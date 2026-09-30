@@ -18,7 +18,19 @@ This node is a **thin Server Component** — it fetches the audit read models di
   - Session id: the `banking_session` cookie (`SESSION_COOKIE`).
 - **Composes** (from `@/components` — read-only): `ui/Table` for the audit trail with columns
   timestamp / userRequest / intent / toolName / riskLevel / confirmationRequired / confirmed /
-  mfaRequired / mfaResult / toolResult / status, plus summary badges.
+  mfaRequired / mfaResult / toolResult / status; `ui/Card` as the surface; `ui/EmptyState` for the
+  zero-row case; summary badges from `ui/Badge` (total + one per `AuditStatus`) and `ui/StatusBadge`
+  (one per `RiskLevel`, labelled from `RISK_LABEL`).
+
+## Display mappings (page-local, presentation only)
+
+- `STATUS_VIEW: Record<AuditStatus, { label; tone }>` — Chinese label + badge tone per audit status.
+- `MFA_RESULT_LABEL` — `success`/`failed`/`not_required` → 验证通过 / 验证失败 / 无需验证 (an absent
+  `mfaResult` renders as 无需验证; the MFA code itself is never rendered).
+- `summarizeToolResult(unknown)` — one-line JSON view of `toolResult`, truncated to 120 chars (`—` for
+  an absent result).
+- Timestamps render through `@/lib/date.formatDateTime` on the server (`timestamp` is epoch ms; no
+  `Date` object crosses a boundary).
 
 ## Constraints
 
