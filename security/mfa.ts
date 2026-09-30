@@ -9,8 +9,19 @@
  * Failures feed the session circuit breaker (`./circuit-breaker`) and emit a
  * `MFA_FAILURE` SecurityEvent.
  */
+import { AppError, ok, err } from '../lib/errors';
 import type { Result } from '../lib/errors';
-import { MFA_MAX_ATTEMPTS } from '../lib/constants';
+import { MFA_CODE, MFA_MAX_ATTEMPTS } from '../lib/constants';
+import {
+  getPendingAction,
+  getMfaChallenge,
+  createMfaChallenge,
+  incrementMfaAttempts,
+  updateMfaChallengeStatus,
+  resetMfaAttempts,
+} from '../lib/db/repositories/pendingAction';
+import { isLocked, recordFailure, recordSuccess } from './circuit-breaker';
+import { recordSecurityEvent } from '../audit';
 
 /** Safe, code-free view of a challenge handed to the caller/UI. */
 export interface MfaChallengeView {
@@ -33,13 +44,54 @@ export interface MfaVerifyResult {
   locked: boolean;
 }
 
+/** Generic, code-free delivery hint shown to the user. */
+const DELIVERY_HINT = '为完成高风险操作，请输入 6 位短信验证码。';
+
+/** Persisted challenge row shape needed to build a view (structural — no repo import coupling). */
+interface ChallengeRow {
+  actionId: string;
+  attempts: number;
+  maxAttempts: number;
+  status: string;
+  createdAt: Date;
+}
+
+/** Map a persisted challenge row to the code-free public view. NEVER leaks `code`. */
+function toView(ch: ChallengeRow): MfaChallengeView {
+  return {
+    actionId: ch.actionId,
+    attempts: ch.attempts,
+    maxAttempts: ch.maxAttempts,
+    verified: ch.status === 'verified',
+    createdAt: ch.createdAt.getTime(),
+    hint: DELIVERY_HINT,
+  };
+}
+
 /**
  * Issue (or re-issue) a challenge for `actionId`. Stores `MFA_CODE` server-side and
  * returns a code-free `MfaChallengeView`.
  * Errors (e.g. unknown action) surface as a thrown `AppError`.
  */
 export async function issueChallenge(actionId: string): Promise<MfaChallengeView> {
-  throw new Error('not implemented');
+  const action = await getPendingAction(actionId);
+  if (!action) {
+    throw new AppError('NOT_FOUND', `未找到待处理操作: ${actionId}`);
+  }
+
+  const existing = await getMfaChallenge(actionId);
+  if (existing) {
+    await resetMfaAttempts(actionId);
+    const refreshed = await updateMfaChallengeStatus(actionId, 'pending');
+    return toView(refreshed);
+  }
+
+  const challenge = await createMfaChallenge({
+    actionId,
+    code: MFA_CODE,
+    maxAttempts: MFA_MAX_ATTEMPTS,
+  });
+  return toView(challenge);
 }
 
 /**
@@ -51,10 +103,61 @@ export async function issueChallenge(actionId: string): Promise<MfaChallengeView
  * Never swallows errors.
  */
 export async function verify(actionId: string, code: string): Promise<Result<MfaVerifyResult>> {
-  throw new Error('not implemented');
+  const challenge = await getMfaChallenge(actionId);
+  if (!challenge) {
+    return err(new AppError('NOT_FOUND', `未找到验证码挑战: ${actionId}`));
+  }
+
+  const action = await getPendingAction(actionId);
+  if (!action) {
+    return err(new AppError('NOT_FOUND', `未找到待处理操作: ${actionId}`));
+  }
+  const sessionId = action.sessionId;
+
+  // Already verified: report success without consuming a new attempt.
+  if (challenge.status === 'verified') {
+    return ok({
+      ok: true,
+      attemptsLeft: challenge.maxAttempts - challenge.attempts,
+      locked: isLocked(sessionId),
+    });
+  }
+
+  // Correct code → verify + reset the consecutive-failure counter.
+  if (code === challenge.code) {
+    await updateMfaChallengeStatus(actionId, 'verified');
+    recordSuccess(sessionId);
+    return ok({
+      ok: true,
+      attemptsLeft: challenge.maxAttempts,
+      locked: isLocked(sessionId),
+    });
+  }
+
+  // Wrong code → count the attempt, emit MFA_FAILURE, feed the breaker.
+  const after = await incrementMfaAttempts(actionId);
+  await recordSecurityEvent({
+    sessionId,
+    kind: 'MFA_FAILURE',
+    severity: 'medium',
+    message: `验证码错误（第 ${after.attempts} 次失败）。`,
+    detail: { actionId, attempts: after.attempts },
+  });
+  const breaker = await recordFailure(sessionId);
+
+  if (after.attempts >= after.maxAttempts) {
+    await updateMfaChallengeStatus(actionId, 'locked');
+  }
+
+  return ok({
+    ok: false,
+    attemptsLeft: after.maxAttempts - after.attempts,
+    locked: breaker.locked,
+  });
 }
 
 /** Read the code-free challenge view for `actionId`, or `null` if none exists. */
 export async function getChallenge(actionId: string): Promise<MfaChallengeView | null> {
-  throw new Error('not implemented');
+  const challenge = await getMfaChallenge(actionId);
+  return challenge ? toView(challenge) : null;
 }

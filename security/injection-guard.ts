@@ -24,9 +24,10 @@ export interface InjectionScanResult {
 
 /** Prompt-injection signatures (data only; matching logic lives in `scan`). */
 export const INJECTION_PATTERNS: ReadonlyArray<{ id: string; pattern: RegExp; label: string }> = [
-  { id: 'ignore-rules-zh', pattern: /忽略(之前|以上|所有)?(的)?(规则|指令|限制|提示|要求)/i, label: '忽略规则' },
-  { id: 'ignore-previous-en', pattern: /ignore\s+(the\s+)?(previous|above|all|prior)\s+(instructions?|rules?|prompts?)/i, label: 'ignore previous instructions' },
+  { id: 'ignore-rules-zh', pattern: /(忽略|无视)(之前|以上|所有)*(的)?(规则|指令|限制|提示|要求)/i, label: '忽略规则' },
+  { id: 'ignore-previous-en', pattern: /ignore\s+(the\s+)?(all\s+)?(previous|above|all|prior)\s+(instructions?|rules?|prompts?)/i, label: 'ignore previous instructions' },
   { id: 'become-admin', pattern: /你(现在)?是(管理员|开发者|root|系统)/i, label: '越权身份声明' },
+  { id: 'become-admin-en', pattern: /you\s+are\s+(now\s+)?(the\s+)?(admin|administrator|root|developer|system)/i, label: '越权身份声明' },
   { id: 'no-confirmation', pattern: /(不要|无需|跳过|绕过|免去).*(确认|验证|审核)/i, label: '绕过确认' },
   { id: 'direct-transfer', pattern: /直接(转账|付款|打款)/i, label: '直接转账' },
   { id: 'system-prompt', pattern: /(system\s*prompt|系统提示词|泄露.*提示)/i, label: '探测系统提示' },
@@ -40,7 +41,23 @@ export const INJECTION_PATTERNS: ReadonlyArray<{ id: string; pattern: RegExp; la
  * plus the matched ids and a human-readable note. NO side effects.
  */
 export function scan(text: string): InjectionScanResult {
-  throw new Error('not implemented');
+  const matched: string[] = [];
+  const labels: string[] = [];
+
+  for (const { id, pattern, label } of INJECTION_PATTERNS) {
+    // Patterns carry no `/g` flag, so `test` is stateless and safe to reuse.
+    if (pattern.test(text)) {
+      matched.push(id);
+      labels.push(label);
+    }
+  }
+
+  const suspicious = matched.length > 0;
+  const note = suspicious
+    ? `检测到疑似提示注入/越权指令：${labels.join('、')}`
+    : '未检测到注入特征';
+
+  return { suspicious, matched, note };
 }
 
 /**
@@ -52,5 +69,13 @@ export async function reportInjection(
   text: string,
   result: InjectionScanResult,
 ): Promise<void> {
-  throw new Error('not implemented');
+  if (!result.suspicious) return;
+
+  await recordSecurityEvent({
+    sessionId,
+    kind: 'INJECTION_ATTEMPT',
+    severity: 'medium',
+    message: result.note,
+    detail: { matched: result.matched, text },
+  });
 }
