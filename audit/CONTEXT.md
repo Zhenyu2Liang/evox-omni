@@ -31,35 +31,39 @@ re-exports each function and its types.
 
 ## Constraints
 
-- **Dependency direction**: `lib` ← `audit`. This node imports ONLY `lib/contracts/*` and
-  `lib/db/repositories/*`. It **MUST NOT** import `security`, `agent`, `planner`, `banking-sdk`,
-  or `prisma` directly — the Security Gateway depends on `audit` for logging, so any reverse
-  import creates a dependency cycle.
+- **Dependency direction**: `lib` ← `audit`. This node imports ONLY `lib/contracts/*`,
+  `lib/db/repositories/*`, `lib/errors`, and `lib/clock`. It **MUST NOT** import `security`,
+  `agent`, `planner`, `banking-sdk`, or `prisma` directly — the Security Gateway depends on
+  `audit` for logging, so any reverse import creates a dependency cycle.
 - **Never redeclare frozen types**: `AuditEntry`, `AuditStatus`, `SecurityEvent`,
   `SecurityEventKind` come from `@/lib/contracts/audit` — import, never fork.
 - **Error strategy — writes never throw into the request path**: `recordAudit` and
-  `recordSecurityEvent` are best-effort. On persistence failure they log and resolve with the
-  input entry/event (they do NOT reject), so a failed audit write never breaks a banking flow.
-  Read/query functions MAY propagate `AppError` (`INTERNAL`) at this boundary.
+  `recordSecurityEvent` are best-effort. They `await` the write via the store seam; on
+  persistence failure they `console.error` the failure and resolve with the input entry/event
+  (they do NOT reject), so a failed audit write never breaks a banking flow. Reads/query
+  functions delegate to the store seam and wrap any non-`AppError` via `AppError.from(e)`
+  (code `INTERNAL`) and rethrow — never silently swallowed.
 - **Audit entries must be complete**: every `recordAudit` call carries the required fields —
   `timestamp, sessionId, userRequest, intent, toolName, riskLevel, confirmationRequired,
   confirmed, mfaRequired, mfaResult, toolResult, status` (see `AuditEntry` in lib/contracts).
 - **Circuit-breaker authority stays in `security`**: `getSecurityStatus` prefers an injected
   `isLocked` callback (the security node's breaker) and only falls back to deriving lock state
-  from the persisted event stream. Do not re-implement breaker logic here.
+  from the persisted event stream (newest `CIRCUIT_BREAKER_TRIPPED`/`SECURITY_RESET` decides;
+  scan window `LOCK_SCAN_LIMIT`). Do not re-implement breaker counters here.
 - Import via the `@/*` path alias (`@/lib/...`) — matches the project's `tsconfig`/`vitest` alias.
 - Keep files ≲ ~1000 lines; split by responsibility.
 
 ## Dependencies
 
 - `@/lib/contracts/audit` (frozen types), `@/lib/contracts/risk` (`RiskLevel`).
-- `@/lib/db/repositories/auditLog` (owned by `./lib`) — expected surface:
+- `@/lib/errors` (`AppError`), `@/lib/clock` (`demoNow` — write timestamps use the demo clock).
+- `@/lib/db/repositories/auditLog` (owned by `./lib`) — surface used:
   `insertAuditLog(entry: AuditEntry): Promise<AuditEntry>`,
   `findAuditLogs(filter: { sessionId?; toolName?; riskLevel?; status?; limit? }): Promise<AuditEntry[]>`,
-  `aggregateAuditLogs(): Promise<{ total: number; byRisk: Record<string, number>; byStatus: Record<string, number> }>`.
-- `@/lib/db/repositories/securityEvent` (owned by `./lib`) — expected surface:
+  `aggregateAuditLogs(): Promise<{ total; byRisk; byStatus }>`. JSON-serializes `toolResult`.
+- `@/lib/db/repositories/securityEvent` (owned by `./lib`) — surface used:
   `insertSecurityEvent(event: SecurityEvent): Promise<SecurityEvent>`,
-  `findSecurityEvents(filter: { sessionId?; kind?; limit? }): Promise<SecurityEvent[]>`.
+  `findSecurityEvents(filter: { sessionId?; kind?; limit? }): Promise<SecurityEvent[]>`. JSON-serializes `detail`.
 - Repository params are structural (primitives / `lib/contracts` types) so `lib` never imports `audit`.
 - `./security` (circuit-breaker lock state) is a **runtime** dependency injected via
   `SecurityStatusOptions.isLocked` — not a code import.
@@ -87,6 +91,4 @@ re-exports each function and its types.
 
 ## Notes for Agents
 
-- The functions are intentionally stubbed (`throw new Error('not implemented')`) — this is a
-  design-only skeleton. Implementation fills the bodies; signatures and types are frozen here.
 - Do not add business/risk logic to this node — logging and querying only.
