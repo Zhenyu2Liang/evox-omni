@@ -19,7 +19,7 @@ Two modes, chosen at call time from `AppConfig.llmMode`:
 
 ```ts
 // provider-live.ts
-export function createLiveModel(cfg: AppConfig): Model;   // real model; needs network + key
+export function createLiveModel(cfg: AppConfig): Model<any>;   // real model; needs network + key
 
 // provider-mock.ts
 export function createMockModel(cfg: AppConfig): Model;   // registers faux provider; offline, deterministic
