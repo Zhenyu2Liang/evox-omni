@@ -7,7 +7,7 @@ order a plan, or enforce a domain invariant. These run **without the LLM** and, 
 **without a DB**, so they are the tightest, most reliable correctness net.
 
 Current status: **fully implemented** — real assertions throughout; no `it.todo` remains.
-are filled in Phase 2 once the modules under test are implemented. Files stay load-safe (they do not
+DB-backed cases use the test SQLite via `../helpers/db`; the rest need no DB or LLM.
 import Prisma-constructing modules at runtime).
 
 ## API Surface
