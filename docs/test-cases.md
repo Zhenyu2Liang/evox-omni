@@ -27,9 +27,9 @@ npm run test -- tests/scenarios           # 只跑场景层
 VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security   # 纯单元、无需 DB
 ```
 
-> **确定性运行建议**：全部测试共用一个 `prisma/test.db`，而 `vitest.config.ts` 尚未设置
-> `fileParallelism: false`，因此并行跑会因 Prisma socket 竞争而不稳。请用
-> `npx vitest run --no-file-parallelism` 获得稳定信号。
+> **确定性运行**：全部测试共用一个 `prisma/test.db`，因此 `vitest.config.ts` 设置了
+> `fileParallelism: false`——测试**文件串行**运行（同一文件内的查询仍可并行），`npm run test`
+> 本身就是稳定信号；显式加 `--no-file-parallelism` 只是可选保险。
 
 ---
 
@@ -103,10 +103,6 @@ VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security   # 纯单元、无�
 
 ## 5. 已知短板 · Known Gaps
 
-- **规划器就绪态判定**：`planner/dag.ts` 的 `getReadyNodes` 目前把 `failed`/`cancelled` 依赖当作终态，
-  从而**错误地**解锁其依赖节点（验收要求只在 `success`/`skip` 上就绪）。对应用例
-  `tests/unit/planner/dag.test.ts` › 「excludes a node whose dependency failed」目前为 RED；修复归属 `planner/`。
-- **共享测试 SQLite 阻碍并行**：所有文件共用一个 `prisma/test.db`，需 `--no-file-parallelism` 串行运行。
 - **GREEN 自动执行不写审计行**：审计只在门控 confirm/verify/cancel 时写入——GREEN 应在 `beforeToolCall` 处断言。
 
 > 安全模型的完整说明见 [`security.md`](./security.md)；已知限制见 [`known-risks.md`](./known-risks.md)。
