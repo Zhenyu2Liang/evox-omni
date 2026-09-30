@@ -190,7 +190,7 @@ Frozen imports (already exist, DO NOT redefine): `lib/contracts/{risk,tools,secu
 `lib/money` (`formatCNY`).
 
 Repository functions this node consumes (confirmed signatures — do NOT fork):
-- `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>` (sibling node; the stub throws `'not implemented'` on CALL — callers `await` it, never fire-and-forget)
+- `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>` (sibling node; implemented, callers `await` it — but its writes are BEST-EFFORT and swallow persistence failures, see Known Issues)
 - `lib/db/repositories/pendingAction` → `createPendingAction(input): Promise<PendingAction>`,
   `getPendingAction(id): Promise<(PendingAction & { mfa: MfaChallenge | null }) | null>`, `updatePendingActionStatus(id, status): Promise<PendingAction>`
 - `lib/db/repositories/pendingAction` (MFA challenge rows live in the SAME module) → `createMfaChallenge({ actionId, code, maxAttempts?, expiresAt? }): Promise<MfaChallenge>`,
