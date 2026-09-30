@@ -16,18 +16,25 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   `addMoney` / `subtractMoney` (cent math). All business logic must use these — never raw float math.
 - `constants.ts` — `DAILY_TRANSFER_LIMIT = 1000`, `MFA_CODE = '123456'`, `MFA_MAX_ATTEMPTS = 3`,
   `ANOMALY_AMOUNT_THRESHOLD = 5000`, `DEFAULT_DEMO_USER_ID = 'user_liming'`,
-  `SESSION_COOKIE = 'banking_session'`, `RISK_LABEL`.
+  `SESSION_COOKIE = 'banking_session'`, `RISK_LABEL`, `DEMO_NOW` (pinned 2026-09-25 12:00 local).
 - `config.ts` — `AppConfig` + `getConfig()`; reads env **at call time**
   (`LLM_MODE`/`LLM_PROVIDER`/`LLM_MODEL`/`DEMO_USER_ID`), so tests can toggle `LLM_MODE`.
-- `ids.ts` — `newId(prefix?)`: unique id string (crypto.randomUUID based), optional readable prefix.
-- `date.ts` — pure, injectable-`now` date helpers: `startOfDay(t)`, `todayRange(now?)`,
-  `monthRange(now?)`, `previousMonthRange(now?)` (each returns `{ start, end }`, `[start, end)`),
-  `formatDateTime(ts)` → `YYYY-MM-DD HH:mm`.
-- `json.ts` — SQLite JSON-text column helpers: `safeParse<T>(text, fallback)` and `toJson(value)`.
+- `ids.ts` — `newId(prefix?)`: unique id string (`node:crypto` `randomUUID`), optional readable prefix
+  (`newId('pax')` → `pax_<uuid>`; no prefix → bare uuid).
+- `date.ts` — pure, injectable-`now` LOCAL-timezone date helpers: `startOfDay(t)`, `todayRange(now?)`,
+  `monthRange(now?)`, `previousMonthRange(now?)` (each returns half-open `{ start, end }` `[start, end)`),
+  `formatDateTime(ts)` → zero-padded `YYYY-MM-DD HH:mm` (accepts `Date | number`, local time).
+- `clock.ts` — the single source of "now" for the running app (the DEMO CLOCK, see root ROOT DECISION):
+  `demoNow(override?: number | Date)` → `DEMO_NOW` unless overridden (a `Date` override → its `.getTime()`);
+  convenience wrappers defaulting to the demo clock — `demoTodayRange(override?)`, `demoMonthRange(override?)`,
+  `demoPreviousMonthRange(override?)` — each delegates to the matching `date.ts` helper via
+  `new Date(demoNow(override))`.
+- `json.ts` — SQLite JSON-text column helpers: `safeParse<T>(text, fallback)` (returns `fallback` for
+  null/undefined/empty/invalid JSON) and `toJson(value)` (`'null'` when value is `undefined`).
 - `contracts/` — the FROZEN cross-module type definitions (see routing table below).
 - `db/` — Prisma client singleton + per-aggregate repositories (the only data-access layer).
 - `index.ts` — convenience barrel re-exporting `contracts`, `errors`, `money`, `config`, `constants`,
-  `ids`, `date`, `json` for `@/lib` imports. It deliberately does **NOT** re-export `db/`.
+  `ids`, `date`, `clock`, `json` for `@/lib` imports. It deliberately does **NOT** re-export `db/`.
 
 ## Constraints
 
@@ -40,6 +47,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   with `toJson`.
 - Money is `Float` CNY; use `lib/money` helpers, never raw float math.
 - Date helpers must be pure and take an injectable `now` — no hidden `Date.now()` inside range helpers.
+- Any "now" in the running app goes through `lib/clock` (`demoNow()`), never raw `Date.now()`.
 - `index.ts` must not import `lib/db` (keeps the Prisma client out of client-side bundles).
 - Pure TypeScript; no side effects at module load, no network. Sole exception: `db/client.ts`
   constructs the Prisma singleton.
@@ -56,19 +64,25 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/db` → Prisma client singleton (`client.ts`) + typed per-aggregate repositories (`repositories/`).
 - `./lib/errors.ts` → `ErrorCode` / `AppError` / `Result<T>` — the project error convention.
 - `./lib/money.ts` → CNY formatting/parsing/cent-safe arithmetic.
-- `./lib/constants.ts` → demo constants (limits, MFA code, thresholds, demo user id, cookie name).
+- `./lib/constants.ts` → demo constants (limits, MFA code, thresholds, demo user id, cookie name, `DEMO_NOW`).
 - `./lib/config.ts` → `getConfig()` runtime env config.
 - `./lib/ids.ts` → `newId(prefix?)` id generation.
-- `./lib/date.ts` → pure date-range/format helpers.
+- `./lib/date.ts` → pure local-timezone date-range/format helpers.
+- `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
 - `./lib/index.ts` → convenience barrel for `@/lib` imports (no `db`).
 
 ## Status
 
-- Design phase complete: contracts, kernel primitives, util signatures and repository signatures are authored.
-- All `lib/*.ts` util function bodies and every `lib/db/repositories/*` function body currently
-  `throw new Error('not implemented')`. Only `lib/db/client.ts` is fully implemented.
-- Implementation of the util helpers and repositories is delegated in Phase 2.
+- Fully implemented: every `lib/*.ts` util helper (`errors`, `money`, `config`, `constants`, `ids`,
+  `date`, `clock`, `json`), `db/client.ts`, and all `lib/db/repositories/*` aggregate modules.
+
+## Known Issues
+
+- `lib/contracts/agent.ts` imports (but does not re-export) `PendingActionSummary` and `TaskPlan`;
+  `tests/helpers/scenario.ts` imports both via `@/lib/contracts/agent` and fails to type-check (TS2459).
+  Resolution is root-owned (frozen contract + the sibling `tests` node are root-scoped): either add the
+  re-export to `agent.ts`, or fix the test imports to `./security`/`./task`.
 
 ## Notes for Agents
 
