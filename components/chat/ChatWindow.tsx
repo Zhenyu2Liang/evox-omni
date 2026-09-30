@@ -45,6 +45,9 @@ export function ChatWindow({ sessionId, initialMessages, endpoints, className }:
     onConfirm: (id) => void stream.confirm(id),
     onVerify: (id, code) => void stream.verify(id, code),
     onCancel: (id) => void stream.cancel(id),
+    onAcknowledge: () => void stream.send('这笔交易是我本人消费'),
+    onViewDetail: () => void stream.send('我想查看这笔交易的详情'),
+    onFreeze: () => void stream.send('冻结我的银行卡'),
     busy: stream.busy,
     error: stream.error,
   };

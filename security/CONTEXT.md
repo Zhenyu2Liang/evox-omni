@@ -47,7 +47,8 @@ function getState(sessionId: string): CircuitBreakerState
 function isLocked(sessionId: string): boolean
 async function recordFailure(sessionId: string): Promise<CircuitBreakerState>   // trips at MFA_MAX_ATTEMPTS; emits CIRCUIT_BREAKER_TRIPPED
 function recordSuccess(sessionId: string): CircuitBreakerState                  // resets consecutive failures (does NOT unlock a tripped breaker)
-function reset(sessionId: string): void
+function reset(sessionId: string): void                                         // clears all state for a session (sync, no I/O; used by tests)
+async function resetSession(sessionId: string): Promise<CircuitBreakerState>    // the security-center UNLOCK: reset() + emits SECURITY_RESET (awaited recordSecurityEvent)
 ```
 
 ### `mfa.ts` — mock MFA (code = `MFA_CODE`, NEVER returned)
@@ -86,6 +87,9 @@ interface SecurityGateway {
 }
 const securityGateway: SecurityGateway
 function buildPendingActionSummary(ctx, ev): PendingActionSummary   // pure formatting of Summary fields
+const TOOL_INTENT: Record<ToolName, string>                         // code-driven per-tool Chinese intent label (never LLM-derived)
+function deriveIntent(toolName: ToolName): string                   // TOOL_INTENT[toolName], else the raw tool name (never empty)
+// `createPendingAction` persists ctx.userRequest + deriveIntent(ctx.toolName); `toContractPendingAction` surfaces both on the returned PendingAction.
 ```
 
 ### `index.ts` — facade
@@ -114,7 +118,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
                 │
       YELLOW/RED (blocked):
                 ▼
-        createPendingAction(ctx, ev) ──► PendingAction (status: pending | awaiting_mfa) + PendingActionSummary
+        createPendingAction(ctx, ev) ──► PendingAction (status: pending | awaiting_mfa; persists userRequest + code-derived intent) + PendingActionSummary
                 ▼
         serializeBlockReason(decision, action) ──► '__SECURITY_BLOCK__{...actionId...}'
                 ▼
@@ -147,20 +151,21 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 
 - **LLM-immutable**: tier / confirmation / MFA are computed only from `TOOL_POLICY`, the validated
   `amount`, and `ctx.dailyTransferTotal`. Model output and user text are NEVER inputs to the decision.
+  The persisted `intent` is likewise a pure function of the tool name (`TOOL_INTENT`), never model text.
 - **Pure/deterministic where possible**: `permission-engine`, `risk-engine.evaluateTransferRisk`,
-  `injection-guard.scan`, `decide`, `serializeBlockReason`, `parseBlockReason`, `buildPendingActionSummary`
-  perform NO I/O. Inject `now` (default `demoNow()`, the demo clock) for time-dependent logic so tests are stable.
+  `injection-guard.scan`, `decide`, `serializeBlockReason`, `parseBlockReason`, `buildPendingActionSummary`,
+  `deriveIntent` perform NO I/O. Inject `now` (default `demoNow()`, the demo clock) for time-dependent logic so tests are stable.
 - **No I/O in the decision; I/O only where required**: DB access is confined to `risk.computeDailyTransferTotal`
-  (transaction repo), `mfa` (pendingAction/mfaChallenge repos), `circuit-breaker.recordFailure` and
-  `injection.reportInjection` (audit). The gateway persists pending actions via the pendingAction repo.
+  (transaction repo), `mfa` (pendingAction/mfaChallenge repos), `circuit-breaker.recordFailure` /
+  `circuit-breaker.resetSession` and `injection.reportInjection` (audit). The gateway persists pending actions via the pendingAction repo.
 - **The gateway does NOT execute business operations** — it only authorizes. Execution is the agent layer's job.
 - **Error strategy**: pure helpers throw `AppError` (`lib/errors`); fallible I/O paths return `Result<T>`
   (`mfa.verify`) or throw `AppError` at boundaries. NEVER swallow an error, never fire-and-forget an event write
-  (`recordFailure`/`reportInjection` are awaited). Never leak a raw exception or the MFA code to the model/UI.
+  (`recordFailure`/`resetSession`/`reportInjection` are awaited). Never leak a raw exception or the MFA code to the model/UI.
 - **Circuit breaker is a hard gate** the LLM cannot clear: 3 consecutive MFA failures (`MFA_MAX_ATTEMPTS`)
   trip it for the session and emit `CIRCUIT_BREAKER_TRIPPED`.
   When tripped it denies EVERY tool call, not only high-risk ones (`gatewayEvaluate`: `blocked = locked || tier !== 'GREEN'`; decision `deny`).
-  Unlocking requires `reset(sessionId)`, which NO runtime caller invokes yet (see Known Issues).
+  Unlocking requires `circuit-breaker.resetSession(sessionId)` (the audited unlock entry point; sync `reset` stays test-only); no app route calls it yet (see Known Issues).
 - **Injection guard never grants permission** — defense-in-depth only (see its file disclaimer).
 - **Files ≲ ~1000 lines**; split by responsibility. No inter-module cycles.
 
@@ -169,16 +174,15 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 - **Injection guard does NOT add a system reminder to the model context.**
   The only caller (`agent/run-turn.ts` ~L353-357) emits a UI `security_event` (kind `injection`) after `reportInjection`; nothing is appended to the agent's system prompt/messages, despite the `injection-guard.ts` header saying so.
   Detection, the `INJECTION_ATTEMPT` event, and never-grants-permission all hold (defense-in-depth unaffected).
-- **Circuit-breaker unlock is not wired.**
-  `CIRCUIT_BREAKER_TRIPPED` is emitted, but no route/code calls `circuit-breaker.reset(sessionId)` and nothing writes a `SECURITY_RESET` event (the kind is declared only in `lib/contracts/audit.ts`).
-  Once tripped, a session stays locked for the process lifetime; the "security-center unlock" has no runtime path (`recordSuccess` clears the counter but explicitly does NOT unlock).
+- **Circuit-breaker unlock is not wired to an app route.**
+  `circuit-breaker.resetSession(sessionId)` exists (audited: clears the lock AND records a `SECURITY_RESET` `SecurityEvent`) and is exposed as `security.circuitBreaker.resetSession`, but no app route/API caller invokes it yet — the security-center unlock button is still not connected. Until an app node wires it, a tripped session stays locked for the process lifetime (`recordSuccess` clears the counter but explicitly does NOT unlock).
 - **Breaker blocks all tiers, not only high-risk.**
   `gatewayEvaluate` sets `blocked = locked || tier !== 'GREEN'`, so when tripped even GREEN reads (e.g. `get_balance`) are denied — broader than the "high-risk ops locked" wording; `tests/scenarios/test-10-circuit-breaker.test.ts` only exercises a RED tool, so this is unguarded.
 - **"Repeated blocked high-risk attempts" is NOT a breaker trigger.**
   `recordFailure` is called ONLY from `mfa.ts` on a wrong code; no code path counts blocked/denied attempts.
 - **Security-event writes are best-effort.**
   `recordSecurityEvent` (sibling `audit/`) logs and swallows persistence failures, so an awaited event write can silently fail; the breaker's in-memory `locked` flag remains authoritative.
-- **`HIGH_RISK_BLOCKED` / `LIMIT_EXCEEDED` / `ANOMALY_FLAGGED` event kinds are declared but never written** by this node (only `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT` are emitted).
+- **`HIGH_RISK_BLOCKED` / `LIMIT_EXCEEDED` / `ANOMALY_FLAGGED` event kinds are declared but never written** by this node (only `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET` are emitted).
 
 ## Dependencies (contracts this node consumes)
 
@@ -191,7 +195,7 @@ Frozen imports (already exist, DO NOT redefine): `lib/contracts/{risk,tools,secu
 
 Repository functions this node consumes (confirmed signatures — do NOT fork):
 - `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>` (sibling node; implemented, callers `await` it — but its writes are BEST-EFFORT and swallow persistence failures, see Known Issues)
-- `lib/db/repositories/pendingAction` → `createPendingAction(input): Promise<PendingAction>`,
+- `lib/db/repositories/pendingAction` → `createPendingAction(input): Promise<PendingAction>` (input also accepts optional `userRequest` / `intent`, written through),
   `getPendingAction(id): Promise<(PendingAction & { mfa: MfaChallenge | null }) | null>`, `updatePendingActionStatus(id, status): Promise<PendingAction>`
 - `lib/db/repositories/pendingAction` (MFA challenge rows live in the SAME module) → `createMfaChallenge({ actionId, code, maxAttempts?, expiresAt? }): Promise<MfaChallenge>`,
   `getMfaChallenge(actionId): Promise<MfaChallenge | null>` (carries `code` — never expose it),
@@ -202,9 +206,11 @@ Repository functions this node consumes (confirmed signatures — do NOT fork):
 
 Vitest. This node is designed to be unit-testable WITHOUT network or clock:
 - Pure units (`permission-engine`, `risk.evaluateTransferRisk`, `injection.scan`, `decide`,
-  `serialize`/`parseBlockReason`, `buildPendingActionSummary`) — table-driven, no DB.
+  `serialize`/`parseBlockReason`, `buildPendingActionSummary`, `deriveIntent`) — table-driven, no DB.
 - Breaker/MFA/gateway I/O units — run against the test SQLite (`lib/db`) with unique `sessionId`s
-  per test to isolate the in-memory breaker; assert `recordFailure` emits `CIRCUIT_BREAKER_TRIPPED`.
+  per test to isolate the in-memory breaker; assert `recordFailure` emits `CIRCUIT_BREAKER_TRIPPED`
+  and `resetSession` emits `SECURITY_RESET`. The gateway audit-trail specs assert the persisted
+  `userRequest` + `intent` round-trip through `createPendingAction`/`handleToolCall`.
 - End-to-end agent scenarios (Tests 1–12, incl. injection & confirmation) live under `../tests/`.
 
 ## Routing Table
@@ -215,6 +221,6 @@ This is a **leaf node** — it has no child directories; the modules above are i
 ## Notes for Agents
 
 - Every money-moving tool MUST be gated through `securityGateway` — never add a tool that bypasses the policy table.
-- When adding a tool, add its entry to `TOOL_POLICY` (typed `Record<ToolName, ToolPolicy>` makes a missing key a compile error).
+- When adding a tool, add its entry to `TOOL_POLICY` **and** `TOOL_INTENT` (both typed `Record<ToolName, …>` make a missing key a compile error).
 - `PendingAction.args` are the ORIGINAL validated args — `authorizeAction` re-checks the breaker but must not re-trust model text.
 - Keep the MFA code inside `mfa.ts`; `MfaChallengeView.hint` and all `message` strings must never contain it.

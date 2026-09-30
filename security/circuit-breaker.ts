@@ -6,8 +6,9 @@
  * breaker trips it emits a `CIRCUIT_BREAKER_TRIPPED` `SecurityEvent` (severity `high`).
  *
  * Consecutive semantics: any success (`recordSuccess`) resets the failure counter.
- * The breaker is a hard gate the LLM can never reset — only `reset(sessionId)` (a
- * user/admin action) clears it.
+ * The breaker is a hard gate the LLM can never reset — only `resetSession(sessionId)` (a
+ * user/admin action, which also records a `SECURITY_RESET` event) clears it. The synchronous
+ * `reset` (no I/O) stays available for tests.
  *
  * NOTE: `recordFailure` is async because emitting the SecurityEvent writes through
  * `./audit` (never fire-and-forget — errors must not be swallowed).
@@ -90,6 +91,28 @@ export function recordSuccess(sessionId: string): CircuitBreakerState {
   const entry: BreakerEntry = entries.get(sessionId) ?? { failures: 0, locked: false };
   entry.failures = 0;
   entries.set(sessionId, entry);
+  return getState(sessionId);
+}
+
+/**
+ * Clear (unlock) a session's breaker state AND record a `SECURITY_RESET` SecurityEvent — the async
+ * entry point for the security center's unlock action. The synchronous `reset` (no I/O) stays
+ * available for tests; this wrapper performs the audit write through `./audit` (never fire-and-forget).
+ * The emitted event carries the session id, kind, a human-readable message and a detail payload;
+ * its `timestamp` defaults to the demo clock inside `recordSecurityEvent`.
+ */
+export async function resetSession(sessionId: string): Promise<CircuitBreakerState> {
+  const before = getState(sessionId);
+  reset(sessionId);
+  await recordSecurityEvent({
+    sessionId,
+    kind: 'SECURITY_RESET',
+    severity: 'medium',
+    message: before.locked
+      ? '会话安全熔断已解除，高风险操作已恢复。'
+      : '已清除该会话的安全限制状态。',
+    detail: { wasLocked: before.locked, previousFailures: before.failures },
+  });
   return getState(sessionId);
 }
 

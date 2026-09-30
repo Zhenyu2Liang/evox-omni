@@ -17,6 +17,7 @@ Grouped by the source module under test (mirrors the source tree):
 - `security/` — `permission-engine`, `risk-engine`, `gateway`, `injection-guard`, `circuit-breaker`, `mfa`.
 - `planner/` — `dag` (validate / topological order / conditions), `executor` (runPlan).
 - `banking-sdk/` — `transfer`, `subscription`, `investment`.
+- `agent/` — end-to-end confirmation-flow audit specs (real DB + gateway + `@/agent`).
 
 Each spec imports the module under test directly from its `@/…` façade path
 (e.g. `@/security`, `@/planner`, `@/banking-sdk`) — no commented-out placeholders remain.
@@ -36,4 +37,5 @@ Each spec imports the module under test directly from its `@/…` façade path
 - `./security` → permission/risk/gateway/injection/circuit-breaker/MFA unit specs
 - `./planner` → DAG + executor unit specs
 - `./banking-sdk` → transfer/subscription/investment domain-invariant specs
+- `./agent` → end-to-end agent confirmation-flow audit specs (real DB + gateway + `@/agent`)
 - `../helpers` → shared utilities (db/fixtures) used by DB-backed unit cases (sibling — this node)
