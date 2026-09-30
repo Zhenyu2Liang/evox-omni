@@ -85,7 +85,9 @@ Additional code-level controls:
   `SecurityEvent`, and adds a system reminder — but **never grants permission** (defense-in-depth only).
 - **Hallucination guard**: the model may only report facts that came from a tool result. If a tool returns
   `success:false`, the agent must report failure (demo **Test 5**).
-- **Audit** (`audit/`): every gateway decision + execution writes an `AuditLog` row (see `lib/contracts/audit.ts`).
+- **Audit** (`audit/`): every **gated action** (confirm / verify / cancel of a YELLOW/RED `PendingAction`)
+  writes an `AuditLog` row, and every security control decision (circuit-breaker trip, injection detection,
+  MFA failure) writes a `SecurityEvent`. GREEN auto-executed reads are **not** audited (see `lib/contracts/audit.ts`).
 ## Shared Contracts (frozen — DO NOT redefine)
 All cross-module types live in **`lib/contracts/`** and are owned by the root. Child nodes IMPORT them;
 they must not redeclare or fork them. Key files:
