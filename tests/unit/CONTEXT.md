@@ -6,7 +6,7 @@ Fast, focused unit tests for the deterministic cores of the system — the parts
 order a plan, or enforce a domain invariant. These run **without the LLM** and, where possible,
 **without a DB**, so they are the tightest, most reliable correctness net.
 
-Current status: **`it.todo` scaffolds** (no assertions) that enumerate every intended case; bodies
+Current status: **fully implemented** — real assertions throughout; no `it.todo` remains.
 are filled in Phase 2 once the modules under test are implemented. Files stay load-safe (they do not
 import Prisma-constructing modules at runtime).
 
