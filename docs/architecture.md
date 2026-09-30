@@ -1,0 +1,272 @@
+# 架构文档 · AI Banking Agent Architecture
+
+> 一个**比赛演示（competition demo）**级的 *AI 银行智能体*：用户用自然语言描述一个金融需求，
+> 智能体理解意图、规划任务、调用**银行工具**，并在一个**由代码强制、模型不可篡改**的权限与
+> 安全模型下完成操作。核心不变式：
+>
+> **智能体可以决定「下一步做什么（what to do next）」；智能体永远不能决定「它是否有权限去做（whether it is allowed）」。**
+> 权限由 TypeScript 代码判定，绝不来自 LLM。
+
+---
+
+## 1. 概述 Overview
+
+系统实现了一个完整的智能体循环：
+
+**理解 → 规划 → 执行 → 风控 → 验证 → 审计**
+(understand → plan → execute → risk-control → verify → audit)
+
+它**不是**一个套在银行 App 外层的聊天皮肤，而是一个具备**自主规划、工具调用、安全网关、
+任务编排与审计**能力的智能体。范围被严格限制在演示沙箱内：**没有真实银行、没有真实资金、
+没有真实支付、没有 shell、模型也不能进行任意代码 / SQL / 文件访问**；所有银行数据都在
+SQLite 中模拟。
+
+---
+
+## 2. 分层流水线 · Layered Pipeline
+
+请求自顶向下穿过各层，越往下越接近数据，越往上越接近用户：
+
+```mermaid
+flowchart TD
+    U["用户 User<br/>自然语言金融需求"] --> W["Next.js Web App<br/>React + Tailwind + Recharts"]
+    W --> A["Pi Agent<br/>@mariozechner/pi-agent-core + pi-ai<br/>意图理解 · 规划 · 工具调用"]
+    A --> P["Agent Planner (planner/)<br/>DAG 规划与执行"]
+    P --> T["Custom Banking Tools (agent/tools)<br/>已注册 · TypeBox 参数校验"]
+    T --> G["Security Gateway (security/security-gateway.ts)<br/>beforeToolCall ← 安全咽喉"]
+    G --> S["Banking SDK (banking-sdk/)<br/>execute-only 业务能力"]
+    S --> DB["Prisma → SQLite<br/>模拟银行数据"]
+    G -. 审计 / 安全事件 .-> AU["Audit (audit/)"]
+    S -. 审计 .-> AU
+```
+
+**各层职责（自顶向下）**
+
+| 层 | 位置 | 职责 | 不做什么 |
+|---|---|---|---|
+| Web App | `app/`, `components/` | 页面、SSE 聊天、卡片、确认/验证按钮；只做「渲染 + 路由」 | 不含业务逻辑、不直接访问 Prisma |
+| Pi Agent | `agent/` | Agent **运行时 + 规划器 + 工具调用器**；意图理解、上下文、自然语言回复 | 不判定权限、不移动资金 |
+| Agent Planner | `planner/` | 纯 DAG 逻辑：校验 → 拓扑排序 → 执行 → 条件求值 → 状态流 | 不含银行/安全/DB 行为（副作用全部注入） |
+| Banking Tools | `agent/tools/` | 智能体**唯一**的能力面：26 个已注册工具，参数为 TypeBox schema | 不判定权限 |
+| Security Gateway | `security/` | 对每个工具调用给出 🟢/🟡/🔴 + 确认 / MFA / 熔断 | **不执行业务操作**（只授权） |
+| Banking SDK | `banking-sdk/` | 唯一把银行意图变成 Prisma 写入的层；执行领域校验 | 不做权限 / 确认 / MFA / 限额判定 |
+| Persistence | `prisma/`, `lib/db/` | Prisma + SQLite 模拟数据，仓储层 `lib/db/repositories/*` | — |
+
+依赖方向严格单向向下：`lib` ← `banking-sdk` ← `agent`/`planner`/`audit`；`security` 依赖 `lib`
+（+ 注入端口）；`app`/`components` 依赖下面的一切。**无跨模块循环依赖。**
+
+---
+
+## 3. 空间维度 · Context Tree 目录布局
+
+仓库本身是一棵 **Context Tree**：每个目录都有一份 `CONTEXT.md`，既是文档（Intent / API Surface /
+Constraints），也是**路由表**（把领域映射到子目录）。顶层节点职责：
+
+| 节点 | 职责 |
+|---|---|
+| `./app` | Next.js App Router：页面（dashboard / agent chat / bills / cards / subscriptions / security / audit）+ API 路由处理器（chat SSE、actions confirm\|verify\|cancel、tasks 控制、audit、security、read models） |
+| `./components` | React UI：聊天卡片、图表、银行瓦片、UI 原语 |
+| `./agent` | Pi Agent 运行时：agent 装配、system prompt、会话存储、工具注册、LLM provider（live + faux）、确认续跑 |
+| `./planner` | DAG 任务规划器 + 执行器（`submit_plan` 的后端） |
+| `./banking-sdk` | 银行能力（account / transaction / transfer / card / subscription / investment / task / budget），execute-only，基于 Prisma |
+| `./security` | 安全网关 + 权限引擎、风险引擎、MFA、熔断器、注入守卫（安全咽喉） |
+| `./audit` | 审计日志器 + 安全事件记录器 |
+| `./lib` | 共享内核：contracts、errors、money、config、constants、clock、Prisma client + repositories |
+| `./prisma` | Prisma schema、种子数据、迁移 |
+| `./tests` | 自动化测试：security/planner/sdk 单元测试 + faux-LLM 场景集成测试（Tests 1–12） |
+| `./docs` | 本目录：参赛文档（architecture / security / test-cases / known-risks） |
+
+---
+
+## 4. 时间维度 · Git DAG（版本即状态）
+
+代码通过一棵**不可变提交的 Git DAG**演进。一个智能体的状态是
+`(node_path, base_commit, current_commit, objective)` 四元组；**部分进展也被接受**——
+只要一个版本让代码库变得更好（哪怕仍有部分损坏）即算数。智能体是**瞬态**的：没有持久记忆，
+所有持久记忆要么存在 Context Tree 的 `CONTEXT.md`，要么存在 Git 历史（Git 就是变更日志）。
+子智能体从父节点提交的 SHA 分支，拥有独立隔离的 worktree，因此**并行智能体互不冲突**。
+
+---
+
+## 5. 深入 · Pi Agent（运行时 + 规划器 + 工具调用器）
+
+Pi Agent 严格地被当作 **Agent Runtime + Planner + Tool Caller** 使用，它是本仓库中**唯一**
+与 `@mariozechner/pi-agent-core` / `@mariozechner/pi-ai` 对话的节点（`agent/`）。
+
+- 用**仅注册的银行工具**构造 Agent——**没有** bash / shell / write / edit / file / SQL 工具被注册，
+  因此一段要求「给我一个 shell/SQL 工具」的注入攻击**根本没有工具可调**。
+- 关键 SDK 事实（对照 pi-agent-core 0.73.1 验证）：
+  - `new Agent({ initialState, beforeToolCall, afterToolCall, convertToLlm, transformContext, sessionId, ... })`
+  - `AgentTool<TParams>` = `{ name, description, parameters (TypeBox), label, execute(...) }`；
+    `execute` 成功返回 `AgentToolResult<T>`，失败时**抛出异常**。
+  - `agent.prompt(input)` / `agent.continue()` 在 run 结束时返回；`agent.subscribe(listener)` 流式推送 `AgentEvent`。
+  - **`beforeToolCall` 是安全咽喉。** 返回 `{ block: true, reason }` 会阻止执行，并向模型发出一个
+    错误工具结果。🟢/🟡/🔴 正是**在代码里**这样被强制的：模型**字面上无法**执行一个被门控的工具。
+  - `AgentState`（`systemPrompt` / `model` / `tools` / `messages`）可 JSON 序列化 → 按会话持久化。
+  - `registerFauxProvider()`（来自 pi-ai）提供脚本化的内存模型，用于**离线/模拟 LLM 模式**与全部智能体测试：
+    同一套 Agent / 工具 / 安全流水线，只有模型被脚本化。
+
+**不变式**：模型提出「下一步做什么」，但每个工具调用都要穿过 `beforeToolCall →
+securityGateway.handleToolCall`；被门控的工具会被阻断、其参数被持久化为 `PendingAction`，
+**资金只有在人工确认之后才会移动**。模型的文本永远无法触发一次执行。
+
+真实集成类型（`agent/`）包括：`BankingAgentRuntime`、`SessionSnapshot`、`ToolRegistry`、
+`ToolExecutionResult`、`runTurn` / `resumeTurn`、`confirmAction` / `verifyAction` / `cancelAction`、
+`resolveModel`（live/mock 选择）等。
+
+---
+
+## 6. 深入 · Banking SDK（execute-only 业务能力）
+
+`banking-sdk/` 是**唯一把银行意图变成 Prisma 写入**的层。每个模块都是一组基于共享仓储
+（`lib/db/repositories/*`）的普通 `async` 领域函数，读写
+`Account`、`Transaction`、`Contact`、`Card`/`CardLimit`、`Subscription`、
+`InvestmentProduct`/`InvestmentHolding`、`Budget`、`ScheduledTask`。
+
+- **execute-only（只执行，不决策）**：它强制*领域不变式*（余额充足、产品 `minAmount`、收款人解析、
+  状态转移），并执行读写——但**不做任何权限、确认、MFA 或日限额判定**。那些由 Security Gateway 决定。
+  **SDK 是机制（mechanism）；`security/` 是策略（policy）。**
+- 返回**纯视图模型**（`banking-sdk/types.ts`）——Prisma 模型类型绝不泄漏出 SDK。
+- 门面：`banking = { account, transaction, transfer, contact, card, subscription, investment, budget, task, dashboard }`。
+- 领域校验：`transfer.createTransfer` 解析收款人（`contactId` | `phone` | `name`）；姓名匹配多个联系人时
+  抛 `AppError('CONFLICT')`（携带 `detail.candidates`）；资金不足抛 `INSUFFICIENT_FUNDS` 且**不写任何行**。
+- 错误一律抛类型化的 `AppError`；金额一律走 `lib/money`，绝不裸浮点运算。
+
+---
+
+## 7. 深入 · Tool Calling（注册式银行工具）
+
+`agent/tools/` 是智能体**完整且穷尽**的能力集，一个工具族一个模块。每个工具族导出：
+
+1. `create<Name>Tool(userId): AgentTool<typeof <Name>Params>` **工厂**——返回的 `AgentTool` 参数是
+   **TypeBox** schema（`Type`/`Static` 由 pi-ai 再导出）；`execute` 调用 Banking SDK 并返回
+   `AgentToolResult`，失败时抛 `AppError`；
+2. `run<X>(userId, args): Promise<ToolExecutionResult>`——**无模型**路径，供 registry 的
+   `executeDirect` 使用；它**捕获**异常并返回 `ToolExecutionResult{ ok:false, error }`。
+
+`index.ts` 通过 `createToolRegistry(userId)` 构建**按用户**的注册表：
+`userId` 被**闭包捕获**（模型永不提供它），工具名必须精确等于 `ToolName` 联合类型中的 26 个名字
+（缺一个都是编译错误）。
+
+**两条执行路径**（安全模型的关键）：
+
+| 路径 | 触发者 | 用途 |
+|---|---|---|
+| `AgentTool.execute`（经模型工具调用） | LLM 提议、`beforeToolCall` 授权后 | 运行中的智能体回合，🟢 内联执行 / 🟡🔴 被阻断 |
+| `registry.executeDirect` / `executeGatedTool` | **人工决策**（confirm/verify）或 Planner 的 `runTool` | 用**原始已校验参数**经 Banking SDK 执行，**不经过 LLM** |
+
+---
+
+## 8. 深入 · DAG Planner（规划器）
+
+`planner/` 是支撑 `submit_plan` 元工具的**确定性 DAG 引擎**。LLM 提出一个计划（`TaskNodeSpec`
+节点组成的 DAG）；规划器**校验**它、计算执行顺序、按拓扑序**执行**节点、**求值**条件分支，
+并发出逐节点的状态更新——这正是智能体循环中的**规划（plan）+ 执行（execute）**阶段。
+
+**流水线**：`validate → topological order → execute → condition eval → status stream`。
+
+- `dag.ts`（纯图操作，无 I/O）：`validatePlan` 拒绝重复 id、未知工具、畸形节点、缺失依赖与环；
+  `topologicalOrder` 给出确定顺序（按声明顺序稳定）；`getReadyNodes` 选出所有依赖已 `success`/`skipped`
+  的就绪节点；`evaluateCondition` 做点路径查表 + `op` 比较；`buildPlan` 组装初始快照。
+- `executor.ts`：`runPlan(plan, deps, opts)` 按拓扑序推进并返回最终快照。**副作用全部注入**：
+  `PlanDeps.runTool`（由 agent 提供，走网关）、`onNodeUpdate`（转发为 `plan_update` 流事件）、
+  可选 `persist`。
+
+**节点状态机**（`TaskNodeStatus`）：
+
+```
+pending → running → { success | failed | waiting_confirmation | waiting_verification | cancelled }
+```
+
+依赖未成功的节点（`skipped` / `failed` / `cancelled`）会传递性地变为 `skipped`；
+条件为 `false` 的分支其后继同样 `skipped`。计划级状态
+（`TaskPlanStatus`）：`pending | running | waiting_confirmation | success | failed | cancelled`。
+
+**被门控的节点会「停放」**：`runTool` 返回 `{ ok:false, requiresConfirmation:true, pendingActionId }`
+时节点不执行，停在 `waiting_confirmation`（RED 待 MFA 则停在 `waiting_verification`）；人工决策后
+智能体通过 `PlanControls.resume()` / `retry(nodeId)` 重新调用 `runTool`。
+
+**示例（对应 Test 11「若本月娱乐>2000则调限额1500」）**：
+
+```mermaid
+flowchart LR
+    A["analyze_spending<br/>🟢 GREEN"] --> C{"condition<br/>本月娱乐 &gt; 2000"}
+    C -- true --> B["set_card_limit<br/>🟡 YELLOW · 需确认"]
+    C -- false --> D["跳过 (skipped)"]
+```
+
+规划器是**纯 DAG 逻辑**：只导入 `lib/contracts/task` + `lib/errors`，绝不导入 banking-sdk / security /
+agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed` 并继续独立分支。
+
+---
+
+## 9. 两阶段确认模型 · Two-Phase Confirmation
+
+资金类调用**总是**由人工确认触发，绝不由模型文本触发（这正是演示 Test 4 —— prompt injection 所证明的）。
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant API as API 路由
+    participant AG as Pi Agent (LLM)
+    participant GW as Security Gateway (beforeToolCall)
+    participant SDK as Banking SDK
+    U->>API: 「给张伟转5000元」
+    API->>AG: prompt(user message)
+    AG->>GW: 工具调用 transfer_money(5000)
+    GW->>GW: evaluate → 🔴 RED（amount > ¥1000）
+    GW-->>AG: { block: true, reason: __SECURITY_BLOCK__… }
+    Note over GW,SDK: 未执行；写入 PendingAction(awaiting_mfa)
+    AG-->>API: 「需安全验证」文本
+    API-->>U: 展示验证码输入
+    U->>API: POST /api/actions/:id/verify { code:"123456" }
+    API->>GW: authorizeAction(id, { mfaCode })
+    GW-->>API: ok（RED + MFA 通过）
+    API->>SDK: createTransfer(原始已校验参数)
+    SDK-->>API: 真实结果（成功 / 失败）
+    API->>AG: continue() 注入真实结果
+    AG-->>U: 如实播报事实性结果
+```
+
+- **第一阶段（回合 / Turn）**：`POST /api/chat` 跑一个 Agent 回合。🟢 工具在 `execute` 内联执行，
+  结果回流给模型；🟡/🔴 工具被 `beforeToolCall` **阻断**，持久化 `PendingAction` 行，并返回结构化原因，
+  模型看到「待确认/待验证」后向用户回复。
+- **第二阶段（人工决策）**：`POST /api/actions/:id/confirm`（🟡，或 MFA 后的 🔴）· `.../verify`（🔴 MFA 码）
+  · `.../cancel`。服务器通过网关的**授权执行路径**（**不是 LLM**）用**原始已校验参数**经 Banking SDK 执行、
+  写审计日志、把**真实**工具结果注入会话，并调用 `agent.continue()` 让模型叙述事实性结果。
+
+> **网关只授权，不执行**：`securityGateway.authorizeAction` 只返回授权结果，资金移动由 agent 层的
+> `executeGatedTool` 用原始参数执行。
+
+---
+
+## 10. 工具体系 · Tool Catalogue
+
+模型拥有的**唯一**能力面（`lib/contracts/tools.ts` 中的 `ToolName` 联合类型，共 26 个）：
+
+| 层级 | 工具 |
+|---|---|
+| 🟢 **GREEN**（13，自动执行，无确认） | `get_balance`、`get_transactions`、`search_contact`、`analyze_spending`、`detect_anomaly`、`get_cards`、`list_subscriptions`、`list_investments`、`compare_investments`、`get_investment_holdings`、`get_dashboard_summary`、`list_scheduled_tasks`、`reserve_budget` |
+| 🟡 **YELLOW**（需用户确认） | `set_card_limit`、`cancel_subscription`、`freeze_card`、`apply_virtual_card`、`set_subscription_reminder`、`create_scheduled_task` |
+| 🔴 **RED**（需强验证 / MFA） | `subscribe_investment`、`redeem_investment`、`report_lost_card`、`unfreeze_card`、`change_password` |
+| 🔵 **DYNAMIC** | `transfer_money`：`amount > ¥1000` **或** `当日累计 + amount > ¥1000` ⇒ 🔴，否则 🟡；**总是**需要确认 |
+| ⚪ **META** | `submit_plan`：不受风险门控（allow） |
+
+精确层级以 `security/permission-engine.ts` 的策略表为准；`transfer_money` 是动态的。
+
+---
+
+## 11. 关键技术决策 · Key Decisions
+
+- **代码即权限**：🟢/🟡/🔴、确认与 MFA 只由静态策略表 + 确定性动态规则推导，
+  模型输出与用户文本**从不**作为判定输入。
+- **能力面即安全边界**：工具注册表就是完整能力集；没有 shell/SQL/文件工具，注入攻击无工具可调。
+- **两阶段 + 人工决策**：资金移动永远由人工确认触发；网关授权、agent 执行，职责分离。
+- **演示时钟（Demo Clock）**：`DEMO_NOW = 2026-09-25 12:00 本地`，让本月/上月/今日窗口、消费分析、
+  日转账窗口、计划任务日期与 system prompt 的「今天」保持一致，不受真实系统时钟影响。
+- **离线确定性**：`LLM_MODE=mock`（faux provider）+ 可注入的 `now` / `id`，让 agent/security/planner
+  测试无需网络。
+- **UI 不展示 LLM 思维链**：只显示任务步骤、工具状态与结果。
+
+> 完整安全模型见 [`security.md`](./security.md)；验收场景见 [`test-cases.md`](./test-cases.md)；
+> 已知限制见 [`known-risks.md`](./known-risks.md)。
