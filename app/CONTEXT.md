@@ -18,6 +18,9 @@ It is the only place that knows about HTTP, cookies, sessions and JSON envelopes
 - **Client Components** (`'use client'`, supplied by `../components`) own interactivity: chat
   streaming, action confirm/verify/cancel buttons, and client-side refresh (polling the `GET /api/*`
   read routes). They reach the server **only through this node's own API routes**.
+- **Global chrome**: `app/layout.tsx` renders a persistent top navigation (`app/_components/NavBar.tsx`,
+  a client component using `usePathname` for active-route highlighting) above `{children}`, linking all
+  seven pages (`/`, `/agent`, `/bills`, `/cards`, `/subscriptions`, `/security`, `/audit`).
 - **Import firewall** (enforced): Server Components MAY import `banking-sdk`, `audit`, `security`,
   `planner`, `lib`. Client Components MUST NOT import Prisma, `banking-sdk`, `security`, `agent`, or
   `planner` — they call `/api/*` instead. Prisma is reachable only through `banking-sdk` /
