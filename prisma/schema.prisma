@@ -1,0 +1,325 @@
+// AI Banking Agent — Prisma schema (SQLite)
+//
+// Demo sandbox: all banking data is simulated. SQLite has no native enum type, so every
+// enum-like field is stored as a `String` (the allowed values are documented per field).
+// Money values use `Float` (CNY). JSON-ish payloads are stored as JSON text in `String`.
+//
+// Field notes:
+//   - `balance` / `amount` are signed: negative = expense/outflow, positive = income/inflow.
+//   - `type`          on Account        = "CHECKING" | "SAVINGS"
+//   - `direction`     on Transaction    = "DEBIT" | "CREDIT"
+//   - `channel`       on Transaction    = "APP" | "CARD" | "TRANSFER" | "SUBSCRIPTION"
+//   - `type`          on Card           = "DEBIT" | "CREDIT" | "VIRTUAL"
+//   - `status`        on Card           = "ACTIVE" | "FROZEN" | "LOST" | "PENDING"
+//   - `status`        on Subscription   = "ACTIVE" | "CANCELLED"
+//   - `riskLevel`     on InvestmentProduct = "R1" | "R2" | "R3" | "R4" | "R5"
+//   - `status`        on InvestmentHolding = "HOLDING" | "REDEEMED"
+//   - `status`        on Budget         = "RESERVED" | "USED" | "RELEASED"
+//   - `kind`          on ScheduledTask  = "REMINDER" | "PAYMENT" | "TRANSFER"
+//   - `status`        on ScheduledTask  = "SCHEDULED" | "DONE" | "CANCELLED"
+//   - `severity`      on SecurityEvent  = "low" | "medium" | "high"
+//   - `status`        on AgentSession   = "active" | "closed"
+//   - `status`        on PendingAction  = "pending" | "confirmed" | "verified" | "cancelled" | "expired"
+//   - `status`        on MfaChallenge   = "pending" | "verified" | "failed" | "locked"
+//   - `status`        on AgentTask/AgentTaskNode = "pending" | "running" | "done" | "failed" | "blocked"
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  name        String
+  phone       String   @unique
+  avatarEmoji String?
+  createdAt   DateTime @default(now())
+
+  accounts       Account[]
+  cards          Card[]
+  contacts       Contact[]
+  subscriptions  Subscription[]
+  holdings       InvestmentHolding[]
+  budgets        Budget[]
+  sessions       AgentSession[]
+  scheduledTasks ScheduledTask[]
+  auditLogs      AuditLog[]
+  securityEvents SecurityEvent[]
+}
+
+model Account {
+  id       String  @id @default(cuid())
+  userId   String
+  type     String // "CHECKING" | "SAVINGS"
+  name     String
+  number   String // masked, e.g. "****8821"
+  balance  Float
+  currency String  @default("CNY")
+
+  user         User          @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+model Transaction {
+  id             String   @id @default(cuid())
+  accountId      String
+  userId         String
+  amount         Float // negative = expense, positive = income
+  currency       String   @default("CNY")
+  direction      String // "DEBIT" | "CREDIT"
+  category       String // 餐饮/出行/购物/娱乐/居住/医疗/订阅/转账/其他
+  merchant       String
+  channel        String? // "APP" | "CARD" | "TRANSFER" | "SUBSCRIPTION"
+  remark         String?
+  counterpartyId String? // Contact id (no relation — historical reference only)
+  occurredAt     DateTime
+  isAnomaly      Boolean  @default(false)
+  anomalyReason  String?
+  createdAt      DateTime @default(now())
+
+  account Account @relation(fields: [accountId], references: [id])
+
+  @@index([userId, occurredAt])
+  @@index([accountId])
+}
+
+model Contact {
+  id     String  @id @default(cuid())
+  userId String
+  name   String
+  phone  String
+  bank   String?
+  remark String?
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, name])
+}
+
+model Card {
+  id             String   @id @default(cuid())
+  userId         String
+  type           String // "DEBIT" | "CREDIT" | "VIRTUAL"
+  network        String   @default("UnionPay")
+  numberMasked   String
+  status         String   @default("ACTIVE") // "ACTIVE" | "FROZEN" | "LOST" | "PENDING"
+  creditLimit    Float?
+  availableLimit Float?
+  monthlyLimit   Float?
+
+  user   User        @relation(fields: [userId], references: [id])
+  limits CardLimit[]
+
+  @@index([userId])
+}
+
+model CardLimit {
+  id       String @id @default(cuid())
+  cardId   String
+  category String // 娱乐/餐饮/购物/出行/其他
+  amount   Float
+
+  card Card @relation(fields: [cardId], references: [id])
+
+  @@index([cardId])
+}
+
+model Subscription {
+  id           String   @id @default(cuid())
+  userId       String
+  name         String
+  amount       Float
+  cycle        String   @default("MONTHLY")
+  nextChargeAt DateTime
+  status       String   @default("ACTIVE") // "ACTIVE" | "CANCELLED"
+  remind       Boolean  @default(false)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model InvestmentProduct {
+  id           String  @id @default(cuid())
+  code         String  @unique
+  name         String
+  riskLevel    String // "R1" | "R2" | "R3" | "R4" | "R5"
+  expectedRate Float // percent, e.g. 3.25
+  termDays     Int
+  minAmount    Float
+  description  String?
+
+  holdings InvestmentHolding[]
+}
+
+model InvestmentHolding {
+  id          String   @id @default(cuid())
+  userId      String
+  productId   String
+  amount      Float
+  marketValue Float?
+  boughtAt    DateTime @default(now())
+  status      String   @default("HOLDING") // "HOLDING" | "REDEEMED"
+
+  user    User              @relation(fields: [userId], references: [id])
+  product InvestmentProduct @relation(fields: [productId], references: [id])
+
+  @@index([userId])
+  @@index([productId])
+}
+
+model Budget {
+  id        String    @id @default(cuid())
+  userId    String
+  name      String
+  amount    Float
+  purpose   String?
+  status    String    @default("RESERVED") // "RESERVED" | "USED" | "RELEASED"
+  dueDate   DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model AgentTask {
+  id        String   @id @default(cuid())
+  sessionId String
+  userId    String
+  goal      String
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  nodes AgentTaskNode[]
+
+  @@index([sessionId])
+}
+
+model AgentTaskNode {
+  id           String    @id @default(cuid())
+  taskId       String
+  nodeId       String
+  name         String
+  kind         String
+  tool         String?
+  args         String? // JSON text
+  condition    String? // JSON text
+  dependencies String? // JSON text (array of nodeIds)
+  status       String    @default("pending")
+  output       String? // JSON text
+  error        String?
+  order        Int
+  startedAt    DateTime?
+  endedAt      DateTime?
+
+  task AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+}
+
+model ScheduledTask {
+  id                   String   @id @default(cuid())
+  userId               String
+  name                 String
+  kind                 String // "REMINDER" | "PAYMENT" | "TRANSFER"
+  payload              String? // JSON text
+  runAt                DateTime
+  status               String   @default("SCHEDULED") // "SCHEDULED" | "DONE" | "CANCELLED"
+  requiresConfirmation Boolean  @default(true)
+  createdAt            DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id                   String   @id @default(cuid())
+  timestamp            DateTime @default(now())
+  sessionId            String
+  userId               String?
+  user                 User?    @relation(fields: [userId], references: [id])
+  userRequest          String
+  intent               String?
+  toolName             String
+  riskLevel            String
+  confirmationRequired Boolean  @default(false)
+  confirmed            Boolean  @default(false)
+  mfaRequired          Boolean  @default(false)
+  mfaResult            String?
+  toolResult           String? // JSON text
+  status               String
+  detail               String?
+
+  @@index([timestamp])
+  @@index([userId])
+  @@index([sessionId])
+}
+
+model SecurityEvent {
+  id        String   @id @default(cuid())
+  timestamp DateTime @default(now())
+  sessionId String
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  kind      String
+  severity  String // "low" | "medium" | "high"
+  message   String
+  detail    String?
+
+  @@index([timestamp])
+  @@index([userId])
+  @@index([sessionId])
+}
+
+model AgentSession {
+  id        String   @id @default(cuid())
+  userId    String
+  stateJson String // serialized AgentState (JSON text)
+  status    String   @default("active")
+  locked    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+}
+
+model PendingAction {
+  id          String   @id @default(cuid())
+  sessionId   String
+  userId      String
+  toolName    String
+  argsJson    String // JSON text
+  riskLevel   String
+  requiresMfa Boolean  @default(false)
+  status      String   @default("pending")
+  summaryJson String // JSON text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  mfa MfaChallenge?
+
+  @@index([sessionId])
+}
+
+model MfaChallenge {
+  id          String    @id @default(cuid())
+  actionId    String    @unique
+  action      PendingAction @relation(fields: [actionId], references: [id], onDelete: Cascade)
+  code        String
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  status      String    @default("pending") // "pending" | "verified" | "failed" | "locked"
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime?
+}
