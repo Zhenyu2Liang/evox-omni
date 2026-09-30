@@ -17,6 +17,7 @@
 import type { AuditEntry, AuditStatus } from '@/lib/contracts/audit';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import { insertAuditLog, findAuditLogs, aggregateAuditLogs } from '@/lib/db/repositories/auditLog';
+import { AppError } from '@/lib/errors';
 
 /**
  * Filter for {@link listAudit}. Every field is optional; results are returned newest-first.
@@ -54,15 +55,34 @@ export const auditStore = { insertAuditLog, findAuditLogs, aggregateAuditLogs };
  * Never rejects: on persistence failure it logs the error and resolves with the input entry.
  */
 export async function recordAudit(entry: AuditEntry): Promise<AuditEntry> {
-  throw new Error('not implemented');
+  try {
+    return await auditStore.insertAuditLog(entry);
+  } catch (e) {
+    // Best-effort write: a failed audit append must never break the banking flow.
+    console.error('[audit] failed to persist audit entry', e);
+    return entry;
+  }
 }
 
 /** Query audit entries, newest-first, by optional filter. Read-only. */
 export async function listAudit(filter: AuditFilter): Promise<AuditEntry[]> {
-  throw new Error('not implemented');
+  try {
+    return await auditStore.findAuditLogs(filter);
+  } catch (e) {
+    throw AppError.from(e);
+  }
 }
 
 /** Aggregate counts (total / byRisk / byStatus) over the whole audit log. Read-only. */
 export async function getAuditSummary(): Promise<AuditSummary> {
-  throw new Error('not implemented');
+  try {
+    const summary = await auditStore.aggregateAuditLogs();
+    return {
+      total: summary.total,
+      byRisk: summary.byRisk,
+      byStatus: summary.byStatus,
+    };
+  } catch (e) {
+    throw AppError.from(e);
+  }
 }

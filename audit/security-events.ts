@@ -19,6 +19,8 @@
  */
 import type { SecurityEvent, SecurityEventKind } from '@/lib/contracts/audit';
 import { insertSecurityEvent, findSecurityEvents } from '@/lib/db/repositories/securityEvent';
+import { AppError } from '@/lib/errors';
+import { demoNow } from '@/lib/clock';
 
 /** Filter for {@link listSecurityEvents}. Every field is optional; results newest-first. */
 export interface SecurityEventFilter {
@@ -54,8 +56,11 @@ export interface SecurityStatusOptions {
  */
 export const securityEventStore = { insertSecurityEvent, findSecurityEvents };
 
+/** Scan window for deriving lock state from the event stream (independent of `recentLimit`). */
+const LOCK_SCAN_LIMIT = 100;
+
 /**
- * Persist a security event. `timestamp` defaults to `Date.now()` when omitted; `id` is
+ * Persist a security event. `timestamp` defaults to `demoNow()` (the demo clock) when omitted; `id` is
  * assigned by the repository.
  *
  * Never rejects: on persistence failure it logs the error and resolves with the input event.
@@ -63,12 +68,23 @@ export const securityEventStore = { insertSecurityEvent, findSecurityEvents };
 export async function recordSecurityEvent(
   event: Omit<SecurityEvent, 'id' | 'timestamp'> & { timestamp?: number },
 ): Promise<SecurityEvent> {
-  throw new Error('not implemented');
+  const full: SecurityEvent = { ...event, timestamp: event.timestamp ?? demoNow() };
+  try {
+    return await securityEventStore.insertSecurityEvent(full);
+  } catch (e) {
+    // Best-effort write: a failed security-event append must never break the flow.
+    console.error('[audit] failed to persist security event', e);
+    return full;
+  }
 }
 
 /** Query security events, newest-first. Read-only. */
 export async function listSecurityEvents(filter?: SecurityEventFilter): Promise<SecurityEvent[]> {
-  throw new Error('not implemented');
+  try {
+    return await securityEventStore.findSecurityEvents(filter ?? {});
+  } catch (e) {
+    throw AppError.from(e);
+  }
 }
 
 /**
@@ -81,5 +97,37 @@ export async function getSecurityStatus(
   sessionId: string,
   options?: SecurityStatusOptions,
 ): Promise<SecurityStatus> {
-  throw new Error('not implemented');
+  try {
+    const recentEvents = await securityEventStore.findSecurityEvents(
+      options?.filter ?? { sessionId, limit: options?.recentLimit },
+    );
+
+    let locked: boolean;
+    if (options?.isLocked) {
+      locked = options.isLocked(sessionId);
+    } else {
+      const stream = await securityEventStore.findSecurityEvents({
+        sessionId,
+        limit: LOCK_SCAN_LIMIT,
+      });
+      locked = deriveLocked(stream);
+    }
+
+    return { locked, recentEvents };
+  } catch (e) {
+    throw AppError.from(e);
+  }
+}
+
+/**
+ * Derive lock state from the persisted event stream: `locked` iff the NEWEST
+ * `CIRCUIT_BREAKER_TRIPPED` / `SECURITY_RESET` event is a trip. Events arrive newest-first.
+ * Breaker counters stay in `security`; this is only the event-derived fallback.
+ */
+function deriveLocked(events: SecurityEvent[]): boolean {
+  for (const event of events) {
+    if (event.kind === 'CIRCUIT_BREAKER_TRIPPED') return true;
+    if (event.kind === 'SECURITY_RESET') return false;
+  }
+  return false;
 }
