@@ -175,7 +175,7 @@ Repository functions this node consumes (confirmed signatures — do NOT fork):
 - `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>` (sibling node; the stub throws `'not implemented'` on CALL — callers `await` it, never fire-and-forget)
 - `lib/db/repositories/pendingAction` → `createPendingAction(input): Promise<PendingAction>`,
   `getPendingAction(id): Promise<(PendingAction & { mfa: MfaChallenge | null }) | null>`, `updatePendingActionStatus(id, status): Promise<PendingAction>`
-- `lib/db/repositories/mfaChallenge` → `createMfaChallenge({actionId, code, maxAttempts, createdAt}): Promise<void>`,
+- `lib/db/repositories/pendingAction` (MFA challenge rows live in the SAME module) → `createMfaChallenge({ actionId, code, maxAttempts?, expiresAt? }): Promise<MfaChallenge>`,
   `getMfaChallenge(actionId): Promise<{actionId; code; attempts; maxAttempts; verified; createdAt} | null>`,
   `incrementMfaAttempts(actionId): Promise<number>`, `markMfaVerified(actionId): Promise<void>`
 - `lib/db/repositories/transaction` → `sumOutgoingTransfersSince(userId: string, sinceMs: number): Promise<number>`
