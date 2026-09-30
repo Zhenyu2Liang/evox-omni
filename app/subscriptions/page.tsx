@@ -5,20 +5,46 @@
  *   `banking.subscription.listSubscriptions(userId)` → `SubscriptionView[]`
  *     (name · amount · cycle · nextChargeAt · status · remind).
  *   User id: `getConfig().demoUserId` (default `DEFAULT_DEMO_USER_ID`).
+ *   ACTIVE subscriptions only (cancelled ones are excluded by the SDK).
  *
- * Composes (`../components` — referenced by name only; the component library owns the API):
- *   subscription list (name / monthly fee / next charge), annual-cost summary, and the
- *   reminder-toggle / cancel actions (client cards call `/api/*` / the agent tools).
+ * Composes (`../components` — read-only sibling):
+ *   SubscriptionTile per row (name / monthly fee / cycle / next charge / remind),
+ *   an annual-cost summary, and the empty state.
+ *
+ * Read-only: cancelling a subscription (`cancel_subscription`) and toggling its reminder
+ * (`set_subscription_reminder`) are YELLOW agent tools — they are executed through the security
+ * gateway's confirmation flow, never directly by this page.
  */
 import { getConfig } from '@/lib/config';
+import { addMoney } from '@/lib/money';
 import { banking } from '@/banking-sdk';
-import type { SubscriptionView } from '@/banking-sdk';
+import type { SubscriptionCycle, SubscriptionView } from '@/banking-sdk';
+import { Badge, Card, EmptyState, Money, SubscriptionTile } from '@/components';
+
+/** Billings per year for each cycle — used to annualise a subscription's fee. */
+const BILLINGS_PER_YEAR: Record<SubscriptionCycle, number> = {
+  MONTHLY: 12,
+  QUARTERLY: 4,
+  YEARLY: 1,
+};
+
+/** Annualised cost of a single subscription (cent-safe). */
+function annualCost(subscription: SubscriptionView): number {
+  return addMoney(0, subscription.amount * BILLINGS_PER_YEAR[subscription.cycle]);
+}
+
+/** Sum of every subscription's annualised cost, cent-safe. */
+function totalAnnualCost(rows: SubscriptionView[]): number {
+  return rows.reduce((sum, row) => addMoney(sum, annualCost(row)), 0);
+}
 
 export default async function SubscriptionsPage() {
   const userId = getConfig().demoUserId;
 
-  // TODO: wire read model — the user's subscriptions with fees, cycles and next-charge dates.
   const subscriptions: SubscriptionView[] = await banking.subscription.listSubscriptions(userId);
+
+  const annualTotal = totalAnnualCost(subscriptions);
+  const remindCount = subscriptions.filter((row) => row.remind).length;
 
   return (
     <main className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
@@ -29,15 +55,47 @@ export default async function SubscriptionsPage() {
         </p>
       </header>
 
-      {/*
-        TODO: wire read model into the component library (`@/components`, read-only sibling):
-          <SubscriptionList rows={subscriptions} />   // name / monthly fee / next charge
-          <AnnualCostSummary rows={subscriptions} />  // annualised spend
-          + reminder-toggle / cancel actions on each row.
-      */}
-      <section className="rounded-2xl bg-white p-6 text-sm text-banking-navy shadow-sm">
-        订阅列表、年度成本汇总与提醒 / 取消操作将由 `@/components` 渲染。
-      </section>
+      <Card title="年度成本汇总" description="按计费周期折算的年化支出">
+        <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+          <div>
+            <dt className="text-xs text-banking-navy">订阅数量</dt>
+            <dd className="mt-1 text-lg font-semibold text-banking-deep">
+              {subscriptions.length} 项
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-banking-navy">年度成本</dt>
+            <dd className="mt-1 text-lg font-semibold text-banking-deep">
+              <Money amount={annualTotal} />
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-banking-navy">已开启续费提醒</dt>
+            <dd className="mt-1">
+              <Badge tone={remindCount > 0 ? 'success' : 'neutral'}>{remindCount} 项</Badge>
+            </dd>
+          </div>
+        </dl>
+      </Card>
+
+      {subscriptions.length === 0 ? (
+        <EmptyState title="暂无订阅" description="当前没有进行中的订阅。" />
+      ) : (
+        <Card
+          title="订阅列表"
+          description="名称 / 月费 / 计费周期 / 下次扣费"
+          padding="lg"
+          footer="取消订阅 / 修改提醒由 AI Agent 确认后执行。"
+        >
+          <ul className="flex flex-col gap-3">
+            {subscriptions.map((subscription) => (
+              <li key={subscription.id}>
+                <SubscriptionTile subscription={subscription} />
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
     </main>
   );
 }

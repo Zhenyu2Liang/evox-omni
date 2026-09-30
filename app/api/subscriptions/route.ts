@@ -9,24 +9,29 @@
  *
  * Note: subscription MUTATIONS (cancel / toggle reminder) are gated tools the agent invokes
  * through the Security Gateway — not exposed here.
- *
- * STUB (Genesis architecture pass): body not implemented yet.
  */
 import type { NextRequest } from 'next/server';
-import { AppError } from '@/lib/errors';
 import { banking, type SubscriptionView } from '@/banking-sdk';
+import { errorResponse, jsonResponse, parseQuery } from '../_lib/http';
 import { userIdQuerySchema } from '../_lib/schemas';
+import { resolveUserId } from '../_lib/session';
 
-/** Query schema for `GET /api/subscriptions`. */
-export const subscriptionsQuerySchema = userIdQuerySchema;
+/** Query schema for `GET /api/subscriptions` (private — a Next route may only export handlers). */
+const subscriptionsQuerySchema = userIdQuerySchema;
 
 /** Success payload shape for `GET /api/subscriptions`. */
 export interface SubscriptionsData {
   subscriptions: SubscriptionView[];
 }
 
-export async function GET(_req: NextRequest): Promise<Response> {
-  throw new AppError('INTERNAL', 'not implemented');
+export async function GET(req: NextRequest): Promise<Response> {
+  try {
+    parseQuery(subscriptionsQuerySchema, req);
+    const userId = resolveUserId(req);
+    const subscriptions = await banking.subscription.listSubscriptions(userId);
+    const data: SubscriptionsData = { subscriptions };
+    return jsonResponse(data);
+  } catch (e) {
+    return errorResponse(e);
+  }
 }
-
-void banking;

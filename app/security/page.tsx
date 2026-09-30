@@ -2,25 +2,33 @@
  * Security Center — `/security` (Server Component, RSC by default).
  *
  * Data (fetched on the server, direct read models — no HTTP hop):
- *   `audit.getSecurityStatus(sessionId)`        → `SecurityStatus` (circuit-breaker lock + recent events)
+ *   `audit.getSecurityStatus(sessionId)`        → `SecurityStatus` (`{ locked, recentEvents }`)
  *   `audit.listSecurityEvents({ sessionId })`   → `SecurityEvent[]`
  *   Session id: the `banking_session` cookie (`SESSION_COOKIE`).
  *
- * Composes (`../components` — referenced by name only; the component library owns the API):
- *   the 🟢/🟡/🔴 permission legend (`RISK_LABEL`), recent verifications, circuit-breaker
- *   status, and the SecurityEvents table.
+ * Composes (`@/components/security` — read-only sibling; the component library owns the API):
+ *   `PermissionLegend`      → 🟢/🟡/🔴 permission-tier legend (driven by `RISK_LABEL`)
+ *   `CircuitBreakerStatus`  → session breaker lock state (tripped / failures vs max attempts)
+ *   `SecurityEventList`     → the recent verifications feed + the session security-event table
+ *
+ * Display only: every tier, lock and event here is produced by `@/audit` / `@/security`; this
+ * page never decides permission. All props passed to the components are JSON-serializable
+ * (epoch-ms timestamps, plain objects).
  */
 import { cookies } from 'next/headers';
 import { audit } from '@/audit';
 import type { SecurityStatus } from '@/audit';
 import type { SecurityEvent } from '@/lib/contracts/audit';
-import type { RiskLevel } from '@/lib/contracts/risk';
-import { RISK_LABEL, SESSION_COOKIE } from '@/lib/constants';
+import { MFA_MAX_ATTEMPTS, SESSION_COOKIE } from '@/lib/constants';
+import {
+  CircuitBreakerStatus,
+  PermissionLegend,
+  SecurityEventList,
+} from '@/components/security';
 
 export default async function SecurityPage() {
   const sessionId = (await cookies()).get(SESSION_COOKIE)?.value ?? '';
 
-  // TODO: wire read model — session security posture + recent security events.
   const status: SecurityStatus = await audit.getSecurityStatus(sessionId);
   const events: SecurityEvent[] = await audit.listSecurityEvents({ sessionId });
 
@@ -33,22 +41,28 @@ export default async function SecurityPage() {
         </p>
       </header>
 
-      <section className="flex flex-wrap gap-3 text-sm">
-        {(Object.keys(RISK_LABEL) as RiskLevel[]).map((tier) => (
-          <span key={tier} className="rounded-xl bg-white px-3 py-1 shadow-sm">
-            {RISK_LABEL[tier]}
-          </span>
-        ))}
+      {/* Permission tiers — 🟢 auto / 🟡 confirm / 🔴 MFA (labels from `lib/constants.RISK_LABEL`). */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium text-banking-deep">权限分级</h2>
+        <PermissionLegend />
       </section>
 
-      {/*
-        TODO: wire read model into the component library (`@/components`, read-only sibling):
-          <CircuitBreakerStatus locked={status.locked} />
-          <RecentVerifications events={status.recentEvents} />
-          <SecurityEventsTable events={events} />
-      */}
-      <section className="rounded-2xl bg-white p-6 text-sm text-banking-navy shadow-sm">
-        熔断状态、最近验证记录与安全事件表将由 `@/components` 渲染。
+      {/* Circuit breaker — after repeated MFA failures, high-risk ops are locked for the session. */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium text-banking-deep">熔断状态</h2>
+        <CircuitBreakerStatus tripped={status.locked} maxAttempts={MFA_MAX_ATTEMPTS} />
+      </section>
+
+      {/* Recent verifications — the latest MFA outcomes / blocked ops for this session. */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium text-banking-deep">最近验证记录</h2>
+        <SecurityEventList events={status.recentEvents} emptyText="暂无最近验证记录" />
+      </section>
+
+      {/* Security-event stream — injection attempts, MFA failures, breaker trips, blocked ops. */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-lg font-medium text-banking-deep">安全事件</h2>
+        <SecurityEventList events={events} emptyText="暂无安全事件" />
       </section>
     </main>
   );

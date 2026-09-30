@@ -16,15 +16,27 @@ This node is a **thin Server Component** — it fetches the audit read models di
   - `audit.listAudit({ sessionId, limit })` → `AuditEntry[]` (newest-first)
   - `audit.getAuditSummary()` → `AuditSummary` (`{ total, byRisk, byStatus }`)
   - Session id: the `banking_session` cookie (`SESSION_COOKIE`).
-- **Composes** (from `../components` — referenced by name only): `AuditTable` with columns
+- **Composes** (from `@/components` — read-only): `ui/Table` for the audit trail with columns
   timestamp / userRequest / intent / toolName / riskLevel / confirmationRequired / confirmed /
-  mfaRequired / mfaResult / toolResult / status, plus summary badges.
+  mfaRequired / mfaResult / toolResult / status; `ui/Card` as the surface; `ui/EmptyState` for the
+  zero-row case; summary badges from `ui/Badge` (total + one per `AuditStatus`) and `ui/StatusBadge`
+  (one per `RiskLevel`, labelled from `RISK_LABEL`).
+
+## Display mappings (page-local, presentation only)
+
+- `STATUS_VIEW: Record<AuditStatus, { label; tone }>` — Chinese label + badge tone per audit status.
+- `MFA_RESULT_LABEL` — `success`/`failed`/`not_required` → 验证通过 / 验证失败 / 无需验证 (an absent
+  `mfaResult` renders as 无需验证; the MFA code itself is never rendered).
+- `summarizeToolResult(unknown)` — one-line JSON view of `toolResult`, truncated to 120 chars (`—` for
+  an absent result).
+- Timestamps render through `@/lib/date.formatDateTime` on the server (`timestamp` is epoch ms; no
+  `Date` object crosses a boundary).
 
 ## Constraints
 
-- **Server Component**; render chrome + `TODO: wire read model` comments — no UI logic.
-- Pass only **serializable** props to client components (no `Date` — epoch ms; render timestamps as
-  epoch ms and format client-side).
+- **Server Component**; no UI logic beyond the display mappings above.
+- Pass only **serializable** props to client components (no `Date` — epoch ms; the page formats
+  timestamps server-side through `@/lib/date.formatDateTime`).
 - **Read via `@/audit` only** — never import Prisma directly.
 - **Never build** the composed components here; reference them from `../components` (read-only sibling).
 - **Never redeclare** the frozen `AuditEntry` type — import it from `@/lib/contracts/audit`.

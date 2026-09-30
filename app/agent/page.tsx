@@ -4,9 +4,13 @@
  * Data: none here — the client streams a turn from `POST /api/chat` (SSE `AgentStreamEvent`s)
  *   and drives confirmations through `POST /api/actions/[id]/{confirm,verify,cancel}`.
  *
- * Composes (`../components`, Client Component — referenced by name only; the library owns the API):
+ * Composes (`@/components`, Client Component — referenced by name only; the library owns the API):
  *   `<ChatWindow/>` — input, message list, task timeline, cards, confirmation / MFA prompts.
+ *   Its `sessionId` prop is optional: the agent creates the session on the first turn and the
+ *   `session` stream event keeps it client-side, so no cookie read is needed here.
  */
+import { ChatWindow } from '@/components';
+
 export default function AgentPage() {
   return (
     <main className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
@@ -17,13 +21,7 @@ export default function AgentPage() {
         </p>
       </header>
 
-      {/*
-        TODO: render the client chat window from `@/components` — do NOT build it here:
-          <ChatWindow sessionId={...} />
-      */}
-      <section className="rounded-2xl bg-white p-6 text-sm text-banking-navy shadow-sm">
-        对话窗口（输入、消息列表、任务时间线、卡片、确认 / 验证码提示）将由 `@/components` 渲染。
-      </section>
+      <ChatWindow className="min-h-[60vh]" />
     </main>
   );
 }
