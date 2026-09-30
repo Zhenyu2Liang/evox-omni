@@ -37,7 +37,7 @@ Run:
   (e.g. `lib/db/client`, `banking-sdk`) — `setup.ts` pushes the schema with `--skip-generate` on purpose.
 - `vitest.config.ts` (root-owned) already wires `setupFiles: ['tests/setup.ts']` + `env: { LLM_MODE: 'mock' }`.
   It is MISSING `test.fileParallelism: false` (and a raised `hookTimeout`): without them every test file runs
-  This file is owned by the root; a change here must be escalated to the root, not made from `./tests`.
+  in parallel against the ONE shared `prisma/test.db`, so reset/seed race (socket timeouts). Run sequentially; escalate to root.
 
 ## Constraints
 
