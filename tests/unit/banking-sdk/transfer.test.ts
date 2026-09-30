@@ -2,40 +2,224 @@
  * Unit: banking-sdk/transfer — money-movement execution (execute only; tier policy lives in security/).
  *
  * Targets `@/banking-sdk` → banking.transfer.createTransfer(input)
- * (+ types TransferInput, TransferResult from '@/banking-sdk').
+ * (+ types TransferInput, TransferResult, TransactionView, ContactView from '@/banking-sdk').
  *
  * Reads accounts & contacts and writes DEBIT transactions via Prisma → requires test SQLite
- * via ../helpers/db. Seed: 李明 checking balance 23580; contacts 张伟/王芳/妈妈/李华.
+ * via ../../helpers/db. Seed: 李明 checking balance 23580; contacts 张伟/王芳/妈妈/李华.
  */
-import { describe, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { banking } from '@/banking-sdk';
+import type { ContactView, TransactionView, TransferInput, TransferResult } from '@/banking-sdk';
+import { demoNow } from '@/lib/clock';
+import { AppError } from '@/lib/errors';
+import { truncateAll, useFreshDatabase } from '../../helpers/db';
+import { ACCOUNTS, CONTACTS, DEMO_USER_ID, seedDemoData } from '../../helpers/fixtures';
 
-// import { banking } from '@/banking-sdk';                        // <- uncomment in Phase 2
-// import type { TransferInput, TransferResult } from '@/banking-sdk';
-// import { AppError } from '@/lib/errors';
+// Fresh seeded DB before each case + disconnect afterwards (registers the Vitest hooks once).
+useFreshDatabase();
+
+/** The primary CHECKING account every transfer funds from (seed balance ¥23,580). */
+const CHECKING = ACCOUNTS.find((a) => a.id === 'acct_checking');
+if (!CHECKING) throw new Error('fixture missing acct_checking');
+const CHECKING_START_BALANCE = CHECKING.balance;
+
+const ZHANGWEI = CONTACTS.find((c) => c.id === 'contact_zhangwei');
+if (!ZHANGWEI) throw new Error('fixture missing contact_zhangwei');
+
+/** Thin wrapper so every case exercises the frozen SDK input/output types. */
+function transfer(input: TransferInput): Promise<TransferResult> {
+  return banking.transfer.createTransfer(input);
+}
+
+/** The user's 转账 (transfer) ledger rows, most recent first — read back through the SDK facade. */
+function transferRows(): Promise<TransactionView[]> {
+  return banking.transaction.listTransactions(DEMO_USER_ID, { category: '转账' });
+}
+
+/** Await `fn`, returning the thrown `AppError`; fails loudly if it unexpectedly resolves. */
+async function captureError(fn: () => Promise<unknown>): Promise<AppError> {
+  try {
+    await fn();
+  } catch (error) {
+    if (error instanceof AppError) return error;
+    throw error;
+  }
+  throw new Error('expected the call to throw an AppError, but it resolved');
+}
 
 describe('banking-sdk/transfer · happy path', () => {
-  it.todo('transfers ¥200 from the checking account (balance 23580 → 23380), success true, recipient + transactionId returned');
-  it.todo('TransferResult.newBalance = 23380 and occurredAt is set');
-  it.todo('writes a DEBIT TRANSFER transaction row readable via banking.transaction');
+  it('transfers ¥200 from the checking account (balance 23580 → 23380), success true, recipient + transactionId returned', async () => {
+    const result = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200 });
+
+    expect(result.success).toBe(true);
+    expect(result.newBalance).toBe(CHECKING_START_BALANCE - 200);
+    expect(result.newBalance).toBe(23380);
+    expect(result.recipient.contactId).toBe('contact_zhangwei');
+    expect(result.recipient.name).toBe('张伟');
+    expect(typeof result.transactionId).toBe('string');
+    expect(result.transactionId).not.toBe('');
+  });
+
+  it('TransferResult.newBalance = 23380 and occurredAt is set', async () => {
+    const result = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200 });
+
+    expect(result.newBalance).toBe(23380);
+    expect(Number.isFinite(result.occurredAt)).toBe(true);
+    // The SDK stamps the demo clock instant (epoch ms).
+    expect(result.occurredAt).toBe(demoNow());
+  });
+
+  it('writes a DEBIT TRANSFER transaction row readable via banking.transaction', async () => {
+    const result = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200 });
+
+    const rows = await transferRows();
+    const written = rows.find((row) => row.id === result.transactionId);
+
+    expect(written).toBeDefined();
+    expect(written?.direction).toBe('DEBIT');
+    expect(written?.amount).toBe(-200);
+    expect(written?.channel).toBe('TRANSFER');
+    expect(written?.merchant).toBe('转账给张伟');
+    expect(written?.accountId).toBe('acct_checking');
+  });
 });
 
 describe('banking-sdk/transfer · recipient resolution', () => {
-  it.todo('resolves the recipient by contactId (张伟)');
-  it.todo('resolves the recipient by phone');
-  it.todo('resolves the recipient by unique name (妈妈)');
-  it.todo("an ambiguous name (two contacts 王芳) → throws AppError('CONFLICT') with detail.candidates listing both");
-  it.todo("an unknown recipient (no id/phone/name match) → throws AppError('NOT_FOUND')");
+  it('resolves the recipient by contactId (张伟)', async () => {
+    const result = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200 });
+
+    expect(result.recipient.contactId).toBe('contact_zhangwei');
+    expect(result.recipient.name).toBe('张伟');
+    expect(result.recipient.phone).toBe(ZHANGWEI.phone);
+  });
+
+  it('resolves the recipient by phone', async () => {
+    const result = await transfer({ userId: DEMO_USER_ID, phone: ZHANGWEI.phone, amount: 200 });
+
+    expect(result.recipient.contactId).toBe('contact_zhangwei');
+    expect(result.recipient.name).toBe('张伟');
+    expect(result.recipient.phone).toBe(ZHANGWEI.phone);
+  });
+
+  it('resolves the recipient by unique name (妈妈)', async () => {
+    const result = await transfer({ userId: DEMO_USER_ID, name: '妈妈', amount: 100 });
+
+    expect(result.recipient.contactId).toBe('contact_mama');
+    expect(result.recipient.name).toBe('妈妈');
+  });
+
+  it("an ambiguous name (two contacts 王芳) → throws AppError('CONFLICT') with detail.candidates listing both", async () => {
+    // The default seed ships ONE 王芳; re-seed with the duplicate for this case only.
+    await truncateAll();
+    await seedDemoData({ withAmbiguousContact: true });
+
+    const error = await captureError(() => transfer({ userId: DEMO_USER_ID, name: '王芳', amount: 100 }));
+
+    expect(error).toBeInstanceOf(AppError);
+    expect(error.code).toBe('CONFLICT');
+
+    const candidates = (error.detail as { candidates: ContactView[] }).candidates;
+    expect(Array.isArray(candidates)).toBe(true);
+    expect(candidates.map((c) => c.id).sort()).toEqual(['contact_wangfang', 'contact_wangfang_2']);
+    expect(candidates.every((c) => c.name === '王芳')).toBe(true);
+  });
+
+  it("an unknown recipient (no id/phone/name match) → throws AppError('NOT_FOUND')", async () => {
+    const byName = await captureError(() => transfer({ userId: DEMO_USER_ID, name: '不存在的人', amount: 100 }));
+    expect(byName).toBeInstanceOf(AppError);
+    expect(byName.code).toBe('NOT_FOUND');
+
+    const byPhone = await captureError(() => transfer({ userId: DEMO_USER_ID, phone: '100****0000', amount: 100 }));
+    expect(byPhone.code).toBe('NOT_FOUND');
+
+    const byId = await captureError(() => transfer({ userId: DEMO_USER_ID, contactId: 'contact_missing', amount: 100 }));
+    expect(byId.code).toBe('NOT_FOUND');
+  });
 });
 
 describe('banking-sdk/transfer · validation + funds', () => {
-  it.todo("insufficient funds (amount > balance) → throws AppError('INSUFFICIENT_FUNDS') and writes no transaction");
-  it.todo("amount 0 or negative → throws AppError('VALIDATION')");
-  it.todo("a non-finite amount (NaN / Infinity) → throws AppError('VALIDATION')");
-  it.todo("a missing recipient (no id/phone/name) → throws AppError('VALIDATION')");
+  it("insufficient funds (amount > balance) → throws AppError('INSUFFICIENT_FUNDS') and writes no transaction", async () => {
+    const before = await transferRows();
+    expect(before).toHaveLength(1); // only the seeded tx_sep_transfer_mama 转账 row
+
+    const error = await captureError(() => transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 999999 }));
+
+    expect(error).toBeInstanceOf(AppError);
+    expect(error.code).toBe('INSUFFICIENT_FUNDS');
+    expect(error.detail).toMatchObject({ balance: CHECKING_START_BALANCE, amount: 999999 });
+
+    // No ledger row written and the funding balance is untouched.
+    const after = await transferRows();
+    expect(after).toHaveLength(before.length);
+
+    const balance = await banking.account.getBalance(DEMO_USER_ID);
+    expect(balance.accounts.find((a) => a.id === 'acct_checking')?.balance).toBe(CHECKING_START_BALANCE);
+  });
+
+  it("amount 0 or negative → throws AppError('VALIDATION')", async () => {
+    for (const amount of [0, -50]) {
+      const error = await captureError(() => transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount }));
+      expect(error).toBeInstanceOf(AppError);
+      expect(error.code).toBe('VALIDATION');
+    }
+  });
+
+  it("a non-finite amount (NaN / Infinity) → throws AppError('VALIDATION')", async () => {
+    for (const amount of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const error = await captureError(() => transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount }));
+      expect(error).toBeInstanceOf(AppError);
+      expect(error.code).toBe('VALIDATION');
+    }
+  });
+
+  it("a missing recipient (no id/phone/name) → throws AppError('VALIDATION')", async () => {
+    const missing = await captureError(() => transfer({ userId: DEMO_USER_ID, amount: 100 }));
+    expect(missing).toBeInstanceOf(AppError);
+    expect(missing.code).toBe('VALIDATION');
+
+    // Supplying more than one recipient selector is also rejected ("exactly one of …").
+    const both = await captureError(() =>
+      transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', phone: ZHANGWEI.phone, amount: 100 }),
+    );
+    expect(both.code).toBe('VALIDATION');
+  });
 });
 
 describe('banking-sdk/transfer · result fidelity', () => {
-  it.todo('a supplied remark is preserved on the result and the written transaction');
-  it.todo('amount is CNY 2-decimal and echoed exactly');
-  it.todo('sourceAccountId defaults to the primary CHECKING account when omitted');
+  it('a supplied remark is preserved on the result and the written transaction', async () => {
+    const result = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200, remark: '房租AA' });
+
+    expect(result.remark).toBe('房租AA');
+
+    const rows = await transferRows();
+    const written = rows.find((row) => row.id === result.transactionId);
+    expect(written?.remark).toBe('房租AA');
+  });
+
+  it('amount is CNY 2-decimal and echoed exactly', async () => {
+    const whole = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200 });
+    expect(whole.amount).toBe(200);
+    expect(whole.newBalance).toBe(23380);
+
+    // Sub-cent input is rounded to 2 decimals and echoed on the result + the ledger row.
+    const fractional = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 123.456 });
+    expect(fractional.amount).toBe(123.46);
+
+    const rows = await transferRows();
+    const written = rows.find((row) => row.id === fractional.transactionId);
+    expect(written?.amount).toBe(-123.46);
+  });
+
+  it('sourceAccountId defaults to the primary CHECKING account when omitted', async () => {
+    const result = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200 });
+
+    const rows = await transferRows();
+    const written = rows.find((row) => row.id === result.transactionId);
+    expect(written?.accountId).toBe('acct_checking');
+
+    // An explicit primary CHECKING id resolves to the same account.
+    const explicit = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200, sourceAccountId: 'acct_checking' });
+    const explicitRows = await transferRows();
+    expect(explicitRows.find((row) => row.id === explicit.transactionId)?.accountId).toBe('acct_checking');
+  });
 });
