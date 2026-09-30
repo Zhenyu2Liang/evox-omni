@@ -10,9 +10,8 @@ outcome (agent text, tool events, cards, `PendingAction`/audit rows, DB side eff
 Only the **model** is mocked (`registerFauxProvider()`, `LLM_MODE=mock`); the tools, security
 chokepoint and DB are the real ones — so these prove the real security behaviour, not a mock of it.
 
-Current status: **Tests 1–6 are implemented** (real assertions, all 36 green) and drive the real
-gateway/SDK/DB pipeline. **Tests 7–12 are still `it.todo` scaffolds** (no assertions), to be filled
-in once their modules are exercised; all specs stay load-safe.
+Current status: **all 12 specs are implemented with real assertions and passing** (no `it.todo`
+remains). Each drives the real gateway/SDK/DB pipeline through the shared harness.
 
 ## The 12 scenarios
 
@@ -36,8 +35,8 @@ in once their modules are exercised; all specs stay load-safe.
 Specs use the shared helpers (see `../helpers/CONTEXT.md`): `fauxAgent.buildFauxAgent` +
 script builders, `scenario.runTurn/confirmAction/verifyAction/cancelAction` (return `ScenarioResult`
 with `events`/`text`/`toolEvents`/`cards`/`confirmation`/`mfa`/`plan`), and `fixtures.*`.
-The implemented specs (Tests 1–6) register their own DB lifecycle hooks (see Constraints) rather
-than calling `db.useFreshDatabase`.
+Specs register their own DB lifecycle hooks (see Constraints) rather than calling
+`db.useFreshDatabase`.
 
 ## Constraints
 
@@ -47,9 +46,9 @@ than calling `db.useFreshDatabase`.
   for Test 10).
 - Assert the *security* facts explicitly: a gated tool is BLOCKED before any DB write; the money move
   only happens after a human confirm/verify; injection text never raises a tier.
-- **DB-backed**: reset + seed per test. The implemented specs (Tests 1–6) register an explicit-timed
-  hook instead of `useFreshDatabase()`, because `resetDatabase()` exceeds Vitest's default 10s
-  `hookTimeout` under a full collective run:
+- **DB-backed**: reset + seed per test. Specs register an explicit-timed hook instead of
+  `useFreshDatabase()`, because `resetDatabase()` exceeds Vitest's default 10s `hookTimeout` under a
+  full collective run:
   `beforeEach(async () => { await resetDatabase(); }, 30000); afterAll(disconnectTestPrisma);`
   reusing the same helper functions from `../helpers/db` (they do NOT re-implement reset/seed).
 - Import frozen types from `@/lib/contracts/*`.
