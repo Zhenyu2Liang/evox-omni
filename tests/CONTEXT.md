@@ -46,7 +46,7 @@ Run:
 - **Unique `sessionId` per test.** The circuit breaker is in-process, keyed by `sessionId`; a lock
   from Test 10 must not leak into other specs. Use `scenario.newSessionId()`.
 - **Test isolation.** DB-backed suites reset + seed via `helpers/db.resetDatabase()`; never share
-  `beforeEach` through `useFreshDatabase()`); never share mutable DB state across tests.
+  mutable DB state. Specs use explicit-timed hooks (`beforeEach(resetDatabase, 30000)`), not `useFreshDatabase()`.
 - **Implemented.** Every spec has real assertions (no `it.todo`); DB-backed suites reset + seed
   per test. Specs stay **load-safe** (no top-level Prisma construction outside DB-backed cases).
 - **Run the DB-backed suite sequentially** (`npx vitest run --no-file-parallelism`) — see Prerequisites.
