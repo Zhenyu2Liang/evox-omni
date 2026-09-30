@@ -1,1 +1,0 @@
-env=True nm=False prisma=False seed=False
