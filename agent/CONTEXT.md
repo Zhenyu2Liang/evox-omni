@@ -8,7 +8,7 @@ banking agent. It owns, in one place:
 
 1. constructing the Pi `Agent` (`banking-agent.ts`),
 2. registering exactly the banking tools (`tools/`),
-3. installing the security chokepoint `beforeToolCall` — delegating to `security.gateway.handleToolCall`,
+3. installing the security chokepoint `beforeToolCall` — delegating to `security.gateway.securityGateway.handleToolCall`,
 4. running ONE chat turn and mapping `AgentEvent`s → `AgentStreamEvent`s (`run-turn.ts`),
 5. the two-phase confirmation continuation, incl. the gateway-authorized execution path (`confirmation.ts`),
 6. mapping a tool's raw result → `ChatCard`s (`card-emitter.ts`),
@@ -18,7 +18,7 @@ banking agent. It owns, in one place:
 
 **Invariant (root-owned, restated here): the agent may decide WHAT to do next; it may NEVER decide
 WHETHER it is allowed.** Every tool the model proposes passes through `beforeToolCall →
-security.gateway.handleToolCall`; a gated tool is blocked, its args are persisted as a
+security.gateway.securityGateway.handleToolCall`; a gated tool is blocked, its args are persisted as a
 `PendingAction`, and money only moves after a **human** confirmation. The model's text can never
 trigger an execution. See root `../CONTEXT.md`.
 
@@ -46,7 +46,7 @@ interface BankingAgentRuntime {
   dispose(): void;              // unsubscribe listeners
 }
 function createBankingAgent(options: BankingAgentOptions): BankingAgentRuntime;
-type BeforeToolCallHook;        // installs security.gateway.handleToolCall (see Constraints)
+type BeforeToolCallHook;        // installs security.gateway.securityGateway.handleToolCall (see Constraints)
 type AfterToolCallHook;
 
 // --- agent/system-prompt.ts -------------------------------------------------
@@ -114,12 +114,13 @@ function providerId(cfg?: AppConfig): string;
 // --- agent/tools/index.ts (see ./tools/CONTEXT.md) --------------------------
 interface ToolExecutionResult { ok: boolean; data?: unknown; summary?: string; error?: string; tier?: RiskLevel }
 interface ToolRegistry {
-  tools: Record<ToolName, AgentTool<unknown>>;
-  list(): AgentTool<unknown>[];
-  get(name: ToolName): AgentTool<unknown>;
+  tools: Record<ToolName, AgentTool<any>>;
+  list(): AgentTool<any>[];
+  get(name: ToolName): AgentTool<any>;
   executeDirect(name: ToolName, args: Record<string, unknown>): Promise<ToolExecutionResult>;
 }
-function createToolRegistry(userId: string): ToolRegistry;   // userId closed over — the model NEVER supplies it
+interface CreateToolRegistryOptions { submitPlan?: SubmitPlanDeps }   // additive; wires `submit_plan`
+function createToolRegistry(userId: string, opts?: CreateToolRegistryOptions): ToolRegistry;   // userId closed over — the model NEVER supplies it
 ```
 
 ### AgentEvent → AgentStreamEvent mapping (owned by `run-turn.ts`)
@@ -144,20 +145,20 @@ function createToolRegistry(userId: string): ToolRegistry;   // userId closed ov
 ## The two-phase confirmation model (what `confirmation.ts` implements)
 
 Turn (in `beforeToolCall`): a GREEN tool executes inline inside its `AgentTool.execute`. A YELLOW/RED
-tool is **blocked** — `security.gateway.handleToolCall` persists a `PendingAction` and returns an
-opaque block reason (`security.gateway.parseBlockReason` decodes it); the model sees
+tool is **blocked** — `security.gateway.securityGateway.handleToolCall` persists a `PendingAction` and returns an
+opaque block reason (`security.gateway.securityGateway.parseBlockReason` decodes it); the model sees
 "awaiting confirmation/verification" and replies to the user.
 
 Human decision (API route → `confirmation.ts`):
-1. `confirmAction(id)` → `security.gateway.authorizeAction(id)` (YELLOW: authorize directly).
-2. `verifyAction(id, code)` → `security.gateway.authorizeAction(id, { mfaCode: code })` (RED + MFA).
-3. `cancelAction(id)` → `security.gateway.cancelAction(id)`.
+1. `confirmAction(id)` → `security.gateway.securityGateway.authorizeAction(id)` (YELLOW: authorize directly).
+2. `verifyAction(id, code)` → `security.gateway.securityGateway.authorizeAction(id, { mfaCode: code })` (RED + MFA).
+3. `cancelAction(id)` → `security.gateway.securityGateway.cancelAction(id)`.
 4. On `AuthorizationResult.ok`, execute the **ORIGINAL validated args** through the Banking SDK via
    `executeGatedTool`/`registry.executeDirect` — **NOT** the LLM — write the audit entry, then call
    `resumeTurn(...)`, which injects the REAL tool result and calls `agent.continue()` so the model
    only *narrates the factual outcome*.
 
-Consequence: money-moving calls are always triggered by a human decision, never by model text
+Consequence: money-moving calls are always triggered by a human decision, never by model text.
 (this is what demo Test 4 — prompt injection — proves).
 
 ## Constraints (hard, encode in every file)
@@ -165,7 +166,7 @@ Consequence: money-moving calls are always triggered by a human decision, never 
 - **NEVER register a bash/shell/write/edit/file/SQL/system/http tool.** The model's ONLY capabilities
   are the registered banking tools + `submit_plan`. An injection asking for a shell/SQL tool has **no
   tool to call**. The tool registry is the complete and exhaustive capability set.
-- **`beforeToolCall` is the ONLY security chokepoint.** It MUST call `security.gateway.handleToolCall`
+- **`beforeToolCall` is the ONLY security chokepoint.** It MUST call `security.gateway.securityGateway.handleToolCall`
   and return `{ block: true, reason }` whenever the gateway says the call is gated. The agent NEVER
   computes a tier, confirmation, or MFA requirement itself (that is `security/`'s sole authority).
 - **`userId` is server-injected** (from the session / `lib/config.demoUserId`), never taken from the
@@ -194,18 +195,22 @@ Frozen imports (exist, DO NOT redefine): `../lib/contracts/*` (`agent`, `securit
 `../lib/ids` (`newId`), `../lib/json` (`toJson`/`safeParse`), `../lib/money`.
 
 Sibling nodes this node consumes (read-only; escalate changes to the owner):
-- `../security` → `security.gateway.handleToolCall(ctx): ToolCallAuthorization`, `.parseBlockReason`,
+- `../security` → `security.gateway.securityGateway.handleToolCall(ctx): ToolCallAuthorization`, `.parseBlockReason`,
   `.authorizeAction(id, {mfaCode?})`, `.cancelAction(id)`, `.serializeBlockReason`; `GatewayContext`,
   `AuthorizationResult`, `ToolCallAuthorization`. `security.injection.scan` / `.reportInjection`.
+  Access path: the `gateway` namespace's ONLY runtime member is the exported object `securityGateway`
+  (module-level `handleToolCall`/`authorizeAction`/`cancelAction`/`parseBlockReason` are private), so the
+  runtime call is `security.gateway.securityGateway.<method>(...)`; `GatewayContext`/`AuthorizationResult`/
+  `ToolCallAuthorization` are imported directly from `@/security/security-gateway`.
 - `../banking-sdk` → `banking.<domain>.*` execute-only functions (module `./types` DTOs).
 - `../planner` → `dag.validatePlan`, `buildPlan`; `executor.runPlan`, `PlanDeps`, `PlanControls`.
 - `../audit` → `recordAudit(entry)`, `recordSecurityEvent(event)`.
 - `../lib/db/repositories` → `sessions.*`, `pendingActions.*`.
 
 REQUIRED from siblings (must align at integration; assumed signatures):
-- `security.gateway.handleToolCall(ctx)` returns `{ evaluation, decision, action?, blockReason? }` with
+- `security.gateway.securityGateway.handleToolCall(ctx)` returns `{ evaluation, decision, action?, blockReason? }` with
   `blockReason` present iff `evaluation.blocked`; `action` present iff gated.
-- `security.gateway.authorizeAction(id, opts)` returns `AuthorizationResult { ok, status, actionId,
+- `security.gateway.securityGateway.authorizeAction(id, opts)` returns `AuthorizationResult { ok, status, actionId,
   tier, requiresMfa, mfaResult?, message, action? }` — it authorizes but does NOT execute.
 - `planner.executor.runPlan(plan, deps, opts)` with `deps.runTool(toolName, args): PlanToolOutcome`
   (`{ ok, data?, summary?, error?, requiresConfirmation?, pendingActionId? }`); the agent supplies
@@ -219,7 +224,7 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
 `node_modules/@mariozechner/*`:
 - `AgentTool<TParameters extends TSchema = TSchema, TDetails = any>` — the generic is a **TypeBox
   TSchema**, NOT `Static<>`. A tool is `AgentTool<typeof <Name>Params>`; a heterogeneous registry uses
-  `AgentTool<any>` (matches `AgentState.tools: AgentTool<any>[]`). `AgentTool<unknown>` does NOT compile.
+  `AgentTool<any>` (matches `AgentState.tools: AgentTool<any>[]`); `AgentTool<unknown>` does NOT compile.
 - `execute(toolCallId, params: Static<TParameters>, signal?, onUpdate?): Promise<AgentToolResult<TDetails>>`
   with `AgentToolResult<T> = { content: (TextContent|ImageContent)[]; details: T; terminate? }`.
 - `Model<TApi extends Api>` **requires a type argument**; this node standardises on `Model<any>`.
@@ -231,7 +236,7 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
 
 - Pi SDK type/function names (`Agent`, `AgentTool`, `AgentState`, `AgentEvent`, `registerFauxProvider`,
   `Type`, `Static`) are relied on per the verified 0.73.1 facts in root `../CONTEXT.md`; confirm exact
-  exported identifiers against the installed packages when implementing (bodies are stubs today).
+  exported identifiers against the installed packages (see the Pi SDK Reconciliation section above).
 - `system-prompt.ts` may list ONLY the tools actually present in `ToolRegistry` — no phantom capabilities.
 - Every card emitted to the UI must originate from a real tool result (or a real security decision) —
   never from model prose. `card-emitter.toCards` is PURE and total (unknown shape ⇒ `error` card).
