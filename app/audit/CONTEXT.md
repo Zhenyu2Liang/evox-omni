@@ -36,7 +36,7 @@ This node is a **thin Server Component** — it fetches the audit read models di
 
 - **Server Component**; no UI logic beyond the display mappings above.
 - Pass only **serializable** props to client components (no `Date` — epoch ms; the page formats
-  epoch ms and format client-side).
+  timestamps server-side through `@/lib/date.formatDateTime`).
 - **Read via `@/audit` only** — never import Prisma directly.
 - **Never build** the composed components here; reference them from `../components` (read-only sibling).
 - **Never redeclare** the frozen `AuditEntry` type — import it from `@/lib/contracts/audit`.
