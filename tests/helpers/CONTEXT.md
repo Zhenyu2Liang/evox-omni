@@ -8,7 +8,7 @@ fixtures, a scripted-model agent builder, and the turn/decision harness. Keeps s
 
 These are **test infrastructure**. They contain no banking/security business logic — they wire up the
 real modules and drive them. `db.ts` and `fixtures.ts` are **implemented** (they really reset + seed the DB);
-whose signatures + data are the frozen contract; bodies land in Phase 2.
+`faux-agent.ts`/`scenario.ts` are still documented **stubs**; their signatures are the frozen contract (bodies land in Phase 2).
 
 ## API Surface
 
