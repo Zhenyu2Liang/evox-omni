@@ -117,7 +117,7 @@ interface ActionResponse {
   where `data = { sessionId, events: AgentStreamEvent[] }`.
 - The route drives the same agent entry point either way: `agent.runTurn({ sessionId?, message })` — when
   `onEvent` is supplied, each event is pushed as it occurs (streaming); the returned `ChatTurnResponse`
-  carries the full ordered event log (used verbatim for the non-streaming response).
+  a `done` event). Streaming mode writes those events as SSE frames.
 - On every turn the route sets `Set-Cookie: banking_session=<sessionId>` (constant `SESSION_COOKIE`)
   so subsequent turns and `GET /api/*` reads share the session.
 
