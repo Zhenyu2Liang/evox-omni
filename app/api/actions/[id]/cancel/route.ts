@@ -14,7 +14,7 @@ import type { NextRequest } from 'next/server';
 import { AppError } from '@/lib/errors';
 // Agent runtime contract (owner: `@/agent`).
 import { cancel } from '@/agent';
-import type { ActionResponse, IdRouteContext } from '../../_lib/types';
+import type { ActionResponse, IdRouteContext } from '../../../_lib/types';
 
 export async function POST(_req: NextRequest, _ctx: IdRouteContext): Promise<Response> {
   throw new AppError('INTERNAL', 'not implemented');

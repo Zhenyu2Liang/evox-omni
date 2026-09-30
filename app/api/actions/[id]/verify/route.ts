@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { AppError } from '@/lib/errors';
 // Agent runtime contract (owner: `@/agent`).
 import { verify } from '@/agent';
-import type { ActionResponse, IdRouteContext } from '../../_lib/types';
+import type { ActionResponse, IdRouteContext } from '../../../_lib/types';
 
 /** Request body schema for `POST /api/actions/[id]/verify`. */
 export const mfaVerifySchema = z.object({
