@@ -1,3 +1,5 @@
+'use client';
+
 export * from './ChatWindow';
 export * from './MessageBubble';
 export * from './Composer';
