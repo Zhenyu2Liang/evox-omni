@@ -117,6 +117,10 @@ must populate `cards[].data` with exactly these shapes.
   rather than re-implementing tiles/charts inside cards.
 - Named exports only; one card per file; files ≲ ~1000 lines.
 
+## Known Issues
+
+- `AnomalyCard`'s three in-card actions (`onAcknowledge` / `onViewDetail` / `onFreeze` → 这是本人交易 / 查看详情 / 冻结银行卡) are declared as props and forwarded by `CardRenderer` (`onAcknowledge={p.action?.onAcknowledge}`, etc.), but the only container that builds a `CardActionHandlers` bundle — `../ChatWindow.tsx` (lines 43–50) — populates **only** `actionId`/`onConfirm`/`onVerify`/`onCancel`/`busy`/`error`. It never sets the three anomaly handlers, so through the chat render path (`ChatWindow → MessageBubble → CardRenderer → AnomalyCard`) those buttons are always no-ops (the `?.()` optional calls do nothing). No code in `./components` supplies these members; wiring them would require a consumer that constructs a `CardActionHandlers` carrying them.
+
 ## Test Strategy
 
 - Primary guard is **compile-time**: the `assertNever` default makes a new card variant a `tsc` error.
