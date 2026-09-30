@@ -45,7 +45,7 @@ const provisionMarker = path.join(prismaDir, '.test-db-provisioned');
 const testDbUrl = 'file:' + testDbPath.split(path.sep).join('/');
 process.env.DATABASE_URL = testDbUrl;
 process.env.LLM_MODE = 'mock';
-process.env.NODE_ENV = process.env.NODE_ENV ?? 'test';
+(process.env as Record<string, string>).NODE_ENV = process.env.NODE_ENV ?? 'test';
 
 // ---------------------------------------------------------------------------
 // 2. Provision the schema once (idempotent across workers via the marker file).
