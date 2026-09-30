@@ -84,6 +84,23 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 - No upward imports: never import from `agent`, `planner`, `security`, `audit`, `app`, `components`.
 - Files ≲ ~1000 lines, split by responsibility (one file per capability domain).
 
+## Design Decisions
+
+- **Demo clock.** Every default date window (本月/上月/今日, spend analysis, dashboard `month`) defaults to `lib/clock.demoNow()` (never `Date.now()`), with an optional explicit `month`/`now` argument so tests inject a fixed instant.
+- **`analyzeSpending` EXCLUDES anomaly rows.** Spend totals (`total`, `prevTotal`, `byCategory`, `topMerchant`, `monthlyTrend`, `largest`) count only `direction = 'DEBIT'` rows with `isAnomaly = false`. The seeded Apple Store ¥6,999 (`isAnomaly = true`, 2026-09-20 18:32) is a SEPARATE September row and MUST NOT fold into 本月消费. Because `transactions.listByCategory`/`sumDebitsInRange` include it, the window is summed by scanning `transactions.listTransactions` and filtering. Seed anchors: 本月 = ¥5,800 (娱乐 ¥2,680), 上月 = ¥6,230.
+- **`transfer.createTransfer` recipient resolution.** Exactly one of `contactId`|`phone`|`name`; `phone`/`name` match by EXACT equality after `contacts.searchContacts`; >1 exact match → `AppError('CONFLICT')` with `detail.candidates` = `ContactView[]` (the agent asks the user to choose). Insufficient funds writes nothing (no transaction, no balance change).
+- **`investment.subscribeInvestment`** below `minAmount` (or a non-positive amount) throws `AppError('VALIDATION')` (not `LIMIT_EXCEEDED`). Subscribe/redeem adjust the funding account **balance** only and write NO `Transaction` row — this preserves the 本月 ¥5,800 spend anchor.
+- **`subscription.listSubscriptions`** returns ACTIVE rows only (matches the `list_subscriptions` tool).
+- **`card.setCardLimit`** replaces the category limit (delete-then-create; one row per card+category). Legal state transitions are enforced: `freeze` from ACTIVE/PENDING, `unfreeze` from FROZEN, `reportLost` from any non-LOST; illegal ones throw `CONFLICT` (same-status is idempotent).
+- **`task` payload** is stored as JSON text; read back via `lib/json.safeParse`.
+- **`contact.toContactView`** is exported for reuse by `transfer.ts` (internal helper — not a DTO).
+
+## Notes for Agents
+
+- **`change_password` is NOT implemented here.** The demo has no credential store; its authority is the `AuditLog` row written by the security/agent layer (the agent tool returns a simulated success). Do NOT add a `banking-sdk` function for it.
+- SDK unit specs live in `../tests/unit/banking-sdk/` (root-owned sibling) and are still `it.todo` Phase-2 scaffolds — activate them there, not here.
+- `../tests` and `../lib/db/repositories` are read-only dependencies; escalate writes to root.
+
 ## Routing Table
 
 - `./banking-sdk/types.ts` → all public DTOs / view models
