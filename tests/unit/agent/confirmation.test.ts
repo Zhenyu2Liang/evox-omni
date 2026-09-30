@@ -25,6 +25,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 import { cancelAction, confirmAction, getOrCreateSession, verifyAction } from '@/agent';
 import { security } from '@/security';
+import { deriveIntent } from '@/security/security-gateway';
 import type { AuthorizationResult } from '@/security/security-gateway';
 import type { PendingAction } from '@/lib/contracts/security';
 import { demoNow } from '@/lib/clock';
@@ -45,7 +46,7 @@ const gateway = security.gateway.securityGateway;
 
 /** The demo request text ("给张伟转200元，备注AA") and its derived intent label. */
 const USER_MESSAGE = '给张伟转200元，备注AA';
-const INTENT = 'transfer_money';
+const INTENT = deriveIntent('transfer_money');
 /** Recipient 张伟 (`contact_zhangwei`) — resolves unambiguously to the seeded contact. */
 const RECIPIENT = CONTACTS[0];
 /** ≤ ¥1000 ⇒ YELLOW; > ¥1000 ⇒ RED (per the security policy table). */
