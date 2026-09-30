@@ -7,8 +7,8 @@ data (no fetching) and renders one chart. All are **Client Components** (Rechart
 
 ## API Surface
 
-All named exports, re-exported from `./index.ts`. Shared wrapper concerns (responsive container,
-banking palette, tooltip styling) live in a private `chartTheme` helper if needed.
+All named exports, re-exported from `./index.ts`. Shared wrapper chrome (responsive container,
+banking palette, tooltip styling, empty-data guard) lives in the private local `./chartTheme.tsx`.
 
 ```ts
 // SpendingPie.tsx — category share donut, fed by SpendingAnalysis.byCategory (CategorySpend[])
@@ -36,9 +36,11 @@ Types `CategorySpend`, `MonthlyTrendPoint` are imported **type-only** from `@/ba
 - **Props only** — no data fetching, no DB, no `banking-sdk` calls. Data is passed in.
 - Charts are **responsive** (wrap in Recharts `ResponsiveContainer`); empty data renders nothing/a
   neutral placeholder, never throws.
-- Use only the Tailwind `banking` palette colours for series; money axes use `lib/money.formatCNY`.
-- Reusable chart chrome lives in the private local helper `./chartTheme.tsx` (`BANKING_PALETTE`, `SERIES_COLORS`/`seriesColor`, `ChartFrame` = ResponsiveContainer + empty-data placeholder, `ChartTooltip`, `isChartEmpty`); it is NOT exported from `./index.ts`. Do not copy-paste it into each chart file.
-  it into each chart file.
+- Use only the Tailwind `banking` palette colours for series; money axes/tooltips use `lib/money.formatCNY`.
+- Reusable chart chrome lives in the private local helper `./chartTheme.tsx` (`BANKING_PALETTE`,
+  `SERIES_COLORS`/`seriesColor`, `ChartFrame` = ResponsiveContainer + empty-data placeholder,
+  `ChartTooltip`, `isChartEmpty`); it is NOT exported from `./index.ts`. Do not copy-paste it into
+  each chart file.
 - Named exports only; one chart per file.
 
 ## Test Strategy
