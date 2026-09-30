@@ -10,7 +10,10 @@
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { PendingActionStatus } from '@/lib/contracts/security';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
-import type { GatewayContext } from '@/security';
+// `security/index.ts` re-exports the gateway as a *namespace* only; its types (GatewayContext,
+// AuthorizationResult, ToolCallAuthorization) live in the documented sub-module, which the security
+// node explicitly permits importing directly. Runtime calls still go through `security.gateway.*`.
+import type { GatewayContext } from '@/security/security-gateway';
 import type { ToolExecutionResult } from './tools';
 import type { RunTurnDeps } from './run-turn';
 
