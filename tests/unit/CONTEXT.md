@@ -18,7 +18,7 @@ Grouped by the source module under test (mirrors the source tree):
 - `planner/` — `dag` (validate / topological order / conditions), `executor` (runPlan).
 - `banking-sdk/` — `transfer`, `subscription`, `investment`.
 
-Runtime imports are present only as commented lines in each spec header (target module + symbols);
+Each spec imports the module under test directly from its `@/…` façade path
 Phase 2 uncomments them.
 
 ## Constraints
