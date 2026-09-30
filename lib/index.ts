@@ -5,4 +5,5 @@ export * from './config';
 export * from './constants';
 export * from './ids';
 export * from './date';
+export * from './clock';
 export * from './json';
