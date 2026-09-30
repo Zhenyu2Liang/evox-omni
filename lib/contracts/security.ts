@@ -36,6 +36,10 @@ export interface PendingAction {
   requiresMfa: boolean;
   status: PendingActionStatus;
   summary: PendingActionSummary;
+  /** The user's original natural-language request, carried through for audit. */
+  userRequest?: string;
+  /** Derived intent label, carried through for audit. */
+  intent?: string;
   createdAt: number;
   updatedAt: number;
 }

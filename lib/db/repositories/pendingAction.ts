@@ -15,6 +15,10 @@ export interface CreatePendingActionInput {
   requiresMfa: boolean;
   summary: PendingActionSummary;
   status?: string;
+  /** The user's original natural-language request, persisted for audit. */
+  userRequest?: string;
+  /** Derived intent label persisted for audit. */
+  intent?: string;
 }
 
 export interface CreateMfaChallengeInput {
@@ -39,6 +43,8 @@ export function createPendingAction(
       requiresMfa: input.requiresMfa,
       summaryJson: toJson(input.summary),
       status: input.status ?? 'pending',
+      userRequest: input.userRequest ?? null,
+      intent: input.intent ?? null,
     },
   });
 }

@@ -304,6 +304,8 @@ model PendingAction {
   requiresMfa Boolean  @default(false)
   status      String   @default("pending")
   summaryJson String // JSON text
+  userRequest String? // the user's original natural-language request (audit)
+  intent      String? // derived intent label (audit)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
