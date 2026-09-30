@@ -12,6 +12,7 @@ export * as scenario from './scenario';
 export * from './fixtures';
 export {
   buildFauxAgent,
+  fauxRegistrationOf,
   text,
   tool,
   final,

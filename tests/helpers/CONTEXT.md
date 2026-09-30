@@ -7,8 +7,8 @@ fixtures, a scripted-model agent builder, and the turn/decision harness. Keeps s
 *what* to assert, not *how* to bootstrap.
 
 These are **test infrastructure**. They contain no banking/security business logic — they wire up the
-real modules and drive them. All functions are documented **stubs** today (`throw new Error('not implemented')`)
-whose signatures + data are the frozen contract; bodies land in Phase 2.
+real modules and drive them. `db.ts` and `fixtures.ts` are **implemented** (they really reset + seed the DB);
+`faux-agent.ts`/`scenario.ts` are still documented **stubs**; their signatures are the frozen contract (bodies land in Phase 2).
 
 ## API Surface
 
@@ -17,15 +17,15 @@ Import from the barrel (`../helpers`) or a specific module.
 - `db.ts` — test-database lifecycle:
   - `getTestPrisma(): PrismaClient` — the Prisma singleton bound to the test DB (`@/lib/db/client`).
   - `truncateAll(): Promise<void>` — delete all rows in FK-safe order (children → parents).
-  - `resetDatabase(): Promise<void>` — `truncateAll()` + `fixtures.seedDemoData()` + reset in-process security state.
+  - `resetDatabase(): Promise<void>` — `truncateAll()` + `fixtures.seedDemoData()` (the circuit breaker has no global reset; isolation comes from a unique `sessionId` per test).
   - `useFreshDatabase(): void` — register Vitest hooks (`beforeEach` → `resetDatabase()`, `afterAll` → disconnect).
   - `disconnectTestPrisma(): Promise<void>` — idempotent Prisma disconnect.
 - `fixtures.ts` — the canonical demo dataset (constants) + seeder:
   - constants: `DEMO_USER_ID`/`DEMO_USER`, `CONTACTS` (张伟/王芳/妈妈/李华), `AMBIGUOUS_CONTACT`
     (2nd 王芳), `ACCOUNTS` (活期 ¥23,580), `ANOMALY_TRANSACTION` + `ANOMALY_OCCURRED_AT`
-    (Apple Store ¥6,999 @ 2026-09-20 18:32), `MONTHLY_SPEND_TOTAL` (≈¥5,800), `PRODUCTS` (incl. 稳健理财A), types.
+    (Apple Store ¥6,999 @ 2026-09-20 18:32), `MONTHLY_SPEND_TOTAL` (≈¥5,800), `PRODUCTS`/`CARDS`/`CARD_LIMITS`, types.
   - `seedDemoData(options?): Promise<void>` — insert the full dataset (call on a fresh DB).
-  - `buildCurrentMonthSpend(now?): TransactionFixture[]` — current-month ordinary spend incl. 娱乐, relative to `now`.
+  - `buildCurrentMonthSpend(now?)` / `buildPreviousMonthSpend(now?)` / `buildSubscriptions(now?)` / `buildHoldings(now?)` / `buildBudgets(now?)` / `buildScheduledTasks(now?)` — the date-relative rows (current/previous/next month), built from LOCAL components relative to `now` (default `demoNow()`).
 - `faux-agent.ts` — build a REAL Pi `Agent` with a SCRIPTED model:
   - `buildFauxAgent(options): Agent` — faux provider + registed banking tools + production `beforeToolCall`.
   - script builders: `text`, `tool(name,args)`, `final`, `callThen(text,name,args)`; types `FauxStep`/`FauxToolCall`/`FauxAgentOptions`.

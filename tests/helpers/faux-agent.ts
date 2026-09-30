@@ -8,16 +8,35 @@
  * DB are the production ones. This is what makes the 12 demo scenarios provable without a
  * network or an API key.
  *
- * STATUS: documented STUB — signatures frozen; implementation lands in Phase 2 once the
- * `./agent` runtime wiring exports its tool registry + `beforeToolCall` builder.
+ * The agent is built with the SAME wiring as `@/agent/banking-agent.ts` (constructor path:
+ * `new Agent({ initialState, beforeToolCall, afterToolCall, sessionId })`), differing ONLY in the
+ * model (a scripted faux provider instead of the live/mock provider resolved from config).
  *
  * Key SDK facts this helper relies on (pi-agent-core 0.73.1):
  *   - `new Agent({ initialState, beforeToolCall, afterToolCall, sessionId, ... })`.
  *   - `agent.prompt(input)` / `agent.continue()` settle when the turn ends.
  *   - `agent.subscribe(listener)` streams `AgentEvent`s.
  *   - `beforeToolCall` returning `{ block: true, reason }` prevents execution (the security gate).
+ *   - `registerFauxProvider().setResponses(steps)` REPLACES the queue; ONE step is consumed per
+ *     model call (an empty queue ⇒ an error assistant message ⇒ `stopReason:'error'`).
  */
-import type { Agent, AgentTool } from '@mariozechner/pi-agent-core';
+import { Agent } from '@mariozechner/pi-agent-core';
+import type {
+  AfterToolCallContext,
+  AfterToolCallResult,
+  AgentTool,
+  BeforeToolCallContext,
+  BeforeToolCallResult,
+} from '@mariozechner/pi-agent-core';
+import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from '@mariozechner/pi-ai';
+import type { FauxProviderRegistration, FauxResponseStep } from '@mariozechner/pi-ai';
+import type { ToolName } from '@/lib/contracts/tools';
+import { newId } from '@/lib/ids';
+import { createToolRegistry } from '@/agent/tools';
+import { executeGatedTool } from '@/agent/confirmation';
+import { buildSystemPrompt } from '@/agent/system-prompt';
+import { security } from '@/security';
+import { DEMO_USER_ID } from './fixtures';
 
 /** One proposed tool call in a scripted model turn. */
 export interface FauxToolCall {
@@ -34,8 +53,8 @@ export type FauxStep =
 export interface FauxAgentOptions {
   /** Ordered script replayed one step per model turn. */
   script: FauxStep[];
-  /** Registered banking tools; defaults to the `./agent` tool registry (all 24 tools + submit_plan). */
-  tools?: AgentTool<unknown>[];
+  /** Registered banking tools; defaults to the `./agent` tool registry (all 26 tools incl. submit_plan). */
+  tools?: AgentTool<any>[];
   /** System prompt; defaults to the `./agent` banking system prompt. */
   systemPrompt?: string;
   /** Session id (use `scenario.newSessionId()` for breaker isolation per test). */
@@ -44,12 +63,92 @@ export interface FauxAgentOptions {
   registerModel?: boolean;
 }
 
+/** Hidden (non-enumerable) property holding the faux registration on the returned agent. */
+const FAUX_REGISTRATION = Symbol.for('tests/helpers/faux-agent/registration');
+
+/** Translate one scripted `FauxStep` into a faux provider response step. */
+function stepToFaux(step: FauxStep): FauxResponseStep {
+  if (step.kind === 'tool') {
+    // A `toolCall` content block (NOT the stopReason) is what makes the agent loop execute a tool.
+    return fauxAssistantMessage([fauxToolCall(step.toolCall.tool, step.toolCall.args)], {
+      stopReason: 'toolUse',
+    });
+  }
+  return fauxAssistantMessage(step.text);
+}
+
 /**
  * Construct a Pi `Agent` wired with the scripted model, the banking tools and the production
  * security `beforeToolCall`. Returns a ready-to-`prompt()` agent.
  */
-export function buildFauxAgent(_options: FauxAgentOptions): Agent {
-  throw new Error('not implemented');
+export function buildFauxAgent(options: FauxAgentOptions): Agent {
+  const sessionId = options.sessionId ?? newId('sess');
+  const userId = DEMO_USER_ID;
+
+  const registration = registerFauxProvider();
+  registration.setResponses(options.script.map(stepToFaux));
+
+  // `userId` is SERVER-INJECTED (never from model text / tool args). `submit_plan` runs its DAG
+  // through the gateway-authorized path so a gated plan node still parks for a human.
+  const registry = createToolRegistry(userId, {
+    submitPlan: {
+      sessionId,
+      runTool: (toolName, args) =>
+        executeGatedTool({ sessionId, userId, toolName, args, userRequest: '' }),
+    },
+  });
+
+  const tools = options.tools ?? registry.list();
+  const systemPrompt =
+    options.systemPrompt ??
+    buildSystemPrompt({ userId, toolNames: tools.map((tool) => tool.name as ToolName) });
+
+  const gateway = security.gateway.securityGateway;
+
+  /** THE security chokepoint — identical to the production `beforeToolCall`. */
+  const beforeToolCall = async (
+    context: BeforeToolCallContext,
+  ): Promise<BeforeToolCallResult | undefined> => {
+    const toolName = context.toolCall.name as ToolName;
+    const args = (context.args ?? context.toolCall.arguments ?? {}) as Record<string, unknown>;
+    const auth = await gateway.handleToolCall({ sessionId, userId, toolName, args, userRequest: '' });
+    if (auth.evaluation.blocked) {
+      return { block: true, reason: auth.blockReason ?? auth.decision.message };
+    }
+    return undefined;
+  };
+
+  const afterToolCall = async (
+    _context: AfterToolCallContext,
+  ): Promise<AfterToolCallResult | undefined> => undefined;
+
+  const agent = new Agent({
+    sessionId,
+    initialState: {
+      systemPrompt,
+      model: registration.getModel(),
+      tools,
+      messages: [],
+    },
+    beforeToolCall,
+    afterToolCall,
+  });
+
+  // Non-enumerable: `scenario.ts` appends continuation responses via `fauxRegistrationOf`.
+  Object.defineProperty(agent, FAUX_REGISTRATION, {
+    value: registration,
+    enumerable: false,
+    configurable: true,
+  });
+
+  return agent;
+}
+
+/** The faux provider registration attached to an agent built by `buildFauxAgent` (else `undefined`). */
+export function fauxRegistrationOf(agent: Agent): FauxProviderRegistration | undefined {
+  return (agent as unknown as Record<symbol, FauxProviderRegistration | undefined>)[
+    FAUX_REGISTRATION
+  ];
 }
 
 /* ------------------------------------------------------------------ script builders */

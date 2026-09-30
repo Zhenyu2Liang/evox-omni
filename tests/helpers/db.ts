@@ -5,32 +5,88 @@
  * reset to a known state before each test. `tests/setup.ts` provisions the schema + points
  * `DATABASE_URL` at `prisma/test.db`; this module owns *resetting* and *seeding* it.
  *
- * STATUS: documented STUB — signatures frozen; implementations land in Phase 2 once
- * `lib/db/repositories` and the generated Prisma client exist. Do NOT import `@prisma/client`
- * at module load in a way that breaks pure unit runs — import it lazily inside functions.
+ * LOAD-SAFE: `@/lib/db/client` (which constructs the Prisma singleton) is resolved LAZILY inside
+ * `getTestPrisma()` — importing this module never constructs Prisma, so pure unit suites can import
+ * it (directly or via the `./helpers` barrel) without a database.
  */
+import { createRequire } from 'node:module';
+import { afterAll, beforeEach } from 'vitest';
 import type { PrismaClient } from '@prisma/client';
+
+/** Shape of the resolved `@/lib/db/client` module (named + default export the same singleton). */
+interface PrismaClientModule {
+  prisma: PrismaClient;
+  default?: PrismaClient;
+}
+
+let cachedModule: PrismaClientModule | undefined;
+let cachedClient: PrismaClient | undefined;
+let disconnected = false;
+
+/**
+ * Resolve `@/lib/db/client` without a module-load side effect. Uses Node's `require` (via
+ * `createRequire`) so the Prisma construction happens only when a test actually needs the DB;
+ * `lib/db/client` caches the singleton on `globalThis`, so every accessor (Vite graph or Node)
+ * shares ONE client bound to the test SQLite.
+ */
+function loadPrismaModule(): PrismaClientModule {
+  if (!cachedModule) {
+    const require = createRequire(import.meta.url);
+    cachedModule = require('../../lib/db/client.ts') as PrismaClientModule;
+  }
+  return cachedModule;
+}
 
 /** The Prisma singleton bound to the test DB (`lib/db/client`). Lazily resolves the client. */
 export function getTestPrisma(): PrismaClient {
-  throw new Error('not implemented');
+  if (!cachedClient) {
+    cachedClient = loadPrismaModule().prisma ?? loadPrismaModule().default;
+    disconnected = false;
+  }
+  return cachedClient;
 }
 
 /**
  * Delete every row from every table in **FK-safe order** (children → parents) so the DB is
- * empty. Table order MUST respect relations (PendingAction→MfaChallenge, AgentTask→AgentTaskNode,
- * Transaction→Account, etc.). Does NOT re-seed.
+ * empty. Table order MUST respect relations (MfaChallenge→PendingAction, AgentTaskNode→AgentTask,
+ * CardLimit→Card, Transaction→Account, InvestmentHolding→User+InvestmentProduct,
+ * Card/Account/Subscription/Budget/ScheduledTask/Contact/AgentSession→User, AuditLog/SecurityEvent→User).
+ * Does NOT re-seed.
  */
 export async function truncateAll(): Promise<void> {
-  throw new Error('not implemented');
+  const prisma = getTestPrisma();
+  await prisma.mfaChallenge.deleteMany();
+  await prisma.pendingAction.deleteMany();
+  await prisma.agentTaskNode.deleteMany();
+  await prisma.agentTask.deleteMany();
+  await prisma.cardLimit.deleteMany();
+  await prisma.transaction.deleteMany();
+  await prisma.investmentHolding.deleteMany();
+  await prisma.card.deleteMany();
+  await prisma.account.deleteMany();
+  await prisma.subscription.deleteMany();
+  await prisma.budget.deleteMany();
+  await prisma.scheduledTask.deleteMany();
+  await prisma.contact.deleteMany();
+  await prisma.auditLog.deleteMany();
+  await prisma.securityEvent.deleteMany();
+  await prisma.agentSession.deleteMany();
+  await prisma.investmentProduct.deleteMany();
+  await prisma.user.deleteMany();
 }
 
 /**
  * `truncateAll()` then `fixtures.seedDemoData()` — the canonical "fresh world" for a test.
- * Also resets in-process security state (circuit breaker) keyed by the session(s) a suite uses.
+ *
+ * NOTE on in-process security state: the circuit breaker (`@/security/circuit-breaker`) is keyed
+ * by `sessionId` and exports only `reset(sessionId)` — there is NO global reset. Suites therefore
+ * use a UNIQUE `sessionId` per test (`scenario.newSessionId()`) for isolation, and this helper
+ * intentionally does not touch the breaker.
  */
 export async function resetDatabase(): Promise<void> {
-  throw new Error('not implemented');
+  await truncateAll();
+  const fixtures = await import('./fixtures');
+  await fixtures.seedDemoData();
 }
 
 /**
@@ -40,10 +96,17 @@ export async function resetDatabase(): Promise<void> {
  * Call once at the top of a `describe`/file: `useFreshDatabase();`.
  */
 export function useFreshDatabase(): void {
-  throw new Error('not implemented');
+  beforeEach(async () => {
+    await resetDatabase();
+  });
+  afterAll(async () => {
+    await disconnectTestPrisma();
+  });
 }
 
 /** Disconnect the Prisma client (idempotent). Used by suite teardown. */
 export async function disconnectTestPrisma(): Promise<void> {
-  throw new Error('not implemented');
+  if (!cachedClient || disconnected) return;
+  await cachedClient.$disconnect();
+  disconnected = true;
 }
