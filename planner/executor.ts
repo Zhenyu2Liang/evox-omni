@@ -361,10 +361,14 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
         continue;
       }
 
-      // Transitive skip propagation: a skipped dependency skips this node too.
-      const depSkipped = node.dependencies.some((dep) => results.get(dep)?.status === 'skipped');
-      if (depSkipped) {
-        await markSkipped(node.id, 'dependency skipped');
+      // Transitive skip propagation: a dependency that did not succeed (skipped,
+      // failed or cancelled) blocks this node too, so it becomes skipped.
+      const depBlocked = node.dependencies.some((dep) => {
+        const depStatus = results.get(dep)?.status;
+        return depStatus === 'skipped' || depStatus === 'failed' || depStatus === 'cancelled';
+      });
+      if (depBlocked) {
+        await markSkipped(node.id, 'dependency did not succeed');
         index += 1;
         continue;
       }
