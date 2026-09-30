@@ -37,7 +37,7 @@ Types `CategorySpend`, `MonthlyTrendPoint` are imported **type-only** from `@/ba
 - Charts are **responsive** (wrap in Recharts `ResponsiveContainer`); empty data renders nothing/a
   neutral placeholder, never throws.
 - Use only the Tailwind `banking` palette colours for series; money axes use `lib/money.formatCNY`.
-- Reusable chart chrome (tooltip, colours) is extracted to a shared local helper — do not copy-paste
+- Reusable chart chrome lives in the private local helper `./chartTheme.tsx` (`BANKING_PALETTE`, `SERIES_COLORS`/`seriesColor`, `ChartFrame` = ResponsiveContainer + empty-data placeholder, `ChartTooltip`, `isChartEmpty`); it is NOT exported from `./index.ts`. Do not copy-paste it into each chart file. — do not copy-paste
   it into each chart file.
 - Named exports only; one chart per file.
 
