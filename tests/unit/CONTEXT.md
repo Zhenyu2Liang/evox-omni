@@ -19,7 +19,7 @@ Grouped by the source module under test (mirrors the source tree):
 - `banking-sdk/` — `transfer`, `subscription`, `investment`.
 
 Each spec imports the module under test directly from its `@/…` façade path
-Phase 2 uncomments them.
+(e.g. `@/security`, `@/planner`, `@/banking-sdk`) — no commented-out placeholders remain.
 
 ## Constraints
 
