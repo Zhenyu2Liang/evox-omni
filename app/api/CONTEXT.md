@@ -31,7 +31,8 @@ envelope (below). Dynamic-route handlers receive `(req: NextRequest, ctx: IdRout
 | GET | `/api/tasks/[id]` | — | `TaskPlan` | persisted `AgentTask` row via `@/lib/db/repositories/task` |
 | POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` | persisted `AgentTask` row steering (best-effort) |
 | GET | `/api/audit` | query `{ sessionId?, toolName?, riskLevel?, status?, limit? }` | `{ entries: AuditEntry[]; summary: AuditSummary }` | `@/audit` `listAudit` + `getAuditSummary` |
-| GET | `/api/security` | query `{ sessionId? }` | `{ status: SecurityStatus; events: SecurityEvent[] }` | `@/audit` `getSecurityStatus`/`listSecurityEvents` + `@/security` `circuitBreaker.isLocked` |
+| GET | `/api/security` | query `{ sessionId? }` | `{ status: SecurityStatus; events: SecurityEvent[]; circuitBreaker: { failures; max; locked } }` | `@/audit` `getSecurityStatus`/`listSecurityEvents` + `@/security` `circuitBreaker.getState`/`isLocked` |
+| POST | `/api/security/reset` | session via cookie / `?sessionId=` | `ResetData { sessionId, locked, failures, max, message }` | `@/security` `circuitBreaker.reset` then `getState` |
 | GET | `/api/dashboard` | query `{ userId? }` | `DashboardSummary` | `@/banking-sdk` `banking.dashboard.getDashboardSummary` |
 | GET | `/api/bills` | query `{ month? }` (`YYYY-MM`) | `{ analysis: SpendingAnalysis; transactions: TransactionView[]; anomalies: AnomalyItem[] }` | `@/banking-sdk` `banking.transaction.*` |
 | GET | `/api/cards` | query `{ userId? }` | `{ cards: CardView[] }` | `@/banking-sdk` `banking.card.getCards` |
@@ -39,7 +40,9 @@ envelope (below). Dynamic-route handlers receive `(req: NextRequest, ctx: IdRout
 
 Read routes are **GREEN reads only**. Card/subscription/transfer **mutations are NOT exposed as
 endpoints** — they are gated tools the agent invokes through the Security Gateway; the only
-human-triggered execution path is the `actions/*` group.
+human-triggered execution path is the `actions/*` group. `POST /api/security/reset` is the one
+non-`actions/*` mutation: an explicit user action that clears the session circuit breaker (the
+runtime unlock path — see Notes).
 
 ## Response envelope & error mapping
 
@@ -121,7 +124,7 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 - `@/agent` (read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`).
 - `@/banking-sdk` (read-only): read models (`banking.dashboard/transaction/card/subscription/…`, DTOs).
 - `@/audit` (read-only): `listAudit`, `getAuditSummary`, `listSecurityEvents`, `getSecurityStatus`.
-- `@/security` (read-only): `circuitBreaker.isLocked` for `/api/security`.
+- `@/security` (read-only): `circuitBreaker.getState`/`isLocked`/`reset` for `/api/security` (+ reset).
 - `@/planner` (read-only): `TaskPlan` type for `/api/tasks*` (no cross-request plan store — see Notes).
 - `@/lib` (read-only): contracts, `AppError`/`ErrorCode`/`Result`, `getConfig`, constants, money,
   and the typed read path `@/lib/db/repositories/*` (`task`, `pendingAction`) + `lib/json`.
@@ -162,7 +165,8 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 - `./tasks/route.ts` → `GET /api/tasks` — list task plans for a session
 - `./tasks/[id]/route.ts` → `GET`/`POST /api/tasks/[id]` — read one plan / steer it (pause|resume|cancel|retry)
 - `./audit/route.ts` → `GET /api/audit` — audit entries + summary
-- `./security/route.ts` → `GET /api/security` — security-center status + events
+- `./security/route.ts` → `GET /api/security` — security-center status + events + breaker counters
+- `./security/reset/route.ts` → `POST /api/security/reset` — clear the session's circuit breaker (the unlock path)
 - `./dashboard/route.ts` → `GET /api/dashboard` — dashboard read model
 - `./bills/route.ts` → `GET /api/bills` — spending analysis + transactions + anomalies
 - `./cards/route.ts` → `GET /api/cards` — cards read model
@@ -179,6 +183,11 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   the build with `Property 'X' is incompatible with index signature … not assignable to type 'never'`.
   Keep route-local zod schemas as NON-exported `const`s (or move them into `_lib/schemas.ts`); `export type`
   / `export interface` are fine.
+- **`POST /api/security/reset`** is the runtime unlock path for a tripped breaker (the gateway's
+  "前往安全中心解除限制" pointer). Session id resolution matches `GET /api/security`. `reset` may become
+  async (it records a `SECURITY_RESET` SecurityEvent) — call it as
+  `await Promise.resolve(security.circuitBreaker.reset(sid))` so both `void` and `Promise` signatures work;
+  then read the fresh state via `getState` for the response.
 - **`@/planner` has no cross-request plan store.** `/api/tasks*` read the persisted `AgentTask`/
   `AgentTaskNode` rows through the sanctioned read path `@/lib/db/repositories/task` and map them to
   `TaskPlan` in `_lib/task-plans.ts`; the executor's `PlanControls` are in-process and not reachable
