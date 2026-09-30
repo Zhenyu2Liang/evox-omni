@@ -178,7 +178,7 @@ Repository functions this node consumes (confirmed signatures — do NOT fork):
 - `lib/db/repositories/pendingAction` (MFA challenge rows live in the SAME module) → `createMfaChallenge({ actionId, code, maxAttempts?, expiresAt? }): Promise<MfaChallenge>`,
   `getMfaChallenge(actionId): Promise<MfaChallenge | null>` (carries `code` — never expose it),
   `incrementMfaAttempts(actionId): Promise<MfaChallenge>`, `updateMfaChallengeStatus(actionId, status): Promise<MfaChallenge>`, `resetMfaAttempts(actionId): Promise<MfaChallenge>`
-- `lib/db/repositories/transaction` → `sumOutgoingTransfersSince(userId: string, sinceMs: number): Promise<number>`
+- `lib/db/repositories/transaction` → `listTransactions(query): Promise<Transaction[]>` (used by `risk.computeDailyTransferTotal`; its range is half-open `[from, to)`, so the inclusive upper bound is passed as `now + 1ms`)
 
 ## Test Strategy
 
