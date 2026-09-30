@@ -13,6 +13,6 @@ export default defineConfig({
     include: ['tests/**/*.{test,spec}.ts'],
     setupFiles: ['tests/setup.ts'],
     env: { LLM_MODE: 'mock' },
-    timeout: 20000,
+    testTimeout: 20000,
   },
 });
