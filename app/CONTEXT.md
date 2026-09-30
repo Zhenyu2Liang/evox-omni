@@ -186,7 +186,7 @@ cancel(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
 - `../agent` → Chat runtime the routes delegate to (sibling — read-only, escalate writes to parent)
 - `../tests/app` → Route-handler contract tests (sibling — read-only, escalate writes to parent)
 
-## Notes for Agents (updated)
+## Notes for Agents
 
 - The pages and route handlers here are **design stubs**: exported signatures + zod schemas + JSDoc
   contracts only; handler bodies throw `not implemented`. Real logic is a later implementation pass.
