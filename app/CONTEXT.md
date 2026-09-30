@@ -15,9 +15,11 @@ It is the only place that knows about HTTP, cookies, sessions and JSON envelopes
   directly (no HTTP hop) from `../banking-sdk` read functions, `../audit` read functions, and
   `../lib/db/repositories` read functions, and pass **plain, JSON-serializable** data into client
   components from `../components`.
-- **Client Components** (`'use client'`, supplied by `../components`) own interactivity: chat
-  streaming, action confirm/verify/cancel buttons, and client-side refresh (polling the `GET /api/*`
-  read routes). They reach the server **only through this node's own API routes**.
+- **Client Components** (`'use client'`) own interactivity: chat streaming, action
+  confirm/verify/cancel buttons, the Security-Center unlock button, and client-side refresh (polling
+  the `GET /api/*` read routes). They reach the server **only through this node's own API routes**.
+  Most come from `../components`; app-local client chrome lives under `app/_components/` (the global
+  `NavBar`) and colocated page folders (e.g. `app/security/ResetBreakerButton.tsx`).
 - **Global chrome**: `app/layout.tsx` renders a persistent top navigation (`app/_components/NavBar.tsx`,
   a client component using `usePathname` for active-route highlighting) above `{children}`, linking all
   seven pages (`/`, `/agent`, `/bills`, `/cards`, `/subscriptions`, `/security`, `/audit`).
@@ -39,7 +41,7 @@ It is the only place that knows about HTTP, cookies, sessions and JSON envelopes
 | `/bills` | `app/bills/page.tsx` | `banking.transaction.analyzeSpending`, `listTransactions`, `listAnomalies` | month picker, category pie, monthly trend, recent transactions table, anomaly list |
 | `/cards` | `app/cards/page.tsx` | `banking.card.getCards` | card tiles (储蓄卡/信用卡/虚拟卡), limits, status badges, freeze/unfreeze/limit actions |
 | `/subscriptions` | `app/subscriptions/page.tsx` | `banking.subscription.listSubscriptions` | subscription list (name, monthly fee, next charge), annual cost summary, reminder/cancel actions |
-| `/security` | `app/security/page.tsx` | `audit.getSecurityStatus`, `audit.listSecurityEvents`, breaker state | 🟢/🟡/🔴 legend, recent verifications, circuit-breaker status, SecurityEvents table |
+| `/security` | `app/security/page.tsx` | `security.circuitBreaker.getState`, `audit.getSecurityStatus({ isLocked })`, `audit.listSecurityEvents` | 🟢/🟡/🔴 legend, recent verifications, circuit-breaker status (real failure count) + `ResetBreakerButton` (client, unlocks), SecurityEvents table |
 | `/audit` | `app/audit/page.tsx` | `audit.listAudit`, `audit.getAuditSummary` | audit table (timestamp/userRequest/intent/toolName/riskLevel/confirmationRequired/confirmed/mfaRequired/mfaResult/toolResult/status) + summary badges |
 
 Pages read on the **server** at initial render; the client refreshes through the matching `GET /api/*`
@@ -63,7 +65,8 @@ authoritative endpoint table.
 | GET | `/api/tasks/[id]` | — | `TaskPlan` |
 | POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` |
 | GET | `/api/audit` | query `{ sessionId?, toolName?, riskLevel?, status?, limit? }` | `{ entries: AuditEntry[]; summary: AuditSummary }` |
-| GET | `/api/security` | query `{ sessionId? }` | `{ status: SecurityStatus; events: SecurityEvent[] }` |
+| GET | `/api/security` | query `{ sessionId? }` | `{ status: SecurityStatus; events: SecurityEvent[]; circuitBreaker: { failures; max; locked } }` |
+| POST | `/api/security/reset` | session via cookie / `?sessionId=` | `ResetData { sessionId, locked, failures, max, message }` — clears this session's breaker |
 | GET | `/api/dashboard` | query `{ userId? }` | `DashboardSummary` |
 | GET | `/api/bills` | query `{ month? }` (`YYYY-MM`) | `{ analysis: SpendingAnalysis; transactions: TransactionView[]; anomalies: AnomalyItem[] }` |
 | GET | `/api/cards` | query `{ userId? }` | `{ cards: CardView[] }` |
@@ -150,11 +153,12 @@ normal `200` — never an HTTP error.
   chat cards, charts, banking tiles, ui primitives). Component API is owned there.
   Every component the pages use renders real markup — `ChatWindow`, `Card`, `CardTile`, `Table`,
   `Badge`, `StatusBadge`, `EmptyState`, `Money`, `SubscriptionTile`, `AssetSummaryCard`,
-  `AnomalyBanner`, `RecentTransactions`, the charts, and `../components/security/*`.
+  `AnomalyBanner`, `RecentTransactions`, the charts, and `../components/security/*`
+  (`PermissionLegend`, `CircuitBreakerStatus`, `SecurityEventList`).
 - `../agent` (sibling — read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`,
   `AgentStreamEvent` emission).
 - `../banking-sdk` (sibling — read-only): read models (`banking.dashboard/account/transaction/card/subscription/…`, DTOs in `banking-sdk/types`).
-- `../security` (sibling — read-only): circuit-breaker lock state for `/api/security`.
+- `../security` (sibling — read-only): circuit breaker — `circuitBreaker.getState/isLocked/reset` used by `/api/security` and the Security Center. `reset` is the runtime unlock path (the gateway's "前往安全中心解除限制" pointer) and records a `SECURITY_RESET` SecurityEvent.
 - `../audit` (sibling — read-only): `listAudit`, `getAuditSummary`, `listSecurityEvents`, `getSecurityStatus`.
 - `../planner` (sibling — read-only): exposes DAG/executor/buildPlan + types only — NO cross-request plan
   store. `/api/tasks*` therefore reads persisted `AgentTask`/`AgentTaskNode` rows via
@@ -188,16 +192,19 @@ normal `200` — never an HTTP error.
 - **Integration/acceptance** (the 12 demo scenarios) are driven through `../agent` + `../tests`, not here;
   the app node contributes the SSE/JSON transport tests for `POST /api/chat` (stream frames + `done`,
   and `?stream=0` fallback).
+- **Build sanity** for this node: `npm run typecheck` + `npm run build` (the latter needs a provisioned
+  SQLite DB — `npx prisma db push` + `npm run db:seed` — because the data pages are prerendered).
 
 ## Routing Table
 
 - `./` → Dashboard page + root layout/globals (this node's own files: `layout.tsx`, `globals.css`, `page.tsx`)
+- `./_components/` → app-local client chrome (private `_` folder, never routed): `NavBar.tsx` global top navigation
 - `./agent` → AI Agent chat page (renders the client `ChatWindow`)
-- `./api` → HTTP API route handlers (chat SSE, actions confirm/verify/cancel, tasks control, audit, security, read models, health) + shared `_lib/` (http, types, schemas, session, task-plans)
+- `./api` → HTTP API route handlers (chat SSE, actions confirm/verify/cancel, tasks control, audit, security + security reset, read models, health) + shared `_lib/` (http, types, schemas, session, task-plans)
 - `./audit` → Audit Log page
 - `./bills` → Bills / 账单 page
 - `./cards` → Cards page
-- `./security` → Security Center page
+- `./security` → Security Center page + `ResetBreakerButton.tsx` (client unlock button)
 - `./subscriptions` → Subscriptions page
 - `../components` → React component library the pages compose (sibling — read-only, escalate writes to parent)
 - `../agent` → Chat runtime the routes delegate to (sibling — read-only, escalate writes to parent)
@@ -209,9 +216,8 @@ normal `200` — never an HTTP error.
   Each route is thin (`validate → delegate → serialize`); shared plumbing lives in `app/api/_lib/`.
 - Add a new client-callable capability as a route under `./api`; add a new screen as a page dir with its
   own `CONTEXT.md`. Never import Prisma into a page or a client component.
-- - There is **no global navigation chrome**: `app/layout.tsx` renders only `{children}` (no nav/header).
-  Each page is reachable by direct URL; the only internal `<Link>`s are the two `/agent` entries on `/`
-  and `/cards` — `/bills`, `/cards`, `/subscriptions`, `/security`, `/audit` are not linked from each other.
+- The app is fully browsable via the global `NavBar` (`app/_components/NavBar.tsx`, mounted in
+  `app/layout.tsx`) — every one of the seven pages is linked.
 - Any new shared UI/transport type belongs in `../lib/contracts` (root-owned) — do not define it locally.
 - **Chat anomaly-card handlers are never wired.** `/agent` mounts `<ChatWindow className=… />` only, and
   `ChatWindowProps` has no prop to accept a handler bundle; the sole `CardActionHandlers` is built inside
