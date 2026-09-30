@@ -23,7 +23,7 @@ Import from the barrel (`../helpers`) or a specific module.
 - `fixtures.ts` — the canonical demo dataset (constants) + seeder:
   - constants: `DEMO_USER_ID`/`DEMO_USER`, `CONTACTS` (张伟/王芳/妈妈/李华), `AMBIGUOUS_CONTACT`
     (2nd 王芳), `ACCOUNTS` (活期 ¥23,580), `ANOMALY_TRANSACTION` + `ANOMALY_OCCURRED_AT`
-    (Apple Store ¥6,999 @ 2026-09-20 18:32), `MONTHLY_SPEND_TOTAL` (≈¥5,800), `PRODUCTS` (incl. 稳健理财A), types.
+    (Apple Store ¥6,999 @ 2026-09-20 18:32), `MONTHLY_SPEND_TOTAL` (≈¥5,800), `PRODUCTS`/`CARDS`/`CARD_LIMITS`, types.
   - `seedDemoData(options?): Promise<void>` — insert the full dataset (call on a fresh DB).
   - `buildCurrentMonthSpend(now?): TransactionFixture[]` — current-month ordinary spend incl. 娱乐, relative to `now`.
 - `faux-agent.ts` — build a REAL Pi `Agent` with a SCRIPTED model:
