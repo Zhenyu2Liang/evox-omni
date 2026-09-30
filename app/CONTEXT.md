@@ -146,7 +146,7 @@ normal `200` — never an HTTP error.
 - `../components` (sibling — read-only): the React component library the pages compose (`ChatWindow`,
   chat cards, charts, banking tiles, ui primitives). Component API is owned there.
   Every component the pages use renders real markup — `ChatWindow`, `Card`, `CardTile`, `Table`,
-  (e.g. `Card`, `CardTile`, `Table`, `Badge`, `StatusBadge`, `EmptyState`, `SubscriptionTile`); pages
+  `Badge`, `StatusBadge`, `EmptyState`, `Money`, `SubscriptionTile`, `AssetSummaryCard`,
   compose and type-check correctly but render blank until `../components` implements them.
 - `../agent` (sibling — read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`,
   `AgentStreamEvent` emission).
