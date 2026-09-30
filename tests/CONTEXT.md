@@ -45,7 +45,7 @@ Run:
   (`registerFauxProvider`); time and ids are injectable; the DB is the isolated test SQLite.
 - **Unique `sessionId` per test.** The circuit breaker is in-process, keyed by `sessionId`; a lock
   from Test 10 must not leak into other specs. Use `scenario.newSessionId()`.
-- **Test isolation.** DB-backed suites reset + seed via `helpers/db.resetDatabase()` (typically in
+- **Test isolation.** DB-backed suites reset + seed via `helpers/db.resetDatabase()`; never share
   `beforeEach` through `useFreshDatabase()`); never share mutable DB state across tests.
 - **Implemented.** Every spec has real assertions (no `it.todo`); DB-backed suites reset + seed
   per test. Specs stay **load-safe** (no top-level Prisma construction outside DB-backed cases).
