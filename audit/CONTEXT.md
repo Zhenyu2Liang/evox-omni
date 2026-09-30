@@ -23,7 +23,7 @@ re-exports each function and its types.
   - types: `AuditFilter` (`{ sessionId?, toolName?, riskLevel?, status?, limit? }`), `AuditSummary`.
   - `auditStore` — repository bindings seam (testability; see Dependencies).
 - `audit/security-events.ts`
-  - `recordSecurityEvent(event: Omit<SecurityEvent,'id'|'timestamp'> & { timestamp? }): Promise<SecurityEvent>` — append one event; `timestamp` defaults to `Date.now()`.
+  - `recordSecurityEvent(event: Omit<SecurityEvent,'id'|'timestamp'> & { timestamp? }): Promise<SecurityEvent>` — append one event; `timestamp` defaults to `demoNow()` (the demo clock).
   - `listSecurityEvents(filter?: SecurityEventFilter): Promise<SecurityEvent[]>` — query newest-first.
   - `getSecurityStatus(sessionId, options?): Promise<SecurityStatus>` — `{ locked, recentEvents }`.
   - types: `SecurityEventFilter` (`{ sessionId?, kind?, limit? }`), `SecurityStatus`, `SecurityStatusOptions` (`{ isLocked?, recentLimit?, filter? }`), `BreakerLookup`.
