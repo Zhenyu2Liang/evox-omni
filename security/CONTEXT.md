@@ -158,7 +158,9 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   (`mfa.verify`) or throw `AppError` at boundaries. NEVER swallow an error, never fire-and-forget an event write
   (`recordFailure`/`reportInjection` are awaited). Never leak a raw exception or the MFA code to the model/UI.
 - **Circuit breaker is a hard gate** the LLM cannot clear: 3 consecutive MFA failures (`MFA_MAX_ATTEMPTS`)
-  lock high-risk ops for the session; only `reset(sessionId)` (user/admin, security-center) unlocks.
+  trip it for the session and emit `CIRCUIT_BREAKER_TRIPPED`.
+  When tripped it denies EVERY tool call, not only high-risk ones (`gatewayEvaluate`: `blocked = locked || tier !== 'GREEN'`; decision `deny`).
+  Unlocking requires `reset(sessionId)`, which NO runtime caller invokes yet (see Known Issues).
 - **Injection guard never grants permission** — defense-in-depth only (see its file disclaimer).
 - **Files ≲ ~1000 lines**; split by responsibility. No inter-module cycles.
 
