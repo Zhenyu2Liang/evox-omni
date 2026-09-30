@@ -168,6 +168,14 @@ See `tests/CONTEXT.md`.
 - `./tests` → Automated tests: security/planner/sdk units + faux-LLM scenario integration tests
 - `./docs` → Competition docs: architecture.md, security.md, test-cases.md, known-risks.md (sibling — read-only, escalate writes here to root)
 - `./README.md` → setup, demo account, mock MFA code, demo script, known limits (sibling/root-owned)
+## Known Issues (current state)
+- **Audit log `userRequest` is always empty and `intent` is never populated.** Both `recordAudit` calls (`agent/confirmation.ts` confirm/verify and cancel paths) hardcode `userRequest: ''` and never pass `intent`; the real request text reaches the gateway but is not persisted on the `PendingAction`.
+- **Audit `timestamp` uses raw `Date.now()`** (`agent/confirmation.ts`) while `SecurityEvent` rows use `demoNow()` → inconsistent clocks across the two tables.
+- **`AnomalyCard` buttons are inert** in the live chat: `components/chat/ChatWindow.tsx` never supplies `onAcknowledge` / `onViewDetail` / `onFreeze` (declared optional in `components/chat/cards/types.ts`).
+- **No global navigation**: `app/layout.tsx` renders only `{children}`, so `/bills`, `/cards`, `/subscriptions`, `/security`, `/audit` are reachable only by direct URL.
+- **`CircuitBreakerStatus` failure count** is not passed by `app/security/page.tsx` → the bar always reads "0 / 3".
+- **No runtime `SECURITY_RESET`** and no `HIGH_RISK_BLOCKED` event is emitted (declared in `lib/contracts/audit.ts`).
+
 ## Notes for Agents
 - The 12 demo scenarios are the acceptance bar. Every module should make its scenario work end-to-end.
 - Never add a tool that moves money without routing it through the gateway's `beforeToolCall` policy.
