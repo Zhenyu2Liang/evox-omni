@@ -11,6 +11,8 @@ export default defineConfig({
     environment: 'node',
     globals: true,
     include: ['tests/**/*.{test,spec}.ts'],
+    setupFiles: ['tests/setup.ts'],
+    env: { LLM_MODE: 'mock' },
     timeout: 20000,
   },
 });

@@ -20,6 +20,7 @@ next-env.d.ts
 *.sqlite3
 prisma/dev.db*
 prisma/test.db*
+prisma/.test-db-provisioned
 prisma/*.db
 prisma/*.db-journal
 
