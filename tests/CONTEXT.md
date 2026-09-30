@@ -90,7 +90,7 @@ anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) 
 - `./helpers` → shared test utilities (db reset/seed, fixtures, faux agent, scenario harness)
 - `./unit` → pure/logic unit specs for security, planner, banking-sdk
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
-- `../vitest.config.ts` → root-owned test runner config; **needs `setupFiles: ['tests/setup.ts']`** (sibling — read-only, escalate writes to root)
+- `../vitest.config.ts` → root-owned test runner config (already wires `setupFiles`); needs `fileParallelism: false` + `hookTimeout` (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)
 
