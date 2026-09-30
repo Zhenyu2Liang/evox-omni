@@ -115,7 +115,7 @@ interface ActionResponse {
 - A mid-turn failure emits `data: {"type":"error","message":"<safe message>"}\n\n` then `done`.
 - Non-streaming fallback: `?stream=0` (or `Accept: application/json`) returns `200 { ok:true, data: ChatTurnResponse }`
   where `data = { sessionId, events: AgentStreamEvent[] }`.
-- The route drives the same agent entry point either way: `agent.runTurn(input, onEvent?)` — when
+- The route drives the same agent entry point either way: `agent.runTurn({ sessionId?, message })` — when
   `onEvent` is supplied, each event is pushed as it occurs (streaming); the returned `ChatTurnResponse`
   carries the full ordered event log (used verbatim for the non-streaming response).
 - On the first turn the route sets `Set-Cookie: banking_session=<sessionId>` (constant `SESSION_COOKIE`)
