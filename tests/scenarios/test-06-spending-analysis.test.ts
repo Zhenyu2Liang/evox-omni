@@ -7,7 +7,7 @@
  * and EXCLUDES the ¥6,999 Apple Store anomaly (a separate `isAnomaly` row).
  * Helpers: ../helpers (fauxAgent/scenario), ../helpers/db, ../helpers/fixtures.
  */
-import { describe, it, expect } from 'vitest';
+import { afterAll, beforeEach, describe, it, expect } from 'vitest';
 import { buildFauxAgent, callThen } from '../helpers/faux-agent';
 import {
   runTurn,
@@ -16,12 +16,17 @@ import {
   newSessionId,
   type ScenarioResult,
 } from '../helpers/scenario';
-import { useFreshDatabase, getTestPrisma } from '../helpers/db';
+import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '../helpers/db';
 import { MONTHLY_SPEND_TOTAL, buildCurrentMonthSpend } from '../helpers/fixtures';
 import type { SpendingAnalysis } from '@/banking-sdk';
 
 describe('Scenario 6 — 分析本月消费 (GREEN analyze_spending)', () => {
-  useFreshDatabase();
+  beforeEach(async () => {
+    await resetDatabase();
+  }, 30000);
+  afterAll(async () => {
+    await disconnectTestPrisma();
+  });
 
   /**
    * Drive one full pipeline turn: the scripted model calls the real `analyze_spending` tool

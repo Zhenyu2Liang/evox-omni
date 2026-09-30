@@ -16,14 +16,19 @@
  * Fixtures: demo user 李明; checking balance ¥23,580; contact 张伟.
  * Helpers: ../helpers (fauxAgent/scenario), ../helpers/db, ../helpers/fixtures.
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildFauxAgent, callThen } from '../helpers/faux-agent';
 import { newSessionId, runTurn, toolEventsOf, verifyAction, type ScenarioResult } from '../helpers/scenario';
-import { getTestPrisma, useFreshDatabase } from '../helpers/db';
+import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '../helpers/db';
 import { ACCOUNTS, CONTACTS } from '../helpers/fixtures';
 import { MFA_CODE } from '@/lib/constants';
 
-useFreshDatabase();
+beforeEach(async () => {
+  await resetDatabase();
+}, 30000);
+afterAll(async () => {
+  await disconnectTestPrisma();
+});
 
 /** The demo recipient 张伟 (seeded contact) and the primary checking account (¥23,580). */
 const RECIPIENT = CONTACTS.find((c) => c.name === '张伟')!;

@@ -9,7 +9,7 @@
  * Only the MODEL is scripted (`buildFauxAgent`); the tools, the `beforeToolCall` security
  * chokepoint, the Banking SDK and the DB are the real ones — so this proves real behaviour.
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import type { BalanceView } from '@/banking-sdk';
 import { security } from '@/security';
 import { buildFauxAgent, final, tool } from '../helpers/faux-agent';
@@ -20,10 +20,15 @@ import {
   toolEventsOf,
   type ScenarioResult,
 } from '../helpers/scenario';
-import { getTestPrisma, useFreshDatabase } from '../helpers/db';
+import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '../helpers/db';
 import { ACCOUNTS, DEMO_USER_ID } from '../helpers/fixtures';
 
-useFreshDatabase();
+beforeEach(async () => {
+  await resetDatabase();
+}, 30000);
+afterAll(async () => {
+  await disconnectTestPrisma();
+});
 
 /** The seeded 活期 account (`acct_checking`, 活期账户 ¥23,580) — the default funding account. */
 const CHECKING = ACCOUNTS[0];

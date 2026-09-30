@@ -21,16 +21,21 @@
  *
  * Helpers: ../helpers (faux-agent/scenario), ../helpers/db, ../helpers/fixtures.
  */
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildFauxAgent, final, tool } from '../helpers/faux-agent';
 import { cardsOfType, confirmAction, newSessionId, runTurn, toolEventsOf } from '../helpers/scenario';
-import { getTestPrisma, useFreshDatabase } from '../helpers/db';
+import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '../helpers/db';
 import { ACCOUNTS, CONTACTS, DEMO_USER_ID } from '../helpers/fixtures';
 import { RISK_LABEL } from '@/lib/constants';
 import { formatCNY } from '@/lib/money';
 import type { PendingActionSummary } from '@/lib/contracts/security';
 
-useFreshDatabase();
+beforeEach(async () => {
+  await resetDatabase();
+}, 30000);
+afterAll(async () => {
+  await disconnectTestPrisma();
+});
 
 /** Funding account 活期账户 (¥23,580) — the default transfer source. */
 const CHECKING = ACCOUNTS[0];

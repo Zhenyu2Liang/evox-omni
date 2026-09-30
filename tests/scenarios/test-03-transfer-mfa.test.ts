@@ -16,7 +16,7 @@
  * Helpers: ../helpers (fauxAgent/scenario), ../helpers/db, ../helpers/fixtures.
  */
 import type { Transaction } from '@prisma/client';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { security } from '@/security';
 import { DAILY_TRANSFER_LIMIT, MFA_CODE } from '@/lib/constants';
@@ -30,7 +30,7 @@ import {
   toolEventsOf,
   verifyAction,
 } from '../helpers/scenario';
-import { getTestPrisma, useFreshDatabase } from '../helpers/db';
+import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '../helpers/db';
 
 /** The 张伟 contact and the primary 活期 account from the canonical seed. */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
@@ -68,7 +68,12 @@ async function proposeRedTransfer() {
   return { sessionId, agent, result };
 }
 
-useFreshDatabase();
+beforeEach(async () => {
+  await resetDatabase();
+}, 30000);
+afterAll(async () => {
+  await disconnectTestPrisma();
+});
 
 describe('Scenario 3 — 给张伟转5000元 (RED MFA)', () => {
   it('transfer_money of ¥5000 exceeds the >1000 threshold and is classified RED by the policy table', async () => {
