@@ -55,7 +55,7 @@ export function StreamingText(p: StreamingTextProps): JSX.Element; // 'use clien
 ```
 
 ```ts
-// actions.ts — client-side fetch contract for the app's API routes (stubs in this phase)
+// actions.ts — client-side fetch contract for the app's API routes
 export interface ChatEndpoints {
   chat: string;                                // default '/api/chat'
   confirm: (actionId: string) => string;       // default `/api/actions/${id}/confirm`
@@ -70,6 +70,10 @@ export function cancelAction(actionId: string, endpoints?: ChatEndpoints): Promi
 ```
 
 ## Event → state fold (consumed by `useAgentStream` / `ChatWindow`)
+
+The fold is implemented as a **separately-exported PURE reducer** `reduceAgentEvents(state, events):
+ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is unit-testable with
+`AgentStreamEvent[]` fixtures and **no DOM**. `useAgentStream` merely wraps it in `useState`.
 
 | `AgentStreamEvent` | state effect |
 | --- | --- |
@@ -95,8 +99,8 @@ export function cancelAction(actionId: string, endpoints?: ChatEndpoints): Promi
   results (tool names, tiers, `summary`), never raw model reasoning.
 - **No MFA code** is displayed anywhere; `MfaCard` (in `./cards`) shows only the hint.
 - No `prisma`; data via props + `fetch` to `./app`. Money/status visuals via `../../ui`.
-- Placeholder stubs in this phase: `actions.ts` + `useAgentStream.ts` define the typed contract; the
-  fetch/reducer bodies land in the implementation phase. Signatures are frozen here.
+- `actions.ts` helpers **never throw** — every failure (network / parse / non-OK / domain `ok:false`)
+  folds into a safe `{ type: 'error', message }` `AgentStreamEvent`, so the UI never sees a raw exception.
 - Named exports only; files ≲ ~1000 lines, one concern per file.
 
 ## Test Strategy
