@@ -9,16 +9,18 @@
  *      - `banking.transaction.listAnomalies(userId)` → `AnomalyItem[]`
  *  - Success:
  *    `200 { ok: true, data: { analysis: SpendingAnalysis; transactions: TransactionView[]; anomalies: AnomalyItem[] } }`.
- *
- * STUB (Genesis architecture pass): body not implemented yet.
  */
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
-import { AppError } from '@/lib/errors';
-import { banking, type SpendingAnalysis, type TransactionView, type AnomalyItem } from '@/banking-sdk';
+import { banking, type AnomalyItem, type SpendingAnalysis, type TransactionView } from '@/banking-sdk';
+import { errorResponse, jsonResponse, parseQuery } from '../_lib/http';
+import { resolveUserId } from '../_lib/session';
 
-/** Query schema for `GET /api/bills`. */
-export const billsQuerySchema = z.object({
+/** Max ledger rows surfaced in the bills table. */
+const BILLS_TRANSACTION_LIMIT = 50;
+
+/** Query schema for `GET /api/bills` (private — a Next route may only export handlers). */
+const billsQuerySchema = z.object({
   month: z
     .string()
     .regex(/^\d{4}-\d{2}$/, 'month must be YYYY-MM')
@@ -33,8 +35,18 @@ export interface BillsData {
   anomalies: AnomalyItem[];
 }
 
-export async function GET(_req: NextRequest): Promise<Response> {
-  throw new AppError('INTERNAL', 'not implemented');
+export async function GET(req: NextRequest): Promise<Response> {
+  try {
+    const { month } = parseQuery(billsQuerySchema, req);
+    const userId = resolveUserId(req);
+    const [analysis, transactions, anomalies] = await Promise.all([
+      banking.transaction.analyzeSpending(userId, { month }),
+      banking.transaction.listTransactions(userId, { limit: BILLS_TRANSACTION_LIMIT }),
+      banking.transaction.listAnomalies(userId),
+    ]);
+    const data: BillsData = { analysis, transactions, anomalies };
+    return jsonResponse(data);
+  } catch (e) {
+    return errorResponse(e);
+  }
 }
-
-void banking;
