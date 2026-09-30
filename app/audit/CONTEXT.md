@@ -34,7 +34,7 @@ This node is a **thin Server Component** — it fetches the audit read models di
 
 ## Constraints
 
-- **Server Component**; render chrome + `TODO: wire read model` comments — no UI logic.
+- **Server Component**; no UI logic beyond the display mappings above.
 - Pass only **serializable** props to client components (no `Date` — epoch ms; render timestamps as
   epoch ms and format client-side).
 - **Read via `@/audit` only** — never import Prisma directly.
