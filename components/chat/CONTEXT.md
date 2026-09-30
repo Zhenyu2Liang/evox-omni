@@ -90,6 +90,13 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 | `error` | set `error` (never throw to the UI) |
 | `done` | clear `busy` |
 
+## Known Issues
+
+- `applyEvent` has a `default: return state` branch (no `assertNever`) — a NEW `AgentStreamEvent` variant silently no-ops instead of failing compilation (contrast `CardRenderer`'s exhaustive guard).
+- `mfa_required` carries no tool name, so `mfaSummary` reconstructs the summary with a hardcoded fallback `toolName: lastBlockedToolName ?? 'transfer_money'` — an MFA prompt for a non-transfer RED action can be mislabelled unless a prior blocked `tool_start`/`tool_end` set `lastBlockedToolName`.
+- `security_event` drops `event.kind` and is rendered as a `system` message, not a banner.
+- The `error` event only sets `state.error`, surfaced solely via `CardActionHandlers.error` (consumed by `ConfirmationCard`/`MfaCard`); with no active pending card an error is not rendered in `ChatWindow`.
+
 ## Constraints
 
 - **All Client Components** (`'use client'`) — hooks, streaming, fetch.
