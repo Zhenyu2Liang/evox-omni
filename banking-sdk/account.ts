@@ -2,19 +2,48 @@
  * Banking SDK — account reads. GREEN tier (auto-execute, no confirmation).
  * Persists nothing; reads via `lib/db/repositories`.
  */
-import type { AccountView, BalanceView } from './types';
+import type { Account } from '@prisma/client';
+import { demoNow } from '../lib/clock';
+import { accounts } from '../lib/db/repositories';
+import { AppError } from '../lib/errors';
+import type { AccountType, AccountView, BalanceView } from './types';
+
+/** Map a persisted `Account` row onto the public `AccountView` view model. */
+function toAccountView(row: Account): AccountView {
+  return {
+    id: row.id,
+    type: row.type as AccountType,
+    name: row.name,
+    // The seed already stores a masked value (e.g. `****8821`).
+    numberMasked: row.number,
+    balance: row.balance,
+    currency: row.currency,
+  };
+}
 
 /** Total available balance plus per-account breakdown for the user. */
 export async function getBalance(userId: string): Promise<BalanceView> {
-  throw new Error('not implemented');
+  const [totalAvailable, rows] = await Promise.all([
+    accounts.getTotalBalance(userId),
+    accounts.listAccounts(userId),
+  ]);
+  return {
+    totalAvailable,
+    currency: 'CNY',
+    accounts: rows.map(toAccountView),
+    asOf: demoNow(),
+  };
 }
 
 /** All accounts owned by the user. */
 export async function getAccounts(userId: string): Promise<AccountView[]> {
-  throw new Error('not implemented');
+  const rows = await accounts.listAccounts(userId);
+  return rows.map(toAccountView);
 }
 
 /** A single account by id. Throws `AppError('NOT_FOUND')` when missing. */
 export async function getAccountById(id: string): Promise<AccountView> {
-  throw new Error('not implemented');
+  const row = await accounts.getAccount(id);
+  if (!row) throw new AppError('NOT_FOUND', `Account ${id} not found`);
+  return toAccountView(row);
 }
