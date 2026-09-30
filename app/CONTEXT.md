@@ -207,3 +207,8 @@ normal `200` — never an HTTP error.
 - Add a new client-callable capability as a route under `./api`; add a new screen as a page dir with its
   own `CONTEXT.md`. Never import Prisma into a page or a client component.
 - Any new shared UI/transport type belongs in `../lib/contracts` (root-owned) — do not define it locally.
+- **Chat anomaly-card handlers are never wired.** `/agent` mounts `<ChatWindow className=… />` only, and
+  `ChatWindowProps` has no prop to accept a handler bundle; the sole `CardActionHandlers` is built inside
+  `../components/chat/ChatWindow.tsx` and omits `onAcknowledge`/`onViewDetail`/`onFreeze`, so those three
+  chat-card buttons ("这是本人交易"/"查看详情"/"冻结银行卡") are dead no-ops. The `AnomalyBanner` usages here
+  (`app/page.tsx:48`, `app/bills/page.tsx:100`) pass no handler props either. See `../components/chat/cards/CONTEXT.md`.
