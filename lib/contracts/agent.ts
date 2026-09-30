@@ -2,6 +2,9 @@ import type { RiskLevel } from './risk';
 import type { PendingActionSummary } from './security';
 import type { TaskPlan } from './task';
 
+export type { PendingActionSummary } from './security';
+export type { TaskPlan } from './task';
+
 export type ChatRole = 'user' | 'assistant' | 'system' | 'tool';
 
 export interface ToolEventView {
