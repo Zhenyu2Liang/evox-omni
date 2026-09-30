@@ -24,9 +24,11 @@ prisma/*.db
 prisma/*.db-journal
 
 # Environment
-.env
+# NOTE: this demo intentionally ships a .env with NON-SECRET defaults so it runs out of the box.
+# Real API keys must never be committed; they belong in .env.local (ignored below).
 .env.local
 .env.*.local
+!.env
 !.env.example
 
 # Testing
