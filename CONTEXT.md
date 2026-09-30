@@ -82,7 +82,7 @@ Additional code-level controls:
 - **Circuit breaker** (`security/circuit-breaker.ts`): 3 consecutive MFA failures (or repeated blocked high-risk
   attempts) → high-risk ops locked for the session + a `SecurityEvent` is emitted.
 - **Injection guard** (`security/injection-guard.ts`): detects injection patterns in user input and records a
-  `SecurityEvent`, and adds a system reminder — but **never grants permission** (defense-in-depth only).
+  `SecurityEvent` (+ a UI security event) — but **never grants permission** (defense-in-depth only). It does NOT inject a system reminder into the model context.
 - **Hallucination guard**: the model may only report facts that came from a tool result. If a tool returns
   `success:false`, the agent must report failure (demo **Test 5**).
 - **Audit** (`audit/`): every **gated action** (confirm / verify / cancel of a YELLOW/RED `PendingAction`)
