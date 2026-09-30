@@ -3,9 +3,9 @@
  * `subscribe_investment`, `redeem_investment`
  *
  * Investment product/holding reads and subscribe/redeem mutations. TypeBox param schemas;
- * `execute` is meant to call the Banking SDK and THROW `AppError` on failure. The
- * `run<X>(userId, args)` runners are the model-free path used by `executeDirect`; they CATCH and
- * return `ToolExecutionResult{ok:false,error}`.
+ * `execute` calls the Banking SDK and THROWS `AppError` on failure. The `run<X>(userId, args)`
+ * runners are the model-free path used by `executeDirect`; they CATCH and return
+ * `ToolExecutionResult{ok:false,error}`.
  *
  * Tiers: `list_investments` / `compare_investments` / `get_investment_holdings` 🟢 GREEN;
  * `subscribe_investment` / `redeem_investment` 🔴 RED (require MFA). Tier is decided by
@@ -13,6 +13,16 @@
  */
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { Type, type Static } from '@mariozechner/pi-ai';
+import { banking } from '@/banking-sdk';
+import type {
+  HoldingView,
+  InvestResult,
+  InvestmentComparison,
+  InvestmentRiskLevel,
+  ProductView,
+} from '@/banking-sdk';
+import { AppError } from '@/lib/errors';
+import { formatCNY } from '@/lib/money';
 import type { ToolExecutionResult } from './index';
 
 /* ----------------------------------------------------------- list_investments */
@@ -24,22 +34,53 @@ export const ListInvestmentsParams = Type.Object({
 export type ListInvestmentsArgs = Static<typeof ListInvestmentsParams>;
 
 /** Registered AgentTool for `list_investments` (🟢 GREEN). */
-export const listInvestmentsTool: AgentTool<ListInvestmentsArgs> = {
-  name: 'list_investments',
-  label: '理财产品',
-  description: '列出理财产品（代码、风险等级、预期年化、期限、起投金额），可按风险等级过滤。',
-  parameters: ListInvestmentsParams,
-  execute: async () => {
-    throw new Error('not implemented');
-  },
-};
+export function createListInvestmentsTool(
+  userId: string,
+): AgentTool<typeof ListInvestmentsParams> {
+  return {
+    name: 'list_investments',
+    label: '理财产品',
+    description: '列出理财产品（代码、风险等级、预期年化、期限、起投金额），可按风险等级过滤。',
+    parameters: ListInvestmentsParams,
+    execute: async (_toolCallId, params) => {
+      const result = await runListInvestments(userId, params);
+      if (!result.ok) throw new AppError('TOOL_FAILED', result.error ?? 'list_investments failed');
+      return {
+        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
+        details: result.data,
+      };
+    },
+  };
+}
 
 /** Model-free runner — `banking.investment.listProducts({ riskLevel })`. */
 export async function runListInvestments(
   userId: string,
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
-  throw new Error('not implemented');
+  try {
+    const riskLevel =
+      typeof args.riskLevel === 'string' ? (args.riskLevel as InvestmentRiskLevel) : undefined;
+    const products: ProductView[] = await banking.investment.listProducts(
+      riskLevel ? { riskLevel } : {},
+    );
+    if (products.length === 0) {
+      return { ok: true, data: products, summary: '暂无符合条件的理财产品。' };
+    }
+    const detail = products
+      .map(
+        (p) =>
+          `${p.code} ${p.name}（${p.riskLevel}，预期年化 ${p.expectedRate}%，期限 ${p.termDays} 天，起投 ${formatCNY(p.minAmount)}）`,
+      )
+      .join('；');
+    return {
+      ok: true,
+      data: products,
+      summary: `共 ${products.length} 只理财产品：${detail}。`,
+    };
+  } catch (e) {
+    return { ok: false, error: AppError.from(e).message };
+  }
 }
 
 /* -------------------------------------------------------- compare_investments */
@@ -51,22 +92,50 @@ export const CompareInvestmentsParams = Type.Object({
 export type CompareInvestmentsArgs = Static<typeof CompareInvestmentsParams>;
 
 /** Registered AgentTool for `compare_investments` (🟢 GREEN). */
-export const compareInvestmentsTool: AgentTool<CompareInvestmentsArgs> = {
-  name: 'compare_investments',
-  label: '对比理财',
-  description: '对比多个理财产品，标出最高预期收益率与最低风险的产品。',
-  parameters: CompareInvestmentsParams,
-  execute: async () => {
-    throw new Error('not implemented');
-  },
-};
+export function createCompareInvestmentsTool(
+  userId: string,
+): AgentTool<typeof CompareInvestmentsParams> {
+  return {
+    name: 'compare_investments',
+    label: '对比理财',
+    description: '对比多个理财产品，标出最高预期收益率与最低风险的产品。',
+    parameters: CompareInvestmentsParams,
+    execute: async (_toolCallId, params) => {
+      const result = await runCompareInvestments(userId, params);
+      if (!result.ok) {
+        throw new AppError('TOOL_FAILED', result.error ?? 'compare_investments failed');
+      }
+      return {
+        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
+        details: result.data,
+      };
+    },
+  };
+}
 
 /** Model-free runner — `banking.investment.compareInvestments(productIds)`. */
 export async function runCompareInvestments(
   userId: string,
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
-  throw new Error('not implemented');
+  try {
+    const productIds = args.productIds;
+    if (!Array.isArray(productIds) || productIds.length === 0) {
+      throw new AppError('VALIDATION', 'compare_investments 需要至少一个产品 id');
+    }
+    const comparison: InvestmentComparison = await banking.investment.compareInvestments(
+      productIds.map((id) => String(id)),
+    );
+    const byId = new Map(comparison.products.map((p) => [p.id, p]));
+    const top = comparison.highestRateId ? byId.get(comparison.highestRateId) : undefined;
+    const low = comparison.lowestRiskId ? byId.get(comparison.lowestRiskId) : undefined;
+    const parts = [`已对比 ${comparison.products.length} 只理财产品`];
+    if (top) parts.push(`最高预期年化：${top.name} ${top.expectedRate}%`);
+    if (low) parts.push(`最低风险：${low.name}（${low.riskLevel}）`);
+    return { ok: true, data: comparison, summary: `${parts.join('；')}。` };
+  } catch (e) {
+    return { ok: false, error: AppError.from(e).message };
+  }
 }
 
 /* --------------------------------------------------- get_investment_holdings */
@@ -76,22 +145,47 @@ export const GetInvestmentHoldingsParams = Type.Object({});
 export type GetInvestmentHoldingsArgs = Static<typeof GetInvestmentHoldingsParams>;
 
 /** Registered AgentTool for `get_investment_holdings` (🟢 GREEN). */
-export const getInvestmentHoldingsTool: AgentTool<GetInvestmentHoldingsArgs> = {
-  name: 'get_investment_holdings',
-  label: '我的持仓',
-  description: '列出当前用户的理财持仓（产品、本金、市值、收益、状态）。',
-  parameters: GetInvestmentHoldingsParams,
-  execute: async () => {
-    throw new Error('not implemented');
-  },
-};
+export function createGetInvestmentHoldingsTool(
+  userId: string,
+): AgentTool<typeof GetInvestmentHoldingsParams> {
+  return {
+    name: 'get_investment_holdings',
+    label: '我的持仓',
+    description: '列出当前用户的理财持仓（产品、本金、市值、收益、状态）。',
+    parameters: GetInvestmentHoldingsParams,
+    execute: async () => {
+      const result = await runGetInvestmentHoldings(userId, {});
+      if (!result.ok) {
+        throw new AppError('TOOL_FAILED', result.error ?? 'get_investment_holdings failed');
+      }
+      return {
+        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
+        details: result.data,
+      };
+    },
+  };
+}
 
 /** Model-free runner — `banking.investment.listHoldings(userId)`. */
 export async function runGetInvestmentHoldings(
   userId: string,
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
-  throw new Error('not implemented');
+  try {
+    const holdings: HoldingView[] = await banking.investment.listHoldings(userId);
+    if (holdings.length === 0) {
+      return { ok: true, data: holdings, summary: '当前没有理财持仓。' };
+    }
+    const principal = holdings.reduce((sum, h) => sum + h.amount, 0);
+    const profit = holdings.reduce((sum, h) => sum + (h.profit ?? 0), 0);
+    return {
+      ok: true,
+      data: holdings,
+      summary: `共 ${holdings.length} 笔持仓，本金合计 ${formatCNY(principal)}，收益合计 ${formatCNY(profit)}。`,
+    };
+  } catch (e) {
+    return { ok: false, error: AppError.from(e).message };
+  }
 }
 
 /* ------------------------------------------------------ subscribe_investment */
@@ -104,22 +198,56 @@ export const SubscribeInvestmentParams = Type.Object({
 export type SubscribeInvestmentArgs = Static<typeof SubscribeInvestmentParams>;
 
 /** Registered AgentTool for `subscribe_investment` (🔴 RED). */
-export const subscribeInvestmentTool: AgentTool<SubscribeInvestmentArgs> = {
-  name: 'subscribe_investment',
-  label: '申购理财',
-  description: '申购指定理财产品（高风险，需要短信验证码验证）。',
-  parameters: SubscribeInvestmentParams,
-  execute: async () => {
-    throw new Error('not implemented');
-  },
-};
+export function createSubscribeInvestmentTool(
+  userId: string,
+): AgentTool<typeof SubscribeInvestmentParams> {
+  return {
+    name: 'subscribe_investment',
+    label: '申购理财',
+    description: '申购指定理财产品（高风险，需要短信验证码验证）。',
+    parameters: SubscribeInvestmentParams,
+    execute: async (_toolCallId, params) => {
+      const result = await runSubscribeInvestment(userId, params);
+      if (!result.ok) {
+        throw new AppError('TOOL_FAILED', result.error ?? 'subscribe_investment failed');
+      }
+      return {
+        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
+        details: result.data,
+      };
+    },
+  };
+}
 
 /** Model-free runner — `banking.investment.subscribeInvestment({ userId, productId, amount })`. */
 export async function runSubscribeInvestment(
   userId: string,
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
-  throw new Error('not implemented');
+  try {
+    const productId = args.productId;
+    const amount = args.amount;
+    if (typeof productId !== 'string' || productId === '') {
+      throw new AppError('VALIDATION', 'subscribe_investment 需要 productId');
+    }
+    if (typeof amount !== 'number' || !Number.isFinite(amount)) {
+      throw new AppError('VALIDATION', 'subscribe_investment 需要合法的 amount');
+    }
+    const result: InvestResult = await banking.investment.subscribeInvestment({
+      userId,
+      productId,
+      amount,
+    });
+    const balance =
+      result.newBalance != null ? `，账户余额 ${formatCNY(result.newBalance)}` : '';
+    return {
+      ok: true,
+      data: result,
+      summary: `已认购 ${formatCNY(result.amount)}，持仓号 ${result.holdingId}（产品 ${result.productId}）${balance}。`,
+    };
+  } catch (e) {
+    return { ok: false, error: AppError.from(e).message };
+  }
 }
 
 /* --------------------------------------------------------- redeem_investment */
@@ -131,20 +259,46 @@ export const RedeemInvestmentParams = Type.Object({
 export type RedeemInvestmentArgs = Static<typeof RedeemInvestmentParams>;
 
 /** Registered AgentTool for `redeem_investment` (🔴 RED). */
-export const redeemInvestmentTool: AgentTool<RedeemInvestmentArgs> = {
-  name: 'redeem_investment',
-  label: '赎回理财',
-  description: '赎回指定理财持仓（高风险，需要短信验证码验证）。',
-  parameters: RedeemInvestmentParams,
-  execute: async () => {
-    throw new Error('not implemented');
-  },
-};
+export function createRedeemInvestmentTool(
+  userId: string,
+): AgentTool<typeof RedeemInvestmentParams> {
+  return {
+    name: 'redeem_investment',
+    label: '赎回理财',
+    description: '赎回指定理财持仓（高风险，需要短信验证码验证）。',
+    parameters: RedeemInvestmentParams,
+    execute: async (_toolCallId, params) => {
+      const result = await runRedeemInvestment(userId, params);
+      if (!result.ok) {
+        throw new AppError('TOOL_FAILED', result.error ?? 'redeem_investment failed');
+      }
+      return {
+        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
+        details: result.data,
+      };
+    },
+  };
+}
 
 /** Model-free runner — `banking.investment.redeemInvestment({ userId, holdingId })`. */
 export async function runRedeemInvestment(
   userId: string,
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
-  throw new Error('not implemented');
+  try {
+    const holdingId = args.holdingId;
+    if (typeof holdingId !== 'string' || holdingId === '') {
+      throw new AppError('VALIDATION', 'redeem_investment 需要 holdingId');
+    }
+    const result: InvestResult = await banking.investment.redeemInvestment({ userId, holdingId });
+    const balance =
+      result.newBalance != null ? `，账户余额 ${formatCNY(result.newBalance)}` : '';
+    return {
+      ok: true,
+      data: result,
+      summary: `已赎回持仓 ${result.holdingId}，到账 ${formatCNY(result.amount)}${balance}。`,
+    };
+  } catch (e) {
+    return { ok: false, error: AppError.from(e).message };
+  }
 }
