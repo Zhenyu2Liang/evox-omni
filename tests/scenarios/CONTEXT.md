@@ -10,8 +10,9 @@ outcome (agent text, tool events, cards, `PendingAction`/audit rows, DB side eff
 Only the **model** is mocked (`registerFauxProvider()`, `LLM_MODE=mock`); the tools, security
 chokepoint and DB are the real ones — so these prove the real security behaviour, not a mock of it.
 
-Current status: **`it.todo` scaffolds** (no assertions); bodies are filled in Phase 2 once the
-`agent`/`security`/`sdk`/`audit` modules are implemented. Files stay load-safe.
+Current status: **Tests 1–6 are implemented** (real assertions, all 36 green) and drive the real
+gateway/SDK/DB pipeline. **Tests 7–12 are still `it.todo` scaffolds** (no assertions), to be filled
+in once their modules are exercised; all specs stay load-safe.
 
 ## The 12 scenarios
 
@@ -34,8 +35,9 @@ Current status: **`it.todo` scaffolds** (no assertions); bodies are filled in Ph
 
 Specs use the shared helpers (see `../helpers/CONTEXT.md`): `fauxAgent.buildFauxAgent` +
 script builders, `scenario.runTurn/confirmAction/verifyAction/cancelAction` (return `ScenarioResult`
-with `events`/`text`/`toolEvents`/`cards`/`confirmation`/`mfa`/`plan`), `db.useFreshDatabase`, and
-`fixtures.*`. Intended imports appear as commented lines in each spec header.
+with `events`/`text`/`toolEvents`/`cards`/`confirmation`/`mfa`/`plan`), and `fixtures.*`.
+The implemented specs (Tests 1–6) register their own DB lifecycle hooks (see Constraints) rather
+than calling `db.useFreshDatabase`.
 
 ## Constraints
 
@@ -45,8 +47,16 @@ with `events`/`text`/`toolEvents`/`cards`/`confirmation`/`mfa`/`plan`), `db.useF
   for Test 10).
 - Assert the *security* facts explicitly: a gated tool is BLOCKED before any DB write; the money move
   only happens after a human confirm/verify; injection text never raises a tier.
-- DB-backed: reset + seed per test via `useFreshDatabase()`.
+- **DB-backed**: reset + seed per test. The implemented specs (Tests 1–6) register an explicit-timed
+  hook instead of `useFreshDatabase()`, because `resetDatabase()` exceeds Vitest's default 10s
+  `hookTimeout` under a full collective run:
+  `beforeEach(async () => { await resetDatabase(); }, 30000); afterAll(disconnectTestPrisma);`
+  reusing the same helper functions from `../helpers/db` (they do NOT re-implement reset/seed).
 - Import frozen types from `@/lib/contracts/*`.
+- A SUCCESS `ToolEventView` carries no `tier` (only status/summary) — assert GREEN/RED tiers via the
+  gateway evaluation, `res.confirmation.action.tier`, or the `AuditLog` row, not the tool event.
+- The GREEN auto-execute path persists NO `AuditLog` row (audit rows are written for gated
+  confirm/verify/cancel decisions) — assert GREEN at the `beforeToolCall` chokepoint instead.
 
 ## Routing Table
 
