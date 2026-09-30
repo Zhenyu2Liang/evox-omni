@@ -7,19 +7,22 @@
  *      · recentTransactions · latestAnomaly · asOf).
  *   User id: `getConfig().demoUserId` (default `DEFAULT_DEMO_USER_ID`).
  *
- * Composes (`../components` — referenced by name only; the component library owns the API):
- *   BalanceCard, stat tiles (总资产 / 活期余额 / 信用卡额度 / 本月消费),
- *   RecentTransactionsTable, AnomalyBanner, and the AI Agent entry linking to `/agent`.
+ * Composes (`@/components` — read-only sibling; the component library owns the API):
+ *   `AssetSummaryCard`     — 总资产 / 活期余额 / 信用卡额度 / 本月消费.
+ *   `AnomalyBanner`        — suspicious-spend banner for the latest anomaly (when present).
+ *   `RecentTransactions`   — the recent transaction list.
+ *   The AI Agent entry links to `/agent`.
  */
 import Link from 'next/link';
 import { getConfig } from '@/lib/config';
 import { banking } from '@/banking-sdk';
 import type { DashboardSummary } from '@/banking-sdk';
+import { AnomalyBanner, AssetSummaryCard, RecentTransactions } from '@/components';
 
 export default async function DashboardPage() {
   const userId = getConfig().demoUserId;
 
-  // TODO: wire read model — `summary` is handed to the component library below.
+  // Read model — aggregated assets, month spend, recent transactions and the latest anomaly.
   const summary: DashboardSummary = await banking.dashboard.getDashboardSummary(userId);
 
   return (
@@ -39,16 +42,12 @@ export default async function DashboardPage() {
         </Link>
       </header>
 
-      {/*
-        TODO: wire read model into the component library (`@/components`, read-only sibling):
-          <BalanceCard summary={summary} />
-          <StatTiles summary={summary} />          // 总资产 / 活期余额 / 信用卡额度 / 本月消费
-          <RecentTransactionsTable rows={summary.recentTransactions} />
-          <AnomalyBanner anomaly={summary.latestAnomaly} />
-      */}
-      <section className="rounded-2xl bg-white p-6 text-sm text-banking-navy shadow-sm">
-        余额卡片、统计指标、近期交易与异常提醒将由 `@/components` 渲染。
-      </section>
+      {/* 总资产 / 活期余额 / 信用卡额度 / 本月消费 */}
+      <AssetSummaryCard summary={summary} />
+
+      {summary.latestAnomaly ? <AnomalyBanner anomaly={summary.latestAnomaly} /> : null}
+
+      <RecentTransactions transactions={summary.recentTransactions} title="近期交易" />
     </main>
   );
 }
