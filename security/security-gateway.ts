@@ -160,7 +160,57 @@ function pickString(args: Record<string, unknown>, keys: readonly string[]): str
   return undefined;
 }
 
-/** Map a persisted Prisma `PendingAction` row to the cross-module contract type. */
+/**
+ * Code-driven intent labels per tool — the human-readable "intent" persisted on a gated
+ * PendingAction for the audit trail. NEVER derived from model output: the label is a fixed
+ * function of the tool name, so the model cannot influence it (LLM-immutable, like the tiers).
+ * Typed Record<ToolName, string> so a newly added tool without a label is a compile error.
+ */
+export const TOOL_INTENT: Record<ToolName, string> = {
+  // 🟢 GREEN
+  get_balance: '查询余额',
+  get_transactions: '查询交易流水',
+  search_contact: '查询联系人',
+  analyze_spending: '消费分析',
+  detect_anomaly: '异常交易检测',
+  get_cards: '查询银行卡',
+  list_subscriptions: '查询订阅',
+  list_investments: '查询理财产品',
+  compare_investments: '理财产品对比',
+  get_investment_holdings: '查询理财持仓',
+  get_dashboard_summary: '资产概览',
+  list_scheduled_tasks: '查询定时任务',
+  reserve_budget: '预算预留',
+  // 🟡 YELLOW
+  transfer_money: '转账',
+  set_card_limit: '调整信用卡额度',
+  cancel_subscription: '取消订阅',
+  freeze_card: '冻结银行卡',
+  apply_virtual_card: '申请虚拟卡',
+  set_subscription_reminder: '设置订阅提醒',
+  create_scheduled_task: '创建定时任务',
+  // 🔴 RED
+  subscribe_investment: '理财产品申购',
+  redeem_investment: '理财产品赎回',
+  report_lost_card: '挂失银行卡',
+  unfreeze_card: '解冻银行卡',
+  change_password: '修改密码',
+  // ⚪ META
+  submit_plan: '规划任务',
+};
+
+/**
+ * Derive the (non-empty) intent label for a tool. Code-driven — a pure function of the tool name.
+ * Falls back to the raw tool name so `intent` is ALWAYS populated for a gated action even if the
+ * map were ever incomplete at runtime (the Record<ToolName, string> typing keeps that a
+ * compile-time concern).
+ */
+export function deriveIntent(toolName: ToolName): string {
+  const label = (TOOL_INTENT as Partial<Record<ToolName, string>>)[toolName];
+  return typeof label === 'string' && label.trim() !== '' ? label : toolName;
+}
+
+/** Map a persisted Prisma row to the cross-module contract PendingAction type. */
 function toContractPendingAction(row: PrismaPendingAction): PendingAction {
   const fallbackSummary: PendingActionSummary = {
     ...FALLBACK_SUMMARY,
@@ -177,6 +227,8 @@ function toContractPendingAction(row: PrismaPendingAction): PendingAction {
     requiresMfa: row.requiresMfa,
     status: row.status as PendingActionStatus,
     summary: safeParse<PendingActionSummary>(row.summaryJson, fallbackSummary),
+    userRequest: row.userRequest ?? undefined,
+    intent: row.intent ?? undefined,
     createdAt: row.createdAt.getTime(),
     updatedAt: row.updatedAt.getTime(),
   };
@@ -267,6 +319,9 @@ async function gatewayCreatePendingAction(
     tier: ev.tier,
     requiresMfa: ev.requiresMfa,
     summary,
+    // Audit trail: the user's original request + a code-derived intent label (never model text).
+    userRequest: ctx.userRequest,
+    intent: deriveIntent(ctx.toolName),
     status,
   });
 
