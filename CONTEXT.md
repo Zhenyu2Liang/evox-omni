@@ -170,7 +170,7 @@ See `tests/CONTEXT.md`.
 - `./README.md` → setup, demo account, mock MFA code, demo script, known limits (sibling/root-owned)
 ## Known Issues (current state)
 - **Audit `userRequest`/`intent` depend on the security gateway populating the `PendingAction`.** `agent/confirmation.ts` reads `action.userRequest`/`action.intent`, but `security/security-gateway.ts` does not yet propagate them onto the contract `PendingAction`, so the audit rows still read empty until that lands.
-- **Audit `timestamp` uses raw `Date.now()`** (`agent/confirmation.ts`) while `SecurityEvent` rows use `demoNow()` → inconsistent clocks across the two tables.
+
 - **`AnomalyCard` buttons are inert** in the live chat: `components/chat/ChatWindow.tsx` never supplies `onAcknowledge` / `onViewDetail` / `onFreeze` (declared optional in `components/chat/cards/types.ts`).
 - **No global navigation**: `app/layout.tsx` renders only `{children}`, so `/bills`, `/cards`, `/subscriptions`, `/security`, `/audit` are reachable only by direct URL.
 - **`CircuitBreakerStatus` failure count** is not passed by `app/security/page.tsx` → the bar always reads "0 / 3".
