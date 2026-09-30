@@ -86,7 +86,7 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 | `plan_update` | set `activePlan` |
 | `confirmation_required` | set `pendingAction` `{ summary, actionId }` (drives `ConfirmationCard`) |
 | `mfa_required` | set `pendingAction` with `actionId` + hint (drives `MfaCard`) |
-| `security_event` | push a banner (`kind`, `message`) |
+| `security_event` | append a `system` `ChatMessage` (content = `event.message`; `event.kind` is not surfaced) |
 | `error` | set `error` (never throw to the UI) |
 | `done` | clear `busy` |
 
