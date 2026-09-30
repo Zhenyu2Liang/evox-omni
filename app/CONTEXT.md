@@ -147,7 +147,7 @@ normal `200` — never an HTTP error.
   chat cards, charts, banking tiles, ui primitives). Component API is owned there.
   Every component the pages use renders real markup — `ChatWindow`, `Card`, `CardTile`, `Table`,
   `Badge`, `StatusBadge`, `EmptyState`, `Money`, `SubscriptionTile`, `AssetSummaryCard`,
-  compose and type-check correctly but render blank until `../components` implements them.
+  `AnomalyBanner`, `RecentTransactions`, the charts, and `../components/security/*`.
 - `../agent` (sibling — read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`,
   `AgentStreamEvent` emission).
 - `../banking-sdk` (sibling — read-only): read models (`banking.dashboard/account/transaction/card/subscription/…`, DTOs in `banking-sdk/types`).
