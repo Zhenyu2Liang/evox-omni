@@ -7,7 +7,8 @@
  *  - Delegates to `@/audit`: `getSecurityStatus(sessionId, { isLocked })` +
  *    `listSecurityEvents({ sessionId })`; the authoritative lock state is supplied by the
  *    security node's circuit breaker (`@/security` → `circuitBreaker.isLocked`).
- *  - Success: `200 { ok: true, data: { status: SecurityStatus; events: SecurityEvent[] } }`;
+ *  - Success: `200 { ok: true, data: { status; events; circuitBreaker } }`, where
+ *    `circuitBreaker` surfaces the raw failure counter (`circuitBreaker.getState`);
  *    an invalid query maps to `400 VALIDATION` through the shared error envelope.
  *
  * Thin by design: `validate (zod) → delegate → serialize`. No business logic, no Prisma here.
@@ -34,6 +35,8 @@ export type SecurityQuery = z.infer<typeof securityQuerySchema>;
 export interface SecurityData {
   status: SecurityStatus;
   events: SecurityEvent[];
+  /** Raw circuit-breaker counters for the session (failure count vs trip threshold). */
+  circuitBreaker: { failures: number; max: number; locked: boolean };
 }
 
 export async function GET(req: NextRequest): Promise<Response> {
@@ -45,8 +48,18 @@ export async function GET(req: NextRequest): Promise<Response> {
       isLocked: (sid) => security.circuitBreaker.isLocked(sid),
     });
     const events = await audit.listSecurityEvents({ sessionId });
+    const breaker = security.circuitBreaker.getState(sessionId);
 
-    return jsonResponse<SecurityData>({ status, events });
+    const data: SecurityData = {
+      status,
+      events,
+      circuitBreaker: {
+        failures: breaker.failures,
+        max: breaker.max,
+        locked: breaker.locked,
+      },
+    };
+    return jsonResponse(data);
   } catch (e) {
     return errorResponse(e);
   }
