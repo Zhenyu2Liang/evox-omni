@@ -176,7 +176,7 @@ Repository functions this node consumes (confirmed signatures — do NOT fork):
 - `lib/db/repositories/pendingAction` → `createPendingAction(input): Promise<PendingAction>`,
   `getPendingAction(id): Promise<(PendingAction & { mfa: MfaChallenge | null }) | null>`, `updatePendingActionStatus(id, status): Promise<PendingAction>`
 - `lib/db/repositories/pendingAction` (MFA challenge rows live in the SAME module) → `createMfaChallenge({ actionId, code, maxAttempts?, expiresAt? }): Promise<MfaChallenge>`,
-  `getMfaChallenge(actionId): Promise<{actionId; code; attempts; maxAttempts; verified; createdAt} | null>`,
+  `getMfaChallenge(actionId): Promise<MfaChallenge | null>` (carries `code` — never expose it),
   `incrementMfaAttempts(actionId): Promise<number>`, `markMfaVerified(actionId): Promise<void>`
 - `lib/db/repositories/transaction` → `sumOutgoingTransfersSince(userId: string, sinceMs: number): Promise<number>`
 
