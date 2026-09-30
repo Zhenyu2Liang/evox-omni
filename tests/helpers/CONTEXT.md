@@ -17,7 +17,7 @@ Import from the barrel (`../helpers`) or a specific module.
 - `db.ts` — test-database lifecycle:
   - `getTestPrisma(): PrismaClient` — the Prisma singleton bound to the test DB (`@/lib/db/client`).
   - `truncateAll(): Promise<void>` — delete all rows in FK-safe order (children → parents).
-  - `resetDatabase(): Promise<void>` — `truncateAll()` + `fixtures.seedDemoData()` + reset in-process security state.
+  - `resetDatabase(): Promise<void>` — `truncateAll()` + `fixtures.seedDemoData()` (the circuit breaker has no global reset; isolation comes from a unique `sessionId` per test).
   - `useFreshDatabase(): void` — register Vitest hooks (`beforeEach` → `resetDatabase()`, `afterAll` → disconnect).
   - `disconnectTestPrisma(): Promise<void>` — idempotent Prisma disconnect.
 - `fixtures.ts` — the canonical demo dataset (constants) + seeder:
