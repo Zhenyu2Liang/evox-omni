@@ -8,7 +8,7 @@ order a plan, or enforce a domain invariant. These run **without the LLM** and, 
 
 Current status: **fully implemented** — real assertions throughout; no `it.todo` remains.
 DB-backed cases use the test SQLite via `../helpers/db`; the rest need no DB or LLM.
-import Prisma-constructing modules at runtime).
+Specs stay load-safe (no top-level Prisma construction outside DB-backed cases).
 
 ## API Surface
 
