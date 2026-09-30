@@ -145,9 +145,9 @@ normal `200` — never an HTTP error.
 
 - `../components` (sibling — read-only): the React component library the pages compose (`ChatWindow`,
   chat cards, charts, banking tiles, ui primitives). Component API is owned there.
-  **Note**: some presentational components are still `return null` design stubs on that side
-  (e.g. `Card`, `CardTile`, `Table`, `Badge`, `StatusBadge`, `EmptyState`, `SubscriptionTile`); pages
-  compose and type-check correctly but render blank until `../components` implements them.
+  Every component the pages use renders real markup — `ChatWindow`, `Card`, `CardTile`, `Table`,
+  `Badge`, `StatusBadge`, `EmptyState`, `Money`, `SubscriptionTile`, `AssetSummaryCard`,
+  `AnomalyBanner`, `RecentTransactions`, the charts, and `../components/security/*`.
 - `../agent` (sibling — read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`,
   `AgentStreamEvent` emission).
 - `../banking-sdk` (sibling — read-only): read models (`banking.dashboard/account/transaction/card/subscription/…`, DTOs in `banking-sdk/types`).
@@ -206,4 +206,12 @@ normal `200` — never an HTTP error.
   Each route is thin (`validate → delegate → serialize`); shared plumbing lives in `app/api/_lib/`.
 - Add a new client-callable capability as a route under `./api`; add a new screen as a page dir with its
   own `CONTEXT.md`. Never import Prisma into a page or a client component.
+- - There is **no global navigation chrome**: `app/layout.tsx` renders only `{children}` (no nav/header).
+  Each page is reachable by direct URL; the only internal `<Link>`s are the two `/agent` entries on `/`
+  and `/cards` — `/bills`, `/cards`, `/subscriptions`, `/security`, `/audit` are not linked from each other.
 - Any new shared UI/transport type belongs in `../lib/contracts` (root-owned) — do not define it locally.
+- **Chat anomaly-card handlers are never wired.** `/agent` mounts `<ChatWindow className=… />` only, and
+  `ChatWindowProps` has no prop to accept a handler bundle; the sole `CardActionHandlers` is built inside
+  `../components/chat/ChatWindow.tsx` and omits `onAcknowledge`/`onViewDetail`/`onFreeze`, so those three
+  chat-card buttons ("这是本人交易"/"查看详情"/"冻结银行卡") are dead no-ops. The `AnomalyBanner` usages here
+  (`app/page.tsx:48`, `app/bills/page.tsx:100`) pass no handler props either. See `../components/chat/cards/CONTEXT.md`.

@@ -86,9 +86,16 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 | `plan_update` | set `activePlan` |
 | `confirmation_required` | set `pendingAction` `{ summary, actionId }` (drives `ConfirmationCard`) |
 | `mfa_required` | set `pendingAction` with `actionId` + hint (drives `MfaCard`) |
-| `security_event` | push a banner (`kind`, `message`) |
+| `security_event` | append a `system` `ChatMessage` (content = `event.message`; `event.kind` is not surfaced) |
 | `error` | set `error` (never throw to the UI) |
 | `done` | clear `busy` |
+
+## Known Issues
+
+- `applyEvent` has a `default: return state` branch (no `assertNever`) — a NEW `AgentStreamEvent` variant silently no-ops instead of failing compilation (contrast `CardRenderer`'s exhaustive guard).
+- `mfa_required` carries no tool name, so `mfaSummary` reconstructs the summary with a hardcoded fallback `toolName: lastBlockedToolName ?? 'transfer_money'` — an MFA prompt for a non-transfer RED action can be mislabelled unless a prior blocked `tool_start`/`tool_end` set `lastBlockedToolName`.
+- `security_event` drops `event.kind` and is rendered as a `system` message, not a banner.
+- The `error` event only sets `state.error`, surfaced solely via `CardActionHandlers.error` (consumed by `ConfirmationCard`/`MfaCard`); with no active pending card an error is not rendered in `ChatWindow`.
 
 ## Constraints
 
@@ -102,6 +109,9 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 - `actions.ts` helpers **never throw** — every failure (network / parse / non-OK / domain `ok:false`)
   folds into a safe `{ type: 'error', message }` `AgentStreamEvent`, so the UI never sees a raw exception.
 - Named exports only; files ≲ ~1000 lines, one concern per file.
+- `ChatWindow` builds the `CardActionHandlers` bundle with only `actionId`/`onConfirm`/`onVerify`/
+  `onCancel`/`busy`/`error`. The anomaly handlers (`onAcknowledge`/`onViewDetail`/`onFreeze`) are NOT
+  supplied, so `AnomalyCard`'s in-card buttons are inert via the chat path (see `./cards/CONTEXT.md` → Known Issues).
 
 ## Test Strategy
 

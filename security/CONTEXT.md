@@ -149,7 +149,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   `amount`, and `ctx.dailyTransferTotal`. Model output and user text are NEVER inputs to the decision.
 - **Pure/deterministic where possible**: `permission-engine`, `risk-engine.evaluateTransferRisk`,
   `injection-guard.scan`, `decide`, `serializeBlockReason`, `parseBlockReason`, `buildPendingActionSummary`
-  perform NO I/O. Inject `now` (default `Date.now()`) for time-dependent logic so tests are stable.
+  perform NO I/O. Inject `now` (default `demoNow()`, the demo clock) for time-dependent logic so tests are stable.
 - **No I/O in the decision; I/O only where required**: DB access is confined to `risk.computeDailyTransferTotal`
   (transaction repo), `mfa` (pendingAction/mfaChallenge repos), `circuit-breaker.recordFailure` and
   `injection.reportInjection` (audit). The gateway persists pending actions via the pendingAction repo.
@@ -158,9 +158,27 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   (`mfa.verify`) or throw `AppError` at boundaries. NEVER swallow an error, never fire-and-forget an event write
   (`recordFailure`/`reportInjection` are awaited). Never leak a raw exception or the MFA code to the model/UI.
 - **Circuit breaker is a hard gate** the LLM cannot clear: 3 consecutive MFA failures (`MFA_MAX_ATTEMPTS`)
-  lock high-risk ops for the session; only `reset(sessionId)` (user/admin, security-center) unlocks.
+  trip it for the session and emit `CIRCUIT_BREAKER_TRIPPED`.
+  When tripped it denies EVERY tool call, not only high-risk ones (`gatewayEvaluate`: `blocked = locked || tier !== 'GREEN'`; decision `deny`).
+  Unlocking requires `reset(sessionId)`, which NO runtime caller invokes yet (see Known Issues).
 - **Injection guard never grants permission** — defense-in-depth only (see its file disclaimer).
 - **Files ≲ ~1000 lines**; split by responsibility. No inter-module cycles.
+
+## Known Issues
+
+- **Injection guard does NOT add a system reminder to the model context.**
+  The only caller (`agent/run-turn.ts` ~L353-357) emits a UI `security_event` (kind `injection`) after `reportInjection`; nothing is appended to the agent's system prompt/messages, despite the `injection-guard.ts` header saying so.
+  Detection, the `INJECTION_ATTEMPT` event, and never-grants-permission all hold (defense-in-depth unaffected).
+- **Circuit-breaker unlock is not wired.**
+  `CIRCUIT_BREAKER_TRIPPED` is emitted, but no route/code calls `circuit-breaker.reset(sessionId)` and nothing writes a `SECURITY_RESET` event (the kind is declared only in `lib/contracts/audit.ts`).
+  Once tripped, a session stays locked for the process lifetime; the "security-center unlock" has no runtime path (`recordSuccess` clears the counter but explicitly does NOT unlock).
+- **Breaker blocks all tiers, not only high-risk.**
+  `gatewayEvaluate` sets `blocked = locked || tier !== 'GREEN'`, so when tripped even GREEN reads (e.g. `get_balance`) are denied — broader than the "high-risk ops locked" wording; `tests/scenarios/test-10-circuit-breaker.test.ts` only exercises a RED tool, so this is unguarded.
+- **"Repeated blocked high-risk attempts" is NOT a breaker trigger.**
+  `recordFailure` is called ONLY from `mfa.ts` on a wrong code; no code path counts blocked/denied attempts.
+- **Security-event writes are best-effort.**
+  `recordSecurityEvent` (sibling `audit/`) logs and swallows persistence failures, so an awaited event write can silently fail; the breaker's in-memory `locked` flag remains authoritative.
+- **`HIGH_RISK_BLOCKED` / `LIMIT_EXCEEDED` / `ANOMALY_FLAGGED` event kinds are declared but never written** by this node (only `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT` are emitted).
 
 ## Dependencies (contracts this node consumes)
 
@@ -172,7 +190,7 @@ Frozen imports (already exist, DO NOT redefine): `lib/contracts/{risk,tools,secu
 `lib/money` (`formatCNY`).
 
 Repository functions this node consumes (confirmed signatures — do NOT fork):
-- `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>` (sibling node; the stub throws `'not implemented'` on CALL — callers `await` it, never fire-and-forget)
+- `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>` (sibling node; implemented, callers `await` it — but its writes are BEST-EFFORT and swallow persistence failures, see Known Issues)
 - `lib/db/repositories/pendingAction` → `createPendingAction(input): Promise<PendingAction>`,
   `getPendingAction(id): Promise<(PendingAction & { mfa: MfaChallenge | null }) | null>`, `updatePendingActionStatus(id, status): Promise<PendingAction>`
 - `lib/db/repositories/pendingAction` (MFA challenge rows live in the SAME module) → `createMfaChallenge({ actionId, code, maxAttempts?, expiresAt? }): Promise<MfaChallenge>`,
