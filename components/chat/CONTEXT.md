@@ -71,6 +71,10 @@ export function cancelAction(actionId: string, endpoints?: ChatEndpoints): Promi
 
 ## Event → state fold (consumed by `useAgentStream` / `ChatWindow`)
 
+The fold is implemented as a **separately-exported PURE reducer** `reduceAgentEvents(state, events):
+ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is unit-testable with
+`AgentStreamEvent[]` fixtures and **no DOM**. `useAgentStream` merely wraps it in `useState`.
+
 | `AgentStreamEvent` | state effect |
 | --- | --- |
 | `session` | set `sessionId` (persist for later turns) |
