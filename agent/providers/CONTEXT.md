@@ -25,7 +25,7 @@ export function createLiveModel(cfg: AppConfig): Model<any>;   // real model; ne
 export function createMockModel(cfg: AppConfig): Model<any>;   // registers faux provider; offline, deterministic
 
 // index.ts (node facade)
-export function resolveModel(cfg?: AppConfig): Model;     // mock ⇒ createMockModel, live ⇒ createLiveModel; defaults to getConfig()
+export function resolveModel(cfg?: AppConfig): Model<any>;     // mock ⇒ createMockModel, live ⇒ createLiveModel; defaults to getConfig()
 export function providerId(cfg?: AppConfig): string;      // "mock" | `${provider}:${model}` — stable log id, never the API key
 ```
 
