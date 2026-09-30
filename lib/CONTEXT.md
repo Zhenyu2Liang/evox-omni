@@ -74,13 +74,15 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 
 ## Status
 
-- Root `lib/*.ts` util helpers (`errors`, `money`, `config`, `constants`, `ids`, `date`, `clock`, `json`)
-  and `db/client.ts` are implemented.
-- `lib/db/repositories/*` function bodies still `throw new Error('not implemented')` — repository
-  implementation is Phase 2 work.
+- Fully implemented: every `lib/*.ts` util helper (`errors`, `money`, `config`, `constants`, `ids`,
+  `date`, `clock`, `json`), `db/client.ts`, and all `lib/db/repositories/*` aggregate modules.
+
+## Known Issues
+
 - `lib/contracts/agent.ts` imports (but does not re-export) `PendingActionSummary` and `TaskPlan`;
-  consumers that need those via `@/lib/contracts/agent` must import them from `./security`/`./task`
-  (or the contract must add the re-export — root-owned change).
+  `tests/helpers/scenario.ts` imports both via `@/lib/contracts/agent` and fails to type-check (TS2459).
+  Resolution is root-owned (frozen contract + the sibling `tests` node are root-scoped): either add the
+  re-export to `agent.ts`, or fix the test imports to `./security`/`./task`.
 
 ## Notes for Agents
 
