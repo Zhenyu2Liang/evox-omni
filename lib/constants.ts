@@ -15,6 +15,17 @@ export const ANOMALY_AMOUNT_THRESHOLD = 5000;
 /** Seeded demo user id (李明). */
 export const DEFAULT_DEMO_USER_ID = 'user_liming';
 
+/**
+ * Fixed "as-of" instant for the demo (2026-09-25 12:00 LOCAL), so 本月/上月/今日, the spending
+ * window, the daily-transfer window and the seeded data (incl. the 2026-09-20 18:32 anomaly)
+ * stay coherent regardless of the real system clock. Built from LOCAL components so it agrees
+ * with date formatting and the test fixtures on any container timezone.
+ *
+ * ALL relative-date logic in the running app MUST default to this clock (overridable by an
+ * explicit `now` argument so tests stay deterministic). See `lib/clock.ts` (`demoNow()`).
+ */
+export const DEMO_NOW = new Date(2026, 8, 25, 12, 0, 0).getTime();
+
 /** Cookie name holding the demo agent session id. */
 export const SESSION_COOKIE = 'banking_session';
 
