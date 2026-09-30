@@ -31,3 +31,8 @@ Spec files (implemented — real assertions against the test SQLite), targeting 
 
 - `./transfer.test.ts` · `./subscription.test.ts` · `./investment.test.ts`
 - `../../helpers` → test-DB lifecycle + fixtures (sibling — this node)
+
+## Notes for Agents
+
+- Helpers are reached via `../../helpers/{db,fixtures}` from this node (not `../helpers/*`).
+- `useFreshDatabase()` is called once per file; each test starts from `resetDatabase()` (truncate + canonical seed).
