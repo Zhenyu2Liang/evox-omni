@@ -66,7 +66,7 @@ Two layers, mirroring the acceptance bar:
   `minAmount`, ambiguous recipient → `CONFLICT` with candidates, subscription cancel, investment subscribe).
 - **Scenario (full pipeline, faux LLM):** Tests 1–12 drive a real turn + human decision and assert the
   agent text, tool events, cards, `PendingAction`/audit rows and DB side effects. All 12 are implemented
-  its `it.todo` list in `scenarios/test-*.test.ts`.
+  (no `it.todo`) and green.
 
 Fixtures: the canonical demo dataset (user 李明; contacts 张伟/王芳/妈妈/李华; the Apple Store ¥6,999
 anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) is defined in
