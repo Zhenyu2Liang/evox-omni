@@ -55,7 +55,7 @@ function reset(sessionId: string): void
 interface MfaChallengeView { actionId: string; attempts: number; maxAttempts: number; verified: boolean; createdAt: number; hint: string }
 interface MfaVerifyResult { ok: boolean; attemptsLeft: number; locked: boolean }
 async function issueChallenge(actionId: string): Promise<MfaChallengeView>
-async function verify(actionId: string, code: string): Promise<Result<MfaVerifyResult>>   // failures feed the breaker + emit MFA_FAILURE
+async function verify(actionId: string, code: string): Promise<Result<MfaVerifyResult>>   // correct→success; wrong→increment+emit MFA_FAILURE+feed breaker; a LOCKED session/challenge ALWAYS returns { ok:false, locked:true } regardless of the code (locked checked first)
 async function getChallenge(actionId: string): Promise<MfaChallengeView | null>
 ```
 
