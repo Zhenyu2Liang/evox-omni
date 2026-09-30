@@ -130,10 +130,8 @@ mock 模式让整条流水线（Agent + 工具 + 安全）**离线、确定、�
 
 ## 11. 其他工程性注意 · Engineering Notes
 
-- **规划器就绪态判定**：`planner/dag.ts` 的 `getReadyNodes` 目前把 `failed`/`cancelled` 依赖当作终态，
-  会错误解锁其依赖节点（应为仅在 `success`/`skip` 上就绪）。对应用例暂时为 RED，修复归属 `planner/`。
-- **测试需串行运行**：所有测试共用一个 `prisma/test.db`，并行会因 Prisma socket 竞争而不稳；
-  请用 `npx vitest run --no-file-parallelism`。
+- **测试文件串行运行**：所有测试共用一个 `prisma/test.db`，`vitest.config.ts` 已设置
+  `fileParallelism: false`，因此测试**文件串行**运行（同一文件内的查询仍可并行），无需额外参数。
 - **`change_password` 无真实凭据存储**：演示 `User` 不存凭据，该工具返回模拟成功视图，
   **`AuditLog` 行即变更的权威记录**——它的存在是为演示 RED 门控 + MFA + 审计。
 
