@@ -17,8 +17,9 @@ effect — tool execution, persistence, the clock — is injected through `PlanD
   ids, unknown tools, malformed nodes, missing deps and cycles (`AppError('VALIDATION')`).
 - `topologicalOrder(nodes: TaskNodeSpec[]): TaskNodeSpec[]` — deterministic order (stable by
   declaration order); throws on cycles.
-- `getReadyNodes(nodes: TaskNodeSpec[], results: TaskNodeResult[]): TaskNodeSpec[]` — unresolved
-  nodes whose every dependency has reached a terminal state.
+- `getReadyNodes(nodes: TaskNodeSpec[], results: TaskNodeResult[]): TaskNodeSpec[]` — nodes not yet
+  resolved (`pending`/absent) whose every dependency is `success` or `skipped`; a `failed`/`cancelled`
+  — or still-in-flight — dependency leaves it unready. Pure helper, no I/O.
 - `evaluateCondition(condition: TaskCondition, scope: Record<string, unknown>): boolean` — dot-path
   lookup in `scope` + `op` comparison; missing path → `false`; pure and total.
 - `buildPlan(input: BuildPlanInput): TaskPlan` — assembles the initial snapshot
@@ -54,7 +55,8 @@ the public types.
 ## Status transitions
 
 `pending → running → { success | failed | waiting_confirmation | waiting_verification | cancelled }`;
-nodes skipped by a `false` condition transitively become `skipped`. Plan-level status mirrors the
+a node whose dependency did not succeed (`skipped`, `failed` or `cancelled`) transitively becomes
+`skipped`, as do the dependents of a `false` condition. Plan-level status mirrors the
 set: `pending | running | waiting_confirmation | success | failed | cancelled`.
 
 ## Constraints

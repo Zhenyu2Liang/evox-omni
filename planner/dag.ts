@@ -16,17 +16,13 @@ import { newId } from '@/lib/ids';
 import { demoNow } from '@/lib/clock';
 
 /**
- * A node status that means "this node will not change again on its own and its
- * dependents may proceed": success / failed / skipped / cancelled. Statuses
- * still in flight (pending / running / waiting_confirmation / waiting_verification)
- * are NOT terminal.
+ * A dependency status that unlocks its dependents: the dependency either
+ * succeeded or was skipped (its branch intentionally did not run). A dependency
+ * that `failed` or was `cancelled` — or that is still in flight (`pending` /
+ * `running` / `waiting_confirmation` / `waiting_verification`) — leaves its
+ * dependents NOT ready.
  */
-const TERMINAL_NODE_STATUSES: ReadonlySet<TaskNodeStatus> = new Set<TaskNodeStatus>([
-  'success',
-  'failed',
-  'skipped',
-  'cancelled',
-]);
+const READY_DEP_STATUSES: ReadonlySet<TaskNodeStatus> = new Set<TaskNodeStatus>(['success', 'skipped']);
 
 /**
  * Input to `buildPlan`. `now` and `id` are injectable for deterministic tests;
@@ -203,14 +199,17 @@ export function topologicalOrder(nodes: TaskNodeSpec[]): TaskNodeSpec[] {
 }
 
 /**
- * Return the nodes that are ready to execute given the current `results`:
- * nodes not yet resolved (`pending`, or absent from `results`) whose every
- * dependency has reached a terminal state (`success | failed | skipped | cancelled`).
+ * Return the nodes that can execute given the current `results`: nodes not yet
+ * resolved (`pending`, or absent from `results`) whose EVERY dependency has a
+ * status of `success` or `skipped`.
  *
- * A dependency still `pending` / `running` / `waiting_confirmation` /
- * `waiting_verification` means its dependents are NOT ready. Declaration order
- * is preserved. Used by the executor to walk the DAG incrementally and by retry
- * logic to find re-runnable nodes.
+ * A dependency that `failed` or was `cancelled` — like one still in flight
+ * (`pending` / `running` / `waiting_confirmation` / `waiting_verification`) —
+ * leaves its dependents NOT ready. Declaration order is preserved.
+ *
+ * Pure helper: it reads `nodes` + `results` and returns the ready subset
+ * (returning the original node references); it performs no I/O and holds no
+ * state.
  */
 export function getReadyNodes(nodes: TaskNodeSpec[], results: TaskNodeResult[]): TaskNodeSpec[] {
   const statusById = new Map<string, TaskNodeStatus>();
@@ -220,11 +219,11 @@ export function getReadyNodes(nodes: TaskNodeSpec[], results: TaskNodeResult[]):
   for (const node of nodes) {
     const status = statusById.get(node.id);
     if (status !== undefined && status !== 'pending') continue; // already resolved
-    const depsTerminal = node.dependencies.every((dep) => {
+    const depsReady = node.dependencies.every((dep) => {
       const depStatus = statusById.get(dep);
-      return depStatus !== undefined && TERMINAL_NODE_STATUSES.has(depStatus);
+      return depStatus !== undefined && READY_DEP_STATUSES.has(depStatus);
     });
-    if (depsTerminal) ready.push(node);
+    if (depsReady) ready.push(node);
   }
   return ready;
 }
