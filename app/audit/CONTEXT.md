@@ -16,7 +16,7 @@ This node is a **thin Server Component** — it fetches the audit read models di
   - `audit.listAudit({ sessionId, limit })` → `AuditEntry[]` (newest-first)
   - `audit.getAuditSummary()` → `AuditSummary` (`{ total, byRisk, byStatus }`)
   - Session id: the `banking_session` cookie (`SESSION_COOKIE`).
-- **Composes** (from `../components` — referenced by name only): `AuditTable` with columns
+- **Composes** (from `@/components` — read-only): `ui/Table` for the audit trail with columns
   timestamp / userRequest / intent / toolName / riskLevel / confirmationRequired / confirmed /
   mfaRequired / mfaResult / toolResult / status, plus summary badges.
 
