@@ -26,12 +26,31 @@ export interface CircuitBreakerState {
   lockedAt?: number;
 }
 
+/** In-process breaker state per session (NOT persisted). */
+interface BreakerEntry {
+  failures: number;
+  locked: boolean;
+  lockedAt?: number;
+}
+
+const entries = new Map<string, BreakerEntry>();
+
 export function getState(sessionId: string): CircuitBreakerState {
-  throw new Error('not implemented');
+  const entry = entries.get(sessionId);
+  if (!entry) {
+    return { sessionId, failures: 0, max: MFA_MAX_ATTEMPTS, locked: false };
+  }
+  return {
+    sessionId,
+    failures: entry.failures,
+    max: MFA_MAX_ATTEMPTS,
+    locked: entry.locked,
+    ...(entry.lockedAt !== undefined ? { lockedAt: entry.lockedAt } : {}),
+  };
 }
 
 export function isLocked(sessionId: string): boolean {
-  throw new Error('not implemented');
+  return entries.get(sessionId)?.locked ?? false;
 }
 
 /**
@@ -39,15 +58,42 @@ export function isLocked(sessionId: string): boolean {
  * session is locked and a `CIRCUIT_BREAKER_TRIPPED` SecurityEvent is emitted.
  */
 export async function recordFailure(sessionId: string): Promise<CircuitBreakerState> {
-  throw new Error('not implemented');
+  const current = entries.get(sessionId);
+  // Already tripped: idempotent — stay locked, do NOT recount and do NOT re-emit.
+  if (current?.locked) {
+    return getState(sessionId);
+  }
+
+  const entry: BreakerEntry = current ?? { failures: 0, locked: false };
+  entry.failures += 1;
+
+  if (entry.failures >= MFA_MAX_ATTEMPTS) {
+    entry.locked = true;
+    entry.lockedAt = Date.now();
+    entries.set(sessionId, entry);
+    await recordSecurityEvent({
+      sessionId,
+      kind: 'CIRCUIT_BREAKER_TRIPPED',
+      severity: 'high',
+      message: `连续验证失败，会话已被锁定（连续 ${entry.failures} 次失败，高风险操作已暂停）。`,
+      detail: { failures: entry.failures, max: MFA_MAX_ATTEMPTS },
+    });
+    return getState(sessionId);
+  }
+
+  entries.set(sessionId, entry);
+  return getState(sessionId);
 }
 
 /** Record a success — resets the consecutive failure counter (does NOT unlock a tripped breaker). */
 export function recordSuccess(sessionId: string): CircuitBreakerState {
-  throw new Error('not implemented');
+  const entry: BreakerEntry = entries.get(sessionId) ?? { failures: 0, locked: false };
+  entry.failures = 0;
+  entries.set(sessionId, entry);
+  return getState(sessionId);
 }
 
 /** Clear all state for a session (used by admin/security-center reset and tests). */
 export function reset(sessionId: string): void {
-  throw new Error('not implemented');
+  entries.delete(sessionId);
 }

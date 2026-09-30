@@ -8,6 +8,9 @@
  */
 import type { RiskLevel } from '../lib/contracts/risk';
 import { DAILY_TRANSFER_LIMIT } from '../lib/constants';
+import { demoNow } from '../lib/clock';
+import { startOfDay } from '../lib/date';
+import { formatCNY } from '../lib/money';
 import { sumOutgoingTransfersSince } from '../lib/db/repositories/transaction';
 
 export interface TransferRiskInput {
@@ -38,14 +41,49 @@ export interface TransferRiskResult {
  * otherwise YELLOW. Transfers ALWAYS require user confirmation.
  */
 export function evaluateTransferRisk(input: TransferRiskInput): TransferRiskResult {
-  throw new Error('not implemented');
+  const { amount, dailyTransferTotal } = input;
+  const projectedDailyTotal = dailyTransferTotal + amount;
+
+  // STRICT `>`: an amount of exactly the limit (or a projected total of exactly the limit) stays YELLOW.
+  const amountOverLimit = amount > DAILY_TRANSFER_LIMIT;
+  const dailyOverLimit = projectedDailyTotal > DAILY_TRANSFER_LIMIT;
+  const red = amountOverLimit || dailyOverLimit;
+
+  const reasons: string[] = [];
+  if (red) {
+    if (amountOverLimit) {
+      reasons.push(
+        `转账金额 ${formatCNY(amount)} 超过单笔限额 ${formatCNY(DAILY_TRANSFER_LIMIT)}，需强验证`,
+      );
+    }
+    if (dailyOverLimit) {
+      reasons.push(
+        `今日累计转账将达到 ${formatCNY(projectedDailyTotal)}，超过日累计限额 ${formatCNY(DAILY_TRANSFER_LIMIT)}，需强验证`,
+      );
+    }
+  } else {
+    reasons.push(
+      `转账金额 ${formatCNY(amount)} 未超过限额（单笔/日累计均为 ${formatCNY(DAILY_TRANSFER_LIMIT)}），属中等风险，需确认`,
+    );
+  }
+
+  return {
+    tier: red ? 'RED' : 'YELLOW',
+    requiresConfirmation: true,
+    requiresMfa: red,
+    reasons,
+    amount,
+    dailyTotal: dailyTransferTotal,
+    projectedDailyTotal,
+  };
 }
 
 /**
  * Sum `userId`'s outgoing transfers for the calendar day containing `now`
- * (defaults to `Date.now()`) via the transaction repository.
+ * (defaults to the DEMO clock) via the transaction repository.
  * `now` is injected so tests are deterministic.
  */
 export async function computeDailyTransferTotal(userId: string, now?: number): Promise<number> {
-  throw new Error('not implemented');
+  const start = startOfDay(new Date(demoNow(now))).getTime();
+  return sumOutgoingTransfersSince(userId, start);
 }
