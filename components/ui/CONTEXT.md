@@ -40,7 +40,7 @@ export interface TabItem { id: string; label: ReactNode; }
 export interface TabsProps { tabs: TabItem[]; active: string; onChange: (id: string) => void; className?: string; }
 export function Tabs(p: TabsProps): JSX.Element;                         // 'use client'
 
-// Dialog.tsx — modal overlay/portal (client)
+// Dialog.tsx — inline modal overlay (client; NOT a portal). Closes on overlay click / Escape; no focus-trap, no scroll-lock.
 export interface DialogProps { open: boolean; onClose: () => void; title?: ReactNode;
   footer?: ReactNode; className?: string; children: ReactNode; }
 export function Dialog(p: DialogProps): JSX.Element;                     // 'use client'

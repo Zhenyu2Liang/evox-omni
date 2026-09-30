@@ -109,6 +109,9 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 - `actions.ts` helpers **never throw** — every failure (network / parse / non-OK / domain `ok:false`)
   folds into a safe `{ type: 'error', message }` `AgentStreamEvent`, so the UI never sees a raw exception.
 - Named exports only; files ≲ ~1000 lines, one concern per file.
+- `ChatWindow` builds the `CardActionHandlers` bundle with only `actionId`/`onConfirm`/`onVerify`/
+  `onCancel`/`busy`/`error`. The anomaly handlers (`onAcknowledge`/`onViewDetail`/`onFreeze`) are NOT
+  supplied, so `AnomalyCard`'s in-card buttons are inert via the chat path (see `./cards/CONTEXT.md` → Known Issues).
 
 ## Test Strategy
 
