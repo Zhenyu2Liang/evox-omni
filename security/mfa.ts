@@ -99,6 +99,7 @@ export async function issueChallenge(actionId: string): Promise<MfaChallengeView
  *  - correct code → mark verified, `recordSuccess` the breaker → `ok({ ok: true, ... })`.
  *  - wrong code   → increment attempts, `recordFailure` the breaker, emit `MFA_FAILURE`
  *                   → `ok({ ok: false, attemptsLeft, locked })`.
+ *  - locked       → `ok({ ok: false, locked: true })` regardless of the code (checked FIRST).
  *  - no challenge → `err(AppError('NOT_FOUND' | 'CONFLICT'))`.
  * Never swallows errors.
  */
@@ -113,6 +114,17 @@ export async function verify(actionId: string, code: string): Promise<Result<Mfa
     return err(new AppError('NOT_FOUND', `未找到待处理操作: ${actionId}`));
   }
   const sessionId = action.sessionId;
+
+  // LOCKED wins: a locked session or a locked challenge fails verification regardless of the
+  // submitted code. Do NOT mark verified, do NOT reset the breaker, do NOT consume an attempt
+  // and do NOT emit a new event.
+  if (isLocked(sessionId) || challenge.status === 'locked') {
+    return ok({
+      ok: false,
+      attemptsLeft: Math.max(0, challenge.maxAttempts - challenge.attempts),
+      locked: true,
+    });
+  }
 
   // Already verified: report success without consuming a new attempt.
   if (challenge.status === 'verified') {
@@ -151,7 +163,7 @@ export async function verify(actionId: string, code: string): Promise<Result<Mfa
 
   return ok({
     ok: false,
-    attemptsLeft: after.maxAttempts - after.attempts,
+    attemptsLeft: Math.max(0, after.maxAttempts - after.attempts),
     locked: breaker.locked,
   });
 }

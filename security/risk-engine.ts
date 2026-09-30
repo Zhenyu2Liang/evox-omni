@@ -11,7 +11,7 @@ import { DAILY_TRANSFER_LIMIT } from '../lib/constants';
 import { demoNow } from '../lib/clock';
 import { startOfDay } from '../lib/date';
 import { formatCNY } from '../lib/money';
-import { sumOutgoingTransfersSince } from '../lib/db/repositories/transaction';
+import { listTransactions } from '../lib/db/repositories/transaction';
 
 export interface TransferRiskInput {
   /** Requested transfer amount in CNY (already validated/normalized by the caller). */
@@ -79,11 +79,25 @@ export function evaluateTransferRisk(input: TransferRiskInput): TransferRiskResu
 }
 
 /**
- * Sum `userId`'s outgoing transfers for the calendar day containing `now`
- * (defaults to the DEMO clock) via the transaction repository.
+ * Sum `userId`'s outgoing transfer debits for the calendar day containing `now`
+ * (defaults to the DEMO clock), via the transaction repository.
+ *
+ * The window is `[startOfDay(now), now]` — INCLUSIVE at BOTH ends: a transfer only
+ * counts as "today's" if it has already happened (`occurredAt <= now`), so FUTURE-dated
+ * rows are excluded. `listTransactions`'s range is half-open (`occurredAt < to`), so the
+ * upper bound is passed as `now + 1 ms`, which is inclusive at millisecond precision.
  * `now` is injected so tests are deterministic.
  */
 export async function computeDailyTransferTotal(userId: string, now?: number): Promise<number> {
-  const start = startOfDay(new Date(demoNow(now))).getTime();
-  return sumOutgoingTransfersSince(userId, start);
+  const nowMs = demoNow(now);
+  const start = startOfDay(new Date(nowMs)).getTime();
+  const rows = await listTransactions({
+    userId,
+    from: new Date(start),
+    to: new Date(nowMs + 1), // half-open [start, now + 1) === [start, now] inclusive (ms precision)
+    channel: 'TRANSFER',
+    direction: 'DEBIT',
+  });
+  // DEBIT amounts are stored negative; the repository call this replaced returned the ABSOLUTE total.
+  return rows.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
 }
