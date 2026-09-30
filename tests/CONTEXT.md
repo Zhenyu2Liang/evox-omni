@@ -72,6 +72,18 @@ Fixtures: the canonical demo dataset (user 李明; contacts 张伟/王芳/妈妈
 anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) is defined in
 `helpers/fixtures.ts`. Cross-module knowledge belongs to the modules under test, not to fixtures.
 
+## Known Issues
+
+- **Planner readiness bug (sibling `planner/dag.ts`).** `getReadyNodes` treats a `failed`/`cancelled`
+  dependency as terminal, so it wrongly unlocks its dependent (the acceptance scaffold requires readiness
+  only on `success`/`skip`). `tests/unit/planner/dag.test.ts` › 'excludes a node whose dependency failed'
+  is left RED on purpose (`expected [ 'b' ] to deeply equal []`). The fix belongs in `planner/` — escalate to root.
+- **Shared test SQLite blocks parallel runs.** All files use one `prisma/test.db` and `vitest.config.ts`
+  lacks `fileParallelism: false`, so a parallel `npm run test` races (Prisma socket timeouts). Run
+  `npx vitest run --no-file-parallelism` for a deterministic signal.
+- **GREEN auto-execute writes no `AuditLog` row.** Audit rows are written only for gated
+  confirm/verify/cancel decisions — assert GREEN at the `beforeToolCall` chokepoint instead.
+
 ## Routing Table
 
 - `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite, `LLM_MODE=mock`) + one-time schema provisioning
