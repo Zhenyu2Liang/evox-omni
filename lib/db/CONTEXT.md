@@ -29,7 +29,7 @@ The Prisma client singleton and the repository layer. This is the **only** subtr
 
 ## Notes for Agents
 
-- Stubs currently `throw new Error('not implemented')` — implementation is delegated in Phase 2.
+- All repository bodies are implemented (real Prisma data access; no stubs remain).
 - `npx prisma generate` must run before any code using `prisma` is executed or type-checked.
 - The SQLite schema (17 models) lives in `prisma/schema.prisma` and is frozen; enum-like fields are `String`,
   money is `Float`, JSON payloads are JSON text in `String`.
