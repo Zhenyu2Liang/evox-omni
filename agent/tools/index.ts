@@ -12,9 +12,68 @@
  * args persisted as a `PendingAction` until a human confirms (see parent `../CONTEXT.md`).
  */
 import type { AgentTool } from '@mariozechner/pi-agent-core';
+import { AppError } from '@/lib/errors';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { RiskLevel } from '@/lib/contracts/risk';
-import type { SubmitPlanDeps } from './planning';
+import { createGetBalanceTool, runGetBalance } from './account';
+import {
+  createDetectAnomalyTool,
+  createGetTransactionsTool,
+  runDetectAnomaly,
+  runGetTransactions,
+} from './transaction';
+import { createAnalyzeSpendingTool, runAnalyzeSpending } from './analysis';
+import { createGetDashboardSummaryTool, runGetDashboardSummary } from './dashboard';
+import { createSearchContactTool, runSearchContact } from './contact';
+import {
+  createApplyVirtualCardTool,
+  createFreezeCardTool,
+  createGetCardsTool,
+  createReportLostCardTool,
+  createSetCardLimitTool,
+  createUnfreezeCardTool,
+  runApplyVirtualCard,
+  runFreezeCard,
+  runGetCards,
+  runReportLostCard,
+  runSetCardLimit,
+  runUnfreezeCard,
+} from './card';
+import {
+  createCancelSubscriptionTool,
+  createListSubscriptionsTool,
+  createSetSubscriptionReminderTool,
+  runCancelSubscription,
+  runListSubscriptions,
+  runSetSubscriptionReminder,
+} from './subscription';
+import {
+  createCompareInvestmentsTool,
+  createGetInvestmentHoldingsTool,
+  createListInvestmentsTool,
+  createRedeemInvestmentTool,
+  createSubscribeInvestmentTool,
+  runCompareInvestments,
+  runGetInvestmentHoldings,
+  runListInvestments,
+  runRedeemInvestment,
+  runSubscribeInvestment,
+} from './investment';
+import { createTransferMoneyTool, runTransferMoney } from './transfer';
+import { createReserveBudgetTool, runReserveBudget } from './budget';
+import {
+  createCreateScheduledTaskTool,
+  createListScheduledTasksTool,
+  runCreateScheduledTask,
+  runListScheduledTasks,
+} from './task';
+import { createChangePasswordTool, runChangePassword } from './security';
+import {
+  SubmitPlanParams,
+  createSubmitPlanTool,
+  runSubmitPlan,
+  type SubmitPlanDeps,
+} from './planning';
 
 /** Uniform result of running a tool model-free (the `executeDirect` contract). */
 export interface ToolExecutionResult {
@@ -28,9 +87,9 @@ export interface ToolExecutionResult {
 /** The per-user tool registry exposed to the agent runtime. */
 export interface ToolRegistry {
   /** Every registered tool, keyed by its exact `ToolName` (all 26). */
-  tools: Record<ToolName, AgentTool<unknown>>;
-  list(): AgentTool<unknown>[];
-  get(name: ToolName): AgentTool<unknown>;
+  tools: Record<ToolName, AgentTool<any>>;
+  list(): AgentTool<any>[];
+  get(name: ToolName): AgentTool<any>;
   /** Gateway-authorized execution path: run a tool's args through the SDK WITHOUT the model. */
   executeDirect(name: ToolName, args: Record<string, unknown>): Promise<ToolExecutionResult>;
 }
@@ -75,15 +134,34 @@ export const TOOL_NAMES: readonly ToolName[] = [
   'submit_plan',
 ];
 
+/** Error message surfaced when `submit_plan` is invoked without the injected deps. */
+const SUBMIT_PLAN_UNCONFIGURED = 'submit_plan 未配置（缺少 sessionId/runTool 注入）';
+
+/**
+ * Placeholder `submit_plan` used when the agent did NOT supply `SubmitPlanDeps`. It keeps the
+ * registry's `Record<ToolName, AgentTool>` structurally complete (a missing key is a compile
+ * error) while making an actual call fail loudly instead of silently no-op'ing.
+ */
+function createUnconfiguredSubmitPlanTool(): AgentTool<typeof SubmitPlanParams> {
+  return {
+    name: 'submit_plan',
+    label: '提交任务计划',
+    description: '提交并执行一个由多个银行工具节点组成的任务计划（DAG）。当前未配置，调用会失败。',
+    parameters: SubmitPlanParams,
+    execute: async () => {
+      throw new AppError('INTERNAL', SUBMIT_PLAN_UNCONFIGURED);
+    },
+  };
+}
+
 /**
  * Build the agent tools bound to `userId`.
  *
- * Wiring (intended implementation):
- *  - 25 SDK-backed tools come from the family modules' `AgentTool` exports, assembled into
- *    `Record<ToolName, AgentTool>`; `list()`/`get()` read from it.
+ *  - 25 SDK-backed tools come from the family modules' `create<Name>Tool(userId)` factories (each
+ *    closers over the SERVER-INJECTED `userId`); `submit_plan` is built from the injected
+ *    `opts.submitPlan` deps (or a failing placeholder when absent). `list()`/`get()` read the map.
  *  - `executeDirect(name, args)` dispatches to the matching family `run<X>(userId, args)` runner,
- *    and to `planning.runSubmitPlan(userId, args, opts.submitPlan)` for `submit_plan` (which needs
- *    the injected `SubmitPlanDeps`).
+ *    and to `planning.runSubmitPlan(userId, args, opts.submitPlan)` for `submit_plan`.
  *
  * Signature note: the frozen form `createToolRegistry(userId: string): ToolRegistry` is preserved —
  * `opts` is an ADDITIVE optional parameter, needed only because `submit_plan` requires an injected
@@ -93,5 +171,96 @@ export function createToolRegistry(
   userId: string,
   opts?: CreateToolRegistryOptions,
 ): ToolRegistry {
-  throw new Error('not implemented');
+  const submitPlanDeps = opts?.submitPlan;
+
+  // `Record<ToolName, AgentTool>` is provably exhaustive: a missing tool name is a compile error.
+  const tools: Record<ToolName, AgentTool<any>> = {
+    // 🟢 GREEN — read-only
+    get_balance: createGetBalanceTool(userId),
+    get_transactions: createGetTransactionsTool(userId),
+    search_contact: createSearchContactTool(userId),
+    analyze_spending: createAnalyzeSpendingTool(userId),
+    detect_anomaly: createDetectAnomalyTool(userId),
+    get_cards: createGetCardsTool(userId),
+    list_subscriptions: createListSubscriptionsTool(userId),
+    list_investments: createListInvestmentsTool(userId),
+    compare_investments: createCompareInvestmentsTool(userId),
+    get_investment_holdings: createGetInvestmentHoldingsTool(userId),
+    get_dashboard_summary: createGetDashboardSummaryTool(userId),
+    list_scheduled_tasks: createListScheduledTasksTool(userId),
+    reserve_budget: createReserveBudgetTool(userId),
+    // 🟡 YELLOW — require confirmation (enforced by `security/`, not here)
+    transfer_money: createTransferMoneyTool(userId),
+    set_card_limit: createSetCardLimitTool(userId),
+    cancel_subscription: createCancelSubscriptionTool(userId),
+    freeze_card: createFreezeCardTool(userId),
+    apply_virtual_card: createApplyVirtualCardTool(userId),
+    set_subscription_reminder: createSetSubscriptionReminderTool(userId),
+    create_scheduled_task: createCreateScheduledTaskTool(userId),
+    // 🔴 RED — require MFA (enforced by `security/`, not here)
+    subscribe_investment: createSubscribeInvestmentTool(userId),
+    redeem_investment: createRedeemInvestmentTool(userId),
+    report_lost_card: createReportLostCardTool(userId),
+    unfreeze_card: createUnfreezeCardTool(userId),
+    change_password: createChangePasswordTool(userId),
+    // META — not risk-gated
+    submit_plan: submitPlanDeps
+      ? createSubmitPlanTool(userId, submitPlanDeps)
+      : createUnconfiguredSubmitPlanTool(),
+  };
+
+  // Model-free runners: also exhaustive over `ToolName` (missing key ⇒ compile error). `userId` is
+  // the closed-over one — it is NEVER read from `args`.
+  const runners: Record<
+    ToolName,
+    (uid: string, args: Record<string, unknown>) => Promise<ToolExecutionResult>
+  > = {
+    get_balance: runGetBalance,
+    get_transactions: runGetTransactions,
+    search_contact: runSearchContact,
+    analyze_spending: runAnalyzeSpending,
+    detect_anomaly: runDetectAnomaly,
+    get_cards: runGetCards,
+    list_subscriptions: runListSubscriptions,
+    list_investments: runListInvestments,
+    compare_investments: runCompareInvestments,
+    get_investment_holdings: runGetInvestmentHoldings,
+    get_dashboard_summary: runGetDashboardSummary,
+    list_scheduled_tasks: runListScheduledTasks,
+    reserve_budget: runReserveBudget,
+    transfer_money: runTransferMoney,
+    set_card_limit: runSetCardLimit,
+    cancel_subscription: runCancelSubscription,
+    freeze_card: runFreezeCard,
+    apply_virtual_card: runApplyVirtualCard,
+    set_subscription_reminder: runSetSubscriptionReminder,
+    create_scheduled_task: runCreateScheduledTask,
+    subscribe_investment: runSubscribeInvestment,
+    redeem_investment: runRedeemInvestment,
+    report_lost_card: runReportLostCard,
+    unfreeze_card: runUnfreezeCard,
+    change_password: runChangePassword,
+    submit_plan: async (uid, args) => {
+      if (!submitPlanDeps) {
+        return { ok: false, error: SUBMIT_PLAN_UNCONFIGURED };
+      }
+      return runSubmitPlan(uid, args, submitPlanDeps);
+    },
+  };
+
+  return {
+    tools,
+    list(): AgentTool<any>[] {
+      return TOOL_NAMES.map((name) => tools[name]);
+    },
+    get(name: ToolName): AgentTool<any> {
+      return tools[name];
+    },
+    async executeDirect(
+      name: ToolName,
+      args: Record<string, unknown>,
+    ): Promise<ToolExecutionResult> {
+      return runners[name](userId, args);
+    },
+  };
 }

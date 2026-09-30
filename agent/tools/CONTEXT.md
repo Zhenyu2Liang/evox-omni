@@ -5,7 +5,8 @@
 The **complete and exhaustive capability set** of the agent, as one module per tool family.
 Each family module exports, per tool:
 
-1. an `AgentTool` object (`@mariozechner/pi-agent-core`) with a **TypeBox** param schema
+1. a `create<Name>Tool(userId: string): AgentTool<typeof <Name>Params>` **factory**
+   (`@mariozechner/pi-agent-core`) returning an `AgentTool` whose params are a **TypeBox** schema
    (`Type`/`Static` re-exported by `@mariozechner/pi-ai`) — `execute` calls the Banking SDK and
    returns an `AgentToolResult`, **throwing `AppError`** (`@/lib/errors`) on failure; and
 2. a plain `run<X>(userId, args): Promise<ToolExecutionResult>` runner — the model-free path used
@@ -35,9 +36,9 @@ export interface ToolExecutionResult {
   tier?: RiskLevel;
 }
 export interface ToolRegistry {
-  tools: Record<ToolName, AgentTool<unknown>>;
-  list(): AgentTool<unknown>[];
-  get(name: ToolName): AgentTool<unknown>;
+  tools: Record<ToolName, AgentTool<any>>;
+  list(): AgentTool<any>[];
+  get(name: ToolName): AgentTool<any>;
   /** Gateway-authorized execution path: run a tool's args through the SDK WITHOUT the model. */
   executeDirect(name: ToolName, args: Record<string, unknown>): Promise<ToolExecutionResult>;
 }
@@ -46,15 +47,21 @@ export interface CreateToolRegistryOptions { submitPlan?: SubmitPlanDeps; }
 export function createToolRegistry(userId: string, opts?: CreateToolRegistryOptions): ToolRegistry;
 ```
 
+`AgentTool`'s generic is the TypeBox **schema** (`AgentTool<TParameters extends TSchema, TDetails>`),
+so a heterogeneous registry uses `AgentTool<any>` (matching `AgentState.tools: AgentTool<any>[]`);
+`AgentTool<unknown>` does not compile.
+
 `opts` is an **additive optional** parameter — one-arg calls match the frozen signature; it exists
 only because `submit_plan` needs an injected `sessionId` + gateway-routed `runTool` (see Design
 Decisions). `userId` is **closed over** per tool by `createToolRegistry(userId)`; the model never
 supplies it.
 
-Per family module: `<toolName>Tool: AgentTool<Static<typeof <ToolName>Params>>` and
-`run<ToolName>(userId: string, args: Record<string, unknown>): Promise<ToolExecutionResult>`
-(e.g. `getBalanceTool` + `runGetBalance`). Param schemas are exported as `<ToolName>Params` with a
-derived `<ToolName>Args` type.
+Per family module: a `create<Name>Tool(userId: string): AgentTool<typeof <Name>Params>` **factory**
+(the generic is the TypeBox SCHEMA object, not `Static<>`) and a model-free
+`run<Name>(userId: string, args: Record<string, unknown>): Promise<ToolExecutionResult>` runner
+(e.g. `createGetBalanceTool` + `runGetBalance`). Param schemas are exported as `<Name>Params` with a
+derived `<Name>Args` type. `index.ts`'s `createToolRegistry` calls every factory and assembles the
+`Record<ToolName, AgentTool<any>>`.
 
 ### Tool catalogue (module → tier → Banking SDK call)
 
@@ -92,7 +99,7 @@ Tier legend: 🟢 GREEN auto-executes · 🟡 YELLOW needs confirmation · 🔴 
 
 `submit_plan` meta types (planning.ts): `SubmitPlanDeps { sessionId; runTool; onNodeUpdate?; signal?; now? }`,
 `PlanRunTool = (toolName: ToolName, args) => Promise<PlanToolOutcome>`, and
-`createSubmitPlanTool(userId, deps): AgentTool<SubmitPlanArgs>`.
+`createSubmitPlanTool(userId, deps): AgentTool<typeof SubmitPlanParams>`.
 
 ## Constraints
 
@@ -102,7 +109,8 @@ Tier legend: 🟢 GREEN auto-executes · 🟡 YELLOW needs confirmation · 🔴 
   no tool accepts a `userId` parameter from the model. `banking-sdk` calls take it as the first arg.
 - **Exact `ToolName` coverage.** `AgentTool.name` MUST equal the corresponding `ToolName`; the
   registry MUST contain exactly the 26 names in `lib/contracts/tools.ts` — none missing, none extra.
-  `TOOL_NAMES` is the single list to assert against.
+  `TOOL_NAMES` is the single list to assert against; both the tool map and the `executeDirect`
+  runner map are typed `Record<ToolName, …>` so a missing tool is a compile error.
 - **No shell/file/network tools.** The registered banking tools + `submit_plan` are the complete
   capability set; never add a bash/shell/write/edit/file/SQL/system/http tool.
 - **Error strategy.** `execute` THROWS `AppError` on failure (the runtime converts it to an error
@@ -116,12 +124,17 @@ Tier legend: 🟢 GREEN auto-executes · 🟡 YELLOW needs confirmation · 🔴 
 
 ## Design Decisions
 
+- **Tools are factories, not module-level constants.** A module-level `const` cannot bind the
+  server-injected `userId`, so each family exports `create<Name>Tool(userId)` and
+  `createToolRegistry(userId)` calls them — closing `userId` over every tool (never read from args).
 - **`submit_plan` needs injected deps.** It runs a DAG whose nodes must route through the gateway,
   so `runSubmitPlan(userId, args, deps)` requires `SubmitPlanDeps` (`sessionId` + gateway-routed
   `runTool`), and `planning.createSubmitPlanTool(userId, deps)` is a factory. Since the model cannot
   supply these, `createToolRegistry` receives them via the additive `opts.submitPlan` (see parent
   `../CONTEXT.md`: the agent passes `runTool = executeGatedTool`). If `opts.submitPlan` is omitted,
-  the SDK-backed tools still work; `submit_plan` execution is unavailable.
+  the SDK-backed tools still work and `submit_plan` is still REGISTERED, but its `execute` throws
+  (`INTERNAL`) and `executeDirect('submit_plan', …)` returns `{ ok:false, error }` — it is unusable
+  without the deps.
 - **`change_password` has no Banking SDK function.** The demo `User` model stores no credential and
   the SDK is an execute-only banking surface, so `runChangePassword` returns a simulated success
   view model and the **`AuditLog` entry is the authoritative record** of the change. The tool exists
@@ -157,14 +170,9 @@ Vitest (via `../tests`, sibling). Determinism: no network — unit tests stub `.
 - **`userId` injection:** assert `userId` is passed to the SDK stub and is never read from `args`;
   a `args.userId` supplied by the model is ignored.
 - **`submit_plan`:** `runSubmitPlan` validates the DAG (`deps.runTool` NOT called on invalid input)
-  and parks a gated node (`requiresConfirmation`) via the injected `runTool`.
+  and parks a gated node (`requiresConfirmation`) via the injected `runTool`. Without `opts.submitPlan`,
+  `submit_plan` is still registered but `executeDirect` returns `{ ok:false, error }`.
 - Full-pipeline demo scenarios run against these tools in `../tests` with `LLM_MODE=mock`.
-
-## Status
-
-**Design-only.** Every function body is currently `throw new Error('not implemented')` — schemas,
-tool objects, signatures and the registry contract are frozen here; bodies are filled by the
-implementation phase.
 
 ## Routing Table
 
