@@ -164,6 +164,22 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 - **Injection guard never grants permission** — defense-in-depth only (see its file disclaimer).
 - **Files ≲ ~1000 lines**; split by responsibility. No inter-module cycles.
 
+## Known Issues
+
+- **Injection guard does NOT add a system reminder to the model context.**
+  The only caller (`agent/run-turn.ts` ~L353-357) emits a UI `security_event` (kind `injection`) after `reportInjection`; nothing is appended to the agent's system prompt/messages, despite the `injection-guard.ts` header saying so.
+  Detection, the `INJECTION_ATTEMPT` event, and never-grants-permission all hold (defense-in-depth unaffected).
+- **Circuit-breaker unlock is not wired.**
+  `CIRCUIT_BREAKER_TRIPPED` is emitted, but no route/code calls `circuit-breaker.reset(sessionId)` and nothing writes a `SECURITY_RESET` event (the kind is declared only in `lib/contracts/audit.ts`).
+  Once tripped, a session stays locked for the process lifetime; the "security-center unlock" has no runtime path (`recordSuccess` clears the counter but explicitly does NOT unlock).
+- **Breaker blocks all tiers, not only high-risk.**
+  `gatewayEvaluate` sets `blocked = locked || tier !== 'GREEN'`, so when tripped even GREEN reads (e.g. `get_balance`) are denied — broader than the "high-risk ops locked" wording; `tests/scenarios/test-10-circuit-breaker.test.ts` only exercises a RED tool, so this is unguarded.
+- **"Repeated blocked high-risk attempts" is NOT a breaker trigger.**
+  `recordFailure` is called ONLY from `mfa.ts` on a wrong code; no code path counts blocked/denied attempts.
+- **Security-event writes are best-effort.**
+  `recordSecurityEvent` (sibling `audit/`) logs and swallows persistence failures, so an awaited event write can silently fail; the breaker's in-memory `locked` flag remains authoritative.
+- **`HIGH_RISK_BLOCKED` / `LIMIT_EXCEEDED` / `ANOMALY_FLAGGED` event kinds are declared but never written** by this node (only `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT` are emitted).
+
 ## Dependencies (contracts this node consumes)
 
 `security` depends on `lib/` and, for SecurityEvent persistence, on the sibling `audit/` node
