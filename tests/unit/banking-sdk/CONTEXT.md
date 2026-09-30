@@ -8,7 +8,7 @@ These run against the test SQLite via `../../helpers/db` + `../../helpers/fixtur
 
 ## API Surface
 
-Spec files (all `it.todo` scaffolds today), targeting `@/banking-sdk` (`banking.<domain>.*`):
+Spec files (implemented — real assertions against the test SQLite), targeting `@/banking-sdk` (`banking.<domain>.*`):
 
 - `transfer.test.ts` — `banking.transfer.createTransfer(input)`: funds invariant (¥200, 23580→23380),
   recipient resolution by `contactId`/`phone`/`name`, ambiguous name → `CONFLICT` (`detail.candidates`),
