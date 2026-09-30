@@ -35,9 +35,9 @@ Run:
 
 - `npm install`, then **`npx prisma generate`** before any spec imports `@prisma/client`
   (e.g. `lib/db/client`, `banking-sdk`) — `setup.ts` pushes the schema with `--skip-generate` on purpose.
-- `vitest.config.ts` (root-owned) already wires `setupFiles: ['tests/setup.ts']` + `env: { LLM_MODE: 'mock' }`.
-  It is MISSING `test.fileParallelism: false` (and a raised `hookTimeout`): without them every test file runs
-  in parallel against the ONE shared `prisma/test.db`, so reset/seed race (socket timeouts). Run sequentially; escalate to root.
+- `vitest.config.ts` (root-owned) wires `setupFiles: ['tests/setup.ts']` + `env: { LLM_MODE: 'mock' }`
+  and sets `fileParallelism: false` + `hookTimeout: 60000`, so files run sequentially against the ONE
+  shared `prisma/test.db` — a plain `npm run test` is deterministic (no manual flag needed).
 
 ## Constraints
 
@@ -49,7 +49,8 @@ Run:
   mutable DB state. Specs use explicit-timed hooks (`beforeEach(resetDatabase, 30000)`), not `useFreshDatabase()`.
 - **Implemented.** Every spec has real assertions (no `it.todo`); DB-backed suites reset + seed
   per test. Specs stay **load-safe** (no top-level Prisma construction outside DB-backed cases).
-- **Run the DB-backed suite sequentially** (`npx vitest run --no-file-parallelism`) — see Prerequisites.
+- **DB-backed suites share one `prisma/test.db`** and run sequentially — enforced by
+  `fileParallelism: false` in `vitest.config.ts` (`--no-file-parallelism` also works if needed).
 - **Never re-implement the code under test.** Tests assert behaviour through the public
   facades (`@/security`, `@/planner`, `@/banking-sdk`, `@/agent`); they do not fork contracts or logic.
 - Specs import frozen types from `@/lib/contracts/*`; they never redeclare them.
@@ -62,8 +63,9 @@ Two layers, mirroring the acceptance bar:
 - **Unit (pure, no LLM):** `security/` (permission policy table, transfer thresholds, gateway
   decide/serialize/parseBlockReason + `buildPendingActionSummary`, injection patterns, circuit-breaker
   trip at 3 failures, MFA verify), `planner/` (DAG validation/topological order/cycle detection,
-  condition evaluation, gated node → `waiting_confirmation`), `banking-sdk/` (funds invariant,
-  `minAmount`, ambiguous recipient → `CONFLICT` with candidates, subscription cancel, investment subscribe).
+  readiness gating on `success`/`skipped`, condition evaluation, gated node → `waiting_confirmation`),
+  `banking-sdk/` (funds invariant, `minAmount`, ambiguous recipient → `CONFLICT` with candidates,
+  subscription cancel, investment subscribe).
 - **Scenario (full pipeline, faux LLM):** Tests 1–12 drive a real turn + human decision and assert the
   agent text, tool events, cards, `PendingAction`/audit rows and DB side effects. All 12 are implemented
   (no `it.todo`) and green.
@@ -74,13 +76,6 @@ anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) 
 
 ## Known Issues
 
-- **Planner readiness bug (sibling `planner/dag.ts`).** `getReadyNodes` treats a `failed`/`cancelled`
-  dependency as terminal, so it wrongly unlocks its dependent (the acceptance scaffold requires readiness
-  only on `success`/`skip`). `tests/unit/planner/dag.test.ts` › 'excludes a node whose dependency failed'
-  is left RED on purpose (`expected [ 'b' ] to deeply equal []`). The fix belongs in `planner/` — escalate to root.
-- **Shared test SQLite blocks parallel runs.** All files use one `prisma/test.db` and `vitest.config.ts`
-  lacks `fileParallelism: false`, so a parallel `npm run test` races (Prisma socket timeouts). Run
-  `npx vitest run --no-file-parallelism` for a deterministic signal.
 - **GREEN auto-execute writes no `AuditLog` row.** Audit rows are written only for gated
   confirm/verify/cancel decisions — assert GREEN at the `beforeToolCall` chokepoint instead.
 
@@ -90,7 +85,7 @@ anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) 
 - `./helpers` → shared test utilities (db reset/seed, fixtures, faux agent, scenario harness)
 - `./unit` → pure/logic unit specs for security, planner, banking-sdk
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
-- `../vitest.config.ts` → root-owned test runner config (already wires `setupFiles`); needs `fileParallelism: false` + `hookTimeout` (sibling — read-only, escalate writes to root)
+- `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)
 
