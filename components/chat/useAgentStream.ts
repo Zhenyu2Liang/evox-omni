@@ -33,11 +33,20 @@ import {
   verifyAction,
 } from './actions';
 
+/**
+ * The summary for an MFA prompt. The `mfa_required` event carries no tool name, so `toolName` is
+ * the actual gated tool the stream reported as blocked (omitted when the stream carried none —
+ * never invented).
+ */
+export interface MfaActionSummary extends Omit<PendingActionSummary, 'toolName'> {
+  toolName?: ToolName;
+}
+
 export interface UseAgentStreamResult {
   messages: ChatMessage[];
   toolEvents: ToolEventView[];
   activePlan?: TaskPlan;
-  pendingAction?: { summary: PendingActionSummary; actionId: string };
+  pendingAction?: { summary: PendingActionSummary | MfaActionSummary; actionId: string };
   streamingText: string;
   busy: boolean;
   error?: string;
@@ -63,7 +72,7 @@ export interface ChatUIState {
   messages: ChatMessage[];
   toolEvents: ToolEventView[];
   activePlan?: TaskPlan;
-  pendingAction?: { summary: PendingActionSummary; actionId: string };
+  pendingAction?: { summary: PendingActionSummary | MfaActionSummary; actionId: string };
   streamingText: string;
   busy: boolean;
   error?: string;
@@ -161,11 +170,23 @@ function attachCard(state: ChatUIState, card: ChatCard): ChatUIState {
   return { ...state, messages };
 }
 
-/** Build the confirmation summary for an MFA prompt (payloads carry no tool name → last blocked). */
-function mfaSummary(state: ChatUIState, hint: string | undefined): PendingActionSummary {
-  const summary: PendingActionSummary = {
+/** The actual gated tool the stream reported as blocked (the RED tool the gateway refused). */
+function blockedToolName(state: ChatUIState): ToolName | undefined {
+  for (let i = state.toolEvents.length - 1; i >= 0; i -= 1) {
+    const event = state.toolEvents[i];
+    if (event.status === 'blocked') return event.toolName as ToolName;
+  }
+  return state.lastBlockedToolName;
+}
+
+/** Build the summary for an MFA prompt (the payload carries no tool name → the streamed blocked tool). */
+function mfaSummary(state: ChatUIState, hint: string | undefined): MfaActionSummary {
+  const toolName =
+    blockedToolName(state) ??
+    (state.toolEvents[state.toolEvents.length - 1]?.toolName as ToolName | undefined);
+  const summary: MfaActionSummary = {
     title: '需要安全验证',
-    toolName: state.lastBlockedToolName ?? 'transfer_money',
+    ...(toolName !== undefined ? { toolName } : {}),
     tier: 'RED',
     fields: [],
     requiresMfa: true,

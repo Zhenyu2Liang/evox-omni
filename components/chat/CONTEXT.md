@@ -13,11 +13,14 @@ Named exports, re-exported from `./index.ts`. Types from `@/lib/contracts/agent`
 
 ```ts
 // useAgentStream.ts — the stateful fold of AgentStreamEvent[] → chat UI state
+/** MFA-prompt summary; `toolName` is the actual blocked tool the stream reported (never invented). */
+export interface MfaActionSummary extends Omit<PendingActionSummary, 'toolName'> { toolName?: ToolName; }
+
 export interface UseAgentStreamResult {
   messages: ChatMessage[];
   toolEvents: ToolEventView[];
   activePlan?: TaskPlan;
-  pendingAction?: { summary: PendingActionSummary; actionId: string };
+  pendingAction?: { summary: PendingActionSummary | MfaActionSummary; actionId: string };
   streamingText: string;
   busy: boolean;
   error?: string;
@@ -81,11 +84,11 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 | `message_start` | append the message (pending assistant/user turn) |
 | `text_delta` | append `delta` to `streamingText` |
 | `message_end` | finalise message content/cards; clear `streamingText` |
-| `tool_start` / `tool_end` | upsert a `ToolEventView` (status started→success/error/blocked) |
+| `tool_start` / `tool_end` | upsert a `ToolEventView` (status started→success/error/blocked); a `blocked` entry also records its `toolName` |
 | `card` | append `card` to the current assistant message's `cards` |
 | `plan_update` | set `activePlan` |
-| `confirmation_required` | set `pendingAction` `{ summary, actionId }` (drives `ConfirmationCard`) |
-| `mfa_required` | set `pendingAction` with `actionId` + hint (drives `MfaCard`) |
+| `confirmation_required` | set `pendingAction` `{ summary: PendingActionSummary, actionId }` (drives `ConfirmationCard`) |
+| `mfa_required` | set `pendingAction` `{ summary: MfaActionSummary, actionId }` (drives `MfaCard`); the summary's `toolName` is the actual gated tool the stream reported as blocked, omitted when the stream carried none |
 | `security_event` | append a `system` `ChatMessage` (content = `event.message`; `event.kind` is not surfaced) |
 | `error` | set `error` (never throw to the UI) |
 | `done` | clear `busy` |
@@ -93,7 +96,6 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 ## Known Issues
 
 - `applyEvent` has a `default: return state` branch (no `assertNever`) — a NEW `AgentStreamEvent` variant silently no-ops instead of failing compilation (contrast `CardRenderer`'s exhaustive guard).
-- `mfa_required` carries no tool name, so `mfaSummary` reconstructs the summary with a hardcoded fallback `toolName: lastBlockedToolName ?? 'transfer_money'` — an MFA prompt for a non-transfer RED action can be mislabelled unless a prior blocked `tool_start`/`tool_end` set `lastBlockedToolName`.
 - `security_event` drops `event.kind` and is rendered as a `system` message, not a banner.
 - The `error` event only sets `state.error`, surfaced solely via `CardActionHandlers.error` (consumed by `ConfirmationCard`/`MfaCard`); with no active pending card an error is not rendered in `ChatWindow`.
 
@@ -109,9 +111,12 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 - `actions.ts` helpers **never throw** — every failure (network / parse / non-OK / domain `ok:false`)
   folds into a safe `{ type: 'error', message }` `AgentStreamEvent`, so the UI never sees a raw exception.
 - Named exports only; files ≲ ~1000 lines, one concern per file.
-- `ChatWindow` builds the `CardActionHandlers` bundle with only `actionId`/`onConfirm`/`onVerify`/
-  `onCancel`/`busy`/`error`. The anomaly handlers (`onAcknowledge`/`onViewDetail`/`onFreeze`) are NOT
-  supplied, so `AnomalyCard`'s in-card buttons are inert via the chat path (see `./cards/CONTEXT.md` → Known Issues).
+- `ChatWindow` builds the `CardActionHandlers` bundle with `actionId`/`onConfirm`/`onVerify`/`onCancel`/
+  `busy`/`error` **plus** the anomaly handlers `onAcknowledge`/`onViewDetail`/`onFreeze`. Those three are
+  fire-and-forget `stream.send(...)` calls (「这笔交易是我本人消费」/「我想查看这笔交易的详情」/「冻结我的银行卡」),
+  so every anomaly button flows chat → agent → Security Gateway as an ordinary user message — the browser
+  never calls a banking op directly (the freeze button drives `freeze_card`, which the gateway routes YELLOW
+  → user confirmation).
 
 ## Test Strategy
 

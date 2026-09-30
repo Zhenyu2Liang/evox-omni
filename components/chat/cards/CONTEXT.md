@@ -110,16 +110,14 @@ must populate `cards[].data` with exactly these shapes.
   `assertNever(card: never)`. Adding a `ChatCard` variant must break the build here.
 - **All Client Components** (`'use client'`) — rendered inside the streaming chat.
 - **Interactive cards never execute money movement themselves.** `ConfirmationCard`/`MfaCard` call the
-  handlers passed from `../../chat/ChatWindow`, which POST to `./app` action routes. The browser only
-  calls fetch; the server re-validates + executes.
+  confirm/verify/cancel handlers passed from `../../chat/ChatWindow`, which POST to `./app` action routes.
+  `AnomalyCard`'s `onAcknowledge`/`onViewDetail`/`onFreeze` are supplied by `ChatWindow` too and simply
+  `stream.send(...)` an ordinary chat message (chat → agent → Security Gateway); 冻结银行卡 drives
+  `freeze_card` → YELLOW confirmation. The browser only calls fetch; the server re-validates + executes.
 - **MFA secrecy**: `MfaCard` renders `hint` only — never the code (`MFA_CODE` is server-side; do not import).
 - **Money** via `Money`; **tiers** via `StatusBadge`; reuse `../../banking` tiles and `../../charts`
   rather than re-implementing tiles/charts inside cards.
 - Named exports only; one card per file; files ≲ ~1000 lines.
-
-## Known Issues
-
-- `AnomalyCard`'s three in-card actions (`onAcknowledge` / `onViewDetail` / `onFreeze` → 这是本人交易 / 查看详情 / 冻结银行卡) are declared as props and forwarded by `CardRenderer` (`onAcknowledge={p.action?.onAcknowledge}`, etc.), but the only container that builds a `CardActionHandlers` bundle — `../ChatWindow.tsx` (lines 43–50) — populates **only** `actionId`/`onConfirm`/`onVerify`/`onCancel`/`busy`/`error`. It never sets the three anomaly handlers, so through the chat render path (`ChatWindow → MessageBubble → CardRenderer → AnomalyCard`) those buttons are always no-ops (the `?.()` optional calls do nothing). No code in `./components` supplies these members; wiring them would require a consumer that constructs a `CardActionHandlers` carrying them.
 
 ## Test Strategy
 
