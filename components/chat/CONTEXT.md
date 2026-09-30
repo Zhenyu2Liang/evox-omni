@@ -55,7 +55,7 @@ export function StreamingText(p: StreamingTextProps): JSX.Element; // 'use clien
 ```
 
 ```ts
-// actions.ts — client-side fetch contract for the app's API routes (stubs in this phase)
+// actions.ts — client-side fetch contract for the app's API routes
 export interface ChatEndpoints {
   chat: string;                                // default '/api/chat'
   confirm: (actionId: string) => string;       // default `/api/actions/${id}/confirm`
