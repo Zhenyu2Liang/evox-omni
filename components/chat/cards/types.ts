@@ -1,0 +1,65 @@
+/**
+ * Chat card payload contracts.
+ *
+ * Concrete payload shapes for the `data: unknown` fields of the frozen `ChatCard` union
+ * (`lib/contracts/agent.ts`), plus the action-handler bundle threaded from the chat container
+ * into interactive cards.
+ *
+ * These are the frozen public contract of the `./components/chat/cards` node. They are declared
+ * here (and re-exported from `./index.ts`) so the `./app` chat serialiser and the card renderers
+ * agree on the exact shapes. Some may be unused yet — that is intentional.
+ */
+import type {
+  AnomalyReport,
+  BalanceView,
+  CardView,
+  HoldingView,
+  InvestmentComparison,
+  ProductView,
+  SpendingAnalysis,
+  SubscriptionView,
+  TransferResult,
+} from '@/banking-sdk';
+
+export interface BalanceCardData {
+  balance: BalanceView;
+}
+
+export interface TransferCardData {
+  result: TransferResult;
+}
+
+export interface SpendingCardData {
+  analysis: SpendingAnalysis;
+}
+
+export interface CardsCardData {
+  cards: CardView[];
+}
+
+export interface InvestmentsCardData {
+  products?: ProductView[];
+  holdings?: HoldingView[];
+  comparison?: InvestmentComparison;
+}
+
+export interface SubscriptionsCardData {
+  subscriptions: SubscriptionView[];
+}
+
+export interface AnomalyCardData {
+  report: AnomalyReport;
+}
+
+/** Callbacks threaded from the chat container into interactive cards. */
+export interface CardActionHandlers {
+  actionId?: string;
+  onConfirm?: (actionId: string) => void;
+  onVerify?: (actionId: string, code: string) => void;
+  onCancel?: (actionId: string) => void;
+  onAcknowledge?: () => void; // anomaly: 这是本人交易
+  onViewDetail?: () => void; // anomaly: 查看详情
+  onFreeze?: () => void; // anomaly: 冻结银行卡
+  busy?: boolean;
+  error?: string;
+}
