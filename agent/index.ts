@@ -7,6 +7,8 @@ export type { BankingAgentOptions, BankingAgentRuntime, BeforeToolCallHook, Afte
 export { runTurn, resumeTurn } from './run-turn';
 export type { RunTurnDeps, ResumeTurnInput } from './run-turn';
 export { confirmAction, verifyAction, cancelAction, executeGatedTool } from './confirmation';
+// Aliases the `app/api/actions/[id]/{confirm,verify,cancel}` routes import by name.
+export { confirmAction as confirm, verifyAction as verify, cancelAction as cancel } from './confirmation';
 export type { ConfirmationOutcome, ConfirmOptions, GatedToolOutcome } from './confirmation';
 export { toCards, errorCard, confirmationCard, mfaCard } from './card-emitter';
 export { buildSystemPrompt, HALLUCINATION_RULE } from './system-prompt';
