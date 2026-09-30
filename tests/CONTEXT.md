@@ -49,7 +49,7 @@ Run:
   `beforeEach` through `useFreshDatabase()`); never share mutable DB state across tests.
 - **Implemented.** Every spec has real assertions (no `it.todo`); DB-backed suites reset + seed
   per test. Specs stay **load-safe** (no top-level Prisma construction outside DB-backed cases).
-  **load-safe** (no runtime import of Prisma-constructing modules) so pure collections never fail.
+- **Run the DB-backed suite sequentially** (`npx vitest run --no-file-parallelism`) — see Prerequisites.
 - **Never re-implement the code under test.** Tests assert behaviour through the public
   facades (`@/security`, `@/planner`, `@/banking-sdk`, `@/agent`); they do not fork contracts or logic.
 - Specs import frozen types from `@/lib/contracts/*`; they never redeclare them.
