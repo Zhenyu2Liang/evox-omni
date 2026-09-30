@@ -8,7 +8,7 @@ These run against the test SQLite via `../../helpers/db` + `../../helpers/fixtur
 
 ## API Surface
 
-Spec files (all `it.todo` scaffolds today), targeting `@/banking-sdk` (`banking.<domain>.*`):
+Spec files (implemented — real assertions against the test SQLite), targeting `@/banking-sdk` (`banking.<domain>.*`):
 
 - `transfer.test.ts` — `banking.transfer.createTransfer(input)`: funds invariant (¥200, 23580→23380),
   recipient resolution by `contactId`/`phone`/`name`, ambiguous name → `CONFLICT` (`detail.candidates`),
@@ -18,6 +18,10 @@ Spec files (all `it.todo` scaffolds today), targeting `@/banking-sdk` (`banking.
 - `investment.test.ts` — `banking.investment.listProducts/compareInvestments/listHoldings/subscribeInvestment/redeemInvestment`:
   `minAmount` enforcement, ¥5000 into 稳健理财A succeeds + debits, `NOT_FOUND`/`INSUFFICIENT_FUNDS`,
   HOLDING→REDEEMED, `highestRateId`/`lowestRiskId`.
+
+## Status
+
+All three specs are implemented with real assertions and pass offline (`npx vitest run tests/unit/banking-sdk` → 38 tests green against `prisma/test.db`). The transfer spec seeds the duplicate 王芳 via `truncateAll()` + `seedDemoData({ withAmbiguousContact: true })` inside the ambiguity case.
 
 ## Constraints
 
@@ -31,3 +35,8 @@ Spec files (all `it.todo` scaffolds today), targeting `@/banking-sdk` (`banking.
 
 - `./transfer.test.ts` · `./subscription.test.ts` · `./investment.test.ts`
 - `../../helpers` → test-DB lifecycle + fixtures (sibling — this node)
+
+## Notes for Agents
+
+- Helpers are reached via `../../helpers/{db,fixtures}` from this node (not `../helpers/*`).
+- `useFreshDatabase()` is called once per file; each test starts from `resetDatabase()` (truncate + canonical seed).

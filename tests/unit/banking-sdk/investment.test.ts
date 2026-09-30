@@ -6,38 +6,246 @@
  * InvestResult from '@/banking-sdk').
  *
  * Reads/writes InvestmentProduct & Holding rows and debits/credits accounts via Prisma →
- * requires test SQLite via ../helpers/db. Seed: 稳健理财A (minAmount 1000); checking balance 23580.
+ * requires test SQLite via ../../helpers/db. Seed: 稳健理财A (minAmount 1000); checking balance 23580.
  */
-import { describe, it } from 'vitest';
+import { describe, it, expect } from 'vitest';
+import { banking } from '@/banking-sdk';
+import type {
+  HoldingView,
+  InvestResult,
+  InvestmentComparison,
+  ProductView,
+  RedeemInvestmentInput,
+  SubscribeInvestmentInput,
+} from '@/banking-sdk';
+import { AppError, type ErrorCode } from '@/lib/errors';
+import { useFreshDatabase } from '../../helpers/db';
+import { ACCOUNTS, DEMO_USER_ID, PRODUCTS } from '../../helpers/fixtures';
 
-// import { banking } from '@/banking-sdk';                        // <- uncomment in Phase 2
-// import type { ProductView, InvestmentComparison, HoldingView } from '@/banking-sdk';
-// import { AppError } from '@/lib/errors';
+// Fresh seeded world before every case; disconnect Prisma on teardown.
+useFreshDatabase();
+
+/** Seeded 活期 funding account (fixture balance ¥23,580). */
+const CHECKING_START = ACCOUNTS.find((a) => a.id === 'acct_checking')!.balance;
+
+/** Seeded product ids (see `tests/helpers/fixtures.ts` / `prisma/seed.ts`). */
+const WENJIANA = 'prod_wenjiana';
+const WENJIB = 'prod_wenjib';
+const JINRONG = 'prod_jinrong';
+const HUOBI = 'prod_huobi';
+const ALL_PRODUCT_IDS = [WENJIANA, WENJIB, JINRONG, HUOBI];
+
+/** The single seeded active holding (稳健理财A, marketValue 5050). */
+const SEEDED_HOLDING = 'holding_wenjiana';
+
+/**
+ * Assert `promise` rejects with an `AppError` carrying `code`, and return it for `detail` checks.
+ * Observes the same promise via `.rejects` (instanceof gate) and `.catch` (read the error), so the
+ * rejection is never left unhandled.
+ */
+async function expectAppErrorCode(promise: Promise<unknown>, code: ErrorCode): Promise<AppError> {
+  await expect(promise).rejects.toBeInstanceOf(AppError);
+  const error = (await promise.catch((e: unknown) => e)) as AppError;
+  expect(error.code).toBe(code);
+  return error;
+}
 
 describe('banking-sdk/investment · listProducts', () => {
-  it.todo('returns all products; a riskLevel filter narrows the result');
-  it.todo('each ProductView carries id / code / name / riskLevel / expectedRate / termDays / minAmount');
+  it('returns all products; a riskLevel filter narrows the result', async () => {
+    const all = await banking.investment.listProducts();
+    expect(all).toHaveLength(PRODUCTS.length);
+    expect(all.map((p) => p.id).sort()).toEqual([...ALL_PRODUCT_IDS].sort());
+
+    const r2 = await banking.investment.listProducts({ riskLevel: 'R2' });
+    expect(r2).toHaveLength(2);
+    expect(r2.map((p) => p.id).sort()).toEqual([WENJIANA, WENJIB].sort());
+    expect(r2.every((p) => p.riskLevel === 'R2')).toBe(true);
+  });
+
+  it('each ProductView carries id / code / name / riskLevel / expectedRate / termDays / minAmount', async () => {
+    const all = await banking.investment.listProducts();
+    const view = all.find((p) => p.id === WENJIANA) as ProductView | undefined;
+    expect(view).toBeDefined();
+    expect(view).toMatchObject({
+      id: 'prod_wenjiana',
+      code: 'WJA001',
+      name: '稳健理财A',
+      riskLevel: 'R2',
+      expectedRate: 3.25,
+      termDays: 90,
+      minAmount: 1000,
+    });
+
+    // Every product exposes the full public shape with the right primitive types.
+    for (const product of all) {
+      expect(typeof product.id).toBe('string');
+      expect(typeof product.code).toBe('string');
+      expect(typeof product.name).toBe('string');
+      expect(['R1', 'R2', 'R3', 'R4', 'R5']).toContain(product.riskLevel);
+      expect(typeof product.expectedRate).toBe('number');
+      expect(typeof product.termDays).toBe('number');
+      expect(typeof product.minAmount).toBe('number');
+    }
+  });
 });
 
 describe('banking-sdk/investment · compareInvestments', () => {
-  it.todo('returns the products plus highestRateId (max expectedRate) and lowestRiskId (lowest risk level)');
-  it.todo('an empty id set → empty products, undefined pick ids');
+  it('returns the products plus highestRateId (max expectedRate) and lowestRiskId (lowest risk level)', async () => {
+    const cmp: InvestmentComparison = await banking.investment.compareInvestments(ALL_PRODUCT_IDS);
+
+    expect(cmp.products).toHaveLength(4);
+    // 进取混合C has the top rate (5.1); 货币基金 is the safest (R1).
+    expect(cmp.highestRateId).toBe(JINRONG);
+    expect(cmp.lowestRiskId).toBe(HUOBI);
+
+    const highest = cmp.products.find((p) => p.id === cmp.highestRateId);
+    const maxRate = Math.max(...cmp.products.map((p) => p.expectedRate));
+    expect(highest?.expectedRate).toBe(maxRate);
+
+    const lowest = cmp.products.find((p) => p.id === cmp.lowestRiskId);
+    expect(lowest?.riskLevel).toBe('R1');
+  });
+
+  it('an empty id set → empty products, undefined pick ids', async () => {
+    const cmp = await banking.investment.compareInvestments([]);
+    expect(cmp.products).toEqual([]);
+    expect(cmp.highestRateId).toBeUndefined();
+    expect(cmp.lowestRiskId).toBeUndefined();
+  });
 });
 
 describe('banking-sdk/investment · subscribeInvestment', () => {
-  it.todo("an amount below the product minAmount → throws AppError('VALIDATION')");
-  it.todo('¥5000 into 稳健理财A (min 1000) succeeds and debits the account (newBalance 18580)');
-  it.todo("an unknown productId → throws AppError('NOT_FOUND')");
-  it.todo("insufficient funds → throws AppError('INSUFFICIENT_FUNDS')");
-  it.todo('creates a HOLDING and returns InvestResult { success, holdingId, productId, amount, newBalance, occurredAt }');
+  it("an amount below the product minAmount → throws AppError('VALIDATION')", async () => {
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: WENJIANA, amount: 500 };
+    const error = await expectAppErrorCode(banking.investment.subscribeInvestment(input), 'VALIDATION');
+    expect(error.detail).toMatchObject({ amount: 500, minAmount: 1000 });
+  });
+
+  it('¥5000 into 稳健理财A (min 1000) succeeds and debits the account (newBalance 18580)', async () => {
+    expect(CHECKING_START).toBe(23580);
+
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: WENJIANA, amount: 5000 };
+    const result: InvestResult = await banking.investment.subscribeInvestment(input);
+
+    expect(result.success).toBe(true);
+    expect(result.productId).toBe(WENJIANA);
+    expect(result.amount).toBe(5000);
+    expect(result.newBalance).toBe(18580);
+    expect(typeof result.holdingId).toBe('string');
+    expect(result.holdingId.length).toBeGreaterThan(0);
+    expect(Number.isFinite(result.occurredAt)).toBe(true);
+
+    // The funding account was really debited in the DB.
+    const balance = await banking.account.getBalance(DEMO_USER_ID);
+    const checking = balance.accounts.find((a) => a.id === 'acct_checking');
+    expect(checking?.balance).toBe(18580);
+  });
+
+  it("an unknown productId → throws AppError('NOT_FOUND')", async () => {
+    const input: SubscribeInvestmentInput = {
+      userId: DEMO_USER_ID,
+      productId: 'prod_does_not_exist',
+      amount: 5000,
+    };
+    const error = await expectAppErrorCode(banking.investment.subscribeInvestment(input), 'NOT_FOUND');
+    expect(error.detail).toMatchObject({ productId: 'prod_does_not_exist' });
+  });
+
+  it("insufficient funds → throws AppError('INSUFFICIENT_FUNDS')", async () => {
+    // 999999 clears the ¥10,000 minAmount of 进取混合C but far exceeds the ¥23,580 balance.
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: JINRONG, amount: 999999 };
+    const error = await expectAppErrorCode(banking.investment.subscribeInvestment(input), 'INSUFFICIENT_FUNDS');
+    expect(error.detail).toMatchObject({ balance: 23580, amount: 999999 });
+  });
+
+  it('creates a HOLDING and returns InvestResult { success, holdingId, productId, amount, newBalance, occurredAt }', async () => {
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: WENJIB, amount: 5000 };
+    const result: InvestResult = await banking.investment.subscribeInvestment(input);
+
+    expect(result.success).toBe(true);
+    expect(result.holdingId).toEqual(expect.any(String));
+    expect(result.productId).toBe(WENJIB);
+    expect(result.amount).toBe(5000);
+    expect(result.newBalance).toBe(18580);
+    expect(Number.isFinite(result.occurredAt)).toBe(true);
+
+    const holdings = await banking.investment.listHoldings(DEMO_USER_ID);
+    const created = holdings.find((h) => h.id === result.holdingId);
+    expect(created).toBeDefined();
+    expect(created).toMatchObject({
+      productId: WENJIB,
+      productName: '稳健理财B',
+      riskLevel: 'R2',
+      amount: 5000,
+      status: 'HOLDING',
+    });
+  });
 });
 
 describe('banking-sdk/investment · redeemInvestment', () => {
-  it.todo('flips a holding HOLDING → REDEEMED and credits the funding account');
-  it.todo("redeeming an unknown / already-redeemed holding → throws AppError('NOT_FOUND' | 'CONFLICT')");
+  it('flips a holding HOLDING → REDEEMED and credits the funding account', async () => {
+    expect(CHECKING_START).toBe(23580);
+
+    const input: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING };
+    const result: InvestResult = await banking.investment.redeemInvestment(input);
+
+    expect(result.success).toBe(true);
+    expect(result.holdingId).toBe(SEEDED_HOLDING);
+    expect(result.productId).toBe(WENJIANA);
+    // Credited by marketValue (5050), not principal (5000).
+    expect(result.amount).toBe(5050);
+    expect(result.newBalance).toBe(28630); // 23580 + 5050
+    expect(Number.isFinite(result.occurredAt)).toBe(true);
+
+    // The holding is closed and no longer reported among the active holdings.
+    const active = await banking.investment.listHoldings(DEMO_USER_ID);
+    expect(active.map((h) => h.id)).not.toContain(SEEDED_HOLDING);
+
+    const balance = await banking.account.getBalance(DEMO_USER_ID);
+    const checking = balance.accounts.find((a) => a.id === 'acct_checking');
+    expect(checking?.balance).toBe(28630);
+  });
+
+  it("redeeming an unknown / already-redeemed holding → throws AppError('NOT_FOUND' | 'CONFLICT')", async () => {
+    const unknown: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: 'holding_does_not_exist' };
+    await expectAppErrorCode(banking.investment.redeemInvestment(unknown), 'NOT_FOUND');
+
+    const seeded: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING };
+    await banking.investment.redeemInvestment(seeded); // first redeem succeeds
+    const again = banking.investment.redeemInvestment(seeded); // second → CONFLICT
+    const error = await expectAppErrorCode(again, 'CONFLICT');
+    expect(error.detail).toMatchObject({ holdingId: SEEDED_HOLDING, status: 'REDEEMED' });
+  });
 });
 
 describe('banking-sdk/investment · listHoldings', () => {
-  it.todo("returns the user's active holdings (excludes REDEEMED ones)");
-  it.todo('each HoldingView carries productName / riskLevel / amount / profit / boughtAt / status');
+  it("returns the user's active holdings (excludes REDEEMED ones)", async () => {
+    const initial = await banking.investment.listHoldings(DEMO_USER_ID);
+    expect(initial).toHaveLength(1);
+    expect(initial[0]?.id).toBe(SEEDED_HOLDING);
+
+    await banking.investment.redeemInvestment({ userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING });
+
+    const after = await banking.investment.listHoldings(DEMO_USER_ID);
+    expect(after).toHaveLength(0);
+    expect(after.map((h) => h.id)).not.toContain(SEEDED_HOLDING);
+  });
+
+  it('each HoldingView carries productName / riskLevel / amount / profit / boughtAt / status', async () => {
+    const holdings = await banking.investment.listHoldings(DEMO_USER_ID);
+    const view = holdings.find((h) => h.id === SEEDED_HOLDING) as HoldingView | undefined;
+    expect(view).toBeDefined();
+    expect(view).toMatchObject({
+      id: SEEDED_HOLDING,
+      productId: WENJIANA,
+      productName: '稳健理财A',
+      riskLevel: 'R2',
+      amount: 5000,
+      marketValue: 5050,
+      profit: 50, // marketValue - amount
+      status: 'HOLDING',
+    });
+    expect(typeof view?.boughtAt).toBe('number');
+    expect(Number.isFinite(view?.boughtAt)).toBe(true);
+  });
 });
