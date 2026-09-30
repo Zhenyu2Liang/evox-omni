@@ -206,4 +206,7 @@ normal `200` — never an HTTP error.
   Each route is thin (`validate → delegate → serialize`); shared plumbing lives in `app/api/_lib/`.
 - Add a new client-callable capability as a route under `./api`; add a new screen as a page dir with its
   own `CONTEXT.md`. Never import Prisma into a page or a client component.
+- - There is **no global navigation chrome**: `app/layout.tsx` renders only `{children}` (no nav/header).
+  Each page is reachable by direct URL; the only internal `<Link>`s are the two `/agent` entries on `/`
+  and `/cards` — `/bills`, `/cards`, `/subscriptions`, `/security`, `/audit` are not linked from each other.
 - Any new shared UI/transport type belongs in `../lib/contracts` (root-owned) — do not define it locally.
