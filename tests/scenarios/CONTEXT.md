@@ -10,7 +10,7 @@ outcome (agent text, tool events, cards, `PendingAction`/audit rows, DB side eff
 Only the **model** is mocked (`registerFauxProvider()`, `LLM_MODE=mock`); the tools, security
 chokepoint and DB are the real ones — so these prove the real security behaviour, not a mock of it.
 
-Current status: **`it.todo` scaffolds** (no assertions); bodies are filled in Phase 2 once the
+Current status: **Tests 7–12 implemented with real assertions and passing** (32 tests across `test-07-anomaly` … `test-12-birthday-plan`); **Tests 1–6 remain `it.todo` scaffolds**, filled in Phase 2 once the
 `agent`/`security`/`sdk`/`audit` modules are implemented. Files stay load-safe.
 
 ## The 12 scenarios
