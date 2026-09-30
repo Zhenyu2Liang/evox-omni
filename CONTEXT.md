@@ -79,7 +79,7 @@ Three tiers (`RiskLevel = GREEN | YELLOW | RED`), decided by `security/permissio
 - 🟡 **YELLOW** — medium-risk (transfer ≤ ¥1000 & daily ≤ ¥1000, set card limit, cancel subscription, freeze card, virtual card, some scheduled tasks). **Requires user confirmation.**
 - 🔴 **RED** — high-risk (transfer > ¥1000 / daily > ¥1000, investment subscribe/redeem, card loss/unfreeze report, password change). **Requires strong verification (mock MFA code `123456`).**
 Additional code-level controls:
-- **Circuit breaker** (`security/circuit-breaker.ts`): 3 consecutive MFA failures (or repeated blocked high-risk
+- **Circuit breaker** (`security/circuit-breaker.ts`): 3 consecutive MFA failures → the session is locked and a
   attempts) → high-risk ops locked for the session + a `SecurityEvent` is emitted.
 - **Injection guard** (`security/injection-guard.ts`): detects injection patterns in user input and records a
   `SecurityEvent` (+ a UI security event) — but **never grants permission** (defense-in-depth only). It does NOT inject a system reminder into the model context.
