@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
+import NavBar from './_components/NavBar';
 
 export const metadata: Metadata = {
   title: 'AI Banking Agent',
@@ -13,7 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body>{children}</body>
+      <body className="flex min-h-screen flex-col">
+        <NavBar />
+        {children}
+      </body>
     </html>
   );
 }
