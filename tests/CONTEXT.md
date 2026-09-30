@@ -36,7 +36,7 @@ Run:
 - `npm install`, then **`npx prisma generate`** before any spec imports `@prisma/client`
   (e.g. `lib/db/client`, `banking-sdk`) — `setup.ts` pushes the schema with `--skip-generate` on purpose.
 - `vitest.config.ts` (root-owned) already wires `setupFiles: ['tests/setup.ts']` + `env: { LLM_MODE: 'mock' }`.
-  (and optionally `test.env: { LLM_MODE: 'mock' }`) so env isolation + schema provisioning run.
+  It is MISSING `test.fileParallelism: false` (and a raised `hookTimeout`): without them every test file runs
   This file is owned by the root; a change here must be escalated to the root, not made from `./tests`.
 
 ## Constraints
