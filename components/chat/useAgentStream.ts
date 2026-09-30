@@ -315,7 +315,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
         timestamp: Date.now(),
       };
       setState((prev) => ({ ...prev, messages: [...prev.messages, userMessage], error: undefined }));
-      const { sessionId } = state;
+      const sessionId = state.sessionId;
       await pull(() =>
         sendChatTurn(
           sessionId !== undefined ? { sessionId, message: text } : { message: text },
