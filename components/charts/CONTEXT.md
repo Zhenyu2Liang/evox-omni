@@ -15,7 +15,7 @@ banking palette, tooltip styling, empty-data guard) lives in the private local `
 export interface SpendingPieProps { data: CategorySpend[]; height?: number; className?: string; }
 export function SpendingPie(p: SpendingPieProps): JSX.Element;          // 'use client'
 
-// SpendingBar.tsx — horizontal/vertical bar of category totals
+// SpendingBar.tsx — vertical bar of category totals (categories on X, amounts on Y)
 export interface SpendingBarProps { data: CategorySpend[]; height?: number; className?: string; }
 export function SpendingBar(p: SpendingBarProps): JSX.Element;          // 'use client'
 
