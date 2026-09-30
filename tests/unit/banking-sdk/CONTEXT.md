@@ -19,6 +19,10 @@ Spec files (implemented — real assertions against the test SQLite), targeting 
   `minAmount` enforcement, ¥5000 into 稳健理财A succeeds + debits, `NOT_FOUND`/`INSUFFICIENT_FUNDS`,
   HOLDING→REDEEMED, `highestRateId`/`lowestRiskId`.
 
+## Status
+
+All three specs are implemented with real assertions and pass offline (`npx vitest run tests/unit/banking-sdk` → 38 tests green against `prisma/test.db`). The transfer spec seeds the duplicate 王芳 via `truncateAll()` + `seedDemoData({ withAmbiguousContact: true })` inside the ambiguity case.
+
 ## Constraints
 
 - The SDK is **execute-only**: assert invariants here; permission/confirmation/MFA are NOT SDK concerns
