@@ -213,6 +213,20 @@ REQUIRED from siblings (must align at integration; assumed signatures):
 - `banking-sdk` functions take `userId` as the first argument and throw typed `AppError`.
 - `sessions.getSession`, `sessions.createSession({userId, stateJson})`, `sessions.updateSessionState(id, stateJson)`.
 
+## Pi SDK Reconciliation (verified against installed 0.73.1)
+
+Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement against
+`node_modules/@mariozechner/*`:
+- `AgentTool<TParameters extends TSchema = TSchema, TDetails = any>` — the generic is a **TypeBox
+  TSchema**, NOT `Static<>`. A tool is `AgentTool<typeof <Name>Params>`; a heterogeneous registry uses
+  `AgentTool<any>` (matches `AgentState.tools: AgentTool<any>[]`). `AgentTool<unknown>` does NOT compile.
+- `execute(toolCallId, params: Static<TParameters>, signal?, onUpdate?): Promise<AgentToolResult<TDetails>>`
+  with `AgentToolResult<T> = { content: (TextContent|ImageContent)[]; details: T; terminate? }`.
+- `Model<TApi extends Api>` **requires a type argument**; this node standardises on `Model<any>`.
+  `registerFauxProvider()` → registration whose `getModel(): Model<string>` is the mock model.
+- `AgentOptions.beforeToolCall?: (ctx: BeforeToolCallContext, signal?) => Promise<BeforeToolCallResult|undefined>`
+  with `ctx.toolCall` (`.name`/`.arguments`) and `ctx.args: unknown`; return `{ block: true, reason }`.
+
 ## Notes for Agents
 
 - Pi SDK type/function names (`Agent`, `AgentTool`, `AgentState`, `AgentEvent`, `registerFauxProvider`,
