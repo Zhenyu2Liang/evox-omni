@@ -37,7 +37,7 @@ interface TransferRiskInput { amount: number; dailyTransferTotal: number }
 interface TransferRiskResult { tier: RiskLevel; requiresConfirmation: boolean; requiresMfa: boolean;
                                reasons: string[]; amount: number; dailyTotal: number; projectedDailyTotal: number }
 function evaluateTransferRisk(input: TransferRiskInput): TransferRiskResult     // RED iff amount>1000 || total+amount>1000, else YELLOW; always requiresConfirmation
-async function computeDailyTransferTotal(userId: string, now?: number): Promise<number>   // sum today's outgoing transfers
+async function computeDailyTransferTotal(userId: string, now?: number): Promise<number>   // sum OUTGOING TRANSFER debits with occurredAt in [startOfDay(now), now] (INCLUSIVE both ends; future-dated rows excluded)
 ```
 
 ### `circuit-breaker.ts` — session-scoped consecutive-failure breaker (in-memory)
