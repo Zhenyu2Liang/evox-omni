@@ -171,7 +171,7 @@ Frozen imports (already exist, DO NOT redefine): `lib/contracts/{risk,tools,secu
 (`AppError`, `Result`, `ok`, `err`), `lib/constants` (`DAILY_TRANSFER_LIMIT`, `MFA_CODE`, `MFA_MAX_ATTEMPTS`),
 `lib/money` (`formatCNY`).
 
-REQUIRED (being designed in parallel — align at integration; assumed signatures):
+Repository functions this node consumes (confirmed signatures — do NOT fork):
 - `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>`
 - `lib/db/repositories/pendingAction` → `createPendingAction(input): Promise<PendingAction>`,
   `getPendingAction(id): Promise<PendingAction | null>`, `updatePendingActionStatus(id, status): Promise<PendingAction>`
