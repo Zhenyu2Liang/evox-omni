@@ -84,7 +84,7 @@ anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) 
 
 ## Notes for Agents
 
-- **The specs are the acceptance checklist, not yet real tests.** Filling in a scenario's `it.todo`
+- **All specs are implemented acceptance tests** (no `it.todo`). Keep them green; fix the seam
   bodies is Phase 2 work; do it only after that module is implemented, and keep them green.
 - The gateway is the security chokepoint: prove in Test 4 that injection text changes NOTHING about
   the tier — the money move still requires human MFA.
