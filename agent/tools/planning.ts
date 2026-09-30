@@ -19,8 +19,14 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { Type, type Static } from '@mariozechner/pi-ai';
 import type { ToolName } from '@/lib/contracts/tools';
-import type { TaskNodeResult } from '@/lib/contracts/task';
-import type { PlanToolOutcome } from '@/planner';
+import type {
+  TaskCondition,
+  TaskNodeKind,
+  TaskNodeResult,
+  TaskNodeSpec,
+} from '@/lib/contracts/task';
+import { dag, executor, type PlanToolOutcome } from '@/planner';
+import { AppError } from '@/lib/errors';
 import type { ToolExecutionResult } from './index';
 
 /**
@@ -52,6 +58,41 @@ export interface SubmitPlanDeps {
  */
 export const SUBMIT_PLAN_TOOL_NAME = 'submit_plan' as const satisfies ToolName;
 
+/**
+ * The 25 non-meta registered banking tool names a plan node may reference.
+ *
+ * Declared LOCALLY (instead of importing the runtime value `TOOL_NAMES` from `./index`) on purpose:
+ * `index.ts` imports this module, so importing its value back would create a runtime import cycle.
+ * `submit_plan` itself is deliberately EXCLUDED — a plan must never recurse into `submit_plan`.
+ */
+const KNOWN_TOOL_NAMES: readonly ToolName[] = [
+  'get_balance',
+  'get_transactions',
+  'search_contact',
+  'analyze_spending',
+  'detect_anomaly',
+  'get_cards',
+  'list_subscriptions',
+  'list_investments',
+  'compare_investments',
+  'get_investment_holdings',
+  'get_dashboard_summary',
+  'list_scheduled_tasks',
+  'reserve_budget',
+  'transfer_money',
+  'set_card_limit',
+  'cancel_subscription',
+  'freeze_card',
+  'apply_virtual_card',
+  'set_subscription_reminder',
+  'create_scheduled_task',
+  'subscribe_investment',
+  'redeem_investment',
+  'report_lost_card',
+  'unfreeze_card',
+  'change_password',
+];
+
 /** `submit_plan` params — the proposed DAG (validated against the frozen `TaskNodeSpec` shape). */
 export const SubmitPlanParams = Type.Object({
   goal: Type.String({ description: '任务目标（自然语言）' }),
@@ -70,6 +111,26 @@ export const SubmitPlanParams = Type.Object({
 });
 export type SubmitPlanArgs = Static<typeof SubmitPlanParams>;
 
+/** One model-proposed node as it arrives in `submit_plan` params. */
+type IncomingPlanNode = SubmitPlanArgs['nodes'][number];
+
+/**
+ * Adapt a loose model-proposed node to the exact `TaskNodeSpec` field names/shape. `kind`, `args`
+ * and `condition` arrive from the TypeBox schema as `string` / `{}` (the schema keeps them open so
+ * the model can pass family-specific args); `dag.validatePlan` then rejects malformed nodes.
+ */
+function toTaskNodeSpec(node: IncomingPlanNode): TaskNodeSpec {
+  return {
+    id: node.id,
+    name: node.name,
+    dependencies: node.dependencies,
+    kind: node.kind as TaskNodeKind,
+    tool: node.tool,
+    args: node.args as Record<string, unknown> | undefined,
+    condition: node.condition as TaskCondition | undefined,
+  };
+}
+
 /**
  * Build the `submit_plan` tool bound to `userId` + `deps`. Kept as a factory (rather than a
  * module-level constant) because it needs the agent-supplied `SubmitPlanDeps`. `createToolRegistry`
@@ -78,8 +139,29 @@ export type SubmitPlanArgs = Static<typeof SubmitPlanParams>;
 export function createSubmitPlanTool(
   userId: string,
   deps: SubmitPlanDeps,
-): AgentTool<SubmitPlanArgs> {
-  throw new Error('not implemented');
+): AgentTool<typeof SubmitPlanParams> {
+  return {
+    name: SUBMIT_PLAN_TOOL_NAME,
+    label: '提交任务计划',
+    description:
+      '提交并执行一个由多个银行工具节点组成的任务计划（DAG），节点按依赖顺序执行。' +
+      '涉及敏感操作的节点会先请求用户确认，不会直接执行。',
+    parameters: SubmitPlanParams,
+    execute: async (_toolCallId, params) => {
+      const result = await runSubmitPlan(
+        userId,
+        params as unknown as Record<string, unknown>,
+        deps,
+      );
+      if (!result.ok) {
+        throw new AppError('TOOL_FAILED', result.error ?? 'submit_plan failed');
+      }
+      return {
+        content: [{ type: 'text', text: result.summary ?? '计划已执行' }],
+        details: result.data,
+      };
+    },
+  };
 }
 
 /**
@@ -93,5 +175,53 @@ export async function runSubmitPlan(
   args: Record<string, unknown>,
   deps: SubmitPlanDeps,
 ): Promise<ToolExecutionResult> {
-  throw new Error('not implemented');
+  // `userId` is unused here: every node executes through the gateway-routed `deps.runTool`, which the
+  // agent already bound to this user. The parameter is kept for registry-runner uniformity.
+  void userId;
+
+  const goal = typeof args.goal === 'string' ? args.goal : '';
+  if (!goal) {
+    return { ok: false, error: '缺少任务目标（goal）' };
+  }
+  if (!Array.isArray(args.nodes)) {
+    return { ok: false, error: '缺少计划节点（nodes）' };
+  }
+
+  const nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
+
+  const knownTools = new Set<string>(KNOWN_TOOL_NAMES);
+  const validation = dag.validatePlan(nodes, knownTools);
+  if (!validation.ok) {
+    return { ok: false, error: validation.error.message };
+  }
+
+  const plan = dag.buildPlan({ sessionId: deps.sessionId, goal, nodes, now: deps.now });
+  const result = await executor.runPlan(
+    plan,
+    { runTool: deps.runTool, onNodeUpdate: deps.onNodeUpdate ?? (() => {}) },
+    { signal: deps.signal, now: deps.now },
+  );
+
+  const done = result.results.filter((r) => r.status === 'success').length;
+  const waiting = result.results.filter(
+    (r) => r.status === 'waiting_confirmation' || r.status === 'waiting_verification',
+  ).length;
+  const failed = result.results.filter((r) => r.status === 'failed').length;
+  const skipped = result.results.filter((r) => r.status === 'skipped').length;
+  const firstFailed = result.results.find((r) => r.status === 'failed');
+
+  // A gated node (waiting_confirmation/waiting_verification) is NOT a failure — it surfaces via the
+  // plan snapshot and is resolved by a human decision. Only a hard `failed` plan status is `ok:false`.
+  const ok = result.status !== 'failed';
+  const summary =
+    `计划${ok ? '已执行' : '执行失败'}：目标「${goal}」，` +
+    `成功 ${done} 个，等待确认 ${waiting} 个，失败 ${failed} 个，跳过 ${skipped} 个` +
+    (waiting > 0 ? '（涉及敏感操作的节点需用户确认后继续）' : '');
+
+  return {
+    ok,
+    data: result,
+    summary,
+    error: firstFailed?.error ?? (ok ? undefined : '计划执行失败'),
+  };
 }

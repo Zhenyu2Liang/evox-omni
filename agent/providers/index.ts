@@ -1,5 +1,7 @@
 import type { Model } from '@mariozechner/pi-ai';
-import type { AppConfig } from '@/lib/config';
+import { getConfig, type AppConfig } from '@/lib/config';
+import { createLiveModel } from './provider-live';
+import { createMockModel } from './provider-mock';
 
 /**
  * Facade of the providers node.
@@ -8,8 +10,11 @@ import type { AppConfig } from '@/lib/config';
  * dispatching to `createMockModel` (mock) or `createLiveModel` (live). The rest of the
  * agent node receives the returned `Model` and NEVER constructs one itself.
  */
-export function resolveModel(cfg?: AppConfig): Model {
-  throw new Error('not implemented');
+export function resolveModel(cfg?: AppConfig): Model<any> {
+  const resolved = cfg ?? getConfig();
+  return resolved.llmMode === 'mock'
+    ? createMockModel(resolved)
+    : createLiveModel(resolved);
 }
 
 /**
@@ -17,5 +22,8 @@ export function resolveModel(cfg?: AppConfig): Model {
  * `` `${cfg.llmProvider}:${cfg.llmModel}` `` for live. Never includes the API key.
  */
 export function providerId(cfg?: AppConfig): string {
-  throw new Error('not implemented');
+  const resolved = cfg ?? getConfig();
+  return resolved.llmMode === 'mock'
+    ? 'mock'
+    : `${resolved.llmProvider}:${resolved.llmModel}`;
 }
