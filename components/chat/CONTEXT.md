@@ -99,8 +99,8 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
   results (tool names, tiers, `summary`), never raw model reasoning.
 - **No MFA code** is displayed anywhere; `MfaCard` (in `./cards`) shows only the hint.
 - No `prisma`; data via props + `fetch` to `./app`. Money/status visuals via `../../ui`.
-- Placeholder stubs in this phase: `actions.ts` + `useAgentStream.ts` define the typed contract; the
-  fetch/reducer bodies land in the implementation phase. Signatures are frozen here.
+- `actions.ts` helpers **never throw** — every failure (network / parse / non-OK / domain `ok:false`)
+  folds into a safe `{ type: 'error', message }` `AgentStreamEvent`, so the UI never sees a raw exception.
 - Named exports only; files ≲ ~1000 lines, one concern per file.
 
 ## Test Strategy
