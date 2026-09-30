@@ -50,6 +50,7 @@ Types `CategorySpend`, `MonthlyTrendPoint` are imported **type-only** from `@/ba
 ## Routing Table
 
 - `./SpendingPie.tsx` `./SpendingBar.tsx` `./SpendingTrend.tsx` `./MiniSparkline.tsx` → the chart wrappers
-- `./index.ts` → re-exports all charts
+- `./index.ts` → re-exports all charts (the 4 public charts only — `chartTheme.tsx` stays private)
+- `./chartTheme.tsx` → private shared chart chrome (palette, ResponsiveContainer wrapper, styled tooltip, empty guard)
 - `../chat/cards/` → `SpendingCard` composes these charts (sibling — read-only)
 - `../banking/` → tiles may embed `MiniSparkline` (sibling — read-only)
