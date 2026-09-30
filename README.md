@@ -362,7 +362,20 @@ cp .env.example .env
 
 ---
 
-## 17. 项目目录 / Project structure
+## 17. 文档 / Documentation
+
+完整竞赛文档位于 `docs/`：
+
+- **[架构文档](docs/architecture.md)** —— 系统架构：Pi Agent、Banking SDK、工具调用与 DAG 规划器。
+- **[安全文档](docs/security.md)** —— 权限分级、Security Gateway、提示词注入防御、幻觉防护、MFA、审计日志、熔断与沙箱。
+- **[测试用例](docs/test-cases.md)** —— 12 个 Demo 场景（Test 1–12）与单元测试覆盖。
+- **[已知风险](docs/known-risks.md)** —— 已知限制与风险说明。
+
+每个模块的设计细节见对应目录的 `CONTEXT.md`；运行方式见第 10 节 **启动方式 / Getting started**。
+
+---
+
+## 18. 项目目录 / Project structure
 
 ```
 .
