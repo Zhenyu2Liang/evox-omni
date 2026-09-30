@@ -75,7 +75,10 @@ export async function POST(req: NextRequest): Promise<Response> {
       start(controller) {
         try {
           for (const evt of res.events) controller.enqueue(encoder.encode(sseFrame(evt)));
-          controller.enqueue(encoder.encode(sseFrame({ type: 'done' })));
+          // runTurn already appends a trailing done event; only add our own terminator
+          // when the runtime did not (robust against future changes to the list).
+          const last = res.events[res.events.length - 1];
+          if (last?.type !== 'done') controller.enqueue(encoder.encode(sseFrame({ type: 'done' })));
         } catch (e) {
           // A mid-turn failure never leaks the raw exception (or the MFA code): the centralized
           // `mapAppError` yields a safe message, then the stream is terminated cleanly.
