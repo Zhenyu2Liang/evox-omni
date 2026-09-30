@@ -85,7 +85,7 @@ anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) 
 ## Notes for Agents
 
 - **All specs are implemented acceptance tests** (no `it.todo`). Keep them green; fix the seam
-  bodies is Phase 2 work; do it only after that module is implemented, and keep them green.
+  (injectable `now`/`id`, unique sessionId, fresh DB), never weaken an assertion to pass.
 - The gateway is the security chokepoint: prove in Test 4 that injection text changes NOTHING about
   the tier — the money move still requires human MFA.
 - Do not weaken determinism to make a test pass (fake timers, real network, shared DB state); fix the
