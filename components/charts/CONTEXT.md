@@ -54,6 +54,6 @@ Types `CategorySpend`, `MonthlyTrendPoint` are imported **type-only** from `@/ba
 - `./SpendingPie.tsx` `./SpendingBar.tsx` `./SpendingTrend.tsx` `./MiniSparkline.tsx` → the chart wrappers
 - `./index.ts` → re-exports all charts (the 4 public charts only — `chartTheme.tsx` stays private)
 - `./chartTheme.tsx` → private shared chart chrome (palette, ResponsiveContainer wrapper, styled tooltip, empty guard)
-- `../chat/cards/` → `SpendingCard` composes these charts (sibling — read-only)
+- `../chat/cards/` → `SpendingCard` composes `SpendingPie` + `SpendingTrend` (sibling — read-only)
 - `../../app/bills/` → the `/bills` page is the primary consumer: renders all four charts (`SpendingPie`, `SpendingBar`, `SpendingTrend`, `MiniSparkline`) from real `banking.transaction.analyzeSpending` output (sibling — read-only)
 - `../banking/` → no banking tile embeds a chart today (`MiniSparkline` is used by `app/bills`, not by tiles) (sibling — read-only)
