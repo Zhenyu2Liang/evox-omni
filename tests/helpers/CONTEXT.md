@@ -25,7 +25,7 @@ Import from the barrel (`../helpers`) or a specific module.
     (2nd 王芳), `ACCOUNTS` (活期 ¥23,580), `ANOMALY_TRANSACTION` + `ANOMALY_OCCURRED_AT`
     (Apple Store ¥6,999 @ 2026-09-20 18:32), `MONTHLY_SPEND_TOTAL` (≈¥5,800), `PRODUCTS`/`CARDS`/`CARD_LIMITS`, types.
   - `seedDemoData(options?): Promise<void>` — insert the full dataset (call on a fresh DB).
-  - `buildCurrentMonthSpend(now?): TransactionFixture[]` — current-month ordinary spend incl. 娱乐, relative to `now`.
+  - `buildCurrentMonthSpend(now?)` / `buildPreviousMonthSpend(now?)` / `buildSubscriptions(now?)` / `buildHoldings(now?)` / `buildBudgets(now?)` / `buildScheduledTasks(now?)` — the date-relative rows (current/previous/next month), built from LOCAL components relative to `now` (default `demoNow()`).
 - `faux-agent.ts` — build a REAL Pi `Agent` with a SCRIPTED model:
   - `buildFauxAgent(options): Agent` — faux provider + registed banking tools + production `beforeToolCall`.
   - script builders: `text`, `tool(name,args)`, `final`, `callThen(text,name,args)`; types `FauxStep`/`FauxToolCall`/`FauxAgentOptions`.
