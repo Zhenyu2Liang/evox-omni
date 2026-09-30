@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --banking-deep: #0b1f3a;
+  --banking-navy: #123a6b;
+  --banking-accent: #2563eb;
+  --banking-success: #16a34a;
+  --banking-warn: #f59e0b;
+  --banking-danger: #dc2626;
+  --banking-light: #f5f7fa;
+}
+
+body {
+  background-color: var(--banking-light);
+  color: var(--banking-deep);
+}
