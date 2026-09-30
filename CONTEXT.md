@@ -81,7 +81,7 @@ Three tiers (`RiskLevel = GREEN | YELLOW | RED`), decided by `security/permissio
 Additional code-level controls:
 - **Circuit breaker** (`security/circuit-breaker.ts`): 3 consecutive MFA failures (or repeated blocked high-risk
   attempts) → high-risk ops locked for the session + a `SecurityEvent` is emitted.
-- **Injection guard** (`security/injection-guard.ts`): detects injection patterns in user input, records a
+- **Injection guard** (`security/injection-guard.ts`): detects injection patterns in user input and records a
   `SecurityEvent`, and adds a system reminder — but **never grants permission** (defense-in-depth only).
 - **Hallucination guard**: the model may only report facts that came from a tool result. If a tool returns
   `success:false`, the agent must report failure (demo **Test 5**).
