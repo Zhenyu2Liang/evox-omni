@@ -65,7 +65,7 @@ Two layers, mirroring the acceptance bar:
   condition evaluation, gated node → `waiting_confirmation`), `banking-sdk/` (funds invariant,
   `minAmount`, ambiguous recipient → `CONFLICT` with candidates, subscription cancel, investment subscribe).
 - **Scenario (full pipeline, faux LLM):** Tests 1–12 drive a real turn + human decision and assert the
-  agent text, tool events, cards, `PendingAction`/audit rows and DB side effects. Each scenario maps to
+  agent text, tool events, cards, `PendingAction`/audit rows and DB side effects. All 12 are implemented
   its `it.todo` list in `scenarios/test-*.test.ts`.
 
 Fixtures: the canonical demo dataset (user 李明; contacts 张伟/王芳/妈妈/李华; the Apple Store ¥6,999
