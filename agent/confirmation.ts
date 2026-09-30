@@ -21,6 +21,7 @@ import { security } from '@/security';
 import { recordAudit } from '@/audit';
 import { getSession } from '@/lib/db/repositories/session';
 import { getConfig } from '@/lib/config';
+import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { resumeTurn } from './run-turn';
@@ -130,9 +131,10 @@ async function executeAuthorizedAction(
   const result = await registry.executeDirect(action.toolName, action.args);
 
   await recordAudit({
-    timestamp: Date.now(),
+    timestamp: demoNow(),
     sessionId: action.sessionId,
-    userRequest: '',
+    userRequest: action.userRequest ?? '',
+    intent: action.intent,
     toolName: action.toolName,
     riskLevel: action.tier,
     confirmationRequired: true,
@@ -219,9 +221,10 @@ export async function cancelAction(
   const action = await gateway.cancelAction(actionId);
 
   await recordAudit({
-    timestamp: Date.now(),
+    timestamp: demoNow(),
     sessionId: action.sessionId,
-    userRequest: '',
+    userRequest: action.userRequest ?? '',
+    intent: action.intent,
     toolName: action.toolName,
     riskLevel: action.tier,
     confirmationRequired: true,
