@@ -13,6 +13,8 @@
 import type { RiskLevel } from '../lib/contracts/risk';
 import type { ToolName } from '../lib/contracts/tools';
 import { evaluateTransferRisk } from './risk-engine';
+import { AppError } from '../lib/errors';
+import { parseAmount } from '../lib/money';
 
 export interface ToolPolicy {
   /** Static risk tier for the tool. `transfer_money` is dynamic (see `static: false`). */
@@ -83,7 +85,9 @@ export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
 
 /** Look up the static policy for a tool. Throws `AppError('VALIDATION')` for an unknown tool. */
 export function getToolPolicy(toolName: ToolName): ToolPolicy {
-  throw new Error('not implemented');
+  const policy = TOOL_POLICY[toolName];
+  if (!policy) throw new AppError('VALIDATION', `未知工具: ${toolName}`);
+  return policy;
 }
 
 /**
@@ -104,5 +108,27 @@ export function evaluateTool(
   args: Record<string, unknown>,
   ctx: EvaluateToolContext,
 ): ToolEvaluation {
-  throw new Error('not implemented');
+  const policy = getToolPolicy(toolName);
+
+  // Dynamic tools (e.g. transfer_money): tier depends on the amount + day total.
+  if (!policy.static) {
+    let amount = parseAmount(args.amount as string | number | null | undefined);
+    if (!Number.isFinite(amount)) amount = 0;
+    const r = evaluateTransferRisk({ amount, dailyTransferTotal: ctx.dailyTransferTotal });
+    return {
+      tier: r.tier,
+      requiresConfirmation: r.requiresConfirmation,
+      requiresMfa: r.requiresMfa,
+      reasons: r.reasons,
+    };
+  }
+
+  // Static tools: tier is fixed by the policy table.
+  const tier = policy.tier;
+  return {
+    tier,
+    requiresConfirmation: tier !== 'GREEN',
+    requiresMfa: tier === 'RED',
+    reasons: [policy.description],
+  };
 }
