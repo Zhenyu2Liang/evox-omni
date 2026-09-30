@@ -118,7 +118,7 @@ interface ActionResponse {
 - The route drives the same agent entry point either way: `agent.runTurn({ sessionId?, message })` — when
   `onEvent` is supplied, each event is pushed as it occurs (streaming); the returned `ChatTurnResponse`
   carries the full ordered event log (used verbatim for the non-streaming response).
-- On the first turn the route sets `Set-Cookie: banking_session=<sessionId>` (constant `SESSION_COOKIE`)
+- On every turn the route sets `Set-Cookie: banking_session=<sessionId>` (constant `SESSION_COOKIE`)
   so subsequent turns and `GET /api/*` reads share the session.
 
 ## Agent runtime surface this node depends on (`../agent`)
