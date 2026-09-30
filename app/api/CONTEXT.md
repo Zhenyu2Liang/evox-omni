@@ -27,9 +27,9 @@ envelope (below). Dynamic-route handlers receive `(req: NextRequest, ctx: IdRout
 | POST | `/api/actions/[id]/confirm` | body `{}` | `ActionResponse` | `@/agent` `confirm` |
 | POST | `/api/actions/[id]/verify` | body `{ code: string }` | `ActionResponse` (wrong code ⇒ 200 with `data.ok=false`, `status:'awaiting_mfa'`) | `@/agent` `verify` |
 | POST | `/api/actions/[id]/cancel` | body `{}` | `ActionResponse` (`status:'cancelled'`) | `@/agent` `cancel` |
-| GET | `/api/tasks` | query `{ sessionId?, limit? }` | `{ plans: TaskPlan[] }` | `@/planner` plan-store |
-| GET | `/api/tasks/[id]` | — | `TaskPlan` | `@/planner` plan-store |
-| POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` | `@/planner` controls |
+| GET | `/api/tasks` | query `{ sessionId?, limit? }` | `{ plans: TaskPlan[] }` | persisted `AgentTask` rows via `@/lib/db/repositories/task` |
+| GET | `/api/tasks/[id]` | — | `TaskPlan` | persisted `AgentTask` row via `@/lib/db/repositories/task` |
+| POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` | persisted `AgentTask` row steering (best-effort) |
 | GET | `/api/audit` | query `{ sessionId?, toolName?, riskLevel?, status?, limit? }` | `{ entries: AuditEntry[]; summary: AuditSummary }` | `@/audit` `listAudit` + `getAuditSummary` |
 | GET | `/api/security` | query `{ sessionId? }` | `{ status: SecurityStatus; events: SecurityEvent[] }` | `@/audit` `getSecurityStatus`/`listSecurityEvents` + `@/security` `circuitBreaker.isLocked` |
 | GET | `/api/dashboard` | query `{ userId? }` | `DashboardSummary` | `@/banking-sdk` `banking.dashboard.getDashboardSummary` |
@@ -73,11 +73,13 @@ human-triggered execution path is the `actions/*` group.
   `data: {"type":"done"}\n\n`. A mid-turn failure emits `data: {"type":"error","message":"<safe>"}\n\n`
   then `done`. The response is built with `sseResponse(stream)`.
 - Non-streaming (`?stream=0` or `Accept: application/json`): `200 { ok:true, data: ChatTurnResponse }`
-  where `data = { sessionId, events: AgentStreamEvent[] }`.
-- Either mode drives the same agent entry point `@/agent` `runTurn(input, onEvent?)`: when `onEvent`
-  is supplied each event is pushed as it occurs; the returned `ChatTurnResponse.events` is used
-  verbatim for the non-streaming response.
-- On the first turn the route sets `Set-Cookie: banking_session=<sessionId>` (`SESSION_COOKIE`).
+  where `data = { sessionId, events: AgentStreamEvent[] }`. `?stream=0` overrides the `Accept` header.
+- Either mode drives the same agent entry point `@/agent` `runTurn(req, deps?)`, which **returns the
+  full ordered event log** (there is no `onEvent` sink): the streaming path writes each returned event
+  as a frame (appending its own `done` terminator only if the last returned event is not already
+  `done`); the non-streaming path uses `ChatTurnResponse.events` verbatim.
+- `Set-Cookie: banking_session=<sessionId>; Path=/; HttpOnly; SameSite=Lax` is set on EVERY chat
+  response (streaming and JSON) from the returned session id.
 
 ## Session & user resolution (`_lib/session.ts`)
 
@@ -90,30 +92,39 @@ human-triggered execution path is the `actions/*` group.
 - `_lib/types.ts` — app-layer transport types: `ApiEnvelope<T>`/`ApiSuccess`/`ApiFailure`,
   `ActionResponse`, `IdRouteContext`.
 - `_lib/http.ts` — `ok`/`fail`/`mapAppError`/`jsonResponse`/`errorResponse`/`parseBody`/`parseQuery`
-  plus SSE helpers `SSE_HEADERS`/`sseFrame`/`sseResponse`.
+  plus SSE helpers `SSE_HEADERS`/`sseFrame`/`sseResponse`. `parseQuery`/`parseBody` throw
+  `AppError('VALIDATION')` on a schema mismatch.
 - `_lib/schemas.ts` — shared zod query fragments (`userIdQuerySchema`, `sessionIdQuerySchema`,
   `limitQuerySchema`).
 - `_lib/session.ts` — `resolveUserId` / `resolveSessionId`.
+- `_lib/task-plans.ts` — pure mapping from persisted `AgentTask`/`AgentTaskNode` rows to the frozen
+  `TaskPlan` contract (JSON columns decoded with `safeParse`); used by `/api/tasks*` (see Notes).
 
 ## Agent runtime surface this node depends on (`@/agent`, owner)
 
+`runTurn` resolves the demo user internally and returns the **full ordered event log** (including a
+trailing `{type:'done'}` event); it takes NO `onEvent` sink and NO `userId`. `confirm`/`verify`/`cancel`
+return a `ConfirmationOutcome` which carries NO `sessionId`/`requiresMfa`/`mfaResult` — the actions
+routes derive those (see Notes).
+
 ```ts
-type EventSink = (event: AgentStreamEvent) => void;
-runTurn(input: { sessionId?: string; message: string; userId: string }, onEvent?: EventSink): Promise<ChatTurnResponse>;
-resumeTurn(sessionId: string, onEvent?: EventSink): Promise<ChatTurnResponse>;
-confirm(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
-verify(actionId: string, code: string, onEvent?: EventSink): Promise<ActionResponse>;
-cancel(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
+runTurn(req: ChatTurnRequest, deps?: RunTurnDeps): Promise<ChatTurnResponse>;   // ChatTurnRequest = { sessionId?; message }
+resumeTurn(input: ResumeTurnInput, deps?: RunTurnDeps): Promise<ChatTurnResponse>;
+confirm(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
+verify(actionId: string, code: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
+cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
+// ConfirmationOutcome = { ok; actionId; status: PendingActionStatus; tier: RiskLevel; message; result?; events }
 ```
 
 ## Dependencies
 
 - `@/agent` (read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`).
-- `@/planner` (read-only): task-plan read + `PlanControls` for `/api/tasks*`.
 - `@/banking-sdk` (read-only): read models (`banking.dashboard/transaction/card/subscription/…`, DTOs).
 - `@/audit` (read-only): `listAudit`, `getAuditSummary`, `listSecurityEvents`, `getSecurityStatus`.
 - `@/security` (read-only): `circuitBreaker.isLocked` for `/api/security`.
-- `@/lib` (read-only): contracts, `AppError`/`ErrorCode`/`Result`, `getConfig`, constants, money.
+- `@/planner` (read-only): `TaskPlan` type for `/api/tasks*` (no cross-request plan store — see Notes).
+- `@/lib` (read-only): contracts, `AppError`/`ErrorCode`/`Result`, `getConfig`, constants, money,
+  and the typed read path `@/lib/db/repositories/*` (`task`, `pendingAction`) + `lib/json`.
 - `../tests/app` (sibling — read-only, escalate writes to root): route-handler contract tests.
 
 ## Constraints
@@ -121,7 +132,8 @@ cancel(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
 - **No business logic here.** No permission/risk decisions, no money math, no Prisma writes.
 - Route handlers thin and ≲ ~150 lines; push shared plumbing into `_lib/http.ts`.
 - **Validate every body/query with zod** before delegating; reject with `AppError('VALIDATION')`.
-- **Never import Prisma directly** — go through `@/banking-sdk`, `@/audit`, `@/security`, `@/planner`.
+- **Never import Prisma directly** — go through `@/banking-sdk`, `@/audit`, `@/security`, `@/planner`,
+  or the typed read path `@/lib/db/repositories/*`.
 - Demo user + session come from `_lib/session.ts`.
 - Money is CNY rendered via `@/lib/money` (`¥1,234.56`); risk uses `RISK_LABEL` (🟢/🟡/🔴).
 - **Determinism**: routes must build/render without network; agent runs use `LLM_MODE=mock`.
@@ -134,16 +146,16 @@ cancel(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
   invoke them directly, asserting: zod mismatch → `400 VALIDATION`, each `AppError` → its mapped
   status, success → `{ ok:true, data }`, domain failures → `200` with `data.ok=false`, and that the
   MFA code never appears in a body.
-- **Dependencies mocked at the module boundary** (`vi.mock('@/agent')`, `vi.mock('@/banking-sdk')`,
-  `vi.mock('@/audit')`, `vi.mock('@/planner')`) — no live Prisma, no network.
-- **Transport tests** for `POST /api/chat`: SSE frames + `done` terminator, and the `?stream=0`
+- **Dependencies are mocked at the module boundary** (`vi.mock('@/agent')`, `vi.mock('@/banking-sdk')`,
+  `vi.mock('@/audit')`) — no live Prisma, no network.
+- **Transport tests** for `POST /api/chat`: SSE frames + single `done` terminator, and the `?stream=0`
   JSON fallback. End-to-end acceptance (the 12 demo scenarios) is driven through `@/agent` + `../tests`.
-- `_lib/http.ts` (envelope/error-map/SSE encoders) is pure and unit-tested in place.
+- `_lib/http.ts` (envelope/error-map/SSE encoders) and `_lib/task-plans.ts` (row → `TaskPlan`) are pure.
 
 ## Routing Table
 
 - `./health/route.ts` → `GET /api/health` liveness + `llmMode` probe
-- `./chat/route.ts` → `POST /api/chat` — one agent turn (SSE stream or JSON), first-turn session cookie
+- `./chat/route.ts` → `POST /api/chat` — one agent turn (SSE stream or JSON), session cookie on every response
 - `./actions/[id]/confirm/route.ts` → `POST /api/actions/[id]/confirm` — execute a confirmed pending action
 - `./actions/[id]/verify/route.ts` → `POST /api/actions/[id]/verify` — MFA code submission for a RED action
 - `./actions/[id]/cancel/route.ts` → `POST /api/actions/[id]/cancel` — cancel a pending action
@@ -155,15 +167,28 @@ cancel(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
 - `./bills/route.ts` → `GET /api/bills` — spending analysis + transactions + anomalies
 - `./cards/route.ts` → `GET /api/cards` — cards read model
 - `./subscriptions/route.ts` → `GET /api/subscriptions` — subscriptions read model
-- `./_lib/` → shared handler plumbing (envelope, error mapping, zod parse, SSE, session) — private `_`-folder, never a route
+- `./_lib/` → shared handler plumbing (envelope, error mapping, zod parse, SSE, session, task-plan mapping) — private `_`-folder, never a route
 - `../tests/app/` → route-handler contract tests (sibling — read-only, escalate writes to parent)
 
 ## Notes for Agents
 
-- **These are design stubs.** Every `route.ts` exports its handler signatures + zod schemas +
-  JSDoc and throws `AppError('INTERNAL','not implemented')`; the `_lib/*` helpers (envelope,
-  error map, zod parse, SSE, session) ARE implemented (pure transport, no business logic). Real
-  handler bodies are a later implementation pass.
+- **All handlers are implemented.** Each `route.ts` validates with zod, delegates to the owner node
+  and serializes; the body is wrapped in try/catch → `errorResponse(e)`.
+- **Next.js 15 route-export rule.** A `route.ts` may export ONLY HTTP-method handlers and known config
+  fields (`dynamic`/`revalidate`/`runtime`/…). Any other runtime `export const` (e.g. a zod schema) fails
+  the build with `Property 'X' is incompatible with index signature … not assignable to type 'never'`.
+  Keep route-local zod schemas as NON-exported `const`s (or move them into `_lib/schemas.ts`); `export type`
+  / `export interface` are fine.
+- **`@/planner` has no cross-request plan store.** `/api/tasks*` read the persisted `AgentTask`/
+  `AgentTaskNode` rows through the sanctioned read path `@/lib/db/repositories/task` and map them to
+  `TaskPlan` in `_lib/task-plans.ts`; the executor's `PlanControls` are in-process and not reachable
+  across HTTP. `GET /api/tasks` with an unknown/empty session returns `{plans:[]}` (200);
+  `GET /api/tasks/[id]` unknown → `404 NOT_FOUND`. `POST /api/tasks/[id]` steering is best-effort on the
+  persisted row (`cancel→'cancelled'`, `resume→'running'`, `pause→'pending'`, `retry→'pending'` + nodes reset).
+- **Actions routes** map `ConfirmationOutcome` → `_lib/types.ActionResponse`: `requiresMfa = tier === 'RED'`,
+  `sessionId` from the persisted `PendingAction` row (fallback `resolveSessionId`), `mfaResult` derived
+  (`verify` → `ok?'success':(status==='awaiting_mfa'?'failed':'not_required')`, else `'not_required'`).
+  A `cancel` of an unknown/settled action surfaces the owner's thrown `AppError('NOT_FOUND'|'CONFLICT')`.
 - Add a new client-callable capability as a route group here; a group with a dynamic id uses a
   `[id]/route.ts` leaf. Folders prefixed `_` (like `_lib`) are private and never routed.
 - Any new shared domain type belongs in `@/lib/contracts` (root-owned); app-only transport types
