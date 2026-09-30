@@ -12,8 +12,6 @@ import { describe, it } from 'vitest';
 // import { runTurn, newSessionId, toolEventsOf, cardsOfType } from '../helpers/scenario';
 // import { useFreshDatabase, resetDatabase, getTestPrisma } from '../helpers/db';
 // import { DEMO_USER_ID, ACCOUNTS } from '../helpers/fixtures';
-// import { getTestPrisma } from '../helpers/db';
-
 describe('Scenario 1 — 查询余额 (GREEN auto-execute)', () => {
   it.todo('seeds the demo world and scripts a get_balance call for "查询我的余额"');
   it.todo('get_balance executes inline with NO confirmation (no PendingAction created)');
