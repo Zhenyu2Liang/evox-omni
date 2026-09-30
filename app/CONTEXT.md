@@ -66,7 +66,7 @@ authoritative endpoint table.
 | GET | `/api/cards` | query `{ userId? }` | `{ cards: CardView[] }` |
 | GET | `/api/subscriptions` | query `{ userId? }` | `{ subscriptions: SubscriptionView[] }` |
 
-`ActionResponse` (shared shape for every action route):
+`ActionResponse` (shared shape for every action route) is defined in `app/api/_lib/types.ts`:
 
 ```ts
 interface ActionResponse {
@@ -115,38 +115,49 @@ interface ActionResponse {
 - A mid-turn failure emits `data: {"type":"error","message":"<safe message>"}\n\n` then `done`.
 - Non-streaming fallback: `?stream=0` (or `Accept: application/json`) returns `200 { ok:true, data: ChatTurnResponse }`
   where `data = { sessionId, events: AgentStreamEvent[] }`.
-- The route drives the same agent entry point either way: `agent.runTurn({ sessionId?, message })` — when
-  `runTurn` has NO `onEvent` sink — it returns the FULL ordered `AgentStreamEvent[]`, already ending in
-  a `done` event). Streaming mode writes those events as SSE frames.
+- The route drives the same agent entry point either way: `agent.runTurn({ sessionId?, message })`
+  (`../agent`). `runTurn` has NO `onEvent` sink — it returns the FULL ordered `AgentStreamEvent[]`
+  (already ending in a `done` event). Streaming mode writes those events as SSE frames (guarding that
+  exactly one `done` is emitted); `?stream=0` returns them verbatim in `ChatTurnResponse`.
 - On every turn the route sets `Set-Cookie: banking_session=<sessionId>` (constant `SESSION_COOKIE`)
   so subsequent turns and `GET /api/*` reads share the session.
 
 ## Agent runtime surface this node depends on (`../agent`)
 
 Route handlers call only these **agent-contract** entry points (owner: `../agent`); the app node never
-constructs an `Agent` itself:
+constructs an `Agent` itself. Real signatures (verified against `../agent`):
 
 ```ts
-type EventSink = (event: AgentStreamEvent) => void;
-runTurn(input: { sessionId?: string; message: string; userId: string }, onEvent?: EventSink): Promise<ChatTurnResponse>;
-resumeTurn(sessionId: string, onEvent?: EventSink): Promise<ChatTurnResponse>;
-confirm(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
-verify(actionId: string, code: string, onEvent?: EventSink): Promise<ActionResponse>;
-cancel(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
+runTurn(req: ChatTurnRequest, deps?: RunTurnDeps): Promise<ChatTurnResponse>; // full ordered events; no onEvent sink
+resumeTurn(req: ResumeTurnInput): Promise<ChatTurnResponse>;
+confirm(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>; // alias of confirmAction
+verify(actionId: string, code: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>; // alias of verifyAction
+cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>; // alias of cancelAction
 ```
+
+`confirm`/`verify`/`cancel` return `ConfirmationOutcome` (it lacks `sessionId`/`requiresMfa`/`mfaResult`),
+so the action routes **derive** those `ActionResponse` fields: `sessionId` from the persisted
+`PendingAction` row (falling back to the request cookie/query), `requiresMfa` from `tier === 'RED'`, and
+`mfaResult` from the verify outcome. A `data.ok === false` outcome (wrong MFA, blocked, cancelled) is a
+normal `200` — never an HTTP error.
 
 ## Dependencies
 
 - `../components` (sibling — read-only): the React component library the pages compose (`ChatWindow`,
   chat cards, charts, banking tiles, ui primitives). Component API is owned there.
+  **Note**: some presentational components are still `return null` design stubs on that side
+  (e.g. `Card`, `CardTile`, `Table`, `Badge`, `StatusBadge`, `EmptyState`, `SubscriptionTile`); pages
+  compose and type-check correctly but render blank until `../components` implements them.
 - `../agent` (sibling — read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`,
   `AgentStreamEvent` emission).
 - `../banking-sdk` (sibling — read-only): read models (`banking.dashboard/account/transaction/card/subscription/…`, DTOs in `banking-sdk/types`).
 - `../security` (sibling — read-only): circuit-breaker lock state for `/api/security`.
 - `../audit` (sibling — read-only): `listAudit`, `getAuditSummary`, `listSecurityEvents`, `getSecurityStatus`.
-- `../planner` (sibling — read-only): task-plan read + control for `/api/tasks*`.
+- `../planner` (sibling — read-only): exposes DAG/executor/buildPlan + types only — NO cross-request plan
+  store. `/api/tasks*` therefore reads persisted `AgentTask`/`AgentTaskNode` rows via
+  `../lib/db/repositories/task`, mapped by the pure helper `app/api/_lib/task-plans.ts`.
 - `../lib` (sibling — read-only): contracts (`ChatTurnRequest`, `ChatTurnResponse`, `AgentStreamEvent`, `AuditEntry`, `SecurityEvent`, `PendingActionStatus`, `TaskPlan`, `RiskLevel`), `AppError`/`ErrorCode`/`Result`, `getConfig`, `SESSION_COOKIE`, `DEFAULT_DEMO_USER_ID`, `formatCNY`.
-- `../tests/app` (sibling — read-only, escalate writes to root): route-handler contract tests.
+- `../tests` (sibling — read-only, escalate writes to root): automated tests (`../tests/app` would host route-handler contract tests; that directory does not exist yet).
 
 ## Constraints
 
@@ -155,6 +166,9 @@ cancel(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
 - Route handlers stay **thin and ≲ ~150 lines**; page files ≲ ~120 lines. Split by responsibility;
   push shared handler plumbing into `app/api/_lib/http.ts` (private `_`-folder — never a route).
 - **Validate every request body/query with zod** before delegating; reject with `AppError('VALIDATION')`.
+- **Next.js route-export constraint**: an App Router `route.ts` may export ONLY HTTP-method handlers +
+  known config fields (`dynamic`/`revalidate`/`runtime`). Route-local zod schemas MUST be non-exported
+  consts (or live in `_lib/schemas.ts`) — exporting them breaks `next build`.
 - Pages pass only **serializable** props to client components (no class instances, no `Date` — epoch ms).
 - Money is CNY rendered via `formatCNY` (`¥1,234.56`); status uses 🟢/🟡/🔴 from `RISK_LABEL`.
 - **Determinism**: pages/routes must build and render without network; agent runs use `LLM_MODE=mock`.
@@ -162,7 +176,7 @@ cancel(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
 
 ## Test Strategy
 
-- **Route-handler contract tests** live in `../tests/app/` (Vitest). Handlers are plain
+- **Route-handler contract tests** would live in `../tests/app/` (Vitest). Handlers are plain
   `(req: NextRequest, ctx) => Response` functions, so tests invoke them directly with synthetic
   `Request` objects and assert: zod rejection → `400 VALIDATION`, `AppError` → correct HTTP status,
   success → `{ ok:true, data }` envelope, and that the MFA code never appears in a body.
@@ -176,7 +190,7 @@ cancel(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
 
 - `./` → Dashboard page + root layout/globals (this node's own files: `layout.tsx`, `globals.css`, `page.tsx`)
 - `./agent` → AI Agent chat page (renders the client `ChatWindow`)
-- `./api` → HTTP API route handlers (chat SSE, actions confirm/verify/cancel, tasks control, audit, security, read models, health) + shared `_lib/http.ts`
+- `./api` → HTTP API route handlers (chat SSE, actions confirm/verify/cancel, tasks control, audit, security, read models, health) + shared `_lib/` (http, types, schemas, session, task-plans)
 - `./audit` → Audit Log page
 - `./bills` → Bills / 账单 page
 - `./cards` → Cards page
@@ -188,8 +202,8 @@ cancel(actionId: string, onEvent?: EventSink): Promise<ActionResponse>;
 
 ## Notes for Agents
 
-- The pages and route handlers here are **design stubs**: exported signatures + zod schemas + JSDoc
-  contracts only; handler bodies throw `not implemented`. Real logic is a later implementation pass.
+- The pages and route handlers here are **fully implemented** (no `not implemented` stub bodies remain).
+  Each route is thin (`validate → delegate → serialize`); shared plumbing lives in `app/api/_lib/`.
 - Add a new client-callable capability as a route under `./api`; add a new screen as a page dir with its
   own `CONTEXT.md`. Never import Prisma into a page or a client component.
 - Any new shared UI/transport type belongs in `../lib/contracts` (root-owned) — do not define it locally.
