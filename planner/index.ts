@@ -12,3 +12,6 @@ export { buildPlan } from './dag';
 export type { BuildPlanInput } from './dag';
 
 export type { PlanDeps, PlanToolOutcome, PlanControls, RunPlanOptions } from './executor';
+
+// Re-export the frozen plan/node contracts consumed by planner callers.
+export type { TaskPlan, TaskNodeSpec, TaskNodeResult, TaskCondition } from '@/lib/contracts/task';
