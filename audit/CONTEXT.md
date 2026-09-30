@@ -89,6 +89,16 @@ re-exports each function and its types.
   verify the required fields landed for each gated execution and blocked/confirmed decision.
 - No network and no live Prisma required for unit tests; use the test SQLite DB for reads.
 
+## Known Issues
+
+- `AuditEntry.userRequest` is NEVER populated: both `recordAudit` call sites in `../agent/confirmation.ts` hardcode `userRequest: ''` (confirm/verify path ~line 135; cancel path ~line 224), and the Security Gateway drops `GatewayContext.userRequest` (never persisted on `PendingAction`). The audit trail therefore never records what the user actually asked.
+- `AuditEntry.intent` is NEVER populated — neither `recordAudit` call passes it, so it stays undefined/null (contract field optional, Prisma column nullable).
+- Audit `timestamp` uses raw `Date.now()` in `../agent/confirmation.ts` (confirm/verify + cancel), NOT the demo clock. This module's own `recordSecurityEvent` defaults to `demoNow()`, so AuditEntry and SecurityEvent rows for the same flow carry inconsistent clocks (violates the root demo-clock decision).
+- On the cancel path `toolResult` and `mfaResult` are intentionally omitted (nothing executed / no MFA) and persisted null (see `cancelAction` in `../agent/confirmation.ts`).
+- `SecurityEventKind` values `HIGH_RISK_BLOCKED`, `LIMIT_EXCEEDED`, `ANOMALY_FLAGGED`, `SECURITY_RESET` have NO producer anywhere: the gateway's locked-session `deny` returns a block reason but writes no `HIGH_RISK_BLOCKED` event, and `circuit-breaker.reset()` deletes in-memory state without emitting `SECURITY_RESET`, so `getSecurityStatus`'s event-derived lock fallback can never observe a reset (the API injects the authoritative breaker, so runtime is unaffected).
+- Confirmed producers of the three required control events: `CIRCUIT_BREAKER_TRIPPED` (`../security/circuit-breaker.ts` recordFailure), `MFA_FAILURE` (`../security/mfa.ts` verify), `INJECTION_ATTEMPT` (`../security/injection-guard.ts` reportInjection, called by `../agent/run-turn.ts`).
+- No dedicated unit tests for this node (`../tests/unit/` has `security/`, `planner/`, `banking-sdk/` but no `audit/`); coverage is indirect via the scenario suite (test-02/03/04/10), which asserts toolName/riskLevel/status/confirmationRequired/confirmed/mfaRequired/mfaResult but NOT userRequest/intent/timestamp.
+
 ## Notes for Agents
 
 - Do not add business/risk logic to this node — logging and querying only.
