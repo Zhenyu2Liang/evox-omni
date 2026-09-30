@@ -48,7 +48,7 @@ Run:
 - **Test isolation.** DB-backed suites reset + seed via `helpers/db.resetDatabase()` (typically in
   `beforeEach` through `useFreshDatabase()`); never share mutable DB state across tests.
 - **Implemented.** Every spec has real assertions (no `it.todo`); DB-backed suites reset + seed
-  case; bodies are filled in Phase 2 once the modules under test are implemented. Specs must remain
+  per test. Specs stay **load-safe** (no top-level Prisma construction outside DB-backed cases).
   **load-safe** (no runtime import of Prisma-constructing modules) so pure collections never fail.
 - **Never re-implement the code under test.** Tests assert behaviour through the public
   facades (`@/security`, `@/planner`, `@/banking-sdk`, `@/agent`); they do not fork contracts or logic.
