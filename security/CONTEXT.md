@@ -149,7 +149,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   `amount`, and `ctx.dailyTransferTotal`. Model output and user text are NEVER inputs to the decision.
 - **Pure/deterministic where possible**: `permission-engine`, `risk-engine.evaluateTransferRisk`,
   `injection-guard.scan`, `decide`, `serializeBlockReason`, `parseBlockReason`, `buildPendingActionSummary`
-  perform NO I/O. Inject `now` (default `Date.now()`) for time-dependent logic so tests are stable.
+  perform NO I/O. Inject `now` (default `demoNow()`, the demo clock) for time-dependent logic so tests are stable.
 - **No I/O in the decision; I/O only where required**: DB access is confined to `risk.computeDailyTransferTotal`
   (transaction repo), `mfa` (pendingAction/mfaChallenge repos), `circuit-breaker.recordFailure` and
   `injection.reportInjection` (audit). The gateway persists pending actions via the pendingAction repo.
