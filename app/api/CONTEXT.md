@@ -203,6 +203,10 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   `sessionId` from the persisted `PendingAction` row (fallback `resolveSessionId`), `mfaResult` derived
   (`verify` → `ok?'success':(status==='awaiting_mfa'?'failed':'not_required')`, else `'not_required'`).
   A `cancel` of an unknown/settled action surfaces the owner's thrown `AppError('NOT_FOUND'|'CONFLICT')`.
+  Each action route ALSO enforces OWNERSHIP before delegating: `resolveSessionId` + `resolveUserId`, then a
+  `getPendingAction` guard that rejects an explicit session/user mismatch with `403 SECURITY_DENIED`; it then
+  delegates through `_lib/agent-bridge` (`confirmOwned`/`verifyOwned`/`cancelOwned`), which forwards the
+  `{ userId, sessionId }` ownership bag to `@/agent`.
 - Add a new client-callable capability as a route group here; a group with a dynamic id uses a
   `[id]/route.ts` leaf. Folders prefixed `_` (like `_lib`) are private and never routed.
 - Any new shared domain type belongs in `@/lib/contracts` (root-owned); app-only transport types
