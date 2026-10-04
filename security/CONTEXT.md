@@ -44,8 +44,9 @@ async function reEvaluateTransferRisk(userId: string, amount: number, now?: numb
 YELLOW pending transfers each validated at PARK time against the same (then-current) day total can
 collectively exceed ¥1000 once executed, so execution must re-derive the day total and escalate to
 RED/MFA. It reuses `TransferRiskResult` (carries `tier` / `requiresMfa` / `dailyTotal` /
-`projectedDailyTotal`) and is auto-exposed via `security.risk.reEvaluateTransferRisk`. **Wiring it
-into the confirm/execution path (agent/app layer) is a LATER task — this node only provides the helper.**
+`projectedDailyTotal`) and is auto-exposed via `security.risk.reEvaluateTransferRisk`. The gateway's
+`authorizeAction` calls it (only for `transfer_money`) at CONFIRM time, so a parked transfer whose
+FRESH day total now crosses the ¥1000 limit is refused the confirmation-only path and requires MFA.
 
 ### `circuit-breaker.ts` — session-scoped consecutive-failure breaker (in-memory)
 ```ts
@@ -93,9 +94,10 @@ interface SecurityGateway {
   decide(ev, ctx): SecurityDecision
   createPendingAction(ctx, ev): Promise<PendingAction>
   serializeBlockReason(decision, action): string
-  parseBlockReason(reason): { actionId: string; decision: SecurityDecisionKind } | null
-  authorizeAction(actionId, opts?: { mfaCode?: string }): Promise<AuthorizationResult>
-  cancelAction(actionId): Promise<PendingAction>
+  parseBlockReason(reason): { actionId: string; decisionKind: SecurityDecisionKind } | null
+  authorizeAction(actionId, opts?: { mfaCode?: string; userId?: string; sessionId?: string }): Promise<AuthorizationResult>
+  cancelAction(actionId, opts?: { userId?: string; sessionId?: string }): Promise<PendingAction>
+  recordActionResult(actionId, status: 'executed'|'failed'): Promise<void>   // persist the TRUE terminal status AFTER the caller executes
   handleToolCall(ctx): Promise<ToolCallAuthorization>    // beforeToolCall entry: evaluate→decide→(persist+reason when gated)
 }
 const securityGateway: SecurityGateway
@@ -104,6 +106,18 @@ const TOOL_INTENT: Record<ToolName, string>                         // code-driv
 function deriveIntent(toolName: ToolName): string                   // TOOL_INTENT[toolName], else the raw tool name (never empty)
 // `createPendingAction` persists ctx.userRequest + deriveIntent(ctx.toolName); `toContractPendingAction` surfaces both on the returned PendingAction.
 ```
+`authorizeAction` gate order (fail-closed): (1) OWNERSHIP — a supplied `opts.userId` / `opts.sessionId`
+that does not match the row throws `AppError('SECURITY_DENIED')` (the codebase `ErrorCode` union has no
+`FORBIDDEN`); (2) CIRCUIT BREAKER — a locked session returns `{ ok:false, status:'locked' }`; (3) EXECUTION-TIME
+RE-RISK for `transfer_money` — a fresh `reEvaluateTransferRisk` that is now RED refuses the confirmation-only
+path and requires MFA (the row's `requiresMfa` column stays `false` for an escalated YELLOW transfer, so the
+flow is routed on `effectiveRequiresMfa = row.requiresMfa || freshRed`); (4) YELLOW confirm when
+`!effectiveRequiresMfa`; (5) RED/escalated verify. Both success paths transition via the atomic, ownership-scoped
+`claimPendingAction({ actionId, from:[…], to:'confirmed' })` (from `['pending']` for YELLOW, from
+`['awaiting_mfa','pending']` for RED/escalated); a claim transitioning 0 rows throws `AppError('CONFLICT')`, so a
+repeat confirm can NOT re-authorize. `cancelAction` claims `['pending','awaiting_mfa'] → 'cancelled'` (same
+ownership check) and rejects a settled action with `CONFLICT`. `recordActionResult(id, status)` persists the
+terminal `'executed'`/`'failed'` status AFTER the caller has executed the operation.
 
 ### `index.ts` — facade
 ```ts
@@ -138,12 +152,13 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
         returned as beforeToolCall block reason ──► model sees "awaiting confirmation/MFA", replies to user
 
    ── human decision (API route) ────────────────────────────────────────────────
-   POST /api/actions/:id/confirm   ──► authorizeAction(id)                (YELLOW ⇒ status 'confirmed')
-   POST /api/actions/:id/verify    ──► authorizeAction(id, { mfaCode })   (RED ⇒ mfa.verify ⇒ 'confirmed')
-   POST /api/actions/:id/cancel    ──► cancelAction(id)                   (status 'cancelled')
+   POST /api/actions/:id/confirm   ──► authorizeAction(id, { userId?, sessionId? })            (ownership → breaker → re-risk → claim ⇒ 'confirmed')
+   POST /api/actions/:id/verify    ──► authorizeAction(id, { mfaCode, userId?, sessionId? })   (RED/escalated ⇒ mfa.verify ⇒ claim ⇒ 'confirmed')
+   POST /api/actions/:id/cancel    ──► cancelAction(id, { userId?, sessionId? })               (claim ⇒ 'cancelled')
                 ▼
         AuthorizationResult.ok ──► agent layer executes ORIGINAL validated args via Banking SDK
                                    (gateway only authorizes; it never executes)
+                                   then recordActionResult(id, 'executed'|'failed')
                 ▼
         real tool result injected into session ──► agent.continue() narrates the factual outcome
 ```
@@ -173,11 +188,17 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 - **No I/O in the decision; I/O only where required**: DB access is confined to `risk.computeDailyTransferTotal` /
   `risk.reEvaluateTransferRisk` (transaction repo), `mfa` (pendingAction/mfaChallenge repos),
   `circuit-breaker.recordFailure` / `circuit-breaker.resetSession` and `injection.reportInjection` (audit).
-  The gateway persists pending actions via the pendingAction repo. This node NEVER imports prisma directly.
+  The gateway persists and mutates pending actions via the pendingAction repo (create / get / atomic
+  `claimPendingAction` / `setPendingActionStatus`). This node NEVER imports prisma directly.
 - **The gateway does NOT execute business operations** — it only authorizes. Execution is the agent layer's job.
+- **Exactly-once authorization**: a confirm/cancel transitions the action via `claimPendingAction` (a single
+  `updateMany` compare-and-set). Only the call that moves the row from an unsettled status to `confirmed` /
+  `cancelled` returns `true`; every other caller gets `false` → `AppError('CONFLICT')`. This is what makes a
+  repeat confirm / cancel-after-confirm / confirm-after-cancel fail closed instead of duplicating money movement.
 - **Error strategy**: pure helpers throw `AppError` (`lib/errors`); fallible I/O paths return `Result<T>`
   (`mfa.verify`) or throw `AppError` at boundaries. NEVER swallow an error, never fire-and-forget an event write
   (`recordFailure`/`resetSession`/`reportInjection` are awaited). Never leak a raw exception or the MFA code to the model/UI.
+  Ownership rejection uses `AppError('SECURITY_DENIED')` — `ErrorCode` has NO `FORBIDDEN`.
 - **Circuit breaker is a hard gate the LLM cannot clear**: 3 consecutive MFA failures (`MFA_MAX_ATTEMPTS`)
   trip it for the session and emit `CIRCUIT_BREAKER_TRIPPED`.
 - **A tripped breaker denies ALL tiers — including 🟢 GREEN reads** (intended hard gate).
@@ -204,9 +225,12 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   route/API caller invokes it yet — the security-center unlock button is still not connected. Until an app
   node wires it, a tripped session stays locked for the process lifetime (`recordSuccess` clears the counter
   but explicitly does NOT unlock).
-- **Execution-time re-risk (`reEvaluateTransferRisk`) is not yet wired into the execution path.**
-  The helper exists and re-derives the day total fresh, but the confirm/execution path (agent/app layer) does
-  not call it yet, so the stale-parked-transfer bypass is only closed once that later task wires it in.
+- **`recordActionResult` / ownership opts are not yet adopted by the agent/app layer.**
+  The gateway supports `authorizeAction(id, { userId, sessionId })`, `cancelAction(id, { userId, sessionId })`
+  and `recordActionResult(id, 'executed'|'failed')`, but `agent/confirmation.ts` still calls the old signatures
+  (no ownership) and never records the true terminal status. Until it calls `recordActionResult` after the SDK
+  execution, an executed action stays `confirmed` — protected only by the exactly-once claim (a repeat confirm
+  still yields `CONFLICT`), but the persisted status never becomes `executed`/`failed`.
 - **Injection guard does NOT add a system reminder to the model context.**
   The only caller (`agent/run-turn.ts` ~L353-357) emits a UI `security_event` (kind `injection`) after `reportInjection`; nothing is appended to the agent's system prompt/messages, despite the `injection-guard.ts` header saying so.
   Detection, the `INJECTION_ATTEMPT` event, and never-grants-permission all hold (defense-in-depth unaffected).
@@ -231,7 +255,9 @@ Frozen imports (already exist, DO NOT redefine): `lib/contracts/{risk,tools,secu
 Repository functions this node consumes (confirmed signatures — do NOT fork):
 - `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>` (sibling node; implemented, callers `await` it — but its writes are BEST-EFFORT and swallow persistence failures, see Known Issues)
 - `lib/db/repositories/pendingAction` → `createPendingAction(input): Promise<PendingAction>` (input also accepts optional `userRequest` / `intent`, written through),
-  `getPendingAction(id): Promise<(PendingAction & { mfa: MfaChallenge | null }) | null>`, `updatePendingActionStatus(id, status): Promise<PendingAction>`
+  `getPendingAction(id): Promise<(PendingAction & { mfa: MfaChallenge | null }) | null>`,
+  `claimPendingAction({ actionId, from, to, userId?, sessionId? }): Promise<boolean>` (the atomic compare-and-set used by `authorizeAction`/`cancelAction`; `true` iff exactly one row transitioned),
+  `setPendingActionStatus(id, status)` (unconditional setter, used by `recordActionResult`; aliased from `updatePendingActionStatus(id, status): Promise<PendingAction>`)
 - `lib/db/repositories/pendingAction` (MFA challenge rows live in the SAME module) → `createMfaChallenge({ actionId, code, maxAttempts?, expiresAt? }): Promise<MfaChallenge>`,
   `getMfaChallenge(actionId): Promise<MfaChallenge | null>` (carries `code` — never expose it),
   `incrementMfaAttempts(actionId): Promise<MfaChallenge>`, `updateMfaChallengeStatus(actionId, status): Promise<MfaChallenge>`, `resetMfaAttempts(actionId): Promise<MfaChallenge>`
@@ -246,6 +272,11 @@ Vitest. This node is designed to be unit-testable WITHOUT network or clock:
   per test to isolate the in-memory breaker; assert `recordFailure` emits `CIRCUIT_BREAKER_TRIPPED`
   and `resetSession` emits `SECURITY_RESET`. The gateway audit-trail specs assert the persisted
   `userRequest` + `intent` round-trip through `createPendingAction`/`handleToolCall`.
+- Authorization-hardening units (`security/_tests/authorize-hardening.test.ts` → intended home
+  `tests/unit/security/`) prove the exactly-once claim (`repeated confirm ⇒ CONFLICT`, confirm-after-cancel
+  and cancel-after-confirm ⇒ `CONFLICT`), the ownership rejection (`SECURITY_DENIED`), the execution-time
+  transfer re-risk escalation (parked YELLOW transfer escalates to MFA then still completes with the code),
+  `recordActionResult` persistence, and the locked-session refusal.
 - End-to-end agent scenarios (Tests 1–12, incl. injection & confirmation) live under `../tests/`.
 
 ## Routing Table
@@ -257,7 +288,8 @@ This is a **leaf node** — it has no child directories; the modules above are i
 
 - Every money-moving tool MUST be gated through `securityGateway` — never add a tool that bypasses the policy table.
 - When adding a tool, add its entry to `TOOL_POLICY` **and** `TOOL_INTENT` (both typed `Record<ToolName, …>` make a missing key a compile error).
-- `PendingAction.args` are the ORIGINAL validated args — `authorizeAction` re-checks the breaker but must not re-trust model text.
-- Keep the MFA code inside `mfa.ts`; `MfaChallengeView.hint` and all `message` strings must never contain it.
-- Use `risk.reEvaluateTransferRisk(userId, amount, now?)` — not the park-time result — when authorizing a transfer for EXECUTION, so the fresh day total is enforced.
-- **Node-local validation specs (pending relocation to the root-owned `../tests/`)**: `security/_tests/*.test.ts` + `security/_vitest.local.config.ts` are validated unit specs runnable via `npx vitest run --config security/_vitest.local.config.ts` (the root `vitest.config.ts` discovers only `tests/**`). They use portable `@/` imports and cover the circuit-breaker trip/reset audit-event completeness, the locked-session all-tiers (incl. 🟢 GREEN) denial, `reEvaluateTransferRisk` execution-time re-risk, and `MFA_FAILURE` detail completeness. Relocate them under `tests/unit/security/` and delete the local config.
+- `PendingAction.args` are the ORIGINAL validated args — `authorizeAction` re-checks the breaker / re-risks a transfer but must not re-trust model text.
+- Keep the MFA code inside `mfa.ts`; `MfaChallengeView.hint` and all `message` strings must never contain it (incl. `TRANSFER_ESCALATED_MESSAGE`).
+- `authorizeAction`/`cancelAction` transition status ONLY through `claimPendingAction` (atomic compare-and-set) — never a status peek then unconditional write; ownership mismatches use `AppError('SECURITY_DENIED')` (no `FORBIDDEN` code exists).
+- After the agent layer executes an authorized action (or it fails), call `securityGateway.recordActionResult(id, 'executed'|'failed')` so the persisted terminal status is truthful and a later confirm/cancel is a `CONFLICT` (see Known Issues — not yet wired).
+- **Node-local validation specs (pending relocation to the root-owned `../tests/`)**: `security/_tests/*.test.ts` + `security/_vitest.local.config.ts` are validated unit specs runnable via `npx vitest run --config security/_vitest.local.config.ts` (the root `vitest.config.ts` discovers only `tests/**`). They use portable `@/` imports and cover the circuit-breaker trip/reset audit-event completeness, the locked-session all-tiers (incl. 🟢 GREEN) denial, `reEvaluateTransferRisk` execution-time re-risk, `MFA_FAILURE` detail completeness, and the confirmation-authorization hardening (exactly-once claim / ownership / escalation / `recordActionResult`). Relocate them under `tests/unit/security/` and delete the local config.
