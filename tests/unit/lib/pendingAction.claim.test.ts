@@ -1,15 +1,16 @@
 /**
  * pendingAction.claim.test.ts — DB-backed unit spec for the ATOMIC, ownership-aware
- * persistence primitives added to `lib/db/repositories/pendingAction.ts`.
+ * persistence primitives of `lib/db/repositories/pendingAction` (`claimPendingAction`
+ * exactly-once `pending → confirmed`, the `from`-set match, `userId`/`sessionId` scoping,
+ * `setPendingActionStatus` + `getPendingActionOwnership`).
  *
- * Lives INSIDE the `lib/db/repositories` node (the sibling `tests/` node is read-only), and is
- * run through `lib/db/vitest.staging.config.ts` against the REAL test SQLite
- * (`tests/helpers/db` + `tests/helpers/fixtures` imported READ-ONLY).
- *
- *     npx vitest run --config lib/db/vitest.staging.config.ts
+ * Lives in the root Vitest test tree (`tests/unit/lib/`) and runs under the ROOT
+ * `vitest.config.ts` — its `include` glob matches every `*.{test,spec}.ts` under `tests/`
+ * recursively — via `npm run test`, against the REAL test SQLite
+ * (`tests/helpers/db` + `tests/helpers/fixtures`).
  *
  * A UNIQUE `sessionId` per test keeps the circuit-breaker/session state isolated — the shared
- * SQLite file is reset+seeded before every test.
+ * SQLite file is reset+seeded before every test (DB-backed).
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
