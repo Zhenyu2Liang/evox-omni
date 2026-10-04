@@ -121,6 +121,10 @@ export function pausePlan(plan: TaskPlan, opts: PausePlanOptions = {}): TaskPlan
  * Pure compensation report over a plan snapshot: classifies every node by its
  * recorded result so the caller can see exactly what executed before a halt.
  * Never mutates the plan; missing results are treated as not-executed.
+ *
+ * The planner performs NO automatic compensation/rollback (see `cancelPlan`):
+ * this report hands the executed / skipped / cancelled partition to the caller
+ * — which alone knows a tool's inverse action — for MANUAL takeover.
  */
 export function compensationReport(plan: TaskPlan, cancelledAt?: number): CompensationReport {
   const executed: string[] = [];
@@ -155,6 +159,14 @@ export function compensationReport(plan: TaskPlan, cancelledAt?: number): Compen
  * Cancelling NEVER re-executes a successful node. When `deps` is supplied the
  * cancellations and the final snapshot are persisted; `deps` may be omitted for
  * a pure in-memory cancellation.
+ *
+ * COMPENSATION POLICY (non-atomic, no automatic rollback): the planner is pure
+ * DAG logic and owns NO banking/domain semantics, so it NEVER automatically
+ * compensates or rolls back an already-executed (`success`) node — executed work
+ * is irreversible under the simulated backend. `compensationReport` exposes the
+ * executed / skipped / cancelled partition so a caller can perform MANUAL
+ * takeover; automatic compensation is intentionally deferred to the
+ * caller/agent layer, because only that layer knows a tool's inverse action.
  */
 export async function cancelPlan(
   plan: TaskPlan,
