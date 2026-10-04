@@ -171,7 +171,7 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 - `./bills/route.ts` → `GET /api/bills` — spending analysis + transactions + anomalies
 - `./cards/route.ts` → `GET /api/cards` — cards read model
 - `./subscriptions/route.ts` → `GET /api/subscriptions` — subscriptions read model
-- `./_lib/` → shared handler plumbing (envelope, error mapping, zod parse, SSE, session, task-plan mapping) — private `_`-folder, never a route
+- `./_lib/` → shared handler plumbing (envelope, error mapping, zod parse, SSE, session, task-plan mapping, agent bridge) — private `_`-folder, never a route
 - `../tests/app/` → route-handler contract tests (sibling — read-only, escalate writes to parent)
 
 ## Notes for Agents
