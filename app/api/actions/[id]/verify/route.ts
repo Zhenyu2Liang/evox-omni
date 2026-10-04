@@ -3,8 +3,11 @@
  *
  * Contract:
  *  - Body: `{ code: string }` (validated with the non-exported `mfaVerifySchema`).
- *  - Delegates to the agent runtime `verify(actionId, code)` (`@/agent`), which checks the code
- *    against the mock MFA value and, on success, executes the original validated args.
+ *  - Ownership guard: the caller's session/user must own the pending action; an explicit mismatch
+ *    is rejected with `403 SECURITY_DENIED`.
+ *  - Delegates to the agent runtime via `_lib/agent-bridge` `verifyOwned(id, code, { userId, sessionId })`
+ *    (`@/agent`), which checks the code against the mock MFA value and, on success, executes the
+ *    original validated args.
  *  - A WRONG code is a NORMAL 200 with `data.ok === false` and `data.status === 'awaiting_mfa'`
  *    (`mfaResult: 'failed'`); three consecutive failures trip the circuit breaker (`423`).
  *  - The MFA code is NEVER echoed back in any response body (only `mfaResult` is reported).
@@ -13,11 +16,11 @@
  */
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
-// Agent runtime contract (owner: `@/agent`).
-import { verify } from '@/agent';
+import { AppError } from '@/lib/errors';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
+import { verifyOwned } from '../../../_lib/agent-bridge';
 import { errorResponse, jsonResponse, parseBody } from '../../../_lib/http';
-import { resolveSessionId } from '../../../_lib/session';
+import { resolveSessionId, resolveUserId } from '../../../_lib/session';
 import type { ActionResponse, IdRouteContext } from '../../../_lib/types';
 
 /** Request body schema for `POST /api/actions/[id]/verify`. */
@@ -30,11 +33,24 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
   try {
     const id = (await ctx.params).id;
     const { code } = await parseBody(mfaVerifySchema, req);
-    const outcome = await verify(id, code);
+    const sessionId = resolveSessionId(req);
+    const userId = resolveUserId(req);
 
-    // `ConfirmationOutcome` does not carry the session id: resolve it from the persisted
+    // Ownership guard: a caller may only settle its OWN pending action. Only an explicit mismatch
+    // is rejected — when no session is resolvable we do NOT invent one.
+    const row = await getPendingAction(id);
+    if (
+      row &&
+      ((sessionId !== undefined && row.sessionId !== sessionId) || row.userId !== userId)
+    ) {
+      throw new AppError('SECURITY_DENIED', '无权验证该操作。');
+    }
+
+    const outcome = await verifyOwned(id, code, { userId, sessionId });
+
+    // `ConfirmationOutcome` does not carry the session id: derive it from the persisted
     // `PendingAction` row, falling back to the request session (cookie/query) when absent.
-    const sessionId = (await getPendingAction(id))?.sessionId ?? resolveSessionId(req) ?? '';
+    const responseSessionId = row?.sessionId ?? sessionId ?? '';
 
     const mfaResult = outcome.ok
       ? 'success'
@@ -44,7 +60,7 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
 
     const mapped: ActionResponse = {
       actionId: outcome.actionId,
-      sessionId,
+      sessionId: responseSessionId,
       ok: outcome.ok,
       status: outcome.status,
       tier: outcome.tier,
