@@ -163,6 +163,28 @@ Human decision (API route → `confirmation.ts`):
    (never a fabricated success) and appends `（结果播报失败：…）` to the message it reports.
 
 Consequence: money-moving calls are always triggered by a human decision, never by model text.
+
+Idempotency (code-enforced, `confirmation.ts`): `executeAuthorizedAction` records the TRUE terminal
+status with `gateway.recordActionResult(actionId, ok ? 'executed' : 'failed')` BEFORE auditing, and
+resolves the owner from `getSession(action.sessionId)?.userId` (NO demo-user fallback — an unknown owner
+is recorded `failed` and a `SECURITY_DENIED` is thrown). A repeat confirm or a confirm-after-cancel
+raises a gateway `CONFLICT` that `confirmAction`/`verifyAction` catch into a real `ok:false`
+(`conflictOutcome`, carrying the action's CURRENT status) — money moves AT MOST ONCE. After a confirmed
+execution it resumes the owning DAG node (`resumeOwningPlan` → `resumeTaskForAction`) and then narrates
+via `resumeTurn`.
+
+### `submit_plan` durable DAG (plan-id ↔ AgentTask-id)
+
+`runSubmitPlan` (`tools/planning.ts`, META / not risk-gated) VALIDATES the DAG, then mints the durable
+rows FIRST: `createTask({sessionId, userId, goal})` returns the `AgentTask` whose id IS the canonical
+plan id; then `plan = { ...dag.buildPlan({sessionId, goal, nodes, now}), id: task.id }` and one
+`createTaskNode(...)` per node in declaration order (`order` = index, `status:'pending'`). It then runs
+`executor.runPlan(plan, { runTool, onNodeUpdate, ...createTaskPersistence(plan.id) }, {signal, now})`,
+so every node status/output is persisted incrementally (`persistNode`) and the plan survives a refresh.
+`plan.id === AgentTask.id === taskId` on EVERY control path (`loadPlan` is `getTask` → `toTaskPlan`).
+A parked (gated) node stores the human decision it waits on inside `AgentTaskNode.output` as
+`{ pendingActionId }` (read via `readPendingActionId`) — there is NO `pendingActionId` column, and a
+gated node is NOT a failure (only a hard `failed` plan status is `ok:false`).
 (this is what demo Test 4 — prompt injection — proves).
 
 ## Constraints (hard, encode in every file)
