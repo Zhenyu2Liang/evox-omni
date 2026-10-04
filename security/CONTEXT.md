@@ -71,6 +71,8 @@ async function verify(actionId: string, code: string): Promise<Result<MfaVerifyR
 async function getChallenge(actionId: string): Promise<MfaChallengeView | null>
 ```
 
+`MFA_FAILURE` (severity `medium`) is a COMPLETE audit record → `detail: { actionId, decision: 'reject_code', result: 'attempt_counted' | 'session_locked', attempts, maxAttempts, attemptsLeft, locked }`; emitted only on a wrong code (a locked session/challenge emits none).
+
 ### `injection-guard.ts` — heuristic detection (defense-in-depth only)
 ```ts
 interface InjectionScanResult { suspicious: boolean; matched: string[]; note: string }
