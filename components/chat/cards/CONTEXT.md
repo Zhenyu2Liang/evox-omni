@@ -114,7 +114,7 @@ must populate `cards[].data` with exactly these shapes.
 
 ## Known Issues
 
-- `PlanCard` renders no confirmation/MFA action for a `waiting_confirmation`/`waiting_verification` node — a parked plan node surfaces only as the 待确认/待验证 badge (there is no [确认]/[取消] button; the confirm path lives in `ConfirmationCard`/`MfaCard`, which are only emitted for direct tool blocks — see `../CONTEXT.md` Known Issues).
+- `PlanCard` is a passive plan view that renders no confirmation/MFA action for a `waiting_confirmation`/`waiting_verification` node — a parked plan node surfaces only as the 待确认/待验证 badge (there is no [确认]/[取消] button; the confirm path lives in `ConfirmationCard`/`MfaCard`, which are only emitted for direct tool blocks — see `../CONTEXT.md` Known Issues).
 - `PlanCard` is a passive plan VIEW by design (takes only `{ plan }`): a `waiting_confirmation`/`waiting_verification` node surfaces as the 待确认/待验证 badge and renders NO confirm/cancel buttons itself. The actionable human-decision for a parked plan node is rendered ONCE by `ChatWindow` from `stream.pendingAction` (driven by the `confirmation_required`/`mfa_required` events), reusing `ConfirmationCard`/`MfaCard` — see `../CONTEXT.md` "Human-decision card".
 
 ## Constraints
