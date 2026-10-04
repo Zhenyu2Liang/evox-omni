@@ -22,7 +22,9 @@ Every spec keeps the in-process circuit breaker isolated with a UNIQUE persisted
 - `providers/provider-mock.test.ts` — pure, DB-free spec for `@/agent/providers/mock-responder`
   (`respond(context)`): fuzzy intent → tool call, two-call recipient resolution, multi-turn reuse,
   clarifications, honest failure narration, blocked gated calls (YELLOW/RED "not executed").
-  `providers/` contains ONLY this file.
+- `providers/plan-limit-park.test.ts` → pins the gated `submit_plan` conditional plan
+  (`analyze` → `check` → `setlimit`, set_card_limit YELLOW) that PARKS in `waiting_confirmation`,
+  then confirms.
 
 ## Idempotency / ownership coverage matrix (audited)
 
@@ -58,6 +60,7 @@ The repeated-confirm spec asserts the second call is `ok:false` and that the fun
 - `./task-control.test.ts` → submit_plan persistence + task-control ownership
 - `./run-turn-failure.test.ts` → continuation-failure contract (`resumeTurn`, `confirmAction`)
 - `./providers/provider-mock.test.ts` → pure `mock-responder` behaviour (regex over the LLM text)
+- `./providers/plan-limit-park.test.ts` → gated `submit_plan` conditional plan (parks, then confirms)
 - `../helpers/db.ts` → `getTestPrisma()` (lazy), `resetDatabase`, `disconnectTestPrisma` (sibling — this node)
 
 ## Known Gaps

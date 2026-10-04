@@ -30,6 +30,8 @@ runs them all — no scoped config is required for any of them.
 - `agent/` (4 specs + `providers/`) — end-to-end confirmation-flow audit specs against the real DB +
   gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `run-turn-failure`;
   `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec.
+  `providers/plan-limit-park.test.ts` pins the mock `submit_plan` gated conditional plan
+  (analyze -> check -> setlimit) that PARKS in `waiting_confirmation`, then confirms.
 - `lib/` (1 spec) — `pendingAction.claim.test.ts` — `lib/db/repositories/pendingAction`: the atomic,
   ownership-aware persistence primitives (`claimPendingAction` exactly-once `pending → confirmed`,
   the `from`-set match, `userId`/`sessionId` scoping, `setPendingActionStatus` +
