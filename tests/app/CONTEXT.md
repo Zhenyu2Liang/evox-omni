@@ -28,10 +28,18 @@ complementing the in-process `tests/scenarios/*` suites.
     `getJson(handler,path,opts?)`. JSON bodies are parsed eagerly; a non-JSON / SSE body is left
     UNCONSUMED so the SSE readers can read it.
   - `idCtx(id)` → `IdRouteContext` (`{ params: Promise.resolve({ id }) }`) for `/…/[id]` handlers.
+    NOTE: the invokers default `ctx` to `idCtx('')`, so an `/…/[id]` spec MUST pass `{ ctx: idCtx(id) }`.
   - SSE: `readSseFrames(res)` → raw `data:` payloads; `readSse(res)` → parsed `AgentStreamEvent[]`.
   - Types `RouteHandler`, `HttpOptions`, `HttpResult<T>`; frozen types imported from `@/lib/contracts/*`.
 - `chat-http.test.ts` — `POST /api/chat` end-to-end (imports `{ POST as chatPost }`). Tests 1–8 +
   the mid-turn-failure reality check.
+- `actions-http.test.ts` — `POST /api/actions/[id]/{confirm,verify,cancel}` end-to-end (imports the
+  three route `POST`s) — the human-decision half of Case 12: GREEN inline read (no park); YELLOW
+  confirm (executes the ORIGINAL args exactly once, audit `success`, repeat confirm is an idempotency
+  no-op); RED verify with `MFA_CODE`; wrong code (200 `ok:false`/`awaiting_mfa`/`mfaResult:'failed'`,
+  no money); honest `INSUFFICIENT_FUNDS` failure (200 `ok:false`/`failed`); cancel (no move,
+  `ok:true`/`cancelled`); ownership 403 `SECURITY_DENIED` / unknown-id 404 `NOT_FOUND` on all three
+  routes; MFA-code secrecy; circuit breaker (3 wrong verifies).
 - `tasks-http.test.ts` — REAL DAG/task-lifecycle e2e (demo Case 11 at the app-entry layer). Imports
   `{ GET, POST }` from `@/app/api/tasks/[id]/route`, `{ GET }` from `@/app/api/tasks/route`, `{ POST }`
   from `.../actions/[id]/{confirm,verify}/route` and `chat/route`, and drives them via `harness.ts`:
@@ -50,6 +58,10 @@ complementing the in-process `tests/scenarios/*` suites.
 - Import frozen types from `@/lib/contracts/*`; never redeclare them. `Envelope<T>` is the app-layer
   transport shape (declared structurally, not a contract).
 - Reuse `@/lib/constants` (`MFA_CODE`, `SESSION_COOKIE`).
+- Domain outcomes are NOT HTTP errors: a wrong MFA code, a cancel, a repeat confirm or a failed tool
+  all return **HTTP 200** with `{ ok:false, data:{ ok:false, status, … } }`. Only ownership
+  (`SECURITY_DENIED`→403), unknown id (`NOT_FOUND`→404) and transport/infra failures use the error
+  envelope (status map in `app/api/_lib/http.ts`).
 - Seeding a durable plan for the task specs goes through the PRODUCTION APIs (`getOrCreateSession` +
   `runSubmitPlan`) so real `AgentTask`/`AgentTaskNode`/`PendingAction` rows exist. **A seeded task MUST
   be paired with a matching `AgentSession` row** — `agent/task-control.ts` `loadOwnedTask` verifies both
@@ -91,6 +103,18 @@ via the production planner, then the real action/task handlers drive it — conf
 parked plan and writes the REAL tool result back (asserted on `AgentTaskNode`, a real `Transaction` row
 and the decremented balance), pause/cancel/retry, refresh recovery, listing and 400/403/404.
 
+## Known gap — `423 CIRCUIT_OPEN` is UNREACHABLE over real HTTP
+
+The confirm/verify route doc comments mention a `423 CIRCUIT_OPEN` error envelope and
+`app/api/_lib/http.ts` maps the code (`CIRCUIT_OPEN: 423`), but **nothing ever throws
+`AppError('CIRCUIT_OPEN')`** — a repo-wide scan finds the code only in that doc comment, the status map
+and the `ErrorCode` union (`lib/errors.ts`). On a tripped breaker
+`security-gateway.authorizeAction` returns the lock as a **domain** outcome
+(`{ ok:false, status:'locked' }`), which `@/agent` `confirmAction`/`verifyAction` surface as a normal
+**HTTP 200** with `data.ok:false` / `data.status:'locked'`. `actions-http.test.ts` therefore asserts the
+reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED` high-severity
+`SecurityEvent`, and denied follow-up action calls) instead of a fabricated 423.
+
 ## Test Strategy
 
 - `npx vitest run tests/app` — real route handlers + a fresh seeded DB per test.
@@ -106,11 +130,12 @@ and the decremented balance), pause/cancel/retry, refresh recovery, listing and 
 
 - `./harness.ts` → shared HTTP plumbing (URL builders, invokers, SSE readers) — reuse for every app-entry spec
 - `./chat-http.test.ts` → `POST /api/chat` real-handler e2e (GREEN/YELLOW/RED, injection, transport, SSE)
+- `./actions-http.test.ts` → `POST /api/actions/[id]/{confirm,verify,cancel}` real-handler e2e (two-phase confirmation: YELLOW confirm, RED MFA verify, wrong code, honest failure, cancel, ownership 403 / 404, MFA secrecy, circuit breaker)
 - `./tasks-http.test.ts` → real task/action handlers e2e (`/api/tasks`, `/api/tasks/[id]`, `/api/actions/[id]/{confirm,verify}`)
 
 ## Notes for Agents
 
-- `POST /api/actions/[id]/cancel` is not yet driven here — add it on TOP of `harness.ts` (pass the
-  specific handler into the invokers; do not duplicate request/SSE plumbing).
 - GREEN auto-executed reads write NO `AuditLog` row (audit rows are gated-only); assert GREEN at the
   tool-event / DB-state level.
+- The remaining HTTP coverage gaps are the `/api/chat` SSE `error`-frame and the plan parking EVENT
+  emission — both unreachable over the real HTTP + mock path (see the two "Known gap" sections above).
