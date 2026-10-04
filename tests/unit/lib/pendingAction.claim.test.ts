@@ -5,8 +5,9 @@
  * `setPendingActionStatus` + `getPendingActionOwnership`).
  *
  * Lives in the root Vitest test tree (`tests/unit/lib/`) and runs under the ROOT
- * `vitest.config.ts` (`include: ['tests/**/*.{test,spec}.ts']`) via `npm run test`, against the
- * REAL test SQLite (`tests/helpers/db` + `tests/helpers/fixtures`).
+ * `vitest.config.ts` — its `include` glob matches every `*.{test,spec}.ts` under `tests/`
+ * recursively — via `npm run test`, against the REAL test SQLite
+ * (`tests/helpers/db` + `tests/helpers/fixtures`).
  *
  * A UNIQUE `sessionId` per test keeps the circuit-breaker/session state isolated — the shared
  * SQLite file is reset+seeded before every test (DB-backed).
