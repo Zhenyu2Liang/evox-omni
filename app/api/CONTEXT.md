@@ -191,7 +191,7 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   Keep route-local zod schemas as NON-exported `const`s (or move them into `_lib/schemas.ts`); `export type`
   / `export interface` are fine.
 - **`POST /api/security/reset`** is the runtime unlock path for a tripped breaker (the gateway's
-  "前往安全中心解除限制" pointer). Session id resolution matches `GET /api/security`. `reset` may become
+  "前往安全中心解除限制" pointer). Session id resolution matches `GET /api/security`. It calls the
   async (it records a `SECURITY_RESET` SecurityEvent) — call it as
   `await Promise.resolve(security.circuitBreaker.reset(sid))` so both `void` and `Promise` signatures work;
   then read the fresh state via `getState` for the response.
