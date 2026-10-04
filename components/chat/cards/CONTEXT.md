@@ -79,11 +79,19 @@ export interface AnomalyCardProps { data: AnomalyReport; onAcknowledge?: () => v
 export function AnomalyCard(p: AnomalyCardProps): JSX.Element;        // [这是本人交易]/[查看详情]/[冻结银行卡]
 
 export interface PlanCardProps { plan: TaskPlan; className?: string; }
-export function PlanCard(p: PlanCardProps): JSX.Element;              // DAG timeline (✓/○) ↔ ../../banking
+export function PlanCard(p: PlanCardProps): JSX.Element;              // status timeline ↔ ../../banking + dependency section
 
 export interface ErrorCardProps { message: string; code?: string; detail?: string; className?: string; }
 export function ErrorCard(p: ErrorCardProps): JSX.Element;            // safe, agent-facing error surface
 ```
+
+**PlanCard structure.** `PlanCard` renders the plan goal + the plan-level status badge, then the
+per-node **status timeline** via the composed `../../banking/AgentTaskTimeline` (the single status→meta
+source — it maps all 8 `TaskNodeStatus` to a distinct icon/label/tone and shows a failed node's
+`result.error` inline), then a **dependency timeline**: one row per node whose `dependencies` are
+resolved to node NAMES through an id→name map built from `plan.nodes` (`依赖于: …`, or
+`起始节点（无依赖）` when empty; a dependency id not present in the plan falls back to the raw id).
+That section carries relationship text only — no status glyphs.
 
 ## The exhaustive mapping (must stay in lock-step with the union)
 
@@ -106,8 +114,6 @@ must populate `cards[].data` with exactly these shapes.
 
 ## Known Issues
 
-- `PlanCard.tsx:31-34` (`stepMark`) + `PlanCard.tsx:61` (`done = result?.status === 'success'`) collapse its OWN explicit DAG step list to a binary **✓/○** — `running`, `waiting_confirmation`, `waiting_verification`, `failed`, `cancelled`, `skipped` all render as the same grey ○ (only the marker/colour are driven by `done`, `PlanCard.tsx:67,73`). This step list is redundant with the timeline below it.
-- The full node-status set IS rendered, but by the COMPOSED `AgentTaskTimeline` (`PlanCard.tsx:56` → `components/banking/AgentTaskTimeline.tsx:30-39`, whose `STATUS_META` covers all 8 `TaskNodeStatus` with distinct icon/label/tone: ○●⏳✓✗×–). So the statuses are visible, but not through PlanCard's own list.
 - `PlanCard` renders no confirmation/MFA action for a `waiting_confirmation`/`waiting_verification` node — a parked plan node surfaces only as the 待确认/待验证 badge (there is no [确认]/[取消] button; the confirm path lives in `ConfirmationCard`/`MfaCard`, which are only emitted for direct tool blocks — see `../CONTEXT.md` Known Issues).
 - `PlanCard` takes only `{ plan }` — no action bundle — so it can never drive a confirm/verify/cancel.
 
@@ -124,6 +130,9 @@ must populate `cards[].data` with exactly these shapes.
 - **MFA secrecy**: `MfaCard` renders `hint` only — never the code (`MFA_CODE` is server-side; do not import).
 - **Money** via `Money`; **tiers** via `StatusBadge`; reuse `../../banking` tiles and `../../charts`
   rather than re-implementing tiles/charts inside cards.
+- **No competing status→meta table**: node statuses are rendered only through the composed
+  `../../banking/AgentTaskTimeline`; do not fork its mapping. `PlanCard`'s dependency section shows
+  relationship text (node names), never status glyphs.
 - Named exports only; one card per file; files ≲ ~1000 lines.
 
 ## Test Strategy
@@ -132,7 +141,8 @@ must populate `cards[].data` with exactly these shapes.
 - RTL render tests under the root `tests/` suite render each card with a fixture `ChatCard` and assert
   key content (amount via `Money`, tier badge label, field rows, MFA hint present / code absent).
 - `CardRenderer` dispatch test: each `card.type` renders its component; unknown key fails to compile.
-- `PlanCard` step status → ✓/○ mapping is the behavioural bit to assert.
+- `PlanCard`'s dependency-label resolution (dep ids → node names, empty → `起始节点（无依赖）`, unknown id
+  fallback) is the behavioural bit to assert; the timeline itself is delegated to `AgentTaskTimeline`.
 
 ## Routing Table
 
