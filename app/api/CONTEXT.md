@@ -29,7 +29,7 @@ envelope (below). Dynamic-route handlers receive `(req: NextRequest, ctx: IdRout
 | POST | `/api/actions/[id]/cancel` | body `{}` | `ActionResponse` (`status:'cancelled'`) | `@/agent` `cancel` |
 | GET | `/api/tasks` | query `{ sessionId?, limit? }` | `{ plans: TaskPlan[] }` | persisted `AgentTask` rows via `@/lib/db/repositories/task` |
 | GET | `/api/tasks/[id]` | — | `TaskPlan` | persisted `AgentTask` row via `@/lib/db/repositories/task` |
-| POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` | persisted `AgentTask` row steering (best-effort) |
+| POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` | `@/agent` execution control via `_lib/agent-bridge` (session-owned; see Notes) |
 | GET | `/api/audit` | query `{ sessionId?, toolName?, riskLevel?, status?, limit? }` | `{ entries: AuditEntry[]; summary: AuditSummary }` | `@/audit` `listAudit` + `getAuditSummary` |
 | GET | `/api/security` | query `{ sessionId? }` | `{ status: SecurityStatus; events: SecurityEvent[]; circuitBreaker: { failures; max; locked } }` | `@/audit` `getSecurityStatus`/`listSecurityEvents` + `@/security` `circuitBreaker.getState`/`isLocked` |
 | POST | `/api/security/reset` | session via cookie / `?sessionId=` | `ResetData { sessionId, locked, failures, max, message }` | `@/security` `circuitBreaker.reset` then `getState` |
