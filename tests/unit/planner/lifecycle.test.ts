@@ -239,6 +239,32 @@ describe('planner/lifecycle · cancel + compensation', () => {
     expect(out.status).toBe('cancelled');
   });
 
+  it('a durable { kind: "cancel" } polled AFTER `a` settles sweeps a 3-node chain to cancelled (Case 10)', async () => {
+    let h: Harness | undefined;
+    const controls: PlanControlPort = {
+      // Cancel ONLY once node `a` has executed — i.e. the durable poll happens
+      // after `a` settled and before `b` is launched.
+      pollControls() {
+        return h?.calls.includes('tool_a') ? [{ kind: 'cancel' }] : [];
+      },
+    };
+    h = harness(() => ({ ok: true, data: {} }), { controls });
+    const plan = makePlan([
+      toolNode('a'),
+      toolNode('b', { dependencies: ['a'] }),
+      toolNode('c', { dependencies: ['b'] }),
+    ]);
+    const out = await runPlan(plan, h.deps, { now: () => NOW });
+    expect(findResult(out, 'a')?.status).toBe('success');
+    expect(findResult(out, 'b')?.status).toBe('cancelled');
+    expect(findResult(out, 'c')?.status).toBe('cancelled');
+    expect(out.status).toBe('cancelled');
+    // `b` and `c` never ran: `a` is the only node whose tool was invoked.
+    expect(h.calls).toEqual(['tool_a']);
+    expect(h.count('tool_b')).toBe(0);
+    expect(h.count('tool_c')).toBe(0);
+  });
+
   it('cancelPlan works without ports (pure halt) and never re-executes a successful node', async () => {
     const plan = makePlan(
       [toolNode('a'), toolNode('b'), toolNode('c')],
