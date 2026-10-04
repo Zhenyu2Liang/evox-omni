@@ -261,6 +261,8 @@ Vitest (`tests/`, sibling). This node is designed to be testable WITHOUT network
 - Full-pipeline scenarios (the 12 demo Tests) run `runTurn` + `confirmAction`/`verifyAction` with
   `LLM_MODE=mock` (faux scripts) — proving gating, MFA, injection refusal, and the hallucination guard.
 - No live LLM and no live Prisma are required for unit tests; scenario tests use the test DB.
+- The **offline mock model** (`providers/`) is the default `LLM_MODE=mock` runtime: `providers/provider-mock.test.ts` (16 unit tests) covers the responder; `integration-mock.test.ts` proves the REAL pipeline (runTurn → `createBankingAgent` → mock → tools → gateway → SDK → DB) end-to-end offline; `run-turn-failure.test.ts` covers the failure / continuation-failure guards.
+- STAGED specs pending ROOT relocation (`tests/` is outside `./agent` write scope): they live at `./agent/providers/provider-mock.test.ts`, `./agent/run-turn-failure.test.ts`, `./agent/integration-mock.test.ts`; relocate to `tests/unit/agent/providers/…`, `tests/unit/agent/…`, `tests/scenarios/…` respectively. Until moved, run them with a local config whose `include` lists the `agent/` paths.
 
 ## Routing Table
 
