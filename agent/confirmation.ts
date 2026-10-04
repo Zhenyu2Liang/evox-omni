@@ -151,12 +151,25 @@ async function executeAuthorizedAction(
   );
   emitAll(events, opts);
 
+  // The gated action ALREADY executed and is ALREADY audited above. A continuation (narration)
+  // failure therefore only means the model could not narrate it: it must NEVER be reported as a
+  // success nor hide the real business outcome. The outcome stays `result`-driven, and the
+  // narration failure is appended to the message the UI shows.
+  const narrationError = events.find(
+    (event): event is Extract<AgentStreamEvent, { type: 'error' }> => event.type === 'error',
+  );
+  const businessMessage = result.ok ? '操作已执行。' : (result.error ?? '操作执行失败。');
+  const message =
+    narrationError === undefined
+      ? businessMessage
+      : `${businessMessage}（结果播报失败：${narrationError.message}）`;
+
   return {
     ok: result.ok,
     actionId,
     status: result.ok ? 'executed' : 'failed',
     tier: action.tier,
-    message: result.ok ? '操作已执行。' : (result.error ?? '操作执行失败。'),
+    message,
     result,
     events,
   };

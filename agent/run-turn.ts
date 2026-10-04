@@ -6,6 +6,17 @@
  * `resumeTurn`: inject a REAL tool result and call `agent.continue()` so the model narrates only the
  * factual outcome. NO chain-of-thought is emitted — only task steps / tool status / results.
  */
+/*
+ * SECURITY BOUNDARY (root-owned invariant; restated here because this file drives the model).
+ * The model's ONLY capabilities are the registered banking tools in `./tools` — exactly the names of
+ * the frozen `ToolName` union (`@/lib/contracts/tools`) — plus the `submit_plan` meta-tool. There is
+ * deliberately NO bash/shell/write/edit/file/SQL/system/http tool: the tool registry IS the complete
+ * and exhaustive capability set, so an injection asking for such a tool has nothing to call.
+ * `beforeToolCall` (installed in `./banking-agent.ts`) is the ONE code-enforced chokepoint: every
+ * proposed call goes through `security.gateway.securityGateway.handleToolCall`, and permission is
+ * decided by code — NEVER by the model. Resource limits: contextWindow 128000 / maxTokens 16384.
+ * No chain-of-thought is ever streamed to the UI — only task steps, tool status and results.
+ */
 import type {
   AgentStreamEvent,
   ChatCard,
@@ -458,6 +469,11 @@ export async function resumeTurn(
     const toolResultMessage = buildToolResultMessage(input, runtime, now());
     runtime.agent.state.messages = [...runtime.agent.state.messages, toolResultMessage];
     await runtime.agent.continue();
+  } catch (error) {
+    // The gated business action ALREADY executed and is ALREADY audited (see `./confirmation`).
+    // A continuation failure (model/narration error) must NEVER be swallowed — it is surfaced as an
+    // `error` event — nor turned into a success: the caller still receives the REAL tool result.
+    buffer.events.push({ type: 'error', message: safeToString(error) });
   } finally {
     unsubscribe();
     runtime.dispose();
