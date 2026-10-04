@@ -76,6 +76,30 @@ Fixtures: the canonical demo dataset (user 李明; contacts 张伟/王芳/妈妈
 anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) is defined in
 `helpers/fixtures.ts`. Cross-module knowledge belongs to the modules under test, not to fixtures.
 
+## Regression Coverage Gaps (current)
+
+All 12 scenario specs + the fast unit/planner/sdk suites exist; the following regression cases
+are NOT fully proven by any spec (assert via the re-implementation harness, not real HTTP):
+
+- **Concurrent confirm (exactly-once race).** No spec issues two SIMULTANEOUS `confirmAction`/`claimPendingAction`
+  calls on one `PendingAction`. Repeat-confirm (`unit/agent/confirmation-idempotency.test.ts`) and
+  claim (`unit/lib/pendingAction.claim.test.ts`) are SEQUENTIAL only; the only concurrency specs
+  (`unit/banking-sdk/atomicity.test.ts`) race transfers/redeems, not confirms.
+- **Execution-time re-risk on TWO queued transfers.** The escalation is proven with a RAW prior
+  `Transaction` row (`unit/security/risk-engine-rerisk.test.ts`, `unit/security/authorize-hardening.test.ts`),
+  never by parking two YELLOW `PendingAction`s, executing the first, and asserting the second parks
+  for MFA at `authorizeAction`. The daily-limit boundary itself is covered (`unit/security/risk-engine.test.ts`).
+- **Planner durable cancel-sweep on a 3-node chain.** A 3-node `[a, b(dep a), c(dep b)]` cancel exists
+  only via `pause()` + explicit `cancelPlan` (`unit/planner/lifecycle.test.ts:183`); the durable
+  `{kind:'cancel'}` poll is exercised only on a 2-node plan (`:225`), so no durable 3-node sweep.
+- **Real HTTP / real app-entry E2E.** No spec drives the real Next.js route handlers
+  (`POST /api/chat`, action/task endpoints) or `next start`. All 12 scenarios + `scenarios/mock-integration.test.ts`
+  drive the pipeline IN-PROCESS via the `helpers/scenario.ts` re-implementation (which re-instantiates
+  `@/agent`'s turn/continuation logic rather than calling it). Tests 11/12 at the HTTP layer
+  (plan_update/confirmation_required/mfa_required events, plan resume/pause/cancel/retry,
+  `GET /api/tasks/[id]` recovery) are uncovered. `mock-integration.test.ts` is the only spec using a
+  production façade (`@/agent`) and covers only Tests 1/2/3/5/6.
+
 ## Fast test-DB path (why the suite is fast — do not remove)
 
 The full suite runs in ~25–30s. This depends on a deliberately fast SQLite configuration; if any piece
