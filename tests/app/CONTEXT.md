@@ -80,6 +80,7 @@ the clearly-named `REACHABLE — …` test. The `error`-event path is only reach
 
 - `./harness.ts` → shared HTTP plumbing (URL builders, invokers, SSE readers) — reuse for every app-entry spec
 - `./chat-http.test.ts` → `POST /api/chat` real-handler e2e (GREEN/YELLOW/RED, injection, transport, SSE)
+- `./actions-http.test.ts` → `POST /api/actions/[id]/{confirm,verify,cancel}` real-handler e2e (two-phase confirmation: YELLOW confirm, RED MFA verify, wrong code, honest failure, cancel, ownership 403 / 404, MFA secrecy, circuit breaker)
 
 ## Notes for Agents
 
