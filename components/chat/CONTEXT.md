@@ -86,7 +86,7 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 | `message_end` | finalise message content/cards; clear `streamingText` |
 | `tool_start` / `tool_end` | upsert a `ToolEventView` (status started→success/error/blocked); a `blocked` entry also records its `toolName` |
 | `card` | append `card` to the current assistant message's `cards` |
-| `plan_update` | set `activePlan` |
+| `plan_update` | set `activePlan` — but `ChatWindow` never reads it AND no `plan_update` event is ever emitted (see Known Issues), so the plan view does not refresh |
 | `confirmation_required` | set `pendingAction` `{ summary: PendingActionSummary, actionId }` (drives `ConfirmationCard`) |
 | `mfa_required` | set `pendingAction` `{ summary: MfaActionSummary, actionId }` (drives `MfaCard`); the summary's `toolName` is the actual gated tool the stream reported as blocked, omitted when the stream carried none |
 | `security_event` | append a `system` `ChatMessage` (content = `event.message`; `event.kind` is not surfaced) |
