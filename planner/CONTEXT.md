@@ -80,7 +80,8 @@ public functions/types (`buildPlan`, `transitiveDependents`, `isTerminalStatus`,
 - `persistNode?(planId, node)` — incremental snapshot write of ONE node change.
 - `persistPlan?(plan)` / `persist?(plan)` — full-snapshot write after each mutation (the deprecated
   `persist` is an alias, used when `persistPlan` is absent).
-- `loadPlan?(planId)` — load a persisted snapshot (for the durable entry points).
+- `loadPlan?(planId)` — load a persisted snapshot (used by the agent layer to resume a plan after a
+  process restart / page refresh; the planner itself never calls it).
 - `controls?: PlanControlPort` — `pollControls(planId)` (READ-AND-CLEAR) returns
   `PlanControlCommand[]` = `{kind:'pause'} | {kind:'cancel'} | {kind:'retry'; nodeId}`, polled at
   each node checkpoint so a separate HTTP request can steer the run.
@@ -94,17 +95,33 @@ through the persistence ports, so state survives the request:
   RETURNS immediately: `status:'pending'`, un-run nodes still `pending`, already-run nodes
   `success`. Resumption = re-invoking `runPlan` (or `resumePlan`) on the returned snapshot;
   `PlanControls.resume()` only clears the in-process pause flag.
-- **Cancel** — `PlanControls.cancel()` / `{kind:'cancel'}` / `opts.signal` abort the walk and cancel
-  the in-flight node; `cancelPlan` then marks every remaining non-terminal node `cancelled` and
-  records the executed set (`PlanCancellation.executedNodes`) on each cancelled node, so the
-  executed / irreversible set is durable. Re-invoking `runPlan` on a `cancelled` plan is a no-op
-  (idempotency).
+- **Cancel** — `PlanControls.cancel()` / `{kind:'cancel'}` / `opts.signal` abort the walk: `runPlan`
+  stops at the next node checkpoint, cancels the in-flight node, then **sweeps the topological order
+  and marks EVERY remaining non-terminal node `cancelled`** (nothing dangles as `pending`) before
+  settling the plan `cancelled`. A gated *park* is NOT a cancellation — the dependents of a
+  `waiting_confirmation`/`waiting_verification` node stay `pending`. Re-invoking `runPlan` on a
+  `cancelled` plan is a no-op (idempotency). The pure-halt `cancelPlan` applies the same sweep and
+  records the executed / irreversible set (`PlanCancellation.executedNodes`) on each cancelled node,
+  so it is durable via node persistence.
 - **Retry** — `PlanControls.retry(nodeId)` / `{kind:'retry', nodeId}` / `retryPlan` reset the target
   and its transitive dependents to `pending` and rewind the walk; a node that already `success` is
   NEVER reset or re-invoked.
 - **Resume** — `resumePlan` applies the human `PlanToolOutcome` to the gated node (success / re-park /
   failed) and continues the walk, which skips every already-successful node and runs only the
   now-unblocked dependents.
+
+## Compensation policy (non-atomic — no automatic rollback)
+
+The plan's side effects are NOT transactional. The rollback policy is explicit and conservative:
+
+- Already-executed nodes (status `success`) are **NEVER compensated or rolled back automatically** —
+  the simulated backend treats executed work as irreversible.
+- The planner is pure DAG logic and owns NO banking/domain semantics, so it cannot know a tool's
+  inverse action; **automatic compensation is intentionally deferred to the caller/agent layer**,
+  which alone knows the compensating tool for a given node.
+- On cancel, every node that did not execute is marked `cancelled` (or was already `skipped`), and
+  `compensationReport(plan, cancelledAt?)` returns the executed / skipped / cancelled partition plus
+  `{ planId, cancelledAt }` — the surface for **manual takeover**.
 
 ## Status transitions
 
@@ -145,9 +162,6 @@ rendered to the user is the `TaskPlan` snapshot delivered via the `plan_update` 
 - `../lib/contracts/task.ts` → FROZEN plan/node types (sibling — read-only, escalate writes to root)
 - `../lib/db/repositories/task.ts` → AgentTask/AgentTaskNode persistence used by `deps.persist`
   (sibling — read-only, escalate writes to `./lib`)
-- `./planner/lifecycle.test.ts` → lifecycle unit spec: dependency order, pause, cancel + compensation,
-  retry, resume-after-gate, idempotency — pure in-memory ports. Co-located here because this node
-  cannot write the sibling `../tests` node; canonical home is
-  `../tests/unit/planner/lifecycle.test.ts` (relocate with `git mv` to run under `npm run test`).
-- `../tests/unit/planner/` → planner unit tests: `dag.test.ts`, `executor.test.ts`
-  (sibling — read-only, escalate writes to `./tests`)
+- `../tests/unit/planner/` → planner unit specs (sibling — read-only, escalate writes to `./tests`):
+  `dag.test.ts`, `executor.test.ts`, `lifecycle.test.ts`. This node has NO local test file and NO
+  scoped vitest config — the specs live in that sibling tree (run `npx vitest run tests/unit/planner`).

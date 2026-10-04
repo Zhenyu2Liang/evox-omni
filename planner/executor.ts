@@ -86,7 +86,7 @@ export interface PlanControls {
 }
 
 export interface RunPlanOptions {
-  /** Abort signal; aborting cancels the plan and marks the running node `cancelled`. */
+  /** Abort signal; aborting cancels the plan and marks every not-yet-terminal node `cancelled`. */
   signal?: AbortSignal;
   /** Injectable clock for deterministic timestamps; defaults to the demo clock (`demoNow`). */
   now?: () => number;
@@ -144,7 +144,7 @@ export async function persistPlanSnapshot(deps: PlanDeps, plan: TaskPlan): Promi
  *   snapshot (`status:'pending'`, un-run nodes still `pending`, already-run nodes
  *   `success`). Resumption is done by re-invoking `runPlan` (or `resumePlan`).
  *   `PlanControls.resume()` only clears the in-process pause flag.
- * - `cancel()` and `opts.signal` abort the walk, marking the in-flight node
+ * - `cancel()` and `opts.signal` abort the walk, marking EVERY not-yet-terminal node
  *   `cancelled` and settling the plan `cancelled`.
  * - `retry(nodeId)` resets that node and its transitive dependents to `pending`
  *   (never a node that already succeeded) and rewinds the walk to the earliest
@@ -483,6 +483,13 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   }
 
   if (stopped) {
+    // A cancellation (in-process `cancel()`, durable `{kind:'cancel'}` or an
+    // `opts.signal` abort) halts the whole walk: sweep the topological order and
+    // cancel EVERY not-yet-terminal node, so nothing dangles as `pending`. A
+    // gated park is NOT a cancellation — its dependents stay `pending` (below).
+    for (const node of order) {
+      if (!isTerminalStatus(results.get(node.id)?.status)) await cancelNode(node);
+    }
     planStatus = 'cancelled';
   } else if (parked) {
     planStatus = 'waiting_confirmation';
