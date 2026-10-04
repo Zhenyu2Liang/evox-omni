@@ -199,7 +199,9 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   `AgentTaskNode` rows through the sanctioned read path `@/lib/db/repositories/task` and map them to
   `TaskPlan` in `_lib/task-plans.ts`; the executor's `PlanControls` are in-process and not reachable
   across HTTP. `GET /api/tasks` with an unknown/empty session returns `{plans:[]}` (200);
-  `GET /api/tasks/[id]` unknown → `404 NOT_FOUND`. `POST /api/tasks/[id]` steering is best-effort on the
+  `GET /api/tasks/[id]` unknown → `404 NOT_FOUND`. `POST /api/tasks/[id]` is NOT best-effort: it REQUIRES the
+  owning session (`resolveSessionId`, else `400 VALIDATION`; non-owner → `403 SECURITY_DENIED`) and delegates
+  the
   persisted row (`cancel→'cancelled'`, `resume→'running'`, `pause→'pending'`, `retry→'pending'` + nodes reset).
 - **Actions routes** map `ConfirmationOutcome` → `_lib/types.ActionResponse`: `requiresMfa = tier === 'RED'`,
   `sessionId` from the persisted `PendingAction` row (fallback `resolveSessionId`), `mfaResult` derived
