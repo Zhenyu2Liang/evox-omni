@@ -4,18 +4,24 @@
  * Walks a validated `TaskPlan` in topological order, executing `kind:'tool'`
  * nodes through an injected `runTool` port and evaluating `kind:'condition'`
  * nodes to skip dependent branches. All side effects (tool calls, persistence,
- * clock) live behind `PlanDeps` — the executor itself holds no banking,
- * security, or DB logic.
+ * clock, cross-request steering) live behind `PlanDeps` — the executor itself
+ * holds no banking, security, or DB logic.
  *
  * The `runTool` port is supplied by the agent layer and routes through the
  * Security Gateway, so a node that needs human confirmation surfaces
  * `requiresConfirmation`/`pendingActionId` instead of executing — the executor
  * then parks the node in `waiting_confirmation` (see `planner/CONTEXT.md`).
+ *
+ * Durability is the CALLER's concern: `PlanDeps` exposes optional
+ * `persistPlan`/`persistNode`/`loadPlan` ports plus a durable `controls` port
+ * polled at each node checkpoint, so an out-of-process (HTTP) request can steer
+ * a running plan and a paused/parked plan can be resumed by re-invoking
+ * `runPlan` (see `planner/lifecycle.ts`).
  */
 import type { TaskNodeResult, TaskNodeSpec, TaskNodeStatus, TaskPlan, TaskPlanStatus } from '@/lib/contracts/task';
 import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
-import { evaluateCondition, topologicalOrder } from './dag';
+import { evaluateCondition, topologicalOrder, transitiveDependents } from './dag';
 
 /**
  * Outcome of one tool invocation, as reported by the injected `runTool` port.
@@ -32,13 +38,42 @@ export interface PlanToolOutcome {
   pendingActionId?: string;
 }
 
-/** Side-effect ports the executor depends on. */
+/** One durable control command, delivered out-of-process (e.g. `POST /api/tasks/:id`). */
+export type PlanControlCommand =
+  | { kind: 'pause' }
+  | { kind: 'cancel' }
+  | { kind: 'retry'; nodeId: string };
+
+/**
+ * Durable control source, consulted at each node checkpoint so an out-of-process
+ * (HTTP) request can steer a running plan. `pollControls` should READ-AND-CLEAR
+ * the pending commands for the plan.
+ */
+export interface PlanControlPort {
+  pollControls(planId: string): Promise<PlanControlCommand[]> | PlanControlCommand[];
+}
+
+/**
+ * Side-effect ports the executor depends on. Every port is injected by the
+ * caller, keeping `./planner` DB-agnostic.
+ */
 export interface PlanDeps {
   /** Execute one banking tool. Routes through the Security Gateway in production. */
   runTool(toolName: string, args: Record<string, unknown>): Promise<PlanToolOutcome>;
   /** Emitted on every node status change; the agent forwards it as `plan_update`. */
   onNodeUpdate(node: TaskNodeResult): void | Promise<void>;
-  /** Optional persistence of the plan snapshot (AgentTask/AgentTaskNode). */
+  /** Persist the full plan snapshot (AgentTask/AgentTaskNode). */
+  persistPlan?(plan: TaskPlan): Promise<void>;
+  /** Persist one node result incrementally (`planId`, node). */
+  persistNode?(planId: string, node: TaskNodeResult): Promise<void>;
+  /** Load a persisted plan snapshot (used by the durable entry points). */
+  loadPlan?(planId: string): Promise<TaskPlan | undefined>;
+  /** Durable control source consulted at each checkpoint (cross-request steering). Optional. */
+  controls?: PlanControlPort;
+  /**
+   * @deprecated kept for BACKWARD COMPATIBILITY — an alias for `persistPlan`
+   * (called after each mutation when `persistPlan` is absent).
+   */
   persist?(plan: TaskPlan): Promise<void>;
 }
 
@@ -56,8 +91,9 @@ export interface RunPlanOptions {
   /** Injectable clock for deterministic timestamps; defaults to the demo clock (`demoNow`). */
   now?: () => number;
   /**
-   * Receives the `PlanControls` object once execution starts, so callers
-   * (`POST /api/tasks/:id/...`) can pause/resume/cancel/retry a running plan.
+   * Receives the `PlanControls` object once execution starts, so an IN-PROCESS
+   * caller can pause/resume/cancel/retry a running plan. Cross-request steering
+   * uses the durable `deps.controls` port instead.
    */
   onControls?: (controls: PlanControls) => void;
 }
@@ -70,6 +106,20 @@ const TERMINAL: ReadonlySet<TaskNodeStatus> = new Set<TaskNodeStatus>([
   'cancelled',
 ]);
 
+/** Is `status` terminal (the node will not run again on its own)? */
+export function isTerminalStatus(status: TaskNodeStatus | undefined): boolean {
+  return status !== undefined && TERMINAL.has(status);
+}
+
+/**
+ * Persist a full plan snapshot through `deps.persistPlan` (or the deprecated
+ * `deps.persist` alias) when either port is supplied.
+ */
+export async function persistPlanSnapshot(deps: PlanDeps, plan: TaskPlan): Promise<void> {
+  const persist = deps.persistPlan ?? deps.persist;
+  await persist?.(plan);
+}
+
 /**
  * Execute a plan to settlement and return its final snapshot.
  *
@@ -78,22 +128,39 @@ const TERMINAL: ReadonlySet<TaskNodeStatus> = new Set<TaskNodeStatus>([
  * - A `condition` node evaluating `false` marks its transitive dependents `skipped`.
  * - A failing node is recorded as `failed`; the executor NEVER throws on a single
  *   node failure and continues independent branches.
- * - `deps.persist` is called after each mutation when provided.
+ * - A node that is ALREADY terminal (`success`/`failed`/`skipped`/`cancelled`) in
+ *   the input plan is never re-executed (idempotency) — its recorded result is
+ *   kept, so a paused/parked plan resumes by re-invoking `runPlan`.
+ * - `deps.persistPlan ?? deps.persist` is called after each mutation, and
+ *   `deps.persistNode` on every node status change, when provided.
  *
  * Assumes a VALIDATED plan (call `validatePlan` first — `submit_plan` does); this
  * function does not re-validate. The input `plan` is never mutated: every emitted
  * / returned state is a fresh snapshot with a copy of the results array.
  *
- * Controls (all cooperative, checked between node checkpoints):
- * - `pause()`/`resume()` gate the walk; `cancel()` and `opts.signal` abort it,
- *   marking the in-flight node `cancelled` and settling the plan `cancelled`.
+ * Controls (all cooperative, consulted at each node checkpoint):
+ * - `pause()` (in-process) or a durable `{ kind:'pause' }` from
+ *   `deps.controls.pollControls(planId)` STOP the walk and RETURN a resumable
+ *   snapshot (`status:'pending'`, un-run nodes still `pending`, already-run nodes
+ *   `success`). Resumption is done by re-invoking `runPlan` (or `resumePlan`).
+ *   `PlanControls.resume()` only clears the in-process pause flag.
+ * - `cancel()` and `opts.signal` abort the walk, marking the in-flight node
+ *   `cancelled` and settling the plan `cancelled`.
  * - `retry(nodeId)` resets that node and its transitive dependents to `pending`
- *   and rewinds the walk to the earliest such node, so they re-run on the next
- *   checkpoints (re-invoking `runTool`). Requests are de-duplicated per pass.
+ *   (never a node that already succeeded) and rewinds the walk to the earliest
+ *   such node, so they re-run on the next checkpoints (re-invoking `runTool`).
+ *   Requests are de-duplicated per pass.
  */
 export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptions = {}): Promise<TaskPlan> {
   const now = opts.now ?? (() => demoNow());
   const signal = opts.signal;
+
+  // Idempotency: a CANCELLED plan is terminal. Re-invoking `runPlan` on it must
+  // never resurrect nodes nor re-execute a node that already succeeded — return
+  // the recorded snapshot unchanged (the cancelled status is preserved).
+  if (plan.status === 'cancelled') {
+    return { ...plan, results: plan.results.map((r) => ({ ...r })), updatedAt: now() };
+  }
 
   const byId = new Map<string, TaskNodeSpec>();
   for (const node of plan.nodes) byId.set(node.id, node);
@@ -101,29 +168,6 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   const order = topologicalOrder(plan.nodes);
   const positionOf = new Map<string, number>();
   order.forEach((node, i) => positionOf.set(node.id, i));
-
-  // Direct dependents map (dependency id → nodes that depend on it).
-  const dependents = new Map<string, string[]>();
-  for (const node of plan.nodes) {
-    for (const dep of node.dependencies) {
-      const arr = dependents.get(dep);
-      if (arr) arr.push(node.id);
-      else dependents.set(dep, [node.id]);
-    }
-  }
-  const collectTransitiveDependents = (id: string): string[] => {
-    const out: string[] = [];
-    const seen = new Set<string>();
-    const stack = [...(dependents.get(id) ?? [])];
-    while (stack.length > 0) {
-      const current = stack.pop() as string;
-      if (seen.has(current)) continue;
-      seen.add(current);
-      out.push(current);
-      for (const next of dependents.get(current) ?? []) stack.push(next);
-    }
-    return out;
-  };
 
   // Working copy of the results (input plan untouched). Keyed by node id.
   const results = new Map<string, TaskNodeResult>();
@@ -147,11 +191,12 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
     updatedAt: now(),
   });
 
-  /** Record a node result, notify the listener and persist the snapshot. */
+  /** Record a node result: notify the listener, persist the node + the snapshot. */
   const setNode = async (result: TaskNodeResult): Promise<void> => {
     results.set(result.id, { ...result });
     await deps.onNodeUpdate({ ...result });
-    await deps.persist?.(snapshot());
+    await deps.persistNode?.(plan.id, { ...result });
+    await persistPlanSnapshot(deps, snapshot());
   };
 
   /** Scope for condition evaluation: prior node id → its recorded `output`. */
@@ -183,17 +228,10 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   let paused = false;
   let cancelled = false;
   let aborted = Boolean(signal?.aborted);
-  let waiters: Array<() => void> = [];
   const retryRequests = new Set<string>();
 
-  const flushWaiters = (): void => {
-    const pending = waiters;
-    waiters = [];
-    for (const w of pending) w();
-  };
   const onAbort = (): void => {
     aborted = true;
-    flushWaiters();
   };
   if (signal) {
     if (signal.aborted) aborted = true;
@@ -206,25 +244,42 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
     pause() {
       if (!stopRequested()) paused = true;
     },
+    // Clears the in-process pause flag only. Durable resumption of a paused plan
+    // is done by re-invoking `runPlan` / `resumePlan` (see `planner/lifecycle.ts`).
     resume() {
       paused = false;
-      flushWaiters();
     },
     cancel() {
       cancelled = true;
-      flushWaiters();
     },
     retry(nodeId) {
       retryRequests.add(nodeId);
     },
   };
 
-  /** Await pause gate; returns immediately when stop is requested. */
+  /**
+   * Poll the durable control port (READ-AND-CLEAR per its contract) and apply
+   * the commands to this run's flags. No-op when `deps.controls` is absent.
+   */
+  const pollDurableControls = async (): Promise<void> => {
+    if (!deps.controls) return;
+    const commands = await deps.controls.pollControls(plan.id);
+    for (const command of commands ?? []) {
+      if (!command || typeof command !== 'object') continue;
+      if (command.kind === 'pause') {
+        if (!stopRequested()) paused = true;
+      } else if (command.kind === 'cancel') {
+        cancelled = true;
+      } else if (command.kind === 'retry' && typeof command.nodeId === 'string') {
+        retryRequests.add(command.nodeId);
+      }
+    }
+  };
+
+  /** Node checkpoint: refresh the abort flag and poll any durable controls. */
   const checkpoint = async (): Promise<void> => {
     if (signal?.aborted) aborted = true;
-    while (paused && !stopRequested()) {
-      await new Promise<void>((resolve) => waiters.push(resolve));
-    }
+    await pollDurableControls();
   };
 
   /** Cancel the node currently in flight (or the next pending one). */
@@ -317,6 +372,7 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
 
   let stopped = false;
   let parked = false;
+  let wasPaused = false;
 
   try {
     let index = 0;
@@ -330,25 +386,35 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
         break;
       }
 
+      // Pause: STOP launching further nodes and RETURN a resumable snapshot.
+      if (paused) {
+        wasPaused = true;
+        break;
+      }
+
       // Cooperative retry: reset affected nodes + rewind to the earliest.
+      // Idempotency: a node that already succeeded is NEVER reset/re-run.
       if (retryRequests.size > 0) {
         let rewindTo = index;
+        let anyReset = false;
         for (const id of retryRequests) {
-          for (const affected of [id, ...collectTransitiveDependents(id)]) {
+          for (const affected of [id, ...transitiveDependents(plan.nodes, id)]) {
             const node = byId.get(affected);
             if (!node) continue;
+            if (results.get(affected)?.status === 'success') continue;
             await setNode({
               id: affected,
               name: node.name,
               status: 'pending',
               tool: node.kind === 'tool' ? node.tool : undefined,
             });
+            anyReset = true;
           }
           const pos = positionOf.get(id);
           if (pos !== undefined && pos < rewindTo) rewindTo = pos;
         }
         retryRequests.clear();
-        index = rewindTo;
+        if (anyReset) index = rewindTo;
         continue;
       }
 
@@ -385,7 +451,7 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
           endedAt: now(),
         });
         if (!truthy) {
-          for (const dependent of collectTransitiveDependents(node.id)) {
+          for (const dependent of transitiveDependents(plan.nodes, node.id)) {
             await markSkipped(dependent, `condition '${node.id}' evaluated false`);
           }
         }
@@ -420,6 +486,9 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
     planStatus = 'cancelled';
   } else if (parked) {
     planStatus = 'waiting_confirmation';
+  } else if (wasPaused) {
+    // TaskPlanStatus has no 'paused': a paused plan surfaces as resumable `pending`.
+    planStatus = 'pending';
   } else {
     const allSettled = plan.nodes.every((node) => {
       const status = results.get(node.id)?.status;
@@ -429,6 +498,6 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   }
 
   const final = snapshot();
-  await deps.persist?.(final);
+  await persistPlanSnapshot(deps, final);
   return final;
 }
