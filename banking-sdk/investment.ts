@@ -6,6 +6,13 @@
  *
  * `subscribeInvestment` enforces `minAmount` → throws `AppError('VALIDATION')` below it and
  * `AppError('INSUFFICIENT_FUNDS')` when the funding account cannot cover the amount.
+ * `redeemInvestment` closes exactly one HOLDING → throws `AppError('CONFLICT')` if it was already
+ * redeemed.
+ *
+ * Both writes run in a SINGLE interactive transaction (`runInTransaction`): the balance change and
+ * the holding change commit together or not at all, so no partial debit/credit can survive. The
+ * debit is a conditional decrement (`balance >= amount`) → a negative balance is impossible even
+ * under concurrency.
  *
  * Note: subscribing/redeeming moves the funding-account BALANCE only — it deliberately does NOT
  * write a `Transaction` row, so the demo's 本月 spending analysis stays anchored at ¥5,800.
@@ -15,6 +22,7 @@ import { demoNow } from '../lib/clock';
 import { accounts, investments } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { round2, subtractMoney } from '../lib/money';
+import { runInTransaction } from './tx';
 import type {
   HoldingStatus,
   HoldingView,
@@ -79,7 +87,11 @@ export async function compareInvestments(ids: string[]): Promise<InvestmentCompa
   };
 }
 
-/** Subscribe to a product: enforce `minAmount`, debit the funding account, create a holding. */
+/**
+ * Subscribe to a product: enforce `minAmount`, atomically debit the funding account and create the
+ * holding in one transaction. The conditional decrement makes an overdraft impossible — when the
+ * account cannot cover the amount the call throws `INSUFFICIENT_FUNDS` and nothing is written.
+ */
 export async function subscribeInvestment(
   input: SubscribeInvestmentInput,
 ): Promise<InvestResult> {
@@ -104,46 +116,62 @@ export async function subscribeInvestment(
       userId: input.userId,
     });
   }
-  if (account.balance < amount) {
-    throw new AppError('INSUFFICIENT_FUNDS', '账户余额不足，无法完成认购', {
-      balance: account.balance,
-      amount,
-    });
-  }
 
   const now = demoNow();
-  const updatedAccount = await accounts.incrementBalance(account.id, -amount);
-  const holding = await investments.createHolding({
-    userId: input.userId,
-    productId: input.productId,
-    amount,
-    marketValue: amount,
-    boughtAt: new Date(now),
-    status: 'HOLDING',
+  const { holdingId, newBalance } = await runInTransaction(async (tx) => {
+    // Atomic sufficient-funds check + debit (rolls back with nothing written when short).
+    const debited = await tx.account.updateMany({
+      where: { id: account.id, userId: input.userId, balance: { gte: amount } },
+      data: { balance: { decrement: amount } },
+    });
+    if (debited.count === 0) {
+      const current = await tx.account.findUnique({ where: { id: account.id } });
+      throw new AppError('INSUFFICIENT_FUNDS', '账户余额不足，无法完成认购', {
+        balance: current?.balance ?? 0,
+        amount,
+      });
+    }
+
+    const holding = await tx.investmentHolding.create({
+      data: {
+        userId: input.userId,
+        productId: input.productId,
+        amount,
+        marketValue: amount,
+        boughtAt: new Date(now),
+        status: 'HOLDING',
+      },
+    });
+
+    const updated = await tx.account.findUnique({ where: { id: account.id } });
+    if (!updated) {
+      throw new AppError('NOT_FOUND', `未找到用户的活期账户：${input.userId}`, {
+        userId: input.userId,
+      });
+    }
+    return { holdingId: holding.id, newBalance: updated.balance };
   });
 
   return {
     success: true,
-    holdingId: holding.id,
+    holdingId,
     productId: input.productId,
     amount,
-    newBalance: updatedAccount.balance,
+    newBalance,
     occurredAt: now,
   };
 }
 
-/** Redeem a holding: close it (status → REDEEMED) and credit the funding account. */
+/**
+ * Redeem a holding: atomically close it (status → REDEEMED) and credit the funding account in one
+ * transaction. The conditional status transition guarantees exactly one credit per holding, closing
+ * the concurrent double-redeem race; a second attempt throws `CONFLICT`.
+ */
 export async function redeemInvestment(input: RedeemInvestmentInput): Promise<InvestResult> {
   const holding = await investments.getHolding(input.holdingId);
   if (holding === null || holding.userId !== input.userId) {
     throw new AppError('NOT_FOUND', `持仓不存在：${input.holdingId}`, {
       holdingId: input.holdingId,
-    });
-  }
-  if (holding.status === 'REDEEMED') {
-    throw new AppError('CONFLICT', '该持仓已赎回', {
-      holdingId: input.holdingId,
-      status: holding.status,
     });
   }
 
@@ -156,15 +184,32 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
 
   const credit = round2(holding.marketValue ?? holding.amount);
   const now = demoNow();
-  const updatedAccount = await accounts.incrementBalance(account.id, credit);
-  await investments.updateHoldingStatus(holding.id, 'REDEEMED');
+  const newBalance = await runInTransaction(async (tx) => {
+    // Atomic HOLDING → REDEEMED transition: count 0 means it was already redeemed (no double credit).
+    const closed = await tx.investmentHolding.updateMany({
+      where: { id: holding.id, userId: input.userId, status: { not: 'REDEEMED' } },
+      data: { status: 'REDEEMED' },
+    });
+    if (closed.count === 0) {
+      throw new AppError('CONFLICT', '该持仓已赎回', {
+        holdingId: input.holdingId,
+        status: 'REDEEMED',
+      });
+    }
+
+    const credited = await tx.account.update({
+      where: { id: account.id },
+      data: { balance: { increment: credit } },
+    });
+    return credited.balance;
+  });
 
   return {
     success: true,
     holdingId: holding.id,
     productId: holding.productId,
     amount: credit,
-    newBalance: updatedAccount.balance,
+    newBalance,
     occurredAt: now,
   };
 }

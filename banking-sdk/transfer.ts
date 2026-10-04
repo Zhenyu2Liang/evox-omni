@@ -5,6 +5,10 @@
  * DEBIT transaction. It does NOT decide permission, confirmation or daily-limit policy — that is
  * the Security Gateway's job (`security/`) and MUST NOT be implemented here.
  *
+ * The debit and the ledger row are written in a SINGLE interactive transaction
+ * (`runInTransaction`), so the two either commit together or roll back together: a partial debit
+ * can never survive and a concurrent call can never drive the balance negative.
+ *
  * Throws `AppError`:
  *  - `VALIDATION`        — missing/invalid recipient or non-positive amount.
  *  - `NOT_FOUND`         — no contact matches the given id/phone/name.
@@ -13,10 +17,11 @@
  */
 import type { Account, Contact } from '@prisma/client';
 import { demoNow } from '../lib/clock';
-import { accounts, contacts, transactions } from '../lib/db/repositories';
+import { accounts, contacts } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { parseAmount, round2 } from '../lib/money';
 import { toContactView } from './contact';
+import { runInTransaction } from './tx';
 import type { TransferInput, TransferRecipient, TransferResult } from './types';
 
 /** Map a resolved contact row onto the public `TransferRecipient`. */
@@ -99,7 +104,13 @@ async function resolveFundingAccount(userId: string, input: TransferInput): Prom
   return account;
 }
 
-/** Execute a transfer: resolve recipient, verify funds, write the DEBIT transaction. */
+/**
+ * Execute a transfer: resolve recipient, atomically debit the funds, write the DEBIT ledger row.
+ *
+ * The debit is a CONDITIONAL `updateMany` (`balance >= amount`). If it matches nothing the transfer
+ * is rejected with `INSUFFICIENT_FUNDS` (carrying the current balance) and NOTHING is written — so
+ * a negative balance is impossible even under concurrency.
+ */
 export async function createTransfer(input: TransferInput): Promise<TransferResult> {
   const amount = round2(parseAmount(input.amount));
   if (!Number.isFinite(amount) || amount <= 0) {
@@ -109,37 +120,49 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
   const recipient = await resolveRecipient(input.userId, input);
   const account = await resolveFundingAccount(input.userId, input);
 
-  // Sufficient-funds check BEFORE any write: on failure nothing is persisted.
-  if (account.balance < amount) {
-    throw new AppError(
-      'INSUFFICIENT_FUNDS',
-      `Insufficient funds: balance ${account.balance} < amount ${amount}`,
-      { balance: account.balance, amount },
-    );
-  }
-
   const occurredAt = demoNow();
 
-  // Debit the funding account first, then record the ledger row (demo-adequate atomicity).
-  const updated = await accounts.incrementBalance(account.id, -amount);
-  const transaction = await transactions.createTransaction({
-    accountId: account.id,
-    userId: input.userId,
-    amount: -amount,
-    direction: 'DEBIT',
-    category: '转账',
-    merchant: '转账给' + recipient.name,
-    channel: 'TRANSFER',
-    remark: input.remark,
-    counterpartyId: recipient.id,
-    occurredAt: new Date(occurredAt),
-    currency: 'CNY',
+  const { transactionId, newBalance } = await runInTransaction(async (tx) => {
+    // Atomic sufficient-funds check + debit: fails with count 0 (no partial write) when short.
+    const debited = await tx.account.updateMany({
+      where: { id: account.id, userId: input.userId, balance: { gte: amount } },
+      data: { balance: { decrement: amount } },
+    });
+    if (debited.count === 0) {
+      const current = await tx.account.findUnique({ where: { id: account.id } });
+      throw new AppError(
+        'INSUFFICIENT_FUNDS',
+        `Insufficient funds: balance ${current?.balance ?? 0} < amount ${amount}`,
+        { balance: current?.balance ?? 0, amount },
+      );
+    }
+
+    const transaction = await tx.transaction.create({
+      data: {
+        accountId: account.id,
+        userId: input.userId,
+        amount: -amount,
+        direction: 'DEBIT',
+        category: '转账',
+        merchant: '转账给' + recipient.name,
+        channel: 'TRANSFER',
+        remark: input.remark,
+        counterpartyId: recipient.id,
+        occurredAt: new Date(occurredAt),
+        currency: 'CNY',
+      },
+    });
+
+    const updated = await tx.account.findUnique({ where: { id: account.id } });
+    if (!updated) throw new AppError('NOT_FOUND', `Funding account ${account.id} not found`);
+
+    return { transactionId: transaction.id, newBalance: updated.balance };
   });
 
   return {
     success: true,
-    transactionId: transaction.id,
-    newBalance: updated.balance,
+    transactionId,
+    newBalance,
     recipient: toRecipient(recipient),
     amount,
     remark: input.remark,
