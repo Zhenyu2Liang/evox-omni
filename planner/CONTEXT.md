@@ -43,8 +43,9 @@ effect — tool execution, persistence, the clock, cross-request controls — is
   plan in topological order and returns the settled snapshot.
 
 `lifecycle.ts` — durable entry points (all return a fresh `TaskPlan` snapshot):
-- `pausePlan(plan, opts?: PausePlanOptions): TaskPlan` — synchronous; returns the plan with
-  `status:'pending'` (there is no `'paused'` plan status) and all recorded results intact.
+- `pausePlan(plan, opts?: PausePlanOptions): TaskPlan` — synchronous; returns a resumable snapshot with
+  `status:'pending'` (there is no `'paused'` plan status): already-run nodes keep their recorded
+  result, un-run nodes surface as `pending`.
 - `cancelPlan(plan, deps?, opts?: CancelPlanOptions): Promise<TaskPlan>` — halts the plan: terminal
   nodes keep their status, every remaining non-terminal node becomes `cancelled` with
   `output: PlanCancellation = { cancelled: true, reason, executedNodes }`, plan settles `cancelled`.
