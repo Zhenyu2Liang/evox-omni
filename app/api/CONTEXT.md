@@ -100,11 +100,16 @@ audited `resetSession` (the runtime unlock path — see Notes).
 - `_lib/schemas.ts` — shared zod query fragments (`userIdQuerySchema`, `sessionIdQuerySchema`,
   `limitQuerySchema`).
 - `_lib/session.ts` — `resolveUserId` / `resolveSessionId`.
-- `_lib/agent-bridge.ts` — the ONE module that knows the agent control/ownership API: resolves the
-  runtime task-control capability (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`) off a namespace
-  import of `@/agent` (they are not named exports yet), failing LOUDLY with `TOOL_FAILED` when absent;
-  forwards `{ userId, sessionId }` ownership to `confirm`/`verify`/`cancel`. Imports only `@/agent` —
-  no Prisma, no DAG logic.
+- `_lib/agent-bridge.ts` — the ONE module that knows the agent control/ownership/plan API. It imports
+  the control + plan-lookup fns STATICALLY from `@/agent`
+  (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`, `findTaskByPendingAction`, `getTaskPlan`) and
+  exposes: `resolveTaskControl(action) → TaskControlFn` (a `Record` lookup over those imports, still
+  failing LOUDLY with `TOOL_FAILED` when an entry is missing);
+  `confirmOwned`/`verifyOwned`/`cancelOwned` (forward the `{ userId, sessionId }` ownership bag);
+  `locateOwningPlan(sessionId, actionId) → LocatedPlan` (`{ sessionId, taskId } | undefined`, the
+  reverse lookup of the plan node parked on an action — call it BEFORE the decision clears the node);
+  `withPlanUpdate(outcome, located)` (append a refreshed `plan_update` event to a SUCCESSFUL
+  `ConfirmationOutcome`). Imports only `@/agent` — no Prisma, no DAG logic.
 - `_lib/task-plans.ts` — pure mapping from persisted `AgentTask`/`AgentTaskNode` rows to the frozen
   `TaskPlan` contract (JSON columns decoded with `safeParse`); used by `/api/tasks*` (see Notes).
 
@@ -123,14 +128,17 @@ confirm(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>; 
 verify(actionId: string, code: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 // ConfirmationOutcome = { ok; actionId; status: PendingActionStatus; tier: RiskLevel; message; result?; events }
-// Task execution control (not yet named exports; resolved at runtime): pauseTask/resumeTask/cancelTask/retryTask(sessionId, taskId) => TaskPlan
+// Task execution control (statically imported by the bridge): pauseTask/resumeTask/cancelTask/retryTask(sessionId, taskId) => TaskPlan
+// Plan lookup: findTaskByPendingAction(sessionId, actionId) => { taskId; nodeId } | undefined
+//              getTaskPlan(sessionId, taskId) => TaskPlan  // ownership-checked
 ```
 
 ## Dependencies
 
-- `@/agent` (read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`) + task
-  execution control (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`), both accessed through
-  `_lib/agent-bridge`.
+- `@/agent` (read-only): chat runtime (`runTurn`/`resumeTurn` + `confirm`/`verify`/`cancel`, the
+  aliases of `confirmAction`/`verifyAction`/`cancelAction`) + task execution control
+  (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`) + plan lookup
+  (`findTaskByPendingAction`/`getTaskPlan`), all accessed through `_lib/agent-bridge`.
 - `@/banking-sdk` (read-only): read models (`banking.dashboard/transaction/card/subscription/…`, DTOs).
 - `@/audit` (read-only): `listAudit`, `getAuditSummary`, `listSecurityEvents`, `getSecurityStatus`.
 - `@/security` (read-only): `circuitBreaker.getState`/`isLocked` for `/api/security`; the audited `circuitBreaker.resetSession` for `/api/security/reset`.
@@ -163,7 +171,8 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 - **Transport tests** for `POST /api/chat`: SSE frames + single `done` terminator, and the `?stream=0`
   JSON fallback. End-to-end acceptance (the 12 demo scenarios) are driven through `@/agent` + `../tests`.
 - `_lib/http.ts` (envelope/error-map/SSE encoders), `_lib/task-plans.ts` (row → `TaskPlan`) and
-  `_lib/agent-bridge.ts` (capability resolution + ownership forwarding) are pure.
+  `_lib/agent-bridge.ts` (capability resolution, plan location + refreshed-`plan_update` assembly,
+  ownership forwarding) are pure.
 
 ## Routing Table
 
@@ -201,7 +210,13 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   `_lib/types.ActionResponse`: `requiresMfa = tier === 'RED'`, `sessionId` from the persisted `PendingAction`
   row (fallback `resolveSessionId`), `mfaResult` derived
   (`verify` → `ok?'success':(status==='awaiting_mfa'?'failed':'not_required')`, else `'not_required'`).
-  A `cancel` of an unknown/settled action surfaces the owner's thrown `AppError('NOT_FOUND'|'CONFLICT')`.
+  **Confirm/verify also forward PLAN progress**: BEFORE delegating, each calls
+  `locateOwningPlan(row?.sessionId, id)` (a plain non-plan action → `undefined`, skipped silently) and,
+  on a SUCCESSFUL outcome, `withPlanUpdate(outcome, located)` → appends a refreshed `plan_update` (the
+  owning plan re-read via the ownership-checked `getTaskPlan`) to `events`, so `/agent` refreshes its
+  plan view. `cancel` emits NO `plan_update` (a cancelled node would still read `waiting_confirmation` —
+  not meaningful). A `cancel` of an unknown/settled action surfaces the owner's thrown
+  `AppError('NOT_FOUND'|'CONFLICT')`.
 - **Task plans & control (`/api/tasks*`).** Read models come from the persisted `AgentTask`/`AgentTaskNode`
   rows via `@/lib/db/repositories/task`, mapped to `TaskPlan` in `_lib/task-plans.ts` (`GET /api/tasks` with
   an unknown/empty session returns `{plans:[]}` 200; `GET /api/tasks/[id]` unknown returns `404 NOT_FOUND`).
@@ -209,7 +224,8 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   else `400 VALIDATION`; non-owner `403 SECURITY_DENIED`) and delegates to `@/agent` via `_lib/agent-bridge`
   (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`) — `pause` stops before the next node, `cancel` stops and
   cancels the remaining nodes, `retry` re-runs only the failed node, `resume` continues without re-running
-  succeeded nodes. The bridge fails loudly with `TOOL_FAILED` (502) when the capability is absent or returns no plan.
+  succeeded nodes. The bridge fails loudly with `TOOL_FAILED` (502) when a control action resolves to no
+  capability or the control returns no plan.
 - **`POST /api/security/reset`** is the runtime unlock path for a tripped breaker (the gateway's
   "前往安全中心解除限制" pointer). Session id resolution matches `GET /api/security`. It calls the AUDITED
   async `security.circuitBreaker.resetSession(sessionId, { actor: 'user' })`, which clears the breaker state
