@@ -1,18 +1,10 @@
 /**
- * STAGING COPY — belongs in `tests/unit/agent/providers/plan-limit-park.test.ts`; the ROOT must
- * relocate it (`tests/` is a read-only sibling of this node).
+ * plan-limit-park — lives in the root Vitest test tree at `tests/unit/agent/providers/`, so the
+ * root `vitest.config.ts` (its `test.include` covers every `*.{test,spec}.ts` under `tests/`)
+ * auto-discovers it, and `npm run test` runs it with the rest of the suite.
  *
- * How to run BEFORE relocation (the repo vitest config only globs `tests/**`, so it will NOT pick
- * up a spec staged under `agent/`):
- *   1. Create a TEMPORARY runner config at the REPOSITORY ROOT whose `resolve.alias['@']` = repo
- *      root and whose `test.include` is exactly this file, `setupFiles: ['tests/setup.ts']`,
- *      `env: { LLM_MODE: 'mock' }`.
- *   2. Run it from the REPOSITORY ROOT (a worktree `node_modules` junction makes Vitest load a
- *      duplicate instance): `npx vitest run --config <tempconfig>`.
- *   3. Delete the temp config — this spec is the only committed artifact.
- *
- * plan-limit-park — pins the mock model's GATED conditional plan, i.e. the otherwise UNREACHABLE
- * plan-parking path over the offline mock LLM:
+ * It pins the mock model's GATED conditional plan, i.e. the otherwise UNREACHABLE plan-parking
+ * path over the offline mock LLM:
  *   "如果这个月娱乐消费超过2000元，就把娱乐消费限额调整为1500元"
  *     → `submit_plan` DAG: `analyze`(analyze_spending, GREEN) → `check`(condition analyze.total > 2000)
  *       → `setlimit`(set_card_limit, YELLOW ⇒ PARKS in `waiting_confirmation`).
