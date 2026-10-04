@@ -37,7 +37,7 @@ It is the only place that knows about HTTP, cookies, sessions and JSON envelopes
 | Route | File | Read dependencies | Composition (from `../components`) |
 | --- | --- | --- | --- |
 | `/` Dashboard | `app/page.tsx` | `banking.dashboard.getDashboardSummary(userId)` | balance card, stat tiles (总资产/活期余额/信用卡额度/本月消费), recent transactions, anomaly banner, AI Agent entry |
-| `/agent` Chat | `app/agent/page.tsx` | none at render (client streams) | `<ChatWindow/>` (client) — input, message list, task timeline, cards, confirmation/MFA prompts |
+| `/agent` Chat | `app/agent/page.tsx` | `banking_session` cookie (server-read → client session recovery) | `<ChatWindow sessionId=…/>` (client) — input, message list, task timeline, cards, confirmation/MFA prompts |
 | `/bills` | `app/bills/page.tsx` | `banking.transaction.analyzeSpending`, `listTransactions`, `listAnomalies` | month picker, category pie, monthly trend, recent transactions table, anomaly list |
 | `/cards` | `app/cards/page.tsx` | `banking.card.getCards` | card tiles (储蓄卡/信用卡/虚拟卡), limits, status badges, freeze/unfreeze/limit actions |
 | `/subscriptions` | `app/subscriptions/page.tsx` | `banking.subscription.listSubscriptions` | subscription list (name, monthly fee, next charge), annual cost summary, reminder/cancel actions |
@@ -206,7 +206,7 @@ documented forward-compat cast.
 
 - `./` → Dashboard page + root layout/globals (this node's own files: `layout.tsx`, `globals.css`, `page.tsx`)
 - `./_components/` → app-local client chrome (private `_` folder, never routed): `NavBar.tsx` global top navigation
-- `./agent` → AI Agent chat page (renders the client `ChatWindow`)
+- `./agent` → AI Agent chat page (renders the client `ChatWindow`, passing the cookie session id for refresh recovery)
 - `./api` → HTTP API route handlers (chat SSE, actions confirm/verify/cancel, tasks control, audit, security + security reset, read models, health) + shared `_lib/` (http, types, schemas, session, task-plans, agent-bridge)
 - `./audit` → Audit Log page
 - `./bills` → Bills / 账单 page
