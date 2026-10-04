@@ -100,6 +100,11 @@ runtime unlock path — see Notes).
 - `_lib/schemas.ts` — shared zod query fragments (`userIdQuerySchema`, `sessionIdQuerySchema`,
   `limitQuerySchema`).
 - `_lib/session.ts` — `resolveUserId` / `resolveSessionId`.
+- `_lib/agent-bridge.ts` — the ONE module that knows the agent control/ownership API: resolves the
+  runtime task-control capability (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`) off a namespace
+  import of `@/agent` (they are not named exports yet), failing LOUDLY with `TOOL_FAILED` when absent;
+  forwards `{ userId, sessionId }` ownership to `confirm`/`verify`/`cancel`. Imports only `@/agent` —
+  no Prisma, no DAG logic.
 - `_lib/task-plans.ts` — pure mapping from persisted `AgentTask`/`AgentTaskNode` rows to the frozen
   `TaskPlan` contract (JSON columns decoded with `safeParse`); used by `/api/tasks*` (see Notes).
 
