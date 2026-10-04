@@ -106,7 +106,8 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 ## Notes for Agents
 
 - **`change_password` is NOT implemented here.** The demo has no credential store; its authority is the `AuditLog` row written by the security/agent layer (the agent tool returns a simulated success). Do NOT add a `banking-sdk` function for it.
-- SDK unit specs live in `../tests/unit/banking-sdk/` (root-owned sibling) and are still `it.todo` Phase-2 scaffolds — activate them there, not here.
+- SDK unit specs live in `../tests/unit/banking-sdk/` (root-owned sibling, 38 active specs) — run them with the root config: `npx vitest run tests/unit/banking-sdk`.
+- The money-movement ATOMICITY regression spec lives IN-NODE (`./banking-sdk/atomicity.test.ts`) because `../tests` is a read-only sibling: it proves ledger/subscribe-write failure ROLLBACK and concurrent overspend / double-redeem prevention. Run it with its scoped config: `npx vitest run --config banking-sdk/vitest.atomicity.config.ts`. That config's `include` is scoped to this node, so it is NOT auto-discovered and `npm run test` is unaffected.
 - `../tests` and `../lib/db/repositories` are read-only dependencies; escalate writes to root.
 
 ## Routing Table
