@@ -1,0 +1,1 @@
+﻿d4f1c92 feat(agent): persist submit_plan DAG + idempotent confirmation wiring (workstreams A/B)
