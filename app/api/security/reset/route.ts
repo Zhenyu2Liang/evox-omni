@@ -3,14 +3,15 @@
  *
  * Contract:
  *  - Session id: `?sessionId=` query → the `banking_session` cookie → `''` (no session yet).
- *  - Delegates to `@/security`: `circuitBreaker.reset(sessionId)` (clear state) then
- *    `circuitBreaker.getState(sessionId)` (read back the fresh state).
+ *  - Delegates to `@/security`: `circuitBreaker.resetSession(sessionId, { actor, reason })` — the
+ *    AUDITED unlock: it clears the session's breaker state AND records a `SECURITY_RESET`
+ *    `SecurityEvent` (never fire-and-forget), returning the fresh `CircuitBreakerState`.
  *  - Success: `200 { ok: true, data: ResetData }`; any throwable maps through the shared error
  *    envelope (`errorResponse`) — never a raw exception or the MFA code.
  *
  * This is the runtime unlock path for a tripped breaker: the gateway tells the user to
- * "前往安全中心解除限制" and the Security Center button calls this route. The breaker is a hard
- * gate the LLM can never reset — only this explicit user action clears it.
+ * "前往安全中心解除限制" and the Security Center button calls this route (with NO request body).
+ * The breaker is a hard gate the LLM can never reset — only this explicit user action clears it.
  *
  * Thin by design: `validate (zod) → delegate → serialize`. No business logic, no Prisma here.
  */
@@ -43,10 +44,9 @@ export async function POST(req: NextRequest): Promise<Response> {
     const query = parseQuery(resetQuerySchema, req);
     const sessionId = query.sessionId ?? resolveSessionId(req) ?? '';
 
-    // `reset` returns `void` today and may become async (it also records a SECURITY_RESET
-    // SecurityEvent) — `Promise.resolve` keeps both signatures compiling and working.
-    await Promise.resolve(security.circuitBreaker.reset(sessionId));
-    const state = security.circuitBreaker.getState(sessionId);
+    // Audited unlock: clears the breaker state for this session and records a
+    // `SECURITY_RESET` SecurityEvent; returns the fresh state.
+    const state = await security.circuitBreaker.resetSession(sessionId, { actor: 'user' });
 
     const data: ResetData = {
       sessionId,
