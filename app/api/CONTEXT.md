@@ -202,7 +202,8 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   `GET /api/tasks/[id]` unknown → `404 NOT_FOUND`. `POST /api/tasks/[id]` is NOT best-effort: it REQUIRES the
   owning session (`resolveSessionId`, else `400 VALIDATION`; non-owner → `403 SECURITY_DENIED`) and delegates
   the
-  persisted row (`cancel→'cancelled'`, `resume→'running'`, `pause→'pending'`, `retry→'pending'` + nodes reset).
+  REAL execution control to `@/agent` via `_lib/agent-bridge` (`pause`/`resume`/`cancel`/`retry`), failing
+  loudly with `TOOL_FAILED` when the capability is absent (and when the control returns no plan).
 - **Actions routes** map `ConfirmationOutcome` → `_lib/types.ActionResponse`: `requiresMfa = tier === 'RED'`,
   `sessionId` from the persisted `PendingAction` row (fallback `resolveSessionId`), `mfaResult` derived
   (`verify` → `ok?'success':(status==='awaiting_mfa'?'failed':'not_required')`, else `'not_required'`).
