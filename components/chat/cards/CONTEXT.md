@@ -50,7 +50,7 @@ export function BalanceCard(p: BalanceCardProps): JSX.Element;        // total +
 export interface TransferCardProps { data: TransferResult; className?: string; }
 export function TransferCard(p: TransferCardProps): JSX.Element;      // recipient + amount + new balance
 
-// confirmation = PendingActionSummary + actionId + [取消]/[确认] → confirj endpoint
+// confirmation = PendingActionSummary + actionId + [取消]/[确认] → confirm endpoint
 export interface ConfirmationCardProps { action: PendingActionSummary; actionId?: string;
   onConfirm?: (actionId: string) => void; onCancel?: (actionId: string) => void;
   busy?: boolean; error?: string; className?: string; }
@@ -110,11 +110,12 @@ That section carries relationship text only — no status glyphs.
 | `error` | `message: string` | `ErrorCard` |
 
 `CardRenderer` narrows the frozen `data: unknown` field to the concrete DTO above; the `./app` serialiser
-must populate `cards[].data` with exactly these shapes.
+must populate `cards[].data` with exactly these shapes. Note: the `plan` renderer here is NOT the live
+plan path — a `plan` card is promoted into `activePlan` and rendered ONCE by `../../chat/ChatWindow`
+(see `../CONTEXT.md` "Plan dedupe" and "Human-decision card").
 
 ## Known Issues
 
-- `PlanCard` is a passive plan view that renders no confirmation/MFA action for a `waiting_confirmation`/`waiting_verification` node — a parked plan node surfaces only as the 待确认/待验证 badge (there is no [确认]/[取消] button; the confirm path lives in `ConfirmationCard`/`MfaCard`, which are only emitted for direct tool blocks — see `../CONTEXT.md` Known Issues).
 - `PlanCard` is a passive plan VIEW by design (takes only `{ plan }`): a `waiting_confirmation`/`waiting_verification` node surfaces as the 待确认/待验证 badge and renders NO confirm/cancel buttons itself. The actionable human-decision for a parked plan node is rendered ONCE by `ChatWindow` from `stream.pendingAction` (driven by the `confirmation_required`/`mfa_required` events), reusing `ConfirmationCard`/`MfaCard` — see `../CONTEXT.md` "Human-decision card".
 
 ## Constraints
