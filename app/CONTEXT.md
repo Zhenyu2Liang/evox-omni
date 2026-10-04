@@ -147,10 +147,7 @@ so the action routes **derive** those `ActionResponse` fields: `sessionId` from 
 `mfaResult` from the verify outcome. A `data.ok === false` outcome (wrong MFA, blocked, cancelled) is a
 normal `200` — never an HTTP error.
 
-The `action` routes call `confirm`/`verify`/`cancel` through `app/api/_lib/agent-bridge.ts`, which also
-resolves `pauseTask`/`resumeTask`/`cancelTask`/`retryTask` at RUNTIME for `POST /api/tasks/[id]` (see
-Known Issues). `ConfirmOptions` currently carries no `userId`/`sessionId`; the bridge forwards them via a
-documented forward-compat cast.
+The `action` routes call `confirm`/`verify`/`cancel` through `app/api/_lib/agent-bridge.ts`, which also maps `pause`/`resume`/`cancel`/`retry` to `@/agent`'s `pauseTask`/`resumeTask`/`cancelTask`/`retryTask` (STATIC imports) for `POST /api/tasks/[id]`, and supplies the plan-forwarding helpers `locateOwningPlan` (+ `withPlanUpdate`) that confirm/verify use to emit a refreshed `plan_update`. `ConfirmOptions` carries `userId`/`sessionId`; the bridge forwards them.
 
 ## Dependencies
 
@@ -160,9 +157,7 @@ documented forward-compat cast.
   `Badge`, `StatusBadge`, `EmptyState`, `Money`, `SubscriptionTile`, `AssetSummaryCard`,
   `AnomalyBanner`, `RecentTransactions`, the charts, and `../components/security/*`
   (`PermissionLegend`, `CircuitBreakerStatus`, `SecurityEventList`).
-- `../agent` (sibling — read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`,
-  `AgentStreamEvent` emission). Task execution control (`pause`/`resume`/`cancel`/`retry`) is delegated
-  through `app/api/_lib/agent-bridge.ts` — see Known Issues.
+- `../agent` (sibling — read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`, `AgentStreamEvent` emission) plus task control/resume (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`, `getTaskPlan`, `findTaskByPendingAction`), all reached through `app/api/_lib/agent-bridge.ts`.
 - `../banking-sdk` (sibling — read-only): read models (`banking.dashboard/account/transaction/card/subscription/…`, DTOs in `banking-sdk/types`).
 - `../security` (sibling — read-only): circuit breaker — `circuitBreaker.getState/isLocked` plus the AUDITED `circuitBreaker.resetSession(sessionId, { actor })` (records a `SECURITY_RESET` SecurityEvent, returns the fresh state) used by `/api/security` and the Security Center. `resetSession` is the runtime unlock path (the gateway's "前往安全中心解除限制" pointer); the sync `reset()` is test-only.
 - `../audit` (sibling — read-only): `listAudit`, `getAuditSummary`, `listSecurityEvents`, `getSecurityStatus`.
@@ -228,30 +223,10 @@ documented forward-compat cast.
 - Any new shared UI/transport type belongs in `../lib/contracts` (root-owned) — do not define it locally.
 - **Chat anomaly-card actions are wired.** `../components/chat/ChatWindow.tsx` builds the sole
   `CardActionHandlers`, whose `onAcknowledge`/`onViewDetail`/`onFreeze` invoke `stream.send('…')` (real
-  follow-up turns) alongside `onConfirm`/`onVerify`/`onCancel`. `/agent` mounts `<ChatWindow className=…/>`
-  only. The `AnomalyBanner` usages here (`app/page.tsx:48`, `app/bills/page.tsx:100`) pass no handler props
+  follow-up turns) alongside `onConfirm`/`onVerify`/`onCancel`. `/agent` mounts `<ChatWindow sessionId={…} className=…/>` (the session id is read server-side from the `banking_session` cookie). The `AnomalyBanner` usages here (`app/page.tsx:48`, `app/bills/page.tsx:100`) pass no handler props
   (the banner is display-only). See `../components/chat/cards/CONTEXT.md`.
-- **Action routes enforce ownership; the reset is audited.** `POST /api/actions/[id]/{confirm,verify,cancel}`
-  guard that the caller's session/user owns the `PendingAction` (explicit mismatch → `403 SECURITY_DENIED`)
-  — the effective enforcement today — and forward `{ userId, sessionId }` to `@/agent` via `agent-bridge`
-  (documented forward-compat cast) so the Security Gateway can additionally enforce it once `ConfirmOptions`
-  carries those fields. `POST /api/security/reset` uses the AUDITED
-  `security.circuitBreaker.resetSession(sessionId, { actor })` (records a `SECURITY_RESET` SecurityEvent),
-  never the test-only sync `reset()`.
+- **Action routes enforce ownership and forward plan updates; the reset is audited.** `POST /api/actions/[id]/{confirm,verify,cancel}` guard that the caller's session/user owns the `PendingAction` (explicit mismatch → `403 SECURITY_DENIED`) and forward `{ userId, sessionId }` to `@/agent` via `agent-bridge`. `confirm`/`verify` additionally append a refreshed `plan_update` to `events` when the settled action parked a plan node (the plan is located BEFORE the decision via `locateOwningPlan`, then re-read via `withPlanUpdate`). `POST /api/security/reset` uses the AUDITED `security.circuitBreaker.resetSession(sessionId, { actor })` (records a `SECURITY_RESET` SecurityEvent), never the test-only sync `reset()`.
 
 ## Known Issues
 
-- **Task execution control awaits the `../agent` control API.** `POST /api/tasks/[id]` routes
-  `{pause|resume|cancel|retry}` to the RUNNING executor through `app/api/_lib/agent-bridge.ts`, which
-  resolves `pauseTask`/`resumeTask`/`cancelTask`/`retryTask` off a namespace import of `@/agent` at RUNTIME
-  and fails LOUDLY (`502 TOOL_FAILED`) when a capability is absent. `@/agent` does not export them yet, so
-  POST returns `502` until that sibling lands them — no `./app` change will be needed then (the bridge
-  self-heals). GET `/api/tasks/[id]` (persisted-plan read → refresh recovery) and the session-ownership
-  guard work regardless.
-- **Plan-node UI is not wired (cross-node, escalated).** A gated PLAN node (a tool parked by the planner
-  executor) surfaces no confirmation/MFA card and the plan view does not refresh after confirm/verify,
-  because `../agent` emits no `plan_update`/`confirmation_required` for plan nodes and `../components/chat`
-  (`ChatWindow`/`useAgentStream`, `PlanCard`) does not consume `activePlan` or call `/api/tasks`. Both are
-  read-only siblings → not editable from `./app`. `PlanCard` also collapses every non-`success`
-  `TaskNodeStatus` to `○` (`../components/chat/cards/PlanCard.tsx`). The `./app` side is ready:
-  persisted-plan GET + control POST + ownership.
+- **Plan-node UI consumption is a `../components` concern.** The `./app` side is complete: `POST /api/chat` forwards `plan_update` / `confirmation_required` / `mfa_required` / `plan` cards verbatim; `GET /api/tasks` + `GET /api/tasks/[id]` + `POST /api/tasks/[id]` serve and steer persisted plans (ownership-guarded); `POST /api/actions/[id]/{confirm,verify}` append a refreshed `plan_update` for a settled plan node; and `/agent` passes the cookie session id to `ChatWindow` so a refresh can recover the running plan. Rendering `activePlan` and reacting to `plan_update` live in the read-only sibling `../components/chat` (`ChatWindow`/`useAgentStream`, `PlanCard`) — not editable from `./app`.
