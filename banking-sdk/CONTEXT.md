@@ -14,6 +14,11 @@ Gateway (`security/`). The SDK is the mechanism; `security/` is the policy.
 
 It returns **plain view models** (`./types`) — Prisma model types never leak out of the SDK.
 
+**Atomicity.** Money-moving and other multi-row writes run inside a single interactive transaction
+(`./tx.ts` → `runInTransaction`), so every step commits together or rolls back together — a partial
+debit, holding or limit change can never survive. `transfer` / `investment.subscribeInvestment`
+enforce sufficient funds with an atomic conditional decrement, so a negative balance is impossible.
+
 ## API Surface
 
 Facade (`index.ts`): `banking = { account, transaction, transfer, contact, card, subscription,
@@ -42,13 +47,14 @@ Reads (GREEN):
 Writes (executed only after the gateway's tier policy):
 
 - `transfer.createTransfer(TransferInput): TransferResult` — resolves recipient (`contactId`|`phone`|`name`),
-  refuses with **`CONFLICT`** when a name matches multiple contacts (`detail.candidates`), **`INSUFFICIENT_FUNDS`**
-  when the funding account is short, then writes the DEBIT `Transaction` and returns the new balance.
+  refuses with **`CONFLICT`** when a name matches multiple contacts (`detail.candidates`), then in ONE
+  transaction atomically debits the funding account (conditional `balance >= amount`, else
+  **`INSUFFICIENT_FUNDS`** carrying the current balance) and writes the DEBIT `Transaction`, returning the new balance.
 - `card.setCardLimit(SetCardLimitInput): CardView` · `card.freezeCard(id)` · `card.unfreezeCard(id)` ·
   `card.reportLostCard(id, { reason? })` · `card.applyVirtualCard(ApplyVirtualCardInput)` → `CardView`
 - `subscription.cancelSubscription(id)` · `subscription.setSubscriptionReminder(id, remind)` → `SubscriptionView`
-- `investment.subscribeInvestment(SubscribeInvestmentInput): InvestResult` (enforces `minAmount`) ·
-  `investment.redeemInvestment(RedeemInvestmentInput): InvestResult`
+- `investment.subscribeInvestment(SubscribeInvestmentInput): InvestResult` (enforces `minAmount`; atomic conditional debit + holding create) ·
+  `investment.redeemInvestment(RedeemInvestmentInput): InvestResult` (atomic HOLDING→REDEEMED + account credit)
 - `budget.reserveBudget(ReserveBudgetInput)` · `budget.releaseBudget(id)` → `BudgetView`
 - `task.createScheduledTask(CreateScheduledTaskInput)` · `task.cancelScheduledTask(id)` → `ScheduledTaskView`
 
@@ -67,10 +73,11 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 
 - **Execute-only.** No permission/confirmation/MFA/circuit-breaker/injection logic — that lives in
   `security/` and is enforced via the Agent's `beforeToolCall` hook. The SDK must never gate a call on a risk tier.
-- **Persist only via `lib/db/repositories/*`** (`user`, `account`, `transaction`, `contact`, `card`,
+- **Persist via `lib/db/repositories/*`** (`user`, `account`, `transaction`, `contact`, `card`,
   `subscription`, `investment`, `budget`, `task`, `scheduledTask`, `auditLog`, `securityEvent`, `session`,
-  `pendingAction`). No raw `prisma.*` calls, no direct SQL. The SDK does not write `AuditLog`/`SecurityEvent`
-  (that is `audit/`).
+  `pendingAction`). Single-statement writes always go through the repositories. The ONLY direct Prisma
+  usage is `./tx.ts` (`runInTransaction`), which wraps multi-statement/money-moving writes in one
+  interactive transaction. No direct SQL. The SDK does not write `AuditLog`/`SecurityEvent` (that is `audit/`).
 - **Money** via `lib/money` (`round2`/`addMoney`/`subtractMoney`, `parseAmount`) — never raw float math.
   Signed amounts: negative = expense/outflow.
 - **Errors**: throw typed `AppError` (`VALIDATION`, `NOT_FOUND`, `CONFLICT`, `INSUFFICIENT_FUNDS`,
@@ -87,11 +94,12 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 ## Design Decisions
 
 - **Demo clock.** Every default date window (本月/上月/今日, spend analysis, dashboard `month`) defaults to `lib/clock.demoNow()` (never `Date.now()`), with an optional explicit `month`/`now` argument so tests inject a fixed instant.
+- **Atomic money movement.** `transfer.createTransfer`, `investment.subscribeInvestment`/`redeemInvestment` and `card.setCardLimit` run their multi-row writes inside ONE interactive transaction (`./tx.ts` → `runInTransaction(fn)` = `prisma.$transaction`), so the steps commit together or roll back together — no partial write can survive. `./tx.ts` is the sole place the SDK touches the Prisma client (`../lib/db/client`) directly.
 - **`analyzeSpending` EXCLUDES anomaly rows.** Spend totals (`total`, `prevTotal`, `byCategory`, `topMerchant`, `monthlyTrend`, `largest`) count only `direction = 'DEBIT'` rows with `isAnomaly = false`. The seeded Apple Store ¥6,999 (`isAnomaly = true`, 2026-09-20 18:32) is a SEPARATE September row and MUST NOT fold into 本月消费. Because `transactions.listByCategory`/`sumDebitsInRange` include it, the window is summed by scanning `transactions.listTransactions` and filtering. Seed anchors: 本月 = ¥5,800 (娱乐 ¥2,680), 上月 = ¥6,230.
-- **`transfer.createTransfer` recipient resolution.** Exactly one of `contactId`|`phone`|`name`; `phone`/`name` match by EXACT equality after `contacts.searchContacts`; >1 exact match → `AppError('CONFLICT')` with `detail.candidates` = `ContactView[]` (the agent asks the user to choose). Insufficient funds writes nothing (no transaction, no balance change).
-- **`investment.subscribeInvestment`** below `minAmount` (or a non-positive amount) throws `AppError('VALIDATION')` (not `LIMIT_EXCEEDED`). Subscribe/redeem adjust the funding account **balance** only and write NO `Transaction` row — this preserves the 本月 ¥5,800 spend anchor.
+- **`transfer.createTransfer` recipient resolution.** Exactly one of `contactId`|`phone`|`name`; `phone`/`name` match by EXACT equality after `contacts.searchContacts`; >1 exact match → `AppError('CONFLICT')` with `detail.candidates` = `ContactView[]` (the agent asks the user to choose). Insufficient funds writes NOTHING: the debit is a conditional `updateMany({ where: { balance: { gte: amount } } })` inside the transaction; when it matches nothing the call throws `AppError('INSUFFICIENT_FUNDS')` with `{ balance: <current>, amount }` and nothing is persisted.
+- **`investment.subscribeInvestment`** below `minAmount` (or a non-positive amount) throws `AppError('VALIDATION')` (not `LIMIT_EXCEEDED`). The debit and the holding create run in one transaction; the funding account is debited via the same conditional decrement, so an overdraft is impossible (`INSUFFICIENT_FUNDS`, `{ balance, amount }`, nothing written). `investment.redeemInvestment` closes the holding via a conditional status transition (`status: { not: 'REDEEMED' }`) then credits the account; a second/concurrent redeem matches nothing → `AppError('CONFLICT')` (no double credit). Subscribe/redeem adjust the funding account **balance** only and write NO `Transaction` row — this preserves the 本月 ¥5,800 spend anchor.
 - **`subscription.listSubscriptions`** returns ACTIVE rows only (matches the `list_subscriptions` tool).
-- **`card.setCardLimit`** replaces the category limit (delete-then-create; one row per card+category). Legal state transitions are enforced: `freeze` from ACTIVE/PENDING, `unfreeze` from FROZEN, `reportLost` from any non-LOST; illegal ones throw `CONFLICT` (same-status is idempotent).
+- **`card.setCardLimit`** replaces the category limit (delete-then-create, both in ONE transaction; one row per card+category). Legal state transitions are enforced: `freeze` from ACTIVE/PENDING, `unfreeze` from FROZEN, `reportLost` from any non-LOST; illegal ones throw `CONFLICT` (same-status is idempotent).
 - **`task` payload** is stored as JSON text; read back via `lib/json.safeParse`.
 - **`contact.toContactView`** is exported for reuse by `transfer.ts` (internal helper — not a DTO).
 
@@ -115,5 +123,6 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 - `./banking-sdk/task.ts` → scheduled tasks
 - `./banking-sdk/dashboard.ts` → aggregated dashboard read model
 - `./banking-sdk/index.ts` → `banking` facade + DTO re-exports
+- `./banking-sdk/tx.ts` → `runInTransaction` — the SDK's only direct Prisma usage (interactive transaction boundary)
 - `../tests` → SDK unit tests live under the repo-root test suite (sibling — read-only, escalate writes to root)
 - `../lib/db/repositories` → the typed repositories the SDK reads/writes through (dependency — read-only)
