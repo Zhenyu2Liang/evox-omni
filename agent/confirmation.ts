@@ -144,9 +144,9 @@ async function resumeOwningPlan(
   result: ToolExecutionResult,
   userId: string,
   opts?: ConfirmOptions,
-): Promise<void> {
+): Promise<AgentStreamEvent[]> {
   try {
-    await resumeTaskForAction(
+    const resumed = await resumeTaskForAction(
       action.sessionId,
       action.id,
       {
@@ -166,11 +166,20 @@ async function resumeOwningPlan(
           }),
       },
     );
+    if (resumed === undefined) return [];
+    // The planner's resume path wrote the executed node's REAL outcome (success carrying the tool's
+    // data/summary, or failed carrying its error) into the plan before re-running the downstream
+    // nodes; that snapshot is what the UI renders as continued DAG progress.
+    const events: AgentStreamEvent[] = [{ type: 'plan_update', plan: resumed.plan }];
+    emitAll(events, opts);
+    return events;
   } catch (e) {
-    opts?.onEvent?.({
+    const event: AgentStreamEvent = {
       type: 'error',
       message: `任务计划恢复失败：${AppError.from(e).message}`,
-    });
+    };
+    emitAll([event], opts);
+    return [event];
   }
 }
 
@@ -235,8 +244,8 @@ async function executeAuthorizedAction(
   });
 
   // If this gated action parked a DAG node, hand the REAL outcome to the planner so the plan
-  // continues (a re-parked node waits for the next human decision).
-  await resumeOwningPlan(action, result, userId, opts);
+  // continues (a re-parked node waits for the next human decision) and stream the resulting plan.
+  const planEvents = await resumeOwningPlan(action, result, userId, opts);
 
   const { events } = await resumeTurn(
     { sessionId: action.sessionId, toolResult: result },
@@ -264,7 +273,7 @@ async function executeAuthorizedAction(
     tier: action.tier,
     message,
     result,
-    events,
+    events: [...planEvents, ...events],
   };
 }
 
