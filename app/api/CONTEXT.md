@@ -192,7 +192,7 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   / `export interface` are fine.
 - **`POST /api/security/reset`** is the runtime unlock path for a tripped breaker (the gateway's
   "前往安全中心解除限制" pointer). Session id resolution matches `GET /api/security`. It calls the
-  async (it records a `SECURITY_RESET` SecurityEvent) — call it as
+  AUDITED async `security.circuitBreaker.resetSession(sessionId, { actor: 'user' })`, which clears the
   `await Promise.resolve(security.circuitBreaker.reset(sid))` so both `void` and `Promise` signatures work;
   then read the fresh state via `getState` for the response.
 - **`@/planner` has no cross-request plan store.** `/api/tasks*` read the persisted `AgentTask`/
