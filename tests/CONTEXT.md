@@ -89,9 +89,6 @@ are NOT fully proven by any spec (assert via the re-implementation harness, not 
   `Transaction` row (`unit/security/risk-engine-rerisk.test.ts`, `unit/security/authorize-hardening.test.ts`),
   never by parking two YELLOW `PendingAction`s, executing the first, and asserting the second parks
   for MFA at `authorizeAction`. The daily-limit boundary itself is covered (`unit/security/risk-engine.test.ts`).
-- **Planner durable cancel-sweep on a 3-node chain.** A 3-node `[a, b(dep a), c(dep b)]` cancel exists
-  only via `pause()` + explicit `cancelPlan` (`unit/planner/lifecycle.test.ts:183`); the durable
-  `{kind:'cancel'}` poll is exercised only on a 2-node plan (`:225`), so no durable 3-node sweep.
 - **Real HTTP / real app-entry E2E.** No spec drives the real Next.js route handlers
   (`POST /api/chat`, action/task endpoints) or `next start`. All 12 scenarios + `scenarios/mock-integration.test.ts`
   drive the pipeline IN-PROCESS via the `helpers/scenario.ts` re-implementation (which re-instantiates
