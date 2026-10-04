@@ -157,6 +157,10 @@ Human decision (API route → `confirmation.ts`):
    `executeGatedTool`/`registry.executeDirect` — **NOT** the LLM — write the audit entry, then call
    `resumeTurn(...)`, which injects the REAL tool result and calls `agent.continue()` so the model
    only *narrates the factual outcome*.
+5. If the continuation itself fails (`agent.continue()` rejects — a model/narration error), the gated
+   action has ALREADY executed and ALREADY been audited: `resumeTurn` catches the rejection, emits an
+   `error` stream event and still returns the turn; `confirmation` keeps its outcome `result`-driven
+   (never a fabricated success) and appends `（结果播报失败：…）` to the message it reports.
 
 Consequence: money-moving calls are always triggered by a human decision, never by model text.
 (this is what demo Test 4 — prompt injection — proves).
@@ -175,6 +179,9 @@ Consequence: money-moving calls are always triggered by a human decision, never 
 - **Hallucination guard**: assistant replies derive ONLY from real tool results. A tool returning
   `ok:false` MUST be reported as a failure; the agent MUST NOT invent balances/results and MUST NOT
   claim a gated tool already executed.
+- **A continuation failure is not a business failure**: after a confirmed execution, a failing
+  `agent.continue()` is surfaced as an `error` event / a flagged message — NEVER swallowed and NEVER
+  turned into a success (the caller always receives the REAL `ToolExecutionResult`).
 - **No chain-of-thought in UI events** — emit task steps, tool status and results only.
 - **Determinism**: with `LLM_MODE=mock` (faux provider) the whole pipeline — agent + tools + security
   — runs offline. `run-turn`/`confirmation` accept an injectable `now` and `config` for tests.
@@ -254,6 +261,8 @@ Vitest (`tests/`, sibling). This node is designed to be testable WITHOUT network
 - Full-pipeline scenarios (the 12 demo Tests) run `runTurn` + `confirmAction`/`verifyAction` with
   `LLM_MODE=mock` (faux scripts) — proving gating, MFA, injection refusal, and the hallucination guard.
 - No live LLM and no live Prisma are required for unit tests; scenario tests use the test DB.
+- The **offline mock model** (`providers/`) is the default `LLM_MODE=mock` runtime: `providers/provider-mock.test.ts` (16 unit tests) covers the responder; `integration-mock.test.ts` proves the REAL pipeline (runTurn → `createBankingAgent` → mock → tools → gateway → SDK → DB) end-to-end offline; `run-turn-failure.test.ts` covers the failure / continuation-failure guards.
+- STAGED specs pending ROOT relocation (`tests/` is outside `./agent` write scope): they live at `./agent/providers/provider-mock.test.ts`, `./agent/run-turn-failure.test.ts`, `./agent/integration-mock.test.ts`; relocate to `tests/unit/agent/providers/…`, `tests/unit/agent/…`, `tests/scenarios/…` respectively. Until moved, run them with a local config whose `include` lists the `agent/` paths.
 
 ## Routing Table
 

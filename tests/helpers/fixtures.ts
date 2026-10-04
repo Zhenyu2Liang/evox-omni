@@ -14,7 +14,7 @@
  * Timestamps are epoch ms (`number`); money is CNY (`number`).
  */
 import { demoNow } from '@/lib/clock';
-import { getTestPrisma } from './db';
+import { ensureTestPragmas, getTestPrisma } from './db';
 
 /** Seeded demo user id (李明) — matches `lib/constants.DEFAULT_DEMO_USER_ID`. */
 export const DEMO_USER_ID = 'user_liming';
@@ -396,6 +396,7 @@ export function buildScheduledTasks(now: Date = new Date(demoNow())): ScheduledT
  * `options.now` (default `demoNow()`) anchors every relative date (current/previous/next month).
  */
 export async function seedDemoData(options: Options = {}): Promise<void> {
+  await ensureTestPragmas();
   const prisma = getTestPrisma();
   const now = options.now ?? new Date(demoNow());
 

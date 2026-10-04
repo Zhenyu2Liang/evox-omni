@@ -6,8 +6,9 @@
  * UI, not to the model, not in `MfaChallengeView`). The demo value is disclosed only in
  * `README.md`, so verification still requires an out-of-band knowledge step.
  *
- * Failures feed the session circuit breaker (`./circuit-breaker`) and emit a
- * `MFA_FAILURE` SecurityEvent.
+ * Failures feed the session circuit breaker (`./circuit-breaker`) and emit a COMPLETE
+ * `MFA_FAILURE` SecurityEvent (severity `medium`) whose `detail` carries the decision,
+ * the outcome/result and the threshold counts.
  */
 import { AppError, ok, err } from '../lib/errors';
 import type { Result } from '../lib/errors';
@@ -146,16 +147,25 @@ export async function verify(actionId: string, code: string): Promise<Result<Mfa
     });
   }
 
-  // Wrong code → count the attempt, emit MFA_FAILURE, feed the breaker.
+  // Wrong code → count the attempt, feed the breaker, then emit a COMPLETE MFA_FAILURE record.
   const after = await incrementMfaAttempts(actionId);
+  const breaker = await recordFailure(sessionId);
+  const attemptsLeft = Math.max(0, after.maxAttempts - after.attempts);
   await recordSecurityEvent({
     sessionId,
     kind: 'MFA_FAILURE',
     severity: 'medium',
     message: `验证码错误（第 ${after.attempts} 次失败）。`,
-    detail: { actionId, attempts: after.attempts },
+    detail: {
+      actionId,
+      decision: 'reject_code',
+      result: breaker.locked ? 'session_locked' : 'attempt_counted',
+      attempts: after.attempts,
+      maxAttempts: after.maxAttempts,
+      attemptsLeft,
+      locked: breaker.locked,
+    },
   });
-  const breaker = await recordFailure(sessionId);
 
   if (after.attempts >= after.maxAttempts) {
     await updateMfaChallengeStatus(actionId, 'locked');
@@ -163,7 +173,7 @@ export async function verify(actionId: string, code: string): Promise<Result<Mfa
 
   return ok({
     ok: false,
-    attemptsLeft: Math.max(0, after.maxAttempts - after.attempts),
+    attemptsLeft,
     locked: breaker.locked,
   });
 }

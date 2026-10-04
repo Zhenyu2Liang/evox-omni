@@ -11,11 +11,16 @@
  *    reported lost again → `AppError('CONFLICT')`;
  *  - freezing an already-frozen (or unfreezing an already-active) card is idempotent: the current
  *    status is returned without a write.
+ *
+ * `setCardLimit` replaces a card+category limit as a single all-or-nothing unit
+ * (`runInTransaction`): the delete and the create commit together, so the card never ends up with
+ * zero or duplicate limit rows for that category.
  */
 import type { Card as CardRow, CardLimit as CardLimitRow } from '@prisma/client';
 import { cards } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { round2 } from '../lib/money';
+import { runInTransaction } from './tx';
 import type {
   ApplyVirtualCardInput,
   CardStatus,
@@ -100,10 +105,12 @@ export async function setCardLimit(input: SetCardLimitInput): Promise<CardView> 
     });
   }
 
-  // Replace semantics: a card+category keeps exactly ONE limit row. The repository creates (it does
-  // not upsert), so the previous rows for this category are removed first.
-  await cards.deleteCardCategoryLimits(row.id, category);
-  await cards.setCardCategoryLimit({ cardId: row.id, category, amount });
+  // Replace semantics: a card+category keeps exactly ONE limit row. The delete and the create run
+  // in ONE transaction, so a failure can never leave the category without its limit.
+  await runInTransaction(async (tx) => {
+    await tx.cardLimit.deleteMany({ where: { cardId: row.id, category } });
+    await tx.cardLimit.create({ data: { cardId: row.id, category, amount } });
+  });
 
   return loadCardView(row);
 }

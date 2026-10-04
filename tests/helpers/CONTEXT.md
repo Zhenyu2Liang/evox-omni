@@ -16,6 +16,9 @@ Import from the barrel (`../helpers`) or a specific module.
 
 - `db.ts` — test-database lifecycle:
   - `getTestPrisma(): PrismaClient` — the Prisma singleton bound to the test DB (`@/lib/db/client`).
+  - `ensureTestPragmas(): Promise<void>` — apply the fast SQLite PRAGMAs (`journal_mode=WAL`,
+    `synchronous=NORMAL`, `busy_timeout=10000`) ONCE per process (memoized). Called by both
+    `truncateAll()` and `seedDemoData()`, so it holds on every entry path.
   - `truncateAll(): Promise<void>` — delete all rows in FK-safe order (children → parents).
   - `resetDatabase(): Promise<void>` — `truncateAll()` + `fixtures.seedDemoData()` (the circuit breaker has no global reset; isolation comes from a unique `sessionId` per test).
   - `useFreshDatabase(): void` — register Vitest hooks (`beforeEach` → `resetDatabase()`, `afterAll` → disconnect).
@@ -47,14 +50,28 @@ Import from the barrel (`../helpers`) or a specific module.
   `ToolEventView`, `PendingActionSummary`); never redeclare them.
 - Timestamps are epoch ms; money is CNY. Keep files ≲ ~1000 lines.
 
+## Fast test-DB path (why the suite is fast — do not remove)
+
+The test SQLite runs on a deliberately fast configuration; the whole `resetDatabase()` cycle is a few
+ms and the full suite finishes in well under a minute. If any of these is dropped, commits fall back
+to fsync and the suite balloons toward the 10-minute tool timeout:
+
+- `ensureTestPragmas()` in `db.ts` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`.
+  `journal_mode=WAL` is **persistent on the DB file**; `synchronous`/`busy_timeout` are **per-connection**.
+- `tests/setup.ts` pins the runtime `DATABASE_URL` to `?connection_limit=1`, so the pool has a SINGLE
+  connection and the per-connection pragmas above apply to EVERY query. Without it, Prisma opens extra
+  pooled connections that keep the default `synchronous=FULL`, and after the pool grows every write
+  stalls ~2s (the DB-backed specs run ~10× slower).
+- `PRAGMA foreign_keys` is enforced; truncate order stays FK-safe (children → parents).
+
 ## Routing Table
 
-- `./db.ts` → test-DB lifecycle (reset / truncate / connect)
+- `./db.ts` → test-DB lifecycle (reset / truncate / connect / fast pragmas)
 - `./fixtures.ts` → canonical demo dataset + seeder
 - `./faux-agent.ts` → scripted-model Agent builder
 - `./scenario.ts` → turn/decision harness + event collection
 - `./index.ts` → barrel re-exports
-- `../setup.ts` → provisions the schema + points `DATABASE_URL` at the test SQLite (sibling — this node)
+- `../setup.ts` → provisions the schema + points `DATABASE_URL` at the test SQLite, incl. `?connection_limit=1` (sibling — this node)
 
 ## Notes for Agents
 
@@ -62,3 +79,5 @@ Import from the barrel (`../helpers`) or a specific module.
 - `registerFauxProvider()` (from `@mariozechner/pi-ai`) is how the model is scripted; see the root
   `CONTEXT.md` "Pi Agent Integration" for the Agent/tool/`beforeToolCall` SDK facts.
 - The circuit breaker is in-process keyed by `sessionId` — always use a unique id per test.
+- Need a fast/reliable suite? Keep the "Fast test-DB path" invariant intact — do NOT remove the
+  pragmas or the `connection_limit=1` URL, and do NOT weaken isolation to gain speed.

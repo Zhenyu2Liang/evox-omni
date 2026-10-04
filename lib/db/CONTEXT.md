@@ -33,3 +33,7 @@ The Prisma client singleton and the repository layer. This is the **only** subtr
 - `npx prisma generate` must run before any code using `prisma` is executed or type-checked.
 - The SQLite schema (17 models) lives in `prisma/schema.prisma` and is frozen; enum-like fields are `String`,
   money is `Float`, JSON payloads are JSON text in `String`.
+- `vitest.staging.config.ts` is a TEMPORARY runner for the repository-scoped spec at
+  `repositories/__tests__/pendingAction.claim.test.ts` (`npx vitest run --config lib/db/vitest.staging.config.ts`)
+  because the root `vitest.config.ts` only discovers `tests/**`. The spec is STAGED to be relocated to
+  `tests/unit/lib/` (root-owned); once relocated, delete this config.

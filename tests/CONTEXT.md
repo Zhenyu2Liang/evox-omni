@@ -19,7 +19,9 @@ This node owns test infrastructure and fixtures — NOT the business logic under
 
 - `setup.ts` — Vitest **global setup** (`setupFiles`). Sets `DATABASE_URL` → the isolated test
   SQLite (`prisma/test.db`, git-ignored, absolute path), forces `LLM_MODE=mock`, and provisions the
-  schema once (`prisma db push --force-reset --skip-generate`, marker-guarded). Exports `testDbUrl`/`testDbPath`.
+  schema once (`prisma db push --force-reset --skip-generate`, marker-guarded). After provisioning it
+  pins the **runtime** `DATABASE_URL` to `?connection_limit=1` (single pooled connection — see
+  "Fast test-DB path"). Exports `testDbUrl`/`testDbPath`.
 - `helpers/` — shared test utilities (`db`, `fixtures`, `faux-agent`, `scenario`) + a barrel.
   See `helpers/CONTEXT.md` for the full helper API.
 - `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`. See `unit/CONTEXT.md`.
@@ -46,7 +48,7 @@ Run:
 - **Unique `sessionId` per test.** The circuit breaker is in-process, keyed by `sessionId`; a lock
   from Test 10 must not leak into other specs. Use `scenario.newSessionId()`.
 - **Test isolation.** DB-backed suites reset + seed via `helpers/db.resetDatabase()`; never share
-  mutable DB state. Specs use explicit-timed hooks (`beforeEach(resetDatabase, 30000)`), not `useFreshDatabase()`.
+  mutable DB state. Specs use explicit-timed hooks (`beforeEach(resetDatabase, 30000)`), not `useFreshDatabase()`. (Banking-sdk unit suites use `useFreshDatabase()`.)
 - **Implemented.** Every spec has real assertions (no `it.todo`); DB-backed suites reset + seed
   per test. Specs stay **load-safe** (no top-level Prisma construction outside DB-backed cases).
 - **DB-backed suites share one `prisma/test.db`** and run sequentially — enforced by
@@ -74,6 +76,18 @@ Fixtures: the canonical demo dataset (user 李明; contacts 张伟/王芳/妈妈
 anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) is defined in
 `helpers/fixtures.ts`. Cross-module knowledge belongs to the modules under test, not to fixtures.
 
+## Fast test-DB path (why the suite is fast — do not remove)
+
+The full suite runs in ~25–30s. This depends on a deliberately fast SQLite configuration; if any piece
+is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
+
+- `helpers/db.ensureTestPragmas()` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`
+  once per process (`WAL` is file-persistent; `synchronous`/`busy_timeout` are per-connection).
+- `setup.ts` pins the runtime `DATABASE_URL` to `?connection_limit=1`, so the pool has a SINGLE
+  connection and those per-connection pragmas apply to EVERY query. Without it Prisma opens extra
+  pooled connections that keep the default `synchronous=FULL`; after the pool grows, every DB-backed
+  write stalls ~2s and the DB specs run ~10× slower.
+
 ## Known Issues
 
 - **GREEN auto-execute writes no `AuditLog` row.** Audit rows are written only for gated
@@ -81,8 +95,8 @@ anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) 
 
 ## Routing Table
 
-- `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite, `LLM_MODE=mock`) + one-time schema provisioning
-- `./helpers` → shared test utilities (db reset/seed, fixtures, faux agent, scenario harness)
+- `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + one-time schema provisioning
+- `./helpers` → shared test utilities (db reset/seed + fast pragmas, fixtures, faux agent, scenario harness)
 - `./unit` → pure/logic unit specs for security, planner, banking-sdk
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
 - `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
@@ -97,3 +111,5 @@ anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) 
   the tier — the money move still requires human MFA.
 - Do not weaken determinism to make a test pass (fake timers, real network, shared DB state); fix the
   seam (injectable `now`/`id`, unique sessionId, fresh DB) instead.
+- Speed comes from the "Fast test-DB path" invariant, NOT from skipping resets — keep the pragmas and
+  the `connection_limit=1` URL, and never trade isolation for speed.

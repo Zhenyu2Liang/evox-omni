@@ -46,6 +46,37 @@ export function getTestPrisma(): PrismaClient {
   return cachedClient;
 }
 
+let pragmasReady: Promise<void> | undefined;
+
+/**
+ * Apply the SQLite connection pragmas that make the test DB fast — ONCE per process.
+ *
+ * The test DB defaults to SQLite's rollback journal with `synchronous=FULL`, so EVERY write commit
+ * fsyncs (~150–300 ms on this local Windows disk). Because every DB-backed test runs
+ * `resetDatabase()` (≈28 write statements) in `beforeEach`, that was the dominant cost (~6 s per
+ * test) and the reason the full suite exceeded the tool timeout. WAL + `synchronous=NORMAL`
+ * collapses a reset to a few ms while preserving full isolation (each test still truncates +
+ * re-seeds from scratch).
+ *
+ * `journal_mode=WAL` is a PERSISTENT property of the DB file, so this is effectively once-per-DB;
+ * the module flag just avoids re-issuing it on every call. Idempotent and safe to call repeatedly.
+ * On failure the flag is reset so a later call can retry. Pure test infra — not business logic.
+ */
+export function ensureTestPragmas(): Promise<void> {
+  if (!pragmasReady) {
+    const prisma = getTestPrisma();
+    pragmasReady = (async () => {
+      await prisma.$queryRawUnsafe('PRAGMA journal_mode = WAL;');
+      await prisma.$queryRawUnsafe('PRAGMA synchronous = NORMAL;');
+      await prisma.$queryRawUnsafe('PRAGMA busy_timeout = 10000;');
+    })().catch((error: unknown) => {
+      pragmasReady = undefined;
+      throw error;
+    });
+  }
+  return pragmasReady;
+}
+
 /**
  * Delete every row from every table in **FK-safe order** (children → parents) so the DB is
  * empty. Table order MUST respect relations (MfaChallenge→PendingAction, AgentTaskNode→AgentTask,
@@ -54,6 +85,7 @@ export function getTestPrisma(): PrismaClient {
  * Does NOT re-seed.
  */
 export async function truncateAll(): Promise<void> {
+  await ensureTestPragmas();
   const prisma = getTestPrisma();
   await prisma.mfaChallenge.deleteMany();
   await prisma.pendingAction.deleteMany();

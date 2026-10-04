@@ -78,4 +78,10 @@ function provisionTestDatabase(): void {
 
 provisionTestDatabase();
 
+// Runtime-only pool constraint (applied AFTER the CLI push above, which used the clean URL).
+// A single SQLite connection keeps the per-connection `PRAGMA synchronous=NORMAL` from
+// `tests/helpers/db.ts` authoritative for EVERY query, so no pooled connection falls back to
+// synchronous=FULL and stalls a write. The Prisma CLI ignores unknown query params; the runtime
+// client honours `connection_limit`.
+process.env.DATABASE_URL = testDbUrl + '?connection_limit=1';
 export { testDbUrl, testDbPath };

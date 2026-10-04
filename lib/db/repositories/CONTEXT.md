@@ -63,11 +63,21 @@ All functions below are implemented (real Prisma data access).
   (consumed by `audit/`).
 - `session.ts` (`AgentSession`) — `listSessions(userId)`, `getSession(id)`, `createSession({userId, stateJson, status?, locked?})`,
   `updateSessionState(id, stateJson)`, `setSessionLocked(id, locked)`, `updateSessionStatus(id, status)`, `deleteSession(id)`.
-- `pendingAction.ts` (`PendingAction`, `MfaChallenge`) — `PendingActionWithMfa = PendingAction & { mfa }`;
+- `pendingAction.ts` (`PendingAction`, `MfaChallenge`) — `PendingActionWithMfa = PendingAction & { mfa }`,
+  `PendingActionOwnership {id, userId, sessionId, status}`;
   `CreatePendingActionInput {sessionId, userId, toolName, args, tier, requiresMfa, summary, status?}`,
-  `CreateMfaChallengeInput {actionId, code, maxAttempts?, expiresAt?}`;
+  `CreateMfaChallengeInput {actionId, code, maxAttempts?, expiresAt?}`,
+  `ClaimPendingActionInput {actionId, from: PendingActionStatus[], to: PendingActionStatus, userId?, sessionId?}`;
   `createPendingAction(input)`, `getPendingAction(id)` (`mfa` included), `listPendingActions({sessionId?, status?, limit?})`,
-  `updatePendingActionStatus(id, status)`, `createMfaChallenge(input)` (`maxAttempts` default 3),
+  `updatePendingActionStatus(id, status)` (unconditional setter),
+  `setPendingActionStatus(actionId, status)` (alias of `updatePendingActionStatus` — persist a terminal state
+  `'executed'`/`'failed'` after a claim),
+  `claimPendingAction(input): Promise<boolean>` — the ATOMIC exactly-once claim gate: a SINGLE
+  `updateMany` CAS moving `status` from any of `from` to `to`, optionally scoped to the row's `userId`/`sessionId`;
+  returns `true` iff exactly one row transitioned (a second/concurrent claim returns `false`),
+  `getPendingActionOwnership(actionId): Promise<PendingActionOwnership | null>` (id/userId/sessionId/status
+  projection for authorizing a caller; `null` when the action is absent),
+  `createMfaChallenge(input)` (`maxAttempts` default 3),
   `getMfaChallenge(actionId)`, `incrementMfaAttempts(actionId)`, `updateMfaChallengeStatus(actionId, status)`,
   `resetMfaAttempts(actionId)` (sets `attempts` 0).
 - `index.ts` — namespace barrel: `users, accounts, transactions, contacts, cards, subscriptions, investments, budgets, tasks, scheduledTasks, auditLogs, securityEvents, sessions, pendingActions`.
@@ -81,9 +91,20 @@ All functions below are implemented (real Prisma data access).
 
 - Import `prisma` **only** from `../client`. Never instantiate `new PrismaClient()` here.
 - Input DTOs live in the module that owns them; reuse `lib/contracts` types (`RiskLevel`,
-  `PendingActionSummary`, `TaskCondition`, `AuditEntry`, `SecurityEvent`) instead of redefining them.
+  `PendingActionSummary`, `PendingActionStatus`, `TaskCondition`, `AuditEntry`, `SecurityEvent`) instead of redefining them.
 - No risk/permission logic — repositories are dumb persistence only.
 - Keep one aggregate per file; ≲ ~1000 lines.
+
+## Known Issues
+
+- **Missing `AgentTaskNode.pendingActionId` column.** The DAG-resume flow must persist/read the
+  `PendingAction` a blocked `AgentTaskNode` is waiting on, but `prisma/schema.prisma` model
+  `AgentTaskNode` has no such field (`./prisma` is a sibling, out of scope for this node).
+  REQUIRED SCHEMA ADDITION: add the field `pendingActionId String?` to model `AgentTaskNode`
+  in `prisma/schema.prisma` (optionally `@@index([pendingActionId])`). Until the column exists, no
+  repository code may reference `AgentTaskNode.pendingActionId` — it would break `tsc --noEmit` at
+  build time and throw at runtime. The existing `listTasksBySession(sessionId)` / `getTaskNode(taskId, nodeId)`
+  lookups in `task.ts` already support locating the node; only the wait-state column is missing.
 
 ## Routing Table
 

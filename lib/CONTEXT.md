@@ -61,7 +61,8 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   PendingAction/PendingActionSummary), `audit.ts` (AuditEntry/AuditStatus/SecurityEvent/SecurityEventKind),
   `task.ts` (TaskPlan/TaskNodeSpec/TaskNodeResult/TaskCondition), `agent.ts` (ChatMessage/ChatCard/
   AgentStreamEvent/ChatTurnRequest/Response), `index.ts` (barrel re-export).
-- `./lib/db` → Prisma client singleton (`client.ts`) + typed per-aggregate repositories (`repositories/`).
+- `./lib/db` → Prisma client singleton (`client.ts`) + typed per-aggregate repositories (`repositories/`),
+  incl. the atomic exactly-once `claimPendingAction` / ownership-aware `getPendingActionOwnership` primitives.
 - `./lib/errors.ts` → `ErrorCode` / `AppError` / `Result<T>` — the project error convention.
 - `./lib/money.ts` → CNY formatting/parsing/cent-safe arithmetic.
 - `./lib/constants.ts` → demo constants (limits, MFA code, thresholds, demo user id, cookie name, `DEMO_NOW`).
@@ -77,16 +78,11 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - Fully implemented: every `lib/*.ts` util helper (`errors`, `money`, `config`, `constants`, `ids`,
   `date`, `clock`, `json`), `db/client.ts`, and all `lib/db/repositories/*` aggregate modules.
 
-## Known Issues
-
-- `lib/contracts/agent.ts` imports (but does not re-export) `PendingActionSummary` and `TaskPlan`;
-  `tests/helpers/scenario.ts` imports both via `@/lib/contracts/agent` and fails to type-check (TS2459).
-  Resolution is root-owned (frozen contract + the sibling `tests` node are root-scoped): either add the
-  re-export to `agent.ts`, or fix the test imports to `./security`/`./task`.
-
 ## Notes for Agents
 
 - If you need a value that every layer shares (limit, threshold, code), add it to `constants.ts`, not locally.
 - Never import `prisma` outside `lib/db/repositories/**` — go through a repository.
 - When adding a repository aggregate, keep one module per aggregate and register it in
   `lib/db/repositories/index.ts`.
+- The `AgentTaskNode.pendingActionId` DAG-resume column is missing from the frozen schema — see
+  `lib/db/repositories/CONTEXT.md` `## Known Issues` for the exact `prisma/schema.prisma` addition needed.

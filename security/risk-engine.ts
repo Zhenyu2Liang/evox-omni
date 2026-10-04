@@ -101,3 +101,28 @@ export async function computeDailyTransferTotal(userId: string, now?: number): P
   // DEBIT amounts are stored negative; the repository call this replaced returned the ABSOLUTE total.
   return rows.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
 }
+
+/**
+ * Execution-time re-evaluation of a transfer's risk against a FRESH day total.
+ *
+ * WHY THIS EXISTS: multiple YELLOW transfers can be parked (each blocked pending user
+ * confirmation) at different moments. Each is validated at PARK time against the day total as it
+ * was THEN. Because none of them has executed yet, every parked transfer sees the same stale
+ * total — so N parked transfers of ¥500 each are each individually YELLOW, yet collectively they
+ * exceed the ¥1000 daily limit at EXECUTION time and must escalate to RED (MFA). Evaluating only
+ * at park time therefore lets repeated small transfers bypass the RED/MFA threshold.
+ *
+ * This helper RE-COMPUTES the day's outgoing-transfer total FRESH (`computeDailyTransferTotal`)
+ * at execution time and re-runs `evaluateTransferRisk` on it, so the confirmation/execution path
+ * (to be wired later in the agent/app layer) can enforce RED/MFA against the real running total.
+ * It returns the same {@link TransferRiskResult} shape (`tier` / `requiresMfa` / `dailyTotal` /
+ * `projectedDailyTotal`). `now` is injectable (defaults to the demo clock) for determinism.
+ */
+export async function reEvaluateTransferRisk(
+  userId: string,
+  amount: number,
+  now?: number,
+): Promise<TransferRiskResult> {
+  const dailyTotal = await computeDailyTransferTotal(userId, now);
+  return evaluateTransferRisk({ amount, dailyTransferTotal: dailyTotal });
+}
