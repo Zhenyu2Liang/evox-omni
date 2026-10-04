@@ -131,6 +131,9 @@ securityGateway.handleToolCall`；被门控的工具会被阻断、其参数被�
 - 领域校验：`transfer.createTransfer` 解析收款人（`contactId` | `phone` | `name`）；姓名匹配多个联系人时
   抛 `AppError('CONFLICT')`（携带 `detail.candidates`）；资金不足抛 `INSUFFICIENT_FUNDS` 且**不写任何行**。
 - 错误一律抛类型化的 `AppError`；金额一律走 `lib/money`，绝不裸浮点运算。
+- **能力边界（诚实说明）**：🟢 `reserveBudget` **只写一条 `Budget` 行（`status = RESERVED`），
+  不锁定 / 不冻结 / 不移动任何资金**；🟡 `createScheduledTask` **只持久化一条 `ScheduledTask` 意向行，
+  当前没有任何在线调度器会在其 `runAt` 时间真正执行它**。二者都是"计划意图的标记"，而非真实资金/动作。
 
 ---
 
