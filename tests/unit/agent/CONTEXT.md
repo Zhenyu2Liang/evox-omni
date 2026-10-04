@@ -1,0 +1,67 @@
+# tests/unit/agent — agent confirmation-flow & provider specs
+
+## Intent
+
+DB-backed, offline specs for the **two-phase confirmation flow** and the **offline mock model's
+brain**. They exercise the REAL production pieces — `@/agent` (`confirmAction`/`verifyAction`/
+`cancelAction`/`resumeTurn`/task-control), the REAL security gateway (`security.gateway.securityGateway`),
+the REAL Banking SDK and the test SQLite — and mock out ONLY the model (`LLM_MODE=mock` faux provider).
+Every spec keeps the in-process circuit breaker isolated with a UNIQUE persisted session per test.
+
+## API Surface (spec files)
+
+- `confirmation-idempotency.test.ts` — the confirmation flow's **idempotency + ownership** boundary:
+  repeated confirm, confirm-after-cancel, foreign `userId`/`sessionId` (`SECURITY_DENIED`).
+- `confirmation.test.ts` — the **AuditLog** facts `agent/confirmation.ts` writes for YELLOW confirm /
+  RED verify / cancel (`userRequest`, `intent`, `timestamp === demoNow()`).
+- `task-control.test.ts` — `runSubmitPlan` durable persistence (`AgentTask`/`AgentTaskNode`,
+  `plan.id === AgentTask.id`) + the ownership-checked control glue (`getTaskPlan`/`pauseTask`/
+  `resumeTask`/`cancelTask`/`retryTask` → `NOT_FOUND` / `SECURITY_DENIED`).
+- `run-turn-failure.test.ts` — the continuation-failure contract: a failing tool result / a
+  `continue()` rejection is never swallowed and never rephrased as a success.
+- `providers/provider-mock.test.ts` — pure, DB-free spec for `@/agent/providers/mock-responder`
+  (`respond(context)`): fuzzy intent → tool call, two-call recipient resolution, multi-turn reuse,
+  clarifications, honest failure narration, blocked gated calls (YELLOW/RED "not executed").
+  `providers/` contains ONLY this file.
+
+## Idempotency / ownership coverage matrix (audited)
+
+| Case | Status | Location |
+| --- | --- | --- |
+| REPEATED confirm (2nd = typed `ok:false`, single debit) | PRESENT | `confirmation-idempotency.test.ts:87` |
+| CONFIRM-AFTER-CANCEL (rejected, no execution) | PRESENT | `confirmation-idempotency.test.ts:115` |
+| CROSS-USER reject (`SECURITY_DENIED`, no execution) | PRESENT | `confirmation-idempotency.test.ts:134` (confirm+cancel); `task-control.test.ts:190` (task paths) |
+| CROSS-SESSION reject (`SECURITY_DENIED`, no execution) | PRESENT | `confirmation-idempotency.test.ts:149` |
+| CONCURRENT confirm (two simultaneous → exactly one executes) | **ABSENT** | no `Promise.all` / concurrency spec anywhere in this node |
+
+The repeated-confirm spec asserts the second call is `ok:false` and that the funding balance and the
+`auditLog` row count are unchanged (money debited exactly once); ownership specs assert
+`rejects.toMatchObject({ code: 'SECURITY_DENIED' })` plus unchanged balance and `pending` status.
+
+## Constraints
+
+- **Load-safe**: no spec constructs Prisma at module scope. Every DB access goes through
+  `getTestPrisma()` from `@/tests/helpers/db`, called INSIDE helper functions or `it` bodies
+  (e.g. `confirmation-idempotency.test.ts:64,70,110`; `task-control.test.ts:88,140,170,216`;
+  `run-turn-failure.test.ts:214`). `@/tests/helpers/db` resolves `lib/db/client` lazily, so importing
+  it never builds a client.
+- Identical DB lifecycle per file: `beforeEach(resetDatabase, 30000)` + `afterAll(disconnectTestPrisma)`;
+  the two `vi.spyOn` files also `afterEach(vi.restoreAllMocks)`.
+- Tests target the real gateway object (`const gateway = security.gateway.securityGateway`) so a
+  `vi.spyOn` on it is observed by `agent/confirmation.ts`; assertions go through the `@/agent` façade.
+- Never weaken determinism (fake timers, shared DB state); fix the injected seam instead.
+
+## Routing Table
+
+- `./confirmation-idempotency.test.ts` → repeated/after-cancel/foreign-owner confirm boundary
+- `./confirmation.test.ts` → AuditLog rows for confirm/verify/cancel
+- `./task-control.test.ts` → submit_plan persistence + task-control ownership
+- `./run-turn-failure.test.ts` → continuation-failure contract (`resumeTurn`, `confirmAction`)
+- `./providers/provider-mock.test.ts` → pure `mock-responder` behaviour (regex over the LLM text)
+- `../helpers/db.ts` → `getTestPrisma()` (lazy), `resetDatabase`, `disconnectTestPrisma` (sibling — this node)
+
+## Known Gaps
+
+- **No concurrent-confirm spec.** The repeated-confirm spec covers sequential reuse but NOT two
+  simultaneous confirms racing for the same `PendingAction` (the "exactly one executes" invariant
+  is unproven here).

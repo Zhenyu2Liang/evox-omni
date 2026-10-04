@@ -79,6 +79,12 @@ Additional behaviours:
   `toolResult`; detected via the `__SECURITY_BLOCK__` literal plus 确认/验证/验证码/MFA/awaiting
   keywords and narrated as "awaiting user confirmation / verification — not executed". It NEVER
   claims the action executed.
+- **`handlePlan` emits NO gated node** — the `submit_plan` DAG it builds contains only GREEN tool
+  nodes (`analyze_spending` / `get_balance`) plus `condition`/`note` nodes. Consequence: a
+  mock-driven `submit_plan` turn NEVER parks a node, so `plan_update` events stream but the
+  plan-level `confirmation_required`/`mfa_required` signal is UNREACHABLE through the mock model.
+  The parked-plan path is exercised only via a scripted model (e.g. `tests/helpers/faux-agent.ts`)
+  or the node-local `task-control.test.ts`.
 
 Purity contract: `mock-responder.ts` imports only `@mariozechner/pi-ai` faux helpers + message types
 (no prisma / banking-sdk / network / filesystem), and uses EXPLICIT stable tool-call ids (e.g.
