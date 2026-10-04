@@ -133,9 +133,13 @@ Vitest (`../tests`, sibling). This node is a thin, well-isolated boundary:
   never appears in the return value.
 - `live` mode is not unit-tested (network + key); it is exercised manually for the demo.
 
-NOTE: the responder unit tests belong under `tests/unit/agent/providers/`, which is a SIBLING of
-this node (`./agent`). Writers here cannot create them (node-scope rule) — escalate the test-file
-creation to the root/owner of `./tests`.
+The responder unit spec is authored and GREEN (16 tests, no DB) as a STAGING COPY at
+`./agent/providers/provider-mock.test.ts`. It MUST be relocated by the ROOT to
+`tests/unit/agent/providers/provider-mock.test.ts` — that directory is a SIBLING of this node, and
+writers here cannot create files there (node-scope rule). To run it PRE-relocation, use a temporary
+vitest config whose `test.include` is exactly the staged file and invoke it from the REPOSITORY ROOT
+(a `node_modules` junction in a worktree makes vitest load a duplicate instance and fail with
+"No test suite found").
 
 ## Routing Table
 
