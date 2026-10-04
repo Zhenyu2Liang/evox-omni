@@ -456,9 +456,41 @@ interface PlanNode {
 
 function handlePlan(text: string): AssistantMessage {
   const threshold = parseThreshold(text);
+  const limitAdjustment = parseCardLimitAdjustment(text);
   const nodes: PlanNode[] = [];
 
-  if (/(消费|花|支出)/.test(text)) {
+  if (limitAdjustment !== undefined) {
+    // Conditional LIMIT-ADJUSTMENT plan: a GREEN analysis node, a condition on its total, then a
+    // GATED `set_card_limit` node (YELLOW — it never executes here; the gateway blocks it and the
+    // plan node PARKS in `waiting_confirmation` until the user confirms).
+    nodes.push({
+      id: 'analyze',
+      name: '查询消费情况',
+      dependencies: [],
+      kind: 'tool',
+      tool: 'analyze_spending',
+      args: {},
+    });
+    nodes.push({
+      id: 'check',
+      name: '判断是否超过阈值',
+      dependencies: ['analyze'],
+      kind: 'condition',
+      condition: { path: 'analyze.total', op: '>', value: threshold ?? PLAN_DEFAULT_THRESHOLD },
+    });
+    nodes.push({
+      id: 'setlimit',
+      name: `调整「${limitAdjustment.category}」消费限额`,
+      dependencies: ['check'],
+      kind: 'tool',
+      tool: 'set_card_limit',
+      args: {
+        cardId: DEMO_CREDIT_CARD_ID,
+        category: limitAdjustment.category,
+        amount: limitAdjustment.amount,
+      },
+    });
+  } else if (/(消费|花|支出)/.test(text)) {
     nodes.push({
       id: 'analyze',
       name: '查询消费情况',
@@ -516,6 +548,45 @@ function parseThreshold(text: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+/** Spend threshold a conditional plan defaults to when it names no explicit 超过/大于 number. */
+const PLAN_DEFAULT_THRESHOLD = 2000;
+
+/**
+ * Seeded credit-card id a scripted limit-adjustment plan targets. It is a DEMO-MODEL scripted id:
+ * `mock-responder.ts` holds no DB access (purity contract — no prisma / banking-sdk imports), so it
+ * cannot look a card up and instead references the deterministic seeded `card_credit`
+ * (see `prisma/seed.ts` / `tests/helpers/fixtures.ts`; it already carries an 娱乐 limit).
+ */
+const DEMO_CREDIT_CARD_ID = 'card_credit';
+
+/** Card spend categories a limit-adjustment plan can target (the SDK accepts a free-form category). */
+const CARD_LIMIT_CATEGORIES = ['娱乐', '餐饮', '购物', '出行', '生活', '居家', '教育', '医疗', '通讯', '其他'];
+
+/** Sensible default category when the request names none (matches the seeded 娱乐 card limit). */
+const DEFAULT_CARD_LIMIT_CATEGORY = '娱乐';
+
+interface CardLimitAdjustment {
+  category: string;
+  amount: number;
+}
+
+/**
+ * A card spend-limit ADJUSTMENT phrased inside a conditional plan, e.g.
+ * "…就把娱乐消费限额调整为1500元" ⇒ `{ category: '娱乐', amount: 1500 }`.
+ *
+ * Returns `undefined` unless BOTH a 限额/额度 noun AND an adjustment verb (调整为/改为/…) are present.
+ * The adjustment amount is the one AFTER the verb — `parseAmount` would wrongly grab the earlier
+ * threshold number, so it is parsed here with a dedicated pattern.
+ */
+function parseCardLimitAdjustment(text: string): CardLimitAdjustment | undefined {
+  if (!/(限额|额度)/.test(text)) return undefined;
+  const m = text.match(/(?:调整为|改为|改成|设置为|设为|限额为|调到|调成)\s*(\d+(?:\.\d+)?)/);
+  if (!m) return undefined;
+  const category =
+    CARD_LIMIT_CATEGORIES.find((candidate) => text.includes(candidate)) ?? DEFAULT_CARD_LIMIT_CATEGORY;
+  return { category, amount: Number(m[1]) };
+}
+
 /* ------------------------------------------------------------- misc helpers */
 
 function toolCall(name: string, args: Record<string, unknown>): AssistantMessage {
@@ -544,6 +615,7 @@ const ACTION_TEXT: Record<string, string> = {
   list_scheduled_tasks: '好的，我来查一下你的定时任务。',
   search_contact: '好的，我来查找这位联系人。',
   transfer_money: '好的，我来为你处理这笔转账。',
+  set_card_limit: '好的，我来为你调整这张卡片的消费限额。',
   reserve_budget: '好的，我来为你预留这笔预算。',
   submit_plan: '好的，我来为你规划一个任务计划。',
 };

@@ -79,12 +79,18 @@ Additional behaviours:
   `toolResult`; detected via the `__SECURITY_BLOCK__` literal plus 确认/验证/验证码/MFA/awaiting
   keywords and narrated as "awaiting user confirmation / verification — not executed". It NEVER
   claims the action executed.
-- **`handlePlan` emits NO gated node** — the `submit_plan` DAG it builds contains only GREEN tool
-  nodes (`analyze_spending` / `get_balance`) plus `condition`/`note` nodes. Consequence: a
-  mock-driven `submit_plan` turn NEVER parks a node, so `plan_update` events stream but the
-  plan-level `confirmation_required`/`mfa_required` signal is UNREACHABLE through the mock model.
-  The parked-plan path is exercised only via a scripted model (e.g. `tests/helpers/faux-agent.ts`)
-  or the node-local `task-control.test.ts`.
+- **`handlePlan` can emit a GATED node** — a conditional message that ALSO asks to adjust a card
+  spend limit (限额/额度 + 调整为/改为/…) builds a `submit_plan` DAG of
+  `analyze`(tool `analyze_spending`, GREEN) → `check`(condition `analyze.total > <threshold>`) →
+  `setlimit`(tool `set_card_limit`, args `{ cardId:'card_credit', category:<parsed>, amount:<parsed> }`,
+  YELLOW). The canonical trigger is exactly `如果这个月娱乐消费超过2000元，就把娱乐消费限额调整为1500元`
+  ⇒ nodes sit at `analyze:success` / `check:success` / `setlimit:waiting_confirmation` and the plan
+  parks at `waiting_confirmation`, so the plan-level `confirmation_required` frame IS reachable
+  through the mock model; a human `confirmAction` runs the real `set_card_limit` and the node
+  advances to `success`. `cardId:'card_credit'` is a scripted demo-model id (the seeded credit card
+  already carries an 娱乐 limit of ¥3000).
+- A conditional message WITHOUT a limit-adjustment phrase still builds only GREEN
+  `analyze_spending`/`get_balance` tool nodes plus `condition`/`note` nodes, so it never parks.
 
 Purity contract: `mock-responder.ts` imports only `@mariozechner/pi-ai` faux helpers + message types
 (no prisma / banking-sdk / network / filesystem), and uses EXPLICIT stable tool-call ids (e.g.
@@ -139,20 +145,22 @@ Vitest (`../tests`, sibling). This node is a thin, well-isolated boundary:
   never appears in the return value.
 - `live` mode is not unit-tested (network + key); it is exercised manually for the demo.
 
-The responder unit spec is authored and GREEN (16 tests, no DB) as a STAGING COPY at
-`./agent/providers/provider-mock.test.ts`. It MUST be relocated by the ROOT to
-`tests/unit/agent/providers/provider-mock.test.ts` — that directory is a SIBLING of this node, and
-writers here cannot create files there (node-scope rule). To run it PRE-relocation, use a temporary
-vitest config whose `test.include` is exactly the staged file and invoke it from the REPOSITORY ROOT
-(a `node_modules` junction in a worktree makes vitest load a duplicate instance and fail with
-"No test suite found").
+The responder unit spec lives at `tests/unit/agent/providers/provider-mock.test.ts` and is
+auto-discovered by the ROOT `vitest.config.ts` (`test.include: ['tests/**/*.{test,spec}.ts']`) via
+`npm run test`; `tests/` is a read-only SIBLING of this node.
+The gated-plan spec `plan-limit-park.test.ts` is a STAGING COPY inside `./agent/providers/` that the
+ROOT must relocate to `tests/unit/agent/providers/` (writers here cannot create files under `tests/`).
+To run it PRE-relocation, use a temporary vitest config (created at the REPOSITORY ROOT) whose
+`test.include` is exactly the staged file, `setupFiles: ['tests/setup.ts']` and `env: { LLM_MODE: 'mock' }`,
+and invoke it from the REPOSITORY ROOT (a `node_modules` junction in a worktree makes vitest load a
+duplicate instance and fail with "No test suite found"); delete the config afterwards.
 
 ## Routing Table
 
 - `./agent/providers/provider-live.ts` → `createLiveModel(cfg)` — real Pi AI model (demo-only)
 - `./agent/providers/provider-mock.ts` → `createMockModel(cfg)` — self-requeuing faux factory (offline, deterministic, interactive)
 - `./agent/providers/mock-responder.ts` → `respond(context)` — PURE scripted decision logic (intent → tool call / clarify / narrate)
-- `./agent/providers/provider-mock.test.ts` → STAGED unit spec for `respond` (16 tests, DB-free); ROOT must relocate it to `tests/unit/agent/providers/provider-mock.test.ts`
+- `./agent/providers/plan-limit-park.test.ts` → STAGED spec: gated conditional plan (`respond` pure + full pipeline parking/confirm E2E); ROOT must relocate it to `tests/unit/agent/providers/plan-limit-park.test.ts`
 - `./agent/providers/index.ts` → node facade: `resolveModel`, `providerId`
 - `../banking-agent.ts` → sole consumer; receives a `Model` from `resolveModel` (sibling file, same node — read-only here)
 - `@/lib/config` → `AppConfig` + `getConfig()` (cross-node dependency — read-only)
