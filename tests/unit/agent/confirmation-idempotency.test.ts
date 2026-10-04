@@ -13,7 +13,7 @@
  * gateway, SDK and DB are the production ones. A UNIQUE persisted session per test keeps the
  * in-process circuit breaker (keyed by sessionId, no global reset) isolated.
  *
- * Run with: `npx vitest run --config agent/vitest.config.ts`
+ * Runs under the default config: `npm run test`.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 

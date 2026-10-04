@@ -13,7 +13,7 @@
  * (`executeGatedTool`) against the real Banking SDK + test SQLite; only the model is the
  * `LLM_MODE=mock` faux provider (and it is never consulted here).
  *
- * Run with: `npx vitest run --config agent/vitest.config.ts`
+ * Runs under the default config: `npm run test`.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
