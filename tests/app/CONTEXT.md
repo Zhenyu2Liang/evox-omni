@@ -85,7 +85,7 @@ the clearly-named `REACHABLE — …` test. The `error`-event path is only reach
 
 ## Notes for Agents
 
-- Add the action/task specs (`/api/actions/[id]/{confirm,verify,cancel}`, `/api/tasks`) on TOP of
+- The action specs now live in `actions-http.test.ts` (the human-decision half of Case 12). The remaining HTTP gap is the task specs (`/api/tasks`, `/api/tasks/[id]`) — build them ON TOP of `harness.ts` — pass the specific handler into the invokers; do not duplicate request/SSE plumbing.
   `harness.ts` — pass the specific handler into the invokers; do not duplicate request/SSE plumbing.
 - GREEN auto-executed reads write NO `AuditLog` row (audit rows are gated-only); assert GREEN at the
   tool-event / DB-state level.
