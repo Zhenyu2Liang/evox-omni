@@ -26,7 +26,7 @@ envelope (below). Dynamic-route handlers receive `(req: NextRequest, ctx: IdRout
 | POST | `/api/chat` | body `ChatTurnRequest`; `?stream=0\|1` (default 1) | stream ⇒ SSE of `AgentStreamEvent` ending `{"type":"done"}`; non-stream ⇒ `ChatTurnResponse` | `@/agent` `runTurn` / `resumeTurn` |
 | POST | `/api/actions/[id]/confirm` | body `{}` | `ActionResponse` (ownership enforced: cross-session/user → `403 SECURITY_DENIED`) | `_lib/agent-bridge` `confirmOwned` → `@/agent` `confirm` (forwards `{userId,sessionId}`) |
 | POST | `/api/actions/[id]/verify` | body `{ code: string }` | `ActionResponse` (wrong code ⇒ 200 with `data.ok=false`, `status:'awaiting_mfa'`; ownership enforced) | `_lib/agent-bridge` `verifyOwned` → `@/agent` `verify` (forwards `{userId,sessionId}`) |
-| POST | `/api/actions/[id]/cancel` | body `{}` | `ActionResponse` (`status:'cancelled'`) | `@/agent` `cancel` |
+| POST | `/api/actions/[id]/cancel` | body `{}` | `ActionResponse` (`status:'cancelled'`; ownership enforced) | `_lib/agent-bridge` `cancelOwned` → `@/agent` `cancel` (forwards `{userId,sessionId}`) |
 | GET | `/api/tasks` | query `{ sessionId?, limit? }` | `{ plans: TaskPlan[] }` | persisted `AgentTask` rows via `@/lib/db/repositories/task` |
 | GET | `/api/tasks/[id]` | — | `TaskPlan` | persisted `AgentTask` row via `@/lib/db/repositories/task` |
 | POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` | `@/agent` execution control via `_lib/agent-bridge` (session-owned; see Notes) |
