@@ -145,5 +145,9 @@ rendered to the user is the `TaskPlan` snapshot delivered via the `plan_update` 
 - `../lib/contracts/task.ts` → FROZEN plan/node types (sibling — read-only, escalate writes to root)
 - `../lib/db/repositories/task.ts` → AgentTask/AgentTaskNode persistence used by `deps.persist`
   (sibling — read-only, escalate writes to `./lib`)
-- `../tests/unit/planner/` → planner unit tests: `dag.test.ts`, `executor.test.ts`, `lifecycle.test.ts`
+- `./planner/lifecycle.test.ts` → lifecycle unit spec: dependency order, pause, cancel + compensation,
+  retry, resume-after-gate, idempotency — pure in-memory ports. Co-located here because this node
+  cannot write the sibling `../tests` node; canonical home is
+  `../tests/unit/planner/lifecycle.test.ts` (relocate with `git mv` to run under `npm run test`).
+- `../tests/unit/planner/` → planner unit tests: `dag.test.ts`, `executor.test.ts`
   (sibling — read-only, escalate writes to `./tests`)
