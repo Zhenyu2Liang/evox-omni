@@ -1,0 +1,6 @@
+   ▲ Next.js 15.5.26
+   - Local:        http://localhost:3011
+   - Network:      http://198.18.0.1:3011
+
+ ✓ Starting...
+ ✓ Ready in 319ms

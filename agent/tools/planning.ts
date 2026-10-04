@@ -24,10 +24,13 @@ import type {
   TaskNodeKind,
   TaskNodeResult,
   TaskNodeSpec,
+  TaskNodeStatus,
   TaskPlan,
+  TaskPlanStatus,
 } from '@/lib/contracts/task';
 import { dag, executor, type PlanToolOutcome } from '@/planner';
 import { AppError } from '@/lib/errors';
+import { demoNow } from '@/lib/clock';
 import { createTask, createTaskNode } from '@/lib/db/repositories/task';
 import { createTaskPersistence } from '../task-control';
 import type { ToolExecutionResult } from './index';
@@ -49,6 +52,12 @@ export interface SubmitPlanDeps {
   runTool: PlanRunTool;
   /** Called on every node status change; the agent forwards it as the `plan_update` stream event. */
   onNodeUpdate?: (node: TaskNodeResult) => void;
+  /**
+   * Called on every node status change with the FULL plan snapshot composed so far (the executor's
+   * `onNodeUpdate` carries only the changed node). The agent forwards it as the `plan_update` stream
+   * event so the UI renders the DAG timeline live. Optional — no snapshot is built when absent.
+   */
+  onPlanUpdate?: (plan: TaskPlan) => void | Promise<void>;
   /** Abort signal for the run. */
   signal?: AbortSignal;
   /** Injectable clock for deterministic tests (`dag.buildPlan` `now`). */
@@ -131,6 +140,52 @@ function toTaskNodeSpec(node: IncomingPlanNode): TaskNodeSpec {
     tool: node.tool,
     args: node.args as Record<string, unknown> | undefined,
     condition: node.condition as TaskCondition | undefined,
+  };
+}
+
+/**
+ * Compose a full `TaskPlan` snapshot from the in-scope plan + the node results accumulated so far,
+ * so a `onPlanUpdate` sink can forward coherent DAG progress after EACH node change (the executor's
+ * `onNodeUpdate` only carries the changed node).
+ *
+ * Mirrors the executor's internal snapshot: not-yet-recorded nodes surface as `pending` stubs, and
+ * the plan status is derived the same way (`waiting_confirmation` when any node is parked, then
+ * `cancelled` / `failed`, then all-settled ⇒ `success`, else `running`).
+ */
+function composePlanSnapshot(
+  plan: TaskPlan,
+  results: ReadonlyMap<string, TaskNodeResult>,
+  now: number,
+): TaskPlan {
+  const statuses = plan.nodes.map((node) => results.get(node.id)?.status);
+  let status: TaskPlanStatus = 'running';
+  if (statuses.some((s) => s === 'waiting_confirmation' || s === 'waiting_verification')) {
+    status = 'waiting_confirmation';
+  } else if (statuses.some((s) => s === 'cancelled')) {
+    status = 'cancelled';
+  } else if (statuses.some((s) => s === 'failed')) {
+    status = 'failed';
+  } else if (statuses.every((s) => s === 'success' || s === 'skipped')) {
+    status = 'success';
+  }
+  return {
+    id: plan.id,
+    sessionId: plan.sessionId,
+    goal: plan.goal,
+    status,
+    nodes: plan.nodes,
+    results: plan.nodes.map((node) => {
+      const recorded = results.get(node.id);
+      if (recorded) return { ...recorded };
+      return {
+        id: node.id,
+        name: node.name,
+        status: 'pending' as TaskNodeStatus,
+        tool: node.kind === 'tool' ? node.tool : undefined,
+      };
+    }),
+    createdAt: plan.createdAt,
+    updatedAt: now,
   };
 }
 
@@ -227,11 +282,25 @@ export async function runSubmitPlan(
     return { ok: false, error: AppError.from(e).message };
   }
 
+  // LIVE DAG progress: the executor notifies the changed node only, so accumulate node results and
+  // forward a full plan snapshot to the optional `onPlanUpdate` sink after every change. Seeded from
+  // the (empty) plan; the sink is what drives the UI's `plan_update` timeline.
+  const nodeSink = deps.onNodeUpdate;
+  const planSink = deps.onPlanUpdate;
+  const planNow = deps.now ?? (() => demoNow());
+  const accumulated = new Map<string, TaskNodeResult>();
+  const onNodeUpdate = async (node: TaskNodeResult): Promise<void> => {
+    await nodeSink?.(node);
+    if (planSink === undefined) return;
+    accumulated.set(node.id, { ...node });
+    await planSink(composePlanSnapshot(plan, accumulated, planNow()));
+  };
+
   const result = await executor.runPlan(
     plan,
     {
       runTool: deps.runTool,
-      onNodeUpdate: deps.onNodeUpdate ?? (() => {}),
+      onNodeUpdate,
       ...createTaskPersistence(plan.id),
     },
     { signal: deps.signal, now: deps.now },
