@@ -24,7 +24,7 @@ envelope (below). Dynamic-route handlers receive `(req: NextRequest, ctx: IdRout
 | --- | --- | --- | --- | --- |
 | GET | `/api/health` | — | `{ status:'ok', time:number, llmMode:'live'\|'mock' }` | `@/lib/config` |
 | POST | `/api/chat` | body `ChatTurnRequest`; `?stream=0\|1` (default 1) | stream ⇒ SSE of `AgentStreamEvent` ending `{"type":"done"}`; non-stream ⇒ `ChatTurnResponse` | `@/agent` `runTurn` / `resumeTurn` |
-| POST | `/api/actions/[id]/confirm` | body `{}` | `ActionResponse` | `@/agent` `confirm` |
+| POST | `/api/actions/[id]/confirm` | body `{}` | `ActionResponse` (ownership enforced: cross-session/user → `403 SECURITY_DENIED`) | `_lib/agent-bridge` `confirmOwned` → `@/agent` `confirm` (forwards `{userId,sessionId}`) |
 | POST | `/api/actions/[id]/verify` | body `{ code: string }` | `ActionResponse` (wrong code ⇒ 200 with `data.ok=false`, `status:'awaiting_mfa'`) | `@/agent` `verify` |
 | POST | `/api/actions/[id]/cancel` | body `{}` | `ActionResponse` (`status:'cancelled'`) | `@/agent` `cancel` |
 | GET | `/api/tasks` | query `{ sessionId?, limit? }` | `{ plans: TaskPlan[] }` | persisted `AgentTask` rows via `@/lib/db/repositories/task` |
