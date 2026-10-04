@@ -210,7 +210,12 @@ describe('plan parking through the mock model (runTurn → confirmAction)', () =
     expect(typeof actionId).toBe('string');
     const pending = await prisma.pendingAction.findUniqueOrThrow({ where: { id: actionId! } });
     expect(pending.toolName).toBe('set_card_limit');
-    expect(pending.args).toMatchObject({ cardId: 'card_credit', category: '娱乐', amount: 1500 });
+    // PendingAction persists args as a JSON string in `argsJson` (there is no `args` column).
+    expect(safeParse(pending.argsJson, {})).toMatchObject({
+      cardId: 'card_credit',
+      category: '娱乐',
+      amount: 1500,
+    });
 
     // The seeded 娱乐 limit is still 3000 — the gated node did NOT execute.
     const before = await prisma.cardLimit.findFirstOrThrow({
@@ -244,7 +249,9 @@ describe('plan parking through the mock model (runTurn → confirmAction)', () =
       .filter((e): e is Extract<AgentStreamEvent, { type: 'text_delta' }> => e.type === 'text_delta')
       .map((e) => e.delta)
       .join('');
-    expect(text).toContain('额度设置结果');
+    // The narration relays the REAL plan outcome: the outer `submit_plan` result (lead
+    // 「任务计划：」) whose summary embeds the executed node's factual new limit — never fabricated.
+    expect(text).toContain('¥1,500.00');
 
     // The REAL card limit moved: 3000 → 1500.
     const after = await getTestPrisma().cardLimit.findFirstOrThrow({
