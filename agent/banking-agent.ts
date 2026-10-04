@@ -22,6 +22,7 @@ import type {
 } from '@mariozechner/pi-agent-core';
 import { getConfig, type AppConfig } from '@/lib/config';
 import type { ToolName } from '@/lib/contracts/tools';
+import type { TaskPlan } from '@/lib/contracts/task';
 import { security } from '@/security';
 import { createToolRegistry, type ToolRegistry } from './tools';
 import { executeGatedTool } from './confirmation';
@@ -66,6 +67,13 @@ export interface BankingAgentOptions {
   snapshot?: SessionSnapshot;
   /** Override config (tests). Defaults to `getConfig()`. */
   config?: AppConfig;
+  /**
+   * Optional LIVE DAG-progress sink: invoked with the full plan snapshot after every node change of
+   * a `submit_plan` run, so `./run-turn` can stream `plan_update` and the parked-node decision
+   * events. When omitted, a `submit_plan` turn still surfaces its plan card but streams no
+   * per-node progress (backward compatible — the model/agent pipeline is unchanged).
+   */
+  onPlanUpdate?: (plan: TaskPlan) => void | Promise<void>;
 }
 export interface BankingAgentRuntime {
   agent: Agent;
@@ -120,6 +128,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
           args,
           userRequest: latestUserRequest(),
         }),
+      ...(options.onPlanUpdate !== undefined ? { onPlanUpdate: options.onPlanUpdate } : {}),
     },
   });
 
