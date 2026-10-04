@@ -131,7 +131,7 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   `_lib/agent-bridge`.
 - `@/banking-sdk` (read-only): read models (`banking.dashboard/transaction/card/subscription/…`, DTOs).
 - `@/audit` (read-only): `listAudit`, `getAuditSummary`, `listSecurityEvents`, `getSecurityStatus`.
-- `@/security` (read-only): `circuitBreaker.getState`/`isLocked`/`reset` for `/api/security` (+ reset).
+- `@/security` (read-only): `circuitBreaker.getState`/`isLocked` for `/api/security`; the audited `circuitBreaker.resetSession` for `/api/security/reset`.
 - `@/planner` (read-only): `TaskPlan` type for `/api/tasks*` (no cross-request plan store — see Notes).
 - `@/lib` (read-only): contracts, `AppError`/`ErrorCode`/`Result`, `getConfig`, constants, money,
   and the typed read path `@/lib/db/repositories/*` (`task`, `pendingAction`) + `lib/json`.
