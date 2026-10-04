@@ -104,6 +104,13 @@ export function ErrorCard(p: ErrorCardProps): JSX.Element;            // safe, a
 `CardRenderer` narrows the frozen `data: unknown` field to the concrete DTO above; the `./app` serialiser
 must populate `cards[].data` with exactly these shapes.
 
+## Known Issues
+
+- `PlanCard.tsx:31-34` (`stepMark`) + `PlanCard.tsx:61` (`done = result?.status === 'success'`) collapse its OWN explicit DAG step list to a binary **✓/○** — `running`, `waiting_confirmation`, `waiting_verification`, `failed`, `cancelled`, `skipped` all render as the same grey ○ (only the marker/colour are driven by `done`, `PlanCard.tsx:67,73`). This step list is redundant with the timeline below it.
+- The full node-status set IS rendered, but by the COMPOSED `AgentTaskTimeline` (`PlanCard.tsx:56` → `components/banking/AgentTaskTimeline.tsx:30-39`, whose `STATUS_META` covers all 8 `TaskNodeStatus` with distinct icon/label/tone: ○●⏳✓✗×–). So the statuses are visible, but not through PlanCard's own list.
+- `PlanCard` renders no confirmation/MFA action for a `waiting_confirmation`/`waiting_verification` node — a parked plan node surfaces only as the 待确认/待验证 badge (there is no [确认]/[取消] button; the confirm path lives in `ConfirmationCard`/`MfaCard`, which are only emitted for direct tool blocks — see `../CONTEXT.md` Known Issues).
+- `PlanCard` takes only `{ plan }` — no action bundle — so it can never drive a confirm/verify/cancel.
+
 ## Constraints
 
 - **Exhaustiveness is mandatory**: `CardRenderer` switches on `card.type` with a `default` of
