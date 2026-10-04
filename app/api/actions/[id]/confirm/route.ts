@@ -8,6 +8,8 @@
  *  - Delegates to the agent runtime via `_lib/agent-bridge` `confirmOwned(id, { userId, sessionId })`
  *    (`@/agent`), which executes the ORIGINAL validated args through the Security Gateway's
  *    authorized path — never from model text.
+ *  - On success, appends a refreshed `plan_update` to `events` when the confirmed action parked a DAG
+ *    plan node, so `/agent` can refresh its plan view (the plan is located BEFORE the confirm).
  *  - Success: `200 { ok: true, data: ActionResponse }`. The action being still `pending`, already
  *    settled, or a `data.ok === false` outcome is a normal 200 (domain outcome, not HTTP error).
  *  - Unknown/expired action → `404 NOT_FOUND`; not the owner → `403 SECURITY_DENIED`; circuit open →
@@ -18,7 +20,7 @@
 import type { NextRequest } from 'next/server';
 import { AppError } from '@/lib/errors';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
-import { confirmOwned } from '../../../_lib/agent-bridge';
+import { confirmOwned, locateOwningPlan, withPlanUpdate } from '../../../_lib/agent-bridge';
 import { errorResponse, jsonResponse } from '../../../_lib/http';
 import { resolveSessionId, resolveUserId } from '../../../_lib/session';
 import type { ActionResponse, IdRouteContext } from '../../../_lib/types';
@@ -39,7 +41,13 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
       throw new AppError('SECURITY_DENIED', '无权确认该操作。');
     }
 
+    // Locate the plan node parked on this action BEFORE confirming — resuming the plan clears the
+    // node's `pendingActionId`, after which the reverse lookup finds nothing. A plain (non-plan)
+    // action simply returns `undefined`.
+    const located = await locateOwningPlan(row?.sessionId, id);
     const outcome = await confirmOwned(id, { userId, sessionId });
+    // Forward a refreshed `plan_update` so `/agent` refreshes its plan view after the decision.
+    const outcomeWithPlan = await withPlanUpdate(outcome, located);
 
     // `ConfirmationOutcome` does not carry the session id: derive it from the persisted
     // `PendingAction` row, falling back to the request session (cookie/query) when absent.
@@ -54,7 +62,7 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
       requiresMfa: outcome.tier === 'RED',
       mfaResult: 'not_required',
       message: outcome.message,
-      events: outcome.events,
+      events: outcomeWithPlan.events,
     };
 
     return jsonResponse<ActionResponse>(mapped);

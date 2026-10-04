@@ -8,6 +8,8 @@
  *  - Delegates to the agent runtime via `_lib/agent-bridge` `verifyOwned(id, code, { userId, sessionId })`
  *    (`@/agent`), which checks the code against the mock MFA value and, on success, executes the
  *    original validated args.
+ *  - On success, appends a refreshed `plan_update` to `events` when the verified action parked a DAG
+ *    plan node, so `/agent` can refresh its plan view (the plan is located BEFORE the verify).
  *  - A WRONG code is a NORMAL 200 with `data.ok === false` and `data.status === 'awaiting_mfa'`
  *    (`mfaResult: 'failed'`); three consecutive failures trip the circuit breaker (`423`).
  *  - The MFA code is NEVER echoed back in any response body (only `mfaResult` is reported).
@@ -18,7 +20,7 @@ import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { AppError } from '@/lib/errors';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
-import { verifyOwned } from '../../../_lib/agent-bridge';
+import { verifyOwned, locateOwningPlan, withPlanUpdate } from '../../../_lib/agent-bridge';
 import { errorResponse, jsonResponse, parseBody } from '../../../_lib/http';
 import { resolveSessionId, resolveUserId } from '../../../_lib/session';
 import type { ActionResponse, IdRouteContext } from '../../../_lib/types';
@@ -46,7 +48,13 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
       throw new AppError('SECURITY_DENIED', '无权验证该操作。');
     }
 
+    // Locate the plan node parked on this action BEFORE verifying — resuming the plan clears the
+    // node's `pendingActionId`, after which the reverse lookup finds nothing. A plain (non-plan)
+    // action simply returns `undefined`.
+    const located = await locateOwningPlan(row?.sessionId, id);
     const outcome = await verifyOwned(id, code, { userId, sessionId });
+    // Forward a refreshed `plan_update` so `/agent` refreshes its plan view after the decision.
+    const outcomeWithPlan = await withPlanUpdate(outcome, located);
 
     // `ConfirmationOutcome` does not carry the session id: derive it from the persisted
     // `PendingAction` row, falling back to the request session (cookie/query) when absent.
@@ -67,7 +75,7 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
       requiresMfa: outcome.tier === 'RED',
       mfaResult,
       message: outcome.message,
-      events: outcome.events,
+      events: outcomeWithPlan.events,
     };
 
     return jsonResponse<ActionResponse>(mapped);
