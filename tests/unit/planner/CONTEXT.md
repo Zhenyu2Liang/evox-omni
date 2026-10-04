@@ -21,7 +21,9 @@ Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` 
   `PlanControls` (pause/resume/cancel/retry); abort signal → `cancelled`.
 - `lifecycle.test.ts` — `planner/lifecycle.ts` durable controls (`pausePlan`/`cancelPlan`/`retryPlan`/
   `resumePlan`) over a persisted plan: pause halts progression, cancel sweeps EVERY remaining
-  non-terminal node to `cancelled`, retry re-runs only the failed node, resume continues.
+  non-terminal node to `cancelled` (incl. a durable `{ kind:'cancel' }` polled after the first node of a
+  3-node `[a, b(dep a), c(dep b)]` chain settles → `a=success`, `b=c=cancelled`, `b`/`c` never invoked),
+  retry re-runs only the failed node, resume continues.
 
 ## Constraints
 
