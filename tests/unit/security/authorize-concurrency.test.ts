@@ -115,7 +115,9 @@ describe('authorizeAction · concurrent confirm (exactly-once execution)', () =>
     const settled = await Promise.allSettled([confirmAction(actionId), confirmAction(actionId)]);
 
     const winners = settled.filter(isWinner);
-    const others = settled.filter((r) => !isWinner(r));
+    // Widen explicitly: the negated type predicate would otherwise narrow this to `PromiseRejectedResult[]`
+    // and make the `status === 'fulfilled'` branch below untypeable (the loser MAY be a typed `ok:false`).
+    const others: PromiseSettledResult<ConfirmOutcome>[] = settled.filter((r) => !isWinner(r));
 
     expect(winners).toHaveLength(1);
     expect(winners[0]!.value.status).toBe('executed');
