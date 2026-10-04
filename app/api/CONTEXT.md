@@ -193,7 +193,7 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 - **`POST /api/security/reset`** is the runtime unlock path for a tripped breaker (the gateway's
   "前往安全中心解除限制" pointer). Session id resolution matches `GET /api/security`. It calls the
   AUDITED async `security.circuitBreaker.resetSession(sessionId, { actor: 'user' })`, which clears the
-  `await Promise.resolve(security.circuitBreaker.reset(sid))` so both `void` and `Promise` signatures work;
+  breaker state AND records a `SECURITY_RESET` `SecurityEvent`, returning the fresh `CircuitBreakerState`
   then read the fresh state via `getState` for the response.
 - **`@/planner` has no cross-request plan store.** `/api/tasks*` read the persisted `AgentTask`/
   `AgentTaskNode` rows through the sanctioned read path `@/lib/db/repositories/task` and map them to
