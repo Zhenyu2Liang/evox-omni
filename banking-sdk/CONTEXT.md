@@ -125,7 +125,5 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 - `./banking-sdk/dashboard.ts` → aggregated dashboard read model
 - `./banking-sdk/index.ts` → `banking` facade + DTO re-exports
 - `./banking-sdk/tx.ts` → `runInTransaction` — the SDK's only direct Prisma usage (interactive transaction boundary)
-- `./banking-sdk/atomicity.test.ts` → in-node regression spec: money-movement rollback + concurrent overspend / double-redeem
-- `./banking-sdk/vitest.atomicity.config.ts` → scoped Vitest config for the in-node atomicity spec (not auto-discovered)
-- `../tests` → SDK unit tests live under the repo-root test suite (sibling — read-only, escalate writes to root)
+- `../tests/unit/banking-sdk` → SDK unit specs incl. the money-movement atomicity regression spec (sibling — read-only, auto-discovered by the root `npm run test`; escalate writes to root)
 - `../lib/db/repositories` → the typed repositories the SDK reads/writes through (dependency — read-only)
