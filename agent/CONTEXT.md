@@ -157,6 +157,10 @@ Human decision (API route → `confirmation.ts`):
    `executeGatedTool`/`registry.executeDirect` — **NOT** the LLM — write the audit entry, then call
    `resumeTurn(...)`, which injects the REAL tool result and calls `agent.continue()` so the model
    only *narrates the factual outcome*.
+5. If the continuation itself fails (`agent.continue()` rejects — a model/narration error), the gated
+   action has ALREADY executed and ALREADY been audited: `resumeTurn` catches the rejection, emits an
+   `error` stream event and still returns the turn; `confirmation` keeps its outcome `result`-driven
+   (never a fabricated success) and appends `（结果播报失败：…）` to the message it reports.
 
 Consequence: money-moving calls are always triggered by a human decision, never by model text.
 (this is what demo Test 4 — prompt injection — proves).
@@ -175,6 +179,9 @@ Consequence: money-moving calls are always triggered by a human decision, never 
 - **Hallucination guard**: assistant replies derive ONLY from real tool results. A tool returning
   `ok:false` MUST be reported as a failure; the agent MUST NOT invent balances/results and MUST NOT
   claim a gated tool already executed.
+- **A continuation failure is not a business failure**: after a confirmed execution, a failing
+  `agent.continue()` is surfaced as an `error` event / a flagged message — NEVER swallowed and NEVER
+  turned into a success (the caller always receives the REAL `ToolExecutionResult`).
 - **No chain-of-thought in UI events** — emit task steps, tool status and results only.
 - **Determinism**: with `LLM_MODE=mock` (faux provider) the whole pipeline — agent + tools + security
   — runs offline. `run-turn`/`confirmation` accept an injectable `now` and `config` for tests.
