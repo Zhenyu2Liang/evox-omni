@@ -1,6 +1,0 @@
-﻿[evogit-agent-T3-A36 d4f1c92] feat(agent): persist submit_plan DAG + idempotent confirmation wiring (workstreams A/B)
- 5 files changed, 492 insertions(+), 7 deletions(-)
- create mode 100644 agent/__tests__/confirmation-idempotency.test.ts
- create mode 100644 agent/__tests__/task-control.test.ts
- create mode 100644 agent/vitest.config.ts
-
