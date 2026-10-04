@@ -88,7 +88,7 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 | `card` | append `card` to the current assistant message's `cards` |
 | `plan_update` | set `activePlan` — but `ChatWindow` never reads it AND no `plan_update` event is ever emitted (see Known Issues), so the plan view does not refresh |
 | `confirmation_required` | set `pendingAction` `{ summary: PendingActionSummary, actionId }` (the card itself comes from a separate `card` event; `pendingAction` only supplies `actionId` — see Known Issues) |
-| `mfa_required` | set `pendingAction` `{ summary: MfaActionSummary, actionId }` (drives `MfaCard`); the summary's `toolName` is the actual gated tool the stream reported as blocked, omitted when the stream carried none |
+| `mfa_required` | set `pendingAction` `{ summary: MfaActionSummary, actionId }` (the `MfaCard` itself is rendered from the `card` event, not from `pendingAction`); the summary's `toolName` is the actual gated tool the stream reported as blocked, omitted when the stream carried none |
 | `security_event` | append a `system` `ChatMessage` (content = `event.message`; `event.kind` is not surfaced) |
 | `error` | set `error` (never throw to the UI) |
 | `done` | clear `busy` |
