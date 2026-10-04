@@ -28,13 +28,14 @@ import type {
 } from '../lib/contracts/security';
 import { evaluateTool, getToolPolicy } from './permission-engine';
 import type { ToolEvaluation } from './permission-engine';
-import { computeDailyTransferTotal } from './risk-engine';
+import { computeDailyTransferTotal, reEvaluateTransferRisk } from './risk-engine';
 import { isLocked } from './circuit-breaker';
 import { getChallenge, issueChallenge, verify } from './mfa';
 import {
+  claimPendingAction,
   createPendingAction as repoCreatePending,
   getPendingAction,
-  updatePendingActionStatus,
+  setPendingActionStatus,
 } from '../lib/db/repositories/pendingAction';
 import { safeParse } from '../lib/json';
 import { formatCNY, parseAmount } from '../lib/money';
@@ -98,15 +99,41 @@ export interface SecurityGateway {
   /** Parse a block reason produced by `serializeBlockReason`; `null` if not a block reason. */
   parseBlockReason(reason: string): { actionId: string; decisionKind: SecurityDecisionKind } | null;
   /**
-   * Authorize a pending action after a human decision.
-   *  - YELLOW: authorize directly (status → `confirmed`).
-   *  - RED: require + verify `mfaCode` via `mfa.verify` (status → `confirmed` on success).
-   *  - locked session: refused (`status: 'locked'`); honors the circuit breaker.
+   * Authorize a pending action after a human decision. This is the ONLY entry point that flips a
+   * pending action to `confirmed` — via an atomic exactly-once claim — so a repeat confirm on an
+   * already-settled action is rejected as `CONFLICT` instead of re-authorizing (which would let the
+   * caller re-execute and move money twice).
+   *
+   * Gate order (fail-closed):
+   *  1. ownership — a supplied `opts.userId` / `opts.sessionId` that does not match the row is
+   *     rejected with `AppError('SECURITY_DENIED')`;
+   *  2. circuit breaker — a locked session is refused (`status: 'locked'`) even with a correct code;
+   *  3. execution-time re-risk — a parked `transfer_money` is re-evaluated against the FRESH day
+   *     total; if it is now RED, the confirmation-only path is refused and strong verification is
+   *     required (closes the stale-parked-transfer bypass);
+   *  4. YELLOW → authorize directly (status → `confirmed`);
+   *  5. RED (or an escalated transfer) → require + verify `mfaCode` via `mfa.verify`
+   *     (status → `confirmed` on success).
    * Does NOT execute the business operation.
    */
-  authorizeAction(actionId: string, opts?: { mfaCode?: string }): Promise<AuthorizationResult>;
-  /** Cancel a pending action (status → `cancelled`); no execution. */
-  cancelAction(actionId: string): Promise<PendingAction>;
+  authorizeAction(
+    actionId: string,
+    opts?: { mfaCode?: string; userId?: string; sessionId?: string },
+  ): Promise<AuthorizationResult>;
+  /**
+   * Cancel a pending action (atomic exactly-once claim → status `cancelled`); no execution.
+   * Enforces the same ownership check as `authorizeAction` and rejects an already-settled action
+   * (`confirmed` / `executed` / `failed` / `cancelled`) with `AppError('CONFLICT')`.
+   */
+  cancelAction(
+    actionId: string,
+    opts?: { userId?: string; sessionId?: string },
+  ): Promise<PendingAction>;
+  /**
+   * Persist the TRUE terminal status of an action AFTER the caller has executed it (or failed), so a
+   * subsequent confirm/cancel is correctly rejected as CONFLICT.
+   */
+  recordActionResult(actionId: string, status: 'executed' | 'failed'): Promise<void>;
   /** End-to-end helper used by `beforeToolCall`. */
   handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorization>;
 }
@@ -122,13 +149,13 @@ const DECISION_KINDS: readonly SecurityDecisionKind[] = [
   'deny',
 ];
 
-/** Statuses from which a pending action can no longer be cancelled. */
-const TERMINAL_STATUSES: readonly PendingActionStatus[] = [
-  'confirmed',
-  'executed',
-  'cancelled',
-  'failed',
-];
+/**
+ * Shown when a parked YELLOW `transfer_money` escalates to RED at EXECUTION time (its fresh day
+ * total now crosses the ¥1000 confirmation-only limit): confirmation alone is refused and strong
+ * verification is required. MUST be code-free — never contains the MFA code.
+ */
+const TRANSFER_ESCALATED_MESSAGE =
+  '该转账在确认时已超出 ¥1000 的免密确认限额（今日累计转账金额变动），需进行安全验证（输入 6 位短信验证码）后方可执行。';
 
 /** Safe fallback summary used when the persisted `summaryJson` cannot be parsed. */
 const FALLBACK_SUMMARY: PendingActionSummary = {
@@ -361,16 +388,40 @@ function parseBlockReason(
 }
 
 /**
+ * EXECUTION-TIME re-risk for a parked action: TRUE iff the row is a `transfer_money` whose FRESH
+ * day-total risk is now RED. Non-transfers, and transfers whose persisted amount cannot be parsed,
+ * are never escalated. The fresh day total comes from `risk.reEvaluateTransferRisk` (demo clock by
+ * default) so the check is deterministic and reads the transaction repository, never model text.
+ */
+async function isTransferEscalated(row: PrismaPendingAction): Promise<boolean> {
+  if (row.toolName !== 'transfer_money') return false;
+  const amount = resolveAmount(safeParse<Record<string, unknown>>(row.argsJson, {}));
+  if (amount === undefined) return false;
+  const fresh = await reEvaluateTransferRisk(row.userId, amount);
+  return fresh.tier === 'RED';
+}
+
+/**
  * Authorize a pending action after a human decision. Honors the session circuit breaker
- * (a locked session is refused even with a correct code) and verifies MFA for RED actions.
- * The gateway NEVER executes the business operation.
+ * (a locked session is refused even with a correct code), re-checks ownership when the caller
+ * supplies it, re-risks a parked transfer against the FRESH day total, claims the action
+ * exactly-once, and verifies MFA for RED actions. The gateway NEVER executes the business operation.
  */
 async function authorizeAction(
   actionId: string,
-  opts?: { mfaCode?: string },
+  opts?: { mfaCode?: string; userId?: string; sessionId?: string },
 ): Promise<AuthorizationResult> {
   const row = await getPendingAction(actionId);
   if (!row) throw new AppError('NOT_FOUND', `未找到待处理的操作: ${actionId}`);
+
+  // Ownership: a confirm from a different user/session is rejected — the caller does not get to
+  // decide another session's action. (When not supplied, the id itself is the capability.)
+  if (opts?.userId !== undefined && opts.userId !== row.userId) {
+    throw new AppError('SECURITY_DENIED', `无权操作该待处理操作: ${actionId}`);
+  }
+  if (opts?.sessionId !== undefined && opts.sessionId !== row.sessionId) {
+    throw new AppError('SECURITY_DENIED', `无权操作该待处理操作: ${actionId}`);
+  }
 
   const action = toContractPendingAction(row);
 
@@ -387,9 +438,44 @@ async function authorizeAction(
     };
   }
 
-  // YELLOW — confirmation alone authorizes execution.
-  if (!row.requiresMfa) {
-    await updatePendingActionStatus(actionId, 'confirmed');
+  // Anti stale-parked-transfer bypass: re-derive today's transfer total FRESH. Several YELLOW
+  // transfers parked at different moments (each validated against the same stale total) must not
+  // collectively slip past the ¥1000 limit — the fresh risk escalates them to RED at execution.
+  const freshRed = await isTransferEscalated(row);
+
+  // The row's `requiresMfa` column stays FALSE for an escalated YELLOW transfer (it was YELLOW at
+  // park time). Route the whole flow on the EFFECTIVE requirement so an escalated transfer can also
+  // be COMPLETED with a code (rather than looping on the escalation branch or confirming unverified).
+  const effectiveRequiresMfa = row.requiresMfa || freshRed;
+
+  // ESCALATION: a confirmation-only transfer whose fresh risk is now RED cannot be confirmed with
+  // confirmation alone. Prompt for strong verification (no state change) unless a code is already
+  // supplied — in which case we fall through to the RED verify path below.
+  if (freshRed && !row.requiresMfa && !opts?.mfaCode) {
+    if (!(await getChallenge(actionId))) await issueChallenge(actionId);
+    return {
+      ok: false,
+      status: 'awaiting_mfa',
+      actionId,
+      tier: action.tier,
+      requiresMfa: true,
+      message: TRANSFER_ESCALATED_MESSAGE,
+      action,
+    };
+  }
+
+  // YELLOW (no strong verification needed) — an atomic exactly-once claim authorizes execution.
+  if (!effectiveRequiresMfa) {
+    const claimed = await claimPendingAction({
+      actionId,
+      from: ['pending'],
+      to: 'confirmed',
+      userId: row.userId,
+      sessionId: row.sessionId,
+    });
+    if (!claimed) {
+      throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    }
     return {
       ok: true,
       status: 'confirmed',
@@ -402,7 +488,7 @@ async function authorizeAction(
     };
   }
 
-  // RED without a code — prompt for verification; nothing is executed.
+  // RED (or escalated) without a code — prompt for verification; nothing is executed.
   if (!opts?.mfaCode) {
     return {
       ok: false,
@@ -447,7 +533,18 @@ async function authorizeAction(
     };
   }
 
-  await updatePendingActionStatus(actionId, 'confirmed');
+  // Verified — claim exactly-once from a still-unsettled state (`awaiting_mfa` for a RED action,
+  // `pending` for an escalated YELLOW transfer) so a concurrent/duplicate confirm is rejected.
+  const claimed = await claimPendingAction({
+    actionId,
+    from: ['awaiting_mfa', 'pending'],
+    to: 'confirmed',
+    userId: row.userId,
+    sessionId: row.sessionId,
+  });
+  if (!claimed) {
+    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+  }
   return {
     ok: true,
     status: 'confirmed',
@@ -460,17 +557,48 @@ async function authorizeAction(
   };
 }
 
-/** Cancel a pending action (status → `cancelled`); no execution. */
-async function cancelAction(actionId: string): Promise<PendingAction> {
+/**
+ * Cancel a pending action (atomic exactly-once claim → `cancelled`); no execution.
+ * Enforces ownership and rejects an already-settled action with `CONFLICT`.
+ */
+async function cancelAction(
+  actionId: string,
+  opts?: { userId?: string; sessionId?: string },
+): Promise<PendingAction> {
   const row = await getPendingAction(actionId);
   if (!row) throw new AppError('NOT_FOUND', `未找到待处理的操作: ${actionId}`);
 
-  if (TERMINAL_STATUSES.includes(row.status as PendingActionStatus)) {
+  if (opts?.userId !== undefined && opts.userId !== row.userId) {
+    throw new AppError('SECURITY_DENIED', `无权操作该待处理操作: ${actionId}`);
+  }
+  if (opts?.sessionId !== undefined && opts.sessionId !== row.sessionId) {
+    throw new AppError('SECURITY_DENIED', `无权操作该待处理操作: ${actionId}`);
+  }
+
+  // Atomic claim: only an unsettled action can be cancelled. A settled one (`confirmed` / `executed`
+  // / `failed` / `cancelled`) transitions 0 rows → rejected, so "cancel after confirm/execute" fails.
+  const claimed = await claimPendingAction({
+    actionId,
+    from: ['pending', 'awaiting_mfa'],
+    to: 'cancelled',
+    userId: row.userId,
+    sessionId: row.sessionId,
+  });
+  if (!claimed) {
     throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法取消。`);
   }
 
-  const updated = await updatePendingActionStatus(actionId, 'cancelled');
-  return toContractPendingAction(updated);
+  const updated = await getPendingAction(actionId);
+  return toContractPendingAction(updated ?? { ...row, status: 'cancelled' });
+}
+
+/**
+ * Persist the TRUE terminal status of an action AFTER the caller has executed it (or failed), so a
+ * subsequent confirm/cancel is correctly rejected as CONFLICT. Unconditional setter — the
+ * exactly-once claim happened at confirm time; this records the real outcome.
+ */
+async function recordActionResult(actionId: string, status: 'executed' | 'failed'): Promise<void> {
+  await setPendingActionStatus(actionId, status);
 }
 
 /** End-to-end helper used by `beforeToolCall`. */
@@ -508,6 +636,7 @@ export const securityGateway: SecurityGateway = {
   parseBlockReason,
   authorizeAction,
   cancelAction,
+  recordActionResult,
   handleToolCall,
 };
 
