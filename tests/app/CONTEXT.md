@@ -32,6 +32,12 @@ complementing the in-process `tests/scenarios/*` suites.
   - Types `RouteHandler`, `HttpOptions`, `HttpResult<T>`; frozen types imported from `@/lib/contracts/*`.
 - `chat-http.test.ts` — `POST /api/chat` end-to-end (imports `{ POST as chatPost }`). Tests 1–8 +
   the mid-turn-failure reality check.
+- `tasks-http.test.ts` — REAL DAG/task-lifecycle e2e (demo Case 11 at the app-entry layer). Imports
+  `{ GET, POST }` from `@/app/api/tasks/[id]/route`, `{ GET }` from `@/app/api/tasks/route`, `{ POST }`
+  from `.../actions/[id]/{confirm,verify}/route` and `chat/route`, and drives them via `harness.ts`:
+  `POST /api/tasks/[id]` pause/cancel/retry, `POST /api/actions/[id]/{confirm,verify}` resuming a
+  parked plan (REAL tool result written back), `GET /api/tasks/[id]` refresh recovery,
+  `GET /api/tasks` newest-first listing, plus 400/403/404 auth.
 
 ## Constraints / Conventions
 
@@ -44,6 +50,11 @@ complementing the in-process `tests/scenarios/*` suites.
 - Import frozen types from `@/lib/contracts/*`; never redeclare them. `Envelope<T>` is the app-layer
   transport shape (declared structurally, not a contract).
 - Reuse `@/lib/constants` (`MFA_CODE`, `SESSION_COOKIE`).
+- Seeding a durable plan for the task specs goes through the PRODUCTION APIs (`getOrCreateSession` +
+  `runSubmitPlan`) so real `AgentTask`/`AgentTaskNode`/`PendingAction` rows exist. **A seeded task MUST
+  be paired with a matching `AgentSession` row** — `agent/task-control.ts` `loadOwnedTask` verifies both
+  `row.sessionId === sessionId` and a session whose `userId` matches, else it rejects with
+  `SECURITY_DENIED`. `TaskPlanStatus` has no `'paused'`: a paused plan surfaces as resumable `pending`.
 
 ## Faux-provider gotcha (important for SSE assertions)
 
@@ -67,6 +78,19 @@ The reachable invariant (well-formed, single-`done`-terminated frames, no `error
 the clearly-named `REACHABLE — …` test. The `error`-event path is only reachable via a mocked agent
 (`tests/unit/agent/run-turn-failure.test.ts`).
 
+## Known gap — plan PARKING EVENTS are UNREACHABLE over real HTTP + mock (honest split)
+
+`agent/providers/mock-responder.ts#handlePlan` emits ONLY GREEN plan nodes (`analyze_spending` OR
+`get_balance` + `note`), so a `submit_plan` issued through `POST /api/chat` NEVER parks. Therefore the
+mid-turn plan-level `plan_update` + `confirmation_required`/`mfa_required` frames (and their cards)
+cannot be produced by the real HTTP + mock chat path. They remain covered at the **`@/agent`-level faux
+harness** (`tests/scenarios/test-11-conditional-dag.test.ts`) — deliberately NOT re-done here.
+
+What the real HTTP path DOES cover (in `tasks-http.test.ts`): a plan WITH a parked GATED node is seeded
+via the production planner, then the real action/task handlers drive it — confirm/verify RESUMES the
+parked plan and writes the REAL tool result back (asserted on `AgentTaskNode`, a real `Transaction` row
+and the decremented balance), pause/cancel/retry, refresh recovery, listing and 400/403/404.
+
 ## Test Strategy
 
 - `npx vitest run tests/app` — real route handlers + a fresh seeded DB per test.
@@ -75,15 +99,18 @@ the clearly-named `REACHABLE — …` test. The `error`-event path is only reach
   DB rows (`account.balance` untouched, `pendingAction` tier/requiresMfa/status, `securityEvent`).
 - `pendingAction.status`: YELLOW → `pending`, RED (MFA) → `awaiting_mfa` (see
   `security/security-gateway.ts` `gatewayCreatePendingAction`).
+- `AgentTaskNode` has no `output` column: a parked node records its `{ pendingActionId }` inside the
+  node's `output` JSON (`agent.readPendingActionId(node.output)`).
 
 ## Routing Table
 
 - `./harness.ts` → shared HTTP plumbing (URL builders, invokers, SSE readers) — reuse for every app-entry spec
 - `./chat-http.test.ts` → `POST /api/chat` real-handler e2e (GREEN/YELLOW/RED, injection, transport, SSE)
+- `./tasks-http.test.ts` → real task/action handlers e2e (`/api/tasks`, `/api/tasks/[id]`, `/api/actions/[id]/{confirm,verify}`)
 
 ## Notes for Agents
 
-- Add the action/task specs (`/api/actions/[id]/{confirm,verify,cancel}`, `/api/tasks`) on TOP of
-  `harness.ts` — pass the specific handler into the invokers; do not duplicate request/SSE plumbing.
+- `POST /api/actions/[id]/cancel` is not yet driven here — add it on TOP of `harness.ts` (pass the
+  specific handler into the invokers; do not duplicate request/SSE plumbing).
 - GREEN auto-executed reads write NO `AuditLog` row (audit rows are gated-only); assert GREEN at the
   tool-event / DB-state level.
