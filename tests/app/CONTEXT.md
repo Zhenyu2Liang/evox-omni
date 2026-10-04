@@ -32,6 +32,7 @@ complementing the in-process `tests/scenarios/*` suites.
   - Types `RouteHandler`, `HttpOptions`, `HttpResult<T>`; frozen types imported from `@/lib/contracts/*`.
 - `chat-http.test.ts` — `POST /api/chat` end-to-end (imports `{ POST as chatPost }`). Tests 1–8 +
   the mid-turn-failure reality check.
+- `actions-http.test.ts` — `POST /api/actions/[id]/{confirm,verify,cancel}` end-to-end (imports the three route `POST`s) — the human-decision half of Case 12: GREEN inline read (no park); YELLOW confirm (executes the ORIGINAL args exactly once, audit `success`, repeat confirm is an idempotency no-op); RED verify with `MFA_CODE`; wrong code (200 `ok:false`/`awaiting_mfa`/`mfaResult:'failed'`, no money); honest `INSUFFICIENT_FUNDS` failure (200 `ok:false`/`failed`); cancel (no move, `ok:true`/`cancelled`); ownership 403 `SECURITY_DENIED` / unknown-id 404 `NOT_FOUND` on all three routes; MFA-code secrecy; circuit breaker (3 wrong verifies).
 
 ## Constraints / Conventions
 
