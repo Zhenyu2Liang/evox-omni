@@ -46,6 +46,18 @@ complementing the in-process `tests/scenarios/*` suites.
   `POST /api/tasks/[id]` pause/cancel/retry, `POST /api/actions/[id]/{confirm,verify}` resuming a
   parked plan (REAL tool result written back), `GET /api/tasks/[id]` refresh recovery,
   `GET /api/tasks` newest-first listing, plus 400/403/404 auth.
+- `plan-parking-http.test.ts` — DAG plan PARKING during a REAL chat turn + post-confirm RESUME
+  ("DAG 确认后继续"). The conditional limit-adjustment trigger
+  (`如果这个月娱乐消费超过2000元，就把娱乐消费限额调整为1500元`) makes the mock responder emit a 3-node
+  DAG (`analyze_spending` → condition `analyze.total > 2000` → YELLOW `set_card_limit`); 本月消费
+  (~¥5,800) satisfies the condition so the gated node PARKS. Asserts the streamed `plan_update` walk
+  settles at `waiting_confirmation` (node statuses analyze:success / check:success /
+  setlimit:waiting_confirmation), the `confirmation_required` frame (tier `YELLOW`,
+  toolName `set_card_limit`) plus `plan`+`confirmation` cards, the persisted plan / `AgentTaskNode`
+  rows / `pendingAction` (YELLOW, `pending`), and that NOTHING moved (seeded `card_credit` 娱乐 limit
+  stays 3000). Then `POST /api/actions/[id]/confirm` resumes the plan (`plan_update` status `success`,
+  setlimit `success`), the real tool runs (limit 3000 → 1500) and the envelope is
+  `status:'executed'`/`tier:'YELLOW'`.
 
 ## Constraints / Conventions
 
@@ -90,18 +102,20 @@ The reachable invariant (well-formed, single-`done`-terminated frames, no `error
 the clearly-named `REACHABLE — …` test. The `error`-event path is only reachable via a mocked agent
 (`tests/unit/agent/run-turn-failure.test.ts`).
 
-## Known gap — plan PARKING EVENTS are UNREACHABLE over real HTTP + mock (honest split)
+## Plan PARKING over real HTTP + mock IS reachable (conditional-DAG trigger)
 
-`agent/providers/mock-responder.ts#handlePlan` emits ONLY GREEN plan nodes (`analyze_spending` OR
-`get_balance` + `note`), so a `submit_plan` issued through `POST /api/chat` NEVER parks. Therefore the
-mid-turn plan-level `plan_update` + `confirmation_required`/`mfa_required` frames (and their cards)
-cannot be produced by the real HTTP + mock chat path. They remain covered at the **`@/agent`-level faux
-harness** (`tests/scenarios/test-11-conditional-dag.test.ts`) — deliberately NOT re-done here.
+`agent/providers/mock-responder.ts#handlePlan` emits a GATED DAG for the conditional limit-adjustment
+trigger: `analyze_spending` (GREEN) → condition (`analyze.total > <threshold>`) → YELLOW
+`set_card_limit`. Because 本月消费 (~¥5,800) satisfies the condition, the gated node is reached and
+PARKS, so the mid-turn plan-level `plan_update` + `confirmation_required` frames (and the `plan` /
+`confirmation` cards) ARE produced by the real HTTP + mock chat path — covered by
+`plan-parking-http.test.ts`. Confirming the chat-produced `PendingAction` RESUMES the parked plan to
+`success` and writes the real tool result.
 
-What the real HTTP path DOES cover (in `tasks-http.test.ts`): a plan WITH a parked GATED node is seeded
-via the production planner, then the real action/task handlers drive it — confirm/verify RESUMES the
-parked plan and writes the REAL tool result back (asserted on `AgentTaskNode`, a real `Transaction` row
-and the decremented balance), pause/cancel/retry, refresh recovery, listing and 400/403/404.
+`tasks-http.test.ts` additionally covers a plan WITH a parked GATED node SEEDED via the production
+planner, then driven by the real action/task handlers — confirm/verify RESUMES the parked plan and
+writes the REAL tool result back (asserted on `AgentTaskNode`, a real `Transaction` row and the
+decremented balance), pause/cancel/retry, refresh recovery, listing and 400/403/404.
 
 ## Known gap — `423 CIRCUIT_OPEN` is UNREACHABLE over real HTTP
 
@@ -132,10 +146,11 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 - `./chat-http.test.ts` → `POST /api/chat` real-handler e2e (GREEN/YELLOW/RED, injection, transport, SSE)
 - `./actions-http.test.ts` → `POST /api/actions/[id]/{confirm,verify,cancel}` real-handler e2e (two-phase confirmation: YELLOW confirm, RED MFA verify, wrong code, honest failure, cancel, ownership 403 / 404, MFA secrecy, circuit breaker)
 - `./tasks-http.test.ts` → real task/action handlers e2e (`/api/tasks`, `/api/tasks/[id]`, `/api/actions/[id]/{confirm,verify}`)
+- `./plan-parking-http.test.ts` → `POST /api/chat` conditional-DAG PARKING + `POST /api/actions/[id]/confirm` RESUME ("DAG 确认后继续")
 
 ## Notes for Agents
 
 - GREEN auto-executed reads write NO `AuditLog` row (audit rows are gated-only); assert GREEN at the
   tool-event / DB-state level.
-- The remaining HTTP coverage gaps are the `/api/chat` SSE `error`-frame and the plan parking EVENT
-  emission — both unreachable over the real HTTP + mock path (see the two "Known gap" sections above).
+- The remaining HTTP coverage gap is the `/api/chat` SSE `error`-frame, which is unreachable over the
+  real HTTP + mock path (see the "Known gap" section above).
