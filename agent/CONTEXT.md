@@ -214,6 +214,31 @@ A parked (gated) node stores the human decision it waits on inside `AgentTaskNod
 `readPendingActionId`) — there is NO `pendingActionId` column and no `TaskNodeResult.pendingActionId`
 field, and a
 gated node is NOT a failure (only a hard `failed` plan status is `ok:false`).
+
+#### Live plan streaming (turn time + resume time)
+
+A `submit_plan` turn is observable in the UI, not just returned as a plan card:
+
+- `run-turn.ts` passes an optional `onPlanUpdate(plan: TaskPlan)` sink into `createBankingAgent`
+  (`BankingAgentOptions.onPlanUpdate`), which forwards it into `createToolRegistry(userId, { submitPlan })`
+  → `SubmitPlanDeps.onPlanUpdate` → `runSubmitPlan`. `runSubmitPlan` wraps the executor's
+  `onNodeUpdate` (which carries only the changed node), accumulates node results and composes the FULL
+  `TaskPlan` snapshot (`composePlanSnapshot`, status derived like the executor's own snapshot), then
+  forwards it after EVERY node change. `run-turn` relays each snapshot as
+  `{ type:'plan_update', plan }` (the UI folds this into its DAG timeline).
+- When a DAG node PARKS on a gated tool (`waiting_confirmation`/`waiting_verification`, its
+  `PendingAction` id readable from `AgentTaskNode.output` via `readPendingActionId`), the relay
+  remembers the node and — after the run settles, so the row is committed — emits the human-decision
+  event decided by the PERSISTED `PendingAction` row (`tier`/`requiresMfa`, read via `loadPendingSummary`):
+  YELLOW ⇒ `{ type:'confirmation_required', action: PendingActionSummary, actionId }` + a confirmation
+  card; RED (or `requiresMfa`) ⇒ `{ type:'mfa_required', actionId, hint }` + an MFA card.
+- `confirmation.ts#resumeOwningPlan` returns the plan snapshot produced by
+  `resumeTaskForAction` (whose planner resume path has already written the executed node's REAL
+  outcome — `success` + data/summary, or `failed` + error — and re-run the downstream nodes) and
+  `executeAuthorizedAction` streams it as a `plan_update`, prepending it to the returned `events`.
+  No extra `plan` CARD is emitted (the plan card stays the single one produced by `card-emitter`).
+- The relay never invents progress: a failed node is reported `failed`, and a plan hiccup is surfaced
+  as an `error` event rather than aborting the plan or the turn.
 (this is what demo Test 4 — prompt injection — proves).
 
 ## Constraints (hard, encode in every file)
