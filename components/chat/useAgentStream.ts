@@ -13,7 +13,7 @@
  * renders chain-of-thought; the browser never executes a banking op (confirm/verify/cancel POST to
  * `./app` routes which re-validate + execute server-side).
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
   AgentStreamEvent,
   ChatCard,
@@ -29,6 +29,7 @@ import {
   DEFAULT_ENDPOINTS,
   cancelAction,
   confirmAction,
+  fetchTaskPlan,
   sendChatTurn,
   verifyAction,
 } from './actions';
@@ -42,11 +43,21 @@ export interface MfaActionSummary extends Omit<PendingActionSummary, 'toolName'>
   toolName?: ToolName;
 }
 
+/**
+ * The ACTIVE human decision the UI must surface — set by a `confirmation_required` (YELLOW) or
+ * `mfa_required` (RED) event. `kind` discriminates the two so `ChatWindow` renders exactly the right
+ * card; the MFA `hint` is carried through (never the code). `actionId` is the server-side
+ * `PendingAction` id that confirm/verify/cancel operate on.
+ */
+export type PendingHumanDecision =
+  | { kind: 'confirmation'; summary: PendingActionSummary; actionId: string }
+  | { kind: 'mfa'; summary: MfaActionSummary; actionId: string; hint?: string };
+
 export interface UseAgentStreamResult {
   messages: ChatMessage[];
   toolEvents: ToolEventView[];
   activePlan?: TaskPlan;
-  pendingAction?: { summary: PendingActionSummary | MfaActionSummary; actionId: string };
+  pendingAction?: PendingHumanDecision;
   streamingText: string;
   busy: boolean;
   error?: string;
@@ -61,6 +72,11 @@ export interface UseAgentStreamOptions {
   sessionId?: string;
   endpoints?: ChatEndpoints;
   initialMessages?: ChatMessage[];
+  /**
+   * Plan id to recover on mount (refresh recovery). When omitted, the last-seen plan id persisted
+   * in `sessionStorage` is used instead.
+   */
+  taskId?: string;
 }
 
 /**
@@ -72,7 +88,7 @@ export interface ChatUIState {
   messages: ChatMessage[];
   toolEvents: ToolEventView[];
   activePlan?: TaskPlan;
-  pendingAction?: { summary: PendingActionSummary | MfaActionSummary; actionId: string };
+  pendingAction?: PendingHumanDecision;
   streamingText: string;
   busy: boolean;
   error?: string;
@@ -103,6 +119,32 @@ function errorMessage(e: unknown): string {
   const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
   const firstLine = raw.split('\n')[0]?.trim();
   return firstLine && firstLine.length > 0 ? firstLine : '请求失败，请稍后重试';
+}
+
+// --- plan identity persistence (refresh recovery) ----------------------------------------------
+
+/** `sessionStorage` key holding the id of the last-seen active plan. */
+const ACTIVE_PLAN_STORAGE_KEY = 'banking-agent:activePlanId';
+
+/** Persist the id of the currently-active plan (best-effort; storage can be unavailable). */
+function rememberPlanId(id: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.sessionStorage.setItem(ACTIVE_PLAN_STORAGE_KEY, id);
+  } catch {
+    /* sessionStorage can throw when disabled/quota-exceeded — recovery is best-effort only. */
+  }
+}
+
+/** The last-seen plan id, if one was persisted (`undefined` in a non-browser/blocked context). */
+function readRememberedPlanId(): string | undefined {
+  if (typeof window === 'undefined') return undefined;
+  try {
+    const id = window.sessionStorage.getItem(ACTIVE_PLAN_STORAGE_KEY);
+    return id !== null && id.length > 0 ? id : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 // --- pure reducer helpers ---------------------------------------------------------------------
@@ -150,8 +192,35 @@ function cardTargetId(state: ChatUIState): string | undefined {
   return undefined;
 }
 
-/** Append a card to the target assistant message, creating a minimal one if none exists. */
+/**
+ * Upsert a plan snapshot into the single `activePlan` slot (the live plan view).
+ *
+ * Latest wins: a newer snapshot for the SAME plan id replaces the stored one, while an out-of-order
+ * (older `updatedAt`) snapshot for the same id never regresses the view. A snapshot for a DIFFERENT
+ * plan id replaces the slot (only one plan is live at a time).
+ */
+function upsertPlan(state: ChatUIState, plan: TaskPlan): ChatUIState {
+  const current = state.activePlan;
+  if (current && current.id === plan.id && current.updatedAt > plan.updatedAt) {
+    return state;
+  }
+  return { ...state, activePlan: plan };
+}
+
+/**
+ * Fold a `card` event into the state.
+ *
+ * A `plan` card is NOT appended as an inline message card — it is PROMOTED into the single
+ * `activePlan` slot (see `upsertPlan`). That is what keeps "at most ONE plan view per plan id": the
+ * live plan rendered by `ChatWindow` is the only plan surface, so a following `plan_update` for the
+ * same id can never leave a duplicate/stale plan card behind (and vice-versa). Every other card
+ * still rides the normal message path (`CardRenderer`).
+ */
 function attachCard(state: ChatUIState, card: ChatCard): ChatUIState {
+  if (card.type === 'plan') {
+    return upsertPlan(state, card.plan);
+  }
+
   const targetId = cardTargetId(state);
   if (targetId === undefined) {
     const message: ChatMessage = {
@@ -241,15 +310,27 @@ function applyEvent(state: ChatUIState, event: AgentStreamEvent): ChatUIState {
       return attachCard(state, event.card);
 
     case 'plan_update':
-      return { ...state, activePlan: event.plan };
+      return upsertPlan(state, event.plan);
 
     case 'confirmation_required':
-      return { ...state, pendingAction: { summary: event.action, actionId: event.actionId } };
+      return {
+        ...state,
+        pendingAction: {
+          kind: 'confirmation',
+          summary: event.action,
+          actionId: event.actionId,
+        },
+      };
 
     case 'mfa_required':
       return {
         ...state,
-        pendingAction: { actionId: event.actionId, summary: mfaSummary(state, event.hint) },
+        pendingAction: {
+          kind: 'mfa',
+          summary: mfaSummary(state, event.hint),
+          actionId: event.actionId,
+          ...(event.hint !== undefined ? { hint: event.hint } : {}),
+        },
       };
 
     case 'security_event':
@@ -289,12 +370,41 @@ export function reduceAgentEvents(state: ChatUIState, events: AgentStreamEvent[]
 
 export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult {
   const endpoints = o?.endpoints ?? DEFAULT_ENDPOINTS;
+  const taskId = o?.taskId;
   const [state, setState] = useState<ChatUIState>(() =>
     initialChatUIState({
       ...(o?.sessionId !== undefined ? { sessionId: o.sessionId } : {}),
       messages: o?.initialMessages ?? [],
     }),
   );
+
+  // Keep the newest endpoints reachable from the one-shot recovery effect without re-running it on
+  // every render when a caller passes an inline `endpoints` object.
+  const endpointsRef = useRef(endpoints);
+  endpointsRef.current = endpoints;
+
+  // Remember the active plan id so a page reload can recover the live plan.
+  const activePlanId = state.activePlan?.id;
+  useEffect(() => {
+    if (activePlanId !== undefined) rememberPlanId(activePlanId);
+  }, [activePlanId]);
+
+  // Refresh recovery: rebuild the live plan from the server (explicit `taskId`, else the remembered
+  // id). A stale/unmounted/aborted or failed fetch is ignored — it NEVER throws to the UI and never
+  // clobbers a plan a live `plan_update` already delivered.
+  useEffect(() => {
+    const planId = taskId ?? readRememberedPlanId();
+    if (planId === undefined) return;
+    let alive = true;
+    void (async () => {
+      const plan = await fetchTaskPlan(planId, endpointsRef.current);
+      if (!alive || plan === undefined) return;
+      setState((prev) => (prev.activePlan ? prev : { ...prev, activePlan: plan }));
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [taskId]);
 
   /** Fold a batch of events into the UI state. */
   const applyEvents = useCallback((events: AgentStreamEvent[]) => {
