@@ -1,17 +1,13 @@
 /**
- * banking-sdk · money-movement ATOMICITY regression (in-node spec).
+ * banking-sdk · money-movement ATOMICITY regression.
  *
- * WHY in `banking-sdk/` (not `tests/unit/banking-sdk/`): the shared `tests/` tree is a read-only
- * SIBLING of this node — writes there are owner-scoped to the repo root. This spec therefore lives
- * inside the node and runs via the scoped config `banking-sdk/vitest.atomicity.config.ts`
- * (deliberately NOT auto-discovered, so `npm run test` is unaffected):
- *
- *   npx vitest run --config banking-sdk/vitest.atomicity.config.ts
+ * WHY under `tests/unit/banking-sdk/`: the repo-root-owned shared test tree provides
+ * the fresh-DB harness + fixtures, and the default Vitest config auto-discovers this spec.
  *
  * WHAT it proves (the two hazards the interactive-transaction fix closes):
- *   1. Ledger-write failure ROLLBACK — if the second write of a money unit fails, the first (the
+ *   1. Ledger-write failure ROLLBACK �?if the second write of a money unit fails, the first (the
  *      balance debit) is rolled back: balance unchanged, no partial ledger/holding row survives.
- *   2. CONCURRENT overspend / double-credit — two racing calls can never drive the balance negative
+ *   2. CONCURRENT overspend / double-credit �?two racing calls can never drive the balance negative
  *      or credit one holding twice; exactly one wins, the loser fails cleanly with a typed AppError.
  *
  * Failure injection: we wrap the REAL interactive transaction's client in a Proxy that throws on one
@@ -22,18 +18,18 @@ import { describe, expect, it } from 'vitest';
 import { banking } from '@/banking-sdk';
 import type { RedeemInvestmentInput, SubscribeInvestmentInput, TransferInput } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
-import { getTestPrisma, useFreshDatabase } from '../tests/helpers/db';
-import { DEMO_USER_ID } from '../tests/helpers/fixtures';
+import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
+import { DEMO_USER_ID } from '../../helpers/fixtures';
 
 // Fresh seeded DB before each case + Prisma disconnect afterwards.
 useFreshDatabase();
 /** Funding account every transfer/subscribe/redeem touches (seed balance ¥23,580). */
 const CHECKING = 'acct_checking';
 const CHECKING_START = 23580;
-/** The single seeded HOLDING (marketValue ¥5,050) — the redeem target. */
+/** The single seeded HOLDING (marketValue ¥5,050) �?the redeem target. */
 const SEEDED_HOLDING = 'holding_wenjiana';
 const HOLDING_MARKET_VALUE = 5050;
-/** 稳健理财A — minAmount ¥1,000. */
+/** 稳健理财A �?minAmount ¥1,000. */
 const PRODUCT = 'prod_wenjiana';
 
 function db() {
@@ -127,7 +123,7 @@ async function withInjectedWriteFailure<T>(
       (arg as (client: unknown) => Promise<unknown>)(injectWriteFailure(tx, model, method)),
     );
 
-  // Install/restore the mock ourselves via `defineProperty` — `vi.spyOn` + `restoreAllMocks`
+  // Install/restore the mock ourselves via `defineProperty` �?`vi.spyOn` + `restoreAllMocks`
   // does NOT round-trip Prisma's `$transaction` (a later read comes back `undefined`).
   Object.defineProperty(client, '$transaction', {
     value: injected,
@@ -148,7 +144,7 @@ async function withInjectedWriteFailure<T>(
 /* ---------------------------------------------------------------------- tests */
 
 describe('banking-sdk · atomicity: concurrent overspend', () => {
-  it('two racing transfers against a balance funding only one → exactly one succeeds, the other is INSUFFICIENT_FUNDS, balance never negative', async () => {
+  it('two racing transfers against a balance funding only one �?exactly one succeeds, the other is INSUFFICIENT_FUNDS, balance never negative', async () => {
     const start = 300;
     await setCheckingBalance(start);
 
@@ -178,7 +174,7 @@ describe('banking-sdk · atomicity: concurrent overspend', () => {
 });
 
 describe('banking-sdk · atomicity: concurrent double-redeem', () => {
-  it('two racing redeems of one holding → exactly one credits the account, the other is CONFLICT', async () => {
+  it('two racing redeems of one holding �?exactly one credits the account, the other is CONFLICT', async () => {
     const before = await checkingBalance();
 
     const input: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING };
@@ -216,7 +212,7 @@ describe('banking-sdk · atomicity: ledger-write failure rolls back the debit', 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(/injected failure/);
 
-    // The debit was rolled back — never a partial write, never a fabricated success.
+    // The debit was rolled back �?never a partial write, never a fabricated success.
     expect(await checkingBalance()).toBe(CHECKING_START);
     expect(await transferLedgerCount(['ROLLBACK'])).toBe(before);
   });
