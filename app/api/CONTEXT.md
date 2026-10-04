@@ -126,7 +126,9 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 
 ## Dependencies
 
-- `@/agent` (read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`).
+- `@/agent` (read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`) + task
+  execution control (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`), both accessed through
+  `_lib/agent-bridge`.
 - `@/banking-sdk` (read-only): read models (`banking.dashboard/transaction/card/subscription/…`, DTOs).
 - `@/audit` (read-only): `listAudit`, `getAuditSummary`, `listSecurityEvents`, `getSecurityStatus`.
 - `@/security` (read-only): `circuitBreaker.getState`/`isLocked`/`reset` for `/api/security` (+ reset).
