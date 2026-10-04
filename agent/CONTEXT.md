@@ -14,7 +14,8 @@ banking agent. It owns, in one place:
 6. mapping a tool's raw result → `ChatCard`s (`card-emitter.ts`),
 7. the banking system prompt (`system-prompt.ts`),
 8. the per-session `AgentState` + transcript store (`session.ts`),
-9. LLM provider selection — live model vs faux/mock (`providers/`).
+9. LLM provider selection — live model vs faux/mock (`providers/`),
+10. durable DAG persistence + control/resume glue backing `submit_plan` (`task-control.ts`).
 
 **Invariant (root-owned, restated here): the agent may decide WHAT to do next; it may NEVER decide
 WHETHER it is allowed.** Every tool the model proposes passes through `beforeToolCall →
@@ -121,7 +122,33 @@ interface ToolRegistry {
 }
 interface CreateToolRegistryOptions { submitPlan?: SubmitPlanDeps }   // additive; wires `submit_plan`
 function createToolRegistry(userId: string, opts?: CreateToolRegistryOptions): ToolRegistry;   // userId closed over — the model NEVER supplies it
+
+// --- agent/task-control.ts (durable DAG persistence + control/resume glue) ----
+interface TaskNodeOutput { pendingActionId?: string }   // the parked-node payload stored in AgentTaskNode.output
+function readPendingActionId(output: unknown): string | undefined;   // the ONLY reader of that shape
+type TaskRunTool = (toolName: string, args: Record<string, unknown>) => Promise<PlanToolOutcome>;   // gateway-routed runner, INJECTED by the caller
+interface TaskControlOptions { now?: () => number }    // injectable clock; defaults to the demo clock
+interface TaskControlDeps extends TaskControlOptions { runTool: TaskRunTool }
+interface TaskPersistence {
+  persistPlan(plan: TaskPlan): Promise<void>;
+  persistNode(planId: string, node: TaskNodeResult): Promise<void>;
+  loadPlan(planId: string): Promise<TaskPlan | undefined>;
+}
+function createTaskPersistence(planId: string): TaskPersistence;   // planner PlanDeps partials bound to planId (= AgentTask.id)
+function toTaskPlan(row: AgentTaskWithNodes): TaskPlan;           // persisted task row (+ ordered nodes) → frozen TaskPlan
+function getTaskPlan(sessionId: string, taskId: string): Promise<TaskPlan>;                            // ownership-checked read
+function pauseTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;
+function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // re-run; terminal nodes skipped
+function cancelTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;
+function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;       // retry failed nodes (+ descendants)
+function findTaskByPendingAction(sessionId: string, actionId: string): Promise<{ taskId: string; nodeId: string } | undefined>;
+function resumeTaskForAction(sessionId: string, actionId: string, outcome: PlanToolOutcome, deps: TaskControlDeps): Promise<{ taskId: string; nodeId: string; plan: TaskPlan } | undefined>;
 ```
+
+Everything above is also re-exported by the facade `./agent/index.ts`, which additionally exposes the
+session-scoped control wrappers `pauseTask(sessionId, taskId)` / `resumeTask(sessionId, taskId)` /
+`cancelTask(sessionId, taskId)` / `retryTask(sessionId, taskId)` / `getTaskPlan(sessionId, taskId)` —
+each closes over the gateway-routed `TaskRunTool` and resolves the owner from the SESSION row.
 
 ### AgentEvent → AgentStreamEvent mapping (owned by `run-turn.ts`)
 
@@ -183,7 +210,9 @@ plan id; then `plan = { ...dag.buildPlan({sessionId, goal, nodes, now}), id: tas
 so every node status/output is persisted incrementally (`persistNode`) and the plan survives a refresh.
 `plan.id === AgentTask.id === taskId` on EVERY control path (`loadPlan` is `getTask` → `toTaskPlan`).
 A parked (gated) node stores the human decision it waits on inside `AgentTaskNode.output` as
-`{ pendingActionId }` (read via `readPendingActionId`) — there is NO `pendingActionId` column, and a
+`{ pendingActionId: string }` (the `TaskNodeOutput` shape declared in `task-control.ts`, read via
+`readPendingActionId`) — there is NO `pendingActionId` column and no `TaskNodeResult.pendingActionId`
+field, and a
 gated node is NOT a failure (only a hard `failed` plan status is `ok:false`).
 (this is what demo Test 4 — prompt injection — proves).
 
@@ -232,9 +261,9 @@ Sibling nodes this node consumes (read-only; escalate changes to the owner):
   runtime call is `security.gateway.securityGateway.<method>(...)`; `GatewayContext`/`AuthorizationResult`/
   `ToolCallAuthorization` are imported directly from `@/security/security-gateway`.
 - `../banking-sdk` → `banking.<domain>.*` execute-only functions (module `./types` DTOs).
-- `../planner` → `dag.validatePlan`, `buildPlan`; `executor.runPlan`, `PlanDeps`, `PlanControls`.
+- `../planner` → `dag.validatePlan`, `buildPlan`; `executor.runPlan`, `executor.persistPlanSnapshot`, `PlanDeps`, `PlanControls`; `lifecycle.pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`.
 - `../audit` → `recordAudit(entry)`, `recordSecurityEvent(event)`.
-- `../lib/db/repositories` → `sessions.*`, `pendingActions.*`.
+- `../lib/db/repositories` → `sessions.*`, `pendingActions.*`, `tasks.*` (`createTask`, `createTaskNode`, `getTask`, `listTasksBySession`, `updateTaskNode`, `updateTaskStatus`, `AgentTaskWithNodes`).
 
 REQUIRED from siblings (must align at integration; assumed signatures):
 - `security.gateway.securityGateway.handleToolCall(ctx)` returns `{ evaluation, decision, action?, blockReason? }` with
@@ -284,7 +313,7 @@ Vitest (`tests/`, sibling). This node is designed to be testable WITHOUT network
   `LLM_MODE=mock` (faux scripts) — proving gating, MFA, injection refusal, and the hallucination guard.
 - No live LLM and no live Prisma are required for unit tests; scenario tests use the test DB.
 - The **offline mock model** (`providers/`) is the default `LLM_MODE=mock` runtime: `providers/provider-mock.test.ts` (16 unit tests) covers the responder; `integration-mock.test.ts` proves the REAL pipeline (runTurn → `createBankingAgent` → mock → tools → gateway → SDK → DB) end-to-end offline; `run-turn-failure.test.ts` covers the failure / continuation-failure guards.
-- STAGED specs pending ROOT relocation (`tests/` is outside `./agent` write scope): they live at `./agent/providers/provider-mock.test.ts`, `./agent/run-turn-failure.test.ts`, `./agent/integration-mock.test.ts`; relocate to `tests/unit/agent/providers/…`, `tests/unit/agent/…`, `tests/scenarios/…` respectively. Until moved, run them with a local config whose `include` lists the `agent/` paths.
+- Node-local agent tests live in `agent/__tests__/` and run via `npx vitest run --config agent/vitest.config.ts`: `confirmation-idempotency.test.ts` (4 tests — repeated/cross-session confirm idempotency + foreign-owner rejection) and `task-control.test.ts` (5 tests — `runSubmitPlan` persistence with `plan.id === AgentTask.id`, ownership rejection, pause/resume/cancel). `tests/` is a read-only sibling, so these stay node-local pending relocation.
 
 ## Routing Table
 
@@ -294,7 +323,8 @@ Vitest (`tests/`, sibling). This node is designed to be testable WITHOUT network
 - `./agent/run-turn.ts` → one chat turn: prompt, event→stream mapping, persistence; `resumeTurn`
 - `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path
 - `./agent/card-emitter.ts` → pure `toCards(toolName, result): ChatCard[]` mapping + card helpers
-- `./agent/index.ts` → node facade (runtime surface: create/run/resume/confirm/verify/cancel/toCards)
+- `./agent/task-control.ts` → node-output JSON shape + DAG plan persistence/load mapping + pause/resume/cancel/retry/getTaskPlan glue (ownership-checked)
+- `./agent/index.ts` → node facade (runtime surface: create/run/resume/confirm/verify/cancel/toCards + DAG control glue `pauseTask`/`resumeTask`/`cancelTask`/`retryTask`/`getTaskPlan`)
 - `./agent/tools` → registered banking tools: one module per family + `createToolRegistry` (child node)
 - `./agent/providers` → LLM provider selection: live + faux/mock + selector (child node)
 - `../tests` → agent unit + faux-LLM scenario integration tests (sibling — read-only, escalate writes to root)
