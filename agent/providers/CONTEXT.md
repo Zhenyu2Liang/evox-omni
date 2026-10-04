@@ -146,6 +146,7 @@ vitest config whose `test.include` is exactly the staged file and invoke it from
 - `./agent/providers/provider-live.ts` → `createLiveModel(cfg)` — real Pi AI model (demo-only)
 - `./agent/providers/provider-mock.ts` → `createMockModel(cfg)` — self-requeuing faux factory (offline, deterministic, interactive)
 - `./agent/providers/mock-responder.ts` → `respond(context)` — PURE scripted decision logic (intent → tool call / clarify / narrate)
+- `./agent/providers/provider-mock.test.ts` → STAGED unit spec for `respond` (16 tests, DB-free); ROOT must relocate it to `tests/unit/agent/providers/provider-mock.test.ts`
 - `./agent/providers/index.ts` → node facade: `resolveModel`, `providerId`
 - `../banking-agent.ts` → sole consumer; receives a `Model` from `resolveModel` (sibling file, same node — read-only here)
 - `@/lib/config` → `AppConfig` + `getConfig()` (cross-node dependency — read-only)
