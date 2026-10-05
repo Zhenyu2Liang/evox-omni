@@ -156,6 +156,31 @@ removal is dropped (no empty bubble). Older/unrelated decision cards are preserv
 - never overwrites a plan a live `plan_update` already delivered, and ignores a stale/unmounted or
   failed fetch (an `alive` cleanup flag; `fetchTaskPlan` resolves `undefined` instead of throwing).
 
+**Pending-action refresh restore.** A second one-shot mount effect rebuilds the active human decision
+(so a reloaded page still shows the confirm/MFA card for an in-flight action): when there is no live
+`pendingAction` it `fetchPendingActions()` and restores the MOST RELEVANT non-terminal one —
+`requiresMfa || status === 'awaiting_mfa' || tier === 'RED'` → the `mfa` kind, else the
+`confirmation` kind. `restoring` is `true` while that read is in flight. Same guards as the plan
+recovery: an `alive` cleanup flag, a functional `setState` that refuses to clobber a non-undefined
+`pendingAction`, and a best-effort `[]` on failure — it NEVER throws to the UI.
+
+### Plan control (pause / resume / cancel / retry)
+
+`useAgentStream.controlTask(action, planId?)` (defaulting `planId` to `state.activePlan?.id`) POSTs
+`endpoints.task(id)` with `{ action }` via `controlTask` and folds the returned post-control snapshot
+into the SAME `activePlan` slot (reusing the latest-wins `upsertPlan`). It sets `busy` around the call
+and, on failure (`undefined`), surfaces a SAFE `error`; never throws. `ChatWindow` exposes it through
+`CardActionHandlers.onTaskControl`, which `./cards/PlanCard` calls for its pause/resume/cancel/retry
+buttons.
+
+### MFA attempt counter
+
+`ChatUIState.mfaAttempts` counts CONSECUTIVE failed verifications for the ACTIVE decision. `verify()`
+increments it (post-`pull`, functional `setState`) only when the turn ends with an `mfa` `pendingAction`
+still active AND an `error` set (a wrong code). An effect keyed on `pendingAction.actionId` + `kind`
+resets it to `0` whenever the decision settles/clears or is replaced (success, cancel, or a new turn).
+`ChatWindow` threads it into `MfaCard.attempts` via `CardActionHandlers.mfaAttempts`.
+
 ## Known Issues
 
 - `applyEvent` has a `default: return state` branch (no `assertNever`) — a NEW `AgentStreamEvent` variant silently no-ops instead of failing compilation (contrast `CardRenderer`'s exhaustive guard).
