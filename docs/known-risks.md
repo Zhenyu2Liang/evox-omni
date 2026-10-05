@@ -2,7 +2,8 @@
 
 > 本文件诚实地列出演示的局限，并对每条给出「**为何在比赛演示中可接受**」。
 > 这些限制大多是**演示沙箱的刻意设计**，而非缺陷——它们让系统在无真实资金、无真实银行的前提下，
-> 完整展示「智能体 + 代码强制安全模型」的核心价值。
+> 完整展示「智能体 + 代码强制安全模型」的核心价值。没有一条声称系统「100% 完成」，
+> 也没有任何一条声称经过真实浏览器验证。
 
 ---
 
@@ -22,6 +23,9 @@
 | 12 | `create_scheduled_task` 只记录未来动作意图，**无在线调度器执行** | `banking-sdk/task.ts` |
 | 13 | Test 12 生日提醒只创建记录，**不真正下单鲜花 / 蛋糕** | `tests/scenarios/`、`banking-sdk/budget.ts`、`banking-sdk/task.ts` |
 | 14 | 注入守卫只记录事件，**不向模型注入"系统提醒"** | `security/injection-guard.ts`、`agent/run-turn.ts` |
+| 15 | 转账确认的原子领取**依赖 SQLite 写锁串行化**（非跨数据库引擎 / 多写入者已证明） | `security/security-gateway.ts` `authorizeTransfer`、`banking-sdk/transfer.ts` |
+| 16 | **无真实浏览器端到端测试**（无 Playwright / Puppeteer / Cypress / Selenium） | `package.json`、`tests/app/` |
+| 17 | 身份是**普通 Cookie**（`banking_session`，非签名 / HMAC 令牌） | `lib/constants.ts` `SESSION_COOKIE`、`app/api/_lib/session.ts`、`app/api/chat/route.ts` |
 
 ---
 
@@ -172,7 +176,55 @@ mock 模式让整条流水线（Agent + 工具 + 安全）**离线、确定、�
 
 ---
 
-## 15. 其他工程性注意 · Engineering Notes
+## 15. SQLite 写锁串行化依赖 · SQLite Write-Lock Serialization Caveat
+
+**限制**：YELLOW 转账的确认走**「先领取、后重估」**的单个 `prisma.$transaction`
+（`security/security-gateway.ts` 的 `authorizeTransfer`）：事务的**第一条语句即 exactly-once 的
+CAS 领取**（一个**写**操作 ⇒ 取得 SQLite 的**文件写锁**），随后才在**同一事务内**读取有效日累计
+并重跑动态风控规则。因此「两个并发确认（不同 `actionId`）不会各自基于同一份过期日累计同时通过」
+这一保证是 **SQLite 特有的**——它依赖单文件写锁的串行化，在**其他数据库引擎 / 多写入者部署**下
+**未经证明**。
+
+此外，转账确认路径**未携带幂等键**（`agent/confirmation.ts` 直接以
+`registry.executeDirect(action.toolName, action.args)` 执行被网关验证过的原始参数，
+未传 `idempotencyKey`），因此在**授权（领取）与 SDK 账本写入（`banking-sdk/transfer.ts`）之间
+存在崩溃窗口**：若进程恰在该窗口内崩溃，可能留下一条状态为 `confirmed` 的 `PendingAction`
+而**没有对应的账本行**。
+
+**为何可接受**：演示是**单进程 + 单个本地 SQLite** 运行，写锁串行化天然成立，
+演示所需的保证（两个并发确认不会同时基于过期日累计通过）**已经满足**。幂等键与崩溃恢复
+属于生产级分布式职责，不在竞赛演示范围内。
+
+---
+
+## 16. 无真实浏览器端到端测试 · No Real-Browser E2E
+
+**限制**：仓库中**没有** Playwright / Puppeteer / Cypress / Selenium（见 `package.json`），
+也没有任何启动浏览器、渲染页面的端到端测试。`tests/app/` 里的规格是**进程内集成测试**：
+它们直接 import 并调用**真实的**路由处理器（`app/api/**/route.ts`），并传入真实的 `NextRequest`
+（`tests/app/harness.ts`）——真实数据库 / 安全网关 / Agent 流水线**全部在跑**，但**没有浏览器、
+没有渲染**。UI 行为只能被**间接**断言（事件 / 卡片 / 响应体的形状），而非通过渲染后的页面。
+
+**为何可接受**：安全相关的行为位于 UI **之下**——路由处理器 + 安全网关 + Banking SDK——
+而这些**确实被真实执行**；被代码强制的安全语义不在浏览器渲染层。演示的验收点是门控、审计与
+流水线行为，而非像素级 UI。
+
+---
+
+## 17. 身份是 Cookie，而非签名令牌 · Plain-Cookie Identity
+
+**限制**：`banking_session` 是一个**不透明的会话 id cookie**（`HttpOnly; SameSite=Lax`，
+由 `POST /api/chat` 下发 —— `app/api/chat/route.ts`；读取与解析见 `app/api/_lib/session.ts`），
+它被解析成一条持久化的 `AgentSession` 行——它**不是**签名 / HMAC 令牌。其完整性依赖
+「该会话确实存在于数据库中」这一事实。
+
+**为何可接受**：演示范围内的身份语义即「服务端持久化状态」；任何被出示的 id 仍必须
+**匹配一条已持久化的会话**且**匹配资源属主**（否则 403 `SECURITY_DENIED`），
+因此未知 / 伪造的 id **失败关闭（fail-closed）**。签名令牌与密钥轮换属于生产身份系统职责。
+
+---
+
+## 18. 其他工程性注意 · Engineering Notes
 
 - **测试文件串行运行**：所有测试共用一个 `prisma/test.db`，`vitest.config.ts` 已设置
   `fileParallelism: false`，因此测试**文件串行**运行（同一文件内的查询仍可并行），无需额外参数。
