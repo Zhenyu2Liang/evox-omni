@@ -54,6 +54,18 @@ EFFECTIVE total (executed + in-flight) and escalate to RED/MFA. `risk-engine` im
 `prisma` client (`lib/db/client`) and the `Prisma` type for its `PrismaLike` parameter — this is the
 sanctioned direct-DB dependency of this node (the aggregate queries must run inside the caller's tx).
 
+**Ledger dedup (counted exactly once)**: the effective total is `executed + in-flight`, but an action
+can be `confirmed` (in-flight) while its ledger `Transaction` row ALREADY exists — the SDK writes that
+row deterministically keyed by `idempotentTransferTxId(userId, action.id)` (`lib/ledger`) and
+`recordActionResult` (the flip to a terminal status) has not run yet. Such an action is ALREADY counted
+by the executed half, so `computeInFlightTransferTotal` EXCLUDES every in-flight action whose
+deterministic ledger row exists (one `client.transaction.findMany({ where:{ id:{ in:[…] } }, select:{ id:true } })`
+after the pendingAction fetch; an empty pending set short-circuits to `0` without querying the ledger).
+Without it a ledgered-but-not-yet-terminal action would be counted TWICE and spuriously escalate a
+legitimately-YELLOW transfer to RED/MFA (repo acceptance case 7). The **concurrency defence is
+untouched**: parked actions with NO ledger row yet still sum, so two ¥600 actions both still `confirmed`
+with no ledger row compute `600 + 600 = 1200 > 1000` → RED/MFA.
+
 ### `circuit-breaker.ts` — session-scoped consecutive-failure breaker (in-memory)
 ```ts
 interface CircuitBreakerState { sessionId: string; failures: number; max: number; locked: boolean; lockedAt?: number }
