@@ -51,6 +51,9 @@ export interface AnomalyCardData {
   report: AnomalyReport;
 }
 
+/** Control action requested from a plan card's task-control buttons. */
+export type TaskControlAction = 'pause' | 'resume' | 'cancel' | 'retry';
+
 /** Callbacks threaded from the chat container into interactive cards. */
 export interface CardActionHandlers {
   actionId?: string;
@@ -60,6 +63,8 @@ export interface CardActionHandlers {
   onAcknowledge?: () => void; // anomaly: 这是本人交易
   onViewDetail?: () => void; // anomaly: 查看详情
   onFreeze?: () => void; // anomaly: 冻结银行卡
+  onTaskControl?: (action: TaskControlAction) => void; // plan: pause/resume/cancel/retry
+  mfaAttempts?: number; // MFA: number of failed verification attempts so far
   busy?: boolean;
   error?: string;
 }

@@ -10,6 +10,8 @@ export interface MfaCardProps {
   onCancel?: (actionId: string) => void;
   busy?: boolean;
   error?: string;
+  attempts?: number;
+  maxAttempts?: number;
   className?: string;
 }
 
@@ -19,7 +21,7 @@ export interface MfaCardProps {
  * `@/lib/constants`, so the mock code can never leak into the UI).
  */
 export function MfaCard(p: MfaCardProps) {
-  const { actionId, hint, onSubmit, onCancel, busy, error, className } = p;
+  const { actionId, hint, onSubmit, onCancel, busy, error, attempts, maxAttempts, className } = p;
   const [code, setCode] = useState('');
 
   const trimmed = code.trim();
@@ -65,6 +67,13 @@ export function MfaCard(p: MfaCardProps) {
           }}
           className="w-full rounded-xl border border-banking-navy/20 bg-banking-light px-3 py-2 text-sm text-banking-navy outline-none transition focus:border-banking-accent disabled:opacity-60"
         />
+
+        {typeof attempts === 'number' && attempts > 0 ? (
+          <p className="text-xs text-banking-warn" role="status">
+            验证失败，已尝试 {attempts} 次
+            {typeof maxAttempts === 'number' ? `（共 ${maxAttempts} 次）` : ''}
+          </p>
+        ) : null}
 
         {error ? <Badge tone="danger">{error}</Badge> : null}
       </div>
