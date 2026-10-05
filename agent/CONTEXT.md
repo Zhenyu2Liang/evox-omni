@@ -117,11 +117,12 @@ function providerId(cfg?: AppConfig): string;
 
 // --- agent/tools/index.ts (see ./tools/CONTEXT.md) --------------------------
 interface ToolExecutionResult { ok: boolean; data?: unknown; summary?: string; error?: string; tier?: RiskLevel }
+interface ToolRunOptions { idempotencyKey?: string }   // ADDITIVE optional; threaded to the SDK by executeDirect
 interface ToolRegistry {
   tools: Record<ToolName, AgentTool<any>>;
   list(): AgentTool<any>[];
   get(name: ToolName): AgentTool<any>;
-  executeDirect(name: ToolName, args: Record<string, unknown>): Promise<ToolExecutionResult>;
+  executeDirect(name: ToolName, args: Record<string, unknown>, opts?: ToolRunOptions): Promise<ToolExecutionResult>;
 }
 interface CreateToolRegistryOptions { submitPlan?: SubmitPlanDeps }   // additive; wires `submit_plan`
 function createToolRegistry(userId: string, opts?: CreateToolRegistryOptions): ToolRegistry;   // userId closed over — the model NEVER supplies it
@@ -194,12 +195,12 @@ Human decision (API route → `confirmation.ts`):
    `error` stream event and still returns the turn; `confirmation` keeps its outcome `result`-driven
    (never a fabricated success) and appends `（结果播报失败：…）` to the message it reports.
 
-Consequence: money-moving calls are always triggered by a human decision, never by model text.
+Consequence: money-moving calls are always triggered by a human decision, never by model text — the injection-resistance guarantee demo Test 4 (prompt injection) proves.
 
 Idempotency (code-enforced, `confirmation.ts`): `executeAuthorizedAction` derives the SDK idempotency key
 from the action's PERSISTED plan link via `getPendingActionPlanLink` — `nodeExecutionKey(taskId, nodeId)`
-(= `nxe:<taskId>:<nodeId>`, `@/lib/ledger`) when the action parked a plan node, else the action's OWN
-`PendingAction` id for a standalone call — and passes it to
+(= `nxe:<taskId>:<nodeId>`, `@/lib/ledger`) when the action parked a plan node, else `action.id` (the
+standalone action's own id) — and passes it to
 `registry.executeDirect(action.toolName, action.args, { idempotencyKey })` for EVERY tool. The INLINE
 GREEN node path (`executeGatedToolOnce`) passes the same `nodeExecutionKey`, so a re-run of a node replays
 its SDK-level side effect. `transfer_money` derives the created ledger row id from the key via
@@ -254,7 +255,6 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   No extra `plan` CARD is emitted (the plan card stays the single one produced by `card-emitter`).
 - The relay never invents progress: a failed node is reported `failed`, and a plan hiccup is surfaced
   as an `error` event rather than aborting the plan or the turn.
-(this is what demo Test 4 — prompt injection — proves).
 
 ### Plan-lifecycle & confirmation guarantees (code-grounded)
 
