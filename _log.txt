@@ -1,0 +1,12 @@
+c536e66 Merge commit '30f13071edb675086b90e80c7d1727bfc2c4ba3f'; commit 'b3fae94d93c3a4b342166f8aebb8b3a75d1da7cc'; commit '91396d90f137a7d13ff8c73eb214b61099e1cf0f'; commit 'b2526dd628fe33c611ad63761ff741581dfed2c4'; commit '6126a67c498b95635bb38ec9351bd95554f79392' into evogit-agent-T4-A33
+91396d9 Update CONTEXT.md for ./tests/unit/security
+4514965 Update CONTEXT.md for ./tests/unit/security
+63c177f Update CONTEXT.md for ./tests/unit/security
+147520e Merge commit '9db3834882e2068033da6fd7c8be7312bbd7f414'; commit '0856b9a7426fd159dfc5ca1bb81e4faff2388655' into evogit-agent-T4-A43
+b3fae94 Update CONTEXT.md for ./tests/unit/agent
+0856b9a Update CONTEXT.md for ./tests/unit/security
+9db3834 test(security): regression spec for dynamic transfer limits + concurrency invariants
+5d370f0 test(security): align gateway/authorize specs to hardened gateway ownership contract
+14098ed Merge commit '16c6e9723703d9eb4b3b44e8cbb5b442c7bd5395'; commit '3d4a5eb6dbc01fa314054ccc2efaf9dd60457dd0' into evogit-agent-T4-A42
+16c6e97 test(agent): add task-cancel-revokes regression spec
+3d4a5eb test(agent): forward cancel ownership opts and assert paused task status
