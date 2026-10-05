@@ -210,7 +210,7 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
   DB rows (`account.balance` untouched, `pendingAction` tier/requiresMfa/status, `securityEvent`).
 - `pendingAction.status`: YELLOW → `pending`, RED (MFA) → `awaiting_mfa` (see
   `security/security-gateway.ts` `gatewayCreatePendingAction`).
-- `AgentTaskNode` has no `output` column: a parked node records its `{ pendingActionId }` inside the
+- `AgentTaskNode` has no `pendingActionId` column: a parked node records its `{ pendingActionId }` inside the
   node's `output` JSON (`agent.readPendingActionId(node.output)`).
 
 ## Routing Table
