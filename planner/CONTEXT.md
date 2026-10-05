@@ -44,7 +44,7 @@ effect — tool execution, persistence, the clock, cross-request controls — is
 
 `lifecycle.ts` — durable entry points (all return a fresh `TaskPlan` snapshot):
 - `pausePlan(plan, opts?: PausePlanOptions): TaskPlan` — synchronous; returns a resumable snapshot with
-  `status:'pending'` (there is no `'paused'` plan status): already-run nodes keep their recorded
+  `status:'paused'` (a NON-terminal, resumable status): already-run nodes keep their recorded
   result, un-run nodes surface as `pending`.
 - `cancelPlan(plan, deps?, opts?: CancelPlanOptions): Promise<TaskPlan>` — halts the plan: terminal
   nodes keep their status, every remaining non-terminal node becomes `cancelled` with
@@ -78,7 +78,7 @@ public functions/types (`buildPlan`, `transitiveDependents`, `isTerminalStatus`,
 - `onNodeUpdate(node)` — called on every status change; the agent forwards it to the client as the
   `plan_update` `AgentStreamEvent` (and the `plan` `ChatCard` carries the whole `TaskPlan`).
 - `persistNode?(planId, node)` — incremental snapshot write of ONE node change.
-- `persistPlan?(plan)` / `persist?(plan)` — full-snapshot write after each mutation (the deprecated
+- `persistPlan?(plan)` / `persist?(plan)` — full-snapshot write, called ONCE when the walk starts (`status:'running'`) and ONCE at settlement — deliberately NOT per node (see the clobber guard below; the deprecated
   `persist` is an alias, used when `persistPlan` is absent).
 - `loadPlan?(planId)` — load a persisted snapshot (used by the agent layer to resume a plan after a
   process restart / page refresh; the planner itself never calls it).
@@ -92,8 +92,9 @@ public functions/types (`buildPlan`, `transitiveDependents`, `isTerminalStatus`,
 through the persistence ports, so state survives the request:
 
 - **runPlan reads NO persisted state during a run** — it consults only the in-memory `plan` argument, its own flags, and `deps.controls.pollControls`. It never calls `deps.loadPlan` mid-walk. So a "pause" applied by writing node statuses (the `pausePlan` snapshot shape) does NOT stop a live run; only `PlanControls.pause()` / a durable `{kind:'pause'}` command does.
+- **Clobber guard (plan-status write cadence)** — `runPlan` writes the FULL plan snapshot (`persistPlan`) only TWICE: once up front (`status:'running'`) and once at settlement; per-node mutations persist just the node row (`persistNode`). This keeps an out-of-process durable control intact — a `POST /pause` that sets the persisted plan status to `'paused'` (or `POST /cancel` → `'cancelled'`) is NOT overwritten by a stale mid-run `'running'` snapshot, so the next `checkpoint()`'s `deps.controls.pollControls` observes it and the walk stops instead of wrongly starting the next node.
 - **Pause** — an in-process `PlanControls.pause()` or a durable `{kind:'pause'}` STOPS the walk and
-  RETURNS immediately: `status:'pending'`, un-run nodes still `pending`, already-run nodes
+  RETURNS immediately: `status:'paused'`, un-run nodes still `pending`, already-run nodes
   `success`. Resumption = re-invoking `runPlan` (or `resumePlan`) on the returned snapshot;
   `PlanControls.resume()` only clears the in-process pause flag.
 - **Cancel** — `PlanControls.cancel()` / `{kind:'cancel'}` / `opts.signal` abort the walk: `runPlan`
@@ -129,8 +130,8 @@ The plan's side effects are NOT transactional. The rollback policy is explicit a
 `pending → running → { success | failed | waiting_confirmation | waiting_verification | cancelled }`;
 a node whose dependency did not succeed (`skipped`, `failed` or `cancelled`) transitively becomes
 `skipped`, as do the dependents of a `false` condition. Plan-level status mirrors the
-set: `pending | running | waiting_confirmation | success | failed | cancelled`. A paused plan is
-reported as `pending` (the plan status union has no `'paused'`).
+set: `pending | running | paused | waiting_confirmation | success | failed | cancelled`. A paused plan is
+reported as `paused` — a NON-terminal, resumable status (cancel/park remain terminal/blocking).
 
 ## Constraints
 
