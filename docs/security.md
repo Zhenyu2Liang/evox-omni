@@ -178,18 +178,18 @@ flowchart TD
 每一处状态迁移都是**原子 compare-and-set**（`lib/db/repositories/task.ts#claimTaskStatus`：单条
 `updateMany`，`count===1` 才算成功），且 `'cancelled'` 为**终态**。
 
-- **取消即撤销（cancel revokes）**：`agent/task-control.ts#cancelTask` 先经网关 `gateway.cancelAction`
-  **原子地**（CAS `pending|awaiting_mfa → cancelled`）撤销计划**已停放**的 `PendingAction`（已结算的
-  收集进 `alreadySettled`，**永不回滚**），再取消计划（`planner/lifecycle.ts#cancelPlan` 保留终态节点，
-  仅把非终态节点标记 `cancelled`）——**已完成的转账原样保留，没有伪造的回滚**。计划进行中被并发取消时，
-  **运行后扫描** `task-control.ts#sweepCancelledPlan` 在每条运行路径之后撤销运行期间新铸造、仍停放的
-  action；取消 vs 确认的竞争经 `security/security-gateway.ts#authorizeAction` 的**共享** `PendingAction`
-  CAS 实现**至多一次**（已取消的 action 认领匹配 0 行 ⇒ `CONFLICT`，取消后的确认**不会执行**）。
+- **取消即撤销（cancel revokes）**：`agent/task-control.ts#cancelTask` 的**主保证（PRIMARY）**是一次**批量原子撤销**——即
+  `lib/db/repositories/pendingAction.ts#revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])` 用**单条**
+  `updateMany`（`pending|awaiting_mfa → cancelled`）**一次性**取消该计划的**全部** `PendingAction`（race-safe by construction）；
+  节点输出扫描（`task-control.ts#revokeParkedActions`，读取 `node.output.pendingActionId`）只是**兜底（FALLBACK）**。随后
+  `planner/lifecycle.ts#cancelPlan` 取消计划本身（保留终态节点，仅把非终态节点标记 `cancelled`）——**已完成的工作原样保留，没有伪造的回滚**。
+  计划进行中被并发取消时，**运行后扫描** `task-control.ts#sweepCancelledPlan` 在每条运行路径之后撤销运行期间被节点新铸造、仍停放的 action；
+  取消 vs 确认的竞争经 `security/security-gateway.ts#authorizeAction` 的**共享** `PendingAction` CAS 实现**至多一次**（已取消的 action 认领匹配 0 行 ⇒ `CONFLICT`，取消后的确认**不会执行**）。
 - **并发 resume / retry 恰好一次**：计划级 CAS 让「输家」返回持久化计划而不运行——`retryTask` 的
-  from-集合**排除** `'running'`（并发 retry 只有一次进入运行），`resumeTask` 则**保留** `'running'`
-  （并发 resume 都运行，恰好一次由下一条保证）；节点副作用由
-  `agent/confirmation.ts#executeGatedTool` 的**单飞**去重（`inFlightExecutions`，键 = session + tool +
-  规范化 args），转账再经 `{ idempotencyKey: action.id }` 幂等——**不重复副作用**。
+  from-集合**排除** `'running'`（并发 retry 只有一次进入运行），`resumeTask` 则**保留** `'running'`（并发 resume 都运行，恰好一次由**数据库执行认领**保证）；
+  恰好一次的守卫是 **DB 级**的：`lib/db/repositories/task.ts#claimTaskExecution`（**计划级** token，`finally` 中释放）与 `#claimNodeExecution`（**节点级** token，`finally` 中释放），加上经
+  `lib/ledger.ts#nodeExecutionKey(taskId, nodeId)` 的**节点身份合并**。去重身份的范围是**稳定的计划 / 节点 / 执行身份**——**不是** `sessionId` + tool + args：
+  **独立调用**（无计划节点）只靠 DB 的 `PendingAction` 状态 CAS，而**两个不同计划**即使 session+tool+args 相同也**各自独立运行**；转账再经 `{ idempotencyKey: action.id }` 幂等——**不重复副作用**。
 - **暂停保持（pause retention）**：在**已暂停**的计划里确认一个停放节点，**只**记录该节点的结果；计划
   **保持暂停**直到一次显式 resume（`task-control.ts#resumeTaskForAction` 调 `lifecycle.resumePlan` 时
   不传 `explicitResume`；`resumePlan` 先核算 `stillPaused` 并返回暂停快照，暂不推进）。
@@ -341,7 +341,7 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 | 熔断解锁 | `circuit-breaker.ts` · `POST /api/security/reset` | 用户在安全中心主动解除 | 清空熔断状态 + `SECURITY_RESET`（**经审计**） |
 | 审计 | `audit/` | 门控决策 / 安全控制 | `AuditLog` / `SecurityEvent` |
 | 会话标识 | `app/api/chat/route.ts` | `POST /api/chat` | cookie-only；body `sessionId` ≠ cookie（含无 cookie）⇒ `409 CONFLICT`，**不签发** cookie |
-| 计划取消撤销 | `task-control.ts#cancelTask` / `#sweepCancelledPlan` | 取消计划 | 原子撤销停放 action（`pending\|awaiting_mfa → cancelled`）+ 运行后扫描 |
+| 计划取消撤销 | `repositories/pendingAction.ts#revokePendingActionsByTask` · `task-control.ts#sweepCancelledPlan` | 取消计划 | **主保证（PRIMARY）**：单条 `updateMany` **批量**撤销（`pending\|awaiting_mfa → cancelled`）；**兜底（FALLBACK）**：节点扫描（`node.output.pendingActionId`）+ 运行后扫描 |
 | 计划状态 CAS | `repositories/task.ts#claimTaskStatus` | pause/cancel/resume/retry | 单条 `updateMany`；**终态不可复活**；输家返回持久化行 |
 | 账本幂等 | `lib/ledger.ts` · `confirmation.ts#executeAuthorizedAction` | `transfer_money` | `{ idempotencyKey: action.id }` ⇒ 账本重放，不重复扣款 |
 
@@ -350,17 +350,17 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 本节是**安全自评**：明确区分"真实由代码强制"（IMPLEMENTED）、"为演示而模拟"（SIMULATED）与
 "尚未端到端验证"（UNVERIFIED）三部分，避免过度声称。
 
-**由 TypeScript 代码强制（真实、可断言，不依赖 LLM 文本）：**
+**【已实现】由 TypeScript 代码强制（真实、可断言，不依赖 LLM 文本）：**
 
 - 权限分级与门控（🟢/🟡/🔴、`requiresConfirmation`、`requiresMfa`）——静态策略表 + 确定性动态规则；
 - `beforeToolCall` 阻断——被门控的工具**字面上无法执行**；
 - 两阶段人工确认——gated 工具的参数被持久化为 `PendingAction`，只有人工 confirm/verify 后用**原始已校验参数**执行；
-- 身份与计划生命周期——cookie-only 会话（body 不选会话，冲突即 `409` 且不签发 cookie）、计划取消的原子撤销 +
-  运行后扫描、计划状态 CAS（终态不可复活）、转账账本幂等（`idempotencyKey`）；
+- 身份与计划生命周期——cookie-only 会话（body 不选会话，冲突即 `409` 且不签发 cookie）、计划状态 CAS（终态不可复活）、转账账本幂等（`idempotencyKey`）；
+- **DB 原子执行认领（恰好一次）**——`repositories/task.ts#claimTaskExecution`（计划级 token，`finally` 中释放）与 `#claimNodeExecution`（节点级 token，`finally` 中释放）；计划取消的**主保证** = `repositories/pendingAction.ts#revokePendingActionsByTask` 以单条 `updateMany` **批量**撤销计划**全部**停放 action（另有节点扫描兜底 + 运行后扫描）；
 - 熔断（连续 3 次 MFA 失败锁会话）、注入检测（纵深防御）、幻觉防护（只报工具结果的事实）；
 - 审计写入（门控动作 + 安全事件）。
 
-**为演示而模拟（非真实能力，已刻意限定）：**
+**【模拟】为演示而模拟（非真实能力，已刻意限定）：**
 
 - **无真实银行 / 无真实资金 / 无真实支付 / 不连接银行核心系统**：`transfer_money` 只是写一条模拟
   `Transaction` 借记行并调整余额；
@@ -373,7 +373,7 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - **`change_password` 为模拟成功（无凭据存储）**，以 `AuditLog` 为准；
 - **UI 不展示 LLM 思维链**——只展示任务步骤、工具状态与结果。
 
-**尚未端到端验证（UNVERIFIED / 诚实边界）：**
+**【未验证】尚未端到端验证（UNVERIFIED / 诚实边界）：**
 
 - **真实浏览器验收存在，但不证明安全模型被完全封闭**：`tests/e2e/` 有一个真实浏览器 harness
   （`playwright-core` 启动**系统**无头 Chrome，**无需**下载浏览器；非 `npm run test`，用 `tsx` 显式运行），
