@@ -9,8 +9,8 @@ Each family module exports, per tool:
    (`@mariozechner/pi-agent-core`) returning an `AgentTool` whose params are a **TypeBox** schema
    (`Type`/`Static` re-exported by `@mariozechner/pi-ai`) — `execute` calls the Banking SDK and
    returns an `AgentToolResult`, **throwing `AppError`** (`@/lib/errors`) on failure; and
-2. a plain `run<X>(userId, args): Promise<ToolExecutionResult>` runner — the model-free path used
-   by the registry's `executeDirect`; it **catches** and returns `ToolExecutionResult{ok:false,error}`.
+2. a plain `run<X>(userId, args, opts?): Promise<ToolExecutionResult>` runner — the model-free path
+   used by the registry's `executeDirect`; it **catches** and returns `ToolExecutionResult{ok:false,error}`.
 
 `index.ts` builds a **per-user** registry (`createToolRegistry(userId)`).
 
@@ -35,7 +35,7 @@ export interface ToolExecutionResult {
   error?: string;
   tier?: RiskLevel;
 }
-/** Additive per-call option accepted by the model-free runners. Only `transfer_money` reads it. */
+/** Additive per-call option accepted by the model-free runners. Side-effecting tools consume it. */
 export interface ToolRunOptions { idempotencyKey?: string; }
 export interface ToolRegistry {
   tools: Record<ToolName, AgentTool<any>>;
@@ -60,9 +60,9 @@ supplies it.
 
 Per family module: a `create<Name>Tool(userId: string): AgentTool<typeof <Name>Params>` **factory**
 (the generic is the TypeBox SCHEMA object, not `Static<>`) and a model-free
-`run<Name>(userId: string, args: Record<string, unknown>): Promise<ToolExecutionResult>` runner
-(e.g. `createGetBalanceTool` + `runGetBalance`). Param schemas are exported as `<Name>Params` with a
-derived `<Name>Args` type. `index.ts`'s `createToolRegistry` calls every factory and assembles the
+`run<Name>(userId, args, opts?): Promise<ToolExecutionResult>` runner (e.g. `createGetBalanceTool` +
+`runGetBalance`). Param schemas are exported as `<Name>Params` with a derived `<Name>Args` type.
+`index.ts`'s `createToolRegistry` calls every factory and assembles the
 `Record<ToolName, AgentTool<any>>`.
 
 ### Tool catalogue (module → tier → Banking SDK call)
@@ -90,18 +90,39 @@ derived `<Name>Args` type. `index.ts`'s `createToolRegistry` calls every factory
 | `subscribe_investment` | investment.ts | 🔴 | `banking.investment.subscribeInvestment({ userId, productId, amount })` |
 | `redeem_investment` | investment.ts | 🔴 | `banking.investment.redeemInvestment({ userId, holdingId })` |
 | `transfer_money` | transfer.ts | 🟡/🔴 dynamic | `banking.transfer.createTransfer({ userId, ..., idempotencyKey? })` |
-| `reserve_budget` | budget.ts | 🟢 | `banking.budget.reserveBudget({ userId, ... })` |
+| `reserve_budget` | budget.ts | 🟢 | `banking.budget.reserveBudget({ userId, ..., idempotencyKey? })` |
 | `list_scheduled_tasks` | task.ts | 🟢 | `banking.task.listScheduledTasks(userId)` |
-| `create_scheduled_task` | task.ts | 🟡 | `banking.task.createScheduledTask({ userId, ... })` |
+| `create_scheduled_task` | task.ts | 🟡 | `banking.task.createScheduledTask({ userId, ..., idempotencyKey? })` |
 | `change_password` | security.ts | 🔴 | _(none — demo-only; see Design Decisions)_ |
 | `submit_plan` | planning.ts | META (not gated) | `planner` `dag.validatePlan`/`buildPlan` + `executor.runPlan` |
 
 Tier legend: 🟢 GREEN auto-executes · 🟡 YELLOW needs confirmation · 🔴 RED needs MFA. Tiers are
 **authoritative in `security/permission-engine.ts`**, not here (this table mirrors the root catalogue).
 
-`submit_plan` meta types (planning.ts): `SubmitPlanDeps { sessionId; runTool; onNodeUpdate?; signal?; now? }`,
-`PlanRunTool = (toolName: ToolName, args) => Promise<PlanToolOutcome>`, and
-`createSubmitPlanTool(userId, deps): AgentTool<typeof SubmitPlanParams>`.
+`submit_plan` meta types (planning.ts):
+
+```ts
+export type PlanRunTool = (
+  toolName: ToolName,
+  args: Record<string, unknown>,
+  ctx: NodeExecutionContext,   // { taskId, nodeId } — identifies the node this call belongs to
+) => Promise<PlanToolOutcome>;
+export interface SubmitPlanDeps {
+  sessionId: string;
+  runTool: PlanRunTool;
+  onNodeUpdate?: (node: TaskNodeResult) => void;
+  onPlanUpdate?: (plan: TaskPlan) => void | Promise<void>;
+  signal?: AbortSignal;
+  now?: () => number;
+}
+export function createSubmitPlanTool(userId: string, deps: SubmitPlanDeps): AgentTool<typeof SubmitPlanParams>;
+export function runSubmitPlan(userId: string, args: Record<string, unknown>, deps: SubmitPlanDeps): Promise<ToolExecutionResult>;
+```
+
+`NodeExecutionContext` is imported from `@/planner` (NOT redeclared here). `ctx` is threaded straight
+through to the executor's `runTool` port (`planner/executor.ts` already calls
+`runTool(tool, args, ctx)`); `runSubmitPlan` NEVER inspects it — it is the agent layer that turns it
+into the node's at-most-once key.
 
 ## Constraints
 
@@ -119,8 +140,8 @@ Tier legend: 🟢 GREEN auto-executes · 🟡 YELLOW needs confirmation · 🔴 
   tool-result); `run<X>` CATCHES and returns `ToolExecutionResult{ok:false,error}`. Never swallow,
   never let a raw exception reach the model.
 - **Import types, never redeclare.** Cross-module types come from `@/lib/contracts/*`; SDK DTOs from
-  `@/banking-sdk`; planner types from `@/planner`. Use the `@/*` alias for cross-node imports and
-  `./` within this node.
+  `@/banking-sdk`; planner types (`NodeExecutionContext`, `PlanToolOutcome`) from `@/planner`. Use the
+  `@/*` alias for cross-node imports and `./` within this node.
 - **Files ≲ ~1000 lines** — one module per family; split further if a family outgrows it.
 - Dependency direction: this node depends on `lib`, `banking-sdk`, `planner` — never the reverse.
 
@@ -144,19 +165,52 @@ Tier legend: 🟢 GREEN auto-executes · 🟡 YELLOW needs confirmation · 🔴 
 - **Tools are data + a thin SDK call.** Each family module only declares the TypeBox schema, the
   `AgentTool` object and one runner that forwards to its `banking-sdk` function — no business rules
   (funds/minAmount/recipient resolution are SDK concerns).
-- **`transfer_money` carries an optional at-most-once key.** Its runner takes `opts?: ToolRunOptions` and forwards `opts.idempotencyKey` verbatim as the SDK `TransferInput.idempotencyKey`; the SDK derives the ledger row id as `idempotentTransferTxId(userId, key)` (`@/lib/ledger`) and reuses it as the PK, so a repeat replays the original `Transaction` row instead of double-debiting (the created id is surfaced as `TransferResult.transactionId`). `confirmation.ts` supplies the gated action's `PendingAction.id` as the key. The `AgentTool.execute` (model path) passes NO key; the gated transfer is executed model-free via `executeDirect`.
+
+## Concurrency & idempotency
+
+Two code-enforced mechanisms keep a plan's side effects at-most-once across duplicate/concurrent runs.
+Both live in THIS node; the key is derived by the agent layer (see parent `../CONTEXT.md`).
+
+- **Node-execution idempotency (inline nodes).** The `runTool` port carries the node's identity as
+  `ctx = { taskId, nodeId }`. The agent layer maps it to `nodeExecutionKey(taskId, nodeId)`
+  (`@/lib/ledger`, format `nxe:<taskId>:<nodeId>`) and passes it as `registry.executeDirect(name, args,
+  { idempotencyKey })`. `executeDirect` forwards `opts` to the runner (it dispatches
+  `runners[name](userId, args, opts)`), and the two SIDE-EFFECTING inline runners
+  `runReserveBudget` (`budget.ts`) and `runCreateScheduledTask` (`task.ts`) resolve the key as
+  `opts?.idempotencyKey ?? args.idempotencyKey` (the server-injected `opts` wins) and forward it to
+  `banking.budget.reserveBudget` / `banking.task.createScheduledTask`, which replay the existing row on
+  the same key. So a replay of the SAME `(plan, node)` dedupes instead of double-creating; a different
+  task/node yields a different key and a distinct row. `ReserveBudgetParams`/`CreateScheduledTaskParams`
+  also carry an OPTIONAL `idempotencyKey` (round-trip for direct/schema callers); `opts` is the
+  canonical path (`executeDirect` bypasses schema validation). `transfer_money`'s key comes from its
+  `PendingAction.id` via the same `opts.idempotencyKey` channel.
+- **Initial-run plan claim.** `runSubmitPlan` acquires the plan's executor slot with
+  `claimTaskExecution(plan.id, newId('taskclaim'))` BEFORE `executor.runPlan`, and releases it via
+  `releaseTaskExecution(plan.id, token)` in a `finally`. A LOST claim (`false`) means another live
+  drive already owns the plan (e.g. a concurrent resume/retry of the SAME `taskId`), so `runSubmitPlan`
+  returns an explicit `{ ok:false, error:'计划已在执行中' }` and runs NOTHING — no duplicate executor.
+  The token is fresh per call, so a later resume/retry can re-claim the released slot. The plan id IS
+  the minted `AgentTask.id`, so the claim and the durable row share one identity.
+- **No inline risk/gating logic here.** Idempotency keys are an at-most-once *effect* mechanism, not a
+  permission decision: the gateway still decides tiers/confirmation/MFA for every node.
 
 ## Dependencies
 
 Frozen imports (exist; DO NOT redefine): `../lib/contracts/tools` (`ToolName`), `../lib/contracts/risk`
-(`RiskLevel`), `../lib/contracts/task` (`TaskNodeSpec`, `TaskNodeResult`), `../lib/errors` (`AppError`).
-Pi SDK: `AgentTool` (`@mariozechner/pi-agent-core`), `Type`/`Static` (`@mariozechner/pi-ai`).
+(`RiskLevel`), `../lib/contracts/task` (`TaskNodeSpec`, `TaskNodeResult`, `TaskPlan`, …),
+`../lib/errors` (`AppError`), `../lib/ledger` (`nodeExecutionKey`), `../lib/ids` (`newId`),
+`../lib/db/repositories/task` (`claimTaskExecution`, `releaseTaskExecution`, `createTask`,
+`createTaskNode`). Pi SDK: `AgentTool` (`@mariozechner/pi-agent-core`), `Type`/`Static` (`@mariozechner/pi-ai`).
 
 Sibling nodes consumed (read-only; escalate changes to the owner):
 - `../banking-sdk` → `banking.{account,transaction,transfer,contact,card,subscription,investment,budget,task,dashboard}.*`
-  (execute-only domain functions; DTOs in `banking-sdk/types.ts`).
-- `../planner` → `dag.validatePlan`, `dag.buildPlan`, `executor.runPlan`, `PlanToolOutcome`.
+  (execute-only domain functions; DTOs in `banking-sdk/types.ts`). `reserveBudget`/`createScheduledTask`
+  accept an optional `idempotencyKey` and replay the existing row on a repeat.
+- `../planner` → `dag.validatePlan`, `dag.buildPlan`, `executor.runPlan`, `PlanToolOutcome`,
+  `NodeExecutionContext`.
 - `../security` → the gateway that gates these tools (consumed by the agent, not this node).
+- `../agent` (`../task-control.ts`) → `createTaskPersistence(plan.id)`, `defaultPollControls`,
+  `sweepCancelledPlan` spread into `runSubmitPlan`'s run-deps (plan-id ↔ AgentTask-id contract).
 
 ## Test Strategy
 
@@ -172,9 +226,14 @@ Vitest (via `../tests`, sibling). Determinism: no network — unit tests stub `.
   required field.
 - **`userId` injection:** assert `userId` is passed to the SDK stub and is never read from `args`;
   a `args.userId` supplied by the model is ignored.
+- **Inline node dedupe (verified against the real test DB):** a replay of `reserve_budget` /
+  `create_scheduled_task` with the SAME `opts.idempotencyKey` returns the SAME row id and creates
+  exactly ONE row; a different key creates a distinct row; `args.idempotencyKey` dedupes when no
+  `opts` is supplied.
 - **`submit_plan`:** `runSubmitPlan` validates the DAG (`deps.runTool` NOT called on invalid input)
-  and parks a gated node (`requiresConfirmation`) via the injected `runTool`. Without `opts.submitPlan`,
-  `submit_plan` is still registered but `executeDirect` returns `{ ok:false, error }`.
+  and parks a gated node (`requiresConfirmation`) via the injected `runTool`; a LOST plan claim
+  returns `{ ok:false, error:'计划已在执行中' }` and calls `executor.runPlan` zero times. Without
+  `opts.submitPlan`, `submit_plan` is still registered but `executeDirect` returns `{ ok:false, error }`.
 - Full-pipeline demo scenarios run against these tools in `../tests` with `LLM_MODE=mock`.
 
 ## Routing Table
@@ -191,8 +250,8 @@ Vitest (via `../tests`, sibling). Determinism: no network — unit tests stub `.
 - `./agent/tools/budget.ts` → `reserve_budget`
 - `./agent/tools/task.ts` → `list_scheduled_tasks`, `create_scheduled_task`
 - `./agent/tools/security.ts` → `change_password`
-- `./agent/tools/planning.ts` → `submit_plan` (meta) + `SubmitPlanDeps`/`createSubmitPlanTool`
-- `./agent/tools/index.ts` → registry facade: `createToolRegistry`, `ToolExecutionResult`, `ToolRegistry`, `TOOL_NAMES`
+- `./agent/tools/planning.ts` → `submit_plan` (meta) + `SubmitPlanDeps`/`PlanRunTool`/`createSubmitPlanTool`
+- `./agent/tools/index.ts` → registry facade: `createToolRegistry`, `ToolExecutionResult`, `ToolRegistry`, `ToolRunOptions`, `TOOL_NAMES`
 - `../agent` → Pi Agent runtime that installs `beforeToolCall` and calls these tools (parent — read-only)
 - `../banking-sdk` → SDK functions each tool forwards to (sibling — read-only, escalate writes to owner)
 - `../planner` → DAG validate/build/run backing `submit_plan` (sibling — read-only, escalate writes to owner)
