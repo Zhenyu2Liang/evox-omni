@@ -10,7 +10,11 @@ The Prisma client singleton and the repository layer. This is the **only** subtr
 
 - `client.ts` — `resolveDatabaseUrl()` and the `prisma` `PrismaClient` **singleton** (also default-exported).
   Cached on `globalThis` so Next.js HMR does not open a new connection pool per reload. Constructed with an
-  explicit `datasources.db.url` fallback so it works without `.env`.
+  explicit `datasources.db.url` fallback so it works without `.env`. Right after construction it best-effort
+  applies the SQLite pragmas `journal_mode = WAL` + `busy_timeout = 10000` (fire-and-forget, never throws at
+  import time) so concurrent `$transaction` writers WAIT on the write lock instead of failing with `SQLITE_BUSY`
+  — required by the atomic transfer-limit claim in `security/security-gateway.ts`. `tests/helpers/db.ts` sets
+  the same pragmas for the test DB.
 - `repositories/` — one module per aggregate, each exporting typed async finders / creators / updaters /
   aggregates (see `repositories/CONTEXT.md`).
 
