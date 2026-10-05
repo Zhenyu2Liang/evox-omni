@@ -103,7 +103,8 @@ async function reportInjection(sessionId: string, text: string, result: Injectio
 ### `security-gateway.ts` — the chokepoint
 ```ts
 const BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__'
-interface GatewayContext { sessionId: string; userId: string; toolName: ToolName; args: Record<string, unknown>; userRequest: string }
+interface GatewayContext { sessionId: string; userId: string; toolName: ToolName; args: Record<string, unknown>; userRequest: string;
+                           taskId?: string; nodeId?: string }   // owning DAG plan node (AgentTask.id / AgentTaskNode.nodeId); absent for a top-level call
 interface ActionOwnership { userId: string; sessionId: string }      // REQUIRED caller identity
 type AuthorizeOptions = ActionOwnership & { mfaCode?: string }
 type CancelOptions = ActionOwnership
@@ -129,8 +130,25 @@ const securityGateway: SecurityGateway
 function buildPendingActionSummary(ctx, ev): PendingActionSummary   // pure formatting of Summary fields
 const TOOL_INTENT: Record<ToolName, string>                         // code-driven per-tool Chinese intent label (never LLM-derived)
 function deriveIntent(toolName: ToolName): string                   // TOOL_INTENT[toolName], else the raw tool name (never empty)
-// `createPendingAction` persists ctx.userRequest + deriveIntent(ctx.toolName); `toContractPendingAction` surfaces both on the returned PendingAction.
+// `createPendingAction` persists ctx.userRequest + deriveIntent(ctx.toolName) + the plan link
+// (ctx.taskId / ctx.nodeId, `null` when absent); `toContractPendingAction` surfaces userRequest and
+// intent on the returned PendingAction (the plan link is read back via `getPendingActionPlanLink`).
+function sameArgs(a: unknown, b: unknown): boolean   // PURE, key-order-insensitive deep equality of tool args
 ```
+`createPendingAction` first runs a **plan-node dedupe** (defense-in-depth — a cheap second layer): when BOTH
+`ctx.taskId` and `ctx.nodeId` are non-empty it lists the plan's non-settled actions
+(`listPendingActionsByTask(taskId, { statuses: ['pending','awaiting_mfa'] })`) and REUSES an existing one iff
+it is the same operation — same `nodeId`, same `toolName`, deep-equal args (`sameArgs` over
+`safeParse(row.argsJson, {})`), and the same effective tier / `requiresMfa` as the fresh evaluation
+(`row.riskLevel === ev.tier && row.requiresMfa === ev.requiresMfa`, so a drifted day total that now needs MFA
+cannot be under-gated away). Reuse returns the existing contract action WITHOUT minting a second row and
+WITHOUT re-issuing an MFA challenge (the existing action already has one). No match — or a `(taskId,nodeId)`
+row whose operation differs — falls through and creates a new action as usual. A node-execution claim
+elsewhere remains the PRIMARY guard.
+
+Persisting `taskId`/`nodeId` AT CREATION is what lets a plan-level cancel revoke the operation later: the plan
+link lives on the `PendingAction` row, so it survives even when the node output JSON was never written.
+
 `authorizeAction` gate order (fail-closed): (1) OWNERSHIP — `opts` is REQUIRED; `assertOwnership(row, opts)`
 throws `AppError('SECURITY_DENIED')` when the caller `userId`/`sessionId` is missing/empty, does not match
 the row, or (when the owning session row exists) disagrees with `getSession(row.sessionId).userId`
@@ -189,7 +207,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
                 │
       YELLOW/RED (blocked):
                 ▼
-        createPendingAction(ctx, ev) ──► PendingAction (status: pending | awaiting_mfa; persists userRequest + code-derived intent) + PendingActionSummary
+        createPendingAction(ctx, ev) ──► existing action for the same (taskId,nodeId) + tool + args + tier/requiresMfa, ELSE a new PendingAction (status: pending | awaiting_mfa; persists userRequest + code-derived intent + the taskId/nodeId plan link) + PendingActionSummary
                 ▼
         serializeBlockReason(decision, action) ──► '__SECURITY_BLOCK__{...actionId...}'
                 ▼
@@ -335,8 +353,9 @@ Frozen imports (already exist, DO NOT redefine): `lib/contracts/{risk,tools,secu
 
 Repository functions this node consumes (confirmed signatures — do NOT fork):
 - `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>` (sibling node; implemented, callers `await` it — but its writes are BEST-EFFORT and swallow persistence failures, see Known Issues)
-- `lib/db/repositories/pendingAction` → `createPendingAction(input): Promise<PendingAction>` (input also accepts optional `userRequest` / `intent`, written through),
+- `lib/db/repositories/pendingAction` → `createPendingAction(input): Promise<PendingAction>` (input also accepts optional `userRequest` / `intent` / `taskId` / `nodeId`, written through),
   `getPendingAction(id): Promise<(PendingAction & { mfa: MfaChallenge | null }) | null>`,
+  `listPendingActionsByTask(taskId, { statuses? }): Promise<PendingAction[]>` (plan-scoped, oldest-first; used ONLY by the park-path dedupe, which reads the plan link off the rows),
   `claimPendingAction({ actionId, from, to, userId?, sessionId? }): Promise<boolean>` (the atomic compare-and-set used by `authorizeAction`/`cancelAction`; `true` iff exactly one row transitioned),
   `setPendingActionStatus(id, status)` (unconditional setter, used by `recordActionResult`; aliased from `updatePendingActionStatus(id, status): Promise<PendingAction>`)
 - `lib/db/repositories/session` → `getSession(id): Promise<AgentSession | null>` (used by the gateway's ownership cross-check; `AgentSession` carries `userId`)
@@ -380,4 +399,4 @@ This is a **leaf node** — it has no child directories; the modules above are i
 - `authorizeAction`/`cancelAction`/`handleToolCall` REQUIRE a caller identity — never add a demo-user fallback; callers must pass `{ userId, sessionId }`.
 - **All tests live under the root-owned `../tests/`** (the root `vitest.config.ts` discovers only `tests/**`): this node's security unit specs — including the DB-free dedup spec `tests/unit/security/risk-engine-dedup.test.ts` — run via `npx vitest run tests/unit/security`.
 - **GREEN auto-executed reads are NOT audited.** The only `recordAudit` callers are the gated paths in `agent/confirmation.ts` (confirm/verify + cancel); a GREEN tool that executes inline writes no `AuditLog` row (by design, per `lib/contracts/audit`).
-- **This node is PLAN-UNAWARE.** `security-gateway.ts` never reads `AgentTask` / plan status: `gatewayCreatePendingAction` (park time) and `authorizeAction` (confirm/verify time) gate ONLY on ownership, the circuit breaker, and the risk engines. The "originating plan was cancelled" refusal is enforced one layer UP, in the sibling `agent/` node: `agent/confirmation.ts` `cancelledPlanOutcome(actionId, sessionId)` (reverse-looks the owning task via `findTaskByPendingAction` + `getTask`, refuses when `task.status === 'cancelled'`) is called by `confirmAction`/`verifyAction`/`cancelAction` BEFORE authorizing/executing, and `agent/task-control.ts` `sweepCancelledPlan`/`revokeParkedActions` revoke parked actions (via `gateway.cancelAction`) after a plan run settles. The gateway's own `cancelAction` only cancels ONE pending action (atomic `['pending','awaiting_mfa'] → 'cancelled'` claim); it has no plan awareness.
+- **This node is PLAN-UNAWARE.** `security-gateway.ts` never reads `AgentTask` / plan status: `gatewayCreatePendingAction` (park time) and `authorizeAction` (confirm/verify time) gate ONLY on ownership, the circuit breaker, and the risk engines. The gateway does persist/read the PLAN LINK on the `PendingAction` it owns (`ctx.taskId`/`ctx.nodeId` written at creation; the park-path dedupe groups by them) — that is action-row data, not plan state, so the gateway still never inspects a plan's status. The "originating plan was cancelled" refusal is enforced one layer UP, in the sibling `agent/` node: `agent/confirmation.ts` `cancelledPlanOutcome(actionId, sessionId)` (reverse-looks the owning task via `findTaskByPendingAction` + `getTask`, refuses when `task.status === 'cancelled'`) is called by `confirmAction`/`verifyAction`/`cancelAction` BEFORE authorizing/executing, and `agent/task-control.ts` `sweepCancelledPlan`/`revokeParkedActions` revoke parked actions (via `gateway.cancelAction`) after a plan run settles. The gateway's own `cancelAction` only cancels ONE pending action (atomic `['pending','awaiting_mfa'] → 'cancelled'` claim); it has no plan awareness.

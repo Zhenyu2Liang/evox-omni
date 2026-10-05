@@ -39,6 +39,7 @@ import {
   claimPendingAction,
   createPendingAction as repoCreatePending,
   getPendingAction,
+  listPendingActionsByTask,
   setPendingActionStatus,
 } from '../lib/db/repositories/pendingAction';
 import { getSession } from '../lib/db/repositories/session';
@@ -61,6 +62,13 @@ export interface GatewayContext {
   args: Record<string, unknown>;
   /** The user's original natural-language request (for audit); never used for permission. */
   userRequest: string;
+  /**
+   * Owning plan (`AgentTask.id`) when the call originates from a DAG plan node; absent for a
+   * top-level tool call. Persisted with the action so a plan-level cancel can revoke it later.
+   */
+  taskId?: string;
+  /** Owning node (`AgentTaskNode.nodeId`) alongside `taskId`; absent for a top-level tool call. */
+  nodeId?: string;
 }
 
 /** Result of a human confirm/verify decision on a pending action. */
@@ -403,11 +411,68 @@ function gatewayDecide(ev: SecurityEvaluation): SecurityDecision {
   };
 }
 
+/**
+ * Key-order-insensitive deep equality for JSON-ish tool args (objects / arrays / primitives).
+ * Pure, no I/O. Used to decide whether a re-parked plan node is the SAME operation.
+ */
+export function sameArgs(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b) return false;
+  if (a === null || b === null || typeof a !== 'object') return false;
+
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => sameArgs(item, b[index]));
+  }
+
+  const left = a as Record<string, unknown>;
+  const right = b as Record<string, unknown>;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  return leftKeys.every(
+    (key) => Object.prototype.hasOwnProperty.call(right, key) && sameArgs(left[key], right[key]),
+  );
+}
+
+/**
+ * DEFENSE-IN-DEPTH dedupe for the park path: find an EXISTING non-settled (`pending` /
+ * `awaiting_mfa`) action of the same plan node that represents the SAME operation — same tool, same
+ * args, same effective tier / `requiresMfa` (the tier check guards against a drifted day total
+ * under-gating the reuse). Returns `null` (⇒ create a fresh action) when the call is not plan-scoped
+ * or no such row exists. A node-execution claim elsewhere remains the PRIMARY guard; this is a
+ * cheap second layer so a re-run of the same node cannot mint duplicate actions.
+ */
+async function findReusableAction(
+  ctx: GatewayContext,
+  ev: SecurityEvaluation,
+): Promise<PrismaPendingAction | null> {
+  const { taskId, nodeId } = ctx;
+  if (!taskId || !nodeId) return null;
+
+  const rows = await listPendingActionsByTask(taskId, { statuses: ['pending', 'awaiting_mfa'] });
+  return (
+    rows.find(
+      (row) =>
+        row.nodeId === nodeId &&
+        row.toolName === ctx.toolName &&
+        row.riskLevel === ev.tier &&
+        row.requiresMfa === ev.requiresMfa &&
+        sameArgs(safeParse<Record<string, unknown>>(row.argsJson, {}), ctx.args),
+    ) ?? null
+  );
+}
+
 /** Persist a gated call as a `PendingAction` with a `PendingActionSummary`. */
 async function gatewayCreatePendingAction(
   ctx: GatewayContext,
   ev: SecurityEvaluation,
 ): Promise<PendingAction> {
+  // A plan node that is re-parked for the same operation reuses its existing action (and its
+  // existing MFA challenge) instead of minting a duplicate.
+  const reusable = await findReusableAction(ctx, ev);
+  if (reusable) return toContractPendingAction(reusable);
+
   const summary = buildPendingActionSummary(ctx, ev);
   const status: PendingActionStatus = ev.requiresMfa ? 'awaiting_mfa' : 'pending';
 
@@ -423,6 +488,10 @@ async function gatewayCreatePendingAction(
     userRequest: ctx.userRequest,
     intent: deriveIntent(ctx.toolName),
     status,
+    // Plan link (present only when the call originates from a DAG node): persisted AT CREATION so a
+    // plan-level cancel can revoke the operation even if the node output JSON was never written.
+    taskId: ctx.taskId,
+    nodeId: ctx.nodeId,
   });
 
   // RED actions get a code-free challenge up-front so the UI can prompt for MFA.
