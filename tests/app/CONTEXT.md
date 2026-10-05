@@ -121,7 +121,7 @@ complementing the in-process `tests/scenarios/*` suites.
   cookie: a body `sessionId` that DISAGREES with the cookie — INCLUDING "no cookie present" — is
   rejected `409 CONFLICT` and sets NO cookie. The FIRST turn OMITS `sessionId` and sends NO cookie;
   the route MINTS the session and returns its id (`data.sessionId` in JSON mode, or the `Set-Cookie`
-  asserted on is the one returned in the response body / cookie; specs send it back as the
+  header via `sessionIdFromResponse(res)` for SSE). That id is carried as the `banking_session` COOKIE
   `banking_session` COOKIE on later confirm/verify/cancel/tasks calls.
 - DB lifecycle like the other DB suites: `beforeEach(resetDatabase, 30000)` + `afterAll(disconnectTestPrisma)`; helpers come from `@/tests/helpers/db` and `@/tests/helpers/fixtures`.
 - Deterministic & offline; **no fake timers**. Reset+seed per test.
