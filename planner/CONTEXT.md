@@ -91,6 +91,7 @@ public functions/types (`buildPlan`, `transitiveDependents`, `isTerminalStatus`,
 `runPlan` is a single in-process walk, but every checkpoint consults `deps.controls` and writes
 through the persistence ports, so state survives the request:
 
+- **runPlan reads NO persisted state during a run** — it consults only the in-memory `plan` argument, its own flags, and `deps.controls.pollControls`. It never calls `deps.loadPlan` mid-walk. So a "pause" applied by writing node statuses (the `pausePlan` snapshot shape) does NOT stop a live run; only `PlanControls.pause()` / a durable `{kind:'pause'}` command does.
 - **Pause** — an in-process `PlanControls.pause()` or a durable `{kind:'pause'}` STOPS the walk and
   RETURNS immediately: `status:'pending'`, un-run nodes still `pending`, already-run nodes
   `success`. Resumption = re-invoking `runPlan` (or `resumePlan`) on the returned snapshot;
