@@ -401,6 +401,45 @@ export async function bootDevServer(opts: { timeoutMs?: number; attempts?: numbe
   throw new Error(`next dev 启动失败（已重试 ${attempts} 次）：${errText(lastError)}`);
 }
 
+// --- deterministic fixture state -----------------------------------------------------------------
+
+/**
+ * Reset the DEV SQLite DB to the canonical seeded demo state — `npm run db:reset`
+ * (`prisma db push --force-reset && tsx prisma/seed.ts`) — SYNCHRONOUSLY and BEFORE the dev server
+ * boots (no open connection ⇒ no Windows SQLite file-lock).
+ *
+ * WHY: money-moving journeys are tiered from the FROZEN demo day's accumulated outgoing transfers
+ * (`lib/clock.ts` `demoNow()` = 2026-09-25 12:00; `security/risk-engine.ts` ⇒ transfer is YELLOW only
+ * while `dayTotal + amount ≤ ¥1000`). Every transfer is stamped with `demoNow()`, so executed
+ * transfers ACCUMULATE across harness runs against the persistent `prisma/dev.db` — a second run
+ * would start with the previous run's transfers already inside the day and the YELLOW-transfer
+ * journeys would escalate to RED. Resetting gives every run the SAME known starting state (idempotent
+ * acceptance), matching the documented prerequisite (`npm run db:seed`).
+ *
+ * Set `E2E_SKIP_DB_RESET=1` to keep the current DB (e.g. to inspect post-run data); the journeys then
+ * require a freshly seeded DB. Throws with the captured command output when the reset fails.
+ */
+export function resetDemoDatabase(): void {
+  if (process.env['E2E_SKIP_DB_RESET'] === '1') {
+    console.log('· 跳过演示数据库重置（E2E_SKIP_DB_RESET=1）');
+    return;
+  }
+  const result =
+    process.platform === 'win32'
+      ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'npm run db:reset'], {
+          cwd: REPO_ROOT,
+          windowsHide: true,
+          encoding: 'utf8',
+        })
+      : spawnSync('npm', ['run', 'db:reset'], { cwd: REPO_ROOT, encoding: 'utf8' });
+  const out = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+  if (result.status !== 0) {
+    throw new Error(
+      `重置演示数据库失败（npm run db:reset，退出码 ${result.status ?? 'null'}）：${out.slice(-800)}`,
+    );
+  }
+}
+
 // --- browser factory ----------------------------------------------------------------------------
 
 /** Well-known Windows browser locations (Chrome first, Edge as fallback). */
@@ -656,14 +695,21 @@ export async function waitForStatusText(page: Page, needle: string, timeoutMs = 
 // --- plan card (task plan) ----------------------------------------------------------------------
 
 /**
- * XPath for the `PlanCard` root: the nearest ancestor `<div class="… rounded-2xl …">` of the
- * `依赖关系` heading (a `PlanCard`-only marker). `ancestor::…[1]` picks the NEAREST such ancestor,
- * which is the plan card itself — not the nested timeline card or any wrapper.
+ * XPath for the ACTIVE `PlanCard` root: the LAST-rendered ancestor `<div class="… rounded-2xl …">` of
+ * the `依赖关系` heading (a `PlanCard`-only marker).
+ *
+ * A plan turn renders the DAG snapshot TWICE: once INLINE inside the assistant message bubble
+ * (`MessageBubble` → `CardRenderer`), and once as the LIVE `stream.activePlan` card which
+ * `ChatWindow` renders AFTER all messages. The inline card's `plan.status` is FROZEN at the value the
+ * turn ended with (nothing rewrites `message.cards`), so pausing/cancelling a plan updates only the
+ * LIVE card. Reading `[1]` (the stale inline card) made this harness observe 等待确认 forever. We
+ * therefore select the LAST match — the live, app-authoritative plan view that reflects plan-control
+ * outcomes. Falls back to the only card when just one is rendered.
  */
 const PLAN_CARD_XPATH =
-  'xpath=//h4[normalize-space(string(.))="依赖关系"]/ancestor::div[contains(concat(" ", normalize-space(@class), " "), " rounded-2xl ")][1]';
+  'xpath=(//h4[normalize-space(string(.))="依赖关系"]/ancestor::div[contains(concat(" ", normalize-space(@class), " "), " rounded-2xl ")][1])[last()]';
 
-/** Locator for the rendered `PlanCard` root. */
+/** Locator for the rendered, LIVE `PlanCard` root (the app-authoritative plan view). */
 export function planCard(page: Page): Locator {
   return page.locator(PLAN_CARD_XPATH);
 }

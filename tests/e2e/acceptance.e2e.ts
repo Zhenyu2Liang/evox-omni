@@ -30,6 +30,7 @@ import {
   mfaCardPresent,
   planControlPresent,
   planStatus,
+  resetDemoDatabase,
   resolveBrowserExecutable,
   runJourney,
   setActiveBrowser,
@@ -50,6 +51,13 @@ import {
 const MSG = {
   /** YELLOW transfer (≤ ¥1000) → confirmation card. */
   transferYellow: '给张伟转200元',
+  /**
+   * YELLOW, NON-transfer action → confirmation card. Its tier is STATIC (`freeze_card` = YELLOW,
+   * `security/permission-engine.ts`), so — unlike a transfer — it stays YELLOW regardless of the
+   * demo day's accumulated transfer total, keeping journey e's confirmation-card recovery
+   * deterministic across runs and journey ordering.
+   */
+  freezeCard: '冻结我的信用卡',
   /** RED transfer (> ¥1000) → MFA card (mock code `123456`). */
   transferRed: '给张伟转2000元',
   /**
@@ -201,7 +209,9 @@ async function journeyPlanCancel(browser: Browser, baseUrl: string): Promise<str
 /**
  * (e) REFRESH → action-entry recovery, in the SAME context across reload (the HttpOnly
  * `banking_session` cookie persists, so the server state is reachable):
- *   leg 1: park a YELLOW transfer → reload → the ConfirmationCard(确认/取消) is RESTORED.
+ *   leg 1: park a YELLOW action → reload → the ConfirmationCard(确认/取消) is RESTORED.
+ *          Uses `freeze_card` (STATIC YELLOW) rather than a transfer, so the tier does not depend on
+ *          the demo day's accumulated transfer total (see MSG.freezeCard).
  *   leg 2 (fresh context): park a RED transfer → reload → the MfaCard(身份验证) is RESTORED.
  */
 async function journeyRefreshRecovery(browser: Browser, baseUrl: string): Promise<string> {
@@ -209,12 +219,12 @@ async function journeyRefreshRecovery(browser: Browser, baseUrl: string): Promis
     browser,
     async (page) => {
       await gotoAgent(page, baseUrl);
-      await submitChat(page, MSG.transferYellow);
+      await submitChat(page, MSG.freezeCard);
       await waitForConfirmCard(page);
       await page.reload({ waitUntil: 'domcontentloaded' });
       await waitForComposer(page);
       await waitForConfirmCard(page);
-      return 'YELLOW 转账挂起 → 同一 context reload → ConfirmationCard(确认/取消) 由 GET /api/actions 恢复';
+      return `YELLOW「${MSG.freezeCard}」挂起 → 同一 context reload → ConfirmationCard(确认/取消) 由 GET /api/actions 恢复`;
     },
     { label: 'e1-refresh-confirm' },
   );
@@ -306,6 +316,13 @@ async function main(): Promise<void> {
         reporter.skip(journey.name, '未找到真实浏览器（Chrome/Edge）；可设置 E2E_BROWSER_PATH 覆盖');
       }
     } else {
+      // Deterministic fixture state: reset the demo DB to the canonical seeded state BEFORE booting.
+      // The money journeys are tiered from the FROZEN demo day's accumulated outgoing transfers
+      // (`demoNow()` = 2026-09-25 12:00), so without a reset a second run would start with the prior
+      // run's executed transfers already in the day and the YELLOW-transfer journey would go RED.
+      console.log('· 重置演示数据库 → npm run db:reset（保证每次运行起始状态一致）');
+      resetDemoDatabase();
+
       // Robust boot: prefers the project-local Next CLI (no npx/shell shim), waits for BOTH
       // `/api/health` AND `/agent`, and retries once on a fresh port — see `bootDevServer`.
       devServer = await bootDevServer();
