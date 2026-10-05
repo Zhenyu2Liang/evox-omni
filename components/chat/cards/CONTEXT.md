@@ -23,6 +23,9 @@ export interface InvestmentsCardData { products?: ProductView[]; holdings?: Hold
 export interface SubscriptionsCardData { subscriptions: SubscriptionView[]; }
 export interface AnomalyCardData { report: AnomalyReport; }
 
+/** Control action requested from a plan card's task-control buttons. */
+export type TaskControlAction = 'pause' | 'resume' | 'cancel' | 'retry';
+
 /** Callbacks threaded from the chat container into interactive cards. */
 export interface CardActionHandlers {
   actionId?: string;
@@ -32,6 +35,8 @@ export interface CardActionHandlers {
   onAcknowledge?: () => void;   // anomaly: 这是本人交易
   onViewDetail?: () => void;    // anomaly: 查看详情
   onFreeze?: () => void;        // anomaly: 冻结银行卡
+  onTaskControl?: (action: TaskControlAction) => void;  // plan: pause/resume/cancel/retry
+  mfaAttempts?: number;         // MFA: failed verification attempts so far
   busy?: boolean;
   error?: string;
 }
@@ -59,7 +64,7 @@ export function ConfirmationCard(p: ConfirmationCardProps): JSX.Element; // titl
 // MfaCard — RED verification; shows hint ONLY, never the code. [取消]/[验证]
 export interface MfaCardProps { actionId: string; hint?: string;
   onSubmit?: (code: string) => void; onCancel?: (actionId: string) => void;
-  busy?: boolean; error?: string; className?: string; }
+  busy?: boolean; error?: string; attempts?: number; maxAttempts?: number; className?: string; }
 export function MfaCard(p: MfaCardProps): JSX.Element;
 
 export interface SpendingCardProps { data: SpendingAnalysis; className?: string; }
@@ -78,8 +83,9 @@ export interface AnomalyCardProps { data: AnomalyReport; onAcknowledge?: () => v
   onViewDetail?: () => void; onFreeze?: () => void; className?: string; }
 export function AnomalyCard(p: AnomalyCardProps): JSX.Element;        // [这是本人交易]/[查看详情]/[冻结银行卡]
 
-export interface PlanCardProps { plan: TaskPlan; className?: string; }
-export function PlanCard(p: PlanCardProps): JSX.Element;              // status timeline ↔ ../../banking + dependency section
+export interface PlanCardProps { plan: TaskPlan; onControl?: (action: TaskControlAction) => void;
+  busy?: boolean; className?: string; }
+export function PlanCard(p: PlanCardProps): JSX.Element;              // status timeline ↔ ../../banking + dependency section + task-control footer
 
 export interface ErrorCardProps { message: string; code?: string; detail?: string; className?: string; }
 export function ErrorCard(p: ErrorCardProps): JSX.Element;            // safe, agent-facing error surface
@@ -92,6 +98,15 @@ source — it maps all 8 `TaskNodeStatus` to a distinct icon/label/tone and show
 resolved to node NAMES through an id→name map built from `plan.nodes` (`依赖于: …`, or
 `起始节点（无依赖）` when empty; a dependency id not present in the plan falls back to the raw id).
 That section carries relationship text only — no status glyphs.
+
+`PlanCard` then renders a **task-control footer**, conditioned on `plan.status`:
+`running | pending | waiting_confirmation` → 暂停 + 取消; `paused` → 继续 + 取消; `failed` → 重试;
+`success | cancelled` → no footer. The buttons are `ui/Button` (secondary for 暂停/继续/重试, danger for
+取消), all disabled while `busy` (and when no `onControl` is supplied). They only invoke the injected
+`onControl(TaskControlAction)` handler — the browser never mutates the task itself.
+
+`MfaCard` optionally renders the failed-attempt count (`验证失败，已尝试 N 次（共 M 次）`) when
+`attempts > 0` and, when provided, `maxAttempts`.
 
 ## The exhaustive mapping (must stay in lock-step with the union)
 
@@ -110,13 +125,14 @@ That section carries relationship text only — no status glyphs.
 | `error` | `message: string` | `ErrorCard` |
 
 `CardRenderer` narrows the frozen `data: unknown` field to the concrete DTO above; the `./app` serialiser
-must populate `cards[].data` with exactly these shapes. Note: the `plan` renderer here is NOT the live
-plan path — a `plan` card is promoted into `activePlan` and rendered ONCE by `../../chat/ChatWindow`
-(see `../CONTEXT.md` "Plan dedupe" and "Human-decision card").
+must populate `cards[].data` with exactly these shapes. It also threads the shared `CardActionHandlers`
+into the interactive cards (`onControl`/`busy` → `PlanCard`; `mfaAttempts` → `MfaCard.attempts`). Note:
+the `plan` renderer here is NOT the live plan path — a `plan` card is promoted into `activePlan` and
+rendered ONCE by `../../chat/ChatWindow` (see `../CONTEXT.md` "Plan dedupe" and "Human-decision card").
 
 ## Known Issues
 
-- `PlanCard` is a passive plan VIEW by design (takes only `{ plan }`): a `waiting_confirmation`/`waiting_verification` node surfaces as the 待确认/待验证 badge and renders NO confirm/cancel buttons itself. The actionable human-decision for a parked plan node is rendered ONCE by `ChatWindow` from `stream.pendingAction` (driven by the `confirmation_required`/`mfa_required` events), reusing `ConfirmationCard`/`MfaCard` — see `../CONTEXT.md` "Human-decision card".
+- `PlanCard`'s task-control footer acts on the WHOLE plan (`pause`/`resume`/`cancel`/`retry`), distinct from the per-NODE human decision: a `waiting_confirmation`/`waiting_verification` node surfaces as the 待确认/待验证 badge and renders NO node-level confirm/cancel buttons. The actionable human-decision for a parked plan node is rendered ONCE by `ChatWindow` from `stream.pendingAction` (driven by the `confirmation_required`/`mfa_required` events), reusing `ConfirmationCard`/`MfaCard` — see `../CONTEXT.md` "Human-decision card".
 
 ## Constraints
 
@@ -125,10 +141,12 @@ plan path — a `plan` card is promoted into `activePlan` and rendered ONCE by `
 - **All Client Components** (`'use client'`) — rendered inside the streaming chat.
 - **Interactive cards never execute money movement themselves.** `ConfirmationCard`/`MfaCard` call the
   confirm/verify/cancel handlers passed from `../../chat/ChatWindow`, which POST to `./app` action routes.
-  `AnomalyCard`'s `onAcknowledge`/`onViewDetail`/`onFreeze` are supplied by `ChatWindow` too and simply
+  `PlanCard`'s task-control footer likewise calls the injected `onControl` only. `AnomalyCard`'s
+  `onAcknowledge`/`onViewDetail`/`onFreeze` are supplied by `ChatWindow` too and simply
   `stream.send(...)` an ordinary chat message (chat → agent → Security Gateway); 冻结银行卡 drives
   `freeze_card` → YELLOW confirmation. The browser only calls fetch; the server re-validates + executes.
-- **MFA secrecy**: `MfaCard` renders `hint` only — never the code (`MFA_CODE` is server-side; do not import).
+- **MFA secrecy**: `MfaCard` renders `hint` + the failed-attempt count only — never the code
+  (`MFA_CODE` is server-side; do not import).
 - **Money** via `Money`; **tiers** via `StatusBadge`; reuse `../../banking` tiles and `../../charts`
   rather than re-implementing tiles/charts inside cards.
 - **No competing status→meta table**: node statuses are rendered only through the composed
@@ -138,16 +156,18 @@ plan path — a `plan` card is promoted into `activePlan` and rendered ONCE by `
 
 ## Test Strategy
 
-- Primary guard is **compile-time**: the `assertNever` default makes a new card variant a `tsc` error.
+- Primary guard is **compile-time**: the `assertNever` default makes a new card variant a `tsc` error,
+  and the `Record<TaskPlanStatus, …>` label/tone maps are exhaustive over the frozen plan statuses.
 - RTL render tests under the root `tests/` suite render each card with a fixture `ChatCard` and assert
   key content (amount via `Money`, tier badge label, field rows, MFA hint present / code absent).
 - `CardRenderer` dispatch test: each `card.type` renders its component; unknown key fails to compile.
 - `PlanCard`'s dependency-label resolution (dep ids → node names, empty → `起始节点（无依赖）`, unknown id
   fallback) is the behavioural bit to assert; the timeline itself is delegated to `AgentTaskTimeline`.
+  Its status→control mapping (`controlActionsFor`) and emitted `TaskControlAction`s are also behavioural.
 
 ## Routing Table
 
-- `./types.ts` → card-data payload interfaces + `CardActionHandlers`
+- `./types.ts` → card-data payload interfaces + `TaskControlAction` + `CardActionHandlers`
 - `./CardRenderer.tsx` → the exhaustive `card.type` dispatcher
 - `./BalanceCard.tsx` `./TransferCard.tsx` `./ConfirmationCard.tsx` `./MfaCard.tsx` `./SpendingCard.tsx`
   `./CardsCard.tsx` `./InvestmentsCard.tsx` `./SubscriptionsCard.tsx` `./AnomalyCard.tsx`
