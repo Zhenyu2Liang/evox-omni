@@ -94,6 +94,26 @@ Fixtures: the canonical demo dataset (user 李明; contacts 张伟/王芳/妈妈
 anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) is defined in
 `helpers/fixtures.ts`. Cross-module knowledge belongs to the modules under test, not to fixtures.
 
+## Real-Browser E2E (tests/e2e — NOT run by vitest)
+
+A separate acceptance layer ABOVE the HTTP specs: `tests/e2e/acceptance.e2e.ts` boots the REAL app
+(`next dev`) on a free port and drives the REAL `/agent` UI in headless system Chrome
+(`playwright-core`, NO browser download), asserting on RENDERED DOM. Its file name avoids
+`.test.`/`.spec.` so `npm run test` NEVER picks it up — run it explicitly.
+
+```
+npx tsx tests/e2e/acceptance.e2e.ts
+```
+
+Prerequisites (once, in a fresh worktree): `npm install` → `npx prisma generate` → `npx prisma db push`
+→ `npm run db:seed`. It uses the DEV DB (`prisma/dev.db`, gitignored), `.env` must set `LLM_MODE=mock`,
+and it needs a system Chrome. It prints one `PASS|FAIL|SKIP <journey> — <evidence>` line per journey
+and exits non-zero iff any journey FAILs (a SKIP does not fail the run).
+**Covers:** NL → confirmation/MFA card → human-decision flows, MFA success + wrong-code rejection,
+plan pause/resume + cancel, and refresh/action-entry recovery from persisted server state.
+**Does NOT cover:** the real LLM, `next build`/`next start`, cross-browser, a11y/perf, or the
+`unit`/`scenarios` layers. See `e2e/CONTEXT.md` for details and known limitations.
+
 ## Fast test-DB path (why the suite is fast — do not remove)
 
 The full suite (447 tests / 214 suites) runs in ~30–45s.
