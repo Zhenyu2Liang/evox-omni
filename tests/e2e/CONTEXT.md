@@ -101,7 +101,7 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   escalate to RED.
 - NOTE: `prisma/dev.db` untouched is guaranteed by construction (never referenced). The sidecars
   `prisma/e2e.db-wal`/`-shm` are git-ignored (see `.gitignore`: `prisma/*.db-wal`, `prisma/*.db-shm`,
-  `prisma/*.db-journal` are) — reported upward as a root-owned `.gitignore` change.
+  plus `prisma/*.db` / `prisma/*.db-journal`).
 
 ## Journeys (each asserts on RENDERED DOM; money journeys add a DB/ledger cross-check)
 - **a-transfer-confirm** (YELLOW transfer ≤¥1000): `给张伟转200元` → ConfirmationCard (`确认`/`取消`)
