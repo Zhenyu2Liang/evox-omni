@@ -132,6 +132,7 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
 - **No chain-of-thought.** Only task steps, tool status and factual results are shown.
 - **One concern per file**, files ≲ ~1000 lines. Shared primitives live in `./ui` (lowest common ancestor).
 - **Freshness/streaming**: components are pure w.r.t. props; live updates flow through `useAgentStream`.
+- **Barrels stay NEUTRAL.** `'use client'` belongs on each interactive LEAF (e.g. `chat/ChatWindow.tsx`, `charts/SpendingPie.tsx`), never on an intermediate barrel (`chat/index.ts`, `chat/cards/index.ts`, `ui/index.ts`, …). A `'use client'` barrel star-re-exported through the neutral `./index.ts` facade resolves to `undefined` at SSR and breaks the consuming page — this is why `/agent` returned HTTP 500. Keep every barrel directive-free, mirroring the neutral `charts/index.ts`.
 - All components are **named exports** (no default exports) so the barrel facade stays tree-shakeable.
 
 ## Test Strategy
