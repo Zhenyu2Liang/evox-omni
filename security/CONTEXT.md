@@ -272,7 +272,7 @@ Vitest. This node is designed to be unit-testable WITHOUT network or clock:
   per test to isolate the in-memory breaker; assert `recordFailure` emits `CIRCUIT_BREAKER_TRIPPED`
   and `resetSession` emits `SECURITY_RESET`. The gateway audit-trail specs assert the persisted
   `userRequest` + `intent` round-trip through `createPendingAction`/`handleToolCall`.
-- Authorization-hardening units (`security/_tests/authorize-hardening.test.ts` → intended home
+- Authorization-hardening units
   `tests/unit/security/`) prove the exactly-once claim (`repeated confirm ⇒ CONFLICT`, confirm-after-cancel
   and cancel-after-confirm ⇒ `CONFLICT`), the ownership rejection (`SECURITY_DENIED`), the execution-time
   transfer re-risk escalation (parked YELLOW transfer escalates to MFA then still completes with the code),
