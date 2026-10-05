@@ -139,6 +139,9 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   (`SESSION_COOKIE`); `?sessionId=`/`?userId=` query params are IGNORED. Missing/unknown cookie → 403
   `SECURITY_DENIED`; unknown id → 404 `NOT_FOUND`; foreign-owned id → 403. App-entry specs pass
   identity as a `Cookie` header via `harness.ts` (`{ sessionId }` shorthand or a raw `cookie`).
+  BOOTSTRAP: the FIRST chat turn OMITS body `sessionId` and sends NO cookie (the route mints the
+  session and returns its id via `data.sessionId`/`Set-Cookie`); a body `sessionId` that disagrees
+  with the cookie → **409**.
 - **Gateway ownership is mandatory.** `securityGateway.authorizeAction(id, { userId, sessionId, mfaCode? })`
   and `cancelAction(id, { userId, sessionId })` REQUIRE non-optional `userId`+`sessionId` (no demo-user
   fallback; missing/mismatch → `SECURITY_DENIED`). Pass the parked action's OWN `sessionId` and that
