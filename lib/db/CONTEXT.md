@@ -15,6 +15,14 @@ The Prisma client singleton and the repository layer. This is the **only** subtr
   import time) so concurrent `$transaction` writers WAIT on the write lock instead of failing with `SQLITE_BUSY`
   — required by the atomic transfer-limit claim in `security/security-gateway.ts`. `tests/helpers/db.ts` sets
   the same pragmas for the test DB.
+  **URL resolution (important for isolated-DB setups):** `resolveDatabaseUrl()` returns
+  `process.env.DATABASE_URL` **verbatim** when set, else `'file:' + path.join(process.cwd(), 'prisma', 'dev.db')`.
+  There is **no `dotenv` anywhere in `lib`** (nor in the repo) — the only implicit `.env` loading is done by
+  Next.js's own env loader at dev/build start (and by the Prisma CLI for its own commands). The cwd-based
+  fallback means any process (e.g. the e2e `next dev` child, or `tsx prisma/seed.ts`) reaches the shared
+  `prisma/dev.db` only when run with cwd = repo root **and** `DATABASE_URL` unset; setting `DATABASE_URL`
+  (absolute `file:` URL) in a child process's env is what redirects BOTH the Prisma CLI and the runtime client
+  to an isolated DB — proven by `tests/setup.ts` redirecting `prisma db push` to `prisma/test.db`.
 - `repositories/` — one module per aggregate, each exporting typed async finders / creators / updaters /
   aggregates (see `repositories/CONTEXT.md`).
   Also carries the concurrency-safety primitives: the `PendingAction` → (`taskId`,`nodeId`) plan link persisted at creation, per-action / plan-level revocation helpers, per-plan / per-node live-execution claim + release CAS helpers keyed by `executionToken`/`executionClaimedAt`, and the `nodeExecutionKey` idempotency key for node side effects.
