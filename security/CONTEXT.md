@@ -312,15 +312,15 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 - **`HIGH_RISK_BLOCKED` / `ANOMALY_FLAGGED` event kinds are declared but never written**
   by this node (it emits `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET`
   and — for the transfer escalation — `LIMIT_EXCEEDED`).
-- **A transfer's terminal ledger write is still not idempotent, and the ledgered-transfer dedup is ACTIVE (the key IS wired — see below).**
+- **A transfer's terminal ledger write IS idempotent, so the ledgered-transfer dedup is ACTIVE.**
   The gateway serializes the AGGREGATE-limit re-risk (claim-first `$transaction`), and `lib/ledger`
   (`idempotentTransferTxId`) + `banking-sdk/transfer.ts` (accepts an `idempotencyKey`, sets `Transaction.id`
-  to that deterministic id) support an idempotency key — but the agent layer currently passes NO key
-  (`agent/tools/transfer.ts` `runTransferMoney`; `agent/confirmation.ts` `executeAuthorizedAction` via
-  `registry.executeDirect`), so no `Transaction.id` equals `idempotentTransferTxId(userId, action.id)`.
-  Consequently the dedup above finds nothing to exclude until that wiring lands, and the gate read is still
-  not atomic with the SDK write (`banking-sdk/transfer.ts`) — a crash between `authorizeAction` and
-  `recordActionResult` leaves a `confirmed` (in-flight) action whose ledger row is missing.
+  to that deterministic id) and the agent layer DOES pass the key (its own `action.id`) — so the created
+  `Transaction.id` exactly equals `idempotentTransferTxId(userId, action.id)` and the
+  `computeInFlightTransferTotal` ledger-exclusion is LIVE (an in-flight `confirmed` action whose ledger
+  row already exists is counted exactly once, via the executed half). Residual: the terminal-status flip
+  (`recordActionResult`) is still a separate step from the SDK write — a crash between `authorizeAction`
+  and `recordActionResult` leaves a `confirmed` action, but a retry now replays the same ledger row (at-most-once).
 
 ## Dependencies (contracts this node consumes)
 
