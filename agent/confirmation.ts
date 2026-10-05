@@ -40,12 +40,13 @@ import { security } from '@/security';
 import { recordAudit } from '@/audit';
 import { getSession } from '@/lib/db/repositories/session';
 import { getPendingAction, getPendingActionOwnership } from '@/lib/db/repositories/pendingAction';
+import { getTask } from '@/lib/db/repositories/task';
 import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { resumeTurn } from './run-turn';
 import type { RunTurnDeps } from './run-turn';
-import { resumeTaskForAction } from './task-control';
+import { findTaskByPendingAction, resumeTaskForAction } from './task-control';
 
 /**
  * The security gateway's runtime surface.
@@ -196,6 +197,47 @@ async function resolveTrustedIdentity(
   return { userId, sessionId: row.sessionId };
 }
 
+/**
+ * FAIL CLOSED when the action's owning plan has been CANCELLED.
+ *
+ * Defense-in-depth for the `cancelTask` path: cancelling a plan already revokes its parked
+ * `PendingAction`s (`task-control.ts#cancelTask` → gateway atomic claim), so the gateway would
+ * reject a late confirm with `CONFLICT`. This check is the belt to that suspenders — it reads the
+ * owning `AgentTask` from PERSISTED state (through the existing `findTaskByPendingAction` reverse
+ * lookup + `tasks.getTask`) and, when that plan is `'cancelled'`, refuses the human decision BEFORE
+ * any authorization or execution, so money can never move out of a cancelled plan even if the
+ * revocation raced or failed.
+ *
+ * Returns the refusal outcome (`ok:false`, honest persisted status), or `undefined` when the action
+ * is not a gated plan node (a plain transfer, say) or its plan is not cancelled — in which case the
+ * caller proceeds unchanged. Ownership stays enforced by `resolveTrustedIdentity`; an action whose
+ * owner cannot be established is still `SECURITY_DENIED`, never silently allowed.
+ */
+async function cancelledPlanOutcome(
+  actionId: string,
+  sessionId: string,
+): Promise<ConfirmationOutcome | undefined> {
+  const located = await findTaskByPendingAction(sessionId, actionId);
+  if (located === undefined) return undefined;
+
+  const task = await getTask(located.taskId);
+  if (task === null || task.status !== 'cancelled') return undefined;
+
+  const row = await getPendingAction(actionId);
+  const status = (row?.status as PendingActionStatus | undefined) ?? 'cancelled';
+  const tier = (row?.riskLevel as RiskLevel | undefined) ?? 'YELLOW';
+  const requiresMfa = row?.requiresMfa === true;
+  return {
+    ok: false,
+    actionId,
+    status,
+    tier,
+    requiresMfa,
+    message: `该操作所属的任务计划已取消（${located.taskId}），已拒绝执行。`,
+    events: [],
+  };
+}
+
 /** The identity bag the merged gateway accepts on `recordActionResult` (legacy: ignored). */
 type RecordActionResult = (
   actionId: string,
@@ -227,14 +269,54 @@ function emitAll(events: readonly AgentStreamEvent[], opts?: ConfirmOptions): vo
 }
 
 /**
- * Gate a tool call through the gateway and, when allowed, execute it through the SDK.
- *
- * Blocked (YELLOW/RED/locked) ⇒ `{ ok:false, requiresConfirmation:true, pendingActionId? }` so the
- * planner parks the node in `waiting_confirmation`/`waiting_verification`. Allowed (GREEN) ⇒ the args
- * run through the Banking SDK. NEVER throws: it is the planner's `runTool` port, and a plan node must
- * report a failure as a value instead of blowing up the whole plan.
+ * Canonical, ORDER-STABLE JSON for a tool's arguments, so two logically identical calls produce the
+ * same single-flight key regardless of object key insertion order. Recurses into arrays/objects;
+ * every other value is serialized by `JSON.stringify` (primitive or `undefined`).
  */
-export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome> {
+function canonicalArgs(args: Record<string, unknown>): string {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value !== null && typeof value === 'object') {
+      const source = value as Record<string, unknown>;
+      const sorted: Record<string, unknown> = {};
+      for (const key of Object.keys(source).sort()) sorted[key] = normalize(source[key]);
+      return sorted;
+    }
+    return value;
+  };
+  return JSON.stringify(normalize(args));
+}
+
+/** The single-flight key of a gated tool call: trusted session + tool + canonical args. */
+function executionKey(ctx: GatewayContext): string {
+  return `${ctx.sessionId}\u0000${ctx.toolName}\u0000${canonicalArgs(ctx.args)}`;
+}
+
+/**
+ * In-flight AUTO-EXECUTING tool calls, keyed by `executionKey`.
+ *
+ * WHY: two CONCURRENT runs of the same plan (a double resume / retry) can both reach the same un-run
+ * node and both invoke `runTool`. The node's side effect must happen EXACTLY ONCE, so a second
+ * concurrent IDENTICAL call SHARES the first's in-flight promise — one execution, one side effect,
+ * one shared result. The entry is CLEARED the moment the call settles (success or failure), so a
+ * later SEQUENTIAL identical call is a genuinely new execution and is NEVER coalesced with a
+ * completed one.
+ */
+const inFlightExecutions = new Map<string, Promise<GatedToolOutcome>>();
+
+/**
+ * Is this outcome a PARKED (human-gated) one rather than an auto-execution?
+ *
+ * A parked call minted a `PendingAction` the human must decide on; those are PER-CALL, so a parked
+ * outcome is never shared between concurrent callers — each concurrent identical gated call keeps its
+ * own pending action.
+ */
+function isParkedOutcome(outcome: GatedToolOutcome): boolean {
+  return outcome.requiresConfirmation === true || outcome.pendingActionId !== undefined;
+}
+
+/** The un-coalesced body of `executeGatedTool`: the actual gateway gate + SDK execution. */
+async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutcome> {
   try {
     const auth = await gateway.handleToolCall(ctx);
 
@@ -259,6 +341,42 @@ export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOu
     // Infra failure (gateway/SDK) ⇒ a failed node carrying its reason, instead of an exception
     // escaping mid-plan. Never silent: the message is reported to the planner/UI.
     return { ok: false, error: AppError.from(e).message };
+  }
+}
+
+/**
+ * Gate a tool call through the gateway and, when allowed, execute it through the SDK.
+ *
+ * Blocked (YELLOW/RED/locked) ⇒ `{ ok:false, requiresConfirmation:true, pendingActionId? }` so the
+ * planner parks the node in `waiting_confirmation`/`waiting_verification`. Allowed (GREEN) ⇒ the args
+ * run through the Banking SDK. NEVER throws: it is the planner's `runTool` port, and a plan node must
+ * report a failure as a value instead of blowing up the whole plan.
+ *
+ * SINGLE-FLIGHT (side effect exactly once): a CONCURRENT identical call — same session, tool and
+ * canonical args — SHARES the first call's in-flight execution instead of running a second time, so a
+ * duplicated resume cannot double a GREEN side effect (e.g. two `reserve_budget`s). A PARKED outcome
+ * is NOT shared: it is per-call (its own `PendingAction`), so a concurrent identical gated call runs
+ * its own gate once the first settles. The in-flight entry is removed on settle, so a SEQUENTIAL
+ * identical call is never coalesced with a completed one.
+ */
+export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome> {
+  const key = executionKey(ctx);
+  const inFlight = inFlightExecutions.get(key);
+  if (inFlight !== undefined) {
+    const shared = await inFlight;
+    // Only auto-executing outcomes are shared; a parked outcome is per-call (own pending action).
+    if (!isParkedOutcome(shared)) return shared;
+    return executeGatedToolOnce(ctx);
+  }
+
+  const run = executeGatedToolOnce(ctx);
+  inFlightExecutions.set(key, run);
+  try {
+    return await run;
+  } finally {
+    // Clear on settle so a LATER sequential identical call is a fresh execution. Remove ONLY our
+    // entry, in case a subsequent call has already registered a new one.
+    if (inFlightExecutions.get(key) === run) inFlightExecutions.delete(key);
   }
 }
 
@@ -360,10 +478,19 @@ async function executeAuthorizedAction(
 
   // Execute the args the gateway validated and persisted at gate time — straight through the
   // registry. Re-running `handleToolCall` would re-gate the call and mint a duplicate PendingAction.
+  //
+  // IDEMPOTENCY (money movement): a `transfer_money` action passes its OWN PendingAction id as the
+  // SDK `idempotencyKey`, so the created ledger row id is exactly
+  // `idempotentTransferTxId(userId, action.id)` (`@/lib/ledger`) and a repeat/concurrent confirm
+  // replays that row instead of double-debiting — the DB itself dedups the write, so no lock is
+  // needed around the ledger-write → terminal-status window. Every other tool takes no opts.
   const registry = createToolRegistry(userId);
   let result: ToolExecutionResult;
   try {
-    result = await registry.executeDirect(action.toolName, action.args);
+    result =
+      action.toolName === 'transfer_money'
+        ? await registry.executeDirect(action.toolName, action.args, { idempotencyKey: action.id })
+        : await registry.executeDirect(action.toolName, action.args);
   } catch (e) {
     // A boundary throw is the REAL failure — recorded as `failed`, never swallowed, never a success.
     result = { ok: false, error: AppError.from(e).message };
@@ -478,6 +605,10 @@ export async function confirmAction(
 ): Promise<ConfirmationOutcome> {
   const identity = await resolveTrustedIdentity(actionId, opts);
 
+  // FAIL CLOSED when the action's owning plan was cancelled: refuse BEFORE authorizing/executing.
+  const cancelled = await cancelledPlanOutcome(actionId, identity.sessionId);
+  if (cancelled !== undefined) return cancelled;
+
   let auth: AuthorizationResult;
   try {
     auth = await gateway.authorizeAction(actionId, {
@@ -502,6 +633,10 @@ export async function verifyAction(
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
   const identity = await resolveTrustedIdentity(actionId, opts);
+
+  // FAIL CLOSED when the action's owning plan was cancelled: refuse BEFORE authorizing/executing.
+  const cancelled = await cancelledPlanOutcome(actionId, identity.sessionId);
+  if (cancelled !== undefined) return cancelled;
 
   let auth: AuthorizationResult;
   try {
@@ -531,6 +666,11 @@ export async function cancelAction(
   // The identity sent to the gateway is resolved from PERSISTED ownership (asserted against any
   // request-supplied `userId`/`sessionId`).
   const identity = await resolveTrustedIdentity(actionId, opts);
+
+  // FAIL CLOSED when the action's owning plan was cancelled: a cancelled plan's parked action is
+  // refused outright (nothing to cancel, nothing may ever run).
+  const cancelled = await cancelledPlanOutcome(actionId, identity.sessionId);
+  if (cancelled !== undefined) return cancelled;
 
   // `cancelAction` throws `AppError('NOT_FOUND'|'SECURITY_DENIED'|'CONFLICT')` for an
   // unknown/foreign/settled action; the API layer maps it to the error envelope (never swallowed).

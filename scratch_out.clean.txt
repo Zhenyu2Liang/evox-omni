@@ -1,0 +1,31 @@
+﻿node.exe : The CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cj
+s-node-api-deprecated for more details.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (The CJS bu...e details.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v2.1.9 D:/projects/banking-agent/.genesis/workers/worker_T4_A13
+
+stdout | agent/__scratch/repro.test.ts > diag single resume (non-blocking)
+DIAG init {"createdStatus":"paused","rowStatus":"paused","nodes":[{"id":"t","status":"success"},{"id":"b","status":"pending"}]}
+
+stdout | agent/__scratch/repro.test.ts > diag single resume (non-blocking)
+DIAG single {"planStatus":"success","log":["reserve_budget"],"rowStatus":"success","nodes":[{"id":"t","status":"success"},{"id":"b","status":"success"}],"budgets":1}
+
+stdout | agent/__scratch/repro.test.ts > diag concurrent resume (non-blocking)
+DIAG init {"createdStatus":"paused","rowStatus":"paused","nodes":[{"id":"t","status":"success"},{"id":"b","status":"pending"}]}
+
+stdout | agent/__scratch/repro.test.ts > diag concurrent resume (non-blocking)
+DIAG concurrent {"log":["reserve_budget"],"rowStatus":"success","nodes":[{"id":"t","status":"success"},{"id":"b","status":"success"}],"count":1}
+
+ ✓ agent/__scratch/repro.test.ts (2 tests) 399ms
+
+ Test Files  1 passed (1)
+      Tests  2 passed (2)
+   Start at  16:08:26
+   Duration  1.19s (transform 263ms, setup 13ms, collect 632ms, tests 399ms, environment 0ms, prepare 44ms)
+
+

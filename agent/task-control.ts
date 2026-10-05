@@ -23,6 +23,12 @@
  * `PendingAction`s through the gateway's atomic claim (`gateway.cancelAction`), so a later
  * confirm/verify can never move money out of a plan the user just cancelled. Tier/permission
  * decisions stay in `security/` — this module computes no tier and grants nothing.
+ *
+ * CONCURRENCY: every state-changing control path claims its transition with a single atomic
+ * compare-and-set (`claimTaskStatus`: one `updateMany` guarded by `status IN fromStatuses`), so two
+ * concurrent requests can never both run the same plan and a terminal status (`cancelled`/`success`)
+ * is never resurrected. After every run the CANONICAL CANCEL SWEEP (`sweepCancelledPlan`) revokes any
+ * `PendingAction` that a node minted DURING the run while the plan was being cancelled concurrently.
  */
 import type {
   TaskCondition,
@@ -40,6 +46,7 @@ import { AppError, type ErrorCode } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
 import { getSession } from '@/lib/db/repositories/session';
 import {
+  claimTaskStatus,
   getTask,
   listTasksBySession,
   updateTaskNode,
@@ -52,6 +59,79 @@ import {
  * `gateway` namespace's sole runtime member is the exported `securityGateway` object.
  */
 const gateway = security.gateway.securityGateway;
+
+/**
+ * The plan statuses `pauseTask` may act on: every NON-TERMINAL status. `success`/`failed`/`cancelled`
+ * are terminal and must never be resurrected by a pause; `'paused'` is included so a repeated pause
+ * is an idempotent no-op instead of a lost update.
+ */
+const PAUSABLE_PLAN_STATUSES: TaskPlanStatus[] = [
+  'pending',
+  'running',
+  'paused',
+  'waiting_confirmation',
+];
+
+/**
+ * The plan statuses `resumeTask` may act on: every NON-TERMINAL status, INCLUDING `'running'`.
+ *
+ * `'running'` is deliberately present: two CONCURRENT resumes of the SAME plan both claim the row and
+ * BOTH invoke `runTool`, so a node's side effect must be de-duplicated BELOW this level (the
+ * single-flight guard in `confirmation.ts#executeGatedTool`). Excluding `'running'` would starve the
+ * second resume (0 rows claimed ⇒ no run ⇒ `runTool` never invoked), which is wrong when a caller
+ * legitimately needs both passes to observe the same in-flight node. `'cancelled'`/`'success'` are
+ * terminal and are NEVER resumed — a terminal row is absent from the from-set, so the CAS claims 0
+ * rows and the caller returns the persisted plan without running.
+ */
+const RESUMABLE_PLAN_STATUSES: TaskPlanStatus[] = [
+  'running',
+  'paused',
+  'waiting_confirmation',
+  'pending',
+  'failed',
+];
+
+/**
+ * Every plan status EXCEPT the terminal `'cancelled'`.
+ *
+ * This is the compare-and-set from-set used to persist a plan CHECKPOINT (`persistPlan`): a
+ * checkpoint may update any live/parked/settled plan, but it must NEVER resurrect a plan the user
+ * cancelled — a `'cancelled'` row is absent from this set, so the guarded write claims 0 rows and the
+ * cancellation stays authoritative. (`'cancelled'` itself is written unconditionally, since a
+ * cancellation always wins — see `createTaskPersistence`.)
+ */
+const NON_CANCELLED_PLAN_STATUSES: TaskPlanStatus[] = [
+  'pending',
+  'running',
+  'paused',
+  'waiting_confirmation',
+  'success',
+  'failed',
+];
+
+/**
+ * The plan statuses `retryTask` may act on: every non-terminal status — and NEVER `'cancelled'` (a
+ * cancelled plan is terminal, so a retry can never resurrect it). `'waiting_verification'` is a NODE
+ * status only: a plan parked on a RED node persists as the PLAN status `'waiting_confirmation'`.
+ */
+const RETRYABLE_PLAN_STATUSES: TaskPlanStatus[] = [
+  'pending',
+  'running',
+  'paused',
+  'waiting_confirmation',
+  'failed',
+];
+
+/**
+ * A control port that ALWAYS answers `{ kind: 'pause' }`.
+ *
+ * Used by `resumeTaskForAction` when the owning plan was explicitly PAUSED: it makes the planner's
+ * `runPlan` record the one human-decided node and then stop at its FIRST checkpoint, so no downstream
+ * node is launched and the plan stays `'paused'` (pause retention — see `resumeTaskForAction`).
+ */
+const PAUSE_NOW_CONTROLS: PlanControlPort = {
+  pollControls: (): PlanControlCommand[] => [{ kind: 'pause' }],
+};
 
 /**
  * The JSON payload a parked (gated) node stores in `AgentTaskNode.output`.
@@ -166,7 +246,19 @@ export function createTaskPersistence(planId: string): TaskPersistence {
   void planId; // the id is carried per call so these ports stay usable against any plan id
   return {
     async persistPlan(plan: TaskPlan): Promise<void> {
-      await updateTaskStatus(plan.id, plan.status);
+      // A `'cancelled'` status is TERMINAL and authoritative: write it unconditionally (a
+      // cancellation always wins over a racing checkpoint).
+      if (plan.status === 'cancelled') {
+        await updateTaskStatus(plan.id, 'cancelled');
+        return;
+      }
+      // Every other checkpoint is applied through an ATOMIC compare-and-set whose from-set EXCLUDES
+      // `'cancelled'` (see `NON_CANCELLED_PLAN_STATUSES`): a plan the user cancelled CONCURRENTLY —
+      // while this run was inside `runTool` — stays cancelled, so the post-run CANCEL SWEEP
+      // (`sweepCancelledPlan`) still observes `'cancelled'` and revokes any action the run just
+      // parked. An UNGUARDED write here would resurrect the cancelled plan and leave that freshly
+      // minted `PendingAction` executable.
+      await claimTaskStatus(plan.id, NON_CANCELLED_PLAN_STATUSES, plan.status);
     },
     async persistNode(planId: string, node: TaskNodeResult): Promise<void> {
       try {
@@ -264,6 +356,16 @@ async function loadOwnedTask(sessionId: string, taskId: string): Promise<AgentTa
   return (await loadOwnedTaskWithOwner(sessionId, taskId)).row;
 }
 
+/**
+ * Re-read a plan (ownership-checked) as the frozen `TaskPlan`.
+ *
+ * Used by a control path that must NOT run the plan (a lost compare-and-set, or a terminal no-op):
+ * the caller returns the CURRENT persisted state instead of a fabricated one.
+ */
+async function reloadPlan(sessionId: string, taskId: string): Promise<TaskPlan> {
+  return toTaskPlan(await loadOwnedTask(sessionId, taskId));
+}
+
 /** Read a task plan as the frozen `TaskPlan` contract (ownership-checked). */
 export async function getTaskPlan(sessionId: string, taskId: string): Promise<TaskPlan> {
   return toTaskPlan(await loadOwnedTask(sessionId, taskId));
@@ -277,6 +379,10 @@ export async function getTaskPlan(sessionId: string, taskId: string): Promise<Ta
  * checkpoint) and the returned snapshot says `'paused'` too, so a read agrees with the row.
  * Already-`success` nodes keep their recorded result and the un-run nodes stay `pending`, so
  * `resumeTask` continues exactly where the pause landed.
+ *
+ * ATOMIC: the transition is a single compare-and-set from a NON-TERMINAL status, so (a) two
+ * concurrent pauses move the row exactly once and (b) a terminal (`cancelled`/`success`/`failed`)
+ * plan is never resurrected by a pause. A LOST claim is a no-op that returns the persisted plan.
  */
 export async function pauseTask(
   sessionId: string,
@@ -284,9 +390,12 @@ export async function pauseTask(
   opts: TaskControlOptions = {},
 ): Promise<TaskPlan> {
   const row = await loadOwnedTask(sessionId, taskId);
-  // `lifecycle.pausePlan` is PURE and returns a resumable `'pending'` snapshot (the planner has no
-  // 'paused' status of its own); the status is upgraded here because the durable row is what truly
-  // holds the pause.
+
+  const claimed = await claimTaskStatus(taskId, PAUSABLE_PLAN_STATUSES, 'paused');
+  if (!claimed) return reloadPlan(sessionId, taskId); // terminal / lost race — never resurrect
+
+  // `lifecycle.pausePlan` is PURE and returns a resumable snapshot; the status is upgraded here
+  // because the durable row is what truly holds the pause.
   const paused: TaskPlan = {
     ...lifecycle.pausePlan(toTaskPlan(row), { now: opts.now }),
     status: 'paused',
@@ -301,27 +410,42 @@ export async function pauseTask(
 /**
  * Resume (re-run) a paused/parked task plan.
  *
- * The durable row is flipped out of `'paused'` FIRST (`'running'`), because a `'paused'` row is
- * exactly what `defaultPollControls` maps to a pause command — leaving it would re-pause this very
- * run at its first checkpoint. `runPlan` then skips every terminal node (idempotency), so an
- * already-`success` node is NEVER re-executed and a re-parked gated node stays parked for the next
- * human decision.
+ * ATOMIC: a single compare-and-set from a RESUMABLE status to `'running'` gates the run, so two
+ * concurrent resumes execute each unfinished node exactly once — the loser sees the row already
+ * `'running'`, its CAS claims 0 rows and it returns the persisted plan WITHOUT running. A `cancelled`
+ * plan is never resurrected (its status is absent from the from-set). The claim also flips the row
+ * out of `'paused'` BEFORE the run, because a `'paused'` row is exactly what `defaultPollControls`
+ * maps to a pause command — leaving it would re-pause this very run at its first checkpoint.
+ * `runPlan` then skips every terminal node (idempotency), so an already-`success` node is NEVER
+ * re-executed and a re-parked gated node stays parked for the next human decision.
+ *
+ * After the run the CANONICAL CANCEL SWEEP revokes any `PendingAction` a node minted while a
+ * concurrent `cancelTask` cancelled the plan (see `sweepCancelledPlan`).
  */
 export async function resumeTask(
   sessionId: string,
   taskId: string,
   deps: TaskControlDeps,
 ): Promise<TaskPlan> {
+  // Ownership is verified BEFORE any mutation, so a foreign caller gets SECURITY_DENIED and the row
+  // is left untouched.
   const row = await loadOwnedTask(sessionId, taskId);
-  await updateTaskStatus(taskId, 'running');
-  return executor.runPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), { now: deps.now });
+
+  const claimed = await claimTaskStatus(taskId, RESUMABLE_PLAN_STATUSES, 'running');
+  if (!claimed) return reloadPlan(sessionId, taskId); // already running / terminal — never double-run
+
+  const result = await executor.runPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), {
+    now: deps.now,
+  });
+  await sweepCancelledPlan(sessionId, taskId);
+  return result;
 }
 
 /** Gateway error codes that mean "already settled / gone" — there is nothing left to revoke. */
 const ALREADY_SETTLED_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>(['CONFLICT', 'NOT_FOUND']);
 
 /** Net outcome of revoking a cancelled plan's parked `PendingAction`s. */
-interface RevokeSummary {
+export interface RevokeSummary {
   /** Action ids atomically claimed `pending`/`awaiting_mfa` → `cancelled`. */
   revoked: string[];
   /** Action ids that were ALREADY settled (executed / cancelled / gone) — nothing left to revoke. */
@@ -366,6 +490,46 @@ async function revokeParkedActions(
 }
 
 /**
+ * CANONICAL CANCEL SWEEP — the post-run guard against a `PendingAction` minted DURING a run.
+ *
+ * `executor.runPlan` can be CANCELLED by a concurrent `cancelTask` while one of its nodes is inside
+ * `runTool`: that call can mint a FRESH `PendingAction` (the gateway parks a YELLOW/RED node call)
+ * AFTER the cancellation already revoked the plan's then-known actions. When the run then settles,
+ * the fresh action is still `pending`/`awaiting_mfa` — i.e. still EXECUTABLE — even though the plan
+ * is cancelled.
+ *
+ * Every run path therefore calls this AFTER its run (the resume/retry paths here, and
+ * `tools/planning.ts#runSubmitPlan` for a turn-time plan): re-load the `AgentTask` and, when its
+ * persisted status is `'cancelled'`, revoke EVERY still-parked action of the plan
+ * (`revokeParkedActions`) so no executable action survives the cancellation.
+ *
+ * Idempotent and cheap: an absent or non-`cancelled` plan is a no-op. An UNEXPECTED revocation
+ * failure is THROWN — never swallowed — because a surviving executable action after a cancellation
+ * is a security incident, not a benign outcome.
+ */
+export async function sweepCancelledPlan(
+  sessionId: string,
+  taskId: string,
+): Promise<RevokeSummary> {
+  const row = await getTask(taskId);
+  if (row === null || row.status !== 'cancelled') {
+    return { revoked: [], alreadySettled: [], failed: [] };
+  }
+  if (row.sessionId !== sessionId) {
+    throw new AppError('SECURITY_DENIED', `无权访问该任务计划: ${taskId}`);
+  }
+  const summary = await revokeParkedActions(row.userId, row.sessionId, row);
+  if (summary.failed.length > 0) {
+    throw new AppError(
+      'INTERNAL',
+      `计划「${taskId}」已取消，但有 ${summary.failed.length} 个待确认操作未能撤销: ` +
+        summary.failed.map((failed) => `${failed.actionId}(${failed.message})`).join('; '),
+    );
+  }
+  return summary;
+}
+
+/**
  * Cancel a task plan.
  *
  * 1. REVOKE the parked `PendingAction`(s) FIRST (atomic claim → `cancelled`), so any later
@@ -374,10 +538,11 @@ async function revokeParkedActions(
  *    never pretended to be rolled back), every remaining non-terminal node becomes `cancelled`, and
  *    the snapshot is persisted.
  *
- * An already-settled action is not a failure (it is terminal, so nothing can be revoked and no
- * confirm can succeed). An UNEXPECTED revocation failure is surfaced as `AppError('INTERNAL')` AFTER
- * the plan has been cancelled — the cancellation itself is never withheld, and the failure is never
- * swallowed.
+ * An already-`cancelled` plan is TERMINAL: re-cancelling is a no-op that returns the persisted
+ * snapshot (no revoke, no rewrite). An already-settled action is not a failure (it is terminal, so
+ * nothing can be revoked and no confirm can succeed). An UNEXPECTED revocation failure is surfaced as
+ * `AppError('INTERNAL')` AFTER the plan has been cancelled — the cancellation itself is never
+ * withheld, and the failure is never swallowed.
  */
 export async function cancelTask(
   sessionId: string,
@@ -385,6 +550,9 @@ export async function cancelTask(
   opts: TaskControlOptions = {},
 ): Promise<TaskPlan> {
   const { row, userId } = await loadOwnedTaskWithOwner(sessionId, taskId);
+
+  // A cancelled plan is terminal — never re-cancel, never rewrite it.
+  if (row.status === 'cancelled') return toTaskPlan(row);
 
   const revoke = await revokeParkedActions(userId, row.sessionId, row);
 
@@ -404,14 +572,38 @@ export async function cancelTask(
   return cancelled;
 }
 
-/** Retry the `failed` nodes (plus their not-yet-satisfied descendants), then re-run the plan. */
+/**
+ * Retry the `failed` nodes (plus their not-yet-satisfied descendants), then re-run the plan.
+ *
+ * ATOMIC: a single compare-and-set from a NON-TERMINAL status to `'running'` gates the run — a
+ * `cancelled` plan is NEVER retried (excluded from the from-set) and two concurrent retries execute
+ * each reset node exactly once (the loser returns the persisted plan WITHOUT running). After the run
+ * the CANONICAL CANCEL SWEEP revokes any action left parked by a concurrent cancellation.
+ */
 export async function retryTask(
   sessionId: string,
   taskId: string,
   deps: TaskControlDeps,
 ): Promise<TaskPlan> {
+  // Ownership is verified BEFORE any mutation (see `resumeTask`).
   const row = await loadOwnedTask(sessionId, taskId);
-  return lifecycle.retryPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), { now: deps.now });
+
+  const claimed = await claimTaskStatus(taskId, RETRYABLE_PLAN_STATUSES, 'running');
+  if (!claimed) return reloadPlan(sessionId, taskId); // cancelled / lost race — never retry
+
+  const result = await lifecycle.retryPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), {
+    now: deps.now,
+  });
+
+  // `retryPlan` returns the input plan UNCHANGED — without persisting — when there is nothing to
+  // retry, which would leave the row dangling in the `'running'` we just claimed. Restore the
+  // truthful status with a CAS `'running' → result.status`: it is a no-op when the run already
+  // persisted its own final status, and it never clobbers a concurrent `'paused'`/`'cancelled'`
+  // (neither of which is `'running'`).
+  await claimTaskStatus(taskId, ['running'], result.status);
+
+  await sweepCancelledPlan(sessionId, taskId);
+  return result;
 }
 
 /**
@@ -441,6 +633,19 @@ export async function findTaskByPendingAction(
  * Returns `undefined` when the action is not a gated plan node (a plain transfer, say) — nothing to
  * resume. The REAL `PlanToolOutcome` is passed through, so the planner records the true result and
  * continues only on success; a re-parked node waits for the next decision.
+ *
+ * A `cancelled` owning plan is TERMINAL: the decision is a no-op returning the persisted plan (never
+ * recording a node into a cancelled plan, which would let the planner's resume path resurrect it).
+ *
+ * PAUSE RETENTION: when the owning plan was explicitly PAUSED, this ONE decision must ONLY record
+ * this node's result — it must NOT flip the plan to `'running'` and must NOT launch downstream nodes.
+ * `lifecycle.resumePlan` always continues via `runPlan`, so the resume is given a control port that
+ * forces `{ kind:'pause' }` (see `PAUSE_NOW_CONTROLS`): `runPlan` records the decided node and stops
+ * at its FIRST checkpoint, leaving the plan `'paused'` with no downstream execution. The plan then
+ * stays `'paused'` until an explicit `resumeTask`.
+ *
+ * After the resume the CANONICAL CANCEL SWEEP revokes any action a downstream node minted while a
+ * concurrent `cancelTask` cancelled the plan.
  */
 export async function resumeTaskForAction(
   sessionId: string,
@@ -454,11 +659,22 @@ export async function resumeTaskForAction(
   const row = await getTask(located.taskId);
   if (row === null) return undefined;
 
+  // A cancelled plan is terminal — the human decision is a no-op returning the persisted plan.
+  if (row.status === 'cancelled') {
+    return { taskId: located.taskId, nodeId: located.nodeId, plan: toTaskPlan(row) };
+  }
+
+  const baseDeps = buildPlanDeps(located.taskId, deps);
+  const planDeps: PlanDeps =
+    row.status === 'paused' ? { ...baseDeps, controls: PAUSE_NOW_CONTROLS } : baseDeps;
+
   const plan = await lifecycle.resumePlan(
     toTaskPlan(row),
     { nodeId: located.nodeId, outcome },
-    buildPlanDeps(located.taskId, deps),
+    planDeps,
     { now: deps.now },
   );
+
+  await sweepCancelledPlan(sessionId, located.taskId);
   return { taskId: located.taskId, nodeId: located.nodeId, plan };
 }

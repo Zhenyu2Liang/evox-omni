@@ -1,0 +1,11 @@
+﻿commit be084bc090c79a88c6513a2fbc1011c6a3789147
+Author: Zhenyu2Liang <1370096263@qq.com>
+Date:   Mon Oct 5 15:14:04 2026 +0800
+
+    test: add review boundary regression reference (def274c review)
+    
+    Co-authored-by: Genesis <noreply@evogit.ai>
+
+ tests/review-boundaries.test.ts | 103 ++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 103 insertions(+)
+

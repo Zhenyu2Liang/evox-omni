@@ -1,0 +1,89 @@
+﻿node.exe : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cj
+s-node-api-deprecated for more details.[39m
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+ RUN  v2.1.9 D:/projects/banking-agent/.genesis/workers/worker_T4_A13
+
+stdout | tests/review-boundaries.test.ts > chat cannot exchange a foreign body sessionId for its authorization cookie
+REVIEW takeover {"turnStatus":409,"cookie":null,"total":0}
+
+stdout | tests/review-boundaries.test.ts > resume preserves cancelled task status in durable storage
+REVIEW cancelled_resume {"responseStatus":200,"responsePlan":"cancelled","storedStatus":"cancelled"}
+
+stdout | tests/review-boundaries.test.ts > cancelling during tool authorization cannot create a fresh executable pending action
+REVIEW cancel_during_gate {"cancelled":"cancelled","returnedPlan":"waiting_confirmation","pending":true,"confirmed":true,"total":200}
+
+stdout | tests/review-boundaries.test.ts > confirming a parked node respects an explicit plan pause
+REVIEW paused_confirmation {"count":0,"status":"paused"}
+
+stdout | tests/review-boundaries.test.ts > concurrent HTTP resume requests do not duplicate budget side effects
+REVIEW http_double_resume {"statuses":[200,200],"count":1}
+
+stdout | tests/review-boundaries.test.ts > ledgered but not yet terminal actions are counted only once in cumulative risk
+REVIEW double_count {"secondOk":false,"secondTier":"RED","secondStatus":"awaiting_mfa","actualTotal":600}
+
+ ❯ tests/review-boundaries.test.ts (7 tests | 3 failed) 20489ms
+   × cancelling during tool authorization cannot create a fresh executable pending action 41ms
+     → expected 200 to be +0 // Object.is equality
+   × two concurrent resumes execute each unfinished node only once 20010ms
+     → Test timed out in 20000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+   × ledgered but not yet terminal actions are counted only once in cumulative risk 29ms
+     → expected false to be true // Object.is equality
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 3 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/review-boundaries.test.ts > cancelling during tool authorization cannot create a fresh executable pending 
+action
+AssertionError: expected 200 to be +0 // Object.is equality
+
+- Expected
++ Received
+
+- 0
++ 200
+
+ ❯ tests/review-boundaries.test.ts:52:17
+     50|   const total=await security.risk.computeDailyTransferTotal(userId);
+     51|   console.log('REVIEW cancel_during_gate',JSON.stringify({cancelled:ca…
+     52|   expect(total).toBe(0);
+       |                 ^
+     53| });
+     54| it('confirming a parked node respects an explicit plan pause',async()=…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯
+
+ FAIL  tests/review-boundaries.test.ts > two concurrent resumes execute each unfinished node only once
+Error: Test timed out in 20000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯
+
+ FAIL  tests/review-boundaries.test.ts > ledgered but not yet terminal actions are counted only once in cumulative risk
+AssertionError: expected false to be true // Object.is equality
+
+- Expected
++ Received
+
+- true
++ false
+
+ ❯ tests/review-boundaries.test.ts:101:21
+     99|   finally {release();await first;spy.mockRestore();}
+    100|   console.log('REVIEW double_count',JSON.stringify({secondOk:second.ok…
+    101|   expect(second.ok).toBe(true);
+       |                     ^
+    102|   expect(second.requiresMfa).toBe(false);
+    103| });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯
+
+ Test Files  1 failed (1)
+      Tests  3 failed | 4 passed (7)
+   Start at  15:59:24
+   Duration  21.34s (transform 295ms, setup 13ms, collect 683ms, tests 20.49s, environment 0ms, prepare 45ms)
+

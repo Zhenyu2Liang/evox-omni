@@ -15,6 +15,7 @@ import { formatCNY, parseAmount } from '../lib/money';
 import { safeParse } from '../lib/json';
 import { prisma } from '../lib/db/client';
 import { listTransactions } from '../lib/db/repositories/transaction';
+import { idempotentTransferTxId } from '../lib/ledger';
 
 export interface TransferRiskInput {
   /** Requested transfer amount in CNY (already validated/normalized by the caller). */
@@ -59,6 +60,16 @@ const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const;
  * can run inside a transaction. `excludeActionId` drops the action currently being
  * evaluated (its own amount is passed separately to `evaluateTransferRisk`).
  *
+ * DEDUP vs the LEDGER: an action can be authorized (status `confirmed`) while its ledger
+ * `Transaction` row ALREADY exists — the Banking SDK writes that row deterministically keyed by
+ * `idempotentTransferTxId(userId, action.id)`, and `recordActionResult` (which flips the action to
+ * its terminal status) has not run yet. Such an action is ALREADY counted by the executed-ledger
+ * total in `computeEffectiveTransferTotalWith`, so counting it here again would DOUBLE-count it
+ * and spuriously escalate a later legitimately-YELLOW transfer to RED/MFA. We therefore EXCLUDE
+ * every in-flight action whose deterministic ledger row already exists. Actions with no ledger row
+ * yet (genuinely parked) still contribute, which is what preserves the concurrency defence: two
+ * ¥600 actions with no ledger rows still sum to ¥1200.
+ *
  * The amount lives inside the JSON `argsJson` blob, so each row is parsed defensively: a
  * malformed/unparsable row (or a non-finite amount) is SKIPPED, never thrown on.
  */
@@ -76,8 +87,21 @@ export async function computeInFlightTransferTotal(
     },
   });
 
+  if (rows.length === 0) return 0;
+
+  // The deterministic ledger ids these parked actions WOULD have produced. Any that already exist
+  // were already written to the ledger (and thus already counted as EXECUTED), so they must be
+  // excluded from the in-flight sum to avoid counting the same money movement twice.
+  const ledgerIds = rows.map((row) => idempotentTransferTxId(userId, row.id));
+  const existingLedgerRows = await client.transaction.findMany({
+    where: { id: { in: ledgerIds } },
+    select: { id: true },
+  });
+  const alreadyLedgered = new Set(existingLedgerRows.map((tx) => tx.id));
+
   let total = 0;
   for (const row of rows) {
+    if (alreadyLedgered.has(idempotentTransferTxId(userId, row.id))) continue;
     const args = safeParse<Record<string, unknown>>(row.argsJson, {});
     const amount = parseAmount(args.amount as string | number | null | undefined);
     if (Number.isFinite(amount)) total += amount;
@@ -120,6 +144,10 @@ async function computeExecutedDailyTransferTotalWith(
  * not happened yet. Two concurrently-confirmed transfers therefore both read the pre-transfer
  * executed total and each pass the ¥1000 confirmation-only rule. Counting the in-flight
  * actions closes that gap. `now` defaults to the demo clock.
+ *
+ * The in-flight half is deduped against the ledger (see `computeInFlightTransferTotal`), so a
+ * transfer that has ALREADY been written to the ledger while its action is still `confirmed` is
+ * counted exactly once — via the executed half.
  */
 export async function computeEffectiveTransferTotalWith(
   client: PrismaLike,

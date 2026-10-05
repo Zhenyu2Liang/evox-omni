@@ -1,0 +1,47 @@
+import { beforeEach, afterAll, it } from 'vitest';
+import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { runSubmitPlan } from '@/agent/tools/planning';
+import { pauseTask, resumeTask } from '@/agent/task-control';
+import { resetDatabase, getTestPrisma, disconnectTestPrisma } from '@/tests/helpers/db';
+
+const userId = 'user_liming';
+beforeEach(() => resetDatabase());
+afterAll(() => disconnectTestPrisma());
+async function session() { return (await getOrCreateSession(userId)).sessionId; }
+const budgetNode = { id: 'b', name: '预算', kind: 'tool' as const, tool: 'reserve_budget', args: { name: '审查预算', amount: 10 }, dependencies: ['t'] };
+const depsFor = (s: string) => ({ sessionId: s, runTool: (toolName: string, args: Record<string, unknown>) => executeGatedTool({ sessionId: s, userId, toolName: toolName as any, args, userRequest: '审查' }) });
+
+async function setup(s: string) {
+  let taskId = '';
+  const created = await runSubmitPlan(userId, { goal: '暂停再预算', nodes: [{ id: 't', name: '读', kind: 'tool', tool: 'get_balance', args: {}, dependencies: [] }, budgetNode] }, {
+    sessionId: s,
+    runTool: async () => {
+      const task = await getTestPrisma().agentTask.findFirst({ where: { sessionId: s } });
+      taskId = task!.id;
+      await pauseTask(s, taskId);
+      return { ok: true, data: { balance: 23580 } };
+    },
+  });
+  const row = await getTestPrisma().agentTask.findUnique({ where: { id: taskId }, include: { nodes: true } });
+  console.log('DIAG init', JSON.stringify({ createdStatus: (created.data as any).status, rowStatus: row!.status, nodes: row!.nodes.map((n) => ({ id: n.nodeId, status: n.status })) }));
+  return taskId;
+}
+
+it('diag single resume (non-blocking)', async () => {
+  const s = await session();
+  const taskId = await setup(s);
+  const log: string[] = [];
+  const p = await resumeTask(s, taskId, { runTool: async (tool, args) => { log.push(tool); return depsFor(s).runTool(tool, args); } });
+  const row = await getTestPrisma().agentTask.findUnique({ where: { id: taskId }, include: { nodes: true } });
+  console.log('DIAG single', JSON.stringify({ planStatus: p.status, log, rowStatus: row!.status, nodes: row!.nodes.map((n) => ({ id: n.nodeId, status: n.status })), budgets: await getTestPrisma().budget.count({ where: { name: '审查预算' } }) }));
+});
+
+it('diag concurrent resume (non-blocking)', async () => {
+  const s = await session();
+  const taskId = await setup(s);
+  const log: string[] = [];
+  const deps = { runTool: async (tool: string, args: Record<string, unknown>) => { log.push(tool); return depsFor(s).runTool(tool, args); } };
+  await Promise.all([resumeTask(s, taskId, deps), resumeTask(s, taskId, deps)]);
+  const row = await getTestPrisma().agentTask.findUnique({ where: { id: taskId }, include: { nodes: true } });
+  console.log('DIAG concurrent', JSON.stringify({ log, rowStatus: row!.status, nodes: row!.nodes.map((n) => ({ id: n.nodeId, status: n.status })), count: await getTestPrisma().budget.count({ where: { name: '审查预算' } }) }));
+});
