@@ -112,7 +112,7 @@ function mfaOf(events: readonly AgentStreamEvent[]): MfaEvent | undefined {
 /** Drive one JSON-mode chat turn against the real route (fresh session). */
 async function chatTurn(message: string): Promise<ChatTurnResponse> {
   const res = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
-    sessionId: newId('sess'),
+    // COOKIE-ONLY bootstrap: omit sessionId (and send no cookie) so the route MINTS the session.
     message,
   });
   expect(res.status).toBe(200);

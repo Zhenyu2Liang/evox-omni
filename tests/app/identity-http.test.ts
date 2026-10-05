@@ -27,8 +27,8 @@
  * `./actions-http.test.ts`; it is not re-tested here.
  *
  * DB lifecycle matches the other DB-backed suites: reset + seed before each test, disconnect after.
- * Every parking turn uses a FRESH requested session id (the in-process circuit breaker is keyed by
- * `sessionId`); the id asserted on is the PERSISTED one the route returns (the owning id), sent back
+ * Every parking turn sends NO cookie, so the route MINTS a FRESH session (the in-process breaker
+ * is keyed by `sessionId`); that minted id is the PERSISTED owning id we assert on and send back
  * as the `banking_session` COOKIE.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
@@ -172,12 +172,12 @@ async function seedPlan(
 
 /**
  * Drive ONE JSON-mode chat turn that PARKS a YELLOW transfer, returning the PERSISTED (owning)
- * session id and the parked `PendingAction` id. Uses a FRESH requested session id so the
- * in-process circuit breaker starts clean; the route MINTS the persisted id we assert on.
+ * session id and the parked `PendingAction` id. Sends NO cookie so the route MINTS a FRESH
+ * session id (the in-process circuit breaker starts clean); that minted id is what we assert on.
  */
 async function parkYellowTransfer(): Promise<{ sessionId: string; actionId: string }> {
   const res = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
-    sessionId: newId('sess'),
+    // COOKIE-ONLY bootstrap: omit sessionId (and send no cookie) so the route MINTS the session.
     message: '给张伟转200元',
   });
   expect(res.status).toBe(200);
