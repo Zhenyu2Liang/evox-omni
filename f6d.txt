@@ -1,0 +1,11 @@
+﻿commit 6da92ef7d219d04da8993badc4b7e9f74c39cf30
+Author: Zhenyu2Liang <1370096263@qq.com>
+Date:   Mon Oct 5 15:56:19 2026 +0800
+
+    test(app): cover cancel-during-authorization via a controlled barrier
+    
+    Add tests/app/cancel-during-authorization-http.test.ts: REAL route-handler [integration] e2e where a cancel/confirm HTTP call interleaves with an in-flight gated transfer park through a deferred-promise barrier inside the runTool seam. Proves both orderings: cancel-wins (later confirm refused as cancelled, no money moves, day total 0, no executable PendingAction survives) and confirm-wins (executes once, later cancel refused, ledger/day total reflect only the authorized movement).
+    
+    Co-authored-by: Genesis <noreply@evogit.ai>
+
+tests/app/cancel-during-authorization-http.test.ts

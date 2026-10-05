@@ -1,0 +1,3 @@
+﻿373f6ae fix(agent): atomic CAS DAG-control transitions + canonical cancel sweep + pause retention
+98b7e07 feat(lib/db): add atomic claimTaskStatus CAS to AgentTask repository
+

@@ -1,0 +1,7 @@
+﻿PASS chat cannot exchange a foreign body sessionId for its authorization cookie
+PASS resume preserves cancelled task status in durable storage
+FAIL cancelling during tool authorization cannot create a fresh executable pending action
+PASS confirming a parked node respects an explicit plan pause
+FAIL two concurrent resumes execute each unfinished node only once
+PASS concurrent HTTP resume requests do not duplicate budget side effects
+FAIL ledgered but not yet terminal actions are counted only once in cumulative risk

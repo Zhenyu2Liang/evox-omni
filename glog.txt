@@ -1,0 +1,55 @@
+﻿d9b8fdf Notes added by 'git notes add'
+238d38c Notes added by 'git notes add'
+7b3faf4 Merge commit 'c49fb8944686f7d27092360bf2879302ec28282d'; commit '373f6ae6b5f4e4e78b42e839a6fb7063ca6a6b6e' into evogit-agent-T4-A13
+950189a Notes added by 'git notes add'
+c49fb89 fix(agent): wire transfer idempotency key + fail closed on cancelled owning plan
+a1da86f Notes added by 'git notes add'
+39752c7 Notes added by 'git notes add'
+cdf5703 Notes added by 'git notes add'
+373f6ae fix(agent): atomic CAS DAG-control transitions + canonical cancel sweep + pause retention
+5677430 Notes added by 'git notes add'
+faf17d7 Notes added by 'git notes add'
+7d5146d Notes added by 'git notes add'
+1c0f66f Notes added by 'git notes add'
+73c6041 Notes added by 'git notes add'
+341b4b2 Notes added by 'git notes add'
+6b6a723 Notes added by 'git notes add'
+5ac6afd Notes added by 'git notes add'
+b9e42e7 Notes added by 'git notes add'
+0264d7c Agent: auto-commit fallback
+9a9e7c6 Notes added by 'git notes add'
+3654958 Notes added by 'git notes add'
+14caf86 test(harness): add sessionIdFromResponse cookie-only bootstrap helper
+bbcb77c Merge commit 'b72030fcaf85c155d629c321b057820e84242aa2'; commit 'fedd643f25602234a5625bc3a2c8ad026181e339' into evogit-agent-T4-A1
+639fdce Notes added by 'git notes add'
+4978593 Notes added by 'git notes add'
+9f82424 Notes added by 'git notes add'
+b72030f docs(api): document cookie-only chat identity in CONTEXT.md
+0d1dc02 Notes added by 'git notes add'
+fedd643 Update CONTEXT.md for ./lib
+a4d2184 fix(chat): enforce cookie-only session identity in POST /api/chat
+5a25df7 Notes added by 'git notes add'
+16b13db Merge commit '6cf0a697e7d46a26343069d1881dc82b66d2e565'; commit '98b7e07098642371ab27e61d90ccb8cf035cb957' into evogit-agent-T4-A3
+5885438 Notes added by 'git notes add'
+b68b3b8 Notes added by 'git notes add'
+98b7e07 feat(lib/db): add atomic claimTaskStatus CAS to AgentTask repository
+6cf0a69 feat(lib): add ledger.ts with canonical idempotentTransferTxId helper
+5349fcc Agent: auto-commit fallback
+be084bc test: add review boundary regression reference (def274c review)
+fa7e2b9 Notes added by 'git notes add'
+def274c chore: remove stray vitest scratch artifact (vt_after.json) tracked at repo root
+  evogit-agent-T2-A1
+  evogit-agent-T2-A64
++ evogit-agent-T4-A1
+* evogit-agent-T4-A13
++ evogit-agent-T4-A21
++ evogit-agent-T4-A9
+  genesis/agent_2a5590c4
++ genesis/agent_a119949a
+  main
+  remotes/origin/HEAD -> origin/main
+  remotes/origin/genesis/agent_2a5590c4
+  remotes/origin/genesis/agent_a119949a
+  remotes/origin/main
+---BUDGET IDEMPOT---
+---RESERVE---

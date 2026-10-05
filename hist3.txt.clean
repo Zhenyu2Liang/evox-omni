@@ -1,0 +1,3 @@
+﻿c49fb89 fix(agent): wire transfer idempotency key + fail closed on cancelled owning plan
+6cf0a69 feat(lib): add ledger.ts with canonical idempotentTransferTxId helper
+
