@@ -40,7 +40,7 @@ export interface ToolRegistry {
   list(): AgentTool<any>[];
   get(name: ToolName): AgentTool<any>;
   /** Gateway-authorized execution path: run a tool's args through the SDK WITHOUT the model. */
-  executeDirect(name: ToolName, args: Record<string, unknown>): Promise<ToolExecutionResult>;
+  executeDirect(name: ToolName, args: Record<string, unknown>, opts?: ToolRunOptions): Promise<ToolExecutionResult>;
 }
 export const TOOL_NAMES: readonly ToolName[];      // exactly the 26 frozen names
 export interface CreateToolRegistryOptions { submitPlan?: SubmitPlanDeps; }
