@@ -1,9 +1,0 @@
-== AI Banking Agent 真实浏览器端到端验收 (tests/e2e) ==
-· next dev (pid=56540) → http://localhost:58176（/api/health 与 /agent 均已就绪，LLM_MODE=mock）
-· 真实浏览器：C:\Program Files\Google\Chrome\Application\chrome.exe
-PASS a-transfer-confirm — 提交「给张伟转200元」→ 确认卡片(确认/取消) → 点击 确认 → 助手消息出现「转账处理结果：」
-PASS b-transfer-mfa — 正确码：正确验证码 123456 → 助手消息出现「转账处理结果：」 ｜ 错误码：错误验证码 000000 → role=status「验证失败，已尝试 1 次」，MFA 卡片保留，无成功叙述
-PASS c-plan-pause-resume — 非门控计划「帮我规划一下：先查一下我的余额，然后汇总」→ 计划卡片渲染「已完成」（balance→summarize 在会话回合内同步执行完毕，无可暂停的中间态），无「暂停」控件 —— 未伪造状态
-FAIL d-plan-cancel — 等待计划状态 [已取消] 超时（90000ms），当前状态：等待确认
-FAIL e-refresh-action-recovery — 等待超时（90000ms）：确认卡片（「确认」按钮）
-== 汇总：PASS 3 ｜ FAIL 2 ｜ SKIP 0 ==
