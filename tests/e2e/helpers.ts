@@ -15,7 +15,7 @@
  *    `tests/**\/*.{test,spec}.ts`), so this harness never runs under `npm run test`.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
@@ -208,15 +208,31 @@ export function killProcessTree(pid: number): void {
   }
 }
 
+/** Project-local Next CLI entry (`node_modules/next/dist/bin/next`), or `undefined` if absent. */
+function resolveNextBin(): string | undefined {
+  const bin = path.join(REPO_ROOT, 'node_modules', 'next', 'dist', 'bin', 'next');
+  return existsSync(bin) ? bin : undefined;
+}
+
 /**
- * The platform-specific command that boots Next dev.
+ * The command that boots Next dev.
  *
- * On Windows we MUST go through `cmd.exe /d /s /c` (there is no `npx` binary, only `npx.cmd`) and we
- * deliberately do NOT use Node's `shell: true`: `shell:true` + args re-serialization produced an EMPTY
- * stdout pipe in this environment (the child never reported its ready line). Spawning `cmd.exe` with a
- * single pre-quoted command string reproduces the known-good manual boot exactly.
+ * PREFERRED — the project-local Next CLI launched with the SAME Node that runs this harness
+ * (`<process.execPath> node_modules/next/dist/bin/next dev -p <port>`): no `npx`/shell shim
+ * resolution, no `.cmd` re-serialization, and identical behaviour on Windows and POSIX. This is the
+ * reliable direct-binary invocation (both `node_modules/.bin/next*` shims and `npx` were flaky here:
+ * an EMPTY stdout pipe / never-ready server).
+ *
+ * FALLBACK (only when the local binary is missing) — `cmd.exe /d /s /c "npx next dev -p <port>"` on
+ * Windows (there is no `npx` binary, only `npx.cmd`) / `npx next dev -p <port>` on POSIX. We
+ * deliberately do NOT use Node's `shell: true`: `shell:true` + args re-serialization produced the
+ * empty stdout pipe in this environment.
  */
 function devServerCommand(port: number): { command: string; args: string[] } {
+  const nextBin = resolveNextBin();
+  if (nextBin !== undefined) {
+    return { command: process.execPath, args: [nextBin, 'dev', '-p', String(port)] };
+  }
   if (process.platform === 'win32') {
     return { command: 'cmd.exe', args: ['/d', '/s', '/c', `npx next dev -p ${port}`] };
   }
@@ -224,8 +240,9 @@ function devServerCommand(port: number): { command: string; args: string[] } {
 }
 
 /**
- * Boot `npx next dev -p <port>` detached (its own process group/tree, so it can be killed whole).
- * Starts the process only — callers must `waitForHealth` before driving the UI.
+ * Boot Next dev detached (its own process group/tree, so it can be killed whole). Both stdout and
+ * stderr are captured into a bounded tail (exposed via `output()`) for diagnostics. Starts the
+ * process only — callers must `waitForAppReady` before driving the UI.
  */
 export function startDevServer(port: number): DevServer {
   const { command, args } = devServerCommand(port);
@@ -276,6 +293,30 @@ function isHealthOk(body: unknown): boolean {
   return Boolean(data && typeof data === 'object' && (data as Record<string, unknown>).status === 'ok');
 }
 
+/** One readiness probe of `GET /api/health`; returns a failure detail, or `undefined` when ready. */
+async function probeHealth(baseUrl: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(`${baseUrl}/api/health`, { headers: { Accept: 'application/json' } });
+    if (!res.ok) return `HTTP ${res.status}`;
+    const body: unknown = await res.json();
+    return isHealthOk(body) ? undefined : `非预期响应体：${JSON.stringify(body).slice(0, 160)}`;
+  } catch (e) {
+    return errText(e);
+  }
+}
+
+/** One readiness probe of `GET /agent` (SSR chat page must return 200 with the composer markup). */
+async function probeAgentPage(baseUrl: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(`${baseUrl}/agent`, { headers: { Accept: 'text/html' } });
+    if (!res.ok) return `HTTP ${res.status}`;
+    const html = await res.text();
+    return html.includes('描述你的需求') ? undefined : '/agent 未返回聊天输入框标记';
+  } catch (e) {
+    return errText(e);
+  }
+}
+
 /**
  * Poll `GET <baseUrl>/api/health` until it reports `{ ok:true, data:{ status:'ok' } }`.
  * Generous default timeout — the first request triggers Next dev's cold compile.
@@ -285,24 +326,190 @@ export async function waitForHealth(baseUrl: string, opts: { timeoutMs?: number;
   const deadline = Date.now() + timeoutMs;
   let last = '尚无响应';
   for (;;) {
-    try {
-      const res = await fetch(`${baseUrl}/api/health`, { headers: { Accept: 'application/json' } });
-      if (res.ok) {
-        const body: unknown = await res.json();
-        if (isHealthOk(body)) return;
-        last = `非预期响应体：${JSON.stringify(body).slice(0, 160)}`;
-      } else {
-        last = `HTTP ${res.status}`;
-      }
-    } catch (e) {
-      last = errText(e);
-    }
+    const detail = await probeHealth(baseUrl);
+    if (detail === undefined) return;
+    last = detail;
     if (Date.now() > deadline) {
       const tail = opts.output ? ` ｜ dev-server 输出尾部：${opts.output().slice(-800)}` : '';
       throw new Error(`/api/health 未就绪（${timeoutMs}ms）：${last}${tail}`);
     }
     await sleep(500);
   }
+}
+
+/**
+ * Wait until BOTH `/api/health` reports ready AND `GET /agent` serves the chat UI. Health alone can
+ * be ready while the first `/agent` compile is still in flight, so the harness drives the UI only
+ * once the page itself is being served. Waits on real HTTP responses — never a fixed sleep.
+ */
+export async function waitForAppReady(
+  baseUrl: string,
+  opts: { timeoutMs?: number; output?: () => string } = {},
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? NAV_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
+  let healthOk = false;
+  let pageOk = false;
+  let healthDetail = '尚无响应';
+  let pageDetail = '尚未请求';
+  for (;;) {
+    if (!healthOk) {
+      const detail = await probeHealth(baseUrl);
+      if (detail === undefined) healthOk = true;
+      else healthDetail = detail;
+    }
+    if (healthOk && !pageOk) {
+      const detail = await probeAgentPage(baseUrl);
+      if (detail === undefined) pageOk = true;
+      else pageDetail = detail;
+    }
+    if (healthOk && pageOk) return;
+    if (Date.now() > deadline) {
+      const missing = !healthOk ? `/api/health（${healthDetail}）` : `/agent（${pageDetail}）`;
+      const tail = opts.output ? ` ｜ dev-server 输出尾部：${opts.output().slice(-800)}` : '';
+      throw new Error(`应用未就绪（${timeoutMs}ms）：${missing}${tail}`);
+    }
+    await sleep(500);
+  }
+}
+
+/**
+ * Boot Next dev and wait for FULL readiness (`/api/health` + `/agent`). On failure the process tree is
+ * killed and the boot is retried ONCE on a fresh port; when every attempt fails the captured
+ * dev-server log tail is printed and a descriptive error is thrown (the entry script then FAILs every
+ * journey and exits non-zero — never a silent pass).
+ */
+export async function bootDevServer(opts: { timeoutMs?: number; attempts?: number } = {}): Promise<DevServer> {
+  const attempts = opts.attempts ?? 2;
+  let lastError: unknown;
+  let lastLog = '';
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const port = await pickFreePort();
+    const server = startDevServer(port);
+    try {
+      await waitForAppReady(server.baseUrl, { timeoutMs: opts.timeoutMs, output: server.output });
+      return server;
+    } catch (e) {
+      lastError = e;
+      lastLog = server.output();
+      server.stop();
+      console.error(`· next dev 启动失败（第 ${attempt}/${attempts} 次，port=${port}）：${errText(e)}`);
+      if (attempt < attempts) await sleep(1500);
+    }
+  }
+  console.error(`· next dev 启动最终失败，dev-server 日志尾部：\n${lastLog.slice(-2000)}`);
+  throw new Error(`next dev 启动失败（已重试 ${attempts} 次）：${errText(lastError)}`);
+}
+
+// --- deterministic fixture state -----------------------------------------------------------------
+
+/** The DEV SQLite file and its WAL/SHM/journal sidecars, relative to the project's `prisma/` dir. */
+const DEV_DB_FILES = ['dev.db', 'dev.db-wal', 'dev.db-shm', 'dev.db-journal'] as const;
+
+/** Synchronous sleep — the reset runs BEFORE any async work, so it cannot `await`. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Project-local Prisma CLI entry (`node_modules/prisma/build/index.js`), or `undefined` if absent. */
+function resolvePrismaBin(): string | undefined {
+  const bin = path.join(REPO_ROOT, 'node_modules', 'prisma', 'build', 'index.js');
+  return existsSync(bin) ? bin : undefined;
+}
+
+/** Project-local tsx CLI entry (`node_modules/tsx/dist/cli.mjs`), or `undefined` if absent. */
+function resolveTsxBin(): string | undefined {
+  const bin = path.join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  return existsSync(bin) ? bin : undefined;
+}
+
+/**
+ * Build a directly-launchable CLI invocation for `npxArgs` (e.g. `['prisma','db','push']`).
+ *
+ * PREFERRED — the project-local binary launched with the SAME Node that runs this harness
+ * (`<process.execPath> node_modules/…`): no `npx`/`.cmd` shim resolution. FALLBACK (only when the
+ * local binary is missing, e.g. a hoisted `node_modules`) — `cmd.exe /d /s /c "npx …"` on Windows
+ * (there is no `npx` binary, only `npx.cmd`) / the plain command on POSIX.
+ */
+function cliCommand(localBin: string | undefined, npxArgs: readonly string[]): { command: string; args: string[] } {
+  if (localBin !== undefined) return { command: process.execPath, args: [localBin, ...npxArgs.slice(1)] };
+  if (process.platform === 'win32') {
+    return { command: 'cmd.exe', args: ['/d', '/s', '/c', `npx ${npxArgs.join(' ')}`] };
+  }
+  return { command: npxArgs[0]!, args: [...npxArgs.slice(1)] };
+}
+
+/** Run one CLI step synchronously in the project root; throws with the captured output on failure. */
+function runCliStep(command: string, args: readonly string[]): string {
+  const result = spawnSync(command, [...args], { cwd: REPO_ROOT, windowsHide: true, encoding: 'utf8' });
+  const out = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+  if (result.status !== 0) {
+    const spawnError = result.error ? `（无法启动进程：${result.error.message}）` : '';
+    throw new Error(`退出码 ${result.status ?? 'null'}${spawnError}：${out.slice(-800)}`);
+  }
+  return out;
+}
+
+/** Delete the DEV SQLite file + its sidecars (a missing file is not an error). */
+function removeDevDb(): void {
+  for (const name of DEV_DB_FILES) {
+    try {
+      rmSync(path.join(REPO_ROOT, 'prisma', name));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+  }
+}
+
+/** One reset attempt: delete the DEV DB → create a fresh schema → seed. */
+function resetDemoDatabaseOnce(): void {
+  removeDevDb();
+  const push = cliCommand(resolvePrismaBin(), ['prisma', 'db', 'push', '--skip-generate']);
+  runCliStep(push.command, push.args);
+  const seed = cliCommand(resolveTsxBin(), ['tsx', path.join('prisma', 'seed.ts')]);
+  runCliStep(seed.command, seed.args);
+}
+
+/**
+ * Reset the DEV SQLite DB to the canonical seeded demo state — SYNCHRONOUSLY and BEFORE the dev
+ * server boots (no open connection ⇒ no Windows SQLite file-lock).
+ *
+ * WHY: money-moving journeys are tiered from the FROZEN demo day's accumulated outgoing transfers
+ * (`lib/clock.ts` `demoNow()` = 2026-09-25 12:00; `security/risk-engine.ts` ⇒ transfer is YELLOW only
+ * while `dayTotal + amount ≤ ¥1000`). Every transfer is stamped with `demoNow()`, so executed
+ * transfers ACCUMULATE across harness runs against the persistent `prisma/dev.db` — a second run
+ * would start with the previous run's transfers already inside the day and the YELLOW-transfer
+ * journeys would escalate to RED. Resetting gives every run the SAME known starting state.
+ *
+ * HOW (deliberately NOT `prisma db push --force-reset`): on Windows the force-reset path was observed
+ * to leave `prisma/dev.db` as a 0-byte image and then fail with `Error code 11: The database disk
+ * image is malformed`, aborting the seed. Instead we DELETE the DB file + sidecars, re-create a fresh
+ * schema with `db push --skip-generate`, then seed (`tsx prisma/seed.ts`). The whole attempt is
+ * retried ONCE with a short backoff (SQLite on Windows is occasionally lock-prone), and each step's
+ * combined stdout+stderr is captured into the thrown error.
+ *
+ * Set `E2E_SKIP_DB_RESET=1` to keep the current DB (e.g. to inspect post-run data); the journeys then
+ * require a freshly seeded DB. Deprecated-`package.json#prisma` warning lines in the captured output
+ * are harmless — success is decided by the EXIT CODE, never by stderr text.
+ */
+export function resetDemoDatabase(opts: { attempts?: number } = {}): void {
+  if (process.env['E2E_SKIP_DB_RESET'] === '1') {
+    console.log('· 跳过演示数据库重置（E2E_SKIP_DB_RESET=1）');
+    return;
+  }
+  const attempts = opts.attempts ?? 2;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      resetDemoDatabaseOnce();
+      return;
+    } catch (e) {
+      lastError = e;
+      console.error(`· 重置演示数据库失败（第 ${attempt}/${attempts} 次）：${errText(e)}`);
+      if (attempt < attempts) sleepSync(1200);
+    }
+  }
+  throw new Error(`重置演示数据库失败（已重试 ${attempts} 次）：${errText(lastError)}`);
 }
 
 // --- browser factory ----------------------------------------------------------------------------
@@ -392,13 +599,36 @@ export const SELECTORS = {
   mfaInput: 'input[aria-label="验证码"]',
 } as const;
 
-/** Navigate to the chat page and wait for the composer to render (fail-fast on SSR error shell). */
+/**
+ * Wait until the SSR composer `<textarea>` has been HYDRATED by React.
+ *
+ * Before hydration the DOM node exists (it is server-rendered) but carries NO React own-property
+ * (`__reactProps$…` / `__reactFiber$…`): a `fill()`/click at that instant is silently DROPPED (no
+ * `POST /api/chat`) AND React's hydration re-renders the controlled `<textarea>` back to empty
+ * (resetting the fill). Waiting for the React own-property key is a real DOM condition — never a
+ * fixed sleep — so the first turn is landed deterministically instead of racing hydration.
+ */
+export async function waitForComposerHydration(page: Page, timeoutMs = NAV_TIMEOUT_MS): Promise<void> {
+  await page.waitForFunction(
+    (selector: string) => {
+      const el = document.querySelector(selector);
+      if (!el) return false;
+      return Object.keys(el).some(
+        (key) => key.startsWith('__reactProps$') || key.startsWith('__reactFiber$'),
+      );
+    },
+    SELECTORS.composer,
+    { timeout: timeoutMs },
+  );
+}
+
+/** Navigate to the chat page and wait for the composer to render AND hydrate (fail-fast on SSR error). */
 export async function gotoAgent(page: Page, baseUrl: string): Promise<void> {
   await page.goto(`${baseUrl}/agent`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
   const deadline = Date.now() + NAV_TIMEOUT_MS;
   for (;;) {
     const composer = page.locator(SELECTORS.composer).first();
-    if ((await composer.count()) > 0 && (await composer.isVisible().catch(() => false))) return;
+    if ((await composer.count()) > 0 && (await composer.isVisible().catch(() => false))) break;
     const ssrError = await readSsrPageError(page);
     if (ssrError !== undefined) {
       throw new Error(`/agent 页面渲染失败（应用端 SSR 报错，非测试问题）：${ssrError}`);
@@ -408,6 +638,8 @@ export async function gotoAgent(page: Page, baseUrl: string): Promise<void> {
     }
     await sleep(250);
   }
+  // The composer is server-rendered; do NOT interact until React has hydrated it (see the helper).
+  await waitForComposerHydration(page, Math.max(1, deadline - Date.now()));
 }
 
 /**
@@ -438,10 +670,13 @@ async function clickWhenEnabled(locator: Locator, description: string, timeoutMs
   await locator.first().click();
 }
 
-/** Type `text` into the composer and submit it (waits for the input to be free first). */
+/** Type `text` into the composer and submit it (waits for hydration + the input to be free first). */
 export async function submitChat(page: Page, text: string, timeoutMs = 60_000): Promise<void> {
   const composer = page.locator(SELECTORS.composer).first();
   await composer.waitFor({ state: 'visible', timeout: timeoutMs });
+  // React must have hydrated the controlled <textarea> BEFORE we interact: otherwise the click is
+  // dropped and hydration resets the fill (see `waitForComposerHydration`).
+  await waitForComposerHydration(page, timeoutMs);
   await waitFor(async () => ((await composer.isEnabled()) ? true : false), {
     timeoutMs,
     description: '聊天输入框可用（上一轮已完成）',
@@ -532,14 +767,21 @@ export async function waitForStatusText(page: Page, needle: string, timeoutMs = 
 // --- plan card (task plan) ----------------------------------------------------------------------
 
 /**
- * XPath for the `PlanCard` root: the nearest ancestor `<div class="… rounded-2xl …">` of the
- * `依赖关系` heading (a `PlanCard`-only marker). `ancestor::…[1]` picks the NEAREST such ancestor,
- * which is the plan card itself — not the nested timeline card or any wrapper.
+ * XPath for the ACTIVE `PlanCard` root: the LAST-rendered ancestor `<div class="… rounded-2xl …">` of
+ * the `依赖关系` heading (a `PlanCard`-only marker).
+ *
+ * A plan turn renders the DAG snapshot TWICE: once INLINE inside the assistant message bubble
+ * (`MessageBubble` → `CardRenderer`), and once as the LIVE `stream.activePlan` card which
+ * `ChatWindow` renders AFTER all messages. The inline card's `plan.status` is FROZEN at the value the
+ * turn ended with (nothing rewrites `message.cards`), so pausing/cancelling a plan updates only the
+ * LIVE card. Reading `[1]` (the stale inline card) made this harness observe 等待确认 forever. We
+ * therefore select the LAST match — the live, app-authoritative plan view that reflects plan-control
+ * outcomes. Falls back to the only card when just one is rendered.
  */
 const PLAN_CARD_XPATH =
-  'xpath=//h4[normalize-space(string(.))="依赖关系"]/ancestor::div[contains(concat(" ", normalize-space(@class), " "), " rounded-2xl ")][1]';
+  'xpath=(//h4[normalize-space(string(.))="依赖关系"]/ancestor::div[contains(concat(" ", normalize-space(@class), " "), " rounded-2xl ")][1])[last()]';
 
-/** Locator for the rendered `PlanCard` root. */
+/** Locator for the rendered, LIVE `PlanCard` root (the app-authoritative plan view). */
 export function planCard(page: Page): Locator {
   return page.locator(PLAN_CARD_XPATH);
 }
@@ -579,4 +821,22 @@ export async function clickPlanControl(page: Page, label: string, timeoutMs = 30
     `计划控制按钮「${label}」`,
     timeoutMs,
   );
+}
+
+/** Is a plan-card control button (`暂停`/`继续`/`取消`/`重试`) currently rendered? */
+export async function planControlPresent(page: Page, label: string): Promise<boolean> {
+  return (await planCard(page).getByRole('button', { name: label, exact: true }).count()) > 0;
+}
+
+/** Wait until a plan card is rendered (its `依赖关系` section exists), then return its status label. */
+export async function waitForPlanCard(page: Page, timeoutMs = 90_000): Promise<string> {
+  let status: string | undefined;
+  await waitFor(
+    async () => {
+      status = await planStatus(page);
+      return status === undefined ? false : status;
+    },
+    { timeoutMs, description: '计划卡片（依赖关系）渲染' },
+  );
+  return status ?? '';
 }

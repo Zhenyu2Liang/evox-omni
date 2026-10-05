@@ -12,16 +12,17 @@ This node is **self-contained** — it does not import `tests/app/*` or any `@/`
 imports + node built-ins only, to avoid tsx/tsconfig path surprises).
 
 ## API Surface
-- `acceptance.e2e.ts` — the SINGLE entry point. Boots the app → waits for readiness → launches
-  Chrome → runs the journeys → prints exactly one `PASS|FAIL|SKIP <journey> — <evidence>` line per
-  journey → exits non-zero iff ANY journey FAILED (a SKIP does not fail the run).
-- `helpers.ts` — shared harness: `pickFreePort`, `startDevServer`/`killProcessTree` (whole-path
-  teardown; boots `cmd.exe /d /s /c "npx next dev -p <port>"` detached — deliberately NOT
-  `shell:true`, which produced an empty stdout pipe here), `waitForHealth`, `resolveBrowserExecutable`/
-  `launchBrowser`, `withPage` (fresh isolated context + failure screenshot + `pageerror` capture), DOM
-  selectors + interactions (`submitChat`, `clickConfirm`, `submitMfa`, `waitForPlanStatus`,
-  `clickPlanControl`, …), the structured `createReporter`, and the fail-fast `gotoAgent`/
-  `readSsrPageError`.
+- `acceptance.e2e.ts` — the SINGLE entry point. Resets the demo DB → boots the app → waits for
+  readiness → launches Chrome → runs the journeys → prints exactly one
+  `PASS|FAIL|SKIP <journey> — <evidence>` line per journey → exits non-zero iff ANY journey FAILED
+  (a SKIP does not fail the run).
+- `helpers.ts` — shared harness: `pickFreePort`, `bootDevServer` (project-local Next CLI, readiness
+  gated on `/api/health` + `/agent`, one retry on a fresh port) with `startDevServer`/
+  `killProcessTree` (whole-tree teardown), `resetDemoDatabase` (see "Deterministic demo DB reset"),
+  `resolveBrowserExecutable`/`launchBrowser`, `withPage` (fresh isolated context + failure screenshot
+  + `pageerror` capture), the hydration gate (`waitForComposerHydration`), DOM selectors +
+  interactions (`submitChat`, `clickConfirm`, `submitMfa`, `waitForPlanStatus`, `clickPlanControl`,
+  `planCard`, …), the structured `createReporter`, and the fail-fast `gotoAgent`/`readSsrPageError`.
 - `screenshots/` — git-ignored failure screenshots (`.gitignore` ignores everything but itself).
 - `CONTEXT.md` — this file.
 
@@ -31,7 +32,8 @@ imports + node built-ins only, to avoid tsx/tsconfig path surprises).
 - **Type-checked.** These files ARE compiled by `tsc --noEmit` (tsconfig `include: **/*.ts`) → must
   stay at 0 errors even though vitest transpiles without type-checking.
 - **Never fake a pass.** A journey that cannot be automated in-browser emits a `SKIP` + concrete
-  reason (or an honest `FAIL`); it never asserts success from an API response alone.
+  reason (or an honest `FAIL`); it never asserts success from an API response alone, and it never
+  fabricates a plan badge it did not genuinely read from the DOM.
 - **Always tear down.** One idempotent `cleanup()` (wired to `process.on('exit' | 'SIGINT' |
   'SIGTERM' | 'uncaughtException' | 'unhandledRejection')`) kills the dev server's whole process tree
   and closes the browser on success, failure AND unexpected errors. Never leave `next dev` listening.
@@ -55,60 +57,85 @@ npx tsx tests/e2e/acceptance.e2e.ts
 ```
 One line per journey; the process exits non-zero when any journey FAILs.
 
+## Deterministic demo DB reset
+`resetDemoDatabase()` runs BEFORE the dev server boots (no open connection ⇒ no Windows SQLite
+file-lock) so every run starts from the canonical seeded state — the money journeys are tiered from
+the FROZEN demo day's accumulated outgoing transfers (`demoNow()` = 2026-09-25 12:00), so without a
+reset a second run would start with the previous run's executed transfers already inside the day and
+the YELLOW-transfer journeys would escalate to RED.
+
+Recipe: delete `prisma/dev.db` + its `-wal`/`-shm`/`-journal` sidecars (missing files are fine) →
+`prisma db push --skip-generate` (creates a fresh schema) → seed via `tsx prisma/seed.ts`. This
+**deliberately AVOIDS `prisma db push --force-reset`**: on Windows that path was seen to leave
+`prisma/dev.db` as a 0-byte image and then fail with `Error code 11: database disk image is
+malformed`, which aborted the seed and failed all five journeys at the infrastructure stage.
+
+CLIs are invoked like the dev server: prefer the project-local binaries
+(`REPO_ROOT/node_modules/...` launched with `process.execPath`, mirroring `resolveNextBin()`), else
+fall back to `cmd.exe /d /s /c "npx …"` on Windows / a plain command on POSIX. The whole attempt is
+retried ONCE with a short backoff (SQLite on Windows is occasionally lock-prone), each step's combined
+stdout+stderr is captured into the thrown error, and success is decided by the **EXIT CODE** (the
+deprecated `package.json#prisma` warning lines are harmless).
+`E2E_SKIP_DB_RESET=1` keeps the current DB (e.g. to inspect post-run data) — the journeys then
+require a freshly seeded DB.
+
 ## Journeys (each asserts on RENDERED DOM)
 - **a-transfer-confirm** (YELLOW transfer ≤¥1000): `给张伟转200元` → ConfirmationCard (`确认`/`取消`)
   → click `确认` → assistant text `转账处理结果：…`.
 - **b-transfer-mfa** (RED transfer >¥1000) — two legs in fresh contexts: correct code `123456` →
   success narration; wrong code `000000` → `role=status` `验证失败，已尝试 1 次`, MFA card STAYS, and
   NO success narration (the transfer did not occur).
-- **c-plan-pause-resume**: gated plan `如果我这个月消费超过2000，就把信用卡娱乐限额调整到1500元`
-  → badge `等待确认` → `暂停` → `已暂停` → `继续` (see Known limitation).
-- **d-plan-cancel**: gated plan → `等待确认` → plan-card `取消` → badge `已取消`.
-- **e-refresh-action-recovery** — two legs (same context across reload): park a YELLOW transfer →
-  reload → ConfirmationCard RESTORED from persisted server state; park a RED transfer → reload →
-  MfaCard RESTORED.
+- **c-plan-pause-resume**: NON-gated plan `帮我规划一下：先查一下我的余额，然后汇总` (`balance` GREEN
+  `get_balance` → `summarize` note; no node is risk-gated). `runSubmitPlan` AWAITS the executor and
+  `POST /api/chat` delivers its SSE frames only after the turn settles, so the PlanCard first renders
+  on an ALREADY-terminal state → badge `已完成` with NO `暂停` control. The journey asserts exactly
+  that rendered state; it only drives `暂停`→`继续` if it ever catches the card mid-run with a `暂停`
+  control present. Completion is NEVER fabricated.
+- **d-plan-cancel**: gated plan `如果我这个月消费超过2000，就把信用卡娱乐限额调整到1500元` →
+  `等待确认` → plan-card `取消` → badge `已取消`.
+- **e-refresh-action-recovery** — two legs: park a **STATIC-YELLOW** `freeze_card` (`冻结我的信用卡`,
+  so the tier does not depend on the demo day's accumulated transfer total) → same-context reload →
+  ConfirmationCard RESTORED from persisted server state; park a RED transfer → reload → MfaCard
+  RESTORED.
 
 ## Coverage notes
 - **Covers:** real-browser NL → card → human-decision flows; MFA success + wrong-code rejection;
-  plan pause/resume + cancel; refresh rehydration from persisted server state; structured honest
+  plan terminal state + cancel; refresh rehydration from persisted server state; structured honest
   reporting; whole-tree teardown.
 - **Does NOT cover:** the real LLM (`LLM_MODE=live`); real bank/network; the production build
   (`next build` / `next start`); cross-browser (Chrome only, Edge as fallback and untested);
   visual/a11y regression; load/perf; the security unit + scenario layers (owned by
   `tests/unit` / `tests/scenarios`).
 
-## Known Issues
-- **No React-hydration gate — journeys a/b/e are racy (harness-side).** `gotoAgent` (helpers.ts:396)
-  returns as soon as the SSR composer `<textarea>` is visible, and `submitChat` (helpers.ts:442) then
-  `fill()`s + clicks `发送` with NO wait for React hydration. At that instant the composer carries NO
-  React fiber props (`__reactFiber$…`/`__reactProps$…` absent — verified by a real headless-Chrome
-  probe), so interacting then (1) DROPS the click (no `POST /api/chat` is issued) and (2) RESETS the
-  `fill()` when React hydrates the controlled `<textarea>`. Landing the first turn depends purely on
-  Next-dev hydration timing. Grep confirms there is NO hydration signal anywhere in `tests/e2e/`
-  (no `__reactFiber$`/`__reactProps$`, no `networkidle`, no `waitForFunction`, no mounted/`data-ready`
-  marker). MINIMAL FIX (owner: `helpers.ts`): before `fill()`/click in `submitChat` (and/or at the end
-  of `gotoAgent`), wait for hydration — e.g. `page.waitForFunction` that the composer element has a
-  `__reactProps$…` key, or add a small client-only `data-hydrated` marker to `Composer` and wait on it.
-- **App side is SOUND (not the cause).** With hydration explicitly awaited (fiber props present), a
-  real headless-Chrome probe's `fill()`+click issued `POST /api/chat` and the ConfirmationCard
-  rendered — so `/agent` hydrates without error, the composer submits, and cards/narration render.
-  `GET /agent` returns HTTP 200; `components/chat/index.ts` and `components/index.ts` are neutral
-  barrels and the chat leaves carry `'use client'`.
-- **Harness dev-server boot fails in this environment (reproduced twice).** The harness's Node
-  `spawn('cmd.exe', ['/d','/s','/c','npx next dev -p <port>'], { detached:true, stdio:'pipe' })`
-  yields an EMPTY stdout pipe and `/api/health` never becomes ready → after 180s all five journeys
-  FAIL with `基础设施失败：/api/health 未就绪` (never reaching a journey interaction). Launching the
-  identical command manually (`Start-Process cmd.exe '/d','/s','/c' 'npx next dev -p <port>'`) boots
-  fine (`Ready in ~1.2s`, `/api/health` 200). So a harness run can report `PASS 0|FAIL 5` at the
-  INFRASTRUCTURE stage alone. Invoke the harness directly (`npx tsx tests/e2e/acceptance.e2e.ts`);
-  never wrap it in an extra `cmd /c`.
-- **`c-plan-pause-resume` honest limitation:** resuming a plan whose gated node is still parked
-  re-attempts that node (parked is NOT terminal), so the plan RE-parks at `等待确认` instead of reaching
-  `已完成`. The journey reports whichever badge is actually observed and NEVER fabricates `已完成`.
+## Design notes (harness mechanics)
+- **React-hydration gate.** `gotoAgent` returns only once the SSR composer `<textarea>` is visible
+  AND hydrated; `submitChat` re-checks hydration before `fill()`/click, and the reload path re-waits
+  via `waitForComposer`. Before hydration the server-rendered `<textarea>` carries NO React
+  own-property (`__reactProps$…`/`__reactFiber$…`), so interacting then silently DROPS the click
+  (no `POST /api/chat` is issued) and React's hydration resets the `fill()`. `waitForComposerHydration`
+  waits on that real DOM condition — never a fixed sleep.
+- **Robust dev-server boot.** `bootDevServer()` prefers the project-local Next CLI
+  (`<process.execPath> node_modules/next/dist/bin/next dev -p <port>`) and falls back to
+  `cmd.exe /d /s /c "npx next dev …"` (Windows) / `npx next dev …` (POSIX) — deliberately NOT Node's
+  `shell: true`, which re-serialized args and produced an empty stdout pipe. It waits for BOTH
+  `/api/health` AND `/agent` (`waitForAppReady`) and retries ONCE on a fresh port; when every attempt
+  fails it prints the captured dev-server log tail and the entry script FAILs every journey.
+- **Live PlanCard selection.** A plan turn renders the DAG snapshot TWICE — inline in the assistant
+  bubble (frozen; nothing rewrites `message.cards`) and as the live `stream.activePlan` card after the
+  messages. `planCard()` therefore selects the LAST match (`PLAN_CARD_XPATH … [last()]`), so
+  plan-control outcomes are read from the app-authoritative live card.
+
+## Known Limitations
+- **`c-plan-pause-resume` has no pausable window in mock mode.** Because the plan executes
+  synchronously inside the chat turn, the card's first render is already `已完成` and offers no
+  `暂停` control, so a genuine `暂停`→`继续` cycle cannot be observed. The journey reports the
+  genuinely rendered badge (or the pause path when it wins the race) and never fabricates `已完成`.
+- **No real browser ⇒ SKIP, not FAIL.** When neither Chrome nor Edge is found (and `E2E_BROWSER_PATH`
+  is unset) every journey emits `SKIP` with the reason; the run does not fail.
 
 ## Routing Table
-- `./acceptance.e2e.ts` → the single real-browser entry point (boot → readiness → journeys → structured report → non-zero exit on FAIL)
-- `./helpers.ts` → shared harness (free port, dev-server boot/teardown, health poll, browser factory, `withPage`, DOM selectors/interactions, reporter, fail-fast navigation)
+- `./acceptance.e2e.ts` → the single real-browser entry point (DB reset → boot → readiness → journeys → structured report → non-zero exit on FAIL)
+- `./helpers.ts` → shared harness (demo DB reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card, reporter, fail-fast navigation)
 - `./screenshots/` → git-ignored failure screenshots
 - `../app` → HTTP route-handler specs (the in-process acceptance layer this harness complements) (sibling — read-only)
 - `../setup.ts` + `../helpers` → vitest global setup + fixtures (untouched by this harness) (sibling — read-only)

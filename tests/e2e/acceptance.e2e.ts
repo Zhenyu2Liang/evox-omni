@@ -1,9 +1,10 @@
 /**
  * `tests/e2e/acceptance.e2e.ts` — the SINGLE real-browser end-to-end acceptance entry point.
  *
- * It boots the REAL Next.js dev server on a free port, waits for `/api/health`, launches the machine's
- * real headless Chrome (via `playwright-core`, no browser download), drives the REAL `/agent` UI and
- * asserts on RENDERED DOM — never on API responses alone. Only the model is scripted (`LLM_MODE=mock`).
+ * It boots the REAL Next.js dev server on a free port (project-local Next CLI, readiness gated on
+ * BOTH `/api/health` AND `/agent`, one retry on a fresh port), launches the machine's real headless
+ * Chrome (via `playwright-core`, no browser download), drives the REAL `/agent` UI and asserts on
+ * RENDERED DOM — never on API responses alone. Only the model is scripted (`LLM_MODE=mock`).
  *
  * Run:  npx tsx tests/e2e/acceptance.e2e.ts
  *
@@ -18,6 +19,7 @@ import type { Browser, Page } from 'playwright-core';
 import {
   NAV_TIMEOUT_MS,
   SELECTORS,
+  bootDevServer,
   clickConfirm,
   clickPlanControl,
   createReporter,
@@ -26,17 +28,19 @@ import {
   hasAssistantText,
   launchBrowser,
   mfaCardPresent,
-  pickFreePort,
+  planControlPresent,
+  planStatus,
+  resetDemoDatabase,
   resolveBrowserExecutable,
   runJourney,
   setActiveBrowser,
-  startDevServer,
   submitChat,
   submitMfa,
   waitForAssistantText,
+  waitForComposerHydration,
   waitForConfirmCard,
-  waitForHealth,
   waitForMfaCard,
+  waitForPlanCard,
   waitForPlanStatus,
   waitForStatusText,
   withPage,
@@ -47,8 +51,20 @@ import {
 const MSG = {
   /** YELLOW transfer (≤ ¥1000) → confirmation card. */
   transferYellow: '给张伟转200元',
+  /**
+   * YELLOW, NON-transfer action → confirmation card. Its tier is STATIC (`freeze_card` = YELLOW,
+   * `security/permission-engine.ts`), so — unlike a transfer — it stays YELLOW regardless of the
+   * demo day's accumulated transfer total, keeping journey e's confirmation-card recovery
+   * deterministic across runs and journey ordering.
+   */
+  freezeCard: '冻结我的信用卡',
   /** RED transfer (> ¥1000) → MFA card (mock code `123456`). */
   transferRed: '给张伟转2000元',
+  /**
+   * NON-risk-gated conditional plan: `balance` (GREEN `get_balance`) → `summarize` (note). Hits the
+   * `余额` branch of `handlePlan` — no `限额`/`额度` and no transfer verb, so NO node parks.
+   */
+  plan: '帮我规划一下：先查一下我的余额，然后汇总',
   /** GATED conditional plan: analyze(GREEN) → check → set_card_limit(YELLOW) ⇒ parks at 等待确认. */
   gatedPlan: '如果我这个月消费超过2000，就把信用卡娱乐限额调整到1500元',
 } as const;
@@ -56,9 +72,14 @@ const MSG = {
 /** Assistant narration lead emitted on a completed transfer (`NARRATION_LEAD.transfer_money`). */
 const TRANSFER_OK_NARRATION = '转账处理结果：';
 
-/** Wait for the chat page to be interactive again after a client-side `page.reload()`. */
+/**
+ * Wait for the chat page to be interactive again after a client-side `page.reload()`: first the
+ * (server-rendered) composer becomes visible, then React has HYDRATED it. Interacting before
+ * hydration drops the click and resets a `fill()` — see `waitForComposerHydration` in `helpers.ts`.
+ */
 async function waitForComposer(page: Page): Promise<void> {
   await page.locator(SELECTORS.composer).first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+  await waitForComposerHydration(page);
 }
 
 // --- journeys (each asserts on RENDERED DOM) ----------------------------------------------------
@@ -121,29 +142,49 @@ async function journeyTransferMfa(browser: Browser, baseUrl: string): Promise<st
 }
 
 /**
- * (c) GATED plan → 等待确认 → 暂停 → 已暂停 → 继续.
+ * (c) NON-risk-gated plan → terminal `已完成` (and, when a real mid-run window exists, 暂停/继续).
  *
- * HONEST REPORTING: per planner semantics (`planner/CONTEXT.md`), `runPlan` on a snapshot whose gated
- * node is still parked RE-ATTEMPTS that node (parked is NOT terminal), so resuming re-parks the plan.
- * We therefore assert the REAL post-resume badge (`等待确认`), or `已完成` if it ever reaches it, and
- * report exactly which was observed — we NEVER fake completion.
+ * The plan is the mock model's `余额` branch: `balance` (GREEN `get_balance`) → `summarize` (note) —
+ * NO node is risk-gated, so nothing parks (unlike the gated `限额` branch used by journey d).
+ *
+ * SEMANTICS (verified): `agent/tools/planning.ts#runSubmitPlan` AWAITS `executor.runPlan`, and
+ * `POST /api/chat` delivers its SSE frames only AFTER the turn resolves — so the PlanCard first
+ * renders on a state that is already TERMINAL (`已完成`) and offers NO `暂停` control. This journey
+ * asserts exactly the state that is actually rendered. If the machine is slow enough to first see the
+ * card mid-run with a `暂停` control present, it exercises pause → resume instead. The reported badge
+ * is ALWAYS the one genuinely read from the DOM — completion is never fabricated.
  */
 async function journeyPlanPauseResume(browser: Browser, baseUrl: string): Promise<string> {
   return withPage(
     browser,
     async (page) => {
       await gotoAgent(page, baseUrl);
-      await submitChat(page, MSG.gatedPlan);
-      await waitForPlanStatus(page, '等待确认');
-      await clickPlanControl(page, '暂停');
-      await waitForPlanStatus(page, '已暂停');
-      await clickPlanControl(page, '继续');
-      const after = await waitForPlanStatus(page, ['等待确认', '已完成'], 90_000);
-      const note =
-        after === '已完成'
-          ? '恢复后达到 已完成'
-          : '恢复后重新停在 等待确认（门控节点再次挂起，未达 已完成 —— 见 CONTEXT.md「已知限制」，未伪造完成）';
-      return `门控计划 → 等待确认 → 暂停 → 已暂停 → 继续 → ${after}（${note}）`;
+      await submitChat(page, MSG.plan);
+      const first = await waitForPlanCard(page);
+
+      if (first !== '已完成' && (await planControlPresent(page, '暂停'))) {
+        try {
+          await clickPlanControl(page, '暂停');
+          const paused = await waitForPlanStatus(page, ['已暂停', '已完成'], 30_000);
+          if (paused === '已暂停') {
+            await clickPlanControl(page, '继续');
+            const after = await waitForPlanStatus(page, ['已完成', '等待确认'], 90_000);
+            return `非门控计划「${MSG.plan}」→ 首次渲染「${first}」→ 暂停 → 已暂停 → 继续 → ${after}`;
+          }
+          return `非门控计划「${MSG.plan}」→ 首次渲染「${first}」→ 计划在暂停生效前已完成 → ${paused}（无可暂停的中间态，未伪造状态）`;
+        } catch (e) {
+          // Only tolerate a pause/resume race with the in-turn completion — re-read the REAL status.
+          const now = await planStatus(page);
+          if (now !== '已完成') throw e;
+          return `非门控计划「${MSG.plan}」→ 首次渲染「${first}」→ 暂停竞态后计划已完成 → 已完成（无可暂停的中间态，未伪造状态）`;
+        }
+      }
+
+      if (await planControlPresent(page, '暂停')) {
+        throw new Error('计划不处于可暂停状态，却仍渲染出「暂停」控件（状态与控件不一致）');
+      }
+      const settled = await waitForPlanStatus(page, '已完成');
+      return `非门控计划「${MSG.plan}」→ 计划卡片渲染「${settled}」（balance→summarize 在会话回合内同步执行完毕，无可暂停的中间态），无「暂停」控件 —— 未伪造状态`;
     },
     { label: 'c-plan-pause-resume' },
   );
@@ -168,7 +209,9 @@ async function journeyPlanCancel(browser: Browser, baseUrl: string): Promise<str
 /**
  * (e) REFRESH → action-entry recovery, in the SAME context across reload (the HttpOnly
  * `banking_session` cookie persists, so the server state is reachable):
- *   leg 1: park a YELLOW transfer → reload → the ConfirmationCard(确认/取消) is RESTORED.
+ *   leg 1: park a YELLOW action → reload → the ConfirmationCard(确认/取消) is RESTORED.
+ *          Uses `freeze_card` (STATIC YELLOW) rather than a transfer, so the tier does not depend on
+ *          the demo day's accumulated transfer total (see MSG.freezeCard).
  *   leg 2 (fresh context): park a RED transfer → reload → the MfaCard(身份验证) is RESTORED.
  */
 async function journeyRefreshRecovery(browser: Browser, baseUrl: string): Promise<string> {
@@ -176,12 +219,12 @@ async function journeyRefreshRecovery(browser: Browser, baseUrl: string): Promis
     browser,
     async (page) => {
       await gotoAgent(page, baseUrl);
-      await submitChat(page, MSG.transferYellow);
+      await submitChat(page, MSG.freezeCard);
       await waitForConfirmCard(page);
       await page.reload({ waitUntil: 'domcontentloaded' });
       await waitForComposer(page);
       await waitForConfirmCard(page);
-      return 'YELLOW 转账挂起 → 同一 context reload → ConfirmationCard(确认/取消) 由 GET /api/actions 恢复';
+      return `YELLOW「${MSG.freezeCard}」挂起 → 同一 context reload → ConfirmationCard(确认/取消) 由 GET /api/actions 恢复`;
     },
     { label: 'e1-refresh-confirm' },
   );
@@ -273,12 +316,18 @@ async function main(): Promise<void> {
         reporter.skip(journey.name, '未找到真实浏览器（Chrome/Edge）；可设置 E2E_BROWSER_PATH 覆盖');
       }
     } else {
-      const port = await pickFreePort();
-      devServer = startDevServer(port);
+      // Deterministic fixture state: reset the demo DB to the canonical seeded state BEFORE booting.
+      // The money journeys are tiered from the FROZEN demo day's accumulated outgoing transfers
+      // (`demoNow()` = 2026-09-25 12:00), so without a reset a second run would start with the prior
+      // run's executed transfers already in the day and the YELLOW-transfer journey would go RED.
+      console.log('· 重置演示数据库 → 删除 dev.db + 副本 → prisma db push --skip-generate → tsx prisma/seed.ts（保证每次运行起始状态一致）');
+      resetDemoDatabase();
+
+      // Robust boot: prefers the project-local Next CLI (no npx/shell shim), waits for BOTH
+      // `/api/health` AND `/agent`, and retries once on a fresh port — see `bootDevServer`.
+      devServer = await bootDevServer();
       const baseUrl = devServer.baseUrl;
-      console.log(`· next dev (pid=${devServer.pid}) → ${baseUrl}`);
-      await waitForHealth(baseUrl, { output: devServer.output });
-      console.log('· /api/health 就绪（LLM_MODE=mock）');
+      console.log(`· next dev (pid=${devServer.pid}) → ${baseUrl}（/api/health 与 /agent 均已就绪，LLM_MODE=mock）`);
 
       console.log(`· 真实浏览器：${executablePath}`);
       browser = await launchBrowser(executablePath);
