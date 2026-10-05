@@ -97,4 +97,4 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - When adding a repository aggregate, keep one module per aggregate and register it in
   `lib/db/repositories/index.ts`.
 - The `AgentTaskNode.pendingActionId` DAG-resume column is missing from the frozen schema — see
-  `lib/db/repositories/CONTEXT.md` `## Known Issues` for the exact `prisma/schema.prisma` addition needed.
+  `lib/db/repositories/CONTEXT.md` `## Known Issues`; the plan↔operation link is instead persisted on `PendingAction.taskId`/`nodeId` and read back via `getPendingActionPlanLink`/`listPendingActionsByTask`.
