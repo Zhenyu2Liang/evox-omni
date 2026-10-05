@@ -16,6 +16,17 @@
  * validated and persisted at gate time, and only after the gateway has authorized the action. A
  * `SECURITY_DENIED`/`NOT_FOUND` from the gateway PROPAGATES as a thrown `AppError` (never executed);
  * an idempotency `CONFLICT` is surfaced as a real `ok:false` outcome (never a fabricated success).
+ *
+ * TRUSTED IDENTITY: EVERY call into the security gateway (`authorizeAction` / `cancelAction` /
+ * `recordActionResult`) is made with the identity resolved from PERSISTED state — the action row's
+ * `sessionId` plus the owning `AgentSession.userId`. A request-supplied `userId`/`sessionId` is
+ * accepted only as an ASSERTION (a mismatch FAILS CLOSED, the action is never authorized); it is
+ * never a grant. Ownership that cannot be established also fails closed.
+ *
+ * EFFECTIVE REQUIREMENT: the authorization's `requiresMfa` is surfaced as-is (and the EFFECTIVE tier
+ * is RED whenever MFA is required). A parked YELLOW transfer that re-risks to RED at execution time
+ * therefore reports `requiresMfa:true` + a `mfa_required` stream event and is audited with the
+ * effective tier/requirement — instead of being flattened into a plain, MFA-less failure.
  */
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { PendingAction, PendingActionStatus } from '@/lib/contracts/security';
@@ -28,7 +39,7 @@ import type { AuthorizationResult, GatewayContext } from '@/security/security-ga
 import { security } from '@/security';
 import { recordAudit } from '@/audit';
 import { getSession } from '@/lib/db/repositories/session';
-import { getPendingAction } from '@/lib/db/repositories/pendingAction';
+import { getPendingAction, getPendingActionOwnership } from '@/lib/db/repositories/pendingAction';
 import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
@@ -51,19 +62,22 @@ export interface ConfirmOptions {
   /** Optional streaming hook: the API layer forwards each continuation event to its SSE sink. */
   onEvent?: (event: AgentStreamEvent) => void;
   /**
-   * Expected owner. When supplied, the gateway rejects an action belonging to another user with
-   * `SECURITY_DENIED` (which PROPAGATES — the action is never executed). Omit to rely on the action
-   * id itself as the capability (the CLI/one-arg call shape).
+   * Expected owner ASSERTION. When supplied it must match the action's PERSISTED ownership; a
+   * mismatch FAILS CLOSED with `SECURITY_DENIED` (the action is never authorized or executed).
+   * Omit to rely on the persisted ownership alone (the action row + its owning session).
    */
   userId?: string;
-  /** Expected owning session; same `SECURITY_DENIED` semantics as `userId`. */
+  /** Expected owning session ASSERTION; same fail-closed `SECURITY_DENIED` semantics as `userId`. */
   sessionId?: string;
 }
 export interface ConfirmationOutcome {
   ok: boolean;
   actionId: string;
   status: PendingActionStatus;
+  /** The EFFECTIVE tier: RED whenever strong verification (MFA) is required, else the action's tier. */
   tier: RiskLevel;
+  /** The EFFECTIVE MFA requirement of this decision (never the stale row flag). */
+  requiresMfa: boolean;
   message: string;
   result?: ToolExecutionResult;
   events: AgentStreamEvent[];
@@ -76,6 +90,133 @@ export interface GatedToolOutcome {
   error?: string;
   requiresConfirmation?: boolean;
   pendingActionId?: string;
+}
+
+/** The union of what the gateway's `AuthorizationResult` carries across its legacy/frozen shapes. */
+interface RawAuth {
+  ok: boolean;
+  tier?: RiskLevel;
+  requiresMfa?: boolean;
+  status?: PendingActionStatus;
+  message?: string;
+  mfaResult?: 'success' | 'failed' | 'not_required';
+  actionId?: string;
+  code?: string;
+  action?: PendingAction;
+}
+
+/**
+ * Unified view over the gateway's `AuthorizationResult`.
+ *
+ * The security node is mid-migration: the CURRENT shape carries `status`/`message`/`mfaResult`/
+ * `action`, while the FROZEN shape carries `code` (no `status`, no `action`). Reading every field
+ * through this ONE normalizer keeps `tsc --noEmit` green against the current type AND the merged one
+ * — no code here ever touches `auth.status` / `auth.code` / `auth.action` directly.
+ */
+interface AuthView {
+  ok: boolean;
+  tier: RiskLevel;
+  requiresMfa: boolean;
+  /** Resulting status: the legacy shape carries it; the frozen shape omits it (derived below). */
+  status: PendingActionStatus;
+  /** Safe, user-facing message (never leaks the MFA code). */
+  message: string;
+  mfaResult?: 'success' | 'failed' | 'not_required';
+  /** Present on the frozen shape's success branch. */
+  actionId?: string;
+  /** Failure code (frozen shape only). */
+  code?: string;
+  /** The updated pending action, when the gateway returns one. */
+  action?: PendingAction;
+}
+
+/** Normalize whatever `AuthorizationResult` the gateway returns into one stable `AuthView`. */
+function viewAuth(auth: AuthorizationResult): AuthView {
+  const a = auth as unknown as RawAuth;
+  const requiresMfa = a.requiresMfa === true;
+  return {
+    ok: a.ok,
+    tier: a.tier ?? 'YELLOW',
+    requiresMfa,
+    // `status` exists only on the legacy shape; the frozen shape omits it, so derive an honest one.
+    status:
+      a.status ?? (a.ok ? 'confirmed' : a.code === 'CIRCUIT_OPEN' ? 'locked' : 'awaiting_mfa'),
+    message: a.message ?? '操作无法执行。',
+    mfaResult: a.mfaResult,
+    actionId: a.actionId,
+    code: a.code,
+    action: a.action,
+  };
+}
+
+/**
+ * The EFFECTIVE tier for an authorization result: MFA is a RED-only control, so any `requiresMfa`
+ * yields RED (this is what surfaces an execution-time-escalated YELLOW transfer as RED).
+ */
+function effectiveTier(view: AuthView): RiskLevel {
+  return view.requiresMfa ? 'RED' : view.tier;
+}
+
+/** The TRUSTED owner of a pending action, resolved from PERSISTED state only. */
+interface TrustedIdentity {
+  userId: string;
+  sessionId: string;
+}
+
+/**
+ * Resolve the TRUSTED identity of a pending action from persisted state — NEVER from the request.
+ *
+ * The `PendingAction` row supplies the owning `sessionId`; the owning `userId` comes from that
+ * session row (`AgentSession.userId`). Any request-supplied `opts.userId`/`opts.sessionId` is an
+ * ASSERTION: when present and mismatching the persisted ownership it FAILS CLOSED with
+ * `SECURITY_DENIED` (the action is never authorized or executed). An unknown action is `NOT_FOUND`;
+ * ownership that cannot be established (no owning session / no user) also FAILS CLOSED.
+ */
+async function resolveTrustedIdentity(
+  actionId: string,
+  opts?: ConfirmOptions,
+): Promise<TrustedIdentity> {
+  const row = await getPendingActionOwnership(actionId);
+  if (row === null) throw new AppError('NOT_FOUND', `未找到待处理的操作: ${actionId}`);
+
+  if (opts?.sessionId !== undefined && opts.sessionId !== row.sessionId) {
+    throw new AppError('SECURITY_DENIED', `无权操作该待处理操作: ${actionId}`);
+  }
+
+  const session = await getSession(row.sessionId);
+  const userId = session?.userId;
+  if (userId === undefined || userId === '') {
+    throw new AppError('SECURITY_DENIED', `无法解析待处理操作的所有者会话: ${row.sessionId}`);
+  }
+
+  if (opts?.userId !== undefined && opts.userId !== userId) {
+    throw new AppError('SECURITY_DENIED', `无权操作该待处理操作: ${actionId}`);
+  }
+
+  return { userId, sessionId: row.sessionId };
+}
+
+/** The identity bag the merged gateway accepts on `recordActionResult` (legacy: ignored). */
+type RecordActionResult = (
+  actionId: string,
+  status: 'executed' | 'failed',
+  opts?: { userId?: string; sessionId?: string },
+) => Promise<void>;
+
+/**
+ * Record an action's TRUE terminal status WITH the trusted identity.
+ *
+ * The security node's current `recordActionResult(actionId, status)` takes no identity; the cast
+ * keeps this call site forward-compatible with the merged signature
+ * (`recordActionResult(actionId, status, { userId, sessionId })`) without touching that node.
+ */
+function recordActionResult(
+  actionId: string,
+  status: 'executed' | 'failed',
+  identity: TrustedIdentity,
+): Promise<void> {
+  const fn = gateway.recordActionResult as unknown as RecordActionResult;
+  return fn(actionId, status, { userId: identity.userId, sessionId: identity.sessionId });
 }
 
 /** Forward every event to the caller's optional streaming hook (no-op when absent). */
@@ -129,7 +270,8 @@ async function conflictOutcome(actionId: string, error: AppError): Promise<Confi
   const row = await getPendingAction(actionId);
   const status = (row?.status as PendingActionStatus | undefined) ?? 'cancelled';
   const tier = (row?.riskLevel as RiskLevel | undefined) ?? 'YELLOW';
-  return { ok: false, actionId, status, tier, message: error.message, events: [] };
+  const requiresMfa = row?.requiresMfa === true;
+  return { ok: false, actionId, status, tier, requiresMfa, message: error.message, events: [] };
 }
 
 /**
@@ -187,31 +329,34 @@ async function resumeOwningPlan(
  * Tail shared by `confirmAction`/`verifyAction`: the gateway already authorized the action, so
  * execute its ORIGINAL validated args, record its terminal status, write the audit entry, resume any
  * owning plan, then narrate the real outcome.
+ *
+ * `identity` is the TRUSTED owner resolved from PERSISTED state before authorization (the session
+ * row is the authority); `view` carries the EFFECTIVE requirement (tier/requiresMfa) so the audit row
+ * and the returned outcome are TRUTHFUL — never the stale parked-row flags.
  */
 async function executeAuthorizedAction(
   actionId: string,
-  auth: {
-    action?: PendingAction;
-    mfaResult?: 'success' | 'failed' | 'not_required';
-  },
+  view: AuthView,
+  identity: TrustedIdentity,
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
-  const action = auth.action;
+  const action = view.action;
   if (action === undefined) {
     throw new AppError('INTERNAL', `安全网关已授权但未返回待处理操作: ${actionId}`);
   }
 
-  // `PendingAction` carries the session but not the user: resolve the owner for the SDK call. The
-  // session row IS the authority — an absent/unknown session (or a row without a user) is NOT a valid
-  // owner. There is deliberately NO demo-user fallback: the action has already been claimed
-  // `confirmed` by the gateway, so record the real terminal status first (it must never dangle in
-  // `confirmed`) and then refuse.
-  const session = await getSession(action.sessionId);
-  const userId = session?.userId;
-  if (userId === undefined || userId === '') {
-    await gateway.recordActionResult(actionId, 'failed');
-    throw new AppError('SECURITY_DENIED', `无法解析待处理操作的所有者会话: ${action.sessionId}`);
+  const tier = effectiveTier(view);
+  const requiresMfa = view.requiresMfa;
+
+  // Defensive: the gateway already claimed the action `confirmed`. If the owning session has since
+  // vanished, record the TRUE terminal status first (it must never dangle in `confirmed`) and then
+  // fail closed — the trusted owner is the session row, and there is NO demo-user fallback.
+  const session = await getSession(identity.sessionId);
+  if (session?.userId === undefined || session.userId === '') {
+    await recordActionResult(actionId, 'failed', identity);
+    throw new AppError('SECURITY_DENIED', `无法解析待处理操作的所有者会话: ${identity.sessionId}`);
   }
+  const userId = identity.userId;
 
   // Execute the args the gateway validated and persisted at gate time — straight through the
   // registry. Re-running `handleToolCall` would re-gate the call and mint a duplicate PendingAction.
@@ -224,9 +369,9 @@ async function executeAuthorizedAction(
     result = { ok: false, error: AppError.from(e).message };
   }
 
-  // Persist the TRUE terminal status so a later confirm/cancel is rejected as CONFLICT instead of
-  // re-authorizing an already-executed action.
-  await gateway.recordActionResult(actionId, result.ok ? 'executed' : 'failed');
+  // Persist the TRUE terminal status (with the trusted identity) so a later confirm/cancel is
+  // rejected as CONFLICT instead of re-authorizing an already-executed action.
+  await recordActionResult(actionId, result.ok ? 'executed' : 'failed', identity);
 
   await recordAudit({
     timestamp: demoNow(),
@@ -234,11 +379,13 @@ async function executeAuthorizedAction(
     userRequest: action.userRequest ?? '',
     intent: action.intent,
     toolName: action.toolName,
-    riskLevel: action.tier,
+    // TRUTHFUL audit: the EFFECTIVE tier + requirement of this decision, not the stale row flags
+    // (a parked YELLOW transfer that escalated to RED is audited RED / mfaRequired:true).
+    riskLevel: tier,
     confirmationRequired: true,
     confirmed: true,
-    mfaRequired: action.requiresMfa,
-    mfaResult: auth.mfaResult,
+    mfaRequired: requiresMfa,
+    mfaResult: view.mfaResult,
     toolResult: result,
     status: result.ok ? 'success' : 'failed',
   });
@@ -270,7 +417,8 @@ async function executeAuthorizedAction(
     ok: result.ok,
     actionId,
     status: result.ok ? 'executed' : 'failed',
-    tier: action.tier,
+    tier,
+    requiresMfa,
     message,
     result,
     events: [...planEvents, ...events],
@@ -278,40 +426,73 @@ async function executeAuthorizedAction(
 }
 
 /**
+ * Map a NON-ok authorization to its outcome — WITHOUT executing anything.
+ *
+ * ESCALATION (`requiresMfa`): strong verification is required (a parked YELLOW transfer that
+ * re-risked to RED at execution time, a RED action without a code, or a locked session). It is
+ * surfaced as `requiresMfa:true` / effective tier RED with a `mfa_required` stream event — NEVER
+ * flattened into a plain failure that loses the requirement.
+ *
+ * Plain failure (`!requiresMfa`): a domain outcome carrying the gateway's safe message, no event.
+ */
+function blockedOutcome(
+  actionId: string,
+  view: AuthView,
+  opts?: ConfirmOptions,
+): ConfirmationOutcome {
+  if (view.requiresMfa) {
+    const events: AgentStreamEvent[] = [{ type: 'mfa_required', actionId }];
+    emitAll(events, opts);
+    return {
+      ok: false,
+      actionId,
+      status: view.status,
+      tier: 'RED',
+      requiresMfa: true,
+      message: view.message,
+      events,
+    };
+  }
+  return {
+    ok: false,
+    actionId,
+    status: view.status,
+    tier: view.tier,
+    requiresMfa: false,
+    message: view.message,
+    events: [],
+  };
+}
+
+/**
  * YELLOW (or RED after MFA) — authorize a pending action and execute its original args.
  *
- * A non-ok authorization (RED without a code ⇒ `awaiting_mfa`, locked session ⇒ `locked`) is a
- * domain outcome, not an error: it is returned as `ok:false` with the gateway's safe message. An
- * already-settled action (repeat/concurrent confirm, confirm-after-cancel) is ALSO `ok:false` — never
- * a success.
+ * The identity sent to the gateway is resolved from PERSISTED ownership (asserted against any
+ * request-supplied `userId`/`sessionId`, which FAIL CLOSED on mismatch). A non-ok authorization is a
+ * domain outcome: an escalation (`requiresMfa`) is surfaced as RED + `mfa_required`; an already-
+ * settled action (repeat/concurrent confirm, confirm-after-cancel) is `ok:false` — never a success.
  */
 export async function confirmAction(
   actionId: string,
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
+  const identity = await resolveTrustedIdentity(actionId, opts);
+
   let auth: AuthorizationResult;
   try {
     auth = await gateway.authorizeAction(actionId, {
-      userId: opts?.userId,
-      sessionId: opts?.sessionId,
+      userId: identity.userId,
+      sessionId: identity.sessionId,
     });
   } catch (e) {
     if (e instanceof AppError && e.code === 'CONFLICT') return conflictOutcome(actionId, e);
     throw e; // SECURITY_DENIED / NOT_FOUND propagate — the action is never executed
   }
 
-  if (!auth.ok) {
-    return {
-      ok: false,
-      actionId,
-      status: auth.status,
-      tier: auth.tier,
-      message: auth.message,
-      events: [],
-    };
-  }
+  const view = viewAuth(auth);
+  if (!view.ok) return blockedOutcome(actionId, view, opts);
 
-  return executeAuthorizedAction(actionId, auth, opts);
+  return executeAuthorizedAction(actionId, view, identity, opts);
 }
 
 /** RED — verify the mock MFA code, then authorize + execute. */
@@ -320,31 +501,26 @@ export async function verifyAction(
   code: string,
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
+  const identity = await resolveTrustedIdentity(actionId, opts);
+
   let auth: AuthorizationResult;
   try {
     auth = await gateway.authorizeAction(actionId, {
       mfaCode: code,
-      userId: opts?.userId,
-      sessionId: opts?.sessionId,
+      userId: identity.userId,
+      sessionId: identity.sessionId,
     });
   } catch (e) {
     if (e instanceof AppError && e.code === 'CONFLICT') return conflictOutcome(actionId, e);
     throw e;
   }
 
-  if (!auth.ok) {
-    // Wrong code (⇒ `awaiting_mfa`, `mfaResult:'failed'`) or a tripped breaker (⇒ `locked`).
-    return {
-      ok: false,
-      actionId,
-      status: auth.status,
-      tier: auth.tier,
-      message: auth.message,
-      events: [],
-    };
-  }
+  const view = viewAuth(auth);
+  // A WRONG code (⇒ `awaiting_mfa`, `mfaResult:'failed'`) or a tripped breaker (⇒ `locked`) still
+  // requires verification — surfaced as RED + `mfa_required`, never a bare failure.
+  if (!view.ok) return blockedOutcome(actionId, view, opts);
 
-  return executeAuthorizedAction(actionId, auth, opts);
+  return executeAuthorizedAction(actionId, view, identity, opts);
 }
 
 /** Cancel a pending action; no execution. */
@@ -352,11 +528,15 @@ export async function cancelAction(
   actionId: string,
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
+  // The identity sent to the gateway is resolved from PERSISTED ownership (asserted against any
+  // request-supplied `userId`/`sessionId`).
+  const identity = await resolveTrustedIdentity(actionId, opts);
+
   // `cancelAction` throws `AppError('NOT_FOUND'|'SECURITY_DENIED'|'CONFLICT')` for an
   // unknown/foreign/settled action; the API layer maps it to the error envelope (never swallowed).
   const action = await gateway.cancelAction(actionId, {
-    userId: opts?.userId,
-    sessionId: opts?.sessionId,
+    userId: identity.userId,
+    sessionId: identity.sessionId,
   });
 
   await recordAudit({
@@ -372,12 +552,14 @@ export async function cancelAction(
     status: 'cancelled',
   });
 
-  // Nothing ran, so there is no continuation to narrate and no event to stream.
+  // Nothing ran, so there is no continuation to narrate and no event to stream (a cancel is not an
+  // escalation, so no `mfa_required` event either).
   return {
     ok: true,
     actionId,
     status: 'cancelled',
     tier: action.tier,
+    requiresMfa: action.requiresMfa === true,
     message: '操作已取消。',
     events: [],
   };
