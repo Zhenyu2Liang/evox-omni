@@ -18,7 +18,9 @@ runs them all — no scoped config is required for any of them.
 
 - `security/` (15 specs) — `permission-engine`, `risk-engine`, `risk-engine-rerisk`, `gateway`,
   `gateway-audit-trail`, `authorize-hardening`, `authorize-concurrency`, `injection-guard`,
-  `circuit-breaker`, `circuit-breaker-audit`, `circuit-breaker-reset`, `mfa`, `mfa-audit`.
+  `circuit-breaker`, `circuit-breaker-audit`, `circuit-breaker-reset`, `mfa`, `mfa-audit`,
+  `risk-engine-dedup` (pure, DB-free: dedups the in-flight transfer total via `computeInFlightTransferTotal`,
+  excluding parked transfers whose ledger `Transaction` row already exists), `transfer-limits-concurrency`.
   `authorize-concurrency` proves the concurrent-confirm exactly-once claim **and** execution-time
   re-risk of a stale parked transfer end-to-end through the REAL `@/agent` `confirmAction`/
   `verifyAction` façade (needs a persisted session).
