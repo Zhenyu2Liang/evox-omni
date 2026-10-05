@@ -231,8 +231,8 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
 - `./Composer.tsx` → input + send
 - `./ToolEventList.tsx` → tool/task status timeline (no chain-of-thought)
 - `./StreamingText.tsx` → incremental assistant text
-- `./useAgentStream.ts` → the event→state hook (chat state machine) + refresh recovery
-- `./actions.ts` → typed client fetch helpers + `ChatEndpoints`/`DEFAULT_ENDPOINTS`/`fetchTaskPlan`
+- `./useAgentStream.ts` → the event→state hook (chat state machine) + refresh recovery (plan AND pending action) + plan control + MFA attempt counter
+- `./actions.ts` → typed client fetch helpers + `ChatEndpoints`/`DEFAULT_ENDPOINTS`/`fetchTaskPlan`/`controlTask`/`fetchPendingActions`
 - `./cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher
 - `./index.ts` → re-exports the chat surface + action helpers
 - `../../ui/` → primitives used here (dependency — read-only)
