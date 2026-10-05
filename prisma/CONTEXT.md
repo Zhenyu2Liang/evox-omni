@@ -62,6 +62,26 @@ Prisma models (see `schema.prisma` for exact fields):
 - SQLite has no native enums — every enum-like/status field is a `String` (allowed values documented at
   the top of `schema.prisma`). JSON-ish payloads are JSON text in `String` columns.
 
+## Concurrency & Idempotency (schema-level)
+
+All new fields below are **optional/nullable**, so existing rows and tests keep working and the
+`prisma db push` workflow is unchanged (no migration file).
+
+- **Exactly-once execution claims** — `AgentTask.executionToken`/`executionClaimedAt` claim the PLAN
+  executor (so two concurrent resume/retry calls cannot both run a plan);
+  `AgentTaskNode.executionToken`/`executionClaimedAt` claim a single node's side effect (so concurrent
+  executors cannot double-execute a node). The winning executor sets a unique token; a concurrent
+  executor that cannot claim it must NOT run. `NULL` = unclaimed.
+- **Plan-replay keys** — `Budget.idempotencyKey` and `ScheduledTask.idempotencyKey` are `@unique`; the
+  value is `<planId>:<nodeId>`, so a REPLAYED plan node replays its existing reservation/scheduled task
+  instead of duplicating it. SQLite allows multiple `NULL`s in a UNIQUE index, so rows created outside
+  the planner (and all pre-existing rows) are unaffected.
+- **Plan-level revocation** — `PendingAction.taskId`/`nodeId` (nullable) persist the owning plan
+  (`AgentTask.id`) + node (`AgentTaskNode.nodeId`) at CREATION, so a plan-level cancel can revoke EVERY
+  associated operation even when the node's `output` JSON was never written / was overwritten.
+- **Indexes** — added `PendingAction @@index([taskId])` and `AgentTaskNode @@index([taskId, nodeId])`
+  (the latter also supports the exactly-once node claim lookups) alongside the existing indexes.
+
 ## Constraints
 
 - Keep `schema.prisma` in sync with `lib/contracts/` (risk levels, audit status, permission tiers);
