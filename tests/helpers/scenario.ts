@@ -474,8 +474,8 @@ async function decideAndContinue(
   const sessionId = agent.sessionId ?? 'sess';
   const auth =
     mfaCode === undefined
-      ? await gateway.authorizeAction(actionId)
-      : await gateway.authorizeAction(actionId, { mfaCode });
+      ? await gateway.authorizeAction(actionId, { userId: DEMO_USER_ID, sessionId })
+      : await gateway.authorizeAction(actionId, { userId: DEMO_USER_ID, sessionId, mfaCode });
 
   // A non-ok authorization (awaiting MFA / locked) is a domain outcome, not an error: return the
   // gateway's safe message and execute NOTHING.
@@ -495,10 +495,10 @@ async function decideAndContinue(
     sessionId: action.sessionId,
     userRequest: '',
     toolName: action.toolName,
-    riskLevel: action.tier,
+    riskLevel: auth.tier,
     confirmationRequired: true,
     confirmed: true,
-    mfaRequired: action.requiresMfa,
+    mfaRequired: auth.requiresMfa,
     mfaResult: auth.mfaResult,
     toolResult: result,
     status: result.ok ? 'success' : 'failed',
@@ -547,7 +547,7 @@ export async function cancelAction(agent: Agent, actionId: string): Promise<Scen
   const sessionId = agent.sessionId ?? 'sess';
 
   // `cancelAction` throws `AppError('NOT_FOUND'|'CONFLICT')` for an unknown/settled action.
-  const action = await gateway.cancelAction(actionId);
+  const action = await gateway.cancelAction(actionId, { userId: DEMO_USER_ID, sessionId });
 
   await recordAudit({
     timestamp: Date.now(),
