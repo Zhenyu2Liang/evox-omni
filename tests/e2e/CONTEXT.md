@@ -87,7 +87,18 @@ One line per journey; the process exits non-zero when any journey FAILs.
   `export * from './ChatWindow'`); the star re-export across the client boundary does not yield a
   usable RSC client reference at SSR. Until this is fixed, all five journeys honestly FAIL (exit 1).
   Likely fix (owner: `app/` + `components/`): import `ChatWindow` from a client module directly
-  (e.g. `@/components/chat`), or make `components/index.ts` re-export explicitly / mark it `'use client'`.
+  (e.g. `@/components/chat`), or drop `'use client'` from `components/chat/index.ts` / re-export explicitly.
+- **The 500 is CONFINED to `/agent`** (verified by booting the real dev server on a free port and probing
+  every route): `/`, `/bills`, `/cards`, `/subscriptions`, `/audit`, `/security` all return **200**; only
+  `/agent` returns 500. `/bills` imports the CLIENT chart components (`SpendingPie`/`SpendingBar`/
+  `SpendingTrend`/`MiniSparkline`) through the NEUTRAL `@/components` barrel and renders fine — so
+  "a client component re-exported through the neutral barrel is undefined at SSR" is REFUTED as a general cause.
+- **Distinguishing factor = the intermediate barrel's `'use client'`:** among the top-level `export *`
+  sources in `components/index.ts`, ONLY `./chat` is itself `'use client'`, and only `/agent` fails.
+  `/agent`'s `ChatWindow` flows neutral `@/components` → `export * from './chat'` → `'use client'` barrel →
+  `export * from './ChatWindow'`; `/bills`'s charts flow neutral `@/components` →
+  `components/charts/index.ts` (NOT `'use client'`) → `export * from './SpendingPie'`. Star re-export
+  ACROSS a `'use client'` intermediate barrel does not yield a usable RSC client reference; a neutral one does.
 - **`c-plan-pause-resume` honest limitation:** resuming a plan whose gated node is still parked
   re-attempts that node (parked is NOT terminal), so the plan RE-parks at `等待确认` instead of reaching
   `已完成`. The journey reports whichever badge is actually observed and NEVER fabricates `已完成`.
