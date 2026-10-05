@@ -55,6 +55,11 @@ flowchart TD
 依赖方向严格单向向下：`lib` ← `banking-sdk` ← `agent`/`planner`/`audit`；`security` 依赖 `lib`
 （+ 注入端口）；`app`/`components` 依赖下面的一切。**无跨模块循环依赖。**
 
+> **构建前置（Build prerequisite）**：`next build`（Next ^15.1.6）会**静态预渲染**依赖数据库的页面
+> （`/`、`/cards`、`/subscriptions` 在模块作用域导入 `@/banking-sdk`），因此必须在构建**之前**先推送并
+> 填充数据库：`npx prisma generate && npx prisma db push && npm run db:seed`，然后 `npm run build`。
+> 按请求动态渲染的页面是 agent / audit / security / bills；`app/api/**` 处理器全部为动态。
+
 ---
 
 ## 3. 空间维度 · Context Tree 目录布局
@@ -258,14 +263,21 @@ sequenceDiagram
   当日转账累计并**重跑**风险评定（`security/security-gateway.ts` → `authorizeTransfer`）。再风控所用的累计值
   **包含在途**（已确认但尚未落账）的转账动作：`security/risk-engine.ts` 的
   `computeEffectiveTransferTotalWith` = 当日**已执行**转账合计 + `computeInFlightTransferTotal`（对状态
-  ∈ `['confirmed','executing']` 的停放 `transfer_money` 动作求和），从而封死「先停放多笔小额转账绕过限额」
+  ∈ `['confirmed','executing']` 且**其账本行尚不存在**的停放 `transfer_money` 动作求和）。账本行由确定性幂等
+  id `idempotentTransferTxId(userId, action.id)`（`lib/ledger.ts`）标识，一笔**已落账但尚未终态**的转账恒被
+  计入**恰好一次**，绝不被「在途」半边重复计，从而封死「先停放多笔小额转账绕过限额」
   的路径。若执行时再风控升级为 🔴 RED，事务内**回滚主张**并持久化 `riskLevel='RED'`、`requiresMfa=true`、
   `status='awaiting_mfa'`，随后下发 MFA（持久化审计用 `LIMIT_EXCEEDED`）。**诚实说明**：主张优先写依赖
   **SQLite 写锁串行化**（SQLite 专属；跨独立数据库引擎 / 多写入者未经验证——演示运行在本地 SQLite 上）。
-- **身份（Identity，cookie-only）**：身份**仅**来自 `banking_session` HttpOnly cookie（由
+- **身份（Identity，cookie-only）**：写端点（actions confirm/verify/cancel、tasks `[id]`、security reset）
+  与读端点的身份**仅**来自 `banking_session` HttpOnly cookie（由
   `app/api/_lib/session.ts#requireIdentity` 解析）；`?userId=` / `?sessionId=` 查询参数被**忽略**；
-  cookie 缺失或对应未知会话 → **403**。待处理动作 / 任务的归属被强制（非本人 → 403，未知 id → 404）。
-  `POST /api/chat` 是**创建会话**的路由（从 body 读取 sessionId、签发 cookie），因此不受身份门控。
+  cookie 缺失或对应未知会话 → **403 SECURITY_DENIED**。待处理动作 / 任务的归属被强制（非本人 → 403，未知 id → 404）。
+  会话创建路由 `POST /api/chat`（`app/api/chat/route.ts`）的身份规则见下一条。
+- **会话身份不可由请求体伪造**：`POST /api/chat` 的会话**只**取自 cookie（`resolveSessionId`），**绝不**取自
+  请求体。当 body `sessionId` 与 cookie 值**不一致**时（**包括完全没有 cookie** 的情形）→ **HTTP 409
+  CONFLICT** 且**不签发任何 Set-Cookie**；body 与 cookie 相等则接受。首次访问 → 新建会话并 `Set-Cookie`。
+  因此请求体永远无法选择或铸造一个会话（也就无法用他人会话 id 换取一张授权 cookie）。
 - **有效层级端到端可见**：确认 / 验证响应同时返回有效 `tier` 与 `requiresMfa`，并发出 `mfa_required` 事件
   （回合时来自 `agent/run-turn.ts`，附带 hint + 卡片；确认时来自 `agent/confirmation.ts#blockedOutcome`）。
 
@@ -297,12 +309,24 @@ sequenceDiagram
 - **能力面即安全边界**：工具注册表就是完整能力集；没有 shell/SQL/文件工具，注入攻击无工具可调。
 - **两阶段 + 人工决策**：资金移动永远由人工确认触发；网关授权、agent 执行，职责分离。
 - **原子主张 + 执行时再风控**：确认在一个 `prisma.$transaction` 内把主张（compare-and-set）与再风控一并完成，
-  再风控累计**包含在途转账**；升级则回滚主张并转 MFA。依赖 SQLite 写锁串行化（演示运行在本地 SQLite）。
+  再风控累计**包含在途转账**（`computeInFlightTransferTotal` 只计入**账本行尚不存在**的动作）；账本行由确定性
+  幂等 id `idempotentTransferTxId(userId, action.id)` 标识并去重，一笔**已落账但未终态**的转账恒被计**恰好一次**。
+  升级则回滚主张并转 MFA。依赖 SQLite 写锁串行化（演示运行在本地 SQLite）。
 - **Cookie-only 身份与归属强制**：身份仅来自 HttpOnly `banking_session` cookie（查询参数被忽略，
-  缺失 / 未知 → 403）；动作 / 任务归属强制（非本人 403 / 未知 404）；**没有 demo-user 回退**——
+  缺失 / 未知 → 403）；`POST /api/chat` 会话只取自 cookie，body `sessionId` 与 cookie 不一致（含无 cookie）
+  → `409 CONFLICT` 且不签发 Set-Cookie；动作 / 任务归属强制（非本人 403 / 未知 404）；**没有 demo-user 回退**——
   仅有 actionId 不构成能力。
-- **DAG 持久化控制**：pause / resume / cancel / retry 由持久化 `AgentTask` 行驱动；cancel 撤销停放动作、
-  保留已执行工作、**无虚假回滚**；刷新后可从 API 恢复计划与待确认入口。
+- **取消与授权的竞态**：取消计划先原子撤销其停放动作，并在每次运行后**后置清扫**（`sweepCancelledPlan`）撤销
+  运行期间新铸的动作；取消与确认的竞态由共享的 `PendingAction` CAS 保证**至多一次**（取消后的确认不再执行）；
+  已完成转账原样保留——**无虚假回滚**。
+- **并发恢复 / 重试的恰好一次**：计划状态用 DB 原子 CAS 主张（`claimTaskStatus`），节点副作用再由**单飞**
+  （`executeGatedTool` 的 `inFlightExecutions`）去重，转账额外用幂等键——同一动作绝不重复执行。
+- **暂停保持（pause retention）**：在已暂停计划内确认一个停放节点只记录该节点结果，计划保持 `paused`，
+  直到显式 resume 才继续。
+- **终态保护**：已取消的计划无法经 resume / retry / pause 离开终态；API 响应与 DB 一致（CAS 的 from 集合
+  排除终态，`persistPlan` 绝不覆盖 `cancelled`）。
+- **DAG 持久化控制**：pause / resume / cancel / retry 由持久化 `AgentTask` 行驱动（状态即真相，跨请求生效）；
+  刷新后可从 API 恢复计划与待确认入口。
 - **演示时钟（Demo Clock）**：`DEMO_NOW = 2026-09-25 12:00 本地`，让本月/上月/今日窗口、消费分析、
   日转账窗口、计划任务日期与 system prompt 的「今天」保持一致，不受真实系统时钟影响。
 - **离线确定性**：`LLM_MODE=mock`（faux provider）+ 可注入的 `now` / `id`，让 agent/security/planner
