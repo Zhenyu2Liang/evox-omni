@@ -199,15 +199,20 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
 - **No MFA code** is displayed anywhere; `MfaCard` (in `./cards`) shows only the hint.
 - No `prisma`; data via props + `fetch` to `./app`. Money/status visuals via `../../ui`.
 - `actions.ts` helpers **never throw** — every failure (network / parse / non-OK / domain `ok:false`)
-  folds into a safe `{ type: 'error', message }` `AgentStreamEvent` (or, for `fetchTaskPlan`,
-  `undefined`), so the UI never sees a raw exception.
+  folds into a safe `{ type: 'error', message }` `AgentStreamEvent`; the best-effort reads
+  (`fetchTaskPlan`, `controlTask`, `fetchPendingActions`) instead resolve to `undefined` / `[]`,
+  so the UI never sees a raw exception.
 - Named exports only; files ≲ ~1000 lines, one concern per file.
-- `ChatWindow` builds the `CardActionHandlers` bundle with `actionId`/`onConfirm`/`onVerify`/`onCancel`/`busy`/`error`
-  **plus** the anomaly handlers `onAcknowledge`/`onViewDetail`/`onFreeze`. Those three are
+- `ChatWindow` builds the `CardActionHandlers` bundle with `actionId`/`onConfirm`/`onVerify`/`onCancel`
+  /`onTaskControl`/`mfaAttempts`/`busy`/`error` **plus** the anomaly handlers
+  `onAcknowledge`/`onViewDetail`/`onFreeze`. `onTaskControl` is `stream.controlTask`; the anomaly three are
   fire-and-forget `stream.send(...)` calls (「这笔交易是我本人消费」/「我想查看这笔交易的详情」/「冻结我的银行卡」),
   so every anomaly button flows chat → agent → Security Gateway as an ordinary user message — the browser
   never calls a banking op directly (the freeze button drives `freeze_card`, which the gateway routes YELLOW
   → user confirmation).
+- `ChatWindow` renders the live plan with control wiring (`<PlanCard plan={stream.activePlan}
+  onControl={action.onTaskControl} busy={stream.busy} />`) and, while `stream.restoring` with nothing
+  else to show, a `Spinner` + loading label **instead of** the empty state.
 
 ## Test Strategy
 
