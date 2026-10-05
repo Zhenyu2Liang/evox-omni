@@ -46,7 +46,6 @@ import { MFA_CODE } from '@/lib/constants';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
 import type { TaskPlan } from '@/lib/contracts/task';
 import { createTask, createTaskNode, updateTaskNode } from '@/lib/db/repositories/task';
-import { newId } from '@/lib/ids';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import {
@@ -425,7 +424,6 @@ describe('GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', 
     // "帮我计划一下…" is the mock `submit_plan` trigger; the balance branch emits a GREEN DAG
     // (`get_balance` → `note`) — never a gated node (see the honest-split header).
     const chat = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
-      sessionId: newId('sess'),
       message: '帮我计划一下查询余额',
     });
     expect(chat.status).toBe(200);

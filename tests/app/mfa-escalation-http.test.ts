@@ -31,7 +31,6 @@ import type { ActionResponse } from '@/app/api/_lib/types';
 import { banking } from '@/banking-sdk';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
 import { DAILY_TRANSFER_LIMIT, MFA_CODE } from '@/lib/constants';
-import { newId } from '@/lib/ids';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { actionUrl, chatUrl, idCtx, postJson, type HttpResult } from './harness';
@@ -92,7 +91,6 @@ function mfaOf(events: readonly AgentStreamEvent[]): MfaEvent | undefined {
 /** Drive one JSON-mode chat turn against the real route (fresh session id). */
 async function chatTurn(message: string): Promise<ChatTurnResponse> {
   const res = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
-    sessionId: newId('sess'),
     message,
   });
   expect(res.status).toBe(200);

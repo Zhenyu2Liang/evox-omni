@@ -41,7 +41,6 @@ import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import { DAILY_TRANSFER_LIMIT, MFA_CODE, MFA_MAX_ATTEMPTS } from '@/lib/constants';
 import { listTasksBySession } from '@/lib/db/repositories/task';
-import { newId } from '@/lib/ids';
 import { security } from '@/security';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
@@ -120,10 +119,12 @@ function mfaOf(events: readonly AgentStreamEvent[]): MfaEvent | undefined {
  * the circuit breaker is keyed by it).
  */
 async function chatTurn(message: string, sessionId?: string): Promise<ChatTurnResponse> {
-  const res = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
-    sessionId: sessionId ?? newId('sess'),
-    message,
-  });
+  const res = await postJson<Envelope<ChatTurnResponse>>(
+    chatPost,
+    chatUrl({ stream: 0 }),
+    { message },
+    sessionId === undefined ? {} : { sessionId },
+  );
   expect(res.status).toBe(200);
   return payload(res);
 }
