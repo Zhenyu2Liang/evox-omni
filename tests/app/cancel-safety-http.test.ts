@@ -42,6 +42,7 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
+import { POST as cancelPost } from '@/app/api/actions/[id]/cancel/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
@@ -53,7 +54,7 @@ import { safeParse } from '@/lib/json';
 import { security } from '@/security';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
-import { actionUrl, idCtx, postJson, taskUrl, type HttpResult } from './harness';
+import { actionUrl, idCtx, postJson, taskUrl, type HttpResult, type RouteHandler } from './harness';
 
 /* ------------------------------------------------------------------------------- fixtures */
 
@@ -300,5 +301,314 @@ describe('[integration] plan cancel safety — WINDOW (a): the parked action exi
     expect(await zhangweiTransfers()).toHaveLength(0);
     expect(await checkingBalance()).toBe(SEEDED_BALANCE);
     expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+  });
+});
+
+/* ------------------------------------------------------------------------------------------- */
+/* WINDOW (b) — "cancel vs confirm concurrency on the SAME parked action"                        */
+/* ------------------------------------------------------------------------------------------- */
+/**
+ * WINDOW (a) above races a PLAN-level cancel against the park itself. This window races the two
+ * HUMAN decisions on the SAME already-parked action: a real `POST /api/actions/[id]/cancel` and a
+ * real `POST /api/actions/[id]/confirm`, both aimed at ONE `PendingAction`.
+ *
+ * The gateway's exactly-once CAS claim makes this a zero-or-one question:
+ *   - the action settles in EXACTLY ONE terminal status (`executed` XOR `cancelled`);
+ *   - the ¥200 may move EXACTLY ZERO or ONE time — never twice, never partially;
+ *   - EXACTLY ONE `AuditLog` row is written, for the ONE decision that actually took effect, and it
+ *     is CONSISTENT with that decision (`success`/`confirmed:true` vs `cancelled`/`confirmed:false`);
+ *   - the loser is REFUSED (a `409 CONFLICT` error envelope OR a `200` domain `ok:false`) — never a
+ *     second success;
+ *   - a confirm that WON is never rolled back by a later cancel: the ledger row and the balance
+ *     decrement are truthful history.
+ *
+ * OVERLAP IS FORCED, NOT HOPED FOR: `makeBarrier(2)` is a controlled rendezvous placed at the ROUTE
+ * BOUNDARY (`gated(handler, barrier)`), so neither decision may enter the logic until BOTH have
+ * arrived — the compare-and-set is genuinely exercised instead of one request finishing before the
+ * other starts. The barrier is bounded (a lone caller is released after a timeout) so a regression
+ * can never HANG the suite, and the fallback is asserted ABSENT (`timedOut() === false`) so a broken
+ * overlap fails LOUDLY instead of silently degrading into a sequential run.
+ *
+ * Offline & deterministic (mock model, isolated test SQLite, no fake timers); a UNIQUE persisted
+ * session per test isolates the in-process circuit breaker.
+ */
+
+/** How long a rendezvous waits for its missing arrival before falling back (guards against a HANG). */
+const BARRIER_TIMEOUT_MS = 3000;
+
+/**
+ * A CONTROLLED request rendezvous: `expected` callers must arrive before EITHER proceeds past
+ * `wait()`. The bounded timeout releases a lone caller (so a regression can never hang the suite)
+ * and the fallback is OBSERVABLE through `timedOut()` — every spec asserts it stayed `false`.
+ */
+function makeBarrier(expected: number) {
+  let arrived = 0;
+  let timedOut = false;
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  return {
+    wait: async (): Promise<void> => {
+      arrived += 1;
+      if (arrived >= expected) {
+        releaseGate();
+        return;
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const fallback = new Promise<void>((resolve) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          resolve();
+        }, BARRIER_TIMEOUT_MS);
+      });
+      try {
+        await Promise.race([gate, fallback]);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    },
+    arrived: (): number => arrived,
+    timedOut: (): boolean => timedOut,
+  };
+}
+
+/** Wrap a REAL route handler so it only enters the decision logic once the rendezvous has released. */
+function gated(handler: RouteHandler, barrier: { wait: () => Promise<void> }): RouteHandler {
+  return async (req, ctx) => {
+    await barrier.wait();
+    return handler(req, ctx);
+  };
+}
+
+/* --------------------------------------------------------------------- WINDOW (b) park seeding */
+
+/** The settled park this window races on: its owning session, its owning task and the action id. */
+interface ParkedAction {
+  sessionId: string;
+  taskId: string;
+  actionId: string;
+}
+
+/**
+ * The gateway-authorized per-node runner used to SEED a settled park.
+ *
+ * A gated node is BLOCKED by the REAL gate (`executeGatedTool`) and its `PendingAction` persisted —
+ * with its plan link, because `ctx.taskId`/`ctx.nodeId` are forwarded — instead of executing.
+ */
+function gatewayRunTool(sessionId: string, userRequest: string): PlanRunTool {
+  return (toolName, args, ctx) =>
+    executeGatedTool({
+      sessionId,
+      userId: DEMO_USER_ID,
+      toolName,
+      args,
+      userRequest,
+      taskId: ctx.taskId,
+      nodeId: ctx.nodeId,
+    });
+}
+
+/**
+ * Seed a FULLY-SETTLED park through the PRODUCTION planner: `runSubmitPlan` mints the durable
+ * `AgentTask`/`AgentTaskNode` rows and the gated ¥200 `transfer_money` node PARKS (one real
+ * `PendingAction`, `status:'pending'`, owned by a fresh session). No barrier here — the run finishes,
+ * so the race below starts from a settled, fully-linked park.
+ */
+async function seedParkedAction(): Promise<ParkedAction> {
+  const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  const result = await runSubmitPlan(
+    DEMO_USER_ID,
+    { goal: TRANSFER_REQUEST, nodes: [transferNode] },
+    { sessionId, runTool: gatewayRunTool(sessionId, TRANSFER_REQUEST) },
+  );
+  const plan = result.data as TaskPlan | undefined;
+  expect(plan, `runSubmitPlan produced no plan: ${result.error}`).toBeDefined();
+  const nodeRow = await getTestPrisma().agentTaskNode.findFirstOrThrow({
+    where: { taskId: plan!.id, nodeId: NODE_ID },
+  });
+  const actionId = readPendingActionId(safeParse(nodeRow.output, undefined));
+  expect(actionId, 'the gated ¥200 transfer must PARK (persist a PendingAction)').toBeDefined();
+  return { sessionId, taskId: plan!.id, actionId: actionId as string };
+}
+
+/* ---------------------------------------------------------------- WINDOW (b) response readers */
+
+/** Invoke the REAL cancel handler (`POST /api/actions/[id]/cancel`) for the parked action. */
+function cancelActionHttp(
+  id: string,
+  sessionId: string,
+): Promise<HttpResult<Envelope<ActionResponse>>> {
+  return postJson<Envelope<ActionResponse>>(cancelPost, actionUrl(id, 'cancel'), {}, {
+    ctx: idCtx(id),
+    sessionId,
+  });
+}
+
+/** Did this decision actually TAKE EFFECT? (`200` + domain `ok:true` + a terminal status.) */
+function isSettled(res: HttpResult<Envelope<ActionResponse>>): boolean {
+  return (
+    res.status === 200 &&
+    res.data?.ok === true &&
+    res.data.data?.ok === true &&
+    (res.data.data.status === 'executed' || res.data.data.status === 'cancelled')
+  );
+}
+
+/**
+ * Was this decision REFUSED? Accepts BOTH refusal transports: a `409 CONFLICT` error envelope (the
+ * losing CAS propagated as an `AppError`) and a `200` success envelope carrying a domain `ok:false`
+ * (the conflict surfaced as an outcome). A refusal is NEVER a second success.
+ */
+function isRefused(res: HttpResult<Envelope<ActionResponse>>): boolean {
+  const errorEnvelope = res.status === 409 && res.data?.ok === false;
+  const domainRefusal = res.status === 200 && res.data?.ok === true && res.data.data?.ok === false;
+  return errorEnvelope || domainRefusal;
+}
+
+/* ------------------------------------------------------------ WINDOW (b) cancel vs confirm races */
+
+describe('[integration] cancel vs confirm concurrency on the SAME parked action — WINDOW (b)', () => {
+  it('[integration] a cancel and a confirm racing on one parked action settle it EXACTLY ONCE — one terminal status, at most one ¥200 debit, one consistent audit row', async () => {
+    const { sessionId, taskId, actionId } = await seedParkedAction();
+
+    // Preconditions: the park is fully settled — linked by BOTH the node output and the action row.
+    const parked = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: actionId } });
+    expect(parked.status).toBe('pending');
+    expect(parked.taskId).toBe(taskId);
+    expect(parked.nodeId).toBe(NODE_ID);
+    expect(await checkingBalance()).toBe(SEEDED_BALANCE);
+    expect(await zhangweiTransfers()).toHaveLength(0);
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+
+    // --- The CONTROLLED BARRIER: BOTH decisions must be in flight before either proceeds.
+    const barrier = makeBarrier(2);
+    const [cancelRes, confirmRes] = await Promise.all([
+      postJson<Envelope<ActionResponse>>(
+        gated(cancelPost, barrier),
+        actionUrl(actionId, 'cancel'),
+        {},
+        { ctx: idCtx(actionId), sessionId },
+      ),
+      postJson<Envelope<ActionResponse>>(
+        gated(confirmPost, barrier),
+        actionUrl(actionId, 'confirm'),
+        {},
+        { ctx: idCtx(actionId), sessionId },
+      ),
+    ]);
+
+    // The rendezvous really happened — a fallback timeout would flag a broken overlap.
+    expect(barrier.arrived(), 'both decisions must genuinely be in flight').toBe(2);
+    expect(barrier.timedOut(), 'the rendezvous must not have fallen back to a timeout').toBe(false);
+
+    // --- EXACTLY-ONE: one decision took effect, the other was REFUSED (never two successes).
+    const settled = [cancelRes, confirmRes].filter(isSettled);
+    const refused = [cancelRes, confirmRes].filter(isRefused);
+    expect(
+      settled,
+      `exactly ONE concurrent decision may take effect, got cancel=${cancelRes.status} ${JSON.stringify(
+        cancelRes.data,
+      )} confirm=${confirmRes.status} ${JSON.stringify(confirmRes.data)}`,
+    ).toHaveLength(1);
+    expect(refused, 'the race loser must be REFUSED, never a second success').toHaveLength(1);
+
+    // --- The action settles in EXACTLY ONE of the two terminal statuses, matching the winner.
+    const finalRow = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: actionId } });
+    expect(['executed', 'cancelled']).toContain(finalRow.status);
+    const executed = finalRow.status === 'executed';
+    expect(settled[0]!.data!.data!.status).toBe(finalRow.status);
+
+    // --- ZERO or ONE ¥200 debit to 张伟 — never two — with the balance consistent.
+    const transfers = await zhangweiTransfers();
+    if (executed) {
+      expect(transfers, 'the winning confirm must debit 张伟 EXACTLY once').toHaveLength(1);
+      expect(transfers[0]!.amount).toBe(-TRANSFER_AMOUNT);
+      expect(transfers[0]!.direction).toBe('DEBIT');
+      expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+    } else {
+      expect(transfers, 'a winning cancel must move NO money').toHaveLength(0);
+      expect(await checkingBalance()).toBe(SEEDED_BALANCE);
+    }
+
+    // --- The day total agrees with the winner (¥0 cancelled / ¥200 executed).
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(
+      executed ? TRANSFER_AMOUNT : 0,
+    );
+
+    // --- EXACTLY ONE audit row — the ONE decision that took effect (the loser audits nothing).
+    const audits = await getTestPrisma().auditLog.findMany({ where: { sessionId } });
+    expect(audits, 'exactly one decision took effect ⇒ exactly one audit row').toHaveLength(1);
+    expect(audits[0]!.toolName).toBe('transfer_money');
+    expect(audits[0]!.confirmed).toBe(executed);
+    expect(audits[0]!.status).toBe(executed ? 'success' : 'cancelled');
+  });
+
+  it('[integration] cancel-then-confirm: the cancel wins and the late confirm is REFUSED, moving NO money', async () => {
+    const { sessionId, actionId } = await seedParkedAction();
+
+    // (1) The cancel lands FIRST and wins the exactly-once claim.
+    const cancelled = await cancelActionHttp(actionId, sessionId);
+    const cancelledBody = payload(cancelled);
+    expect(cancelledBody.status).toBe('cancelled');
+    expect(cancelledBody.ok).toBe(true);
+    expect(isSettled(cancelled)).toBe(true);
+
+    // (2) The late confirm is REFUSED — a `409 CONFLICT` or a domain `ok:false`, never a success.
+    const confirmed = await confirmHttp(actionId, sessionId);
+    expect(
+      isRefused(confirmed),
+      `a confirm after a cancel must be refused, got ${confirmed.status} ${JSON.stringify(confirmed.data)}`,
+    ).toBe(true);
+    expect(isSettled(confirmed)).toBe(false);
+
+    // (3) STRICT no-movement: no 张伟 debit, the balance is untouched, the day total is still ¥0.
+    expect(await getTestPrisma().transaction.count({ where: { counterpartyId: ZHANGWEI.id } })).toBe(0);
+    expect(await checkingBalance()).toBe(SEEDED_BALANCE);
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+
+    // (4) EXACTLY ONE audit row — the cancelled decision.
+    const audits = await getTestPrisma().auditLog.findMany({ where: { sessionId } });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.status).toBe('cancelled');
+    expect(audits[0]!.confirmed).toBe(false);
+  });
+
+  it('[integration] confirm-then-cancel: the executed transfer is TRUTHFULLY PRESERVED and the late cancel is REFUSED', async () => {
+    const { sessionId, actionId } = await seedParkedAction();
+
+    // (1) The confirm lands FIRST and wins: the ¥200 actually moves.
+    const confirmed = await confirmHttp(actionId, sessionId);
+    const executedBody = payload(confirmed);
+    expect(executedBody.status).toBe('executed');
+    expect(executedBody.ok).toBe(true);
+    expect(isSettled(confirmed)).toBe(true);
+
+    const transfers = await zhangweiTransfers();
+    expect(transfers, 'the winning confirm must debit 张伟 EXACTLY once').toHaveLength(1);
+    expect(transfers[0]!.amount).toBe(-TRANSFER_AMOUNT);
+    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(TRANSFER_AMOUNT);
+
+    // (2) The late cancel is REFUSED — the completed transfer is never rolled back.
+    const cancelled = await cancelActionHttp(actionId, sessionId);
+    expect(
+      isRefused(cancelled),
+      `a cancel after an executed confirm must be refused, got ${cancelled.status} ${JSON.stringify(cancelled.data)}`,
+    ).toBe(true);
+    expect(isSettled(cancelled)).toBe(false);
+
+    // (3) The money stays moved: the ledger row + the balance decrement are durable history.
+    const finalRow = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: actionId } });
+    expect(finalRow.status).toBe('executed');
+    expect(await zhangweiTransfers()).toHaveLength(1);
+    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(TRANSFER_AMOUNT);
+
+    // (4) EXACTLY ONE audit row — the successful decision.
+    const audits = await getTestPrisma().auditLog.findMany({ where: { sessionId } });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.status).toBe('success');
+    expect(audits[0]!.confirmed).toBe(true);
   });
 });
