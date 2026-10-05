@@ -1,0 +1,58 @@
+﻿D:\projects\banking-agent\.genesis\workers\worker_T4_A23\tests\app\actions-http.test.ts:31: import type { ActionResponse } from '@/app/api/_lib/types';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\tests\app\harness.ts:12: * logic and does NOT re-implement the response envelope (building stays in `app/api/_lib/http.ts`).
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\tests\app\harness.ts:15: * load-order coupling. SSE frames follow `sseFrame()` in `@/app/api/_lib/http` (`data: <JSON>\n\n`).
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\tests\app\harness.ts:19: import type { IdRouteContext } from '@/app/api/_lib/types';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\tests\app\plan-parking-http.test.ts:31: import type { ActionResponse } from '@/app/api/_lib/types';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\components\chat\actions.ts:9: * Contract notes (see `@/app/api/_lib/http.ts` + `_lib/types.ts`):
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\actions\[id]\cancel\route.ts:20: import { resolveSessionId, resolveUserId } from '../../../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\actions\[id]\cancel\route.ts:26: const sessionId = resolveSessionId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\actions\[id]\cancel\route.ts:27: const userId = resolveUserId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\actions\[id]\confirm\route.ts:25: import { resolveSessionId, resolveUserId } from '../../../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\actions\[id]\confirm\route.ts:31: const sessionId = resolveSessionId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\actions\[id]\confirm\route.ts:32: const userId = resolveUserId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\actions\[id]\verify\route.ts:25: import { resolveSessionId, resolveUserId } from '../../../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\actions\[id]\verify\route.ts:38: const sessionId = resolveSessionId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\actions\[id]\verify\route.ts:39: const userId = resolveUserId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\bills\route.ts:17: import { resolveUserId } from '../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\bills\route.ts:41: const userId = resolveUserId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\cards\route.ts:16: import { resolveUserId } from '../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\cards\route.ts:29: const userId = resolveUserId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\dashboard\route.ts:13: import { resolveUserId } from '../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\dashboard\route.ts:21: const userId = resolveUserId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\security\reset\route.ts:22: import { resolveSessionId } from '../../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\security\reset\route.ts:45: const sessionId = query.sessionId ?? resolveSessionId(req) ?? '';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\security\route.ts:23: import { resolveSessionId } from '../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\security\route.ts:45: const sessionId = query.sessionId ?? resolveSessionId(req) ?? '';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\subscriptions\route.ts:17: import { resolveUserId } from '../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\subscriptions\route.ts:30: const userId = resolveUserId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\tasks\[id]\route.ts:24: import { resolveSessionId } from '../../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\tasks\[id]\route.ts:50: const sessionId = resolveSessionId(req);
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\tasks\route.ts:19: import { resolveSessionId } from '../_lib/session';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\tasks\route.ts:34: const sessionId = query.sessionId ?? resolveSessionId(req) ?? '';
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\_lib\agent-bridge.ts:2: * app/api/_lib/agent-bridge.ts — the ONE module that knows about the agent's control/ownership API.
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\_lib\http.ts:2: * app/api/_lib/http.ts — shared handler plumbing for every API route.
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\_lib\schemas.ts:2: * app/api/_lib/schemas.ts — zod schemas shared across route handlers.
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\_lib\session.ts:2: * app/api/_lib/session.ts — resolves the demo user and agent session for a request.
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\_lib\session.ts:17: export function resolveUserId(req?: NextRequest): string {
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\_lib\session.ts:26: export function resolveSessionId(req?: NextRequest): string | undefined {
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\_lib\task-plans.ts:2: * app/api/_lib/task-plans.ts — read-side mapping from persisted `AgentTask` rows to the frozen
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\app\api\_lib\types.ts:2: * app/api/_lib/types.ts — app-layer transport types shared by every route handler.
+D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:134: * read-side mapping in `app/api/_lib/task-plans.ts` (`./app` is not writable here) so `getTaskPlan`
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:14: * 2. NODE-OUTPUT JSON SHAPE. A parked (gated) node records the human decision it is waiting on INSIDE
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:15: *    `AgentTaskNode.output` as `{ pendingActionId: string }` (`TaskNodeOutput` below) — there is no
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:16: *    `pendingActionId` column on `AgentTaskNode`, and `TaskNodeResult` has no such field. The planner
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:17: *    already writes this shape; `readPendingActionId` is the single reader, and
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:18: *    `findTaskByPendingAction` is the single reverse lookup (pendingActionId → owning task/node).
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:47: * The JSON payload a parked (gated) node stores in `AgentTaskNode.output`.
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:49: * `pendingActionId` is present iff the node is `waiting_confirmation`/`waiting_verification` and the
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:51: * its owning plan node — there is no `pendingActionId` column.
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:53: export interface TaskNodeOutput {
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:54: pendingActionId?: string;
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:57: /** Read `pendingActionId` out of a (decoded) `AgentTaskNode.output`; `undefined` when absent. */
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:58: export function readPendingActionId(output: unknown): string | undefined {
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:59: if (output === null || typeof output !== 'object') return undefined;
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:60: const candidate = (output as { pendingActionId?: unknown }).pendingActionId;
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:125: output: safeParse(node.output, undefined),
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:165: output: node.output ?? null,
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:276: * node's `output` (see `TaskNodeOutput` — there is no `pendingActionId` column).
+TC D:\projects\banking-agent\.genesis\workers\worker_T4_A23\agent\task-control.ts:287: if (readPendingActionId(safeParse(node.output, undefined)) === actionId) {
