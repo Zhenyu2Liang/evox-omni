@@ -28,12 +28,15 @@ export interface UseAgentStreamResult {
   pendingAction?: PendingHumanDecision;              // { kind, summary, actionId, hint? }
   streamingText: string;
   busy: boolean;
+  restoring: boolean;                                // true while the mount-time pending-actions read is in flight
+  mfaAttempts: number;                               // failed MFA attempts for the ACTIVE decision (0 when none)
   error?: string;
   applyEvents(events: AgentStreamEvent[]): void;     // fold a batch (used by actions + SSE)
   send(text: string): Promise<void>;                 // POST /api/chat, fold response
   confirm(actionId: string): Promise<void>;          // POST /api/actions/:id/confirm
   verify(actionId: string, code: string): Promise<void>; // POST .../verify
   cancel(actionId: string): Promise<void>;           // POST .../cancel
+  controlTask(action: TaskControlAction, planId?: string): Promise<void>; // POST /api/tasks/:id { action }
 }
 export interface UseAgentStreamOptions { sessionId?: string; endpoints?: ChatEndpoints;
   initialMessages?: ChatMessage[]; taskId?: string; }   // taskId → refresh recovery on mount
