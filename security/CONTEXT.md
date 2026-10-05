@@ -226,7 +226,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   node wires it, a tripped session stays locked for the process lifetime (`recordSuccess` clears the counter
   but explicitly does NOT unlock).
 - **Ownership enforcement is OPT-IN (the `actionId` is itself the capability when opts are omitted).**
-  The gateway supports `authorizeAction(id, { userId, sessionId })`, `cancelAction(id, { userId, sessionId })`
+  `authorizeAction`/`cancelAction` reject a MISMATCHING `opts.userId`/`opts.sessionId` with `SECURITY_DENIED`, but only
   and `recordActionResult(id, 'executed'|'failed')`, but `agent/confirmation.ts` still calls the old signatures
   (no ownership) and never records the true terminal status. Until it calls `recordActionResult` after the SDK
   execution, an executed action stays `confirmed` — protected only by the exactly-once claim (a repeat confirm
