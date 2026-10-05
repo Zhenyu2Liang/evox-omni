@@ -37,7 +37,7 @@ Prisma models (see `schema.prisma` for exact fields):
 
 - Anchored to the demo clock: **DEMO_NOW = 2026-09-25 12:00 local** (September 2026 = "current month",
   August 2026 = "last month" for 环比/trend). Every date is built from LOCAL `new Date(...)` components;
-  `seed.ts` deliberately does **NOT** import `lib/date` (unimplemented) and never calls `Date.now()`.
+  `seed.ts` deliberately does **NOT** import `lib/date` and never calls `Date.now()`.
 - Reuses the **canonical stable ids** from `tests/helpers/fixtures.ts` (`user_liming`,
   `acct_checking`/`acct_savings`, `contact_zhangwei/wangfang/mama/lihua`, `prod_wenjiana/b/jinrong`,
   `tx_anomaly_apple`) so the app, tests and seed agree.
