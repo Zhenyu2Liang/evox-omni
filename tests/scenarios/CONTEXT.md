@@ -30,6 +30,18 @@ remains). Each drives the real gateway/SDK/DB pipeline through the shared harnes
 | 11 | `test-11-conditional-dag.test.ts` | 若本月娱乐>2000则调限额1500 | `submit_plan` DAG: analysis → condition → gated `set_card_limit` |
 | 12 | `test-12-birthday-plan.test.ts` | 爱人11月20日生日，准备1000预算 | `reserve_budget` (GREEN) + `create_scheduled_task` (YELLOW) plan |
 
+## mock-integration.test.ts — the non-scripted "is the demo usable offline?" guard
+
+`./mock-integration.test.ts` is NOT a scripted scenario: unlike `test-01…test-12` (which script the
+model via `../helpers/faux-agent.ts`), it drives the REAL production pipeline with the REAL mock model
+the running app resolves under `LLM_MODE=mock` (`agent/providers/mock-responder.ts`):
+`@/agent` `runTurn` → `createBankingAgent` → the registered banking tools → the `beforeToolCall`
+gateway → the Banking SDK → the test SQLite, then `confirmAction`/`verifyAction`. A green run means the
+demo actually works when a human types the prompts.
+It carries a GLOBAL REGRESSION GUARD (`expectHealthyTurn`): every turn must yield a NON-EMPTY assistant
+reply and NO `error` event (the empty-queue defect), plus `expectNoLiveModelLeak`. It covers Tests
+1/2/3/5/6.
+
 ## API Surface / harness
 
 Specs use the shared helpers (see `../helpers/CONTEXT.md`): `fauxAgent.buildFauxAgent` +
@@ -60,5 +72,6 @@ Specs register their own DB lifecycle hooks (see Constraints) rather than callin
 ## Routing Table
 
 - `./test-01-balance.test.ts` … `./test-12-birthday-plan.test.ts` → one spec per demo scenario
+- `./mock-integration.test.ts` → the REAL-mock-model (NON-scripted) end-to-end "demo is interactively usable offline" guard (Tests 1/2/3/5/6 + non-empty-reply / no-error global guard)
 - `../helpers` → faux agent + scenario harness + db/fixtures (sibling — this node)
 - `../unit` → the faster pure/logic layer beneath these end-to-end checks (sibling — this node)
