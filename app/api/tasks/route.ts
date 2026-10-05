@@ -1,10 +1,12 @@
 /**
- * GET /api/tasks — list agent task plans for a session.
+ * GET /api/tasks — list agent task plans for the TRUSTED caller session.
  *
  * Contract:
- *  - Query (validated with `taskListQuerySchema`): `{ sessionId?: string; limit?: number }`.
- *  - `sessionId` precedence: `?sessionId=` query → `banking_session` cookie. An empty/unknown
- *    session yields `{ plans: [] }` (200, never an error).
+ *  - Query (validated with `limitQuerySchema`): `{ limit?: number }`. A `?sessionId=` query param is
+ *    IGNORED (identity is never query-trusted).
+ *  - Session: resolved SERVER-SIDE from the `banking_session` cookie (`_lib/session#resolveIdentity`).
+ *    No cookie / unknown session yields `{ plans: [] }` (200, never an error — the chat page has no
+ *    plans to restore until a session exists).
  *  - Reads persisted `AgentTask`/`AgentTaskNode` rows through the sanctioned repository read path
  *    (`@/lib/db/repositories/task`) and maps them to the frozen `TaskPlan` contract (`_lib/task-plans`).
  *    The `@/planner` facade exposes no plan-store reader (see `_lib/task-plans.ts`).
@@ -15,12 +17,12 @@ import { z } from 'zod';
 import { getTask, listTasksBySession } from '@/lib/db/repositories/task';
 import type { TaskPlan } from '@/lib/contracts/task';
 import { errorResponse, jsonResponse, parseQuery } from '../_lib/http';
-import { sessionIdQuerySchema, limitQuerySchema } from '../_lib/schemas';
-import { resolveSessionId } from '../_lib/session';
+import { limitQuerySchema } from '../_lib/schemas';
+import { resolveIdentity } from '../_lib/session';
 import { toTaskPlan } from '../_lib/task-plans';
 
 /** Query schema for `GET /api/tasks`. */
-const taskListQuerySchema = sessionIdQuerySchema.merge(limitQuerySchema);
+const taskListQuerySchema = limitQuerySchema;
 type TaskListQuery = z.infer<typeof taskListQuerySchema>;
 
 /** Success payload shape for `GET /api/tasks`. */
@@ -31,10 +33,10 @@ export interface TaskListData {
 export async function GET(req: NextRequest): Promise<Response> {
   try {
     const query: TaskListQuery = parseQuery(taskListQuerySchema, req);
-    const sessionId = query.sessionId ?? resolveSessionId(req) ?? '';
-    if (!sessionId) return jsonResponse<TaskListData>({ plans: [] });
+    const identity = await resolveIdentity(req);
+    if (!identity) return jsonResponse<TaskListData>({ plans: [] });
 
-    const rows = await listTasksBySession(sessionId);
+    const rows = await listTasksBySession(identity.sessionId);
     const plans: TaskPlan[] = [];
     for (const row of rows) {
       // `listTasksBySession` returns rows only; load nodes per task to build the full plan.
