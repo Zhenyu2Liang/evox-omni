@@ -329,6 +329,7 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
   `Type`, `Static`) are relied on per the verified 0.73.1 facts in root `../CONTEXT.md`; confirm exact
   exported identifiers against the installed packages (see the Pi SDK Reconciliation section above).
 - `system-prompt.ts` may list ONLY the tools actually present in `ToolRegistry` — no phantom capabilities.
+- `ConfirmationOutcome.requiresMfa` is the EFFECTIVE MFA requirement and `tier` is the EFFECTIVE tier (RED whenever `requiresMfa`). `app/api/actions/[id]/confirm|verify/route.ts` should surface `outcome.requiresMfa`; the current `outcome.tier === 'RED'` derivation still agrees because the tier is effective. Owner of `./app` — escalate route edits to the parent.
 - Every card emitted to the UI must originate from a real tool result (or a real security decision) —
   never from model prose. `card-emitter.toCards` is PURE and total (unknown shape ⇒ `error` card).
 - `submit_plan` is meta (not risk-gated): it validates the DAG, then runs it via `planner.runPlan` with
