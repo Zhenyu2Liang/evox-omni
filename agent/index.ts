@@ -41,6 +41,7 @@ export { resolveModel, providerId } from './providers';
 // --- durable DAG persistence + control/resume glue (`./task-control`, `submit_plan` backing) ------
 export {
   createTaskPersistence,
+  defaultPollControls,
   findTaskByPendingAction,
   readPendingActionId,
   resumeTaskForAction,
