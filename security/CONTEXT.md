@@ -225,12 +225,12 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   route/API caller invokes it yet — the security-center unlock button is still not connected. Until an app
   node wires it, a tripped session stays locked for the process lifetime (`recordSuccess` clears the counter
   but explicitly does NOT unlock).
-- **`recordActionResult` / ownership opts are not yet adopted by the agent/app layer.**
-  The gateway supports `authorizeAction(id, { userId, sessionId })`, `cancelAction(id, { userId, sessionId })`
-  and `recordActionResult(id, 'executed'|'failed')`, but `agent/confirmation.ts` still calls the old signatures
-  (no ownership) and never records the true terminal status. Until it calls `recordActionResult` after the SDK
-  execution, an executed action stays `confirmed` — protected only by the exactly-once claim (a repeat confirm
-  still yields `CONFLICT`), but the persisted status never becomes `executed`/`failed`.
+- **Ownership enforcement is OPT-IN (the `actionId` is itself the capability when opts are omitted).**
+  `authorizeAction`/`cancelAction` reject a MISMATCHING `opts.userId`/`opts.sessionId` with `SECURITY_DENIED`, but only
+  when the caller SUPPLIES them (`opts?.userId !== undefined`); an actionId alone authorizes. The app layer DOES forward
+  `{ userId, sessionId }` and DOES call `recordActionResult(id, 'executed'|'failed')` after executing, but the identity is
+  request-derived (`app/api/_lib/session.ts`) with no trusted/signed session token, so the check defends against
+  mis-routing, not against a caller who knows the actionId.
 - **Injection guard does NOT add a system reminder to the model context.**
   The only caller (`agent/run-turn.ts` ~L353-357) emits a UI `security_event` (kind `injection`) after `reportInjection`; nothing is appended to the agent's system prompt/messages, despite the `injection-guard.ts` header saying so.
   Detection, the `INJECTION_ATTEMPT` event, and never-grants-permission all hold (defense-in-depth unaffected).
@@ -242,6 +242,20 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   `recordSecurityEvent` (sibling `audit/`) logs and swallows persistence failures, so an awaited event write can silently fail; the breaker's in-memory `locked` flag remains authoritative.
 - **`HIGH_RISK_BLOCKED` / `LIMIT_EXCEEDED` / `ANOMALY_FLAGGED` event kinds are declared but never written**
   by this node (only `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET` are emitted).
+- **Cumulative-transfer race — the daily ¥1000 limit is re-checked, never atomically RESERVED/executed.**
+  `authorizeAction` re-risks a parked `transfer_money` via `isTransferEscalated` → `risk.reEvaluateTransferRisk(userId, amount)`
+  (`security-gateway.ts:396-402`, `:444`), which calls `computeDailyTransferTotal` (`risk-engine.ts:91-103`) — a plain READ of
+  today's TRANSFER debits — BEFORE any debit is written. Two DISTINCT ¥600 actions confirmed CONCURRENTLY both read the
+  pre-transfer total, both pass YELLOW, and both execute (≈¥1200, no MFA); sequentially the second is caught (fresh total ¥600).
+  Nothing serializes the gate read against the SDK write (`banking-sdk/transfer.ts:114`); the only atomic primitives are
+  `claimPendingAction` (per-actionId CAS) and the per-transfer balance decrement — neither guards the AGGREGATE daily limit.
+  No transfer has an idempotency key / unique constraint.
+- **Execution-time escalation (YELLOW→RED) is not surfaced in the returned tier, events, or audit.**
+  The escalation branch (`security-gateway.ts:454-465`) returns `tier: action.tier` = the STALE persisted YELLOW with `requiresMfa: true`;
+  `AuthorizationResult` (`:59-72`) has NO effective-tier field, and the YELLOW / RED-verify success branches (`:479-488`, `:548-557`)
+  likewise echo `action.tier`. `authorizeAction` computes the true requirement internally as `effectiveRequiresMfa = row.requiresMfa || freshRed`
+  (`:449`) but never returns it. Downstream `agent/confirmation.ts` then returns tier=YELLOW, has no `requiresMfa` field, emits no
+  `mfa_required` event, and writes `audit.mfaRequired = action.requiresMfa` (the row column stays FALSE for a transfer YELLOW at park time).
 
 ## Dependencies (contracts this node consumes)
 
@@ -272,8 +286,8 @@ Vitest. This node is designed to be unit-testable WITHOUT network or clock:
   per test to isolate the in-memory breaker; assert `recordFailure` emits `CIRCUIT_BREAKER_TRIPPED`
   and `resetSession` emits `SECURITY_RESET`. The gateway audit-trail specs assert the persisted
   `userRequest` + `intent` round-trip through `createPendingAction`/`handleToolCall`.
-- Authorization-hardening units (`security/_tests/authorize-hardening.test.ts` → intended home
-  `tests/unit/security/`) prove the exactly-once claim (`repeated confirm ⇒ CONFLICT`, confirm-after-cancel
+- Authorization-hardening units
+  (`tests/unit/security/`) prove the exactly-once claim (`repeated confirm ⇒ CONFLICT`, confirm-after-cancel
   and cancel-after-confirm ⇒ `CONFLICT`), the ownership rejection (`SECURITY_DENIED`), the execution-time
   transfer re-risk escalation (parked YELLOW transfer escalates to MFA then still completes with the code),
   `recordActionResult` persistence, and the locked-session refusal.
@@ -292,4 +306,4 @@ This is a **leaf node** — it has no child directories; the modules above are i
 - Keep the MFA code inside `mfa.ts`; `MfaChallengeView.hint` and all `message` strings must never contain it (incl. `TRANSFER_ESCALATED_MESSAGE`).
 - `authorizeAction`/`cancelAction` transition status ONLY through `claimPendingAction` (atomic compare-and-set) — never a status peek then unconditional write; ownership mismatches use `AppError('SECURITY_DENIED')` (no `FORBIDDEN` code exists).
 - After the agent layer executes an authorized action (or it fails), call `securityGateway.recordActionResult(id, 'executed'|'failed')` so the persisted terminal status is truthful and a later confirm/cancel is a `CONFLICT` (see Known Issues — not yet wired).
-- **Node-local validation specs (pending relocation to the root-owned `../tests/`)**: `security/_tests/*.test.ts` + `security/_vitest.local.config.ts` are validated unit specs runnable via `npx vitest run --config security/_vitest.local.config.ts` (the root `vitest.config.ts` discovers only `tests/**`). They use portable `@/` imports and cover the circuit-breaker trip/reset audit-event completeness, the locked-session all-tiers (incl. 🟢 GREEN) denial, `reEvaluateTransferRisk` execution-time re-risk, `MFA_FAILURE` detail completeness, and the confirmation-authorization hardening (exactly-once claim / ownership / escalation / `recordActionResult`). Relocate them under `tests/unit/security/` and delete the local config.
+- **No local test files exist in this node.** `security/_tests/` and `security/_vitest.local.config.ts` do NOT exist; all security specs live under the root-owned `../tests/` (root `vitest.config.ts` discovers only `tests/**`).
