@@ -225,7 +225,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   route/API caller invokes it yet — the security-center unlock button is still not connected. Until an app
   node wires it, a tripped session stays locked for the process lifetime (`recordSuccess` clears the counter
   but explicitly does NOT unlock).
-- **`recordActionResult` / ownership opts are not yet adopted by the agent/app layer.**
+- **Ownership enforcement is OPT-IN (the `actionId` is itself the capability when opts are omitted).**
   The gateway supports `authorizeAction(id, { userId, sessionId })`, `cancelAction(id, { userId, sessionId })`
   and `recordActionResult(id, 'executed'|'failed')`, but `agent/confirmation.ts` still calls the old signatures
   (no ownership) and never records the true terminal status. Until it calls `recordActionResult` after the SDK
