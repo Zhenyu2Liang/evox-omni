@@ -71,8 +71,8 @@ VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security   # 纯单元、无�
 ## 2. 12 个演示场景 · The 12 Demo Scenarios
 
 每个场景一个 spec 文件（`tests/scenarios/test-0X-*.test.ts`），驱动真实的**回合 + 人工决策**并断言
-智能体文本、工具事件、卡片、`PendingAction`/审计行与 DB 副作用。**12 个场景规格均已实现**；测试套件
-（含回归与真实 HTTP 用例）正由并行工作流增量刷新，因此本文件描述的是**测试策略与场景清单**，而非逐条断言枚举。
+智能体文本、工具事件、卡片、`PendingAction`/审计行与 DB 副作用。**12 个场景规格均已实现**（另有 `tests/scenarios/mock-integration.test.ts`）。
+本文件描述**测试策略与场景清单**；逐条断言以各 spec 文件为准。
 
 | # | 用户输入（中文） | 预期层级 | 预期行为 / 流程 | 断言 spec 文件 |
 |---|---|---|---|---|

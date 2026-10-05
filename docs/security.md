@@ -87,7 +87,8 @@ flowchart TD
   **模型输出与用户文本永远不是判定输入**。
 - `beforeToolCall` 是**唯一**安全咽喉：它必须调用 `securityGateway.handleToolCall`，并在网关判定为门控时
   返回 `{ block: true, reason }`。agent 自己**从不**计算层级 / 确认 / MFA 需求（那是 `security/` 的专属权威）。
-- `userId` 由**服务器注入**（来自会话 / `lib/config.demoUserId`），**永不**取自模型或用户文本。
+- `userId` 由**服务器注入**（受门控路由来自 `banking_session` 会话，见第 4 节；读取路由用 `resolveUserId()`），
+  **永不**取自模型或用户文本。
 - **告警**：任何移动资金的工具都必须穿过 `securityGateway`——绝不允许新增一个绕过策略表的工具；
   新增工具时必须在 `TOOL_POLICY`（类型为 `Record<ToolName, ToolPolicy>`，缺键即编译错误）中登记。
 
