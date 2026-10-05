@@ -23,6 +23,8 @@ prisma/test.db*
 prisma/.test-db-provisioned
 prisma/*.db
 prisma/*.db-journal
+prisma/*.db-wal
+prisma/*.db-shm
 
 # Environment
 # NOTE: this demo intentionally ships a .env with NON-SECRET defaults so it runs out of the box.
