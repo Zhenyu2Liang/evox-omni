@@ -193,7 +193,13 @@ Human decision (API route → `confirmation.ts`):
 
 Consequence: money-moving calls are always triggered by a human decision, never by model text.
 
-Idempotency (code-enforced, `confirmation.ts`): `executeAuthorizedAction` records the TRUE terminal
+Idempotency (code-enforced, `confirmation.ts`): `executeAuthorizedAction` executes a `transfer_money`
+action's ORIGINAL validated args with the action's OWN `PendingAction` id as the SDK idempotency key —
+`registry.executeDirect(action.toolName, action.args, { idempotencyKey: action.id })` — so the created
+ledger row id is exactly `idempotentTransferTxId(userId, action.id)` (`@/lib/ledger`); that deterministic
+id is the link `security/` uses to exclude an already-ledgered in-flight transfer from the cumulative
+daily total (the DB PK dedups the write, so no lock is needed). Every non-transfer tool runs with no opts.
+It records the TRUE terminal
 status with `gateway.recordActionResult(actionId, ok ? 'executed' : 'failed')` BEFORE auditing, and
 resolves the owner from `getSession(action.sessionId)?.userId` (NO demo-user fallback — an unknown owner
 is recorded `failed` and a `SECURITY_DENIED` is thrown). A repeat confirm or a confirm-after-cancel
