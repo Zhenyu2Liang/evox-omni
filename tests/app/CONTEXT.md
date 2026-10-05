@@ -247,3 +247,6 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 - The mock responder (`agent/providers/mock-responder.ts`) routes DIRECT single-action intents: e.g.
   "把信用卡娱乐限额调整到1500" → `set_card_limit`, "申购稳健理财A 1000元" → `subscribe_investment`,
   "取消Netflix订阅" → `cancel_subscription`.
+- A gated plan node's `runTool` MUST forward `ctx.taskId`/`ctx.nodeId` (the planner's 3rd `NodeExecutionContext` arg) into `executeGatedTool`, or the gateway cannot persist the `PendingAction.taskId`/`nodeId` link at creation (see `plan-linkage-http.test.ts`).
+- The `AuditLog` model has NO `actionId` column — audit assertions are SESSION-scoped (`findMany({where:{sessionId}})` on `status`/`confirmed`/`toolName`).
+- Barrier idioms to reuse (do not invent new style): `makeBarrier(n)` rendezvous with a bounded timeout from `task-resume-retry-http.test.ts`; the deferred `parkingBarrier` inside `runTool` from `cancel-during-authorization-http.test.ts` / `cancel-safety-http.test.ts`.
