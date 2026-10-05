@@ -22,7 +22,7 @@ runs them all — no scoped config is required for any of them.
   `authorize-concurrency` proves the concurrent-confirm exactly-once claim **and** execution-time
   re-risk of a stale parked transfer end-to-end through the REAL `@/agent` `confirmAction`/
   `verifyAction` façade (needs a persisted session).
-- `planner/` (3 specs) — `dag` (validate / topological order / readiness / conditions / `buildPlan`),
+- `planner/` (4 specs) — `dag` (validate / topological order / readiness / conditions / `buildPlan`),
   `executor` (`runPlan` node-state machine + `PlanControls`), `lifecycle` (durable persisted-plan
   `pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`).
 - `banking-sdk/` (4 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
