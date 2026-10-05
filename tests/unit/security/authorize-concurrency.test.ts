@@ -191,7 +191,7 @@ describe('authorizeAction · two queued YELLOW transfers escalate at execution t
 
     // NOT executed: balance unchanged, action still unsettled, no ledger row for 王芳.
     expect(await balanceOf()).toBe(STARTING_BALANCE - HALF_LIMIT);
-    expect(await actionStatus(second)).toBe('pending');
+    expect(await actionStatus(second)).toBe('awaiting_mfa');
     expect(await transferLedgerCount(WANGFANG.name)).toBe(0);
 
     // ...and it is COMPLETABLE with strong verification (not a dead-end loop).
