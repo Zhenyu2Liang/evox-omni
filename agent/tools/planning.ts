@@ -32,7 +32,7 @@ import { dag, executor, type PlanToolOutcome } from '@/planner';
 import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
 import { createTask, createTaskNode } from '@/lib/db/repositories/task';
-import { createTaskPersistence, defaultPollControls } from '../task-control';
+import { createTaskPersistence, defaultPollControls, sweepCancelledPlan } from '../task-control';
 import type { ToolExecutionResult } from './index';
 
 /**
@@ -309,6 +309,12 @@ export async function runSubmitPlan(
     },
     { signal: deps.signal, now: deps.now },
   );
+
+  // CANONICAL CANCEL SWEEP: a node inside this run can have minted a FRESH `PendingAction` (the
+  // gateway parks a YELLOW/RED node call) at the very moment a concurrent `cancelTask` cancelled the
+  // plan, so an executable action could outlive the cancellation. Re-load the durable row and, when
+  // it is `cancelled`, revoke every still-parked action (a no-op otherwise — see `sweepCancelledPlan`).
+  await sweepCancelledPlan(deps.sessionId, plan.id);
 
   const done = result.results.filter((r) => r.status === 'success').length;
   const waiting = result.results.filter(

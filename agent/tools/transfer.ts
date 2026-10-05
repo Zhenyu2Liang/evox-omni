@@ -2,9 +2,10 @@
  * transfer — `transfer_money`
  *
  * Money movement. TypeBox param schema; `execute` calls the Banking SDK and THROWS
- * `AppError` on failure. `runTransferMoney(userId, args)` is the model-free path used by
+ * `AppError` on failure. `runTransferMoney(userId, args, opts?)` is the model-free path used by
  * `executeDirect` (invoked ONLY after the gateway authorizes a confirmed action):
- * it CATCHES and returns `ToolExecutionResult{ok:false,error}`.
+ * it CATCHES and returns `ToolExecutionResult{ok:false,error}`. `opts.idempotencyKey` (when given)
+ * is forwarded to the SDK so a repeat confirm replays the same ledger row (at-most-once).
  *
  * Tier: DYNAMIC — 🟡 YELLOW for ≤ ¥1000 and daily total ≤ ¥1000, 🔴 RED above; computed by
  * `security/`'s risk engine from the amount + daily total, NEVER here and NEVER by the model.
@@ -19,7 +20,7 @@ import { banking } from '@/banking-sdk';
 import type { TransferResult } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
 import { formatCNY } from '@/lib/money';
-import type { ToolExecutionResult } from './index';
+import type { ToolExecutionResult, ToolRunOptions } from './index';
 
 /** `transfer_money` params (SDK `TransferInput` minus the server-injected `userId`). */
 export const TransferMoneyParams = Type.Object({
@@ -55,10 +56,19 @@ export function createTransferMoneyTool(userId: string): AgentTool<typeof Transf
   };
 }
 
-/** Model-free runner — `banking.transfer.createTransfer({ userId, ... })`. */
+/**
+ * Model-free runner — `banking.transfer.createTransfer({ userId, ..., idempotencyKey })`.
+ *
+ * `opts.idempotencyKey` (the gated `PendingAction` id, supplied by `confirmation.ts`) makes the call
+ * at-most-once: the SDK derives the ledger row id as `idempotentTransferTxId(userId, key)`
+ * (`@/lib/ledger`) and reuses it as the primary key, so a repeat replays the original row instead
+ * of double-debiting. That derived id IS the created `Transaction.id` and is surfaced to callers via
+ * `data.transactionId` (`TransferResult.transactionId`).
+ */
 export async function runTransferMoney(
   userId: string,
   args: Record<string, unknown>,
+  opts?: ToolRunOptions,
 ): Promise<ToolExecutionResult> {
   try {
     const amount = args.amount;
@@ -73,10 +83,14 @@ export async function runTransferMoney(
       amount,
       remark: typeof args.remark === 'string' ? args.remark : undefined,
       sourceAccountId: typeof args.sourceAccountId === 'string' ? args.sourceAccountId : undefined,
+      // At-most-once: absent ⇒ unchanged behavior; present ⇒ the ledger row id is deterministic.
+      idempotencyKey: opts?.idempotencyKey,
     });
     const balance = result.newBalance != null ? `，账户余额 ${formatCNY(result.newBalance)}` : '';
     return {
       ok: true,
+      // `result` carries the created ledger row id as `transactionId` (the derived idempotent id
+      // when a key was supplied) — the observable proof that the ledger write is deduplicated.
       data: result,
       summary: `已向 ${result.recipient.name} 转账 ${formatCNY(result.amount)}${balance}。`,
     };
