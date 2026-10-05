@@ -330,6 +330,7 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
   exported identifiers against the installed packages (see the Pi SDK Reconciliation section above).
 - `system-prompt.ts` may list ONLY the tools actually present in `ToolRegistry` — no phantom capabilities.
 - `ConfirmationOutcome.requiresMfa` is the EFFECTIVE MFA requirement and `tier` is the EFFECTIVE tier (RED whenever `requiresMfa`). `app/api/actions/[id]/confirm|verify/route.ts` should surface `outcome.requiresMfa`; the current `outcome.tier === 'RED'` derivation still agrees because the tier is effective. Owner of `./app` — escalate route edits to the parent.
+- The human-decision stream events are emitted from two distinct sites (same names, different payloads): `confirmation_required` ONLY from `run-turn.ts` (turn-time, via `handleToolExecutionEnd` for a directly-blocked gated tool, or `emitParkedDecision` for a parked DAG node) and NEVER from `confirmation.ts`; `mfa_required` from `run-turn.ts` (with `hint: MFA_HINT` + an MFA card) AND from `confirmation.ts#blockedOutcome` (with ONLY `{ actionId }` — no `hint`, no card) when a confirm/verify authorization still requires verification (wrong code ⇒ `awaiting_mfa`, or `locked`).
 - Every card emitted to the UI must originate from a real tool result (or a real security decision) —
   never from model prose. `card-emitter.toCards` is PURE and total (unknown shape ⇒ `error` card).
 - `submit_plan` is meta (not risk-gated): it validates the DAG, then runs it via `planner.runPlan` with
