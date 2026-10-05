@@ -107,7 +107,7 @@ npx tsx tests/e2e/acceptance.e2e.ts
 ```
 
 Prerequisites (once, in a fresh worktree): `npm install` → `npx prisma generate`. It uses an ISOLATED E2E DB
-→ `npm run db:seed`. It uses the DEV DB (`prisma/dev.db`, gitignored), `.env` must set `LLM_MODE=mock`,
+(`prisma/e2e.db`, git-ignored, provisioned by the harness itself — no manual `db push`/`db:seed` needed), `.env` must set `LLM_MODE=mock`,
 and it needs a system Chrome. It prints one `PASS|FAIL|SKIP <journey> — <evidence>` line per journey
 and exits non-zero iff any journey FAILs (a SKIP does not fail the run).
 **Covers:** NL → confirmation/MFA card → human-decision flows, MFA success + wrong-code rejection,
