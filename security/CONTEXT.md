@@ -358,10 +358,17 @@ Vitest. This node is designed to be unit-testable WITHOUT network or clock:
 - **These specs must supply `{ userId, sessionId }` to `authorizeAction`/`cancelAction`** (the options are
   required) and a non-empty identity to `handleToolCall`; a call without ids fails closed with `SECURITY_DENIED`.
 - End-to-end agent scenarios (Tests 1–12, incl. injection & confirmation) live under `../tests/`.
+- **Local DB-free spec (this node)**: `security/_tests/risk-engine-dedup.test.ts` proves the
+  `computeInFlightTransferTotal` ledger dedup with a hand-written stub implementing only
+  `pendingAction.findMany` + `transaction.findMany` (cast to `PrismaLike`) — no DB, no clock, no
+  network. Run it with its own config (the root `vitest.config.ts` discovers only `tests/**`):
+  `npx vitest run --config security/_vitest.local.config.ts` (include = `security/_tests/**/*.test.ts`,
+  `environment: 'node'`).
 
 ## Routing Table
 
 This is a **leaf node** — it has no child directories; the modules above are its surface.
+- `security/_tests/` + `security/_vitest.local.config.ts` → this node's own DB-free dedup spec and its runner config
 - `../tests/` → security/planner/sdk units + faux-LLM scenario integration tests (sibling — read-only, escalate writes to root)
 
 ## Notes for Agents
