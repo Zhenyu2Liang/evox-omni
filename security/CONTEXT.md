@@ -227,7 +227,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   but explicitly does NOT unlock).
 - **Ownership enforcement is OPT-IN (the `actionId` is itself the capability when opts are omitted).**
   `authorizeAction`/`cancelAction` reject a MISMATCHING `opts.userId`/`opts.sessionId` with `SECURITY_DENIED`, but only
-  and `recordActionResult(id, 'executed'|'failed')`, but `agent/confirmation.ts` still calls the old signatures
+  when the caller SUPPLIES them (`opts?.userId !== undefined`); an actionId alone authorizes. The app layer DOES forward
   (no ownership) and never records the true terminal status. Until it calls `recordActionResult` after the SDK
   execution, an executed action stays `confirmed` — protected only by the exactly-once claim (a repeat confirm
   still yields `CONFLICT`), but the persisted status never becomes `executed`/`failed`.
