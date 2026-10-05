@@ -60,6 +60,10 @@ flowchart TD
 > 填充数据库：`npx prisma generate && npx prisma db push && npm run db:seed`，然后 `npm run build`。
 > 按请求动态渲染的页面是 agent / audit / security / bills；`app/api/**` 处理器全部为动态。
 
+> **UI 组件 barrel 中立性（SSR）**：barrel 层**不得**带 `'use client'`；一个带该指令的**中间层** barrel
+> 若经中立的 `components/index.ts` 门面星号再导出，SSR 时会解析为 `undefined` 并让消费页崩溃
+> （`/agent` 曾因此返回 HTTP 500）——只有**叶子**客户端组件带该指令。
+
 ---
 
 ## 3. 空间维度 · Context Tree 目录布局
@@ -78,7 +82,7 @@ Constraints），也是**路由表**（把领域映射到子目录）。顶层�
 | `./audit` | 审计日志器 + 安全事件记录器 |
 | `./lib` | 共享内核：contracts、errors、money、config、constants、clock、Prisma client + repositories |
 | `./prisma` | Prisma schema、种子数据、迁移 |
-| `./tests` | 自动化测试（三层）：纯单元测试（security/planner/sdk/agent/lib）+ `tests/scenarios/` 的 faux-LLM 全流水线场景测试（Tests 1–12）+ `tests/app/*` 与 `tests/review-boundaries.test.ts` 的进程内 HTTP 路由处理器 `[integration]` 测试 |
+| `./tests` | 自动化测试（四层）：纯单元测试（security/planner/sdk/agent/lib）+ `tests/scenarios/` 的 faux-LLM 全流水线场景测试（Tests 1–12）+ `tests/app/*` 与 `tests/review-boundaries.test.ts` 的进程内 HTTP 路由处理器 `[integration]` 测试 + `tests/e2e/` 的**真实浏览器验收 harness**（`playwright-core` 启动系统 Chrome，`tsx` 显式运行，非 Vitest） |
 | `./docs` | 本目录：参赛文档（architecture / security / test-cases / known-risks） |
 
 ---
@@ -332,6 +336,9 @@ sequenceDiagram
 - **离线确定性**：`LLM_MODE=mock`（faux provider）+ 可注入的 `now` / `id`，让 agent/security/planner
   测试无需网络。
 - **UI 不展示 LLM 思维链**：只显示任务步骤、工具状态与结果。
+- **组件 barrel 层必须保持中立（neutral）**：`components/` 的 barrel **不得**携带 `'use client'`——一个带
+  `'use client'` 的**中间层** barrel 若经中立的 `components/index.ts` 门面星号再导出，SSR 时会解析为
+  `undefined` 并让消费页面崩溃（`/agent` 曾因此返回 HTTP 500）；只有**叶子**客户端组件带该指令。
 
 > 完整安全模型见 [`security.md`](./security.md)；验收场景见 [`test-cases.md`](./test-cases.md)；
 > 已知限制见 [`known-risks.md`](./known-risks.md)。

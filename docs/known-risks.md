@@ -3,7 +3,8 @@
 > 本文件诚实地列出演示的局限，并对每条给出「**为何在比赛演示中可接受**」。
 > 这些限制大多是**演示沙箱的刻意设计**或**单进程 / SQLite 部署下未经证明**的边界，而非缺陷——
 > 它们让系统在无真实资金、无真实银行的前提下，完整展示「智能体 + 代码强制安全模型」的核心价值。
-> 没有一条声称系统「100% 完成」，也没有任何一条声称经过真实浏览器验证。
+> 没有一条声称系统「100% 完成」。系统已有一个**真实浏览器验收 harness**（`tests/e2e/`，见第 16 条），
+> 但它是**单机、有限 journey** 的验收，**不**证明安全模型已被完全封闭。
 > 每条都标注**性质**，明确区分三者：
 >
 > - ✅ **实现（代码强制）** — 该语义由 TypeScript 代码强制执行，LLM 无法绕过（可能仍带单进程/环境前提）。
@@ -29,7 +30,7 @@
 | 13 | Test 12 生日提醒只创建记录，**不真正下单鲜花 / 蛋糕** | 🧪 模拟 | `tests/scenarios/`、`banking-sdk/budget.ts`、`banking-sdk/task.ts` |
 | 14 | 注入守卫只记录事件，**不向模型注入"系统提醒"** | ✅ 实现（防御纵深） | `security/injection-guard.ts`、`agent/run-turn.ts` |
 | 15 | 转账**已接线幂等键**（重复确认在 DB 层去重）；**残余**：确认的原子领取仅靠 SQLite 写锁串行化 | ✅ 实现（幂等）+ ⚠️ 未验证（跨引擎） | `lib/ledger.ts`、`agent/confirmation.ts`、`banking-sdk/transfer.ts`、`security/security-gateway.ts` `authorizeTransfer` |
-| 16 | **无真实浏览器端到端测试**（`playwright-core` 已声明但**未使用**） | ⚠️ 未验证（覆盖缺口） | `package.json`、`tests/app/` |
+| 16 | 有**真实浏览器验收 harness**，但为**单机、有限 journey** 的验收（非多实例 / 非生产构建 / 非跨浏览器） | ⚠️ 未验证（有限验收，非全覆盖） | `tests/e2e/`、`package.json` |
 | 17 | 身份是**普通 Cookie**（`banking_session`，非签名 / HMAC 令牌） | ✅ 实现（fail-closed） | `lib/constants.ts` `SESSION_COOKIE`、`app/api/_lib/session.ts`、`app/api/chat/route.ts` |
 | 18 | 计划生命周期的诚实边界（取消撤销 / 无假回滚 / 终态仅靠 CAS 约定 / 单进程 single-flight） | ✅ 实现 + ⚠️ 未验证（无 DB 约束 / 单进程） | `agent/task-control.ts`、`planner/lifecycle.ts`、`lib/db/repositories/{task,pendingAction}.ts`、`prisma/schema.prisma` |
 | 19 | 其他工程性注意（测试串行、`change_password` 无凭据存储） | ✅ 说明 | `vitest.config.ts`、`banking-sdk/` |
@@ -233,20 +234,25 @@ SQLite 单文件写锁**串行化并发确认；在**其他数据库引擎 / 多
 
 ---
 
-## 16. 无真实浏览器端到端测试 · No Real-Browser E2E
+## 16. 真实浏览器验收是「单机、有限 journey」 · Limited Single-Machine Browser Acceptance
 
-**性质：⚠️ 未验证（测试覆盖缺口）。**
+**性质：⚠️ 未验证（有限验收，非全覆盖）。**
 
-**限制**：`package.json` 已声明 `playwright-core ^1.63.0`（devDependency），但仓库**没有浏览器端到端
-harness**：无 `tests/e2e/`，也没有任何 Playwright / Puppeteer / Cypress / Selenium 测试文件——该依赖
-**当前未被使用**。`tests/app/` 下的规格是**进程内 HTTP 集成测试**（`describe('[integration] …')`）：
-它们 import 并调用**真实的**路由处理器（`app/api/**/route.ts`），传入真实的 `NextRequest`
+**限制**：仓库**已有**真实浏览器端到端 harness（`tests/e2e/`）：它用 `playwright-core` 启动**系统**无头
+浏览器（Chrome 优先 / Edge 兜底，无需下载浏览器），启动**真实** `next dev`，在真实 `/agent` 输入框
+输入中文，并对**渲染后的 DOM**（卡片 / 按钮 / 徽章 / 文本）断言其覆盖的 5 条 journey。它**只**覆盖：
+🟡 转账确认、🔴 转账 MFA（成功 + 错误码）、计划暂停/继续、计划取消、刷新后恢复停靠决策；仅模型被
+脚本化（`LLM_MODE=mock`）。它**不**覆盖：live LLM、真实银行 / 网络、生产构建（`next build` /
+`next start`）、跨浏览器（仅 Chrome，Edge 兜底未测）、视觉 / a11y、负载 / 性能。它是**单机**验收，**不**证明安全模型已被完全封闭。
+
+`tests/app/` 下的验收仍独立：它们是**进程内 HTTP 集成测试**（`describe('[integration] …')`），
+`import` 并调用**真实的**路由处理器（`app/api/**/route.ts`），传入真实的 `NextRequest`
 （`tests/app/harness.ts`）——真实数据库 / 安全网关 / Agent 流水线**全部在跑**，只有模型被脚本化；
-但**没有浏览器、没有渲染**。UI 行为只能被**间接**断言（事件 / 卡片 / 响应体的形状）。
+但**没有浏览器、没有渲染**，UI 行为只能被**间接**断言（事件 / 卡片 / 响应体的形状）。
 
 **为何可接受**：安全相关的行为位于 UI **之下**——路由处理器 + 安全网关 + Banking SDK——
-而这些**确实被真实执行**；被代码强制的安全语义不在浏览器渲染层。演示的验收点是门控、审计与
-流水线行为，而非像素级 UI。
+而这些**确实被真实执行**；浏览器层验收的作用是证明渲染后的交互链路可用，而非封闭安全模型。
+演示的验收点是门控、审计、流水线行为（外加若干真实浏览器 journey），而非像素级 UI 或跨浏览器一致性。
 
 ---
 

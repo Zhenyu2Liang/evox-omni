@@ -25,7 +25,8 @@ code-enforced security*, not a chat skin over a bank app.
   session identity (cookie-only write endpoints); plan-lifecycle guarantees (cancel revokes parked
   actions / no fake rollback / exactly-once resume-retry); sandbox guarantees.
 - `docs/test-cases.md` — the 12 demo scenarios as a table (input / tier / behavior / spec file);
-  the three test layers (pure unit / faux-LLM scenario / in-process route-handler `[integration]`)
+  the four test layers (pure unit / faux-LLM scenario / in-process route-handler `[integration]` /
+  real-browser acceptance harness `tests/e2e`, run via tsx, not vitest)
   and the regression categories they cover (concurrency & limits, cumulative-risk dedup, identity &
   session, MFA escalation, DAG pause/cancel/resume/refresh, mock action routing, injection, shared
   kernel); the offline `LLM_MODE=mock` + `registerFauxProvider` determinism story; run commands.
@@ -49,8 +50,9 @@ code-enforced security*, not a chat skin over a bank app.
 
 - `./architecture.md` → system architecture, layers, Context Tree, Pi Agent/SDK/Tools/Planner deep dives, diagrams
 - `./security.md` → permission tiers, gateway, injection/hallucination defense, MFA, circuit breaker, audit, sandbox
-- `./test-cases.md` → 12 demo scenarios + unit coverage + offline/mock test strategy
+- `./test-cases.md` → 12 demo scenarios + unit coverage + offline/mock test strategy + real-browser acceptance harness
 - `./known-risks.md` → honest limitations, each with a demo acceptability rationale
+- `../tests/e2e/CONTEXT.md` → real-browser acceptance harness (journeys + honest caveats; sibling — read-only)
 - `../CONTEXT.md` → root context (pipeline, tech stack, security model, tool catalogue) — source of truth (read-only)
 - `../README.md` → setup, demo account, mock MFA code, demo script (root-owned, sibling — read-only)
 
@@ -62,7 +64,7 @@ code-enforced security*, not a chat skin over a bank app.
   `security/permission-engine.ts` (the authoritative tier table).
 - Scenario spec filenames mirror `tests/scenarios/test-0X-*.test.ts` (12 files).
 - When the code changes, update these docs in the same commit — they describe current state.
-- There is **no browser E2E suite**: `tests/app/*` are in-process route-handler `[integration]` specs;
-  the repo has no `tests/e2e/` and no Playwright/Puppeteer/Cypress/Selenium spec file;
-  `playwright-core` is declared in `package.json` but unused — these docs must never claim browser
-  verification.
+- A real-browser acceptance harness exists at `tests/e2e/` (system Chrome via `playwright-core`, run
+  explicitly via `npx tsx tests/e2e/acceptance.e2e.ts`, never collected by vitest); the docs may
+  describe it but must NOT claim it proves the security model fully closed — it is a limited
+  single-machine acceptance (see `../tests/e2e/CONTEXT.md`).

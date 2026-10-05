@@ -375,9 +375,10 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 **尚未端到端验证（UNVERIFIED / 诚实边界）：**
 
-- **无真实浏览器端到端（E2E）测试**：仓库内**没有** `tests/e2e/`，也没有任何
-  Playwright / Puppeteer / Cypress / Selenium **测试文件**；`playwright-core`（`^1.63.0`）虽在
-  `package.json` 中声明为 devDependency，但**未被使用**（无 `test:e2e` 脚本、无启动浏览器的代码）。
+- **真实浏览器验收存在，但不证明安全模型被完全封闭**：`tests/e2e/` 有一个真实浏览器 harness
+  （`playwright-core` 启动**系统**无头 Chrome，**无需**下载浏览器；非 `npm run test`，用 `tsx` 显式运行），
+  它对**渲染后的 DOM** 断言，仅覆盖 5 条 journey（🟡 转账确认、🔴 转账 MFA 成功 + 错误码、计划暂停/继续、
+  计划取消、刷新恢复）——**不**覆盖 live LLM、真实银行 / 网络、生产构建、跨浏览器、视觉 / a11y、负载 / 性能。
   `tests/app/*` 是**进程内 HTTP 路由集成测试**（标记 `[integration]`）：`import` **真实**路由处理器并用
   `NextRequest` 对象直接调用——**只有模型被脚本化**，**不是**浏览器测试；
 - **熔断器是进程内 / 单进程内存态**（非分布式、不持久化）；

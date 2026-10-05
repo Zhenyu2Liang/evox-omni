@@ -1,13 +1,15 @@
 # 测试用例文档 · Test Cases & Demo Scenarios
 
 > 测试套件是 AI Banking Agent 演示的**验收标准（acceptance bar）**，用 **Vitest** 写成，
-> **完全离线、确定性**运行（无网络、无需 API key）。
+> **完全离线、确定性**运行（无网络、无需 API key）。此外还有一个**独立于 Vitest** 的真实浏览器
+> 验收 harness（`tests/e2e/`，用 `tsx` 显式运行，见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)），
+> 它**不**计入 `npm run test`。
 
 ---
 
 ## 1. 总览 Overview
 
-测试分**三层**：
+测试分**四层**：
 
 1. **纯单元测试（pure unit, no LLM）**——证明安全模型是**代码强制**的（层级、确认、MFA、熔断、注入防御），
    以及规划器与 SDK 的确定性核心；不需要模型，覆盖 `security/`、`planner/`、`banking-sdk/`、`agent/`、`lib/`。
@@ -16,14 +18,17 @@
 3. **HTTP 路由集成测试（route-handler integration，`[integration]`）**——`tests/app/` 下**进程内（in-process）**
    直接导入**真实导出**的 route handler，用真实 `NextRequest` 调用（共享 `harness.ts`），覆盖
    `/api/chat`、`/api/actions/*`、`/api/tasks/*`；另有 `tests/review-boundaries.test.ts` 复核边界规格。
+4. **真实浏览器验收 harness（real-browser acceptance）**——`tests/e2e/` 下**独立于 Vitest**（`tsx` 显式运行），
+   启动真实 `next dev` + 真实无头 Chrome，对**渲染后的 DOM** 断言——见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
 **只有模型被 mock**（`registerFauxProvider()`，`LLM_MODE=mock`）；**工具、安全咽喉、路由与数据库都是真实的**——
 因此场景测试与 HTTP 集成测试证明的是**真实的安全行为**，而不是对它的 mock。
 
 > `tests/app/` 的规格是**进程内集成测试**：导入真实导出的 route handler 并用真实 `NextRequest` 调用，
-> **不是**真实浏览器测试。仓库**没有**浏览器 E2E 套件——没有 `tests/e2e/` 目录，也没有任何
-> Playwright / Puppeteer / Cypress / Selenium 测试文件。`playwright-core` 虽在 `package.json` 声明为
-> devDependency，但**未被使用**（无 `test:e2e` 脚本、无浏览器启动代码）。
+> **不是**真实浏览器测试；真实浏览器验收由另一个**独立**的 harness（`tests/e2e/`）承担：
+> 用 `playwright-core` 启动**系统**无头 Chrome（Chrome 优先 / Edge 兜底；`E2E_BROWSER_PATH` 可覆盖），
+> 不属于 Vitest 套件——文件以 `.e2e.ts` 结尾，`npm run test` 永不收集它，也无 `test:e2e` 脚本；
+> 详见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
 ### 回归关注面 · Regression Categories
 
@@ -77,6 +82,7 @@ npm run test -- tests/unit                # 只跑纯单元层
 npm run test -- tests/scenarios           # 只跑场景层（faux LLM）
 npm run test -- tests/app                 # 只跑进程内 HTTP 集成层
 VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security   # 纯单元、无需 DB
+npx tsx tests/e2e/acceptance.e2e.ts       # 真实浏览器验收 harness（非 Vitest；需已 seed 的本地 DB）
 ```
 
 > 三层共用同一入口，用目录分别运行：`-- tests/unit`（纯单元）、`-- tests/scenarios`（场景）、`-- tests/app`（HTTP 集成）。
@@ -175,7 +181,7 @@ VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security   # 纯单元、无�
 覆盖从 HTTP 边界到 DB 副作用的完整路径。共享 `harness.ts` 负责构造请求（身份以 `Cookie` 头传递）、驱动
 handler 与会话、读取 SSE 分帧。
 
-> 这些是**进程内集成测试**，**不是**真实浏览器测试：仓库没有 Playwright / Puppeteer / Cypress 测试文件。
+> 这些是**进程内集成测试**，**不是**真实浏览器测试；真实浏览器验收由独立的 `tests/e2e/` harness 承担（见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)）。
 
 | Spec | 覆盖内容 |
 |---|---|
@@ -200,7 +206,38 @@ handler 与会话、读取 SSE 分帧。
 
 ---
 
-## 5. 离线确定性 · Offline & Deterministic
+## 5. 真实浏览器验收 harness · Real-Browser Acceptance Harness
+
+**独立于 Vitest**：位于 `tests/e2e/`，用 `tsx` 显式运行（`npx tsx tests/e2e/acceptance.e2e.ts`）；文件以
+`.e2e.ts` 结尾，`npm run test` **永不**收集它，且仓库**没有** `test:e2e` 脚本。
+
+流程：在空闲端口启动**真实** `next dev` → 轮询 `/api/health` 待就绪 → 通过 **`playwright-core`** 启动
+机器上**真实**的无头浏览器（**系统 Chrome 优先 / Edge 兜底**，`E2E_BROWSER_PATH` 可覆盖；**无需
+`playwright install` / 不下载浏览器**）→ 在真实 `/agent` 输入框输入中文 → 对**渲染后的 DOM**
+（卡片 / 按钮 / 徽章 / 助手文本）逐条断言 → 每个 journey 打印一行 `PASS|FAIL|SKIP <journey> — <evidence>`
+→ 任一 journey `FAIL` 时以非零码退出（`SKIP` 不算失败）。应用 / 路由 / 安全网关 / Banking SDK / SQLite
+都是真实的，**只有模型被脚本化**（`LLM_MODE=mock`）。
+
+| Journey | 覆盖（均在真实浏览器中驱动真实流水线） |
+|---|---|
+| `a-transfer-confirm` | 🟡 转账 ≤¥1000：ConfirmationCard → 点「确认」→ 助手叙述事实性结果 |
+| `b-transfer-mfa` | 🔴 转账 >¥1000：正确码 `123456` 成功；错误码 → 验证失败、MFA 卡保留、无成功叙述 |
+| `c-plan-pause-resume` | 门控计划：`等待确认` → 暂停 → `已暂停` → 继续（受 harness 的诚实限制约束） |
+| `d-plan-cancel` | 门控计划：`等待确认` → 计划卡「取消」→ `已取消` |
+| `e-refresh-action-recovery` | 刷新恢复：停靠的 🟡/🔴 决策在页面重载后从**服务端持久化状态**重建卡片 |
+
+**覆盖**：真实浏览器里「自然语言 → 卡片 → 人工决策」全链路；MFA 成功 + 错误码拒绝；计划暂停/继续/取消；
+刷新后从持久化状态恢复；结构化诚实上报；整棵进程树清理。
+
+**不覆盖（诚实边界）**：live LLM（`LLM_MODE=live`）；真实银行 / 网络；生产构建（`next build` / `next start`）；
+跨浏览器（仅 Chrome，Edge 兜底未测）；视觉 / a11y 回归；负载 / 性能；单元 / 场景层的安全断言
+（由 `tests/unit`、`tests/scenarios` 承担）。这是**单机真实浏览器验收**，**不**证明安全模型已被完全封闭。
+
+> harness 细节（hydration 竞态、dev-server 启动注意项、暂停/继续的诚实限制）见 [`tests/e2e/CONTEXT.md`](../tests/e2e/CONTEXT.md)。
+
+---
+
+## 6. 离线确定性 · Offline & Deterministic
 
 - **无网络、无真实 LLM**：模型由 `registerFauxProvider()`（pi-ai）**脚本化**——同一套
   Agent / 工具 / 安全流水线，只有模型被脚本化。
@@ -215,7 +252,7 @@ handler 与会话、读取 SSE 分帧。
 
 ---
 
-## 6. 已知短板 · Known Gaps
+## 7. 已知短板 · Known Gaps
 
 - **GREEN 自动执行不写审计行**：审计只在门控 confirm/verify/cancel 时写入——GREEN 应在 `beforeToolCall` 处断言。
 - **`/api/chat` 的 SSE `error` 帧在真实 HTTP + mock 路径下不可达**：该 SSE `error`→`done` 分支仅由
