@@ -40,12 +40,13 @@ import { security } from '@/security';
 import { recordAudit } from '@/audit';
 import { getSession } from '@/lib/db/repositories/session';
 import { getPendingAction, getPendingActionOwnership } from '@/lib/db/repositories/pendingAction';
+import { getTask } from '@/lib/db/repositories/task';
 import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { resumeTurn } from './run-turn';
 import type { RunTurnDeps } from './run-turn';
-import { resumeTaskForAction } from './task-control';
+import { findTaskByPendingAction, resumeTaskForAction } from './task-control';
 
 /**
  * The security gateway's runtime surface.
@@ -194,6 +195,47 @@ async function resolveTrustedIdentity(
   }
 
   return { userId, sessionId: row.sessionId };
+}
+
+/**
+ * FAIL CLOSED when the action's owning plan has been CANCELLED.
+ *
+ * Defense-in-depth for the `cancelTask` path: cancelling a plan already revokes its parked
+ * `PendingAction`s (`task-control.ts#cancelTask` → gateway atomic claim), so the gateway would
+ * reject a late confirm with `CONFLICT`. This check is the belt to that suspenders — it reads the
+ * owning `AgentTask` from PERSISTED state (through the existing `findTaskByPendingAction` reverse
+ * lookup + `tasks.getTask`) and, when that plan is `'cancelled'`, refuses the human decision BEFORE
+ * any authorization or execution, so money can never move out of a cancelled plan even if the
+ * revocation raced or failed.
+ *
+ * Returns the refusal outcome (`ok:false`, honest persisted status), or `undefined` when the action
+ * is not a gated plan node (a plain transfer, say) or its plan is not cancelled — in which case the
+ * caller proceeds unchanged. Ownership stays enforced by `resolveTrustedIdentity`; an action whose
+ * owner cannot be established is still `SECURITY_DENIED`, never silently allowed.
+ */
+async function cancelledPlanOutcome(
+  actionId: string,
+  sessionId: string,
+): Promise<ConfirmationOutcome | undefined> {
+  const located = await findTaskByPendingAction(sessionId, actionId);
+  if (located === undefined) return undefined;
+
+  const task = await getTask(located.taskId);
+  if (task === null || task.status !== 'cancelled') return undefined;
+
+  const row = await getPendingAction(actionId);
+  const status = (row?.status as PendingActionStatus | undefined) ?? 'cancelled';
+  const tier = (row?.riskLevel as RiskLevel | undefined) ?? 'YELLOW';
+  const requiresMfa = row?.requiresMfa === true;
+  return {
+    ok: false,
+    actionId,
+    status,
+    tier,
+    requiresMfa,
+    message: `该操作所属的任务计划已取消（${located.taskId}），已拒绝执行。`,
+    events: [],
+  };
 }
 
 /** The identity bag the merged gateway accepts on `recordActionResult` (legacy: ignored). */
@@ -360,10 +402,19 @@ async function executeAuthorizedAction(
 
   // Execute the args the gateway validated and persisted at gate time — straight through the
   // registry. Re-running `handleToolCall` would re-gate the call and mint a duplicate PendingAction.
+  //
+  // IDEMPOTENCY (money movement): a `transfer_money` action passes its OWN PendingAction id as the
+  // SDK `idempotencyKey`, so the created ledger row id is exactly
+  // `idempotentTransferTxId(userId, action.id)` (`@/lib/ledger`) and a repeat/concurrent confirm
+  // replays that row instead of double-debiting — the DB itself dedups the write, so no lock is
+  // needed around the ledger-write → terminal-status window. Every other tool takes no opts.
   const registry = createToolRegistry(userId);
   let result: ToolExecutionResult;
   try {
-    result = await registry.executeDirect(action.toolName, action.args);
+    result =
+      action.toolName === 'transfer_money'
+        ? await registry.executeDirect(action.toolName, action.args, { idempotencyKey: action.id })
+        : await registry.executeDirect(action.toolName, action.args);
   } catch (e) {
     // A boundary throw is the REAL failure — recorded as `failed`, never swallowed, never a success.
     result = { ok: false, error: AppError.from(e).message };
@@ -478,6 +529,10 @@ export async function confirmAction(
 ): Promise<ConfirmationOutcome> {
   const identity = await resolveTrustedIdentity(actionId, opts);
 
+  // FAIL CLOSED when the action's owning plan was cancelled: refuse BEFORE authorizing/executing.
+  const cancelled = await cancelledPlanOutcome(actionId, identity.sessionId);
+  if (cancelled !== undefined) return cancelled;
+
   let auth: AuthorizationResult;
   try {
     auth = await gateway.authorizeAction(actionId, {
@@ -502,6 +557,10 @@ export async function verifyAction(
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
   const identity = await resolveTrustedIdentity(actionId, opts);
+
+  // FAIL CLOSED when the action's owning plan was cancelled: refuse BEFORE authorizing/executing.
+  const cancelled = await cancelledPlanOutcome(actionId, identity.sessionId);
+  if (cancelled !== undefined) return cancelled;
 
   let auth: AuthorizationResult;
   try {
@@ -531,6 +590,11 @@ export async function cancelAction(
   // The identity sent to the gateway is resolved from PERSISTED ownership (asserted against any
   // request-supplied `userId`/`sessionId`).
   const identity = await resolveTrustedIdentity(actionId, opts);
+
+  // FAIL CLOSED when the action's owning plan was cancelled: a cancelled plan's parked action is
+  // refused outright (nothing to cancel, nothing may ever run).
+  const cancelled = await cancelledPlanOutcome(actionId, identity.sessionId);
+  if (cancelled !== undefined) return cancelled;
 
   // `cancelAction` throws `AppError('NOT_FOUND'|'SECURITY_DENIED'|'CONFLICT')` for an
   // unknown/foreign/settled action; the API layer maps it to the error envelope (never swallowed).
