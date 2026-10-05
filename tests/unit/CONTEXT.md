@@ -29,7 +29,9 @@ runs them all — no scoped config is required for any of them.
   Map), `lifecycle` (durable persisted-plan
   `pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`).
 - `banking-sdk/` (5 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
-  `atomicity` (ledger-write rollback + concurrent overspend / double-redeem through the real tx).
+  `atomicity` (ledger-write rollback + concurrent overspend / double-redeem through the real tx), and
+  `idempotent` (the shared at-most-once CREATE helper: same key replays exactly ONE row for both
+  `reserveBudget` and `createScheduledTask`; absent key keeps legacy create-a-row behavior).
 - `agent/` (4 specs + `providers/`) — end-to-end confirmation-flow audit specs against the real DB +
   gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `run-turn-failure`;
   `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec.
