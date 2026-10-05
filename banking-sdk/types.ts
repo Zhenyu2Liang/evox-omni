@@ -149,6 +149,12 @@ export interface TransferInput {
   remark?: string;
   /** Funding account; defaults to the user's primary CHECKING account. */
   sourceAccountId?: string;
+  /**
+   * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT
+   * double-debit: the ledger row id is derived deterministically from (userId, key), and the
+   * existing row is returned instead of writing a second one. Absent → unchanged behavior.
+   */
+  idempotencyKey?: string;
 }
 
 export interface TransferRecipient {

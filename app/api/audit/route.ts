@@ -3,7 +3,11 @@
  *
  * Contract:
  *  - Query (validated with the private `auditQuerySchema`):
- *    `{ sessionId?, toolName?, riskLevel?: 'GREEN'|'YELLOW'|'RED', status?: AuditStatus, limit? }`.
+ *    `{ toolName?, riskLevel?: 'GREEN'|'YELLOW'|'RED', status?: AuditStatus, limit? }`.
+ *  - Session SCOPE: resolved SERVER-SIDE from the `banking_session` cookie
+ *    (`_lib/session#resolveIdentity`); a `?sessionId=` query param is IGNORED and never widens
+ *    access. When there is no session the entries are not session-scoped (the demo audit dashboard
+ *    shows the demo's simulated data).
  *  - Delegates to `@/audit`: `listAudit(filter)` (entries, newest-first) + `getAuditSummary()`
  *    (aggregate badges — global, not session-scoped).
  *  - Success: `200 { ok: true, data: { entries: AuditEntry[]; summary: AuditSummary } }`;
@@ -17,7 +21,8 @@ import { z } from 'zod';
 import { audit, type AuditFilter, type AuditSummary } from '@/audit';
 import type { AuditEntry } from '@/lib/contracts/audit';
 import { jsonResponse, errorResponse, parseQuery } from '../_lib/http';
-import { sessionIdQuerySchema, limitQuerySchema } from '../_lib/schemas';
+import { limitQuerySchema } from '../_lib/schemas';
+import { resolveIdentity } from '../_lib/session';
 
 /**
  * Query schema for `GET /api/audit`.
@@ -28,7 +33,7 @@ import { sessionIdQuerySchema, limitQuerySchema } from '../_lib/schemas';
  * `status` is validated against the frozen `AuditStatus` union so the parsed value is directly
  * assignable to `AuditFilter.status`; an unknown status is rejected with `400 VALIDATION`.
  */
-const auditQuerySchema = sessionIdQuerySchema.merge(limitQuerySchema).extend({
+const auditQuerySchema = limitQuerySchema.extend({
   toolName: z.string().min(1).optional(),
   riskLevel: z.enum(['GREEN', 'YELLOW', 'RED']).optional(),
   status: z
@@ -55,9 +60,11 @@ export interface AuditData {
 export async function GET(req: NextRequest): Promise<Response> {
   try {
     const query = parseQuery(auditQuerySchema, req);
+    // Trusted session scope (cookie-only); a `?sessionId=` query param is never authoritative.
+    const identity = await resolveIdentity(req);
 
     const filter: AuditFilter = {
-      sessionId: query.sessionId,
+      sessionId: identity?.sessionId,
       toolName: query.toolName,
       riskLevel: query.riskLevel,
       status: query.status,

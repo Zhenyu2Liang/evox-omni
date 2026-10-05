@@ -91,10 +91,11 @@ interface ConfirmationOutcome {
   ok: boolean;
   actionId: string;
   status: PendingActionStatus;   // confirmed | executed | failed | cancelled | locked | awaiting_mfa
-  tier: RiskLevel;
+  tier: RiskLevel;               // EFFECTIVE tier: RED whenever `requiresMfa`, else the action's tier
+  requiresMfa: boolean;          // EFFECTIVE MFA requirement (never the stale parked-row flag)
   message: string;
   result?: ToolExecutionResult;  // present when the original args were executed
-  events: AgentStreamEvent[];    // continuation narration (agent.continue()) events
+  events: AgentStreamEvent[];    // continuation narration + any escalation events (`mfa_required`)
 }
 function confirmAction(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 function verifyAction(actionId: string, code: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
@@ -136,10 +137,11 @@ interface TaskPersistence {
 }
 function createTaskPersistence(planId: string): TaskPersistence;   // planner PlanDeps partials bound to planId (= AgentTask.id)
 function toTaskPlan(row: AgentTaskWithNodes): TaskPlan;           // persisted task row (+ ordered nodes) → frozen TaskPlan
+function defaultPollControls(planId: string): PlanControlPort;   // durable row status → planner controls ('paused'⇒pause, 'cancelled'⇒cancel)
 function getTaskPlan(sessionId: string, taskId: string): Promise<TaskPlan>;                            // ownership-checked read
-function pauseTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;
-function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // re-run; terminal nodes skipped
-function cancelTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;
+function pauseTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // persists durable status 'paused'
+function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // flips 'paused'→'running'; terminal (success) nodes skipped
+function cancelTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // revokes the plan's parked PendingActions, then cancels
 function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;       // retry failed nodes (+ descendants)
 function findTaskByPendingAction(sessionId: string, actionId: string): Promise<{ taskId: string; nodeId: string } | undefined>;
 function resumeTaskForAction(sessionId: string, actionId: string, outcome: PlanToolOutcome, deps: TaskControlDeps): Promise<{ taskId: string; nodeId: string; plan: TaskPlan } | undefined>;
@@ -293,8 +295,8 @@ Sibling nodes this node consumes (read-only; escalate changes to the owner):
 REQUIRED from siblings (must align at integration; assumed signatures):
 - `security.gateway.securityGateway.handleToolCall(ctx)` returns `{ evaluation, decision, action?, blockReason? }` with
   `blockReason` present iff `evaluation.blocked`; `action` present iff gated.
-- `security.gateway.securityGateway.authorizeAction(id, opts)` returns `AuthorizationResult { ok, status, actionId,
-  tier, requiresMfa, mfaResult?, message, action? }` — it authorizes but does NOT execute.
+- `security.gateway.securityGateway.authorizeAction(id, opts)` returns `AuthorizationResult` — it authorizes but does NOT execute. `confirmation.ts` reads every field through the `viewAuth` normalizer, so it stays green across the CURRENT shape (`{ ok, status, actionId,
+  tier, requiresMfa, mfaResult?, message, action? }`) AND the FROZEN shape (`{ ok; tier; requiresMfa; actionId? } | { ok:false; code; message; tier; requiresMfa }`). The effective tier is RED whenever `requiresMfa`.
 - `planner.executor.runPlan(plan, deps, opts)` with `deps.runTool(toolName, args): PlanToolOutcome`
   (`{ ok, data?, summary?, error?, requiresConfirmation?, pendingActionId? }`); the agent supplies
   `runTool = executeGatedTool`, so a gated node parks in `waiting_confirmation`/`waiting_verification`.
@@ -318,8 +320,8 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
 ## Known Issues
 
 - **(a) Cumulative-transfer concurrency — no serialization around confirm+execute.** `executeAuthorizedAction` (`confirmation.ts:191-278`) awaits `registry.executeDirect(action.toolName, action.args)` (`confirmation.ts:221`) and writes the terminal status (`confirmation.ts:229`) with NO mutex/lock/transaction spanning the aggregate daily-limit gate. That gate lives in the gateway: `security/security-gateway.ts:444` → `isTransferEscalated` → `risk-engine.reEvaluateTransferRisk` → `computeDailyTransferTotal` reads today's TRANSFER debits BEFORE the transfer executes. Two DISTINCT parked transfers confirmed CONCURRENTLY each read the pre-transfer total, both pass as YELLOW, and both execute (e.g. 2×¥600 = ¥1200 with no MFA). The only atomicity present is per-action (`claimPendingAction` CAS in `lib/db/repositories/pendingAction.ts:120`) and per-transfer (`banking-sdk/transfer.ts` `runInTransaction` + conditional debit) — neither serializes the daily-total gate across separate actions. SEQUENTIALLY the escalation DOES catch the second transfer; only the concurrent interleaving bypasses it.
-- **(b) MFA escalation on the confirm path loses the requirement (response/events/audit).** When a parked YELLOW `transfer_money` re-risks to RED at execution time, `security.gateway.securityGateway.authorizeAction` returns `{ ok:false, status:'awaiting_mfa', tier:'YELLOW', requiresMfa:true }` (`security/security-gateway.ts:454-465`). `confirmAction` drops `auth.requiresMfa` — the `ConfirmationOutcome` interface (`confirmation.ts:62-70`) has NO `requiresMfa` field — and emits NO event (`confirmation.ts:303-312` returns `events: []`, `tier: auth.tier` = YELLOW). So the confirm route reports `requiresMfa:false` via `outcome.tier === 'RED'` (`app/api/actions/[id]/confirm/route.ts:62`) with no `mfa_required` stream event, and NO audit row is written for the escalation branch. After the follow-up `verifyAction` succeeds, the audit carries the STALE row flag `mfaRequired: action.requiresMfa` (= false for an escalated transfer) and `riskLevel: action.tier` (= YELLOW) (`confirmation.ts:237,240`), and the outcome still returns `tier: action.tier` (YELLOW) (`confirmation.ts:273`) while `mfaResult:'success'`.
-- **(c) Identity plumbing (no defect found).** `confirmAction`/`verifyAction` pass `{ userId, sessionId }` into `authorizeAction` (`confirmation.ts:294-297,325-329`); the gateway enforces `opts.userId !== row.userId` / `sessionId` mismatch as `SECURITY_DENIED` (`security/security-gateway.ts:419-424`); the route repeats the guard (`app/api/actions/[id]/confirm/route.ts:36-42`). The SDK owner used for execution is re-resolved from the SESSION row (`confirmation.ts:209`), NOT the request body.
+- **(b) `pauseTask` persists `'paused'` — two ROOT-OWNED specs still assert the old `'pending'` (intended interface change).** `pauseTask` now writes `AgentTask.status = 'paused'` (the durable source of truth `defaultPollControls` reads). `tests/unit/agent/task-control.test.ts:210-211` and `tests/app/tasks-http.test.ts:203,207` expect `'pending'` and must be updated to `'paused'` by the `./tests` owner (this node may not edit `./tests`).
+- **(c) `components/chat/cards/PlanCard.tsx` lacks a `'paused'` entry** in its `PLAN_STATUS_LABEL`/`PLAN_STATUS_TONE` `Record<TaskPlanStatus, …>` maps, so a persisted `'paused'` plan breaks `tsc --noEmit` and would render an undefined label/tone. Owner: `./components` (pre-existing since `'paused'` was added to `TaskPlanStatus` at commit `751efb1`; now reachable because pause persists `'paused'`). Separately, `./planner`'s `runPlan` persists a `'pending'` snapshot after a paused walk and its per-node `persistPlan` can clobber a concurrently persisted `'paused'`/`'cancelled'` before the next checkpoint — a race the durable mapping here cannot fix without `./planner` changes (out of this node's scope).
 
 ## Notes for Agents
 
@@ -327,6 +329,7 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
   `Type`, `Static`) are relied on per the verified 0.73.1 facts in root `../CONTEXT.md`; confirm exact
   exported identifiers against the installed packages (see the Pi SDK Reconciliation section above).
 - `system-prompt.ts` may list ONLY the tools actually present in `ToolRegistry` — no phantom capabilities.
+- `ConfirmationOutcome.requiresMfa` is the EFFECTIVE MFA requirement and `tier` is the EFFECTIVE tier (RED whenever `requiresMfa`). `app/api/actions/[id]/confirm|verify/route.ts` should surface `outcome.requiresMfa`; the current `outcome.tier === 'RED'` derivation still agrees because the tier is effective. Owner of `./app` — escalate route edits to the parent.
 - Every card emitted to the UI must originate from a real tool result (or a real security decision) —
   never from model prose. `card-emitter.toCards` is PURE and total (unknown shape ⇒ `error` card).
 - `submit_plan` is meta (not risk-gated): it validates the DAG, then runs it via `planner.runPlan` with

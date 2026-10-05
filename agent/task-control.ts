@@ -17,9 +17,12 @@
  *    already writes this shape; `readPendingActionId` is the single reader, and
  *    `findTaskByPendingAction` is the single reverse lookup (pendingActionId → owning task/node).
  *
- * No security/agent import: the gateway-routed `runTool` port is INJECTED by the caller
- * (`confirmation.ts` / `index.ts`), so this module never imports `./confirmation` (no import cycle)
- * and never executes a tool on its own authority.
+ * The gateway-routed `runTool` port is INJECTED by the caller (`confirmation.ts` / `index.ts`), so
+ * this module never imports `./confirmation` (no import cycle) and never executes a tool on its own
+ * authority. It does import `@/security` for exactly ONE thing: revoking a cancelled plan's parked
+ * `PendingAction`s through the gateway's atomic claim (`gateway.cancelAction`), so a later
+ * confirm/verify can never move money out of a plan the user just cancelled. Tier/permission
+ * decisions stay in `security/` — this module computes no tier and grants nothing.
  */
 import type {
   TaskCondition,
@@ -30,9 +33,10 @@ import type {
   TaskPlan,
   TaskPlanStatus,
 } from '@/lib/contracts/task';
-import type { PlanDeps, PlanToolOutcome } from '@/planner';
+import type { PlanControlCommand, PlanControlPort, PlanDeps, PlanToolOutcome } from '@/planner';
 import { executor, lifecycle } from '@/planner';
-import { AppError } from '@/lib/errors';
+import { security } from '@/security';
+import { AppError, type ErrorCode } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
 import { getSession } from '@/lib/db/repositories/session';
 import {
@@ -42,6 +46,12 @@ import {
   updateTaskStatus,
   type AgentTaskWithNodes,
 } from '@/lib/db/repositories/task';
+
+/**
+ * The gateway's runtime entry, used ONLY to revoke a cancelled plan's parked `PendingAction`s. The
+ * `gateway` namespace's sole runtime member is the exported `securityGateway` object.
+ */
+const gateway = security.gateway.securityGateway;
 
 /**
  * The JSON payload a parked (gated) node stores in `AgentTaskNode.output`.
@@ -180,22 +190,63 @@ export function createTaskPersistence(planId: string): TaskPersistence {
   };
 }
 
-/** Assemble the full `PlanDeps` the planner entry points expect (persistence + injected runner). */
+/**
+ * The durable cross-request control source for a RUNNING plan: map the PERSISTED `AgentTask.status`
+ * to the planner's out-of-band control commands, so a `POST /api/tasks/[id]` (pause / cancel) issued
+ * while a plan is executing is observed at that run's next node checkpoint.
+ *
+ * The mapping is a PURE READ of the durable row and never clears anything: the durable status IS the
+ * source of truth, so it stays stable across the checkpoints of a pass (and across passes) —
+ * `'paused'` keeps yielding `{ kind:'pause' }` until `resumeTask` flips the row back to `'running'`,
+ * and a `'cancelled'` row keeps yielding `{ kind:'cancel' }` (a cancelled plan is terminal).
+ * Every other status (`'pending'`/`'running'`/`'waiting_confirmation'`/`'success'`/`'failed'`) yields
+ * nothing, so a normal run is never interrupted by its own persisted status.
+ */
+export function defaultPollControls(planId: string): PlanControlPort {
+  return {
+    async pollControls(id: string): Promise<PlanControlCommand[]> {
+      // The executor passes the plan id; the bound id is the fallback for a caller that omits it.
+      const row = await getTask(id || planId);
+      if (row === null) return [];
+      if (row.status === 'paused') return [{ kind: 'pause' }];
+      if (row.status === 'cancelled') return [{ kind: 'cancel' }];
+      return [];
+    },
+  };
+}
+
+/** Assemble the full `PlanDeps` the planner entry points expect (persistence + runner + controls). */
 function buildPlanDeps(
   planId: string,
   deps: TaskControlDeps,
   onNodeUpdate: (node: TaskNodeResult) => void = () => {},
 ): PlanDeps {
-  return { runTool: deps.runTool, onNodeUpdate, ...createTaskPersistence(planId) };
+  return {
+    runTool: deps.runTool,
+    onNodeUpdate,
+    // Durable steering: a pause/cancel persisted by a control request stops THIS run at its next
+    // checkpoint (see `defaultPollControls`).
+    controls: defaultPollControls(planId),
+    ...createTaskPersistence(planId),
+  };
+}
+
+/** A task row plus the owner resolved from its persisted SESSION row (never from model text). */
+interface OwnedTask {
+  row: AgentTaskWithNodes;
+  /** The verified owner: `row.userId`, cross-checked against the persisted session row. */
+  userId: string;
 }
 
 /**
- * Load a task and verify it belongs to `sessionId` (and to that session's user).
+ * Load a task, verify it belongs to `sessionId` (and to that session's user) and return BOTH the row
+ * and the TRUSTED owner id.
  *
  * Ownership is a SERVER-SIDE check: `sessionId` comes from the session, never from model text. A
- * mismatch is `SECURITY_DENIED`; an unknown task is `NOT_FOUND`.
+ * mismatch is `SECURITY_DENIED`; an unknown task is `NOT_FOUND`. The returned `userId` is the only
+ * identity this module may act with (see `revokeParkedActions`).
  */
-async function loadOwnedTask(sessionId: string, taskId: string): Promise<AgentTaskWithNodes> {
+async function loadOwnedTaskWithOwner(sessionId: string, taskId: string): Promise<OwnedTask> {
   const row = await getTask(taskId);
   if (row === null) throw new AppError('NOT_FOUND', `任务计划不存在: ${taskId}`);
   if (row.sessionId !== sessionId) {
@@ -205,7 +256,12 @@ async function loadOwnedTask(sessionId: string, taskId: string): Promise<AgentTa
   if (session === null || session.userId !== row.userId) {
     throw new AppError('SECURITY_DENIED', `无权访问该任务计划: ${taskId}`);
   }
-  return row;
+  return { row, userId: row.userId };
+}
+
+/** `loadOwnedTaskWithOwner` for the callers that do not need the owner id. */
+async function loadOwnedTask(sessionId: string, taskId: string): Promise<AgentTaskWithNodes> {
+  return (await loadOwnedTaskWithOwner(sessionId, taskId)).row;
 }
 
 /** Read a task plan as the frozen `TaskPlan` contract (ownership-checked). */
@@ -214,8 +270,13 @@ export async function getTaskPlan(sessionId: string, taskId: string): Promise<Ta
 }
 
 /**
- * Mark a task plan PAUSED. `TaskPlanStatus` has no `'paused'`, so the paused snapshot lands
- * `pending` (a paused plan resumes by re-running); the task row's status is persisted to match.
+ * Mark a task plan PAUSED.
+ *
+ * The DURABLE row carries the pause: `AgentTask.status` becomes `'paused'` (the source of truth
+ * `defaultPollControls` reads, so a plan that is STILL RUNNING in another request stops at its next
+ * checkpoint) and the returned snapshot says `'paused'` too, so a read agrees with the row.
+ * Already-`success` nodes keep their recorded result and the un-run nodes stay `pending`, so
+ * `resumeTask` continues exactly where the pause landed.
  */
 export async function pauseTask(
   sessionId: string,
@@ -223,7 +284,13 @@ export async function pauseTask(
   opts: TaskControlOptions = {},
 ): Promise<TaskPlan> {
   const row = await loadOwnedTask(sessionId, taskId);
-  const paused = lifecycle.pausePlan(toTaskPlan(row), { now: opts.now });
+  // `lifecycle.pausePlan` is PURE and returns a resumable `'pending'` snapshot (the planner has no
+  // 'paused' status of its own); the status is upgraded here because the durable row is what truly
+  // holds the pause.
+  const paused: TaskPlan = {
+    ...lifecycle.pausePlan(toTaskPlan(row), { now: opts.now }),
+    status: 'paused',
+  };
   await executor.persistPlanSnapshot(
     buildPlanDeps(taskId, { runTool: UNUSED_RUN_TOOL, now: opts.now }),
     paused,
@@ -232,8 +299,13 @@ export async function pauseTask(
 }
 
 /**
- * Resume (re-run) a paused/parked task plan. `runPlan` skips every terminal node (idempotency), so a
- * paused plan continues and a re-parked gated node stays parked for the next human decision.
+ * Resume (re-run) a paused/parked task plan.
+ *
+ * The durable row is flipped out of `'paused'` FIRST (`'running'`), because a `'paused'` row is
+ * exactly what `defaultPollControls` maps to a pause command — leaving it would re-pause this very
+ * run at its first checkpoint. `runPlan` then skips every terminal node (idempotency), so an
+ * already-`success` node is NEVER re-executed and a re-parked gated node stays parked for the next
+ * human decision.
  */
 export async function resumeTask(
   sessionId: string,
@@ -241,24 +313,95 @@ export async function resumeTask(
   deps: TaskControlDeps,
 ): Promise<TaskPlan> {
   const row = await loadOwnedTask(sessionId, taskId);
+  await updateTaskStatus(taskId, 'running');
   return executor.runPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), { now: deps.now });
 }
 
+/** Gateway error codes that mean "already settled / gone" — there is nothing left to revoke. */
+const ALREADY_SETTLED_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>(['CONFLICT', 'NOT_FOUND']);
+
+/** Net outcome of revoking a cancelled plan's parked `PendingAction`s. */
+interface RevokeSummary {
+  /** Action ids atomically claimed `pending`/`awaiting_mfa` → `cancelled`. */
+  revoked: string[];
+  /** Action ids that were ALREADY settled (executed / cancelled / gone) — nothing left to revoke. */
+  alreadySettled: string[];
+  /** Action ids that could NOT be revoked for an unexpected reason (message names the failure). */
+  failed: { actionId: string; message: string }[];
+}
+
 /**
- * Cancel a task plan: already-`success` nodes keep their result (irreversible), every remaining
- * non-terminal node becomes `cancelled`, and the snapshot is persisted.
+ * Revoke EVERY `PendingAction` the plan's nodes are parked on, using the TRUSTED identity only
+ * (`userId` = the session-verified owner, `sessionId` = the task's own session — never model text).
+ *
+ * The gateway claims each action ATOMICALLY (`pending`/`awaiting_mfa` → `cancelled`), so a later
+ * confirm/verify fails (`CONFLICT`) instead of moving money out of a plan the user just cancelled.
+ * Each action is revoked INDEPENDENTLY — one failure never aborts the others — and the net outcome is
+ * returned so the caller can surface it. An already-settled action is reported, never undone: work
+ * that already executed is irreversible under the simulated backend and is NEVER pretended to be
+ * rolled back.
+ */
+async function revokeParkedActions(
+  userId: string,
+  sessionId: string,
+  row: AgentTaskWithNodes,
+): Promise<RevokeSummary> {
+  const summary: RevokeSummary = { revoked: [], alreadySettled: [], failed: [] };
+  for (const node of row.nodes) {
+    const actionId = readPendingActionId(safeParse(node.output, undefined));
+    if (actionId === undefined) continue;
+    try {
+      await gateway.cancelAction(actionId, { userId, sessionId });
+      summary.revoked.push(actionId);
+    } catch (error) {
+      const appError = AppError.from(error);
+      if (ALREADY_SETTLED_CODES.has(appError.code)) {
+        summary.alreadySettled.push(actionId);
+        continue;
+      }
+      summary.failed.push({ actionId, message: appError.message });
+    }
+  }
+  return summary;
+}
+
+/**
+ * Cancel a task plan.
+ *
+ * 1. REVOKE the parked `PendingAction`(s) FIRST (atomic claim → `cancelled`), so any later
+ *    confirm/verify fails (`CONFLICT`/`NOT_FOUND`) and can never move money out of the cancelled plan.
+ * 2. THEN cancel the plan: already-`success` nodes keep their result (irreversible — executed work is
+ *    never pretended to be rolled back), every remaining non-terminal node becomes `cancelled`, and
+ *    the snapshot is persisted.
+ *
+ * An already-settled action is not a failure (it is terminal, so nothing can be revoked and no
+ * confirm can succeed). An UNEXPECTED revocation failure is surfaced as `AppError('INTERNAL')` AFTER
+ * the plan has been cancelled — the cancellation itself is never withheld, and the failure is never
+ * swallowed.
  */
 export async function cancelTask(
   sessionId: string,
   taskId: string,
   opts: TaskControlOptions = {},
 ): Promise<TaskPlan> {
-  const row = await loadOwnedTask(sessionId, taskId);
-  return lifecycle.cancelPlan(
+  const { row, userId } = await loadOwnedTaskWithOwner(sessionId, taskId);
+
+  const revoke = await revokeParkedActions(userId, row.sessionId, row);
+
+  const cancelled = await lifecycle.cancelPlan(
     toTaskPlan(row),
     buildPlanDeps(taskId, { runTool: UNUSED_RUN_TOOL, now: opts.now }),
     { now: opts.now },
   );
+
+  if (revoke.failed.length > 0) {
+    throw new AppError(
+      'INTERNAL',
+      `计划「${taskId}」已取消，但有 ${revoke.failed.length} 个待确认操作未能撤销: ` +
+        revoke.failed.map((failed) => `${failed.actionId}(${failed.message})`).join('; '),
+    );
+  }
+  return cancelled;
 }
 
 /** Retry the `failed` nodes (plus their not-yet-satisfied descendants), then re-run the plan. */

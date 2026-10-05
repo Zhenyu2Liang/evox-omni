@@ -103,10 +103,10 @@ function snapshotWith(
 }
 
 /**
- * Mark a plan PAUSED. `TaskPlanStatus` has no `'paused'`, so a paused plan is
- * returned with `status:'pending'`: its un-run nodes are surfaced as `pending`
- * (like any other snapshot) and its already-successful nodes keep their
- * `success` result — resumable by re-invoking `runPlan` / `resumePlan`.
+ * Mark a plan PAUSED: return a snapshot with `status:'paused'` — a non-terminal,
+ * resumable status. Its un-run nodes are surfaced as `pending` and its already-
+ * successful nodes keep their `success` result — resumable by re-invoking
+ * `runPlan` / `resumePlan` (which skip every already-successful node).
  *
  * Pure: the input plan is never mutated.
  */
@@ -114,7 +114,7 @@ export function pausePlan(plan: TaskPlan, opts: PausePlanOptions = {}): TaskPlan
   const now = opts.now ?? (() => demoNow());
   const results = new Map<string, TaskNodeResult>();
   for (const r of plan.results) results.set(r.id, { ...r });
-  return snapshotWith(plan, results, 'pending', now());
+  return snapshotWith(plan, results, 'paused', now());
 }
 
 /**
