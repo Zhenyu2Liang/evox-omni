@@ -91,7 +91,8 @@ interface ConfirmationOutcome {
   ok: boolean;
   actionId: string;
   status: PendingActionStatus;   // confirmed | executed | failed | cancelled | locked | awaiting_mfa
-  tier: RiskLevel;
+  tier: RiskLevel;               // EFFECTIVE tier: RED whenever `requiresMfa`, else the action's tier
+  requiresMfa: boolean;          // EFFECTIVE MFA requirement (never the stale parked-row flag)
   message: string;
   result?: ToolExecutionResult;  // present when the original args were executed
   events: AgentStreamEvent[];    // continuation narration (agent.continue()) events
