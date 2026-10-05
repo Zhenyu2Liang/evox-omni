@@ -35,6 +35,8 @@ export interface ToolExecutionResult {
   error?: string;
   tier?: RiskLevel;
 }
+/** Additive per-call option accepted by the model-free runners. Only `transfer_money` reads it. */
+export interface ToolRunOptions { idempotencyKey?: string; }
 export interface ToolRegistry {
   tools: Record<ToolName, AgentTool<any>>;
   list(): AgentTool<any>[];
