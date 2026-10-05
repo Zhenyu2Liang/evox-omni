@@ -10,7 +10,9 @@ It proves two things, deterministically and **offline** (no network, no API key)
 2. the **12 demo scenarios** work end-to-end through the full pipeline
    (Pi Agent → banking tools → Security Gateway `beforeToolCall` → Banking SDK → audit) via
    **scenario** tests driven by a *scripted* model (`registerFauxProvider()`, `LLM_MODE=mock`) and via
-   **app-entry (HTTP)** tests that drive the REAL Next.js route handlers.
+   **app-entry (HTTP)** tests that drive the REAL Next.js route handlers, and
+3. the **user journeys** render correctly in a **real browser** (`e2e/`, headless system Chrome via
+   `playwright-core` against the real `/agent` page) — the only layer that asserts on RENDERED DOM.
 
 Only the model is mocked; the tools, the security chokepoint, the route handlers and the DB are the real ones.
 This node owns test infrastructure and fixtures — NOT the business logic under test (that lives in
@@ -92,6 +94,26 @@ Fixtures: the canonical demo dataset (user 李明; contacts 张伟/王芳/妈妈
 anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) is defined in
 `helpers/fixtures.ts`. Cross-module knowledge belongs to the modules under test, not to fixtures.
 
+## Real-Browser E2E (tests/e2e — NOT run by vitest)
+
+A separate acceptance layer ABOVE the HTTP specs: `tests/e2e/acceptance.e2e.ts` boots the REAL app
+(`next dev`) on a free port and drives the REAL `/agent` UI in headless system Chrome
+(`playwright-core`, NO browser download), asserting on RENDERED DOM. Its file name avoids
+`.test.`/`.spec.` so `npm run test` NEVER picks it up — run it explicitly.
+
+```
+npx tsx tests/e2e/acceptance.e2e.ts
+```
+
+Prerequisites (once, in a fresh worktree): `npm install` → `npx prisma generate` → `npx prisma db push`
+→ `npm run db:seed`. It uses the DEV DB (`prisma/dev.db`, gitignored), `.env` must set `LLM_MODE=mock`,
+and it needs a system Chrome. It prints one `PASS|FAIL|SKIP <journey> — <evidence>` line per journey
+and exits non-zero iff any journey FAILs (a SKIP does not fail the run).
+**Covers:** NL → confirmation/MFA card → human-decision flows, MFA success + wrong-code rejection,
+plan pause/resume + cancel, and refresh/action-entry recovery from persisted server state.
+**Does NOT cover:** the real LLM, `next build`/`next start`, cross-browser, a11y/perf, or the
+`unit`/`scenarios` layers. See `e2e/CONTEXT.md` for details and known limitations.
+
 ## Fast test-DB path (why the suite is fast — do not remove)
 
 The full suite (447 tests / 214 suites) runs in ~30–45s.
@@ -119,7 +141,8 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - `./helpers` → shared test utilities (db reset/seed + fast pragmas, fixtures, faux agent, scenario harness)
 - `./unit` → pure/logic unit specs for security, planner, banking-sdk, agent, lib (incl. `unit/security/risk-engine-dedup.test.ts` → ledger dedup of the in-flight transfer total via `computeInFlightTransferTotal`)
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
-- `./app` → real app-entry (HTTP) specs driving the real Next.js route handlers (chat/SSE, action confirm|verify|cancel, task lifecycle, reviewer regressions); newer specs cover cookie-only session takeover, cancel-during-authorization, concurrent resume/retry exactly-once, plan pause/terminal-state, cumulative ¥1000/day risk, ledger consistency, YELLOW→RED MFA upgrade
+- `./app` → real app-entry (HTTP) specs driving the real Next.js route handlers (chat/SSE, action confirm|verify|cancel, task lifecycle, reviewer regressions); newer specs cover cookie-only session takeover, cancel-during-authorization, concurrent resume/retry exactly-once, plan pause/terminal-state, cumulative ¥1000/day risk, ledger consistency, YELLOW→RED MFA upgrade — every top-level describe is labeled `[integration]` (these are handler tests, NOT browser E2E)
+- `./e2e` → real-browser acceptance harness: boots `next dev` + real headless Chrome and drives the `/agent` UI end-to-end, asserting on RENDERED DOM (the ONLY true browser E2E layer). See `e2e/CONTEXT.md`.
 - `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)

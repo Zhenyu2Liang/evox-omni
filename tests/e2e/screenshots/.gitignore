@@ -1,0 +1,4 @@
+# Screenshots are runtime artifacts of the real-browser E2E harness (failure captures).
+# Ignore everything in this directory — including the PNGs — but keep this .gitignore itself.
+*
+!.gitignore

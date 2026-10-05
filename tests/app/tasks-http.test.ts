@@ -181,7 +181,7 @@ afterAll(async () => {
 
 /* ------------------------------------------------------------------------------------ specs */
 
-describe('POST /api/tasks/[id] — real task control (pause / cancel / retry)', () => {
+describe('[integration] POST /api/tasks/[id] — real task control (pause / cancel / retry)', () => {
   it('pause — halts the parked plan and persists the paused snapshot (status:paused)', async () => {
     const { sessionId, taskId, plan } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
     expect(plan.status).toBe('waiting_confirmation');
@@ -296,7 +296,7 @@ describe('POST /api/tasks/[id] — real task control (pause / cancel / retry)', 
   });
 });
 
-describe('POST /api/actions/[id]/{confirm,verify} — resume the parked plan with the REAL result', () => {
+describe('[integration] POST /api/actions/[id]/{confirm,verify} — resume the parked plan with the REAL result', () => {
   it('confirm (YELLOW) — resumes the parked YELLOW node and writes the REAL transfer result back', async () => {
     const { sessionId, taskId, plan } = await seedPlan(
       '先查余额再给张伟转200元',
@@ -394,7 +394,7 @@ describe('POST /api/actions/[id]/{confirm,verify} — resume the parked plan wit
   });
 });
 
-describe('GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', () => {
+describe('[integration] GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', () => {
   it('GET /api/tasks/[id] returns the persisted plan (refresh recovery for a seeded parked plan)', async () => {
     const { sessionId, taskId, plan } = await seedPlan(
       '先查余额再给张伟转200元',
@@ -478,7 +478,7 @@ describe('GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', 
   });
 });
 
-describe('task endpoints — authorization (cookie-only identity)', () => {
+describe('[integration] task endpoints — authorization (cookie-only identity)', () => {
   it('POST /api/tasks/[id] without a session (no cookie) → 403 SECURITY_DENIED', async () => {
     const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
 

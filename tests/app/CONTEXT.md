@@ -117,6 +117,10 @@ complementing the in-process `tests/scenarios/*` suites.
 
 ## Constraints / Conventions
 
+- **Every suite is labeled `[integration]`.** Each `*-http.test.ts` carries the `[integration]` marker in
+  its top-level `describe(...)` title(s) — these are INTEGRATION-level specs driving the REAL Next.js
+  route handlers in-process (NOT unit tests, and NOT browser end-to-end). The ONLY true browser
+  end-to-end acceptance lives in the sibling `../e2e/` harness.
 - **Cookie-only session bootstrap.** `POST /api/chat` takes identity SOLELY from the `banking_session`
   cookie: a body `sessionId` that DISAGREES with the cookie — INCLUDING "no cookie present" — is
   rejected `409 CONFLICT` and sets NO cookie. The FIRST turn OMITS `sessionId` and sends NO cookie;
