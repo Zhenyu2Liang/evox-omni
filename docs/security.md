@@ -105,9 +105,14 @@ flowchart TD
 - **受 Cookie 门控（写 / 鉴权）的路由**：
   `POST /api/actions/[id]/confirm`、`POST /api/actions/[id]/verify`、`POST /api/actions/[id]/cancel`、
   `GET /api/actions`、`GET /api/tasks/[id]`、`POST /api/tasks/[id]`、`POST /api/security/reset`。
+- **`POST /api/chat`（会话创建 / 回合路由）—— cookie-only，body 永不选会话**：
+  - 会话 id **只**取自可信的 HttpOnly `banking_session` cookie（`resolveSessionId`）；
+  - 若请求 body 的 `sessionId` **存在且与 cookie 不一致**（**包括无 cookie 的情况**）⇒
+    `AppError('CONFLICT')` ⇒ **HTTP 409，且不签发任何 `Set-Cookie`**；body 的 `sessionId` 与 cookie
+    **相等**时才被接受（它只能"确认"，**永不**能选择或铸造会话）；
+  - 首次访问（无 cookie）⇒ 新建会话并在成功响应上签发
+    `banking_session=<id>; Path=/; HttpOnly; SameSite=Lax`。
 - **非身份门控（明确列出，避免过度声称）**：
-  - `POST /api/chat` 是**会话创建**路由 —— 它从请求 **body** 读取 `sessionId` 并**签发**
-    `banking_session` cookie（**不要求**已存在 cookie）；
   - `GET /api/tasks`、`GET /api/security`、`GET /api/audit` 的身份是**可选**的（会话范围读取；
     无 / 未知会话 ⇒ 空结果或兜底，而非 403）；
   - 读取路由 `/api/dashboard`、`/api/bills`、`/api/cards`、`/api/subscriptions` 使用 `resolveUserId()`
@@ -147,6 +152,14 @@ flowchart TD
   `IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing']` 的已停放 `transfer_money` `PendingAction` 行
   （**防御式**解析 `argsJson.amount`，跳过畸形 / 非有限值的行）。这封堵了「陈旧停放转账」绕过：多笔
   各自在**停放时**通过校验、但合计超过 ¥1000 的 YELLOW 转账。
+- **账本去重（恰好计数一次）**：`lib/ledger.ts#idempotentTransferTxId(userId, key)` =
+  `txidem_` + `sha256("<userId>\0<key>")` 的前 32 位十六进制。`agent/confirmation.ts#executeAuthorizedAction`
+  对 `transfer_money` 传入 `{ idempotencyKey: action.id }`，`banking-sdk/transfer.ts` 以该 id 作为账本
+  `Transaction` 的**主键**（重复 ⇒ 重放原行，**不重复扣款**）。因此 `computeInFlightTransferTotal`
+  **排除**任何账本行已存在的在途动作：一个「已入账，但动作仍未终态（`PendingAction` 仍为 `confirmed`）」
+  的转账被**恰好计数一次**（算在**已执行**半边，而非在途半边）。
+- **严格 `>` 的边界**：`¥1000` ⇒ 🟡 YELLOW（仅确认，免密）；`¥1000.01` ⇒ 🔴 RED（需 MFA）；
+  两笔并发 `¥600` ⇒ 第二笔升级为 MFA；**无 MFA 时有效当日累计永不超过 ¥1000**。
 - **YELLOW→RED 升级（escalation）**：若 `risk.tier === 'RED'`，在**事务内**通过
   `tx.pendingAction.update({ where: { id }, data: { status: 'awaiting_mfa', riskLevel: 'RED', requiresMfa: true } })`
   **回滚认领**并返回 `{ kind: 'escalated' }`。**提交之后**签发 MFA 挑战，并记录一条
@@ -159,7 +172,34 @@ flowchart TD
 
 ---
 
-## 6. 提示注入防御 · Prompt Injection Defense
+## 6. 计划生命周期安全保证 · Plan-Lifecycle Security
+
+`submit_plan` 支撑的 DAG 计划（持久化为 `AgentTask`）在**跨请求**的 pause / cancel / resume / retry 下保持一致。
+每一处状态迁移都是**原子 compare-and-set**（`lib/db/repositories/task.ts#claimTaskStatus`：单条
+`updateMany`，`count===1` 才算成功），且 `'cancelled'` 为**终态**。
+
+- **取消即撤销（cancel revokes）**：`agent/task-control.ts#cancelTask` 先经网关 `gateway.cancelAction`
+  **原子地**（CAS `pending|awaiting_mfa → cancelled`）撤销计划**已停放**的 `PendingAction`（已结算的
+  收集进 `alreadySettled`，**永不回滚**），再取消计划（`planner/lifecycle.ts#cancelPlan` 保留终态节点，
+  仅把非终态节点标记 `cancelled`）——**已完成的转账原样保留，没有伪造的回滚**。计划进行中被并发取消时，
+  **运行后扫描** `task-control.ts#sweepCancelledPlan` 在每条运行路径之后撤销运行期间新铸造、仍停放的
+  action；取消 vs 确认的竞争经 `security/security-gateway.ts#authorizeAction` 的**共享** `PendingAction`
+  CAS 实现**至多一次**（已取消的 action 认领匹配 0 行 ⇒ `CONFLICT`，取消后的确认**不会执行**）。
+- **并发 resume / retry 恰好一次**：计划级 CAS 让「输家」返回持久化计划而不运行——`retryTask` 的
+  from-集合**排除** `'running'`（并发 retry 只有一次进入运行），`resumeTask` 则**保留** `'running'`
+  （并发 resume 都运行，恰好一次由下一条保证）；节点副作用由
+  `agent/confirmation.ts#executeGatedTool` 的**单飞**去重（`inFlightExecutions`，键 = session + tool +
+  规范化 args），转账再经 `{ idempotencyKey: action.id }` 幂等——**不重复副作用**。
+- **暂停保持（pause retention）**：在**已暂停**的计划里确认一个停放节点，**只**记录该节点的结果；计划
+  **保持暂停**直到一次显式 resume（`task-control.ts#resumeTaskForAction` 调 `lifecycle.resumePlan` 时
+  不传 `explicitResume`；`resumePlan` 先核算 `stillPaused` 并返回暂停快照，暂不推进）。
+- **终态保护（terminal protection）**：被取消的计划**无法**经 resume / retry / pause 回到非终态——CAS 的
+  from-集合**排除**终态；丢失认领时返回持久化行，使 API 响应与数据库一致。持久化永不覆盖 `'cancelled'`
+  （状态是普通列，CAS 是**唯一**的强制手段）。
+
+---
+
+## 7. 提示注入防御 · Prompt Injection Defense
 
 `security/injection-guard.ts` 做**启发式检测**——但它**只防御，从不授予权限（defense-in-depth only）**。
 
@@ -180,7 +220,7 @@ flowchart TD
 
 ---
 
-## 7. 幻觉防护 · Hallucination Protection
+## 8. 幻觉防护 · Hallucination Protection
 
 系统对模型输出做**事实性约束**（`agent/system-prompt.ts` 导出 `HALLUCINATION_RULE`）：
 
@@ -196,7 +236,7 @@ flowchart TD
 
 ---
 
-## 8. MFA（模拟验证） · Mock MFA
+## 9. MFA（模拟验证） · Mock MFA
 
 `security/mfa.ts` 实现演示用 MFA：
 
@@ -207,7 +247,7 @@ flowchart TD
   **已锁定的会话/挑战无论提交什么码都返回 `{ ok:false, locked:true }`**（锁定优先判定）。
 - `MFA_MAX_ATTEMPTS = 3` —— 达到连续失败上限即触发熔断。
 
-### 8.1 升级为强验证 · MFA Escalation（有效层级端到端）
+### 9.1 升级为强验证 · MFA Escalation（有效层级端到端）
 
 一个**停放时被判 YELLOW** 的中等转账，可能在**执行 / 确认时**因当日有效累计变动而重新分级为 RED。
 这种**执行时升级**必须**端到端如实呈现**，绝不能被压平成一个「无 MFA 的普通失败」：
@@ -224,7 +264,7 @@ flowchart TD
 
 ---
 
-## 9. 熔断器 · Circuit Breaker
+## 10. 熔断器 · Circuit Breaker
 
 `security/circuit-breaker.ts` 是**会话级、连续失败**熔断器（**进程内内存态**）：
 
@@ -249,7 +289,7 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 ---
 
-## 10. 审计日志 · Audit Log
+## 11. 审计日志 · Audit Log
 
 `audit/` 是智能体问责轨迹的**唯一持久化 + 查询 API**：每条工具调用审计（`AuditEntry`）
 与每个安全事件（`SecurityEvent`）。它服务于智能体循环的**审计**阶段，并驱动审计面板与安全中心读模型。
@@ -273,7 +313,7 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 ---
 
-## 11. 沙箱保证 · Sandbox Guarantees
+## 12. 沙箱保证 · Sandbox Guarantees
 
 演示严格限定在安全沙箱内：
 
@@ -285,7 +325,7 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 ---
 
-## 12. 安全事件与决策速查 · Quick Reference
+## 13. 安全事件与决策速查 · Quick Reference
 
 | 控制 | 位置 | 触发 | 效果 |
 |---|---|---|---|
@@ -300,8 +340,12 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 | 熔断 | `circuit-breaker.ts` | 3 次连续失败 | 会话**全部操作**锁定（含读取，fail-closed）+ `CIRCUIT_BREAKER_TRIPPED` |
 | 熔断解锁 | `circuit-breaker.ts` · `POST /api/security/reset` | 用户在安全中心主动解除 | 清空熔断状态 + `SECURITY_RESET`（**经审计**） |
 | 审计 | `audit/` | 门控决策 / 安全控制 | `AuditLog` / `SecurityEvent` |
+| 会话标识 | `app/api/chat/route.ts` | `POST /api/chat` | cookie-only；body `sessionId` ≠ cookie（含无 cookie）⇒ `409 CONFLICT`，**不签发** cookie |
+| 计划取消撤销 | `task-control.ts#cancelTask` / `#sweepCancelledPlan` | 取消计划 | 原子撤销停放 action（`pending\|awaiting_mfa → cancelled`）+ 运行后扫描 |
+| 计划状态 CAS | `repositories/task.ts#claimTaskStatus` | pause/cancel/resume/retry | 单条 `updateMany`；**终态不可复活**；输家返回持久化行 |
+| 账本幂等 | `lib/ledger.ts` · `confirmation.ts#executeAuthorizedAction` | `transfer_money` | `{ idempotencyKey: action.id }` ⇒ 账本重放，不重复扣款 |
 
-## 13. 代码强制 vs 模拟 · What is Enforced vs Simulated（诚实清单）
+## 14. 代码强制 vs 模拟 · What is Enforced vs Simulated（诚实清单）
 
 本节是**安全自评**：明确区分"真实由代码强制"（IMPLEMENTED）、"为演示而模拟"（SIMULATED）与
 "尚未端到端验证"（UNVERIFIED）三部分，避免过度声称。
@@ -311,6 +355,8 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - 权限分级与门控（🟢/🟡/🔴、`requiresConfirmation`、`requiresMfa`）——静态策略表 + 确定性动态规则；
 - `beforeToolCall` 阻断——被门控的工具**字面上无法执行**；
 - 两阶段人工确认——gated 工具的参数被持久化为 `PendingAction`，只有人工 confirm/verify 后用**原始已校验参数**执行；
+- 身份与计划生命周期——cookie-only 会话（body 不选会话，冲突即 `409` 且不签发 cookie）、计划取消的原子撤销 +
+  运行后扫描、计划状态 CAS（终态不可复活）、转账账本幂等（`idempotencyKey`）；
 - 熔断（连续 3 次 MFA 失败锁会话）、注入检测（纵深防御）、幻觉防护（只报工具结果的事实）；
 - 审计写入（门控动作 + 安全事件）。
 
@@ -329,9 +375,11 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 **尚未端到端验证（UNVERIFIED / 诚实边界）：**
 
-- **无真实浏览器端到端测试**：仓库内**没有** Playwright / Puppeteer / Cypress；`tests/app/` 下的 HTTP
-  路由规格是**进程内集成测试**——它们 `import` 真实路由处理器并用 `NextRequest` 对象直接调用，**不是**
-  浏览器测试；
+- **无真实浏览器端到端（E2E）测试**：仓库内**没有** `tests/e2e/`，也没有任何
+  Playwright / Puppeteer / Cypress / Selenium **测试文件**；`playwright-core`（`^1.63.0`）虽在
+  `package.json` 中声明为 devDependency，但**未被使用**（无 `test:e2e` 脚本、无启动浏览器的代码）。
+  `tests/app/*` 是**进程内 HTTP 路由集成测试**（标记 `[integration]`）：`import` **真实**路由处理器并用
+  `NextRequest` 对象直接调用——**只有模型被脚本化**，**不是**浏览器测试；
 - **熔断器是进程内 / 单进程内存态**（非分布式、不持久化）；
 - **演示时钟被固定**（`DEMO_NOW = 2026-09-25 12:00 本地`）；**🟢 GREEN 只读操作按设计不写审计**；
 - **原子累计限额认领的串行化依赖 SQLite 文件锁**（见「原子累计限额主张」的注意项）——SQLite 特有，
