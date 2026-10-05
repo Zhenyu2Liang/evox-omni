@@ -55,14 +55,23 @@ flowchart TD
 依赖方向严格单向向下：`lib` ← `banking-sdk` ← `agent`/`planner`/`audit`；`security` 依赖 `lib`
 （+ 注入端口）；`app`/`components` 依赖下面的一切。**无跨模块循环依赖。**
 
+**Next.js 表面（HTTP 路由处理器 + 页面）**
+
+- **API 路由处理器**（`app/api/**/route.ts`，共 15 个）：`/api/actions`、`/api/actions/[id]/confirm`、
+  `/api/actions/[id]/verify`、`/api/actions/[id]/cancel`、`/api/audit`、`/api/bills`、`/api/cards`、
+  `/api/chat`、`/api/dashboard`、`/api/health`、`/api/security`、`/api/security/reset`、
+  `/api/subscriptions`、`/api/tasks`、`/api/tasks/[id]`。
+- **页面**（`app/**/page.tsx`，共 7 个）：`/`（dashboard）、`/agent`、`/audit`、`/bills`、`/cards`、
+  `/security`、`/subscriptions`；另有 Next 生成的 `/_not-found`。
+
 > **构建前置（Build prerequisite）**：`next build`（Next ^15.1.6）会**静态预渲染**依赖数据库的页面
 > （`/`、`/cards`、`/subscriptions` 在模块作用域导入 `@/banking-sdk`），因此必须在构建**之前**先推送并
 > 填充数据库：`npx prisma generate && npx prisma db push && npm run db:seed`，然后 `npm run build`。
 > 按请求动态渲染的页面是 agent / audit / security / bills；`app/api/**` 处理器全部为动态。
 
 > **UI 组件 barrel 中立性（SSR）**：barrel 层**不得**带 `'use client'`；一个带该指令的**中间层** barrel
-> 若经中立的 `components/index.ts` 门面星号再导出，SSR 时会解析为 `undefined` 并让消费页崩溃
-> （`/agent` 曾因此返回 HTTP 500）——只有**叶子**客户端组件带该指令。
+> 若经中立的 `components/index.ts` 门面星号再导出，SSR 时会解析为 `undefined` 并让消费页崩溃——
+> 只有**叶子**客户端组件带该指令。
 
 ---
 
@@ -81,7 +90,7 @@ Constraints），也是**路由表**（把领域映射到子目录）。顶层�
 | `./security` | 安全网关 + 权限引擎、风险引擎、MFA、熔断器、注入守卫（安全咽喉） |
 | `./audit` | 审计日志器 + 安全事件记录器 |
 | `./lib` | 共享内核：contracts、errors、money、config、constants、clock、Prisma client + repositories |
-| `./prisma` | Prisma schema、种子数据、迁移 |
+| `./prisma` | Prisma schema + 种子数据（无 `migrations/` 目录；schema 由 `prisma db push` 推送） |
 | `./tests` | 自动化测试（四层）：纯单元测试（security/planner/sdk/agent/lib）+ `tests/scenarios/` 的 faux-LLM 全流水线场景测试（Tests 1–12）+ `tests/app/*` 与 `tests/review-boundaries.test.ts` 的进程内 HTTP 路由处理器 `[integration]` 测试 + `tests/e2e/` 的**真实浏览器验收 harness**（`playwright-core` 启动系统 Chrome，`tsx` 显式运行，非 Vitest） |
 | `./docs` | 本目录：参赛文档（architecture / security / test-cases / known-risks） |
 
@@ -218,10 +227,23 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   （控制是 DB 驱动：执行器在每个检查点重读持久化行，而非内存标志）。
 - **RESUME**：先把状态翻回 `running` 再重跑计划，**跳过**所有既有结果为终态
   （`success | failed | skipped | cancelled`）的节点——已成功节点**绝不重跑**；仍停放的被门控节点继续停放。
-- **CANCEL**：终态，且**先撤销**该计划停放的 `PendingAction`（`revokeParkedActions` → 网关 `cancelAction`，
-  原子主张 `['pending','awaiting_mfa'] → 'cancelled'`），因此之后对它的确认以 `CONFLICT` 失败
-  （**资金无法从已取消的计划中流出**）。已执行的工作被保留——**不做虚假回滚**；只有剩余的非终态节点变为 `cancelled`。
+- **CANCEL**：终态，且**先撤销**该计划停放的 `PendingAction`。**主要保证**是
+  `agent/task-control.ts#cancelTask` 调用的 `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])`
+  （`lib/db/repositories/pendingAction.ts`）——**单条原子 `updateMany`** 一次性取消该计划的**每一个**动作。
+  节点输出扫描（`revokeParkedActions`，读 `node.output.pendingActionId`）与运行后的 `sweepCancelledPlan` 只是
+  **兜底 / 补充**，用于捕获「运行期间新铸、与并发取消擦肩而过」的动作——因此之后对它的确认以 `CONFLICT` 失败
+  （**资金无法从已取消的计划中流出**）。已完成的动作被如实保留——**不做虚假回滚**；只有剩余的非终态节点变为 `cancelled`。
 - **RETRY**：只重跑失败节点；`success` 节点永不重置。
+- **恰好一次（DB 级执行主张，不是进程内状态）**：跨请求的重复执行由**数据库主张**挡住。
+  `lib/db/repositories/task.ts#claimTaskExecution` 在 `executor.runPlan` **之前**用**单条原子 `updateMany`**
+  （compare-and-set：`executionToken IS NULL` → 本次的 token）主张 `AgentTask.executionToken`，并在 `finally` 中由
+  `releaseTaskExecution` 释放；节点级同理：`claimNodeExecution` 主张 `AgentTaskNode.executionToken`、
+  `releaseNodeExecution` 在 `finally` 释放，经 planner 的 `PlanDeps.claimNode` / `PlanDeps.releaseNode` 接入
+  （`agent/task-control.ts#buildPlanDeps`）。因此并发的 resume / retry / 确认续跑中**只有一个**能真正启动执行器，
+  其余立即返回已持久化的计划。跨「副作用已发生、结果尚未落库」窗口的幂等由
+  **`nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`**（`lib/ledger.ts`）保证：它作为 SDK 的
+  `idempotencyKey` 传入，同一 `(task, node)` 的重跑重放原始副作用而不会二次施加；`transfer_money` 另外用
+  `idempotentTransferTxId` 推导其账本行 id。
 - **刷新 / 恢复**：`GET /api/tasks`（按 cookie 限定的列表）与 `GET /api/tasks/[id]`（单计划，其节点结果携带
   `pendingActionId`，UI 可在刷新后恢复确认/MFA 入口）；`GET /api/actions` 列出非终态待处理动作。
   对计划停放动作的成功确认/验证会追加一个 `{type:'plan_update', plan}` 事件。
@@ -320,11 +342,16 @@ sequenceDiagram
   缺失 / 未知 → 403）；`POST /api/chat` 会话只取自 cookie，body `sessionId` 与 cookie 不一致（含无 cookie）
   → `409 CONFLICT` 且不签发 Set-Cookie；动作 / 任务归属强制（非本人 403 / 未知 404）；**没有 demo-user 回退**——
   仅有 actionId 不构成能力。
-- **取消与授权的竞态**：取消计划先原子撤销其停放动作，并在每次运行后**后置清扫**（`sweepCancelledPlan`）撤销
-  运行期间新铸的动作；取消与确认的竞态由共享的 `PendingAction` CAS 保证**至多一次**（取消后的确认不再执行）；
+- **取消与授权的竞态**：`cancelTask` 的**主要保证**是一次批量原子撤销——`revokePendingActionsByTask(taskId,
+  ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`）用**单条 `updateMany`** 取消计划内的**每一个**动作；
+  节点输出扫描与每次运行后的 `sweepCancelledPlan` 只是**兜底**，用于捕获运行期间新铸的动作。取消与确认的竞态由共享的
+  `PendingAction` 状态 CAS 保证**至多一次**（取消后的确认不再执行）；
   已完成转账原样保留——**无虚假回滚**。
-- **并发恢复 / 重试的恰好一次**：计划状态用 DB 原子 CAS 主张（`claimTaskStatus`），节点副作用再由**单飞**
-  （`executeGatedTool` 的 `inFlightExecutions`）去重，转账额外用幂等键——同一动作绝不重复执行。
+- **去重身份的作用域**：恰好一次的主保证是**DB 执行主张**（`claimTaskExecution` / `claimNodeExecution`，见 §8）。
+  `agent/confirmation.ts` 只对**自动执行的计划节点**调用按**稳定的节点身份** `nodeExecutionKey(taskId, nodeId)`
+  合并并发调用；**独立调用**（无计划节点）**没有**合并键——其恰好一次由 DB 的 `PendingAction` 状态 CAS 保证；
+  **两个不同计划**即使调用同一工具、传同一参数也各自独立执行（按 `sessionId` + 工具 + args 合并会把一个计划的副作用
+  错误地施加到另一个计划）。进程内 `inFlightExecutions` 只是**同进程补充**，且以**节点身份**为键。
 - **暂停保持（pause retention）**：在已暂停计划内确认一个停放节点只记录该节点结果，计划保持 `paused`，
   直到显式 resume 才继续。
 - **终态保护**：已取消的计划无法经 resume / retry / pause 离开终态；API 响应与 DB 一致（CAS 的 from 集合
@@ -338,7 +365,7 @@ sequenceDiagram
 - **UI 不展示 LLM 思维链**：只显示任务步骤、工具状态与结果。
 - **组件 barrel 层必须保持中立（neutral）**：`components/` 的 barrel **不得**携带 `'use client'`——一个带
   `'use client'` 的**中间层** barrel 若经中立的 `components/index.ts` 门面星号再导出，SSR 时会解析为
-  `undefined` 并让消费页面崩溃（`/agent` 曾因此返回 HTTP 500）；只有**叶子**客户端组件带该指令。
+  `undefined` 并让消费页面崩溃；只有**叶子**客户端组件带该指令。
 
 > 完整安全模型见 [`security.md`](./security.md)；验收场景见 [`test-cases.md`](./test-cases.md)；
 > 已知限制见 [`known-risks.md`](./known-risks.md)。
