@@ -11,14 +11,14 @@ const userId='user_liming';
 beforeEach(()=>resetDatabase());afterAll(()=>disconnectTestPrisma());
 async function session(){return (await getOrCreateSession(userId)).sessionId;}
 async function post(handler:any,id:string,body:unknown,s:string,path?:string){const res=await handler(new NextRequest('http://localhost'+(path??`/api/tasks/${id}`),{method:'POST',headers:{'Content-Type':'application/json',cookie:`banking_session=${s}`},body:JSON.stringify(body)}),{params:Promise.resolve({id})});return {httpStatus:res.status,...await res.json()};}
-const runner=(s:string)=>(toolName:string,args:Record<string,unknown>)=>executeGatedTool({sessionId:s,userId,toolName:toolName as any,args,userRequest:'审查'});
+const runner=(s:string)=>(toolName:string,args:Record<string,unknown>,ctx?:{taskId?:string;nodeId?:string})=>executeGatedTool({sessionId:s,userId,toolName:toolName as any,args,userRequest:'审查',taskId:ctx?.taskId,nodeId:ctx?.nodeId});
 const budget={id:'b',name:'预算',kind:'tool' as const,tool:'reserve_budget',args:{name:'审查新预算',amount:10},dependencies:['read']};
 const transfer={id:'t',name:'转200',kind:'tool' as const,tool:'transfer_money',args:{name:'张伟',amount:200},dependencies:['read']};
 async function pausedPlan(s:string,node:any){const result=await runSubmitPlan(userId,{goal:'审查',nodes:[{id:'read',name:'读',kind:'tool',tool:'get_balance',args:{},dependencies:[]},node]},{sessionId:s,runTool:async()=>{const row=await getTestPrisma().agentTask.findFirst({where:{sessionId:s},orderBy:{createdAt:'desc'}});await pauseTask(s,row!.id);return {ok:true,data:{balance:23580}};}});return result.data as any;}
 it('a staggered concurrent resume does not repeat an already-effected node before its result persists',async()=>{
   const s=await session();const plan=await pausedPlan(s,budget);
   let reached!:()=>void;const atBoundary=new Promise<void>(r=>reached=r);let release!:()=>void;const gate=new Promise<void>(r=>release=r);
-  const first=resumeTask(s,plan.id,{runTool:async(tool,args)=>{const outcome=await runner(s)(tool,args);reached();await gate;return outcome;}});
+  const first=resumeTask(s,plan.id,{runTool:async(tool,args,ctx)=>{const outcome=await runner(s)(tool,args,ctx);reached();await gate;return outcome;}});
   let second:any;
   try{await atBoundary;second=await post(taskPost,plan.id,{action:'resume'},s);}finally{release();await first;}
   const count=await getTestPrisma().budget.count({where:{name:'审查新预算'}});
@@ -54,7 +54,7 @@ it('independent plans with identical tools and arguments each perform their own 
 it('cancel blocks confirmation of an action minted before its node association persists',async()=>{
   const s=await session();let reached!:()=>void;const atBoundary=new Promise<void>(r=>reached=r);let release!:()=>void;const gate=new Promise<void>(r=>release=r);
   let actionId='';
-  const running=runSubmitPlan(userId,{goal:'转账',nodes:[{...transfer,dependencies:[]}]},{sessionId:s,runTool:async(tool,args)=>{const outcome=await runner(s)(tool,args);actionId=outcome.pendingActionId!;reached();await gate;return outcome;}});
+  const running=runSubmitPlan(userId,{goal:'转账',nodes:[{...transfer,dependencies:[]}]},{sessionId:s,runTool:async(tool,args,ctx)=>{const outcome=await runner(s)(tool,args,ctx);actionId=outcome.pendingActionId!;reached();await gate;return outcome;}});
   let cancelled:any,confirmed:any;
   try{await atBoundary;const task=await getTestPrisma().agentTask.findFirst({where:{sessionId:s}});cancelled=await post(taskPost,task!.id,{action:'cancel'},s);confirmed=await post(confirmPost,actionId,{},s,`/api/actions/${actionId}/confirm`);}
   finally{release();await running;}
