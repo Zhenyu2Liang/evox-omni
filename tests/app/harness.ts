@@ -67,6 +67,25 @@ export function sessionCookie(sessionId: string): string {
   return `${SESSION_COOKIE}=${sessionId}`;
 }
 
+/**
+ * Extract the `banking_session` id from a response's `Set-Cookie` header (undefined when absent).
+ *
+ * THE COOKIE-ONLY BOOTSTRAP RECIPE (see the module doc): `POST /api/chat` takes identity SOLELY from
+ * the `banking_session` cookie — a body `sessionId` that DISAGREES with the cookie (INCLUDING "no
+ * cookie present") is rejected with `409 CONFLICT` and sets NO cookie. So a spec MUST NOT bootstrap a
+ * session by sending a body `sessionId`. Instead:
+ *   1. send the FIRST turn with a body that OMITS `sessionId` and with NO cookie — the route MINTS the
+ *      session, returns its id as `data.sessionId` (or `Set-Cookie`) AND sets the cookie;
+ *   2. carry that id on EVERY later request as `Cookie: banking_session=<id>` (the `sessionId` opt).
+ * A `?sessionId=`/`?userId=` query param NEVER authenticates.
+ */
+export function sessionIdFromResponse(res: Response): string | undefined {
+  const setCookie = res.headers.get('set-cookie');
+  if (!setCookie) return undefined;
+  const match = setCookie.match(new RegExp(`${SESSION_COOKIE}=([^;]*)`));
+  return match?.[1];
+}
+
 /* ---------------------------------------------------------------------------- URL builders */
 
 /** Build a relative `path?query` string, dropping `undefined` params (base is applied on invoke). */
