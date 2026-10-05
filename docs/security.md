@@ -319,7 +319,7 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 - **没有真实银行**：所有数据都在 SQLite 中模拟（种子用户**李明**，活期 ¥23,580 等）。
 - **没有真实资金 / 真实支付**：`transfer_money` 只是写一条模拟 `Transaction` 借记行并调整余额。
-- **没有 shell / SQL / 文件访问**：模型的**唯一**能力面是 26 个已注册银行工具 + `submit_plan`；
+- **没有 shell / SQL / 文件访问**：模型的**唯一**能力面是**共 26 个已注册工具**（= **25 个银行工具** + `submit_plan` 元工具）；
   没有 bash/shell/write/edit/file/SQL/system/http 工具被注册——**一段要求这类工具的注入无工具可调**。
 - **模型永不获得上述任何工具**，因此注入攻击的能力面为空集。
 

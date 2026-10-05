@@ -78,7 +78,7 @@ Constraints），也是**路由表**（把领域映射到子目录）。顶层�
 | `./audit` | 审计日志器 + 安全事件记录器 |
 | `./lib` | 共享内核：contracts、errors、money、config、constants、clock、Prisma client + repositories |
 | `./prisma` | Prisma schema、种子数据、迁移 |
-| `./tests` | 自动化测试：security/planner/sdk 单元测试 + faux-LLM 场景集成测试（Tests 1–12） |
+| `./tests` | 自动化测试（三层）：纯单元测试（security/planner/sdk/agent/lib）+ `tests/scenarios/` 的 faux-LLM 全流水线场景测试（Tests 1–12）+ `tests/app/*` 与 `tests/review-boundaries.test.ts` 的进程内 HTTP 路由处理器 `[integration]` 测试 |
 | `./docs` | 本目录：参赛文档（architecture / security / test-cases / known-risks） |
 
 ---

@@ -22,13 +22,17 @@ code-enforced security*, not a chat skin over a bank app.
   code-enforced / LLM-immutable permissions; prompt-injection defense (`injection-guard`, Test 4);
   hallucination protection (facts only from tool results); MFA (`MFA_CODE='123456'`,
   `MFA_MAX_ATTEMPTS=3`); circuit breaker; audit log fields (`AuditEntry` / `SecurityEventKind`);
-  sandbox guarantees.
-- `docs/test-cases.md` — the 12 demo scenarios as a table (input / tier / behavior / spec file),
-  the unit-test coverage per module, and the offline `LLM_MODE=mock` + `registerFauxProvider`
-  determinism story; run commands.
+  session identity (cookie-only write endpoints); plan-lifecycle guarantees (cancel revokes parked
+  actions / no fake rollback / exactly-once resume-retry); sandbox guarantees.
+- `docs/test-cases.md` — the 12 demo scenarios as a table (input / tier / behavior / spec file);
+  the three test layers (pure unit / faux-LLM scenario / in-process route-handler `[integration]`)
+  and the regression categories they cover (concurrency & limits, cumulative-risk dedup, identity &
+  session, MFA escalation, DAG pause/cancel/resume/refresh, mock action routing, injection, shared
+  kernel); the offline `LLM_MODE=mock` + `registerFauxProvider` determinism story; run commands.
 - `docs/known-risks.md` — honest limitations (mock data, simulated MFA, no real payment, heuristic
   anomaly detection, fictional investments, spending analysis excludes anomalies, in-process
-  breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each framed as
+  breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with the
+  honest ✅ implemented / 🧪 simulated / ⚠️ unverified classification and framed as
   *limitation + why it is acceptable for a competition demo*.
 
 ## Constraints
@@ -58,3 +62,7 @@ code-enforced security*, not a chat skin over a bank app.
   `security/permission-engine.ts` (the authoritative tier table).
 - Scenario spec filenames mirror `tests/scenarios/test-0X-*.test.ts` (12 files).
 - When the code changes, update these docs in the same commit — they describe current state.
+- There is **no browser E2E suite**: `tests/app/*` are in-process route-handler `[integration]` specs;
+  the repo has no `tests/e2e/` and no Playwright/Puppeteer/Cypress/Selenium spec file;
+  `playwright-core` is declared in `package.json` but unused — these docs must never claim browser
+  verification.
