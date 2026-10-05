@@ -146,7 +146,7 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>; /
 
 `confirm`/`verify`/`cancel` return `ConfirmationOutcome` (it lacks `sessionId`/`requiresMfa`/`mfaResult`),
 so the action routes **derive** those `ActionResponse` fields: `sessionId` from the persisted
-`PendingAction` row (falling back to the request cookie/query), `requiresMfa` from `tier === 'RED'`, and
+`PendingAction` row (falling back to the trusted cookie identity), `requiresMfa` from `tier === 'RED'`, and
 `mfaResult` from the verify outcome. A `data.ok === false` outcome (wrong MFA, blocked, cancelled) is a
 normal `200` — never an HTTP error.
 
@@ -169,7 +169,9 @@ The `action` routes call `confirm`/`verify`/`cancel` through `app/api/_lib/agent
   `../lib/db/repositories/task`, mapped by the pure helper `app/api/_lib/task-plans.ts`. Execution
   control lives in `../agent`, not here.
 - `../lib` (sibling — read-only): contracts (`ChatTurnRequest`, `ChatTurnResponse`, `AgentStreamEvent`, `AuditEntry`, `SecurityEvent`, `PendingActionStatus`, `TaskPlan`, `RiskLevel`), `AppError`/`ErrorCode`/`Result`, `getConfig`, `SESSION_COOKIE`, `DEFAULT_DEMO_USER_ID`, `formatCNY`.
-- `../tests` (sibling — read-only, escalate writes to root): automated tests (`../tests/app` would host route-handler contract tests; that directory does not exist yet).
+- `../tests` (sibling — read-only, escalate writes to root): automated tests; `../tests/app/` holds the
+  route-handler specs that drive these handlers in-process (real `NextRequest`, real Prisma on the test
+  SQLite, mock LLM).
 
 ## Constraints
 
@@ -188,12 +190,14 @@ The `action` routes call `confirm`/`verify`/`cancel` through `app/api/_lib/agent
 
 ## Test Strategy
 
-- **Route-handler contract tests** would live in `../tests/app/` (Vitest). Handlers are plain
+- **Route-handler contract tests** live in `../tests/app/` (Vitest). Handlers are plain
   `(req: NextRequest, ctx) => Response` functions, so tests invoke them directly with synthetic
   `Request` objects and assert: zod rejection → `400 VALIDATION`, `AppError` → correct HTTP status,
   success → `{ ok:true, data }` envelope, and that the MFA code never appears in a body.
-- **Dependencies are mocked at the module boundary** (`vi.mock('../agent')`, `vi.mock('../banking-sdk')`,
-  etc.) — no live Prisma, no network.
+- **Dependencies are NOT module-mocked** (`vi.mock` is never used): the specs import the REAL handlers
+  and run the whole production stack (route → `../agent` → tools → security gateway → `../banking-sdk` → a
+  test SQLite); only the MODEL is scripted (`tests/setup.ts` forces `LLM_MODE=mock`, the faux provider).
+  Identity is carried as the `Cookie: banking_session=<id>` header (never a query param).
 - **Integration/acceptance** (the 12 demo scenarios) are driven through `../agent` + `../tests`, not here;
   the app node contributes the SSE/JSON transport tests for `POST /api/chat` (stream frames + `done`,
   and `?stream=0` fallback).
@@ -252,11 +256,5 @@ prerender fails. README §10 orders: `db:generate` → `db:push` → `db:seed` �
   `CardActionHandlers`, whose `onAcknowledge`/`onViewDetail`/`onFreeze` invoke `stream.send('…')` (real
   follow-up turns) alongside `onConfirm`/`onVerify`/`onCancel`. `/agent` mounts `<ChatWindow sessionId={…} className=…/>` (the session id is read server-side from the `banking_session` cookie). The `AnomalyBanner` usages here (`app/page.tsx:48`, `app/bills/page.tsx:100`) pass no handler props
   (the banner is display-only). See `../components/chat/cards/CONTEXT.md`.
-- **Identity is cookie-only (server-derived); action/task routes enforce ownership; the reset is audited.** Every auth/write route calls `requireIdentity(req)` FIRST — a missing cookie or unknown session fails closed with `403 SECURITY_DENIED`; a `?userId=`/`?sessionId=` query param is IGNORED (never overrides the cookie). `POST /api/actions/[id]/{confirm,verify,cancel}` then guard that the trusted session/user owns the `PendingAction` (mismatch → `403 SECURITY_DENIED`) and forward `{ userId, sessionId }` to `@/agent` via `agent-bridge`; `confirm` surfaces MFA escalation (`requiresMfa`, effective `tier`, and a code-free `{type:'mfa_required',actionId}` event). `confirm`/`verify` additionally append a refreshed `plan_update` to `events` when the settled action parked a plan node (located BEFORE the decision via `locateOwningPlan`, then re-read via `withPlanUpdate`). Ownership-guarded reads: `GET /api/actions` (the session's non-terminal pending actions), `GET /api/tasks/[id]` (owning plan with node `pendingActionId`), and `POST /api/tasks/[id]` (ownership-guarded execution control). `POST /api/security/reset` requires identity and uses the AUDITED `security.circuitBreaker.resetSession(sessionId, { actor })` (records a `SECURITY_RESET` SecurityEvent), never the test-only sync `reset()`.
-
-## Known Issues
-
-- **Root-owned `tests/app/*` still authenticate via the `?sessionId=` query with no `banking_session` cookie.** With cookie-only identity they now receive `403` where they expected `200` — `tasks-http.test.ts` (10/11), `actions-http.test.ts` (8/9), `plan-parking-http.test.ts` (2/4) fail. They need a `Cookie: banking_session=<id>` helper (two `tasks-http` assertions also change: 400→403, unknown-id-without-identity→403). `tests/app/chat-http.test.ts` passes (it sends `sessionId` in the request body). Reported to root — NOT editable from `./app`.
-- **Sibling `components/chat/cards/PlanCard.tsx:13,22` fails type-check/build.** `PLAN_STATUS_LABEL` / `PLAN_STATUS_TONE` are `Record<TaskPlanStatus, string>` missing the `paused` key (added to `TaskPlanStatus`). This breaks `npx tsc --noEmit` (2 errors, both sibling; 0 in `app/**`) and `npx next build` repo-wide. Owned by the `./components` sibling — reported, not editable from `./app`.
-
+- **Identity is cookie-only (server-derived); action/task routes enforce ownership; the reset is audited.** Every auth/write route calls `requireIdentity(req)` FIRST — a missing cookie or unknown session fails closed with `403 SECURITY_DENIED`; a `?userId=`/`?sessionId=` query param is IGNORED (never overrides the cookie). `POST /api/actions/[id]/{confirm,verify,cancel}` then guard that the trusted session/user owns the `PendingAction` (mismatch → `403 SECURITY_DENIED`) and forward `{ userId, sessionId }` to `@/agent` via `agent-bridge`; `confirm` surfaces MFA escalation (`requiresMfa`, effective `tier`, and a code-free `{type:'mfa_required',actionId}` event). The gateway parks a gated YELLOW/RED call as a `PendingAction` row that persists the owning plan's `taskId`/`nodeId` (both nullable); `confirm`/`verify` use that to locate and refresh the parked plan node's `plan_update` BEFORE the decision (`locateOwningPlan`) and re-read it after (`withPlanUpdate`). Ownership-guarded reads: `GET /api/actions` (the session's non-terminal pending actions), `GET /api/tasks/[id]` (owning plan with node `pendingActionId`), and `POST /api/tasks/[id]` (ownership-guarded execution control). `POST /api/security/reset` requires identity and uses the AUDITED `security.circuitBreaker.resetSession(sessionId, { actor })` (records a `SECURITY_RESET` SecurityEvent), never the test-only sync `reset()`.
 - **Plan-node UI consumption is a `../components` concern.** The `./app` side is complete: `POST /api/chat` forwards `plan_update` / `confirmation_required` / `mfa_required` / `plan` cards verbatim; `GET /api/tasks` + `GET /api/tasks/[id]` + `POST /api/tasks/[id]` serve and steer persisted plans (ownership-guarded); `POST /api/actions/[id]/{confirm,verify}` append a refreshed `plan_update` for a settled plan node; and `/agent` passes the cookie session id to `ChatWindow` so a refresh can recover the running plan. Rendering `activePlan` and reacting to `plan_update` live in the read-only sibling `../components/chat` (`ChatWindow`/`useAgentStream`, `PlanCard`) — not editable from `./app`.
