@@ -295,7 +295,7 @@ Sibling nodes this node consumes (read-only; escalate changes to the owner):
 REQUIRED from siblings (must align at integration; assumed signatures):
 - `security.gateway.securityGateway.handleToolCall(ctx)` returns `{ evaluation, decision, action?, blockReason? }` with
   `blockReason` present iff `evaluation.blocked`; `action` present iff gated.
-- `security.gateway.securityGateway.authorizeAction(id, opts)` returns `AuthorizationResult { ok, status, actionId,
+- `security.gateway.securityGateway.authorizeAction(id, opts)` returns `AuthorizationResult` — it authorizes but does NOT execute. `confirmation.ts` reads every field through the `viewAuth` normalizer, so it stays green across the CURRENT shape (`{ ok, status, actionId,
   tier, requiresMfa, mfaResult?, message, action? }` — it authorizes but does NOT execute.
 - `planner.executor.runPlan(plan, deps, opts)` with `deps.runTool(toolName, args): PlanToolOutcome`
   (`{ ok, data?, summary?, error?, requiresConfirmation?, pendingActionId? }`); the agent supplies
