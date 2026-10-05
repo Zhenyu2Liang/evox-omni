@@ -184,6 +184,11 @@ function classify(text: string, messages: Message[]): AssistantMessage {
   }
   if (isConditionalPlan(t)) return handlePlan(t);
 
+  // DIRECT ACTION routes (gated YELLOW/RED tools) — matched BEFORE the broad READ matchers below
+  // (卡片/订阅/理财/…) so an action request is never answered with a query result instead.
+  const action = classifyDirectAction(t, messages);
+  if (action) return action;
+
   if (/(异常|可疑|奇怪|盗刷|被刷|乱扣|乱花|不对的消费)/.test(t)) {
     return toolCall('detect_anomaly', {});
   }
@@ -565,6 +570,24 @@ const CARD_LIMIT_CATEGORIES = ['娱乐', '餐饮', '购物', '出行', '生活',
 /** Sensible default category when the request names none (matches the seeded 娱乐 card limit). */
 const DEFAULT_CARD_LIMIT_CATEGORY = '娱乐';
 
+/**
+ * The adjustment verbs that introduce a NEW card limit. `调整到` (调-整-到) is included because the
+ * very common phrase "…调整到1500" (no 元/¥ suffix) would otherwise be missed. Shared by the direct
+ * `set_card_limit` route AND the conditional-plan limit branch so the two never diverge.
+ */
+const LIMIT_ADJUSTMENT_VERB =
+  '调整到|调整为|调整成|调整至|调到|调成|改成|改为|设置为|设为|限额为|设定为|限定为|限制为';
+
+/**
+ * Whether the text carries a limit-ADJUSTMENT intent even when the amount is still missing (the bare
+ * `调整` covers "…调整一下" / "…调整" with no number yet). Distinct from the amount pattern above,
+ * which needs the precise verb+number shape.
+ */
+const LIMIT_ADJUSTMENT_INTENT_RE = /(调整|改成|改为|设置为|设为|调到|调成|限额为|设定为|限定为|限制为)/;
+
+/** The limit amount that follows the adjustment verb — the one AFTER the verb, never an earlier number. */
+const LIMIT_ADJUSTMENT_AMOUNT_RE = new RegExp(`(?:${LIMIT_ADJUSTMENT_VERB})\\s*(\\d+(?:\\.\\d+)?)`);
+
 interface CardLimitAdjustment {
   category: string;
   amount: number;
@@ -580,11 +603,219 @@ interface CardLimitAdjustment {
  */
 function parseCardLimitAdjustment(text: string): CardLimitAdjustment | undefined {
   if (!/(限额|额度)/.test(text)) return undefined;
-  const m = text.match(/(?:调整为|改为|改成|设置为|设为|限额为|调到|调成)\s*(\d+(?:\.\d+)?)/);
+  const m = text.match(LIMIT_ADJUSTMENT_AMOUNT_RE);
   if (!m) return undefined;
   const category =
     CARD_LIMIT_CATEGORIES.find((candidate) => text.includes(candidate)) ?? DEFAULT_CARD_LIMIT_CATEGORY;
   return { category, amount: Number(m[1]) };
+}
+
+/* ------------------------------------------------------------- direct actions */
+
+/**
+ * DIRECT ACTION routes: a request that targets a gated (🟡 YELLOW / 🔴 RED) banking tool. `classify`
+ * consults them BEFORE the broad READ matchers (卡片/订阅/理财/…) so an action is never answered with
+ * a query result instead. Each returns a SINGLE tool call — or, when required information is missing,
+ * a plain CLARIFICATION asking for exactly that field — or `undefined` when the text is not that
+ * action (so classification falls through to the READ matchers).
+ *
+ * Purity contract: a scripted DEMO id map stands in for a DB lookup (no prisma / banking-sdk here).
+ * These routes only decide WHAT to do next — never WHETHER it is allowed: every emitted tool still
+ * passes through the single security chokepoint (`beforeToolCall → security.gateway`).
+ */
+function classifyDirectAction(text: string, messages: Message[]): AssistantMessage | undefined {
+  return (
+    classifySetCardLimit(text) ??
+    classifyFreezeCard(text) ??
+    classifySubscribeInvestment(text) ??
+    classifyRedeemInvestment(text) ??
+    classifyCancelSubscription(text) ??
+    classifyActionFollowUp(text, messages)
+  );
+}
+
+/** A clarification asking for the (missing) adjusted limit amount. */
+const LIMIT_AMOUNT_QUESTION = '请问要把限额调整到多少？例如“把娱乐限额调整到1500”。';
+
+/** 🟡 `set_card_limit` — a spend-limit adjustment, e.g. "把信用卡娱乐限额调整到1500". */
+function classifySetCardLimit(text: string): AssistantMessage | undefined {
+  if (!/(限额|额度)/.test(text)) return undefined;
+  if (!LIMIT_ADJUSTMENT_INTENT_RE.test(text)) return undefined;
+  const amount = parseLimitAdjustmentAmount(text);
+  if (amount == null) return plain(LIMIT_AMOUNT_QUESTION);
+  const category =
+    CARD_LIMIT_CATEGORIES.find((candidate) => text.includes(candidate)) ?? DEFAULT_CARD_LIMIT_CATEGORY;
+  return toolCall('set_card_limit', { cardId: resolveCardId(text), category, amount });
+}
+
+/** The amount AFTER the adjustment verb (dedicated pattern), else `parseAmount` as a fallback. */
+function parseLimitAdjustmentAmount(text: string): number | undefined {
+  const m = text.match(LIMIT_ADJUSTMENT_AMOUNT_RE);
+  if (m) return Number(m[1]);
+  return parseAmount(text);
+}
+
+/** 🟡 `freeze_card` — e.g. "冻结我的信用卡". An inquiry about a frozen card is not a freeze request. */
+function classifyFreezeCard(text: string): AssistantMessage | undefined {
+  if (!/冻结/.test(text)) return undefined;
+  if (/被冻结|已冻结/.test(text)) return undefined;
+  if (!/卡/.test(text)) return plain('请问要冻结哪张卡？例如“冻结我的信用卡”。');
+  return toolCall('freeze_card', { cardId: resolveCardId(text) });
+}
+
+/** Resolve a scripted demo card id from card words (purity ⇒ no DB lookup). */
+function resolveCardId(text: string): string {
+  if (/借记卡|储蓄卡/.test(text)) return 'card_debit';
+  return DEMO_CREDIT_CARD_ID; // 信用卡 (or unspecified) ⇒ the seeded credit card
+}
+
+/**
+ * Product NAMES → seeded ids (mirror `tests/helpers/fixtures.ts` PRODUCTS). The responder holds no DB
+ * access (purity contract), so a KNOWN name maps to its scripted id and an unknown name is used
+ * verbatim as the `productId` (best effort — the SDK then reports an honest failure).
+ */
+const PRODUCT_ID_BY_NAME: Record<string, string> = {
+  稳健理财A: 'prod_wenjiana',
+  稳健理财B: 'prod_wenjib',
+  进取混合C: 'prod_jinrong',
+  货币基金: 'prod_huobi',
+};
+
+/** Subscription NAMES → seeded ids (mirror `tests/helpers/fixtures.ts` buildSubscriptions). */
+const SUBSCRIPTION_ID_BY_NAME: Record<string, string> = {
+  Netflix: 'sub_netflix',
+  Spotify: 'sub_spotify',
+  iCloud: 'sub_icloud',
+  视频会员: 'sub_video',
+};
+
+/** The single seeded investment holding id a scripted redemption targets (best effort; see fixtures). */
+const DEMO_HOLDING_ID = 'holding_wenjiana';
+
+/** 🔴 `subscribe_investment` — e.g. "申购稳健理财A 1000元". */
+function classifySubscribeInvestment(text: string): AssistantMessage | undefined {
+  if (!/(申购|认购|买入|购买)/.test(text) && !/买[^\n]{0,6}(理财|基金|产品)/.test(text)) {
+    return undefined;
+  }
+  const productName = extractProductName(text);
+  if (!productName) {
+    return plain('请问要申购哪只理财产品？例如“申购稳健理财A 1000元”。');
+  }
+  const amount = parseAmount(text);
+  if (amount == null) return plain(`请问要申购「${productName}」多少钱？`);
+  return toolCall('subscribe_investment', { productId: resolveProductId(productName), amount });
+}
+
+/** The product name in the text: a known name first (longest match), else the name after the verb. */
+function extractProductName(text: string): string | undefined {
+  const known = knownNameInText(text, PRODUCT_ID_BY_NAME);
+  if (known) return known;
+  const m = text.match(
+    /(?:申购|认购|买入|购买|买)\s*([\u4e00-\u9fa5A-Za-z0-9·]{2,20}?)(?=\s*\d|\s*(?:元|块钱|块|人民币|¥|￥)|\s*[，,。！!？?]|\s*$)/,
+  );
+  const candidate = m?.[1]?.trim().replace(/^[点些个几]{1,3}/, '');
+  return candidate ? candidate : undefined;
+}
+
+function resolveProductId(name: string): string {
+  return PRODUCT_ID_BY_NAME[name] ?? name;
+}
+
+/** 🔴 `redeem_investment` — e.g. "赎回稳健理财A" (best effort; the seeded holding is `holding_wenjiana`). */
+function classifyRedeemInvestment(text: string): AssistantMessage | undefined {
+  const redeem = /赎回/.test(text) || (/取出/.test(text) && /(理财|基金|产品)/.test(text));
+  if (!redeem) return undefined;
+  return toolCall('redeem_investment', { holdingId: DEMO_HOLDING_ID });
+}
+
+/** 🟡 `cancel_subscription` — e.g. "取消Netflix订阅" / "取消订阅Netflix". */
+function classifyCancelSubscription(text: string): AssistantMessage | undefined {
+  if (!/(取消|退订)/.test(text)) return undefined;
+  if (!/(订阅|会员|续费)/.test(text) && !knownNameInText(text, SUBSCRIPTION_ID_BY_NAME)) {
+    return undefined; // not a subscription cancel (e.g. "取消订单") ⇒ fall through
+  }
+  const name = subscriptionNameInText(text);
+  if (!name) return plain('请问要取消哪个订阅？例如“取消Netflix订阅”。');
+  return toolCall('cancel_subscription', { subscriptionId: resolveSubscriptionId(name) });
+}
+
+/** The subscription name in the text: a known name first, then "取消X订阅" / "取消订阅X". */
+function subscriptionNameInText(text: string): string | undefined {
+  const known = knownNameInText(text, SUBSCRIPTION_ID_BY_NAME);
+  if (known) return known;
+  const candidate =
+    text.match(/取消\s*([\u4e00-\u9fa5A-Za-z0-9·]{2,20}?)\s*订阅/)?.[1]?.trim() ??
+    text.match(/取消\s*订阅\s*([\u4e00-\u9fa5A-Za-z0-9·]{2,20})/)?.[1]?.trim();
+  // A generic reference ("我的订阅" / "这个订阅") names no subscription ⇒ treat as missing.
+  if (!candidate || /的|我的|这个|那个|哪个|哪些|所有|全部/.test(candidate)) return undefined;
+  return candidate;
+}
+
+function resolveSubscriptionId(name: string): string {
+  return SUBSCRIPTION_ID_BY_NAME[name] ?? name;
+}
+
+/** The longest KEY of `map` that occurs literally in `text` (undefined when none does). */
+function knownNameInText(text: string, map: Record<string, string>): string | undefined {
+  let best: string | undefined;
+  for (const name of Object.keys(map)) {
+    if (text.includes(name) && (best === undefined || name.length > best.length)) best = name;
+  }
+  return best;
+}
+
+/**
+ * Cheap multi-turn: a BARE amount answering OUR OWN limit/subscribe clarification reuses the card or
+ * product parsed from the message that triggered it (no re-parse of the noun/verb).
+ */
+function classifyActionFollowUp(text: string, messages: Message[]): AssistantMessage | undefined {
+  const amount = parseAmountOnly(text);
+  if (amount == null) return undefined;
+  const lastUserIndex = findLastUserIndex(messages);
+  const priorReply = assistantTextBefore(messages, lastUserIndex);
+  if (!priorReply) return undefined;
+  const priorUser = userTextBefore(messages, lastUserIndex);
+
+  if (priorReply.includes('要把限额调整到多少') && priorUser) {
+    const category =
+      CARD_LIMIT_CATEGORIES.find((candidate) => priorUser.includes(candidate)) ??
+      DEFAULT_CARD_LIMIT_CATEGORY;
+    return toolCall('set_card_limit', { cardId: resolveCardId(priorUser), category, amount });
+  }
+  if (/要申购.*多少钱/.test(priorReply) && priorUser) {
+    const productName = extractProductName(priorUser);
+    if (productName) {
+      return toolCall('subscribe_investment', { productId: resolveProductId(productName), amount });
+    }
+  }
+  return undefined;
+}
+
+/** The whole message is just an amount (a bare answer to a clarification), e.g. "1500" / "1500元". */
+function parseAmountOnly(text: string): number | undefined {
+  const t = text.trim();
+  if (!/^\d+(?:\.\d+)?\s*(?:元|块钱|块|人民币)?\s*[。.!！]?$/.test(t)) return undefined;
+  return parseAmount(t);
+}
+
+/** Text of the assistant reply immediately preceding the latest user turn (undefined if none). */
+function assistantTextBefore(messages: Message[], lastUserIndex: number): string | undefined {
+  for (let i = lastUserIndex - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role === 'assistant') return contentToText(msg.content).trim();
+    if (msg.role === 'user') return undefined;
+  }
+  return undefined;
+}
+
+/** Text of the user message preceding the latest user turn (undefined if none). */
+function userTextBefore(messages: Message[], lastUserIndex: number): string | undefined {
+  for (let i = lastUserIndex - 1; i >= 0; i--) {
+    if (messages[i].role === 'user') {
+      return contentToText((messages[i] as UserMessage).content).trim();
+    }
+  }
+  return undefined;
 }
 
 /* ------------------------------------------------------------- misc helpers */
@@ -616,6 +847,10 @@ const ACTION_TEXT: Record<string, string> = {
   search_contact: '好的，我来查找这位联系人。',
   transfer_money: '好的，我来为你处理这笔转账。',
   set_card_limit: '好的，我来为你调整这张卡片的消费限额。',
+  freeze_card: '好的，我来为你冻结这张卡片。',
+  cancel_subscription: '好的，我来为你取消这个订阅。',
+  subscribe_investment: '好的，我来为你办理理财申购。',
+  redeem_investment: '好的，我来为你办理理财赎回。',
   reserve_budget: '好的，我来为你预留这笔预算。',
   submit_plan: '好的，我来为你规划一个任务计划。',
 };
