@@ -184,7 +184,11 @@ through the persistence ports, so state survives the request:
 - **Resume** — `resumePlan` applies the human `PlanToolOutcome` to the gated node (success / re-park /
   failed) and continues the walk, which skips every already-successful node and runs only the
   now-unblocked dependents. On a `'paused'` plan without `explicitResume` the decision is recorded
-  but the plan stays `'paused'` and nothing advances.
+  but the plan stays `'paused'` and nothing advances. If the gated node is the plan's LAST node,
+  resume makes NO forward progress beyond deciding it: `resumePlan` resolves that node and `runPlan`
+  then finds every node terminal (no tool re-runs), while a re-park returns WITHOUT entering `runPlan`.
+  So a resume only demonstrates "remaining nodes ran" when at least one node FOLLOWS the gated node
+  (or pending nodes remain after a pause).
 - **Cancelled is terminal for the controls** — `pausePlan` / `cancelPlan` / `retryPlan` return a
   `'cancelled'` plan UNCHANGED (no writes, no resets, `runPlan` never entered), so no control call
   can move it back to a non-terminal state. `'success'`/`'failed'` are NOT guarded this way:
