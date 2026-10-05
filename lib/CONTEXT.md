@@ -81,7 +81,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 ## Status
 
 - Fully implemented: every `lib/*.ts` util helper (`errors`, `money`, `config`, `constants`, `ids`,
-  `date`, `clock`, `json`), `db/client.ts`, and all `lib/db/repositories/*` aggregate modules.
+  `date`, `clock`, `json`, `ledger`), `db/client.ts`, and all `lib/db/repositories/*` aggregate modules.
 
 ## Notes for Agents
 
