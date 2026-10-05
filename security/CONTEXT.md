@@ -322,7 +322,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   The only caller (`agent/run-turn.ts` ~L450-454) scans, awaits `reportInjection`, then emits a UI `security_event` (kind `injection`); nothing is appended to the agent's system prompt/messages, despite the `injection-guard.ts` header mentioning a system reminder.
   Detection, the `INJECTION_ATTEMPT` event, and never-grants-permission all hold (defense-in-depth unaffected).
 - **The all-tiers (incl. GREEN) block when tripped has no direct unit test.**
-  `tests/scenarios/test-10-circuit-breaker.test.ts` only exercises a RED tool, so the GREEN-read denial path is unguarded by tests.
+- **"Repeated blocked high-risk attempts" is NOT a breaker trigger.**
 - **"Repeated blocked high-risk attempts" is NOT a breaker trigger.**
   `recordFailure` is called ONLY from `mfa.ts` on a wrong code; no code path counts blocked/denied attempts.
 - **Security-event writes are best-effort.**
