@@ -1,0 +1,60 @@
+﻿tests\app\actions-http.test.ts:152: function cancelAction(id: string, sessionId?: string): Promise<HttpResult<Envelope<ActionResponse>>> {
+tests\app\actions-http.test.ts:348: const res = await cancelAction(row.id, turn.sessionId);
+tests\app\actions-http.test.ts:399: const unknownCancel = await cancelAction(unknownId, turn.sessionId);
+tests\helpers\faux-agent.ts:114: const auth = await gateway.handleToolCall({ sessionId, userId, toolName, args, userRequest: '' });
+tests\helpers\scenario.ts:477: ? await gateway.authorizeAction(actionId)
+tests\helpers\scenario.ts:478: : await gateway.authorizeAction(actionId, { mfaCode });
+tests\helpers\scenario.ts:546: export async function cancelAction(agent: Agent, actionId: string): Promise<ScenarioResult> {
+tests\helpers\scenario.ts:550: const action = await gateway.cancelAction(actionId);
+tests\scenarios\test-01-balance.test.ts:120: const auth = await security.gateway.securityGateway.handleToolCall({
+tests\scenarios\test-10-circuit-breaker.test.ts:163: const auth = await security.gateway.securityGateway.authorizeAction(actionId, {
+tests\scenarios\test-10-circuit-breaker.test.ts:172: const gate = await security.gateway.securityGateway.handleToolCall({
+tests\unit\agent\confirmation-idempotency.test.ts:50: const auth = await gateway.handleToolCall({
+tests\unit\agent\confirmation-idempotency.test.ts:119: const cancelled = await cancelAction(actionId);
+tests\unit\agent\confirmation-idempotency.test.ts:141: await expect(cancelAction(actionId, { userId: 'user_intruder' })).rejects.toMatchObject({
+tests\unit\agent\confirmation-idempotency.test.ts:156: await expect(cancelAction(actionId, { sessionId: 'sess_intruder' })).rejects.toMatchObject({
+tests\unit\agent\confirmation.test.ts:74: const auth = await gateway.handleToolCall({
+tests\unit\agent\confirmation.test.ts:193: const outcome = await cancelAction(actionId);
+tests\unit\agent\run-turn-failure.test.ts:128: const auth = await gateway.handleToolCall({
+tests\unit\security\authorize-concurrency.test.ts:69: const auth = await gateway.handleToolCall({
+tests\unit\security\authorize-hardening.test.ts:102: const first = await securityGateway.authorizeAction(action.id);
+tests\unit\security\authorize-hardening.test.ts:108: await expectAppError(securityGateway.authorizeAction(action.id), 'CONFLICT');
+tests\unit\security\authorize-hardening.test.ts:113: await expectAppError(securityGateway.authorizeAction('pa_missing'), 'NOT_FOUND');
+tests\unit\security\authorize-hardening.test.ts:114: await expectAppError(securityGateway.cancelAction('pa_missing'), 'NOT_FOUND');
+tests\unit\security\authorize-hardening.test.ts:121: const cancelled = await securityGateway.cancelAction(action.id);
+tests\unit\security\authorize-hardening.test.ts:124: await expectAppError(securityGateway.authorizeAction(action.id), 'CONFLICT');
+tests\unit\security\authorize-hardening.test.ts:130: await securityGateway.authorizeAction(action.id);
+tests\unit\security\authorize-hardening.test.ts:133: await expectAppError(securityGateway.cancelAction(action.id), 'CONFLICT');
+tests\unit\security\authorize-hardening.test.ts:143: securityGateway.authorizeAction(action.id, { userId: 'user_someone_else' }),
+tests\unit\security\authorize-hardening.test.ts:147: securityGateway.cancelAction(action.id, { userId: 'user_someone_else' }),
+tests\unit\security\authorize-hardening.test.ts:157: securityGateway.authorizeAction(action.id, { sessionId: newSessionId() }),
+tests\unit\security\authorize-hardening.test.ts:161: securityGateway.cancelAction(action.id, { sessionId: newSessionId() }),
+tests\unit\security\authorize-hardening.test.ts:171: const res = await securityGateway.authorizeAction(action.id, {
+tests\unit\security\authorize-hardening.test.ts:192: const escalated = await securityGateway.authorizeAction(action.id);
+tests\unit\security\authorize-hardening.test.ts:200: const verified = await securityGateway.authorizeAction(action.id, { mfaCode: MFA_CODE });
+tests\unit\security\authorize-hardening.test.ts:214: const res = await securityGateway.authorizeAction(action.id);
+tests\unit\security\authorize-hardening.test.ts:228: await expectAppError(securityGateway.authorizeAction(executed.id), 'CONFLICT');
+tests\unit\security\authorize-hardening.test.ts:252: const res = await securityGateway.authorizeAction(action.id, { mfaCode: MFA_CODE });
+tests\unit\security\gateway-audit-trail.test.ts:111: const auth = await securityGateway.handleToolCall(ctx);
+tests\unit\security\gateway.test.ts:379: const res = await securityGateway.authorizeAction(action.id);
+tests\unit\security\gateway.test.ts:398: const res = await securityGateway.authorizeAction(action.id);
+tests\unit\security\gateway.test.ts:416: const res = await securityGateway.authorizeAction(action.id, { mfaCode: '000000' });
+tests\unit\security\gateway.test.ts:434: const res = await securityGateway.authorizeAction(action.id, { mfaCode: MFA_CODE });
+tests\unit\security\gateway.test.ts:458: const res = await securityGateway.authorizeAction(action.id, { mfaCode: MFA_CODE });
+tests\unit\security\gateway.test.ts:472: it("cancelAction(id) → status 'cancelled'; the business op is never executed", async () => {
+tests\unit\security\gateway.test.ts:477: const cancelled = await securityGateway.cancelAction(action.id);
+tests\unit\security\gateway.test.ts:489: const missing = await securityGateway.cancelAction('pa_does_not_exist').catch((e: unknown) => e);
+tests\unit\security\gateway.test.ts:494: await securityGateway.cancelAction(action.id); // → cancelled (now terminal)
+tests\unit\security\gateway.test.ts:496: const again = await securityGateway.cancelAction(action.id).catch((e: unknown) => e);
+tests\unit\security\gateway.test.ts:508: const res = await securityGateway.handleToolCall(ctxFor('get_balance'));
+tests\unit\security\gateway.test.ts:519: const res = await securityGateway.handleToolCall(
+tests\unit\security\gateway.test.ts:538: const res = await securityGateway.handleToolCall(
+tests\unit\security\gateway.test.ts:556: await securityGateway.handleToolCall(
+tests\unit\security\gateway.test.ts:559: await securityGateway.handleToolCall(
+tests\unit\security\gateway.test.ts:562: await securityGateway.handleToolCall(ctxFor('get_balance', {}, newSessionId()));
+agent\banking-agent.ts:153: const auth = await gateway.handleToolCall({
+agent\confirmation.ts:98: const auth = await gateway.handleToolCall(ctx);
+agent\confirmation.ts:294: auth = await gateway.authorizeAction(actionId, {
+agent\confirmation.ts:325: auth = await gateway.authorizeAction(actionId, {
+agent\confirmation.ts:351: export async function cancelAction(
+agent\confirmation.ts:357: const action = await gateway.cancelAction(actionId, {
