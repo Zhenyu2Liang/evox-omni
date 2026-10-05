@@ -129,3 +129,4 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 - `./banking-sdk/tx.ts` → `runInTransaction` — the SDK's only direct Prisma usage (interactive transaction boundary)
 - `../tests/unit/banking-sdk` → SDK unit specs incl. the money-movement atomicity regression spec (sibling — read-only, auto-discovered by the root `npm run test`; escalate writes to root)
 - `../lib/db/repositories` → the typed repositories the SDK reads/writes through (dependency — read-only)
+- `../lib/ledger` → shared deterministic transfer-ledger id (`idempotentTransferTxId`) — the idempotency dedup key the SDK uses for `createTransfer`; also consumed by `security/` (dependency — read-only)
