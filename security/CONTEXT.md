@@ -242,6 +242,20 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   `recordSecurityEvent` (sibling `audit/`) logs and swallows persistence failures, so an awaited event write can silently fail; the breaker's in-memory `locked` flag remains authoritative.
 - **`HIGH_RISK_BLOCKED` / `LIMIT_EXCEEDED` / `ANOMALY_FLAGGED` event kinds are declared but never written**
   by this node (only `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET` are emitted).
+- **Cumulative-transfer race — the daily ¥1000 limit is re-checked, never atomically RESERVED/executed.**
+  `authorizeAction` re-risks a parked `transfer_money` via `isTransferEscalated` → `risk.reEvaluateTransferRisk(userId, amount)`
+  (`security-gateway.ts:396-402`, `:444`), which calls `computeDailyTransferTotal` (`risk-engine.ts:91-103`) — a plain READ of
+  today's TRANSFER debits — BEFORE any debit is written. Two DISTINCT ¥600 actions confirmed CONCURRENTLY both read the
+  pre-transfer total, both pass YELLOW, and both execute (≈¥1200, no MFA); sequentially the second is caught (fresh total ¥600).
+  Nothing serializes the gate read against the SDK write (`banking-sdk/transfer.ts:114`); the only atomic primitives are
+  `claimPendingAction` (per-actionId CAS) and the per-transfer balance decrement — neither guards the AGGREGATE daily limit.
+  No transfer has an idempotency key / unique constraint.
+- **Execution-time escalation (YELLOW→RED) is not surfaced in the returned tier, events, or audit.**
+  The escalation branch (`security-gateway.ts:454-465`) returns `tier: action.tier` = the STALE persisted YELLOW with `requiresMfa: true`;
+  `AuthorizationResult` (`:59-72`) has NO effective-tier field, and the YELLOW / RED-verify success branches (`:479-488`, `:548-557`)
+  likewise echo `action.tier`. `authorizeAction` computes the true requirement internally as `effectiveRequiresMfa = row.requiresMfa || freshRed`
+  (`:449`) but never returns it. Downstream `agent/confirmation.ts` then returns tier=YELLOW, has no `requiresMfa` field, emits no
+  `mfa_required` event, and writes `audit.mfaRequired = action.requiresMfa` (the row column stays FALSE for a transfer YELLOW at park time).
 
 ## Dependencies (contracts this node consumes)
 
