@@ -2,34 +2,24 @@
  * GET /api/security — security-center read model.
  *
  * Contract:
- *  - Query (validated with the private `securityQuerySchema`): `{ sessionId?: string }`.
- *  - Session id: `?sessionId=` → the `banking_session` cookie → `''` (no session yet).
+ *  - Session: resolved SERVER-SIDE from the `banking_session` cookie (`_lib/session#resolveIdentity`);
+ *    a `?sessionId=` query param is IGNORED and never widens access. With no session the read model
+ *    falls back to the empty session id `''` (nothing to report yet) — a normal 200, not an error.
  *  - Delegates to `@/audit`: `getSecurityStatus(sessionId, { isLocked })` +
  *    `listSecurityEvents({ sessionId })`; the authoritative lock state is supplied by the
  *    security node's circuit breaker (`@/security` → `circuitBreaker.isLocked`).
  *  - Success: `200 { ok: true, data: { status; events; circuitBreaker } }`, where
  *    `circuitBreaker` surfaces the raw failure counter (`circuitBreaker.getState`);
- *    an invalid query maps to `400 VALIDATION` through the shared error envelope.
+ *    any failure maps through the shared error envelope.
  *
  * Thin by design: `validate (zod) → delegate → serialize`. No business logic, no Prisma here.
  */
 import type { NextRequest } from 'next/server';
-import { z } from 'zod';
 import { audit, type SecurityStatus } from '@/audit';
 import { security } from '@/security';
 import type { SecurityEvent } from '@/lib/contracts/audit';
-import { jsonResponse, errorResponse, parseQuery } from '../_lib/http';
-import { sessionIdQuerySchema } from '../_lib/schemas';
-import { resolveSessionId } from '../_lib/session';
-
-/**
- * Query schema for `GET /api/security`.
- *
- * PRIVATE on purpose: an App Router `route.ts` may only export HTTP-method handlers (plus known
- * config fields) — exporting a runtime schema value breaks `next build`.
- */
-const securityQuerySchema = sessionIdQuerySchema;
-export type SecurityQuery = z.infer<typeof securityQuerySchema>;
+import { jsonResponse, errorResponse } from '../_lib/http';
+import { resolveIdentity } from '../_lib/session';
 
 /** Success payload shape for `GET /api/security`. */
 export interface SecurityData {
@@ -41,8 +31,8 @@ export interface SecurityData {
 
 export async function GET(req: NextRequest): Promise<Response> {
   try {
-    const query = parseQuery(securityQuerySchema, req);
-    const sessionId = query.sessionId ?? resolveSessionId(req) ?? '';
+    const identity = await resolveIdentity(req);
+    const sessionId = identity?.sessionId ?? '';
 
     const status = await audit.getSecurityStatus(sessionId, {
       isLocked: (sid) => security.circuitBreaker.isLocked(sid),

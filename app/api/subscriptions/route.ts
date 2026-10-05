@@ -3,7 +3,10 @@
  * `/subscriptions` page).
  *
  * Contract:
- *  - Query (validated with `subscriptionsQuerySchema`): `{ userId?: string }`.
+ *  - NO query params (a `?userId=`/`?sessionId=` param is IGNORED — identity is never query-trusted).
+ *  - The user is the single seeded demo user, resolved SERVER-SIDE from runtime config only
+ *    (`_lib/session#resolveUserId`) — the NON-AUTHORITATIVE demo-read user for this simulated-data
+ *    read. It is never used for any auth/ownership decision.
  *  - Delegates to `@/banking-sdk`: `banking.subscription.listSubscriptions(userId)` (GREEN read).
  *  - Success: `200 { ok: true, data: { subscriptions: SubscriptionView[] } }`.
  *
@@ -12,22 +15,17 @@
  */
 import type { NextRequest } from 'next/server';
 import { banking, type SubscriptionView } from '@/banking-sdk';
-import { errorResponse, jsonResponse, parseQuery } from '../_lib/http';
-import { userIdQuerySchema } from '../_lib/schemas';
+import { errorResponse, jsonResponse } from '../_lib/http';
 import { resolveUserId } from '../_lib/session';
-
-/** Query schema for `GET /api/subscriptions` (private — a Next route may only export handlers). */
-const subscriptionsQuerySchema = userIdQuerySchema;
 
 /** Success payload shape for `GET /api/subscriptions`. */
 export interface SubscriptionsData {
   subscriptions: SubscriptionView[];
 }
 
-export async function GET(req: NextRequest): Promise<Response> {
+export async function GET(_req: NextRequest): Promise<Response> {
   try {
-    parseQuery(subscriptionsQuerySchema, req);
-    const userId = resolveUserId(req);
+    const userId = resolveUserId();
     const subscriptions = await banking.subscription.listSubscriptions(userId);
     const data: SubscriptionsData = { subscriptions };
     return jsonResponse(data);

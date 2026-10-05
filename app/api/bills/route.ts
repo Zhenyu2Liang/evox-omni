@@ -2,7 +2,11 @@
  * GET /api/bills — bills / 账单 read model (used by the client to refresh the `/bills` page).
  *
  * Contract:
- *  - Query (validated with `billsQuerySchema`): `{ month?: string }` (`YYYY-MM`).
+ *  - Query (validated with `billsQuerySchema`): `{ month?: string }` (`YYYY-MM`). A `?userId=` /
+ *    `?sessionId=` param is IGNORED — identity is never query-trusted.
+ *  - The user is the single seeded demo user, resolved SERVER-SIDE from runtime config only
+ *    (`_lib/session#resolveUserId`) — the NON-AUTHORITATIVE demo-read user for these simulated-data
+ *    reads. It is never used for any auth/ownership decision.
  *  - Delegates to `@/banking-sdk` (all GREEN reads):
  *      - `banking.transaction.analyzeSpending(userId, { month })` → `SpendingAnalysis`
  *      - `banking.transaction.listTransactions(userId, { limit })` → `TransactionView[]`
@@ -38,7 +42,7 @@ export interface BillsData {
 export async function GET(req: NextRequest): Promise<Response> {
   try {
     const { month } = parseQuery(billsQuerySchema, req);
-    const userId = resolveUserId(req);
+    const userId = resolveUserId();
     const [analysis, transactions, anomalies] = await Promise.all([
       banking.transaction.analyzeSpending(userId, { month }),
       banking.transaction.listTransactions(userId, { limit: BILLS_TRANSACTION_LIMIT }),
