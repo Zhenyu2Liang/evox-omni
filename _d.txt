@@ -1,0 +1,44 @@
+﻿=== agent/CONTEXT.md 210564c ===
+commit 210564c930f1f902769e75dd6c7e68e2d9e42887
+Author: Zhenyu2Liang <1370096263@qq.com>
+Date:   Mon Oct 5 19:19:24 2026 +0800
+
+    Update CONTEXT.md for ./agent
+    
+    Co-Authored-By: Genesis <noreply@evogit.ai>
+
+diff --git a/agent/CONTEXT.md b/agent/CONTEXT.md
+index 9042f57..c1e8477 100644
+--- a/agent/CONTEXT.md
++++ b/agent/CONTEXT.md
+@@ -374,6 +374,8 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
+ 
+ - **Cross-action transfer serialization depends on SQLite's DB-level single-writer lock, and the gateway's confirm-time re-risk transaction does not include the SDK execution.** `security/security-gateway.ts#authorizeTransfer` re-risks in ONE `prisma.$transaction` that CAS-claims the action FIRST and only THEN reads the in-flight-inclusive effective total (`computeEffectiveTransferTotalWith`) and re-runs `evaluateTransferRisk` (escalating to MFA when the day's total would exceed the limit), so concurrent confirms of DISTINCT parked transfers serialize only through SQLite's single-writer lock - with no explicit isolation level or `SELECT ... FOR UPDATE`; and a crash between that commit and `agent/confirmation.ts#executeAuthorizedAction` (which runs the transfer, then `recordActionResult`) leaves a `confirmed`-but-unledgered action counted as in-flight (over-conservative, never under-counting).
+ 
++- **`cancelTask` can return HTTP 500 AFTER the plan row is already `cancelled`.** `cancelTask` (`task-control.ts` 557-583) persists `cancelled` via `lifecycle.cancelPlan` → `persistPlanSnapshot` → `createTaskPersistence.persistPlan` → `updateTaskStatus(id,'cancelled')` (line 255, UNCONDITIONAL), and ONLY THEN `throw new AppError('INTERNAL', …)` when `revokeParkedActions` recorded a non-`CONFLICT`/`NOT_FOUND` failure (line 496). `app/api/_lib/http.ts#mapAppError` maps `INTERNAL → 500` and replaces the message with the literal `'Internal error'`; the client (`components/chat/actions.ts` 253-257, `useAgentStream.ts#controlTask`) turns any `!res.ok` into `undefined`, skips `upsertPlan`, and shows a generic error — so a `waiting_confirmation` plan can be durably `cancelled` while the rendered badge stays stale (`等待确认`). `pauseTask` has no revoke step and never throws, so it is immune. `revokeParkedActions` (454-500) only whitelists `CONFLICT`/`NOT_FOUND` as `alreadySettled`; any `SECURITY_DENIED` (from `gateway.cancelAction` → `assertOwnership`) or coerced `INTERNAL` becomes a `failed` entry.
++
+ ## Notes for Agents
+ 
+ - Pi SDK type/function names (`Agent`, `AgentTool`, `AgentState`, `AgentEvent`, `registerFauxProvider`,
+=== banking-sdk/CONTEXT.md 8bf0129 ===
+commit 8bf0129f483244371c7ec4154d5be08ed8f68b9a
+Author: Zhenyu2Liang <1370096263@qq.com>
+Date:   Mon Oct 5 19:08:04 2026 +0800
+
+    Update CONTEXT.md for ./banking-sdk
+    
+    Co-Authored-By: Genesis <noreply@evogit.ai>
+
+diff --git a/banking-sdk/CONTEXT.md b/banking-sdk/CONTEXT.md
+index dac02be..f9dda1f 100644
+--- a/banking-sdk/CONTEXT.md
++++ b/banking-sdk/CONTEXT.md
+@@ -93,7 +93,7 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
+ 
+ ## Design Decisions
+ 
+-- **Demo clock.** Every default date window (本月/上月/今日, spend analysis, dashboard `month`) defaults to `lib/clock.demoNow()` (never `Date.now()`), with an optional explicit `month`/`now` argument so tests inject a fixed instant.
++- **Demo clock.** Every default date window (本月/上月/今日, spend analysis, dashboard `month`) defaults to `lib/clock.demoNow()` (never `Date.now()`), with an optional explicit `month`/`now` argument so tests inject a fixed instant. On the WRITE path, `createTransfer` stamps its DEBIT ledger row with `occurredAt = demoNow()` (`transfer.ts:151` → written at `transfer.ts:197`), so every executed transfer lands on the pinned demo day (2026-09-25 12:00 LOCAL) and is counted by `security/risk-engine.computeDailyTransferTotal` (window `[startOfDay(demoNow), demoNow]`). The row also sets `amount: -amount` (NEGATIVE), `direction: 'DEBIT'`, `channel: 'TRANSFER'`, `category: '转账'`, `merchant: '转账给' + recipient.name`, `counterpartyId: recipient.id`, `currency: 'CNY'`.
+ - **Atomic money movement.** `transfer.createTransfer`, `investment.subscribeInvestment`/`redeemInvestment` and `card.setCardLimit` run their multi-row writes inside ONE interactive transaction (`./tx.ts` → `runInTransaction(fn)` = `prisma.$transaction`), so the steps commit together or roll back together — no partial write can survive. `./tx.ts` is the sole place the SDK touches the Prisma client (`../lib/db/client`) directly.
+ - **Concurrency & idempotency boundary.** No mutex, no explicit `$transaction` isolation option (`runInTransaction` calls `prisma.$transaction(fn)` bare, `./tx.ts:29`), no `SELECT … FOR UPDATE`. Overspend is prevented solely by the single-statement conditional decrement `tx.account.updateMany({ where: { balance: { gte: amount } } })` (in `transfer.ts` → `createTransfer`; `investment.ts` → `subscribeInvestment`) plus SQLite's database-level writer serialization. `createTransfer` writes a new ledger row per submitted call unless an `idempotencyKey` is supplied (see the idempotency bullet below). The SDK never checks the daily transfer limit — that is `security/` policy (`risk-engine`), and by design it is a *policy* concern, not an execute-only one.
+ - **`createTransfer` optional idempotency.** `TransferInput.idempotencyKey?` gives at-most-once semantics with NO schema change: the ledger row id is derived deterministically from `(userId, key)` via the SHARED helper `lib/ledger` → `idempotentTransferTxId` (`transfer.ts:154` just calls it; format `txidem_<sha256[:32]>`) and reused as the existing `Transaction.id` primary key. A repeat finds the persisted row inside the transaction and returns it (same `transactionId`, no second debit); a concurrent same-key loser hits the PK unique violation (`P2002`), its transaction rolls back (no debit) and the committed row is replayed. Absent key → unchanged behavior. Defense-in-depth only — the security layer's `PendingAction` compare-and-set is the PRIMARY at-most-once guard; the agent/app layer may pass `pendingAction.id` as the key.
