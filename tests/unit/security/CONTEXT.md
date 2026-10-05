@@ -60,6 +60,7 @@ circuitBreaker, injection}`) or the module directly:
 
 - `./permission-engine.test.ts` · `./risk-engine.test.ts` · `./risk-engine-rerisk.test.ts`
 - `./gateway.test.ts` · `./gateway-audit-trail.test.ts` · `./authorize-hardening.test.ts` · `./authorize-concurrency.test.ts`
+- `./transfer-limits-concurrency.test.ts` → dynamic transfer-risk + concurrency/limit invariants through the real gateway/`@/agent` façade + SDK
 - `./injection-guard.test.ts`
 - `./circuit-breaker.test.ts` · `./circuit-breaker-audit.test.ts` · `./circuit-breaker-reset.test.ts`
 - `./mfa.test.ts` · `./mfa-audit.test.ts`
