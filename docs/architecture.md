@@ -201,6 +201,22 @@ flowchart LR
 规划器是**纯 DAG 逻辑**：只导入 `lib/contracts/task` + `lib/errors`，绝不导入 banking-sdk / security /
 agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed` 并继续独立分支。
 
+**持久化任务控制 · Durable DAG Control**（路由在 `app/api/tasks/[id]/route.ts`，逻辑在 `agent/task-control.ts` + `planner/`）：
+
+- `POST /api/tasks/[id]`，body `{ action: 'pause' | 'resume' | 'cancel' | 'retry' }` →
+  `pauseTask` / `resumeTask` / `cancelTask` / `retryTask`。
+- **PAUSE**：持久化 `AgentTask.status='paused'`；一个**仍在运行**的计划会在**下一个节点边界**停下
+  （控制是 DB 驱动：执行器在每个检查点重读持久化行，而非内存标志）。
+- **RESUME**：先把状态翻回 `running` 再重跑计划，**跳过**所有既有结果为终态
+  （`success | failed | skipped | cancelled`）的节点——已成功节点**绝不重跑**；仍停放的被门控节点继续停放。
+- **CANCEL**：终态，且**先撤销**该计划停放的 `PendingAction`（`revokeParkedActions` → 网关 `cancelAction`，
+  原子主张 `['pending','awaiting_mfa'] → 'cancelled'`），因此之后对它的确认以 `CONFLICT` 失败
+  （**资金无法从已取消的计划中流出**）。已执行的工作被保留——**不做虚假回滚**；只有剩余的非终态节点变为 `cancelled`。
+- **RETRY**：只重跑失败节点；`success` 节点永不重置。
+- **刷新 / 恢复**：`GET /api/tasks`（按 cookie 限定的列表）与 `GET /api/tasks/[id]`（单计划，其节点结果携带
+  `pendingActionId`，UI 可在刷新后恢复确认/MFA 入口）；`GET /api/actions` 列出非终态待处理动作。
+  对计划停放动作的成功确认/验证会追加一个 `{type:'plan_update', plan}` 事件。
+
 ---
 
 ## 9. 两阶段确认模型 · Two-Phase Confirmation
@@ -237,6 +253,21 @@ sequenceDiagram
 - **第二阶段（人工决策）**：`POST /api/actions/:id/confirm`（🟡，或 MFA 后的 🔴）· `.../verify`（🔴 MFA 码）
   · `.../cancel`。服务器通过网关的**授权执行路径**（**不是 LLM**）用**原始已校验参数**经 Banking SDK 执行、
   写审计日志、把**真实**工具结果注入会话，并调用 `agent.continue()` 让模型叙述事实性结果。
+- **原子性（Atomic Claim + 执行时再风控）**：确认在**一个** `prisma.$transaction` 内完成，其**第一条语句**
+  就是 `PendingAction` 的比较并写入（compare-and-set，`pending → confirmed`）；**仍在同一事务内**重新推导
+  当日转账累计并**重跑**风险评定（`security/security-gateway.ts` → `authorizeTransfer`）。再风控所用的累计值
+  **包含在途**（已确认但尚未落账）的转账动作：`security/risk-engine.ts` 的
+  `computeEffectiveTransferTotalWith` = 当日**已执行**转账合计 + `computeInFlightTransferTotal`（对状态
+  ∈ `['confirmed','executing']` 的停放 `transfer_money` 动作求和），从而封死「先停放多笔小额转账绕过限额」
+  的路径。若执行时再风控升级为 🔴 RED，事务内**回滚主张**并持久化 `riskLevel='RED'`、`requiresMfa=true`、
+  `status='awaiting_mfa'`，随后下发 MFA（持久化审计用 `LIMIT_EXCEEDED`）。**诚实说明**：主张优先写依赖
+  **SQLite 写锁串行化**（SQLite 专属；跨独立数据库引擎 / 多写入者未经验证——演示运行在本地 SQLite 上）。
+- **身份（Identity，cookie-only）**：身份**仅**来自 `banking_session` HttpOnly cookie（由
+  `app/api/_lib/session.ts#requireIdentity` 解析）；`?userId=` / `?sessionId=` 查询参数被**忽略**；
+  cookie 缺失或对应未知会话 → **403**。待处理动作 / 任务的归属被强制（非本人 → 403，未知 id → 404）。
+  `POST /api/chat` 是**创建会话**的路由（从 body 读取 sessionId、签发 cookie），因此不受身份门控。
+- **有效层级端到端可见**：确认 / 验证响应同时返回有效 `tier` 与 `requiresMfa`，并发出 `mfa_required` 事件
+  （回合时来自 `agent/run-turn.ts`，附带 hint + 卡片；确认时来自 `agent/confirmation.ts#blockedOutcome`）。
 
 > **网关只授权，不执行**：`securityGateway.authorizeAction` 只返回授权结果，资金移动由 agent 层的
 > `executeGatedTool` 用原始参数执行。
@@ -265,6 +296,13 @@ sequenceDiagram
   模型输出与用户文本**从不**作为判定输入。
 - **能力面即安全边界**：工具注册表就是完整能力集；没有 shell/SQL/文件工具，注入攻击无工具可调。
 - **两阶段 + 人工决策**：资金移动永远由人工确认触发；网关授权、agent 执行，职责分离。
+- **原子主张 + 执行时再风控**：确认在一个 `prisma.$transaction` 内把主张（compare-and-set）与再风控一并完成，
+  再风控累计**包含在途转账**；升级则回滚主张并转 MFA。依赖 SQLite 写锁串行化（演示运行在本地 SQLite）。
+- **Cookie-only 身份与归属强制**：身份仅来自 HttpOnly `banking_session` cookie（查询参数被忽略，
+  缺失 / 未知 → 403）；动作 / 任务归属强制（非本人 403 / 未知 404）；**没有 demo-user 回退**——
+  仅有 actionId 不构成能力。
+- **DAG 持久化控制**：pause / resume / cancel / retry 由持久化 `AgentTask` 行驱动；cancel 撤销停放动作、
+  保留已执行工作、**无虚假回滚**；刷新后可从 API 恢复计划与待确认入口。
 - **演示时钟（Demo Clock）**：`DEMO_NOW = 2026-09-25 12:00 本地`，让本月/上月/今日窗口、消费分析、
   日转账窗口、计划任务日期与 system prompt 的「今天」保持一致，不受真实系统时钟影响。
 - **离线确定性**：`LLM_MODE=mock`（faux provider）+ 可注入的 `now` / `id`，让 agent/security/planner
