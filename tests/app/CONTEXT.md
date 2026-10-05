@@ -106,7 +106,9 @@ complementing the in-process `tests/scenarios/*` suites.
   ANOTHER session/user → **403 `SECURITY_DENIED`**. `GET /api/tasks/[id]` enforces ownership the same
   way; `GET /api/tasks` with no cookie returns `{ plans: [] }` (200).
 - Domain outcomes are NOT HTTP errors: a wrong MFA code, a cancel, a repeat confirm or a failed tool
-  all return **HTTP 200** with `{ ok:false, data:{ ok:false, status, … } }`. Only identity/ownership
+  all return **HTTP 200** using the SAME envelope as success — outer `{ ok:true, data }` — carrying the
+  domain outcome INSIDE `data` (`data.ok:false` / `data.status:'failed'|'cancelled'|…`); a failed domain
+  outcome is NEVER an outer `ok:false`. Only identity/ownership
   (`SECURITY_DENIED`→403), unknown id (`NOT_FOUND`→404) and transport/infra failures use the error
   envelope (status map in `app/api/_lib/http.ts`). A missing cookie on `POST /api/tasks/[id]` is
   rejected by `requireIdentity` BEFORE the body is parsed — a 403, never 400 `VALIDATION`.
