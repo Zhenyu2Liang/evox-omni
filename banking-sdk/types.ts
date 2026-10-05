@@ -321,6 +321,12 @@ export interface ReserveBudgetInput {
   purpose?: string;
   /** Epoch ms. */
   dueDate?: number;
+  /**
+   * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT create a
+   * second budget: the already-persisted reservation is replayed (same `id`) instead. The planner
+   * passes `nodeExecutionKey(taskId, nodeId)`. Absent → unchanged behavior.
+   */
+  idempotencyKey?: string;
 }
 
 /* --------------------------------------------------------------- task (sched) */
@@ -350,6 +356,12 @@ export interface CreateScheduledTaskInput {
   runAt: number;
   /** Defaults to `true`. */
   requiresConfirmation?: boolean;
+  /**
+   * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT create a
+   * second scheduled task: the already-persisted task is replayed (same `id`) instead. The planner
+   * passes `nodeExecutionKey(taskId, nodeId)`. Absent → unchanged behavior.
+   */
+  idempotencyKey?: string;
 }
 
 /* ----------------------------------------------------------------- dashboard */
