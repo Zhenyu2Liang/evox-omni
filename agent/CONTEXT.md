@@ -102,6 +102,8 @@ function verifyAction(actionId: string, code: string, opts?: ConfirmOptions): Pr
 function cancelAction(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 // the single gateway-authorized execution path used by confirmation AND the planner's runTool:
 function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome>;
+// confirm/verify/cancel FAIL CLOSED when the action's owning plan is CANCELLED, BEFORE authorizing:
+async function cancelledPlanOutcome(actionId: string, sessionId: string): Promise<ConfirmationOutcome | undefined>;  // findTaskByPendingAction + tasks.getTask; status 'cancelled' ⇒ refuse with the row's persisted status
 
 // --- agent/card-emitter.ts --------------------------------------------------
 function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCard[];  // PURE, total
@@ -143,6 +145,7 @@ function pauseTask(sessionId: string, taskId: string, opts?: TaskControlOptions)
 function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // CAS-flips a resumable row to 'running', then runs with `explicitResume:true`; terminal (success) nodes skipped
 function cancelTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // revokes the plan's parked PendingActions, then cancels
 function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;       // retry failed nodes (+ descendants); CAS from-set EXCLUDES 'running' (resume KEEPS it)
+function sweepCancelledPlan(sessionId: string, taskId: string): Promise<RevokeSummary>;                // post-run CANCEL SWEEP: if the persisted AgentTask is 'cancelled', revoke every still-parked PendingAction (run after submit_plan / resume / retry; an unexpected revoke failure THROWS)
 function findTaskByPendingAction(sessionId: string, actionId: string): Promise<{ taskId: string; nodeId: string } | undefined>;
 function resumeTaskForAction(sessionId: string, actionId: string, outcome: PlanToolOutcome, deps: TaskControlDeps): Promise<{ taskId: string; nodeId: string; plan: TaskPlan } | undefined>;
 ```
@@ -243,6 +246,50 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   as an `error` event rather than aborting the plan or the turn.
 (this is what demo Test 4 — prompt injection — proves).
 
+### Plan-lifecycle & confirmation guarantees (code-grounded)
+
+- **Cancel revokes parked actions, THEN cancels.** `task-control.ts#cancelTask` calls
+  `revokeParkedActions` (one `gateway.cancelAction` per parked node — a DB CAS
+  `pending`/`awaiting_mfa` → `cancelled`) BEFORE `lifecycle.cancelPlan`. `revokeParkedActions` reports
+  `alreadySettled` for an action that already executed/errored and never pretends to roll it back
+  (executed work is irreversible; the planner performs NO automatic compensation).
+- **No pre-park plan-status check exists** — neither `securityGateway.handleToolCall` nor
+  `executor.runPlan`'s `runToolNode` consults the plan status before parking. Prevention of a
+  post-cancel executable action relies on the post-run CANCEL SWEEP: `sweepCancelledPlan(sessionId,
+  taskId)` (called after every run path — `runSubmitPlan` (`tools/planning.ts`), `resumeTask`,
+  `retryTask`, `resumeTaskForAction`) re-reads the row and, when `cancelled`, revokes every still-parked
+  action; an UNEXPECTED revocation failure is THROWN (a surviving executable action is an incident). A
+  live run is interrupted mid-flight only via `defaultPollControls` (`'cancelled'` ⇒ `{kind:'cancel'}`)
+  polled at each node checkpoint.
+- **Confirm-vs-cancel is at-most-once via the gateway CAS, NOT "cancel always wins".**
+  `confirmation.ts#confirmAction`/`verifyAction`/`cancelAction` first call `cancelledPlanOutcome` (reads
+  the owning `AgentTask` via `findTaskByPendingAction` + `getTask`; if `'cancelled'` ⇒ `ok:false` BEFORE
+  authorizing — the belt), then `gateway.authorizeAction`, whose `claimPendingAction` from
+  `['pending']`/`['awaiting_mfa']` claims 0 rows on an already-revoked/executed action and throws
+  `CONFLICT` — surfaced as a real `ok:false` (`conflictOutcome`). Confirm and cancel race through the
+  SAME CAS (`pendingAction.ts#claimPendingAction`), so exactly one wins; a confirm that wins the race
+  executes, and the concurrent cancel's revoke then reports it settled.
+- **Concurrent resume/retry is exactly-once per effect.** `claimTaskStatus`
+  (`lib/db/repositories/task.ts`) is a single `updateMany` CAS (`status IN fromStatuses` → `toStatus`;
+  `count===1`). `resumeTask`'s from-set KEEPS `'running'` (two resumes both run; effect de-dup is the
+  IN-PROCESS single-flight `inFlightExecutions` map in `confirmation.ts#executeGatedTool`, keyed by
+  session+tool+canonical-args and cleared on settle), whereas `retryTask`'s from-set EXCLUDES
+  `'running'` (the loser claims 0 rows ⇒ returns the persisted plan WITHOUT running). `transfer_money`
+  adds DB-level idempotency: `executeAuthorizedAction` passes `{ idempotencyKey: action.id }` to
+  `registry.executeDirect`.
+- **Pause retains.** When `resumeTaskForAction` sees the owning plan `'paused'`, it records the decided
+  node and does NOT advance. TWO belts hold it: (a) `lifecycle.resumePlan` returns early with
+  `status:'paused'` whenever `explicitResume !== true` (`stillPaused`) — and `resumeTaskForAction`
+  passes NO `explicitResume` — and (b) `resumeTaskForAction` passes `PAUSE_NOW_CONTROLS` (always
+  `{kind:'pause'}`) into `runPlan`. The plan stays `'paused'` until an explicit `resumeTask`.
+- **Terminal states are never resurrected.** Every control CAS from-set excludes `'cancelled'`
+  (`PAUSABLE_PLAN_STATUSES`/`RESUMABLE_PLAN_STATUSES`/`RETRYABLE_PLAN_STATUSES` in `task-control.ts`); a
+  lost claim returns `reloadPlan(...)` — the PERSISTED row — so the API response always matches the DB.
+  `createTaskPersistence.persistPlan` writes `'cancelled'` unconditionally but every other checkpoint via
+  `claimTaskStatus(NON_CANCELLED_PLAN_STATUSES)`, so a concurrent cancel wins. `resumeTaskForAction`
+  no-ops on a `'cancelled'` plan (returns the persisted plan); `cancelTask` is idempotent on an
+  already-`'cancelled'` row.
+
 ## Constraints (hard, encode in every file)
 
 - **NEVER register a bash/shell/write/edit/file/SQL/system/http tool.** The model's ONLY capabilities
@@ -290,7 +337,7 @@ Sibling nodes this node consumes (read-only; escalate changes to the owner):
 - `../banking-sdk` → `banking.<domain>.*` execute-only functions (module `./types` DTOs).
 - `../planner` → `dag.validatePlan`, `buildPlan`; `executor.runPlan`, `executor.persistPlanSnapshot`, `PlanDeps`, `PlanControls`; `lifecycle.pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`.
 - `../audit` → `recordAudit(entry)`, `recordSecurityEvent(event)`.
-- `../lib/db/repositories` → `sessions.*`, `pendingActions.*`, `tasks.*` (`createTask`, `createTaskNode`, `getTask`, `listTasksBySession`, `updateTaskNode`, `updateTaskStatus`, `AgentTaskWithNodes`).
+- `../lib/db/repositories` → `sessions.*`, `pendingActions.*` (`getPendingAction`, `getPendingActionOwnership`, `claimPendingAction` — the exactly-once CAS), `tasks.*` (`createTask`, `createTaskNode`, `getTask`, `listTasksBySession`, `updateTaskNode`, `updateTaskStatus`, `claimTaskStatus` — the atomic status CAS, `AgentTaskWithNodes`).
 
 REQUIRED from siblings (must align at integration; assumed signatures):
 - `security.gateway.securityGateway.handleToolCall(ctx)` returns `{ evaluation, decision, action?, blockReason? }` with
