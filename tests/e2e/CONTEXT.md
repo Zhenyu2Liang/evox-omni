@@ -1,75 +1,104 @@
-﻿# tests/e2e — REAL-BROWSER End-to-End Acceptance Harness
+# tests/e2e — Real-Browser End-to-End Acceptance Harness
 
 ## Intent
-Self-contained, real-browser acceptance suite proving the AI Banking Agent demo works through the
-REAL UI. It boots the actual Next.js dev server on a runtime-picked free port, launches the machine's
-real headless Chrome via `playwright-core` (NO browser download), drives the real `/agent` page and
-asserts on RENDERED DOM. Only the model is scripted (`LLM_MODE=mock`); app, route handlers, security
-gateway, banking SDK and SQLite are the real ones.
+The top of the test pyramid: prove the AI Banking Agent demo works through a **REAL browser**
+driving the **REAL Next.js app** — not just in-process route handlers. It boots the actual
+`next dev` server on a free port, launches the machine's real headless **Chrome** via
+`playwright-core`, types natural-language requests into the real `/agent` composer, and asserts on
+**RENDERED DOM** (cards, buttons, badges, assistant text). Only the LLM is scripted
+(`LLM_MODE=mock`); the app, route handlers, security gateway, banking SDK and SQLite DB are real.
+
+This node is **self-contained** — it does not import `tests/app/*` or any `@/` alias (relative
+imports + node built-ins only, to avoid tsx/tsconfig path surprises).
 
 ## API Surface
-- `helpers.ts` — free-port picker, `startDevServer`/`waitForHealth`, real-Chrome `launchBrowser`,
-  process-tree `killProcessTree` + `DevServer.stop()`, `withPage` (fresh isolated context per journey,
-  screenshot + pageerror capture on failure), DOM helpers (`gotoAgent`, `submitChat`,
-  `waitForConfirmCard`/`clickConfirm`, `waitForMfaCard`/`submitMfa`, `waitForStatusText`,
-  `planCard`/`planStatus`/`waitForPlanStatus`/`clickPlanControl`, `waitForAssistantText`),
-  structured `createReporter`/`runJourney` (one `PASS|FAIL|SKIP` line per journey).
-- `acceptance.e2e.ts` — the SINGLE entry script (5 journeys a–e). Filename is `.e2e.ts` on purpose:
-  it must NOT match vitest's include glob `tests/**/*.{test,spec}.ts`.
-- `screenshots/.gitignore` — ignores everything but itself (failure screenshots are never committed).
+- `acceptance.e2e.ts` — the SINGLE entry point. Boots the app → waits for readiness → launches
+  Chrome → runs the journeys → prints exactly one `PASS|FAIL|SKIP <journey> — <evidence>` line per
+  journey → exits non-zero iff ANY journey FAILED (a SKIP does not fail the run).
+- `helpers.ts` — shared harness: `pickFreePort`, `startDevServer`/`killProcessTree` (whole-path
+  teardown; boots `cmd.exe /d /s /c "npx next dev -p <port>"` detached — deliberately NOT
+  `shell:true`, which produced an empty stdout pipe here), `waitForHealth`, `resolveBrowserExecutable`/
+  `launchBrowser`, `withPage` (fresh isolated context + failure screenshot + `pageerror` capture), DOM
+  selectors + interactions (`submitChat`, `clickConfirm`, `submitMfa`, `waitForPlanStatus`,
+  `clickPlanControl`, …), the structured `createReporter`, and the fail-fast `gotoAgent`/
+  `readSsrPageError`.
+- `screenshots/` — git-ignored failure screenshots (`.gitignore` ignores everything but itself).
+- `CONTEXT.md` — this file.
 
-## How to run
+## Constraints
+- **Never matches vitest.** Every file avoids `.test.`/`.spec.` (the entry is `.e2e.ts`), so
+  `npm run test` never picks it up. Run it explicitly: `npx tsx tests/e2e/acceptance.e2e.ts`.
+- **Type-checked.** These files ARE compiled by `tsc --noEmit` (tsconfig `include: **/*.ts`) → must
+  stay at 0 errors even though vitest transpiles without type-checking.
+- **Never fake a pass.** A journey that cannot be automated in-browser emits a `SKIP` + concrete
+  reason (or an honest `FAIL`); it never asserts success from an API response alone.
+- **Always tear down.** One idempotent `cleanup()` (wired to `process.on('exit' | 'SIGINT' |
+  'SIGTERM' | 'uncaughtException' | 'unhandledRejection')`) kills the dev server's whole process tree
+  and closes the browser on success, failure AND unexpected errors. Never leave `next dev` listening.
+- **Isolation.** A FRESH browser context (fresh cookies) per journey. Identity is the HttpOnly
+  `banking_session` cookie, so the refresh-recovery journey reuses the SAME context across reload.
+- Wait on real DOM conditions, never fixed sleeps; keep generous timeouts for Next dev cold compile.
+
+## Prerequisites (in order, in a fresh worktree)
 1. `npm install`
 2. `npx prisma generate`
 3. `npx prisma db push`
 4. `npm run db:seed`
-5. `npx tsx tests/e2e/acceptance.e2e.ts`
+- A **free port** is chosen at runtime. **System Chrome** is used (Chrome first, Edge fallback;
+  `E2E_BROWSER_PATH` overrides detection). **No `playwright install` / browser download** — headless
+  Chrome is launched via `chromium.launch({ executablePath, headless: true })`.
+- `.env` provides `LLM_MODE=mock` (deterministic scripted model) and the demo SQLite URL.
 
-Exit non-zero iff ANY journey FAILED (SKIP does not fail the run). Exactly one structured line per
-journey: `PASS|FAIL|SKIP <journey> — <evidence|reason>`.
+## How to run
+```
+npx tsx tests/e2e/acceptance.e2e.ts
+```
+One line per journey; the process exits non-zero when any journey FAILs.
 
-## Prerequisites
-- `.env` committed with `LLM_MODE=mock` and `DATABASE_URL="file:./dev.db"`.
-- A real browser present. Real Chrome first, Edge fallback; `E2E_BROWSER_PATH` overrides detection.
-  Known paths: `C:\Program Files\Google\Chrome\Application\chrome.exe`,
-  `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`. NEVER run `playwright install`.
-- Mock MFA code `123456`; demo clock pinned to 2026-09-25 12:00.
+## Journeys (each asserts on RENDERED DOM)
+- **a-transfer-confirm** (YELLOW transfer ≤¥1000): `给张伟转200元` → ConfirmationCard (`确认`/`取消`)
+  → click `确认` → assistant text `转账处理结果：…`.
+- **b-transfer-mfa** (RED transfer >¥1000) — two legs in fresh contexts: correct code `123456` →
+  success narration; wrong code `000000` → `role=status` `验证失败，已尝试 1 次`, MFA card STAYS, and
+  NO success narration (the transfer did not occur).
+- **c-plan-pause-resume**: gated plan `如果我这个月消费超过2000，就把信用卡娱乐限额调整到1500元`
+  → badge `等待确认` → `暂停` → `已暂停` → `继续` (see Known limitation).
+- **d-plan-cancel**: gated plan → `等待确认` → plan-card `取消` → badge `已取消`.
+- **e-refresh-action-recovery** — two legs (same context across reload): park a YELLOW transfer →
+  reload → ConfirmationCard RESTORED from persisted server state; park a RED transfer → reload →
+  MfaCard RESTORED.
 
-## Journeys (assert on RENDERED DOM)
-- `a-transfer-confirm` (COVERS): `给张伟转200元` → ConfirmationCard(确认/取消) → 确认 → assistant
-  MessageBubble shows `转账处理结果：`. Does NOT cover: the money-move DB row itself, amounts in UI.
-- `b-transfer-mfa` (COVERS): RED `给张伟转2000元` → MfaCard(身份验证) → code `123456` → success
-  narration; then a FRESH context: same msg → wrong code `000000` → role=status `验证失败，已尝试 1 次`,
-  MfaCard stays, NO success narration. Does NOT cover: circuit-breaker trip (needs 3 tries).
-- `c-plan-pause-resume` (COVERS): gated plan `如果我这个月消费超过2000，就把信用卡娱乐限额调整到1500元`
-  → 等待确认 → 暂停 → 已暂停 → 继续 → real post-resume badge. LIMITATION (documented, never faked):
-  per `planner/` semantics, resuming a plan whose gated node is parked RE-ATTEMPTS the node and
-  re-parks it, so the observed post-resume badge is expected to be `等待确认`, NOT `已完成`. The journey
-  asserts `等待确认`|`已完成` and reports exactly which was observed.
-- `d-plan-cancel` (COVERS): gated plan → 等待确认 → plan card 取消 → 已取消.
-- `e-refresh-action-recovery` (COVERS): park YELLOW transfer → `page.reload()` in the SAME context
-  (HttpOnly `banking_session` cookie persists) → ConfirmationCard restored from `GET /api/actions`;
-  and a fresh-context leg: park RED transfer → reload → MfaCard restored.
+## Coverage notes
+- **Covers:** real-browser NL → card → human-decision flows; MFA success + wrong-code rejection;
+  plan pause/resume + cancel; refresh rehydration from persisted server state; structured honest
+  reporting; whole-tree teardown.
+- **Does NOT cover:** the real LLM (`LLM_MODE=live`); real bank/network; the production build
+  (`next build` / `next start`); cross-browser (Chrome only, Edge as fallback and untested);
+  visual/a11y regression; load/perf; the security unit + scenario layers (owned by
+  `tests/unit` / `tests/scenarios`); and the app-side `/agent` SSR defect below (reported, NOT fixed
+  here — it is outside this node).
 
-## Constraints
-- Offline & deterministic: mock LLM only, no network to real LLMs.
-- Files under `tests/e2e/` are type-checked by `tsc --noEmit` (tsconfig `include: **/*.ts`) and MUST
-  NOT contain `.test.`/`.spec.` in their names.
-- Relative imports / node built-ins only (no `@/` alias) to avoid tsx path surprises.
-- ALWAYS tear down: the dev server's WHOLE process tree (Windows `taskkill /pid <pid> /T /F`) plus the
-  browser, on success/failure/unexpected error, via `process.on('exit'|'SIGINT'|'SIGTERM'|
-  'uncaughtException'|'unhandledRejection')`. Never leave a dev server listening.
-- Wait on real DOM conditions (`waitForSelector`, polling) — never fixed sleeps; generous timeouts for
-  Next dev cold-compile latency (`DEFAULT_TIMEOUT_MS = 45s`, `NAV_TIMEOUT_MS = 180s`).
+## Known Issues
+- **BLOCKED by an APP-side defect (outside `tests/e2e`):** `GET /agent` returns **HTTP 500** — the RSC
+  payload renders `<ChatWindow/>` as `$undefined` ("Element type is invalid … but got: undefined …
+  Check the render method of `AgentPage`"). `app/agent/page.tsx` imports the CLIENT component
+  `ChatWindow` through the NEUTRAL (non-`'use client'`) top barrel `@/components`
+  (`components/index.ts` → `export * from './chat'` → `'use client'` `components/chat/index.ts` →
+  `export * from './ChatWindow'`); the star re-export across the client boundary does not yield a
+  usable RSC client reference at SSR. Until this is fixed, all five journeys honestly FAIL (exit 1).
+  Likely fix (owner: `app/` + `components/`): import `ChatWindow` from a client module directly
+  (e.g. `@/components/chat`), or make `components/index.ts` re-export explicitly / mark it `'use client'`.
+- **`c-plan-pause-resume` honest limitation:** resuming a plan whose gated node is still parked
+  re-attempts that node (parked is NOT terminal), so the plan RE-parks at `等待确认` instead of reaching
+  `已完成`. The journey reports whichever badge is actually observed and NEVER fabricates `已完成`.
+- **Boot flakiness (observed once):** a dev-server launch produced an empty stdout pipe and
+  `/api/health` never became ready (killed at the 180s timeout); a later identical run booted
+  normally (`Ready in ~1.4s`). Invoke the harness directly (e.g. `npx tsx …` or `Start-Process npx.cmd`);
+  avoid wrapping it in an extra `cmd /c`.
 
 ## Routing Table
-- `./helpers.ts` — shared harness (boot, browser, DOM, reporter)
-- `./acceptance.e2e.ts` — the single entry script (journeys a–e)
-- `./screenshots/` — git-ignored failure screenshots (`*` + `!.gitignore`)
-
-## Notes for Agents
-- Windows boot quirk: `npx` is `npx.cmd`, so `startDevServer` spawns `cmd.exe /d /s /c "npx next dev -p <port>"`
-  (detached, NO `shell:true`). Node's `shell:true` produced an EMPTY stdout pipe here and `/api/health`
-  never came up — do not reintroduce it.
-- Next dev warns about multiple lockfiles in this worktree layout (harmless).
-- PowerShell stdout capture is unreliable here; redirect to a file and read it.
+- `./acceptance.e2e.ts` → the single real-browser entry point (boot → readiness → journeys → structured report → non-zero exit on FAIL)
+- `./helpers.ts` → shared harness (free port, dev-server boot/teardown, health poll, browser factory, `withPage`, DOM selectors/interactions, reporter, fail-fast navigation)
+- `./screenshots/` → git-ignored failure screenshots
+- `../app` → HTTP route-handler specs (the in-process acceptance layer this harness complements) (sibling — read-only)
+- `../setup.ts` + `../helpers` → vitest global setup + fixtures (untouched by this harness) (sibling — read-only)
