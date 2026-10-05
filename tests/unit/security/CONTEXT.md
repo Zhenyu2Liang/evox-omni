@@ -17,6 +17,7 @@ circuitBreaker, injection}`) or the module directly:
 - `permission-engine.test.ts` — `TOOL_POLICY` exhaustiveness vs the `ToolName` union, static GREEN/YELLOW/RED tiers, `getToolPolicy` (unknown → `AppError('VALIDATION')`), `evaluateTool` (GREEN no confirm/no mfa, YELLOW confirm, RED confirm+mfa; dynamic `transfer_money` delegated to the risk engine; `submit_plan` not risk-gated; LLM-immutability — whimsical/spoofed args & `ctx` never change the tier). Pure, no DB.
 - `risk-engine.test.ts` — `evaluateTransferRisk` boundary at ¥1000 (`>` is strict) + `computeDailyTransferTotal` (test SQLite). Pure part has no DB.
 - `risk-engine-rerisk.test.ts` — `reEvaluateTransferRisk(userId, amount, now?)` re-risks against a FRESH day total at EXECUTION time (closes the stale-parked-transfer bypass) + facade exposure + strict `>` boundary. DB-backed.
+- `risk-engine-dedup.test.ts` — `computeInFlightTransferTotal` ledger dedup: parked-`confirmed` transfer totals EXCLUDE any action whose deterministic ledger `Transaction` row already exists (`idempotentTransferTxId`), so a "ledgered but not yet terminal" action is never double-counted. DB-free (hand-written Prisma stub).
 
 **Gateway**
 - `gateway.test.ts` — `securityGateway.evaluate/decide/createPendingAction/serializeBlockReason/parseBlockReason/authorizeAction/cancelAction/handleToolCall` + `buildPendingActionSummary` + `BLOCK_REASON_PREFIX`. Persistence cases need test SQLite.
