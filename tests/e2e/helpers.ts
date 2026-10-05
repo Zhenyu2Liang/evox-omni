@@ -392,10 +392,38 @@ export const SELECTORS = {
   mfaInput: 'input[aria-label="验证码"]',
 } as const;
 
-/** Navigate to the chat page and wait for the composer to render. */
+/** Navigate to the chat page and wait for the composer to render (fail-fast on SSR error shell). */
 export async function gotoAgent(page: Page, baseUrl: string): Promise<void> {
   await page.goto(`${baseUrl}/agent`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
-  await page.locator(SELECTORS.composer).first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+  const deadline = Date.now() + NAV_TIMEOUT_MS;
+  for (;;) {
+    const composer = page.locator(SELECTORS.composer).first();
+    if ((await composer.count()) > 0 && (await composer.isVisible().catch(() => false))) return;
+    const ssrError = await readSsrPageError(page);
+    if (ssrError !== undefined) {
+      throw new Error(`/agent 页面渲染失败（应用端 SSR 报错，非测试问题）：${ssrError}`);
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`等待 /agent 聊天输入框超时（${NAV_TIMEOUT_MS}ms）`);
+    }
+    await sleep(250);
+  }
+}
+
+/**
+ * Read the Next dev SSR error message when the page rendered Next's error shell
+ * (`<html id="__next_error__">` + `<template data-next-error-message=...>`), else `undefined`.
+ * Lets callers fail fast on a broken page instead of waiting the whole DOM timeout.
+ */
+export async function readSsrPageError(page: Page): Promise<string | undefined> {
+  const shell = page.locator('html#__next_error__');
+  if ((await shell.count()) === 0) return undefined;
+  const template = page.locator('template[data-next-error-message]').first();
+  const message =
+    (await template.count()) > 0
+      ? await template.getAttribute('data-next-error-message').catch(() => null)
+      : null;
+  return message ?? '页面渲染失败（未知 SSR 错误）';
 }
 
 /** Click the first match of `locator` once it exists and is enabled (waits on the real DOM). */
