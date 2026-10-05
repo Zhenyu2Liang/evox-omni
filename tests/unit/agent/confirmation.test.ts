@@ -112,11 +112,16 @@ function injectAuditFieldsOnAuthorize(): void {
   );
 }
 
-/** Wrap the REAL `cancelAction` so the returned action always carries `userRequest`/`intent`. */
+/**
+ * Wrap the REAL `cancelAction` so the returned action always carries `userRequest`/`intent`.
+ * `opts` (the REQUIRED ownership `{ userId, sessionId }`) is forwarded: the hardened gateway fails
+ * closed with `SECURITY_DENIED` when the caller identity is missing.
+ */
 function injectAuditFieldsOnCancel(): void {
   const original = gateway.cancelAction.bind(gateway);
   vi.spyOn(gateway, 'cancelAction').mockImplementation(
-    async (actionId): Promise<PendingAction> => fillAuditFields(await original(actionId)),
+    async (actionId, opts): Promise<PendingAction> =>
+      fillAuditFields(await original(actionId, opts)),
   );
 }
 
