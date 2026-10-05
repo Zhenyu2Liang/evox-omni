@@ -251,12 +251,15 @@ npm run test               # vitest run（离线：mock LLM + 测试 SQLite，�
 其它命令：
 
 ```bash
-npm run build              # 生产构建（next build）
+npm run build              # 生产构建（等价 npx next build）
 npm run start              # 启动生产构建
-npm run test               # 运行全部 Vitest 测试（== vitest run）
+npm run test               # 运行全部 Vitest 测试（== vitest run；前三层，离线 mock LLM + 测试 SQLite）
 npm run test:watch         # 监听模式
-npm run typecheck          # tsc --noEmit
+npm run typecheck          # 类型检查（等价 npx tsc --noEmit；Vitest 只转译，不做类型检查）
 npm run lint               # next lint
+
+# 真实浏览器 E2E 验收（隔离 prisma/e2e.db；由 tsx 运行 —— 不是 vitest，也不是 npm run test）：
+npx tsx tests/e2e/acceptance.e2e.ts
 
 # 便捷脚本
 npm run db:reset           # prisma db push --force-reset && tsx prisma/seed.ts   （重建数据库）
@@ -306,6 +309,28 @@ cp .env.example .env
 
 种子锚定 **演示时钟** `DEMO_NOW = 2026-09-25 12:00`（见第 16 节）：
 2026 年 9 月为"本月"，2026 年 8 月为"上月"（用于环比）。表内金额一律为 **有符号 CNY**（负数 = 支出/流出）。
+
+### 12.1 迁移 / 部署（最近的 schema 变更）/ Migration & deploy
+
+> **本项目使用 `prisma db push` 工作流：仓库 `prisma/` 目录下 *没有* `migrations/` 子目录。**
+> 请**不要**去寻找或等待迁移文件 —— schema 变更直接 push 到 SQLite。
+
+最近一次 schema 变更（见 `prisma/schema.prisma`）：
+
+- `PendingAction` 新增 `taskId?` / `nodeId?`，以及 `@@index([taskId])`（把待办动作关联到计划任务节点）。
+- `AgentTask` 与 `AgentTaskNode` 均新增 `executionToken?` / `executionClaimedAt?`（节点执行的原子 claim）。
+- `Budget` 新增 `idempotencyKey? @unique`；`ScheduledTask` 新增 `idempotencyKey? @unique`（幂等写入）。
+
+应用该变更（务必按序）：
+
+```bash
+npx prisma generate   # 重新生成 Prisma Client（字段/类型变更后必须重跑）
+npx prisma db push    # 将 schema 变更 push 到 SQLite（无 migrations 目录）
+npm run db:seed       # 幂等重灌演示数据
+```
+
+> `db push` 会就地新增可空列与唯一索引，不会重建/清空数据。若需一个全新的数据库，
+> 可运行 `npm run db:reset`（`prisma db push --force-reset && tsx prisma/seed.ts`）。
 
 ---
 
@@ -382,20 +407,31 @@ cp .env.example .env
 测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）：
 
 1. **纯单元测试（pure unit）** — `tests/unit/`：`security`（权限策略表、转账阈值、网关 decide、注入检测、熔断、MFA、风控）、`planner`（DAG 校验 / 拓扑序 / 成环 / 条件）、`banking-sdk`（资金不变量等）；无网络、无真实 LLM。
-2. **faux-LLM 场景测试（scenario）** — `tests/scenarios/test-01…test-12`：用脚本化模型（`LLM_MODE=mock`）驱动 **完整流水线**，逐个覆盖 12 个验收场景。
-3. **进程内 HTTP 路由处理器集成测试（`[integration]`）** — `tests/app/*-http.test.ts`：直接调用真实的 Next.js 路由处理器（`POST /api/chat`、actions confirm/verify/cancel、tasks 等）与真实 SQLite，每个顶层 describe 都带 **`[integration]`** 标签。**它们不是浏览器测试**（不启动浏览器，只驱动路由处理器）。
-4. **真实浏览器验收（real-browser E2E）** — `tests/e2e/`，唯一入口 `acceptance.e2e.ts`：启动真实应用（`next dev`）并用 **`playwright-core`** 驱动 **本机 headless Chrome/Edge**（系统浏览器可执行文件，**不下载浏览器**），在真实 `/agent` 页面断言 **渲染后的 DOM**。覆盖：转账确认（YELLOW）、转账 MFA（RED，含错误验证码拒付且不产生转账）、计划暂停 / 恢复、取消、以及 **刷新后从已持久化状态恢复待办动作**。
+2. **faux-LLM 场景集成测试（scenario）** — `tests/scenarios/test-01…test-12`：用脚本化模型（`LLM_MODE=mock` + 隔离的测试 SQLite `prisma/test.db`）驱动 **完整流水线**，逐个覆盖 12 个验收场景。
+3. **进程内 HTTP 路由处理器集成测试（`[integration]`）** — `tests/app/*-http.test.ts` + 根级 `tests/review-boundaries.test.ts` / `tests/review-concurrency.test.ts`（route-handler 契约 / 并发回归）：直接调用真实的 Next.js 路由处理器（`POST /api/chat`、actions confirm/verify/cancel、tasks 等）与真实 SQLite，每个顶层 describe 都带 **`[integration]`** 标签。**它们不是浏览器测试**（不启动浏览器，只驱动路由处理器）。
+4. **真实浏览器验收（real-browser E2E）** — `tests/e2e/`，唯一入口 `acceptance.e2e.ts`：启动真实应用（`next dev`）并用 **`playwright-core`** 驱动 **本机 headless Chrome/Edge**（系统浏览器可执行文件，**不下载浏览器**），在**隔离的 `prisma/e2e.db`**（不触碰 `prisma/dev.db`）上、于真实 `/agent` 页面断言 **渲染后的 DOM**。覆盖：转账确认（YELLOW）、转账 MFA（RED，含错误验证码拒付且不产生转账）、计划暂停 / 恢复、取消、以及 **刷新后从已持久化状态恢复待办动作**。
 
 运行命令：
 
 ```bash
-npm run test                         # 前三层（Vitest run）；可按层指定：npm run test -- tests/unit | tests/scenarios | tests/app
+npm run test                         # 前三层（vitest run，离线 mock LLM + 测试 SQLite）；可按层指定：npm run test -- tests/unit | tests/scenarios | tests/app
+npx tsc --noEmit                     # 类型检查（Vitest 只转译、不做类型检查；必须 0 错误）
+npx next build                       # 生产构建（需先 generate + db push + seed，见 §10）
 npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 tsx 运行 —— 不是 vitest，也不是 npm run test）
 ```
 
 > 真实浏览器验收需要 **系统 Chrome（Edge 作兜底，可用 `E2E_BROWSER_PATH` 覆盖）**，运行前需先完成
 > `npx prisma generate` → `npx prisma db push` → `npm run db:seed`。它为每个 journey 打印一行
 > `PASS|FAIL|SKIP <journey> — <evidence>`，任一 journey **FAIL** 时进程以非零码退出（**SKIP 不算失败**）。
+
+### 15.4 实测表面 / Measured surface
+
+- **页面 7 个**：`/`（仪表盘）、`/agent`（AI 助手）、`/bills`（账单）、`/cards`（卡片）、`/subscriptions`（订阅）、`/security`（安全中心）、`/audit`（审计）。
+- **API 路由处理器 15 个**：`/api/chat`、`/api/actions`、`/api/actions/[id]/confirm`、`/api/actions/[id]/verify`、`/api/actions/[id]/cancel`、`/api/tasks`、`/api/tasks/[id]`、`/api/audit`、`/api/security`、`/api/security/reset`、`/api/dashboard`、`/api/bills`、`/api/cards`、`/api/subscriptions`、`/api/health`。
+
+运行命令见 §10 **启动方式** 与 §15.3 **测试分层**：`npm run test`（前三层）· `npx tsc --noEmit`（类型检查）· `npx next build`（生产构建）· `npx tsx tests/e2e/acceptance.e2e.ts`（第四层：真实浏览器验收）。
+
+> **诚实的边界：测试通过 ≠ 安全模型已闭合。** 每项能力的真实状态 —— **【已实现】✅ 代码强制 /【模拟】🧪 演示替身 /【未验证】⚠️ 尚未覆盖** —— 以 [`docs/known-risks.md`](docs/known-risks.md) 为准，不要仅凭测试全绿就宣称安全已闭合。
 
 ---
 
@@ -406,14 +442,14 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 - **无真实银行 / 无真实资金 / 无真实支付。** 一切数据在 SQLite 中模拟，不会发生任何真实资金流动。
 - **真实浏览器 E2E 是「单机、有限 journey」的验收，并非全量 UI 覆盖，也不证明安全模型已完全闭合。** 仓库内现已包含一个 **真实浏览器验收 harness**（`tests/e2e/acceptance.e2e.ts`）：它启动真实应用并用 `playwright-core` 驱动 **本机 headless Chrome/Edge**（系统浏览器可执行文件，不下载浏览器），在真实 `/agent` 页面断言渲染后的 DOM，覆盖转账确认（YELLOW）、转账 MFA（RED，含错误验证码拒付）、计划暂停 / 恢复、取消、以及刷新后从已持久化状态恢复待办动作。security 的判定是否闭合由 `security/` 的 **单元 / 集成测试** 保证，**不由浏览器验收证明**；该 harness 为 **单机 / 单进程** 运行、journey 数量有限，**未覆盖** 真实 LLM（`LLM_MODE=live`）、`next build` / `next start`、跨浏览器、无障碍与性能。进程内的 route-handler 集成测试见 `tests/app/*-http.test.ts`，核心流水线（Agent + 工具 + 安全网关 + Banking SDK + 审计）的单元 / 场景测试见 `tests/`。
 - **验证码是模拟的**（固定 `123456`），不发送真实短信；且 UI 不显示验证码。
-- **演示时钟被固定。** 应用内所有"现在"默认使用 `DEMO_NOW = 2026-09-25 12:00（本地时间）`，
+- **演示时钟被固定。** 应用内所有"现在"默认使用 `DEMO_NOW = 2026-09-25 12:00（本地时间）`（`lib/constants.ts`），经 `lib/clock.ts` 的 `demoNow(override?)` 统一派发，
   以保证本月/上月/今日窗口、消费分析、当日转账累计与种子数据保持一致 —— 它 **不是真实系统时间**。
 - **异常检测为演示级规则。** 基于单笔金额阈值（>¥5,000，`ANOMALY_AMOUNT_THRESHOLD`）与种子标记，
   并非真实风控模型。
 - **理财产品为虚构数据**，收益率/持仓均非真实市场数据；申购/赎回仅调整账户余额、不写交易流水（演示简化）。
 - **熔断器为进程内状态**（按 `sessionId` 记录），服务重启即重置；非分布式/持久化实现。
 - **审计范围有限。** 仅对 **受闸门的操作**（YELLOW/RED 的确认 / 验证 / 取消）写 `AuditLog`；
-  🟢 GREEN 自动执行的读取 **不写审计**。
+  🟢 GREEN 自动执行的读取 **不写审计** —— 这是**设计选择**（非缺陷）：GREEN 读取无人工决策，故不入审计。
 - **`change_password` 为演示专用**（无凭据存储），以 `AuditLog` 记录为准。
 - **`LLM_MODE=live` 时结果不确定**（真实大模型的非确定性）；所有自动化测试与演示均使用
   `LLM_MODE=mock`（脚本化模型）以保证可复现。
@@ -433,7 +469,7 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 - **[架构文档](docs/architecture.md)** —— 系统架构：Pi Agent、Banking SDK、工具调用与 DAG 规划器。
 - **[安全文档](docs/security.md)** —— 权限分级、Security Gateway、提示词注入防御、幻觉防护、MFA、审计日志、熔断与沙箱。
 - **[测试用例](docs/test-cases.md)** —— 12 个 Demo 场景（Test 1–12）与单元测试覆盖。
-- **[已知风险](docs/known-risks.md)** —— 已知限制与风险说明。
+- **[已知风险](docs/known-risks.md)** —— 已知限制与风险说明：逐项标注 **【已实现】✅ 代码强制 /【模拟】🧪 演示替身 /【未验证】⚠️ 尚未覆盖**（**测试全绿不等于安全问题已闭合**）。
 
 每个模块的设计细节见对应目录的 `CONTEXT.md`；运行方式见第 10 节 **启动方式 / Getting started**。
 
