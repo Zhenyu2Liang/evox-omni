@@ -1,0 +1,4 @@
+﻿?? .fin.txt
+2bcca8b agent: document plan/node DB execution claims, node-scoped idempotency and bulk cancel revoke
+46312e2 agent: plan/node DB execution claims + cancel-safety + node-scoped idempotency
+1d77935 agent/tools: thread node identity + add inline side-effect idempotency and plan-run claim
