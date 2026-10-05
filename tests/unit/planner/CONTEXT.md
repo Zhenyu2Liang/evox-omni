@@ -46,3 +46,4 @@ Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` 
 - `./dag.test.ts` → graph validation / ordering / conditions / buildPlan
 - `./executor.test.ts` → runPlan state machine + plan controls
 - `./lifecycle.test.ts` → durable persisted-plan lifecycle (pause/cancel/retry/resume)
+- `./executor-claim-scope.test.ts` → DB `(taskId,nodeId)` node-execution claim CAS + cross-run de-dup scope
