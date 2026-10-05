@@ -88,7 +88,7 @@ Pi Agent → Tool Request → Security Gateway → permission tier (GREEN/YELLOW
 | Agent 运行时 | **`@mariozechner/pi-agent-core` `^0.73.1`** + **`@mariozechner/pi-ai` `^0.73.1`**（工具 schema 用 TypeBox） |
 | 持久化 | **Prisma 6** + **SQLite** |
 | 校验 | **zod**（API 边界）+ TypeBox（工具参数） |
-| 测试 | **Vitest 2**（离线 deterministic：mock LLM + 测试用 SQLite） |
+| 测试 | **Vitest 2**（离线 deterministic：mock LLM + 测试用 SQLite）· **`playwright-core` `^1.63`**（真实浏览器验收：本机 headless Chrome/Edge，不下载浏览器） |
 | 运行时 | **Node.js ≥ 20**（本项目在 Node 25 上构建/运行） |
 
 ---
@@ -239,9 +239,14 @@ npm run db:seed            # 等价：tsx prisma/seed.ts（幂等；可重复运
 npm run dev                # http://localhost:3000
 
 # 5) 生产构建 / 运行测试
-npm run build              # next build
+npm run build              # next build（⚠️ 构建前必须已完成上面的 generate + db push + seed，见下方说明）
 npm run test               # vitest run（离线：mock LLM + 测试 SQLite，无需 API Key）
 ```
+
+> **⚠️ 数据库前置步骤（务必按序）：`npx prisma generate` → `npx prisma db push` → `npm run db:seed`。**
+> `next build` 会 **静态预渲染** 由数据库驱动的页面（这些页面在 **构建期** 就会查询 SQLite），
+> 因此 **必须先完成 `prisma db push` + `npm run db:seed`** 才能运行 `npm run build`；
+> 若数据库尚未建表 / 灌入演示数据，**`next build` 会直接失败**。
 
 其它命令：
 
@@ -372,6 +377,26 @@ cp .env.example .env
 | 11 | 如果本月娱乐消费超过2000，就把娱乐限额调成1500 | `submit_plan` DAG：分析 → 条件 → 受闸门的 `set_card_limit`（🟡） |
 | 12 | 爱人11月20日生日，帮我准备1000元预算 | 计划：`reserve_budget`（🟢）+ `create_scheduled_task`（🟡 确认）· **只创建预算/任务/提醒记录，不会真正下单鲜花/蛋糕** |
 
+### 15.3 测试分层 / Test layers
+
+测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）：
+
+1. **纯单元测试（pure unit）** — `tests/unit/`：`security`（权限策略表、转账阈值、网关 decide、注入检测、熔断、MFA、风控）、`planner`（DAG 校验 / 拓扑序 / 成环 / 条件）、`banking-sdk`（资金不变量等）；无网络、无真实 LLM。
+2. **faux-LLM 场景测试（scenario）** — `tests/scenarios/test-01…test-12`：用脚本化模型（`LLM_MODE=mock`）驱动 **完整流水线**，逐个覆盖 12 个验收场景。
+3. **进程内 HTTP 路由处理器集成测试（`[integration]`）** — `tests/app/*-http.test.ts`：直接调用真实的 Next.js 路由处理器（`POST /api/chat`、actions confirm/verify/cancel、tasks 等）与真实 SQLite，每个顶层 describe 都带 **`[integration]`** 标签。**它们不是浏览器测试**（不启动浏览器，只驱动路由处理器）。
+4. **真实浏览器验收（real-browser E2E）** — `tests/e2e/`，唯一入口 `acceptance.e2e.ts`：启动真实应用（`next dev`）并用 **`playwright-core`** 驱动 **本机 headless Chrome/Edge**（系统浏览器可执行文件，**不下载浏览器**），在真实 `/agent` 页面断言 **渲染后的 DOM**。覆盖：转账确认（YELLOW）、转账 MFA（RED，含错误验证码拒付且不产生转账）、计划暂停 / 恢复、取消、以及 **刷新后从已持久化状态恢复待办动作**。
+
+运行命令：
+
+```bash
+npm run test                         # 前三层（Vitest run）；可按层指定：npm run test -- tests/unit | tests/scenarios | tests/app
+npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 tsx 运行 —— 不是 vitest，也不是 npm run test）
+```
+
+> 真实浏览器验收需要 **系统 Chrome（Edge 作兜底，可用 `E2E_BROWSER_PATH` 覆盖）**，运行前需先完成
+> `npx prisma generate` → `npx prisma db push` → `npm run db:seed`。它为每个 journey 打印一行
+> `PASS|FAIL|SKIP <journey> — <evidence>`，任一 journey **FAIL** 时进程以非零码退出（**SKIP 不算失败**）。
+
 ---
 
 ## 16. 已知限制 / Known limitations
@@ -379,8 +404,7 @@ cp .env.example .env
 本 Demo 为 **竞赛沙箱**，刻意做了精简与模拟（诚实说明）：
 
 - **无真实银行 / 无真实资金 / 无真实支付。** 一切数据在 SQLite 中模拟，不会发生任何真实资金流动。
-- **浏览器端 E2E 未在仓库内自动化。** 仓库内的端到端测试是 **route-handler 集成测试**（`tests/app/*-http.test.ts` 直接驱动 Next.js 路由处理器 + faux LLM + 测试 SQLite），**没有** Playwright/Cypress 之类的浏览器 UI E2E；
-  因此 UI 交互以「已实现」表述，**不宣称已由浏览器端到端验证**；核心流水线（Agent + 工具 + 安全网关 + Banking SDK + 审计）的单元/集成测试见 `tests/`。
+- **真实浏览器 E2E 是「单机、有限 journey」的验收，并非全量 UI 覆盖，也不证明安全模型已完全闭合。** 仓库内现已包含一个 **真实浏览器验收 harness**（`tests/e2e/acceptance.e2e.ts`）：它启动真实应用并用 `playwright-core` 驱动 **本机 headless Chrome/Edge**（系统浏览器可执行文件，不下载浏览器），在真实 `/agent` 页面断言渲染后的 DOM，覆盖转账确认（YELLOW）、转账 MFA（RED，含错误验证码拒付）、计划暂停 / 恢复、取消、以及刷新后从已持久化状态恢复待办动作。security 的判定是否闭合由 `security/` 的 **单元 / 集成测试** 保证，**不由浏览器验收证明**；该 harness 为 **单机 / 单进程** 运行、journey 数量有限，**未覆盖** 真实 LLM（`LLM_MODE=live`）、`next build` / `next start`、跨浏览器、无障碍与性能。进程内的 route-handler 集成测试见 `tests/app/*-http.test.ts`，核心流水线（Agent + 工具 + 安全网关 + Banking SDK + 审计）的单元 / 场景测试见 `tests/`。
 - **验证码是模拟的**（固定 `123456`），不发送真实短信；且 UI 不显示验证码。
 - **演示时钟被固定。** 应用内所有"现在"默认使用 `DEMO_NOW = 2026-09-25 12:00（本地时间）`，
   以保证本月/上月/今日窗口、消费分析、当日转账累计与种子数据保持一致 —— 它 **不是真实系统时间**。
@@ -434,10 +458,14 @@ cp .env.example .env
 ├── audit/               # 审计日志 + 安全事件
 ├── lib/                 # 共享内核：contracts · errors · money · clock · config · db(repositories)
 ├── prisma/              # schema.prisma + seed.ts
-├── tests/               # Vitest：unit（security/planner/sdk）+ scenarios（Test 1–12 端到端）
+├── tests/               # 四层：unit（纯单元 security/planner/sdk）+ scenarios（Test 1–12 faux-LLM 端到端）+ app（route-handler HTTP 集成，[integration]）+ e2e/（真实浏览器验收：tsx 驱动 headless Chrome/Edge）
 ├── docs/                # 竞赛文档
 └── CONTEXT.md           # 根架构总览（架构 · 安全模型 · 工具目录 · 演示时钟）
 ```
+
+> **组件库设计约束：** `components/index.ts` 是 **中性 barrel（facade）**——它本身 **不能** 带 `'use client'`。
+> 若在其下再引入一个带 `'use client'` 的中间 barrel 并经该中性 facade 二次导出，会破坏 SSR（页面返回 500）。
+> 因此中间 barrel 必须保持中性，`'use client'` 只放在真正的客户端组件文件上。
 
 ---
 
