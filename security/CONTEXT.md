@@ -229,7 +229,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   `authorizeAction`/`cancelAction` reject a MISMATCHING `opts.userId`/`opts.sessionId` with `SECURITY_DENIED`, but only
   when the caller SUPPLIES them (`opts?.userId !== undefined`); an actionId alone authorizes. The app layer DOES forward
   `{ userId, sessionId }` and DOES call `recordActionResult(id, 'executed'|'failed')` after executing, but the identity is
-  execution, an executed action stays `confirmed` — protected only by the exactly-once claim (a repeat confirm
+  request-derived (`app/api/_lib/session.ts`) with no trusted/signed session token, so the check defends against
   still yields `CONFLICT`), but the persisted status never becomes `executed`/`failed`.
 - **Injection guard does NOT add a system reminder to the model context.**
   The only caller (`agent/run-turn.ts` ~L353-357) emits a UI `security_event` (kind `injection`) after `reportInjection`; nothing is appended to the agent's system prompt/messages, despite the `injection-guard.ts` header saying so.
