@@ -128,6 +128,8 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 
 ## Known Issues
 
+- **No spec asserts on a message's inline `cards`.** For a `submit_plan` turn the `plan` card is delivered BOTH ways — inline in the `submit_plan`-calling assistant message's `cards` (surfaced on its `message_start`/`message_end` events) AND as a standalone `{type:'card', card}` event — because `agent/run-turn.ts#emitCard` pushes the SAME card into `buffer.current.cards` and the `card` event, and `runTurn` returns `buffer.events` by reference. Plan specs assert only the standalone `card` event (`app/plan-parking-http.test.ts:183`) and `plan_update` frames, so a UI double-render of the plan card (the UI promotes the standalone `card` to `activePlan` AND keeps the message's `cards`) is UNCOVERED.
+
 - **GREEN auto-execute writes no `AuditLog` row.** Audit rows are written only for gated
   confirm/verify/cancel decisions — assert GREEN at the `beforeToolCall` chokepoint instead.
 - **`CIRCUIT_OPEN`/423 and SSE `error`-frame are unreachable over real HTTP + mock.** `mapAppError`
