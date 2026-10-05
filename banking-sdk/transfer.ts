@@ -19,9 +19,9 @@
  *  - `CONFLICT`          — a name matches multiple contacts (`detail.candidates` lists them).
  *  - `INSUFFICIENT_FUNDS`— funding account balance < amount.
  */
-import { createHash } from 'node:crypto';
 import type { Account, Contact, Transaction } from '@prisma/client';
 import { demoNow } from '../lib/clock';
+import { idempotentTransferTxId } from '@/lib/ledger';
 import { accounts, contacts, transactions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { parseAmount, round2 } from '../lib/money';
@@ -37,12 +37,6 @@ function toRecipient(contact: Contact): TransferRecipient {
     phone: contact.phone,
     bank: contact.bank ?? undefined,
   };
-}
-
-/** Deterministic ledger-row id derived from (userId, idempotencyKey) — the idempotency dedup key. */
-function idempotentTransferId(userId: string, idempotencyKey: string): string {
-  const digest = createHash('sha256').update(`${userId}\u0000${idempotencyKey}`).digest('hex');
-  return `txidem_${digest.slice(0, 32)}`;
 }
 
 /** Structural Prisma unique-constraint (P2002) check — avoids importing the runtime error class. */
@@ -157,7 +151,7 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
   const occurredAt = demoNow();
 
   const key = input.idempotencyKey?.trim();
-  const txId = key ? idempotentTransferId(input.userId, key) : undefined;
+  const txId = key ? idempotentTransferTxId(input.userId, key) : undefined;
 
   type Outcome =
     | { kind: 'executed'; transactionId: string; newBalance: number }

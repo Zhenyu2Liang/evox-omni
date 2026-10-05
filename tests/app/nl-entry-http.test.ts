@@ -32,7 +32,6 @@ import { POST as verifyPost } from '@/app/api/actions/[id]/verify/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
 import { MFA_CODE } from '@/lib/constants';
-import { newId } from '@/lib/ids';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, CONTACTS } from '@/tests/helpers/fixtures';
 import { actionUrl, chatUrl, idCtx, postJson, type HttpResult } from './harness';
@@ -129,7 +128,6 @@ function assistantText(events: readonly AgentStreamEvent[]): string {
 /** Drive one JSON-mode NL turn against the REAL chat route (fresh session). */
 async function chatTurn(message: string): Promise<ChatTurnResponse> {
   const res = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
-    sessionId: newId('sess'),
     message,
   });
   expect(res.status).toBe(200);

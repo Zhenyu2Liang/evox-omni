@@ -46,7 +46,6 @@ import { MFA_CODE } from '@/lib/constants';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
 import type { TaskPlan } from '@/lib/contracts/task';
 import { createTask, createTaskNode, updateTaskNode } from '@/lib/db/repositories/task';
-import { newId } from '@/lib/ids';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import {
@@ -182,7 +181,7 @@ afterAll(async () => {
 
 /* ------------------------------------------------------------------------------------ specs */
 
-describe('POST /api/tasks/[id] — real task control (pause / cancel / retry)', () => {
+describe('[integration] POST /api/tasks/[id] — real task control (pause / cancel / retry)', () => {
   it('pause — halts the parked plan and persists the paused snapshot (status:paused)', async () => {
     const { sessionId, taskId, plan } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
     expect(plan.status).toBe('waiting_confirmation');
@@ -297,7 +296,7 @@ describe('POST /api/tasks/[id] — real task control (pause / cancel / retry)', 
   });
 });
 
-describe('POST /api/actions/[id]/{confirm,verify} — resume the parked plan with the REAL result', () => {
+describe('[integration] POST /api/actions/[id]/{confirm,verify} — resume the parked plan with the REAL result', () => {
   it('confirm (YELLOW) — resumes the parked YELLOW node and writes the REAL transfer result back', async () => {
     const { sessionId, taskId, plan } = await seedPlan(
       '先查余额再给张伟转200元',
@@ -395,7 +394,7 @@ describe('POST /api/actions/[id]/{confirm,verify} — resume the parked plan wit
   });
 });
 
-describe('GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', () => {
+describe('[integration] GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', () => {
   it('GET /api/tasks/[id] returns the persisted plan (refresh recovery for a seeded parked plan)', async () => {
     const { sessionId, taskId, plan } = await seedPlan(
       '先查余额再给张伟转200元',
@@ -425,7 +424,6 @@ describe('GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', 
     // "帮我计划一下…" is the mock `submit_plan` trigger; the balance branch emits a GREEN DAG
     // (`get_balance` → `note`) — never a gated node (see the honest-split header).
     const chat = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
-      sessionId: newId('sess'),
       message: '帮我计划一下查询余额',
     });
     expect(chat.status).toBe(200);
@@ -480,7 +478,7 @@ describe('GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', 
   });
 });
 
-describe('task endpoints — authorization (cookie-only identity)', () => {
+describe('[integration] task endpoints — authorization (cookie-only identity)', () => {
   it('POST /api/tasks/[id] without a session (no cookie) → 403 SECURITY_DENIED', async () => {
     const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
 

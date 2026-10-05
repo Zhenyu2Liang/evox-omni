@@ -93,13 +93,41 @@ complementing the in-process `tests/scenarios/*` suites.
   issued through `POST /api/tasks/[id]` halts the next node while resume re-runs only that node; and
   identity stays COOKIE-ONLY — a forged `?sessionId=`/`?userId=` query NEVER authenticates on
   `verify`/`cancel`/`tasks`/`reset`.
+- `session-takeover-http.test.ts` — cookie-only takeover/isolation: a body `sessionId` that disagrees
+  with the cookie (incl. no cookie) → `409` with NO `Set-Cookie`; cross-session action/plan isolation
+  (403, victim action stays pending); missing-cookie fail-closed 403 across confirm/verify/cancel/tasks/
+  security-reset; forged `?sessionId=`/`?userId=` never authenticates.
+- `cancel-during-authorization-http.test.ts` — a cancel landing WHILE a park is in flight (controlled
+  barrier held open inside the `runTool` seam): after cancel NO newly-executable `PendingAction`
+  survives and `computeDailyTransferTotal` stays 0; cancel/confirm race both orderings.
+- `task-resume-retry-http.test.ts` — CONCURRENT real `resume`/`retry` via `POST /api/tasks/[id]` (a
+  rendezvous barrier forces both requests to overlap): the unfinished node's side effect happens
+  EXACTLY ONCE (one `Budget` row / one fresh gate) and the persisted `AgentTask` status stays consistent.
+- `plan-pause-terminal-http.test.ts` — confirming a parked node in a PAUSED plan must NOT advance it
+  (only an explicit `resume` runs the rest); TERMINAL-state protection (a `cancelled` plan stays
+  `cancelled` for resume/retry/pause in route AND DB; a completed plan never re-runs a node).
+- `cumulative-risk-http.test.ts` — cumulative ¥1000/day rule through the REAL confirm/verify routes: an
+  in-flight (ledgered-but-not-terminal) transfer is counted ONCE; concurrent ¥600+¥600 escalates the
+  SECOND to RED/MFA; boundaries ¥1000 → YELLOW, ¥1000.01 → RED.
+- `ledger-consistency-http.test.ts` — confirmed transfers: balance decrement === ledger delta and the
+  matching transfer `Transaction` rows agree; refused/failed actions move NO money; N transfers accumulate.
+- `mfa-escalation-upgrade-http.test.ts` — YELLOW→RED upgrade at execution time: the confirm response
+  surfaces `requiresMfa:true`/tier `RED`/`awaiting_mfa` AND an `mfa_required` event; verify with
+  `MFA_CODE` executes; the `AuditLog` row is consistent with the effective tier.
 
 ## Constraints / Conventions
 
-- **One fresh `sessionId` per turn** (`newId('sess')`) — the in-process circuit breaker is keyed by
-  `sessionId`. The route mints the PERSISTED session id itself (`getOrCreateSession`), so the id
-  asserted on is the one returned in the response body / cookie; specs send it back as the
-  `banking_session` COOKIE on later confirm/verify/cancel/tasks calls.
+- **Every suite is labeled `[integration]`.** Each `*-http.test.ts` carries the `[integration]` marker in
+  its top-level `describe(...)` title(s) — these are INTEGRATION-level specs driving the REAL Next.js
+  route handlers in-process (NOT unit tests, and NOT browser end-to-end). The ONLY true browser
+  end-to-end acceptance lives in the sibling `../e2e/` harness.
+- **Cookie-only session bootstrap.** `POST /api/chat` takes identity SOLELY from the `banking_session`
+  cookie: a body `sessionId` that DISAGREES with the cookie — INCLUDING "no cookie present" — is
+  rejected `409 CONFLICT` and sets NO cookie. The FIRST turn OMITS `sessionId` and sends NO cookie;
+  the route MINTS the session and returns its id (`data.sessionId` in JSON mode, or the `Set-Cookie`
+  header via `sessionIdFromResponse(res)` for SSE). That id is carried as the `banking_session` COOKIE
+  (harness `sessionId` option) on later chat/confirm/verify/cancel/tasks calls. Use a fresh id per test
+  (the in-process circuit breaker is keyed by `sessionId`).
 - DB lifecycle like the other DB suites: `beforeEach(resetDatabase, 30000)` + `afterAll(disconnectTestPrisma)`; helpers come from `@/tests/helpers/db` and `@/tests/helpers/fixtures`.
 - Deterministic & offline; **no fake timers**. Reset+seed per test.
 - Import frozen types from `@/lib/contracts/*`; never redeclare them. `Envelope<T>` is the app-layer
@@ -199,6 +227,13 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 - `./malicious-input-http.test.ts` → prompt-injection over HTTP still gated + follow-up arg-override cannot change executed args
 - `./nl-entry-http.test.ts` → natural-language entry via `POST /api/chat` → gated tool → confirm/verify completes
 - `./review-regressions-http.test.ts` → reviewer regression e2e: two-park YELLOW→RED execution-time escalation in one session, plan-cancel revokes its parked action + cancel/confirm race orderings, a mid-run pause (via the real handler) halting the next node + resume re-running only that node, and forged-query-never-authenticates on verify/cancel/tasks/reset
+- `./session-takeover-http.test.ts` → cookie-only takeover/isolation (body `sessionId` ≠ cookie → 409 no cookie; cross-session isolation 403; missing-cookie fail-closed; forged query never authenticates)
+- `./cancel-during-authorization-http.test.ts` → cancel landing while a park is in flight (controlled barrier): no executable PendingAction survives, daily total stays 0, both race orderings
+- `./task-resume-retry-http.test.ts` → concurrent real `resume`/`retry` over HTTP (rendezvous barrier): unfinished node runs EXACTLY ONCE, persisted status consistent
+- `./plan-pause-terminal-http.test.ts` → confirming a parked node in a PAUSED plan does NOT advance it; terminal-state protection (cancelled stays cancelled; completed never re-runs)
+- `./cumulative-risk-http.test.ts` → cumulative ¥1000/day rule over real confirm/verify (in-flight counted once; concurrent escalation; ¥1000/¥1000.01 boundaries)
+- `./ledger-consistency-http.test.ts` → ledger/balance consistency (confirmed delta === ledger delta; refusals move no money; N transfers accumulate)
+- `./mfa-escalation-upgrade-http.test.ts` → YELLOW→RED upgrade at execution time (confirm surfaces RED/awaiting_mfa + `mfa_required`; verify executes; audit consistent)
 
 ## Notes for Agents
 

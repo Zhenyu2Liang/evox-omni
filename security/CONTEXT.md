@@ -40,7 +40,7 @@ type PrismaLike = Prisma.TransactionClient | typeof prisma   // the shared clien
 const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const
 function evaluateTransferRisk(input: TransferRiskInput): TransferRiskResult     // RED iff amount>1000 || total+amount>1000 (STRICT `>`; exactly ¥1000 stays YELLOW), else YELLOW; always requiresConfirmation
 async function computeDailyTransferTotal(userId: string, now?: number): Promise<number>   // EXECUTED only: sum OUTGOING TRANSFER debits with occurredAt in [startOfDay(now), now] (INCLUSIVE both ends; future-dated rows excluded)
-async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>   // sum of in-flight (status confirmed|executing) parked transfer_money args.amount, minus excludeActionId; a malformed row is SKIPPED (never throws)
+async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>   // sum of in-flight (status confirmed|executing) parked transfer_money args.amount, minus excludeActionId; a malformed row is SKIPPED (never throws); an action whose deterministic ledger row `idempotentTransferTxId(userId, action.id)` ALREADY EXISTS is EXCLUDED (already counted by the executed half)
 async function computeEffectiveTransferTotalWith(client: PrismaLike, userId: string, now?: number, excludeActionId?: string): Promise<number>   // EXECUTED-today transfer debits + in-flight PendingActions, through `client` (so it runs INSIDE a `$transaction`)
 async function reEvaluateTransferRisk(userId: string, amount: number, now?: number): Promise<TransferRiskResult>   // EXECUTED-only re-risk: computeDailyTransferTotal FRESH then evaluateTransferRisk
 ```
@@ -53,6 +53,18 @@ then-current day total can collectively exceed ¥1000 once executed, so executio
 EFFECTIVE total (executed + in-flight) and escalate to RED/MFA. `risk-engine` imports the shared
 `prisma` client (`lib/db/client`) and the `Prisma` type for its `PrismaLike` parameter — this is the
 sanctioned direct-DB dependency of this node (the aggregate queries must run inside the caller's tx).
+
+**Ledger dedup (counted exactly once)**: the effective total is `executed + in-flight`, but an action
+can be `confirmed` (in-flight) while its ledger `Transaction` row ALREADY exists — the SDK writes that
+row deterministically keyed by `idempotentTransferTxId(userId, action.id)` (`lib/ledger`) and
+`recordActionResult` (the flip to a terminal status) has not run yet. Such an action is ALREADY counted
+by the executed half, so `computeInFlightTransferTotal` EXCLUDES every in-flight action whose
+deterministic ledger row exists (one `client.transaction.findMany({ where:{ id:{ in:[…] } }, select:{ id:true } })`
+after the pendingAction fetch; an empty pending set short-circuits to `0` without querying the ledger).
+Without it a ledgered-but-not-yet-terminal action would be counted TWICE and spuriously escalate a
+legitimately-YELLOW transfer to RED/MFA (repo acceptance case 7). The **concurrency defence is
+untouched**: parked actions with NO ledger row yet still sum, so two ¥600 actions both still `confirmed`
+with no ledger row compute `600 + 600 = 1200 > 1000` → RED/MFA.
 
 ### `circuit-breaker.ts` — session-scoped consecutive-failure breaker (in-memory)
 ```ts
@@ -300,11 +312,15 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 - **`HIGH_RISK_BLOCKED` / `ANOMALY_FLAGGED` event kinds are declared but never written**
   by this node (it emits `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET`
   and — for the transfer escalation — `LIMIT_EXCEEDED`).
-- **A transfer's terminal ledger write is still not idempotent.**
-  The gateway serializes the AGGREGATE-limit re-risk (claim-first `$transaction`), but no transfer carries an
-  idempotency key / unique constraint, and the gate read is not atomic with the SDK write
-  (`banking-sdk/transfer.ts`) — a crash between `authorizeAction` and `recordActionResult` leaves a
-  `confirmed` (in-flight) action whose ledger row is missing.
+- **A transfer's terminal ledger write IS idempotent, so the ledgered-transfer dedup is ACTIVE.**
+  The gateway serializes the AGGREGATE-limit re-risk (claim-first `$transaction`), and `lib/ledger`
+  (`idempotentTransferTxId`) + `banking-sdk/transfer.ts` (accepts an `idempotencyKey`, sets `Transaction.id`
+  to that deterministic id) and the agent layer DOES pass the key (its own `action.id`) — so the created
+  `Transaction.id` exactly equals `idempotentTransferTxId(userId, action.id)` and the
+  `computeInFlightTransferTotal` ledger-exclusion is LIVE (an in-flight `confirmed` action whose ledger
+  row already exists is counted exactly once, via the executed half). Residual: the terminal-status flip
+  (`recordActionResult`) is still a separate step from the SDK write — a crash between `authorizeAction`
+  and `recordActionResult` leaves a `confirmed` action, but a retry now replays the same ledger row (at-most-once).
 
 ## Dependencies (contracts this node consumes)
 
@@ -346,6 +362,7 @@ Vitest. This node is designed to be unit-testable WITHOUT network or clock:
 - **These specs must supply `{ userId, sessionId }` to `authorizeAction`/`cancelAction`** (the options are
   required) and a non-empty identity to `handleToolCall`; a call without ids fails closed with `SECURITY_DENIED`.
 - End-to-end agent scenarios (Tests 1–12, incl. injection & confirmation) live under `../tests/`.
+- **All specs live under the root-owned `../tests/`** (the root `vitest.config.ts` discovers only `tests/**`). The `computeInFlightTransferTotal` ledger-dedup spec is `tests/unit/security/risk-engine-dedup.test.ts` (a hand-written Prisma stub implementing only `pendingAction.findMany` + `transaction.findMany`, cast to `PrismaLike`; no DB, no clock, no network), run with the other security units via `npx vitest run tests/unit/security`.
 
 ## Routing Table
 
@@ -361,5 +378,6 @@ This is a **leaf node** — it has no child directories; the modules above are i
 - `authorizeAction`/`cancelAction` transition status ONLY through `claimPendingAction` (atomic compare-and-set; the transfer path uses the same CAS inline) — never a status peek then unconditional write; ownership mismatches use `AppError('SECURITY_DENIED')` (no `FORBIDDEN` code exists).
 - After the agent layer executes an authorized action (or it fails), call `securityGateway.recordActionResult(id, 'executed'|'failed')` so the persisted terminal status is truthful and a later confirm/cancel is a `CONFLICT`.
 - `authorizeAction`/`cancelAction`/`handleToolCall` REQUIRE a caller identity — never add a demo-user fallback; callers must pass `{ userId, sessionId }`.
-- **No local test files exist in this node.** `security/_tests/` and `security/_vitest.local.config.ts` do NOT exist; all security specs live under the root-owned `../tests/` (root `vitest.config.ts` discovers only `tests/**`).
+- **All tests live under the root-owned `../tests/`** (the root `vitest.config.ts` discovers only `tests/**`): this node's security unit specs — including the DB-free dedup spec `tests/unit/security/risk-engine-dedup.test.ts` — run via `npx vitest run tests/unit/security`.
 - **GREEN auto-executed reads are NOT audited.** The only `recordAudit` callers are the gated paths in `agent/confirmation.ts` (confirm/verify + cancel); a GREEN tool that executes inline writes no `AuditLog` row (by design, per `lib/contracts/audit`).
+- **This node is PLAN-UNAWARE.** `security-gateway.ts` never reads `AgentTask` / plan status: `gatewayCreatePendingAction` (park time) and `authorizeAction` (confirm/verify time) gate ONLY on ownership, the circuit breaker, and the risk engines. The "originating plan was cancelled" refusal is enforced one layer UP, in the sibling `agent/` node: `agent/confirmation.ts` `cancelledPlanOutcome(actionId, sessionId)` (reverse-looks the owning task via `findTaskByPendingAction` + `getTask`, refuses when `task.status === 'cancelled'`) is called by `confirmAction`/`verifyAction`/`cancelAction` BEFORE authorizing/executing, and `agent/task-control.ts` `sweepCancelledPlan`/`revokeParkedActions` revoke parked actions (via `gateway.cancelAction`) after a plan run settles. The gateway's own `cancelAction` only cancels ONE pending action (atomic `['pending','awaiting_mfa'] → 'cancelled'` claim); it has no plan awareness.

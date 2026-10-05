@@ -112,7 +112,7 @@ function mfaOf(events: readonly AgentStreamEvent[]): MfaEvent | undefined {
 /** Drive one JSON-mode chat turn against the real route (fresh session). */
 async function chatTurn(message: string): Promise<ChatTurnResponse> {
   const res = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
-    sessionId: newId('sess'),
+    // COOKIE-ONLY bootstrap: omit sessionId (and send no cookie) so the route MINTS the session.
     message,
   });
   expect(res.status).toBe(200);
@@ -179,7 +179,7 @@ afterAll(async () => {
 
 /* ----------------------------------------------------------------------------------- tests */
 
-describe('POST /api/actions — GREEN reads never park and never confirm', () => {
+describe('[integration] POST /api/actions — GREEN reads never park and never confirm', () => {
   it('1 — "查询我的余额" executes get_balance inline: no PendingAction, no confirmation, balance untouched', async () => {
     const turn = await chatTurn('查询我的余额');
 
@@ -193,7 +193,7 @@ describe('POST /api/actions — GREEN reads never park and never confirm', () =>
   });
 });
 
-describe('POST /api/actions/[id]/confirm — YELLOW transfer', () => {
+describe('[integration] POST /api/actions/[id]/confirm — YELLOW transfer', () => {
   it('2 — parks, confirm executes the original args exactly once, writes an audit success; a repeat confirm is a no-op', async () => {
     const turn = await chatTurn('给张伟转200元');
     const confirmation = confirmationOf(turn.events);
@@ -245,7 +245,7 @@ describe('POST /api/actions/[id]/confirm — YELLOW transfer', () => {
   });
 });
 
-describe('POST /api/actions/[id]/verify — RED transfer', () => {
+describe('[integration] POST /api/actions/[id]/verify — RED transfer', () => {
   it('3 — parks awaiting_mfa, verify(MFA_CODE) executes the original args exactly once and audits MFA success', async () => {
     const turn = await chatTurn('给张伟转5000元');
     const mfa = mfaOf(turn.events);
@@ -336,7 +336,7 @@ describe('POST /api/actions/[id]/verify — RED transfer', () => {
   });
 });
 
-describe('POST /api/actions/[id]/cancel — no execution', () => {
+describe('[integration] POST /api/actions/[id]/cancel — no execution', () => {
   it('6 — cancel marks the action cancelled, writes an audit `cancelled` row and moves no money', async () => {
     const turn = await chatTurn('给张伟转200元');
     const row = await parked(turn.sessionId);
@@ -368,7 +368,7 @@ describe('POST /api/actions/[id]/cancel — no execution', () => {
   });
 });
 
-describe('POST /api/actions — ownership guard and unknown ids', () => {
+describe('[integration] POST /api/actions — ownership guard and unknown ids', () => {
   it('7 — a foreign OWNER gets 403 SECURITY_DENIED (action untouched); an unknown id gets 404 NOT_FOUND on every route', async () => {
     const turn = await chatTurn('给张伟转200元');
     const row = await parked(turn.sessionId);
@@ -453,7 +453,7 @@ describe('POST /api/actions — ownership guard and unknown ids', () => {
   });
 });
 
-describe('POST /api/actions — MFA secrecy over HTTP', () => {
+describe('[integration] POST /api/actions — MFA secrecy over HTTP', () => {
   it('8 — the literal mock MFA code never appears in the parking turn or any verify response body', async () => {
     const turn = await chatTurn('给张伟转5000元');
     const row = await parked(turn.sessionId);
@@ -467,7 +467,7 @@ describe('POST /api/actions — MFA secrecy over HTTP', () => {
   });
 });
 
-describe('POST /api/actions — circuit breaker over HTTP', () => {
+describe('[integration] POST /api/actions — circuit breaker over HTTP', () => {
   /**
    * REACHABLE INVARIANT ONLY — the documented `423 CIRCUIT_OPEN` is UNREACHABLE here.
    *

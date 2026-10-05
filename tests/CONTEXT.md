@@ -10,7 +10,9 @@ It proves two things, deterministically and **offline** (no network, no API key)
 2. the **12 demo scenarios** work end-to-end through the full pipeline
    (Pi Agent → banking tools → Security Gateway `beforeToolCall` → Banking SDK → audit) via
    **scenario** tests driven by a *scripted* model (`registerFauxProvider()`, `LLM_MODE=mock`) and via
-   **app-entry (HTTP)** tests that drive the REAL Next.js route handlers.
+   **app-entry (HTTP)** tests that drive the REAL Next.js route handlers, and
+3. the **user journeys** render correctly in a **real browser** (`e2e/`, headless system Chrome via
+   `playwright-core` against the real `/agent` page) — the only layer that asserts on RENDERED DOM.
 
 Only the model is mocked; the tools, the security chokepoint, the route handlers and the DB are the real ones.
 This node owns test infrastructure and fixtures — NOT the business logic under test (that lives in
@@ -29,7 +31,9 @@ This node owns test infrastructure and fixtures — NOT the business logic under
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
 - `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
   (chat/SSE, action confirm|verify|cancel, task lifecycle, and `review-regressions-http.test.ts`
-  reviewer regressions). See `app/CONTEXT.md`.
+  reviewer regressions) plus the newer regression specs (`session-takeover-http`, `cancel-during-
+  authorization-http`, `task-resume-retry-http`, `plan-pause-terminal-http`, `cumulative-risk-http`,
+  `ledger-consistency-http`, `mfa-escalation-upgrade-http`). See `app/CONTEXT.md`.
 
 Run:
 
@@ -90,6 +94,26 @@ Fixtures: the canonical demo dataset (user 李明; contacts 张伟/王芳/妈妈
 anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) is defined in
 `helpers/fixtures.ts`. Cross-module knowledge belongs to the modules under test, not to fixtures.
 
+## Real-Browser E2E (tests/e2e — NOT run by vitest)
+
+A separate acceptance layer ABOVE the HTTP specs: `tests/e2e/acceptance.e2e.ts` boots the REAL app
+(`next dev`) on a free port and drives the REAL `/agent` UI in headless system Chrome
+(`playwright-core`, NO browser download), asserting on RENDERED DOM. Its file name avoids
+`.test.`/`.spec.` so `npm run test` NEVER picks it up — run it explicitly.
+
+```
+npx tsx tests/e2e/acceptance.e2e.ts
+```
+
+Prerequisites (once, in a fresh worktree): `npm install` → `npx prisma generate` → `npx prisma db push`
+→ `npm run db:seed`. It uses the DEV DB (`prisma/dev.db`, gitignored), `.env` must set `LLM_MODE=mock`,
+and it needs a system Chrome. It prints one `PASS|FAIL|SKIP <journey> — <evidence>` line per journey
+and exits non-zero iff any journey FAILs (a SKIP does not fail the run).
+**Covers:** NL → confirmation/MFA card → human-decision flows, MFA success + wrong-code rejection,
+plan pause/resume + cancel, and refresh/action-entry recovery from persisted server state.
+**Does NOT cover:** the real LLM, `next build`/`next start`, cross-browser, a11y/perf, or the
+`unit`/`scenarios` layers. See `e2e/CONTEXT.md` for details and known limitations.
+
 ## Fast test-DB path (why the suite is fast — do not remove)
 
 The full suite (447 tests / 214 suites) runs in ~30–45s.
@@ -104,6 +128,8 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 
 ## Known Issues
 
+- **No spec asserts on a message's inline `cards`.** For a `submit_plan` turn the `plan` card is delivered BOTH ways — inline in the `submit_plan`-calling assistant message's `cards` (surfaced on its `message_start`/`message_end` events) AND as a standalone `{type:'card', card}` event — because `agent/run-turn.ts#emitCard` pushes the SAME card into `buffer.current.cards` and the `card` event, and `runTurn` returns `buffer.events` by reference. Plan specs assert only the standalone `card` event (`app/plan-parking-http.test.ts:183`) and `plan_update` frames, so a UI double-render of the plan card (the UI promotes the standalone `card` to `activePlan` AND keeps the message's `cards`) is UNCOVERED.
+
 - **GREEN auto-execute writes no `AuditLog` row.** Audit rows are written only for gated
   confirm/verify/cancel decisions — assert GREEN at the `beforeToolCall` chokepoint instead.
 - **`CIRCUIT_OPEN`/423 and SSE `error`-frame are unreachable over real HTTP + mock.** `mapAppError`
@@ -115,9 +141,10 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 
 - `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + one-time schema provisioning
 - `./helpers` → shared test utilities (db reset/seed + fast pragmas, fixtures, faux agent, scenario harness)
-- `./unit` → pure/logic unit specs for security, planner, banking-sdk, agent, lib
+- `./unit` → pure/logic unit specs for security, planner, banking-sdk, agent, lib (incl. `unit/security/risk-engine-dedup.test.ts` → ledger dedup of the in-flight transfer total via `computeInFlightTransferTotal`)
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
-- `./app` → real app-entry (HTTP) specs driving the real Next.js route handlers (chat/SSE, action confirm|verify|cancel, task lifecycle, reviewer regressions)
+- `./app` → real app-entry (HTTP) specs driving the real Next.js route handlers (chat/SSE, action confirm|verify|cancel, task lifecycle, reviewer regressions); newer specs cover cookie-only session takeover, cancel-during-authorization, concurrent resume/retry exactly-once, plan pause/terminal-state, cumulative ¥1000/day risk, ledger consistency, YELLOW→RED MFA upgrade — every top-level describe is labeled `[integration]` (these are handler tests, NOT browser E2E)
+- `./e2e` → real-browser acceptance harness: boots `next dev` + real headless Chrome and drives the `/agent` UI end-to-end, asserting on RENDERED DOM (the ONLY true browser E2E layer). See `e2e/CONTEXT.md`.
 - `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)
@@ -137,6 +164,9 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   (`SESSION_COOKIE`); `?sessionId=`/`?userId=` query params are IGNORED. Missing/unknown cookie → 403
   `SECURITY_DENIED`; unknown id → 404 `NOT_FOUND`; foreign-owned id → 403. App-entry specs pass
   identity as a `Cookie` header via `harness.ts` (`{ sessionId }` shorthand or a raw `cookie`).
+  BOOTSTRAP: the FIRST chat turn OMITS body `sessionId` and sends NO cookie (the route mints the
+  session and returns its id via `data.sessionId`/`Set-Cookie`); a body `sessionId` that disagrees
+  with the cookie → **409**.
 - **Gateway ownership is mandatory.** `securityGateway.authorizeAction(id, { userId, sessionId, mfaCode? })`
   and `cancelAction(id, { userId, sessionId })` REQUIRE non-optional `userId`+`sessionId` (no demo-user
   fallback; missing/mismatch → `SECURITY_DENIED`). Pass the parked action's OWN `sessionId` and that

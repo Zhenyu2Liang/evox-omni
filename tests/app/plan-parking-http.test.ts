@@ -19,7 +19,7 @@
  * real `set_card_limit` runs and the seeded 娱乐 limit changes 3000 → 1500.
  *
  * DB lifecycle matches the other DB-backed suites: reset + seed before each test, disconnect after.
- * Every turn uses a FRESH requested session id (the in-process circuit breaker is keyed by
+ * Every turn uses a FRESH session (the in-process circuit breaker is keyed by
  * `sessionId`); the route MINTS the persisted id itself (`getOrCreateSession`), so the id we assert
  * on is the one returned by the turn (the leading `session` SSE frame).
  */
@@ -32,7 +32,6 @@ import type { ActionResponse } from '@/app/api/_lib/types';
 import type { AgentStreamEvent, ChatCard, ChatTurnResponse } from '@/lib/contracts/agent';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import { MFA_CODE } from '@/lib/constants';
-import { newId } from '@/lib/ids';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { CARD_LIMITS } from '@/tests/helpers/fixtures';
 import {
@@ -121,7 +120,6 @@ function nodeStatusOf(plan: TaskPlan, nodeId: string): TaskNodeStatus | undefine
  */
 async function parkPlanTurn(): Promise<{ sessionId: string; events: AgentStreamEvent[] }> {
   const res = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({}), {
-    sessionId: newId('sess'),
     message: MESSAGE,
   });
   expect(res.status).toBe(200);
@@ -145,7 +143,7 @@ afterAll(async () => {
 
 /* ------------------------------------------------------------------------------------ specs */
 
-describe('POST /api/chat — a conditional DAG plan PARKS on a gated node (real HTTP + mock)', () => {
+describe('[integration] POST /api/chat — a conditional DAG plan PARKS on a gated node (real HTTP + mock)', () => {
   it('the streamed DAG walks analyze→check→setlimit and settles in waiting_confirmation', async () => {
     const { sessionId, events } = await parkPlanTurn();
 
@@ -189,7 +187,7 @@ describe('POST /api/chat — a conditional DAG plan PARKS on a gated node (real 
   });
 });
 
-describe('the PARKING turn moved nothing and persisted the plan + a pending YELLOW action', () => {
+describe('[integration] the PARKING turn moved nothing and persisted the plan + a pending YELLOW action', () => {
   it('persists the plan (waiting_confirmation), a pending YELLOW action, and leaves the limit at 3000', async () => {
     const { sessionId, events } = await parkPlanTurn();
     const prisma = getTestPrisma();
@@ -232,7 +230,7 @@ describe('the PARKING turn moved nothing and persisted the plan + a pending YELL
   });
 });
 
-describe('POST /api/actions/[id]/confirm — resumes the parked plan with the REAL result', () => {
+describe('[integration] POST /api/actions/[id]/confirm — resumes the parked plan with the REAL result', () => {
   it('confirm (YELLOW) resumes the plan to success and applies the real limit change 3000 → 1500', async () => {
     const { sessionId, events } = await parkPlanTurn();
     const actionId = confirmationOf(events)!.actionId;

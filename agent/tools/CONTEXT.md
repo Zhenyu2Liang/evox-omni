@@ -35,12 +35,14 @@ export interface ToolExecutionResult {
   error?: string;
   tier?: RiskLevel;
 }
+/** Additive per-call option accepted by the model-free runners. Only `transfer_money` reads it. */
+export interface ToolRunOptions { idempotencyKey?: string; }
 export interface ToolRegistry {
   tools: Record<ToolName, AgentTool<any>>;
   list(): AgentTool<any>[];
   get(name: ToolName): AgentTool<any>;
   /** Gateway-authorized execution path: run a tool's args through the SDK WITHOUT the model. */
-  executeDirect(name: ToolName, args: Record<string, unknown>): Promise<ToolExecutionResult>;
+  executeDirect(name: ToolName, args: Record<string, unknown>, opts?: ToolRunOptions): Promise<ToolExecutionResult>;
 }
 export const TOOL_NAMES: readonly ToolName[];      // exactly the 26 frozen names
 export interface CreateToolRegistryOptions { submitPlan?: SubmitPlanDeps; }
@@ -87,7 +89,7 @@ derived `<Name>Args` type. `index.ts`'s `createToolRegistry` calls every factory
 | `get_investment_holdings` | investment.ts | 🟢 | `banking.investment.listHoldings(userId)` |
 | `subscribe_investment` | investment.ts | 🔴 | `banking.investment.subscribeInvestment({ userId, productId, amount })` |
 | `redeem_investment` | investment.ts | 🔴 | `banking.investment.redeemInvestment({ userId, holdingId })` |
-| `transfer_money` | transfer.ts | 🟡/🔴 dynamic | `banking.transfer.createTransfer({ userId, ... })` |
+| `transfer_money` | transfer.ts | 🟡/🔴 dynamic | `banking.transfer.createTransfer({ userId, ..., idempotencyKey? })` |
 | `reserve_budget` | budget.ts | 🟢 | `banking.budget.reserveBudget({ userId, ... })` |
 | `list_scheduled_tasks` | task.ts | 🟢 | `banking.task.listScheduledTasks(userId)` |
 | `create_scheduled_task` | task.ts | 🟡 | `banking.task.createScheduledTask({ userId, ... })` |
@@ -142,6 +144,7 @@ Tier legend: 🟢 GREEN auto-executes · 🟡 YELLOW needs confirmation · 🔴 
 - **Tools are data + a thin SDK call.** Each family module only declares the TypeBox schema, the
   `AgentTool` object and one runner that forwards to its `banking-sdk` function — no business rules
   (funds/minAmount/recipient resolution are SDK concerns).
+- **`transfer_money` carries an optional at-most-once key.** Its runner takes `opts?: ToolRunOptions` and forwards `opts.idempotencyKey` verbatim as the SDK `TransferInput.idempotencyKey`; the SDK derives the ledger row id as `idempotentTransferTxId(userId, key)` (`@/lib/ledger`) and reuses it as the PK, so a repeat replays the original `Transaction` row instead of double-debiting (the created id is surfaced as `TransferResult.transactionId`). `confirmation.ts` supplies the gated action's `PendingAction.id` as the key. The `AgentTool.execute` (model path) passes NO key; the gated transfer is executed model-free via `executeDirect`.
 
 ## Dependencies
 

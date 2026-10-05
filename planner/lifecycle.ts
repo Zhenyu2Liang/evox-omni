@@ -11,6 +11,12 @@
  * A plan is resumed by RE-INVOKING `runPlan` on its snapshot: `runPlan` skips
  * every terminal node (idempotency) and only launches the now-unblocked
  * dependents. Nothing here re-executes a node that already succeeded.
+ *
+ * `'cancelled'` is TERMINAL for the controls here: `pausePlan` / `cancelPlan` /
+ * `retryPlan` return a cancelled plan UNCHANGED, so no control call can move it
+ * back to a non-terminal state. `'paused'` is respected by `resumePlan`, which
+ * records the human decision but does not advance the plan unless the caller
+ * explicitly lifts the pause (`explicitResume`).
  */
 import type { TaskNodeResult, TaskNodeStatus, TaskPlan, TaskPlanStatus } from '@/lib/contracts/task';
 import { AppError } from '@/lib/errors';
@@ -105,12 +111,17 @@ function snapshotWith(
 /**
  * Mark a plan PAUSED: return a snapshot with `status:'paused'` — a non-terminal,
  * resumable status. Its un-run nodes are surfaced as `pending` and its already-
- * successful nodes keep their `success` result — resumable by re-invoking
- * `runPlan` / `resumePlan` (which skip every already-successful node).
+ * successful nodes keep their `success` result — resumable with
+ * `runPlan(..., { explicitResume: true })` / `resumePlan(..., { explicitResume: true })`
+ * (which skip every already-successful node).
+ *
+ * A `'cancelled'` plan is TERMINAL: pausing it would move it back to a non-terminal
+ * state, so the plan is returned UNCHANGED.
  *
  * Pure: the input plan is never mutated.
  */
 export function pausePlan(plan: TaskPlan, opts: PausePlanOptions = {}): TaskPlan {
+  if (plan.status === 'cancelled') return plan;
   const now = opts.now ?? (() => demoNow());
   const results = new Map<string, TaskNodeResult>();
   for (const r of plan.results) results.set(r.id, { ...r });
@@ -160,6 +171,9 @@ export function compensationReport(plan: TaskPlan, cancelledAt?: number): Compen
  * cancellations and the final snapshot are persisted; `deps` may be omitted for
  * a pure in-memory cancellation.
  *
+ * A `'cancelled'` plan is TERMINAL: the plan is returned UNCHANGED with NO writes
+ * (a cancellation must never be re-applied nor moved to a non-terminal state).
+ *
  * COMPENSATION POLICY (non-atomic, no automatic rollback): the planner is pure
  * DAG logic and owns NO banking/domain semantics, so it NEVER automatically
  * compensates or rolls back an already-executed (`success`) node — executed work
@@ -173,6 +187,7 @@ export async function cancelPlan(
   deps?: PlanDeps,
   opts: CancelPlanOptions = {},
 ): Promise<TaskPlan> {
+  if (plan.status === 'cancelled') return plan;
   const now = opts.now ?? (() => demoNow());
   const reason = opts.reason ?? 'cancelled by user';
 
@@ -219,13 +234,15 @@ export async function cancelPlan(
  *
  * A node that already `success` is NEVER reset/re-run (idempotency). When there
  * is nothing to retry (no target, or no resettable node) the plan is returned
- * UNCHANGED.
+ * UNCHANGED — as is a `'cancelled'` plan, which is TERMINAL: no node is reset and
+ * `runPlan` is never entered.
  */
 export async function retryPlan(
   plan: TaskPlan,
   deps: PlanDeps,
   opts: RetryPlanOptions = {},
 ): Promise<TaskPlan> {
+  if (plan.status === 'cancelled') return plan;
   const now = opts.now ?? (() => demoNow());
 
   const results = new Map<string, TaskNodeResult>();
@@ -273,7 +290,12 @@ export async function retryPlan(
   const snapshot = snapshotWith(plan, results, 'pending', now());
   await persistPlanSnapshot(deps, snapshot);
 
-  return runPlan(snapshot, deps, { now: opts.now, signal: opts.signal, onControls: opts.onControls });
+  return runPlan(snapshot, deps, {
+    now: opts.now,
+    signal: opts.signal,
+    onControls: opts.onControls,
+    explicitResume: opts.explicitResume,
+  });
 }
 
 /**
@@ -288,6 +310,12 @@ export async function retryPlan(
  * After a SUCCESSFUL decision the plan continues via `runPlan`, which skips every
  * already-successful node and runs only the now-unblocked dependents. Throws
  * `AppError('NOT_FOUND')` when `nodeId` is not a node of the plan.
+ *
+ * A `'paused'` plan HOLDS: the human decision is still recorded on the gated node
+ * (and persisted), but the plan keeps `status:'paused'` and its dependents do NOT
+ * run — a durable pause must not be advanced by a decision alone. Only an
+ * explicit resume (`opts.explicitResume === true`) lifts the pause and lets the
+ * walk continue.
  */
 export async function resumePlan(
   plan: TaskPlan,
@@ -299,6 +327,9 @@ export async function resumePlan(
   const node = plan.nodes.find((n) => n.id === resume.nodeId);
   if (!node) throw new AppError('NOT_FOUND', `plan '${plan.id}' has no node '${resume.nodeId}'`);
 
+  // A durable pause is honoured: the decision below is recorded, but the plan is
+  // NOT advanced past it (nothing runs until an explicit resume).
+  const stillPaused = plan.status === 'paused' && opts.explicitResume !== true;
   const outcome = resume.outcome;
   const results = new Map<string, TaskNodeResult>();
   for (const r of plan.results) results.set(r.id, { ...r });
@@ -340,14 +371,19 @@ export async function resumePlan(
   await deps.onNodeUpdate({ ...updated });
   await deps.persistNode?.(plan.id, { ...updated });
 
-  const planStatus: TaskPlanStatus =
-    status === 'waiting_confirmation' || status === 'waiting_verification'
+  const planStatus: TaskPlanStatus = stillPaused
+    ? 'paused'
+    : status === 'waiting_confirmation' || status === 'waiting_verification'
       ? 'waiting_confirmation'
       : status === 'failed'
         ? 'failed'
         : 'running';
   const snapshot = snapshotWith(plan, results, planStatus, now());
   await persistPlanSnapshot(deps, snapshot);
+
+  // The plan is (still) paused: the decision is recorded durably, the plan stays
+  // resumable, and no dependent runs until an explicit resume.
+  if (stillPaused) return snapshot;
 
   // A re-parked node has NOT been decided — wait for the next human decision.
   if (status === 'waiting_confirmation' || status === 'waiting_verification') return snapshot;

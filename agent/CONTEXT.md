@@ -102,6 +102,8 @@ function verifyAction(actionId: string, code: string, opts?: ConfirmOptions): Pr
 function cancelAction(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 // the single gateway-authorized execution path used by confirmation AND the planner's runTool:
 function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome>;
+// confirm/verify/cancel FAIL CLOSED when the action's owning plan is CANCELLED, BEFORE authorizing:
+async function cancelledPlanOutcome(actionId: string, sessionId: string): Promise<ConfirmationOutcome | undefined>;  // findTaskByPendingAction + tasks.getTask; status 'cancelled' ⇒ refuse with the row's persisted status
 
 // --- agent/card-emitter.ts --------------------------------------------------
 function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCard[];  // PURE, total
@@ -140,9 +142,10 @@ function toTaskPlan(row: AgentTaskWithNodes): TaskPlan;           // persisted t
 function defaultPollControls(planId: string): PlanControlPort;   // durable row status → planner controls ('paused'⇒pause, 'cancelled'⇒cancel)
 function getTaskPlan(sessionId: string, taskId: string): Promise<TaskPlan>;                            // ownership-checked read
 function pauseTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // persists durable status 'paused'
-function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // flips 'paused'→'running'; terminal (success) nodes skipped
+function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // CAS-flips a resumable row to 'running', then runs with `explicitResume:true`; terminal (success) nodes skipped
 function cancelTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // revokes the plan's parked PendingActions, then cancels
-function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;       // retry failed nodes (+ descendants)
+function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;       // retry failed nodes (+ descendants); CAS from-set EXCLUDES 'running' (resume KEEPS it)
+function sweepCancelledPlan(sessionId: string, taskId: string): Promise<RevokeSummary>;                // post-run CANCEL SWEEP: if the persisted AgentTask is 'cancelled', revoke every still-parked PendingAction (run after submit_plan / resume / retry; an unexpected revoke failure is recorded as a SecurityEvent via recordRevokeFailure, and the summary is still returned)
 function findTaskByPendingAction(sessionId: string, actionId: string): Promise<{ taskId: string; nodeId: string } | undefined>;
 function resumeTaskForAction(sessionId: string, actionId: string, outcome: PlanToolOutcome, deps: TaskControlDeps): Promise<{ taskId: string; nodeId: string; plan: TaskPlan } | undefined>;
 ```
@@ -193,7 +196,13 @@ Human decision (API route → `confirmation.ts`):
 
 Consequence: money-moving calls are always triggered by a human decision, never by model text.
 
-Idempotency (code-enforced, `confirmation.ts`): `executeAuthorizedAction` records the TRUE terminal
+Idempotency (code-enforced, `confirmation.ts`): `executeAuthorizedAction` executes a `transfer_money`
+action's ORIGINAL validated args with the action's OWN `PendingAction` id as the SDK idempotency key —
+`registry.executeDirect(action.toolName, action.args, { idempotencyKey: action.id })` — so the created
+ledger row id is exactly `idempotentTransferTxId(userId, action.id)` (`@/lib/ledger`); that deterministic
+id is the link `security/` uses to exclude an already-ledgered in-flight transfer from the cumulative
+daily total (the DB PK dedups the write, so no lock is needed). Every non-transfer tool runs with no opts.
+It records the TRUE terminal
 status with `gateway.recordActionResult(actionId, ok ? 'executed' : 'failed')` BEFORE auditing, and
 resolves the owner from `getSession(action.sessionId)?.userId` (NO demo-user fallback — an unknown owner
 is recorded `failed` and a `SECURITY_DENIED` is thrown). A repeat confirm or a confirm-after-cancel
@@ -243,6 +252,52 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   as an `error` event rather than aborting the plan or the turn.
 (this is what demo Test 4 — prompt injection — proves).
 
+### Plan-lifecycle & confirmation guarantees (code-grounded)
+
+- **Cancel revokes parked actions, THEN cancels.** `task-control.ts#cancelTask` calls
+  `revokeParkedActions` (one `gateway.cancelAction` per parked node — a DB CAS
+  `pending`/`awaiting_mfa` → `cancelled`) BEFORE `lifecycle.cancelPlan`. `revokeParkedActions` reports
+  `alreadySettled` for an action that already executed/errored and never pretends to roll it back
+  (executed work is irreversible; the planner performs NO automatic compensation).
+- **No pre-park plan-status check exists** — neither `securityGateway.handleToolCall` nor
+  `executor.runPlan`'s `runToolNode` consults the plan status before parking. Prevention of a
+  post-cancel executable action relies on the post-run CANCEL SWEEP: `sweepCancelledPlan(sessionId,
+  taskId)` (called after every run path — `runSubmitPlan` (`tools/planning.ts`), `resumeTask`,
+  `retryTask`, `resumeTaskForAction`) re-reads the row and, when `cancelled`, revokes every still-parked
+  action; an UNEXPECTED revocation failure is recorded durably as a `SecurityEvent`
+  (`recordRevokeFailure`, kind `HIGH_RISK_BLOCKED`) and the summary is still returned, so a control
+  API response never becomes a 5xx that would hide the already-persisted `cancelled` state. A
+  live run is interrupted mid-flight only via `defaultPollControls` (`'cancelled'` ⇒ `{kind:'cancel'}`)
+  polled at each node checkpoint.
+- **Confirm-vs-cancel is at-most-once via the gateway CAS, NOT "cancel always wins".**
+  `confirmation.ts#confirmAction`/`verifyAction`/`cancelAction` first call `cancelledPlanOutcome` (reads
+  the owning `AgentTask` via `findTaskByPendingAction` + `getTask`; if `'cancelled'` ⇒ `ok:false` BEFORE
+  authorizing — the belt), then `gateway.authorizeAction`, whose `claimPendingAction` from
+  `['pending']`/`['awaiting_mfa']` claims 0 rows on an already-revoked/executed action and throws
+  `CONFLICT` — surfaced as a real `ok:false` (`conflictOutcome`). Confirm and cancel race through the
+  SAME CAS (`pendingAction.ts#claimPendingAction`), so exactly one wins; a confirm that wins the race
+  executes, and the concurrent cancel's revoke then reports it settled.
+- **Concurrent resume/retry is exactly-once per effect.** `claimTaskStatus`
+  (`lib/db/repositories/task.ts`) is a single `updateMany` CAS (`status IN fromStatuses` → `toStatus`;
+  `count===1`). `resumeTask`'s from-set KEEPS `'running'` (two resumes both run; effect de-dup is the
+  IN-PROCESS single-flight `inFlightExecutions` map in `confirmation.ts#executeGatedTool`, keyed by
+  session+tool+canonical-args and cleared on settle), whereas `retryTask`'s from-set EXCLUDES
+  `'running'` (the loser claims 0 rows ⇒ returns the persisted plan WITHOUT running). `transfer_money`
+  adds DB-level idempotency: `executeAuthorizedAction` passes `{ idempotencyKey: action.id }` to
+  `registry.executeDirect`.
+- **Pause retains.** When `resumeTaskForAction` sees the owning plan `'paused'`, it records the decided
+  node and does NOT advance. TWO belts hold it: (a) `lifecycle.resumePlan` returns early with
+  `status:'paused'` whenever `explicitResume !== true` (`stillPaused`) — and `resumeTaskForAction`
+  passes NO `explicitResume` — and (b) `resumeTaskForAction` passes `PAUSE_NOW_CONTROLS` (always
+  `{kind:'pause'}`) into `runPlan`. The plan stays `'paused'` until an explicit `resumeTask`.
+- **Terminal states are never resurrected.** Every control CAS from-set excludes `'cancelled'`
+  (`PAUSABLE_PLAN_STATUSES`/`RESUMABLE_PLAN_STATUSES`/`RETRYABLE_PLAN_STATUSES` in `task-control.ts`); a
+  lost claim returns `reloadPlan(...)` — the PERSISTED row — so the API response always matches the DB.
+  `createTaskPersistence.persistPlan` writes `'cancelled'` unconditionally but every other checkpoint via
+  `claimTaskStatus(NON_CANCELLED_PLAN_STATUSES)`, so a concurrent cancel wins. `resumeTaskForAction`
+  no-ops on a `'cancelled'` plan (returns the persisted plan); `cancelTask` is idempotent on an
+  already-`'cancelled'` row.
+
 ## Constraints (hard, encode in every file)
 
 - **NEVER register a bash/shell/write/edit/file/SQL/system/http tool.** The model's ONLY capabilities
@@ -290,7 +345,7 @@ Sibling nodes this node consumes (read-only; escalate changes to the owner):
 - `../banking-sdk` → `banking.<domain>.*` execute-only functions (module `./types` DTOs).
 - `../planner` → `dag.validatePlan`, `buildPlan`; `executor.runPlan`, `executor.persistPlanSnapshot`, `PlanDeps`, `PlanControls`; `lifecycle.pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`.
 - `../audit` → `recordAudit(entry)`, `recordSecurityEvent(event)`.
-- `../lib/db/repositories` → `sessions.*`, `pendingActions.*`, `tasks.*` (`createTask`, `createTaskNode`, `getTask`, `listTasksBySession`, `updateTaskNode`, `updateTaskStatus`, `AgentTaskWithNodes`).
+- `../lib/db/repositories` → `sessions.*`, `pendingActions.*` (`getPendingAction`, `getPendingActionOwnership`, `claimPendingAction` — the exactly-once CAS), `tasks.*` (`createTask`, `createTaskNode`, `getTask`, `listTasksBySession`, `updateTaskNode`, `updateTaskStatus`, `claimTaskStatus` — the atomic status CAS, `AgentTaskWithNodes`).
 
 REQUIRED from siblings (must align at integration; assumed signatures):
 - `security.gateway.securityGateway.handleToolCall(ctx)` returns `{ evaluation, decision, action?, blockReason? }` with
@@ -319,9 +374,7 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
 
 ## Known Issues
 
-- **(a) Cumulative-transfer concurrency — no serialization around confirm+execute.** `executeAuthorizedAction` (`confirmation.ts:191-278`) awaits `registry.executeDirect(action.toolName, action.args)` (`confirmation.ts:221`) and writes the terminal status (`confirmation.ts:229`) with NO mutex/lock/transaction spanning the aggregate daily-limit gate. That gate lives in the gateway: `security/security-gateway.ts:444` → `isTransferEscalated` → `risk-engine.reEvaluateTransferRisk` → `computeDailyTransferTotal` reads today's TRANSFER debits BEFORE the transfer executes. Two DISTINCT parked transfers confirmed CONCURRENTLY each read the pre-transfer total, both pass as YELLOW, and both execute (e.g. 2×¥600 = ¥1200 with no MFA). The only atomicity present is per-action (`claimPendingAction` CAS in `lib/db/repositories/pendingAction.ts:120`) and per-transfer (`banking-sdk/transfer.ts` `runInTransaction` + conditional debit) — neither serializes the daily-total gate across separate actions. SEQUENTIALLY the escalation DOES catch the second transfer; only the concurrent interleaving bypasses it.
-- **(b) `pauseTask` persists `'paused'` — two ROOT-OWNED specs still assert the old `'pending'` (intended interface change).** `pauseTask` now writes `AgentTask.status = 'paused'` (the durable source of truth `defaultPollControls` reads). `tests/unit/agent/task-control.test.ts:210-211` and `tests/app/tasks-http.test.ts:203,207` expect `'pending'` and must be updated to `'paused'` by the `./tests` owner (this node may not edit `./tests`).
-- **(c) `components/chat/cards/PlanCard.tsx` lacks a `'paused'` entry** in its `PLAN_STATUS_LABEL`/`PLAN_STATUS_TONE` `Record<TaskPlanStatus, …>` maps, so a persisted `'paused'` plan breaks `tsc --noEmit` and would render an undefined label/tone. Owner: `./components` (pre-existing since `'paused'` was added to `TaskPlanStatus` at commit `751efb1`; now reachable because pause persists `'paused'`). Separately, `./planner`'s `runPlan` persists a `'pending'` snapshot after a paused walk and its per-node `persistPlan` can clobber a concurrently persisted `'paused'`/`'cancelled'` before the next checkpoint — a race the durable mapping here cannot fix without `./planner` changes (out of this node's scope).
+- **Cross-action transfer serialization depends on SQLite's DB-level single-writer lock, and the gateway's confirm-time re-risk transaction does not include the SDK execution.** `security/security-gateway.ts#authorizeTransfer` re-risks in ONE `prisma.$transaction` that CAS-claims the action FIRST and only THEN reads the in-flight-inclusive effective total (`computeEffectiveTransferTotalWith`) and re-runs `evaluateTransferRisk` (escalating to MFA when the day's total would exceed the limit), so concurrent confirms of DISTINCT parked transfers serialize only through SQLite's single-writer lock - with no explicit isolation level or `SELECT ... FOR UPDATE`; and a crash between that commit and `agent/confirmation.ts#executeAuthorizedAction` (which runs the transfer, then `recordActionResult`) leaves a `confirmed`-but-unledgered action counted as in-flight (over-conservative, never under-counting).
 
 ## Notes for Agents
 

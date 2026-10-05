@@ -44,7 +44,12 @@ All functions below are implemented (real Prisma data access).
 - `task.ts` (`AgentTask`, `AgentTaskNode`) — `AgentTaskWithNodes = AgentTask & { nodes }` (`getTask` includes `nodes` by `order`);
   `CreateTaskInput {sessionId, userId, goal, status?}`, `CreateTaskNodeInput {taskId, nodeId, name, kind, order, tool?, args?, condition?, dependencies?, status?}`,
   `UpdateTaskNodeInput {status?, output?, error?, startedAt?, endedAt?}`;
-  `createTask(input)`, `getTask(id)`, `listTasksBySession(sessionId)`, `updateTaskStatus(id, status)`,
+  `createTask(input)`, `getTask(id)` (task row incl. current `status`), `listTasksBySession(sessionId)`,
+  `updateTaskStatus(id, status)` (blind unconditional set),
+  `claimTaskStatus(taskId, fromStatuses: TaskPlanStatus[], toStatus: TaskPlanStatus): Promise<boolean>` — the
+  ATOMIC concurrency guard: a SINGLE `updateMany` CAS moving `status` from any of `fromStatuses` to `toStatus`,
+  returning `true` iff exactly one row transitioned (a second/concurrent resume/retry returns `false`; a
+  terminal/cancelled status not in `fromStatuses` matches 0 rows),
   `createTaskNode(input)`, `getTaskNode(taskId, nodeId)`, `updateTaskNode(taskId, nodeId, update)`,
   `updateTaskNodeStatus(taskId, nodeId, status)`, `deleteTask(id)` (nodes cascade).
 - `scheduledTask.ts` (`ScheduledTask`) — `CreateScheduledTaskInput {userId, name, kind, runAt, payload?, requiresConfirmation?, status?}`;
@@ -116,7 +121,7 @@ All functions below are implemented (real Prisma data access).
 - `./subscription.ts` → Subscription
 - `./investment.ts` → InvestmentProduct + InvestmentHolding
 - `./budget.ts` → Budget
-- `./task.ts` → AgentTask + AgentTaskNode
+- `./task.ts` → AgentTask + AgentTaskNode (+ concurrency-safe `claimTaskStatus` status CAS)
 - `./scheduledTask.ts` → ScheduledTask
 - `./auditLog.ts` → AuditLog
 - `./securityEvent.ts` → SecurityEvent
@@ -131,3 +136,17 @@ All functions below are implemented (real Prisma data access).
   events, pending actions, sessions) return newest-first; list `limit`s default to 100 where optional.
 - `AgentTaskNode.(taskId,nodeId)` is not a DB unique constraint — `getTaskNode`/`updateTaskNode` route
   through the first row (ordered by `order`) matching the pair.
+- Concurrency guards are CAS-only and convention-enforced — there is NO DB-level enum or terminal-state
+  constraint. `claimTaskStatus` (AgentTask) and `claimPendingAction` (PendingAction) are the ONLY atomic
+  gates; the plain setters `updateTaskStatus` / `updateTaskNodeStatus` / `updatePendingActionStatus`
+  are blind unconditional `update`s that would happily regress a terminal (`cancelled`/`success`) row.
+  Never use a plain setter for a transition that must respect terminal state — use the `claim*` CAS with a
+  non-terminal `from` (a status not in `from` matches 0 rows → returns `false`).
+- There is NO node-level CAS (`claimTaskNode` does not exist). Exactly-once node side effects are
+  guaranteed by claiming the PARENT `AgentTask` via `claimTaskStatus`, not by any per-node predicate;
+  node writes (`updateTaskNode`/`updateTaskNodeStatus`) resolve `firstNodeId` and THROW if the node is absent.
+- Every `status` column is a plain `String` (SQLite). The `prisma/schema.prisma` field comments list
+  DIFFERENT status values than the frozen contract enums (`TaskPlanStatus`/`TaskNodeStatus`/`PendingActionStatus`
+  in `lib/contracts`) — the contract enums are authoritative; the schema comments are non-normative.
+- There is no dedicated "supersede"/"revoke" function for a `PendingAction`: cancel it by claiming
+  `to: 'cancelled'` (`claimPendingAction`) or via the blind `setPendingActionStatus`/`updatePendingActionStatus`.

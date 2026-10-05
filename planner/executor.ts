@@ -15,8 +15,8 @@
  * Durability is the CALLER's concern: `PlanDeps` exposes optional
  * `persistPlan`/`persistNode`/`loadPlan` ports plus a durable `controls` port
  * polled at each node checkpoint, so an out-of-process (HTTP) request can steer
- * a running plan and a paused/parked plan can be resumed by re-invoking
- * `runPlan` (see `planner/lifecycle.ts`).
+ * a running plan and a paused/parked plan can be resumed (`runPlan` with
+ * `explicitResume:true`, or `lifecycle.resumePlan` — see `planner/lifecycle.ts`).
  */
 import type { TaskNodeResult, TaskNodeSpec, TaskNodeStatus, TaskPlan, TaskPlanStatus } from '@/lib/contracts/task';
 import { AppError } from '@/lib/errors';
@@ -66,7 +66,11 @@ export interface PlanDeps {
   persistPlan?(plan: TaskPlan): Promise<void>;
   /** Persist one node result incrementally (`planId`, node). */
   persistNode?(planId: string, node: TaskNodeResult): Promise<void>;
-  /** Load a persisted plan snapshot (used by the durable entry points). */
+  /**
+   * Load a persisted plan snapshot. Used by the durable entry points AND by
+   * `persistPlanSnapshotGuarded` (the planner-side guard that refuses to
+   * overwrite a durable `'cancelled'`/`'success'`/`'paused'` status).
+   */
   loadPlan?(planId: string): Promise<TaskPlan | undefined>;
   /** Durable control source consulted at each checkpoint (cross-request steering). Optional. */
   controls?: PlanControlPort;
@@ -96,6 +100,17 @@ export interface RunPlanOptions {
    * uses the durable `deps.controls` port instead.
    */
   onControls?: (controls: PlanControls) => void;
+  /**
+   * Explicitly re-drive a plan whose snapshot says `'paused'`. A paused plan is
+   * NOT runnable on its own (see `runPlan`): this flag is the ONLY way to advance
+   * it through `runPlan` directly — a bare `runPlan(paused, deps)` returns the
+   * snapshot unchanged.
+   *
+   * It also tells `persistPlanSnapshotGuarded` that the pause has been lifted by
+   * a human, so a DURABLE `'paused'` status may be overwritten (a durable
+   * `'cancelled'`/`'success'` stays pinned regardless — see there).
+   */
+  explicitResume?: boolean;
 }
 
 /** A node status that will not change again on its own (dependents may proceed). */
@@ -120,6 +135,55 @@ export async function persistPlanSnapshot(deps: PlanDeps, plan: TaskPlan): Promi
   await persist?.(plan);
 }
 
+/** Options for `persistPlanSnapshotGuarded`. */
+export interface GuardedPersistOptions {
+  /**
+   * The caller EXPLICITLY re-drove a paused plan (see `RunPlanOptions.explicitResume`):
+   * a human already lifted the pause, so a durable `'paused'` status is NOT pinned.
+   * A durable `'cancelled'`/`'success'` stays pinned regardless.
+   */
+  explicitResume?: boolean;
+}
+
+/** Plan statuses a concurrent control may have pinned durably (see `isPinnedDurableStatus`). */
+const PINNED_PLAN_STATUSES: ReadonlySet<TaskPlanStatus> = new Set<TaskPlanStatus>(['cancelled', 'success']);
+
+/** Is `status` a durable status this run must not overwrite? */
+function isPinnedDurableStatus(status: TaskPlanStatus, opts: GuardedPersistOptions): boolean {
+  if (status === 'paused') return opts.explicitResume !== true;
+  return PINNED_PLAN_STATUSES.has(status);
+}
+
+/**
+ * Persist a full plan snapshot WITHOUT clobbering a plan status a concurrent
+ * control pinned durably.
+ *
+ * `runPlan` writes the FULL snapshot exactly twice (up-front `'running'` and at
+ * settlement); every other plan mutation writes only the affected NODE row. When
+ * `deps.loadPlan` is supplied, this helper reads the durable snapshot first and
+ * SKIPS the write if the durable status is pinned (`'cancelled'`/`'success'`, or
+ * `'paused'` unless `explicitResume`) and differs from the snapshot's status: the
+ * concurrent control wins, so a stale run never downgrades a cancelled plan back
+ * to a non-terminal state (nor settles a plan a human just paused).
+ *
+ * The atomic compare-and-set for a concurrent pause/cancel belongs to the
+ * caller's `persistPlan` port (e.g. a guarded `claimTaskStatus` transition) —
+ * this is only the planner-side guard that avoids INITIATING the downgrade.
+ * Without `deps.loadPlan` it behaves exactly like `persistPlanSnapshot`.
+ */
+export async function persistPlanSnapshotGuarded(
+  deps: PlanDeps,
+  plan: TaskPlan,
+  opts: GuardedPersistOptions = {},
+): Promise<void> {
+  const loadPlan = deps.loadPlan;
+  if (loadPlan !== undefined) {
+    const durable = await loadPlan(plan.id);
+    if (durable && durable.status !== plan.status && isPinnedDurableStatus(durable.status, opts)) return;
+  }
+  await persistPlanSnapshot(deps, plan);
+}
+
 /**
  * Execute a plan to settlement and return its final snapshot.
  *
@@ -131,6 +195,10 @@ export async function persistPlanSnapshot(deps: PlanDeps, plan: TaskPlan): Promi
  * - A node that is ALREADY terminal (`success`/`failed`/`skipped`/`cancelled`) in
  *   the input plan is never re-executed (idempotency) — its recorded result is
  *   kept, so a paused/parked plan resumes by re-invoking `runPlan`.
+ * - A NON-RUNNABLE plan is returned UNCHANGED without running a node: a
+ *   `'cancelled'` or `'success'` plan (both terminal) and a `'paused'` plan (unless
+ *   `opts.explicitResume` is set — the ONLY way to advance a paused snapshot
+ *   directly). Nothing is persisted in those cases.
  * - `deps.persistPlan ?? deps.persist` is called after each mutation, and
  *   `deps.persistNode` on every node status change, when provided.
  *
@@ -142,8 +210,9 @@ export async function persistPlanSnapshot(deps: PlanDeps, plan: TaskPlan): Promi
  * - `pause()` (in-process) or a durable `{ kind:'pause' }` from
  *   `deps.controls.pollControls(planId)` STOP the walk and RETURN a resumable
  *   snapshot (`status:'paused'`, un-run nodes still `pending`, already-run nodes
- *   `success`). Resumption is done by re-invoking `runPlan` (or `resumePlan`).
- *   `PlanControls.resume()` only clears the in-process pause flag.
+ *   `success`). Resumption is done by re-invoking `runPlan` with
+ *   `explicitResume:true` (or via `resumePlan`). `PlanControls.resume()` only
+ *   clears the in-process pause flag.
  * - `cancel()` and `opts.signal` abort the walk, marking EVERY not-yet-terminal node
  *   `cancelled` and settling the plan `cancelled`.
  * - `retry(nodeId)` resets that node and its transitive dependents to `pending`
@@ -155,13 +224,30 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   const now = opts.now ?? (() => demoNow());
   const signal = opts.signal;
 
-  // Idempotency: a CANCELLED plan is terminal. Re-invoking `runPlan` on it must
-  // never resurrect nodes nor re-execute a node that already succeeded — return
-  // the recorded snapshot unchanged (the cancelled status is preserved).
-  if (plan.status === 'cancelled') {
-    return { ...plan, results: plan.results.map((r) => ({ ...r })), updatedAt: now() };
-  }
+  /**
+   * A fresh copy of the input snapshot, returned when the plan is NOT runnable
+   * (cancelled / paused / already settled): no node runs and nothing is persisted.
+   */
+  const passthrough = (): TaskPlan => ({
+    ...plan,
+    results: plan.results.map((r) => ({ ...r })),
+    updatedAt: now(),
+  });
 
+  // A plan is runnable only from a live status. Three non-runnable snapshots are
+  // returned UNCHANGED — the recorded plan status and node results are preserved:
+
+  // 1. Idempotency: a CANCELLED plan is terminal. Re-invoking `runPlan` on it must
+  //    never resurrect nodes nor re-execute a node that already succeeded.
+  if (plan.status === 'cancelled') return passthrough();
+
+  // 2. A PAUSED plan is never advanced silently — a bare `runPlan(paused, deps)`
+  //    would run the dependents of the pause with no human decision behind it.
+  //    Lifting the pause requires `opts.explicitResume` (or `lifecycle.resumePlan`).
+  if (plan.status === 'paused' && opts.explicitResume !== true) return passthrough();
+
+  // 3. A SUCCESS plan is terminal: every node settled, nothing is left to run.
+  if (plan.status === 'success') return passthrough();
   const byId = new Map<string, TaskNodeSpec>();
   for (const node of plan.nodes) byId.set(node.id, node);
 
@@ -386,7 +472,9 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   // node mutations only touch the affected NODE rows (`persistNode`), so they
   // never clobber a durable `paused`/`cancelled` written out-of-process during
   // the run — which the next `checkpoint()`'s `deps.controls` poll must observe.
-  await persistPlanSnapshot(deps, snapshot());
+  // The GUARDED write additionally refuses to overwrite a plan status a
+  // concurrent control pinned durably (see `persistPlanSnapshotGuarded`).
+  await persistPlanSnapshotGuarded(deps, snapshot(), { explicitResume: opts.explicitResume });
 
   let stopped = false;
   let parked = false;
@@ -524,6 +612,6 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   }
 
   const final = snapshot();
-  await persistPlanSnapshot(deps, final);
+  await persistPlanSnapshotGuarded(deps, final, { explicitResume: opts.explicitResume });
   return final;
 }

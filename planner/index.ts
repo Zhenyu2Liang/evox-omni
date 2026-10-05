@@ -12,8 +12,9 @@ export * as lifecycle from './lifecycle';
 export { buildPlan, transitiveDependents } from './dag';
 export type { BuildPlanInput } from './dag';
 
-export { isTerminalStatus, persistPlanSnapshot } from './executor';
+export { isTerminalStatus, persistPlanSnapshot, persistPlanSnapshotGuarded } from './executor';
 export type {
+  GuardedPersistOptions,
   PlanControlCommand,
   PlanControlPort,
   PlanControls,
