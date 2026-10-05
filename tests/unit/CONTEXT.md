@@ -25,7 +25,7 @@ runs them all — no scoped config is required for any of them.
 - `planner/` (4 specs) — `dag` (validate / topological order / readiness / conditions / `buildPlan`),
   `executor` (`runPlan` node-state machine + `PlanControls`), `lifecycle` (durable persisted-plan
   `pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`).
-- `banking-sdk/` (4 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
+- `banking-sdk/` (5 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
   `atomicity` (ledger-write rollback + concurrent overspend / double-redeem through the real tx).
 - `agent/` (4 specs + `providers/`) — end-to-end confirmation-flow audit specs against the real DB +
   gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `run-turn-failure`;
