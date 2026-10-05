@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Risk Engine — the DYNAMIC half of the security policy.
  *
  * Computes runtime risk that cannot be expressed in a static table: the transfer
@@ -36,6 +36,100 @@ export interface TransferRiskResult {
   dailyTotal: number;
   /** `dailyTransferTotal + amount` — the projected day total used for the rule. */
   projectedDailyTotal: number;
+}
+
+/**
+ * A Prisma surface that can be EITHER the shared client or a transaction client. Both
+ * expose `transaction` / `pendingAction`, so the aggregate helpers below run unchanged
+ * inside (`$transaction`) and outside a transaction.
+ */
+export type PrismaLike = Prisma.TransactionClient | typeof prisma;
+
+/**
+ * Statuses of a parked `transfer_money` that has ALREADY been authorized (its claim is
+ * committed) but has not necessarily been written to the ledger yet. `confirmed` is the
+ * only settled/authorized status in `PendingActionStatus`; `executing` is included
+ * defensively so an explicit in-flight marker (if the contract ever adds one) is covered.
+ */
+const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const;
+
+/**
+ * Sum the amounts of `userId`'s IN-FLIGHT (authorized-but-not-yet-ledgered) parked
+ * `transfer_money` PendingActions, using the caller's Prisma surface (client OR tx) so it
+ * can run inside a transaction. `excludeActionId` drops the action currently being
+ * evaluated (its own amount is passed separately to `evaluateTransferRisk`).
+ *
+ * The amount lives inside the JSON `argsJson` blob, so each row is parsed defensively: a
+ * malformed/unparsable row (or a non-finite amount) is SKIPPED, never thrown on.
+ */
+export async function computeInFlightTransferTotal(
+  client: PrismaLike,
+  userId: string,
+  excludeActionId?: string,
+): Promise<number> {
+  const rows = await client.pendingAction.findMany({
+    where: {
+      userId,
+      toolName: 'transfer_money',
+      status: { in: [...IN_FLIGHT_TRANSFER_STATUSES] },
+      ...(excludeActionId !== undefined ? { id: { not: excludeActionId } } : {}),
+    },
+  });
+
+  let total = 0;
+  for (const row of rows) {
+    const args = safeParse<Record<string, unknown>>(row.argsJson, {});
+    const amount = parseAmount(args.amount as string | number | null | undefined);
+    if (Number.isFinite(amount)) total += amount;
+  }
+  return total;
+}
+
+/**
+ * Sum `userId`'s already-EXECUTED outgoing transfer debits for today, through the caller's
+ * Prisma surface (so it runs inside a transaction). Same window as `computeDailyTransferTotal`
+ * — `[startOfDay(now), now]` inclusive — but a raw query because the transaction repository
+ * helper always uses the bare client.
+ */
+async function computeExecutedDailyTransferTotalWith(
+  client: PrismaLike,
+  userId: string,
+  now?: number,
+): Promise<number> {
+  const nowMs = demoNow(now);
+  const start = startOfDay(new Date(nowMs)).getTime();
+  const rows = await client.transaction.findMany({
+    where: {
+      userId,
+      occurredAt: { gte: new Date(start), lt: new Date(nowMs + 1) },
+      channel: 'TRANSFER',
+      direction: 'DEBIT',
+    },
+  });
+  // DEBIT amounts are stored negative; the aggregate reported is the ABSOLUTE total.
+  return rows.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
+}
+
+/**
+ * Compute the EFFECTIVE day transfer total for `userId` at execution time, through the
+ * caller's Prisma surface: today's already-EXECUTED transfer debits PLUS every in-flight
+ * (authorized-not-yet-ledgered) parked `transfer_money` action except `excludeActionId`.
+ *
+ * WHY THIS EXISTS: as soon as one transfer is confirmed its claim is committed, but the
+ * ledger write (and thus `computeDailyTransferTotal`, which only counts executed rows) has
+ * not happened yet. Two concurrently-confirmed transfers therefore both read the pre-transfer
+ * executed total and each pass the ¥1000 confirmation-only rule. Counting the in-flight
+ * actions closes that gap. `now` defaults to the demo clock.
+ */
+export async function computeEffectiveTransferTotalWith(
+  client: PrismaLike,
+  userId: string,
+  now?: number,
+  excludeActionId?: string,
+): Promise<number> {
+  const executed = await computeExecutedDailyTransferTotalWith(client, userId, now);
+  const inFlight = await computeInFlightTransferTotal(client, userId, excludeActionId);
+  return executed + inFlight;
 }
 
 /**
@@ -116,10 +210,11 @@ export async function computeDailyTransferTotal(userId: string, now?: number): P
  * at park time therefore lets repeated small transfers bypass the RED/MFA threshold.
  *
  * This helper RE-COMPUTES the day's outgoing-transfer total FRESH (`computeDailyTransferTotal`)
- * at execution time and re-runs `evaluateTransferRisk` on it, so the confirmation/execution path
- * (to be wired later in the agent/app layer) can enforce RED/MFA against the real running total.
- * It returns the same {@link TransferRiskResult} shape (`tier` / `requiresMfa` / `dailyTotal` /
- * `projectedDailyTotal`). `now` is injectable (defaults to the demo clock) for determinism.
+ * at execution time and re-runs `evaluateTransferRisk` on it. It is the EXECUTED-only public API;
+ * the gateway additionally counts in-flight PendingActions via `computeEffectiveTransferTotalWith`
+ * inside its atomic claim transaction. It returns the same {@link TransferRiskResult} shape
+ * (`tier` / `requiresMfa` / `dailyTotal` / `projectedDailyTotal`). `now` is injectable (defaults
+ * to the demo clock) for determinism.
  */
 export async function reEvaluateTransferRisk(
   userId: string,
