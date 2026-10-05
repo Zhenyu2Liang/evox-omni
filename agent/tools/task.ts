@@ -2,8 +2,8 @@
  * task — `list_scheduled_tasks`, `create_scheduled_task`
  *
  * Scheduled-task reads and creation. TypeBox param schemas; `execute` calls the Banking SDK and
- * THROWS `AppError` on failure. The `run<X>(userId, args)` runners are the model-free path used by
- * `executeDirect`; they CATCH and return `ToolExecutionResult{ok:false,error}`.
+ * THROWS `AppError` on failure. The `run<X>(userId, args, opts?)` runners are the model-free path
+ * used by `executeDirect`; they CATCH and return `ToolExecutionResult{ok:false,error}`.
  *
  * Tiers: `list_scheduled_tasks` 🟢 GREEN; `create_scheduled_task` 🟡 YELLOW (requires confirmation).
  * Tier is decided by `security/`, NOT here. `userId` is SERVER-INJECTED; the model never supplies it.
@@ -18,7 +18,7 @@ import type {
 } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
 import { AppError } from '@/lib/errors';
-import type { ToolExecutionResult } from './index';
+import type { ToolExecutionResult, ToolRunOptions } from './index';
 
 /** Chinese labels for a scheduled-task kind (for user-facing summaries). */
 const KIND_LABELS: Record<ScheduledTaskKind, string> = {
@@ -94,6 +94,9 @@ export const CreateScheduledTaskParams = Type.Object({
   runAt: Type.Number({ description: '执行时间（epoch ms）' }),
   payload: Type.Optional(Type.Object({}, { description: '任务载荷（JSON）' })),
   requiresConfirmation: Type.Optional(Type.Boolean({ description: '执行前是否需要确认，默认 true' })),
+  idempotencyKey: Type.Optional(
+    Type.String({ description: '幂等键：同一键的重复调用复用原记录（通常由服务端注入）' }),
+  ),
 });
 export type CreateScheduledTaskArgs = Static<typeof CreateScheduledTaskParams>;
 
@@ -119,12 +122,21 @@ export function createCreateScheduledTaskTool(
   };
 }
 
-/** Model-free runner — `banking.task.createScheduledTask({ userId, name, kind, runAt, payload, requiresConfirmation })`. */
+/**
+ * Model-free runner — `banking.task.createScheduledTask({ userId, name, kind, runAt, payload,
+ * requiresConfirmation, idempotencyKey })`.
+ *
+ * At-most-once key: the SERVER-INJECTED `opts.idempotencyKey` (the gateway/plan-node path) wins; a
+ * direct `args.idempotencyKey` is honoured otherwise. A replay of the SAME key reuses the row (the
+ * SDK dedupes on it), so a repeated (plan, node) never double-creates a scheduled task.
+ */
 export async function runCreateScheduledTask(
   userId: string,
   args: Record<string, unknown>,
+  opts?: ToolRunOptions,
 ): Promise<ToolExecutionResult> {
   const input = args as unknown as CreateScheduledTaskArgs;
+  const idempotencyKey = opts?.idempotencyKey ?? input.idempotencyKey;
   try {
     const request: CreateScheduledTaskInput = {
       userId,
@@ -133,6 +145,7 @@ export async function runCreateScheduledTask(
       runAt: input.runAt,
       payload: input.payload as Record<string, unknown> | undefined,
       requiresConfirmation: input.requiresConfirmation,
+      idempotencyKey,
     };
     const task = await banking.task.createScheduledTask(request);
     const kind = KIND_LABELS[task.kind] ?? task.kind;
