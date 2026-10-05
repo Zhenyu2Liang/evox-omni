@@ -141,7 +141,7 @@ describe('planner/lifecycle · pause', () => {
     expect(findResult(paused, 'b')?.status).toBe('pending');
     expect(findResult(paused, 'c')?.status).toBe('pending');
     expect(paused.status).toBe('paused');
-    const resumed = await runPlan(paused, h.deps, { now: () => NOW });
+    const resumed = await runPlan(paused, h.deps, { now: () => NOW, explicitResume: true });
     expect(h.calls).toEqual(['tool_a', 'tool_b', 'tool_c']);
     expect(resumed.status).toBe('success');
   });
