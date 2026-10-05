@@ -202,7 +202,7 @@ The `action` routes call `confirm`/`verify`/`cancel` through `app/api/_lib/agent
 - `./` → Dashboard page + root layout/globals (this node's own files: `layout.tsx`, `globals.css`, `page.tsx`)
 - `./_components/` → app-local client chrome (private `_` folder, never routed): `NavBar.tsx` global top navigation
 - `./agent` → AI Agent chat page (renders the client `ChatWindow`, passing the cookie session id for refresh recovery)
-- `./api` → HTTP API route handlers (chat SSE, actions confirm/verify/cancel, tasks control, audit, security + security reset, read models, health) + shared `_lib/` (http, types, schemas, session, task-plans, agent-bridge)
+- `./api` → HTTP API route handlers (chat SSE, actions list/confirm/verify/cancel, tasks list/read/control, audit, security + security reset, read models, health) + shared `_lib/` (http, types, schemas, session [cookie-only trusted identity], task-plans, agent-bridge)
 - `./audit` → Audit Log page
 - `./bills` → Bills / 账单 page
 - `./cards` → Cards page
