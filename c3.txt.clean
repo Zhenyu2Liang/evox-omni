@@ -1,8 +1,0 @@
-﻿commit 98b7e07098642371ab27e61d90ccb8cf035cb957
-Author: Zhenyu2Liang <1370096263@qq.com>
-Commit: Zhenyu2Liang <1370096263@qq.com>
-
-    feat(lib/db): add atomic claimTaskStatus CAS to AgentTask repository
-    
-    Co-authored-by: Genesis <noreply@evogit.ai>
-

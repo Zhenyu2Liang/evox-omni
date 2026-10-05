@@ -1,2 +1,0 @@
-﻿TSC_EXIT=0
-OUT_LINES=0
