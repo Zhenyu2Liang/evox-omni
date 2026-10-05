@@ -100,7 +100,7 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   prior run's executed transfers already inside the day and the YELLOW-transfer journeys would
   escalate to RED.
 - NOTE: `prisma/dev.db` untouched is guaranteed by construction (never referenced). The sidecars
-  `prisma/e2e.db-wal`/`-shm` are currently NOT covered by `.gitignore` (only `prisma/*.db` and
+  `prisma/e2e.db-wal`/`-shm` are git-ignored (see `.gitignore`: `prisma/*.db-wal`, `prisma/*.db-shm`,
   `prisma/*.db-journal` are) — reported upward as a root-owned `.gitignore` change.
 
 ## Journeys (each asserts on RENDERED DOM; money journeys add a DB/ledger cross-check)
