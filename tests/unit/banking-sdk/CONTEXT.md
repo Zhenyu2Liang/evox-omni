@@ -3,9 +3,9 @@
 ## Intent
 
 Prove the Banking SDK enforces its **domain invariants** (independent of the security policy): fund
-sufficiency, product `minAmount`, recipient resolution & ambiguity, legal state transitions, and
+sufficiency, product `minAmount`, recipient resolution & ambiguity, legal state transitions,
 **money-movement atomicity** (a failed second write rolls the first back; concurrent money moves
-cannot overspend or double-credit).
+cannot overspend or double-credit) and **at-most-once (idempotent) CREATE** replay.
 These run against the test SQLite via `../../helpers/db` + `../../helpers/fixtures`.
 
 ## API Surface
@@ -31,12 +31,20 @@ Spec files (implemented — real assertions against the test SQLite), targeting 
   one → exactly one succeeds, the loser is `INSUFFICIENT_FUNDS`, balance never negative, exactly one
   ledger row. (c) **concurrent double-redeem** — two racing `redeemInvestment` calls on one holding →
   one credits, the other is `CONFLICT`, credited exactly once.
+- `idempotent.test.ts` — the shared **at-most-once CREATE helper** (`banking-sdk/idempotent.ts`):
+  pure `isUniqueViolation` (structural `P2002` only) + `normalizeIdempotencyKey` (trim / absent);
+  `createIdempotent` driven directly against the real `Budget` table (first call inserts, a replay
+  with the SAME key returns the SAME row and does NOT call `create` again, a lost `P2002` race
+  re-reads the winner's committed row, any other error propagates and writes nothing); and through
+  the SDK barrel `banking.budget.reserveBudget` / `banking.task.createScheduledTask` — repeated key
+  → same `id` + exactly ONE row (`count({ where: { idempotencyKey } })`), absent/empty/whitespace
+  key and two different keys → two rows (legacy behavior preserved).
 
 ## Status
 
-All four specs are implemented with real assertions and pass offline
-(`npx vitest run tests/unit/banking-sdk` → 43 tests green against `prisma/test.db`; full `npm run test`
-→ 38 files / 359 tests green in ~27s). The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
+All five specs are implemented with real assertions and pass offline
+(`npx vitest run tests/unit/banking-sdk` → 5 files / 56 tests green against `prisma/test.db`).
+The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
 `seedDemoData({ withAmbiguousContact: true })` inside the ambiguity case.
 
 ## Constraints
@@ -50,7 +58,7 @@ All four specs are implemented with real assertions and pass offline
 
 ## Routing Table
 
-- `./transfer.test.ts` · `./subscription.test.ts` · `./investment.test.ts` · `./atomicity.test.ts`
+- `./transfer.test.ts` · `./subscription.test.ts` · `./investment.test.ts` · `./atomicity.test.ts` · `./idempotent.test.ts`
 - `../../helpers` → test-DB lifecycle + fixtures (sibling — this node)
 
 ## Notes for Agents
