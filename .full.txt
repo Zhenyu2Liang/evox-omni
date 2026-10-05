@@ -1,0 +1,156 @@
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/projects/banking-agent/.genesis/workers/worker_T4_A20[39m
+
+ [32m✓[39m tests/app/review-regressions-http.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 904[2mms[22m[39m
+ [32m✓[39m tests/app/cancel-safety-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 378[2mms[22m[39m
+ [32m✓[39m tests/app/concurrent-execution-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 486[2mms[22m[39m
+ [32m✓[39m tests/app/actions-http.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 864[2mms[22m[39m
+   [33m[2m✓[22m[39m [integration] POST /api/actions — MFA secrecy over HTTP[2m > [22m8 — the literal mock MFA code never appears in the parking turn or any verify response body [33m367[2mms[22m[39m
+ [32m✓[39m tests/unit/security/gateway.test.ts [2m([22m[2m27 tests[22m[2m)[22m[33m 1068[2mms[22m[39m
+   [33m[2m✓[22m[39m security-gateway · handleToolCall composition[2m > [22mYELLOW tool → blocked: PendingAction persisted + a round-trippable blockReason [33m338[2mms[22m[39m
+ [32m✓[39m tests/app/tasks-http.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 885[2mms[22m[39m
+   [33m[2m✓[22m[39m [integration] task endpoints — authorization (cookie-only identity)[2m > [22mPOST /api/tasks/[id] without a session (no cookie) → 403 SECURITY_DENIED [33m377[2mms[22m[39m
+ [32m✓[39m tests/app/dag-recovery-http.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 421[2mms[22m[39m
+ [32m✓[39m tests/unit/security/transfer-limits-concurrency.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 478[2mms[22m[39m
+ [32m✓[39m tests/app/chat-http.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 480[2mms[22m[39m
+ [32m✓[39m tests/app/identity-http.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 530[2mms[22m[39m
+ [32m✓[39m tests/app/mfa-escalation-upgrade-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 427[2mms[22m[39m
+ [32m✓[39m tests/app/session-takeover-http.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 713[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/lifecycle.test.ts [2m([22m[2m20 tests[22m[2m)[22m[90m 8[2mms[22m[39m
+ [32m✓[39m tests/app/ledger-consistency-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 444[2mms[22m[39m
+ [32m✓[39m tests/app/malicious-input-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 419[2mms[22m[39m
+ [32m✓[39m tests/app/task-resume-retry-http.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 356[2mms[22m[39m
+ [32m✓[39m tests/app/nl-entry-http.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 532[2mms[22m[39m
+ [32m✓[39m tests/app/plan-pause-terminal-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 406[2mms[22m[39m
+ [32m✓[39m tests/app/plan-linkage-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 331[2mms[22m[39m
+ [32m✓[39m tests/app/cumulative-risk-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 416[2mms[22m[39m
+ [32m✓[39m tests/app/cancel-during-authorization-http.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 285[2mms[22m[39m
+ [32m✓[39m tests/app/mfa-escalation-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 328[2mms[22m[39m
+ [32m✓[39m tests/app/plan-parking-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 502[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/providers/provider-mock.test.ts [2m([22m[2m16 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+ [32m✓[39m tests/unit/security/mfa.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 666[2mms[22m[39m
+ [32m✓[39m tests/unit/security/authorize-hardening.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 736[2mms[22m[39m
+   [33m[2m✓[22m[39m authorizeAction · circuit breaker stays the first hard gate[2m > [22ma locked session refuses a confirm with status 'locked' (row unchanged) [33m343[2mms[22m[39m
+ [32m✓[39m tests/unit/security/permission-engine.test.ts [2m([22m[2m24 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+ [32m✓[39m tests/scenarios/mock-integration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 428[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/atomicity.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 279[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/task-cancel-revokes.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 357[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/idempotent.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 604[2mms[22m[39m
+   [33m[2m✓[22m[39m banking-sdk · idempotent: createScheduledTask[2m > [22mtwo DIFFERENT keys create two rows [33m306[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-11-conditional-dag.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 444[2mms[22m[39m
+[90mstdout[2m | tests/unit/agent/providers/plan-limit-park.test.ts[2m > [22m[2mplan parking through the mock model (runTurn → confirmAction)[2m > [22m[2mparks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)
+[22m[39mPARKING FRAMES:
+[{"type":"session","sessionId":"cmuvkt0xx0001f8yoe3pv5b2a"},{"type":"message_start"},{"type":"text_delta","delta":"好的，我来为你规划一个任务计划。"},{"type":"message_end","content":"好的，我来为你规划一个任务计划。"},{"type":"tool_start","toolName":"submit_plan","status":"started"},{"type":"plan_update","planStatus":"running","nodes":["analyze:running","check:pending","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:pending","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:success","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:success","setlimit:running"]},{"type":"plan_update","planStatus":"waiting_confirmation","nodes":["analyze:success","check:success","setlimit:waiting_confirmation"]},{"type":"tool_end","toolName":"submit_plan","status":"success"},{"type":"card","cardType":"plan"},{"type":"message_start"},{"type":"text_delta","delta":"这笔操作（任务计划）需要你确认后才会执行"},{"type":"text_delta","delta":"，目前状态为「等待确认」，尚未执行。请你"},{"type":"text_delta","delta":"确认后我才会为你执行。"},{"type":"message_end","content":"这笔操作（任务计划）需要你确认后才会执行，目前状态为「等待确认」，尚未执行。请你确认后我才会为你执行。"},{"type":"confirmation_required","actionId":"cmuvkt0yk0009f8yozqyjevm1","tier":"YELLOW","toolName":"set_card_limit"},{"type":"card","cardType":"confirmation"},{"type":"done"}]
+
+[90mstdout[2m | tests/unit/agent/providers/plan-limit-park.test.ts[2m > [22m[2mplan parking through the mock model (runTurn → confirmAction)[2m > [22m[2mparks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)
+[22m[39mCONFIRM FRAMES:
+[{"type":"plan_update","planStatus":"success","nodes":["analyze:success","check:success","setlimit:success"]},{"type":"session","sessionId":"cmuvkt0xx0001f8yoe3pv5b2a"},{"type":"message_start"},{"type":"text_delta","delta":"任务计划：已为卡片 ****66"},{"type":"text_delta","delta":"88 的「娱乐」设置限额"},{"type":"text_delta","delta":" ¥1,500.00"},{"type":"message_end","content":"任务计划：已为卡片 ****6688 的「娱乐」设置限额 ¥1,500.00"},{"type":"done"}]
+
+ [32m✓[39m tests/unit/agent/providers/plan-limit-park.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 302[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 872[2mms[22m[39m
+   [33m[2m✓[22m[39m risk-engine · computeDailyTransferTotal (needs test SQLite)[2m > [22mis deterministic via the injected now: a fixed now selects exactly one calendar day [33m461[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/investment.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 331[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-02-transfer-confirm.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 343[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/transfer.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 545[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/executor.test.ts [2m([22m[2m14 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+ [32m✓[39m tests/unit/security/authorize-concurrency.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 301[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/dag.test.ts [2m([22m[2m22 tests[22m[2m)[22m[90m 5[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/executor-claim-scope.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 261[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-12-birthday-plan.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 381[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-04-prompt-injection.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 387[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/run-turn-failure.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 276[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/task-control.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 374[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-09-investment-mfa.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 372[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-03-transfer-mfa.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 415[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-10-circuit-breaker.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 324[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/confirmation.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 291[2mms[22m[39m
+ [32m✓[39m tests/unit/security/injection-guard.test.ts [2m([22m[2m15 tests[22m[2m)[22m[90m 209[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/subscription.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 347[2mms[22m[39m
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mchat cannot exchange a foreign body sessionId for its authorization cookie
+[22m[39mREVIEW takeover {"turnStatus":409,"cookie":null,"total":0}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mresume preserves cancelled task status in durable storage
+[22m[39mREVIEW cancelled_resume {"responseStatus":200,"responsePlan":"cancelled","storedStatus":"cancelled"}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mcancelling during tool authorization cannot create a fresh executable pending action
+[22m[39mREVIEW cancel_during_gate {"cancelled":"cancelled","returnedPlan":"waiting_confirmation","pending":false,"total":0}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mconfirming a parked node respects an explicit plan pause
+[22m[39mREVIEW paused_confirmation {"count":0,"status":"paused"}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mconcurrent HTTP resume requests do not duplicate budget side effects
+[22m[39mREVIEW http_double_resume {"statuses":[200,200],"count":1}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mledgered but not yet terminal actions are counted only once in cumulative risk
+[22m[39mREVIEW double_count {"secondOk":true,"secondTier":"YELLOW","secondStatus":"executed","actualTotal":700}
+
+ [31m❯[39m tests/review-boundaries.test.ts [2m([22m[2m7 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 20456[2mms[22m[39m
+[31m   [31m×[31m two concurrent resumes execute each unfinished node only once[33m 20015[2mms[22m[31m[39m
+[31m     → Test timed out in 20000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+ [32m✓[39m tests/scenarios/test-05-failure-report.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 384[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 538[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker-audit.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 345[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/confirmation-idempotency.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 361[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine-dedup.test.ts [2m([22m[2m9 tests[22m[2m)[22m[90m 3[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-01-balance.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 378[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-08-card-limit.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 313[2mms[22m[39m
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2ma staggered concurrent resume does not repeat an already-effected node before its result persists
+[22m[39mREVIEW staggered_resume {"secondStatus":200,"count":1}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mtwo concurrent resumes of one gated node produce only one pending action
+[22m[39mREVIEW gated_double_resume {"statuses":[200,200],"actions":[{"id":"cmuvktu4e000gf8xgfrvt52e6","status":"pending"}]}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mcancelling a doubly-resumed plan revokes every action created for its node
+[22m[39mREVIEW orphan_after_cancel {"cancelled":"cancelled","leftovers":0,"confirmed":[],"total":0}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mindependent plans with identical tools and arguments each perform their own side effect
+[22m[39mREVIEW independent_plans {"planIds":["cmuvktu5j000rf8xgfwem9p1r","cmuvktu5j000sf8xgztypeza1"],"statuses":["success","success"],"count":2}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mcancel blocks confirmation of an action minted before its node association persists
+[22m[39mREVIEW unlinked_cancel {"cancelled":"cancelled","confirmed":true,"total":200}
+
+ [31m❯[39m tests/review-concurrency.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 402[2mms[22m[39m
+[31m   [31m×[31m cancel blocks confirmation of an action minted before its node association persists[90m 40[2mms[22m[31m[39m
+[31m     → expected 200 to be +0 // Object.is equality[39m
+ [32m✓[39m tests/unit/security/gateway-audit-trail.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 356[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-06-spending-analysis.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 299[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-07-anomaly.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 379[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine-rerisk.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 379[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/pendingAction.claim.test.ts [2m([22m[2m7 tests[22m[2m)[22m[90m 285[2mms[22m[39m
+ [32m✓[39m tests/unit/security/mfa-audit.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 287[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker-reset.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 270[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/ledger-keys.test.ts [2m([22m[2m11 tests[22m[2m)[22m[90m 3[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[1m[7m Failed Tests 2 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/review-boundaries.test.ts[2m > [22mtwo concurrent resumes execute each unfinished node only once
+[31m[1mError[22m: Test timed out in 20000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/review-concurrency.test.ts[2m > [22mcancel blocks confirmation of an action minted before its node association persists
+[31m[1mAssertionError[22m: expected 200 to be +0 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 0[39m
+[31m+ 200[39m
+
+[36m [2m❯[22m tests/review-concurrency.test.ts:[2m63:17[22m[39m
+    [90m 61| [39m  [35mconst[39m total[33m=[39m[35mawait[39m security[33m.[39mrisk[33m.[39m[34mcomputeDailyTransferTotal[39m(userId)[33m;[39m
+    [90m 62| [39m  console[33m.[39m[34mlog[39m([32m'REVIEW unlinked_cancel'[39m[33m,[39m[33mJSON[39m[33m.[39m[34mstringify[39m({cancelled[33m:[39mcance…
+    [90m 63| [39m  [34mexpect[39m(total)[33m.[39m[34mtoBe[39m([34m0[39m)[33m;[39m
+    [90m   | [39m                [31m^[39m
+    [90m 64| [39m})[33m;[39m
+    [90m 65| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m66 passed[39m[22m[90m (68)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m530 passed[39m[22m[90m (532)[39m
+[2m   Start at [22m 02:20:48
+[2m   Duration [22m 71.76s[2m (transform 743ms, setup 208ms, collect 15.24s, tests 46.97s, environment 7ms, prepare 2.75s)[22m
+
