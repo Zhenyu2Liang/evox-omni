@@ -50,6 +50,14 @@ All functions below are implemented (real Prisma data access).
   ATOMIC concurrency guard: a SINGLE `updateMany` CAS moving `status` from any of `fromStatuses` to `toStatus`,
   returning `true` iff exactly one row transitioned (a second/concurrent resume/retry returns `false`; a
   terminal/cancelled status not in `fromStatuses` matches 0 rows),
+  `claimTaskExecution(taskId, token, {staleBefore?}?): Promise<boolean>` — the exactly-once PLAN-executor claim:
+  a SINGLE `updateMany` stamping `executionToken = token` / `executionClaimedAt = now` WHERE the token is NULL
+  (or, when `staleBefore` is supplied, `executionClaimedAt < staleBefore`); `true` iff one row was claimed,
+  `releaseTaskExecution(taskId, token): Promise<void>` — clears `executionToken`/`executionClaimedAt` ONLY where
+  the token still equals this caller's `token`,
+  `claimNodeExecution(taskId, nodeId, token, {staleBefore?}?): Promise<boolean>` /
+  `releaseNodeExecution(taskId, nodeId, token): Promise<void>` — the NODE-level analogues addressed by the
+  logical `(taskId, nodeId)` pair,
   `createTaskNode(input)`, `getTaskNode(taskId, nodeId)`, `updateTaskNode(taskId, nodeId, update)`,
   `updateTaskNodeStatus(taskId, nodeId, status)`, `deleteTask(id)` (nodes cascade).
 - `scheduledTask.ts` (`ScheduledTask`) — `CreateScheduledTaskInput {userId, name, kind, runAt, payload?, requiresConfirmation?, status?}`;
@@ -69,8 +77,10 @@ All functions below are implemented (real Prisma data access).
 - `session.ts` (`AgentSession`) — `listSessions(userId)`, `getSession(id)`, `createSession({userId, stateJson, status?, locked?})`,
   `updateSessionState(id, stateJson)`, `setSessionLocked(id, locked)`, `updateSessionStatus(id, status)`, `deleteSession(id)`.
 - `pendingAction.ts` (`PendingAction`, `MfaChallenge`) — `PendingActionWithMfa = PendingAction & { mfa }`,
-  `PendingActionOwnership {id, userId, sessionId, status}`;
-  `CreatePendingActionInput {sessionId, userId, toolName, args, tier, requiresMfa, summary, status?}`,
+  `PendingActionOwnership {id, userId, sessionId, status}`, `PendingActionPlanLink {id, taskId, nodeId}`;
+  `CreatePendingActionInput {sessionId, userId, toolName, args, tier, requiresMfa, summary, status?, userRequest?, intent?, taskId?, nodeId?}`
+  (`taskId`/`nodeId` are the owning plan (`AgentTask.id`) / node (`AgentTaskNode.nodeId`), persisted AT CREATION as
+  `null` when absent),
   `CreateMfaChallengeInput {actionId, code, maxAttempts?, expiresAt?}`,
   `ClaimPendingActionInput {actionId, from: PendingActionStatus[], to: PendingActionStatus, userId?, sessionId?}`;
   `createPendingAction(input)`, `getPendingAction(id)` (`mfa` included), `listPendingActions({sessionId?, status?, limit?})`,
@@ -82,6 +92,14 @@ All functions below are implemented (real Prisma data access).
   returns `true` iff exactly one row transitioned (a second/concurrent claim returns `false`),
   `getPendingActionOwnership(actionId): Promise<PendingActionOwnership | null>` (id/userId/sessionId/status
   projection for authorizing a caller; `null` when the action is absent),
+  `getPendingActionPlanLink(actionId): Promise<PendingActionPlanLink | null>` (id/taskId/nodeId projection — the
+  owning plan/node the action was created under; `null` when the action is absent; a sibling of
+  `getPendingActionOwnership`, whose minimal projection is kept unchanged),
+  `listPendingActionsByTask(taskId, {statuses?}?): Promise<PendingAction[]>` — plan-scoped enumeration of EVERY
+  action belonging to a plan, optionally narrowed by status, ordered oldest-first by `createdAt` (no `take` limit),
+  `revokePendingActionsByTask(taskId, fromStatuses: string[]): Promise<number>` — bulk plan-level revocation: a
+  SINGLE atomic `updateMany` cancelling EVERY action of the plan whose current status is in `fromStatuses`,
+  returning the number of rows transitioned,
   `createMfaChallenge(input)` (`maxAttempts` default 3),
   `getMfaChallenge(actionId)`, `incrementMfaAttempts(actionId)`, `updateMfaChallengeStatus(actionId, status)`,
   `resetMfaAttempts(actionId)` (sets `attempts` 0).
@@ -102,14 +120,10 @@ All functions below are implemented (real Prisma data access).
 
 ## Known Issues
 
-- **Missing `AgentTaskNode.pendingActionId` column.** The DAG-resume flow must persist/read the
-  `PendingAction` a blocked `AgentTaskNode` is waiting on, but `prisma/schema.prisma` model
-  `AgentTaskNode` has no such field (`./prisma` is a sibling, out of scope for this node).
-  REQUIRED SCHEMA ADDITION: add the field `pendingActionId String?` to model `AgentTaskNode`
-  in `prisma/schema.prisma` (optionally `@@index([pendingActionId])`). Until the column exists, no
-  repository code may reference `AgentTaskNode.pendingActionId` — it would break `tsc --noEmit` at
-  build time and throw at runtime. The existing `listTasksBySession(sessionId)` / `getTaskNode(taskId, nodeId)`
-  lookups in `task.ts` already support locating the node; only the wait-state column is missing.
+- **Missing `AgentTaskNode.pendingActionId` column.** `prisma/schema.prisma` model `AgentTaskNode`
+  has no `pendingActionId` field (`./prisma` is a sibling, out of scope for this node). The plan↔operation
+  link is instead persisted on `PendingAction.taskId`/`nodeId` and read back via `getPendingActionPlanLink` /
+  `listPendingActionsByTask`, so no repository code references `AgentTaskNode.pendingActionId`.
 
 ## Routing Table
 
@@ -121,12 +135,12 @@ All functions below are implemented (real Prisma data access).
 - `./subscription.ts` → Subscription
 - `./investment.ts` → InvestmentProduct + InvestmentHolding
 - `./budget.ts` → Budget
-- `./task.ts` → AgentTask + AgentTaskNode (+ concurrency-safe `claimTaskStatus` status CAS)
+- `./task.ts` → AgentTask + AgentTaskNode (+ concurrency-safe `claimTaskStatus` status CAS and the `claimTaskExecution`/`claimNodeExecution` exactly-once execution claims + matching `release*`)
 - `./scheduledTask.ts` → ScheduledTask
 - `./auditLog.ts` → AuditLog
 - `./securityEvent.ts` → SecurityEvent
 - `./session.ts` → AgentSession
-- `./pendingAction.ts` → PendingAction + MfaChallenge
+- `./pendingAction.ts` → PendingAction + MfaChallenge (+ plan-scoped `listPendingActionsByTask` / `revokePendingActionsByTask` and the `getPendingActionPlanLink` reader)
 - `./index.ts` → namespace barrel
 
 ## Notes for Agents
@@ -134,19 +148,26 @@ All functions below are implemented (real Prisma data access).
 - `npx prisma generate` must run before this code is executed or type-checked.
 - Date/time ranges are half-open `[from, to)`. Time-series lists (transactions, audit logs, security
   events, pending actions, sessions) return newest-first; list `limit`s default to 100 where optional.
+  Plan-scoped lists (`listPendingActionsByTask`) are the exception: oldest-first, no default limit.
 - `AgentTaskNode.(taskId,nodeId)` is not a DB unique constraint — `getTaskNode`/`updateTaskNode` route
-  through the first row (ordered by `order`) matching the pair.
+  through the first row (ordered by `order`) matching the pair, and `claimNodeExecution`/`releaseNodeExecution`
+  address the pair with an `updateMany` that therefore targets ALL rows for it (normally exactly one).
 - Concurrency guards are CAS-only and convention-enforced — there is NO DB-level enum or terminal-state
-  constraint. `claimTaskStatus` (AgentTask) and `claimPendingAction` (PendingAction) are the ONLY atomic
-  gates; the plain setters `updateTaskStatus` / `updateTaskNodeStatus` / `updatePendingActionStatus`
+  constraint. The atomic gates are the `claim*` / `revoke*` primitives: `claimTaskStatus` (AgentTask status),
+  `claimPendingAction` (PendingAction status), `claimTaskExecution`/`releaseTaskExecution` (plan executor slot),
+  `claimNodeExecution`/`releaseNodeExecution` (node executor slot) and `revokePendingActionsByTask` (bulk
+  plan-level cancel). The plain setters `updateTaskStatus` / `updateTaskNodeStatus` / `updatePendingActionStatus`
   are blind unconditional `update`s that would happily regress a terminal (`cancelled`/`success`) row.
   Never use a plain setter for a transition that must respect terminal state — use the `claim*` CAS with a
   non-terminal `from` (a status not in `from` matches 0 rows → returns `false`).
-- There is NO node-level CAS (`claimTaskNode` does not exist). Exactly-once node side effects are
-  guaranteed by claiming the PARENT `AgentTask` via `claimTaskStatus`, not by any per-node predicate;
-  node writes (`updateTaskNode`/`updateTaskNodeStatus`) resolve `firstNodeId` and THROW if the node is absent.
+- Node execution claims ARE supported (`claimNodeExecution`/`releaseNodeExecution`) in addition to the PARENT
+  `AgentTask` claim (`claimTaskStatus`/`claimTaskExecution`); the stale-takeover path (`staleBefore`) only
+  matches rows whose `executionClaimedAt` is non-NULL and older, so a set token with a NULL `executionClaimedAt`
+  is not reclaimable (fail-safe). Node writes (`updateTaskNode`/`updateTaskNodeStatus`) resolve `firstNodeId`
+  and THROW if the node is absent.
 - Every `status` column is a plain `String` (SQLite). The `prisma/schema.prisma` field comments list
   DIFFERENT status values than the frozen contract enums (`TaskPlanStatus`/`TaskNodeStatus`/`PendingActionStatus`
   in `lib/contracts`) — the contract enums are authoritative; the schema comments are non-normative.
-- There is no dedicated "supersede"/"revoke" function for a `PendingAction`: cancel it by claiming
-  `to: 'cancelled'` (`claimPendingAction`) or via the blind `setPendingActionStatus`/`updatePendingActionStatus`.
+- A `PendingAction` is revoked (superseded/cancelled) either per-action by claiming `to: 'cancelled'`
+  (`claimPendingAction`) / via the blind `setPendingActionStatus`/`updatePendingActionStatus`, or in bulk for a
+  whole plan via `revokePendingActionsByTask(taskId, fromStatuses)` (single atomic `updateMany`).
