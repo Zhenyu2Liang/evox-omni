@@ -35,7 +35,7 @@ runs them all — no scoped config is required for any of them.
   `idempotent` (the shared at-most-once CREATE helper: same key replays exactly ONE row for both
   `reserveBudget` and `createScheduledTask`; absent key keeps legacy create-a-row behavior).
 - `agent/` (5 specs + `providers/`) — end-to-end confirmation-flow audit specs against the real DB +
-  gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `run-turn-failure`;
+  gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `task-cancel-revokes`, `run-turn-failure`;
   `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec.
   `providers/plan-limit-park.test.ts` pins the mock `submit_plan` gated conditional plan
   (analyze -> check -> setlimit) that PARKS in `waiting_confirmation`, then confirms.
