@@ -38,6 +38,7 @@ import { runSubmitPlan } from '@/agent/tools/planning';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import { DAILY_TRANSFER_LIMIT, MFA_CODE } from '@/lib/constants';
+import { listTasksBySession } from '@/lib/db/repositories/task';
 import { newId } from '@/lib/ids';
 import { security } from '@/security';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
@@ -611,5 +612,147 @@ describe('[integration] POST /api/tasks/[id] cancel — an already-completed pla
     ).toBe('executed');
 
     expectNoMfaLeak('Scenario 2 / it 5', confirmRes.data, confirmRes.data?.data, cancelRes.data, cancelRes.data?.data);
+  });
+});
+
+/* ============================================================================================== *
+ * SCENARIO 3 — a MID-RUN PAUSE stops the NEXT node; resume re-runs ONLY the not-yet-run node
+ * ============================================================================================== *
+ * A 2-node GREEN plan is seeded through the PRODUCTION `submit_plan` runner (`runSubmitPlan`): node
+ * `a` = `reserve_budget` (a COUNTABLE probe — exactly ONE `Budget` row per execution, no deps) and
+ * node `b` = `reserve_budget` depending on `a`. The plan walk is STRICTLY SEQUENTIAL
+ * (`planner/executor.ts`): at the TOP of every loop iteration it consults the durable control port
+ * (`deps.controls`), and the production port (`agent/task-control.ts#defaultPollControls`) maps a
+ * persisted `AgentTask.status === 'paused'` to `{ kind:'pause' }`.
+ *
+ * The regression: a pause issued THROUGH THE REAL `POST /api/tasks/[id]` WHILE node `a` is executing
+ * (i.e. after it ran, before the executor looks at node `b`) must be observed at the NEXT checkpoint,
+ * so node `b` NEVER launches. The executor deliberately does NOT re-persist the plan status after
+ * node mutations, so the `'paused'` row written out-of-process survives to that checkpoint. Resume
+ * then re-runs ONLY node `b` (node `a` is terminal `success` → skipped), proving the pause stopped
+ * the plan at exactly the right place and nothing was executed twice.
+ * ============================================================================================== */
+
+/** Scenario 3's two COUNTABLE GREEN probes (node `a`, then node `b` depending on it). */
+const MIDRUN_BUDGET_A = '预留预算A';
+const MIDRUN_BUDGET_B = '预留预算B';
+
+/** `POST /api/tasks/[id] { action:'pause'|'resume' }` (identity is cookie-only). */
+function taskControlRequest(
+  taskId: string,
+  action: 'pause' | 'resume',
+  sessionId: string,
+): Promise<HttpResult<Envelope<TaskPlan>>> {
+  return postJson<Envelope<TaskPlan>>(taskPost, taskUrl(taskId), { action }, {
+    ctx: idCtx(taskId),
+    sessionId,
+  });
+}
+
+describe('[integration] POST /api/tasks/[id] pause — a MID-RUN pause stops the NEXT node', () => {
+  it('6 — pausing WHILE node a runs halts node b (never executed); resume re-runs ONLY node b', async () => {
+    const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    const goal = '先预留预算A，再预留预算B';
+
+    // The just-minted plan id (`runSubmitPlan` adopts the durable `AgentTask.id` as the plan id).
+    let taskId: string | undefined;
+    // The mid-run pause fires EXACTLY ONCE — during node 'a', after it executed but before the
+    // executor considers node 'b' at its next checkpoint.
+    let pauseIssued = false;
+    let pauseStatus: number | undefined;
+
+    const base = gatewayRunTool(sessionId, goal);
+    // A per-node runner that still executes each node through the gateway (exactly like the seed
+    // runner) — plus a one-shot, AWAITED mid-run pause so the 'paused' row is committed before the
+    // node returns and the executor reaches node 'b'.
+    const runTool = async (toolName: string, args: Record<string, unknown>) => {
+      const outcome = await base(toolName, args);
+      if (!pauseIssued) {
+        pauseIssued = true;
+        // Resolve the plan id: the FIRST `plan_update` snapshot (emitted for node 'a' before its
+        // runner is invoked) carries the adopted id; fall back to the session's durable task row.
+        const id = taskId ?? (await listTasksBySession(sessionId))[0]?.id;
+        expect(id, 'the plan task id must be resolvable before node a returns').toBeDefined();
+        const res = await taskControlRequest(id!, 'pause', sessionId);
+        pauseStatus = res.status;
+      }
+      return outcome;
+    };
+
+    const result = await runSubmitPlan(
+      DEMO_USER_ID,
+      {
+        goal,
+        nodes: [
+          budgetNode('a', MIDRUN_BUDGET_A, 1200),
+          budgetNode('b', MIDRUN_BUDGET_B, 800, ['a']),
+        ],
+      },
+      {
+        sessionId,
+        runTool,
+        onPlanUpdate: (plan) => {
+          taskId = plan.id;
+        },
+      },
+    );
+
+    const plan = result.data as TaskPlan | undefined;
+    expect(plan).toBeDefined();
+
+    // The REAL pause route accepted the out-of-process steering of a RUNNING plan.
+    expect(pauseIssued).toBe(true);
+    expect(pauseStatus).toBe(200);
+
+    // The walk STOPPED at the pause checkpoint: node 'a' ran, node 'b' NEVER launched.
+    expect(plan!.status).toBe('paused');
+    expect(nodeStatusOf(plan!, 'a')).toBe('success');
+    expect(nodeStatusOf(plan!, 'b')).toBe('pending');
+    expect(await countBudgets(MIDRUN_BUDGET_A)).toBe(1);
+    expect(await countBudgets(MIDRUN_BUDGET_B)).toBe(0);
+
+    // Durable: the `AgentTask` row holds the pause (the source of truth `defaultPollControls` read).
+    expect((await getTestPrisma().agentTask.findUniqueOrThrow({ where: { id: plan!.id } })).status).toBe(
+      'paused',
+    );
+
+    // --- GET refresh: the reloaded plan carries per-node statuses (executed / never-started).
+    const reloaded = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(plan!.id), {
+      ctx: idCtx(plan!.id),
+      sessionId,
+    });
+    expect(reloaded.status).toBe(200);
+    const refreshed = payload(reloaded);
+    expect(refreshed.status).toBe('paused');
+    expect(nodeStatusOf(refreshed, 'a')).toBe('success');
+    expect(nodeStatusOf(refreshed, 'b')).toBe('pending');
+
+    // Capture node 'a's row NOW — resume must skip it (the SAME row, never a second one).
+    const budgetABefore = await getTestPrisma().budget.findFirstOrThrow({
+      where: { userId: DEMO_USER_ID, name: MIDRUN_BUDGET_A },
+    });
+
+    // --- RESUME through the REAL route: it re-runs the plan through the PRODUCTION runner (NOT the
+    // pause wrapper), so node 'a' (terminal `success`) is skipped and node 'b' (GREEN) executes.
+    const resumedRes = await taskControlRequest(plan!.id, 'resume', sessionId);
+    expect(resumedRes.status).toBe(200);
+    const resumed = payload(resumedRes);
+    expect(resumed.status).toBe('success');
+    expect(nodeStatusOf(resumed, 'a')).toBe('success');
+    expect(nodeStatusOf(resumed, 'b')).toBe('success');
+
+    // node 'a' was NOT re-executed (exactly ONE Budget A row — and it is the SAME row); node 'b' ran
+    // exactly once.
+    expect(await countBudgets(MIDRUN_BUDGET_A)).toBe(1);
+    const budgetAAfter = await getTestPrisma().budget.findFirstOrThrow({
+      where: { userId: DEMO_USER_ID, name: MIDRUN_BUDGET_A },
+    });
+    expect(budgetAAfter.id).toBe(budgetABefore.id);
+    expect(await countBudgets(MIDRUN_BUDGET_B)).toBe(1);
+
+    // Durable: the plan row settled `success`.
+    expect((await getTestPrisma().agentTask.findUniqueOrThrow({ where: { id: plan!.id } })).status).toBe(
+      'success',
+    );
   });
 });
