@@ -75,37 +75,36 @@ One line per journey; the process exits non-zero when any journey FAILs.
 - **Does NOT cover:** the real LLM (`LLM_MODE=live`); real bank/network; the production build
   (`next build` / `next start`); cross-browser (Chrome only, Edge as fallback and untested);
   visual/a11y regression; load/perf; the security unit + scenario layers (owned by
-  `tests/unit` / `tests/scenarios`); and the app-side `/agent` SSR defect below (reported, NOT fixed
-  here — it is outside this node).
+  `tests/unit` / `tests/scenarios`).
 
 ## Known Issues
-- **BLOCKED by an APP-side defect (outside `tests/e2e`):** `GET /agent` returns **HTTP 500** — the RSC
-  payload renders `<ChatWindow/>` as `$undefined` ("Element type is invalid … but got: undefined …
-  Check the render method of `AgentPage`"). `app/agent/page.tsx` imports the CLIENT component
-  `ChatWindow` through the NEUTRAL (non-`'use client'`) top barrel `@/components`
-  (`components/index.ts` → `export * from './chat'` → `'use client'` `components/chat/index.ts` →
-  `export * from './ChatWindow'`); the star re-export across the client boundary does not yield a
-  usable RSC client reference at SSR. Until this is fixed, all five journeys honestly FAIL (exit 1).
-  Likely fix (owner: `app/` + `components/`): import `ChatWindow` from a client module directly
-  (e.g. `@/components/chat`), or drop `'use client'` from `components/chat/index.ts` / re-export explicitly.
-- **The 500 is CONFINED to `/agent`** (verified by booting the real dev server on a free port and probing
-  every route): `/`, `/bills`, `/cards`, `/subscriptions`, `/audit`, `/security` all return **200**; only
-  `/agent` returns 500. `/bills` imports the CLIENT chart components (`SpendingPie`/`SpendingBar`/
-  `SpendingTrend`/`MiniSparkline`) through the NEUTRAL `@/components` barrel and renders fine — so
-  "a client component re-exported through the neutral barrel is undefined at SSR" is REFUTED as a general cause.
-- **Distinguishing factor = the intermediate barrel's `'use client'`:** among the top-level `export *`
-  sources in `components/index.ts`, ONLY `./chat` is itself `'use client'`, and only `/agent` fails.
-  `/agent`'s `ChatWindow` flows neutral `@/components` → `export * from './chat'` → `'use client'` barrel →
-  `export * from './ChatWindow'`; `/bills`'s charts flow neutral `@/components` →
-  `components/charts/index.ts` (NOT `'use client'`) → `export * from './SpendingPie'`. Star re-export
-  ACROSS a `'use client'` intermediate barrel does not yield a usable RSC client reference; a neutral one does.
+- **No React-hydration gate — journeys a/b/e are racy (harness-side).** `gotoAgent` (helpers.ts:396)
+  returns as soon as the SSR composer `<textarea>` is visible, and `submitChat` (helpers.ts:442) then
+  `fill()`s + clicks `发送` with NO wait for React hydration. At that instant the composer carries NO
+  React fiber props (`__reactFiber$…`/`__reactProps$…` absent — verified by a real headless-Chrome
+  probe), so interacting then (1) DROPS the click (no `POST /api/chat` is issued) and (2) RESETS the
+  `fill()` when React hydrates the controlled `<textarea>`. Landing the first turn depends purely on
+  Next-dev hydration timing. Grep confirms there is NO hydration signal anywhere in `tests/e2e/`
+  (no `__reactFiber$`/`__reactProps$`, no `networkidle`, no `waitForFunction`, no mounted/`data-ready`
+  marker). MINIMAL FIX (owner: `helpers.ts`): before `fill()`/click in `submitChat` (and/or at the end
+  of `gotoAgent`), wait for hydration — e.g. `page.waitForFunction` that the composer element has a
+  `__reactProps$…` key, or add a small client-only `data-hydrated` marker to `Composer` and wait on it.
+- **App side is SOUND (not the cause).** With hydration explicitly awaited (fiber props present), a
+  real headless-Chrome probe's `fill()`+click issued `POST /api/chat` and the ConfirmationCard
+  rendered — so `/agent` hydrates without error, the composer submits, and cards/narration render.
+  `GET /agent` returns HTTP 200; `components/chat/index.ts` and `components/index.ts` are neutral
+  barrels and the chat leaves carry `'use client'`.
+- **Harness dev-server boot fails in this environment (reproduced twice).** The harness's Node
+  `spawn('cmd.exe', ['/d','/s','/c','npx next dev -p <port>'], { detached:true, stdio:'pipe' })`
+  yields an EMPTY stdout pipe and `/api/health` never becomes ready → after 180s all five journeys
+  FAIL with `基础设施失败：/api/health 未就绪` (never reaching a journey interaction). Launching the
+  identical command manually (`Start-Process cmd.exe '/d','/s','/c' 'npx next dev -p <port>'`) boots
+  fine (`Ready in ~1.2s`, `/api/health` 200). So a harness run can report `PASS 0|FAIL 5` at the
+  INFRASTRUCTURE stage alone. Invoke the harness directly (`npx tsx tests/e2e/acceptance.e2e.ts`);
+  never wrap it in an extra `cmd /c`.
 - **`c-plan-pause-resume` honest limitation:** resuming a plan whose gated node is still parked
   re-attempts that node (parked is NOT terminal), so the plan RE-parks at `等待确认` instead of reaching
   `已完成`. The journey reports whichever badge is actually observed and NEVER fabricates `已完成`.
-- **Boot flakiness (observed once):** a dev-server launch produced an empty stdout pipe and
-  `/api/health` never became ready (killed at the 180s timeout); a later identical run booted
-  normally (`Ready in ~1.4s`). Invoke the harness directly (e.g. `npx tsx …` or `Start-Process npx.cmd`);
-  avoid wrapping it in an extra `cmd /c`.
 
 ## Routing Table
 - `./acceptance.e2e.ts` → the single real-browser entry point (boot → readiness → journeys → structured report → non-zero exit on FAIL)
