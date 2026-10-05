@@ -151,10 +151,11 @@ status badges, agent task timeline; 🟢🟡🔴 used for permission status. Amo
 - Build: `npm run build`
 - Test: `npm run test` (Vitest, mock LLM + test SQLite)
 ## Test Strategy
-Vitest. Unit tests for `security/` (permission, risk, gateway, MFA, circuit breaker, injection), `banking-sdk/`,
-`planner/` (DAG order/cycles). Integration tests drive the full agent pipeline with the **faux provider** to
-prove the 12 demo scenarios (Tests 1–12 in the objective). Fixtures + a test Prisma DB live under `tests/`.
-See `tests/CONTEXT.md`.
+Four layers (see `tests/CONTEXT.md`): (1) pure unit tests (`tests/unit/` — security, planner, banking-sdk, lib, agent);
+(2) faux-LLM scenario integration (`tests/scenarios/`, mock provider + test SQLite) proving the 12 demo scenarios;
+(3) in-process route-handler HTTP integration (`tests/app/*-http.test.ts`, real handlers + real test SQLite) plus
+root review specs (`tests/review-*.test.ts`); (4) real-browser e2e acceptance (`tests/e2e/acceptance.e2e.ts`,
+playwright-core-driven on an isolated `prisma/e2e.db`, run via `npx tsx`, not Vitest).
 ## Routing Table
 - `./app` → Next.js App Router: pages (dashboard, agent chat, bills, cards, subscriptions, security center, audit) + API route handlers (chat/SSE, actions confirm|verify|cancel, tasks control, audit, security, read models)
 - `./components` → React UI: chat cards (balance/transfer/confirm/MFA/anomaly/plan), charts, banking tiles, ui primitives
@@ -164,8 +165,8 @@ See `tests/CONTEXT.md`.
 - `./planner` → DAG task planner + executor (`submit_plan` backing)
 - `./audit` → Audit logger + security-event recorder
 - `./lib` → Shared kernel: contracts, errors, money, config, constants, clock, Prisma client + repositories
-- `./prisma` → Prisma schema, seed data, migrations
-- `./tests` → Automated tests: security/planner/sdk units + faux-LLM scenario integration tests
+- `./prisma` → Prisma schema + seed data (applied via `prisma db push`; NO `migrations/` directory)
+- `./tests` → Four layers: unit (security/planner/sdk/lib/agent) + faux-LLM scenario integration + in-process route-handler HTTP integration (`app/*-http.test.ts`, `review-*.test.ts`) + real-browser e2e acceptance (`e2e/`, isolated `prisma/e2e.db`)
 - `./docs` → Competition docs: architecture.md, security.md, test-cases.md, known-risks.md (sibling — read-only, escalate writes here to root)
 - `./README.md` → setup, demo account, mock MFA code, demo script, known limits (sibling/root-owned)
 
