@@ -80,6 +80,11 @@ Three layers, mirroring the acceptance bar:
   (JSON `?stream=0` + SSE default) and the action/task handlers, proving money moves only after a human
   confirm/verify, honest failure narratives, no secret leaks, ownership/not-found handling, the DAG
   task lifecycle (pause/cancel/retry + refresh recovery) and the circuit breaker at the HTTP boundary.
+  `review-regressions-http.test.ts` additionally locks down reviewer-flagged regressions: two YELLOW
+  parks in ONE session escalate the SECOND confirm to RED/MFA at execution time; a plan-cancel revokes
+  its parked action (both cancel/confirm race orderings); a mid-run pause halts the next node while
+  resume re-runs only it; and identity stays COOKIE-ONLY (a forged `?sessionId=`/`?userId=` query NEVER
+  authenticates on verify/cancel/tasks/reset).
 
 Fixtures: the canonical demo dataset (user 李明; contacts 张伟/王芳/妈妈/李华; the Apple Store ¥6,999
 anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) is defined in
