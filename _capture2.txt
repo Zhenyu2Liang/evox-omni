@@ -1,0 +1,101 @@
+== AI Banking Agent 真实浏览器端到端验收 (tests/e2e) ==
+· 重置演示数据库 → npm run db:reset（保证每次运行起始状态一致）
+FAIL a-transfer-confirm — 基础设施失败：重置演示数据库失败（npm run db:reset，退出码 1）：ed.ts
+
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": SQLite database "dev.db" at "file:./dev.db"
+
+The SQLite database "dev.db" at "file:./dev.db" was successfully reset.
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+Environment variables loaded from .env
+Error: Error describing the database.
+Error querying the database: Error code 11: The database disk image is malformed
+   0: schema_commands::commands::schema_push::Calculate from database
+             at schema-engine\commands\src\commands\schema_push.rs:40
+   1: schema_core::state::SchemaPush
+             at schema-engine\core\src\state.rs:545
+FAIL b-transfer-mfa — 基础设施失败：重置演示数据库失败（npm run db:reset，退出码 1）：ed.ts
+
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": SQLite database "dev.db" at "file:./dev.db"
+
+The SQLite database "dev.db" at "file:./dev.db" was successfully reset.
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+Environment variables loaded from .env
+Error: Error describing the database.
+Error querying the database: Error code 11: The database disk image is malformed
+   0: schema_commands::commands::schema_push::Calculate from database
+             at schema-engine\commands\src\commands\schema_push.rs:40
+   1: schema_core::state::SchemaPush
+             at schema-engine\core\src\state.rs:545
+FAIL c-plan-pause-resume — 基础设施失败：重置演示数据库失败（npm run db:reset，退出码 1）：ed.ts
+
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": SQLite database "dev.db" at "file:./dev.db"
+
+The SQLite database "dev.db" at "file:./dev.db" was successfully reset.
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+Environment variables loaded from .env
+Error: Error describing the database.
+Error querying the database: Error code 11: The database disk image is malformed
+   0: schema_commands::commands::schema_push::Calculate from database
+             at schema-engine\commands\src\commands\schema_push.rs:40
+   1: schema_core::state::SchemaPush
+             at schema-engine\core\src\state.rs:545
+FAIL d-plan-cancel — 基础设施失败：重置演示数据库失败（npm run db:reset，退出码 1）：ed.ts
+
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": SQLite database "dev.db" at "file:./dev.db"
+
+The SQLite database "dev.db" at "file:./dev.db" was successfully reset.
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+Environment variables loaded from .env
+Error: Error describing the database.
+Error querying the database: Error code 11: The database disk image is malformed
+   0: schema_commands::commands::schema_push::Calculate from database
+             at schema-engine\commands\src\commands\schema_push.rs:40
+   1: schema_core::state::SchemaPush
+             at schema-engine\core\src\state.rs:545
+FAIL e-refresh-action-recovery — 基础设施失败：重置演示数据库失败（npm run db:reset，退出码 1）：ed.ts
+
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": SQLite database "dev.db" at "file:./dev.db"
+
+The SQLite database "dev.db" at "file:./dev.db" was successfully reset.
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+Environment variables loaded from .env
+Error: Error describing the database.
+Error querying the database: Error code 11: The database disk image is malformed
+   0: schema_commands::commands::schema_push::Calculate from database
+             at schema-engine\commands\src\commands\schema_push.rs:40
+   1: schema_core::state::SchemaPush
+             at schema-engine\core\src\state.rs:545
+== 汇总：PASS 0 ｜ FAIL 5 ｜ SKIP 0 ==
+
+===STDERR===
+· 基础设施失败：重置演示数据库失败（npm run db:reset，退出码 1）：ed.ts
+
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": SQLite database "dev.db" at "file:./dev.db"
+
+The SQLite database "dev.db" at "file:./dev.db" was successfully reset.
+warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please migrate to a Prisma config file (e.g., `prisma.config.ts`).
+For more information, see: https://pris.ly/prisma-config
+
+Environment variables loaded from .env
+Error: Error describing the database.
+Error querying the database: Error code 11: The database disk image is malformed
+   0: schema_commands::commands::schema_push::Calculate from database
+             at schema-engine\commands\src\commands\schema_push.rs:40
+   1: schema_core::state::SchemaPush
+             at schema-engine\core\src\state.rs:545
