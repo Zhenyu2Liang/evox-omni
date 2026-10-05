@@ -64,6 +64,30 @@ complementing the in-process `tests/scenarios/*` suites.
   setlimit `success`), the real tool runs (limit 3000 → 1500) and the envelope is
   `status:'executed'`/`tier:'YELLOW'`.
 
+- `identity-http.test.ts` — cookie-only IDENTITY across ALL write/auth routes (`POST /api/actions/[id]/{confirm,verify,cancel}`,
+  `POST /api/tasks`, `POST /api/tasks/[id]`, `POST /api/security/reset`): missing cookie → 403 `SECURITY_DENIED`;
+  unknown session cookie → 403; a valid cookie for a session that does NOT own the target id → 403; a
+  truly-unknown action/task id (valid cookie) → 404 `NOT_FOUND`; forged `?userId=`/`?sessionId=` query params
+  CANNOT override cookie identity (still denied when the cookie is missing/foreign).
+- `mfa-escalation-http.test.ts` — YELLOW→RED ESCALATION at execution time: a parked YELLOW transfer whose FRESH
+  same-day total tips over ¥1000 is confirmed → the confirm response surfaces `requiresMfa:true`/`tier:'RED'` with
+  an `{type:'mfa_required'}` event and NO money moves; then `verify` with `MFA_CODE` executes (audit row
+  `mfaResult:'success'`, `mfaRequired:true`, `riskLevel:'RED'`); a wrong code moves NO money.
+- `dag-recovery-http.test.ts` — REAL DAG control/recovery e2e driven by `POST /api/tasks/[id]`
+  (pause/resume/cancel/retry), `GET /api/tasks/[id]` + `GET /api/actions` (refresh restore) and
+  `POST /api/actions/[id]/confirm`. Proves the real invariants with a COUNTABLE node side effect (a GREEN
+  `reserve_budget` node = exactly ONE `Budget` row): pause stops before the not-yet-run node; resume skips
+  already-`success` nodes; cancel is terminal (executed node's row preserved, parked node `cancelled`, parked
+  action revoked); retry re-runs ONLY the `failed` node on a FRESH gate action.
+- `malicious-input-http.test.ts` — MALICIOUS input over HTTP: a prompt-injection message cannot bypass
+  confirm/MFA (the money move stays gated); after a confirm, altering the amount/recipient in a FOLLOW-UP
+  request cannot change the executed args (the ORIGINAL validated args run); forged identity query params rejected.
+- `nl-entry-http.test.ts` — NATURAL-LANGUAGE ENTRY via `POST /api/chat` (mock responder) then completed through
+  the REAL action routes: `把信用卡娱乐限额调整到1500` → gated `set_card_limit` (YELLOW) → confirm (limit
+  3000→1500); `申购稳健理财A 1000元` → gated `subscribe_investment` (RED) → verify (holdings 1→2);
+  `取消Netflix订阅` → gated `cancel_subscription` (YELLOW) → confirm (ACTIVE→CANCELLED); a transfer with missing
+  info (no recipient/amount) → clarification (NO tool call, no read fallback).
+
 ## Constraints / Conventions
 
 - **One fresh `sessionId` per turn** (`newId('sess')`) — the in-process circuit breaker is keyed by
@@ -160,6 +184,12 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 - `./actions-http.test.ts` → `POST /api/actions/[id]/{confirm,verify,cancel}` real-handler e2e (two-phase confirmation: YELLOW confirm, RED MFA verify, wrong code, honest failure, cancel, foreign-owner/missing-cookie 403, unknown-id 404, MFA secrecy, circuit breaker)
 - `./tasks-http.test.ts` → real task/action handlers e2e (`/api/tasks`, `/api/tasks/[id]`, `/api/actions/[id]/{confirm,verify}`)
 - `./plan-parking-http.test.ts` → `POST /api/chat` conditional-DAG PARKING + `POST /api/actions/[id]/confirm` RESUME ("DAG 确认后继续")
+
+- `./identity-http.test.ts` → cookie-only identity across all write/auth routes (403 missing/unknown/foreign cookie, 404 unknown id, forged query params ignored)
+- `./mfa-escalation-http.test.ts` → YELLOW→RED escalation at execution time (fresh daily total → confirm surfaces RED/requiresMfa, verify executes, wrong code moves nothing)
+- `./dag-recovery-http.test.ts` → DAG control/recovery e2e (pause/resume/cancel/retry) + refresh restore (`GET /api/tasks/[id]`, `GET /api/actions`)
+- `./malicious-input-http.test.ts` → prompt-injection over HTTP still gated + follow-up arg-override cannot change executed args
+- `./nl-entry-http.test.ts` → natural-language entry via `POST /api/chat` → gated tool → confirm/verify completes
 
 ## Notes for Agents
 
