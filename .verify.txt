@@ -1,0 +1,9 @@
+﻿commit: 500939b fix(agent): guard plan checkpoints against cancelled + single-flight auto-exec
+--- status ---
+ M agent/CONTEXT.md
+?? .verify.txt
+--- show files ---
+500939b fix(agent): guard plan checkpoints against cancelled + single-flight auto-exec
+ agent/confirmation.ts | 88 +++++++++++++++++++++++++++++++++++++++++++++++----
+ agent/task-control.ts | 46 ++++++++++++++++++++++++---
+ 2 files changed, 123 insertions(+), 11 deletions(-)
