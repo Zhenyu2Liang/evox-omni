@@ -23,7 +23,10 @@ runs them all — no scoped config is required for any of them.
   re-risk of a stale parked transfer end-to-end through the REAL `@/agent` `confirmAction`/
   `verifyAction` façade (needs a persisted session).
 - `planner/` (4 specs) — `dag` (validate / topological order / readiness / conditions / `buildPlan`),
-  `executor` (`runPlan` node-state machine + `PlanControls`), `lifecycle` (durable persisted-plan
+  `executor` (`runPlan` node-state machine + `PlanControls`), `executor-claim-scope` (DB-backed: exactly-once node-executor
+  claim by the stable `(taskId,nodeId)` identity via `claimNodeExecution`/`releaseNodeExecution`; a
+  second separate `runPlan` of the same node loses the claim, writes nothing, and halts - NO in-process
+  Map), `lifecycle` (durable persisted-plan
   `pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`).
 - `banking-sdk/` (5 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
   `atomicity` (ledger-write rollback + concurrent overspend / double-redeem through the real tx).
