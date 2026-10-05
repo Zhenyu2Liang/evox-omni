@@ -9,7 +9,7 @@ permission, and the circuit breaker locks a session after 3 consecutive MFA fail
 
 ## API Surface
 
-Thirteen spec files (grouped below by concern), each with **real assertions** (no `it.todo` remain),
+Fourteen spec files (grouped below by concern), each with **real assertions** (no `it.todo` remain),
 targeting `@/security/<module>` via the `@/security` facade (`{gateway, permission, risk, mfa,
 circuitBreaker, injection}`) or the module directly:
 
