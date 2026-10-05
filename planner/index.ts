@@ -15,6 +15,7 @@ export type { BuildPlanInput } from './dag';
 export { isTerminalStatus, persistPlanSnapshot, persistPlanSnapshotGuarded } from './executor';
 export type {
   GuardedPersistOptions,
+  NodeExecutionContext,
   PlanControlCommand,
   PlanControlPort,
   PlanControls,
