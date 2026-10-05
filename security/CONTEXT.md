@@ -228,7 +228,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 - **Ownership enforcement is OPT-IN (the `actionId` is itself the capability when opts are omitted).**
   `authorizeAction`/`cancelAction` reject a MISMATCHING `opts.userId`/`opts.sessionId` with `SECURITY_DENIED`, but only
   when the caller SUPPLIES them (`opts?.userId !== undefined`); an actionId alone authorizes. The app layer DOES forward
-  (no ownership) and never records the true terminal status. Until it calls `recordActionResult` after the SDK
+  `{ userId, sessionId }` and DOES call `recordActionResult(id, 'executed'|'failed')` after executing, but the identity is
   execution, an executed action stays `confirmed` — protected only by the exactly-once claim (a repeat confirm
   still yields `CONFLICT`), but the persisted status never becomes `executed`/`failed`.
 - **Injection guard does NOT add a system reminder to the model context.**
