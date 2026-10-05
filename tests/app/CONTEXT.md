@@ -87,6 +87,12 @@ complementing the in-process `tests/scenarios/*` suites.
   3000→1500); `申购稳健理财A 1000元` → gated `subscribe_investment` (RED) → verify (holdings 1→2);
   `取消Netflix订阅` → gated `cancel_subscription` (YELLOW) → confirm (ACTIVE→CANCELLED); a transfer with missing
   info (no recipient/amount) → clarification (NO tool call, no read fallback).
+- `review-regressions-http.test.ts` — HTTP e2e regressions a reviewer flagged in already-shipped
+  areas: two YELLOW parks in ONE session escalate the SECOND confirm to RED/MFA at execution time;
+  cancelling a plan revokes its parked action (plus cancel/confirm race orderings); a MID-RUN pause
+  issued through `POST /api/tasks/[id]` halts the next node while resume re-runs only that node; and
+  identity stays COOKIE-ONLY — a forged `?sessionId=`/`?userId=` query NEVER authenticates on
+  `verify`/`cancel`/`tasks`/`reset`.
 
 ## Constraints / Conventions
 
@@ -168,18 +174,6 @@ and the `ErrorCode` union (`lib/errors.ts`). On a tripped breaker
 reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED` high-severity
 `SecurityEvent`, and denied follow-up action calls) instead of a fabricated 423.
 
-## Known gap — mid-execution PAUSE is not exercised at the HTTP layer
-
-Both pause specs operate on a plan that has already SETTLED (parked at `waiting_confirmation`):
-`tasks-http.test.ts:186` and `dag-recovery-http.test.ts:181` seed a plan, let it run to a park, then
-`POST /api/tasks/[id] {action:'pause'}` — NO node is `running` when the pause is issued. They prove
-"pause halts an at-rest plan" and "the dependent node never runs (its side-effect row stays 0)", NOT a
-pause that lands WHILE a node is executing. The durable mid-run steering is real code —
-`agent/task-control.ts#defaultPollControls` maps a persisted `AgentTask.status === 'paused'` to
-`{kind:'pause'}`, observed at the run's next node checkpoint (`planner/executor.ts:397-411`) — but
-exercising it over `POST /api/tasks/[id]` requires issuing the pause CONCURRENTLY with an in-flight
-run; every app-entry spec awaits the run to settle before pausing, so this path is untested here.
-
 ## Test Strategy
 
 - `npx vitest run tests/app` — real route handlers + a fresh seeded DB per test.
@@ -204,6 +198,7 @@ run; every app-entry spec awaits the run to settle before pausing, so this path 
 - `./dag-recovery-http.test.ts` → DAG control/recovery e2e (pause/resume/cancel/retry) + refresh restore (`GET /api/tasks/[id]`, `GET /api/actions`)
 - `./malicious-input-http.test.ts` → prompt-injection over HTTP still gated + follow-up arg-override cannot change executed args
 - `./nl-entry-http.test.ts` → natural-language entry via `POST /api/chat` → gated tool → confirm/verify completes
+- `./review-regressions-http.test.ts` → reviewer regression e2e: two-park YELLOW→RED execution-time escalation in one session, plan-cancel revokes its parked action + cancel/confirm race orderings, a mid-run pause (via the real handler) halting the next node + resume re-running only that node, and forged-query-never-authenticates on verify/cancel/tasks/reset
 
 ## Notes for Agents
 

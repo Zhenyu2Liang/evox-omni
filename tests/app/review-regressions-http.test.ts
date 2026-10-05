@@ -31,13 +31,15 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { POST as chatPost } from '@/app/api/chat/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as verifyPost } from '@/app/api/actions/[id]/verify/route';
+import { POST as cancelPost } from '@/app/api/actions/[id]/cancel/route';
+import { POST as resetPost, type ResetData } from '@/app/api/security/reset/route';
 import { GET as taskGet, POST as taskPost } from '@/app/api/tasks/[id]/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
 import { executeGatedTool, getOrCreateSession, readPendingActionId } from '@/agent';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
-import { DAILY_TRANSFER_LIMIT, MFA_CODE } from '@/lib/constants';
+import { DAILY_TRANSFER_LIMIT, MFA_CODE, MFA_MAX_ATTEMPTS } from '@/lib/constants';
 import { listTasksBySession } from '@/lib/db/repositories/task';
 import { newId } from '@/lib/ids';
 import { security } from '@/security';
@@ -83,6 +85,13 @@ interface Envelope<T> {
 function payload<T>(res: HttpResult<Envelope<T>>): T {
   expect(res.data?.ok, `expected success envelope, got ${JSON.stringify(res.data)}`).toBe(true);
   return res.data!.data as T;
+}
+
+/** Identity/ownership failure protocol: assert 403 + `SECURITY_DENIED`. */
+function expectDenied<T>(res: HttpResult<Envelope<T>>): void {
+  expect(res.status, `expected 403, got body ${JSON.stringify(res.data)}`).toBe(403);
+  expect(res.data?.ok).toBe(false);
+  expect(res.data?.error?.code).toBe('SECURITY_DENIED');
 }
 
 /** Assert the literal mock MFA code never leaks into a response body we captured. */
@@ -753,6 +762,227 @@ describe('[integration] POST /api/tasks/[id] pause — a MID-RUN pause stops the
     // Durable: the plan row settled `success`.
     expect((await getTestPrisma().agentTask.findUniqueOrThrow({ where: { id: plan!.id } })).status).toBe(
       'success',
+    );
+  });
+});
+
+/* ============================================================================================== *
+ * SCENARIO 4 — IDENTITY stays COOKIE-ONLY on the routes `identity-http.test.ts` does not cover
+ * ============================================================================================== *
+ * `./identity-http.test.ts` already pins the missing / unknown / foreign-COOKIE failures and the
+ * forged `?sessionId=`/`?userId=` query on CONFIRM. This scenario closes the remaining hole: on
+ * `POST /api/actions/[id]/verify`, `…/cancel`, `POST /api/tasks/[id]` and
+ * `POST /api/security/reset` a query param must NEVER authenticate and must NEVER widen a foreign
+ * cookie to the owning session.
+ *
+ * Every route derives identity SOLELY from the trusted `banking_session` cookie
+ * (`app/api/_lib/session#requireIdentity`); the query string is never consulted. The VICTIM is a
+ * fresh persisted session that OWNS both a chat-parked YELLOW transfer and a durable gated task; a
+ * FOREIGN cookie is a DIFFERENT valid session that owns neither. The regression: a forged
+ * `?sessionId=<victim>` (with or without a cookie) must leave the victim's action `pending`, its
+ * plan `waiting_confirmation` and its breaker LOCKED — never settle or unlock anything.
+ * ============================================================================================== */
+
+/** The COUNTABLE GREEN probe of the victim task (one `Budget` row ⇒ the plan walked node v1). */
+const VICTIM_BUDGET = '预留预算V';
+
+/** Per-call identity + an optional RAW query string (to forge `?sessionId=` / `?userId=`). */
+interface ForgeOpts {
+  sessionId?: string;
+  query?: string;
+  /** MFA code for the verify invoker (defaults to the mock code; the wrong-code probe overrides it). */
+  code?: string;
+}
+
+/** Append a raw query string to a path (`undefined` ⇒ no query). */
+function appendQuery(path: string, query?: string): string {
+  return query ? `${path}?${query}` : path;
+}
+
+/** `POST /api/actions/[id]/verify` — cookie-only identity + an optional forged query string. */
+function verifyCall(id: string, opts: ForgeOpts = {}) {
+  return postJson<Envelope<ActionResponse>>(
+    verifyPost,
+    appendQuery(actionUrl(id, 'verify'), opts.query),
+    { code: opts.code ?? MFA_CODE },
+    { ctx: idCtx(id), sessionId: opts.sessionId },
+  );
+}
+
+/** `POST /api/actions/[id]/cancel` — cookie-only identity + an optional forged query string. */
+function cancelCall(id: string, opts: ForgeOpts = {}) {
+  return postJson<Envelope<ActionResponse>>(
+    cancelPost,
+    appendQuery(actionUrl(id, 'cancel'), opts.query),
+    {},
+    { ctx: idCtx(id), sessionId: opts.sessionId },
+  );
+}
+
+/** `POST /api/tasks/[id]` execution control — cookie-only identity + an optional forged query. */
+function taskControlCall(
+  id: string,
+  action: 'pause' | 'resume' | 'cancel' | 'retry',
+  opts: ForgeOpts = {},
+) {
+  return postJson<Envelope<TaskPlan>>(
+    taskPost,
+    appendQuery(taskUrl(id), opts.query),
+    { action },
+    { ctx: idCtx(id), sessionId: opts.sessionId },
+  );
+}
+
+/** `POST /api/security/reset` (single-arg handler) — cookie-only identity + an optional forged query. */
+function resetCall(opts: ForgeOpts = {}) {
+  return postJson<Envelope<ResetData>>(resetPost, appendQuery('/api/security/reset', opts.query), {}, {
+    sessionId: opts.sessionId,
+  });
+}
+
+/**
+ * A fresh VICTIM session that OWNS both a chat-parked YELLOW transfer and a durable GATED task, plus
+ * a FOREIGN valid session that owns neither. Both resources belong to the SAME victim session, so a
+ * forged query (or cookie) that slipped past identity would be directly observable.
+ */
+async function seedVictim(): Promise<{
+  victim: string;
+  foreign: string;
+  actionId: string;
+  taskId: string;
+}> {
+  const victim = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+
+  // 1) Park a YELLOW ¥200 transfer through the REAL chat route — the victim's ONLY parked action yet.
+  const turn = await chatTurn('给张伟转200元', victim);
+  expect(turn.sessionId, 'the chat turn must reuse the victim session').toBe(victim);
+  const action = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { sessionId: victim } });
+  expect(action.toolName).toBe('transfer_money');
+  expect(action.riskLevel).toBe('YELLOW');
+  expect(action.status).toBe('pending');
+
+  // 2) Seed a durable, GATED task owned by the SAME victim session (via the production runner).
+  const goal = '先预留预算V，再给张伟转200元';
+  const result = await runSubmitPlan(
+    DEMO_USER_ID,
+    { goal, nodes: [budgetNode('v1', VICTIM_BUDGET, 1200), transferNode('v2', PARKED_AMOUNT, ['v1'])] },
+    { sessionId: victim, runTool: gatewayRunTool(victim, goal) },
+  );
+  const plan = result.data as TaskPlan | undefined;
+  expect(plan, `runSubmitPlan produced no plan: ${result.error}`).toBeDefined();
+  expect(plan!.status).toBe('waiting_confirmation');
+  expect(nodeStatusOf(plan!, 'v1')).toBe('success');
+  expect(nodeStatusOf(plan!, 'v2')).toBe('waiting_confirmation');
+  expect(await countBudgets(VICTIM_BUDGET)).toBe(1);
+
+  // 3) A DIFFERENT valid session that owns neither the action nor the task.
+  const foreign = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  expect(foreign).not.toBe(victim);
+
+  return { victim, foreign, actionId: action.id, taskId: plan!.id };
+}
+
+/** The victim's action / plan / money are UNAFFECTED by a rejected identity. */
+async function expectVictimUntouched(before: {
+  victim: string;
+  actionId: string;
+  taskId: string;
+}): Promise<void> {
+  const action = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: before.actionId } });
+  expect(action.status, 'the victim parked action must stay pending').toBe('pending');
+  const task = await getTestPrisma().agentTask.findUniqueOrThrow({ where: { id: before.taskId } });
+  expect(task.status, 'the victim plan must stay parked').toBe('waiting_confirmation');
+  expect(await checkingBalance()).toBe(SEEDED_BALANCE);
+  expect(await transfersTo(RECIPIENT.id)).toHaveLength(0);
+  expect(await getTestPrisma().auditLog.count({ where: { sessionId: before.victim } })).toBe(0);
+}
+
+describe('[integration] identity — a query param NEVER authenticates on verify/cancel/tasks/reset', () => {
+  it('7 — NO cookie + a forged ?sessionId=<victim>&userId=<victim> on verify/cancel/tasks/reset is 403 everywhere and leaves the victim untouched', async () => {
+    const before = await seedVictim();
+    // Both forged params carry the CORRECT owning session id (plus a victim-valued user id), yet NO
+    // cookie is sent — every write/auth route must still fail closed.
+    const forged = `sessionId=${encodeURIComponent(before.victim)}&userId=${encodeURIComponent(before.victim)}`;
+
+    expectDenied(await verifyCall(before.actionId, { query: forged }));
+    expectDenied(await cancelCall(before.actionId, { query: forged }));
+    expectDenied(await taskControlCall(before.taskId, 'pause', { query: forged }));
+    expectDenied(await resetCall({ query: forged }));
+
+    await expectVictimUntouched(before);
+  });
+
+  it('8 — a FOREIGN valid cookie + a forged ?sessionId=<victim> query is 403 on verify/cancel/tasks and leaves the victim untouched', async () => {
+    const before = await seedVictim();
+    const query = `sessionId=${encodeURIComponent(before.victim)}`;
+
+    // A real cookie authenticates the FOREIGN session, but ownership still rejects settling the
+    // victim's action / controlling its task — the forged query can never widen it.
+    expectDenied(await verifyCall(before.actionId, { sessionId: before.foreign, query }));
+    expectDenied(await cancelCall(before.actionId, { sessionId: before.foreign, query }));
+    expectDenied(await taskControlCall(before.taskId, 'cancel', { sessionId: before.foreign, query }));
+
+    await expectVictimUntouched(before);
+  });
+
+  it('9 — /api/security/reset: a forged ?sessionId=<victim> query never unlocks the VICTIM session', async () => {
+    // The victim owns a RED parked transfer, so its breaker CAN trip.
+    const victim = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    const turn = await chatTurn('给张伟转5000元', victim);
+    expect(turn.sessionId).toBe(victim);
+    const actionId = (
+      await getTestPrisma().pendingAction.findFirstOrThrow({ where: { sessionId: victim } })
+    ).id;
+
+    // Trip the VICTIM breaker through the REAL verify route with the victim's OWN cookie.
+    for (let attempt = 0; attempt < MFA_MAX_ATTEMPTS; attempt += 1) {
+      const res = await verifyCall(actionId, { sessionId: victim, code: '000000' });
+      expect(res.status).toBe(200);
+    }
+    expect(security.circuitBreaker.getState(victim).locked, 'the victim breaker must be tripped').toBe(
+      true,
+    );
+
+    const resetEventsFor = (sessionId: string) =>
+      getTestPrisma().securityEvent.count({ where: { sessionId, kind: 'SECURITY_RESET' } });
+
+    // (a) NO cookie + a forged ?sessionId=<victim>: the forged query authenticates NOTHING (403) and
+    // the victim stays locked with no reset event.
+    const forged = `sessionId=${encodeURIComponent(victim)}`;
+    expectDenied(await resetCall({ query: forged }));
+    expect(security.circuitBreaker.getState(victim).locked).toBe(true);
+    expect(await resetEventsFor(victim)).toBe(0);
+
+    // (b) A FOREIGN valid cookie + the same forged query: the route HONESTLY resets the CALLER's OWN
+    // session (200 for the foreign session, one SECURITY_RESET event) — never the victim's.
+    const foreign = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    expect(foreign).not.toBe(victim);
+    const foreignRes = await resetCall({ sessionId: foreign, query: forged });
+    expect(foreignRes.status).toBe(200);
+    expect(payload(foreignRes).sessionId).toBe(foreign);
+    expect(await resetEventsFor(foreign)).toBe(1);
+
+    // The VICTIM session was NEVER unlocked: still locked, still zero reset events, and an end-to-end
+    // probe proves the lock still denies even the CORRECT mock MFA code.
+    expect(security.circuitBreaker.getState(victim).locked).toBe(true);
+    expect(await resetEventsFor(victim)).toBe(0);
+    const probe = await verifyCall(actionId, { sessionId: victim, code: MFA_CODE });
+    expect(probe.status).toBe(200);
+    const probeData = payload(probe);
+    expect(probeData.ok).toBe(false);
+    expect(probeData.status).toBe('locked');
+
+    // Fail-closed: the ¥5000 transfer never moved and no audit row was written for the victim.
+    expect(await checkingBalance()).toBe(SEEDED_BALANCE);
+    expect(await transfersTo(RECIPIENT.id)).toHaveLength(0);
+    expect(await getTestPrisma().auditLog.count({ where: { sessionId: victim } })).toBe(0);
+
+    expectNoMfaLeak(
+      'Scenario 4 / it 9',
+      foreignRes.data,
+      foreignRes.data?.data,
+      probe.data,
+      probe.data?.data,
     );
   });
 });
