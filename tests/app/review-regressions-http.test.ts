@@ -31,13 +31,26 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { POST as chatPost } from '@/app/api/chat/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as verifyPost } from '@/app/api/actions/[id]/verify/route';
+import { GET as taskGet, POST as taskPost } from '@/app/api/tasks/[id]/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
+import { executeGatedTool, getOrCreateSession, readPendingActionId } from '@/agent';
+import { runSubmitPlan } from '@/agent/tools/planning';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
+import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import { DAILY_TRANSFER_LIMIT, MFA_CODE } from '@/lib/constants';
 import { newId } from '@/lib/ids';
+import { security } from '@/security';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
-import { ACCOUNTS, CONTACTS } from '@/tests/helpers/fixtures';
-import { actionUrl, chatUrl, idCtx, postJson, type HttpResult } from './harness';
+import { ACCOUNTS, CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
+import {
+  actionUrl,
+  chatUrl,
+  getJson,
+  idCtx,
+  postJson,
+  taskUrl,
+  type HttpResult,
+} from './harness';
 
 /* ------------------------------------------------------------------------------- fixtures */
 
@@ -341,5 +354,262 @@ describe('[integration] POST /api/actions/[id]/verify — a WRONG code on an esc
     expect(rowB.riskLevel).toBe('RED');
 
     expectNoMfaLeak('Scenario 1 / it 3', escalated, res.data, res.data?.data);
+  });
+});
+
+/* ============================================================================================== *
+ * SCENARIO 2 — a plan CANCEL revokes its parked action; the cancel/confirm RACE
+ * ============================================================================================== *
+ * A durable plan is seeded through the PRODUCTION `submit_plan` runner (`runSubmitPlan`, exactly as
+ * `tests/app/dag-recovery-http.test.ts#seedPlan`): node n1 = GREEN `reserve_budget` (a COUNTABLE
+ * probe — exactly ONE `Budget` row per execution) and node n2 = YELLOW `transfer_money` to 张伟
+ * (¥200) depending on n1. The seed EXECUTES n1 and PARKS n2 as a `PendingAction`.
+ *
+ * The regression: cancelling the plan must REVOKE the parked action so a later confirm can never
+ * move money out of a plan the user just cancelled — while an EXECUTED transfer is never pretended
+ * to be rolled back. Both orderings are exercised (cancel-then-confirm, confirm-then-cancel); the
+ * outcome is decided ENTIRELY in code (`agent/task-control.ts#cancelTask` →
+ * `security/security-gateway.ts#cancelAction` + `planner/lifecycle.ts#cancelPlan`), never by text.
+ * ============================================================================================== */
+
+/** Recipient 张伟 (declared above) — the payee of Scenario 2's parked YELLOW transfer. */
+const RECIPIENT = ZHANGWEI;
+/** Scenario 2's YELLOW transfers move ¥200 — ≤ `DAILY_TRANSFER_LIMIT`, so they park YELLOW. */
+const PARKED_AMOUNT = 200;
+/** The COUNTABLE GREEN probe's budget name (exactly ONE row per successful execution). */
+const PROBE_BUDGET = '预留预算S2';
+
+/** A plan node as supplied to `runSubmitPlan` (the model-free DAG runner). */
+interface SeedNode {
+  id: string;
+  name: string;
+  dependencies: string[];
+  kind: 'tool' | 'condition' | 'note';
+  tool?: string;
+  args?: Record<string, unknown>;
+}
+
+/** GREEN probe node — `reserve_budget` writes exactly ONE `Budget` row per run. */
+function budgetNode(id: string, budgetName: string, amount: number, deps: string[] = []): SeedNode {
+  return {
+    id,
+    name: budgetName,
+    dependencies: deps,
+    kind: 'tool',
+    tool: 'reserve_budget',
+    args: { name: budgetName, amount },
+  };
+}
+
+/** YELLOW `transfer_money` node — gated, so it PARKS a `PendingAction` instead of executing. */
+function transferNode(id: string, amount: number, deps: string[] = []): SeedNode {
+  return {
+    id,
+    name: `给${RECIPIENT.name}转账`,
+    dependencies: deps,
+    kind: 'tool',
+    tool: 'transfer_money',
+    args: { name: RECIPIENT.name, amount },
+  };
+}
+
+/** The gateway-authorized per-node runner (a gated node parks instead of executing). */
+function gatewayRunTool(sessionId: string, userRequest = '') {
+  return (toolName: string, args: Record<string, unknown>) =>
+    executeGatedTool({
+      sessionId,
+      userId: DEMO_USER_ID,
+      toolName: toolName as Parameters<typeof executeGatedTool>[0]['toolName'],
+      args,
+      userRequest,
+    });
+}
+
+/**
+ * Seed a durable plan through the PRODUCTION `submit_plan` runner: real `AgentTask`/`AgentTaskNode`
+ * rows + a real `PendingAction` for a gated node + the matching `AgentSession` row that the control
+ * ownership check (`agent/task-control.ts#loadOwnedTask`) requires.
+ */
+async function seedPlan(
+  goal: string,
+  nodes: SeedNode[],
+): Promise<{ sessionId: string; taskId: string; plan: TaskPlan }> {
+  const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  const result = await runSubmitPlan(DEMO_USER_ID, { goal, nodes }, {
+    sessionId,
+    runTool: gatewayRunTool(sessionId, goal),
+  });
+  const plan = result.data as TaskPlan | undefined;
+  expect(plan, `runSubmitPlan produced no plan: ${result.error}`).toBeDefined();
+  return { sessionId, taskId: plan!.id, plan: plan! };
+}
+
+/** Count the `Budget` rows with the given name (0 ⇒ that node never executed). */
+function countBudgets(name: string): Promise<number> {
+  return getTestPrisma().budget.count({ where: { userId: DEMO_USER_ID, name } });
+}
+
+/** The recorded `TaskNodeResult` for a node id (throws when absent — a missing node is a bug). */
+function resultOf(plan: TaskPlan, nodeId: string) {
+  const result = plan.results.find((candidate) => candidate.id === nodeId);
+  expect(result, `plan ${plan.id} has no node '${nodeId}'`).toBeDefined();
+  return result!;
+}
+
+/** The recorded node status in a plan snapshot (`undefined` when the node is absent). */
+function nodeStatusOf(plan: TaskPlan, nodeId: string): TaskNodeStatus | undefined {
+  return plan.results.find((result) => result.id === nodeId)?.status;
+}
+
+/** `POST /api/tasks/[id] { action:'cancel' }` (identity is cookie-only). */
+function cancelTaskRequest(taskId: string, sessionId: string): Promise<HttpResult<Envelope<TaskPlan>>> {
+  return postJson<Envelope<TaskPlan>>(taskPost, taskUrl(taskId), { action: 'cancel' }, {
+    ctx: idCtx(taskId),
+    sessionId,
+  });
+}
+
+/**
+ * Seed the Scenario 2 plan and assert its PARKED precondition: n1 = GREEN `reserve_budget` probe
+ * (ONE `Budget` row, `success`) and n2 = YELLOW `transfer_money` (¥200 to 张伟, PARKED). Nothing has
+ * moved. Returns the persisted plan + the parked `PendingAction` id (read from n2's `output` JSON).
+ */
+async function seedParkedTransferPlan() {
+  const { sessionId, taskId, plan } = await seedPlan('先预留预算S2，再给张伟转200元', [
+    budgetNode('n1', PROBE_BUDGET, 1200),
+    transferNode('n2', PARKED_AMOUNT, ['n1']),
+  ]);
+
+  expect(PARKED_AMOUNT).toBeLessThanOrEqual(DAILY_TRANSFER_LIMIT);
+
+  expect(plan.status).toBe('waiting_confirmation');
+  expect(nodeStatusOf(plan, 'n1')).toBe('success');
+  expect(nodeStatusOf(plan, 'n2')).toBe('waiting_confirmation');
+  expect(await countBudgets(PROBE_BUDGET)).toBe(1);
+
+  const parkedActionId = readPendingActionId(resultOf(plan, 'n2').output);
+  expect(typeof parkedActionId).toBe('string');
+
+  // The parked YELLOW transfer has NOT moved any money at seed time.
+  expect(await transfersTo(RECIPIENT.id)).toHaveLength(0);
+  expect(await checkingBalance()).toBe(SEEDED_BALANCE);
+
+  return { sessionId, taskId, plan, parkedActionId: parkedActionId! };
+}
+
+/* --------------------------------------------------------------------------- Scenario 2 specs */
+
+describe('[integration] POST /api/tasks/[id] cancel — revokes the plan parked action; a later confirm is refused', () => {
+  it('4 — cancel first: the parked YELLOW action is revoked, the plan is terminal, and a later confirm is refused with NO money moved', async () => {
+    const { sessionId, taskId, parkedActionId } = await seedParkedTransferPlan();
+    const dayTotalBefore = await security.risk.computeDailyTransferTotal(DEMO_USER_ID);
+
+    // --- CANCEL the plan through the REAL route (cookie-only identity).
+    const cancelRes = await cancelTaskRequest(taskId, sessionId);
+    expect(cancelRes.status).toBe(200);
+    const cancelled = payload(cancelRes);
+    expect(cancelled.status).toBe('cancelled');
+
+    // The executed node keeps `success`; the parked node is now `cancelled`.
+    expect(nodeStatusOf(cancelled, 'n1')).toBe('success');
+    expect(nodeStatusOf(cancelled, 'n2')).toBe('cancelled');
+
+    // Durable: the node rows + the `AgentTask` row agree with the snapshot.
+    const nodes = await getTestPrisma().agentTaskNode.findMany({
+      where: { taskId },
+      orderBy: { order: 'asc' },
+    });
+    expect(nodes.map((node) => node.status)).toEqual(['success', 'cancelled']);
+    expect((await getTestPrisma().agentTask.findUnique({ where: { id: taskId } }))!.status).toBe('cancelled');
+
+    // The parked action was REVOKED through the gateway: a later confirm can never move money.
+    const revoked = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: parkedActionId } });
+    expect(revoked.status).toBe('cancelled');
+
+    // The executed node's side effect is NOT rolled back (irreversible) and NOT duplicated.
+    expect(await countBudgets(PROBE_BUDGET)).toBe(1);
+
+    // --- CONFIRM the revoked action: refused (the atomic claim finds no `pending` status) + NO move.
+    const confirmRes = await confirmAction(parkedActionId, sessionId);
+    expect(confirmRes.status).toBe(200);
+    const refused = payload(confirmRes);
+    expect(refused.ok).toBe(false);
+    expect(refused.status).toBe('cancelled');
+    expect(await transfersTo(RECIPIENT.id)).toHaveLength(0);
+    expect(await checkingBalance()).toBe(SEEDED_BALANCE);
+    // The day's outbound transfer total is UNCHANGED — the refused confirm moved nothing.
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(dayTotalBefore);
+
+    expectNoMfaLeak('Scenario 2 / it 4', cancelRes.data, cancelRes.data?.data, confirmRes.data, confirmRes.data?.data);
+  });
+});
+
+describe('[integration] POST /api/tasks/[id] cancel — an already-completed plan is terminal and the executed transfer is preserved', () => {
+  it('5 — confirm first: the executed transfer is preserved truthfully (no rollback) and a later cancel keeps the executed nodes', async () => {
+    const { sessionId, taskId, parkedActionId } = await seedParkedTransferPlan();
+
+    // --- CONFIRM the parked YELLOW transfer: it EXECUTES (¥200 out of checking).
+    const confirmRes = await confirmAction(parkedActionId, sessionId);
+    expect(confirmRes.status).toBe(200);
+    const executed = payload(confirmRes);
+    expect(executed.ok).toBe(true);
+    expect(executed.status).toBe('executed');
+    expect(executed.tier).toBe('YELLOW');
+
+    const zhangwei = await transfersTo(RECIPIENT.id);
+    expect(zhangwei).toHaveLength(1);
+    expect(zhangwei[0].amount).toBe(-PARKED_AMOUNT);
+    expect(await checkingBalance()).toBe(SEEDED_BALANCE - PARKED_AMOUNT);
+
+    // The plan continued (the executed node's real outcome was written back): both nodes `success`.
+    const completedNodes = await getTestPrisma().agentTaskNode.findMany({
+      where: { taskId },
+      orderBy: { order: 'asc' },
+    });
+    expect(completedNodes.map((node) => node.status)).toEqual(['success', 'success']);
+    expect((await getTestPrisma().agentTask.findUnique({ where: { id: taskId } }))!.status).toBe('success');
+
+    // --- CANCEL the now-COMPLETED plan. HONEST behaviour (`agent/task-control.ts#cancelTask` →
+    // `planner/lifecycle.ts#cancelPlan`): the plan snapshot/row still settles `cancelled`, but a
+    // TERMINAL (`success`) node KEEPS its status — no node becomes `cancelled` — and nothing that
+    // already executed is rolled back. The already-executed action is terminal, so revoking it is a
+    // no-op (`security-gateway.cancelAction` reports it `alreadySettled`, never a failure).
+    const cancelRes = await cancelTaskRequest(taskId, sessionId);
+    expect(cancelRes.status).toBe(200);
+    const after = payload(cancelRes);
+    expect(after.status).toBe('cancelled');
+    expect(nodeStatusOf(after, 'n1')).toBe('success');
+    expect(nodeStatusOf(after, 'n2')).toBe('success');
+
+    // Durable: the node rows agree — NO node became `cancelled` — and the task row settled `cancelled`.
+    const nodes = await getTestPrisma().agentTaskNode.findMany({
+      where: { taskId },
+      orderBy: { order: 'asc' },
+    });
+    expect(nodes.map((node) => node.status)).toEqual(['success', 'success']);
+    expect((await getTestPrisma().agentTask.findUnique({ where: { id: taskId } }))!.status).toBe('cancelled');
+
+    // A refresh read returns the SAME terminal snapshot (no node was undone by the cancel).
+    const reloaded = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(taskId), {
+      ctx: idCtx(taskId),
+      sessionId,
+    });
+    expect(reloaded.status).toBe(200);
+    const refreshed = payload(reloaded);
+    expect(refreshed.status).toBe('cancelled');
+    expect(refreshed.results.map((result) => result.status)).toEqual(['success', 'success']);
+
+    // The executed transfer is PRESERVED truthfully — exactly ONE ±¥200 row, balance still debited.
+    const afterRows = await transfersTo(RECIPIENT.id);
+    expect(afterRows).toHaveLength(1);
+    expect(afterRows[0].amount).toBe(-PARKED_AMOUNT);
+    expect(await checkingBalance()).toBe(SEEDED_BALANCE - PARKED_AMOUNT);
+    // The GREEN probe was neither re-run nor rolled back, and the action row is still `executed`.
+    expect(await countBudgets(PROBE_BUDGET)).toBe(1);
+    expect(
+      (await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: parkedActionId } })).status,
+    ).toBe('executed');
+
+    expectNoMfaLeak('Scenario 2 / it 5', confirmRes.data, confirmRes.data?.data, cancelRes.data, cancelRes.data?.data);
   });
 });
