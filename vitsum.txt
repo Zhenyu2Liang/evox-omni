@@ -1,3 +1,0 @@
-testsFailed=1/413 suitesFailed=2
-tests/scenarios/test-10-circuit-breaker.test.ts failed=1
-  - Scenario 10 ? ????MFA???? (circuit breaker) a subsequent RED attempt is refused with status "locked" and no execution occurs

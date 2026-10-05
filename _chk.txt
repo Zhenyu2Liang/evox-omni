@@ -1,3 +1,0 @@
-﻿_chk.txt
-?? _chk.txt
-HEAD: 55c2765 Merge commit '15efb7cd4f3f5c4b69f660a5e76cd07bfb26ba63'; commit '610188d3f0d3daa5cd13b66c61c4b004b3b86cf1' into evogit-agent-T3-A75
