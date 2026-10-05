@@ -28,7 +28,9 @@ Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` 
 
 ## Constraints
 
-- All side effects (tool calls, persistence, clock) are **injected** — these specs need no DB and no LLM.
+- Side effects (tool calls, persistence, clock) are **injected** — most specs need no DB and no LLM;
+  `executor-claim-scope.test.ts` IS DB-backed (real `AgentTask`/`AgentTaskNode` rows for the CAS, via
+  `useFreshDatabase()` → `../../helpers/db`).
 - Deterministic order/timestamps: assert stable ordering by declaration order among equally-ready nodes.
 - `evaluateCondition` is total: a missing dot-path resolves to `false`.
 - `getReadyNodes` unlocks a dependent ONLY for terminal `success`/`skipped` deps
