@@ -141,7 +141,7 @@ export async function persistPlanSnapshot(deps: PlanDeps, plan: TaskPlan): Promi
  * Controls (all cooperative, consulted at each node checkpoint):
  * - `pause()` (in-process) or a durable `{ kind:'pause' }` from
  *   `deps.controls.pollControls(planId)` STOP the walk and RETURN a resumable
- *   snapshot (`status:'pending'`, un-run nodes still `pending`, already-run nodes
+ *   snapshot (`status:'paused'`, un-run nodes still `pending`, already-run nodes
  *   `success`). Resumption is done by re-invoking `runPlan` (or `resumePlan`).
  *   `PlanControls.resume()` only clears the in-process pause flag.
  * - `cancel()` and `opts.signal` abort the walk, marking EVERY not-yet-terminal node
@@ -191,12 +191,24 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
     updatedAt: now(),
   });
 
-  /** Record a node result: notify the listener, persist the node + the snapshot. */
+  /**
+   * Record a node result: notify the listener and persist the affected NODE row.
+   *
+   * Deliberately does NOT re-write the whole plan snapshot. The plan status is
+   * written ONCE at the start ('running') and ONCE at settlement (see the walk).
+   * Rewriting it on every node mutation would CLOBBER a durable control status
+   * written out-of-process during the run — e.g. `POST /api/tasks/:id`
+   * `{action:'pause'}` sets the persisted plan status to 'paused', which the next
+   * `checkpoint()` must observe via `deps.controls`; a mid-run
+   * `persistPlan({status:'running'})` would erase it and the walk would wrongly
+   * start the next node. Node-level progress is still persisted incrementally
+   * (`deps.persistNode`), so a live UI keeps per-node status.
+   */
   const setNode = async (result: TaskNodeResult): Promise<void> => {
     results.set(result.id, { ...result });
     await deps.onNodeUpdate({ ...result });
     await deps.persistNode?.(plan.id, { ...result });
-    await persistPlanSnapshot(deps, snapshot());
+    // (the full plan snapshot is NOT re-persisted per node — see the walk below)
   };
 
   /** Scope for condition evaluation: prior node id → its recorded `output`. */
@@ -370,6 +382,12 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   // ---- main walk ------------------------------------------------------------
   opts.onControls?.(controls);
 
+  // Persist the running status ONCE up front (and again at settlement). Mid-run
+  // node mutations only touch the affected NODE rows (`persistNode`), so they
+  // never clobber a durable `paused`/`cancelled` written out-of-process during
+  // the run — which the next `checkpoint()`'s `deps.controls` poll must observe.
+  await persistPlanSnapshot(deps, snapshot());
+
   let stopped = false;
   let parked = false;
   let wasPaused = false;
@@ -494,8 +512,9 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   } else if (parked) {
     planStatus = 'waiting_confirmation';
   } else if (wasPaused) {
-    // TaskPlanStatus has no 'paused': a paused plan surfaces as resumable `pending`.
-    planStatus = 'pending';
+    // A pause (in-process `pause()` or durable `{kind:'pause'}`) halts the walk
+    // but does NOT settle the plan: it stays resumable with `status:'paused'`.
+    planStatus = 'paused';
   } else {
     const allSettled = plan.nodes.every((node) => {
       const status = results.get(node.id)?.status;

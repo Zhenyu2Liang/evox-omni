@@ -21,14 +21,12 @@
  *       • `POST /api/tasks/[id]` pause / cancel / retry drive the real executor lifecycle;
  *       • `GET /api/tasks/[id]` returns the persisted plan (refresh recovery), for both a seeded plan
  *         and a durable GREEN plan submitted through `POST /api/chat`.
- * (ii) NOT COVERED HERE — the PARKING-EVENT emission DURING a chat turn. The mock responder
- *     (`agent/providers/mock-responder.ts#handlePlan`) emits ONLY GREEN plan nodes, so a `submit_plan`
- *     issued through `POST /api/chat` NEVER parks. Consequently the plan-level
- *     `plan_update` + `confirmation_required`/`mfa_required` frames produced WHILE the DAG is
- *     EXECUTING (mid-turn) are UNREACHABLE over the real HTTP + mock chat path. That emission is
- *     covered by the `@/agent`-level faux harness in `tests/scenarios/test-11-conditional-dag.test.ts`
- *     and is intentionally NOT re-done here. See the report for the exact reason; no unreachable
- *     behaviour is fabricated.
+ * (ii) NOT COVERED HERE — the PARKING-EVENT emission DURING a chat turn. The PLAIN plan trigger
+ *     (`帮我计划一下…`) makes `agent/providers/mock-responder.ts#handlePlan` emit ONLY GREEN plan
+ *     nodes, so a `submit_plan` issued through `POST /api/chat` for THAT trigger NEVER parks. The
+ *     CONDITIONAL limit-adjustment trigger DOES emit a gated DAG and PARKS mid-turn over the same
+ *     real HTTP + mock path — that is covered end-to-end by `./plan-parking-http.test.ts`; (ii) here
+ *     is limited to the plain GREEN plan lifecycle. No unreachable behaviour is fabricated.
  *
  * DB lifecycle matches the other DB-backed suites: reset + seed before each test, disconnect after.
  * Every scenario uses a UNIQUE persisted session id (the in-process circuit breaker is keyed by
@@ -185,26 +183,26 @@ afterAll(async () => {
 /* ------------------------------------------------------------------------------------ specs */
 
 describe('POST /api/tasks/[id] — real task control (pause / cancel / retry)', () => {
-  it('pause — halts the parked plan and persists the paused snapshot (status:pending)', async () => {
+  it('pause — halts the parked plan and persists the paused snapshot (status:paused)', async () => {
     const { sessionId, taskId, plan } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
     expect(plan.status).toBe('waiting_confirmation');
 
     const res = await postJson<Envelope<TaskPlan>>(
       taskPost,
-      taskUrl(taskId, sessionId),
+      taskUrl(taskId),
       { action: 'pause' },
-      { ctx: idCtx(taskId) },
+      { ctx: idCtx(taskId), sessionId },
     );
 
     expect(res.status).toBe(200);
     const paused = payload(res);
     expect(paused.id).toBe(taskId);
-    // `TaskPlanStatus` has no 'paused': a paused plan surfaces as resumable `pending`.
-    expect(paused.status).toBe('pending');
+    // `TaskPlanStatus` includes 'paused': `pauseTask` persists that status on the snapshot AND the row.
+    expect(paused.status).toBe('paused');
 
     // The halt is DURABLE — the AgentTask row carries the paused status.
     const row = await getTestPrisma().agentTask.findUnique({ where: { id: taskId } });
-    expect(row!.status).toBe('pending');
+    expect(row!.status).toBe('paused');
     // The already-successful node keeps its result; the parked node stays parked (awaiting a decision).
     expect(resultOf(paused, 'n1').status).toBe('success');
     expect(resultOf(paused, 'n2').status).toBe('waiting_confirmation');
@@ -215,9 +213,9 @@ describe('POST /api/tasks/[id] — real task control (pause / cancel / retry)', 
 
     const res = await postJson<Envelope<TaskPlan>>(
       taskPost,
-      taskUrl(taskId, sessionId),
+      taskUrl(taskId),
       { action: 'cancel' },
-      { ctx: idCtx(taskId) },
+      { ctx: idCtx(taskId), sessionId },
     );
 
     expect(res.status).toBe(200);
@@ -273,9 +271,9 @@ describe('POST /api/tasks/[id] — real task control (pause / cancel / retry)', 
 
     const res = await postJson<Envelope<TaskPlan>>(
       taskPost,
-      taskUrl(task.id, sessionId),
+      taskUrl(task.id),
       { action: 'retry' },
-      { ctx: idCtx(task.id) },
+      { ctx: idCtx(task.id), sessionId },
     );
 
     expect(res.status).toBe(200);
@@ -310,9 +308,9 @@ describe('POST /api/actions/[id]/{confirm,verify} — resume the parked plan wit
 
     const res = await postJson<Envelope<{ ok: boolean; status: string; tier: string; requiresMfa: boolean; events: AgentStreamEvent[] }>>(
       confirmPost,
-      actionUrl(parkedActionId!, 'confirm', sessionId),
+      actionUrl(parkedActionId!, 'confirm'),
       {},
-      { ctx: idCtx(parkedActionId!) },
+      { ctx: idCtx(parkedActionId!), sessionId },
     );
 
     expect(res.status).toBe(200);
@@ -368,9 +366,9 @@ describe('POST /api/actions/[id]/{confirm,verify} — resume the parked plan wit
 
     const res = await postJson<Envelope<{ ok: boolean; status: string; tier: string; mfaResult?: string; events: AgentStreamEvent[] }>>(
       verifyPost,
-      actionUrl(parkedActionId!, 'verify', sessionId),
+      actionUrl(parkedActionId!, 'verify'),
       { code: MFA_CODE },
-      { ctx: idCtx(parkedActionId!) },
+      { ctx: idCtx(parkedActionId!), sessionId },
     );
 
     expect(res.status).toBe(200);
@@ -404,8 +402,9 @@ describe('GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', 
       transferPlanNodes(200),
     );
 
-    const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(taskId, sessionId), {
+    const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(taskId), {
       ctx: idCtx(taskId),
+      sessionId,
     });
 
     expect(res.status).toBe(200);
@@ -433,16 +432,16 @@ describe('GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', 
     const turn = payload(chat);
 
     // The turn persisted exactly one durable plan for its session.
-    const listRes = await getJson<Envelope<{ plans: TaskPlan[] }>>(
-      tasksGet,
-      tasksUrl(turn.sessionId),
-    );
+    const listRes = await getJson<Envelope<{ plans: TaskPlan[] }>>(tasksGet, tasksUrl(), {
+      sessionId: turn.sessionId,
+    });
     const listed = payload(listRes).plans;
     expect(listed).toHaveLength(1);
     const planId = listed[0].id;
 
-    const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(planId, turn.sessionId), {
+    const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(planId), {
       ctx: idCtx(planId),
+      sessionId: turn.sessionId,
     });
     expect(res.status).toBe(200);
     const recovered = payload(res);
@@ -470,7 +469,7 @@ describe('GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', 
       data: { createdAt: new Date(2026, 8, 2, 10, 0, 0) },
     });
 
-    const res = await getJson<Envelope<{ plans: TaskPlan[] }>>(tasksGet, tasksUrl(sessionId));
+    const res = await getJson<Envelope<{ plans: TaskPlan[] }>>(tasksGet, tasksUrl(), { sessionId });
     expect(res.status).toBe(200);
     expect(payload(res).plans.map((plan) => plan.id)).toEqual([newer.id, older.id]);
 
@@ -481,32 +480,34 @@ describe('GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing', 
   });
 });
 
-describe('task endpoints — validation & authorization', () => {
-  it('POST /api/tasks/[id] without a session → 400 VALIDATION', async () => {
+describe('task endpoints — authorization (cookie-only identity)', () => {
+  it('POST /api/tasks/[id] without a session (no cookie) → 403 SECURITY_DENIED', async () => {
     const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
 
     const res = await postJson<Envelope<unknown>>(
       taskPost,
-      taskUrl(taskId), // no ?sessionId → no cookie → no session
+      taskUrl(taskId), // no cookie → requireIdentity rejects BEFORE the body is parsed
       { action: 'pause' },
       { ctx: idCtx(taskId) },
     );
 
-    expect(res.status).toBe(400);
-    expect(failure(res).code).toBe('VALIDATION');
+    expect(res.status).toBe(403);
+    expect(failure(res).code).toBe('SECURITY_DENIED');
     // The rejected control changed nothing.
     const row = await getTestPrisma().agentTask.findUnique({ where: { id: taskId } });
     expect(row!.status).toBe('waiting_confirmation');
   });
 
-  it('POST /api/tasks/[id] with a foreign session → 403 SECURITY_DENIED', async () => {
+  it('POST /api/tasks/[id] with a valid but FOREIGN session → 403 SECURITY_DENIED (ownership)', async () => {
     const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    // A REAL persisted session that does NOT own the task: identity passes, ownership fails.
+    const foreignSessionId = await newPersistedSessionId();
 
     const res = await postJson<Envelope<unknown>>(
       taskPost,
-      taskUrl(taskId, 'sess_intruder'),
+      taskUrl(taskId),
       { action: 'cancel' },
-      { ctx: idCtx(taskId) },
+      { ctx: idCtx(taskId), sessionId: foreignSessionId },
     );
 
     expect(res.status).toBe(403);
@@ -516,12 +517,52 @@ describe('task endpoints — validation & authorization', () => {
     expect(row!.status).toBe('waiting_confirmation');
   });
 
-  it('GET /api/tasks/[id] with an unknown id → 404 NOT_FOUND', async () => {
+  it('POST /api/tasks/[id] with an unknown id (valid cookie) → 404 NOT_FOUND', async () => {
+    const sessionId = await newPersistedSessionId();
+
+    const res = await postJson<Envelope<unknown>>(
+      taskPost,
+      taskUrl('task_missing'),
+      { action: 'pause' },
+      { ctx: idCtx('task_missing'), sessionId },
+    );
+
+    expect(res.status).toBe(404);
+    expect(failure(res).code).toBe('NOT_FOUND');
+  });
+
+  it('GET /api/tasks/[id] with an unknown id (valid cookie) → 404 NOT_FOUND', async () => {
+    const sessionId = await newPersistedSessionId();
     const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl('task_missing'), {
       ctx: idCtx('task_missing'),
+      sessionId,
     });
 
     expect(res.status).toBe(404);
     expect(failure(res).code).toBe('NOT_FOUND');
+  });
+
+  it('GET /api/tasks/[id] with no cookie → 403 SECURITY_DENIED (identity is cookie-only)', async () => {
+    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+
+    const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(taskId), {
+      ctx: idCtx(taskId),
+    });
+
+    expect(res.status).toBe(403);
+    expect(failure(res).code).toBe('SECURITY_DENIED');
+  });
+
+  it('GET /api/tasks/[id] for a task owned by a FOREIGN session → 403 SECURITY_DENIED', async () => {
+    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    const foreignSessionId = await newPersistedSessionId();
+
+    const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(taskId), {
+      ctx: idCtx(taskId),
+      sessionId: foreignSessionId,
+    });
+
+    expect(res.status).toBe(403);
+    expect(failure(res).code).toBe('SECURITY_DENIED');
   });
 });

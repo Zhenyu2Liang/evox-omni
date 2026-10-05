@@ -3,8 +3,11 @@
  *
  * Contract:
  *  - Body: `{}` (the action id comes from the path via `IdRouteContext`).
- *  - Ownership guard: the caller's session/user must own the pending action; an explicit mismatch
- *    is rejected with `403 SECURITY_DENIED`.
+ *  - IDENTITY: the caller's session/user come from the TRUSTED `banking_session` cookie
+ *    (`_lib/session#requireIdentity`); a missing cookie or unknown session → `403 SECURITY_DENIED`.
+ *    A `?sessionId=` / `?userId=` query param is IGNORED and can never widen access.
+ *  - Existence + ownership: evaluated only AFTER identity is established — an unknown action id is
+ *    `404 NOT_FOUND`; an action owned by a DIFFERENT session/user is `403 SECURITY_DENIED`.
  *  - Delegates to the agent runtime via `_lib/agent-bridge` `cancelOwned(id, { userId, sessionId })`
  *    (`@/agent`); marks the pending action `cancelled` and records an audit `cancelled` entry.
  *  - Success: `200 { ok: true, data: ActionResponse }` with `data.status === 'cancelled'`.
@@ -17,30 +20,33 @@ import { AppError } from '@/lib/errors';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import { cancelOwned } from '../../../_lib/agent-bridge';
 import { errorResponse, jsonResponse } from '../../../_lib/http';
-import { resolveSessionId, resolveUserId } from '../../../_lib/session';
+import { requireIdentity } from '../../../_lib/session';
 import type { ActionResponse, IdRouteContext } from '../../../_lib/types';
 
 export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Response> {
   try {
     const id = (await ctx.params).id;
-    const sessionId = resolveSessionId(req);
-    const userId = resolveUserId(req);
 
-    // Ownership guard: a caller may only settle its OWN pending action. Only an explicit mismatch
-    // is rejected — when no session is resolvable we do NOT invent one.
+    // Trusted identity: cookie-only, server-validated. Missing cookie / unknown session → 403.
+    const identity = await requireIdentity(req);
+    const { sessionId, userId } = identity;
+
+    // Existence first: an unknown action id is `404 NOT_FOUND`, distinct from a forbidden one.
     const row = await getPendingAction(id);
-    if (
-      row &&
-      ((sessionId !== undefined && row.sessionId !== sessionId) || row.userId !== userId)
-    ) {
+    if (!row) {
+      throw new AppError('NOT_FOUND', `未找到待处理的操作: ${id}`);
+    }
+
+    // Ownership guard: a caller may only settle its OWN pending action (mismatch → 403).
+    if (row.sessionId !== sessionId || row.userId !== userId) {
       throw new AppError('SECURITY_DENIED', '无权取消该操作。');
     }
 
     const outcome = await cancelOwned(id, { userId, sessionId });
 
     // `ConfirmationOutcome` does not carry the session id: derive it from the persisted
-    // `PendingAction` row, falling back to the request session (cookie/query) when absent.
-    const responseSessionId = row?.sessionId ?? sessionId ?? '';
+    // `PendingAction` row (the caller is already known to own it).
+    const responseSessionId = row.sessionId;
 
     const mapped: ActionResponse = {
       actionId: outcome.actionId,

@@ -9,15 +9,20 @@
  * (`runInTransaction`), so the two either commit together or roll back together: a partial debit
  * can never survive and a concurrent call can never drive the balance negative.
  *
+ * Optional at-most-once semantics: when a caller supplies `idempotencyKey`, the ledger row id is
+ * derived deterministically from `(userId, key)` and reused as the primary key, so a repeat is
+ * rejected by the PK uniqueness and the original row is replayed instead of double-debiting.
+ *
  * Throws `AppError`:
  *  - `VALIDATION`        — missing/invalid recipient or non-positive amount.
  *  - `NOT_FOUND`         — no contact matches the given id/phone/name.
  *  - `CONFLICT`          — a name matches multiple contacts (`detail.candidates` lists them).
  *  - `INSUFFICIENT_FUNDS`— funding account balance < amount.
  */
-import type { Account, Contact } from '@prisma/client';
+import { createHash } from 'node:crypto';
+import type { Account, Contact, Transaction } from '@prisma/client';
 import { demoNow } from '../lib/clock';
-import { accounts, contacts } from '../lib/db/repositories';
+import { accounts, contacts, transactions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { parseAmount, round2 } from '../lib/money';
 import { toContactView } from './contact';
@@ -31,6 +36,30 @@ function toRecipient(contact: Contact): TransferRecipient {
     name: contact.name,
     phone: contact.phone,
     bank: contact.bank ?? undefined,
+  };
+}
+
+/** Deterministic ledger-row id derived from (userId, idempotencyKey) — the idempotency dedup key. */
+function idempotentTransferId(userId: string, idempotencyKey: string): string {
+  const digest = createHash('sha256').update(`${userId}\u0000${idempotencyKey}`).digest('hex');
+  return `txidem_${digest.slice(0, 32)}`;
+}
+
+/** Structural Prisma unique-constraint (P2002) check — avoids importing the runtime error class. */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
+}
+
+/** Build the TransferResult for an idempotent replay from the already-persisted ledger row. */
+function replayResult(existing: Transaction, recipient: Contact, newBalance: number): TransferResult {
+  return {
+    success: true,
+    transactionId: existing.id,
+    newBalance,
+    recipient: toRecipient(recipient),
+    amount: Math.abs(existing.amount),
+    remark: existing.remark ?? undefined,
+    occurredAt: existing.occurredAt.getTime(),
   };
 }
 
@@ -110,6 +139,11 @@ async function resolveFundingAccount(userId: string, input: TransferInput): Prom
  * The debit is a CONDITIONAL `updateMany` (`balance >= amount`). If it matches nothing the transfer
  * is rejected with `INSUFFICIENT_FUNDS` (carrying the current balance) and NOTHING is written — so
  * a negative balance is impossible even under concurrency.
+ *
+ * When `idempotencyKey` is supplied the call is at-most-once: the ledger row id is deterministic
+ * from `(userId, key)`, so a repeat finds and replays the original row (same `transactionId`, no
+ * second debit). Concurrent same-key calls are still safe — the loser's insert violates the PK and
+ * its transaction rolls back (no debit), then the committed row is replayed.
  */
 export async function createTransfer(input: TransferInput): Promise<TransferResult> {
   const amount = round2(parseAmount(input.amount));
@@ -122,47 +156,79 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
 
   const occurredAt = demoNow();
 
-  const { transactionId, newBalance } = await runInTransaction(async (tx) => {
-    // Atomic sufficient-funds check + debit: fails with count 0 (no partial write) when short.
-    const debited = await tx.account.updateMany({
-      where: { id: account.id, userId: input.userId, balance: { gte: amount } },
-      data: { balance: { decrement: amount } },
+  const key = input.idempotencyKey?.trim();
+  const txId = key ? idempotentTransferId(input.userId, key) : undefined;
+
+  type Outcome =
+    | { kind: 'executed'; transactionId: string; newBalance: number }
+    | { kind: 'replay'; existing: Transaction; newBalance: number };
+
+  let outcome: Outcome;
+  try {
+    outcome = await runInTransaction(async (tx): Promise<Outcome> => {
+      if (txId !== undefined) {
+        const existing = await tx.transaction.findUnique({ where: { id: txId } });
+        if (existing) {
+          const current = await tx.account.findUnique({ where: { id: account.id } });
+          return { kind: 'replay', existing, newBalance: current?.balance ?? 0 };
+        }
+      }
+
+      // Atomic sufficient-funds check + debit (unchanged behavior).
+      const debited = await tx.account.updateMany({
+        where: { id: account.id, userId: input.userId, balance: { gte: amount } },
+        data: { balance: { decrement: amount } },
+      });
+      if (debited.count === 0) {
+        const current = await tx.account.findUnique({ where: { id: account.id } });
+        throw new AppError(
+          'INSUFFICIENT_FUNDS',
+          `Insufficient funds: balance ${current?.balance ?? 0} < amount ${amount}`,
+          { balance: current?.balance ?? 0, amount },
+        );
+      }
+
+      const transaction = await tx.transaction.create({
+        data: {
+          ...(txId !== undefined ? { id: txId } : {}),
+          accountId: account.id,
+          userId: input.userId,
+          amount: -amount,
+          direction: 'DEBIT',
+          category: '转账',
+          merchant: '转账给' + recipient.name,
+          channel: 'TRANSFER',
+          remark: input.remark,
+          counterpartyId: recipient.id,
+          occurredAt: new Date(occurredAt),
+          currency: 'CNY',
+        },
+      });
+
+      const updated = await tx.account.findUnique({ where: { id: account.id } });
+      if (!updated) throw new AppError('NOT_FOUND', `Funding account ${account.id} not found`);
+      return { kind: 'executed', transactionId: transaction.id, newBalance: updated.balance };
     });
-    if (debited.count === 0) {
-      const current = await tx.account.findUnique({ where: { id: account.id } });
-      throw new AppError(
-        'INSUFFICIENT_FUNDS',
-        `Insufficient funds: balance ${current?.balance ?? 0} < amount ${amount}`,
-        { balance: current?.balance ?? 0, amount },
-      );
+  } catch (error) {
+    // Concurrent same-key race: another call committed the row first → our tx rolled back (no debit).
+    if (txId !== undefined && isUniqueViolation(error)) {
+      const existing = await transactions.getTransaction(txId);
+      if (existing) {
+        const account2 = await accounts.getAccount(account.id);
+        return replayResult(existing, recipient, account2?.balance ?? 0);
+      }
     }
+    throw error;
+  }
 
-    const transaction = await tx.transaction.create({
-      data: {
-        accountId: account.id,
-        userId: input.userId,
-        amount: -amount,
-        direction: 'DEBIT',
-        category: '转账',
-        merchant: '转账给' + recipient.name,
-        channel: 'TRANSFER',
-        remark: input.remark,
-        counterpartyId: recipient.id,
-        occurredAt: new Date(occurredAt),
-        currency: 'CNY',
-      },
-    });
-
-    const updated = await tx.account.findUnique({ where: { id: account.id } });
-    if (!updated) throw new AppError('NOT_FOUND', `Funding account ${account.id} not found`);
-
-    return { transactionId: transaction.id, newBalance: updated.balance };
-  });
+  if (outcome.kind === 'replay') {
+    return replayResult(outcome.existing, recipient, outcome.newBalance);
+  }
 
   return {
     success: true,
-    transactionId,
-    newBalance,
+    transactionId: outcome.transactionId,
+    newBalance: outcome.newBalance,
     recipient: toRecipient(recipient),
     amount,
     remark: input.remark,

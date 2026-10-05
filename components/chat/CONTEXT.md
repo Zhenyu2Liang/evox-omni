@@ -28,12 +28,15 @@ export interface UseAgentStreamResult {
   pendingAction?: PendingHumanDecision;              // { kind, summary, actionId, hint? }
   streamingText: string;
   busy: boolean;
+  restoring: boolean;                                // true while the mount-time pending-actions read is in flight
+  mfaAttempts: number;                               // failed MFA attempts for the ACTIVE decision (0 when none)
   error?: string;
   applyEvents(events: AgentStreamEvent[]): void;     // fold a batch (used by actions + SSE)
   send(text: string): Promise<void>;                 // POST /api/chat, fold response
   confirm(actionId: string): Promise<void>;          // POST /api/actions/:id/confirm
   verify(actionId: string, code: string): Promise<void>; // POST .../verify
   cancel(actionId: string): Promise<void>;           // POST .../cancel
+  controlTask(action: TaskControlAction, planId?: string): Promise<void>; // POST /api/tasks/:id { action }
 }
 export interface UseAgentStreamOptions { sessionId?: string; endpoints?: ChatEndpoints;
   initialMessages?: ChatMessage[]; taskId?: string; }   // taskId → refresh recovery on mount
@@ -69,7 +72,8 @@ export interface ChatEndpoints {
   confirm: (actionId: string) => string;       // default `/api/actions/${id}/confirm`
   verify:  (actionId: string) => string;       // default `/api/actions/${id}/verify`
   cancel:  (actionId: string) => string;       // default `/api/actions/${id}/cancel`
-  task:    (id: string) => string;             // default `/api/tasks/${id}` — read ONE persisted plan
+  task:    (id: string) => string;             // default `/api/tasks/${id}` — read/control ONE persisted plan
+  actions: string;                             // default '/api/actions' — list non-terminal pending actions
 }
 export const DEFAULT_ENDPOINTS: ChatEndpoints;
 export function sendChatTurn(req: ChatTurnRequest, endpoints?: ChatEndpoints): Promise<ChatTurnResponse>;
@@ -79,7 +83,22 @@ export function cancelAction(actionId: string, endpoints?: ChatEndpoints): Promi
 // NEVER-throwing plan read (refresh recovery): resolves the plan, else undefined on
 // non-ok / error-envelope / malformed body / exception. Never surfaces a raw error to the UI.
 export function fetchTaskPlan(id: string, endpoints?: ChatEndpoints): Promise<TaskPlan | undefined>;
+// POST the SAME `task(id)` URL with `{ action }`; resolves the post-control snapshot, else undefined.
+export function controlTask(id: string, action: TaskControlAction, endpoints?: ChatEndpoints): Promise<TaskPlan | undefined>;
+// GET `actions`; tolerant of a top-level array OR `{ actions: [...] }`; keeps only actionable
+// (pending | awaiting_mfa) rows. Best-effort — resolves `[]` on ANY failure (never throws).
+export interface PendingActionRef { id: string; status: PendingActionStatus; tier: RiskLevel;
+  requiresMfa: boolean; summary: PendingActionSummary; }
+export function fetchPendingActions(endpoints?: ChatEndpoints): Promise<PendingActionRef[]>;
+export type { TaskControlAction };   // re-exported from the chat barrel (`./index.ts`)
 ```
+
+`postAction` (the confirm/verify/cancel path) maps the `ActionResponse` to events defensively: an
+**escalation / MFA-prompt** outcome (`requiresMfa && tier === 'RED' && !executed`, not a failed code)
+gets an `mfa_required` `AgentStreamEvent` ensured (synthesised when the server omitted one) and is
+**not** turned into a spurious `error`; any other `ok:false` outcome gets an `error` event appended
+when the server sent none (e.g. a wrong MFA code arrives as `ok:false` + `status:'awaiting_mfa'` +
+`mfaResult:'failed'` with an EMPTY event list).
 
 ## Event → state fold (consumed by `useAgentStream` / `ChatWindow`)
 
@@ -137,6 +156,31 @@ removal is dropped (no empty bubble). Older/unrelated decision cards are preserv
 - never overwrites a plan a live `plan_update` already delivered, and ignores a stale/unmounted or
   failed fetch (an `alive` cleanup flag; `fetchTaskPlan` resolves `undefined` instead of throwing).
 
+**Pending-action refresh restore.** A second one-shot mount effect rebuilds the active human decision
+(so a reloaded page still shows the confirm/MFA card for an in-flight action): when there is no live
+`pendingAction` it `fetchPendingActions()` and restores the MOST RELEVANT non-terminal one —
+`requiresMfa || status === 'awaiting_mfa' || tier === 'RED'` → the `mfa` kind, else the
+`confirmation` kind. `restoring` is `true` while that read is in flight. Same guards as the plan
+recovery: an `alive` cleanup flag, a functional `setState` that refuses to clobber a non-undefined
+`pendingAction`, and a best-effort `[]` on failure — it NEVER throws to the UI.
+
+### Plan control (pause / resume / cancel / retry)
+
+`useAgentStream.controlTask(action, planId?)` (defaulting `planId` to `state.activePlan?.id`) POSTs
+`endpoints.task(id)` with `{ action }` via `controlTask` and folds the returned post-control snapshot
+into the SAME `activePlan` slot (reusing the latest-wins `upsertPlan`). It sets `busy` around the call
+and, on failure (`undefined`), surfaces a SAFE `error`; never throws. `ChatWindow` exposes it through
+`CardActionHandlers.onTaskControl`, which `./cards/PlanCard` calls for its pause/resume/cancel/retry
+buttons.
+
+### MFA attempt counter
+
+`ChatUIState.mfaAttempts` counts CONSECUTIVE failed verifications for the ACTIVE decision. `verify()`
+increments it (post-`pull`, functional `setState`) only when the turn ends with an `mfa` `pendingAction`
+still active AND an `error` set (a wrong code). An effect keyed on `pendingAction.actionId` + `kind`
+resets it to `0` whenever the decision settles/clears or is replaced (success, cancel, or a new turn).
+`ChatWindow` threads it into `MfaCard.attempts` via `CardActionHandlers.mfaAttempts`.
+
 ## Known Issues
 
 - `applyEvent` has a `default: return state` branch (no `assertNever`) — a NEW `AgentStreamEvent` variant silently no-ops instead of failing compilation (contrast `CardRenderer`'s exhaustive guard).
@@ -155,15 +199,20 @@ removal is dropped (no empty bubble). Older/unrelated decision cards are preserv
 - **No MFA code** is displayed anywhere; `MfaCard` (in `./cards`) shows only the hint.
 - No `prisma`; data via props + `fetch` to `./app`. Money/status visuals via `../../ui`.
 - `actions.ts` helpers **never throw** — every failure (network / parse / non-OK / domain `ok:false`)
-  folds into a safe `{ type: 'error', message }` `AgentStreamEvent` (or, for `fetchTaskPlan`,
-  `undefined`), so the UI never sees a raw exception.
+  folds into a safe `{ type: 'error', message }` `AgentStreamEvent`; the best-effort reads
+  (`fetchTaskPlan`, `controlTask`, `fetchPendingActions`) instead resolve to `undefined` / `[]`,
+  so the UI never sees a raw exception.
 - Named exports only; files ≲ ~1000 lines, one concern per file.
-- `ChatWindow` builds the `CardActionHandlers` bundle with `actionId`/`onConfirm`/`onVerify`/`onCancel`/`busy`/`error`
-  **plus** the anomaly handlers `onAcknowledge`/`onViewDetail`/`onFreeze`. Those three are
+- `ChatWindow` builds the `CardActionHandlers` bundle with `actionId`/`onConfirm`/`onVerify`/`onCancel`
+  /`onTaskControl`/`mfaAttempts`/`busy`/`error` **plus** the anomaly handlers
+  `onAcknowledge`/`onViewDetail`/`onFreeze`. `onTaskControl` is `stream.controlTask`; the anomaly three are
   fire-and-forget `stream.send(...)` calls (「这笔交易是我本人消费」/「我想查看这笔交易的详情」/「冻结我的银行卡」),
   so every anomaly button flows chat → agent → Security Gateway as an ordinary user message — the browser
   never calls a banking op directly (the freeze button drives `freeze_card`, which the gateway routes YELLOW
   → user confirmation).
+- `ChatWindow` renders the live plan with control wiring (`<PlanCard plan={stream.activePlan}
+  onControl={action.onTaskControl} busy={stream.busy} />`) and, while `stream.restoring` with nothing
+  else to show, a `Spinner` + loading label **instead of** the empty state.
 
 ## Test Strategy
 
@@ -182,8 +231,8 @@ removal is dropped (no empty bubble). Older/unrelated decision cards are preserv
 - `./Composer.tsx` → input + send
 - `./ToolEventList.tsx` → tool/task status timeline (no chain-of-thought)
 - `./StreamingText.tsx` → incremental assistant text
-- `./useAgentStream.ts` → the event→state hook (chat state machine) + refresh recovery
-- `./actions.ts` → typed client fetch helpers + `ChatEndpoints`/`DEFAULT_ENDPOINTS`/`fetchTaskPlan`
+- `./useAgentStream.ts` → the event→state hook (chat state machine) + refresh recovery (plan AND pending action) + plan control + MFA attempt counter
+- `./actions.ts` → typed client fetch helpers + `ChatEndpoints`/`DEFAULT_ENDPOINTS`/`fetchTaskPlan`/`controlTask`/`fetchPendingActions`
 - `./cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher
 - `./index.ts` → re-exports the chat surface + action helpers
 - `../../ui/` → primitives used here (dependency — read-only)

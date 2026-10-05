@@ -67,6 +67,44 @@ history (system prompt is separate in `context.systemPrompt`): user messages, as
    `submit_plan`. Emitted args match the TypeBox schemas in `../tools/*.ts` EXACTLY; `userId` is
    NEVER emitted (server-injected).
 
+#### Direct ACTION routes (`classifyDirectAction`, consulted BEFORE the broad READ matchers)
+
+`classify` runs the READ matchers (异常/流水/花了/概览/余额/卡片/订阅/持仓/理财/…) only AFTER a
+`classifyDirectAction(t, messages)` block (in `classify`, just below the
+`if (isConditionalPlan(t)) return handlePlan(t);` line). Its purpose: a prompt that targets a gated
+(🟡/🔴) tool is routed to that ACTION — never answered with a query result through a broad matcher
+like `/(卡片|额度)/ ⇒ get_cards` or `/(订阅)/ ⇒ list_subscriptions`. The chain returns the FIRST
+non-`undefined` of: `classifySetCardLimit` → `classifyFreezeCard` → `classifySubscribeInvestment` →
+`classifyRedeemInvestment` → `classifyCancelSubscription` → `classifyActionFollowUp`. Each emits ONE
+tool call (the shared `toolCall(name, args)` helper hardcodes the id `call_<name>`), or a
+`plain(...)` CLARIFICATION for the SPECIFIC missing field, or `undefined` to fall through to the READ
+matchers.
+
+| Trigger (fuzzy) | Action route | Emitted call |
+|---|---|---|
+| 限额/额度 + adjustment verb (调整到/调整为/调整成/调整至/调到/调成/改成/改为/设置为/设为/限额为…), e.g. `把信用卡娱乐限额调整到1500` | `classifySetCardLimit` | 🟡 `set_card_limit { cardId, category, amount }`; missing amount ⇒ clarification `LIMIT_AMOUNT_QUESTION` |
+| 冻结…卡 (not 被冻结/已冻结) | `classifyFreezeCard` | 🟡 `freeze_card { cardId }`; no 卡 ⇒ clarification |
+| 申购/认购/买入/购买 (+ 理财/基金/产品), e.g. `申购稳健理财A 1000元` | `classifySubscribeInvestment` | 🔴 `subscribe_investment { productId, amount }`; missing product/amount ⇒ clarification |
+| 赎回, or 取出 + 理财/基金/产品 | `classifyRedeemInvestment` | 🔴 `redeem_investment { holdingId }` (best effort) |
+| 取消/退订 + 订阅/会员/续费 (or a known subscription name), e.g. `取消Netflix订阅` | `classifyCancelSubscription` | 🟡 `cancel_subscription { subscriptionId }`; missing name ⇒ clarification |
+| a BARE amount that answers OUR OWN limit/subscribe clarification | `classifyActionFollowUp` | reuses the earlier parsed card/product (cheap multi-turn) |
+
+Scripted id helpers (PURITY: the responder holds no DB access — they mirror
+`tests/helpers/fixtures.ts`): `resolveCardId` (`/借记卡|储蓄卡/ ⇒ 'card_debit'`, else
+`DEMO_CREDIT_CARD_ID='card_credit'`); `PRODUCT_ID_BY_NAME` (稳健理财A→`prod_wenjiana`,
+稳健理财B→`prod_wenjib`, 进取混合C→`prod_jinrong`, 货币基金→`prod_huobi`; an unknown name is used
+verbatim as `productId`, best effort); `SUBSCRIPTION_ID_BY_NAME` (Netflix→`sub_netflix`,
+Spotify→`sub_spotify`, iCloud→`sub_icloud`, 视频会员→`sub_video`; unknown ⇒ verbatim);
+`DEMO_HOLDING_ID='holding_wenjiana'`.
+
+The `LIMIT_ADJUSTMENT_VERB` string covers 调整到/调整成/调整至 as well as the older 调整为/改为/…, and
+`parseCardLimitAdjustment` (the conditional-plan branch) + `classifySetCardLimit` (the direct route)
+both use the SHARED `LIMIT_ADJUSTMENT_AMOUNT_RE`, so the amount AFTER the verb is parsed identically
+on both paths (never the earlier threshold number of a 如果…就… plan trigger).
+
+An action intent with missing info is ALWAYS a clarification — the missing field is NEVER defaulted
+and NEVER falls back to a read tool.
+
 Additional behaviours:
 - **Multi-turn reuse** — "还是刚才那个人，再转100" reuses the recipient from a prior
   `transfer_money` toolCall / prior contact resolution and takes only the new amount.
@@ -80,7 +118,7 @@ Additional behaviours:
   keywords and narrated as "awaiting user confirmation / verification — not executed". It NEVER
   claims the action executed.
 - **`handlePlan` can emit a GATED node** — a conditional message that ALSO asks to adjust a card
-  spend limit (限额/额度 + 调整为/改为/…) builds a `submit_plan` DAG of
+  spend limit (限额/额度 + 调整到/调整为/改为/…) builds a `submit_plan` DAG of
   `analyze`(tool `analyze_spending`, GREEN) → `check`(condition `analyze.total > <threshold>`) →
   `setlimit`(tool `set_card_limit`, args `{ cardId:'card_credit', category:<parsed>, amount:<parsed> }`,
   YELLOW). The canonical trigger is exactly `如果这个月娱乐消费超过2000元，就把娱乐消费限额调整为1500元`
@@ -145,22 +183,16 @@ Vitest (`../tests`, sibling). This node is a thin, well-isolated boundary:
   never appears in the return value.
 - `live` mode is not unit-tested (network + key); it is exercised manually for the demo.
 
-The responder unit spec lives at `tests/unit/agent/providers/provider-mock.test.ts` and is
-auto-discovered by the ROOT `vitest.config.ts` (`test.include: ['tests/**/*.{test,spec}.ts']`) via
-`npm run test`; `tests/` is a read-only SIBLING of this node.
-The gated-plan spec `plan-limit-park.test.ts` is a STAGING COPY inside `./agent/providers/` that the
-ROOT must relocate to `tests/unit/agent/providers/` (writers here cannot create files under `tests/`).
-To run it PRE-relocation, use a temporary vitest config (created at the REPOSITORY ROOT) whose
-`test.include` is exactly the staged file, `setupFiles: ['tests/setup.ts']` and `env: { LLM_MODE: 'mock' }`,
-and invoke it from the REPOSITORY ROOT (a `node_modules` junction in a worktree makes vitest load a
-duplicate instance and fail with "No test suite found"); delete the config afterwards.
+The responder unit spec lives at `tests/unit/agent/providers/provider-mock.test.ts` and the
+gated-plan spec at `tests/unit/agent/providers/plan-limit-park.test.ts`; both are auto-discovered by
+the ROOT `vitest.config.ts` (`test.include: ['tests/**/*.{test,spec}.ts']`) via `npm run test`;
+`tests/` is a read-only SIBLING of this node (no test files live under `./agent/providers/`).
 
 ## Routing Table
 
 - `./agent/providers/provider-live.ts` → `createLiveModel(cfg)` — real Pi AI model (demo-only)
 - `./agent/providers/provider-mock.ts` → `createMockModel(cfg)` — self-requeuing faux factory (offline, deterministic, interactive)
-- `./agent/providers/mock-responder.ts` → `respond(context)` — PURE scripted decision logic (intent → tool call / clarify / narrate)
-- `./agent/providers/plan-limit-park.test.ts` → STAGED spec: gated conditional plan (`respond` pure + full pipeline parking/confirm E2E); ROOT must relocate it to `tests/unit/agent/providers/plan-limit-park.test.ts`
+- `./agent/providers/mock-responder.ts` → `respond(context)` — PURE scripted decision logic (intent → tool call / clarify / narrate); `classify` (READ routes) + `classifyDirectAction` (gated ACTION routes: set_card_limit / freeze_card / subscribe_investment / redeem_investment / cancel_subscription) + `handlePlan` (conditional DAG)
 - `./agent/providers/index.ts` → node facade: `resolveModel`, `providerId`
 - `../banking-agent.ts` → sole consumer; receives a `Model` from `resolveModel` (sibling file, same node — read-only here)
 - `@/lib/config` → `AppConfig` + `getConfig()` (cross-node dependency — read-only)

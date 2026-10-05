@@ -2,7 +2,9 @@
  * POST /api/security/reset — clears the CURRENT session's circuit-breaker state.
  *
  * Contract:
- *  - Session id: `?sessionId=` query → the `banking_session` cookie → `''` (no session yet).
+ *  - IDENTITY: the session comes from the TRUSTED `banking_session` cookie
+ *    (`_lib/session#requireIdentity`); a missing cookie or unknown session → `403 SECURITY_DENIED`.
+ *    A `?sessionId=` query param is IGNORED — a caller can never unlock another session's breaker.
  *  - Delegates to `@/security`: `circuitBreaker.resetSession(sessionId, { actor, reason })` — the
  *    AUDITED unlock: it clears the session's breaker state AND records a `SECURITY_RESET`
  *    `SecurityEvent` (never fire-and-forget), returning the fresh `CircuitBreakerState`.
@@ -17,17 +19,8 @@
  */
 import type { NextRequest } from 'next/server';
 import { security } from '@/security';
-import { jsonResponse, errorResponse, parseQuery } from '../../_lib/http';
-import { sessionIdQuerySchema } from '../../_lib/schemas';
-import { resolveSessionId } from '../../_lib/session';
-
-/**
- * Query schema for `POST /api/security/reset`.
- *
- * PRIVATE on purpose: an App Router `route.ts` may only export HTTP-method handlers (plus
- * known config fields and types) — exporting a runtime schema value breaks `next build`.
- */
-const resetQuerySchema = sessionIdQuerySchema;
+import { jsonResponse, errorResponse } from '../../_lib/http';
+import { requireIdentity } from '../../_lib/session';
 
 /** Success payload shape for `POST /api/security/reset`. */
 export interface ResetData {
@@ -41,8 +34,9 @@ export interface ResetData {
 
 export async function POST(req: NextRequest): Promise<Response> {
   try {
-    const query = parseQuery(resetQuerySchema, req);
-    const sessionId = query.sessionId ?? resolveSessionId(req) ?? '';
+    // Trusted identity: cookie-only, server-validated. Missing cookie / unknown session → 403.
+    const identity = await requireIdentity(req);
+    const sessionId = identity.sessionId;
 
     // Audited unlock: clears the breaker state for this session and records a
     // `SECURITY_RESET` SecurityEvent; returns the fresh state.

@@ -28,10 +28,11 @@ Primary public exports (grouped — full per-component prop signatures live in e
 
 - Chat surface (`./chat`): `ChatWindow`, `MessageBubble`, `Composer`, `ToolEventList`, `StreamingText`,
   `useAgentStream`, and the client action helpers `sendChatTurn`, `confirmAction`, `verifyAction`,
-  `cancelAction`, `DEFAULT_ENDPOINTS`, `ChatEndpoints`.
+  `cancelAction`, `controlTask`, `fetchTaskPlan`, `fetchPendingActions`, `DEFAULT_ENDPOINTS`, `ChatEndpoints`.
 - Card renderers (`./chat/cards`): `CardRenderer` (dispatches on `ChatCard['type']`) plus the 11 card
   components (`BalanceCard`, `TransferCard`, `ConfirmationCard`, `MfaCard`, `SpendingCard`, `CardsCard`,
-  `InvestmentsCard`, `SubscriptionsCard`, `AnomalyCard`, `PlanCard`, `ErrorCard`) and their prop types.
+  `InvestmentsCard`, `SubscriptionsCard`, `AnomalyCard`, `PlanCard`, `ErrorCard`) and their prop types
+  (`CardActionHandlers`, `TaskControlAction`, the card-data payload types).
 - Charts (`./charts`): `SpendingPie`, `SpendingBar`, `SpendingTrend`, `MiniSparkline`.
 - Banking tiles (`./banking`): `AssetSummaryCard`, `RecentTransactions`, `CardTile`, `SubscriptionTile`,
   `InvestmentProductTile`, `AnomalyBanner`, `AgentTaskTimeline`.
@@ -64,6 +65,24 @@ Because most variants carry `data: unknown` in the frozen contract, `CardRendere
 `data` to its concrete SDK DTO (see the table) before passing it down. The `./app` chat serialiser is
 responsible for populating `cards[].data` with exactly these shapes.
 
+## Closed loop (confirm / MFA / DAG control)
+
+The interactive cards are wired into ONE closed loop, driven by `useAgentStream` + `./app` routes:
+
+- **YELLOW confirm** — a `confirmation_required` event renders `ConfirmationCard` (summary fields + `Money`
+  amount, 确认/取消). Confirm/Cancel only call `onConfirm`/`onCancel` → the hook POSTs to `./app`; the browser
+  never fabricates success — the factual outcome arrives as server events.
+- **RED MFA / escalation** — an `mfa_required` event renders `MfaCard` (code input + optional attempt count).
+  A confirm response carrying `requiresMfa:true` / `tier:'RED'` (YELLOW→RED escalation, or a still-unverified
+  RED action) switches the SAME `actionId` to MFA entry — never a dead-end. A wrong code is a normal `200`
+  with `ok:false`; the card stays up showing the error and bumps `mfaAttempts`.
+- **DAG control** — `PlanCard` renders each node's status (via `AgentTaskTimeline`) and Pause/Resume/Cancel/
+  Retry controls conditioned on `plan.status`, calling `onControl(TaskControlAction)` → the hook's `controlTask`
+  POSTs `{action}` to `/api/tasks/:id` and folds the returned snapshot into the live `activePlan` slot.
+- **Refresh restore** — on mount `useAgentStream` rebuilds an in-flight decision from `GET /api/actions`
+  and the live plan from `GET /api/tasks/:id`; `restoring` drives a loading state. Both are best-effort and
+  never clobber a live event-delivered state.
+
 ## Client / Server Component split
 
 - **Client Components** (`'use client'`) — require hooks/interactivity/fetch/Recharts:
@@ -83,9 +102,15 @@ owned by `./app`; the component layer only depends on this shape:
 - `POST /api/chat` — body `ChatTurnRequest` (`{ sessionId?, message }`) → `ChatTurnResponse` (`{ sessionId, events: AgentStreamEvent[] }`).
   (The live chat stream may be delivered as SSE on the same path; `sendChatTurn` normalises to events.)
 - `POST /api/actions/:id/confirm` — body `{}` → `ChatTurnResponse`. Executes a YELLOW action's original
-  validated args server-side and returns the narration events.
+  validated args server-side and returns the narration events. The raw `ActionResponse` also carries
+  `{ ok, status, tier, requiresMfa, mfaResult }` which `postAction` folds into events (escalation handling).
 - `POST /api/actions/:id/verify` — body `{ code: string }` → `ChatTurnResponse`. RED MFA path.
 - `POST /api/actions/:id/cancel` — body `{}` → `ChatTurnResponse`.
+- `GET /api/actions` — body none → the caller session's NON-TERMINAL `PendingAction` rows (accepted as a bare
+  array or `{ actions: [...] }`). Drives the **refresh restore** of an in-flight confirm/MFA decision; read
+  tolerantly by `fetchPendingActions` (never throws → best-effort `[]`). **Owned by `./app` (see Notes for Agents).**
+- `GET /api/tasks/:id` — `{ ok:true, data: TaskPlan }` (plan refresh recovery); `POST /api/tasks/:id` body
+  `{ action: 'pause'|'resume'|'cancel'|'retry' }` → `{ ok:true, data: TaskPlan }` (snapshot AFTER the control).
 - Errors are surfaced as an `{ type: 'error', message }` `AgentStreamEvent` (never a raw exception in UI).
 - `ChatEndpoints` + `DEFAULT_ENDPOINTS` centralise these URLs so pages can override them in tests.
 
@@ -116,9 +141,9 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
 - The **exhaustive `CardRenderer` mapping** is enforced at compile time (`assertNever` default branch):
   a new `ChatCard` variant breaks `tsc`/`next build` until a renderer is added — this is the primary
   regression guard.
-- Unit-testable without a DOM: `ui/Money` formatting, `StatusBadge` tier→label mapping, and the
+- Unit-testable without a DOM: `ui/Money` formatting, `StatusBadge` tier→label mapping, the
   `useAgentStream` event→state reducer (pure fold, testable with `AgentStreamEvent[]` fixtures from the
-  faux-provider scenarios).
+  faux-provider scenarios), and `PlanCard.controlActionsFor` (status → control-set mapping).
 - Rendering tests use React Testing Library (jsdom) rendering each card type with a fixture `ChatCard`
   and asserting key amounts/statuses; the `ChatWindow` integration test drives a scripted
   `AgentStreamEvent[]` sequence. (Test deps are added by the root `tests` owner.)
@@ -126,7 +151,7 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
 ## Routing Table
 
 - `./ui/` → Tailwind-styled primitives (Card, Button, Badge, StatusBadge, Money, Tabs, Dialog, Spinner, EmptyState, Table)
-- `./chat/` → chat surface: ChatWindow, MessageBubble, Composer, ToolEventList, StreamingText, useAgentStream hook, client action helpers
+- `./chat/` → chat surface: ChatWindow, MessageBubble, Composer, ToolEventList, StreamingText, useAgentStream hook, client action helpers, task-control (pause/resume/cancel/retry) + refresh restore
 - `./chat/cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher + card-data/action-handler types
 - `./charts/` → Recharts wrappers (SpendingPie, SpendingBar, SpendingTrend, MiniSparkline)
 - `./banking/` → read-model tiles/banners (AssetSummaryCard, RecentTransactions, CardTile, SubscriptionTile, InvestmentProductTile, AnomalyBanner, AgentTaskTimeline)
@@ -143,3 +168,9 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
 - `docs/` (design language, test-cases) is a root sibling; escalate any write there to the root.
 - Money-moving buttons (confirm/verify/cancel) only ever call the `./app` action routes — the browser
   NEVER executes a gated banking op directly; the server re-validates and executes.
+- **App-node interface the closed loop depends on (report needs, do NOT fork a frozen contract):**
+  `GET /api/actions` must return the caller session's non-terminal `PendingAction`s for refresh restore
+  (accepted shapes: a bare array or `{ actions: [...] }`; each row needs `{ id, status, tier, requiresMfa, summary }`).
+  Optionally, a `pendingActionId` on a plan node result (declared in `lib/contracts/task.ts`, root-owned) would let
+  the plan view link a parked node to its decision; a server-provided MFA attempt count would let `mfaAttempts`
+  survive reloads (it currently counts only in-session failed verifies).

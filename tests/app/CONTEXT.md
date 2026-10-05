@@ -21,8 +21,11 @@ complementing the in-process `tests/scenarios/*` suites.
   Contains NO business logic and does NOT re-implement the envelope (framing lives in
   `app/api/_lib/http.ts`). It NEVER imports route modules — each spec imports the handler(s) it drives
   and passes them in, so it stays importable by every app-entry spec.
-  - URL builders: `chatUrl({stream?,sessionId?})`, `actionUrl(id,'confirm'|'verify'|'cancel',sessionId?)`,
-    `taskUrl(id,sessionId?)`, `tasksUrl(sessionId?)` (base `http://localhost`).
+  - **Identity is COOKIE-ONLY.** `HttpOptions` carries identity as a `Cookie` header, never a query
+    param: `sessionId` (shorthand → `Cookie: banking_session=<id>`, built by the exported
+    `sessionCookie()`) or a raw `cookie` (wins over `sessionId`). Omitting both sends NO cookie.
+  - URL builders carry no identity: `chatUrl({stream?})`, `actionUrl(id,'confirm'|'verify'|'cancel')`,
+    `taskUrl(id)`, `tasksUrl()` (base `http://localhost`).
   - Invokers (build a real `NextRequest`, call the handler, return `{status,ok,data,headers,res}`):
     `postJson(handler,path,body,opts?)`, `postRaw(handler,path,rawString,opts?)`,
     `getJson(handler,path,opts?)`. JSON bodies are parsed eagerly; a non-JSON / SSE body is left
@@ -39,13 +42,15 @@ complementing the in-process `tests/scenarios/*` suites.
   no-op); RED verify with `MFA_CODE`; wrong code (200 `ok:false`/`awaiting_mfa`/`mfaResult:'failed'`,
   no money); honest `INSUFFICIENT_FUNDS` failure (200 `ok:false`/`failed`); cancel (no move,
   `ok:true`/`cancelled`); ownership 403 `SECURITY_DENIED` / unknown-id 404 `NOT_FOUND` on all three
-  routes; MFA-code secrecy; circuit breaker (3 wrong verifies).
+  routes; missing/unknown-cookie 403 (identity is cookie-only); MFA-code secrecy; circuit breaker (3
+  wrong verifies).
 - `tasks-http.test.ts` — REAL DAG/task-lifecycle e2e (demo Case 11 at the app-entry layer). Imports
   `{ GET, POST }` from `@/app/api/tasks/[id]/route`, `{ GET }` from `@/app/api/tasks/route`, `{ POST }`
   from `.../actions/[id]/{confirm,verify}/route` and `chat/route`, and drives them via `harness.ts`:
   `POST /api/tasks/[id]` pause/cancel/retry, `POST /api/actions/[id]/{confirm,verify}` resuming a
   parked plan (REAL tool result written back), `GET /api/tasks/[id]` refresh recovery,
-  `GET /api/tasks` newest-first listing, plus 400/403/404 auth.
+  `GET /api/tasks` newest-first listing, plus cookie-identity auth (missing cookie → 403, unknown id →
+  404, foreign-owner → 403).
 - `plan-parking-http.test.ts` — DAG plan PARKING during a REAL chat turn + post-confirm RESUME
   ("DAG 确认后继续"). The conditional limit-adjustment trigger
   (`如果这个月娱乐消费超过2000元，就把娱乐消费限额调整为1500元`) makes the mock responder emit a 3-node
@@ -59,26 +64,66 @@ complementing the in-process `tests/scenarios/*` suites.
   setlimit `success`), the real tool runs (limit 3000 → 1500) and the envelope is
   `status:'executed'`/`tier:'YELLOW'`.
 
+- `identity-http.test.ts` — cookie-only IDENTITY across ALL write/auth routes (`POST /api/actions/[id]/{confirm,verify,cancel}`,
+  `POST /api/tasks`, `POST /api/tasks/[id]`, `POST /api/security/reset`): missing cookie → 403 `SECURITY_DENIED`;
+  unknown session cookie → 403; a valid cookie for a session that does NOT own the target id → 403; a
+  truly-unknown action/task id (valid cookie) → 404 `NOT_FOUND`; forged `?userId=`/`?sessionId=` query params
+  CANNOT override cookie identity (still denied when the cookie is missing/foreign).
+- `mfa-escalation-http.test.ts` — YELLOW→RED ESCALATION at execution time: a parked YELLOW transfer whose FRESH
+  same-day total tips over ¥1000 is confirmed → the confirm response surfaces `requiresMfa:true`/`tier:'RED'` with
+  an `{type:'mfa_required'}` event and NO money moves; then `verify` with `MFA_CODE` executes (audit row
+  `mfaResult:'success'`, `mfaRequired:true`, `riskLevel:'RED'`); a wrong code moves NO money.
+- `dag-recovery-http.test.ts` — REAL DAG control/recovery e2e driven by `POST /api/tasks/[id]`
+  (pause/resume/cancel/retry), `GET /api/tasks/[id]` + `GET /api/actions` (refresh restore) and
+  `POST /api/actions/[id]/confirm`. Proves the real invariants with a COUNTABLE node side effect (a GREEN
+  `reserve_budget` node = exactly ONE `Budget` row): pause stops before the not-yet-run node; resume skips
+  already-`success` nodes; cancel is terminal (executed node's row preserved, parked node `cancelled`, parked
+  action revoked); retry re-runs ONLY the `failed` node on a FRESH gate action.
+- `malicious-input-http.test.ts` — MALICIOUS input over HTTP: a prompt-injection message cannot bypass
+  confirm/MFA (the money move stays gated); after a confirm, altering the amount/recipient in a FOLLOW-UP
+  request cannot change the executed args (the ORIGINAL validated args run); forged identity query params rejected.
+- `nl-entry-http.test.ts` — NATURAL-LANGUAGE ENTRY via `POST /api/chat` (mock responder) then completed through
+  the REAL action routes: `把信用卡娱乐限额调整到1500` → gated `set_card_limit` (YELLOW) → confirm (limit
+  3000→1500); `申购稳健理财A 1000元` → gated `subscribe_investment` (RED) → verify (holdings 1→2);
+  `取消Netflix订阅` → gated `cancel_subscription` (YELLOW) → confirm (ACTIVE→CANCELLED); a transfer with missing
+  info (no recipient/amount) → clarification (NO tool call, no read fallback).
+- `review-regressions-http.test.ts` — HTTP e2e regressions a reviewer flagged in already-shipped
+  areas: two YELLOW parks in ONE session escalate the SECOND confirm to RED/MFA at execution time;
+  cancelling a plan revokes its parked action (plus cancel/confirm race orderings); a MID-RUN pause
+  issued through `POST /api/tasks/[id]` halts the next node while resume re-runs only that node; and
+  identity stays COOKIE-ONLY — a forged `?sessionId=`/`?userId=` query NEVER authenticates on
+  `verify`/`cancel`/`tasks`/`reset`.
+
 ## Constraints / Conventions
 
 - **One fresh `sessionId` per turn** (`newId('sess')`) — the in-process circuit breaker is keyed by
-  `sessionId`. Note the route mints the PERSISTED session id itself (`getOrCreateSession`), so the id
-  asserted on is the one returned in the response body / cookie.
-- DB lifecycle like the other DB suites: `beforeEach(resetDatabase, 30000)` +
-  `afterAll(disconnectTestPrisma)`; helpers come from `@/tests/helpers/db` and `@/tests/helpers/fixtures`.
+  `sessionId`. The route mints the PERSISTED session id itself (`getOrCreateSession`), so the id
+  asserted on is the one returned in the response body / cookie; specs send it back as the
+  `banking_session` COOKIE on later confirm/verify/cancel/tasks calls.
+- DB lifecycle like the other DB suites: `beforeEach(resetDatabase, 30000)` + `afterAll(disconnectTestPrisma)`; helpers come from `@/tests/helpers/db` and `@/tests/helpers/fixtures`.
 - Deterministic & offline; **no fake timers**. Reset+seed per test.
 - Import frozen types from `@/lib/contracts/*`; never redeclare them. `Envelope<T>` is the app-layer
   transport shape (declared structurally, not a contract).
 - Reuse `@/lib/constants` (`MFA_CODE`, `SESSION_COOKIE`).
+- **Identity is COOKIE-ONLY** (`app/api/_lib/session#resolveIdentity`): write/auth routes
+  (`POST /api/actions/[id]/{confirm,verify,cancel}`, `POST /api/tasks`, `POST /api/tasks/[id]`) require
+  the `banking_session` cookie; a `?sessionId=`/`?userId=` query param is IGNORED. Missing/unknown
+  cookie → **403 `SECURITY_DENIED`**; an id that does NOT exist → **404 `NOT_FOUND`**; an id owned by
+  ANOTHER session/user → **403 `SECURITY_DENIED`**. `GET /api/tasks/[id]` enforces ownership the same
+  way; `GET /api/tasks` with no cookie returns `{ plans: [] }` (200).
 - Domain outcomes are NOT HTTP errors: a wrong MFA code, a cancel, a repeat confirm or a failed tool
-  all return **HTTP 200** with `{ ok:false, data:{ ok:false, status, … } }`. Only ownership
+  all return **HTTP 200** using the SAME envelope as success — outer `{ ok:true, data }` — carrying the
+  domain outcome INSIDE `data` (`data.ok:false` / `data.status:'failed'|'cancelled'|…`); a failed domain
+  outcome is NEVER an outer `ok:false`. Only identity/ownership
   (`SECURITY_DENIED`→403), unknown id (`NOT_FOUND`→404) and transport/infra failures use the error
-  envelope (status map in `app/api/_lib/http.ts`).
+  envelope (status map in `app/api/_lib/http.ts`). A missing cookie on `POST /api/tasks/[id]` is
+  rejected by `requireIdentity` BEFORE the body is parsed — a 403, never 400 `VALIDATION`.
 - Seeding a durable plan for the task specs goes through the PRODUCTION APIs (`getOrCreateSession` +
   `runSubmitPlan`) so real `AgentTask`/`AgentTaskNode`/`PendingAction` rows exist. **A seeded task MUST
   be paired with a matching `AgentSession` row** — `agent/task-control.ts` `loadOwnedTask` verifies both
   `row.sessionId === sessionId` and a session whose `userId` matches, else it rejects with
-  `SECURITY_DENIED`. `TaskPlanStatus` has no `'paused'`: a paused plan surfaces as resumable `pending`.
+  `SECURITY_DENIED`. `TaskPlanStatus` includes `'paused'`: `pauseTask` persists `'paused'` on the plan
+  snapshot AND the `AgentTask` row.
 
 ## Faux-provider gotcha (important for SSE assertions)
 
@@ -92,8 +137,8 @@ compare the concatenated streamed text separately (`project()` + `streamedText()
 
 `app/api/chat/route.ts` documents a mid-stream `{type:'error'}` frame followed by `done`, but on the real
 mock path neither producer fires:
-- the mock responder never yields a model stop reason of `error`/`aborted`, so `runTurn`'s `agent_end`
-  failure mapping never emits an `error` event;
+- the mock responder never yields a model stop reason of `error`/`aborted`, so `runTurn`'s
+  `agent_end` failure mapping never emits an `error` event;
 - a throw from `runTurn` is caught by the route's OUTER try → a JSON error envelope (covered by the
   transport-failure test), never an SSE frame;
 - `sseFrame` only serializes JSON-safe event objects, so the stream `start` catch cannot trigger.
@@ -115,7 +160,7 @@ PARKS, so the mid-turn plan-level `plan_update` + `confirmation_required` frames
 `tasks-http.test.ts` additionally covers a plan WITH a parked GATED node SEEDED via the production
 planner, then driven by the real action/task handlers — confirm/verify RESUMES the parked plan and
 writes the REAL tool result back (asserted on `AgentTaskNode`, a real `Transaction` row and the
-decremented balance), pause/cancel/retry, refresh recovery, listing and 400/403/404.
+decremented balance), pause/cancel/retry, refresh recovery, listing and 403/404 auth.
 
 ## Known gap — `423 CIRCUIT_OPEN` is UNREACHABLE over real HTTP
 
@@ -144,9 +189,16 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 
 - `./harness.ts` → shared HTTP plumbing (URL builders, invokers, SSE readers) — reuse for every app-entry spec
 - `./chat-http.test.ts` → `POST /api/chat` real-handler e2e (GREEN/YELLOW/RED, injection, transport, SSE)
-- `./actions-http.test.ts` → `POST /api/actions/[id]/{confirm,verify,cancel}` real-handler e2e (two-phase confirmation: YELLOW confirm, RED MFA verify, wrong code, honest failure, cancel, ownership 403 / 404, MFA secrecy, circuit breaker)
+- `./actions-http.test.ts` → `POST /api/actions/[id]/{confirm,verify,cancel}` real-handler e2e (two-phase confirmation: YELLOW confirm, RED MFA verify, wrong code, honest failure, cancel, foreign-owner/missing-cookie 403, unknown-id 404, MFA secrecy, circuit breaker)
 - `./tasks-http.test.ts` → real task/action handlers e2e (`/api/tasks`, `/api/tasks/[id]`, `/api/actions/[id]/{confirm,verify}`)
 - `./plan-parking-http.test.ts` → `POST /api/chat` conditional-DAG PARKING + `POST /api/actions/[id]/confirm` RESUME ("DAG 确认后继续")
+
+- `./identity-http.test.ts` → cookie-only identity across all write/auth routes (403 missing/unknown/foreign cookie, 404 unknown id, forged query params ignored)
+- `./mfa-escalation-http.test.ts` → YELLOW→RED escalation at execution time (fresh daily total → confirm surfaces RED/requiresMfa, verify executes, wrong code moves nothing)
+- `./dag-recovery-http.test.ts` → DAG control/recovery e2e (pause/resume/cancel/retry) + refresh restore (`GET /api/tasks/[id]`, `GET /api/actions`)
+- `./malicious-input-http.test.ts` → prompt-injection over HTTP still gated + follow-up arg-override cannot change executed args
+- `./nl-entry-http.test.ts` → natural-language entry via `POST /api/chat` → gated tool → confirm/verify completes
+- `./review-regressions-http.test.ts` → reviewer regression e2e: two-park YELLOW→RED execution-time escalation in one session, plan-cancel revokes its parked action + cancel/confirm race orderings, a mid-run pause (via the real handler) halting the next node + resume re-running only that node, and forged-query-never-authenticates on verify/cancel/tasks/reset
 
 ## Notes for Agents
 
@@ -154,3 +206,6 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
   tool-event / DB-state level.
 - The remaining HTTP coverage gap is the `/api/chat` SSE `error`-frame, which is unreachable over the
   real HTTP + mock path (see the "Known gap" section above).
+- The mock responder (`agent/providers/mock-responder.ts`) routes DIRECT single-action intents: e.g.
+  "把信用卡娱乐限额调整到1500" → `set_card_limit`, "申购稳健理财A 1000元" → `subscribe_investment`,
+  "取消Netflix订阅" → `cancel_subscription`.

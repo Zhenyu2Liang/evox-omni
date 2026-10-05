@@ -32,7 +32,7 @@ import { dag, executor, type PlanToolOutcome } from '@/planner';
 import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
 import { createTask, createTaskNode } from '@/lib/db/repositories/task';
-import { createTaskPersistence } from '../task-control';
+import { createTaskPersistence, defaultPollControls } from '../task-control';
 import type { ToolExecutionResult } from './index';
 
 /**
@@ -301,6 +301,10 @@ export async function runSubmitPlan(
     {
       runTool: deps.runTool,
       onNodeUpdate,
+      // Durable cross-request steering: a pause/cancel persisted by `POST /api/tasks/[id]` is
+      // observed at this run's next node checkpoint, so a LIVE plan really stops (the persisted
+      // `AgentTask.status` is the source of truth — see `defaultPollControls`).
+      controls: defaultPollControls(plan.id),
       ...createTaskPersistence(plan.id),
     },
     { signal: deps.signal, now: deps.now },

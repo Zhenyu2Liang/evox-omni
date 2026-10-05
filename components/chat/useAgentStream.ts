@@ -24,11 +24,14 @@ import type {
 import type { PendingActionSummary } from '@/lib/contracts/security';
 import type { TaskPlan } from '@/lib/contracts/task';
 import type { ToolName } from '@/lib/contracts/tools';
-import type { ChatEndpoints } from './actions';
+import type { TaskControlAction } from './cards';
+import type { ChatEndpoints, PendingActionRef } from './actions';
 import {
   DEFAULT_ENDPOINTS,
   cancelAction,
   confirmAction,
+  controlTask as controlTaskRequest,
+  fetchPendingActions,
   fetchTaskPlan,
   sendChatTurn,
   verifyAction,
@@ -60,12 +63,18 @@ export interface UseAgentStreamResult {
   pendingAction?: PendingHumanDecision;
   streamingText: string;
   busy: boolean;
+  /** True while the mount-time pending-actions read (`GET /api/actions`) is in flight. */
+  restoring: boolean;
+  /** Consecutive failed MFA attempts for the ACTIVE decision (reset when it settles/changes). */
+  mfaAttempts: number;
   error?: string;
   applyEvents(events: AgentStreamEvent[]): void; // fold a batch (used by actions + SSE)
   send(text: string): Promise<void>; // POST /api/chat, fold response
   confirm(actionId: string): Promise<void>; // POST /api/actions/:id/confirm
   verify(actionId: string, code: string): Promise<void>; // POST .../verify
   cancel(actionId: string): Promise<void>; // POST .../cancel
+  /** POST /api/tasks/:id { action } — steer the running plan; folds the returned snapshot. */
+  controlTask(action: TaskControlAction, planId?: string): Promise<void>;
 }
 
 export interface UseAgentStreamOptions {
@@ -92,6 +101,8 @@ export interface ChatUIState {
   streamingText: string;
   busy: boolean;
   error?: string;
+  /** Consecutive failed MFA attempts for the active decision (see `UseAgentStreamResult`). */
+  mfaAttempts: number;
   currentAssistantId?: string;
   lastBlockedToolName?: ToolName;
 }
@@ -103,6 +114,7 @@ export function initialChatUIState(overrides: Partial<ChatUIState> = {}): ChatUI
     toolEvents: [],
     streamingText: '',
     busy: false,
+    mfaAttempts: 0,
     ...overrides,
   };
 }
@@ -366,6 +378,46 @@ export function reduceAgentEvents(state: ChatUIState, events: AgentStreamEvent[]
   return events.reduce(applyEvent, state);
 }
 
+// --- refresh restore (pending actions) ---------------------------------------------------------
+
+/**
+ * Build the MFA prompt summary for a RESTORED decision — mirrors the `mfa_required` case: the tier
+ * is forced RED and `requiresMfa` true (a restored MFA decision always is one), with the row's
+ * summary used as the base when it looks like a `PendingActionSummary` (title/toolName/fields/hint
+ * carried through). Falls back to the minimal prompt shape otherwise.
+ */
+function restoredMfaSummary(summary?: PendingActionSummary): MfaActionSummary {
+  if (!summary || typeof summary.title !== 'string') {
+    return { title: '需要安全验证', tier: 'RED', fields: [], requiresMfa: true };
+  }
+  const result: MfaActionSummary = {
+    title: summary.title,
+    ...(summary.toolName ? { toolName: summary.toolName } : {}),
+    tier: 'RED',
+    fields: summary.fields ?? [],
+    requiresMfa: true,
+  };
+  if (summary.mfaHint !== undefined) result.mfaHint = summary.mfaHint;
+  if (typeof summary.amount === 'number') result.amount = summary.amount;
+  return result;
+}
+
+/**
+ * Pick the MOST RELEVANT non-terminal action to restore: an MFA/RED row (which needs the strongest
+ * user attention) wins over a plain YELLOW confirmation; among several, the first such row is used.
+ * Returns `undefined` when there is nothing actionable to restore.
+ */
+function pickPendingAction(refs: PendingActionRef[]): PendingHumanDecision | undefined {
+  if (refs.length === 0) return undefined;
+  const chosen =
+    refs.find((ref) => ref.requiresMfa || ref.status === 'awaiting_mfa' || ref.tier === 'RED') ??
+    refs[0];
+  if (chosen.requiresMfa || chosen.status === 'awaiting_mfa' || chosen.tier === 'RED') {
+    return { kind: 'mfa', summary: restoredMfaSummary(chosen.summary), actionId: chosen.id };
+  }
+  return { kind: 'confirmation', summary: chosen.summary, actionId: chosen.id };
+}
+
 // --- stateful hook ----------------------------------------------------------------------------
 
 export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult {
@@ -405,6 +457,43 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
       alive = false;
     };
   }, [taskId]);
+
+  // ACTIVE refresh restore: on mount, rebuild the pending human decision from the server so a
+  // reloaded page still shows the confirm/MFA card for an in-flight action. Best-effort: a
+  // stale/unmounted/aborted or failed read is ignored and NEVER clobbers a decision a live event
+  // already delivered (checked via a functional `setState`). `restoring` tracks the read in flight.
+  const [restoring, setRestoring] = useState(false);
+  const pendingActionRef = useRef(state.pendingAction);
+  pendingActionRef.current = state.pendingAction;
+
+  useEffect(() => {
+    // Nothing to restore when a live decision is already surfaced (e.g. from initial state).
+    if (pendingActionRef.current !== undefined) return;
+    let alive = true;
+    setRestoring(true);
+    void (async () => {
+      const refs = await fetchPendingActions(endpointsRef.current);
+      if (!alive) return;
+      const decision = pickPendingAction(refs);
+      if (decision !== undefined) {
+        setState((prev) =>
+          prev.pendingAction === undefined ? { ...prev, pendingAction: decision } : prev,
+        );
+      }
+      setRestoring(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Reset the MFA attempt counter whenever the active decision clears or changes (a success, a
+  // cancel, or a NEW action). A failed verify keeps the SAME actionId/kind, so the count survives.
+  const pendingActionKey = state.pendingAction?.actionId;
+  const pendingActionKind = state.pendingAction?.kind;
+  useEffect(() => {
+    setState((prev) => (prev.mfaAttempts === 0 ? prev : { ...prev, mfaAttempts: 0 }));
+  }, [pendingActionKey, pendingActionKind]);
 
   /** Fold a batch of events into the UI state. */
   const applyEvents = useCallback((events: AgentStreamEvent[]) => {
@@ -462,12 +551,46 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
     [pull, endpoints],
   );
   const verify = useCallback(
-    (actionId: string, code: string) => pull(() => verifyAction(actionId, code, endpoints)),
+    async (actionId: string, code: string) => {
+      await pull(() => verifyAction(actionId, code, endpoints));
+      // A WRONG code keeps the SAME `mfa` decision active and sets `error` — count the attempt so the
+      // MFA card can show "第 N 次尝试". A success/cancel clears `pendingAction` (and the reset effect
+      // zeroes the counter); a new action changes actionId/kind, which also resets it.
+      setState((prev) =>
+        prev.pendingAction?.kind === 'mfa' && prev.error !== undefined
+          ? { ...prev, mfaAttempts: prev.mfaAttempts + 1 }
+          : prev,
+      );
+    },
     [pull, endpoints],
   );
   const cancel = useCallback(
     (actionId: string) => pull(() => cancelAction(actionId, endpoints)),
     [pull, endpoints],
+  );
+
+  /**
+   * Steer the running plan (`pause`/`resume`/`cancel`/`retry`) via `POST /api/tasks/:id`. Defaults
+   * `planId` to the live plan. Folds the returned snapshot into the SAME `activePlan` slot (reusing
+   * the `plan_update` latest-wins upsert). Best-effort: a failed control surfaces a SAFE `error` and
+   * NEVER throws to the UI.
+   */
+  const controlTask = useCallback(
+    async (action: TaskControlAction, planId?: string) => {
+      const id = planId ?? state.activePlan?.id;
+      if (id === undefined) {
+        setState((prev) => ({ ...prev, error: '当前没有可控制的任务计划' }));
+        return;
+      }
+      setState((prev) => ({ ...prev, busy: true, error: undefined }));
+      const plan = await controlTaskRequest(id, action, endpoints);
+      if (plan === undefined) {
+        setState((prev) => ({ ...prev, busy: false, error: errorMessage(undefined) }));
+        return;
+      }
+      setState((prev) => ({ ...upsertPlan(prev, plan), busy: false }));
+    },
+    [state.activePlan?.id, endpoints],
   );
 
   return {
@@ -477,11 +600,14 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
     pendingAction: state.pendingAction,
     streamingText: state.streamingText,
     busy: state.busy,
+    restoring,
+    mfaAttempts: state.mfaAttempts,
     error: state.error,
     applyEvents,
     send,
     confirm,
     verify,
     cancel,
+    controlTask,
   };
 }

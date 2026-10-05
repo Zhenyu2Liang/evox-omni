@@ -376,7 +376,7 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
     const action = await createYellowAction(sessionId);
     expect(action.requiresMfa).toBe(false);
 
-    const res = await securityGateway.authorizeAction(action.id);
+    const res = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId });
 
     expect(res.ok).toBe(true);
     expect(res.status).toBe('confirmed');
@@ -395,7 +395,7 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
     const balanceBefore = await checkingBalance();
     const txBefore = await countTransactions();
 
-    const res = await securityGateway.authorizeAction(action.id);
+    const res = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId });
 
     expect(res.ok).toBe(false);
     expect(res.status).toBe('awaiting_mfa');
@@ -413,7 +413,7 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
     const action = await createRedAction(sessionId);
     expect(security.circuitBreaker.getState(sessionId).failures).toBe(0);
 
-    const res = await securityGateway.authorizeAction(action.id, { mfaCode: '000000' });
+    const res = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId, mfaCode: '000000' });
 
     expect(res.ok).toBe(false);
     expect(res.status).toBe('awaiting_mfa');
@@ -431,7 +431,7 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
     const sessionId = newSessionId();
     const action = await createRedAction(sessionId);
 
-    const res = await securityGateway.authorizeAction(action.id, { mfaCode: MFA_CODE });
+    const res = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId, mfaCode: MFA_CODE });
 
     expect(res.ok).toBe(true);
     expect(res.status).toBe('confirmed');
@@ -455,7 +455,7 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
     }
     expect(security.circuitBreaker.isLocked(sessionId)).toBe(true);
 
-    const res = await securityGateway.authorizeAction(action.id, { mfaCode: MFA_CODE });
+    const res = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId, mfaCode: MFA_CODE });
 
     expect(res.ok).toBe(false);
     expect(res.status).toBe('locked');
@@ -470,11 +470,12 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
 
 describe('security-gateway · cancelAction (needs test SQLite)', () => {
   it("cancelAction(id) → status 'cancelled'; the business op is never executed", async () => {
-    const action = await createYellowAction(newSessionId());
+    const sessionId = newSessionId();
+    const action = await createYellowAction(sessionId);
     const balanceBefore = await checkingBalance();
     const txBefore = await countTransactions();
 
-    const cancelled = await securityGateway.cancelAction(action.id);
+    const cancelled = await securityGateway.cancelAction(action.id, { userId: DEMO_USER_ID, sessionId });
 
     expect(cancelled.id).toBe(action.id);
     expect(cancelled.status).toBe('cancelled');
@@ -486,14 +487,19 @@ describe('security-gateway · cancelAction (needs test SQLite)', () => {
   });
 
   it('cancelling an unknown or already-terminal action surfaces an AppError', async () => {
-    const missing = await securityGateway.cancelAction('pa_does_not_exist').catch((e: unknown) => e);
+    const missing = await securityGateway
+      .cancelAction('pa_does_not_exist', { userId: DEMO_USER_ID, sessionId: newSessionId() })
+      .catch((e: unknown) => e);
     expect(missing).toBeInstanceOf(AppError);
     expect((missing as AppError).code).toBe('NOT_FOUND');
 
-    const action = await createYellowAction(newSessionId());
-    await securityGateway.cancelAction(action.id); // → cancelled (now terminal)
+    const sessionId = newSessionId();
+    const action = await createYellowAction(sessionId);
+    await securityGateway.cancelAction(action.id, { userId: DEMO_USER_ID, sessionId }); // → cancelled (now terminal)
 
-    const again = await securityGateway.cancelAction(action.id).catch((e: unknown) => e);
+    const again = await securityGateway
+      .cancelAction(action.id, { userId: DEMO_USER_ID, sessionId })
+      .catch((e: unknown) => e);
     expect(again).toBeInstanceOf(AppError);
     expect((again as AppError).code).toBe('CONFLICT');
 

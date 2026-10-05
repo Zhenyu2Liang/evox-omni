@@ -120,7 +120,7 @@ describe('planner/lifecycle · dependency order + validation', () => {
 });
 
 describe('planner/lifecycle · pause', () => {
-  it('PAUSE via in-process PlanControls stops the walk and returns a resumable pending snapshot', async () => {
+  it('PAUSE via in-process PlanControls stops the walk and returns a resumable paused snapshot', async () => {
     let controls: PlanControls | undefined;
     let pausedOnce = false;
     const h = harness(() => {
@@ -140,7 +140,7 @@ describe('planner/lifecycle · pause', () => {
     expect(findResult(paused, 'a')?.status).toBe('success');
     expect(findResult(paused, 'b')?.status).toBe('pending');
     expect(findResult(paused, 'c')?.status).toBe('pending');
-    expect(paused.status).toBe('pending');
+    expect(paused.status).toBe('paused');
     const resumed = await runPlan(paused, h.deps, { now: () => NOW });
     expect(h.calls).toEqual(['tool_a', 'tool_b', 'tool_c']);
     expect(resumed.status).toBe('success');
@@ -161,17 +161,17 @@ describe('planner/lifecycle · pause', () => {
     expect(h.calls).toEqual(['tool_a']);
     expect(findResult(paused, 'a')?.status).toBe('success');
     expect(findResult(paused, 'b')?.status).toBe('pending');
-    expect(paused.status).toBe('pending');
-    expect(h.snapshots[h.snapshots.length - 1]?.status).toBe('pending');
+    expect(paused.status).toBe('paused');
+    expect(h.snapshots[h.snapshots.length - 1]?.status).toBe('paused');
   });
 
-  it('pausePlan marks a resumable snapshot as pending and keeps recorded node results', () => {
+  it('pausePlan marks a resumable snapshot as paused and keeps recorded node results', () => {
     const plan = makePlan(
       [toolNode('a'), toolNode('b')],
       [{ id: 'a', name: 'A', status: 'success', tool: 'tool_a', output: { cached: true } }],
     );
     const paused = pausePlan(plan, { now: () => 7 });
-    expect(paused.status).toBe('pending');
+    expect(paused.status).toBe('paused');
     expect(paused.updatedAt).toBe(7);
     expect(findResult(paused, 'a')?.status).toBe('success');
     expect(findResult(paused, 'b')?.status).toBe('pending');

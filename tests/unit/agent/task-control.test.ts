@@ -207,8 +207,8 @@ describe('task control ownership', () => {
     const taskId = await seedTask(sessionId);
 
     const paused = await pauseTask(sessionId, taskId);
-    expect(paused.status).toBe('pending');
-    expect(await taskStatus(taskId)).toBe('pending');
+    expect(paused.status).toBe('paused');
+    expect(await taskStatus(taskId)).toBe('paused');
 
     const resumed = await resumeTask(sessionId, taskId);
     expect(resumed.status).toBe('success');

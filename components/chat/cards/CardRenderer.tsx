@@ -60,6 +60,7 @@ export function CardRenderer(p: CardRendererProps) {
           onCancel={p.action?.onCancel}
           busy={p.action?.busy}
           error={p.action?.error}
+          attempts={p.action?.mfaAttempts}
           className={p.className}
         />
       );
@@ -83,7 +84,14 @@ export function CardRenderer(p: CardRendererProps) {
         />
       );
     case 'plan':
-      return <PlanCard plan={p.card.plan} className={p.className} />;
+      return (
+        <PlanCard
+          plan={p.card.plan}
+          onControl={p.action?.onTaskControl}
+          busy={p.action?.busy}
+          className={p.className}
+        />
+      );
     case 'error':
       return <ErrorCard message={p.card.message} className={p.className} />;
     default:

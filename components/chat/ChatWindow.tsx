@@ -30,7 +30,7 @@ import { MessageBubble } from './MessageBubble';
 import { StreamingText } from './StreamingText';
 import { ToolEventList } from './ToolEventList';
 import { Composer } from './Composer';
-import { EmptyState } from '../ui';
+import { EmptyState, Spinner } from '../ui';
 
 export interface ChatWindowProps {
   sessionId?: string;
@@ -83,10 +83,12 @@ interface PendingDecisionCardProps {
   action: CardActionHandlers;
   busy?: boolean;
   error?: string;
+  /** Failed MFA attempts for the active decision (shown on the MFA card). */
+  attempts?: number;
 }
 
 /** The ONE active human-decision card: confirm/verify/cancel all POST to the `./app` routes. */
-function PendingDecisionCard({ pending, action, busy, error }: PendingDecisionCardProps) {
+function PendingDecisionCard({ pending, action, busy, error, attempts }: PendingDecisionCardProps) {
   if (pending.kind === 'confirmation') {
     return (
       <ConfirmationCard
@@ -109,6 +111,7 @@ function PendingDecisionCard({ pending, action, busy, error }: PendingDecisionCa
       onCancel={action.onCancel}
       busy={busy}
       error={error}
+      attempts={attempts}
     />
   );
 }
@@ -147,6 +150,8 @@ export function ChatWindow({
     onAcknowledge: () => void stream.send('这笔交易是我本人消费'),
     onViewDetail: () => void stream.send('我想查看这笔交易的详情'),
     onFreeze: () => void stream.send('冻结我的银行卡'),
+    onTaskControl: (a) => void stream.controlTask(a),
+    mfaAttempts: stream.mfaAttempts,
     busy: stream.busy,
     error: stream.error,
   };
@@ -157,7 +162,12 @@ export function ChatWindow({
   return (
     <div className={`flex h-full min-h-0 flex-col bg-banking-light ${className ?? ''}`.trim()}>
       <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {isEmpty ? (
+        {isEmpty && stream.restoring ? (
+          <div className="flex flex-col items-center justify-center gap-3 py-10">
+            <Spinner />
+            <p className="text-sm text-banking-navy/60">正在恢复会话状态…</p>
+          </div>
+        ) : isEmpty ? (
           <EmptyState
             title="开始与 AI 银行助手对话"
             description="用自然语言描述你的需求，例如「查一下我的余额」或「给张伟转账 200 元」。"
@@ -170,13 +180,16 @@ export function ChatWindow({
             {stream.streamingText.length > 0 && (
               <StreamingText text={stream.streamingText} active={stream.busy} />
             )}
-            {stream.activePlan !== undefined && <PlanCard plan={stream.activePlan} />}
+            {stream.activePlan !== undefined && (
+              <PlanCard plan={stream.activePlan} onControl={action.onTaskControl} busy={stream.busy} />
+            )}
             {pending !== undefined && (
               <PendingDecisionCard
                 pending={pending}
                 action={action}
                 busy={stream.busy}
                 error={stream.error}
+                attempts={stream.mfaAttempts}
               />
             )}
           </>

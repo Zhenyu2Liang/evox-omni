@@ -27,7 +27,9 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   See `helpers/CONTEXT.md` for the full helper API.
 - `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs. See `unit/CONTEXT.md`.
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
-- `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers. See `app/CONTEXT.md`.
+- `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
+  (chat/SSE, action confirm|verify|cancel, task lifecycle, and `review-regressions-http.test.ts`
+  reviewer regressions). See `app/CONTEXT.md`.
 
 Run:
 
@@ -78,6 +80,11 @@ Three layers, mirroring the acceptance bar:
   (JSON `?stream=0` + SSE default) and the action/task handlers, proving money moves only after a human
   confirm/verify, honest failure narratives, no secret leaks, ownership/not-found handling, the DAG
   task lifecycle (pause/cancel/retry + refresh recovery) and the circuit breaker at the HTTP boundary.
+  `review-regressions-http.test.ts` additionally locks down reviewer-flagged regressions: two YELLOW
+  parks in ONE session escalate the SECOND confirm to RED/MFA at execution time; a plan-cancel revokes
+  its parked action (both cancel/confirm race orderings); a mid-run pause halts the next node while
+  resume re-runs only it; and identity stays COOKIE-ONLY (a forged `?sessionId=`/`?userId=` query NEVER
+  authenticates on verify/cancel/tasks/reset).
 
 Fixtures: the canonical demo dataset (user 李明; contacts 张伟/王芳/妈妈/李华; the Apple Store ¥6,999
 anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) is defined in
@@ -85,8 +92,8 @@ anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) 
 
 ## Fast test-DB path (why the suite is fast — do not remove)
 
-The full suite runs in ~25–30s. This depends on a deliberately fast SQLite configuration; if any piece
-is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
+The full suite (447 tests / 214 suites) runs in ~30–45s.
+This depends on a deliberately fast SQLite configuration; if any piece is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
 
 - `helpers/db.ensureTestPragmas()` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`
   once per process (`WAL` is file-persistent; `synchronous`/`busy_timeout` are per-connection).
@@ -110,7 +117,7 @@ is dropped, commits fall back to fsync and the suite balloons toward the 10-minu
 - `./helpers` → shared test utilities (db reset/seed + fast pragmas, fixtures, faux agent, scenario harness)
 - `./unit` → pure/logic unit specs for security, planner, banking-sdk, agent, lib
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
-- `./app` → real app-entry (HTTP) specs driving the real Next.js route handlers (chat/SSE, action confirm|verify|cancel, task lifecycle)
+- `./app` → real app-entry (HTTP) specs driving the real Next.js route handlers (chat/SSE, action confirm|verify|cancel, task lifecycle, reviewer regressions)
 - `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)
@@ -125,5 +132,15 @@ is dropped, commits fall back to fsync and the suite balloons toward the 10-minu
   seam (injectable `now`/`id`, unique sessionId, fresh DB) instead.
 - Speed comes from the "Fast test-DB path" invariant, NOT from skipping resets — keep the pragmas and
   the `connection_limit=1` URL, and never trade isolation for speed.
+- **Identity is COOKIE-ONLY.** Write/auth routes (`/api/actions/[id]/{confirm,verify,cancel}`,
+  `/api/tasks*`, `/api/security/reset`) authenticate ONLY via the `banking_session` cookie
+  (`SESSION_COOKIE`); `?sessionId=`/`?userId=` query params are IGNORED. Missing/unknown cookie → 403
+  `SECURITY_DENIED`; unknown id → 404 `NOT_FOUND`; foreign-owned id → 403. App-entry specs pass
+  identity as a `Cookie` header via `harness.ts` (`{ sessionId }` shorthand or a raw `cookie`).
+- **Gateway ownership is mandatory.** `securityGateway.authorizeAction(id, { userId, sessionId, mfaCode? })`
+  and `cancelAction(id, { userId, sessionId })` REQUIRE non-optional `userId`+`sessionId` (no demo-user
+  fallback; missing/mismatch → `SECURITY_DENIED`). Pass the parked action's OWN `sessionId` and that
+  session's `userId` (`DEMO_USER_ID` = 'user_liming'). `AuthorizationResult` carries the EFFECTIVE
+  `tier`/`requiresMfa` on BOTH success and failure.
 - `tsc --noEmit` must stay at **0 errors** — a green `vitest run` alone is not sufficient (Vitest
   transpiles without type-checking).

@@ -3,16 +3,21 @@
 import type { TaskNodeSpec, TaskPlan, TaskPlanStatus } from '@/lib/contracts/task';
 import { Card } from '../../ui/Card';
 import { Badge } from '../../ui/Badge';
+import { Button } from '../../ui/Button';
 import { AgentTaskTimeline } from '../../banking';
+import type { TaskControlAction } from './types';
 
 export interface PlanCardProps {
   plan: TaskPlan;
+  onControl?: (action: TaskControlAction) => void;
+  busy?: boolean;
   className?: string;
 }
 
 const PLAN_STATUS_LABEL: Record<TaskPlanStatus, string> = {
   pending: '待执行',
   running: '执行中',
+  paused: '已暂停',
   waiting_confirmation: '等待确认',
   success: '已完成',
   failed: '已失败',
@@ -22,11 +27,47 @@ const PLAN_STATUS_LABEL: Record<TaskPlanStatus, string> = {
 const PLAN_STATUS_TONE: Record<TaskPlanStatus, 'neutral' | 'info' | 'success' | 'warn' | 'danger'> = {
   pending: 'neutral',
   running: 'info',
+  paused: 'warn',
   waiting_confirmation: 'warn',
   success: 'success',
   failed: 'danger',
   cancelled: 'neutral',
 };
+
+const CONTROL_LABEL: Record<TaskControlAction, string> = {
+  pause: '暂停',
+  resume: '继续',
+  cancel: '取消',
+  retry: '重试',
+};
+
+const CONTROL_VARIANT: Record<TaskControlAction, 'secondary' | 'danger'> = {
+  pause: 'secondary',
+  resume: 'secondary',
+  cancel: 'danger',
+  retry: 'secondary',
+};
+
+/**
+ * The task-control actions offered for a plan status. Terminal plans (success/cancelled) offer
+ * none; a running/queued plan can be paused or cancelled; a paused plan resumed or cancelled;
+ * a failed plan retried.
+ */
+function controlActionsFor(status: TaskPlanStatus): TaskControlAction[] {
+  switch (status) {
+    case 'running':
+    case 'pending':
+    case 'waiting_confirmation':
+      return ['pause', 'cancel'];
+    case 'paused':
+      return ['resume', 'cancel'];
+    case 'failed':
+      return ['retry'];
+    case 'success':
+    case 'cancelled':
+      return [];
+  }
+}
 
 /**
  * Human-readable dependency line for a node: its direct dependencies resolved to node NAMES
@@ -42,11 +83,32 @@ function dependencyLabel(node: TaskNodeSpec, nameById: Map<string, string>): str
 /**
  * Plan card: the plan goal + status badge, the per-node status timeline (composed
  * `AgentTaskTimeline`, the single status→meta source) and a dependency section that lists each
- * node's upstream node NAMES. No chain-of-thought is rendered — only step names, tools, the DAG
- * relationships and the factual results (a failed node's `result.error` shows inline in the timeline).
+ * node's upstream node NAMES. A footer exposes the task-control actions for the current plan
+ * status (pause/resume/cancel/retry) — these only call the injected `onControl` handler; the
+ * browser never mutates the task itself. No chain-of-thought is rendered — only step names, tools,
+ * the DAG relationships and the factual results (a failed node's `result.error` shows inline in
+ * the timeline).
  */
-export function PlanCard({ plan, className }: PlanCardProps) {
+export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
   const nameById = new Map<string, string>(plan.nodes.map((node) => [node.id, node.name]));
+  const controls = controlActionsFor(plan.status);
+
+  const footer =
+    controls.length > 0 ? (
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {controls.map((action) => (
+          <Button
+            key={action}
+            variant={CONTROL_VARIANT[action]}
+            size="md"
+            disabled={busy || !onControl}
+            onClick={() => onControl?.(action)}
+          >
+            {CONTROL_LABEL[action]}
+          </Button>
+        ))}
+      </div>
+    ) : undefined;
 
   return (
     <Card
@@ -58,6 +120,7 @@ export function PlanCard({ plan, className }: PlanCardProps) {
         </span>
       }
       description={plan.goal}
+      footer={footer}
     >
       <div className="space-y-3">
         <AgentTaskTimeline plan={plan} results={plan.results} />
