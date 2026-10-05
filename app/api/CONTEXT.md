@@ -88,6 +88,12 @@ audited `resetSession` (the runtime unlock path — see Notes).
 - `Set-Cookie: banking_session=<sessionId>; Path=/; HttpOnly; SameSite=Lax` is set on EVERY chat
   response (streaming and JSON) from the returned session id. This cookie IS the trusted identity
   every other route reads.
+- **Chat identity is COOKIE-ONLY.** The turn's session comes solely from the `banking_session`
+  cookie (`_lib/session` `resolveSessionId`), never from the request body: a body `sessionId` that
+  DISAGREES with the cookie — INCLUDING when no cookie is present — is rejected with `409 CONFLICT`
+  and sets NO cookie, so a body `sessionId` can never select or mint a session (or exchange a foreign
+  session id for an authorization cookie). The `Set-Cookie` always mirrors the session actually used
+  (`res.sessionId`).
 
 ## Identity resolution (`_lib/session.ts`) — cookie-only, server-derived
 
