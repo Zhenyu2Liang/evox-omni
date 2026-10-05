@@ -19,7 +19,7 @@
  * real `set_card_limit` runs and the seeded 娱乐 limit changes 3000 → 1500.
  *
  * DB lifecycle matches the other DB-backed suites: reset + seed before each test, disconnect after.
- * Every turn uses a FRESH requested session id (the in-process circuit breaker is keyed by
+ * Every turn uses a FRESH session (the in-process circuit breaker is keyed by
  * `sessionId`); the route MINTS the persisted id itself (`getOrCreateSession`), so the id we assert
  * on is the one returned by the turn (the leading `session` SSE frame).
  */
@@ -32,7 +32,6 @@ import type { ActionResponse } from '@/app/api/_lib/types';
 import type { AgentStreamEvent, ChatCard, ChatTurnResponse } from '@/lib/contracts/agent';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import { MFA_CODE } from '@/lib/constants';
-import { newId } from '@/lib/ids';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { CARD_LIMITS } from '@/tests/helpers/fixtures';
 import {
@@ -121,7 +120,6 @@ function nodeStatusOf(plan: TaskPlan, nodeId: string): TaskNodeStatus | undefine
  */
 async function parkPlanTurn(): Promise<{ sessionId: string; events: AgentStreamEvent[] }> {
   const res = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({}), {
-    sessionId: newId('sess'),
     message: MESSAGE,
   });
   expect(res.status).toBe(200);
