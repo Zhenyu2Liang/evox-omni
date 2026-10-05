@@ -161,6 +161,8 @@ describe('Scenario 10 — 连续错误MFA触发熔断 (circuit breaker)', () => 
 
     // Even the CORRECT demo code cannot authorize a locked session (the breaker is checked FIRST).
     const auth = await security.gateway.securityGateway.authorizeAction(actionId, {
+      userId: DEMO_USER_ID,
+      sessionId,
       mfaCode: MFA_CODE,
     });
     expect(auth.ok).toBe(false);

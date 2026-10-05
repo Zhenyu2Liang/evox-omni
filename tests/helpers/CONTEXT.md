@@ -35,6 +35,8 @@ Import from the barrel (`../helpers`) or a specific module.
 - `scenario.ts` — drive a full session turn + human decision:
   - `runTurn({sessionId,message,agent}): Promise<ScenarioResult>` — send a message, collect events.
   - `confirmAction(agent,actionId)` / `verifyAction(agent,actionId,code)` / `cancelAction(agent,actionId)` — human decision + narration.
+    - Authorizes via `securityGateway.authorizeAction` / `cancelAction`, passing the action's real owner `{ userId: DEMO_USER_ID, sessionId: agent.sessionId ?? 'sess' }` (required; a missing/mismatched identity is refused with `SECURITY_DENIED`).
+    - The post-authorize audit row records the EFFECTIVE `auth.tier` / `auth.requiresMfa` (a YELLOW transfer can escalate to RED at execution time); the cancel audit row keeps the parked `action.tier` / `action.requiresMfa`.
   - `newSessionId(prefix?)`, `collectEvents(agent)`, `toolEventsOf(res,name)`, `cardsOfType(res,type)`; types `ScenarioResult`.
 
 ## Constraints

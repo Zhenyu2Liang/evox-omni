@@ -6,8 +6,8 @@
  *  - IDENTITY: the caller's session/user come from the TRUSTED `banking_session` cookie
  *    (`_lib/session#requireIdentity`); a missing cookie or unknown session → `403 SECURITY_DENIED`.
  *    A `?sessionId=` / `?userId=` query param is IGNORED and can never widen access.
- *  - Ownership guard: the caller's (trusted) session/user must own the pending action; a mismatch
- *    is rejected with `403 SECURITY_DENIED`.
+ *  - Existence + ownership: evaluated only AFTER identity is established — an unknown action id is
+ *    `404 NOT_FOUND`; an action owned by a DIFFERENT session/user is `403 SECURITY_DENIED`.
  *  - Delegates to the agent runtime via `_lib/agent-bridge` `verifyOwned(id, code, { userId, sessionId })`
  *    (`@/agent`), which checks the code against the mock MFA value and, on success, executes the
  *    original validated args.
@@ -44,23 +44,28 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
 
     const { code } = await parseBody(mfaVerifySchema, req);
 
-    // Ownership guard: a caller may only settle its OWN pending action.
+    // Existence first: an unknown action id is `404 NOT_FOUND`, distinct from a forbidden one.
     const row = await getPendingAction(id);
-    if (row && (row.sessionId !== sessionId || row.userId !== userId)) {
+    if (!row) {
+      throw new AppError('NOT_FOUND', `未找到待处理的操作: ${id}`);
+    }
+
+    // Ownership guard: a caller may only settle its OWN pending action (mismatch → 403).
+    if (row.sessionId !== sessionId || row.userId !== userId) {
       throw new AppError('SECURITY_DENIED', '无权验证该操作。');
     }
 
     // Locate the plan node parked on this action BEFORE verifying — resuming the plan clears the
     // node's `pendingActionId`, after which the reverse lookup finds nothing. A plain (non-plan)
     // action simply returns `undefined`.
-    const located = await locateOwningPlan(row?.sessionId, id);
+    const located = await locateOwningPlan(row.sessionId, id);
     const outcome = await verifyOwned(id, code, { userId, sessionId });
     // Forward a refreshed `plan_update` so `/agent` refreshes its plan view after the decision.
     const outcomeWithPlan = await withPlanUpdate(outcome, located);
 
     // `ConfirmationOutcome` does not carry the session id: derive it from the persisted
-    // `PendingAction` row, falling back to the trusted identity.
-    const responseSessionId = row?.sessionId ?? sessionId;
+    // `PendingAction` row (the caller is already known to own it).
+    const responseSessionId = row.sessionId;
 
     const mfaResult = outcome.ok
       ? 'success'

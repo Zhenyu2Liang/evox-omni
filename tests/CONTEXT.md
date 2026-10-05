@@ -85,8 +85,8 @@ anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) 
 
 ## Fast test-DB path (why the suite is fast — do not remove)
 
-The full suite runs in ~25–30s. This depends on a deliberately fast SQLite configuration; if any piece
-is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
+The full suite (438 tests / 206 suites) runs in ~30–45s.
+This depends on a deliberately fast SQLite configuration; if any piece is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
 
 - `helpers/db.ensureTestPragmas()` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`
   once per process (`WAL` is file-persistent; `synchronous`/`busy_timeout` are per-connection).
@@ -125,5 +125,15 @@ is dropped, commits fall back to fsync and the suite balloons toward the 10-minu
   seam (injectable `now`/`id`, unique sessionId, fresh DB) instead.
 - Speed comes from the "Fast test-DB path" invariant, NOT from skipping resets — keep the pragmas and
   the `connection_limit=1` URL, and never trade isolation for speed.
+- **Identity is COOKIE-ONLY.** Write/auth routes (`/api/actions/[id]/{confirm,verify,cancel}`,
+  `/api/tasks*`, `/api/security/reset`) authenticate ONLY via the `banking_session` cookie
+  (`SESSION_COOKIE`); `?sessionId=`/`?userId=` query params are IGNORED. Missing/unknown cookie → 403
+  `SECURITY_DENIED`; unknown id → 404 `NOT_FOUND`; foreign-owned id → 403. App-entry specs pass
+  identity as a `Cookie` header via `harness.ts` (`{ sessionId }` shorthand or a raw `cookie`).
+- **Gateway ownership is mandatory.** `securityGateway.authorizeAction(id, { userId, sessionId, mfaCode? })`
+  and `cancelAction(id, { userId, sessionId })` REQUIRE non-optional `userId`+`sessionId` (no demo-user
+  fallback; missing/mismatch → `SECURITY_DENIED`). Pass the parked action's OWN `sessionId` and that
+  session's `userId` (`DEMO_USER_ID` = 'user_liming'). `AuthorizationResult` carries the EFFECTIVE
+  `tier`/`requiresMfa` on BOTH success and failure.
 - `tsc --noEmit` must stay at **0 errors** — a green `vitest run` alone is not sufficient (Vitest
   transpiles without type-checking).

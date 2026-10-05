@@ -29,11 +29,12 @@ import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as cancelPost } from '@/app/api/actions/[id]/cancel/route';
 import { POST as verifyPost } from '@/app/api/actions/[id]/verify/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
+import { getOrCreateSession } from '@/agent';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
 import { MFA_CODE } from '@/lib/constants';
 import { newId } from '@/lib/ids';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
-import { ACCOUNTS, CONTACTS } from '@/tests/helpers/fixtures';
+import { ACCOUNTS, CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { actionUrl, chatUrl, idCtx, postJson, type HttpResult } from './harness';
 
 /* ------------------------------------------------------------------------------- fixtures */
@@ -124,16 +125,15 @@ function parked(sessionId: string) {
 }
 
 /**
- * Invoke a real action route handler. The dynamic-route `ctx` MUST be passed explicitly (the
- * harness defaults it to `idCtx('')`), and `sessionId` travels as a query param the routes read.
+ * Invoke a real action route handler. The dynamic-route `ctx` MUST be passed explicitly (the harness
+ * defaults it to `idCtx('')`), and `sessionId` travels as the `banking_session` COOKIE — identity is
+ * cookie-only, so a `?sessionId=` query param would be IGNORED.
  */
 function confirmAction(id: string, sessionId?: string): Promise<HttpResult<Envelope<ActionResponse>>> {
-  return postJson<Envelope<ActionResponse>>(
-    confirmPost,
-    actionUrl(id, 'confirm', sessionId),
-    {},
-    { ctx: idCtx(id) },
-  );
+  return postJson<Envelope<ActionResponse>>(confirmPost, actionUrl(id, 'confirm'), {}, {
+    ctx: idCtx(id),
+    sessionId,
+  });
 }
 
 function verifyAction(
@@ -141,21 +141,17 @@ function verifyAction(
   code: string,
   sessionId?: string,
 ): Promise<HttpResult<Envelope<ActionResponse>>> {
-  return postJson<Envelope<ActionResponse>>(
-    verifyPost,
-    actionUrl(id, 'verify', sessionId),
-    { code },
-    { ctx: idCtx(id) },
-  );
+  return postJson<Envelope<ActionResponse>>(verifyPost, actionUrl(id, 'verify'), { code }, {
+    ctx: idCtx(id),
+    sessionId,
+  });
 }
 
 function cancelAction(id: string, sessionId?: string): Promise<HttpResult<Envelope<ActionResponse>>> {
-  return postJson<Envelope<ActionResponse>>(
-    cancelPost,
-    actionUrl(id, 'cancel', sessionId),
-    {},
-    { ctx: idCtx(id) },
-  );
+  return postJson<Envelope<ActionResponse>>(cancelPost, actionUrl(id, 'cancel'), {}, {
+    ctx: idCtx(id),
+    sessionId,
+  });
 }
 
 /* ----------------------------------------------------------------------------- DB helpers */
@@ -373,20 +369,36 @@ describe('POST /api/actions/[id]/cancel — no execution', () => {
 });
 
 describe('POST /api/actions — ownership guard and unknown ids', () => {
-  it('7 — a foreign session gets 403 SECURITY_DENIED (action untouched); an unknown id gets 404 NOT_FOUND on every route', async () => {
+  it('7 — a foreign OWNER gets 403 SECURITY_DENIED (action untouched); an unknown id gets 404 NOT_FOUND on every route', async () => {
     const turn = await chatTurn('给张伟转200元');
     const row = await parked(turn.sessionId);
 
-    // Ownership: a DIFFERENT session may not settle this action.
-    const foreign = await confirmAction(row.id, newId('sess'));
-    expect(foreign.status).toBe(403);
-    expect(failure(foreign).code).toBe('SECURITY_DENIED');
+    // Ownership: a REAL (persisted) but DIFFERENT session may not settle this action. Using a valid
+    // foreign session proves the 403 comes from the OWNERSHIP guard — requireIdentity passes and the
+    // gateway rejects the id/owner mismatch (NOT a fall-through identity failure).
+    const foreignSessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    expect(foreignSessionId).not.toBe(turn.sessionId);
 
+    const foreignConfirm = await confirmAction(row.id, foreignSessionId);
+    expect(foreignConfirm.status).toBe(403);
+    expect(failure(foreignConfirm).code).toBe('SECURITY_DENIED');
+
+    const foreignVerify = await verifyAction(row.id, MFA_CODE, foreignSessionId);
+    expect(foreignVerify.status).toBe(403);
+    expect(failure(foreignVerify).code).toBe('SECURITY_DENIED');
+
+    const foreignCancel = await cancelAction(row.id, foreignSessionId);
+    expect(foreignCancel.status).toBe(403);
+    expect(failure(foreignCancel).code).toBe('SECURITY_DENIED');
+
+    // The action is untouched: still pending, no money moved, no audit row.
     const untouched = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: row.id } });
     expect(untouched.status).toBe('pending');
     expect(await checkingBalance()).toBe(SEEDED_BALANCE);
+    expect(await zhangweiTransfers()).toHaveLength(0);
+    expect(await getTestPrisma().auditLog.count({ where: { sessionId: turn.sessionId } })).toBe(0);
 
-    // Unknown action id ⇒ the gateway throws NOT_FOUND (all three routes).
+    // Unknown action id ⇒ the gateway throws NOT_FOUND (all three routes), given a VALID cookie.
     const unknownId = newId('missing');
     const unknownConfirm = await confirmAction(unknownId, turn.sessionId);
     expect(unknownConfirm.status).toBe(404);
@@ -399,6 +411,45 @@ describe('POST /api/actions — ownership guard and unknown ids', () => {
     const unknownCancel = await cancelAction(unknownId, turn.sessionId);
     expect(unknownCancel.status).toBe(404);
     expect(failure(unknownCancel).code).toBe('NOT_FOUND');
+  });
+
+  it('7b — identity is COOKIE-ONLY: a missing/unknown cookie (or a ?sessionId= query param) is 403 SECURITY_DENIED on every write route', async () => {
+    const turn = await chatTurn('给张伟转200元');
+    const row = await parked(turn.sessionId);
+
+    // No cookie at all ⇒ requireIdentity rejects (fail-closed) on all three routes.
+    const noCookieConfirm = await confirmAction(row.id);
+    expect(noCookieConfirm.status).toBe(403);
+    expect(failure(noCookieConfirm).code).toBe('SECURITY_DENIED');
+
+    const noCookieVerify = await verifyAction(row.id, MFA_CODE);
+    expect(noCookieVerify.status).toBe(403);
+    expect(failure(noCookieVerify).code).toBe('SECURITY_DENIED');
+
+    const noCookieCancel = await cancelAction(row.id);
+    expect(noCookieCancel.status).toBe(403);
+    expect(failure(noCookieCancel).code).toBe('SECURITY_DENIED');
+
+    // An UNKNOWN cookie (no matching session row) is also rejected — it never resolves to a user.
+    const unknownCookieConfirm = await confirmAction(row.id, newId('sess'));
+    expect(unknownCookieConfirm.status).toBe(403);
+    expect(failure(unknownCookieConfirm).code).toBe('SECURITY_DENIED');
+
+    // A `?sessionId=` query param carrying the CORRECT id does NOT authenticate: identity is cookie-only.
+    const queryOnly = await postJson<Envelope<ActionResponse>>(
+      confirmPost,
+      `${actionUrl(row.id, 'confirm')}?sessionId=${encodeURIComponent(turn.sessionId)}`,
+      {},
+      { ctx: idCtx(row.id) },
+    );
+    expect(queryOnly.status).toBe(403);
+    expect(failure(queryOnly).code).toBe('SECURITY_DENIED');
+
+    // Nothing settled and no money moved.
+    const untouched = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: row.id } });
+    expect(untouched.status).toBe('pending');
+    expect(await checkingBalance()).toBe(SEEDED_BALANCE);
+    expect(await zhangweiTransfers()).toHaveLength(0);
   });
 });
 

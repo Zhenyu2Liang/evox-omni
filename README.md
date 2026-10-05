@@ -203,6 +203,8 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 
 ## 9. 安全设计 / Security design
 
+- **会话身份来自 HttpOnly Cookie（查询参数不授权）** — 请求身份**仅**从 HttpOnly 的 `banking_session` Cookie 解析（会话 id 由 `POST /api/chat` 下发），`userId` 由服务端从该 `AgentSession` 行读出；`?sessionId=` / `?userId=` 等 **查询参数一律被忽略**，绝不能伪造 / 覆盖 / 扩大身份。缺失 Cookie 或未知会话 ⇒ `403 SECURITY_DENIED`（fail-closed）。
+- **原子化的日累计限额** — 当日转账累计（已执行流水 + 在途授权 `PendingAction`）在 **同一个数据库事务** 内计算，`transfer_money` 的「确认」在同一事务内做原子 claim，杜绝并发确认绕过 ¥1000 阈值；多个各自 YELLOW 的小额转账会在 **执行时** 被重新评估并升级为 🔴 RED（需 MFA）。
 - **提示词注入防御（injection-guard）** — 对用户输入做启发式检测，命中则记录 `SecurityEvent`
   并向前端发出安全事件（`security_event{kind:'injection'}`）；但它 **只做纵深防御，绝不授予权限**。
   检测结果**不会**被注入模型上下文（不加任何"系统提醒"），也不改变任何授权结论。
@@ -227,14 +229,18 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 npm install
 
 # 2) 生成 Prisma Client（任何 import @prisma/client 的代码之前都要先做）
-npm run db:generate        # == npx prisma generate
+npx prisma generate        # 等价：npm run db:generate
 
 # 3) 初始化数据库（SQLite：建表 + 灌入演示数据）
-npm run db:push            # == npx prisma db push   （无 migrations 目录，直接 push）
-npm run db:seed            # == tsx prisma/seed.ts   （幂等；可重复运行）
+npx prisma db push         # 等价：npm run db:push   （无 migrations 目录，直接 push）
+npm run db:seed            # 等价：tsx prisma/seed.ts（幂等；可重复运行）
 
 # 4) 启动开发服务器
 npm run dev                # http://localhost:3000
+
+# 5) 生产构建 / 运行测试
+npm run build              # next build
+npm run test               # vitest run（离线：mock LLM + 测试 SQLite，无需 API Key）
 ```
 
 其它命令：
@@ -330,7 +336,26 @@ cp .env.example .env
 
 以下 12 个场景是 **验收标准**，均有对应的自动化测试（`tests/scenarios/test-01…test-12`），
 使用脚本化模型（`LLM_MODE=mock`）驱动 **完整流水线**（仅模型被 mock，工具 / 安全闸门 / 数据库都是真实的）。
-**逐场景的断言清单以 [`docs/test-cases.md`](docs/test-cases.md) 为准**；测试套件（含回归与真实 HTTP 用例）由并行工作流增量刷新。
+**逐场景的断言清单以 [`docs/test-cases.md`](docs/test-cases.md) 为准**；场景测试位于 `tests/scenarios/`，route-handler HTTP 集成测试位于 `tests/app/`。
+
+### 15.1 演示脚本 / 3-minute demo script
+
+> 开箱即用：默认 `LLM_MODE=mock`，**无需网络 / 无需 API Key** 即可离线跑通全部流程。
+
+1. **智能转账（分级随金额/当日累计升级）** — 输入「给张伟转200元，备注AA」：Agent 先 🟢 读余额/联系人（自动执行，无确认），
+   再发起 `transfer_money` —— 因单笔 ≤¥1000 被判 **🟡 YELLOW**，弹出 **确认卡片（ConfirmationCard）**；点击「确认」后由
+   服务端用**已校验参数**执行，余额 `23,580 → 23,380`。再输入「再给张伟转5000元」或使当日累计超过 ¥1000：同一工具升级为
+   **🔴 RED**，需在 **MFA 卡片（MfaCard）** 输入验证码 `123456`。**动钱的执行永远由人的确认/验证触发，而不是模型文本。**
+2. **账单 / 消费分析** — 输入「分析我这个月的消费」：🟢 `analyze_spending` 自动执行，返回本月总额 ≈¥5,800、分类占比与环比图表
+   （Recharts）。再输入「看看有没有异常交易」：🟢 `detect_anomaly` 命中 **Apple Store ¥6,999 @ 2026-09-20 18:32**，并显示异常横幅。
+3. **理财 / 订阅管理** — 输入「买5000元稳健理财A」：🔴 `subscribe_investment` → **MFA 卡片** → 验证码 `123456` → 生成持仓。
+   或输入「取消 Netflix 订阅」：🟡 `cancel_subscription` → **确认卡片** → 状态变更。
+4. **确认 + MFA UI** — 🟡 操作显示 **ConfirmationCard**（核对已校验参数后可确认/取消）；🔴 操作显示 **MfaCard**
+   （由用户手动输入验证码，**UI 永不显示验证码**）。
+5. **DAG 计划卡片** — 输入「如果本月娱乐消费超过2000，就把娱乐限额调成1500」：`submit_plan` 生成 **PlanCard**，按拓扑序展示节点状态；
+   卡片提供 **暂停 / 恢复 / 取消 / 重试** 控件（`POST /api/tasks/:id` 的 `pause | resume | cancel | retry`，被闸门的节点停留等待人工决策）。
+
+### 15.2 12 个验收场景 / 12 acceptance scenarios
 
 | # | 演示输入（用户原话） | 期望等级 / 结果 |
 |---|---|---|
@@ -354,8 +379,8 @@ cp .env.example .env
 本 Demo 为 **竞赛沙箱**，刻意做了精简与模拟（诚实说明）：
 
 - **无真实银行 / 无真实资金 / 无真实支付。** 一切数据在 SQLite 中模拟，不会发生任何真实资金流动。
-- **端到端验证状态。** 核心流水线（Agent + 工具 + 安全网关 + Banking SDK + 审计）已实现并配有自动化测试；
-  套件正由并行工作流补充回归与真实 HTTP 用例——凡未亲自端到端复现之处，本仓库文档以"**已实现，端到端验证进行中**"表述，而非断言"已完成"。
+- **浏览器端 E2E 未在仓库内自动化。** 仓库内的端到端测试是 **route-handler 集成测试**（`tests/app/*-http.test.ts` 直接驱动 Next.js 路由处理器 + faux LLM + 测试 SQLite），**没有** Playwright/Cypress 之类的浏览器 UI E2E；
+  因此 UI 交互以「已实现」表述，**不宣称已由浏览器端到端验证**；核心流水线（Agent + 工具 + 安全网关 + Banking SDK + 审计）的单元/集成测试见 `tests/`。
 - **验证码是模拟的**（固定 `123456`），不发送真实短信；且 UI 不显示验证码。
 - **演示时钟被固定。** 应用内所有"现在"默认使用 `DEMO_NOW = 2026-09-25 12:00（本地时间）`，
   以保证本月/上月/今日窗口、消费分析、当日转账累计与种子数据保持一致 —— 它 **不是真实系统时间**。

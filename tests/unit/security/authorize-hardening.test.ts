@@ -99,66 +99,70 @@ describe('authorizeAction · exactly-once claim (no duplicate re-authorization)'
     const action = await parkYellowTransfer(sessionId, 200);
     expect(await statusOf(action.id)).toBe('pending');
 
-    const first = await securityGateway.authorizeAction(action.id);
+    const first = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId });
     expect(first.ok).toBe(true);
     expect(first.status).toBe('confirmed');
     expect(await statusOf(action.id)).toBe('confirmed');
 
     // Second confirm must be rejected — otherwise the caller would re-execute money movement.
-    await expectAppError(securityGateway.authorizeAction(action.id), 'CONFLICT');
+    await expectAppError(securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId }), 'CONFLICT');
     expect(await statusOf(action.id)).toBe('confirmed');
   });
 
   it('an unknown action id surfaces NOT_FOUND', async () => {
-    await expectAppError(securityGateway.authorizeAction('pa_missing'), 'NOT_FOUND');
-    await expectAppError(securityGateway.cancelAction('pa_missing'), 'NOT_FOUND');
+    await expectAppError(securityGateway.authorizeAction('pa_missing', { userId: DEMO_USER_ID, sessionId: newSessionId() }), 'NOT_FOUND');
+    await expectAppError(securityGateway.cancelAction('pa_missing', { userId: DEMO_USER_ID, sessionId: newSessionId() }), 'NOT_FOUND');
   });
 });
 
 describe('authorizeAction / cancelAction · settling transitions reject the other path', () => {
   it('confirm-after-cancel throws CONFLICT', async () => {
-    const action = await parkYellowTransfer(newSessionId(), 200);
-    const cancelled = await securityGateway.cancelAction(action.id);
+    const sessionId = newSessionId();
+    const action = await parkYellowTransfer(sessionId, 200);
+    const cancelled = await securityGateway.cancelAction(action.id, { userId: DEMO_USER_ID, sessionId });
     expect(cancelled.status).toBe('cancelled');
 
-    await expectAppError(securityGateway.authorizeAction(action.id), 'CONFLICT');
+    await expectAppError(securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId }), 'CONFLICT');
     expect(await statusOf(action.id)).toBe('cancelled');
   });
 
   it('cancel-after-confirm throws CONFLICT', async () => {
-    const action = await parkYellowTransfer(newSessionId(), 200);
-    await securityGateway.authorizeAction(action.id);
+    const sessionId = newSessionId();
+    const action = await parkYellowTransfer(sessionId, 200);
+    await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId });
     expect(await statusOf(action.id)).toBe('confirmed');
 
-    await expectAppError(securityGateway.cancelAction(action.id), 'CONFLICT');
+    await expectAppError(securityGateway.cancelAction(action.id, { userId: DEMO_USER_ID, sessionId }), 'CONFLICT');
     expect(await statusOf(action.id)).toBe('confirmed');
   });
 });
 
 describe('authorizeAction / cancelAction · ownership (userId / sessionId)', () => {
   it('a mismatching userId is rejected with SECURITY_DENIED (confirm + cancel) and the row is untouched', async () => {
-    const action = await parkYellowTransfer(newSessionId(), 200);
+    const sessionId = newSessionId();
+    const action = await parkYellowTransfer(sessionId, 200);
 
     await expectAppError(
-      securityGateway.authorizeAction(action.id, { userId: 'user_someone_else' }),
+      securityGateway.authorizeAction(action.id, { userId: 'user_someone_else', sessionId }),
       'SECURITY_DENIED',
     );
     await expectAppError(
-      securityGateway.cancelAction(action.id, { userId: 'user_someone_else' }),
+      securityGateway.cancelAction(action.id, { userId: 'user_someone_else', sessionId }),
       'SECURITY_DENIED',
     );
     expect(await statusOf(action.id)).toBe('pending');
   });
 
   it('a mismatching sessionId is rejected with SECURITY_DENIED', async () => {
-    const action = await parkYellowTransfer(newSessionId(), 200);
+    const sessionId = newSessionId();
+    const action = await parkYellowTransfer(sessionId, 200);
 
     await expectAppError(
-      securityGateway.authorizeAction(action.id, { sessionId: newSessionId() }),
+      securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId: newSessionId() }),
       'SECURITY_DENIED',
     );
     await expectAppError(
-      securityGateway.cancelAction(action.id, { sessionId: newSessionId() }),
+      securityGateway.cancelAction(action.id, { userId: DEMO_USER_ID, sessionId: newSessionId() }),
       'SECURITY_DENIED',
     );
     expect(await statusOf(action.id)).toBe('pending');
@@ -189,15 +193,15 @@ describe('authorizeAction · execution-time transfer re-risk (anti bypass)', () 
     await insertOutgoingTransfer(-600, DEMO_DAY_MORNING);
 
     // Confirmation ALONE must now be refused: the transfer escalated to RED at execution time.
-    const escalated = await securityGateway.authorizeAction(action.id);
+    const escalated = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId });
     expect(escalated.ok).toBe(false);
     expect(escalated.status).toBe('awaiting_mfa');
     expect(escalated.requiresMfa).toBe(true);
     expect(escalated.message).not.toContain(MFA_CODE); // never leaks the code
-    expect(await statusOf(action.id)).toBe('pending'); // NOT confirmed
+    expect(await statusOf(action.id)).toBe('awaiting_mfa'); // NOT confirmed — escalated at execution time
 
     // ...and it must be COMPLETABLE with strong verification (not a dead-end loop).
-    const verified = await securityGateway.authorizeAction(action.id, { mfaCode: MFA_CODE });
+    const verified = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId, mfaCode: MFA_CODE });
     expect(verified.ok).toBe(true);
     expect(verified.status).toBe('confirmed');
     expect(verified.mfaResult).toBe('success');
@@ -211,7 +215,7 @@ describe('authorizeAction · execution-time transfer re-risk (anti bypass)', () 
     // A prior ¥300 → ¥600 + ¥300 = ¥900 ≤ ¥1000 → still YELLOW.
     await insertOutgoingTransfer(-300, DEMO_DAY_MORNING);
 
-    const res = await securityGateway.authorizeAction(action.id);
+    const res = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId });
     expect(res.ok).toBe(true);
     expect(res.status).toBe('confirmed');
     expect(res.mfaResult).toBe('not_required');
@@ -220,22 +224,24 @@ describe('authorizeAction · execution-time transfer re-risk (anti bypass)', () 
 
 describe('recordActionResult · true terminal status', () => {
   it("persists 'executed' and 'failed', and a confirm after 'executed' is CONFLICT", async () => {
-    const executed = await parkYellowTransfer(newSessionId(), 200);
+    const sessionId = newSessionId();
+    const executed = await parkYellowTransfer(sessionId, 200);
     await securityGateway.recordActionResult(executed.id, 'executed');
     expect(await statusOf(executed.id)).toBe('executed');
 
     // The action was really executed → a later confirm must be rejected (no double movement).
-    await expectAppError(securityGateway.authorizeAction(executed.id), 'CONFLICT');
+    await expectAppError(securityGateway.authorizeAction(executed.id, { userId: DEMO_USER_ID, sessionId }), 'CONFLICT');
     expect(await statusOf(executed.id)).toBe('executed');
 
-    const failed = await parkYellowTransfer(newSessionId(), 200);
+    const failed = await parkYellowTransfer(sessionId, 200);
     await securityGateway.recordActionResult(failed.id, 'failed');
     expect(await statusOf(failed.id)).toBe('failed');
   });
 
   it("is exposed on the securityGateway object (facade-visible) and does not throw for a failure status", async () => {
     expect(typeof securityGateway.recordActionResult).toBe('function');
-    const action = await parkYellowTransfer(newSessionId(), 200);
+    const sessionId = newSessionId();
+    const action = await parkYellowTransfer(sessionId, 200);
     await expect(securityGateway.recordActionResult(action.id, 'failed')).resolves.toBeUndefined();
   });
 });
@@ -249,7 +255,7 @@ describe('authorizeAction · circuit breaker stays the first hard gate', () => {
       await recordFailure(sessionId);
     }
 
-    const res = await securityGateway.authorizeAction(action.id, { mfaCode: MFA_CODE });
+    const res = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId, mfaCode: MFA_CODE });
     expect(res.ok).toBe(false);
     expect(res.status).toBe('locked');
     expect(res.mfaResult).toBeUndefined();

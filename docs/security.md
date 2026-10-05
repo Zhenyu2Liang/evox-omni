@@ -35,7 +35,8 @@
 
 `transfer_money` 的层级是**动态**的，由 `risk-engine.evaluateTransferRisk({ amount, dailyTransferTotal })` 决定：
 
-- `amount > 1000` **或** `dailyTransferTotal + amount > 1000` ⇒ 🔴 RED，否则 🟡 YELLOW；
+- `amount > 1000` **或** `dailyTransferTotal + amount > 1000` ⇒ 🔴 RED，否则 🟡 YELLOW
+  （阈值为**严格 `>`**：恰好 ¥1000 —— 无论单笔还是累计后 —— 仍为 🟡 YELLOW）；
 - **总是** `requiresConfirmation`。
 
 常量与阈值来自 `lib/constants.ts`：
@@ -86,13 +87,79 @@ flowchart TD
   **模型输出与用户文本永远不是判定输入**。
 - `beforeToolCall` 是**唯一**安全咽喉：它必须调用 `securityGateway.handleToolCall`，并在网关判定为门控时
   返回 `{ block: true, reason }`。agent 自己**从不**计算层级 / 确认 / MFA 需求（那是 `security/` 的专属权威）。
-- `userId` 由**服务器注入**（来自会话 / `lib/config.demoUserId`），**永不**取自模型或用户文本。
+- `userId` 由**服务器注入**（受门控路由来自 `banking_session` 会话，见第 4 节；读取路由用 `resolveUserId()`），
+  **永不**取自模型或用户文本。
 - **告警**：任何移动资金的工具都必须穿过 `securityGateway`——绝不允许新增一个绕过策略表的工具；
   新增工具时必须在 `TOOL_POLICY`（类型为 `Record<ToolName, ToolPolicy>`，缺键即编译错误）中登记。
 
 ---
 
-## 4. 提示注入防御 · Prompt Injection Defense
+## 4. 身份与归属 · Identity & Ownership
+
+**身份只来自 Cookie（cookie-only）**，绝不来自请求参数或模型文本。
+
+- `app/api/_lib/session.ts` → `requireIdentity(req)` 读取 HttpOnly cookie `banking_session`
+  （常量 `SESSION_COOKIE`），**忽略** `?userId=` / `?sessionId=` 查询参数；会话 cookie **缺失或未知**
+  一律返回 `403 SECURITY_DENIED`。`userId` 由服务器从持久化的 `AgentSession` 行读取 —— **没有**
+  demo-user 兜底。
+- **受 Cookie 门控（写 / 鉴权）的路由**：
+  `POST /api/actions/[id]/confirm`、`POST /api/actions/[id]/verify`、`POST /api/actions/[id]/cancel`、
+  `GET /api/actions`、`GET /api/tasks/[id]`、`POST /api/tasks/[id]`、`POST /api/security/reset`。
+- **非身份门控（明确列出，避免过度声称）**：
+  - `POST /api/chat` 是**会话创建**路由 —— 它从请求 **body** 读取 `sessionId` 并**签发**
+    `banking_session` cookie（**不要求**已存在 cookie）；
+  - `GET /api/tasks`、`GET /api/security`、`GET /api/audit` 的身份是**可选**的（会话范围读取；
+    无 / 未知会话 ⇒ 空结果或兜底，而非 403）；
+  - 读取路由 `/api/dashboard`、`/api/bills`、`/api/cards`、`/api/subscriptions` 使用 `resolveUserId()`
+    （demo-read 用户，**明确不是**授权原语，仅供渲染单一种子演示用户的数据）。
+- **归属（ownership）**：网关 `assertOwnership(row, opts)` 在所有者缺失 / 不匹配时抛出
+  `AppError('SECURITY_DENIED')`（并**复核**所属 `AgentSession` 行的所有者）；应用于 `authorizeAction`
+  与 `cancelAction`。**未知 action id** ⇒ `NOT_FOUND`。
+- **HTTP 状态映射**（`app/api/_lib/http.ts`）：`SECURITY_DENIED→403`、`NOT_FOUND→404`、
+  `CIRCUIT_OPEN→423`、`CONFLICT→409`、`MFA_FAILED→403`。
+  因此：**他人所有 ⇒ 403；未知 id ⇒ 404**。注意：单独的 `actionId` **不是**能力凭证（capability）。
+
+---
+
+## 5. 原子累计限额主张 · Atomic Cumulative-Limit Claim
+
+`transfer_money` 的**确认路径**（仅 YELLOW 免密确认）在 `security/security-gateway.ts#authorizeTransfer`
+中做成一个**单事务、认领先行（claim-first）**的恰好一次（exactly-once）流程，用于堵住「陈旧停放转账」绕过。
+
+- **只运行一个** `prisma.$transaction(async (tx) => {…})`，其**第一条语句**是认领**写**
+  （compare-and-set）：
+
+  ```ts
+  tx.pendingAction.updateMany({
+    where: { id, status: { in: ['pending'] }, userId, sessionId },
+    data: { status: 'confirmed' },
+  })
+  ```
+
+  若认领计数 `!== 1` ⇒ 返回 `{ kind: 'conflict' }` ⇒ `AppError('CONFLICT')`（恰好一次，重复 / 并发确认被拒）。
+- **仍在同一事务内**重算当日累计并**重新分级**：
+  `computeEffectiveTransferTotalWith(tx, userId, undefined, row.id)` 然后
+  `evaluateTransferRisk({ amount, dailyTransferTotal: effectiveTotal })`。
+- **重新分级用的累计包含在途转账**：`security/risk-engine.ts` →
+  `computeEffectiveTransferTotalWith(client, userId, now?, excludeActionId?)` = **已执行**的当日转出
+  （channel `TRANSFER`、direction `DEBIT`、窗口 `[startOfDay(now), now]` **闭区间**）**加上**
+  `computeInFlightTransferTotal(client, userId, excludeActionId?)` —— 后者汇总处于
+  `IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing']` 的已停放 `transfer_money` `PendingAction` 行
+  （**防御式**解析 `argsJson.amount`，跳过畸形 / 非有限值的行）。这封堵了「陈旧停放转账」绕过：多笔
+  各自在**停放时**通过校验、但合计超过 ¥1000 的 YELLOW 转账。
+- **YELLOW→RED 升级（escalation）**：若 `risk.tier === 'RED'`，在**事务内**通过
+  `tx.pendingAction.update({ where: { id }, data: { status: 'awaiting_mfa', riskLevel: 'RED', requiresMfa: true } })`
+  **回滚认领**并返回 `{ kind: 'escalated' }`。**提交之后**签发 MFA 挑战，并记录一条
+  `SecurityEvent`（kind `LIMIT_EXCEEDED`，severity `high`），返回
+  `{ ok:false, status:'awaiting_mfa', tier:'RED', requiresMfa:true, code:'LIMIT_EXCEEDED' }`。
+- 因为**认领写是事务的第一条语句**，对**不同 action id** 的并发确认会在 **SQLite 的写锁**上**串行化**
+  （跨**会话**也正确），而不是各自读到同一份「转账前」的当日累计。
+- **注意（诚实的边界）**：该保证依赖 **SQLite 文件锁串行化** —— 它是 **SQLite 特有**的，**未**在不同
+  数据库引擎 / 多写者（multi-writer）部署上证明；本演示运行在**本地 SQLite** 上。
+
+---
+
+## 6. 提示注入防御 · Prompt Injection Defense
 
 `security/injection-guard.ts` 做**启发式检测**——但它**只防御，从不授予权限（defense-in-depth only）**。
 
@@ -113,7 +180,7 @@ flowchart TD
 
 ---
 
-## 5. 幻觉防护 · Hallucination Protection
+## 7. 幻觉防护 · Hallucination Protection
 
 系统对模型输出做**事实性约束**（`agent/system-prompt.ts` 导出 `HALLUCINATION_RULE`）：
 
@@ -129,7 +196,7 @@ flowchart TD
 
 ---
 
-## 6. MFA（模拟验证） · Mock MFA
+## 8. MFA（模拟验证） · Mock MFA
 
 `security/mfa.ts` 实现演示用 MFA：
 
@@ -140,9 +207,24 @@ flowchart TD
   **已锁定的会话/挑战无论提交什么码都返回 `{ ok:false, locked:true }`**（锁定优先判定）。
 - `MFA_MAX_ATTEMPTS = 3` —— 达到连续失败上限即触发熔断。
 
+### 8.1 升级为强验证 · MFA Escalation（有效层级端到端）
+
+一个**停放时被判 YELLOW** 的中等转账，可能在**执行 / 确认时**因当日有效累计变动而重新分级为 RED。
+这种**执行时升级**必须**端到端如实呈现**，绝不能被压平成一个「无 MFA 的普通失败」：
+
+- **有效 `tier` + `requiresMfa` 始终向外传递**：`AuthorizationResult.tier` / `requiresMfa` **始终是有效值**
+  （不是停放行的过期标志）；`agent/confirmation.ts` 的 `effectiveTier(view)` 只要 `requiresMfa` 即返回
+  `'RED'`。因此被升级的 YELLOW 转账会**报告并审计**为 **RED + `mfaRequired:true`**。
+- **`mfa_required` 是 `AgentStreamEvent` 类型（不是 `SecurityEventKind`）**，在两个时刻发出：
+  - **回合时（turn）**：`agent/run-turn.ts` 发出（携带 hint + MFA 卡片）；
+  - **确认时（confirmation）**：`agent/confirmation.ts#blockedOutcome` 发出（仅 `{ actionId }`）。
+  转账升级的**持久化**审计**不用** `mfa_required`，而是用 `SecurityEventKind = 'LIMIT_EXCEEDED'`。
+- **审计 `riskLevel` / `mfaRequired` 是真实的**：由 `agent/confirmation.ts#executeAuthorizedAction` 写入
+  **有效值**，而非停放行的过期标志。
+
 ---
 
-## 7. 熔断器 · Circuit Breaker
+## 9. 熔断器 · Circuit Breaker
 
 `security/circuit-breaker.ts` 是**会话级、连续失败**熔断器（**进程内内存态**）：
 
@@ -156,9 +238,9 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - `isLocked(sessionId)`：作为硬门——被锁定时网关对**任何**工具调用直接 `deny`（block reason `HIGH_RISK_BLOCKED`），
   **包括 🟢 GREEN 读取**（`gatewayEvaluate`：`blocked = locked || tier !== 'GREEN'`，故锁定后所有层级一律拒绝）。
 - 解锁的**唯一**运行时路径是安全中心的**经审计**动作 `resetSession(sessionId, { actor, reason })`
-  （`POST /api/security/reset`）：它清空该会话熔断状态并写入一条 `SECURITY_RESET` `SecurityEvent`。
-  `recordSuccess` 与"锁定期间提交正确验证码"都**不会**解锁（锁定优先）。同步、无 I/O 的 `reset(sessionId)`
-  仅供测试使用（不写审计）。
+  （接线到 `POST /api/security/reset`，该路由本身受 `banking_session` Cookie 门控）：它清空该会话熔断状态
+  并写入一条 `SECURITY_RESET` `SecurityEvent`。`recordSuccess` 与"锁定期间提交正确验证码"都**不会**解锁
+  （锁定优先）。同步、无 I/O 的 `reset(sessionId)` 仅供测试使用（不写审计）。
 - 熔断器是 **LLM 无法清除的硬门**：3 次连续 MFA 失败即锁死**该会话的全部操作（含读取）**；
   只有用户主动的安全中心解锁（经审计）能恢复。
 
@@ -167,7 +249,7 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 ---
 
-## 8. 审计日志 · Audit Log
+## 10. 审计日志 · Audit Log
 
 `audit/` 是智能体问责轨迹的**唯一持久化 + 查询 API**：每条工具调用审计（`AuditEntry`）
 与每个安全事件（`SecurityEvent`）。它服务于智能体循环的**审计**阶段，并驱动审计面板与安全中心读模型。
@@ -191,7 +273,7 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 ---
 
-## 9. 沙箱保证 · Sandbox Guarantees
+## 11. 沙箱保证 · Sandbox Guarantees
 
 演示严格限定在安全沙箱内：
 
@@ -203,12 +285,15 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 ---
 
-## 10. 安全事件与决策速查 · Quick Reference
+## 12. 安全事件与决策速查 · Quick Reference
 
 | 控制 | 位置 | 触发 | 效果 |
 |---|---|---|---|
 | 权限判定 | `permission-engine.ts` | 每次工具调用 | 🟢/🟡/🔴 + 确认/MFA 需求 |
 | 动态风险 | `risk-engine.ts` | `transfer_money` | 金额/日累计升 RED |
+| 身份解析 | `app/api/_lib/session.ts` | 受门控路由 | Cookie-only；缺失/未知会话 ⇒ `403 SECURITY_DENIED` |
+| 归属校验 | `security-gateway.ts#assertOwnership` | confirm/verify/cancel | 非本人 ⇒ `403`；未知 id ⇒ `404`（`actionId` 非能力凭证） |
+| 原子认领/重分级 | `security-gateway.ts#authorizeTransfer` | `transfer_money` 确认 | 单事务内 CAS 认领 + 有效累计（含在途）重分级；超限升 RED |
 | 网关阻断 | `security-gateway.ts` | YELLOW/RED | `block:true` + `PendingAction` |
 | 注入检测 | `injection-guard.ts` | 可疑用户文本 | `INJECTION_ATTEMPT`（**不授予权限**） |
 | MFA | `mfa.ts` | RED | 校验 `123456`；失败喂熔断 |
@@ -216,9 +301,10 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 | 熔断解锁 | `circuit-breaker.ts` · `POST /api/security/reset` | 用户在安全中心主动解除 | 清空熔断状态 + `SECURITY_RESET`（**经审计**） |
 | 审计 | `audit/` | 门控决策 / 安全控制 | `AuditLog` / `SecurityEvent` |
 
-## 11. 代码强制 vs 模拟 · What is Enforced vs Simulated（诚实清单）
+## 13. 代码强制 vs 模拟 · What is Enforced vs Simulated（诚实清单）
 
-本节是**安全自评**：明确区分"真实由代码强制"与"为演示而模拟"的部分，避免过度声称。
+本节是**安全自评**：明确区分"真实由代码强制"（IMPLEMENTED）、"为演示而模拟"（SIMULATED）与
+"尚未端到端验证"（UNVERIFIED）三部分，避免过度声称。
 
 **由 TypeScript 代码强制（真实、可断言，不依赖 LLM 文本）：**
 
@@ -239,11 +325,16 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - **`reserve_budget`（🟢）只写一条预算行，不锁定 / 移动资金**；
 - **`create_scheduled_task`（🟡）只记录一条"未来动作"意图，无在线调度器执行**；
 - **`change_password` 为模拟成功（无凭据存储）**，以 `AuditLog` 为准；
-- **熔断器是进程内内存态**（非分布式 / 不持久化）；
-- **演示时钟被固定**（`DEMO_NOW = 2026-09-25 12:00 本地`）；**🟢 GREEN 只读操作按设计不写审计**；
-  **UI 不展示 LLM 思维链**。
+- **UI 不展示 LLM 思维链**——只展示任务步骤、工具状态与结果。
 
-**实现但端到端验证进行中：** 以上路径均已实现并配有自动化测试；测试套件正由并行工作流补充回归与
-真实 HTTP 用例——尚未端到端复现之处，本文以"实现，验证进行中"表述，而非断言"完成"。
+**尚未端到端验证（UNVERIFIED / 诚实边界）：**
+
+- **无真实浏览器端到端测试**：仓库内**没有** Playwright / Puppeteer / Cypress；`tests/app/` 下的 HTTP
+  路由规格是**进程内集成测试**——它们 `import` 真实路由处理器并用 `NextRequest` 对象直接调用，**不是**
+  浏览器测试；
+- **熔断器是进程内 / 单进程内存态**（非分布式、不持久化）；
+- **演示时钟被固定**（`DEMO_NOW = 2026-09-25 12:00 本地`）；**🟢 GREEN 只读操作按设计不写审计**；
+- **原子累计限额认领的串行化依赖 SQLite 文件锁**（见「原子累计限额主张」的注意项）——SQLite 特有，
+  未在其他数据库引擎 / 多写者部署上验证。
 
 > 验收场景与断言见 [`test-cases.md`](./test-cases.md)；已知限制见 [`known-risks.md`](./known-risks.md)。
