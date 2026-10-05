@@ -54,6 +54,8 @@ All handlers are **thin**: `validate (zod) → delegate → serialize`. Every re
 below. Path params come from `params`; query/body are zod-parsed. See `app/api/CONTEXT.md` for the
 authoritative endpoint table.
 
+**Trusted identity is cookie-only and server-derived.** Auth/write routes NEVER trust `?userId=`/`?sessionId=` query params — they call `requireIdentity(req)` (from `app/api/_lib/session.ts`), which reads the `banking_session` cookie, looks up the session row, and returns the trusted `{ sessionId, userId }`. A missing cookie or unknown session fails closed with `403 SECURITY_DENIED`. The demo-user fallback (`getConfig().demoUserId`) is used ONLY for anonymous GREEN read models, never for auth/write paths.
+
 | Method | Path | Request | Success data (`ok:true`) |
 | --- | --- | --- | --- |
 | GET | `/api/health` | — | `{ status:'ok', time:number, llmMode:'live'\|'mock' }` |
@@ -61,16 +63,17 @@ authoritative endpoint table.
 | POST | `/api/actions/[id]/confirm` | body `{}` | `ActionResponse` |
 | POST | `/api/actions/[id]/verify` | body `{ code: string }` | `ActionResponse` (`ok:false` + `status:'awaiting_mfa'` on wrong code) |
 | POST | `/api/actions/[id]/cancel` | body `{}` | `ActionResponse` (`status:'cancelled'`) |
-| GET | `/api/tasks` | query `{ sessionId?, limit? }` | `{ plans: TaskPlan[] }` |
-| GET | `/api/tasks/[id]` | — | `TaskPlan` (persisted snapshot → refresh recovery) |
-| POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` (plan after the control; owning session only) |
-| GET | `/api/audit` | query `{ sessionId?, toolName?, riskLevel?, status?, limit? }` | `{ entries: AuditEntry[]; summary: AuditSummary }` |
-| GET | `/api/security` | query `{ sessionId? }` | `{ status: SecurityStatus; events: SecurityEvent[]; circuitBreaker: { failures; max; locked } }` |
-| POST | `/api/security/reset` | session via cookie / `?sessionId=` | `ResetData { sessionId, locked, failures, max, message }` — AUDITED unlock of this session's breaker |
-| GET | `/api/dashboard` | query `{ userId? }` | `DashboardSummary` |
+| GET | `/api/actions` | identity from cookie | `{ actions: PendingAction[] }` — the session's NON-TERMINAL pending actions (refresh-restore entry) |
+| GET | `/api/tasks` | query `{ limit? }` (identity from cookie) | `{ plans: TaskPlan[] }` — the session's plans, newest-first |
+| GET | `/api/tasks/[id]` | identity from cookie | `TaskPlan` with node statuses + each node's `pendingActionId` (owning session+user only; foreign → 403, unknown → 404) |
+| POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` (identity from cookie) | `TaskPlan` (plan after the control; owning session/user only) |
+| GET | `/api/audit` | query `{ toolName?, riskLevel?, status?, limit? }` | `{ entries: AuditEntry[]; summary: AuditSummary }` |
+| GET | `/api/security` | identity from cookie | `{ status: SecurityStatus; events: SecurityEvent[]; circuitBreaker: { failures; max; locked } }` |
+| POST | `/api/security/reset` | identity from cookie | `ResetData { sessionId, locked, failures, max, message }` — AUDITED unlock of this session's breaker |
+| GET | `/api/dashboard` | `{}` (demo user) | `DashboardSummary` |
 | GET | `/api/bills` | query `{ month? }` (`YYYY-MM`) | `{ analysis: SpendingAnalysis; transactions: TransactionView[]; anomalies: AnomalyItem[] }` |
-| GET | `/api/cards` | query `{ userId? }` | `{ cards: CardView[] }` |
-| GET | `/api/subscriptions` | query `{ userId? }` | `{ subscriptions: SubscriptionView[] }` |
+| GET | `/api/cards` | `{}` (demo user) | `{ cards: CardView[] }` |
+| GET | `/api/subscriptions` | `{}` (demo user) | `{ subscriptions: SubscriptionView[] }` |
 
 `ActionResponse` (shared shape for every action route) is defined in `app/api/_lib/types.ts`:
 
@@ -228,5 +231,8 @@ The `action` routes call `confirm`/`verify`/`cancel` through `app/api/_lib/agent
 - **Identity is cookie-only (server-derived); action/task routes enforce ownership; the reset is audited.** Every auth/write route calls `requireIdentity(req)` FIRST — a missing cookie or unknown session fails closed with `403 SECURITY_DENIED`; a `?userId=`/`?sessionId=` query param is IGNORED (never overrides the cookie). `POST /api/actions/[id]/{confirm,verify,cancel}` then guard that the trusted session/user owns the `PendingAction` (mismatch → `403 SECURITY_DENIED`) and forward `{ userId, sessionId }` to `@/agent` via `agent-bridge`; `confirm` surfaces MFA escalation (`requiresMfa`, effective `tier`, and a code-free `{type:'mfa_required',actionId}` event). `confirm`/`verify` additionally append a refreshed `plan_update` to `events` when the settled action parked a plan node (located BEFORE the decision via `locateOwningPlan`, then re-read via `withPlanUpdate`). Ownership-guarded reads: `GET /api/actions` (the session's non-terminal pending actions), `GET /api/tasks/[id]` (owning plan with node `pendingActionId`), and `POST /api/tasks/[id]` (ownership-guarded execution control). `POST /api/security/reset` requires identity and uses the AUDITED `security.circuitBreaker.resetSession(sessionId, { actor })` (records a `SECURITY_RESET` SecurityEvent), never the test-only sync `reset()`.
 
 ## Known Issues
+
+- **Root-owned `tests/app/*` still authenticate via the `?sessionId=` query with no `banking_session` cookie.** With cookie-only identity they now receive `403` where they expected `200` — `tasks-http.test.ts` (10/11), `actions-http.test.ts` (8/9), `plan-parking-http.test.ts` (2/4) fail. They need a `Cookie: banking_session=<id>` helper (two `tasks-http` assertions also change: 400→403, unknown-id-without-identity→403). `tests/app/chat-http.test.ts` passes (it sends `sessionId` in the request body). Reported to root — NOT editable from `./app`.
+- **Sibling `components/chat/cards/PlanCard.tsx:13,22` fails type-check/build.** `PLAN_STATUS_LABEL` / `PLAN_STATUS_TONE` are `Record<TaskPlanStatus, string>` missing the `paused` key (added to `TaskPlanStatus`). This breaks `npx tsc --noEmit` (2 errors, both sibling; 0 in `app/**`) and `npx next build` repo-wide. Owned by the `./components` sibling — reported, not editable from `./app`.
 
 - **Plan-node UI consumption is a `../components` concern.** The `./app` side is complete: `POST /api/chat` forwards `plan_update` / `confirmation_required` / `mfa_required` / `plan` cards verbatim; `GET /api/tasks` + `GET /api/tasks/[id]` + `POST /api/tasks/[id]` serve and steer persisted plans (ownership-guarded); `POST /api/actions/[id]/{confirm,verify}` append a refreshed `plan_update` for a settled plan node; and `/agent` passes the cookie session id to `ChatWindow` so a refresh can recover the running plan. Rendering `activePlan` and reacting to `plan_update` live in the read-only sibling `../components/chat` (`ChatWindow`/`useAgentStream`, `PlanCard`) — not editable from `./app`.
