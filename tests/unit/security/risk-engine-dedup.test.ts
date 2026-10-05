@@ -11,13 +11,11 @@
  *
  * DB-free: the Prisma surface is a hand-written STUB that implements only the two calls the helper
  * makes (`pendingAction.findMany` + `transaction.findMany`) and honours the `where` filters it uses.
- *
- * Run: `npx vitest run --config security/_vitest.local.config.ts`
  */
 import { describe, it, expect } from 'vitest';
 
-import { computeInFlightTransferTotal, type PrismaLike } from '../risk-engine';
-import { idempotentTransferTxId } from '../../lib/ledger';
+import { computeInFlightTransferTotal, type PrismaLike } from '@/security/risk-engine';
+import { idempotentTransferTxId } from '@/lib/ledger';
 
 const USER_ID = 'user_liming';
 

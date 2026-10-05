@@ -362,17 +362,11 @@ Vitest. This node is designed to be unit-testable WITHOUT network or clock:
 - **These specs must supply `{ userId, sessionId }` to `authorizeAction`/`cancelAction`** (the options are
   required) and a non-empty identity to `handleToolCall`; a call without ids fails closed with `SECURITY_DENIED`.
 - End-to-end agent scenarios (Tests 1–12, incl. injection & confirmation) live under `../tests/`.
-- **Local DB-free spec (this node)**: `security/_tests/risk-engine-dedup.test.ts` proves the
-  `computeInFlightTransferTotal` ledger dedup with a hand-written stub implementing only
-  `pendingAction.findMany` + `transaction.findMany` (cast to `PrismaLike`) — no DB, no clock, no
-  network. Run it with its own config (the root `vitest.config.ts` discovers only `tests/**`):
-  `npx vitest run --config security/_vitest.local.config.ts` (include = `security/_tests/**/*.test.ts`,
-  `environment: 'node'`).
+- **All specs live under the root-owned `../tests/`** (the root `vitest.config.ts` discovers only `tests/**`). The `computeInFlightTransferTotal` ledger-dedup spec is `tests/unit/security/risk-engine-dedup.test.ts` (a hand-written Prisma stub implementing only `pendingAction.findMany` + `transaction.findMany`, cast to `PrismaLike`; no DB, no clock, no network), run with the other security units via `npx vitest run tests/unit/security`.
 
 ## Routing Table
 
 This is a **leaf node** — it has no child directories; the modules above are its surface.
-- `security/_tests/` + `security/_vitest.local.config.ts` → this node's own DB-free dedup spec and its runner config
 - `../tests/` → security/planner/sdk units + faux-LLM scenario integration tests (sibling — read-only, escalate writes to root)
 
 ## Notes for Agents
@@ -384,5 +378,5 @@ This is a **leaf node** — it has no child directories; the modules above are i
 - `authorizeAction`/`cancelAction` transition status ONLY through `claimPendingAction` (atomic compare-and-set; the transfer path uses the same CAS inline) — never a status peek then unconditional write; ownership mismatches use `AppError('SECURITY_DENIED')` (no `FORBIDDEN` code exists).
 - After the agent layer executes an authorized action (or it fails), call `securityGateway.recordActionResult(id, 'executed'|'failed')` so the persisted terminal status is truthful and a later confirm/cancel is a `CONFLICT`.
 - `authorizeAction`/`cancelAction`/`handleToolCall` REQUIRE a caller identity — never add a demo-user fallback; callers must pass `{ userId, sessionId }`.
-- **Local test files**: this node owns `security/_tests/risk-engine-dedup.test.ts` (DB-free dedup spec) run via `security/_vitest.local.config.ts`. The bulk of security specs still live under the root-owned `../tests/` (the root `vitest.config.ts` discovers only `tests/**`, so the local spec needs the dedicated `--config`).
+- **All tests live under the root-owned `../tests/`** (the root `vitest.config.ts` discovers only `tests/**`): this node's security unit specs — including the DB-free dedup spec `tests/unit/security/risk-engine-dedup.test.ts` — run via `npx vitest run tests/unit/security`.
 - **GREEN auto-executed reads are NOT audited.** The only `recordAudit` callers are the gated paths in `agent/confirmation.ts` (confirm/verify + cancel); a GREEN tool that executes inline writes no `AuditLog` row (by design, per `lib/contracts/audit`).
