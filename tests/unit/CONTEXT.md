@@ -40,7 +40,10 @@ runs them all — no scoped config is required for any of them.
 - `lib/` (2 specs) — `pendingAction.claim.test.ts` — `lib/db/repositories/pendingAction`: the atomic,
   ownership-aware persistence primitives (`claimPendingAction` exactly-once `pending → confirmed`,
   the `from`-set match, `userId`/`sessionId` scoping, `setPendingActionStatus` +
-  `getPendingActionOwnership`). DB-backed.
+  `getPendingActionOwnership`). DB-backed. Plus `ledger-keys.test.ts` - pure: `lib/ledger` de-dup-scope
+  identity keys (`nodeExecutionKey` = `nxe:<taskId>:<nodeId>`, plan/node-scoped so two DIFFERENT plans
+  never merge while the SAME (task,node) always dedupes; `idempotentTransferTxId` = `txidem_` + first 32
+  hex of sha256 over `<userId>` + NUL + key).
 
 Each spec imports the module under test directly from its `@/…` façade path
 (e.g. `@/security`, `@/planner`, `@/banking-sdk`, `@/agent`, `@/lib/db/repositories/pendingAction`)
