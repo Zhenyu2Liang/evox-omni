@@ -200,6 +200,30 @@ The `action` routes call `confirm`/`verify`/`cancel` through `app/api/_lib/agent
 - **Build sanity** for this node: `npm run typecheck` + `npm run build` (the latter needs a provisioned
   SQLite DB — `npx prisma db push` + `npm run db:seed` — because the data pages are prerendered).
 
+## Build-time Rendering (static vs dynamic)
+
+Next ^15.1.6 App Router: a page is **statically prerendered at build time** unless it uses a dynamic API
+(`cookies()`, `headers()`, `searchParams`) or opts out. No page/route in `app/` exports
+`dynamic`/`revalidate`/`dynamicParams`/`fetchCache`/`runtime`/`force-static`/`force-dynamic`/`noStore` —
+the static/dynamic split is driven purely by dynamic-API usage.
+
+- **Static (prerendered at build → the read model's Prisma query runs during `next build`)** — import
+  `@/banking-sdk` and call a read model in render with NO dynamic API:
+  - `app/page.tsx` `/` — `banking.dashboard.getDashboardSummary(userId)` (line 26).
+  - `app/cards/page.tsx` `/cards` — `banking.card.getCards(userId)` (line 27).
+  - `app/subscriptions/page.tsx` `/subscriptions` — `banking.subscription.listSubscriptions(userId)` (line 44).
+- **Dynamic (rendered per request, NOT prerendered)**:
+  - `app/agent/page.tsx` `/agent` — `await cookies()` (line 21).
+  - `app/audit/page.tsx` `/audit` — `await cookies()` (line 71).
+  - `app/security/page.tsx` `/security` — `await cookies()` (line 34).
+  - `app/bills/page.tsx` `/bills` — awaits `searchParams` (line 38).
+- `app/layout.tsx` + `app/_components/NavBar.tsx` (client-only) — no DB access.
+- `app/api/**/route.ts` — Route Handlers, dynamic by default (no static opt-in) → never prerendered.
+
+**Consequence**: `npm run build` (`next build`) executes the three static pages' Prisma queries at build
+time, so the SQLite DB MUST be pushed + seeded first (`npx prisma db push` + `npm run db:seed`) or the
+prerender fails. README §10 orders: `db:generate` → `db:push` → `db:seed` → `dev`/`build`.
+
 ## Routing Table
 
 - `./` → Dashboard page + root layout/globals (this node's own files: `layout.tsx`, `globals.css`, `page.tsx`)
