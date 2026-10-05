@@ -220,6 +220,13 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 - `./malicious-input-http.test.ts` → prompt-injection over HTTP still gated + follow-up arg-override cannot change executed args
 - `./nl-entry-http.test.ts` → natural-language entry via `POST /api/chat` → gated tool → confirm/verify completes
 - `./review-regressions-http.test.ts` → reviewer regression e2e: two-park YELLOW→RED execution-time escalation in one session, plan-cancel revokes its parked action + cancel/confirm race orderings, a mid-run pause (via the real handler) halting the next node + resume re-running only that node, and forged-query-never-authenticates on verify/cancel/tasks/reset
+- `./session-takeover-http.test.ts` → cookie-only takeover/isolation (body `sessionId` ≠ cookie → 409 no cookie; cross-session isolation 403; missing-cookie fail-closed; forged query never authenticates)
+- `./cancel-during-authorization-http.test.ts` → cancel landing while a park is in flight (controlled barrier): no executable PendingAction survives, daily total stays 0, both race orderings
+- `./task-resume-retry-http.test.ts` → concurrent real `resume`/`retry` over HTTP (rendezvous barrier): unfinished node runs EXACTLY ONCE, persisted status consistent
+- `./plan-pause-terminal-http.test.ts` → confirming a parked node in a PAUSED plan does NOT advance it; terminal-state protection (cancelled stays cancelled; completed never re-runs)
+- `./cumulative-risk-http.test.ts` → cumulative ¥1000/day rule over real confirm/verify (in-flight counted once; concurrent escalation; ¥1000/¥1000.01 boundaries)
+- `./ledger-consistency-http.test.ts` → ledger/balance consistency (confirmed delta === ledger delta; refusals move no money; N transfers accumulate)
+- `./mfa-escalation-upgrade-http.test.ts` → YELLOW→RED upgrade at execution time (confirm surfaces RED/awaiting_mfa + `mfa_required`; verify executes; audit consistent)
 
 ## Notes for Agents
 
