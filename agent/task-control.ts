@@ -110,13 +110,16 @@ const NON_CANCELLED_PLAN_STATUSES: TaskPlanStatus[] = [
 ];
 
 /**
- * The plan statuses `retryTask` may act on: every non-terminal status — and NEVER `'cancelled'` (a
- * cancelled plan is terminal, so a retry can never resurrect it). `'waiting_verification'` is a NODE
- * status only: a plan parked on a RED node persists as the PLAN status `'waiting_confirmation'`.
+ * The plan statuses `retryTask` may act on. `'running'` is DELIBERATELY EXCLUDED — the mirror image
+ * of `resumeTask`'s from-set, which KEEPS it — so a retry whose re-run was already started by a
+ * concurrent retry cannot be started twice: the first retry claims (e.g. `failed` → `running`) and
+ * runs, while the loser's guarded compare-and-set claims 0 rows and returns the persisted plan
+ * WITHOUT running. `'cancelled'` is also excluded (terminal — a retry can never resurrect a cancelled
+ * plan). `'waiting_verification'` is a NODE status only: a plan parked on a RED node persists as the
+ * PLAN status `'waiting_confirmation'`.
  */
 const RETRYABLE_PLAN_STATUSES: TaskPlanStatus[] = [
   'pending',
-  'running',
   'paused',
   'waiting_confirmation',
   'failed',
@@ -410,14 +413,20 @@ export async function pauseTask(
 /**
  * Resume (re-run) a paused/parked task plan.
  *
- * ATOMIC: a single compare-and-set from a RESUMABLE status to `'running'` gates the run, so two
- * concurrent resumes execute each unfinished node exactly once — the loser sees the row already
- * `'running'`, its CAS claims 0 rows and it returns the persisted plan WITHOUT running. A `cancelled`
- * plan is never resurrected (its status is absent from the from-set). The claim also flips the row
- * out of `'paused'` BEFORE the run, because a `'paused'` row is exactly what `defaultPollControls`
- * maps to a pause command — leaving it would re-pause this very run at its first checkpoint.
- * `runPlan` then skips every terminal node (idempotency), so an already-`success` node is NEVER
- * re-executed and a re-parked gated node stays parked for the next human decision.
+ * The durable row is loaded FIRST, so `toTaskPlan(row)` may still carry the stale `'paused'` status;
+ * the run is therefore driven with `explicitResume: true` — the planner's ONLY hook for advancing an
+ * in-memory `'paused'` snapshot (a bare `runPlan(paused, …)` returns it unchanged). Independently,
+ * `claimTaskStatus(taskId, RESUMABLE_PLAN_STATUSES, 'running')` flips the DURABLE row to `'running'`
+ * BEFORE the run, because a durable `'paused'` row is exactly what `defaultPollControls` maps to a
+ * pause command — leaving it would re-pause this very run at its first checkpoint.
+ *
+ * ATOMIC: that same compare-and-set from a RESUMABLE status to `'running'` gates the run. `'running'`
+ * is deliberately KEPT in the from-set (unlike `retryTask`'s, which EXCLUDES it): two concurrent
+ * resumes must each run, and the exactly-once side effect is guaranteed BELOW this level by the
+ * single-flight de-duplication in `confirmation.ts#executeGatedTool`. A `cancelled` plan is never
+ * resurrected (its status is absent from the from-set). `runPlan` skips every terminal node
+ * (idempotency), so an already-`success` node is NEVER re-executed and a re-parked gated node stays
+ * parked for the next human decision.
  *
  * After the run the CANONICAL CANCEL SWEEP revokes any `PendingAction` a node minted while a
  * concurrent `cancelTask` cancelled the plan (see `sweepCancelledPlan`).
@@ -436,6 +445,7 @@ export async function resumeTask(
 
   const result = await executor.runPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), {
     now: deps.now,
+    explicitResume: true,
   });
   await sweepCancelledPlan(sessionId, taskId);
   return result;
@@ -575,10 +585,13 @@ export async function cancelTask(
 /**
  * Retry the `failed` nodes (plus their not-yet-satisfied descendants), then re-run the plan.
  *
- * ATOMIC: a single compare-and-set from a NON-TERMINAL status to `'running'` gates the run — a
- * `cancelled` plan is NEVER retried (excluded from the from-set) and two concurrent retries execute
- * each reset node exactly once (the loser returns the persisted plan WITHOUT running). After the run
- * the CANONICAL CANCEL SWEEP revokes any action left parked by a concurrent cancellation.
+ * ATOMIC: a single compare-and-set from a NON-TERMINAL status to `'running'` gates the run. The
+ * from-set EXCLUDES `'running'` (see `RETRYABLE_PLAN_STATUSES`) — the deliberate ASYMMETRY with
+ * `resumeTask`, whose from-set KEEPS it: two concurrent retries must execute each reset node exactly
+ * once (the loser returns the persisted plan WITHOUT running), whereas two concurrent resumes must
+ * both run and rely on the single-flight de-duplication in `confirmation.ts#executeGatedTool`. A
+ * `cancelled` plan is NEVER retried (excluded from the from-set). After the run the CANONICAL CANCEL
+ * SWEEP revokes any action left parked by a concurrent cancellation.
  */
 export async function retryTask(
   sessionId: string,
