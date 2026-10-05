@@ -6,11 +6,14 @@
  * explicit (the caller passes `dailyTransferTotal`; `now` is injectable) so evaluation
  * is deterministic and unit-testable without a network or clock.
  */
+import type { Prisma } from '@prisma/client';
 import type { RiskLevel } from '../lib/contracts/risk';
 import { DAILY_TRANSFER_LIMIT } from '../lib/constants';
 import { demoNow } from '../lib/clock';
 import { startOfDay } from '../lib/date';
-import { formatCNY } from '../lib/money';
+import { formatCNY, parseAmount } from '../lib/money';
+import { safeParse } from '../lib/json';
+import { prisma } from '../lib/db/client';
 import { listTransactions } from '../lib/db/repositories/transaction';
 
 export interface TransferRiskInput {
