@@ -24,7 +24,7 @@ export interface TaskNodeResult {
   endedAt?: number;
 }
 
-export type TaskPlanStatus = 'pending' | 'running' | 'waiting_confirmation' | 'success' | 'failed' | 'cancelled';
+export type TaskPlanStatus = 'pending' | 'running' | 'paused' | 'waiting_confirmation' | 'success' | 'failed' | 'cancelled';
 
 export interface TaskPlan {
   id: string;
