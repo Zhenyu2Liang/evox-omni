@@ -3,17 +3,53 @@
 > 本文件诚实地列出演示的局限，并对每条给出「**为何在比赛演示中可接受**」。
 > 这些限制大多是**演示沙箱的刻意设计**或**单进程 / SQLite 部署下未经证明**的边界，而非缺陷——
 > 它们让系统在无真实资金、无真实银行的前提下，完整展示「智能体 + 代码强制安全模型」的核心价值。
-> 没有一条声称系统「100% 完成」。系统已有一个**真实浏览器验收 harness**（`tests/e2e/`，见第 16 条），
+> **测试通过 ≠ 安全模型已封闭**：安全语义的封闭只能来自对**失败路径**的显式验证，而非「测试全绿」；
+> 本文件不为任何一条声称「100% 完成」。系统已有一个**真实浏览器验收 harness**（`tests/e2e/`，见第 16 条），
 > 但它是**单机、有限 journey** 的验收，**不**证明安全模型已被完全封闭。
-> 每条都标注**性质**，明确区分三者：
+> 每条限制都**恰好**归入下列**三个显式分桶**之一（每条的 `性质` 标签即其所属桶）：
 >
-> - ✅ **实现（代码强制）** — 该语义由 TypeScript 代码强制执行，LLM 无法绕过（可能仍带单进程/环境前提）。
-> - 🧪 **模拟** — 后端为模拟实现（无真实银行 / 资金 / 支付 / 短信等）。
-> - ⚠️ **未验证** — 依赖特定运行环境（单进程 / SQLite），或属测试覆盖缺口，**未在本仓库证明**。
+> - ✅ **【已实现】代码强制（LLM-immutable）** — 该语义由 TypeScript 代码强制执行，LLM / 模型文本无法绕过（可能仍带单进程 / 数据库引擎前提，见【未验证】桶）。
+> - 🧪 **【模拟】模拟后端 / 刻意受限** — 后端为模拟实现（无真实银行 / 资金 / 支付 / 短信），或为演示而**刻意受限**的设计（进程内熔断、固定演示时钟、🟢 读取按设计不审计）。
+> - ⚠️ **【未验证】本仓库未证明** — 依赖特定运行环境（多进程 / 多实例 / 跨浏览器）或属覆盖缺口，**仅单进程 + SQLite 文件锁的原子性被实际运行过**（详见下节分桶）。
 
 ---
 
-| # | 限制 | 性质 | 定位（代码 / 常量） |
+## 三类分桶 · Three-Bucket Separation
+
+每一条限制**恰好**归入下面一个桶——其 `性质` 标签即所属桶。
+
+### ✅ 【已实现】代码强制 · LLM-immutable
+
+该语义由 TypeScript 代码强制执行，LLM（及其文本）**无法绕过**：
+
+- **Cookie-only 会话身份**（第 17 条）— 会话 id **仅**取自 `banking_session` HttpOnly Cookie（`lib/constants.ts` `SESSION_COOKIE`、`app/api/_lib/session.ts` `resolveSessionId`）；请求体 `sessionId` 与 Cookie **不一致（含无 Cookie）→ `409 CONFLICT` 且不下发 `Set-Cookie`**（`app/api/chat/route.ts`）——请求体永远无法选择 / 铸造会话。
+- **DB 原子执行领取**（第 18 条）— `lib/db/repositories/task.ts#claimTaskExecution`（计划）/ `#claimNodeExecution`（节点）以**单条 `updateMany` CAS** 领取执行槽，并在 **`finally`** 中 `releaseTaskExecution` / `releaseNodeExecution` 释放；并发的 resume / retry **只有一个能运行**。
+- **PRIMARY 批量撤销取消**（第 18 条）— `agent/task-control.ts#cancelTask` → `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`）：**单条原子 `updateMany`** 一次性把该计划**全部**可执行动作置为 `cancelled`，此后任何 confirm / verify 均以 `CONFLICT` / `NOT_FOUND` 失败。
+- **计划 / 节点幂等键**（第 15、18 条）— `nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>` 为计划节点副作用去重、`idempotentTransferTxId(userId, key)` 为转账派生账本主键（均在 `lib/ledger.ts`）——重复 / 并发执行**重放原行而非二次生效**。
+- 同桶其余条目：第 4 条（启发式异常检测）、第 6 条（消费分析按设计排除异常）、第 14 条（注入守卫不改变授权结论）、第 19 条（工程性说明）。
+
+### 🧪 【模拟】模拟后端 / 刻意受限
+
+后端为模拟实现，或为演示而**刻意受限**（**无真实银行 / 资金 / 支付 / 短信**）：
+
+- **模拟银行 SDK**（第 1、3 条）— `transfer_money` 只写一条模拟 `Transaction` 借贷行并调整余额；系统不连接任何真实银行核心系统、不发起任何真实支付。
+- **进程内熔断器**（第 7 条）— `security/circuit-breaker.ts` 为**内存态、按 `sessionId`** 的熔断器，不跨进程 / 不跨实例共享、不持久化。
+- **固定演示时钟**（第 8 条）— `DEMO_NOW = 2026-09-25 12:00 本地`（`lib/constants.ts`、`lib/clock.ts` `demoNow()`）让本月/上月/今日窗口、消费分析与 system prompt 的「今天」保持一致。
+- **🟢 GREEN 读取按设计不审计**（第 9 条）— 审计只覆盖门控动作（YELLOW/RED 的 confirm / verify / cancel）与安全事件；GREEN 自动执行的读取**不写审计行**（`audit/`、`lib/contracts/audit.ts`）。
+- 同桶其余条目：第 2 条（固定验证码 MFA）、第 5 条（虚构投资产品）、第 10 条（mock 供应商）、第 11 条（`reserve_budget` 不锁资金）、第 12 条（定时任务不执行）、第 13 条（Test 12 只创建记录）。
+
+### ⚠️ 【未验证】本仓库未证明
+
+依赖特定运行环境，或属测试覆盖缺口——**未在本仓库证明**：
+
+- **多进程 / 多实例集群竞态**未验证 — 上述【已实现】桶的原子性都建立在**单进程 + 单个本地 SQLite** 之上（见第 7、15、18 条）。
+- **唯一串行化手段是 SQLite 单文件写锁** — `security/security-gateway.ts#authorizeTransfer` 的「先 CAS 领取、后重估有效日累计」在**单个 `prisma.$transaction`** 内完成，其**串行化仅由 SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多实例部署**下**未经证明**（第 15 条）。
+- **跨浏览器矩阵**未验证（第 16 条）— `tests/e2e/` 只跑系统 Chrome（Edge 兜底未测），亦不含生产构建（`next build` / `next start`）、live LLM、视觉 / a11y、负载 / 性能。
+- **验证上限：仅单进程并发 + 基于 SQLite 文件锁的原子性被实际运行过** —— 集群 / 多实例一致性不在本仓库的验证范围内。
+
+---
+
+| # | 限制 | 性质（桶） | 定位（代码 / 常量） |
 |---|---|---|---|
 | 1 | 仅使用**模拟**银行数据 | 🧪 模拟 | `prisma/`、`prisma/seed.ts` |
 | 2 | MFA 是**模拟的固定验证码**（非真实 OTP 服务） | 🧪 模拟 | `lib/constants.ts` `MFA_CODE='123456'`、`security/mfa.ts` |
@@ -21,18 +57,18 @@
 | 4 | 异常检测是 **Demo 级启发式规则** | ✅ 实现（启发式，非 ML） | `lib/constants.ts` `ANOMALY_AMOUNT_THRESHOLD=5000`、`banking-sdk/transaction.ts` |
 | 5 | 投资产品是**虚构样例数据** | 🧪 模拟 | `prisma/seed.ts` |
 | 6 | 消费分析**按设计排除异常行** | ✅ 实现（设计取舍） | `banking-sdk/transaction.ts` `analyzeSpending` |
-| 7 | 熔断器是**进程内**（按会话，非分布式） | ✅ 实现（单进程） | `security/circuit-breaker.ts` |
-| 8 | 演示时钟被**固定**在 `DEMO_NOW` | ✅ 实现（设计取舍） | `lib/constants.ts` `DEMO_NOW=2026-09-25 12:00 本地`、`lib/clock.ts` |
-| 9 | 审计覆盖**门控动作 + 安全事件**（🟢 读取**不审计**） | ✅ 实现（设计取舍） | `audit/`、`lib/contracts/audit.ts` |
+| 7 | 熔断器是**进程内**（按会话，非分布式） | 🧪 模拟 · 刻意受限（单进程） | `security/circuit-breaker.ts` |
+| 8 | 演示时钟被**固定**在 `DEMO_NOW` | 🧪 模拟 · 刻意受限（固定时钟） | `lib/constants.ts` `DEMO_NOW=2026-09-25 12:00 本地`、`lib/clock.ts` |
+| 9 | 审计覆盖**门控动作 + 安全事件**（🟢 读取**不审计**） | 🧪 模拟 · 刻意受限（按设计不审计 🟢） | `audit/`、`lib/contracts/audit.ts` |
 | 10 | live 模式下 LLM 输出**非确定性**（演示/测试用 mock 模式） | 🧪 模拟（mock 供应商） | `agent/providers/`、`LLM_MODE` |
 | 11 | `reserve_budget` 只记录预算行，**不锁定 / 不移动资金** | 🧪 模拟 | `banking-sdk/budget.ts` |
 | 12 | `create_scheduled_task` 只记录未来动作意图，**无在线调度器执行** | 🧪 模拟 | `banking-sdk/task.ts` |
 | 13 | Test 12 生日提醒只创建记录，**不真正下单鲜花 / 蛋糕** | 🧪 模拟 | `tests/scenarios/`、`banking-sdk/budget.ts`、`banking-sdk/task.ts` |
 | 14 | 注入守卫只记录事件，**不向模型注入"系统提醒"** | ✅ 实现（防御纵深） | `security/injection-guard.ts`、`agent/run-turn.ts` |
-| 15 | 转账**已接线幂等键**（重复确认在 DB 层去重）；**残余**：确认的原子领取仅靠 SQLite 写锁串行化 | ✅ 实现（幂等）+ ⚠️ 未验证（跨引擎） | `lib/ledger.ts`、`agent/confirmation.ts`、`banking-sdk/transfer.ts`、`security/security-gateway.ts` `authorizeTransfer` |
+| 15 | 转账**已接线幂等键**（重复确认在 DB 层去重） | ✅ 已实现（幂等键） | `lib/ledger.ts`、`agent/confirmation.ts`、`banking-sdk/transfer.ts`、`security/security-gateway.ts` `authorizeTransfer` |
 | 16 | 有**真实浏览器验收 harness**，但为**单机、有限 journey** 的验收（非多实例 / 非生产构建 / 非跨浏览器） | ⚠️ 未验证（有限验收，非全覆盖） | `tests/e2e/`、`package.json` |
 | 17 | 身份是**普通 Cookie**（`banking_session`，非签名 / HMAC 令牌） | ✅ 实现（fail-closed） | `lib/constants.ts` `SESSION_COOKIE`、`app/api/_lib/session.ts`、`app/api/chat/route.ts` |
-| 18 | 计划生命周期的诚实边界（取消撤销 / 无假回滚 / 终态仅靠 CAS 约定 / 单进程 single-flight） | ✅ 实现 + ⚠️ 未验证（无 DB 约束 / 单进程） | `agent/task-control.ts`、`planner/lifecycle.ts`、`lib/db/repositories/{task,pendingAction}.ts`、`prisma/schema.prisma` |
+| 18 | 计划生命周期的诚实边界（DB 原子执行领取 / 批量撤销 / 无假回滚 / 终态仅靠 CAS 约定） | ✅ 已实现（DB 原子领取 + 批量撤销 + 节点去重） | `agent/task-control.ts`、`planner/lifecycle.ts`、`lib/db/repositories/{task,pendingAction}.ts`、`prisma/schema.prisma` |
 | 19 | 其他工程性注意（测试串行、`change_password` 无凭据存储） | ✅ 说明 | `vitest.config.ts`、`banking-sdk/` |
 
 ---
@@ -115,7 +151,7 @@ Apple Store ¥6,999 @ 2026-09-20 18:32 的异常）。
 
 ## 7. 熔断器是进程内（按会话） · In-Process, Per-Session Circuit Breaker
 
-**性质：✅ 实现（代码强制），单进程。**
+**性质：🧪 模拟 · 刻意受限（代码强制，仅进程内）。**
 
 **限制**：`security/circuit-breaker.ts` 是**内存态、键控于 `sessionId`** 的熔断器——
 不跨进程 / 不跨实例共享状态，也不持久化。多实例部署下每个实例各有一份。
@@ -127,7 +163,7 @@ Apple Store ¥6,999 @ 2026-09-20 18:32 的异常）。
 
 ## 8. 演示时钟被固定 · Pinned Demo Clock
 
-**性质：✅ 实现（一致性设计取舍）。**
+**性质：🧪 模拟 · 刻意受限（代码强制，固定演示时钟）。**
 
 **限制**：演示把「当前时刻」固定为 `DEMO_NOW = 2026-09-25 12:00 本地`（`lib/constants.ts`），
 `lib/clock.ts` 暴露 `demoNow()` 作为所有相对日期逻辑的默认值。
@@ -140,7 +176,7 @@ Apple Store ¥6,999 @ 2026-09-20 18:32 的异常）。
 
 ## 9. 审计覆盖范围有限 · Audit Scope
 
-**性质：✅ 实现（刻意取舍）。**
+**性质：🧪 模拟 · 刻意受限（代码强制，🟢 读取按设计不审计）。**
 
 **限制**：审计只覆盖**被门控动作**（YELLOW/RED `PendingAction` 的 confirm / verify / cancel）
 与**安全事件**（熔断、注入检测、MFA 失败等）；**🟢 GREEN 自动执行的读取不写审计行**。
@@ -214,7 +250,7 @@ mock 模式让整条流水线（Agent + 工具 + 安全）**离线、确定、�
 
 ## 15. 转账幂等已接线，残余限制是 SQLite 写锁串行化 · Idempotency Wired; SQLite Write-Lock Caveat
 
-**性质：✅ 实现（幂等）+ ⚠️ 未验证（跨数据库引擎）。**
+**性质：✅ 已实现（幂等键）。**
 
 **限制**：转账确认**已携带幂等键**——`agent/confirmation.ts` 以 `PendingAction.id` 作为 SDK 的
 `idempotencyKey`，`banking-sdk/transfer.ts` 用它派生账本主键
@@ -273,27 +309,18 @@ SQLite 单文件写锁**串行化并发确认；在**其他数据库引擎 / 多
 
 ## 18. 计划生命周期的诚实边界 · Plan-Lifecycle Honesty Caveats
 
-**性质：✅ 实现（代码强制）+ ⚠️ 未验证（无 DB 约束 / 单进程）。**
+**性质：✅ 已实现（代码强制：DB 原子执行领取 + 批量撤销 + 节点身份去重）。**
 
 **限制**：
 
-- **取消即撤销 + 运行后兜底扫描**：`agent/task-control.ts#cancelTask` 先**原子地**撤销计划已登记停靠的
-  `PendingAction`（`pending`/`awaiting_mfa` → `cancelled`），使后续 confirm/verify 以 `CONFLICT`/`NOT_FOUND`
-  失败；**post-run sweep**（`sweepCancelledPlan`）在运行结束后再次扫描，撤销**运行期间**新铸造、
-  仍可执行的 action，确保取消后**没有任何可执行动作存活**。
-- **不伪造回滚**：已完成（`success`）的节点**保留其结果**——已执行的副作用在模拟后端下不可逆，
-  **绝不假装被回滚**。
-- **取消 vs 确认 = 至多一次**：二者共享同一 `PendingAction` 的 **CAS**（`claimPendingAction`），
-  因此最多一方成功。
-- **终态仅由 CAS 约定保证**：`prisma/schema.prisma` 的 `status` 列是**普通字符串、无 CHECK / 唯一约束**——
-  「已取消的计划不能离开终态」只由 `claimTaskStatus` / `claimPendingAction` 的 CAS 约定保证，
-  **没有数据库 / 模式层约束**。
-- **并发 resume / retry**：依赖 DB 级原子 CAS（`claimTaskStatus`）加**进程内** single-flight map
-  （`agent/confirmation.ts` 的 `inFlightExecutions`）去重同一工具的并发执行——**单进程**。
+- **DB 原子执行领取**：一个*运行中*的计划由一条 DB 执行领取把守——`claimTaskExecution` 在 `executor.runPlan` **之前**以**单条 `updateMany` CAS** 领取 `AgentTask.executionToken`，并在 **`finally`** 中 `releaseTaskExecution` 释放；节点级同理（`lib/db/repositories/task.ts#claimNodeExecution` / `#releaseNodeExecution`）。因此两个并发 resume / retry **无法同时运行同一计划**——败者因 `executionToken IS NULL` 不再匹配而领取 0 行落败。
+- **PRIMARY：批量撤销取消**：`agent/task-control.ts#cancelTask` → `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`）以**单条原子 `updateMany`** 一次性把该计划**全部**可执行 `PendingAction` 置为 `cancelled`，此后任何 confirm / verify 均以 `CONFLICT` / `NOT_FOUND` 失败；**post-run sweep**（`sweepCancelledPlan`）在运行结束后再次扫描，撤销**运行期间**新铸造、仍可执行的 action，确保取消后**没有任何可执行动作存活**。
+- **节点身份去重**：计划节点的副作用以 `nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`（`lib/ledger.ts`）为幂等键——同一 `(task, node)` 的重复执行**重放原副作用**而非二次生效；不同计划的相同工具 / 参数因 `taskId` 不同而**不碰撞**。
+- **不伪造回滚**：已完成（`success`）的节点**保留其结果**——已执行的副作用在模拟后端下不可逆，**绝不假装被回滚**。
+- **取消 vs 确认 = 至多一次**：二者共享同一 `PendingAction` 的 **CAS**（`claimPendingAction`），因此最多一方成功。
+- **终态仅由 CAS 约定保证**：`prisma/schema.prisma` 的 `status` 列是**普通字符串、无 CHECK / 唯一约束**——「已取消的计划不能离开终态」只由 `claimTaskStatus` / `claimPendingAction` 的 CAS 约定保证，**没有数据库 / 模式层约束**。
 
-**为何可接受**：演示为**单进程**，CAS + 进程内 single-flight 足以保证「至多一次」「取消后不可复活」
-「无假回滚」等在舞台上可断言的语义。若迁移到多写入者 / 多实例，需把终态保护下沉到数据库约束或
-事务边界——属生产级职责，不在竞赛演示范围。
+**为何可接受**：演示为**单进程**，DB 原子领取 + 批量撤销 + 节点身份去重足以保证「至多一次」「取消后不可复活」「无假回滚」等在舞台上可断言的语义。**但单进程 ≠ 多实例**：终态保护仅靠 CAS 约定（`status` 列无 CHECK / 唯一约束），**多写入者 / 多实例**并发属【未验证】桶——若迁移到多实例，需把终态保护下沉到数据库约束或跨实例事务边界。
 
 ---
 
