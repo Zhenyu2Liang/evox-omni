@@ -72,7 +72,8 @@ export interface ChatEndpoints {
   confirm: (actionId: string) => string;       // default `/api/actions/${id}/confirm`
   verify:  (actionId: string) => string;       // default `/api/actions/${id}/verify`
   cancel:  (actionId: string) => string;       // default `/api/actions/${id}/cancel`
-  task:    (id: string) => string;             // default `/api/tasks/${id}` — read ONE persisted plan
+  task:    (id: string) => string;             // default `/api/tasks/${id}` — read/control ONE persisted plan
+  actions: string;                             // default '/api/actions' — list non-terminal pending actions
 }
 export const DEFAULT_ENDPOINTS: ChatEndpoints;
 export function sendChatTurn(req: ChatTurnRequest, endpoints?: ChatEndpoints): Promise<ChatTurnResponse>;
@@ -82,7 +83,22 @@ export function cancelAction(actionId: string, endpoints?: ChatEndpoints): Promi
 // NEVER-throwing plan read (refresh recovery): resolves the plan, else undefined on
 // non-ok / error-envelope / malformed body / exception. Never surfaces a raw error to the UI.
 export function fetchTaskPlan(id: string, endpoints?: ChatEndpoints): Promise<TaskPlan | undefined>;
+// POST the SAME `task(id)` URL with `{ action }`; resolves the post-control snapshot, else undefined.
+export function controlTask(id: string, action: TaskControlAction, endpoints?: ChatEndpoints): Promise<TaskPlan | undefined>;
+// GET `actions`; tolerant of a top-level array OR `{ actions: [...] }`; keeps only actionable
+// (pending | awaiting_mfa) rows. Best-effort — resolves `[]` on ANY failure (never throws).
+export interface PendingActionRef { id: string; status: PendingActionStatus; tier: RiskLevel;
+  requiresMfa: boolean; summary: PendingActionSummary; }
+export function fetchPendingActions(endpoints?: ChatEndpoints): Promise<PendingActionRef[]>;
+export type { TaskControlAction };   // re-exported from the chat barrel (`./index.ts`)
 ```
+
+`postAction` (the confirm/verify/cancel path) maps the `ActionResponse` to events defensively: an
+**escalation / MFA-prompt** outcome (`requiresMfa && tier === 'RED' && !executed`, not a failed code)
+gets an `mfa_required` `AgentStreamEvent` ensured (synthesised when the server omitted one) and is
+**not** turned into a spurious `error`; any other `ok:false` outcome gets an `error` event appended
+when the server sent none (e.g. a wrong MFA code arrives as `ok:false` + `status:'awaiting_mfa'` +
+`mfaResult:'failed'` with an EMPTY event list).
 
 ## Event → state fold (consumed by `useAgentStream` / `ChatWindow`)
 
