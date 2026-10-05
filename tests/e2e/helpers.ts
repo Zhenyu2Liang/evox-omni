@@ -15,7 +15,7 @@
  *    `tests/**\/*.{test,spec}.ts`), so this harness never runs under `npm run test`.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
@@ -403,41 +403,113 @@ export async function bootDevServer(opts: { timeoutMs?: number; attempts?: numbe
 
 // --- deterministic fixture state -----------------------------------------------------------------
 
+/** The DEV SQLite file and its WAL/SHM/journal sidecars, relative to the project's `prisma/` dir. */
+const DEV_DB_FILES = ['dev.db', 'dev.db-wal', 'dev.db-shm', 'dev.db-journal'] as const;
+
+/** Synchronous sleep — the reset runs BEFORE any async work, so it cannot `await`. */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Project-local Prisma CLI entry (`node_modules/prisma/build/index.js`), or `undefined` if absent. */
+function resolvePrismaBin(): string | undefined {
+  const bin = path.join(REPO_ROOT, 'node_modules', 'prisma', 'build', 'index.js');
+  return existsSync(bin) ? bin : undefined;
+}
+
+/** Project-local tsx CLI entry (`node_modules/tsx/dist/cli.mjs`), or `undefined` if absent. */
+function resolveTsxBin(): string | undefined {
+  const bin = path.join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+  return existsSync(bin) ? bin : undefined;
+}
+
 /**
- * Reset the DEV SQLite DB to the canonical seeded demo state — `npm run db:reset`
- * (`prisma db push --force-reset && tsx prisma/seed.ts`) — SYNCHRONOUSLY and BEFORE the dev server
- * boots (no open connection ⇒ no Windows SQLite file-lock).
+ * Build a directly-launchable CLI invocation for `npxArgs` (e.g. `['prisma','db','push']`).
+ *
+ * PREFERRED — the project-local binary launched with the SAME Node that runs this harness
+ * (`<process.execPath> node_modules/…`): no `npx`/`.cmd` shim resolution. FALLBACK (only when the
+ * local binary is missing, e.g. a hoisted `node_modules`) — `cmd.exe /d /s /c "npx …"` on Windows
+ * (there is no `npx` binary, only `npx.cmd`) / the plain command on POSIX.
+ */
+function cliCommand(localBin: string | undefined, npxArgs: readonly string[]): { command: string; args: string[] } {
+  if (localBin !== undefined) return { command: process.execPath, args: [localBin, ...npxArgs.slice(1)] };
+  if (process.platform === 'win32') {
+    return { command: 'cmd.exe', args: ['/d', '/s', '/c', `npx ${npxArgs.join(' ')}`] };
+  }
+  return { command: npxArgs[0]!, args: [...npxArgs.slice(1)] };
+}
+
+/** Run one CLI step synchronously in the project root; throws with the captured output on failure. */
+function runCliStep(command: string, args: readonly string[]): string {
+  const result = spawnSync(command, [...args], { cwd: REPO_ROOT, windowsHide: true, encoding: 'utf8' });
+  const out = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+  if (result.status !== 0) {
+    const spawnError = result.error ? `（无法启动进程：${result.error.message}）` : '';
+    throw new Error(`退出码 ${result.status ?? 'null'}${spawnError}：${out.slice(-800)}`);
+  }
+  return out;
+}
+
+/** Delete the DEV SQLite file + its sidecars (a missing file is not an error). */
+function removeDevDb(): void {
+  for (const name of DEV_DB_FILES) {
+    try {
+      rmSync(path.join(REPO_ROOT, 'prisma', name));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e;
+    }
+  }
+}
+
+/** One reset attempt: delete the DEV DB → create a fresh schema → seed. */
+function resetDemoDatabaseOnce(): void {
+  removeDevDb();
+  const push = cliCommand(resolvePrismaBin(), ['prisma', 'db', 'push', '--skip-generate']);
+  runCliStep(push.command, push.args);
+  const seed = cliCommand(resolveTsxBin(), ['tsx', path.join('prisma', 'seed.ts')]);
+  runCliStep(seed.command, seed.args);
+}
+
+/**
+ * Reset the DEV SQLite DB to the canonical seeded demo state — SYNCHRONOUSLY and BEFORE the dev
+ * server boots (no open connection ⇒ no Windows SQLite file-lock).
  *
  * WHY: money-moving journeys are tiered from the FROZEN demo day's accumulated outgoing transfers
  * (`lib/clock.ts` `demoNow()` = 2026-09-25 12:00; `security/risk-engine.ts` ⇒ transfer is YELLOW only
  * while `dayTotal + amount ≤ ¥1000`). Every transfer is stamped with `demoNow()`, so executed
  * transfers ACCUMULATE across harness runs against the persistent `prisma/dev.db` — a second run
  * would start with the previous run's transfers already inside the day and the YELLOW-transfer
- * journeys would escalate to RED. Resetting gives every run the SAME known starting state (idempotent
- * acceptance), matching the documented prerequisite (`npm run db:seed`).
+ * journeys would escalate to RED. Resetting gives every run the SAME known starting state.
+ *
+ * HOW (deliberately NOT `prisma db push --force-reset`): on Windows the force-reset path was observed
+ * to leave `prisma/dev.db` as a 0-byte image and then fail with `Error code 11: The database disk
+ * image is malformed`, aborting the seed. Instead we DELETE the DB file + sidecars, re-create a fresh
+ * schema with `db push --skip-generate`, then seed (`tsx prisma/seed.ts`). The whole attempt is
+ * retried ONCE with a short backoff (SQLite on Windows is occasionally lock-prone), and each step's
+ * combined stdout+stderr is captured into the thrown error.
  *
  * Set `E2E_SKIP_DB_RESET=1` to keep the current DB (e.g. to inspect post-run data); the journeys then
- * require a freshly seeded DB. Throws with the captured command output when the reset fails.
+ * require a freshly seeded DB. Deprecated-`package.json#prisma` warning lines in the captured output
+ * are harmless — success is decided by the EXIT CODE, never by stderr text.
  */
-export function resetDemoDatabase(): void {
+export function resetDemoDatabase(opts: { attempts?: number } = {}): void {
   if (process.env['E2E_SKIP_DB_RESET'] === '1') {
     console.log('· 跳过演示数据库重置（E2E_SKIP_DB_RESET=1）');
     return;
   }
-  const result =
-    process.platform === 'win32'
-      ? spawnSync('cmd.exe', ['/d', '/s', '/c', 'npm run db:reset'], {
-          cwd: REPO_ROOT,
-          windowsHide: true,
-          encoding: 'utf8',
-        })
-      : spawnSync('npm', ['run', 'db:reset'], { cwd: REPO_ROOT, encoding: 'utf8' });
-  const out = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
-  if (result.status !== 0) {
-    throw new Error(
-      `重置演示数据库失败（npm run db:reset，退出码 ${result.status ?? 'null'}）：${out.slice(-800)}`,
-    );
+  const attempts = opts.attempts ?? 2;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      resetDemoDatabaseOnce();
+      return;
+    } catch (e) {
+      lastError = e;
+      console.error(`· 重置演示数据库失败（第 ${attempt}/${attempts} 次）：${errText(e)}`);
+      if (attempt < attempts) sleepSync(1200);
+    }
   }
+  throw new Error(`重置演示数据库失败（已重试 ${attempts} 次）：${errText(lastError)}`);
 }
 
 // --- browser factory ----------------------------------------------------------------------------
