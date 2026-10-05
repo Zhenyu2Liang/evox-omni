@@ -312,11 +312,15 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 - **`HIGH_RISK_BLOCKED` / `ANOMALY_FLAGGED` event kinds are declared but never written**
   by this node (it emits `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET`
   and — for the transfer escalation — `LIMIT_EXCEEDED`).
-- **A transfer's terminal ledger write is still not idempotent.**
-  The gateway serializes the AGGREGATE-limit re-risk (claim-first `$transaction`), but no transfer carries an
-  idempotency key / unique constraint, and the gate read is not atomic with the SDK write
-  (`banking-sdk/transfer.ts`) — a crash between `authorizeAction` and `recordActionResult` leaves a
-  `confirmed` (in-flight) action whose ledger row is missing.
+- **A transfer's terminal ledger write is still not idempotent, and the ledgered-transfer dedup is inert until the key is wired.**
+  The gateway serializes the AGGREGATE-limit re-risk (claim-first `$transaction`), and `lib/ledger`
+  (`idempotentTransferTxId`) + `banking-sdk/transfer.ts` (accepts an `idempotencyKey`, sets `Transaction.id`
+  to that deterministic id) support an idempotency key — but the agent layer currently passes NO key
+  (`agent/tools/transfer.ts` `runTransferMoney`; `agent/confirmation.ts` `executeAuthorizedAction` via
+  `registry.executeDirect`), so no `Transaction.id` equals `idempotentTransferTxId(userId, action.id)`.
+  Consequently the dedup above finds nothing to exclude until that wiring lands, and the gate read is still
+  not atomic with the SDK write (`banking-sdk/transfer.ts`) — a crash between `authorizeAction` and
+  `recordActionResult` leaves a `confirmed` (in-flight) action whose ledger row is missing.
 
 ## Dependencies (contracts this node consumes)
 
