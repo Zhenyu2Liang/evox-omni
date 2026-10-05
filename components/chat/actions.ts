@@ -13,18 +13,22 @@
  *  - The action routes (confirm/verify/cancel) return `{ ok:true, data: ActionResponse }` or the
  *    error envelope `{ ok:false, error:{ code, message } }`. A DOMAIN failure (e.g. a wrong MFA code)
  *    is a normal `200` with `data.ok === false` + a safe `data.message` — NOT an HTTP error.
+ *  - `GET /api/tasks/:id` returns `{ ok:true, data: TaskPlan }` (or `404` for an unknown id).
  *
  * Hard rules: these helpers NEVER throw. Every failure (network, parse, `!response.ok`, domain error)
  * surfaces as an `{ type:'error'; message }` event folded into the returned `ChatTurnResponse`, and
- * the message is always SAFE (never a raw stack / internals).
+ * the message is always SAFE (never a raw stack / internals). `fetchTaskPlan` instead resolves to
+ * `undefined` on ANY failure (a refresh-recovery read is best-effort, never a user-facing error).
  */
 import type { AgentStreamEvent, ChatTurnRequest, ChatTurnResponse } from '@/lib/contracts/agent';
+import type { TaskPlan } from '@/lib/contracts/task';
 
 export interface ChatEndpoints {
   chat: string; // default '/api/chat'
   confirm: (actionId: string) => string; // default `/api/actions/${id}/confirm`
   verify: (actionId: string) => string; // default `/api/actions/${id}/verify`
   cancel: (actionId: string) => string; // default `/api/actions/${id}/cancel`
+  task: (id: string) => string; // default `/api/tasks/${id}` — read ONE persisted plan
 }
 
 export const DEFAULT_ENDPOINTS: ChatEndpoints = {
@@ -32,6 +36,7 @@ export const DEFAULT_ENDPOINTS: ChatEndpoints = {
   confirm: (actionId) => `/api/actions/${actionId}/confirm`,
   verify: (actionId) => `/api/actions/${actionId}/verify`,
   cancel: (actionId) => `/api/actions/${actionId}/cancel`,
+  task: (id) => `/api/tasks/${id}`,
 };
 
 /** Generic, user-facing failure text used when no safer message is available. */
@@ -157,6 +162,15 @@ function unwrapEnvelope(json: unknown): { data?: unknown; errorMessage?: string 
   return { data: json };
 }
 
+/** Narrow an unknown payload to a `TaskPlan` (id + nodes + results discriminator). */
+function asTaskPlan(value: unknown): TaskPlan | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === 'string' && Array.isArray(record.nodes) && Array.isArray(record.results)
+    ? (value as TaskPlan)
+    : undefined;
+}
+
 /** Narrow an unknown payload to `{ sessionId?, events? }` (used for bare `ChatTurnResponse`s). */
 function normalizeTurn(value: unknown): { sessionId?: string; events?: AgentStreamEvent[] } {
   if (!value || typeof value !== 'object') return {};
@@ -177,6 +191,32 @@ async function errorMessageFromResponse(res: Response): Promise<string> {
     /* fall through to the generic message */
   }
   return `${GENERIC_ERROR}（${res.status}）`;
+}
+
+/**
+ * `GET /api/tasks/:id` — load ONE persisted plan.
+ *
+ * Used for refresh recovery: after a page reload the live plan is rebuilt from the server rather
+ * than from the (empty) in-memory message list. NEVER throws and NEVER surfaces an error to the UI:
+ * a non-OK response, an error envelope, a malformed body or any thrown exception all resolve to
+ * `undefined` (a best-effort read — the chat stays usable without it).
+ */
+export async function fetchTaskPlan(
+  id: string,
+  endpoints: ChatEndpoints = DEFAULT_ENDPOINTS,
+): Promise<TaskPlan | undefined> {
+  try {
+    const res = await fetch(endpoints.task(id), { method: 'GET', headers: { Accept: 'application/json' } });
+    if (!res.ok) return undefined;
+
+    const json: unknown = await res.json();
+    const { data, errorMessage } = unwrapEnvelope(json);
+    if (errorMessage) return undefined;
+
+    return asTaskPlan(data);
+  } catch {
+    return undefined;
+  }
 }
 
 /**

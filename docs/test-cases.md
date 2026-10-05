@@ -17,6 +17,19 @@
 **只有模型被 mock**（`registerFauxProvider()`，`LLM_MODE=mock`）；**工具、安全咽喉与数据库都是真实的**——
 因此场景测试证明的是**真实的安全行为**，而不是对它的 mock。
 
+### 回归关注面 · Regression Categories
+
+除 12 个端到端场景外，套件还覆盖以下**回归关注面**（既有纯单元，也有集成 / 真实 HTTP 用例；由并行工作流持续补充）：
+
+- **权限与门控**：静态策略表的层级、`requiresConfirmation` / `requiresMfa`、`transfer_money` 的动态升级（金额 / 当日累计）；
+- **两阶段确认**：被门控调用在**任何 DB 写入之前**被阻断；只有人工 confirm/verify 后才用**原始已校验参数**执行；
+- **幂等 / 冲突**：对已结算的 `PendingAction` 重复 confirm/cancel 返回 `CONFLICT`，不会重复执行或重复动账；
+- **熔断与会话隔离**：3 次连续 MFA 失败即锁会话；breaker 按 `sessionId` 键控，一个会话的锁定**不泄漏**到其它会话；安全中心解锁写 `SECURITY_RESET`；
+- **注入 / 幻觉防护**：注入文本**不提升**层级；`success:false` 必须如实汇报失败；
+- **SDK 领域不变量**：余额不足 `INSUFFICIENT_FUNDS`、收款人歧义 `CONFLICT`、产品起投金额 `minAmount`；
+- **DAG 规划器**：重复 / 未知工具 / 成环校验、稳定拓扑序、条件分支、门控节点停靠；
+- **共享内核**：金额格式化（`¥`、两位小数）、演示时钟窗口。
+
 ### 运行命令
 
 ```bash
@@ -36,7 +49,8 @@ VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security   # 纯单元、无�
 ## 2. 12 个演示场景 · The 12 Demo Scenarios
 
 每个场景一个 spec 文件（`tests/scenarios/test-0X-*.test.ts`），驱动真实的**回合 + 人工决策**并断言
-智能体文本、工具事件、卡片、`PendingAction`/审计行与 DB 副作用。**全部 12 个均已实现且通过**（无 `it.todo`）。
+智能体文本、工具事件、卡片、`PendingAction`/审计行与 DB 副作用。**12 个场景规格均已实现**；测试套件
+（含回归与真实 HTTP 用例）正由并行工作流增量刷新，因此本文件描述的是**测试策略与场景清单**，而非逐条断言枚举。
 
 | # | 用户输入（中文） | 预期层级 | 预期行为 / 流程 | 断言 spec 文件 |
 |---|---|---|---|---|
@@ -49,9 +63,9 @@ VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security   # 纯单元、无�
 | 7 | 有没有异常交易 | 🟢 GREEN | `detect_anomaly`；Apple Store ¥6,999 @ 2026-09-20 18:32 | `tests/scenarios/test-07-anomaly.test.ts` |
 | 8 | 信用卡娱乐限额调到1500 | 🟡 YELLOW | `set_card_limit` → 用户确认；限额 = ¥1500 | `tests/scenarios/test-08-card-limit.test.ts` |
 | 9 | 买5000元稳健理财A | 🔴 RED | `subscribe_investment` → MFA；创建持仓 | `tests/scenarios/test-09-investment-mfa.test.ts` |
-| 10 | 3 次错误验证码 | —（熔断） | 熔断器跳闸（`CIRCUIT_BREAKER_TRIPPED`）；高风险操作被锁 | `tests/scenarios/test-10-circuit-breaker.test.ts` |
+| 10 | 3 次错误验证码 | —（熔断） | 熔断器跳闸（`CIRCUIT_BREAKER_TRIPPED`）；该会话**所有操作被锁（含 🟢 查询，fail-closed）** | `tests/scenarios/test-10-circuit-breaker.test.ts` |
 | 11 | 若本月娱乐>2000则调限额1500 | 🟡 YELLOW（DAG） | `submit_plan` DAG：分析 → 条件 → 门控的 `set_card_limit` | `tests/scenarios/test-11-conditional-dag.test.ts` |
-| 12 | 爱人11月20日生日，准备1000预算 | 🟢 + 🟡（DAG） | `reserve_budget`（🟢）+ `create_scheduled_task`（🟡）组成的计划 | `tests/scenarios/test-12-birthday-plan.test.ts` |
+| 12 | 爱人11月20日生日，准备1000预算 | 🟢 + 🟡（DAG） | `reserve_budget`（🟢）+ `create_scheduled_task`（🟡）组成的计划；**只创建预算/任务/提醒记录，不下单鲜花/蛋糕** | `tests/scenarios/test-12-birthday-plan.test.ts` |
 
 ### 场景断言要点
 

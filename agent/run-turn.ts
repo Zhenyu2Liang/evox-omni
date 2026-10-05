@@ -6,6 +6,17 @@
  * `resumeTurn`: inject a REAL tool result and call `agent.continue()` so the model narrates only the
  * factual outcome. NO chain-of-thought is emitted — only task steps / tool status / results.
  */
+/*
+ * SECURITY BOUNDARY (root-owned invariant; restated here because this file drives the model).
+ * The model's ONLY capabilities are the registered banking tools in `./tools` — exactly the names of
+ * the frozen `ToolName` union (`@/lib/contracts/tools`) — plus the `submit_plan` meta-tool. There is
+ * deliberately NO bash/shell/write/edit/file/SQL/system/http tool: the tool registry IS the complete
+ * and exhaustive capability set, so an injection asking for such a tool has nothing to call.
+ * `beforeToolCall` (installed in `./banking-agent.ts`) is the ONE code-enforced chokepoint: every
+ * proposed call goes through `security.gateway.securityGateway.handleToolCall`, and permission is
+ * decided by code — NEVER by the model. Resource limits: contextWindow 128000 / maxTokens 16384.
+ * No chain-of-thought is ever streamed to the UI — only task steps, tool status and results.
+ */
 import type {
   AgentStreamEvent,
   ChatCard,
@@ -16,6 +27,7 @@ import type {
 } from '@/lib/contracts/agent';
 import type { PendingActionSummary } from '@/lib/contracts/security';
 import type { RiskLevel } from '@/lib/contracts/risk';
+import type { TaskNodeResult, TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { AppConfig } from '@/lib/config';
 import { getConfig } from '@/lib/config';
@@ -30,6 +42,7 @@ import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechne
 import { createBankingAgent, type BankingAgentRuntime } from './banking-agent';
 import { confirmationCard, errorCard, mfaCard, toCards } from './card-emitter';
 import { getOrCreateSession, loadSession, saveSession } from './session';
+import { readPendingActionId } from './task-control';
 import type { ToolExecutionResult } from './tools';
 
 export interface RunTurnDeps { config?: AppConfig; now?: () => number; }
@@ -173,6 +186,90 @@ async function loadPendingSummary(
     tier: row.riskLevel as RiskLevel,
     requiresMfa: row.requiresMfa,
   });
+}
+
+/* ------------------------------------------------------- live `submit_plan` (DAG) progress */
+
+/**
+ * What the turn remembers about the LIVE `submit_plan` DAG it is running: the node currently parked
+ * on a gated (YELLOW/RED) tool, if any, so the human-decision event can be emitted once the run has
+ * settled (the gateway's `PendingAction` row is committed by then).
+ */
+interface PlanRelay {
+  parkedActionId?: string;
+  parkedToolName?: string;
+}
+
+/** Is this node status a PARKED (gated) state, i.e. awaiting a human decision? */
+function isParkedPlanStatus(status: TaskNodeStatus | undefined): boolean {
+  return status === 'waiting_confirmation' || status === 'waiting_verification';
+}
+
+/** The plan node parked on a gated tool (a node drains its `PendingAction` id through `output`). */
+function parkedPlanNode(plan: TaskPlan): { node: TaskNodeResult; actionId: string } | undefined {
+  for (const node of plan.results) {
+    if (!isParkedPlanStatus(node.status)) continue;
+    const actionId = readPendingActionId(node.output);
+    if (actionId !== undefined) return { node, actionId };
+  }
+  return undefined;
+}
+
+/**
+ * Relay ONE live `submit_plan` plan snapshot into the turn stream: a `plan_update` carrying the whole
+ * `TaskPlan` (what the UI folds into its DAG timeline as node statuses change), plus remembering the
+ * node currently parked on a gated tool so `emitParkedDecision` can raise the human decision.
+ *
+ * Invoked from inside `executor.runPlan`, so it must NEVER throw (a mapping bug would abort the
+ * plan); like `createEventHandler`, a bug surfaces as an `error` event instead of escaping.
+ */
+function relayPlanSnapshot(buffer: TurnBuffer, relay: PlanRelay, plan: TaskPlan): void {
+  try {
+    buffer.events.push({ type: 'plan_update', plan });
+    const parked = parkedPlanNode(plan);
+    if (parked === undefined) {
+      relay.parkedActionId = undefined;
+      return;
+    }
+    relay.parkedActionId = parked.actionId;
+    relay.parkedToolName = parked.node.tool ?? '';
+  } catch (error) {
+    buffer.events.push({ type: 'error', message: safeToString(error) });
+  }
+}
+
+/**
+ * Emit the human-decision event for the DAG node that parked during this turn: YELLOW ⇒
+ * `confirmation_required` + a confirmation card, RED ⇒ `mfa_required` + an MFA card. The tier and
+ * the MFA requirement are read from the PERSISTED `PendingAction` row (a plan node carries no risk
+ * level) — i.e. from `security/`'s decision, never from a guess. Emitted AFTER the run settles so
+ * the row is guaranteed committed; at most one decision event per parked node.
+ */
+async function emitParkedDecision(buffer: TurnBuffer, relay: PlanRelay): Promise<void> {
+  const actionId = relay.parkedActionId;
+  if (actionId === undefined) return;
+  relay.parkedActionId = undefined;
+  const summary = await loadPendingSummary(actionId, relay.parkedToolName ?? 'submit_plan');
+  if (summary.tier === 'RED' || summary.requiresMfa) {
+    buffer.events.push({ type: 'mfa_required', actionId, hint: MFA_HINT });
+    emitCard(buffer, mfaCard(actionId, MFA_HINT));
+    return;
+  }
+  buffer.events.push({ type: 'confirmation_required', action: summary, actionId });
+  emitCard(buffer, confirmationCard(summary));
+}
+
+/**
+ * Flush the parked-node decision (if any) without ever failing an otherwise-complete turn: a
+ * `PendingAction` that cannot be read back is surfaced as an `error` event (never swallowed), the
+ * turn's real events are preserved.
+ */
+async function flushParkedDecision(buffer: TurnBuffer, relay: PlanRelay): Promise<void> {
+  try {
+    await emitParkedDecision(buffer, relay);
+  } catch (error) {
+    buffer.events.push({ type: 'error', message: safeToString(error) });
+  }
 }
 
 /** The `tool_execution_end` variant of the pi `AgentEvent` union. */
@@ -356,17 +453,24 @@ export async function runTurn(
     buffer.events.push({ type: 'security_event', kind: 'injection', message: scan.note });
   }
 
+  // LIVE DAG progress for a `submit_plan` turn: the sink fires from inside `executor.runPlan` on
+  // every node change, so the UI sees the plan timeline update and the parked node's decision.
+  const relay: PlanRelay = {};
   const runtime = createBankingAgent({
     sessionId: snapshot.sessionId,
     userId: config.demoUserId,
     snapshot,
     config,
+    onPlanUpdate: (plan) => relayPlanSnapshot(buffer, relay, plan),
   });
 
   const unsubscribe = runtime.agent.subscribe(createEventHandler(buffer, now));
   try {
     await runtime.agent.prompt(req.message);
   } finally {
+    // Flush AFTER the run settles (the parked `PendingAction` row is committed by then) and even
+    // when the run failed — the user must still be able to take the parked decision.
+    await flushParkedDecision(buffer, relay);
     unsubscribe();
     runtime.dispose();
   }
@@ -446,11 +550,15 @@ export async function resumeTurn(
   const buffer = createTurnBuffer();
   buffer.events.push({ type: 'session', sessionId: snapshot.sessionId });
 
+  // A continuation can drive a `submit_plan` DAG too (the model may plan while narrating), so the
+  // same live-progress relay is installed here.
+  const relay: PlanRelay = {};
   const runtime = createBankingAgent({
     sessionId: snapshot.sessionId,
     userId: snapshot.userId,
     snapshot,
     config,
+    onPlanUpdate: (plan) => relayPlanSnapshot(buffer, relay, plan),
   });
 
   const unsubscribe = runtime.agent.subscribe(createEventHandler(buffer, now));
@@ -458,7 +566,15 @@ export async function resumeTurn(
     const toolResultMessage = buildToolResultMessage(input, runtime, now());
     runtime.agent.state.messages = [...runtime.agent.state.messages, toolResultMessage];
     await runtime.agent.continue();
+  } catch (error) {
+    // The gated business action ALREADY executed and is ALREADY audited (see `./confirmation`).
+    // A continuation failure (model/narration error) must NEVER be swallowed — it is surfaced as an
+    // `error` event — nor turned into a success: the caller still receives the REAL tool result.
+    buffer.events.push({ type: 'error', message: safeToString(error) });
   } finally {
+    // Flush AFTER the continuation settles (even when it failed): a DAG node parked by this turn
+    // still needs its human decision surfaced.
+    await flushParkedDecision(buffer, relay);
     unsubscribe();
     runtime.dispose();
   }

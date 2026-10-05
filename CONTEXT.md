@@ -80,7 +80,7 @@ Three tiers (`RiskLevel = GREEN | YELLOW | RED`), decided by `security/permissio
 - 🔴 **RED** — high-risk (transfer > ¥1000 / daily > ¥1000, investment subscribe/redeem, card loss/unfreeze report, password change). **Requires strong verification (mock MFA code `123456`).**
 Additional code-level controls:
 - **Circuit breaker** (`security/circuit-breaker.ts`): 3 consecutive MFA failures → the session is locked and a
-  `SecurityEvent` (`CIRCUIT_BREAKER_TRIPPED`) is emitted. A tripped breaker currently denies **all** tiers (incl. GREEN reads) and has **no runtime unlock path** (`reset()` is test-only).
+  `SecurityEvent` (`CIRCUIT_BREAKER_TRIPPED`) is emitted. A tripped breaker denies **all** tiers (incl. GREEN reads, fail-closed) and is unlocked at runtime via an audited `POST /api/security/reset` → `circuitBreaker.resetSession(sessionId, {actor, reason})` which writes a `SECURITY_RESET` SecurityEvent; the synchronous `reset()` is test-only.
 - **Injection guard** (`security/injection-guard.ts`): detects injection patterns in user input and records a
   `SecurityEvent` (+ a UI security event) — but **never grants permission** (defense-in-depth only). It does NOT inject a system reminder into the model context.
 - **Hallucination guard**: the model may only report facts that came from a tool result. If a tool returns

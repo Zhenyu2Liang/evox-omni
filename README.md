@@ -173,6 +173,12 @@ agent.beforeToolCall ──► securityGateway.handleToolCall(ctx)
 判定规则：`requiresConfirmation = (tier !== 'GREEN')`；`requiresMfa = (tier === 'RED')`。
 精确等级以 `security/permission-engine.ts` 的策略表为准。
 
+> **两条重要的能力边界（诚实说明）：**
+> - 🟢 `reserve_budget` 只**写入一条预算记录**（`Budget` 行，`status = RESERVED`），
+>   **不锁定、不冻结、不移动任何资金**——它只是一个"预算信封"标记。
+> - 🟡 `create_scheduled_task` 只**记录一条"未来动作"的意图**（`ScheduledTask` 行），
+>   **当前没有任何在线调度器会在其 `runAt` 时间真正执行它**。
+
 ---
 
 ## 8. DAG 任务规划 / Task planning
@@ -198,12 +204,13 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 ## 9. 安全设计 / Security design
 
 - **提示词注入防御（injection-guard）** — 对用户输入做启发式检测，命中则记录 `SecurityEvent`
-  并附系统提醒；但它 **只做纵深防御，绝不授予权限**。
+  并向前端发出安全事件（`security_event{kind:'injection'}`）；但它 **只做纵深防御，绝不授予权限**。
+  检测结果**不会**被注入模型上下文（不加任何"系统提醒"），也不改变任何授权结论。
 - **幻觉防护（hallucination guard）** — 模型只能报告来自工具结果的事实；`success:false` 必须如实报告失败。
 - **模拟 MFA（短信验证码）** — 🔴 RED 操作需要输入验证码；错误验证码会累加失败次数。
   **UI 永不显示验证码**，需由用户输入。
-- **熔断（circuit-breaker）** — 连续 **3 次** 验证码失败（或反复的高风险被拦截尝试）会 **锁定该会话的高风险操作**
-  并写入 `SecurityEvent`（`CIRCUIT_BREAKER_TRIPPED`，severity `high`）。熔断是 LLM 无法清除的硬闸门。
+- **熔断（circuit-breaker）** — 连续 **3 次** 验证码失败会 **锁定该会话（fail-closed：拒绝该会话的*所有*工具调用，*包括 🟢 GREEN 查询*）**
+  并写入 `SecurityEvent`（`CIRCUIT_BREAKER_TRIPPED`，severity `high`）。熔断是 LLM 无法清除的硬闸门；**只有用户通过安全中心**（`POST /api/security/reset` → `circuitBreaker.resetSession`，写入 `SECURITY_RESET` 事件）**的经审计操作才能解除**。
 - **审计（audit）** — 每个被闸门拦截的操作（确认 / 验证 / 取消）写入 `AuditLog`；
   每个安全控制决策写入 `SecurityEvent`。
 - **沙箱（sandbox）** — 演示范围硬约束：**无真实银行、无真实资金、无真实支付、无 shell、
@@ -323,6 +330,7 @@ cp .env.example .env
 
 以下 12 个场景是 **验收标准**，均有对应的自动化测试（`tests/scenarios/test-01…test-12`），
 使用脚本化模型（`LLM_MODE=mock`）驱动 **完整流水线**（仅模型被 mock，工具 / 安全闸门 / 数据库都是真实的）。
+**逐场景的断言清单以 [`docs/test-cases.md`](docs/test-cases.md) 为准**；测试套件（含回归与真实 HTTP 用例）由并行工作流增量刷新。
 
 | # | 演示输入（用户原话） | 期望等级 / 结果 |
 |---|---|---|
@@ -335,9 +343,9 @@ cp .env.example .env
 | 7 | 看看有没有异常交易 | 🟢 GREEN · `detect_anomaly` · Apple Store ¥6,999 @ 2026-09-20 18:32 |
 | 8 | 把信用卡娱乐限额调整到1500 | 🟡 YELLOW · `set_card_limit` → 确认 · 限额 = ¥1500 |
 | 9 | 买5000元稳健理财A | 🔴 RED · `subscribe_investment` → 验证码 · 生成持仓 |
-| 10 | （连续 3 次错误验证码） | 熔断触发（`CIRCUIT_BREAKER_TRIPPED`），高风险操作被锁定 |
+| 10 | （连续 3 次错误验证码） | 熔断触发（`CIRCUIT_BREAKER_TRIPPED`）· 该会话**所有操作被锁定（含 🟢 查询，fail-closed）** · 需在安全中心解除 |
 | 11 | 如果本月娱乐消费超过2000，就把娱乐限额调成1500 | `submit_plan` DAG：分析 → 条件 → 受闸门的 `set_card_limit`（🟡） |
-| 12 | 爱人11月20日生日，帮我准备1000元预算 | 计划：`reserve_budget`（🟢）+ `create_scheduled_task`（🟡 确认） |
+| 12 | 爱人11月20日生日，帮我准备1000元预算 | 计划：`reserve_budget`（🟢）+ `create_scheduled_task`（🟡 确认）· **只创建预算/任务/提醒记录，不会真正下单鲜花/蛋糕** |
 
 ---
 
@@ -346,6 +354,8 @@ cp .env.example .env
 本 Demo 为 **竞赛沙箱**，刻意做了精简与模拟（诚实说明）：
 
 - **无真实银行 / 无真实资金 / 无真实支付。** 一切数据在 SQLite 中模拟，不会发生任何真实资金流动。
+- **端到端验证状态。** 核心流水线（Agent + 工具 + 安全网关 + Banking SDK + 审计）已实现并配有自动化测试；
+  套件正由并行工作流补充回归与真实 HTTP 用例——凡未亲自端到端复现之处，本仓库文档以"**已实现，端到端验证进行中**"表述，而非断言"已完成"。
 - **验证码是模拟的**（固定 `123456`），不发送真实短信；且 UI 不显示验证码。
 - **演示时钟被固定。** 应用内所有"现在"默认使用 `DEMO_NOW = 2026-09-25 12:00（本地时间）`，
   以保证本月/上月/今日窗口、消费分析、当日转账累计与种子数据保持一致 —— 它 **不是真实系统时间**。
@@ -358,6 +368,11 @@ cp .env.example .env
 - **`change_password` 为演示专用**（无凭据存储），以 `AuditLog` 记录为准。
 - **`LLM_MODE=live` 时结果不确定**（真实大模型的非确定性）；所有自动化测试与演示均使用
   `LLM_MODE=mock`（脚本化模型）以保证可复现。
+- **`reserve_budget` 不涉及资金。** 🟢 `reserve_budget` 只在 `Budget` 表写入一条 `RESERVED` 记录，
+  **不锁定 / 不冻结 / 不移动任何资金**。
+- **定时任务不会被真正执行。** 🟡 `create_scheduled_task`（以及 Test 12 的生日提醒）只**记录**一条
+  未来动作意图（`ScheduledTask` 行），**没有被任何在线调度器在其 `runAt` 时间执行**；Test 12 也
+  **不会真正下单鲜花 / 蛋糕**。
 - **单进程 / SQLite / 单演示用户**，通过 Cookie 维护会话；非生产级多用户/高可用架构。
 
 ---

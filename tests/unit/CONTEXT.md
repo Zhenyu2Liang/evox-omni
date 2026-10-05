@@ -12,30 +12,50 @@ Specs stay load-safe (no top-level Prisma construction outside DB-backed cases).
 
 ## API Surface
 
-Grouped by the source module under test (mirrors the source tree):
+Grouped by the source module under test (mirrors the source tree). Every spec is auto-discovered by
+the root `vitest.config.ts` (`include: ['tests/**/*.{test,spec}.ts']`), so a plain `npm run test`
+runs them all — no scoped config is required for any of them.
 
-- `security/` — `permission-engine`, `risk-engine`, `gateway`, `injection-guard`, `circuit-breaker`, `mfa`.
-- `planner/` — `dag` (validate / topological order / conditions), `executor` (runPlan).
-- `banking-sdk/` — `transfer`, `subscription`, `investment`.
-- `agent/` — end-to-end confirmation-flow audit specs (real DB + gateway + `@/agent`).
+- `security/` (13 specs) — `permission-engine`, `risk-engine`, `risk-engine-rerisk`, `gateway`,
+  `gateway-audit-trail`, `authorize-hardening`, `authorize-concurrency`, `injection-guard`,
+  `circuit-breaker`, `circuit-breaker-audit`, `circuit-breaker-reset`, `mfa`, `mfa-audit`.
+  `authorize-concurrency` proves the concurrent-confirm exactly-once claim **and** execution-time
+  re-risk of a stale parked transfer end-to-end through the REAL `@/agent` `confirmAction`/
+  `verifyAction` façade (needs a persisted session).
+- `planner/` (3 specs) — `dag` (validate / topological order / readiness / conditions / `buildPlan`),
+  `executor` (`runPlan` node-state machine + `PlanControls`), `lifecycle` (durable persisted-plan
+  `pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`).
+- `banking-sdk/` (4 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
+  `atomicity` (ledger-write rollback + concurrent overspend / double-redeem through the real tx).
+- `agent/` (4 specs + `providers/`) — end-to-end confirmation-flow audit specs against the real DB +
+  gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `run-turn-failure`;
+  `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec.
+  `providers/plan-limit-park.test.ts` pins the mock `submit_plan` gated conditional plan
+  (analyze -> check -> setlimit) that PARKS in `waiting_confirmation`, then confirms.
+- `lib/` (1 spec) — `pendingAction.claim.test.ts` — `lib/db/repositories/pendingAction`: the atomic,
+  ownership-aware persistence primitives (`claimPendingAction` exactly-once `pending → confirmed`,
+  the `from`-set match, `userId`/`sessionId` scoping, `setPendingActionStatus` +
+  `getPendingActionOwnership`). DB-backed.
 
 Each spec imports the module under test directly from its `@/…` façade path
-(e.g. `@/security`, `@/planner`, `@/banking-sdk`) — no commented-out placeholders remain.
+(e.g. `@/security`, `@/planner`, `@/banking-sdk`, `@/agent`, `@/lib/db/repositories/pendingAction`)
+— no commented-out placeholders remain.
 
 ## Constraints
 
 - Pure where possible: no network, no real clock (`now` is injected), no LLM. DB-backed cases
-  (`computeDailyTransferTotal`, gateway persistence, MFA challenges, SDK invariants) use the test
-  SQLite via `../helpers/db` and are annotated as such in their file header.
+  (`computeDailyTransferTotal`, gateway persistence, MFA challenges, SDK invariants, PendingAction
+  claims) use the test SQLite via `../helpers/db` and are annotated as such in their file header.
 - **Unique `sessionId`** for any breaker-related case.
 - Import frozen types from `@/lib/contracts/*`; never redeclare. Assert through public facades
-  (`@/security`, `@/planner`, `@/banking-sdk`).
+  (`@/security`, `@/planner`, `@/banking-sdk`, `@/agent`).
 - Do not weaken determinism (fake timers, shared state) to pass — use the injected seams.
 
 ## Routing Table
 
-- `./security` → permission/risk/gateway/injection/circuit-breaker/MFA unit specs
-- `./planner` → DAG + executor unit specs
-- `./banking-sdk` → transfer/subscription/investment domain-invariant specs
-- `./agent` → end-to-end agent confirmation-flow audit specs (real DB + gateway + `@/agent`)
+- `./security` → permission/risk/gateway/authorization/injection/circuit-breaker/MFA unit specs
+- `./planner` → DAG + executor + durable lifecycle unit specs
+- `./banking-sdk` → transfer/subscription/investment domain invariants + money-movement atomicity
+- `./agent` → end-to-end confirmation-flow / task-control / provider specs (real DB + gateway + `@/agent`)
+- `./lib` → `PendingAction` atomic-claim persistence primitives
 - `../helpers` → shared utilities (db/fixtures) used by DB-backed unit cases (sibling — this node)

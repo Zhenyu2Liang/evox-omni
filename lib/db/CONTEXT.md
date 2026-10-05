@@ -33,3 +33,6 @@ The Prisma client singleton and the repository layer. This is the **only** subtr
 - `npx prisma generate` must run before any code using `prisma` is executed or type-checked.
 - The SQLite schema (17 models) lives in `prisma/schema.prisma` and is frozen; enum-like fields are `String`,
   money is `Float`, JSON payloads are JSON text in `String`.
+- The `pendingAction` claim/ownership spec lives at `tests/unit/lib/pendingAction.claim.test.ts` (root-owned)
+  and is auto-discovered by the root `vitest.config.ts` (`include: ['tests/**/*.{test,spec}.ts']`) via `npm run test`.
+  There is no in-tree `lib/db` test runner, config, or `__tests__/` directory.

@@ -24,15 +24,15 @@ envelope (below). Dynamic-route handlers receive `(req: NextRequest, ctx: IdRout
 | --- | --- | --- | --- | --- |
 | GET | `/api/health` | — | `{ status:'ok', time:number, llmMode:'live'\|'mock' }` | `@/lib/config` |
 | POST | `/api/chat` | body `ChatTurnRequest`; `?stream=0\|1` (default 1) | stream ⇒ SSE of `AgentStreamEvent` ending `{"type":"done"}`; non-stream ⇒ `ChatTurnResponse` | `@/agent` `runTurn` / `resumeTurn` |
-| POST | `/api/actions/[id]/confirm` | body `{}` | `ActionResponse` | `@/agent` `confirm` |
-| POST | `/api/actions/[id]/verify` | body `{ code: string }` | `ActionResponse` (wrong code ⇒ 200 with `data.ok=false`, `status:'awaiting_mfa'`) | `@/agent` `verify` |
-| POST | `/api/actions/[id]/cancel` | body `{}` | `ActionResponse` (`status:'cancelled'`) | `@/agent` `cancel` |
+| POST | `/api/actions/[id]/confirm` | body `{}` | `ActionResponse` (ownership enforced: cross-session/user → `403 SECURITY_DENIED`) | `_lib/agent-bridge` `confirmOwned` → `@/agent` `confirm` (forwards `{userId,sessionId}`) |
+| POST | `/api/actions/[id]/verify` | body `{ code: string }` | `ActionResponse` (wrong code ⇒ 200 with `data.ok=false`, `status:'awaiting_mfa'`; ownership enforced) | `_lib/agent-bridge` `verifyOwned` → `@/agent` `verify` (forwards `{userId,sessionId}`) |
+| POST | `/api/actions/[id]/cancel` | body `{}` | `ActionResponse` (`status:'cancelled'`; ownership enforced) | `_lib/agent-bridge` `cancelOwned` → `@/agent` `cancel` (forwards `{userId,sessionId}`) |
 | GET | `/api/tasks` | query `{ sessionId?, limit? }` | `{ plans: TaskPlan[] }` | persisted `AgentTask` rows via `@/lib/db/repositories/task` |
 | GET | `/api/tasks/[id]` | — | `TaskPlan` | persisted `AgentTask` row via `@/lib/db/repositories/task` |
-| POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` | persisted `AgentTask` row steering (best-effort) |
+| POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` | `@/agent` execution control via `_lib/agent-bridge` (session-owned; see Notes) |
 | GET | `/api/audit` | query `{ sessionId?, toolName?, riskLevel?, status?, limit? }` | `{ entries: AuditEntry[]; summary: AuditSummary }` | `@/audit` `listAudit` + `getAuditSummary` |
 | GET | `/api/security` | query `{ sessionId? }` | `{ status: SecurityStatus; events: SecurityEvent[]; circuitBreaker: { failures; max; locked } }` | `@/audit` `getSecurityStatus`/`listSecurityEvents` + `@/security` `circuitBreaker.getState`/`isLocked` |
-| POST | `/api/security/reset` | session via cookie / `?sessionId=` | `ResetData { sessionId, locked, failures, max, message }` | `@/security` `circuitBreaker.reset` then `getState` |
+| POST | `/api/security/reset` | session via cookie / `?sessionId=` | `ResetData { sessionId, locked, failures, max, message }` | `@/security` `circuitBreaker.resetSession(sessionId, { actor, reason })` — audited unlock |
 | GET | `/api/dashboard` | query `{ userId? }` | `DashboardSummary` | `@/banking-sdk` `banking.dashboard.getDashboardSummary` |
 | GET | `/api/bills` | query `{ month? }` (`YYYY-MM`) | `{ analysis: SpendingAnalysis; transactions: TransactionView[]; anomalies: AnomalyItem[] }` | `@/banking-sdk` `banking.transaction.*` |
 | GET | `/api/cards` | query `{ userId? }` | `{ cards: CardView[] }` | `@/banking-sdk` `banking.card.getCards` |
@@ -41,8 +41,8 @@ envelope (below). Dynamic-route handlers receive `(req: NextRequest, ctx: IdRout
 Read routes are **GREEN reads only**. Card/subscription/transfer **mutations are NOT exposed as
 endpoints** — they are gated tools the agent invokes through the Security Gateway; the only
 human-triggered execution path is the `actions/*` group. `POST /api/security/reset` is the one
-non-`actions/*` mutation: an explicit user action that clears the session circuit breaker (the
-runtime unlock path — see Notes).
+non-`actions/*` mutation: an explicit user action that clears the session circuit breaker via the
+audited `resetSession` (the runtime unlock path — see Notes).
 
 ## Response envelope & error mapping
 
@@ -100,6 +100,16 @@ runtime unlock path — see Notes).
 - `_lib/schemas.ts` — shared zod query fragments (`userIdQuerySchema`, `sessionIdQuerySchema`,
   `limitQuerySchema`).
 - `_lib/session.ts` — `resolveUserId` / `resolveSessionId`.
+- `_lib/agent-bridge.ts` — the ONE module that knows the agent control/ownership/plan API. It imports
+  the control + plan-lookup fns STATICALLY from `@/agent`
+  (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`, `findTaskByPendingAction`, `getTaskPlan`) and
+  exposes: `resolveTaskControl(action) → TaskControlFn` (a `Record` lookup over those imports, still
+  failing LOUDLY with `TOOL_FAILED` when an entry is missing);
+  `confirmOwned`/`verifyOwned`/`cancelOwned` (forward the `{ userId, sessionId }` ownership bag);
+  `locateOwningPlan(sessionId, actionId) → LocatedPlan` (`{ sessionId, taskId } | undefined`, the
+  reverse lookup of the plan node parked on an action — call it BEFORE the decision clears the node);
+  `withPlanUpdate(outcome, located)` (append a refreshed `plan_update` event to a SUCCESSFUL
+  `ConfirmationOutcome`). Imports only `@/agent` — no Prisma, no DAG logic.
 - `_lib/task-plans.ts` — pure mapping from persisted `AgentTask`/`AgentTaskNode` rows to the frozen
   `TaskPlan` contract (JSON columns decoded with `safeParse`); used by `/api/tasks*` (see Notes).
 
@@ -108,24 +118,31 @@ runtime unlock path — see Notes).
 `runTurn` resolves the demo user internally and returns the **full ordered event log** (including a
 trailing `{type:'done'}` event); it takes NO `onEvent` sink and NO `userId`. `confirm`/`verify`/`cancel`
 return a `ConfirmationOutcome` which carries NO `sessionId`/`requiresMfa`/`mfaResult` — the actions
-routes derive those (see Notes).
+routes derive those (see Notes) and forward `{ userId, sessionId }` ownership through `_lib/agent-bridge`
+(`confirmOwned`/`verifyOwned`/`cancelOwned`).
 
 ```ts
 runTurn(req: ChatTurnRequest, deps?: RunTurnDeps): Promise<ChatTurnResponse>;   // ChatTurnRequest = { sessionId?; message }
 resumeTurn(input: ResumeTurnInput, deps?: RunTurnDeps): Promise<ChatTurnResponse>;
-confirm(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
+confirm(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;  // opts forwarded from the ownership bag
 verify(actionId: string, code: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 // ConfirmationOutcome = { ok; actionId; status: PendingActionStatus; tier: RiskLevel; message; result?; events }
+// Task execution control (statically imported by the bridge): pauseTask/resumeTask/cancelTask/retryTask(sessionId, taskId) => TaskPlan
+// Plan lookup: findTaskByPendingAction(sessionId, actionId) => { taskId; nodeId } | undefined
+//              getTaskPlan(sessionId, taskId) => TaskPlan  // ownership-checked
 ```
 
 ## Dependencies
 
-- `@/agent` (read-only): chat runtime (`runTurn`/`resumeTurn`/`confirm`/`verify`/`cancel`).
+- `@/agent` (read-only): chat runtime (`runTurn`/`resumeTurn` + `confirm`/`verify`/`cancel`, the
+  aliases of `confirmAction`/`verifyAction`/`cancelAction`) + task execution control
+  (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`) + plan lookup
+  (`findTaskByPendingAction`/`getTaskPlan`), all accessed through `_lib/agent-bridge`.
 - `@/banking-sdk` (read-only): read models (`banking.dashboard/transaction/card/subscription/…`, DTOs).
 - `@/audit` (read-only): `listAudit`, `getAuditSummary`, `listSecurityEvents`, `getSecurityStatus`.
-- `@/security` (read-only): `circuitBreaker.getState`/`isLocked`/`reset` for `/api/security` (+ reset).
-- `@/planner` (read-only): `TaskPlan` type for `/api/tasks*` (no cross-request plan store — see Notes).
+- `@/security` (read-only): `circuitBreaker.getState`/`isLocked` for `/api/security`; the audited `circuitBreaker.resetSession` for `/api/security/reset`.
+- `@/planner` (read-only): `TaskPlan` type for the `/api/tasks*` read models.
 - `@/lib` (read-only): contracts, `AppError`/`ErrorCode`/`Result`, `getConfig`, constants, money,
   and the typed read path `@/lib/db/repositories/*` (`task`, `pendingAction`) + `lib/json`.
 - `../tests/app` (sibling — read-only, escalate writes to root): route-handler contract tests.
@@ -152,26 +169,28 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 - **Dependencies are mocked at the module boundary** (`vi.mock('@/agent')`, `vi.mock('@/banking-sdk')`,
   `vi.mock('@/audit')`) — no live Prisma, no network.
 - **Transport tests** for `POST /api/chat`: SSE frames + single `done` terminator, and the `?stream=0`
-  JSON fallback. End-to-end acceptance (the 12 demo scenarios) is driven through `@/agent` + `../tests`.
-- `_lib/http.ts` (envelope/error-map/SSE encoders) and `_lib/task-plans.ts` (row → `TaskPlan`) are pure.
+  JSON fallback. End-to-end acceptance (the 12 demo scenarios) are driven through `@/agent` + `../tests`.
+- `_lib/http.ts` (envelope/error-map/SSE encoders), `_lib/task-plans.ts` (row → `TaskPlan`) and
+  `_lib/agent-bridge.ts` (capability resolution, plan location + refreshed-`plan_update` assembly,
+  ownership forwarding) are pure.
 
 ## Routing Table
 
 - `./health/route.ts` → `GET /api/health` liveness + `llmMode` probe
 - `./chat/route.ts` → `POST /api/chat` — one agent turn (SSE stream or JSON), session cookie on every response
-- `./actions/[id]/confirm/route.ts` → `POST /api/actions/[id]/confirm` — execute a confirmed pending action
-- `./actions/[id]/verify/route.ts` → `POST /api/actions/[id]/verify` — MFA code submission for a RED action
-- `./actions/[id]/cancel/route.ts` → `POST /api/actions/[id]/cancel` — cancel a pending action
+- `./actions/[id]/confirm/route.ts` → `POST /api/actions/[id]/confirm` — execute a confirmed pending action (ownership-enforced)
+- `./actions/[id]/verify/route.ts` → `POST /api/actions/[id]/verify` — MFA code submission for a RED action (ownership-enforced)
+- `./actions/[id]/cancel/route.ts` → `POST /api/actions/[id]/cancel` — cancel a pending action (ownership-enforced)
 - `./tasks/route.ts` → `GET /api/tasks` — list task plans for a session
-- `./tasks/[id]/route.ts` → `GET`/`POST /api/tasks/[id]` — read one plan / steer it (pause|resume|cancel|retry)
+- `./tasks/[id]/route.ts` → `GET`/`POST /api/tasks/[id]` — read one plan / control its execution (pause|resume|cancel|retry)
 - `./audit/route.ts` → `GET /api/audit` — audit entries + summary
 - `./security/route.ts` → `GET /api/security` — security-center status + events + breaker counters
-- `./security/reset/route.ts` → `POST /api/security/reset` — clear the session's circuit breaker (the unlock path)
+- `./security/reset/route.ts` → `POST /api/security/reset` — clear the session's circuit breaker via the audited `resetSession` (the unlock path)
 - `./dashboard/route.ts` → `GET /api/dashboard` — dashboard read model
 - `./bills/route.ts` → `GET /api/bills` — spending analysis + transactions + anomalies
 - `./cards/route.ts` → `GET /api/cards` — cards read model
 - `./subscriptions/route.ts` → `GET /api/subscriptions` — subscriptions read model
-- `./_lib/` → shared handler plumbing (envelope, error mapping, zod parse, SSE, session, task-plan mapping) — private `_`-folder, never a route
+- `./_lib/` → shared handler plumbing (envelope, error mapping, zod parse, SSE, session, task-plan mapping, agent bridge) — private `_`-folder, never a route
 - `../tests/app/` → route-handler contract tests (sibling — read-only, escalate writes to parent)
 
 ## Notes for Agents
@@ -183,21 +202,35 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   the build with `Property 'X' is incompatible with index signature … not assignable to type 'never'`.
   Keep route-local zod schemas as NON-exported `const`s (or move them into `_lib/schemas.ts`); `export type`
   / `export interface` are fine.
-- **`POST /api/security/reset`** is the runtime unlock path for a tripped breaker (the gateway's
-  "前往安全中心解除限制" pointer). Session id resolution matches `GET /api/security`. `reset` may become
-  async (it records a `SECURITY_RESET` SecurityEvent) — call it as
-  `await Promise.resolve(security.circuitBreaker.reset(sid))` so both `void` and `Promise` signatures work;
-  then read the fresh state via `getState` for the response.
-- **`@/planner` has no cross-request plan store.** `/api/tasks*` read the persisted `AgentTask`/
-  `AgentTaskNode` rows through the sanctioned read path `@/lib/db/repositories/task` and map them to
-  `TaskPlan` in `_lib/task-plans.ts`; the executor's `PlanControls` are in-process and not reachable
-  across HTTP. `GET /api/tasks` with an unknown/empty session returns `{plans:[]}` (200);
-  `GET /api/tasks/[id]` unknown → `404 NOT_FOUND`. `POST /api/tasks/[id]` steering is best-effort on the
-  persisted row (`cancel→'cancelled'`, `resume→'running'`, `pause→'pending'`, `retry→'pending'` + nodes reset).
-- **Actions routes** map `ConfirmationOutcome` → `_lib/types.ActionResponse`: `requiresMfa = tier === 'RED'`,
-  `sessionId` from the persisted `PendingAction` row (fallback `resolveSessionId`), `mfaResult` derived
+- **Actions routes enforce OWNERSHIP before delegating.** Each resolves `resolveSessionId` + `resolveUserId`,
+  then a `getPendingAction` guard rejects an explicit session/user MISMATCH with `403 SECURITY_DENIED`
+  (only an explicit mismatch — when no session is resolvable the route does NOT invent one). They then
+  delegate through `_lib/agent-bridge` (`confirmOwned`/`verifyOwned`/`cancelOwned`), which forwards the
+  `{ userId, sessionId }` ownership bag to `@/agent`. The routes map `ConfirmationOutcome` →
+  `_lib/types.ActionResponse`: `requiresMfa = tier === 'RED'`, `sessionId` from the persisted `PendingAction`
+  row (fallback `resolveSessionId`), `mfaResult` derived
   (`verify` → `ok?'success':(status==='awaiting_mfa'?'failed':'not_required')`, else `'not_required'`).
-  A `cancel` of an unknown/settled action surfaces the owner's thrown `AppError('NOT_FOUND'|'CONFLICT')`.
+  **Confirm/verify also forward PLAN progress**: BEFORE delegating, each calls
+  `locateOwningPlan(row?.sessionId, id)` (a plain non-plan action → `undefined`, skipped silently) and,
+  on a SUCCESSFUL outcome, `withPlanUpdate(outcome, located)` → appends a refreshed `plan_update` (the
+  owning plan re-read via the ownership-checked `getTaskPlan`) to `events`, so `/agent` refreshes its
+  plan view. `cancel` emits NO `plan_update` (a cancelled node would still read `waiting_confirmation` —
+  not meaningful). A `cancel` of an unknown/settled action surfaces the owner's thrown
+  `AppError('NOT_FOUND'|'CONFLICT')`.
+- **Task plans & control (`/api/tasks*`).** Read models come from the persisted `AgentTask`/`AgentTaskNode`
+  rows via `@/lib/db/repositories/task`, mapped to `TaskPlan` in `_lib/task-plans.ts` (`GET /api/tasks` with
+  an unknown/empty session returns `{plans:[]}` 200; `GET /api/tasks/[id]` unknown returns `404 NOT_FOUND`).
+  `POST /api/tasks/[id]` performs REAL execution control: it REQUIRES the owning session (`resolveSessionId`,
+  else `400 VALIDATION`; non-owner `403 SECURITY_DENIED`) and delegates to `@/agent` via `_lib/agent-bridge`
+  (`pauseTask`/`resumeTask`/`cancelTask`/`retryTask`) — `pause` stops before the next node, `cancel` stops and
+  cancels the remaining nodes, `retry` re-runs only the failed node, `resume` continues without re-running
+  succeeded nodes. The bridge fails loudly with `TOOL_FAILED` (502) when a control action resolves to no
+  capability or the control returns no plan.
+- **`POST /api/security/reset`** is the runtime unlock path for a tripped breaker (the gateway's
+  "前往安全中心解除限制" pointer). Session id resolution matches `GET /api/security`. It calls the AUDITED
+  async `security.circuitBreaker.resetSession(sessionId, { actor: 'user' })`, which clears the breaker state
+  AND records a `SECURITY_RESET` `SecurityEvent`, returning the fresh `CircuitBreakerState` used to build
+  `ResetData`. It parses NO request body.
 - Add a new client-callable capability as a route group here; a group with a dynamic id uses a
   `[id]/route.ts` leaf. Folders prefixed `_` (like `_lib`) are private and never routed.
 - Any new shared domain type belongs in `@/lib/contracts` (root-owned); app-only transport types

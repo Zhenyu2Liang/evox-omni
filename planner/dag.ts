@@ -228,6 +228,40 @@ export function getReadyNodes(nodes: TaskNodeSpec[], results: TaskNodeResult[]):
   return ready;
 }
 
+/**
+ * Return the ids of every node that TRANSITIVELY depends on `id` — its direct
+ * dependents, their dependents, and so on — in declaration order.
+ *
+ * BFS over the dependency graph built from `nodes`; a node reached through any
+ * path is included exactly once. Pure helper: no I/O, no mutation. Shared by the
+ * executor (skip propagation / cooperative retry) and the durable lifecycle
+ * helpers (`retryPlan` / `cancelPlan` / compensation) instead of each carrying a
+ * private copy.
+ */
+export function transitiveDependents(nodes: TaskNodeSpec[], id: string): string[] {
+  const dependents = new Map<string, string[]>();
+  for (const node of nodes) {
+    for (const dep of node.dependencies ?? []) {
+      const arr = dependents.get(dep);
+      if (arr) arr.push(node.id);
+      else dependents.set(dep, [node.id]);
+    }
+  }
+
+  const reachable = new Set<string>();
+  const queue: string[] = [...(dependents.get(id) ?? [])];
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    if (reachable.has(current)) continue;
+    reachable.add(current);
+    for (const next of dependents.get(current) ?? []) {
+      if (!reachable.has(next)) queue.push(next);
+    }
+  }
+
+  return nodes.filter((node) => reachable.has(node.id)).map((node) => node.id);
+}
+
 /** Coerce a primitive to a finite number, or `undefined` when it is not numeric. */
 function toNumber(value: unknown): number | undefined {
   if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;

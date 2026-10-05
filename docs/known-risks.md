@@ -18,6 +18,10 @@
 | 8 | 演示时钟被**固定**在 `DEMO_NOW` | `lib/constants.ts` `DEMO_NOW=2026-09-25 12:00 本地`、`lib/clock.ts` |
 | 9 | 审计覆盖**门控动作 + 安全事件**（🟢 读取**不审计**） | `audit/`、`lib/contracts/audit.ts` |
 | 10 | live 模式下 LLM 输出**非确定性**（演示/测试用 mock 模式） | `agent/providers/`、`LLM_MODE` |
+| 11 | `reserve_budget` 只记录预算行，**不锁定 / 不移动资金** | `banking-sdk/budget.ts` |
+| 12 | `create_scheduled_task` 只记录未来动作意图，**无在线调度器执行** | `banking-sdk/task.ts` |
+| 13 | Test 12 生日提醒只创建记录，**不真正下单鲜花 / 蛋糕** | `tests/scenarios/`、`banking-sdk/budget.ts`、`banking-sdk/task.ts` |
+| 14 | 注入守卫只记录事件，**不向模型注入"系统提醒"** | `security/injection-guard.ts`、`agent/run-turn.ts` |
 
 ---
 
@@ -128,7 +132,47 @@ mock 模式让整条流水线（Agent + 工具 + 安全）**离线、确定、�
 
 ---
 
-## 11. 其他工程性注意 · Engineering Notes
+## 11. `reserve_budget` 只记录预算，不涉及资金 · Budget Reservation Moves No Money
+
+**限制**：🟢 `reserve_budget` 只在 `Budget` 表写入一条 `status = 'RESERVED'` 的行
+（`banking-sdk/budget.ts`）——它**不锁定、不冻结、不移动任何资金**，账户余额不受影响。
+
+**为何可接受**：演示里的"预算"是一个**计划意图的标记**，而非真实的资金锁定；它让 Test 12 能展示
+"智能体理解生日场景 → 预留预算 + 定时提醒"的跨能力编排，而无需引入任何真实的资金托管语义。
+
+---
+
+## 12. 定时任务不会被真正执行 · Scheduled Tasks Are Not Executed
+
+**限制**：🟡 `create_scheduled_task` 只向 `ScheduledTask` 表写入一条"未来动作"意图
+（`banking-sdk/task.ts`）——**当前没有任何在线调度器 / 后台作业会在其 `runAt` 时间真正执行它**。
+
+**为何可接受**：演示聚焦"把一句自然语言拆成受门控的任务"；任务**被正确登记、且需人工确认**即为
+演示目标。真实的到期执行属于生产系统职责，不在竞赛范围。
+
+---
+
+## 13. Test 12 只创建记录，不真正下单 · Birthday Plan Only Records
+
+**限制**：Test 12（"爱人 11 月 20 日生日，帮我准备 1000 元预算"）的产物是**数据库记录**：
+一条 `RESERVED` 预算 + 一条及以上的 `ScheduledTask`（提醒）。它**不会真正下单鲜花 / 蛋糕**，
+也不发起任何支付。
+
+**为何可接受**：这正是沙箱边界的体现——"无真实支付"，同时完整演示了跨能力的规划与门控。
+
+---
+
+## 14. 注入守卫不向模型注入提醒 · Injection Guard Adds No Model Reminder
+
+**限制**：`security/injection-guard.ts` 对可疑文本**只**写入 `INJECTION_ATTEMPT` `SecurityEvent`
+（`agent/run-turn.ts` 另向 UI 发一条 `security_event{kind:'injection'}`）；它**不向模型上下文注入任何
+"系统提醒"**，也**绝不**改变授权结论（defense-in-depth only）。
+
+**为何可接受**：授权的唯一权威是网关的策略表；不向模型注入文本反而**缩小**了可被注入利用的表面。
+
+---
+
+## 15. 其他工程性注意 · Engineering Notes
 
 - **测试文件串行运行**：所有测试共用一个 `prisma/test.db`，`vitest.config.ts` 已设置
   `fileParallelism: false`，因此测试**文件串行**运行（同一文件内的查询仍可并行），无需额外参数。

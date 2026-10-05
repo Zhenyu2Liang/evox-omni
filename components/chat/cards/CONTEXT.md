@@ -50,7 +50,7 @@ export function BalanceCard(p: BalanceCardProps): JSX.Element;        // total +
 export interface TransferCardProps { data: TransferResult; className?: string; }
 export function TransferCard(p: TransferCardProps): JSX.Element;      // recipient + amount + new balance
 
-// confirmation = PendingActionSummary + actionId + [取消]/[确认] → confirj endpoint
+// confirmation = PendingActionSummary + actionId + [取消]/[确认] → confirm endpoint
 export interface ConfirmationCardProps { action: PendingActionSummary; actionId?: string;
   onConfirm?: (actionId: string) => void; onCancel?: (actionId: string) => void;
   busy?: boolean; error?: string; className?: string; }
@@ -79,11 +79,19 @@ export interface AnomalyCardProps { data: AnomalyReport; onAcknowledge?: () => v
 export function AnomalyCard(p: AnomalyCardProps): JSX.Element;        // [这是本人交易]/[查看详情]/[冻结银行卡]
 
 export interface PlanCardProps { plan: TaskPlan; className?: string; }
-export function PlanCard(p: PlanCardProps): JSX.Element;              // DAG timeline (✓/○) ↔ ../../banking
+export function PlanCard(p: PlanCardProps): JSX.Element;              // status timeline ↔ ../../banking + dependency section
 
 export interface ErrorCardProps { message: string; code?: string; detail?: string; className?: string; }
 export function ErrorCard(p: ErrorCardProps): JSX.Element;            // safe, agent-facing error surface
 ```
+
+**PlanCard structure.** `PlanCard` renders the plan goal + the plan-level status badge, then the
+per-node **status timeline** via the composed `../../banking/AgentTaskTimeline` (the single status→meta
+source — it maps all 8 `TaskNodeStatus` to a distinct icon/label/tone and shows a failed node's
+`result.error` inline), then a **dependency timeline**: one row per node whose `dependencies` are
+resolved to node NAMES through an id→name map built from `plan.nodes` (`依赖于: …`, or
+`起始节点（无依赖）` when empty; a dependency id not present in the plan falls back to the raw id).
+That section carries relationship text only — no status glyphs.
 
 ## The exhaustive mapping (must stay in lock-step with the union)
 
@@ -102,7 +110,13 @@ export function ErrorCard(p: ErrorCardProps): JSX.Element;            // safe, a
 | `error` | `message: string` | `ErrorCard` |
 
 `CardRenderer` narrows the frozen `data: unknown` field to the concrete DTO above; the `./app` serialiser
-must populate `cards[].data` with exactly these shapes.
+must populate `cards[].data` with exactly these shapes. Note: the `plan` renderer here is NOT the live
+plan path — a `plan` card is promoted into `activePlan` and rendered ONCE by `../../chat/ChatWindow`
+(see `../CONTEXT.md` "Plan dedupe" and "Human-decision card").
+
+## Known Issues
+
+- `PlanCard` is a passive plan VIEW by design (takes only `{ plan }`): a `waiting_confirmation`/`waiting_verification` node surfaces as the 待确认/待验证 badge and renders NO confirm/cancel buttons itself. The actionable human-decision for a parked plan node is rendered ONCE by `ChatWindow` from `stream.pendingAction` (driven by the `confirmation_required`/`mfa_required` events), reusing `ConfirmationCard`/`MfaCard` — see `../CONTEXT.md` "Human-decision card".
 
 ## Constraints
 
@@ -117,6 +131,9 @@ must populate `cards[].data` with exactly these shapes.
 - **MFA secrecy**: `MfaCard` renders `hint` only — never the code (`MFA_CODE` is server-side; do not import).
 - **Money** via `Money`; **tiers** via `StatusBadge`; reuse `../../banking` tiles and `../../charts`
   rather than re-implementing tiles/charts inside cards.
+- **No competing status→meta table**: node statuses are rendered only through the composed
+  `../../banking/AgentTaskTimeline`; do not fork its mapping. `PlanCard`'s dependency section shows
+  relationship text (node names), never status glyphs.
 - Named exports only; one card per file; files ≲ ~1000 lines.
 
 ## Test Strategy
@@ -125,7 +142,8 @@ must populate `cards[].data` with exactly these shapes.
 - RTL render tests under the root `tests/` suite render each card with a fixture `ChatCard` and assert
   key content (amount via `Money`, tier badge label, field rows, MFA hint present / code absent).
 - `CardRenderer` dispatch test: each `card.type` renders its component; unknown key fails to compile.
-- `PlanCard` step status → ✓/○ mapping is the behavioural bit to assert.
+- `PlanCard`'s dependency-label resolution (dep ids → node names, empty → `起始节点（无依赖）`, unknown id
+  fallback) is the behavioural bit to assert; the timeline itself is delegated to `AgentTaskTimeline`.
 
 ## Routing Table
 
