@@ -243,6 +243,50 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   as an `error` event rather than aborting the plan or the turn.
 (this is what demo Test 4 — prompt injection — proves).
 
+### Plan-lifecycle & confirmation guarantees (code-grounded)
+
+- **Cancel revokes parked actions, THEN cancels.** `task-control.ts#cancelTask` calls
+  `revokeParkedActions` (one `gateway.cancelAction` per parked node — a DB CAS
+  `pending`/`awaiting_mfa` → `cancelled`) BEFORE `lifecycle.cancelPlan`. `revokeParkedActions` reports
+  `alreadySettled` for an action that already executed/errored and never pretends to roll it back
+  (executed work is irreversible; the planner performs NO automatic compensation).
+- **No pre-park plan-status check exists** — neither `securityGateway.handleToolCall` nor
+  `executor.runPlan`'s `runToolNode` consults the plan status before parking. Prevention of a
+  post-cancel executable action relies on the post-run CANCEL SWEEP: `sweepCancelledPlan(sessionId,
+  taskId)` (called after every run path — `runSubmitPlan` (`tools/planning.ts`), `resumeTask`,
+  `retryTask`, `resumeTaskForAction`) re-reads the row and, when `cancelled`, revokes every still-parked
+  action; an UNEXPECTED revocation failure is THROWN (a surviving executable action is an incident). A
+  live run is interrupted mid-flight only via `defaultPollControls` (`'cancelled'` ⇒ `{kind:'cancel'}`)
+  polled at each node checkpoint.
+- **Confirm-vs-cancel is at-most-once via the gateway CAS, NOT "cancel always wins".**
+  `confirmation.ts#confirmAction`/`verifyAction`/`cancelAction` first call `cancelledPlanOutcome` (reads
+  the owning `AgentTask` via `findTaskByPendingAction` + `getTask`; if `'cancelled'` ⇒ `ok:false` BEFORE
+  authorizing — the belt), then `gateway.authorizeAction`, whose `claimPendingAction` from
+  `['pending']`/`['awaiting_mfa']` claims 0 rows on an already-revoked/executed action and throws
+  `CONFLICT` — surfaced as a real `ok:false` (`conflictOutcome`). Confirm and cancel race through the
+  SAME CAS (`pendingAction.ts#claimPendingAction`), so exactly one wins; a confirm that wins the race
+  executes, and the concurrent cancel's revoke then reports it settled.
+- **Concurrent resume/retry is exactly-once per effect.** `claimTaskStatus`
+  (`lib/db/repositories/task.ts`) is a single `updateMany` CAS (`status IN fromStatuses` → `toStatus`;
+  `count===1`). `resumeTask`'s from-set KEEPS `'running'` (two resumes both run; effect de-dup is the
+  IN-PROCESS single-flight `inFlightExecutions` map in `confirmation.ts#executeGatedTool`, keyed by
+  session+tool+canonical-args and cleared on settle), whereas `retryTask`'s from-set EXCLUDES
+  `'running'` (the loser claims 0 rows ⇒ returns the persisted plan WITHOUT running). `transfer_money`
+  adds DB-level idempotency: `executeAuthorizedAction` passes `{ idempotencyKey: action.id }` to
+  `registry.executeDirect`.
+- **Pause retains.** When `resumeTaskForAction` sees the owning plan `'paused'`, it records the decided
+  node and does NOT advance. TWO belts hold it: (a) `lifecycle.resumePlan` returns early with
+  `status:'paused'` whenever `explicitResume !== true` (`stillPaused`) — and `resumeTaskForAction`
+  passes NO `explicitResume` — and (b) `resumeTaskForAction` passes `PAUSE_NOW_CONTROLS` (always
+  `{kind:'pause'}`) into `runPlan`. The plan stays `'paused'` until an explicit `resumeTask`.
+- **Terminal states are never resurrected.** Every control CAS from-set excludes `'cancelled'`
+  (`PAUSABLE_PLAN_STATUSES`/`RESUMABLE_PLAN_STATUSES`/`RETRYABLE_PLAN_STATUSES` in `task-control.ts`); a
+  lost claim returns `reloadPlan(...)` — the PERSISTED row — so the API response always matches the DB.
+  `createTaskPersistence.persistPlan` writes `'cancelled'` unconditionally but every other checkpoint via
+  `claimTaskStatus(NON_CANCELLED_PLAN_STATUSES)`, so a concurrent cancel wins. `resumeTaskForAction`
+  no-ops on a `'cancelled'` plan (returns the persisted plan); `cancelTask` is idempotent on an
+  already-`'cancelled'` row.
+
 ## Constraints (hard, encode in every file)
 
 - **NEVER register a bash/shell/write/edit/file/SQL/system/http tool.** The model's ONLY capabilities
