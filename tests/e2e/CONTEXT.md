@@ -79,6 +79,15 @@ deprecated `package.json#prisma` warning lines are harmless).
 `E2E_SKIP_DB_RESET=1` keeps the current DB (e.g. to inspect post-run data) — the journeys then
 require a freshly seeded DB.
 
+**Env propagation (how a DB URL reaches the children).** The harness (`npx tsx tests/e2e/acceptance.e2e.ts`)
+does NOT load `.env` (tsx has no dotenv shim). The spawned `next dev` is launched with
+`env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' }` (`startDevServer`), and then Next.js itself loads
+`.env` at boot (Next's env loader does not override an already-set var). The Prisma/tsx CLI children
+(`runCliStep` -> `spawnSync` with NO `env` key) inherit the harness's `process.env` unchanged. So to point
+BOTH the CLIs and the dev server at an isolated DB, set `process.env.DATABASE_URL` (an ABSOLUTE `file:`
+URL -- a relative `file:./...` resolves against the Prisma schema dir) BEFORE `resetDemoDatabase()` and
+`bootDevServer()`. Current DB file: `prisma/dev.db` (+ `-wal`/`-shm`/`-journal`, `DEV_DB_FILES`).
+
 ## Journeys (each asserts on RENDERED DOM)
 - **a-transfer-confirm** (YELLOW transfer ≤¥1000): `给张伟转200元` → ConfirmationCard (`确认`/`取消`)
   → click `确认` → assistant text `转账处理结果：…`.
