@@ -256,5 +256,5 @@ rendered to the user is the `TaskPlan` snapshot delivered via the `plan_update` 
 - `../lib/db/repositories/task.ts` → AgentTask/AgentTaskNode persistence used by `deps.persist`
   (sibling — read-only, escalate writes to `./lib`)
 - `../tests/unit/planner/` → planner unit specs (sibling — read-only, escalate writes to `./tests`):
-  `dag.test.ts`, `executor.test.ts`, `lifecycle.test.ts`. This node has NO local test file and NO
+  `dag.test.ts`, `executor.test.ts`, `executor-claim-scope.test.ts`, `lifecycle.test.ts`. This node has NO local test file and NO
   scoped vitest config — the specs live in that sibling tree (run `npx vitest run tests/unit/planner`).
