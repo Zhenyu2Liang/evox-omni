@@ -312,7 +312,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 - **`HIGH_RISK_BLOCKED` / `ANOMALY_FLAGGED` event kinds are declared but never written**
   by this node (it emits `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET`
   and — for the transfer escalation — `LIMIT_EXCEEDED`).
-- **A transfer's terminal ledger write is still not idempotent, and the ledgered-transfer dedup is inert until the key is wired.**
+- **A transfer's terminal ledger write is still not idempotent, and the ledgered-transfer dedup is ACTIVE (the key IS wired — see below).**
   The gateway serializes the AGGREGATE-limit re-risk (claim-first `$transaction`), and `lib/ledger`
   (`idempotentTransferTxId`) + `banking-sdk/transfer.ts` (accepts an `idempotencyKey`, sets `Transaction.id`
   to that deterministic id) support an idempotency key — but the agent layer currently passes NO key
