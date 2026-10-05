@@ -195,7 +195,7 @@ describe('the PARKING turn moved nothing and persisted the plan + a pending YELL
     const prisma = getTestPrisma();
 
     // The plan is DURABLE — it is listed through the real `GET /api/tasks` handler.
-    const listed = await getJson<Envelope<{ plans: TaskPlan[] }>>(tasksGet, tasksUrl(sessionId));
+    const listed = await getJson<Envelope<{ plans: TaskPlan[] }>>(tasksGet, tasksUrl(), { sessionId });
     expect(listed.status).toBe(200);
     const plans = payload(listed).plans;
     expect(plans).toHaveLength(1);
@@ -239,9 +239,9 @@ describe('POST /api/actions/[id]/confirm — resumes the parked plan with the RE
 
     const res = await postJson<Envelope<ActionResponse>>(
       confirmPost,
-      actionUrl(actionId, 'confirm', sessionId),
+      actionUrl(actionId, 'confirm'),
       {},
-      { ctx: idCtx(actionId) },
+      { ctx: idCtx(actionId), sessionId },
     );
 
     expect(res.status).toBe(200);

@@ -13,8 +13,14 @@
  * Route modules are NEVER imported here — each spec imports the handler(s) it drives and passes them
  * in, so this module stays importable by every app-entry spec (chat / actions / tasks) and free of
  * load-order coupling. SSE frames follow `sseFrame()` in `@/app/api/_lib/http` (`data: <JSON>\n\n`).
+ *
+ * IDENTITY IS COOKIE-ONLY. The app derives the trusted caller identity from the HttpOnly
+ * `banking_session` cookie (`app/api/_lib/session#resolveIdentity`); a `?sessionId=` query param is
+ * IGNORED for every authorization decision. The invokers therefore carry identity as a `Cookie`
+ * header (the `sessionId` / `cookie` option), NOT as a query param.
  */
 import { NextRequest } from 'next/server';
+import { SESSION_COOKIE } from '@/lib/constants';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import type { IdRouteContext } from '@/app/api/_lib/types';
 
@@ -27,11 +33,22 @@ export const BASE_URL = 'http://localhost';
  */
 export type RouteHandler = (req: NextRequest, ctx: IdRouteContext) => Response | Promise<Response>;
 
-/** Per-request options: extra headers, the dynamic-route context, and an origin override. */
+/**
+ * Per-request options: extra headers, the dynamic-route context, an origin override, and the
+ * COOKIE-ONLY identity.
+ *
+ * - `sessionId` — shorthand that emits `Cookie: banking_session=<id>`. Omitting it sends NO cookie
+ *   (the route fails closed with `403 SECURITY_DENIED` on a write/auth route).
+ * - `cookie` — a raw `Cookie` header value; wins over `sessionId` when both are supplied.
+ */
 export interface HttpOptions {
   headers?: Record<string, string>;
   ctx?: IdRouteContext;
   base?: string;
+  /** Trusted identity shorthand: emits `Cookie: <SESSION_COOKIE>=<id>`. */
+  sessionId?: string;
+  /** Raw `Cookie` header value (takes precedence over `sessionId`). */
+  cookie?: string;
 }
 
 /** The captured result of invoking a route handler. */
@@ -45,6 +62,11 @@ export interface HttpResult<T = unknown> {
   res: Response;
 }
 
+/** Build the `Cookie` header value carrying the `banking_session` id. */
+export function sessionCookie(sessionId: string): string {
+  return `${SESSION_COOKIE}=${sessionId}`;
+}
+
 /* ---------------------------------------------------------------------------- URL builders */
 
 /** Build a relative `path?query` string, dropping `undefined` params (base is applied on invoke). */
@@ -56,31 +78,26 @@ function withQuery(path: string, query: Record<string, string | undefined>): str
   return url.pathname + url.search;
 }
 
-/** `POST /api/chat` URL. `stream` picks the mode; `sessionId` is passed through as a query param. */
-export function chatUrl(opts: { stream?: 0 | 1; sessionId?: string } = {}): string {
+/** `POST /api/chat` URL. `stream` picks the mode. Identity is carried in the body / cookie, not here. */
+export function chatUrl(opts: { stream?: 0 | 1 } = {}): string {
   return withQuery('/api/chat', {
     stream: opts.stream === undefined ? undefined : String(opts.stream),
-    sessionId: opts.sessionId,
   });
 }
 
-/** `POST /api/actions/[id]/{confirm|verify|cancel}` URL, optionally scoped to a session. */
-export function actionUrl(
-  id: string,
-  action: 'confirm' | 'verify' | 'cancel',
-  sessionId?: string,
-): string {
-  return withQuery(`/api/actions/${encodeURIComponent(id)}/${action}`, { sessionId });
+/** `POST /api/actions/[id]/{confirm|verify|cancel}` URL. Identity comes from the cookie. */
+export function actionUrl(id: string, action: 'confirm' | 'verify' | 'cancel'): string {
+  return `/api/actions/${encodeURIComponent(id)}/${action}`;
 }
 
-/** `/api/tasks/[id]` URL (`GET` reads, `POST` controls), optionally scoped to a session. */
-export function taskUrl(id: string, sessionId?: string): string {
-  return withQuery(`/api/tasks/${encodeURIComponent(id)}`, { sessionId });
+/** `/api/tasks/[id]` URL (`GET` reads, `POST` controls). Identity comes from the cookie. */
+export function taskUrl(id: string): string {
+  return `/api/tasks/${encodeURIComponent(id)}`;
 }
 
-/** `GET /api/tasks` URL (optionally scoped to a session). */
-export function tasksUrl(sessionId?: string): string {
-  return withQuery('/api/tasks', { sessionId });
+/** `GET /api/tasks` URL. Identity comes from the cookie. */
+export function tasksUrl(): string {
+  return '/api/tasks';
 }
 
 /** The Next.js 15 dynamic-route context for a `/…/[id]` handler. */
@@ -153,7 +170,12 @@ async function invoke<T>(
   init: RequestSpec,
   opts: HttpOptions,
 ): Promise<HttpResult<T>> {
-  const req = new NextRequest((opts.base ?? BASE_URL) + path, init);
+  // Cookie-only identity: fold the `sessionId` shorthand (or a raw `cookie`) into a `Cookie` header.
+  const headers: Record<string, string> = { ...init.headers };
+  const cookie = opts.cookie ?? (opts.sessionId !== undefined ? sessionCookie(opts.sessionId) : undefined);
+  if (cookie !== undefined) headers.cookie = cookie;
+
+  const req = new NextRequest((opts.base ?? BASE_URL) + path, { ...init, headers });
   const res = await handler(req, opts.ctx ?? idCtx(''));
   const contentType = res.headers.get('content-type') ?? '';
   // Only JSON responses are parsed here; an SSE body is left UNCONSUMED for `readSse`.
