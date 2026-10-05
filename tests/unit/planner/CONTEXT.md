@@ -25,6 +25,14 @@ Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` 
   non-terminal node to `cancelled` (incl. a durable `{ kind:'cancel' }` polled after the first node of a
   3-node `[a, b(dep a), c(dep b)]` chain settles → `a=success`, `b=c=cancelled`, `b`/`c` never invoked),
   retry re-runs only the failed node, resume continues.
+- `executor-claim-scope.test.ts` (3 specs, DB-backed) — the NODE-execution de-dup SCOPE keyed by the
+  stable `(taskId,nodeId)` identity (NOT an in-process single-flight Map). Part A drives the CAS
+  (`claimNodeExecution`/`releaseNodeExecution` in `@/lib/db/repositories/task`) directly: exactly-once
+  claim, non-owner release no-op, owner release clears, cross-task independence. Part B runs two
+  SEPARATE `runPlan` invocations with SEPARATE `PlanDeps` over the same identity: while a still-live
+  run holds the claim the second run backs off with ZERO node side effects and no settlement write
+  (`persistPlan` only ever carries `status:'running'`); after release exactly one run executes the
+  node (stable `runTool` ctx → same `nodeExecutionKey`).
 
 ## Constraints
 
