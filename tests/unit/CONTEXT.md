@@ -65,5 +65,5 @@ Each spec imports the module under test directly from its `@/…` façade path
 - `./planner` → DAG + executor + durable lifecycle unit specs (incl. `executor-claim-scope` → exactly-once node claim)
 - `./banking-sdk` → transfer/subscription/investment domain invariants + money-movement atomicity + idempotent-CREATE replay
 - `./agent` → end-to-end confirmation-flow / task-control / provider specs (real DB + gateway + `@/agent`)
-- `./lib` → `PendingAction` atomic-claim persistence primitives
+- `./lib` → `PendingAction` atomic-claim persistence primitives + pure `lib/ledger` de-dup-scope identity keys
 - `../helpers` → shared utilities (db/fixtures) used by DB-backed unit cases (sibling — this node)
