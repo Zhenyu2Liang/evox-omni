@@ -92,7 +92,7 @@ anomaly @ 2026-09-20 18:32; products incl. 稳健理财A; subscriptions; cards) 
 
 ## Fast test-DB path (why the suite is fast — do not remove)
 
-The full suite (438 tests / 206 suites) runs in ~30–45s.
+The full suite (447 tests / 214 suites) runs in ~30–45s.
 This depends on a deliberately fast SQLite configuration; if any piece is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
 
 - `helpers/db.ensureTestPragmas()` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`
