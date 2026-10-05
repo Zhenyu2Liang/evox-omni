@@ -264,32 +264,32 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 
 ## Known Issues
 
-- **Circuit-breaker unlock is not wired to an app route.**
-  `circuit-breaker.resetSession(sessionId, opts?)` exists (audited: clears the lock AND records a
-  `SECURITY_RESET` `SecurityEvent`) and is exposed as `security.circuitBreaker.resetSession`, but no app
-  route/API caller invokes it yet — the security-center unlock button is still not connected. Until an app
-  node wires it, a tripped session stays locked for the process lifetime (`recordSuccess` clears the counter
-  but explicitly does NOT unlock).
-- **Ownership is REQUIRED, but the caller identity is request-derived.**
-  `authorizeAction`/`cancelAction`/`handleToolCall` now refuse a missing/mismatching identity with
-  `SECURITY_DENIED` and never fall back to a demo user, but the identity itself comes from
-  `app/api/_lib/session.ts` with no trusted/signed session token — the check defends against mis-routing,
-  not against a caller who already knows the `actionId`. Sibling callers must forward explicit ids:
-  `agent/confirmation.ts` (it passes `opts?.userId`/`opts?.sessionId`, which are `undefined` when its
-  `ConfirmOptions` omits them) and every `tests/**` gateway call must be updated to supply
-  `{ userId, sessionId }`; until then those calls fail closed with `SECURITY_DENIED`.
+- **Ownership is REQUIRED; the caller identity is cookie-derived AND independently re-derived from persisted state.**
+  `authorizeAction`/`cancelAction`/`handleToolCall` refuse a missing/mismatching identity with
+  `SECURITY_DENIED` and never fall back to a demo user. The API layer derives identity from the HttpOnly
+  `banking_session` cookie (`app/api/_lib/session.ts` `requireIdentity` → 403 on missing/unknown; any
+  `?sessionId=`/`?userId=` query param is IGNORED), and `agent/confirmation.ts` independently re-derives the
+  trusted owner from persisted state (`getPendingActionOwnership` + `getSession`), treating request-supplied
+  ids as a fail-closed ASSERTION. Residual gap: the cookie carries no signed/HMAC token, so the check
+  defends against mis-routing rather than a caller who already knows the `actionId` in the same session.
+- **The circuit-breaker unlock IS wired to an app route.**
+  `app/api/security/reset/route.ts` (`POST /api/security/reset`, cookie identity via `requireIdentity`)
+  invokes `security.circuitBreaker.resetSession(sessionId, { actor, reason })` — the audited unlock that
+  clears the lock AND records a `SECURITY_RESET` `SecurityEvent`. A tripped session is therefore no longer
+  locked for the process lifetime once a human calls this route.
 - **`mfa_required` is MISSING from `lib/contracts/audit.ts`.**
   `SecurityEventKind` has no `mfa_required` member, so the transfer escalation (YELLOW→RED at execution time)
   emits an EXISTING kind (`LIMIT_EXCEEDED`, severity `high`) with a COMPLETE `detail`
   (`decision:'escalate_to_mfa'`, `reason:'execution_time_transfer_re_risk'`, `actionId`, `amount`,
   `effectiveDailyTotal`, `projectedDailyTotal`, `persistedTier`, `persistedRequiresMfa`). A dedicated
-  `mfa_required` kind should be added by the contract owner.
+  `mfa_required` kind should be added by the contract owner. NOTE: `mfa_required` IS a valid
+  `AgentStreamEvent` type (surfaced by the API/agent layer), but NOT a `SecurityEventKind`.
 - **`PendingActionStatus` has no `'executing'` member.**
   An in-flight (authorized-but-not-yet-ledgered) transfer is therefore identified by status `'confirmed'`;
   `IN_FLIGHT_TRANSFER_STATUSES` in `risk-engine.ts` includes `'executing'` defensively so an explicit
   in-flight marker added to the contract later is covered automatically.
 - **Injection guard does NOT add a system reminder to the model context.**
-  The only caller (`agent/run-turn.ts` ~L353-357) emits a UI `security_event` (kind `injection`) after `reportInjection`; nothing is appended to the agent's system prompt/messages, despite the `injection-guard.ts` header saying so.
+  The only caller (`agent/run-turn.ts` ~L450-454) scans, awaits `reportInjection`, then emits a UI `security_event` (kind `injection`); nothing is appended to the agent's system prompt/messages, despite the `injection-guard.ts` header mentioning a system reminder.
   Detection, the `INJECTION_ATTEMPT` event, and never-grants-permission all hold (defense-in-depth unaffected).
 - **The all-tiers (incl. GREEN) block when tripped has no direct unit test.**
   `tests/scenarios/test-10-circuit-breaker.test.ts` only exercises a RED tool, so the GREEN-read denial path is unguarded by tests.
@@ -362,3 +362,4 @@ This is a **leaf node** — it has no child directories; the modules above are i
 - After the agent layer executes an authorized action (or it fails), call `securityGateway.recordActionResult(id, 'executed'|'failed')` so the persisted terminal status is truthful and a later confirm/cancel is a `CONFLICT`.
 - `authorizeAction`/`cancelAction`/`handleToolCall` REQUIRE a caller identity — never add a demo-user fallback; callers must pass `{ userId, sessionId }`.
 - **No local test files exist in this node.** `security/_tests/` and `security/_vitest.local.config.ts` do NOT exist; all security specs live under the root-owned `../tests/` (root `vitest.config.ts` discovers only `tests/**`).
+- **GREEN auto-executed reads are NOT audited.** The only `recordAudit` callers are the gated paths in `agent/confirmation.ts` (confirm/verify + cancel); a GREEN tool that executes inline writes no `AuditLog` row (by design, per `lib/contracts/audit`).

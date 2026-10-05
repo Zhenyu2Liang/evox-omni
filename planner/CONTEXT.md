@@ -111,6 +111,7 @@ through the persistence ports, so state survives the request:
 - **Resume** — `resumePlan` applies the human `PlanToolOutcome` to the gated node (success / re-park /
   failed) and continues the walk, which skips every already-successful node and runs only the
   now-unblocked dependents.
+- **Parked is NOT terminal (gotcha)** — the terminal set `TERMINAL = {success, failed, skipped, cancelled}` EXCLUDES `waiting_confirmation`/`waiting_verification`, so the walk's skip guard `if (existing && TERMINAL.has(existing.status)) { index += 1; continue; }` does NOT skip a parked node. Invoking `runPlan` DIRECTLY on a snapshot whose gated node is still parked would re-attempt it (call `deps.runTool` again). Always resume a gated plan through `resumePlan`, which resolves the node's status first (success / failed / re-park); a re-park returns BEFORE calling `runPlan`.
 
 ## Compensation policy (non-atomic — no automatic rollback)
 
