@@ -89,7 +89,7 @@ derived `<Name>Args` type. `index.ts`'s `createToolRegistry` calls every factory
 | `get_investment_holdings` | investment.ts | 🟢 | `banking.investment.listHoldings(userId)` |
 | `subscribe_investment` | investment.ts | 🔴 | `banking.investment.subscribeInvestment({ userId, productId, amount })` |
 | `redeem_investment` | investment.ts | 🔴 | `banking.investment.redeemInvestment({ userId, holdingId })` |
-| `transfer_money` | transfer.ts | 🟡/🔴 dynamic | `banking.transfer.createTransfer({ userId, ... })` |
+| `transfer_money` | transfer.ts | 🟡/🔴 dynamic | `banking.transfer.createTransfer({ userId, ..., idempotencyKey? })` |
 | `reserve_budget` | budget.ts | 🟢 | `banking.budget.reserveBudget({ userId, ... })` |
 | `list_scheduled_tasks` | task.ts | 🟢 | `banking.task.listScheduledTasks(userId)` |
 | `create_scheduled_task` | task.ts | 🟡 | `banking.task.createScheduledTask({ userId, ... })` |
