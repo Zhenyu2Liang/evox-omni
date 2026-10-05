@@ -144,6 +144,7 @@ Tier legend: 🟢 GREEN auto-executes · 🟡 YELLOW needs confirmation · 🔴 
 - **Tools are data + a thin SDK call.** Each family module only declares the TypeBox schema, the
   `AgentTool` object and one runner that forwards to its `banking-sdk` function — no business rules
   (funds/minAmount/recipient resolution are SDK concerns).
+- **`transfer_money` carries an optional at-most-once key.** Its runner takes `opts?: ToolRunOptions` and forwards `opts.idempotencyKey` verbatim as the SDK `TransferInput.idempotencyKey`; the SDK derives the ledger row id as `idempotentTransferTxId(userId, key)` (`@/lib/ledger`) and reuses it as the PK, so a repeat replays the original `Transaction` row instead of double-debiting (the created id is surfaced as `TransferResult.transactionId`). `confirmation.ts` supplies the gated action's `PendingAction.id` as the key. The `AgentTool.execute` (model path) passes NO key; the gated transfer is executed model-free via `executeDirect`.
 
 ## Dependencies
 
