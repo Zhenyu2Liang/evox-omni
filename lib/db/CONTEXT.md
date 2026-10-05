@@ -35,6 +35,12 @@ The Prisma client singleton and the repository layer. This is the **only** subtr
 
 - All repository bodies are implemented (real Prisma data access; no stubs remain).
 - `npx prisma generate` must run before any code using `prisma` is executed or type-checked.
+- Issue PRAGMAs with `$queryRawUnsafe`, never `$executeRawUnsafe`: a PRAGMA returns a result row and Prisma's
+  SQLite driver rejects an `execute` that returns rows (`Execute returned results, which is not allowed in
+  SQLite`), so the statement would silently do nothing.
+- `journal_mode = WAL` is persistent on the DB file; `busy_timeout` is **per-connection**, so on a pooled
+  SQLite datasource a single PRAGMA only raises it for the connection that ran it (Prisma's own default is 5s;
+  `?connection_limit=1` makes it pool-wide).
 - The SQLite schema (17 models) lives in `prisma/schema.prisma` and is frozen; enum-like fields are `String`,
   money is `Float`, JSON payloads are JSON text in `String`.
 - The `pendingAction` claim/ownership spec lives at `tests/unit/lib/pendingAction.claim.test.ts` (root-owned)
