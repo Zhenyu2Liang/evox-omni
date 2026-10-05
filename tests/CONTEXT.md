@@ -10,7 +10,9 @@ It proves two things, deterministically and **offline** (no network, no API key)
 2. the **12 demo scenarios** work end-to-end through the full pipeline
    (Pi Agent → banking tools → Security Gateway `beforeToolCall` → Banking SDK → audit) via
    **scenario** tests driven by a *scripted* model (`registerFauxProvider()`, `LLM_MODE=mock`) and via
-   **app-entry (HTTP)** tests that drive the REAL Next.js route handlers.
+   **app-entry (HTTP)** tests that drive the REAL Next.js route handlers, and
+3. the **user journeys** render correctly in a **real browser** (`e2e/`, headless system Chrome via
+   `playwright-core` against the real `/agent` page) — the only layer that asserts on RENDERED DOM.
 
 Only the model is mocked; the tools, the security chokepoint, the route handlers and the DB are the real ones.
 This node owns test infrastructure and fixtures — NOT the business logic under test (that lives in
