@@ -117,7 +117,9 @@ complementing the in-process `tests/scenarios/*` suites.
 
 ## Constraints / Conventions
 
-- **One fresh `sessionId` per turn** (`newId('sess')`) — the in-process circuit breaker is keyed by
+- **Cookie-only session bootstrap.** `POST /api/chat` takes identity SOLELY from the `banking_session`
+  cookie: a body `sessionId` that DISAGREES with the cookie — INCLUDING "no cookie present" — is
+  rejected `409 CONFLICT` and sets NO cookie. The FIRST turn OMITS `sessionId` and sends NO cookie;
   `sessionId`. The route mints the PERSISTED session id itself (`getOrCreateSession`), so the id
   asserted on is the one returned in the response body / cookie; specs send it back as the
   `banking_session` COOKIE on later confirm/verify/cancel/tasks calls.
