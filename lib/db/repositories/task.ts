@@ -2,7 +2,7 @@ import { Prisma } from '@prisma/client';
 import type { AgentTask, AgentTaskNode } from '@prisma/client';
 import { prisma } from '../client';
 import { toJson } from '../../json';
-import type { TaskCondition } from '../../contracts/task';
+import type { TaskCondition, TaskPlanStatus } from '../../contracts/task';
 
 export type AgentTaskWithNodes = AgentTask & { nodes: AgentTaskNode[] };
 
@@ -59,8 +59,41 @@ export function listTasksBySession(sessionId: string): Promise<AgentTask[]> {
   });
 }
 
+/**
+ * Unconditional status setter — a blind set with no compare-and-set guard. Retained for
+ * callers that genuinely need to force a status. For any transition that must be exactly-once
+ * or must respect a terminal state, use `claimTaskStatus` (the PREFERRED concurrency-safe path).
+ */
 export function updateTaskStatus(id: string, status: string): Promise<AgentTask> {
   return prisma.agentTask.update({ where: { id }, data: { status } });
+}
+
+/**
+ * The concurrency guard for an `AgentTask` status transition.
+ *
+ * Performs a SINGLE atomic compare-and-set: the task's status is moved from any of
+ * `fromStatuses` to `toStatus` ONLY IF it currently matches one of `fromStatuses`.
+ * Returns `true` iff exactly one row was transitioned.
+ *
+ * Because the transition is one `updateMany` statement, this:
+ * (a) stops two concurrent resume/retry calls from both proceeding — the loser's
+ *     `status IN fromStatuses` no longer matches, so it transitions 0 rows and returns `false`;
+ * (b) stops a cancelled/terminal plan from being moved back to a non-terminal state — when the
+ *     current status is not in `fromStatuses` the CAS matches 0 rows and returns `false`.
+ *
+ * Contract callers read the current status via `getTask(id)` (which returns the task row
+ * including `status`) before deciding which transition to claim.
+ */
+export async function claimTaskStatus(
+  taskId: string,
+  fromStatuses: TaskPlanStatus[],
+  toStatus: TaskPlanStatus,
+): Promise<boolean> {
+  const result = await prisma.agentTask.updateMany({
+    where: { id: taskId, status: { in: fromStatuses } },
+    data: { status: toStatus },
+  });
+  return result.count === 1;
 }
 
 export function createTaskNode(input: CreateTaskNodeInput): Promise<AgentTaskNode> {

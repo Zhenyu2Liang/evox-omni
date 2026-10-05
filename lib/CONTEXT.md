@@ -31,6 +31,10 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   `new Date(demoNow(override))`.
 - `json.ts` — SQLite JSON-text column helpers: `safeParse<T>(text, fallback)` (returns `fallback` for
   null/undefined/empty/invalid JSON) and `toJson(value)` (`'null'` when value is `undefined`).
+- `ledger.ts` — `idempotentTransferTxId(userId, idempotencyKey)`: the canonical deterministic transfer-ledger id,
+  `txidem_` + the first 32 hex chars of `sha256("<userId>\u0000<idempotencyKey>")`.
+  It is the single source of truth that LINKS a gated transfer `PendingAction` to the ledger `Transaction` row it produces:
+  the Banking SDK derives that row's primary key from it (supplying an idempotency key makes a repeat transfer at-most-once — a repeat replays the original row instead of double-debiting), and `security/` uses it to EXCLUDE already-ledgered in-flight actions from the cumulative daily-transfer total.
 - `contracts/` — the FROZEN cross-module type definitions (see routing table below).
 - `db/` — Prisma client singleton + per-aggregate repositories (the only data-access layer).
 - `index.ts` — convenience barrel re-exporting `contracts`, `errors`, `money`, `config`, `constants`,
@@ -71,12 +75,13 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/date.ts` → pure local-timezone date-range/format helpers.
 - `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
+- `./lib/ledger.ts` → canonical deterministic transfer-ledger id (`idempotentTransferTxId`).
 - `./lib/index.ts` → convenience barrel for `@/lib` imports (no `db`).
 
 ## Status
 
 - Fully implemented: every `lib/*.ts` util helper (`errors`, `money`, `config`, `constants`, `ids`,
-  `date`, `clock`, `json`), `db/client.ts`, and all `lib/db/repositories/*` aggregate modules.
+  `date`, `clock`, `json`, `ledger`), `db/client.ts`, and all `lib/db/repositories/*` aggregate modules.
 
 ## Notes for Agents
 

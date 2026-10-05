@@ -13,7 +13,13 @@
  *  - Delegates to the agent runtime `runTurn({ sessionId, message })` (`@/agent`). `runTurn`
  *    resolves the demo user internally and returns the FULL ordered event list (there is no
  *    `onEvent` sink), so streaming writes the returned events as SSE frames.
- *  - On EVERY response the route sets the `banking_session` cookie to the turn's session id.
+ *  - IDENTITY IS COOKIE-ONLY. The turn's session comes ONLY from the `banking_session` cookie
+ *    (`resolveSessionId`); it is NEVER taken from the request body. A body `sessionId` that
+ *    DISAGREES with the cookie — INCLUDING the case where there is no cookie — is rejected with
+ *    `409 CONFLICT` and no cookie is set, so a body `sessionId` can never select or mint a session
+ *    (it can never exchange a foreign session id for an authorization cookie).
+ *  - On EVERY successful response the route sets the `banking_session` cookie to `res.sessionId`
+ *    — the session actually used, never a body-supplied id.
  *
  * Thin by design: `validate (zod) → delegate → serialize`.
  */
@@ -22,6 +28,7 @@ import { z } from 'zod';
 import { runTurn } from '@/agent';
 import { SESSION_COOKIE } from '@/lib/constants';
 import type { ChatTurnResponse } from '@/lib/contracts/agent';
+import { AppError } from '@/lib/errors';
 import {
   errorResponse,
   jsonResponse,
@@ -31,6 +38,7 @@ import {
   sseFrame,
   sseResponse,
 } from '../_lib/http';
+import { resolveSessionId } from '../_lib/session';
 
 /** Request body schema for `POST /api/chat` (`ChatTurnRequest`). */
 const chatTurnRequestSchema = z.object({
@@ -61,10 +69,21 @@ function wantsStream(req: NextRequest, stream: '0' | '1' | undefined): boolean {
 
 export async function POST(req: NextRequest): Promise<Response> {
   try {
-    const { sessionId, message } = await parseBody(chatTurnRequestSchema, req);
+    const payload = await parseBody(chatTurnRequestSchema, req);
     const { stream } = parseQuery(chatQuerySchema, req);
 
-    const res = await runTurn({ sessionId, message });
+    // SECURITY CHOKEPOINT — identity is cookie-only. The session comes SOLELY from the trusted
+    // `banking_session` cookie; a body `sessionId` is never trusted for identity. If the body
+    // disagrees with the cookie (INCLUDING "no cookie present"), refuse with 409 and set NO
+    // cookie. Otherwise an attacker holding their OWN valid cookie could pass a VICTIM's
+    // sessionId in the body and receive the victim's authorization cookie back (session
+    // takeover), then confirm the victim's parked actions.
+    const cookieSessionId = resolveSessionId(req);
+    if (payload.sessionId !== undefined && payload.sessionId !== cookieSessionId) {
+      throw new AppError('CONFLICT', '会话标识不匹配，请刷新后重试。');
+    }
+
+    const res = await runTurn({ sessionId: cookieSessionId, message: payload.message });
     const cookie = sessionCookie(res.sessionId);
 
     if (!wantsStream(req, stream)) {
