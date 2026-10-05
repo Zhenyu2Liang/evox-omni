@@ -296,7 +296,7 @@ REQUIRED from siblings (must align at integration; assumed signatures):
 - `security.gateway.securityGateway.handleToolCall(ctx)` returns `{ evaluation, decision, action?, blockReason? }` with
   `blockReason` present iff `evaluation.blocked`; `action` present iff gated.
 - `security.gateway.securityGateway.authorizeAction(id, opts)` returns `AuthorizationResult` — it authorizes but does NOT execute. `confirmation.ts` reads every field through the `viewAuth` normalizer, so it stays green across the CURRENT shape (`{ ok, status, actionId,
-  tier, requiresMfa, mfaResult?, message, action? }` — it authorizes but does NOT execute.
+  tier, requiresMfa, mfaResult?, message, action? }`) AND the FROZEN shape (`{ ok; tier; requiresMfa; actionId? } | { ok:false; code; message; tier; requiresMfa }`). The effective tier is RED whenever `requiresMfa`.
 - `planner.executor.runPlan(plan, deps, opts)` with `deps.runTool(toolName, args): PlanToolOutcome`
   (`{ ok, data?, summary?, error?, requiresConfirmation?, pendingActionId? }`); the agent supplies
   `runTool = executeGatedTool`, so a gated node parks in `waiting_confirmation`/`waiting_verification`.
