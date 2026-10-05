@@ -42,6 +42,7 @@ import type {
 import type { PlanControlCommand, PlanControlPort, PlanDeps, PlanToolOutcome } from '@/planner';
 import { executor, lifecycle } from '@/planner';
 import { security } from '@/security';
+import { recordSecurityEvent } from '@/audit';
 import { AppError, type ErrorCode } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
 import { getSession } from '@/lib/db/repositories/session';
@@ -500,6 +501,32 @@ async function revokeParkedActions(
 }
 
 /**
+ * Durably record an UNEXPECTED revocation failure as a `SecurityEvent`.
+ *
+ * The cancelled plan is ALREADY persisted `cancelled`, so a failed revoke must be surfaced in the
+ * audit trail WITHOUT turning the control API response into a 5xx (which would make the client discard
+ * the response and keep a stale `等待确认` badge). The human-readable message names the plan id and each
+ * `actionId(message)`; the structured failure list goes into `detail`. `SecurityEventKind` has no
+ * dedicated "revoke failed" member, so the closest existing kind is used (`HIGH_RISK_BLOCKED`,
+ * severity `high`): a surviving executable action after a cancellation is a high-risk incident.
+ */
+async function recordRevokeFailure(
+  sessionId: string,
+  taskId: string,
+  failed: { actionId: string; message: string }[],
+): Promise<void> {
+  await recordSecurityEvent({
+    sessionId,
+    kind: 'HIGH_RISK_BLOCKED',
+    severity: 'high',
+    message:
+      `计划「${taskId}」已取消，但有 ${failed.length} 个待确认操作未能撤销: ` +
+      failed.map((entry) => `${entry.actionId}(${entry.message})`).join('; '),
+    detail: { taskId, failed },
+  });
+}
+
+/**
  * CANONICAL CANCEL SWEEP — the post-run guard against a `PendingAction` minted DURING a run.
  *
  * `executor.runPlan` can be CANCELLED by a concurrent `cancelTask` while one of its nodes is inside
@@ -514,8 +541,9 @@ async function revokeParkedActions(
  * (`revokeParkedActions`) so no executable action survives the cancellation.
  *
  * Idempotent and cheap: an absent or non-`cancelled` plan is a no-op. An UNEXPECTED revocation
- * failure is THROWN — never swallowed — because a surviving executable action after a cancellation
- * is a security incident, not a benign outcome.
+ * failure is NOT thrown — it is durably recorded as a `SecurityEvent` via `recordRevokeFailure` and
+ * the summary is still returned, so a control API response never becomes a 5xx that would hide the
+ * already-persisted `cancelled` state from the client.
  */
 export async function sweepCancelledPlan(
   sessionId: string,
@@ -530,11 +558,7 @@ export async function sweepCancelledPlan(
   }
   const summary = await revokeParkedActions(row.userId, row.sessionId, row);
   if (summary.failed.length > 0) {
-    throw new AppError(
-      'INTERNAL',
-      `计划「${taskId}」已取消，但有 ${summary.failed.length} 个待确认操作未能撤销: ` +
-        summary.failed.map((failed) => `${failed.actionId}(${failed.message})`).join('; '),
-    );
+    await recordRevokeFailure(sessionId, taskId, summary.failed);
   }
   return summary;
 }
@@ -550,9 +574,10 @@ export async function sweepCancelledPlan(
  *
  * An already-`cancelled` plan is TERMINAL: re-cancelling is a no-op that returns the persisted
  * snapshot (no revoke, no rewrite). An already-settled action is not a failure (it is terminal, so
- * nothing can be revoked and no confirm can succeed). An UNEXPECTED revocation failure is surfaced as
- * `AppError('INTERNAL')` AFTER the plan has been cancelled — the cancellation itself is never
- * withheld, and the failure is never swallowed.
+ * nothing can be revoked and no confirm can succeed). An UNEXPECTED revocation failure is NOT thrown —
+ * it is durably recorded as a `SecurityEvent` via `recordRevokeFailure` and the cancelled plan is still
+ * returned: the cancellation itself is never withheld, so the API response stays consistent with the
+ * already-persisted `cancelled` row, and the failure is never swallowed (it is recorded above).
  */
 export async function cancelTask(
   sessionId: string,
@@ -573,11 +598,7 @@ export async function cancelTask(
   );
 
   if (revoke.failed.length > 0) {
-    throw new AppError(
-      'INTERNAL',
-      `计划「${taskId}」已取消，但有 ${revoke.failed.length} 个待确认操作未能撤销: ` +
-        revoke.failed.map((failed) => `${failed.actionId}(${failed.message})`).join('; '),
-    );
+    await recordRevokeFailure(row.sessionId, taskId, revoke.failed);
   }
   return cancelled;
 }

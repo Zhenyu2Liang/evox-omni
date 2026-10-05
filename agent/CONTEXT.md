@@ -145,7 +145,7 @@ function pauseTask(sessionId: string, taskId: string, opts?: TaskControlOptions)
 function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // CAS-flips a resumable row to 'running', then runs with `explicitResume:true`; terminal (success) nodes skipped
 function cancelTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // revokes the plan's parked PendingActions, then cancels
 function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;       // retry failed nodes (+ descendants); CAS from-set EXCLUDES 'running' (resume KEEPS it)
-function sweepCancelledPlan(sessionId: string, taskId: string): Promise<RevokeSummary>;                // post-run CANCEL SWEEP: if the persisted AgentTask is 'cancelled', revoke every still-parked PendingAction (run after submit_plan / resume / retry; an unexpected revoke failure THROWS)
+function sweepCancelledPlan(sessionId: string, taskId: string): Promise<RevokeSummary>;                // post-run CANCEL SWEEP: if the persisted AgentTask is 'cancelled', revoke every still-parked PendingAction (run after submit_plan / resume / retry; an unexpected revoke failure is recorded as a SecurityEvent via recordRevokeFailure, and the summary is still returned)
 function findTaskByPendingAction(sessionId: string, actionId: string): Promise<{ taskId: string; nodeId: string } | undefined>;
 function resumeTaskForAction(sessionId: string, actionId: string, outcome: PlanToolOutcome, deps: TaskControlDeps): Promise<{ taskId: string; nodeId: string; plan: TaskPlan } | undefined>;
 ```
@@ -264,7 +264,9 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   post-cancel executable action relies on the post-run CANCEL SWEEP: `sweepCancelledPlan(sessionId,
   taskId)` (called after every run path — `runSubmitPlan` (`tools/planning.ts`), `resumeTask`,
   `retryTask`, `resumeTaskForAction`) re-reads the row and, when `cancelled`, revokes every still-parked
-  action; an UNEXPECTED revocation failure is THROWN (a surviving executable action is an incident). A
+  action; an UNEXPECTED revocation failure is recorded durably as a `SecurityEvent`
+  (`recordRevokeFailure`, kind `HIGH_RISK_BLOCKED`) and the summary is still returned, so a control
+  API response never becomes a 5xx that would hide the already-persisted `cancelled` state. A
   live run is interrupted mid-flight only via `defaultPollControls` (`'cancelled'` ⇒ `{kind:'cancel'}`)
   polled at each node checkpoint.
 - **Confirm-vs-cancel is at-most-once via the gateway CAS, NOT "cancel always wins".**
@@ -373,8 +375,6 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
 ## Known Issues
 
 - **Cross-action transfer serialization depends on SQLite's DB-level single-writer lock, and the gateway's confirm-time re-risk transaction does not include the SDK execution.** `security/security-gateway.ts#authorizeTransfer` re-risks in ONE `prisma.$transaction` that CAS-claims the action FIRST and only THEN reads the in-flight-inclusive effective total (`computeEffectiveTransferTotalWith`) and re-runs `evaluateTransferRisk` (escalating to MFA when the day's total would exceed the limit), so concurrent confirms of DISTINCT parked transfers serialize only through SQLite's single-writer lock - with no explicit isolation level or `SELECT ... FOR UPDATE`; and a crash between that commit and `agent/confirmation.ts#executeAuthorizedAction` (which runs the transfer, then `recordActionResult`) leaves a `confirmed`-but-unledgered action counted as in-flight (over-conservative, never under-counting).
-
-- **`cancelTask` can return HTTP 500 AFTER the plan row is already `cancelled`.** `cancelTask` (`task-control.ts` 557-583) persists `cancelled` via `lifecycle.cancelPlan` → `persistPlanSnapshot` → `createTaskPersistence.persistPlan` → `updateTaskStatus(id,'cancelled')` (line 255, UNCONDITIONAL), and ONLY THEN `throw new AppError('INTERNAL', …)` when `revokeParkedActions` recorded a non-`CONFLICT`/`NOT_FOUND` failure (line 496). `app/api/_lib/http.ts#mapAppError` maps `INTERNAL → 500` and replaces the message with the literal `'Internal error'`; the client (`components/chat/actions.ts` 253-257, `useAgentStream.ts#controlTask`) turns any `!res.ok` into `undefined`, skips `upsertPlan`, and shows a generic error — so a `waiting_confirmation` plan can be durably `cancelled` while the rendered badge stays stale (`等待确认`). `pauseTask` has no revoke step and never throws, so it is immune. `revokeParkedActions` (454-500) only whitelists `CONFLICT`/`NOT_FOUND` as `alreadySettled`; any `SECURITY_DENIED` (from `gateway.cancelAction` → `assertOwnership`) or coerced `INTERNAL` becomes a `failed` entry.
 
 ## Notes for Agents
 
