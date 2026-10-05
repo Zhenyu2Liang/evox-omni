@@ -66,11 +66,13 @@ it('two concurrent resumes execute each unfinished node only once',async()=>{
     const task=await getTestPrisma().agentTask.findFirst({where:{sessionId:s}});taskId=task!.id;await pauseTask(s,taskId);return {ok:true,data:{balance:23580}};
   }});
   expect((created.data as any).status).toBe('paused');
-  let calls=0;let release!:()=>void; const gate=new Promise<void>(r=>release=r);
-  const deps={runTool:async(tool:string,args:Record<string,unknown>)=>{calls++;if(calls===2) release();await gate;return depsFor(s).runTool(tool,args);}};
-  await Promise.all([resumeTask(s,taskId,deps),resumeTask(s,taskId,deps)]);
+  let calls=0;let reached!:()=>void;const atBoundary=new Promise<void>(r=>reached=r);let release!:()=>void;const gate=new Promise<void>(r=>release=r);
+  const deps={runTool:async(tool:string,args:Record<string,unknown>)=>{calls++;const outcome=await depsFor(s).runTool(tool,args);if(calls===1){reached();await gate;}return outcome;}};
+  const first=resumeTask(s,taskId,deps);
+  let second:any;
+  try{await atBoundary;second=await resumeTask(s,taskId,deps);}finally{release();await first;}
   const count=await getTestPrisma().budget.count({where:{name:'审查预算'}});
-  console.log('REVIEW double_resume',JSON.stringify({calls,count}));
+  console.log('REVIEW double_resume',JSON.stringify({calls,secondOk:second?.ok,count}));
   expect(count).toBe(1);
 });
 it('concurrent HTTP resume requests do not duplicate budget side effects',async()=>{
