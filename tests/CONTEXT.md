@@ -27,7 +27,9 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   See `helpers/CONTEXT.md` for the full helper API.
 - `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs. See `unit/CONTEXT.md`.
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
-- `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers. See `app/CONTEXT.md`.
+- `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
+  (chat/SSE, action confirm|verify|cancel, task lifecycle, and `review-regressions-http.test.ts`
+  reviewer regressions). See `app/CONTEXT.md`.
 
 Run:
 
