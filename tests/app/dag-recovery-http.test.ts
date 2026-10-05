@@ -338,7 +338,11 @@ describe('[integration] POST /api/tasks/[id] retry — re-runs ONLY the failed n
       { ctx: idCtx(firstActionId!), sessionId },
     );
     expect(confirmRes.status).toBe(200);
-    expect(confirmRes.data?.ok).toBe(false);
+    // Domain outcome, NOT an HTTP error: the transport succeeded (`{ ok:true, data }` — see
+    // `app/api/_lib/http.ts#jsonResponse`), so the OUTER envelope is `ok:true` while the TOOL failed
+    // honestly INSIDE `data` (`data.ok:false` / `data.status:'failed'`). This mirrors the sibling
+    // `actions-http.test.ts#payload()` convention for its honest-failure case.
+    expect(confirmRes.data?.ok).toBe(true);
     expect(confirmRes.data!.data!.ok).toBe(false);
     expect(confirmRes.data!.data!.status).toBe('failed');
 
