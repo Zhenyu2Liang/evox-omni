@@ -39,10 +39,15 @@ import type { AuthorizationResult, GatewayContext } from '@/security/security-ga
 import { security } from '@/security';
 import { recordAudit } from '@/audit';
 import { getSession } from '@/lib/db/repositories/session';
-import { getPendingAction, getPendingActionOwnership } from '@/lib/db/repositories/pendingAction';
+import {
+  getPendingAction,
+  getPendingActionOwnership,
+  getPendingActionPlanLink,
+} from '@/lib/db/repositories/pendingAction';
 import { getTask } from '@/lib/db/repositories/task';
 import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
+import { nodeExecutionKey } from '@/lib/ledger';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { resumeTurn } from './run-turn';
 import type { RunTurnDeps } from './run-turn';
@@ -203,8 +208,9 @@ async function resolveTrustedIdentity(
  * Defense-in-depth for the `cancelTask` path: cancelling a plan already revokes its parked
  * `PendingAction`s (`task-control.ts#cancelTask` → gateway atomic claim), so the gateway would
  * reject a late confirm with `CONFLICT`. This check is the belt to that suspenders — it reads the
- * owning `AgentTask` from PERSISTED state (through the existing `findTaskByPendingAction` reverse
- * lookup + `tasks.getTask`) and, when that plan is `'cancelled'`, refuses the human decision BEFORE
+ * owning `AgentTask` from PERSISTED state (`findTaskByPendingAction`, which PREFERS the action's
+ * persisted plan link — `PendingAction.taskId`/`nodeId` — over the node-`output` scan, then
+ * `tasks.getTask`) and, when that plan is `'cancelled'`, refuses the human decision BEFORE
  * any authorization or execution, so money can never move out of a cancelled plan even if the
  * revocation raced or failed.
  *
@@ -269,38 +275,32 @@ function emitAll(events: readonly AgentStreamEvent[], opts?: ConfirmOptions): vo
 }
 
 /**
- * Canonical, ORDER-STABLE JSON for a tool's arguments, so two logically identical calls produce the
- * same single-flight key regardless of object key insertion order. Recurses into arrays/objects;
- * every other value is serialized by `JSON.stringify` (primitive or `undefined`).
+ * The single-flight key of an AUTO-EXECUTING (GREEN) PLAN-NODE call: its NODE identity
+ * (`nodeExecutionKey(taskId, nodeId)`), or `undefined` for a call NOT tied to a plan node.
+ *
+ * WHY the key MUST be the node identity (NEVER `sessionId` + tool + canonical args): two INDEPENDENT
+ * plans that happen to call the SAME tool with the SAME args are DIFFERENT work and MUST run
+ * independently — coalescing them by args alone would silently apply one plan's side effect to the
+ * other. A standalone call (no plan node) therefore has NO coalescing key: its exactly-once guarantee
+ * is the DB (`PendingAction` status CAS for a gated call), never an in-process map.
  */
-function canonicalArgs(args: Record<string, unknown>): string {
-  const normalize = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(normalize);
-    if (value !== null && typeof value === 'object') {
-      const source = value as Record<string, unknown>;
-      const sorted: Record<string, unknown> = {};
-      for (const key of Object.keys(source).sort()) sorted[key] = normalize(source[key]);
-      return sorted;
-    }
-    return value;
-  };
-  return JSON.stringify(normalize(args));
-}
-
-/** The single-flight key of a gated tool call: trusted session + tool + canonical args. */
-function executionKey(ctx: GatewayContext): string {
-  return `${ctx.sessionId}\u0000${ctx.toolName}\u0000${canonicalArgs(ctx.args)}`;
+function executionKey(ctx: GatewayContext): string | undefined {
+  if (ctx.taskId !== undefined && ctx.nodeId !== undefined) {
+    return nodeExecutionKey(ctx.taskId, ctx.nodeId);
+  }
+  return undefined;
 }
 
 /**
- * In-flight AUTO-EXECUTING tool calls, keyed by `executionKey`.
+ * In-flight AUTO-EXECUTING (GREEN) PLAN-NODE tool calls, keyed by `executionKey` (the node identity).
  *
- * WHY: two CONCURRENT runs of the same plan (a double resume / retry) can both reach the same un-run
+ * WHY: two CONCURRENT runs of the SAME plan (a double resume / retry) can both reach the same un-run
  * node and both invoke `runTool`. The node's side effect must happen EXACTLY ONCE, so a second
- * concurrent IDENTICAL call SHARES the first's in-flight promise — one execution, one side effect,
+ * concurrent identical call SHARES the first's in-flight promise — one execution, one side effect,
  * one shared result. The entry is CLEARED the moment the call settles (success or failure), so a
  * later SEQUENTIAL identical call is a genuinely new execution and is NEVER coalesced with a
- * completed one.
+ * completed one. A plan node's side effect is ALSO deduped in the DB (the caller passes
+ * `nodeExecutionKey` as the SDK `idempotencyKey`), so a replay is at-most-once across processes too.
  */
 const inFlightExecutions = new Map<string, Promise<GatedToolOutcome>>();
 
@@ -330,7 +330,14 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     }
 
     const registry = createToolRegistry(ctx.userId);
-    const result = await registry.executeDirect(ctx.toolName, ctx.args);
+    // A PLAN-NODE call passes its NODE idempotency key so a re-run of the SAME node (a replay, a
+    // resume, a retry) replays its SDK-level side effect instead of repeating it; a standalone call
+    // takes no key. (`executeDirect` forwards `idempotencyKey` to every runner.)
+    const opts =
+      ctx.taskId !== undefined && ctx.nodeId !== undefined
+        ? { idempotencyKey: nodeExecutionKey(ctx.taskId, ctx.nodeId) }
+        : undefined;
+    const result = await registry.executeDirect(ctx.toolName, ctx.args, opts);
     return {
       ok: result.ok,
       data: result.data,
@@ -352,15 +359,23 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
  * run through the Banking SDK. NEVER throws: it is the planner's `runTool` port, and a plan node must
  * report a failure as a value instead of blowing up the whole plan.
  *
- * SINGLE-FLIGHT (side effect exactly once): a CONCURRENT identical call — same session, tool and
- * canonical args — SHARES the first call's in-flight execution instead of running a second time, so a
- * duplicated resume cannot double a GREEN side effect (e.g. two `reserve_budget`s). A PARKED outcome
- * is NOT shared: it is per-call (its own `PendingAction`), so a concurrent identical gated call runs
- * its own gate once the first settles. The in-flight entry is removed on settle, so a SEQUENTIAL
- * identical call is never coalesced with a completed one.
+ * SINGLE-FLIGHT (side effect exactly once): a CONCURRENT identical PLAN-NODE call — same node
+ * identity (`taskId`+`nodeId`) — SHARES the first call's in-flight execution instead of running a
+ * second time, so a duplicated resume cannot double a GREEN side effect (e.g. two `reserve_budget`s);
+ * the node's side effect is ALSO DB-deduped (its `nodeExecutionKey` is passed as the SDK
+ * `idempotencyKey`). A STANDALONE call (no plan node) is executed DIRECTLY — never coalesced — because
+ * two independent calls that merely share a session/tool/args are different work. A PARKED outcome is
+ * NOT shared: it is per-call (its own `PendingAction`), so a concurrent identical gated call runs its
+ * own gate once the first settles. The in-flight entry is removed on settle, so a SEQUENTIAL identical
+ * call is never coalesced with a completed one.
  */
 export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome> {
   const key = executionKey(ctx);
+  // A STANDALONE call (no plan node) has no coalescing identity — execute it directly. Its
+  // exactly-once guarantee is the DB (`PendingAction` status CAS for a gated call), never an
+  // in-process map keyed by args alone (which would wrongly merge UNRELATED plans).
+  if (key === undefined) return executeGatedToolOnce(ctx);
+
   const inFlight = inFlightExecutions.get(key);
   if (inFlight !== undefined) {
     const shared = await inFlight;
@@ -416,13 +431,15 @@ async function resumeOwningPlan(
         error: result.error,
       },
       {
-        runTool: (toolName, args) =>
+        runTool: (toolName, args, ctx) =>
           executeGatedTool({
             sessionId: action.sessionId,
             userId,
             toolName: toolName as ToolName,
             args,
             userRequest: action.userRequest ?? '',
+            taskId: ctx.taskId,
+            nodeId: ctx.nodeId,
           }),
       },
     );
@@ -479,18 +496,23 @@ async function executeAuthorizedAction(
   // Execute the args the gateway validated and persisted at gate time — straight through the
   // registry. Re-running `handleToolCall` would re-gate the call and mint a duplicate PendingAction.
   //
-  // IDEMPOTENCY (money movement): a `transfer_money` action passes its OWN PendingAction id as the
-  // SDK `idempotencyKey`, so the created ledger row id is exactly
-  // `idempotentTransferTxId(userId, action.id)` (`@/lib/ledger`) and a repeat/concurrent confirm
-  // replays that row instead of double-debiting — the DB itself dedups the write, so no lock is
-  // needed around the ledger-write → terminal-status window. Every other tool takes no opts.
+  // IDEMPOTENCY (gated execution): derive the SDK `idempotencyKey` from the action's PERSISTED plan
+  // link, so a re-run of a GATED PLAN-NODE call replays — exactly what the INLINE GREEN path passes
+  // for the same node (`nodeExecutionKey(taskId, nodeId)`). An action NOT tied to a plan node (a plain
+  // standalone transfer, or one parked before the plan link existed) falls back to its OWN
+  // PendingAction id, so a repeat/concurrent confirm replays its ledger row instead of double-debiting
+  // — the DB itself dedups the write, so no lock is needed around the ledger-write → terminal-status
+  // window. `transfer_money` derives the created row id from the key via
+  // `idempotentTransferTxId(userId, key)` (`@/lib/ledger`); the key is passed for EVERY tool.
   const registry = createToolRegistry(userId);
+  const link = await getPendingActionPlanLink(actionId);
+  const idempotencyKey =
+    link !== null && link.taskId !== null && link.nodeId !== null
+      ? nodeExecutionKey(link.taskId, link.nodeId)
+      : actionId;
   let result: ToolExecutionResult;
   try {
-    result =
-      action.toolName === 'transfer_money'
-        ? await registry.executeDirect(action.toolName, action.args, { idempotencyKey: action.id })
-        : await registry.executeDirect(action.toolName, action.args);
+    result = await registry.executeDirect(action.toolName, action.args, { idempotencyKey });
   } catch (e) {
     // A boundary throw is the REAL failure — recorded as `failed`, never swallowed, never a success.
     result = { ok: false, error: AppError.from(e).message };

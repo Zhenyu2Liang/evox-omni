@@ -55,7 +55,7 @@ export type { TaskControlDeps, TaskControlOptions, TaskNodeOutput, TaskPersisten
  * instead of executing. The owner is resolved from the SESSION row — never from model text.
  */
 function taskRunToolFor(sessionId: string): TaskRunTool {
-  return async (toolName, args): Promise<PlanToolOutcome> => {
+  return async (toolName, args, ctx): Promise<PlanToolOutcome> => {
     const session = await getSession(sessionId);
     const userId = session?.userId;
     if (userId === undefined || userId === '') {
@@ -67,6 +67,8 @@ function taskRunToolFor(sessionId: string): TaskRunTool {
       toolName: toolName as ToolName,
       args,
       userRequest: '',
+      taskId: ctx.taskId,
+      nodeId: ctx.nodeId,
     });
   };
 }

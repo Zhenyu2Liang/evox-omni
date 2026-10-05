@@ -25,10 +25,13 @@
  * decisions stay in `security/` — this module computes no tier and grants nothing.
  *
  * CONCURRENCY: every state-changing control path claims its transition with a single atomic
- * compare-and-set (`claimTaskStatus`: one `updateMany` guarded by `status IN fromStatuses`), so two
- * concurrent requests can never both run the same plan and a terminal status (`cancelled`/`success`)
- * is never resurrected. After every run the CANONICAL CANCEL SWEEP (`sweepCancelledPlan`) revokes any
- * `PendingAction` that a node minted DURING the run while the plan was being cancelled concurrently.
+ * compare-and-set, and a RUNNING plan additionally holds a DB EXECUTION CLAIM
+ * (`claimTaskExecution`: `AgentTask.executionToken` is claimed before `executor.runPlan` and released
+ * in a `finally`), so two concurrent resumes/retries can never both RUN the same plan. A terminal
+ * status (`cancelled`/`success`) is never resurrected. `cancelTask` revokes EVERY action of the plan
+ * in ONE atomic bulk update (`revokePendingActionsByTask`) as its PRIMARY guarantee, and after every
+ * run the CANONICAL CANCEL SWEEP (`sweepCancelledPlan`) revokes any `PendingAction` that a node
+ * minted DURING the run while the plan was being cancelled concurrently.
  */
 import type {
   TaskCondition,
@@ -39,17 +42,31 @@ import type {
   TaskPlan,
   TaskPlanStatus,
 } from '@/lib/contracts/task';
-import type { PlanControlCommand, PlanControlPort, PlanDeps, PlanToolOutcome } from '@/planner';
+import type {
+  NodeExecutionContext,
+  PlanControlCommand,
+  PlanControlPort,
+  PlanDeps,
+  PlanToolOutcome,
+} from '@/planner';
 import { executor, lifecycle } from '@/planner';
 import { security } from '@/security';
 import { recordSecurityEvent } from '@/audit';
 import { AppError, type ErrorCode } from '@/lib/errors';
+import { newId } from '@/lib/ids';
 import { safeParse } from '@/lib/json';
 import { getSession } from '@/lib/db/repositories/session';
 import {
-  claimTaskStatus,
+  getPendingActionPlanLink,
+  revokePendingActionsByTask,
+} from '@/lib/db/repositories/pendingAction';
+import {
+  claimNodeExecution,
+  claimTaskExecution,
   getTask,
   listTasksBySession,
+  releaseNodeExecution,
+  releaseTaskExecution,
   updateTaskNode,
   updateTaskStatus,
   type AgentTaskWithNodes,
@@ -76,13 +93,12 @@ const PAUSABLE_PLAN_STATUSES: TaskPlanStatus[] = [
 /**
  * The plan statuses `resumeTask` may act on: every NON-TERMINAL status, INCLUDING `'running'`.
  *
- * `'running'` is deliberately present: two CONCURRENT resumes of the SAME plan both claim the row and
- * BOTH invoke `runTool`, so a node's side effect must be de-duplicated BELOW this level (the
- * single-flight guard in `confirmation.ts#executeGatedTool`). Excluding `'running'` would starve the
- * second resume (0 rows claimed ⇒ no run ⇒ `runTool` never invoked), which is wrong when a caller
- * legitimately needs both passes to observe the same in-flight node. `'cancelled'`/`'success'` are
- * terminal and are NEVER resumed — a terminal row is absent from the from-set, so the CAS claims 0
- * rows and the caller returns the persisted plan without running.
+ * `'running'` is deliberately present so a second resume of an already-running plan is not starved by
+ * the status CAS. The EXACTLY-ONCE guarantee is NOT the status CAS: it is the PLAN-level DB execution
+ * claim (`claimTaskExecution` on `AgentTask.executionToken`), acquired BEFORE the run and released in
+ * a `finally`, so a resume that loses the claim returns the persisted plan WITHOUT starting a second
+ * executor. `'cancelled'`/`'success'` are terminal and are NEVER resumed — a terminal row is absent
+ * from the from-set, so the CAS claims 0 rows and the caller returns the persisted plan without running.
  */
 const RESUMABLE_PLAN_STATUSES: TaskPlanStatus[] = [
   'running',
@@ -115,9 +131,10 @@ const NON_CANCELLED_PLAN_STATUSES: TaskPlanStatus[] = [
  * of `resumeTask`'s from-set, which KEEPS it — so a retry whose re-run was already started by a
  * concurrent retry cannot be started twice: the first retry claims (e.g. `failed` → `running`) and
  * runs, while the loser's guarded compare-and-set claims 0 rows and returns the persisted plan
- * WITHOUT running. `'cancelled'` is also excluded (terminal — a retry can never resurrect a cancelled
- * plan). `'waiting_verification'` is a NODE status only: a plan parked on a RED node persists as the
- * PLAN status `'waiting_confirmation'`.
+ * WITHOUT running. The PLAN-level DB execution claim (`claimTaskExecution`) is the additional fence
+ * against a concurrent resume/confirm-continuation still holding the executor slot. `'cancelled'` is
+ * also excluded (terminal — a retry can never resurrect a cancelled plan). `'waiting_verification'`
+ * is a NODE status only: a plan parked on a RED node persists as the PLAN status `'waiting_confirmation'`.
  */
 const RETRYABLE_PLAN_STATUSES: TaskPlanStatus[] = [
   'pending',
@@ -162,6 +179,7 @@ export function readPendingActionId(output: unknown): string | undefined {
 export type TaskRunTool = (
   toolName: string,
   args: Record<string, unknown>,
+  ctx: NodeExecutionContext,
 ) => Promise<PlanToolOutcome>;
 
 /** Options shared by every task-control entry point. */
@@ -320,6 +338,11 @@ function buildPlanDeps(
   return {
     runTool: deps.runTool,
     onNodeUpdate,
+    // Per-node DB claim: the planner executor claims each node BEFORE running it and releases it in a
+    // `finally` (even for a parked node), so a node's side effect can never run twice across two
+    // overlapping executor passes of the same plan. `'running'` node status is never used as a lock.
+    claimNode: (taskId, nodeId, token) => claimNodeExecution(taskId, nodeId, token),
+    releaseNode: (taskId, nodeId, token) => releaseNodeExecution(taskId, nodeId, token),
     // Durable steering: a pause/cancel persisted by a control request stops THIS run at its next
     // checkpoint (see `defaultPollControls`).
     controls: defaultPollControls(planId),
@@ -421,13 +444,14 @@ export async function pauseTask(
  * BEFORE the run, because a durable `'paused'` row is exactly what `defaultPollControls` maps to a
  * pause command — leaving it would re-pause this very run at its first checkpoint.
  *
- * ATOMIC: that same compare-and-set from a RESUMABLE status to `'running'` gates the run. `'running'`
- * is deliberately KEPT in the from-set (unlike `retryTask`'s, which EXCLUDES it): two concurrent
- * resumes must each run, and the exactly-once side effect is guaranteed BELOW this level by the
- * single-flight de-duplication in `confirmation.ts#executeGatedTool`. A `cancelled` plan is never
- * resurrected (its status is absent from the from-set). `runPlan` skips every terminal node
- * (idempotency), so an already-`success` node is NEVER re-executed and a re-parked gated node stays
- * parked for the next human decision.
+ * ATOMIC: that same compare-and-set from a RESUMABLE status to `'running'` gates the run, and the
+ * PLAN-level DB execution claim (`claimTaskExecution`) is the EXACTLY-ONCE guarantee: the run only
+ * starts when this caller wins the token, and a losing concurrent resume returns the persisted plan
+ * WITHOUT a second executor. `'running'` is deliberately KEPT in the status from-set (unlike
+ * `retryTask`'s, which EXCLUDES it). A `cancelled` plan is never resurrected (its status is absent
+ * from the from-set). `runPlan` skips every terminal node (idempotency) and each node additionally
+ * claims its own DB slot (`claimNode`), so an already-`success` node is NEVER re-executed and a
+ * re-parked gated node stays parked for the next human decision.
  *
  * After the run the CANONICAL CANCEL SWEEP revokes any `PendingAction` a node minted while a
  * concurrent `cancelTask` cancelled the plan (see `sweepCancelledPlan`).
@@ -444,12 +468,22 @@ export async function resumeTask(
   const claimed = await claimTaskStatus(taskId, RESUMABLE_PLAN_STATUSES, 'running');
   if (!claimed) return reloadPlan(sessionId, taskId); // already running / terminal — never double-run
 
-  const result = await executor.runPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), {
-    now: deps.now,
-    explicitResume: true,
-  });
-  await sweepCancelledPlan(sessionId, taskId);
-  return result;
+  // PLAN-level DB claim: the ONE executor slot for this plan. A concurrent resume that loses this
+  // atomic claim does NOT start a second executor — it returns the persisted plan. The claim is
+  // released in the `finally`, so the next legitimate resume can take it.
+  const token = newId('taskclaim');
+  if (!(await claimTaskExecution(taskId, token))) return reloadPlan(sessionId, taskId);
+
+  try {
+    const result = await executor.runPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), {
+      now: deps.now,
+      explicitResume: true,
+    });
+    await sweepCancelledPlan(sessionId, taskId);
+    return result;
+  } finally {
+    await releaseTaskExecution(taskId, token);
+  }
 }
 
 /** Gateway error codes that mean "already settled / gone" — there is nothing left to revoke. */
@@ -514,15 +548,17 @@ async function recordRevokeFailure(
   sessionId: string,
   taskId: string,
   failed: { actionId: string; message: string }[],
+  bulkRevoked?: number,
 ): Promise<void> {
   await recordSecurityEvent({
     sessionId,
     kind: 'HIGH_RISK_BLOCKED',
     severity: 'high',
     message:
-      `计划「${taskId}」已取消，但有 ${failed.length} 个待确认操作未能撤销: ` +
+      `计划「${taskId}」已取消（批量撤销 ${bulkRevoked ?? 0} 个待确认操作），` +
+      `但有 ${failed.length} 个未能撤销: ` +
       failed.map((entry) => `${entry.actionId}(${entry.message})`).join('; '),
-    detail: { taskId, failed },
+    detail: { taskId, failed, bulkRevoked: bulkRevoked ?? 0 },
   });
 }
 
@@ -589,6 +625,13 @@ export async function cancelTask(
   // A cancelled plan is terminal — never re-cancel, never rewrite it.
   if (row.status === 'cancelled') return toTaskPlan(row);
 
+  // PRIMARY guarantee: revoke EVERY action of the plan in ONE atomic bulk update (`pending` /
+  // `awaiting_mfa` → `cancelled`), so no executable gated call survives the cancellation regardless
+  // of which node parked it. Race-safe by construction (a single `updateMany`).
+  const bulkRevoked = await revokePendingActionsByTask(taskId, ['pending', 'awaiting_mfa']);
+
+  // FALLBACK: also revoke via the parked-node scan (`node.output.pendingActionId`) for an action the
+  // bulk update could not address (defensive — the bulk path already covers every `taskId`-linked row).
   const revoke = await revokeParkedActions(userId, row.sessionId, row);
 
   const cancelled = await lifecycle.cancelPlan(
@@ -597,8 +640,10 @@ export async function cancelTask(
     { now: opts.now },
   );
 
+  // Surface anything that could not be settled (never swallowed): an unexpected failure is durably
+  // recorded as a `SecurityEvent`, with the bulk-revoke count for the audit trail.
   if (revoke.failed.length > 0) {
-    await recordRevokeFailure(row.sessionId, taskId, revoke.failed);
+    await recordRevokeFailure(row.sessionId, taskId, revoke.failed, bulkRevoked);
   }
   return cancelled;
 }
@@ -609,10 +654,10 @@ export async function cancelTask(
  * ATOMIC: a single compare-and-set from a NON-TERMINAL status to `'running'` gates the run. The
  * from-set EXCLUDES `'running'` (see `RETRYABLE_PLAN_STATUSES`) — the deliberate ASYMMETRY with
  * `resumeTask`, whose from-set KEEPS it: two concurrent retries must execute each reset node exactly
- * once (the loser returns the persisted plan WITHOUT running), whereas two concurrent resumes must
- * both run and rely on the single-flight de-duplication in `confirmation.ts#executeGatedTool`. A
- * `cancelled` plan is NEVER retried (excluded from the from-set). After the run the CANONICAL CANCEL
- * SWEEP revokes any action left parked by a concurrent cancellation.
+ * once (the loser returns the persisted plan WITHOUT running). The PLAN-level DB execution claim
+ * (`claimTaskExecution`) additionally fences a concurrent resume/confirm-continuation. A `cancelled`
+ * plan is NEVER retried (excluded from the from-set). After the run the CANONICAL CANCEL SWEEP
+ * revokes any action left parked by a concurrent cancellation.
  */
 export async function retryTask(
   sessionId: string,
@@ -625,29 +670,54 @@ export async function retryTask(
   const claimed = await claimTaskStatus(taskId, RETRYABLE_PLAN_STATUSES, 'running');
   if (!claimed) return reloadPlan(sessionId, taskId); // cancelled / lost race — never retry
 
-  const result = await lifecycle.retryPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), {
-    now: deps.now,
-  });
+  // PLAN-level DB claim: the ONE executor slot. A concurrent retry that loses the status CAS above
+  // already returns early; this token additionally fences a resume/confirm-continuation that is still
+  // holding the slot. The claim is released in the `finally`.
+  const token = newId('taskclaim');
+  if (!(await claimTaskExecution(taskId, token))) return reloadPlan(sessionId, taskId);
 
-  // `retryPlan` returns the input plan UNCHANGED — without persisting — when there is nothing to
-  // retry, which would leave the row dangling in the `'running'` we just claimed. Restore the
-  // truthful status with a CAS `'running' → result.status`: it is a no-op when the run already
-  // persisted its own final status, and it never clobbers a concurrent `'paused'`/`'cancelled'`
-  // (neither of which is `'running'`).
-  await claimTaskStatus(taskId, ['running'], result.status);
+  try {
+    const result = await lifecycle.retryPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), {
+      now: deps.now,
+    });
 
-  await sweepCancelledPlan(sessionId, taskId);
-  return result;
+    // `retryPlan` returns the input plan UNCHANGED — without persisting — when there is nothing to
+    // retry, which would leave the row dangling in the `'running'` we just claimed. Restore the
+    // truthful status with a CAS `'running' → result.status`: it is a no-op when the run already
+    // persisted its own final status, and it never clobbers a concurrent `'paused'`/`'cancelled'`
+    // (neither of which is `'running'`).
+    await claimTaskStatus(taskId, ['running'], result.status);
+
+    await sweepCancelledPlan(sessionId, taskId);
+    return result;
+  } finally {
+    await releaseTaskExecution(taskId, token);
+  }
 }
 
 /**
- * Reverse lookup: which task/node is parked on `actionId`? Scans the session's tasks and reads each
- * node's `output` (see `TaskNodeOutput` — there is no `pendingActionId` column).
+ * Reverse lookup: which task/node is parked on `actionId`?
+ *
+ * PREFERS the action's PERSISTED plan link (`PendingAction.taskId`/`nodeId`, written at gate time),
+ * verified against the owning task's session; FALLS BACK to scanning the session's tasks and reading
+ * each node's `output` (see `TaskNodeOutput`) for a pre-link action.
  */
 export async function findTaskByPendingAction(
   sessionId: string,
   actionId: string,
 ): Promise<{ taskId: string; nodeId: string } | undefined> {
+  // PRIMARY: the action's persisted plan link, verified so a link to a foreign/absent task is ignored
+  // rather than trusted.
+  const link = await getPendingActionPlanLink(actionId);
+  if (link !== null && link.taskId !== null && link.nodeId !== null) {
+    const linked = await getTask(link.taskId);
+    if (linked !== null && linked.sessionId === sessionId) {
+      return { taskId: link.taskId, nodeId: link.nodeId };
+    }
+  }
+
+  // FALLBACK: scan the session's tasks and read each node's `output` (see `TaskNodeOutput`) — for an
+  // action persisted before the plan link existed (or whose link is null).
   const tasks = await listTasksBySession(sessionId);
   for (const task of tasks) {
     const row = await getTask(task.id);
