@@ -269,14 +269,54 @@ function emitAll(events: readonly AgentStreamEvent[], opts?: ConfirmOptions): vo
 }
 
 /**
- * Gate a tool call through the gateway and, when allowed, execute it through the SDK.
- *
- * Blocked (YELLOW/RED/locked) ⇒ `{ ok:false, requiresConfirmation:true, pendingActionId? }` so the
- * planner parks the node in `waiting_confirmation`/`waiting_verification`. Allowed (GREEN) ⇒ the args
- * run through the Banking SDK. NEVER throws: it is the planner's `runTool` port, and a plan node must
- * report a failure as a value instead of blowing up the whole plan.
+ * Canonical, ORDER-STABLE JSON for a tool's arguments, so two logically identical calls produce the
+ * same single-flight key regardless of object key insertion order. Recurses into arrays/objects;
+ * every other value is serialized by `JSON.stringify` (primitive or `undefined`).
  */
-export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome> {
+function canonicalArgs(args: Record<string, unknown>): string {
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (value !== null && typeof value === 'object') {
+      const source = value as Record<string, unknown>;
+      const sorted: Record<string, unknown> = {};
+      for (const key of Object.keys(source).sort()) sorted[key] = normalize(source[key]);
+      return sorted;
+    }
+    return value;
+  };
+  return JSON.stringify(normalize(args));
+}
+
+/** The single-flight key of a gated tool call: trusted session + tool + canonical args. */
+function executionKey(ctx: GatewayContext): string {
+  return `${ctx.sessionId}\u0000${ctx.toolName}\u0000${canonicalArgs(ctx.args)}`;
+}
+
+/**
+ * In-flight AUTO-EXECUTING tool calls, keyed by `executionKey`.
+ *
+ * WHY: two CONCURRENT runs of the same plan (a double resume / retry) can both reach the same un-run
+ * node and both invoke `runTool`. The node's side effect must happen EXACTLY ONCE, so a second
+ * concurrent IDENTICAL call SHARES the first's in-flight promise — one execution, one side effect,
+ * one shared result. The entry is CLEARED the moment the call settles (success or failure), so a
+ * later SEQUENTIAL identical call is a genuinely new execution and is NEVER coalesced with a
+ * completed one.
+ */
+const inFlightExecutions = new Map<string, Promise<GatedToolOutcome>>();
+
+/**
+ * Is this outcome a PARKED (human-gated) one rather than an auto-execution?
+ *
+ * A parked call minted a `PendingAction` the human must decide on; those are PER-CALL, so a parked
+ * outcome is never shared between concurrent callers — each concurrent identical gated call keeps its
+ * own pending action.
+ */
+function isParkedOutcome(outcome: GatedToolOutcome): boolean {
+  return outcome.requiresConfirmation === true || outcome.pendingActionId !== undefined;
+}
+
+/** The un-coalesced body of `executeGatedTool`: the actual gateway gate + SDK execution. */
+async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutcome> {
   try {
     const auth = await gateway.handleToolCall(ctx);
 
@@ -301,6 +341,42 @@ export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOu
     // Infra failure (gateway/SDK) ⇒ a failed node carrying its reason, instead of an exception
     // escaping mid-plan. Never silent: the message is reported to the planner/UI.
     return { ok: false, error: AppError.from(e).message };
+  }
+}
+
+/**
+ * Gate a tool call through the gateway and, when allowed, execute it through the SDK.
+ *
+ * Blocked (YELLOW/RED/locked) ⇒ `{ ok:false, requiresConfirmation:true, pendingActionId? }` so the
+ * planner parks the node in `waiting_confirmation`/`waiting_verification`. Allowed (GREEN) ⇒ the args
+ * run through the Banking SDK. NEVER throws: it is the planner's `runTool` port, and a plan node must
+ * report a failure as a value instead of blowing up the whole plan.
+ *
+ * SINGLE-FLIGHT (side effect exactly once): a CONCURRENT identical call — same session, tool and
+ * canonical args — SHARES the first call's in-flight execution instead of running a second time, so a
+ * duplicated resume cannot double a GREEN side effect (e.g. two `reserve_budget`s). A PARKED outcome
+ * is NOT shared: it is per-call (its own `PendingAction`), so a concurrent identical gated call runs
+ * its own gate once the first settles. The in-flight entry is removed on settle, so a SEQUENTIAL
+ * identical call is never coalesced with a completed one.
+ */
+export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome> {
+  const key = executionKey(ctx);
+  const inFlight = inFlightExecutions.get(key);
+  if (inFlight !== undefined) {
+    const shared = await inFlight;
+    // Only auto-executing outcomes are shared; a parked outcome is per-call (own pending action).
+    if (!isParkedOutcome(shared)) return shared;
+    return executeGatedToolOnce(ctx);
+  }
+
+  const run = executeGatedToolOnce(ctx);
+  inFlightExecutions.set(key, run);
+  try {
+    return await run;
+  } finally {
+    // Clear on settle so a LATER sequential identical call is a fresh execution. Remove ONLY our
+    // entry, in case a subsequent call has already registered a new one.
+    if (inFlightExecutions.get(key) === run) inFlightExecutions.delete(key);
   }
 }
 

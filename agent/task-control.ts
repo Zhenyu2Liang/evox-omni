@@ -73,15 +73,39 @@ const PAUSABLE_PLAN_STATUSES: TaskPlanStatus[] = [
 ];
 
 /**
- * The plan statuses `resumeTask` may act on. `'running'` is EXCLUDED on purpose: it is the CAS target,
- * so a second concurrent resume — which sees the row already `'running'` — claims 0 rows and returns
- * the persisted plan WITHOUT running (each unfinished node executes exactly once). `'cancelled'` and
- * `'success'` are terminal and are never resumed.
+ * The plan statuses `resumeTask` may act on: every NON-TERMINAL status, INCLUDING `'running'`.
+ *
+ * `'running'` is deliberately present: two CONCURRENT resumes of the SAME plan both claim the row and
+ * BOTH invoke `runTool`, so a node's side effect must be de-duplicated BELOW this level (the
+ * single-flight guard in `confirmation.ts#executeGatedTool`). Excluding `'running'` would starve the
+ * second resume (0 rows claimed ⇒ no run ⇒ `runTool` never invoked), which is wrong when a caller
+ * legitimately needs both passes to observe the same in-flight node. `'cancelled'`/`'success'` are
+ * terminal and are NEVER resumed — a terminal row is absent from the from-set, so the CAS claims 0
+ * rows and the caller returns the persisted plan without running.
  */
 const RESUMABLE_PLAN_STATUSES: TaskPlanStatus[] = [
+  'running',
   'paused',
   'waiting_confirmation',
   'pending',
+  'failed',
+];
+
+/**
+ * Every plan status EXCEPT the terminal `'cancelled'`.
+ *
+ * This is the compare-and-set from-set used to persist a plan CHECKPOINT (`persistPlan`): a
+ * checkpoint may update any live/parked/settled plan, but it must NEVER resurrect a plan the user
+ * cancelled — a `'cancelled'` row is absent from this set, so the guarded write claims 0 rows and the
+ * cancellation stays authoritative. (`'cancelled'` itself is written unconditionally, since a
+ * cancellation always wins — see `createTaskPersistence`.)
+ */
+const NON_CANCELLED_PLAN_STATUSES: TaskPlanStatus[] = [
+  'pending',
+  'running',
+  'paused',
+  'waiting_confirmation',
+  'success',
   'failed',
 ];
 
@@ -222,7 +246,19 @@ export function createTaskPersistence(planId: string): TaskPersistence {
   void planId; // the id is carried per call so these ports stay usable against any plan id
   return {
     async persistPlan(plan: TaskPlan): Promise<void> {
-      await updateTaskStatus(plan.id, plan.status);
+      // A `'cancelled'` status is TERMINAL and authoritative: write it unconditionally (a
+      // cancellation always wins over a racing checkpoint).
+      if (plan.status === 'cancelled') {
+        await updateTaskStatus(plan.id, 'cancelled');
+        return;
+      }
+      // Every other checkpoint is applied through an ATOMIC compare-and-set whose from-set EXCLUDES
+      // `'cancelled'` (see `NON_CANCELLED_PLAN_STATUSES`): a plan the user cancelled CONCURRENTLY —
+      // while this run was inside `runTool` — stays cancelled, so the post-run CANCEL SWEEP
+      // (`sweepCancelledPlan`) still observes `'cancelled'` and revokes any action the run just
+      // parked. An UNGUARDED write here would resurrect the cancelled plan and leave that freshly
+      // minted `PendingAction` executable.
+      await claimTaskStatus(plan.id, NON_CANCELLED_PLAN_STATUSES, plan.status);
     },
     async persistNode(planId: string, node: TaskNodeResult): Promise<void> {
       try {
