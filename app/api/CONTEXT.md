@@ -85,9 +85,9 @@ audited `resetSession` (the runtime unlock path — see Notes).
   full ordered event log** (there is no `onEvent` sink): the streaming path writes each returned event
   as a frame (appending its own `done` terminator only if the last returned event is not already
   `done`); the non-streaming path uses `ChatTurnResponse.events` verbatim.
-- `Set-Cookie: banking_session=<sessionId>; Path=/; HttpOnly; SameSite=Lax` is set on EVERY chat
-  response (streaming and JSON) from the returned session id. This cookie IS the trusted identity
-  every other route reads.
+- `Set-Cookie: banking_session=<sessionId>; Path=/; HttpOnly; SameSite=Lax` is set on EVERY SUCCESSFUL
+  chat response (streaming and JSON) from the RETURNED session id (never a body-supplied id); a rejected
+  turn (see below) sets no cookie. This cookie IS the trusted identity every other route reads.
 - **Chat identity is COOKIE-ONLY.** The turn's session comes solely from the `banking_session`
   cookie (`_lib/session` `resolveSessionId`), never from the request body: a body `sessionId` that
   DISAGREES with the cookie — INCLUDING when no cookie is present — is rejected with `409 CONFLICT`
@@ -217,10 +217,13 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   `tasks-http.test.ts` assertions also encode the old behavior (session-less control expected `400
   VALIDATION` → now `403`; unknown-id-without-identity → `403` before the `404`). `../tests` is
   root-owned — escalate the fix there.
-- **The only `tsc`/`next build` blocker is a SIBLING, not this node:** `components/chat/cards/PlanCard.tsx`
-  (`PLAN_STATUS_LABEL`/`PLAN_STATUS_TONE`) lacks a `paused` key after the parent commit that added
-  `'paused'` to `TaskPlanStatus` (`@/lib/contracts/task`). `app/api/**` typechecks cleanly; the sibling
-  `../components` needs `paused` added (read-only here — escalate).
+- **Root-owned `../tests/app/*.test.ts` bootstrap sessions via a cookie-less body `sessionId`** — their
+  shared harness sends the FIRST `POST /api/chat` with `{ sessionId: <fresh>, message }` and NO cookie,
+  then reuses the returned cookie. With the cookie-only chat rule that first turn is now `409 CONFLICT`
+  (a body `sessionId` can no longer mint a session), so the setup fails before any assertion. The fix
+  belongs in `../tests/app` (root-owned — escalate): create the first turn WITHOUT a body `sessionId`
+  and take the cookie from the response; send identity on action/task calls as the
+  `Cookie: banking_session=<id>` header.
 
 ## Routing Table
 
