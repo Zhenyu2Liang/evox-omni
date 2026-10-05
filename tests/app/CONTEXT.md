@@ -168,6 +168,18 @@ and the `ErrorCode` union (`lib/errors.ts`). On a tripped breaker
 reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED` high-severity
 `SecurityEvent`, and denied follow-up action calls) instead of a fabricated 423.
 
+## Known gap — mid-execution PAUSE is not exercised at the HTTP layer
+
+Both pause specs operate on a plan that has already SETTLED (parked at `waiting_confirmation`):
+`tasks-http.test.ts:186` and `dag-recovery-http.test.ts:181` seed a plan, let it run to a park, then
+`POST /api/tasks/[id] {action:'pause'}` — NO node is `running` when the pause is issued. They prove
+"pause halts an at-rest plan" and "the dependent node never runs (its side-effect row stays 0)", NOT a
+pause that lands WHILE a node is executing. The durable mid-run steering is real code —
+`agent/task-control.ts#defaultPollControls` maps a persisted `AgentTask.status === 'paused'` to
+`{kind:'pause'}`, observed at the run's next node checkpoint (`planner/executor.ts:397-411`) — but
+exercising it over `POST /api/tasks/[id]` requires issuing the pause CONCURRENTLY with an in-flight
+run; every app-entry spec awaits the run to settle before pausing, so this path is untested here.
+
 ## Test Strategy
 
 - `npx vitest run tests/app` — real route handlers + a fresh seeded DB per test.
