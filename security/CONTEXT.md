@@ -36,17 +36,23 @@ delegates to `risk-engine.evaluateTransferRisk({ amount, dailyTransferTotal: ctx
 interface TransferRiskInput { amount: number; dailyTransferTotal: number }
 interface TransferRiskResult { tier: RiskLevel; requiresConfirmation: boolean; requiresMfa: boolean;
                                reasons: string[]; amount: number; dailyTotal: number; projectedDailyTotal: number }
+type PrismaLike = Prisma.TransactionClient | typeof prisma   // the shared client OR a `$transaction` client
+const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const
 function evaluateTransferRisk(input: TransferRiskInput): TransferRiskResult     // RED iff amount>1000 || total+amount>1000 (STRICT `>`; exactly ¥1000 stays YELLOW), else YELLOW; always requiresConfirmation
-async function computeDailyTransferTotal(userId: string, now?: number): Promise<number>   // sum OUTGOING TRANSFER debits with occurredAt in [startOfDay(now), now] (INCLUSIVE both ends; future-dated rows excluded)
-async function reEvaluateTransferRisk(userId: string, amount: number, now?: number): Promise<TransferRiskResult>   // EXECUTION-TIME re-risk: computeDailyTransferTotal FRESH (injected `now`, default demo clock) then evaluateTransferRisk
+async function computeDailyTransferTotal(userId: string, now?: number): Promise<number>   // EXECUTED only: sum OUTGOING TRANSFER debits with occurredAt in [startOfDay(now), now] (INCLUSIVE both ends; future-dated rows excluded)
+async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>   // sum of in-flight (status confirmed|executing) parked transfer_money args.amount, minus excludeActionId; a malformed row is SKIPPED (never throws)
+async function computeEffectiveTransferTotalWith(client: PrismaLike, userId: string, now?: number, excludeActionId?: string): Promise<number>   // EXECUTED-today transfer debits + in-flight PendingActions, through `client` (so it runs INSIDE a `$transaction`)
+async function reEvaluateTransferRisk(userId: string, amount: number, now?: number): Promise<TransferRiskResult>   // EXECUTED-only re-risk: computeDailyTransferTotal FRESH then evaluateTransferRisk
 ```
-`reEvaluateTransferRisk` is the mechanism preventing the **stale-parked-transfer bypass**: several
-YELLOW pending transfers each validated at PARK time against the same (then-current) day total can
-collectively exceed ¥1000 once executed, so execution must re-derive the day total and escalate to
-RED/MFA. It reuses `TransferRiskResult` (carries `tier` / `requiresMfa` / `dailyTotal` /
-`projectedDailyTotal`) and is auto-exposed via `security.risk.reEvaluateTransferRisk`. The gateway's
-`authorizeAction` calls it (only for `transfer_money`) at CONFIRM time, so a parked transfer whose
-FRESH day total now crosses the ¥1000 limit is refused the confirmation-only path and requires MFA.
+`computeDailyTransferTotal` / `reEvaluateTransferRisk` remain the EXECUTED-only public API (and are
+auto-exposed via `security.risk`). The gateway does NOT use them for the transfer confirm path: it calls
+`computeEffectiveTransferTotalWith(tx, …)` INSIDE the atomic claim transaction so in-flight
+(authorized-not-yet-ledgered) transfers also count. That aggregate is the mechanism that closes the
+**stale-parked-transfer bypass**: several YELLOW transfers each validated at PARK time against the same
+then-current day total can collectively exceed ¥1000 once executed, so execution must re-derive the
+EFFECTIVE total (executed + in-flight) and escalate to RED/MFA. `risk-engine` imports the shared
+`prisma` client (`lib/db/client`) and the `Prisma` type for its `PrismaLike` parameter — this is the
+sanctioned direct-DB dependency of this node (the aggregate queries must run inside the caller's tx).
 
 ### `circuit-breaker.ts` — session-scoped consecutive-failure breaker (in-memory)
 ```ts
@@ -86,8 +92,15 @@ async function reportInjection(sessionId: string, text: string, result: Injectio
 ```ts
 const BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__'
 interface GatewayContext { sessionId: string; userId: string; toolName: ToolName; args: Record<string, unknown>; userRequest: string }
-interface AuthorizationResult { ok: boolean; status: PendingActionStatus; actionId: string; tier: RiskLevel;
-                                requiresMfa: boolean; mfaResult?: 'success'|'failed'|'not_required'; message: string; action?: PendingAction }
+interface ActionOwnership { userId: string; sessionId: string }      // REQUIRED caller identity
+type AuthorizeOptions = ActionOwnership & { mfaCode?: string }
+type CancelOptions = ActionOwnership
+interface AuthorizationResult { ok: boolean; status: PendingActionStatus; actionId: string;
+                                tier: RiskLevel;              // ALWAYS the EFFECTIVE tier (an escalated transfer ⇒ 'RED')
+                                requiresMfa: boolean;         // ALWAYS the EFFECTIVE requirement
+                                mfaResult?: 'success'|'failed'|'not_required';
+                                code?: ErrorCode;             // typed failure code (present iff ok===false for a domain refusal)
+                                message: string; action?: PendingAction }
 interface ToolCallAuthorization { evaluation: SecurityEvaluation; decision: SecurityDecision; action?: PendingAction; blockReason?: string }
 interface SecurityGateway {
   evaluate(ctx): Promise<SecurityEvaluation>
@@ -95,10 +108,10 @@ interface SecurityGateway {
   createPendingAction(ctx, ev): Promise<PendingAction>
   serializeBlockReason(decision, action): string
   parseBlockReason(reason): { actionId: string; decisionKind: SecurityDecisionKind } | null
-  authorizeAction(actionId, opts?: { mfaCode?: string; userId?: string; sessionId?: string }): Promise<AuthorizationResult>
-  cancelAction(actionId, opts?: { userId?: string; sessionId?: string }): Promise<PendingAction>
+  authorizeAction(actionId: string, opts: AuthorizeOptions): Promise<AuthorizationResult>   // opts REQUIRED (ownership enforced)
+  cancelAction(actionId: string, opts: CancelOptions): Promise<PendingAction>               // opts REQUIRED (ownership enforced)
   recordActionResult(actionId, status: 'executed'|'failed'): Promise<void>   // persist the TRUE terminal status AFTER the caller executes
-  handleToolCall(ctx): Promise<ToolCallAuthorization>    // beforeToolCall entry: evaluate→decide→(persist+reason when gated)
+  handleToolCall(ctx): Promise<ToolCallAuthorization>    // beforeToolCall entry: assertCallerIdentity→evaluate→decide→(persist+reason when gated)
 }
 const securityGateway: SecurityGateway
 function buildPendingActionSummary(ctx, ev): PendingActionSummary   // pure formatting of Summary fields
@@ -106,18 +119,37 @@ const TOOL_INTENT: Record<ToolName, string>                         // code-driv
 function deriveIntent(toolName: ToolName): string                   // TOOL_INTENT[toolName], else the raw tool name (never empty)
 // `createPendingAction` persists ctx.userRequest + deriveIntent(ctx.toolName); `toContractPendingAction` surfaces both on the returned PendingAction.
 ```
-`authorizeAction` gate order (fail-closed): (1) OWNERSHIP — a supplied `opts.userId` / `opts.sessionId`
-that does not match the row throws `AppError('SECURITY_DENIED')` (the codebase `ErrorCode` union has no
-`FORBIDDEN`); (2) CIRCUIT BREAKER — a locked session returns `{ ok:false, status:'locked' }`; (3) EXECUTION-TIME
-RE-RISK for `transfer_money` — a fresh `reEvaluateTransferRisk` that is now RED refuses the confirmation-only
-path and requires MFA (the row's `requiresMfa` column stays `false` for an escalated YELLOW transfer, so the
-flow is routed on `effectiveRequiresMfa = row.requiresMfa || freshRed`); (4) YELLOW confirm when
-`!effectiveRequiresMfa`; (5) RED/escalated verify. Both success paths transition via the atomic, ownership-scoped
-`claimPendingAction({ actionId, from:[…], to:'confirmed' })` (from `['pending']` for YELLOW, from
-`['awaiting_mfa','pending']` for RED/escalated); a claim transitioning 0 rows throws `AppError('CONFLICT')`, so a
-repeat confirm can NOT re-authorize. `cancelAction` claims `['pending','awaiting_mfa'] → 'cancelled'` (same
-ownership check) and rejects a settled action with `CONFLICT`. `recordActionResult(id, status)` persists the
-terminal `'executed'`/`'failed'` status AFTER the caller has executed the operation.
+`authorizeAction` gate order (fail-closed): (1) OWNERSHIP — `opts` is REQUIRED; `assertOwnership(row, opts)`
+throws `AppError('SECURITY_DENIED')` when the caller `userId`/`sessionId` is missing/empty, does not match
+the row, or (when the owning session row exists) disagrees with `getSession(row.sessionId).userId`
+(the codebase `ErrorCode` union has no `FORBIDDEN`); (2) CIRCUIT BREAKER — a locked session returns
+`{ ok:false, status:'locked', code:'CIRCUIT_OPEN' }`; (3) `transfer_money` (DYNAMIC) → `authorizeTransfer`;
+(4) static RED (or `row.requiresMfa`) → the shared strong-verification path; (5) static YELLOW → an atomic
+exactly-once `claimPendingAction(['pending'] → 'confirmed')`.
+
+`authorizeTransfer` (a YELLOW/confirmation-only `transfer_money`) runs ONE `prisma.$transaction` whose
+FIRST statement is the CAS claim `tx.pendingAction.updateMany({ where:{ id, status:{ in:['pending'] }, userId,
+sessionId }, data:{ status:'confirmed' } })`. That WRITE acquires SQLite's write lock, so concurrent confirms
+of DIFFERENT action ids SERIALIZE (cross-session, cross-process) instead of each reading the same
+pre-transfer day total. AFTER the claim it reads the EFFECTIVE day total via
+`risk.computeEffectiveTransferTotalWith(tx, userId, undefined, actionId)` — today's EXECUTED transfer debits
+PLUS every in-flight (`confirmed`/`executing`) parked `transfer_money` action except this one — and re-runs
+`evaluateTransferRisk`. If the fresh risk is now RED the claim is reverted INSIDE the tx to
+`{ status:'awaiting_mfa', riskLevel:'RED', requiresMfa:true }` (the transfer is NOT authorized for execution),
+the MFA challenge is issued AFTER the commit, a `LIMIT_EXCEEDED` `SecurityEvent` is recorded (there is no
+`mfa_required` kind — see Known Issues), and it is refused the confirmation-only path with
+`{ ok:false, status:'awaiting_mfa', tier:'RED', requiresMfa:true, code:'LIMIT_EXCEEDED' }`. Otherwise
+`{ ok:true, status:'confirmed', tier:'YELLOW', requiresMfa:false }`. A claim that transitions 0 rows ⇒
+`AppError('CONFLICT')`.
+
+The strong-verification path (`authorizeWithMfa`, used by static RED and an already-RED/escalated transfer)
+ensures the challenge exists, prompts (`MFA_CODE_PROMPT`, code-free) when no `mfaCode` was supplied, runs
+`mfa.verify`, and on success claims `['awaiting_mfa','pending'] → 'confirmed'` (0 rows ⇒ `AppError('CONFLICT')`).
+A wrong code returns `code:'MFA_FAILED'`; a locked session/challenge returns `code:'CIRCUIT_OPEN'`.
+`tier`/`requiresMfa` are ALWAYS the EFFECTIVE values on EVERY branch (success and failure). `cancelAction`
+REQUIRES ownership too and claims `['pending','awaiting_mfa'] → 'cancelled'` (a settled action ⇒ `CONFLICT`).
+`handleToolCall` first calls `assertCallerIdentity(ctx)` (presence/non-emptiness only — there is no persisted
+action yet). There is NO demo-user fallback anywhere: an `actionId` alone is no longer a capability.
 
 ### `index.ts` — facade
 ```ts
@@ -128,7 +160,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 
 ```
                  (every model tool call)
-   agent.beforeToolCall ──► securityGateway.handleToolCall(ctx)
+   agent.beforeToolCall ──► securityGateway.handleToolCall(ctx)      [assertCallerIdentity(ctx) first]
                                    │
                 ┌──────────────────┴───────────────────┐
                 ▼                                       │
@@ -152,9 +184,9 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
         returned as beforeToolCall block reason ──► model sees "awaiting confirmation/MFA", replies to user
 
    ── human decision (API route) ────────────────────────────────────────────────
-   POST /api/actions/:id/confirm   ──► authorizeAction(id, { userId?, sessionId? })            (ownership → breaker → re-risk → claim ⇒ 'confirmed')
-   POST /api/actions/:id/verify    ──► authorizeAction(id, { mfaCode, userId?, sessionId? })   (RED/escalated ⇒ mfa.verify ⇒ claim ⇒ 'confirmed')
-   POST /api/actions/:id/cancel    ──► cancelAction(id, { userId?, sessionId? })               (claim ⇒ 'cancelled')
+   POST /api/actions/:id/confirm   ──► authorizeAction(id, { userId, sessionId })            (ownership → breaker → transfer_money: ONE tx { CAS claim ⇒ effective-total(+in-flight) read ⇒ re-risk; now-RED ⇒ revert to awaiting_mfa/RED } | static YELLOW: claim ⇒ 'confirmed')
+   POST /api/actions/:id/verify    ──► authorizeAction(id, { mfaCode, userId, sessionId })   (RED/escalated ⇒ mfa.verify ⇒ claim ⇒ 'confirmed')
+   POST /api/actions/:id/cancel    ──► cancelAction(id, { userId, sessionId })               (claim ⇒ 'cancelled')
                 ▼
         AuthorizationResult.ok ──► agent layer executes ORIGINAL validated args via Banking SDK
                                    (gateway only authorizes; it never executes)
@@ -185,16 +217,29 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 - **Pure/deterministic where possible**: `permission-engine`, `risk-engine.evaluateTransferRisk`,
   `injection-guard.scan`, `decide`, `serializeBlockReason`, `parseBlockReason`, `buildPendingActionSummary`,
   `deriveIntent` perform NO I/O. Inject `now` (default `demoNow()`, the demo clock) for time-dependent logic so tests are stable.
-- **No I/O in the decision; I/O only where required**: DB access is confined to `risk.computeDailyTransferTotal` /
-  `risk.reEvaluateTransferRisk` (transaction repo), `mfa` (pendingAction/mfaChallenge repos),
+- **No I/O in the decision; I/O only where required**: DB access is confined to
+  `risk.computeDailyTransferTotal` / `risk.reEvaluateTransferRisk` / `risk.computeInFlightTransferTotal` /
+  `risk.computeEffectiveTransferTotalWith` (transaction + pendingAction tables, via the shared `prisma`
+  client OR an injected `$transaction` client), `mfa` (pendingAction/mfaChallenge repos),
   `circuit-breaker.recordFailure` / `circuit-breaker.resetSession` and `injection.reportInjection` (audit).
-  The gateway persists and mutates pending actions via the pendingAction repo (create / get / atomic
-  `claimPendingAction` / `setPendingActionStatus`). This node NEVER imports prisma directly.
+  The gateway persists/mutates pending actions via the pendingAction repo (create / get / atomic
+  `claimPendingAction` / `setPendingActionStatus`) and runs the transfer confirm path's atomic claim +
+  effective-total read in ONE direct `prisma.$transaction`; it reads `session.getSession` for the ownership
+  cross-check. Direct `prisma` use is limited to those sanctioned call sites.
+- **Required ownership (fail-closed)**: `authorizeAction`/`cancelAction` require `{ userId, sessionId }`
+  and `handleToolCall` requires a non-empty caller identity; a missing/mismatching identity (or a
+  session-row/user mismatch) throws `AppError('SECURITY_DENIED')`. There is NO demo-user fallback — an
+  `actionId` alone does not authorize.
+- **Atomic claim-first transfer re-risk**: a YELLOW `transfer_money` confirm performs the exactly-once
+  CAS claim and the effective-total read in ONE `$transaction` (the write-first claim serializes concurrent
+  confirms), and the effective total includes in-flight parked transfers, so neither the concurrent-confirm
+  race nor the stale-parked-transfer bypass can push the aggregate ¥1000 day limit past the confirmation-only path.
 - **The gateway does NOT execute business operations** — it only authorizes. Execution is the agent layer's job.
 - **Exactly-once authorization**: a confirm/cancel transitions the action via `claimPendingAction` (a single
-  `updateMany` compare-and-set). Only the call that moves the row from an unsettled status to `confirmed` /
-  `cancelled` returns `true`; every other caller gets `false` → `AppError('CONFLICT')`. This is what makes a
-  repeat confirm / cancel-after-confirm / confirm-after-cancel fail closed instead of duplicating money movement.
+  `updateMany` compare-and-set; the transfer path uses the same CAS inline in its `$transaction`). Only the call
+  that moves the row from an unsettled status to `confirmed` / `cancelled` returns `true`; every other caller gets
+  `false` → `AppError('CONFLICT')`. This is what makes a repeat confirm / cancel-after-confirm / confirm-after-cancel
+  fail closed instead of duplicating money movement.
 - **Error strategy**: pure helpers throw `AppError` (`lib/errors`); fallible I/O paths return `Result<T>`
   (`mfa.verify`) or throw `AppError` at boundaries. NEVER swallow an error, never fire-and-forget an event write
   (`recordFailure`/`resetSession`/`reportInjection` are awaited). Never leak a raw exception or the MFA code to the model/UI.
@@ -225,12 +270,24 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   route/API caller invokes it yet — the security-center unlock button is still not connected. Until an app
   node wires it, a tripped session stays locked for the process lifetime (`recordSuccess` clears the counter
   but explicitly does NOT unlock).
-- **Ownership enforcement is OPT-IN (the `actionId` is itself the capability when opts are omitted).**
-  `authorizeAction`/`cancelAction` reject a MISMATCHING `opts.userId`/`opts.sessionId` with `SECURITY_DENIED`, but only
-  when the caller SUPPLIES them (`opts?.userId !== undefined`); an actionId alone authorizes. The app layer DOES forward
-  `{ userId, sessionId }` and DOES call `recordActionResult(id, 'executed'|'failed')` after executing, but the identity is
-  request-derived (`app/api/_lib/session.ts`) with no trusted/signed session token, so the check defends against
-  mis-routing, not against a caller who knows the actionId.
+- **Ownership is REQUIRED, but the caller identity is request-derived.**
+  `authorizeAction`/`cancelAction`/`handleToolCall` now refuse a missing/mismatching identity with
+  `SECURITY_DENIED` and never fall back to a demo user, but the identity itself comes from
+  `app/api/_lib/session.ts` with no trusted/signed session token — the check defends against mis-routing,
+  not against a caller who already knows the `actionId`. Sibling callers must forward explicit ids:
+  `agent/confirmation.ts` (it passes `opts?.userId`/`opts?.sessionId`, which are `undefined` when its
+  `ConfirmOptions` omits them) and every `tests/**` gateway call must be updated to supply
+  `{ userId, sessionId }`; until then those calls fail closed with `SECURITY_DENIED`.
+- **`mfa_required` is MISSING from `lib/contracts/audit.ts`.**
+  `SecurityEventKind` has no `mfa_required` member, so the transfer escalation (YELLOW→RED at execution time)
+  emits an EXISTING kind (`LIMIT_EXCEEDED`, severity `high`) with a COMPLETE `detail`
+  (`decision:'escalate_to_mfa'`, `reason:'execution_time_transfer_re_risk'`, `actionId`, `amount`,
+  `effectiveDailyTotal`, `projectedDailyTotal`, `persistedTier`, `persistedRequiresMfa`). A dedicated
+  `mfa_required` kind should be added by the contract owner.
+- **`PendingActionStatus` has no `'executing'` member.**
+  An in-flight (authorized-but-not-yet-ledgered) transfer is therefore identified by status `'confirmed'`;
+  `IN_FLIGHT_TRANSFER_STATUSES` in `risk-engine.ts` includes `'executing'` defensively so an explicit
+  in-flight marker added to the contract later is covered automatically.
 - **Injection guard does NOT add a system reminder to the model context.**
   The only caller (`agent/run-turn.ts` ~L353-357) emits a UI `security_event` (kind `injection`) after `reportInjection`; nothing is appended to the agent's system prompt/messages, despite the `injection-guard.ts` header saying so.
   Detection, the `INJECTION_ATTEMPT` event, and never-grants-permission all hold (defense-in-depth unaffected).
@@ -240,22 +297,14 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   `recordFailure` is called ONLY from `mfa.ts` on a wrong code; no code path counts blocked/denied attempts.
 - **Security-event writes are best-effort.**
   `recordSecurityEvent` (sibling `audit/`) logs and swallows persistence failures, so an awaited event write can silently fail; the breaker's in-memory `locked` flag remains authoritative.
-- **`HIGH_RISK_BLOCKED` / `LIMIT_EXCEEDED` / `ANOMALY_FLAGGED` event kinds are declared but never written**
-  by this node (only `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET` are emitted).
-- **Cumulative-transfer race — the daily ¥1000 limit is re-checked, never atomically RESERVED/executed.**
-  `authorizeAction` re-risks a parked `transfer_money` via `isTransferEscalated` → `risk.reEvaluateTransferRisk(userId, amount)`
-  (`security-gateway.ts:396-402`, `:444`), which calls `computeDailyTransferTotal` (`risk-engine.ts:91-103`) — a plain READ of
-  today's TRANSFER debits — BEFORE any debit is written. Two DISTINCT ¥600 actions confirmed CONCURRENTLY both read the
-  pre-transfer total, both pass YELLOW, and both execute (≈¥1200, no MFA); sequentially the second is caught (fresh total ¥600).
-  Nothing serializes the gate read against the SDK write (`banking-sdk/transfer.ts:114`); the only atomic primitives are
-  `claimPendingAction` (per-actionId CAS) and the per-transfer balance decrement — neither guards the AGGREGATE daily limit.
-  No transfer has an idempotency key / unique constraint.
-- **Execution-time escalation (YELLOW→RED) is not surfaced in the returned tier, events, or audit.**
-  The escalation branch (`security-gateway.ts:454-465`) returns `tier: action.tier` = the STALE persisted YELLOW with `requiresMfa: true`;
-  `AuthorizationResult` (`:59-72`) has NO effective-tier field, and the YELLOW / RED-verify success branches (`:479-488`, `:548-557`)
-  likewise echo `action.tier`. `authorizeAction` computes the true requirement internally as `effectiveRequiresMfa = row.requiresMfa || freshRed`
-  (`:449`) but never returns it. Downstream `agent/confirmation.ts` then returns tier=YELLOW, has no `requiresMfa` field, emits no
-  `mfa_required` event, and writes `audit.mfaRequired = action.requiresMfa` (the row column stays FALSE for a transfer YELLOW at park time).
+- **`HIGH_RISK_BLOCKED` / `ANOMALY_FLAGGED` event kinds are declared but never written**
+  by this node (it emits `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET`
+  and — for the transfer escalation — `LIMIT_EXCEEDED`).
+- **A transfer's terminal ledger write is still not idempotent.**
+  The gateway serializes the AGGREGATE-limit re-risk (claim-first `$transaction`), but no transfer carries an
+  idempotency key / unique constraint, and the gate read is not atomic with the SDK write
+  (`banking-sdk/transfer.ts`) — a crash between `authorizeAction` and `recordActionResult` leaves a
+  `confirmed` (in-flight) action whose ledger row is missing.
 
 ## Dependencies (contracts this node consumes)
 
@@ -263,8 +312,10 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 (audit owns audit/security-event persistence; it depends only on `lib`, so there is no cycle).
 
 Frozen imports (already exist, DO NOT redefine): `lib/contracts/{risk,tools,security,audit}`, `lib/errors`
-(`AppError`, `Result`, `ok`, `err`), `lib/constants` (`DAILY_TRANSFER_LIMIT`, `MFA_CODE`, `MFA_MAX_ATTEMPTS`),
-`lib/money` (`formatCNY`), `lib/clock` (`demoNow`), `lib/date` (`startOfDay`).
+(`AppError`, `Result`, `ok`, `err`, `ErrorCode`), `lib/constants` (`DAILY_TRANSFER_LIMIT`, `MFA_CODE`,
+`MFA_MAX_ATTEMPTS`, `RISK_LABEL`), `lib/money` (`formatCNY`, `parseAmount`), `lib/json` (`safeParse`),
+`lib/clock` (`demoNow`), `lib/date` (`startOfDay`), `lib/db/client` (`prisma`, the singleton), `@prisma/client`
+(the `Prisma` namespace / `TransactionClient` type).
 
 Repository functions this node consumes (confirmed signatures — do NOT fork):
 - `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>` (sibling node; implemented, callers `await` it — but its writes are BEST-EFFORT and swallow persistence failures, see Known Issues)
@@ -272,10 +323,11 @@ Repository functions this node consumes (confirmed signatures — do NOT fork):
   `getPendingAction(id): Promise<(PendingAction & { mfa: MfaChallenge | null }) | null>`,
   `claimPendingAction({ actionId, from, to, userId?, sessionId? }): Promise<boolean>` (the atomic compare-and-set used by `authorizeAction`/`cancelAction`; `true` iff exactly one row transitioned),
   `setPendingActionStatus(id, status)` (unconditional setter, used by `recordActionResult`; aliased from `updatePendingActionStatus(id, status): Promise<PendingAction>`)
+- `lib/db/repositories/session` → `getSession(id): Promise<AgentSession | null>` (used by the gateway's ownership cross-check; `AgentSession` carries `userId`)
 - `lib/db/repositories/pendingAction` (MFA challenge rows live in the SAME module) → `createMfaChallenge({ actionId, code, maxAttempts?, expiresAt? }): Promise<MfaChallenge>`,
   `getMfaChallenge(actionId): Promise<MfaChallenge | null>` (carries `code` — never expose it),
   `incrementMfaAttempts(actionId): Promise<MfaChallenge>`, `updateMfaChallengeStatus(actionId, status): Promise<MfaChallenge>`, `resetMfaAttempts(actionId): Promise<MfaChallenge>`
-- `lib/db/repositories/transaction` → `listTransactions(query): Promise<Transaction[]>` (used by `risk.computeDailyTransferTotal` / `risk.reEvaluateTransferRisk`; its range is half-open `[from, to)`, so the inclusive upper bound is passed as `now + 1ms`)
+- `lib/db/repositories/transaction` → `listTransactions(query): Promise<Transaction[]>` (used by `risk.computeDailyTransferTotal`; its range is half-open `[from, to)`, so the inclusive upper bound is passed as `now + 1ms`). `risk.computeEffectiveTransferTotalWith` queries `client.transaction.findMany` directly (same window/filters) so it can run inside a `$transaction`.
 
 ## Test Strategy
 
@@ -291,6 +343,8 @@ Vitest. This node is designed to be unit-testable WITHOUT network or clock:
   and cancel-after-confirm ⇒ `CONFLICT`), the ownership rejection (`SECURITY_DENIED`), the execution-time
   transfer re-risk escalation (parked YELLOW transfer escalates to MFA then still completes with the code),
   `recordActionResult` persistence, and the locked-session refusal.
+- **These specs must supply `{ userId, sessionId }` to `authorizeAction`/`cancelAction`** (the options are
+  required) and a non-empty identity to `handleToolCall`; a call without ids fails closed with `SECURITY_DENIED`.
 - End-to-end agent scenarios (Tests 1–12, incl. injection & confirmation) live under `../tests/`.
 
 ## Routing Table
@@ -303,7 +357,8 @@ This is a **leaf node** — it has no child directories; the modules above are i
 - Every money-moving tool MUST be gated through `securityGateway` — never add a tool that bypasses the policy table.
 - When adding a tool, add its entry to `TOOL_POLICY` **and** `TOOL_INTENT` (both typed `Record<ToolName, …>` make a missing key a compile error).
 - `PendingAction.args` are the ORIGINAL validated args — `authorizeAction` re-checks the breaker / re-risks a transfer but must not re-trust model text.
-- Keep the MFA code inside `mfa.ts`; `MfaChallengeView.hint` and all `message` strings must never contain it (incl. `TRANSFER_ESCALATED_MESSAGE`).
-- `authorizeAction`/`cancelAction` transition status ONLY through `claimPendingAction` (atomic compare-and-set) — never a status peek then unconditional write; ownership mismatches use `AppError('SECURITY_DENIED')` (no `FORBIDDEN` code exists).
-- After the agent layer executes an authorized action (or it fails), call `securityGateway.recordActionResult(id, 'executed'|'failed')` so the persisted terminal status is truthful and a later confirm/cancel is a `CONFLICT` (see Known Issues — not yet wired).
+- Keep the MFA code inside `mfa.ts`; `MfaChallengeView.hint` and all `message` strings must never contain it (incl. `TRANSFER_ESCALATED_MESSAGE`, `MFA_CODE_PROMPT`).
+- `authorizeAction`/`cancelAction` transition status ONLY through `claimPendingAction` (atomic compare-and-set; the transfer path uses the same CAS inline) — never a status peek then unconditional write; ownership mismatches use `AppError('SECURITY_DENIED')` (no `FORBIDDEN` code exists).
+- After the agent layer executes an authorized action (or it fails), call `securityGateway.recordActionResult(id, 'executed'|'failed')` so the persisted terminal status is truthful and a later confirm/cancel is a `CONFLICT`.
+- `authorizeAction`/`cancelAction`/`handleToolCall` REQUIRE a caller identity — never add a demo-user fallback; callers must pass `{ userId, sessionId }`.
 - **No local test files exist in this node.** `security/_tests/` and `security/_vitest.local.config.ts` do NOT exist; all security specs live under the root-owned `../tests/` (root `vitest.config.ts` discovers only `tests/**`).
