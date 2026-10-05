@@ -201,7 +201,7 @@ afterAll(async () => {
 
 /* ----------------------------------------------------------------------------------- tests */
 
-describe('POST /api/chat (real route handler, mock model) — GREEN reads', () => {
+describe('[integration] POST /api/chat (real route handler, mock model) — GREEN reads', () => {
   it('1 — "查询我的余额": JSON envelope, session event, get_balance success, balance card, done; balance untouched', async () => {
     const { res, turn } = await chatJson('查询我的余额');
 
@@ -223,7 +223,7 @@ describe('POST /api/chat (real route handler, mock model) — GREEN reads', () =
   });
 });
 
-describe('POST /api/chat (real route handler, mock model) — gated transfers park, never execute', () => {
+describe('[integration] POST /api/chat (real route handler, mock model) — gated transfers park, never execute', () => {
   it('2 — YELLOW "给张伟转200元": search_contact + blocked transfer_money, confirmation_required + card, pendingAction YELLOW, no money moved', async () => {
     const { res, turn } = await chatJson('给张伟转200元');
     const events = turn.events;
@@ -321,7 +321,7 @@ describe('POST /api/chat (real route handler, mock model) — gated transfers pa
   });
 });
 
-describe('POST /api/chat (real route handler, mock model) — GREEN analysis reads', () => {
+describe('[integration] POST /api/chat (real route handler, mock model) — GREEN analysis reads', () => {
   it('5 — "分析本月消费" runs analyze_spending (+ spending card); "有没有异常交易" runs detect_anomaly (+ anomaly card)', async () => {
     const spending = await chatJson('分析本月消费');
     expect(lastToolEnd(spending.turn.events, 'analyze_spending')?.status).toBe('success');
@@ -337,7 +337,7 @@ describe('POST /api/chat (real route handler, mock model) — GREEN analysis rea
   });
 });
 
-describe('POST /api/chat — transport modes, cookie and errors', () => {
+describe('[integration] POST /api/chat — transport modes, cookie and errors', () => {
   it('6 — streaming (`text/event-stream`) yields well-formed, done-terminated frames mirroring the JSON path; Accept: application/json yields JSON; Set-Cookie is set', async () => {
     // Default mode (no `stream` param, non-JSON Accept) → SSE.
     const sse = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({}), {
@@ -418,7 +418,7 @@ describe('POST /api/chat — transport modes, cookie and errors', () => {
   });
 });
 
-describe('POST /api/chat — mid-turn failure over real HTTP (investigated honestly)', () => {
+describe('[integration] POST /api/chat — mid-turn failure over real HTTP (investigated honestly)', () => {
   /**
    * REACHABLE INVARIANT ONLY.
    *

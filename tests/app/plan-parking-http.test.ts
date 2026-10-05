@@ -143,7 +143,7 @@ afterAll(async () => {
 
 /* ------------------------------------------------------------------------------------ specs */
 
-describe('POST /api/chat — a conditional DAG plan PARKS on a gated node (real HTTP + mock)', () => {
+describe('[integration] POST /api/chat — a conditional DAG plan PARKS on a gated node (real HTTP + mock)', () => {
   it('the streamed DAG walks analyze→check→setlimit and settles in waiting_confirmation', async () => {
     const { sessionId, events } = await parkPlanTurn();
 
@@ -187,7 +187,7 @@ describe('POST /api/chat — a conditional DAG plan PARKS on a gated node (real 
   });
 });
 
-describe('the PARKING turn moved nothing and persisted the plan + a pending YELLOW action', () => {
+describe('[integration] the PARKING turn moved nothing and persisted the plan + a pending YELLOW action', () => {
   it('persists the plan (waiting_confirmation), a pending YELLOW action, and leaves the limit at 3000', async () => {
     const { sessionId, events } = await parkPlanTurn();
     const prisma = getTestPrisma();
@@ -230,7 +230,7 @@ describe('the PARKING turn moved nothing and persisted the plan + a pending YELL
   });
 });
 
-describe('POST /api/actions/[id]/confirm — resumes the parked plan with the REAL result', () => {
+describe('[integration] POST /api/actions/[id]/confirm — resumes the parked plan with the REAL result', () => {
   it('confirm (YELLOW) resumes the plan to success and applies the real limit change 3000 → 1500', async () => {
     const { sessionId, events } = await parkPlanTurn();
     const actionId = confirmationOf(events)!.actionId;
