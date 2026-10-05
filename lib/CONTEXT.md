@@ -88,6 +88,11 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 ## Notes for Agents
 
 - If you need a value that every layer shares (limit, threshold, code), add it to `constants.ts`, not locally.
+- The DB target is chosen **only** by `process.env.DATABASE_URL` (read at module load by
+  `lib/db/client.ts` → `resolveDatabaseUrl()`), with a cwd-based `prisma/dev.db` fallback — there is **no
+  dotenv in `lib`** (implicit `.env` loading comes from Next.js's dev/build env loader or the Prisma CLI).
+  Setting an absolute `file:` `DATABASE_URL` in a child process's env is the supported way to redirect both
+  the Prisma CLI and the runtime client to an isolated SQLite file. See `lib/db/CONTEXT.md`.
 - Never import `prisma` outside `lib/db/repositories/**` — go through a repository.
 - When adding a repository aggregate, keep one module per aggregate and register it in
   `lib/db/repositories/index.ts`.
