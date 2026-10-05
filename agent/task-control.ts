@@ -63,6 +63,7 @@ import {
 import {
   claimNodeExecution,
   claimTaskExecution,
+  claimTaskStatus,
   getTask,
   listTasksBySession,
   releaseNodeExecution,
