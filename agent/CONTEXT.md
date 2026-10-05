@@ -102,6 +102,8 @@ function verifyAction(actionId: string, code: string, opts?: ConfirmOptions): Pr
 function cancelAction(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 // the single gateway-authorized execution path used by confirmation AND the planner's runTool:
 function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome>;
+// confirm/verify/cancel FAIL CLOSED when the action's owning plan is CANCELLED, BEFORE authorizing:
+async function cancelledPlanOutcome(actionId: string, sessionId: string): Promise<ConfirmationOutcome | undefined>;  // findTaskByPendingAction + tasks.getTask; status 'cancelled' ⇒ refuse with the row's persisted status
 
 // --- agent/card-emitter.ts --------------------------------------------------
 function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCard[];  // PURE, total
