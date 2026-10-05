@@ -401,6 +401,16 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
   never from model prose. `card-emitter.toCards` is PURE and total (unknown shape ⇒ `error` card).
 - `submit_plan` is meta (not risk-gated): it validates the DAG, then runs it via `planner.runPlan` with
   `runTool = executeGatedTool`; individual money-moving nodes still gate through the gateway.
+- **Plan-node actions are BORN plan-linked.** Every REAL `runTool` adapter forwards the executor's
+  `ctx {taskId,nodeId}` (the gated path in `planner/executor.ts` invokes `runTool(tool, args, {taskId, nodeId})`)
+  into `executeGatedTool` → `gateway.handleToolCall` → `gatewayCreatePendingAction`, which persists
+  `PendingAction.taskId`/`nodeId` IN THE SAME INSERT as the row — BEFORE the `runTool` promise resolves.
+  So `cancelTask`'s PRIMARY bulk `revokePendingActionsByTask(taskId,[...])` revokes a parked node action
+  EVEN BEFORE the node's `output.pendingActionId` is written. Production callers that must forward `ctx`:
+  `banking-agent.ts` (submit_plan deps), `index.ts#taskRunToolFor` (resume/retry),
+  `confirmation.ts#resumeOwningPlan`. A `runTool` injection that DROPS `ctx` mints an UNLINKED orphan
+  that the bulk revoke AND `findTaskByPendingAction` both miss — the action stays confirmable after a
+  plan cancel.
 
 ## Test Strategy
 
