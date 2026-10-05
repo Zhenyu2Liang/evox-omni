@@ -264,7 +264,8 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 
 ## Known Issues
 
-- **Circuit-breaker unlock is not wired to an app route.**
+- **Circuit-breaker unlock IS wired to an app route.**
+  `app/api/security/reset/route.ts` (`POST /api/security/reset`, cookie identity via `requireIdentity`) invokes `security.circuitBreaker.resetSession(sessionId, { actor, reason })` — the audited unlock (clears the lock AND records a `SECURITY_RESET` `SecurityEvent`). The following former caveat is obsolete:
   `circuit-breaker.resetSession(sessionId, opts?)` exists (audited: clears the lock AND records a
   `SECURITY_RESET` `SecurityEvent`) and is exposed as `security.circuitBreaker.resetSession`, but no app
   route/API caller invokes it yet — the security-center unlock button is still not connected. Until an app
