@@ -23,13 +23,15 @@ Prisma models (see `schema.prisma` for exact fields):
 - `User` — demo user; roots to accounts, cards, contacts, subscriptions, holdings, budgets, sessions,
   scheduledTasks, auditLogs, securityEvents.
 - `Account` / `Transaction` — checking/savings balances and ledger (signed `amount`, anomaly flags).
-- `Contact`, `Card` + `CardLimit`, `Subscription`, `Budget`.
+- `Contact`, `Card` + `CardLimit`, `Subscription`, `Budget` (`idempotencyKey` unique — plan-replay key).
 - `InvestmentProduct` / `InvestmentHolding` — products and user holdings.
-- `AgentTask` / `AgentTaskNode` — planner task DAG (nodes store `args`/`output`/`dependencies` as JSON text).
-- `ScheduledTask` — future reminders/payments/transfers.
+- `AgentTask` / `AgentTaskNode` — planner task DAG (nodes store `args`/`output`/`dependencies` as JSON
+  text). Both carry `executionToken` + `executionClaimedAt` — the DB-level exactly-once execution claim.
+- `ScheduledTask` — future reminders/payments/transfers (`idempotencyKey` unique — plan-replay key).
 - `AuditLog` / `SecurityEvent` — append-only audit + security records.
 - `AgentSession` — per-session serialized agent state (`stateJson`).
-- `PendingAction` / `MfaChallenge` — two-phase YELLOW/RED confirmation + mock MFA.
+- `PendingAction` / `MfaChallenge` — two-phase YELLOW/RED confirmation + mock MFA. `PendingAction`
+  carries `taskId`/`nodeId` (owning plan + node) persisted at creation for plan-level revocation.
 
 ## Seed Data (`seed.ts`)
 
