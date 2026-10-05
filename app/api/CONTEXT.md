@@ -174,6 +174,11 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   `_lib/agent-bridge.ts` (capability resolution, plan location + refreshed-`plan_update` assembly,
   ownership forwarding) are pure.
 
+## Known Issues
+
+- **Caller-supplied `?sessionId=` overrides the `banking_session` cookie on every route** (`_lib/session.ts:26-31`). The ownership guards on `POST /api/actions/[id]/{confirm,verify,cancel}` (`route.ts` sessionId computed via `resolveSessionId`) and `POST /api/tasks/[id]` compare `row.sessionId !== sessionId` where `sessionId` may come from the query string — a caller who passes the victim's session id as `?sessionId=` satisfies the guard (the cookie is ignored when the query param is present). The routes then forward that query-derived `{ userId, sessionId }` to `@/agent`. `GET /api/tasks` (`tasks/route.ts:34`) also accepts `?sessionId=` to read another session's plans, and `GET /api/tasks/[id]` (`tasks/[id]/route.ts:34-43`) enforces NO session check at all (reads any plan by id).
+- `resolveUserId` (`_lib/session.ts:17-20`) also honours `?userId=` over `getConfig().demoUserId`, so the ownership guard's `row.userId !== userId` clause is likewise caller-controllable.
+
 ## Routing Table
 
 - `./health/route.ts` → `GET /api/health` liveness + `llmMode` probe
