@@ -17,6 +17,7 @@ The Prisma client singleton and the repository layer. This is the **only** subtr
   the same pragmas for the test DB.
 - `repositories/` — one module per aggregate, each exporting typed async finders / creators / updaters /
   aggregates (see `repositories/CONTEXT.md`).
+  Also carries the concurrency-safety primitives: the `PendingAction` → (`taskId`,`nodeId`) plan link persisted at creation, per-action / plan-level revocation helpers, per-plan / per-node live-execution claim + release CAS helpers keyed by `executionToken`/`executionClaimedAt`, and the `nodeExecutionKey` idempotency key for node side effects.
 
 ## Constraints
 
