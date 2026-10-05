@@ -35,7 +35,7 @@ import { GET as actionsGet } from '@/app/api/actions/route';
 import { GET as taskGet, POST as taskPost } from '@/app/api/tasks/[id]/route';
 import { executeGatedTool, getOrCreateSession, readPendingActionId } from '@/agent';
 import { runSubmitPlan } from '@/agent/tools/planning';
-import { newId } from '@/lib/ids';
+
 import type { ChatTurnResponse } from '@/lib/contracts/agent';
 import type { PendingAction } from '@/lib/contracts/security';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
@@ -416,7 +416,7 @@ describe('[integration] GET /api/tasks/[id] + GET /api/actions — refresh resto
   it('GET /api/actions returns the caller session non-terminal action only (foreign session sees none)', async () => {
     // A real chat turn parks a YELLOW transfer → the session gets a durable pending action.
     const chat = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
-      sessionId: newId('sess'),
+      // COOKIE-ONLY bootstrap: omit sessionId (and send no cookie) so the route MINTS the session.
       message: '给张伟转200元',
     });
     expect(chat.status).toBe(200);
