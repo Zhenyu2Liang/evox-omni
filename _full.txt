@@ -1,0 +1,332 @@
+﻿node.exe : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cj
+s-node-api-deprecated for more details.[39m
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/projects/banking-agent/.genesis/workers/worker_T4_A1[39m
+
+ [31m❯[39m tests/app/review-regressions-http.test.ts [2m([22m[2m9 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 958[2mms[22m[39m
+[31m   [31m×[31m [integration] POST /api/tasks/[id] pause — a MID-RUN pause stops the NEXT node[2m > [22m6 — pausing WHILE node a runs halts node b (never executed); resume re-runs ONLY node b[90m 23[2mms[22m[31m[39m
+[31m     → expected 'paused' to be 'success' // Object.is equality[39m
+   [33m[2m✓[22m[39m [integration] identity — a query param NEVER authenticates on verify/cancel/tasks/reset[2m > [22m8 — a FOREIGN valid cookie + a forged ?sessionId=<victim> query is 403 on verify/cancel/tasks and leaves the victim untouched [33m461[2mms[22m[39m
+ [32m✓[39m tests/app/actions-http.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 882[2mms[22m[39m
+   [33m[2m✓[22m[39m POST /api/actions — circuit breaker over HTTP[2m > [22m9 — 3 consecutive wrong verifies lock the session; a following action call on the SAME session is denied [33m447[2mms[22m[39m
+ [32m✓[39m tests/unit/security/gateway.test.ts [2m([22m[2m27 tests[22m[2m)[22m[33m 1166[2mms[22m[39m
+   [33m[2m✓[22m[39m security-gateway · createPendingAction (needs test SQLite)[2m > [22mbuildPendingActionSummary for transfer_money includes the fields 收款人 / 金额 / 账户 / 风险等级 [33m480[2mms[22m[39m
+ [32m✓[39m tests/app/tasks-http.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 831[2mms[22m[39m
+   [33m[2m✓[22m[39m task endpoints — authorization (cookie-only identity)[2m > [22mPOST /api/tasks/[id] with a valid but FOREIGN session → 403 SECURITY_DENIED (ownership) [33m342[2mms[22m[39m
+ [31m❯[39m tests/app/dag-recovery-http.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 416[2mms[22m[39m
+[31m   [31m×[31m [integration] POST /api/tasks/[id] pause → resume — no re-execution of successful nodes[2m > [22mpause halts before the pending node; resume skips the successful one and the plan completes[90m 101[2mms[22m[31m[39m
+[31m     → expected 'paused' to be 'waiting_confirmation' // Object.is equality[39m
+ [32m✓[39m tests/unit/security/transfer-limits-concurrency.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 432[2mms[22m[39m
+ [32m✓[39m tests/app/chat-http.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 381[2mms[22m[39m
+ [32m✓[39m tests/app/identity-http.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 380[2mms[22m[39m
+ [32m✓[39m tests/app/mfa-escalation-upgrade-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 529[2mms[22m[39m
+ [32m✓[39m tests/app/session-takeover-http.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 558[2mms[22m[39m
+ [31m❯[39m tests/unit/planner/lifecycle.test.ts [2m([22m[2m20 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[90m 11[2mms[22m[39m
+[31m   [31m×[31m planner/lifecycle · pause[2m > [22mPAUSE via in-process PlanControls stops the walk and returns a resumable paused snapshot[90m 4[2mms[22m[31m[39m
+[31m     → expected [ 'tool_a' ] to deeply equal [ 'tool_a', 'tool_b', 'tool_c' ][39m
+ [32m✓[39m tests/app/ledger-consistency-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 926[2mms[22m[39m
+ [32m✓[39m tests/app/malicious-input-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 397[2mms[22m[39m
+ [31m❯[39m tests/app/task-resume-retry-http.test.ts [2m([22m[2m2 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[33m 339[2mms[22m[39m
+[31m   [31m×[31m [integration] POST /api/tasks/[id] concurrent resume — the unfinished node runs EXACTLY ONCE[2m > [22m[integration] two overlapping {action:"resume"} requests execute the pending node once and settle one consistent status[90m 103[2mms[22m[31m[39m
+[31m     → expected +0 to be 1 // Object.is equality[39m
+[31m   [31m×[31m [integration] POST /api/tasks/[id] concurrent retry — the failed node re-runs EXACTLY ONCE[2m > [22m[integration] two overlapping {action:"retry"} requests re-gate the failed node once and settle one consistent status[90m 51[2mms[22m[31m[39m
+[31m     → expected 2 to be 1 // Object.is equality[39m
+ [32m✓[39m tests/app/nl-entry-http.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 487[2mms[22m[39m
+ [31m❯[39m tests/app/plan-pause-terminal-http.test.ts [2m([22m[2m3 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 335[2mms[22m[39m
+[31m   [31m×[31m [integration] POST /api/tasks/[id] pause → confirm a parked node → plan stays PAUSED[2m > [22mconfirming a parked node in a paused plan does NOT advance it; only an explicit resume runs the rest[90m 126[2mms[22m[31m[39m
+[31m     → expected 'paused' to be 'success' // Object.is equality[39m
+ [32m✓[39m tests/app/cumulative-risk-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 428[2mms[22m[39m
+ [32m✓[39m tests/app/cancel-during-authorization-http.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 243[2mms[22m[39m
+ [32m✓[39m tests/app/mfa-escalation-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 343[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/providers/provider-mock.test.ts [2m([22m[2m16 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+ [32m✓[39m tests/app/plan-parking-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 303[2mms[22m[39m
+ [32m✓[39m tests/unit/security/mfa.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 971[2mms[22m[39m
+   [33m[2m✓[22m[39m mfa · verify failure + breaker[2m > [22ma wrong code emits an MFA_FAILURE SecurityEvent (needs test SQLite) [33m484[2mms[22m[39m
+ [32m✓[39m tests/unit/security/authorize-hardening.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 466[2mms[22m[39m
+ [32m✓[39m tests/unit/security/permission-engine.test.ts [2m([22m[2m24 tests[22m[2m)[22m[90m 7[2mms[22m[39m
+ [32m✓[39m tests/scenarios/mock-integration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 689[2mms[22m[39m
+   [33m[2m✓[22m[39m mock-model integration — the real production pipeline, OFFLINE[2m > [22mTest 1 — "查询我的余额" / "我还有多少钱？" narrate the real ¥23,580 via a get_balance success event [33m429[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/atomicity.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 243[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/task-cancel-revokes.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 280[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-11-conditional-dag.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 427[2mms[22m[39m
+[90mstdout[2m | tests/unit/agent/providers/plan-limit-park.test.ts[2m > [22m[2mplan parking through the mock model (runTurn → confirmAction)[2m > [22m[2mparks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)
+[22m[39mPARKING FRAMES:
+[{"type":"session","sessionId":"cmuuzwusr0001f8rkvu9outs4"},{"type":"message_start"},{"type":"text_delta","delta":"好的，我来为你规划一个任"},{"type":"text_delta","delta":"务计划。"},{"type":"message_end","content":"好的，我来为你规划一个任务计划。"},{"type":"tool_start","toolName":"submit_plan","status":"started"},{"type":"plan_update","planStatus":"running","nodes":["analyze:running","check:pending","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:pending","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:success","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:success","setlimit:running"]},{"type":"plan_update","planStatus":"waiting_confirmation","nodes":["analyze:success","check:success","setlimit:waiting_confirmation"]},{"type":"tool_end","toolName":"submit_plan","status":"success"},{"type":"card","cardType":"plan"},{"type":"message_start"},{"type":"text_delta","delta":"这笔操作（任务计划）需要"},{"type":"text_delta","delta":"你确认后才会执行，目前状态为「等待确认」"},{"type":"text_delta","delta":"，尚未执行。请你确认后我才会为你执行。"},{"type":"message_end","content":"这笔操作（任务计划）需要你确认后才会执行，目前状态为「等待确认」，尚未执行。请你确认后我才会为你执行。"},{"type":"confirmation_required","actionId":"cmuuzwutb0009f8rk98zjesm2","tier":"YELLOW","toolName":"set_card_limit"},{"type":"card","cardType":"confirmation"},{"type":"done"}]
+
+[90mstdout[2m | tests/unit/agent/providers/plan-limit-park.test.ts[2m > [22m[2mplan parking through the mock model (runTurn → confirmAction)[2m > [22m[2mparks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)
+[22m[39mCONFIRM FRAMES:
+[{"type":"plan_update","planStatus":"success","nodes":["analyze:success","check:success","setlimit:success"]},{"type":"session","sessionId":"cmuuzwusr0001f8rkvu9outs4"},{"type":"message_start"},{"type":"text_delta","delta":"任务计划：已为卡片 **"},{"type":"text_delta","delta":"**6688 的「娱乐」设置限额 ¥1,"},{"type":"text_delta","delta":"500.00"},{"type":"message_end","content":"任务计划：已为卡片 ****6688 的「娱乐」设置限额 ¥1,500.00"},{"type":"done"}]
+
+ [32m✓[39m tests/unit/agent/providers/plan-limit-park.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 301[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 589[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/investment.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 352[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-02-transfer-confirm.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 312[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/transfer.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 472[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/executor.test.ts [2m([22m[2m14 tests[22m[2m)[22m[90m 5[2mms[22m[39m
+ [32m✓[39m tests/unit/security/authorize-concurrency.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 236[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/dag.test.ts [2m([22m[2m22 tests[22m[2m)[22m[90m 5[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-12-birthday-plan.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 291[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-04-prompt-injection.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 254[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/run-turn-failure.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 232[2mms[22m[39m
+ [31m❯[39m tests/unit/agent/task-control.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 397[2mms[22m[39m
+[31m   [31m×[31m task control ownership[2m > [22mpause / resume / cancel drive the persisted snapshot for an owned task[90m 13[2mms[22m[31m[39m
+[31m     → expected 'paused' to be 'success' // Object.is equality[39m
+ [32m✓[39m tests/scenarios/test-09-investment-mfa.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 413[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-03-transfer-mfa.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 436[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-10-circuit-breaker.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 365[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/confirmation.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 256[2mms[22m[39m
+ [32m✓[39m tests/unit/security/injection-guard.test.ts [2m([22m[2m15 tests[22m[2m)[22m[90m 203[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/subscription.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 366[2mms[22m[39m
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mchat cannot exchange a foreign body sessionId for its authorization cookie
+[22m[39mREVIEW takeover {"turnStatus":409,"cookie":null,"total":0}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mresume preserves cancelled task status in durable storage
+[22m[39mREVIEW cancelled_resume {"responseStatus":200,"responsePlan":"cancelled","storedStatus":"cancelled"}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mcancelling during tool authorization cannot create a fresh executable pending action
+[22m[39mREVIEW cancel_during_gate {"cancelled":"cancelled","returnedPlan":"waiting_confirmation","pending":false,"total":0}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mconfirming a parked node respects an explicit plan pause
+[22m[39mREVIEW paused_confirmation {"count":0,"status":"paused"}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mtwo concurrent resumes execute each unfinished node only once
+[22m[39mREVIEW double_resume {"calls":0,"count":0}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mconcurrent HTTP resume requests do not duplicate budget side effects
+[22m[39mREVIEW http_double_resume {"statuses":[200,200],"count":0}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mledgered but not yet terminal actions are counted only once in cumulative risk
+[22m[39mREVIEW double_count {"secondOk":true,"secondTier":"YELLOW","secondStatus":"executed","actualTotal":700}
+
+ [31m❯[39m tests/review-boundaries.test.ts [2m([22m[2m7 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[33m 387[2mms[22m[39m
+[31m   [31m×[31m two concurrent resumes execute each unfinished node only once[90m 22[2mms[22m[31m[39m
+[31m     → expected +0 to be 1 // Object.is equality[39m
+[31m   [31m×[31m concurrent HTTP resume requests do not duplicate budget side effects[90m 21[2mms[22m[31m[39m
+[31m     → expected +0 to be 1 // Object.is equality[39m
+ [32m✓[39m tests/scenarios/test-05-failure-report.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 395[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 360[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker-audit.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 329[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/confirmation-idempotency.test.ts [2m([22m[2m4 tests[22m[2m)[22m[90m 272[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-01-balance.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 317[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-08-card-limit.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 250[2mms[22m[39m
+ [32m✓[39m tests/unit/security/gateway-audit-trail.test.ts [2m([22m[2m7 tests[22m[2m)[22m[90m 272[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-06-spending-analysis.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 307[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-07-anomaly.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 425[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine-rerisk.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 408[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/pendingAction.claim.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 330[2mms[22m[39m
+ [32m✓[39m tests/unit/security/mfa-audit.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 273[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker-reset.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 375[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[1m[7m Failed Tests 9 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/review-boundaries.test.ts[2m > [22mtwo concurrent resumes execute each unfin
+ished node only once
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m tests/review-boundaries.test.ts:[2m74:17[22m[39m
+    [90m 72| [39m  [35mconst[39m count[33m=[39m[35mawait[39m [34mgetTestPrisma[39m()[33m.[39mbudget[33m.[
+39m[34mcount[39m({where[33m:[39m{name[33m:[39m[32m'审查预[39m…
+    [90m 73| [39m  console[33m.[39m[34mlog[39m([32m'REVIEW double_resume'[39m[33m,[39m[33mJSON[39m[33m.[3
+9m[34mstringify[39m({calls[33m,[39mcount}))[33m;[39m
+    [90m 74| [39m  [34mexpect[39m(count)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m   | [39m                [31m^[39m
+    [90m 75| [39m})[33m;[39m
+    [90m 76| [39m[34mit[39m([32m'concurrent HTTP resume requests do not duplicate budget side effec[39m…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/review-boundaries.test.ts[2m > [22mconcurrent HTTP resume requests do not du
+plicate budget side effects
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m tests/review-boundaries.test.ts:[2m84:17[22m[39m
+    [90m 82| [39m  [35mconst[39m count[33m=[39m[35mawait[39m [34mgetTestPrisma[39m()[33m.[39mbudget[33m.[
+39m[34mcount[39m({where[33m:[39m{name[33m:[39m[32m'审查预[39m…
+    [90m 83| [39m  console[33m.[39m[34mlog[39m([32m'REVIEW http_double_resume'[39m[33m,[39m[33mJSON[39m[33
+m.[39m[34mstringify[39m({statuses[33m:[39mrep…
+    [90m 84| [39m  [34mexpect[39m(count)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m   | [39m                [31m^[39m
+    [90m 85| [39m})[33m;[39m
+    [90m 86| [39m[34mit[39m([32m'ledgered but not yet terminal actions are counted only once in cum[39m…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/app/dag-recovery-http.test.ts[2m > [22m[integration] POST /api/tasks/[id] pa
+use → resume — no re-execution of successful nodes[2m > [22mpause halts before the pending node; resume skips the suc
+cessful one and the plan completes
+[31m[1mAssertionError[22m: expected 'paused' to be 'waiting_confirmation' // Object.is equality[39m
+
+Expected: [32m"waiting_confirmation"[39m
+Received: [31m"paused"[39m
+
+[36m [2m❯[22m tests/app/dag-recovery-http.test.ts:[2m226:28[22m[39m
+    [90m224| [39m    [34mexpect[39m(resumedRes[33m.[39mstatus)[33m.[39m[34mtoBe[39m([34m200[39m)[33m;[39m
+    [90m225| [39m    [35mconst[39m resumed [33m=[39m [34mpayload[39m(resumedRes)[33m;[39m
+    [90m226| [39m    [34mexpect[39m(resumed[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m'waiting_confirmation'
+[39m)[33m;[39m
+    [90m   | [39m                           [31m^[39m
+    [90m227| [39m    [34mexpect[39m([34mnodeStatusOf[39m(resumed[33m,[39m [32m'n1'[39m))[33m.[39m[34mtoBe
+[39m([32m'success'[39m)[33m;[39m
+    [90m228| [39m    [34mexpect[39m([34mnodeStatusOf[39m(resumed[33m,[39m [32m'n2'[39m))[33m.[39m[34mtoBe
+[39m([32m'waiting_confirmation'[39m)[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/app/plan-pause-terminal-http.test.ts[2m > [22m[integration] POST /api/tasks/
+[id] pause → confirm a parked node → plan stays PAUSED[2m > [22mconfirming a parked node in a paused plan does NOT ad
+vance it; only an explicit resume runs the rest
+[31m[1mAssertionError[22m: expected 'paused' to be 'success' // Object.is equality[39m
+
+Expected: [32m"success"[39m
+Received: [31m"paused"[39m
+
+[36m [2m❯[22m tests/app/plan-pause-terminal-http.test.ts:[2m231:28[22m[39m
+    [90m229| [39m    [34mexpect[39m(resumedRes[33m.[39mstatus)[33m.[39m[34mtoBe[39m([34m200[39m)[33m;[39m
+    [90m230| [39m    [35mconst[39m resumed [33m=[39m [34mpayload[39m(resumedRes)[33m;[39m
+    [90m231| [39m    [34mexpect[39m(resumed[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m'success'[39m)[33m;[
+39m
+    [90m   | [39m                           [31m^[39m
+    [90m232| [39m    [34mexpect[39m([34mnodeStatusOf[39m(resumed[33m,[39m [32m'n3'[39m))[33m.[39m[34mtoBe
+[39m([32m'success'[39m)[33m;[39m
+    [90m233| [39m    [34mexpect[39m(([35mawait[39m [34mgetTestPrisma[39m()[33m.[39magentTask[33m.[39m[34mf
+indUnique[39m({ where[33m:[39m { id[33m:[39m …
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/9]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/app/review-regressions-http.test.ts[2m > [22m[integration] POST /api/tasks/[
+id] pause — a MID-RUN pause stops the NEXT node[2m > [22m6 — pausing WHILE node a runs halts node b (never executed);
+ resume re-runs ONLY node b
+[31m[1mAssertionError[22m: expected 'paused' to be 'success' // Object.is equality[39m
+
+Expected: [32m"success"[39m
+Received: [31m"paused"[39m
+
+[36m [2m❯[22m tests/app/review-regressions-http.test.ts:[2m750:28[22m[39m
+    [90m748| [39m    [34mexpect[39m(resumedRes[33m.[39mstatus)[33m.[39m[34mtoBe[39m([34m200[39m)[33m;[39m
+    [90m749| [39m    [35mconst[39m resumed [33m=[39m [34mpayload[39m(resumedRes)[33m;[39m
+    [90m750| [39m    [34mexpect[39m(resumed[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m'success'[39m)[33m;[
+39m
+    [90m   | [39m                           [31m^[39m
+    [90m751| [39m    [34mexpect[39m([34mnodeStatusOf[39m(resumed[33m,[39m [32m'a'[39m))[33m.[39m[34mtoBe[
+39m([32m'success'[39m)[33m;[39m
+    [90m752| [39m    [34mexpect[39m([34mnodeStatusOf[39m(resumed[33m,[39m [32m'b'[39m))[33m.[39m[34mtoBe[
+39m([32m'success'[39m)[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/9]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/app/task-resume-retry-http.test.ts[2m > [22m[integration] POST /api/tasks/[i
+d] concurrent resume — the unfinished node runs EXACTLY ONCE[2m > [22m[integration] two overlapping {action:"resume"}
+ requests execute the pending node once and settle one consistent status
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m tests/app/task-resume-retry-http.test.ts:[2m285:40[22m[39m
+    [90m283| [39m
+    [90m284| [39m    [90m// --- EXACTLY-ONCE: the unfinished node's side effect happened ex[39m…
+    [90m285| [39m    [34mexpect[39m([35mawait[39m [34mcountBudgets[39m(marker))[33m.[39m[34mtoBe[39m([34m1
+[39m)[33m;[39m
+    [90m   | [39m                                       [31m^[39m
+    [90m286| [39m
+    [90m287| [39m    [90m// --- CONSISTENT PERSISTED STATE: one durable row per node, one s[39m…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/9]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/app/task-resume-retry-http.test.ts[2m > [22m[integration] POST /api/tasks/[i
+d] concurrent retry — the failed node re-runs EXACTLY ONCE[2m > [22m[integration] two overlapping {action:"retry"} re
+quests re-gate the failed node once and settle one consistent status
+[31m[1mAssertionError[22m: expected 2 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 2[39m
+
+[36m [2m❯[22m tests/app/task-resume-retry-http.test.ts:[2m352:31[22m[39m
+    [90m350| [39m      where[33m:[39m { sessionId[33m,[39m toolName[33m:[39m [32m'transfer_money'[39m[33m,[
+39m status[33m:[39m [32m'pending[39m…
+    [90m351| [39m    })[33m;[39m
+    [90m352| [39m    [34mexpect[39m(freshGates[33m.[39mlength)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m   | [39m                              [31m^[39m
+    [90m353| [39m    [34mexpect[39m(freshGates[[34m0[39m][33m![39m[33m.[39mid)[33m.[39mnot[33m.[39m[34mt
+oBe[39m(firstActionId)[33m;[39m
+    [90m354| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/9]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/unit/agent/task-control.test.ts[2m > [22mtask control ownership[2m > [22mp
+ause / resume / cancel drive the persisted snapshot for an owned task
+[31m[1mAssertionError[22m: expected 'paused' to be 'success' // Object.is equality[39m
+
+Expected: [32m"success"[39m
+Received: [31m"paused"[39m
+
+[36m [2m❯[22m tests/unit/agent/task-control.test.ts:[2m214:28[22m[39m
+    [90m212| [39m
+    [90m213| [39m    [35mconst[39m resumed [33m=[39m [35mawait[39m [34mresumeTask[39m(sessionId[33m,[39m ta
+skId)[33m;[39m
+    [90m214| [39m    [34mexpect[39m(resumed[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m'success'[39m)[33m;[
+39m
+    [90m   | [39m                           [31m^[39m
+    [90m215| [39m    [34mexpect[39m([35mawait[39m [34mtaskStatus[39m(taskId))[33m.[39m[34mtoBe[39m([32m'su
+ccess'[39m)[33m;[39m
+    [90m216| [39m    [35mconst[39m nodeRow [33m=[39m [35mawait[39m [34mgetTestPrisma[39m()[33m.[39magentTas
+kNode[33m.[39m[34mfindFirst[39m({ wh…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/9]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/unit/planner/lifecycle.test.ts[2m > [22mplanner/lifecycle · pause[2m > [22
+mPAUSE via in-process PlanControls stops the walk and returns a resumable paused snapshot
+[31m[1mAssertionError[22m: expected [ 'tool_a' ] to deeply equal [ 'tool_a', 'tool_b', 'tool_c' ][39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  Array [[22m
+[2m    "tool_a",[22m
+[32m-   "tool_b",[39m
+[32m-   "tool_c",[39m
+[2m  ][22m
+
+[36m [2m❯[22m tests/unit/planner/lifecycle.test.ts:[2m145:21[22m[39m
+    [90m143| [39m    [34mexpect[39m(paused[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m'paused'[39m)[33m;[39
+m
+    [90m144| [39m    [35mconst[39m resumed [33m=[39m [35mawait[39m [34mrunPlan[39m(paused[33m,[39m h[33m.
+[39mdeps[33m,[39m { now[33m:[39m () [33m=>[39m [33mNOW[39m })[33m;[39m
+    [90m145| [39m    [34mexpect[39m(h[33m.[39mcalls)[33m.[39m[34mtoEqual[39m([[32m'tool_a'[39m[33m,[39m 
+[32m'tool_b'[39m[33m,[39m [32m'tool_c'[39m])[33m;[39m
+    [90m   | [39m                    [31m^[39m
+    [90m146| [39m    [34mexpect[39m(resumed[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m'success'[39m)[33m;[
+39m
+    [90m147| [39m  })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/9]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m7 failed[39m[22m[2m | [22m[1m[32m53 passed[39m[22m[90m (60)[39m
+[2m      Tests [22m [1m[31m9 failed[39m[22m[2m | [22m[1m[32m470 passed[39m[22m[90m (479)[39m
+[2m   Start at [22m 16:35:59
+[2m   Duration [22m 44.77s[2m (transform 678ms, setup 174ms, collect 12.93s, tests 23.62s, environment 6ms, prepare 2.36s)[22m
+
