@@ -40,7 +40,7 @@ type PrismaLike = Prisma.TransactionClient | typeof prisma   // the shared clien
 const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const
 function evaluateTransferRisk(input: TransferRiskInput): TransferRiskResult     // RED iff amount>1000 || total+amount>1000 (STRICT `>`; exactly ¥1000 stays YELLOW), else YELLOW; always requiresConfirmation
 async function computeDailyTransferTotal(userId: string, now?: number): Promise<number>   // EXECUTED only: sum OUTGOING TRANSFER debits with occurredAt in [startOfDay(now), now] (INCLUSIVE both ends; future-dated rows excluded)
-async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>   // sum of in-flight (status confirmed|executing) parked transfer_money args.amount, minus excludeActionId; a malformed row is SKIPPED (never throws)
+async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>   // sum of in-flight (status confirmed|executing) parked transfer_money args.amount, minus excludeActionId; a malformed row is SKIPPED (never throws); an action whose deterministic ledger row `idempotentTransferTxId(userId, action.id)` ALREADY EXISTS is EXCLUDED (already counted by the executed half)
 async function computeEffectiveTransferTotalWith(client: PrismaLike, userId: string, now?: number, excludeActionId?: string): Promise<number>   // EXECUTED-today transfer debits + in-flight PendingActions, through `client` (so it runs INSIDE a `$transaction`)
 async function reEvaluateTransferRisk(userId: string, amount: number, now?: number): Promise<TransferRiskResult>   // EXECUTED-only re-risk: computeDailyTransferTotal FRESH then evaluateTransferRisk
 ```
