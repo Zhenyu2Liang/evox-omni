@@ -95,7 +95,7 @@ interface ConfirmationOutcome {
   requiresMfa: boolean;          // EFFECTIVE MFA requirement (never the stale parked-row flag)
   message: string;
   result?: ToolExecutionResult;  // present when the original args were executed
-  events: AgentStreamEvent[];    // continuation narration (agent.continue()) events
+  events: AgentStreamEvent[];    // continuation narration + any escalation events (`mfa_required`)
 }
 function confirmAction(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 function verifyAction(actionId: string, code: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
