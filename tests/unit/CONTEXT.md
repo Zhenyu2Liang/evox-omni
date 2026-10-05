@@ -62,7 +62,7 @@ Each spec imports the module under test directly from its `@/…` façade path
 ## Routing Table
 
 - `./security` → permission/risk/gateway/authorization/injection/circuit-breaker/MFA unit specs
-- `./planner` → DAG + executor + durable lifecycle unit specs
+- `./planner` → DAG + executor + durable lifecycle unit specs (incl. `executor-claim-scope` → exactly-once node claim)
 - `./banking-sdk` → transfer/subscription/investment domain invariants + money-movement atomicity
 - `./agent` → end-to-end confirmation-flow / task-control / provider specs (real DB + gateway + `@/agent`)
 - `./lib` → `PendingAction` atomic-claim persistence primitives
