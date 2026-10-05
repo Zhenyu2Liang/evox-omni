@@ -44,7 +44,12 @@ All functions below are implemented (real Prisma data access).
 - `task.ts` (`AgentTask`, `AgentTaskNode`) — `AgentTaskWithNodes = AgentTask & { nodes }` (`getTask` includes `nodes` by `order`);
   `CreateTaskInput {sessionId, userId, goal, status?}`, `CreateTaskNodeInput {taskId, nodeId, name, kind, order, tool?, args?, condition?, dependencies?, status?}`,
   `UpdateTaskNodeInput {status?, output?, error?, startedAt?, endedAt?}`;
-  `createTask(input)`, `getTask(id)`, `listTasksBySession(sessionId)`, `updateTaskStatus(id, status)`,
+  `createTask(input)`, `getTask(id)` (task row incl. current `status`), `listTasksBySession(sessionId)`,
+  `updateTaskStatus(id, status)` (blind unconditional set),
+  `claimTaskStatus(taskId, fromStatuses: TaskPlanStatus[], toStatus: TaskPlanStatus): Promise<boolean>` — the
+  ATOMIC concurrency guard: a SINGLE `updateMany` CAS moving `status` from any of `fromStatuses` to `toStatus`,
+  returning `true` iff exactly one row transitioned (a second/concurrent resume/retry returns `false`; a
+  terminal/cancelled status not in `fromStatuses` matches 0 rows),
   `createTaskNode(input)`, `getTaskNode(taskId, nodeId)`, `updateTaskNode(taskId, nodeId, update)`,
   `updateTaskNodeStatus(taskId, nodeId, status)`, `deleteTask(id)` (nodes cascade).
 - `scheduledTask.ts` (`ScheduledTask`) — `CreateScheduledTaskInput {userId, name, kind, runAt, payload?, requiresConfirmation?, status?}`;
@@ -116,7 +121,7 @@ All functions below are implemented (real Prisma data access).
 - `./subscription.ts` → Subscription
 - `./investment.ts` → InvestmentProduct + InvestmentHolding
 - `./budget.ts` → Budget
-- `./task.ts` → AgentTask + AgentTaskNode
+- `./task.ts` → AgentTask + AgentTaskNode (+ concurrency-safe `claimTaskStatus` status CAS)
 - `./scheduledTask.ts` → ScheduledTask
 - `./auditLog.ts` → AuditLog
 - `./securityEvent.ts` → SecurityEvent
