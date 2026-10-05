@@ -29,7 +29,9 @@ This node owns test infrastructure and fixtures — NOT the business logic under
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
 - `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
   (chat/SSE, action confirm|verify|cancel, task lifecycle, and `review-regressions-http.test.ts`
-  reviewer regressions). See `app/CONTEXT.md`.
+  reviewer regressions) plus the newer regression specs (`session-takeover-http`, `cancel-during-
+  authorization-http`, `task-resume-retry-http`, `plan-pause-terminal-http`, `cumulative-risk-http`,
+  `ledger-consistency-http`, `mfa-escalation-upgrade-http`). See `app/CONTEXT.md`.
 
 Run:
 
