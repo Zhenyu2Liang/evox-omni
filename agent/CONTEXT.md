@@ -206,7 +206,7 @@ own id) — and passes it to
 `ledgerKeyForAction` generation that `security/`'s risk engine looks up (`ledgerTxIdForAction`) keeps an
 already-ledgered in-flight transfer excluded from the cumulative daily total. The INLINE
 GREEN node path (`executeGatedToolOnce`) passes the same `nodeExecutionKey`, so a re-run of a node replays
-its SDK-level side effect. `transfer_money`, `reserve_budget`, `create_scheduled_task` AND the investment
+its SDK-level side effect. `transfer_money`, `reserve_budget`, `create_scheduled_task`, `apply_virtual_card` AND the investment
 tools (`subscribe_investment`/`redeem_investment`; `agent/tools/investment.ts` accepts `opts?: ToolRunOptions`
 and forwards `idempotencyKey`) all thread the key into their banking-sdk call; `transfer_money` derives the
 created ledger row id from the key via `idempotentTransferTxId(userId, key)` (the DB PK dedups the write,
