@@ -106,7 +106,7 @@ A separate acceptance layer ABOVE the HTTP specs: `tests/e2e/acceptance.e2e.ts` 
 npx tsx tests/e2e/acceptance.e2e.ts
 ```
 
-Prerequisites (once, in a fresh worktree): `npm install` → `npx prisma generate`. It uses an ISOLATED E2E DB
+Prerequisites (once, in a fresh worktree): `npm install` only — the harness generates the Prisma Client itself if missing (no manual `prisma generate` needed). It uses an ISOLATED E2E DB
 (`prisma/e2e.db`, git-ignored, provisioned by the harness itself — no manual `db push`/`db:seed` needed), `.env` must set `LLM_MODE=mock`,
 and it needs a system Chrome. It prints one `PASS|FAIL|SKIP <journey> — <evidence>` line per journey
 and exits non-zero iff any journey FAILs (a SKIP does not fail the run).
