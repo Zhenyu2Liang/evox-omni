@@ -27,7 +27,10 @@
  * CONCURRENCY: every state-changing control path claims its transition with a single atomic
  * compare-and-set, and a RUNNING plan additionally holds a DB EXECUTION CLAIM
  * (`claimTaskExecution`: `AgentTask.executionToken` is claimed before `executor.runPlan` and released
- * in a `finally`), so two concurrent resumes/retries can never both RUN the same plan. A terminal
+ * in a `finally`), so two concurrent resumes/retries can never both RUN the same plan. Each claim is
+ * taken with a stale-claim takeover horizon (`EXECUTION_CLAIM_TTL_MS`), so a token left behind by an
+ * owner that CRASHED before its `finally` is reclaimable instead of wedging the plan forever, while a
+ * LIVE executor is never preempted. A terminal
  * status (`cancelled`/`success`) is never resurrected. `cancelTask` revokes EVERY action of the plan
  * in ONE atomic bulk update (`revokePendingActionsByTask`) as its PRIMARY guarantee, and after every
  * run the CANONICAL CANCEL SWEEP (`sweepCancelledPlan`) revokes any `PendingAction` that a node
@@ -79,6 +82,35 @@ import {
  * `gateway` namespace's sole runtime member is the exported `securityGateway` object.
  */
 const gateway = security.gateway.securityGateway;
+
+/**
+ * The staleness horizon for a plan/node EXECUTION CLAIM.
+ *
+ * `claimTaskExecution` / `claimNodeExecution` (`lib/db/repositories/task.ts`) stamp
+ * `executionClaimedAt` with the REAL wall clock (`new Date()`) and their owner releases the token in
+ * a `finally`. A process that CRASHES before that `finally` leaves the token set forever, so a claim
+ * that only ever matched `executionToken IS NULL` would wedge the plan permanently: every later
+ * resume loses the claim and returns the still-`'running'` persisted plan.
+ *
+ * Every claim taken from this module therefore ALSO offers a stale horizon: the atomic compare-and-set
+ * may additionally match a row whose `executionClaimedAt` is older than
+ * `Date.now() - EXECUTION_CLAIM_TTL_MS`, i.e. a claim whose owner has plausibly died. The TTL is
+ * deliberately generous (10 minutes) so a legitimately RUNNING executor is never preempted — its
+ * fresh `executionClaimedAt` is nowhere near the horizon — while a crashed owner's stale token
+ * becomes reclaimable. Two racing takeovers still produce exactly ONE winner: the winner re-stamps a
+ * fresh `executionClaimedAt`, so the loser's `updateMany` re-evaluates the predicate against the new
+ * timestamp and matches 0 rows.
+ *
+ * The horizon MUST be computed from the REAL clock (`Date.now()`), NEVER from the demo clock
+ * (`lib/clock.ts` `demoNow()`, pinned to 2026-09-25): `executionClaimedAt` uses the real clock, so a
+ * different time basis would misjudge liveness and could wrongly preempt a LIVE executor.
+ */
+const EXECUTION_CLAIM_TTL_MS = 600_000;
+
+/** The stale-claim takeover horizon: an `executionClaimedAt` older than this is reclaimable. */
+function staleExecutionClaimBefore(): Date {
+  return new Date(Date.now() - EXECUTION_CLAIM_TTL_MS);
+}
 
 /**
  * The plan statuses `pauseTask` may act on: every NON-TERMINAL status. `success`/`failed`/`cancelled`
@@ -343,7 +375,11 @@ function buildPlanDeps(
     // Per-node DB claim: the planner executor claims each node BEFORE running it and releases it in a
     // `finally` (even for a parked node), so a node's side effect can never run twice across two
     // overlapping executor passes of the same plan. `'running'` node status is never used as a lock.
-    claimNode: (taskId, nodeId, token) => claimNodeExecution(taskId, nodeId, token),
+    // The stale horizon (`staleExecutionClaimBefore`, see `EXECUTION_CLAIM_TTL_MS`) additionally lets
+    // this claim RECLAIM a node token a CRASHED owner left behind, while a LIVE node claim (a fresh
+    // `executionClaimedAt`) is never stolen.
+    claimNode: (taskId, nodeId, token) =>
+      claimNodeExecution(taskId, nodeId, token, { staleBefore: staleExecutionClaimBefore() }),
     releaseNode: (taskId, nodeId, token) => releaseNodeExecution(taskId, nodeId, token),
     // Durable steering: a pause/cancel persisted by a control request stops THIS run at its next
     // checkpoint (see `defaultPollControls`).
@@ -449,7 +485,10 @@ export async function pauseTask(
  * ATOMIC: that same compare-and-set from a RESUMABLE status to `'running'` gates the run, and the
  * PLAN-level DB execution claim (`claimTaskExecution`) is the EXACTLY-ONCE guarantee: the run only
  * starts when this caller wins the token, and a losing concurrent resume returns the persisted plan
- * WITHOUT a second executor. `'running'` is deliberately KEPT in the status from-set (unlike
+ * WITHOUT a second executor. The claim carries a stale horizon (see `EXECUTION_CLAIM_TTL_MS`), so a
+ * token the owner left behind by CRASHING is reclaimed through the same atomic CAS (exactly one
+ * takeover winner) instead of making the plan permanently unresumable; a LIVE claim is never matched.
+ * `'running'` is deliberately KEPT in the status from-set (unlike
  * `retryTask`'s, which EXCLUDES it). A `cancelled` plan is never resurrected (its status is absent
  * from the from-set). `runPlan` skips every terminal node (idempotency) and each node additionally
  * claims its own DB slot (`claimNode`), so an already-`success` node is NEVER re-executed and a
@@ -473,8 +512,14 @@ export async function resumeTask(
   // PLAN-level DB claim: the ONE executor slot for this plan. A concurrent resume that loses this
   // atomic claim does NOT start a second executor — it returns the persisted plan. The claim is
   // released in the `finally`, so the next legitimate resume can take it.
+  // The `staleBefore` horizon additionally RECLAIMS a token whose owner CRASHED before its `finally`
+  // ran (see `EXECUTION_CLAIM_TTL_MS`), so such a plan does not stay `'running'`/unresumable forever:
+  // a LIVE claim (a fresh `executionClaimedAt`) is never matched, and two racing takeovers still
+  // produce exactly ONE winner (the loser's CAS re-evaluates against the winner's fresh timestamp).
   const token = newId('taskclaim');
-  if (!(await claimTaskExecution(taskId, token))) return reloadPlan(sessionId, taskId);
+  if (!(await claimTaskExecution(taskId, token, { staleBefore: staleExecutionClaimBefore() }))) {
+    return reloadPlan(sessionId, taskId);
+  }
 
   try {
     const result = await executor.runPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), {
@@ -681,7 +726,9 @@ export async function cancelTask(
  * from-set EXCLUDES `'running'` (see `RETRYABLE_PLAN_STATUSES`) — the deliberate ASYMMETRY with
  * `resumeTask`, whose from-set KEEPS it: two concurrent retries must execute each reset node exactly
  * once (the loser returns the persisted plan WITHOUT running). The PLAN-level DB execution claim
- * (`claimTaskExecution`) additionally fences a concurrent resume/confirm-continuation. A `cancelled`
+ * (`claimTaskExecution`) additionally fences a concurrent resume/confirm-continuation, and carries the
+ * same stale horizon as `resumeTask` (see `EXECUTION_CLAIM_TTL_MS`), so a token a CRASHED owner left
+ * behind is reclaimable while a LIVE executor is never preempted. A `cancelled`
  * plan is NEVER retried (excluded from the from-set). After the run the CANONICAL CANCEL SWEEP
  * revokes any action left parked by a concurrent cancellation.
  */
@@ -698,9 +745,13 @@ export async function retryTask(
 
   // PLAN-level DB claim: the ONE executor slot. A concurrent retry that loses the status CAS above
   // already returns early; this token additionally fences a resume/confirm-continuation that is still
-  // holding the slot. The claim is released in the `finally`.
+  // holding the slot. The claim is released in the `finally`. As in `resumeTask`, the `staleBefore`
+  // horizon (see `EXECUTION_CLAIM_TTL_MS`) reclaims a token a CRASHED owner left behind while never
+  // preempting a LIVE executor.
   const token = newId('taskclaim');
-  if (!(await claimTaskExecution(taskId, token))) return reloadPlan(sessionId, taskId);
+  if (!(await claimTaskExecution(taskId, token, { staleBefore: staleExecutionClaimBefore() }))) {
+    return reloadPlan(sessionId, taskId);
+  }
 
   try {
     const result = await lifecycle.retryPlan(toTaskPlan(row), buildPlanDeps(taskId, deps), {
