@@ -228,7 +228,7 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
 - **RESUME**：先把状态翻回 `running` 再重跑计划，**跳过**所有既有结果为终态
   （`success | failed | skipped | cancelled`）的节点——已成功节点**绝不重跑**；仍停放的被门控节点继续停放。
 - **CANCEL**：终态。`agent/task-control.ts#cancelTask` 的**原子结算**把「撤销」与「置状态」放进**同一个**
-  `prisma.$transaction`：事务内先重跑撤销该计划停放的 `PendingAction`——`revokePendingActionsByTask(taskId,
+  `prisma.$transaction`：事务内**先撤销**该计划停放的 `PendingAction`——`revokePendingActionsByTask(taskId,
   ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`，**单条 `updateMany`** 一次性取消该计划的
   **每一个**动作），再写入 `AgentTask.status='cancelled'`——两者之间**没有窗口**，撤销与取消**不可能被分别观测到**。
   节点输出扫描（`revokeParkedActions`，读 `node.output.pendingActionId`）与每次运行后的 `sweepCancelledPlan` 只是
