@@ -28,7 +28,9 @@ Harness helpers (`helpers.ts`):
   `bootDevServer` (project-local Next CLI, readiness gated on `/api/health` + `/agent`, one retry on
   a fresh port), `killProcessTree` (whole-tree teardown).
 - **Isolated DB**: `E2E_DB_URL` (absolute `file:` URL to `prisma/e2e.db`), `useIsolatedDatabase()`
-  (sets `process.env.DATABASE_URL`), `resetDemoDatabase()` (see "Isolated E2E database").
+  (sets `process.env.DATABASE_URL`), `resetDemoDatabase()` (generate-or-heal the Client → delete →
+  `db push --skip-generate` → seed, with a delete + `--force-reset` fallback; FULL un-truncated CLI
+  diagnostics on failure). See "Isolated E2E database".
 - Browser: `resolveBrowserExecutable`/`launchBrowser`, `withPage` (fresh isolated context + failure
   screenshot + `pageerror` capture), `setActiveBrowser`/`runJourney`, `createReporter`.
 - Hydration gate + navigation: `waitForComposerHydration`, `gotoAgent`, `readSsrPageError`.
