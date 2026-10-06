@@ -158,29 +158,6 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   as HTTP 200); the SSE `error`-then-`done` path is only exercised by `unit/agent/run-turn-failure.test.ts`.
   See `app/CONTEXT.md`.
 
-- **`review-recovery-probes.test.ts` has 2 RED tests that are NOT test bugs — they demand unwired
-  SOURCE capabilities.** A verbatim port of `.codex-review` reference probes (`a10cd48`, no source
-  change), asserting recovery behaviour that does not exist yet. Do NOT weaken/relax them; the fix
-  lands OUTSIDE `./tests`:
-  - Test 1 "resume recovers an already-executed gated node after its plan callback fails" → expected
-    `'success'`/1 budget, observed `'waiting_confirmation'`/0. Root cause: the confirm path records the
-    action `executed` (`confirmation.ts#executeAuthorizedAction` → `recordActionResult`) BEFORE
-    `resumeOwningPlan` persists the node result; when that persistence fails (a crash/failure between
-    effect and write) the node row keeps `status:'waiting_confirmation'` + `output.pendingActionId`, and
-    a later resume re-parks the node instead of reconciling it — `executeGatedToolOnce` →
-    `findInFlightPlanActionId` treats `'executed'` as in-flight (`IN_FLIGHT_PLAN_ACTION_STATUSES` in
-    `agent/confirmation.ts`), so the node never advances and downstream nodes never run (**permanent livelock**).
-    Missing behaviour: reconcile a node whose linked `PendingAction` is already terminal `executed` by
-    recording its real outcome and continuing the DAG (in `agent/confirmation.ts`/`agent/task-control.ts`).
-  - Test 2 "resume can recover a persisted executor claim whose owner died long ago" → expected
-    `'success'`/1 budget, observed `'running'`/0. Root cause: `agent/task-control.ts#resumeTask` calls
-    `claimTaskExecution(taskId, token)` with NO `{ staleBefore }` (L477), so a dead owner's token
-    (`executionToken:'dead-process-claim'`) blocks the claim → early `return reloadPlan(...)`, leaving the
-    plan persisted `'running'` with no executor. Missing behaviour: **stale-claim takeover** — pass
-    `{ staleBefore: <now − STALE_CLAIM_MS> }` (and similarly in `retryTask`). The primitive already exists
-    and is unused: `lib/db/repositories/task.ts#claimTaskExecution`/`claimNodeExecution` accept
-    `opts?:{staleBefore?:Date}` (added by `06d7e3d`) with **no production caller anywhere**.
-
 ## Routing Table
 
 - `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + hash-aware schema provisioning (re-pushes when the sha1 of `prisma/schema.prisma` changes; removes the WAL-mode `test.db` first)
@@ -193,7 +170,7 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - `./review-concurrency.test.ts` → `[integration]` reviewer concurrency-bug regressions (the 5 cases from the `.codex-review` reference port): staggered resume / gated double-resume / orphan-after-cancel / independent plans / unlinked-cancel each assert EXACTLY-ONCE side effects and full revoke-on-cancel (assertions ported unrelaxed)
 - `./review-new-boundaries.test.ts` → `[integration]` cross-cutting exactness regressions over the REAL route handlers + security gateway, using controllable barriers (`deferred()`/`bounded()`): a plan transfer already on the ledger but not yet terminal is counted EXACTLY ONCE in the cumulative daily/amount risk rules (a later ¥100 stays YELLOW; ¥1000 YELLOW, ¥1000.01 RED) while genuinely un-posted actions still count; resuming an investment node in the "effect posted, result not yet persisted" window cannot debit twice (balance ¥23,580 → ¥22,580, exactly one ¥1000 holding); a plan cancellation completed before the authorization compare-and-set prevents the debit (cumulative total ¥0, action `cancelled`, HTTP 200 `{ok:false,status:'cancelled'}`)
 - `./review-followup-probes.test.ts` → `[integration]` reviewer reference-probe ports over the REAL route handlers + gateway (`.codex-review`), using controllable barriers (`deferred()`/`bounded()`): cancel preserves an already-ledgered/executed transfer while result persistence is in flight.
-- `./review-recovery-probes.test.ts` → `[integration]` reviewer reference-probe ports for crash/resume recovery (`.codex-review`, `a10cd48`). **2 of 3 tests are RED** (see Known Issues — demand source capabilities outside `./tests`, not relaxable); the 3rd (same-key redemption replay) is green.
+- `./review-recovery-probes.test.ts` → `[integration]` recovery reference-probe ports (`.codex-review`, `a10cd48`) over the REAL route handlers + DB with controllable fault injection (a spied failing node-result persistence; a seeded dead-owner execution claim). **All 3 green**: an already-executed gated node is reconciled from its persisted result and the DAG continues — no duplicate side effect, idempotent on repeat resume; a stale dead-owner claim is taken over and finishes the remaining work; same-key redemption replays the exact result while a distinct key is refused. The capability lives in `./agent` (executed-node reconciliation in `confirmation.ts`; stale-claim takeover via `{ staleBefore }` in `task-control.ts` resume/retry).
 - `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)
