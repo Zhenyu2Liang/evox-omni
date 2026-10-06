@@ -117,7 +117,7 @@ function providerId(cfg?: AppConfig): string;
 
 // --- agent/tools/index.ts (see ./tools/CONTEXT.md) --------------------------
 interface ToolExecutionResult { ok: boolean; data?: unknown; summary?: string; error?: string; tier?: RiskLevel }
-interface ToolRunOptions { idempotencyKey?: string }   // ADDITIVE optional; threaded to the SDK by executeDirect
+interface ToolRunOptions { idempotencyKey?: string }   // ADDITIVE optional; threaded to the SDK by executeDirect (consumed by transfer_money, apply_virtual_card, reserve_budget, create_scheduled_task, investment tools)
 interface ToolRegistry {
   tools: Record<ToolName, AgentTool<any>>;
   list(): AgentTool<any>[];
