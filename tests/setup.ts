@@ -8,12 +8,14 @@
  *      (`lib/db/client.ts` → `resolveDatabaseUrl()`) resolve the SAME file.
  *   2. Forcing `LLM_MODE=mock` (the faux provider) so no suite ever touches the network.
  *   3. Guaranteeing a **generated, usable Prisma Client** on a clean checkout, then provisioning
- *      the schema (`prisma db push --force-reset`) whenever the provisioned schema version changes.
- *      The guard marker stores the **sha1 of `prisma/schema.prisma`** so parallel workers do not
- *      race AND a stale `test.db` (provisioned before a schema change) is automatically re-pushed
- *      instead of silently reused. Because the fast-path keeps `test.db` in WAL mode (which
- *      `--force-reset` cannot re-reset), the stale DB files are removed first so the push always
- *      starts from a clean slate.
+ *      the schema through an ORDERED LADDER of `prisma db push` shapes — the historical PRIMARY
+ *      `db push --force-reset --skip-generate` first (byte-for-byte unchanged), then ADDITIVE,
+ *      progressively simpler fallbacks that run only after a failure (clean-checkout hardening for
+ *      the opaque `Error: Schema engine error:`). The guard marker stores the **sha1 of
+ *      `prisma/schema.prisma`** so parallel workers do not race AND a stale `test.db` (provisioned
+ *      before a schema change) is automatically re-pushed instead of silently reused. Because the
+ *      fast-path keeps `test.db` in WAL mode (which `--force-reset` cannot re-reset), the stale DB
+ *      files are removed before EVERY push rung so it always starts from a clean slate.
  *
  * Fixture SEEDING is intentionally NOT done here — a single global seed would be wiped by the
  * per-suite resets that tests need for isolation. Each suite seeds through
@@ -45,13 +47,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import {
-  cliCommand,
-  ensurePrismaClientGenerated,
-  removeSqliteFiles,
-  resolvePrismaBin,
-  runCliStep,
-} from './helpers/prisma-cli';
+import { ensurePrismaClientGenerated, provisionSchemaLadder } from './helpers/prisma-cli';
 
 const repoRoot = process.cwd();
 const prismaDir = path.join(repoRoot, 'prisma');
@@ -114,22 +110,32 @@ function provisionTestDatabase(): void {
   if (isProvisioned()) return; // schema unchanged & DB present — another worker already provisioned
 
   mkdirSync(prismaDir, { recursive: true });
-  // (b) Start from a CLEAN SLATE. `--force-reset` cannot reliably re-reset an existing WAL-mode
-  //     SQLite file (Prisma's reset step fails with "Error code 11: The database disk image is
-  //     malformed"), and the fast-path pragmas in `tests/helpers/db.ts` keep `test.db` permanently
-  //     in WAL mode. Removing the DB file and its -wal/-shm/-journal sidecars guarantees the push
-  //     below recreates the schema from scratch.
-  removeSqliteFiles(prismaDir, ['test.db', 'test.db-wal', 'test.db-shm', 'test.db-journal']);
-  // `--force-reset` drops any stale data; `--skip-generate` keeps this a pure schema push (the client
-  // was already generated above). A failure THROWS with the FULL captured CLI output — never a warn.
-  const push = cliCommand(resolvePrismaBin(repoRoot), [
-    'prisma',
-    'db',
-    'push',
-    '--force-reset',
-    '--skip-generate',
-  ]);
-  runCliStep(push.command, push.args, { cwd: repoRoot, env: process.env });
+  // (b) Start from a CLEAN SLATE and provision through the shared ORDERED LADDER
+  //     (`prisma-cli.ts#provisionSchemaLadder`). `--force-reset` cannot reliably re-reset an existing
+  //     WAL-mode SQLite file (Prisma's reset step fails with "Error code 11: The database disk image
+  //     is malformed"), and the fast-path pragmas in `tests/helpers/db.ts` keep `test.db` permanently
+  //     in WAL mode — so the ladder deletes `test.db` + its -wal/-shm/-journal sidecars BEFORE EVERY
+  //     rung, guaranteeing each push recreates the schema from scratch.
+  //       · Rung 1 (PRIMARY, byte-for-byte unchanged): `db push --force-reset --skip-generate`
+  //       · Rung 2: `db push --skip-generate` (no --force-reset — the file was just deleted)
+  //       · Rung 3: `db push` (NO flags — the shape that succeeds where the flagged shapes die with an
+  //         opaque `Error: Schema engine error:`)
+  //     Each rung runs ONLY after the previous one FAILED. If EVERY rung fails the ladder THROWS a
+  //     single error with the FULL captured output of each rung + environment diagnostics — never a warn.
+  provisionSchemaLadder({
+    repoRoot,
+    dbDir: prismaDir,
+    dbFiles: ['test.db', 'test.db-wal', 'test.db-shm', 'test.db-journal'],
+    env: process.env,
+    rungs: [
+      {
+        label: 'db push --force-reset --skip-generate',
+        args: ['prisma', 'db', 'push', '--force-reset', '--skip-generate'],
+      },
+      { label: 'db push --skip-generate', args: ['prisma', 'db', 'push', '--skip-generate'] },
+      { label: 'db push', args: ['prisma', 'db', 'push'] },
+    ],
+  });
   markProvisioned();
 }
 
