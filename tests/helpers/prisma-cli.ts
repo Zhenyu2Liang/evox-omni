@@ -34,57 +34,30 @@
 import { existsSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import {
+  cliCommand,
+  pinSchemaEngineLogging,
+  prismaCliEnv,
+  resolvePrismaBin,
+  resolveRepoRoot,
+  resolveTsxBin,
+  SCHEMA_ENGINE_RUST_LOG,
+  type CliInvocation,
+} from '../../lib/prisma-cli-env';
 
-/** A directly-launchable CLI invocation (`command` + `args`). */
-export interface CliInvocation {
-  command: string;
-  args: string[];
-}
-
-/**
- * Project root containing `package.json` + `next.config.mjs`, found by walking up from `startDir`.
- * Falls back to `startDir` when no match is found.
- */
-export function resolveRepoRoot(startDir: string = process.cwd()): string {
-  let dir = startDir;
-  for (let i = 0; i < 8; i += 1) {
-    if (existsSync(path.join(dir, 'package.json')) && existsSync(path.join(dir, 'next.config.mjs'))) {
-      return dir;
-    }
-    const parent = path.dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-  return startDir;
-}
-
-/** Project-local Prisma CLI entry (`node_modules/prisma/build/index.js`), or `undefined` if absent. */
-export function resolvePrismaBin(repoRoot: string): string | undefined {
-  const bin = path.join(repoRoot, 'node_modules', 'prisma', 'build', 'index.js');
-  return existsSync(bin) ? bin : undefined;
-}
-
-/** Project-local tsx CLI entry (`node_modules/tsx/dist/cli.mjs`), or `undefined` if absent. */
-export function resolveTsxBin(repoRoot: string): string | undefined {
-  const bin = path.join(repoRoot, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-  return existsSync(bin) ? bin : undefined;
-}
-
-/**
- * Build a directly-launchable CLI invocation for `npxArgs` (e.g. `['prisma','db','push']`).
- *
- * PREFERRED — the project-local binary launched with the SAME Node that runs the harness
- * (`<process.execPath> node_modules/…`): no `npx`/`.cmd` shim resolution. FALLBACK (only when the
- * local binary is missing, e.g. a hoisted `node_modules`) — `cmd.exe /d /s /c "npx …"` on Windows
- * (there is no `npx` binary, only `npx.cmd`) / the plain command on POSIX.
- */
-export function cliCommand(localBin: string | undefined, npxArgs: readonly string[]): CliInvocation {
-  if (localBin !== undefined) return { command: process.execPath, args: [localBin, ...npxArgs.slice(1)] };
-  if (process.platform === 'win32') {
-    return { command: 'cmd.exe', args: ['/d', '/s', '/c', `npx ${npxArgs.join(' ')}`] };
-  }
-  return { command: npxArgs[0]!, args: [...npxArgs.slice(1)] };
-}
+// The schema-engine log-level policy, the repo/binary resolution and `cliCommand` now live in the
+// shared, NON-TEST module `lib/prisma-cli-env.ts` (the deployment entrypoint `scripts/db-push.ts`
+// needs them too). They are RE-EXPORTED here so every existing importer of THIS module
+// (`tests/setup.ts`, `tests/e2e/helpers.ts`) keeps working with ZERO import changes.
+export {
+  cliCommand,
+  pinSchemaEngineLogging,
+  resolvePrismaBin,
+  resolveRepoRoot,
+  resolveTsxBin,
+  SCHEMA_ENGINE_RUST_LOG,
+};
+export type { CliInvocation };
 
 /** Delete SQLite files (a missing file is not an error) — `names` are relative to `dir`. */
 export function removeSqliteFiles(dir: string, names: readonly string[]): void {
@@ -136,53 +109,6 @@ export function diagnosticCliOutput(stdout: string | null, stderr: string | null
   const head = combined.slice(0, half);
   const tail = combined.slice(combined.length - half);
   return `${head}\n…[中间省略 ${combined.length - 2 * half} 字符]…\n${tail}`;
-}
-
-// ---------------------------------------------------------------------------
-// Schema-engine LOG LEVEL pinning — the ROOT-CAUSE fix for the opaque
-// `Error: Schema engine error:` on a cold checkout.
-// ---------------------------------------------------------------------------
-
-/**
- * The ONLY schema-engine log level that keeps Prisma's error reporting intact: `info`.
- *
- * WHY THIS MATTERS (this is the root cause of the empty `Error: Schema engine error:`):
- * the Prisma schema engine is a Rust binary that writes a JSON-lines log to stderr whose FIRST line
- * is an INFO banner (`{"level":"INFO",…,"target":"schema_engine"}`) followed by any diagnostic lines
- * (`{"level":"ERROR",…,"error_code":"P1003",…,"target":"schema_engine::logger"}`). Prisma's CLI
- * error mapper (`ape(e)` in `prisma/build/index.js`) parses that stream as
- * `e.split(/\r?\n/).slice(1)` — it DROPS line 0 because it expects the banner there. But the CLI's
- * engine spawn builds the child env as `{ RUST_LOG:"info", RUST_BACKTRACE:"1", ...process.env }`, so
- * an ambient `RUST_LOG` at/above `warn` OVERRIDES the intended `info` default, the engine suppresses
- * its INFO banner, and the ERROR line lands at index 0 — where `slice(1)` throws it away. The parsed
- * message is then empty and the CLI reports a bare `Error: Schema engine error:` with no reason,
- * while the *legitimate* `P1003 Database … does not exist` probe (which `db push` RELIES on before
- * creating a fresh SQLite file) is destroyed — so a cold-checkout push FAILS instead of provisioning.
- *
- * Pinning `RUST_LOG=info` restores the banner, so the ERROR line survives parsing and Prisma behaves
- * exactly as on a clean environment.
- */
-export const SCHEMA_ENGINE_RUST_LOG = 'info';
-
-/**
- * Pin {@link SCHEMA_ENGINE_RUST_LOG} (plus a sane `RUST_BACKTRACE`) on `env` — defaulting to
- * `process.env` — MUTATING and returning it.
- *
- * Called once at module load by both test entry points (`tests/setup.ts`, `tests/e2e/helpers.ts`) so
- * this process AND every child it spawns (the Prisma CLI, the engine it starts, the Next dev server)
- * inherit the pinned level. `runCliStepCaptured` additionally re-pins it per spawn, so a caller that
- * passes an explicit env object cannot re-introduce the suppression.
- */
-export function pinSchemaEngineLogging(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  env.RUST_LOG = SCHEMA_ENGINE_RUST_LOG;
-  if (env.RUST_BACKTRACE === undefined) env.RUST_BACKTRACE = '1';
-  return env;
-}
-
-/** The env for ONE spawned Prisma CLI step: ambient env with the schema-engine log level pinned. */
-function prismaCliEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
-  const base = env ?? process.env;
-  return { ...base, RUST_LOG: SCHEMA_ENGINE_RUST_LOG, RUST_BACKTRACE: base.RUST_BACKTRACE ?? '1' };
 }
 
 export interface RunCliStepOptions {
