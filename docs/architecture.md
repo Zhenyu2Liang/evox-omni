@@ -227,12 +227,17 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   （控制是 DB 驱动：执行器在每个检查点重读持久化行，而非内存标志）。
 - **RESUME**：先把状态翻回 `running` 再重跑计划，**跳过**所有既有结果为终态
   （`success | failed | skipped | cancelled`）的节点——已成功节点**绝不重跑**；仍停放的被门控节点继续停放。
-- **CANCEL**：终态，且**先撤销**该计划停放的 `PendingAction`。**主要保证**是
-  `agent/task-control.ts#cancelTask` 调用的 `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])`
-  （`lib/db/repositories/pendingAction.ts`）——**单条原子 `updateMany`** 一次性取消该计划的**每一个**动作。
-  节点输出扫描（`revokeParkedActions`，读 `node.output.pendingActionId`）与运行后的 `sweepCancelledPlan` 只是
-  **兜底 / 补充**，用于捕获「运行期间新铸、与并发取消擦肩而过」的动作——因此之后对它的确认以 `CONFLICT` 失败
-  （**资金无法从已取消的计划中流出**）。已完成的动作被如实保留——**不做虚假回滚**；只有剩余的非终态节点变为 `cancelled`。
+- **CANCEL**：终态。`agent/task-control.ts#cancelTask` 的**原子结算**把「撤销」与「置状态」放进**同一个**
+  `prisma.$transaction`：事务内先重跑撤销该计划停放的 `PendingAction`——`revokePendingActionsByTask(taskId,
+  ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`，**单条 `updateMany`** 一次性取消该计划的
+  **每一个**动作），再写入 `AgentTask.status='cancelled'`——两者之间**没有窗口**，撤销与取消**不可能被分别观测到**。
+  节点输出扫描（`revokeParkedActions`，读 `node.output.pendingActionId`）与每次运行后的 `sweepCancelledPlan` 只是
+  **兜底 / 补充**，用于捕获「运行期间新铸、与并发取消擦肩而过」的动作。
+  **授权侧**同样在 `security/security-gateway.ts` 的**比较并写入（compare-and-set）`$transaction` 内部**按
+  `PendingAction.taskId` 重读所属计划状态：计划已 `cancelled` ⇒ 事务内**回滚主张**（`status='cancelled'`）并返回
+  `{ kind: 'plan_cancelled' }`（HTTP **200** `{ ok:false, status:'cancelled', code:'SECURITY_DENIED' }`，是**返回**而非抛出）；
+  `gatewayCreatePendingAction` 亦**拒绝**在已取消的计划下新建动作——因此**资金无法从已取消的计划中流出**。
+  已完成的动作被如实保留——**不做虚假回滚**；只有剩余的非终态节点变为 `cancelled`。
 - **RETRY**：只重跑失败节点；`success` 节点永不重置。
 - **恰好一次（DB 级执行主张，不是进程内状态）**：跨请求的重复执行由**数据库主张**挡住。
   `lib/db/repositories/task.ts#claimTaskExecution` 在 `executor.runPlan` **之前**用**单条原子 `updateMany`**
@@ -242,8 +247,12 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   （`agent/task-control.ts#buildPlanDeps`）。因此并发的 resume / retry / 确认续跑中**只有一个**能真正启动执行器，
   其余立即返回已持久化的计划。跨「副作用已发生、结果尚未落库」窗口的幂等由
   **`nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`**（`lib/ledger.ts`）保证：它作为 SDK 的
-  `idempotencyKey` 传入，同一 `(task, node)` 的重跑重放原始副作用而不会二次施加；`transfer_money` 另外用
-  `idempotentTransferTxId` 推导其账本行 id。
+  `idempotencyKey` 传入，同一 `(task, node)` 的重跑重放原始副作用（如投资 `subscribe_investment` /
+  `redeem_investment` 即按此键去重）而不会二次施加。账本行的定位在 `lib/ledger.ts` **统一**：
+  `ledgerKeyForAction({ id, taskId, nodeId })` 在 `taskId` 与 `nodeId` **同时存在**时返回
+  `nodeExecutionKey(taskId, nodeId)`，否则返回动作自身的 `id`；`ledgerTxIdForAction(userId, action)` 由此派生
+  账本行 id——agent 的确认执行路径与 SDK 均据此推导转账流水 id。`agent/confirmation.ts#executeGatedToolOnce`
+  另以 `findInFlightPlanActionId(taskId, nodeId)` 预检，避免为同一节点重复铸造第二个 `PendingAction`。
 - **刷新 / 恢复**：`GET /api/tasks`（按 cookie 限定的列表）与 `GET /api/tasks/[id]`（单计划，其节点结果携带
   `pendingActionId`，UI 可在刷新后恢复确认/MFA 入口）；`GET /api/actions` 列出非终态待处理动作。
   对计划停放动作的成功确认/验证会追加一个 `{type:'plan_update', plan}` 事件。
@@ -289,9 +298,12 @@ sequenceDiagram
   当日转账累计并**重跑**风险评定（`security/security-gateway.ts` → `authorizeTransfer`）。再风控所用的累计值
   **包含在途**（已确认但尚未落账）的转账动作：`security/risk-engine.ts` 的
   `computeEffectiveTransferTotalWith` = 当日**已执行**转账合计 + `computeInFlightTransferTotal`（对状态
-  ∈ `['confirmed','executing']` 且**其账本行尚不存在**的停放 `transfer_money` 动作求和）。账本行由确定性幂等
-  id `idempotentTransferTxId(userId, action.id)`（`lib/ledger.ts`）标识，一笔**已落账但尚未终态**的转账恒被
-  计入**恰好一次**，绝不被「在途」半边重复计，从而封死「先停放多笔小额转账绕过限额」
+  ∈ `['confirmed','executing']` 且**其账本行尚不存在**的停放 `transfer_money` 动作求和）。账本行的定位在
+  `lib/ledger.ts` **统一**：`ledgerTxIdForAction(userId, action)`（基于 `ledgerKeyForAction({ id, taskId, nodeId })`
+  ——`taskId` 与 `nodeId` 同时存在时用 `nodeExecutionKey(taskId, nodeId)`，否则用动作 `id`）既标识动作产生的
+  账本行，也被 `computeInFlightTransferTotal` 用来**判断该账本行是否已存在**：一笔**已落账但仍为 `confirmed`**
+  的计划转账由此恒被计入**恰好一次**（经已执行半边），绝不被「在途」半边重复计——例如其后**再发起 ¥100 仍为 🟡、
+  ¥1000 仍为 🟡、¥1000.01 才为 🔴**（`evaluateTransferRisk` 用严格 `>`）。这封死了「先停放多笔小额转账绕过限额」
   的路径。若执行时再风控升级为 🔴 RED，事务内**回滚主张**并持久化 `riskLevel='RED'`、`requiresMfa=true`、
   `status='awaiting_mfa'`，随后下发 MFA（持久化审计用 `LIMIT_EXCEEDED`）。**诚实说明**：主张优先写依赖
   **SQLite 写锁串行化**（SQLite 专属；跨独立数据库引擎 / 多写入者未经验证——演示运行在本地 SQLite 上）。
@@ -335,21 +347,26 @@ sequenceDiagram
 - **能力面即安全边界**：工具注册表就是完整能力集；没有 shell/SQL/文件工具，注入攻击无工具可调。
 - **两阶段 + 人工决策**：资金移动永远由人工确认触发；网关授权、agent 执行，职责分离。
 - **原子主张 + 执行时再风控**：确认在一个 `prisma.$transaction` 内把主张（compare-and-set）与再风控一并完成，
-  再风控累计**包含在途转账**（`computeInFlightTransferTotal` 只计入**账本行尚不存在**的动作）；账本行由确定性
-  幂等 id `idempotentTransferTxId(userId, action.id)` 标识并去重，一笔**已落账但未终态**的转账恒被计**恰好一次**。
+  再风控累计**包含在途转账**（`computeInFlightTransferTotal` 只计入**账本行尚不存在**的动作）；账本行的定位统一在
+  `lib/ledger.ts`（`ledgerTxIdForAction` / `ledgerKeyForAction`），一笔**已落账但未终态**的转账恒被计**恰好一次**。
   升级则回滚主张并转 MFA。依赖 SQLite 写锁串行化（演示运行在本地 SQLite）。
 - **Cookie-only 身份与归属强制**：身份仅来自 HttpOnly `banking_session` cookie（查询参数被忽略，
   缺失 / 未知 → 403）；`POST /api/chat` 会话只取自 cookie，body `sessionId` 与 cookie 不一致（含无 cookie）
   → `409 CONFLICT` 且不签发 Set-Cookie；动作 / 任务归属强制（非本人 403 / 未知 404）；**没有 demo-user 回退**——
   仅有 actionId 不构成能力。
-- **取消与授权的竞态**：`cancelTask` 的**主要保证**是一次批量原子撤销——`revokePendingActionsByTask(taskId,
-  ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`）用**单条 `updateMany`** 取消计划内的**每一个**动作；
-  节点输出扫描与每次运行后的 `sweepCancelledPlan` 只是**兜底**，用于捕获运行期间新铸的动作。取消与确认的竞态由共享的
-  `PendingAction` 状态 CAS 保证**至多一次**（取消后的确认不再执行）；
-  已完成转账原样保留——**无虚假回滚**。
+- **取消与授权的竞态**：`cancelTask` 的**原子结算**把「批量撤销」`revokePendingActionsByTask(taskId,
+  ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`，**单条 `updateMany`** 取消计划内的**每一个**动作）
+  与 `status='cancelled'` 的写入放进**同一个** `prisma.$transaction`——撤销与取消之间**没有窗口**；节点输出扫描与
+  每次运行后的 `sweepCancelledPlan` 只是**兜底**。授权侧的 CAS `$transaction` 内还会按 `PendingAction.taskId` 重读计划
+  状态：已 `cancelled` ⇒ 回滚主张并返回 `{ kind: 'plan_cancelled' }`（HTTP 200 `{ ok:false, code:'SECURITY_DENIED' }`），
+  `gatewayCreatePendingAction` 亦拒绝在已取消计划下新建动作。取消与确认的竞态由共享的 `PendingAction` 状态 CAS 保证
+  **至多一次**（取消后的确认不再执行）；已完成转账原样保留——**无虚假回滚**。
 - **去重身份的作用域**：恰好一次的主保证是**DB 执行主张**（`claimTaskExecution` / `claimNodeExecution`，见 §8）。
-  `agent/confirmation.ts` 只对**自动执行的计划节点**调用按**稳定的节点身份** `nodeExecutionKey(taskId, nodeId)`
-  合并并发调用；**独立调用**（无计划节点）**没有**合并键——其恰好一次由 DB 的 `PendingAction` 状态 CAS 保证；
+  `nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`（`lib/ledger.ts`）是计划节点**副作用**的 SDK
+  `idempotencyKey`（如 `subscribe_investment` / `redeem_investment` 即按它去重）；`agent/confirmation.ts` 只对
+  **自动执行的计划节点**调用按**稳定的节点身份** `nodeExecutionKey(taskId, nodeId)` 合并并发调用，并以
+  `findInFlightPlanActionId(taskId, nodeId)` 预检、避免为同一节点重复铸造第二个 `PendingAction`；
+  **独立调用**（无计划节点）**没有**合并键——其恰好一次由 DB 的 `PendingAction` 状态 CAS 保证；
   **两个不同计划**即使调用同一工具、传同一参数也各自独立执行（按 `sessionId` + 工具 + args 合并会把一个计划的副作用
   错误地施加到另一个计划）。进程内 `inFlightExecutions` 只是**同进程补充**，且以**节点身份**为键。
 - **暂停保持（pause retention）**：在已暂停计划内确认一个停放节点只记录该节点结果，计划保持 `paused`，
