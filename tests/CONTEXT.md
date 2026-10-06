@@ -205,6 +205,11 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   `tests/setup.ts` self-bootstraps a usable client via `helpers/prisma-cli.ts#ensurePrismaClientGenerated`
   BEFORE the provision short-circuit (cheap no-op once generated); `e2e/helpers.ts` does the same.
   Without this, every DB-backed suite dies at IMPORT time with `@prisma/client did not initialize yet`.
+  The skip gate is the USABILITY probe (`prismaClientUsable`): it skips only when a real `PrismaClient`
+  actually CONSTRUCTS (the client `require`d after Node's upward `node_modules` walk), so a
+  hoisted/parent-resolved layout — where `prisma generate` writes to the PARENT path and the
+  worktree-local artifact path stays absent — is ACCEPTED, while a stub-only client (probe throws) still
+  triggers a generate.
 - **Provisioning FAILS LOUD.** `setup.ts` runs the push through `runCliStep`, which THROWS on a non-zero
   exit with the FULL captured stdout+stderr (never a `console.warn`-and-continue), so the real cause can
   never be masked by a later `The table main.X does not exist in the current database.` cascade.
