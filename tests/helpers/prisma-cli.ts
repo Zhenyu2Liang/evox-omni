@@ -23,6 +23,11 @@
  *       must NEVER silently warn-and-continue (a swallowed failure shows up later as the far more
  *       confusing `The table main.X does not exist in the current database.`).
  *
+ *   (c) sanitize the child-process environment so the schema engine's log banner is never suppressed —
+ *       an ambient `RUST_LOG≥warn` makes Prisma discard the engine's real error and report an EMPTY
+ *       `Error: Schema engine error:`, which used to break cold-start `db push` entirely. See
+ *       {@link SCHEMA_ENGINE_RUST_LOG} for the full mechanism.
+ *
  * Extracting it here keeps the two call sites from drifting apart. It uses Node built-ins ONLY (no
  * `vitest`, no `@/` alias) so both the Vitest setup file and the tsx-run E2E harness can import it.
  */
@@ -133,6 +138,53 @@ export function diagnosticCliOutput(stdout: string | null, stderr: string | null
   return `${head}\n…[中间省略 ${combined.length - 2 * half} 字符]…\n${tail}`;
 }
 
+// ---------------------------------------------------------------------------
+// Schema-engine LOG LEVEL pinning — the ROOT-CAUSE fix for the opaque
+// `Error: Schema engine error:` on a cold checkout.
+// ---------------------------------------------------------------------------
+
+/**
+ * The ONLY schema-engine log level that keeps Prisma's error reporting intact: `info`.
+ *
+ * WHY THIS MATTERS (this is the root cause of the empty `Error: Schema engine error:`):
+ * the Prisma schema engine is a Rust binary that writes a JSON-lines log to stderr whose FIRST line
+ * is an INFO banner (`{"level":"INFO",…,"target":"schema_engine"}`) followed by any diagnostic lines
+ * (`{"level":"ERROR",…,"error_code":"P1003",…,"target":"schema_engine::logger"}`). Prisma's CLI
+ * error mapper (`ape(e)` in `prisma/build/index.js`) parses that stream as
+ * `e.split(/\r?\n/).slice(1)` — it DROPS line 0 because it expects the banner there. But the CLI's
+ * engine spawn builds the child env as `{ RUST_LOG:"info", RUST_BACKTRACE:"1", ...process.env }`, so
+ * an ambient `RUST_LOG` at/above `warn` OVERRIDES the intended `info` default, the engine suppresses
+ * its INFO banner, and the ERROR line lands at index 0 — where `slice(1)` throws it away. The parsed
+ * message is then empty and the CLI reports a bare `Error: Schema engine error:` with no reason,
+ * while the *legitimate* `P1003 Database … does not exist` probe (which `db push` RELIES on before
+ * creating a fresh SQLite file) is destroyed — so a cold-checkout push FAILS instead of provisioning.
+ *
+ * Pinning `RUST_LOG=info` restores the banner, so the ERROR line survives parsing and Prisma behaves
+ * exactly as on a clean environment.
+ */
+export const SCHEMA_ENGINE_RUST_LOG = 'info';
+
+/**
+ * Pin {@link SCHEMA_ENGINE_RUST_LOG} (plus a sane `RUST_BACKTRACE`) on `env` — defaulting to
+ * `process.env` — MUTATING and returning it.
+ *
+ * Called once at module load by both test entry points (`tests/setup.ts`, `tests/e2e/helpers.ts`) so
+ * this process AND every child it spawns (the Prisma CLI, the engine it starts, the Next dev server)
+ * inherit the pinned level. `runCliStepCaptured` additionally re-pins it per spawn, so a caller that
+ * passes an explicit env object cannot re-introduce the suppression.
+ */
+export function pinSchemaEngineLogging(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  env.RUST_LOG = SCHEMA_ENGINE_RUST_LOG;
+  if (env.RUST_BACKTRACE === undefined) env.RUST_BACKTRACE = '1';
+  return env;
+}
+
+/** The env for ONE spawned Prisma CLI step: ambient env with the schema-engine log level pinned. */
+function prismaCliEnv(env: NodeJS.ProcessEnv | undefined): NodeJS.ProcessEnv {
+  const base = env ?? process.env;
+  return { ...base, RUST_LOG: SCHEMA_ENGINE_RUST_LOG, RUST_BACKTRACE: base.RUST_BACKTRACE ?? '1' };
+}
+
 export interface RunCliStepOptions {
   cwd: string;
   /** Environment for the child process (defaults to the current `process.env`). */
@@ -166,7 +218,10 @@ export function runCliStepCaptured(
     cwd: opts.cwd,
     windowsHide: true,
     encoding: 'utf8',
-    env: opts.env ?? process.env,
+    // EVERY spawned CLI (db push / generate / seed) inherits the pinned schema-engine log level, so
+    // an ambient `RUST_LOG≥warn` can never suppress the engine's INFO banner again (see the
+    // `SCHEMA_ENGINE_RUST_LOG` note above).
+    env: prismaCliEnv(opts.env),
   });
   return {
     ok: result.status === 0,
@@ -315,13 +370,16 @@ function errorText(e: unknown): string {
 /**
  * Provision a SQLite schema through an ORDERED LADDER of `prisma db push` invocation shapes.
  *
- * WHY A LADDER: on a clean checkout the AUTOMATIC push can die with an opaque
- * `Error: Schema engine error:` (empty detail) even though a MANUAL plain `prisma db push` (NO flags)
- * succeeds in the very same worktree — the one concrete, evidence-based differentiator is the
- * INVOCATION SHAPE (the automatic paths always pass `--skip-generate` and sometimes `--force-reset`).
- * Rather than guess, the ladder tries the historical PRIMARY shape first (byte-for-byte unchanged) and
- * then, ADDITIVELY and only AFTER a failure, falls back to progressively simpler shapes ending in the
- * flag-less `db push` that is known to succeed where the flagged shapes fail.
+ * ROOT CAUSE (fixed here): the opaque `Error: Schema engine error:` a clean checkout used to hit was
+ * NOT an invocation-shape problem — an ambient `RUST_LOG` at/above `warn` suppresses the schema
+ * engine's INFO banner, which makes Prisma's own error mapper discard the engine's ERROR line and
+ * report an EMPTY reason (full explanation on {@link SCHEMA_ENGINE_RUST_LOG}). Every spawned rung
+ * therefore runs with the log level pinned to `info`, so the banner is always present.
+ *
+ * WHY THE LADDER IS STILL HERE: the ORDERED fallback remains as clean-checkout hardening for GENUINE
+ * invocation-shape differences — the historical PRIMARY shape first (byte-for-byte unchanged) and
+ * then, ADDITIVELY and only AFTER a failure, progressively simpler shapes ending in the flag-less
+ * `db push`. Rungs are never skipped and no rung may be removed.
  *
  * Mechanics: each rung runs ONLY after the previous one FAILED, and `dbFiles` (+ sidecars) are deleted
  * with `removeSqliteFiles` BEFORE EVERY rung — so `--force-reset` is not required on later rungs (the
@@ -330,9 +388,11 @@ function errorText(e: unknown): string {
  *
  * FAIL-LOUD: if EVERY rung fails, a single error is thrown that embeds the FULL captured stdout+stderr
  * of EVERY rung (`diagnosticCliOutput`, tail preserved) PLUS enriched environment diagnostics (the
- * resolved `DATABASE_URL`, the cwd, the project-local Prisma CLI path and whether it exists, a
- * `prisma -v`-style version/engine summary, and the presence of the schema-engine artifacts) — so a
- * future `Schema engine error:` is never opaque again. It NEVER silently continues.
+ * resolved `DATABASE_URL`, the ambient vs pinned `RUST_LOG`, the cwd, the project-local Prisma CLI
+ * path and whether it exists, a `prisma -v`-style version/engine summary, and the presence of the
+ * schema-engine artifacts) — so a future `Schema engine error:` is never opaque again. A rung that
+ * failed with the MASKED-EMPTY engine error additionally gets an explicit explanation
+ * (`MASKED_ENGINE_ERROR_HINT`). It NEVER silently continues.
  */
 export function provisionSchemaLadder(opts: ProvisionSchemaOptions): void {
   if (opts.rungs.length === 0) throw new Error('provisionSchemaLadder：至少需要一个 rung');
@@ -368,11 +428,32 @@ export function provisionSchemaLadder(opts: ProvisionSchemaOptions): void {
       rung,
       output:
         `执行失败（退出码 ${result.status ?? 'null'}）${spawnErrorText(result.error)}：${push.command} ${push.args.join(' ')}\n` +
-        diagnosticCliOutput(result.stdout, result.stderr),
+        diagnosticCliOutput(result.stdout, result.stderr) +
+        (isMaskedSchemaEngineError(result.stdout, result.stderr) ? `\n${MASKED_ENGINE_ERROR_HINT}` : ''),
     });
   }
   throw new Error(buildProvisionFailure(opts, attempts));
 }
+
+/**
+ * Does the captured CLI output carry the MASKED-EMPTY schema-engine failure — `Schema engine error:`
+ * with NOTHING after the colon (no `error_code`, no message)?
+ *
+ * That empty shape is the signature of the RUST_LOG/banner interaction described on
+ * {@link SCHEMA_ENGINE_RUST_LOG}: the engine's real reason was thrown away by Prisma's own error
+ * mapper, so nothing downstream can recover it. `provisionSchemaLadder` forces `RUST_LOG=info`, so
+ * this should be unreachable — the detector exists purely so a future occurrence is EXPLAINED rather
+ * than left as a bare, reason-less `Schema engine error:`.
+ */
+export function isMaskedSchemaEngineError(stdout: string | null, stderr: string | null): boolean {
+  return /Schema engine error:[ \t]*(?:\r?\n|$)/.test(`${stdout ?? ''}\n${stderr ?? ''}`);
+}
+
+/** Added to a failing rung's diagnostics when {@link isMaskedSchemaEngineError} fires. */
+const MASKED_ENGINE_ERROR_HINT =
+  '（提示：Prisma 报出的 schema engine 错误信息为「空」。Prisma 解析引擎 stderr 时会丢弃第 0 行' +
+  '（期望它是 INFO 横幅）；当环境变量 `RUST_LOG` ≥ `warn` 时横幅被抑制、ERROR 行落到第 0 行并被丢弃，' +
+  '于是只剩空消息。本工具链已在每个 CLI 步骤强制 `RUST_LOG=info`——若此处仍为空，请检查外层进程是否注入了别的 `RUST_LOG`。）';
 
 /** Assemble the single fail-loud error: every rung's rendered output + the environment diagnostics. */
 function buildProvisionFailure(
@@ -400,6 +481,11 @@ function provisionDiagnostics(opts: ProvisionSchemaOptions): string {
   const lines: string[] = [];
   lines.push(`DATABASE_URL: ${env.DATABASE_URL ?? '(未设置)'}`);
   lines.push(`cwd (repoRoot): ${opts.repoRoot}`);
+  // The schema-engine log level is the one env knob whose value silently changes Prisma's error
+  // reporting, so surface BOTH the ambient value and the pinned value used for spawned CLIs.
+  lines.push(
+    `RUST_LOG: 环境=${env.RUST_LOG ?? '(未设置)'} → CLI 子进程=${SCHEMA_ENGINE_RUST_LOG}（强制，见 SCHEMA_ENGINE_RUST_LOG）`,
+  );
 
   const cliPath = resolvePrismaBin(opts.repoRoot);
   lines.push(
@@ -410,7 +496,7 @@ function provisionDiagnostics(opts: ProvisionSchemaOptions): string {
       cwd: opts.repoRoot,
       windowsHide: true,
       encoding: 'utf8',
-      env,
+      env: prismaCliEnv(env),
     });
     const rendered = diagnosticCliOutput(version.stdout, version.stderr);
     lines.push(

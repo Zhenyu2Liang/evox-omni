@@ -24,6 +24,7 @@ import {
   cliCommand,
   diagnosticCliOutput,
   ensurePrismaClientGenerated,
+  pinSchemaEngineLogging,
   provisionSchemaLadder,
   resolveRepoRoot,
   resolveTsxBin,
@@ -31,6 +32,13 @@ import {
   runCliStep as runCliStepShared,
   spawnErrorText,
 } from '../helpers/prisma-cli';
+
+// Pin the Prisma schema engine's log level to `info` BEFORE anything spawns a CLI (the provisioning
+// `db push`/seed AND the dev server): an ambient `RUST_LOG≥warn` suppresses the engine's INFO banner,
+// which makes Prisma DROP the engine's ERROR line and report an EMPTY `Error: Schema engine error:`,
+// so a cold-checkout E2E provision fails for no real reason. See
+// `../helpers/prisma-cli.ts#SCHEMA_ENGINE_RUST_LOG` for the full mechanism.
+pinSchemaEngineLogging();
 
 /** Generous default for DOM waits (Next dev client hydration can lag on a cold compile). */
 export const DEFAULT_TIMEOUT_MS = 45_000;

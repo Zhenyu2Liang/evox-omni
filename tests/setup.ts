@@ -7,15 +7,24 @@
  *      git-ignored) using an ABSOLUTE path, so the Prisma CLI and the runtime client
  *      (`lib/db/client.ts` → `resolveDatabaseUrl()`) resolve the SAME file.
  *   2. Forcing `LLM_MODE=mock` (the faux provider) so no suite ever touches the network.
- *   3. Guaranteeing a **generated, usable Prisma Client** on a clean checkout, then provisioning
- *      the schema through an ORDERED LADDER of `prisma db push` shapes — the historical PRIMARY
+ *   3. Guaranteeing a **generated, usable Prisma Client** on a clean checkout, pinning the
+ *      **schema-engine log level** (`RUST_LOG=info`, see below), then provisioning the schema
+ *      through an ORDERED LADDER of `prisma db push` shapes — the historical PRIMARY
  *      `db push --force-reset --skip-generate` first (byte-for-byte unchanged), then ADDITIVE,
- *      progressively simpler fallbacks that run only after a failure (clean-checkout hardening for
- *      the opaque `Error: Schema engine error:`). The guard marker stores the **sha1 of
- *      `prisma/schema.prisma`** so parallel workers do not race AND a stale `test.db` (provisioned
- *      before a schema change) is automatically re-pushed instead of silently reused. Because the
- *      fast-path keeps `test.db` in WAL mode (which `--force-reset` cannot re-reset), the stale DB
- *      files are removed before EVERY push rung so it always starts from a clean slate.
+ *      progressively simpler fallbacks that run only after a failure. The guard marker stores the
+ *      **sha1 of `prisma/schema.prisma`** so parallel workers do not race AND a stale `test.db`
+ *      (provisioned before a schema change) is automatically re-pushed instead of silently reused.
+ *      Because the fast-path keeps `test.db` in WAL mode (which `--force-reset` cannot re-reset), the
+ *      stale DB files are removed before EVERY push rung so it always starts from a clean slate.
+ *
+ * WHY `RUST_LOG` IS PINNED: Prisma parses the schema engine's stderr as
+ * `split(/\r?\n/).slice(1)` — it DROPS line 0, expecting the engine's INFO banner there. An ambient
+ * `RUST_LOG` at/above `warn` suppresses that banner, so the engine's ERROR line lands at index 0 and
+ * is dropped too: Prisma then reports an EMPTY `Error: Schema engine error:` (destroying even the
+ * legitimate `P1003 Database … does not exist` probe that `db push` needs before creating a fresh
+ * SQLite file) and a cold-checkout push fails for no real reason. Forcing `RUST_LOG=info` on this
+ * process and on every spawned CLI restores the banner. Mechanism:
+ * `helpers/prisma-cli.ts#SCHEMA_ENGINE_RUST_LOG`.
  *
  * Fixture SEEDING is intentionally NOT done here — a single global seed would be wiped by the
  * per-suite resets that tests need for isolation. Each suite seeds through
@@ -47,7 +56,17 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { ensurePrismaClientGenerated, provisionSchemaLadder } from './helpers/prisma-cli';
+import {
+  ensurePrismaClientGenerated,
+  pinSchemaEngineLogging,
+  provisionSchemaLadder,
+} from './helpers/prisma-cli';
+
+// Pin the Prisma schema engine's log level to `info` BEFORE anything spawns a CLI: an ambient
+// `RUST_LOG≥warn` suppresses the engine's INFO banner, which makes Prisma DROP the engine's ERROR
+// line and report an EMPTY `Error: Schema engine error:` — breaking cold-start provisioning outright.
+// See `prisma-cli.ts#SCHEMA_ENGINE_RUST_LOG` for the full mechanism.
+pinSchemaEngineLogging();
 
 const repoRoot = process.cwd();
 const prismaDir = path.join(repoRoot, 'prisma');
