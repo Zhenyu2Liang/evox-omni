@@ -276,7 +276,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   `alreadySettled` for an action that already executed/errored and never pretends to roll it back
   (executed work is irreversible; the planner performs NO automatic compensation). Anything that could
   not be settled — including the bulk-revoke count — is durably recorded via `recordRevokeFailure`.
-- **A resume never re-mints an action for an in-flight plan node.** Every `PendingAction` persists its
+- **A resume never re-mints an action for a still-gated plan node, and RECOVERS an already-executed one.** Every `PendingAction` persists its
   owning plan+node at creation (`PendingAction.taskId`/`nodeId`). Before
   `confirmation.ts#executeGatedToolOnce` mints a gated action for a plan node,
   `findInFlightPlanActionId(taskId, nodeId)` looks for an existing action on that `(taskId, nodeId)` in
