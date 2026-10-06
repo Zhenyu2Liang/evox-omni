@@ -1,9 +1,0 @@
-﻿cmd : FINDSTR: Cannot open AuthorizeOptions
-At line:1 char:63
-+ ... ing]::UTF8; cmd /c "findstr /n /i \"AuthorizeOptions confirmed author ...
-+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: (FINDSTR: Cannot open AuthorizeOptions:String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
- 
-FINDSTR: Cannot open confirmed
-FINDSTR: Cannot open authorizeAction\ security\security-gateway.ts
