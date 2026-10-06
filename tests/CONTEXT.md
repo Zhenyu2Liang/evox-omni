@@ -59,7 +59,11 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   (chat/SSE, action confirm|verify|cancel, task lifecycle, and `review-regressions-http.test.ts`
   reviewer regressions) plus the newer regression specs (`session-takeover-http`, `cancel-during-
   authorization-http`, `task-resume-retry-http`, `plan-pause-terminal-http`, `cumulative-risk-http`,
-  `ledger-consistency-http`, `mfa-escalation-upgrade-http`, and the round-5a linkage/concurrency specs `plan-linkage-http`, `cancel-safety-http`, `concurrent-execution-http`). See `app/CONTEXT.md`.
+  `ledger-consistency-http`, `mfa-escalation-upgrade-http`, the round-5a linkage/concurrency specs
+  `plan-linkage-http`, `cancel-safety-http`, `concurrent-execution-http`, and the confirm-continuation
+  fence-loss coverage `confirm-continuation-fencing` (LIVE plan-owner-token branch) +
+  `confirm-continuation-no-owner-fencing` (NO-OWNER branch-3 CAS, incl. a takeover-during-write skip)).
+  See `app/CONTEXT.md`.
 - `review-boundaries.test.ts`, `review-concurrency.test.ts` & `review-new-boundaries.test.ts` — root-level `[integration]` reviewer-reference ports (real route handlers + gateway/executor + controllable barriers): plan/node linkage, cancel safety, exactly-once concurrent execution, de-dup scope, ledgered-but-not-terminal cumulative-risk exactness, no double-debit across the effect/persist window, and revoke-on-cancel-before-CAS. See the Routing Table entries below.
 
 Run:
@@ -148,7 +152,7 @@ plan pause/resume + cancel, and refresh/action-entry recovery from persisted ser
 
 ## Fast test-DB path (why the suite is fast — do not remove)
 
-The full suite (538 tests / 70 files) runs in ~50s (a cold run that provisions the test DB adds ~10s).
+The full suite (559 tests / 77 files) runs in ~65s (a cold run that provisions the test DB adds ~10s).
 This depends on a deliberately fast SQLite configuration; if any piece is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
 
 - `helpers/db.ensureTestPragmas()` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`
@@ -197,7 +201,7 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - `./helpers` → shared test utilities (db reset/seed + fast pragmas, fixtures, faux agent, scenario harness)
 - `./unit` → pure/logic unit specs for security, planner, banking-sdk, agent, lib (incl. `unit/security/risk-engine-dedup.test.ts` → ledger dedup of the in-flight transfer total via `computeInFlightTransferTotal`)
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
-- `./app` → real app-entry (HTTP) specs driving the real Next.js route handlers (chat/SSE, action confirm|verify|cancel, task lifecycle, reviewer regressions); newer specs cover cookie-only session takeover, cancel-during-authorization, concurrent resume/retry exactly-once, plan pause/terminal-state, cumulative ¥1000/day risk, ledger consistency, YELLOW→RED MFA upgrade — every top-level describe is labeled `[integration]` (these are handler tests, NOT browser E2E)
+- `./app` → real app-entry (HTTP) specs driving the real Next.js route handlers (chat/SSE, action confirm|verify|cancel, task lifecycle, reviewer regressions); newer specs cover cookie-only session takeover, cancel-during-authorization, concurrent resume/retry exactly-once, plan pause/terminal-state, cumulative ¥1000/day risk, ledger consistency, YELLOW→RED MFA upgrade — every top-level describe is labeled `[integration]` (these are handler tests, NOT browser E2E). `confirm-continuation-no-owner-fencing.test.ts` drives `@/agent`'s `task-fencing.ts#recordDecidedNodeFenced` NO-OWNER (branch-3) CAS over a REAL test SQLite (`getTestPrisma()`), seeding via `runSubmitPlan` + `executeGatedTool` on a 2-node plan: with no owner the decided node is recorded and the plan is SETTLED to `success` (the parked `PendingAction` untouched), and a takeover that claims the plan INSIDE the write window makes the CAS match 0 rows — the recorder returns `false`, the node is not overwritten and nothing settles (the spy wraps the REAL `agentTaskNode.updateMany` and calls the bound original; the CAS result is never fabricated)
 - `./e2e` → real-browser acceptance harness: boots `next dev` + real headless Chrome and drives the `/agent` UI end-to-end, asserting on RENDERED DOM (the ONLY true browser E2E layer). See `e2e/CONTEXT.md`.
 - `./review-boundaries.test.ts` → `[integration]` reviewer-boundary regressions over the REAL route handlers (chat/tasks/actions): foreign body-`sessionId` vs cookie → 409; resume keeps a cancelled task cancelled; no fresh executable PendingAction after cancel-during-authorization; paused-plan confirm does NOT advance; two concurrent resumes run each unfinished node exactly once; concurrent HTTP resume adds no duplicate budget; ledgered-but-not-terminal actions counted once in cumulative risk
 - `./review-concurrency.test.ts` → `[integration]` reviewer concurrency-bug regressions (the 5 cases from the `.codex-review` reference port): staggered resume / gated double-resume / orphan-after-cancel / independent plans / unlinked-cancel each assert EXACTLY-ONCE side effects and full revoke-on-cancel (assertions ported unrelaxed)
