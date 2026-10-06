@@ -50,7 +50,6 @@
 - **跨浏览器矩阵**未验证（第 16 条）— `tests/e2e/` 只跑系统 Chrome（Edge 兜底未测），亦不含生产构建（`next build` / `next start`）、live LLM、视觉 / a11y、负载 / 性能。
 - **验证上限：仅单进程 + DB 事务语义（SQLite 文件锁的原子性）被实际运行过** —— **集群 / 多实例下的【日累计】与【取消】竞态未经压测**，不在本仓库的验证范围内。
 - **接管受 TTL 启发式约束 · fence 覆盖全部执行器写入** —— **每一条执行器写入路径**（首次 `submit_plan` 运行、依赖跳过、condition / note 节点、确认续跑）都按领取 token 在**同一条 SQL 语句**内原子隔离（`createTaskPersistence` 经 `claimTaskStatus(..., {fenceToken})` / `updateTaskNode(..., {fenceToken})`；确认续跑丢失领取时经 `agent/task-fencing.ts#recordDecidedNodeFenced` 走**无所有者 CAS**，仅**刻意**不加 fence 的 `pauseTask`/`cancelTask`「control」写入不持领取）；接管**仅在领取被证明陈旧**时发生（TTL 视界 `EXECUTION_CLAIM_TTL_MS = 600000` ms，基于**真实** `Date.now()`），推进中的执行者靠**节点边界**的租约续期保持新鲜（`renewTaskExecutionClaim`，token 条件式，**非**后台定时器）。仍需诚实记录的是：该 TTL 视界本身只是**启发式**——一个**长时间阻塞在单次工具调用内**的进程**仍可能被接管**并尝试继续（其写入已被 fence 拒绝，故无副作用）（第 18 条）。
-- **干净环境自举已修复（根因已定位）**（第 16、19 条）—— `tests/helpers/prisma-cli.ts#pinSchemaEngineLogging` 对 Prisma schema-engine 子进程强制 `RUST_LOG=info`；根因是外层 `RUST_LOG` ≥ `warn` **抑制**了引擎的 INFO 横幅，令 Prisma CLI 的报错映射 `e.split(/\r?\n/).slice(1)` 把**第 0 行**的真实错误丢弃，只剩空 `Error: Schema engine error:`——在**全新 SQLite 文件**上把 `P1003` 可探针诊断破坏成空消息。结果：默认 `npx vitest run` 与默认浏览器 E2E **自动**以无手工准备、无 skip 标志、无预写标记的方式 provision 隔离库（默认 E2E PASS 5 / FAIL 0 / SKIP 0），`prisma/dev.db` 不受影响，`prisma/schema.prisma` 变更会重建测试库。
 
 ---
 

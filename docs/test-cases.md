@@ -279,6 +279,7 @@ handler 与会话、读取 SSE 分帧。
   Agent / 工具 / 安全流水线，只有模型被脚本化。
 - **`LLM_MODE=mock`**：`tests/setup.ts` 强制设置，并把 `DATABASE_URL` 指向隔离的测试 SQLite
   （`prisma/test.db`，git 忽略）；provision schema 前先按**可用性探针** `prismaClientUsable` 确保 Prisma Client 可用（产物路径标记仅为非权威代理），provision **失败即抛**（按退出码判定、附完整 CLI 输出），**绝不** warn-and-continue。
+- **clean-env 自举已修复（`RUST_LOG` 根因）**：`tests/helpers/prisma-cli.ts#pinSchemaEngineLogging` 对 Prisma schema-engine 子进程强制 `RUST_LOG=info`——根因是外层 `RUST_LOG` ≥ `warn` 抑制了引擎的 INFO 横幅，令 Prisma CLI 的报错映射 `e.split(/\r?\n/).slice(1)` 把**第 0 行**真实错误丢弃，在**全新 SQLite 文件**上只剩空的 `Error: Schema engine error:`；修复后默认 `npx vitest run` 与默认浏览器 E2E 均**自动、无手工准备、无 skip 标志、无预写标记**地 provision 隔离库，且 `prisma/dev.db` 不受影响。
 - **可注入时间与 id**：`now` / `id` 可注入，因此测试稳定确定。
 - **测试隔离**：DB 支撑的套件每个测试 `resetDatabase()` + 重新播种；绝不共享可变 DB 状态。
 - **文件串行**：`vitest.config.ts` 设置 `fileParallelism: false`——全部套件共用同一个 `prisma/test.db`，
@@ -298,6 +299,5 @@ handler 与会话、读取 SSE 分帧。
   `LLM_MODE=live`（真实模型、非确定性）不在任何自动化套件内，仅由人工演示覆盖。
 - **真实浏览器验收是单机 / 单浏览器**：`tests/e2e/` 只在**本机**的无头 Chrome（Edge 兜底未测）上运行，
   不构成跨浏览器验证；它也不跑生产构建（`next build` / `next start`）。
-- **clean-env 初始化已修复（根因已定位）**：`tests/helpers/prisma-cli.ts#pinSchemaEngineLogging` 对 Prisma schema-engine 子进程强制 `RUST_LOG=info`；根因是外层 `RUST_LOG` ≥ `warn` 抑制了引擎的 INFO 横幅，令 Prisma CLI 的报错映射 `e.split(/\r?\n/).slice(1)` 把**第 0 行**真实错误丢弃，只剩空的字面 `Error: Schema engine error:`（在全新 SQLite 文件上把 `P1003` 可探针诊断破坏成空消息）。修复后默认 `npx vitest run` 自动 provision `prisma/test.db`、默认 E2E 自动 provision `prisma/e2e.db`（E2E **PASS 5 / FAIL 0 / SKIP 0**），`prisma/dev.db` 不受影响，`prisma/schema.prisma` 变更会重建测试库。
 
 > 安全模型的完整说明见 [`security.md`](./security.md)；已知限制见 [`known-risks.md`](./known-risks.md)。

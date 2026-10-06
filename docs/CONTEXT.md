@@ -42,13 +42,13 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   §1/§4 list the frozen regression probes (`tests/review-final-boundaries.test.ts`,
   `tests/review-recovery-probes.test.ts`) plus the invariant-grouped boundary/integrity/fencing specs
   (`tests/review-current-boundaries.test.ts`, `tests/review-execution-integrity.test.ts`,
-  `tests/review-execution-fencing.test.ts`, `tests/app/confirm-continuation-fencing.test.ts`); §7
+  `tests/review-execution-fencing.test.ts`, `tests/app/confirm-continuation-fencing.test.ts`); §6 (test-infra)
   records the clean-env init fix (`RUST_LOG` root cause).
 - `docs/known-risks.md` — honest limitations (mock data, simulated MFA, no real payment, heuristic
   anomaly detection, fictional investments, spending analysis excludes anomalies, in-process
   breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with
   exactly one of the three buckets and framed as *limitation + why it is acceptable for a
-  competition demo*; documents the clean-env init fix (`RUST_LOG` root cause).
+  competition demo*; documents the clean-env init fix as an §19 engineering note (`RUST_LOG` root cause).
 
 ## Constraints
 
