@@ -1,0 +1,44 @@
+﻿index.ts:43: createTaskPersistence,
+task-control.ts:172: * This is the compare-and-set from-set used to persist a plan CHECKPOINT (`persistPlan`): a
+task-control.ts:176: * cancellation always wins — see `createTaskPersistence`.)
+task-control.ts:256: persistPlan(plan: TaskPlan): Promise<void>;
+task-control.ts:257: persistNode(planId: string, node: TaskNodeResult): Promise<void>;
+task-control.ts:352: * is reachable ONLY by those no-claim paths (see `persistNode`).
+task-control.ts:355: /** The current PLAN execution claim token (`AgentTask.executionToken`) — fences `persistPlan`. */
+task-control.ts:356: planToken?: string;
+task-control.ts:358: nodeToken?: (nodeId: string) => string | undefined;
+task-control.ts:369: export function createTaskPersistence(
+task-control.ts:374: const { planToken, nodeToken } = opts;
+task-control.ts:376: async persistPlan(plan: TaskPlan): Promise<void> {
+task-control.ts:396: planToken === undefined ? undefined : { fenceToken: planToken },
+task-control.ts:398: if (planToken !== undefined && !written) return; // claim lost (or CAS lost) — no write
+task-control.ts:400: async persistNode(planId: string, node: TaskNodeResult): Promise<void> {
+task-control.ts:401: const token = nodeToken?.(node.id);
+task-control.ts:406: fenceToken: token,
+task-control.ts:411: if (planToken !== undefined) {
+task-control.ts:414: // still carrying this run's claim token (`task: { executionToken: planToken }`), so a run whose
+task-control.ts:418: where: { taskId: planId, nodeId: node.id, task: { executionToken: planToken } },
+task-control.ts:476: const { planToken } = opts;
+task-control.ts:478: // matching `persistNode` write be FENCED on the claim the run still owns (see
+task-control.ts:479: // `createTaskPersistence`): once another executor takes the claim over, the token no longer matches
+task-control.ts:481: const nodeTokens = new Map<string, string>();
+task-control.ts:498: if (planToken !== undefined) await renewTaskExecutionClaim(planId, planToken);
+task-control.ts:502: if (won) nodeTokens.set(nodeId, token);
+task-control.ts:506: nodeTokens.delete(nodeId);
+task-control.ts:509: if (planToken !== undefined) await renewTaskExecutionClaim(planId, planToken);
+task-control.ts:514: ...createTaskPersistence(planId, {
+task-control.ts:515: planToken,
+task-control.ts:516: nodeToken: (nodeId) => nodeTokens.get(nodeId),
+task-control.ts:598: // CONTROL write: a pause owns no execution claim, so it passes NO claim token — `persistNode` then
+task-control.ts:600: await executor.persistPlanSnapshot(
+task-control.ts:659: buildPlanDeps(taskId, deps, undefined, { planToken: token }),
+task-control.ts:844: // CONTROL write: cancelling owns no execution claim, so it passes NO claim token — `persistNode`
+task-control.ts:897: buildPlanDeps(taskId, deps, undefined, { planToken: token }),
+task-control.ts:968: * through the UNFENCED ports (`buildPlanDeps(..., ownsPlan ? { planToken } : {})`), because the ONLY
+task-control.ts:972: * idempotency, so the side effect stays exactly-once, and the token-less fallback in `persistNode` is
+task-control.ts:1007: const planToken = newId('taskclaim');
+task-control.ts:1008: const ownsPlan = await claimTaskExecution(located.taskId, planToken, {
+task-control.ts:1013: // The plan claim is OWNED ⇒ every write this continuation makes is FENCED on `planToken` (see
+task-control.ts:1014: // `createTaskPersistence`) and a run it took over can never clobber its result. When the claim is
+task-control.ts:1020: const baseDeps = buildPlanDeps(located.taskId, deps, undefined, ownsPlan ? { planToken } : {});
+task-control.ts:1034: if (ownsPlan) await releaseTaskExecution(located.taskId, planToken);
