@@ -350,7 +350,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   The gateway serializes the AGGREGATE-limit re-risk (claim-first `$transaction`), and `lib/ledger`
   (`ledgerKeyForAction` → `idempotentTransferTxId`) + `banking-sdk/transfer.ts` (accepts an `idempotencyKey`, sets `Transaction.id`
   to that deterministic id) and the agent layer DOES pass the key — `ledgerKeyForAction(action)` = `nodeExecutionKey(taskId,nodeId)` for a plan-linked action, else the action `id` — so the created
-  `Transaction.id` exactly equals `idempotentTransferTxId(userId, action.id)` and the
+  `Transaction.id` exactly equals `ledgerTxIdForAction(userId, action)` and the
   `computeInFlightTransferTotal` ledger-exclusion is LIVE (an in-flight `confirmed` action whose ledger
   row already exists is counted exactly once, via the executed half). Residual: the terminal-status flip
   (`recordActionResult`) is still a separate step from the SDK write — a crash between `authorizeAction`
