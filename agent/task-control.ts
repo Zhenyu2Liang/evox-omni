@@ -142,6 +142,106 @@ function staleExecutionClaimBefore(): Date {
 }
 
 /**
+ * A node status that is TERMINAL and must never be (re)claimed or overwritten by an executor: once a
+ * node has settled (`success`/`failed`/`skipped`) or been `cancelled`, no later pass — including a
+ * zombie whose PLAN claim was taken over — may flip it. `cancelled` mirrors `planner/executor.ts`'s own
+ * TERMINAL set.
+ */
+const TERMINAL_NODE_STATUSES: TaskNodeStatus[] = ['success', 'failed', 'skipped', 'cancelled'];
+
+/**
+ * An ATOMIC plan-ownership-aware NODE claim.
+ *
+ * `claimNodeExecution` (`lib/db/repositories/task.ts`) verifies ONLY the NODE token, so after a
+ * concurrent takeover rotated the PLAN's `AgentTask.executionToken` a superseded ("zombie") executor
+ * could still win a node whose own token had since been released (`NULL`) — and then (re)run its tool,
+ * overwrite an already-completed node and advance the DAG. This single CAS closes that window: the node
+ * slot is claimed ONLY while the PARENT plan still carries THIS run's PLAN claim token
+ * (`task: { executionToken: planToken }`) — ownership is verified in the SAME statement as the write —
+ * AND the node is not already TERMINAL (a settled `success`/`failed`/`skipped`/`cancelled` node is never
+ * (re)claimed). The node-token staleness horizon is preserved (a NULL or stale node claim is still
+ * reclaimable), so liveness is unchanged: a legitimately RUNNING executor keeps a fresh node claim far
+ * from the horizon, while a lost PLAN claim refuses every node.
+ */
+async function claimNodeOwnedByPlan(
+  planId: string,
+  nodeId: string,
+  nodeToken: string,
+  planToken: string,
+  staleBefore: Date,
+): Promise<boolean> {
+  const result = await prisma.agentTaskNode.updateMany({
+    where: {
+      taskId: planId,
+      nodeId,
+      status: { notIn: TERMINAL_NODE_STATUSES },
+      task: { executionToken: planToken },
+      OR: [{ executionToken: null }, { executionClaimedAt: { lt: staleBefore } }],
+    },
+    data: { executionToken: nodeToken, executionClaimedAt: new Date() },
+  });
+  return result.count === 1;
+}
+
+/**
+ * Whether `planId`'s PLAN execution claim is still held by `token` — a single cheap read used to GATE a
+ * publication (so a run whose plan claim was taken over emits NO stale `plan_update`; see
+ * `agent/tools/planning.ts`) and as the SOFT per-node claim of the `submit_plan` inline PlanDeps (which
+ * holds no node token): a run that no longer owns the plan stops at its next node boundary instead of
+ * running a successor tool call.
+ */
+export async function planExecutionClaimHeld(planId: string, token: string): Promise<boolean> {
+  const row = await prisma.agentTask.findUnique({
+    where: { id: planId },
+    select: { executionToken: true },
+  });
+  return row?.executionToken === token;
+}
+
+/**
+ * Build the planner `claimNode`/`releaseNode` PORTS for an executor run keyed on its PLAN claim, plus
+ * the per-node token MAP shared with `createTaskPersistence`'s `nodeToken` resolver (so every node write
+ * is fenced on the claim this run handed out).
+ *
+ * With a PLAN claim (`planToken` set) the node claim is the ATOMIC plan-ownership-aware CAS above — a
+ * run whose plan claim was taken over can never (re)claim a node, so it never runs that node's tool,
+ * never overwrites a terminal node, and stops at the boundary. Without a plan claim it falls back to the
+ * node-token-only `claimNodeExecution` (unchanged behavior for a claim-less walk). The PLAN lease is
+ * renewed at each node boundary while this run still owns it (a zombie's token no longer matches → 0
+ * rows → no-op), so a legitimately long run keeps its slot while a stuck one still ages out.
+ */
+export function buildNodeClaimPorts(
+  planId: string,
+  planToken: string | undefined,
+): {
+  claimNode: NonNullable<PlanDeps['claimNode']>;
+  releaseNode: NonNullable<PlanDeps['releaseNode']>;
+  nodeTokens: Map<string, string>;
+} {
+  const nodeTokens = new Map<string, string>();
+  return {
+    nodeTokens,
+    claimNode: async (taskId, nodeId, token) => {
+      if (planToken !== undefined) await renewTaskExecutionClaim(planId, planToken);
+      const won =
+        planToken !== undefined
+          ? await claimNodeOwnedByPlan(planId, nodeId, token, planToken, staleExecutionClaimBefore())
+          : await claimNodeExecution(taskId, nodeId, token, {
+              staleBefore: staleExecutionClaimBefore(),
+            });
+      if (won) nodeTokens.set(nodeId, token);
+      return won;
+    },
+    releaseNode: async (taskId, nodeId, token) => {
+      nodeTokens.delete(nodeId);
+      await releaseNodeExecution(taskId, nodeId, token);
+      // Renew at the closing boundary too, so the PLAN claim stays fresh for the next node.
+      if (planToken !== undefined) await renewTaskExecutionClaim(planId, planToken);
+    },
+  };
+}
+
+/**
  * The plan statuses `pauseTask` may act on: every NON-TERMINAL status. `success`/`failed`/`cancelled`
  * are terminal and must never be resurrected by a pause; `'paused'` is included so a repeated pause
  * is an idempotent no-op instead of a lost update.
@@ -399,23 +499,48 @@ export function createTaskPersistence(
     },
     async persistNode(planId: string, node: TaskNodeResult): Promise<void> {
       const token = nodeToken?.(node.id);
+      // A TERMINAL stored node must not be clobbered by a ZOMBIE pass — but a legitimate REOPEN must
+      // still pass: `planner/lifecycle.retryPlan` re-runs a `failed` node by writing `pending`, and
+      // that write is made by the CURRENT plan owner (which the fence below already proves). So the
+      // terminal guard is applied ONLY when the NEW status is itself TERMINAL (a settled result): a
+      // reopen (`pending`/`running`/`waiting_confirmation`/`waiting_verification`) is allowed for the
+      // plan owner, while a terminal result may never overwrite a terminal node.
+      const newIsTerminal = TERMINAL_NODE_STATUSES.includes(node.status);
       if (token !== undefined) {
-        // FENCED on the NODE claim: ONE atomic write conditioned on this run still owning it. `null`
-        // means the claim was taken over — the takeover's row stands and this zombie writes nothing.
-        const written = await updateTaskNode(planId, node.id, toNodeUpdate(node), {
-          fenceToken: token,
+        // FENCED on the NODE claim AND (when this run holds one) the PLAN claim, and REFUSING to
+        // clobber a TERMINAL node with a terminal result: ONE atomic `updateMany` whose `where`
+        // requires this run's node token, the parent TASK still carrying this run's plan token
+        // (`task: { executionToken: planToken }`) and — when the NEW status is terminal — a
+        // not-yet-terminal stored status. A run whose PLAN claim was taken over (a ZOMBIE) matches 0
+        // rows and writes NOTHING, so it can never clobber the takeover's terminal row (e.g. flip a
+        // completed `success` back to `failed`). `count === 0` ⇒ skip (no stale write).
+        const res = await prisma.agentTaskNode.updateMany({
+          where: {
+            taskId: planId,
+            nodeId: node.id,
+            executionToken: token,
+            ...(newIsTerminal ? { status: { notIn: TERMINAL_NODE_STATUSES } } : {}),
+            ...(planToken === undefined ? {} : { task: { executionToken: planToken } }),
+          },
+          data: { ...toNodeUpdate(node), output: jsonNodeOutput(node) },
         });
-        if (written === null) return;
+        if (res.count === 0) return;
         return;
       }
       if (planToken !== undefined) {
         // FENCED on the PLAN claim (an EXECUTOR write whose node has no NODE token — the `submit_plan`
         // inline PlanDeps declares no `claimNode`): ONE atomic `updateMany` filtered by the PARENT task
-        // still carrying this run's claim token (`task: { executionToken: planToken }`), so a run whose
-        // plan claim was taken over writes NOTHING instead of clobbering the takeover's node row.
-        // `count === 0` ⇒ claim lost ⇒ skip (this zombie may not persist/narrate its stale result).
+        // still carrying this run's claim token (`task: { executionToken: planToken }`) and — when the
+        // NEW status is terminal — a not-yet-terminal stored node, so a run whose plan claim was taken
+        // over writes NOTHING instead of clobbering the takeover's terminal node row. `count === 0` ⇒
+        // claim lost ⇒ skip (this zombie may not persist/narrate its stale result).
         const res = await prisma.agentTaskNode.updateMany({
-          where: { taskId: planId, nodeId: node.id, task: { executionToken: planToken } },
+          where: {
+            taskId: planId,
+            nodeId: node.id,
+            ...(newIsTerminal ? { status: { notIn: TERMINAL_NODE_STATUSES } } : {}),
+            task: { executionToken: planToken },
+          },
           data: { ...toNodeUpdate(node), output: jsonNodeOutput(node) },
         });
         if (res.count === 0) return;
@@ -474,40 +599,20 @@ function buildPlanDeps(
   opts: TaskPersistenceOptions = {},
 ): PlanDeps {
   const { mode = 'executor', planToken } = opts;
-  // The NODE claim token THIS run handed to `claimNodeExecution`, per `nodeId`. Recording it lets the
-  // matching `persistNode` write be FENCED on the claim the run still owns (see
-  // `createTaskPersistence`): once another executor takes the claim over, the token no longer matches
-  // and this run's late write is rejected instead of clobbering the takeover's result.
-  const nodeTokens = new Map<string, string>();
+  // Per-node DB claim/release ports + the node-token MAP shared with the `createTaskPersistence`
+  // `nodeToken` resolver (see `buildNodeClaimPorts`). The planner executor claims each node BEFORE
+  // running it and releases it in a `finally` (even for a parked node), so a node's side effect can
+  // never run twice across two overlapping executor passes of the same plan. With a PLAN claim
+  // (`planToken` set) the node claim ALSO verifies PLAN ownership ATOMICALLY — a run whose plan claim
+  // was taken over can never (re)claim a node, overwrite a terminal node, run its tool or advance the
+  // DAG (see `claimNodeOwnedByPlan`). Without a plan claim it falls back to the node-token-only CAS
+  // (`claimNodeExecution`), unchanged for a claim-less walk.
+  const { claimNode, releaseNode, nodeTokens } = buildNodeClaimPorts(planId, planToken);
   return {
     runTool: deps.runTool,
     onNodeUpdate,
-    // Per-node DB claim: the planner executor claims each node BEFORE running it and releases it in a
-    // `finally` (even for a parked node), so a node's side effect can never run twice across two
-    // overlapping executor passes of the same plan. `'running'` node status is never used as a lock.
-    // The stale horizon (`staleExecutionClaimBefore`, see `EXECUTION_CLAIM_TTL_MS`) additionally lets
-    // this claim RECLAIM a node token a CRASHED owner left behind, while a LIVE node claim (a fresh
-    // `executionClaimedAt`) is never stolen.
-    claimNode: async (taskId, nodeId, token) => {
-      // NODE BOUNDARY lease renewal. A legitimately LONG run would otherwise age past the stale
-      // horizon and be taken over while still ALIVE (letting a fresh executor race it for the same
-      // node). Renewing here re-stamps the REAL clock ONLY while this run still owns the PLAN claim
-      // (a zombie's token no longer matches → 0 rows → no-op). Deliberately at node boundaries only:
-      // NEVER a background timer and NEVER while blocked inside a tool call — a stuck executor must
-      // still age out and become takeover-able (that takeover is what the write fences guard).
-      if (planToken !== undefined) await renewTaskExecutionClaim(planId, planToken);
-      const won = await claimNodeExecution(taskId, nodeId, token, {
-        staleBefore: staleExecutionClaimBefore(),
-      });
-      if (won) nodeTokens.set(nodeId, token);
-      return won;
-    },
-    releaseNode: async (taskId, nodeId, token) => {
-      nodeTokens.delete(nodeId);
-      await releaseNodeExecution(taskId, nodeId, token);
-      // Renew at the closing boundary too, so the PLAN claim stays fresh for the next node.
-      if (planToken !== undefined) await renewTaskExecutionClaim(planId, planToken);
-    },
+    claimNode,
+    releaseNode,
     // Durable steering: a pause/cancel persisted by a control request stops THIS run at its next
     // checkpoint (see `defaultPollControls`).
     controls: defaultPollControls(planId),
