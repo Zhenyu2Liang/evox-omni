@@ -64,19 +64,19 @@ it('recovery of a persisted failed result must finalize the action as failed rat
  expect(resumed.status).toBe('failed');expect(after?.status).toBe('failed');
 });
 
-it('legacy recovery is safe when actually entered, while the original fault injection no longer hits the write',async()=>{
+it('legacy recovery is safe when the result transaction genuinely fails, without re-applying a later authorized limit',async()=>{
  const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();const card=(await p.card.findFirst({where:{userId,type:'CREDIT'}}))!;const args={cardId:card.id,category:'娱乐',amount:1500};
  const result=await runSubmitPlan(userId,{goal:'实际遗留结果恢复',nodes:[{id:'limit',name:'限额',kind:'tool',tool:'set_card_limit',args,dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=result.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
- const spy=vi.spyOn(taskRepository,'updateTaskNode').mockRejectedValueOnce(new Error('review: original node persistence injection'));
+ const spy=vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(new Error('review: result transaction write injection'));// faults the REAL result+status $transaction write in executeAuthorizedAction (the old taskRepository.updateTaskNode fault never hit this path)
  await confirmRaw(action.id,s);const faultCalls=spy.mock.calls.length;spy.mockRestore();
- const completed=(await p.agentTaskNode.findFirst({where:{taskId:plan.id,nodeId:'limit'}}))!.status;
- // Force the actual pre-upgrade gap: executed action, absent result, incomplete persisted node.
+ const nodeAfterFault=await p.agentTaskNode.findFirst({where:{taskId:plan.id,nodeId:'limit'}});const resultAfterFault=(await p.pendingAction.findUnique({where:{id:action.id}}))?.resultJson;expect(faultCalls).toBeGreaterThanOrEqual(1);expect(nodeAfterFault?.status).not.toBe('success');expect(resultAfterFault).toBeNull();
+ // Force the actual pre-upgrade gap: committed side effect, absent result, incomplete persisted node.
  await p.pendingAction.update({where:{id:action.id},data:{resultJson:null}});
  await p.agentTaskNode.updateMany({where:{taskId:plan.id,nodeId:'limit'},data:{status:'running',output:null,error:null}});
  await p.agentTask.update({where:{id:plan.id},data:{status:'running'}});
  const later=await executeGatedTool({sessionId:s,userId,toolName:'set_card_limit',args:{...args,amount:500},userRequest:'新限额500'});await confirmRaw(later.pendingActionId!,s);
  const resumed=await task(plan.id,'resume',s);const amount=(await p.cardLimit.findFirst({where:{cardId:card.id,category:'娱乐'}}))?.amount;
- console.log('REVIEW_LEGACY_GUARD_COVERAGE',JSON.stringify({faultCalls,nodeAfterOriginalConfirm:completed,recoveredPlanStatus:resumed.status,amount}));
- expect(faultCalls).toBe(0);expect(completed).toBe('success');expect(amount).toBe(500);expect(resumed.status).toBe('failed');expect(resumed.results[0].error).toContain('人工核对');
+ console.log('REVIEW_LEGACY_GUARD_COVERAGE',JSON.stringify({faultCalls,nodeAfterFault:nodeAfterFault?.status,resultAbsentAfterFault:resultAfterFault===null,recoveredPlanStatus:resumed.status,amount}));
+ expect(amount).toBe(500);expect(resumed.status).toBe('failed');expect(resumed.results[0].error).toContain('人工核对');
 });
