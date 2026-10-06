@@ -24,8 +24,10 @@
 
 - **Cookie-only 会话身份**（第 17 条）— 会话 id **仅**取自 `banking_session` HttpOnly Cookie（`lib/constants.ts` `SESSION_COOKIE`、`app/api/_lib/session.ts` `resolveSessionId`）；请求体 `sessionId` 与 Cookie **不一致（含无 Cookie）→ `409 CONFLICT` 且不下发 `Set-Cookie`**（`app/api/chat/route.ts`）——请求体永远无法选择 / 铸造会话。
 - **DB 原子执行领取**（第 18 条）— `lib/db/repositories/task.ts#claimTaskExecution`（计划）/ `#claimNodeExecution`（节点）以**单条 `updateMany` CAS** 领取执行槽，并在 **`finally`** 中 `releaseTaskExecution` / `releaseNodeExecution` 释放；并发的 resume / retry **只有一个能运行**。
-- **PRIMARY 批量撤销取消**（第 18 条）— `agent/task-control.ts#cancelTask` → `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`）：**单条原子 `updateMany`** 一次性把该计划**全部**可执行动作置为 `cancelled`，此后任何 confirm / verify 均以 `CONFLICT` / `NOT_FOUND` 失败。
-- **计划 / 节点幂等键**（第 15、18 条）— `nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>` 为计划节点副作用去重、`idempotentTransferTxId(userId, key)` 为转账派生账本主键（均在 `lib/ledger.ts`）——重复 / 并发执行**重放原行而非二次生效**。
+- **原子取消计划**（第 18 条）— `agent/task-control.ts#cancelTask` 最终在一个 `prisma.$transaction` 内**同时**执行 `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`，**单条原子 `updateMany`**，一次性把该计划**全部**可执行动作置为 `cancelled`）与计划行 `status='cancelled'` 写入——撤销与取消之间**没有窗口**；节点输出扫描（`revokeParkedActions`）与运行后 `sweepCancelledPlan` 只是**兜底**。此后任何 confirm / verify 均以 `CONFLICT` / `NOT_FOUND` 失败，**已入账的交易保留**（不伪造回滚）。
+- **取消计划的授权复核**（第 18 条）— `security/security-gateway.ts` 在 compare-and-set 的**同一个 `$transaction`** 内按 `PendingAction.taskId` 重读所属计划状态：计划已 `cancelled` ⇒ **在事务内反转领取**并返回 `plan_cancelled`（HTTP 200 `{ok:false, status:'cancelled', code:'SECURITY_DENIED'}`）；`gatewayCreatePendingAction` 拒绝在已取消计划下新建 action；`recordActionResult` 绝不把已取消计划下的 action 标为 `executed`。**取消先于执行**由代码强制，LLM 无法复活。
+- **统一账本键 · 转账幂等**（第 15 条）— `lib/ledger.ts` 以 `ledgerKeyForAction({id,taskId,nodeId})` 统一派生幂等键（计划节点动作得 `nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`，独立动作得自身 `id`），`ledgerTxIdForAction(userId, action)` 在**同一把键**上派生 / 查找账本行主键——生成端与查找端一致，**已入账的 in-flight 转账在日累计中只计一次**，重复 / 并发确认**重放原行而非二次生效**。
+- **计划节点身份去重**（第 18 条）— `nodeExecutionKey(taskId, nodeId)` 为节点副作用去重（`subscribeInvestment` 的 `InvestmentHolding.idempotencyKey`、`redeemInvestment` 的 `REDEEMED` 状态翻转、`applyVirtualCard` 的确定性 card id）；`agent/confirmation.ts#executeGatedToolOnce` 以 `findInFlightPlanActionId(taskId, nodeId)` 返回已停靠结果而非铸造第二个 action。
 - 同桶其余条目：第 4 条（启发式异常检测）、第 6 条（消费分析按设计排除异常）、第 14 条（注入守卫不改变授权结论）、第 19 条（工程性说明）。
 
 ### 🧪 【模拟】模拟后端 / 刻意受限
@@ -33,7 +35,7 @@
 后端为模拟实现，或为演示而**刻意受限**（**无真实银行 / 资金 / 支付 / 短信**）：
 
 - **模拟银行 SDK**（第 1、3 条）— `transfer_money` 只写一条模拟 `Transaction` 借贷行并调整余额；系统不连接任何真实银行核心系统、不发起任何真实支付。
-- **进程内熔断器**（第 7 条）— `security/circuit-breaker.ts` 为**内存态、按 `sessionId`** 的熔断器，不跨进程 / 不跨实例共享、不持久化。
+- **进程内熔断器**（第 7 条）— `security/circuit-breaker.ts` 为**内存态、按 `sessionId`** 的熔断器，不跨进程 / 不跨实例共享、不持久化（**进程重启即重置**）。
 - **固定演示时钟**（第 8 条）— `DEMO_NOW = 2026-09-25 12:00 本地`（`lib/constants.ts`、`lib/clock.ts` `demoNow()`）让本月/上月/今日窗口、消费分析与 system prompt 的「今天」保持一致。
 - **🟢 GREEN 读取按设计不审计**（第 9 条）— 审计只覆盖门控动作（YELLOW/RED 的 confirm / verify / cancel）与安全事件；GREEN 自动执行的读取**不写审计行**（`audit/`、`lib/contracts/audit.ts`）。
 - 同桶其余条目：第 2 条（固定验证码 MFA）、第 5 条（虚构投资产品）、第 10 条（mock 供应商）、第 11 条（`reserve_budget` 不锁资金）、第 12 条（定时任务不执行）、第 13 条（Test 12 只创建记录）。
@@ -42,10 +44,10 @@
 
 依赖特定运行环境，或属测试覆盖缺口——**未在本仓库证明**：
 
-- **多进程 / 多实例集群竞态**未验证 — 上述【已实现】桶的原子性都建立在**单进程 + 单个本地 SQLite** 之上（见第 7、15、18 条）。
-- **唯一串行化手段是 SQLite 单文件写锁** — `security/security-gateway.ts#authorizeTransfer` 的「先 CAS 领取、后重估有效日累计」在**单个 `prisma.$transaction`** 内完成，其**串行化仅由 SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多实例部署**下**未经证明**（第 15 条）。
+- **多进程 / 多实例集群竞态**未验证 — 上述【已实现】桶的原子性（含**日累计**与**取消**竞态）都建立在**单进程 + 单个本地 SQLite** 之上，**未经压测**（见第 7、15、18 条）。
+- **唯一串行化手段是 SQLite 单文件写锁** — `security/security-gateway.ts#authorizeTransfer` 的「先 CAS 领取、后重估有效日累计」与 `agent/task-control.ts#cancelTask` 的原子结算，都在**单个 `prisma.$transaction`** 内完成，其**串行化仅由 SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多实例部署**下**未经证明**（第 15、18 条）。
 - **跨浏览器矩阵**未验证（第 16 条）— `tests/e2e/` 只跑系统 Chrome（Edge 兜底未测），亦不含生产构建（`next build` / `next start`）、live LLM、视觉 / a11y、负载 / 性能。
-- **验证上限：仅单进程并发 + 基于 SQLite 文件锁的原子性被实际运行过** —— 集群 / 多实例一致性不在本仓库的验证范围内。
+- **验证上限：仅单进程 + DB 事务语义（SQLite 文件锁的原子性）被实际运行过** —— **集群 / 多实例下的【日累计】与【取消】竞态未经压测**，不在本仓库的验证范围内。
 
 ---
 
@@ -65,10 +67,10 @@
 | 12 | `create_scheduled_task` 只记录未来动作意图，**无在线调度器执行** | 🧪 模拟 | `banking-sdk/task.ts` |
 | 13 | Test 12 生日提醒只创建记录，**不真正下单鲜花 / 蛋糕** | 🧪 模拟 | `tests/scenarios/`、`banking-sdk/budget.ts`、`banking-sdk/task.ts` |
 | 14 | 注入守卫只记录事件，**不向模型注入"系统提醒"** | ✅ 实现（防御纵深） | `security/injection-guard.ts`、`agent/run-turn.ts` |
-| 15 | 转账**已接线幂等键**（重复确认在 DB 层去重） | ✅ 已实现（幂等键） | `lib/ledger.ts`、`agent/confirmation.ts`、`banking-sdk/transfer.ts`、`security/security-gateway.ts` `authorizeTransfer` |
+| 15 | 转账的**账本键派生 / 查找统一**（重复确认在 DB 层去重，已入账的 in-flight 只计一次） | ✅ 已实现（统一账本键） | `lib/ledger.ts`、`agent/confirmation.ts`、`security/risk-engine.ts` `computeInFlightTransferTotal`、`banking-sdk/transfer.ts` |
 | 16 | 有**真实浏览器验收 harness**，但为**单机、有限 journey** 的验收（非多实例 / 非生产构建 / 非跨浏览器） | ⚠️ 未验证（有限验收，非全覆盖） | `tests/e2e/`、`package.json` |
 | 17 | 身份是**普通 Cookie**（`banking_session`，非签名 / HMAC 令牌） | ✅ 实现（fail-closed） | `lib/constants.ts` `SESSION_COOKIE`、`app/api/_lib/session.ts`、`app/api/chat/route.ts` |
-| 18 | 计划生命周期的诚实边界（DB 原子执行领取 / 批量撤销 / 无假回滚 / 终态仅靠 CAS 约定） | ✅ 已实现（DB 原子领取 + 批量撤销 + 节点去重） | `agent/task-control.ts`、`planner/lifecycle.ts`、`lib/db/repositories/{task,pendingAction}.ts`、`prisma/schema.prisma` |
+| 18 | 计划生命周期的诚实边界（DB 原子执行领取 / 原子取消 / 取消计划授权复核 / 节点幂等 / 无假回滚 / 终态仅靠 CAS 约定） | ✅ 已实现（DB 原子领取 + 原子取消 + 取消复核 + 节点幂等） | `agent/task-control.ts`、`agent/confirmation.ts`、`planner/lifecycle.ts`、`lib/db/repositories/{task,pendingAction}.ts`、`security/security-gateway.ts`、`prisma/schema.prisma` |
 | 19 | 其他工程性注意（测试串行、`change_password` 无凭据存储） | ✅ 说明 | `vitest.config.ts`、`banking-sdk/` |
 
 ---
@@ -154,7 +156,7 @@ Apple Store ¥6,999 @ 2026-09-20 18:32 的异常）。
 **性质：🧪 模拟 · 刻意受限（代码强制，仅进程内）。**
 
 **限制**：`security/circuit-breaker.ts` 是**内存态、键控于 `sessionId`** 的熔断器——
-不跨进程 / 不跨实例共享状态，也不持久化。多实例部署下每个实例各有一份。
+不跨进程 / 不跨实例共享状态，也不持久化（**进程重启即重置**）。多实例部署下每个实例各有一份。
 
 **为何可接受**：演示是**单进程**运行，会话级熔断足以展示「3 次连续 MFA 失败即锁死高风险操作」
 这一核心安全语义。它**正是 LLM 无法清除的硬门**；分布式一致性不属于比赛演示的目标范围。
@@ -248,21 +250,21 @@ mock 模式让整条流水线（Agent + 工具 + 安全）**离线、确定、�
 
 ---
 
-## 15. 转账幂等已接线，残余限制是 SQLite 写锁串行化 · Idempotency Wired; SQLite Write-Lock Caveat
+## 15. 账本键派生 / 查找统一，残余限制是 SQLite 写锁串行化 · Unified Ledger Key; SQLite Write-Lock Caveat
 
-**性质：✅ 已实现（幂等键）。**
+**性质：✅ 已实现（统一账本键）。**
 
-**限制**：转账确认**已携带幂等键**——`agent/confirmation.ts` 以 `PendingAction.id` 作为 SDK 的
-`idempotencyKey`，`banking-sdk/transfer.ts` 用它派生账本主键
-`idempotentTransferTxId(userId, key)`（`lib/ledger.ts`，格式 `txidem_` + `sha256("<userId>\0<key>")` 前 32 hex）。
-因此**重复 / 并发确认重放同一账本行**而非二次扣款——去重由数据库主键完成，账本写入 → 终态之间的
-窗口**不再需要锁**。`security/risk-engine.ts` 的 `computeInFlightTransferTotal` 会**排除账本行已存在**
-的 in-flight action，所以一条「已入账但仍为 `confirmed`」的转账在日累计中**只计一次**（避免重复计数
-导致的虚假升级）。
+**限制**：账本键的**生成端与查找端已统一**到 `lib/ledger.ts`：`ledgerKeyForAction({id, taskId, nodeId})` 在 `taskId` 与
+`nodeId` **同时存在**（trim 后均非空）时返回 `nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`，否则返回 action 自身 `id`；
+`ledgerTxIdForAction(userId, action)` 在该键上派生 / 查找账本主键（`idempotentTransferTxId`，格式 `txidem_` + `sha256("<userId>\0<key>")` 前 32 hex）。
+`agent/confirmation.ts` 用该键作为 SDK 的 `idempotencyKey` 下发给 `registry.executeDirect`——因此**重复 / 并发确认**
+**重放同一账本行**而非二次扣款（去重由数据库主键完成，账本写入 → 终态之间的窗口**不再需要锁**）。
+`security/risk-engine.ts` 的 `computeInFlightTransferTotal` 以 `ledgerTxIdForAction(userId, row)` **排除账本行已存在**的 in-flight action，
+所以一条「**已入账但仍为 `confirmed`**」的计划转账在日累计中**只计一次**：其后一笔 ¥100 仍为 🟡、¥1000 仍为 🟡、¥1000.01 升 🔴；**真正尚未入账**的动作仍被计数。
 
-**残余限制（未验证）**：用于抗「过期日累计」的**「先领取、后重估」**单个 `prisma.$transaction`
-（`security/security-gateway.ts` 的 `authorizeTransfer`，首条语句即为 exactly-once 的 CAS 写操作）**仅靠
-SQLite 单文件写锁**串行化并发确认；在**其他数据库引擎 / 多写入者部署**下**未经证明**。
+**残余限制（未验证）**：用于抗「过期日累计」的**「先领取、后重估」**（`security/security-gateway.ts` 的 `authorizeTransfer`）
+与**取消计划的原子结算**（`agent/task-control.ts` 的 `cancelTask`）都在**单个 `prisma.$transaction`** 内完成，其**串行化仅由
+SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多实例部署**下**未经证明**。
 
 **为何可接受**：演示是**单进程 + 单个本地 SQLite**，写锁串行化天然成立，演示所需的保证（两个并发确认
 不会各自基于同一份过期日累计同时通过）**已经满足**；幂等键已接线，重复确认在 DB 层去重。
@@ -280,6 +282,9 @@ SQLite 单文件写锁**串行化并发确认；在**其他数据库引擎 / 多
 🟡 转账确认、🔴 转账 MFA（成功 + 错误码）、计划暂停/继续、计划取消、刷新后恢复停靠决策；仅模型被
 脚本化（`LLM_MODE=mock`）。它**不**覆盖：live LLM、真实银行 / 网络、生产构建（`next build` /
 `next start`）、跨浏览器（仅 Chrome，Edge 兜底未测）、视觉 / a11y、负载 / 性能。它是**单机**验收，**不**证明安全模型已被完全封闭。
+
+**默认命令与自举**：默认命令 `npx tsx tests/e2e/acceptance.e2e.ts` 会**自举 Prisma client**——仅当 `node_modules/.prisma/client/schema.prisma` 缺失时才执行一次 `prisma generate`——因此**干净检出**下**无需** `E2E_SKIP_DB_RESET` 即可运行；它使用**隔离**的 `prisma/e2e.db`，**绝不**触碰 `prisma/dev.db`。
+**GREEN 测试全绿 ≠ 安全闭环**：仅靠 🟢 读取路径的测试**不**构成对安全模型的证明——闭环只能来自对失败路径（🟡/🔴 门控、确认 / 验证、取消、熔断、注入）的**显式**验证。
 
 `tests/app/` 下的验收仍独立：它们是**进程内 HTTP 集成测试**（`describe('[integration] …')`），
 `import` 并调用**真实的**路由处理器（`app/api/**/route.ts`），传入真实的 `NextRequest`
@@ -309,18 +314,19 @@ SQLite 单文件写锁**串行化并发确认；在**其他数据库引擎 / 多
 
 ## 18. 计划生命周期的诚实边界 · Plan-Lifecycle Honesty Caveats
 
-**性质：✅ 已实现（代码强制：DB 原子执行领取 + 批量撤销 + 节点身份去重）。**
+**性质：✅ 已实现（代码强制：DB 原子执行领取 + 原子取消 + 取消计划授权复核 + 节点幂等）。**
 
 **限制**：
 
 - **DB 原子执行领取**：一个*运行中*的计划由一条 DB 执行领取把守——`claimTaskExecution` 在 `executor.runPlan` **之前**以**单条 `updateMany` CAS** 领取 `AgentTask.executionToken`，并在 **`finally`** 中 `releaseTaskExecution` 释放；节点级同理（`lib/db/repositories/task.ts#claimNodeExecution` / `#releaseNodeExecution`）。因此两个并发 resume / retry **无法同时运行同一计划**——败者因 `executionToken IS NULL` 不再匹配而领取 0 行落败。
-- **PRIMARY：批量撤销取消**：`agent/task-control.ts#cancelTask` → `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`）以**单条原子 `updateMany`** 一次性把该计划**全部**可执行 `PendingAction` 置为 `cancelled`，此后任何 confirm / verify 均以 `CONFLICT` / `NOT_FOUND` 失败；**post-run sweep**（`sweepCancelledPlan`）在运行结束后再次扫描，撤销**运行期间**新铸造、仍可执行的 action，确保取消后**没有任何可执行动作存活**。
-- **节点身份去重**：计划节点的副作用以 `nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`（`lib/ledger.ts`）为幂等键——同一 `(task, node)` 的重复执行**重放原副作用**而非二次生效；不同计划的相同工具 / 参数因 `taskId` 不同而**不碰撞**。
+- **原子取消计划**：`agent/task-control.ts#cancelTask` 最终在**一个 `prisma.$transaction`** 内**同时**执行 `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`，**单条原子 `updateMany`**，一次性把该计划**全部**可执行 `PendingAction` 置为 `cancelled`）与计划行 `status='cancelled'` 写入——撤销与取消之间**没有窗口**；节点输出扫描（`revokeParkedActions`）与运行后 `sweepCancelledPlan` 只是**兜底**。此后任何 confirm / verify 均以 `CONFLICT` / `NOT_FOUND` 失败，**已入账的交易保留**（不伪造回滚）。
+- **取消计划的授权复核**：`security/security-gateway.ts` 在 compare-and-set 的**同一个 `$transaction`** 内按 `PendingAction.taskId` 重读所属计划状态——计划已 `cancelled` ⇒ **在事务内反转领取**并返回 `{kind:'plan_cancelled'}`（HTTP 200 `{ok:false, status:'cancelled', code:'SECURITY_DENIED'}`）；`gatewayCreatePendingAction` 拒绝在已取消计划下新建 action；`recordActionResult` 绝不把已取消计划下的 action 标为 `executed`。
+- **节点身份去重**：`nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`（`lib/ledger.ts`）为节点副作用去重——`subscribeInvestment` 把它写入 `InvestmentHolding.idempotencyKey`（唯一）并在**一个 DB 事务**内以共享的 P2002 处理重放，`redeemInvestment` 以 `REDEEMED` 状态翻转作为重放标记，`applyVirtualCard` 以确定性 card id 幂等；`agent/confirmation.ts#executeGatedToolOnce` 以 `findInFlightPlanActionId(taskId, nodeId)` 返回已停靠结果而非铸造第二个 action；不同计划的相同工具 / 参数因 `taskId` 不同而**不碰撞**。
 - **不伪造回滚**：已完成（`success`）的节点**保留其结果**——已执行的副作用在模拟后端下不可逆，**绝不假装被回滚**。
 - **取消 vs 确认 = 至多一次**：二者共享同一 `PendingAction` 的 **CAS**（`claimPendingAction`），因此最多一方成功。
 - **终态仅由 CAS 约定保证**：`prisma/schema.prisma` 的 `status` 列是**普通字符串、无 CHECK / 唯一约束**——「已取消的计划不能离开终态」只由 `claimTaskStatus` / `claimPendingAction` 的 CAS 约定保证，**没有数据库 / 模式层约束**。
 
-**为何可接受**：演示为**单进程**，DB 原子领取 + 批量撤销 + 节点身份去重足以保证「至多一次」「取消后不可复活」「无假回滚」等在舞台上可断言的语义。**但单进程 ≠ 多实例**：终态保护仅靠 CAS 约定（`status` 列无 CHECK / 唯一约束），**多写入者 / 多实例**并发属【未验证】桶——若迁移到多实例，需把终态保护下沉到数据库约束或跨实例事务边界。
+**为何可接受**：演示为**单进程**，DB 原子领取 + 原子取消（撤销与取消同一事务）+ 取消计划授权复核 + 节点幂等足以保证「至多一次」「取消后不可复活」「无假回滚」等在舞台上可断言的语义。**但单进程 ≠ 多实例**：终态保护仅靠 CAS 约定（`status` 列无 CHECK / 唯一约束），**多写入者 / 多实例**下的日累计与取消竞态属【未验证】桶——若迁移到多实例，需把终态保护下沉到数据库约束或跨实例事务边界。
 
 ---
 
