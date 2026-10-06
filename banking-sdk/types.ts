@@ -301,11 +301,11 @@ export interface RedeemInvestmentInput {
   userId: string;
   holdingId: string;
   /**
-   * Optional idempotency key. When supplied, a repeated call on an already-REDEEMED holding
-   * REPLAYS the original redemption (same `amount`, current balance) instead of throwing
-   * `CONFLICT`. The REDEEMED holding status is the durable replay marker — nothing is stored on
-   * the holding here (`InvestmentHolding.idempotencyKey` is reserved for subscribe dedup). The
-   * planner passes `nodeExecutionKey(taskId, nodeId)`. Absent → unchanged behavior.
+   * Optional idempotency key — the redemption's EXECUTION IDENTITY. A repeat with the SAME
+   * key on an already-REDEEMED holding REPLAYS the original redemption (same `amount`, current
+   * balance); a DISTINCT (or absent) key on an already-REDEEMED holding always throws
+   * `CONFLICT` — never a false success. The identity and original result are persisted on the
+   * holding (`redeemExecutionKey` / `redeemResult`); the planner passes `nodeExecutionKey(taskId, nodeId)`.
    */
   idempotencyKey?: string;
 }
