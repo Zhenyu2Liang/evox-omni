@@ -1,0 +1,26 @@
+﻿=== HEAD ===
+795b40e Merge commit '1d2111450edddf6b3d011fc660aeeb17aa9e2849'; commit '0c6ae31d52d90b8105c52453f6b741e448e39d11' into evogit-agent-T1-A2
+0c6ae31 Update CONTEXT.md for ./tests
+75afadf Update CONTEXT.md for ./tests
+1f6c5e3 Update CONTEXT.md for ./tests
+96a5b1e test(infra): self-bootstrap Prisma Client + fail-loud schema provisioning on clean env
+1d21114 Update CONTEXT.md for ./tests
+
+=== status ===
+
+=== diff stat vs a10cd48 ===
+ tests/CONTEXT.md            |  43 ++++++++-
+ tests/e2e/helpers.ts        | 206 +++++----------------------------------
+ tests/helpers/prisma-cli.ts | 228 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/setup.ts              |  90 +++++++++--------
+ 4 files changed, 344 insertions(+), 223 deletions(-)
+
+=== files in tests/helpers ===
+CONTEXT.md
+db.ts
+faux-agent.ts
+fixtures.ts
+index.ts
+prisma-cli.ts
+scenario.ts
+
