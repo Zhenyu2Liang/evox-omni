@@ -209,8 +209,9 @@ own id) — and passes it to
 `registry.executeDirect(action.toolName, action.args, { idempotencyKey })` for EVERY tool. Using the SAME
 `ledgerKeyForAction` generation that `security/`'s risk engine looks up (`ledgerTxIdForAction`) keeps an
 already-ledgered in-flight transfer excluded from the cumulative daily total. The INLINE
-GREEN node path (`executeGatedToolOnce`) passes the same `nodeExecutionKey`, so a re-run of a node replays
-its SDK-level side effect. `transfer_money`, `reserve_budget`, `create_scheduled_task`, `apply_virtual_card` AND the investment
+GREEN node path (`executeGatedToolOnce`) passes the same `nodeExecutionKey`, so a re-run of a GREEN node
+re-issues the same SDK request, which the SDK idempotency key dedups (no duplicate side effect) — a GATED plan node, by contrast, NEVER re-runs its tool on a resume: it parks or BACKFILLS (see the recovery guarantee below).
+`transfer_money`, `reserve_budget`, `create_scheduled_task`, `apply_virtual_card` AND the investment
 tools (`subscribe_investment`/`redeem_investment`; `agent/tools/investment.ts` accepts `opts?: ToolRunOptions`
 and forwards `idempotencyKey`) all thread the key into their banking-sdk call; `transfer_money` derives the
 created ledger row id from the key via `idempotentTransferTxId(userId, key)` (the DB PK dedups the write,
@@ -367,8 +368,12 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   10 min): the atomic CAS may additionally match a row whose `executionClaimedAt` is older than that
   horizon, i.e. a claim whose owner has plausibly died. Two racing takeovers still yield exactly ONE winner
   (the winner re-stamps a fresh `executionClaimedAt`, so the loser's `updateMany` re-evaluates against the
-  new timestamp and matches 0 rows); a legitimately RUNNING executor is never preempted (its fresh
-  `executionClaimedAt` is nowhere near the horizon); and an old owner's `release*` is a token-guarded no-op.
+  new timestamp and matches 0 rows); a legitimately RUNNING executor that renews its lease at node
+  boundaries keeps a fresh `executionClaimedAt` far from the horizon and is not preempted WHILE it renews,
+  but preemption is a TTL HEURISTIC, not a liveness proof — a LONG-BLOCKED owner stalled inside a single
+  tool call for longer than `EXECUTION_CLAIM_TTL_MS` CAN still be taken over, and it is the WRITE FENCES
+  (not the TTL) that make the superseded owner's writes lose;
+  and an old owner's `release*` is a token-guarded no-op.
   The horizon is derived from the REAL clock (`Date.now()`), NEVER the demo clock (`demoNow()` pinned to
   2026-09-25), because `executionClaimedAt` uses the real clock. `resumeTask`/`retryTask`/`resumeTaskForAction`
   pass it to `claimTaskExecution`; `buildPlanDeps`'s `claimNode` passes it to `claimNodeExecution`.
@@ -376,9 +381,10 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   boundaries.** `resumeTask`/`retryTask`/`runSubmitPlan`/`resumeTaskForAction` thread their PLAN claim token
   into `buildPlanDeps` → `createTaskPersistence(planId, { planToken, nodeToken })`, and `buildPlanDeps#claimNode`
   records each WON node token in a per-node map read by `persistNode`. A write made while HOLDING a claim therefore goes through the
-  repository's token-fenced primitives (`updateTaskNode(taskId, nodeId, update, { fenceToken })` → `null` when
+  repository's token-fenced primitives — a SINGLE atomic statement carrying the token in its `where`, so ownership is validated in the SAME statement as the write, never a read-then-write (`updateTaskNode(taskId, nodeId, update, { fenceToken })` → `null` when
   the claim was lost; `claimTaskStatus(..., { fenceToken })` → `false` when lost), so a ZOMBIE executor whose
-  claim was taken over SKIPS the write (and its narration) instead of clobbering the takeover's row (a run
+  claim was taken over SKIPS the write (and its narration) instead of clobbering the takeover's node/plan
+  result, marking an already-completed dependent `skipped`, or advancing downstream (a run
   that holds NO claim — a control `pause`/`cancel` — writes UNFENCED;
   see `createTaskPersistence`). The claim
   is kept fresh by `renewTaskExecutionClaim(taskId, token)` — a TOKEN-CONDITIONED `updateMany`
@@ -386,6 +392,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   BOUNDARIES ONLY (`claimNode`/`releaseNode` / explicit progress points), NEVER from a background timer and
   NEVER while the run is blocked inside a tool call, so a legitimately long run keeps its slot while a run
   STUCK inside a tool call still ages out and becomes takeover-able (the takeover those write fences guard).
+  EVERY executor node outcome flows through this port — `running`/`success`/`failed`/`parked`/`cancelled`, a dependency-`skipped` node, and a `kind:'condition'`/`kind:'note'` node — and a node write with no node token (skip/condition/note, which never `claimNode`) falls back to the PLAN-token fence.
 - **A `resumeTaskForAction` that LOSES the plan claim still records the human decision — through an atomic
   ownership CAS, never an unfenced write.** The continuation
   mints a FRESH PLAN token via `claimTaskExecution(located.taskId, newId('taskclaim'), { staleBefore:
