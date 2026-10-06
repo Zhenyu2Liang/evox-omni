@@ -28,8 +28,8 @@ Harness helpers (`helpers.ts`):
   `bootDevServer` (project-local Next CLI, readiness gated on `/api/health` + `/agent`, one retry on
   a fresh port), `killProcessTree` (whole-tree teardown).
 - **Isolated DB**: `E2E_DB_URL` (absolute `file:` URL to `prisma/e2e.db`), `useIsolatedDatabase()`
-  (sets `process.env.DATABASE_URL`), `resetDemoDatabase()` (generate-or-heal the Client → delete →
-  `db push --skip-generate` → seed, with a delete + `--force-reset` fallback; FULL un-truncated CLI
+  (sets `process.env.DATABASE_URL`), `resetDemoDatabase()` (generate-or-heal the Client → the shared
+  ORDERED `prisma db push` ladder → seed; each rung deletes the DB first; FULL un-truncated CLI
   diagnostics on failure). See "Isolated E2E database".
 - Browser: `resolveBrowserExecutable`/`launchBrowser`, `withPage` (fresh isolated context + failure
   screenshot + `pageerror` capture), `setActiveBrowser`/`runJourney`, `createReporter`.
@@ -87,31 +87,39 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
 - The SAME `DATABASE_URL` is passed to BOTH the provisioning CLIs (`runCliStep`) AND the spawned
   dev server (`startDevServer`).
 - `resetDemoDatabase()` runs BEFORE the dev server boots (no open connection ⇒ no Windows SQLite
-  file-lock). It first ensures a GENERATED, USABLE Prisma Client, then (per attempt) DELETES `e2e.db` +
-  its `-wal`/`-shm`/`-journal` sidecars FIRST (missing files are fine) and provisions the schema:
-  1. **Client bootstrap / self-heal** (`ensurePrismaClientGenerated`): runs `prisma generate` when the
-     generated artifacts (`node_modules/.prisma/client/{schema.prisma,index.js,default.js}`) are absent
-     OR the client does not actually construct (a throwaway `require('@prisma/client'); new PrismaClient()`
-     probe — the bare-`npm install` postinstall stub throws `did not initialize yet`), so a
-     partially-provisioned or stale `node_modules` self-heals. After generating, artifact presence is the
-     HARD gate (a flaky probe can at most trigger one harmless extra generate).
-  2. **Primary provisioning**: `prisma db push --skip-generate` → DB usability probe
-     (`probeDatabaseUsable`: connect through the generated client and assert the canonical `User` table
-     exists — catches a push that reported success but left an un-openable/empty image) → seed via
-     `tsx prisma/seed.ts`.
-  3. **Fallback / auto-recovery** (only when the primary path fails): re-run `prisma generate` (a stale
-     client or engine can make the push fail with an opaque `Error: Schema engine error:`), re-DELETE
-     `e2e.db` + sidecars, then `prisma db push --force-reset --skip-generate` → probe → seed.
+  file-lock). It first ensures a GENERATED, USABLE Prisma Client, then (per attempt) provisions the
+  schema + seed through the SAME shared ORDERED LADDER as the Vitest setup
+  (`../helpers/prisma-cli.ts#provisionSchemaLadder`), which DELETES `e2e.db` + its
+  `-wal`/`-shm`/`-journal` sidecars (missing files are fine) BEFORE EVERY rung and runs
+  `probeDatabaseUsable()` + the seed (`afterPush`) between every push and its dependents:
+  1. **Client bootstrap / self-heal** (`ensurePrismaClientGenerated`, once per attempt): runs
+     `prisma generate` when the generated artifacts
+     (`node_modules/.prisma/client/{schema.prisma,index.js,default.js}`) are absent OR the client does
+     not actually construct (a throwaway `require('@prisma/client'); new PrismaClient()` probe — the
+     bare-`npm install` postinstall stub throws `did not initialize yet`), so a
+     partially-provisioned or stale `node_modules` self-heals. Readiness is gated on the USABILITY probe
+     (`prismaClientUsable`); artifact presence is accepted as a non-authoritative confirming signal.
+  2. **Primary rung** (byte-for-byte unchanged): `prisma db push --skip-generate` → probe → seed.
      `--force-reset` is deliberately NOT the primary path: on Windows it has been seen to leave the DB
      file as a 0-byte image and fail `Error code 11: database disk image is malformed`.
-- **Self-diagnosing CLI steps.** `runCliStep` decides success by the **EXIT CODE** (the deprecated
-  `package.json#prisma` warning lines are harmless) and, on failure, throws the COMPLETE labelled
-  stdout+stderr — the TAIL is ALWAYS preserved (an output over `CLI_OUTPUT_CAP` = 16 KB elides only the
-  MIDDLE), so the schema engine's real reason (often the last stderr line) is never hidden by
-  truncation — plus any spawn `error` (message + code). When BOTH provisioning paths fail the thrown
-  message carries the ORIGINAL primary error un-truncated alongside the fallback error. The whole attempt
-  (incl. the fallback) is retried `attempts` times (default 2) with a short backoff — SQLite on Windows
-  is occasionally lock-prone.
+  3. **Generate-first fallback rung**: re-run `prisma generate` → `prisma db push --force-reset
+     --skip-generate` → probe → seed — a stale client or engine can make the push fail with an opaque
+     `Error: Schema engine error:`.
+  4. **ADDITIVE flag-less rung**: `prisma db push` with NO flags → probe → seed — the exact shape that
+     provably SUCCEEDS in a clean environment where the flag-bearing shapes die with
+     `Error: Schema engine error:`. Because the file is deleted before every rung, `--force-reset` is not
+     needed here.
+  Each rung runs ONLY after the previous FAILED; the delete-then-push ordering means the fallbacks can
+  only help.
+- **Self-diagnosing CLI steps.** `runCliStep`/`runCliStepCaptured` decide success by the **EXIT CODE**
+  (the deprecated `package.json#prisma` warning lines are harmless) and, on failure, preserve the
+  COMPLETE labelled stdout+stderr — the TAIL is ALWAYS preserved (an output over `CLI_OUTPUT_CAP` = 16 KB
+  elides only the MIDDLE), so the schema engine's real reason (often the last stderr line) is never hidden
+  by truncation — plus any spawn `error` (message + code). When EVERY ladder rung fails
+  (`provisionSchemaLadder`) the thrown message embeds EACH rung's un-truncated output PLUS environment
+  diagnostics (resolved `DATABASE_URL`, cwd, project-local Prisma CLI path, a `prisma -v` version/engine
+  summary, `node_modules/@prisma/engines/schema-engine*` presence). The whole attempt is retried
+  `attempts` times (default 2) with a short backoff — SQLite on Windows is occasionally lock-prone.
 - CLIs are invoked like the dev server: project-local binaries (`REPO_ROOT/node_modules/...` launched
   with `process.execPath`), else `cmd.exe /d /s /c "npx …"` on Windows / a plain command on POSIX.
 - `E2E_SKIP_DB_RESET=1` keeps the current DB (e.g. to inspect post-run data) — the journeys then

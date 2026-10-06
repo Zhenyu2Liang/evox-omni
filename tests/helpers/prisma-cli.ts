@@ -26,7 +26,7 @@
  * Extracting it here keeps the two call sites from drifting apart. It uses Node built-ins ONLY (no
  * `vitest`, no `@/` alias) so both the Vitest setup file and the tsx-run E2E harness can import it.
  */
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
@@ -139,6 +139,44 @@ export interface RunCliStepOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+/** Raw outcome of one spawned CLI step (never throws — callers decide how to react). */
+export interface CliStepResult {
+  /** `true` iff the process exited with code 0. */
+  ok: boolean;
+  /** Process exit code (`null` when the process could not be spawned or was signalled). */
+  status: number | null;
+  stdout: string | null;
+  stderr: string | null;
+  /** Spawn failure (`ENOENT` etc.), or `null` — rendered by `spawnErrorText`. */
+  error: Error | null;
+}
+
+/**
+ * Spawn one CLI step synchronously and return its RAW outcome (stdout/stderr/exit code) WITHOUT
+ * throwing. `runCliStep` layers the fail-loud contract on top of this; the provisioning LADDER uses
+ * it directly so it can fold EACH rung's complete output (`diagnosticCliOutput`, tail preserved) into
+ * one combined failure.
+ */
+export function runCliStepCaptured(
+  command: string,
+  args: readonly string[],
+  opts: RunCliStepOptions,
+): CliStepResult {
+  const result = spawnSync(command, [...args], {
+    cwd: opts.cwd,
+    windowsHide: true,
+    encoding: 'utf8',
+    env: opts.env ?? process.env,
+  });
+  return {
+    ok: result.status === 0,
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    error: result.error ?? null,
+  };
+}
+
 /**
  * Run one CLI step synchronously in `opts.cwd`; throws with the FULL captured output on failure
  * (success is decided by the EXIT CODE, never by stderr text — the deprecated `package.json#prisma`
@@ -147,14 +185,9 @@ export interface RunCliStepOptions {
  * is never hidden by truncation.
  */
 export function runCliStep(command: string, args: readonly string[], opts: RunCliStepOptions): string {
-  const result = spawnSync(command, [...args], {
-    cwd: opts.cwd,
-    windowsHide: true,
-    encoding: 'utf8',
-    env: opts.env ?? process.env,
-  });
+  const result = runCliStepCaptured(command, args, opts);
   const out = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
-  if (result.status !== 0) {
+  if (!result.ok) {
     const spawnError = spawnErrorText(result.error);
     throw new Error(
       `执行失败（退出码 ${result.status ?? 'null'}）${spawnError}：${command} ${args.join(' ')}\n` +
@@ -234,4 +267,176 @@ export function ensurePrismaClientGenerated(repoRoot: string, env?: NodeJS.Proce
   runPrismaGenerate(repoRoot, env);
   if (prismaClientUsable(repoRoot) || prismaClientGenerated(repoRoot)) return;
   throw new Error('prisma generate 完成后 Prisma Client 产物仍缺失（见上方完整 CLI 输出）');
+}
+
+// ---------------------------------------------------------------------------
+// Ordered provisioning ladder (ADDITIVE fallback — the primary rung is unchanged).
+// ---------------------------------------------------------------------------
+
+/** One rung of a provisioning ladder: a labelled `prisma db push` invocation shape. */
+export interface PushRung {
+  /** Human-readable label, e.g. `db push --force-reset --skip-generate` (used in diagnostics). */
+  label: string;
+  /** FULL CLI args INCLUDING the `prisma` program name, e.g. `['prisma','db','push','--skip-generate']`. */
+  args: readonly string[];
+  /** Optional pre-step run BEFORE this rung's push (e.g. `prisma generate`). A throw fails the rung. */
+  before?: () => void;
+}
+
+export interface ProvisionSchemaOptions {
+  /** Project root — the cwd for every CLI step and where `node_modules/prisma` is resolved. */
+  repoRoot: string;
+  /** Directory holding the SQLite file + its `-wal`/`-shm`/`-journal` sidecars. */
+  dbDir: string;
+  /** SQLite file names (relative to `dbDir`) DELETED, via `removeSqliteFiles`, before EACH rung. */
+  dbFiles: readonly string[];
+  /** The ORDERED ladder: each rung runs ONLY after the previous rung FAILED. */
+  rungs: readonly PushRung[];
+  /** Environment for the child processes (defaults to the current `process.env`). */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Runs AFTER a rung's push SUCCEEDS (e.g. a usability probe + a seed). A throw here is treated
+   * EXACTLY like a push failure — the ladder advances to the NEXT rung, never a warn-and-continue.
+   */
+  afterPush?: (rung: PushRung) => void;
+}
+
+/** Safe single-line text for ANY throwable (never a raw stack). */
+function errorText(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (typeof e === 'string') return e;
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
+
+/**
+ * Provision a SQLite schema through an ORDERED LADDER of `prisma db push` invocation shapes.
+ *
+ * WHY A LADDER: on a clean checkout the AUTOMATIC push can die with an opaque
+ * `Error: Schema engine error:` (empty detail) even though a MANUAL plain `prisma db push` (NO flags)
+ * succeeds in the very same worktree — the one concrete, evidence-based differentiator is the
+ * INVOCATION SHAPE (the automatic paths always pass `--skip-generate` and sometimes `--force-reset`).
+ * Rather than guess, the ladder tries the historical PRIMARY shape first (byte-for-byte unchanged) and
+ * then, ADDITIVELY and only AFTER a failure, falls back to progressively simpler shapes ending in the
+ * flag-less `db push` that is known to succeed where the flagged shapes fail.
+ *
+ * Mechanics: each rung runs ONLY after the previous one FAILED, and `dbFiles` (+ sidecars) are deleted
+ * with `removeSqliteFiles` BEFORE EVERY rung — so `--force-reset` is not required on later rungs (the
+ * file is gone; a fresh push is equivalent). A rung whose push SUCCEEDS but whose `afterPush` throws
+ * is ALSO treated as failed and the ladder advances.
+ *
+ * FAIL-LOUD: if EVERY rung fails, a single error is thrown that embeds the FULL captured stdout+stderr
+ * of EVERY rung (`diagnosticCliOutput`, tail preserved) PLUS enriched environment diagnostics (the
+ * resolved `DATABASE_URL`, the cwd, the project-local Prisma CLI path and whether it exists, a
+ * `prisma -v`-style version/engine summary, and the presence of the schema-engine artifacts) — so a
+ * future `Schema engine error:` is never opaque again. It NEVER silently continues.
+ */
+export function provisionSchemaLadder(opts: ProvisionSchemaOptions): void {
+  if (opts.rungs.length === 0) throw new Error('provisionSchemaLadder：至少需要一个 rung');
+  const attempts: { rung: PushRung; output: string }[] = [];
+  for (const rung of opts.rungs) {
+    // Optional pre-step (e.g. `prisma generate`) — a throw fails THIS rung and advances the ladder.
+    if (rung.before !== undefined) {
+      try {
+        rung.before();
+      } catch (e) {
+        attempts.push({ rung, output: `（前置步骤失败）${errorText(e)}` });
+        continue;
+      }
+    }
+    removeSqliteFiles(opts.dbDir, opts.dbFiles);
+    const push = cliCommand(resolvePrismaBin(opts.repoRoot), rung.args);
+    const result = runCliStepCaptured(push.command, push.args, { cwd: opts.repoRoot, env: opts.env });
+    if (result.ok) {
+      try {
+        opts.afterPush?.(rung);
+        return;
+      } catch (e) {
+        attempts.push({
+          rung,
+          output:
+            `（push 成功，但后置步骤失败）${errorText(e)}\n` +
+            diagnosticCliOutput(result.stdout, result.stderr),
+        });
+        continue;
+      }
+    }
+    attempts.push({
+      rung,
+      output:
+        `执行失败（退出码 ${result.status ?? 'null'}）${spawnErrorText(result.error)}：${push.command} ${push.args.join(' ')}\n` +
+        diagnosticCliOutput(result.stdout, result.stderr),
+    });
+  }
+  throw new Error(buildProvisionFailure(opts, attempts));
+}
+
+/** Assemble the single fail-loud error: every rung's rendered output + the environment diagnostics. */
+function buildProvisionFailure(
+  opts: ProvisionSchemaOptions,
+  attempts: readonly { rung: PushRung; output: string }[],
+): string {
+  const lines: string[] = [];
+  lines.push(
+    `数据库 schema 配置失败：已按顺序尝试全部 ${opts.rungs.length} 种 prisma db push 形态，均未成功（fail-loud，绝不静默继续）。`,
+  );
+  attempts.forEach((attempt, index) => {
+    lines.push('');
+    lines.push(`=== 尝试 ${index + 1}/${opts.rungs.length}：${attempt.rung.label} ===`);
+    lines.push(attempt.output.length > 0 ? attempt.output : '(无输出)');
+  });
+  lines.push('');
+  lines.push('=== 环境诊断上下文 ===');
+  lines.push(provisionDiagnostics(opts));
+  return lines.join('\n');
+}
+
+/** Best-effort environment snapshot so a future `Schema engine error:` is never opaque again. */
+function provisionDiagnostics(opts: ProvisionSchemaOptions): string {
+  const env = opts.env ?? process.env;
+  const lines: string[] = [];
+  lines.push(`DATABASE_URL: ${env.DATABASE_URL ?? '(未设置)'}`);
+  lines.push(`cwd (repoRoot): ${opts.repoRoot}`);
+
+  const cliPath = resolvePrismaBin(opts.repoRoot);
+  lines.push(
+    `项目本地 Prisma CLI: ${cliPath ?? '(缺失：node_modules/prisma/build/index.js)'}${cliPath ? '（存在）' : ''}`,
+  );
+  if (cliPath !== undefined) {
+    const version = spawnSync(process.execPath, [cliPath, '-v'], {
+      cwd: opts.repoRoot,
+      windowsHide: true,
+      encoding: 'utf8',
+      env,
+    });
+    const rendered = diagnosticCliOutput(version.stdout, version.stderr);
+    lines.push(
+      `prisma -v（退出码 ${version.status ?? 'null'}）${spawnErrorText(version.error)}：\n` +
+        (rendered.length > 0 ? rendered : '(无输出)'),
+    );
+  }
+
+  const enginesDir = path.join(opts.repoRoot, 'node_modules', '@prisma', 'engines');
+  let enginesText: string;
+  if (!existsSync(enginesDir)) {
+    enginesText = `(目录不存在：${enginesDir})`;
+  } else {
+    try {
+      const engines = readdirSync(enginesDir).filter((name) => name.startsWith('schema-engine'));
+      enginesText = engines.length > 0 ? engines.join(', ') : `(目录存在但无 schema-engine*：${enginesDir})`;
+    } catch (e) {
+      enginesText = `(读取失败：${errorText(e)})`;
+    }
+  }
+  lines.push(`schema-engine 产物: ${enginesText}`);
+
+  lines.push(
+    `目标 DB 文件（相对 ${opts.dbDir}）: ${opts.dbFiles
+      .map((name) => `${name}=${existsSync(path.join(opts.dbDir, name)) ? '存在' : '缺失'}`)
+      .join(' ')}`,
+  );
+  return lines.join('\n');
 }
