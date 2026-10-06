@@ -54,7 +54,7 @@ it('a plan cancellation completed before authorization CAS prevents the debit',a
  try{
   await bounded(beforeTool.promise);const task=(await p.agentTask.findFirst({where:{sessionId:s}}))!;
   const origBulk=p.pendingAction.updateMany.bind(p.pendingAction);
-  vi.spyOn(p.pendingAction,'updateMany').mockImplementation(async(args:any)=>{const result=await origBulk(args);if(args.where.taskId===task.id){afterBulk.release();await allowCancel.promise;}return result;});
+  vi.spyOn(p.pendingAction,'updateMany').mockImplementation(((async(args:any)=>{const result=await origBulk(args);if(args.where.taskId===task.id){afterBulk.release();await allowCancel.promise;}return result;}) as any));
   cancelling=post(task.id,'cancel',s);await bounded(afterBulk.promise);
   allowTool.release();await bounded(afterTool.promise);
   const origAuth=gateway.authorizeAction.bind(gateway);
