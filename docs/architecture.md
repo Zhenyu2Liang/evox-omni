@@ -227,6 +227,11 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   （控制是 DB 驱动：执行器在每个检查点重读持久化行，而非内存标志）。
 - **RESUME**：先把状态翻回 `running` 再重跑计划，**跳过**所有既有结果为终态
   （`success | failed | skipped | cancelled`）的节点——已成功节点**绝不重跑**；仍停放的被门控节点继续停放。
+  若某门控节点的既有 `PendingAction` 已为 `executed`（副作用已执行并已入账，但节点结果未回写），则**恢复**该节点：
+  `agent/confirmation.ts#executeGatedToolOnce` 经 `findInFlightPlanAction(taskId, nodeId)` 识别后调用
+  `replayExecutedPlanAction`，以该动作**持久化的原始 toolName/argsJson** 经 SDK 在**同一节点幂等键**
+  `nodeExecutionKey(taskId, nodeId)` 下**重放**（SDK 幂等 ⇒ 不重复副作用），把节点补齐为 `success` 并继续后续节点，
+  **不重新请求确认、不重复执行**；真正 `pending`/`awaiting_mfa`/`confirmed` 的节点仍继续停放等待人工决策；恢复幂等。
 - **CANCEL**：终态。`agent/task-control.ts#cancelTask` 的**原子结算**把「撤销」与「置状态」放进**同一个**
   `prisma.$transaction`：事务内**先撤销**该计划停放的 `PendingAction`——`revokePendingActionsByTask(taskId,
   ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`，**单条 `updateMany`** 一次性取消该计划的
@@ -244,15 +249,22 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   （compare-and-set：`executionToken IS NULL` → 本次的 token）主张 `AgentTask.executionToken`，并在 `finally` 中由
   `releaseTaskExecution` 释放；节点级同理：`claimNodeExecution` 主张 `AgentTaskNode.executionToken`、
   `releaseNodeExecution` 在 `finally` 释放，经 planner 的 `PlanDeps.claimNode` / `PlanDeps.releaseNode` 接入
-  （`agent/task-control.ts#buildPlanDeps`）。因此并发的 resume / retry / 确认续跑中**只有一个**能真正启动执行器，
+  （`agent/task-control.ts#buildPlanDeps`）。这些领取支持**陈旧接管**：resume / retry 传入
+  `staleBefore = staleExecutionClaimBefore()`（`agent/task-control.ts`；`EXECUTION_CLAIM_TTL_MS = 600000` ≈ 10 分钟，
+  基于**真实时钟** `Date.now()`，**非**演示时钟），`where.OR = [ executionToken IS NULL, executionClaimedAt < staleBefore ]`：
+  **仅当**所有者被证明**陈旧**时才接管；仍**存活**的所有者**不被抢占**；并发接管**只允许一个赢家**；旧所有者的
+  `releaseTaskExecution` / `releaseNodeExecution`（`finally` 中调用）按 token CAS **成为空操作**。因此并发的
+  resume / retry / 确认续跑中**只有一个**能真正启动执行器，
   其余立即返回已持久化的计划。跨「副作用已发生、结果尚未落库」窗口的幂等由
   **`nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`**（`lib/ledger.ts`）保证：它作为 SDK 的
-  `idempotencyKey` 传入，同一 `(task, node)` 的重跑重放原始副作用（如投资 `subscribe_investment` /
-  `redeem_investment` 即按此键去重）而不会二次施加。账本行的定位在 `lib/ledger.ts` **统一**：
+  `idempotencyKey` 传入，同一 `(task, node)` 的重跑**重放原始副作用**而不会二次施加（如投资 `subscribe_investment` /
+  `redeem_investment` 即按此键去重；`redeem_investment` 另在持仓上持久化本次执行的**执行身份**与**原始结果**
+  （`InvestmentHolding.redeemExecutionKey` / `redeemResult`）——相同身份的重放**返回原始结果**，身份不同或缺失则抛
+  `AppError('CONFLICT')`）。账本行的定位在 `lib/ledger.ts` **统一**：
   `ledgerKeyForAction({ id, taskId, nodeId })` 在 `taskId` 与 `nodeId` **同时存在**时返回
   `nodeExecutionKey(taskId, nodeId)`，否则返回动作自身的 `id`；`ledgerTxIdForAction(userId, action)` 由此派生
   账本行 id——agent 的确认执行路径与 SDK 均据此推导转账流水 id。`agent/confirmation.ts#executeGatedToolOnce`
-  另以 `findInFlightPlanActionId(taskId, nodeId)` 预检，避免为同一节点重复铸造第二个 `PendingAction`。
+  另以 `findInFlightPlanAction(taskId, nodeId)` 预检，避免为同一节点重复铸造第二个 `PendingAction`。
 - **刷新 / 恢复**：`GET /api/tasks`（按 cookie 限定的列表）与 `GET /api/tasks/[id]`（单计划，其节点结果携带
   `pendingActionId`，UI 可在刷新后恢复确认/MFA 入口）；`GET /api/actions` 列出非终态待处理动作。
   对计划停放动作的成功确认/验证会追加一个 `{type:'plan_update', plan}` 事件。
@@ -365,7 +377,8 @@ sequenceDiagram
   `nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`（`lib/ledger.ts`）是计划节点**副作用**的 SDK
   `idempotencyKey`（如 `subscribe_investment` / `redeem_investment` 即按它去重）；`agent/confirmation.ts` 只对
   **自动执行的计划节点**调用按**稳定的节点身份** `nodeExecutionKey(taskId, nodeId)` 合并并发调用，并以
-  `findInFlightPlanActionId(taskId, nodeId)` 预检、避免为同一节点重复铸造第二个 `PendingAction`；
+  `findInFlightPlanAction(taskId, nodeId)` 预检、避免为同一节点重复铸造第二个 `PendingAction`；已 `executed` 的计划节点
+  动作经幂等 SDK 重放被**恢复**（绝不重新确认）；
   **独立调用**（无计划节点）**没有**合并键——其恰好一次由 DB 的 `PendingAction` 状态 CAS 保证；
   **两个不同计划**即使调用同一工具、传同一参数也各自独立执行（按 `sessionId` + 工具 + args 合并会把一个计划的副作用
   错误地施加到另一个计划）。进程内 `inFlightExecutions` 只是**同进程补充**，且以**节点身份**为键。
