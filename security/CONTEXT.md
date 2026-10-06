@@ -106,7 +106,7 @@ const BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__'
 interface GatewayContext { sessionId: string; userId: string; toolName: ToolName; args: Record<string, unknown>; userRequest: string;
                            taskId?: string; nodeId?: string }   // owning DAG plan node (AgentTask.id / AgentTaskNode.nodeId); absent for a top-level call
 interface ActionOwnership { userId: string; sessionId: string }      // REQUIRED caller identity
-type AuthorizeOptions = ActionOwnership & { mfaCode?: string }
+type AuthorizeOptions = ActionOwnership & { mfaCode?: string; confirmed?: boolean }   // `confirmed` is an accepted-but-ignored caller HINT threaded from the caller; it never changes a permission outcome (a YELLOW action is authorized by the atomic `pending → confirmed` CAS claim, a RED action by `mfaCode`)
 type CancelOptions = ActionOwnership
 interface AuthorizationResult { ok: boolean; status: PendingActionStatus; actionId: string;
                                 tier: RiskLevel;              // ALWAYS the EFFECTIVE tier (an escalated transfer ⇒ 'RED')
