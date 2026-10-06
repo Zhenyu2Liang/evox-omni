@@ -60,7 +60,8 @@ Harness helpers (`helpers.ts`):
 ## Prerequisites (in order, in a fresh worktree)
 1. `npm install`
 - No manual `prisma generate` step: `resetDemoDatabase()` GENERATES the Prisma Client itself when it is
-  missing, so a clean `npm install`-only checkout is sufficient (see "Isolated E2E database").
+  missing or unusable (and self-heals a partially-provisioned `node_modules`), so a clean `npm install`-only
+  checkout is sufficient (see "Isolated E2E database").
 - A **free port** is chosen at runtime. **System Chrome** is used (Chrome first, Edge fallback;
   `E2E_BROWSER_PATH` overrides detection). **No `playwright install` / browser download** — headless
   Chrome is launched via `chromium.launch({ executablePath, headless: true })`.
