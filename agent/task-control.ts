@@ -980,6 +980,9 @@ export async function findTaskByPendingAction(
  *   decision either, so it records the ONE decided node through `recordDecidedNodeFenced` — a single
  *   atomic write FENCED on the LIVE owner's plan/node token — and returns the plan as the owner will
  *   observe it; the owner records the node it is parked on and continues, so the plan does not wedge.
+ *   When NO owner is left (its claim was released between the reads) the same fenced primitive records
+ *   the decision and settles the plan status from the persisted node rows (`settlePlanFromNodes`), so a
+ *   plan whose every node is terminal can never dangle a stale `waiting_confirmation`.
  *   Nothing was claimed, so nothing is released.
  *
  * PAUSE RETENTION: when the owning plan was explicitly PAUSED, this ONE decision must ONLY record

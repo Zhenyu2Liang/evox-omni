@@ -14,13 +14,15 @@
  *    (`pauseTask`/`cancelTask`) writes deliberately unfenced — it holds no claim to fence on.
  * 2. `recordDecidedNodeFenced` — the confirm/verify CONTINUATION when it LOST the plan claim. It may
  *    not drive the plan (the LIVE owner does), but the human decision must never be dropped, so it
- *    records that ONE decided node through a single atomic token-fenced write.
+ *    records that ONE decided node through a single atomic token-fenced write; with NO owner left it
+ *    also settles the plan status from the persisted node rows (`settlePlanFromNodes`), so a plan
+ *    whose every node is terminal can never dangle a stale `waiting_confirmation`.
  *
  * The fence always lives INSIDE the single `updateMany` / compare-and-set statement (see
  * `lib/db/repositories/task.ts`), so ownership is verified ATOMICALLY with the write: a run whose
  * claim was taken over matches 0 rows and SKIPS its stale result instead of clobbering the takeover's.
  */
-import type { TaskNodeResult, TaskNodeStatus } from '@/lib/contracts/task';
+import type { TaskNodeResult, TaskNodeStatus, TaskPlanStatus } from '@/lib/contracts/task';
 import type { PlanToolOutcome } from '@/planner';
 import { demoNow } from '@/lib/clock';
 import { toJson } from '@/lib/json';
@@ -118,6 +120,64 @@ export interface DecidedNodeInput {
 }
 
 /**
+ * Node statuses a plan may be settled FROM: a `settlePlanFromNodes` pass only derives a plan status
+ * once every node has stopped moving on its own (mirrors `planner/executor.ts`'s `TERMINAL` set
+ * MINUS `'cancelled'` — a cancelled node belongs to `cancelTask`, which owns that plan status).
+ */
+const SETTLEABLE_NODE_STATUSES: ReadonlySet<TaskNodeStatus> = new Set<TaskNodeStatus>([
+  'success',
+  'failed',
+  'skipped',
+]);
+
+/** Plan statuses `settlePlanFromNodes` may move: the live, non-terminal, non-paused ones. */
+const SETTLEABLE_PLAN_STATUSES: TaskPlanStatus[] = ['pending', 'running', 'waiting_confirmation'];
+
+/**
+ * Settle a plan's PERSISTED status from its PERSISTED node rows, but ONLY when NO executor owns the
+ * plan (`executionToken IS NULL`).
+ *
+ * A LOST-claim confirm-continuation records the human-decided node on a plan whose LIVE owner had
+ * ALREADY published its (now stale) snapshot — the owner saw the node re-parked, released its claim
+ * and stopped; the continuation then made that node terminal. Without this settle the plan would
+ * dangle `waiting_confirmation` with every node terminal (a wedged, stale summary). The derivation
+ * mirrors the executor's own settlement: every node `success`/`skipped` ⇒ `'success'`, else `'failed'`.
+ *
+ * Safe by construction:
+ * - a LIVE claim (`executionToken` set) is the single writer of the plan status, so this pass SKIPS;
+ *   the condition is re-checked INSIDE the single `updateMany`, so a claim taken between the read and
+ *   the write still wins;
+ * - a `'cancelled'` plan is terminal and a `'paused'` plan must be RETAINED (pause retention), so both
+ *   are left untouched;
+ * - only statuses whose every node is terminal are eligible, so nothing is settled mid-walk.
+ *
+ * Returns `true` iff the plan status was written.
+ */
+export async function settlePlanFromNodes(taskId: string): Promise<boolean> {
+  const row = await getTask(taskId);
+  if (row === null) return false;
+  if (row.executionToken !== null) return false; // a LIVE executor owns the plan status
+  if (row.status === 'cancelled' || row.status === 'paused') return false;
+  if (row.nodes.length === 0) return false;
+
+  const statuses = row.nodes.map((node) => node.status as TaskNodeStatus);
+  if (!statuses.every((status) => SETTLEABLE_NODE_STATUSES.has(status))) return false;
+
+  const settled: TaskPlanStatus = statuses.every(
+    (status) => status === 'success' || status === 'skipped',
+  )
+    ? 'success'
+    : 'failed';
+  if (row.status === settled) return false;
+
+  const written = await prisma.agentTask.updateMany({
+    where: { id: taskId, executionToken: null, status: { in: SETTLEABLE_PLAN_STATUSES } },
+    data: { status: settled },
+  });
+  return written.count > 0;
+}
+
+/**
  * Record a HUMAN decision's outcome on plan node `(taskId, nodeId)` through a SINGLE atomic FENCED
  * write, WITHOUT running the plan.
  *
@@ -134,7 +194,9 @@ export interface DecidedNodeInput {
  *    token of its own;
  * 3. else no claim exists at all (the owner released it between the reads): the decision is recorded
  *    with the CONTROL-equivalent unfenced write — the ONLY unfenced write in this module, reachable
- *    only when NO executor owns the plan (a claimed plan always takes branch 2).
+ *    only when NO executor owns the plan (a claimed plan always takes branch 2) — and the plan status
+ *    is then settled from the persisted node rows (see `settlePlanFromNodes`), because no executor is
+ *    left to publish it.
  *
  * Returns `true` iff the outcome was written. `false` means the plan/node row is gone, or the
  * node/plan claim changed under us — in which case a LIVE owner of that very node writes the truth.
@@ -176,13 +238,16 @@ export async function recordDecidedNodeFenced(input: DecidedNodeInput): Promise<
     return res.count > 0;
   }
 
-  // 3. No claim at all: a control-grade write so the human decision is NEVER dropped.
+  // 3. No claim at all: a control-grade write so the human decision is NEVER dropped, followed by a
+  //    CONTROL-equivalent plan settle — with NO executor left, THIS continuation is the only writer
+  //    that can make the persisted plan status agree with its now-terminal node rows.
   try {
     await updateTaskNode(input.taskId, input.nodeId, update);
-    return true;
   } catch (error) {
     // A plan built outside `submit_plan` has no node rows; not a persistence failure.
     if (isMissingNodeError(error)) return false;
     throw error; // every other failure surfaces — never swallowed
   }
+  await settlePlanFromNodes(input.taskId);
+  return true;
 }
