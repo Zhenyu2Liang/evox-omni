@@ -80,7 +80,7 @@ Per family module: a `create<Name>Tool(userId: string): AgentTool<typeof <Name>P
 | `freeze_card` | card.ts | 🟡 | `banking.card.freezeCard(cardId)` |
 | `unfreeze_card` | card.ts | 🔴 | `banking.card.unfreezeCard(cardId)` |
 | `report_lost_card` | card.ts | 🔴 | `banking.card.reportLostCard(cardId, { reason })` |
-| `apply_virtual_card` | card.ts | 🟡 | `banking.card.applyVirtualCard({ userId, label })` |
+| `apply_virtual_card` | card.ts | 🟡 | `banking.card.applyVirtualCard({ userId, label, idempotencyKey? })` |
 | `list_subscriptions` | subscription.ts | 🟢 | `banking.subscription.listSubscriptions(userId)` |
 | `cancel_subscription` | subscription.ts | 🟡 | `banking.subscription.cancelSubscription(subscriptionId)` |
 | `set_subscription_reminder` | subscription.ts | 🟡 | `banking.subscription.setSubscriptionReminder(subscriptionId, remind)` |
@@ -175,10 +175,10 @@ Both live in THIS node; the key is derived by the agent layer (see parent `../CO
   `ctx = { taskId, nodeId }`. The agent layer maps it to `nodeExecutionKey(taskId, nodeId)`
   (`@/lib/ledger`, format `nxe:<taskId>:<nodeId>`) and passes it as `registry.executeDirect(name, args,
   { idempotencyKey })`. `executeDirect` forwards `opts` to the runner (it dispatches
-  `runners[name](userId, args, opts)`), and the two SIDE-EFFECTING inline runners
-  `runReserveBudget` (`budget.ts`) and `runCreateScheduledTask` (`task.ts`) resolve the key as
+  `runners[name](userId, args, opts)`), and the side-effecting runners `runReserveBudget`
+  (`budget.ts`), `runCreateScheduledTask` (`task.ts`) and `runApplyVirtualCard` (`card.ts`) resolve the key as
   `opts?.idempotencyKey ?? args.idempotencyKey` (the server-injected `opts` wins) and forward it to
-  `banking.budget.reserveBudget` / `banking.task.createScheduledTask`, which replay the existing row on
+  `banking.budget.reserveBudget` / `banking.task.createScheduledTask` / `banking.card.applyVirtualCard`, which replay the existing row on
   the same key. So a replay of the SAME `(plan, node)` dedupes instead of double-creating; a different
   task/node yields a different key and a distinct row. `ReserveBudgetParams`/`CreateScheduledTaskParams`
   also carry an OPTIONAL `idempotencyKey` (round-trip for direct/schema callers); `opts` is the
