@@ -19,11 +19,13 @@ import type {
   InvestResult,
   InvestmentComparison,
   InvestmentRiskLevel,
+  RedeemInvestmentInput,
+  SubscribeInvestmentInput,
   ProductView,
 } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
 import { formatCNY } from '@/lib/money';
-import type { ToolExecutionResult } from './index';
+import type { ToolExecutionResult, ToolRunOptions } from './index';
 
 /* ----------------------------------------------------------- list_investments */
 
@@ -219,10 +221,11 @@ export function createSubscribeInvestmentTool(
   };
 }
 
-/** Model-free runner — `banking.investment.subscribeInvestment({ userId, productId, amount })`. */
+/** Model-free runner — `banking.investment.subscribeInvestment({ userId, productId, amount, idempotencyKey })`. */
 export async function runSubscribeInvestment(
   userId: string,
   args: Record<string, unknown>,
+  opts?: ToolRunOptions,
 ): Promise<ToolExecutionResult> {
   try {
     const productId = args.productId;
@@ -237,7 +240,13 @@ export async function runSubscribeInvestment(
       userId,
       productId,
       amount,
-    });
+      // At-most-once: the SERVER-INJECTED `opts.idempotencyKey` (the gated-`PendingAction` /
+      // plan-node path) is forwarded verbatim to the SDK's `idempotencyKey`, so a replay of the SAME
+      // action/node reuses its ledger effect instead of debiting twice. Absent ⇒ unchanged behavior.
+      // The SDK input type does not (yet) declare the field, so the object is cast minimally — this
+      // compiles whether or not the SDK adds `idempotencyKey` to `SubscribeInvestmentInput`.
+      idempotencyKey: opts?.idempotencyKey,
+    } as SubscribeInvestmentInput);
     const balance =
       result.newBalance != null ? `，账户余额 ${formatCNY(result.newBalance)}` : '';
     return {
@@ -280,17 +289,24 @@ export function createRedeemInvestmentTool(
   };
 }
 
-/** Model-free runner — `banking.investment.redeemInvestment({ userId, holdingId })`. */
+/** Model-free runner — `banking.investment.redeemInvestment({ userId, holdingId, idempotencyKey })`. */
 export async function runRedeemInvestment(
   userId: string,
   args: Record<string, unknown>,
+  opts?: ToolRunOptions,
 ): Promise<ToolExecutionResult> {
   try {
     const holdingId = args.holdingId;
     if (typeof holdingId !== 'string' || holdingId === '') {
       throw new AppError('VALIDATION', 'redeem_investment 需要 holdingId');
     }
-    const result: InvestResult = await banking.investment.redeemInvestment({ userId, holdingId });
+    const result: InvestResult = await banking.investment.redeemInvestment({
+      userId,
+      holdingId,
+      // At-most-once: forwarded verbatim to the SDK's `idempotencyKey` (absent ⇒ unchanged behavior).
+      // Minimal cast — the SDK input type does not (yet) declare the field.
+      idempotencyKey: opts?.idempotencyKey,
+    } as RedeemInvestmentInput);
     const balance =
       result.newBalance != null ? `，账户余额 ${formatCNY(result.newBalance)}` : '';
     return {

@@ -198,15 +198,19 @@ Human decision (API route → `confirmation.ts`):
 Consequence: money-moving calls are always triggered by a human decision, never by model text — the injection-resistance guarantee demo Test 4 (prompt injection) proves.
 
 Idempotency (code-enforced, `confirmation.ts`): `executeAuthorizedAction` derives the SDK idempotency key
-from the action's PERSISTED plan link via `getPendingActionPlanLink` — `nodeExecutionKey(taskId, nodeId)`
-(= `nxe:<taskId>:<nodeId>`, `@/lib/ledger`) when the action parked a plan node, else `action.id` (the
-standalone action's own id) — and passes it to
-`registry.executeDirect(action.toolName, action.args, { idempotencyKey })` for EVERY tool. The INLINE
+with the shared-kernel helper `ledgerKeyForAction({ id, taskId, nodeId })` (`@/lib/ledger`) from the
+action's PERSISTED plan link (`getPendingActionPlanLink`) — `nodeExecutionKey(taskId, nodeId)`
+(= `nxe:<taskId>:<nodeId>`) when the action parked a plan node, else `action.id` (the standalone action's
+own id) — and passes it to
+`registry.executeDirect(action.toolName, action.args, { idempotencyKey })` for EVERY tool. Using the SAME
+`ledgerKeyForAction` generation that `security/`'s risk engine looks up (`ledgerTxIdForAction`) keeps an
+already-ledgered in-flight transfer excluded from the cumulative daily total. The INLINE
 GREEN node path (`executeGatedToolOnce`) passes the same `nodeExecutionKey`, so a re-run of a node replays
-its SDK-level side effect. `transfer_money` derives the created ledger row id from the key via
-`idempotentTransferTxId(userId, key)`; that deterministic id is the link `security/` uses to exclude an
-already-ledgered in-flight transfer from the cumulative daily total (the DB PK dedups the write, so no
-lock is needed).
+its SDK-level side effect. `transfer_money`, `reserve_budget`, `create_scheduled_task` AND the investment
+tools (`subscribe_investment`/`redeem_investment`; `agent/tools/investment.ts` accepts `opts?: ToolRunOptions`
+and forwards `idempotencyKey`) all thread the key into their banking-sdk call; `transfer_money` derives the
+created ledger row id from the key via `idempotentTransferTxId(userId, key)` (the DB PK dedups the write,
+so no lock is needed).
 It records the TRUE terminal
 status with `gateway.recordActionResult(actionId, ok ? 'executed' : 'failed')` BEFORE auditing, and
 resolves the owner from `getSession(action.sessionId)?.userId` (NO demo-user fallback — an unknown owner
@@ -258,14 +262,33 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
 
 ### Plan-lifecycle & confirmation guarantees (code-grounded)
 
-- **Cancel revokes parked actions, THEN cancels.** `task-control.ts#cancelTask` FIRST runs the atomic
-  bulk `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])` (ONE `updateMany` → `cancelled`:
-  the PRIMARY guarantee, so no executable action survives the cancellation regardless of which node
-  parked it), THEN the node-`output`-scan `revokeParkedActions` (one `gateway.cancelAction` per parked
-  node — the FALLBACK for a pre-link action) BEFORE `lifecycle.cancelPlan`. `revokeParkedActions` reports
+- **Cancel settles revoke + plan status ATOMICALLY.** `task-control.ts#cancelTask` first runs the
+  root-client bulk `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])` (the PRIMARY
+  guarantee that no executable action survives; also the statement the review spec's spy gates), then in
+  ONE `prisma.$transaction` re-runs `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'], tx)`
+  (covering anything parked during phase 1) AND writes the row status inline
+  `tx.agentTask.update({ where:{id:taskId}, data:{status:'cancelled'} })`. `updateTaskStatus`/`claimTaskStatus`
+  in `lib/db/repositories/task.ts` accept no transaction client, so the status write goes through `tx`
+  directly. Because the re-revoke and the `cancelled` status commit together, a newly parked action cannot
+  be authorized against a still-non-cancelled plan. The node-`output`-scan `revokeParkedActions` (one
+  `gateway.cancelAction` per parked node — the FALLBACK for a pre-link action) and `sweepCancelledPlan`
+  are kept ONLY as POST-HOC fallbacks (not the primary guarantee). `revokeParkedActions` reports
   `alreadySettled` for an action that already executed/errored and never pretends to roll it back
   (executed work is irreversible; the planner performs NO automatic compensation). Anything that could
   not be settled — including the bulk-revoke count — is durably recorded via `recordRevokeFailure`.
+- **A resume never re-mints an action for an in-flight plan node.** Every `PendingAction` persists its
+  owning plan+node at creation (`PendingAction.taskId`/`nodeId`). Before
+  `confirmation.ts#executeGatedToolOnce` mints a gated action for a plan node,
+  `findInFlightPlanActionId(taskId, nodeId)` looks for an existing action on that `(taskId, nodeId)` in
+  status `pending | awaiting_mfa | confirmed` (`listPendingActionsByTask(taskId, {statuses})` filtered by
+  nodeId, oldest-first). When found, the node is treated as IN-PROGRESS: no `gateway.handleToolCall` and
+  no new `PendingAction` — the SAME parked outcome
+  (`{ ok:false, requiresConfirmation:true, pendingActionId:<existing id> }`) is returned. This closes the
+  window where a node's side effect has run but its result is not yet persisted (the gateway's own
+  `findReusableAction` only matches `pending`/`awaiting_mfa`, so it would otherwise MISS the `confirmed`
+  row) so a resume there cannot double-apply. The in-process single-flight (`inFlightExecutions` /
+  `nodeExecutionKey`) remains an OPTIMIZATION only, never the correctness guarantee; the persisted DB row
+  is the authority.
 - **No pre-park plan-status check exists** — neither `securityGateway.handleToolCall` nor
   `executor.runPlan`'s `runToolNode` consults the plan status before parking. Prevention of a
   post-cancel executable action relies on the post-run CANCEL SWEEP: `sweepCancelledPlan(sessionId,

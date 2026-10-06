@@ -11,6 +11,8 @@
  * The write still goes through `./tx.ts` → `runInTransaction`, which remains the SDK's single
  * direct-Prisma boundary; this module never touches the Prisma client itself.
  */
+import { createHash } from 'node:crypto';
+
 import { runInTransaction, type Tx } from './tx';
 
 /** Structural Prisma unique-constraint (P2002) check — avoids importing the runtime error class. */
@@ -24,6 +26,22 @@ export function isUniqueViolation(error: unknown): boolean {
 export function normalizeIdempotencyKey(key: string | undefined): string | undefined {
   const trimmed = key?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Canonical deterministic virtual-card id for an idempotent `applyVirtualCard` call.
+ *
+ * The `Card` table has no `idempotencyKey` column, so — mirroring
+ * `lib/ledger.idempotentTransferTxId` — a supplied key maps to a DETERMINISTIC primary key: a
+ * repeat derives the SAME id, finds the already-issued card and replays it instead of issuing a
+ * second virtual card.
+ *
+ * FORMAT (mirrors `lib/ledger.idempotentTransferTxId`): `cardidem_` + first 32 hex chars of
+ * `sha256("<userId>\u0000<idempotencyKey>")` (a REAL NUL byte separates the two parts).
+ */
+export function idempotentCardId(userId: string, idempotencyKey: string): string {
+  const digest = createHash('sha256').update(`${userId}\u0000${idempotencyKey}`).digest('hex');
+  return `cardidem_${digest.slice(0, 32)}`;
 }
 
 /** Find-then-create spec for {@link createIdempotent}, evaluated inside one transaction. */

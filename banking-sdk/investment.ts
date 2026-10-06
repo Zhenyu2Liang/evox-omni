@@ -14,15 +14,23 @@
  * debit is a conditional decrement (`balance >= amount`) → a negative balance is impossible even
  * under concurrency.
  *
+ * Optional at-most-once semantics (`input.idempotencyKey`, supplied by the planner as
+ * `nodeExecutionKey(taskId, nodeId)`): a replayed plan node re-runs the tool, so a repeat with the
+ * SAME key must not debit/credit twice. `subscribeInvestment` stores the caller's key on the
+ * `InvestmentHolding` and replays the persisted holding (`./idempotent.ts`); `redeemInvestment`
+ * uses the REDEEMED holding status itself as the durable replay marker (no key stored) and replays
+ * the original redemption instead of throwing `CONFLICT`. Absent key → the legacy behavior above.
+ *
  * Note: subscribing/redeeming moves the funding-account BALANCE only — it deliberately does NOT
  * write a `Transaction` row, so the demo's 本月 spending analysis stays anchored at ¥5,800.
  */
-import type { InvestmentProduct } from '@prisma/client';
+import type { InvestmentHolding, InvestmentProduct } from '@prisma/client';
 import { demoNow } from '../lib/clock';
 import { accounts, investments } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { round2, subtractMoney } from '../lib/money';
-import { runInTransaction } from './tx';
+import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
+import { runInTransaction, type Tx } from './tx';
 import type {
   HoldingStatus,
   HoldingView,
@@ -87,14 +95,34 @@ export async function compareInvestments(ids: string[]): Promise<InvestmentCompa
   };
 }
 
+/** A subscribe outcome: the persisted holding plus the funding-account balance after the write. */
+interface SubscribeOutcome {
+  holding: InvestmentHolding;
+  newBalance: number;
+}
+
+/** Map a persisted holding (plus the balance after the write) onto the public `InvestResult`. */
+function toSubscribeResult(outcome: SubscribeOutcome): InvestResult {
+  return {
+    success: true,
+    holdingId: outcome.holding.id,
+    productId: outcome.holding.productId,
+    amount: outcome.holding.amount,
+    newBalance: outcome.newBalance,
+    occurredAt: outcome.holding.boughtAt.getTime(),
+  };
+}
+
 /**
  * Subscribe to a product: enforce `minAmount`, atomically debit the funding account and create the
  * holding in one transaction. The conditional decrement makes an overdraft impossible — when the
  * account cannot cover the amount the call throws `INSUFFICIENT_FUNDS` and nothing is written.
+ *
+ * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, a repeat with the SAME
+ * key replays the persisted holding (same `holdingId` / `amount`, current balance) and never debits
+ * a second time (see `./idempotent.ts`). Absent → unchanged behavior.
  */
-export async function subscribeInvestment(
-  input: SubscribeInvestmentInput,
-): Promise<InvestResult> {
+export async function subscribeInvestment(input: SubscribeInvestmentInput): Promise<InvestResult> {
   const product = await investments.getProduct(input.productId);
   if (product === null) {
     throw new AppError('NOT_FOUND', `投资产品不存在：${input.productId}`, {
@@ -118,7 +146,12 @@ export async function subscribeInvestment(
   }
 
   const now = demoNow();
-  const { holdingId, newBalance } = await runInTransaction(async (tx) => {
+
+  /** Debit the funding account and create the holding inside the caller's transaction. */
+  const debitAndCreate = async (
+    tx: Tx,
+    replayKey: string | undefined,
+  ): Promise<SubscribeOutcome> => {
     // Atomic sufficient-funds check + debit (rolls back with nothing written when short).
     const debited = await tx.account.updateMany({
       where: { id: account.id, userId: input.userId, balance: { gte: amount } },
@@ -140,6 +173,7 @@ export async function subscribeInvestment(
         marketValue: amount,
         boughtAt: new Date(now),
         status: 'HOLDING',
+        idempotencyKey: replayKey,
       },
     });
 
@@ -149,23 +183,37 @@ export async function subscribeInvestment(
         userId: input.userId,
       });
     }
-    return { holdingId: holding.id, newBalance: updated.balance };
-  });
-
-  return {
-    success: true,
-    holdingId,
-    productId: input.productId,
-    amount,
-    newBalance,
-    occurredAt: now,
+    return { holding, newBalance: updated.balance };
   };
+
+  const key = normalizeIdempotencyKey(input.idempotencyKey);
+  if (key === undefined) {
+    return toSubscribeResult(await runInTransaction((tx) => debitAndCreate(tx, undefined)));
+  }
+
+  // Keyed path: ONE transaction keys the holding on `key`; a repeat replays it (no second debit).
+  const outcome = await createIdempotent<SubscribeOutcome>({
+    key,
+    find: async (tx) => {
+      const existing = await tx.investmentHolding.findUnique({ where: { idempotencyKey: key } });
+      if (existing === null) return null;
+      const current = await tx.account.findUnique({ where: { id: account.id } });
+      return { holding: existing, newBalance: current?.balance ?? 0 };
+    },
+    create: (tx, replayKey) => debitAndCreate(tx, replayKey),
+  });
+  return toSubscribeResult(outcome);
 }
 
 /**
  * Redeem a holding: atomically close it (status → REDEEMED) and credit the funding account in one
  * transaction. The conditional status transition guarantees exactly one credit per holding, closing
  * the concurrent double-redeem race; a second attempt throws `CONFLICT`.
+ *
+ * With an `input.idempotencyKey` (planner replay), the REDEEMED status IS the durable replay
+ * marker: a repeat credits nothing (the flip already happened) and returns the original redemption
+ * instead of `CONFLICT`. No key is stored on the holding — `InvestmentHolding.idempotencyKey` is
+ * reserved for subscribe dedup. Absent → unchanged behavior (a second redeem throws `CONFLICT`).
  */
 export async function redeemInvestment(input: RedeemInvestmentInput): Promise<InvestResult> {
   const holding = await investments.getHolding(input.holdingId);
@@ -182,6 +230,7 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
     });
   }
 
+  const replay = normalizeIdempotencyKey(input.idempotencyKey) !== undefined;
   const credit = round2(holding.marketValue ?? holding.amount);
   const now = demoNow();
   const newBalance = await runInTransaction(async (tx) => {
@@ -191,10 +240,15 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
       data: { status: 'REDEEMED' },
     });
     if (closed.count === 0) {
-      throw new AppError('CONFLICT', '该持仓已赎回', {
-        holdingId: input.holdingId,
-        status: 'REDEEMED',
-      });
+      if (!replay) {
+        throw new AppError('CONFLICT', '该持仓已赎回', {
+          holdingId: input.holdingId,
+          status: 'REDEEMED',
+        });
+      }
+      // Replayed node: the credit already happened, so report the current balance unchanged.
+      const current = await tx.account.findUnique({ where: { id: account.id } });
+      return current?.balance ?? 0;
     }
 
     const credited = await tx.account.update({
