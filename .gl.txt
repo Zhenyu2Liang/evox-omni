@@ -1,6 +1,0 @@
-﻿02f7c84 Merge commit 'f925c0dd76f30ef52edac82901f4f7baa45a2feb'; commit 'b13b6c1403e4d7c54da874741e20510f6595dd47' into evogit-agent-T1-A1
-b13b6c1 Merge commit 'deaba5609ccf3ce411cb5966d85d2e15e0634269'; commit 'd64cacd641d4b197870c141b8d08922833c71501'; commit '6dca843a3a64d784f8a772790af5124822520f47'; commit '58b7655f93f66cec349c6e948a2897d7336be7a0' into evogit-agent-T1-A10
-deaba56 docs(test-cases): availability-probe bootstrap + fail-loud provisioning; redeem identity replay
-d64cacd docs(known-risks): redeem identity replay, stale-claim takeover boundary, clean-env bootstrap
-----
-?? .gl.txt
