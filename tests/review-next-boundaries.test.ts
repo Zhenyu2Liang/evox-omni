@@ -56,7 +56,7 @@ it('recovery of a persisted failed result must finalize the action as failed rat
  const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();const card=(await p.card.findFirst({where:{userId,type:'CREDIT'}}))!;
  const result=await runSubmitPlan(userId,{goal:'旧失败结果恢复',nodes:[{id:'limit',name:'限额',kind:'tool',tool:'set_card_limit',args:{cardId:card.id,category:'娱乐',amount:1500},dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=result.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
- await securityGateway.authorizeAction(action.id,{sessionId:s,userId});
+ await securityGateway.authorizeAction(action.id,{confirmed:true,sessionId:s,userId});
  // Legitimate legacy interruption: previous versions persisted failed tool result before status.
  await p.pendingAction.update({where:{id:action.id},data:{resultJson:JSON.stringify({ok:false,error:'review: actual business failure'})}});
  const resumed=await task(plan.id,'resume',s);const after=await p.pendingAction.findUnique({where:{id:action.id}});
