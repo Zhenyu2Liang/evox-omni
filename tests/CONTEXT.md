@@ -37,7 +37,9 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   `setup.ts` and `e2e/helpers.ts` (`resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`,
   `removeSqliteFiles`, `runCliStep` (fail-loud: throws with FULL captured stdout+stderr+exit code),
   `diagnosticCliOutput`, `prismaClientUsable`/`prismaClientGenerated`, `runPrismaGenerate`,
-  `ensurePrismaClientGenerated`). NOT in the `helpers/index.ts` barrel — specs must not import it.
+  `ensurePrismaClientGenerated` — its readiness gate keys on the USABILITY probe `prismaClientUsable`
+  (the client that will actually be `require`d), NOT the worktree-local artifact-path proxy
+  `prismaClientGenerated`). NOT in the `helpers/index.ts` barrel — specs must not import it.
 - `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs. See `unit/CONTEXT.md`.
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
 - `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
