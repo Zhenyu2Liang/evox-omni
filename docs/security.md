@@ -199,7 +199,7 @@ flowchart TD
   恰好一次的守卫是 **DB 级**的：`lib/db/repositories/task.ts#claimTaskExecution`（**计划级** token，`finally` 中释放）与 `#claimNodeExecution`（**节点级** token，`finally` 中释放），加上经
   `lib/ledger.ts#nodeExecutionKey(taskId, nodeId)` 的**节点身份合并**。去重身份的范围是**稳定的计划 / 节点 / 执行身份**——**不是** `sessionId` + tool + args：
   **独立调用**（无计划节点）只靠 DB 的 `PendingAction` 状态 CAS，而**两个不同计划**即使 session+tool+args 相同也**各自独立运行**；转账再经 `ledgerKeyForAction({ id, taskId, nodeId })` 派生的幂等键（计划节点 ⇒ `nodeExecutionKey`；独立调用 ⇒ 动作 `id`）幂等——**不重复副作用**。
-  **陈旧执行领取接管**：DB 执行领取（`claimTaskExecution` / `claimNodeExecution`）支持陈旧接管——resume/retry 传入 `staleBefore = staleExecutionClaimBefore()`（`agent/task-control.ts`；`EXECUTION_CLAIM_TTL_MS = 600000` ≈ 10 分钟，基于**真实时钟** `Date.now()`，**非**演示时钟），`where.OR = [ executionToken IS NULL, executionClaimedAt < staleBefore ]`：**仅当**所有者被证明**陈旧**时才接管；仍**存活**的所有者**不被抢占**；并发接管**只允许一个赢家**（赢家重盖 `executionClaimedAt`，败者匹配 0 行）；旧所有者的 `releaseTaskExecution` / `releaseNodeExecution`（`finally` 中调用）按 token CAS **成为空操作**。
+  **陈旧执行领取接管**：DB 执行领取（`claimTaskExecution` / `claimNodeExecution`）支持陈旧接管——resume/retry 传入 `staleBefore = staleExecutionClaimBefore()`（`agent/task-control.ts`；`EXECUTION_CLAIM_TTL_MS = 600000` ≈ 10 分钟，基于**真实时钟** `Date.now()`，**非**演示时钟），`where.OR = [ executionToken IS NULL, executionClaimedAt < staleBefore ]`：**仅当**所有者被证明**陈旧**时才接管；仍**存活**的所有者**不被抢占**；并发接管**只允许一个赢家**（赢家重盖 `executionClaimedAt`，败者匹配 0 行）；旧所有者的 `releaseTaskExecution` / `releaseNodeExecution`（`finally` 中调用）按 token CAS **成为空操作**；被接管的旧所有者对**节点 / 计划结果**的写入也被 token **隔离**——`repositories/task.ts#updateTaskNode` / `#claimTaskStatus` 的 `fenceToken` 与写入在**同一条** `updateMany` 内（**非**读后写），旧所有者的写入匹配 0 行而被拒绝。
 - **暂停保持（pause retention）**：在**已暂停**的计划里确认一个停放节点，**只**记录该节点的结果；计划
   **保持暂停**直到一次显式 resume（`task-control.ts#resumeTaskForAction` 调 `lifecycle.resumePlan` 时
   不传 `explicitResume`；`resumePlan` 先核算 `stillPaused` 并返回暂停快照，暂不推进）。
@@ -212,7 +212,7 @@ flowchart TD
   - `banking-sdk/investment.ts#redeemInvestment` 把该次赎回的**执行身份**与**原结果**与入账在**同一 DB 事务**内持久化（`InvestmentHolding.redeemExecutionKey` / `redeemResult`，`prisma/schema.prisma`）：**同身份**再次赎回返回**原结果**且**不重复入账**；**不同身份 / 无身份**再次赎回 → `AppError('CONFLICT')` **明确拒绝**（**不**宣称到账）；并发赎回经条件 `updateMany({ status: { not: 'REDEEMED' } })` 仅**一次实际入账**。
   - `banking-sdk/card.ts#applyVirtualCard` 用**确定性卡片 id** 实现幂等（同一节点的重复受理返回同一张卡）。
   - `agent/confirmation.ts#executeGatedToolOnce` 以 `findInFlightPlanAction(taskId, nodeId)` 守卫（唯一事实来源是该计划节点**已持久化**的 `PendingAction` 行，状态集 `pending|awaiting_mfa|confirmed|executed`）：同一计划节点已有持久化动作时**不再**为该节点铸造第二个 `PendingAction`。
-    当该节点的既有动作状态为 `executed`（副作用已执行并已入账，但节点结果未回写——确认路径先记 `executed`，随后写节点结果的那次持久化可能失败）时，`executeGatedToolOnce` 调用 `replayExecutedPlanAction`，以该动作**持久化的原始 toolName/argsJson** 经 SDK 在**同一节点幂等键** `nodeExecutionKey(taskId, nodeId)` 下**重放**（SDK 幂等 ⇒ 不重复副作用），把节点补齐为 `success` 并继续后续节点，**不重新请求确认、不重复执行**（此恢复路径**有意不经过网关**，避免为该节点铸造第二个动作）。真正处于 `pending`/`awaiting_mfa`/`confirmed` 的动作仍返回**已停放结果**、继续等待真实人工确认；恢复是幂等的。
+    当该节点的既有动作状态为 `executed`（副作用已执行并已入账，但节点结果未回写——确认路径先记 `executed`，随后写节点结果的那次持久化可能失败）时，`executeGatedToolOnce` 调用 `recoverExecutedPlanAction`，从该动作**持久化的耐久 `resultJson`** **回填**节点结果（把节点补齐为 `success` 并继续后续节点），**不重新调用工具** ⇒ 非幂等副作用（如 `set_card_limit`）**绝不重放**（此恢复路径**有意不经过网关**，避免为该节点铸造第二个动作）。仅当该动作**没有**持久化结果（遗留行）时，才回退到 `replayExecutedPlanAction`：以动作**持久化的原始 toolName/argsJson** 经 SDK 在**同一节点幂等键** `nodeExecutionKey(taskId, nodeId)` 下**重放**（SDK 幂等 ⇒ 不重复副作用）。真正处于 `pending`/`awaiting_mfa`/`confirmed` 的动作仍返回**已停放结果**、继续等待真实人工确认；恢复是幂等的。
 
 ---
 
@@ -375,6 +375,8 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - 两阶段人工确认——gated 工具的参数被持久化为 `PendingAction`，只有人工 confirm/verify 后用**原始已校验参数**执行；
 - 身份与计划生命周期——cookie-only 会话（body 不选会话，冲突即 `409` 且不签发 cookie）、计划状态 CAS（终态不可复活）、转账账本幂等（`ledgerKeyForAction` 统一键，计划节点/独立调用共用同一派生）；
 - **DB 原子执行认领（恰好一次）**——`repositories/task.ts#claimTaskExecution`（计划级 token，`finally` 中释放）与 `#claimNodeExecution`（节点级 token，`finally` 中释放）；计划取消的**主保证** = `task-control.ts#cancelTask` 在**单个** `prisma.$transaction` 内，用 `repositories/pendingAction.ts#revokePendingActionsByTask` 的**一条** `updateMany` **批量**撤销计划**全部**停放 action，并与计划 `status='cancelled'` 的**终态写入**同事务提交（两者之间无窗口；另有节点扫描兜底 + 运行后扫描 `sweepCancelledPlan` 作为 FALLBACK）；
+- **执行认领 token fence（被接管的旧所有者无法伪造 / 覆盖结果）**——`agent/task-control.ts#createTaskPersistence` 把节点 / 计划结果写入路由到 `lib/db/repositories/task.ts` 的 **token-fenced 原子原语**：`updateTaskNode(..., { fenceToken })`（**单条** `updateMany`，要求 `executionToken === fenceToken`，认领丢失时返回 `null`）与 `claimTaskStatus(..., { fenceToken })`（认领丢失时返回 `false`）；fence 与写入在**同一条语句**内（**非**读后写）⇒ 认领被接管的「僵尸」执行者**无法**伪造或覆盖节点 / 计划结果（也无法据此叙述）；
+- **已执行门控节点的状态安全恢复**——`agent/confirmation.ts#recoverExecutedPlanAction` 对已 `executed` 的门控计划节点，从 `executeAuthorizedAction` 持久化的**耐久** `PendingAction.resultJson` **回填**节点结果，**不重新调用工具**，因此非幂等副作用（如 `set_card_limit`）**绝不重放**；重放工具（`replayExecutedPlanAction`）**仅**用于无耐久结果的遗留行；
 - 熔断（连续 3 次 MFA 失败锁会话）、注入检测（纵深防御）、幻觉防护（只报工具结果的事实）；
 - 审计写入（门控动作 + 安全事件）。
 
@@ -402,9 +404,9 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - **熔断器是进程内 / 单进程内存态**（非分布式、不持久化）；
 - **演示时钟被固定**（`DEMO_NOW = 2026-09-25 12:00 本地`）；**🟢 GREEN 只读操作按设计不写审计**；
 - **原子累计限额认领的串行化依赖 SQLite 文件锁**（见「原子累计限额主张」的注意项）——SQLite 特有，
-  未在其他数据库引擎 / 多写者部署上验证。
-- **执行领取的陈旧接管无 fencing token**：`agent/task-control.ts` 的 `persistNode` / `persistPlan` **不**校验执行 token（`persistPlan` 对 `cancelled` 无条件写入，
-  否则用 `claimTaskStatus` 做**状态** CAS），接管**不隔离**旧所有者对节点行 / 计划快照的写；副作用仍受**节点级 DB 领取** + `nodeExecutionKey` **SDK 幂等**约束。
-  接管视界 `EXECUTION_CLAIM_TTL_MS` 为**启发式**——长时人工阻塞可能把仍存活者误判为陈旧。
+  未在其他数据库引擎 / 多写者部署上验证；
+- **陈旧接管的接管视界是启发式**：`agent/task-control.ts` 的 `EXECUTION_CLAIM_TTL_MS = 600000`（≈10 分钟）是**启发式**边界——在**单次工具调用**内阻塞**极久**的进程仍可能被接管（其节点 / 计划结果写入已被 token fence 拒绝，但接管这个动作本身仍会发生）；
+- **部分节点写入仍未加 fence**：遗留的内联 `submit_plan` `PlanDeps`，以及在节点被认领**之前**发生的「已决定节点」写入（`createTaskPersistence` 未提供 node token 时走未加 fence 的 legacy 路径）；
+- **执行认领 / fence 的并发正确性建立在 SQLite 单写者假设之上**——多进程 / 多实例部署未验证。
 
 > 验收场景与断言见 [`test-cases.md`](./test-cases.md)；已知限制见 [`known-risks.md`](./known-risks.md)。
