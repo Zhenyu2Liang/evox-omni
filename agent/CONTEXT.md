@@ -298,8 +298,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
     deliberately NOT consulted (re-gating would mint a SECOND action / re-request confirmation for work that
     already happened); the replay never throws (an SDK failure becomes a failed node value). Recovery is
     idempotent: repeating the resume re-replays the same key and yields the same single-effect outcome.
-  This closes the
-  window where a node's side effect has run but its result is not yet persisted (the gateway's own
+  This closes the window where a node's side effect has run but its result is not yet persisted (the gateway's own
   `findReusableAction` only matches `pending`/`awaiting_mfa`, so it would otherwise MISS the `confirmed`/`executed`
   row) so a resume there cannot double-apply. The in-process single-flight (`inFlightExecutions` /
   `nodeExecutionKey`) remains an OPTIMIZATION only, never the correctness guarantee; the persisted DB row
