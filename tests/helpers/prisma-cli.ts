@@ -213,16 +213,25 @@ export function runPrismaGenerate(repoRoot: string, env?: NodeJS.ProcessEnv): vo
  * client (and the seed, which imports `@prisma/client`) would then be broken and every DB-backed suite
  * would fail as an infrastructure error — exactly the bug this guards against.
  *
- * Robustness: skips ONLY when the generated artifacts are present AND the client actually constructs
- * (`prismaClientUsable`), so a partially-provisioned or stale `node_modules` self-heals by (re)running
- * `prisma generate`. After generating, artifact presence is the HARD gate (a flaky probe can at most
- * trigger a harmless extra generate, never a false failure). `generate` needs no live DB.
+ * AUTHORITATIVE GATE - the USABILITY probe (`prismaClientUsable`): it requires `@prisma/client` and
+ * constructs a `PrismaClient` exactly the way the suites do, so it is true iff the client that will
+ * ACTUALLY be required is usable. It is the ONLY reliable signal because Node resolves `@prisma/client`
+ * by walking UP the directory tree: in a hoisted layout (a sparse/local `node_modules` whose real deps -
+ * `@prisma/client`, `prisma` - live in a PARENT `node_modules`) `prisma generate` writes the client to
+ * that PARENT path, so the fixed worktree-local artifact path checked by `prismaClientGenerated` stays
+ * absent even though the client resolves and constructs fine. Gating on artifact presence alone would
+ * therefore falsely force a generate and then THROW on a healthy worktree.
+ *
+ * `prismaClientGenerated` (worktree-local artifact presence) is kept only as a NON-authoritative proxy.
+ * Post-generate we accept EITHER signal: a clean checkout (stub-only `node_modules`) has a false probe
+ * until `generate` runs, and artifact presence then confirms success even if the probe is momentarily
+ * flaky - a false-negative probe at most costs a harmless extra generate, never a false failure.
+ * `generate` needs no live DB.
  */
 export function ensurePrismaClientGenerated(repoRoot: string, env?: NodeJS.ProcessEnv): void {
-  if (prismaClientGenerated(repoRoot) && prismaClientUsable(repoRoot)) return;
+  if (prismaClientUsable(repoRoot)) return;
   console.log('· 未检测到可用的 Prisma Client → 运行 prisma generate（清理环境自举步骤）');
   runPrismaGenerate(repoRoot, env);
-  if (!prismaClientGenerated(repoRoot)) {
-    throw new Error('prisma generate 完成后 Prisma Client 产物仍缺失（见上方完整 CLI 输出）');
-  }
+  if (prismaClientUsable(repoRoot) || prismaClientGenerated(repoRoot)) return;
+  throw new Error('prisma generate 完成后 Prisma Client 产物仍缺失（见上方完整 CLI 输出）');
 }
