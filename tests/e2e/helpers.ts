@@ -615,10 +615,58 @@ function ensurePrismaClientGenerated(): void {
 }
 
 /**
- * Delete the ISOLATED E2E DB + sidecars, (re)create the schema, then seed — all against `E2E_DB_URL`.
- * `forceReset` selects the recovery push flavour (`prisma db push --force-reset --skip-generate`)
- * instead of the plain `prisma db push --skip-generate`. The delete happens FIRST in both cases, so
- * the isolated DB is always recreated from scratch and `prisma/dev.db` is never referenced.
+ * Sanity-probe the freshly provisioned E2E DB: spawn a throwaway Node process that CONNECTS to the
+ * isolated DB through the generated Prisma Client and checks that the canonical `User` table exists.
+ *
+ * WHY: `prisma db push` can occasionally report success (exit 0) while leaving a DB image that cannot
+ * actually be opened (a truncated/zeroed file, a Windows file-lock, or a schema-engine hiccup). Without
+ * this probe the breakage would only surface later inside the seed (or, worse, mid-journey) with a
+ * misleading error. Failing HERE produces a precise "the DB is not usable after push" message, with the
+ * FULL captured stdout+stderr (`diagnosticCliOutput`), and lets the recovery path run (regenerate the
+ * client + hard clean + `--force-reset`).
+ */
+function probeDatabaseUsable(): void {
+  const script = `
+const { PrismaClient } = require('@prisma/client');
+const client = new PrismaClient();
+const check = "SELECT name FROM sqlite_master WHERE type='table' AND name='User'";
+(async () => {
+  try {
+    const rows = await client.$queryRawUnsafe(check);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      console.error('schema 未应用：缺少 User 表');
+      process.exitCode = 3;
+    }
+  } catch (e) {
+    console.error((e && e.stack) || String(e));
+    process.exitCode = 2;
+  } finally {
+    await client.$disconnect().catch(() => {});
+  }
+})();
+`;
+  const probe = spawnSync(process.execPath, ['-e', script], {
+    cwd: REPO_ROOT,
+    windowsHide: true,
+    encoding: 'utf8',
+    // Probe the ISOLATED E2E DB — never the shared dev DB (see `useIsolatedDatabase`/`E2E_DB_URL`).
+    env: { ...process.env, DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL },
+  });
+  if (probe.status !== 0) {
+    throw new Error(
+      `db push 完成后 E2E 数据库探测失败（退出码 ${probe.status ?? 'null'}）${spawnErrorText(probe.error)}\n` +
+        diagnosticCliOutput(probe.stdout, probe.stderr),
+    );
+  }
+}
+
+/**
+ * Delete the ISOLATED E2E DB + sidecars, (re)create the schema, verify it is usable, then seed — all
+ * against `E2E_DB_URL`. `forceReset` selects the recovery push flavour
+ * (`prisma db push --force-reset --skip-generate`) instead of the plain
+ * `prisma db push --skip-generate`. The delete happens FIRST in both cases, so the isolated DB is
+ * always recreated from scratch and `prisma/dev.db` is never referenced. `probeDatabaseUsable` runs
+ * between the push and the seed so a silently-broken image is caught with a precise message.
  */
 function provisionSchemaAndSeed(forceReset: boolean): void {
   removeSqliteFiles(E2E_DB_FILES);
@@ -627,6 +675,9 @@ function provisionSchemaAndSeed(forceReset: boolean): void {
     : ['prisma', 'db', 'push', '--skip-generate'];
   const push = cliCommand(resolvePrismaBin(), pushArgs);
   runCliStep(push.command, push.args);
+  // Catch a silently-broken DB BEFORE the seed: a push can report success yet leave an image that
+  // cannot be opened. Probing here gives a precise message and lets the recovery path run.
+  probeDatabaseUsable();
   const seed = cliCommand(resolveTsxBin(), ['tsx', path.join('prisma', 'seed.ts')]);
   runCliStep(seed.command, seed.args);
 }
@@ -634,10 +685,11 @@ function provisionSchemaAndSeed(forceReset: boolean): void {
 /**
  * One reset attempt: ensure the Prisma Client is generated → provision the schema + seed. The PRIMARY
  * path is delete-then-`db push --skip-generate` (deliberately NOT `--force-reset`, see
- * `resetDemoDatabase`). If it fails, recover by re-deleting the isolated DB and running
- * `db push --force-reset --skip-generate` + seed; when that recovery ALSO fails, the thrown error
- * carries BOTH the ORIGINAL (full, un-truncated) primary error and the recovery error, so the real
- * cause of the primary failure is never masked by the fallback.
+ * `resetDemoDatabase`). If it fails, AUTO-RECOVER: re-run `prisma generate` (a stale/partially
+ * provisioned client or engine can make the push fail with an opaque `Error: Schema engine error:`),
+ * hard-clean the isolated DB, and retry `db push --force-reset --skip-generate` + seed; when that
+ * recovery ALSO fails, the thrown error carries BOTH the ORIGINAL (full, un-truncated) primary error and
+ * the recovery error, so the real cause of the primary failure is never masked by the fallback.
  */
 function resetDemoDatabaseOnce(): void {
   ensurePrismaClientGenerated();
@@ -646,16 +698,20 @@ function resetDemoDatabaseOnce(): void {
     return;
   } catch (primaryError) {
     console.error(
-      `· 主路径（删除后 db push --skip-generate）失败，尝试回退（删除后 db push --force-reset --skip-generate）：${errText(primaryError)}`,
+      `· 主路径（删除后 db push --skip-generate）失败，尝试回退（prisma generate → 删除后 db push --force-reset --skip-generate）：${errText(primaryError)}`,
     );
     try {
+      // AUTO-RECOVERY: a stale/partially-provisioned client, or a transient schema-engine failure, can
+      // make the primary push fail with an opaque `Error: Schema engine error:`. Regenerate the client
+      // FIRST, then hard-clean the isolated DB (delete + sidecars) and retry with `--force-reset`.
+      runPrismaGenerate();
       provisionSchemaAndSeed(true);
       return;
     } catch (fallbackError) {
       throw new Error(
         '重置 E2E 数据库失败：主路径与回退路径均未成功。\n' +
           `— 主路径（删除后 db push --skip-generate）原始错误（完整输出）：\n${errText(primaryError)}\n` +
-          `— 回退路径（删除后 db push --force-reset --skip-generate）错误：\n${errText(fallbackError)}`,
+          `— 回退路径（prisma generate 后删除并 db push --force-reset --skip-generate）错误：\n${errText(fallbackError)}`,
       );
     }
   }
@@ -675,12 +731,13 @@ function resetDemoDatabaseOnce(): void {
  *
  * HOW: ensure a GENERATED, USABLE Prisma Client (`ensurePrismaClientGenerated`; a bare `npm install`
  * checkout self-bootstraps via `prisma generate`). Then, for each attempt, DELETE the isolated DB +
- * sidecars and provision the schema with the PRIMARY path `prisma db push --skip-generate`, seeding via
- * `tsx prisma/seed.ts`. If that primary path fails, the attempt RECOVERS by re-deleting the isolated DB
- * and running `prisma db push --force-reset --skip-generate` + seed (`provisionSchemaAndSeed(true)`) —
- * the fallback runs only AFTER the primary failure, so it can only help. `--force-reset` is
- * deliberately NOT the primary path: on Windows it has been seen to leave the SQLite file as a 0-byte
- * image and fail `Error code 11: The database disk image is malformed`.
+ * sidecars, provision the schema with the PRIMARY path `prisma db push --skip-generate`, PROBE that the
+ * DB is actually usable (`probeDatabaseUsable`), and seed via `tsx prisma/seed.ts`. If that primary path
+ * fails, the attempt RECOVERS by re-running `prisma generate`, re-deleting the isolated DB and running
+ * `prisma db push --force-reset --skip-generate` + seed (`provisionSchemaAndSeed(true)`) — the fallback
+ * runs only AFTER the primary failure, so it can only help. `--force-reset` is deliberately NOT the
+ * primary path: on Windows it has been seen to leave the SQLite file as a 0-byte image and fail
+ * `Error code 11: The database disk image is malformed`.
  *
  * Every CLI step is given `DATABASE_URL` = `E2E_DB_URL` (see `runCliStep`), and any CLI failure throws
  * the FULL captured stdout+stderr (tail preserved — see `runCliStep`/`diagnosticCliOutput`); when BOTH
