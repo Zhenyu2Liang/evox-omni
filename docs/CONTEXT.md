@@ -24,7 +24,9 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   confirmation + DAG example) and the tool catalogue (🟢/🟡/🔴 + `submit_plan`). §8/§11 state the
   durable-plan mechanics accurately: an executed gated node recovers by **backfilling the persisted
   `PendingAction.resultJson`** (never re-invoking the tool); takeover writes are **token-fenced**; a
-  progressing executor renews its lease at **node boundaries**.
+  progressing executor renews its lease at **node boundaries**; a node claim verifies **plan ownership**
+  in the same statement as the claim and refuses a **terminal** node; a committed side effect whose
+  result transaction rolled back is finalized `failed` into explicit **manual reconciliation** (`人工核对`).
 - `docs/security.md` — three permission tiers + the frozen policy table + dynamic `transfer_money`
   rules (`DAILY_TRANSFER_LIMIT=1000`); the Security Gateway `beforeToolCall` chokepoint;
   code-enforced / LLM-immutable permissions; prompt-injection defense (`injection-guard`, Test 4);
@@ -43,12 +45,15 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   `tests/review-recovery-probes.test.ts`) plus the invariant-grouped boundary/integrity/fencing specs
   (`tests/review-current-boundaries.test.ts`, `tests/review-execution-integrity.test.ts`,
   `tests/review-execution-fencing.test.ts`, `tests/app/confirm-continuation-fencing.test.ts`); §6 (test-infra)
-  records the clean-env init fix (`RUST_LOG` root cause).
+  records the clean-env init root cause (`RUST_LOG`), the new specs (`tests/review-next-boundaries.test.ts`,
+  `tests/review-obsolete-executor.test.ts`, `tests/review-result-recovery.test.ts`, `tests/deploy-db-push.test.ts`,
+  `tests/unit/lib/prisma-cli-env.test.ts`) and the deploy ordering (`npm run db:push` → `db:seed` → `build`).
 - `docs/known-risks.md` — honest limitations (mock data, simulated MFA, no real payment, heuristic
   anomaly detection, fictional investments, spending analysis excludes anomalies, in-process
   breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with
   exactly one of the three buckets and framed as *limitation + why it is acceptable for a
-  competition demo*; documents the clean-env init fix as an §19 engineering note (`RUST_LOG` root cause).
+  competition demo*; documents the clean-env init root cause, the `lib/prisma-cli-env.ts` policy and the
+  deploy ordering as an §19 engineering note, together with the file-size soft-guideline overrun.
 
 ## Constraints
 
@@ -100,10 +105,18 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   fresh via **node-boundary renewal** (`renewTaskExecutionClaim`); a zombie's **writes are fenced**.
   A process **blocked a long time inside a single tool call** can still be overtaken and may still
   attempt (fenced, side-effect-free) work — never claim "a live owner is never preempted".
-- **Clean-env init is FIXED with a root cause**: `tests/helpers/prisma-cli.ts#pinSchemaEngineLogging`
+- **Unclosed defects** (do NOT claim every execution path is safe): (a) `inFlightConfirmations` is
+  **per-process** — a `confirmed` + `resultJson=null` row whose live continuation runs in a
+  **different process/instance** is not distinguished (multi-instance deploy uncovered); (b) the
+  execution-claim takeover is a **TTL heuristic** (a single tool call blocked beyond
+  `EXECUTION_CLAIM_TTL_MS` can be overtaken; multi-process contention is not stress-tested — atomicity
+  is verified only within a single process/DB); (c) `agent/task-control.ts` (~1169 lines) and
+  `agent/confirmation.ts` (~1006 lines) exceed the ~1000-line soft guideline (extraction candidates).
+- **Clean-env init root cause (`RUST_LOG`)**: the shared policy (`SCHEMA_ENGINE_RUST_LOG`, `pinSchemaEngineLogging`, `prismaCliEnv`, the CLI/root/bin resolvers) lives in the non-test module `lib/prisma-cli-env.ts`, re-exported by `tests/helpers/prisma-cli.ts` (public API unchanged). It
   forces `RUST_LOG=info` on the Prisma schema-engine child; an ambient `RUST_LOG≥warn` had suppressed
   the engine's INFO banner, so Prisma's CLI error mapper dropped the real error line and surfaced an
   empty `Error: Schema engine error:`. Default `npx vitest run` and default E2E now auto-provision the
   isolated DB. Do NOT describe this as open/unresolved.
-- **Measured state** (keep current when the suite changes): `npx vitest run` → 76 files / 557 tests
+- **Deploy ordering**: `npm run db:push` (`tsx scripts/db-push.ts`, pins `RUST_LOG=info`) → `npm run db:seed` → `npm run build` (the build prerenders routes that query SQLite).
+- **Measured state** (keep current when the suite changes): `npx vitest run` → 82 files / 585 tests
   pass; `npx tsc --noEmit` → 0 errors; `npx next build` → exit 0; E2E → PASS 5 / FAIL 0 / SKIP 0.
