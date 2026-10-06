@@ -54,10 +54,12 @@ that accepts one.
   `UpdateTaskNodeInput {status?, output?, error?, startedAt?, endedAt?}`;
   `createTask(input)`, `getTask(id)` (task row incl. current `status`), `listTasksBySession(sessionId)`,
   `updateTaskStatus(id, status)` (blind unconditional set),
-  `claimTaskStatus(taskId, fromStatuses: TaskPlanStatus[], toStatus: TaskPlanStatus): Promise<boolean>` — the
+  `claimTaskStatus(taskId, fromStatuses: TaskPlanStatus[], toStatus: TaskPlanStatus, opts?: { fenceToken?: string }): Promise<boolean>` — the
   ATOMIC concurrency guard: a SINGLE `updateMany` CAS moving `status` from any of `fromStatuses` to `toStatus`,
   returning `true` iff exactly one row transitioned (a second/concurrent resume/retry returns `false`; a
-  terminal/cancelled status not in `fromStatuses` matches 0 rows),
+  terminal/cancelled status not in `fromStatuses` matches 0 rows); when `opts.fenceToken` is supplied the SAME
+  atomic `where` also requires `executionToken = opts.fenceToken`, so a stale executor that lost the plan to a
+  takeover transitions 0 rows and returns `false` (the boolean return type is unchanged),
   `claimTaskExecution(taskId, token, {staleBefore?}?): Promise<boolean>` — the exactly-once PLAN-executor claim:
   a SINGLE `updateMany` stamping `executionToken = token` / `executionClaimedAt = now` WHERE the token is NULL
   (or, when `staleBefore` is supplied, `executionClaimedAt < staleBefore`); `true` iff one row was claimed,
@@ -66,8 +68,17 @@ that accepts one.
   `claimNodeExecution(taskId, nodeId, token, {staleBefore?}?): Promise<boolean>` /
   `releaseNodeExecution(taskId, nodeId, token): Promise<void>` — the NODE-level analogues addressed by the
   logical `(taskId, nodeId)` pair,
-  `createTaskNode(input)`, `getTaskNode(taskId, nodeId)`, `updateTaskNode(taskId, nodeId, update)`,
+  `createTaskNode(input)`, `getTaskNode(taskId, nodeId)`,
   `updateTaskNodeStatus(taskId, nodeId, status)`, `deleteTask(id)` (nodes cascade).
+
+  **`updateTaskNode` — token-fenced node write.** Exactly two overloads:
+  `updateTaskNode(taskId, nodeId, update: UpdateTaskNodeInput): Promise<AgentTaskNode>` (the UNFENCED path: resolve the first `(taskId, nodeId)` row and `update` it, returning the updated `AgentTaskNode`, or THROW when the node is absent), and
+  `updateTaskNode(taskId, nodeId, update: UpdateTaskNodeInput, opts: { fenceToken?: string }): Promise<AgentTaskNode | null>` (the FENCED path).
+  The fenced path (when `opts.fenceToken` is defined) writes with a SINGLE atomic `updateMany` whose `where` requires `executionToken = opts.fenceToken`, so the token check is INSIDE the same statement (never a read-then-write).
+  It then re-reads the row via the `(taskId, nodeId)` first-row lookup and returns the updated `AgentTaskNode` when the token still matched.
+  When the token did NOT match (0 rows) it performs NO write and returns the **"lost" sentinel `null`**.
+  `null` therefore means "the write was rejected because you no longer own the node", NOT "the node is missing" (the unfenced path is the one that throws on a missing node); a fenced caller must branch on `null` and skip its follow-up work rather than treat it as an error.
+  Callers pass the CURRENT executor's token (from `claimTaskExecution`/`claimNodeExecution`); the `./agent` owner must wire `persistNode`/`persistPlan` to pass that token and to skip writes (no re-persist, no narration of a result they no longer own) when they receive `null`.
 - `scheduledTask.ts` (`ScheduledTask`) — `CreateScheduledTaskInput {userId, name, kind, runAt, payload?, requiresConfirmation?, status?}`;
   `listScheduledTasks(userId, status?)`, `getScheduledTask(id)`, `createScheduledTask(input)`,
   `updateScheduledTaskStatus(id, status)`, `deleteScheduledTask(id)`.
@@ -152,7 +163,7 @@ that accepts one.
 - `./subscription.ts` → Subscription
 - `./investment.ts` → InvestmentProduct + InvestmentHolding
 - `./budget.ts` → Budget
-- `./task.ts` → AgentTask + AgentTaskNode (+ concurrency-safe `claimTaskStatus` status CAS and the `claimTaskExecution`/`claimNodeExecution` exactly-once execution claims + matching `release*`)
+- `./task.ts` → AgentTask + AgentTaskNode (+ the `claimTaskStatus` status CAS with an optional `fenceToken`, the `claimTaskExecution`/`claimNodeExecution` exactly-once execution claims + matching token-checked `release*`, and the token-fenced `updateTaskNode` overload that returns a `null` "lost" sentinel)
 - `./scheduledTask.ts` → ScheduledTask
 - `./auditLog.ts` → AuditLog
 - `./securityEvent.ts` → SecurityEvent
@@ -166,9 +177,10 @@ that accepts one.
 - Date/time ranges are half-open `[from, to)`. Time-series lists (transactions, audit logs, security
   events, pending actions, sessions) return newest-first; list `limit`s default to 100 where optional.
   Plan-scoped lists (`listPendingActionsByTask`) are the exception: oldest-first, no default limit.
-- `AgentTaskNode.(taskId,nodeId)` is not a DB unique constraint — `getTaskNode`/`updateTaskNode` route
-  through the first row (ordered by `order`) matching the pair, and `claimNodeExecution`/`releaseNodeExecution`
-  address the pair with an `updateMany` that therefore targets ALL rows for it (normally exactly one).
+- `AgentTaskNode.(taskId,nodeId)` is not a DB unique constraint — `getTaskNode` and the UNFENCED `updateTaskNode`
+  route through the first row (ordered by `order`) matching the pair, while the FENCED `updateTaskNode`,
+  `claimNodeExecution` and `releaseNodeExecution` address the pair with an `updateMany` that therefore targets
+  ALL rows for it (normally exactly one).
 - Concurrency guards are CAS-only and convention-enforced — there is NO DB-level enum or terminal-state
   constraint. The atomic gates are the `claim*` / `revoke*` primitives: `claimTaskStatus` (AgentTask status),
   `claimPendingAction` (PendingAction status), `claimTaskExecution`/`releaseTaskExecution` (plan executor slot),
@@ -184,8 +196,17 @@ that accepts one.
 - Node execution claims ARE supported (`claimNodeExecution`/`releaseNodeExecution`) in addition to the PARENT
   `AgentTask` claim (`claimTaskStatus`/`claimTaskExecution`); the stale-takeover path (`staleBefore`) only
   matches rows whose `executionClaimedAt` is non-NULL and older, so a set token with a NULL `executionClaimedAt`
-  is not reclaimable (fail-safe). Node writes (`updateTaskNode`/`updateTaskNodeStatus`) resolve `firstNodeId`
-  and THROW if the node is absent.
+  is not reclaimable (fail-safe). The UNFENCED node writes (`updateTaskNode` without `opts`, `updateTaskNodeStatus`)
+  resolve `firstNodeId` and THROW if the node is absent.
+- Token fencing prevents a stale "zombie" executor from overwriting a takeover's result: pass the CURRENT
+  executor's token as `opts.fenceToken` to `updateTaskNode` (returns the `null` "lost" sentinel on a lost claim)
+  and to `claimTaskStatus` (returns `false` on a lost claim).
+- The fence condition is ALWAYS part of the SAME single `updateMany` statement as the write (never a
+  read-then-write), so the check cannot be lost to a race between reading the token and writing.
+- `releaseTaskExecution`/`releaseNodeExecution` are also token-checked — only the owning token clears the slot,
+  so a non-owner release is a no-op.
+- `./agent` owns the wiring: `persistNode`/`persistPlan` must pass the current executor's token and skip writes
+  (no re-persist, no narration of a result it no longer owns) when a fenced write returns `null`.
 - Every `status` column is a plain `String` (SQLite). The `prisma/schema.prisma` field comments list
   DIFFERENT status values than the frozen contract enums (`TaskPlanStatus`/`TaskNodeStatus`/`PendingActionStatus`
   in `lib/contracts`) — the contract enums are authoritative; the schema comments are non-normative.

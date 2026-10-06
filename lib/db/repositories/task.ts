@@ -83,14 +83,28 @@ export function updateTaskStatus(id: string, status: string): Promise<AgentTask>
  *
  * Contract callers read the current status via `getTask(id)` (which returns the task row
  * including `status`) before deciding which transition to claim.
+ *
+ * Token fence (`opts.fenceToken`): when supplied, this SAME atomic CAS also requires the row's
+ * `executionToken` to equal `opts.fenceToken`. This lets a running plan executor prove it still
+ * OWNS the plan at the instant of the write, so a stale "zombie" executor whose claim was taken
+ * over (its token overwritten by a newer executor) transitions 0 rows and returns `false` — it can
+ * never move the status of a plan it no longer owns. The check lives INSIDE the single `updateMany`
+ * statement (atomic, never a read-then-write). Omit `opts` (or `opts.fenceToken`) for the unfenced
+ * behavior above. The return type is unchanged — `false` is the existing "claim lost" sentinel.
  */
 export async function claimTaskStatus(
   taskId: string,
   fromStatuses: TaskPlanStatus[],
   toStatus: TaskPlanStatus,
+  opts?: { fenceToken?: string },
 ): Promise<boolean> {
+  const fenceToken = opts?.fenceToken;
   const result = await prisma.agentTask.updateMany({
-    where: { id: taskId, status: { in: fromStatuses } },
+    where: {
+      id: taskId,
+      status: { in: fromStatuses },
+      ...(fenceToken === undefined ? {} : { executionToken: fenceToken }),
+    },
     data: { status: toStatus },
   });
   return result.count === 1;
@@ -171,11 +185,45 @@ export function getTaskNode(
   });
 }
 
+/**
+ * Persist a node's result.
+ *
+ * Two modes, selected by whether `opts.fenceToken` is supplied:
+ *
+ * - **Unfenced (`opts` omitted or `fenceToken` undefined)** — the legacy behavior: resolve the
+ *   first row matching the logical `(taskId, nodeId)` pair and `update` it, returning the updated
+ *   `AgentTaskNode`. THROWS when the node does not exist.
+ *
+ * - **Fenced (`opts.fenceToken` supplied)** — a SINGLE atomic conditional statement (`updateMany`
+ *   with `executionToken: opts.fenceToken` in the `where`) writes the row ONLY while its
+ *   `executionToken` still equals the caller's token. The token check lives INSIDE the same
+ *   statement (never a read-then-write), so a stale "zombie" executor whose claim was taken over
+ *   can NEVER overwrite the takeover's result.
+ *   - Claim still owned → the row is written, then re-read via the `(taskId, nodeId)` first-row
+ *     lookup, and returned as `AgentTaskNode | null`.
+ *   - Claim LOST (0 rows matched) → NO write happens and the **"lost" sentinel `null`** is
+ *     returned. This is deliberately different from the unfenced path's throw-when-absent: a
+ *     `null` means "the write was rejected because you no longer own the node", NOT "the node is
+ *     missing". Callers that pass a fence token MUST branch on `null` (skip narrating/persisting)
+ *     rather than treat it as an error.
+ */
 export function updateTaskNode(
   taskId: string,
   nodeId: string,
   update: UpdateTaskNodeInput,
-): Promise<AgentTaskNode> {
+): Promise<AgentTaskNode>;
+export function updateTaskNode(
+  taskId: string,
+  nodeId: string,
+  update: UpdateTaskNodeInput,
+  opts: { fenceToken?: string },
+): Promise<AgentTaskNode | null>;
+export function updateTaskNode(
+  taskId: string,
+  nodeId: string,
+  update: UpdateTaskNodeInput,
+  opts?: { fenceToken?: string },
+): Promise<AgentTaskNode | null> {
   const data: Prisma.AgentTaskNodeUpdateInput = {};
   if (update.status !== undefined) data.status = update.status;
   if (update.output !== undefined) {
@@ -185,9 +233,24 @@ export function updateTaskNode(
   if (update.startedAt !== undefined) data.startedAt = update.startedAt;
   if (update.endedAt !== undefined) data.endedAt = update.endedAt;
 
-  return firstNodeId(taskId, nodeId).then((id) =>
-    prisma.agentTaskNode.update({ where: { id }, data }),
-  );
+  const fenceToken = opts?.fenceToken;
+  if (fenceToken === undefined) {
+    return firstNodeId(taskId, nodeId).then((id) =>
+      prisma.agentTaskNode.update({ where: { id }, data }),
+    );
+  }
+
+  return (async () => {
+    const result = await prisma.agentTaskNode.updateMany({
+      where: { taskId, nodeId, executionToken: fenceToken },
+      data,
+    });
+    if (result.count === 0) return null;
+    return prisma.agentTaskNode.findFirst({
+      where: { taskId, nodeId },
+      orderBy: { order: 'asc' },
+    });
+  })();
 }
 
 export function updateTaskNodeStatus(
