@@ -199,6 +199,7 @@ flowchart TD
   恰好一次的守卫是 **DB 级**的：`lib/db/repositories/task.ts#claimTaskExecution`（**计划级** token，`finally` 中释放）与 `#claimNodeExecution`（**节点级** token，`finally` 中释放），加上经
   `lib/ledger.ts#nodeExecutionKey(taskId, nodeId)` 的**节点身份合并**。去重身份的范围是**稳定的计划 / 节点 / 执行身份**——**不是** `sessionId` + tool + args：
   **独立调用**（无计划节点）只靠 DB 的 `PendingAction` 状态 CAS，而**两个不同计划**即使 session+tool+args 相同也**各自独立运行**；转账再经 `ledgerKeyForAction({ id, taskId, nodeId })` 派生的幂等键（计划节点 ⇒ `nodeExecutionKey`；独立调用 ⇒ 动作 `id`）幂等——**不重复副作用**。
+  **陈旧执行领取接管**：DB 执行领取（`claimTaskExecution` / `claimNodeExecution`）支持陈旧接管——resume/retry 传入 `staleBefore = staleExecutionClaimBefore()`（`agent/task-control.ts`；`EXECUTION_CLAIM_TTL_MS = 600000` ≈ 10 分钟，基于**真实时钟** `Date.now()`，**非**演示时钟），`where.OR = [ executionToken IS NULL, executionClaimedAt < staleBefore ]`：**仅当**所有者被证明**陈旧**时才接管；仍**存活**的所有者**不被抢占**；并发接管**只允许一个赢家**（赢家重盖 `executionClaimedAt`，败者匹配 0 行）；旧所有者的 `releaseTaskExecution` / `releaseNodeExecution`（`finally` 中调用）按 token CAS **成为空操作**。
 - **暂停保持（pause retention）**：在**已暂停**的计划里确认一个停放节点，**只**记录该节点的结果；计划
   **保持暂停**直到一次显式 resume（`task-control.ts#resumeTaskForAction` 调 `lifecycle.resumePlan` 时
   不传 `explicitResume`；`resumePlan` 先核算 `stillPaused` 并返回暂停快照，暂不推进）。
@@ -208,10 +209,10 @@ flowchart TD
 - **投资与虚拟卡幂等（不重复扣款 / 不重复受理）**：`subscribe_investment` / `redeem_investment` 携带**稳定的节点执行幂等键** `nodeExecutionKey(taskId, nodeId)`（`lib/ledger.ts`，形如 `nxe:<taskId>:<nodeId>`）。
   - `banking-sdk/investment.ts#subscribeInvestment` 把该键存入 `InvestmentHolding.idempotencyKey`（`prisma/schema.prisma` 中为 **UNIQUE** 列），经**共享的 P2002 / 唯一约束冲突处理**重放原始结果；
     幂等记录 + 余额扣减 + 持仓创建**在同一 DB 事务内**完成（**无部分扣款**）。
-  - `banking-sdk/investment.ts#redeemInvestment` 以 **REDEEMED 状态翻转**作为其重放标记：同一节点再次赎回会**重放**（返回当前余额）而非二次赎回。
+  - `banking-sdk/investment.ts#redeemInvestment` 把该次赎回的**执行身份**与**原结果**与入账在**同一 DB 事务**内持久化（`InvestmentHolding.redeemExecutionKey` / `redeemResult`，`prisma/schema.prisma`）：**同身份**再次赎回返回**原结果**且**不重复入账**；**不同身份 / 无身份**再次赎回 → `AppError('CONFLICT')` **明确拒绝**（**不**宣称到账）；并发赎回经条件 `updateMany({ status: { not: 'REDEEMED' } })` 仅**一次实际入账**。
   - `banking-sdk/card.ts#applyVirtualCard` 用**确定性卡片 id** 实现幂等（同一节点的重复受理返回同一张卡）。
-  - `agent/confirmation.ts#executeGatedToolOnce` 增加 `findInFlightPlanActionId(taskId, nodeId)` 守卫：同一计划节点已在等待人工确认时，直接返回**已停放的结果**，
-    **不再**为该节点铸造第二个 `PendingAction`。
+  - `agent/confirmation.ts#executeGatedToolOnce` 以 `findInFlightPlanAction(taskId, nodeId)` 守卫（唯一事实来源是该计划节点**已持久化**的 `PendingAction` 行，状态集 `pending|awaiting_mfa|confirmed|executed`）：同一计划节点已有持久化动作时**不再**为该节点铸造第二个 `PendingAction`。
+    当该节点的既有动作状态为 `executed`（副作用已执行并已入账，但节点结果未回写——确认路径先记 `executed`，随后写节点结果的那次持久化可能失败）时，`executeGatedToolOnce` 调用 `replayExecutedPlanAction`，以该动作**持久化的原始 toolName/argsJson** 经 SDK 在**同一节点幂等键** `nodeExecutionKey(taskId, nodeId)` 下**重放**（SDK 幂等 ⇒ 不重复副作用），把节点补齐为 `success` 并继续后续节点，**不重新请求确认、不重复执行**（此恢复路径**有意不经过网关**，避免为该节点铸造第二个动作）。真正处于 `pending`/`awaiting_mfa`/`confirmed` 的动作仍返回**已停放结果**、继续等待真实人工确认；恢复是幂等的。
 
 ---
 
@@ -402,5 +403,8 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - **演示时钟被固定**（`DEMO_NOW = 2026-09-25 12:00 本地`）；**🟢 GREEN 只读操作按设计不写审计**；
 - **原子累计限额认领的串行化依赖 SQLite 文件锁**（见「原子累计限额主张」的注意项）——SQLite 特有，
   未在其他数据库引擎 / 多写者部署上验证。
+- **执行领取的陈旧接管无 fencing token**：`agent/task-control.ts` 的 `persistNode` / `persistPlan` **不**校验执行 token（`persistPlan` 对 `cancelled` 无条件写入，
+  否则用 `claimTaskStatus` 做**状态** CAS），接管**不隔离**旧所有者对节点行 / 计划快照的写；副作用仍受**节点级 DB 领取** + `nodeExecutionKey` **SDK 幂等**约束。
+  接管视界 `EXECUTION_CLAIM_TTL_MS` 为**启发式**——长时人工阻塞可能把仍存活者误判为陈旧。
 
 > 验收场景与断言见 [`test-cases.md`](./test-cases.md)；已知限制见 [`known-risks.md`](./known-risks.md)。
