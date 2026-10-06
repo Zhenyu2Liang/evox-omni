@@ -1,8 +1,21 @@
 import type { PendingAction, MfaChallenge } from '@prisma/client';
+import { type Prisma } from '@prisma/client';
 import { prisma } from '../client';
 import { toJson } from '../../json';
 import type { RiskLevel } from '../../contracts/risk';
 import type { PendingActionSummary, PendingActionStatus } from '../../contracts/security';
+
+/**
+ * Repository for the `PendingAction` aggregate (+ its `MfaChallenge`).
+ *
+ * TRANSACTION COMPOSABILITY — every function here takes an OPTIONAL trailing
+ * `client: Prisma.TransactionClient = prisma`. The default is the shared singleton, so existing
+ * callers are unaffected; passing an explicit client (a `prisma.$transaction` handle) routes ALL
+ * of that function's DB access through it, letting a caller compose several of these calls into
+ * ONE transaction so they cannot interleave. This is required by the cancel/authorize
+ * coordination flow: a plan-level cancel (`revokePendingActionsByTask`) and a concurrent
+ * authorization CAS (`claimPendingAction`) must be all-or-nothing together.
+ */
 
 export type PendingActionWithMfa = PendingAction & { mfa: MfaChallenge | null };
 
@@ -69,8 +82,9 @@ const DEFAULT_LIMIT = 100;
 
 export function createPendingAction(
   input: CreatePendingActionInput,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<PendingAction> {
-  return prisma.pendingAction.create({
+  return client.pendingAction.create({
     data: {
       sessionId: input.sessionId,
       userId: input.userId,
@@ -90,19 +104,23 @@ export function createPendingAction(
 
 export function getPendingAction(
   id: string,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<PendingActionWithMfa | null> {
-  return prisma.pendingAction.findUnique({
+  return client.pendingAction.findUnique({
     where: { id },
     include: { mfa: true },
   });
 }
 
-export function listPendingActions(query: {
-  sessionId?: string;
-  status?: string;
-  limit?: number;
-}): Promise<PendingAction[]> {
-  return prisma.pendingAction.findMany({
+export function listPendingActions(
+  query: {
+    sessionId?: string;
+    status?: string;
+    limit?: number;
+  },
+  client: Prisma.TransactionClient = prisma,
+): Promise<PendingAction[]> {
+  return client.pendingAction.findMany({
     where: {
       ...(query.sessionId ? { sessionId: query.sessionId } : {}),
       ...(query.status ? { status: query.status } : {}),
@@ -121,8 +139,9 @@ export function listPendingActions(query: {
 export function listPendingActionsByTask(
   taskId: string,
   opts?: { statuses?: string[] },
+  client: Prisma.TransactionClient = prisma,
 ): Promise<PendingAction[]> {
-  return prisma.pendingAction.findMany({
+  return client.pendingAction.findMany({
     where: {
       taskId,
       ...(opts?.statuses?.length ? { status: { in: opts.statuses } } : {}),
@@ -138,12 +157,16 @@ export function listPendingActionsByTask(
  * Race-safe by construction — implemented as a SINGLE atomic `updateMany` statement, so a
  * concurrent claim of one of the actions simply is not matched (it no longer has a status in
  * `fromStatuses`) and the two operations cannot interleave.
+ *
+ * Pass `client` to run this revocation inside the SAME transaction as the concurrent
+ * authorization CAS (`claimPendingAction`) it must not interleave with.
  */
 export async function revokePendingActionsByTask(
   taskId: string,
   fromStatuses: string[],
+  client: Prisma.TransactionClient = prisma,
 ): Promise<number> {
-  const result = await prisma.pendingAction.updateMany({
+  const result = await client.pendingAction.updateMany({
     where: { taskId, status: { in: fromStatuses } },
     data: { status: 'cancelled' },
   });
@@ -153,8 +176,9 @@ export async function revokePendingActionsByTask(
 export function updatePendingActionStatus(
   id: string,
   status: string,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<PendingAction> {
-  return prisma.pendingAction.update({ where: { id }, data: { status } });
+  return client.pendingAction.update({ where: { id }, data: { status } });
 }
 
 /**
@@ -173,11 +197,14 @@ export const setPendingActionStatus = updatePendingActionStatus;
  *
  * Concurrency: the transition is a single `updateMany` statement, so a second/concurrent
  * claim (whose `status IN from` no longer matches) transitions 0 rows and returns `false`.
+ * Pass `client` to run the CAS inside the caller's transaction (e.g. together with a
+ * plan-level cancel) — the CAS itself stays a single `updateMany` (no read-modify-write).
  */
 export async function claimPendingAction(
   input: ClaimPendingActionInput,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<boolean> {
-  const result = await prisma.pendingAction.updateMany({
+  const result = await client.pendingAction.updateMany({
     where: {
       id: input.actionId,
       status: { in: input.from },
@@ -191,12 +218,14 @@ export async function claimPendingAction(
 
 /**
  * Ownership reader: the minimal identifying fields of a `PendingAction` used to authorize a
- * caller before executing it. Returns `null` when the action does not exist.
+ * caller before executing it. Returns `null` when the action does not exist. Pass `client` to
+ * read it from within the caller's transaction.
  */
 export function getPendingActionOwnership(
   actionId: string,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<PendingActionOwnership | null> {
-  return prisma.pendingAction.findUnique({
+  return client.pendingAction.findUnique({
     where: { id: actionId },
     select: { id: true, userId: true, sessionId: true, status: true },
   });
@@ -210,8 +239,9 @@ export function getPendingActionOwnership(
  */
 export function getPendingActionPlanLink(
   actionId: string,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<PendingActionPlanLink | null> {
-  return prisma.pendingAction.findUnique({
+  return client.pendingAction.findUnique({
     where: { id: actionId },
     select: { id: true, taskId: true, nodeId: true },
   });
@@ -219,8 +249,9 @@ export function getPendingActionPlanLink(
 
 export function createMfaChallenge(
   input: CreateMfaChallengeInput,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<MfaChallenge> {
-  return prisma.mfaChallenge.create({
+  return client.mfaChallenge.create({
     data: {
       actionId: input.actionId,
       code: input.code,
@@ -232,12 +263,16 @@ export function createMfaChallenge(
 
 export function getMfaChallenge(
   actionId: string,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<MfaChallenge | null> {
-  return prisma.mfaChallenge.findUnique({ where: { actionId } });
+  return client.mfaChallenge.findUnique({ where: { actionId } });
 }
 
-export function incrementMfaAttempts(actionId: string): Promise<MfaChallenge> {
-  return prisma.mfaChallenge.update({
+export function incrementMfaAttempts(
+  actionId: string,
+  client: Prisma.TransactionClient = prisma,
+): Promise<MfaChallenge> {
+  return client.mfaChallenge.update({
     where: { actionId },
     data: { attempts: { increment: 1 } },
   });
@@ -246,10 +281,14 @@ export function incrementMfaAttempts(actionId: string): Promise<MfaChallenge> {
 export function updateMfaChallengeStatus(
   actionId: string,
   status: string,
+  client: Prisma.TransactionClient = prisma,
 ): Promise<MfaChallenge> {
-  return prisma.mfaChallenge.update({ where: { actionId }, data: { status } });
+  return client.mfaChallenge.update({ where: { actionId }, data: { status } });
 }
 
-export function resetMfaAttempts(actionId: string): Promise<MfaChallenge> {
-  return prisma.mfaChallenge.update({ where: { actionId }, data: { attempts: 0 } });
+export function resetMfaAttempts(
+  actionId: string,
+  client: Prisma.TransactionClient = prisma,
+): Promise<MfaChallenge> {
+  return client.mfaChallenge.update({ where: { actionId }, data: { attempts: 0 } });
 }

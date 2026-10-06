@@ -15,11 +15,16 @@
  * `setCardLimit` replaces a card+category limit as a single all-or-nothing unit
  * (`runInTransaction`): the delete and the create commit together, so the card never ends up with
  * zero or duplicate limit rows for that category.
+ *
+ * `applyVirtualCard` accepts an OPTIONAL `idempotencyKey`: when supplied, the card id is derived
+ * deterministically from `(userId, key)` and a repeat replays the existing card instead of issuing a
+ * second one (a plan node can be replayed after a resume/retry — see `./idempotent.ts`).
  */
 import type { Card as CardRow, CardLimit as CardLimitRow } from '@prisma/client';
 import { cards } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { round2 } from '../lib/money';
+import { idempotentCardId, isUniqueViolation, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction } from './tx';
 import type {
   ApplyVirtualCardInput,
@@ -156,6 +161,12 @@ export async function reportLostCard(
  * Issue a new virtual card; returns the created card.
  * `input.label` is accepted for API compatibility but not persisted (no label column in the demo
  * schema). The masked number is generated as `****` + 4 digits, avoiding the user's existing masks.
+ *
+ * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, the card id is derived
+ * deterministically from `(userId, key)` and reused as the primary key, so a repeat of the SAME key
+ * finds and REPLAYS the original card (same `id`) instead of issuing a SECOND virtual card.
+ * Concurrent same-key calls are safe too — the loser's insert violates the PK, its transaction rolls
+ * back (no card written), then the winner's committed card is replayed. Absent → unchanged behavior.
  */
 export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<CardView> {
   const userId = typeof input?.userId === 'string' ? input.userId : '';
@@ -163,19 +174,58 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
     throw new AppError('VALIDATION', '缺少用户 id', { userId: input?.userId });
   }
 
-  const existing = await cards.listCards(userId);
-  const numberMasked = generateMaskedNumber(new Set(existing.map((card) => card.numberMasked)));
+  const key = normalizeIdempotencyKey(input.idempotencyKey);
+  if (key === undefined) {
+    const existing = await cards.listCards(userId);
+    const numberMasked = generateMaskedNumber(new Set(existing.map((card) => card.numberMasked)));
 
-  const row = await cards.createCard({
-    userId,
-    type: 'VIRTUAL',
-    network: VIRTUAL_CARD_NETWORK,
-    numberMasked,
-    status: 'ACTIVE',
-  });
+    const row = await cards.createCard({
+      userId,
+      type: 'VIRTUAL',
+      network: VIRTUAL_CARD_NETWORK,
+      numberMasked,
+      status: 'ACTIVE',
+    });
 
-  // A brand-new card carries no per-category limits.
-  return toCardView(row, []);
+    // A brand-new card carries no per-category limits.
+    return toCardView(row, []);
+  }
+
+  // Deterministic-id replay (the `Card` table has no idempotencyKey column): the create goes
+  // through `runInTransaction` so the derive-find-create sequence is all-or-nothing, mirroring
+  // `setCardLimit`'s in-transaction use of `tx.card*`.
+  const cardId = idempotentCardId(userId, key);
+  let row: CardRow;
+  try {
+    row = await runInTransaction(async (tx): Promise<CardRow> => {
+      const replayed = await tx.card.findUnique({ where: { id: cardId } });
+      if (replayed) return replayed;
+
+      const own = await tx.card.findMany({ where: { userId } });
+      const numberMasked = generateMaskedNumber(new Set(own.map((card) => card.numberMasked)));
+
+      return tx.card.create({
+        data: {
+          id: cardId,
+          userId,
+          type: 'VIRTUAL',
+          network: VIRTUAL_CARD_NETWORK,
+          numberMasked,
+          status: 'ACTIVE',
+        },
+      });
+    });
+  } catch (error) {
+    // Concurrent same-key race: the other call committed the card first → our tx rolled back (no
+    // card written). Re-read the committed card and replay it.
+    if (isUniqueViolation(error)) {
+      const committed = await cards.getCard(cardId);
+      if (committed) return loadCardView(committed);
+    }
+    throw error;
+  }
+
+  return loadCardView(row);
 }
 
 /**

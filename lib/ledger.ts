@@ -42,3 +42,49 @@ export function idempotentTransferTxId(userId: string, idempotencyKey: string): 
 export function nodeExecutionKey(taskId: string, nodeId: string): string {
   return `nxe:${taskId}:${nodeId}`;
 }
+
+/**
+ * Canonical de-dup IDENTITY of a gated `PendingAction`.
+ *
+ * The identity of an action is its PLAN membership when it belongs to a plan, else its OWN `id`:
+ *  - an action that is part of a plan (`taskId` AND `nodeId` both non-null and non-empty after
+ *    trimming) is identified by its plan node → `nodeExecutionKey(taskId, nodeId)`, so a re-run of
+ *    the same (task, node) dedupes to the SAME identity and the ledger row the node produced can be
+ *    looked up again;
+ *  - a STANDALONE action (no plan link) is identified by its own `id` — the conventional
+ *    per-`PendingAction` idempotency key.
+ *
+ * This is the SINGLE key that LINKS an action to the ledger `Transaction` row it produced: a plan
+ * node's row id is derived from `nodeExecutionKey(taskId, nodeId)`, while a standalone action's row
+ * id is derived from its `id`. Callers MUST use this helper (never a bare `action.id`) so the key
+ * they look up MATCHES the key the row was generated with; otherwise an already-ledgered action is
+ * not recognized and is double-counted.
+ */
+export function ledgerKeyForAction(action: {
+  id: string;
+  taskId?: string | null;
+  nodeId?: string | null;
+}): string {
+  const { taskId, nodeId } = action;
+  if (taskId != null && taskId.trim().length > 0 && nodeId != null && nodeId.trim().length > 0) {
+    return nodeExecutionKey(taskId, nodeId);
+  }
+  return action.id;
+}
+
+/**
+ * Canonical deterministic transfer-ledger transaction id for a gated `PendingAction`.
+ *
+ * Thin composition of {@link idempotentTransferTxId} over {@link ledgerKeyForAction}: it yields the
+ * SAME transaction id the Banking SDK derives for the row the action produces — the plan-node key
+ * for a plan-linked action, the action `id` otherwise.
+ *
+ * Use this (NOT `idempotentTransferTxId(userId, action.id)`) to look up an action's ledger row, so
+ * an already-ledgered action is recognized and excluded from the cumulative daily-transfer total.
+ */
+export function ledgerTxIdForAction(
+  userId: string,
+  action: { id: string; taskId?: string | null; nodeId?: string | null },
+): string {
+  return idempotentTransferTxId(userId, ledgerKeyForAction(action));
+}

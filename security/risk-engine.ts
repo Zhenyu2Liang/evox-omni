@@ -15,7 +15,7 @@ import { formatCNY, parseAmount } from '../lib/money';
 import { safeParse } from '../lib/json';
 import { prisma } from '../lib/db/client';
 import { listTransactions } from '../lib/db/repositories/transaction';
-import { idempotentTransferTxId } from '../lib/ledger';
+import { ledgerTxIdForAction } from '../lib/ledger';
 
 export interface TransferRiskInput {
   /** Requested transfer amount in CNY (already validated/normalized by the caller). */
@@ -62,7 +62,8 @@ const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const;
  *
  * DEDUP vs the LEDGER: an action can be authorized (status `confirmed`) while its ledger
  * `Transaction` row ALREADY exists — the Banking SDK writes that row deterministically keyed by
- * `idempotentTransferTxId(userId, action.id)`, and `recordActionResult` (which flips the action to
+ * the action IDENTITY (`ledgerTxIdForAction`: the plan-node key `nodeExecutionKey(taskId, nodeId)`
+ * for a plan-linked action, else the action `id`), and `recordActionResult` (which flips the action to
  * its terminal status) has not run yet. Such an action is ALREADY counted by the executed-ledger
  * total in `computeEffectiveTransferTotalWith`, so counting it here again would DOUBLE-count it
  * and spuriously escalate a later legitimately-YELLOW transfer to RED/MFA. We therefore EXCLUDE
@@ -92,7 +93,7 @@ export async function computeInFlightTransferTotal(
   // The deterministic ledger ids these parked actions WOULD have produced. Any that already exist
   // were already written to the ledger (and thus already counted as EXECUTED), so they must be
   // excluded from the in-flight sum to avoid counting the same money movement twice.
-  const ledgerIds = rows.map((row) => idempotentTransferTxId(userId, row.id));
+  const ledgerIds = rows.map((row) => ledgerTxIdForAction(userId, row));
   const existingLedgerRows = await client.transaction.findMany({
     where: { id: { in: ledgerIds } },
     select: { id: true },
@@ -101,7 +102,7 @@ export async function computeInFlightTransferTotal(
 
   let total = 0;
   for (const row of rows) {
-    if (alreadyLedgered.has(idempotentTransferTxId(userId, row.id))) continue;
+    if (alreadyLedgered.has(ledgerTxIdForAction(userId, row))) continue;
     const args = safeParse<Record<string, unknown>>(row.argsJson, {});
     const amount = parseAmount(args.amount as string | number | null | undefined);
     if (Number.isFinite(amount)) total += amount;

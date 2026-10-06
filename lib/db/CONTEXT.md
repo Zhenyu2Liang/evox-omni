@@ -26,6 +26,11 @@ The Prisma client singleton and the repository layer. This is the **only** subtr
 - `repositories/` — one module per aggregate, each exporting typed async finders / creators / updaters /
   aggregates (see `repositories/CONTEXT.md`).
   Also carries the concurrency-safety primitives: the `PendingAction` → (`taskId`,`nodeId`) plan link persisted at creation, per-action / plan-level revocation helpers, per-plan / per-node live-execution claim + release CAS helpers keyed by `executionToken`/`executionClaimedAt`, and the `nodeExecutionKey` idempotency key for node side effects.
+  **Transaction composability**: every function in `repositories/pendingAction.ts` takes an optional trailing
+  `client: Prisma.TransactionClient = prisma` (default = the `client.ts` singleton) and routes ALL of its DB
+  access through it, so a caller can compose its readers / CAS transitions / bulk plan-cancel into ONE
+  `prisma.$transaction` (the cancel/authorize flow depends on this so a plan-cancel and a concurrent
+  authorization CAS cannot interleave). All other aggregates take no `client` and use the singleton.
 
 ## Constraints
 
@@ -34,6 +39,9 @@ The Prisma client singleton and the repository layer. This is the **only** subtr
   Writes that accept structured payloads serialize via `toJson`.
 - Money columns are `Float` CNY; never do raw float arithmetic here beyond simple persistence.
 - No business rules (permissions, limits, risk) live here — those belong to `security/` / `banking-sdk/`.
+- The optional `client: Prisma.TransactionClient` parameter is allowed **only** in `repositories/pendingAction.ts`;
+  its default must remain the `../client` singleton. Do not convert its single-statement `claim*`/`revoke*`
+  CAS primitives into read-modify-write logic.
 - Keep files ≲ ~1000 lines.
 
 ## Routing Table

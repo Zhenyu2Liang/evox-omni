@@ -31,12 +31,16 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   `new Date(demoNow(override))`.
 - `json.ts` — SQLite JSON-text column helpers: `safeParse<T>(text, fallback)` (returns `fallback` for
   null/undefined/empty/invalid JSON) and `toJson(value)` (`'null'` when value is `undefined`).
-- `ledger.ts` — deterministic idempotency keys: `idempotentTransferTxId(userId, idempotencyKey)` is the canonical transfer-ledger id,
-  `txidem_` + the first 32 hex chars of `sha256("<userId>\u0000<idempotencyKey>")`.
-  It is the single source of truth that LINKS a gated transfer `PendingAction` to the ledger `Transaction` row it produces:
-  the Banking SDK derives that row's primary key from it (supplying an idempotency key makes a repeat transfer at-most-once — a repeat replays the original row instead of double-debiting), and `security/` uses it to EXCLUDE already-ledgered in-flight actions from the cumulative daily-transfer total.
-  `nodeExecutionKey(taskId, nodeId)` is the stable per-(`taskId`, `nodeId`) idempotency key for a plan node's SIDE EFFECT (format `nxe:<taskId>:<nodeId>`).
-  Two runs of the same (task, node) dedupe to the same key, while a different plan (`taskId`) never collides.
+- `ledger.ts` — deterministic idempotency keys + the canonical action→ledger-row IDENTITY.
+  - `idempotentTransferTxId(userId, idempotencyKey)` → the canonical transfer-ledger id,
+    `txidem_` + the first 32 hex chars of `sha256("<userId>\u0000<idempotencyKey>")`.
+    The single source of truth that LINKS an idempotency key to the ledger `Transaction` row it produces:
+    the Banking SDK derives that row's primary key from it, so supplying an idempotency key makes a repeat transfer at-most-once — it replays the original row instead of double-debiting.
+  - `nodeExecutionKey(taskId, nodeId)` → the stable per-(`taskId`, `nodeId`) idempotency key for a plan node's SIDE EFFECT (format `nxe:<taskId>:<nodeId>`).
+    Two runs of the same (task, node) dedupe to the same key, while a different plan (`taskId`) never collides.
+  - `ledgerKeyForAction(action)` → the canonical de-dup IDENTITY of a `PendingAction`: `nodeExecutionKey(taskId, nodeId)` when the action is plan-linked (`taskId` AND `nodeId` both non-null/non-empty after trim), else the action's own `id`.
+  - `ledgerTxIdForAction(userId, action)` → `idempotentTransferTxId(userId, ledgerKeyForAction(action))`, the ledger-row id `security/risk-engine` must look up to EXCLUDE an already-ledgered in-flight action from the cumulative daily-transfer total.
+    Callers must use THIS (never `idempotentTransferTxId(userId, action.id)`) so a plan node's lookup MATCHES the id its row was generated with — otherwise the action is not recognized and is double-counted.
 - `contracts/` — the FROZEN cross-module type definitions (see routing table below).
 - `db/` — Prisma client singleton + per-aggregate repositories (the only data-access layer).
 - `index.ts` — convenience barrel re-exporting `contracts`, `errors`, `money`, `config`, `constants`,
@@ -56,7 +60,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - Any "now" in the running app goes through `lib/clock` (`demoNow()`), never raw `Date.now()`.
 - `index.ts` must not import `lib/db` (keeps the Prisma client out of client-side bundles).
 - Pure TypeScript; no side effects at module load, no network. Sole exception: `db/client.ts`
-  constructs the Prisma singleton.
+  constructs the Prisma singleton. `ledger.ts` stays pure (only `node:crypto`).
 - Files use relative imports between each other — no path aliases assumed.
 - Keep files ≲ ~1000 lines; split by responsibility.
 
@@ -68,7 +72,8 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   `task.ts` (TaskPlan/TaskNodeSpec/TaskNodeResult/TaskCondition), `agent.ts` (ChatMessage/ChatCard/
   AgentStreamEvent/ChatTurnRequest/Response), `index.ts` (barrel re-export).
 - `./lib/db` → Prisma client singleton (`client.ts`) + typed per-aggregate repositories (`repositories/`),
-  incl. the atomic exactly-once `claimPendingAction` / ownership-aware `getPendingActionOwnership` primitives.
+  incl. the atomic exactly-once `claimPendingAction` / ownership-aware `getPendingActionOwnership` primitives
+  and the optional-`client` transaction-composable `pendingAction` repository.
 - `./lib/errors.ts` → `ErrorCode` / `AppError` / `Result<T>` — the project error convention.
 - `./lib/money.ts` → CNY formatting/parsing/cent-safe arithmetic.
 - `./lib/constants.ts` → demo constants (limits, MFA code, thresholds, demo user id, cookie name, `DEMO_NOW`).
@@ -77,7 +82,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/date.ts` → pure local-timezone date-range/format helpers.
 - `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
-- `./lib/ledger.ts` → deterministic idempotency keys — transfer-ledger id (`idempotentTransferTxId`) and per-(plan,node) node side-effect key (`nodeExecutionKey`).
+- `./lib/ledger.ts` → deterministic idempotency keys + canonical action→ledger-row identity — `idempotentTransferTxId`, `nodeExecutionKey`, `ledgerKeyForAction`, `ledgerTxIdForAction`.
 - `./lib/index.ts` → convenience barrel for `@/lib` imports (no `db`).
 
 ## Status

@@ -55,6 +55,7 @@ import { recordSecurityEvent } from '@/audit';
 import { AppError, type ErrorCode } from '@/lib/errors';
 import { newId } from '@/lib/ids';
 import { safeParse } from '@/lib/json';
+import { prisma } from '@/lib/db/client';
 import { getSession } from '@/lib/db/repositories/session';
 import {
   getPendingActionPlanLink,
@@ -603,6 +604,12 @@ export async function sweepCancelledPlan(
 /**
  * Cancel a task plan.
  *
+ * The settle itself is ATOMIC: phase 1 bulk-revokes every parked action of the plan, then phase 2
+ * re-revokes anything parked in the meantime AND writes the plan row `cancelled` in ONE `$transaction`,
+ * so a between-phases action is never left `pending` while the row is not yet `cancelled` (the gateway's
+ * `authorizeAction` does not read the plan status). The numbered steps below give the revoke-then-cancel
+ * order.
+ *
  * 1. REVOKE the parked `PendingAction`(s) FIRST (atomic claim → `cancelled`), so any later
  *    confirm/verify fails (`CONFLICT`/`NOT_FOUND`) and can never move money out of the cancelled plan.
  * 2. THEN cancel the plan: already-`success` nodes keep their result (irreversible — executed work is
@@ -626,7 +633,7 @@ export async function cancelTask(
   // A cancelled plan is terminal — never re-cancel, never rewrite it.
   if (row.status === 'cancelled') return toTaskPlan(row);
 
-  // PRIMARY guarantee: revoke EVERY action of the plan in ONE atomic bulk update (`pending` /
+  // PHASE 1 — bulk revoke: revoke EVERY action of the plan in ONE atomic bulk update (`pending` /
   // `awaiting_mfa` → `cancelled`), so no executable gated call survives the cancellation regardless
   // of which node parked it. Race-safe by construction (a single `updateMany`).
   const bulkRevoked = await revokePendingActionsByTask(taskId, ['pending', 'awaiting_mfa']);
@@ -635,6 +642,24 @@ export async function cancelTask(
   // bulk update could not address (defensive — the bulk path already covers every `taskId`-linked row).
   const revoke = await revokeParkedActions(userId, row.sessionId, row);
 
+  // PHASE 2 — ATOMIC SETTLE: re-revoke whatever got parked while phase 1 was in flight AND write the
+  // plan row `cancelled` in ONE `$transaction`, so the revocation and the cancellation are never
+  // observable separately. As two DISTINCT statements they left a gap: a gated call parked between
+  // them stayed `pending` while the row was not yet `cancelled` — i.e. still authorizable, since
+  // `security/security-gateway.ts#authorizeAction` does NOT read the plan status (only
+  // `confirmation.ts#cancelledPlanOutcome`, which may already have run, does). Both writes MUST go
+  // through the SAME `tx` client — neither `updateTaskStatus` nor `claimTaskStatus` accepts one, hence
+  // the inline `tx.agentTask.update`. Irreversible work is never compensated: the revoke only matches
+  // `pending`/`awaiting_mfa`, so an already-executed transfer is left exactly where it is.
+  const settledRevoked = await prisma.$transaction(async (tx) => {
+    const revoked = await revokePendingActionsByTask(taskId, ['pending', 'awaiting_mfa'], tx);
+    await tx.agentTask.update({ where: { id: taskId }, data: { status: 'cancelled' } });
+    return revoked;
+  });
+
+  // THEN cancel the plan: already-`success` nodes keep their result (irreversible — executed work is
+  // never pretended to be rolled back), every remaining non-terminal node becomes `cancelled`, and the
+  // snapshot is persisted (its `'cancelled'` status write is idempotent with phase 2).
   const cancelled = await lifecycle.cancelPlan(
     toTaskPlan(row),
     buildPlanDeps(taskId, { runTool: UNUSED_RUN_TOOL, now: opts.now }),
@@ -644,7 +669,7 @@ export async function cancelTask(
   // Surface anything that could not be settled (never swallowed): an unexpected failure is durably
   // recorded as a `SecurityEvent`, with the bulk-revoke count for the audit trail.
   if (revoke.failed.length > 0) {
-    await recordRevokeFailure(row.sessionId, taskId, revoke.failed, bulkRevoked);
+    await recordRevokeFailure(row.sessionId, taskId, revoke.failed, bulkRevoked + settledRevoked);
   }
   return cancelled;
 }
