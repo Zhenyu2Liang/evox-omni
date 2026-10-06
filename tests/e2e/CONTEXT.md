@@ -59,7 +59,8 @@ Harness helpers (`helpers.ts`):
 
 ## Prerequisites (in order, in a fresh worktree)
 1. `npm install`
-2. `npx prisma generate`
+- No manual `prisma generate` step: `resetDemoDatabase()` GENERATES the Prisma Client itself when it is
+  missing, so a clean `npm install`-only checkout is sufficient (see "Isolated E2E database").
 - A **free port** is chosen at runtime. **System Chrome** is used (Chrome first, Edge fallback;
   `E2E_BROWSER_PATH` overrides detection). **No `playwright install` / browser download** — headless
   Chrome is launched via `chromium.launch({ executablePath, headless: true })`.
@@ -83,13 +84,16 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
 - The SAME `DATABASE_URL` is passed to BOTH the provisioning CLIs (`runCliStep`) AND the spawned
   dev server (`startDevServer`).
 - `resetDemoDatabase()` runs BEFORE the dev server boots (no open connection ⇒ no Windows SQLite
-  file-lock). Recipe: delete `e2e.db` + its `-wal`/`-shm`/`-journal` sidecars (missing files are
-  fine) → `prisma db push --skip-generate` → seed via `tsx prisma/seed.ts`. This **deliberately
-  AVOIDS `prisma db push --force-reset`**: on Windows that path was seen to leave the DB file as a
-  0-byte image and then fail with `Error code 11: database disk image is malformed`, aborting the
-  seed and failing all journeys. The whole attempt is retried ONCE with a short backoff (SQLite on
-  Windows is occasionally lock-prone); each step's combined stdout+stderr is captured into the
-  thrown error and success is decided by the **EXIT CODE** (the deprecated `package.json#prisma`
+  file-lock). Recipe: ensure the Prisma Client is generated (run `prisma generate` ONLY when the
+  generated marker `node_modules/.prisma/client/schema.prisma` is absent — a bare `npm install` leaves
+  only the `@prisma/client` postinstall stub, whose `PrismaClient` throws `did not initialize yet`,
+  and the seed below imports `@prisma/client`) → delete `e2e.db` + its `-wal`/`-shm`/`-journal`
+  sidecars (missing files are fine) → `prisma db push --skip-generate` → seed via `tsx prisma/seed.ts`.
+  This **deliberately AVOIDS `prisma db push --force-reset`**: on Windows that path was seen to leave
+  the DB file as a 0-byte image and then fail with `Error code 11: database disk image is malformed`,
+  aborting the seed and failing all journeys. The whole attempt is retried ONCE with a short backoff
+  (SQLite on Windows is occasionally lock-prone); each step's combined stdout+stderr is captured into
+  the thrown error and success is decided by the **EXIT CODE** (the deprecated `package.json#prisma`
   warning lines are harmless).
 - CLIs are invoked like the dev server: project-local binaries (`REPO_ROOT/node_modules/...` launched
   with `process.execPath`), else `cmd.exe /d /s /c "npx …"` on Windows / a plain command on POSIX.

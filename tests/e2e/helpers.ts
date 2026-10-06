@@ -498,8 +498,45 @@ function removeSqliteFiles(files: readonly string[]): void {
   }
 }
 
-/** One reset attempt: delete the ISOLATED E2E DB → create a fresh schema → seed (all against `E2E_DB_URL`). */
+/**
+ * Absolute path of the marker file a successful `prisma generate` writes into the generated Prisma
+ * Client (the schema copy). It is ABSENT from the `@prisma/client` POSTINSTALL STUB that a bare
+ * `npm install` leaves behind, so its presence is a reliable "the client is generated" signal.
+ */
+function prismaClientMarkerPath(): string {
+  return path.join(REPO_ROOT, 'node_modules', '.prisma', 'client', 'schema.prisma');
+}
+
+/**
+ * Ensure the Prisma Client is GENERATED before any DB step needs it.
+ *
+ * WHY: the repo-root `package.json` has NO `postinstall` hook and `prisma generate` is a SEPARATE
+ * script (`db:generate`), so a clean `npm install`-only checkout leaves `node_modules/.prisma/client`
+ * holding ONLY the `@prisma/client` stub, whose `PrismaClient` throws
+ * `@prisma/client did not initialize yet. Please run "prisma generate" and try to import it again.`
+ * The reset below pushes the schema with `--skip-generate` (it deliberately skips generation), so the
+ * seed (`tsx prisma/seed.ts`, which imports `@prisma/client`) would then crash and every journey would
+ * FAIL as an infrastructure error — exactly the bug this guards against.
+ *
+ * Runs `prisma generate` ONLY when the generated client is missing (marker absent — see
+ * `prismaClientMarkerPath`), so repeat runs on an already-provisioned checkout stay fast. Uses the same
+ * project-local CLI invocation (`resolvePrismaBin` + `cliCommand`) and `DATABASE_URL` propagation
+ * (`runCliStep`) as the other steps; `generate` needs no live DB, the env is only carried through for
+ * consistency.
+ */
+function ensurePrismaClientGenerated(): void {
+  if (existsSync(prismaClientMarkerPath())) return;
+  console.log('· 未检测到已生成的 Prisma Client → 运行 prisma generate（清理环境自举步骤）');
+  const generate = cliCommand(resolvePrismaBin(), ['prisma', 'generate']);
+  runCliStep(generate.command, generate.args);
+}
+
+/**
+ * One reset attempt: ensure the Prisma Client is generated → delete the ISOLATED E2E DB → create a
+ * fresh schema → seed (all against `E2E_DB_URL`).
+ */
 function resetDemoDatabaseOnce(): void {
+  ensurePrismaClientGenerated();
   removeSqliteFiles(E2E_DB_FILES);
   const push = cliCommand(resolvePrismaBin(), ['prisma', 'db', 'push', '--skip-generate']);
   runCliStep(push.command, push.args);
@@ -522,9 +559,11 @@ function resetDemoDatabaseOnce(): void {
  * HOW (deliberately NOT `prisma db push --force-reset`): on Windows the force-reset path was observed
  * to leave the SQLite file as a 0-byte image and then fail with `Error code 11: The database disk
  * image is malformed`, aborting the seed. Instead we DELETE the DB file + sidecars, re-create a fresh
- * schema with `db push --skip-generate`, then seed (`tsx prisma/seed.ts`) — both CLIs are given
- * `DATABASE_URL` = `E2E_DB_URL` (see `runCliStep`). The whole attempt is retried ONCE with a short
- * backoff (SQLite on Windows is occasionally lock-prone), and each step's combined stdout+stderr is
+ * schema with `db push --skip-generate`, then seed (`tsx prisma/seed.ts`). The Prisma Client is
+ * GENERATED first when missing (`ensurePrismaClientGenerated`), so a bare `npm install`-only checkout
+ * works without a manual `npx prisma generate`. Every CLI step is given `DATABASE_URL` = `E2E_DB_URL`
+ * (see `runCliStep`). The whole attempt is retried ONCE with a short backoff (SQLite on Windows is
+ * occasionally lock-prone), and each step's combined stdout+stderr is
  * captured into the thrown error.
  *
  * Set `E2E_SKIP_DB_RESET=1` to keep the current DB (e.g. to inspect post-run data); the journeys then

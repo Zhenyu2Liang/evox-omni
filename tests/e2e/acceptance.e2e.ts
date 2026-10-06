@@ -500,7 +500,7 @@ async function main(): Promise<void> {
       // The money journeys are tiered from the FROZEN demo day's accumulated outgoing transfers
       // (`demoNow()` = 2026-09-25 12:00), so without a reset a second run would start with the prior
       // run's executed transfers already in the day and the YELLOW-transfer journey would go RED.
-      console.log('· 重置隔离 E2E 数据库 → 删除 e2e.db + 副本 → prisma db push --skip-generate → tsx prisma/seed.ts（保证每次运行起始状态一致）');
+      console.log('· 重置隔离 E2E 数据库 →（缺 Prisma Client 时先 prisma generate）→ 删除 e2e.db + 副本 → prisma db push --skip-generate → tsx prisma/seed.ts（保证每次运行起始状态一致）');
       resetDemoDatabase();
 
       // Robust boot: prefers the project-local Next CLI (no npx/shell shim), waits for BOTH
