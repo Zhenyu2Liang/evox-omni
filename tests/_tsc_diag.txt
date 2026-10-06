@@ -1,0 +1,1 @@
+tests/review-next-boundaries.test.ts(59,51): error TS2353: Object literal may only specify known properties, and 'confirmed' does not exist in type 'AuthorizeOptions'.
