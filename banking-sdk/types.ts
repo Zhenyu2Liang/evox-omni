@@ -212,6 +212,13 @@ export interface ReportLostCardInput {
 export interface ApplyVirtualCardInput {
   userId: string;
   label?: string;
+  /**
+   * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT issue a
+   * second card: the card id is derived deterministically from (userId, key), and the existing
+   * virtual card is replayed (same `id`) instead of creating another one. Absent → unchanged
+   * behavior (every call issues a NEW card with a freshly generated masked number).
+   */
+  idempotencyKey?: string;
 }
 
 /* -------------------------------------------------------------- subscription */
