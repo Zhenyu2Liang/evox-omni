@@ -280,7 +280,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   owning plan+node at creation (`PendingAction.taskId`/`nodeId`). Before
   `confirmation.ts#executeGatedToolOnce` mints a gated action for a plan node,
   `findInFlightPlanActionId(taskId, nodeId)` looks for an existing action on that `(taskId, nodeId)` in
-  status `pending | awaiting_mfa | confirmed` (`listPendingActionsByTask(taskId, {statuses})` filtered by
+  status `pending | awaiting_mfa | confirmed | executed` (`listPendingActionsByTask(taskId, {statuses})` filtered by
   nodeId, oldest-first). When found, the node is treated as IN-PROGRESS: no `gateway.handleToolCall` and
   no new `PendingAction` — the SAME parked outcome
   (`{ ok:false, requiresConfirmation:true, pendingActionId:<existing id> }`) is returned. This closes the
