@@ -39,7 +39,6 @@ import {
   claimPendingAction,
   createPendingAction as repoCreatePending,
   getPendingAction,
-  getPendingActionPlanLink,
   listPendingActionsByTask,
   setPendingActionStatus,
 } from '../lib/db/repositories/pendingAction';
@@ -934,25 +933,11 @@ async function cancelAction(actionId: string, opts: CancelOptions): Promise<Pend
 
 /**
  * Persist the TRUE terminal status of an action AFTER the caller has executed it (or failed), so a
- * subsequent confirm/cancel is correctly rejected as CONFLICT. Unconditional setter — the
- * exactly-once claim happened at confirm time; this records the real outcome.
+ * subsequent confirm/cancel is correctly rejected as CONFLICT. Recorded VERBATIM and unconditionally
+ * — the exactly-once claim happened at confirm time, and this never consults the owning plan, so an
+ * action whose money already moved stays `'executed'` even if its plan is cancelled afterwards.
  */
 async function recordActionResult(actionId: string, status: 'executed' | 'failed'): Promise<void> {
-  if (status === 'executed') {
-    // Belt-and-braces plan-cancel guard: never mark an action EXECUTED when its owning plan is
-    // cancelled. A NON-plan action (no `taskId`) is COMPLETELY unaffected and persists `'executed'`.
-    const link = await getPendingActionPlanLink(actionId);
-    if (link?.taskId) {
-      const plan = await prisma.agentTask.findUnique({
-        where: { id: link.taskId },
-        select: { status: true },
-      });
-      if (plan?.status === 'cancelled') {
-        await setPendingActionStatus(actionId, 'cancelled');
-        return;
-      }
-    }
-  }
   await setPendingActionStatus(actionId, status);
 }
 
