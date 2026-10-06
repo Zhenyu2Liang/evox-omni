@@ -10,10 +10,12 @@ Prisma's error reporting.
 ## API Surface
 
 - `db-push.ts` — backs `npm run db:push` (and `npm run db:reset`). Runs `prisma db push` through the
-  project-local Prisma CLI with `RUST_LOG` pinned to `info` (see
-  `../lib/prisma-cli-env.ts#SCHEMA_ENGINE_RUST_LOG`), forwards every extra CLI arg
-  (`process.argv.slice(2)`), inherits stdio and exits with the child's exit code. On a MISSING SQLite
-  file it self-provisions the database — no manual DB creation, no readiness marker, no skip flag.
+  project-local Prisma CLI with `RUST_LOG=info` + `RUST_BACKTRACE=1` pinned for the schema-engine child
+  (shared pinning logic, in the non-test module `../lib/prisma-cli-env.ts#SCHEMA_ENGINE_RUST_LOG` /
+  `pinSchemaEngineLogging`). Resolves the local Prisma CLI (falling back to `npx` only when the local
+  binary is absent), forwards every extra CLI arg (`process.argv.slice(2)`), inherits stdio and exits
+  with the child's exit code. On a MISSING SQLite file it self-provisions the database — no manual DB
+  creation, no readiness marker, no skip flag.
 
 ## Commands
 
