@@ -1,0 +1,361 @@
+﻿node.exe : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cj
+s-node-api-deprecated for more details.[39m
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/projects/banking-agent/.genesis/workers/worker_T1_A7[39m
+
+ [32m✓[39m tests/app/review-regressions-http.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 857[2mms[22m[39m
+   [33m[2m✓[22m[39m [integration] identity — a query param NEVER authenticates on verify/cancel/tasks/reset[2m > [22m7 — NO cookie + a forged ?sessionId=<victim>&userId=<victim> on verify/cancel/tasks/reset is 403 everywhere and leaves the victim untouched [33m325[2mms[22m[39m
+ [32m✓[39m tests/app/cancel-safety-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 319[2mms[22m[39m
+ [32m✓[39m tests/app/concurrent-execution-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 568[2mms[22m[39m
+ [32m✓[39m tests/app/actions-http.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 867[2mms[22m[39m
+   [33m[2m✓[22m[39m [integration] POST /api/actions — MFA secrecy over HTTP[2m > [22m8 — the literal mock MFA code never appears in the parking turn or any verify response body [33m355[2mms[22m[39m
+ [32m✓[39m tests/unit/security/gateway.test.ts [2m([22m[2m27 tests[22m[2m)[22m[33m 781[2mms[22m[39m
+ [31m❯[39m tests/app/tasks-http.test.ts [2m([22m[2m14 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 791[2mms[22m[39m
+[31m   [31m×[31m [integration] POST /api/tasks/[id] — real task control (pause / cancel / retry)[2m > [22mretry — re-runs ONLY the failed node; a completed node keeps its recorded result[90m 21[2mms[22m[31m[39m
+[31m     → expected 'running' to be 'success' // Object.is equality[39m
+ [31m❯[39m tests/app/dag-recovery-http.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 376[2mms[22m[39m
+[31m   [31m×[31m [integration] POST /api/tasks/[id] retry — re-runs ONLY the failed node[2m > [22mre-runs the failed gated node (fresh gate) while the successful node is not re-executed[90m 105[2mms[22m[31m[39m
+[31m     → expected 'pending' to be 'waiting_confirmation' // Object.is equality[39m
+ [32m✓[39m tests/unit/security/transfer-limits-concurrency.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 635[2mms[22m[39m
+ [32m✓[39m tests/app/chat-http.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 460[2mms[22m[39m
+ [32m✓[39m tests/app/identity-http.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 393[2mms[22m[39m
+ [32m✓[39m tests/app/mfa-escalation-upgrade-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 360[2mms[22m[39m
+ [32m✓[39m tests/app/session-takeover-http.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 440[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/lifecycle.test.ts [2m([22m[2m20 tests[22m[2m)[22m[90m 8[2mms[22m[39m
+ [32m✓[39m tests/app/ledger-consistency-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 442[2mms[22m[39m
+ [32m✓[39m tests/app/malicious-input-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 345[2mms[22m[39m
+ [31m❯[39m tests/app/task-resume-retry-http.test.ts [2m([22m[2m2 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 350[2mms[22m[39m
+[31m   [31m×[31m [integration] POST /api/tasks/[id] concurrent retry — the failed node re-runs EXACTLY ONCE[2m > [22m[integration] two overlapping {action:"retry"} requests re-gate the failed node once and settle one consistent status[90m 86[2mms[22m[31m[39m
+[31m     → expected +0 to be 1 // Object.is equality[39m
+ [32m✓[39m tests/app/nl-entry-http.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 337[2mms[22m[39m
+ [32m✓[39m tests/app/plan-pause-terminal-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 295[2mms[22m[39m
+ [32m✓[39m tests/app/confirm-continuation-fencing.test.ts [2m([22m[2m1 test[22m[2m)[22m[90m 221[2mms[22m[39m
+ [32m✓[39m tests/app/plan-linkage-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 497[2mms[22m[39m
+ [32m✓[39m tests/app/cumulative-risk-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 766[2mms[22m[39m
+ [32m✓[39m tests/app/cancel-during-authorization-http.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 648[2mms[22m[39m
+ [32m✓[39m tests/app/mfa-escalation-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 574[2mms[22m[39m
+[90mstdout[2m | tests/review-execution-integrity.test.ts[2m > [22m[2mthe initial submit executor cannot overwrite a takeover completed node
+[22m[39mREVIEW_EXEC_INITIAL_TAKEOVER {"takeoverStatus":"success","finalStatus":"success","nodeStatus":"success","budgets":1}
+
+[90mstdout[2m | tests/review-execution-integrity.test.ts[2m > [22m[2man obsolete resumed executor cannot persist a late success over the takeover node result
+[22m[39mREVIEW_OBSOLETE_LATE_SUCCESS {"takeoverStatus":"success","finalStatus":"success","nodeStatus":"success","nodeOutput":"{\"id\":\"cmuwzwv3d000ff8xg0q93j2lu\",\"name\":\"执行完整性晚成功预算\",\"amount\":10,\"status\":\"RESERVED\",\"createdAt\":1791310317673}","budgets":1}
+
+[90mstdout[2m | tests/review-execution-integrity.test.ts[2m > [22m[2man obsolete resumed executor cannot mark a takeover completed node failed
+[22m[39mREVIEW_OBSOLETE_LATE_FAILURE {"takeoverStatus":"success","finalStatus":"success","nodeStatus":"success","nodeError":null,"budgets":1}
+
+[90mstdout[2m | tests/review-execution-integrity.test.ts[2m > [22m[2ma stale node token cannot write a partial result after the takeover completed the node
+[22m[39mREVIEW_STALE_NODE_TOKEN_PARTIAL {"takeoverStatus":"success","capturedToken":"string","nodeStatus":"success","nodeOutput":"{\"id\":\"cmuwzwv5d000xf8xgq7di8dia\",\"name\":\"执行完整性部分写入预算\",\"amount\":10,\"status\":\"RESERVED\",\"createdAt\":1791310317745}"}
+
+[90mstdout[2m | tests/review-execution-integrity.test.ts[2m > [22m[2man obsolete resumed executor cannot skip a dependent already completed by the takeover
+[22m[39mREVIEW_OBSOLETE_DEPENDENT_SKIP {"takeoverStatus":"success","finalStatus":"success","budgetStatus":"success","tailStatus":"success"}
+
+[90mstdout[2m | tests/review-execution-integrity.test.ts[2m > [22m[2ma stored successful result stays consistent when the separate terminal status write fails
+[22m[39mREVIEW_RESULT_STATUS_ATOMIC {"firstOk":true,"firstStatus":"executed","actionStatus":"executed","hasResult":true,"savedOk":true,"consistent":true,"planStatus":"success","repeat":false,"amount":1500,"rows":1}
+
+[90mstdout[2m | tests/review-execution-integrity.test.ts[2m > [22m[2mthe result payload and the terminal status are written in one atomic transaction
+[22m[39mREVIEW_ATOMIC_RESULT_STATUS {"failureHttp":500,"failureOk":false,"actionStatus":"confirmed","hasResult":false,"consistent":true,"retryHttp":200,"retryOk":false,"cards":1}
+
+ [32m✓[39m tests/review-execution-integrity.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 805[2mms[22m[39m
+ [32m✓[39m tests/app/confirm-continuation-no-owner-fencing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 352[2mms[22m[39m
+ [32m✓[39m tests/app/plan-parking-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 768[2mms[22m[39m
+   [33m[2m✓[22m[39m [integration] POST /api/chat — a conditional DAG plan PARKS on a gated node (real HTTP + mock)[2m > [22mthe streamed DAG walks analyze→check→setlimit and settles in waiting_confirmation [33m320[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/providers/provider-mock.test.ts [2m([22m[2m16 tests[22m[2m)[22m[90m 7[2mms[22m[39m
+ [32m✓[39m tests/unit/security/mfa.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 763[2mms[22m[39m
+   [33m[2m✓[22m[39m mfa · verify failure + breaker[2m > [22ma wrong code emits an MFA_FAILURE SecurityEvent (needs test SQLite) [33m392[2mms[22m[39m
+ [32m✓[39m tests/unit/security/authorize-hardening.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 616[2mms[22m[39m
+ [32m✓[39m tests/unit/security/permission-engine.test.ts [2m([22m[2m24 tests[22m[2m)[22m[90m 7[2mms[22m[39m
+ [32m✓[39m tests/scenarios/mock-integration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 352[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/atomicity.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 307[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/task-cancel-revokes.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 309[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/idempotent.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 488[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-11-conditional-dag.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 344[2mms[22m[39m
+[90mstdout[2m | tests/unit/agent/providers/plan-limit-park.test.ts[2m > [22m[2mplan parking through the mock model (runTurn → confirmAction)[2m > [22m[2mparks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)
+[22m[39mPARKING FRAMES:
+[{"type":"session","sessionId":"cmuwzx3000001f860ny1zgj12"},{"type":"message_start"},{"type":"text_delta","delta":"好的，我来为你规划一个任务计划。"},{"type":"message_end","content":"好的，我来为你规划一个任务计划。"},{"type":"tool_start","toolName":"submit_plan","status":"started"},{"type":"plan_update","planStatus":"running","nodes":["analyze:running","check:pending","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:pending","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:success","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:success","setlimit:running"]},{"type":"plan_update","planStatus":"waiting_confirmation","nodes":["analyze:success","check:success","setlimit:waiting_confirmation"]},{"type":"tool_end","toolName":"submit_plan","status":"success"},{"type":"card","cardType":"plan"},{"type":"message_start"},{"type":"text_delta","delta":"这笔操作（任务计划）需要你确认后"},{"type":"text_delta","delta":"才会执行，目前状态为「等待确认」，尚未执"},{"type":"text_delta","delta":"行。请你确认后我才会为你执行。"},{"type":"message_end","content":"这笔操作（任务计划）需要你确认后才会执行，目前状态为「等待确认」，尚未执行。请你确认后我才会为你执行。"},{"type":"confirmation_required","actionId":"cmuwzx30n0009f860omdm6opk","tier":"YELLOW","toolName":"set_card_limit"},{"type":"card","cardType":"confirmation"},{"type":"done"}]
+
+[90mstdout[2m | tests/unit/agent/providers/plan-limit-park.test.ts[2m > [22m[2mplan parking through the mock model (runTurn → confirmAction)[2m > [22m[2mparks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)
+[22m[39mCONFIRM FRAMES:
+[{"type":"plan_update","planStatus":"success","nodes":["analyze:success","check:success","setlimit:success"]},{"type":"session","sessionId":"cmuwzx3000001f860ny1zgj12"},{"type":"message_start"},{"type":"text_delta","delta":"任务计划：已为卡片 ****6688 的"},{"type":"text_delta","delta":"「娱乐」设置限额 ¥1,500.00"},{"type":"message_end","content":"任务计划：已为卡片 ****6688 的「娱乐」设置限额 ¥1,500.00"},{"type":"done"}]
+
+ [32m✓[39m tests/unit/agent/providers/plan-limit-park.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 332[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 975[2mms[22m[39m
+   [33m[2m✓[22m[39m risk-engine · computeDailyTransferTotal (needs test SQLite)[2m > [22mexcludes transfers from other days (a prior day relative to now) [33m460[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/investment.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 928[2mms[22m[39m
+   [33m[2m✓[22m[39m banking-sdk/investment · listHoldings[2m > [22meach HoldingView carries productName / riskLevel / amount / profit / boughtAt / status [33m450[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-02-transfer-confirm.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 709[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/transfer.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 832[2mms[22m[39m
+   [33m[2m✓[22m[39m banking-sdk/transfer · validation + funds[2m > [22ma missing recipient (no id/phone/name) → throws AppError('VALIDATION') [33m407[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/executor.test.ts [2m([22m[2m14 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+ [32m✓[39m tests/unit/security/authorize-concurrency.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 592[2mms[22m[39m
+[90mstdout[2m | tests/review-next-boundaries.test.ts[2m > [22m[2ma replaced plan executor must not reclaim and overwrite a completed successor node
+[22m[39mREVIEW_OBSOLETE_SUCCESSOR_RECLAIM {"takeoverStatus":"success","finalStatus":"success","secondStatus":"success","oldSuccessorCalls":0,"budgets":2}
+
+[90mstdout[2m | tests/review-next-boundaries.test.ts[2m > [22m[2man obsolete initial executor must not publish a failed plan update after takeover success
+[22m[39mREVIEW_OBSOLETE_PROGRESS_EVENT {"takeoverStatus":"success","persistedStatus":"success","lateStatuses":[]}
+
+[90mstdout[2m | tests/review-next-boundaries.test.ts[2m > [22m[2ma committed business effect must not wedge indefinitely when its result transaction rolls back
+[22m[39mREVIEW_RESULT_TX_ROLLBACK_WEDGE {"firstHttp":500,"actionStatus":"confirmed","result":null,"firstResume":"waiting_confirmation","secondResume":"waiting_confirmation","cards":1}
+
+[90mstdout[2m | tests/review-next-boundaries.test.ts[2m > [22m[2mrecovery of a persisted failed result must finalize the action as failed rather than executed
+[22m[39mREVIEW_FAILED_RESULT_FINALIZATION {"planStatus":"failed","actionStatus":"executed","resultOk":false}
+
+[90mstdout[2m | tests/review-next-boundaries.test.ts[2m > [22m[2mlegacy recovery is safe when actually entered, while the original fault injection no longer hits the write
+[22m[39mREVIEW_LEGACY_GUARD_COVERAGE {"faultCalls":0,"nodeAfterOriginalConfirm":"success","recoveredPlanStatus":"failed","amount":500}
+
+ [31m❯[39m tests/review-next-boundaries.test.ts [2m([22m[2m5 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[33m 654[2mms[22m[39m
+[31m   [31m×[31m a committed business effect must not wedge indefinitely when its result transaction rolls back[90m 45[2mms[22m[31m[39m
+[31m     → expected 'waiting_confirmation' not to be 'waiting_confirmation' // Object.is equality[39m
+[31m   [31m×[31m recovery of a persisted failed result must finalize the action as failed rather than executed[90m 28[2mms[22m[31m[39m
+[31m     → expected 'executed' to be 'failed' // Object.is equality[39m
+ [32m✓[39m tests/unit/planner/dag.test.ts [2m([22m[2m22 tests[22m[2m)[22m[90m 5[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/executor-claim-scope.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 501[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-12-birthday-plan.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1094[2mms[22m[39m
+   [33m[2m✓[22m[39m Scenario 12 — 生日预算计划 (reserve_budget + create_scheduled_task)[2m > [22msubmit_plan builds a plan with a reserve_budget node (¥1000, purpose 生日) and a create_scheduled_task node (reminder near 11-20) [33m413[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-04-prompt-injection.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 267[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/run-turn-failure.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 415[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/task-control.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 275[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-09-investment-mfa.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 323[2mms[22m[39m
+[90mstdout[2m | tests/review-execution-fencing.test.ts[2m > [22m[2mtwo concurrent takeovers of a stale plan claim yield exactly one winner (node runs once)
+[22m[39mREVIEW_EXECUTION_FENCING concurrent_takeover {"statuses":[200,200],"count":1,"planStatus":"success","budgetNodeStatus":"success","executionToken":null}
+
+[90mstdout[2m | tests/review-execution-fencing.test.ts[2m > [22m[2ma live, heartbeating owner keeps its fresh claim: a concurrent resume starts no second executor
+[22m[39mREVIEW_EXECUTION_FENCING live_owner_not_preempted {"concurrentStatus":200,"concurrentPlanStatus":"running","tokenHeld":true,"tokenUnchanged":true,"midCount":1,"count":1,"planStatus":"success","budgetNodeStatus":"success"}
+
+ [32m✓[39m tests/review-execution-fencing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 268[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-03-transfer-mfa.test.ts [2m([22m[2m7 tests[22m[2m)[22m[90m 296[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-10-circuit-breaker.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 312[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/confirmation.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 263[2mms[22m[39m
+[90mstdout[2m | tests/review-current-boundaries.test.ts[2m > [22m[2mpre-upgrade executed actions without stored results must never overwrite a later authorized limit
+[22m[39mREVIEW_LEGACY_RESULT_REAPPLY {"firstOk":true,"before":500,"after":500,"planStatus":"success"}
+
+[90mstdout[2m | tests/review-current-boundaries.test.ts[2m > [22m[2mthe initial submit executor cannot overwrite a takeover completed node
+[22m[39mREVIEW_INITIAL_STALE_WRITER {"takeoverStatus":"success","finalStatus":"success","nodeStatus":"success","budgets":1}
+
+[90mstdout[2m | tests/review-current-boundaries.test.ts[2m > [22m[2ma saved successful result must remain recoverable if the separate terminal status write fails
+[22m[39mREVIEW_RESULT_STATUS_GAP {"firstHttp":200,"actionStatus":"executed","savedOk":true,"planStatus":"success","repeat":false,"amount":1500}
+
+[90mstdout[2m | tests/review-current-boundaries.test.ts[2m > [22m[2man obsolete resumed executor must not skip a dependent already completed by the takeover
+[22m[39mREVIEW_STALE_DEPENDENT_WRITE {"takeoverStatus":"success","finalStatus":"success","budgetStatus":"success","tailStatus":"success"}
+
+ [32m✓[39m tests/review-current-boundaries.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 383[2mms[22m[39m
+ [32m✓[39m tests/unit/security/injection-guard.test.ts [2m([22m[2m15 tests[22m[2m)[22m[90m 259[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/subscription.test.ts [2m([22m[2m10 tests[22m[2m)[22m[90m 277[2mms[22m[39m
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mchat cannot exchange a foreign body sessionId for its authorization cookie
+[22m[39mREVIEW takeover {"turnStatus":409,"cookie":null,"total":0}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mresume preserves cancelled task status in durable storage
+[22m[39mREVIEW cancelled_resume {"responseStatus":200,"responsePlan":"cancelled","storedStatus":"cancelled"}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mcancelling during tool authorization cannot create a fresh executable pending action
+[22m[39mREVIEW cancel_during_gate {"cancelled":"cancelled","returnedPlan":"waiting_confirmation","pending":true,"confirmed":true,"total":200}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mconfirming a parked node respects an explicit plan pause
+[22m[39mREVIEW paused_confirmation {"count":0,"status":"paused"}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mtwo concurrent resumes execute each unfinished node only once
+[22m[39mREVIEW double_resume {"calls":1,"count":1}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mconcurrent HTTP resume requests do not duplicate budget side effects
+[22m[39mREVIEW http_double_resume {"statuses":[200,200],"count":1}
+
+[90mstdout[2m | tests/review-boundaries.test.ts[2m > [22m[2mledgered but not yet terminal actions are counted only once in cumulative risk
+[22m[39mREVIEW double_count {"secondOk":true,"secondTier":"YELLOW","secondStatus":"executed","actualTotal":700}
+
+ [31m❯[39m tests/review-boundaries.test.ts [2m([22m[2m7 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 499[2mms[22m[39m
+[31m   [31m×[31m cancelling during tool authorization cannot create a fresh executable pending action[90m 42[2mms[22m[31m[39m
+[31m     → expected 200 to be +0 // Object.is equality[39m
+ [32m✓[39m tests/scenarios/test-05-failure-report.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 302[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 317[2mms[22m[39m
+[90mstdout[2m | tests/review-new-boundaries.test.ts[2m > [22m[2ma plan transfer already ledgered but still confirmed is counted once
+[22m[39mREVIEW_PLAN_LEDGER {"alreadyLedgered":600,"laterTier":"YELLOW","laterRequiresMfa":false,"laterStatus":"executed"}
+
+[90mstdout[2m | tests/review-new-boundaries.test.ts[2m > [22m[2mresuming an investment node during post-effect persistence cannot debit twice
+[22m[39mREVIEW_INVESTMENT_REPLAY {"resumeStatus":"success","balance":22580,"purchases":1}
+
+[90mstdout[2m | tests/review-new-boundaries.test.ts[2m > [22m[2ma plan cancellation completed before authorization CAS prevents the debit
+[22m[39mREVIEW_CANCEL_GAP {"cancelled":"cancelled","actionStatus":"cancelled","total":0}
+
+ [32m✓[39m tests/review-new-boundaries.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 327[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker-audit.test.ts [2m([22m[2m6 tests[22m[2m)[22m[90m 241[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/confirmation-idempotency.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 406[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine-dedup.test.ts [2m([22m[2m9 tests[22m[2m)[22m[90m 2[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-01-balance.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 309[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-08-card-limit.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 244[2mms[22m[39m
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2ma staggered concurrent resume does not repeat an already-effected node before its result persists
+[22m[39mREVIEW staggered_resume {"secondStatus":200,"count":1}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mtwo concurrent resumes of one gated node produce only one pending action
+[22m[39mREVIEW gated_double_resume {"statuses":[200,200],"actions":[{"id":"cmuwzxn2s000gf89oqdvkno7r","status":"pending"}]}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mcancelling a doubly-resumed plan revokes every action created for its node
+[22m[39mREVIEW orphan_after_cancel {"cancelled":"cancelled","leftovers":0,"confirmed":[],"total":0}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mindependent plans with identical tools and arguments each perform their own side effect
+[22m[39mREVIEW independent_plans {"planIds":["cmuwzxn42000rf89om4chsdcb","cmuwzxn42000sf89oymoc5rew"],"statuses":["success","success"],"count":2}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mcancel blocks confirmation of an action minted before its node association persists
+[22m[39mREVIEW unlinked_cancel {"cancelled":"cancelled","confirmed":false,"total":0}
+
+ [32m✓[39m tests/review-concurrency.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 407[2mms[22m[39m
+[90mstdout[2m | tests/review-followup-probes.test.ts[2m > [22m[2mcancel preserves the executed truth when a transfer is ledgered before result persistence
+[22m[39mREVIEW_EXECUTED_TRUTH {"planStatus":"cancelled","responseStatus":"executed","storedStatus":"executed","balance":23380,"debits":[-200]}
+
+[90mstdout[2m | tests/review-followup-probes.test.ts[2m > [22m[2ma virtual card node cannot create another card during the action-to-node persistence window
+[22m[39mREVIEW_VIRTUAL_CARD_REPLAY {"cards":["cardidem_9adda3a425b8761073b8308e43adaad9"]}
+
+[90mstdout[2m | tests/review-followup-probes.test.ts[2m > [22m[2ma distinct redemption action cannot report another credit for an already redeemed holding
+[22m[39mREVIEW_REDEEM_IDENTITY {"firstAction":"cmuwzxntd000gf8p4e45ibzec","secondAction":"cmuwzxnts000kf8p49vx7owrv","firstOk":true,"secondOk":false,"secondStatus":"failed","firstBalance":28630,"secondBalance":28630}
+
+ [32m✓[39m tests/review-followup-probes.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 305[2mms[22m[39m
+ [32m✓[39m tests/unit/security/gateway-audit-trail.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 355[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-06-spending-analysis.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 262[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-07-anomaly.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 220[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine-rerisk.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 337[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/pendingAction.claim.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 306[2mms[22m[39m
+[90mstdout[2m | tests/review-final-boundaries.test.ts[2m > [22m[2mrecovery of an executed limit change must preserve a later independently authorized limit
+[22m[39mREVIEW_RECOVERY_REAPPLY {"firstOk":true,"secondOk":true,"beforeResume":500,"afterResume":500,"planStatus":"success"}
+
+[90mstdout[2m | tests/review-final-boundaries.test.ts[2m > [22m[2ma live old executor cannot overwrite the takeover executor completed result
+[22m[39mREVIEW_STALE_WRITER {"takeoverStatus":"success","finalStatus":"success","nodeStatus":"success","budgets":1}
+
+ [32m✓[39m tests/review-final-boundaries.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 331[2mms[22m[39m
+ [32m✓[39m tests/unit/security/mfa-audit.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 259[2mms[22m[39m
+[90mstdout[2m | tests/review-recovery-probes.test.ts[2m > [22m[2mresume recovers an already-executed gated node after its plan callback fails
+[22m[39mREVIEW_EXECUTED_NODE_RECOVERY {"responseOk":true,"responseStatus":"executed","actionStatus":"executed","firstResume":"success","repeatConfirmOk":false,"secondResume":"success","cards":1,"budgets":1}
+
+[90mstdout[2m | tests/review-recovery-probes.test.ts[2m > [22m[2mresume can recover a persisted executor claim whose owner died long ago
+[22m[39mREVIEW_STALE_EXECUTOR_CLAIM {"status":"success","token":null,"claimedAt":null,"budgets":1}
+
+ [32m✓[39m tests/review-recovery-probes.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 288[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker-reset.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 218[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/ledger-keys.test.ts [2m([22m[2m11 tests[22m[2m)[22m[90m 3[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[1m[7m Failed Tests 6 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/review-boundaries.test.ts[2m > [22mcancelling during tool authorization cann
+ot create a fresh executable pending action
+[31m[1mAssertionError[22m: expected 200 to be +0 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 0[39m
+[31m+ 200[39m
+
+[36m [2m❯[22m tests/review-boundaries.test.ts:[2m52:17[22m[39m
+    [90m 50| [39m  [35mconst[39m total[33m=[39m[35mawait[39m security[33m.[39mrisk[33m.[39m[34mcomputeDail
+yTransferTotal[39m(userId)[33m;[39m
+    [90m 51| [39m  console[33m.[39m[34mlog[39m([32m'REVIEW cancel_during_gate'[39m[33m,[39m[33mJSON[39m[33
+m.[39m[34mstringify[39m({cancelled[33m:[39mca…
+    [90m 52| [39m  [34mexpect[39m(total)[33m.[39m[34mtoBe[39m([34m0[39m)[33m;[39m
+    [90m   | [39m                [31m^[39m
+    [90m 53| [39m})[33m;[39m
+    [90m 54| [39m[34mit[39m([32m'confirming a parked node respects an explicit plan pause'[39m[33m,[39m[35masy
+nc[39m()[33m=[39m…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/6]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/review-next-boundaries.test.ts[2m > [22ma committed business effect must not
+ wedge indefinitely when its result transaction rolls back
+[31m[1mAssertionError[22m: expected 'waiting_confirmation' not to be 'waiting_confirmation' // Object.is equality[3
+9m
+[36m [2m❯[22m tests/review-next-boundaries.test.ts:[2m52:102[22m[39m
+
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/6]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/review-next-boundaries.test.ts[2m > [22mrecovery of a persisted failed resul
+t must finalize the action as failed rather than executed
+[31m[1mAssertionError[22m: expected 'executed' to be 'failed' // Object.is equality[39m
+
+Expected: [32m"[7mfail[27med"[39m
+Received: [31m"[7mexecut[27med"[39m
+
+[36m [2m❯[22m tests/review-next-boundaries.test.ts:[2m64:62[22m[39m
+    [90m 62| [39m [35mconst[39m resumed[33m=[39m[35mawait[39m [34mtask[39m(plan[33m.[39mid[33m,[39m[32m'
+resume'[39m[33m,[39ms)[33m;[39m[35mconst[39m after[33m=[39m[35mawait[39m p[33m.[39mpend…
+    [90m 63| [39m console[33m.[39m[34mlog[39m([32m'REVIEW_FAILED_RESULT_FINALIZATION'[39m[33m,[39m[33mJSON[
+39m[33m.[39m[34mstringify[39m({planS…
+    [90m 64| [39m [34mexpect[39m(resumed[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m'failed'[39m)[33m;[39m
+[34mexpect[39m(after[33m?.[39mstatus)[33m.[39m[34mtoBe[39m([32m'fai[39m…
+    [90m   | [39m                                                             [31m^[39m
+    [90m 65| [39m})[33m;[39m
+    [90m 66| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/6]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/app/dag-recovery-http.test.ts[2m > [22m[integration] POST /api/tasks/[id] re
+try — re-runs ONLY the failed node[2m > [22mre-runs the failed gated node (fresh gate) while the successful node is n
+ot re-executed
+[31m[1mAssertionError[22m: expected 'pending' to be 'waiting_confirmation' // Object.is equality[39m
+
+Expected: [32m"waiting_confirmation"[39m
+Received: [31m"pending"[39m
+
+[36m [2m❯[22m tests/app/dag-recovery-http.test.ts:[2m365:41[22m[39m
+    [90m363| [39m
+    [90m364| [39m    [90m// The failed node RE-RAN: it went through the gateway again and r[39m…
+    [90m365| [39m    [34mexpect[39m([34mnodeStatusOf[39m(retried[33m,[39m [32m'n2'[39m))[33m.[39m[34mtoBe
+[39m([32m'waiting_confirmation'[39m)[33m;[39m
+    [90m   | [39m                                        [31m^[39m
+    [90m366| [39m    [35mconst[39m secondActionId [33m=[39m [34mreadPendingActionId[39m([34mresultOf[39m(retr
+ied[33m,[39m [32m'n2'[39m)…
+    [90m367| [39m    [34mexpect[39m([35mtypeof[39m secondActionId)[33m.[39m[34mtoBe[39m([32m'string'[39m)[
+33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/6]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/app/task-resume-retry-http.test.ts[2m > [22m[integration] POST /api/tasks/[i
+d] concurrent retry — the failed node re-runs EXACTLY ONCE[2m > [22m[integration] two overlapping {action:"retry"} re
+quests re-gate the failed node once and settle one consistent status
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m tests/app/task-resume-retry-http.test.ts:[2m352:31[22m[39m
+    [90m350| [39m      where[33m:[39m { sessionId[33m,[39m toolName[33m:[39m [32m'transfer_money'[39m[33m,[
+39m status[33m:[39m [32m'pending[39m…
+    [90m351| [39m    })[33m;[39m
+    [90m352| [39m    [34mexpect[39m(freshGates[33m.[39mlength)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m   | [39m                              [31m^[39m
+    [90m353| [39m    [34mexpect[39m(freshGates[[34m0[39m][33m![39m[33m.[39mid)[33m.[39mnot[33m.[39m[34mt
+oBe[39m(firstActionId)[33m;[39m
+    [90m354| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/6]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/app/tasks-http.test.ts[2m > [22m[integration] POST /api/tasks/[id] — real ta
+sk control (pause / cancel / retry)[2m > [22mretry — re-runs ONLY the failed node; a completed node keeps its recorde
+d result
+[31m[1mAssertionError[22m: expected 'running' to be 'success' // Object.is equality[39m
+
+Expected: [32m"success"[39m
+Received: [31m"running"[39m
+
+[36m [2m❯[22m tests/app/tasks-http.test.ts:[2m280:28[22m[39m
+    [90m278| [39m    [34mexpect[39m(res[33m.[39mstatus)[33m.[39m[34mtoBe[39m([34m200[39m)[33m;[39m
+    [90m279| [39m    [35mconst[39m retried [33m=[39m [34mpayload[39m(res)[33m;[39m
+    [90m280| [39m    [34mexpect[39m(retried[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m'success'[39m)[33m;[
+39m
+    [90m   | [39m                           [31m^[39m
+    [90m281| [39m
+    [90m282| [39m    [90m// The completed node was NOT re-run — its recorded marker is unto[39m…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/6]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m5 failed[39m[22m[2m | [22m[1m[32m73 passed[39m[22m[90m (78)[39m
+[2m      Tests [22m [1m[31m6 failed[39m[22m[2m | [22m[1m[32m558 passed[39m[22m[90m (564)[39m
+[2m   Start at [22m 02:11:32
+[2m   Duration [22m 68.72s[2m (transform 846ms, setup 6.43s, collect 18.78s, tests 32.35s, environment 8ms, prepare 3.33s)[22m
+
+DONE_EXIT=1
