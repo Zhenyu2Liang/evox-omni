@@ -66,7 +66,7 @@ flowchart TD
 
 > **构建前置（Build prerequisite）**：`next build`（Next ^15.1.6）会**静态预渲染**依赖数据库的页面
 > （`/`、`/cards`、`/subscriptions` 在模块作用域导入 `@/banking-sdk`），因此必须在构建**之前**先推送并
-> 填充数据库：`npx prisma generate && npx prisma db push && npm run db:seed`，然后 `npm run build`。
+> 填充数据库：`npm run db:push` → `npm run db:seed` → `npm run build`（`npm run db:push` = `tsx scripts/db-push.ts`，为 Prisma schema-engine 子进程固定 `RUST_LOG=info`）。
 > 按请求动态渲染的页面是 agent / audit / security / bills；`app/api/**` 处理器全部为动态。
 
 > **UI 组件 barrel 中立性（SSR）**：barrel 层**不得**带 `'use client'`；一个带该指令的**中间层** barrel
@@ -235,8 +235,9 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   因此**绝不重放副作用**（例：旧的 `set_card_limit=1500` 计划，在用户此后自行把限额改为 500 后恢复，限额**仍为 500**）。
   当既有动作**没有**存储的 `resultJson`（先于 agent 层持久化结果的历史行）时，恢复**同样不重新调用工具**——
   它以「已执行但未留存结果，需人工核对（不会重新执行）」的**显式失败结果**把该节点**终结**。
-  若既有 `PendingAction` 为 `confirmed` **且**已带存储结果，则在恢复时经 `claimPendingAction({ from:['confirmed'], to:'executed' })` 把它**终态化**（CAS `confirmed`→`executed` + 回填），**不重跑、不做虚假回滚**。
+  若既有 `PendingAction` 为 `confirmed` **且**已带存储结果，则在恢复时经 `claimPendingAction({ from:['confirmed'], to:<target> })` 把它**终态化**（CAS `confirmed` → `readStoredResult(existing)?.ok === true ? 'executed' : 'failed'` + 回填；**存储结果为失败**时动作 / 节点 / 计划一律收敛到 `failed`），**不重跑、不做虚假回滚**。
   上述路径都**不重新请求确认**；真正 `pending`/`awaiting_mfa` 的节点仍继续停放等待人工决策；恢复幂等。
+  当 SDK 副作用已提交、而结果与终态状态的 `$transaction` 回滚（动作滞留 `confirmed` + `resultJson=null`）时，`agent/confirmation.ts#executeGatedToolOnce` 以进程内 `inFlightConfirmations` 注册表区分**真楔子**（无活跃续跑）与**仍由活跃续跑拥有**的行（重新停放、**不写入**）：真楔子被**终结为 `failed`** 并路由到**显式人工核对**（消息含 `人工核对`），工具**绝不**重跑、**绝不**伪造回滚，计划**绝不**滞留在 `waiting_confirmation`。
 - **CANCEL**：终态。`agent/task-control.ts#cancelTask` 的**原子结算**把「撤销」与「置状态」放进**同一个**
   `prisma.$transaction`：事务内**先撤销**该计划停放的 `PendingAction`——`revokePendingActionsByTask(taskId,
   ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`，**单条 `updateMany`** 一次性取消该计划的
@@ -289,6 +290,7 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   `nodeExecutionKey(taskId, nodeId)`，否则返回动作自身的 `id`；`ledgerTxIdForAction(userId, action)` 由此派生
   账本行 id——agent 的确认执行路径与 SDK 均据此推导转账流水 id。`agent/confirmation.ts#executeGatedToolOnce`
   另以 `findInFlightPlanAction(taskId, nodeId)` 预检，避免为同一节点重复铸造第二个 `PendingAction`。
+  **节点领取还校验计划所有权并拒绝终态节点（同一条语句内）**：`agent/task-control.ts#claimNodeOwnedByPlan` 的**单条** `prisma.agentTaskNode.updateMany` CAS 要求 `task: { executionToken: planToken }`（**计划所有权**，与节点领取在**同一条语句**内）且 `status: { notIn: TERMINAL_NODE_STATUSES }`（`TERMINAL_NODE_STATUSES = ['success','failed','skipped','cancelled']`）——一个已**失去计划领取**的执行者**无法**重新领取终态节点、**无法**运行其后继工具；执行器的节点/计划写入另带 **terminal-clobber 守卫**（仅当**新**状态为终态时生效，故当前所有者合法的 `failed`→`pending` 重开仍通过）；发布侧由 `planExecutionClaimHeld(planId, claimToken)` 门控（`agent/tools/planning.ts`）——被接管的执行者**不**再发布迟到的 `plan_update`。
 - **刷新 / 恢复**：`GET /api/tasks`（按 cookie 限定的列表）与 `GET /api/tasks/[id]`（单计划，其节点结果携带
   `pendingActionId`，UI 可在刷新后恢复确认/MFA 入口）；`GET /api/actions` 列出非终态待处理动作。
   对计划停放动作的成功确认/验证会追加一个 `{type:'plan_update', plan}` 事件。
@@ -407,6 +409,7 @@ sequenceDiagram
   **独立调用**（无计划节点）**没有**合并键——其恰好一次由 DB 的 `PendingAction` 状态 CAS 保证；
   **两个不同计划**即使调用同一工具、传同一参数也各自独立执行（按 `sessionId` + 工具 + args 合并会把一个计划的副作用
   错误地施加到另一个计划）。进程内 `inFlightExecutions` 只是**同进程补充**，且以**节点身份**为键。
+- **计划所有权与楔子归属**：节点领取经 `agent/task-control.ts#claimNodeOwnedByPlan` 在**同一条语句**内校验计划所有权（`task.executionToken === planToken`）并拒绝终态节点（`TERMINAL_NODE_STATUSES`），发布由 `planExecutionClaimHeld` 门控——失去计划领取的执行者**无法**重开终态节点 / 运行后继工具 / 发迟到 `plan_update`；副作用已提交而结果事务回滚的**楔子**动作由进程内 `inFlightConfirmations` 区分真楔子与仍被活跃续跑拥有的行，真楔子终结 `failed` 并路由**人工核对**（工具**绝不**重跑、计划**绝不**停在 `waiting_confirmation`）。
 - **暂停保持（pause retention）**：在已暂停计划内确认一个停放节点只记录该节点结果，计划保持 `paused`，
   直到显式 resume 才继续。
 - **终态保护**：已取消的计划无法经 resume / retry / pause 离开终态；API 响应与 DB 一致（CAS 的 from 集合
