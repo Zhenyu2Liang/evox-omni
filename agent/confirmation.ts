@@ -46,9 +46,10 @@ import {
   listPendingActionsByTask,
 } from '@/lib/db/repositories/pendingAction';
 import { getTask } from '@/lib/db/repositories/task';
+import { prisma } from '@/lib/db/client';
 import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
-import { safeParse } from '@/lib/json';
+import { safeParse, toJson } from '@/lib/json';
 import { ledgerKeyForAction, nodeExecutionKey } from '@/lib/ledger';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { resumeTurn } from './run-turn';
@@ -363,17 +364,77 @@ async function findInFlightPlanAction(
 }
 
 /**
+ * The DURABLE execution-result payload persisted on `PendingAction.resultJson` when a gated action
+ * was executed (written by `executeAuthorizedAction`). It is the SDK's `ToolExecutionResult`, so a
+ * recovery can reconstruct the node outcome faithfully WITHOUT re-running the side effect.
+ */
+interface StoredToolResult {
+  ok: boolean;
+  data?: unknown;
+  summary?: string;
+  error?: string;
+}
+
+/**
+ * Decode the durable execution result stored on a `PendingAction` (`resultJson`, a JSON-text
+ * `ToolExecutionResult`). `listPendingActionsByTask` selects EVERY column (no projection), so the
+ * loaded row already carries it. Returns `undefined` when nothing usable was stored — an
+ * empty/absent/invalid payload, or a legacy row executed before the agent layer began persisting
+ * results — so the caller can fall back to the re-invoking replay.
+ */
+function readStoredResult(action: PendingActionRow): StoredToolResult | undefined {
+  const parsed = safeParse<Partial<StoredToolResult> | null>(action.resultJson, null);
+  if (parsed === null || typeof parsed.ok !== 'boolean') return undefined;
+  return { ok: parsed.ok, data: parsed.data, summary: parsed.summary, error: parsed.error };
+}
+
+/**
  * RECOVER an ALREADY-EXECUTED plan node whose real outcome was never persisted (its `PendingAction`
  * is `executed`, so the gated side effect ran and was ledgered, but the owning `AgentTaskNode` is
- * still `running`/unwritten). The gateway is deliberately NOT consulted here — re-gating would mint
- * a SECOND action and re-request a human confirmation for work that already happened.
+ * still `running`/unwritten). The gateway is deliberately NOT consulted — re-gating would mint a
+ * SECOND action and re-request a human confirmation for work that already happened.
  *
- * The node's tool is re-run through the SDK with the SAME node idempotency key the inline and confirm
- * paths use (`nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`), so the SDK REPLAYS its
- * already-applied side effect instead of repeating it (e.g. `apply_virtual_card` derives the SAME
- * card id, yielding exactly one card) and `reserve_budget`'s unique `idempotencyKey` dedups the
- * insert. The persisted action's OWN `toolName`/`argsJson` are used, so the executed work is never
- * substituted. Never throws: an SDK/infra failure becomes a failed node value.
+ * PRIMARY (correctness): BACKFILL the node outcome from the DURABLE execution result persisted on
+ * the action (`resultJson`, written by `executeAuthorizedAction` BEFORE the node result is written).
+ * The node's side effect therefore does NOT run again — the persisted outcome IS the node result.
+ * This is GENERIC over the stored payload: it reconstructs `{ ok, data, summary, error }` for EVERY
+ * recoverable write tool (`set_card_limit`, `cancel_subscription`, `freeze_card`,
+ * `apply_virtual_card`, `set_subscription_reminder`, `create_scheduled_task`, `transfer_money`,
+ * `subscribe_investment`, `redeem_investment`, `report_lost_card`, `unfreeze_card`,
+ * `change_password`, …) because every one of them stores the same `ToolExecutionResult` shape.
+ *
+ * WHY this matters: re-invoking a tool that does NOT consume the SDK idempotency key (e.g.
+ * `set_card_limit`) would RE-APPLY its side effect and clobber a value the user independently
+ * changed AFTER this action had already executed.
+ *
+ * FALLBACK (last resort): only when NO durable result was stored (a legacy row executed before the
+ * agent layer persisted results) does it re-invoke the tool through the SDK under the node's own
+ * idempotency key — which RE-PRODUCES a side effect and is therefore used ONLY as a last resort.
+ * Never throws: an SDK/infra failure becomes a failed node value.
+ */
+async function recoverExecutedPlanAction(
+  userId: string,
+  taskId: string,
+  nodeId: string,
+  action: PendingActionRow,
+): Promise<GatedToolOutcome> {
+  const stored = readStoredResult(action);
+  if (stored !== undefined) {
+    return { ok: stored.ok, data: stored.data, summary: stored.summary, error: stored.error };
+  }
+  return replayExecutedPlanAction(userId, taskId, nodeId, action);
+}
+
+/**
+ * LAST-RESORT replay of an already-executed node's side effect, used ONLY when the action carries NO
+ * durable `resultJson` (a pre-existing/legacy row). The node's tool is re-run through the SDK with
+ * the SAME node idempotency key the inline and confirm paths use (`nodeExecutionKey(taskId, nodeId)`
+ * = `nxe:<taskId>:<nodeId>`), so a tool that CONSUMES the key REPLAYS its already-applied side effect
+ * (e.g. `apply_virtual_card` derives the SAME card id, yielding exactly one card; `reserve_budget`'s
+ * unique `idempotencyKey` dedups the insert). A tool that does NOT consume the key would re-apply its
+ * side effect — which is exactly why this path is now a FALLBACK, never the primary one. The
+ * persisted action's OWN `toolName`/`argsJson` are used, so the executed work is never substituted.
+ * Never throws: an SDK/infra failure becomes a failed node value.
  */
 async function replayExecutedPlanAction(
   userId: string,
@@ -405,13 +466,15 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     //     `waiting_confirmation`/`waiting_verification` with no second side effect.
     //   • `executed` — the gated side effect ALREADY ran and was ledgered but the node's REAL outcome
     //     was never persisted (the confirm path records `executed` BEFORE `resumeOwningPlan` writes
-    //     the node result, and that persist can fail): RECOVER by replaying the SDK side effect
-    //     idempotently under the node's own execution key, never by parking or re-confirming.
+    //     the node result, and that persist can fail): RECOVER by BACKFILLING the node result from
+    //     the DURABLE execution result persisted on the action (`resultJson`) — WITHOUT re-invoking
+    //     the tool, so a non-idempotent side effect (e.g. `set_card_limit`) is never re-applied; only
+    //     a legacy row with no stored result falls back to a re-invoking replay.
     if (ctx.taskId !== undefined && ctx.nodeId !== undefined) {
       const existing = await findInFlightPlanAction(ctx.taskId, ctx.nodeId);
       if (existing !== undefined) {
         if (existing.status === 'executed') {
-          return replayExecutedPlanAction(ctx.userId, ctx.taskId, ctx.nodeId, existing);
+          return recoverExecutedPlanAction(ctx.userId, ctx.taskId, ctx.nodeId, existing);
         }
         return {
           ok: false,
@@ -476,10 +539,11 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
  * ALREADY-REPRESENTED (side effect exactly once, across processes): a PLAN-NODE call (both `taskId`
  * and `nodeId` present) that ALREADY has a persisted `PendingAction` does NOT re-enter the gateway.
  * A still-in-flight one (`pending`/`awaiting_mfa`/`confirmed`) is reported as STILL PARKED on that
- * EXISTING action; an `executed` one is RECOVERED by replaying its SDK side effect under the node's
- * own execution key (`executeGatedToolOnce#findInFlightPlanAction`). That DB row is the authority the
- * in-process map cannot be: it holds even when a RESUME races a confirm whose `recordActionResult`
- * has not committed.
+ * EXISTING action; an `executed` one is RECOVERED by BACKFILLING the node result from the DURABLE
+ * execution result persisted on the action (`resultJson`), WITHOUT re-invoking the tool
+ * (`executeGatedToolOnce#findInFlightPlanAction` → `recoverExecutedPlanAction`). That DB row is the
+ * authority the in-process map cannot be: it holds even when a RESUME races a confirm whose
+ * `recordActionResult` has not committed.
  */
 export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome> {
   const key = executionKey(ctx);
@@ -632,6 +696,17 @@ async function executeAuthorizedAction(
     // A boundary throw is the REAL failure — recorded as `failed`, never swallowed, never a success.
     result = { ok: false, error: AppError.from(e).message };
   }
+
+  // DURABLY PERSIST the ORIGINAL execution result payload on the action — ONE atomic update from the
+  // agent layer (the security node's `recordActionResult` writes only the status). This is what lets
+  // a later RECOVERY of this already-executed action's plan node BACKFILL the node result from the
+  // stored outcome instead of RE-INVOKING the tool — a re-invocation would re-apply a
+  // non-idempotent side effect (e.g. clobber a card limit the user independently changed after this
+  // action had executed). Written for BOTH outcomes, so a failed execution is likewise recoverable.
+  await prisma.pendingAction.update({
+    where: { id: actionId },
+    data: { resultJson: toJson(result) },
+  });
 
   // Persist the TRUE terminal status (with the trusted identity) so a later confirm/cancel is
   // rejected as CONFLICT instead of re-authorizing an already-executed action.

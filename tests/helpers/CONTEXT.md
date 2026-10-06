@@ -32,6 +32,23 @@ Import from the barrel (`../helpers`) or a specific module.
 - `faux-agent.ts` — build a REAL Pi `Agent` with a SCRIPTED model:
   - `buildFauxAgent(options): Agent` — faux provider + registed banking tools + production `beforeToolCall`.
   - script builders: `text`, `tool(name,args)`, `final`, `callThen(text,name,args)`; types `FauxStep`/`FauxToolCall`/`FauxAgentOptions`.
+- `prisma-cli.ts` — Node-built-ins-only shared Prisma CLI/generate plumbing (NOT in the `index.ts`
+  barrel; specs must not import it — only `../setup.ts` and `../e2e/helpers.ts` do):
+  - `resolveRepoRoot`/`resolvePrismaBin`/`resolveTsxBin`/`cliCommand` — locate the repo + the
+    project-local Prisma/tsx binaries and build a directly-launchable invocation.
+  - `runCliStepCaptured(command,args,opts): CliStepResult` — the NON-throwing spawn primitive.
+  - `runCliStep(command,args,opts): string` — fail-loud wrapper: success = EXIT CODE 0; on failure
+    throws the FULL captured stdout+stderr (`diagnosticCliOutput`) + spawn error.
+  - `diagnosticCliOutput` / `spawnErrorText` / `removeSqliteFiles` — render CLI output (tail preserved),
+    render a spawn failure, delete a SQLite file + sidecars (missing = fine).
+  - `provisionSchemaLadder(opts): void` — provision a SQLite schema through an ORDERED LADDER of
+    `prisma db push` invocation shapes (`PushRung`/`ProvisionSchemaOptions`): each rung runs ONLY after
+    the previous FAILED, the `dbFiles` (+ sidecars) are deleted via `removeSqliteFiles` before EVERY
+    rung, and `afterPush` (e.g. a usability probe + seed) is treated like part of the rung. On TOTAL
+    failure it THROWS one error embedding EVERY rung's FULL output + environment diagnostics
+    (`DATABASE_URL`, cwd, project-local Prisma CLI path, `prisma -v`, `@prisma/engines/schema-engine*`).
+  - `prismaClientUsable`/`prismaClientGenerated`, `runPrismaGenerate`, `ensurePrismaClientGenerated` —
+    the client self-bootstrap (readiness gate = the USABILITY probe, not artifact presence).
 - `scenario.ts` — drive a full session turn + human decision:
   - `runTurn({sessionId,message,agent}): Promise<ScenarioResult>` — send a message, collect events.
   - `confirmAction(agent,actionId)` / `verifyAction(agent,actionId,code)` / `cancelAction(agent,actionId)` — human decision + narration.
@@ -72,8 +89,9 @@ to fsync and the suite balloons toward the 10-minute tool timeout:
 - `./fixtures.ts` → canonical demo dataset + seeder
 - `./faux-agent.ts` → scripted-model Agent builder
 - `./scenario.ts` → turn/decision harness + event collection
+- `./prisma-cli.ts` → shared Prisma CLI/generate plumbing + the ORDERED provisioning ladder (`provisionSchemaLadder`), used by `../setup.ts` and `../e2e/helpers.ts` only (NOT in the barrel)
 - `./index.ts` → barrel re-exports
-- `../setup.ts` → provisions the schema + points `DATABASE_URL` at the test SQLite, incl. `?connection_limit=1` (sibling — this node)
+- `../setup.ts` → provisions the schema (via the shared ladder) + points `DATABASE_URL` at the test SQLite, incl. `?connection_limit=1` (sibling — this node)
 
 ## Notes for Agents
 

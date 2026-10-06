@@ -22,13 +22,17 @@ This node owns test infrastructure and fixtures — NOT the business logic under
 
 - `setup.ts` — Vitest **global setup** (`setupFiles`). Sets `DATABASE_URL` → the isolated test
   SQLite (`prisma/test.db`, git-ignored, absolute path), forces `LLM_MODE=mock`, and provisions the
-  schema when the schema version changes (`prisma db push --force-reset --skip-generate`). The guard
+  schema when the schema version changes through the shared ORDERED provisioning LADDER
+  (`helpers/prisma-cli.ts#provisionSchemaLadder`) whose PRIMARY rung is the byte-for-byte
+  `prisma db push --force-reset --skip-generate`, falling back ADDITIVELY (only after a failure) to
+  `db push --skip-generate` then a flag-less `db push` (clean-checkout hardening for the opaque
+  `Error: Schema engine error:`). The guard
   **marker** (`prisma/.test-db-provisioned`) stores the **sha1 of `prisma/schema.prisma`** (written
   atomically via temp-file + rename); provisioning is skipped ONLY when the marker's hash equals the
   current schema hash AND `test.db` exists — so a stale `test.db` (provisioned before a schema
   change), an absent DB, or an old-format ISO-date marker all trigger a re-provision. Re-provisioning
-  removes the WAL-mode `test.db` (+ `-wal`/`-shm`/`-journal`) first, because `--force-reset` cannot
-  re-reset an existing WAL file. After provisioning it
+  removes the WAL-mode `test.db` (+ `-wal`/`-shm`/`-journal`) before EACH rung, because `--force-reset`
+  cannot re-reset an existing WAL file. After provisioning it
   pins the **runtime** `DATABASE_URL` to `?connection_limit=1` (single pooled connection — see
   "Fast test-DB path"). Exports `testDbUrl`/`testDbPath`.
 - `helpers/` — shared test utilities (`db`, `fixtures`, `faux-agent`, `scenario`) + a barrel.
@@ -36,10 +40,15 @@ This node owns test infrastructure and fixtures — NOT the business logic under
 - `helpers/prisma-cli.ts` — Node-built-ins-only shared Prisma CLI/generate infrastructure used by BOTH
   `setup.ts` and `e2e/helpers.ts` (`resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`,
   `removeSqliteFiles`, `runCliStep` (fail-loud: throws with FULL captured stdout+stderr+exit code),
-  `diagnosticCliOutput`, `prismaClientUsable`/`prismaClientGenerated`, `runPrismaGenerate`,
-  `ensurePrismaClientGenerated` — its readiness gate keys on the USABILITY probe `prismaClientUsable`
-  (the client that will actually be `require`d), NOT the worktree-local artifact-path proxy
-  `prismaClientGenerated`). NOT in the `helpers/index.ts` barrel — specs must not import it.
+  `runCliStepCaptured` (the non-throwing spawn primitive `runCliStep` delegates to),
+  `provisionSchemaLadder` (the ORDERED `prisma db push` ladder: each rung runs ONLY after the previous
+  FAILED, the DB file + sidecars are deleted before EVERY rung, and a total failure THROWS one error
+  embedding every rung's FULL captured output + environment diagnostics — see `PushRung`/
+  `ProvisionSchemaOptions`), `diagnosticCliOutput`, `prismaClientUsable`/`prismaClientGenerated`,
+  `runPrismaGenerate`, `ensurePrismaClientGenerated` — its readiness gate keys on the USABILITY probe
+  `prismaClientUsable` (the client that will actually be `require`d), NOT the worktree-local
+  artifact-path proxy `prismaClientGenerated`). NOT in the `helpers/index.ts` barrel — specs must not
+  import it.
 - `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs. See `unit/CONTEXT.md`.
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
 - `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
@@ -142,9 +151,11 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   connection and those per-connection pragmas apply to EVERY query. Without it Prisma opens extra
   pooled connections that keep the default `synchronous=FULL`; after the pool grows, every DB-backed
   write stalls ~2s and the DB specs run ~10× slower.
-- Because the fast path leaves `test.db` in WAL mode, `setup.ts` DELETES `test.db` (+ its
-  `-wal`/`-shm`/`-journal` sidecars) before re-running `prisma db push --force-reset` — a `--force-reset`
-  against an existing WAL file fails with "database disk image is malformed". It only re-pushes when the
+- Because the fast path leaves `test.db` in WAL mode, the provisioning LADDER deletes `test.db` (+ its
+  `-wal`/`-shm`/`-journal` sidecars) before EACH rung — a `--force-reset` against an existing WAL file
+  fails with "database disk image is malformed" — then tries the rungs in order (primary
+  `prisma db push --force-reset --skip-generate`, then `db push --skip-generate`, then a flag-less
+  `db push`). It only re-pushes when the
   marker's stored sha1 differs from the current `prisma/schema.prisma` (or the marker/DB is absent).
 
 ## Known Issues
@@ -160,7 +171,7 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 
 ## Routing Table
 
-- `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + hash-aware schema provisioning (re-pushes when the sha1 of `prisma/schema.prisma` changes; removes the WAL-mode `test.db` first)
+- `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + hash-aware schema provisioning through the shared ORDERED LADDER (`helpers/prisma-cli.ts#provisionSchemaLadder`; primary rung `prisma db push --force-reset --skip-generate`, then `db push --skip-generate`, then flag-less `db push`; re-pushes when the sha1 of `prisma/schema.prisma` changes; the DB file + sidecars are removed before every rung)
 - `./helpers` → shared test utilities (db reset/seed + fast pragmas, fixtures, faux agent, scenario harness)
 - `./unit` → pure/logic unit specs for security, planner, banking-sdk, agent, lib (incl. `unit/security/risk-engine-dedup.test.ts` → ledger dedup of the in-flight transfer total via `computeInFlightTransferTotal`)
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
@@ -171,6 +182,7 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - `./review-new-boundaries.test.ts` → `[integration]` cross-cutting exactness regressions over the REAL route handlers + security gateway, using controllable barriers (`deferred()`/`bounded()`): a plan transfer already on the ledger but not yet terminal is counted EXACTLY ONCE in the cumulative daily/amount risk rules (a later ¥100 stays YELLOW; ¥1000 YELLOW, ¥1000.01 RED) while genuinely un-posted actions still count; resuming an investment node in the "effect posted, result not yet persisted" window cannot debit twice (balance ¥23,580 → ¥22,580, exactly one ¥1000 holding); a plan cancellation completed before the authorization compare-and-set prevents the debit (cumulative total ¥0, action `cancelled`, HTTP 200 `{ok:false,status:'cancelled'}`)
 - `./review-followup-probes.test.ts` → `[integration]` reviewer reference-probe ports over the REAL route handlers + gateway (`.codex-review`), using controllable barriers (`deferred()`/`bounded()`): cancel preserves an already-ledgered/executed transfer while result persistence is in flight.
 - `./review-recovery-probes.test.ts` → `[integration]` recovery reference-probe ports (`.codex-review`, `a10cd48`) over the REAL route handlers + DB with controllable fault injection (a spied failing node-result persistence; a seeded dead-owner execution claim). **All 3 green**: an already-executed gated node is reconciled from its persisted result and the DAG continues — no duplicate side effect, idempotent on repeat resume; a stale dead-owner claim is taken over and finishes the remaining work; same-key redemption replays the exact result while a distinct key is refused. The capability lives in `./agent` (executed-node reconciliation in `confirmation.ts`; stale-claim takeover via `{ staleBefore }` in `task-control.ts` resume/retry).
+- `./review-final-boundaries.test.ts` → `[integration]` **frozen regression guard (GREEN)** over the REAL route handlers + DB with controllable barriers (`.codex-review` reference port): (1) recovering an executed `set_card_limit` node backfills its node result from the **persisted** `PendingAction.resultJson` (no tool re-invocation) so the resumed plan must NOT re-apply the node's old amount (¥1500) over a later independently authorized limit (¥500) — final limit stays ¥500 and the plan completes `success`; (2) plan/node writes are **token-fenced**, so a still-live old executor's late failure (after a stale-claim takeover completed the node) must NOT overwrite the takeover's result — the node stays `success` with exactly one budget side effect. Both invariants hold and the spec is kept as a regression guard.
 - `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)
@@ -187,8 +199,12 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   hoisted/parent-resolved layout — where `prisma generate` writes to the PARENT path and the
   worktree-local artifact path stays absent — is ACCEPTED, while a stub-only client (probe throws) still
   triggers a generate.
-- **Provisioning FAILS LOUD.** `setup.ts` runs the push through `runCliStep`, which THROWS on a non-zero
-  exit with the FULL captured stdout+stderr (never a `console.warn`-and-continue), so the real cause can
+- **Provisioning FAILS LOUD.** Both `setup.ts` and `e2e/helpers.ts` provision through the shared
+  `provisionSchemaLadder`, which drives each rung via `runCliStepCaptured` and, when EVERY rung fails,
+  THROWS ONE error embedding every rung's FULL captured stdout+stderr (`diagnosticCliOutput`, tail
+  preserved) plus environment diagnostics (resolved `DATABASE_URL`, cwd, project-local Prisma CLI path,
+  a `prisma -v` version/engine summary, `node_modules/@prisma/engines/schema-engine*` presence) — never
+  a `console.warn`-and-continue, so the real cause can
   never be masked by a later `The table main.X does not exist in the current database.` cascade.
 - **All specs are implemented acceptance tests** (no `it.todo`). Keep them green; fix the seam
   (injectable `now`/`id`, unique sessionId, fresh DB), never weaken an assertion to pass.
