@@ -367,7 +367,7 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 | 计划取消授权检查 | `security-gateway.ts#authorizeAction`（CAS 事务内重读计划状态） | 确认已取消计划的动作 | 同一 CAS 事务内重读计划 ⇒ 已取消则回滚认领并返回 `plan_cancelled` ⇒ HTTP 200 `{ok:false, status:'cancelled', code:'SECURITY_DENIED'}`（**刻意**的非 403） |
 | 计划状态 CAS | `repositories/task.ts#claimTaskStatus` | pause/cancel/resume/retry | 单条 `updateMany`；**终态不可复活**；输家返回持久化行 |
 | 账本幂等 | `lib/ledger.ts#ledgerKeyForAction` / `#ledgerTxIdForAction` · `confirmation.ts#executeAuthorizedAction` | `transfer_money` | 键由 `ledgerKeyForAction({ id, taskId, nodeId })` 统一派生（计划节点 ⇒ `nodeExecutionKey`，独立调用 ⇒ 动作 `id`），`ledgerTxIdForAction` 由此得出账本主键；`risk-engine.ts#computeInFlightTransferTotal` 经该键去重 ⇒ 账本重放且**恰好计数一次**，不重复扣款 |
-| 计划所有权节点领取 | `agent/task-control.ts#claimNodeOwnedByPlan` · `agent/tools/planning.ts#planExecutionClaimHeld` | 执行器的节点领取 / 发布 | **单条** `updateMany` CAS **同时**要求计划所有权（`task.executionToken === planToken`）与 `status: { notIn: TERMINAL_NODE_STATUSES }`：失去计划领取的执行者不能重开终态节点、不能运行后继工具；发布由 `planExecutionClaimHeld` 门控，被接管者**不**发迟到 `plan_update` |
+| 计划所有权节点领取 | `agent/task-control.ts#claimNodeOwnedByPlan` · `agent/tools/planning.ts#planExecutionClaimHeld` | 执行器的节点领取 / 发布 | **单条** `updateMany` CAS **同时**要求计划所有权（`task.executionToken === planToken`）与 `status: { notIn: TERMINAL_NODE_STATUSES }`：失去计划领取的执行者不能重开终态节点、不能运行后继工具；发布由 `planExecutionClaimHeld` 门控，被接管者**不**发迟到 `plan_update` |
 | 楔子动作归属 | `agent/confirmation.ts#executeGatedToolOnce`（`inFlightConfirmations`） | 副作用已提交、结果事务回滚（`confirmed` + `resultJson=null`） | 进程内注册表区分**真楔子**与**活跃续跑拥有**的行：真楔子终结 `failed` + `人工核对`（工具**绝不**重跑，计划**绝不**停在 `waiting_confirmation`） |
 
 ## 14. 代码强制 vs 模拟 · What is Enforced vs Simulated（诚实清单）
