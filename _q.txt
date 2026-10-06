@@ -1,0 +1,30 @@
+﻿=== c2fd548 stat ===
+c2fd548 test(app): prove the confirm-continuation FENCED write when it loses the plan claim
+ tests/app/confirm-continuation-fencing.test.ts | 375 +++++++++++++++++++++++++
+ 1 file changed, 375 insertions(+)
+=== tests/app listing ===
+actions-http.test.ts
+cancel-during-authorization-http.test.ts
+cancel-safety-http.test.ts
+chat-http.test.ts
+concurrent-execution-http.test.ts
+confirm-continuation-fencing.test.ts
+CONTEXT.md
+cumulative-risk-http.test.ts
+dag-recovery-http.test.ts
+harness.ts
+identity-http.test.ts
+ledger-consistency-http.test.ts
+malicious-input-http.test.ts
+mfa-escalation-http.test.ts
+mfa-escalation-upgrade-http.test.ts
+nl-entry-http.test.ts
+plan-linkage-http.test.ts
+plan-parking-http.test.ts
+plan-pause-terminal-http.test.ts
+review-regressions-http.test.ts
+session-takeover-http.test.ts
+task-resume-retry-http.test.ts
+tasks-http.test.ts
+=== exists no-owner ===
+False
