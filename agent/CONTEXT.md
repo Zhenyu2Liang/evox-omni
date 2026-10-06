@@ -379,7 +379,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   repository's token-fenced primitives (`updateTaskNode(taskId, nodeId, update, { fenceToken })` → `null` when
   the claim was lost; `claimTaskStatus(..., { fenceToken })` → `false` when lost), so a ZOMBIE executor whose
   claim was taken over SKIPS the write (and its narration) instead of clobbering the takeover's row (a run
-  that holds NO claim — a control `pause`/`cancel`, or the lost-claim confirm continuation — writes UNFENCED;
+  that holds NO claim — a control `pause`/`cancel` — writes UNFENCED;
   see `createTaskPersistence`). The claim
   is kept fresh by `renewTaskExecutionClaim(taskId, token)` — a TOKEN-CONDITIONED `updateMany`
   (`where { id, executionToken: token }` re-stamps `executionClaimedAt` from the REAL clock) — invoked at NODE
