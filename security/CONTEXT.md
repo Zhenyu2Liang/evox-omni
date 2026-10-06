@@ -186,7 +186,7 @@ action yet). There is NO demo-user fallback anywhere: an `actionId` alone is no 
 
 **Plan-cancel guards (fail-closed; the gateway READS the owning plan's status).** To close the
 plan-cancel → authorize race even when the plan's bulk revoke is lost or neutralized, the gateway
-reads `AgentTask.status` at three points: (1) CREATE/PARK — `gatewayCreatePendingAction` reads the
+reads `AgentTask.status` at two points: (1) CREATE/PARK — `gatewayCreatePendingAction` reads the
 owning `AgentTask` INSIDE the SAME `$transaction` that inserts the row and returns `null` when the
 plan is `'cancelled'` (⇒ `handleToolCall` returns a clean `deny` with a `blockReason` and NO live
 `action`); (2) AUTHORIZE — BOTH `authorizeTransfer` (YELLOW CAS tx) and `authorizeWithMfa`
@@ -194,10 +194,8 @@ plan is `'cancelled'` (⇒ `handleToolCall` returns a clean `deny` with a `block
 same `$transaction` that claims the action and, on `'cancelled'`, REVERSE the claim to `'cancelled'`,
 return a distinct `{kind:'plan_cancelled'}` from the tx and translate it AFTER the commit into a
 RETURNED (never thrown) `{ok:false, status:'cancelled', code:'SECURITY_DENIED'}` — the side effect
-MUST NOT run and NO ledger row is written; (3) RECORD — `recordActionResult` NEVER marks an action
-`'executed'` when its owning plan is `'cancelled'` (persists `'cancelled'` instead). An action with
-NO plan link (`row.taskId` null/empty) is COMPLETELY unaffected by all three guards, and a committed
-ledger debit is NEVER rolled back.
+MUST NOT run and NO ledger row is written. An action with NO plan link (`row.taskId` null/empty) is
+COMPLETELY unaffected by both guards, and a committed ledger debit is NEVER rolled back.
 
 ### `index.ts` — facade
 ```ts
@@ -415,4 +413,4 @@ This is a **leaf node** — it has no child directories; the modules above are i
 - `authorizeAction`/`cancelAction`/`handleToolCall` REQUIRE a caller identity — never add a demo-user fallback; callers must pass `{ userId, sessionId }`.
 - **All tests live under the root-owned `../tests/`** (the root `vitest.config.ts` discovers only `tests/**`): this node's security unit specs — including the DB-free dedup spec `tests/unit/security/risk-engine-dedup.test.ts` — run via `npx vitest run tests/unit/security`.
 - **GREEN auto-executed reads are NOT audited.** The only `recordAudit` callers are the gated paths in `agent/confirmation.ts` (confirm/verify + cancel); a GREEN tool that executes inline writes no `AuditLog` row (by design, per `lib/contracts/audit`).
-- **This node READS the owning plan's status at its three plan-cancel guard points, but is otherwise plan-UNAWARE.** `security-gateway.ts` never inspects the plan's node graph or its status transitions, and `cancelAction` only cancels ONE pending action (atomic `['pending','awaiting_mfa'] → 'cancelled'` claim). It DOES read `AgentTask.status` as a fail-closed cancel guard at create/park time (`gatewayCreatePendingAction`, same-tx as the insert), authorize time (both `authorizeTransfer` and `authorizeWithMfa`, same-tx as the CAS claim — the claim is reversed to `cancelled` and a clean `ok:false` is RETURNED, never thrown) and record time (`recordActionResult` refuses to mark `'executed'` under a cancelled plan) — see the plan-cancel-guards paragraph above. This is what closes the cancel→authorize race when the plan-level bulk revoke (`agent/task-control.ts` `revokeParkedActions`/`sweepCancelledPlan`) is lost or neutralized; the sibling `agent/` node ALSO refuses at `agent/confirmation.ts` `cancelledPlanOutcome` BEFORE authorizing. The gateway loads the plan ONLY for its `status` (never its nodes) — no plan graph is traversed here.
+- **This node READS the owning plan's status at its two plan-cancel guard points, but is otherwise plan-UNAWARE.** `security-gateway.ts` never inspects the plan's node graph or its status transitions, and `cancelAction` only cancels ONE pending action (atomic `['pending','awaiting_mfa'] → 'cancelled'` claim). It DOES read `AgentTask.status` as a fail-closed cancel guard at create/park time (`gatewayCreatePendingAction`, same-tx as the insert), authorize time (both `authorizeTransfer` and `authorizeWithMfa`, same-tx as the CAS claim — the claim is reversed to `cancelled` and a clean `ok:false` is RETURNED, never thrown) — see the plan-cancel-guards paragraph above. This is what closes the cancel→authorize race when the plan-level bulk revoke (`agent/task-control.ts` `revokeParkedActions`/`sweepCancelledPlan`) is lost or neutralized; the sibling `agent/` node ALSO refuses at `agent/confirmation.ts` `cancelledPlanOutcome` BEFORE authorizing. The gateway loads the plan ONLY for its `status` (never its nodes) — no plan graph is traversed here.

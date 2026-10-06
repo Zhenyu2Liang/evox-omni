@@ -117,7 +117,7 @@ function providerId(cfg?: AppConfig): string;
 
 // --- agent/tools/index.ts (see ./tools/CONTEXT.md) --------------------------
 interface ToolExecutionResult { ok: boolean; data?: unknown; summary?: string; error?: string; tier?: RiskLevel }
-interface ToolRunOptions { idempotencyKey?: string }   // ADDITIVE optional; threaded to the SDK by executeDirect
+interface ToolRunOptions { idempotencyKey?: string }   // ADDITIVE optional; threaded to the SDK by executeDirect (consumed by transfer_money, apply_virtual_card, reserve_budget, create_scheduled_task, investment tools)
 interface ToolRegistry {
   tools: Record<ToolName, AgentTool<any>>;
   list(): AgentTool<any>[];
@@ -206,11 +206,11 @@ own id) — and passes it to
 `ledgerKeyForAction` generation that `security/`'s risk engine looks up (`ledgerTxIdForAction`) keeps an
 already-ledgered in-flight transfer excluded from the cumulative daily total. The INLINE
 GREEN node path (`executeGatedToolOnce`) passes the same `nodeExecutionKey`, so a re-run of a node replays
-its SDK-level side effect. `transfer_money`, `reserve_budget`, `create_scheduled_task` AND the investment
+its SDK-level side effect. `transfer_money`, `reserve_budget`, `create_scheduled_task`, `apply_virtual_card` AND the investment
 tools (`subscribe_investment`/`redeem_investment`; `agent/tools/investment.ts` accepts `opts?: ToolRunOptions`
 and forwards `idempotencyKey`) all thread the key into their banking-sdk call; `transfer_money` derives the
 created ledger row id from the key via `idempotentTransferTxId(userId, key)` (the DB PK dedups the write,
-so no lock is needed).
+so no lock is needed); `apply_virtual_card` (`agent/tools/card.ts` accepts `opts?: ToolRunOptions` and forwards the key) makes the SDK derive a deterministic card id via `idempotentCardId(userId, key)` — the SAME key reuses ITS card (so a replayed plan node yields one card), while distinct plans with different keys get independent cards.
 It records the TRUE terminal
 status with `gateway.recordActionResult(actionId, ok ? 'executed' : 'failed')` BEFORE auditing, and
 resolves the owner from `getSession(action.sessionId)?.userId` (NO demo-user fallback — an unknown owner
@@ -280,12 +280,12 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   owning plan+node at creation (`PendingAction.taskId`/`nodeId`). Before
   `confirmation.ts#executeGatedToolOnce` mints a gated action for a plan node,
   `findInFlightPlanActionId(taskId, nodeId)` looks for an existing action on that `(taskId, nodeId)` in
-  status `pending | awaiting_mfa | confirmed` (`listPendingActionsByTask(taskId, {statuses})` filtered by
+  status `pending | awaiting_mfa | confirmed | executed` (`listPendingActionsByTask(taskId, {statuses})` filtered by
   nodeId, oldest-first). When found, the node is treated as IN-PROGRESS: no `gateway.handleToolCall` and
   no new `PendingAction` — the SAME parked outcome
   (`{ ok:false, requiresConfirmation:true, pendingActionId:<existing id> }`) is returned. This closes the
   window where a node's side effect has run but its result is not yet persisted (the gateway's own
-  `findReusableAction` only matches `pending`/`awaiting_mfa`, so it would otherwise MISS the `confirmed`
+  `findReusableAction` only matches `pending`/`awaiting_mfa`, so it would otherwise MISS the `confirmed`/`executed`
   row) so a resume there cannot double-apply. The in-process single-flight (`inFlightExecutions` /
   `nodeExecutionKey`) remains an OPTIMIZATION only, never the correctness guarantee; the persisted DB row
   is the authority.

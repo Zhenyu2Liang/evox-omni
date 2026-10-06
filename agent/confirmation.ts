@@ -320,13 +320,18 @@ function isParkedOutcome(outcome: GatedToolOutcome): boolean {
  * Statuses meaning "this plan node's gated side effect is ALREADY represented" and must NOT be
  * re-minted: `pending`/`awaiting_mfa` (parked, awaiting the human decision) and `confirmed` (the
  * gateway has claimed the action and the confirm path is executing it RIGHT NOW — e.g.
- * `gateway.recordActionResult` is still in flight). `executed`/`failed`/`cancelled`/`locked` are
- * terminal for this purpose and never hold a re-run back.
+ * `gateway.recordActionResult` is still in flight), and `executed` (the side effect ran but the
+ * owning node's REAL outcome may not be persisted yet — the confirm path records `executed` BEFORE
+ * `resumeOwningPlan` writes the node result, so this closes that window; an `executed` action
+ * otherwise belongs only to a terminal `success` node that resume SKIPS and retry never re-runs, so
+ * it never holds back genuine work). `failed`/`cancelled`/`locked` are terminal for this purpose and
+ * never hold a re-run back (`failed` MUST stay re-runnable by retry).
  */
 const IN_FLIGHT_PLAN_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'pending',
   'awaiting_mfa',
   'confirmed',
+  'executed',
 ];
 
 /**
@@ -354,7 +359,12 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     // ALREADY-IN-PROGRESS plan node — the correctness guard the in-process single-flight map CANNOT
     // provide. When a plan node's gated side effect has ALREADY been claimed (a `pending`/
     // `awaiting_mfa` action waiting on the human, or a `confirmed` action whose side effect the
-    // confirm path is executing right now), a re-run of the node (a plan RESUME between the effect
+    // confirm path is executing right now, or an `executed` action whose side effect ALREADY ran but
+    // whose REAL node outcome is not yet persisted — the confirm path records `executed` BEFORE
+    // `resumeOwningPlan` persists the node result, so this closes the target window; an `executed`
+    // action otherwise only belongs to a terminal `success` node that resume SKIPS and retry never
+    // re-runs, so it never holds back a genuine re-run), a re-run of the node (a plan RESUME between
+    // the effect
     // and its persisted result) must NOT re-enter the gateway and mint a SECOND duplicate action —
     // confirming which would apply the side effect twice. The node is instead reported as STILL
     // PARKED on the EXISTING action (the same parked shape the blocked path returns), so the executor
