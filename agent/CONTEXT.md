@@ -281,7 +281,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   `confirmation.ts#executeGatedToolOnce` mints a gated action for a plan node,
   `findInFlightPlanAction(taskId, nodeId)` looks for an existing action on that `(taskId, nodeId)` in
   status `pending | awaiting_mfa | confirmed | executed` (`listPendingActionsByTask(taskId, {statuses})` filtered by
-  nodeId, oldest-first). When found, the node is treated as IN-PROGRESS: no `gateway.handleToolCall` and
+  nodeId, oldest-first) and BRANCHES on its status: no `gateway.handleToolCall` and
   no new `PendingAction` — the SAME parked outcome
   (`{ ok:false, requiresConfirmation:true, pendingActionId:<existing id> }`) is returned. This closes the
   window where a node's side effect has run but its result is not yet persisted (the gateway's own
