@@ -281,9 +281,24 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   `confirmation.ts#executeGatedToolOnce` mints a gated action for a plan node,
   `findInFlightPlanAction(taskId, nodeId)` looks for an existing action on that `(taskId, nodeId)` in
   status `pending | awaiting_mfa | confirmed | executed` (`listPendingActionsByTask(taskId, {statuses})` filtered by
-  nodeId, oldest-first) and BRANCHES on its status: no `gateway.handleToolCall` and
-  no new `PendingAction` — the SAME parked outcome
-  (`{ ok:false, requiresConfirmation:true, pendingActionId:<existing id> }`) is returned. This closes the
+  nodeId, oldest-first) and BRANCHES on its status:
+  - `pending`/`awaiting_mfa`/`confirmed` — genuinely in-flight (awaiting the human, or the confirm path is
+    executing it right now). The node is treated as STILL PARKED: no `gateway.handleToolCall` and no new
+    `PendingAction` — the SAME parked outcome
+    (`{ ok:false, requiresConfirmation:true, pendingActionId:<existing id> }`) is returned, so the executor
+    keeps it in `waiting_confirmation`/`waiting_verification`.
+  - `executed` — the gated side effect ALREADY ran and was ledgered, but the owning `AgentTaskNode`'s real
+    outcome was never persisted (the confirm path records `executed` BEFORE `resumeOwningPlan` writes the
+    node result, and that persist can fail). The node is RECOVERED, not parked: `replayExecutedPlanAction`
+    re-runs the persisted action's OWN `toolName`/`argsJson` through
+    `createToolRegistry(userId).executeDirect(..., { idempotencyKey: nodeExecutionKey(taskId, nodeId) })` —
+    the SAME key the inline/confirm paths use — so the SDK REPLAYS its already-applied side effect instead
+    of repeating it (e.g. `apply_virtual_card` derives the SAME card id ⇒ exactly one card; `reserve_budget`
+    dedups its insert) and the node advances to its real result instead of waiting forever. The gateway is
+    deliberately NOT consulted (re-gating would mint a SECOND action / re-request confirmation for work that
+    already happened); the replay never throws (an SDK failure becomes a failed node value). Recovery is
+    idempotent: repeating the resume re-replays the same key and yields the same single-effect outcome.
+  This closes the
   window where a node's side effect has run but its result is not yet persisted (the gateway's own
   `findReusableAction` only matches `pending`/`awaiting_mfa`, so it would otherwise MISS the `confirmed`/`executed`
   row) so a resume there cannot double-apply. The in-process single-flight (`inFlightExecutions` /
