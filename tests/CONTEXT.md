@@ -33,6 +33,11 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   "Fast test-DB path"). Exports `testDbUrl`/`testDbPath`.
 - `helpers/` — shared test utilities (`db`, `fixtures`, `faux-agent`, `scenario`) + a barrel.
   See `helpers/CONTEXT.md` for the full helper API.
+- `helpers/prisma-cli.ts` — Node-built-ins-only shared Prisma CLI/generate infrastructure used by BOTH
+  `setup.ts` and `e2e/helpers.ts` (`resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`,
+  `removeSqliteFiles`, `runCliStep` (fail-loud: throws with FULL captured stdout+stderr+exit code),
+  `diagnosticCliOutput`, `prismaClientUsable`/`prismaClientGenerated`, `runPrismaGenerate`,
+  `ensurePrismaClientGenerated`). NOT in the `helpers/index.ts` barrel — specs must not import it.
 - `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs. See `unit/CONTEXT.md`.
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
 - `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
@@ -46,7 +51,10 @@ Run:
 
 - `npm run test` → `vitest run` (all suites). `npm run test:watch` for watch mode.
 - Target a layer: `npm run test -- tests/unit` · `npm run test -- tests/scenarios` · `npm run test -- tests/app`.
-- Pure unit-only run without a DB: `VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security`.
+- Pure unit-only run without a DB: `VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/planner tests/unit/lib/ledger-keys.test.ts tests/unit/agent/providers/provider-mock.test.ts`
+  (`VITEST_SKIP_DB_SETUP=1` skips BOTH Prisma Client generation AND schema provisioning; note
+  `tests/unit/security` and `tests/unit/planner/executor-claim-scope.test.ts` are DB-BACKED, so they
+  fail without a DB — only the DB-free specs above run clean under the flag).
 
 ### Prerequisites
 
@@ -190,6 +198,14 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 
 ## Notes for Agents
 
+- **Clean-env bootstrap.** `package.json` has no `postinstall` hook and `prisma generate` is a separate
+  script, so a fresh checkout has only the `@prisma/client` POSTINSTALL STUB (no engine, no schema copy).
+  `tests/setup.ts` self-bootstraps a usable client via `helpers/prisma-cli.ts#ensurePrismaClientGenerated`
+  BEFORE the provision short-circuit (cheap no-op once generated); `e2e/helpers.ts` does the same.
+  Without this, every DB-backed suite dies at IMPORT time with `@prisma/client did not initialize yet`.
+- **Provisioning FAILS LOUD.** `setup.ts` runs the push through `runCliStep`, which THROWS on a non-zero
+  exit with the FULL captured stdout+stderr (never a `console.warn`-and-continue), so the real cause can
+  never be masked by a later `The table main.X does not exist in the current database.` cascade.
 - **All specs are implemented acceptance tests** (no `it.todo`). Keep them green; fix the seam
   (injectable `now`/`id`, unique sessionId, fresh DB), never weaken an assertion to pass.
 - The gateway is the security chokepoint: prove in Test 4 that injection text changes NOTHING about
