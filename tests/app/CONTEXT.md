@@ -210,7 +210,7 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
   DB rows (`account.balance` untouched, `pendingAction` tier/requiresMfa/status, `securityEvent`).
 - `pendingAction.status`: YELLOW → `pending`, RED (MFA) → `awaiting_mfa` (see
   `security/security-gateway.ts` `gatewayCreatePendingAction`).
-- `AgentTaskNode` has no `output` column: a parked node records its `{ pendingActionId }` inside the
+- `AgentTaskNode` has no `pendingActionId` column: a parked node records its `{ pendingActionId }` inside the
   node's `output` JSON (`agent.readPendingActionId(node.output)`).
 
 ## Routing Table
@@ -234,6 +234,9 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 - `./cumulative-risk-http.test.ts` → cumulative ¥1000/day rule over real confirm/verify (in-flight counted once; concurrent escalation; ¥1000/¥1000.01 boundaries)
 - `./ledger-consistency-http.test.ts` → ledger/balance consistency (confirmed delta === ledger delta; refusals move no money; N transfers accumulate)
 - `./mfa-escalation-upgrade-http.test.ts` → YELLOW→RED upgrade at execution time (confirm surfaces RED/awaiting_mfa + `mfa_required`; verify executes; audit consistent)
+- `./plan-linkage-http.test.ts` → PendingAction↔plan/node LINKAGE: a parked action carries `taskId`/`nodeId` AT CREATION; a reused/deduped (re-run/resume) action keeps the SAME link; two independent plans with identical tool+args each produce their OWN side effect (two `Budget` rows) / their OWN `PendingAction` (never one shared row — no cross-plan merge)
+- `./cancel-safety-http.test.ts` → CANCEL-safety race windows (controlled barrier): (a) plan-level cancel (`POST /api/tasks/[id]` `{action:'cancel'}`) landing AFTER the gateway parked the action but BEFORE the executor persisted the node result; (b) genuine cancel-vs-confirm concurrency on the same action (+ both sequential orderings). Asserts the old action is not executable/confirmable, NO unauthorized balance/ledger change (`computeDailyTransferTotal === 0`, checking balance unchanged), EVERY related action revoked `cancelled` (incl. one never written into a node output), and a confirm-won transfer truthfully preserved
+- `./concurrent-execution-http.test.ts` → CONCURRENT `resume`/`retry` (+ confirm-continuation) through a rendezvous barrier genuinely overlap: each unfinished node's side effect runs EXACTLY ONCE (one `Budget` row / one fresh gated `PendingAction`), persisted `AgentTask.status` + node rows consistent (no lost update / duplicate node rows / stale `running`); window "side effect done but node result NOT yet persisted" adds NO second side effect
 
 ## Notes for Agents
 
@@ -244,3 +247,6 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 - The mock responder (`agent/providers/mock-responder.ts`) routes DIRECT single-action intents: e.g.
   "把信用卡娱乐限额调整到1500" → `set_card_limit`, "申购稳健理财A 1000元" → `subscribe_investment`,
   "取消Netflix订阅" → `cancel_subscription`.
+- A gated plan node's `runTool` MUST forward `ctx.taskId`/`ctx.nodeId` (the planner's 3rd `NodeExecutionContext` arg) into `executeGatedTool`, or the gateway cannot persist the `PendingAction.taskId`/`nodeId` link at creation (see `plan-linkage-http.test.ts`).
+- The `AuditLog` model has NO `actionId` column — audit assertions are SESSION-scoped (`findMany({where:{sessionId}})` on `status`/`confirmed`/`toolName`).
+- Barrier idioms to reuse (do not invent new style): `makeBarrier(n)` rendezvous with a bounded timeout from `task-resume-retry-http.test.ts`; the deferred `parkingBarrier` inside `runTool` from `cancel-during-authorization-http.test.ts` / `cancel-safety-http.test.ts`.

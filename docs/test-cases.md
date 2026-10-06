@@ -9,7 +9,7 @@
 
 ## 1. 总览 Overview
 
-测试分**四层**：
+测试分**四层**（外加跨切面的边界/契约复核规格，见第 3 层）：
 
 1. **纯单元测试（pure unit, no LLM）**——证明安全模型是**代码强制**的（层级、确认、MFA、熔断、注入防御），
    以及规划器与 SDK 的确定性核心；不需要模型，覆盖 `security/`、`planner/`、`banking-sdk/`、`agent/`、`lib/`。
@@ -17,9 +17,9 @@
    用户消息 → Pi Agent（脚本化模型）→ 银行工具 → Security Gateway（`beforeToolCall`）→ Banking SDK → 审计。
 3. **HTTP 路由集成测试（route-handler integration，`[integration]`）**——`tests/app/` 下**进程内（in-process）**
    直接导入**真实导出**的 route handler，用真实 `NextRequest` 调用（共享 `harness.ts`），覆盖
-   `/api/chat`、`/api/actions/*`、`/api/tasks/*`；另有 `tests/review-boundaries.test.ts` 复核边界规格。
+   `/api/chat`、`/api/actions/*`、`/api/tasks/*`；此外还有**跨切面**的边界/契约复核规格 `tests/review-boundaries.test.ts` 与 `tests/review-concurrency.test.ts`（同为 `[integration]`）。
 4. **真实浏览器验收 harness（real-browser acceptance）**——`tests/e2e/` 下**独立于 Vitest**（`tsx` 显式运行），
-   启动真实 `next dev` + 真实无头 Chrome，对**渲染后的 DOM** 断言——见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
+   启动真实 `next dev` + 真实无头 Chrome（隔离库 `prisma/e2e.db`），对**渲染后的 DOM** 断言——见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
 **只有模型被 mock**（`registerFauxProvider()`，`LLM_MODE=mock`）；**工具、安全咽喉、路由与数据库都是真实的**——
 因此场景测试与 HTTP 集成测试证明的是**真实的安全行为**，而不是对它的 mock。
@@ -30,6 +30,14 @@
 > 不属于 Vitest 套件——文件以 `.e2e.ts` 结尾，`npm run test` 永不收集它，也无 `test:e2e` 脚本；
 > 详见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
+### 当前实测状态 · Measured State
+- **`npx vitest run`** → **68 个文件 / 532 个测试全部通过**。
+- **`npx tsc --noEmit`** → **0 错误**（Vitest 只转译、不做类型检查，故类型门禁单列）。
+- **`npx next build`** → **退出码 0**。
+- **真实浏览器验收**（`npx tsx tests/e2e/acceptance.e2e.ts`，隔离库 `prisma/e2e.db`）→ **PASS 5 / FAIL 0 / SKIP 0**：
+  含**真实**的「暂停 → 继续」journey（harness 真的点「暂停」再点「继续」）与「取消」journey
+  （会尝试**旧的**确认入口：过期确认被服务端拒绝，且钱不动）。
+
 ### 回归关注面 · Regression Categories
 
 除 12 个端到端场景外，套件还覆盖以下**回归关注面**（跨三层：纯单元、场景、进程内 HTTP 集成）：
@@ -39,7 +47,9 @@
   `tests/unit/security/transfer-limits-concurrency.test.ts`、`tests/unit/security/authorize-concurrency.test.ts`、
   `tests/unit/security/authorize-hardening.test.ts`、`tests/unit/security/risk-engine-rerisk.test.ts`、
   `tests/unit/security/gateway.test.ts`、`tests/unit/banking-sdk/atomicity.test.ts`、
-  `tests/unit/lib/pendingAction.claim.test.ts`、`tests/app/cumulative-risk-http.test.ts`。
+  `tests/unit/lib/pendingAction.claim.test.ts`、`tests/app/cumulative-risk-http.test.ts`、
+  `tests/app/concurrent-execution-http.test.ts`、`tests/unit/planner/executor-claim-scope.test.ts`、
+  `tests/unit/banking-sdk/idempotent.test.ts`、`tests/review-concurrency.test.ts`。
 - **累计风控去重（cumulative-risk dedup）**：**已入账但尚未终态**（ledgered-but-not-terminal）的动作只按**已执行**计一次，
   不得重复计入在途总额而把后续合规 YELLOW 误升级为 RED——
   `tests/unit/security/risk-engine-dedup.test.ts`、`tests/app/cumulative-risk-http.test.ts`、
@@ -64,7 +74,8 @@
   `tests/app/tasks-http.test.ts`、`tests/app/dag-recovery-http.test.ts`、
   `tests/app/cancel-during-authorization-http.test.ts`、`tests/app/task-resume-retry-http.test.ts`、
   `tests/app/plan-pause-terminal-http.test.ts`、`tests/app/plan-parking-http.test.ts`、
-  `tests/review-boundaries.test.ts`、`tests/scenarios/test-11-conditional-dag.test.ts`。
+  `tests/review-boundaries.test.ts`、`tests/app/plan-linkage-http.test.ts`、`tests/app/cancel-safety-http.test.ts`、
+  `tests/scenarios/test-11-conditional-dag.test.ts`。
 - **模拟动作路由（mock action routing）**：mock 模型如何把中文意图路由到工具（与生产 `LLM_MODE=mock` 下同一套解析）——
   `tests/unit/agent/providers/provider-mock.test.ts`、`tests/unit/agent/providers/plan-limit-park.test.ts`、
   `tests/scenarios/mock-integration.test.ts`。
@@ -82,7 +93,7 @@ npm run test -- tests/unit                # 只跑纯单元层
 npm run test -- tests/scenarios           # 只跑场景层（faux LLM）
 npm run test -- tests/app                 # 只跑进程内 HTTP 集成层
 VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security   # 纯单元、无需 DB
-npx tsx tests/e2e/acceptance.e2e.ts       # 真实浏览器验收 harness（非 Vitest；需已 seed 的本地 DB）
+npx tsx tests/e2e/acceptance.e2e.ts       # 真实浏览器验收 harness（非 Vitest；自建/自 seed 隔离库 prisma/e2e.db）
 ```
 
 > 三层共用同一入口，用目录分别运行：`-- tests/unit`（纯单元）、`-- tests/scenarios`（场景）、`-- tests/app`（HTTP 集成）。
@@ -167,11 +178,14 @@ npx tsx tests/e2e/acceptance.e2e.ts       # 真实浏览器验收 harness（非 
 | DAG | `planner/dag`：`validatePlan`（重复/未知工具/环）、拓扑排序、条件求值 | `tests/unit/planner/dag.test.ts` |
 | 执行器 | `planner/executor`：`runPlan`、门控节点 → `waiting_confirmation` | `tests/unit/planner/executor.test.ts` |
 | 计划生命周期 | `planner/lifecycle`：`pausePlan` / `cancelPlan` / `retryPlan` / `resumePlan` 的持久化 + 幂等 | `tests/unit/planner/lifecycle.test.ts` |
+| 执行器 claim 作用域 | `executor-claim-scope`：节点**恰好一次**由 **DB CAS**（`claimNodeExecution` / `releaseNodeExecution`）按稳定 `(taskId, nodeId)` 界定（不依赖进程内 Map）；持有者未释放时第二个 `runPlan` **零副作用**退让，释放后恰好执行一次 | `tests/unit/planner/executor-claim-scope.test.ts` |
 | 转账 | `banking-sdk/transfer`：资金不变式、收款人歧义 → `CONFLICT`+候选 | `tests/unit/banking-sdk/transfer.test.ts` |
 | 原子性 | `banking-sdk/atomicity`：注入失败时账本写入回滚；并发超额 / 重复赎回**恰好一次成功** | `tests/unit/banking-sdk/atomicity.test.ts` |
+| 幂等创建 | `banking-sdk/idempotent`：`isUniqueViolation`（严格 `P2002`）/ `normalizeIdempotencyKey`；`createIdempotent` 对同一 key **重放**已提交行（不再 `create`）、败者 `P2002` 重读赢家行、其它错误传播且不落库；`reserveBudget` / `createScheduledTask` 同 key 只落一行 | `tests/unit/banking-sdk/idempotent.test.ts` |
 | 订阅 | `banking-sdk/subscription`：取消订阅 | `tests/unit/banking-sdk/subscription.test.ts` |
 | 投资 | `banking-sdk/investment`：`minAmount`、认购 | `tests/unit/banking-sdk/investment.test.ts` |
 | PendingAction claim | `pendingAction.claim`：恰好一次 `pending→confirmed` claim、`from` 集合 + `userId`/`sessionId` 作用域 | `tests/unit/lib/pendingAction.claim.test.ts` |
+| 账本键推导 | `ledger-keys`：`nodeExecutionKey(taskId,nodeId)` → 冻结 `nxe:<taskId>:<nodeId>`；`idempotentTransferTxId(userId,key)` → 冻结 `txidem_` + `sha256` 前 32 hex；相同输入恒等、不同计划/节点/归属**永不**合并 | `tests/unit/lib/ledger-keys.test.ts` |
 
 ---
 
@@ -202,7 +216,11 @@ handler 与会话、读取 SSE 分帧。
 | `tests/app/review-regressions-http.test.ts` | 复核回归：单会话两段停靠 YELLOW→RED 执行时升级；计划取消撤销其停靠动作 + cancel/confirm 竞态顺序；运行中暂停停止下一节点 + resume 只重跑该节点；伪造 query 永不认证 |
 | `tests/app/malicious-input-http.test.ts` | HTTP 层注入仍被门控 + 后续参数覆盖改不了已执行参数 |
 | `tests/app/nl-entry-http.test.ts` | 自然语言入口 `POST /api/chat` → 门控工具 → confirm/verify 完成 |
+| `tests/app/plan-linkage-http.test.ts` | `PendingAction` ↔ 计划/节点**关联**：停靠动作在**创建时**持久化 `taskId`/`nodeId`，使计划取消可撤销、人工决策可恢复**正确**节点、同节点重驱动**复用**既有动作；两个独立计划同工具同参数各自产生副作用（**绝不**合并） |
+| `tests/app/cancel-safety-http.test.ts` | 计划**取消安全窗口**：取消落在停靠进行中的任一交错顺序，**均**将其动作为终止态撤销、当日累计保持 0、不留可执行 `PendingAction`（真实屏障制造窗口；决策全在代码侧） |
+| `tests/app/concurrent-execution-http.test.ts` | 并发**执行 claim**：副作用已完成但结果**尚未持久化**时，真实 `resume`/`retry` 与之竞争**不**产生第二个副作用；确定续跑与控制请求竞争同一停靠计划仍**恰好一次**执行 |
 | `tests/review-boundaries.test.ts` | 复核边界：body/query 伪造身份换不到授权 cookie；cancelled 任务 resume 保持 cancelled；取消期间授权不留可执行动作；暂停计划中 confirm 不推进；并发 resume 只执行一次（进程内 + HTTP）；已入账未终态动作只计一次 |
+| `tests/review-concurrency.test.ts` | 复核**并发**回归（`.codex-review` 参考端口）：错峰并发 `resume` 不重复已生效节点；对门控节点的双 `resume` 只产生**一个**停靠动作；取消双重 `resume` 的计划撤销其节点**全部**动作；独立计划同工具同参数**不**合并；未关联取消——均断言**恰好一次**副作用 |
 
 ---
 
@@ -210,6 +228,7 @@ handler 与会话、读取 SSE 分帧。
 
 **独立于 Vitest**：位于 `tests/e2e/`，用 `tsx` 显式运行（`npx tsx tests/e2e/acceptance.e2e.ts`）；文件以
 `.e2e.ts` 结尾，`npm run test` **永不**收集它，且仓库**没有** `test:e2e` 脚本。
+它在**隔离的 E2E 库 `prisma/e2e.db`** 上运行（harness 自建 + 自 seed，绝不触碰 `prisma/dev.db`）；当前实测 **PASS 5 / FAIL 0 / SKIP 0**。
 
 流程：在空闲端口启动**真实** `next dev` → 轮询 `/api/health` 待就绪 → 通过 **`playwright-core`** 启动
 机器上**真实**的无头浏览器（**系统 Chrome 优先 / Edge 兜底**，`E2E_BROWSER_PATH` 可覆盖；**无需
@@ -222,18 +241,18 @@ handler 与会话、读取 SSE 分帧。
 |---|---|
 | `a-transfer-confirm` | 🟡 转账 ≤¥1000：ConfirmationCard → 点「确认」→ 助手叙述事实性结果 |
 | `b-transfer-mfa` | 🔴 转账 >¥1000：正确码 `123456` 成功；错误码 → 验证失败、MFA 卡保留、无成功叙述 |
-| `c-plan-pause-resume` | 门控计划：`等待确认` → 暂停 → `已暂停` → 继续（受 harness 的诚实限制约束） |
-| `d-plan-cancel` | 门控计划：`等待确认` → 计划卡「取消」→ `已取消` |
+| `c-plan-pause-resume` | 门控计划：`等待确认` → **真实**点「暂停」→ 徽章 `已暂停`（停靠节点保持 `待确认`、娱乐限额不变）→ **真实**点「继续」→ 计划回到 `等待确认`（已完成节点不重跑、剩余节点重新停靠） |
+| `d-plan-cancel` | 门控计划：`等待确认` → 计划卡「取消」→ `已取消`；随后尝试**旧的**确认入口——确认卡若仍在则点击并断言服务端**拒绝**（`ok=false`/`status=cancelled` 或 4xx），否则以渲染 DOM（按钮数 0）+ `GET /api/actions` 佐证；余额/账本/限额均不变 |
 | `e-refresh-action-recovery` | 刷新恢复：停靠的 🟡/🔴 决策在页面重载后从**服务端持久化状态**重建卡片 |
 
-**覆盖**：真实浏览器里「自然语言 → 卡片 → 人工决策」全链路；MFA 成功 + 错误码拒绝；计划暂停/继续/取消；
+**覆盖**：真实浏览器里「自然语言 → 卡片 → 人工决策」全链路；MFA 成功 + 错误码拒绝；**真实**计划暂停/继续/取消（含取消后尝试**旧的**确认入口被拒）；
 刷新后从持久化状态恢复；结构化诚实上报；整棵进程树清理。
 
 **不覆盖（诚实边界）**：live LLM（`LLM_MODE=live`）；真实银行 / 网络；生产构建（`next build` / `next start`）；
 跨浏览器（仅 Chrome，Edge 兜底未测）；视觉 / a11y 回归；负载 / 性能；单元 / 场景层的安全断言
 （由 `tests/unit`、`tests/scenarios` 承担）。这是**单机真实浏览器验收**，**不**证明安全模型已被完全封闭。
 
-> harness 细节（hydration 竞态、dev-server 启动注意项、暂停/继续的诚实限制）见 [`tests/e2e/CONTEXT.md`](../tests/e2e/CONTEXT.md)。
+> harness 细节（hydration 竞态、dev-server 启动注意项、harness 的诚实限制）见 [`tests/e2e/CONTEXT.md`](../tests/e2e/CONTEXT.md)。
 
 ---
 
@@ -257,5 +276,10 @@ handler 与会话、读取 SSE 分帧。
 - **GREEN 自动执行不写审计行**：审计只在门控 confirm/verify/cancel 时写入——GREEN 应在 `beforeToolCall` 处断言。
 - **`/api/chat` 的 SSE `error` 帧在真实 HTTP + mock 路径下不可达**：该 SSE `error`→`done` 分支仅由
   `tests/unit/agent/run-turn-failure.test.ts` 覆盖。
+
+- **live LLM 未被任何自动化层覆盖**：全部自动化套件都跑在脚本化模型（`LLM_MODE=mock` + `registerFauxProvider`）下；
+  `LLM_MODE=live`（真实模型、非确定性）不在任何自动化套件内，仅由人工演示覆盖。
+- **真实浏览器验收是单机 / 单浏览器**：`tests/e2e/` 只在**本机**的无头 Chrome（Edge 兜底未测）上运行，
+  不构成跨浏览器验证；它也不跑生产构建（`next build` / `next start`）。
 
 > 安全模型的完整说明见 [`security.md`](./security.md)；已知限制见 [`known-risks.md`](./known-risks.md)。

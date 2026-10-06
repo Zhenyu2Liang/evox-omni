@@ -9,7 +9,7 @@ permission, and the circuit breaker locks a session after 3 consecutive MFA fail
 
 ## API Surface
 
-Fourteen spec files (grouped below by concern), each with **real assertions** (no `it.todo` remain),
+Fifteen spec files (grouped below by concern), each with **real assertions** (no `it.todo` remain),
 targeting `@/security/<module>` via the `@/security` facade (`{gateway, permission, risk, mfa,
 circuitBreaker, injection}`) or the module directly:
 
@@ -17,6 +17,7 @@ circuitBreaker, injection}`) or the module directly:
 - `permission-engine.test.ts` — `TOOL_POLICY` exhaustiveness vs the `ToolName` union, static GREEN/YELLOW/RED tiers, `getToolPolicy` (unknown → `AppError('VALIDATION')`), `evaluateTool` (GREEN no confirm/no mfa, YELLOW confirm, RED confirm+mfa; dynamic `transfer_money` delegated to the risk engine; `submit_plan` not risk-gated; LLM-immutability — whimsical/spoofed args & `ctx` never change the tier). Pure, no DB.
 - `risk-engine.test.ts` — `evaluateTransferRisk` boundary at ¥1000 (`>` is strict) + `computeDailyTransferTotal` (test SQLite). Pure part has no DB.
 - `risk-engine-rerisk.test.ts` — `reEvaluateTransferRisk(userId, amount, now?)` re-risks against a FRESH day total at EXECUTION time (closes the stale-parked-transfer bypass) + facade exposure + strict `>` boundary. DB-backed.
+- `risk-engine-dedup.test.ts` — `computeInFlightTransferTotal` ledger dedup: parked-`confirmed` transfer totals EXCLUDE any action whose deterministic ledger `Transaction` row already exists (`idempotentTransferTxId`), so a "ledgered but not yet terminal" action is never double-counted. DB-free (hand-written Prisma stub).
 
 **Gateway**
 - `gateway.test.ts` — `securityGateway.evaluate/decide/createPendingAction/serializeBlockReason/parseBlockReason/authorizeAction/cancelAction/handleToolCall` + `buildPendingActionSummary` + `BLOCK_REASON_PREFIX`. Persistence cases need test SQLite.
@@ -53,7 +54,7 @@ circuitBreaker, injection}`) or the module directly:
 - DB-backed specs set `vi.setConfig({ hookTimeout: 60_000 })` — the `useFreshDatabase()` per-test truncate+seed is I/O-heavy and can exceed Vitest's 10 s default hook timeout on Windows. This is a local workaround; the root-owned `vitest.config.ts` still has no global `hookTimeout`.
 - Gateway persistence facts the specs assert: `createPendingAction` persists YELLOW as status `'pending'` (there is no `'awaiting_confirmation'` value in `PendingActionStatus`) and RED as `'awaiting_mfa'`; `parseBlockReason` returns `{ actionId, decisionKind }` (field is `decisionKind`).
 - `securityGateway.authorizeAction`/`cancelAction` REQUIRE non-optional `{ userId, sessionId }` ownership (no demo-user fallback; missing/mismatching → `AppError('SECURITY_DENIED')`), and `NOT_FOUND` is still checked first. Specs pass `{ userId: DEMO_USER_ID, sessionId }`, where `sessionId` is the session the action was parked with. On execution-time re-risk escalation a parked YELLOW transfer is persisted as `'awaiting_mfa'` (tier `RED`, `requiresMfa: true`) and returned as `{ ok:false, status:'awaiting_mfa', tier:'RED', requiresMfa:true, code:'LIMIT_EXCEEDED' }`.
-- `computeDailyTransferTotal(userId, now?)` resolves the window as `[startOfDay(now), +∞)` — a LOWER bound only, so future-dated transfers would count; specs use a PRIOR day to test exclusion rather than a future date.
+- `computeDailyTransferTotal(userId, now?)` resolves the window as `[startOfDay(now), now]` — INCLUSIVE at both ends (the upper bound is passed as `now + 1`), so future-dated transfers are EXCLUDED.
 - `authorize-concurrency.test.ts` drives the REAL `@/agent` `confirmAction`/`verifyAction` façade (not just `securityGateway`), so it needs a PERSISTED session (`getOrCreateSession(DEMO_USER_ID)`) — `agent/confirmation.ts` resolves the owner from the session row; that also provides circuit-breaker isolation.
 
 ## Routing Table

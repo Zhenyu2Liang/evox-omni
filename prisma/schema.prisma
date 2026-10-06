@@ -182,6 +182,10 @@ model Budget {
   purpose   String?
   status    String    @default("RESERVED") // "RESERVED" | "USED" | "RELEASED"
   dueDate   DateTime?
+  // Replay key: `<planId>:<nodeId>` so a replayed plan node replays the existing reservation
+  // instead of duplicating it. NULL for rows created outside the planner. SQLite UNIQUE allows
+  // multiple NULLs, so pre-existing rows are unaffected.
+  idempotencyKey String? @unique
   createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id])
@@ -195,6 +199,10 @@ model AgentTask {
   userId    String
   goal      String
   status    String   @default("pending")
+  // DB-level exactly-once claim for the PLAN executor: the winning resume/retry sets a unique
+  // token here; a concurrent executor that cannot claim it must NOT run the plan. NULL = unclaimed.
+  executionToken     String?
+  executionClaimedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -219,10 +227,15 @@ model AgentTaskNode {
   order        Int
   startedAt    DateTime?
   endedAt      DateTime?
+  // DB-level exactly-once claim for the node's side effect: the winning executor sets a unique
+  // token here; a concurrent executor that cannot claim it must NOT execute the node. NULL = unclaimed.
+  executionToken     String?
+  executionClaimedAt DateTime?
 
   task AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([taskId])
+  @@index([taskId, nodeId])
 }
 
 model ScheduledTask {
@@ -234,6 +247,10 @@ model ScheduledTask {
   runAt                DateTime
   status               String   @default("SCHEDULED") // "SCHEDULED" | "DONE" | "CANCELLED"
   requiresConfirmation Boolean  @default(true)
+  // Replay key: `<planId>:<nodeId>` so a replayed plan node replays the existing scheduled task
+  // instead of duplicating it. NULL for rows created outside the planner. SQLite UNIQUE allows
+  // multiple NULLs, so pre-existing rows are unaffected.
+  idempotencyKey       String?  @unique
   createdAt            DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
@@ -306,12 +323,18 @@ model PendingAction {
   summaryJson String // JSON text
   userRequest String? // the user's original natural-language request (audit)
   intent      String? // derived intent label (audit)
+  // Owning plan (`AgentTask.id`) + owning node (`AgentTaskNode.nodeId`), persisted AT CREATION so a
+  // plan-level cancel can revoke EVERY associated operation even when the node's `output` JSON was
+  // never written / was overwritten. NULL for actions created outside the planner.
+  taskId      String?
+  nodeId      String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   mfa MfaChallenge?
 
   @@index([sessionId])
+  @@index([taskId])
 }
 
 model MfaChallenge {

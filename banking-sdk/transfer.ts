@@ -26,6 +26,7 @@ import { accounts, contacts, transactions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { parseAmount, round2 } from '../lib/money';
 import { toContactView } from './contact';
+import { isUniqueViolation } from './idempotent';
 import { runInTransaction } from './tx';
 import type { TransferInput, TransferRecipient, TransferResult } from './types';
 
@@ -37,11 +38,6 @@ function toRecipient(contact: Contact): TransferRecipient {
     phone: contact.phone,
     bank: contact.bank ?? undefined,
   };
-}
-
-/** Structural Prisma unique-constraint (P2002) check — avoids importing the runtime error class. */
-function isUniqueViolation(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
 }
 
 /** Build the TransferResult for an idempotent replay from the already-persisted ledger row. */

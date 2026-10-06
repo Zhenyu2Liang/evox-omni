@@ -172,6 +172,6 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
 - **App-node interface the closed loop depends on (report needs, do NOT fork a frozen contract):**
   `GET /api/actions` must return the caller session's non-terminal `PendingAction`s for refresh restore
   (accepted shapes: a bare array or `{ actions: [...] }`; each row needs `{ id, status, tier, requiresMfa, summary }`).
-  Optionally, a `pendingActionId` on a plan node result (declared in `lib/contracts/task.ts`, root-owned) would let
+  Optionally, a `pendingActionId` on a plan node result (NOT a declared `TaskNodeResult` field — the agent records it inside the node's `output` JSON, read via `readPendingActionId`) would let
   the plan view link a parked node to its decision; a server-provided MFA attempt count would let `mfaAttempts`
   survive reloads (it currently counts only in-session failed verifies).

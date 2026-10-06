@@ -120,13 +120,15 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   const registry = createToolRegistry(userId, {
     submitPlan: {
       sessionId,
-      runTool: (toolName, args) =>
+      runTool: (toolName, args, ctx) =>
         executeGatedTool({
           sessionId,
           userId,
           toolName,
           args,
           userRequest: latestUserRequest(),
+          taskId: ctx.taskId,
+          nodeId: ctx.nodeId,
         }),
       ...(options.onPlanUpdate !== undefined ? { onPlanUpdate: options.onPlanUpdate } : {}),
     },

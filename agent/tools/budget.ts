@@ -14,7 +14,7 @@ import { banking } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
 import { AppError } from '@/lib/errors';
 import { formatCNY } from '@/lib/money';
-import type { ToolExecutionResult } from './index';
+import type { ToolExecutionResult, ToolRunOptions } from './index';
 
 /** `reserve_budget` params (SDK `ReserveBudgetInput` minus the server-injected `userId`). */
 export const ReserveBudgetParams = Type.Object({
@@ -22,6 +22,9 @@ export const ReserveBudgetParams = Type.Object({
   amount: Type.Number({ description: '预留金额（CNY）' }),
   purpose: Type.Optional(Type.String({ description: '用途说明' })),
   dueDate: Type.Optional(Type.Number({ description: '到期时间（epoch ms）' })),
+  idempotencyKey: Type.Optional(
+    Type.String({ description: '幂等键：同一键的重复调用复用原记录（通常由服务端注入）' }),
+  ),
 });
 export type ReserveBudgetArgs = Static<typeof ReserveBudgetParams>;
 
@@ -45,12 +48,17 @@ export function createReserveBudgetTool(userId: string): AgentTool<typeof Reserv
   };
 }
 
-/** Model-free runner — `banking.budget.reserveBudget({ userId, name, amount, purpose, dueDate })`. */
+/** Model-free runner — `banking.budget.reserveBudget({ userId, name, amount, purpose, dueDate, idempotencyKey })`. */
 export async function runReserveBudget(
   userId: string,
   args: Record<string, unknown>,
+  opts?: ToolRunOptions,
 ): Promise<ToolExecutionResult> {
   const input = args as unknown as ReserveBudgetArgs;
+  // At-most-once key: the SERVER-INJECTED `opts.idempotencyKey` (the gateway/plan-node path) wins;
+  // a direct `args.idempotencyKey` is honoured otherwise. A replay of the SAME key reuses the row
+  // (the SDK dedupes on it), so a repeated (plan, node) never double-creates a reservation.
+  const idempotencyKey = opts?.idempotencyKey ?? input.idempotencyKey;
   try {
     const budget = await banking.budget.reserveBudget({
       userId,
@@ -58,6 +66,7 @@ export async function runReserveBudget(
       amount: input.amount,
       purpose: input.purpose,
       dueDate: input.dueDate,
+      idempotencyKey,
     });
     const purpose = budget.purpose ? `，用途：${budget.purpose}` : '';
     const due = budget.dueDate ? `，到期：${formatDateTime(budget.dueDate)}` : '';

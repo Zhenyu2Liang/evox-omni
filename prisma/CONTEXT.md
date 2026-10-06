@@ -23,19 +23,21 @@ Prisma models (see `schema.prisma` for exact fields):
 - `User` — demo user; roots to accounts, cards, contacts, subscriptions, holdings, budgets, sessions,
   scheduledTasks, auditLogs, securityEvents.
 - `Account` / `Transaction` — checking/savings balances and ledger (signed `amount`, anomaly flags).
-- `Contact`, `Card` + `CardLimit`, `Subscription`, `Budget`.
+- `Contact`, `Card` + `CardLimit`, `Subscription`, `Budget` (`idempotencyKey` unique — plan-replay key).
 - `InvestmentProduct` / `InvestmentHolding` — products and user holdings.
-- `AgentTask` / `AgentTaskNode` — planner task DAG (nodes store `args`/`output`/`dependencies` as JSON text).
-- `ScheduledTask` — future reminders/payments/transfers.
+- `AgentTask` / `AgentTaskNode` — planner task DAG (nodes store `args`/`output`/`dependencies` as JSON
+  text). Both carry `executionToken` + `executionClaimedAt` — the DB-level exactly-once execution claim.
+- `ScheduledTask` — future reminders/payments/transfers (`idempotencyKey` unique — plan-replay key).
 - `AuditLog` / `SecurityEvent` — append-only audit + security records.
 - `AgentSession` — per-session serialized agent state (`stateJson`).
-- `PendingAction` / `MfaChallenge` — two-phase YELLOW/RED confirmation + mock MFA.
+- `PendingAction` / `MfaChallenge` — two-phase YELLOW/RED confirmation + mock MFA. `PendingAction`
+  carries `taskId`/`nodeId` (owning plan + node) persisted at creation for plan-level revocation.
 
 ## Seed Data (`seed.ts`)
 
 - Anchored to the demo clock: **DEMO_NOW = 2026-09-25 12:00 local** (September 2026 = "current month",
   August 2026 = "last month" for 环比/trend). Every date is built from LOCAL `new Date(...)` components;
-  `seed.ts` deliberately does **NOT** import `lib/date` (unimplemented) and never calls `Date.now()`.
+  `seed.ts` deliberately does **NOT** import `lib/date` and never calls `Date.now()`.
 - Reuses the **canonical stable ids** from `tests/helpers/fixtures.ts` (`user_liming`,
   `acct_checking`/`acct_savings`, `contact_zhangwei/wangfang/mama/lihua`, `prod_wenjiana/b/jinrong`,
   `tx_anomaly_apple`) so the app, tests and seed agree.
@@ -59,6 +61,26 @@ Prisma models (see `schema.prisma` for exact fields):
   transactions are expense-only (`direction: 'DEBIT'`).
 - SQLite has no native enums — every enum-like/status field is a `String` (allowed values documented at
   the top of `schema.prisma`). JSON-ish payloads are JSON text in `String` columns.
+
+## Concurrency & Idempotency (schema-level)
+
+All new fields below are **optional/nullable**, so existing rows and tests keep working and the
+`prisma db push` workflow is unchanged (no migration file).
+
+- **Exactly-once execution claims** — `AgentTask.executionToken`/`executionClaimedAt` claim the PLAN
+  executor (so two concurrent resume/retry calls cannot both run a plan);
+  `AgentTaskNode.executionToken`/`executionClaimedAt` claim a single node's side effect (so concurrent
+  executors cannot double-execute a node). The winning executor sets a unique token; a concurrent
+  executor that cannot claim it must NOT run. `NULL` = unclaimed.
+- **Plan-replay keys** — `Budget.idempotencyKey` and `ScheduledTask.idempotencyKey` are `@unique`; the
+  value is `<planId>:<nodeId>`, so a REPLAYED plan node replays its existing reservation/scheduled task
+  instead of duplicating it. SQLite allows multiple `NULL`s in a UNIQUE index, so rows created outside
+  the planner (and all pre-existing rows) are unaffected.
+- **Plan-level revocation** — `PendingAction.taskId`/`nodeId` (nullable) persist the owning plan
+  (`AgentTask.id`) + node (`AgentTaskNode.nodeId`) at CREATION, so a plan-level cancel can revoke EVERY
+  associated operation even when the node's `output` JSON was never written / was overwritten.
+- **Indexes** — added `PendingAction @@index([taskId])` and `AgentTaskNode @@index([taskId, nodeId])`
+  (the latter also supports the exactly-once node claim lookups) alongside the existing indexes.
 
 ## Constraints
 

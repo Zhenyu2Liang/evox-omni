@@ -117,11 +117,12 @@ function providerId(cfg?: AppConfig): string;
 
 // --- agent/tools/index.ts (see ./tools/CONTEXT.md) --------------------------
 interface ToolExecutionResult { ok: boolean; data?: unknown; summary?: string; error?: string; tier?: RiskLevel }
+interface ToolRunOptions { idempotencyKey?: string }   // ADDITIVE optional; threaded to the SDK by executeDirect
 interface ToolRegistry {
   tools: Record<ToolName, AgentTool<any>>;
   list(): AgentTool<any>[];
   get(name: ToolName): AgentTool<any>;
-  executeDirect(name: ToolName, args: Record<string, unknown>): Promise<ToolExecutionResult>;
+  executeDirect(name: ToolName, args: Record<string, unknown>, opts?: ToolRunOptions): Promise<ToolExecutionResult>;
 }
 interface CreateToolRegistryOptions { submitPlan?: SubmitPlanDeps }   // additive; wires `submit_plan`
 function createToolRegistry(userId: string, opts?: CreateToolRegistryOptions): ToolRegistry;   // userId closed over — the model NEVER supplies it
@@ -129,7 +130,7 @@ function createToolRegistry(userId: string, opts?: CreateToolRegistryOptions): T
 // --- agent/task-control.ts (durable DAG persistence + control/resume glue) ----
 interface TaskNodeOutput { pendingActionId?: string }   // the parked-node payload stored in AgentTaskNode.output
 function readPendingActionId(output: unknown): string | undefined;   // the ONLY reader of that shape
-type TaskRunTool = (toolName: string, args: Record<string, unknown>) => Promise<PlanToolOutcome>;   // gateway-routed runner, INJECTED by the caller
+type TaskRunTool = (toolName: string, args: Record<string, unknown>, ctx: NodeExecutionContext) => Promise<PlanToolOutcome>;   // gateway-routed runner, INJECTED by the caller; 3rd param REQUIRED (node identity)
 interface TaskControlOptions { now?: () => number }    // injectable clock; defaults to the demo clock
 interface TaskControlDeps extends TaskControlOptions { runTool: TaskRunTool }
 interface TaskPersistence {
@@ -142,11 +143,11 @@ function toTaskPlan(row: AgentTaskWithNodes): TaskPlan;           // persisted t
 function defaultPollControls(planId: string): PlanControlPort;   // durable row status → planner controls ('paused'⇒pause, 'cancelled'⇒cancel)
 function getTaskPlan(sessionId: string, taskId: string): Promise<TaskPlan>;                            // ownership-checked read
 function pauseTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // persists durable status 'paused'
-function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // CAS-flips a resumable row to 'running', then runs with `explicitResume:true`; terminal (success) nodes skipped
-function cancelTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // revokes the plan's parked PendingActions, then cancels
-function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;       // retry failed nodes (+ descendants); CAS from-set EXCLUDES 'running' (resume KEEPS it)
+function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // CAS-flips a resumable row to 'running' (from-set KEEPS 'running'), then acquires the PLAN-level DB execution claim (`claimTaskExecution`; lost => persisted plan, NO second executor; released in a finally), then runs with `explicitResume:true`; terminal (success) nodes skipped
+function cancelTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // revokes the plan's parked PendingActions via the atomic bulk `revokePendingActionsByTask` (PRIMARY; node-output scan is FALLBACK), then cancels
+function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;       // retry failed nodes (+ descendants); CAS from-set EXCLUDES 'running' (resume KEEPS it); acquires the PLAN-level DB execution claim before running (lost => persisted plan, NO second executor; released in a finally)
 function sweepCancelledPlan(sessionId: string, taskId: string): Promise<RevokeSummary>;                // post-run CANCEL SWEEP: if the persisted AgentTask is 'cancelled', revoke every still-parked PendingAction (run after submit_plan / resume / retry; an unexpected revoke failure is recorded as a SecurityEvent via recordRevokeFailure, and the summary is still returned)
-function findTaskByPendingAction(sessionId: string, actionId: string): Promise<{ taskId: string; nodeId: string } | undefined>;
+function findTaskByPendingAction(sessionId: string, actionId: string): Promise<{ taskId: string; nodeId: string } | undefined>;   // prefers the action's PERSISTED plan link (PendingAction.taskId/nodeId, ownership-checked via getTask); node-output scan is FALLBACK
 function resumeTaskForAction(sessionId: string, actionId: string, outcome: PlanToolOutcome, deps: TaskControlDeps): Promise<{ taskId: string; nodeId: string; plan: TaskPlan } | undefined>;
 ```
 
@@ -194,14 +195,18 @@ Human decision (API route → `confirmation.ts`):
    `error` stream event and still returns the turn; `confirmation` keeps its outcome `result`-driven
    (never a fabricated success) and appends `（结果播报失败：…）` to the message it reports.
 
-Consequence: money-moving calls are always triggered by a human decision, never by model text.
+Consequence: money-moving calls are always triggered by a human decision, never by model text — the injection-resistance guarantee demo Test 4 (prompt injection) proves.
 
-Idempotency (code-enforced, `confirmation.ts`): `executeAuthorizedAction` executes a `transfer_money`
-action's ORIGINAL validated args with the action's OWN `PendingAction` id as the SDK idempotency key —
-`registry.executeDirect(action.toolName, action.args, { idempotencyKey: action.id })` — so the created
-ledger row id is exactly `idempotentTransferTxId(userId, action.id)` (`@/lib/ledger`); that deterministic
-id is the link `security/` uses to exclude an already-ledgered in-flight transfer from the cumulative
-daily total (the DB PK dedups the write, so no lock is needed). Every non-transfer tool runs with no opts.
+Idempotency (code-enforced, `confirmation.ts`): `executeAuthorizedAction` derives the SDK idempotency key
+from the action's PERSISTED plan link via `getPendingActionPlanLink` — `nodeExecutionKey(taskId, nodeId)`
+(= `nxe:<taskId>:<nodeId>`, `@/lib/ledger`) when the action parked a plan node, else `action.id` (the
+standalone action's own id) — and passes it to
+`registry.executeDirect(action.toolName, action.args, { idempotencyKey })` for EVERY tool. The INLINE
+GREEN node path (`executeGatedToolOnce`) passes the same `nodeExecutionKey`, so a re-run of a node replays
+its SDK-level side effect. `transfer_money` derives the created ledger row id from the key via
+`idempotentTransferTxId(userId, key)`; that deterministic id is the link `security/` uses to exclude an
+already-ledgered in-flight transfer from the cumulative daily total (the DB PK dedups the write, so no
+lock is needed).
 It records the TRUE terminal
 status with `gateway.recordActionResult(actionId, ok ? 'executed' : 'failed')` BEFORE auditing, and
 resolves the owner from `getSession(action.sessionId)?.userId` (NO demo-user fallback — an unknown owner
@@ -250,15 +255,17 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   No extra `plan` CARD is emitted (the plan card stays the single one produced by `card-emitter`).
 - The relay never invents progress: a failed node is reported `failed`, and a plan hiccup is surfaced
   as an `error` event rather than aborting the plan or the turn.
-(this is what demo Test 4 — prompt injection — proves).
 
 ### Plan-lifecycle & confirmation guarantees (code-grounded)
 
-- **Cancel revokes parked actions, THEN cancels.** `task-control.ts#cancelTask` calls
-  `revokeParkedActions` (one `gateway.cancelAction` per parked node — a DB CAS
-  `pending`/`awaiting_mfa` → `cancelled`) BEFORE `lifecycle.cancelPlan`. `revokeParkedActions` reports
+- **Cancel revokes parked actions, THEN cancels.** `task-control.ts#cancelTask` FIRST runs the atomic
+  bulk `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])` (ONE `updateMany` → `cancelled`:
+  the PRIMARY guarantee, so no executable action survives the cancellation regardless of which node
+  parked it), THEN the node-`output`-scan `revokeParkedActions` (one `gateway.cancelAction` per parked
+  node — the FALLBACK for a pre-link action) BEFORE `lifecycle.cancelPlan`. `revokeParkedActions` reports
   `alreadySettled` for an action that already executed/errored and never pretends to roll it back
-  (executed work is irreversible; the planner performs NO automatic compensation).
+  (executed work is irreversible; the planner performs NO automatic compensation). Anything that could
+  not be settled — including the bulk-revoke count — is durably recorded via `recordRevokeFailure`.
 - **No pre-park plan-status check exists** — neither `securityGateway.handleToolCall` nor
   `executor.runPlan`'s `runToolNode` consults the plan status before parking. Prevention of a
   post-cancel executable action relies on the post-run CANCEL SWEEP: `sweepCancelledPlan(sessionId,
@@ -279,12 +286,18 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   executes, and the concurrent cancel's revoke then reports it settled.
 - **Concurrent resume/retry is exactly-once per effect.** `claimTaskStatus`
   (`lib/db/repositories/task.ts`) is a single `updateMany` CAS (`status IN fromStatuses` → `toStatus`;
-  `count===1`). `resumeTask`'s from-set KEEPS `'running'` (two resumes both run; effect de-dup is the
-  IN-PROCESS single-flight `inFlightExecutions` map in `confirmation.ts#executeGatedTool`, keyed by
-  session+tool+canonical-args and cleared on settle), whereas `retryTask`'s from-set EXCLUDES
-  `'running'` (the loser claims 0 rows ⇒ returns the persisted plan WITHOUT running). `transfer_money`
-  adds DB-level idempotency: `executeAuthorizedAction` passes `{ idempotencyKey: action.id }` to
-  `registry.executeDirect`.
+  `count===1`). `resumeTask`'s from-set KEEPS `'running'`, whereas `retryTask`'s EXCLUDES `'running'`
+  (the loser claims 0 rows ⇒ returns the persisted plan WITHOUT running). The EXACTLY-ONCE guarantee is
+  NOT the status CAS but the PLAN-level DB execution claim (`claimTaskExecution` on
+  `AgentTask.executionToken`): `resumeTask`/`retryTask` acquire a `newId('taskclaim')` token BEFORE
+  `executor.runPlan` and release it in a `finally`, so a second concurrent caller that loses the claim
+  returns the persisted plan WITHOUT starting a second executor. Each NODE additionally claims its own
+  slot (`buildPlanDeps` exposes `claimNode`/`releaseNode` → `claimNodeExecution`/`releaseNodeExecution`),
+  claimed BEFORE the node's write and released even for a parked node. The IN-PROCESS single-flight
+  (`confirmation.ts#executeGatedTool`) is keyed by the NODE identity (`nodeExecutionKey(taskId, nodeId)`
+  when both are present) — NEVER by `sessionId`+tool+args alone, so two INDEPENDENT plans with identical
+  tool+args run independently; a STANDALONE call (no plan node) is executed directly. The DB
+  (`PendingAction` status CAS + `nodeExecutionKey` SDK idempotency) is the at-most-once authority.
 - **Pause retains.** When `resumeTaskForAction` sees the owning plan `'paused'`, it records the decided
   node and does NOT advance. TWO belts hold it: (a) `lifecycle.resumePlan` returns early with
   `status:'paused'` whenever `explicitResume !== true` (`stillPaused`) — and `resumeTaskForAction`
@@ -345,7 +358,7 @@ Sibling nodes this node consumes (read-only; escalate changes to the owner):
 - `../banking-sdk` → `banking.<domain>.*` execute-only functions (module `./types` DTOs).
 - `../planner` → `dag.validatePlan`, `buildPlan`; `executor.runPlan`, `executor.persistPlanSnapshot`, `PlanDeps`, `PlanControls`; `lifecycle.pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`.
 - `../audit` → `recordAudit(entry)`, `recordSecurityEvent(event)`.
-- `../lib/db/repositories` → `sessions.*`, `pendingActions.*` (`getPendingAction`, `getPendingActionOwnership`, `claimPendingAction` — the exactly-once CAS), `tasks.*` (`createTask`, `createTaskNode`, `getTask`, `listTasksBySession`, `updateTaskNode`, `updateTaskStatus`, `claimTaskStatus` — the atomic status CAS, `AgentTaskWithNodes`).
+- `../lib/db/repositories` → `sessions.*`, `pendingActions.*` (`getPendingAction`, `getPendingActionOwnership`, `claimPendingAction` — the exactly-once CAS; `getPendingActionPlanLink`, `revokePendingActionsByTask`, `listPendingActionsByTask`), `tasks.*` (`createTask`, `createTaskNode`, `getTask`, `listTasksBySession`, `updateTaskNode`, `updateTaskStatus`, `claimTaskStatus` — the atomic status CAS; `claimTaskExecution`/`releaseTaskExecution`/`claimNodeExecution`/`releaseNodeExecution` — the plan/node DB execution claims; `AgentTaskWithNodes`).
 
 REQUIRED from siblings (must align at integration; assumed signatures):
 - `security.gateway.securityGateway.handleToolCall(ctx)` returns `{ evaluation, decision, action?, blockReason? }` with
@@ -388,6 +401,16 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
   never from model prose. `card-emitter.toCards` is PURE and total (unknown shape ⇒ `error` card).
 - `submit_plan` is meta (not risk-gated): it validates the DAG, then runs it via `planner.runPlan` with
   `runTool = executeGatedTool`; individual money-moving nodes still gate through the gateway.
+- **Plan-node actions are BORN plan-linked.** Every REAL `runTool` adapter forwards the executor's
+  `ctx {taskId,nodeId}` (the gated path in `planner/executor.ts` invokes `runTool(tool, args, {taskId, nodeId})`)
+  into `executeGatedTool` → `gateway.handleToolCall` → `gatewayCreatePendingAction`, which persists
+  `PendingAction.taskId`/`nodeId` IN THE SAME INSERT as the row — BEFORE the `runTool` promise resolves.
+  So `cancelTask`'s PRIMARY bulk `revokePendingActionsByTask(taskId,[...])` revokes a parked node action
+  EVEN BEFORE the node's `output.pendingActionId` is written. Production callers that must forward `ctx`:
+  `banking-agent.ts` (submit_plan deps), `index.ts#taskRunToolFor` (resume/retry),
+  `confirmation.ts#resumeOwningPlan`. A `runTool` injection that DROPS `ctx` mints an UNLINKED orphan
+  that the bulk revoke AND `findTaskByPendingAction` both miss — the action stays confirmable after a
+  plan cancel.
 
 ## Test Strategy
 

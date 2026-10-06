@@ -33,7 +33,8 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   (chat/SSE, action confirm|verify|cancel, task lifecycle, and `review-regressions-http.test.ts`
   reviewer regressions) plus the newer regression specs (`session-takeover-http`, `cancel-during-
   authorization-http`, `task-resume-retry-http`, `plan-pause-terminal-http`, `cumulative-risk-http`,
-  `ledger-consistency-http`, `mfa-escalation-upgrade-http`). See `app/CONTEXT.md`.
+  `ledger-consistency-http`, `mfa-escalation-upgrade-http`, and the round-5a linkage/concurrency specs `plan-linkage-http`, `cancel-safety-http`, `concurrent-execution-http`). See `app/CONTEXT.md`.
+- `review-boundaries.test.ts` & `review-concurrency.test.ts` — root-level `[integration]` reviewer-reference ports (real route handlers + gateway/executor): plan/node linkage, cancel safety, exactly-once concurrent execution, de-dup scope. See the Routing Table entries below.
 
 Run:
 
@@ -105,8 +106,8 @@ A separate acceptance layer ABOVE the HTTP specs: `tests/e2e/acceptance.e2e.ts` 
 npx tsx tests/e2e/acceptance.e2e.ts
 ```
 
-Prerequisites (once, in a fresh worktree): `npm install` → `npx prisma generate` → `npx prisma db push`
-→ `npm run db:seed`. It uses the DEV DB (`prisma/dev.db`, gitignored), `.env` must set `LLM_MODE=mock`,
+Prerequisites (once, in a fresh worktree): `npm install` → `npx prisma generate`. It uses an ISOLATED E2E DB
+(`prisma/e2e.db`, git-ignored, provisioned by the harness itself — no manual `db push`/`db:seed` needed), `.env` must set `LLM_MODE=mock`,
 and it needs a system Chrome. It prints one `PASS|FAIL|SKIP <journey> — <evidence>` line per journey
 and exits non-zero iff any journey FAILs (a SKIP does not fail the run).
 **Covers:** NL → confirmation/MFA card → human-decision flows, MFA success + wrong-code rejection,
@@ -116,7 +117,7 @@ plan pause/resume + cancel, and refresh/action-entry recovery from persisted ser
 
 ## Fast test-DB path (why the suite is fast — do not remove)
 
-The full suite (447 tests / 214 suites) runs in ~30–45s.
+The full suite (532 tests / 68 files) runs in ~50s.
 This depends on a deliberately fast SQLite configuration; if any piece is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
 
 - `helpers/db.ensureTestPragmas()` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`
@@ -145,6 +146,8 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
 - `./app` → real app-entry (HTTP) specs driving the real Next.js route handlers (chat/SSE, action confirm|verify|cancel, task lifecycle, reviewer regressions); newer specs cover cookie-only session takeover, cancel-during-authorization, concurrent resume/retry exactly-once, plan pause/terminal-state, cumulative ¥1000/day risk, ledger consistency, YELLOW→RED MFA upgrade — every top-level describe is labeled `[integration]` (these are handler tests, NOT browser E2E)
 - `./e2e` → real-browser acceptance harness: boots `next dev` + real headless Chrome and drives the `/agent` UI end-to-end, asserting on RENDERED DOM (the ONLY true browser E2E layer). See `e2e/CONTEXT.md`.
+- `./review-boundaries.test.ts` → `[integration]` reviewer-boundary regressions over the REAL route handlers (chat/tasks/actions): foreign body-`sessionId` vs cookie → 409; resume keeps a cancelled task cancelled; no fresh executable PendingAction after cancel-during-authorization; paused-plan confirm does NOT advance; two concurrent resumes run each unfinished node exactly once; concurrent HTTP resume adds no duplicate budget; ledgered-but-not-terminal actions counted once in cumulative risk
+- `./review-concurrency.test.ts` → `[integration]` reviewer concurrency-bug regressions (the 5 cases from the `.codex-review` reference port): staggered resume / gated double-resume / orphan-after-cancel / independent plans / unlinked-cancel each assert EXACTLY-ONCE side effects and full revoke-on-cancel (assertions ported unrelaxed)
 - `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)

@@ -87,14 +87,18 @@ export interface ToolExecutionResult {
 /**
  * Optional, ADDITIVE per-call options accepted by the model-free runners (`executeDirect`).
  *
- * Only `idempotencyKey` exists, and only a MONEY-MOVING tool (`transfer_money`) meaningfully reads
- * it: the Banking SDK derives the ledger row id deterministically from `(userId, key)` (via
- * `@/lib/ledger#idempotentTransferTxId`), so a repeat replays the original row instead of
- * double-debiting. Every other tool ignores the option. Omitting `opts` keeps the old behavior
- * exactly, so all existing two-argument call sites stay valid.
+ * `idempotencyKey` is the at-most-once key for a side-effecting tool call. It is consumed by:
+ *  - `transfer_money` — the Banking SDK derives the ledger row id deterministically from
+ *    `(userId, key)` (via `@/lib/ledger#idempotentTransferTxId`), so a repeat replays the original
+ *    row instead of double-debiting; and
+ *  - the plan-node side-effect tools `reserve_budget` / `create_scheduled_task` — the plan-node and
+ *    confirmation paths pass `@/lib/ledger#nodeExecutionKey(taskId, nodeId)`, so a replay of the SAME
+ *    `(plan, node)` dedupes its side effect instead of creating a duplicate row.
+ * Any other tool ignores the option. Omitting `opts` keeps the old behavior exactly, so all existing
+ * two-argument call sites stay valid.
  */
 export interface ToolRunOptions {
-  /** At-most-once key for money movement; passed verbatim as the SDK's `idempotencyKey`. */
+  /** At-most-once key for a side-effecting call; passed verbatim to the SDK's `idempotencyKey`. */
   idempotencyKey?: string;
 }
 
@@ -113,7 +117,7 @@ export interface ToolRegistry {
   get(name: ToolName): AgentTool<any>;
   /**
    * Gateway-authorized execution path: run a tool's args through the SDK WITHOUT the model.
-   * `opts` is ADDITIVE/optional — only money-moving tools read `opts.idempotencyKey`.
+   * `opts` is ADDITIVE/optional — side-effecting tools read `opts.idempotencyKey` (see `ToolRunOptions`).
    */
   executeDirect(
     name: ToolName,
@@ -188,10 +192,10 @@ function createUnconfiguredSubmitPlanTool(): AgentTool<typeof SubmitPlanParams> 
  *  - 25 SDK-backed tools come from the family modules' `create<Name>Tool(userId)` factories (each
  *    closers over the SERVER-INJECTED `userId`); `submit_plan` is built from the injected
  *    `opts.submitPlan` deps (or a failing placeholder when absent). `list()`/`get()` read the map.
- *  - `executeDirect(name, args, opts?)` dispatches to the matching family `run<X>(userId, args)`
+ *  - `executeDirect(name, args, opts?)` dispatches to the matching family `run<X>(userId, args, opts)`
  *    runner, and to `planning.runSubmitPlan(userId, args, opts.submitPlan)` for `submit_plan`. The
- *    optional `opts.idempotencyKey` is threaded to the tool's runner (only `transfer_money` consumes
- *    it — see `ToolRunOptions`).
+ *    optional `opts.idempotencyKey` is threaded to every runner; the side-effecting tools consume it
+ *    (`transfer_money`, `reserve_budget`, `create_scheduled_task`) — see `ToolRunOptions`.
  *
  * Signature note: the frozen form `createToolRegistry(userId: string): ToolRegistry` is preserved —
  * `opts` is an ADDITIVE optional parameter, needed only because `submit_plan` requires an injected
@@ -240,8 +244,8 @@ export function createToolRegistry(
   };
 
   // Model-free runners: also exhaustive over `ToolName` (missing key ⇒ compile error). `userId` is
-  // the closed-over one — it is NEVER read from `args`. Every runner may accept the optional `opts`
-  // (only `transfer_money` reads `opts.idempotencyKey`; the rest ignore the extra argument).
+  // the closed-over one — it is NEVER read from `args`. Every runner may accept the optional `opts`;
+  // the side-effecting ones read `opts.idempotencyKey` (see `ToolRunOptions`), the rest ignore it.
   const runners: Record<ToolName, ToolRunner> = {
     get_balance: runGetBalance,
     get_transactions: runGetTransactions,

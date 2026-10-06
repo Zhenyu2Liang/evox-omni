@@ -28,20 +28,31 @@ import type {
   TaskPlan,
   TaskPlanStatus,
 } from '@/lib/contracts/task';
-import { dag, executor, type PlanToolOutcome } from '@/planner';
+import { dag, executor, type NodeExecutionContext, type PlanToolOutcome } from '@/planner';
 import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
-import { createTask, createTaskNode } from '@/lib/db/repositories/task';
+import { newId } from '@/lib/ids';
+import {
+  claimTaskExecution,
+  createTask,
+  createTaskNode,
+  releaseTaskExecution,
+} from '@/lib/db/repositories/task';
 import { createTaskPersistence, defaultPollControls, sweepCancelledPlan } from '../task-control';
 import type { ToolExecutionResult } from './index';
 
 /**
  * Gateway-routed runner for a single plan node — supplied by the agent layer. MUST route through
  * `security.gateway` (a gated node returns `{ ok:false, requiresConfirmation:true, pendingActionId }`).
+ * `ctx` identifies the node this call belongs to (`{ taskId, nodeId }`); the agent forwards it as the
+ * node's at-most-once key (`@/lib/ledger#nodeExecutionKey`), so a replay of the SAME `(task, node)`
+ * dedupes its side effect instead of applying it twice. It is threaded straight through to the
+ * executor's `runTool` port (which already calls `runTool(tool, args, ctx)`).
  */
 export type PlanRunTool = (
   toolName: ToolName,
   args: Record<string, unknown>,
+  ctx: NodeExecutionContext,
 ) => Promise<PlanToolOutcome>;
 
 /** Injection `submit_plan` needs to run its DAG (the agent supplies these; the model cannot). */
@@ -224,9 +235,10 @@ export function createSubmitPlanTool(
 
 /**
  * Model-free runner: `dag.validatePlan` → mint the durable `AgentTask`/`AgentTaskNode` rows →
- * `dag.buildPlan` → `executor.runPlan` with the `task-control` persistence ports (see below).
- * Returns `ToolExecutionResult{ok:false}` when validation fails or any node fails; a gated node
- * surfaces via the plan snapshot (`waiting_confirmation`/`waiting_verification`).
+ * `dag.buildPlan` → claim the plan's executor slot → `executor.runPlan` with the `task-control`
+ * persistence ports (see below). Returns `ToolExecutionResult{ok:false}` when validation fails, a
+ * concurrent run already owns the plan, or any node fails; a gated node surfaces via the plan
+ * snapshot (`waiting_confirmation`/`waiting_verification`).
  */
 export async function runSubmitPlan(
   userId: string,
@@ -296,25 +308,46 @@ export async function runSubmitPlan(
     await planSink(composePlanSnapshot(plan, accumulated, planNow()));
   };
 
-  const result = await executor.runPlan(
-    plan,
-    {
-      runTool: deps.runTool,
-      onNodeUpdate,
-      // Durable cross-request steering: a pause/cancel persisted by `POST /api/tasks/[id]` is
-      // observed at this run's next node checkpoint, so a LIVE plan really stops (the persisted
-      // `AgentTask.status` is the source of truth — see `defaultPollControls`).
-      controls: defaultPollControls(plan.id),
-      ...createTaskPersistence(plan.id),
-    },
-    { signal: deps.signal, now: deps.now },
-  );
+  // INITIAL-RUN PLAN CLAIM: take the plan's executor slot BEFORE starting a run, so two concurrent
+  // drives of the SAME task can never both launch an executor. The token is fresh per call (a NEW
+  // unique value, never reused), and a LOST claim (`false`) means another live run already owns the
+  // plan — return an explicit "already running" outcome and run NOTHING (no duplicate execution).
+  // The slot is released in `finally`, so a later resume/retry can re-claim it.
+  const claimToken = newId('taskclaim');
+  const claimed = await claimTaskExecution(plan.id, claimToken);
+  if (!claimed) {
+    return {
+      ok: false,
+      error: '计划已在执行中',
+      summary: `计划「${goal}」已在执行中，本次未重复启动`,
+    };
+  }
 
-  // CANONICAL CANCEL SWEEP: a node inside this run can have minted a FRESH `PendingAction` (the
-  // gateway parks a YELLOW/RED node call) at the very moment a concurrent `cancelTask` cancelled the
-  // plan, so an executable action could outlive the cancellation. Re-load the durable row and, when
-  // it is `cancelled`, revoke every still-parked action (a no-op otherwise — see `sweepCancelledPlan`).
-  await sweepCancelledPlan(deps.sessionId, plan.id);
+  let result: TaskPlan;
+  try {
+    result = await executor.runPlan(
+      plan,
+      {
+        runTool: deps.runTool,
+        onNodeUpdate,
+        // Durable cross-request steering: a pause/cancel persisted by `POST /api/tasks/[id]` is
+        // observed at this run's next node checkpoint, so a LIVE plan really stops (the persisted
+        // `AgentTask.status` is the source of truth — see `defaultPollControls`).
+        controls: defaultPollControls(plan.id),
+        ...createTaskPersistence(plan.id),
+      },
+      { signal: deps.signal, now: deps.now },
+    );
+
+    // CANONICAL CANCEL SWEEP: a node inside this run can have minted a FRESH `PendingAction` (the
+    // gateway parks a YELLOW/RED node call) at the very moment a concurrent `cancelTask` cancelled
+    // the plan, so an executable action could outlive the cancellation. Re-load the durable row and,
+    // when it is `cancelled`, revoke every still-parked action (a no-op otherwise — see
+    // `sweepCancelledPlan`). This runs while the plan claim is still held.
+    await sweepCancelledPlan(deps.sessionId, plan.id);
+  } finally {
+    await releaseTaskExecution(plan.id, claimToken);
+  }
 
   const done = result.results.filter((r) => r.status === 'success').length;
   const waiting = result.results.filter(

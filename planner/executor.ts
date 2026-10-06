@@ -21,6 +21,7 @@
 import type { TaskNodeResult, TaskNodeSpec, TaskNodeStatus, TaskPlan, TaskPlanStatus } from '@/lib/contracts/task';
 import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
+import { newId } from '@/lib/ids';
 import { evaluateCondition, topologicalOrder, transitiveDependents } from './dag';
 
 /**
@@ -36,6 +37,12 @@ export interface PlanToolOutcome {
   error?: string;
   requiresConfirmation?: boolean;
   pendingActionId?: string;
+}
+
+/** Identity of the node a tool call belongs to — threaded to the injected `runTool` port. */
+export interface NodeExecutionContext {
+  taskId: string;
+  nodeId: string;
 }
 
 /** One durable control command, delivered out-of-process (e.g. `POST /api/tasks/:id`). */
@@ -58,10 +65,27 @@ export interface PlanControlPort {
  * caller, keeping `./planner` DB-agnostic.
  */
 export interface PlanDeps {
-  /** Execute one banking tool. Routes through the Security Gateway in production. */
-  runTool(toolName: string, args: Record<string, unknown>): Promise<PlanToolOutcome>;
+  /**
+   * Execute one banking tool. Routes through the Security Gateway in production.
+   * `ctx` identifies the node this call belongs to (`{ taskId, nodeId }`); the
+   * agent layer forwards it as the idempotency key (`nodeExecutionKey`).
+   */
+  runTool(toolName: string, args: Record<string, unknown>, ctx: NodeExecutionContext): Promise<PlanToolOutcome>;
   /** Emitted on every node status change; the agent forwards it as `plan_update`. */
   onNodeUpdate(node: TaskNodeResult): void | Promise<void>;
+  /**
+   * DB-atomic claim of the NODE executor slot before it runs. Returns true iff this
+   * run won the claim. OPTIONAL: when absent the executor does not claim at all.
+   *
+   * Supplied TOGETHER with `releaseNode`; in production it delegates to
+   * `claimNodeExecution(taskId, nodeId, token)` (a single atomic `updateMany` CAS),
+   * so two concurrent `resume`/`retry`/confirm-continuation runs can never execute
+   * the SAME plan node at the same time. The DB CAS is the ONLY claim — the
+   * `'running'` node status is never used as a lock.
+   */
+  claimNode?(taskId: string, nodeId: string, token: string): Promise<boolean>;
+  /** Release the claim minted by `claimNode` for the same (taskId, nodeId, token). */
+  releaseNode?(taskId: string, nodeId: string, token: string): Promise<void>;
   /** Persist the full plan snapshot (AgentTask/AgentTaskNode). */
   persistPlan?(plan: TaskPlan): Promise<void>;
   /** Persist one node result incrementally (`planId`, node). */
@@ -261,7 +285,9 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
 
   let planStatus: TaskPlanStatus = 'running';
 
-  const snapshot = (): TaskPlan => ({
+  // ONE claim token per `runPlan` invocation: every node this run claims uses the
+  // same token, so `releaseNode` can only clear a claim THIS run still owns.
+  const claimToken = newId('nodeclaim');  const snapshot = (): TaskPlan => ({
     id: plan.id,
     sessionId: plan.sessionId,
     goal: plan.goal,
@@ -395,74 +421,88 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   };
 
   /** Execute a `kind:'tool'` node. */
-  const runToolNode = async (node: TaskNodeSpec): Promise<'settled' | 'parked' | 'stopped'> => {
-    const startedAt = now();
-    await setNode({ id: node.id, name: node.name, status: 'running', tool: node.tool, startedAt });
-
-    if (stopRequested()) {
-      await cancelNode(node);
-      return 'stopped';
+  const runToolNode = async (node: TaskNodeSpec): Promise<'settled' | 'parked' | 'stopped' | 'owned'> => {
+    // Claim the node's executor slot BEFORE any write. A lost claim must produce
+    // ZERO writes for this node (never clobber the owner's row); the DB CAS is the
+    // ONLY claim — `status:'running'` is never used as a lock.
+    if (deps.claimNode) {
+      const won = await deps.claimNode(plan.id, node.id, claimToken);
+      if (!won) return 'owned';
     }
-
-    let outcome: PlanToolOutcome;
     try {
-      outcome = await deps.runTool(node.tool as string, node.args ?? {});
-    } catch (e) {
-      outcome = { ok: false, error: AppError.from(e).message };
-    }
+      const startedAt = now();
+      await setNode({ id: node.id, name: node.name, status: 'running', tool: node.tool, startedAt });
 
-    if (stopRequested()) {
-      await cancelNode(node);
-      return 'stopped';
-    }
+      if (stopRequested()) {
+        await cancelNode(node);
+        return 'stopped';
+      }
 
-    // Gated tool: it did NOT execute — park the node for human confirmation/MFA.
-    if (outcome.requiresConfirmation || (!outcome.ok && outcome.pendingActionId !== undefined)) {
-      const isRed = (node as { riskLevel?: unknown }).riskLevel === 'RED';
-      planStatus = 'waiting_confirmation';
-      const parked: TaskNodeResult & { pendingActionId?: string } = {
+      let outcome: PlanToolOutcome;
+      try {
+        outcome = await deps.runTool(node.tool as string, node.args ?? {}, { taskId: plan.id, nodeId: node.id });
+      } catch (e) {
+        outcome = { ok: false, error: AppError.from(e).message };
+      }
+
+      if (stopRequested()) {
+        await cancelNode(node);
+        return 'stopped';
+      }
+
+      // Gated tool: it did NOT execute — park the node for human confirmation/MFA.
+      if (outcome.requiresConfirmation || (!outcome.ok && outcome.pendingActionId !== undefined)) {
+        const isRed = (node as { riskLevel?: unknown }).riskLevel === 'RED';
+        planStatus = 'waiting_confirmation';
+        const parked: TaskNodeResult & { pendingActionId?: string } = {
+          id: node.id,
+          name: node.name,
+          status: isRed ? 'waiting_verification' : 'waiting_confirmation',
+          tool: node.tool,
+          output: outcome.pendingActionId !== undefined ? { pendingActionId: outcome.pendingActionId } : undefined,
+          error: outcome.error,
+          startedAt,
+          endedAt: now(),
+        };
+        if (outcome.pendingActionId !== undefined) parked.pendingActionId = outcome.pendingActionId;
+        await setNode(parked);
+        return 'parked';
+      }
+
+      if (outcome.ok) {
+        let output = outcome.data;
+        if (output === undefined && outcome.summary !== undefined) output = { summary: outcome.summary };
+        const success: TaskNodeResult & { summary?: string } = {
+          id: node.id,
+          name: node.name,
+          status: 'success',
+          tool: node.tool,
+          output,
+          startedAt,
+          endedAt: now(),
+        };
+        if (outcome.summary !== undefined) success.summary = outcome.summary;
+        await setNode(success);
+        return 'settled';
+      }
+
+      // Failure: record it and continue — never throw.
+      await setNode({
         id: node.id,
         name: node.name,
-        status: isRed ? 'waiting_verification' : 'waiting_confirmation',
+        status: 'failed',
         tool: node.tool,
-        output: outcome.pendingActionId !== undefined ? { pendingActionId: outcome.pendingActionId } : undefined,
-        error: outcome.error,
+        error: outcome.error ?? `tool '${node.tool ?? node.id}' failed`,
         startedAt,
         endedAt: now(),
-      };
-      if (outcome.pendingActionId !== undefined) parked.pendingActionId = outcome.pendingActionId;
-      await setNode(parked);
-      return 'parked';
-    }
-
-    if (outcome.ok) {
-      let output = outcome.data;
-      if (output === undefined && outcome.summary !== undefined) output = { summary: outcome.summary };
-      const success: TaskNodeResult & { summary?: string } = {
-        id: node.id,
-        name: node.name,
-        status: 'success',
-        tool: node.tool,
-        output,
-        startedAt,
-        endedAt: now(),
-      };
-      if (outcome.summary !== undefined) success.summary = outcome.summary;
-      await setNode(success);
+      });
       return 'settled';
+    } finally {
+      // A parked/success/failed node ALWAYS releases its claim, so a later
+      // retry/resume/confirm re-drives it (cross-replay idempotency is handled
+      // elsewhere, via `nodeExecutionKey`).
+      if (deps.claimNode) await deps.releaseNode?.(plan.id, node.id, claimToken);
     }
-
-    // Failure: record it and continue — never throw.
-    await setNode({
-      id: node.id,
-      name: node.name,
-      status: 'failed',
-      tool: node.tool,
-      error: outcome.error ?? `tool '${node.tool ?? node.id}' failed`,
-      startedAt,
-      endedAt: now(),
-    });
-    return 'settled';
   };
 
   // ---- main walk ------------------------------------------------------------
@@ -479,7 +519,7 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   let stopped = false;
   let parked = false;
   let wasPaused = false;
-
+  let claimLost = false;
   try {
     let index = 0;
     while (index < order.length || retryRequests.size > 0) {
@@ -582,6 +622,13 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
         parked = true;
         break;
       }
+      if (outcome === 'owned') {
+        // Another live executor owns this node: do NOT run dependents (their
+        // dependency is not settled) and do NOT enter the cancel sweep. The node
+        // is left not-yet-settled and the plan stays `running` (see settlement).
+        claimLost = true;
+        break;
+      }
       index += 1;
     }
   } finally {
@@ -603,6 +650,11 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
     // A pause (in-process `pause()` or durable `{kind:'pause'}`) halts the walk
     // but does NOT settle the plan: it stays resumable with `status:'paused'`.
     planStatus = 'paused';
+  } else if (claimLost) {
+    // Another live executor owns this plan/node — this run backs off. The node is
+    // left not-yet-settled (NOT success/failed/skipped) and the plan is NOT counted
+    // as done ('running'), so the owning executor remains the single writer.
+    planStatus = 'running';
   } else {
     const allSettled = plan.nodes.every((node) => {
       const status = results.get(node.id)?.status;
@@ -612,6 +664,12 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
   }
 
   const final = snapshot();
+  if (claimLost) {
+    // The durable plan state belongs to the owning executor: do NOT write the full
+    // plan snapshot. Every node this run DID run was already persisted
+    // incrementally via `persistNode`.
+    return final;
+  }
   await persistPlanSnapshotGuarded(deps, final, { explicitResume: opts.explicitResume });
   return final;
 }

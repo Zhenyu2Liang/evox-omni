@@ -251,7 +251,12 @@ export function startDevServer(port: number): DevServer {
     detached: true,
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: '1' },
+    env: {
+      ...process.env,
+      NEXT_TELEMETRY_DISABLED: '1',
+      // Isolate the app from the shared `prisma/dev.db` — see `useIsolatedDatabase`/`E2E_DB_URL`.
+      DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL,
+    },
   });
 
   const pid = child.pid;
@@ -403,8 +408,34 @@ export async function bootDevServer(opts: { timeoutMs?: number; attempts?: numbe
 
 // --- deterministic fixture state -----------------------------------------------------------------
 
-/** The DEV SQLite file and its WAL/SHM/journal sidecars, relative to the project's `prisma/` dir. */
-const DEV_DB_FILES = ['dev.db', 'dev.db-wal', 'dev.db-shm', 'dev.db-journal'] as const;
+/**
+ * The ISOLATED E2E SQLite file + its WAL/SHM/journal sidecars, relative to the project's `prisma/`
+ * dir. The harness NEVER touches the shared `prisma/dev.db` — every E2E run gets its own database.
+ */
+const E2E_DB_FILES = ['e2e.db', 'e2e.db-wal', 'e2e.db-shm', 'e2e.db-journal'] as const;
+
+/**
+ * Absolute `file:` URL for the ISOLATED E2E SQLite DB.
+ *
+ * Prisma requires FORWARD SLASHES inside a `file:` URL (a Windows `C:\…` backslash path is rejected
+ * as invalid), so the OS path is normalised via `split(path.sep).join('/')`. `REPO_ROOT` is absolute,
+ * so the result is absolute on both Windows (`file:D:/…/prisma/e2e.db`) and POSIX
+ * (`file:/…/prisma/e2e.db`).
+ */
+export const E2E_DB_URL = `file:${path.join(REPO_ROOT, 'prisma', 'e2e.db').split(path.sep).join('/')}`;
+
+/**
+ * Point this process — and EVERYTHING it spawns (the provisioning CLIs via `runCliStep`, the dev
+ * server via `startDevServer`) — at the ISOLATED E2E DB by setting `process.env.DATABASE_URL`.
+ *
+ * `lib/db/client.ts` reads `process.env.DATABASE_URL` FIRST (only falling back to `prisma/dev.db`),
+ * and Next dev does NOT override an already-set `process.env` value with `.env`, so this reliably
+ * isolates every E2E run from the shared dev database. Returns the URL (for logging).
+ */
+export function useIsolatedDatabase(): string {
+  process.env['DATABASE_URL'] = E2E_DB_URL;
+  return E2E_DB_URL;
+}
 
 /** Synchronous sleep — the reset runs BEFORE any async work, so it cannot `await`. */
 function sleepSync(ms: number): void {
@@ -441,7 +472,13 @@ function cliCommand(localBin: string | undefined, npxArgs: readonly string[]): {
 
 /** Run one CLI step synchronously in the project root; throws with the captured output on failure. */
 function runCliStep(command: string, args: readonly string[]): string {
-  const result = spawnSync(command, [...args], { cwd: REPO_ROOT, windowsHide: true, encoding: 'utf8' });
+  const result = spawnSync(command, [...args], {
+    cwd: REPO_ROOT,
+    windowsHide: true,
+    encoding: 'utf8',
+    // Provision the ISOLATED E2E DB — never the shared dev DB (see `useIsolatedDatabase`/`E2E_DB_URL`).
+    env: { ...process.env, DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL },
+  });
   const out = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
   if (result.status !== 0) {
     const spawnError = result.error ? `（无法启动进程：${result.error.message}）` : '';
@@ -450,9 +487,9 @@ function runCliStep(command: string, args: readonly string[]): string {
   return out;
 }
 
-/** Delete the DEV SQLite file + its sidecars (a missing file is not an error). */
-function removeDevDb(): void {
-  for (const name of DEV_DB_FILES) {
+/** Delete a SQLite file + its sidecars (a missing file is not an error). */
+function removeSqliteFiles(files: readonly string[]): void {
+  for (const name of files) {
     try {
       rmSync(path.join(REPO_ROOT, 'prisma', name));
     } catch (e) {
@@ -461,9 +498,9 @@ function removeDevDb(): void {
   }
 }
 
-/** One reset attempt: delete the DEV DB → create a fresh schema → seed. */
+/** One reset attempt: delete the ISOLATED E2E DB → create a fresh schema → seed (all against `E2E_DB_URL`). */
 function resetDemoDatabaseOnce(): void {
-  removeDevDb();
+  removeSqliteFiles(E2E_DB_FILES);
   const push = cliCommand(resolvePrismaBin(), ['prisma', 'db', 'push', '--skip-generate']);
   runCliStep(push.command, push.args);
   const seed = cliCommand(resolveTsxBin(), ['tsx', path.join('prisma', 'seed.ts')]);
@@ -471,22 +508,24 @@ function resetDemoDatabaseOnce(): void {
 }
 
 /**
- * Reset the DEV SQLite DB to the canonical seeded demo state — SYNCHRONOUSLY and BEFORE the dev
- * server boots (no open connection ⇒ no Windows SQLite file-lock).
+ * Reset the ISOLATED E2E SQLite DB (`prisma/e2e.db`) to the canonical seeded demo state —
+ * SYNCHRONOUSLY and BEFORE the dev server boots (no open connection ⇒ no Windows SQLite file-lock).
+ * The shared `prisma/dev.db` is NEVER touched.
  *
  * WHY: money-moving journeys are tiered from the FROZEN demo day's accumulated outgoing transfers
  * (`lib/clock.ts` `demoNow()` = 2026-09-25 12:00; `security/risk-engine.ts` ⇒ transfer is YELLOW only
  * while `dayTotal + amount ≤ ¥1000`). Every transfer is stamped with `demoNow()`, so executed
- * transfers ACCUMULATE across harness runs against the persistent `prisma/dev.db` — a second run
- * would start with the previous run's transfers already inside the day and the YELLOW-transfer
- * journeys would escalate to RED. Resetting gives every run the SAME known starting state.
+ * transfers ACCUMULATE across harness runs against a persistent DB — a second run would start with
+ * the previous run's transfers already inside the day and the YELLOW-transfer journeys would escalate
+ * to RED. Resetting gives every run the SAME known starting state.
  *
  * HOW (deliberately NOT `prisma db push --force-reset`): on Windows the force-reset path was observed
- * to leave `prisma/dev.db` as a 0-byte image and then fail with `Error code 11: The database disk
+ * to leave the SQLite file as a 0-byte image and then fail with `Error code 11: The database disk
  * image is malformed`, aborting the seed. Instead we DELETE the DB file + sidecars, re-create a fresh
- * schema with `db push --skip-generate`, then seed (`tsx prisma/seed.ts`). The whole attempt is
- * retried ONCE with a short backoff (SQLite on Windows is occasionally lock-prone), and each step's
- * combined stdout+stderr is captured into the thrown error.
+ * schema with `db push --skip-generate`, then seed (`tsx prisma/seed.ts`) — both CLIs are given
+ * `DATABASE_URL` = `E2E_DB_URL` (see `runCliStep`). The whole attempt is retried ONCE with a short
+ * backoff (SQLite on Windows is occasionally lock-prone), and each step's combined stdout+stderr is
+ * captured into the thrown error.
  *
  * Set `E2E_SKIP_DB_RESET=1` to keep the current DB (e.g. to inspect post-run data); the journeys then
  * require a freshly seeded DB. Deprecated-`package.json#prisma` warning lines in the captured output
@@ -764,6 +803,124 @@ export async function waitForStatusText(page: Page, needle: string, timeoutMs = 
   );
 }
 
+// --- read-model (HTTP) helpers ------------------------------------------------------------------
+
+/** A `TransactionView` from the bills read model (signed amount: negative = DEBIT/expense). */
+export interface LedgerTransaction {
+  id: string;
+  amount: number;
+  direction: 'DEBIT' | 'CREDIT';
+  category: string;
+  merchant: string;
+  occurredAt: number;
+}
+
+/** The `GET /api/bills` payload (the subset the harness asserts on). */
+export interface LedgerView {
+  transactions: LedgerTransaction[];
+}
+
+/** The `GET /api/dashboard` payload (the subset the harness asserts on). */
+export interface DashboardView {
+  checkingBalance: number;
+}
+
+/** A `CardView` limit row (`GET /api/cards`). */
+export interface CardLimitView {
+  category: string;
+  amount: number;
+}
+
+/** A `CardView` (`GET /api/cards`). */
+export interface CardView {
+  id: string;
+  status: string;
+  limits: CardLimitView[];
+}
+
+/** A non-terminal `PendingAction` from `GET /api/actions`. */
+export interface PendingActionView {
+  id: string;
+  sessionId: string;
+  toolName: string;
+  status: string;
+  tier: string;
+}
+
+/**
+ * GET `url`, require a 2xx JSON envelope `{ ok:true, data }`, and return the unwrapped `data`.
+ * Throws a descriptive error on a non-2xx status, a non-JSON body, or a non-`ok` envelope — so a
+ * DB/ledger assertion can never silently pass on a malformed response.
+ */
+export async function getJson<T>(url: string, cookie?: string): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (cookie !== undefined) headers['Cookie'] = cookie;
+  const res = await fetch(url, { headers });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`GET ${url} → HTTP ${res.status}：${text.slice(0, 200)}`);
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    throw new Error(`GET ${url} 返回非 JSON：${text.slice(0, 200)}`);
+  }
+  const envelope = body as Record<string, unknown> | null;
+  if (!envelope || envelope['ok'] !== true) {
+    throw new Error(`GET ${url} 未返回 { ok:true } 信封：${text.slice(0, 200)}`);
+  }
+  return envelope['data'] as T;
+}
+
+/** `GET /api/dashboard` → the demo user's dashboard summary (no identity required). */
+export function fetchDashboardSummary(baseUrl: string): Promise<DashboardView> {
+  return getJson<DashboardView>(`${baseUrl}/api/dashboard`);
+}
+
+/** `GET /api/bills` → the transaction ledger (newest ≤50, no date filter; no identity required). */
+export function fetchLedger(baseUrl: string): Promise<LedgerView> {
+  return getJson<LedgerView>(`${baseUrl}/api/bills`);
+}
+
+/** `GET /api/cards` → the demo user's cards (incl. per-category limits; no identity required). */
+export async function fetchCards(baseUrl: string): Promise<CardView[]> {
+  const data = await getJson<{ cards: CardView[] }>(`${baseUrl}/api/cards`);
+  return data.cards;
+}
+
+/** `GET /api/actions` → the caller session's NON-TERMINAL actions (identity = the cookie). */
+export function fetchPendingActions(baseUrl: string, cookie: string): Promise<PendingActionView[]> {
+  return getJson<PendingActionView[]>(`${baseUrl}/api/actions`, cookie);
+}
+
+/** The `value` of one card's per-category limit, or `undefined` when the card/category is absent. */
+export function cardCategoryLimit(cards: readonly CardView[], cardId: string, category: string): number | undefined {
+  const card = cards.find((candidate) => candidate.id === cardId);
+  return card?.limits.find((limit) => limit.category === category)?.amount;
+}
+
+/** Ledger rows that appeared (`added`) / disappeared (`removed`) between two snapshots. */
+export interface LedgerDiff {
+  added: LedgerTransaction[];
+  removed: LedgerTransaction[];
+}
+
+/** Diff two ledger snapshots by transaction id (order-independent). */
+export function diffLedger(before: readonly LedgerTransaction[], after: readonly LedgerTransaction[]): LedgerDiff {
+  const beforeIds = new Set(before.map((tx) => tx.id));
+  const afterIds = new Set(after.map((tx) => tx.id));
+  return {
+    added: after.filter((tx) => !beforeIds.has(tx.id)),
+    removed: before.filter((tx) => !afterIds.has(tx.id)),
+  };
+}
+
+/** The `banking_session` cookie as a `Cookie` header value, or `undefined` when it is not set yet. */
+export async function readSessionCookie(page: Page, name = 'banking_session'): Promise<string | undefined> {
+  const cookies = await page.context().cookies();
+  const found = cookies.find((cookie) => cookie.name === name);
+  return found ? `${found.name}=${found.value}` : undefined;
+}
+
 // --- plan card (task plan) ----------------------------------------------------------------------
 
 /**
@@ -839,4 +996,68 @@ export async function waitForPlanCard(page: Page, timeoutMs = 90_000): Promise<s
     { timeoutMs, description: '计划卡片（依赖关系）渲染' },
   );
   return status ?? '';
+}
+
+// --- plan node timeline (per-node status badges) ------------------------------------------------
+
+/** One row of the plan card's node timeline: the node name + its rendered status label. */
+export interface PlanNodeRow {
+  name: string;
+  status: string;
+}
+
+/**
+ * Read EVERY per-node row of the LIVE plan card's timeline from RENDERED DOM.
+ *
+ * The timeline is `AgentTaskTimeline` → `<ol class="space-y-3">` with one `<li>` per node; each row
+ * carries the node name (`span.text-sm.font-medium.text-banking-deep`) plus a status `<Badge>`
+ * (`span.rounded-full`). Node labels are whitespace-stripped. Scoping to `ol.space-y-3 > li` avoids
+ * the SECOND copy of every node name that the card's 依赖关系 dependency list also renders.
+ */
+export async function planNodeRows(page: Page): Promise<PlanNodeRow[]> {
+  const rows = planCard(page).locator('ol.space-y-3 > li');
+  const count = await rows.count();
+  const out: PlanNodeRow[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const row = rows.nth(i);
+    const byClass = row.locator('span.text-sm.font-medium.text-banking-deep').first();
+    const nameEl = (await byClass.count()) > 0 ? byClass : row.locator('span:not([aria-hidden="true"])').first();
+    const name = (await nameEl.innerText().catch(() => '')).replace(/\s+/g, '').trim();
+    const status = (await row.locator('span.rounded-full').first().innerText().catch(() => ''))
+      .replace(/\s+/g, '')
+      .trim();
+    out.push({ name, status });
+  }
+  return out;
+}
+
+/** The rendered status label of the plan node whose name CONTAINS `nodeNameContains`, or `undefined`. */
+export async function nodeStatus(page: Page, nodeNameContains: string): Promise<string | undefined> {
+  const rows = await planNodeRows(page);
+  return rows.find((row) => row.name.includes(nodeNameContains))?.status;
+}
+
+/** Wait until a plan node's status label is one of `accept`; returns the observed label (or throws). */
+export async function waitForNodeStatus(
+  page: Page,
+  nodeNameContains: string,
+  accept: string | readonly string[],
+  timeoutMs = 90_000,
+): Promise<string> {
+  const wanted = typeof accept === 'string' ? [accept] : [...accept];
+  const deadline = Date.now() + timeoutMs;
+  let last: string | undefined;
+  for (;;) {
+    last = await nodeStatus(page, nodeNameContains);
+    if (last !== undefined && wanted.includes(last)) return last;
+    if (Date.now() > deadline) {
+      const snapshot = (await planNodeRows(page).catch(() => []))
+        .map((row) => `${row.name}=${row.status}`)
+        .join(', ');
+      throw new Error(
+        `等待计划节点「${nodeNameContains}」状态 [${wanted.join('|')}] 超时（${timeoutMs}ms），当前：${last ?? '未找到'}（时间线：${snapshot}）`,
+      );
+    }
+    await sleep(200);
+  }
 }

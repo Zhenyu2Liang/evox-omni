@@ -16,26 +16,36 @@ Grouped by the source module under test (mirrors the source tree). Every spec is
 the root `vitest.config.ts` (`include: ['tests/**/*.{test,spec}.ts']`), so a plain `npm run test`
 runs them all — no scoped config is required for any of them.
 
-- `security/` (13 specs) — `permission-engine`, `risk-engine`, `risk-engine-rerisk`, `gateway`,
+- `security/` (15 specs) — `permission-engine`, `risk-engine`, `risk-engine-rerisk`, `gateway`,
   `gateway-audit-trail`, `authorize-hardening`, `authorize-concurrency`, `injection-guard`,
-  `circuit-breaker`, `circuit-breaker-audit`, `circuit-breaker-reset`, `mfa`, `mfa-audit`.
+  `circuit-breaker`, `circuit-breaker-audit`, `circuit-breaker-reset`, `mfa`, `mfa-audit`,
+  `risk-engine-dedup` (pure, DB-free: dedups the in-flight transfer total via `computeInFlightTransferTotal`,
+  excluding parked transfers whose ledger `Transaction` row already exists), `transfer-limits-concurrency`.
   `authorize-concurrency` proves the concurrent-confirm exactly-once claim **and** execution-time
   re-risk of a stale parked transfer end-to-end through the REAL `@/agent` `confirmAction`/
   `verifyAction` façade (needs a persisted session).
-- `planner/` (3 specs) — `dag` (validate / topological order / readiness / conditions / `buildPlan`),
-  `executor` (`runPlan` node-state machine + `PlanControls`), `lifecycle` (durable persisted-plan
+- `planner/` (4 specs) — `dag` (validate / topological order / readiness / conditions / `buildPlan`),
+  `executor` (`runPlan` node-state machine + `PlanControls`), `executor-claim-scope` (DB-backed: exactly-once node-executor
+  claim by the stable `(taskId,nodeId)` identity via `claimNodeExecution`/`releaseNodeExecution`; a
+  second separate `runPlan` of the same node loses the claim, writes nothing, and halts - NO in-process
+  Map), `lifecycle` (durable persisted-plan
   `pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`).
-- `banking-sdk/` (4 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
-  `atomicity` (ledger-write rollback + concurrent overspend / double-redeem through the real tx).
-- `agent/` (4 specs + `providers/`) — end-to-end confirmation-flow audit specs against the real DB +
-  gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `run-turn-failure`;
+- `banking-sdk/` (5 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
+  `atomicity` (ledger-write rollback + concurrent overspend / double-redeem through the real tx), and
+  `idempotent` (the shared at-most-once CREATE helper: same key replays exactly ONE row for both
+  `reserveBudget` and `createScheduledTask`; absent key keeps legacy create-a-row behavior).
+- `agent/` (5 specs + `providers/`) — end-to-end confirmation-flow audit specs against the real DB +
+  gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `task-cancel-revokes`, `run-turn-failure`;
   `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec.
   `providers/plan-limit-park.test.ts` pins the mock `submit_plan` gated conditional plan
   (analyze -> check -> setlimit) that PARKS in `waiting_confirmation`, then confirms.
-- `lib/` (1 spec) — `pendingAction.claim.test.ts` — `lib/db/repositories/pendingAction`: the atomic,
+- `lib/` (2 specs) — `pendingAction.claim.test.ts` — `lib/db/repositories/pendingAction`: the atomic,
   ownership-aware persistence primitives (`claimPendingAction` exactly-once `pending → confirmed`,
   the `from`-set match, `userId`/`sessionId` scoping, `setPendingActionStatus` +
-  `getPendingActionOwnership`). DB-backed.
+  `getPendingActionOwnership`). DB-backed. Plus `ledger-keys.test.ts` - pure: `lib/ledger` de-dup-scope
+  identity keys (`nodeExecutionKey` = `nxe:<taskId>:<nodeId>`, plan/node-scoped so two DIFFERENT plans
+  never merge while the SAME (task,node) always dedupes; `idempotentTransferTxId` = `txidem_` + first 32
+  hex of sha256 over `<userId>` + NUL + key).
 
 Each spec imports the module under test directly from its `@/…` façade path
 (e.g. `@/security`, `@/planner`, `@/banking-sdk`, `@/agent`, `@/lib/db/repositories/pendingAction`)
@@ -54,8 +64,8 @@ Each spec imports the module under test directly from its `@/…` façade path
 ## Routing Table
 
 - `./security` → permission/risk/gateway/authorization/injection/circuit-breaker/MFA unit specs
-- `./planner` → DAG + executor + durable lifecycle unit specs
-- `./banking-sdk` → transfer/subscription/investment domain invariants + money-movement atomicity
+- `./planner` → DAG + executor + durable lifecycle unit specs (incl. `executor-claim-scope` → exactly-once node claim)
+- `./banking-sdk` → transfer/subscription/investment domain invariants + money-movement atomicity + idempotent-CREATE replay
 - `./agent` → end-to-end confirmation-flow / task-control / provider specs (real DB + gateway + `@/agent`)
-- `./lib` → `PendingAction` atomic-claim persistence primitives
+- `./lib` → `PendingAction` atomic-claim persistence primitives + pure `lib/ledger` de-dup-scope identity keys
 - `../helpers` → shared utilities (db/fixtures) used by DB-backed unit cases (sibling — this node)

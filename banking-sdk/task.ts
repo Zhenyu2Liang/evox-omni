@@ -5,11 +5,15 @@
  *
  * The repository persists `payload` as JSON TEXT (see `lib/db/repositories/scheduledTask.ts`) and
  * returns the raw column on read, so it is parsed back with `safeParse` here.
+ *
+ * `createScheduledTask` accepts an OPTIONAL `idempotencyKey`: a repeat with the SAME key replays the
+ * already-persisted task instead of creating a second row (see `./idempotent.ts`).
  */
 import type { ScheduledTask } from '@prisma/client';
 import { scheduledTasks } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
-import { safeParse } from '../lib/json';
+import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
+import { safeParse, toJson } from '../lib/json';
 import type {
   CreateScheduledTaskInput,
   ScheduledTaskKind,
@@ -38,7 +42,12 @@ function toScheduledTaskView(row: ScheduledTask): ScheduledTaskView {
   };
 }
 
-/** Create a scheduled task; returns the created task. */
+/**
+ * Create a scheduled task; returns the created task.
+ *
+ * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, a repeated call with the
+ * SAME key replays the persisted task (same `id`, no second row). Absent → unchanged behavior.
+ */
 export async function createScheduledTask(
   input: CreateScheduledTaskInput,
 ): Promise<ScheduledTaskView> {
@@ -52,6 +61,28 @@ export async function createScheduledTask(
   }
   if (!Number.isFinite(input.runAt)) {
     throw new AppError('VALIDATION', '任务执行时间无效', { runAt: input.runAt });
+  }
+
+  const key = normalizeIdempotencyKey(input.idempotencyKey);
+  if (key !== undefined) {
+    const replayed = await createIdempotent<ScheduledTask>({
+      key,
+      find: (tx) => tx.scheduledTask.findUnique({ where: { idempotencyKey: key } }),
+      create: (tx, replayKey) =>
+        tx.scheduledTask.create({
+          data: {
+            userId: input.userId,
+            name: input.name,
+            kind: input.kind,
+            runAt: new Date(input.runAt),
+            payload: input.payload == null ? null : toJson(input.payload),
+            requiresConfirmation: input.requiresConfirmation ?? true,
+            status: 'SCHEDULED',
+            idempotencyKey: replayKey,
+          },
+        }),
+    });
+    return toScheduledTaskView(replayed);
   }
 
   const row = await scheduledTasks.createScheduledTask({

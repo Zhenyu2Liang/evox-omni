@@ -96,6 +96,54 @@ export async function claimTaskStatus(
   return result.count === 1;
 }
 
+/**
+ * Exactly-once claim of the PLAN executor slot for `taskId`.
+ *
+ * A SINGLE atomic `updateMany` stamps `executionToken = token` / `executionClaimedAt = now`
+ * ONLY WHERE the row is currently unclaimed (`executionToken IS NULL`) or, when `opts.staleBefore`
+ * is supplied, its `executionClaimedAt` is older than that instant (a stale-claim takeover).
+ * Returns `true` iff exactly one row was updated (this caller won); a concurrent claimant
+ * transitions 0 rows and returns `false`.
+ *
+ * Fail-safe: when `opts.staleBefore` is NOT supplied only an unclaimed (token NULL) row is
+ * claimable. A row whose token is set but whose `executionClaimedAt` is NULL is NOT reclaimable
+ * via the stale path — SQL `NULL < x` evaluates to NULL (not true), so the stale OR-branch never
+ * matches; such a row stays claimed until released by its owner.
+ */
+export async function claimTaskExecution(
+  taskId: string,
+  token: string,
+  opts?: { staleBefore?: Date },
+): Promise<boolean> {
+  const staleBefore = opts?.staleBefore;
+  const result = await prisma.agentTask.updateMany({
+    where: {
+      id: taskId,
+      OR: [
+        { executionToken: null },
+        ...(staleBefore ? [{ executionClaimedAt: { lt: staleBefore } }] : []),
+      ],
+    },
+    data: { executionToken: token, executionClaimedAt: new Date() },
+  });
+  return result.count === 1;
+}
+
+/**
+ * Release the PLAN executor claim for `taskId`, clearing the token ONLY where it is still this
+ * caller's `token`. A non-owner's token does not match, so nothing is released. The affected-row
+ * count is irrelevant, so this returns `void`.
+ */
+export async function releaseTaskExecution(
+  taskId: string,
+  token: string,
+): Promise<void> {
+  await prisma.agentTask.updateMany({
+    where: { id: taskId, executionToken: token },
+    data: { executionToken: null, executionClaimedAt: null },
+  });
+}
+
 export function createTaskNode(input: CreateTaskNodeInput): Promise<AgentTaskNode> {
   return prisma.agentTaskNode.create({
     data: {
@@ -150,6 +198,58 @@ export function updateTaskNodeStatus(
   return firstNodeId(taskId, nodeId).then((id) =>
     prisma.agentTaskNode.update({ where: { id }, data: { status } }),
   );
+}
+
+/**
+ * Exactly-once claim of the NODE executor slot addressed by the logical `(taskId, nodeId)` pair —
+ * the node-level analogue of `claimTaskExecution`.
+ *
+ * A SINGLE atomic `updateMany` stamps `executionToken = token` / `executionClaimedAt = now` ONLY
+ * WHERE the node is unclaimed (`executionToken IS NULL`) or, when `opts.staleBefore` is supplied,
+ * its `executionClaimedAt` is older than that instant (a stale-claim takeover). Returns `true` iff
+ * exactly one row was updated (this caller won).
+ *
+ * NOTE: `(taskId, nodeId)` is NOT a DB-unique pair, so this `updateMany` targets ALL rows matching
+ * the pair (normally exactly one). If a pair were ever duplicated more than one row would be
+ * claimed and the `count === 1` check would report the claim as lost. The same fail-safe note as
+ * `claimTaskExecution` applies: a set token with a NULL `executionClaimedAt` is not reclaimable via
+ * the stale path.
+ */
+export async function claimNodeExecution(
+  taskId: string,
+  nodeId: string,
+  token: string,
+  opts?: { staleBefore?: Date },
+): Promise<boolean> {
+  const staleBefore = opts?.staleBefore;
+  const result = await prisma.agentTaskNode.updateMany({
+    where: {
+      taskId,
+      nodeId,
+      OR: [
+        { executionToken: null },
+        ...(staleBefore ? [{ executionClaimedAt: { lt: staleBefore } }] : []),
+      ],
+    },
+    data: { executionToken: token, executionClaimedAt: new Date() },
+  });
+  return result.count === 1;
+}
+
+/**
+ * Release the NODE executor claim for the `(taskId, nodeId)` pair, clearing the token ONLY where it
+ * is still this caller's `token`. A non-owner's token does not match, so nothing is released. The
+ * affected-row count is irrelevant, so this returns `void`.
+ */
+export async function releaseNodeExecution(
+  taskId: string,
+  nodeId: string,
+  token: string,
+): Promise<void> {
+  await prisma.agentTaskNode.updateMany({
+    where: { taskId, nodeId, executionToken: token },
+    data: { executionToken: null, executionClaimedAt: null },
+  });
 }
 
 export function deleteTask(id: string): Promise<void> {

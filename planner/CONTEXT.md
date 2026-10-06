@@ -34,6 +34,8 @@ effect — tool execution, persistence, the clock, cross-request controls — is
 
 `executor.ts` — execution engine:
 - `PlanToolOutcome` — `{ ok; data?; summary?; error?; requiresConfirmation?; pendingActionId? }`.
+- `NodeExecutionContext` — `{ taskId; nodeId }` — the identity of the node a tool call belongs to,
+  threaded to `runTool` as its 3rd argument.
 - `PlanDeps` — ports (see below); `PlanControls` — `{ pause(); resume(); cancel(); retry(nodeId) }`.
 - `RunPlanOptions` — `{ signal?; now?; onControls?; explicitResume? }`. `explicitResume` (default
   `false`) is the ONLY way to re-drive a `'paused'` plan through `runPlan` directly (a bare
@@ -86,18 +88,29 @@ effect — tool execution, persistence, the clock, cross-request controls — is
 `index.ts` — barrel facade re-exporting the `dag`, `executor` and `lifecycle` namespaces plus the
 public functions/types (`buildPlan`, `transitiveDependents`, `isTerminalStatus`,
 `persistPlanSnapshot`, `persistPlanSnapshotGuarded`, `pausePlan`, `cancelPlan`, `retryPlan`,
-`resumePlan`, `compensationReport`, `GuardedPersistOptions`).
+`resumePlan`, `compensationReport`, `GuardedPersistOptions`, `NodeExecutionContext`).
 
 ## PlanDeps contract (agent ↔ planner boundary)
 
-- `runTool(toolName, args)` — supplied by the **agent layer** and MUST route through the Security
-  Gateway's `execute` path. Returns a `PlanToolOutcome`:
+- `runTool(toolName, args, ctx)` — supplied by the **agent layer** and MUST route through the Security
+  Gateway's `execute` path. `ctx: NodeExecutionContext = { taskId, nodeId }` is the node this call
+  belongs to (the agent passes `nodeExecutionKey(taskId, nodeId)` as its idempotency key). Returns a
+  `PlanToolOutcome`:
   - success → `{ ok:true, data, summary }` → node `success`;
   - failure → `{ ok:false, error }` → node `failed` (recorded, never thrown);
   - **gated** → `{ ok:false, requiresConfirmation:true, pendingActionId }` → the node does NOT
     execute; it parks in `waiting_confirmation` (plan → `waiting_confirmation`) and the
     `pendingActionId` is recorded on the node result. A **RED** node (spec `riskLevel:'RED'`) parks
     in `waiting_verification` instead. The plan resumes via `lifecycle.resumePlan`.
+- `claimNode?(taskId, nodeId, token)` / `releaseNode?(taskId, nodeId, token)` — OPTIONAL DB-atomic
+  per-node execution claim, supplied TOGETHER (the agent delegates to `claimNodeExecution` /
+  `releaseNodeExecution`). `runPlan` mints ONE claim token per invocation and claims a `kind:'tool'`
+  node BEFORE any write for it (condition/note nodes never claim). A lost claim ⇒ ZERO writes for
+  that node, the walk halts (dependents do not run, no cancel sweep), the node stays not-yet-settled
+  and the plan stays `running` (the final guarded snapshot write is skipped) — the owning executor
+  remains the single writer. The claim is ALWAYS released in `finally` (after success, park or
+  failure) so a later retry/resume/confirm re-drives the node. When `claimNode` is absent the
+  executor behaves exactly as without claiming; `status:'running'` is never used as the claim.
 - `onNodeUpdate(node)` — called on every status change; the agent forwards it to the client as the
   `plan_update` `AgentStreamEvent` (and the `plan` `ChatCard` carries the whole `TaskPlan`).
 - `persistNode?(planId, node)` — incremental snapshot write of ONE node change.
@@ -145,7 +158,8 @@ through the persistence ports, so state survives the request:
 - **Per-node checkpoint ordering** (`runPlan` main loop, `executor.ts`) — each loop iteration, in
   order: (1) `await checkpoint()` → `pollDurableControls()` → `deps.controls.pollControls(plan.id)`;
   (2) guards `stopRequested()` / `paused` break / retry rewind; (3) select `node = order[index]`;
-  (4) for a `kind:'tool'` node, `await runToolNode(node)` which does `setNode('running')` →
+  (4) for a `kind:'tool'` node, `await runToolNode(node)` which first CLAIMS the node (`deps.claimNode`, before any write; a
+  lost claim returns `'owned'` and halts the walk) then does `setNode('running')` →
   `await deps.runTool(...)` → `setNode(success|failed|parked)`. `setNode` records the result, then
   `onNodeUpdate`, then `persistNode` — it NEVER calls `persistPlan`. Consequence: a control persisted
   DURING node 'a' is not touched by 'a's completion writes (`persistNode` writes only the node row
@@ -170,7 +184,11 @@ through the persistence ports, so state survives the request:
 - **Resume** — `resumePlan` applies the human `PlanToolOutcome` to the gated node (success / re-park /
   failed) and continues the walk, which skips every already-successful node and runs only the
   now-unblocked dependents. On a `'paused'` plan without `explicitResume` the decision is recorded
-  but the plan stays `'paused'` and nothing advances.
+  but the plan stays `'paused'` and nothing advances. If the gated node is the plan's LAST node,
+  resume makes NO forward progress beyond deciding it: `resumePlan` resolves that node and `runPlan`
+  then finds every node terminal (no tool re-runs), while a re-park returns WITHOUT entering `runPlan`.
+  So a resume only demonstrates "remaining nodes ran" when at least one node FOLLOWS the gated node
+  (or pending nodes remain after a pause).
 - **Cancelled is terminal for the controls** — `pausePlan` / `cancelPlan` / `retryPlan` return a
   `'cancelled'` plan UNCHANGED (no writes, no resets, `runPlan` never entered), so no control call
   can move it back to a non-terminal state. `'success'`/`'failed'` are NOT guarded this way:
@@ -206,7 +224,8 @@ reported as `paused` — a NON-terminal, resumable status (cancel/park remain te
 
 ## Constraints
 
-- Pure DAG logic. Imports only `lib/contracts/task` + `lib/errors` + `lib/clock` — never
+- Pure DAG logic. Imports only `lib/contracts/task` + `lib/errors` + `lib/clock` + `lib/ids`
+  (`newId` for the per-run claim token) — never
   banking-sdk / security / agent / audit / prisma.
 - Inject all side effects via `PlanDeps`; inject `now` via `RunPlanOptions.now` /
   `BuildPlanInput.now` so agent + planner tests run offline and deterministically (`LLM_MODE=mock`).
@@ -237,5 +256,5 @@ rendered to the user is the `TaskPlan` snapshot delivered via the `plan_update` 
 - `../lib/db/repositories/task.ts` → AgentTask/AgentTaskNode persistence used by `deps.persist`
   (sibling — read-only, escalate writes to `./lib`)
 - `../tests/unit/planner/` → planner unit specs (sibling — read-only, escalate writes to `./tests`):
-  `dag.test.ts`, `executor.test.ts`, `lifecycle.test.ts`. This node has NO local test file and NO
+  `dag.test.ts`, `executor.test.ts`, `executor-claim-scope.test.ts`, `lifecycle.test.ts`. This node has NO local test file and NO
   scoped vitest config — the specs live in that sibling tree (run `npx vitest run tests/unit/planner`).

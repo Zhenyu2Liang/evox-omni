@@ -19,6 +19,16 @@ export interface CreatePendingActionInput {
   userRequest?: string;
   /** Derived intent label persisted for audit. */
   intent?: string;
+  /**
+   * Owning plan (`AgentTask.id`), persisted AT CREATION so a plan-level cancel can revoke every
+   * operation belonging to the plan. `null` (absent) for actions created outside the planner.
+   */
+  taskId?: string;
+  /**
+   * Owning node (`AgentTaskNode.nodeId`), persisted AT CREATION alongside `taskId`.
+   * `null` (absent) for actions created outside the planner.
+   */
+  nodeId?: string;
 }
 
 export interface CreateMfaChallengeInput {
@@ -48,6 +58,13 @@ export interface PendingActionOwnership {
   status: string;
 }
 
+/** Plan-link view of a `PendingAction`: the owning plan/node it was created under (if any). */
+export interface PendingActionPlanLink {
+  id: string;
+  taskId: string | null;
+  nodeId: string | null;
+}
+
 const DEFAULT_LIMIT = 100;
 
 export function createPendingAction(
@@ -65,6 +82,8 @@ export function createPendingAction(
       status: input.status ?? 'pending',
       userRequest: input.userRequest ?? null,
       intent: input.intent ?? null,
+      taskId: input.taskId ?? null,
+      nodeId: input.nodeId ?? null,
     },
   });
 }
@@ -91,6 +110,44 @@ export function listPendingActions(query: {
     orderBy: { createdAt: 'desc' },
     take: query.limit ?? DEFAULT_LIMIT,
   });
+}
+
+/**
+ * Plan-scoped enumeration: EVERY `PendingAction` belonging to the plan `taskId`, optionally
+ * narrowed to a set of `statuses`. Returned oldest-first (`createdAt` asc) so the plan's actions
+ * read in creation order. Because this is a plan-scoped listing (not a time-series page) it takes
+ * no `take` limit.
+ */
+export function listPendingActionsByTask(
+  taskId: string,
+  opts?: { statuses?: string[] },
+): Promise<PendingAction[]> {
+  return prisma.pendingAction.findMany({
+    where: {
+      taskId,
+      ...(opts?.statuses?.length ? { status: { in: opts.statuses } } : {}),
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+}
+
+/**
+ * Bulk plan-level revocation: cancels EVERY `PendingAction` of the plan `taskId` whose status is
+ * currently in `fromStatuses`, returning the number of rows transitioned.
+ *
+ * Race-safe by construction — implemented as a SINGLE atomic `updateMany` statement, so a
+ * concurrent claim of one of the actions simply is not matched (it no longer has a status in
+ * `fromStatuses`) and the two operations cannot interleave.
+ */
+export async function revokePendingActionsByTask(
+  taskId: string,
+  fromStatuses: string[],
+): Promise<number> {
+  const result = await prisma.pendingAction.updateMany({
+    where: { taskId, status: { in: fromStatuses } },
+    data: { status: 'cancelled' },
+  });
+  return result.count;
 }
 
 export function updatePendingActionStatus(
@@ -142,6 +199,21 @@ export function getPendingActionOwnership(
   return prisma.pendingAction.findUnique({
     where: { id: actionId },
     select: { id: true, userId: true, sessionId: true, status: true },
+  });
+}
+
+/**
+ * Plan-link reader: the `taskId` / `nodeId` a `PendingAction` was created under, used to resolve
+ * the owning plan/node of an action (e.g. to resume a blocked DAG node). A `select` projection;
+ * returns `null` when the action does not exist. Sibling of `getPendingActionOwnership` — kept
+ * separate so that reader's projection stays minimal.
+ */
+export function getPendingActionPlanLink(
+  actionId: string,
+): Promise<PendingActionPlanLink | null> {
+  return prisma.pendingAction.findUnique({
+    where: { id: actionId },
+    select: { id: true, taskId: true, nodeId: true },
   });
 }
 

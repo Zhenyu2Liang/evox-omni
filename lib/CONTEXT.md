@@ -31,10 +31,12 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   `new Date(demoNow(override))`.
 - `json.ts` — SQLite JSON-text column helpers: `safeParse<T>(text, fallback)` (returns `fallback` for
   null/undefined/empty/invalid JSON) and `toJson(value)` (`'null'` when value is `undefined`).
-- `ledger.ts` — `idempotentTransferTxId(userId, idempotencyKey)`: the canonical deterministic transfer-ledger id,
+- `ledger.ts` — deterministic idempotency keys: `idempotentTransferTxId(userId, idempotencyKey)` is the canonical transfer-ledger id,
   `txidem_` + the first 32 hex chars of `sha256("<userId>\u0000<idempotencyKey>")`.
   It is the single source of truth that LINKS a gated transfer `PendingAction` to the ledger `Transaction` row it produces:
   the Banking SDK derives that row's primary key from it (supplying an idempotency key makes a repeat transfer at-most-once — a repeat replays the original row instead of double-debiting), and `security/` uses it to EXCLUDE already-ledgered in-flight actions from the cumulative daily-transfer total.
+  `nodeExecutionKey(taskId, nodeId)` is the stable per-(`taskId`, `nodeId`) idempotency key for a plan node's SIDE EFFECT (format `nxe:<taskId>:<nodeId>`).
+  Two runs of the same (task, node) dedupe to the same key, while a different plan (`taskId`) never collides.
 - `contracts/` — the FROZEN cross-module type definitions (see routing table below).
 - `db/` — Prisma client singleton + per-aggregate repositories (the only data-access layer).
 - `index.ts` — convenience barrel re-exporting `contracts`, `errors`, `money`, `config`, `constants`,
@@ -75,7 +77,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/date.ts` → pure local-timezone date-range/format helpers.
 - `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
-- `./lib/ledger.ts` → canonical deterministic transfer-ledger id (`idempotentTransferTxId`).
+- `./lib/ledger.ts` → deterministic idempotency keys — transfer-ledger id (`idempotentTransferTxId`) and per-(plan,node) node side-effect key (`nodeExecutionKey`).
 - `./lib/index.ts` → convenience barrel for `@/lib` imports (no `db`).
 
 ## Status
@@ -86,8 +88,13 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 ## Notes for Agents
 
 - If you need a value that every layer shares (limit, threshold, code), add it to `constants.ts`, not locally.
+- The DB target is chosen **only** by `process.env.DATABASE_URL` (read at module load by
+  `lib/db/client.ts` → `resolveDatabaseUrl()`), with a cwd-based `prisma/dev.db` fallback — there is **no
+  dotenv in `lib`** (implicit `.env` loading comes from Next.js's dev/build env loader or the Prisma CLI).
+  Setting an absolute `file:` `DATABASE_URL` in a child process's env is the supported way to redirect both
+  the Prisma CLI and the runtime client to an isolated SQLite file. See `lib/db/CONTEXT.md`.
 - Never import `prisma` outside `lib/db/repositories/**` — go through a repository.
 - When adding a repository aggregate, keep one module per aggregate and register it in
   `lib/db/repositories/index.ts`.
 - The `AgentTaskNode.pendingActionId` DAG-resume column is missing from the frozen schema — see
-  `lib/db/repositories/CONTEXT.md` `## Known Issues` for the exact `prisma/schema.prisma` addition needed.
+  `lib/db/repositories/CONTEXT.md` `## Known Issues`; the plan↔operation link is instead persisted on `PendingAction.taskId`/`nodeId` and read back via `getPendingActionPlanLink`/`listPendingActionsByTask`.
