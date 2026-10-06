@@ -1,9 +1,0 @@
-﻿
-    + FullyQualifiedErrorId : NativeCommandError
-DBPUSH_EXIT=0
-SEED_EXIT=0
-    + FullyQualifiedErrorId : NativeCommandError
- ✓ Compiled successfully in 5.2s
-BUILD_EXIT=0
-
-
