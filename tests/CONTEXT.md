@@ -59,7 +59,11 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   (chat/SSE, action confirm|verify|cancel, task lifecycle, and `review-regressions-http.test.ts`
   reviewer regressions) plus the newer regression specs (`session-takeover-http`, `cancel-during-
   authorization-http`, `task-resume-retry-http`, `plan-pause-terminal-http`, `cumulative-risk-http`,
-  `ledger-consistency-http`, `mfa-escalation-upgrade-http`, and the round-5a linkage/concurrency specs `plan-linkage-http`, `cancel-safety-http`, `concurrent-execution-http`). See `app/CONTEXT.md`.
+  `ledger-consistency-http`, `mfa-escalation-upgrade-http`, the round-5a linkage/concurrency specs
+  `plan-linkage-http`, `cancel-safety-http`, `concurrent-execution-http`, and the confirm-continuation
+  fence-loss coverage `confirm-continuation-fencing` (LIVE plan-owner-token branch) +
+  `confirm-continuation-no-owner-fencing` (NO-OWNER branch-3 CAS, incl. a takeover-during-write skip)).
+  See `app/CONTEXT.md`.
 - `review-boundaries.test.ts`, `review-concurrency.test.ts` & `review-new-boundaries.test.ts` — root-level `[integration]` reviewer-reference ports (real route handlers + gateway/executor + controllable barriers): plan/node linkage, cancel safety, exactly-once concurrent execution, de-dup scope, ledgered-but-not-terminal cumulative-risk exactness, no double-debit across the effect/persist window, and revoke-on-cancel-before-CAS. See the Routing Table entries below.
 
 Run:
