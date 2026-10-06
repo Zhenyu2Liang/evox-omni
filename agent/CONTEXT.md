@@ -336,6 +336,20 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   when both are present) — NEVER by `sessionId`+tool+args alone, so two INDEPENDENT plans with identical
   tool+args run independently; a STANDALONE call (no plan node) is executed directly. The DB
   (`PendingAction` status CAS + `nodeExecutionKey` SDK idempotency) is the at-most-once authority.
+- **A crashed executor's orphaned execution claim is reclaimable via a TTL stale horizon.**
+  `claimTaskExecution`/`claimNodeExecution` (`lib/db/repositories/task.ts`) stamp `executionClaimedAt` with
+  the REAL wall clock and their owner releases the token in a `finally`; a process that CRASHES before that
+  `finally` would otherwise leave the token set forever — wedging the plan `'running'`/unresumable and its
+  nodes unclaimable. So EVERY claim taken from `task-control.ts` passes
+  `{ staleBefore: staleExecutionClaimBefore() }` (= `new Date(Date.now() - EXECUTION_CLAIM_TTL_MS)`, TTL =
+  10 min): the atomic CAS may additionally match a row whose `executionClaimedAt` is older than that
+  horizon, i.e. a claim whose owner has plausibly died. Two racing takeovers still yield exactly ONE winner
+  (the winner re-stamps a fresh `executionClaimedAt`, so the loser's `updateMany` re-evaluates against the
+  new timestamp and matches 0 rows); a legitimately RUNNING executor is never preempted (its fresh
+  `executionClaimedAt` is nowhere near the horizon); and an old owner's `release*` is a token-guarded no-op.
+  The horizon is derived from the REAL clock (`Date.now()`), NEVER the demo clock (`demoNow()` pinned to
+  2026-09-25), because `executionClaimedAt` uses the real clock. `resumeTask`/`retryTask` pass it to
+  `claimTaskExecution`; `buildPlanDeps`'s `claimNode` passes it to `claimNodeExecution`.
 - **Pause retains.** When `resumeTaskForAction` sees the owning plan `'paused'`, it records the decided
   node and does NOT advance. TWO belts hold it: (a) `lifecycle.resumePlan` returns early with
   `status:'paused'` whenever `explicitResume !== true` (`stillPaused`) — and `resumeTaskForAction`
