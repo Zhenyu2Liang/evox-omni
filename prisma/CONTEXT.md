@@ -24,7 +24,8 @@ Prisma models (see `schema.prisma` for exact fields):
   scheduledTasks, auditLogs, securityEvents.
 - `Account` / `Transaction` — checking/savings balances and ledger (signed `amount`, anomaly flags).
 - `Contact`, `Card` + `CardLimit`, `Subscription`, `Budget` (`idempotencyKey` unique — plan-replay key).
-- `InvestmentProduct` / `InvestmentHolding` — products and user holdings.
+- `InvestmentProduct` / `InvestmentHolding` — products and user holdings (`InvestmentHolding` carries
+  `idempotencyKey` unique — plan-replay key).
 - `AgentTask` / `AgentTaskNode` — planner task DAG (nodes store `args`/`output`/`dependencies` as JSON
   text). Both carry `executionToken` + `executionClaimedAt` — the DB-level exactly-once execution claim.
 - `ScheduledTask` — future reminders/payments/transfers (`idempotencyKey` unique — plan-replay key).
@@ -72,10 +73,11 @@ All new fields below are **optional/nullable**, so existing rows and tests keep 
   `AgentTaskNode.executionToken`/`executionClaimedAt` claim a single node's side effect (so concurrent
   executors cannot double-execute a node). The winning executor sets a unique token; a concurrent
   executor that cannot claim it must NOT run. `NULL` = unclaimed.
-- **Plan-replay keys** — `Budget.idempotencyKey` and `ScheduledTask.idempotencyKey` are `@unique`; the
-  value is `<planId>:<nodeId>`, so a REPLAYED plan node replays its existing reservation/scheduled task
-  instead of duplicating it. SQLite allows multiple `NULL`s in a UNIQUE index, so rows created outside
-  the planner (and all pre-existing rows) are unaffected.
+- **Plan-replay keys** — `Budget.idempotencyKey`, `ScheduledTask.idempotencyKey` and
+  `InvestmentHolding.idempotencyKey` are `@unique`; the value is `<planId>:<nodeId>`, so a REPLAYED
+  plan node replays its existing reservation/scheduled task/holding instead of duplicating it. SQLite
+  allows multiple `NULL`s in a UNIQUE index, so rows created outside the planner (and all pre-existing
+  rows) are unaffected.
 - **Plan-level revocation** — `PendingAction.taskId`/`nodeId` (nullable) persist the owning plan
   (`AgentTask.id`) + node (`AgentTaskNode.nodeId`) at CREATION, so a plan-level cancel can revoke EVERY
   associated operation even when the node's `output` JSON was never written / was overwritten.

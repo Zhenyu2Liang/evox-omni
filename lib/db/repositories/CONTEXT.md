@@ -5,10 +5,18 @@
 One module per aggregate. Each exports narrow, typed async functions over the shared `prisma` singleton
 (`../client`). This is the single data-access surface for the whole app; all reads/writes funnel through here.
 
+`pendingAction.ts` is **transaction-composable**: EVERY function in it takes an optional trailing
+`client: Prisma.TransactionClient = prisma`, so a caller can route several of its calls through ONE
+`prisma.$transaction` handle. The default keeps every existing caller working unchanged. This exists so a
+plan-level cancel and a concurrent authorization CAS can be composed into a single transaction and cannot
+interleave. All other repository modules use the shared singleton only.
+
 ## API Surface
 
 Model return types come from `@prisma/client`. JSON-text columns are stored/parsed with `lib/json`.
 All functions below are implemented (real Prisma data access).
+The trailing optional `client?` parameter is documented only for `pendingAction.ts` — the aggregate
+that accepts one.
 
 - `user.ts` (`User`) — `getUser(id)`, `getUserByPhone(phone)`, `listUsers()`,
   `createUser({id?, name, phone, avatarEmoji?})`, `updateUser(id, {name?, avatarEmoji?})`.
@@ -83,26 +91,31 @@ All functions below are implemented (real Prisma data access).
   `null` when absent),
   `CreateMfaChallengeInput {actionId, code, maxAttempts?, expiresAt?}`,
   `ClaimPendingActionInput {actionId, from: PendingActionStatus[], to: PendingActionStatus, userId?, sessionId?}`;
-  `createPendingAction(input)`, `getPendingAction(id)` (`mfa` included), `listPendingActions({sessionId?, status?, limit?})`,
-  `updatePendingActionStatus(id, status)` (unconditional setter),
-  `setPendingActionStatus(actionId, status)` (alias of `updatePendingActionStatus` — persist a terminal state
-  `'executed'`/`'failed'` after a claim),
-  `claimPendingAction(input): Promise<boolean>` — the ATOMIC exactly-once claim gate: a SINGLE
+  EVERY function here also takes an optional trailing `client: Prisma.TransactionClient = prisma` (default = the
+  shared singleton) that routes ALL of that call's DB access through the supplied client — the transaction-composability
+  surface described in `## Intent`;
+  `createPendingAction(input, client?)`, `getPendingAction(id, client?)` (`mfa` included),
+  `listPendingActions({sessionId?, status?, limit?}, client?)`,
+  `updatePendingActionStatus(id, status, client?)` (unconditional setter),
+  `setPendingActionStatus(actionId, status, client?)` (alias of `updatePendingActionStatus` — persist a terminal
+  state `'executed'`/`'failed'` after a claim),
+  `claimPendingAction(input, client?): Promise<boolean>` — the ATOMIC exactly-once claim gate: a SINGLE
   `updateMany` CAS moving `status` from any of `from` to `to`, optionally scoped to the row's `userId`/`sessionId`;
-  returns `true` iff exactly one row transitioned (a second/concurrent claim returns `false`),
-  `getPendingActionOwnership(actionId): Promise<PendingActionOwnership | null>` (id/userId/sessionId/status
+  returns `true` iff exactly one row transitioned (a second/concurrent claim returns `false`). Supplying `client`
+  only re-targets the statement — it stays a single `updateMany`, never a read-modify-write,
+  `getPendingActionOwnership(actionId, client?): Promise<PendingActionOwnership | null>` (id/userId/sessionId/status
   projection for authorizing a caller; `null` when the action is absent),
-  `getPendingActionPlanLink(actionId): Promise<PendingActionPlanLink | null>` (id/taskId/nodeId projection — the
-  owning plan/node the action was created under; `null` when the action is absent; a sibling of
+  `getPendingActionPlanLink(actionId, client?): Promise<PendingActionPlanLink | null>` (id/taskId/nodeId projection —
+  the owning plan/node the action was created under; `null` when the action is absent; a sibling of
   `getPendingActionOwnership`, whose minimal projection is kept unchanged),
-  `listPendingActionsByTask(taskId, {statuses?}?): Promise<PendingAction[]>` — plan-scoped enumeration of EVERY
-  action belonging to a plan, optionally narrowed by status, ordered oldest-first by `createdAt` (no `take` limit),
-  `revokePendingActionsByTask(taskId, fromStatuses: string[]): Promise<number>` — bulk plan-level revocation: a
+  `listPendingActionsByTask(taskId, {statuses?}?, client?): Promise<PendingAction[]>` — plan-scoped enumeration of
+  EVERY action belonging to a plan, optionally narrowed by status, ordered oldest-first by `createdAt` (no `take` limit),
+  `revokePendingActionsByTask(taskId, fromStatuses: string[], client?): Promise<number>` — bulk plan-level revocation: a
   SINGLE atomic `updateMany` cancelling EVERY action of the plan whose current status is in `fromStatuses`,
   returning the number of rows transitioned,
-  `createMfaChallenge(input)` (`maxAttempts` default 3),
-  `getMfaChallenge(actionId)`, `incrementMfaAttempts(actionId)`, `updateMfaChallengeStatus(actionId, status)`,
-  `resetMfaAttempts(actionId)` (sets `attempts` 0).
+  `createMfaChallenge(input, client?)` (`maxAttempts` default 3),
+  `getMfaChallenge(actionId, client?)`, `incrementMfaAttempts(actionId, client?)`,
+  `updateMfaChallengeStatus(actionId, status, client?)`, `resetMfaAttempts(actionId, client?)` (sets `attempts` 0).
 - `index.ts` — namespace barrel: `users, accounts, transactions, contacts, cards, subscriptions, investments, budgets, tasks, scheduledTasks, auditLogs, securityEvents, sessions, pendingActions`.
 
 ## JSON-text columns (serialize with `toJson` / parse with `safeParse`)
@@ -116,6 +129,10 @@ All functions below are implemented (real Prisma data access).
 - Input DTOs live in the module that owns them; reuse `lib/contracts` types (`RiskLevel`,
   `PendingActionSummary`, `PendingActionStatus`, `TaskCondition`, `AuditEntry`, `SecurityEvent`) instead of redefining them.
 - No risk/permission logic — repositories are dumb persistence only.
+- `pendingAction.ts` is the ONE aggregate whose functions take the optional trailing
+  `client: Prisma.TransactionClient = prisma`; the default must stay the `../client` singleton so existing
+  callers compile and behave identically. This parameter exists purely to compose the cancel/authorize flow
+  into one transaction — never replace a `claim*`/`revoke*` CAS with a read-modify-write to achieve it.
 - Keep one aggregate per file; ≲ ~1000 lines.
 
 ## Known Issues
@@ -140,7 +157,7 @@ All functions below are implemented (real Prisma data access).
 - `./auditLog.ts` → AuditLog
 - `./securityEvent.ts` → SecurityEvent
 - `./session.ts` → AgentSession
-- `./pendingAction.ts` → PendingAction + MfaChallenge (+ plan-scoped `listPendingActionsByTask` / `revokePendingActionsByTask` and the `getPendingActionPlanLink` reader)
+- `./pendingAction.ts` → PendingAction + MfaChallenge (+ plan-scoped `listPendingActionsByTask` / `revokePendingActionsByTask`, the `getPendingActionPlanLink` reader, and the optional-`client` transaction-composable variants of every function)
 - `./index.ts` → namespace barrel
 
 ## Notes for Agents
@@ -160,6 +177,10 @@ All functions below are implemented (real Prisma data access).
   are blind unconditional `update`s that would happily regress a terminal (`cancelled`/`success`) row.
   Never use a plain setter for a transition that must respect terminal state — use the `claim*` CAS with a
   non-terminal `from` (a status not in `from` matches 0 rows → returns `false`).
+- Transaction composability (`pendingAction.ts` only): pass `client` to the readers / setters / CAS so several
+  calls become atomic together, e.g.
+  `prisma.$transaction(tx => { revokePendingActionsByTask(taskId, ['pending'], tx); return claimPendingAction(input, tx); })`.
+  Supplying `client` never changes any function's semantics — the CAS gates stay single-statement `updateMany`s.
 - Node execution claims ARE supported (`claimNodeExecution`/`releaseNodeExecution`) in addition to the PARENT
   `AgentTask` claim (`claimTaskStatus`/`claimTaskExecution`); the stale-takeover path (`staleBefore`) only
   matches rows whose `executionClaimedAt` is non-NULL and older, so a set token with a NULL `executionClaimedAt`
