@@ -1,0 +1,121 @@
+﻿
+> ai-banking-agent@1.0.0 db:push
+> tsx scripts/db-push.ts
+
+node.exe : warn The configuration property `package.json#prisma` is deprecated and will be removed in Prisma 7. Please 
+migrate to a Prisma config file (e.g., `prisma.config.ts`).
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warn The config...ma.config.ts`).:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+For more information, see: https://pris.ly/prisma-config
+
+Environment variables loaded from .env
+Prisma schema loaded from prisma\schema.prisma
+Datasource "db": SQLite database "dev.db" at "file:./dev.db"
+
+SQLite database dev.db created at file:./dev.db
+
+Your database is now in sync with your Prisma schema. Done in 9.84s
+
+Running generate... (Use --skip-generate to skip the generators)
+[2K[1A[2K[GRunning generate... - Prisma Client
+[2K[1A[2K[G✔ Generated Prisma Client (v6.19.3) to .\..\..\..\node_modules\@prisma\client i
+n 88ms
+
+DBPUSH_EXIT=0
+
+> ai-banking-agent@1.0.0 db:seed
+> tsx prisma/seed.ts
+
+
+Seed complete. Row counts per table:
+  User                 1
+  Account              2
+  Transaction          30
+  Contact              4
+  Card                 2
+  CardLimit            1
+  Subscription         4
+  InvestmentProduct    4
+  InvestmentHolding    1
+  Budget               1
+  ScheduledTask        2
+  AuditLog             0
+  SecurityEvent        0
+  AgentSession         0
+  AgentTask            0
+  AgentTaskNode        0
+  PendingAction        0
+  MfaChallenge         0
+SEED_EXIT=0
+
+> ai-banking-agent@1.0.0 build
+> next build
+
+node.exe :  ⚠ Warning: Next.js inferred your workspace root, but it may not be correct.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ( ⚠ Warning: Nex...not be correct.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ We detected multiple lockfiles and selected the directory of D:\projects\banking-agent\package-lock.json as the root d
+irectory.
+ To silence this warning, set `outputFileTracingRoot` in your Next.js config, or consider removing one of the lockfiles
+ if it's not needed.
+   See https://nextjs.org/docs/app/api-reference/config/next-config-js/output#caveats for more information.
+ Detected additional lockfiles: 
+   * D:\projects\banking-agent\.genesis\workers\worker_T1_A1\package-lock.json
+
+   ▲ Next.js 15.5.26
+   - Environments: .env
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully in 5.2s
+   Linting and checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/21) ...
+   Generating static pages (5/21) 
+   Generating static pages (10/21) 
+   Generating static pages (15/21) 
+ ✓ Generating static pages (21/21)
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                 Size  First Load JS
+┌ ○ /                                      297 B         233 kB
+├ ○ /_not-found                            999 B         104 kB
+├ ƒ /agent                                 289 B         229 kB
+├ ƒ /api/actions                           158 B         103 kB
+├ ƒ /api/actions/[id]/cancel               158 B         103 kB
+├ ƒ /api/actions/[id]/confirm              158 B         103 kB
+├ ƒ /api/actions/[id]/verify               158 B         103 kB
+├ ƒ /api/audit                             158 B         103 kB
+├ ƒ /api/bills                             158 B         103 kB
+├ ƒ /api/cards                             158 B         103 kB
+├ ƒ /api/chat                              158 B         103 kB
+├ ƒ /api/dashboard                         158 B         103 kB
+├ ƒ /api/health                            158 B         103 kB
+├ ƒ /api/security                          158 B         103 kB
+├ ƒ /api/security/reset                    158 B         103 kB
+├ ƒ /api/subscriptions                     158 B         103 kB
+├ ƒ /api/tasks                             158 B         103 kB
+├ ƒ /api/tasks/[id]                        158 B         103 kB
+├ ƒ /audit                                 289 B         229 kB
+├ ƒ /bills                                 289 B         229 kB
+├ ○ /cards                                 297 B         233 kB
+├ ƒ /security                              985 B         104 kB
+└ ○ /subscriptions                         289 B         229 kB
++ First Load JS shared by all             103 kB
+  ├ chunks/0937d497-e8fb6c57833bcd75.js  54.2 kB
+  ├ chunks/89-45166ab315d7fa1a.js        46.6 kB
+  └ other shared chunks (total)          2.05 kB
+
+
+○  (Static)   prerendered as static content
+ƒ  (Dynamic)  server-rendered on demand
+
+BUILD_EXIT=0
