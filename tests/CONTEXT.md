@@ -25,8 +25,9 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   schema when the schema version changes through the shared ORDERED provisioning LADDER
   (`helpers/prisma-cli.ts#provisionSchemaLadder`) whose PRIMARY rung is the byte-for-byte
   `prisma db push --force-reset --skip-generate`, falling back ADDITIVELY (only after a failure) to
-  `db push --skip-generate` then a flag-less `db push` (clean-checkout hardening for the opaque
-  `Error: Schema engine error:`). The guard
+  `db push --skip-generate` then a flag-less `db push` (clean-checkout hardening for genuine
+  invocation-shape differences — the `Error: Schema engine error:` root cause is the engine log-level
+  pin, see **Known Issues**). The guard
   **marker** (`prisma/.test-db-provisioned`) stores the **sha1 of `prisma/schema.prisma`** (written
   atomically via temp-file + rename); provisioning is skipped ONLY when the marker's hash equals the
   current schema hash AND `test.db` exists — so a stale `test.db` (provisioned before a schema
@@ -47,8 +48,11 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   `ProvisionSchemaOptions`), `diagnosticCliOutput`, `prismaClientUsable`/`prismaClientGenerated`,
   `runPrismaGenerate`, `ensurePrismaClientGenerated` — its readiness gate keys on the USABILITY probe
   `prismaClientUsable` (the client that will actually be `require`d), NOT the worktree-local
-  artifact-path proxy `prismaClientGenerated`). NOT in the `helpers/index.ts` barrel — specs must not
-  import it.
+  artifact-path proxy `prismaClientGenerated`). It ALSO owns the schema-engine **log-level policy**
+  (`SCHEMA_ENGINE_RUST_LOG` + `pinSchemaEngineLogging`, called at module load by `setup.ts` and
+  `e2e/helpers.ts`; the per-spawn sanitization lives in `runCliStepCaptured`/`provisionDiagnostics`
+  and `isMaskedSchemaEngineError` explains an empty `Schema engine error:` — see **Known Issues**).
+  NOT in the `helpers/index.ts` barrel — specs must not import it.
 - `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs. See `unit/CONTEXT.md`.
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
 - `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
@@ -69,8 +73,10 @@ Run:
 
 ### Prerequisites
 
-- `npm install`, then **`npx prisma generate`** before any spec imports `@prisma/client`
-  (e.g. `lib/db/client`, `banking-sdk`) — `setup.ts` pushes the schema with `--skip-generate` on purpose.
+- `npm install` is enough for a normal run: `setup.ts` self-bootstraps a usable Prisma Client
+  (`helpers/prisma-cli.ts#ensurePrismaClientGenerated`) and pushes the schema with `--skip-generate`
+  on purpose — see "Clean-env bootstrap". Run **`npx prisma generate`** manually only for a run that
+  skips setup (`VITEST_SKIP_DB_SETUP=1`) or before `tsc`/`next build`.
 - `vitest.config.ts` (root-owned) wires `setupFiles: ['tests/setup.ts']` + `env: { LLM_MODE: 'mock' }`
   and sets `fileParallelism: false` + `hookTimeout: 60000`, so files run sequentially against the ONE
   shared `prisma/test.db` — a plain `npm run test` is deterministic (no manual flag needed).
@@ -168,10 +174,26 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   maps `CIRCUIT_OPEN`→423 but nothing throws it (a tripped breaker returns a domain `status:'locked'`
   as HTTP 200); the SSE `error`-then-`done` path is only exercised by `unit/agent/run-turn-failure.test.ts`.
   See `app/CONTEXT.md`.
+- **The schema engine's INFO banner must never be suppressed (`RUST_LOG`).** Prisma parses the schema
+  engine's stderr as `split(/\r?\n/).slice(1)` — it DROPS line 0, expecting the engine's banner
+  (`{"level":"INFO",…,"target":"schema_engine"}`) to be there. The CLI spawns the engine with
+  `env: { RUST_LOG: 'info', …process.env }`, so an AMBIENT `RUST_LOG` at/above `warn` OVERRIDES that
+  default: the banner vanishes, the engine's ERROR line (including the LEGITIMATE
+  `P1003 Database … does not exist` probe that `db push` relies on before creating a fresh SQLite
+  file) lands at index 0 and gets discarded too, and the CLI reports an EMPTY
+  `Error: Schema engine error:` — so a cold-checkout `db push` fails with no reason. The fix is
+  env sanitization, not a bigger ladder: `helpers/prisma-cli.ts` pins `SCHEMA_ENGINE_RUST_LOG = 'info'`,
+  `pinSchemaEngineLogging()` is called at module load by BOTH entry points (`tests/setup.ts`,
+  `tests/e2e/helpers.ts`) so this process and every child it spawns (Prisma CLI, schema engine,
+  `next dev`) inherit it, and `runCliStepCaptured` re-pins the level per spawn so even a caller passing
+  an explicit env object cannot re-introduce the suppression. `RUST_BACKTRACE` is only defaulted
+  (`?? '1'`), never overwritten. The ladder, the fail-loud throw and the absence of skip flags are
+  unchanged; `isMaskedSchemaEngineError` just explains a masked-empty engine error in the thrown
+  diagnostics if it ever recurs.
 
 ## Routing Table
 
-- `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + hash-aware schema provisioning through the shared ORDERED LADDER (`helpers/prisma-cli.ts#provisionSchemaLadder`; primary rung `prisma db push --force-reset --skip-generate`, then `db push --skip-generate`, then flag-less `db push`; re-pushes when the sha1 of `prisma/schema.prisma` changes; the DB file + sidecars are removed before every rung)
+- `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + a module-load `pinSchemaEngineLogging()` (forces `RUST_LOG=info`, see **Known Issues**) + hash-aware schema provisioning through the shared ORDERED LADDER (`helpers/prisma-cli.ts#provisionSchemaLadder`; primary rung `prisma db push --force-reset --skip-generate`, then `db push --skip-generate`, then flag-less `db push`; re-pushes when the sha1 of `prisma/schema.prisma` changes; the DB file + sidecars are removed before every rung)
 - `./helpers` → shared test utilities (db reset/seed + fast pragmas, fixtures, faux agent, scenario harness)
 - `./unit` → pure/logic unit specs for security, planner, banking-sdk, agent, lib (incl. `unit/security/risk-engine-dedup.test.ts` → ledger dedup of the in-flight transfer total via `computeInFlightTransferTotal`)
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
@@ -202,8 +224,10 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - **Provisioning FAILS LOUD.** Both `setup.ts` and `e2e/helpers.ts` provision through the shared
   `provisionSchemaLadder`, which drives each rung via `runCliStepCaptured` and, when EVERY rung fails,
   THROWS ONE error embedding every rung's FULL captured stdout+stderr (`diagnosticCliOutput`, tail
-  preserved) plus environment diagnostics (resolved `DATABASE_URL`, cwd, project-local Prisma CLI path,
-  a `prisma -v` version/engine summary, `node_modules/@prisma/engines/schema-engine*` presence) — never
+  preserved) plus environment diagnostics (resolved `DATABASE_URL`, the ambient vs the pinned
+  `RUST_LOG`, cwd, project-local Prisma CLI path, a `prisma -v` version/engine summary,
+  `node_modules/@prisma/engines/schema-engine*` presence, and an explicit
+  `isMaskedSchemaEngineError` hint for an empty `Schema engine error:`) — never
   a `console.warn`-and-continue, so the real cause can
   never be masked by a later `The table main.X does not exist in the current database.` cascade.
 - **All specs are implemented acceptance tests** (no `it.todo`). Keep them green; fix the seam
