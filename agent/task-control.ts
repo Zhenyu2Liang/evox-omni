@@ -57,7 +57,7 @@ import { security } from '@/security';
 import { recordSecurityEvent } from '@/audit';
 import { AppError, type ErrorCode } from '@/lib/errors';
 import { newId } from '@/lib/ids';
-import { safeParse } from '@/lib/json';
+import { safeParse, toJson } from '@/lib/json';
 import { prisma } from '@/lib/db/client';
 import { getSession } from '@/lib/db/repositories/session';
 import {
@@ -317,6 +317,11 @@ export function toTaskPlan(row: AgentTaskWithNodes): TaskPlan {
   };
 }
 
+/** The JSON-text `output` column value for a node result (mirrors the repository's mapping). */
+function jsonNodeOutput(node: TaskNodeResult): string | null {
+  return node.output === undefined || node.output === null ? null : toJson(node.output);
+}
+
 /** Map a planner `TaskNodeResult` to the repository's node-update payload (shared by both modes). */
 function toNodeUpdate(node: TaskNodeResult): UpdateTaskNodeInput {
   return {
@@ -335,11 +340,16 @@ function toNodeUpdate(node: TaskNodeResult): UpdateTaskNodeInput {
  * A run that loses its claim — its token was taken over through the stale-claim horizon, e.g. while
  * it was stuck inside a tool call — must NOT be able to write a late result OVER the takeover's: an
  * unfenced write would let that zombie executor clobber the winner's node/plan row. The fence lives
- * INSIDE the single `updateMany` statement, so the ownership check is atomic with the write.
+ * INSIDE the single `updateMany`/CAS statement, so the ownership check is atomic with the write.
  *
- * Omitting the tokens keeps the legacy UNFENCED behavior (`pauseTask`/`cancelTask` own no claim), and
- * it is what the planner's DECIDED-node writes rely on: those happen BEFORE the node is claimed, so
- * no node token is known for them.
+ * EXECUTOR writes carry a claim and are ALWAYS fenced: a node write first tries the NODE token, else
+ * the PLAN token (an inline `submit_plan` PlanDeps declares no `claimNode`, so its nodes have no node
+ * token). The token-conditioned statement is what stops a taken-over zombie from clobbering the winner.
+ *
+ * A write with NEITHER claim — a CONTROL path (`pauseTask`/`cancelTask`), or the confirm continuation
+ * when it LOST the plan claim — has no token to fence on and is persisted UNFENCED: the decided/
+ * terminal result must never be dropped. Every real executor pass carries a PLAN token, so this branch
+ * is reachable ONLY by those no-claim paths (see `persistNode`).
  */
 export interface TaskPersistenceOptions {
   /** The current PLAN execution claim token (`AgentTask.executionToken`) — fences `persistPlan`. */
@@ -390,20 +400,36 @@ export function createTaskPersistence(
     async persistNode(planId: string, node: TaskNodeResult): Promise<void> {
       const token = nodeToken?.(node.id);
       if (token !== undefined) {
-        // FENCED: ONE atomic write conditioned on this run still owning the NODE claim. `null` means
-        // the claim was taken over — the takeover's row stands and this zombie writes nothing.
+        // FENCED on the NODE claim: ONE atomic write conditioned on this run still owning it. `null`
+        // means the claim was taken over — the takeover's row stands and this zombie writes nothing.
         const written = await updateTaskNode(planId, node.id, toNodeUpdate(node), {
           fenceToken: token,
         });
         if (written === null) return;
         return;
       }
-      // UNFENCED (legacy): no node claim is known — a `submit_plan` inline PlanDeps, or a planner
-      // DECIDED-node write that happens BEFORE the node is claimed.
+      if (planToken !== undefined) {
+        // FENCED on the PLAN claim (an EXECUTOR write whose node has no NODE token — the `submit_plan`
+        // inline PlanDeps declares no `claimNode`): ONE atomic `updateMany` filtered by the PARENT task
+        // still carrying this run's claim token (`task: { executionToken: planToken }`), so a run whose
+        // plan claim was taken over writes NOTHING instead of clobbering the takeover's node row.
+        // `count === 0` ⇒ claim lost ⇒ skip (this zombie may not persist/narrate its stale result).
+        const res = await prisma.agentTaskNode.updateMany({
+          where: { taskId: planId, nodeId: node.id, task: { executionToken: planToken } },
+          data: { ...toNodeUpdate(node), output: jsonNodeOutput(node) },
+        });
+        if (res.count === 0) return;
+        return;
+      }
+      // NO claim to fence on: a CONTROL path (`pauseTask`/`cancelTask`) or the confirm continuation
+      // that LOST the plan claim. It must still persist the node's result — the human decision and the
+      // terminal outcome are never dropped — so it writes UNFENCED. A real executor pass ALWAYS
+      // carries a PLAN token, so this branch is unreachable from a zombie-executor path, which is
+      // exactly what the token fences above protect against.
       try {
         await updateTaskNode(planId, node.id, toNodeUpdate(node));
       } catch (error) {
-        // A plan built outside `submit_plan` has no node rows; that is not a persistence failure.
+        // A plan built outside `submit_plan` has no node rows; not a persistence failure.
         if (isMissingNodeError(error)) return;
         throw error; // every other failure surfaces — never swallowed
       }
@@ -569,6 +595,8 @@ export async function pauseTask(
     ...lifecycle.pausePlan(toTaskPlan(row), { now: opts.now }),
     status: 'paused',
   };
+  // CONTROL write: a pause owns no execution claim, so it passes NO claim token — `persistNode` then
+  // takes its UNFENCED no-claim branch and still records the node snapshot.
   await executor.persistPlanSnapshot(
     buildPlanDeps(taskId, { runTool: UNUSED_RUN_TOOL, now: opts.now }),
     paused,
@@ -813,6 +841,8 @@ export async function cancelTask(
   // THEN cancel the plan: already-`success` nodes keep their result (irreversible — executed work is
   // never pretended to be rolled back), every remaining non-terminal node becomes `cancelled`, and the
   // snapshot is persisted (its `'cancelled'` status write is idempotent with phase 2).
+  // CONTROL write: cancelling owns no execution claim, so it passes NO claim token — `persistNode`
+  // then takes its UNFENCED no-claim branch and still records the node `cancelled` results.
   const cancelled = await lifecycle.cancelPlan(
     toTaskPlan(row),
     buildPlanDeps(taskId, { runTool: UNUSED_RUN_TOOL, now: opts.now }),
@@ -931,12 +961,16 @@ export async function findTaskByPendingAction(
  * recording a node into a cancelled plan, which would let the planner's resume path resurrect it).
  *
  * EXECUTION CLAIM: the continuation first takes the plan's single DB execution claim
- * (`claimTaskExecution`, the same stale-horizon CAS `resumeTask`/`retryTask` use) and FENCES its
- * writes on it, so a run whose claim was taken over can never overwrite this continuation's result.
- * A LOST claim (a LIVE executor owns the plan) NEVER drops the human decision: the continuation still
- * records it through the legacy UNFENCED ports (see `resumeTaskForAction`'s body), because an
- * unrecorded decision would wedge the plan on a stale `waiting_confirmation` row for an action that
- * already executed.
+ * (`claimTaskExecution`, the same stale-horizon CAS `resumeTask`/`retryTask` use). When WON, its
+ * writes are FENCED on that claim (see `buildPlanDeps`) and the claim is released in the `finally`,
+ * exactly like any other executor pass. When LOST (a LIVE executor holds the plan right now), the
+ * decision is NOT dropped: the continuation still records the decided node and continues the plan
+ * through the UNFENCED ports (`buildPlanDeps(..., ownsPlan ? { planToken } : {})`), because the ONLY
+ * way the plan can leave a node parked on an action that this continuation just settled — with no
+ * executable action left — is for the decided node to be recorded here. That is safe: each node the
+ * walk reaches is still guarded by its per-node DB claim (`claimNode`) and the SDK `nodeExecutionKey`
+ * idempotency, so the side effect stays exactly-once, and the token-less fallback in `persistNode` is
+ * reachable ONLY by this no-claim path (a real executor/zombie always carries a PLAN token).
  *
  * PAUSE RETENTION: when the owning plan was explicitly PAUSED, this ONE decision must ONLY record
  * this node's result — it must NOT flip the plan to `'running'` and must NOT launch downstream nodes.
@@ -966,30 +1000,24 @@ export async function resumeTaskForAction(
   }
 
   // PLAN-level DB claim, exactly as `resumeTask`/`retryTask` take it: this continuation IS a real
-  // executor pass, so it should own the plan's single executor slot — and, just as importantly, its
-  // plan/node writes are FENCED on that claim (see `buildPlanDeps`) so a run it takes over can never
-  // clobber its result. The claim carries the same stale horizon (see `EXECUTION_CLAIM_TTL_MS`) and,
-  // when WON, is released in the `finally`.
+  // executor pass, so it takes the plan's single executor slot — and its plan/node writes are FENCED
+  // on that claim (see `buildPlanDeps`) when it OWNS it, so a run it takes over can never clobber its
+  // result. The claim carries the same stale horizon (see `EXECUTION_CLAIM_TTL_MS`) and, when WON, is
+  // released in the `finally`.
   const planToken = newId('taskclaim');
   const ownsPlan = await claimTaskExecution(located.taskId, planToken, {
     staleBefore: staleExecutionClaimBefore(),
   });
 
   try {
-    // A LOST claim means a LIVE executor owns the plan right now — but a human ALREADY decided this
-    // node, so the decision must still be recorded: dropping it would wedge the plan on a stale
-    // `waiting_confirmation` row whose action is already `executed` (and would lose the money
-    // outcome). The continuation therefore falls back to the legacy UNFENCED ports — the exact
-    // pre-claim behavior — instead of returning early. It is safe: the decided node becomes terminal
-    // before the walk continues, and every node the walk does reach is still guarded by the per-node
-    // DB claim (`claimNode`) and the SDK `nodeExecutionKey` idempotency, so the side effect stays
-    // exactly-once.
-    const baseDeps = buildPlanDeps(
-      located.taskId,
-      deps,
-      undefined,
-      ownsPlan ? { planToken } : {},
-    );
+    // The plan claim is OWNED ⇒ every write this continuation makes is FENCED on `planToken` (see
+    // `createTaskPersistence`) and a run it took over can never clobber its result. When the claim is
+    // LOST (a LIVE executor holds the plan right now) the continuation still records the decided node
+    // and continues the plan — but through UNFENCED ports — because dropping the decision would leave
+    // the node parked on an action this continuation just settled, i.e. unrecoverably stuck. The
+    // exactly-once guard is the per-node DB claim (`claimNode`) + the SDK `nodeExecutionKey`, never
+    // the plan claim.
+    const baseDeps = buildPlanDeps(located.taskId, deps, undefined, ownsPlan ? { planToken } : {});
     const planDeps: PlanDeps =
       row.status === 'paused' ? { ...baseDeps, controls: PAUSE_NOW_CONTROLS } : baseDeps;
 

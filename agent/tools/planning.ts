@@ -334,10 +334,11 @@ export async function runSubmitPlan(
         // observed at this run's next node checkpoint, so a LIVE plan really stops (the persisted
         // `AgentTask.status` is the source of truth — see `defaultPollControls`).
         controls: defaultPollControls(plan.id),
-        // FENCE this run's plan-status writes on the claim token it just took (see
+        // FENCE this run's writes on the claim token it just took (see
         // `createTaskPersistence`/`TaskPersistenceOptions`), so a run whose claim was taken over can
-        // never overwrite the takeover's plan row. The inline PlanDeps declares no `claimNode`, so
-        // node-result writes stay UNFENCED here (the submit run owns every node's first execution).
+        // never overwrite the takeover's plan or node row. This inline PlanDeps declares no
+        // `claimNode`, so a node write falls back to the PLAN-token fence (`task.executionToken`); an
+        // executor write with NEITHER claim is SKIPPED rather than written unfenced.
         ...createTaskPersistence(plan.id, { planToken: claimToken }),
       },
       { signal: deps.signal, now: deps.now },
