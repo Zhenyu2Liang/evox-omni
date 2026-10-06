@@ -14,9 +14,11 @@
  *    (`pauseTask`/`cancelTask`) writes deliberately unfenced — it holds no claim to fence on.
  * 2. `recordDecidedNodeFenced` — the confirm/verify CONTINUATION when it LOST the plan claim. It may
  *    not drive the plan (the LIVE owner does), but the human decision must never be dropped, so it
- *    records that ONE decided node through a single atomic token-fenced write; with NO owner left it
- *    also settles the plan status from the persisted node rows (`settlePlanFromNodes`), so a plan
- *    whose every node is terminal can never dangle a stale `waiting_confirmation`.
+ *    records that ONE decided node through a single atomic OWNERSHIP-validated write (the node claim
+ *    token, else the plan claim token, else — with NO owner left — a no-owner CAS that skips the write
+ *    if a takeover has since claimed the plan); with NO owner left it also settles the plan status
+ *    from the persisted node rows (`settlePlanFromNodes`), so a plan whose every node is terminal can
+ *    never dangle a stale `waiting_confirmation`.
  *
  * The fence always lives INSIDE the single `updateMany` / compare-and-set statement (see
  * `lib/db/repositories/task.ts`), so ownership is verified ATOMICALLY with the write: a run whose
@@ -193,10 +195,14 @@ export async function settlePlanFromNodes(taskId: string): Promise<boolean> {
  *    because the executor RELEASES a parked node's claim in its `finally`, so a parked node has NO
  *    token of its own;
  * 3. else no claim exists at all (the owner released it between the reads): the decision is recorded
- *    with the CONTROL-equivalent unfenced write — the ONLY unfenced write in this module, reachable
- *    only when NO executor owns the plan (a claimed plan always takes branch 2) — and the plan status
- *    is then settled from the persisted node rows (see `settlePlanFromNodes`), because no executor is
- *    left to publish it.
+ *    through a single atomic NO-OWNER CAS — one `updateMany` conditioned on the plan still holding NO
+ *    execution token (`task: { executionToken: null }`, the same predicate `settlePlanFromNodes` uses)
+ *    — so a takeover that ACQUIRED the claim between our read and this write makes the statement match
+ *    0 rows and SKIPS, never clobbering the takeover's row. The plan status is then settled from the
+ *    persisted node rows (see `settlePlanFromNodes`), because no executor is left to publish it.
+ *
+ * There is therefore NO non-CAS / unfenced write in this module: every branch is a single-statement
+ * ownership CAS.
  *
  * Returns `true` iff the outcome was written. `false` means the plan/node row is gone, or the
  * node/plan claim changed under us — in which case a LIVE owner of that very node writes the truth.
@@ -238,16 +244,16 @@ export async function recordDecidedNodeFenced(input: DecidedNodeInput): Promise<
     return res.count > 0;
   }
 
-  // 3. No claim at all: a control-grade write so the human decision is NEVER dropped, followed by a
-  //    CONTROL-equivalent plan settle — with NO executor left, THIS continuation is the only writer
-  //    that can make the persisted plan status agree with its now-terminal node rows.
-  try {
-    await updateTaskNode(input.taskId, input.nodeId, update);
-  } catch (error) {
-    // A plan built outside `submit_plan` has no node rows; not a persistence failure.
-    if (isMissingNodeError(error)) return false;
-    throw error; // every other failure surfaces — never swallowed
-  }
+  // 3. No owner at all: an atomic NO-OWNER fence, one `updateMany` conditioned on the plan still
+  //    holding NO execution token (`task: { executionToken: null }`, the predicate `settlePlanFromNodes`
+  //    uses), so a takeover that ACQUIRED the claim between our read and this write matches 0 rows and
+  //    SKIPS. With NO executor left THIS continuation then settles the plan status from its now-terminal
+  //    node rows (see `settlePlanFromNodes`).
+  const res = await prisma.agentTaskNode.updateMany({
+    where: { taskId: input.taskId, nodeId: input.nodeId, task: { executionToken: null } },
+    data: { ...update, output: jsonNodeOutput(decided) },
+  });
+  if (res.count === 0) return false;
   await settlePlanFromNodes(input.taskId);
   return true;
 }
