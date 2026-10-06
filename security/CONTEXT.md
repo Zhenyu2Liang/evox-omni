@@ -348,7 +348,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   and — for the transfer escalation — `LIMIT_EXCEEDED`).
 - **A transfer's terminal ledger write IS idempotent, so the ledgered-transfer dedup is ACTIVE.**
   The gateway serializes the AGGREGATE-limit re-risk (claim-first `$transaction`), and `lib/ledger`
-  (`idempotentTransferTxId`) + `banking-sdk/transfer.ts` (accepts an `idempotencyKey`, sets `Transaction.id`
+  (`ledgerKeyForAction` → `idempotentTransferTxId`) + `banking-sdk/transfer.ts` (accepts an `idempotencyKey`, sets `Transaction.id`
   to that deterministic id) and the agent layer DOES pass the key (its own `action.id`) — so the created
   `Transaction.id` exactly equals `idempotentTransferTxId(userId, action.id)` and the
   `computeInFlightTransferTotal` ledger-exclusion is LIVE (an in-flight `confirmed` action whose ledger
