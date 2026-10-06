@@ -185,7 +185,7 @@ npx tsx tests/e2e/acceptance.e2e.ts       # 真实浏览器验收 harness（非 
 | 原子性 | `banking-sdk/atomicity`：注入失败时账本写入回滚；并发超额 / 重复赎回**恰好一次成功** | `tests/unit/banking-sdk/atomicity.test.ts` |
 | 幂等创建 | `banking-sdk/idempotent`：`isUniqueViolation`（严格 `P2002`）/ `normalizeIdempotencyKey`；`createIdempotent` 对同一 key **重放**已提交行（不再 `create`）、败者 `P2002` 重读赢家行、其它错误传播且不落库；`reserveBudget` / `createScheduledTask` 同 key 只落一行 | `tests/unit/banking-sdk/idempotent.test.ts` |
 | 订阅 | `banking-sdk/subscription`：取消订阅 | `tests/unit/banking-sdk/subscription.test.ts` |
-| 投资 | `banking-sdk/investment`：`minAmount`、认购 | `tests/unit/banking-sdk/investment.test.ts` |
+| 投资 | `banking-sdk/investment`：`minAmount`、认购；赎回**身份重放**（同一 `idempotencyKey` 返回**原始结果**且不再入账，不同 / 缺失身份 → `CONFLICT`） | `tests/unit/banking-sdk/investment.test.ts`、`tests/review-recovery-probes.test.ts`、`tests/review-followup-probes.test.ts` |
 | PendingAction claim | `pendingAction.claim`：恰好一次 `pending→confirmed` claim、`from` 集合 + `userId`/`sessionId` 作用域 | `tests/unit/lib/pendingAction.claim.test.ts` |
 | 账本键推导 | `ledger-keys`：`nodeExecutionKey(taskId,nodeId)` → 冻结 `nxe:<taskId>:<nodeId>`；`idempotentTransferTxId(userId,key)` → 冻结 `txidem_` + `sha256` 前 32 hex；相同输入恒等、不同计划/节点/归属**永不**合并 | `tests/unit/lib/ledger-keys.test.ts` |
 
@@ -234,10 +234,10 @@ handler 与会话、读取 SSE 分帧。
 它在**隔离的 E2E 库 `prisma/e2e.db`** 上运行（harness 自建 + 自 seed，绝不触碰 `prisma/dev.db`）；当前实测 **PASS 5 / FAIL 0 / SKIP 0**。
 
 **默认命令自举（clean checkout 可直接跑）**：`npx tsx tests/e2e/acceptance.e2e.ts` 在重建隔离库**之前**
-自动确保 Prisma Client 已生成——仅当生成标记 `node_modules/.prisma/client/schema.prisma` **缺失**时才运行
-`prisma generate`（已生成则跳过，重复运行保持快）。因此**全新检出**（仅 `npm install`、未手工
-`prisma generate`）下**无需**任何额外准备，也**无需**设置 `E2E_SKIP_DB_RESET` 即可直接跑通；harness 始终只用
-隔离的 `prisma/e2e.db`，**从不**修改共享的 `prisma/dev.db`。
+自动确保 Prisma Client **可用**——与 Vitest 共用 `tests/helpers/prisma-cli.ts`（E2E 经 `tests/e2e/helpers.ts` 的 `resetDemoDatabaseOnce`），
+就绪判定是**可用性探针** `prismaClientUsable`（真的按套件方式 `require` 并构造 `PrismaClient`），**不是**产物路径标记（`prismaClientGenerated` 仅为**非权威代理**）；
+生成 / 建库**失败即抛**（按**退出码**判定，抛错附完整 stdout+stderr），**绝不** warn-and-continue。因此**全新检出**（仅 `npm install`、
+未手工 `prisma generate`）下**无需**任何额外准备、**无需**设置 `E2E_SKIP_DB_RESET` 即可直接跑通；harness 只用隔离的 `prisma/e2e.db`，**从不**修改共享的 `prisma/dev.db`。
 
 流程：在空闲端口启动**真实** `next dev` → 轮询 `/api/health` 待就绪 → 通过 **`playwright-core`** 启动
 机器上**真实**的无头浏览器（**系统 Chrome 优先 / Edge 兜底**，`E2E_BROWSER_PATH` 可覆盖；**无需
@@ -270,7 +270,7 @@ handler 与会话、读取 SSE 分帧。
 - **无网络、无真实 LLM**：模型由 `registerFauxProvider()`（pi-ai）**脚本化**——同一套
   Agent / 工具 / 安全流水线，只有模型被脚本化。
 - **`LLM_MODE=mock`**：`tests/setup.ts` 强制设置，并把 `DATABASE_URL` 指向隔离的测试 SQLite
-  （`prisma/test.db`，git 忽略），一次性 provision schema。
+  （`prisma/test.db`，git 忽略）；provision schema 前先按**可用性探针** `prismaClientUsable` 确保 Prisma Client 可用（产物路径标记仅为非权威代理），provision **失败即抛**（按退出码判定、附完整 CLI 输出），**绝不** warn-and-continue。
 - **可注入时间与 id**：`now` / `id` 可注入，因此测试稳定确定。
 - **测试隔离**：DB 支撑的套件每个测试 `resetDatabase()` + 重新播种；绝不共享可变 DB 状态。
 - **文件串行**：`vitest.config.ts` 设置 `fileParallelism: false`——全部套件共用同一个 `prisma/test.db`，

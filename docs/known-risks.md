@@ -27,7 +27,8 @@
 - **原子取消计划**（第 18 条）— `agent/task-control.ts#cancelTask` 最终在一个 `prisma.$transaction` 内**同时**执行 `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`，**单条原子 `updateMany`**，一次性把该计划**全部**可执行动作置为 `cancelled`）与计划行 `status='cancelled'` 写入——撤销与取消之间**没有窗口**；节点输出扫描（`revokeParkedActions`）与运行后 `sweepCancelledPlan` 只是**兜底**。此后任何 confirm / verify 均以 `CONFLICT` / `NOT_FOUND` 失败，**已入账的交易保留**（不伪造回滚）。
 - **取消计划的授权复核**（第 18 条）— `security/security-gateway.ts` 在 compare-and-set 的**同一个 `$transaction`** 内按 `PendingAction.taskId` 重读所属计划状态：计划已 `cancelled` ⇒ **在事务内反转领取**并返回 `plan_cancelled`（HTTP 200 `{ok:false, status:'cancelled', code:'SECURITY_DENIED'}`）；`gatewayCreatePendingAction` 拒绝在已取消计划下新建 action；`recordActionResult` 绝不把已取消计划下的 action 标为 `executed`。**取消先于执行**由代码强制，LLM 无法复活。
 - **统一账本键 · 转账幂等**（第 15 条）— `lib/ledger.ts` 以 `ledgerKeyForAction({id,taskId,nodeId})` 统一派生幂等键（计划节点动作得 `nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`，独立动作得自身 `id`），`ledgerTxIdForAction(userId, action)` 在**同一把键**上派生 / 查找账本行主键——生成端与查找端一致，**已入账的 in-flight 转账在日累计中只计一次**，重复 / 并发确认**重放原行而非二次生效**。
-- **计划节点身份去重**（第 18 条）— `nodeExecutionKey(taskId, nodeId)` 为节点副作用去重（`subscribeInvestment` 的 `InvestmentHolding.idempotencyKey`、`redeemInvestment` 的 `REDEEMED` 状态翻转、`applyVirtualCard` 的确定性 card id）；`agent/confirmation.ts#executeGatedToolOnce` 以 `findInFlightPlanActionId(taskId, nodeId)` 返回已停靠结果而非铸造第二个 action。
+- **计划节点身份去重**（第 18 条）— `nodeExecutionKey(taskId, nodeId)` 为节点副作用去重（`subscribeInvestment` 的 `InvestmentHolding.idempotencyKey`、`redeemInvestment` 的 `redeemExecutionKey`/`redeemResult` 身份重放、`applyVirtualCard` 的确定性 card id）；`agent/confirmation.ts#executeGatedToolOnce` 以 `findInFlightPlanAction(taskId, nodeId)` 返回已停靠结果而非铸造第二个 action。
+- **已执行节点恢复**（第 18 条）— `executed` 动作经 `replayExecutedPlanAction` 在同一 `nodeExecutionKey` 下幂等重放补齐节点为 success，不重复副作用。
 - 同桶其余条目：第 4 条（启发式异常检测）、第 6 条（消费分析按设计排除异常）、第 14 条（注入守卫不改变授权结论）、第 19 条（工程性说明）。
 
 ### 🧪 【模拟】模拟后端 / 刻意受限
@@ -48,6 +49,8 @@
 - **唯一串行化手段是 SQLite 单文件写锁** — `security/security-gateway.ts#authorizeTransfer` 的「先 CAS 领取、后重估有效日累计」与 `agent/task-control.ts#cancelTask` 的原子结算，都在**单个 `prisma.$transaction`** 内完成，其**串行化仅由 SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多实例部署**下**未经证明**（第 15、18 条）。
 - **跨浏览器矩阵**未验证（第 16 条）— `tests/e2e/` 只跑系统 Chrome（Edge 兜底未测），亦不含生产构建（`next build` / `next start`）、live LLM、视觉 / a11y、负载 / 性能。
 - **验证上限：仅单进程 + DB 事务语义（SQLite 文件锁的原子性）被实际运行过** —— **集群 / 多实例下的【日累计】与【取消】竞态未经压测**，不在本仓库的验证范围内。
+- **陈旧执行领取接管无 fencing token** —— `agent/task-control.ts` 的接管以 `staleBefore = staleExecutionClaimBefore()`（TTL 视界 `EXECUTION_CLAIM_TTL_MS`，基于**真实** `Date.now()`）判定陈旧，但 `persistNode` / `persistPlan` **不校验执行 token**——因此接管**不隔离**旧所有者对**节点行 / 计划快照**的写；TTL 视界只是**启发式**（长时间人工阻塞可能被误判为陈旧）（第 18 条）。
+- **字面 `Error: Schema engine error:` 在本环境未复现** —— 本仓库测试环境（Node v25.9.0 / Prisma 6.19.3 / Windows）**未**复现该字面报错，属**环境差异**，**不**宣称已关闭（第 16、19 条）。
 
 ---
 
@@ -68,10 +71,10 @@
 | 13 | Test 12 生日提醒只创建记录，**不真正下单鲜花 / 蛋糕** | 🧪 模拟 | `tests/scenarios/`、`banking-sdk/budget.ts`、`banking-sdk/task.ts` |
 | 14 | 注入守卫只记录事件，**不向模型注入"系统提醒"** | ✅ 实现（防御纵深） | `security/injection-guard.ts`、`agent/run-turn.ts` |
 | 15 | 转账的**账本键派生 / 查找统一**（重复确认在 DB 层去重，已入账的 in-flight 只计一次） | ✅ 已实现（统一账本键） | `lib/ledger.ts`、`agent/confirmation.ts`、`security/risk-engine.ts` `computeInFlightTransferTotal`、`banking-sdk/transfer.ts` |
-| 16 | 有**真实浏览器验收 harness**，但为**单机、有限 journey** 的验收（非多实例 / 非生产构建 / 非跨浏览器） | ⚠️ 未验证（有限验收，非全覆盖） | `tests/e2e/`、`package.json` |
+| 16 | 有**真实浏览器验收 harness**，但为**单机、有限 journey** 的验收（非多实例 / 非生产构建 / 非跨浏览器）；干净环境自举以**可用性探针**为判据，provisioning 失败大声报错 | ⚠️ 未验证（有限验收，非全覆盖） | `tests/e2e/`、`tests/setup.ts`、`tests/helpers/prisma-cli.ts`、`package.json` |
 | 17 | 身份是**普通 Cookie**（`banking_session`，非签名 / HMAC 令牌） | ✅ 实现（fail-closed） | `lib/constants.ts` `SESSION_COOKIE`、`app/api/_lib/session.ts`、`app/api/chat/route.ts` |
-| 18 | 计划生命周期的诚实边界（DB 原子执行领取 / 原子取消 / 取消计划授权复核 / 节点幂等 / 无假回滚 / 终态仅靠 CAS 约定） | ✅ 已实现（DB 原子领取 + 原子取消 + 取消复核 + 节点幂等） | `agent/task-control.ts`、`agent/confirmation.ts`、`planner/lifecycle.ts`、`lib/db/repositories/{task,pendingAction}.ts`、`security/security-gateway.ts`、`prisma/schema.prisma` |
-| 19 | 其他工程性注意（测试串行、`change_password` 无凭据存储） | ✅ 说明 | `vitest.config.ts`、`banking-sdk/` |
+| 18 | 计划生命周期的诚实边界（DB 原子执行领取（含陈旧接管）/ 原子取消 / 取消计划授权复核 / 节点幂等 / 已执行节点恢复 / 无假回滚 / 终态仅靠 CAS 约定；接管**无 fencing token**） | ✅ 已实现（DB 原子领取 + 原子取消 + 取消复核 + 节点幂等 + 已执行恢复；接管隔离性属未验证） | `agent/task-control.ts`、`agent/confirmation.ts`、`planner/lifecycle.ts`、`lib/db/repositories/{task,pendingAction}.ts`、`security/security-gateway.ts`、`banking-sdk/investment.ts`、`prisma/schema.prisma` |
+| 19 | 其他工程性注意（测试串行、`change_password` 无凭据存储、干净环境自举 + provisioning 失败大声报错；字面 `Error: Schema engine error:` 本环境未复现） | ✅ 说明（含环境差异） | `vitest.config.ts`、`tests/setup.ts`、`tests/helpers/prisma-cli.ts`、`banking-sdk/` |
 
 ---
 
@@ -283,7 +286,7 @@ SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多
 脚本化（`LLM_MODE=mock`）。它**不**覆盖：live LLM、真实银行 / 网络、生产构建（`next build` /
 `next start`）、跨浏览器（仅 Chrome，Edge 兜底未测）、视觉 / a11y、负载 / 性能。它是**单机**验收，**不**证明安全模型已被完全封闭。
 
-**默认命令与自举**：默认命令 `npx tsx tests/e2e/acceptance.e2e.ts` 会**自举 Prisma client**——仅当 `node_modules/.prisma/client/schema.prisma` 缺失时才执行一次 `prisma generate`——因此**干净检出**下**无需** `E2E_SKIP_DB_RESET` 即可运行；它使用**隔离**的 `prisma/e2e.db`，**绝不**触碰 `prisma/dev.db`。
+**默认命令与自举**：默认命令 `npx tsx tests/e2e/acceptance.e2e.ts` 会**自举 Prisma client**——`tests/e2e/helpers.ts#resetDemoDatabaseOnce` 先调用 `tests/helpers/prisma-cli.ts#ensurePrismaClientGenerated`，其就绪判据是**可用性探针** `prismaClientUsable`（**真正**构造一次 `PrismaClient`），而非 `node_modules/.prisma/client/schema.prisma` 这类工作区产物路径（**非权威**代理）——因此**干净检出**下**无需** `E2E_SKIP_DB_RESET` 即可运行；provisioning 失败**大声报错**（`runCliStep` 退出码非 0 即抛错，携带**完整** stdout+stderr），不再 warn-and-continue。它使用**隔离**的 `prisma/e2e.db`，**绝不**触碰 `prisma/dev.db`。
 **GREEN 测试全绿 ≠ 安全闭环**：仅靠 🟢 读取路径的测试**不**构成对安全模型的证明——闭环只能来自对失败路径（🟡/🔴 门控、确认 / 验证、取消、熔断、注入）的**显式**验证。
 
 `tests/app/` 下的验收仍独立：它们是**进程内 HTTP 集成测试**（`describe('[integration] …')`），
@@ -321,7 +324,9 @@ SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多
 - **DB 原子执行领取**：一个*运行中*的计划由一条 DB 执行领取把守——`claimTaskExecution` 在 `executor.runPlan` **之前**以**单条 `updateMany` CAS** 领取 `AgentTask.executionToken`，并在 **`finally`** 中 `releaseTaskExecution` 释放；节点级同理（`lib/db/repositories/task.ts#claimNodeExecution` / `#releaseNodeExecution`）。因此两个并发 resume / retry **无法同时运行同一计划**——败者因 `executionToken IS NULL` 不再匹配而领取 0 行落败。
 - **原子取消计划**：`agent/task-control.ts#cancelTask` 最终在**一个 `prisma.$transaction`** 内**同时**执行 `revokePendingActionsByTask(taskId, ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`，**单条原子 `updateMany`**，一次性把该计划**全部**可执行 `PendingAction` 置为 `cancelled`）与计划行 `status='cancelled'` 写入——撤销与取消之间**没有窗口**；节点输出扫描（`revokeParkedActions`）与运行后 `sweepCancelledPlan` 只是**兜底**。此后任何 confirm / verify 均以 `CONFLICT` / `NOT_FOUND` 失败，**已入账的交易保留**（不伪造回滚）。
 - **取消计划的授权复核**：`security/security-gateway.ts` 在 compare-and-set 的**同一个 `$transaction`** 内按 `PendingAction.taskId` 重读所属计划状态——计划已 `cancelled` ⇒ **在事务内反转领取**并返回 `{kind:'plan_cancelled'}`（HTTP 200 `{ok:false, status:'cancelled', code:'SECURITY_DENIED'}`）；`gatewayCreatePendingAction` 拒绝在已取消计划下新建 action；`recordActionResult` 绝不把已取消计划下的 action 标为 `executed`。
-- **节点身份去重**：`nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`（`lib/ledger.ts`）为节点副作用去重——`subscribeInvestment` 把它写入 `InvestmentHolding.idempotencyKey`（唯一）并在**一个 DB 事务**内以共享的 P2002 处理重放，`redeemInvestment` 以 `REDEEMED` 状态翻转作为重放标记，`applyVirtualCard` 以确定性 card id 幂等；`agent/confirmation.ts#executeGatedToolOnce` 以 `findInFlightPlanActionId(taskId, nodeId)` 返回已停靠结果而非铸造第二个 action；不同计划的相同工具 / 参数因 `taskId` 不同而**不碰撞**。
+- **节点身份去重**：`nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`（`lib/ledger.ts`）为节点副作用去重——`subscribeInvestment` 把它写入 `InvestmentHolding.idempotencyKey`（唯一）并在**一个 DB 事务**内以共享的 P2002 处理重放，`redeemInvestment` 在**与入账同一个 DB 事务**内持久化该次赎回的**执行身份** `InvestmentHolding.redeemExecutionKey` 与**原始结果** `redeemResult`——**同一身份**的重放返回**原始结果且不再二次入账**，**不同 / 缺失身份**（独立动作以 action id 为键、或根本无键）抛 `AppError('CONFLICT')`（**显式拒绝**，绝不伪造成功）；`applyVirtualCard` 以确定性 card id 幂等；`agent/confirmation.ts#executeGatedToolOnce` 以 `findInFlightPlanAction(taskId, nodeId)` 返回已停靠结果而非铸造第二个 action；不同计划的相同工具 / 参数因 `taskId` 不同而**不碰撞**。
+- **已执行节点恢复（不重复副作用）**：若某门控节点的 `PendingAction` 已是 `executed`（副作用**已执行并入账**，但节点结果从未落库），该节点由 `replayExecutedPlanAction` 恢复——用**持久化的** `toolName` / `argsJson` 在同一 `nodeExecutionKey(taskId, nodeId)` 下走 `registry.executeDirect` 作**幂等 SDK 重放**，把节点**补齐为 success**，**不**重新确认、**不**重复执行；`pending` / `awaiting_mfa` / `confirmed` 仍按原样等待人工决定。恢复本身**幂等**（重复 resume 重放同一键，只产生同一份副作用）。
+- **陈旧执行领取接管**：`claimTaskExecution` / `claimNodeExecution` 支持以 `staleBefore = staleExecutionClaimBefore()`（`EXECUTION_CLAIM_TTL_MS = 600000`，基于**真实** `Date.now()`，**非**演示时钟）接管已崩溃拥有者留下的执行 token——仅在拥有者**被证明陈旧**时才接管（**活跃**拥有者不被抢占），并发接管**只有一个赢家**，旧拥有者的 release 是 **CAS no-op**。**边界**：`persistNode` / `persistPlan` **没有** fencing token，接管**不隔离**旧所有者对**节点行 / 计划快照**的写；TTL 视界是**启发式**（一次长时间人工阻塞可能被误判陈旧）——该隔离性缺口属【未验证】桶。
 - **不伪造回滚**：已完成（`success`）的节点**保留其结果**——已执行的副作用在模拟后端下不可逆，**绝不假装被回滚**。
 - **取消 vs 确认 = 至多一次**：二者共享同一 `PendingAction` 的 **CAS**（`claimPendingAction`），因此最多一方成功。
 - **终态仅由 CAS 约定保证**：`prisma/schema.prisma` 的 `status` 列是**普通字符串、无 CHECK / 唯一约束**——「已取消的计划不能离开终态」只由 `claimTaskStatus` / `claimPendingAction` 的 CAS 约定保证，**没有数据库 / 模式层约束**。
@@ -338,5 +343,15 @@ SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多
   `fileParallelism: false`，因此测试**文件串行**运行（同一文件内的查询仍可并行），无需额外参数。
 - **`change_password` 无真实凭据存储**：演示 `User` 不存凭据，该工具返回模拟成功视图，
   **`AuditLog` 行即变更的权威记录**——它的存在是为演示 RED 门控 + MFA + 审计。
+- **干净环境自举 · provisioning 失败大声报错**：`tests/setup.ts#provisionTestDatabase` 在 provisioning
+  **之前**先自举 Prisma Client（`tests/helpers/prisma-cli.ts#ensurePrismaClientGenerated`），其就绪判据是
+  **可用性探针** `prismaClientUsable`（**真正**构造一次 `PrismaClient`），**而非** `node_modules/.prisma/client/schema.prisma`
+  这类工作区产物路径（**非权威**代理）。所有 CLI 步骤统一走 `runCliStep`：**退出码非 0 即抛错**，并携带
+  **完整** stdout+stderr（`diagnosticCliOutput`，头尾都保留）——**不再 warn-and-continue**。保留：sha1 标记
+  `schemaHash`（schema 未变则不重建）、标记的**原子写**（temp + rename）、删除 `-wal/-shm/-journal`。
+  E2E harness 以**同一方式**自举（`tests/e2e/helpers.ts#resetDemoDatabaseOnce`，失败先自动恢复、再以两个
+  完整错误抛出）；隔离库为 `prisma/test.db` / `prisma/e2e.db`，**绝不**触碰 `prisma/dev.db`。
+- **字面 `Error: Schema engine error:` 在本环境未复现**：本仓库测试环境（Node v25.9.0 / Prisma 6.19.3 /
+  Windows）**未**复现该字面报错——属**环境差异**，**不**宣称已关闭；失败路径仍以完整 CLI 输出暴露真实原因。
 
 > 相关文档：[`architecture.md`](./architecture.md)、[`security.md`](./security.md)、[`test-cases.md`](./test-cases.md)。

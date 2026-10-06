@@ -143,7 +143,7 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 - `./banking-sdk/dashboard.ts` → aggregated dashboard read model
 - `./banking-sdk/index.ts` → `banking` facade + DTO re-exports
 - `./banking-sdk/tx.ts` → `runInTransaction` — the SDK's only direct Prisma usage (interactive transaction boundary)
-- `./banking-sdk/idempotent.ts` → shared at-most-once CREATE helper (`createIdempotent`, `normalizeIdempotencyKey`, `isUniqueViolation`) used by `budget.ts` / `task.ts` / `transfer.ts` / `investment.ts`
+- `./banking-sdk/idempotent.ts` → shared at-most-once helpers: `createIdempotent` / `normalizeIdempotencyKey` / `isUniqueViolation` (used by `budget.ts` / `task.ts` / `transfer.ts` / `investment.ts`) + `idempotentCardId` (deterministic PK, used by `card.ts` → `applyVirtualCard`)
 - `../tests/unit/banking-sdk` → SDK unit specs incl. the money-movement atomicity regression spec (sibling — read-only, auto-discovered by the root `npm run test`; escalate writes to root)
 - `../lib/db/repositories` → the typed repositories the SDK reads/writes through (dependency — read-only)
 - `../lib/ledger` → shared deterministic transfer-ledger id (`idempotentTransferTxId`) — the idempotency dedup key the SDK uses for `createTransfer`; also consumed by `security/` (dependency — read-only)

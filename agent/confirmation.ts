@@ -48,6 +48,7 @@ import {
 import { getTask } from '@/lib/db/repositories/task';
 import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
+import { safeParse } from '@/lib/json';
 import { ledgerKeyForAction, nodeExecutionKey } from '@/lib/ledger';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { resumeTurn } from './run-turn';
@@ -318,14 +319,14 @@ function isParkedOutcome(outcome: GatedToolOutcome): boolean {
 
 /**
  * Statuses meaning "this plan node's gated side effect is ALREADY represented" and must NOT be
- * re-minted: `pending`/`awaiting_mfa` (parked, awaiting the human decision) and `confirmed` (the
- * gateway has claimed the action and the confirm path is executing it RIGHT NOW — e.g.
- * `gateway.recordActionResult` is still in flight), and `executed` (the side effect ran but the
- * owning node's REAL outcome may not be persisted yet — the confirm path records `executed` BEFORE
- * `resumeOwningPlan` writes the node result, so this closes that window; an `executed` action
- * otherwise belongs only to a terminal `success` node that resume SKIPS and retry never re-runs, so
- * it never holds back genuine work). `failed`/`cancelled`/`locked` are terminal for this purpose and
- * never hold a re-run back (`failed` MUST stay re-runnable by retry).
+ * re-minted by a fresh gate: `pending`/`awaiting_mfa` (parked, awaiting the human decision) and
+ * `confirmed` (the gateway has claimed the action and the confirm path is executing it RIGHT NOW —
+ * e.g. `gateway.recordActionResult` is still in flight). Those three are genuinely in-flight, so a
+ * re-run of the node is reported as STILL PARKED on the existing action. `executed` means the gated
+ * side effect ALREADY ran and was ledgered but the owning node's REAL outcome was never persisted
+ * (the confirm path records `executed` BEFORE `resumeOwningPlan` writes the node result, and that
+ * persist can fail) — such a node is RECOVERED, not parked. `failed`/`cancelled`/`locked` are
+ * terminal for this purpose and never hold a re-run back (`failed` MUST stay re-runnable by retry).
  */
 const IN_FLIGHT_PLAN_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'pending',
@@ -335,47 +336,87 @@ const IN_FLIGHT_PLAN_ACTION_STATUSES: readonly PendingActionStatus[] = [
 ];
 
 /**
- * The id of an EXISTING `PendingAction` already representing this plan node's gated side effect.
+ * The persisted `PendingAction` row shape returned by `listPendingActionsByTask` (NOT the frozen
+ * `lib/contracts` `PendingAction`). Its `toolName`/`argsJson`/`status` are what the recovery path
+ * needs to replay an already-executed node without re-gating it.
+ */
+type PendingActionRow = Awaited<ReturnType<typeof listPendingActionsByTask>>[number];
+
+/**
+ * The EXISTING `PendingAction` already representing this plan node's gated side effect, if any.
  *
  * A `PendingAction` persists its owning plan+node AT CREATION (`PendingAction.taskId`/`nodeId`, in
  * the same INSERT the gateway mints the row) — so it is the authoritative "this node already has a
  * gated action" marker, available even BEFORE the node's `output.pendingActionId` is written and
  * even WHILE the confirm path is still executing it (`recordActionResult` not yet recorded).
- * Returns the oldest matching row (creation order). `undefined` ⇒ no action yet ⇒ safe to gate.
+ * Returns the oldest matching row (creation order) so the caller can branch on its STATUS.
+ * `undefined` ⇒ no action yet ⇒ safe to gate.
  */
-async function findInFlightPlanActionId(
+async function findInFlightPlanAction(
   taskId: string,
   nodeId: string,
-): Promise<string | undefined> {
+): Promise<PendingActionRow | undefined> {
   const rows = await listPendingActionsByTask(taskId, {
     statuses: [...IN_FLIGHT_PLAN_ACTION_STATUSES],
   });
-  return rows.find((row) => row.nodeId === nodeId)?.id;
+  return rows.find((row) => row.nodeId === nodeId);
+}
+
+/**
+ * RECOVER an ALREADY-EXECUTED plan node whose real outcome was never persisted (its `PendingAction`
+ * is `executed`, so the gated side effect ran and was ledgered, but the owning `AgentTaskNode` is
+ * still `running`/unwritten). The gateway is deliberately NOT consulted here — re-gating would mint
+ * a SECOND action and re-request a human confirmation for work that already happened.
+ *
+ * The node's tool is re-run through the SDK with the SAME node idempotency key the inline and confirm
+ * paths use (`nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`), so the SDK REPLAYS its
+ * already-applied side effect instead of repeating it (e.g. `apply_virtual_card` derives the SAME
+ * card id, yielding exactly one card) and `reserve_budget`'s unique `idempotencyKey` dedups the
+ * insert. The persisted action's OWN `toolName`/`argsJson` are used, so the executed work is never
+ * substituted. Never throws: an SDK/infra failure becomes a failed node value.
+ */
+async function replayExecutedPlanAction(
+  userId: string,
+  taskId: string,
+  nodeId: string,
+  action: PendingActionRow,
+): Promise<GatedToolOutcome> {
+  try {
+    const args = safeParse<Record<string, unknown>>(action.argsJson, {});
+    const registry = createToolRegistry(userId);
+    const result = await registry.executeDirect(action.toolName as ToolName, args, {
+      idempotencyKey: nodeExecutionKey(taskId, nodeId),
+    });
+    return { ok: result.ok, data: result.data, summary: result.summary, error: result.error };
+  } catch (e) {
+    return { ok: false, error: AppError.from(e).message };
+  }
 }
 
 /** The un-coalesced body of `executeGatedTool`: the actual gateway gate + SDK execution. */
 async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutcome> {
   try {
-    // ALREADY-IN-PROGRESS plan node — the correctness guard the in-process single-flight map CANNOT
-    // provide. When a plan node's gated side effect has ALREADY been claimed (a `pending`/
-    // `awaiting_mfa` action waiting on the human, or a `confirmed` action whose side effect the
-    // confirm path is executing right now, or an `executed` action whose side effect ALREADY ran but
-    // whose REAL node outcome is not yet persisted — the confirm path records `executed` BEFORE
-    // `resumeOwningPlan` persists the node result, so this closes the target window; an `executed`
-    // action otherwise only belongs to a terminal `success` node that resume SKIPS and retry never
-    // re-runs, so it never holds back a genuine re-run), a re-run of the node (a plan RESUME between
-    // the effect
-    // and its persisted result) must NOT re-enter the gateway and mint a SECOND duplicate action —
-    // confirming which would apply the side effect twice. The node is instead reported as STILL
-    // PARKED on the EXISTING action (the same parked shape the blocked path returns), so the executor
-    // keeps it in `waiting_confirmation`/`waiting_verification` with no second side effect.
+    // ALREADY-REPRESENTED plan node — the correctness guard the in-process single-flight map CANNOT
+    // provide. When a plan node's gated side effect is ALREADY represented by a persisted action, a
+    // re-run of the node must NOT re-enter the gateway and mint a SECOND duplicate action.
+    //   • `pending`/`awaiting_mfa`/`confirmed` — genuinely in-flight (awaiting the human, or the
+    //     confirm path is executing it right now): report the node as STILL PARKED on the EXISTING
+    //     action (the shape the blocked path returns), so the executor keeps it in
+    //     `waiting_confirmation`/`waiting_verification` with no second side effect.
+    //   • `executed` — the gated side effect ALREADY ran and was ledgered but the node's REAL outcome
+    //     was never persisted (the confirm path records `executed` BEFORE `resumeOwningPlan` writes
+    //     the node result, and that persist can fail): RECOVER by replaying the SDK side effect
+    //     idempotently under the node's own execution key, never by parking or re-confirming.
     if (ctx.taskId !== undefined && ctx.nodeId !== undefined) {
-      const existingActionId = await findInFlightPlanActionId(ctx.taskId, ctx.nodeId);
-      if (existingActionId !== undefined) {
+      const existing = await findInFlightPlanAction(ctx.taskId, ctx.nodeId);
+      if (existing !== undefined) {
+        if (existing.status === 'executed') {
+          return replayExecutedPlanAction(ctx.userId, ctx.taskId, ctx.nodeId, existing);
+        }
         return {
           ok: false,
           requiresConfirmation: true,
-          pendingActionId: existingActionId,
+          pendingActionId: existing.id,
           error: '该计划节点已在等待人工确认，未重复受理。',
         };
       }
@@ -432,11 +473,13 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
  * own gate once the first settles. The in-flight entry is removed on settle, so a SEQUENTIAL identical
  * call is never coalesced with a completed one.
  *
- * ALREADY-PARKED (side effect exactly once, across processes): a PLAN-NODE call (both `taskId` and
- * `nodeId` present) whose node ALREADY has a non-terminal `PendingAction` (`pending`/`awaiting_mfa`/
- * `confirmed`) does NOT re-enter the gateway — it is reported as still parked on that EXISTING action
- * (`executeGatedToolOnce#findInFlightPlanActionId`). That DB row is the authority the in-process map
- * cannot be: it holds even when a RESUME races a confirm whose `recordActionResult` has not committed.
+ * ALREADY-REPRESENTED (side effect exactly once, across processes): a PLAN-NODE call (both `taskId`
+ * and `nodeId` present) that ALREADY has a persisted `PendingAction` does NOT re-enter the gateway.
+ * A still-in-flight one (`pending`/`awaiting_mfa`/`confirmed`) is reported as STILL PARKED on that
+ * EXISTING action; an `executed` one is RECOVERED by replaying its SDK side effect under the node's
+ * own execution key (`executeGatedToolOnce#findInFlightPlanAction`). That DB row is the authority the
+ * in-process map cannot be: it holds even when a RESUME races a confirm whose `recordActionResult`
+ * has not committed.
  */
 export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome> {
   const key = executionKey(ctx);

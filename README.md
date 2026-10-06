@@ -196,9 +196,17 @@ agent.beforeToolCall ──► securityGateway.handleToolCall(ctx)
    被闸门拦下的节点会 **停在该节点等待人工决策**（不执行任何写操作），人工确认后由
    `PlanControls.resume()/retry()` 继续。
 6. 单个节点失败 **不会** 抛出整体异常：记录 `failed` 并继续独立分支。
-7. **取消是原子的**：取消计划时，「撤销该计划的所有待确认操作」与「把计划标记为 `cancelled`」在
-   **同一个数据库事务** 内完成；已执行（`success`）的节点保持原状 —— **已落账的交易会被保留**，
-   不会被撤销，也不会伪造"回滚"，其余非终态节点变为 `cancelled`。
+7. **取消只阻止"尚未授权/未执行"的操作（原子）**：取消计划时，「撤销该计划所有**尚未授权/未执行**的待确认操作（`PendingAction`）」与「把计划标记为 `cancelled`」在
+   **同一个数据库事务** 内完成。已成功入账的副作用所对应的动作**恒记 `executed`**；**已落账的交易会被保留**，
+   不会被撤销、也不会伪造 "回滚" —— 账本、操作状态与接口响应三者**一致**；其余非终态节点变为 `cancelled`。
+
+8. **已执行节点恢复**（`agent/confirmation.ts`）：恢复计划时，若被闸门节点的关联 `PendingAction` 已是
+   `executed`（副作用已入账、只是节点结果尚未回写），则依据**持久化的真实结果**补齐该节点 `success`
+   并继续后续节点，**不重新请求确认、不重复副作用**（沿用节点级幂等键 `nodeExecutionKey` 重放）；
+   `pending` / `awaiting_mfa` 仍等待真实人工确认；恢复**幂等**。
+9. **执行接管（execution token）**（`agent/task-control.ts`）：`resume` / `retry` 以 `staleBefore`
+   （`EXECUTION_CLAIM_TTL_MS = 600000ms`，用 **真实时钟** 计算）**仅在计划/节点 `executionToken` 的所有者已陈旧时**
+   接管；**存活的所有者不会被抢占**，并发接管**恰有一个赢家**（赢家重写 `executionClaimedAt`，输家的条件更新匹配 0 行）。
 
 UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 思维链**。
 
@@ -208,8 +216,8 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 
 - **会话身份来自 HttpOnly Cookie（查询参数不授权）** — 请求身份**仅**从 HttpOnly 的 `banking_session` Cookie 解析（会话 id 由 `POST /api/chat` 下发），`userId` 由服务端从该 `AgentSession` 行读出；`?sessionId=` / `?userId=` 等 **查询参数一律被忽略**，绝不能伪造 / 覆盖 / 扩大身份。缺失 Cookie 或未知会话 ⇒ `403 SECURITY_DENIED`（fail-closed）。
 - **原子化的日累计限额（已落账去重）** — 当日转账累计（已执行流水 + 在途授权 `PendingAction`）在 **同一个数据库事务** 内计算，`transfer_money` 的「确认」在同一事务内做原子 claim，杜绝并发确认绕过 ¥1000 阈值；多个各自 YELLOW 的小额转账会在 **执行时** 被重新评估并升级为 🔴 RED（需 MFA）。流水 id 的 **生成** 与 **查询** 使用同一套确定性 key（`lib/ledger.ts` 的 `ledgerTxIdForAction` / `idempotentTransferTxId`）：一个已写入流水、但 `PendingAction` 仍为 `confirmed` 的计划转账会被 **恰好计一次**（按已执行流水计），而真正尚未落账的动作仍按在途计入。因此 ¥1000 保持 🟡 YELLOW、¥1000.01 升级为 🔴 RED，且不会因重复计数被误升级。
-- **计划取消与授权的原子性** — 取消计划是原子的：**撤销该计划的所有待确认操作** 与 **将计划标记为 `cancelled`** 在同一个数据库事务内完成；`confirm` / `verify` 的授权在做原子 claim 的 **同一个事务内重新读取所属计划状态**，若计划已在此前被取消，则在事务内 **回退这次 claim**（不执行、不写流水）。**已经落账的交易会被保留**，不会被撤销或伪造回滚。
-- **投资申购 / 赎回幂等** — `subscribe_investment` / `redeem_investment` 携带稳定的「节点执行幂等键」（`lib/ledger.ts` 的 `nodeExecutionKey(taskId, nodeId)`）；幂等记录 + 扣款 + 生成持仓在 **同一个数据库事务** 内完成，因此计划在效果已落账后恢复执行时 **不会二次扣款**。
+- **计划取消与授权的原子性** — 取消计划是原子的：**撤销该计划所有尚未授权/未执行的待确认操作** 与 **将计划标记为 `cancelled`** 在同一个数据库事务内完成；`confirm` / `verify` 的授权在做原子 claim 的 **同一个事务内重新读取所属计划状态**，若计划已在此前被取消，则在事务内 **回退这次 claim**（不执行、不写流水）。**已经落账的交易会被保留**（其对应动作恒记 `executed`），不会被撤销或伪造回滚。
+- **投资申购 / 赎回幂等** — `subscribe_investment` 携带稳定的「节点执行幂等键」（`lib/ledger.ts` 的 `nodeExecutionKey(taskId, nodeId)`）：幂等记录 + 扣款 + 生成持仓在 **同一个数据库事务** 内完成，因此计划在效果已落账后恢复执行时 **不会二次扣款**。`redeem_investment` 在 **同一个数据库事务** 内持久化本次赎回的**执行身份**（`redeemExecutionKey`）与**原始结果**（`redeemResult`）：**同身份重放**返回原结果、**不重复入账**；**异身份（或无身份）对已赎回持仓 → `CONFLICT` 拒绝**（绝不伪造成功）；条件状态流转（`status != REDEEMED`）保证并发下 **恰好一次入账**。
 - **提示词注入防御（injection-guard）** — 对用户输入做启发式检测，命中则记录 `SecurityEvent`
   并向前端发出安全事件（`security_event{kind:'injection'}`）；但它 **只做纵深防御，绝不授予权限**。
   检测结果**不会**被注入模型上下文（不加任何"系统提醒"），也不改变任何授权结论。
@@ -274,7 +282,11 @@ npm run db:reset           # prisma db push --force-reset && tsx prisma/seed.ts 
 npm run db:studio          # prisma studio（可视化查看数据）
 ```
 
-> **测试提示**：所有 DB 测试共用同一个 SQLite 文件（`prisma/test.db`），`vitest.config.ts`
+> **测试提示**：`npm run test` 由 `tests/setup.ts`（Vitest `setupFiles`）**自举** —— 它先用**可用性探针**
+> 自举一个可用的 Prisma Client（干净 checkout 也无需手动 `prisma generate`），再把 schema provision 到
+> **隔离的 `prisma/test.db`（`prisma/dev.db` 不受影响）**：以 `prisma/schema.prisma` 的 **sha1** 作为
+> 「已 provision」标记，**仅在 schema 变化时**才重建（**fail-loud**：provision/generate 失败会带着完整 CLI
+> 输出直接抛出，绝不 `console.warn` 后继续）。所有 DB 测试共用同一个 SQLite 文件（`prisma/test.db`），`vitest.config.ts`
 > 已设置 `fileParallelism: false` 以串行运行、避免竞争。如需手动指定，可使用
 > `npx vitest run --no-file-parallelism`。
 
@@ -472,7 +484,9 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
   未来动作意图（`ScheduledTask` 行），**没有被任何在线调度器在其 `runAt` 时间执行**；Test 12 也
   **不会真正下单鲜花 / 蛋糕**。
 - **单进程 / SQLite / 单演示用户**，通过 Cookie 维护会话；非生产级多用户/高可用架构。
-- **多进程 / 集群下的竞争未被压力测试。** 并发保护依赖 **单个 SQLite 文件的写锁**（`prisma db push` 工作流、无 `migrations/` 目录），因此只在 **单进程** 下验证过串行化；面向真实的高并发多实例集群既未压测也未验证。**熔断器（circuit-breaker）为进程内状态**（按 `sessionId` 记录），**服务重启即重置**，不是分布式/持久化实现。
+- **多进程 / 集群下的竞争未被压力测试。** 并发保护依赖 **单个 SQLite 文件的写锁**（`prisma db push` 工作流、无 `migrations/` 目录）+ **DB 事务**，因此只在 **单进程** 下验证过串行化；面向真实的高并发多实例集群既未压测也未验证。**熔断器（circuit-breaker）为进程内状态**（按 `sessionId` 记录），**服务重启即重置**，不是分布式/持久化实现。
+- **执行接管不提供 fencing token（【未验证】⚠️）。** `resume` / `retry` 只在 `executionClaimedAt` 陈旧（TTL 启发式）时接管 `executionToken`，**不隔离旧所有者对节点行 / 计划快照的写入**（无 fencing token）—— 副作用仍受 **节点级 claim（原子 compare-and-set）** 与 **SDK 幂等键** 约束，但"旧所有者不再写"这一点未被机制强制。TTL（`EXECUTION_CLAIM_TTL_MS = 600000ms`）是**启发式**阈值，并非已证得的活性判据。
+- **审查日志中的字面 `Error: Schema engine error:` 在本环境未复现（环境差异，不宣称已关闭）。** 本仓库当前使用的 **Prisma 6.19.3** 在 SQLite 上走**内置 WASM schema engine**，测试与 `prisma db push` 均未见该报错；我们**不宣称已修复/已关闭**，仅记录为不同环境（Prisma 版本 / schema engine 实现）下的差异。
 - **诚实的状态分级：** 本 README 描述的能力应区分 **【已实现】✅ 代码强制 /【模拟】🧪 演示替身 /【未验证】⚠️ 尚未覆盖** 三态（逐项见 [`docs/known-risks.md`](docs/known-risks.md)）。**测试全绿 ≠ 安全模型已闭合**：本 Demo 未做形式化验证，也未覆盖多进程集群、真实 LLM、真实支付通道；请在演示与评审中如实标注，不要把"单元 / 集成 / 浏览器测试通过"表述为"安全闭环已证明"。
 
 ---

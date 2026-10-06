@@ -72,6 +72,19 @@ Concrete SDK facts the implementation relies on (verified against pi-agent-core 
      and calls `agent.continue()` so the model narrates the factual outcome.
 Consequence: money-moving calls are always triggered by a human confirmation, never by the model text.
 This is exactly what demo **Test 4** (prompt injection) proves.
+### Durable plan execution (current behavior)
+- **Cancellation only blocks not-yet-authorized/executed work.** Cancelling a plan atomically revokes its
+  **not-yet-authorized/executed** `PendingAction`s and marks the plan `cancelled`. A successfully posted side
+  effect keeps its action at `executed` and is **retained** — never rolled back or cosmetically reverted; the
+  ledger, the action status and the API response stay consistent.
+- **Executed-node recovery** (`agent/confirmation.ts`): when a plan resumes and a gated node's `PendingAction`
+  is already `executed` (side effect posted, node result not yet persisted), the node's `success` is
+  reconstructed from the **persisted** result via the node idempotency key (`nodeExecutionKey`) and the plan
+  continues — no re-confirmation, no duplicate side effect; `pending`/`awaiting_mfa` still await the real human
+  decision; recovery is idempotent.
+- **Execution takeover** (`agent/task-control.ts`): `resume`/`retry` take over a plan/node `executionToken`
+  only when the owner is stale (`EXECUTION_CLAIM_TTL_MS = 600000ms`, computed from the **real** clock); a live
+  owner is never preempted and concurrent takeovers yield exactly one winner.
 ## Security Model (code-enforced, LLM-immutable)
 Three tiers (`RiskLevel = GREEN | YELLOW | RED`), decided by `security/permission-engine.ts` +
 `security/risk-engine.ts` from a **static policy table + dynamic rules** (amount, daily total), never from the model:
@@ -156,6 +169,9 @@ Four layers (see `tests/CONTEXT.md`): (1) pure unit tests (`tests/unit/` — sec
 (3) in-process route-handler HTTP integration (`tests/app/*-http.test.ts`, real handlers + real test SQLite) plus
 root review specs (`tests/review-*.test.ts`); (4) real-browser e2e acceptance (`tests/e2e/acceptance.e2e.ts`,
 playwright-core-driven on an isolated `prisma/e2e.db`, run via `npx tsx`, not Vitest).
+Clean-env bootstrap (`tests/setup.ts`, Vitest `setupFiles`): self-bootstraps a **usable** Prisma Client (usability
+probe) and provisions the **isolated** `prisma/test.db` **fail-loud**, keyed on a **sha1 marker of
+`prisma/schema.prisma`** so the schema is re-pushed **only when it changes**; `prisma/dev.db` is untouched.
 ## Routing Table
 - `./app` → Next.js App Router: pages (dashboard, agent chat, bills, cards, subscriptions, security center, audit) + API route handlers (chat/SSE, actions confirm|verify|cancel, tasks control, audit, security, read models)
 - `./components` → React UI: chat cards (balance/transfer/confirm/MFA/anomaly/plan), charts, banking tiles, ui primitives

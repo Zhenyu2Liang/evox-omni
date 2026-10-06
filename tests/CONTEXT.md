@@ -33,6 +33,13 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   "Fast test-DB path"). Exports `testDbUrl`/`testDbPath`.
 - `helpers/` — shared test utilities (`db`, `fixtures`, `faux-agent`, `scenario`) + a barrel.
   See `helpers/CONTEXT.md` for the full helper API.
+- `helpers/prisma-cli.ts` — Node-built-ins-only shared Prisma CLI/generate infrastructure used by BOTH
+  `setup.ts` and `e2e/helpers.ts` (`resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`,
+  `removeSqliteFiles`, `runCliStep` (fail-loud: throws with FULL captured stdout+stderr+exit code),
+  `diagnosticCliOutput`, `prismaClientUsable`/`prismaClientGenerated`, `runPrismaGenerate`,
+  `ensurePrismaClientGenerated` — its readiness gate keys on the USABILITY probe `prismaClientUsable`
+  (the client that will actually be `require`d), NOT the worktree-local artifact-path proxy
+  `prismaClientGenerated`). NOT in the `helpers/index.ts` barrel — specs must not import it.
 - `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs. See `unit/CONTEXT.md`.
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
 - `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
@@ -46,7 +53,10 @@ Run:
 
 - `npm run test` → `vitest run` (all suites). `npm run test:watch` for watch mode.
 - Target a layer: `npm run test -- tests/unit` · `npm run test -- tests/scenarios` · `npm run test -- tests/app`.
-- Pure unit-only run without a DB: `VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security`.
+- Pure unit-only run without a DB: `VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/planner tests/unit/lib/ledger-keys.test.ts tests/unit/agent/providers/provider-mock.test.ts`
+  (`VITEST_SKIP_DB_SETUP=1` skips BOTH Prisma Client generation AND schema provisioning; note
+  `tests/unit/security` and `tests/unit/planner/executor-claim-scope.test.ts` are DB-BACKED, so they
+  fail without a DB — only the DB-free specs above run clean under the flag).
 
 ### Prerequisites
 
@@ -159,12 +169,27 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - `./review-boundaries.test.ts` → `[integration]` reviewer-boundary regressions over the REAL route handlers (chat/tasks/actions): foreign body-`sessionId` vs cookie → 409; resume keeps a cancelled task cancelled; no fresh executable PendingAction after cancel-during-authorization; paused-plan confirm does NOT advance; two concurrent resumes run each unfinished node exactly once; concurrent HTTP resume adds no duplicate budget; ledgered-but-not-terminal actions counted once in cumulative risk
 - `./review-concurrency.test.ts` → `[integration]` reviewer concurrency-bug regressions (the 5 cases from the `.codex-review` reference port): staggered resume / gated double-resume / orphan-after-cancel / independent plans / unlinked-cancel each assert EXACTLY-ONCE side effects and full revoke-on-cancel (assertions ported unrelaxed)
 - `./review-new-boundaries.test.ts` → `[integration]` cross-cutting exactness regressions over the REAL route handlers + security gateway, using controllable barriers (`deferred()`/`bounded()`): a plan transfer already on the ledger but not yet terminal is counted EXACTLY ONCE in the cumulative daily/amount risk rules (a later ¥100 stays YELLOW; ¥1000 YELLOW, ¥1000.01 RED) while genuinely un-posted actions still count; resuming an investment node in the "effect posted, result not yet persisted" window cannot debit twice (balance ¥23,580 → ¥22,580, exactly one ¥1000 holding); a plan cancellation completed before the authorization compare-and-set prevents the debit (cumulative total ¥0, action `cancelled`, HTTP 200 `{ok:false,status:'cancelled'}`)
+- `./review-followup-probes.test.ts` → `[integration]` reviewer reference-probe ports over the REAL route handlers + gateway (`.codex-review`), using controllable barriers (`deferred()`/`bounded()`): cancel preserves an already-ledgered/executed transfer while result persistence is in flight.
+- `./review-recovery-probes.test.ts` → `[integration]` recovery reference-probe ports (`.codex-review`, `a10cd48`) over the REAL route handlers + DB with controllable fault injection (a spied failing node-result persistence; a seeded dead-owner execution claim). **All 3 green**: an already-executed gated node is reconciled from its persisted result and the DAG continues — no duplicate side effect, idempotent on repeat resume; a stale dead-owner claim is taken over and finishes the remaining work; same-key redemption replays the exact result while a distinct key is refused. The capability lives in `./agent` (executed-node reconciliation in `confirmation.ts`; stale-claim takeover via `{ staleBefore }` in `task-control.ts` resume/retry).
 - `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)
 
 ## Notes for Agents
 
+- **Clean-env bootstrap.** `package.json` has no `postinstall` hook and `prisma generate` is a separate
+  script, so a fresh checkout has only the `@prisma/client` POSTINSTALL STUB (no engine, no schema copy).
+  `tests/setup.ts` self-bootstraps a usable client via `helpers/prisma-cli.ts#ensurePrismaClientGenerated`
+  BEFORE the provision short-circuit (cheap no-op once generated); `e2e/helpers.ts` does the same.
+  Without this, every DB-backed suite dies at IMPORT time with `@prisma/client did not initialize yet`.
+  The skip gate is the USABILITY probe (`prismaClientUsable`): it skips only when a real `PrismaClient`
+  actually CONSTRUCTS (the client `require`d after Node's upward `node_modules` walk), so a
+  hoisted/parent-resolved layout — where `prisma generate` writes to the PARENT path and the
+  worktree-local artifact path stays absent — is ACCEPTED, while a stub-only client (probe throws) still
+  triggers a generate.
+- **Provisioning FAILS LOUD.** `setup.ts` runs the push through `runCliStep`, which THROWS on a non-zero
+  exit with the FULL captured stdout+stderr (never a `console.warn`-and-continue), so the real cause can
+  never be masked by a later `The table main.X does not exist in the current database.` cascade.
 - **All specs are implemented acceptance tests** (no `it.todo`). Keep them green; fix the seam
   (injectable `now`/`id`, unique sessionId, fresh DB), never weaken an assertion to pass.
 - The gateway is the security chokepoint: prove in Test 4 that injection text changes NOTHING about
