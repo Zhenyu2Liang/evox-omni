@@ -279,7 +279,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
 - **A resume never re-mints an action for a still-gated plan node, and RECOVERS an already-executed one.** Every `PendingAction` persists its
   owning plan+node at creation (`PendingAction.taskId`/`nodeId`). Before
   `confirmation.ts#executeGatedToolOnce` mints a gated action for a plan node,
-  `findInFlightPlanActionId(taskId, nodeId)` looks for an existing action on that `(taskId, nodeId)` in
+  `findInFlightPlanAction(taskId, nodeId)` looks for an existing action on that `(taskId, nodeId)` in
   status `pending | awaiting_mfa | confirmed | executed` (`listPendingActionsByTask(taskId, {statuses})` filtered by
   nodeId, oldest-first). When found, the node is treated as IN-PROGRESS: no `gateway.handleToolCall` and
   no new `PendingAction` — the SAME parked outcome
