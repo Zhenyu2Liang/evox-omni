@@ -212,7 +212,11 @@ flowchart TD
   - `banking-sdk/investment.ts#redeemInvestment` 把该次赎回的**执行身份**与**原结果**与入账在**同一 DB 事务**内持久化（`InvestmentHolding.redeemExecutionKey` / `redeemResult`，`prisma/schema.prisma`）：**同身份**再次赎回返回**原结果**且**不重复入账**；**不同身份 / 无身份**再次赎回 → `AppError('CONFLICT')` **明确拒绝**（**不**宣称到账）；并发赎回经条件 `updateMany({ status: { not: 'REDEEMED' } })` 仅**一次实际入账**。
   - `banking-sdk/card.ts#applyVirtualCard` 用**确定性卡片 id** 实现幂等（同一节点的重复受理返回同一张卡）。
   - `agent/confirmation.ts#executeGatedToolOnce` 以 `findInFlightPlanAction(taskId, nodeId)` 守卫（唯一事实来源是该计划节点**已持久化**的 `PendingAction` 行，状态集 `pending|awaiting_mfa|confirmed|executed`）：同一计划节点已有持久化动作时**不再**为该节点铸造第二个 `PendingAction`。
-    当该节点的既有动作状态为 `executed`（副作用已执行并已入账，但节点结果未回写——确认路径先记 `executed`，随后写节点结果的那次持久化可能失败）时，`executeGatedToolOnce` 调用 `recoverExecutedPlanAction`，从该动作**持久化的耐久 `resultJson`** **回填**节点结果（把节点补齐为 `success` 并继续后续节点），**不重新调用工具** ⇒ 非幂等副作用（如 `set_card_limit`）**绝不重放**（此恢复路径**有意不经过网关**，避免为该节点铸造第二个动作）。仅当该动作**没有**持久化结果（遗留行）时，才回退到 `replayExecutedPlanAction`：以动作**持久化的原始 toolName/argsJson** 经 SDK 在**同一节点幂等键** `nodeExecutionKey(taskId, nodeId)` 下**重放**——该路径**依赖各工具自身对幂等键的消费**（如 `subscribe_investment` / `redeem_investment` 即按此键去重），**不构成**通用的「重放不产生重复副作用」保证。真正处于 `pending`/`awaiting_mfa`/`confirmed` 的动作仍返回**已停放结果**、继续等待真实人工确认；恢复是幂等的。
+  既有动作为 `executed` **且带耐久 `resultJson`** 时，`recoverExecutedPlanAction` 从该持久化结果**回填**节点结果（补齐为 `success` 并继续后续节点）——**不重新调用工具**，非幂等副作用（如 `set_card_limit`）**绝不重放**（此恢复路径**有意不经过网关**，避免为该节点铸造第二个动作）。
+  既有动作为 `executed` 但**无存储结果**（遗留行）时，恢复**同样不重新调用工具**：它以**显式失败结果**（「该节点此前已执行但未留存结果，需人工核对（不会重新执行）。」）终结该节点。
+  既有动作为 `confirmed` **且带存储结果**（结果已持久化、终态状态未及写入）时，resume 以 CAS（`confirmed → executed`）把动作**终结**并回填节点结果——**不重跑、不伪造回滚**。
+  该恢复对所有门控写工具**通用**且**幂等**（无额外写入、无新确认、无重复副作用）；真正处于 `pending`/`awaiting_mfa` 的动作仍返回**已停放结果**、继续等待真实人工确认。
+- **结果与终态状态的原子写入**——`agent/confirmation.ts#executeAuthorizedAction` 在**单个** `prisma.$transaction` 内同写 `PendingAction.resultJson` 与**终态状态**（`executed`/`failed`），关闭"结果已存、状态却停在 `confirmed`/`waiting_confirmation`"的搁浅窗口；带存储结果的 `confirmed` 动作在 resume 时以 CAS（`confirmed → executed`）+ 回填终结，**无重跑、无伪造回滚**。
 
 ---
 
@@ -376,7 +380,9 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - 身份与计划生命周期——cookie-only 会话（body 不选会话，冲突即 `409` 且不签发 cookie）、计划状态 CAS（终态不可复活）、转账账本幂等（`ledgerKeyForAction` 统一键，计划节点/独立调用共用同一派生）；
 - **DB 原子执行认领（恰好一次）**——`repositories/task.ts#claimTaskExecution`（计划级 token，`finally` 中释放）与 `#claimNodeExecution`（节点级 token，`finally` 中释放）；计划取消的**主保证** = `task-control.ts#cancelTask` 在**单个** `prisma.$transaction` 内，用 `repositories/pendingAction.ts#revokePendingActionsByTask` 的**一条** `updateMany` **批量**撤销计划**全部**停放 action，并与计划 `status='cancelled'` 的**终态写入**同事务提交（两者之间无窗口；另有节点扫描兜底 + 运行后扫描 `sweepCancelledPlan` 作为 FALLBACK）；
 - **执行认领 token fence（被接管的旧所有者无法伪造 / 覆盖结果）**——`agent/task-control.ts#createTaskPersistence` 把节点 / 计划结果写入路由到 `lib/db/repositories/task.ts` 的 **token-fenced 原子原语**：`updateTaskNode(..., { fenceToken })`（**单条** `updateMany`，要求 `executionToken === fenceToken`，认领丢失时返回 `null`）与 `claimTaskStatus(..., { fenceToken })`（认领丢失时返回 `false`）；fence 与写入在**同一条语句**内（**非**读后写）⇒ 认领被接管的「僵尸」执行者**无法**伪造或覆盖节点 / 计划结果（也无法据此叙述）；
-- **已执行门控节点的状态安全恢复**——`agent/confirmation.ts#recoverExecutedPlanAction` 对已 `executed` 的门控计划节点，从 `executeAuthorizedAction` 持久化的**耐久** `PendingAction.resultJson` **回填**节点结果，**不重新调用工具**，因此非幂等副作用（如 `set_card_limit`）**绝不重放**；重放工具（`replayExecutedPlanAction`）**仅**用于无耐久结果的遗留行；
+  fence **覆盖每一条执行器写入路径**（首次 `submit_plan` 运行、依赖跳过、condition / note 节点，以及确认续跑）；持久化端口以显式 `mode:'executor'`（**始终**加 fence）与 `mode:'control'`（**仅**刻意不加 fence 的 `pauseTask`/`cancelTask`，因其不持有领取）区分两种写入；**本模块内不存在非 CAS / 未加 fence 的写入**；
+  当**确认续跑**丢失计划领取时，它**不**推进计划，而是经 `agent/task-fencing.ts#recordDecidedNodeFenced` 以**无所有者 CAS**（`where { task: { executionToken: null } }`，随后 `settlePlanFromNodes`）记下该已决定节点，使**活跃所有者**继续、人工决定**永不丢失**；
+- **已执行门控节点的状态安全恢复（回填，非重放）**——`agent/confirmation.ts#recoverExecutedPlanAction` 对已 `executed` 的门控计划节点，从 `executeAuthorizedAction` 持久化的**耐久** `PendingAction.resultJson` **回填**节点结果，**不重新调用工具**，因此非幂等副作用（如 `set_card_limit`）**绝不重放**；对**无存储结果**的遗留行，恢复也**不重新调用工具**，而以「已执行但未留存结果，需人工核对」的显式失败结果终结该节点；
 - 熔断（连续 3 次 MFA 失败锁会话）、注入检测（纵深防御）、幻觉防护（只报工具结果的事实）；
 - 审计写入（门控动作 + 安全事件）。
 
@@ -406,7 +412,6 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - **原子累计限额认领的串行化依赖 SQLite 文件锁**（见「原子累计限额主张」的注意项）——SQLite 特有，
   未在其他数据库引擎 / 多写者部署上验证；
 - **陈旧接管的接管视界是启发式**：`agent/task-control.ts` 的 `EXECUTION_CLAIM_TTL_MS = 600000`（≈10 分钟）是**启发式**边界——在**单次工具调用**内阻塞**极久**的进程仍可能被接管（其节点 / 计划结果写入已被 token fence 拒绝，但接管这个动作本身仍会发生）；
-- **部分节点写入仍未加 fence**：遗留的内联 `submit_plan` `PlanDeps`，以及在节点被认领**之前**发生的「已决定节点」写入（`createTaskPersistence` 未提供 node token 时走未加 fence 的 legacy 路径）；
 - **执行认领 / fence 的并发正确性建立在 SQLite 单写者假设之上**——多进程 / 多实例部署未验证。
 
 > 验收场景与断言见 [`test-cases.md`](./test-cases.md)；已知限制见 [`known-risks.md`](./known-risks.md)。
