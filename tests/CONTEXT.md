@@ -39,21 +39,31 @@ This node owns test infrastructure and fixtures — NOT the business logic under
 - `helpers/` — shared test utilities (`db`, `fixtures`, `faux-agent`, `scenario`) + a barrel.
   See `helpers/CONTEXT.md` for the full helper API.
 - `helpers/prisma-cli.ts` — Node-built-ins-only shared Prisma CLI/generate infrastructure used by BOTH
-  `setup.ts` and `e2e/helpers.ts` (`resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`,
-  `removeSqliteFiles`, `runCliStep` (fail-loud: throws with FULL captured stdout+stderr+exit code),
-  `runCliStepCaptured` (the non-throwing spawn primitive `runCliStep` delegates to),
-  `provisionSchemaLadder` (the ORDERED `prisma db push` ladder: each rung runs ONLY after the previous
-  FAILED, the DB file + sidecars are deleted before EVERY rung, and a total failure THROWS one error
-  embedding every rung's FULL captured output + environment diagnostics — see `PushRung`/
-  `ProvisionSchemaOptions`), `diagnosticCliOutput`, `prismaClientUsable`/`prismaClientGenerated`,
-  `runPrismaGenerate`, `ensurePrismaClientGenerated` — its readiness gate keys on the USABILITY probe
-  `prismaClientUsable` (the client that will actually be `require`d), NOT the worktree-local
-  artifact-path proxy `prismaClientGenerated`). It ALSO owns the schema-engine **log-level policy**
-  (`SCHEMA_ENGINE_RUST_LOG` + `pinSchemaEngineLogging`, called at module load by `setup.ts` and
-  `e2e/helpers.ts`; the per-spawn sanitization lives in `runCliStepCaptured`/`provisionDiagnostics`
-  and `isMaskedSchemaEngineError` explains an empty `Schema engine error:` — see **Known Issues**).
+  `setup.ts` and `e2e/helpers.ts` (`removeSqliteFiles`, `runCliStep` (fail-loud: throws with FULL
+  captured stdout+stderr+exit code), `runCliStepCaptured` (the non-throwing spawn primitive
+  `runCliStep` delegates to), `provisionSchemaLadder` (the ORDERED `prisma db push` ladder: each rung
+  runs ONLY after the previous FAILED, the DB file + sidecars are deleted before EVERY rung, and a
+  total failure THROWS one error embedding every rung's FULL captured output + environment
+  diagnostics — see `PushRung`/`ProvisionSchemaOptions`), `diagnosticCliOutput`,
+  `prismaClientUsable`/`prismaClientGenerated`, `runPrismaGenerate`, `ensurePrismaClientGenerated` —
+  its readiness gate keys on the USABILITY probe `prismaClientUsable` (the client that will actually
+  be `require`d), NOT the worktree-local artifact-path proxy `prismaClientGenerated`).
+  It is the RE-EXPORTING entry point for the schema-engine **log-level policy**
+  (`SCHEMA_ENGINE_RUST_LOG`, `pinSchemaEngineLogging`, `prismaCliEnv` — `pinSchemaEngineLogging` is
+  called at module load by `setup.ts` and `e2e/helpers.ts`) and for the binary-resolution helpers
+  (`resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`): those now LIVE in the
+  NON-TEST sibling module `lib/prisma-cli-env.ts` and are re-exported here with the public API
+  unchanged, so every existing importer of THIS module keeps working. The per-spawn sanitization lives
+  in `runCliStepCaptured`/`provisionDiagnostics` (via `lib/prisma-cli-env.ts#prismaCliEnv`) and
+  `isMaskedSchemaEngineError` explains an empty `Schema engine error:` — see **Known Issues**.
   NOT in the `helpers/index.ts` barrel — specs must not import it.
-- `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs. See `unit/CONTEXT.md`.
+- `../lib/prisma-cli-env.ts` (sibling, NON-TEST) — the shared schema-engine environment policy + CLI/binary
+  resolution used by the two test entry points AND by the deploy script `scripts/db-push.ts`:
+  `SCHEMA_ENGINE_RUST_LOG = 'info'`, the MUTATING `pinSchemaEngineLogging(env)` (called once at module
+  load) and the NON-mutating `prismaCliEnv(env)` (the env for ONE spawned CLI step), plus
+  `resolveRepoRoot`/`resolvePrismaBin`/`resolveTsxBin`/`cliCommand`. Node built-ins ONLY — no `vitest`,
+  no `@/` alias, no import-time side effects.
+- `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs (incl. `unit/lib/prisma-cli-env.test.ts` (10 tests) for the shared `lib/prisma-cli-env.ts` schema-engine env policy). See `unit/CONTEXT.md`.
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
 - `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
   (chat/SSE, action confirm|verify|cancel, task lifecycle, and `review-regressions-http.test.ts`
@@ -64,7 +74,7 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   fence-loss coverage `confirm-continuation-fencing` (LIVE plan-owner-token branch) +
   `confirm-continuation-no-owner-fencing` (NO-OWNER branch-3 CAS, incl. a takeover-during-write skip)).
   See `app/CONTEXT.md`.
-- `review-boundaries.test.ts`, `review-concurrency.test.ts` & `review-new-boundaries.test.ts` — root-level `[integration]` reviewer-reference ports (real route handlers + gateway/executor + controllable barriers): plan/node linkage, cancel safety, exactly-once concurrent execution, de-dup scope, ledgered-but-not-terminal cumulative-risk exactness, no double-debit across the effect/persist window, and revoke-on-cancel-before-CAS. See the Routing Table entries below.
+- `review-boundaries.test.ts`, `review-concurrency.test.ts`, `review-new-boundaries.test.ts`, `review-next-boundaries.test.ts`, `review-obsolete-executor.test.ts`, `review-result-recovery.test.ts` & `deploy-db-push.test.ts` — root-level `[integration]` / deploy specs (real route handlers + gateway/executor + the real deploy script + controllable barriers): plan/node linkage, cancel safety, exactly-once concurrent execution, de-dup scope, ledgered-but-not-terminal cumulative-risk exactness, no double-debit across the effect/persist window, revoke-on-cancel-before-CAS, plan-ownership fencing of an obsolete executor, gated-node result recovery, and the `RUST_LOG`-pinned deploy path. See the Routing Table entries below.
 
 Run:
 
@@ -152,7 +162,7 @@ plan pause/resume + cancel, and refresh/action-entry recovery from persisted ser
 
 ## Fast test-DB path (why the suite is fast — do not remove)
 
-The full suite (559 tests / 77 files) runs in ~65s (a cold run that provisions the test DB adds ~10s).
+The full suite (**585 tests / 82 files**, 0 failures, cold-start on the isolated auto-provisioned `prisma/test.db` via the default `npx vitest run`) runs in ~65s (a cold run that provisions the test DB adds ~10s).
 This depends on a deliberately fast SQLite configuration; if any piece is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
 
 - `helpers/db.ensureTestPragmas()` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`
@@ -186,7 +196,8 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   `P1003 Database … does not exist` probe that `db push` relies on before creating a fresh SQLite
   file) lands at index 0 and gets discarded too, and the CLI reports an EMPTY
   `Error: Schema engine error:` — so a cold-checkout `db push` fails with no reason. The fix is
-  env sanitization, not a bigger ladder: `helpers/prisma-cli.ts` pins `SCHEMA_ENGINE_RUST_LOG = 'info'`,
+  env sanitization, not a bigger ladder: `lib/prisma-cli-env.ts` pins `SCHEMA_ENGINE_RUST_LOG = 'info'`
+  (re-exported by `helpers/prisma-cli.ts`),
   `pinSchemaEngineLogging()` is called at module load by BOTH entry points (`tests/setup.ts`,
   `tests/e2e/helpers.ts`) so this process and every child it spawns (Prisma CLI, schema engine,
   `next dev`) inherit it, and `runCliStepCaptured` re-pins the level per spawn so even a caller passing
@@ -199,7 +210,7 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 
 - `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + a module-load `pinSchemaEngineLogging()` (forces `RUST_LOG=info`, see **Known Issues**) + hash-aware schema provisioning through the shared ORDERED LADDER (`helpers/prisma-cli.ts#provisionSchemaLadder`; primary rung `prisma db push --force-reset --skip-generate`, then `db push --skip-generate`, then flag-less `db push`; re-pushes when the sha1 of `prisma/schema.prisma` changes; the DB file + sidecars are removed before every rung)
 - `./helpers` → shared test utilities (db reset/seed + fast pragmas, fixtures, faux agent, scenario harness)
-- `./unit` → pure/logic unit specs for security, planner, banking-sdk, agent, lib (incl. `unit/security/risk-engine-dedup.test.ts` → ledger dedup of the in-flight transfer total via `computeInFlightTransferTotal`)
+- `./unit` → pure/logic unit specs for security, planner, banking-sdk, agent, lib (incl. `unit/security/risk-engine-dedup.test.ts` → ledger dedup of the in-flight transfer total via `computeInFlightTransferTotal`, and `unit/lib/prisma-cli-env.test.ts` (10 tests) → the shared `lib/prisma-cli-env.ts` schema-engine env policy: the mutating entry-point pin vs the per-spawn non-mutating copy)
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)
 - `./app` → real app-entry (HTTP) specs driving the real Next.js route handlers (chat/SSE, action confirm|verify|cancel, task lifecycle, reviewer regressions); newer specs cover cookie-only session takeover, cancel-during-authorization, concurrent resume/retry exactly-once, plan pause/terminal-state, cumulative ¥1000/day risk, ledger consistency, YELLOW→RED MFA upgrade — every top-level describe is labeled `[integration]` (these are handler tests, NOT browser E2E). `confirm-continuation-no-owner-fencing.test.ts` drives `@/agent`'s `task-fencing.ts#recordDecidedNodeFenced` NO-OWNER (branch-3) CAS over a REAL test SQLite (`getTestPrisma()`), seeding via `runSubmitPlan` + `executeGatedTool` on a 2-node plan: with no owner the decided node is recorded and the plan is SETTLED to `success` (the parked `PendingAction` untouched), and a takeover that claims the plan INSIDE the write window makes the CAS match 0 rows — the recorder returns `false`, the node is not overwritten and nothing settles (the spy wraps the REAL `agentTaskNode.updateMany` and calls the bound original; the CAS result is never fabricated)
 - `./e2e` → real-browser acceptance harness: boots `next dev` + real headless Chrome and drives the `/agent` UI end-to-end, asserting on RENDERED DOM (the ONLY true browser E2E layer). See `e2e/CONTEXT.md`.
@@ -209,10 +220,13 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - `./review-followup-probes.test.ts` → `[integration]` reviewer reference-probe ports over the REAL route handlers + gateway (`.codex-review`), using controllable barriers (`deferred()`/`bounded()`): cancel preserves an already-ledgered/executed transfer while result persistence is in flight.
 - `./review-recovery-probes.test.ts` → `[integration]` recovery reference-probe ports (`.codex-review`, `a10cd48`) over the REAL route handlers + DB with controllable fault injection (a spied failing node-result persistence; a seeded dead-owner execution claim). **All 3 green**: an already-executed gated node is reconciled from its persisted result and the DAG continues — no duplicate side effect, idempotent on repeat resume; a stale dead-owner claim is taken over and finishes the remaining work; same-key redemption replays the exact result while a distinct key is refused. The capability lives in `./agent` (executed-node reconciliation in `confirmation.ts`; stale-claim takeover via `{ staleBefore }` in `task-control.ts` resume/retry).
 - `./review-final-boundaries.test.ts` → `[integration]` **frozen regression guard (GREEN)** over the REAL route handlers + DB with controllable barriers (`.codex-review` reference port): (1) recovering an executed `set_card_limit` node backfills its node result from the **persisted** `PendingAction.resultJson` (no tool re-invocation) so the resumed plan must NOT re-apply the node's old amount (¥1500) over a later independently authorized limit (¥500) — final limit stays ¥500 and the plan completes `success`; (2) plan/node writes are **token-fenced**, so a still-live old executor's late failure (after a stale-claim takeover completed the node) must NOT overwrite the takeover's result — the node stays `success` with exactly one budget side effect. Both invariants hold and the spec is kept as a regression guard.
-- `./review-result-recovery.test.ts` → `[integration]` gated plan-node RESULT-RECOVERY regressions over the REAL confirm/task route handlers + DB with a persistence fault (`vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(...)`, the REAL result-transaction write), every assertion re-read via `getTestPrisma()`: a `confirmed` action with a persisted `resultJson={ok:true,…}` finalizes `executed` / node `success` WITHOUT re-invoking the tool (side effect exactly once); a persisted `{ok:false,…}` result finalizes action/node/plan `failed` (never `executed`); recovery is idempotent and concurrent-safe (one side effect, one action); a simulated process restart recovers purely from persisted server state; and the result-transaction-rollback wedge (side effect committed, result write rejected) must NOT stay `waiting_confirmation` — it settles terminal `failed` carrying the `人工核对` message with the side effect exactly once
-- `./review-next-boundaries.test.ts` → `[integration]` obsolete-executor / result-recovery boundary regressions over the REAL route handlers + DB (`deferred()`/`bounded()` barriers, `getTestPrisma()`): a replaced-plan-executor must not reclaim/overwrite a completed successor and a stale initial executor must not publish a plan-update after takeover; a `set_card_limit` node whose result transaction genuinely fails (fault injected at `pendingActionRepo.setPendingActionStatus`, the REAL result write) must recover WITHOUT re-applying the node's original ¥1500 over a later independently authorized ¥500 (final ¥500) and settle the plan `failed` with the `人工核对` message; recovery of a persisted `{ok:false}` result finalizes action/node/plan `failed` (never `executed`)
+- `./review-result-recovery.test.ts` (6 tests) → `[integration]` gated plan-node RESULT-RECOVERY regressions over the REAL confirm/task route handlers + DB with a persistence fault (`vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(...)`, the REAL result-transaction write), every assertion re-read via `getTestPrisma()`: a `confirmed` action with a persisted `resultJson={ok:true,…}` finalizes `executed` / node `success` WITHOUT re-invoking the tool (side effect exactly once); a persisted `{ok:false,…}` result finalizes action/node/plan `failed` (never `executed`); recovery is idempotent and concurrent-safe (one side effect, one action); a simulated process restart recovers purely from persisted server state; and the result-transaction-rollback wedge (side effect committed, result write rejected) must NOT stay `waiting_confirmation` — it settles terminal `failed` carrying the `人工核对` message with the side effect exactly once
+- `./review-next-boundaries.test.ts` (5 tests tagged `REVIEW_OBSOLETE_SUCCESSOR_RECLAIM`, `REVIEW_OBSOLETE_PROGRESS_EVENT`, `REVIEW_RESULT_TX_ROLLBACK_WEDGE`, `REVIEW_FAILED_RESULT_FINALIZATION`, `REVIEW_LEGACY_GUARD_COVERAGE`) → `[integration]` obsolete-executor / result-recovery boundary regressions over the REAL route handlers + DB (`deferred()`/`bounded()` barriers, `getTestPrisma()`): a replaced-plan-executor must not reclaim/overwrite a completed successor and a stale initial executor must not publish a plan-update after takeover; a `set_card_limit` node whose result transaction genuinely fails (fault injected at `pendingActionRepo.setPendingActionStatus`, the REAL result write) must recover WITHOUT re-applying the node's original ¥1500 over a later independently authorized ¥500 (final ¥500) and settle the plan `failed` with the `人工核对` message; recovery of a persisted `{ok:false}` result finalizes action/node/plan `failed` (never `executed`)
+- `./review-obsolete-executor.test.ts` (4 tests) → `[integration]` plan-ownership FENCING acceptance over the REAL task route handler + gateway-routed `runTool` port + REAL executor + test SQLite (only a race barrier, never a mocked return value): after a `resume`/`retry` takeover rotates the plan `executionToken` (owner aged past `EXECUTION_CLAIM_TTL_MS`), the obsolete executor can NOT re-claim/reuse a completed node, run its successor tool, flip a takeover-completed dependency to `failed`/`skipped`, or publish a stale `onPlanUpdate`; two concurrent takeovers yield EXACTLY ONE side effect (frozen acceptance criteria — assertions never weakened).
+- `./deploy-db-push.test.ts` (1 test) → `[integration]` regression for the SUPPORTED deploy entrypoint `scripts/db-push.ts` (`npm run db:push`/`db:reset`): driven through `tsx` (via `cliCommand(resolveTsxBin(repoRoot), …)`, same as the E2E harness) with an ambient `RUST_LOG=warn` and a DELIBERATELY isolated absolute `DATABASE_URL`, a MISSING SQLite file self-provisions (exit 0 + the file appears) while `prisma/dev.db`/`test.db`/`e2e.db` stay asserted UNTOUCHED (before AND after).
 - `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
+- `../lib/prisma-cli-env.ts` → NON-TEST shared schema-engine env policy + CLI/binary resolution, imported by the test entry points AND the deploy script `scripts/db-push.ts` (sibling — re-exported by `./helpers/prisma-cli.ts`)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)
 
 ## Notes for Agents

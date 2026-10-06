@@ -17,7 +17,7 @@
    用户消息 → Pi Agent（脚本化模型）→ 银行工具 → Security Gateway（`beforeToolCall`）→ Banking SDK → 审计。
 3. **HTTP 路由集成测试（route-handler integration，`[integration]`）**——`tests/app/` 下**进程内（in-process）**
    直接导入**真实导出**的 route handler，用真实 `NextRequest` 调用（共享 `harness.ts`），覆盖
-   `/api/chat`、`/api/actions/*`、`/api/tasks/*`；此外还有**跨切面**的边界/契约复核规格 `tests/review-boundaries.test.ts`、`tests/review-concurrency.test.ts`、`tests/review-new-boundaries.test.ts`、`tests/review-current-boundaries.test.ts`、`tests/review-execution-integrity.test.ts`、`tests/review-execution-fencing.test.ts`、`tests/review-followup-probes.test.ts` 与 `tests/app/confirm-continuation-fencing.test.ts`，以及**冻结回归守卫** `tests/review-final-boundaries.test.ts` 与 `tests/review-recovery-probes.test.ts`（同为 `[integration]`）。
+   `/api/chat`、`/api/actions/*`、`/api/tasks/*`；此外还有**跨切面**的边界/契约复核规格 `tests/review-boundaries.test.ts`、`tests/review-concurrency.test.ts`、`tests/review-new-boundaries.test.ts`、`tests/review-current-boundaries.test.ts`、`tests/review-execution-integrity.test.ts`、`tests/review-execution-fencing.test.ts`、`tests/review-followup-probes.test.ts`、`tests/review-next-boundaries.test.ts`、`tests/review-obsolete-executor.test.ts`、`tests/review-result-recovery.test.ts` 与 `tests/app/confirm-continuation-fencing.test.ts`，以及**冻结回归守卫** `tests/review-final-boundaries.test.ts` 与 `tests/review-recovery-probes.test.ts`（同为 `[integration]`）。
 4. **真实浏览器验收 harness（real-browser acceptance）**——`tests/e2e/` 下**独立于 Vitest**（`tsx` 显式运行），
    启动真实 `next dev` + 真实无头 Chrome（隔离库 `prisma/e2e.db`），对**渲染后的 DOM** 断言——见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
@@ -31,7 +31,7 @@
 > 详见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
 ### 当前实测状态 · Measured State
-- **`npx vitest run`** → **76 个文件 / 557 个测试全部通过**。
+- **`npx vitest run`** → **82 个文件 / 585 个测试全部通过**。
 - **`npx tsc --noEmit`** → **0 错误**（Vitest 只转译、不做类型检查，故类型门禁单列）。
 - **`npx next build`** → **退出码 0**。
 - **真实浏览器验收**（`npx tsx tests/e2e/acceptance.e2e.ts`，隔离库 `prisma/e2e.db`）→ **PASS 5 / FAIL 0 / SKIP 0**：
@@ -188,6 +188,7 @@ npx tsx tests/e2e/acceptance.e2e.ts       # 真实浏览器验收 harness（非 
 | 投资 | `banking-sdk/investment`：`minAmount`、认购；赎回**身份重放**（同一 `idempotencyKey` 返回**原始结果**且不再入账，不同 / 缺失身份 → `CONFLICT`） | `tests/unit/banking-sdk/investment.test.ts`、`tests/review-recovery-probes.test.ts`、`tests/review-followup-probes.test.ts` |
 | PendingAction claim | `pendingAction.claim`：恰好一次 `pending→confirmed` claim、`from` 集合 + `userId`/`sessionId` 作用域 | `tests/unit/lib/pendingAction.claim.test.ts` |
 | 账本键推导 | `ledger-keys`：`nodeExecutionKey(taskId,nodeId)` → 冻结 `nxe:<taskId>:<nodeId>`；`idempotentTransferTxId(userId,key)` → 冻结 `txidem_` + `sha256` 前 32 hex；相同输入恒等、不同计划/节点/归属**永不**合并 | `tests/unit/lib/ledger-keys.test.ts` |
+| Prisma CLI 环境 | `prisma-cli-env`：共享的 schema-engine 环境策略——`SCHEMA_ENGINE_RUST_LOG='info'`、`pinSchemaEngineLogging`（**就地改动**并返回同一对象、`RUST_BACKTRACE` 默认 / 保留）、`prismaCliEnv`（返回**新对象**、不改入参、仅在缺失时默认 `RUST_BACKTRACE`、透传其它环境键） | `tests/unit/lib/prisma-cli-env.test.ts` |
 
 ---
 
@@ -230,8 +231,12 @@ handler 与会话、读取 SSE 分帧。
 | `tests/review-execution-integrity.test.ts` | 复核**执行完整性**（7 例）：结果与终态状态在**同一 `prisma.$transaction`** 内原子写入，**无**「结果已存、状态滞留 `confirmed`/`waiting_confirmation`」的搁浅动作；带存储结果的 `confirmed` 动作在 resume 时以 CAS（`confirmed → executed`）+ 回填终结，**无重跑、无伪造回滚** |
 | `tests/review-execution-fencing.test.ts` | 复核**执行围栏**（2 例）：**丢失领取**的执行器写入被拒绝（`updateTaskNode` 返回 `null` 哨兵 / `claimTaskStatus` 返回 `false`）、并发接管**恰好一个赢家**、仍在**节点边界**续租的活跃拥有者**不被误抢占** |
 | `tests/app/confirm-continuation-fencing.test.ts` | 复核**确认续跑围栏**（含一个无所有者 companion 断言）：确认续跑丢失计划领取时**不推进计划**，改经 `agent/task-fencing.ts#recordDecidedNodeFenced` 的**无所有者 CAS** 记下已决定节点，使**活跃所有者**继续、人工决定**永不丢失**、金额只动一次 |
+| `tests/review-next-boundaries.test.ts` | 复核**下一代边界**（5 例）：被接管的执行者**不重新领取 / 覆盖已完成后继节点**（后继工具从不被调用）；过期执行者在接管成功后**零**迟到 `plan_update`；业务副作用已提交、结果事务回滚的动作**不无限停滞**（第二次 resume 不停在 `waiting_confirmation`）；持久化**失败**结果经 CAS 终结为 `failed`（而非 `executed`）；遗留恢复在结果事务真失败时安全（**不**重新施加其后独立授权的限额，以含 `人工核对` 的显式失败终结） |
+| `tests/review-obsolete-executor.test.ts` | **冻结验收规格**——过期执行者停走（4 例）：丢失计划领取的执行者**不重新领取已完成后继节点**（后继工具从不被调用，接管方完成的节点保持 `success`）、接管成功后**零**迟到 `onPlanUpdate` 快照、迟到失败**不**把已完成依赖翻成 `failed`、也不把下游翻成 `skipped`、并发接管**恰好一个**执行者（副作用节点只运行一次） |
+| `tests/review-result-recovery.test.ts` | 复核**结果恢复**（6 例）：副作用已提交但结果 `$transaction` 回滚的楔子动作被终结 `failed` 并路由人工核对（消息含 `人工核对`，工具**绝不重跑**，计划**绝不**停在 `waiting_confirmation`）；持久化的**成功**结果经 CAS（`confirmed → executed`）**回填**；恢复纯粹由**服务端持久化状态**驱动（等价于进程重启、不复用进程内句柄）；其后独立授权的新限额**不被覆盖** |
+| `tests/deploy-db-push.test.ts` | 复核**部署入口**（1 例）：以环境 `RUST_LOG=warn` 经 `tsx` 驱动**真实** `scripts/db-push.ts`，缺失的隔离 SQLite 库**自举成功**、退出码 0，且共享 `dev/test/e2e.db` 逐字节不变（隔离 `DATABASE_URL` 被遵守） |
 
-> `review-final-boundaries` 与 `review-recovery-probes` 是**冻结回归守卫（frozen）**，锁定两种恢复不变式：(a) 恢复通过**回填持久化的 `PendingAction.resultJson`** 完成、**绝不**再次调用工具；(b) 接管写入受**令牌围栏（token-fenced）**保护——僵尸执行器**无法**覆盖接管方已写入的结果。`review-current-boundaries` / `review-execution-integrity` / `review-execution-fencing` 与 `tests/app/confirm-continuation-fencing` 按**不变式分组**补充当前边界、执行完整性与围栏覆盖。
+> `review-final-boundaries` 与 `review-recovery-probes` 是**冻结回归守卫（frozen）**，锁定两种恢复不变式：(a) 恢复通过**回填持久化的 `PendingAction.resultJson`** 完成、**绝不**再次调用工具；(b) 接管写入受**令牌围栏（token-fenced）**保护——僵尸执行器**无法**覆盖接管方已写入的结果。`review-current-boundaries` / `review-execution-integrity` / `review-execution-fencing` 与 `tests/app/confirm-continuation-fencing` 按**不变式分组**补充当前边界、执行完整性、围栏覆盖，以及**过期执行者**（`tests/review-obsolete-executor.test.ts`）、**结果恢复**（`tests/review-result-recovery.test.ts`）、**下一代边界**（`tests/review-next-boundaries.test.ts`）与**部署入口**（`tests/deploy-db-push.test.ts`）。
 
 ---
 
@@ -279,7 +284,7 @@ handler 与会话、读取 SSE 分帧。
   Agent / 工具 / 安全流水线，只有模型被脚本化。
 - **`LLM_MODE=mock`**：`tests/setup.ts` 强制设置，并把 `DATABASE_URL` 指向隔离的测试 SQLite
   （`prisma/test.db`，git 忽略）；provision schema 前先按**可用性探针** `prismaClientUsable` 确保 Prisma Client 可用（产物路径标记仅为非权威代理），provision **失败即抛**（按退出码判定、附完整 CLI 输出），**绝不** warn-and-continue。
-- **clean-env 自举已修复（`RUST_LOG` 根因）**：`tests/helpers/prisma-cli.ts#pinSchemaEngineLogging` 对 Prisma schema-engine 子进程强制 `RUST_LOG=info`——根因是外层 `RUST_LOG` ≥ `warn` 抑制了引擎的 INFO 横幅，令 Prisma CLI 的报错映射 `e.split(/\r?\n/).slice(1)` 把**第 0 行**真实错误丢弃，在**全新 SQLite 文件**上只剩空的 `Error: Schema engine error:`；修复后默认 `npx vitest run` 与默认浏览器 E2E 均**自动、无手工准备、无 skip 标志、无预写标记**地 provision 隔离库，且 `prisma/dev.db` 不受影响。
+- **clean-env 自举（`RUST_LOG` 根因）**：`lib/prisma-cli-env.ts#pinSchemaEngineLogging`（由 `tests/helpers/prisma-cli.ts` 再导出，公共 API 不变）对 Prisma schema-engine 子进程强制 `RUST_LOG=info`；部署路径同源——`npm run db:push` → `tsx scripts/db-push.ts` 复用同一份固定逻辑（并置 `RUST_BACKTRACE=1`、解析项目内 Prisma CLI、透传额外参数、以子进程退出码退出）——根因是外层 `RUST_LOG` ≥ `warn` 抑制了引擎的 INFO 横幅，令 Prisma CLI 的报错映射 `e.split(/\r?\n/).slice(1)` 把**第 0 行**真实错误丢弃，在**全新 SQLite 文件**上只剩空的 `Error: Schema engine error:`；因此默认 `npx vitest run` 与默认浏览器 E2E 均**自动、无手工准备、无 skip 标志、无预写标记**地 provision 隔离库，且 `prisma/dev.db` 不受影响。部署时的顺序为 `npm run db:push` → `npm run db:seed` → `npm run build`（`npm run db:reset` = `tsx scripts/db-push.ts --force-reset && tsx prisma/seed.ts`；构建会预渲染查询 SQLite 的路由）。
 - **可注入时间与 id**：`now` / `id` 可注入，因此测试稳定确定。
 - **测试隔离**：DB 支撑的套件每个测试 `resetDatabase()` + 重新播种；绝不共享可变 DB 状态。
 - **文件串行**：`vitest.config.ts` 设置 `fileParallelism: false`——全部套件共用同一个 `prisma/test.db`，
