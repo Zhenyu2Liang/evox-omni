@@ -7,34 +7,51 @@
  *      git-ignored) using an ABSOLUTE path, so the Prisma CLI and the runtime client
  *      (`lib/db/client.ts` → `resolveDatabaseUrl()`) resolve the SAME file.
  *   2. Forcing `LLM_MODE=mock` (the faux provider) so no suite ever touches the network.
- *   3. Provisioning the schema (`prisma db push --force-reset`) whenever the provisioned
- *      schema version changes. The guard marker stores the **sha1 of `prisma/schema.prisma`**
- *      so parallel workers do not race AND a stale `test.db` (provisioned before a schema
- *      change) is automatically re-pushed instead of silently reused. Because the fast-path
- *      keeps `test.db` in WAL mode (which `--force-reset` cannot re-reset), the stale DB files
- *      are removed first so the push always starts from a clean slate.
+ *   3. Guaranteeing a **generated, usable Prisma Client** on a clean checkout, then provisioning
+ *      the schema (`prisma db push --force-reset`) whenever the provisioned schema version changes.
+ *      The guard marker stores the **sha1 of `prisma/schema.prisma`** so parallel workers do not
+ *      race AND a stale `test.db` (provisioned before a schema change) is automatically re-pushed
+ *      instead of silently reused. Because the fast-path keeps `test.db` in WAL mode (which
+ *      `--force-reset` cannot re-reset), the stale DB files are removed first so the push always
+ *      starts from a clean slate.
  *
  * Fixture SEEDING is intentionally NOT done here — a single global seed would be wiped by the
  * per-suite resets that tests need for isolation. Each suite seeds through
  * `tests/helpers/fixtures.ts` / `tests/helpers/db.ts` in `beforeAll`/`beforeEach`
  * (`resetDatabase()`). This file guarantees an EMPTY, MIGRATED test DB plus the right env.
  *
+ * WHY A BARE `npm install` ALONE IS NOT ENOUGH: `package.json` has no `postinstall` hook and
+ * `prisma generate` is a separate script, so a clean checkout has ONLY the `@prisma/client`
+ * POSTINSTALL STUB. Every DB-backed suite would then die at IMPORT time with the misleading
+ * `@prisma/client did not initialize yet…`. `ensurePrismaClientGenerated()` (shared with the E2E
+ * harness) self-bootstraps the client here before anything imports it.
+ *
+ * FAIL-LOUD BY DESIGN: a provisioning/generate failure THROWS with the FULL captured CLI output
+ * (never a `console.warn` that lets the run continue). Letting the run continue would surface the
+ * failure later as the far more confusing
+ * `The table main.X does not exist in the current database.` and hide the real reason.
+ *
  * HOW THIS FILE IS WIRED (root-owned config — escalate to root, do NOT edit from here):
  *   `vitest.config.ts` MUST add   `test.setupFiles: ['tests/setup.ts']`.
  *   Optionally also   `test.env: { LLM_MODE: 'mock' }`   (belt-and-braces; this file sets it too).
  *
  * PREREQUISITES:
- *   - `npm install` (prisma CLI available).
- *   - `npx prisma generate` before any test imports `@prisma/client` (e.g. `lib/db/client`).
- *     The schema push below runs with `--skip-generate` on purpose — generation is a build step.
+ *   - `npm install` (prisma CLI + engines available; this file generates the client for you).
  *
  * ENV ESCAPES:
- *   - `VITEST_SKIP_DB_SETUP=1` → skip schema provisioning (pure unit runs with no DB).
+ *   - `VITEST_SKIP_DB_SETUP=1` → skip client generation AND schema provisioning entirely, so a
+ *     pure-unit run needs no database at all.
  */
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { execSync } from 'node:child_process';
+import {
+  cliCommand,
+  ensurePrismaClientGenerated,
+  removeSqliteFiles,
+  resolvePrismaBin,
+  runCliStep,
+} from './helpers/prisma-cli';
 
 const repoRoot = process.cwd();
 const prismaDir = path.join(repoRoot, 'prisma');
@@ -89,36 +106,31 @@ function markProvisioned(): void {
 
 function provisionTestDatabase(): void {
   if (process.env.VITEST_SKIP_DB_SETUP === '1') return;
+
+  // (a) Self-bootstrap the Prisma Client on a clean checkout (cheap no-op once generated): a bare
+  //     `npm install` leaves only the stub, which makes every DB-backed suite throw at import time.
+  ensurePrismaClientGenerated(repoRoot, process.env);
+
   if (isProvisioned()) return; // schema unchanged & DB present — another worker already provisioned
 
   mkdirSync(prismaDir, { recursive: true });
-  try {
-    // Start from a CLEAN SLATE. `--force-reset` cannot reliably re-reset an existing WAL-mode
-    // SQLite file (Prisma's reset step fails with "Error code 11: The database disk image is
-    // malformed"), and the fast-path pragmas in `tests/helpers/db.ts` keep `test.db` permanently
-    // in WAL mode. Removing the DB file and its -wal/-shm/-journal sidecars guarantees the push
-    // below recreates the schema from scratch (verified: a re-push on a WAL db fails; on a
-    // freshly removed one it succeeds).
-    for (const stale of [testDbPath, `${testDbPath}-wal`, `${testDbPath}-shm`, `${testDbPath}-journal`]) {
-      rmSync(stale, { force: true });
-    }
-    // `--force-reset` drops any stale data; `--skip-generate` keeps this a pure schema push.
-    execSync('npx prisma db push --force-reset --skip-generate', {
-      cwd: repoRoot,
-      env: process.env,
-      stdio: 'inherit',
-    });
-    markProvisioned();
-  } catch (error) {
-    // Do not hard-crash the whole run: pure unit suites need no DB. Loudly warn so the
-    // failure is impossible to miss when integration suites actually need the DB.
-    console.warn(
-      '[tests/setup] Could not provision the test database (prisma db push failed).\n' +
-        '             Run `npm install` then `npx prisma generate` and retry.\n' +
-        `             DATABASE_URL=${testDbUrl}`,
-      error,
-    );
-  }
+  // (b) Start from a CLEAN SLATE. `--force-reset` cannot reliably re-reset an existing WAL-mode
+  //     SQLite file (Prisma's reset step fails with "Error code 11: The database disk image is
+  //     malformed"), and the fast-path pragmas in `tests/helpers/db.ts` keep `test.db` permanently
+  //     in WAL mode. Removing the DB file and its -wal/-shm/-journal sidecars guarantees the push
+  //     below recreates the schema from scratch.
+  removeSqliteFiles(prismaDir, ['test.db', 'test.db-wal', 'test.db-shm', 'test.db-journal']);
+  // `--force-reset` drops any stale data; `--skip-generate` keeps this a pure schema push (the client
+  // was already generated above). A failure THROWS with the FULL captured CLI output — never a warn.
+  const push = cliCommand(resolvePrismaBin(repoRoot), [
+    'prisma',
+    'db',
+    'push',
+    '--force-reset',
+    '--skip-generate',
+  ]);
+  runCliStep(push.command, push.args, { cwd: repoRoot, env: process.env });
+  markProvisioned();
 }
 
 provisionTestDatabase();

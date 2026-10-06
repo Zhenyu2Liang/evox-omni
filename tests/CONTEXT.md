@@ -33,6 +33,13 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   "Fast test-DB path"). Exports `testDbUrl`/`testDbPath`.
 - `helpers/` — shared test utilities (`db`, `fixtures`, `faux-agent`, `scenario`) + a barrel.
   See `helpers/CONTEXT.md` for the full helper API.
+- `helpers/prisma-cli.ts` — Node-built-ins-only shared Prisma CLI/generate infrastructure used by BOTH
+  `setup.ts` and `e2e/helpers.ts` (`resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`,
+  `removeSqliteFiles`, `runCliStep` (fail-loud: throws with FULL captured stdout+stderr+exit code),
+  `diagnosticCliOutput`, `prismaClientUsable`/`prismaClientGenerated`, `runPrismaGenerate`,
+  `ensurePrismaClientGenerated` — its readiness gate keys on the USABILITY probe `prismaClientUsable`
+  (the client that will actually be `require`d), NOT the worktree-local artifact-path proxy
+  `prismaClientGenerated`). NOT in the `helpers/index.ts` barrel — specs must not import it.
 - `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs. See `unit/CONTEXT.md`.
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
 - `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
@@ -46,7 +53,10 @@ Run:
 
 - `npm run test` → `vitest run` (all suites). `npm run test:watch` for watch mode.
 - Target a layer: `npm run test -- tests/unit` · `npm run test -- tests/scenarios` · `npm run test -- tests/app`.
-- Pure unit-only run without a DB: `VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/security`.
+- Pure unit-only run without a DB: `VITEST_SKIP_DB_SETUP=1 npm run test -- tests/unit/planner tests/unit/lib/ledger-keys.test.ts tests/unit/agent/providers/provider-mock.test.ts`
+  (`VITEST_SKIP_DB_SETUP=1` skips BOTH Prisma Client generation AND schema provisioning; note
+  `tests/unit/security` and `tests/unit/planner/executor-claim-scope.test.ts` are DB-BACKED, so they
+  fail without a DB — only the DB-free specs above run clean under the flag).
 
 ### Prerequisites
 
@@ -148,6 +158,29 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   as HTTP 200); the SSE `error`-then-`done` path is only exercised by `unit/agent/run-turn-failure.test.ts`.
   See `app/CONTEXT.md`.
 
+- **`review-recovery-probes.test.ts` has 2 RED tests that are NOT test bugs — they demand unwired
+  SOURCE capabilities.** A verbatim port of `.codex-review` reference probes (`a10cd48`, no source
+  change), asserting recovery behaviour that does not exist yet. Do NOT weaken/relax them; the fix
+  lands OUTSIDE `./tests`:
+  - Test 1 "resume recovers an already-executed gated node after its plan callback fails" → expected
+    `'success'`/1 budget, observed `'waiting_confirmation'`/0. Root cause: the confirm path records the
+    action `executed` (`confirmation.ts#executeAuthorizedAction` → `recordActionResult`) BEFORE
+    `resumeOwningPlan` persists the node result; when that persistence fails (a crash/failure between
+    effect and write) the node row keeps `status:'waiting_confirmation'` + `output.pendingActionId`, and
+    a later resume re-parks the node instead of reconciling it — `executeGatedToolOnce` →
+    `findInFlightPlanActionId` treats `'executed'` as in-flight (`IN_FLIGHT_PLAN_ACTION_STATUSES` in
+    `agent/confirmation.ts`), so the node never advances and downstream nodes never run (**permanent livelock**).
+    Missing behaviour: reconcile a node whose linked `PendingAction` is already terminal `executed` by
+    recording its real outcome and continuing the DAG (in `agent/confirmation.ts`/`agent/task-control.ts`).
+  - Test 2 "resume can recover a persisted executor claim whose owner died long ago" → expected
+    `'success'`/1 budget, observed `'running'`/0. Root cause: `agent/task-control.ts#resumeTask` calls
+    `claimTaskExecution(taskId, token)` with NO `{ staleBefore }` (L477), so a dead owner's token
+    (`executionToken:'dead-process-claim'`) blocks the claim → early `return reloadPlan(...)`, leaving the
+    plan persisted `'running'` with no executor. Missing behaviour: **stale-claim takeover** — pass
+    `{ staleBefore: <now − STALE_CLAIM_MS> }` (and similarly in `retryTask`). The primitive already exists
+    and is unused: `lib/db/repositories/task.ts#claimTaskExecution`/`claimNodeExecution` accept
+    `opts?:{staleBefore?:Date}` (added by `06d7e3d`) with **no production caller anywhere**.
+
 ## Routing Table
 
 - `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + hash-aware schema provisioning (re-pushes when the sha1 of `prisma/schema.prisma` changes; removes the WAL-mode `test.db` first)
@@ -159,12 +192,27 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - `./review-boundaries.test.ts` → `[integration]` reviewer-boundary regressions over the REAL route handlers (chat/tasks/actions): foreign body-`sessionId` vs cookie → 409; resume keeps a cancelled task cancelled; no fresh executable PendingAction after cancel-during-authorization; paused-plan confirm does NOT advance; two concurrent resumes run each unfinished node exactly once; concurrent HTTP resume adds no duplicate budget; ledgered-but-not-terminal actions counted once in cumulative risk
 - `./review-concurrency.test.ts` → `[integration]` reviewer concurrency-bug regressions (the 5 cases from the `.codex-review` reference port): staggered resume / gated double-resume / orphan-after-cancel / independent plans / unlinked-cancel each assert EXACTLY-ONCE side effects and full revoke-on-cancel (assertions ported unrelaxed)
 - `./review-new-boundaries.test.ts` → `[integration]` cross-cutting exactness regressions over the REAL route handlers + security gateway, using controllable barriers (`deferred()`/`bounded()`): a plan transfer already on the ledger but not yet terminal is counted EXACTLY ONCE in the cumulative daily/amount risk rules (a later ¥100 stays YELLOW; ¥1000 YELLOW, ¥1000.01 RED) while genuinely un-posted actions still count; resuming an investment node in the "effect posted, result not yet persisted" window cannot debit twice (balance ¥23,580 → ¥22,580, exactly one ¥1000 holding); a plan cancellation completed before the authorization compare-and-set prevents the debit (cumulative total ¥0, action `cancelled`, HTTP 200 `{ok:false,status:'cancelled'}`)
+- `./review-followup-probes.test.ts` → `[integration]` reviewer reference-probe ports over the REAL route handlers + gateway (`.codex-review`), using controllable barriers (`deferred()`/`bounded()`): cancel preserves an already-ledgered/executed transfer while result persistence is in flight.
+- `./review-recovery-probes.test.ts` → `[integration]` reviewer reference-probe ports for crash/resume recovery (`.codex-review`, `a10cd48`). **2 of 3 tests are RED** (see Known Issues — demand source capabilities outside `./tests`, not relaxable); the 3rd (same-key redemption replay) is green.
 - `../vitest.config.ts` → root-owned test runner config (`setupFiles`, `env: LLM_MODE=mock`, `fileParallelism: false`, `hookTimeout: 60000`) (sibling — read-only, escalate writes to root)
 - `../lib/contracts` → frozen cross-module types the specs import (sibling — read-only)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)
 
 ## Notes for Agents
 
+- **Clean-env bootstrap.** `package.json` has no `postinstall` hook and `prisma generate` is a separate
+  script, so a fresh checkout has only the `@prisma/client` POSTINSTALL STUB (no engine, no schema copy).
+  `tests/setup.ts` self-bootstraps a usable client via `helpers/prisma-cli.ts#ensurePrismaClientGenerated`
+  BEFORE the provision short-circuit (cheap no-op once generated); `e2e/helpers.ts` does the same.
+  Without this, every DB-backed suite dies at IMPORT time with `@prisma/client did not initialize yet`.
+  The skip gate is the USABILITY probe (`prismaClientUsable`): it skips only when a real `PrismaClient`
+  actually CONSTRUCTS (the client `require`d after Node's upward `node_modules` walk), so a
+  hoisted/parent-resolved layout — where `prisma generate` writes to the PARENT path and the
+  worktree-local artifact path stays absent — is ACCEPTED, while a stub-only client (probe throws) still
+  triggers a generate.
+- **Provisioning FAILS LOUD.** `setup.ts` runs the push through `runCliStep`, which THROWS on a non-zero
+  exit with the FULL captured stdout+stderr (never a `console.warn`-and-continue), so the real cause can
+  never be masked by a later `The table main.X does not exist in the current database.` cascade.
 - **All specs are implemented acceptance tests** (no `it.todo`). Keep them green; fix the seam
   (injectable `now`/`id`, unique sessionId, fresh DB), never weaken an assertion to pass.
 - The gateway is the security chokepoint: prove in Test 4 that injection text changes NOTHING about

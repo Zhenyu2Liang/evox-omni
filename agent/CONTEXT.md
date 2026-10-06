@@ -143,9 +143,9 @@ function toTaskPlan(row: AgentTaskWithNodes): TaskPlan;           // persisted t
 function defaultPollControls(planId: string): PlanControlPort;   // durable row status → planner controls ('paused'⇒pause, 'cancelled'⇒cancel)
 function getTaskPlan(sessionId: string, taskId: string): Promise<TaskPlan>;                            // ownership-checked read
 function pauseTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // persists durable status 'paused'
-function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // CAS-flips a resumable row to 'running' (from-set KEEPS 'running'), then acquires the PLAN-level DB execution claim (`claimTaskExecution`; lost => persisted plan, NO second executor; released in a finally), then runs with `explicitResume:true`; terminal (success) nodes skipped
+function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // CAS-flips a resumable row to 'running' (from-set KEEPS 'running'), then acquires the PLAN-level DB execution claim (`claimTaskExecution` with the TTL stale horizon `staleBefore`; lost => persisted plan, NO second executor; released in a finally), then runs with `explicitResume:true`; terminal (success) nodes skipped
 function cancelTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // revokes the plan's parked PendingActions via the atomic bulk `revokePendingActionsByTask` (PRIMARY; node-output scan is FALLBACK), then cancels
-function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;       // retry failed nodes (+ descendants); CAS from-set EXCLUDES 'running' (resume KEEPS it); acquires the PLAN-level DB execution claim before running (lost => persisted plan, NO second executor; released in a finally)
+function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;       // retry failed nodes (+ descendants); CAS from-set EXCLUDES 'running' (resume KEEPS it); acquires the PLAN-level DB execution claim (TTL stale horizon `staleBefore`) before running (lost => persisted plan, NO second executor; released in a finally)
 function sweepCancelledPlan(sessionId: string, taskId: string): Promise<RevokeSummary>;                // post-run CANCEL SWEEP: if the persisted AgentTask is 'cancelled', revoke every still-parked PendingAction (run after submit_plan / resume / retry; an unexpected revoke failure is recorded as a SecurityEvent via recordRevokeFailure, and the summary is still returned)
 function findTaskByPendingAction(sessionId: string, actionId: string): Promise<{ taskId: string; nodeId: string } | undefined>;   // prefers the action's PERSISTED plan link (PendingAction.taskId/nodeId, ownership-checked via getTask); node-output scan is FALLBACK
 function resumeTaskForAction(sessionId: string, actionId: string, outcome: PlanToolOutcome, deps: TaskControlDeps): Promise<{ taskId: string; nodeId: string; plan: TaskPlan } | undefined>;
@@ -276,15 +276,29 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   `alreadySettled` for an action that already executed/errored and never pretends to roll it back
   (executed work is irreversible; the planner performs NO automatic compensation). Anything that could
   not be settled — including the bulk-revoke count — is durably recorded via `recordRevokeFailure`.
-- **A resume never re-mints an action for an in-flight plan node.** Every `PendingAction` persists its
-  owning plan+node at creation (`PendingAction.taskId`/`nodeId`). Before
+- **A resume never re-mints an action for a still-gated plan node, and RECOVERS an already-executed one.**
+  Every `PendingAction` persists its owning plan+node at creation (`PendingAction.taskId`/`nodeId`). Before
   `confirmation.ts#executeGatedToolOnce` mints a gated action for a plan node,
-  `findInFlightPlanActionId(taskId, nodeId)` looks for an existing action on that `(taskId, nodeId)` in
+  `findInFlightPlanAction(taskId, nodeId)` looks for an existing action on that `(taskId, nodeId)` in
   status `pending | awaiting_mfa | confirmed | executed` (`listPendingActionsByTask(taskId, {statuses})` filtered by
-  nodeId, oldest-first). When found, the node is treated as IN-PROGRESS: no `gateway.handleToolCall` and
-  no new `PendingAction` — the SAME parked outcome
-  (`{ ok:false, requiresConfirmation:true, pendingActionId:<existing id> }`) is returned. This closes the
-  window where a node's side effect has run but its result is not yet persisted (the gateway's own
+  nodeId, oldest-first) and BRANCHES on its status:
+  - `pending`/`awaiting_mfa`/`confirmed` — genuinely in-flight (awaiting the human, or the confirm path is
+    executing it right now). The node is treated as STILL PARKED: no `gateway.handleToolCall` and no new
+    `PendingAction` — the SAME parked outcome
+    (`{ ok:false, requiresConfirmation:true, pendingActionId:<existing id> }`) is returned, so the executor
+    keeps it in `waiting_confirmation`/`waiting_verification`.
+  - `executed` — the gated side effect ALREADY ran and was ledgered, but the owning `AgentTaskNode`'s real
+    outcome was never persisted (the confirm path records `executed` BEFORE `resumeOwningPlan` writes the
+    node result, and that persist can fail). The node is RECOVERED, not parked: `replayExecutedPlanAction`
+    re-runs the persisted action's OWN `toolName`/`argsJson` through
+    `createToolRegistry(userId).executeDirect(..., { idempotencyKey: nodeExecutionKey(taskId, nodeId) })` —
+    the SAME key the inline/confirm paths use — so the SDK REPLAYS its already-applied side effect instead
+    of repeating it (e.g. `apply_virtual_card` derives the SAME card id ⇒ exactly one card; `reserve_budget`
+    dedups its insert) and the node advances to its real result instead of waiting forever. The gateway is
+    deliberately NOT consulted (re-gating would mint a SECOND action / re-request confirmation for work that
+    already happened); the replay never throws (an SDK failure becomes a failed node value). Recovery is
+    idempotent: repeating the resume re-replays the same key and yields the same single-effect outcome.
+  This closes the window where a node's side effect has run but its result is not yet persisted (the gateway's own
   `findReusableAction` only matches `pending`/`awaiting_mfa`, so it would otherwise MISS the `confirmed`/`executed`
   row) so a resume there cannot double-apply. The in-process single-flight (`inFlightExecutions` /
   `nodeExecutionKey`) remains an OPTIMIZATION only, never the correctness guarantee; the persisted DB row
@@ -321,6 +335,20 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   when both are present) — NEVER by `sessionId`+tool+args alone, so two INDEPENDENT plans with identical
   tool+args run independently; a STANDALONE call (no plan node) is executed directly. The DB
   (`PendingAction` status CAS + `nodeExecutionKey` SDK idempotency) is the at-most-once authority.
+- **A crashed executor's orphaned execution claim is reclaimable via a TTL stale horizon.**
+  `claimTaskExecution`/`claimNodeExecution` (`lib/db/repositories/task.ts`) stamp `executionClaimedAt` with
+  the REAL wall clock and their owner releases the token in a `finally`; a process that CRASHES before that
+  `finally` would otherwise leave the token set forever — wedging the plan `'running'`/unresumable and its
+  nodes unclaimable. So EVERY claim taken from `task-control.ts` passes
+  `{ staleBefore: staleExecutionClaimBefore() }` (= `new Date(Date.now() - EXECUTION_CLAIM_TTL_MS)`, TTL =
+  10 min): the atomic CAS may additionally match a row whose `executionClaimedAt` is older than that
+  horizon, i.e. a claim whose owner has plausibly died. Two racing takeovers still yield exactly ONE winner
+  (the winner re-stamps a fresh `executionClaimedAt`, so the loser's `updateMany` re-evaluates against the
+  new timestamp and matches 0 rows); a legitimately RUNNING executor is never preempted (its fresh
+  `executionClaimedAt` is nowhere near the horizon); and an old owner's `release*` is a token-guarded no-op.
+  The horizon is derived from the REAL clock (`Date.now()`), NEVER the demo clock (`demoNow()` pinned to
+  2026-09-25), because `executionClaimedAt` uses the real clock. `resumeTask`/`retryTask` pass it to
+  `claimTaskExecution`; `buildPlanDeps`'s `claimNode` passes it to `claimNodeExecution`.
 - **Pause retains.** When `resumeTaskForAction` sees the owning plan `'paused'`, it records the decided
   node and does NOT advance. TWO belts hold it: (a) `lifecycle.resumePlan` returns early with
   `status:'paused'` whenever `explicitResume !== true` (`stillPaused`) — and `resumeTaskForAction`
