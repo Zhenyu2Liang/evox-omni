@@ -84,17 +84,27 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
 - The SAME `DATABASE_URL` is passed to BOTH the provisioning CLIs (`runCliStep`) AND the spawned
   dev server (`startDevServer`).
 - `resetDemoDatabase()` runs BEFORE the dev server boots (no open connection ⇒ no Windows SQLite
-  file-lock). Recipe: ensure the Prisma Client is generated (run `prisma generate` ONLY when the
-  generated marker `node_modules/.prisma/client/schema.prisma` is absent — a bare `npm install` leaves
-  only the `@prisma/client` postinstall stub, whose `PrismaClient` throws `did not initialize yet`,
-  and the seed below imports `@prisma/client`) → delete `e2e.db` + its `-wal`/`-shm`/`-journal`
-  sidecars (missing files are fine) → `prisma db push --skip-generate` → seed via `tsx prisma/seed.ts`.
-  This **deliberately AVOIDS `prisma db push --force-reset`**: on Windows that path was seen to leave
-  the DB file as a 0-byte image and then fail with `Error code 11: database disk image is malformed`,
-  aborting the seed and failing all journeys. The whole attempt is retried ONCE with a short backoff
-  (SQLite on Windows is occasionally lock-prone); each step's combined stdout+stderr is captured into
-  the thrown error and success is decided by the **EXIT CODE** (the deprecated `package.json#prisma`
-  warning lines are harmless).
+  file-lock). It first ensures a GENERATED, USABLE Prisma Client, then (per attempt) DELETES `e2e.db` +
+  its `-wal`/`-shm`/`-journal` sidecars FIRST (missing files are fine) and provisions the schema:
+  1. **Client bootstrap / self-heal** (`ensurePrismaClientGenerated`): runs `prisma generate` when the
+     generated artifacts (`node_modules/.prisma/client/{schema.prisma,index.js,default.js}`) are absent
+     OR the client does not actually construct (a throwaway `require('@prisma/client'); new PrismaClient()`
+     probe — the bare-`npm install` postinstall stub throws `did not initialize yet`), so a
+     partially-provisioned or stale `node_modules` self-heals. After generating, artifact presence is the
+     HARD gate (a flaky probe can at most trigger one harmless extra generate).
+  2. **Primary provisioning**: `prisma db push --skip-generate` → seed via `tsx prisma/seed.ts`.
+  3. **Fallback** (only when the primary path fails): re-DELETE `e2e.db` + sidecars, then
+     `prisma db push --force-reset --skip-generate` → seed. `--force-reset` is deliberately NOT the
+     primary path: on Windows it has been seen to leave the DB file as a 0-byte image and fail
+     `Error code 11: database disk image is malformed`.
+- **Self-diagnosing CLI steps.** `runCliStep` decides success by the **EXIT CODE** (the deprecated
+  `package.json#prisma` warning lines are harmless) and, on failure, throws the COMPLETE labelled
+  stdout+stderr — the TAIL is ALWAYS preserved (an output over `CLI_OUTPUT_CAP` = 16 KB elides only the
+  MIDDLE), so the schema engine's real reason (often the last stderr line) is never hidden by
+  truncation — plus any spawn `error` (message + code). When BOTH provisioning paths fail the thrown
+  message carries the ORIGINAL primary error un-truncated alongside the fallback error. The whole attempt
+  (incl. the fallback) is retried `attempts` times (default 2) with a short backoff — SQLite on Windows
+  is occasionally lock-prone.
 - CLIs are invoked like the dev server: project-local binaries (`REPO_ROOT/node_modules/...` launched
   with `process.execPath`), else `cmd.exe /d /s /c "npx …"` on Windows / a plain command on POSIX.
 - `E2E_SKIP_DB_RESET=1` keeps the current DB (e.g. to inspect post-run data) — the journeys then
