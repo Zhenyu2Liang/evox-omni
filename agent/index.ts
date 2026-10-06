@@ -47,7 +47,13 @@ export {
   resumeTaskForAction,
   toTaskPlan,
 } from './task-control';
-export type { TaskControlDeps, TaskControlOptions, TaskNodeOutput, TaskPersistence, TaskRunTool };
+export type {
+  TaskControlDeps,
+  TaskControlOptions,
+  TaskNodeOutput,
+  TaskPersistence,
+  TaskRunTool,
+} from './task-control';
 
 /**
  * Default `runTool` adapter for the agent-level task controls: every node routes through the
