@@ -43,11 +43,12 @@ import {
   getPendingAction,
   getPendingActionOwnership,
   getPendingActionPlanLink,
+  listPendingActionsByTask,
 } from '@/lib/db/repositories/pendingAction';
 import { getTask } from '@/lib/db/repositories/task';
 import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
-import { nodeExecutionKey } from '@/lib/ledger';
+import { ledgerKeyForAction, nodeExecutionKey } from '@/lib/ledger';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { resumeTurn } from './run-turn';
 import type { RunTurnDeps } from './run-turn';
@@ -315,9 +316,61 @@ function isParkedOutcome(outcome: GatedToolOutcome): boolean {
   return outcome.requiresConfirmation === true || outcome.pendingActionId !== undefined;
 }
 
+/**
+ * Statuses meaning "this plan node's gated side effect is ALREADY represented" and must NOT be
+ * re-minted: `pending`/`awaiting_mfa` (parked, awaiting the human decision) and `confirmed` (the
+ * gateway has claimed the action and the confirm path is executing it RIGHT NOW — e.g.
+ * `gateway.recordActionResult` is still in flight). `executed`/`failed`/`cancelled`/`locked` are
+ * terminal for this purpose and never hold a re-run back.
+ */
+const IN_FLIGHT_PLAN_ACTION_STATUSES: readonly PendingActionStatus[] = [
+  'pending',
+  'awaiting_mfa',
+  'confirmed',
+];
+
+/**
+ * The id of an EXISTING `PendingAction` already representing this plan node's gated side effect.
+ *
+ * A `PendingAction` persists its owning plan+node AT CREATION (`PendingAction.taskId`/`nodeId`, in
+ * the same INSERT the gateway mints the row) — so it is the authoritative "this node already has a
+ * gated action" marker, available even BEFORE the node's `output.pendingActionId` is written and
+ * even WHILE the confirm path is still executing it (`recordActionResult` not yet recorded).
+ * Returns the oldest matching row (creation order). `undefined` ⇒ no action yet ⇒ safe to gate.
+ */
+async function findInFlightPlanActionId(
+  taskId: string,
+  nodeId: string,
+): Promise<string | undefined> {
+  const rows = await listPendingActionsByTask(taskId, {
+    statuses: [...IN_FLIGHT_PLAN_ACTION_STATUSES],
+  });
+  return rows.find((row) => row.nodeId === nodeId)?.id;
+}
+
 /** The un-coalesced body of `executeGatedTool`: the actual gateway gate + SDK execution. */
 async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutcome> {
   try {
+    // ALREADY-IN-PROGRESS plan node — the correctness guard the in-process single-flight map CANNOT
+    // provide. When a plan node's gated side effect has ALREADY been claimed (a `pending`/
+    // `awaiting_mfa` action waiting on the human, or a `confirmed` action whose side effect the
+    // confirm path is executing right now), a re-run of the node (a plan RESUME between the effect
+    // and its persisted result) must NOT re-enter the gateway and mint a SECOND duplicate action —
+    // confirming which would apply the side effect twice. The node is instead reported as STILL
+    // PARKED on the EXISTING action (the same parked shape the blocked path returns), so the executor
+    // keeps it in `waiting_confirmation`/`waiting_verification` with no second side effect.
+    if (ctx.taskId !== undefined && ctx.nodeId !== undefined) {
+      const existingActionId = await findInFlightPlanActionId(ctx.taskId, ctx.nodeId);
+      if (existingActionId !== undefined) {
+        return {
+          ok: false,
+          requiresConfirmation: true,
+          pendingActionId: existingActionId,
+          error: '该计划节点已在等待人工确认，未重复受理。',
+        };
+      }
+    }
+
     const auth = await gateway.handleToolCall(ctx);
 
     if (auth.evaluation.blocked) {
@@ -368,6 +421,12 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
  * NOT shared: it is per-call (its own `PendingAction`), so a concurrent identical gated call runs its
  * own gate once the first settles. The in-flight entry is removed on settle, so a SEQUENTIAL identical
  * call is never coalesced with a completed one.
+ *
+ * ALREADY-PARKED (side effect exactly once, across processes): a PLAN-NODE call (both `taskId` and
+ * `nodeId` present) whose node ALREADY has a non-terminal `PendingAction` (`pending`/`awaiting_mfa`/
+ * `confirmed`) does NOT re-enter the gateway — it is reported as still parked on that EXISTING action
+ * (`executeGatedToolOnce#findInFlightPlanActionId`). That DB row is the authority the in-process map
+ * cannot be: it holds even when a RESUME races a confirm whose `recordActionResult` has not committed.
  */
 export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome> {
   const key = executionKey(ctx);
@@ -497,19 +556,22 @@ async function executeAuthorizedAction(
   // registry. Re-running `handleToolCall` would re-gate the call and mint a duplicate PendingAction.
   //
   // IDEMPOTENCY (gated execution): derive the SDK `idempotencyKey` from the action's PERSISTED plan
-  // link, so a re-run of a GATED PLAN-NODE call replays — exactly what the INLINE GREEN path passes
-  // for the same node (`nodeExecutionKey(taskId, nodeId)`). An action NOT tied to a plan node (a plain
-  // standalone transfer, or one parked before the plan link existed) falls back to its OWN
-  // PendingAction id, so a repeat/concurrent confirm replays its ledger row instead of double-debiting
-  // — the DB itself dedups the write, so no lock is needed around the ledger-write → terminal-status
+  // link via `@/lib/ledger#ledgerKeyForAction` — the SINGLE key that LINKS an action to the ledger row
+  // it produces, and the SAME key `security/`'s risk engine looks the row up with (so an
+  // already-ledgered in-flight action is recognized, never double-counted). A plan-node action yields
+  // `nodeExecutionKey(taskId, nodeId)` — exactly what the INLINE GREEN path passes for the same node —
+  // so a re-run of a GATED PLAN-NODE call replays instead of double-applying; a STANDALONE action (no
+  // plan link) yields its OWN `PendingAction` id, so a repeat/concurrent confirm replays its ledger row.
+  // The DB itself dedups the write, so no lock is needed around the ledger-write → terminal-status
   // window. `transfer_money` derives the created row id from the key via
   // `idempotentTransferTxId(userId, key)` (`@/lib/ledger`); the key is passed for EVERY tool.
   const registry = createToolRegistry(userId);
   const link = await getPendingActionPlanLink(actionId);
-  const idempotencyKey =
-    link !== null && link.taskId !== null && link.nodeId !== null
-      ? nodeExecutionKey(link.taskId, link.nodeId)
-      : actionId;
+  const idempotencyKey = ledgerKeyForAction({
+    id: actionId,
+    taskId: link?.taskId,
+    nodeId: link?.nodeId,
+  });
   let result: ToolExecutionResult;
   try {
     result = await registry.executeDirect(action.toolName, action.args, { idempotencyKey });
