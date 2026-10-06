@@ -470,7 +470,54 @@ function cliCommand(localBin: string | undefined, npxArgs: readonly string[]): {
   return { command: npxArgs[0]!, args: [...npxArgs.slice(1)] };
 }
 
-/** Run one CLI step synchronously in the project root; throws with the captured output on failure. */
+/**
+ * Upper bound (characters) on the combined CLI output embedded in a failure message.
+ *
+ * Generous on purpose: the REAL Prisma diagnostics (schema-engine reason, DB lock, malformed image)
+ * are usually printed LAST, so the failure message must NEVER be a head-only slice that hides the
+ * tail. When the output exceeds this cap BOTH ends are kept (`<head>…<tail>`, see
+ * `diagnosticCliOutput`), so the root cause is always visible.
+ */
+const CLI_OUTPUT_CAP = 16_000;
+
+/** Render a spawn failure (`result.error`) with its message AND error code, or `''` when there is none. */
+function spawnErrorText(error: Error | null | undefined): string {
+  if (!error) return '';
+  const code = (error as NodeJS.ErrnoException).code;
+  const codePart = code === undefined ? '' : ` code=${code}`;
+  return `（无法启动进程：${error.message}${codePart}）`;
+}
+
+/**
+ * Render a failed CLI step's FULL captured stdout+stderr for diagnosis.
+ *
+ * The two streams are labelled (`stdout` / `stderr`) and the WHOLE output is included — Prisma writes
+ * the real engine reason to stderr, frequently at the TAIL, so slicing to the last N characters (the
+ * previous behaviour) hid exactly the line needed to diagnose the failure. Only when the combined
+ * output exceeds `CLI_OUTPUT_CAP` is a middle section elided — and even then BOTH the head and the
+ * tail are preserved, so no diagnostic is ever lost from the tail.
+ */
+function diagnosticCliOutput(stdout: string | null, stderr: string | null): string {
+  const sections: string[] = [];
+  const out = (stdout ?? '').trim();
+  const err = (stderr ?? '').trim();
+  if (out.length > 0) sections.push(`--- stdout ---\n${out}`);
+  if (err.length > 0) sections.push(`--- stderr ---\n${err}`);
+  const combined = sections.join('\n');
+  if (combined.length <= CLI_OUTPUT_CAP) return combined;
+  const half = Math.floor(CLI_OUTPUT_CAP / 2);
+  const head = combined.slice(0, half);
+  const tail = combined.slice(combined.length - half);
+  return `${head}\n…[中间省略 ${combined.length - 2 * half} 字符]…\n${tail}`;
+}
+
+/**
+ * Run one CLI step synchronously in the project root; throws with the FULL captured output on failure
+ * (success is decided by the EXIT CODE, never by stderr text — the deprecated `package.json#prisma`
+ * warning lines are harmless). A failure message carries the complete combined stdout+stderr
+ * (`diagnosticCliOutput`, tail preserved) plus any spawn `error` (message + code), so the real reason
+ * is never hidden by truncation.
+ */
 function runCliStep(command: string, args: readonly string[]): string {
   const result = spawnSync(command, [...args], {
     cwd: REPO_ROOT,
@@ -481,8 +528,11 @@ function runCliStep(command: string, args: readonly string[]): string {
   });
   const out = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
   if (result.status !== 0) {
-    const spawnError = result.error ? `（无法启动进程：${result.error.message}）` : '';
-    throw new Error(`退出码 ${result.status ?? 'null'}${spawnError}：${out.slice(-800)}`);
+    const spawnError = spawnErrorText(result.error);
+    throw new Error(
+      `执行失败（退出码 ${result.status ?? 'null'}）${spawnError}：${command} ${args.join(' ')}\n` +
+        diagnosticCliOutput(result.stdout, result.stderr),
+    );
   }
   return out;
 }
@@ -499,16 +549,45 @@ function removeSqliteFiles(files: readonly string[]): void {
 }
 
 /**
- * Absolute path of the marker file a successful `prisma generate` writes into the generated Prisma
- * Client (the schema copy). It is ABSENT from the `@prisma/client` POSTINSTALL STUB that a bare
- * `npm install` leaves behind, so its presence is a reliable "the client is generated" signal.
+ * Absolute paths a SUCCESSFUL `prisma generate` writes into the generated Prisma Client
+ * (`node_modules/.prisma/client`). The `@prisma/client` POSTINSTALL STUB that a bare `npm install`
+ * leaves behind ships the runtime files but NOT the `schema.prisma` copy, so requiring ALL of them is
+ * a reliable on-disk "the client is generated" signal.
  */
-function prismaClientMarkerPath(): string {
-  return path.join(REPO_ROOT, 'node_modules', '.prisma', 'client', 'schema.prisma');
+function prismaClientArtifactPaths(): string[] {
+  const dir = path.join(REPO_ROOT, 'node_modules', '.prisma', 'client');
+  return [path.join(dir, 'schema.prisma'), path.join(dir, 'index.js'), path.join(dir, 'default.js')];
+}
+
+/** Are the generated Prisma Client ARTIFACTS all present on disk? */
+function prismaClientGenerated(): boolean {
+  return prismaClientArtifactPaths().every((p) => existsSync(p));
 }
 
 /**
- * Ensure the Prisma Client is GENERATED before any DB step needs it.
+ * Does the generated Prisma Client actually CONSTRUCT? A throwaway Node process requires
+ * `@prisma/client` and instantiates `PrismaClient` (which never CONNECTS — construction only).
+ * The postinstall stub throws `@prisma/client did not initialize yet…`, so this is the real
+ * "usable, not a stub" probe — artifact presence alone cannot detect a partially-provisioned client.
+ */
+function prismaClientUsable(): boolean {
+  const script = "const {PrismaClient}=require('@prisma/client');new PrismaClient();";
+  const probe = spawnSync(process.execPath, ['-e', script], {
+    cwd: REPO_ROOT,
+    windowsHide: true,
+    encoding: 'utf8',
+  });
+  return probe.status === 0;
+}
+
+/** Run `prisma generate` — materialises the Client + its engine artifacts — via the shared CLI path. */
+function runPrismaGenerate(): void {
+  const generate = cliCommand(resolvePrismaBin(), ['prisma', 'generate']);
+  runCliStep(generate.command, generate.args);
+}
+
+/**
+ * Ensure a GENERATED, USABLE Prisma Client exists before any DB step needs it.
  *
  * WHY: the repo-root `package.json` has NO `postinstall` hook and `prisma generate` is a SEPARATE
  * script (`db:generate`), so a clean `npm install`-only checkout leaves `node_modules/.prisma/client`
@@ -518,30 +597,124 @@ function prismaClientMarkerPath(): string {
  * seed (`tsx prisma/seed.ts`, which imports `@prisma/client`) would then crash and every journey would
  * FAIL as an infrastructure error — exactly the bug this guards against.
  *
- * Runs `prisma generate` ONLY when the generated client is missing (marker absent — see
- * `prismaClientMarkerPath`), so repeat runs on an already-provisioned checkout stay fast. Uses the same
- * project-local CLI invocation (`resolvePrismaBin` + `cliCommand`) and `DATABASE_URL` propagation
- * (`runCliStep`) as the other steps; `generate` needs no live DB, the env is only carried through for
- * consistency.
+ * Robustness: skips ONLY when the generated artifacts are present AND the client actually constructs
+ * (`prismaClientUsable`), so a partially-provisioned or stale `node_modules` self-heals by (re)running
+ * `prisma generate` — which also (re)materialises the client's engine artifacts. After generating,
+ * artifact presence is the HARD gate (a flaky probe can at most trigger a harmless extra generate,
+ * never a false failure). Uses the same project-local CLI invocation (`resolvePrismaBin` +
+ * `cliCommand`) and `DATABASE_URL` propagation (`runCliStep`) as the other steps; `generate` needs no
+ * live DB.
  */
 function ensurePrismaClientGenerated(): void {
-  if (existsSync(prismaClientMarkerPath())) return;
-  console.log('· 未检测到已生成的 Prisma Client → 运行 prisma generate（清理环境自举步骤）');
-  const generate = cliCommand(resolvePrismaBin(), ['prisma', 'generate']);
-  runCliStep(generate.command, generate.args);
+  if (prismaClientGenerated() && prismaClientUsable()) return;
+  console.log('· 未检测到可用的 Prisma Client → 运行 prisma generate（清理环境自举步骤）');
+  runPrismaGenerate();
+  if (!prismaClientGenerated()) {
+    throw new Error('prisma generate 完成后 Prisma Client 产物仍缺失（见上方完整 CLI 输出）');
+  }
 }
 
 /**
- * One reset attempt: ensure the Prisma Client is generated → delete the ISOLATED E2E DB → create a
- * fresh schema → seed (all against `E2E_DB_URL`).
+ * Sanity-probe the freshly provisioned E2E DB: spawn a throwaway Node process that CONNECTS to the
+ * isolated DB through the generated Prisma Client and checks that the canonical `User` table exists.
+ *
+ * WHY: `prisma db push` can occasionally report success (exit 0) while leaving a DB image that cannot
+ * actually be opened (a truncated/zeroed file, a Windows file-lock, or a schema-engine hiccup). Without
+ * this probe the breakage would only surface later inside the seed (or, worse, mid-journey) with a
+ * misleading error. Failing HERE produces a precise "the DB is not usable after push" message, with the
+ * FULL captured stdout+stderr (`diagnosticCliOutput`), and lets the recovery path run (regenerate the
+ * client + hard clean + `--force-reset`).
+ */
+function probeDatabaseUsable(): void {
+  const script = `
+const { PrismaClient } = require('@prisma/client');
+const client = new PrismaClient();
+const check = "SELECT name FROM sqlite_master WHERE type='table' AND name='User'";
+(async () => {
+  try {
+    const rows = await client.$queryRawUnsafe(check);
+    if (!Array.isArray(rows) || rows.length === 0) {
+      console.error('schema 未应用：缺少 User 表');
+      process.exitCode = 3;
+    }
+  } catch (e) {
+    console.error((e && e.stack) || String(e));
+    process.exitCode = 2;
+  } finally {
+    await client.$disconnect().catch(() => {});
+  }
+})();
+`;
+  const probe = spawnSync(process.execPath, ['-e', script], {
+    cwd: REPO_ROOT,
+    windowsHide: true,
+    encoding: 'utf8',
+    // Probe the ISOLATED E2E DB — never the shared dev DB (see `useIsolatedDatabase`/`E2E_DB_URL`).
+    env: { ...process.env, DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL },
+  });
+  if (probe.status !== 0) {
+    throw new Error(
+      `db push 完成后 E2E 数据库探测失败（退出码 ${probe.status ?? 'null'}）${spawnErrorText(probe.error)}\n` +
+        diagnosticCliOutput(probe.stdout, probe.stderr),
+    );
+  }
+}
+
+/**
+ * Delete the ISOLATED E2E DB + sidecars, (re)create the schema, verify it is usable, then seed — all
+ * against `E2E_DB_URL`. `forceReset` selects the recovery push flavour
+ * (`prisma db push --force-reset --skip-generate`) instead of the plain
+ * `prisma db push --skip-generate`. The delete happens FIRST in both cases, so the isolated DB is
+ * always recreated from scratch and `prisma/dev.db` is never referenced. `probeDatabaseUsable` runs
+ * between the push and the seed so a silently-broken image is caught with a precise message.
+ */
+function provisionSchemaAndSeed(forceReset: boolean): void {
+  removeSqliteFiles(E2E_DB_FILES);
+  const pushArgs = forceReset
+    ? ['prisma', 'db', 'push', '--force-reset', '--skip-generate']
+    : ['prisma', 'db', 'push', '--skip-generate'];
+  const push = cliCommand(resolvePrismaBin(), pushArgs);
+  runCliStep(push.command, push.args);
+  // Catch a silently-broken DB BEFORE the seed: a push can report success yet leave an image that
+  // cannot be opened. Probing here gives a precise message and lets the recovery path run.
+  probeDatabaseUsable();
+  const seed = cliCommand(resolveTsxBin(), ['tsx', path.join('prisma', 'seed.ts')]);
+  runCliStep(seed.command, seed.args);
+}
+
+/**
+ * One reset attempt: ensure the Prisma Client is generated → provision the schema + seed. The PRIMARY
+ * path is delete-then-`db push --skip-generate` (deliberately NOT `--force-reset`, see
+ * `resetDemoDatabase`). If it fails, AUTO-RECOVER: re-run `prisma generate` (a stale/partially
+ * provisioned client or engine can make the push fail with an opaque `Error: Schema engine error:`),
+ * hard-clean the isolated DB, and retry `db push --force-reset --skip-generate` + seed; when that
+ * recovery ALSO fails, the thrown error carries BOTH the ORIGINAL (full, un-truncated) primary error and
+ * the recovery error, so the real cause of the primary failure is never masked by the fallback.
  */
 function resetDemoDatabaseOnce(): void {
   ensurePrismaClientGenerated();
-  removeSqliteFiles(E2E_DB_FILES);
-  const push = cliCommand(resolvePrismaBin(), ['prisma', 'db', 'push', '--skip-generate']);
-  runCliStep(push.command, push.args);
-  const seed = cliCommand(resolveTsxBin(), ['tsx', path.join('prisma', 'seed.ts')]);
-  runCliStep(seed.command, seed.args);
+  try {
+    provisionSchemaAndSeed(false);
+    return;
+  } catch (primaryError) {
+    console.error(
+      `· 主路径（删除后 db push --skip-generate）失败，尝试回退（prisma generate → 删除后 db push --force-reset --skip-generate）：${errText(primaryError)}`,
+    );
+    try {
+      // AUTO-RECOVERY: a stale/partially-provisioned client, or a transient schema-engine failure, can
+      // make the primary push fail with an opaque `Error: Schema engine error:`. Regenerate the client
+      // FIRST, then hard-clean the isolated DB (delete + sidecars) and retry with `--force-reset`.
+      runPrismaGenerate();
+      provisionSchemaAndSeed(true);
+      return;
+    } catch (fallbackError) {
+      throw new Error(
+        '重置 E2E 数据库失败：主路径与回退路径均未成功。\n' +
+          `— 主路径（删除后 db push --skip-generate）原始错误（完整输出）：\n${errText(primaryError)}\n` +
+          `— 回退路径（prisma generate 后删除并 db push --force-reset --skip-generate）错误：\n${errText(fallbackError)}`,
+      );
+    }
+  }
 }
 
 /**
@@ -556,15 +729,21 @@ function resetDemoDatabaseOnce(): void {
  * the previous run's transfers already inside the day and the YELLOW-transfer journeys would escalate
  * to RED. Resetting gives every run the SAME known starting state.
  *
- * HOW (deliberately NOT `prisma db push --force-reset`): on Windows the force-reset path was observed
- * to leave the SQLite file as a 0-byte image and then fail with `Error code 11: The database disk
- * image is malformed`, aborting the seed. Instead we DELETE the DB file + sidecars, re-create a fresh
- * schema with `db push --skip-generate`, then seed (`tsx prisma/seed.ts`). The Prisma Client is
- * GENERATED first when missing (`ensurePrismaClientGenerated`), so a bare `npm install`-only checkout
- * works without a manual `npx prisma generate`. Every CLI step is given `DATABASE_URL` = `E2E_DB_URL`
- * (see `runCliStep`). The whole attempt is retried ONCE with a short backoff (SQLite on Windows is
- * occasionally lock-prone), and each step's combined stdout+stderr is
- * captured into the thrown error.
+ * HOW: ensure a GENERATED, USABLE Prisma Client (`ensurePrismaClientGenerated`; a bare `npm install`
+ * checkout self-bootstraps via `prisma generate`). Then, for each attempt, DELETE the isolated DB +
+ * sidecars, provision the schema with the PRIMARY path `prisma db push --skip-generate`, PROBE that the
+ * DB is actually usable (`probeDatabaseUsable`), and seed via `tsx prisma/seed.ts`. If that primary path
+ * fails, the attempt RECOVERS by re-running `prisma generate`, re-deleting the isolated DB and running
+ * `prisma db push --force-reset --skip-generate` + seed (`provisionSchemaAndSeed(true)`) — the fallback
+ * runs only AFTER the primary failure, so it can only help. `--force-reset` is deliberately NOT the
+ * primary path: on Windows it has been seen to leave the SQLite file as a 0-byte image and fail
+ * `Error code 11: The database disk image is malformed`.
+ *
+ * Every CLI step is given `DATABASE_URL` = `E2E_DB_URL` (see `runCliStep`), and any CLI failure throws
+ * the FULL captured stdout+stderr (tail preserved — see `runCliStep`/`diagnosticCliOutput`); when BOTH
+ * provisioning paths fail the thrown message includes the ORIGINAL primary error un-truncated alongside
+ * the fallback error. The whole attempt (including the alternative path) is retried `opts.attempts`
+ * times (default 2) with a short backoff — SQLite on Windows is occasionally lock-prone.
  *
  * Set `E2E_SKIP_DB_RESET=1` to keep the current DB (e.g. to inspect post-run data); the journeys then
  * require a freshly seeded DB. Deprecated-`package.json#prisma` warning lines in the captured output

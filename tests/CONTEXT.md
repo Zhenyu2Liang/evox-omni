@@ -22,7 +22,13 @@ This node owns test infrastructure and fixtures — NOT the business logic under
 
 - `setup.ts` — Vitest **global setup** (`setupFiles`). Sets `DATABASE_URL` → the isolated test
   SQLite (`prisma/test.db`, git-ignored, absolute path), forces `LLM_MODE=mock`, and provisions the
-  schema once (`prisma db push --force-reset --skip-generate`, marker-guarded). After provisioning it
+  schema when the schema version changes (`prisma db push --force-reset --skip-generate`). The guard
+  **marker** (`prisma/.test-db-provisioned`) stores the **sha1 of `prisma/schema.prisma`** (written
+  atomically via temp-file + rename); provisioning is skipped ONLY when the marker's hash equals the
+  current schema hash AND `test.db` exists — so a stale `test.db` (provisioned before a schema
+  change), an absent DB, or an old-format ISO-date marker all trigger a re-provision. Re-provisioning
+  removes the WAL-mode `test.db` (+ `-wal`/`-shm`/`-journal`) first, because `--force-reset` cannot
+  re-reset an existing WAL file. After provisioning it
   pins the **runtime** `DATABASE_URL` to `?connection_limit=1` (single pooled connection — see
   "Fast test-DB path"). Exports `testDbUrl`/`testDbPath`.
 - `helpers/` — shared test utilities (`db`, `fixtures`, `faux-agent`, `scenario`) + a barrel.
@@ -117,7 +123,7 @@ plan pause/resume + cancel, and refresh/action-entry recovery from persisted ser
 
 ## Fast test-DB path (why the suite is fast — do not remove)
 
-The full suite (535 tests / 69 files) runs in ~50s.
+The full suite (538 tests / 70 files) runs in ~50s (a cold run that provisions the test DB adds ~10s).
 This depends on a deliberately fast SQLite configuration; if any piece is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
 
 - `helpers/db.ensureTestPragmas()` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`
@@ -126,6 +132,10 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   connection and those per-connection pragmas apply to EVERY query. Without it Prisma opens extra
   pooled connections that keep the default `synchronous=FULL`; after the pool grows, every DB-backed
   write stalls ~2s and the DB specs run ~10× slower.
+- Because the fast path leaves `test.db` in WAL mode, `setup.ts` DELETES `test.db` (+ its
+  `-wal`/`-shm`/`-journal` sidecars) before re-running `prisma db push --force-reset` — a `--force-reset`
+  against an existing WAL file fails with "database disk image is malformed". It only re-pushes when the
+  marker's stored sha1 differs from the current `prisma/schema.prisma` (or the marker/DB is absent).
 
 ## Known Issues
 
@@ -140,7 +150,7 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 
 ## Routing Table
 
-- `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + one-time schema provisioning
+- `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + hash-aware schema provisioning (re-pushes when the sha1 of `prisma/schema.prisma` changes; removes the WAL-mode `test.db` first)
 - `./helpers` → shared test utilities (db reset/seed + fast pragmas, fixtures, faux agent, scenario harness)
 - `./unit` → pure/logic unit specs for security, planner, banking-sdk, agent, lib (incl. `unit/security/risk-engine-dedup.test.ts` → ledger dedup of the in-flight transfer total via `computeInFlightTransferTotal`)
 - `./scenarios` → full-pipeline integration specs, one per demo scenario (Tests 1–12)

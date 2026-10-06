@@ -17,9 +17,11 @@
  * Optional at-most-once semantics (`input.idempotencyKey`, supplied by the planner as
  * `nodeExecutionKey(taskId, nodeId)`): a replayed plan node re-runs the tool, so a repeat with the
  * SAME key must not debit/credit twice. `subscribeInvestment` stores the caller's key on the
- * `InvestmentHolding` and replays the persisted holding (`./idempotent.ts`); `redeemInvestment`
- * uses the REDEEMED holding status itself as the durable replay marker (no key stored) and replays
- * the original redemption instead of throwing `CONFLICT`. Absent key → the legacy behavior above.
+ * `InvestmentHolding` and replays the persisted holding (`./idempotent.ts`). `redeemInvestment`
+ * persists the redemption's EXECUTION IDENTITY (`redeemExecutionKey`) and ORIGINAL result payload
+ * (`redeemResult`) on the holding inside the SAME transaction: a repeat with the SAME identity
+ * replays that original result, while a DIFFERENT or absent identity on an already-REDEEMED holding
+ * throws `CONFLICT` — never a false success.
  *
  * Note: subscribing/redeeming moves the funding-account BALANCE only — it deliberately does NOT
  * write a `Transaction` row, so the demo's 本月 spending analysis stays anchored at ¥5,800.
@@ -111,6 +113,19 @@ function toSubscribeResult(outcome: SubscribeOutcome): InvestResult {
     newBalance: outcome.newBalance,
     occurredAt: outcome.holding.boughtAt.getTime(),
   };
+}
+
+/**
+ * Parse a holding's persisted ORIGINAL redemption payload. A corrupt/unparsable payload is a
+ * data-integrity failure of an already-closed redemption: surface it as `CONFLICT` rather than
+ * letting a raw exception escape the SDK (never a fabricated success, never swallowed).
+ */
+function parseRedeemResult(stored: string, holdingId: string): InvestResult {
+  try {
+    return JSON.parse(stored) as InvestResult;
+  } catch {
+    throw new AppError('CONFLICT', '该持仓已赎回', { holdingId, status: 'REDEEMED' });
+  }
 }
 
 /**
@@ -208,12 +223,14 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
 /**
  * Redeem a holding: atomically close it (status → REDEEMED) and credit the funding account in one
  * transaction. The conditional status transition guarantees exactly one credit per holding, closing
- * the concurrent double-redeem race; a second attempt throws `CONFLICT`.
+ * the concurrent double-redeem race.
  *
- * With an `input.idempotencyKey` (planner replay), the REDEEMED status IS the durable replay
- * marker: a repeat credits nothing (the flip already happened) and returns the original redemption
- * instead of `CONFLICT`. No key is stored on the holding — `InvestmentHolding.idempotencyKey` is
- * reserved for subscribe dedup. Absent → unchanged behavior (a second redeem throws `CONFLICT`).
+ * Execution identity: the SAME transaction also persists the redemption's execution identity
+ * (`redeemExecutionKey`) and ORIGINAL result payload (`redeemResult`) on the holding. A repeat with
+ * the SAME identity (`input.idempotencyKey`, e.g. a replayed plan node) returns that original result
+ * and credits nothing; a DISTINCT identity — or an absent key — on an already-REDEEMED holding
+ * throws `CONFLICT` (never a false success). `InvestmentHolding.idempotencyKey` stays reserved for
+ * subscribe dedup.
  */
 export async function redeemInvestment(input: RedeemInvestmentInput): Promise<InvestResult> {
   const holding = await investments.getHolding(input.holdingId);
@@ -230,42 +247,55 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
     });
   }
 
-  const replay = normalizeIdempotencyKey(input.idempotencyKey) !== undefined;
+  const key = normalizeIdempotencyKey(input.idempotencyKey);
   const credit = round2(holding.marketValue ?? holding.amount);
   const now = demoNow();
-  const newBalance = await runInTransaction(async (tx) => {
+
+  return runInTransaction(async (tx): Promise<InvestResult> => {
     // Atomic HOLDING → REDEEMED transition: count 0 means it was already redeemed (no double credit).
     const closed = await tx.investmentHolding.updateMany({
       where: { id: holding.id, userId: input.userId, status: { not: 'REDEEMED' } },
       data: { status: 'REDEEMED' },
     });
+
     if (closed.count === 0) {
-      if (!replay) {
-        throw new AppError('CONFLICT', '该持仓已赎回', {
-          holdingId: input.holdingId,
-          status: 'REDEEMED',
-        });
+      // Already redeemed: re-read the COMMITTED row inside the transaction for its identity + result.
+      const stored = await tx.investmentHolding.findUnique({ where: { id: holding.id } });
+      const storedKey = stored?.redeemExecutionKey ?? null;
+      const storedResult = stored?.redeemResult ?? null;
+      // SAME identity → replay the ORIGINAL result (credit nothing); anything else → CONFLICT.
+      if (key !== undefined && storedKey !== null && storedKey === key && storedResult !== null) {
+        return parseRedeemResult(storedResult, input.holdingId);
       }
-      // Replayed node: the credit already happened, so report the current balance unchanged.
-      const current = await tx.account.findUnique({ where: { id: account.id } });
-      return current?.balance ?? 0;
+      throw new AppError('CONFLICT', '该持仓已赎回', {
+        holdingId: input.holdingId,
+        status: 'REDEEMED',
+      });
     }
 
     const credited = await tx.account.update({
       where: { id: account.id },
       data: { balance: { increment: credit } },
     });
-    return credited.balance;
-  });
 
-  return {
-    success: true,
-    holdingId: holding.id,
-    productId: holding.productId,
-    amount: credit,
-    newBalance,
-    occurredAt: now,
-  };
+    const payload: InvestResult = {
+      success: true,
+      holdingId: holding.id,
+      productId: holding.productId,
+      amount: credit,
+      newBalance: credited.balance,
+      occurredAt: now,
+    };
+
+    // Persist the execution identity + ORIGINAL payload in the SAME transaction: a replay with the
+    // SAME identity returns this exact result, a different identity is rejected (never a false claim).
+    await tx.investmentHolding.update({
+      where: { id: holding.id },
+      data: { redeemExecutionKey: key ?? null, redeemResult: JSON.stringify(payload) },
+    });
+
+    return payload;
+  });
 }
 
 /** The user's active holdings. */

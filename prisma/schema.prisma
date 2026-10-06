@@ -166,6 +166,11 @@ model InvestmentHolding {
   marketValue Float?
   boughtAt    DateTime @default(now())
   status      String   @default("HOLDING") // "HOLDING" | "REDEEMED"
+  // Redeem execution identity + ORIGINAL result (persisted when the holding closes): a replay with
+  // the SAME identity returns the original result without re-crediting; a DISTINCT identity on an
+  // already-REDEEMED holding is rejected (never a false success). NULL until redeemed.
+  redeemExecutionKey String?
+  redeemResult       String? // JSON text of the original redemption result payload
   // Replay key: `<planId>:<nodeId>` so a replayed plan node replays the existing holding
   // instead of duplicating it. NULL for rows created outside the planner. SQLite UNIQUE allows
   // multiple NULLs, so pre-existing rows are unaffected.

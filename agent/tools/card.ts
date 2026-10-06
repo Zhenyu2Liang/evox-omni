@@ -17,7 +17,7 @@ import { banking } from '@/banking-sdk';
 import type { CardStatus, CardType, CardView } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
 import { formatCNY } from '@/lib/money';
-import type { ToolExecutionResult } from './index';
+import type { ToolExecutionResult, ToolRunOptions } from './index';
 
 /** Chinese labels for a card type (for user-facing summaries). */
 const CARD_TYPE_LABELS: Record<CardType, string> = {
@@ -296,14 +296,19 @@ export function createApplyVirtualCardTool(userId: string): AgentTool<typeof App
   };
 }
 
-/** Model-free runner — `banking.card.applyVirtualCard({ userId, label })`. */
+/** Model-free runner — `banking.card.applyVirtualCard({ userId, label, idempotencyKey? })`. */
 export async function runApplyVirtualCard(
   userId: string,
   args: Record<string, unknown>,
+  opts?: ToolRunOptions,
 ): Promise<ToolExecutionResult> {
   const { label } = args as unknown as ApplyVirtualCardArgs;
   try {
-    const card = await banking.card.applyVirtualCard({ userId, label });
+    const card = await banking.card.applyVirtualCard({
+      userId,
+      label,
+      idempotencyKey: opts?.idempotencyKey,
+    });
     const status = CARD_STATUS_LABELS[card.status] ?? card.status;
     const suffix = label ? `（${label}）` : '';
     return {
