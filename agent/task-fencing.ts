@@ -49,7 +49,7 @@ export function toNodeUpdate(node: TaskNodeResult): UpdateTaskNodeInput {
 }
 
 /** `updateTaskNode` throws this exact plain `Error` when the `(taskId, nodeId)` row is missing. */
-function isMissingNodeError(error: unknown): boolean {
+export function isMissingNodeError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith('AgentTaskNode not found');
 }
 
