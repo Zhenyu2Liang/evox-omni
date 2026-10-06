@@ -123,7 +123,7 @@ plan pause/resume + cancel, and refresh/action-entry recovery from persisted ser
 
 ## Fast test-DB path (why the suite is fast — do not remove)
 
-The full suite (535 tests / 69 files) runs in ~50s.
+The full suite (538 tests / 70 files) runs in ~50s (a cold run that provisions the test DB adds ~10s).
 This depends on a deliberately fast SQLite configuration; if any piece is dropped, commits fall back to fsync and the suite balloons toward the 10-minute tool timeout:
 
 - `helpers/db.ensureTestPragmas()` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`
