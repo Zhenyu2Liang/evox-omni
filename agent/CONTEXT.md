@@ -285,7 +285,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   no new `PendingAction` — the SAME parked outcome
   (`{ ok:false, requiresConfirmation:true, pendingActionId:<existing id> }`) is returned. This closes the
   window where a node's side effect has run but its result is not yet persisted (the gateway's own
-  `findReusableAction` only matches `pending`/`awaiting_mfa`, so it would otherwise MISS the `confirmed`
+  `findReusableAction` only matches `pending`/`awaiting_mfa`, so it would otherwise MISS the `confirmed`/`executed`
   row) so a resume there cannot double-apply. The in-process single-flight (`inFlightExecutions` /
   `nodeExecutionKey`) remains an OPTIMIZATION only, never the correctness guarantee; the persisted DB row
   is the authority.
