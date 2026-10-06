@@ -148,6 +148,29 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
   as HTTP 200); the SSE `error`-then-`done` path is only exercised by `unit/agent/run-turn-failure.test.ts`.
   See `app/CONTEXT.md`.
 
+- **`review-recovery-probes.test.ts` has 2 RED tests that are NOT test bugs — they demand unwired
+  SOURCE capabilities.** A verbatim port of `.codex-review` reference probes (`a10cd48`, no source
+  change), asserting recovery behaviour that does not exist yet. Do NOT weaken/relax them; the fix
+  lands OUTSIDE `./tests`:
+  - Test 1 "resume recovers an already-executed gated node after its plan callback fails" → expected
+    `'success'`/1 budget, observed `'waiting_confirmation'`/0. Root cause: the confirm path records the
+    action `executed` (`confirmation.ts#executeAuthorizedAction` → `recordActionResult`) BEFORE
+    `resumeOwningPlan` persists the node result; when that persistence fails (a crash/failure between
+    effect and write) the node row keeps `status:'waiting_confirmation'` + `output.pendingActionId`, and
+    a later resume re-parks the node instead of reconciling it — `executeGatedToolOnce` →
+    `findInFlightPlanActionId` treats `'executed'` as in-flight (`IN_FLIGHT_PLAN_ACTION_STATUSES` in
+    `agent/confirmation.ts`), so the node never advances and downstream nodes never run (**permanent livelock**).
+    Missing behaviour: reconcile a node whose linked `PendingAction` is already terminal `executed` by
+    recording its real outcome and continuing the DAG (in `agent/confirmation.ts`/`agent/task-control.ts`).
+  - Test 2 "resume can recover a persisted executor claim whose owner died long ago" → expected
+    `'success'`/1 budget, observed `'running'`/0. Root cause: `agent/task-control.ts#resumeTask` calls
+    `claimTaskExecution(taskId, token)` with NO `{ staleBefore }` (L477), so a dead owner's token
+    (`executionToken:'dead-process-claim'`) blocks the claim → early `return reloadPlan(...)`, leaving the
+    plan persisted `'running'` with no executor. Missing behaviour: **stale-claim takeover** — pass
+    `{ staleBefore: <now − STALE_CLAIM_MS> }` (and similarly in `retryTask`). The primitive already exists
+    and is unused: `lib/db/repositories/task.ts#claimTaskExecution`/`claimNodeExecution` accept
+    `opts?:{staleBefore?:Date}` (added by `06d7e3d`) with **no production caller anywhere**.
+
 ## Routing Table
 
 - `./setup.ts` → Vitest global setup: env isolation (`DATABASE_URL`→test SQLite incl. `?connection_limit=1`, `LLM_MODE=mock`) + hash-aware schema provisioning (re-pushes when the sha1 of `prisma/schema.prisma` changes; removes the WAL-mode `test.db` first)
