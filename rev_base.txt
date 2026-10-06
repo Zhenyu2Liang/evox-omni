@@ -1,0 +1,102 @@
+﻿node.exe : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cj
+s-node-api-deprecated for more details.[39m
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/projects/banking-agent/.genesis/workers/worker_T4_A12[39m
+
+[90mstdout[2m | tests/review-new-boundaries.test.ts[2m > [22m[2ma plan transfer already ledgered but still confirmed is counted once
+[22m[39mREVIEW_PLAN_LEDGER {"alreadyLedgered":600,"laterTier":"RED","laterRequiresMfa":true,"laterStatus":"awaiting_mfa"}
+
+[90mstdout[2m | tests/review-new-boundaries.test.ts[2m > [22m[2mresuming an investment node during post-effect persistence cannot debit twice
+[22m[39mREVIEW_INVESTMENT_REPLAY {"secondAction":"cmuw6ozf8000lf86of9lesc79","resumeStatus":"waiting_confirmation","balance":21580,"purchases":2}
+
+[90mstdout[2m | tests/review-new-boundaries.test.ts[2m > [22m[2ma plan cancellation completed before authorization CAS prevents the debit
+[22m[39mREVIEW_CANCEL_GAP {"cancelled":"cancelled","actionStatus":"executed","total":200}
+
+ [31m❯[39m tests/review-new-boundaries.test.ts [2m([22m[2m3 tests[22m[2m | [22m[31m3 failed[39m[2m)[22m[33m 398[2mms[22m[39m
+[31m   [31m×[31m a plan transfer already ledgered but still confirmed is counted once[90m 154[2mms[22m[31m[39m
+[31m     → expected true to be false // Object.is equality[39m
+[31m   [31m×[31m resuming an investment node during post-effect persistence cannot debit twice[90m 67[2mms[22m[31m[39m
+[31m     → expected 21580 to be 22580 // Object.is equality[39m
+[31m   [31m×[31m a plan cancellation completed before authorization CAS prevents the debit[90m 35[2mms[22m[31m[39m
+[31m     → expected 200 to be +0 // Object.is equality[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[1m[7m Failed Tests 3 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/review-new-boundaries.test.ts[2m > [22ma plan transfer already ledgered but 
+still confirmed is counted once
+[31m[1mAssertionError[22m: expected true to be false // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- false[39m
+[31m+ true[39m
+
+[36m [2m❯[22m tests/review-new-boundaries.test.ts:[2m30:28[22m[39m
+    [90m 28| [39m [35mfinally[39m{release[33m.[39m[34mrelease[39m()[33m;[39m[35mawait[39m first[33m;[39m}
+    [90m 29| [39m console[33m.[39m[34mlog[39m([32m'REVIEW_PLAN_LEDGER'[39m[33m,[39m[33mJSON[39m[33m.[39m
+[34mstringify[39m({alreadyLedgered[33m:[39mtota…
+    [90m 30| [39m [34mexpect[39m(later[33m.[39mrequiresMfa)[33m.[39m[34mtoBe[39m([35mfalse[39m)[33m;[39m
+    [90m   | [39m                           [31m^[39m
+    [90m 31| [39m})[33m;[39m
+    [90m 32| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/3]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/review-new-boundaries.test.ts[2m > [22mresuming an investment node during po
+st-effect persistence cannot debit twice
+[31m[1mAssertionError[22m: expected 21580 to be 22580 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 22580[39m
+[31m+ 21580[39m
+
+[36m [2m❯[22m tests/review-new-boundaries.test.ts:[2m45:27[22m[39m
+    [90m 43| [39m [35mconst[39m balance[33m=[39m[35mawait[39m [34mgetTestPrisma[39m()[33m.[39maccount[33m.
+[39m[34mfindFirst[39m({where[33m:[39m{userId[33m,[39m…
+    [90m 44| [39m console[33m.[39m[34mlog[39m([32m'REVIEW_INVESTMENT_REPLAY'[39m[33m,[39m[33mJSON[39m[33m.
+[39m[34mstringify[39m({secondAction[33m:[39ms…
+    [90m 45| [39m [34mexpect[39m(balance[33m?.[39mbalance)[33m.[39m[34mtoBe[39m([34m22580[39m)[33m;[39m[
+34mexpect[39m(purchases)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m   | [39m                          [31m^[39m
+    [90m 46| [39m})[33m;[39m
+    [90m 47| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/3]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/review-new-boundaries.test.ts[2m > [22ma plan cancellation completed before 
+authorization CAS prevents the debit
+[31m[1mAssertionError[22m: expected 200 to be +0 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 0[39m
+[31m+ 200[39m
+
+[36m [2m❯[22m tests/review-new-boundaries.test.ts:[2m68:64[22m[39m
+    [90m 66| [39m [35mconst[39m total[33m=[39m[35mawait[39m security[33m.[39mrisk[33m.[39m[34mcomputeDaily
+TransferTotal[39m(userId)[33m;[39m[35mcon[39m…
+    [90m 67| [39m console[33m.[39m[34mlog[39m([32m'REVIEW_CANCEL_GAP'[39m[33m,[39m[33mJSON[39m[33m.[39m[
+34mstringify[39m({cancelled[33m:[39mcancelled[33m?.[39m…
+    [90m 68| [39m [34mexpect[39m(cancelled[33m.[39mdata[33m.[39mstatus)[33m.[39m[34mtoBe[39m([32m'cancelle
+d'[39m)[33m;[39m[34mexpect[39m(total)[33m.[39m[34mtoBe[39m([34m0[39m)[33m;[39m
+    [90m   | [39m                                                               [31m^[39m
+    [90m 69| [39m})[33m;[39m
+    [90m 70| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/3]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m3 failed[39m[22m[90m (3)[39m
+[2m   Start at [22m 12:33:59
+[2m   Duration [22m 1.38s[2m (transform 334ms, setup 13ms, collect 804ms, tests 398ms, environment 0ms, prepare 49ms)[22m
+
