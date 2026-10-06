@@ -277,7 +277,7 @@ SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多
 
 ## 16. 真实浏览器验收是「单机、有限 journey」 · Limited Single-Machine Browser Acceptance
 
-**性质：⚠️ 未验证（有限验收 + 干净环境自举仍开放，非全覆盖）。**
+**性质：⚠️ 未验证（有限验收，非全覆盖）。**
 
 **限制**：仓库**已有**真实浏览器端到端 harness（`tests/e2e/`）：它用 `playwright-core` 启动**系统**无头
 浏览器（Chrome 优先 / Edge 兜底，无需下载浏览器），启动**真实** `next dev`，在真实 `/agent` 输入框
