@@ -33,6 +33,11 @@ This node owns test infrastructure and fixtures — NOT the business logic under
   "Fast test-DB path"). Exports `testDbUrl`/`testDbPath`.
 - `helpers/` — shared test utilities (`db`, `fixtures`, `faux-agent`, `scenario`) + a barrel.
   See `helpers/CONTEXT.md` for the full helper API.
+- `helpers/prisma-cli.ts` — Node-built-ins-only shared Prisma CLI/generate infrastructure used by BOTH
+  `setup.ts` and `e2e/helpers.ts` (`resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`,
+  `removeSqliteFiles`, `runCliStep` (fail-loud: throws with FULL captured stdout+stderr+exit code),
+  `diagnosticCliOutput`, `prismaClientUsable`/`prismaClientGenerated`, `runPrismaGenerate`,
+  `ensurePrismaClientGenerated`). NOT in the `helpers/index.ts` barrel — specs must not import it.
 - `unit/` — pure/logic specs for `security`, `planner`, `banking-sdk`, plus `agent` + `lib` facade specs. See `unit/CONTEXT.md`.
 - `scenarios/` — one spec per demo scenario, Tests 1–12, over the in-process pipeline. See `scenarios/CONTEXT.md`.
 - `app/` — real app-entry (HTTP) specs driving the REAL Next.js route handlers
