@@ -197,7 +197,7 @@ function createUnconfiguredSubmitPlanTool(): AgentTool<typeof SubmitPlanParams> 
  *    runner, and to `planning.runSubmitPlan(userId, args, opts.submitPlan)` for `submit_plan`. The
  *    optional `opts.idempotencyKey` is threaded to every runner; the side-effecting tools consume it
  *    (`transfer_money`, `reserve_budget`, `create_scheduled_task`, `subscribe_investment`,
- *    `redeem_investment`) — see `ToolRunOptions`.
+ *    `redeem_investment`, `apply_virtual_card`) — see `ToolRunOptions`.
  *
  * Signature note: the frozen form `createToolRegistry(userId: string): ToolRegistry` is preserved —
  * `opts` is an ADDITIVE optional parameter, needed only because `submit_plan` requires an injected
