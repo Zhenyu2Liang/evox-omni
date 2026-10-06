@@ -287,11 +287,27 @@ export interface SubscribeInvestmentInput {
   productId: string;
   /** CNY amount; must be ≥ product `minAmount`. */
   amount: number;
+  /**
+   * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT
+   * double-debit: the holding already persisted for the key is replayed (same `holdingId` /
+   * `amount`, current balance) instead of creating a second one. Stored on
+   * `InvestmentHolding.idempotencyKey`; the planner passes `nodeExecutionKey(taskId, nodeId)`.
+   * Absent → unchanged behavior.
+   */
+  idempotencyKey?: string;
 }
 
 export interface RedeemInvestmentInput {
   userId: string;
   holdingId: string;
+  /**
+   * Optional idempotency key. When supplied, a repeated call on an already-REDEEMED holding
+   * REPLAYS the original redemption (same `amount`, current balance) instead of throwing
+   * `CONFLICT`. The REDEEMED holding status is the durable replay marker — nothing is stored on
+   * the holding here (`InvestmentHolding.idempotencyKey` is reserved for subscribe dedup). The
+   * planner passes `nodeExecutionKey(taskId, nodeId)`. Absent → unchanged behavior.
+   */
+  idempotencyKey?: string;
 }
 
 export interface InvestResult {
