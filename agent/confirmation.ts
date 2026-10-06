@@ -325,12 +325,42 @@ function isParkedOutcome(outcome: GatedToolOutcome): boolean {
  * re-minted by a fresh gate: `pending`/`awaiting_mfa` (parked, awaiting the human decision) and
  * `confirmed` (the gateway claimed the action; the confirm path is executing it — or its result was
  * already persisted but the terminal status write never landed). A re-run of the node is reported as
- * STILL PARKED on the existing action, EXCEPT a `confirmed` row that ALREADY carries a stored
- * `resultJson` (finalized to `executed`, see `executeGatedToolOnce`). `executed` means the gated
+ * STILL PARKED only for `pending`/`awaiting_mfa`; a `confirmed` row is FINALIZED instead (stored
+ * `ok:true` -> `executed`; stored `ok:false` or NO stored result -> `failed`); `executed` means the gated
  * side effect ALREADY ran and was ledgered but the owning node's REAL outcome was never persisted —
  * such a node is RECOVERED, not parked. `failed`/`cancelled`/`locked` are terminal for this purpose
  * and never hold a re-run back (`failed` MUST stay re-runnable by retry).
  */
+/**
+ * `PendingAction` ids whose confirm/verify continuation is applying its side effect RIGHT NOW in
+ * THIS process.
+ *
+ * WHY (the durable AMBIGUITY this resolves): a row left `confirmed` with NO persisted `resultJson`
+ * is INDISTINGUISHABLE in the DB between
+ *   (a) a continuation that is STILL RUNNING — it claimed the row (`confirmed`) and is applying the
+ *       side effect right now, so no result has been written yet; and
+ *   (b) a continuation that COMMITTED the side effect but whose result+status transaction rolled
+ *       back (or whose process died before writing the result) — a genuine WEDGE.
+ * A re-run of the owning plan node must NOT finalize case (a): that would evict the live
+ * continuation's REAL outcome and settle the node `failed` for work that actually succeeded. It MUST
+ * finalize case (b), or the plan wedges at `waiting_confirmation` forever.
+ *
+ * `confirmAction`/`verifyAction` register their action id BEFORE they authorize (so the tiny window
+ * between the gateway's CAS to `confirmed` and the registration can never be observed) and clear it
+ * in a `finally` once the continuation has returned. An id PRESENT here is therefore case (a) — the
+ * re-run DEFERS to the live human decision (reported as STILL PARKED, no CAS, no write); an id
+ * ABSENT is case (b) — the re-run FINALIZES it (single CAS on the row, then
+ * `recoverExecutedPlanAction`). Either way the tool is never re-invoked and no rollback is
+ * fabricated.
+ *
+ * Scope: like `inFlightExecutions` this is a PER-PROCESS liveness hint — a multi-process deployment
+ * would additionally need a durable marker to detect case (a) across processes. It never GRANTS
+ * anything: the durable `PendingAction` row stays the authority and every terminal transition below
+ * is still a single atomic CAS. It is bounded by the continuation's own lifetime (each entry is
+ * removed in a `finally`; a hung continuation IS still running, so deferring to it is correct).
+ */
+const inFlightConfirmations = new Set<string>();
+
 const IN_FLIGHT_PLAN_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'pending',
   'awaiting_mfa',
@@ -341,7 +371,7 @@ const IN_FLIGHT_PLAN_ACTION_STATUSES: readonly PendingActionStatus[] = [
 /**
  * The persisted `PendingAction` row shape returned by `listPendingActionsByTask` (NOT the frozen
  * `lib/contracts` `PendingAction`). Its `status` and `resultJson` are what the recovery path
- * to backfill an already-executed node without re-gating it.
+ * uses to backfill an already-executed node without re-gating it.
  */
 type PendingActionRow = Awaited<ReturnType<typeof listPendingActionsByTask>>[number];
 
@@ -440,11 +470,19 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     //   • `pending`/`awaiting_mfa` — genuinely in-flight (awaiting the human decision): report the
     //     node as STILL PARKED on the EXISTING action (the shape the blocked path returns), so the
     //     executor keeps it in `waiting_confirmation`/`waiting_verification` with no second side effect.
-    //   • `confirmed` WITH a stored `resultJson` — the side effect ALREADY ran and its result was
-    //     persisted, but the terminal STATUS write (`recordActionResult`) never landed: the row is one
-    //     state short of `executed`. FINALIZE it via a single CAS (`confirmed` → `executed`) BEFORE
-    //     recovering, so a re-run recovers it instead of parking forever. A `confirmed` row WITHOUT a
-    //     stored result is genuinely in-flight (the confirm path is executing it right now) → park.
+    //   • `confirmed` - the gateway ALREADY claimed the action, so its side effect ran
+    //     and its DURABLE result was persisted (`resultJson`), while the terminal STATUS write
+    //     never landed. The row is FINALIZED (never re-parked, never re-run) via a single CAS on
+    //     the action row, then read back by `recoverExecutedPlanAction` from the stored
+    //     `resultJson`:
+    //       - stored `ok:true`  => CAS `confirmed` -> `executed`, then recover (success node).
+    //       - stored `ok:false` => CAS `confirmed` -> `failed`, then recover (FAILED node).
+    //       - NO stored result  => the business effect committed but the result transaction
+    //         ROLLED BACK, leaving the row `confirmed` with `resultJson=null`; CAS `confirmed`
+    //         -> `failed` and route it to the manual-reconciliation path, so the node settles
+    //         TERMINALLY `failed` instead of wedging the plan at `waiting_confirmation` forever.
+    //         The tool is NEVER re-invoked (side effect exactly once) and NO rollback is
+    //         fabricated - executed work is irreversible.
     //   • `executed` — the gated side effect ALREADY ran and was ledgered but the node's REAL outcome
     //     was never persisted: RECOVER by BACKFILLING the node result from the DURABLE execution result
     //     persisted on the action (`resultJson`) — WITHOUT re-invoking the tool, so a non-idempotent
@@ -455,11 +493,17 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
         if (existing.status === 'executed') {
           return recoverExecutedPlanAction(existing);
         }
-        if (existing.status === 'confirmed' && readStoredResult(existing) !== undefined) {
+        // DEFER while a confirm/verify continuation is applying THIS action's side effect RIGHT NOW in
+        // this process (`inFlightConfirmations`): the row is `confirmed` with no result yet ONLY
+        // because that LIVE continuation has not written it. Finalizing here would evict its real
+        // outcome and settle the node `failed` for work that actually succeeded; instead the node is
+        // reported as STILL PARKED on that live human decision (no CAS, no write). A `confirmed` row
+        // with NO live continuation is the genuine WEDGE and IS finalized below.
+        if (existing.status === 'confirmed' && !inFlightConfirmations.has(existing.id)) {
           const won = await claimPendingAction({
             actionId: existing.id,
             from: ['confirmed'],
-            to: 'executed',
+            to: readStoredResult(existing)?.ok === true ? 'executed' : 'failed',
           });
           if (won) return recoverExecutedPlanAction(existing);
         }
@@ -525,11 +569,13 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
  *
  * ALREADY-REPRESENTED (side effect exactly once, across processes): a PLAN-NODE call (both `taskId`
  * and `nodeId` present) that ALREADY has a persisted `PendingAction` does NOT re-enter the gateway.
- * A still-in-flight one (`pending`/`awaiting_mfa`/`confirmed`) is reported as STILL PARKED on that
- * EXISTING action; an `executed` one is RECOVERED by BACKFILLING the node result from the DURABLE
- * execution result persisted on the action (`resultJson`), WITHOUT re-invoking the tool
- * (`executeGatedToolOnce#findInFlightPlanAction` → `recoverExecutedPlanAction`). That DB row is the
- * authority the in-process map cannot be: it holds even when a RESUME races a confirm whose
+ * A still-in-flight one (`pending`/`awaiting_mfa`) is reported as STILL PARKED on that EXISTING
+ * action; a `confirmed` one is FINALIZED via a single CAS on the row (stored `ok:true` ->
+ * `executed`, stored `ok:false` or NO stored result -> `failed`) and then RECOVERED; an
+ * `executed` one is RECOVERED by BACKFILLING the node result from the DURABLE execution result
+ * persisted on the action (`resultJson`), WITHOUT re-invoking the tool
+ * (`executeGatedToolOnce#findInFlightPlanAction` -> `recoverExecutedPlanAction`). That DB row is
+ * the authority the in-process map cannot be: it holds even when a RESUME races a confirm whose
  * `recordActionResult` has not committed.
  */
 export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOutcome> {
@@ -691,8 +737,8 @@ async function executeAuthorizedAction(
   // user independently changed after this action had executed). Written for BOTH outcomes.
   //
   // The two writes MUST be atomic: as separate statements they left a gap where the result was
-  // persisted but the status write failed, leaving the action `confirmed` (not `executed`) — so a
-  // re-run of the owning node treated already-executed work as still in-flight and parked forever.
+  // persisted but the status write failed, leaving the action `confirmed` with a persisted result — so a
+  // re-run of the owning node FINALIZES the action (and recovers the node) instead of parking forever.
   // The status write goes through the repository's UNCONDITIONAL `setPendingActionStatus(id,status,tx)`
   // (idempotent — a repeat is harmless).
   await prisma.$transaction(async (tx) => {
@@ -812,7 +858,7 @@ function blockedOutcome(
  * domain outcome: an escalation (`requiresMfa`) is surfaced as RED + `mfa_required`; an already-
  * settled action (repeat/concurrent confirm, confirm-after-cancel) is `ok:false` — never a success.
  */
-export async function confirmAction(
+async function confirmActionImpl(
   actionId: string,
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
@@ -840,7 +886,7 @@ export async function confirmAction(
 }
 
 /** RED — verify the mock MFA code, then authorize + execute. */
-export async function verifyAction(
+async function verifyActionImpl(
   actionId: string,
   code: string,
   opts?: ConfirmOptions,
@@ -869,6 +915,47 @@ export async function verifyAction(
   if (!view.ok) return blockedOutcome(actionId, view, opts);
 
   return executeAuthorizedAction(actionId, view, identity, opts);
+}
+
+/**
+ * Run a confirm/verify continuation while marking `actionId` LIVE for THIS process for its WHOLE
+ * duration (see `inFlightConfirmations`), so a concurrent plan re-run of the owning node does NOT
+ * mistake the in-flight `confirmed` row for a wedged one. The marker is cleared in a `finally`, so a
+ * completed continuation (success, refusal, or a rolled-back result transaction) leaves NO trace and
+ * a later re-run correctly FINALIZES the wedged row.
+ */
+async function withLiveConfirmation<T>(
+  actionId: string,
+  run: () => Promise<T>,
+): Promise<T> {
+  inFlightConfirmations.add(actionId);
+  try {
+    return await run();
+  } finally {
+    inFlightConfirmations.delete(actionId);
+  }
+}
+
+/**
+ * YELLOW (or RED after MFA) — authorize a pending action and execute its original args.
+ *
+ * Marked LIVE for its whole duration (`withLiveConfirmation`): while it runs, the action's
+ * `confirmed` row is legitimately result-less and a plan re-run must defer to it, never finalize it.
+ */
+export function confirmAction(
+  actionId: string,
+  opts?: ConfirmOptions,
+): Promise<ConfirmationOutcome> {
+  return withLiveConfirmation(actionId, () => confirmActionImpl(actionId, opts));
+}
+
+/** RED — verify the mock MFA code, then authorize + execute (same LIVE marking as `confirmAction`). */
+export function verifyAction(
+  actionId: string,
+  code: string,
+  opts?: ConfirmOptions,
+): Promise<ConfirmationOutcome> {
+  return withLiveConfirmation(actionId, () => verifyActionImpl(actionId, code, opts));
 }
 
 /** Cancel a pending action; no execution. */

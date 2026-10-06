@@ -38,7 +38,12 @@ import {
   createTaskNode,
   releaseTaskExecution,
 } from '@/lib/db/repositories/task';
-import { createTaskPersistence, defaultPollControls, sweepCancelledPlan } from '../task-control';
+import {
+  createTaskPersistence,
+  defaultPollControls,
+  planExecutionClaimHeld,
+  sweepCancelledPlan,
+} from '../task-control';
 import type { ToolExecutionResult } from './index';
 
 /**
@@ -301,10 +306,19 @@ export async function runSubmitPlan(
   const planSink = deps.onPlanUpdate;
   const planNow = deps.now ?? (() => demoNow());
   const accumulated = new Map<string, TaskNodeResult>();
+  // The plan's executor slot token (minted just below, before the run starts): referenced by the
+  // `plan_update` gate so the closure reads the SAME per-run token the run fences its writes on.
+  const claimToken = newId('taskclaim');
   const onNodeUpdate = async (node: TaskNodeResult): Promise<void> => {
     await nodeSink?.(node);
     if (planSink === undefined) return;
     accumulated.set(node.id, { ...node });
+    // PLAN-OWNERSHIP GATE: forward a `plan_update` ONLY while this run still owns the plan's
+    // execution claim. A run whose claim was taken over (a concurrent resume/retry rotated
+    // `AgentTask.executionToken`) must publish NO stale snapshot — otherwise the UI's DAG timeline
+    // would show the obsolete executor's failure over the takeover's completed run. The node write is
+    // fenced independently (`createTaskPersistence`), so this only suppresses the publication.
+    if (!(await planExecutionClaimHeld(plan.id, claimToken))) return;
     await planSink(composePlanSnapshot(plan, accumulated, planNow()));
   };
 
@@ -313,7 +327,6 @@ export async function runSubmitPlan(
   // unique value, never reused), and a LOST claim (`false`) means another live run already owns the
   // plan — return an explicit "already running" outcome and run NOTHING (no duplicate execution).
   // The slot is released in `finally`, so a later resume/retry can re-claim it.
-  const claimToken = newId('taskclaim');
   const claimed = await claimTaskExecution(plan.id, claimToken);
   if (!claimed) {
     return {
