@@ -17,7 +17,7 @@
    用户消息 → Pi Agent（脚本化模型）→ 银行工具 → Security Gateway（`beforeToolCall`）→ Banking SDK → 审计。
 3. **HTTP 路由集成测试（route-handler integration，`[integration]`）**——`tests/app/` 下**进程内（in-process）**
    直接导入**真实导出**的 route handler，用真实 `NextRequest` 调用（共享 `harness.ts`），覆盖
-   `/api/chat`、`/api/actions/*`、`/api/tasks/*`；此外还有**跨切面**的边界/契约复核规格 `tests/review-boundaries.test.ts` 与 `tests/review-concurrency.test.ts`（同为 `[integration]`）。
+   `/api/chat`、`/api/actions/*`、`/api/tasks/*`；此外还有**跨切面**的边界/契约复核规格 `tests/review-boundaries.test.ts`、`tests/review-concurrency.test.ts` 与 `tests/review-new-boundaries.test.ts`（同为 `[integration]`）。
 4. **真实浏览器验收 harness（real-browser acceptance）**——`tests/e2e/` 下**独立于 Vitest**（`tsx` 显式运行），
    启动真实 `next dev` + 真实无头 Chrome（隔离库 `prisma/e2e.db`），对**渲染后的 DOM** 断言——见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
@@ -31,7 +31,7 @@
 > 详见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
 ### 当前实测状态 · Measured State
-- **`npx vitest run`** → **68 个文件 / 532 个测试全部通过**。
+- **`npx vitest run`** → **69 个文件 / 535 个测试全部通过**。
 - **`npx tsc --noEmit`** → **0 错误**（Vitest 只转译、不做类型检查，故类型门禁单列）。
 - **`npx next build`** → **退出码 0**。
 - **真实浏览器验收**（`npx tsx tests/e2e/acceptance.e2e.ts`，隔离库 `prisma/e2e.db`）→ **PASS 5 / FAIL 0 / SKIP 0**：
@@ -53,7 +53,8 @@
 - **累计风控去重（cumulative-risk dedup）**：**已入账但尚未终态**（ledgered-but-not-terminal）的动作只按**已执行**计一次，
   不得重复计入在途总额而把后续合规 YELLOW 误升级为 RED——
   `tests/unit/security/risk-engine-dedup.test.ts`、`tests/app/cumulative-risk-http.test.ts`、
-  `tests/app/ledger-consistency-http.test.ts`、`tests/review-boundaries.test.ts`。
+  `tests/app/ledger-consistency-http.test.ts`、`tests/review-boundaries.test.ts`、
+  `tests/review-new-boundaries.test.ts`。
 - **身份 / 会话（identity & session）**：write/auth 路由**仅**认 `banking_session` cookie；跨用户 / 跨会话的
   confirm 必须被 `SECURITY_DENIED` 拒绝，未知 id 返回 `NOT_FOUND`，伪造 `?sessionId=`/`?userId=` **永不**认证；
   body `sessionId` 与 cookie 不一致 → 409——
@@ -74,7 +75,8 @@
   `tests/app/tasks-http.test.ts`、`tests/app/dag-recovery-http.test.ts`、
   `tests/app/cancel-during-authorization-http.test.ts`、`tests/app/task-resume-retry-http.test.ts`、
   `tests/app/plan-pause-terminal-http.test.ts`、`tests/app/plan-parking-http.test.ts`、
-  `tests/review-boundaries.test.ts`、`tests/app/plan-linkage-http.test.ts`、`tests/app/cancel-safety-http.test.ts`、
+  `tests/review-boundaries.test.ts`、`tests/review-new-boundaries.test.ts`、
+  `tests/app/plan-linkage-http.test.ts`、`tests/app/cancel-safety-http.test.ts`、
   `tests/scenarios/test-11-conditional-dag.test.ts`。
 - **模拟动作路由（mock action routing）**：mock 模型如何把中文意图路由到工具（与生产 `LLM_MODE=mock` 下同一套解析）——
   `tests/unit/agent/providers/provider-mock.test.ts`、`tests/unit/agent/providers/plan-limit-park.test.ts`、
@@ -221,6 +223,7 @@ handler 与会话、读取 SSE 分帧。
 | `tests/app/concurrent-execution-http.test.ts` | 并发**执行 claim**：副作用已完成但结果**尚未持久化**时，真实 `resume`/`retry` 与之竞争**不**产生第二个副作用；确定续跑与控制请求竞争同一停靠计划仍**恰好一次**执行 |
 | `tests/review-boundaries.test.ts` | 复核边界：body/query 伪造身份换不到授权 cookie；cancelled 任务 resume 保持 cancelled；取消期间授权不留可执行动作；暂停计划中 confirm 不推进；并发 resume 只执行一次（进程内 + HTTP）；已入账未终态动作只计一次 |
 | `tests/review-concurrency.test.ts` | 复核**并发**回归（`.codex-review` 参考端口）：错峰并发 `resume` 不重复已生效节点；对门控节点的双 `resume` 只产生**一个**停靠动作；取消双重 `resume` 的计划撤销其节点**全部**动作；独立计划同工具同参数**不**合并；未关联取消——均断言**恰好一次**副作用 |
+| `tests/review-new-boundaries.test.ts` | 复核新边界（三例）：(a) 计划转账**已入账但仍未终态**（ledgered-but-not-terminal）时只按**已执行**计一次（累计去重——后续合规小额转账不被误升级 RED）；(b) 投资节点在**副作用已发生但结果尚未持久化**时 `resume` **不得二次扣款**（节点幂等——余额只扣一次、持仓只建一条）；(c) 授权 CAS **之前**完成的计划取消**阻止扣款**（取消已终态、当日累计保持 0） |
 
 ---
 
@@ -229,6 +232,12 @@ handler 与会话、读取 SSE 分帧。
 **独立于 Vitest**：位于 `tests/e2e/`，用 `tsx` 显式运行（`npx tsx tests/e2e/acceptance.e2e.ts`）；文件以
 `.e2e.ts` 结尾，`npm run test` **永不**收集它，且仓库**没有** `test:e2e` 脚本。
 它在**隔离的 E2E 库 `prisma/e2e.db`** 上运行（harness 自建 + 自 seed，绝不触碰 `prisma/dev.db`）；当前实测 **PASS 5 / FAIL 0 / SKIP 0**。
+
+**默认命令自举（clean checkout 可直接跑）**：`npx tsx tests/e2e/acceptance.e2e.ts` 在重建隔离库**之前**
+自动确保 Prisma Client 已生成——仅当生成标记 `node_modules/.prisma/client/schema.prisma` **缺失**时才运行
+`prisma generate`（已生成则跳过，重复运行保持快）。因此**全新检出**（仅 `npm install`、未手工
+`prisma generate`）下**无需**任何额外准备，也**无需**设置 `E2E_SKIP_DB_RESET` 即可直接跑通；harness 始终只用
+隔离的 `prisma/e2e.db`，**从不**修改共享的 `prisma/dev.db`。
 
 流程：在空闲端口启动**真实** `next dev` → 轮询 `/api/health` 待就绪 → 通过 **`playwright-core`** 启动
 机器上**真实**的无头浏览器（**系统 Chrome 优先 / Edge 兜底**，`E2E_BROWSER_PATH` 可覆盖；**无需
