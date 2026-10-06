@@ -201,12 +201,12 @@ agent.beforeToolCall ──► securityGateway.handleToolCall(ctx)
    不会被撤销、也不会伪造 "回滚" —— 账本、操作状态与接口响应三者**一致**；其余非终态节点变为 `cancelled`。
 
 8. **已执行节点恢复**（`agent/confirmation.ts`）：恢复计划时，若被闸门节点的关联 `PendingAction` 已是
-   `executed`（副作用已入账、只是节点结果尚未回写），则依据**持久化的真实结果**补齐该节点 `success`
-   并继续后续节点，**不重新请求确认、不重复副作用**（沿用节点级幂等键 `nodeExecutionKey` 重放）；
-   `pending` / `awaiting_mfa` 仍等待真实人工确认；恢复**幂等**。
-9. **执行接管（execution token）**（`agent/task-control.ts`）：`resume` / `retry` 以 `staleBefore`
+   `executed`（副作用已入账、只是节点结果尚未回写），`recoverExecutedPlanAction` 直接**读取 `PendingAction.resultJson` 中已持久化的原始结果回填**该节点 `success`
+   并继续后续节点，**不重新调用工具、不重新请求确认、不重复副作用**（`executeAuthorizedAction` 执行时已把原始结果写入该动作）；
+   `pending` / `awaiting_mfa` 仍等待真实人工确认；恢复**幂等**（仅遗留行无已存结果时才重放 `replayExecutedPlanAction` 兜底）。
+9. **执行接管（execution token，fenced）**（`agent/task-control.ts`）：`resume` / `retry` 以 `staleBefore`
    （`EXECUTION_CLAIM_TTL_MS = 600000ms`，用 **真实时钟** 计算）**仅在计划/节点 `executionToken` 的所有者已陈旧时**
-   接管；**存活的所有者不会被抢占**，并发接管**恰有一个赢家**（赢家重写 `executionClaimedAt`，输家的条件更新匹配 0 行）。
+   接管；仍在推进的执行者通过**节点边界的租约续期**（`renewTaskExecutionClaim`，非后台定时器）保持自己的 claim 新鲜，但**长时间阻塞的所有者仍可被接管**——接管是 **fenced** 的：`createTaskPersistence` 经**带 token 条件的原子写入原语**落库结果（`updateTaskNode(..., { fenceToken })` 在 claim 丢失时返回 `null`；`claimTaskStatus(..., { fenceToken })` 在 claim 丢失时返回 `false`），因此被接管的旧执行者**无法再覆盖结果**；并发接管**恰有一个赢家**（赢家重写 `executionClaimedAt`，输家的条件更新匹配 0 行）。
 
 UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 思维链**。
 
@@ -485,7 +485,7 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
   **不会真正下单鲜花 / 蛋糕**。
 - **单进程 / SQLite / 单演示用户**，通过 Cookie 维护会话；非生产级多用户/高可用架构。
 - **多进程 / 集群下的竞争未被压力测试。** 并发保护依赖 **单个 SQLite 文件的写锁**（`prisma db push` 工作流、无 `migrations/` 目录）+ **DB 事务**，因此只在 **单进程** 下验证过串行化；面向真实的高并发多实例集群既未压测也未验证。**熔断器（circuit-breaker）为进程内状态**（按 `sessionId` 记录），**服务重启即重置**，不是分布式/持久化实现。
-- **执行接管不提供 fencing token（【未验证】⚠️）。** `resume` / `retry` 只在 `executionClaimedAt` 陈旧（TTL 启发式）时接管 `executionToken`，**不隔离旧所有者对节点行 / 计划快照的写入**（无 fencing token）—— 副作用仍受 **节点级 claim（原子 compare-and-set）** 与 **SDK 幂等键** 约束，但"旧所有者不再写"这一点未被机制强制。TTL（`EXECUTION_CLAIM_TTL_MS = 600000ms`）是**启发式**阈值，并非已证得的活性判据。
+- **执行接管已实现 fencing token（【已实现】✅ 代码强制）；TTL 仍是启发式。** `resume` / `retry` 仅在 `executionClaimedAt` 陈旧（TTL）或所有者长时间阻塞（未续租约）时接管 `executionToken`：仍在推进的执行者通过**节点边界租约续期**（`renewTaskExecutionClaim`）保持 claim 新鲜，而被接管的旧执行者的写入经**带 token 条件的原子写入原语**（`updateTaskNode` / `claimTaskStatus` 的 `fenceToken`；claim 丢失即被拒）**被拒绝**，无法覆盖接管者的结果。TTL（`EXECUTION_CLAIM_TTL_MS = 600000ms`）仍是**启发式**阈值，并非已证得的活性判据。
 - **审查日志中的字面 `Error: Schema engine error:` 在本环境未复现（环境差异，不宣称已关闭）。** 本仓库当前使用的 **Prisma 6.19.3** 在 SQLite 上走**内置 WASM schema engine**，测试与 `prisma db push` 均未见该报错；我们**不宣称已修复/已关闭**，仅记录为不同环境（Prisma 版本 / schema engine 实现）下的差异。
 - **诚实的状态分级：** 本 README 描述的能力应区分 **【已实现】✅ 代码强制 /【模拟】🧪 演示替身 /【未验证】⚠️ 尚未覆盖** 三态（逐项见 [`docs/known-risks.md`](docs/known-risks.md)）。**测试全绿 ≠ 安全模型已闭合**：本 Demo 未做形式化验证，也未覆盖多进程集群、真实 LLM、真实支付通道；请在演示与评审中如实标注，不要把"单元 / 集成 / 浏览器测试通过"表述为"安全闭环已证明"。
 

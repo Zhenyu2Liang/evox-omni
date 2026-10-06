@@ -79,12 +79,19 @@ This is exactly what demo **Test 4** (prompt injection) proves.
   ledger, the action status and the API response stay consistent.
 - **Executed-node recovery** (`agent/confirmation.ts`): when a plan resumes and a gated node's `PendingAction`
   is already `executed` (side effect posted, node result not yet persisted), the node's `success` is
-  reconstructed from the **persisted** result via the node idempotency key (`nodeExecutionKey`) and the plan
+  backfilled by `recoverExecutedPlanAction` from the **persisted** `PendingAction.resultJson` (written by
+  `executeAuthorizedAction`; **no re-invocation of the tool**) and the plan
   continues — no re-confirmation, no duplicate side effect; `pending`/`awaiting_mfa` still await the real human
-  decision; recovery is idempotent.
+  decision; recovery is idempotent. Re-invocation under the node idempotency key (`replayExecutedPlanAction`)
+  is a legacy-only fallback for rows lacking a stored result.
 - **Execution takeover** (`agent/task-control.ts`): `resume`/`retry` take over a plan/node `executionToken`
-  only when the owner is stale (`EXECUTION_CLAIM_TTL_MS = 600000ms`, computed from the **real** clock); a live
-  owner is never preempted and concurrent takeovers yield exactly one winner.
+  only when the owner is stale (`EXECUTION_CLAIM_TTL_MS = 600000ms`, computed from the **real** clock). A
+  progressing executor keeps its claim fresh via **node-boundary lease renewal** (`renewTaskExecutionClaim`,
+  never a background timer), but a **long-blocked owner can still be overtaken** — takeover is **fenced**, so the
+  overtaken executor's writes are **rejected**: `createTaskPersistence` writes results through token-conditioned
+  atomic primitives (`updateTaskNode(..., { fenceToken })` returns the `null` "lost" sentinel;
+  `claimTaskStatus(..., { fenceToken })` returns `false`), threading the claim token from
+  `claimTaskExecution`/`buildPlanDeps`. Concurrent takeovers yield exactly one winner.
 ## Security Model (code-enforced, LLM-immutable)
 Three tiers (`RiskLevel = GREEN | YELLOW | RED`), decided by `security/permission-engine.ts` +
 `security/risk-engine.ts` from a **static policy table + dynamic rules** (amount, daily total), never from the model:
