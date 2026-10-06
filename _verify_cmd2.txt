@@ -1,0 +1,51 @@
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/projects/banking-agent/.genesis/workers/worker_T5_A12[39m
+
+ [32m✓[39m tests/unit/agent/providers/provider-mock.test.ts [2m([22m[2m16 tests[22m[2m)[22m[90m 7[2mms[22m[39m
+ [32m✓[39m tests/scenarios/mock-integration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 690[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/task-cancel-revokes.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 456[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-11-conditional-dag.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 781[2mms[22m[39m
+[90mstdout[2m | tests/unit/agent/providers/plan-limit-park.test.ts[2m > [22m[2mplan parking through the mock model (runTurn → confirmAction)[2m > [22m[2mparks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)
+[22m[39mPARKING FRAMES:
+[{"type":"session","sessionId":"cmuwcfjj50001f8pk89lzs6nu"},{"type":"message_start"},{"type":"text_delta","delta":"好的，我来为你规划一个任务计划。"},{"type":"message_end","content":"好的，我来为你规划一个任务计划。"},{"type":"tool_start","toolName":"submit_plan","status":"started"},{"type":"plan_update","planStatus":"running","nodes":["analyze:running","check:pending","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:pending","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:success","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:success","setlimit:running"]},{"type":"plan_update","planStatus":"waiting_confirmation","nodes":["analyze:success","check:success","setlimit:waiting_confirmation"]},{"type":"tool_end","toolName":"submit_plan","status":"success"},{"type":"card","cardType":"plan"},{"type":"message_start"},{"type":"text_delta","delta":"这笔操作（任务计划）需要"},{"type":"text_delta","delta":"你确认后才会执行，目前状态为「等待确认」"},{"type":"text_delta","delta":"，尚未执行。请你确认后我"},{"type":"text_delta","delta":"才会为你执行。"},{"type":"message_end","content":"这笔操作（任务计划）需要你确认后才会执行，目前状态为「等待确认」，尚未执行。请你确认后我才会为你执行。"},{"type":"confirmation_required","actionId":"cmuwcfjju0009f8pks0s69weo","tier":"YELLOW","toolName":"set_card_limit"},{"type":"card","cardType":"confirmation"},{"type":"done"}]
+
+[90mstdout[2m | tests/unit/agent/providers/plan-limit-park.test.ts[2m > [22m[2mplan parking through the mock model (runTurn → confirmAction)[2m > [22m[2mparks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)
+[22m[39mCONFIRM FRAMES:
+[{"type":"plan_update","planStatus":"success","nodes":["analyze:success","check:success","setlimit:success"]},{"type":"session","sessionId":"cmuwcfjj50001f8pk89lzs6nu"},{"type":"message_start"},{"type":"text_delta","delta":"任务计划：已为卡片 **"},{"type":"text_delta","delta":"**6688 的「娱乐」设置限额 ¥1,"},{"type":"text_delta","delta":"500.00"},{"type":"message_end","content":"任务计划：已为卡片 ****6688 的「娱乐」设置限额 ¥1,500.00"},{"type":"done"}]
+
+ [32m✓[39m tests/unit/agent/providers/plan-limit-park.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 842[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-02-transfer-confirm.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 1244[2mms[22m[39m
+   [33m[2m✓[22m[39m Scenario 2 — 给张伟转200元 (YELLOW confirm)[2m > [22ma PendingAction is persisted with status pending and summary 收款人 张伟 / 金额 ¥200.00 [33m306[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-12-birthday-plan.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1124[2mms[22m[39m
+   [33m[2m✓[22m[39m Scenario 12 — 生日预算计划 (reserve_budget + create_scheduled_task)[2m > [22msubmit_plan builds a plan with a reserve_budget node (¥1000, purpose 生日) and a create_scheduled_task node (reminder near 11-20) [33m322[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-04-prompt-injection.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 554[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/run-turn-failure.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 437[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/task-control.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 380[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-09-investment-mfa.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 503[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-03-transfer-mfa.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 847[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-10-circuit-breaker.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 829[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/confirmation.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 396[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-05-failure-report.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 381[2mms[22m[39m
+[90mstdout[2m | tests/review-new-boundaries.test.ts[2m > [22m[2ma plan transfer already ledgered but still confirmed is counted once
+[22m[39mREVIEW_PLAN_LEDGER {"alreadyLedgered":600,"laterTier":"YELLOW","laterRequiresMfa":false,"laterStatus":"executed"}
+
+[90mstdout[2m | tests/review-new-boundaries.test.ts[2m > [22m[2mresuming an investment node during post-effect persistence cannot debit twice
+[22m[39mREVIEW_INVESTMENT_REPLAY {"resumeStatus":"waiting_confirmation","balance":22580,"purchases":1}
+
+[90mstdout[2m | tests/review-new-boundaries.test.ts[2m > [22m[2ma plan cancellation completed before authorization CAS prevents the debit
+[22m[39mREVIEW_CANCEL_GAP {"cancelled":"cancelled","actionStatus":"cancelled","total":0}
+
+ [32m✓[39m tests/review-new-boundaries.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 764[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/confirmation-idempotency.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 748[2mms[22m[39m
+   [33m[2m✓[22m[39m confirmation idempotency[2m > [22ma repeated confirm executes exactly once; the second is a typed ok:false [33m435[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-01-balance.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 665[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-08-card-limit.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 661[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-06-spending-analysis.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 576[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-07-anomaly.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 819[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m21 passed[39m[22m[90m (21)[39m
+[2m      Tests [22m [1m[32m113 passed[39m[22m[90m (113)[39m
+[2m   Start at [22m 15:14:33
+[2m   Duration [22m 23.13s[2m (transform 453ms, setup 68ms, collect 6.26s, tests 13.70s, environment 2ms, prepare 876ms)[22m
+

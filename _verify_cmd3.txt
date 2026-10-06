@@ -1,0 +1,7 @@
+tests/e2e/acceptance.e2e.ts(23,36): error TS2307: Cannot find module 'playwright-core' or its corresponding type declarations.
+tests/e2e/acceptance.e2e.ts(338,14): error TS7006: Parameter 'res' implicitly has an 'any' type.
+tests/e2e/helpers.ts(21,26): error TS2307: Cannot find module 'playwright-core' or its corresponding type declarations.
+tests/e2e/helpers.ts(22,45): error TS2307: Cannot find module 'playwright-core' or its corresponding type declarations.
+tests/e2e/helpers.ts(653,25): error TS7006: Parameter 'error' implicitly has an 'any' type.
+tests/e2e/helpers.ts(839,26): error TS7006: Parameter 'text' implicitly has an 'any' type.
+tests/e2e/helpers.ts(959,31): error TS7006: Parameter 'cookie' implicitly has an 'any' type.
