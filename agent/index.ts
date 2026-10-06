@@ -47,7 +47,19 @@ export {
   resumeTaskForAction,
   toTaskPlan,
 } from './task-control';
-export type { TaskControlDeps, TaskControlOptions, TaskNodeOutput, TaskPersistence, TaskRunTool };
+export type {
+  TaskControlDeps,
+  TaskControlOptions,
+  TaskNodeOutput,
+  TaskPersistence,
+  TaskPersistenceMode,
+  TaskPersistenceOptions,
+  TaskRunTool,
+} from './task-control';
+// The FENCED write primitives (`./task-fencing`), incl. the confirm-continuation's LOST-claim
+// decision recorder.
+export { isMissingNodeError, jsonNodeOutput, recordDecidedNodeFenced, toNodeUpdate } from './task-fencing';
+export type { DecidedNodeInput } from './task-fencing';
 
 /**
  * Default `runTool` adapter for the agent-level task controls: every node routes through the

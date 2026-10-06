@@ -201,12 +201,13 @@ agent.beforeToolCall ──► securityGateway.handleToolCall(ctx)
    不会被撤销、也不会伪造 "回滚" —— 账本、操作状态与接口响应三者**一致**；其余非终态节点变为 `cancelled`。
 
 8. **已执行节点恢复**（`agent/confirmation.ts`）：恢复计划时，若被闸门节点的关联 `PendingAction` 已是
-   `executed`（副作用已入账、只是节点结果尚未回写），`recoverExecutedPlanAction` 直接**读取 `PendingAction.resultJson` 中已持久化的原始结果回填**该节点 `success`
-   并继续后续节点，**不重新调用工具、不重新请求确认、不重复副作用**（`executeAuthorizedAction` 执行时已把原始结果写入该动作）；
-   `pending` / `awaiting_mfa` 仍等待真实人工确认；恢复**幂等**（仅遗留行无已存结果时才重放 `replayExecutedPlanAction` 兜底）。
-9. **执行接管（execution token，fenced）**（`agent/task-control.ts`）：`resume` / `retry` 以 `staleBefore`
-   （`EXECUTION_CLAIM_TTL_MS = 600000ms`，用 **真实时钟** 计算）**仅在计划/节点 `executionToken` 的所有者已陈旧时**
-   接管；仍在推进的执行者通过**节点边界的租约续期**（`renewTaskExecutionClaim`，非后台定时器）保持自己的 claim 新鲜，但**长时间阻塞的所有者仍可被接管**——接管是 **fenced** 的：`createTaskPersistence` 经**带 token 条件的原子写入原语**落库结果（`updateTaskNode(..., { fenceToken })` 在 claim 丢失时返回 `null`；`claimTaskStatus(..., { fenceToken })` 在 claim 丢失时返回 `false`），因此被接管的旧执行者**无法再覆盖结果**；并发接管**恰有一个赢家**（赢家重写 `executionClaimedAt`，输家的条件更新匹配 0 行）。
+   `executed`（副作用已入账、只是节点结果尚未回写），`recoverExecutedPlanAction` 直接**读取 `PendingAction.resultJson` 中已持久化的原始结果回填**该节点 `success` 并继续后续节点，**绝不重新调用工具、不重新请求确认、不重复副作用**（`executeAuthorizedAction` 执行时已在**同一个事务**内把原始结果与终态动作状态一起写入）。
+   恢复对**所有受闸门的写工具通用且幂等**；`confirmed` 但已存结果的动作用一次 CAS（`confirmed` → `executed`）+ 同样回填即完成，不重跑、也不伪造回滚；`executed` 但**无**已存结果的遗留行同样**不重新调用工具**，而是以「已执行但未留存结果，需人工核对」明确收敛。
+   `pending` / `awaiting_mfa` 仍等待真实人工确认。
+9. **执行接管（execution token，fenced）**（`agent/task-control.ts` + `agent/task-fencing.ts`）：`resume` / `retry` 以 `staleBefore`
+   （`EXECUTION_CLAIM_TTL_MS = 600000ms`，用 **真实时钟** 计算）**仅在计划/节点 `executionToken` 的所有者已陈旧时**接管；仍在推进的执行者通过**节点边界的租约续期**（`renewTaskExecutionClaim`，非后台定时器）保持自己的 claim 新鲜，但**长时间阻塞的所有者（单次工具调用阻塞超过 TTL）仍可被接管**——接管是 **TTL 启发式**，不是活性证明。
+   接管是 **fenced** 的，且**每个执行者路径都被 fence**（初次 `submit_plan` 执行、依赖跳过与条件/说明节点、以及确认续跑）：**所有权在与写入同一条 SQL 的原子 CAS 中断言**（`updateTaskNode(..., { fenceToken })` 在 claim 丢失时返回 `null`；`claimTaskStatus(..., { fenceToken })` 在 claim 丢失时返回 `false`），因此被接管的旧执行者**无法再覆盖节点或计划结果、无法把已完成的下游标记为 `skipped`、也无法推进下游**；`createTaskPersistence` 区分 `mode:'executor'`（始终 fence）与 `mode:'control'`（仅 `pauseTask` / `cancelTask` 的刻意非 fence 写入）。
+   当确认续跑**丢失**计划 claim 时，它**不推进计划**，而是经带 fence 的「无主 CAS」把人工决策节点落库（`agent/task-fencing.ts#recordDecidedNodeFenced`），让在场所有者继续、人工决策永不丢失；并发接管**恰有一个赢家**（赢家重写 `executionClaimedAt`，输家的条件更新匹配 0 行）。
 
 UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 思维链**。
 
@@ -257,8 +258,9 @@ npm run test               # vitest run（离线：mock LLM + 测试 SQLite，�
 ```
 
 > **⚠️ 标准命令顺序（务必按序）：`npm install` → `npx prisma generate` → `npx prisma db push` → `npm run db:seed` → `npm run build`。**
-> `next build` 会 **静态预渲染** 由数据库驱动的页面（这些页面在 **构建期** 就会查询 SQLite），
-> 因此 **必须先完成 `prisma db push` + `npm run db:seed`** 才能运行 `npm run build`；
+> `next build` 会输出一张 **构建路由表（build routing table）**，逐条列出每个路由/入口及其生成类型（静态 ○ / 动态 ƒ）；
+> 构建过程中的 `Generating static pages (n/N)` 只是 **路由/入口生成进度**（不是“N 个静态页面”）。
+> 由数据库驱动的入口在 **构建期** 就会查询 SQLite，因此 **必须先完成 `prisma db push` + `npm run db:seed`** 才能运行 `npm run build`；
 > 若数据库尚未建表 / 灌入演示数据，**`next build` 会直接失败**。
 
 其它命令：
@@ -286,9 +288,10 @@ npm run db:studio          # prisma studio（可视化查看数据）
 > 自举一个可用的 Prisma Client（干净 checkout 也无需手动 `prisma generate`），再把 schema provision 到
 > **隔离的 `prisma/test.db`（`prisma/dev.db` 不受影响）**：以 `prisma/schema.prisma` 的 **sha1** 作为
 > 「已 provision」标记，**仅在 schema 变化时**才重建（**fail-loud**：provision/generate 失败会带着完整 CLI
-> 输出直接抛出，绝不 `console.warn` 后继续）。所有 DB 测试共用同一个 SQLite 文件（`prisma/test.db`），`vitest.config.ts`
-> 已设置 `fileParallelism: false` 以串行运行、避免竞争。如需手动指定，可使用
-> `npx vitest run --no-file-parallelism`。
+> 输出直接抛出，绝不 `console.warn` 后继续）。
+> 冷启动 provisioning 会为 schema-engine 子进程**固定 `RUST_LOG=info`**（`tests/helpers/prisma-cli.ts#pinSchemaEngineLogging`）——
+> 环境中 `RUST_LOG` 达到/高于 `warn` 会压掉引擎的 INFO 横幅，使 Prisma 丢掉真正的（第 1 行）错误，在全新 SQLite 文件上表现为**空内容的 `Error: Schema engine error:`**；固定后**默认命令即可冷启动自举**（`npx vitest run` 与默认浏览器 E2E 均**无需手动准备 / 无需跳过开关 / 无需预写标记**）。
+> 所有 DB 测试共用同一个 SQLite 文件（`prisma/test.db`），`vitest.config.ts` 已设置 `fileParallelism: false` 以串行运行、避免竞争。如需手动指定，可使用 `npx vitest run --no-file-parallelism`。
 
 ---
 
@@ -351,7 +354,7 @@ npm run build         # 生产构建（页面在构建期预渲染，必须先�
 ```
 
 > 标准顺序即 `npm install` → `npx prisma generate` → `npx prisma db push` → `npm run db:seed` → `npm run build`：
-> `next build` 会 **静态预渲染** 由数据库驱动的页面，故 build 必须排在 push + seed 之后，否则构建失败。
+> `next build` 会输出一张 **构建路由表（build routing table）**，逐条列出每个路由/入口及其生成类型（静态 ○ / 动态 ƒ），由数据库驱动的入口在**构建期**查询 SQLite，故 build 必须排在 push + seed 之后，否则构建失败。
 > `db push` 会就地新增可空列与唯一索引，不会重建/清空数据。若需一个全新的数据库，
 > 可运行 `npm run db:reset`（`prisma db push --force-reset && tsx prisma/seed.ts`）。
 
@@ -485,8 +488,8 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
   **不会真正下单鲜花 / 蛋糕**。
 - **单进程 / SQLite / 单演示用户**，通过 Cookie 维护会话；非生产级多用户/高可用架构。
 - **多进程 / 集群下的竞争未被压力测试。** 并发保护依赖 **单个 SQLite 文件的写锁**（`prisma db push` 工作流、无 `migrations/` 目录）+ **DB 事务**，因此只在 **单进程** 下验证过串行化；面向真实的高并发多实例集群既未压测也未验证。**熔断器（circuit-breaker）为进程内状态**（按 `sessionId` 记录），**服务重启即重置**，不是分布式/持久化实现。
-- **执行接管已实现 fencing token（【已实现】✅ 代码强制）；TTL 仍是启发式。** `resume` / `retry` 仅在 `executionClaimedAt` 陈旧（TTL）或所有者长时间阻塞（未续租约）时接管 `executionToken`：仍在推进的执行者通过**节点边界租约续期**（`renewTaskExecutionClaim`）保持 claim 新鲜，而被接管的旧执行者的写入经**带 token 条件的原子写入原语**（`updateTaskNode` / `claimTaskStatus` 的 `fenceToken`；claim 丢失即被拒）**被拒绝**，无法覆盖接管者的结果。TTL（`EXECUTION_CLAIM_TTL_MS = 600000ms`）仍是**启发式**阈值，并非已证得的活性判据。
-- **审查日志中的字面 `Error: Schema engine error:` 在本环境未复现（环境差异，不宣称已关闭）。** 本仓库当前使用的 **Prisma 6.19.3** 在 SQLite 上走**内置 WASM schema engine**，测试与 `prisma db push` 均未见该报错；我们**不宣称已修复/已关闭**，仅记录为不同环境（Prisma 版本 / schema engine 实现）下的差异。
+- **执行接管已实现 fencing token（【已实现】✅ 代码强制）；TTL 仍是启发式。** `resume` / `retry` 仅在 `executionClaimedAt` 陈旧（TTL）或所有者长时间阻塞（未续租约）时接管 `executionToken`：仍在推进的执行者通过**节点边界租约续期**（`renewTaskExecutionClaim`）保持 claim 新鲜，而被接管的旧执行者的写入经**带 token 条件的原子写入原语**（`updateTaskNode` / `claimTaskStatus` 的 `fenceToken`；claim 丢失即被拒）**被拒绝**，无法覆盖接管者的结果。Fencing 覆盖**每个执行者路径**（初次 `submit_plan` 执行、依赖跳过与条件/说明节点、确认续跑）：所有权在与写入**同一条 SQL 的原子 CAS** 中断言；确认续跑若**丢失**计划 claim 则不推进计划，而经带 fence 的无主 CAS（`agent/task-fencing.ts#recordDecidedNodeFenced`）落库人工决策节点。TTL（`EXECUTION_CLAIM_TTL_MS = 600000ms`）仍是**启发式**阈值，并非已证得的活性判据——**单次工具调用阻塞超过 TTL 的所有者仍可被接管**，只是其写入会失败。
+- **schema engine 冷启动报错的根因已定位并修复（【已实现】✅ 代码强制）。** 在全新 SQLite 文件上，环境中 `RUST_LOG` 达到/高于 `warn` 会压掉 Prisma schema-engine 的 INFO 横幅；Prisma 的错误映射会丢弃第 0 行输出，于是真正的（第 1 行）错误也被丢弃，只剩下**空内容的 `Error: Schema engine error:`**，并连带毁掉「库不存在（`P1003`）」这一探测结果，使冷启动 `db push` 失败。修复方式是为 schema-engine 子进程**固定 `RUST_LOG=info`**（`tests/helpers/prisma-cli.ts#pinSchemaEngineLogging`），因此**默认的 `npx vitest run` 与默认浏览器 E2E 均可自动 provision 隔离库**——无需手动准备、无需跳过开关、无需预写标记。
 - **诚实的状态分级：** 本 README 描述的能力应区分 **【已实现】✅ 代码强制 /【模拟】🧪 演示替身 /【未验证】⚠️ 尚未覆盖** 三态（逐项见 [`docs/known-risks.md`](docs/known-risks.md)）。**测试全绿 ≠ 安全模型已闭合**：本 Demo 未做形式化验证，也未覆盖多进程集群、真实 LLM、真实支付通道；请在演示与评审中如实标注，不要把"单元 / 集成 / 浏览器测试通过"表述为"安全闭环已证明"。
 
 ---

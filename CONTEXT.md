@@ -73,25 +73,23 @@ Concrete SDK facts the implementation relies on (verified against pi-agent-core 
 Consequence: money-moving calls are always triggered by a human confirmation, never by the model text.
 This is exactly what demo **Test 4** (prompt injection) proves.
 ### Durable plan execution (current behavior)
-- **Cancellation only blocks not-yet-authorized/executed work.** Cancelling a plan atomically revokes its
-  **not-yet-authorized/executed** `PendingAction`s and marks the plan `cancelled`. A successfully posted side
-  effect keeps its action at `executed` and is **retained** — never rolled back or cosmetically reverted; the
-  ledger, the action status and the API response stay consistent.
-- **Executed-node recovery** (`agent/confirmation.ts`): when a plan resumes and a gated node's `PendingAction`
-  is already `executed` (side effect posted, node result not yet persisted), the node's `success` is
-  backfilled by `recoverExecutedPlanAction` from the **persisted** `PendingAction.resultJson` (written by
-  `executeAuthorizedAction`; **no re-invocation of the tool**) and the plan
-  continues — no re-confirmation, no duplicate side effect; `pending`/`awaiting_mfa` still await the real human
-  decision; recovery is idempotent. Re-invocation under the node idempotency key (`replayExecutedPlanAction`)
-  is a legacy-only fallback for rows lacking a stored result.
-- **Execution takeover** (`agent/task-control.ts`): `resume`/`retry` take over a plan/node `executionToken`
-  only when the owner is stale (`EXECUTION_CLAIM_TTL_MS = 600000ms`, computed from the **real** clock). A
-  progressing executor keeps its claim fresh via **node-boundary lease renewal** (`renewTaskExecutionClaim`,
-  never a background timer), but a **long-blocked owner can still be overtaken** — takeover is **fenced**, so the
-  overtaken executor's writes are **rejected**: `createTaskPersistence` writes results through token-conditioned
-  atomic primitives (`updateTaskNode(..., { fenceToken })` returns the `null` "lost" sentinel;
-  `claimTaskStatus(..., { fenceToken })` returns `false`), threading the claim token from
-  `claimTaskExecution`/`buildPlanDeps`. Concurrent takeovers yield exactly one winner.
+- **Cancellation only blocks not-yet-authorized/executed work.**
+  Cancelling a plan atomically revokes its **not-yet-authorized/executed** `PendingAction`s and marks the plan `cancelled` in one transaction.
+  A successfully posted side effect keeps its action at `executed` and is **retained** — never rolled back or cosmetically reverted; the ledger, the action status and the API response stay consistent.
+- **Executed-node recovery** (`agent/confirmation.ts`): when a plan resumes and a gated node's `PendingAction` is already `executed` (side effect posted, node result not yet persisted), the node's `success` is backfilled by `recoverExecutedPlanAction` from the **persisted** `PendingAction.resultJson` written by `executeAuthorizedAction` — the tool is **never re-invoked**.
+  Recovery is **generic** across all gated write tools and **idempotent** (no extra write, no fresh confirmation, no duplicate side effect).
+  A `confirmed` action that already has a stored result is finalized on resume via a single CAS (`confirmed` → `executed`) plus the same backfill — no re-run, no fabricated rollback.
+  An `executed` action that has **no** stored result (legacy/pre-upgrade row) is also **not** re-invoked; the node settles with an explicit "executed but no stored result — needs manual reconciliation" outcome.
+  `pending` / `awaiting_mfa` still await the real human decision.
+- **The execution result and the terminal action status are written in ONE atomic `prisma.$transaction`** (`agent/confirmation.ts#executeAuthorizedAction`), closing the window where a saved result could be stranded at `confirmed` / `waiting_confirmation`.
+- **Executor write FENCING** (`agent/task-control.ts` + `agent/task-fencing.ts`) covers **every** executor path: the initial `submit_plan` run, dependency-skip and condition/note nodes, and the confirm-continuation.
+  Ownership is validated **atomically in the SAME DB statement as the write** (a single-statement CAS on the node/plan `executionToken`), so a resumed / lost-claim executor can no longer overwrite a takeover's node or plan result, mark a completed dependent `skipped`, or advance downstream.
+  `createTaskPersistence` distinguishes an explicit `mode:'executor'` (always fenced: `updateTaskNode(..., { fenceToken })` returns the `null` "lost" sentinel, `claimTaskStatus(..., { fenceToken })` returns `false`) from `mode:'control'` (the deliberate, unfenced `pauseTask` / `cancelTask` writes).
+  When the confirm-continuation **loses** the plan claim it does **not** advance the plan; it records the decided node through a fenced no-owner CAS (`agent/task-fencing.ts#recordDecidedNodeFenced`) so the live owner continues and the human decision is never lost.
+- **Execution takeover** (`agent/task-control.ts`): `resume`/`retry` take over a plan/node `executionToken` only when the owner is stale (`EXECUTION_CLAIM_TTL_MS = 600000ms`, computed from the **real** clock).
+  A progressing executor keeps its claim fresh via **node-boundary lease renewal** (`renewTaskExecutionClaim`, never a background timer), but a **long-blocked owner can still be overtaken** (a single tool call blocked beyond the TTL), so takeover is a **TTL heuristic**, not a liveness proof.
+  The takeover is **fenced**: the overtaken executor's writes are **rejected** by the same-statement CAS, threading the claim token from `claimTaskExecution`/`buildPlanDeps`.
+  Concurrent takeovers yield exactly one winner.
 ## Security Model (code-enforced, LLM-immutable)
 Three tiers (`RiskLevel = GREEN | YELLOW | RED`), decided by `security/permission-engine.ts` +
 `security/risk-engine.ts` from a **static policy table + dynamic rules** (amount, daily total), never from the model:
@@ -176,9 +174,9 @@ Four layers (see `tests/CONTEXT.md`): (1) pure unit tests (`tests/unit/` — sec
 (3) in-process route-handler HTTP integration (`tests/app/*-http.test.ts`, real handlers + real test SQLite) plus
 root review specs (`tests/review-*.test.ts`); (4) real-browser e2e acceptance (`tests/e2e/acceptance.e2e.ts`,
 playwright-core-driven on an isolated `prisma/e2e.db`, run via `npx tsx`, not Vitest).
-Clean-env bootstrap (`tests/setup.ts`, Vitest `setupFiles`): self-bootstraps a **usable** Prisma Client (usability
-probe) and provisions the **isolated** `prisma/test.db` **fail-loud**, keyed on a **sha1 marker of
-`prisma/schema.prisma`** so the schema is re-pushed **only when it changes**; `prisma/dev.db` is untouched.
+Clean-env bootstrap (`tests/setup.ts`, Vitest `setupFiles`): self-bootstraps a **usable** Prisma Client (usability probe) and provisions the **isolated** `prisma/test.db` **fail-loud**, keyed on a **sha1 marker of `prisma/schema.prisma`** so the schema is re-pushed **only when it changes**; `prisma/dev.db` is untouched.
+Cold-start provisioning pins `RUST_LOG=info` for the Prisma schema-engine child process (`tests/helpers/prisma-cli.ts#pinSchemaEngineLogging`), because an ambient `RUST_LOG` at/above `warn` suppressed the engine's INFO banner and made Prisma drop the real (line-1) error, surfacing as the opaque empty `Error: Schema engine error:` on a fresh SQLite file.
+With that pin the DEFAULT `npx vitest run` and the DEFAULT browser E2E auto-provision the isolated DB — no manual prep, no skip flag, no pre-written marker.
 ## Routing Table
 - `./app` → Next.js App Router: pages (dashboard, agent chat, bills, cards, subscriptions, security center, audit) + API route handlers (chat/SSE, actions confirm|verify|cancel, tasks control, audit, security, read models)
 - `./components` → React UI: chat cards (balance/transfer/confirm/MFA/anomaly/plan), charts, banking tiles, ui primitives
