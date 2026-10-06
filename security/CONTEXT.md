@@ -40,7 +40,7 @@ type PrismaLike = Prisma.TransactionClient | typeof prisma   // the shared clien
 const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const
 function evaluateTransferRisk(input: TransferRiskInput): TransferRiskResult     // RED iff amount>1000 || total+amount>1000 (STRICT `>`; exactly ¥1000 stays YELLOW), else YELLOW; always requiresConfirmation
 async function computeDailyTransferTotal(userId: string, now?: number): Promise<number>   // EXECUTED only: sum OUTGOING TRANSFER debits with occurredAt in [startOfDay(now), now] (INCLUSIVE both ends; future-dated rows excluded)
-async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>   // sum of in-flight (status confirmed|executing) parked transfer_money args.amount, minus excludeActionId; a malformed row is SKIPPED (never throws); an action whose deterministic ledger row `idempotentTransferTxId(userId, action.id)` ALREADY EXISTS is EXCLUDED (already counted by the executed half)
+async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>   // sum of in-flight (status confirmed|executing) parked transfer_money args.amount, minus excludeActionId; a malformed row is SKIPPED (never throws); an action whose deterministic ledger row `ledgerTxIdForAction(userId, action)` ALREADY EXISTS is EXCLUDED (already counted by the executed half)
 async function computeEffectiveTransferTotalWith(client: PrismaLike, userId: string, now?: number, excludeActionId?: string): Promise<number>   // EXECUTED-today transfer debits + in-flight PendingActions, through `client` (so it runs INSIDE a `$transaction`)
 async function reEvaluateTransferRisk(userId: string, amount: number, now?: number): Promise<TransferRiskResult>   // EXECUTED-only re-risk: computeDailyTransferTotal FRESH then evaluateTransferRisk
 ```
@@ -133,6 +133,9 @@ function deriveIntent(toolName: ToolName): string                   // TOOL_INTE
 // `createPendingAction` persists ctx.userRequest + deriveIntent(ctx.toolName) + the plan link
 // (ctx.taskId / ctx.nodeId, `null` when absent); `toContractPendingAction` surfaces userRequest and
 // intent on the returned PendingAction (the plan link is read back via `getPendingActionPlanLink`).
+// A plan-scoped call (`ctx.taskId`) whose owning `AgentTask` is already `'cancelled'` is REFUSED: the
+// internal path returns `null` (⇒ `handleToolCall` yields a clean `deny`); the exported
+// `createPendingAction` maps that to a thrown `CONFLICT` so its public return type stays non-null.
 function sameArgs(a: unknown, b: unknown): boolean   // PURE, key-order-insensitive deep equality of tool args
 ```
 `createPendingAction` first runs a **plan-node dedupe** (defense-in-depth — a cheap second layer): when BOTH
@@ -180,6 +183,21 @@ A wrong code returns `code:'MFA_FAILED'`; a locked session/challenge returns `co
 REQUIRES ownership too and claims `['pending','awaiting_mfa'] → 'cancelled'` (a settled action ⇒ `CONFLICT`).
 `handleToolCall` first calls `assertCallerIdentity(ctx)` (presence/non-emptiness only — there is no persisted
 action yet). There is NO demo-user fallback anywhere: an `actionId` alone is no longer a capability.
+
+**Plan-cancel guards (fail-closed; the gateway READS the owning plan's status).** To close the
+plan-cancel → authorize race even when the plan's bulk revoke is lost or neutralized, the gateway
+reads `AgentTask.status` at three points: (1) CREATE/PARK — `gatewayCreatePendingAction` reads the
+owning `AgentTask` INSIDE the SAME `$transaction` that inserts the row and returns `null` when the
+plan is `'cancelled'` (⇒ `handleToolCall` returns a clean `deny` with a `blockReason` and NO live
+`action`); (2) AUTHORIZE — BOTH `authorizeTransfer` (YELLOW CAS tx) and `authorizeWithMfa`
+(strong-verification claim tx) re-read the plan via the action's persisted `row.taskId` INSIDE the
+same `$transaction` that claims the action and, on `'cancelled'`, REVERSE the claim to `'cancelled'`,
+return a distinct `{kind:'plan_cancelled'}` from the tx and translate it AFTER the commit into a
+RETURNED (never thrown) `{ok:false, status:'cancelled', code:'SECURITY_DENIED'}` — the side effect
+MUST NOT run and NO ledger row is written; (3) RECORD — `recordActionResult` NEVER marks an action
+`'executed'` when its owning plan is `'cancelled'` (persists `'cancelled'` instead). An action with
+NO plan link (`row.taskId` null/empty) is COMPLETELY unaffected by all three guards, and a committed
+ledger debit is NEVER rolled back.
 
 ### `index.ts` — facade
 ```ts
@@ -397,4 +415,4 @@ This is a **leaf node** — it has no child directories; the modules above are i
 - `authorizeAction`/`cancelAction`/`handleToolCall` REQUIRE a caller identity — never add a demo-user fallback; callers must pass `{ userId, sessionId }`.
 - **All tests live under the root-owned `../tests/`** (the root `vitest.config.ts` discovers only `tests/**`): this node's security unit specs — including the DB-free dedup spec `tests/unit/security/risk-engine-dedup.test.ts` — run via `npx vitest run tests/unit/security`.
 - **GREEN auto-executed reads are NOT audited.** The only `recordAudit` callers are the gated paths in `agent/confirmation.ts` (confirm/verify + cancel); a GREEN tool that executes inline writes no `AuditLog` row (by design, per `lib/contracts/audit`).
-- **This node is PLAN-UNAWARE.** `security-gateway.ts` never reads `AgentTask` / plan status: `gatewayCreatePendingAction` (park time) and `authorizeAction` (confirm/verify time) gate ONLY on ownership, the circuit breaker, and the risk engines. The gateway does persist/read the PLAN LINK on the `PendingAction` it owns (`ctx.taskId`/`ctx.nodeId` written at creation; the park-path dedupe groups by them) — that is action-row data, not plan state, so the gateway still never inspects a plan's status. The "originating plan was cancelled" refusal is enforced one layer UP, in the sibling `agent/` node: `agent/confirmation.ts` `cancelledPlanOutcome(actionId, sessionId)` (reverse-looks the owning task via `findTaskByPendingAction` + `getTask`, refuses when `task.status === 'cancelled'`) is called by `confirmAction`/`verifyAction`/`cancelAction` BEFORE authorizing/executing, and `agent/task-control.ts` `sweepCancelledPlan`/`revokeParkedActions` revoke parked actions (via `gateway.cancelAction`) after a plan run settles. The gateway's own `cancelAction` only cancels ONE pending action (atomic `['pending','awaiting_mfa'] → 'cancelled'` claim); it has no plan awareness.
+- **This node READS the owning plan's status at its three plan-cancel guard points, but is otherwise plan-UNAWARE.** `security-gateway.ts` never inspects the plan's node graph or its status transitions, and `cancelAction` only cancels ONE pending action (atomic `['pending','awaiting_mfa'] → 'cancelled'` claim). It DOES read `AgentTask.status` as a fail-closed cancel guard at create/park time (`gatewayCreatePendingAction`, same-tx as the insert), authorize time (both `authorizeTransfer` and `authorizeWithMfa`, same-tx as the CAS claim — the claim is reversed to `cancelled` and a clean `ok:false` is RETURNED, never thrown) and record time (`recordActionResult` refuses to mark `'executed'` under a cancelled plan) — see the plan-cancel-guards paragraph above. This is what closes the cancel→authorize race when the plan-level bulk revoke (`agent/task-control.ts` `revokeParkedActions`/`sweepCancelledPlan`) is lost or neutralized; the sibling `agent/` node ALSO refuses at `agent/confirmation.ts` `cancelledPlanOutcome` BEFORE authorizing. The gateway loads the plan ONLY for its `status` (never its nodes) — no plan graph is traversed here.

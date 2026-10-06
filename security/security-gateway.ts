@@ -39,6 +39,7 @@ import {
   claimPendingAction,
   createPendingAction as repoCreatePending,
   getPendingAction,
+  getPendingActionPlanLink,
   listPendingActionsByTask,
   setPendingActionStatus,
 } from '../lib/db/repositories/pendingAction';
@@ -191,6 +192,13 @@ const TRANSFER_ESCALATED_MESSAGE =
 
 /** Prompt shown when a RED (or escalated) action still needs a strong-verification code. */
 const MFA_CODE_PROMPT = '请输入 6 位短信验证码以完成安全验证。';
+
+/**
+ * Shown when a confirm/verify targets an action whose OWNING PLAN is `'cancelled'`: the claim is
+ * REVERSED to `cancelled` inside the authorizing transaction, so no side effect runs and no ledger
+ * row is written. MUST be code-free.
+ */
+const PLAN_CANCELLED_MESSAGE = '操作所属的任务计划已取消，该操作不会执行。';
 
 /** Code-free confirmation messages. */
 const CONFIRM_OK_MESSAGE = '操作已确认，正在执行。';
@@ -463,11 +471,19 @@ async function findReusableAction(
   );
 }
 
-/** Persist a gated call as a `PendingAction` with a `PendingActionSummary`. */
+/**
+ * Persist a gated call as a `PendingAction` with a `PendingActionSummary`.
+ *
+ * Returns `null` when the call is plan-scoped (`ctx.taskId`) and the owning `AgentTask` is already
+ * `'cancelled'`. The plan-status read and the row insert run in ONE transaction, so a plan cancelled
+ * concurrently cannot slip a fresh action in between the read and the write (create-time half of the
+ * plan-cancel → authorize race guard). `handleToolCall` turns the refusal into a clean `deny`; the
+ * public `SecurityGateway.createPendingAction` wrapper maps it to a `CONFLICT`.
+ */
 async function gatewayCreatePendingAction(
   ctx: GatewayContext,
   ev: SecurityEvaluation,
-): Promise<PendingAction> {
+): Promise<PendingAction | null> {
   // A plan node that is re-parked for the same operation reuses its existing action (and its
   // existing MFA challenge) instead of minting a duplicate.
   const reusable = await findReusableAction(ctx, ev);
@@ -476,28 +492,45 @@ async function gatewayCreatePendingAction(
   const summary = buildPendingActionSummary(ctx, ev);
   const status: PendingActionStatus = ev.requiresMfa ? 'awaiting_mfa' : 'pending';
 
-  const row = await repoCreatePending({
-    sessionId: ctx.sessionId,
-    userId: ctx.userId,
-    toolName: ctx.toolName,
-    args: ctx.args,
-    tier: ev.tier,
-    requiresMfa: ev.requiresMfa,
-    summary,
-    // Audit trail: the user's original request + a code-derived intent label (never model text).
-    userRequest: ctx.userRequest,
-    intent: deriveIntent(ctx.toolName),
-    status,
-    // Plan link (present only when the call originates from a DAG node): persisted AT CREATION so a
-    // plan-level cancel can revoke the operation even if the node output JSON was never written.
-    taskId: ctx.taskId,
-    nodeId: ctx.nodeId,
+  // The owning-plan status check and the row insert share ONE transaction: a plan cancelled
+  // concurrently cannot slip a new action in between the read and the write.
+  const created = await prisma.$transaction(async (tx) => {
+    if (ctx.taskId) {
+      const plan = await tx.agentTask.findUnique({
+        where: { id: ctx.taskId },
+        select: { status: true },
+      });
+      if (plan?.status === 'cancelled') return { refused: true as const };
+    }
+    const row = await repoCreatePending(
+      {
+        sessionId: ctx.sessionId,
+        userId: ctx.userId,
+        toolName: ctx.toolName,
+        args: ctx.args,
+        tier: ev.tier,
+        requiresMfa: ev.requiresMfa,
+        summary,
+        // Audit trail: the user's original request + a code-derived intent label (never model text).
+        userRequest: ctx.userRequest,
+        intent: deriveIntent(ctx.toolName),
+        status,
+        // Plan link (present only when the call originates from a DAG node): persisted AT CREATION so a
+        // plan-level cancel can revoke the operation even if the node output JSON was never written.
+        taskId: ctx.taskId,
+        nodeId: ctx.nodeId,
+      },
+      tx,
+    );
+    return { refused: false as const, row };
   });
 
-  // RED actions get a code-free challenge up-front so the UI can prompt for MFA.
-  if (ev.requiresMfa) await issueChallenge(row.id);
+  if (created.refused) return null;
 
-  return toContractPendingAction(row);
+  // RED actions get a code-free challenge up-front so the UI can prompt for MFA.
+  if (ev.requiresMfa) await issueChallenge(created.row.id);
+
+  return toContractPendingAction(created.row);
 }
 
 /** Serialize the opaque block reason the runtime returns to the model. */
@@ -527,6 +560,29 @@ function parseBlockReason(
   if (!isDecisionKind(decisionKind)) return null;
 
   return { actionId, decisionKind };
+}
+
+/**
+ * Clean refusal returned when a confirm/verify is attempted on an action whose owning plan has been
+ * `'cancelled'`: the claim is REVERSED to `cancelled` inside the caller's transaction, so NO side
+ * effect runs and NO ledger row is written. RETURNED (never thrown) so the HTTP confirm/verify route
+ * yields 200 `{ ok:false, ... }`. The tier is the action's EFFECTIVE parked tier; `requiresMfa` is
+ * `false` (nothing more is being asked of the caller — the plan is simply gone).
+ */
+function planCancelledOutcome(
+  row: PrismaPendingAction,
+  action: PendingAction,
+): AuthorizationResult {
+  return {
+    ok: false,
+    status: 'cancelled',
+    actionId: row.id,
+    tier: action.tier,
+    requiresMfa: false,
+    code: 'SECURITY_DENIED',
+    message: PLAN_CANCELLED_MESSAGE,
+    action: { ...action, status: 'cancelled' },
+  };
 }
 
 /**
@@ -589,16 +645,39 @@ async function authorizeWithMfa(
   }
 
   // Verified — claim exactly-once from a still-unsettled state (`awaiting_mfa` for a RED action,
-  // `pending` for an escalated YELLOW transfer) so a concurrent/duplicate confirm is rejected.
-  const claimed = await claimPendingAction({
-    actionId,
-    from: ['awaiting_mfa', 'pending'],
-    to: 'confirmed',
-    userId: row.userId,
-    sessionId: row.sessionId,
+  // `pending` for an escalated YELLOW transfer) so a concurrent/duplicate confirm is rejected. The
+  // claim and the owning-plan re-read share ONE transaction: a plan cancelled after this action was
+  // parked REVERSES the claim inside the tx, so no side effect runs and no ledger row is written.
+  const claimOutcome = await prisma.$transaction(async (tx) => {
+    const claimed = await claimPendingAction(
+      {
+        actionId,
+        from: ['awaiting_mfa', 'pending'],
+        to: 'confirmed',
+        userId: row.userId,
+        sessionId: row.sessionId,
+      },
+      tx,
+    );
+    if (!claimed) return { kind: 'conflict' as const };
+    if (row.taskId) {
+      const plan = await tx.agentTask.findUnique({
+        where: { id: row.taskId },
+        select: { status: true },
+      });
+      if (plan?.status === 'cancelled') {
+        await tx.pendingAction.update({ where: { id: row.id }, data: { status: 'cancelled' } });
+        return { kind: 'plan_cancelled' as const };
+      }
+    }
+    return { kind: 'confirmed' as const };
   });
-  if (!claimed) {
+
+  if (claimOutcome.kind === 'conflict') {
     throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+  }
+  if (claimOutcome.kind === 'plan_cancelled') {
+    return planCancelledOutcome(row, action);
   }
   return {
     ok: true,
@@ -674,6 +753,20 @@ async function authorizeTransfer(
     });
     if (claim.count !== 1) return { kind: 'conflict' as const };
 
+    // Plan-cancel guard: the owning plan may have been cancelled after this action was parked (a
+    // bulk revoke that raced this confirm). If so, REVERSE the claim inside the tx so no side effect
+    // runs and NO ledger row is written.
+    if (row.taskId) {
+      const plan = await tx.agentTask.findUnique({
+        where: { id: row.taskId },
+        select: { status: true },
+      });
+      if (plan?.status === 'cancelled') {
+        await tx.pendingAction.update({ where: { id: row.id }, data: { status: 'cancelled' } });
+        return { kind: 'plan_cancelled' as const };
+      }
+    }
+
     const effectiveTotal = await computeEffectiveTransferTotalWith(
       tx,
       row.userId,
@@ -695,6 +788,10 @@ async function authorizeTransfer(
 
   if (outcome.kind === 'conflict') {
     throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+  }
+
+  if (outcome.kind === 'plan_cancelled') {
+    return planCancelledOutcome(row, action);
   }
 
   if (outcome.kind === 'escalated') {
@@ -841,6 +938,21 @@ async function cancelAction(actionId: string, opts: CancelOptions): Promise<Pend
  * exactly-once claim happened at confirm time; this records the real outcome.
  */
 async function recordActionResult(actionId: string, status: 'executed' | 'failed'): Promise<void> {
+  if (status === 'executed') {
+    // Belt-and-braces plan-cancel guard: never mark an action EXECUTED when its owning plan is
+    // cancelled. A NON-plan action (no `taskId`) is COMPLETELY unaffected and persists `'executed'`.
+    const link = await getPendingActionPlanLink(actionId);
+    if (link?.taskId) {
+      const plan = await prisma.agentTask.findUnique({
+        where: { id: link.taskId },
+        select: { status: true },
+      });
+      if (plan?.status === 'cancelled') {
+        await setPendingActionStatus(actionId, 'cancelled');
+        return;
+      }
+    }
+  }
   await setPendingActionStatus(actionId, status);
 }
 
@@ -867,6 +979,15 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
 
   // Gated (YELLOW/RED) — persist the pending action and block with its id.
   const action = await gatewayCreatePendingAction(ctx, evaluation);
+  // Plan-scoped call whose owning plan is already cancelled → REFUSE cleanly (returned, not thrown)
+  // so the agent layer reports a refusal rather than an infra failure.
+  if (action === null) {
+    return {
+      evaluation,
+      decision: { ...decision, kind: 'deny' },
+      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny' })}`,
+    };
+  }
   return {
     evaluation,
     decision: { ...decision, pendingActionId: action.id },
@@ -878,7 +999,16 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
 export const securityGateway: SecurityGateway = {
   evaluate: gatewayEvaluate,
   decide: gatewayDecide,
-  createPendingAction: gatewayCreatePendingAction,
+  // Public interface stays non-null: the internal implementation returns `null` only when a
+  // plan-scoped call's owning plan is already cancelled. A direct caller that bypassed
+  // `handleToolCall` gets a CONFLICT instead of a `null` action.
+  createPendingAction: async (ctx: GatewayContext, ev: SecurityEvaluation) => {
+    const action = await gatewayCreatePendingAction(ctx, ev);
+    if (action === null) {
+      throw new AppError('CONFLICT', '操作所属的任务计划已取消，无法创建待处理操作。');
+    }
+    return action;
+  },
   serializeBlockReason,
   parseBlockReason,
   authorizeAction,
