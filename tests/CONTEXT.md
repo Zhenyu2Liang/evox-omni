@@ -173,6 +173,14 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 
 ## Notes for Agents
 
+- **Clean-env bootstrap.** `package.json` has no `postinstall` hook and `prisma generate` is a separate
+  script, so a fresh checkout has only the `@prisma/client` POSTINSTALL STUB (no engine, no schema copy).
+  `tests/setup.ts` self-bootstraps a usable client via `helpers/prisma-cli.ts#ensurePrismaClientGenerated`
+  BEFORE the provision short-circuit (cheap no-op once generated); `e2e/helpers.ts` does the same.
+  Without this, every DB-backed suite dies at IMPORT time with `@prisma/client did not initialize yet`.
+- **Provisioning FAILS LOUD.** `setup.ts` runs the push through `runCliStep`, which THROWS on a non-zero
+  exit with the FULL captured stdout+stderr (never a `console.warn`-and-continue), so the real cause can
+  never be masked by a later `The table main.X does not exist in the current database.` cascade.
 - **All specs are implemented acceptance tests** (no `it.todo`). Keep them green; fix the seam
   (injectable `now`/`id`, unique sessionId, fresh DB), never weaken an assertion to pass.
 - The gateway is the security chokepoint: prove in Test 4 that injection text changes NOTHING about
