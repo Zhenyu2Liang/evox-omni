@@ -196,6 +196,9 @@ agent.beforeToolCall ──► securityGateway.handleToolCall(ctx)
    被闸门拦下的节点会 **停在该节点等待人工决策**（不执行任何写操作），人工确认后由
    `PlanControls.resume()/retry()` 继续。
 6. 单个节点失败 **不会** 抛出整体异常：记录 `failed` 并继续独立分支。
+7. **取消是原子的**：取消计划时，「撤销该计划的所有待确认操作」与「把计划标记为 `cancelled`」在
+   **同一个数据库事务** 内完成；已执行（`success`）的节点保持原状 —— **已落账的交易会被保留**，
+   不会被撤销，也不会伪造"回滚"，其余非终态节点变为 `cancelled`。
 
 UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 思维链**。
 
@@ -204,7 +207,9 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 ## 9. 安全设计 / Security design
 
 - **会话身份来自 HttpOnly Cookie（查询参数不授权）** — 请求身份**仅**从 HttpOnly 的 `banking_session` Cookie 解析（会话 id 由 `POST /api/chat` 下发），`userId` 由服务端从该 `AgentSession` 行读出；`?sessionId=` / `?userId=` 等 **查询参数一律被忽略**，绝不能伪造 / 覆盖 / 扩大身份。缺失 Cookie 或未知会话 ⇒ `403 SECURITY_DENIED`（fail-closed）。
-- **原子化的日累计限额** — 当日转账累计（已执行流水 + 在途授权 `PendingAction`）在 **同一个数据库事务** 内计算，`transfer_money` 的「确认」在同一事务内做原子 claim，杜绝并发确认绕过 ¥1000 阈值；多个各自 YELLOW 的小额转账会在 **执行时** 被重新评估并升级为 🔴 RED（需 MFA）。
+- **原子化的日累计限额（已落账去重）** — 当日转账累计（已执行流水 + 在途授权 `PendingAction`）在 **同一个数据库事务** 内计算，`transfer_money` 的「确认」在同一事务内做原子 claim，杜绝并发确认绕过 ¥1000 阈值；多个各自 YELLOW 的小额转账会在 **执行时** 被重新评估并升级为 🔴 RED（需 MFA）。流水 id 的 **生成** 与 **查询** 使用同一套确定性 key（`lib/ledger.ts` 的 `ledgerTxIdForAction` / `idempotentTransferTxId`）：一个已写入流水、但 `PendingAction` 仍为 `confirmed` 的计划转账会被 **恰好计一次**（按已执行流水计），而真正尚未落账的动作仍按在途计入。因此 ¥1000 保持 🟡 YELLOW、¥1000.01 升级为 🔴 RED，且不会因重复计数被误升级。
+- **计划取消与授权的原子性** — 取消计划是原子的：**撤销该计划的所有待确认操作** 与 **将计划标记为 `cancelled`** 在同一个数据库事务内完成；`confirm` / `verify` 的授权在做原子 claim 的 **同一个事务内重新读取所属计划状态**，若计划已在此前被取消，则在事务内 **回退这次 claim**（不执行、不写流水）。**已经落账的交易会被保留**，不会被撤销或伪造回滚。
+- **投资申购 / 赎回幂等** — `subscribe_investment` / `redeem_investment` 携带稳定的「节点执行幂等键」（`lib/ledger.ts` 的 `nodeExecutionKey(taskId, nodeId)`）；幂等记录 + 扣款 + 生成持仓在 **同一个数据库事务** 内完成，因此计划在效果已落账后恢复执行时 **不会二次扣款**。
 - **提示词注入防御（injection-guard）** — 对用户输入做启发式检测，命中则记录 `SecurityEvent`
   并向前端发出安全事件（`security_event{kind:'injection'}`）；但它 **只做纵深防御，绝不授予权限**。
   检测结果**不会**被注入模型上下文（不加任何"系统提醒"），也不改变任何授权结论。
@@ -235,15 +240,15 @@ npx prisma generate        # 等价：npm run db:generate
 npx prisma db push         # 等价：npm run db:push   （无 migrations 目录，直接 push）
 npm run db:seed            # 等价：tsx prisma/seed.ts（幂等；可重复运行）
 
-# 4) 启动开发服务器
-npm run dev                # http://localhost:3000
+# 4) 生产构建（⚠️ 必须在 generate + db push + seed 之后，见下方说明）
+npm run build              # next build
 
-# 5) 生产构建 / 运行测试
-npm run build              # next build（⚠️ 构建前必须已完成上面的 generate + db push + seed，见下方说明）
+# 5) 启动开发服务器 / 运行测试
+npm run dev                # http://localhost:3000
 npm run test               # vitest run（离线：mock LLM + 测试 SQLite，无需 API Key）
 ```
 
-> **⚠️ 数据库前置步骤（务必按序）：`npx prisma generate` → `npx prisma db push` → `npm run db:seed`。**
+> **⚠️ 标准命令顺序（务必按序）：`npm install` → `npx prisma generate` → `npx prisma db push` → `npm run db:seed` → `npm run build`。**
 > `next build` 会 **静态预渲染** 由数据库驱动的页面（这些页面在 **构建期** 就会查询 SQLite），
 > 因此 **必须先完成 `prisma db push` + `npm run db:seed`** 才能运行 `npm run build`；
 > 若数据库尚未建表 / 灌入演示数据，**`next build` 会直接失败**。
@@ -258,7 +263,10 @@ npm run test:watch         # 监听模式
 npm run typecheck          # 类型检查（等价 npx tsc --noEmit；Vitest 只转译，不做类型检查）
 npm run lint               # next lint
 
-# 真实浏览器 E2E 验收（隔离 prisma/e2e.db；由 tsx 运行 —— 不是 vitest，也不是 npm run test）：
+# 真实浏览器 E2E 验收（由 tsx 运行 —— 不是 vitest，也不是 npm run test）：
+#   · 默认命令即可，无需任何特殊环境变量开关（例如 E2E_SKIP_DB_RESET）；
+#   · 脚本会自举：若 Prisma Client 缺失则先 prisma generate，再用隔离的 prisma/e2e.db 建表 + 灌种；
+#   · 全程不触碰 prisma/dev.db。
 npx tsx tests/e2e/acceptance.e2e.ts
 
 # 便捷脚本
@@ -310,25 +318,28 @@ cp .env.example .env
 种子锚定 **演示时钟** `DEMO_NOW = 2026-09-25 12:00`（见第 16 节）：
 2026 年 9 月为"本月"，2026 年 8 月为"上月"（用于环比）。表内金额一律为 **有符号 CNY**（负数 = 支出/流出）。
 
-### 12.1 迁移 / 部署（最近的 schema 变更）/ Migration & deploy
+### 12.1 迁移 / 部署 / Migration & deploy
 
 > **本项目使用 `prisma db push` 工作流：仓库 `prisma/` 目录下 *没有* `migrations/` 子目录。**
-> 请**不要**去寻找或等待迁移文件 —— schema 变更直接 push 到 SQLite。
+> 请**不要**去寻找或等待迁移文件 —— schema 直接 push 到 SQLite。
 
-最近一次 schema 变更（见 `prisma/schema.prisma`）：
+支撑**原子 claim** 与**幂等写入**的关键列（当前 schema，见 `prisma/schema.prisma`）：
 
-- `PendingAction` 新增 `taskId?` / `nodeId?`，以及 `@@index([taskId])`（把待办动作关联到计划任务节点）。
-- `AgentTask` 与 `AgentTaskNode` 均新增 `executionToken?` / `executionClaimedAt?`（节点执行的原子 claim）。
-- `Budget` 新增 `idempotencyKey? @unique`；`ScheduledTask` 新增 `idempotencyKey? @unique`（幂等写入）。
+- `PendingAction.taskId?` / `nodeId?` 与 `@@index([taskId])` —— 把待办动作关联到计划任务节点（供计划级取消批量撤销）。
+- `AgentTask.executionToken?` / `executionClaimedAt?` 与 `AgentTaskNode.executionToken?` / `executionClaimedAt?` —— 计划级 / 节点级执行的原子 claim。
+- `Budget.idempotencyKey? @unique`、`ScheduledTask.idempotencyKey? @unique`、`InvestmentHolding.idempotencyKey? @unique` —— 幂等写入 / 去重（同 key 重复执行只落一行；投资申购不二次扣款）。
 
-应用该变更（务必按序）：
+应用 schema（务必按序）：
 
 ```bash
 npx prisma generate   # 重新生成 Prisma Client（字段/类型变更后必须重跑）
-npx prisma db push    # 将 schema 变更 push 到 SQLite（无 migrations 目录）
+npx prisma db push    # 将 schema push 到 SQLite（无 migrations 目录）
 npm run db:seed       # 幂等重灌演示数据
+npm run build         # 生产构建（页面在构建期预渲染，必须先完成上面三步）
 ```
 
+> 标准顺序即 `npm install` → `npx prisma generate` → `npx prisma db push` → `npm run db:seed` → `npm run build`：
+> `next build` 会 **静态预渲染** 由数据库驱动的页面，故 build 必须排在 push + seed 之后，否则构建失败。
 > `db push` 会就地新增可空列与唯一索引，不会重建/清空数据。若需一个全新的数据库，
 > 可运行 `npm run db:reset`（`prisma db push --force-reset && tsx prisma/seed.ts`）。
 
@@ -420,8 +431,10 @@ npx next build                       # 生产构建（需先 generate + db push 
 npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 tsx 运行 —— 不是 vitest，也不是 npm run test）
 ```
 
-> 真实浏览器验收需要 **系统 Chrome（Edge 作兜底，可用 `E2E_BROWSER_PATH` 覆盖）**，运行前需先完成
-> `npx prisma generate` → `npx prisma db push` → `npm run db:seed`。它为每个 journey 打印一行
+> 真实浏览器验收**默认命令即可运行、无需任何特殊环境变量开关**：脚本会 **自举** —— 若 Prisma Client
+> 缺失就先 `prisma generate`，再用 **隔离的 `prisma/e2e.db`**（**全程不触碰 `prisma/dev.db`**）建表 + 灌种 ——
+> 因此干净的 checkout 也能一键跑通、且重复运行起点一致。它需要 **系统 Chrome（Edge 作兜底，可用
+> `E2E_BROWSER_PATH` 覆盖；不下载浏览器）**，为每个 journey 打印一行
 > `PASS|FAIL|SKIP <journey> — <evidence>`，任一 journey **FAIL** 时进程以非零码退出（**SKIP 不算失败**）。
 
 ### 15.4 实测表面 / Measured surface
@@ -439,7 +452,7 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 
 本 Demo 为 **竞赛沙箱**，刻意做了精简与模拟（诚实说明）：
 
-- **无真实银行 / 无真实资金 / 无真实支付。** 一切数据在 SQLite 中模拟，不会发生任何真实资金流动。
+- **无真实银行 / 无真实资金 / 无真实支付；Banking SDK 是「模拟」层。** `banking-sdk/` 只对 SQLite 做读写，**不接入任何真实核心银行系统 / 支付网关**，一切数据在 SQLite 中模拟，不会发生任何真实资金流动。
 - **真实浏览器 E2E 是「单机、有限 journey」的验收，并非全量 UI 覆盖，也不证明安全模型已完全闭合。** 仓库内现已包含一个 **真实浏览器验收 harness**（`tests/e2e/acceptance.e2e.ts`）：它启动真实应用并用 `playwright-core` 驱动 **本机 headless Chrome/Edge**（系统浏览器可执行文件，不下载浏览器），在真实 `/agent` 页面断言渲染后的 DOM，覆盖转账确认（YELLOW）、转账 MFA（RED，含错误验证码拒付）、计划暂停 / 恢复、取消、以及刷新后从已持久化状态恢复待办动作。security 的判定是否闭合由 `security/` 的 **单元 / 集成测试** 保证，**不由浏览器验收证明**；该 harness 为 **单机 / 单进程** 运行、journey 数量有限，**未覆盖** 真实 LLM（`LLM_MODE=live`）、`next build` / `next start`、跨浏览器、无障碍与性能。进程内的 route-handler 集成测试见 `tests/app/*-http.test.ts`，核心流水线（Agent + 工具 + 安全网关 + Banking SDK + 审计）的单元 / 场景测试见 `tests/`。
 - **验证码是模拟的**（固定 `123456`），不发送真实短信；且 UI 不显示验证码。
 - **演示时钟被固定。** 应用内所有"现在"默认使用 `DEMO_NOW = 2026-09-25 12:00（本地时间）`（`lib/constants.ts`），经 `lib/clock.ts` 的 `demoNow(override?)` 统一派发，
@@ -459,6 +472,8 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
   未来动作意图（`ScheduledTask` 行），**没有被任何在线调度器在其 `runAt` 时间执行**；Test 12 也
   **不会真正下单鲜花 / 蛋糕**。
 - **单进程 / SQLite / 单演示用户**，通过 Cookie 维护会话；非生产级多用户/高可用架构。
+- **多进程 / 集群下的竞争未被压力测试。** 并发保护依赖 **单个 SQLite 文件的写锁**（`prisma db push` 工作流、无 `migrations/` 目录），因此只在 **单进程** 下验证过串行化；面向真实的高并发多实例集群既未压测也未验证。**熔断器（circuit-breaker）为进程内状态**（按 `sessionId` 记录），**服务重启即重置**，不是分布式/持久化实现。
+- **诚实的状态分级：** 本 README 描述的能力应区分 **【已实现】✅ 代码强制 /【模拟】🧪 演示替身 /【未验证】⚠️ 尚未覆盖** 三态（逐项见 [`docs/known-risks.md`](docs/known-risks.md)）。**测试全绿 ≠ 安全模型已闭合**：本 Demo 未做形式化验证，也未覆盖多进程集群、真实 LLM、真实支付通道；请在演示与评审中如实标注，不要把"单元 / 集成 / 浏览器测试通过"表述为"安全闭环已证明"。
 
 ---
 
