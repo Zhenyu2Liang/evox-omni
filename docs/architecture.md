@@ -91,7 +91,7 @@ Constraints），也是**路由表**（把领域映射到子目录）。顶层�
 | `./audit` | 审计日志器 + 安全事件记录器 |
 | `./lib` | 共享内核：contracts、errors、money、config、constants、clock、Prisma client + repositories |
 | `./prisma` | Prisma schema + 种子数据（无 `migrations/` 目录；schema 由 `prisma db push` 推送） |
-| `./tests` | 自动化测试（四层）：纯单元测试（security/planner/sdk/agent/lib）+ `tests/scenarios/` 的 faux-LLM 全流水线场景测试（Tests 1–12）+ `tests/app/*` 与 `tests/review-boundaries.test.ts` 的进程内 HTTP 路由处理器 `[integration]` 测试 + `tests/e2e/` 的**真实浏览器验收 harness**（`playwright-core` 启动系统 Chrome，`tsx` 显式运行，非 Vitest） |
+| `./tests` | 自动化测试（四层）：纯单元测试（security/planner/sdk/agent/lib）+ `tests/scenarios/` 的 faux-LLM 全流水线场景测试（Tests 1–12）+ `tests/app/*` 与 `tests/review-*.test.ts` 的进程内 HTTP 路由处理器 `[integration]` 测试 + `tests/e2e/` 的**真实浏览器验收 harness**（`playwright-core` 启动系统 Chrome，`tsx` 显式运行，非 Vitest） |
 | `./docs` | 本目录：参赛文档（architecture / security / test-cases / known-risks） |
 
 ---
@@ -230,13 +230,13 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   若某门控节点的既有 `PendingAction` 已为 `executed`（副作用已执行并已入账，但节点结果未回写），则**恢复**该节点：
   `agent/confirmation.ts#executeGatedToolOnce` 经 `findInFlightPlanAction(taskId, nodeId)` 识别后调用
   `recoverExecutedPlanAction`——执行阶段已由 `executeAuthorizedAction` 把**原始工具执行结果**
-  （`{ ok, data, summary, error }`，成功与失败**皆**写入）经**一次原子 `prisma.pendingAction.update`** 落到
-  `PendingAction.resultJson` 列；恢复只**读取**该持久化结果并把节点结果**回填（backfill）**，**绝不重新调用工具**，
+  （`{ ok, data, summary, error }`，成功与失败**皆**写入）与**终态状态**放进**同一个** `prisma.$transaction`
+  一起落库到 `PendingAction.resultJson` 列；恢复只**读取**该持久化结果并把节点结果**回填（backfill）**，**绝不重新调用工具**，
   因此**绝不重放副作用**（例：旧的 `set_card_limit=1500` 计划，在用户此后自行把限额改为 500 后恢复，限额**仍为 500**）。
-  仅当动作**没有**存储的 `resultJson`（先于 agent 层持久化结果的历史行）时才退回**最后手段**的 `replayExecutedPlanAction`：
-  它以该动作**持久化的原始 toolName/argsJson** 经 SDK 在节点幂等键 `nodeExecutionKey(taskId, nodeId)` 下**重放**——
-  该路径依赖**各工具自身对幂等键的消费**，**不构成**通用的「重放不产生重复副作用」保证。
-  两条路径都**不重新请求确认**；真正 `pending`/`awaiting_mfa`/`confirmed` 的节点仍继续停放等待人工决策；恢复幂等。
+  当既有动作**没有**存储的 `resultJson`（先于 agent 层持久化结果的历史行）时，恢复**同样不重新调用工具**——
+  它以「已执行但未留存结果，需人工核对（不会重新执行）」的**显式失败结果**把该节点**终结**。
+  若既有 `PendingAction` 为 `confirmed` **且**已带存储结果，则在恢复时经 `claimPendingAction({ from:['confirmed'], to:'executed' })` 把它**终态化**（CAS `confirmed`→`executed` + 回填），**不重跑、不做虚假回滚**。
+  上述路径都**不重新请求确认**；真正 `pending`/`awaiting_mfa` 的节点仍继续停放等待人工决策；恢复幂等。
 - **CANCEL**：终态。`agent/task-control.ts#cancelTask` 的**原子结算**把「撤销」与「置状态」放进**同一个**
   `prisma.$transaction`：事务内**先撤销**该计划停放的 `PendingAction`——`revokePendingActionsByTask(taskId,
   ['pending','awaiting_mfa'])`（`lib/db/repositories/pendingAction.ts`，**单条 `updateMany`** 一次性取消该计划的
@@ -271,8 +271,14 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   与 `#claimTaskStatus(..., { fenceToken })`（主张丢失时返回 `false`）；栅栏条件**就在同一条语句内部**（**绝非**「先读后写」），
   令牌由 `claimTaskExecution` / `buildPlanDeps` 贯穿到 `createTaskPersistence`。因此一个主张已被接管的**「僵尸」执行器
   无法再修改节点 / 计划结果**，也**不再播报**一个它已不再拥有的结果（`persistNode` / `persistPlan` 在栅栏丢失时**跳过**）。
-  **唯一例外**：`persistPlan` 对 `cancelled` 状态**无条件写入**——取消是**绝不能**被栅栏挡出的那一个写入者；其余每个检查点
-  都走栅栏化的 `claimTaskStatus` CAS，其 from 集合**排除** `cancelled`。跨「副作用已发生、结果尚未落库」窗口的幂等由
+  **两种持久化模式**：`mode:'executor'`（默认——每次 `runPlan` / `resumePlan` / `submit_plan` 内联 `PlanDeps` 都属此类）的**每一个写入都栅栏化**——
+  节点写先试**节点 token**、否则**计划 token**，凡无可用 token 的写入**一律跳过**（执行器**绝无**未栅栏的写入路径）；
+  `mode:'control'`（**仅** `pauseTask` / `cancelTask`——它们**按设计不持有**任何主张）**故意不栅栏**，这是**唯一**的未栅栏写入路径。
+  此外 `persistPlan` 对 `cancelled` 状态**无条件写入**（取消是**绝不能**被栅栏挡出的那一个写入者），其余检查点都走栅栏化的
+  `claimTaskStatus` CAS，其 from 集合**排除** `cancelled`。**确认续跑丢失计划主张时**（`agent/task-fencing.ts#recordDecidedNodeFenced`）：
+  经**栅栏化的无主 CAS**（`task:{ executionToken: null }`）把**人工已决策的那一个节点**结果写回（节点自身 token → 活所有者的计划 token → 无主 CAS 逐级降级），
+  **绝不用陈旧快照推进计划**——活所有者继续走计划，人工决策**永不丢失**；无主时再由 `settlePlanFromNodes` 从持久化节点行结算计划状态，避免计划悬在陈旧的 `waiting_confirmation`。
+  跨「副作用已发生、结果尚未落库」窗口的幂等由
   **`nodeExecutionKey(taskId, nodeId)` = `nxe:<taskId>:<nodeId>`**（`lib/ledger.ts`）承担：它作为 SDK 的
   `idempotencyKey` 传入，是计划节点**副作用**的幂等键——**当且仅当**该工具**消费**这个键时重放才不二次施加（投资
   `subscribe_investment` / `redeem_investment` 即按此键去重；**不消费**该键的工具重放仍会重新施加其副作用，那一层由上面的
@@ -397,7 +403,7 @@ sequenceDiagram
   **自动执行的计划节点**调用按**稳定的节点身份** `nodeExecutionKey(taskId, nodeId)` 合并并发调用，并以
   `findInFlightPlanAction(taskId, nodeId)` 预检、避免为同一节点重复铸造第二个 `PendingAction`；已 `executed` 的计划节点
   动作由 `PendingAction.resultJson` 中**持久化的原始执行结果**回填节点结果（**绝不重新调用工具**、**绝不重新确认**；
-  仅无存储结果的历史行才退回**消费幂等键**的 SDK 重放）；
+  无存储结果的历史行**同样不重放**——以「已执行但未留存结果，需人工核对」的显式失败结果终结该节点）；
   **独立调用**（无计划节点）**没有**合并键——其恰好一次由 DB 的 `PendingAction` 状态 CAS 保证；
   **两个不同计划**即使调用同一工具、传同一参数也各自独立执行（按 `sessionId` + 工具 + args 合并会把一个计划的副作用
   错误地施加到另一个计划）。进程内 `inFlightExecutions` 只是**同进程补充**，且以**节点身份**为键。
