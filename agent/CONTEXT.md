@@ -210,7 +210,7 @@ its SDK-level side effect. `transfer_money`, `reserve_budget`, `create_scheduled
 tools (`subscribe_investment`/`redeem_investment`; `agent/tools/investment.ts` accepts `opts?: ToolRunOptions`
 and forwards `idempotencyKey`) all thread the key into their banking-sdk call; `transfer_money` derives the
 created ledger row id from the key via `idempotentTransferTxId(userId, key)` (the DB PK dedups the write,
-so no lock is needed).
+so no lock is needed); `apply_virtual_card` (`agent/tools/card.ts` accepts `opts?: ToolRunOptions` and forwards the key) makes the SDK derive a deterministic card id via `idempotentCardId(userId, key)` — the SAME key reuses ITS card (so a replayed plan node yields one card), while distinct plans with different keys get independent cards.
 It records the TRUE terminal
 status with `gateway.recordActionResult(actionId, ok ? 'executed' : 'failed')` BEFORE auditing, and
 resolves the owner from `getSession(action.sessionId)?.userId` (NO demo-user fallback — an unknown owner
