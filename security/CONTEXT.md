@@ -56,7 +56,7 @@ sanctioned direct-DB dependency of this node (the aggregate queries must run ins
 
 **Ledger dedup (counted exactly once)**: the effective total is `executed + in-flight`, but an action
 can be `confirmed` (in-flight) while its ledger `Transaction` row ALREADY exists — the SDK writes that
-row deterministically keyed by `idempotentTransferTxId(userId, action.id)` (`lib/ledger`) and
+row deterministically keyed by `ledgerTxIdForAction(userId, action)` (`lib/ledger`: the plan-node key `nodeExecutionKey(taskId, nodeId)` for a plan-linked action, else the action `id`) and
 `recordActionResult` (the flip to a terminal status) has not run yet. Such an action is ALREADY counted
 by the executed half, so `computeInFlightTransferTotal` EXCLUDES every in-flight action whose
 deterministic ledger row exists (one `client.transaction.findMany({ where:{ id:{ in:[…] } }, select:{ id:true } })`
