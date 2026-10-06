@@ -91,9 +91,10 @@ export interface ToolExecutionResult {
  *  - `transfer_money` — the Banking SDK derives the ledger row id deterministically from
  *    `(userId, key)` (via `@/lib/ledger#idempotentTransferTxId`), so a repeat replays the original
  *    row instead of double-debiting; and
- *  - the plan-node side-effect tools `reserve_budget` / `create_scheduled_task` — the plan-node and
- *    confirmation paths pass `@/lib/ledger#nodeExecutionKey(taskId, nodeId)`, so a replay of the SAME
- *    `(plan, node)` dedupes its side effect instead of creating a duplicate row.
+ *  - the plan-node side-effect tools `reserve_budget` / `create_scheduled_task` /
+ *    `subscribe_investment` / `redeem_investment` — the plan-node and confirmation paths pass
+ *    `@/lib/ledger#nodeExecutionKey(taskId, nodeId)`, so a replay of the SAME `(plan, node)` dedupes
+ *    its side effect instead of creating a duplicate row.
  * Any other tool ignores the option. Omitting `opts` keeps the old behavior exactly, so all existing
  * two-argument call sites stay valid.
  */
@@ -195,7 +196,8 @@ function createUnconfiguredSubmitPlanTool(): AgentTool<typeof SubmitPlanParams> 
  *  - `executeDirect(name, args, opts?)` dispatches to the matching family `run<X>(userId, args, opts)`
  *    runner, and to `planning.runSubmitPlan(userId, args, opts.submitPlan)` for `submit_plan`. The
  *    optional `opts.idempotencyKey` is threaded to every runner; the side-effecting tools consume it
- *    (`transfer_money`, `reserve_budget`, `create_scheduled_task`) — see `ToolRunOptions`.
+ *    (`transfer_money`, `reserve_budget`, `create_scheduled_task`, `subscribe_investment`,
+ *    `redeem_investment`) — see `ToolRunOptions`.
  *
  * Signature note: the frozen form `createToolRegistry(userId: string): ToolRegistry` is preserved —
  * `opts` is an ADDITIVE optional parameter, needed only because `submit_plan` requires an injected
