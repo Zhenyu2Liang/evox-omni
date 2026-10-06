@@ -386,15 +386,19 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   BOUNDARIES ONLY (`claimNode`/`releaseNode` / explicit progress points), NEVER from a background timer and
   NEVER while the run is blocked inside a tool call, so a legitimately long run keeps its slot while a run
   STUCK inside a tool call still ages out and becomes takeover-able (the takeover those write fences guard).
-- **A `resumeTaskForAction` that LOSES the plan claim still records the human decision.** The continuation
+- **A `resumeTaskForAction` that LOSES the plan claim still records the human decision — through an atomic
+  ownership CAS, never an unfenced write.** The continuation
   mints a FRESH PLAN token via `claimTaskExecution(located.taskId, newId('taskclaim'), { staleBefore:
-  staleExecutionClaimBefore() })` and, when WON, releases it in a `finally`. A LOST claim (a LIVE executor
-  owns the plan) does NOT drop the decision — it continues through the legacy UNFENCED ports
-  (`buildPlanDeps(..., undefined, ownsPlan ? { planToken } : {})`) so the decided node is still recorded; that
-  is safe because the decided node becomes terminal before the walk continues and every node the walk reaches
-  is still guarded by its per-node DB claim (`claimNode`) and the SDK `nodeExecutionKey` idempotency, so the
-  side effect stays exactly-once. Pause retention (`PAUSE_NOW_CONTROLS`), the cancelled-plan no-op and the
-  post-run cancel sweep are preserved unchanged.
+  staleExecutionClaimBefore() })`. WON ⇒ it drives the plan as an executor with `buildPlanDeps(..., {
+  mode:'executor', planToken })` (fenced), releasing the claim in a `finally`. LOST ⇒ a LIVE executor owns
+  the plan, so this continuation must NOT advance it (an overlapping walk could launch a node twice) and must
+  NOT clobber the owner's rows: it never touches `buildPlanDeps`, instead recording its ONE decided node via
+  the atomic ownership CAS `recordDecidedNodeFenced` (node-claim token ⇒ LIVE plan-claim token ⇒ no-owner CAS
+  `task: { executionToken: null }`; a lost race matches 0 rows ⇒ SKIP), then runs `sweepCancelledPlan` and
+  reloads the persisted plan. Nothing is claimed on the LOST path, so nothing is released. Pause retention
+  (`PAUSE_NOW_CONTROLS` — also passed on the WON path when the row is `'paused'`, belt (a) being
+  `lifecycle.resumePlan`'s `stillPaused` early return), the cancelled-plan no-op and the post-run cancel
+  sweep are preserved.
 - **Pause retains.** When `resumeTaskForAction` sees the owning plan `'paused'`, it records the decided
   node and does NOT advance. TWO belts hold it: (a) `lifecycle.resumePlan` returns early with
   `status:'paused'` whenever `explicitResume !== true` (`stillPaused`) — and `resumeTaskForAction`
