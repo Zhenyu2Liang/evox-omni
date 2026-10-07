@@ -241,7 +241,7 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
   with `kind`, error→banner, done→idle.
 - **No component/DOM test layer exists** — `@testing-library/react`/`jsdom`/`happy-dom` are NOT dependencies and `vitest.config.ts` runs `environment: 'node'`.
   There is NO `useAgentStream`/`ChatWindow`/`Composer` test; DOM coverage is ONLY the real-browser suite `tests/e2e/acceptance.e2e.ts` (playwright-core, `npx tsx`, NOT Vitest).
-- Refresh restore: a `fetchPendingActions` fixture carrying actionable AND `needs_reconciliation` rows
+- **Untested fold rules of thumb** (candidates, NOT existing tests): a `fetchPendingActions` fixture with actionable AND
   must rebuild the decision slot AND the `pendingReconciliations` list (an actionless
   `ReconciliationCard` per reconciliation row) without clobbering a live decision.
 - `Composer`: enter-to-send + disabled-when-busy behaviour.
