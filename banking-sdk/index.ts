@@ -35,3 +35,6 @@ export const banking = {
 
 /** Public DTOs / view models (see `./types`). */
 export * from './types';
+
+/** Execution-fence carrier (see `./fence`) — a server-generated check awaited inside the write tx. */
+export * from './fence';
