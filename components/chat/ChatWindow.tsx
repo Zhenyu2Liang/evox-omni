@@ -25,7 +25,7 @@ import type { ChatEndpoints } from './actions';
 import type { CardActionHandlers } from './cards';
 import type { PendingHumanDecision } from './useAgentStream';
 import { useAgentStream } from './useAgentStream';
-import { ConfirmationCard, MfaCard, PlanCard } from './cards';
+import { ConfirmationCard, MfaCard, PlanCard, ReconciliationCard } from './cards';
 import { MessageBubble } from './MessageBubble';
 import { StreamingText } from './StreamingText';
 import { ToolEventList } from './ToolEventList';
@@ -140,7 +140,7 @@ export function ChatWindow({
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [lastMessageId, stream.streamingText, pending, stream.activePlan]);
+  }, [lastMessageId, stream.streamingText, pending, stream.activePlan, stream.pendingReconciliations]);
 
   const action: CardActionHandlers = {
     actionId: pending?.actionId,
@@ -157,7 +157,11 @@ export function ChatWindow({
   };
 
   const hasConversation = visibleMessages.length > 0 || stream.streamingText.length > 0;
-  const isEmpty = !hasConversation && pending === undefined && stream.activePlan === undefined;
+  const isEmpty =
+    !hasConversation &&
+    pending === undefined &&
+    stream.activePlan === undefined &&
+    stream.pendingReconciliations.length === 0;
 
   return (
     <div className={`flex h-full min-h-0 flex-col bg-banking-light ${className ?? ''}`.trim()}>
@@ -192,6 +196,9 @@ export function ChatWindow({
                 attempts={stream.mfaAttempts}
               />
             )}
+            {stream.pendingReconciliations.map((r) => (
+              <ReconciliationCard key={r.actionId} action={r.summary} actionId={r.actionId} />
+            ))}
           </>
         )}
       </div>

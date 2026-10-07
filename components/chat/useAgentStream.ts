@@ -56,11 +56,19 @@ export type PendingHumanDecision =
   | { kind: 'confirmation'; summary: PendingActionSummary; actionId: string }
   | { kind: 'mfa'; summary: MfaActionSummary; actionId: string; hint?: string };
 
+/** A restored TERMINAL action a human must reconcile out-of-band (no server action, never re-invoked). */
+export interface PendingReconciliation {
+  summary: PendingActionSummary;
+  actionId: string;
+}
+
 export interface UseAgentStreamResult {
   messages: ChatMessage[];
   toolEvents: ToolEventView[];
   activePlan?: TaskPlan;
   pendingAction?: PendingHumanDecision;
+  /** Restored TERMINAL actions a human must reconcile out-of-band (never re-invoked). */
+  pendingReconciliations: PendingReconciliation[];
   streamingText: string;
   busy: boolean;
   /** True while the mount-time pending-actions read (`GET /api/actions`) is in flight. */
@@ -98,6 +106,7 @@ export interface ChatUIState {
   toolEvents: ToolEventView[];
   activePlan?: TaskPlan;
   pendingAction?: PendingHumanDecision;
+  pendingReconciliations: PendingReconciliation[];
   streamingText: string;
   busy: boolean;
   error?: string;
@@ -112,6 +121,7 @@ export function initialChatUIState(overrides: Partial<ChatUIState> = {}): ChatUI
   return {
     messages: [],
     toolEvents: [],
+    pendingReconciliations: [],
     streamingText: '',
     busy: false,
     mfaAttempts: 0,
@@ -408,14 +418,31 @@ function restoredMfaSummary(summary?: PendingActionSummary): MfaActionSummary {
  * Returns `undefined` when there is nothing actionable to restore.
  */
 function pickPendingAction(refs: PendingActionRef[]): PendingHumanDecision | undefined {
-  if (refs.length === 0) return undefined;
+  // ONLY actionable rows may become a live confirmation/MFA decision — a `needs_reconciliation` row
+  // is terminal and must NEVER be mistaken for one (it has no confirm/verify/cancel path).
+  const actionable = refs.filter(
+    (ref) => ref.status === 'pending' || ref.status === 'awaiting_mfa',
+  );
+  if (actionable.length === 0) return undefined;
   const chosen =
-    refs.find((ref) => ref.requiresMfa || ref.status === 'awaiting_mfa' || ref.tier === 'RED') ??
-    refs[0];
+    actionable.find(
+      (ref) => ref.requiresMfa || ref.status === 'awaiting_mfa' || ref.tier === 'RED',
+    ) ?? actionable[0];
   if (chosen.requiresMfa || chosen.status === 'awaiting_mfa' || chosen.tier === 'RED') {
     return { kind: 'mfa', summary: restoredMfaSummary(chosen.summary), actionId: chosen.id };
   }
   return { kind: 'confirmation', summary: chosen.summary, actionId: chosen.id };
+}
+
+/**
+ * Every TERMINAL `needs_reconciliation` row, mapped to a display-only `PendingReconciliation`. These
+ * rows have NO server action (no confirm/cancel/MFA) — they exist only so the user is told a gated
+ * operation may have executed without a recorded outcome and must be reconciled out-of-band.
+ */
+function pickReconciliations(refs: PendingActionRef[]): PendingReconciliation[] {
+  return refs
+    .filter((ref) => ref.status === 'needs_reconciliation')
+    .map((ref) => ({ summary: ref.summary, actionId: ref.id }));
 }
 
 // --- stateful hook ----------------------------------------------------------------------------
@@ -463,23 +490,30 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
   // stale/unmounted/aborted or failed read is ignored and NEVER clobbers a decision a live event
   // already delivered (checked via a functional `setState`). `restoring` tracks the read in flight.
   const [restoring, setRestoring] = useState(false);
-  const pendingActionRef = useRef(state.pendingAction);
-  pendingActionRef.current = state.pendingAction;
 
   useEffect(() => {
-    // Nothing to restore when a live decision is already surfaced (e.g. from initial state).
-    if (pendingActionRef.current !== undefined) return;
+    // ALWAYS run the one-shot best-effort read on mount: a live decision must never be clobbered
+    // (guarded in the functional `setState` below), and a terminal `needs_reconciliation` row —
+    // which carries no live decision of its own — must still be surfaced for manual reconciliation.
     let alive = true;
     setRestoring(true);
     void (async () => {
       const refs = await fetchPendingActions(endpointsRef.current);
       if (!alive) return;
       const decision = pickPendingAction(refs);
-      if (decision !== undefined) {
-        setState((prev) =>
-          prev.pendingAction === undefined ? { ...prev, pendingAction: decision } : prev,
-        );
-      }
+      const reconciliations = pickReconciliations(refs);
+      setState((prev) => {
+        const next = { ...prev };
+        // Never clobber a decision a live event already delivered.
+        if (next.pendingAction === undefined && decision !== undefined) {
+          next.pendingAction = decision;
+        }
+        // Seed the reconciliation list only when nothing has populated it yet.
+        if (next.pendingReconciliations.length === 0 && reconciliations.length > 0) {
+          next.pendingReconciliations = reconciliations;
+        }
+        return next;
+      });
       setRestoring(false);
     })();
     return () => {
@@ -598,6 +632,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
     toolEvents: state.toolEvents,
     activePlan: state.activePlan,
     pendingAction: state.pendingAction,
+    pendingReconciliations: state.pendingReconciliations,
     streamingText: state.streamingText,
     busy: state.busy,
     restoring,
