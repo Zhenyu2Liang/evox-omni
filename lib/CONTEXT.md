@@ -105,7 +105,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/date.ts` → pure local-timezone date-range/format helpers.
 - `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
-- `./lib/ledger.ts` → deterministic idempotency keys + canonical action→ledger-row identity — `idempotentTransferTxId`, `nodeExecutionKey`, `ledgerKeyForAction`, `ledgerTxIdForAction`.
+- `./lib/ledger.ts` → deterministic idempotency keys + canonical action→ledger-row identity — `idempotentTransferTxId`, `nodeExecutionKey`, `ledgerKeyForAction`, `ledgerTxIdForAction`, plus the EXECUTION-RECEIPT helpers `executionReceiptId` / `requestDigest`.
 - `./lib/prisma-cli-env.ts` → Prisma-CLI env pinning + bin resolution — `SCHEMA_ENGINE_RUST_LOG`, `pinSchemaEngineLogging`, `prismaCliEnv`, `CliInvocation`, `resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`; re-exported by `tests/helpers/prisma-cli.ts` (its public API is unchanged) and consumed by `scripts/db-push.ts` (the `npm run db:push` / `db:reset` deploy entry).
 - `./lib/index.ts` → convenience barrel for `@/lib` imports (no `db`).
 
