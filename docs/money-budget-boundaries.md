@@ -40,7 +40,7 @@ SDK 在写事务内执行检查，期间已触发熔断的预算操作返回失�
 
 ## 验证范围
 
-`tests/repair-money-budget-boundaries.test.ts` 包含 17 条进程内集成回归，调用真实 HTTP route handler、
+`tests/integration/money-budget.test.ts` 包含 17 条进程内集成回归，调用真实 HTTP route handler、
 Pi runtime、网关、SDK 和 SQLite；仅用可控屏障安排竞争时序。覆盖非法金额拒绝、历史非法动作、
 合法分值并发/MFA、三种自动预算写入路径的熔断、跨用户同 key 和同用户并发去重。
 

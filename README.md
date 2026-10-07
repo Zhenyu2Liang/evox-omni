@@ -457,11 +457,11 @@ npm run build         # 生产构建（页面在构建期预渲染，必须先�
 
 ### 15.3 测试分层 / Test layers
 
-测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）。当前仓库含 **107** 个测试文件 / **726** 条测试（前三层）：
+测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）。清理重复历史探针后，当前仓库含 **100** 个测试文件 / **716** 条测试（前三层），全量验证通过：
 
 1. **纯单元测试（pure unit）** — `tests/unit/`：`security`（权限策略表、转账阈值、网关 decide、注入检测、熔断、MFA、风控）、`planner`（DAG 校验 / 拓扑序 / 成环 / 条件）、`banking-sdk`（资金不变量等）；无网络、无真实 LLM。
 2. **faux-LLM 场景集成测试（scenario）** — `tests/scenarios/test-01…test-12`：用脚本化模型（`LLM_MODE=mock` + 隔离的测试 SQLite `prisma/test.db`）驱动 **完整流水线**，逐个覆盖 12 个验收场景。
-3. **进程内 HTTP 路由处理器集成测试（`[integration]`）** — `tests/app/*-http.test.ts` + 根级 `tests/review-*.test.ts`（route-handler 契约 / 并发 / 执行 fencing 与恢复回归）：直接调用真实的 Next.js 路由处理器（`POST /api/chat`、actions confirm/verify/cancel、tasks 等）与真实 SQLite，每个顶层 describe 都带 **`[integration]`** 标签。**它们不是浏览器测试**（不启动浏览器，只驱动路由处理器）。
+3. **进程内路由与跨模块集成测试** — `tests/app/` + `tests/integration/`，覆盖路由契约、并发、执行围栏与恢复：直接调用真实的 Next.js 路由处理器、执行器、SDK 与 SQLite。它们不启动浏览器；跨模块测试按功能命名，不再保留重复的历史审查探针。
 4. **真实浏览器验收（real-browser E2E）** — `tests/e2e/`，唯一入口 `acceptance.e2e.ts`：启动真实应用（`next dev`）并用 **`playwright-core`** 驱动 **本机 headless Chrome/Edge**（系统浏览器可执行文件，**不下载浏览器**），在**隔离的 `prisma/e2e.db`**（不触碰 `prisma/dev.db`）上、于真实 `/agent` 页面断言 **渲染后的 DOM**。覆盖：转账确认（YELLOW）、转账 MFA（RED，含错误验证码拒付且不产生转账）、计划暂停 / 恢复、取消、以及 **刷新后从已持久化状态恢复待办动作**。
 
 运行命令：

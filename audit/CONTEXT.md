@@ -96,7 +96,7 @@ re-exports each function and its types.
   it (event-derived fallback).
 - Scenario coverage lives in the `../tests/` integration suite (faux provider) — audit assertions
   verify the required fields landed for each gated execution and blocked/confirmed decision; the
-  `../tests/review-unified-boundaries.test.ts` review spec drives the transactional settle path
+  `../tests/integration/committed-outcomes.test.ts` review spec drives the transactional settle path
   that opts into `strict`.
 - No network and no live Prisma required for unit tests; use the test SQLite DB for reads.
 
@@ -106,7 +106,7 @@ re-exports each function and its types.
 - On the cancel path `toolResult` and `mfaResult` are intentionally omitted (nothing executed / no MFA) and persisted null (see `cancelAction` in `../agent/confirmation.ts`).
 - `SecurityEventKind` values `HIGH_RISK_BLOCKED` and `ANOMALY_FLAGGED` have NO producer anywhere: the gateway's locked-session `deny` uses `HIGH_RISK_BLOCKED` only as an opaque block-reason TAG (it writes no `SecurityEvent`), and `detect_anomaly` (`banking-sdk/transaction.ts`) is READ-ONLY.
 - The other `SecurityEventKind`s ARE produced: `CIRCUIT_BREAKER_TRIPPED` and `SECURITY_RESET` (`../security/circuit-breaker.ts` `recordFailure`/`resetSession`), `LIMIT_EXCEEDED` (`../security/security-gateway.ts` transfer escalation at execution time), `MFA_FAILURE` (`../security/mfa.ts` `verify`), `INJECTION_ATTEMPT` (`../security/injection-guard.ts` `reportInjection`, called by `../agent/run-turn.ts`).
-- No dedicated unit tests for this node (`../tests/unit/` has `security/`, `planner/`, `banking-sdk/`, `agent/`, `lib/` but no `audit/`); coverage is indirect — the scenario suite (test-02/03/04/10) asserts toolName/riskLevel/status/confirmationRequired/confirmed/mfaRequired/mfaResult, `../tests/unit/agent/confirmation.test.ts` asserts the `userRequest`/`intent`/`timestamp === demoNow()` fields the confirm/verify/cancel paths write, and `../tests/review-unified-boundaries.test.ts` covers the `strict` transactional settle path.
+- No dedicated unit tests for this node (`../tests/unit/` has `security/`, `planner/`, `banking-sdk/`, `agent/`, `lib/` but no `audit/`); coverage is indirect — the scenario suite (test-02/03/04/10) asserts toolName/riskLevel/status/confirmationRequired/confirmed/mfaRequired/mfaResult, `../tests/unit/agent/confirmation.test.ts` asserts the `userRequest`/`intent`/`timestamp === demoNow()` fields the confirm/verify/cancel paths write, and `../tests/integration/committed-outcomes.test.ts` covers the `strict` transactional settle path.
 
 ## Notes for Agents
 

@@ -12,9 +12,12 @@
 
 ## 复现与测试
 
-原审查文件固化为 `tests/review-95ff994-additional.test.ts`，原文与断言保持不变。源文件与固化文件 SHA256 均为：
+原审查文件曾在该修复提交中逐字节存档，源文件与存档 SHA256 均为：
 
 `8690085159B8B18C26B71DBA4539473A2CCF5D229249F045FFE65042E99E4EB0`
+
+正式测试精简时删除了重复探针副本，当前由 `tests/integration/recovery-authorization.test.ts` 维护等价回归。
+下表为原修复时的历史验证记录；当前布局与验收见 [测试用例](test-cases.md)。
 
 | 验证 | 实测结果 |
 | --- | --- |

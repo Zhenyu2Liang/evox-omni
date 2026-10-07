@@ -1,5 +1,5 @@
 /**
- * review-restart-independence.test.ts — recovery correctness depends on PERSISTED data, NOT the
+ * integration/restart-recovery.test.ts — recovery correctness depends on PERSISTED data, NOT the
  * in-process liveness / lease registry.
  *
  * WHY this suite exists: the recovery path uses PER-PROCESS auxiliary hints — the reference-counted

@@ -29,8 +29,8 @@ import { committedExecutionResult } from './execution-evidence';
  * the SDK idempotency key (e.g. `set_card_limit`) would RE-APPLY its side effect. The owning node is
  * stopped with this message; the action is `needs_reconciliation`, not a fabricated failure.
  *
- * The exact string is a frozen contract (asserted by `tests/review-result-recovery.test.ts` and
- * `tests/review-next-boundaries.test.ts`); do NOT reword it.
+ * The exact string is a frozen contract (asserted by
+ * `tests/integration/node-result-recovery.test.ts`); do NOT reword it.
  */
 export const PLAN_LINKED_UNRECONCILED_ERROR =
   '该节点此前已执行但未留存结果，需人工核对（不会重新执行）。';

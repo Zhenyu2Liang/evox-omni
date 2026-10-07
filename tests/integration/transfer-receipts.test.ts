@@ -1,5 +1,5 @@
 /**
- * review-receipt-identity.test.ts — transaction-fact ATOMICITY, IDEMPOTENCY and EXECUTION-IDENTITY
+ * integration/transfer-receipts.test.ts — transaction-fact ATOMICITY, IDEMPOTENCY and EXECUTION-IDENTITY
  * conflicts on the money-movement ledger + the unified execution receipt.
  *
  * The banking SDK writes the DEBIT, its ledger row and the `ExecutionReceipt` (the durable proof the

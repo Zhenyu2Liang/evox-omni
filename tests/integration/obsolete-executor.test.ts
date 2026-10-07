@@ -1,5 +1,5 @@
 /**
- * review-obsolete-executor.test.ts — frozen acceptance criteria for the OBSOLETE-EXECUTOR STOP.
+ * integration/obsolete-executor.test.ts — frozen acceptance criteria for the OBSOLETE-EXECUTOR STOP.
  *
  * When a plan executor LOSES its plan execution claim (its `AgentTask.executionToken` is rotated by a
  * concurrent `resume`/`retry` takeover, because the owner aged past `EXECUTION_CLAIM_TTL_MS`), the

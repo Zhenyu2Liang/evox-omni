@@ -3,7 +3,7 @@
 `repair-recovery-security.md` records the `95ff994` follow-up repair: new-debit recovery authorization,
 card/subscription resource ownership, separate reconciliation audit identities and truthful recovery
 responses. Its three original probes are unchanged; one older HTTP assertion is tightened to the
-manual-review contract. Current suite: 105 files / 703 tests; separate browser acceptance: 6 journeys.
+manual-review contract. Current suite: 100 files / 716 tests; separate browser acceptance: 7 journeys.
 
 ## Intent
 
@@ -71,25 +71,25 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   and the regression categories they cover (concurrency & limits, cumulative-risk dedup, identity &
   session, MFA escalation, DAG pause/cancel/resume/refresh, mock action routing, injection, shared
   kernel); the offline `LLM_MODE=mock` + `registerFauxProvider` determinism story; run commands.
-  §1/§4 list the frozen regression probes (`tests/review-final-boundaries.test.ts`,
-  `tests/review-recovery-probes.test.ts`) plus the frozen acceptance spec
-  `tests/review-followup-integrity.test.ts` (4 tests), the invariant-grouped boundary/integrity/fencing
-  specs (`tests/review-current-boundaries.test.ts`, `tests/review-execution-integrity.test.ts`,
-  `tests/review-execution-fencing.test.ts`, `tests/app/confirm-continuation-fencing.test.ts`) and the
+  §1/§4 list the frozen regression probes (`tests/integration/node-result-recovery.test.ts`,
+  `tests/integration/node-recovery.test.ts`) plus the frozen acceptance spec
+  `tests/integration/confirmation-continuation.test.ts` (4 tests), the invariant-grouped boundary/integrity/fencing
+  specs (`tests/integration/execution-integrity.test.ts`, `tests/integration/execution-integrity.test.ts`,
+  `tests/integration/executor-leases.test.ts`, `tests/app/confirm-continuation-fencing.test.ts`) and the
   executor-fencing / marker-lifecycle / standalone-recovery specs
-  (`tests/review-initial-executor-fencing.test.ts`, `tests/review-confirmation-marker-lifecycle.test.ts` —
-  now asserts a committed receipt converges to **executed/success**, `tests/review-standalone-recovery.test.ts`)
-  plus the receipt/barrier/refresh recovery specs (`tests/review-postfix-boundaries.test.ts`,
-  `tests/review-txn-facts.test.ts`, `tests/review-receipt-identity.test.ts`,
-  `tests/review-convergence-refresh.test.ts`, `tests/review-execution-barriers.test.ts`,
+  (`tests/integration/initial-executor-fencing.test.ts`, `tests/integration/confirmation-liveness.test.ts` —
+  now asserts a committed receipt converges to **executed/success**, `tests/integration/standalone-recovery.test.ts`)
+  plus the receipt/barrier/refresh recovery specs (`tests/integration/action-refresh.test.ts`,
+  `tests/integration/transfer-history.test.ts`, `tests/integration/transfer-receipts.test.ts`,
+  `tests/integration/action-refresh.test.ts`, `tests/integration/execution-barriers.test.ts`,
   `tests/app/actions-recovery-http.test.ts`) and the **unified-boundary regression specs**
-  (`tests/review-unified-boundaries.test.ts`, `tests/review-committed-side-effect.test.ts`,
-  `tests/review-idempotent-replay.test.ts`, `tests/review-takeover-barriers.test.ts`,
-  `tests/review-audit-reliability.test.ts`, `tests/review-restart-independence.test.ts`); §6 (test-infra)
-  records the clean-env init root cause (`RUST_LOG`), further specs (`tests/review-next-boundaries.test.ts`,
-  `tests/review-obsolete-executor.test.ts`, `tests/review-result-recovery.test.ts`, `tests/deploy-db-push.test.ts`,
+  (`tests/integration/committed-outcomes.test.ts`, `tests/integration/committed-outcomes.test.ts`,
+  `tests/integration/transfer-replay.test.ts`, `tests/integration/takeover-controls.test.ts`,
+  `tests/integration/execution-audit.test.ts`, `tests/integration/restart-recovery.test.ts`); §6 (test-infra)
+  records the clean-env init root cause (`RUST_LOG`), further specs (`tests/integration/node-result-recovery.test.ts`,
+  `tests/integration/obsolete-executor.test.ts`, `tests/integration/node-result-recovery.test.ts`, `tests/deploy-db-push.test.ts`,
   `tests/unit/lib/prisma-cli-env.test.ts`) and the deploy ordering (`npm run db:push` → `db:seed` → `build`);
-  the recorded suite size is **105 files / 703 tests**.
+  the maintained suites now live in tests/integration; current size is **100 files / 716 tests**.
 - `docs/known-risks.md` — honest limitations (mock data, simulated MFA, no real payment, heuristic
   anomaly detection, fictional investments, spending analysis excludes anomalies, in-process
   breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with
@@ -168,8 +168,8 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   (used for execution/recovery audits) rethrows a real insert error and ONLY absorbs a verified duplicate (P2002 on
   the exact `dedupeKey` AND a row with that `dedupeKey` already present). `AuditLog.dedupeKey` is `String? @unique`.
 - **Frozen regression invariants** (locked by the frozen acceptance spec
-  `tests/review-followup-integrity.test.ts` — 4 tests — alongside
-  `tests/review-final-boundaries.test.ts` — 2 tests — and `tests/review-recovery-probes.test.ts` —
+  `tests/integration/confirmation-continuation.test.ts` — 4 tests — alongside
+  `tests/integration/node-result-recovery.test.ts` — 2 tests — and `tests/integration/node-recovery.test.ts` —
   3 tests): (a) executed-node recovery **backfills** the persisted `PendingAction.resultJson` and
   **never re-invokes the tool**; (b) takeover writes are **token-fenced** (a taken-over zombie cannot
   forge/overwrite node/plan results). Describe these two invariants exactly; do NOT generalise them
@@ -207,5 +207,6 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   `npm run db:seed` → `npm run build` (the build prerenders routes that query SQLite). The `ExecutionReceipt`
   model and `AuditLog.dedupeKey` are additive and applied via `prisma db push` (there is NO `migrations/`
   directory); consistency is NEVER resolved by wiping or re-seeding the DB.
-- **Measured state** (keep current when the suite changes): `npx vitest run` → 105 files / 703 tests
-  pass; `npx tsc --noEmit` → 0 errors; `npx next build` → exit 0; E2E → PASS 6 / FAIL 0 / SKIP 0.
+- **Measured state**: cleanup validation → 100 files / 716 tests pass and typecheck → 0 errors.
+  Previous functional validation: build → exit 0; E2E → PASS 7 / FAIL 0 / SKIP 0. Cleanup does not
+  change production logic, and did not rerun build/browser acceptance. See docs/test-cases.md.

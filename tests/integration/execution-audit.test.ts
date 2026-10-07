@@ -1,5 +1,5 @@
 /**
- * review-audit-reliability.test.ts — EXECUTION/RECOVERY AUDIT reliability regressions.
+ * integration/execution-audit.test.ts — EXECUTION/RECOVERY AUDIT reliability regressions.
  *
  * WHY this suite exists: the audit log is the durable record of the agent loop
  * (理解 → 规划 → 执行 → 风控 → 验证 → 审计). A money-moving gated action's audit is written

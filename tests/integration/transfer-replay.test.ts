@@ -1,5 +1,5 @@
 /**
- * review-idempotent-replay.test.ts — idempotent replay is SERIAL- and CONCURRENT-safe and never
+ * integration/transfer-replay.test.ts — idempotent replay is SERIAL- and CONCURRENT-safe and never
  * returns a WRONG recipient/amount.
  *
  * The Banking SDK's `createTransfer` gives a transfer AT-MOST-ONCE semantics through the optional

@@ -1,5 +1,5 @@
 /**
- * review-confirmation-marker-lifecycle.test.ts — DEFECT 2: the LIVE-confirmation
+ * integration/confirmation-liveness.test.ts — DEFECT 2: the LIVE-confirmation
  * REFERENCE-COUNT marker lifecycle (`agent/confirmation-recovery.ts`).
  *
  * `confirmAction`/`verifyAction` mark a gated action LIVE in an in-process REFERENCE-COUNTED registry
@@ -14,7 +14,7 @@
  *      bookkeeping, so a LATER legitimate recovery of the wedged `confirmed` row still makes progress;
  *  (c) the final PendingAction / node / plan / API-response states are mutually CONSISTENT.
  *
- * Only the frozen reference `tests/review-followup-integrity.test.ts` covers the YELLOW confirm case;
+ * Only the frozen reference `tests/integration/confirmation-continuation.test.ts` covers the YELLOW confirm case;
  * this spec uses the RED / MFA `verify` path. REAL route handlers + REAL isolated `prisma/test.db`.
  * Mocks are used ONLY as barriers (`authorizeAction` spy) or REAL fault injection
  * (`setPendingActionStatus` throw) — never to fabricate a return value.

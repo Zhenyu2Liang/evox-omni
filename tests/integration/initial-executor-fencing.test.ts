@@ -13,7 +13,7 @@ async function task(id:string,action:string,s:string){const res=await taskPost(n
 
 // DEFECT 1: an INITIAL `submit_plan` executor whose plan claim is taken over by a concurrent
 // `resume` must stop at its next node boundary. This spec extends the frozen base
-// (`review-followup-integrity.test.ts` case 1, which asserts only `oldSuccessorCalls`) with the
+// (`integration/confirmation-continuation.test.ts` case 1, which asserts only `oldSuccessorCalls`) with the
 // FENCED-OUT PUBLISH + DB/RETURN CONSISTENCY + SIDE-EFFECT EXACTNESS invariants that the frozen
 // base does NOT cover: the zombie must publish NEITHER a stale node event NOR a stale plan
 // snapshot, the persisted plan must agree with the RETURNED takeover plan, and the zombie's own

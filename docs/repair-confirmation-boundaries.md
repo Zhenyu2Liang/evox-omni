@@ -18,11 +18,12 @@
 
 ## 回归证据
 
-原始探针逐字节保留为 `tests/review-e819d6e-boundaries.test.ts`，与外部复查源文件 SHA256 均为
+原始探针曾在该修复提交中逐字节存档，与外部复查源文件 SHA256 均为
 `52CFBEB8EAC95284A7B6CDBCBAD7FACF2AB15ABCDBA6438615F84D4E8F24B351`。
-修复前 4/4 失败，修复后 4/4 通过，业务断言未改。
+修复前 4/4 失败，修复后 4/4 通过，业务断言未改。正式测试精简时删除了重复副本，等价覆盖由
+`tests/integration/confirmation-policy.test.ts` 维护；历史文件仍可从 Git 记录恢复。
 
-新增 `tests/repair-confirmation-boundaries.test.ts` 的 19 例覆盖：
+当前维护的 `tests/integration/confirmation-policy.test.ts` 的 19 例覆盖：
 
 - 普通确认/MFA 已授权后熔断，HTTP 423、余额/流水/凭证不变，操作保留可恢复状态；
   经真实安全重置接口解锁后，恢复和重复确认仅产生一次扣款及一次执行审计。

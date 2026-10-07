@@ -1,5 +1,5 @@
 /**
- * review-committed-side-effect.test.ts — the "committed side effect, result NOT persisted" WEDGE.
+ * integration/committed-outcomes.test.ts — the "committed side effect, result NOT persisted" WEDGE.
  *
  * WHY this suite exists: a gated action's side effect (the SDK write) and its result+status+audit
  * landing are TWO different transactions. When the side effect COMMITS but the landing transaction

@@ -1,5 +1,5 @@
 /**
- * review-convergence-refresh.test.ts — STATE-CONVERGENCE / REFRESH regression suite.
+ * integration/action-refresh.test.ts — STATE-CONVERGENCE / REFRESH regression suite.
  *
  * WHY this suite exists: the failure mode that matters for the demo is never "the model said
  * something wrong" — it is a USER REFRESH (or a process RESTART) observing a state that does not
