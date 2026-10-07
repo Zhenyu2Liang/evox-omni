@@ -246,6 +246,11 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
   `ReconciliationCard` per reconciliation row) without clobbering a live decision; `Composer` should be enter-to-send
   and disabled-when-busy.
 
+## Known Issues
+
+- **Out-of-order `plan_update` can regress the live plan view.** `useAgentStream.ts#upsertPlan` (L224–230) guards only with a strict `>` on `updatedAt` and only for the SAME `plan.id`. An older-generation snapshot wins when it carries a DIFFERENT `plan.id` (replaces the `activePlan` slot unconditionally) or when the timestamps are equal. Neither `TaskPlan` (`lib/contracts/task.ts`) nor `AgentStreamEvent` (`lib/contracts/agent.ts`) carries a generation/epoch/revision/`executionToken` field, so there is nothing to fence a stale event against. The second caller of `upsertPlan` — `controlTask` (L612–628, folds the POST snapshot) — has the same exposure.
+- **`applyEvent` ends in a silent `default: return state`** (L378–379) — no `assertNever` — so a NEW `AgentStreamEvent` variant is NOT a compile error here and would silently no-op (unlike `ChatCard`, which IS `assertNever`-guarded in `CardRenderer`).
+
 ## Routing Table
 
 - `./ChatWindow.tsx` → container: message list + live plan + active decision card + composer, owns `useAgentStream`
