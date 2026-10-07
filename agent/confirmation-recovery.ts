@@ -63,6 +63,11 @@ export function isActionLive(actionId: string): boolean {
   return (liveConfirmations.get(actionId) ?? 0) > 0;
 }
 
+/** The number of live confirm/verify continuations for `actionId` in THIS process (0 when none). */
+export function liveCount(actionId: string): number {
+  return liveConfirmations.get(actionId) ?? 0;
+}
+
 /** Register a live continuation for `actionId` (ref-count +1). */
 export function retainAction(actionId: string): void {
   liveConfirmations.set(actionId, (liveConfirmations.get(actionId) ?? 0) + 1);
@@ -158,6 +163,7 @@ function isPlanLinked(link: { taskId: string | null; nodeId: string | null } | n
  */
 export async function recoverStandaloneWedge(
   actionId: string,
+  opts?: { selfHoldsLiveMarker?: boolean },
 ): Promise<StandaloneWedgeOutcome | undefined> {
   const row = await getPendingAction(actionId);
   if (row === null || row.status !== 'confirmed') return undefined;
@@ -166,7 +172,10 @@ export async function recoverStandaloneWedge(
   if (hasPersistedResult(row.resultJson)) return undefined;
   // A LIVE continuation in this process owns this `confirmed` row: it is result-less only because
   // that continuation has not written yet. Do NOT touch it — the duplicate reports the conflict.
-  if (isActionLive(actionId)) return undefined;
+  // The CALLER (a repeat confirm/verify via `conflictOutcome`) holds its OWN marker, so when asked
+  // (`selfHoldsLiveMarker`) subtract it: only ANOTHER live continuation means "still owned".
+  const otherLive = liveCount(actionId) - (opts?.selfHoldsLiveMarker === true ? 1 : 0);
+  if (otherLive > 0) return undefined;
 
   const link = await getPendingActionPlanLink(actionId);
   // A PLAN-LINKED wedge is settled by the executor re-run path (`executeGatedToolOnce` →

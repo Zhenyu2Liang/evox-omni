@@ -622,6 +622,14 @@ export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOu
  * outcome, not a failure: report it truthfully with the action's CURRENT persisted status.
  */
 async function conflictOutcome(actionId: string, error: AppError): Promise<ConfirmationOutcome> {
+  // A REPEAT confirm/verify reaches here via the gateway's exactly-once CAS (`CONFLICT`): the action
+  // is no longer `pending`. For a STANDALONE action whose side effect COMMITTED but whose
+  // result+status transaction ROLLED BACK, this is the ONLY place the row can settle (the gateway
+  // can never match it again). Resolve that wedge FIRST — idempotent replay for a proven-idempotent
+  // tool, else `needs_reconciliation`; a PLAN-LINKED wedge is left to the executor re-run path.
+  // When there is nothing to recover, fall through to the plain conflict outcome below.
+  const recovered = await recoverStandaloneWedge(actionId, { selfHoldsLiveMarker: true });
+  if (recovered !== undefined) return recovered;
   const row = await getPendingAction(actionId);
   const status = (row?.status as PendingActionStatus | undefined) ?? 'cancelled';
   const tier = (row?.riskLevel as RiskLevel | undefined) ?? 'YELLOW';
@@ -941,7 +949,7 @@ async function withLiveConfirmation<T>(
   actionId: string,
   run: () => Promise<T>,
 ): Promise<T> {
-  inFlightConfirmations.add(actionId);
+  retainAction(actionId);
   try {
     return await run();
   } finally {
