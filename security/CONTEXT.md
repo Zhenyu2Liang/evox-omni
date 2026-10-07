@@ -12,6 +12,13 @@ This node is the `beforeToolCall` chokepoint and the sole authority on 🟢/🟡
 
 ## API Surface
 
+- `recovery-authorization.ts` exports `authorizeRecoveryAction(actionId, actor)` and
+  `assertRecoverySessionUnlocked(sessionId)` through `security.recovery`. Only recovery that may
+  create a NEW transfer debit re-enters this policy: trusted owner/session, confirmed CAS, plan
+  cancellation, current effective daily total and verified MFA. A raced committed ledger is not
+  counted twice. The agent also invokes the breaker check inside the SDK write fence. Receipt-only
+  reconstruction does not authorize a new write and can proceed while locked.
+
 Import the facade (`import { security } from '../security'`) or the sub-modules directly.
 All public types are local interfaces (NOT in `lib/contracts`) except the frozen cross-module
 types it consumes and returns (`SecurityEvaluation`, `SecurityDecision`, `PendingAction`,

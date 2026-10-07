@@ -31,6 +31,11 @@ re-exports each function and its types.
 
 ## Constraints
 
+- Execution and manual-review events are DISTINCT: agent convergence uses `exec:<actionId>` for
+  execution and `reconcile:<actionId>` for manual review. Never overwrite a committed success audit
+  or absorb a contradictory outcome as the same event. The manual-review audit and action state
+  land in one strict transaction; a failed audit leaves the prior state available for retry.
+
 - **Transaction composition**: `recordAudit(entry, { client, dedupeKey, strict })` accepts a `Prisma.TransactionClient` (`client`) so an audit write CAN be folded into the caller's `prisma.$transaction`, and an optional unique `dedupeKey` makes a repeat write of the SAME execution identity idempotent. `recordSecurityEvent` accepts NO `client`/`tx` and always writes via the global `prisma` singleton (`@/lib/db/client`), so a security-event write is NOT transaction-composable.
 - **Dependency direction**: `lib` ← `audit`. This node imports ONLY `lib/contracts/*`,
   `lib/db/repositories/*`, `lib/db/client`, `lib/errors`, and `lib/clock`. It **MUST NOT** import

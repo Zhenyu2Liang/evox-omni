@@ -199,6 +199,8 @@ export interface CardView {
 }
 
 export interface SetCardLimitInput {
+  /** Trusted caller identity, injected by the server runner. */
+  userId: string;
   cardId: string;
   category: string;
   /** CNY cap for the category. */

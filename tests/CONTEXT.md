@@ -1,5 +1,13 @@
 # tests — Automated Test Suite (Vitest)
 
+Current recovery-security regressions: `review-95ff994-additional.test.ts` preserves the original
+three reviewer probes byte-for-byte; `repair-recovery-security.test.ts` adds 15 cases for breaker
+timing, receipt-only locked recovery, risk/MFA escalation, two fresh-recovery races at ¥1000,
+six resource-owner violations, write-time owner changes and reconciliation audit atomicity.
+`app/actions-recovery-http.test.ts` now requires `ok:false` and `needs_reconciliation` for an
+unprovable plan outcome (request handling alone is not business success). Subscription SDK tests
+only gain the required server identity argument; existing business assertions remain.
+
 ## Intent
 
 The **acceptance bar** for the AI Banking Agent demo, expressed as executable tests.
@@ -253,7 +261,7 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - `./repair-sdk-boundaries.test.ts` — 16 additional cases: all 12 mutating tools reach the trusted
   transaction fence; legacy request matching; executed historical audit repair; inconsistent receipts
   enter reconciliation; strict audit deduplication rejects a different business outcome.
-- Verified full suite: 103 files / 685 tests, zero failed or skipped. Browser acceptance is separate:
+- Verified full suite: 105 files / 703 tests, zero failed or skipped. Browser acceptance is separate:
   six journeys in `e2e/acceptance.e2e.ts`.
 - Transfer execution audits now commit with the debit, ledger and receipt. Audit-failure expectations
   require zero debit/receipt and an unchanged balance. Legacy replay never invents an original balance

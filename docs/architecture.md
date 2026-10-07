@@ -1,5 +1,7 @@
 # 架构文档 · AI Banking Agent Architecture
 
+恢复入口有两条执行边界：核验已提交凭证后只读回填；无凭证且可能首次转账时进入 `security/recovery-authorization.ts`，复核当前授权，并通过 SDK 事务内围栏再次检查熔断。卡片/订阅写操作由工具层传入服务端身份，SDK 用所有者条件保护实际写入。执行审计 `exec:<actionId>` 与人工核对事件 `reconcile:<actionId>` 分开去重，避免审计冲突阻止状态收敛。详见 [本轮修复报告](repair-recovery-security.md)。
+
 > 一个**比赛演示（competition demo）**级的 *AI 银行智能体*：用户用自然语言描述一个金融需求，
 > 智能体理解意图、规划任务、调用**银行工具**，并在一个**由代码强制、模型不可篡改**的权限与
 > 安全模型下完成操作。核心不变式：

@@ -25,7 +25,7 @@ import {
   settlePendingAction,
   type ConfirmableActionRow,
 } from './confirmation-recovery';
-import { buildRecoveryAudit, decideConvergence } from './execution-convergence';
+import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
 import {
   cancelTask as cancelTaskInternal,
   findTaskByPendingAction,
@@ -199,14 +199,15 @@ export async function recoverAction(
     // never left dangling `confirmed`. The owning plan is then resumed (below) so the NODE backfills
     // its REAL outcome from that persisted result without re-applying the side effect.
     const decision = await decideConvergence(row);
-    if (decision.write && decision.status === 'executed') {
+    if (decision.write && row.status === 'confirmed' &&
+        ['executed', 'failed', 'needs_reconciliation'].includes(decision.status)) {
       await settlePendingAction({
         actionId,
         status: decision.status,
         result: decision.result,
         from: ['confirmed'],
         audit: buildRecoveryAudit(row, decision),
-        dedupeKey: `exec:${actionId}`,
+        dedupeKey: convergenceAuditKey(actionId, decision.status),
       });
     }
     const located = await findTaskByPendingAction(row.sessionId, actionId);
@@ -215,16 +216,21 @@ export async function recoverAction(
         const plan = await resumeTask(row.sessionId, located.taskId);
         const after = await getPendingAction(actionId);
         const settledStatus = (after?.status as PendingActionStatus | undefined) ?? status;
+        const manualReview = settledStatus === 'needs_reconciliation';
+        const unsuccessful = manualReview || ['failed', 'cancelled', 'locked'].includes(settledStatus) ||
+          (plan.status === 'failed' && settledStatus !== 'executed');
         const events: AgentStreamEvent[] = [{ type: 'plan_update', plan }];
         const emit = opts?.onEvent;
         if (emit !== undefined) for (const event of events) emit(event);
         return {
-          ok: true,
+          ok: !unsuccessful,
           actionId,
           status: settledStatus,
           tier,
           requiresMfa,
-          message: `已恢复所属任务计划（${located.taskId}）。`,
+          message: manualReview ? '操作执行证据存在矛盾或缺失，已进入人工核对，请勿重复执行。'
+            : unsuccessful ? `所属任务计划未成功完成（${located.taskId}），请核对操作状态。`
+            : `已恢复所属任务计划（${located.taskId}）。`,
           events,
         };
       } catch (error) {
@@ -232,7 +238,7 @@ export async function recoverAction(
         return {
           ok: false,
           actionId,
-          status,
+          status: ((await getPendingAction(actionId))?.status as PendingActionStatus | undefined) ?? status,
           tier,
           requiresMfa,
           message: `恢复所属任务计划失败：${reason}`,

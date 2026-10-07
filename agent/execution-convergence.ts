@@ -70,6 +70,11 @@ export interface ConvergenceDecision {
   write: boolean;
 }
 
+/** Manual-review decisions are separate events; never overwrite a committed execution audit. */
+export function convergenceAuditKey(actionId: string, status: PendingActionStatus): string {
+  return status === 'needs_reconciliation' ? `reconcile:${actionId}` : `exec:${actionId}`;
+}
+
 /** A plan link is USABLE only when BOTH `taskId` and `nodeId` are non-null and non-empty. */
 function isPlanLinked(action: ConvergenceActionRow): boolean {
   const taskId = action.taskId?.trim();
@@ -165,8 +170,8 @@ export async function decideConvergence(
 /**
  * Build the execution `AuditEntry` for a convergence-dispatch settle that lands a terminal status
  * from COMMITTED EVIDENCE (a receipt or a stored result). Written INSIDE the same `$transaction` as
- * the result+status write (via `settlePendingAction`) with the `exec:<actionId>` dedupe key, so a
- * repeat recovery never double-records and an action can never settle `executed` without its audit.
+ * the result+status write (via `settlePendingAction`). `convergenceAuditKey` uses `exec:<actionId>`
+ * for execution and `reconcile:<actionId>` for manual review, preserving both events on a conflict.
  */
 export function buildRecoveryAudit(
   action: ConvergenceActionRow,
@@ -185,6 +190,8 @@ export function buildRecoveryAudit(
     mfaRequired: action.requiresMfa === true,
     toolResult: decision.result,
     status: decision.status === 'needs_reconciliation' ? 'blocked' : ok ? 'success' : 'failed',
-    detail: '恢复：由已提交的执行证据判定终态（未重新执行副作用）',
+    detail: decision.status === 'needs_reconciliation'
+      ? '恢复：执行证据缺失或矛盾，已进入人工核对（未重新执行副作用）'
+      : '恢复：由已提交的执行证据判定终态（未重新执行副作用）',
   };
 }

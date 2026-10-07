@@ -67,7 +67,7 @@ import {
   retainAction,
   settlePendingAction,
 } from './confirmation-recovery';
-import { buildRecoveryAudit, decideConvergence } from './execution-convergence';
+import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
 import { transferExecutionAudit } from './execution-audit';
 
 /**
@@ -529,7 +529,7 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
             result: decision.result,
             from: ['confirmed'],
             audit: buildRecoveryAudit(existing, decision),
-            dedupeKey: `exec:${existing.id}`,
+            dedupeKey: convergenceAuditKey(existing.id, decision.status),
           });
           if (won) {
             const refreshed = (await getPendingAction(existing.id)) ?? existing;
@@ -827,7 +827,7 @@ async function executeAuthorizedAction(
       toolResult: result,
       status: decision.status === 'needs_reconciliation' ? 'blocked' : result.ok ? 'success' : 'failed',
     },
-    dedupeKey: `exec:${actionId}`,
+    dedupeKey: convergenceAuditKey(actionId, decision.status),
   });
 
   // Then RECORD the terminal status through the gateway (with the trusted identity) — the security

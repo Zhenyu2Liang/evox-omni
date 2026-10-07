@@ -66,9 +66,12 @@ Writes (executed only after the gateway's tier policy):
   transaction atomically debits the funding account (conditional `balance >= amount`, else 
   **`INSUFFICIENT_FUNDS`** carrying the current balance) and writes the DEBIT `Transaction`, returning the new balance.
   Optional `TransferInput.idempotencyKey` gives at-most-once semantics.
-- `card.setCardLimit(SetCardLimitInput): CardView` · `card.freezeCard(id)` · `card.unfreezeCard(id)` ·
-  `card.reportLostCard(id, { reason? })` · `card.applyVirtualCard(ApplyVirtualCardInput)` → `CardView`
-- `subscription.cancelSubscription(id)` · `subscription.setSubscriptionReminder(id, remind)` → `SubscriptionView`
+- `card.setCardLimit(SetCardLimitInput)` (required `userId`) · `card.freezeCard(id, userId)` · `card.unfreezeCard(id, userId)` ·
+  `card.reportLostCard(id, userId, { reason? })` · `card.applyVirtualCard(ApplyVirtualCardInput)` → `CardView`
+- `subscription.cancelSubscription(id, userId)` · `subscription.setSubscriptionReminder(id, remind, userId)` → `SubscriptionView`
+- Card/subscription writers require a server-supplied owner, reject missing/foreign identity with
+  `SECURITY_DENIED`, and constrain the actual mutation by owner. Card-limit child writes use an
+  owner-filtered relation and conditional connect in one transaction, protecting lookup/write races.
 - `investment.subscribeInvestment(SubscribeInvestmentInput): InvestResult` (enforces `minAmount`; atomic conditional debit + holding create;
   optional `SubscribeInvestmentInput.idempotencyKey` → at-most-once subscribe) ·
   `investment.redeemInvestment(RedeemInvestmentInput): InvestResult` (atomic HOLDING→REDEEMED + account credit;

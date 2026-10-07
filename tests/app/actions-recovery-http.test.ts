@@ -254,7 +254,9 @@ describe('standalone /actions recovery surface', () => {
       recovered as HttpResult<Envelope<{ ok: boolean; actionId: string; events?: unknown[] }>>,
     );
     expect(outcome.actionId).toBe(action.id);
-    expect(outcome.ok).toBe(true);
+    // This limit mutation has no durable receipt after status landing failed. Recovery must
+    // report manual review, not business success merely because the request was handled.
+    expect(outcome.ok).toBe(false);
 
     // The plan (and its node) settle TERMINALLY — never left `waiting_confirmation`, and the tool is
     // NEVER re-invoked (the persisted action is no longer `confirmed`).
@@ -265,7 +267,7 @@ describe('standalone /actions recovery surface', () => {
     expect(plan.status).not.toBe('waiting_confirmation');
     expect(['success', 'failed']).toContain(plan.status);
     expect(['success', 'failed']).toContain(node.status);
-    expect(['executed', 'failed', 'needs_reconciliation']).toContain(settled.status);
+    expect(settled.status).toBe('needs_reconciliation');
     expect(settled.status).not.toBe('confirmed');
 
     // Idempotent, honest recovery: a REPEAT recover is a settled no-op (no duplicate side effect,

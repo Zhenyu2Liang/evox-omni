@@ -27,9 +27,11 @@ function toSubscriptionView(row: SubscriptionRow): SubscriptionView {
 }
 
 /** Resolve a subscription or throw `AppError('NOT_FOUND')`. */
-async function requireSubscription(id: string): Promise<SubscriptionRow> {
+async function requireSubscription(id: string, userId: string): Promise<SubscriptionRow> {
+  if (typeof userId !== 'string' || !userId.trim()) throw new AppError('SECURITY_DENIED', '缺少订阅操作用户身份。');
   const row = typeof id === 'string' && id.length > 0 ? await subscriptions.getSubscription(id) : null;
   if (!row) throw new AppError('NOT_FOUND', `订阅不存在：${String(id)}`, { subscriptionId: id });
+  if (row.userId !== userId) throw new AppError('SECURITY_DENIED', '无权操作该订阅。');
   return row;
 }
 
@@ -40,15 +42,15 @@ export async function listSubscriptions(userId: string): Promise<SubscriptionVie
 }
 
 /** Cancel a subscription (status → CANCELLED); returns the updated subscription. */
-export async function cancelSubscription(id: string): Promise<SubscriptionView> {
-  const row = await requireSubscription(id);
+export async function cancelSubscription(id: string, userId: string): Promise<SubscriptionView> {
+  const row = await requireSubscription(id, userId);
   if ((row.status as SubscriptionStatus) === 'CANCELLED') {
     throw new AppError('CONFLICT', `订阅已取消，无法重复取消：${row.name}`, {
       subscriptionId: row.id,
       status: row.status,
     });
   }
-  const updated = await runInTransaction((tx) => tx.subscription.update({ where: { id: row.id }, data: { status: 'CANCELLED' } }));
+  const updated = await runInTransaction((tx) => tx.subscription.update({ where: { id: row.id, userId, status: row.status }, data: { status: 'CANCELLED' } }));
   return toSubscriptionView(updated);
 }
 
@@ -56,11 +58,12 @@ export async function cancelSubscription(id: string): Promise<SubscriptionView> 
 export async function setSubscriptionReminder(
   id: string,
   remind: boolean,
+  userId: string,
 ): Promise<SubscriptionView> {
   if (typeof remind !== 'boolean') {
     throw new AppError('VALIDATION', '提醒开关必须是布尔值', { subscriptionId: id, remind });
   }
-  const row = await requireSubscription(id);
-  const updated = await runInTransaction((tx) => tx.subscription.update({ where: { id: row.id }, data: { remind } }));
+  const row = await requireSubscription(id, userId);
+  const updated = await runInTransaction((tx) => tx.subscription.update({ where: { id: row.id, userId }, data: { remind } }));
   return toSubscriptionView(updated);
 }

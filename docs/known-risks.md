@@ -1,5 +1,7 @@
 # 已知风险与限制 · Known Risks & Limitations
 
+本轮已修复：恢复可能首次扣款时绕过熔断/当日累计复核、卡片与订阅写入缺少资源归属校验、人工核对事件与成功审计共用键导致状态事务回滚。恢复仍区分只读核验与新增副作用；人工核对返回 `ok=false`。详见 [本轮修复报告](repair-recovery-security.md)。熔断器仍为进程内状态，多进程竞争与真实支付网关仍未验证；本轮结果不证明生产安全闭环。
+
 > 本文件诚实地列出演示的局限，并对每条给出「**为何在比赛演示中可接受**」。
 > 这些限制大多是**演示沙箱的刻意设计**或**单进程 / SQLite 部署下未经证明**的边界，而非缺陷——
 > 它们让系统在无真实资金、无真实银行的前提下，完整展示「智能体 + 代码强制安全模型」的核心价值。
@@ -33,7 +35,7 @@
 - **统一证据收敛**：正常确认/MFA、异常处理与恢复共同调用 decideConvergence。转账优先核验凭证与账本，以及无凭证的匹配历史流水；冲突证据进入人工核对。活跃执行暂不收敛，存储结果可复用；无证据的计划动作进入 needs_reconciliation，独立动作仅允许已证明幂等的恢复。被取消计划下的已提交操作可以修正状态，计划及后续节点不会因此复活。
 - **SDK 写入边界的执行权 fence**（第 18、20 条）— `banking-sdk/fence.ts` 以**不可枚举 Symbol** `EXECUTION_FENCE` 承载一个**不透明**的异步检查（`attachExecutionFence` 返回**同一对象引用**、`readExecutionFence` 读取；**无法**经 JSON / 工具参数注入）；`banking-sdk/{transfer,budget}.ts` 与 `banking-sdk/idempotent.ts` 在**写入事务内部、业务写入之前** `await` 该检查——抛错即回滚，**无业务行落库**。`agent/execution-fence.ts` 构造两种权威：`buildPlanNodeFence(taskId,nodeId)`（内联 🟢 计划节点路径——工具启动时**读取**持久化的计划 / 节点 `executionToken`、`generation`、状态，写入边界**重读**；token 轮换 / 代际变更 / 取消 / 状态不允许 / 节点领取被替换 ⇒ `AppError('CONFLICT')`）与 `buildConfirmFence(taskId,nodeId)`（确认续跑路径——**仅**断言**所属计划未被取消**，因为 `resumeTaskForAction` 会合法地铸造 / 轮换 / 释放计划 token）。**事务外的检查不是最终保证**：fence 与业务写入在**同一个 `$transaction`** 内。取消先行会阻断旧执行者的写入；业务先行则保留真实事实。
 - **事务事实优先 · 事务内摘要校验的转账**（第 15、20 条）— `banking-sdk/transfer.ts` 把借方、账本 `Transaction` 与 `ExecutionReceipt` 写入**同一个 `prisma.$transaction`**；重放时**先**（任何可变查找之前）经 `replayCommitted` 读**已提交回执**，事务内命中同一身份时以**同一个事务客户端**读回执并校验 `requestDigest`：**同键 + 同请求 ⇒ 原始结果**；**同键 + 不同请求 ⇒ `AppError('CONFLICT')`（无新副作用）**；**缺回执 ⇒ `CONFLICT`**；**无回执的遗留账本行**（`idempotentTransferTxId`）仍被识别为**已入账**。
-- **可靠 / 键控审计**（第 9、18、20 条）— `audit/audit-logger.ts#recordAudit(entry, {client, dedupeKey, strict})`：`strict:true` 时**真实插入错误重新抛出**（令调用方事务回滚业务写入），**仅吸收**一个**已验证的重复**——同 `dedupeKey` 的 P2002 **且**该键审计行**已存在**；业务写入与其**执行审计**在**同一个 `$transaction`** 内提交，故审计失败会**回滚**业务写入。`AuditLog.dedupeKey`（`String? @unique`，`prisma/schema.prisma`）使历史「已入账但缺审计」的行可**幂等回填**（**不二次扣款**、**绝不**把 `executed` 翻回 `failed`）。
+- **可靠 / 键控审计**（第 9、18、20 条）：严格插入失败回滚调用方事务；重复键须核验事件身份和结果。转账必需执行审计与扣款、流水、回执同事务，后续状态结算及其审计为另一事务。其他工具业务与状态审计仍分离，不能承诺审计故障能撤销此前已提交业务。历史缺失审计可核验回填；人工核对用独立 `reconcile:<actionId>`，保留原成功记录。
 - 同桶其余条目：第 4 条（启发式异常检测）、第 6 条（消费分析按设计排除异常）、第 14 条（注入守卫不改变授权结论）；第 19 条为工程性说明。
 
 ### 🧪 【模拟】模拟后端 / 刻意受限

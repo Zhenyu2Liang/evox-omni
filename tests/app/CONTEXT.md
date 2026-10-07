@@ -1,5 +1,10 @@
 # tests/app — REAL-application-entry (HTTP) end-to-end specs
 
+Recovery response contract: `ok:true` must not describe `needs_reconciliation`. The plan-wedge
+case in `actions-recovery-http.test.ts` explicitly asserts `ok:false` and that exact manual state;
+new root recovery-security regressions additionally retain the old success audit and verify one
+separate `reconcile:<actionId>` event, including atomic rollback on an audit fault.
+
 ## Intent
 
 Drive the **real Next.js App Router route handlers** — importing their exported `POST`/`GET`

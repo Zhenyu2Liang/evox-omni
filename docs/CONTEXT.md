@@ -1,5 +1,10 @@
 # docs — Competition Documentation
 
+`repair-recovery-security.md` records the `95ff994` follow-up repair: new-debit recovery authorization,
+card/subscription resource ownership, separate reconciliation audit identities and truthful recovery
+responses. Its three original probes are unchanged; one older HTTP assertion is tightened to the
+manual-review contract. Current suite: 105 files / 703 tests; separate browser acceptance: 6 journeys.
+
 ## Intent
 
 The **competition-facing documentation** for the AI Banking Agent demo: precise, demo-oriented
@@ -84,7 +89,7 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   records the clean-env init root cause (`RUST_LOG`), further specs (`tests/review-next-boundaries.test.ts`,
   `tests/review-obsolete-executor.test.ts`, `tests/review-result-recovery.test.ts`, `tests/deploy-db-push.test.ts`,
   `tests/unit/lib/prisma-cli-env.test.ts`) and the deploy ordering (`npm run db:push` → `db:seed` → `build`);
-  the recorded suite size is **103 files / 685 tests**.
+  the recorded suite size is **105 files / 703 tests**.
 - `docs/known-risks.md` — honest limitations (mock data, simulated MFA, no real payment, heuristic
   anomaly detection, fictional investments, spending analysis excludes anomalies, in-process
   breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with
@@ -202,5 +207,5 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   `npm run db:seed` → `npm run build` (the build prerenders routes that query SQLite). The `ExecutionReceipt`
   model and `AuditLog.dedupeKey` are additive and applied via `prisma db push` (there is NO `migrations/`
   directory); consistency is NEVER resolved by wiping or re-seeding the DB.
-- **Measured state** (keep current when the suite changes): `npx vitest run` → 103 files / 685 tests
+- **Measured state** (keep current when the suite changes): `npx vitest run` → 105 files / 703 tests
   pass; `npx tsc --noEmit` → 0 errors; `npx next build` → exit 0; E2E → PASS 6 / FAIL 0 / SKIP 0.

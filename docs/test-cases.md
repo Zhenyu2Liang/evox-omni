@@ -1,5 +1,7 @@
 # 测试用例文档 · Test Cases & Demo Scenarios
 
+新增 `tests/review-95ff994-additional.test.ts`：保留审查方原始三例，覆盖恢复绕过熔断、跨用户卡片写入、矛盾凭证与成功审计共存时的人工核对。新增 `tests/repair-recovery-security.test.ts`（15 例）：写入前熔断、锁定后只读恢复、累计升级 MFA、并发首次恢复的 ¥1000 边界、六类资源越权、写入时所有者变更、人工核对幂等与审计失败回滚。全量共 105 文件 / 703 用例。旧 `actions-recovery-http` 用例把人工核对断言改为 `ok=false`，并收紧状态为 `needs_reconciliation`；订阅 SDK 用例只补充必需用户身份。详情见 [本轮修复报告](repair-recovery-security.md)。
+
 > 测试套件是 AI Banking Agent 演示的**验收标准（acceptance bar）**，用 **Vitest** 写成，
 > **完全离线、确定性**运行（无网络、无需 API key）。此外还有一个**独立于 Vitest** 的真实浏览器
 > 验收 harness（`tests/e2e/`，用 `tsx` 显式运行，见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)），
@@ -31,7 +33,7 @@
 > 详见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
 ### 当前实测状态 · Measured State
-- **`npx vitest run`** → **103 个文件 / 685 个测试全部通过**。
+- **`npx vitest run`** → **105 个文件 / 703 个测试全部通过**。
 - **`npx tsc --noEmit`** → **0 错误**（Vitest 只转译、不做类型检查，故类型门禁单列）。
 - **`npx next build`** → **退出码 0**。
 - **真实浏览器验收**（`npx tsx tests/e2e/acceptance.e2e.ts`，隔离库 `prisma/e2e.db`）→ **PASS 6 / FAIL 0 / SKIP 0**：
@@ -279,6 +281,7 @@ handler 与会话、读取 SSE 分帧。
 | `c-plan-pause-resume` | 门控计划：`等待确认` → **真实**点「暂停」→ 徽章 `已暂停`（停靠节点保持 `待确认`、娱乐限额不变）→ **真实**点「继续」→ 计划回到 `等待确认`（已完成节点不重跑、剩余节点重新停靠） |
 | `d-plan-cancel` | 门控计划：`等待确认` → 计划卡「取消」→ `已取消`；随后尝试**旧的**确认入口——确认卡若仍在则点击并断言服务端**拒绝**（`ok=false`/`status=cancelled` 或 4xx），否则以渲染 DOM（按钮数 0）+ `GET /api/actions` 佐证；余额/账本/限额均不变 |
 | `e-refresh-action-recovery` | 刷新恢复：停靠的 🟡/🔴 决策在页面重载后从**服务端持久化状态**重建卡片 |
+| `f-wedge-refresh-recover` | 导航 `/actions` 后从持久化列表点击恢复，核对已提交凭证、一次扣款、`executed` 与执行审计，不要求传入隐藏 actionId |
 
 **覆盖**：真实浏览器里「自然语言 → 卡片 → 人工决策」全链路；MFA 成功 + 错误码拒绝；**真实**计划暂停/继续/取消（含取消后尝试**旧的**确认入口被拒）；
 刷新后从持久化状态恢复；结构化诚实上报；整棵进程树清理。

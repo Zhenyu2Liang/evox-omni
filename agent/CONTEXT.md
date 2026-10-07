@@ -321,10 +321,13 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
     changed that value. When NO `resultJson` was stored (a legacy row executed before the agent layer
     persisted results) the tool is STILL never re-invoked: the node is settled TERMINALLY as `failed` for
     MANUAL review, so a wedged plan settles instead of looping and a non-idempotent side effect can never
-    be re-applied. A `confirmed` row whose terminal status write never landed is FINALIZED by the unified evidence-based `decideConvergence` (see `execution-convergence.ts`) BEFORE recovering: a committed `ExecutionReceipt`/ledger row ⇒ `executed` reusing the receipt's result; else a stored `resultJson` ⇒ `ok?'executed':'failed'`; only a plan-linked row with NO evidence ⇒ `failed` (人工核对). The
-    gateway is deliberately NOT consulted on ANY recovery path (re-gating would mint a SECOND action /
-    re-request confirmation for work that already happened); recovery never throws (an SDK failure becomes
-    a failed node value) and is idempotent.
+    be re-applied. A `confirmed` row whose terminal status write never landed is finalized by
+    `decideConvergence`: verified receipt/ledger ⇒ `executed`; stored result ⇒ its actual outcome;
+    missing/conflicting plan evidence ⇒ action `needs_reconciliation`, node stopped for manual review.
+    Receipt-only recovery never re-executes. Standalone recovery that may create a NEW debit calls
+    `security.recovery.authorizeRecoveryAction` (same action, no new action), then checks the breaker
+    again inside the SDK fence. Current cumulative risk can require MFA. Persistence failures propagate
+    so recovery can be retried. Manual review returns `ok:false`, not successful execution.
   This closes the window where a node's side effect has run but its result is not yet persisted (the gateway's own
   `findReusableAction` only matches `pending`/`awaiting_mfa`, so it would otherwise MISS the `confirmed`/`executed`
   row) so a resume there cannot double-apply. The in-process single-flight (`inFlightExecutions` /

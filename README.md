@@ -82,7 +82,7 @@ Pi Agent → Tool Request → Security Gateway → permission tier (GREEN/YELLOW
 - **唯一的证据式收敛判定** `agent/execution-convergence.ts#decideConvergence`：**独立 / 计划关联 / 确认·验证 / 异常 / 恢复**各路径共用同一判定，且 **凭据优先（receipt-first）** —— 已核实提交的 `ExecutionReceipt`（+ 其账本行，计划身份 `nxe:<taskId>:<nodeId>`）⇒ `executed` 并**复用原始结果、绝不重跑**；存在存活执行租约 / 进程内标记 ⇒ 保持 `processing`；**只有在能证明"确实无副作用"时才** `failed`；其余未知 ⇒ 可人工核对的终态（独立楔子 → 可查询的 `needs_reconciliation`；计划关联楔子 → 带「需人工核对、绝不重跑」消息的终态）。**绝不**因 `resultJson` 缺失、进程内标记丢失或被捕获的异常而**推断失败**；对**已取消**的计划，已入账动作的状态可被更正，但**不会因此恢复该计划**。
 - **SDK 写入边界围栏** `agent/execution-fence.ts` + `banking-sdk/fence.ts`：服务端生成的执行凭据以**非枚举 `EXECUTION_FENCE` Symbol** 挂在工具输入对象上，**带入真正写入的那个 SDK 事务**；围栏在该事务内重读计划 / 节点的 `executionToken` + `generation` + 状态，一旦**发生轮换 / 代际变更 / 已取消 / 状态不符**，就在任何业务写入之前抛 `AppError('CONFLICT')`（已应用于 `reserve_budget` 与 `transfer_money`）。确认以**动作自身的租约 / 存活续跑 + 所属计划未取消**认证（而非计划被轮换后的 token）：因此"先取消"能拦住旧执行者的写入，而"业务先提交"则保留真实事实；暂停语义保持不变。
 - **事务内请求指纹校验** `banking-sdk/transfer.ts`：扣款 + 账本 `Transaction` + `ExecutionReceipt` 在**同一个 `$transaction`** 内提交；事务内以事务客户端重读凭据 —— **同身份 + 同 `requestDigest`** ⇒ 返回**原始结果**（不产生新副作用）；**同身份 + 异请求** ⇒ `AppError('CONFLICT')`；无凭据 ⇒ `CONFLICT`。
-- **执行审计强一致 + 幂等回填** `audit/audit-logger.ts#recordAudit(entry, { client, dedupeKey, strict })`：`strict:true`（用于执行 / 恢复审计）会**重抛**真实插入错误，仅在 **`P2002` + 已存在同 `dedupeKey` 行**时吸收为幂等重复；因此审计写入失败会**回滚业务写入**。历史上"已入账但缺审计"的行支持**幂等回填**（不重新扣款，绝不把 `executed` 改成 `failed`）。
+- **严格审计 + 幂等回填**：`strict:true` 重抛真实插入错误，重复键还须核验事件身份及业务结果。转账必需审计与扣款、流水、回执同事务；后续状态结算与其审计另在一个事务，不能回滚更早已提交的业务。其他工具的业务与状态审计尚未全部原子化。历史缺失执行审计可以核验后回填，不再次扣款。
 
 > 模块级设计细节见各目录的 `CONTEXT.md`（例如 `agent/CONTEXT.md`、`security/CONTEXT.md`、
 > `banking-sdk/CONTEXT.md`、`planner/CONTEXT.md`、`lib/CONTEXT.md`）；根架构总览见 `CONTEXT.md`。
@@ -138,7 +138,7 @@ Pi Agent **只**被用作 **Agent Runtime + Planner + Tool Caller**：
 - `task` — 定时任务
 - `dashboard` — 聚合仪表盘读模型
 
-约定：**每个函数第一个参数是 `userId`**（由服务端注入，模型无法提供），失败时 **抛出带类型的 `AppError`**
+约定：**用户身份 `userId` 必须由服务端注入**（位置参数或输入对象字段，不能取自模型参数）；卡片与订阅变更同时核对资源归属，并在实际写入条件中限定所有者。失败时 **抛出带类型的 `AppError`**
 （`VALIDATION` / `NOT_FOUND` / `CONFLICT` / `INSUFFICIENT_FUNDS` / `LIMIT_EXCEEDED` / `INTERNAL`），
 绝不静默返回哨兵值。对外只返回纯视图模型（DTO），Prisma 行类型不外泄。
 
@@ -455,7 +455,7 @@ npm run build         # 生产构建（页面在构建期预渲染，必须先�
 
 ### 15.3 测试分层 / Test layers
 
-测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）。当前仓库含 **103** 个测试文件 / **685** 条测试（前三层）：
+测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）。当前仓库含 **105** 个测试文件 / **703** 条测试（前三层）：
 
 1. **纯单元测试（pure unit）** — `tests/unit/`：`security`（权限策略表、转账阈值、网关 decide、注入检测、熔断、MFA、风控）、`planner`（DAG 校验 / 拓扑序 / 成环 / 条件）、`banking-sdk`（资金不变量等）；无网络、无真实 LLM。
 2. **faux-LLM 场景集成测试（scenario）** — `tests/scenarios/test-01…test-12`：用脚本化模型（`LLM_MODE=mock` + 隔离的测试 SQLite `prisma/test.db`）驱动 **完整流水线**，逐个覆盖 12 个验收场景。
@@ -487,6 +487,10 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 > **诚实的边界：测试通过 ≠ 安全模型已闭合。** 每项能力的真实状态 —— **【已实现】✅ 代码强制 /【模拟】🧪 演示替身 /【未验证】⚠️ 尚未覆盖** —— 以 [`docs/known-risks.md`](docs/known-risks.md) 为准，不要仅凭测试全绿就宣称安全已闭合。
 
 ### 15.5 恢复与对账 / Recovery & reconciliation
+
+恢复先核验已提交事实。若凭证缺失且恢复可能首次扣款，必须重新进入 `security/recovery-authorization.ts`：复核服务端身份、当前熔断、计划状态、当日累计及 MFA，并在 SDK 写入事务内再次检查熔断。锁定会话返回 `423 CIRCUIT_OPEN` 且不新增扣款；只读恢复已入账结果仍可进行。并发恢复不会重复计入同一笔已入账转账。
+
+人工核对审计使用 `reconcile:<actionId>`，成功执行审计保留 `exec:<actionId>`。证据矛盾时动作进入 `needs_reconciliation`，接口返回 `ok=false`；核对审计和状态同事务，审计故障回滚状态并允许稍后重试。复现与验证说明见 [本轮修复报告](docs/repair-recovery-security.md)。
 
 **为什么会出现"楔子（wedge）"：** 动钱工具的 SDK 副作用（扣款 + 账本 `Transaction`）在**一个 `$transaction`** 内提交，而「写入执行结果 + 终态动作状态 + 审计」是**另一次 `$transaction`**。若后者回滚（或进程在两次之间死亡），就会出现**副作用已落账、`PendingAction` 却停在 `confirmed` 且 `resultJson=null`** 的行 —— 它既不是待决策的 `pending`，也还不是 `executed`。
 

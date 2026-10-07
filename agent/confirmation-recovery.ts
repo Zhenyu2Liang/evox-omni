@@ -2,8 +2,8 @@
  * confirmation-recovery.ts — durable recovery + LANDING primitives for the two-phase confirmation path.
  *
  * Extracted from `confirmation.ts` (kept as the thin orchestrator) to stay under the ~1000-line soft
- * budget. It owns NO policy: it never computes a tier, a confirmation or an MFA requirement — every
- * input is PERSISTED `PendingAction` state the security gateway already wrote.
+ * budget. Security policy remains in `security/`: recovery that can create a new debit explicitly
+ * re-enters that authorization layer; committed receipts are reconstructed without re-execution.
  *
  * Concerns:
  *  1. The REFERENCE-COUNTED live-confirmation registry (`isActionLive`/`retainAction`/`releaseAction`)
@@ -37,7 +37,8 @@ import { demoNow } from '@/lib/clock';
 import { committedExecutionResult } from './execution-evidence';
 import { transferExecutionAudit } from './execution-audit';
 import { buildConfirmFence } from './execution-fence';
-import { decideConvergence } from './execution-convergence';
+import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
+import { recovery } from '@/security';
 
 /* ----------------------------------------------------------------------------------------- *
  * 1. Live-confirmation registry — REFERENCE-COUNTED (in-process AUXILIARY hint)
@@ -437,6 +438,30 @@ async function replayStandaloneAction(
   tier: RiskLevel,
   requiresMfa: boolean,
 ): Promise<StandaloneWedgeOutcome> {
+  // A receipt miss can mean the first attempt rolled back BEFORE debit. Idempotency alone does
+  // not authorize a new debit: re-enter security policy before calling the SDK.
+  let authorization: Awaited<ReturnType<typeof recovery.authorizeRecoveryAction>>;
+  try {
+    authorization = await recovery.authorizeRecoveryAction(actionId, {
+      userId: row.userId, sessionId: row.sessionId,
+    });
+  } catch (error) {
+    // Another recovery may have committed after our receipt miss, even before we acquire the
+    // authorization write lock. Resolve that committed fact without treating it as a new debit.
+    if (error instanceof AppError && (error.code === 'CONFLICT' || error.code === 'CIRCUIT_OPEN')) {
+      const committed = await settleFromCommittedReceipt(actionId, row, link, tier, requiresMfa);
+      if (committed !== undefined) return committed;
+    }
+    throw error;
+  }
+  if (!authorization.ok) {
+    return { ok: false, actionId, status: authorization.status, tier: authorization.tier,
+      requiresMfa: authorization.requiresMfa, message: authorization.message,
+      events: authorization.requiresMfa ? [{ type: 'mfa_required', actionId }] : [],
+    };
+  }
+  tier = authorization.tier;
+  requiresMfa = authorization.requiresMfa;
   const toolName = row.toolName as ToolName;
   const args = safeParse<Record<string, unknown>>(row.argsJson, {});
   const idempotencyKey = ledgerKeyForAction({
@@ -447,13 +472,20 @@ async function replayStandaloneAction(
 
   let result: ToolExecutionResult;
   let sideEffectCommitted = false;
+  let policyError: AppError | undefined;
+  const confirmFence = await buildConfirmFence(link?.taskId, link?.nodeId, actionId);
   const executionAudit = transferExecutionAudit(actionId, {
     sessionId: row.sessionId, userRequest: row.userRequest ?? '', intent: row.intent ?? undefined,
     toolName: row.toolName, riskLevel: tier, confirmationRequired: true, confirmed: true, mfaRequired: requiresMfa,
+    mfaResult: authorization.mfaResult,
   });
   try {
     result = await createToolRegistry(row.userId).executeDirect(toolName, args, {
-      idempotencyKey, fence: await buildConfirmFence(link?.taskId, link?.nodeId, actionId),
+      idempotencyKey, fence: async tx => {
+        await confirmFence?.(tx);
+        try { recovery.assertRecoverySessionUnlocked(row.sessionId); }
+        catch (error) { policyError = AppError.from(error); throw error; }
+      },
       onTransferCommit: executionAudit.onTransferCommit,
       onTransactionCommitted: () => { sideEffectCommitted = true; },
     });
@@ -462,6 +494,7 @@ async function replayStandaloneAction(
     result = { ok: false, error: AppError.from(e).message };
   }
 
+  if (policyError !== undefined) throw policyError;
   executionAudit.assertSucceeded();
   const current = await getPendingAction(actionId);
   if (current === null) throw new AppError('NOT_FOUND', '恢复操作不存在');
@@ -472,8 +505,8 @@ async function replayStandaloneAction(
   return {
     ...settled,
     message: result.ok
-      ? '该操作此前已执行但结果未留存，已按其幂等键安全重放并确认执行成功（副作用仅发生一次）。'
-      : `该操作此前已执行但结果未留存，幂等重放确认为失败：${result.error ?? '未知原因'}`,
+      ? '已复核当前授权，按持久化操作身份完成恢复并确认执行成功（副作用仅发生一次）。'
+      : `恢复执行未成功：${result.error ?? '未知原因'}`,
   };
 }
 
@@ -505,10 +538,11 @@ async function landStandalone(
       confirmed: true,
       mfaRequired: requiresMfa,
       toolResult: result,
-      status: result.ok ? 'success' : 'failed',
-      detail: '恢复：初次结果写回失败，按幂等键安全重放（副作用仅一次）',
+      status: status === 'needs_reconciliation' ? 'blocked' : result.ok ? 'success' : 'failed',
+      detail: status === 'needs_reconciliation' ? '恢复：执行结果需人工核对'
+        : '恢复：按持久化操作身份核对执行结果（副作用仅一次）',
     },
-    dedupeKey: `exec:${actionId}`,
+    dedupeKey: convergenceAuditKey(actionId, status),
   });
 
   return { ok: result.ok, actionId, status, tier, requiresMfa, message: '', result, events: [] };
@@ -526,10 +560,16 @@ async function reconcileStandaloneAction(
   tier: RiskLevel,
   requiresMfa: boolean,
 ): Promise<StandaloneWedgeOutcome> {
+  const row = await getPendingAction(actionId);
+  if (row === null) throw new AppError('NOT_FOUND', '待核对操作不存在。');
+  const result: ToolExecutionResult = { ok: false, error: '执行证据不足或矛盾，需人工核对（不会重新执行）。' };
   const won = await settlePendingAction({
     actionId,
     status: 'needs_reconciliation',
     from: ['confirmed'],
+    result,
+    audit: buildRecoveryAudit(row, { status: 'needs_reconciliation', result, evidence: 'none', write: true }),
+    dedupeKey: convergenceAuditKey(actionId, 'needs_reconciliation'),
   });
   // A lost CAS means a concurrent settle already moved the row: report its CURRENT persisted status
   // truthfully (never a fabricated one).

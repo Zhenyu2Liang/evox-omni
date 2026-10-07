@@ -65,7 +65,7 @@ describe('banking-sdk/subscription · listSubscriptions', () => {
   it('a cancelled subscription is excluded from the active list', async () => {
     expect((await banking.subscription.listSubscriptions(DEMO_USER_ID)).map((s) => s.id)).toContain('sub_netflix');
 
-    await banking.subscription.cancelSubscription('sub_netflix');
+    await banking.subscription.cancelSubscription('sub_netflix', DEMO_USER_ID);
 
     const after = await banking.subscription.listSubscriptions(DEMO_USER_ID);
     expect(after).toHaveLength(3);
@@ -107,7 +107,7 @@ describe('banking-sdk/subscription · cancelSubscription', () => {
     const before = findById(await banking.subscription.listSubscriptions(DEMO_USER_ID), 'sub_netflix');
     expect(before.status).toBe('ACTIVE');
 
-    const cancelled = await banking.subscription.cancelSubscription('sub_netflix');
+    const cancelled = await banking.subscription.cancelSubscription('sub_netflix', DEMO_USER_ID);
     expect(cancelled).toMatchObject({
       id: 'sub_netflix',
       name: 'Netflix',
@@ -127,9 +127,9 @@ describe('banking-sdk/subscription · cancelSubscription', () => {
   });
 
   it('re-cancelling an already CANCELLED subscription surfaces an AppError (illegal transition)', async () => {
-    await banking.subscription.cancelSubscription('sub_netflix');
+    await banking.subscription.cancelSubscription('sub_netflix', DEMO_USER_ID);
 
-    const error = await captureAppError(banking.subscription.cancelSubscription('sub_netflix'), 'CONFLICT');
+    const error = await captureAppError(banking.subscription.cancelSubscription('sub_netflix', DEMO_USER_ID), 'CONFLICT');
     expect(error.detail).toMatchObject({ subscriptionId: 'sub_netflix', status: 'CANCELLED' });
 
     // No side effect from the rejected call — still exactly the one CANCELLED row.
@@ -138,7 +138,7 @@ describe('banking-sdk/subscription · cancelSubscription', () => {
   });
 
   it("an unknown subscription id → throws AppError('NOT_FOUND')", async () => {
-    const error = await captureAppError(banking.subscription.cancelSubscription('nope'), 'NOT_FOUND');
+    const error = await captureAppError(banking.subscription.cancelSubscription('nope', DEMO_USER_ID), 'NOT_FOUND');
     expect(error.detail).toMatchObject({ subscriptionId: 'nope' });
 
     // Nothing was created or mutated.
@@ -148,7 +148,7 @@ describe('banking-sdk/subscription · cancelSubscription', () => {
 
 describe('banking-sdk/subscription · setSubscriptionReminder', () => {
   it('sets remind true and returns the updated view', async () => {
-    const updated = await banking.subscription.setSubscriptionReminder('sub_spotify', true);
+    const updated = await banking.subscription.setSubscriptionReminder('sub_spotify', true, DEMO_USER_ID);
     expect(updated).toMatchObject({
       id: 'sub_spotify',
       name: 'Spotify',
@@ -166,9 +166,9 @@ describe('banking-sdk/subscription · setSubscriptionReminder', () => {
   });
 
   it('toggles remind back to false', async () => {
-    expect((await banking.subscription.setSubscriptionReminder('sub_spotify', true)).remind).toBe(true);
+    expect((await banking.subscription.setSubscriptionReminder('sub_spotify', true, DEMO_USER_ID)).remind).toBe(true);
 
-    const off = await banking.subscription.setSubscriptionReminder('sub_spotify', false);
+    const off = await banking.subscription.setSubscriptionReminder('sub_spotify', false, DEMO_USER_ID);
     expect(off).toMatchObject({ id: 'sub_spotify', name: 'Spotify', status: 'ACTIVE', remind: false });
 
     const row = await getTestPrisma().subscription.findUnique({ where: { id: 'sub_spotify' } });
@@ -176,13 +176,13 @@ describe('banking-sdk/subscription · setSubscriptionReminder', () => {
   });
 
   it("an unknown subscription id → throws AppError('NOT_FOUND')", async () => {
-    const error = await captureAppError(banking.subscription.setSubscriptionReminder('nope', true), 'NOT_FOUND');
+    const error = await captureAppError(banking.subscription.setSubscriptionReminder('nope', true, DEMO_USER_ID), 'NOT_FOUND');
     expect(error.detail).toMatchObject({ subscriptionId: 'nope' });
   });
 
   it("a non-boolean remind → throws AppError('VALIDATION')", async () => {
     await captureAppError(
-      banking.subscription.setSubscriptionReminder('sub_spotify', 'yes' as unknown as boolean),
+      banking.subscription.setSubscriptionReminder('sub_spotify', 'yes' as unknown as boolean, DEMO_USER_ID),
       'VALIDATION',
     );
 
