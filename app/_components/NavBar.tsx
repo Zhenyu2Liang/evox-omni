@@ -19,6 +19,7 @@ interface NavItem {
 
 const NAV_ITEMS: readonly NavItem[] = [
   { href: '/', label: '总览' },
+  { href: '/actions', label: '待处理操作' },
   { href: '/agent', label: 'AI 助手' },
   { href: '/bills', label: '账单' },
   { href: '/cards', label: '卡片' },
