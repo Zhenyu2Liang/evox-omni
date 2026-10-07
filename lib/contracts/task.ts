@@ -35,4 +35,10 @@ export interface TaskPlan {
   results: TaskNodeResult[];
   createdAt: number;
   updatedAt: number;
+  /**
+   * Monotonic execution generation. Bumped whenever the plan's `executionToken`
+   * is (re)claimed (initial claim or a stale-owner takeover). Consumers can reject
+   * a stale (lower-generation) plan update event.
+   */
+  generation?: number;
 }

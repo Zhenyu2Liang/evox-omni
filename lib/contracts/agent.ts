@@ -47,7 +47,7 @@ export type AgentStreamEvent =
   | { type: 'tool_start'; toolEvent: ToolEventView }
   | { type: 'tool_end'; toolEvent: ToolEventView }
   | { type: 'card'; card: ChatCard }
-  | { type: 'plan_update'; plan: TaskPlan }
+  | { type: 'plan_update'; plan: TaskPlan; generation?: number }
   | { type: 'confirmation_required'; action: PendingActionSummary; actionId: string }
   | { type: 'mfa_required'; actionId: string; hint?: string }
   | { type: 'security_event'; kind: string; message: string }

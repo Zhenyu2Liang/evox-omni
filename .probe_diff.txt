@@ -1,0 +1,25 @@
+﻿ lib/contracts/agent.ts | 2 +-
+ lib/contracts/task.ts  | 7 ++++++-
+ 2 files changed, 7 insertions(+), 2 deletions(-)
+diff --git a/lib/contracts/task.ts b/lib/contracts/task.ts
+index f60ff9e..840a670 100644
+--- a/lib/contracts/task.ts
++++ b/lib/contracts/task.ts
+@@ -1,6 +1,5 @@
+ export type TaskNodeStatus = 'pending' | 'running' | 'waiting_confirmation' | 'waiting_verification' | 'success' | 'failed' | 'cancelled' | 'skipped';
+ export type TaskNodeKind = 'tool' | 'condition' | 'note';
+-
+ export interface TaskCondition { path: string; op: '>' | '>=' | '<' | '<=' | '==' | '!='; value: number | string | boolean; }
+ 
+ export interface TaskNodeSpec {
+@@ -35,4 +34,10 @@ export interface TaskPlan {
+   results: TaskNodeResult[];
+   createdAt: number;
+   updatedAt: number;
++  /**
++   * Monotonic execution generation. Bumped whenever the plan's `executionToken`
++   * is (re)claimed (initial claim or a stale-owner takeover). Consumers can reject
++   * a stale (lower-generation) plan update event.
++   */
++  generation?: number;
+ }

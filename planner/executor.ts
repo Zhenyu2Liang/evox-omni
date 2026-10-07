@@ -86,6 +86,19 @@ export interface PlanDeps {
   claimNode?(taskId: string, nodeId: string, token: string): Promise<boolean>;
   /** Release the claim minted by `claimNode` for the same (taskId, nodeId, token). */
   releaseNode?(taskId: string, nodeId: string, token: string): Promise<void>;
+  /**
+   * OPTIONAL ownership re-check, consulted AFTER an async node notification resolves and BEFORE the
+   * next notification is published / the node's tool is launched. Returns `true` while this run still
+   * owns the plan's execution claim.
+   *
+   * The node claim (`claimNode`) is atomic with the CLAIM, but a node notification
+   * (`onNodeUpdate`) can block arbitrarily long; a concurrent takeover that rotates the plan's owner
+   * in that window would otherwise let this run launch the tool and publish stale progress. With this
+   * port wired, a run that lost its claim returns the EXISTING `'owned'` branch (ZERO writes for the
+   * node, NO tool call) and the walk backs off (`claimLost`). Absent ⇒ no-op (the default for a
+   * claim-less walk; a plan-less `runPlan` supplies neither `claimNode` nor this port).
+   */
+  isRunOwner?: () => Promise<boolean>;
   /** Persist the full plan snapshot (AgentTask/AgentTaskNode). */
   persistPlan?(plan: TaskPlan): Promise<void>;
   /** Persist one node result incrementally (`planId`, node). */
@@ -287,7 +300,18 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
 
   // ONE claim token per `runPlan` invocation: every node this run claims uses the
   // same token, so `releaseNode` can only clear a claim THIS run still owns.
-  const claimToken = newId('nodeclaim');  const snapshot = (): TaskPlan => ({
+  const claimToken = newId('nodeclaim');
+
+  /**
+   * Has this run LOST ownership of the plan's execution claim? Always `false` when no ownership port
+   * is wired (the default for a claim-less walk), so the barrier is a genuine no-op there. Consulted
+   * after EVERY async notification resolves (and before the tool launch) so a taken-over run
+   * publishes no further node/plan progress and launches no further tool.
+   */
+  const ownerLost = async (): Promise<boolean> =>
+    deps.isRunOwner !== undefined && !(await deps.isRunOwner());
+
+  const snapshot = (): TaskPlan => ({
     id: plan.id,
     sessionId: plan.sessionId,
     goal: plan.goal,
@@ -301,6 +325,7 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
     }),
     createdAt: plan.createdAt,
     updatedAt: now(),
+    generation: plan.generation,
   });
 
   /**
@@ -432,6 +457,11 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
     try {
       const startedAt = now();
       await setNode({ id: node.id, name: node.name, status: 'running', tool: node.tool, startedAt });
+
+      // OWNERSHIP BARRIER: the `running` notification is async and may block arbitrarily long; a
+      // concurrent takeover could have rotated the plan's owner in that window. Re-validate BEFORE
+      // launching the tool: a lost claim returns the `'owned'` branch (no tool call, no further write).
+      if (await ownerLost()) return 'owned';
 
       if (stopRequested()) {
         await cancelNode(node);

@@ -1,0 +1,2 @@
+﻿len=1087
+ string;<CR><LF>  status: TaskPlanStatus;<CR><LF>  nodes: TaskNodeSpec[];<CR><LF>  results: TaskNodeResult[];<CR><LF>  createdAt: number;<CR><LF>  updatedAt: number;<CR><LF>}<CR><LF>
