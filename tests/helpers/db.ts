@@ -82,6 +82,7 @@ export function ensureTestPragmas(): Promise<void> {
  * empty. Table order MUST respect relations (MfaChallenge→PendingAction, AgentTaskNode→AgentTask,
  * CardLimit→Card, Transaction→Account, InvestmentHolding→User+InvestmentProduct,
  * Card/Account/Subscription/Budget/ScheduledTask/Contact/AgentSession→User, AuditLog/SecurityEvent→User).
+ * `ExecutionReceipt` declares no relations, so its position in the order is free.
  * Does NOT re-seed.
  */
 export async function truncateAll(): Promise<void> {
@@ -89,6 +90,7 @@ export async function truncateAll(): Promise<void> {
   const prisma = getTestPrisma();
   await prisma.mfaChallenge.deleteMany();
   await prisma.pendingAction.deleteMany();
+  await prisma.executionReceipt.deleteMany();
   await prisma.agentTaskNode.deleteMany();
   await prisma.agentTask.deleteMany();
   await prisma.cardLimit.deleteMany();

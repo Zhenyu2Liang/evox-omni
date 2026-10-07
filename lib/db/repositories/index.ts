@@ -12,3 +12,4 @@ export * as auditLogs from './auditLog';
 export * as securityEvents from './securityEvent';
 export * as sessions from './session';
 export * as pendingActions from './pendingAction';
+export * as executionReceipts from './executionReceipt';

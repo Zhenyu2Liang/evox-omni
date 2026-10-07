@@ -88,3 +88,56 @@ export function ledgerTxIdForAction(
 ): string {
   return idempotentTransferTxId(userId, ledgerKeyForAction(action));
 }
+
+/**
+ * Deterministic id of the unified EXECUTION RECEIPT for a gated side effect.
+ *
+ * An `ExecutionReceipt` is the durable, COMMITTED-FACT record of ONE side effect identified by its
+ * execution identity (`userId` + `key`, the SAME key {@link ledgerKeyForAction} /
+ * {@link idempotentTransferTxId} use). Because it is addressed deterministically, a replay can
+ * recognize an already-committed side effect from PERSISTED data instead of re-resolving MUTABLE
+ * inputs (e.g. a recipient looked up by name that has since been renamed).
+ *
+ * FORMAT (frozen): `rcpt_` + first 32 hex chars of `sha256("<userId>\u0000<key>")`
+ * (a REAL NUL byte separates the two parts).
+ */
+export function executionReceiptId(userId: string, key: string): string {
+  const digest = createHash('sha256').update(`${userId}\u0000${key}`).digest('hex');
+  return `rcpt_${digest.slice(0, 32)}`;
+}
+
+/**
+ * Canonical fingerprint of a gated tool REQUEST, used to decide whether a replay under the SAME
+ * execution identity is the SAME request (→ replay the stored result) or a DIFFERENT one (→ reject
+ * explicitly, never execute).
+ *
+ * Pure and deterministic: the parts are serialized as CANONICAL JSON — object keys sorted
+ * recursively and `undefined` normalized to `null` — so key INSERTION ORDER never changes the
+ * digest and re-serializing an identical request always yields an identical digest (while an absent
+ * field and an explicit `null` hash the same).
+ *
+ * Returns the lowercase hex sha256 digest of that canonical JSON.
+ */
+export function requestDigest(parts: Record<string, unknown>): string {
+  return createHash('sha256').update(canonicalJson(parts)).digest('hex');
+}
+
+/** Recursively canonicalize a value: sort object keys, normalize `undefined` to `null`. */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(source).sort()) {
+      const entry = source[key];
+      out[key] = entry === undefined ? null : canonicalize(entry);
+    }
+    return out;
+  }
+  return value === undefined ? null : value;
+}
+
+/** Canonical JSON text of a value (stable regardless of key insertion order). */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalize(value));
+}
