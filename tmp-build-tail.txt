@@ -1,0 +1,42 @@
+﻿
+> ai-banking-agent@1.0.0 build
+> next build
+
+node.exe :  ⚠ Warning: Next.js inferred your workspace root, but it may not be correct.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ( ⚠ Warning: Nex...not be correct.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ We detected multiple lockfiles and selected the directory of D:\projects\banking-agent\package-lock.json as the root d
+irectory.
+ To silence this warning, set `outputFileTracingRoot` in your Next.js config, or consider removing one of the lockfiles
+ if it's not needed.
+   See https://nextjs.org/docs/app/api-reference/config/next-config-js/output#caveats for more information.
+ Detected additional lockfiles: 
+   * D:\projects\banking-agent\.genesis\workers\worker_T1_A1\package-lock.json
+
+   ▲ Next.js 15.5.26
+   - Environments: .env
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully in 5.5s
+   Linting and checking validity of types ...
+Failed to compile.
+
+.next/types/app/api/actions/route.ts:12:13
+Type error: Type 'OmitWithTag<typeof import("D:/projects/banking-agent/.genesis/workers/worker_T1_A1/app/api/actions/ro
+ute"), "GET" | "POST" | "config" | "generateStaticParams" | "revalidate" | "dynamic" | ... 9 more ... | "PATCH", "">' d
+oes not satisfy the constraint '{ [x: string]: never; }'.
+  Property 'DECISION_STATUSES' is incompatible with index signature.
+    Type 'readonly PendingActionStatus[]' is not assignable to type 'never'.
+
+[0m [90m 10 |[39m
+ [90m 11 |[39m [90m// Check that the entry is a valid entry[39m
+[31m[1m>[22m[39m[90m 12 |[39m checkFields[33m<[39m[33mDiff[39m[33m<[39m{
+ [90m    |[39m             [31m[1m^[22m[39m
+ [90m 13 |[39m   [33mGET[39m[33m?[39m[33m:[39m [33mFunction[39m
+ [90m 14 |[39m   [33mHEAD[39m[33m?[39m[33m:[39m [33mFunction[39m
+ [90m 15 |[39m   [33mOPTIONS[39m[33m?[39m[33m:[39m [33mFunction[39m[0m
+Next.js build worker exited with code: 1 and signal: null

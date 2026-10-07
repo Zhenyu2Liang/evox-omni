@@ -1,0 +1,60 @@
+﻿[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mtwo concurrent resumes of one gated node produce only one pending action
+[22m[39mREVIEW gated_double_resume {"statuses":[200,200],"actions":[{"id":"cmuxtpjb7000gf8bk4qb04own","status":"pending"}]}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mcancelling a doubly-resumed plan revokes every action created for its node
+[22m[39mREVIEW orphan_after_cancel {"cancelled":"cancelled","leftovers":0,"confirmed":[],"total":0}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mindependent plans with identical tools and arguments each perform their own side effect
+[22m[39mREVIEW independent_plans {"planIds":["cmuxtpjcd000rf8bktokdgomn","cmuxtpjcd000sf8bkkuvyaaya"],"statuses":["success","success"],"count":2}
+
+[90mstdout[2m | tests/review-concurrency.test.ts[2m > [22m[2mcancel blocks confirmation of an action minted before its node association persists
+[22m[39mREVIEW unlinked_cancel {"cancelled":"cancelled","confirmed":false,"total":0}
+
+ [32m✓[39m tests/review-concurrency.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 340[2mms[22m[39m
+[90mstdout[2m | tests/review-followup-probes.test.ts[2m > [22m[2mcancel preserves the executed truth when a transfer is ledgered before result persistence
+[22m[39mREVIEW_EXECUTED_TRUTH {"planStatus":"cancelled","responseStatus":"executed","storedStatus":"executed","balance":23380,"debits":[-200]}
+
+[90mstdout[2m | tests/review-followup-probes.test.ts[2m > [22m[2ma virtual card node cannot create another card during the action-to-node persistence window
+[22m[39mREVIEW_VIRTUAL_CARD_REPLAY {"cards":["cardidem_1fe76510cfbf1ac738a424dade520f03"]}
+
+[90mstdout[2m | tests/review-followup-probes.test.ts[2m > [22m[2ma distinct redemption action cannot report another credit for an already redeemed holding
+[22m[39mREVIEW_REDEEM_IDENTITY {"firstAction":"cmuxtpk0f000gf8qo1ljw39t9","secondAction":"cmuxtpk0t000kf8qoc22kfiif","firstOk":true,"secondOk":false,"secondStatus":"failed","firstBalance":28630,"secondBalance":28630}
+
+ [32m✓[39m tests/review-followup-probes.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 401[2mms[22m[39m
+ [32m✓[39m tests/unit/security/gateway-audit-trail.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 319[2mms[22m[39m
+[90mstdout[2m | tests/review-initial-executor-fencing.test.ts[2m > [22m[2man INITIAL submit executor publishes no stale node/plan progress and stays DB-consistent after losing its plan claim
+[22m[39mREVIEW_INITIAL_FENCING_CONSISTENCY {"takeoverStatus":"success","oldStatus":"success","oldSuccessorCalls":0,"lateNodeUpdates":0,"latePlanSnapshots":0,"storedStatus":"success","storedNodeStatuses":["first:success","second:success"],"takeoverNodeStatuses":["first:success","second:success"],"oldSuccessorStatus":"pending","budgets":2,"budgetsAtTakeover":2}
+
+ [32m✓[39m tests/review-initial-executor-fencing.test.ts [2m([22m[2m1 test[22m[2m)[22m[90m 274[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-06-spending-analysis.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 369[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-07-anomaly.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 372[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine-rerisk.test.ts [2m([22m[2m8 tests[22m[2m)[22m[90m 273[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/pendingAction.claim.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 340[2mms[22m[39m
+[90mstdout[2m | tests/review-final-boundaries.test.ts[2m > [22m[2mrecovery of an executed limit change must preserve a later independently authorized limit
+[22m[39mREVIEW_RECOVERY_REAPPLY {"firstOk":true,"secondOk":true,"beforeResume":500,"afterResume":500,"planStatus":"success"}
+
+[90mstdout[2m | tests/review-final-boundaries.test.ts[2m > [22m[2ma live old executor cannot overwrite the takeover executor completed result
+[22m[39mREVIEW_STALE_WRITER {"takeoverStatus":"success","finalStatus":"success","nodeStatus":"success","budgets":1}
+
+ [32m✓[39m tests/review-final-boundaries.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 482[2mms[22m[39m
+ [32m✓[39m tests/unit/security/mfa-audit.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 239[2mms[22m[39m
+[90mstdout[2m | tests/review-recovery-probes.test.ts[2m > [22m[2mresume recovers an already-executed gated node after its plan callback fails
+[22m[39mREVIEW_EXECUTED_NODE_RECOVERY {"responseOk":true,"responseStatus":"executed","actionStatus":"executed","firstResume":"success","repeatConfirmOk":false,"secondResume":"success","cards":1,"budgets":1}
+
+[90mstdout[2m | tests/review-recovery-probes.test.ts[2m > [22m[2mresume can recover a persisted executor claim whose owner died long ago
+[22m[39mREVIEW_STALE_EXECUTOR_CLAIM {"status":"success","token":null,"claimedAt":null,"budgets":1}
+
+ [32m✓[39m tests/review-recovery-probes.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 377[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/prisma-cli-env.test.ts [2m([22m[2m10 tests[22m[2m)[22m[90m 3[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/execution-receipt.test.ts [2m([22m[2m9 tests[22m[2m)[22m[90m 3[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker-reset.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 349[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/ledger-keys.test.ts [2m([22m[2m11 tests[22m[2m)[22m[90m 2[2mms[22m[39m
+ [32m✓[39m tests/deploy-db-push.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 11079[2mms[22m[39m
+   [33m[2m✓[22m[39m scripts/db-push.ts — cold deploy under RUST_LOG=warn[2m > [22mself-provisions a MISSING isolated SQLite file and exits 0 [33m11078[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m95 passed[39m[22m[90m (95)[39m
+[2m      Tests [22m [1m[32m642 passed[39m[22m[90m (642)[39m
+[2m   Start at [22m 16:04:54
+[2m   Duration [22m 90.24s[2m (transform 961ms, setup 7.85s, collect 22.19s, tests 46.86s, environment 10ms, prepare 3.91s)[22m
+
+VITEST_EXIT=0
