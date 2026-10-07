@@ -83,8 +83,10 @@ re-exports each function and its types.
   defaulting, and the never-throw-on-write contract (a throwing store still resolves).
 - Strict mode is exercised by stubbing `auditStore.insertAuditLog` to throw: `strict: true` rethrows
   the ORIGINAL error, EXCEPT a P2002 unique violation whose `dedupeKey` row is found by the
-  back-read on the same client (idempotent no-op); a `dedupeKey`-less or non-P2002 failure always
-  rejects.
+  back-read on the same client AND matches the session/tool/risk/decision/business result identity
+  (idempotent no-op). Transfer results compare the original transaction id, amount and counterparty;
+  narration and unavailable legacy balance/phone fields do not change business identity. A conflicting
+  duplicate, a `dedupeKey`-less failure or a non-P2002 failure rejects.
 - `getSecurityStatus` is tested with an injected `isLocked` callback (authoritative) and without
   it (event-derived fallback).
 - Scenario coverage lives in the `../tests/` integration suite (faux provider) — audit assertions

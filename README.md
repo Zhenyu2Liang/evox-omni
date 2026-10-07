@@ -210,7 +210,7 @@ agent.beforeToolCall ──► securityGateway.handleToolCall(ctx)
 8. **已执行节点恢复**（`agent/confirmation.ts`）：恢复计划时，若被闸门节点的关联 `PendingAction` 已是
    `executed`（副作用已入账、只是节点结果尚未回写），`recoverExecutedPlanAction` 直接**读取 `PendingAction.resultJson` 中已持久化的原始结果回填**该节点 `success` 并继续后续节点，**绝不重新调用工具、不重新请求确认、不重复副作用**（`executeAuthorizedAction` 执行时已在**同一个事务**内把原始结果与终态动作状态一起写入）。
    恢复对**所有受闸门的写工具通用且幂等**；`confirmed` 但已存结果的动作用一次 CAS（`confirmed` → `readStoredResult(existing)?.ok===true ? 'executed' : 'failed'`，经 `claimPendingAction({actionId, from:['confirmed'], to:<target>})`）+ 同样回填即完成（`ok:false` 时动作 / 节点 / 计划一并收敛为 `failed`），不重跑、也不伪造回滚；`executed` 但**无**已存结果的遗留行同样**不重新调用工具**，而是以「已执行但未留存结果，需人工核对」明确收敛。
-   当 SDK 副作用已提交、但「结果 + 终态动作状态」的那次 `$transaction` **回滚**时（`resultJson=null` 卡在 `confirmed`），该动作被**最终判定为 `failed` 并路由到显式人工核对**（消息含 `人工核对`），工具绝不重调、计划也不会停在 `waiting_confirmation`；真正的楔子（无存活续跑）与**仍被存活续跑持有**的 `confirmed`+`null` 行由**进程内、参考计数** `liveConfirmations` 登记表（`agent/confirmation-recovery.ts`）区分（见 `agent/confirmation.ts#executeGatedToolOnce`）。
+   SDK 副作用已提交而结果状态落库失败时，正常确认与恢复先核对持久化回执和流水。成功事实保持 `executed`；无法核实的动作进入 `needs_reconciliation`，不盲目重放。有效租约及进程内引用计数只用于暂缓仍在执行的操作。
    `pending` / `awaiting_mfa` 仍等待真实人工确认。
    **统一结算分类器 + 执行租约**：`agent/confirmation-recovery.ts#classifyConfirmedAction(row, nowMs)` 把一个 `confirmed` 行映射为 `settled | processing | recoverable | needs_reconciliation`；结算统一经 `settlePendingAction` / `settleFromCommittedReceipt` 在**同一个 `$transaction`** 内落地「结果 + 终态动作状态 + 审计」。持久化 **执行租约**（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`，`EXECUTION_LEASE_TTL_MS = 120000`）**只对 `pending` / `awaiting_mfa` 取**（经 `beginExecutionLease`，绝不对 `confirmed` 取），因此被存活续跑持有的 `confirmed` 行被识别为 `processing`，不会被误判为楔子。
    独立（非计划）楔子另有一条**显式人工入口** `recoverAction`（`agent/index.ts`）：`POST /api/actions/[id]/recover` 对独立动作按需重放已证幂等的 `transfer_money` 或转入可查询的 `needs_reconciliation`，对计划关联动作则恢复其所属计划。
@@ -455,7 +455,7 @@ npm run build         # 生产构建（页面在构建期预渲染，必须先�
 
 ### 15.3 测试分层 / Test layers
 
-测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）。当前仓库含 **101** 个测试文件 / **665** 条测试（前三层）：
+测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）。当前仓库含 **103** 个测试文件 / **685** 条测试（前三层）：
 
 1. **纯单元测试（pure unit）** — `tests/unit/`：`security`（权限策略表、转账阈值、网关 decide、注入检测、熔断、MFA、风控）、`planner`（DAG 校验 / 拓扑序 / 成环 / 条件）、`banking-sdk`（资金不变量等）；无网络、无真实 LLM。
 2. **faux-LLM 场景集成测试（scenario）** — `tests/scenarios/test-01…test-12`：用脚本化模型（`LLM_MODE=mock` + 隔离的测试 SQLite `prisma/test.db`）驱动 **完整流水线**，逐个覆盖 12 个验收场景。
@@ -490,7 +490,7 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 
 **为什么会出现"楔子（wedge）"：** 动钱工具的 SDK 副作用（扣款 + 账本 `Transaction`）在**一个 `$transaction`** 内提交，而「写入执行结果 + 终态动作状态 + 审计」是**另一次 `$transaction`**。若后者回滚（或进程在两次之间死亡），就会出现**副作用已落账、`PendingAction` 却停在 `confirmed` 且 `resultJson=null`** 的行 —— 它既不是待决策的 `pending`，也还不是 `executed`。
 
-**提交事实优先的结算（receipt-first）：** `banking-sdk/transfer.ts` 在**一个 `prisma.$transaction`** 内写入「扣款 + 账本 `Transaction` + `ExecutionReceipt`」，因此恢复**永远先查已提交凭据**（`replayCommitted(userId, key, digest)`）：**同身份 + 同 `requestDigest`** ⇒ 返回**原始结果**（不重放副作用）；**同身份 + 异 digest** ⇒ `AppError('CONFLICT', 'same execution identity, different request')`；**没有凭据的遗留确定性流水行**同被识别为**已入账**。
+**提交事实优先的结算（receipt-first）：** `banking-sdk/transfer.ts` 在**一个 `prisma.$transaction`** 内写入「扣款 + 账本 `Transaction` + `ExecutionReceipt`」，因此恢复**永远先查已提交凭据**（`getCommittedTransfer(input)`）：**同身份 + 同 `requestDigest`** ⇒ 返回**原始结果**（不重放副作用）；**同身份 + 异 digest** ⇒ `AppError('CONFLICT', 'same execution identity, different request')`；**没有凭据的遗留确定性流水行**同被识别为**已入账**。
 
 **统一的证据式收敛（unified convergence）：** `agent/execution-convergence.ts#decideConvergence(action, opts?)` 是 **独立 / 计划关联 / 确认·验证 / 异常 / 恢复** 各路径共用的**唯一**判定，且 **凭据优先（receipt-first）**：已提交的 `ExecutionReceipt`（+ 其账本行，计划身份 `nxe:<taskId>:<nodeId>`）⇒ `executed` 并**复用原始结果、绝不重跑**；存在存活执行租约 / 进程内标记 ⇒ 保持 `processing`；**只有在能证明「确实无副作用」时才** `failed`；其余未知 ⇒ 可人工核对的终态（独立楔子 → 可查询的 `needs_reconciliation`；计划关联楔子 → 带「需人工核对、绝不重跑」消息的终态）。它**绝不**因 `resultJson` 缺失、进程内标记丢失或被捕获的异常而**推断失败**；对**已取消**的计划，已入账动作的状态可被更正，但**不会因此恢复该计划**。结算统一经 `settlePendingAction` / `settleFromCommittedReceipt`（结果 + 终态状态 + 审计在同一 `$transaction` 内落地，见 §9）。只读面的**建议处置** `attention`（`decision | processing | recoverable | reconciliation`）仍由 `agent/confirmation-recovery.ts#classifyConfirmedAction(row, nowMs)` 从**持久化状态**给出（不重跑任何工具）—— `transfer_money`（`RECOVERABLE_STANDALONE_TOOLS` 中**唯一**已证独立幂等的工具）可被**重放并落真实结果**；**其他独立写工具**的楔子转入**可查询**的 `needs_reconciliation`（**绝不**盲目重放 / 伪造失败 / 回滚）。
 
@@ -531,7 +531,7 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 - **执行接管已实现 fencing token（【已实现】✅ 代码强制）；TTL 仍是启发式。** `resume` / `retry` 仅在 `executionClaimedAt` 陈旧（TTL）或所有者长时间阻塞（未续租约）时接管 `executionToken`：仍在推进的执行者通过**节点边界租约续期**（`renewTaskExecutionClaim`）保持 claim 新鲜，而被接管的旧执行者的写入经**带 token 条件的原子写入原语**（`updateTaskNode` / `claimTaskStatus` 的 `fenceToken`；claim 丢失即被拒）**被拒绝**，无法覆盖接管者的结果。Fencing 覆盖**每个执行者路径**（初次 `submit_plan` 执行、依赖跳过与条件/说明节点、确认续跑）：所有权在与写入**同一条 SQL 的原子 CAS** 中断言；确认续跑若**丢失**计划 claim 则不推进计划，而经带 fence 的无主 CAS（`agent/task-fencing.ts#recordDecidedNodeFenced`）落库人工决策节点。TTL（`EXECUTION_CLAIM_TTL_MS = 600000ms`）仍是**启发式**阈值，并非已证得的活性判据——**单次工具调用阻塞超过 TTL 的所有者仍可被接管**，只是其写入会失败。**首次 `submit_plan` 执行与 `resume` / `retry` / 确认续跑统一经同一套原子节点认领端口**（`agent/tools/planning.ts#runSubmitPlan` → `buildNodeClaimPorts` / `claimNodeOwnedByPlan`）：接管者赢得计划 claim 后会清理僵尸的非终态节点 claim（`agent/task-control.ts#clearStaleNodeClaims`）以便重新认领，而僵尸随后的认领 / 写入与任何迟到工具调用都被拒绝、迟到进度被抑制。
 - **schema engine 冷启动报错的根因已定位并修复（【已实现】✅ 代码强制）。** 在全新 SQLite 文件上，环境中 `RUST_LOG` 达到/高于 `warn` 会压掉 Prisma schema-engine 的 INFO 横幅；Prisma 的错误映射会丢弃第 0 行输出，于是真正的（第 1 行）错误也被丢弃，只剩下**空内容的 `Error: Schema engine error:`**，并连带毁掉「库不存在（`P1003`）」这一探测结果，使冷启动 `db push` 失败。修复方式是为 schema-engine 子进程**固定 `RUST_LOG=info`**（`lib/prisma-cli-env.ts#pinSchemaEngineLogging`，经 `tests/helpers/prisma-cli.ts` 再导出），因此**默认的 `npx vitest run` 与默认浏览器 E2E 均可自动 provision 隔离库**——无需手动准备、无需跳过开关、无需预写标记。
 - **计划级所有权 fencing 覆盖节点 claim 与写入（【已实现】✅ 代码强制）。** 丢失计划执行 claim 的执行者**停止推进**：无法再 claim / 覆盖已完成节点、无法运行后继工具、无法发布迟到的 `onPlanUpdate`、也不会返回误导性结果——`agent/task-control.ts` 的 `claimNodeOwnedByPlan` 用**单条 `prisma.agentTaskNode.updateMany` 原子 CAS** 同时要求 `task:{executionToken:planToken}`（计划所有权）**且** `status:{notIn:TERMINAL_NODE_STATUSES}`（拒绝 `success`/`failed`/`skipped`/`cancelled` 终态节点），`planExecutionClaimHeld` 则为发布闸门；`agent/tools/planning.ts` 的 `onPlanUpdate` 以 `planExecutionClaimHeld` 为门槛。
-- **「已落账但结果事务回滚」的楔子被显式收敛（【已实现】✅ 代码强制）。** 当 SDK 副作用已提交、但「结果 + 终态动作状态」的 `$transaction` 回滚时，动作会卡在 `confirmed` 且 `resultJson=null`；现在它被**最终判定为 `failed` 并路由到显式人工核对**（消息含 `人工核对`），工具**绝不重新调用**、不伪造回滚、计划也不会停在 `waiting_confirmation`。区分依据是新增的**进程内、参考计数** `liveConfirmations` 登记表（`agent/confirmation-recovery.ts`，与 `inFlightExecutions` 同款）：真正的楔子（无存活续跑）才终结为 `failed`，而仍被**存活续跑持有**的 `confirmed`+`null` 行只是**重新停靠、不写库**（`agent/confirmation.ts#executeGatedToolOnce`）。因其为**计数**而非 `Set`，被拒绝的**重复确认**不会误清仍在运行的原请求标记（标记仅在计数归零时移除），故在途人工决策绝不会被误判为 `failed`。
+- **已提交事实优先收敛。** 正常确认、MFA 与恢复均先核对回执及流水；匹配的历史流水也证明已入账。成功事实收敛为 `executed`，计划未知结果收敛为 `needs_reconciliation` 并停止后续执行；缺少结果不等于业务失败。
 - **持久化 `ok:false` 的结果以 `failed` 收敛（【已实现】✅ 代码强制）。** 在「`confirmed` 且已存结果」分支，CAS 目标改为 `readStoredResult(existing)?.ok===true ? 'executed' : 'failed'`（经 `claimPendingAction({actionId, from:['confirmed'], to:<target>})`），随后 `recoverExecutedPlanAction` 回填；`ok:false` 时动作、节点、计划**一并收敛为 `failed`**。
 - **独立（非计划）操作的楔子以「提交事实优先（receipt-first）」结算，或转入人工核对（【已实现】✅ 代码强制）。** 没有 `taskId`/`nodeId` 的独立动作若卡在 `confirmed` 且无持久化结果（副作用已提交但结果事务回滚，或进程死亡），由 `agent/confirmation-recovery.ts#recoverStandaloneWedge` 收束：**先查已提交凭据** —— 若已存在该执行身份的 `ExecutionReceipt`，则由 `settleFromCommittedReceipt` 从**已提交事实**结为 `executed`（**绝不重调工具**）；否则对**已证独立幂等**的 `transfer_money`（`RECOVERABLE_STANDALONE_TOOLS` 中**唯一**成员，同 ledger key）**按幂等键重放并写入真实结果**；**其他任何独立写工具**转入**可查询**的 `needs_reconciliation` 状态（**绝不**盲目重放、伪造失败或回滚）。该结算有**两条入口**：**重复确认 / 验证**（此时网关的 exactly-once CAS 不再匹配 `pending`，返回 `CONFLICT`），以及**刷新可达的 `POST /api/actions/[id]/recover`**（`recoverAction`，`agent/index.ts`）。`needs_reconciliation` 由 `GET /api/actions`（与 `pending`/`awaiting_mfa` 并列）、`/actions` 页面（导航 **待处理操作**）与 `POST /api/actions/[id]/recover` 共同暴露，并在 UI 以人工核对卡片呈现，用户可见、可查询，无需人工改库。
 - **⚠️ 未验证 —— 多实例下「存活续跑」与执行租约不可识别：** `liveConfirmations` 登记表是**进程内、参考计数**状态，执行租约（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`）是**按 DB** 持久化、按 TTL 判活；若那股存活续跑跑在**另一个进程 / 实例**上，本进程无法识别，故**多实例部署未覆盖**。此外，只有 `transfer_money` 被证明在**独立**场景下幂等；其他独立写工具的楔子只能转入 `needs_reconciliation` 转人工，不能自动重放。
@@ -597,3 +597,11 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 - **结算凭据优先（receipt-first）**：终态只从**持久化证据**（`ExecutionReceipt` / 已存结果 / 存活租约）收敛；**绝不**因缺 `resultJson`、丢标记或捕获异常而推断失败，**绝不**重跑已提交的副作用（`agent/execution-convergence.ts#decideConvergence`）。
 - **同身份幂等**：同一执行身份 + 同 `requestDigest` 重放**原始结果**；异请求显式 `CONFLICT`；遗留无凭据流水行仍识别为**已入账**（`banking-sdk/transfer.ts`）。
 - **审计严格且幂等**：执行 / 恢复审计与业务事实**同事务**提交，审计失败即**回滚业务写入**；`dedupeKey` 令重复恢复 / 回填**绝不**重复记账（`audit/audit-logger.ts#recordAudit(..., { strict })`）。
+
+
+### 当前执行与历史数据契约
+
+- 正常确认与恢复共用交易证据核验；成功回执必须匹配请求摘要和实际流水。历史无回执流水逐字段核验，无法核验时进入人工核对。历史姓名来自流水；原始交易后余额无法还原时省略，不能以当前余额代替。
+- 真实 SDK 写入统一进入事务并执行服务端条件写入保护；取消先提交则阻止新写入，业务先提交则保留真实事实。resume/retry 返回最新持久化计划状态。
+- 转账扣款、流水、回执、关键执行审计同事务；审计失败全部回滚。操作结果/终态后续结算，结算失败依靠已提交事实恢复。其他工具的业务写入与状态审计仍分开；未知结果停止并进入人工核对，不能承诺自动恢复。
+- 不改变 schema，不清理开发库；多进程竞争、真实支付通道仍未验证。

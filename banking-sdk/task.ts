@@ -12,6 +12,7 @@
 import type { ScheduledTask } from '@prisma/client';
 import { scheduledTasks } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
+import { runInTransaction } from './tx';
 import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
 import { safeParse, toJson } from '../lib/json';
 import type {
@@ -85,14 +86,14 @@ export async function createScheduledTask(
     return toScheduledTaskView(replayed);
   }
 
-  const row = await scheduledTasks.createScheduledTask({
+  const row = await runInTransaction((tx) => tx.scheduledTask.create({ data: {
     userId: input.userId,
     name: input.name,
     kind: input.kind,
     runAt: new Date(input.runAt),
-    payload: input.payload,
+    payload: input.payload == null ? null : toJson(input.payload),
     requiresConfirmation: input.requiresConfirmation ?? true,
-  });
+  } }));
   return toScheduledTaskView(row);
 }
 
@@ -109,6 +110,6 @@ export async function cancelScheduledTask(id: string): Promise<ScheduledTaskView
     throw new AppError('NOT_FOUND', `计划任务不存在：${id}`, { id });
   }
 
-  const row = await scheduledTasks.updateScheduledTaskStatus(id, 'CANCELLED');
+  const row = await runInTransaction((tx) => tx.scheduledTask.update({ where: { id }, data: { status: 'CANCELLED' } }));
   return toScheduledTaskView(row);
 }

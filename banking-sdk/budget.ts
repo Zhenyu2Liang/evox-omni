@@ -86,7 +86,7 @@ export async function reserveBudget(input: ReserveBudgetInput): Promise<BudgetVi
     return toBudgetView(row);
   }
 
-  const row = await budgets.createBudget(reservationData(input));
+  const row = await runInTransaction((tx) => tx.budget.create({ data: reservationData(input) }));
   return toBudgetView(row);
 }
 
@@ -103,6 +103,6 @@ export async function releaseBudget(id: string): Promise<BudgetView> {
     throw new AppError('NOT_FOUND', `预算不存在：${id}`, { id });
   }
 
-  const row = await budgets.updateBudgetStatus(id, 'RELEASED');
+  const row = await runInTransaction((tx) => tx.budget.update({ where: { id }, data: { status: 'RELEASED' } }));
   return toBudgetView(row);
 }

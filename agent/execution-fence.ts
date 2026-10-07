@@ -11,9 +11,9 @@
  * and it must NOT commit.
  *
  * The Banking SDK executes banking writes and knows nothing about plans/claims/tokens, so the agent
- * layer hands the guarantee to the write boundary as an OPAQUE check carried on the INPUT OBJECT
- * itself (`banking-sdk/fence.ts#attachExecutionFence` — a non-enumerable Symbol property, so it can
- * never be injected through JSON/tool args). The SDK `await`s that check INSIDE its write transaction,
+ * layer hands the guarantee to the write boundary through a trusted invocation context
+ * (`banking-sdk/execution-context.ts`; legacy Symbol input fences remain supported). Neither
+ * mechanism can be injected through JSON/tool args. The SDK awaits the check INSIDE its write transaction,
  * immediately BEFORE the business write, so a check that THROWS rolls the transaction back and NO
  * business row is persisted (see `banking-sdk/budget.ts`, `banking-sdk/idempotent.ts`,
  * `banking-sdk/transfer.ts`).
@@ -28,11 +28,11 @@
  *  - `buildConfirmFence` — the confirm/verify continuation. Its authority is the ACTION's own
  *    effective decision (the gateway already claimed the action exactly-once and its execution lease /
  *    live marker governs the window), NOT the plan's `executionToken` — which a `resumeTaskForAction`
- *    legitimately mints, rotates and releases around the continuation. It therefore asserts only the
- *    one thing that MUST hold: the owning plan was not CANCELLED.
+ *    legitimately mints, rotates and releases around the continuation. It asserts that the action
+ *    is still confirmed and that its owning plan, when present, was not cancelled.
  *
- * Everything here is a READ-ONLY assertion: the fence never writes, never re-invokes a tool and never
- * swallows an error — a fence that cannot prove the write is still authorized THROWS.
+ * The fence uses conditional identity-preserving writes to obtain SQLite's writer slot before
+ * banking mutations. It never re-invokes a tool or swallows an authorization failure.
  */
 import type { Prisma } from '@prisma/client';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
@@ -73,16 +73,14 @@ function fenceConflict(reason: string, details: Record<string, unknown>): AppErr
 /**
  * Whether an optional id identifies a real row. The Prisma columns behind a plan link are NULLABLE,
  * so a STANDALONE action yields `null` (never `undefined`); mirror `lib/ledger.ts#ledgerKeyForAction`'s
- * "non-null and non-empty after trimming" rule so a fence is built EXACTLY when the action is
- * plan-linked — never on a standalone action (which would query `getTask(null)`).
+ * "non-null and non-empty after trimming" rule so standalone actions never query a null plan id.
  */
 function isUsableId(id: string | null | undefined): id is string {
   return typeof id === 'string' && id.trim().length > 0;
 }
 
 /**
- * THE CHECK: re-read the plan + node **on the caller's transaction client** (so the assertion joins the
- * very transaction that is about to write) and throw when the captured execution right no longer holds.
+ * Atomically verify plan/node identity on the business transaction's client before any mutation.
  */
 async function assertPlanNodeUnchanged(
   client: Prisma.TransactionClient,
@@ -90,33 +88,19 @@ async function assertPlanNodeUnchanged(
   nodeId: string,
   captured: CapturedPlanIdentity,
 ): Promise<void> {
-  const plan = await client.agentTask.findUnique({ where: { id: taskId } });
-  if (plan === null) throw fenceConflict('计划不存在', { taskId, nodeId });
-  if (plan.executionToken !== captured.planToken) {
-    throw fenceConflict('计划执行权已被接管', { taskId, nodeId, captured: captured.planToken });
-  }
-  if (plan.generation !== captured.generation) {
-    throw fenceConflict('计划执行代际已变更', { taskId, nodeId, captured: captured.generation });
-  }
-  if (plan.status === 'cancelled') throw fenceConflict('计划已取消', { taskId, nodeId });
-  if (!WRITABLE_PLAN_STATUSES.has(plan.status)) {
-    throw fenceConflict(`计划状态不允许写入：${plan.status}`, { taskId, nodeId, planStatus: plan.status });
-  }
-
-  const node = await client.agentTaskNode.findFirst({
-    where: { taskId, nodeId },
-    orderBy: { order: 'asc' },
+  // Conditional FIRST WRITE obtains SQLite's writer slot. A concurrent cancel/takeover either
+  // commits first (this CAS fails) or waits until this business transaction commits.
+  const plan = await client.agentTask.updateMany({
+    where: { id: taskId, executionToken: captured.planToken, generation: captured.generation,
+      status: { in: [...WRITABLE_PLAN_STATUSES] } },
+    data: { generation: { increment: 0 } },
   });
-  if (node === null) throw fenceConflict(`计划节点不存在：${nodeId}`, { taskId, nodeId });
-  // A captured NULL node token means this pass holds no distinguishable node claim, so there is
-  // nothing to compare — the plan token / status assertions above remain the authority. A NON-null
-  // captured token that has been replaced (released then re-claimed by a takeover) is a rotation.
-  if (captured.nodeToken !== null && node.executionToken !== captured.nodeToken) {
-    throw fenceConflict('节点执行权已被接管', { taskId, nodeId, captured: captured.nodeToken });
-  }
-  if (!WRITABLE_NODE_STATUSES.has(node.status)) {
-    throw fenceConflict(`节点状态不允许写入：${node.status}`, { taskId, nodeId, nodeStatus: node.status });
-  }
+  if (plan.count !== 1) throw fenceConflict('计划执行权已被接管、取消或暂停', { taskId, nodeId });
+  const node = await client.agentTaskNode.updateMany({
+    where: { taskId, nodeId, executionToken: captured.nodeToken, status: { in: [...WRITABLE_NODE_STATUSES] } },
+    data: { executionToken: captured.nodeToken },
+  });
+  if (node.count !== 1) throw fenceConflict('节点执行权已失效', { taskId, nodeId });
 }
 
 /**
@@ -158,23 +142,31 @@ export async function buildPlanNodeFence(
  * The continuation's authority is the ACTION's own exactly-once gateway claim plus its execution
  * lease / live marker (`confirmation-recovery.ts`) — NOT the plan's `executionToken`, which
  * `resumeTaskForAction` legitimately mints/rotates/releases around the continuation and which may
- * therefore differ from any token captured earlier. The ONE fact that must hold is that the owning
- * plan was not CANCELLED while the blocked write was in flight; a cancelled plan's write must not
- * commit.
+ * therefore differ from any token captured earlier. The action must remain confirmed and the owning
+ * plan must not be cancelled while the blocked write is in flight. These conditional writes take
+ * the database writer slot before the business mutation.
  *
- * Returns `undefined` when the action has NO usable plan link (a standalone action has no plan to
- * fence on) or when the owning plan row is unreadable.
+ * Standalone actions are fenced by action id. Returns undefined only when neither an action id
+ * nor a usable plan id is supplied; missing rows fail closed inside the transaction.
  */
 export async function buildConfirmFence(
   taskId: string | null | undefined,
   nodeId: string | null | undefined,
+  actionId?: string,
 ): Promise<ExecutionFenceCheck | undefined> {
-  if (!isUsableId(taskId)) return undefined;
-  const plan = await getTask(taskId);
-  if (plan === null) return undefined;
+  if (!isUsableId(taskId) && actionId === undefined) return undefined;
   return async (client: Prisma.TransactionClient): Promise<void> => {
-    const current = await client.agentTask.findUnique({ where: { id: taskId } });
-    if (current === null) throw fenceConflict('计划不存在', { taskId, nodeId });
-    if (current.status === 'cancelled') throw fenceConflict('计划已取消', { taskId, nodeId });
+    if (actionId !== undefined) {
+      const action = await client.pendingAction.updateMany({
+        where: { id: actionId, status: 'confirmed' }, data: { status: 'confirmed' },
+      });
+      if (action.count !== 1) throw fenceConflict('操作已不再处于授权执行状态', { actionId });
+    }
+    if (isUsableId(taskId)) {
+      const plan = await client.agentTask.updateMany({
+        where: { id: taskId, status: { not: 'cancelled' } }, data: { generation: { increment: 0 } },
+      });
+      if (plan.count !== 1) throw fenceConflict('计划已取消或不存在', { taskId, nodeId });
+    }
   };
 }

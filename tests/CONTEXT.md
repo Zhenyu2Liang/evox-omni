@@ -245,6 +245,20 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 - `../lib/prisma-cli-env.ts` → NON-TEST shared schema-engine env policy + CLI/binary resolution, imported by the test entry points AND the deploy script `scripts/db-push.ts` (sibling — re-exported by `./helpers/prisma-cli.ts`)
 - `../prisma/schema.prisma` → SQLite schema the test DB is pushed from (sibling — read-only)
 
+## Current transaction-boundary regressions
+
+- `./review-unclosed-boundaries.test.ts` — four unchanged reviewer probes: post-commit SDK exception,
+  pre-receipt ledger recovery, cancellation before a card-limit write, and required-audit rollback.
+  Baseline `c1d2b55`: 0/4 pass; repaired branch: 4/4 pass.
+- `./repair-sdk-boundaries.test.ts` — 16 additional cases: all 12 mutating tools reach the trusted
+  transaction fence; legacy request matching; executed historical audit repair; inconsistent receipts
+  enter reconciliation; strict audit deduplication rejects a different business outcome.
+- Verified full suite: 103 files / 685 tests, zero failed or skipped. Browser acceptance is separate:
+  six journeys in `e2e/acceptance.e2e.ts`.
+- Transfer execution audits now commit with the debit, ledger and receipt. Audit-failure expectations
+  require zero debit/receipt and an unchanged balance. Legacy replay never invents an original balance
+  or replaces the recorded historical recipient name with today's contact name.
+
 ## Notes for Agents
 
 - **Clean-env bootstrap.** `package.json` has no `postinstall` hook and `prisma generate` is a separate

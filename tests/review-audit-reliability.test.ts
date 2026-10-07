@@ -9,9 +9,8 @@
  * RELIABLE:
  *
  *  (1) CRITICAL-FAILURE → ROLLBACK — if the execution audit insert throws, the settle rolls back
- *      ATOMICALLY (the row must NOT be finalized `executed`/`failed` without its audit), while the
- *      SDK side effect that committed BEFORE the settle stays committed EXACTLY ONCE. A later
- *      recovery re-settles it and backfills the missing audit — without a second debit.
+ *      ATOMICALLY with the debit, ledger and receipt. The authorized action stays recoverable;
+ *      later recovery performs its first committed debit and audit exactly once.
  *  (2) BACKFILL — a HISTORICAL row whose side effect posted but whose execution audit is missing
  *      (a legacy/pre-upgrade row) is BACKFILLED on recovery: the recover path re-writes the audit
  *      from the committed receipt, lands `executed` (NEVER `failed`) and a REPEAT recovery adds no
@@ -113,7 +112,7 @@ const receiptCount = (id: string) =>
 const checkingBalance = async () =>
   (await getTestPrisma().account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
 
-it('a CRITICAL execution-audit insert failure ROLLS BACK the atomic settle (SDK side effect still commits exactly once)', async () => {
+it('a CRITICAL execution-audit insert failure rolls back the debit, ledger and receipt before recovery', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
   const id = await parkTransfer(s, 200);
@@ -131,11 +130,12 @@ it('a CRITICAL execution-audit insert failure ROLLS BACK the atomic settle (SDK 
   expect(wedged.status).toBe('confirmed');
   expect(wedged.resultJson).toBeNull();
 
-  // …while the SDK side effect that committed BEFORE the settle stays committed EXACTLY ONCE.
-  expect(await debitRows(200)).toBe(1);
-  expect(await checkingBalance()).toBe(CHECKING_BALANCE - 200);
-  expect(await receiptCount(id)).toBe(1);
-  expect(await executionAudits(id)).toBe(0); // the audit insert was rolled back with the settle
+  // The required audit now shares the banking transaction. This strengthens the former contract:
+  // an audit-storage failure must leave ZERO business writes, not a posted-but-unaudited transfer.
+  expect(await debitRows(200)).toBe(0);
+  expect(await checkingBalance()).toBe(CHECKING_BALANCE);
+  expect(await receiptCount(id)).toBe(0);
+  expect(await executionAudits(id)).toBe(0);
 
   // Restore the real audit write and RECOVER: the settle lands, and the audit is backfilled.
   fault.spy.mockRestore();
@@ -151,7 +151,7 @@ it('a CRITICAL execution-audit insert failure ROLLS BACK the atomic settle (SDK 
       firstHttp: first.status,
       wedgedStatus: wedged.status,
       wedgedResultNull: wedged.resultJson === null,
-      receiptAfterFault: 1,
+      receiptAfterFault: 0,
       auditsAfterFault: 0,
       recoveryOk: recovered.body.data?.ok,
       recoveredStatus: after.status,
@@ -192,7 +192,9 @@ it('a HISTORICAL already-posted but missing-audit row is idempotently BACKFILLED
   // Simulate a LEGACY/pre-upgrade row whose side effect posted without an audit: ensure the
   // execution audit is genuinely absent before recovery.
   const deleted = await p.auditLog.deleteMany({ where: { dedupeKey: `exec:${id}` } });
-  expect(deleted.count).toBe(0); // the rolled-back settle never wrote one — the state IS "missing audit"
+  // The audit now committed with the debit before the status-write fault. Remove that audit only
+  // to model a genuine pre-upgrade posted record with a missing audit, preserving the backfill test.
+  expect(deleted.count).toBe(1);
   expect(await executionAudits(id)).toBe(0);
 
   // RECOVERY backfills the missing execution audit from the committed receipt.

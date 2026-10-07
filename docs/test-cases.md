@@ -31,12 +31,13 @@
 > 详见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
 ### 当前实测状态 · Measured State
-- **`npx vitest run`** → **101 个文件 / 665 个测试全部通过**。
+- **`npx vitest run`** → **103 个文件 / 685 个测试全部通过**。
 - **`npx tsc --noEmit`** → **0 错误**（Vitest 只转译、不做类型检查，故类型门禁单列）。
 - **`npx next build`** → **退出码 0**。
-- **真实浏览器验收**（`npx tsx tests/e2e/acceptance.e2e.ts`，隔离库 `prisma/e2e.db`）→ **PASS 5 / FAIL 0 / SKIP 0**：
+- **真实浏览器验收**（`npx tsx tests/e2e/acceptance.e2e.ts`，隔离库 `prisma/e2e.db`）→ **PASS 6 / FAIL 0 / SKIP 0**：
   含**真实**的「暂停 → 继续」journey（harness 真的点「暂停」再点「继续」）与「取消」journey
   （会尝试**旧的**确认入口：过期确认被服务端拒绝，且钱不动）。
+  第六个旅程从 `/actions` 刷新入口发现已入账的待恢复操作，点击恢复后核对只扣款一次、状态与执行审计一致。
 
 ### 回归关注面 · Regression Categories
 
@@ -241,14 +242,14 @@ handler 与会话、读取 SSE 分帧。
 | `tests/review-committed-side-effect.test.ts` | 复核**已提交副作用楔子**：侧效应（SDK 写入）已**提交**、结果+状态事务**回滚**（行滞留 `confirmed`、`resultJson=null`）时，按**持久化证据**收敛而非臆断——**计划节点**与**独立动作**两种形态落在**同一**真相上，且账本 / 已提交回执 `ExecutionReceipt` / `PendingAction` / 计划节点状态**互相一致**；**未证明幂等**的工具（如 `apply_virtual_card`）收敛到显式、可查询的 `needs_reconciliation`（**不**重跑、**不**伪造 `failed`/`executed`、无第二个副作用）并经 `GET /api/actions` **呈现** |
 | `tests/review-idempotent-replay.test.ts` | 复核**幂等重放**（4 例）：同键 + 同请求的**串行**/**并发**调用从**已提交事实**重放、收敛到同一账本行/回执、恰好一次扣款（**不**重新解析可变收款人）；同键 + **不同**请求并发 → 败者 `CONFLICT`，赢家的收款人/金额与其持久化账本行**一致**（**绝不**返回矛盾的收款人）；重放返回**原始**提交快照（`transactionId` === 账本行 id） |
 | `tests/review-takeover-barriers.test.ts` | 复核**接管 × 取消/暂停屏障**（6 例，真实屏障置于六个接管/决策点）：节点领取处接管（旧执行者零工具、零迟到进度）、写入前接管（**围栏**掉的僵尸写入至多一次、无重复）、**取消优先**（被阻塞的 SDK 写入在任何副作用提交前被围栏，零行）、**业务先提交**（取消**保留**已提交副作用、不回滚不重跑）、**暂停后确认**（执行人工决定但计划**不推进**，随后 `resume` 完成）、**并发接管**（恰好一个赢家，副作用节点恰好运行一次） |
-| `tests/review-audit-reliability.test.ts` | 复核**执行/恢复审计可靠性**（3 例）：执行审计插入失败**原子回滚**该 settle（**不**在缺审计时终结终态），而此前已提交的 SDK 副作用仍**恰好一次**；随后恢复重新结算并**回填**缺失审计；历史「已入账但缺审计」行在恢复时**回填**并落 `executed`（**绝不** `failed`）；连续两次恢复**恰好一条**执行审计、**恰好一次**扣款（**永不**降级） |
+| `tests/review-audit-reliability.test.ts` | 关键执行审计失败同时回滚扣款、流水及回执；恢复后首次提交资金与审计恰一次；历史缺审计幂等回填 |
 | `tests/review-restart-independence.test.ts` | 复核**重启独立性**：恢复正确性只依赖**持久化**数据（`PendingAction` 状态 + `resultJson`、已提交回执、账本），**不**依赖进程内活性/租约登记表——用 `vi.resetModules()` 清空模块图（新登记表 `liveCount===0`）后经**全新导入**的 route handler 驱动恢复，落在**真实、恰好一次**的终态；跨模块重置的重复恢复幂等（无第二次扣款、无第二条执行审计） |
 | `tests/review-unified-boundaries.test.ts` | 复核**统一执行边界**（4 例）：计划已入账转账从**已提交回执**恢复为 `executed`（而非终结 `failed`）+ 节点 `success`；瞬时执行审计插入失败**不**使已结算转账永久无审计搁浅；同执行键 + **不同**请求并发 → `CONFLICT`（**永不**返回错误收款人）；已接管后**取消**的计划在其被阻塞的 **SDK 写入**提交前将其**围栏**（零预算行） |
 | `tests/deploy-db-push.test.ts` | 复核**部署入口**（1 例）：以环境 `RUST_LOG=warn` 经 `tsx` 驱动**真实** `scripts/db-push.ts`，缺失的隔离 SQLite 库**自举成功**、退出码 0，且共享 `dev/test/e2e.db` 逐字节不变（隔离 `DATABASE_URL` 被遵守） |
 
 > `review-final-boundaries`、`review-recovery-probes` 与 `review-followup-integrity` 是**冻结回归守卫（frozen）**，锁定恢复不变式：(a) 恢复通过**回填持久化的 `PendingAction.resultJson`** 完成、**绝不**再次调用工具；(b) 接管写入受**令牌围栏（token-fenced）**保护——僵尸执行器**无法**覆盖接管方已写入的结果；(c) **初始** `submit_plan` 执行者丢失计划领取后**不会启动任何后继工具**、**重复** confirm 不得清除**首个活跃**续跑的活性标记、**独立**楔子动作**恢复或可见地进入人工核对**。`review-current-boundaries` / `review-execution-integrity` / `review-execution-fencing` 与 `tests/app/confirm-continuation-fencing` 按**不变式分组**补充当前边界、执行完整性、围栏覆盖，以及**初始执行者围栏**（`tests/review-initial-executor-fencing.test.ts`）、**人工确认活性标记生命周期**（`tests/review-confirmation-marker-lifecycle.test.ts`）、**独立动作恢复**（`tests/review-standalone-recovery.test.ts`）、**过期执行者**（`tests/review-obsolete-executor.test.ts`）、**结果恢复**（`tests/review-result-recovery.test.ts`）、**下一代边界**（`tests/review-next-boundaries.test.ts`）、**统一证据收敛**（`tests/review-unified-boundaries.test.ts`、`tests/review-committed-side-effect.test.ts`、`tests/review-confirmation-marker-lifecycle.test.ts`）、**事务事实优先 + 幂等重放**（`tests/review-idempotent-replay.test.ts`）、**执行权写围栏**（`tests/review-takeover-barriers.test.ts`）、**审计可靠性**（`tests/review-audit-reliability.test.ts`）、**重启独立性**（`tests/review-restart-independence.test.ts`）与**部署入口**（`tests/deploy-db-push.test.ts`）。
 
-> **当前态的统一机制（上述规格共同锁定）**：(1) **统一证据收敛** `agent/execution-convergence.ts#decideConvergence`——已提交 `ExecutionReceipt` → `executed`（**复用**原始结果、**绝不**重跑），有活跃活性标记/租约 → `processing`，有持久化结果 → `executed`/`failed`，无证据 → 计划节点终态 `failed`（冻结消息 `PLAN_LINKED_UNRECONCILED_ERROR`，含 `人工核对`）/ 独立动作转交 `recoverStandaloneWedge`；**绝不**由缺失的 `resultJson`、丢失的标记或被捕获的异常推断失败。(2) **事务事实优先结算** `banking-sdk/transfer.ts`——借方 + 账本 `Transaction` + `ExecutionReceipt` 写入**同一个** `prisma.$transaction`；重放时在**事务内**校验 `requestDigest`（同键同请求 → 原始结果；异请求 / 无回执 → `CONFLICT`）。(3) **执行权写围栏** `banking-sdk/fence.ts` + `agent/execution-fence.ts#buildPlanNodeFence`/`buildConfirmFence`——在**写入事务内**重读持久化的计划/节点 `executionToken`/`generation`/状态，令牌轮换 / 取消 / generation 变更即抛 `CONFLICT`（**取消优先**阻断旧执行者写入，**业务先提交**则保留事实）。(4) **可靠、键控审计** `audit/audit-logger.ts#recordAudit(entry,{client,dedupeKey,strict})`——`strict` 模式对**真实**插入错误**重新抛出**（仅吸收**已核实**的 P2002 重复），使业务写入与其执行审计在**同一** `$transaction` 内提交。
+> 当前机制：正常确认与恢复先核验回执及历史流水；未知动作进入 needs_reconciliation。所有实际 SDK 写入经可信事务上下文与条件写入保护。转账关键审计和扣款、流水、回执同事务；其他工具业务与状态审计仍分开，未知结果停止并交人工核对。
 
 ---
 
@@ -256,7 +257,7 @@ handler 与会话、读取 SSE 分帧。
 
 **独立于 Vitest**：位于 `tests/e2e/`，用 `tsx` 显式运行（`npx tsx tests/e2e/acceptance.e2e.ts`）；文件以
 `.e2e.ts` 结尾，`npm run test` **永不**收集它，且仓库**没有** `test:e2e` 脚本。
-它在**隔离的 E2E 库 `prisma/e2e.db`** 上运行（harness 自建 + 自 seed，绝不触碰 `prisma/dev.db`）；当前实测 **PASS 5 / FAIL 0 / SKIP 0**。
+它在**隔离的 E2E 库 `prisma/e2e.db`** 上运行（harness 自建 + 自 seed，绝不触碰 `prisma/dev.db`）；当前实测 **PASS 6 / FAIL 0 / SKIP 0**。
 
 **默认命令自举（clean checkout 可直接跑）**：`npx tsx tests/e2e/acceptance.e2e.ts` 在重建隔离库**之前**
 自动确保 Prisma Client **可用**——与 Vitest 共用 `tests/helpers/prisma-cli.ts`（E2E 经 `tests/e2e/helpers.ts` 的 `resetDemoDatabaseOnce`），

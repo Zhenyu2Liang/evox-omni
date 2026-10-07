@@ -84,7 +84,7 @@ async function transitionTo(
       to: next,
     });
   }
-  return cards.updateCardStatus(row.id, next);
+  return runInTransaction((tx) => tx.card.update({ where: { id: row.id }, data: { status: next } }));
 }
 
 /** All cards owned by the user (with per-category limits). */
@@ -153,7 +153,7 @@ export async function reportLostCard(
       reason,
     });
   }
-  const updated = await cards.updateCardStatus(row.id, 'LOST');
+  const updated = await runInTransaction((tx) => tx.card.update({ where: { id: row.id }, data: { status: 'LOST' } }));
   return loadCardView(updated);
 }
 
@@ -179,13 +179,13 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
     const existing = await cards.listCards(userId);
     const numberMasked = generateMaskedNumber(new Set(existing.map((card) => card.numberMasked)));
 
-    const row = await cards.createCard({
+    const row = await runInTransaction((tx) => tx.card.create({ data: {
       userId,
       type: 'VIRTUAL',
       network: VIRTUAL_CARD_NETWORK,
       numberMasked,
       status: 'ACTIVE',
-    });
+    } }));
 
     // A brand-new card carries no per-category limits.
     return toCardView(row, []);

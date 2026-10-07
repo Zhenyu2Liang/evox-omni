@@ -68,6 +68,7 @@ import {
   settlePendingAction,
 } from './confirmation-recovery';
 import { buildRecoveryAudit, decideConvergence } from './execution-convergence';
+import { transferExecutionAudit } from './execution-audit';
 
 /**
  * The security gateway's runtime surface.
@@ -384,6 +385,7 @@ const IN_FLIGHT_PLAN_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'awaiting_mfa',
   'confirmed',
   'executed',
+  'needs_reconciliation',
 ];
 
 /**
@@ -508,7 +510,7 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     if (ctx.taskId !== undefined && ctx.nodeId !== undefined) {
       const existing = await findInFlightPlanAction(ctx.taskId, ctx.nodeId);
       if (existing !== undefined) {
-        if (existing.status === 'executed') {
+        if (existing.status === 'executed' || existing.status === 'needs_reconciliation') {
           return recoverExecutedPlanAction(existing);
         }
         // ONE evidence-based convergence decision (see `./execution-convergence`): consult the
@@ -764,18 +766,33 @@ async function executeAuthorizedAction(
     nodeId: link?.nodeId,
   });
   let result: ToolExecutionResult;
+  let sideEffectCommitted = false;
+  const executionAudit = transferExecutionAudit(actionId, {
+    sessionId: action.sessionId, userRequest: action.userRequest ?? '', intent: action.intent,
+    toolName: action.toolName, riskLevel: tier, confirmationRequired: true, confirmed: true,
+    mfaRequired: requiresMfa, mfaResult: view.mfaResult,
+  });
   try {
     // WRITE-BOUNDARY fence (confirm/verify path): authority is the ACTION's own exactly-once gateway
     // claim plus its execution lease / live continuation — NOT the plan's `executionToken`, which
     // `resumeTaskForAction` legitimately mints/rotates/releases around this continuation. It therefore
-    // asserts only that the owning plan was not CANCELLED while the blocked write was in flight; a
-    // cancelled plan's write rolls the transaction back with NO side effect.
-    const fence = await buildConfirmFence(link?.taskId, link?.nodeId);
-    result = await registry.executeDirect(action.toolName, action.args, { idempotencyKey, fence });
+    // asserts that the action is still confirmed and its owning plan is not cancelled. These
+    // conditional writes serialize against cancellation before any banking mutation.
+    const fence = await buildConfirmFence(link?.taskId, link?.nodeId, actionId);
+    result = await registry.executeDirect(action.toolName, action.args, {
+      idempotencyKey, fence, onTransferCommit: executionAudit.onTransferCommit,
+      onTransactionCommitted: () => { sideEffectCommitted = true; },
+    });
   } catch (e) {
-    // A boundary throw is the REAL failure — recorded as `failed`, never swallowed, never a success.
+    // A thrown return path is not proof of business failure; convergence checks committed evidence.
     result = { ok: false, error: AppError.from(e).message };
   }
+
+  executionAudit.assertSucceeded();
+  const current = await getPendingAction(actionId);
+  if (current === null) throw new AppError('NOT_FOUND', '执行操作不存在');
+  const decision = await decideConvergence(current, { completion: result, sideEffectCommitted });
+  result = decision.result ?? result;
 
   // LAND the ORIGINAL execution result payload AND the terminal status AND the execution AUDIT
   // ATOMICALLY — ONE `prisma.$transaction`, through the ONE unified landing primitive
@@ -792,7 +809,7 @@ async function executeAuthorizedAction(
   // repeat settle of the SAME action can never duplicate its audit row.
   await settlePendingAction({
     actionId,
-    status: result.ok ? 'executed' : 'failed',
+    status: decision.status,
     result,
     audit: {
       timestamp: demoNow(),
@@ -808,7 +825,7 @@ async function executeAuthorizedAction(
       mfaRequired: requiresMfa,
       mfaResult: view.mfaResult,
       toolResult: result,
-      status: result.ok ? 'success' : 'failed',
+      status: decision.status === 'needs_reconciliation' ? 'blocked' : result.ok ? 'success' : 'failed',
     },
     dedupeKey: `exec:${actionId}`,
   });
@@ -818,7 +835,9 @@ async function executeAuthorizedAction(
   // CONFLICT). This is NON-FATAL: the row is ALREADY settled atomically above, so a failure here must
   // never turn a successfully-executed action into an error response.
   try {
-    await recordActionResult(actionId, result.ok ? 'executed' : 'failed', identity);
+    if (decision.status === 'executed' || decision.status === 'failed') {
+      await recordActionResult(actionId, decision.status, identity);
+    }
   } catch {
     // Non-fatal: the atomic transaction above already persisted the TRUE terminal status.
   }
@@ -839,7 +858,9 @@ async function executeAuthorizedAction(
   const narrationError = events.find(
     (event): event is Extract<AgentStreamEvent, { type: 'error' }> => event.type === 'error',
   );
-  const businessMessage = result.ok ? '操作已执行。' : (result.error ?? '操作执行失败。');
+  const businessMessage = decision.status === 'needs_reconciliation'
+    ? '操作结果尚无法核实，已进入人工核对，请勿重复执行。'
+    : result.ok ? '操作已执行。' : (result.error ?? '操作执行失败。');
   const message =
     narrationError === undefined
       ? businessMessage
@@ -848,7 +869,7 @@ async function executeAuthorizedAction(
   return {
     ok: result.ok,
     actionId,
-    status: result.ok ? 'executed' : 'failed',
+    status: decision.status,
     tier,
     requiresMfa,
     message,

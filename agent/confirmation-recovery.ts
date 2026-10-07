@@ -34,6 +34,10 @@ import { formatCNY } from '@/lib/money';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { recordAudit } from '@/audit';
 import { demoNow } from '@/lib/clock';
+import { committedExecutionResult } from './execution-evidence';
+import { transferExecutionAudit } from './execution-audit';
+import { buildConfirmFence } from './execution-fence';
+import { decideConvergence } from './execution-convergence';
 
 /* ----------------------------------------------------------------------------------------- *
  * 1. Live-confirmation registry — REFERENCE-COUNTED (in-process AUXILIARY hint)
@@ -236,8 +240,9 @@ export interface SettlePendingActionInput {
  * audit, or any other half-landed combination. Returns `false` when a requested CAS did not match
  * (a concurrent settle already moved the row — nothing is written).
  *
- * The audit write is delegated to `recordAudit`, which is best-effort (never throws); a duplicate
- * `dedupeKey` is absorbed, so a REPEATED settle of the same action never duplicates its audit.
+ * Critical audit writes are strict. Only verified duplicate identities/results are absorbed.
+ * Transfers already wrote their required execution audit in the debit/ledger/receipt transaction;
+ * this transaction lands state and repairs pre-upgrade missing audits without another debit.
  */
 export async function settlePendingAction(input: SettlePendingActionInput): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
@@ -403,21 +408,14 @@ async function settleFromCommittedReceipt(
   tier: RiskLevel,
   requiresMfa: boolean,
 ): Promise<StandaloneWedgeOutcome | undefined> {
-  const key = ledgerKeyForAction({
-    id: actionId,
-    taskId: link?.taskId ?? undefined,
-    nodeId: link?.nodeId ?? undefined,
-  });
-  const receipt = await getExecutionReceipt(row.userId, key);
-  if (receipt === null) return undefined;
-  const stored = safeParse<Record<string, unknown> | null>(receipt.resultJson, null);
-  if (stored === null) return undefined;
-
-  const result: ToolExecutionResult = {
-    ok: true,
-    data: stored,
-    summary: summaryFromReceipt(row.toolName, stored),
-  };
+  let result: ToolExecutionResult | undefined;
+  try {
+    result = await committedExecutionResult({ ...row, id: actionId, taskId: link?.taskId ?? null, nodeId: link?.nodeId ?? null });
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code !== 'CONFLICT') throw error;
+    return reconcileStandaloneAction(actionId, tier, requiresMfa);
+  }
+  if (result === undefined) return undefined;
   const settled = await landStandalone(actionId, row, tier, requiresMfa, result, 'executed');
   return {
     ...settled,
@@ -448,14 +446,28 @@ async function replayStandaloneAction(
   });
 
   let result: ToolExecutionResult;
+  let sideEffectCommitted = false;
+  const executionAudit = transferExecutionAudit(actionId, {
+    sessionId: row.sessionId, userRequest: row.userRequest ?? '', intent: row.intent ?? undefined,
+    toolName: row.toolName, riskLevel: tier, confirmationRequired: true, confirmed: true, mfaRequired: requiresMfa,
+  });
   try {
-    result = await createToolRegistry(row.userId).executeDirect(toolName, args, { idempotencyKey });
+    result = await createToolRegistry(row.userId).executeDirect(toolName, args, {
+      idempotencyKey, fence: await buildConfirmFence(link?.taskId, link?.nodeId, actionId),
+      onTransferCommit: executionAudit.onTransferCommit,
+      onTransactionCommitted: () => { sideEffectCommitted = true; },
+    });
   } catch (e) {
-    // A boundary throw is the REAL failure — recorded as `failed`, never swallowed, never a success.
+    // A thrown return path is not proof of business failure; convergence checks committed evidence.
     result = { ok: false, error: AppError.from(e).message };
   }
 
-  const status: PendingActionStatus = result.ok ? 'executed' : 'failed';
+  executionAudit.assertSucceeded();
+  const current = await getPendingAction(actionId);
+  if (current === null) throw new AppError('NOT_FOUND', '恢复操作不存在');
+  const decision = await decideConvergence(current, { completion: result, sideEffectCommitted });
+  result = decision.result ?? result;
+  const status = decision.status;
   const settled = await landStandalone(actionId, row, tier, requiresMfa, result, status);
   return {
     ...settled,

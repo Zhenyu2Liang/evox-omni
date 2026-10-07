@@ -27,6 +27,7 @@ import { insertAuditLog, findAuditLogs, aggregateAuditLogs } from '@/lib/db/repo
 import { prisma } from '@/lib/db/client';
 import type { Prisma } from '@prisma/client';
 import { AppError } from '@/lib/errors';
+import { requestDigest } from '@/lib/ledger';
 
 /**
  * Filter for {@link listAudit}. Every field is optional; results are returned newest-first.
@@ -107,7 +108,22 @@ export async function recordAudit(
         try {
           const client = opts.client ?? prisma;
           const existing = await client.auditLog.findUnique({ where: { dedupeKey } });
-          if (existing) return entry;
+          if (existing && existing.sessionId === entry.sessionId && existing.toolName === entry.toolName &&
+              existing.status === entry.status && existing.riskLevel === entry.riskLevel &&
+              existing.confirmed === entry.confirmed && existing.mfaRequired === entry.mfaRequired) {
+            const previous = existing.toolResult === null ? undefined : JSON.parse(existing.toolResult);
+            const current = entry.toolResult as { ok?: boolean; data?: unknown } | undefined;
+            // Narration/summary can change on recovery; the execution identity and business result cannot.
+            const executionIdentity = (result: { ok?: boolean; data?: unknown } | undefined) => {
+              const data = result?.data as { transactionId?: string; amount?: number; recipient?: { contactId?: string } } | undefined;
+              // Legacy recovery cannot reconstruct a historical balance/phone. The verified ledger
+              // transaction, amount and recorded counterparty still identify exactly the same fact.
+              return typeof data?.transactionId === 'string'
+                ? { ok: result?.ok, transactionId: data.transactionId, amount: data.amount, contactId: data.recipient?.contactId }
+                : { ok: result?.ok, data: result?.data };
+            };
+            if (requestDigest(executionIdentity(previous)) === requestDigest(executionIdentity(current))) return entry;
+          }
         } catch {
           // Back-read failed — fall through and rethrow the ORIGINAL insert error unchanged.
         }

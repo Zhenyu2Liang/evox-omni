@@ -7,6 +7,7 @@ import type { ToolName } from '@/lib/contracts/tools';
 import type { PlanToolOutcome } from '@/planner';
 import { getSession } from '@/lib/db/repositories/session';
 import { AppError } from '@/lib/errors';
+import { prisma } from '@/lib/db/client';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { PendingActionStatus } from '@/lib/contracts/security';
@@ -159,6 +160,20 @@ export async function recoverAction(
 ): Promise<ConfirmationOutcome> {
   await resolveActionOwner(actionId, opts);
 
+  // Historical executions may already be terminal while their audit is missing. Repair only the
+  // audit/result from verified evidence; never re-run the SDK or downgrade a successful action.
+  const initial = await getPendingAction(actionId);
+  let repairedAudit = false;
+  if (initial?.status === 'executed' && await prisma.auditLog.findUnique({ where: { dedupeKey: `exec:${actionId}` } }) === null) {
+    const decision = await decideConvergence(initial);
+    if (decision.status === 'executed' && decision.result?.ok === true) {
+      repairedAudit = await settlePendingAction({
+        actionId, status: 'executed', result: decision.result, from: ['executed'],
+        audit: buildRecoveryAudit(initial, decision), dedupeKey: `exec:${actionId}`,
+      });
+    }
+  }
+
   const recovered = await recoverStandaloneWedge(actionId);
   if (recovered !== undefined) {
     const emit = opts?.onEvent;
@@ -228,12 +243,12 @@ export async function recoverAction(
   }
 
   return {
-    ok: false,
+    ok: repairedAudit,
     actionId,
     status,
     tier,
     requiresMfa,
-    message: noRecoveryMessage(row, link),
+    message: repairedAudit ? '已从持久化执行证据补齐审计，未重新执行操作。' : noRecoveryMessage(row, link),
     events: [],
   };
 }

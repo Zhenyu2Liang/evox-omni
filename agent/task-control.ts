@@ -799,7 +799,7 @@ export async function resumeTask(
   await clearStaleNodeClaims(taskId, token);
 
   try {
-    const result = await executor.runPlan(
+    await executor.runPlan(
       toTaskPlan(row),
       buildPlanDeps(taskId, deps, undefined, { planToken: token }),
       {
@@ -808,7 +808,7 @@ export async function resumeTask(
       },
     );
     await sweepCancelledPlan(sessionId, taskId);
-    return result;
+    return reloadPlan(sessionId, taskId);
   } finally {
     await releaseTaskExecution(taskId, token);
   }
@@ -1059,7 +1059,7 @@ export async function retryTask(
     await claimTaskStatus(taskId, ['running'], result.status);
 
     await sweepCancelledPlan(sessionId, taskId);
-    return result;
+    return reloadPlan(sessionId, taskId);
   } finally {
     await releaseTaskExecution(taskId, token);
   }

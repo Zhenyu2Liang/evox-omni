@@ -14,6 +14,7 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { AppError } from '@/lib/errors';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
+import { withBankingExecution, type BankingExecutionContext } from '@/banking-sdk';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import { createGetBalanceTool, runGetBalance } from './account';
@@ -110,6 +111,9 @@ export interface ToolRunOptions {
    * cancelled commits NO side effect. ADDITIVE: absent ⇒ unchanged behavior for every caller.
    */
   fence?: ExecutionFenceCheck;
+  /** Required transfer audit, composed into the SDK's debit/ledger/receipt transaction. */
+  onTransferCommit?: BankingExecutionContext['onTransferCommit'];
+  onTransactionCommitted?: BankingExecutionContext['onTransactionCommitted'];
 }
 
 /** A model-free runner for one tool: `(userId, args, opts?) => ToolExecutionResult` (never throws). */
@@ -304,7 +308,10 @@ export function createToolRegistry(
       args: Record<string, unknown>,
       opts?: ToolRunOptions,
     ): Promise<ToolExecutionResult> {
-      return runners[name](userId, args, opts);
+      return withBankingExecution(
+        { fence: opts?.fence, onTransferCommit: opts?.onTransferCommit, onTransactionCommitted: opts?.onTransactionCommitted },
+        () => runners[name](userId, args, opts),
+      );
     },
   };
 }

@@ -155,25 +155,24 @@ securityGateway.handleToolCall`；被门控的工具会被阻断、其参数被�
 - **已提交事实优先 ＋ 事务内摘要校验（transaction-fact-first）**：`transfer.createTransfer` 把**扣款**、
   账本 `Transaction` 与一行 `ExecutionReceipt`（`@@unique([userId, key])`；仓储
   `lib/db/repositories/executionReceipt.ts#getExecutionReceipt` / `putExecutionReceipt`，二者都接受一个可选**事务客户端**）
-  写进**同一个** `prisma.$transaction`。带 `idempotencyKey` 时，先经 `replayCommitted(userId, key, digest)` 在
+  写进**同一个** `prisma.$transaction`。带 `idempotencyKey` 时，先经 `getCommittedTransfer(input)` 在
   **任何可变查找（收款人 / 资金来源）之前**判定已提交事实：命中 `ExecutionReceipt` ⇒ **同身份 + 同请求摘要**
   （`requestDigest`，`lib/ledger.ts` 的规范 JSON 指纹）返回**原始结果**（不重新解析、不重新扣款）；
   **同身份 + 不同摘要** ⇒ `AppError('CONFLICT', 'same execution identity, different request')`，**不产生任何新副作用**。
   事务内若发现**已存在**账本行却**无回执**，同样抛 `CONFLICT`——**绝不**把当前请求的收款人 / 金额
   **拼接（stitch）**到既有账本行上；无回执的**历史**账本行（主键为确定性 `idempotentTransferTxId`）**仍**被识别为已落账。
   并发同键竞争中失败者的事务回滚（不扣款），仅在**验明请求摘要**之后才重放已提交事实。
-- **写入边界执行栅栏（write-boundary execution fence）**：SDK 把「授权至写入瞬间仍成立」这一保证交由
-  **输入对象自身携带**的一个不透明异步检查（`banking-sdk/fence.ts` 的 `EXECUTION_FENCE` Symbol /
-  `attachExecutionFence(input, check)` / `readExecutionFence`）。该 Symbol 属性**不可枚举**，故**无法经
-  JSON / 工具参数注入**；`attachExecutionFence` 返回**同一对象引用**，使其能穿过只转发第一个参数的包装层。
-  SDK 在**写入事务内部、业务写入之前** `await` 该检查——`transfer.ts` 扣款前、`budget.ts#reserveBudget`
-  插入前 / `idempotent.ts#createIdempotent` 创建前——检查抛错即整笔事务回滚、**不落任何业务行**。
+- **写入边界执行栅栏（write-boundary execution fence）**：服务端通过 `banking-sdk/execution-context.ts`
+  的调用上下文传递不透明异步检查，不能由 JSON / 工具参数注入；原有输入对象 Symbol 栅栏继续兼容。
+  所有实际 SDK 写操作均进入 `runInTransaction`，在业务变更前执行该检查。计划/操作条件写先取得
+  SQLite 写入权，取消先提交则检查拒绝，业务先提交则保留事实；检查抛错即整笔事务回滚。
   栅栏的**构造**在 agent 层（`agent/execution-fence.ts`，见 §8）。
 - **同事务审计事实（same-tx audit）**：一次确认 / 恢复的**结果 + 终态状态 + 执行审计**经
   `agent/confirmation-recovery.ts#settlePendingAction` 写进**同一个** `prisma.$transaction`，审计以
   `audit/audit-logger.ts#recordAudit(entry, { client, dedupeKey, strict:true })` 落在该事务内；`strict:true` 下
   **真实**的插入失败会**重新抛出**（仅吸收经核验的同一 `dedupeKey` 重复），从而**连带回滚**同一事务的写入——
-  终态状态 / 结果**绝不会**在没有其审计的情况下落库。
+  终态状态 / 结果**绝不会**在没有其审计的情况下落库。另由 `agent/execution-audit.ts` 将转账必需执行
+  审计直接写进借方 / 流水 / 回执的事务；该审计失败会回滚资金变更。其他工具的业务与审计事务仍分离。
 
 > **升级兼容（Schema upgrade / compatibility）**：新增的 `ExecutionReceipt` 模型（`@@unique([userId, key])`）与
 > `AuditLog.dedupeKey`（`String? @unique`）都是**纯增量（additive）**结构，经 `prisma db push` 应用
@@ -268,7 +267,7 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   **保持 `confirmed`、不写入**；③ **持久化 `resultJson`** ⇒ 按其 `ok` 收敛（`executed` / `failed`）；
   ④ **无任何证据** ⇒ **计划节点动作**以**冻结消息** `PLAN_LINKED_UNRECONCILED_ERROR` =
   `该节点此前已执行但未留存结果，需人工核对（不会重新执行）。`（`agent/execution-convergence.ts`；**人工核对**、
-  工具**绝不**重跑）**终结为 `failed`**；**独立动作**（无计划链接）则**保留 `confirmed`**、**推迟**给既有的
+  工具**绝不**重跑）**收敛为 `needs_reconciliation`**；**独立动作**（无计划链接）则**保留 `confirmed`**、**推迟**给既有的
   `recoverStandaloneWedge`（重放**已证明幂等**的 `transfer_money`，否则转 `needs_reconciliation`，见 §9）。
   判定器**绝不**从「缺失的 `resultJson`」「丢失的进程内标记」或「被捕获的异常」**推断失败**——
   一个**已提交且不可逆**的副作用**绝不**因结果回写事务回滚而被误判 `failed`。判定为 `write:true` 时，其结果经
@@ -279,7 +278,7 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   同一判定器以进程内**引用计数**的活跃确认注册表（`agent/confirmation-recovery.ts` 的 `liveConfirmations` /
   `retainAction` / `releaseAction` / `isActionLive` / `liveCount`，按动作 id 计数）区分**真楔子**（无活跃续跑）
   与**仍由活跃续跑拥有**的行（**保持 `confirmed`、不写入**）：**计划节点**真楔子以 `PLAN_LINKED_UNRECONCILED_ERROR`
-  终结 `failed` 供人工核对，工具**绝不**重跑、**绝不**伪造回滚，计划**绝不**滞留在 `waiting_confirmation`；
+  收敛 `needs_reconciliation` 供人工核对，工具**绝不**重跑、**绝不**伪造回滚，计划**绝不**滞留在 `waiting_confirmation`；
   该注册表以**引用计数**承载——同一动作被重复 confirm/verify 时，被快速拒绝的那一路**不会**清掉仍在运行的第一路续跑的标记（标记仅在计数归零时移除）。
 - **CANCEL**：终态。`agent/task-control.ts#cancelTask` 的**原子结算**把「撤销」与「置状态」放进**同一个**
   `prisma.$transaction`：事务内**先撤销**该计划停放的 `PendingAction`——`revokePendingActionsByTask(taskId,
@@ -428,7 +427,7 @@ sequenceDiagram
   （`lib/contracts/security.ts` 的 `PendingActionStatus` 新成员——**需人工结算**、**既非 `failed`**（结果未知，不是失败）
   **亦非 `confirmed`**（会永远悬挂））。两条路径都**绝不**重跑未证明幂等的写工具、**绝不**伪造回滚。仍被**本进程活跃续跑**
   拥有的行、已有存储结果的行，以及**计划节点**楔子都不在此处理（后者见下一条与 §8）。
-- **已提交事实优先（committed-fact-first）＋执行租约**：`banking-sdk/transfer.ts` 把借方、账本 `Transaction` 与一行 `ExecutionReceipt`（`@@unique([userId, key])`，仓储 `lib/db/repositories/executionReceipt.ts` 的 `getExecutionReceipt` / `putExecutionReceipt`，再导出 `executionReceipts`）写进**同一个 `prisma.$transaction`**，以**执行身份**（`lib/ledger.ts#ledgerKeyForAction`）为键持久化**原始结果**；因此幂等重放由 `replayCommitted(userId, key, digest)` 在**任何可变查找之前**先判定——**同身份 + 同请求摘要**（`requestDigest`）⇒ 返回**原始结果**，**同身份 + 不同摘要** ⇒ `AppError('CONFLICT', 'same execution identity, different request')`，而无回执的**历史**账本行（`idempotentTransferTxId`）**仍**被识别为已落账。楔子分类由 `agent/confirmation-recovery.ts#classifyConfirmedAction(row, nowMs)` 统一给出 `'settled' | 'processing' | 'recoverable' | 'needs_reconciliation'`，`settlePendingAction` / `settleFromCommittedReceipt` 把结果 + 终态 + 审计写进**同一个 `$transaction`**；持久化执行租约（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`，`EXECUTION_LEASE_TTL_MS = 120000`，`setPendingActionLease` / `clearPendingActionLease` / `hasActiveLease`）**仅**对 `pending` / `awaiting_mfa` 经 `beginExecutionLease` / `endExecutionLease` 取得（**绝不**对 `confirmed` 取），从而区分**仍在运行的续跑**（`processing`）与**真楔子**。该 `EXECUTION_LEASE_TTL_MS = 120000` 与计划接管的 `EXECUTION_CLAIM_TTL_MS = 600000` 是**两个不同**的 TTL；对外的**终态收敛**则由**唯一**判定器 `agent/execution-convergence.ts#decideConvergence(action, opts?)` 从**持久化证据**（已提交回执 → 活跃标记 / 租约 → 存储结果 → 无证据）按**固定优先级**给出（见 §8）。
+- **已提交事实优先（committed-fact-first）＋执行租约**：`banking-sdk/transfer.ts` 把借方、账本 `Transaction` 与一行 `ExecutionReceipt`（`@@unique([userId, key])`，仓储 `lib/db/repositories/executionReceipt.ts` 的 `getExecutionReceipt` / `putExecutionReceipt`，再导出 `executionReceipts`）写进**同一个 `prisma.$transaction`**，以**执行身份**（`lib/ledger.ts#ledgerKeyForAction`）为键持久化**原始结果**；因此幂等重放由 `getCommittedTransfer(input)` 在**任何可变查找之前**先判定——**同身份 + 同请求摘要**（`requestDigest`）⇒ 返回**原始结果**，**同身份 + 不同摘要** ⇒ `AppError('CONFLICT', 'same execution identity, different request')`，而无回执的**历史**账本行（`idempotentTransferTxId`）**仍**被识别为已落账。楔子分类由 `agent/confirmation-recovery.ts#classifyConfirmedAction(row, nowMs)` 统一给出 `'settled' | 'processing' | 'recoverable' | 'needs_reconciliation'`，`settlePendingAction` / `settleFromCommittedReceipt` 把结果 + 终态 + 审计写进**同一个 `$transaction`**；持久化执行租约（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`，`EXECUTION_LEASE_TTL_MS = 120000`，`setPendingActionLease` / `clearPendingActionLease` / `hasActiveLease`）**仅**对 `pending` / `awaiting_mfa` 经 `beginExecutionLease` / `endExecutionLease` 取得（**绝不**对 `confirmed` 取），从而区分**仍在运行的续跑**（`processing`）与**真楔子**。该 `EXECUTION_LEASE_TTL_MS = 120000` 与计划接管的 `EXECUTION_CLAIM_TTL_MS = 600000` 是**两个不同**的 TTL；对外的**终态收敛**则由**唯一**判定器 `agent/execution-convergence.ts#decideConvergence(action, opts?)` 从**持久化证据**（已提交回执 → 活跃标记 / 租约 → 存储结果 → 无证据）按**固定优先级**给出（见 §8）。
 - **`needs_reconciliation` 对用户可见**：`GET /api/actions` 的 `DECISION_STATUSES`（`app/api/actions/route.ts`）=
   `pending` / `awaiting_mfa` / `needs_reconciliation`；UI 由 `components/chat/useAgentStream.ts` 的 `pendingReconciliations`
   驱动，渲染一张**无操作按钮**的琥珀色 `ReconciliationCard`（「该操作需要人工核对」）——不提供确认/取消，也不重发聊天消息
@@ -438,7 +437,7 @@ sequenceDiagram
   **基于证据**结算——① **已提交回执** ⇒ 收敛 `executed` 并**复用原始结果**（**绝不**重新调用工具）；
   ② `executed` 节点由**持久化的 `PendingAction.resultJson` 回填**（**绝不**重新调用工具）；③ 存储 `ok:false` 结算 `failed`；
   ④ **无任何证据**的计划节点楔子以**冻结消息** `PLAN_LINKED_UNRECONCILED_ERROR`
-  = `该节点此前已执行但未留存结果，需人工核对（不会重新执行）。` **终结 `failed`** 供**人工核对**
+  = `该节点此前已执行但未留存结果，需人工核对（不会重新执行）。` **收敛 `needs_reconciliation`** 供**人工核对**
   （工具**绝不**重跑、**绝不**伪造回滚、**绝不**从缺失的 `resultJson` 推断失败、计划**绝不**停在 `waiting_confirmation`）。
 
 > **网关只授权，不执行**：`securityGateway.authorizeAction` 只返回授权结果，资金移动由 agent 层的
@@ -511,16 +510,16 @@ sequenceDiagram
   （独立动作 / 计划节点动作 / 确认·MFA / 异常处理 / 恢复**共用同一条决策**）：① 已提交 `ExecutionReceipt` ⇒ `executed`，
   **复用原始结果**、**绝不重新执行**；② 活跃标记（`isActionLive`）或——**仅独立动作**——活跃租约（`hasActiveLease`）⇒ 仍 `processing`、
   **保持 `confirmed`、不写入**；③ 持久化 `resultJson` ⇒ 按其 `ok` 收敛（`executed` / `failed`）；④ 无证据 ⇒ **计划节点**动作以**冻结消息**
-  `PLAN_LINKED_UNRECONCILED_ERROR`（`该节点此前已执行但未留存结果，需人工核对（不会重新执行）。`）**终结 `failed`** 供**人工核对**，
+  `PLAN_LINKED_UNRECONCILED_ERROR`（`该节点此前已执行但未留存结果，需人工核对（不会重新执行）。`）**收敛 `needs_reconciliation`** 供**人工核对**，
   **独立**动作推迟给 `recoverStandaloneWedge`（重放**已证明幂等**的 `transfer_money`，否则转**终态** `needs_reconciliation`，经 `GET /api/actions` 的 `DECISION_STATUSES` 与 UI 的 `ReconciliationCard` 呈现）。
   **绝不**从缺失的 `resultJson` / 丢失的进程内标记 / 被捕获的异常**推断失败**——已提交且不可逆的副作用**绝不**被误判 `failed`。
 - **SDK 写入边界执行栅栏**：授权是「至写入瞬间仍成立」的保证，不能只靠**事务外**读取——它被携带在**输入对象自身**
   （`banking-sdk/fence.ts` 的**不可枚举** `EXECUTION_FENCE` Symbol，**无法经 JSON / 工具参数注入**），并在**写入事务内部、
   业务写入之前**被 `await`，检查抛错即整笔事务回滚、**无副作用**。权威由 `agent/execution-fence.ts` 构造：
   `buildPlanNodeFence`（🟢 内联计划节点：本次运行持有的计划 / 节点执行领取）与 `buildConfirmFence`（确认续跑：动作自身主张 + 租约 / 活跃标记，**仅**断言所属计划未取消）。
-  已应用于 `reserve_budget` 与 `transfer_money`。
+  经可信执行上下文与统一事务入口应用于所有实际 SDK 写操作。
 - **事务内摘要校验的重放（in-tx digest replay）**：`transfer.createTransfer` 把扣款 + 账本 `Transaction` + `ExecutionReceipt`
-  写进**同一个** `$transaction`，并在**任何可变查找之前**经 `replayCommitted(userId, key, digest)` 判定已提交事实——
+  写进**同一个** `$transaction`，并在**任何可变查找之前**经 `getCommittedTransfer(input)` 判定已提交事实——
   **同身份 + 同摘要** ⇒ 返回**原始结果**（不重新解析、不重新扣款）；**同身份 + 不同摘要**（或事务内出现**无回执**的已有账本行）⇒
   `AppError('CONFLICT')`，**绝不**把当前请求的收款人 / 金额**拼接（stitch）**到既有行上；无回执的**历史**账本行（`idempotentTransferTxId`）仍被识别为已落账。
 - **可靠 / 带键审计（strict / keyed audit）**：`audit/audit-logger.ts#recordAudit(entry, { client, dedupeKey, strict })` 默认**尽力而为**
@@ -543,3 +542,11 @@ sequenceDiagram
 
 > 完整安全模型见 [`security.md`](./security.md)；验收场景见 [`test-cases.md`](./test-cases.md)；
 > 已知限制见 [`known-risks.md`](./known-risks.md)。
+
+
+### 当前执行与历史数据契约
+
+- 正常确认与恢复共用交易证据核验；成功回执必须匹配请求摘要和实际流水。历史无回执流水逐字段核验，无法核验时进入人工核对。历史姓名来自流水；原始交易后余额无法还原时省略，不能以当前余额代替。
+- 真实 SDK 写入统一进入事务并执行服务端条件写入保护；取消先提交则阻止新写入，业务先提交则保留真实事实。resume/retry 返回最新持久化计划状态。
+- 转账扣款、流水、回执、关键执行审计同事务；审计失败全部回滚。操作结果/终态后续结算，结算失败依靠已提交事实恢复。其他工具的业务写入与状态审计仍分开；未知结果停止并进入人工核对，不能承诺自动恢复。
+- 不改变 schema，不清理开发库；多进程竞争、真实支付通道仍未验证。

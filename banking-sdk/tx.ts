@@ -16,6 +16,7 @@
  */
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../lib/db/client';
+import { bankingExecutionContext } from './execution-context';
 
 /** The Prisma client bound to an open interactive transaction. */
 export type Tx = Prisma.TransactionClient;
@@ -26,5 +27,14 @@ export type Tx = Prisma.TransactionClient;
  * to abort the unit — nothing it wrote is persisted.
  */
 export function runInTransaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T> {
-  return prisma.$transaction(fn);
+  const context = bankingExecutionContext();
+  return prisma.$transaction(async (tx) => {
+    // Every SDK mutation enters here, including runners that only forward their first argument.
+    // The trusted fence takes the SQLite writer slot before any banking write in this transaction.
+    await context?.fence?.(tx);
+    return fn(tx);
+  }).then((result) => {
+    context?.onTransactionCommitted?.();
+    return result;
+  });
 }

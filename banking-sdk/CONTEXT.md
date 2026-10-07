@@ -140,7 +140,7 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 
 - **`change_password` is NOT implemented here.** The demo has no credential store; its authority is the `AuditLog` row written by the security/agent layer (the agent tool returns a simulated success). Do NOT add a `banking-sdk` function for it.
 - The at-most-once CREATE helper lives in `./banking-sdk/idempotent.ts` (`createIdempotent`, `normalizeIdempotencyKey`, `isUniqueViolation`). Reuse it for any future gated CREATE that must survive a replayed plan node — do not re-implement find-then-create + `P2002` replay per module.
-- The execution fence is **OPT-IN and caller-attached**: `banking-sdk` never sets one. A caller that must guarantee a write is still authorized at commit time calls `attachExecutionFence(input, check)` (importable from `@/banking-sdk`); the check is bound to the transaction client and may assert (or throw to abort) within the same atomic unit. `createTransfer` and `reserveBudget` are the tools that honour it today — wire the carrier through any NEW gated write the same way.
+- Trusted execution context is scoped by `withBankingExecution` (`AsyncLocalStorage`), installed by the server tool registry. All SDK mutations enter `runInTransaction`, which applies the context fence before business writes. The optional symbol carrier remains supported for direct transfer/budget callers. A new mutation must use this transaction boundary.
 - SDK unit specs live in `../tests/unit/banking-sdk/` (root-owned sibling — the SDK unit specs) — run them with the root config: `npx vitest run tests/unit/banking-sdk`.
 - The money-movement ATOMICITY regression spec lives in the root test tree at `tests/unit/banking-sdk/atomicity.test.ts`, where it is auto-discovered and run by the root `vitest.config.ts` under `npm run test`. It proves ledger/subscribe-write failure ROLLBACK and concurrent overspend / double-redeem prevention.
 - `../tests` and `../lib/db/repositories` are read-only dependencies; escalate writes to root.
@@ -165,3 +165,5 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 - `../tests/unit/banking-sdk` → SDK unit specs incl. the money-movement atomicity regression spec (sibling — read-only, auto-discovered by the root `npm run test`; escalate writes to root)
 - `../lib/db/repositories` → the typed repositories the SDK reads/writes through (dependency — read-only)
 - `../lib/ledger` → shared deterministic transfer-ledger id (`idempotentTransferTxId`) — the idempotency dedup key the SDK uses for `createTransfer`; also consumed by `security/` (dependency — read-only)
+
+- `./banking-sdk/execution-context.ts` → request-scoped trusted fence, transfer audit callback and transaction-commit observation

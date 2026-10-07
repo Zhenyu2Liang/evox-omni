@@ -38,3 +38,5 @@ export * from './types';
 
 /** Execution-fence carrier (see `./fence`) — a server-generated check awaited inside the write tx. */
 export * from './fence';
+export { withBankingExecution } from './execution-context';
+export type { BankingExecutionContext } from './execution-context';

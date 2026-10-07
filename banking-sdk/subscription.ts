@@ -10,6 +10,7 @@
 import type { Subscription as SubscriptionRow } from '@prisma/client';
 import { subscriptions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
+import { runInTransaction } from './tx';
 import type { SubscriptionCycle, SubscriptionStatus, SubscriptionView } from './types';
 
 /** Map a Prisma subscription row onto the frozen `SubscriptionView` DTO. */
@@ -47,7 +48,7 @@ export async function cancelSubscription(id: string): Promise<SubscriptionView> 
       status: row.status,
     });
   }
-  const updated = await subscriptions.updateSubscriptionStatus(row.id, 'CANCELLED');
+  const updated = await runInTransaction((tx) => tx.subscription.update({ where: { id: row.id }, data: { status: 'CANCELLED' } }));
   return toSubscriptionView(updated);
 }
 
@@ -60,6 +61,6 @@ export async function setSubscriptionReminder(
     throw new AppError('VALIDATION', '提醒开关必须是布尔值', { subscriptionId: id, remind });
   }
   const row = await requireSubscription(id);
-  const updated = await subscriptions.setSubscriptionReminder(row.id, remind);
+  const updated = await runInTransaction((tx) => tx.subscription.update({ where: { id: row.id }, data: { remind } }));
   return toSubscriptionView(updated);
 }
