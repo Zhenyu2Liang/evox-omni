@@ -438,6 +438,7 @@ export function toTaskPlan(row: AgentTaskWithNodes): TaskPlan {
     nodes: row.nodes.map(toNodeSpec),
     results: row.nodes.map(toNodeResult),
     createdAt: row.createdAt.getTime(),
+    generation: row.generation,
     updatedAt: row.updatedAt.getTime(),
   };
 }
