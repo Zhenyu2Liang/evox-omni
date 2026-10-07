@@ -373,7 +373,7 @@ interface StandaloneRow {
 }
 
 /** Build the `transfer_money` summary from a persisted SDK `TransferResult` snapshot, when possible. */
-function summaryFromReceipt(toolName: string, stored: Record<string, unknown>): string | undefined {
+export function summaryFromReceipt(toolName: string, stored: Record<string, unknown>): string | undefined {
   if (toolName !== 'transfer_money') return undefined;
   const recipient = stored.recipient as { name?: unknown } | undefined;
   const name =
