@@ -1,16 +1,22 @@
 /**
- * confirmation-recovery.ts — durable recovery primitives for the two-phase confirmation path.
+ * confirmation-recovery.ts — durable recovery + LANDING primitives for the two-phase confirmation path.
  *
  * Extracted from `confirmation.ts` (kept as the thin orchestrator) to stay under the ~1000-line soft
  * budget. It owns NO policy: it never computes a tier, a confirmation or an MFA requirement — every
  * input is PERSISTED `PendingAction` state the security gateway already wrote.
  *
- * Two concerns:
- *  1. The REFERENCE-COUNTED live-confirmation registry (`isActionLive`/`retainAction`/`releaseAction`).
- *  2. STANDALONE (non-plan) wedge recovery (`recoverStandaloneWedge`).
+ * Concerns:
+ *  1. The REFERENCE-COUNTED live-confirmation registry (`isActionLive`/`retainAction`/`releaseAction`)
+ *     — an in-process AUXILIARY hint only.
+ *  2. The DURABLE execution lease clock/TTL (`leaseNowMs`/`EXECUTION_LEASE_TTL_MS`) and the
+ *     `classifyConfirmedAction` classifier that reads the PERSISTED lease.
+ *  3. STANDALONE (non-plan) wedge recovery (`recoverStandaloneWedge`), RECEIPT-FIRST.
+ *  4. `settlePendingAction` — the ONE unified landing primitive (terminal status + persisted result +
+ *     the execution `AuditLog`, ALL in ONE `prisma.$transaction`).
  */
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { PendingActionStatus } from '@/lib/contracts/security';
+import type { AuditEntry } from '@/lib/contracts/audit';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import type { ToolName } from '@/lib/contracts/tools';
 import {
@@ -19,16 +25,18 @@ import {
   getPendingActionPlanLink,
   setPendingActionStatus,
 } from '@/lib/db/repositories/pendingAction';
+import { getExecutionReceipt } from '@/lib/db/repositories/executionReceipt';
 import { prisma } from '@/lib/db/client';
 import { AppError } from '@/lib/errors';
 import { safeParse, toJson } from '@/lib/json';
 import { ledgerKeyForAction } from '@/lib/ledger';
+import { formatCNY } from '@/lib/money';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { recordAudit } from '@/audit';
 import { demoNow } from '@/lib/clock';
 
 /* ----------------------------------------------------------------------------------------- *
- * 1. Live-confirmation registry — REFERENCE-COUNTED
+ * 1. Live-confirmation registry — REFERENCE-COUNTED (in-process AUXILIARY hint)
  * ----------------------------------------------------------------------------------------- */
 
 /**
@@ -53,10 +61,10 @@ import { demoNow } from '@/lib/clock';
  * and mis-finalize it. Counting keeps the action LIVE while ANY continuation holds it: the marker is
  * removed only when the count drops back to ZERO.
  *
- * Scope: like `inFlightExecutions` this is a PER-PROCESS liveness hint — a multi-process deployment
- * would additionally need a durable marker to detect case (a) across processes. It never GRANTS
- * anything: the durable `PendingAction` row stays the authority and every terminal transition is
- * still a single atomic CAS.
+ * Scope: this is a PER-PROCESS liveness hint; the DURABLE analogue is the PERSISTED execution lease
+ * (`PendingAction.executionLeaseOwner`/`executionLeaseExpiresAt`, written by the agent layer and
+ * classified by `classifyConfirmedAction`). It never GRANTS anything: the durable `PendingAction` row
+ * stays the authority and every terminal transition is still a single atomic CAS.
  */
 const liveConfirmations = new Map<string, number>();
 
@@ -86,8 +94,38 @@ export function releaseAction(actionId: string): void {
 }
 
 /* ----------------------------------------------------------------------------------------- *
- * 2. STANDALONE (non-plan) wedge recovery
+ * 2. Durable execution lease — TTL + clock + classifier
  * ----------------------------------------------------------------------------------------- */
+
+/**
+ * How long a persisted execution lease stays VALID. A confirm/verify continuation renews nothing (it
+ * holds the lease for its whole duration and clears it in a `finally`); the TTL is the bounded
+ * fallback that lets a LATER observer (after a crash / process death) reclassify an abandoned
+ * `confirmed` row as recoverable rather than "processing" forever. It is deliberately generous
+ * relative to a single tool call.
+ */
+export const EXECUTION_LEASE_TTL_MS = 120_000;
+
+/**
+ * The clock the lease is written with — the REAL wall clock by default. Tests inject a deterministic
+ * clock (`__setLeaseClockForTests`) so lease expiry can be exercised without sleeping.
+ */
+let leaseClock: () => number = () => Date.now();
+
+/** @internal test seam — inject the clock the lease TTL is computed from. */
+export function __setLeaseClockForTests(fn: () => number): void {
+  leaseClock = fn;
+}
+
+/** The current lease clock (ms epoch). */
+export function leaseNowMs(): number {
+  return leaseClock();
+}
+
+/** The expiry instant for a lease taken at `nowMs`. */
+export function leaseExpiryFor(nowMs: number): Date {
+  return new Date(nowMs + EXECUTION_LEASE_TTL_MS);
+}
 
 /**
  * Tools whose SDK write is PROVEN idempotent for a STANDALONE action — i.e. the write consumes the
@@ -108,9 +146,129 @@ export function releaseAction(actionId: string): void {
  * validated for a standalone key, so a standalone wedge of those settles `needs_reconciliation`
  * instead of being replayed.
  */
-const PROVEN_IDEMPOTENT_STANDALONE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
+export const RECOVERABLE_STANDALONE_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
   'transfer_money',
 ]);
+
+/** Is `toolName` a standalone tool whose wedge may be safely REPLAYED on its ledger key? */
+export function isRecoverableStandaloneTool(toolName: string): boolean {
+  return RECOVERABLE_STANDALONE_TOOLS.has(toolName as ToolName);
+}
+
+/** The classification of a (possibly) `confirmed` action from PERSISTED state + the current clock. */
+export type ConfirmedActionClass =
+  | 'settled'
+  | 'processing'
+  | 'recoverable'
+  | 'needs_reconciliation';
+
+/** The persisted fields `classifyConfirmedAction` reads (a structural slice of `PendingAction`). */
+export interface ConfirmableActionRow {
+  status: string;
+  resultJson: string | null;
+  toolName: string;
+  executionLeaseOwner: string | null;
+  executionLeaseExpiresAt: Date | null;
+}
+
+/** Statuses that are TERMINAL — a row in one of them is settled and needs no recovery. */
+const TERMINAL_ACTION_STATUSES: ReadonlySet<string> = new Set<string>([
+  'executed',
+  'failed',
+  'cancelled',
+  'locked',
+  'needs_reconciliation',
+]);
+
+/** Is a NON-EXPIRED persisted lease present on the row at `nowMs`? */
+export function hasActiveLease(row: ConfirmableActionRow, nowMs: number): boolean {
+  const owner = row.executionLeaseOwner;
+  const expiresAt = row.executionLeaseExpiresAt;
+  if (owner === null || owner === '') return false;
+  if (expiresAt === null) return false;
+  return expiresAt.getTime() > nowMs;
+}
+
+/**
+ * Classify a (possibly `confirmed`) action from PERSISTED state, WITHOUT re-running anything:
+ *  - `settled`              — a persisted result OR a terminal status (nothing to recover);
+ *  - `processing`           — a `confirmed`, result-less row with a NON-EXPIRED persisted lease (an
+ *                             in-flight continuation owns it; a refresh must NOT finalize it);
+ *  - `recoverable`          — a `confirmed`, result-less row with NO live lease whose tool is in the
+ *                             recoverable set (`RECOVERABLE_STANDALONE_TOOLS`);
+ *  - `needs_reconciliation` — anything else (a `confirmed`, result-less row of a non-replayable tool).
+ *
+ * The TTL is a heuristic, not a liveness proof: an owner that legitimately blocks past
+ * `EXECUTION_LEASE_TTL_MS` can be reclassified (same caveat as execution takeover).
+ */
+export function classifyConfirmedAction(row: ConfirmableActionRow, nowMs: number): ConfirmedActionClass {
+  if (hasPersistedResult(row.resultJson)) return 'settled';
+  if (TERMINAL_ACTION_STATUSES.has(row.status)) return 'settled';
+  if (row.status !== 'confirmed') return 'needs_reconciliation';
+  if (hasActiveLease(row, nowMs)) return 'processing';
+  if (isRecoverableStandaloneTool(row.toolName)) return 'recoverable';
+  return 'needs_reconciliation';
+}
+
+/* ----------------------------------------------------------------------------------------- *
+ * 3. Unified landing primitive — status + result + audit in ONE transaction
+ * ----------------------------------------------------------------------------------------- */
+
+/** Input for {@link settlePendingAction}. */
+export interface SettlePendingActionInput {
+  actionId: string;
+  /** The TERMINAL status to land (`executed` / `failed` / `needs_reconciliation` / …). */
+  status: PendingActionStatus;
+  /** The persisted `ToolExecutionResult` — omit to leave `resultJson` untouched. */
+  result?: ToolExecutionResult;
+  /** When given, land ONLY if the row currently holds one of these statuses (atomic CAS). */
+  from?: PendingActionStatus[];
+  /** The execution audit entry, written INSIDE the same transaction. */
+  audit?: AuditEntry;
+  /** Idempotency key for the audit insert — a repeat settle never duplicates the audit row. */
+  dedupeKey?: string;
+}
+
+/**
+ * LAND a `PendingAction` in ONE atomic `prisma.$transaction`: (optionally CAS) the terminal status,
+ * (optionally) the persisted `ToolExecutionResult`, and (optionally) the execution `AuditLog` — so a
+ * settled action can NEVER be left with a persisted result but no terminal status, a status but no
+ * audit, or any other half-landed combination. Returns `false` when a requested CAS did not match
+ * (a concurrent settle already moved the row — nothing is written).
+ *
+ * The audit write is delegated to `recordAudit`, which is best-effort (never throws); a duplicate
+ * `dedupeKey` is absorbed, so a REPEATED settle of the same action never duplicates its audit.
+ */
+export async function settlePendingAction(input: SettlePendingActionInput): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    if (input.from !== undefined) {
+      const won = await claimPendingAction(
+        { actionId: input.actionId, from: input.from, to: input.status },
+        tx,
+      );
+      if (!won) return false;
+    } else {
+      await setPendingActionStatus(input.actionId, input.status, tx);
+    }
+    if (input.result !== undefined) {
+      await tx.pendingAction.update({
+        where: { id: input.actionId },
+        data: { resultJson: toJson(input.result) },
+      });
+    }
+    if (input.audit !== undefined) {
+      await recordAudit(
+        input.audit,
+        input.dedupeKey !== undefined ? { client: tx, dedupeKey: input.dedupeKey } : { client: tx },
+      );
+    }
+    return true;
+  });
+}
+
+/* ----------------------------------------------------------------------------------------- *
+ * 4. STANDALONE (non-plan) wedge recovery — RECEIPT-FIRST
+ * ----------------------------------------------------------------------------------------- */
 
 /**
  * The outcome of a standalone-wedge resolution, structurally identical to `confirmation.ts`'s
@@ -130,7 +288,7 @@ export interface StandaloneWedgeOutcome {
 /**
  * Does a persisted `resultJson` payload hold a usable execution result? Mirrors the decode rule of
  * `confirmation.ts#readStoredResult` (a JSON object carrying a boolean `ok`) — a stored result means
- * `executeAuthorizedAction`'s atomic result+status write DID commit, so the row is not a wedge.
+ * the atomic result+status write DID commit, so the row is not a wedge.
  */
 function hasPersistedResult(resultJson: string | null): boolean {
   const parsed = safeParse<{ ok?: unknown } | null>(resultJson, null);
@@ -151,17 +309,17 @@ function isPlanLinked(link: { taskId: string | null; nodeId: string | null } | n
  * transaction ROLLED BACK (or the process died before writing it). On a repeat confirm the gateway
  * rejects with `CONFLICT` (its exactly-once CAS no longer matches `pending`), so this is the ONLY
  * place such a row can settle — otherwise it dangles `confirmed` forever and is invisible to
- * `GET /api/actions` (which lists only `pending`/`awaiting_mfa`). This also covers a simulated
- * process restart, where the in-process liveness marker is empty.
+ * `GET /api/actions` (which lists only `pending`/`awaiting_mfa`/`needs_reconciliation`). This also
+ * covers a simulated process restart, where the in-process liveness marker is empty.
  *
  * Returns `undefined` when there is nothing to do — NOT a `confirmed` row, a row whose result IS
- * stored (not a wedge), a row still owned by a LIVE continuation in this process (a later repeat
- * keeps deferring to it), or a PLAN-LINKED row (whose wedge is settled by the executor's own
- * `executeGatedToolOnce` path, unchanged). Otherwise:
- *  - a tool whose SDK write is PROVEN idempotent (`transfer_money`) ⇒ IDEMPOTENT REPLAY: re-invoke
- *    with the SAME ledger key and persist the TRUE result + terminal status (`executed`/`failed`);
- *  - any other standalone write tool ⇒ transition the row to the explicit, queryable
- *    `needs_reconciliation` state (NEVER a fabricated failure, NEVER a rollback, NEVER a re-run).
+ * stored (not a wedge), a row still owned by a LIVE continuation (in-process ref-count OR a
+ * non-expired PERSISTED lease), or a PLAN-LINKED row (whose wedge is settled by the executor's own
+ * `executeGatedToolOnce` path, unchanged). Otherwise the committed FACT is consulted FIRST
+ * ({@link settleFromCommittedReceipt}): an already-committed side effect is settled `executed` from
+ * its `ExecutionReceipt` WITHOUT re-running the tool. Only on a miss AND a RECOVERABLE tool is the
+ * side effect replayed on its idempotency key; any other standalone write tool transitions to the
+ * explicit, queryable `needs_reconciliation` state (NEVER a fabricated failure, NEVER a rollback).
  */
 export async function recoverStandaloneWedge(
   actionId: string,
@@ -172,6 +330,9 @@ export async function recoverStandaloneWedge(
   // A persisted result means the atomic result+status write DID commit (or a prior recovery settled
   // it) — not a wedge; fall through to the plain conflict outcome.
   if (hasPersistedResult(row.resultJson)) return undefined;
+  // An ACTIVE PERSISTED LEASE means an in-flight continuation owns this `confirmed` row (even across
+  // a refresh / another process): it is result-less only because that holder has not written yet.
+  if (hasActiveLease(row, leaseNowMs())) return undefined;
   // A LIVE continuation in this process owns this `confirmed` row: it is result-less only because
   // that continuation has not written yet. Do NOT touch it — the duplicate reports the conflict.
   // The CALLER (a repeat confirm/verify via `conflictOutcome`) holds its OWN marker, so when asked
@@ -188,29 +349,90 @@ export async function recoverStandaloneWedge(
   const tier = (row.riskLevel as RiskLevel | undefined) ?? 'YELLOW';
   const requiresMfa = row.requiresMfa === true;
 
-  if (PROVEN_IDEMPOTENT_STANDALONE_TOOLS.has(row.toolName as ToolName)) {
+  // COMMITTED-FACT FIRST: an `ExecutionReceipt` for this execution identity proves the side effect
+  // ALREADY committed — settle `executed` FROM it, WITHOUT re-running the tool. (A LEGACY
+  // deterministic ledger row with no receipt is handled by the SDK replay itself, which consults it
+  // before any mutable lookup — see `banking-sdk/transfer.ts#replayCommitted`.)
+  const committed = await settleFromCommittedReceipt(actionId, row, link, tier, requiresMfa);
+  if (committed !== undefined) return committed;
+
+  if (isRecoverableStandaloneTool(row.toolName)) {
     return replayStandaloneAction(actionId, row, link, tier, requiresMfa);
   }
   return reconcileStandaloneAction(actionId, tier, requiresMfa);
 }
 
+/** The row shape the standalone recovery paths consume (a structural slice of `PendingAction`). */
+interface StandaloneRow {
+  userId: string;
+  toolName: string;
+  argsJson: string;
+  sessionId: string;
+  userRequest: string | null;
+  intent: string | null;
+}
+
+/** Build the `transfer_money` summary from a persisted SDK `TransferResult` snapshot, when possible. */
+function summaryFromReceipt(toolName: string, stored: Record<string, unknown>): string | undefined {
+  if (toolName !== 'transfer_money') return undefined;
+  const recipient = stored.recipient as { name?: unknown } | undefined;
+  const name =
+    recipient !== undefined && typeof recipient.name === 'string' && recipient.name !== ''
+      ? recipient.name
+      : '收款人';
+  const amount = typeof stored.amount === 'number' ? stored.amount : undefined;
+  if (amount === undefined) return undefined;
+  const newBalance = typeof stored.newBalance === 'number' ? stored.newBalance : undefined;
+  const balance = newBalance !== undefined ? `，账户余额 ${formatCNY(newBalance)}` : '';
+  return `已向 ${name} 转账 ${formatCNY(amount)}${balance}。`;
+}
+
+/**
+ * Settle a standalone wedge FROM its COMMITTED execution receipt — the durable proof that the side
+ * effect already committed with this execution identity. The tool is NEVER re-invoked (so no mutable
+ * re-resolution, no second side effect); the persisted SDK result snapshot becomes the action's
+ * `ToolExecutionResult`. Returns `undefined` when no (readable) receipt exists, so the caller falls
+ * back to the replay/reconcile branches.
+ */
+async function settleFromCommittedReceipt(
+  actionId: string,
+  row: StandaloneRow,
+  link: { taskId: string | null; nodeId: string | null } | null,
+  tier: RiskLevel,
+  requiresMfa: boolean,
+): Promise<StandaloneWedgeOutcome | undefined> {
+  const key = ledgerKeyForAction({
+    id: actionId,
+    taskId: link?.taskId ?? undefined,
+    nodeId: link?.nodeId ?? undefined,
+  });
+  const receipt = await getExecutionReceipt(row.userId, key);
+  if (receipt === null) return undefined;
+  const stored = safeParse<Record<string, unknown> | null>(receipt.resultJson, null);
+  if (stored === null) return undefined;
+
+  const result: ToolExecutionResult = {
+    ok: true,
+    data: stored,
+    summary: summaryFromReceipt(row.toolName, stored),
+  };
+  const settled = await landStandalone(actionId, row, tier, requiresMfa, result, 'executed');
+  return {
+    ...settled,
+    message:
+      '该操作此前已执行但结果未留存，已从其已提交的执行凭证中恢复成功（副作用仅发生一次，未重新执行）。',
+  };
+}
+
 /**
  * IDEMPOTENT REPLAY of a proven-idempotent standalone wedge. Re-invokes the tool with the SAME
  * ledger key the FIRST execution used, so the SDK replays its already-committed row (side effect
- * EXACTLY ONCE — the ledger primary key dedups the write) and returns the TRUE outcome; then persists
- * that result AND the terminal status ATOMICALLY, closing the same window `executeAuthorizedAction`
- * normally closes in one transaction.
+ * EXACTLY ONCE — the ledger primary key dedups the write) and returns the TRUE outcome; then lands
+ * that result AND the terminal status ATOMICALLY with the recovery audit.
  */
 async function replayStandaloneAction(
   actionId: string,
-  row: {
-    userId: string;
-    toolName: string;
-    argsJson: string;
-    sessionId: string;
-    userRequest: string | null;
-    intent: string | null;
-  },
+  row: StandaloneRow,
   link: { taskId: string | null; nodeId: string | null } | null,
   tier: RiskLevel,
   requiresMfa: boolean,
@@ -232,48 +454,50 @@ async function replayStandaloneAction(
   }
 
   const status: PendingActionStatus = result.ok ? 'executed' : 'failed';
-  // Persist the recovered result and the terminal status ATOMICALLY (mirrors
-  // `executeAuthorizedAction`), so the row can never dangle `confirmed` with a stored result.
-  await prisma.$transaction(async (tx) => {
-    await tx.pendingAction.update({
-      where: { id: actionId },
-      data: { resultJson: toJson(result) },
-    });
-    await setPendingActionStatus(actionId, status, tx);
-    // The RECOVERY audit is written in the SAME transaction as the recovery fact (result + status),
-    // so a settled recovery always leaves a durable audit and can never be stranded at `confirmed`.
-    // Deduped by execution identity, so a repeated recovery never duplicates the audit.
-    await recordAudit(
-      {
-        timestamp: demoNow(),
-        sessionId: row.sessionId,
-        userRequest: row.userRequest ?? '',
-        intent: row.intent ?? undefined,
-        toolName,
-        riskLevel: tier,
-        confirmationRequired: true,
-        confirmed: true,
-        mfaRequired: requiresMfa,
-        toolResult: result,
-        status: result.ok ? 'success' : 'failed',
-        detail: '恢复：初次结果写回失败，按幂等键安全重放（副作用仅一次）',
-      },
-      { client: tx, dedupeKey: `exec:${idempotencyKey}` },
-    );
-  });
-
+  const settled = await landStandalone(actionId, row, tier, requiresMfa, result, status);
   return {
-    ok: result.ok,
-    actionId,
-    status,
-    tier,
-    requiresMfa,
+    ...settled,
     message: result.ok
       ? '该操作此前已执行但结果未留存，已按其幂等键安全重放并确认执行成功（副作用仅发生一次）。'
       : `该操作此前已执行但结果未留存，幂等重放确认为失败：${result.error ?? '未知原因'}`,
-    result,
-    events: [],
   };
+}
+
+/**
+ * LAND a standalone recovery: persist the recovered result + terminal status + the recovery audit in
+ * ONE atomic `prisma.$transaction` (via {@link settlePendingAction}), so a settled recovery always
+ * leaves a durable audit and can never be stranded at `confirmed`.
+ */
+async function landStandalone(
+  actionId: string,
+  row: StandaloneRow,
+  tier: RiskLevel,
+  requiresMfa: boolean,
+  result: ToolExecutionResult,
+  status: PendingActionStatus,
+): Promise<StandaloneWedgeOutcome> {
+  await settlePendingAction({
+    actionId,
+    status,
+    result,
+    audit: {
+      timestamp: demoNow(),
+      sessionId: row.sessionId,
+      userRequest: row.userRequest ?? '',
+      intent: row.intent ?? undefined,
+      toolName: row.toolName,
+      riskLevel: tier,
+      confirmationRequired: true,
+      confirmed: true,
+      mfaRequired: requiresMfa,
+      toolResult: result,
+      status: result.ok ? 'success' : 'failed',
+      detail: '恢复：初次结果写回失败，按幂等键安全重放（副作用仅一次）',
+    },
+    dedupeKey: `exec:${actionId}`,
+  });
+
+  return { ok: result.ok, actionId, status, tier, requiresMfa, message: '', result, events: [] };
 }
 
 /**
@@ -288,10 +512,10 @@ async function reconcileStandaloneAction(
   tier: RiskLevel,
   requiresMfa: boolean,
 ): Promise<StandaloneWedgeOutcome> {
-  const won = await claimPendingAction({
+  const won = await settlePendingAction({
     actionId,
+    status: 'needs_reconciliation',
     from: ['confirmed'],
-    to: 'needs_reconciliation',
   });
   // A lost CAS means a concurrent settle already moved the row: report its CURRENT persisted status
   // truthfully (never a fabricated one).
