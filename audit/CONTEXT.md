@@ -92,6 +92,7 @@ re-exports each function and its types.
 
 ## Known Issues
 
+- **No idempotency/dedup/outbox for audit writes**: `insertAuditLog`/`insertSecurityEvent` always `create` a NEW row (the `AuditLog`/`SecurityEvent` models have NO unique key) and no outbox/retry mechanism exists in the repo — a retried/duplicated decision path appends a duplicate row, and a swallowed write failure is never retried. The only idempotency machinery (`@/lib/ledger` keys feeding the SDK) covers *business side effects*, not audit/security-event rows.
 - On the cancel path `toolResult` and `mfaResult` are intentionally omitted (nothing executed / no MFA) and persisted null (see `cancelAction` in `../agent/confirmation.ts`).
 - `SecurityEventKind` values `HIGH_RISK_BLOCKED` and `ANOMALY_FLAGGED` have NO producer anywhere: the gateway's locked-session `deny` uses `HIGH_RISK_BLOCKED` only as an opaque block-reason TAG (it writes no `SecurityEvent`), and `detect_anomaly` (`banking-sdk/transaction.ts`) is READ-ONLY.
 - The other `SecurityEventKind`s ARE produced: `CIRCUIT_BREAKER_TRIPPED` and `SECURITY_RESET` (`../security/circuit-breaker.ts` `recordFailure`/`resetSession`), `LIMIT_EXCEEDED` (`../security/security-gateway.ts` transfer escalation at execution time), `MFA_FAILURE` (`../security/mfa.ts` `verify`), `INJECTION_ATTEMPT` (`../security/injection-guard.ts` `reportInjection`, called by `../agent/run-turn.ts`).
