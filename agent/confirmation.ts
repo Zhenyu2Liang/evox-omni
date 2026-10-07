@@ -945,7 +945,7 @@ async function withLiveConfirmation<T>(
   try {
     return await run();
   } finally {
-    inFlightConfirmations.delete(actionId);
+    releaseAction(actionId);
   }
 }
 
