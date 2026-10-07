@@ -244,6 +244,13 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
   tool-event / DB-state level.
 - The remaining HTTP coverage gap is the `/api/chat` SSE `error`-frame, which is unreachable over the
   real HTTP + mock path (see the "Known gap" section above).
+- NO spec under `tests/app` references a `needs_reconciliation` action or a recovery route — and there
+  is NO `POST /api/actions/[id]/recover` endpoint (the action routes are only confirm/verify/cancel +
+  `GET /api/actions`). `GET /api/actions` IS exercised here (`dag-recovery-http.test.ts`,
+  `identity-http.test.ts`, `session-takeover-http.test.ts`) but only for the non-terminal
+  `pending`/`awaiting_mfa` listing and session isolation; the `needs_reconciliation` SURFACING itself
+  (a standalone-wedge action) is covered only by the ROOT review spec
+  `tests/review-standalone-recovery.test.ts` (`getJson(actionsGet, '/api/actions')`), not from this node.
 - The mock responder (`agent/providers/mock-responder.ts`) routes DIRECT single-action intents: e.g.
   "把信用卡娱乐限额调整到1500" → `set_card_limit`, "申购稳健理财A 1000元" → `subscribe_investment`,
   "取消Netflix订阅" → `cancel_subscription`.

@@ -31,6 +31,7 @@ re-exports each function and its types.
 
 ## Constraints
 
+- **Writes are NOT transaction-composable**: `recordAudit` / `recordSecurityEvent` accept NO `Prisma.TransactionClient` — they go through the store seam to `insertAuditLog` / `insertSecurityEvent`, which use the **global `prisma` singleton** (`@/lib/db/client`). An audit/security-event write therefore CANNOT be folded into a caller's `prisma.$transaction` (unlike `@/lib/db/repositories/pendingAction` functions, which take `client: Prisma.TransactionClient = prisma`). To make an audit write atomic with a business fact today would require adding a `client`/`tx` parameter to this node's write functions and to the repository functions they delegate to.
 - **Dependency direction**: `lib` ← `audit`. This node imports ONLY `lib/contracts/*`,
   `lib/db/repositories/*`, `lib/errors`, and `lib/clock`. It **MUST NOT** import `security`,
   `agent`, `planner`, `banking-sdk`, or `prisma` directly — the Security Gateway depends on
@@ -91,6 +92,7 @@ re-exports each function and its types.
 
 ## Known Issues
 
+- **No idempotency/dedup/outbox for audit writes**: `insertAuditLog`/`insertSecurityEvent` always `create` a NEW row (the `AuditLog`/`SecurityEvent` models have NO unique key) and no outbox/retry mechanism exists in the repo — a retried/duplicated decision path appends a duplicate row, and a swallowed write failure is never retried. The only idempotency machinery (`@/lib/ledger` keys feeding the SDK) covers *business side effects*, not audit/security-event rows.
 - On the cancel path `toolResult` and `mfaResult` are intentionally omitted (nothing executed / no MFA) and persisted null (see `cancelAction` in `../agent/confirmation.ts`).
 - `SecurityEventKind` values `HIGH_RISK_BLOCKED` and `ANOMALY_FLAGGED` have NO producer anywhere: the gateway's locked-session `deny` uses `HIGH_RISK_BLOCKED` only as an opaque block-reason TAG (it writes no `SecurityEvent`), and `detect_anomaly` (`banking-sdk/transaction.ts`) is READ-ONLY.
 - The other `SecurityEventKind`s ARE produced: `CIRCUIT_BREAKER_TRIPPED` and `SECURITY_RESET` (`../security/circuit-breaker.ts` `recordFailure`/`resetSession`), `LIMIT_EXCEEDED` (`../security/security-gateway.ts` transfer escalation at execution time), `MFA_FAILURE` (`../security/mfa.ts` `verify`), `INJECTION_ATTEMPT` (`../security/injection-guard.ts` `reportInjection`, called by `../agent/run-turn.ts`).
