@@ -17,7 +17,7 @@
    用户消息 → Pi Agent（脚本化模型）→ 银行工具 → Security Gateway（`beforeToolCall`）→ Banking SDK → 审计。
 3. **HTTP 路由集成测试（route-handler integration，`[integration]`）**——`tests/app/` 下**进程内（in-process）**
    直接导入**真实导出**的 route handler，用真实 `NextRequest` 调用（共享 `harness.ts`），覆盖
-   `/api/chat`、`/api/actions/*`、`/api/tasks/*`；此外还有**跨切面**的边界/契约复核规格 `tests/review-boundaries.test.ts`、`tests/review-concurrency.test.ts`、`tests/review-new-boundaries.test.ts`、`tests/review-current-boundaries.test.ts`、`tests/review-execution-integrity.test.ts`、`tests/review-execution-fencing.test.ts`、`tests/review-followup-probes.test.ts`、`tests/review-next-boundaries.test.ts`、`tests/review-obsolete-executor.test.ts`、`tests/review-result-recovery.test.ts`、`tests/review-initial-executor-fencing.test.ts`、`tests/review-confirmation-marker-lifecycle.test.ts`、`tests/review-standalone-recovery.test.ts` 与 `tests/app/confirm-continuation-fencing.test.ts`，以及**冻结回归守卫** `tests/review-final-boundaries.test.ts`、`tests/review-recovery-probes.test.ts` 与 `tests/review-followup-integrity.test.ts`（同为 `[integration]`）。
+   `/api/chat`、`/api/actions/*`、`/api/tasks/*`；此外还有**跨切面**的边界/契约复核规格 `tests/review-boundaries.test.ts`、`tests/review-concurrency.test.ts`、`tests/review-new-boundaries.test.ts`、`tests/review-current-boundaries.test.ts`、`tests/review-execution-integrity.test.ts`、`tests/review-execution-fencing.test.ts`、`tests/review-followup-probes.test.ts`、`tests/review-next-boundaries.test.ts`、`tests/review-obsolete-executor.test.ts`、`tests/review-result-recovery.test.ts`、`tests/review-initial-executor-fencing.test.ts`、`tests/review-confirmation-marker-lifecycle.test.ts`、`tests/review-standalone-recovery.test.ts`、`tests/review-postfix-boundaries.test.ts`、`tests/review-txn-facts.test.ts`、`tests/review-receipt-identity.test.ts`、`tests/review-convergence-refresh.test.ts`、`tests/review-execution-barriers.test.ts` 与 `tests/app/confirm-continuation-fencing.test.ts`、`tests/app/actions-recovery-http.test.ts`，以及**冻结回归守卫** `tests/review-final-boundaries.test.ts`、`tests/review-recovery-probes.test.ts` 与 `tests/review-followup-integrity.test.ts`（同为 `[integration]`）。
 4. **真实浏览器验收 harness（real-browser acceptance）**——`tests/e2e/` 下**独立于 Vitest**（`tsx` 显式运行），
    启动真实 `next dev` + 真实无头 Chrome（隔离库 `prisma/e2e.db`），对**渲染后的 DOM** 断言——见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
@@ -31,7 +31,7 @@
 > 详见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
 ### 当前实测状态 · Measured State
-- **`npx vitest run`** → **86 个文件 / 599 个测试全部通过**。
+- **`npx vitest run`** → **95 个文件 / 642 个测试全部通过**。
 - **`npx tsc --noEmit`** → **0 错误**（Vitest 只转译、不做类型检查，故类型门禁单列）。
 - **`npx next build`** → **退出码 0**。
 - **真实浏览器验收**（`npx tsx tests/e2e/acceptance.e2e.ts`，隔离库 `prisma/e2e.db`）→ **PASS 5 / FAIL 0 / SKIP 0**：
@@ -309,13 +309,13 @@ handler 与会话、读取 SSE 分帧。
 - **真实浏览器验收是单机 / 单浏览器**：`tests/e2e/` 只在**本机**的无头 Chrome（Edge 兜底未测）上运行，
   不构成跨浏览器验证；它也不跑生产构建（`next build` / `next start`）。
 - **独立楔子恢复的幂等性只对 `transfer_money` 被证明**：`agent/confirmation-recovery.ts#recoverStandaloneWedge`
-  仅对**被证明幂等**的独立写工具 `transfer_money`（`PROVEN_IDEMPOTENT_STANDALONE_TOOLS` 的唯一成员，经
-  `lib/ledger` 的 `ledgerKeyForAction` / `idempotentTransferTxId` 按账本主键去重）**重放**；**其它**独立门控写工具
+  仅对**被证明幂等**的独立写工具 `transfer_money`（`RECOVERABLE_STANDALONE_TOOLS` 的唯一成员，经
+  先经 `banking-sdk/transfer.ts#replayCommitted` 读**已提交回执** `ExecutionReceipt`（同身份 + 同 `requestDigest` ⇒ 原始结果，不同摘要 ⇒ `CONFLICT`），无回执时回退到 `lib/ledger` 的 `ledgerKeyForAction` / `idempotentTransferTxId` 按账本主键去重）**重放**；**其它**独立门控写工具
   （`apply_virtual_card`、`set_card_limit`、`reserve_budget`、`create_scheduled_task` …）一律结算为终态
-  `needs_reconciliation`（需人工核对），**不**自动重试、**不**伪造回滚。
+  `needs_reconciliation`（需人工核对），**不**自动重试、**不**伪造回滚；经 `GET /api/actions`、页面 `/actions` 与 `POST /api/actions/[id]/recover` 呈现 / 结算。
 - **人工确认活性登记表是进程内（per-process）**：`liveConfirmations` 引用计数（`agent/confirmation-recovery.ts`）
   只在**本进程**内可见——多进程 / 多实例部署下，运行在**其它**进程的活跃续跑**不被识别**；
-  执行领取接管仍是 **TTL 启发式**（`EXECUTION_CLAIM_TTL_MS = 600000`，真实时钟），单次工具调用阻塞超过该 TTL 仍可能被接管
+  执行领取接管仍是 **TTL 启发式**（`EXECUTION_CLAIM_TTL_MS = 600000`，真实时钟），单次工具调用阻塞超过该 TTL 仍可能被接管；持久化**执行租约** `EXECUTION_LEASE_TTL_MS = 120000`（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`，驱动 `classifyConfirmedAction` 判 `processing`）是**另一个不同**的 TTL，同样只是启发式
   （其写入受围栏保护）。上述边界仅在**单进程 / 单 SQLite** 内验证，多进程竞争**未**做压力测试。
 
 > 安全模型的完整说明见 [`security.md`](./security.md)；已知限制见 [`known-risks.md`](./known-risks.md)。

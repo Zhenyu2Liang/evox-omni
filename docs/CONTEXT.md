@@ -55,18 +55,21 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   `tests/review-execution-fencing.test.ts`, `tests/app/confirm-continuation-fencing.test.ts`) and the
   executor-fencing / marker-lifecycle / standalone-recovery specs
   (`tests/review-initial-executor-fencing.test.ts`, `tests/review-confirmation-marker-lifecycle.test.ts`,
-  `tests/review-standalone-recovery.test.ts`); §6 (test-infra)
+  `tests/review-standalone-recovery.test.ts`) plus the receipt/barrier/refresh recovery specs (`tests/review-postfix-boundaries.test.ts`, `tests/review-txn-facts.test.ts`, `tests/review-receipt-identity.test.ts`, `tests/review-convergence-refresh.test.ts`, `tests/review-execution-barriers.test.ts`, `tests/app/actions-recovery-http.test.ts`); §6 (test-infra)
   records the clean-env init root cause (`RUST_LOG`), the new specs (`tests/review-next-boundaries.test.ts`,
   `tests/review-obsolete-executor.test.ts`, `tests/review-result-recovery.test.ts`, `tests/deploy-db-push.test.ts`,
   `tests/unit/lib/prisma-cli-env.test.ts`) and the deploy ordering (`npm run db:push` → `db:seed` → `build`);
-  the recorded suite size is **86 files / 599 tests**.
+  the recorded suite size is **95 files / 642 tests**.
 - `docs/known-risks.md` — honest limitations (mock data, simulated MFA, no real payment, heuristic
   anomaly detection, fictional investments, spending analysis excludes anomalies, in-process
   breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with
   exactly one of the three buckets and framed as *limitation + why it is acceptable for a
   competition demo*; documents the standalone `needs_reconciliation` reconciliation boundary (only
   `transfer_money` is proven idempotent for standalone recovery), the per-process ref-counted
-  `liveConfirmations` liveness registry, the clean-env init root cause, the
+  `liveConfirmations` liveness registry (with the persisted per-row execution lease,
+  `EXECUTION_LEASE_TTL_MS = 120000`, distinct from the plan-takeover `EXECUTION_CLAIM_TTL_MS = 600000`),
+  the receipt-first idempotent settlement (`ExecutionReceipt` + `replayCommitted`), the `/actions` page
+  and the `POST /api/actions/[id]/recover` route, the clean-env init root cause, the
   `lib/prisma-cli-env.ts` policy and the deploy ordering as an §19 engineering note, together with the
   file-size soft-guideline overrun.
 
@@ -94,8 +97,8 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
 
 - Constants cited here come from `lib/constants.ts`: `DAILY_TRANSFER_LIMIT`, `MFA_CODE`,
   `MFA_MAX_ATTEMPTS`, `ANOMALY_AMOUNT_THRESHOLD`, `DEFAULT_DEMO_USER_ID`, `DEMO_NOW`, `RISK_LABEL`.
-- The 26-tool catalogue mirrors `lib/contracts/tools.ts` (`ToolName` union) and
-  `security/permission-engine.ts` (the authoritative tier table).
+- The 26-tool catalogue mirrors `lib/contracts/tools.ts` (`ToolName` union = 26) and
+  `security/permission-engine.ts` (the authoritative tier table); `agent/tools/planning.ts#KNOWN_TOOL_NAMES` is 25 (excludes the `submit_plan` meta-tool).
 - Scenario spec filenames mirror `tests/scenarios/test-0X-*.test.ts` (12 files).
 - When the code changes, update these docs in the same commit — they describe current state.
 - A real-browser acceptance harness exists at `tests/e2e/` (system Chrome via `playwright-core`, run
@@ -141,5 +144,5 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   empty `Error: Schema engine error:`. Default `npx vitest run` and default E2E now auto-provision the
   isolated DB. Do NOT describe this as open/unresolved.
 - **Deploy ordering**: `npm run db:push` (`tsx scripts/db-push.ts`, pins `RUST_LOG=info`) → `npm run db:seed` → `npm run build` (the build prerenders routes that query SQLite).
-- **Measured state** (keep current when the suite changes): `npx vitest run` → 86 files / 599 tests
+- **Measured state** (keep current when the suite changes): `npx vitest run` → 95 files / 642 tests
   pass; `npx tsc --noEmit` → 0 errors; `npx next build` → exit 0; E2E → PASS 5 / FAIL 0 / SKIP 0.

@@ -57,11 +57,11 @@ flowchart TD
 
 **Next.js 表面（HTTP 路由处理器 + 页面）**
 
-- **API 路由处理器**（`app/api/**/route.ts`，共 15 个）：`/api/actions`、`/api/actions/[id]/confirm`、
-  `/api/actions/[id]/verify`、`/api/actions/[id]/cancel`、`/api/audit`、`/api/bills`、`/api/cards`、
+- **API 路由处理器**（`app/api/**/route.ts`，共 16 个）：`/api/actions`、`/api/actions/[id]/confirm`、
+  `/api/actions/[id]/verify`、`/api/actions/[id]/cancel`、`/api/actions/[id]/recover`、`/api/audit`、`/api/bills`、`/api/cards`、
   `/api/chat`、`/api/dashboard`、`/api/health`、`/api/security`、`/api/security/reset`、
   `/api/subscriptions`、`/api/tasks`、`/api/tasks/[id]`。
-- **页面**（`app/**/page.tsx`，共 7 个）：`/`（dashboard）、`/agent`、`/audit`、`/bills`、`/cards`、
+- **页面**（`app/**/page.tsx`，共 8 个）：`/`（dashboard）、`/actions`（待处理操作）、`/agent`、`/audit`、`/bills`、`/cards`、
   `/security`、`/subscriptions`；另有 Next 生成的 `/_not-found`。
 
 > **构建前置（Build prerequisite）**：`next build`（Next ^15.1.6）会**静态预渲染**依赖数据库的页面
@@ -82,7 +82,7 @@ Constraints），也是**路由表**（把领域映射到子目录）。顶层�
 
 | 节点 | 职责 |
 |---|---|
-| `./app` | Next.js App Router：页面（dashboard / agent chat / bills / cards / subscriptions / security / audit）+ API 路由处理器（chat SSE、actions confirm\|verify\|cancel、tasks 控制、audit、security、read models） |
+| `./app` | Next.js App Router：页面（dashboard / agent chat / bills / cards / subscriptions / security / audit / actions 待处理操作）+ API 路由处理器（chat SSE、actions confirm\|verify\|cancel\|recover、tasks 控制、audit、security、read models） |
 | `./components` | React UI：聊天卡片、图表、银行瓦片、UI 原语 |
 | `./agent` | Pi Agent 运行时：agent 装配、system prompt、会话存储、工具注册、LLM provider（live + faux）、确认续跑 |
 | `./planner` | DAG 任务规划器 + 执行器（`submit_plan` 的后端） |
@@ -292,8 +292,9 @@ agent / audit / prisma。单个节点失败**绝不抛出**——记录 `failed`
   另以 `findInFlightPlanAction(taskId, nodeId)` 预检，避免为同一节点重复铸造第二个 `PendingAction`。
   **节点领取还校验计划所有权并拒绝终态节点（同一条语句内）**：`agent/task-control.ts#claimNodeOwnedByPlan` 的**单条** `prisma.agentTaskNode.updateMany` CAS 要求 `task: { executionToken: planToken }`（**计划所有权**，与节点领取在**同一条语句**内）且 `status: { notIn: TERMINAL_NODE_STATUSES }`（`TERMINAL_NODE_STATUSES = ['success','failed','skipped','cancelled']`）——一个已**失去计划领取**的执行者**无法**重新领取终态节点、**无法**运行其后继工具；执行器的节点/计划写入另带 **terminal-clobber 守卫**（仅当**新**状态为终态时生效，故当前所有者合法的 `failed`→`pending` 重开仍通过）；发布侧由 `planExecutionClaimHeld(planId, claimToken)` 门控（`agent/tools/planning.ts`）——被接管的执行者**不**再发布迟到的 `plan_update`。
 - **初始运行与接管共用同一原子节点领取（plan-ownership node claim）**：`submit_plan` 的**首次**运行与 resume / retry / 确认续跑走**同一套**原语。`agent/tools/planning.ts#runSubmitPlan` 在赢得计划领取（`claimTaskExecution`）后，用 `agent/task-control.ts#buildNodeClaimPorts(plan.id, claimToken)` 构造 `claimNode` / `releaseNode` 端口并注入 planner 的 `PlanDeps`，使**每一次节点领取**都走**单条语句**的 `claimNodeOwnedByPlan` CAS——要求父 `AgentTask.executionToken === planToken`（**计划所有权**）**且**节点非终态（`TERMINAL_NODE_STATUSES`）**且**节点 token 为空或已陈旧：**所有权校验与领取在同一条语句内**，读写之间**无 TOCTOU 窗口**，因此一个并发接管一旦轮换 `AgentTask.executionToken`，**初始**执行者的下一次节点领取即失败，**不会**启动后继工具。每次成功 `claimTaskExecution`（resume / retry / 确认续跑 / 初始运行）之后立即调用 `agent/task-control.ts#clearStaleNodeClaims(planId, planToken)`——一条**按计划 token 栅栏**的 `updateMany`，把该计划**非终态**节点的执行领取**置空**（终态节点**绝不**触碰）——否则僵尸已领取的新鲜节点 token 既非空也非陈旧，会被接管的原子 CAS 拒绝而让计划**卡在 `running`**；只有接管**赢家**的 `updateMany` 命中（失败者命中 0 行），**并发接管仍恰有一个赢家**。失去计划领取后，初始执行者**不启动后继工具、不覆写任何节点/计划行、不发布迟到进度**（`onNodeUpdate` / `onPlanUpdate` 均由**活跃计划领取**门控，其发布闸是 `planExecutionClaimHeld`——**只是发布门，绝非安全判定**）。
+- **执行权 / 世代栅栏（execution-right / generation fencing）**：`planner/executor.ts` 暴露可选端口 `PlanDeps.isRunOwner?: () => Promise<boolean>`（`planner/executor.ts:101`）；执行器在每个**异步节点通知之后**（阻塞式 sink 之后、下一次工具调用 / 通知**之前**）重查所有权（`ownerLost = async () => deps.isRunOwner !== undefined && !(await deps.isRunOwner())`，`:311`），丢失所有权即进入既有 `'owned'` 分支——该节点零写入、**不调用工具**、对计划/节点**无任何写**。计划领取经 `claimTaskExecutionWithGeneration` **原子**完成（`agent/tools/planning.ts`），并把 `TaskPlan.generation` 快照进每一次 `plan_update`，使被接管的执行者在**世代**层面即被识别为过期。
 - **刷新 / 恢复**：`GET /api/tasks`（按 cookie 限定的列表）与 `GET /api/tasks/[id]`（单计划，其节点结果携带
-  `pendingActionId`，UI 可在刷新后恢复确认/MFA 入口）；`GET /api/actions` 列出**需人工处理**的动作（`pending` / `awaiting_mfa` / `needs_reconciliation`——见 §9）。
+  `pendingActionId`，UI 可在刷新后恢复确认/MFA 入口）；`GET /api/actions` 列出**需人工处理**的动作（`pending` / `awaiting_mfa` / `needs_reconciliation`，外加任一**非终态**的 `confirmed` 楔子，每条附一个**建议性** `attention` 类 `decision|processing|recoverable|reconciliation`——见 §9），并配套**可刷新到达**的页面 `/actions`（导航「待处理操作」，`app/actions/page.tsx`）与**恢复入口** `POST /api/actions/[id]/recover`（独立楔子重放 / `needs_reconciliation` 结算；计划关联则转由所属计划 resume）。
   对计划停放动作的成功确认/验证会追加一个 `{type:'plan_update', plan}` 事件。
 
 ---
@@ -360,14 +361,15 @@ sequenceDiagram
 - **独立（非计划）门控动作的楔子恢复（standalone wedge）**：当 SDK 副作用已提交、而结果与终态状态的 `$transaction` 回滚
   （`PendingAction` 滞留 `confirmed` + `resultJson=null`）**且该动作不属于任何计划节点**时，重复 confirm/verify 会走到
   `conflictOutcome`，由 `agent/confirmation-recovery.ts#recoverStandaloneWedge` 结算这个楔子。对**已证明幂等**的
-  `transfer_money`（`PROVEN_IDEMPOTENT_STANDALONE_TOOLS` 的**唯一**成员；其账本行主键由
+  `transfer_money`（`RECOVERABLE_STANDALONE_TOOLS` 的**唯一**成员；先由**已提交回执**（`ExecutionReceipt`，见下一条）判定，无回执时才回退到历史账本行，其主键由
   `lib/ledger#idempotentTransferTxId(userId, ledgerKeyForAction(action))` 派生，重复调用在同一个 `runInTransaction` 内
   **重放已有行**、不二次扣款）以**相同幂等键幂等重放**，并**原子**持久化真实结果与终态（`executed` / `failed`）；
   对**其余**未证明幂等的独立写工具，经**单条 CAS** 把行转成新的**终态** `needs_reconciliation`
   （`lib/contracts/security.ts` 的 `PendingActionStatus` 新成员——**需人工结算**、**既非 `failed`**（结果未知，不是失败）
   **亦非 `confirmed`**（会永远悬挂））。两条路径都**绝不**重跑未证明幂等的写工具、**绝不**伪造回滚。仍被**本进程活跃续跑**
   拥有的行、已有存储结果的行，以及**计划节点**楔子都不在此处理（后者见下一条与 §8）。
-- **`needs_reconciliation` 对用户可见**：`GET /api/actions` 的 `SURFACED_STATUSES`（`app/api/actions/route.ts`）=
+- **已提交事实优先（committed-fact-first）＋执行租约**：`banking-sdk/transfer.ts` 把借方、账本 `Transaction` 与一行 `ExecutionReceipt`（`@@unique([userId, key])`，仓储 `lib/db/repositories/executionReceipt.ts` 的 `getExecutionReceipt` / `putExecutionReceipt`，再导出 `executionReceipts`）写进**同一个 `prisma.$transaction`**，以**执行身份**（`lib/ledger.ts#ledgerKeyForAction`）为键持久化**原始结果**；因此幂等重放由 `replayCommitted(userId, key, digest)` 在**任何可变查找之前**先判定——**同身份 + 同请求摘要**（`requestDigest`）⇒ 返回**原始结果**，**同身份 + 不同摘要** ⇒ `AppError('CONFLICT', 'same execution identity, different request')`，而无回执的**历史**账本行（`idempotentTransferTxId`）**仍**被识别为已落账。楔子分类由 `agent/confirmation-recovery.ts#classifyConfirmedAction(row, nowMs)` 统一给出 `'settled' | 'processing' | 'recoverable' | 'needs_reconciliation'`，`settlePendingAction` / `settleFromCommittedReceipt` 把结果 + 终态 + 审计写进**同一个 `$transaction`**；持久化执行租约（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`，`EXECUTION_LEASE_TTL_MS = 120000`，`setPendingActionLease` / `clearPendingActionLease` / `hasActiveLease`）**仅**对 `pending` / `awaiting_mfa` 经 `beginExecutionLease` / `endExecutionLease` 取得（**绝不**对 `confirmed` 取），从而区分**仍在运行的续跑**（`processing`）与**真楔子**。该 `EXECUTION_LEASE_TTL_MS = 120000` 与计划接管的 `EXECUTION_CLAIM_TTL_MS = 600000` 是**两个不同**的 TTL。
+- **`needs_reconciliation` 对用户可见**：`GET /api/actions` 的 `DECISION_STATUSES`（`app/api/actions/route.ts`）=
   `pending` / `awaiting_mfa` / `needs_reconciliation`；UI 由 `components/chat/useAgentStream.ts` 的 `pendingReconciliations`
   驱动，渲染一张**无操作按钮**的琥珀色 `ReconciliationCard`（「该操作需要人工核对」）——不提供确认/取消，也不重发聊天消息
   （浏览器**绝不**执行银行操作）。
@@ -383,7 +385,7 @@ sequenceDiagram
 
 ## 10. 工具体系 · Tool Catalogue
 
-模型拥有的**唯一**能力面（`lib/contracts/tools.ts` 中的 `ToolName` 联合类型，共 26 个）：
+模型拥有的**唯一**能力面（`lib/contracts/tools.ts` 中的 `ToolName` 联合类型，共 26 个；`agent/tools/planning.ts#KNOWN_TOOL_NAMES` 集合为 25 个——**不含** `submit_plan` 元工具）：
 
 | 层级 | 工具 |
 |---|---|
@@ -434,15 +436,18 @@ sequenceDiagram
   每次成功 `claimTaskExecution` 之后立即调用 `clearStaleNodeClaims(planId, planToken)`（**按计划 token 栅栏**的 `updateMany`，把**非终态**节点的执行领取置空），
   使并发接管能重新领取僵尸占用的节点、计划不卡在 `running`。失去计划领取的执行者**无法**重开终态节点 / 运行后继工具 / 覆写节点或计划行 / 发迟到 `plan_update`
   （`planExecutionClaimHeld` **只是发布门**，绝非安全判定）。
+- **执行权 / 世代（generation）栅栏**：执行器在每个**异步节点通知之后**重查可选端口 `PlanDeps.isRunOwner`（`planner/executor.ts:101`），
+  丢失所有权即进入 `'owned'` 分支（零写入、**不调用工具**）；计划经 `claimTaskExecutionWithGeneration` **原子**领取，
+  并把 `TaskPlan.generation` 快照进 `plan_update`（`agent/tools/planning.ts`），使被接管的执行者在**世代**层面即被识别为过期。
 - **活跃确认的引用计数（ref-counted liveness）**：进程内活跃确认注册表是**引用计数**的 `Map<string, number>`
   （`agent/confirmation-recovery.ts#liveConfirmations` 的 `retainAction` / `releaseAction` / `isActionLive` / `liveCount`）：
   同一动作被重复 confirm/verify 时，被快速拒绝（网关恰好一次 CAS → `CONFLICT`）且**先**结束的那一路，其 `finally` **不会**清掉仍在运行的第一路续跑的标记——
   标记仅在计数归零时移除，因此并发的计划重跑**不会**把活跃的 `confirmed` 行误判为楔子。
 - **楔子结算（计划节点 vs 独立动作）**：计划节点楔子由执行器续跑路径终结（`executed` 节点回填持久化 `resultJson`、**绝不**重跑工具；
   无存储结果或存储 `ok:false` 一律结算 `failed` 并路由**人工核对**）；**独立（非计划）**楔子由 `recoverStandaloneWedge` 结算——
-  对**已证明幂等**的 `transfer_money`（`PROVEN_IDEMPOTENT_STANDALONE_TOOLS` 唯一成员）幂等重放并原子落盘真实结果/终态，
+  对**已证明幂等**的 `transfer_money`（`RECOVERABLE_STANDALONE_TOOLS` 唯一成员）经**已提交回执优先**（`replayCommitted` 读 `ExecutionReceipt`）幂等重放并原子落盘真实结果/终态，
   对其余独立写工具经单条 CAS 转成**终态** `needs_reconciliation`（`PendingActionStatus` 新成员，需人工结算，**非** `failed`、**非** `confirmed`，
-  经 `GET /api/actions` 的 `SURFACED_STATUSES` 与 UI 的 `ReconciliationCard`/`pendingReconciliations` 呈现）；**绝不**重跑未证明幂等的写工具、**绝不**伪造回滚。
+  经 `GET /api/actions` 的 `DECISION_STATUSES` 与 UI 的 `ReconciliationCard`/`pendingReconciliations` 呈现）；**绝不**重跑未证明幂等的写工具、**绝不**伪造回滚。
 - **暂停保持（pause retention）**：在已暂停计划内确认一个停放节点只记录该节点结果，计划保持 `paused`，
   直到显式 resume 才继续。
 - **终态保护**：已取消的计划无法经 resume / retry / pause 离开终态；API 响应与 DB 一致（CAS 的 from 集合
