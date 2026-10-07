@@ -25,6 +25,7 @@ import {
 } from './confirmation-recovery';
 import {
   cancelTask as cancelTaskInternal,
+  findTaskByPendingAction,
   getTaskPlan as getTaskPlanInternal,
   pauseTask as pauseTaskInternal,
   resumeTask as resumeTaskInternal,
@@ -142,6 +143,11 @@ function noRecoveryMessage(
  * `executed` WITHOUT re-invoking the tool; otherwise an idempotent replay for a proven-idempotent
  * tool, else the queryable `needs_reconciliation` state.
  *
+ * A PLAN-LINKED wedge (a `confirmed`, result-less action belonging to a task-plan node) is settled
+ * by RESUMING its owning plan: the plan-resume executor backfills the node from the PERSISTED result
+ * (`recoverExecutedPlanAction`) or settles it `failed` / manual-reconciliation — the tool is NEVER
+ * re-invoked on a guess.
+ *
  * When there is nothing to recover it returns an honest `ok:false` outcome carrying the row's
  * CURRENT persisted status — NEVER a fabricated success and NEVER a re-run.
  */
@@ -165,6 +171,44 @@ export async function recoverAction(
   const status = (row?.status as PendingActionStatus | undefined) ?? 'cancelled';
   const tier = (row?.riskLevel as RiskLevel | undefined) ?? 'YELLOW';
   const requiresMfa = row?.requiresMfa === true;
+
+  // A PLAN-LINKED wedge is settled by RESUMING its owning plan: the plan-resume path backfills the
+  // node from the PERSISTED result (or settles it `failed` / manual-reconciliation) — the tool is
+  // never re-run on a mere guess.
+  if (row !== null && isPlanLinked(link)) {
+    const located = await findTaskByPendingAction(row.sessionId, actionId);
+    if (located !== undefined) {
+      try {
+        const plan = await resumeTask(row.sessionId, located.taskId);
+        const after = await getPendingAction(actionId);
+        const settledStatus = (after?.status as PendingActionStatus | undefined) ?? status;
+        const events: AgentStreamEvent[] = [{ type: 'plan_update', plan }];
+        const emit = opts?.onEvent;
+        if (emit !== undefined) for (const event of events) emit(event);
+        return {
+          ok: true,
+          actionId,
+          status: settledStatus,
+          tier,
+          requiresMfa,
+          message: `已恢复所属任务计划（${located.taskId}）。`,
+          events,
+        };
+      } catch (error) {
+        const reason = error instanceof AppError ? error.message : '请稍后重试。';
+        return {
+          ok: false,
+          actionId,
+          status,
+          tier,
+          requiresMfa,
+          message: `恢复所属任务计划失败：${reason}`,
+          events: [],
+        };
+      }
+    }
+  }
+
   return {
     ok: false,
     actionId,
