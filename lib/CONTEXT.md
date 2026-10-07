@@ -96,7 +96,8 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   AgentStreamEvent/ChatTurnRequest/Response), `index.ts` (barrel re-export).
 - `./lib/db` → Prisma client singleton (`client.ts`) + typed per-aggregate repositories (`repositories/`),
   incl. the atomic exactly-once `claimPendingAction` / ownership-aware `getPendingActionOwnership` primitives
-  and the optional-`client` transaction-composable `pendingAction` repository.
+  and the optional-`client` transaction-composable `pendingAction` & `executionReceipt` repositories
+  (a caller can write a receipt in the SAME `prisma.$transaction` as the side effect it records).
 - `./lib/errors.ts` → `ErrorCode` / `AppError` / `Result<T>` — the project error convention.
 - `./lib/money.ts` → CNY formatting/parsing/cent-safe arithmetic.
 - `./lib/constants.ts` → demo constants (limits, MFA code, thresholds, demo user id, cookie name, `DEMO_NOW`).
