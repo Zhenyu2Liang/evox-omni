@@ -16,4 +16,4 @@ export * from './ToolEventList';
 export * from './StreamingText';
 export * from './useAgentStream';
 export * from './actions';
-export type { TaskControlAction } from './cards';
+export type { TaskControlAction, AttentionClass, OutOfBandAttention } from './cards';

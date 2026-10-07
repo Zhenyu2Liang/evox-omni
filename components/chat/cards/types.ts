@@ -54,6 +54,26 @@ export interface AnomalyCardData {
 /** Control action requested from a plan card's task-control buttons. */
 export type TaskControlAction = 'pause' | 'resume' | 'cancel' | 'retry';
 
+/**
+ * How the chat surface must treat a restored `GET /api/actions` row. It is additive on top of the
+ * row `status` (a legacy server that omits it is handled by deriving it from `status`):
+ *  - `decision`       — a LIVE human decision (`pending` / `awaiting_mfa`) → confirm/MFA card.
+ *  - `processing`     — a `confirmed` row with an ACTIVE execution lease (work still in flight;
+ *                       nothing for the user to do, just show it is being processed).
+ *  - `recoverable`    — a result-less `confirmed` wedge with NO live lease that the server can
+ *                       safely settle on request (e.g. an idempotent `transfer_money` replay) →
+ *                       the user may trigger recovery.
+ *  - `reconciliation` — a terminal `needs_reconciliation` row whose outcome is UNKNOWN and must be
+ *                       settled out-of-band / through the recovery entry.
+ */
+export type AttentionClass = 'decision' | 'processing' | 'recoverable' | 'reconciliation';
+
+/**
+ * The out-of-band attention states rendered by the non-decision `ReconciliationCard`
+ * (`processing` / `recoverable` / `reconciliation`) — i.e. every class EXCEPT `decision`.
+ */
+export type OutOfBandAttention = Exclude<AttentionClass, 'decision'>;
+
 /** Callbacks threaded from the chat container into interactive cards. */
 export interface CardActionHandlers {
   actionId?: string;
@@ -64,6 +84,7 @@ export interface CardActionHandlers {
   onViewDetail?: () => void; // anomaly: 查看详情
   onFreeze?: () => void; // anomaly: 冻结银行卡
   onTaskControl?: (action: TaskControlAction) => void; // plan: pause/resume/cancel/retry
+  onRecover?: (actionId: string) => void; // out-of-band: POST /api/actions/:id/recover
   mfaAttempts?: number; // MFA: number of failed verification attempts so far
   busy?: boolean;
   error?: string;

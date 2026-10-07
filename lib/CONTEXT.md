@@ -41,6 +41,15 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   - `ledgerKeyForAction(action)` → the canonical de-dup IDENTITY of a `PendingAction`: `nodeExecutionKey(taskId, nodeId)` when the action is plan-linked (`taskId` AND `nodeId` both non-null/non-empty after trim), else the action's own `id`.
   - `ledgerTxIdForAction(userId, action)` → `idempotentTransferTxId(userId, ledgerKeyForAction(action))`, the ledger-row id `security/risk-engine` must look up to EXCLUDE an already-ledgered in-flight action from the cumulative daily-transfer total.
     Callers must use THIS (never `idempotentTransferTxId(userId, action.id)`) so a plan node's lookup MATCHES the id its row was generated with — otherwise the action is not recognized and is double-counted.
+  - `executionReceiptId(userId, key)` → the deterministic id of the unified EXECUTION RECEIPT for one gated side effect,
+    `rcpt_` + the first 32 hex chars of `sha256("<userId>\u0000<key>")`. A receipt is the durable COMMITTED-FACT record of
+    an execution identity (`userId` + `key` — the SAME key `ledgerKeyForAction`/`idempotentTransferTxId` use), so a replay
+    can recognize an already-committed side effect from PERSISTED data instead of re-resolving MUTABLE inputs.
+  - `requestDigest(parts)` → the canonical fingerprint of a gated tool REQUEST: the lowercase-hex `sha256` of
+    CANONICAL JSON of `parts` (object keys sorted recursively, `undefined` normalized to `null`; arrays keep their order).
+    Key insertion order never changes the digest and an absent field hashes the same as an explicit `null`, so
+    re-serializing an identical request always yields an identical digest. Used to decide whether a replay under the
+    SAME execution identity is the same request (replay the stored result) or a different one (reject `CONFLICT`).
 - `prisma-cli-env.ts` — shared Prisma-CLI **env policy + binary resolution**, the one piece every entry point that spawns the Prisma CLI imports (uses Node built-ins only — `node:fs`/`node:path` — no `@/` alias, no side effects at import).
   - `SCHEMA_ENGINE_RUST_LOG = 'info'` plus the two pinning helpers: `pinSchemaEngineLogging(env = process.env)` MUTATES and returns `env`; `prismaCliEnv(env?)` returns a NEW object and never mutates its input.
     Both force `RUST_LOG='info'` and default `RUST_BACKTRACE='1'`,
@@ -87,7 +96,8 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   AgentStreamEvent/ChatTurnRequest/Response), `index.ts` (barrel re-export).
 - `./lib/db` → Prisma client singleton (`client.ts`) + typed per-aggregate repositories (`repositories/`),
   incl. the atomic exactly-once `claimPendingAction` / ownership-aware `getPendingActionOwnership` primitives
-  and the optional-`client` transaction-composable `pendingAction` repository.
+  and the optional-`client` transaction-composable `pendingAction` & `executionReceipt` repositories
+  (a caller can write a receipt in the SAME `prisma.$transaction` as the side effect it records).
 - `./lib/errors.ts` → `ErrorCode` / `AppError` / `Result<T>` — the project error convention.
 - `./lib/money.ts` → CNY formatting/parsing/cent-safe arithmetic.
 - `./lib/constants.ts` → demo constants (limits, MFA code, thresholds, demo user id, cookie name, `DEMO_NOW`).
@@ -96,7 +106,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/date.ts` → pure local-timezone date-range/format helpers.
 - `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
-- `./lib/ledger.ts` → deterministic idempotency keys + canonical action→ledger-row identity — `idempotentTransferTxId`, `nodeExecutionKey`, `ledgerKeyForAction`, `ledgerTxIdForAction`.
+- `./lib/ledger.ts` → deterministic idempotency keys + canonical action→ledger-row identity — `idempotentTransferTxId`, `nodeExecutionKey`, `ledgerKeyForAction`, `ledgerTxIdForAction`, plus the EXECUTION-RECEIPT helpers `executionReceiptId` / `requestDigest`.
 - `./lib/prisma-cli-env.ts` → Prisma-CLI env pinning + bin resolution — `SCHEMA_ENGINE_RUST_LOG`, `pinSchemaEngineLogging`, `prismaCliEnv`, `CliInvocation`, `resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`; re-exported by `tests/helpers/prisma-cli.ts` (its public API is unchanged) and consumed by `scripts/db-push.ts` (the `npm run db:push` / `db:reset` deploy entry).
 - `./lib/index.ts` → convenience barrel for `@/lib` imports (no `db`).
 

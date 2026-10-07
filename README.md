@@ -205,10 +205,13 @@ agent.beforeToolCall ──► securityGateway.handleToolCall(ctx)
    恢复对**所有受闸门的写工具通用且幂等**；`confirmed` 但已存结果的动作用一次 CAS（`confirmed` → `readStoredResult(existing)?.ok===true ? 'executed' : 'failed'`，经 `claimPendingAction({actionId, from:['confirmed'], to:<target>})`）+ 同样回填即完成（`ok:false` 时动作 / 节点 / 计划一并收敛为 `failed`），不重跑、也不伪造回滚；`executed` 但**无**已存结果的遗留行同样**不重新调用工具**，而是以「已执行但未留存结果，需人工核对」明确收敛。
    当 SDK 副作用已提交、但「结果 + 终态动作状态」的那次 `$transaction` **回滚**时（`resultJson=null` 卡在 `confirmed`），该动作被**最终判定为 `failed` 并路由到显式人工核对**（消息含 `人工核对`），工具绝不重调、计划也不会停在 `waiting_confirmation`；真正的楔子（无存活续跑）与**仍被存活续跑持有**的 `confirmed`+`null` 行由**进程内、参考计数** `liveConfirmations` 登记表（`agent/confirmation-recovery.ts`）区分（见 `agent/confirmation.ts#executeGatedToolOnce`）。
    `pending` / `awaiting_mfa` 仍等待真实人工确认。
+   **统一结算分类器 + 执行租约**：`agent/confirmation-recovery.ts#classifyConfirmedAction(row, nowMs)` 把一个 `confirmed` 行映射为 `settled | processing | recoverable | needs_reconciliation`；结算统一经 `settlePendingAction` / `settleFromCommittedReceipt` 在**同一个 `$transaction`** 内落地「结果 + 终态动作状态 + 审计」。持久化 **执行租约**（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`，`EXECUTION_LEASE_TTL_MS = 120000`）**只对 `pending` / `awaiting_mfa` 取**（经 `beginExecutionLease`，绝不对 `confirmed` 取），因此被存活续跑持有的 `confirmed` 行被识别为 `processing`，不会被误判为楔子。
+   独立（非计划）楔子另有一条**显式人工入口** `recoverAction`（`agent/index.ts`）：`POST /api/actions/[id]/recover` 对独立动作按需重放已证幂等的 `transfer_money` 或转入可查询的 `needs_reconciliation`，对计划关联动作则恢复其所属计划。
 9. **执行接管（execution token，fenced）**（`agent/task-control.ts` + `agent/task-fencing.ts`）：`resume` / `retry` 以 `staleBefore`
    （`EXECUTION_CLAIM_TTL_MS = 600000ms`，用 **真实时钟** 计算）**仅在计划/节点 `executionToken` 的所有者已陈旧时**接管；仍在推进的执行者通过**节点边界的租约续期**（`renewTaskExecutionClaim`，非后台定时器）保持自己的 claim 新鲜，但**长时间阻塞的所有者（单次工具调用阻塞超过 TTL）仍可被接管**——接管是 **TTL 启发式**，不是活性证明。
    接管是 **fenced** 的，且**每个执行者路径都被 fence**（初次 `submit_plan` 执行、依赖跳过与条件/说明节点、以及确认续跑）：**所有权在与写入同一条 SQL 的原子 CAS 中断言**（`updateTaskNode(..., { fenceToken })` 在 claim 丢失时返回 `null`；`claimTaskStatus(..., { fenceToken })` 在 claim 丢失时返回 `false`），因此被接管的旧执行者**无法再覆盖节点或计划结果、无法把已完成的下游标记为 `skipped`、也无法推进下游**；`createTaskPersistence` 区分 `mode:'executor'`（始终 fence）与 `mode:'control'`（仅 `pauseTask` / `cancelTask` 的刻意非 fence 写入）。
    当确认续跑**丢失**计划 claim 时，它**不推进计划**，而是经带 fence 的「无主 CAS」把人工决策节点落库（`agent/task-fencing.ts#recordDecidedNodeFenced`），让在场所有者继续、人工决策永不丢失；并发接管**恰有一个赢家**（赢家重写 `executionClaimedAt`，输家的条件更新匹配 0 行）。丢失计划 claim 的执行者被**计划级所有权 fencing** 拦下：节点 claim / 写入经 `claimNodeOwnedByPlan` 的**单条 `prisma.agentTaskNode.updateMany` 原子 CAS** 同时校验 `task:{executionToken:planToken}`（计划所有权）**且** `status:{notIn:TERMINAL_NODE_STATUSES}`（拒绝终态节点），迟到的 `onPlanUpdate` 亦被 `planExecutionClaimHeld` 门控而**不发布**。
+   **执行权 / 代际 fencing**：`planner/executor.ts` 暴露 `PlanDeps.isRunOwner?: () => Promise<boolean>` 端口 —— 它在**每个异步节点通知之后**（阻塞式 sink）与**下一次工具调用 / 通知之前**重查计划所有权，一旦不再是所有者，该节点即以 `'owned'` 收敛、**零写入、不发起任何工具调用**。`agent/tools/planning.ts` 经 `claimTaskExecutionWithGeneration` 认领并把 `TaskPlan.generation` 打在 `plan_update` 事件上（消费者可据此丢弃被取代执行者的低代际事件），`agent/task-control.ts#clearStaleNodeClaims` 在接管时清理僵尸的非终态节点 claim 以便重新认领。
 
 UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 思维链**。
 
@@ -229,7 +232,9 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 - **熔断（circuit-breaker）** — 连续 **3 次** 验证码失败会 **锁定该会话（fail-closed：拒绝该会话的*所有*工具调用，*包括 🟢 GREEN 查询*）**
   并写入 `SecurityEvent`（`CIRCUIT_BREAKER_TRIPPED`，severity `high`）。熔断是 LLM 无法清除的硬闸门；**只有用户通过安全中心**（`POST /api/security/reset` → `circuitBreaker.resetSession`，写入 `SECURITY_RESET` 事件）**的经审计操作才能解除**。
 - **审计（audit）** — 每个被闸门拦截的操作（确认 / 验证 / 取消）写入 `AuditLog`；
+  恢复（settle / replay / `needs_reconciliation`）的审计**与执行事实在同一个 `$transaction` 内**写入（`audit/audit-logger.ts#recordAudit(entry, { client, dedupeKey })`），并以唯一 `dedupeKey`（`AuditLog.dedupeKey? @unique`，形如 `exec:<ledgerKey>`，即该动作的执行身份 / `actionId`）保证幂等 —— 重复恢复**绝不**重复记账；
   每个安全控制决策写入 `SecurityEvent`。
+- **提交事实优先的幂等结算（committed-fact-first）** — `transfer_money` 在**一个 `prisma.$transaction`** 内写入「扣款 + 账本 `Transaction` + `ExecutionReceipt`（`@@unique([userId, key])`，保存**原始结果** `resultJson`、请求指纹 `requestDigest` 与关联 `txId`）」，因此重放**先查已提交凭据**（`banking-sdk/transfer.ts#replayCommitted(userId, key, digest)`，在任何可变查询之前）：**同身份 + 同 `requestDigest`** ⇒ 直接返回**原始结果**（不重放副作用）；**同身份 + 异 digest** ⇒ `AppError('CONFLICT', 'same execution identity, different request')`；**无凭据的遗留确定性流水行**（`lib/ledger.ts#idempotentTransferTxId` 派生的旧流水 id）同样被识别为**已入账**并按其持久化字段重放，绝不因收款人被改名而误判 `NOT_FOUND`。
 - **沙箱（sandbox）** — 演示范围硬约束：**无真实银行、无真实资金、无真实支付、无 shell、
   无任意代码/SQL/文件访问**。所有银行数据都在 SQLite 中模拟。
 
@@ -329,7 +334,7 @@ cp .env.example .env
 
 `User`、`Account`、`Transaction`、`Contact`、`Card` / `CardLimit`、`Subscription`、
 `InvestmentProduct` / `InvestmentHolding`、`Budget`、`ScheduledTask`、
-`AgentTask` / `AgentTaskNode`、`AuditLog`、`SecurityEvent`、`AgentSession`、`PendingAction` / `MfaChallenge`。
+`AgentTask` / `AgentTaskNode`、`ExecutionReceipt`、`AuditLog`、`SecurityEvent`、`AgentSession`、`PendingAction` / `MfaChallenge`。
 
 种子锚定 **演示时钟** `DEMO_NOW = 2026-09-25 12:00`（见第 16 节）：
 2026 年 9 月为"本月"，2026 年 8 月为"上月"（用于环比）。表内金额一律为 **有符号 CNY**（负数 = 支出/流出）。
@@ -344,6 +349,18 @@ cp .env.example .env
 - `PendingAction.taskId?` / `nodeId?` 与 `@@index([taskId])` —— 把待办动作关联到计划任务节点（供计划级取消批量撤销）。
 - `AgentTask.executionToken?` / `executionClaimedAt?` 与 `AgentTaskNode.executionToken?` / `executionClaimedAt?` —— 计划级 / 节点级执行的原子 claim。
 - `Budget.idempotencyKey? @unique`、`ScheduledTask.idempotencyKey? @unique`、`InvestmentHolding.idempotencyKey? @unique` —— 幂等写入 / 去重（同 key 重复执行只落一行；投资申购不二次扣款）。
+- `ExecutionReceipt`（`id` / `userId` / `key` / `toolName` / `requestDigest` / `resultJson`＝**原始结果**的 JSON 快照 / `txId?` / `createdAt`，`@@unique([userId, key])`）—— **提交事实优先（committed-fact-first）** 的结算凭据（同身份 + 同 `requestDigest` 重放原始结果，异 digest 显式拒绝；见 §9）。
+- `AgentTask.generation Int @default(0)` —— 计划执行的 **generation（代际）** 标记，用于执行权 / 代际 fencing，并随 `plan_update` 事件发布。
+- `PendingAction.executionLeaseOwner String?` / `PendingAction.executionLeaseExpiresAt DateTime?` —— 持久化 **执行租约**（`EXECUTION_LEASE_TTL_MS = 120000`，仅对 `pending` / `awaiting_mfa` 取，驱动 `classifyConfirmedAction` 的 `processing` 判定）。
+- `AuditLog.dedupeKey String? @unique` —— 恢复审计的幂等去重键（形如 `exec:<ledgerKey>`），令重复恢复绝不重复记账。
+
+> **旧数据兼容 / 升级（LEGACY-DATA COMPATIBILITY / UPGRADE）**：以上新增均为**可加性（additive）**变更 ——
+> 只新增可空列 / 带默认值的列与唯一索引，**不改写任何既有行**，因此 **`prisma db push` 之后历史数据保持有效**
+> （仓库使用 `prisma db push` 工作流，`prisma/` 下**没有 `migrations/` 目录**）。
+> 在 `ExecutionReceipt` 之前落账的历史转账仍被识别为**已入账**：SDK 会回落到**确定性的旧流水 id**
+> （`lib/ledger.ts#idempotentTransferTxId` 派生）并按已持久化字段重放，**不会重复扣款**。
+> **数据一致性绝不通过清库或重灌种子来"修复"**：`npm run db:reset` 会以 `--force-reset` **从零重建**数据库
+> （既有数据被**丢弃**）——它是**重建**，**不是修复（NOT a repair）**。
 
 应用 schema（务必按序）：
 
@@ -455,12 +472,27 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 
 ### 15.4 实测表面 / Measured surface
 
-- **页面 7 个**：`/`（仪表盘）、`/agent`（AI 助手）、`/bills`（账单）、`/cards`（卡片）、`/subscriptions`（订阅）、`/security`（安全中心）、`/audit`（审计）。
-- **API 路由处理器 15 个**：`/api/chat`、`/api/actions`、`/api/actions/[id]/confirm`、`/api/actions/[id]/verify`、`/api/actions/[id]/cancel`、`/api/tasks`、`/api/tasks/[id]`、`/api/audit`、`/api/security`、`/api/security/reset`、`/api/dashboard`、`/api/bills`、`/api/cards`、`/api/subscriptions`、`/api/health`。
+- **页面 8 个**：`/`（仪表盘）、`/agent`（AI 助手）、`/actions`（待处理操作 —— 恢复 / 对账）、`/bills`（账单）、`/cards`（卡片）、`/subscriptions`（订阅）、`/security`（安全中心）、`/audit`（审计）。
+- **API 路由处理器 16 个**：`/api/chat`、`/api/actions`（只读）、`/api/actions/[id]/confirm`、`/api/actions/[id]/verify`、`/api/actions/[id]/cancel`、`/api/actions/[id]/recover`、`/api/tasks`、`/api/tasks/[id]`、`/api/audit`、`/api/security`、`/api/security/reset`、`/api/dashboard`、`/api/bills`、`/api/cards`、`/api/subscriptions`、`/api/health`。
 
 运行命令见 §10 **启动方式** 与 §15.3 **测试分层**：`npm run test`（前三层）· `npx tsc --noEmit`（类型检查）· `npx next build`（生产构建）· `npx tsx tests/e2e/acceptance.e2e.ts`（第四层：真实浏览器验收）。
 
 > **诚实的边界：测试通过 ≠ 安全模型已闭合。** 每项能力的真实状态 —— **【已实现】✅ 代码强制 /【模拟】🧪 演示替身 /【未验证】⚠️ 尚未覆盖** —— 以 [`docs/known-risks.md`](docs/known-risks.md) 为准，不要仅凭测试全绿就宣称安全已闭合。
+
+### 15.5 恢复与对账 / Recovery & reconciliation
+
+**为什么会出现"楔子（wedge）"：** 动钱工具的 SDK 副作用（扣款 + 账本 `Transaction`）在**一个 `$transaction`** 内提交，而「写入执行结果 + 终态动作状态 + 审计」是**另一次 `$transaction`**。若后者回滚（或进程在两次之间死亡），就会出现**副作用已落账、`PendingAction` 却停在 `confirmed` 且 `resultJson=null`** 的行 —— 它既不是待决策的 `pending`，也还不是 `executed`。
+
+**提交事实优先的结算（receipt-first）：** `banking-sdk/transfer.ts` 在**一个 `prisma.$transaction`** 内写入「扣款 + 账本 `Transaction` + `ExecutionReceipt`」，因此恢复**永远先查已提交凭据**（`replayCommitted(userId, key, digest)`）：**同身份 + 同 `requestDigest`** ⇒ 返回**原始结果**（不重放副作用）；**同身份 + 异 digest** ⇒ `AppError('CONFLICT', 'same execution identity, different request')`；**没有凭据的遗留确定性流水行**同被识别为**已入账**。
+
+**分类与人工对账：** `agent/confirmation-recovery.ts#classifyConfirmedAction(row, nowMs)` 把 `confirmed` 行判定为 `settled | processing | recoverable | needs_reconciliation`，结算统一经 `settlePendingAction` / `settleFromCommittedReceipt`（结果 + 终态状态 + 审计在同一 `$transaction` 内落地）。`transfer_money`（`RECOVERABLE_STANDALONE_TOOLS` 中**唯一**已证独立幂等的工具）**重放并落真实结果**；**其他独立写工具**的楔子转入**可查询**的 `needs_reconciliation`（**绝不**盲目重放 / 伪造失败 / 回滚）。
+
+**恢复表面（UI + 路由）：**
+- 页面 **`/actions`**（路由 `/actions`，导航标签 **待处理操作**，`app/actions/page.tsx`）把 `pending` / `awaiting_mfa` / `needs_reconciliation` 与非结算的 `confirmed` 楔子一起呈现，并显示**建议处置** `attention`（`decision | processing | recoverable | reconciliation`）。
+- **只读 `GET /api/actions`**（身份仍来自 HttpOnly `banking_session` Cookie）返回上述行与各自的 `attention`。
+- **`POST /api/actions/[id]/recover`**（`recoverAction(id)`，`agent/index.ts`）是刷新可达的恢复入口：独立楔子按需**重放**已证幂等工具或转入 `needs_reconciliation`；计划关联动作则**恢复其所属计划**。
+
+**活性判定（lease-based liveness）：** 区分"仍在处理"与"真楔子"有两条互补依据 ——（1）**进程内、参考计数**的 `liveConfirmations` 登记表（`retainAction` / `releaseAction` / `isActionLive` / `liveCount`，计数归零才移除）；以及（2）**持久化执行租约**（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`，`EXECUTION_LEASE_TTL_MS = 120000`，仅对 `pending` / `awaiting_mfa` 取）。二者都是**启发式 / 进程内**依据：跨进程 / 跨实例的存活续跑在本进程**不可识别**。
 
 ---
 
@@ -494,9 +526,9 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 - **计划级所有权 fencing 覆盖节点 claim 与写入（【已实现】✅ 代码强制）。** 丢失计划执行 claim 的执行者**停止推进**：无法再 claim / 覆盖已完成节点、无法运行后继工具、无法发布迟到的 `onPlanUpdate`、也不会返回误导性结果——`agent/task-control.ts` 的 `claimNodeOwnedByPlan` 用**单条 `prisma.agentTaskNode.updateMany` 原子 CAS** 同时要求 `task:{executionToken:planToken}`（计划所有权）**且** `status:{notIn:TERMINAL_NODE_STATUSES}`（拒绝 `success`/`failed`/`skipped`/`cancelled` 终态节点），`planExecutionClaimHeld` 则为发布闸门；`agent/tools/planning.ts` 的 `onPlanUpdate` 以 `planExecutionClaimHeld` 为门槛。
 - **「已落账但结果事务回滚」的楔子被显式收敛（【已实现】✅ 代码强制）。** 当 SDK 副作用已提交、但「结果 + 终态动作状态」的 `$transaction` 回滚时，动作会卡在 `confirmed` 且 `resultJson=null`；现在它被**最终判定为 `failed` 并路由到显式人工核对**（消息含 `人工核对`），工具**绝不重新调用**、不伪造回滚、计划也不会停在 `waiting_confirmation`。区分依据是新增的**进程内、参考计数** `liveConfirmations` 登记表（`agent/confirmation-recovery.ts`，与 `inFlightExecutions` 同款）：真正的楔子（无存活续跑）才终结为 `failed`，而仍被**存活续跑持有**的 `confirmed`+`null` 行只是**重新停靠、不写库**（`agent/confirmation.ts#executeGatedToolOnce`）。因其为**计数**而非 `Set`，被拒绝的**重复确认**不会误清仍在运行的原请求标记（标记仅在计数归零时移除），故在途人工决策绝不会被误判为 `failed`。
 - **持久化 `ok:false` 的结果以 `failed` 收敛（【已实现】✅ 代码强制）。** 在「`confirmed` 且已存结果」分支，CAS 目标改为 `readStoredResult(existing)?.ok===true ? 'executed' : 'failed'`（经 `claimPendingAction({actionId, from:['confirmed'], to:<target>})`），随后 `recoverExecutedPlanAction` 回填；`ok:false` 时动作、节点、计划**一并收敛为 `failed`**。
-- **独立（非计划）操作的楔子被显式恢复或转人工核对（【已实现】✅ 代码强制）。** 没有 `taskId`/`nodeId` 的独立动作若卡在 `confirmed` 且无持久化结果（副作用已提交但结果事务回滚，或进程死亡），会在**重复确认**时由 `agent/confirmation-recovery.ts#recoverStandaloneWedge` 收束（网关的 exactly-once CAS 对重复确认返回 `CONFLICT`，这是此类行唯一能被结算的入口）：`transfer_money`（**唯一已被证明幂等**，同 ledger key）**重放并写入真实结果**；其他写工具转入**可查询**的 `needs_reconciliation` 状态（**绝不**盲目重放、伪造失败或回滚）。`needs_reconciliation` 由 `GET /api/actions`（与 `pending`/`awaiting_mfa` 并列）暴露并在 UI 以人工核对卡片呈现，用户可见、可查询，无需人工改库。
-- **⚠️ 未验证 —— 多实例下「存活续跑」不可识别：** `liveConfirmations` 是**进程内**状态；若那股存活续跑跑在**另一个进程 / 实例**上，本进程无法识别，故**多实例部署未覆盖**。此外，只有 `transfer_money` 被证明在**独立**场景下幂等；其他独立写工具的楔子只能转入 `needs_reconciliation` 转人工，不能自动重放。
-- **⚠️ 未验证 —— 执行接管仍是 TTL 启发式：** 单次工具调用合法阻塞超过 `EXECUTION_CLAIM_TTL_MS`（约 10 分钟）的所有者仍可被接管；多进程 / 多实例争用的原子性**只在单进程 / 单 DB 内验证过**，未做压力测试。
+- **独立（非计划）操作的楔子以「提交事实优先（receipt-first）」结算，或转入人工核对（【已实现】✅ 代码强制）。** 没有 `taskId`/`nodeId` 的独立动作若卡在 `confirmed` 且无持久化结果（副作用已提交但结果事务回滚，或进程死亡），由 `agent/confirmation-recovery.ts#recoverStandaloneWedge` 收束：**先查已提交凭据** —— 若已存在该执行身份的 `ExecutionReceipt`，则由 `settleFromCommittedReceipt` 从**已提交事实**结为 `executed`（**绝不重调工具**）；否则对**已证独立幂等**的 `transfer_money`（`RECOVERABLE_STANDALONE_TOOLS` 中**唯一**成员，同 ledger key）**按幂等键重放并写入真实结果**；**其他任何独立写工具**转入**可查询**的 `needs_reconciliation` 状态（**绝不**盲目重放、伪造失败或回滚）。该结算有**两条入口**：**重复确认 / 验证**（此时网关的 exactly-once CAS 不再匹配 `pending`，返回 `CONFLICT`），以及**刷新可达的 `POST /api/actions/[id]/recover`**（`recoverAction`，`agent/index.ts`）。`needs_reconciliation` 由 `GET /api/actions`（与 `pending`/`awaiting_mfa` 并列）、`/actions` 页面（导航 **待处理操作**）与 `POST /api/actions/[id]/recover` 共同暴露，并在 UI 以人工核对卡片呈现，用户可见、可查询，无需人工改库。
+- **⚠️ 未验证 —— 多实例下「存活续跑」与执行租约不可识别：** `liveConfirmations` 登记表是**进程内、参考计数**状态，执行租约（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`）是**按 DB** 持久化、按 TTL 判活；若那股存活续跑跑在**另一个进程 / 实例**上，本进程无法识别，故**多实例部署未覆盖**。此外，只有 `transfer_money` 被证明在**独立**场景下幂等；其他独立写工具的楔子只能转入 `needs_reconciliation` 转人工，不能自动重放。
+- **⚠️ 未验证 —— 计划接管与执行租约都是 TTL 启发式：** 计划 / 节点接管用 `EXECUTION_CLAIM_TTL_MS = 600000ms`（约 10 分钟）：单次工具调用合法阻塞超过该 TTL 的所有者仍可被接管（其写入被 fence 拒绝，但确被抢占）；`classifyConfirmedAction` 判定 `processing` 所依据的执行租约是 **另一个** TTL `EXECUTION_LEASE_TTL_MS = 120000ms`。两者都**不是活性证明**；多进程 / 多实例争用的原子性**只在单进程 / 单 DB 内验证过**，未做压力测试。
 - **⚠️ 未验证 —— 文件规模超软阈值：** `agent/task-control.ts`（约 1205 行）与 `agent/confirmation.ts`（约 1028 行）超出约 1000 行的软性指引，是可抽取拆分的候选。
 - **诚实的状态分级：** 本 README 描述的能力应区分 **【已实现】✅ 代码强制 /【模拟】🧪 演示替身 /【未验证】⚠️ 尚未覆盖** 三态（逐项见 [`docs/known-risks.md`](docs/known-risks.md)）。**测试全绿 ≠ 安全模型已闭合**：本 Demo 未做形式化验证，也未覆盖多进程集群、真实 LLM、真实支付通道；请在演示与评审中如实标注，不要把"单元 / 集成 / 浏览器测试通过"表述为"安全闭环已证明"。
 
@@ -520,9 +552,9 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 ```
 .
 ├── app/                 # Next.js App Router：页面 + API 路由处理器
-│   ├── api/             #   chat(SSE) · actions confirm/verify/cancel · tasks · audit · security · dashboard · bills · cards · subscriptions · health
+│   ├── api/             #   chat(SSE) · actions confirm/verify/cancel/recover · tasks · audit · security · dashboard · bills · cards · subscriptions · health
 │   ├── agent/           #   AI 助手对话页
-│   ├── bills/ cards/ subscriptions/ security/ audit/
+│   ├── bills/ cards/ subscriptions/ security/ audit/ actions/
 │   └── page.tsx         #   仪表盘首页
 ├── components/          # React 组件库：chat · chat/cards · charts · banking · security · ui
 ├── agent/               # Pi Agent 运行时（构造 / 工具注册 / 会话 / 续跑 / 卡片 / 系统提示词 / provider）

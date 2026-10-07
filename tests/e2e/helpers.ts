@@ -15,6 +15,7 @@
  *    `tests/**\/*.{test,spec}.ts`), so this harness never runs under `npm run test`.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
@@ -49,6 +50,219 @@ export const NAV_TIMEOUT_MS = 180_000;
 export const REPO_ROOT = resolveRepoRoot();
 /** Scratch dir for failure screenshots (git-ignored — never committed). */
 export const SCREENSHOTS_DIR = path.join(REPO_ROOT, 'tests', 'e2e', 'screenshots');
+
+// --- standalone gated-action WEDGE recovery (journey `f-wedge-refresh-recover`) -------------------
+//
+// These helpers let the harness SEED the exact wedge the app's own commit path can leave behind — a
+// `PendingAction` stuck at `status='confirmed'` with `resultJson=null` because the Banking SDK side
+// effect committed but its result+status transaction was lost — and then query the persisted outcome.
+// The id derivations MIRROR `lib/ledger.ts` (`idempotentTransferTxId` / `executionReceiptId` /
+// `requestDigest`, all sha256-based with a `\u0000` separator) so the seeded rows are byte-identical
+// to what `banking-sdk/transfer.ts#createTransfer` would have written. They are re-implemented here
+// (not imported) to honour this node's "no `@/` alias, node built-ins + relative imports only" rule.
+
+/** Lowercase sha256 hex of a UTF-8 string. */
+function sha256Hex(input: string): string {
+  return createHash('sha256').update(input, 'utf8').digest('hex');
+}
+
+/** Deterministic transfer `Transaction` id for a ledger key — mirrors `lib/ledger.ts#idempotentTransferTxId`. */
+export function idempotentTransferTxId(userId: string, key: string): string {
+  return `txidem_${sha256Hex(`${userId}\u0000${key}`).slice(0, 32)}`;
+}
+
+/** Deterministic `ExecutionReceipt` id for a ledger key — mirrors `lib/ledger.ts#executionReceiptId`. */
+export function executionReceiptId(userId: string, key: string): string {
+  return `rcpt_${sha256Hex(`${userId}\u0000${key}`).slice(0, 32)}`;
+}
+
+/** Recursively key-sorted clone (`undefined` → `null`) — mirrors `lib/ledger.ts#canonicalize`. */
+function canonicalize(value: unknown): unknown {
+  if (value === undefined) return null;
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(source).sort()) out[key] = canonicalize(source[key]);
+    return out;
+  }
+  return value;
+}
+
+/** sha256 of the canonical JSON — mirrors `lib/ledger.ts#requestDigest`. */
+export function requestDigest(parts: unknown): string {
+  return sha256Hex(JSON.stringify(canonicalize(parts)));
+}
+
+/** The fixed wedge identifiers used by journey `f-wedge-refresh-recover`. */
+export const WEDGE_ACTION_ID = 'pa_ewedge_1';
+/** A STANDALONE action's ledger key IS its id (no `taskId`/`nodeId`). */
+export const WEDGE_LEDGER_KEY = WEDGE_ACTION_ID;
+/** The committed DEBIT `Transaction` id for the wedge. */
+export const WEDGE_TX_ID = idempotentTransferTxId('user_liming', WEDGE_LEDGER_KEY);
+/** The committed `ExecutionReceipt` id for the wedge. */
+export const WEDGE_RECEIPT_ID = executionReceiptId('user_liming', WEDGE_LEDGER_KEY);
+/** The amount (CNY) of the committed debit. */
+export const WEDGE_AMOUNT = 200;
+/** The sticky (YELLOW) risk level of the wedge action. */
+export const WEDGE_TIER = 'YELLOW';
+/** The recovery audit `dedupeKey` written by `landStandalone` (`'exec:' + actionId`). */
+export const WEDGE_AUDIT_DEDUPE_KEY = `exec:${WEDGE_ACTION_ID}`;
+/** The demo clock instant (`demoNow()` = 2026-09-25 12:00 LOCAL) used for the seeded timestamps. */
+export const WEDGE_DEMO_NOW = new Date(2026, 8, 25, 12, 0, 0);
+
+/**
+ * SEED the standalone wedge directly into the isolated E2E DB (`prisma/e2e.db`), inserting ONLY the
+ * wedge rows in ONE transaction — never a wipe/re-seed. It mirrors the app's real commit path:
+ *   (i)  decrement `acct_checking.balance` by the amount (the COMMITTED debit — already on the ledger);
+ *   (ii) insert the DEBIT `Transaction` (id = `WEDGE_TX_ID`);
+ *   (iii) insert the committed `ExecutionReceipt` (the evidence recovery settles FROM, no re-debit);
+ *   (iv) insert the `PendingAction` `pa_ewedge_1` at `status='confirmed'` with `resultJson=null`
+ *        (the WEDGE: side effect committed, result+status write lost).
+ * Returns the seeded ids. A fresh `PrismaClient` is used and always disconnected.
+ */
+export async function seedStandaloneWedge(params: { sessionId: string }): Promise<{ txId: string; receiptId: string }> {
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient();
+  const occurredAt = WEDGE_DEMO_NOW;
+  try {
+    await prisma.$transaction(async (tx) => {
+      await tx.account.update({
+        where: { id: 'acct_checking' },
+        data: { balance: { decrement: WEDGE_AMOUNT } },
+      });
+      await tx.transaction.create({
+        data: {
+          id: WEDGE_TX_ID,
+          accountId: 'acct_checking',
+          userId: 'user_liming',
+          amount: -WEDGE_AMOUNT,
+          currency: 'CNY',
+          direction: 'DEBIT',
+          category: '转账',
+          merchant: `转账给张伟`,
+          channel: 'TRANSFER',
+          counterpartyId: 'contact_zhangwei',
+          occurredAt,
+        },
+      });
+      await tx.executionReceipt.create({
+        data: {
+          id: WEDGE_RECEIPT_ID,
+          userId: 'user_liming',
+          key: WEDGE_LEDGER_KEY,
+          toolName: 'transfer_money',
+          requestDigest: requestDigest({
+            userId: 'user_liming',
+            toolName: 'transfer_money',
+            name: '张伟',
+            contactId: null,
+            phone: null,
+            amount: WEDGE_AMOUNT,
+            sourceAccountId: null,
+            remark: null,
+          }),
+          resultJson: JSON.stringify({
+            success: true,
+            transactionId: WEDGE_TX_ID,
+            newBalance: 23380,
+            recipient: { contactId: 'contact_zhangwei', name: '张伟', phone: '' },
+            amount: WEDGE_AMOUNT,
+            remark: null,
+            occurredAt: occurredAt.getTime(),
+          }),
+          txId: WEDGE_TX_ID,
+        },
+      });
+      await tx.pendingAction.create({
+        data: {
+          id: WEDGE_ACTION_ID,
+          sessionId: params.sessionId,
+          userId: 'user_liming',
+          toolName: 'transfer_money',
+          argsJson: JSON.stringify({ name: '张伟', amount: WEDGE_AMOUNT }),
+          riskLevel: WEDGE_TIER,
+          requiresMfa: false,
+          status: 'confirmed',
+          summaryJson: JSON.stringify({
+            title: '转账给张伟',
+            toolName: 'transfer_money',
+            tier: WEDGE_TIER,
+            fields: [
+              { label: '收款人', value: '张伟' },
+              { label: '金额', value: `¥${WEDGE_AMOUNT.toFixed(2)}` },
+            ],
+            amount: WEDGE_AMOUNT,
+            requiresMfa: false,
+          }),
+          resultJson: null,
+          userRequest: '给张伟转200元',
+          taskId: null,
+          nodeId: null,
+          executionLeaseOwner: null,
+          executionLeaseExpiresAt: null,
+          createdAt: occurredAt,
+          updatedAt: occurredAt,
+        },
+      });
+    });
+    return { txId: WEDGE_TX_ID, receiptId: WEDGE_RECEIPT_ID };
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+/** Read the persisted `status` (+ `resultJson`) of a `PendingAction` by id, or `null` when absent. */
+export async function queryPendingActionStatus(
+  actionId: string,
+): Promise<{ status: string; resultJson: string | null } | null> {
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient();
+  try {
+    const row = await prisma.pendingAction.findUnique({
+      where: { id: actionId },
+      select: { status: true, resultJson: true },
+    });
+    return row ? { status: row.status, resultJson: row.resultJson ?? null } : null;
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
+/** The durable `AuditLog` row for a recovery `dedupeKey`, or `null`. */
+export interface ExecutionAuditRow {
+  status: string;
+  toolName: string;
+  riskLevel: string;
+  sessionId: string;
+  confirmationRequired: boolean;
+  confirmed: boolean;
+  mfaRequired: boolean;
+}
+
+/** Read the newest `AuditLog` row for a `dedupeKey`, or `null` when none was written. */
+export async function queryExecutionAudit(dedupeKey: string): Promise<ExecutionAuditRow | null> {
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient();
+  try {
+    const row = await prisma.auditLog.findFirst({
+      where: { dedupeKey },
+      orderBy: { timestamp: 'desc' },
+    });
+    if (row === null) return null;
+    return {
+      status: row.status,
+      toolName: row.toolName,
+      riskLevel: row.riskLevel,
+      sessionId: row.sessionId,
+      confirmationRequired: row.confirmationRequired,
+      confirmed: row.confirmed,
+      mfaRequired: row.mfaRequired,
+    };
+  } finally {
+    await prisma.$disconnect();
+  }
+}
 
 /** Resolve after `ms` milliseconds. */
 export function sleep(ms: number): Promise<void> {
@@ -905,6 +1119,8 @@ export interface PendingActionView {
   toolName: string;
   status: string;
   tier: string;
+  /** How `GET /api/actions` surfaces the row: `decision` | `processing` | `recoverable` | `reconciliation`. */
+  attention?: string;
 }
 
 /**

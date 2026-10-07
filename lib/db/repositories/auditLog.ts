@@ -48,6 +48,17 @@ export interface AuditLogAggregate {
 
 const DEFAULT_LIMIT = 100;
 
+/** Optional composition + idempotency controls for {@link insertAuditLog}. */
+export interface InsertAuditLogOptions {
+  /** Transaction client to compose the insert into a caller's `prisma.$transaction`. */
+  client?: Prisma.TransactionClient;
+  /**
+   * Idempotency key (maps to `AuditLog.dedupeKey`, unique). A repeat write for the SAME execution
+   * identity is a duplicate (P2002); callers that must never throw absorb it (see `recordAudit`).
+   */
+  dedupeKey?: string;
+}
+
 export function createAuditLog(input: AuditLogInput): Promise<AuditLog> {
   return prisma.auditLog.create({
     data: {
@@ -91,8 +102,12 @@ export function countAuditLogs(
  * Append one audit entry (the shape the audit node's `recordAudit` delegates to).
  * `toolResult` is stored as JSON text; `timestamp` (ms epoch) maps to a `DateTime`.
  */
-export async function insertAuditLog(entry: AuditEntry): Promise<AuditEntry> {
-  const row = await prisma.auditLog.create({
+export async function insertAuditLog(
+  entry: AuditEntry,
+  opts: InsertAuditLogOptions = {},
+): Promise<AuditEntry> {
+  const client = opts.client ?? prisma;
+  const row = await client.auditLog.create({
     data: {
       timestamp: new Date(entry.timestamp),
       sessionId: entry.sessionId,
@@ -107,6 +122,7 @@ export async function insertAuditLog(entry: AuditEntry): Promise<AuditEntry> {
       toolResult: entry.toolResult === undefined ? null : toJson(entry.toolResult),
       status: entry.status,
       detail: entry.detail ?? null,
+      dedupeKey: opts.dedupeKey ?? null,
     },
   });
   return toAuditEntry(row);

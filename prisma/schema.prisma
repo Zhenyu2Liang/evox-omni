@@ -19,7 +19,7 @@
 //   - `status`        on ScheduledTask  = "SCHEDULED" | "DONE" | "CANCELLED"
 //   - `severity`      on SecurityEvent  = "low" | "medium" | "high"
 //   - `status`        on AgentSession   = "active" | "closed"
-//   - `status`        on PendingAction  = "pending" | "confirmed" | "verified" | "cancelled" | "expired"
+//   - `status`        on PendingAction  = "pending" | "confirmed" | "awaiting_mfa" | "executed" | "failed" | "cancelled" | "needs_reconciliation"
 //   - `status`        on MfaChallenge   = "pending" | "verified" | "failed" | "locked"
 //   - `status`        on AgentTask/AgentTaskNode = "pending" | "running" | "done" | "failed" | "blocked"
 
@@ -214,6 +214,8 @@ model AgentTask {
   executionClaimedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  // Monotonic execution GENERATION of this plan; a later workstream bumps it.
+  generation Int @default(0)
 
   nodes AgentTaskNode[]
 
@@ -284,6 +286,8 @@ model AuditLog {
   toolResult           String? // JSON text
   status               String
   detail               String?
+  // Idempotency key that makes this audit entry write-once (dedupes a repeated audit).
+  dedupeKey            String?  @unique
 
   @@index([timestamp])
   @@index([userId])
@@ -338,6 +342,9 @@ model PendingAction {
   // never written / was overwritten. NULL for actions created outside the planner.
   taskId      String?
   nodeId      String?
+  // Persisted execution LEASE of the confirm/verify continuation applying this action side effect.
+  executionLeaseOwner     String?
+  executionLeaseExpiresAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -357,4 +364,23 @@ model MfaChallenge {
   status      String    @default("pending") // "pending" | "verified" | "failed" | "locked"
   createdAt   DateTime  @default(now())
   expiresAt   DateTime?
+}
+
+// Unified EXECUTION RECEIPT / transaction-fact: the durable proof that a gated side effect with a
+// given execution identity (`userId` + `key`) ALREADY COMMITTED. `requestDigest` is the canonical
+// fingerprint of the ORIGINAL request, so a replay with the SAME identity returns the stored
+// `resultJson` (a full result snapshot) without re-resolving anything MUTABLE (e.g. a recipient by
+// name), while a replay with a DIFFERENT request is rejected explicitly. `txId` links the receipt to
+// the ledger `Transaction` row it produced (when the tool writes one).
+model ExecutionReceipt {
+  id            String   @id
+  userId        String
+  key           String
+  toolName      String
+  requestDigest String
+  resultJson    String // JSON text of the original result snapshot
+  txId          String?
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, key])
 }

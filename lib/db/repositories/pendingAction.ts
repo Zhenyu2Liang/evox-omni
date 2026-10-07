@@ -189,6 +189,44 @@ export function updatePendingActionStatus(
 export const setPendingActionStatus = updatePendingActionStatus;
 
 /**
+ * PERSIST a durable EXECUTION LEASE on a `PendingAction`: which continuation owns the in-flight
+ * execution and until when. This is the DURABLE analogue of the per-process `liveConfirmations`
+ * ref-count — a refresh/restart (even in ANOTHER process) can tell an in-flight `confirmed` row that
+ * is legitimately result-less (a live holder) apart from a genuine wedge, by reading PERSISTED state.
+ *
+ * It never GRANTS anything: the row's status CAS is still the authority; the lease is a TTL-bounded
+ * liveness hint (see the agent layer's `EXECUTION_LEASE_TTL_MS`).
+ */
+export function setPendingActionLease(
+  actionId: string,
+  lease: { owner: string; expiresAt: Date },
+  client: Prisma.TransactionClient = prisma,
+): Promise<PendingAction> {
+  return client.pendingAction.update({
+    where: { id: actionId },
+    data: { executionLeaseOwner: lease.owner, executionLeaseExpiresAt: lease.expiresAt },
+  });
+}
+
+/**
+ * CLEAR a `PendingAction`'s execution lease (both columns → `null`). When `opts.owner` is given the
+ * clear is CONDITIONAL on the current holder, so a continuation can only release the lease IT took
+ * (a takeover's fresh lease is never cleared by the overtaken holder). Returns the number of rows
+ * cleared (0 when a different owner holds it).
+ */
+export async function clearPendingActionLease(
+  actionId: string,
+  opts?: { owner?: string },
+  client: Prisma.TransactionClient = prisma,
+): Promise<number> {
+  const result = await client.pendingAction.updateMany({
+    where: { id: actionId, ...(opts?.owner ? { executionLeaseOwner: opts.owner } : {}) },
+    data: { executionLeaseOwner: null, executionLeaseExpiresAt: null },
+  });
+  return result.count;
+}
+
+/**
  * The ONE-AND-ONLY exactly-once claim gate for a `PendingAction`.
  *
  * Performs a SINGLE atomic compare-and-set: the row's status is moved from any of `from`

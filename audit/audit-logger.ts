@@ -17,6 +17,7 @@
 import type { AuditEntry, AuditStatus } from '@/lib/contracts/audit';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import { insertAuditLog, findAuditLogs, aggregateAuditLogs } from '@/lib/db/repositories/auditLog';
+import type { Prisma } from '@prisma/client';
 import { AppError } from '@/lib/errors';
 
 /**
@@ -45,6 +46,14 @@ export interface AuditSummary {
  */
 export const auditStore = { insertAuditLog, findAuditLogs, aggregateAuditLogs };
 
+/** Optional composition + idempotency controls forwarded to the repository insert. */
+export interface RecordAuditOptions {
+  /** Transaction client — write the audit inside the caller's `prisma.$transaction`. */
+  client?: Prisma.TransactionClient;
+  /** Idempotency key: a repeat write of the SAME execution's audit is absorbed (no duplicate row). */
+  dedupeKey?: string;
+}
+
 /**
  * Persist one audit entry (append-only).
  *
@@ -54,9 +63,12 @@ export const auditStore = { insertAuditLog, findAuditLogs, aggregateAuditLogs };
  *
  * Never rejects: on persistence failure it logs the error and resolves with the input entry.
  */
-export async function recordAudit(entry: AuditEntry): Promise<AuditEntry> {
+export async function recordAudit(
+  entry: AuditEntry,
+  opts?: RecordAuditOptions,
+): Promise<AuditEntry> {
   try {
-    return await auditStore.insertAuditLog(entry);
+    return await auditStore.insertAuditLog(entry, opts);
   } catch (e) {
     // Best-effort write: a failed audit append must never break the banking flow.
     console.error('[audit] failed to persist audit entry', e);

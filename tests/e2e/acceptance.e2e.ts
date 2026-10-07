@@ -57,6 +57,12 @@ import {
   waitForNodeStatus,
   waitForPlanStatus,
   waitForStatusText,
+  queryExecutionAudit,
+  queryPendingActionStatus,
+  seedStandaloneWedge,
+  WEDGE_ACTION_ID,
+  WEDGE_AMOUNT,
+  WEDGE_AUDIT_DEDUPE_KEY,
   withPage,
   type DevServer,
   type LedgerView,
@@ -64,6 +70,8 @@ import {
 
 /** Exact mock-mode trigger phrases, verified against `agent/providers/mock-responder.ts`. */
 const MSG = {
+  /** GREEN read (`get_balance`) → mints the COOKIE-ONLY session without moving any money. */
+  balance: '查一下我的余额',
   /** YELLOW transfer (≤ ¥1000) → confirmation card. */
   transferYellow: '给张伟转200元',
   /**
@@ -421,6 +429,95 @@ async function journeyRefreshRecovery(browser: Browser, baseUrl: string): Promis
   return `YELLOW：${yellow} ｜ RED：${red}`;
 }
 
+/**
+ * (f) WEDGE recovery reached ONLY via a PLAIN refresh/navigation — the refresh-reachable recovery
+ * surface. A committed-but-unrecorded standalone transfer (`status='confirmed'`, `resultJson=null`,
+ * with a committed `ExecutionReceipt`) is seeded straight into the isolated E2E DB; then a plain
+ * `page.goto('/actions')` (the actionId is NEVER passed) must surface the row with a `恢复执行`
+ * button. Clicking it settles the wedge FROM the committed receipt — one debit total, `executed`
+ * status, a durable success audit — never a second debit.
+ */
+async function journeyWedgeRefreshRecover(browser: Browser, baseUrl: string): Promise<string> {
+  return withPage(
+    browser,
+    async (page) => {
+      // (a) mint the identity cookie via the FIRST chat turn (identity is COOKIE-ONLY).
+      await gotoAgent(page, baseUrl);
+      await submitChat(page, MSG.balance);
+      const cookie = await waitFor(
+        async () => {
+          const value = await readSessionCookie(page);
+          return value === undefined ? false : value;
+        },
+        { description: '银行会话 cookie（banking_session）', timeoutMs: NAV_TIMEOUT_MS },
+      );
+      const sessionId = cookie.slice(cookie.indexOf('=') + 1);
+
+      // (b) pre-state via the app's real read routes.
+      const before = await snapshotMoneyState(baseUrl);
+
+      // (c) SEED the wedge (committed debit + committed receipt + confirmed/null PendingAction).
+      await seedStandaloneWedge({ sessionId });
+      await waitFor(
+        async () => {
+          const dashboard = await fetchDashboardSummary(baseUrl);
+          return dashboard.checkingBalance === before.balance - WEDGE_AMOUNT;
+        },
+        { description: `wedge 注入后余额应为 ${before.balance - WEDGE_AMOUNT}`, timeoutMs: 30_000 },
+      );
+
+      // (d) PLAIN navigation to /actions — the actionId is NEVER passed to the browser.
+      await page.goto(`${baseUrl}/actions`, { waitUntil: 'domcontentloaded' });
+      const recoverButton = page.getByRole('button', { name: '恢复执行', exact: true });
+      await recoverButton.first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+
+      // (e) click the recovery control, then wait for the outcome to settle.
+      await recoverButton.first().click();
+      const settled = await waitFor(
+        async () => {
+          const [actions, dashboard, ledger] = await Promise.all([
+            fetchPendingActions(baseUrl, cookie),
+            fetchDashboardSummary(baseUrl),
+            fetchLedger(baseUrl),
+          ]);
+          const row = actions.find((candidate) => candidate.id === WEDGE_ACTION_ID);
+          if (row !== undefined && row.attention === 'recoverable') return false;
+          if (dashboard.checkingBalance !== before.balance - WEDGE_AMOUNT) return false;
+          const added = diffLedger(before.ledger.transactions, ledger.transactions).added.filter(
+            (tx) => tx.amount === -WEDGE_AMOUNT && tx.direction === 'DEBIT' && tx.merchant.includes(RECIPIENT_NAME),
+          );
+          if (added.length !== 1) return false;
+          return { balance: dashboard.checkingBalance, addedDebits: added.length };
+        },
+        {
+          description: '恢复后：/api/actions 不再“可恢复”、余额恰为一次扣款、账本恰新增一条 -200 DEBIT',
+          timeoutMs: 30_000,
+        },
+      );
+
+      // (f) TRUE facts: persisted action status + durable audit.
+      const persisted = await queryPendingActionStatus(WEDGE_ACTION_ID);
+      if (persisted === null) throw new Error(`恢复后未找到 PendingAction ${WEDGE_ACTION_ID}`);
+      if (persisted.status !== 'executed') {
+        throw new Error(`恢复后 PendingAction.status 应为 executed，实际 ${persisted.status}`);
+      }
+      const audit = await queryExecutionAudit(WEDGE_AUDIT_DEDUPE_KEY);
+      if (audit === null) {
+        throw new Error(`恢复后未写入恢复成功的 AuditLog（dedupeKey=${WEDGE_AUDIT_DEDUPE_KEY}）`);
+      }
+      if (audit.status !== 'success' || audit.toolName !== 'transfer_money') {
+        throw new Error(`恢复 AuditLog 应为 success/transfer_money，实际 ${audit.status}/${audit.toolName}`);
+      }
+      if (audit.sessionId !== sessionId) {
+        throw new Error(`恢复 AuditLog.sessionId 应为 ${sessionId}，实际 ${audit.sessionId}`);
+      }
+
+      return `仅经“纯刷新/导航”可达的恢复面：种子 wedge(status=confirmed,resultJson=null,已提交凭证) → page.goto('/actions')（不传 actionId）→ 渲染「恢复执行」→ 点击 → 由已提交凭证结算（未再次扣款）；余额 ${before.balance} → ${settled.balance}（恰一次 −${WEDGE_AMOUNT}，账本恰新增 ${settled.addedDebits} 条 −${WEDGE_AMOUNT} DEBIT/${RECIPIENT_NAME}）；PendingAction.status=${persisted.status}；AuditLog(dedupeKey=${WEDGE_AUDIT_DEDUPE_KEY}) status=${audit.status}`;
+    },
+    { label: 'f-wedge-refresh-recover' },
+  );
+}
+
 interface Journey {
   name: string;
   run: (browser: Browser, baseUrl: string) => Promise<string>;
@@ -432,6 +529,7 @@ const JOURNEYS: readonly Journey[] = [
   { name: 'c-plan-pause-resume', run: journeyPlanPauseResume },
   { name: 'd-plan-cancel', run: journeyPlanCancel },
   { name: 'e-refresh-action-recovery', run: journeyRefreshRecovery },
+  { name: 'f-wedge-refresh-recover', run: journeyWedgeRefreshRecover },
 ];
 
 // --- entry point --------------------------------------------------------------------------------

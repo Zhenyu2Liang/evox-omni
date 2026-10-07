@@ -40,18 +40,18 @@ import { security } from '@/security';
 import { recordAudit } from '@/audit';
 import { getSession } from '@/lib/db/repositories/session';
 import {
-  claimPendingAction,
+  clearPendingActionLease,
   getPendingAction,
   getPendingActionOwnership,
   getPendingActionPlanLink,
   listPendingActionsByTask,
-  setPendingActionStatus,
+  setPendingActionLease,
 } from '@/lib/db/repositories/pendingAction';
 import { getTask } from '@/lib/db/repositories/task';
-import { prisma } from '@/lib/db/client';
+import { newId } from '@/lib/ids';
 import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
-import { safeParse, toJson } from '@/lib/json';
+import { safeParse } from '@/lib/json';
 import { ledgerKeyForAction, nodeExecutionKey } from '@/lib/ledger';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { resumeTurn } from './run-turn';
@@ -59,9 +59,12 @@ import type { RunTurnDeps } from './run-turn';
 import { findTaskByPendingAction, resumeTaskForAction } from './task-control';
 import {
   isActionLive,
+  leaseExpiryFor,
+  leaseNowMs,
   recoverStandaloneWedge,
   releaseAction,
   retainAction,
+  settlePendingAction,
 } from './confirmation-recovery';
 
 /**
@@ -513,10 +516,10 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
         // actually succeeded; instead it is reported STILL PARKED on that live decision (no CAS, no
         // write). A `confirmed` row with NO live continuation is the genuine WEDGE and IS finalized below.
         if (existing.status === 'confirmed' && !isActionLive(existing.id)) {
-          const won = await claimPendingAction({
+          const won = await settlePendingAction({
             actionId: existing.id,
+            status: readStoredResult(existing)?.ok === true ? 'executed' : 'failed',
             from: ['confirmed'],
-            to: readStoredResult(existing)?.ok === true ? 'executed' : 'failed',
           });
           if (won) return recoverExecutedPlanAction(existing);
         }
@@ -751,23 +754,40 @@ async function executeAuthorizedAction(
     result = { ok: false, error: AppError.from(e).message };
   }
 
-  // DURABLY PERSIST the ORIGINAL execution result payload AND the terminal status ATOMICALLY — ONE
-  // transaction from the agent layer. This is what lets a later RECOVERY of this already-executed
-  // action's plan node BACKFILL the node result from the stored outcome instead of RE-INVOKING the
-  // tool (a re-invocation would re-apply a non-idempotent side effect, e.g. clobber a card limit the
-  // user independently changed after this action had executed). Written for BOTH outcomes.
+  // LAND the ORIGINAL execution result payload AND the terminal status AND the execution AUDIT
+  // ATOMICALLY — ONE `prisma.$transaction`, through the ONE unified landing primitive
+  // (`confirmation-recovery.ts#settlePendingAction`). This is what lets a later RECOVERY of this
+  // already-executed action's plan node BACKFILL the node result from the stored outcome instead of
+  // RE-INVOKING the tool (a re-invocation would re-apply a non-idempotent side effect, e.g. clobber a
+  // card limit the user independently changed after this action had executed). Written for BOTH
+  // outcomes.
   //
-  // The two writes MUST be atomic: as separate statements they left a gap where the result was
-  // persisted but the status write failed, leaving the action `confirmed` with a persisted result — so a
-  // re-run of the owning node FINALIZES the action (and recovers the node) instead of parking forever.
-  // The status write goes through the repository's UNCONDITIONAL `setPendingActionStatus(id,status,tx)`
-  // (idempotent — a repeat is harmless).
-  await prisma.$transaction(async (tx) => {
-    await tx.pendingAction.update({
-      where: { id: actionId },
-      data: { resultJson: toJson(result) },
-    });
-    await setPendingActionStatus(actionId, result.ok ? 'executed' : 'failed', tx);
+  // The result + status + audit MUST land together: as separate statements they left a gap where the
+  // result was persisted but the status write failed (leaving the action `confirmed` with a persisted
+  // result, so a re-run of the owning node had to FINALIZE it) — or where the business effect
+  // committed but no audit row was ever written. `dedupeKey` makes the audit insert idempotent, so a
+  // repeat settle of the SAME action can never duplicate its audit row.
+  await settlePendingAction({
+    actionId,
+    status: result.ok ? 'executed' : 'failed',
+    result,
+    audit: {
+      timestamp: demoNow(),
+      sessionId: action.sessionId,
+      userRequest: action.userRequest ?? '',
+      intent: action.intent,
+      toolName: action.toolName,
+      // TRUTHFUL audit: the EFFECTIVE tier + requirement of this decision, not the stale row flags
+      // (a parked YELLOW transfer that escalated to RED is audited RED / mfaRequired:true).
+      riskLevel: tier,
+      confirmationRequired: true,
+      confirmed: true,
+      mfaRequired: requiresMfa,
+      mfaResult: view.mfaResult,
+      toolResult: result,
+      status: result.ok ? 'success' : 'failed',
+    },
+    dedupeKey: `exec:${actionId}`,
   });
 
   // Then RECORD the terminal status through the gateway (with the trusted identity) — the security
@@ -779,24 +799,6 @@ async function executeAuthorizedAction(
   } catch {
     // Non-fatal: the atomic transaction above already persisted the TRUE terminal status.
   }
-
-  await recordAudit({
-    timestamp: demoNow(),
-    sessionId: action.sessionId,
-    userRequest: action.userRequest ?? '',
-    intent: action.intent,
-    toolName: action.toolName,
-    // TRUTHFUL audit: the EFFECTIVE tier + requirement of this decision, not the stale row flags
-    // (a parked YELLOW transfer that escalated to RED is audited RED / mfaRequired:true).
-    riskLevel: tier,
-    confirmationRequired: true,
-    confirmed: true,
-    mfaRequired: requiresMfa,
-    mfaResult: view.mfaResult,
-    toolResult: result,
-    status: result.ok ? 'success' : 'failed',
-  });
-
   // If this gated action parked a DAG node, hand the REAL outcome to the planner so the plan
   // continues (a re-parked node waits for the next human decision) and stream the resulting plan.
   const planEvents = await resumeOwningPlan(action, result, userId, opts);
@@ -939,21 +941,73 @@ async function verifyActionImpl(
 }
 
 /**
+ * Take the PERSISTED EXECUTION LEASE for `actionId` while this continuation applies a human decision.
+ *
+ * DURABLE, cross-process analogue of the in-process ref-count: it writes a per-invocation random
+ * `owner` + a TTL onto `PendingAction.executionLeaseOwner`/`executionLeaseExpiresAt`, so ANY observer
+ * — a page refresh (`GET /api/actions` → `classifyConfirmedAction`), a plan re-run, another process —
+ * can read PERSISTED state and tell an in-flight `confirmed`, result-less row (a live holder →
+ * `processing`) apart from a genuine WEDGE (`recoverable`/`needs_reconciliation`).
+ *
+ * The lease is taken ONLY while the row is still UNDECIDED (`pending`/`awaiting_mfa`) — exactly when
+ * this continuation is about to apply a decision (the gateway CAS then moves it to `confirmed`). A
+ * row that is ALREADY `confirmed` (or terminal) is deliberately NOT leased: `recoverStandaloneWedge`
+ * in `confirmation-recovery.ts` treats an ACTIVE lease as "someone else owns this row, do not touch",
+ * so leasing a `confirmed` row from its OWN repeat-decide continuation would make that very recovery
+ * refuse to settle a genuine wedge. The in-process `liveConfirmations` ref-count stays the PRIMARY
+ * fast hint; this persisted lease is the durable fallback for a process that never clears it.
+ *
+ * It never GRANTS anything — the durable `PendingAction` status CAS stays the authority; the TTL
+ * (`EXECUTION_LEASE_TTL_MS`) is the bounded fallback for a crashed process. Returns the owner token to
+ * release with, or `undefined` when no lease was taken (row gone, or not a decidable state).
+ */
+async function beginExecutionLease(actionId: string): Promise<string | undefined> {
+  const row = await getPendingAction(actionId);
+  if (row === null) return undefined;
+  if (row.status !== 'pending' && row.status !== 'awaiting_mfa') return undefined;
+  const owner = newId('lease');
+  await setPendingActionLease(actionId, { owner, expiresAt: leaseExpiryFor(leaseNowMs()) });
+  return owner;
+}
+
+/**
+ * Release the lease taken by {@link beginExecutionLease} — CONDITIONALLY on OUR owner token, so a
+ * concurrent continuation's fresh lease is never wiped by this continuation's `finally` (a takeover's
+ * lease, or a duplicate's, survives). A vanished/owned-by-other row simply clears nothing.
+ */
+async function endExecutionLease(actionId: string, owner: string | undefined): Promise<void> {
+  if (owner === undefined) return;
+  await clearPendingActionLease(actionId, { owner });
+}
+
+/**
  * Run a confirm/verify continuation while marking `actionId` LIVE for THIS process for its WHOLE
- * duration (see the ref-counted `liveConfirmations` registry in `confirmation-recovery.ts`), so a
- * concurrent plan re-run of the owning node does NOT mistake the in-flight `confirmed` row for a
- * wedged one. The marker is cleared in a `finally`, so a completed continuation (success, refusal,
- * or a rolled-back result transaction) leaves NO trace and a later re-run FINALIZES the wedged row.
+ * duration (the ref-counted `liveConfirmations` registry in `confirmation-recovery.ts`) AND taking the
+ * DURABLE persisted execution lease ({@link beginExecutionLease}), so neither a concurrent plan re-run
+ * NOR a cross-process refresh mistakes the in-flight `confirmed` row for a wedged one. Both markers
+ * are cleared in a `finally`, so a completed continuation (success, refusal, or a rolled-back result
+ * transaction) leaves NO trace and a later re-run FINALIZES the wedged row.
  */
 async function withLiveConfirmation<T>(
   actionId: string,
   run: () => Promise<T>,
 ): Promise<T> {
   retainAction(actionId);
+  let leaseOwner: string | undefined;
   try {
+    // The lease is taken INSIDE the try so the in-process ref-count marker is ALWAYS released: if
+    // `beginExecutionLease` (a DB read + conditional write) throws, `leaseOwner` stays `undefined`
+    // (→ a no-op `endExecutionLease`) and the `finally` still runs `releaseAction`. Every cleanup is
+    // itself nested so a throwing `endExecutionLease` can never skip the ref-count release — the lease
+    // self-heals via its TTL anyway, but a leaked ref-count would defer recovery forever.
+    leaseOwner = await beginExecutionLease(actionId);
     return await run();
   } finally {
-    releaseAction(actionId);
+    try {
+      await endExecutionLease(actionId, leaseOwner);
+    } finally {
+      releaseAction(actionId);
+    }
   }
 }
 

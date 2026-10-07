@@ -10,8 +10,8 @@
  *    transitions and driving the client fetch helpers in `./actions`.
  *
  * Rules: NEVER throws to the UI (failures fold into `error` + a synthetic `error` event); never
- * renders chain-of-thought; the browser never executes a banking op (confirm/verify/cancel POST to
- * `./app` routes which re-validate + execute server-side).
+ * renders chain-of-thought; the browser never executes a banking op (confirm/verify/cancel/recover
+ * POST to `./app` routes which re-validate + execute server-side).
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type {
@@ -24,7 +24,7 @@ import type {
 import type { PendingActionSummary } from '@/lib/contracts/security';
 import type { TaskPlan } from '@/lib/contracts/task';
 import type { ToolName } from '@/lib/contracts/tools';
-import type { TaskControlAction } from './cards';
+import type { OutOfBandAttention, TaskControlAction } from './cards';
 import type { ChatEndpoints, PendingActionRef } from './actions';
 import {
   DEFAULT_ENDPOINTS,
@@ -33,6 +33,7 @@ import {
   controlTask as controlTaskRequest,
   fetchPendingActions,
   fetchTaskPlan,
+  recoverAction,
   sendChatTurn,
   verifyAction,
 } from './actions';
@@ -56,10 +57,16 @@ export type PendingHumanDecision =
   | { kind: 'confirmation'; summary: PendingActionSummary; actionId: string }
   | { kind: 'mfa'; summary: MfaActionSummary; actionId: string; hint?: string };
 
-/** A restored TERMINAL action a human must reconcile out-of-band (no server action, never re-invoked). */
+/**
+ * A restored OUT-OF-BAND action (never a live decision): a `confirmed` row still being processed or
+ * a recoverable result-less wedge, or a terminal `needs_reconciliation` that must be reconciled — it
+ * carries no confirm/MFA path but is surfaced so the user sees the state and (where allowed) can
+ * trigger recovery. `attention` distinguishes the three treatments.
+ */
 export interface PendingReconciliation {
   summary: PendingActionSummary;
   actionId: string;
+  attention: OutOfBandAttention;
 }
 
 export interface UseAgentStreamResult {
@@ -67,7 +74,7 @@ export interface UseAgentStreamResult {
   toolEvents: ToolEventView[];
   activePlan?: TaskPlan;
   pendingAction?: PendingHumanDecision;
-  /** Restored TERMINAL actions a human must reconcile out-of-band (never re-invoked). */
+  /** Restored out-of-band actions (processing / recoverable / needs_reconciliation) — never re-invoked. */
   pendingReconciliations: PendingReconciliation[];
   streamingText: string;
   busy: boolean;
@@ -81,6 +88,8 @@ export interface UseAgentStreamResult {
   confirm(actionId: string): Promise<void>; // POST /api/actions/:id/confirm
   verify(actionId: string, code: string): Promise<void>; // POST .../verify
   cancel(actionId: string): Promise<void>; // POST .../cancel
+  /** POST /api/actions/:id/recover — server-side recovery of a result-less out-of-band action. */
+  recover(actionId: string): Promise<void>;
   /** POST /api/tasks/:id { action } — steer the running plan; folds the returned snapshot. */
   controlTask(action: TaskControlAction, planId?: string): Promise<void>;
 }
@@ -220,11 +229,28 @@ function cardTargetId(state: ChatUIState): string | undefined {
  * Latest wins: a newer snapshot for the SAME plan id replaces the stored one, while an out-of-order
  * (older `updatedAt`) snapshot for the same id never regresses the view. A snapshot for a DIFFERENT
  * plan id replaces the slot (only one plan is live at a time).
+ *
+ * Generation fence (same plan id): the agent stamps a monotonic execution `generation` whenever the
+ * plan's execution token is (re)claimed (initial claim or a stale-owner takeover). When BOTH the
+ * incoming and the stored snapshot carry a generation, an OLDER incoming generation is REJECTED
+ * outright — even if its `updatedAt` looks fresher — and an incoming generation that is EQUAL OR
+ * NEWER is ACCEPTED even if its `updatedAt` is equal/older. When EITHER side is missing a generation
+ * there is no fence information, so the (backward-compatible) `updatedAt` guard applies.
  */
-function upsertPlan(state: ChatUIState, plan: TaskPlan): ChatUIState {
+function upsertPlan(state: ChatUIState, plan: TaskPlan, generation?: number): ChatUIState {
   const current = state.activePlan;
-  if (current && current.id === plan.id && current.updatedAt > plan.updatedAt) {
-    return state;
+  if (current && current.id === plan.id) {
+    const incomingGeneration = plan.generation ?? generation;
+    const storedGeneration = current.generation;
+    if (incomingGeneration !== undefined && storedGeneration !== undefined) {
+      // A lower generation belongs to a superseded executor — never overwrite the newer state.
+      if (incomingGeneration < storedGeneration) return state;
+      // Same/newer generation: the event wins, even when `updatedAt` is equal or older.
+      return { ...state, activePlan: plan };
+    }
+    if (current.updatedAt > plan.updatedAt) {
+      return state;
+    }
   }
   return { ...state, activePlan: plan };
 }
@@ -332,7 +358,7 @@ function applyEvent(state: ChatUIState, event: AgentStreamEvent): ChatUIState {
       return attachCard(state, event.card);
 
     case 'plan_update':
-      return upsertPlan(state, event.plan);
+      return upsertPlan(state, event.plan, event.generation);
 
     case 'confirmation_required':
       return {
@@ -418,8 +444,8 @@ function restoredMfaSummary(summary?: PendingActionSummary): MfaActionSummary {
  * Returns `undefined` when there is nothing actionable to restore.
  */
 function pickPendingAction(refs: PendingActionRef[]): PendingHumanDecision | undefined {
-  // ONLY actionable rows may become a live confirmation/MFA decision — a `needs_reconciliation` row
-  // is terminal and must NEVER be mistaken for one (it has no confirm/verify/cancel path).
+  // ONLY actionable rows may become a live confirmation/MFA decision — an out-of-band row
+  // (`confirmed` / `needs_reconciliation`) is not a live decision and must NEVER be mistaken for one.
   const actionable = refs.filter(
     (ref) => ref.status === 'pending' || ref.status === 'awaiting_mfa',
   );
@@ -435,14 +461,18 @@ function pickPendingAction(refs: PendingActionRef[]): PendingHumanDecision | und
 }
 
 /**
- * Every TERMINAL `needs_reconciliation` row, mapped to a display-only `PendingReconciliation`. These
- * rows have NO server action (no confirm/cancel/MFA) — they exist only so the user is told a gated
- * operation may have executed without a recorded outcome and must be reconciled out-of-band.
+ * Every OUT-OF-BAND row (attention `processing` / `recoverable` / `reconciliation`), mapped to a
+ * display-only `PendingReconciliation`. These rows have NO live decision path (no confirm/MFA) —
+ * they exist so the user sees an in-flight action, can trigger recovery for a recoverable wedge, and
+ * is told when a gated operation must be reconciled out-of-band.
  */
-function pickReconciliations(refs: PendingActionRef[]): PendingReconciliation[] {
-  return refs
-    .filter((ref) => ref.status === 'needs_reconciliation')
-    .map((ref) => ({ summary: ref.summary, actionId: ref.id }));
+function pickAttention(refs: PendingActionRef[]): PendingReconciliation[] {
+  const out: PendingReconciliation[] = [];
+  for (const ref of refs) {
+    if (ref.attention === 'decision') continue;
+    out.push({ summary: ref.summary, actionId: ref.id, attention: ref.attention });
+  }
+  return out;
 }
 
 // --- stateful hook ----------------------------------------------------------------------------
@@ -493,22 +523,22 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
 
   useEffect(() => {
     // ALWAYS run the one-shot best-effort read on mount: a live decision must never be clobbered
-    // (guarded in the functional `setState` below), and a terminal `needs_reconciliation` row —
-    // which carries no live decision of its own — must still be surfaced for manual reconciliation.
+    // (guarded in the functional `setState` below), and an out-of-band row — which carries no live
+    // decision of its own — must still be surfaced for manual reconciliation / recovery.
     let alive = true;
     setRestoring(true);
     void (async () => {
       const refs = await fetchPendingActions(endpointsRef.current);
       if (!alive) return;
       const decision = pickPendingAction(refs);
-      const reconciliations = pickReconciliations(refs);
+      const reconciliations = pickAttention(refs);
       setState((prev) => {
         const next = { ...prev };
         // Never clobber a decision a live event already delivered.
         if (next.pendingAction === undefined && decision !== undefined) {
           next.pendingAction = decision;
         }
-        // Seed the reconciliation list only when nothing has populated it yet.
+        // Seed the out-of-band list only when nothing has populated it yet.
         if (next.pendingReconciliations.length === 0 && reconciliations.length > 0) {
           next.pendingReconciliations = reconciliations;
         }
@@ -604,6 +634,30 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
   );
 
   /**
+   * Trigger the RECOVERY entry for an out-of-band action (`POST /api/actions/:id/recover`). The
+   * server re-checks ownership and settles the action through the gateway's authorized path — the
+   * browser never replays a banking op itself. Folds the returned events like any other action; on
+   * SUCCESS the card is dropped from the out-of-band list (a FAILED recovery keeps it so the user can
+   * retry). Best-effort: a failure surfaces a SAFE `error` and never throws to the UI.
+   */
+  const recover = useCallback(
+    async (actionId: string) => {
+      await pull(() => recoverAction(actionId, endpoints));
+      setState((prev) =>
+        prev.error !== undefined
+          ? prev
+          : {
+              ...prev,
+              pendingReconciliations: prev.pendingReconciliations.filter(
+                (r) => r.actionId !== actionId,
+              ),
+            },
+      );
+    },
+    [pull, endpoints],
+  );
+
+  /**
    * Steer the running plan (`pause`/`resume`/`cancel`/`retry`) via `POST /api/tasks/:id`. Defaults
    * `planId` to the live plan. Folds the returned snapshot into the SAME `activePlan` slot (reusing
    * the `plan_update` latest-wins upsert). Best-effort: a failed control surfaces a SAFE `error` and
@@ -643,6 +697,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
     confirm,
     verify,
     cancel,
+    recover,
     controlTask,
   };
 }

@@ -21,15 +21,16 @@ export type PendingHumanDecision =
   | { kind: 'confirmation'; summary: PendingActionSummary; actionId: string }
   | { kind: 'mfa'; summary: MfaActionSummary; actionId: string; hint?: string };
 
-/** A restored TERMINAL action a human must reconcile out-of-band (no server action, never re-invoked). */
-export interface PendingReconciliation { summary: PendingActionSummary; actionId: string; }
+/** A restored OUT-OF-BAND action (never a live decision, never re-invoked): `attention` says how to treat it. */
+export interface PendingReconciliation { summary: PendingActionSummary; actionId: string;
+  attention: OutOfBandAttention; }   // 'processing' | 'recoverable' | 'reconciliation'
 
 export interface UseAgentStreamResult {
   messages: ChatMessage[];
   toolEvents: ToolEventView[];
   activePlan?: TaskPlan;
   pendingAction?: PendingHumanDecision;              // { kind, summary, actionId, hint? }
-  pendingReconciliations: PendingReconciliation[];   // restored TERMINAL needs_reconciliation actions (display-only)
+  pendingReconciliations: PendingReconciliation[];   // restored OUT-OF-BAND rows (processing/recoverable/reconciliation)
   streamingText: string;
   busy: boolean;
   restoring: boolean;                                // true while the mount-time pending-actions read is in flight
@@ -40,6 +41,7 @@ export interface UseAgentStreamResult {
   confirm(actionId: string): Promise<void>;          // POST /api/actions/:id/confirm
   verify(actionId: string, code: string): Promise<void>; // POST .../verify
   cancel(actionId: string): Promise<void>;           // POST .../cancel
+  recover(actionId: string): Promise<void>;          // POST /api/actions/:id/recover
   controlTask(action: TaskControlAction, planId?: string): Promise<void>; // POST /api/tasks/:id { action }
 }
 export interface UseAgentStreamOptions { sessionId?: string; endpoints?: ChatEndpoints;
@@ -76,35 +78,59 @@ export interface ChatEndpoints {
   confirm: (actionId: string) => string;       // default `/api/actions/${id}/confirm`
   verify:  (actionId: string) => string;       // default `/api/actions/${id}/verify`
   cancel:  (actionId: string) => string;       // default `/api/actions/${id}/cancel`
+  recover: (actionId: string) => string;       // default `/api/actions/${id}/recover`
   task:    (id: string) => string;             // default `/api/tasks/${id}` — read/control ONE persisted plan
-  actions: string;                             // default '/api/actions' — list non-terminal pending actions
+  actions: string;                             // default '/api/actions' — list the session's attention rows
 }
 export const DEFAULT_ENDPOINTS: ChatEndpoints;
 export function sendChatTurn(req: ChatTurnRequest, endpoints?: ChatEndpoints): Promise<ChatTurnResponse>;
 export function confirmAction(actionId: string, endpoints?: ChatEndpoints): Promise<ChatTurnResponse>;
 export function verifyAction(actionId: string, code: string, endpoints?: ChatEndpoints): Promise<ChatTurnResponse>;
 export function cancelAction(actionId: string, endpoints?: ChatEndpoints): Promise<ChatTurnResponse>;
+export function recoverAction(actionId: string, endpoints?: ChatEndpoints): Promise<ChatTurnResponse>;
 // NEVER-throwing plan read (refresh recovery): resolves the plan, else undefined on
 // non-ok / error-envelope / malformed body / exception. Never surfaces a raw error to the UI.
 export function fetchTaskPlan(id: string, endpoints?: ChatEndpoints): Promise<TaskPlan | undefined>;
 // POST the SAME `task(id)` URL with `{ action }`; resolves the post-control snapshot, else undefined.
 export function controlTask(id: string, action: TaskControlAction, endpoints?: ChatEndpoints): Promise<TaskPlan | undefined>;
-// GET `actions`; tolerant of a top-level array OR `{ actions: [...] }`; keeps actionable
-// (pending | awaiting_mfa) rows AND TERMINAL needs_reconciliation rows (the latter has no server
-// action but must be SHOWN for out-of-band reconciliation, never re-invoked). Best-effort —
-// resolves `[]` on ANY failure (never throws).
+// GET `actions`; tolerant of a top-level array OR `{ actions: [...] }`; keeps ACTIONABLE
+// (pending | awaiting_mfa) rows AND OUT-OF-BAND rows (`confirmed` in-flight/recoverable +
+// TERMINAL needs_reconciliation) — the latter carry no confirm/MFA path but must be SHOWN so the
+// user sees their state and can reconcile/recover. Each ref carries an `attention` class (the
+// additive server field, else derived from `status`). Best-effort — resolves `[]` on ANY failure.
 export interface PendingActionRef { id: string; status: PendingActionStatus; tier: RiskLevel;
-  requiresMfa: boolean; summary: PendingActionSummary; }
+  requiresMfa: boolean; summary: PendingActionSummary; attention: AttentionClass; }
 export function fetchPendingActions(endpoints?: ChatEndpoints): Promise<PendingActionRef[]>;
-export type { TaskControlAction };   // re-exported from the chat barrel (`./index.ts`)
+export type { TaskControlAction, AttentionClass, OutOfBandAttention };  // re-exported from the chat barrel
 ```
 
-`postAction` (the confirm/verify/cancel path) maps the `ActionResponse` to events defensively: an
-**escalation / MFA-prompt** outcome (`requiresMfa && tier === 'RED' && !executed`, not a failed code)
-gets an `mfa_required` `AgentStreamEvent` ensured (synthesised when the server omitted one) and is
-**not** turned into a spurious `error`; any other `ok:false` outcome gets an `error` event appended
-when the server sent none (e.g. a wrong MFA code arrives as `ok:false` + `status:'awaiting_mfa'` +
-`mfaResult:'failed'` with an EMPTY event list).
+`postAction` (the confirm/verify/cancel/**recover** path) maps the `ActionResponse` to events
+defensively: an **escalation / MFA-prompt** outcome (`requiresMfa && tier === 'RED' && !executed`, not
+a failed code) gets an `mfa_required` `AgentStreamEvent` ensured (synthesised when the server omitted
+one) and is **not** turned into a spurious `error`; any other `ok:false` outcome gets an `error` event
+appended when the server sent none (e.g. a wrong MFA code arrives as `ok:false` +
+`status:'awaiting_mfa'` + `mfaResult:'failed'` with an EMPTY event list). `recoverAction` reuses the
+same normalisation, so a failed recovery is a safe event list, never a raw throw.
+
+## Attention classes (additive `GET /api/actions` field)
+
+`GET /api/actions` returns the caller session's attention rows. Each row MAY carry an additive
+`attention: AttentionClass` (`'decision' | 'processing' | 'recoverable' | 'reconciliation'`); when the
+server omits it, `actions.ts#toPendingActionRef` **derives** it from `status`
+(`pending`/`awaiting_mfa` → `decision`, `needs_reconciliation` → `reconciliation`, `confirmed` →
+`processing`). The class decides the UI treatment:
+
+| `attention` | trigger | treatment |
+| --- | --- | --- |
+| `decision` | `pending` / `awaiting_mfa` | the ONE live human-decision card (`ConfirmationCard` / `MfaCard`) |
+| `processing` | `confirmed` with an ACTIVE persisted lease | `ReconciliationCard` "处理中" — **no button** (work is still owned by a live continuation) |
+| `recoverable` | result-less `confirmed` wedge, no lease (server may settle it) | `ReconciliationCard` "可恢复" + 恢复执行 button |
+| `reconciliation` | terminal `needs_reconciliation` | `ReconciliationCard` "待人工核对" + 恢复执行 button |
+
+Only rows whose `status` is `pending | awaiting_mfa | confirmed | needs_reconciliation` become a
+`PendingActionRef`; every other `status` (`executed` / `failed` / `cancelled` / `locked`) is dropped.
+The `AttentionClass` / `OutOfBandAttention` types live in `./cards/types.ts` (re-exported through
+`./cards` and the chat barrel) so the fetch helper and the card agree on one definition.
 
 ## Event → state fold (consumed by `useAgentStream` / `ChatWindow`)
 
@@ -121,7 +147,7 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 | `message_end` | finalise message content/cards; clear `streamingText` |
 | `tool_start` / `tool_end` | upsert a `ToolEventView` (status started→success/error/blocked); a `blocked` entry also records its `toolName` |
 | `card` | append `card` to the current assistant message's `cards` — **except a `plan` card**, which is promoted into `activePlan` (never an inline card); see "Plan dedupe" |
-| `plan_update` | UPSERT `activePlan`: a newer snapshot for the same `plan.id` replaces the stored one; an older `updatedAt` for the same id never regresses the view; a different id replaces the slot (one live plan at a time) |
+| `plan_update` | UPSERT `activePlan` under the **generation fence** (see "Plan dedupe"): an OLDER generation for the same id is rejected, an equal-or-NEWER one wins, and a missing generation falls back to the `updatedAt` guard; a different id replaces the slot (one live plan at a time) |
 | `confirmation_required` | set `pendingAction` `{ kind: 'confirmation', summary: event.action, actionId: event.actionId }` |
 | `mfa_required` | set `pendingAction` `{ kind: 'mfa', summary: mfaSummary(state, event.hint), actionId: event.actionId, hint: event.hint }`; the summary's `toolName` is the actual gated tool the stream reported as blocked, omitted when the stream carried none |
 | `security_event` | append a `system` `ChatMessage` (content = `event.message`; `event.kind` is not surfaced) |
@@ -132,7 +158,7 @@ The MFA summary's `hint` is carried on `pendingAction.hint` so `ChatWindow` can 
 keeps the settle rule — `pendingAction` is cleared after a NON-error turn (a domain `error` keeps the
 decision visible so the user can retry).
 
-### Plan dedupe (at most ONE plan view per plan id)
+### Plan dedupe (at most ONE plan view per plan id) + generation fence
 
 Plan cards and `plan_update` events both flow through `upsertPlan` into the single `activePlan` slot:
 
@@ -141,6 +167,21 @@ Plan cards and `plan_update` events both flow through `upsertPlan` into the sing
 - `ChatWindow` renders that ONE live plan via `PlanCard`, so node statuses advance on `plan_update`.
 - Consequence: a `card`/`plan_update` pair for the same plan id can never leave a duplicate or stale
   plan card behind — there is exactly one plan surface per plan id.
+
+**Generation fence (执行代次/版本).** `TaskPlan.generation` is bumped by the agent layer whenever the
+plan's execution token is (re)claimed (initial claim or a stale-owner takeover), and the `plan_update`
+`AgentStreamEvent` also carries an optional `generation`. `upsertPlan(state, plan, generation?)` uses
+`plan.generation ?? generation` as the incoming value and fences it against the stored plan for the
+SAME id:
+
+- both sides present → an **older** incoming generation is **rejected** (returns the state unchanged),
+  an incoming generation that is **equal or newer** **wins** even when `updatedAt` is equal/older;
+- **either** side missing a generation → "no fence info" → the backward-compatible `updatedAt` guard
+  (`current.updatedAt > plan.updatedAt` → keep) applies;
+- a DIFFERENT plan id still replaces the slot unconditionally (the fence is per-id).
+
+All three `upsertPlan` callers are covered: `case 'plan_update'` (passes `event.generation`), the
+`plan` card promotion, and `controlTask` (folds the POST snapshot).
 
 ### Human-decision card (exactly ONE per active action)
 
@@ -154,10 +195,17 @@ duplicate (`withoutDuplicateDecisionCard`, matched by `actionId` for MFA and by 
 confirmation) so exactly one card is visible for the active action; a message left empty by the
 removal is dropped (no empty bubble). Older/unrelated decision cards are preserved.
 
-Separately, `ChatWindow` renders one ACTIONLESS `ReconciliationCard` per restored terminal
-`needs_reconciliation` action (from `pendingReconciliations`) — an amber warning with NO 确认/取消 and
-NO code input, so a possibly-executed-but-unrecorded op is never re-invoked and is never mistaken for
-a live 🟡/🔴 decision.
+### Out-of-band card (one per restored attention row)
+
+`ChatWindow` renders one `ReconciliationCard` per `pendingReconciliations` entry, passing the row's
+`attention` so it shows the right state (处理中 / 可恢复 / 待人工核对). It is visually distinct from
+`ConfirmationCard` (🟡 tier badge + 确认/取消) and `MfaCard` (🔴 code entry) — an amber/blue banner and
+a left accent border, never a `StatusBadge` — so it can never be mistaken for a live 🟡/🔴 decision.
+
+The 恢复执行 button (only for `recoverable` / `reconciliation`) calls `CardActionHandlers.onRecover`
+(`stream.recover`), which POSTs `/api/actions/:id/recover`; **the browser never replays a banking op
+itself** — the server re-checks ownership and settles the action through the gateway's authorized
+path. A `processing` row renders NO button (the work is still owned by a live continuation).
 
 ### Refresh recovery
 
@@ -168,20 +216,26 @@ a live 🟡/🔴 decision.
 - never overwrites a plan a live `plan_update` already delivered, and ignores a stale/unmounted or
   failed fetch (an `alive` cleanup flag; `fetchTaskPlan` resolves `undefined` instead of throwing).
 
-**Pending-action + reconciliation refresh restore.** A second one-shot mount effect ALWAYS runs
-`fetchPendingActions()` (a terminal `needs_reconciliation` row carries no live decision of its own,
-so it must be read even when a decision is already showing), then rebuilds two independent things:
+**Pending-action + out-of-band refresh restore.** A second one-shot mount effect ALWAYS runs
+`fetchPendingActions()` (an out-of-band row carries no live decision of its own, so it must be read
+even when a decision is already showing), then rebuilds two independent things:
 - the ACTIVE human decision in the single `pendingAction` slot (so a reloaded page still shows the
-  confirm/MFA card for an in-flight action) — the MOST RELEVANT actionable row wins:
+  confirm/MFA card for an in-flight action) — the MOST RELEVANT ACTIONABLE row wins:
   `requiresMfa || status === 'awaiting_mfa' || tier === 'RED'` → the `mfa` kind, else the
-  `confirmation` kind;
-- `pendingReconciliations` — every TERMINAL `needs_reconciliation` row, as a display-only list
-  (no server action, never re-invoked), which `ChatWindow` renders one `ReconciliationCard` per row.
+  `confirmation` kind (an out-of-band row is NEVER picked as a decision);
+- `pendingReconciliations` — every OUT-OF-BAND row (`attention !== 'decision'`), each carrying its
+  `attention` so `ChatWindow` renders the matching `ReconciliationCard` state.
 
 `restoring` is `true` while that read is in flight. Same guards as the plan recovery: an `alive`
 cleanup flag, a functional `setState` that refuses to clobber a non-undefined `pendingAction` (or a
 non-empty `pendingReconciliations`) already delivered by a live event, and a best-effort `[]` on
 failure — it NEVER throws to the UI.
+
+### Recovery entry (`recover`)
+
+`useAgentStream.recover(actionId)` runs the shared `pull()` over `recoverAction`, folding the returned
+events like any other action. On **success** (no `error` folded) the row is dropped from
+`pendingReconciliations`; on a **failure** it is kept so the user can retry. It never throws to the UI.
 
 ### Plan control (pause / resume / cancel / retry)
 
@@ -207,12 +261,18 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
 - The `error` event only sets `state.error`; with no active pending card it is not rendered in `ChatWindow` (the pending cards surface it via `CardActionHandlers.error`).
 - **Gated PLAN nodes get no actionable card.** A plan node's gated tool runs inside the executor's `runTool` (`agent/confirmation.ts` `executeGatedTool`), NOT through pi's `beforeToolCall`, so `submit_plan` succeeds (`agent/tools/planning.ts`) and no `confirmation_required`/`mfa_required` is emitted for a plan node — the live plan view shows a passive 待确认 badge with no confirm button.
 - No UI entry point passes `taskId` yet: `app/agent/page.tsx` renders `<ChatWindow/>` without it, so refresh recovery currently relies on the `sessionStorage` fallback.
+- **The generation fence is PER plan id.** A snapshot for a DIFFERENT `plan.id` still replaces the
+  `activePlan` slot unconditionally (only one plan is live at a time — the intended behaviour), so a
+  stale snapshot carrying another id is not fenced.
+- **`applyEvent` ends in a silent `default: return state`** — no `assertNever` — so a NEW
+  `AgentStreamEvent` variant is NOT a compile error here and would silently no-op (unlike `ChatCard`,
+  which IS `assertNever`-guarded in `CardRenderer`).
 
 ## Constraints
 
 - **All Client Components** (`'use client'`) — hooks, streaming, fetch.
-- **The browser never executes a banking op.** Confirm/verify/cancel POST to `./app` routes; the server
-  re-validates and executes. `useAgentStream` only folds the returned `ChatTurnResponse.events`.
+- **The browser never executes a banking op.** Confirm/verify/cancel/recover POST to `./app` routes; the
+  server re-validates and executes. `useAgentStream` only folds the returned `ChatTurnResponse.events`.
 - **No chain-of-thought**: `ToolEventList`/`StreamingText`/`PlanCard` render only steps, tool status and
   factual results (tool names, tiers, `summary`), never raw model reasoning.
 - **No MFA code** is displayed anywhere; `MfaCard` (in `./cards`) shows only the hint.
@@ -223,9 +283,10 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
   so the UI never sees a raw exception.
 - Named exports only; files ≲ ~1000 lines, one concern per file.
 - `ChatWindow` builds the `CardActionHandlers` bundle with `actionId`/`onConfirm`/`onVerify`/`onCancel`
-  /`onTaskControl`/`mfaAttempts`/`busy`/`error` **plus** the anomaly handlers
-  `onAcknowledge`/`onViewDetail`/`onFreeze`. `onTaskControl` is `stream.controlTask`; the anomaly three are
-  fire-and-forget `stream.send(...)` calls (「这笔交易是我本人消费」/「我想查看这笔交易的详情」/「冻结我的银行卡」),
+  /`onRecover`/`onTaskControl`/`mfaAttempts`/`busy`/`error` **plus** the anomaly handlers
+  `onAcknowledge`/`onViewDetail`/`onFreeze`. `onTaskControl` is `stream.controlTask`, `onRecover` is
+  `stream.recover`; the anomaly three are fire-and-forget `stream.send(...)` calls
+  (「这笔交易是我本人消费」/「我想查看这笔交易的详情」/「冻结我的银行卡」),
   so every anomaly button flows chat → agent → Security Gateway as an ordinary user message — the browser
   never calls a banking op directly (the freeze button drives `freeze_card`, which the gateway routes YELLOW
   → user confirmation).
@@ -237,24 +298,26 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
 
 - `useAgentStream` is a **pure fold** over `AgentStreamEvent[]` → unit-test it with scripted event
   sequences (from the faux-provider scenarios) under the root `tests/` suite: card attachment,
-  plan promotion/upsert (one plan view per id), tool-event upsert, confirmation/mfa transitions
-  with `kind`, error→banner, done→idle.
-- `ChatWindow` integration test: feed a scripted event list, assert rendered messages/cards/timeline,
-  the single live plan and the single active decision card.
-- Refresh restore: a `fetchPendingActions` fixture carrying actionable AND `needs_reconciliation` rows
-  must rebuild the decision slot AND the `pendingReconciliations` list (an actionless
-  `ReconciliationCard` per reconciliation row) without clobbering a live decision.
-- `Composer`: enter-to-send + disabled-when-busy behaviour.
+  plan promotion/upsert (one plan view per id), the generation fence (an older generation for the same
+  id is rejected; an equal-or-newer one wins over an equal/older `updatedAt`), tool-event upsert, confirmation/mfa
+  transitions with `kind`, error→banner, done→idle.
+- **No component/DOM test layer exists** — `@testing-library/react`/`jsdom`/`happy-dom` are NOT dependencies and `vitest.config.ts` runs `environment: 'node'`.
+  There is NO `useAgentStream`/`ChatWindow`/`Composer` test; DOM coverage is ONLY the real-browser suite `tests/e2e/acceptance.e2e.ts` (playwright-core, `npx tsx`, NOT Vitest).
+- **Untested fold rules of thumb** (candidates, NOT existing tests): a `fetchPendingActions` fixture with
+  actionable AND out-of-band rows (`confirmed` → `processing`/`recoverable`, `needs_reconciliation` →
+  `reconciliation`) should rebuild the decision slot AND the `pendingReconciliations` list (one
+  `ReconciliationCard` per row, with a 恢复执行 button only for `recoverable`/`reconciliation`) without
+  clobbering a live decision; `Composer` should be enter-to-send and disabled-when-busy.
 
 ## Routing Table
 
-- `./ChatWindow.tsx` → container: message list + live plan + active decision card + composer, owns `useAgentStream`
+- `./ChatWindow.tsx` → container: message list + live plan + active decision card + out-of-band cards + composer, owns `useAgentStream`
 - `./MessageBubble.tsx` → one message (text + cards via `./cards/CardRenderer` + tool events)
 - `./Composer.tsx` → input + send
 - `./ToolEventList.tsx` → tool/task status timeline (no chain-of-thought)
 - `./StreamingText.tsx` → incremental assistant text
-- `./useAgentStream.ts` → the event→state hook (chat state machine) + refresh recovery (plan, pending action AND reconciliation) + plan control + MFA attempt counter
-- `./actions.ts` → typed client fetch helpers + `ChatEndpoints`/`DEFAULT_ENDPOINTS`/`fetchTaskPlan`/`controlTask`/`fetchPendingActions`
-- `./cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher + the non-union `ReconciliationCard`
-- `./index.ts` → re-exports the chat surface + action helpers
+- `./useAgentStream.ts` → the event→state hook (chat state machine, with the plan generation fence) + refresh recovery (plan, pending action AND out-of-band attention) + recovery entry + plan control + MFA attempt counter
+- `./actions.ts` → typed client fetch helpers + `ChatEndpoints`/`DEFAULT_ENDPOINTS`/`fetchTaskPlan`/`controlTask`/`fetchPendingActions`/`recoverAction` + the `PendingActionRef` attention mapping
+- `./cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher + the non-union `ReconciliationCard` (out-of-band: processing/recoverable/reconciliation) + the `AttentionClass`/`OutOfBandAttention` types
+- `./index.ts` → re-exports the chat surface + action helpers + the attention types
 - `../../ui/` → primitives used here (dependency — read-only)

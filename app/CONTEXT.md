@@ -249,6 +249,7 @@ prerender fails. README §10 orders: `db:generate` → `db:push` → `db:seed` �
   Each route is thin (`validate → delegate → serialize`); shared plumbing lives in `app/api/_lib/`.
 - Add a new client-callable capability as a route under `./api`; add a new screen as a page dir with its
   own `CONTEXT.md`. Never import Prisma into a page or a client component.
+- **`GET /api/actions` has exactly ONE UI consumer: the chat page's mount-time restore.** `../components/chat/useAgentStream.ts` calls `fetchPendingActions()` once on mount (cookie identity, no `actionId` needed) and `ChatWindow` renders every out-of-band row as a `ReconciliationCard` (attention `recoverable`/`reconciliation` → 恢复执行 → `POST /api/actions/[id]/recover`; `processing` → no button). The ONLY page where this is reachable is `/agent`. There is **no standalone `/actions` page**, and neither `/security` nor `/audit` (nor `/`) surfaces pending/reconciliation rows — so a stranded recoverable / `needs_reconciliation` action is invisible outside the chat page.
 - The app is fully browsable via the global `NavBar` (`app/_components/NavBar.tsx`, mounted in
   `app/layout.tsx`) — every one of the seven pages is linked.
 - Any new shared UI/transport type belongs in `../lib/contracts` (root-owned) — do not define it locally.

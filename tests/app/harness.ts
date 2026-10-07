@@ -104,8 +104,8 @@ export function chatUrl(opts: { stream?: 0 | 1 } = {}): string {
   });
 }
 
-/** `POST /api/actions/[id]/{confirm|verify|cancel}` URL. Identity comes from the cookie. */
-export function actionUrl(id: string, action: 'confirm' | 'verify' | 'cancel'): string {
+/** `POST /api/actions/[id]/{confirm|verify|cancel|recover}` URL. Identity comes from the cookie. */
+export function actionUrl(id: string, action: 'confirm' | 'verify' | 'cancel' | 'recover'): string {
   return `/api/actions/${encodeURIComponent(id)}/${action}`;
 }
 

@@ -13,22 +13,34 @@
  * derived deterministically from `(userId, key)` and reused as the primary key, so a repeat is
  * rejected by the PK uniqueness and the original row is replayed instead of double-debiting.
  *
+ * COMMITTED-FACT FIRST: the same execution identity also writes an `ExecutionReceipt` (the durable
+ * proof that the side effect committed, holding a snapshot of the original result + a canonical
+ * digest of the original request) in the SAME transaction as the debit. A replay therefore consults
+ * the receipt/ledger BEFORE any MUTABLE lookup (recipient by name, funding account), so an
+ * already-debited transfer is recognized from PERSISTED facts and never spuriously re-resolved —
+ * while a replay under the same identity but a DIFFERENT request is rejected explicitly (CONFLICT).
+ *
  * Throws `AppError`:
  *  - `VALIDATION`        — missing/invalid recipient or non-positive amount.
  *  - `NOT_FOUND`         — no contact matches the given id/phone/name.
- *  - `CONFLICT`          — a name matches multiple contacts (`detail.candidates` lists them).
+ *  - `CONFLICT`          — a name matches multiple contacts (`detail.candidates` lists them), or a
+ *                          replay reuses an execution identity for a different request.
  *  - `INSUFFICIENT_FUNDS`— funding account balance < amount.
  */
 import type { Account, Contact, Transaction } from '@prisma/client';
 import { demoNow } from '../lib/clock';
-import { idempotentTransferTxId } from '@/lib/ledger';
-import { accounts, contacts, transactions } from '../lib/db/repositories';
+import { executionReceiptId, idempotentTransferTxId, requestDigest } from '@/lib/ledger';
+import { accounts, contacts, executionReceipts, transactions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
+import { safeParse, toJson } from '../lib/json';
 import { parseAmount, round2 } from '../lib/money';
 import { toContactView } from './contact';
 import { isUniqueViolation } from './idempotent';
 import { runInTransaction } from './tx';
 import type { TransferInput, TransferRecipient, TransferResult } from './types';
+
+/** The registered tool name this module records receipts / fingerprints requests against. */
+const TRANSFER_TOOL = 'transfer_money';
 
 /** Map a resolved contact row onto the public `TransferRecipient`. */
 function toRecipient(contact: Contact): TransferRecipient {
@@ -40,17 +52,79 @@ function toRecipient(contact: Contact): TransferRecipient {
   };
 }
 
+/** Normalize a selector/remark: an absent OR blank string hashes the same as `null`. */
+function selector(value: string | undefined): string | null {
+  return value !== undefined && value !== '' ? value : null;
+}
+
 /** Build the TransferResult for an idempotent replay from the already-persisted ledger row. */
-function replayResult(existing: Transaction, recipient: Contact, newBalance: number): TransferResult {
+function replayResult(existing: Transaction, recipient: TransferRecipient, newBalance: number): TransferResult {
   return {
     success: true,
     transactionId: existing.id,
     newBalance,
-    recipient: toRecipient(recipient),
+    recipient,
     amount: Math.abs(existing.amount),
     remark: existing.remark ?? undefined,
     occurredAt: existing.occurredAt.getTime(),
   };
+}
+
+/**
+ * A MINIMAL recipient reconstructed from PERSISTED ledger fields ONLY — used when the counterparty
+ * no longer resolves (renamed/deleted contact). It NEVER invents a contact id/phone: the name is the
+ * one the ledger row itself recorded (`merchant` = `转账给<name>`), and an empty phone stays empty.
+ */
+function ledgerRecipient(existing: Transaction): TransferRecipient {
+  const prefix = '转账给';
+  const recorded = existing.merchant.startsWith(prefix) ? existing.merchant.slice(prefix.length) : '';
+  return { name: recorded || '收款人', phone: '' };
+}
+
+/** Replay recipient from PERSISTED facts: the contact while it still resolves, else a minimal one. */
+async function replayRecipient(userId: string, existing: Transaction): Promise<TransferRecipient> {
+  if (existing.counterpartyId !== null && existing.counterpartyId !== '') {
+    const contact = await contacts.getContact(existing.counterpartyId);
+    if (contact && contact.userId === userId) return toRecipient(contact);
+  }
+  return ledgerRecipient(existing);
+}
+
+/**
+ * Recognize an ALREADY-COMMITTED transfer for `(userId, key)` from PERSISTED facts, BEFORE any
+ * MUTABLE lookup (recipient / funding-account resolution). Returns the replayed `TransferResult`,
+ * or `null` when nothing has committed yet.
+ *
+ *  - an `ExecutionReceipt` for the identity: the request digest MUST match, in which case the
+ *    ORIGINAL result snapshot is replayed verbatim; a differing digest is an explicit CONFLICT.
+ *  - else a LEGACY deterministic ledger row (debit present, no receipt): recognized as
+ *    already-credited and replayed from persisted fields — never re-resolved by name, never a
+ *    spurious NOT_FOUND.
+ */
+async function replayCommitted(userId: string, key: string, digest: string): Promise<TransferResult | null> {
+  const receipt = await executionReceipts.getExecutionReceipt(userId, key);
+  if (receipt) {
+    if (receipt.requestDigest !== digest) {
+      throw new AppError('CONFLICT', 'same execution identity, different request', {
+        key,
+        expectedDigest: receipt.requestDigest,
+        actualDigest: digest,
+      });
+    }
+    const stored = safeParse<TransferResult | null>(receipt.resultJson, null);
+    if (stored === null) {
+      throw new AppError('INTERNAL', `Execution receipt ${receipt.id} has an unreadable result`, {
+        key,
+      });
+    }
+    return stored;
+  }
+
+  const legacy = await transactions.getTransaction(idempotentTransferTxId(userId, key));
+  if (!legacy) return null;
+  const account = await accounts.getAccount(legacy.accountId);
+  if (!account) throw new AppError('NOT_FOUND', `Funding account ${legacy.accountId} not found`);
+  return replayResult(legacy, await replayRecipient(userId, legacy), account.balance);
 }
 
 /** Exactly one of `contactId` | `phone` | `name` must be supplied. */
@@ -124,16 +198,18 @@ async function resolveFundingAccount(userId: string, input: TransferInput): Prom
 }
 
 /**
- * Execute a transfer: resolve recipient, atomically debit the funds, write the DEBIT ledger row.
+ * Execute a transfer: consult the committed receipt/ledger, then (on a miss) resolve the recipient,
+ * atomically debit the funds and write the DEBIT ledger row + the execution receipt.
  *
  * The debit is a CONDITIONAL `updateMany` (`balance >= amount`). If it matches nothing the transfer
  * is rejected with `INSUFFICIENT_FUNDS` (carrying the current balance) and NOTHING is written — so
  * a negative balance is impossible even under concurrency.
  *
- * When `idempotencyKey` is supplied the call is at-most-once: the ledger row id is deterministic
- * from `(userId, key)`, so a repeat finds and replays the original row (same `transactionId`, no
- * second debit). Concurrent same-key calls are still safe — the loser's insert violates the PK and
- * its transaction rolls back (no debit), then the committed row is replayed.
+ * When `idempotencyKey` is supplied the call is at-most-once: an already-committed identity replays
+ * its persisted result (same `transactionId`, no second debit, no mutable re-resolution), while a
+ * DIFFERENT request under the same identity is rejected with `CONFLICT`. Concurrent same-key calls
+ * are still safe — the loser's insert violates the unique/PK constraint, its transaction rolls back
+ * (no debit), and the committed fact is replayed.
  */
 export async function createTransfer(input: TransferInput): Promise<TransferResult> {
   const amount = round2(parseAmount(input.amount));
@@ -141,13 +217,31 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
     throw new AppError('VALIDATION', `Transfer amount must be a positive number (received: ${input.amount})`);
   }
 
+  const key = input.idempotencyKey?.trim();
+  const txId = key ? idempotentTransferTxId(input.userId, key) : undefined;
+  const digest = requestDigest({
+    userId: input.userId,
+    toolName: TRANSFER_TOOL,
+    name: selector(input.name),
+    contactId: selector(input.contactId),
+    phone: selector(input.phone),
+    amount,
+    sourceAccountId: selector(input.sourceAccountId),
+    remark: selector(input.remark),
+  });
+
+  // COMMITTED-FACT FAST PATH — consulted BEFORE any MUTABLE lookup, so an already-debited transfer is
+  // recognized from persisted facts and never re-resolved through data (the recipient by name) that
+  // may have changed since the side effect committed.
+  if (key !== undefined) {
+    const committed = await replayCommitted(input.userId, key, digest);
+    if (committed) return committed;
+  }
+
   const recipient = await resolveRecipient(input.userId, input);
   const account = await resolveFundingAccount(input.userId, input);
 
   const occurredAt = demoNow();
-
-  const key = input.idempotencyKey?.trim();
-  const txId = key ? idempotentTransferTxId(input.userId, key) : undefined;
 
   type Outcome =
     | { kind: 'executed'; transactionId: string; newBalance: number }
@@ -197,22 +291,55 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
 
       const updated = await tx.account.findUnique({ where: { id: account.id } });
       if (!updated) throw new AppError('NOT_FOUND', `Funding account ${account.id} not found`);
+
+      // Persist the EXECUTION RECEIPT in the SAME transaction as the debit + ledger row, so the
+      // committed fact (original result snapshot + request fingerprint) is durable the instant the
+      // side effect exists — a later replay returns it verbatim instead of re-resolving mutable data.
+      if (key !== undefined) {
+        const snapshot: TransferResult = {
+          success: true,
+          transactionId: transaction.id,
+          newBalance: updated.balance,
+          recipient: toRecipient(recipient),
+          amount,
+          remark: input.remark,
+          occurredAt,
+        };
+        await executionReceipts.putExecutionReceipt(
+          {
+            id: executionReceiptId(input.userId, key),
+            userId: input.userId,
+            key,
+            toolName: TRANSFER_TOOL,
+            requestDigest: digest,
+            resultJson: toJson(snapshot),
+            txId: transaction.id,
+          },
+          tx,
+        );
+      }
+
       return { kind: 'executed', transactionId: transaction.id, newBalance: updated.balance };
     });
   } catch (error) {
-    // Concurrent same-key race: another call committed the row first → our tx rolled back (no debit).
-    if (txId !== undefined && isUniqueViolation(error)) {
+    // Concurrent same-key race: another call committed the row/receipt first → our tx rolled back
+    // (no debit). Our tx may have failed on the ledger PK OR the receipt unique constraint, so prefer
+    // the full committed fact (the receipt) and fall back to the committed ledger row.
+    if (txId !== undefined && key !== undefined && isUniqueViolation(error)) {
+      const committed = await replayCommitted(input.userId, key, digest);
+      if (committed) return committed;
       const existing = await transactions.getTransaction(txId);
       if (existing) {
         const account2 = await accounts.getAccount(account.id);
-        return replayResult(existing, recipient, account2?.balance ?? 0);
+        if (!account2) throw new AppError('NOT_FOUND', `Funding account ${account.id} not found`);
+        return replayResult(existing, await replayRecipient(input.userId, existing), account2.balance);
       }
     }
     throw error;
   }
 
   if (outcome.kind === 'replay') {
-    return replayResult(outcome.existing, recipient, outcome.newBalance);
+    return replayResult(outcome.existing, toRecipient(recipient), outcome.newBalance);
   }
 
   return {

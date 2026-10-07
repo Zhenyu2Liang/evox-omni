@@ -240,7 +240,7 @@ via `resumeTurn`.
 rows FIRST: `createTask({sessionId, userId, goal})` returns the `AgentTask` whose id IS the canonical
 plan id; then `plan = { ...dag.buildPlan({sessionId, goal, nodes, now}), id: task.id }` and one
 `createTaskNode(...)` per node in declaration order (`order` = index, `status:'pending'`). It then CLAIMS
-the plan's executor slot (`claimTaskExecution(plan.id, newId('taskclaim'))`; a lost claim returns
+the plan's executor slot (`claimTaskExecutionWithGeneration(plan.id, newId('taskclaim'))`; a lost claim returns
 `ok:false` and runs NOTHING), clears the plan's non-terminal node claims under the won token
 (`clearStaleNodeClaims` — a no-op on a fresh plan) and runs
 `executor.runPlan(plan, { runTool, onNodeUpdate, controls, claimNode, releaseNode, ...createTaskPersistence(plan.id, { planToken: claimToken, nodeToken: (nodeId) => nodeTokens.get(nodeId) }) }, {signal, now})`
@@ -272,7 +272,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   — a cheap read of the parent `AgentTask.executionToken`. A run whose PLAN claim was taken over therefore
   emits NO stale snapshot, so the UI's DAG timeline never shows the superseded executor's progress over
   the takeover's completed run. The node write is fenced independently (`createTaskPersistence`), so this
-  gate only suppresses the publication.
+  gate only suppresses the publication. The `onNodeUpdate` wrapper ALSO re-checks `planExecutionClaimHeld` AFTER its (arbitrarily long-blocking) node sink returns and BEFORE it accumulates/publishes the plan snapshot — a takeover landing WHILE a notification is being dispatched therefore publishes nothing. `runSubmitPlan` additionally wires `isRunOwner: () => planExecutionClaimHeld(plan.id, claimToken)` into the executor, so the taken-over run also refuses its next node claim and launches no successor tool.
 - When a DAG node PARKS on a gated tool (`waiting_confirmation`/`waiting_verification`, its
   `PendingAction` id readable from `AgentTaskNode.output` via `readPendingActionId`), the relay
   remembers the node and — after the run settles, so the row is committed — emits the human-decision
@@ -595,8 +595,8 @@ Vitest (`tests/`, sibling). This node is designed to be testable WITHOUT network
 - `./agent/system-prompt.ts` → banking system prompt builder + hallucination/permission rules
 - `./agent/session.ts` → per-session `AgentState` + transcript load/create/persist
 - `./agent/run-turn.ts` → one chat turn: prompt, event→stream mapping, persistence; `resumeTurn`
-- `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path + executed-node recovery + committed-side-effect wedge finalization (ref-counted `liveConfirmations` in `confirmation-recovery.ts`)
-- `./agent/confirmation-recovery.ts` → ref-counted per-process live-confirmation registry (`retainAction`/`releaseAction`/`isActionLive`/`liveCount`) + standalone (non-plan) wedge recovery (`recoverStandaloneWedge`: idempotent replay of the PROVEN-idempotent `transfer_money`, else the terminal queryable `needs_reconciliation` state)
+- `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path (result + terminal status + recovery audit settled in ONE `$transaction`) + executed-node recovery + committed-side-effect wedge finalization (ref-counted `liveConfirmations` in `confirmation-recovery.ts`); the exported `recoverAction(actionId, opts?)` (`agent/index.ts` → `POST /api/actions/[id]/recover`) drives the same settlement path explicitly
+- `./agent/confirmation-recovery.ts` → ref-counted per-process live-confirmation registry (`retainAction`/`releaseAction`/`isActionLive`/`liveCount`) + unified settlement classifier `classifyConfirmedAction(row, nowMs)` → `settled|processing|recoverable|needs_reconciliation` + `settlePendingAction`/`settleFromCommittedReceipt` + persisted execution LEASE (`EXECUTION_LEASE_TTL_MS = 120000`; `setPendingActionLease`/`clearPendingActionLease`/`hasActiveLease`/`leaseNowMs`; taken ONLY for `pending`/`awaiting_mfa`) + standalone (non-plan) wedge recovery (`recoverStandaloneWedge`: receipt-first idempotent replay for every `RECOVERABLE_STANDALONE_TOOLS` member — currently `transfer_money` only — else the terminal queryable `needs_reconciliation` state)
 - `./agent/card-emitter.ts` → pure `toCards(toolName, result): ChatCard[]` mapping + card helpers
 - `./agent/task-control.ts` → node-output JSON shape + token-fenced DAG plan persistence/load mapping + PLAN-ownership-aware node claim/write/reclaim (`claimNodeOwnedByPlan`, `planExecutionClaimHeld`, `buildNodeClaimPorts`, `clearStaleNodeClaims`) + pause/resume/cancel/retry/getTaskPlan glue (ownership-checked; EXECUTOR vs CONTROL write mode — see `task-fencing.ts`)
 - `./agent/task-fencing.ts` → FENCED plan/node write primitives: `toNodeUpdate`/`jsonNodeOutput`/`isMissingNodeError`, `settlePlanFromNodes`, `recordDecidedNodeFenced` (single-statement ownership CASes used by a lost-claim confirm-continuation)
