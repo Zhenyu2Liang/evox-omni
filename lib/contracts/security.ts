@@ -15,7 +15,23 @@ export interface SecurityEvaluation {
   blockReason?: string;
 }
 
-export type PendingActionStatus = 'pending' | 'awaiting_mfa' | 'confirmed' | 'executed' | 'failed' | 'cancelled' | 'locked';
+export type PendingActionStatus =
+  | 'pending'
+  | 'awaiting_mfa'
+  | 'confirmed'
+  | 'executed'
+  | 'failed'
+  | 'cancelled'
+  | 'locked'
+  /**
+   * TERMINAL, and the ONLY status that requires a HUMAN to settle it out-of-band: a gated side
+   * effect that may HAVE committed but whose outcome could not be recorded, and which cannot be
+   * safely recovered/replayed (a non-idempotent standalone write, or a committed side effect with
+   * no durable result). It is deliberately NOT `failed` (the outcome is UNKNOWN, not a failure) and
+   * NOT `confirmed` (that would dangle forever / imply a live decision). It is queryable and shown
+   * to the user as a manual-reconciliation entry.
+   */
+  | 'needs_reconciliation';
 
 export interface PendingActionSummary {
   title: string;
