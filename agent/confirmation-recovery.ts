@@ -24,6 +24,8 @@ import { AppError } from '@/lib/errors';
 import { safeParse, toJson } from '@/lib/json';
 import { ledgerKeyForAction } from '@/lib/ledger';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
+import { recordAudit } from '@/audit';
+import { demoNow } from '@/lib/clock';
 
 /* ----------------------------------------------------------------------------------------- *
  * 1. Live-confirmation registry — REFERENCE-COUNTED
@@ -201,7 +203,14 @@ export async function recoverStandaloneWedge(
  */
 async function replayStandaloneAction(
   actionId: string,
-  row: { userId: string; toolName: string; argsJson: string },
+  row: {
+    userId: string;
+    toolName: string;
+    argsJson: string;
+    sessionId: string;
+    userRequest: string | null;
+    intent: string | null;
+  },
   link: { taskId: string | null; nodeId: string | null } | null,
   tier: RiskLevel,
   requiresMfa: boolean,
@@ -231,6 +240,26 @@ async function replayStandaloneAction(
       data: { resultJson: toJson(result) },
     });
     await setPendingActionStatus(actionId, status, tx);
+    // The RECOVERY audit is written in the SAME transaction as the recovery fact (result + status),
+    // so a settled recovery always leaves a durable audit and can never be stranded at `confirmed`.
+    // Deduped by execution identity, so a repeated recovery never duplicates the audit.
+    await recordAudit(
+      {
+        timestamp: demoNow(),
+        sessionId: row.sessionId,
+        userRequest: row.userRequest ?? '',
+        intent: row.intent ?? undefined,
+        toolName,
+        riskLevel: tier,
+        confirmationRequired: true,
+        confirmed: true,
+        mfaRequired: requiresMfa,
+        toolResult: result,
+        status: result.ok ? 'success' : 'failed',
+        detail: '恢复：初次结果写回失败，按幂等键安全重放（副作用仅一次）',
+      },
+      { client: tx, dedupeKey: `exec:${idempotencyKey}` },
+    );
   });
 
   return {
