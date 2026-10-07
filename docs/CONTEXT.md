@@ -22,19 +22,26 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   deep dives on **Pi Agent**, **Banking SDK**, **Tool Calling** (`createToolRegistry`, TypeBox,
   two execution paths) and the **DAG Planner**; Mermaid diagrams (pipeline + two-phase
   confirmation + DAG example) and the tool catalogue (🟢/🟡/🔴 + `submit_plan`). §8/§11 state the
-  durable-plan mechanics accurately: an executed gated node recovers by **backfilling the persisted
-  `PendingAction.resultJson`** (never re-invoking the tool); takeover writes are **token-fenced**; a
-  progressing executor renews its lease at **node boundaries**; a node claim verifies **plan ownership**
-  in the same statement as the claim and refuses a **terminal** node; a committed side effect whose
-  result transaction rolled back is finalized `failed` into explicit **manual reconciliation** (`人工核对`).
+  durable-plan mechanics accurately: the INITIAL `submit_plan` run claims each node through the SAME
+  atomic plan-ownership CAS a resume uses (`agent/task-control.ts#buildNodeClaimPorts` around the
+  single-statement `claimNodeOwnedByPlan`, wired by `agent/tools/planning.ts#runSubmitPlan`), and a
+  takeover reclaims the zombie's non-terminal nodes via `clearStaleNodeClaims`; takeover writes are
+  **token-fenced**; a progressing executor renews its lease at **node boundaries**; a node claim
+  verifies **plan ownership** in the same statement as the claim and refuses a **terminal** node; an
+  executed gated PLAN node recovers by **backfilling the persisted `PendingAction.resultJson`** (never
+  re-invoking the tool), while a STANDALONE wedge is settled by the reference-counted `liveConfirmations`
+  registry + `recoverStandaloneWedge` (idempotent replay of `transfer_money`, else terminal
+  `needs_reconciliation`).
 - `docs/security.md` — three permission tiers + the frozen policy table + dynamic `transfer_money`
   rules (`DAILY_TRANSFER_LIMIT=1000`); the Security Gateway `beforeToolCall` chokepoint;
   code-enforced / LLM-immutable permissions; prompt-injection defense (`injection-guard`, Test 4);
   hallucination protection (facts only from tool results); MFA (`MFA_CODE='123456'`,
   `MFA_MAX_ATTEMPTS=3`); circuit breaker; audit log fields (`AuditEntry` / `SecurityEventKind`);
   session identity (cookie-only write endpoints); plan-lifecycle guarantees (cancel revokes parked
-  actions / no fake rollback / exactly-once resume-retry); sandbox guarantees. §14 is the honest
-  **三桶自评** (已实现 / 模拟 / 未验证) for the security surface.
+  actions / no fake rollback / exactly-once resume-retry, with the INITIAL `submit_plan` run fenced
+  through the same plan-ownership node claim as a resume); the standalone `needs_reconciliation`
+  outcome (manual reconciliation of a possibly-committed, non-replayable side effect); sandbox
+  guarantees. §14 is the honest **三桶自评** (已实现 / 模拟 / 未验证) for the security surface.
 - `docs/test-cases.md` — the 12 demo scenarios as a table (input / tier / behavior / spec file);
   the four test layers (pure unit / faux-LLM scenario / in-process route-handler `[integration]` /
   real-browser acceptance harness `tests/e2e`, run via tsx, not vitest)
@@ -42,18 +49,26 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   session, MFA escalation, DAG pause/cancel/resume/refresh, mock action routing, injection, shared
   kernel); the offline `LLM_MODE=mock` + `registerFauxProvider` determinism story; run commands.
   §1/§4 list the frozen regression probes (`tests/review-final-boundaries.test.ts`,
-  `tests/review-recovery-probes.test.ts`) plus the invariant-grouped boundary/integrity/fencing specs
-  (`tests/review-current-boundaries.test.ts`, `tests/review-execution-integrity.test.ts`,
-  `tests/review-execution-fencing.test.ts`, `tests/app/confirm-continuation-fencing.test.ts`); §6 (test-infra)
+  `tests/review-recovery-probes.test.ts`) plus the frozen acceptance spec
+  `tests/review-followup-integrity.test.ts` (4 tests), the invariant-grouped boundary/integrity/fencing
+  specs (`tests/review-current-boundaries.test.ts`, `tests/review-execution-integrity.test.ts`,
+  `tests/review-execution-fencing.test.ts`, `tests/app/confirm-continuation-fencing.test.ts`) and the
+  executor-fencing / marker-lifecycle / standalone-recovery specs
+  (`tests/review-initial-executor-fencing.test.ts`, `tests/review-confirmation-marker-lifecycle.test.ts`,
+  `tests/review-standalone-recovery.test.ts`); §6 (test-infra)
   records the clean-env init root cause (`RUST_LOG`), the new specs (`tests/review-next-boundaries.test.ts`,
   `tests/review-obsolete-executor.test.ts`, `tests/review-result-recovery.test.ts`, `tests/deploy-db-push.test.ts`,
-  `tests/unit/lib/prisma-cli-env.test.ts`) and the deploy ordering (`npm run db:push` → `db:seed` → `build`).
+  `tests/unit/lib/prisma-cli-env.test.ts`) and the deploy ordering (`npm run db:push` → `db:seed` → `build`);
+  the recorded suite size is **86 files / 599 tests**.
 - `docs/known-risks.md` — honest limitations (mock data, simulated MFA, no real payment, heuristic
   anomaly detection, fictional investments, spending analysis excludes anomalies, in-process
   breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with
   exactly one of the three buckets and framed as *limitation + why it is acceptable for a
-  competition demo*; documents the clean-env init root cause, the `lib/prisma-cli-env.ts` policy and the
-  deploy ordering as an §19 engineering note, together with the file-size soft-guideline overrun.
+  competition demo*; documents the standalone `needs_reconciliation` reconciliation boundary (only
+  `transfer_money` is proven idempotent for standalone recovery), the per-process liveness registries
+  (`inFlightConfirmations` / live-confirmation markers), the clean-env init root cause, the
+  `lib/prisma-cli-env.ts` policy and the deploy ordering as an §19 engineering note, together with the
+  file-size soft-guideline overrun.
 
 ## Constraints
 
@@ -89,34 +104,42 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   single-machine acceptance (see `../tests/e2e/CONTEXT.md`).
 - **Three-bucket convention**: tag every limitation with exactly one of ✅ 已实现 / 🧪 模拟 /
   ⚠️ 未验证·未完成. Never let a doc claim more than the code proves.
-- **Frozen regression invariants** (locked by `tests/review-final-boundaries.test.ts` — 2 tests —
-  and `tests/review-recovery-probes.test.ts` — 3 tests): (a) executed-node recovery **backfills** the
-  persisted `PendingAction.resultJson` and **never re-invokes the tool**; (b) takeover writes are
-  **token-fenced** (a taken-over zombie cannot forge/overwrite node/plan results). Describe these two
-  invariants exactly; do NOT generalise them into blanket "replay never duplicates side effects".
+- **Frozen regression invariants** (locked by the frozen acceptance spec
+  `tests/review-followup-integrity.test.ts` — 4 tests — alongside
+  `tests/review-final-boundaries.test.ts` — 2 tests — and `tests/review-recovery-probes.test.ts` —
+  3 tests): (a) executed-node recovery **backfills** the persisted `PendingAction.resultJson` and
+  **never re-invokes the tool**; (b) takeover writes are **token-fenced** (a taken-over zombie cannot
+  forge/overwrite node/plan results). Describe these two invariants exactly; do NOT generalise them
+  into blanket "replay never duplicates side effects".
 - **Execution fencing covers every executor path** (initial `submit_plan` run, dependency-skip,
   condition/note nodes, confirm-continuation) via a single-statement CAS on the node/plan execution
-  token; only the deliberate `pauseTask`/`cancelTask` ("control") writes are unfenced. When the
-  confirm-continuation loses the plan claim it records the decided node through
-  `agent/task-fencing.ts#recordDecidedNodeFenced` (no-owner CAS) — the human decision is never lost.
-  The execution **result and terminal action status** are written in one atomic `prisma.$transaction`.
+  token: the INITIAL run claims each node through `agent/task-control.ts#buildNodeClaimPorts` (the
+  SAME single-statement plan-ownership CAS `claimNodeOwnedByPlan` a resume uses), and a takeover
+  reclaims the zombie's non-terminal nodes via `clearStaleNodeClaims`; only the deliberate
+  `pauseTask`/`cancelTask` ("control") writes are unfenced. When the confirm-continuation loses the
+  plan claim it records the decided node through `agent/task-fencing.ts#recordDecidedNodeFenced`
+  (no-owner CAS) — the human decision is never lost. The execution **result and terminal action
+  status** are written in one atomic `prisma.$transaction`.
 - **Takeover wording**: takeover happens only when the claim is **provably stale** (TTL
   `EXECUTION_CLAIM_TTL_MS = 600000`, real `Date.now()`); a *progressing* executor keeps its claim
   fresh via **node-boundary renewal** (`renewTaskExecutionClaim`); a zombie's **writes are fenced**.
   A process **blocked a long time inside a single tool call** can still be overtaken and may still
   attempt (fenced, side-effect-free) work — never claim "a live owner is never preempted".
-- **Unclosed defects** (do NOT claim every execution path is safe): (a) `inFlightConfirmations` is
-  **per-process** — a `confirmed` + `resultJson=null` row whose live continuation runs in a
-  **different process/instance** is not distinguished (multi-instance deploy uncovered); (b) the
-  execution-claim takeover is a **TTL heuristic** (a single tool call blocked beyond
-  `EXECUTION_CLAIM_TTL_MS` can be overtaken; multi-process contention is not stress-tested — atomicity
-  is verified only within a single process/DB); (c) `agent/task-control.ts` (~1169 lines) and
-  `agent/confirmation.ts` (~1006 lines) exceed the ~1000-line soft guideline (extraction candidates).
+- **Unclosed defects** (do NOT claim every execution path is safe): (a) BOTH `inFlightConfirmations`
+  AND the reference-counted `liveConfirmations` markers are **per-process** — a `confirmed` +
+  `resultJson=null` row owned by a live continuation in a **different process/instance** is not
+  recognized (multi-instance deploy uncovered); (b) the execution-claim takeover is a **TTL heuristic**
+  (a single tool call blocked beyond `EXECUTION_CLAIM_TTL_MS` can be overtaken; multi-process contention
+  is not stress-tested — atomicity is verified only within a single process/DB); (c) `agent/task-control.ts`
+  (~1205 lines) and `agent/confirmation.ts` (~1028 lines) exceed the ~1000-line soft guideline
+  (extraction candidates); (d) only `transfer_money` is PROVEN idempotent for STANDALONE recovery —
+  every other standalone gated write settles to `needs_reconciliation` (manual reconciliation) rather
+  than being replayed.
 - **Clean-env init root cause (`RUST_LOG`)**: the shared policy (`SCHEMA_ENGINE_RUST_LOG`, `pinSchemaEngineLogging`, `prismaCliEnv`, the CLI/root/bin resolvers) lives in the non-test module `lib/prisma-cli-env.ts`, re-exported by `tests/helpers/prisma-cli.ts` (public API unchanged). It
   forces `RUST_LOG=info` on the Prisma schema-engine child; an ambient `RUST_LOG≥warn` had suppressed
   the engine's INFO banner, so Prisma's CLI error mapper dropped the real error line and surfaced an
   empty `Error: Schema engine error:`. Default `npx vitest run` and default E2E now auto-provision the
   isolated DB. Do NOT describe this as open/unresolved.
 - **Deploy ordering**: `npm run db:push` (`tsx scripts/db-push.ts`, pins `RUST_LOG=info`) → `npm run db:seed` → `npm run build` (the build prerenders routes that query SQLite).
-- **Measured state** (keep current when the suite changes): `npx vitest run` → 82 files / 585 tests
+- **Measured state** (keep current when the suite changes): `npx vitest run` → 86 files / 599 tests
   pass; `npx tsc --noEmit` → 0 errors; `npx next build` → exit 0; E2E → PASS 5 / FAIL 0 / SKIP 0.
