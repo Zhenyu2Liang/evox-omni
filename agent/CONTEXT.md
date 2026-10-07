@@ -240,7 +240,7 @@ via `resumeTurn`.
 rows FIRST: `createTask({sessionId, userId, goal})` returns the `AgentTask` whose id IS the canonical
 plan id; then `plan = { ...dag.buildPlan({sessionId, goal, nodes, now}), id: task.id }` and one
 `createTaskNode(...)` per node in declaration order (`order` = index, `status:'pending'`). It then CLAIMS
-the plan's executor slot (`claimTaskExecution(plan.id, newId('taskclaim'))`; a lost claim returns
+the plan's executor slot (`claimTaskExecutionWithGeneration(plan.id, newId('taskclaim'))`; a lost claim returns
 `ok:false` and runs NOTHING), clears the plan's non-terminal node claims under the won token
 (`clearStaleNodeClaims` — a no-op on a fresh plan) and runs
 `executor.runPlan(plan, { runTool, onNodeUpdate, controls, claimNode, releaseNode, ...createTaskPersistence(plan.id, { planToken: claimToken, nodeToken: (nodeId) => nodeTokens.get(nodeId) }) }, {signal, now})`
