@@ -314,7 +314,7 @@ handler 与会话、读取 SSE 分帧。
   （`apply_virtual_card`、`set_card_limit`、`reserve_budget`、`create_scheduled_task` …）一律结算为终态
   `needs_reconciliation`（需人工核对），**不**自动重试、**不**伪造回滚。
 - **人工确认活性登记表是进程内（per-process）**：`liveConfirmations` 引用计数（`agent/confirmation-recovery.ts`）
-  与 `inFlightConfirmations` 都只在**本进程**内可见——多进程 / 多实例部署下，运行在**其它**进程的活跃续跑**不被识别**；
+  只在**本进程**内可见——多进程 / 多实例部署下，运行在**其它**进程的活跃续跑**不被识别**；
   执行领取接管仍是 **TTL 启发式**（`EXECUTION_CLAIM_TTL_MS = 600000`，真实时钟），单次工具调用阻塞超过该 TTL 仍可能被接管
   （其写入受围栏保护）。上述边界仅在**单进程 / 单 SQLite** 内验证，多进程竞争**未**做压力测试。
 

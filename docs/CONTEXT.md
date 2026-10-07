@@ -65,8 +65,8 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with
   exactly one of the three buckets and framed as *limitation + why it is acceptable for a
   competition demo*; documents the standalone `needs_reconciliation` reconciliation boundary (only
-  `transfer_money` is proven idempotent for standalone recovery), the per-process liveness registries
-  (`inFlightConfirmations` / live-confirmation markers), the clean-env init root cause, the
+  `transfer_money` is proven idempotent for standalone recovery), the per-process ref-counted
+  `liveConfirmations` liveness registry, the clean-env init root cause, the
   `lib/prisma-cli-env.ts` policy and the deploy ordering as an §19 engineering note, together with the
   file-size soft-guideline overrun.
 
@@ -125,8 +125,8 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   fresh via **node-boundary renewal** (`renewTaskExecutionClaim`); a zombie's **writes are fenced**.
   A process **blocked a long time inside a single tool call** can still be overtaken and may still
   attempt (fenced, side-effect-free) work — never claim "a live owner is never preempted".
-- **Unclosed defects** (do NOT claim every execution path is safe): (a) BOTH `inFlightConfirmations`
-  AND the reference-counted `liveConfirmations` markers are **per-process** — a `confirmed` +
+- **Unclosed defects** (do NOT claim every execution path is safe): (a) the reference-counted
+  `liveConfirmations` markers are **per-process** — a `confirmed` +
   `resultJson=null` row owned by a live continuation in a **different process/instance** is not
   recognized (multi-instance deploy uncovered); (b) the execution-claim takeover is a **TTL heuristic**
   (a single tool call blocked beyond `EXECUTION_CLAIM_TTL_MS` can be overtaken; multi-process contention
