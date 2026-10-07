@@ -8,7 +8,9 @@
 import type { Budget } from '@prisma/client';
 import { budgets } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
+import { readExecutionFence } from './fence';
 import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
+import { runInTransaction } from './tx';
 import type { BudgetStatus, BudgetView, ReserveBudgetInput } from './types';
 
 /** Maps a `Budget` row to its public view model. */
@@ -25,45 +27,66 @@ function toBudgetView(row: Budget): BudgetView {
 }
 
 /**
- * Reserve a budget envelope; returns the created budget.
- *
- * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, a repeated call with the
- * SAME key replays the persisted reservation (same `id`, no second row). Absent → unchanged behavior.
+ * The persisted columns shared by the plain repository insert and the in-transaction insert, so the
+ * unfenced and fenced paths always write the identical row.
  */
-export async function reserveBudget(input: ReserveBudgetInput): Promise<BudgetView> {
-  if (!(input.amount > 0)) {
-    throw new AppError('VALIDATION', '预算金额必须大于 0', { amount: input.amount });
-  }
-
-  const key = normalizeIdempotencyKey(input.idempotencyKey);
-  if (key !== undefined) {
-    const replayed = await createIdempotent<Budget>({
-      key,
-      find: (tx) => tx.budget.findUnique({ where: { idempotencyKey: key } }),
-      create: (tx, replayKey) =>
-        tx.budget.create({
-          data: {
-            userId: input.userId,
-            name: input.name,
-            amount: input.amount,
-            purpose: input.purpose,
-            status: 'RESERVED',
-            dueDate: input.dueDate !== undefined ? new Date(input.dueDate) : undefined,
-            idempotencyKey: replayKey,
-          },
-        }),
-    });
-    return toBudgetView(replayed);
-  }
-
-  const row = await budgets.createBudget({
+function reservationData(input: ReserveBudgetInput): {
+  userId: string;
+  name: string;
+  amount: number;
+  purpose?: string;
+  status: string;
+  dueDate?: Date;
+} {
+  return {
     userId: input.userId,
     name: input.name,
     amount: input.amount,
     purpose: input.purpose,
     status: 'RESERVED',
     dueDate: input.dueDate !== undefined ? new Date(input.dueDate) : undefined,
-  });
+  };
+}
+
+/**
+ * Reserve a budget envelope; returns the created budget.
+ *
+ * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, a repeated call with the
+ * SAME key replays the persisted reservation (same `id`, no second row). Absent → unchanged behavior.
+ *
+ * An optional execution fence MAY be carried on `input` (see `./fence`); when present it is awaited
+ * INSIDE the write transaction, immediately BEFORE the insert — a fence that throws rolls the
+ * transaction back with NO budget row written.
+ */
+export async function reserveBudget(input: ReserveBudgetInput): Promise<BudgetView> {
+  if (!(input.amount > 0)) {
+    throw new AppError('VALIDATION', '预算金额必须大于 0', { amount: input.amount });
+  }
+
+  const fence = readExecutionFence(input);
+  const key = normalizeIdempotencyKey(input.idempotencyKey);
+  if (key !== undefined) {
+    const replayed = await createIdempotent<Budget>({
+      key,
+      fence,
+      find: (tx) => tx.budget.findUnique({ where: { idempotencyKey: key } }),
+      create: (tx, replayKey) =>
+        tx.budget.create({ data: { ...reservationData(input), idempotencyKey: replayKey } }),
+    });
+    return toBudgetView(replayed);
+  }
+
+  // Fenced insert (no key): the fence and the insert share ONE transaction, so a throwing fence
+  // commits nothing. Without a fence, keep the plain repository write unchanged.
+  if (fence !== undefined) {
+    const row = await runInTransaction(async (tx) => {
+      await fence(tx);
+      return tx.budget.create({ data: reservationData(input) });
+    });
+    return toBudgetView(row);
+  }
+
+  const row = await budgets.createBudget(reservationData(input));
   return toBudgetView(row);
 }
 
