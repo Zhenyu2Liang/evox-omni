@@ -1,5 +1,5 @@
 /**
- * tests/app/review-regressions-http.test.ts — REVIEW REGRESSIONS at the REAL-application-entry
+ * tests/app/security-workflow-http.test.ts — SECURITY WORKFLOWS at the REAL-application-entry
  * (HTTP) layer.
  *
  * Each `describe` captures a regression that a reviewer found in a previously-shipped area and that

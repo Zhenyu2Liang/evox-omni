@@ -14,6 +14,8 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `money.ts` — CNY helpers: `CNY` (`'¥'`), `round2`, `formatCNY` (`¥1,234.56`, negatives `-¥...`),
   `parseAmount` (strips `¥`/`,`/spaces; `0` for empty, `NaN` for non-numeric non-empty strings),
   `addMoney` / `subtractMoney` (cent math). All business logic must use these — never raw float math.
+  `moneyToCents` validates safe integer cents without rounding fractional cents (IEEE-754 noise only
+  is tolerated); `normalizeTransferAmount` additionally requires a positive amount and returns canonical CNY.
 - `constants.ts` — `DAILY_TRANSFER_LIMIT = 1000`, `MFA_CODE = '123456'`, `MFA_MAX_ATTEMPTS = 3`,
   `ANOMALY_AMOUNT_THRESHOLD = 5000`, `DEFAULT_DEMO_USER_ID = 'user_liming'`,
   `SESSION_COOKIE = 'banking_session'`, `RISK_LABEL`, `DEMO_NOW` (pinned 2026-09-25 12:00 local).

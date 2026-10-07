@@ -71,9 +71,10 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
     // Escalation: a RED action reaching confirm without a code returns `status === 'awaiting_mfa'`.
     // Surface it so the UI prompts for the MFA code; inject the code-free `mfa_required` event.
     const requiresMfa = outcome.status === 'awaiting_mfa' || outcome.tier === 'RED';
+    const awaitingMfa = (outcome.status === 'pending' || outcome.status === 'awaiting_mfa') && requiresMfa;
     const alreadySignalled = outcomeWithPlan.events.some((event) => event.type === 'mfa_required');
     const events: AgentStreamEvent[] =
-      requiresMfa && !alreadySignalled
+      awaitingMfa && !alreadySignalled
         ? [
             { type: 'mfa_required', actionId: id, hint: MFA_REQUIRED_HINT },
             ...outcomeWithPlan.events,

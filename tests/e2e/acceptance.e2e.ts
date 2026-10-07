@@ -21,6 +21,7 @@
  * vitest's include glob `tests/**\/*.{test,spec}.ts` and never runs under `npm run test`.
  */
 import type { Browser, Page } from 'playwright-core';
+import { journeyManualReview } from './manual-review.e2e-helper';
 import {
   NAV_TIMEOUT_MS,
   SELECTORS,
@@ -530,6 +531,7 @@ const JOURNEYS: readonly Journey[] = [
   { name: 'd-plan-cancel', run: journeyPlanCancel },
   { name: 'e-refresh-action-recovery', run: journeyRefreshRecovery },
   { name: 'f-wedge-refresh-recover', run: journeyWedgeRefreshRecover },
+  { name: 'g-manual-handoff', run: journeyManualReview },
 ];
 
 // --- entry point --------------------------------------------------------------------------------

@@ -89,7 +89,7 @@ describe('banking-sdk · idempotent: createIdempotent (direct, real Budget table
     );
     const spec = {
       key,
-      find: (tx: Tx) => tx.budget.findUnique({ where: { idempotencyKey: key } }),
+      find: (tx: Tx) => tx.budget.findUnique({ where: { userId_idempotencyKey: { userId: DEMO_USER_ID, idempotencyKey: key } } }),
       create,
     };
 
@@ -131,7 +131,7 @@ describe('banking-sdk · idempotent: createIdempotent (direct, real Budget table
         // The in-transaction read saw nothing (winner uncommitted); the post-race re-read sees it.
         return findCalls === 1
           ? Promise.resolve(null)
-          : tx.budget.findUnique({ where: { idempotencyKey: key } });
+          : tx.budget.findUnique({ where: { userId_idempotencyKey: { userId: DEMO_USER_ID, idempotencyKey: key } } });
       },
       create,
     });
@@ -147,7 +147,7 @@ describe('banking-sdk · idempotent: createIdempotent (direct, real Budget table
     const error = await capture(() =>
       createIdempotent({
         key,
-        find: (tx) => tx.budget.findUnique({ where: { idempotencyKey: key } }),
+        find: (tx) => tx.budget.findUnique({ where: { userId_idempotencyKey: { userId: DEMO_USER_ID, idempotencyKey: key } } }),
         create: async () => {
           throw new Error('boom');
         },

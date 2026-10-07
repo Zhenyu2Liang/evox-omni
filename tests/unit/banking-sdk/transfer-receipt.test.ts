@@ -140,15 +140,16 @@ describe('banking-sdk/transfer · legacy ledger row (no receipt)', () => {
     await db().executionReceipt.deleteMany({ where: { userId: DEMO_USER_ID, key } });
     await db().contact.update({ where: { id: 'contact_zhangwei' }, data: { name: '张伟（已更名）' } });
 
-    const replayed = await transfer({ userId: DEMO_USER_ID, name: '张伟', amount: 200, idempotencyKey: key });
+    // Matching legacy replay retains the original remark; changing it is a different request.
+    const replayed = await transfer({ userId: DEMO_USER_ID, name: '张伟', amount: 200, remark: 'LEGACY_RENAMED', idempotencyKey: key });
 
     expect(replayed.success).toBe(true);
     expect(replayed.transactionId).toBe(first.transactionId);
     expect(replayed.amount).toBe(200); // from the persisted ledger row, not re-derived from the request
-    expect(replayed.newBalance).toBe(23380); // from the account
-    // Recipient from the PERSISTED counterparty (still resolves) — the current contact row, never invented.
+    expect(replayed.newBalance).toBeUndefined(); // historical post-debit balance was not recorded
+    // Use the original ledger name; a changed contact must not rewrite historical payment details.
     expect(replayed.recipient.contactId).toBe('contact_zhangwei');
-    expect(replayed.recipient.name).toBe('张伟（已更名）');
+    expect(replayed.recipient.name).toBe('张伟');
 
     expect(await ledgerCount('LEGACY_RENAMED')).toBe(1);
     expect(await receiptCount()).toBe(0);
@@ -169,14 +170,14 @@ describe('banking-sdk/transfer · legacy ledger row (no receipt)', () => {
     await db().executionReceipt.deleteMany({ where: { userId: DEMO_USER_ID, key } });
     await db().contact.delete({ where: { id: 'contact_zhangwei' } });
 
-    const replayed = await transfer({ userId: DEMO_USER_ID, name: '张伟', amount: 200, idempotencyKey: key });
+    const replayed = await transfer({ userId: DEMO_USER_ID, name: '张伟', amount: 200, remark: 'LEGACY_REMOVED', idempotencyKey: key });
 
     expect(replayed.success).toBe(true);
     expect(replayed.transactionId).toBe(first.transactionId);
     expect(replayed.amount).toBe(200);
-    expect(replayed.newBalance).toBe(23380);
+    expect(replayed.newBalance).toBeUndefined();
     // MINIMAL recipient built from PERSISTED ledger fields only — no invented contact id/phone.
-    expect(replayed.recipient.contactId).toBeUndefined();
+    expect(replayed.recipient.contactId).toBe('contact_zhangwei'); // recorded ledger id, even if contact was deleted
     expect(replayed.recipient.phone).toBe('');
     expect(replayed.recipient.name).toBe('张伟'); // the name the ledger row itself recorded (merchant)
 

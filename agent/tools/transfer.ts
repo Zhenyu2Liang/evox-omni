@@ -16,7 +16,7 @@
  */
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { Type, type Static } from '@mariozechner/pi-ai';
-import { banking } from '@/banking-sdk';
+import { attachExecutionFence, banking } from '@/banking-sdk';
 import type { TransferResult } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
 import { formatCNY } from '@/lib/money';
@@ -27,7 +27,7 @@ export const TransferMoneyParams = Type.Object({
   contactId: Type.Optional(Type.String({ description: '收款联系人 id（优先）' })),
   phone: Type.Optional(Type.String({ description: '或按手机号指定收款人' })),
   name: Type.Optional(Type.String({ description: '或按姓名指定收款人（重名时报冲突）' })),
-  amount: Type.Number({ description: '转账金额（正数，CNY）' }),
+  amount: Type.Number({ description: '转账金额（正数，CNY，最多两位小数）' }),
   remark: Type.Optional(Type.String({ description: '转账备注' })),
   sourceAccountId: Type.Optional(Type.String({ description: '付款账户；默认主活期账户' })),
 });
@@ -75,7 +75,7 @@ export async function runTransferMoney(
     if (typeof amount !== 'number' || !Number.isFinite(amount)) {
       throw new AppError('VALIDATION', 'transfer_money 需要合法的 amount');
     }
-    const result: TransferResult = await banking.transfer.createTransfer({
+    const sdkInput = {
       userId,
       contactId: typeof args.contactId === 'string' ? args.contactId : undefined,
       phone: typeof args.phone === 'string' ? args.phone : undefined,
@@ -85,7 +85,12 @@ export async function runTransferMoney(
       sourceAccountId: typeof args.sourceAccountId === 'string' ? args.sourceAccountId : undefined,
       // At-most-once: absent ⇒ unchanged behavior; present ⇒ the ledger row id is deterministic.
       idempotencyKey: opts?.idempotencyKey,
-    });
+    };
+    // WRITE-BOUNDARY fence: carried on the SDK INPUT OBJECT so the SDK awaits it INSIDE its write
+    // transaction, immediately before the debit. A throwing fence rolls the transaction back with NO
+    // debit / ledger row / receipt.
+    if (opts?.fence !== undefined) attachExecutionFence(sdkInput, opts.fence);
+    const result: TransferResult = await banking.transfer.createTransfer(sdkInput);
     const balance = result.newBalance != null ? `，账户余额 ${formatCNY(result.newBalance)}` : '';
     return {
       ok: true,

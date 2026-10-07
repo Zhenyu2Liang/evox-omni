@@ -122,6 +122,7 @@ export async function runSetCardLimit(
   const input = args as unknown as SetCardLimitArgs;
   try {
     const card = await banking.card.setCardLimit({
+      userId,
       cardId: input.cardId,
       category: input.category,
       amount: input.amount,
@@ -173,7 +174,7 @@ export async function runFreezeCard(
 ): Promise<ToolExecutionResult> {
   const { cardId } = args as unknown as FreezeCardArgs;
   try {
-    const card = await banking.card.freezeCard(cardId);
+    const card = await banking.card.freezeCard(cardId, userId);
     const status = CARD_STATUS_LABELS[card.status] ?? card.status;
     return { ok: true, data: card, summary: `卡片 ${card.numberMasked} 已冻结（当前状态：${status}）` };
   } catch (e) {
@@ -216,7 +217,7 @@ export async function runUnfreezeCard(
 ): Promise<ToolExecutionResult> {
   const { cardId } = args as unknown as UnfreezeCardArgs;
   try {
-    const card = await banking.card.unfreezeCard(cardId);
+    const card = await banking.card.unfreezeCard(cardId, userId);
     const status = CARD_STATUS_LABELS[card.status] ?? card.status;
     return { ok: true, data: card, summary: `卡片 ${card.numberMasked} 已解冻（当前状态：${status}）` };
   } catch (e) {
@@ -260,7 +261,7 @@ export async function runReportLostCard(
 ): Promise<ToolExecutionResult> {
   const input = args as unknown as ReportLostCardArgs;
   try {
-    const card = await banking.card.reportLostCard(input.cardId, { reason: input.reason });
+    const card = await banking.card.reportLostCard(input.cardId, userId, { reason: input.reason });
     const reason = input.reason ? `（原因：${input.reason}）` : '';
     return { ok: true, data: card, summary: `卡片 ${card.numberMasked} 已挂失${reason}` };
   } catch (e) {

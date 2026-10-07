@@ -3,10 +3,12 @@
  * ONLY from here.
  */
 import type { TaskPlan } from '@/lib/contracts/task';
+export { getManualReviewInbox, openManualReview, resolveManualReview } from './manual-review';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { PlanToolOutcome } from '@/planner';
 import { getSession } from '@/lib/db/repositories/session';
 import { AppError } from '@/lib/errors';
+import { prisma } from '@/lib/db/client';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { PendingActionStatus } from '@/lib/contracts/security';
@@ -21,8 +23,10 @@ import {
   hasActiveLease,
   leaseNowMs,
   recoverStandaloneWedge,
+  settlePendingAction,
   type ConfirmableActionRow,
 } from './confirmation-recovery';
+import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
 import {
   cancelTask as cancelTaskInternal,
   findTaskByPendingAction,
@@ -157,6 +161,20 @@ export async function recoverAction(
 ): Promise<ConfirmationOutcome> {
   await resolveActionOwner(actionId, opts);
 
+  // Historical executions may already be terminal while their audit is missing. Repair only the
+  // audit/result from verified evidence; never re-run the SDK or downgrade a successful action.
+  const initial = await getPendingAction(actionId);
+  let repairedAudit = false;
+  if (initial?.status === 'executed' && await prisma.auditLog.findUnique({ where: { dedupeKey: `exec:${actionId}` } }) === null) {
+    const decision = await decideConvergence(initial);
+    if (decision.status === 'executed' && decision.result?.ok === true) {
+      repairedAudit = await settlePendingAction({
+        actionId, status: 'executed', result: decision.result, from: ['executed'],
+        audit: buildRecoveryAudit(initial, decision), dedupeKey: `exec:${actionId}`,
+      });
+    }
+  }
+
   const recovered = await recoverStandaloneWedge(actionId);
   if (recovered !== undefined) {
     const emit = opts?.onEvent;
@@ -176,22 +194,44 @@ export async function recoverAction(
   // node from the PERSISTED result (or settles it `failed` / manual-reconciliation) — the tool is
   // never re-run on a mere guess.
   if (row !== null && isPlanLinked(link)) {
+    // Evidence-based convergence at the recovery ENTRY POINT: a plan-linked row whose side effect is
+    // PROVEN committed (a durable `ExecutionReceipt`, or a persisted result) is recorded `executed`
+    // on the ACTION first — the tool is NEVER re-invoked — so an irreversible posted effect is
+    // never left dangling `confirmed`. The owning plan is then resumed (below) so the NODE backfills
+    // its REAL outcome from that persisted result without re-applying the side effect.
+    const decision = await decideConvergence(row);
+    if (decision.write && row.status === 'confirmed' &&
+        ['executed', 'failed', 'needs_reconciliation'].includes(decision.status)) {
+      await settlePendingAction({
+        actionId,
+        status: decision.status,
+        result: decision.result,
+        from: ['confirmed'],
+        audit: buildRecoveryAudit(row, decision),
+        dedupeKey: convergenceAuditKey(actionId, decision.status),
+      });
+    }
     const located = await findTaskByPendingAction(row.sessionId, actionId);
     if (located !== undefined) {
       try {
         const plan = await resumeTask(row.sessionId, located.taskId);
         const after = await getPendingAction(actionId);
         const settledStatus = (after?.status as PendingActionStatus | undefined) ?? status;
+        const manualReview = settledStatus === 'needs_reconciliation';
+        const unsuccessful = manualReview || ['failed', 'cancelled', 'locked'].includes(settledStatus) ||
+          (plan.status === 'failed' && settledStatus !== 'executed');
         const events: AgentStreamEvent[] = [{ type: 'plan_update', plan }];
         const emit = opts?.onEvent;
         if (emit !== undefined) for (const event of events) emit(event);
         return {
-          ok: true,
+          ok: !unsuccessful,
           actionId,
           status: settledStatus,
           tier,
           requiresMfa,
-          message: `已恢复所属任务计划（${located.taskId}）。`,
+          message: manualReview ? '操作执行证据存在矛盾或缺失，已进入人工核对，请勿重复执行。'
+            : unsuccessful ? `所属任务计划未成功完成（${located.taskId}），请核对操作状态。`
+            : `已恢复所属任务计划（${located.taskId}）。`,
           events,
         };
       } catch (error) {
@@ -199,7 +239,7 @@ export async function recoverAction(
         return {
           ok: false,
           actionId,
-          status,
+          status: ((await getPendingAction(actionId))?.status as PendingActionStatus | undefined) ?? status,
           tier,
           requiresMfa,
           message: `恢复所属任务计划失败：${reason}`,
@@ -210,12 +250,12 @@ export async function recoverAction(
   }
 
   return {
-    ok: false,
+    ok: repairedAudit,
     actionId,
     status,
     tier,
     requiresMfa,
-    message: noRecoveryMessage(row, link),
+    message: repairedAudit ? '已从持久化执行证据补齐审计，未重新执行操作。' : noRecoveryMessage(row, link),
     events: [],
   };
 }

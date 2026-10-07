@@ -54,6 +54,7 @@ import { AppError } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
 import { ledgerKeyForAction, nodeExecutionKey } from '@/lib/ledger';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
+import { buildAutomaticWriteFence, buildConfirmFence, guardExecutionFence } from './execution-fence';
 import { resumeTurn } from './run-turn';
 import type { RunTurnDeps } from './run-turn';
 import { findTaskByPendingAction, resumeTaskForAction } from './task-control';
@@ -66,6 +67,8 @@ import {
   retainAction,
   settlePendingAction,
 } from './confirmation-recovery';
+import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
+import { transferExecutionAudit } from './execution-audit';
 
 /**
  * The security gateway's runtime surface.
@@ -382,6 +385,7 @@ const IN_FLIGHT_PLAN_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'awaiting_mfa',
   'confirmed',
   'executed',
+  'needs_reconciliation',
 ];
 
 /**
@@ -506,22 +510,31 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     if (ctx.taskId !== undefined && ctx.nodeId !== undefined) {
       const existing = await findInFlightPlanAction(ctx.taskId, ctx.nodeId);
       if (existing !== undefined) {
-        if (existing.status === 'executed') {
+        if (existing.status === 'executed' || existing.status === 'needs_reconciliation') {
           return recoverExecutedPlanAction(existing);
         }
-        // DEFER while a confirm/verify continuation is applying THIS action's side effect RIGHT NOW in
-        // this process (the ref-counted `liveConfirmations` registry in `confirmation-recovery.ts`):
-        // the row is `confirmed` with no result yet ONLY because that LIVE continuation has not written
-        // it. Finalizing here would evict its real outcome and settle the node `failed` for work that
-        // actually succeeded; instead it is reported STILL PARKED on that live decision (no CAS, no
-        // write). A `confirmed` row with NO live continuation is the genuine WEDGE and IS finalized below.
-        if (existing.status === 'confirmed' && !isActionLive(existing.id)) {
+        // ONE evidence-based convergence decision (see `./execution-convergence`): consult the
+        // PERSISTED facts — a committed `ExecutionReceipt`, a stored result, a live continuation
+        // — BEFORE settling, so a successful, irreversible side effect is never finalized `failed`
+        // merely because its result+status write rolled back. A row a confirm/verify continuation is
+        // applying RIGHT NOW (in-process `liveConfirmations`, or a standalone lease) is DEFERRED —
+        // reported STILL PARKED on that live decision (no CAS, no write) so its real outcome is never
+        // evicted — while a result-less row with NO evidence is the genuine WEDGE and IS finalized
+        // (plan-linked => terminal `failed` for manual review). The tool is NEVER re-invoked on a guess.
+        const decision = await decideConvergence(existing);
+        if (decision.write && existing.status === 'confirmed') {
           const won = await settlePendingAction({
             actionId: existing.id,
-            status: readStoredResult(existing)?.ok === true ? 'executed' : 'failed',
+            status: decision.status,
+            result: decision.result,
             from: ['confirmed'],
+            audit: buildRecoveryAudit(existing, decision),
+            dedupeKey: convergenceAuditKey(existing.id, decision.status),
           });
-          if (won) return recoverExecutedPlanAction(existing);
+          if (won) {
+            const refreshed = (await getPendingAction(existing.id)) ?? existing;
+            return recoverExecutedPlanAction(refreshed);
+          }
         }
         return {
           ok: false,
@@ -547,10 +560,12 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     // A PLAN-NODE call passes its NODE idempotency key so a re-run of the SAME node (a replay, a
     // resume, a retry) replays its SDK-level side effect instead of repeating it; a standalone call
     // takes no key. (`executeDirect` forwards `idempotencyKey` to every runner.)
-    const opts =
-      ctx.taskId !== undefined && ctx.nodeId !== undefined
+    const opts = {
+      ...(ctx.taskId !== undefined && ctx.nodeId !== undefined
         ? { idempotencyKey: nodeExecutionKey(ctx.taskId, ctx.nodeId) }
-        : undefined;
+        : {}),
+      fence: await buildAutomaticWriteFence(ctx.sessionId, ctx.taskId, ctx.nodeId),
+    };
     const result = await registry.executeDirect(ctx.toolName, ctx.args, opts);
     return {
       ok: result.ok,
@@ -747,12 +762,34 @@ async function executeAuthorizedAction(
     nodeId: link?.nodeId,
   });
   let result: ToolExecutionResult;
+  let sideEffectCommitted = false;
+  const guarded = guardExecutionFence(await buildConfirmFence(link?.taskId, link?.nodeId, actionId));
+  const executionAudit = transferExecutionAudit(actionId, {
+    sessionId: action.sessionId, userRequest: action.userRequest ?? '', intent: action.intent,
+    toolName: action.toolName, riskLevel: tier, confirmationRequired: true, confirmed: true,
+    mfaRequired: requiresMfa, mfaResult: view.mfaResult,
+  });
   try {
-    result = await registry.executeDirect(action.toolName, action.args, { idempotencyKey });
+    // WRITE-BOUNDARY fence (confirm/verify path): authority is the ACTION's own exactly-once gateway
+    // claim plus its execution lease / live continuation — NOT the plan's `executionToken`, which
+    // `resumeTaskForAction` legitimately mints/rotates/releases around this continuation. It therefore
+    // asserts that the action is still confirmed and its owning plan is not cancelled. These
+    // conditional writes serialize against cancellation before any banking mutation.
+    result = await registry.executeDirect(action.toolName, action.args, {
+      idempotencyKey, fence: guarded.fence, onTransferCommit: executionAudit.onTransferCommit,
+      onTransactionCommitted: () => { sideEffectCommitted = true; },
+    });
   } catch (e) {
-    // A boundary throw is the REAL failure — recorded as `failed`, never swallowed, never a success.
+    // A thrown return path is not proof of business failure; convergence checks committed evidence.
     result = { ok: false, error: AppError.from(e).message };
   }
+
+  guarded.assertPolicyAllowed();
+  executionAudit.assertSucceeded();
+  const current = await getPendingAction(actionId);
+  if (current === null) throw new AppError('NOT_FOUND', '执行操作不存在');
+  const decision = await decideConvergence(current, { completion: result, sideEffectCommitted });
+  result = decision.result ?? result;
 
   // LAND the ORIGINAL execution result payload AND the terminal status AND the execution AUDIT
   // ATOMICALLY — ONE `prisma.$transaction`, through the ONE unified landing primitive
@@ -769,7 +806,7 @@ async function executeAuthorizedAction(
   // repeat settle of the SAME action can never duplicate its audit row.
   await settlePendingAction({
     actionId,
-    status: result.ok ? 'executed' : 'failed',
+    status: decision.status,
     result,
     audit: {
       timestamp: demoNow(),
@@ -785,9 +822,9 @@ async function executeAuthorizedAction(
       mfaRequired: requiresMfa,
       mfaResult: view.mfaResult,
       toolResult: result,
-      status: result.ok ? 'success' : 'failed',
+      status: decision.status === 'needs_reconciliation' ? 'blocked' : result.ok ? 'success' : 'failed',
     },
-    dedupeKey: `exec:${actionId}`,
+    dedupeKey: convergenceAuditKey(actionId, decision.status),
   });
 
   // Then RECORD the terminal status through the gateway (with the trusted identity) — the security
@@ -795,7 +832,9 @@ async function executeAuthorizedAction(
   // CONFLICT). This is NON-FATAL: the row is ALREADY settled atomically above, so a failure here must
   // never turn a successfully-executed action into an error response.
   try {
-    await recordActionResult(actionId, result.ok ? 'executed' : 'failed', identity);
+    if (decision.status === 'executed' || decision.status === 'failed') {
+      await recordActionResult(actionId, decision.status, identity);
+    }
   } catch {
     // Non-fatal: the atomic transaction above already persisted the TRUE terminal status.
   }
@@ -816,7 +855,9 @@ async function executeAuthorizedAction(
   const narrationError = events.find(
     (event): event is Extract<AgentStreamEvent, { type: 'error' }> => event.type === 'error',
   );
-  const businessMessage = result.ok ? '操作已执行。' : (result.error ?? '操作执行失败。');
+  const businessMessage = decision.status === 'needs_reconciliation'
+    ? '操作结果尚无法核实，已进入人工核对，请勿重复执行。'
+    : result.ok ? '操作已执行。' : (result.error ?? '操作执行失败。');
   const message =
     narrationError === undefined
       ? businessMessage
@@ -825,7 +866,7 @@ async function executeAuthorizedAction(
   return {
     ok: result.ok,
     actionId,
-    status: result.ok ? 'executed' : 'failed',
+    status: decision.status,
     tier,
     requiresMfa,
     message,
@@ -838,7 +879,7 @@ async function executeAuthorizedAction(
  * Map a NON-ok authorization to its outcome — WITHOUT executing anything.
  *
  * ESCALATION (`requiresMfa`): strong verification is required (a parked YELLOW transfer that
- * re-risked to RED at execution time, a RED action without a code, or a locked session). It is
+ * re-risked to RED at execution time or a RED action without a code). It is
  * surfaced as `requiresMfa:true` / effective tier RED with a `mfa_required` stream event — NEVER
  * flattened into a plain failure that loses the requirement.
  *
@@ -850,7 +891,8 @@ function blockedOutcome(
   opts?: ConfirmOptions,
 ): ConfirmationOutcome {
   if (view.requiresMfa) {
-    const events: AgentStreamEvent[] = [{ type: 'mfa_required', actionId }];
+    const events: AgentStreamEvent[] = view.status === 'pending' || view.status === 'awaiting_mfa'
+      ? [{ type: 'mfa_required', actionId }] : [];
     emitAll(events, opts);
     return {
       ok: false,
@@ -933,8 +975,8 @@ async function verifyActionImpl(
   }
 
   const view = viewAuth(auth);
-  // A WRONG code (⇒ `awaiting_mfa`, `mfaResult:'failed'`) or a tripped breaker (⇒ `locked`) still
-  // requires verification — surfaced as RED + `mfa_required`, never a bare failure.
+  // A wrong code can keep the existing awaiting_mfa decision. A locked/terminal outcome retains
+  // its historical RED requirement but must not request a new code.
   if (!view.ok) return blockedOutcome(actionId, view, opts);
 
   return executeAuthorizedAction(actionId, view, identity, opts);

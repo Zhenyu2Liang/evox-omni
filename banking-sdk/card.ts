@@ -59,9 +59,11 @@ async function loadCardView(row: CardRow): Promise<CardView> {
 }
 
 /** Resolve a card or throw `AppError('NOT_FOUND')`. */
-async function requireCard(cardId: string): Promise<CardRow> {
+async function requireCard(cardId: string, userId: string): Promise<CardRow> {
+  if (typeof userId !== 'string' || !userId.trim()) throw new AppError('SECURITY_DENIED', '缺少卡片操作用户身份。');
   const row = typeof cardId === 'string' && cardId.length > 0 ? await cards.getCard(cardId) : null;
   if (!row) throw new AppError('NOT_FOUND', `卡片不存在：${String(cardId)}`, { cardId });
+  if (row.userId !== userId) throw new AppError('SECURITY_DENIED', '无权操作该卡片。');
   return row;
 }
 
@@ -84,7 +86,7 @@ async function transitionTo(
       to: next,
     });
   }
-  return cards.updateCardStatus(row.id, next);
+  return runInTransaction((tx) => tx.card.update({ where: { id: row.id, userId: row.userId, status: current }, data: { status: next } }));
 }
 
 /** All cards owned by the user (with per-category limits). */
@@ -95,7 +97,7 @@ export async function getCards(userId: string): Promise<CardView[]> {
 
 /** Set/replace the per-category spend limit on a card; returns the updated card. */
 export async function setCardLimit(input: SetCardLimitInput): Promise<CardView> {
-  const row = await requireCard(input?.cardId);
+  const row = await requireCard(input?.cardId, input?.userId);
 
   const category = typeof input?.category === 'string' ? input.category.trim() : '';
   if (category === '') {
@@ -113,23 +115,23 @@ export async function setCardLimit(input: SetCardLimitInput): Promise<CardView> 
   // Replace semantics: a card+category keeps exactly ONE limit row. The delete and the create run
   // in ONE transaction, so a failure can never leave the category without its limit.
   await runInTransaction(async (tx) => {
-    await tx.cardLimit.deleteMany({ where: { cardId: row.id, category } });
-    await tx.cardLimit.create({ data: { cardId: row.id, category, amount } });
+    await tx.cardLimit.deleteMany({ where: { card: { id: row.id, userId: input.userId }, category } });
+    await tx.cardLimit.create({ data: { card: { connect: { id: row.id, userId: input.userId } }, category, amount } });
   });
 
   return loadCardView(row);
 }
 
 /** Freeze a card (status → FROZEN); returns the updated card. */
-export async function freezeCard(cardId: string): Promise<CardView> {
-  const row = await requireCard(cardId);
+export async function freezeCard(cardId: string, userId: string): Promise<CardView> {
+  const row = await requireCard(cardId, userId);
   const updated = await transitionTo(row, 'FROZEN', ['ACTIVE', 'PENDING']);
   return loadCardView(updated);
 }
 
 /** Unfreeze a card (status → ACTIVE); returns the updated card. */
-export async function unfreezeCard(cardId: string): Promise<CardView> {
-  const row = await requireCard(cardId);
+export async function unfreezeCard(cardId: string, userId: string): Promise<CardView> {
+  const row = await requireCard(cardId, userId);
   // Only a FROZEN card can be unfrozen; an ACTIVE one is a no-op, a LOST one may not be revived.
   const updated = await transitionTo(row, 'ACTIVE', ['FROZEN']);
   return loadCardView(updated);
@@ -142,9 +144,10 @@ export async function unfreezeCard(cardId: string): Promise<CardView> {
  */
 export async function reportLostCard(
   cardId: string,
+  userId: string,
   input: ReportLostCardInput = {},
 ): Promise<CardView> {
-  const row = await requireCard(cardId);
+  const row = await requireCard(cardId, userId);
   const reason = typeof input?.reason === 'string' ? input.reason.trim() || undefined : undefined;
   if ((row.status as CardStatus) === 'LOST') {
     throw new AppError('CONFLICT', '该卡片已挂失，无需重复挂失', {
@@ -153,7 +156,7 @@ export async function reportLostCard(
       reason,
     });
   }
-  const updated = await cards.updateCardStatus(row.id, 'LOST');
+  const updated = await runInTransaction((tx) => tx.card.update({ where: { id: row.id, userId, status: row.status }, data: { status: 'LOST' } }));
   return loadCardView(updated);
 }
 
@@ -179,13 +182,13 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
     const existing = await cards.listCards(userId);
     const numberMasked = generateMaskedNumber(new Set(existing.map((card) => card.numberMasked)));
 
-    const row = await cards.createCard({
+    const row = await runInTransaction((tx) => tx.card.create({ data: {
       userId,
       type: 'VIRTUAL',
       network: VIRTUAL_CARD_NETWORK,
       numberMasked,
       status: 'ACTIVE',
-    });
+    } }));
 
     // A brand-new card carries no per-category limits.
     return toCardView(row, []);

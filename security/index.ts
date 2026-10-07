@@ -1,7 +1,7 @@
 /**
  * Security node — public facade.
  *
- * Re-exports the six security sub-modules as namespaces and aggregates them into a
+ * Re-exports the security sub-modules as namespaces and aggregates them into a
  * single `security` object. Consumers (the agent layer, API routes, tests) import from
  * here rather than reaching into individual files where possible.
  *
@@ -14,8 +14,10 @@ import * as mfa from './mfa';
 import * as circuitBreaker from './circuit-breaker';
 import * as injection from './injection-guard';
 import * as gateway from './security-gateway';
+import * as recovery from './recovery-authorization';
+import * as writePolicy from './execution-policy';
 
-export { permission, risk, mfa, circuitBreaker, injection, gateway };
+export { permission, risk, mfa, circuitBreaker, injection, gateway, recovery, writePolicy };
 
 /** Aggregate facade: `security.gateway.evaluate(...)`, `security.injection.scan(...)`, etc. */
-export const security = { gateway, permission, risk, mfa, circuitBreaker, injection };
+export const security = { gateway, permission, risk, mfa, circuitBreaker, injection, recovery, writePolicy };

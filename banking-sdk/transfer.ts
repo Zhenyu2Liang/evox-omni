@@ -19,6 +19,14 @@
  * the receipt/ledger BEFORE any MUTABLE lookup (recipient by name, funding account), so an
  * already-debited transfer is recognized from PERSISTED facts and never spuriously re-resolved —
  * while a replay under the same identity but a DIFFERENT request is rejected explicitly (CONFLICT).
+ * The digest is ALSO verified INSIDE the write transaction (with the tx client), so even a
+ * CONCURRENT interleaving cannot replay the winner's row under a different request: a committed
+ * ledger row whose receipt is missing, or whose digest differs, is an explicit CONFLICT; a match
+ * replays the receipt's ORIGINAL result VERBATIM (the current request is never spliced onto it).
+ *
+ * An optional EXECUTION FENCE may be carried on the input (see `./fence`); when present it is
+ * awaited INSIDE the write transaction, immediately BEFORE the debit, so a fence that throws rolls
+ * the transaction back with NO debit, ledger row or receipt written.
  *
  * Throws `AppError`:
  *  - `VALIDATION`        — missing/invalid recipient or non-positive amount.
@@ -33,10 +41,12 @@ import { executionReceiptId, idempotentTransferTxId, requestDigest } from '@/lib
 import { accounts, contacts, executionReceipts, transactions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { safeParse, toJson } from '../lib/json';
-import { parseAmount, round2 } from '../lib/money';
+import { normalizeTransferAmount, parseAmount, round2 } from '../lib/money';
 import { toContactView } from './contact';
+import { readExecutionFence } from './fence';
 import { isUniqueViolation } from './idempotent';
 import { runInTransaction } from './tx';
+import { bankingExecutionContext } from './execution-context';
 import type { TransferInput, TransferRecipient, TransferResult } from './types';
 
 /** The registered tool name this module records receipts / fingerprints requests against. */
@@ -58,11 +68,10 @@ function selector(value: string | undefined): string | null {
 }
 
 /** Build the TransferResult for an idempotent replay from the already-persisted ledger row. */
-function replayResult(existing: Transaction, recipient: TransferRecipient, newBalance: number): TransferResult {
+function replayResult(existing: Transaction, recipient: TransferRecipient): TransferResult {
   return {
     success: true,
     transactionId: existing.id,
-    newBalance,
     recipient,
     amount: Math.abs(existing.amount),
     remark: existing.remark ?? undefined,
@@ -78,16 +87,7 @@ function replayResult(existing: Transaction, recipient: TransferRecipient, newBa
 function ledgerRecipient(existing: Transaction): TransferRecipient {
   const prefix = '转账给';
   const recorded = existing.merchant.startsWith(prefix) ? existing.merchant.slice(prefix.length) : '';
-  return { name: recorded || '收款人', phone: '' };
-}
-
-/** Replay recipient from PERSISTED facts: the contact while it still resolves, else a minimal one. */
-async function replayRecipient(userId: string, existing: Transaction): Promise<TransferRecipient> {
-  if (existing.counterpartyId !== null && existing.counterpartyId !== '') {
-    const contact = await contacts.getContact(existing.counterpartyId);
-    if (contact && contact.userId === userId) return toRecipient(contact);
-  }
-  return ledgerRecipient(existing);
+  return { contactId: existing.counterpartyId ?? undefined, name: recorded || '收款人', phone: '' };
 }
 
 /**
@@ -101,10 +101,12 @@ async function replayRecipient(userId: string, existing: Transaction): Promise<T
  *    already-credited and replayed from persisted fields — never re-resolved by name, never a
  *    spurious NOT_FOUND.
  */
-async function replayCommitted(userId: string, key: string, digest: string): Promise<TransferResult | null> {
+async function replayCommitted(userId: string, key: string, digest: string, input: TransferInput): Promise<TransferResult | null> {
   const receipt = await executionReceipts.getExecutionReceipt(userId, key);
+  const ledger = await transactions.getTransaction(idempotentTransferTxId(userId, key));
   if (receipt) {
-    if (receipt.requestDigest !== digest) {
+    if (receipt.toolName !== TRANSFER_TOOL || receipt.requestDigest !== digest || !ledger ||
+        receipt.txId !== ledger.id || ledger.userId !== userId || ledger.direction !== 'DEBIT' || ledger.channel !== 'TRANSFER') {
       throw new AppError('CONFLICT', 'same execution identity, different request', {
         key,
         expectedDigest: receipt.requestDigest,
@@ -112,19 +114,50 @@ async function replayCommitted(userId: string, key: string, digest: string): Pro
       });
     }
     const stored = safeParse<TransferResult | null>(receipt.resultJson, null);
-    if (stored === null) {
-      throw new AppError('INTERNAL', `Execution receipt ${receipt.id} has an unreadable result`, {
+    if (stored === null || stored.success !== true || stored.transactionId !== ledger.id ||
+        stored.amount !== -ledger.amount || stored.recipient?.contactId !== ledger.counterpartyId) {
+      throw new AppError('CONFLICT', `Execution receipt ${receipt.id} cannot be verified; manual reconciliation required`, {
         key,
       });
     }
     return stored;
   }
 
-  const legacy = await transactions.getTransaction(idempotentTransferTxId(userId, key));
+  const legacy = ledger;
   if (!legacy) return null;
+  // Old ledgers have no request digest. Verify every persisted field; never silently replay a
+  // different request under the same key, and never resolve the original name through mutable data.
+  const selectors = suppliedRecipientFields(input);
+  let sameRecipient = selectors.length === 1 && (
+    (input.contactId !== undefined && input.contactId === legacy.counterpartyId) ||
+    (input.name !== undefined && legacy.merchant === `转账给${input.name}`)
+  );
+  if (selectors.length === 1 && input.phone !== undefined && legacy.counterpartyId) {
+    const contact = await contacts.getContact(legacy.counterpartyId);
+    sameRecipient = contact?.userId === userId && contact.phone === input.phone;
+  }
+  if (legacy.userId !== userId || legacy.direction !== 'DEBIT' || legacy.channel !== 'TRANSFER' ||
+      legacy.currency !== 'CNY' || -legacy.amount !== round2(parseAmount(input.amount)) || !sameRecipient ||
+      (input.sourceAccountId !== undefined && legacy.accountId !== input.sourceAccountId) ||
+      (selector(legacy.remark ?? undefined) !== selector(input.remark))) {
+    throw new AppError('CONFLICT', '历史流水无法核验为同一请求，需人工核对', { key, txId: legacy.id });
+  }
   const account = await accounts.getAccount(legacy.accountId);
-  if (!account) throw new AppError('NOT_FOUND', `Funding account ${legacy.accountId} not found`);
-  return replayResult(legacy, await replayRecipient(userId, legacy), account.balance);
+  if (!account || account.userId !== userId) throw new AppError('CONFLICT', '历史流水账户无法核验，需人工核对');
+  // A historical post-debit balance is unavailable. Omit it rather than report today's balance.
+  return replayResult(legacy, ledgerRecipient(legacy));
+}
+
+/** Read committed evidence only. This function never executes or retries a transfer. */
+export async function getCommittedTransfer(input: TransferInput): Promise<TransferResult | null> {
+  const key = input.idempotencyKey?.trim();
+  if (!key) return null;
+  const digest = requestDigest({
+    userId: input.userId, toolName: TRANSFER_TOOL,
+    name: selector(input.name), contactId: selector(input.contactId), phone: selector(input.phone),
+    amount: round2(parseAmount(input.amount)), sourceAccountId: selector(input.sourceAccountId), remark: selector(input.remark),
+  });
+  return replayCommitted(input.userId, key, digest, input);
 }
 
 /** Exactly one of `contactId` | `phone` | `name` must be supplied. */
@@ -209,15 +242,13 @@ async function resolveFundingAccount(userId: string, input: TransferInput): Prom
  * its persisted result (same `transactionId`, no second debit, no mutable re-resolution), while a
  * DIFFERENT request under the same identity is rejected with `CONFLICT`. Concurrent same-key calls
  * are still safe — the loser's insert violates the unique/PK constraint, its transaction rolls back
- * (no debit), and the committed fact is replayed.
+ * (no debit), and the committed fact is replayed ONLY after its request digest is verified.
  */
 export async function createTransfer(input: TransferInput): Promise<TransferResult> {
-  const amount = round2(parseAmount(input.amount));
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new AppError('VALIDATION', `Transfer amount must be a positive number (received: ${input.amount})`);
-  }
+  const amount = normalizeTransferAmount(input.amount);
 
   const key = input.idempotencyKey?.trim();
+  const fence = readExecutionFence(input);
   const txId = key ? idempotentTransferTxId(input.userId, key) : undefined;
   const digest = requestDigest({
     userId: input.userId,
@@ -234,7 +265,7 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
   // recognized from persisted facts and never re-resolved through data (the recipient by name) that
   // may have changed since the side effect committed.
   if (key !== undefined) {
-    const committed = await replayCommitted(input.userId, key, digest);
+    const committed = await replayCommitted(input.userId, key, digest, input);
     if (committed) return committed;
   }
 
@@ -245,18 +276,43 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
 
   type Outcome =
     | { kind: 'executed'; transactionId: string; newBalance: number }
-    | { kind: 'replay'; existing: Transaction; newBalance: number };
+    | { kind: 'replayed'; result: TransferResult };
 
   let outcome: Outcome;
   try {
     outcome = await runInTransaction(async (tx): Promise<Outcome> => {
-      if (txId !== undefined) {
+      if (txId !== undefined && key !== undefined) {
         const existing = await tx.transaction.findUnique({ where: { id: txId } });
         if (existing) {
-          const current = await tx.account.findUnique({ where: { id: account.id } });
-          return { kind: 'replay', existing, newBalance: current?.balance ?? 0 };
+          // A committed ledger row under this identity is a replay ONLY when the persisted receipt
+          // proves it is the SAME request — the receipt is read with the SAME tx client and its
+          // ORIGINAL result is returned VERBATIM. A missing receipt (or a differing digest) is an
+          // explicit CONFLICT: the current request's recipient/amount is never spliced onto the
+          // winner's row.
+          const receipt = await executionReceipts.getExecutionReceipt(input.userId, key, tx);
+          if (!receipt) {
+            throw new AppError('CONFLICT', 'same execution identity, different request', { key, txId });
+          }
+          if (receipt.requestDigest !== digest) {
+            throw new AppError('CONFLICT', 'same execution identity, different request', {
+              key,
+              expectedDigest: receipt.requestDigest,
+              actualDigest: digest,
+            });
+          }
+          const stored = safeParse<TransferResult | null>(receipt.resultJson, null);
+          if (stored === null) {
+            throw new AppError('INTERNAL', `Execution receipt ${receipt.id} has an unreadable result`, {
+              key,
+            });
+          }
+          return { kind: 'replayed', result: stored };
         }
       }
+
+      // SERVER-GENERATED execution fence: awaited INSIDE this write transaction, immediately BEFORE
+      // the business write, so a fence that throws rolls the transaction back with NO side effect.
+      await fence?.(tx);
 
       // Atomic sufficient-funds check + debit (unchanged behavior).
       const debited = await tx.account.updateMany({
@@ -295,16 +351,16 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
       // Persist the EXECUTION RECEIPT in the SAME transaction as the debit + ledger row, so the
       // committed fact (original result snapshot + request fingerprint) is durable the instant the
       // side effect exists — a later replay returns it verbatim instead of re-resolving mutable data.
+      const snapshot: TransferResult = {
+        success: true,
+        transactionId: transaction.id,
+        newBalance: updated.balance,
+        recipient: toRecipient(recipient),
+        amount,
+        remark: input.remark,
+        occurredAt,
+      };
       if (key !== undefined) {
-        const snapshot: TransferResult = {
-          success: true,
-          transactionId: transaction.id,
-          newBalance: updated.balance,
-          recipient: toRecipient(recipient),
-          amount,
-          remark: input.remark,
-          occurredAt,
-        };
         await executionReceipts.putExecutionReceipt(
           {
             id: executionReceiptId(input.userId, key),
@@ -319,27 +375,25 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
         );
       }
 
+      // A required audit failure aborts this very transaction: no debit, ledger or receipt survives.
+      await bankingExecutionContext()?.onTransferCommit?.(tx, snapshot);
+
       return { kind: 'executed', transactionId: transaction.id, newBalance: updated.balance };
     });
   } catch (error) {
     // Concurrent same-key race: another call committed the row/receipt first → our tx rolled back
-    // (no debit). Our tx may have failed on the ledger PK OR the receipt unique constraint, so prefer
-    // the full committed fact (the receipt) and fall back to the committed ledger row.
+    // (no debit). The committed fact is replayed ONLY through `replayCommitted`, which verifies the
+    // request digest and throws CONFLICT on a mismatch — the catch NEVER guesses a replay for an
+    // unverified ledger row.
     if (txId !== undefined && key !== undefined && isUniqueViolation(error)) {
-      const committed = await replayCommitted(input.userId, key, digest);
+      const committed = await replayCommitted(input.userId, key, digest, input);
       if (committed) return committed;
-      const existing = await transactions.getTransaction(txId);
-      if (existing) {
-        const account2 = await accounts.getAccount(account.id);
-        if (!account2) throw new AppError('NOT_FOUND', `Funding account ${account.id} not found`);
-        return replayResult(existing, await replayRecipient(input.userId, existing), account2.balance);
-      }
     }
     throw error;
   }
 
-  if (outcome.kind === 'replay') {
-    return replayResult(outcome.existing, toRecipient(recipient), outcome.newBalance);
+  if (outcome.kind === 'replayed') {
+    return outcome.result;
   }
 
   return {

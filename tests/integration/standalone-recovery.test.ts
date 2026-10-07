@@ -1,5 +1,5 @@
 /**
- * review-standalone-recovery.test.ts — DEFECT 3: STANDALONE gated-action wedge recovery.
+ * integration/standalone-recovery.test.ts — DEFECT 3: STANDALONE gated-action wedge recovery.
  *
  * A STANDALONE (non-plan) YELLOW/RED gated action that parks a `PendingAction` and whose SDK side
  * effect COMMITS but whose result+status transaction ROLLS BACK is left `confirmed` with

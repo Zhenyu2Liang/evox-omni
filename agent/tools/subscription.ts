@@ -115,7 +115,7 @@ export async function runCancelSubscription(
 ): Promise<ToolExecutionResult> {
   const { subscriptionId } = args as unknown as CancelSubscriptionArgs;
   try {
-    const sub = await banking.subscription.cancelSubscription(subscriptionId);
+    const sub = await banking.subscription.cancelSubscription(subscriptionId, userId);
     const cycle = CYCLE_LABELS[sub.cycle] ?? sub.cycle;
     return {
       ok: true,
@@ -168,6 +168,7 @@ export async function runSetSubscriptionReminder(
     const sub = await banking.subscription.setSubscriptionReminder(
       input.subscriptionId,
       input.remind,
+      userId,
     );
     const action = sub.remind ? '开启' : '关闭';
     return {

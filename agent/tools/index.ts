@@ -13,6 +13,8 @@
  */
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { AppError } from '@/lib/errors';
+import type { ExecutionFenceCheck } from '@/banking-sdk';
+import { withBankingExecution, type BankingExecutionContext } from '@/banking-sdk';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import { createGetBalanceTool, runGetBalance } from './account';
@@ -101,6 +103,17 @@ export interface ToolExecutionResult {
 export interface ToolRunOptions {
   /** At-most-once key for a side-effecting call; passed verbatim to the SDK's `idempotencyKey`. */
   idempotencyKey?: string;
+  /**
+   * WRITE-BOUNDARY fence: an opaque async check the Banking SDK `await`s INSIDE its write transaction,
+   * immediately before the business write (see `@/banking-sdk#attachExecutionFence`). Built by the
+   * agent layer (`../execution-fence`) for a plan-node (GREEN inline) or confirm/verify execution; a
+   * check that THROWS rolls the transaction back, so a write whose execution right was taken over /
+   * cancelled commits NO side effect. ADDITIVE: absent ⇒ unchanged behavior for every caller.
+   */
+  fence?: ExecutionFenceCheck;
+  /** Required transfer audit, composed into the SDK's debit/ledger/receipt transaction. */
+  onTransferCommit?: BankingExecutionContext['onTransferCommit'];
+  onTransactionCommitted?: BankingExecutionContext['onTransactionCommitted'];
 }
 
 /** A model-free runner for one tool: `(userId, args, opts?) => ToolExecutionResult` (never throws). */
@@ -129,6 +142,8 @@ export interface ToolRegistry {
 
 /** Injection the agent supplies so the `submit_plan` meta-tool can run its DAG through the gateway. */
 export interface CreateToolRegistryOptions {
+  /** Trusted write-boundary check for Pi's automatic execution path, supplied by its session owner. */
+  automaticWriteFence?: () => Promise<ExecutionFenceCheck>;
   /** Required for a usable `submit_plan`; the agent binds its session + gateway-routed `runTool`. */
   submitPlan?: SubmitPlanDeps;
 }
@@ -245,6 +260,24 @@ export function createToolRegistry(
       : createUnconfiguredSubmitPlanTool(),
   };
 
+  // Pi invokes AgentTool.execute directly after beforeToolCall. Scope the trusted SDK context here
+  // too, so a breaker tripped while a GREEN tool was in flight cannot bypass the transaction fence.
+  // submit_plan creates its own per-node contexts through executeGatedTool and must not inherit one.
+  if (opts?.automaticWriteFence) {
+    const buildFence = opts.automaticWriteFence;
+    for (const name of TOOL_NAMES) {
+      if (name === 'submit_plan') continue;
+      const tool = tools[name];
+      const execute = tool.execute.bind(tool);
+      tools[name] = {
+        ...tool,
+        execute: async (...args: Parameters<typeof execute>) => withBankingExecution(
+          { fence: await buildFence() }, () => execute(...args),
+        ),
+      };
+    }
+  }
+
   // Model-free runners: also exhaustive over `ToolName` (missing key ⇒ compile error). `userId` is
   // the closed-over one — it is NEVER read from `args`. Every runner may accept the optional `opts`;
   // the side-effecting ones read `opts.idempotencyKey` (see `ToolRunOptions`), the rest ignore it.
@@ -295,7 +328,10 @@ export function createToolRegistry(
       args: Record<string, unknown>,
       opts?: ToolRunOptions,
     ): Promise<ToolExecutionResult> {
-      return runners[name](userId, args, opts);
+      return withBankingExecution(
+        { fence: opts?.fence, onTransferCommit: opts?.onTransferCommit, onTransactionCommitted: opts?.onTransactionCommitted },
+        () => runners[name](userId, args, opts),
+      );
     },
   };
 }

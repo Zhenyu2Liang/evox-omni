@@ -13,3 +13,4 @@ export * as securityEvents from './securityEvent';
 export * as sessions from './session';
 export * as pendingActions from './pendingAction';
 export * as executionReceipts from './executionReceipt';
+export * as manualReviews from './manualReview';

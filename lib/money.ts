@@ -1,3 +1,5 @@
+import { AppError } from './errors';
+
 /** Chinese yuan symbol used for all amounts in the demo. */
 export const CNY = '¥';
 
@@ -46,6 +48,32 @@ export function parseAmount(input: string | number | null | undefined): number {
   if (cleaned === '') return 0;
   const parsed = Number(cleaned);
   return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+/**
+ * Validate an amount without rounding fractional cents into a different operation.
+ * The small relative tolerance only absorbs IEEE-754 representation noise (e.g. 0.29 * 100).
+ * Authorization and execution must both use this same canonical number of cents.
+ */
+export function moneyToCents(input: unknown): number {
+  if (typeof input !== 'number' && typeof input !== 'string') {
+    throw new AppError('VALIDATION', '金额必须为合法数字，且最多保留两位小数。');
+  }
+  const amount = typeof input === 'number' ? input : parseAmount(input);
+  const scaled = amount * 100;
+  const cents = Math.round(scaled);
+  const tolerance = Number.EPSILON * Math.max(1, Math.abs(scaled)) * 2;
+  if (!Number.isFinite(amount) || !Number.isSafeInteger(cents) || Math.abs(scaled - cents) > tolerance) {
+    throw new AppError('VALIDATION', '金额必须为合法数字，且最多保留两位小数。');
+  }
+  return cents;
+}
+
+/** Positive CNY amount shared by transfer authorization, persistence and the SDK write path. */
+export function normalizeTransferAmount(input: unknown): number {
+  const cents = moneyToCents(input);
+  if (cents <= 0) throw new AppError('VALIDATION', '转账金额必须大于 0，且最多保留两位小数。');
+  return cents / 100;
 }
 
 /** Cent-safe addition of two money amounts. */

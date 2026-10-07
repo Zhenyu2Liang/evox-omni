@@ -191,14 +191,14 @@ model Budget {
   purpose   String?
   status    String    @default("RESERVED") // "RESERVED" | "USED" | "RELEASED"
   dueDate   DateTime?
-  // Replay key: `<planId>:<nodeId>` so a replayed plan node replays the existing reservation
-  // instead of duplicating it. NULL for rows created outside the planner. SQLite UNIQUE allows
-  // multiple NULLs, so pre-existing rows are unaffected.
-  idempotencyKey String? @unique
+  // Replay identity belongs to a user: another user's identical local key is independent.
+  // NULL remains allowed for calls without a replay key.
+  idempotencyKey String?
   createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id])
 
+  @@unique([userId, idempotencyKey])
   @@index([userId])
 }
 
@@ -218,8 +218,33 @@ model AgentTask {
   generation Int @default(0)
 
   nodes AgentTaskNode[]
+  manualReviews ManualReview[]
 
   @@index([sessionId])
+}
+
+// Demo operator workflow. Closing a review never asserts that a banking write succeeded.
+model ManualReview {
+  id           String   @id @default(cuid())
+  sessionId    String
+  userId       String
+  taskId       String?
+  actionId     String?
+  // Filled only while open: at most one active review per target, with durable history.
+  activeKey    String?  @unique
+  title        String
+  reason       String
+  status       String   @default("open")
+  operatorId   String
+  operatorName String
+  notes        String?
+  resolution   String? // "stop" | "retry"; never "executed"
+  createdAt    DateTime @default(now())
+  resolvedAt   DateTime?
+
+  task AgentTask? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, status])
 }
 
 model AgentTaskNode {

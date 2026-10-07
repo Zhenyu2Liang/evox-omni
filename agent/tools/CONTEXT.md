@@ -76,14 +76,14 @@ Per family module: a `create<Name>Tool(userId: string): AgentTool<typeof <Name>P
 | `get_dashboard_summary` | dashboard.ts | 🟢 | `banking.dashboard.getDashboardSummary(userId)` |
 | `search_contact` | contact.ts | 🟢 | `banking.contact.searchContacts(userId, query)` |
 | `get_cards` | card.ts | 🟢 | `banking.card.getCards(userId)` |
-| `set_card_limit` | card.ts | 🟡 | `banking.card.setCardLimit({ cardId, category, amount })` |
-| `freeze_card` | card.ts | 🟡 | `banking.card.freezeCard(cardId)` |
-| `unfreeze_card` | card.ts | 🔴 | `banking.card.unfreezeCard(cardId)` |
-| `report_lost_card` | card.ts | 🔴 | `banking.card.reportLostCard(cardId, { reason })` |
+| `set_card_limit` | card.ts | 🟡 | `banking.card.setCardLimit({ userId, cardId, category, amount })` |
+| `freeze_card` | card.ts | 🟡 | `banking.card.freezeCard(cardId, userId)` |
+| `unfreeze_card` | card.ts | 🔴 | `banking.card.unfreezeCard(cardId, userId)` |
+| `report_lost_card` | card.ts | 🔴 | `banking.card.reportLostCard(cardId, userId, { reason })` |
 | `apply_virtual_card` | card.ts | 🟡 | `banking.card.applyVirtualCard({ userId, label, idempotencyKey? })` |
 | `list_subscriptions` | subscription.ts | 🟢 | `banking.subscription.listSubscriptions(userId)` |
-| `cancel_subscription` | subscription.ts | 🟡 | `banking.subscription.cancelSubscription(subscriptionId)` |
-| `set_subscription_reminder` | subscription.ts | 🟡 | `banking.subscription.setSubscriptionReminder(subscriptionId, remind)` |
+| `cancel_subscription` | subscription.ts | 🟡 | `banking.subscription.cancelSubscription(subscriptionId, userId)` |
+| `set_subscription_reminder` | subscription.ts | 🟡 | `banking.subscription.setSubscriptionReminder(subscriptionId, remind, userId)` |
 | `list_investments` | investment.ts | 🟢 | `banking.investment.listProducts({ riskLevel })` |
 | `compare_investments` | investment.ts | 🟢 | `banking.investment.compareInvestments(productIds)` |
 | `get_investment_holdings` | investment.ts | 🟢 | `banking.investment.listHoldings(userId)` |
@@ -125,6 +125,10 @@ through to the executor's `runTool` port (`planner/executor.ts` already calls
 into the node's at-most-once key.
 
 ## Constraints
+
+- Pi's automatic tool execution receives the server-built `automaticWriteFence` from the registry,
+  scoped by `withBankingExecution`. It is not a model argument. Plan-node calls use their own composed
+  session/plan fence. `submit_plan` itself is excluded from the outer context so each node owns its check.
 
 - **Capability only — never gating.** No permission/risk/MFA/daily-limit computation here; that is
   `security/`'s sole authority, enforced in the agent's `beforeToolCall`.

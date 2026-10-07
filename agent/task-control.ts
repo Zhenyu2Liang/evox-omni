@@ -60,6 +60,7 @@ import { newId } from '@/lib/ids';
 import { safeParse } from '@/lib/json';
 import { prisma } from '@/lib/db/client';
 import { getSession } from '@/lib/db/repositories/session';
+import { assertNoOpenManualReview } from '@/lib/db/repositories/manualReview';
 import {
   getPendingActionPlanLink,
   revokePendingActionsByTask,
@@ -641,6 +642,12 @@ function buildPlanDeps(
     releaseNode,
     // Durable steering: a pause/cancel persisted by a control request stops THIS run at its next
     // checkpoint (see `defaultPollControls`).
+    // Execution-right re-check: consulted AFTER an async node notification resolves and BEFORE the
+    // next notification / node tool launch. Wired ONLY with a PLAN claim (this run's `planToken`); a
+    // run whose claim was taken over mid-walk then takes the planner's `'owned'` branch — zero writes,
+    // NO successor tool, no stale progress event. A claim-less walk keeps the old behavior.
+    isRunOwner:
+      planToken === undefined ? undefined : () => planExecutionClaimHeld(planId, planToken),
     controls: defaultPollControls(planId),
     ...createTaskPersistence(planId, {
       mode,
@@ -773,6 +780,7 @@ export async function resumeTask(
   // is left untouched.
   const row = await loadOwnedTask(sessionId, taskId);
 
+  await assertNoOpenManualReview(taskId);
   const claimed = await claimTaskStatus(taskId, RESUMABLE_PLAN_STATUSES, 'running');
   if (!claimed) return reloadPlan(sessionId, taskId); // already running / terminal — never double-run
 
@@ -793,7 +801,7 @@ export async function resumeTask(
   await clearStaleNodeClaims(taskId, token);
 
   try {
-    const result = await executor.runPlan(
+    await executor.runPlan(
       toTaskPlan(row),
       buildPlanDeps(taskId, deps, undefined, { planToken: token }),
       {
@@ -802,7 +810,7 @@ export async function resumeTask(
       },
     );
     await sweepCancelledPlan(sessionId, taskId);
-    return result;
+    return reloadPlan(sessionId, taskId);
   } finally {
     await releaseTaskExecution(taskId, token);
   }
@@ -1020,6 +1028,7 @@ export async function retryTask(
   // Ownership is verified BEFORE any mutation (see `resumeTask`).
   const row = await loadOwnedTask(sessionId, taskId);
 
+  await assertNoOpenManualReview(taskId);
   const claimed = await claimTaskStatus(taskId, RETRYABLE_PLAN_STATUSES, 'running');
   if (!claimed) return reloadPlan(sessionId, taskId); // cancelled / lost race — never retry
 
@@ -1053,7 +1062,7 @@ export async function retryTask(
     await claimTaskStatus(taskId, ['running'], result.status);
 
     await sweepCancelledPlan(sessionId, taskId);
-    return result;
+    return reloadPlan(sessionId, taskId);
   } finally {
     await releaseTaskExecution(taskId, token);
   }

@@ -14,7 +14,7 @@ import type { RiskLevel } from '../lib/contracts/risk';
 import type { ToolName } from '../lib/contracts/tools';
 import { evaluateTransferRisk } from './risk-engine';
 import { AppError } from '../lib/errors';
-import { parseAmount } from '../lib/money';
+import { normalizeTransferAmount } from '../lib/money';
 
 export interface ToolPolicy {
   /** Static risk tier for the tool. `transfer_money` is dynamic (see `static: false`). */
@@ -112,8 +112,7 @@ export function evaluateTool(
 
   // Dynamic tools (e.g. transfer_money): tier depends on the amount + day total.
   if (!policy.static) {
-    let amount = parseAmount(args.amount as string | number | null | undefined);
-    if (!Number.isFinite(amount)) amount = 0;
+    const amount = normalizeTransferAmount(args.amount);
     const r = evaluateTransferRisk({ amount, dailyTransferTotal: ctx.dailyTransferTotal });
     return {
       tier: r.tier,

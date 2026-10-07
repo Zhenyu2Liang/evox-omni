@@ -1,6 +1,7 @@
 'use client';
 
 import type { PendingActionSummary } from '@/lib/contracts/security';
+import Link from 'next/link';
 import type { OutOfBandAttention } from './types';
 import { Badge, Button, Card, Money, type BadgeProps } from '../../ui';
 
@@ -56,7 +57,7 @@ const COPY: Record<OutOfBandAttention, AttentionCopy> = {
     tone: 'warn',
     bannerClass: 'bg-amber-50 text-banking-warn',
     body: '该操作可能已经执行，但其执行结果未能记录，系统无法自动判定成功或失败。为避免重复执行，本操作不会被自动重试。',
-    help: '请核对账户流水，如需帮助请联系客服人工处理。',
+    help: '请核对账户流水，可进入人工处理登记核对说明；结果不明时不能重新执行。',
   },
 };
 
@@ -130,6 +131,7 @@ export function ReconciliationCard(p: ReconciliationCardProps) {
         <div className={`rounded-xl px-3 py-2 text-sm ${copy.bannerClass}`}>{copy.body}</div>
 
         <p className="text-sm text-banking-navy/70">{copy.help}</p>
+        {attention === 'reconciliation' && <Link href="/manual" className="text-sm text-banking-accent underline">转人工处理</Link>}
 
         <dl className="flex flex-col gap-2">
           {action.fields.map((field, index) => (

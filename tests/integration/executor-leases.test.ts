@@ -1,5 +1,5 @@
 /**
- * review-execution-fencing.test.ts — reference ports for the PLAN EXECUTION CLAIM fencing in
+ * integration/executor-leases.test.ts — reference ports for the PLAN EXECUTION CLAIM fencing in
  * `agent/task-control.ts` (the DB exactly-once guard behind `resumeTask`).
  *
  * Two invariants are locked, asserting on PERSISTED DB STATE via `getTestPrisma()`:

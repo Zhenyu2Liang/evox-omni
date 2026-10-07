@@ -1,5 +1,15 @@
 # tests/app — REAL-application-entry (HTTP) end-to-end specs
 
+`../integration/confirmation-policy.test.ts` additionally drives the real confirm/verify/recover
+routes: CIRCUIT_OPEN at the SDK write fence returns HTTP 423 without a debit; RED terminal actions
+retain their persisted status without an MFA prompt. These are route-handler integration checks;
+the client normalizer checks in that suite do not assert rendered DOM.
+
+Recovery response contract: `ok:true` must not describe `needs_reconciliation`. The plan-wedge
+case in `actions-recovery-http.test.ts` explicitly asserts `ok:false` and that exact manual state;
+the maintained recovery-authorization suite additionally retains the old success audit and verifies one
+separate `reconcile:<actionId>` event, including atomic rollback on an audit fault.
+
 ## Intent
 
 Drive the **real Next.js App Router route handlers** — importing their exported `POST`/`GET`
@@ -87,7 +97,7 @@ complementing the in-process `tests/scenarios/*` suites.
   3000→1500); `申购稳健理财A 1000元` → gated `subscribe_investment` (RED) → verify (holdings 1→2);
   `取消Netflix订阅` → gated `cancel_subscription` (YELLOW) → confirm (ACTIVE→CANCELLED); a transfer with missing
   info (no recipient/amount) → clarification (NO tool call, no read fallback).
-- `review-regressions-http.test.ts` — HTTP e2e regressions a reviewer flagged in already-shipped
+- `security-workflow-http.test.ts` — HTTP e2e regressions a reviewer flagged in already-shipped
   areas: two YELLOW parks in ONE session escalate the SECOND confirm to RED/MFA at execution time;
   cancelling a plan revokes its parked action (plus cancel/confirm race orderings); a MID-RUN pause
   issued through `POST /api/tasks/[id]` halts the next node while resume re-runs only that node; and
@@ -226,7 +236,7 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 - `./dag-recovery-http.test.ts` → DAG control/recovery e2e (pause/resume/cancel/retry) + refresh restore (`GET /api/tasks/[id]`, `GET /api/actions`)
 - `./malicious-input-http.test.ts` → prompt-injection over HTTP still gated + follow-up arg-override cannot change executed args
 - `./nl-entry-http.test.ts` → natural-language entry via `POST /api/chat` → gated tool → confirm/verify completes
-- `./review-regressions-http.test.ts` → reviewer regression e2e: two-park YELLOW→RED execution-time escalation in one session, plan-cancel revokes its parked action + cancel/confirm race orderings, a mid-run pause (via the real handler) halting the next node + resume re-running only that node, and forged-query-never-authenticates on verify/cancel/tasks/reset
+- `./security-workflow-http.test.ts` → reviewer regression e2e: two-park YELLOW→RED execution-time escalation in one session, plan-cancel revokes its parked action + cancel/confirm race orderings, a mid-run pause (via the real handler) halting the next node + resume re-running only that node, and forged-query-never-authenticates on verify/cancel/tasks/reset
 - `./session-takeover-http.test.ts` → cookie-only takeover/isolation (body `sessionId` ≠ cookie → 409 no cookie; cross-session isolation 403; missing-cookie fail-closed; forged query never authenticates)
 - `./cancel-during-authorization-http.test.ts` → cancel landing while a park is in flight (controlled barrier): no executable PendingAction survives, daily total stays 0, both race orderings
 - `./task-resume-retry-http.test.ts` → concurrent real `resume`/`retry` over HTTP (rendezvous barrier): unfinished node runs EXACTLY ONCE, persisted status consistent

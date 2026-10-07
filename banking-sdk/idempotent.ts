@@ -3,8 +3,8 @@
  *
  * WHY this module exists: two gated CREATE side effects (`budget.reserveBudget` →
  * `Budget`, `task.createScheduledTask` → `ScheduledTask`) can be re-run when a plan node is
- * retried/replayed. Both tables carry a `idempotencyKey String? @unique` column, so a repeat with
- * the SAME key must replay the already-persisted row instead of inserting a second one. The
+ * retried/replayed. Each table enforces a replay identity (Budget: userId + idempotencyKey;
+ * ScheduledTask: idempotencyKey), so the SAME identity replays the persisted row. The
  * find-then-create + unique-violation-replay sequence is identical for both tables — it lives here
  * once.
  *
@@ -13,6 +13,7 @@
  */
 import { createHash } from 'node:crypto';
 
+import type { ExecutionFenceCheck } from './fence';
 import { runInTransaction, type Tx } from './tx';
 
 /** Structural Prisma unique-constraint (P2002) check — avoids importing the runtime error class. */
@@ -48,6 +49,8 @@ export function idempotentCardId(userId: string, idempotencyKey: string): string
 export interface IdempotentCreateSpec<TRow> {
   /** Normalized (trimmed, non-empty) replay key — see {@link normalizeIdempotencyKey}. */
   key: string;
+  /** Optional execution fence awaited INSIDE the transaction immediately BEFORE the insert. */
+  fence?: ExecutionFenceCheck;
   /** Read the row previously created for `key`, or `null` when none exists yet. */
   find: (tx: Tx) => Promise<TRow | null>;
   /** Insert the row for `key`; the callback must persist `key` on the new row. */
@@ -60,14 +63,20 @@ export interface IdempotentCreateSpec<TRow> {
  * Inside ONE interactive transaction: replay the persisted row when `key` was already used, else
  * insert it. A concurrent same-key caller loses the race on the `idempotencyKey` UNIQUE column
  * (`P2002`), its transaction rolls back (nothing written), and the winner's committed row is then
- * re-read and replayed — so exactly one row exists per key and both callers receive the same row.
+ * re-read through the SAME scoped `find` callback — so a fallback cannot broaden ownership.
  * Any other error propagates untouched.
+ *
+ * When `spec.fence` is supplied it is awaited INSIDE that same transaction and BEFORE the insert, so
+ * a fence that throws rolls back with nothing written. A replay (row already persisted) writes
+ * nothing and therefore needs no fence.
  */
 export async function createIdempotent<TRow>(spec: IdempotentCreateSpec<TRow>): Promise<TRow> {
   try {
     return await runInTransaction(async (tx) => {
       const existing = await spec.find(tx);
-      return existing !== null ? existing : spec.create(tx, spec.key);
+      if (existing !== null) return existing;
+      await spec.fence?.(tx);
+      return spec.create(tx, spec.key);
     });
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;

@@ -2,8 +2,8 @@
  * confirmation-recovery.ts — durable recovery + LANDING primitives for the two-phase confirmation path.
  *
  * Extracted from `confirmation.ts` (kept as the thin orchestrator) to stay under the ~1000-line soft
- * budget. It owns NO policy: it never computes a tier, a confirmation or an MFA requirement — every
- * input is PERSISTED `PendingAction` state the security gateway already wrote.
+ * budget. Security policy remains in `security/`: recovery that can create a new debit explicitly
+ * re-enters that authorization layer; committed receipts are reconstructed without re-execution.
  *
  * Concerns:
  *  1. The REFERENCE-COUNTED live-confirmation registry (`isActionLive`/`retainAction`/`releaseAction`)
@@ -24,6 +24,7 @@ import {
   getPendingAction,
   getPendingActionPlanLink,
   setPendingActionStatus,
+  type PendingActionWithMfa,
 } from '@/lib/db/repositories/pendingAction';
 import { getExecutionReceipt } from '@/lib/db/repositories/executionReceipt';
 import { prisma } from '@/lib/db/client';
@@ -34,6 +35,11 @@ import { formatCNY } from '@/lib/money';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { recordAudit } from '@/audit';
 import { demoNow } from '@/lib/clock';
+import { committedExecutionResult } from './execution-evidence';
+import { transferExecutionAudit } from './execution-audit';
+import { buildConfirmFence, guardExecutionFence } from './execution-fence';
+import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
+import { recovery } from '@/security';
 
 /* ----------------------------------------------------------------------------------------- *
  * 1. Live-confirmation registry — REFERENCE-COUNTED (in-process AUXILIARY hint)
@@ -223,8 +229,8 @@ export interface SettlePendingActionInput {
   result?: ToolExecutionResult;
   /** When given, land ONLY if the row currently holds one of these statuses (atomic CAS). */
   from?: PendingActionStatus[];
-  /** The execution audit entry, written INSIDE the same transaction. */
-  audit?: AuditEntry;
+  /** Audit entry, or a pure builder reading the current decision AFTER the transaction's write lock. */
+  audit?: AuditEntry | ((current: PendingActionWithMfa) => AuditEntry);
   /** Idempotency key for the audit insert — a repeat settle never duplicates the audit row. */
   dedupeKey?: string;
 }
@@ -236,8 +242,9 @@ export interface SettlePendingActionInput {
  * audit, or any other half-landed combination. Returns `false` when a requested CAS did not match
  * (a concurrent settle already moved the row — nothing is written).
  *
- * The audit write is delegated to `recordAudit`, which is best-effort (never throws); a duplicate
- * `dedupeKey` is absorbed, so a REPEATED settle of the same action never duplicates its audit.
+ * Critical audit writes are strict. Only verified duplicate identities/results are absorbed.
+ * Transfers already wrote their required execution audit in the debit/ledger/receipt transaction;
+ * this transaction lands state and repairs pre-upgrade missing audits without another debit.
  */
 export async function settlePendingAction(input: SettlePendingActionInput): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
@@ -257,9 +264,16 @@ export async function settlePendingAction(input: SettlePendingActionInput): Prom
       });
     }
     if (input.audit !== undefined) {
+      // The status write above holds the writer slot. Recovery must use the decision that is
+      // persisted NOW, not an ownership snapshot taken before a competing MFA upgrade/commit.
+      const audit = typeof input.audit === 'function'
+        ? input.audit(await tx.pendingAction.findUniqueOrThrow({ where: { id: input.actionId }, include: { mfa: true } }))
+        : input.audit;
       await recordAudit(
-        input.audit,
-        input.dedupeKey !== undefined ? { client: tx, dedupeKey: input.dedupeKey } : { client: tx },
+        audit,
+        input.dedupeKey !== undefined
+          ? { client: tx, dedupeKey: input.dedupeKey, strict: true }
+          : { client: tx, strict: true },
       );
     }
     return true;
@@ -373,7 +387,7 @@ interface StandaloneRow {
 }
 
 /** Build the `transfer_money` summary from a persisted SDK `TransferResult` snapshot, when possible. */
-function summaryFromReceipt(toolName: string, stored: Record<string, unknown>): string | undefined {
+export function summaryFromReceipt(toolName: string, stored: Record<string, unknown>): string | undefined {
   if (toolName !== 'transfer_money') return undefined;
   const recipient = stored.recipient as { name?: unknown } | undefined;
   const name =
@@ -401,21 +415,14 @@ async function settleFromCommittedReceipt(
   tier: RiskLevel,
   requiresMfa: boolean,
 ): Promise<StandaloneWedgeOutcome | undefined> {
-  const key = ledgerKeyForAction({
-    id: actionId,
-    taskId: link?.taskId ?? undefined,
-    nodeId: link?.nodeId ?? undefined,
-  });
-  const receipt = await getExecutionReceipt(row.userId, key);
-  if (receipt === null) return undefined;
-  const stored = safeParse<Record<string, unknown> | null>(receipt.resultJson, null);
-  if (stored === null) return undefined;
-
-  const result: ToolExecutionResult = {
-    ok: true,
-    data: stored,
-    summary: summaryFromReceipt(row.toolName, stored),
-  };
+  let result: ToolExecutionResult | undefined;
+  try {
+    result = await committedExecutionResult({ ...row, id: actionId, taskId: link?.taskId ?? null, nodeId: link?.nodeId ?? null });
+  } catch (error) {
+    if (!(error instanceof AppError) || error.code !== 'CONFLICT') throw error;
+    return reconcileStandaloneAction(actionId, tier, requiresMfa);
+  }
+  if (result === undefined) return undefined;
   const settled = await landStandalone(actionId, row, tier, requiresMfa, result, 'executed');
   return {
     ...settled,
@@ -437,6 +444,30 @@ async function replayStandaloneAction(
   tier: RiskLevel,
   requiresMfa: boolean,
 ): Promise<StandaloneWedgeOutcome> {
+  // A receipt miss can mean the first attempt rolled back BEFORE debit. Idempotency alone does
+  // not authorize a new debit: re-enter security policy before calling the SDK.
+  let authorization: Awaited<ReturnType<typeof recovery.authorizeRecoveryAction>>;
+  try {
+    authorization = await recovery.authorizeRecoveryAction(actionId, {
+      userId: row.userId, sessionId: row.sessionId,
+    });
+  } catch (error) {
+    // Another recovery may have committed after our receipt miss, even before we acquire the
+    // authorization write lock. Resolve that committed fact without treating it as a new debit.
+    if (error instanceof AppError && (error.code === 'CONFLICT' || error.code === 'CIRCUIT_OPEN')) {
+      const committed = await settleFromCommittedReceipt(actionId, row, link, tier, requiresMfa);
+      if (committed !== undefined) return committed;
+    }
+    throw error;
+  }
+  if (!authorization.ok) {
+    return { ok: false, actionId, status: authorization.status, tier: authorization.tier,
+      requiresMfa: authorization.requiresMfa, message: authorization.message,
+      events: authorization.requiresMfa ? [{ type: 'mfa_required', actionId }] : [],
+    };
+  }
+  tier = authorization.tier;
+  requiresMfa = authorization.requiresMfa;
   const toolName = row.toolName as ToolName;
   const args = safeParse<Record<string, unknown>>(row.argsJson, {});
   const idempotencyKey = ledgerKeyForAction({
@@ -446,20 +477,37 @@ async function replayStandaloneAction(
   });
 
   let result: ToolExecutionResult;
+  let sideEffectCommitted = false;
+  const guarded = guardExecutionFence(await buildConfirmFence(link?.taskId, link?.nodeId, actionId));
+  const executionAudit = transferExecutionAudit(actionId, {
+    sessionId: row.sessionId, userRequest: row.userRequest ?? '', intent: row.intent ?? undefined,
+    toolName: row.toolName, riskLevel: tier, confirmationRequired: true, confirmed: true, mfaRequired: requiresMfa,
+    mfaResult: authorization.mfaResult,
+  });
   try {
-    result = await createToolRegistry(row.userId).executeDirect(toolName, args, { idempotencyKey });
+    result = await createToolRegistry(row.userId).executeDirect(toolName, args, {
+      idempotencyKey, fence: guarded.fence,
+      onTransferCommit: executionAudit.onTransferCommit,
+      onTransactionCommitted: () => { sideEffectCommitted = true; },
+    });
   } catch (e) {
-    // A boundary throw is the REAL failure — recorded as `failed`, never swallowed, never a success.
+    // A thrown return path is not proof of business failure; convergence checks committed evidence.
     result = { ok: false, error: AppError.from(e).message };
   }
 
-  const status: PendingActionStatus = result.ok ? 'executed' : 'failed';
+  guarded.assertPolicyAllowed();
+  executionAudit.assertSucceeded();
+  const current = await getPendingAction(actionId);
+  if (current === null) throw new AppError('NOT_FOUND', '恢复操作不存在');
+  const decision = await decideConvergence(current, { completion: result, sideEffectCommitted });
+  result = decision.result ?? result;
+  const status = decision.status;
   const settled = await landStandalone(actionId, row, tier, requiresMfa, result, status);
   return {
     ...settled,
     message: result.ok
-      ? '该操作此前已执行但结果未留存，已按其幂等键安全重放并确认执行成功（副作用仅发生一次）。'
-      : `该操作此前已执行但结果未留存，幂等重放确认为失败：${result.error ?? '未知原因'}`,
+      ? '已复核当前授权，按持久化操作身份完成恢复并确认执行成功（副作用仅发生一次）。'
+      : `恢复执行未成功：${result.error ?? '未知原因'}`,
   };
 }
 
@@ -480,21 +528,29 @@ async function landStandalone(
     actionId,
     status,
     result,
-    audit: {
-      timestamp: demoNow(),
-      sessionId: row.sessionId,
-      userRequest: row.userRequest ?? '',
-      intent: row.intent ?? undefined,
-      toolName: row.toolName,
-      riskLevel: tier,
-      confirmationRequired: true,
-      confirmed: true,
-      mfaRequired: requiresMfa,
-      toolResult: result,
-      status: result.ok ? 'success' : 'failed',
-      detail: '恢复：初次结果写回失败，按幂等键安全重放（副作用仅一次）',
+    audit: current => {
+      // Also covers CONFLICT/CIRCUIT_OPEN receipt fallbacks, which may carry a stale caller row.
+      // Strict duplicate audit validation remains unchanged: differing facts still fail closed.
+      requiresMfa = current.requiresMfa || current.riskLevel === 'RED';
+      tier = requiresMfa ? 'RED' : current.riskLevel as RiskLevel;
+      return {
+        timestamp: demoNow(),
+        sessionId: row.sessionId,
+        userRequest: row.userRequest ?? '',
+        intent: row.intent ?? undefined,
+        toolName: row.toolName,
+        riskLevel: tier,
+        confirmationRequired: true,
+        confirmed: true,
+        mfaRequired: requiresMfa,
+        mfaResult: requiresMfa ? current.mfa?.status === 'verified' ? 'success' : undefined : 'not_required',
+        toolResult: result,
+        status: status === 'needs_reconciliation' ? 'blocked' : result.ok ? 'success' : 'failed',
+        detail: status === 'needs_reconciliation' ? '恢复：执行结果需人工核对'
+          : '恢复：按持久化操作身份核对执行结果（副作用仅一次）',
+      };
     },
-    dedupeKey: `exec:${actionId}`,
+    dedupeKey: convergenceAuditKey(actionId, status),
   });
 
   return { ok: result.ok, actionId, status, tier, requiresMfa, message: '', result, events: [] };
@@ -512,10 +568,16 @@ async function reconcileStandaloneAction(
   tier: RiskLevel,
   requiresMfa: boolean,
 ): Promise<StandaloneWedgeOutcome> {
+  const row = await getPendingAction(actionId);
+  if (row === null) throw new AppError('NOT_FOUND', '待核对操作不存在。');
+  const result: ToolExecutionResult = { ok: false, error: '执行证据不足或矛盾，需人工核对（不会重新执行）。' };
   const won = await settlePendingAction({
     actionId,
     status: 'needs_reconciliation',
     from: ['confirmed'],
+    result,
+    audit: buildRecoveryAudit(row, { status: 'needs_reconciliation', result, evidence: 'none', write: true }),
+    dedupeKey: convergenceAuditKey(actionId, 'needs_reconciliation'),
   });
   // A lost CAS means a concurrent settle already moved the row: report its CURRENT persisted status
   // truthfully (never a fabricated one).

@@ -12,6 +12,21 @@ This node is the `beforeToolCall` chokepoint and the sole authority on 🟢/🟡
 
 ## API Surface
 
+- `execution-policy.ts` exports `assertSessionMayWrite(sessionId)` through `security.writePolicy`.
+  Ordinary confirm, MFA verify and replay recovery share this breaker check inside the SDK write
+  transaction, after the action/plan conditional writes. Policy denial propagates as CIRCUIT_OPEN;
+  committed receipt-only reconstruction remains available while locked.
+- Authorization rejects confirmed/terminal actions before requesting or verifying MFA. Recovery
+  re-reads the persisted risk decision after its transaction's writer claim; a stale ownership
+  snapshot cannot downgrade a concurrent RED upgrade to YELLOW.
+
+- `recovery-authorization.ts` exports `authorizeRecoveryAction(actionId, actor)` and
+  `assertRecoverySessionUnlocked(sessionId)` through `security.recovery`. Only recovery that may
+  create a NEW transfer debit re-enters this policy: trusted owner/session, confirmed CAS, plan
+  cancellation, current effective daily total and verified MFA. A raced committed ledger is not
+  counted twice. The agent also invokes the breaker check inside the SDK write fence. Receipt-only
+  reconstruction does not authorize a new write and can proceed while locked.
+
 Import the facade (`import { security } from '../security'`) or the sub-modules directly.
 All public types are local interfaces (NOT in `lib/contracts`) except the frozen cross-module
 types it consumes and returns (`SecurityEvaluation`, `SecurityDecision`, `PendingAction`,
@@ -40,7 +55,9 @@ type PrismaLike = Prisma.TransactionClient | typeof prisma   // the shared clien
 const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const
 function evaluateTransferRisk(input: TransferRiskInput): TransferRiskResult     // RED iff amount>1000 || total+amount>1000 (STRICT `>`; exactly ¥1000 stays YELLOW), else YELLOW; always requiresConfirmation
 async function computeDailyTransferTotal(userId: string, now?: number): Promise<number>   // EXECUTED only: sum OUTGOING TRANSFER debits with occurredAt in [startOfDay(now), now] (INCLUSIVE both ends; future-dated rows excluded)
-async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>   // sum of in-flight (status confirmed|executing) parked transfer_money args.amount, minus excludeActionId; a malformed row is SKIPPED (never throws); an action whose deterministic ledger row `ledgerTxIdForAction(userId, action)` ALREADY EXISTS is EXCLUDED (already counted by the executed half)
+async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>
+// Sums integer cents of confirmed|executing transfers; invalid amounts fail closed. Excludes the
+// current action and actions whose ledgerTxIdForAction already exists (counted by the executed half).
 async function computeEffectiveTransferTotalWith(client: PrismaLike, userId: string, now?: number, excludeActionId?: string): Promise<number>   // EXECUTED-today transfer debits + in-flight PendingActions, through `client` (so it runs INSIDE a `$transaction`)
 async function reEvaluateTransferRisk(userId: string, amount: number, now?: number): Promise<TransferRiskResult>   // EXECUTED-only re-risk: computeDailyTransferTotal FRESH then evaluateTransferRisk
 ```
@@ -257,6 +274,10 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 
 ## Constraints
 
+- Transfer authorization rejects fractional cents and invalid amounts before creating a pending action;
+  all day/in-flight totals and threshold comparisons sum canonical integer cents. Invalid persisted
+  in-flight amounts fail closed instead of being omitted. New-debit recovery uses the same validator.
+
 - **LLM-immutable**: tier / confirmation / MFA are computed only from `TOOL_POLICY`, the validated
   `amount`, and `ctx.dailyTransferTotal`. Model output and user text are NEVER inputs to the decision.
   The persisted `intent` is likewise a pure function of the tool name (`TOOL_INTENT`), never model text.
@@ -304,7 +325,9 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   - `recordSuccess` does NOT unlock a tripped breaker (a correct MFA code on a NON-locked path only resets the counter);
   - a correct MFA code submitted WHILE locked is rejected and does NOT unlock (`mfa.verify` checks the lock first);
   - unlock clears ALL breaker state and restarts the failure counter from 0;
-  - unlock does NOT re-authorize a previously blocked action — that `PendingAction` must be re-created (and re-confirmed/re-verified).
+  - unlock does NOT itself re-authorize an action. Undecided actions need a fresh confirm/MFA;
+    a result-less confirmed transfer must pass recovery authorization again; terminal/manual
+    outcomes are not made executable by unlocking.
 - **Injection guard never grants permission** — defense-in-depth only (see its file disclaimer).
 - **Files ≲ ~1000 lines**; split by responsibility. No inter-module cycles.
 

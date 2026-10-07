@@ -1,5 +1,5 @@
 /**
- * review-txn-facts.test.ts — the UNIFIED TRANSACTION-FACT SOURCE.
+ * integration/transfer-history.test.ts — the UNIFIED TRANSACTION-FACT SOURCE.
  *
  * A COMMITTED transfer's facts (the ledger debit + the execution receipt) MUST survive changes to
  * MUTABLE reference data (a renamed / deleted recipient contact) and a PLAN CANCELLATION: the
