@@ -1,0 +1,3 @@
+﻿77e0c27 docs: sync root CONTEXT.md and app/api CONTEXT.md with receipt/settlement/fencing + /actions recovery surface
+?? _c.txt
+?? _c2.txt

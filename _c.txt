@@ -1,0 +1,3 @@
+﻿[evogit-agent-T1-A26 77e0c27] docs: sync root CONTEXT.md and app/api CONTEXT.md with receipt/settlement/fencing + /actions recovery surface
+ 2 files changed, 27 insertions(+), 12 deletions(-)
+77e0c27 docs: sync root CONTEXT.md and app/api CONTEXT.md with receipt/settlement/fencing + /actions recovery surface
