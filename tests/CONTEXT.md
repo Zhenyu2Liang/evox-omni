@@ -1,5 +1,11 @@
 # tests — Automated Test Suite (Vitest)
 
+`review-e819d6e-boundaries.test.ts` preserves all four original reviewer probes byte-for-byte.
+`repair-confirmation-boundaries.test.ts` adds 19 cases for ordinary/MFA write-time breaker denial,
+audited unlock and at-most-once recovery, card mutation denial, RED receipt fallback after a
+competing MFA commit (CONFLICT/CIRCUIT_OPEN), strict audit mismatch rejection, and frontend/HTTP
+terminal-state versus active-MFA behaviour. No existing assertion is weakened.
+
 Current recovery-security regressions: `review-95ff994-additional.test.ts` preserves the original
 three reviewer probes byte-for-byte; `repair-recovery-security.test.ts` adds 15 cases for breaker
 timing, receipt-only locked recovery, risk/MFA escalation, two fresh-recovery races at ¥1000,

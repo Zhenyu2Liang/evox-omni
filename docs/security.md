@@ -1,5 +1,12 @@
 # 安全模型文档 · Security Model
 
+普通确认、MFA 确认和恢复重放共用 `buildConfirmFence`，在 SDK 写事务内按持久化操作的会话重查熔断。
+写入前拒绝返回 `423 CIRCUIT_OPEN`，不记为已执行/业务失败；解锁后的恢复仍需复核当前授权。
+已提交凭证的只读回填继续可用。恢复授权认领后重读风险信息，状态/结果/审计落地事务再次读取当前授权，
+防止并发 RED 升级被旧 YELLOW 快照覆盖。严格审计去重校验保持不变。
+验证码仅面向 `pending/awaiting_mfa` 决策；终态的历史 `requiresMfa` 不表示仍需验证。
+详见 [本轮确认边界修复](repair-confirmation-boundaries.md)。
+
 当前恢复边界：已提交结果可只读重建；无凭证且可能新增扣款的恢复必须经 `security/recovery-authorization.ts` 复核身份、熔断、计划状态、累计金额及 MFA，SDK 写事务内再查熔断。锁定时拒绝新扣款（HTTP 423）；并发已入账的同一动作不会再次计入授权金额。
 
 卡片与订阅写工具只使用服务端用户身份。SDK 要求 `userId`，既在读取时核对所有者，也把所有者限定进实际写条件。伪造工具参数中的 `userId` 不能越权。

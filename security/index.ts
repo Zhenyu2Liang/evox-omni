@@ -15,8 +15,9 @@ import * as circuitBreaker from './circuit-breaker';
 import * as injection from './injection-guard';
 import * as gateway from './security-gateway';
 import * as recovery from './recovery-authorization';
+import * as writePolicy from './execution-policy';
 
-export { permission, risk, mfa, circuitBreaker, injection, gateway, recovery };
+export { permission, risk, mfa, circuitBreaker, injection, gateway, recovery, writePolicy };
 
 /** Aggregate facade: `security.gateway.evaluate(...)`, `security.injection.scan(...)`, etc. */
-export const security = { gateway, permission, risk, mfa, circuitBreaker, injection, recovery };
+export const security = { gateway, permission, risk, mfa, circuitBreaker, injection, recovery, writePolicy };

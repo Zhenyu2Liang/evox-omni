@@ -29,7 +29,8 @@
  *    effective decision (the gateway already claimed the action exactly-once and its execution lease /
  *    live marker governs the window), NOT the plan's `executionToken` — which a `resumeTaskForAction`
  *    legitimately mints, rotates and releases around the continuation. It asserts that the action
- *    is still confirmed and that its owning plan, when present, was not cancelled.
+ *    is still confirmed, that its owning plan was not cancelled, and that its persisted session
+ *    remains unlocked at the SDK mutation boundary (ordinary confirm, MFA verify and recovery).
  *
  * The fence uses conditional identity-preserving writes to obtain SQLite's writer slot before
  * banking mutations. It never re-invokes a tool or swallows an authorization failure.
@@ -38,6 +39,25 @@ import type { Prisma } from '@prisma/client';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
 import { getTask, getTaskNode } from '@/lib/db/repositories/task';
+import { writePolicy } from '@/security';
+
+/** SDK runners return business errors as values; a policy denial must still reach the API as 423. */
+export function guardExecutionFence(fence: ExecutionFenceCheck | undefined): {
+  fence: ExecutionFenceCheck;
+  assertPolicyAllowed: () => void;
+} {
+  let policyError: AppError | undefined;
+  return {
+    fence: async client => {
+      try { await fence?.(client); }
+      catch (error) {
+        if (error instanceof AppError && error.code === 'CIRCUIT_OPEN') policyError = error;
+        throw error;
+      }
+    },
+    assertPolicyAllowed: () => { if (policyError !== undefined) throw policyError; },
+  };
+}
 
 /**
  * Plan statuses during which a node's SDK write may legitimately commit. The planner writes the plan
@@ -144,7 +164,7 @@ export async function buildPlanNodeFence(
  * `resumeTaskForAction` legitimately mints/rotates/releases around the continuation and which may
  * therefore differ from any token captured earlier. The action must remain confirmed and the owning
  * plan must not be cancelled while the blocked write is in flight. These conditional writes take
- * the database writer slot before the business mutation.
+ * the database writer slot before the business mutation; the current breaker is then rechecked.
  *
  * Standalone actions are fenced by action id. Returns undefined only when neither an action id
  * nor a usable plan id is supplied; missing rows fail closed inside the transaction.
@@ -156,17 +176,23 @@ export async function buildConfirmFence(
 ): Promise<ExecutionFenceCheck | undefined> {
   if (!isUsableId(taskId) && actionId === undefined) return undefined;
   return async (client: Prisma.TransactionClient): Promise<void> => {
+    let sessionId: string | undefined;
     if (actionId !== undefined) {
       const action = await client.pendingAction.updateMany({
         where: { id: actionId, status: 'confirmed' }, data: { status: 'confirmed' },
       });
       if (action.count !== 1) throw fenceConflict('操作已不再处于授权执行状态', { actionId });
+      sessionId = (await client.pendingAction.findUniqueOrThrow({ where: { id: actionId } })).sessionId;
     }
     if (isUsableId(taskId)) {
       const plan = await client.agentTask.updateMany({
         where: { id: taskId, status: { not: 'cancelled' } }, data: { generation: { increment: 0 } },
       });
       if (plan.count !== 1) throw fenceConflict('计划已取消或不存在', { taskId, nodeId });
+      sessionId ??= (await client.agentTask.findUniqueOrThrow({ where: { id: taskId } })).sessionId;
     }
+    // Shared by ordinary confirm, MFA verify and recovery; the SDK invokes this in its write tx.
+    // Receipt-only reads bypass the SDK mutation transaction and remain available while locked.
+    if (sessionId !== undefined) writePolicy.assertSessionMayWrite(sessionId);
   };
 }

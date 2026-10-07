@@ -1,6 +1,12 @@
 # 测试用例文档 · Test Cases & Demo Scenarios
 
-新增 `tests/review-95ff994-additional.test.ts`：保留审查方原始三例，覆盖恢复绕过熔断、跨用户卡片写入、矛盾凭证与成功审计共存时的人工核对。新增 `tests/repair-recovery-security.test.ts`（15 例）：写入前熔断、锁定后只读恢复、累计升级 MFA、并发首次恢复的 ¥1000 边界、六类资源越权、写入时所有者变更、人工核对幂等与审计失败回滚。全量共 105 文件 / 703 用例。旧 `actions-recovery-http` 用例把人工核对断言改为 `ok=false`，并收紧状态为 `needs_reconciliation`；订阅 SDK 用例只补充必需用户身份。详情见 [本轮修复报告](repair-recovery-security.md)。
+新增 `tests/review-e819d6e-boundaries.test.ts`（原始 4 例不变）及 `tests/repair-confirmation-boundaries.test.ts`（19 例）：
+普通确认/MFA 写入前熔断、审计解锁后幂等恢复、卡片写入保护、RED 终态展示、并发恢复授权元数据及严格审计校验。
+详情见 [确认边界修复报告](repair-confirmation-boundaries.md)。
+
+上轮 `tests/review-95ff994-additional.test.ts` 保留原始三例，覆盖恢复绕过熔断、跨用户卡片写入、矛盾凭证与成功审计共存时的人工核对。
+`tests/repair-recovery-security.test.ts`（15 例）继续覆盖恢复权限、资源归属与核对审计原子性；上轮行为与测试保留。
+完整全量现为 107 文件 / 726 用例。上轮证据见 [恢复安全修复报告](repair-recovery-security.md)。
 
 > 测试套件是 AI Banking Agent 演示的**验收标准（acceptance bar）**，用 **Vitest** 写成，
 > **完全离线、确定性**运行（无网络、无需 API key）。此外还有一个**独立于 Vitest** 的真实浏览器
@@ -33,7 +39,7 @@
 > 详见 [§5](#5-真实浏览器验收-harness--real-browser-acceptance-harness)。
 
 ### 当前实测状态 · Measured State
-- **`npx vitest run`** → **105 个文件 / 703 个测试全部通过**。
+- **`npx vitest run`** → **107 个文件 / 726 个测试全部通过**。
 - **`npx tsc --noEmit`** → **0 错误**（Vitest 只转译、不做类型检查，故类型门禁单列）。
 - **`npx next build`** → **退出码 0**。
 - **真实浏览器验收**（`npx tsx tests/e2e/acceptance.e2e.ts`，隔离库 `prisma/e2e.db`）→ **PASS 6 / FAIL 0 / SKIP 0**：

@@ -28,8 +28,9 @@
  *     checks the lock FIRST ("locked wins") and fails regardless of the submitted code.
  *   - Unlock clears ALL breaker state for the session — `failures` back to 0, `locked` false,
  *     `lockedAt` cleared — so a subsequent trip counts from scratch.
- *   - Unlock does NOT re-authorize a previously blocked action: the blocked `PendingAction`
- *     must be re-created (and re-confirmed/re-verified) after unlocking.
+ *   - Unlock does NOT itself re-authorize an action. Undecided actions need confirm/MFA; a
+ *     result-less confirmed transfer must pass recovery authorization again. Terminal/manual
+ *     outcomes are not made executable by unlocking.
  *
  * NOTE: `recordFailure` is async because emitting the SecurityEvent writes through
  * `./audit` (never fire-and-forget — errors must not be swallowed).
@@ -140,8 +141,8 @@ export function recordSuccess(sessionId: string): CircuitBreakerState {
  * UNLOCK CONDITIONS (see the file header): this is the ONLY way to clear a tripped breaker.
  * The model/LLM can NEVER unlock it; `recordSuccess` and a correct MFA code do NOT unlock it.
  * Unlock clears ALL breaker state (failures → 0, locked → false, lockedAt cleared) so the
- * failure counter restarts from scratch; it does NOT re-authorize a previously blocked action
- * (that `PendingAction` must be re-created and re-confirmed/re-verified).
+ * failure counter restarts from scratch; it does NOT itself grant execution. A confirmed transfer
+ * wedge must re-enter recovery authorization; undecided actions still require confirm/MFA.
  *
  * The synchronous `reset` (no I/O, test-only) performs only the state clear; this wrapper adds
  * the `./audit` write (never fire-and-forget). The emitted event detail is a COMPLETE audit

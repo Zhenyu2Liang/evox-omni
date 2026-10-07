@@ -7,16 +7,14 @@ import { parseAmount } from '@/lib/money';
 import { demoNow } from '@/lib/clock';
 import { ledgerTxIdForAction } from '@/lib/ledger';
 import { recordSecurityEvent } from '@/audit';
-import { isLocked } from './circuit-breaker';
+import { assertSessionMayWrite } from './execution-policy';
 import { computeEffectiveTransferTotalWith, evaluateTransferRisk } from './risk-engine';
 import { issueChallenge } from './mfa';
 import type { ActionOwnership, AuthorizationResult } from './security-gateway';
 
 /** Applies only to recovery that may create a NEW debit, never to read-only receipt recovery. */
 export function assertRecoverySessionUnlocked(sessionId: string): void {
-  if (isLocked(sessionId)) {
-    throw new AppError('CIRCUIT_OPEN', '当前会话已触发安全熔断，恢复操作不得产生新的资金变更。');
-  }
+  assertSessionMayWrite(sessionId);
 }
 
 /** Revalidate persisted authorization and current policy before an idempotent recovery attempt. */
@@ -40,19 +38,22 @@ export async function authorizeRecoveryAction(actionId: string, actor: ActionOwn
       data: { status: 'confirmed' },
     });
     if (claimed.count !== 1) throw new AppError('CONFLICT', '操作状态已变化，请刷新后核对。');
+    // Re-read AFTER the writer claim: another recovery may have upgraded MFA and committed while
+    // the ownership read above was in flight. Its persisted decision is the current authority.
+    const current = await tx.pendingAction.findUniqueOrThrow({ where: { id: actionId } });
     // A competing recovery can commit after our caller's receipt miss. Its debit is already in
     // the daily total: do not add this request again or downgrade it to awaiting_mfa. The SDK
     // still verifies the receipt/request before returning; this branch grants no new debit.
-    if (await tx.transaction.findUnique({ where: { id: ledgerTxIdForAction(actor.userId, row) } })) {
-      return { requiresMfa: row.requiresMfa || row.riskLevel === 'RED', allowed: true };
+    if (await tx.transaction.findUnique({ where: { id: ledgerTxIdForAction(actor.userId, current) } })) {
+      return { requiresMfa: current.requiresMfa || current.riskLevel === 'RED', allowed: true };
     }
     assertRecoverySessionUnlocked(actor.sessionId);
-    if (row.taskId && (await tx.agentTask.findUnique({ where: { id: row.taskId } }))?.status === 'cancelled') {
+    if (current.taskId && (await tx.agentTask.findUnique({ where: { id: current.taskId } }))?.status === 'cancelled') {
       throw new AppError('SECURITY_DENIED', '操作所属计划已取消，不能恢复新的资金变更。');
     }
     const total = await computeEffectiveTransferTotalWith(tx, actor.userId, undefined, actionId);
     const risk = evaluateTransferRisk({ amount, dailyTransferTotal: total });
-    const needsMfa = row.requiresMfa || row.riskLevel === 'RED' || risk.requiresMfa;
+    const needsMfa = current.requiresMfa || current.riskLevel === 'RED' || risk.requiresMfa;
     const challenge = needsMfa ? await tx.mfaChallenge.findUnique({ where: { actionId } }) : null;
     const verified = challenge?.status === 'verified' &&
       (challenge.expiresAt === null || challenge.expiresAt.getTime() > demoNow());

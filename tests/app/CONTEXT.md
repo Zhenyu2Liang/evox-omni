@@ -1,5 +1,10 @@
 # tests/app — REAL-application-entry (HTTP) end-to-end specs
 
+Root `repair-confirmation-boundaries.test.ts` additionally drives the real confirm/verify/recover
+routes: CIRCUIT_OPEN at the SDK write fence returns HTTP 423 without a debit; RED terminal actions
+retain their persisted status without an MFA prompt. These are route-handler integration checks;
+the client normalizer checks in that suite do not assert rendered DOM.
+
 Recovery response contract: `ok:true` must not describe `needs_reconciliation`. The plan-wedge
 case in `actions-recovery-http.test.ts` explicitly asserts `ok:false` and that exact manual state;
 new root recovery-security regressions additionally retain the old success audit and verify one

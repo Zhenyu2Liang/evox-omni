@@ -54,7 +54,7 @@ import { AppError } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
 import { ledgerKeyForAction, nodeExecutionKey } from '@/lib/ledger';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
-import { buildConfirmFence, buildPlanNodeFence } from './execution-fence';
+import { buildConfirmFence, buildPlanNodeFence, guardExecutionFence } from './execution-fence';
 import { resumeTurn } from './run-turn';
 import type { RunTurnDeps } from './run-turn';
 import { findTaskByPendingAction, resumeTaskForAction } from './task-control';
@@ -767,6 +767,7 @@ async function executeAuthorizedAction(
   });
   let result: ToolExecutionResult;
   let sideEffectCommitted = false;
+  const guarded = guardExecutionFence(await buildConfirmFence(link?.taskId, link?.nodeId, actionId));
   const executionAudit = transferExecutionAudit(actionId, {
     sessionId: action.sessionId, userRequest: action.userRequest ?? '', intent: action.intent,
     toolName: action.toolName, riskLevel: tier, confirmationRequired: true, confirmed: true,
@@ -778,9 +779,8 @@ async function executeAuthorizedAction(
     // `resumeTaskForAction` legitimately mints/rotates/releases around this continuation. It therefore
     // asserts that the action is still confirmed and its owning plan is not cancelled. These
     // conditional writes serialize against cancellation before any banking mutation.
-    const fence = await buildConfirmFence(link?.taskId, link?.nodeId, actionId);
     result = await registry.executeDirect(action.toolName, action.args, {
-      idempotencyKey, fence, onTransferCommit: executionAudit.onTransferCommit,
+      idempotencyKey, fence: guarded.fence, onTransferCommit: executionAudit.onTransferCommit,
       onTransactionCommitted: () => { sideEffectCommitted = true; },
     });
   } catch (e) {
@@ -788,6 +788,7 @@ async function executeAuthorizedAction(
     result = { ok: false, error: AppError.from(e).message };
   }
 
+  guarded.assertPolicyAllowed();
   executionAudit.assertSucceeded();
   const current = await getPendingAction(actionId);
   if (current === null) throw new AppError('NOT_FOUND', '执行操作不存在');
@@ -882,7 +883,7 @@ async function executeAuthorizedAction(
  * Map a NON-ok authorization to its outcome — WITHOUT executing anything.
  *
  * ESCALATION (`requiresMfa`): strong verification is required (a parked YELLOW transfer that
- * re-risked to RED at execution time, a RED action without a code, or a locked session). It is
+ * re-risked to RED at execution time or a RED action without a code). It is
  * surfaced as `requiresMfa:true` / effective tier RED with a `mfa_required` stream event — NEVER
  * flattened into a plain failure that loses the requirement.
  *
@@ -894,7 +895,8 @@ function blockedOutcome(
   opts?: ConfirmOptions,
 ): ConfirmationOutcome {
   if (view.requiresMfa) {
-    const events: AgentStreamEvent[] = [{ type: 'mfa_required', actionId }];
+    const events: AgentStreamEvent[] = view.status === 'pending' || view.status === 'awaiting_mfa'
+      ? [{ type: 'mfa_required', actionId }] : [];
     emitAll(events, opts);
     return {
       ok: false,
@@ -977,8 +979,8 @@ async function verifyActionImpl(
   }
 
   const view = viewAuth(auth);
-  // A WRONG code (⇒ `awaiting_mfa`, `mfaResult:'failed'`) or a tripped breaker (⇒ `locked`) still
-  // requires verification — surfaced as RED + `mfa_required`, never a bare failure.
+  // A wrong code can keep the existing awaiting_mfa decision. A locked/terminal outcome retains
+  // its historical RED requirement but must not request a new code.
   if (!view.ok) return blockedOutcome(actionId, view, opts);
 
   return executeAuthorizedAction(actionId, view, identity, opts);

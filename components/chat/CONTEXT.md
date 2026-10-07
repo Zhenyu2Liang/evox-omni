@@ -2,6 +2,11 @@
 
 ## Intent
 
+`actions.ts#postAction` synthesises MFA only for explicit pending/awaiting_mfa decisions. A
+historical RED/requiresMfa flag on confirmed or terminal outcomes does not reopen that action's
+verification card. Stale same-action MFA events are removed; a different next-plan action's event
+is preserved. Domain failures, including needs_reconciliation, remain visible error events.
+
 The interactive chat surface: the message list, the composer, the tool/task status timeline, the
 streaming text, and the stateful `useAgentStream` hook that folds `AgentStreamEvent`s into UI state.
 Plus the thin **client fetch helpers** the surface uses to drive `./app` action routes. All **Client

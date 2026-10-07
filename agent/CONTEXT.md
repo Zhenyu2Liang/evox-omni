@@ -2,6 +2,13 @@
 
 ## Intent
 
+Confirm/verify/replay recovery share `buildConfirmFence` + `guardExecutionFence`: the persisted
+action session is checked by security at the SDK mutation boundary. A CIRCUIT_OPEN denial is not
+normalised into a failed business result; no new side effect is landed and the action stays
+confirmed. A transfer can re-enter recovery authorization after an audited unlock; other tools
+still require proven committed evidence or manual reconciliation. Standalone recovery builds its audit from the current
+persisted authorization inside the status/result/audit transaction, including receipt fallbacks.
+
 `./agent` is the ONLY node in the codebase that talks to `@mariozechner/pi-agent-core` /
 `@mariozechner/pi-ai`. It is the runtime glue that turns the frozen contracts into a running
 banking agent. It owns, in one place:

@@ -24,6 +24,7 @@ import {
   getPendingAction,
   getPendingActionPlanLink,
   setPendingActionStatus,
+  type PendingActionWithMfa,
 } from '@/lib/db/repositories/pendingAction';
 import { getExecutionReceipt } from '@/lib/db/repositories/executionReceipt';
 import { prisma } from '@/lib/db/client';
@@ -36,7 +37,7 @@ import { recordAudit } from '@/audit';
 import { demoNow } from '@/lib/clock';
 import { committedExecutionResult } from './execution-evidence';
 import { transferExecutionAudit } from './execution-audit';
-import { buildConfirmFence } from './execution-fence';
+import { buildConfirmFence, guardExecutionFence } from './execution-fence';
 import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
 import { recovery } from '@/security';
 
@@ -228,8 +229,8 @@ export interface SettlePendingActionInput {
   result?: ToolExecutionResult;
   /** When given, land ONLY if the row currently holds one of these statuses (atomic CAS). */
   from?: PendingActionStatus[];
-  /** The execution audit entry, written INSIDE the same transaction. */
-  audit?: AuditEntry;
+  /** Audit entry, or a pure builder reading the current decision AFTER the transaction's write lock. */
+  audit?: AuditEntry | ((current: PendingActionWithMfa) => AuditEntry);
   /** Idempotency key for the audit insert — a repeat settle never duplicates the audit row. */
   dedupeKey?: string;
 }
@@ -263,8 +264,13 @@ export async function settlePendingAction(input: SettlePendingActionInput): Prom
       });
     }
     if (input.audit !== undefined) {
+      // The status write above holds the writer slot. Recovery must use the decision that is
+      // persisted NOW, not an ownership snapshot taken before a competing MFA upgrade/commit.
+      const audit = typeof input.audit === 'function'
+        ? input.audit(await tx.pendingAction.findUniqueOrThrow({ where: { id: input.actionId }, include: { mfa: true } }))
+        : input.audit;
       await recordAudit(
-        input.audit,
+        audit,
         input.dedupeKey !== undefined
           ? { client: tx, dedupeKey: input.dedupeKey, strict: true }
           : { client: tx, strict: true },
@@ -472,8 +478,7 @@ async function replayStandaloneAction(
 
   let result: ToolExecutionResult;
   let sideEffectCommitted = false;
-  let policyError: AppError | undefined;
-  const confirmFence = await buildConfirmFence(link?.taskId, link?.nodeId, actionId);
+  const guarded = guardExecutionFence(await buildConfirmFence(link?.taskId, link?.nodeId, actionId));
   const executionAudit = transferExecutionAudit(actionId, {
     sessionId: row.sessionId, userRequest: row.userRequest ?? '', intent: row.intent ?? undefined,
     toolName: row.toolName, riskLevel: tier, confirmationRequired: true, confirmed: true, mfaRequired: requiresMfa,
@@ -481,11 +486,7 @@ async function replayStandaloneAction(
   });
   try {
     result = await createToolRegistry(row.userId).executeDirect(toolName, args, {
-      idempotencyKey, fence: async tx => {
-        await confirmFence?.(tx);
-        try { recovery.assertRecoverySessionUnlocked(row.sessionId); }
-        catch (error) { policyError = AppError.from(error); throw error; }
-      },
+      idempotencyKey, fence: guarded.fence,
       onTransferCommit: executionAudit.onTransferCommit,
       onTransactionCommitted: () => { sideEffectCommitted = true; },
     });
@@ -494,7 +495,7 @@ async function replayStandaloneAction(
     result = { ok: false, error: AppError.from(e).message };
   }
 
-  if (policyError !== undefined) throw policyError;
+  guarded.assertPolicyAllowed();
   executionAudit.assertSucceeded();
   const current = await getPendingAction(actionId);
   if (current === null) throw new AppError('NOT_FOUND', '恢复操作不存在');
@@ -527,20 +528,27 @@ async function landStandalone(
     actionId,
     status,
     result,
-    audit: {
-      timestamp: demoNow(),
-      sessionId: row.sessionId,
-      userRequest: row.userRequest ?? '',
-      intent: row.intent ?? undefined,
-      toolName: row.toolName,
-      riskLevel: tier,
-      confirmationRequired: true,
-      confirmed: true,
-      mfaRequired: requiresMfa,
-      toolResult: result,
-      status: status === 'needs_reconciliation' ? 'blocked' : result.ok ? 'success' : 'failed',
-      detail: status === 'needs_reconciliation' ? '恢复：执行结果需人工核对'
-        : '恢复：按持久化操作身份核对执行结果（副作用仅一次）',
+    audit: current => {
+      // Also covers CONFLICT/CIRCUIT_OPEN receipt fallbacks, which may carry a stale caller row.
+      // Strict duplicate audit validation remains unchanged: differing facts still fail closed.
+      requiresMfa = current.requiresMfa || current.riskLevel === 'RED';
+      tier = requiresMfa ? 'RED' : current.riskLevel as RiskLevel;
+      return {
+        timestamp: demoNow(),
+        sessionId: row.sessionId,
+        userRequest: row.userRequest ?? '',
+        intent: row.intent ?? undefined,
+        toolName: row.toolName,
+        riskLevel: tier,
+        confirmationRequired: true,
+        confirmed: true,
+        mfaRequired: requiresMfa,
+        mfaResult: requiresMfa ? current.mfa?.status === 'verified' ? 'success' : undefined : 'not_required',
+        toolResult: result,
+        status: status === 'needs_reconciliation' ? 'blocked' : result.ok ? 'success' : 'failed',
+        detail: status === 'needs_reconciliation' ? '恢复：执行结果需人工核对'
+          : '恢复：按持久化操作身份核对执行结果（副作用仅一次）',
+      };
     },
     dedupeKey: convergenceAuditKey(actionId, status),
   });

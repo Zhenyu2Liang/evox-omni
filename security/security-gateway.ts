@@ -854,6 +854,12 @@ async function authorizeAction(
   // Ownership is REQUIRED (fail-closed): a missing/mismatching caller identity is refused.
   await assertOwnership(row, opts);
 
+  // Only undecided actions can request a code. A historical RED flag on a confirmed/terminal
+  // action must not reopen verification, issue a new challenge or consume an MFA attempt.
+  if (row.status !== 'pending' && row.status !== 'awaiting_mfa') {
+    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+  }
+
   const action = toContractPendingAction(row);
   const effectiveRequiresMfa = row.requiresMfa || action.tier === 'RED';
 

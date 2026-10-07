@@ -455,7 +455,7 @@ npm run build         # 生产构建（页面在构建期预渲染，必须先�
 
 ### 15.3 测试分层 / Test layers
 
-测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）。当前仓库含 **105** 个测试文件 / **703** 条测试（前三层）：
+测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）。当前仓库含 **107** 个测试文件 / **726** 条测试（前三层）：
 
 1. **纯单元测试（pure unit）** — `tests/unit/`：`security`（权限策略表、转账阈值、网关 decide、注入检测、熔断、MFA、风控）、`planner`（DAG 校验 / 拓扑序 / 成环 / 条件）、`banking-sdk`（资金不变量等）；无网络、无真实 LLM。
 2. **faux-LLM 场景集成测试（scenario）** — `tests/scenarios/test-01…test-12`：用脚本化模型（`LLM_MODE=mock` + 隔离的测试 SQLite `prisma/test.db`）驱动 **完整流水线**，逐个覆盖 12 个验收场景。
@@ -491,6 +491,10 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 恢复先核验已提交事实。若凭证缺失且恢复可能首次扣款，必须重新进入 `security/recovery-authorization.ts`：复核服务端身份、当前熔断、计划状态、当日累计及 MFA，并在 SDK 写入事务内再次检查熔断。锁定会话返回 `423 CIRCUIT_OPEN` 且不新增扣款；只读恢复已入账结果仍可进行。并发恢复不会重复计入同一笔已入账转账。
 
 人工核对审计使用 `reconcile:<actionId>`，成功执行审计保留 `exec:<actionId>`。证据矛盾时动作进入 `needs_reconciliation`，接口返回 `ok=false`；核对审计和状态同事务，审计故障回滚状态并允许稍后重试。复现与验证说明见 [本轮修复报告](docs/repair-recovery-security.md)。
+
+普通确认、MFA 确认和恢复重放现共用 SDK 写入前的熔断检查，拒绝时返回 `423 CIRCUIT_OPEN` 且不新增副作用。
+RED 终态不会再次要求验证码；并发恢复在事务内使用当前授权信息构建审计和返回结果，保留原成功审计。
+本轮保留 4 个原始复现用例，新增 19 个边界用例，详见 [确认边界修复报告](docs/repair-confirmation-boundaries.md)。
 
 **为什么会出现"楔子（wedge）"：** 动钱工具的 SDK 副作用（扣款 + 账本 `Transaction`）在**一个 `$transaction`** 内提交，而「写入执行结果 + 终态动作状态 + 审计」是**另一次 `$transaction`**。若后者回滚（或进程在两次之间死亡），就会出现**副作用已落账、`PendingAction` 却停在 `confirmed` 且 `resultJson=null`** 的行 —— 它既不是待决策的 `pending`，也还不是 `executed`。
 

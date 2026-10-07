@@ -12,6 +12,14 @@ This node is the `beforeToolCall` chokepoint and the sole authority on 🟢/🟡
 
 ## API Surface
 
+- `execution-policy.ts` exports `assertSessionMayWrite(sessionId)` through `security.writePolicy`.
+  Ordinary confirm, MFA verify and replay recovery share this breaker check inside the SDK write
+  transaction, after the action/plan conditional writes. Policy denial propagates as CIRCUIT_OPEN;
+  committed receipt-only reconstruction remains available while locked.
+- Authorization rejects confirmed/terminal actions before requesting or verifying MFA. Recovery
+  re-reads the persisted risk decision after its transaction's writer claim; a stale ownership
+  snapshot cannot downgrade a concurrent RED upgrade to YELLOW.
+
 - `recovery-authorization.ts` exports `authorizeRecoveryAction(actionId, actor)` and
   `assertRecoverySessionUnlocked(sessionId)` through `security.recovery`. Only recovery that may
   create a NEW transfer debit re-enters this policy: trusted owner/session, confirmed CAS, plan
@@ -311,7 +319,9 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
   - `recordSuccess` does NOT unlock a tripped breaker (a correct MFA code on a NON-locked path only resets the counter);
   - a correct MFA code submitted WHILE locked is rejected and does NOT unlock (`mfa.verify` checks the lock first);
   - unlock clears ALL breaker state and restarts the failure counter from 0;
-  - unlock does NOT re-authorize a previously blocked action — that `PendingAction` must be re-created (and re-confirmed/re-verified).
+  - unlock does NOT itself re-authorize an action. Undecided actions need a fresh confirm/MFA;
+    a result-less confirmed transfer must pass recovery authorization again; terminal/manual
+    outcomes are not made executable by unlocking.
 - **Injection guard never grants permission** — defense-in-depth only (see its file disclaimer).
 - **Files ≲ ~1000 lines**; split by responsibility. No inter-module cycles.
 

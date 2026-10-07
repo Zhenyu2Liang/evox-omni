@@ -502,7 +502,8 @@ export function sendChatTurn(
  *  - ESCALATION / MFA prompt (`requiresMfa && tier==='RED'`, not yet executed, NOT a failed verify):
  *    a YELLOW confirm escalated to RED, or a RED action that still needs a code. The UI must switch to
  *    the MFA card for the SAME `actionId` — never dead-end on an error. We ensure an `mfa_required`
- *    event is present (synthesised when the server omitted one) and do NOT append a spurious `error`
+ *    event is present ONLY for explicit pending/awaiting_mfa states (synthesised when omitted),
+ *    and do NOT append a spurious `error`
  *    for this non-error prompt. The reducer turns `mfa_required` into the MFA `pendingAction`.
  *  - Otherwise a `domainOk === false` outcome with no `error` event gets one appended so the UI can
  *    surface the reason — e.g. a WRONG MFA code, which the verify route legitimately reports as
@@ -528,7 +529,7 @@ async function postAction(url: string, body: Record<string, unknown>): Promise<C
 
     const record = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
     const sessionId = typeof record.sessionId === 'string' ? record.sessionId : '';
-    const events = Array.isArray(record.events) ? [...(record.events as AgentStreamEvent[])] : [];
+    let events = Array.isArray(record.events) ? [...(record.events as AgentStreamEvent[])] : [];
     const domainOk = record.ok;
     const message = typeof record.message === 'string' ? record.message : undefined;
     const actionId = typeof record.actionId === 'string' ? record.actionId : undefined;
@@ -538,10 +539,16 @@ async function postAction(url: string, body: Record<string, unknown>): Promise<C
     const mfaResult = typeof record.mfaResult === 'string' ? record.mfaResult : undefined;
 
     const executed = domainOk === true || status === 'executed' || status === 'confirmed';
+    const awaitingDecision = status === 'pending' || status === 'awaiting_mfa';
+    // A historical RED requirement is not a new verification decision. Preserve events for any
+    // DIFFERENT action parked by a resumed plan, but never reopen this action's terminal card.
+    if (status !== undefined && !awaitingDecision && actionId !== undefined) {
+      events = events.filter(event => event.type !== 'mfa_required' || event.actionId !== actionId);
+    }
 
     // ESCALATION / MFA prompt (see doc comment). A WRONG code (`mfaResult === 'failed'`) is a real
     // failure and intentionally falls through to the error-appending branch below.
-    if (requiresMfa && tier === 'RED' && !executed && mfaResult !== 'failed') {
+    if (awaitingDecision && requiresMfa && tier === 'RED' && !executed && mfaResult !== 'failed') {
       const hasMfaEvent = events.some((event) => event.type === 'mfa_required');
       if (!hasMfaEvent && actionId !== undefined) {
         events.push({ type: 'mfa_required', actionId });
