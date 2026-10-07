@@ -259,7 +259,9 @@ export async function settlePendingAction(input: SettlePendingActionInput): Prom
     if (input.audit !== undefined) {
       await recordAudit(
         input.audit,
-        input.dedupeKey !== undefined ? { client: tx, dedupeKey: input.dedupeKey } : { client: tx },
+        input.dedupeKey !== undefined
+          ? { client: tx, dedupeKey: input.dedupeKey, strict: true }
+          : { client: tx, strict: true },
       );
     }
     return true;
