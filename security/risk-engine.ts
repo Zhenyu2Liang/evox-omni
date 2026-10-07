@@ -11,7 +11,8 @@ import type { RiskLevel } from '../lib/contracts/risk';
 import { DAILY_TRANSFER_LIMIT } from '../lib/constants';
 import { demoNow } from '../lib/clock';
 import { startOfDay } from '../lib/date';
-import { formatCNY, parseAmount } from '../lib/money';
+import { formatCNY, moneyToCents, normalizeTransferAmount } from '../lib/money';
+import { AppError } from '../lib/errors';
 import { safeParse } from '../lib/json';
 import { prisma } from '../lib/db/client';
 import { listTransactions } from '../lib/db/repositories/transaction';
@@ -54,6 +55,13 @@ export type PrismaLike = Prisma.TransactionClient | typeof prisma;
  */
 const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const;
 
+/** Sum canonical cents, never floating-point yuan at the authorization boundary. */
+function sumTransferAmounts(amounts: number[]): number {
+  const cents = amounts.reduce((sum, amount) => sum + moneyToCents(amount), 0);
+  if (!Number.isSafeInteger(cents)) throw new AppError('VALIDATION', '累计转账金额超出安全范围。');
+  return cents / 100;
+}
+
 /**
  * Sum the amounts of `userId`'s IN-FLIGHT (authorized-but-not-yet-ledgered) parked
  * `transfer_money` PendingActions, using the caller's Prisma surface (client OR tx) so it
@@ -72,7 +80,7 @@ const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const;
  * ¥600 actions with no ledger rows still sum to ¥1200.
  *
  * The amount lives inside the JSON `argsJson` blob, so each row is parsed defensively: a
- * malformed/unparsable row (or a non-finite amount) is SKIPPED, never thrown on.
+ * malformed/unparsable or fractional-cent amounts fail closed; they must never reduce the total.
  */
 export async function computeInFlightTransferTotal(
   client: PrismaLike,
@@ -100,14 +108,13 @@ export async function computeInFlightTransferTotal(
   });
   const alreadyLedgered = new Set(existingLedgerRows.map((tx) => tx.id));
 
-  let total = 0;
+  const amounts: number[] = [];
   for (const row of rows) {
     if (alreadyLedgered.has(ledgerTxIdForAction(userId, row))) continue;
     const args = safeParse<Record<string, unknown>>(row.argsJson, {});
-    const amount = parseAmount(args.amount as string | number | null | undefined);
-    if (Number.isFinite(amount)) total += amount;
+    amounts.push(normalizeTransferAmount(args.amount));
   }
-  return total;
+  return sumTransferAmounts(amounts);
 }
 
 /**
@@ -132,7 +139,7 @@ async function computeExecutedDailyTransferTotalWith(
     },
   });
   // DEBIT amounts are stored negative; the aggregate reported is the ABSOLUTE total.
-  return rows.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
+  return sumTransferAmounts(rows.map(tx => Math.abs(tx.amount)));
 }
 
 /**
@@ -158,7 +165,7 @@ export async function computeEffectiveTransferTotalWith(
 ): Promise<number> {
   const executed = await computeExecutedDailyTransferTotalWith(client, userId, now);
   const inFlight = await computeInFlightTransferTotal(client, userId, excludeActionId);
-  return executed + inFlight;
+  return sumTransferAmounts([executed, inFlight]);
 }
 
 /**
@@ -167,12 +174,17 @@ export async function computeEffectiveTransferTotalWith(
  * otherwise YELLOW. Transfers ALWAYS require user confirmation.
  */
 export function evaluateTransferRisk(input: TransferRiskInput): TransferRiskResult {
-  const { amount, dailyTransferTotal } = input;
-  const projectedDailyTotal = dailyTransferTotal + amount;
+  const amountCents = moneyToCents(input.amount);
+  const dailyCents = moneyToCents(input.dailyTransferTotal);
+  if (amountCents < 0 || dailyCents < 0) throw new AppError('VALIDATION', '转账金额及累计金额不能为负。');
+  const amount = amountCents / 100;
+  const dailyTransferTotal = dailyCents / 100;
+  const projectedDailyTotal = sumTransferAmounts([dailyTransferTotal, amount]);
 
   // STRICT `>`: an amount of exactly the limit (or a projected total of exactly the limit) stays YELLOW.
-  const amountOverLimit = amount > DAILY_TRANSFER_LIMIT;
-  const dailyOverLimit = projectedDailyTotal > DAILY_TRANSFER_LIMIT;
+  const limitCents = moneyToCents(DAILY_TRANSFER_LIMIT);
+  const amountOverLimit = amountCents > limitCents;
+  const dailyOverLimit = moneyToCents(projectedDailyTotal) > limitCents;
   const red = amountOverLimit || dailyOverLimit;
 
   const reasons: string[] = [];
@@ -225,7 +237,7 @@ export async function computeDailyTransferTotal(userId: string, now?: number): P
     direction: 'DEBIT',
   });
   // DEBIT amounts are stored negative; the repository call this replaced returned the ABSOLUTE total.
-  return rows.reduce((sum, tx) => sum + Math.abs(tx.amount), 0);
+  return sumTransferAmounts(rows.map(tx => Math.abs(tx.amount)));
 }
 
 /**

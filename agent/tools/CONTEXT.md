@@ -126,6 +126,10 @@ into the node's at-most-once key.
 
 ## Constraints
 
+- Pi's automatic tool execution receives the server-built `automaticWriteFence` from the registry,
+  scoped by `withBankingExecution`. It is not a model argument. Plan-node calls use their own composed
+  session/plan fence. `submit_plan` itself is excluded from the outer context so each node owns its check.
+
 - **Capability only — never gating.** No permission/risk/MFA/daily-limit computation here; that is
   `security/`'s sole authority, enforced in the agent's `beforeToolCall`.
 - **`userId` is server-injected.** Tools close over the `userId` from `createToolRegistry(userId)`;

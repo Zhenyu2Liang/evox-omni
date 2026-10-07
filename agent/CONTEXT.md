@@ -416,6 +416,10 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
 
 ## Constraints (hard, encode in every file)
 
+- Automatic writes compose `buildAutomaticWriteFence(sessionId, taskId?, nodeId?)` with the plan/node
+  claim where present. Standalone Pi `AgentTool.execute` is also scoped by trusted SDK context; checking
+  only `beforeToolCall` cannot stop a breaker tripped during an in-flight call.
+
 - **NEVER register a bash/shell/write/edit/file/SQL/system/http tool.** The model's ONLY capabilities
   are the registered banking tools + `submit_plan`. An injection asking for a shell/SQL tool has **no
   tool to call**. The tool registry is the complete and exhaustive capability set.

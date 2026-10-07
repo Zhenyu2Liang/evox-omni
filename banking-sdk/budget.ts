@@ -2,7 +2,7 @@
  * Banking SDK — budget reservations. `listBudgets` is a GREEN read; `reserveBudget` / `releaseBudget`
  * execute only (tier policy lives in `security/`).
  *
- * `reserveBudget` accepts an OPTIONAL `idempotencyKey`: a repeat with the SAME key replays the
+ * `reserveBudget` accepts an OPTIONAL `idempotencyKey`: a repeat by the SAME user/key replays the
  * already-persisted reservation instead of creating a second row (see `./idempotent.ts`).
  */
 import type { Budget } from '@prisma/client';
@@ -52,7 +52,8 @@ function reservationData(input: ReserveBudgetInput): {
  * Reserve a budget envelope; returns the created budget.
  *
  * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, a repeated call with the
- * SAME key replays the persisted reservation (same `id`, no second row). Absent → unchanged behavior.
+ * SAME user/key replays the persisted reservation (same `id`, no second row). Another user's local
+ * key is independent. Absent → unchanged behavior.
  *
  * An optional execution fence MAY be carried on `input` (see `./fence`); when present it is awaited
  * INSIDE the write transaction, immediately BEFORE the insert — a fence that throws rolls the
@@ -69,7 +70,11 @@ export async function reserveBudget(input: ReserveBudgetInput): Promise<BudgetVi
     const replayed = await createIdempotent<Budget>({
       key,
       fence,
-      find: (tx) => tx.budget.findUnique({ where: { idempotencyKey: key } }),
+      // This callback is also used by createIdempotent's unique-conflict fallback. Both reads
+      // resolve only this owner's execution identity; a foreign row can never be replayed.
+      find: (tx) => tx.budget.findUnique({ where: {
+        userId_idempotencyKey: { userId: input.userId, idempotencyKey: key },
+      } }),
       create: (tx, replayKey) =>
         tx.budget.create({ data: { ...reservationData(input), idempotencyKey: replayKey } }),
     });

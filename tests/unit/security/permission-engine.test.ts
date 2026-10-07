@@ -237,14 +237,13 @@ describe('permission-engine · evaluateTool · dynamic transfer + meta', () => {
     });
   });
 
-  it('transfer_money accepts string amounts (¥-prefixed / formatted) and tolerates a missing amount', () => {
+  it('transfer_money accepts formatted amounts and rejects missing amounts before authorization', () => {
     const formatted = evaluateTool('transfer_money', { amount: '¥1,500' }, makeCtx());
     expect(formatted.tier).toBe('RED');
     expect(formatted.requiresMfa).toBe(true);
 
-    // Missing amount → parseAmount yields 0 → YELLOW (never NaN/RED).
-    const missing = evaluateTool('transfer_money', {}, makeCtx({ dailyTransferTotal: 0 }));
-    expect(missing).toMatchObject({ tier: 'YELLOW', requiresConfirmation: true, requiresMfa: false });
+    expect(() => evaluateTool('transfer_money', {}, makeCtx({ dailyTransferTotal: 0 })))
+      .toThrowError(expect.objectContaining({ code: 'VALIDATION' }));
   });
 
   it('submit_plan → allow: requiresConfirmation false, requiresMfa false', () => {

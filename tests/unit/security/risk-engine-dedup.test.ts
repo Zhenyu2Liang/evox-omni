@@ -118,14 +118,15 @@ describe('risk-engine · computeInFlightTransferTotal · ledger dedup', () => {
     expect(await computeInFlightTransferTotal(client, USER_ID, 'act_b')).toBe(300);
   });
 
-  it('skips a malformed/non-finite amount rather than throwing', async () => {
+  it('fails closed on a malformed/non-finite amount instead of undercounting authorized work', async () => {
     const client = stubClient([
       parkedTransfer('act_bad_json', 0, { argsJson: '{ not json' }),
       parkedTransfer('act_bad_amount', 0, { argsJson: JSON.stringify({ amount: 'abc' }) }),
       parkedTransfer('act_ok', 250),
     ]);
 
-    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe(250);
+    await expect(computeInFlightTransferTotal(client, USER_ID))
+      .rejects.toMatchObject({ code: 'VALIDATION' });
   });
 
   it('scopes to the given userId and to transfer_money actions only', async () => {

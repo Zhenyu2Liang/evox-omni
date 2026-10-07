@@ -26,6 +26,7 @@ import type { TaskPlan } from '@/lib/contracts/task';
 import { security } from '@/security';
 import { createToolRegistry, type ToolRegistry } from './tools';
 import { executeGatedTool } from './confirmation';
+import { buildAutomaticWriteFence } from './execution-fence';
 import { resolveModel } from './providers';
 import { buildSystemPrompt } from './system-prompt';
 import type { SessionSnapshot } from './session';
@@ -118,6 +119,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   // `userId` is SERVER-INJECTED here — never taken from tool args or model text. The planner's node
   // runner is the gateway-authorized execution path, so a gated plan node still parks for a human.
   const registry = createToolRegistry(userId, {
+    automaticWriteFence: () => buildAutomaticWriteFence(sessionId),
     submitPlan: {
       sessionId,
       runTool: (toolName, args, ctx) =>

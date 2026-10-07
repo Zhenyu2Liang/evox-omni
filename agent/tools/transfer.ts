@@ -27,7 +27,7 @@ export const TransferMoneyParams = Type.Object({
   contactId: Type.Optional(Type.String({ description: '收款联系人 id（优先）' })),
   phone: Type.Optional(Type.String({ description: '或按手机号指定收款人' })),
   name: Type.Optional(Type.String({ description: '或按姓名指定收款人（重名时报冲突）' })),
-  amount: Type.Number({ description: '转账金额（正数，CNY）' }),
+  amount: Type.Number({ description: '转账金额（正数，CNY，最多两位小数）' }),
   remark: Type.Optional(Type.String({ description: '转账备注' })),
   sourceAccountId: Type.Optional(Type.String({ description: '付款账户；默认主活期账户' })),
 });

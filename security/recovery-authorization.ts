@@ -3,7 +3,7 @@ import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import { getSession } from '@/lib/db/repositories/session';
 import { AppError } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
-import { parseAmount } from '@/lib/money';
+import { normalizeTransferAmount } from '@/lib/money';
 import { demoNow } from '@/lib/clock';
 import { ledgerTxIdForAction } from '@/lib/ledger';
 import { recordSecurityEvent } from '@/audit';
@@ -28,8 +28,7 @@ export async function authorizeRecoveryAction(actionId: string, actor: ActionOwn
   assertRecoverySessionUnlocked(actor.sessionId);
   if (row.toolName !== 'transfer_money') throw new AppError('SECURITY_DENIED', '该工具不允许重新执行业务恢复。');
   const args = safeParse<Record<string, unknown>>(row.argsJson, {});
-  const amount = parseAmount(args.amount as number | string | undefined);
-  if (!Number.isFinite(amount) || amount <= 0) throw new AppError('VALIDATION', '待恢复转账金额无效。');
+  const amount = normalizeTransferAmount(args.amount);
 
   const outcome = await prisma.$transaction(async tx => {
     // First write serializes this authorization against other transfers and cancellations.

@@ -157,6 +157,27 @@ export async function buildPlanNodeFence(
 }
 
 /**
+ * Automatic tools need the same write-time breaker check as human-confirmed actions.
+ * The session is injected by the server, never obtained from tool arguments. Compose it with
+ * plan ownership when present; standalone calls still receive a fence. A committed-result read
+ * does not enter a mutation transaction and remains available without creating a new side effect.
+ */
+export async function buildAutomaticWriteFence(
+  sessionId: string,
+  taskId?: string,
+  nodeId?: string,
+): Promise<ExecutionFenceCheck> {
+  const planFence = await buildPlanNodeFence(taskId, nodeId);
+  return async client => {
+    await planFence?.(client);
+    // Standalone calls have no plan CAS: obtain the SQLite writer slot before checking the
+    // session policy, just as confirmed writes do. This is an identity-preserving write.
+    await client.agentSession.updateMany({ where: { id: sessionId }, data: { id: sessionId } });
+    writePolicy.assertSessionMayWrite(sessionId);
+  };
+}
+
+/**
  * Build the fence for a CONFIRM/VERIFY continuation.
  *
  * The continuation's authority is the ACTION's own exactly-once gateway claim plus its execution

@@ -46,7 +46,7 @@ import { getSession } from '../lib/db/repositories/session';
 import { prisma } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 import { safeParse } from '../lib/json';
-import { formatCNY, parseAmount } from '../lib/money';
+import { formatCNY, normalizeTransferAmount, parseAmount } from '../lib/money';
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
 import type { ErrorCode } from '../lib/errors';
@@ -483,6 +483,9 @@ async function gatewayCreatePendingAction(
   ctx: GatewayContext,
   ev: SecurityEvaluation,
 ): Promise<PendingAction | null> {
+  if (ctx.toolName === 'transfer_money') {
+    ctx = { ...ctx, args: { ...ctx.args, amount: normalizeTransferAmount(ctx.args.amount) } };
+  }
   // A plan node that is re-parked for the same operation reuses its existing action (and its
   // existing MFA challenge) instead of minting a duplicate.
   const reusable = await findReusableAction(ctx, ev);
@@ -708,33 +711,10 @@ async function authorizeTransfer(
   action: PendingAction,
   opts: AuthorizeOptions,
 ): Promise<AuthorizationResult> {
+  const amount = normalizeTransferAmount(safeParse<Record<string, unknown>>(row.argsJson, {}).amount);
   const effectiveRequiresMfa = row.requiresMfa || action.tier === 'RED';
   if (effectiveRequiresMfa) {
     return authorizeWithMfa(row.id, row, action, opts);
-  }
-
-  const amount = resolveAmount(safeParse<Record<string, unknown>>(row.argsJson, {}));
-  if (amount === undefined) {
-    // Un-parsable amount — cannot re-risk. Fall back to a plain confirmation-only claim (defensive;
-    // the gateway always persists validated tool args).
-    const claimed = await claimPendingAction({
-      actionId: row.id,
-      from: ['pending'],
-      to: 'confirmed',
-      userId: row.userId,
-      sessionId: row.sessionId,
-    });
-    if (!claimed) throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
-    return {
-      ok: true,
-      status: 'confirmed',
-      actionId: row.id,
-      tier: action.tier,
-      requiresMfa: false,
-      mfaResult: 'not_required',
-      message: CONFIRM_OK_MESSAGE,
-      action: { ...action, status: 'confirmed' },
-    };
   }
 
   // ONE transaction: the CAS claim (a WRITE ⇒ serializing SQLite write lock) FIRST, THEN the

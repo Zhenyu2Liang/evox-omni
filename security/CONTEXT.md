@@ -55,7 +55,9 @@ type PrismaLike = Prisma.TransactionClient | typeof prisma   // the shared clien
 const IN_FLIGHT_TRANSFER_STATUSES = ['confirmed', 'executing'] as const
 function evaluateTransferRisk(input: TransferRiskInput): TransferRiskResult     // RED iff amount>1000 || total+amount>1000 (STRICT `>`; exactly ¥1000 stays YELLOW), else YELLOW; always requiresConfirmation
 async function computeDailyTransferTotal(userId: string, now?: number): Promise<number>   // EXECUTED only: sum OUTGOING TRANSFER debits with occurredAt in [startOfDay(now), now] (INCLUSIVE both ends; future-dated rows excluded)
-async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>   // sum of in-flight (status confirmed|executing) parked transfer_money args.amount, minus excludeActionId; a malformed row is SKIPPED (never throws); an action whose deterministic ledger row `ledgerTxIdForAction(userId, action)` ALREADY EXISTS is EXCLUDED (already counted by the executed half)
+async function computeInFlightTransferTotal(client: PrismaLike, userId: string, excludeActionId?: string): Promise<number>
+// Sums integer cents of confirmed|executing transfers; invalid amounts fail closed. Excludes the
+// current action and actions whose ledgerTxIdForAction already exists (counted by the executed half).
 async function computeEffectiveTransferTotalWith(client: PrismaLike, userId: string, now?: number, excludeActionId?: string): Promise<number>   // EXECUTED-today transfer debits + in-flight PendingActions, through `client` (so it runs INSIDE a `$transaction`)
 async function reEvaluateTransferRisk(userId: string, amount: number, now?: number): Promise<TransferRiskResult>   // EXECUTED-only re-risk: computeDailyTransferTotal FRESH then evaluateTransferRisk
 ```
@@ -271,6 +273,10 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 `lib/contracts/tools.ts` (26 members; every member has a `TOOL_POLICY` entry and a `TOOL_INTENT` label).
 
 ## Constraints
+
+- Transfer authorization rejects fractional cents and invalid amounts before creating a pending action;
+  all day/in-flight totals and threshold comparisons sum canonical integer cents. Invalid persisted
+  in-flight amounts fail closed instead of being omitted. New-debit recovery uses the same validator.
 
 - **LLM-immutable**: tier / confirmation / MFA are computed only from `TOOL_POLICY`, the validated
   `amount`, and `ctx.dailyTransferTotal`. Model output and user text are NEVER inputs to the decision.

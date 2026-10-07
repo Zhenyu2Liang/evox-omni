@@ -41,7 +41,7 @@ import { executionReceiptId, idempotentTransferTxId, requestDigest } from '@/lib
 import { accounts, contacts, executionReceipts, transactions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { safeParse, toJson } from '../lib/json';
-import { parseAmount, round2 } from '../lib/money';
+import { normalizeTransferAmount, parseAmount, round2 } from '../lib/money';
 import { toContactView } from './contact';
 import { readExecutionFence } from './fence';
 import { isUniqueViolation } from './idempotent';
@@ -245,10 +245,7 @@ async function resolveFundingAccount(userId: string, input: TransferInput): Prom
  * (no debit), and the committed fact is replayed ONLY after its request digest is verified.
  */
 export async function createTransfer(input: TransferInput): Promise<TransferResult> {
-  const amount = round2(parseAmount(input.amount));
-  if (!Number.isFinite(amount) || amount <= 0) {
-    throw new AppError('VALIDATION', `Transfer amount must be a positive number (received: ${input.amount})`);
-  }
+  const amount = normalizeTransferAmount(input.amount);
 
   const key = input.idempotencyKey?.trim();
   const fence = readExecutionFence(input);

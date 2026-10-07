@@ -142,6 +142,8 @@ export interface ToolRegistry {
 
 /** Injection the agent supplies so the `submit_plan` meta-tool can run its DAG through the gateway. */
 export interface CreateToolRegistryOptions {
+  /** Trusted write-boundary check for Pi's automatic execution path, supplied by its session owner. */
+  automaticWriteFence?: () => Promise<ExecutionFenceCheck>;
   /** Required for a usable `submit_plan`; the agent binds its session + gateway-routed `runTool`. */
   submitPlan?: SubmitPlanDeps;
 }
@@ -257,6 +259,24 @@ export function createToolRegistry(
       ? createSubmitPlanTool(userId, submitPlanDeps)
       : createUnconfiguredSubmitPlanTool(),
   };
+
+  // Pi invokes AgentTool.execute directly after beforeToolCall. Scope the trusted SDK context here
+  // too, so a breaker tripped while a GREEN tool was in flight cannot bypass the transaction fence.
+  // submit_plan creates its own per-node contexts through executeGatedTool and must not inherit one.
+  if (opts?.automaticWriteFence) {
+    const buildFence = opts.automaticWriteFence;
+    for (const name of TOOL_NAMES) {
+      if (name === 'submit_plan') continue;
+      const tool = tools[name];
+      const execute = tool.execute.bind(tool);
+      tools[name] = {
+        ...tool,
+        execute: async (...args: Parameters<typeof execute>) => withBankingExecution(
+          { fence: await buildFence() }, () => execute(...args),
+        ),
+      };
+    }
+  }
 
   // Model-free runners: also exhaustive over `ToolName` (missing key ⇒ compile error). `userId` is
   // the closed-over one — it is NEVER read from `args`. Every runner may accept the optional `opts`;

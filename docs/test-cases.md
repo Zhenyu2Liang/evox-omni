@@ -1,12 +1,14 @@
 # 测试用例文档 · Test Cases & Demo Scenarios
 
+`tests/repair-money-budget-boundaries.test.ts`（17 例，真实 HTTP/Pi/SDK/SQLite）覆盖：超精度转账拒绝、历史非法待办与在途金额失败关闭、合法分值并发累计/MFA、聊天/独立/计划预算写入时熔断、跨用户同 key 隔离及同用户并发重放。金额兼容性、原子累计、确认恢复与计划执行权的既有测试继续保留。
+
 新增 `tests/review-e819d6e-boundaries.test.ts`（原始 4 例不变）及 `tests/repair-confirmation-boundaries.test.ts`（19 例）：
 普通确认/MFA 写入前熔断、审计解锁后幂等恢复、卡片写入保护、RED 终态展示、并发恢复授权元数据及严格审计校验。
 详情见 [确认边界修复报告](repair-confirmation-boundaries.md)。
 
 上轮 `tests/review-95ff994-additional.test.ts` 保留原始三例，覆盖恢复绕过熔断、跨用户卡片写入、矛盾凭证与成功审计共存时的人工核对。
 `tests/repair-recovery-security.test.ts`（15 例）继续覆盖恢复权限、资源归属与核对审计原子性；上轮行为与测试保留。
-完整全量现为 107 文件 / 726 用例。上轮证据见 [恢复安全修复报告](repair-recovery-security.md)。
+既有测试证据见 [恢复安全修复报告](repair-recovery-security.md)；当前命令与结果见 [金额与预算安全边界](money-budget-boundaries.md)。
 
 > 测试套件是 AI Banking Agent 演示的**验收标准（acceptance bar）**，用 **Vitest** 写成，
 > **完全离线、确定性**运行（无网络、无需 API key）。此外还有一个**独立于 Vitest** 的真实浏览器

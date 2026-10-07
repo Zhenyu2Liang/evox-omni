@@ -348,7 +348,7 @@ export interface ReserveBudgetInput {
   dueDate?: number;
   /**
    * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT create a
-   * second budget: the already-persisted reservation is replayed (same `id`) instead. The planner
+     * second budget for this user: only that owner's persisted reservation is replayed (same `id`). The planner
    * passes `nodeExecutionKey(taskId, nodeId)`. Absent → unchanged behavior.
    */
   idempotencyKey?: string;

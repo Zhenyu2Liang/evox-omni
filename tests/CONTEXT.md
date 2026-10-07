@@ -261,6 +261,11 @@ This depends on a deliberately fast SQLite configuration; if any piece is droppe
 
 ## Current transaction-boundary regressions
 
+- `repair-money-budget-boundaries.test.ts` (17 real integration cases): fractional-cent rejection,
+  legacy invalid in-flight amounts, concurrent cent thresholds/MFA, GREEN budget write-time breaker
+  checks through Pi chat/standalone/plan, and user-scoped budget replay. Seeded historical ledger rows
+  are preserved and compared against their pre-operation values.
+
 - `./review-unclosed-boundaries.test.ts` — four unchanged reviewer probes: post-commit SDK exception,
   pre-receipt ledger recovery, cancellation before a card-limit write, and required-audit rollback.
   Baseline `c1d2b55`: 0/4 pass; repaired branch: 4/4 pass.

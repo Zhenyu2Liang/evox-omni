@@ -191,14 +191,14 @@ model Budget {
   purpose   String?
   status    String    @default("RESERVED") // "RESERVED" | "USED" | "RELEASED"
   dueDate   DateTime?
-  // Replay key: `<planId>:<nodeId>` so a replayed plan node replays the existing reservation
-  // instead of duplicating it. NULL for rows created outside the planner. SQLite UNIQUE allows
-  // multiple NULLs, so pre-existing rows are unaffected.
-  idempotencyKey String? @unique
+  // Replay identity belongs to a user: another user's identical local key is independent.
+  // NULL remains allowed for calls without a replay key.
+  idempotencyKey String?
   createdAt DateTime  @default(now())
 
   user User @relation(fields: [userId], references: [id])
 
+  @@unique([userId, idempotencyKey])
   @@index([userId])
 }
 

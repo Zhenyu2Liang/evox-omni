@@ -75,8 +75,8 @@ All new fields below are **optional/nullable**, so existing rows and tests keep 
   `AgentTaskNode.executionToken`/`executionClaimedAt` claim a single node's side effect (so concurrent
   executors cannot double-execute a node). The winning executor sets a unique token; a concurrent
   executor that cannot claim it must NOT run. `NULL` = unclaimed.
-- **Plan-replay keys** — `Budget.idempotencyKey`, `ScheduledTask.idempotencyKey` and
-  `InvestmentHolding.idempotencyKey` are `@unique`; the value is `<planId>:<nodeId>`, so a REPLAYED
+- **Plan-replay keys** — Budget uses `@@unique([userId, idempotencyKey])`; `ScheduledTask.idempotencyKey` and
+  `InvestmentHolding.idempotencyKey` are `@unique`; the plan key is `nxe:<planId>:<nodeId>`, so a REPLAYED
   plan node replays its existing reservation/scheduled task/holding instead of duplicating it. SQLite
   allows multiple `NULL`s in a UNIQUE index, so rows created outside the planner (and all pre-existing
   rows) are unaffected.

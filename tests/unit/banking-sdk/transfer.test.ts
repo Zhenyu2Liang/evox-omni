@@ -201,13 +201,18 @@ describe('banking-sdk/transfer · result fidelity', () => {
     expect(whole.amount).toBe(200);
     expect(whole.newBalance).toBe(23380);
 
-    // Sub-cent input is rounded to 2 decimals and echoed on the result + the ledger row.
-    const fractional = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 123.456 });
+    // The authorized cent amount is echoed exactly; sub-cent input must not be silently rounded.
+    const fractional = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 123.46 });
     expect(fractional.amount).toBe(123.46);
 
     const rows = await transferRows();
     const written = rows.find((row) => row.id === fractional.transactionId);
     expect(written?.amount).toBe(-123.46);
+    const beforeBalance = await banking.account.getBalance(DEMO_USER_ID);
+    await expect(transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 123.456 }))
+      .rejects.toMatchObject({ code: 'VALIDATION' });
+    expect(await transferRows()).toEqual(rows);
+    expect(await banking.account.getBalance(DEMO_USER_ID)).toEqual(beforeBalance);
   });
 
   it('sourceAccountId defaults to the primary CHECKING account when omitted', async () => {

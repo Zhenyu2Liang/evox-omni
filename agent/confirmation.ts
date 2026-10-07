@@ -54,7 +54,7 @@ import { AppError } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
 import { ledgerKeyForAction, nodeExecutionKey } from '@/lib/ledger';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
-import { buildConfirmFence, buildPlanNodeFence, guardExecutionFence } from './execution-fence';
+import { buildAutomaticWriteFence, buildConfirmFence, guardExecutionFence } from './execution-fence';
 import { resumeTurn } from './run-turn';
 import type { RunTurnDeps } from './run-turn';
 import { findTaskByPendingAction, resumeTaskForAction } from './task-control';
@@ -560,16 +560,12 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     // A PLAN-NODE call passes its NODE idempotency key so a re-run of the SAME node (a replay, a
     // resume, a retry) replays its SDK-level side effect instead of repeating it; a standalone call
     // takes no key. (`executeDirect` forwards `idempotencyKey` to every runner.)
-    const opts =
-      ctx.taskId !== undefined && ctx.nodeId !== undefined
-        ? {
-            idempotencyKey: nodeExecutionKey(ctx.taskId, ctx.nodeId),
-            // WRITE-BOUNDARY fence: the SDK awaits it inside its write transaction, so a GREEN plan
-            // node whose plan was taken over / cancelled while its tool call was in flight commits
-            // NO side effect.
-            fence: await buildPlanNodeFence(ctx.taskId, ctx.nodeId),
-          }
-        : undefined;
+    const opts = {
+      ...(ctx.taskId !== undefined && ctx.nodeId !== undefined
+        ? { idempotencyKey: nodeExecutionKey(ctx.taskId, ctx.nodeId) }
+        : {}),
+      fence: await buildAutomaticWriteFence(ctx.sessionId, ctx.taskId, ctx.nodeId),
+    };
     const result = await registry.executeDirect(ctx.toolName, ctx.args, opts);
     return {
       ok: result.ok,

@@ -348,6 +348,8 @@ cp .env.example .env
 
 ### 12.1 迁移 / 部署 / Migration & deploy
 
+预算索引升级及金额/自动写入契约见 [金额与预算安全边界](docs/money-budget-boundaries.md)。旧库应用本次复合唯一索引时，Prisma 会要求确认唯一约束警告；核对 schema 差异后使用 `npm run db:push -- --skip-generate --accept-data-loss`，不使用 `--force-reset`。既有业务库升级不执行 `db:seed`；种子流程仅用于初始化演示库。
+
 > **本项目使用 `prisma db push` 工作流：仓库 `prisma/` 目录下 *没有* `migrations/` 子目录。**
 > 请**不要**去寻找或等待迁移文件 —— schema 直接 push 到 SQLite。
 
@@ -355,7 +357,7 @@ cp .env.example .env
 
 - `PendingAction.taskId?` / `nodeId?` 与 `@@index([taskId])` —— 把待办动作关联到计划任务节点（供计划级取消批量撤销）。
 - `AgentTask.executionToken?` / `executionClaimedAt?` 与 `AgentTaskNode.executionToken?` / `executionClaimedAt?` —— 计划级 / 节点级执行的原子 claim。
-- `Budget.idempotencyKey? @unique`、`ScheduledTask.idempotencyKey? @unique`、`InvestmentHolding.idempotencyKey? @unique` —— 幂等写入 / 去重（同 key 重复执行只落一行；投资申购不二次扣款）。
+- `Budget.idempotencyKey?` + `@@unique([userId, idempotencyKey])` —— 预算按用户与执行 key 去重，不同用户的相同 key 相互独立。`ScheduledTask.idempotencyKey? @unique`、`InvestmentHolding.idempotencyKey? @unique` 保持各自原有约束。
 - `ExecutionReceipt`（`id` / `userId` / `key` / `toolName` / `requestDigest` / `resultJson`＝**原始结果**的 JSON 快照 / `txId?` / `createdAt`，`@@unique([userId, key])`）—— **提交事实优先（committed-fact-first）** 的结算凭据（同身份 + 同 `requestDigest` 重放原始结果，异 digest 显式拒绝；见 §9）。
 - `AgentTask.generation Int @default(0)` —— 计划执行的 **generation（代际）** 标记，用于执行权 / 代际 fencing，并随 `plan_update` 事件发布。
 - `PendingAction.executionLeaseOwner String?` / `PendingAction.executionLeaseExpiresAt DateTime?` —— 持久化 **执行租约**（`EXECUTION_LEASE_TTL_MS = 120000`，仅对 `pending` / `awaiting_mfa` 取，驱动 `classifyConfirmedAction` 的 `processing` 判定）。
@@ -612,4 +614,4 @@ RED 终态不会再次要求验证码；并发恢复在事务内使用当前授�
 - 正常确认与恢复共用交易证据核验；成功回执必须匹配请求摘要和实际流水。历史无回执流水逐字段核验，无法核验时进入人工核对。历史姓名来自流水；原始交易后余额无法还原时省略，不能以当前余额代替。
 - 真实 SDK 写入统一进入事务并执行服务端条件写入保护；取消先提交则阻止新写入，业务先提交则保留真实事实。resume/retry 返回最新持久化计划状态。
 - 转账扣款、流水、回执、关键执行审计同事务；审计失败全部回滚。操作结果/终态后续结算，结算失败依靠已提交事实恢复。其他工具的业务写入与状态审计仍分开；未知结果停止并进入人工核对，不能承诺自动恢复。
-- 不改变 schema，不清理开发库；多进程竞争、真实支付通道仍未验证。
+- 预算幂等索引为 `@@unique([userId, idempotencyKey])`；升级既有数据只应用 schema，不运行 seed/reset。多进程竞争、真实支付通道仍未验证。
