@@ -329,7 +329,7 @@ cp .env.example .env
 
 `User`、`Account`、`Transaction`、`Contact`、`Card` / `CardLimit`、`Subscription`、
 `InvestmentProduct` / `InvestmentHolding`、`Budget`、`ScheduledTask`、
-`AgentTask` / `AgentTaskNode`、`AuditLog`、`SecurityEvent`、`AgentSession`、`PendingAction` / `MfaChallenge`。
+`AgentTask` / `AgentTaskNode`、`ExecutionReceipt`、`AuditLog`、`SecurityEvent`、`AgentSession`、`PendingAction` / `MfaChallenge`。
 
 种子锚定 **演示时钟** `DEMO_NOW = 2026-09-25 12:00`（见第 16 节）：
 2026 年 9 月为"本月"，2026 年 8 月为"上月"（用于环比）。表内金额一律为 **有符号 CNY**（负数 = 支出/流出）。
@@ -455,8 +455,8 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 
 ### 15.4 实测表面 / Measured surface
 
-- **页面 7 个**：`/`（仪表盘）、`/agent`（AI 助手）、`/bills`（账单）、`/cards`（卡片）、`/subscriptions`（订阅）、`/security`（安全中心）、`/audit`（审计）。
-- **API 路由处理器 15 个**：`/api/chat`、`/api/actions`、`/api/actions/[id]/confirm`、`/api/actions/[id]/verify`、`/api/actions/[id]/cancel`、`/api/tasks`、`/api/tasks/[id]`、`/api/audit`、`/api/security`、`/api/security/reset`、`/api/dashboard`、`/api/bills`、`/api/cards`、`/api/subscriptions`、`/api/health`。
+- **页面 8 个**：`/`（仪表盘）、`/agent`（AI 助手）、`/actions`（待处理操作 —— 恢复 / 对账）、`/bills`（账单）、`/cards`（卡片）、`/subscriptions`（订阅）、`/security`（安全中心）、`/audit`（审计）。
+- **API 路由处理器 16 个**：`/api/chat`、`/api/actions`（只读）、`/api/actions/[id]/confirm`、`/api/actions/[id]/verify`、`/api/actions/[id]/cancel`、`/api/actions/[id]/recover`、`/api/tasks`、`/api/tasks/[id]`、`/api/audit`、`/api/security`、`/api/security/reset`、`/api/dashboard`、`/api/bills`、`/api/cards`、`/api/subscriptions`、`/api/health`。
 
 运行命令见 §10 **启动方式** 与 §15.3 **测试分层**：`npm run test`（前三层）· `npx tsc --noEmit`（类型检查）· `npx next build`（生产构建）· `npx tsx tests/e2e/acceptance.e2e.ts`（第四层：真实浏览器验收）。
 
@@ -520,9 +520,9 @@ npx tsx tests/e2e/acceptance.e2e.ts  # 第四层：真实浏览器验收（由 t
 ```
 .
 ├── app/                 # Next.js App Router：页面 + API 路由处理器
-│   ├── api/             #   chat(SSE) · actions confirm/verify/cancel · tasks · audit · security · dashboard · bills · cards · subscriptions · health
+│   ├── api/             #   chat(SSE) · actions confirm/verify/cancel/recover · tasks · audit · security · dashboard · bills · cards · subscriptions · health
 │   ├── agent/           #   AI 助手对话页
-│   ├── bills/ cards/ subscriptions/ security/ audit/
+│   ├── bills/ cards/ subscriptions/ security/ audit/ actions/
 │   └── page.tsx         #   仪表盘首页
 ├── components/          # React 组件库：chat · chat/cards · charts · banking · security · ui
 ├── agent/               # Pi Agent 运行时（构造 / 工具注册 / 会话 / 续跑 / 卡片 / 系统提示词 / provider）
