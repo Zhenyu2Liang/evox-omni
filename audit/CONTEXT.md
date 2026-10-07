@@ -31,6 +31,7 @@ re-exports each function and its types.
 
 ## Constraints
 
+- **Writes are NOT transaction-composable**: `recordAudit` / `recordSecurityEvent` accept NO `Prisma.TransactionClient` — they go through the store seam to `insertAuditLog` / `insertSecurityEvent`, which use the **global `prisma` singleton** (`@/lib/db/client`). An audit/security-event write therefore CANNOT be folded into a caller's `prisma.$transaction` (unlike `@/lib/db/repositories/pendingAction` functions, which take `client: Prisma.TransactionClient = prisma`). To make an audit write atomic with a business fact today would require adding a `client`/`tx` parameter to this node's write functions and to the repository functions they delegate to.
 - **Dependency direction**: `lib` ← `audit`. This node imports ONLY `lib/contracts/*`,
   `lib/db/repositories/*`, `lib/errors`, and `lib/clock`. It **MUST NOT** import `security`,
   `agent`, `planner`, `banking-sdk`, or `prisma` directly — the Security Gateway depends on
