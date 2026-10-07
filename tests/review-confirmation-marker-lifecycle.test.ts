@@ -234,10 +234,12 @@ describe('[integration] live-confirmation REFERENCE-COUNT marker lifecycle', () 
 
     // Recovery MAKES PROGRESS: the plan no longer dangles `waiting_confirmation` forever.
     expect(resumed.status).not.toBe('waiting_confirmation');
-    expect(recovered?.status).toBe('failed');
-    expect(recovered?.nodes[0]?.status).toBe('failed');
-    expect(recovered?.nodes[0]?.error).toContain('人工核对');
-    expect(recoveredAction?.status).toBe('failed');
+    // A committed ExecutionReceipt (the debit, the ledger row and the receipt are written in ONE tx)
+    // means the wedged action converges to executed / node+plan success; the tool is NEVER re-invoked
+    // and the committed side effect is never fabricated into a failed / 人工核对 outcome.
+    expect(recovered?.status).toBe('success');
+    expect(recovered?.nodes[0]?.status).toBe('success');
+    expect(recoveredAction?.status).toBe('executed');
     // The tool was NEVER re-invoked: side effect still exactly once.
     expect(await balance()).toBe(18580);
     expect(await debitCount()).toBe(before + 1);
