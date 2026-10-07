@@ -57,6 +57,12 @@ import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { resumeTurn } from './run-turn';
 import type { RunTurnDeps } from './run-turn';
 import { findTaskByPendingAction, resumeTaskForAction } from './task-control';
+import {
+  isActionLive,
+  recoverStandaloneWedge,
+  releaseAction,
+  retainAction,
+} from './confirmation-recovery';
 
 /**
  * The security gateway's runtime surface.
@@ -359,7 +365,14 @@ function isParkedOutcome(outcome: GatedToolOutcome): boolean {
  * is still a single atomic CAS. It is bounded by the continuation's own lifetime (each entry is
  * removed in a `finally`; a hung continuation IS still running, so deferring to it is correct).
  */
-const inFlightConfirmations = new Set<string>();
+/*
+ * The live-confirmation registry is now a REFERENCE COUNT kept in `./confirmation-recovery.ts`
+ * (`isActionLive` / `retainAction` / `releaseAction`). WHY a COUNT and not a `Set`: a rejected
+ * DUPLICATE confirm (fast gateway `CONFLICT`) finishes FIRST, and its `finally` must NOT clear the
+ * marker a FIRST, still-running continuation still owns — the marker is dropped only when the count
+ * returns to ZERO. Consumers keep the SAME truthiness semantics (`isActionLive(id)` is true while any
+ * continuation is live), so the live-vs-wedge distinction in `executeGatedToolOnce` is unchanged.
+ */
 
 const IN_FLIGHT_PLAN_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'pending',
@@ -499,7 +512,7 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
         // outcome and settle the node `failed` for work that actually succeeded; instead the node is
         // reported as STILL PARKED on that live human decision (no CAS, no write). A `confirmed` row
         // with NO live continuation is the genuine WEDGE and IS finalized below.
-        if (existing.status === 'confirmed' && !inFlightConfirmations.has(existing.id)) {
+        if (existing.status === 'confirmed' && !isActionLive(existing.id)) {
           const won = await claimPendingAction({
             actionId: existing.id,
             from: ['confirmed'],
@@ -609,6 +622,14 @@ export async function executeGatedTool(ctx: GatewayContext): Promise<GatedToolOu
  * outcome, not a failure: report it truthfully with the action's CURRENT persisted status.
  */
 async function conflictOutcome(actionId: string, error: AppError): Promise<ConfirmationOutcome> {
+  // A REPEAT confirm/verify reaches here via the gateway's exactly-once CAS (`CONFLICT`): the action
+  // is no longer `pending`. For a STANDALONE action whose side effect COMMITTED but whose
+  // result+status transaction ROLLED BACK, this is the ONLY place the row can settle (the gateway
+  // can never match it again). Resolve that wedge FIRST — idempotent replay for a proven-idempotent
+  // tool, else `needs_reconciliation`; a PLAN-LINKED wedge is left to the executor re-run path.
+  // When there is nothing to recover, fall through to the plain conflict outcome below.
+  const recovered = await recoverStandaloneWedge(actionId, { selfHoldsLiveMarker: true });
+  if (recovered !== undefined) return recovered;
   const row = await getPendingAction(actionId);
   const status = (row?.status as PendingActionStatus | undefined) ?? 'cancelled';
   const tier = (row?.riskLevel as RiskLevel | undefined) ?? 'YELLOW';
@@ -928,11 +949,11 @@ async function withLiveConfirmation<T>(
   actionId: string,
   run: () => Promise<T>,
 ): Promise<T> {
-  inFlightConfirmations.add(actionId);
+  retainAction(actionId);
   try {
     return await run();
   } finally {
-    inFlightConfirmations.delete(actionId);
+    releaseAction(actionId);
   }
 }
 

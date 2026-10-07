@@ -1,16 +1,21 @@
 /**
- * GET /api/actions — the caller session's NON-TERMINAL pending actions.
+ * GET /api/actions — the caller session's SURFACED pending actions.
  *
  * This is the frozen endpoint the UI consumes to RESTORE the confirm/MFA entry after a page
- * refresh: it lists every `PendingAction` still awaiting a human decision for the caller's session.
+ * refresh: it lists every `PendingAction` that still needs the human's attention for the caller's
+ * session — either a decision (`pending`/`awaiting_mfa`) or a manual-reconciliation entry
+ * (`needs_reconciliation`).
  *
  * Contract:
  *  - IDENTITY: the session comes from the TRUSTED `banking_session` cookie
  *    (`_lib/session#requireIdentity`); a missing cookie or unknown session → `403 SECURITY_DENIED`.
  *    A `?sessionId=` query param is IGNORED — a caller can never read another session's actions.
  *  - Reads the caller session's `PendingAction` rows via the sanctioned repository read path
- *    (`@/lib/db/repositories/pendingAction#listPendingActions`) and keeps only the NON-TERMINAL ones
- *    (`status` ∈ {`pending`, `awaiting_mfa`}).
+ *    (`@/lib/db/repositories/pendingAction#listPendingActions`) and keeps only the SURFACED ones
+ *    (`SURFACED_STATUSES` ∈ {`pending`, `awaiting_mfa`, `needs_reconciliation`}): the two
+ *    NON-TERMINAL statuses that await a human decision, plus the TERMINAL `needs_reconciliation`
+ *    manual-reconciliation entry (a gated side effect that may have committed but whose outcome
+ *    could not be recorded/recovered) — which still requires user attention.
  *  - Maps each row to the frozen `PendingAction` contract (JSON columns decoded with `safeParse`,
  *    timestamps as epoch ms). The response is JSON-serializable and NEVER contains the MFA code.
  *  - Success: `200 { ok: true, data: PendingAction[] }` (newest-first).
@@ -29,8 +34,15 @@ import { safeParse } from '@/lib/json';
 import { errorResponse, jsonResponse } from '../_lib/http';
 import { requireIdentity } from '../_lib/session';
 
-/** The two NON-TERMINAL statuses — the actions still awaiting a human decision. */
-const NON_TERMINAL_STATUSES: readonly PendingActionStatus[] = ['pending', 'awaiting_mfa'];
+/**
+ * The statuses this endpoint SURFACES — everything the human still has to act on.
+ *
+ * `pending`/`awaiting_mfa` are NON-TERMINAL: the action is still awaiting a human decision.
+ * `needs_reconciliation` is TERMINAL but still REQUIRES user attention: it is the
+ * manual-reconciliation entry for a gated side effect that may already have committed but whose
+ * outcome could not be recorded/recovered — it must stay visible until a human settles it.
+ */
+const SURFACED_STATUSES: readonly PendingActionStatus[] = ['pending', 'awaiting_mfa', 'needs_reconciliation'];
 
 /** Safe summary fallback when a row's `summaryJson` is missing/corrupt (never leaks anything). */
 const FALLBACK_SUMMARY: PendingActionSummary = {
@@ -75,7 +87,7 @@ export async function GET(req: NextRequest): Promise<Response> {
 
     const rows = await listPendingActions({ sessionId: identity.sessionId });
     const actions = rows
-      .filter((row) => NON_TERMINAL_STATUSES.includes(row.status as PendingActionStatus))
+      .filter((row) => SURFACED_STATUSES.includes(row.status as PendingActionStatus))
       .map(toContractPendingAction);
 
     return jsonResponse<PendingAction[]>(actions);
