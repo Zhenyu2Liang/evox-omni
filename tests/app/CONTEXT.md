@@ -237,6 +237,7 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 - `./plan-linkage-http.test.ts` → PendingAction↔plan/node LINKAGE: a parked action carries `taskId`/`nodeId` AT CREATION; a reused/deduped (re-run/resume) action keeps the SAME link; two independent plans with identical tool+args each produce their OWN side effect (two `Budget` rows) / their OWN `PendingAction` (never one shared row — no cross-plan merge)
 - `./cancel-safety-http.test.ts` → CANCEL-safety race windows (controlled barrier): (a) plan-level cancel (`POST /api/tasks/[id]` `{action:'cancel'}`) landing AFTER the gateway parked the action but BEFORE the executor persisted the node result; (b) genuine cancel-vs-confirm concurrency on the same action (+ both sequential orderings). Asserts the old action is not executable/confirmable, NO unauthorized balance/ledger change (`computeDailyTransferTotal === 0`, checking balance unchanged), EVERY related action revoked `cancelled` (incl. one never written into a node output), and a confirm-won transfer truthfully preserved
 - `./concurrent-execution-http.test.ts` → CONCURRENT `resume`/`retry` (+ confirm-continuation) through a rendezvous barrier genuinely overlap: each unfinished node's side effect runs EXACTLY ONCE (one `Budget` row / one fresh gated `PendingAction`), persisted `AgentTask.status` + node rows consistent (no lost update / duplicate node rows / stale `running`); window "side effect done but node result NOT yet persisted" adds NO second side effect
+- `./actions-recovery-http.test.ts` → recovery surface e2e: `GET /api/actions` surfaces a STANDALONE wedge (`attention:'recoverable'`) → `POST /api/actions/[id]/recover` replays it idempotently to `executed` (side effect once); a PLAN-NODE wedge is surfaced with a non-`processing` attention and recover RESUMES the owning plan; a repeat recover is a settled no-op
 
 ## Notes for Agents
 
@@ -244,13 +245,18 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
   tool-event / DB-state level.
 - The remaining HTTP coverage gap is the `/api/chat` SSE `error`-frame, which is unreachable over the
   real HTTP + mock path (see the "Known gap" section above).
-- NO spec under `tests/app` references a `needs_reconciliation` action or a recovery route — and there
-  is NO `POST /api/actions/[id]/recover` endpoint (the action routes are only confirm/verify/cancel +
-  `GET /api/actions`). `GET /api/actions` IS exercised here (`dag-recovery-http.test.ts`,
-  `identity-http.test.ts`, `session-takeover-http.test.ts`) but only for the non-terminal
-  `pending`/`awaiting_mfa` listing and session isolation; the `needs_reconciliation` SURFACING itself
-  (a standalone-wedge action) is covered only by the ROOT review spec
-  `tests/review-standalone-recovery.test.ts` (`getJson(actionsGet, '/api/actions')`), not from this node.
+- `actions-recovery-http.test.ts` covers the RECOVERY surface end-to-end: a STANDALONE `transfer_money`
+  wedge is surfaced by a real `GET /api/actions` refresh with `attention:'recoverable'`, then
+  `POST /api/actions/[id]/recover` replays it idempotently to `executed` (side effect applied EXACTLY
+  once); a PLAN-NODE wedge is surfaced with a NON-`processing` attention class and recover RESUMES the
+  owning plan server-side (the client never needs plan knowledge), settling plan/node WITHOUT
+  re-invoking the tool; a repeat recover is a settled no-op. The wedge is produced by REAL fault
+  injection (`vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(...)`).
+- `GET /api/actions` is READ-ONLY: given cookie identity it surfaces the `DECISION_STATUSES`
+  (`pending`/`awaiting_mfa`/`needs_reconciliation`) unconditionally plus any NON-settled `confirmed`
+  wedge, each carrying an advisory `attention` (`decision`/`processing`/`recoverable`/`reconciliation`).
+  `POST /api/actions/[id]/recover` is the cookie-identity recovery entry point (identity → ownership →
+  `@/agent#recoverOwned`).
 - The mock responder (`agent/providers/mock-responder.ts`) routes DIRECT single-action intents: e.g.
   "把信用卡娱乐限额调整到1500" → `set_card_limit`, "申购稳健理财A 1000元" → `subscribe_investment`,
   "取消Netflix订阅" → `cancel_subscription`.
