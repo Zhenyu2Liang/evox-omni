@@ -111,6 +111,14 @@ public functions/types (`buildPlan`, `transitiveDependents`, `isTerminalStatus`,
   remains the single writer. The claim is ALWAYS released in `finally` (after success, park or
   failure) so a later retry/resume/confirm re-drives the node. When `claimNode` is absent the
   executor behaves exactly as without claiming; `status:'running'` is never used as the claim.
+- `isRunOwner?()` — OPTIONAL ownership re-check, consulted AFTER each async node notification resolves and
+  BEFORE the next notification is published / the node's tool is launched. It answers `true` while this run
+  still owns the PLAN's execution claim (the agent wires it as `planExecutionClaimHeld(plan.id, claimToken)`).
+  A lost claim returns the SAME `'owned'` back-off as a lost node claim: ZERO further writes for the node, NO
+  tool call, no plan-snapshot persist, node left not-yet-settled and plan `running`. It is consulted at these
+  boundaries of `runToolNode`/the walk: right after the node claim + `running` notification, and after EVERY
+  settlement notification (before the walk advances to a successor). So a run whose plan claim was taken over
+  launches no successor tool and publishes no stale progress. Absent (a claim-less walk) ⇒ a genuine no-op.
 - `onNodeUpdate(node)` — called on every status change; the agent forwards it to the client as the
   `plan_update` `AgentStreamEvent` (and the `plan` `ChatCard` carries the whole `TaskPlan`).
 - `persistNode?(planId, node)` — incremental snapshot write of ONE node change.
@@ -159,7 +167,7 @@ through the persistence ports, so state survives the request:
   order: (1) `await checkpoint()` → `pollDurableControls()` → `deps.controls.pollControls(plan.id)`;
   (2) guards `stopRequested()` / `paused` break / retry rewind; (3) select `node = order[index]`;
   (4) for a `kind:'tool'` node, `await runToolNode(node)` which first CLAIMS the node (`deps.claimNode`, before any write; a
-  lost claim returns `'owned'` and halts the walk) then does `setNode('running')` →
+  lost claim returns `'owned'` and halts the walk) then does `setNode('running')`, re-checks `isRunOwner` AFTER that async notification resolves and before the tool launch, then
   `await deps.runTool(...)` → `setNode(success|failed|parked)`. `setNode` records the result, then
   `onNodeUpdate`, then `persistNode` — it NEVER calls `persistPlan`. Consequence: a control persisted
   DURING node 'a' is not touched by 'a's completion writes (`persistNode` writes only the node row

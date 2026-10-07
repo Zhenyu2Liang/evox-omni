@@ -33,7 +33,7 @@ import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import {
-  claimTaskExecution,
+  claimTaskExecutionWithGeneration,
   createTask,
   createTaskNode,
   releaseTaskExecution,
@@ -43,6 +43,7 @@ import {
   clearStaleNodeClaims,
   createTaskPersistence,
   defaultPollControls,
+  getTaskPlan,
   planExecutionClaimHeld,
   sweepCancelledPlan,
 } from '../task-control';
@@ -203,6 +204,7 @@ function composePlanSnapshot(
       };
     }),
     createdAt: plan.createdAt,
+    generation: plan.generation,
     updatedAt: now,
   };
 }
@@ -281,6 +283,7 @@ export async function runSubmitPlan(
     plan = {
       ...dag.buildPlan({ sessionId: deps.sessionId, goal, nodes, now: deps.now }),
       id: task.id,
+      generation: task.generation,
     };
     for (const [order, node] of plan.nodes.entries()) {
       await createTaskNode({
@@ -322,6 +325,10 @@ export async function runSubmitPlan(
     if (nodeSink === undefined && planSink === undefined) return;
     if (!(await planExecutionClaimHeld(plan.id, claimToken))) return;
     await nodeSink?.(node);
+    // RE-CHECK after the (arbitrarily long-blocking) node sink RETURNS: a takeover landing during
+    // that wait must not let this run accumulate or publish a stale plan snapshot — the winning
+    // executor owns the DAG timeline.
+    if (!(await planExecutionClaimHeld(plan.id, claimToken))) return;
     if (planSink === undefined) return;
     accumulated.set(node.id, { ...node });
     await planSink(composePlanSnapshot(plan, accumulated, planNow()));
@@ -332,8 +339,8 @@ export async function runSubmitPlan(
   // unique value, never reused), and a LOST claim (`false`) means another live run already owns the
   // plan — return an explicit "already running" outcome and run NOTHING (no duplicate execution).
   // The slot is released in `finally`, so a later resume/retry can re-claim it.
-  const claimed = await claimTaskExecution(plan.id, claimToken);
-  if (!claimed) {
+  const claimed = await claimTaskExecutionWithGeneration(plan.id, claimToken);
+  if (!claimed.won) {
     return {
       ok: false,
       error: '计划已在执行中',
@@ -343,6 +350,10 @@ export async function runSubmitPlan(
   // WON the slot: nothing to reclaim on a FRESH plan (every node is `pending` with a NULL token), but
   // calling it keeps the initial pass identical to resume/retry/confirm-continuation (see
   // `clearStaleNodeClaims`).
+  // Stamp the plan with the EXECUTION GENERATION this claim established, so every published
+  // `plan_update` — and the plan this run RETURNS — carries the version in effect for THIS run's
+  // claim (a consumer can drop a stale, lower-generation event from a superseded executor).
+  plan = { ...plan, generation: claimed.generation ?? plan.generation };
   await clearStaleNodeClaims(plan.id, claimToken);
 
   // PER-NODE PLAN-OWNERSHIP CLAIM (ATOMIC): the executor asks `claimNode` before EVERY node. With this
@@ -360,6 +371,11 @@ export async function runSubmitPlan(
       plan,
       {
         runTool: deps.runTool,
+        // EXECUTION-RIGHT re-check consulted by the executor AFTER every async node notification
+        // resolves and BEFORE it launches the node's tool: a taken-over initial run returns the
+        // `'owned'` back-off branch (ZERO writes, NO tool call) instead of launching its next node.
+        // Without this wiring the port is dead code and a zombie keeps executing.
+        isRunOwner: () => planExecutionClaimHeld(plan.id, claimToken),
         onNodeUpdate,
         // Durable cross-request steering: a pause/cancel persisted by `POST /api/tasks/[id]` is
         // observed at this run's next node checkpoint, so a LIVE plan really stops (the persisted
@@ -389,6 +405,22 @@ export async function runSubmitPlan(
     await sweepCancelledPlan(deps.sessionId, plan.id);
   } finally {
     await releaseTaskExecution(plan.id, claimToken);
+  }
+
+  // CLAIM-LOST RECONCILIATION: `executor.runPlan` returns a `'running'` plan ONLY because it backed
+  // off — a concurrent takeover rotated this plan's owner (see `claimLost` in `planner/executor`). A
+  // superseded run must never report stale in-memory facts that contradict the winner's COMMITTED
+  // state, so reload the durable plan and adopt its plan-level status/generation. This run's own
+  // (truthful) node results are KEPT: it launched no successor tool after the takeover, so it never
+  // claims a node success the database does not have.
+  if (result.status === 'running') {
+    const persisted = await getTaskPlan(deps.sessionId, plan.id);
+    result = {
+      ...result,
+      status: persisted.status,
+      generation: persisted.generation ?? result.generation,
+      updatedAt: persisted.updatedAt,
+    };
   }
 
   const done = result.results.filter((r) => r.status === 'success').length;

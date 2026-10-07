@@ -652,6 +652,14 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
         parked = true;
         break;
       }
+      // POST-SETTLEMENT OWNERSHIP BARRIER: a settled node's OWN settlement notification is async and
+      // may block arbitrarily long; a takeover that lands while it is dispatched must stop this run
+      // from ADVANCING to the node's dependents (zero further writes, NO successor tool). This is the
+      // same back-off as a lost node claim (`'owned'`), applied at the post-settlement boundary.
+      if (outcome === 'settled' && (await ownerLost())) {
+        claimLost = true;
+        break;
+      }
       if (outcome === 'owned') {
         // Another live executor owns this node: do NOT run dependents (their
         // dependency is not settled) and do NOT enter the cancel sweep. The node

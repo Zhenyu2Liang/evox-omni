@@ -240,7 +240,7 @@ via `resumeTurn`.
 rows FIRST: `createTask({sessionId, userId, goal})` returns the `AgentTask` whose id IS the canonical
 plan id; then `plan = { ...dag.buildPlan({sessionId, goal, nodes, now}), id: task.id }` and one
 `createTaskNode(...)` per node in declaration order (`order` = index, `status:'pending'`). It then CLAIMS
-the plan's executor slot (`claimTaskExecution(plan.id, newId('taskclaim'))`; a lost claim returns
+the plan's executor slot (`claimTaskExecutionWithGeneration(plan.id, newId('taskclaim'))`; a lost claim returns
 `ok:false` and runs NOTHING), clears the plan's non-terminal node claims under the won token
 (`clearStaleNodeClaims` — a no-op on a fresh plan) and runs
 `executor.runPlan(plan, { runTool, onNodeUpdate, controls, claimNode, releaseNode, ...createTaskPersistence(plan.id, { planToken: claimToken, nodeToken: (nodeId) => nodeTokens.get(nodeId) }) }, {signal, now})`
@@ -272,7 +272,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   — a cheap read of the parent `AgentTask.executionToken`. A run whose PLAN claim was taken over therefore
   emits NO stale snapshot, so the UI's DAG timeline never shows the superseded executor's progress over
   the takeover's completed run. The node write is fenced independently (`createTaskPersistence`), so this
-  gate only suppresses the publication.
+  gate only suppresses the publication. The `onNodeUpdate` wrapper ALSO re-checks `planExecutionClaimHeld` AFTER its (arbitrarily long-blocking) node sink returns and BEFORE it accumulates/publishes the plan snapshot — a takeover landing WHILE a notification is being dispatched therefore publishes nothing. `runSubmitPlan` additionally wires `isRunOwner: () => planExecutionClaimHeld(plan.id, claimToken)` into the executor, so the taken-over run also refuses its next node claim and launches no successor tool.
 - When a DAG node PARKS on a gated tool (`waiting_confirmation`/`waiting_verification`, its
   `PendingAction` id readable from `AgentTaskNode.output` via `readPendingActionId`), the relay
   remembers the node and — after the run settles, so the row is committed — emits the human-decision
