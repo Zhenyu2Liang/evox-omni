@@ -507,11 +507,11 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
           return recoverExecutedPlanAction(existing);
         }
         // DEFER while a confirm/verify continuation is applying THIS action's side effect RIGHT NOW in
-        // this process (`inFlightConfirmations`): the row is `confirmed` with no result yet ONLY
-        // because that LIVE continuation has not written it. Finalizing here would evict its real
-        // outcome and settle the node `failed` for work that actually succeeded; instead the node is
-        // reported as STILL PARKED on that live human decision (no CAS, no write). A `confirmed` row
-        // with NO live continuation is the genuine WEDGE and IS finalized below.
+        // this process (the ref-counted `liveConfirmations` registry in `confirmation-recovery.ts`):
+        // the row is `confirmed` with no result yet ONLY because that LIVE continuation has not written
+        // it. Finalizing here would evict its real outcome and settle the node `failed` for work that
+        // actually succeeded; instead it is reported STILL PARKED on that live decision (no CAS, no
+        // write). A `confirmed` row with NO live continuation is the genuine WEDGE and IS finalized below.
         if (existing.status === 'confirmed' && !isActionLive(existing.id)) {
           const won = await claimPendingAction({
             actionId: existing.id,
@@ -940,10 +940,10 @@ async function verifyActionImpl(
 
 /**
  * Run a confirm/verify continuation while marking `actionId` LIVE for THIS process for its WHOLE
- * duration (see `inFlightConfirmations`), so a concurrent plan re-run of the owning node does NOT
- * mistake the in-flight `confirmed` row for a wedged one. The marker is cleared in a `finally`, so a
- * completed continuation (success, refusal, or a rolled-back result transaction) leaves NO trace and
- * a later re-run correctly FINALIZES the wedged row.
+ * duration (see the ref-counted `liveConfirmations` registry in `confirmation-recovery.ts`), so a
+ * concurrent plan re-run of the owning node does NOT mistake the in-flight `confirmed` row for a
+ * wedged one. The marker is cleared in a `finally`, so a completed continuation (success, refusal,
+ * or a rolled-back result transaction) leaves NO trace and a later re-run FINALIZES the wedged row.
  */
 async function withLiveConfirmation<T>(
   actionId: string,
