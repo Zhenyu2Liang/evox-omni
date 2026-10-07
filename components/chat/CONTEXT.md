@@ -244,7 +244,7 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
 - **Untested fold rules of thumb** (candidates, NOT existing tests): a `fetchPendingActions` fixture with actionable AND
   `needs_reconciliation` rows should rebuild the decision slot AND the `pendingReconciliations` list (an actionless
   `ReconciliationCard` per reconciliation row) without clobbering a live decision; `Composer` should be enter-to-send
-- `Composer`: enter-to-send + disabled-when-busy behaviour.
+  and disabled-when-busy.
 
 ## Routing Table
 
