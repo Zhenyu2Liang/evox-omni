@@ -239,7 +239,7 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
   sequences (from the faux-provider scenarios) under the root `tests/` suite: card attachment,
   plan promotion/upsert (one plan view per id), tool-event upsert, confirmation/mfa transitions
   with `kind`, error→banner, done→idle.
-- `ChatWindow` integration test: feed a scripted event list, assert rendered messages/cards/timeline,
+- **No component/DOM test layer exists** — `@testing-library/react`/`jsdom`/`happy-dom` are NOT dependencies and `vitest.config.ts` runs `environment: 'node'`.
   the single live plan and the single active decision card.
 - Refresh restore: a `fetchPendingActions` fixture carrying actionable AND `needs_reconciliation` rows
   must rebuild the decision slot AND the `pendingReconciliations` list (an actionless
