@@ -218,8 +218,33 @@ model AgentTask {
   generation Int @default(0)
 
   nodes AgentTaskNode[]
+  manualReviews ManualReview[]
 
   @@index([sessionId])
+}
+
+// Demo operator workflow. Closing a review never asserts that a banking write succeeded.
+model ManualReview {
+  id           String   @id @default(cuid())
+  sessionId    String
+  userId       String
+  taskId       String?
+  actionId     String?
+  // Filled only while open: at most one active review per target, with durable history.
+  activeKey    String?  @unique
+  title        String
+  reason       String
+  status       String   @default("open")
+  operatorId   String
+  operatorName String
+  notes        String?
+  resolution   String? // "stop" | "retry"; never "executed"
+  createdAt    DateTime @default(now())
+  resolvedAt   DateTime?
+
+  task AgentTask? @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, status])
 }
 
 model AgentTaskNode {

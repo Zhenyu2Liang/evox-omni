@@ -3,6 +3,7 @@
  * ONLY from here.
  */
 import type { TaskPlan } from '@/lib/contracts/task';
+export { getManualReviewInbox, openManualReview, resolveManualReview } from './manual-review';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { PlanToolOutcome } from '@/planner';
 import { getSession } from '@/lib/db/repositories/session';

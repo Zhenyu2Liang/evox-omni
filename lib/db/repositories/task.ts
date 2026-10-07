@@ -103,6 +103,7 @@ export async function claimTaskStatus(
     where: {
       id: taskId,
       status: { in: fromStatuses },
+      ...(toStatus === 'running' ? { manualReviews: { none: { status: 'open' } } } : {}),
       ...(fenceToken === undefined ? {} : { executionToken: fenceToken }),
     },
     data: { status: toStatus },
@@ -152,6 +153,7 @@ export async function claimTaskExecutionWithGeneration(
   const result = await prisma.agentTask.updateMany({
     where: {
       id: taskId,
+      manualReviews: { none: { status: 'open' } },
       OR: [
         { executionToken: null },
         ...(staleBefore ? [{ executionClaimedAt: { lt: staleBefore } }] : []),

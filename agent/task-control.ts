@@ -60,6 +60,7 @@ import { newId } from '@/lib/ids';
 import { safeParse } from '@/lib/json';
 import { prisma } from '@/lib/db/client';
 import { getSession } from '@/lib/db/repositories/session';
+import { assertNoOpenManualReview } from '@/lib/db/repositories/manualReview';
 import {
   getPendingActionPlanLink,
   revokePendingActionsByTask,
@@ -779,6 +780,7 @@ export async function resumeTask(
   // is left untouched.
   const row = await loadOwnedTask(sessionId, taskId);
 
+  await assertNoOpenManualReview(taskId);
   const claimed = await claimTaskStatus(taskId, RESUMABLE_PLAN_STATUSES, 'running');
   if (!claimed) return reloadPlan(sessionId, taskId); // already running / terminal — never double-run
 
@@ -1026,6 +1028,7 @@ export async function retryTask(
   // Ownership is verified BEFORE any mutation (see `resumeTask`).
   const row = await loadOwnedTask(sessionId, taskId);
 
+  await assertNoOpenManualReview(taskId);
   const claimed = await claimTaskStatus(taskId, RETRYABLE_PLAN_STATUSES, 'running');
   if (!claimed) return reloadPlan(sessionId, taskId); // cancelled / lost race — never retry
 

@@ -339,3 +339,8 @@ handler 与会话、读取 SSE 分帧。
   （其写入受围栏保护）。上述边界仅在**单进程 / 单 SQLite** 内验证，多进程竞争**未**做压力测试。
 
 > 安全模型的完整说明见 [`security.md`](./security.md)；已知限制见 [`known-risks.md`](./known-risks.md)。
+
+## Demo 人工接管补充验收
+
+- `tests/app/manual-review-http.test.ts`：11 项真实路由集成测试；转人工与刷新读取、阻止自动继续/重试、继续仍需确认/MFA、已入账交易保持、余额不足的独立操作可达、未知结果拒绝重跑、Cookie 所有权、并发记录/决定去重、审计失败回滚。
+- `tests/e2e/manual-review.e2e-helper.ts`：并入统一 Chrome 验收入口的 `g-manual-handoff`，真实点击转人工/记录/继续/结束并刷新，核对记录、原确认门控和审计。仅初始失败/未知状态使用隔离库夹具，不声称实际浏览器触发了服务崩溃。

@@ -1,6 +1,7 @@
 'use client';
 
 import type { TaskNodeSpec, TaskPlan, TaskPlanStatus } from '@/lib/contracts/task';
+import Link from 'next/link';
 import { Card } from '../../ui/Card';
 import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
@@ -96,6 +97,7 @@ export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
   const footer =
     controls.length > 0 ? (
       <div className="flex flex-wrap items-center justify-end gap-2">
+        {plan.status === 'failed' && <Link href="/manual" className="text-sm text-banking-accent underline">转人工处理</Link>}
         {controls.map((action) => (
           <Button
             key={action}

@@ -16,6 +16,7 @@ decide *whether it is allowed to do it*. Permission is decided by TypeScript cod
 - **HTTP surface** (Next.js App Router; identity from the HttpOnly `banking_session` cookie): `POST /api/chat` (+ SSE stream), actions `confirm|verify|cancel|recover`, READ-ONLY `GET /api/actions`, tasks control, `audit`, `security` (+`reset`), and the read models (`dashboard`/`bills`/`cards`/`subscriptions`/`health`).
 - **Shared contracts**: every cross-module type is exported from `lib/contracts/` (see below); child nodes IMPORT them and never fork them.
 - **Persistence**: Prisma + SQLite through `lib/db/client.ts` + `lib/db/repositories/*` (no `migrations/`; the schema is applied with `prisma db push`).
+- **Demo manual handoff**: `/manual` + Cookie-owned `/api/manual-reviews` persist operator/reason/notes/decision in `ManualReview`, with strict transactional audit. An open review blocks task status/execution claims; continue only retries explicitly failed work through original confirmation/MFA. Unknown banking outcomes remain `needs_reconciliation`; no invented success or reversal. No independent staff authentication/RBAC. See `docs/manual-review.md`.
 ## System Architecture
 ```
 User
