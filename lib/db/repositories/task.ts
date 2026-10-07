@@ -123,12 +123,31 @@ export async function claimTaskStatus(
  * claimable. A row whose token is set but whose `executionClaimedAt` is NULL is NOT reclaimable
  * via the stale path — SQL `NULL < x` evaluates to NULL (not true), so the stale OR-branch never
  * matches; such a row stays claimed until released by its owner.
+ *
+ * EXECUTION GENERATION: the SAME atomic statement also INCREMENTS `AgentTask.generation`, so every
+ * (re)claim — the initial claim and every stale-owner takeover — advances a monotonic version
+ * attributable to exactly one executor. A plan snapshot / `plan_update` stamped with this generation
+ * lets a consumer reject a stale (lower-generation) event published by a superseded executor. Use
+ * `claimTaskExecutionWithGeneration` to also read the generation this claim established.
  */
 export async function claimTaskExecution(
   taskId: string,
   token: string,
   opts?: { staleBefore?: Date },
 ): Promise<boolean> {
+  return (await claimTaskExecutionWithGeneration(taskId, token, opts)).won;
+}
+
+/**
+ * `claimTaskExecution` that ALSO reports the task's `generation` after a WON claim (the version in
+ * effect for this claim), so a caller can stamp its plan snapshots / `plan_update` events.
+ * Returns `{ won: false, generation: null }` when the claim was lost (nothing was written).
+ */
+export async function claimTaskExecutionWithGeneration(
+  taskId: string,
+  token: string,
+  opts?: { staleBefore?: Date },
+): Promise<{ won: boolean; generation: number | null }> {
   const staleBefore = opts?.staleBefore;
   const result = await prisma.agentTask.updateMany({
     where: {
@@ -138,9 +157,14 @@ export async function claimTaskExecution(
         ...(staleBefore ? [{ executionClaimedAt: { lt: staleBefore } }] : []),
       ],
     },
-    data: { executionToken: token, executionClaimedAt: new Date() },
+    data: { executionToken: token, executionClaimedAt: new Date(), generation: { increment: 1 } },
   });
-  return result.count === 1;
+  if (result.count !== 1) return { won: false, generation: null };
+  const row = await prisma.agentTask.findUnique({
+    where: { id: taskId },
+    select: { generation: true },
+  });
+  return { won: true, generation: row?.generation ?? null };
 }
 
 /**
