@@ -9,7 +9,7 @@
  */
 import type { ErrorCode } from '@/lib/errors';
 import type { RiskLevel } from '@/lib/contracts/risk';
-import type { PendingActionStatus } from '@/lib/contracts/security';
+import type { PendingAction, PendingActionStatus } from '@/lib/contracts/security';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 
 /** Success envelope returned by every route: `{ ok: true, data }`. */
@@ -55,6 +55,26 @@ export interface ActionResponse {
   /** Continuation events to append to the chat stream. */
   events: AgentStreamEvent[];
 }
+
+/**
+ * The ATTENTION class of a surfaced `PendingAction` (a `GET /api/actions` row) — an app-layer,
+ * purely ADVISORY classification the UI uses to pick the right card:
+ *  - `decision`       — `pending` / `awaiting_mfa`: awaits a human decision (confirm / MFA code).
+ *  - `processing`     — a `confirmed`, result-less row with a NON-EXPIRED persisted execution lease:
+ *                       an in-flight continuation owns it and is applying the side effect right now.
+ *  - `recoverable`    — a `confirmed`, result-less row whose tool may be safely RECOVERED (its
+ *                       side effect may be replayed / read back from a committed receipt).
+ *  - `reconciliation` — a `needs_reconciliation` row (or a `confirmed`, result-less row whose tool
+ *                       is NOT safely recoverable): the outcome is UNKNOWN and needs manual settling.
+ */
+export type ActionAttention = 'decision' | 'processing' | 'recoverable' | 'reconciliation';
+
+/**
+ * A `GET /api/actions` row: the frozen `PendingAction` contract PLUS the app-layer `attention`
+ * classification. Strictly ADDITIVE — every frozen `PendingAction` field is preserved untouched so
+ * existing consumers keep working; `attention` is a hint only and never grants/lifts anything.
+ */
+export type SurfacedPendingAction = PendingAction & { attention: ActionAttention };
 
 /**
  * Next.js 15 dynamic-route context: `params` is a Promise that resolves to the path segments.
