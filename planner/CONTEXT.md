@@ -167,7 +167,7 @@ through the persistence ports, so state survives the request:
   order: (1) `await checkpoint()` → `pollDurableControls()` → `deps.controls.pollControls(plan.id)`;
   (2) guards `stopRequested()` / `paused` break / retry rewind; (3) select `node = order[index]`;
   (4) for a `kind:'tool'` node, `await runToolNode(node)` which first CLAIMS the node (`deps.claimNode`, before any write; a
-  lost claim returns `'owned'` and halts the walk) then does `setNode('running')` →
+  lost claim returns `'owned'` and halts the walk) then does `setNode('running')`, re-checks `isRunOwner` AFTER that async notification resolves and before the tool launch, then
   `await deps.runTool(...)` → `setNode(success|failed|parked)`. `setNode` records the result, then
   `onNodeUpdate`, then `persistNode` — it NEVER calls `persistPlan`. Consequence: a control persisted
   DURING node 'a' is not touched by 'a's completion writes (`persistNode` writes only the node row
