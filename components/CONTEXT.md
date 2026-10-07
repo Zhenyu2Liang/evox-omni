@@ -153,7 +153,7 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
   faux-provider scenarios), the `useAgentStream` refresh-restore reconciliation fold (seeds
   `pendingReconciliations` from `GET /api/actions`), and `PlanCard.controlActionsFor` (status → control-set mapping).
 - **There is NO component/DOM test layer.** `@testing-library/react`, `jsdom` and `happy-dom` are NOT dependencies and no component render test exists; `vitest.config.ts` runs `environment: 'node'`. DOM-level coverage is ONLY the real-browser e2e suite (playwright-core on `prisma/e2e.db`): `tests/e2e/acceptance.e2e.ts` (`npx tsx`, NOT Vitest). Its helpers select on DOM contracts owned here (`AgentTaskTimeline`'s `ol.space-y-3 > li`, node-name `span.text-sm.font-medium.text-banking-deep`, status `span.rounded-full`) — a new status chip must preserve these classes.
-  and asserting key amounts/statuses; the `ChatWindow` integration test drives a scripted
+  X/statuses; the `ChatWindow` integration test drives a scripted
   `AgentStreamEvent[]` sequence. (Test deps are added by the root `tests` owner.)
 
 ## Routing Table
