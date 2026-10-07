@@ -16,7 +16,7 @@ imports + node built-ins only, to avoid tsx/tsconfig path surprises).
 
 ## API Surface
 - `acceptance.e2e.ts` — the SINGLE entry point. Sets the isolated DB → resets it to the canonical
-  seed → boots the app → waits for readiness → launches Chrome → runs the 5 journeys → prints
+  seed → boots the app → waits for readiness → launches Chrome → runs the 6 journeys → prints
   exactly one `PASS|FAIL|SKIP <journey> — <evidence>` line per journey → exits non-zero iff ANY
   journey FAILED (a SKIP does not fail the run).
 - `helpers.ts` — shared harness (details below).
@@ -41,6 +41,14 @@ Harness helpers (`helpers.ts`):
 - Read-model HTTP helpers (SECONDARY DB/ledger checks): `getJson`, `fetchDashboardSummary`,
   `fetchLedger`, `fetchCards`, `fetchPendingActions`, `cardCategoryLimit`, `diffLedger`,
   `readSessionCookie` (+ `LedgerView`/`DashboardView`/`CardView`/`PendingActionView`/`LedgerDiff`).
+- Wedge fixtures + direct-DB fact helpers (journey `f`, relative imports only): `WEDGE_ACTION_ID`,
+  `WEDGE_LEDGER_KEY`, `WEDGE_TX_ID`, `WEDGE_RECEIPT_ID`, `WEDGE_AMOUNT`, `WEDGE_TIER`,
+  `WEDGE_AUDIT_DEDUPE_KEY`, `WEDGE_DEMO_NOW`, plus `idempotentTransferTxId`/`executionReceiptId`/
+  `requestDigest` (mirrors of the app's ledger identity). `seedStandaloneWedge({ sessionId })` inserts
+  ONLY the committed wedge rows in ONE transaction (checking-account debit + DEBIT `Transaction` +
+  `ExecutionReceipt` + a `PendingAction` at `status='confirmed'`/`resultJson=null`), never a
+  wipe/re-seed. `queryPendingActionStatus(actionId)` reads the persisted `status`+`resultJson`;
+  `queryExecutionAudit(dedupeKey)` reads the durable recovery `AuditLog` row (typed `ExecutionAuditRow`).
 
 ## Constraints
 - **Never matches vitest.** Every file avoids `.test.`/`.spec.` (the entry is `.e2e.ts`), so
@@ -158,12 +166,23 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
     demo day's accumulated transfer total) → same-context reload → ConfirmationCard RESTORED from
     persisted server state (`GET /api/actions`).
   - leg 2 (fresh context) parks a RED transfer → reload → MfaCard RESTORED.
+- **f-wedge-refresh-recover** (the PLAIN refresh/navigation recovery surface — the recovery control is
+  reached with NO actionId in the URL): mints the identity cookie with a first GREEN chat turn, snapshots
+  balance+ledger, then SEEDS a committed-but-unrecorded standalone transfer straight into the isolated E2E
+  DB (debit + DEBIT `Transaction` + committed `ExecutionReceipt` + `PendingAction pa_ewedge_1` at
+  `confirmed` with `resultJson=null`). A plain `page.goto('/actions')` must RENDER the row with a `恢复执行`
+  button; clicking it settles the wedge FROM the committed receipt (never a second debit) and the journey
+  asserts on the DOM-reachable read routes + direct DB facts: balance exactly one `−¥200`, exactly ONE new
+  `−200 DEBIT`/张伟 ledger row, `PendingAction.status='executed'`, and a durable recovery
+  `AuditLog` (`dedupeKey=exec:pa_ewedge_1`) at `success`/`transfer_money` for the owning session.
 
 ## Coverage notes
 - **Covers:** real-browser NL → card → human-decision flows; MFA success + wrong-code rejection;
   GENUINE plan pause→resume with per-node status badges; plan cancel + rejected stale-confirm;
   no-money-moved assertions (balance + ledger + card limit); refresh rehydration from persisted
-  server state; structured honest reporting; whole-tree teardown.
+  server state; a plain refresh/navigation recovery of a committed-but-unrecorded standalone wedge
+  (exactly one debit, `executed` status, durable recovery audit); structured honest reporting;
+  whole-tree teardown.
 - **Does NOT cover:** the real LLM (`LLM_MODE=live`); real bank/network; the production build
   (`next build` / `next start`); cross-browser (Chrome only, Edge as fallback and untested);
   visual/a11y regression; load/perf; the security unit + scenario layers (owned by
@@ -192,6 +211,11 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
 - **Transfer ledger `merchant`.** A transfer row's `merchant` is the plain recipient name
   (`张伟`); the merchant JSDoc mentions `'转账给'+name`, but the runtime value is the plain name —
   assertions use `.includes(RECIPIENT_NAME)`.
+- **Standalone-wedge seeding (journey `f`).** The recovery surface must be reachable by PLAIN
+  navigation, so the journey NEVER passes the actionId in the URL: it mints the cookie with a first
+  GREEN chat turn, seeds the committed-but-unrecorded rows directly into the isolated E2E DB
+  (`seedStandaloneWedge`, ONE transaction, no wipe/re-seed), then does a plain
+  `page.goto('/actions')` and clicks the rendered `恢复执行` control.
 
 ## Known Limitations
 - **Plan DAG has no observable "downstream node ran after resume".** The gated mock plan's `setlimit`
@@ -204,8 +228,8 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   is unset) every journey emits `SKIP` with the reason; the run does not fail.
 
 ## Routing Table
-- `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 5 journeys → structured report → non-zero exit on FAIL)
-- `./helpers.ts` → shared harness (isolated E2E DB + reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card + per-node timeline, read-model HTTP helpers, reporter, fail-fast navigation)
+- `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 6 journeys → structured report → non-zero exit on FAIL)
+- `./helpers.ts` → shared harness (isolated E2E DB + reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card + per-node timeline, read-model HTTP helpers, wedge fixtures + `seedStandaloneWedge`/direct-DB fact queries (`queryPendingActionStatus`/`queryExecutionAudit`), reporter, fail-fast navigation)
 - `./screenshots/` → git-ignored failure screenshots
 - `../app` → HTTP route-handler specs (the in-process acceptance layer this harness complements) (sibling — read-only)
 - `../setup.ts` + `../helpers` → vitest global setup + fixtures (untouched by this harness) (sibling — read-only)
