@@ -151,6 +151,7 @@ export function ChatWindow({
     onViewDetail: () => void stream.send('我想查看这笔交易的详情'),
     onFreeze: () => void stream.send('冻结我的银行卡'),
     onTaskControl: (a) => void stream.controlTask(a),
+    onRecover: (id) => void stream.recover(id),
     mfaAttempts: stream.mfaAttempts,
     busy: stream.busy,
     error: stream.error,
@@ -197,7 +198,15 @@ export function ChatWindow({
               />
             )}
             {stream.pendingReconciliations.map((r) => (
-              <ReconciliationCard key={r.actionId} action={r.summary} actionId={r.actionId} />
+              <ReconciliationCard
+                key={r.actionId}
+                action={r.summary}
+                actionId={r.actionId}
+                attention={r.attention}
+                onRecover={action.onRecover}
+                busy={stream.busy}
+                error={stream.error}
+              />
             ))}
           </>
         )}

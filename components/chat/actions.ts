@@ -10,14 +10,17 @@
  *  - `POST /api/chat` streams `text/event-stream` in the default mode: one `data: <JSON>\n\n` frame
  *    per `AgentStreamEvent`, terminated by `data: {"type":"done"}\n\n`. A `?stream=0` /
  *    `Accept: application/json` request gets the JSON envelope `{ ok:true, data: ChatTurnResponse }`.
- *  - The action routes (confirm/verify/cancel) return `{ ok:true, data: ActionResponse }` or the
- *    error envelope `{ ok:false, error:{ code, message } }`. A DOMAIN failure (e.g. a wrong MFA code)
- *    is a normal `200` with `data.ok === false` + a safe `data.message` — NOT an HTTP error.
+ *  - The action routes (confirm/verify/cancel/recover) return `{ ok:true, data: ActionResponse }` or
+ *    the error envelope `{ ok:false, error:{ code, message } }`. A DOMAIN failure (e.g. a wrong MFA
+ *    code) is a normal `200` with `data.ok === false` + a safe `data.message` — NOT an HTTP error.
  *  - `GET /api/tasks/:id` returns `{ ok:true, data: TaskPlan }` (or `404` for an unknown id); the SAME
  *    URL accepts `POST { action }` to steer a running plan (`pause`/`resume`/`cancel`/`retry`).
- *  - `GET /api/actions` returns the caller-session's NON-TERMINAL `PendingAction`s. Its exact body
- *    shape is not frozen, so `fetchPendingActions` consumes it TOLERANTLY (a top-level array OR
- *    `{ actions: [...] }`, rows that are `PendingAction`-like or summary-view).
+ *  - `GET /api/actions` returns the caller-session's attention rows: LIVE decisions (`pending` /
+ *    `awaiting_mfa`), an in-flight `confirmed` row, a recoverable result-less `confirmed` wedge, and a
+ *    terminal `needs_reconciliation` row. Each row MAY carry an additive `attention` class
+ *    (`decision|processing|recoverable|reconciliation`); when absent it is derived from `status`.
+ *    The exact body shape is not frozen, so `fetchPendingActions` consumes it TOLERANTLY (a
+ *    top-level array OR `{ actions: [...] }`, rows that are `PendingAction`-like or summary-view).
  *
  * Hard rules: these helpers NEVER throw. Every failure (network, parse, `!response.ok`, domain error)
  * surfaces as an `{ type:'error'; message }` event folded into the returned `ChatTurnResponse`, and
@@ -30,15 +33,16 @@ import type { RiskLevel } from '@/lib/contracts/risk';
 import type { PendingActionStatus, PendingActionSummary } from '@/lib/contracts/security';
 import type { TaskPlan } from '@/lib/contracts/task';
 import type { ToolName } from '@/lib/contracts/tools';
-// Type-only: the card node owns `TaskControlAction`; a type import is erased at build time, so this
-// never pulls the (client) card components into this module's runtime graph.
-import type { TaskControlAction } from './cards';
+// Type-only: the card node owns `TaskControlAction` + `AttentionClass`; a type import is erased at
+// build time, so this never pulls the (client) card components into this module's runtime graph.
+import type { AttentionClass, TaskControlAction } from './cards';
 
 export interface ChatEndpoints {
   chat: string; // default '/api/chat'
   confirm: (actionId: string) => string; // default `/api/actions/${id}/confirm`
   verify: (actionId: string) => string; // default `/api/actions/${id}/verify`
   cancel: (actionId: string) => string; // default `/api/actions/${id}/cancel`
+  recover: (actionId: string) => string; // default `/api/actions/${id}/recover`
   task: (id: string) => string; // default `/api/tasks/${id}` — read/control ONE persisted plan
   actions: string; // default '/api/actions' — list the session's non-terminal pending actions
 }
@@ -48,6 +52,7 @@ export const DEFAULT_ENDPOINTS: ChatEndpoints = {
   confirm: (actionId) => `/api/actions/${actionId}/confirm`,
   verify: (actionId) => `/api/actions/${actionId}/verify`,
   cancel: (actionId) => `/api/actions/${actionId}/cancel`,
+  recover: (actionId) => `/api/actions/${actionId}/recover`,
   task: (id) => `/api/tasks/${id}`,
   actions: '/api/actions',
 };
@@ -263,10 +268,11 @@ export async function controlTask(
 }
 
 /**
- * One `PendingAction` recovered for refresh restore. A row is either ACTIONABLE (`pending` /
- * `awaiting_mfa`) or a TERMINAL `needs_reconciliation` row — the latter has no server action
- * (it must NOT be confirmed/cancelled/re-invoked) but is surfaced so the user can reconcile it
- * out-of-band.
+ * One attention row recovered for refresh restore. A row is either ACTIONABLE (`pending` /
+ * `awaiting_mfa`) or an OUT-OF-BAND row (`confirmed` with an active lease, a result-less
+ * `confirmed` wedge the server can recover, or a terminal `needs_reconciliation`): the out-of-band
+ * rows have no confirm/MFA path but are surfaced so the user sees their state and — where the server
+ * allows it — can trigger the recovery entry. `attention` tells the UI which treatment to apply.
  */
 export interface PendingActionRef {
   id: string;
@@ -274,11 +280,48 @@ export interface PendingActionRef {
   tier: RiskLevel;
   requiresMfa: boolean;
   summary: PendingActionSummary;
+  /** How the chat surface must treat this row (see `AttentionClass`). */
+  attention: AttentionClass;
 }
 
 /** Coerce an untrusted value to a `RiskLevel`, falling back when it is not one of the three tiers. */
 function asRiskLevel(value: unknown, fallback: RiskLevel): RiskLevel {
   return value === 'GREEN' || value === 'YELLOW' || value === 'RED' ? value : fallback;
+}
+
+/** The set of valid `AttentionClass` values, for tolerant coercion of the server field. */
+const ATTENTION_CLASSES: readonly AttentionClass[] = [
+  'decision',
+  'processing',
+  'recoverable',
+  'reconciliation',
+];
+
+/** Coerce an untrusted `attention` value to an `AttentionClass`, else `undefined`. */
+function asAttentionClass(value: unknown): AttentionClass | undefined {
+  return typeof value === 'string' && (ATTENTION_CLASSES as readonly string[]).includes(value)
+    ? (value as AttentionClass)
+    : undefined;
+}
+
+/**
+ * Derive the attention class from a row `status` when the server did not supply one (backward
+ * compatible). `confirmed` falls back to `processing` — a `confirmed` row is by definition
+ * mid-execution, and only the (additive) server `attention` field distinguishes a genuinely
+ * recoverable wedge; without it the safe default is "still being processed" (no recovery button).
+ */
+function deriveAttention(
+  status: 'pending' | 'awaiting_mfa' | 'confirmed' | 'needs_reconciliation',
+): AttentionClass {
+  switch (status) {
+    case 'pending':
+    case 'awaiting_mfa':
+      return 'decision';
+    case 'needs_reconciliation':
+      return 'reconciliation';
+    case 'confirmed':
+      return 'processing';
+  }
 }
 
 /** Coerce an untrusted `fields` value to the frozen `PendingActionSummary['fields']` shape. */
@@ -324,7 +367,11 @@ function extractSummary(
 
 /**
  * Map ONE untrusted `PendingAction`-like row to a `PendingActionRef`, or `undefined` when it must be
- * dropped (missing id, or a status that is not actionable and not `needs_reconciliation`).
+ * dropped (missing id, or a status that is neither actionable nor one of the out-of-band states).
+ *
+ * Retained statuses: `pending` / `awaiting_mfa` (actionable), `confirmed` (an in-flight OR a
+ * recoverable result-less wedge) and `needs_reconciliation` (terminal, human-settled). Every other
+ * non-actionable status (`executed` / `failed` / `cancelled` / `locked`) is dropped.
  */
 function toPendingActionRef(row: unknown): PendingActionRef | undefined {
   if (!row || typeof row !== 'object') return undefined;
@@ -333,9 +380,12 @@ function toPendingActionRef(row: unknown): PendingActionRef | undefined {
   if (id === undefined) return undefined;
 
   const status = record.status;
-  // `needs_reconciliation` is terminal but MUST be surfaced for manual reconciliation; every other
-  // non-actionable status (confirmed/executed/failed/cancelled/locked) is dropped.
-  if (status !== 'pending' && status !== 'awaiting_mfa' && status !== 'needs_reconciliation') {
+  if (
+    status !== 'pending' &&
+    status !== 'awaiting_mfa' &&
+    status !== 'confirmed' &&
+    status !== 'needs_reconciliation'
+  ) {
     return undefined;
   }
 
@@ -345,19 +395,24 @@ function toPendingActionRef(row: unknown): PendingActionRef | undefined {
   const tier = asRiskLevel(record.tier ?? record.riskLevel ?? summaryRecord?.tier, 'YELLOW');
   const requiresMfa = record.requiresMfa === true || summaryRecord?.requiresMfa === true;
 
-  return { id, status, tier, requiresMfa, summary: extractSummary(record, tier, requiresMfa) };
+  // Prefer the additive server `attention`; fall back to deriving it from `status` (tolerant of an
+  // older server that does not emit it yet).
+  const attention = asAttentionClass(record.attention) ?? deriveAttention(status);
+
+  return { id, status, tier, requiresMfa, summary: extractSummary(record, tier, requiresMfa), attention };
 }
 
 /**
- * `GET /api/actions` — the caller-session's pending actions that need the user's attention, for
- * ACTIVE refresh restore.
+ * `GET /api/actions` — the caller-session's actions that need the user's attention, for refresh
+ * restore.
  *
  * Consumed TOLERANTLY (the route's exact shape is not frozen): accepts a top-level array or
  * `{ actions: [...] }`, and each row may be a `PendingAction` or a summary-view row. ACTIONABLE rows
- * (`pending` / `awaiting_mfa`) AND TERMINAL `needs_reconciliation` rows are retained (the latter has
- * no server action but must be SHOWN so a human can reconcile the unknown outcome out-of-band); the
- * other terminal statuses (`confirmed`/`executed`/`failed`/`cancelled`) and `locked` rows are dropped,
- * as are rows missing an id. NEVER throws — a failed/aborted read resolves to `[]` (best-effort).
+ * (`pending` / `awaiting_mfa`) AND out-of-band rows (`confirmed` in-flight/recoverable,
+ * `needs_reconciliation`) are retained (the latter carry no confirm/MFA path but must be SHOWN so the
+ * user sees the state and can reconcile/recover); the other terminal statuses (`executed` / `failed`
+ * / `cancelled`) and `locked` rows are dropped, as are rows missing an id. NEVER throws — a
+ * failed/aborted read resolves to `[]` (best-effort).
  */
 export async function fetchPendingActions(
   endpoints: ChatEndpoints = DEFAULT_ENDPOINTS,
@@ -438,7 +493,7 @@ export function sendChatTurn(
 }
 
 /**
- * POST an action (confirm/verify/cancel) and normalise the response.
+ * POST an action (confirm/verify/cancel/recover) and normalise the response.
  *
  * The action routes return `{ ok:true, data: ActionResponse }` (or the error envelope), but a bare
  * `ChatTurnResponse` is also tolerated. `data.ok` is the DOMAIN outcome (a failed action is a normal
@@ -528,4 +583,19 @@ export function cancelAction(
   endpoints: ChatEndpoints = DEFAULT_ENDPOINTS,
 ): Promise<ChatTurnResponse> {
   return postAction(endpoints.cancel(actionId), {});
+}
+
+/**
+ * `POST /api/actions/:id/recover` — the user-facing RECOVERY entry for an out-of-band action.
+ *
+ * The route re-checks ownership (cookie/session) and settles a `confirmed` result-less wedge (or a
+ * `needs_reconciliation` row) through the gateway's authorized path — the browser never replays a
+ * banking op itself. Normalised through the SAME `postAction` helper, so a failure is a safe event
+ * list (never a raw throw).
+ */
+export function recoverAction(
+  actionId: string,
+  endpoints: ChatEndpoints = DEFAULT_ENDPOINTS,
+): Promise<ChatTurnResponse> {
+  return postAction(endpoints.recover(actionId), {});
 }
