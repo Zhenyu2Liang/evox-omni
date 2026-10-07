@@ -1,0 +1,22 @@
+﻿ M agent/task-control.ts
+ M agent/task-fencing.ts
+ M agent/tools/planning.ts
+ M lib/contracts/agent.ts
+ M lib/contracts/task.ts
+ M lib/db/repositories/task.ts
+ M planner/executor.ts
+?? .probe_cfg.txt
+?? .probe_diff.txt
+?? .probe_install.txt
+?? .probe_lines.txt
+?? .probe_norm.txt
+?? .probe_out.txt
+?? .probe_rg.txt
+?? .probe_test.txt
+?? .probe_ts_probe.txt
+?? .probe_tsc.txt
+?? .tmpdir.txt
+---DIFFSTAT---
+ lib/contracts/agent.ts | 2 +-
+ lib/contracts/task.ts  | 6 ++++++
+ 2 files changed, 7 insertions(+), 1 deletion(-)
