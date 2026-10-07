@@ -7,6 +7,10 @@ The **exhaustive renderers for the frozen `ChatCard` union** (`lib/contracts/age
 variant to a component; every amount/status is rendered through `../../ui` primitives. All **Client
 Components** (they sit inside the streaming chat surface).
 
+It also holds `ReconciliationCard` — a NON-union, actionless card for a terminal `needs_reconciliation`
+action. It is NOT a `ChatCard` variant and is NOT dispatched by `CardRenderer`; `ChatWindow` renders it
+directly (see below).
+
 ## API Surface
 
 Named exports, re-exported from `./index.ts`. `ChatCard`/`PendingActionSummary`/`TaskPlan` from
@@ -46,7 +50,7 @@ export interface CardRendererProps { card: ChatCard; action?: CardActionHandlers
 export function CardRenderer(p: CardRendererProps): JSX.Element;   // 'use client'
 ```
 
-### The 11 card components (all `'use client'`, named exports)
+### The 11 `ChatCard` renderers (all `'use client'`, named exports)
 
 ```ts
 export interface BalanceCardProps { data: BalanceView; className?: string; }
@@ -91,6 +95,23 @@ export interface ErrorCardProps { message: string; code?: string; detail?: strin
 export function ErrorCard(p: ErrorCardProps): JSX.Element;            // safe, agent-facing error surface
 ```
 
+### `ReconciliationCard` — the non-union, actionless card
+
+`ReconciliationCard` renders a TERMINAL `needs_reconciliation` action: a gated side effect that MAY have
+committed but whose outcome could not be recorded, so a human must reconcile it out-of-band. It is
+deliberately ACTIONLESS — NO 确认/取消, NO code input, NO button that sends a chat message — so the
+operation is never re-invoked and the browser never executes a banking op. It is visually distinct from
+`ConfirmationCard` (🟡 tier badge + 确认/取消) and `MfaCard` (🔴 code entry) via an amber warning banner
+and a left accent border (never a `StatusBadge`), so it can never be mistaken for a live 🟡/🔴 decision.
+
+It is NOT a `ChatCard` variant and `CardRenderer` never dispatches to it (the union is unchanged); the
+`../../chat/ChatWindow` renders one per restored `pendingReconciliations` entry.
+
+```ts
+export interface ReconciliationCardProps { action: PendingActionSummary; actionId?: string; className?: string; }
+export function ReconciliationCard(p: ReconciliationCardProps): JSX.Element; // 'use client'
+```
+
 **PlanCard structure.** `PlanCard` renders the plan goal + the plan-level status badge, then the
 per-node **status timeline** via the composed `../../banking/AgentTaskTimeline` (the single status→meta
 source — it maps all 8 `TaskNodeStatus` to a distinct icon/label/tone and shows a failed node's
@@ -129,6 +150,8 @@ must populate `cards[].data` with exactly these shapes. It also threads the shar
 into the interactive cards (`onControl`/`busy` → `PlanCard`; `mfaAttempts` → `MfaCard.attempts`). Note:
 the `plan` renderer here is NOT the live plan path — a `plan` card is promoted into `activePlan` and
 rendered ONCE by `../../chat/ChatWindow` (see `../CONTEXT.md` "Plan dedupe" and "Human-decision card").
+`ReconciliationCard` is intentionally NOT a variant of this union (it is not agent-emitted — it is a
+client-side restore surface; see the section above).
 
 ## Known Issues
 
@@ -147,6 +170,9 @@ rendered ONCE by `../../chat/ChatWindow` (see `../CONTEXT.md` "Plan dedupe" and 
   `freeze_card` → YELLOW confirmation. The browser only calls fetch; the server re-validates + executes.
 - **MFA secrecy**: `MfaCard` renders `hint` + the failed-attempt count only — never the code
   (`MFA_CODE` is server-side; do not import).
+- **`ReconciliationCard` is actionless and non-union.** It renders a terminal `needs_reconciliation`
+  action with no confirm/cancel/MFA and is never dispatched by `CardRenderer`; `ChatWindow` renders it
+  directly from `pendingReconciliations`.
 - **Money** via `Money`; **tiers** via `StatusBadge`; reuse `../../banking` tiles and `../../charts`
   rather than re-implementing tiles/charts inside cards.
 - **No competing status→meta table**: node statuses are rendered only through the composed
@@ -161,6 +187,8 @@ rendered ONCE by `../../chat/ChatWindow` (see `../CONTEXT.md` "Plan dedupe" and 
 - RTL render tests under the root `tests/` suite render each card with a fixture `ChatCard` and assert
   key content (amount via `Money`, tier badge label, field rows, MFA hint present / code absent).
 - `CardRenderer` dispatch test: each `card.type` renders its component; unknown key fails to compile.
+- `ReconciliationCard` render test: a terminal `needs_reconciliation` `PendingActionSummary` renders the
+  amber warning + fields/amount with NO confirm/cancel/MFA control.
 - `PlanCard`'s dependency-label resolution (dep ids → node names, empty → `起始节点（无依赖）`, unknown id
   fallback) is the behavioural bit to assert; the timeline itself is delegated to `AgentTaskTimeline`.
   Its status→control mapping (`controlActionsFor`) and emitted `TaskControlAction`s are also behavioural.
@@ -171,7 +199,8 @@ rendered ONCE by `../../chat/ChatWindow` (see `../CONTEXT.md` "Plan dedupe" and 
 - `./CardRenderer.tsx` → the exhaustive `card.type` dispatcher
 - `./BalanceCard.tsx` `./TransferCard.tsx` `./ConfirmationCard.tsx` `./MfaCard.tsx` `./SpendingCard.tsx`
   `./CardsCard.tsx` `./InvestmentsCard.tsx` `./SubscriptionsCard.tsx` `./AnomalyCard.tsx`
-  `./PlanCard.tsx` `./ErrorCard.tsx` → the individual card renderers
+  `./PlanCard.tsx` `./ErrorCard.tsx` → the individual `ChatCard` renderers
+- `./ReconciliationCard.tsx` → the non-union, actionless terminal-`needs_reconciliation` card (rendered by `../ChatWindow`, not `CardRenderer`)
 - `./index.ts` → re-exports the cards, `CardRenderer`, and the types
 - `../` → `ChatWindow`/`MessageBubble` render `CardRenderer` (parent — read-only)
 - `../../banking/`, `../../charts/`, `../../ui/` → composed here (dependencies — read-only)

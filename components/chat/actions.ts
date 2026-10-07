@@ -262,7 +262,12 @@ export async function controlTask(
   }
 }
 
-/** One actionable, non-terminal `PendingAction` recovered for refresh restore. */
+/**
+ * One `PendingAction` recovered for refresh restore. A row is either ACTIONABLE (`pending` /
+ * `awaiting_mfa`) or a TERMINAL `needs_reconciliation` row — the latter has no server action
+ * (it must NOT be confirmed/cancelled/re-invoked) but is surfaced so the user can reconcile it
+ * out-of-band.
+ */
 export interface PendingActionRef {
   id: string;
   status: PendingActionStatus;
@@ -318,8 +323,8 @@ function extractSummary(
 }
 
 /**
- * Map ONE untrusted `PendingAction`-like row to a `PendingActionRef`, or `undefined` when it is not
- * an actionable non-terminal action (missing id, or a terminal/`locked` status).
+ * Map ONE untrusted `PendingAction`-like row to a `PendingActionRef`, or `undefined` when it must be
+ * dropped (missing id, or a status that is not actionable and not `needs_reconciliation`).
  */
 function toPendingActionRef(row: unknown): PendingActionRef | undefined {
   if (!row || typeof row !== 'object') return undefined;
@@ -328,7 +333,11 @@ function toPendingActionRef(row: unknown): PendingActionRef | undefined {
   if (id === undefined) return undefined;
 
   const status = record.status;
-  if (status !== 'pending' && status !== 'awaiting_mfa') return undefined;
+  // `needs_reconciliation` is terminal but MUST be surfaced for manual reconciliation; every other
+  // non-actionable status (confirmed/executed/failed/cancelled/locked) is dropped.
+  if (status !== 'pending' && status !== 'awaiting_mfa' && status !== 'needs_reconciliation') {
+    return undefined;
+  }
 
   const rawSummary = record.summary;
   const summaryRecord =
@@ -340,13 +349,15 @@ function toPendingActionRef(row: unknown): PendingActionRef | undefined {
 }
 
 /**
- * `GET /api/actions` — the caller-session's NON-TERMINAL pending actions, for ACTIVE refresh restore.
+ * `GET /api/actions` — the caller-session's pending actions that need the user's attention, for
+ * ACTIVE refresh restore.
  *
  * Consumed TOLERANTLY (the route's exact shape is not frozen): accepts a top-level array or
- * `{ actions: [...] }`, and each row may be a `PendingAction` or a summary-view row. Only ACTIONABLE
- * rows are kept (`pending` / `awaiting_mfa`); terminal (`confirmed`/`executed`/`failed`/`cancelled`)
- * and `locked` rows are dropped, as are rows missing an id. NEVER throws — a failed/aborted read
- * resolves to `[]` (best-effort).
+ * `{ actions: [...] }`, and each row may be a `PendingAction` or a summary-view row. ACTIONABLE rows
+ * (`pending` / `awaiting_mfa`) AND TERMINAL `needs_reconciliation` rows are retained (the latter has
+ * no server action but must be SHOWN so a human can reconcile the unknown outcome out-of-band); the
+ * other terminal statuses (`confirmed`/`executed`/`failed`/`cancelled`) and `locked` rows are dropped,
+ * as are rows missing an id. NEVER throws — a failed/aborted read resolves to `[]` (best-effort).
  */
 export async function fetchPendingActions(
   endpoints: ChatEndpoints = DEFAULT_ENDPOINTS,

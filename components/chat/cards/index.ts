@@ -3,6 +3,7 @@ export * from './BalanceCard';
 export * from './TransferCard';
 export * from './ConfirmationCard';
 export * from './MfaCard';
+export * from './ReconciliationCard';
 export * from './SpendingCard';
 export * from './CardsCard';
 export * from './InvestmentsCard';

@@ -48,6 +48,10 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
     an ambient `RUST_LOG` at/above `warn` suppresses the engine's line-0 INFO banner, the real diagnostic (e.g. the `P1003 Database … does not exist` probe that `db push` relies on before creating a fresh SQLite file) lands at index 0 and is discarded, and the CLI fails with an opaque empty `Error: Schema engine error:`.
   - `CliInvocation` (`{ command, args }`), `resolveRepoRoot(startDir = process.cwd())` (walks up to the dir holding `package.json` + `next.config.mjs`), `resolvePrismaBin(repoRoot)` (`node_modules/prisma/build/index.js`, else `undefined`), `resolveTsxBin(repoRoot)` (`node_modules/tsx/dist/cli.mjs`, else `undefined`), `cliCommand(localBin, npxArgs)` (prefers the project-local bin launched with `process.execPath`; falls back to `cmd.exe /d /s /c "npx …"` on Windows / the plain command on POSIX).
 - `contracts/` — the FROZEN cross-module type definitions (see routing table below).
+  `contracts/security.ts` owns `PendingActionStatus`, the authoritative lifecycle enum of a gated action:
+  its terminal member `needs_reconciliation` marks an action whose outcome is UNKNOWN (a gated write whose
+  SDK side effect may have committed while its result/status transaction rolled back), so it must not
+  dangle as a live decision and is surfaced to the user for manual reconciliation instead.
 - `db/` — Prisma client singleton + per-aggregate repositories (the only data-access layer).
 - `index.ts` — convenience barrel re-exporting `contracts`, `errors`, `money`, `config`, `constants`,
   `ids`, `date`, `clock`, `json` for `@/lib` imports. It deliberately does **NOT** re-export `db/`.
@@ -74,7 +78,11 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 
 - `./lib/contracts` → frozen cross-module types — `risk.ts` (RiskLevel/PermissionTier/TransferPolicy),
   `tools.ts` (ToolName/ToolCategory/ToolDescriptor), `security.ts` (SecurityEvaluation/SecurityDecision/
-  PendingAction/PendingActionSummary), `audit.ts` (AuditEntry/AuditStatus/SecurityEvent/SecurityEventKind),
+  PendingAction/PendingActionSummary/PendingActionStatus — whose TERMINAL member `needs_reconciliation`
+  marks a gated write whose outcome is UNKNOWN (the SDK side effect may have committed while the
+  result/status transaction rolled back): it is neither `failed` nor a live decision to confirm, it is
+  queryable and surfaced to the user as a manual-reconciliation entry),
+  `audit.ts` (AuditEntry/AuditStatus/SecurityEvent/SecurityEventKind),
   `task.ts` (TaskPlan/TaskNodeSpec/TaskNodeResult/TaskCondition), `agent.ts` (ChatMessage/ChatCard/
   AgentStreamEvent/ChatTurnRequest/Response), `index.ts` (barrel re-export).
 - `./lib/db` → Prisma client singleton (`client.ts`) + typed per-aggregate repositories (`repositories/`),

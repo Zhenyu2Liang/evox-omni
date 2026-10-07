@@ -27,12 +27,16 @@ the card-data payload types and action-handler types. Sub-barrels re-export each
 Primary public exports (grouped — full per-component prop signatures live in each child CONTEXT.md):
 
 - Chat surface (`./chat`): `ChatWindow`, `MessageBubble`, `Composer`, `ToolEventList`, `StreamingText`,
-  `useAgentStream`, and the client action helpers `sendChatTurn`, `confirmAction`, `verifyAction`,
-  `cancelAction`, `controlTask`, `fetchTaskPlan`, `fetchPendingActions`, `DEFAULT_ENDPOINTS`, `ChatEndpoints`.
-- Card renderers (`./chat/cards`): `CardRenderer` (dispatches on `ChatCard['type']`) plus the 11 card
+  `useAgentStream` (plus its `PendingHumanDecision` / `PendingReconciliation` types), and the client action
+  helpers `sendChatTurn`, `confirmAction`, `verifyAction`, `cancelAction`, `controlTask`, `fetchTaskPlan`,
+  `fetchPendingActions`, `DEFAULT_ENDPOINTS`, `ChatEndpoints`.
+- Card renderers (`./chat/cards`): `CardRenderer` (dispatches on `ChatCard['type']`) plus the 11 **union** card
   components (`BalanceCard`, `TransferCard`, `ConfirmationCard`, `MfaCard`, `SpendingCard`, `CardsCard`,
   `InvestmentsCard`, `SubscriptionsCard`, `AnomalyCard`, `PlanCard`, `ErrorCard`) and their prop types
   (`CardActionHandlers`, `TaskControlAction`, the card-data payload types).
+- Non-union card (`./chat/cards`): `ReconciliationCard` — an actionless amber warning card for a terminal
+  `needs_reconciliation` action, rendered DIRECTLY by `ChatWindow`; it is NOT a `ChatCard` variant and is
+  NOT dispatched by `CardRenderer` (so it is outside the `assertNever` exhaustiveness contract).
 - Charts (`./charts`): `SpendingPie`, `SpendingBar`, `SpendingTrend`, `MiniSparkline`.
 - Banking tiles (`./banking`): `AssetSummaryCard`, `RecentTransactions`, `CardTile`, `SubscriptionTile`,
   `InvestmentProductTile`, `AnomalyBanner`, `AgentTaskTimeline`.
@@ -79,9 +83,9 @@ The interactive cards are wired into ONE closed loop, driven by `useAgentStream`
 - **DAG control** — `PlanCard` renders each node's status (via `AgentTaskTimeline`) and Pause/Resume/Cancel/
   Retry controls conditioned on `plan.status`, calling `onControl(TaskControlAction)` → the hook's `controlTask`
   POSTs `{action}` to `/api/tasks/:id` and folds the returned snapshot into the live `activePlan` slot.
-- **Refresh restore** — on mount `useAgentStream` rebuilds an in-flight decision from `GET /api/actions`
-  and the live plan from `GET /api/tasks/:id`; `restoring` drives a loading state. Both are best-effort and
-  never clobber a live event-delivered state.
+- **Refresh restore** — on mount `useAgentStream` rebuilds an in-flight decision AND the display-only
+  `needs_reconciliation` list from `GET /api/actions`, and the live plan from `GET /api/tasks/:id`; `restoring`
+  drives a loading state. Each is best-effort and never clobbers a live event-delivered state.
 
 ## Client / Server Component split
 
@@ -106,9 +110,11 @@ owned by `./app`; the component layer only depends on this shape:
   `{ ok, status, tier, requiresMfa, mfaResult }` which `postAction` folds into events (escalation handling).
 - `POST /api/actions/:id/verify` — body `{ code: string }` → `ChatTurnResponse`. RED MFA path.
 - `POST /api/actions/:id/cancel` — body `{}` → `ChatTurnResponse`.
-- `GET /api/actions` — body none → the caller session's NON-TERMINAL `PendingAction` rows (accepted as a bare
-  array or `{ actions: [...] }`). Drives the **refresh restore** of an in-flight confirm/MFA decision; read
-  tolerantly by `fetchPendingActions` (never throws → best-effort `[]`). **Owned by `./app` (see Notes for Agents).**
+- `GET /api/actions` — body none → the caller session's `PendingAction` rows requiring attention: the
+  NON-TERMINAL `pending`/`awaiting_mfa` decisions PLUS the TERMINAL `needs_reconciliation` manual-reconciliation
+  entries (accepted as a bare array or `{ actions: [...] }`). Drives the **refresh restore** of both the
+  in-flight confirm/MFA decision and the display-only reconciliation list; read tolerantly by
+  `fetchPendingActions` (never throws → best-effort `[]`). **Owned by `./app` (see Notes for Agents).**
 - `GET /api/tasks/:id` — `{ ok:true, data: TaskPlan }` (plan refresh recovery); `POST /api/tasks/:id` body
   `{ action: 'pause'|'resume'|'cancel'|'retry' }` → `{ ok:true, data: TaskPlan }` (snapshot AFTER the control).
 - Errors are surfaced as an `{ type: 'error', message }` `AgentStreamEvent` (never a raw exception in UI).
@@ -144,7 +150,8 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
   regression guard.
 - Unit-testable without a DOM: `ui/Money` formatting, `StatusBadge` tier→label mapping, the
   `useAgentStream` event→state reducer (pure fold, testable with `AgentStreamEvent[]` fixtures from the
-  faux-provider scenarios), and `PlanCard.controlActionsFor` (status → control-set mapping).
+  faux-provider scenarios), the `useAgentStream` refresh-restore reconciliation fold (seeds
+  `pendingReconciliations` from `GET /api/actions`), and `PlanCard.controlActionsFor` (status → control-set mapping).
 - Rendering tests use React Testing Library (jsdom) rendering each card type with a fixture `ChatCard`
   and asserting key amounts/statuses; the `ChatWindow` integration test drives a scripted
   `AgentStreamEvent[]` sequence. (Test deps are added by the root `tests` owner.)
@@ -152,8 +159,8 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
 ## Routing Table
 
 - `./ui/` → Tailwind-styled primitives (Card, Button, Badge, StatusBadge, Money, Tabs, Dialog, Spinner, EmptyState, Table)
-- `./chat/` → chat surface: ChatWindow, MessageBubble, Composer, ToolEventList, StreamingText, useAgentStream hook, client action helpers, task-control (pause/resume/cancel/retry) + refresh restore
-- `./chat/cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher + card-data/action-handler types
+- `./chat/` → chat surface: ChatWindow, MessageBubble, Composer, ToolEventList, StreamingText, useAgentStream hook, client action helpers, task-control (pause/resume/cancel/retry) + refresh restore (pending decision + `needs_reconciliation` list)
+- `./chat/cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher + the non-union `ReconciliationCard` + card-data/action-handler types
 - `./charts/` → Recharts wrappers (SpendingPie, SpendingBar, SpendingTrend, MiniSparkline)
 - `./banking/` → read-model tiles/banners (AssetSummaryCard, RecentTransactions, CardTile, SubscriptionTile, InvestmentProductTile, AnomalyBanner, AgentTaskTimeline)
 - `./security/` → security visualisations (PermissionLegend, SecurityEventList, CircuitBreakerStatus)
@@ -170,8 +177,10 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
 - Money-moving buttons (confirm/verify/cancel) only ever call the `./app` action routes — the browser
   NEVER executes a gated banking op directly; the server re-validates and executes.
 - **App-node interface the closed loop depends on (report needs, do NOT fork a frozen contract):**
-  `GET /api/actions` must return the caller session's non-terminal `PendingAction`s for refresh restore
-  (accepted shapes: a bare array or `{ actions: [...] }`; each row needs `{ id, status, tier, requiresMfa, summary }`).
+  `GET /api/actions` must return the caller session's actionable `PendingAction`s — the NON-TERMINAL
+  `pending`/`awaiting_mfa` for the in-flight decision AND the TERMINAL `needs_reconciliation` for the
+  display-only reconciliation list (accepted shapes: a bare array or `{ actions: [...] }`; each row needs
+  `{ id, status, tier, requiresMfa, summary }`).
   Optionally, a `pendingActionId` on a plan node result (NOT a declared `TaskNodeResult` field — the agent records it inside the node's `output` JSON, read via `readPendingActionId`) would let
   the plan view link a parked node to its decision; a server-provided MFA attempt count would let `mfaAttempts`
   survive reloads (it currently counts only in-session failed verifies).

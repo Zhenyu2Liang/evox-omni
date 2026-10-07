@@ -21,11 +21,15 @@ export type PendingHumanDecision =
   | { kind: 'confirmation'; summary: PendingActionSummary; actionId: string }
   | { kind: 'mfa'; summary: MfaActionSummary; actionId: string; hint?: string };
 
+/** A restored TERMINAL action a human must reconcile out-of-band (no server action, never re-invoked). */
+export interface PendingReconciliation { summary: PendingActionSummary; actionId: string; }
+
 export interface UseAgentStreamResult {
   messages: ChatMessage[];
   toolEvents: ToolEventView[];
   activePlan?: TaskPlan;
   pendingAction?: PendingHumanDecision;              // { kind, summary, actionId, hint? }
+  pendingReconciliations: PendingReconciliation[];   // restored TERMINAL needs_reconciliation actions (display-only)
   streamingText: string;
   busy: boolean;
   restoring: boolean;                                // true while the mount-time pending-actions read is in flight
@@ -85,8 +89,10 @@ export function cancelAction(actionId: string, endpoints?: ChatEndpoints): Promi
 export function fetchTaskPlan(id: string, endpoints?: ChatEndpoints): Promise<TaskPlan | undefined>;
 // POST the SAME `task(id)` URL with `{ action }`; resolves the post-control snapshot, else undefined.
 export function controlTask(id: string, action: TaskControlAction, endpoints?: ChatEndpoints): Promise<TaskPlan | undefined>;
-// GET `actions`; tolerant of a top-level array OR `{ actions: [...] }`; keeps only actionable
-// (pending | awaiting_mfa) rows. Best-effort — resolves `[]` on ANY failure (never throws).
+// GET `actions`; tolerant of a top-level array OR `{ actions: [...] }`; keeps actionable
+// (pending | awaiting_mfa) rows AND TERMINAL needs_reconciliation rows (the latter has no server
+// action but must be SHOWN for out-of-band reconciliation, never re-invoked). Best-effort —
+// resolves `[]` on ANY failure (never throws).
 export interface PendingActionRef { id: string; status: PendingActionStatus; tier: RiskLevel;
   requiresMfa: boolean; summary: PendingActionSummary; }
 export function fetchPendingActions(endpoints?: ChatEndpoints): Promise<PendingActionRef[]>;
@@ -105,6 +111,7 @@ when the server sent none (e.g. a wrong MFA code arrives as `ok:false` + `status
 The fold is implemented as a **separately-exported PURE reducer** `reduceAgentEvents(state, events):
 ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is unit-testable with
 `AgentStreamEvent[]` fixtures and **no DOM**. `useAgentStream` merely wraps it in `useState`.
+`pendingReconciliations` is NOT event-driven — it is seeded only by the refresh-restore effect (below).
 
 | `AgentStreamEvent` | state effect |
 | --- | --- |
@@ -147,6 +154,11 @@ duplicate (`withoutDuplicateDecisionCard`, matched by `actionId` for MFA and by 
 confirmation) so exactly one card is visible for the active action; a message left empty by the
 removal is dropped (no empty bubble). Older/unrelated decision cards are preserved.
 
+Separately, `ChatWindow` renders one ACTIONLESS `ReconciliationCard` per restored terminal
+`needs_reconciliation` action (from `pendingReconciliations`) — an amber warning with NO 确认/取消 and
+NO code input, so a possibly-executed-but-unrecorded op is never re-invoked and is never mistaken for
+a live 🟡/🔴 decision.
+
 ### Refresh recovery
 
 `ChatWindow` takes an optional `taskId` threaded into `useAgentStream`. On mount the hook:
@@ -156,13 +168,20 @@ removal is dropped (no empty bubble). Older/unrelated decision cards are preserv
 - never overwrites a plan a live `plan_update` already delivered, and ignores a stale/unmounted or
   failed fetch (an `alive` cleanup flag; `fetchTaskPlan` resolves `undefined` instead of throwing).
 
-**Pending-action refresh restore.** A second one-shot mount effect rebuilds the active human decision
-(so a reloaded page still shows the confirm/MFA card for an in-flight action): when there is no live
-`pendingAction` it `fetchPendingActions()` and restores the MOST RELEVANT non-terminal one —
-`requiresMfa || status === 'awaiting_mfa' || tier === 'RED'` → the `mfa` kind, else the
-`confirmation` kind. `restoring` is `true` while that read is in flight. Same guards as the plan
-recovery: an `alive` cleanup flag, a functional `setState` that refuses to clobber a non-undefined
-`pendingAction`, and a best-effort `[]` on failure — it NEVER throws to the UI.
+**Pending-action + reconciliation refresh restore.** A second one-shot mount effect ALWAYS runs
+`fetchPendingActions()` (a terminal `needs_reconciliation` row carries no live decision of its own,
+so it must be read even when a decision is already showing), then rebuilds two independent things:
+- the ACTIVE human decision in the single `pendingAction` slot (so a reloaded page still shows the
+  confirm/MFA card for an in-flight action) — the MOST RELEVANT actionable row wins:
+  `requiresMfa || status === 'awaiting_mfa' || tier === 'RED'` → the `mfa` kind, else the
+  `confirmation` kind;
+- `pendingReconciliations` — every TERMINAL `needs_reconciliation` row, as a display-only list
+  (no server action, never re-invoked), which `ChatWindow` renders one `ReconciliationCard` per row.
+
+`restoring` is `true` while that read is in flight. Same guards as the plan recovery: an `alive`
+cleanup flag, a functional `setState` that refuses to clobber a non-undefined `pendingAction` (or a
+non-empty `pendingReconciliations`) already delivered by a live event, and a best-effort `[]` on
+failure — it NEVER throws to the UI.
 
 ### Plan control (pause / resume / cancel / retry)
 
@@ -222,6 +241,9 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
   with `kind`, error→banner, done→idle.
 - `ChatWindow` integration test: feed a scripted event list, assert rendered messages/cards/timeline,
   the single live plan and the single active decision card.
+- Refresh restore: a `fetchPendingActions` fixture carrying actionable AND `needs_reconciliation` rows
+  must rebuild the decision slot AND the `pendingReconciliations` list (an actionless
+  `ReconciliationCard` per reconciliation row) without clobbering a live decision.
 - `Composer`: enter-to-send + disabled-when-busy behaviour.
 
 ## Routing Table
@@ -231,8 +253,8 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
 - `./Composer.tsx` → input + send
 - `./ToolEventList.tsx` → tool/task status timeline (no chain-of-thought)
 - `./StreamingText.tsx` → incremental assistant text
-- `./useAgentStream.ts` → the event→state hook (chat state machine) + refresh recovery (plan AND pending action) + plan control + MFA attempt counter
+- `./useAgentStream.ts` → the event→state hook (chat state machine) + refresh recovery (plan, pending action AND reconciliation) + plan control + MFA attempt counter
 - `./actions.ts` → typed client fetch helpers + `ChatEndpoints`/`DEFAULT_ENDPOINTS`/`fetchTaskPlan`/`controlTask`/`fetchPendingActions`
-- `./cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher
+- `./cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher + the non-union `ReconciliationCard`
 - `./index.ts` → re-exports the chat surface + action helpers
 - `../../ui/` → primitives used here (dependency — read-only)
