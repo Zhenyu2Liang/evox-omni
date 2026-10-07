@@ -33,6 +33,8 @@ Prisma models (see `schema.prisma` for exact fields):
 - `AgentSession` — per-session serialized agent state (`stateJson`).
 - `PendingAction` / `MfaChallenge` — two-phase YELLOW/RED confirmation + mock MFA. `PendingAction`
   carries `taskId`/`nodeId` (owning plan + node) persisted at creation for plan-level revocation.
+- `ExecutionReceipt` — the committed-fact record of a gated side effect, unique on `(userId, key)`;
+  stores the ORIGINAL result (`resultJson`) + `requestDigest` so a replay returns the committed result.
 
 ## Seed Data (`seed.ts`)
 
@@ -83,6 +85,34 @@ All new fields below are **optional/nullable**, so existing rows and tests keep 
   associated operation even when the node's `output` JSON was never written / was overwritten.
 - **Indexes** — added `PendingAction @@index([taskId])` and `AgentTaskNode @@index([taskId, nodeId])`
   (the latter also supports the exactly-once node claim lookups) alongside the existing indexes.
+- **Committed-fact record (`ExecutionReceipt`)** — `id`, `userId`, `key`, `toolName`, `requestDigest`,
+  `resultJson` (JSON text of the ORIGINAL tool result), `txId` (the ledger `Transaction` id, nullable),
+  `createdAt`, with `@@unique([userId, key])`. It is the durable proof that a gated side effect under a
+  given execution identity (`userId` + `key`) has committed: a repeat with the SAME identity and SAME
+  `requestDigest` returns the stored ORIGINAL `resultJson`; the SAME identity with a DIFFERENT digest is
+  a `CONFLICT`.
+- **Plan-ownership generation (`AgentTask.generation Int @default(0)`)** — the plan-execution generation
+  stamped on claim and emitted on `plan_update`; used for execution-right fencing.
+- **Execution lease (`PendingAction.executionLeaseOwner String?` + `executionLeaseExpiresAt DateTime?`)** —
+  the persisted LEASE of the confirm/verify continuation applying an action side effect
+  (`EXECUTION_LEASE_TTL_MS = 120000`, a code constant in `agent/confirmation-recovery.ts`); it
+  distinguishes a still-running continuation from a genuine wedge. `NULL` = no active lease.
+- **Write-once recovery audit (`AuditLog.dedupeKey String? @unique`)** — makes a recovery audit
+  idempotent: a repeat recovery with the same `dedupeKey` (e.g. `exec:<ledgerKey>`) never
+  double-records. SQLite UNIQUE allows multiple `NULL`s, so key-less rows are unaffected.
+- **Terminal reconciliation status** — `PendingAction.status` also includes `needs_reconciliation`
+  (an out-of-band human-settled UNKNOWN outcome) alongside
+  `pending` | `confirmed` | `awaiting_mfa` | `executed` | `failed` | `cancelled`.
+
+### Schema Evolution & Legacy-Data Compatibility
+
+Every field/model above is **additive** — new nullable columns and new tables only; no existing column
+is changed or removed. The schema is applied exclusively with **`prisma db push`** (there is **no
+`migrations/` directory**), and a push leaves **existing data valid** (new columns default to
+`NULL`/`0`). Historical `PendingAction`/ledger rows that lack an `ExecutionReceipt` are still recognized
+as already-posted via the legacy deterministic ledger id (`idempotentTransferTxId`), so a receipt is not
+required for them to be treated as committed. Data consistency is **never** restored by clearing or
+re-seeding — a reset is not a repair.
 
 ## Constraints
 
