@@ -347,10 +347,25 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   `waiting_confirmation` forever.
   The tool is NEVER re-invoked and NO rollback is fabricated: executed work is irreversible.
   The DISTINGUISHER between that genuine wedge and a `confirmed`+null row still OWNED by a live continuation is
-  the in-process `inFlightConfirmations` registry (the same pattern as `inFlightExecutions`, keyed by action id;
-  `confirmAction`/`verifyAction` register the action id BEFORE authorizing via `withLiveConfirmation` and clear it
-  in a `finally`). A row whose id IS registered is reported as STILL PARKED with NO CAS and NO write, so the live
-  continuation's REAL outcome is never evicted; a row whose id is ABSENT is the genuine wedge and IS finalized.
+  the in-process, REFERENCE-COUNTED `liveConfirmations` registry owned by `agent/confirmation-recovery.ts`
+  (`retainAction`/`releaseAction`/`isActionLive`/`liveCount`, keyed by action id — the same per-process pattern as
+  `inFlightExecutions`). `confirmAction`/`verifyAction` register the action id BEFORE authorizing via
+  `withLiveConfirmation` and release it in a `finally`; it COUNTS (not a `Set`), so a rejected DUPLICATE confirm
+  cannot clear a still-running original's marker (removed only when the count reaches zero). A row whose id is
+  LIVE is reported as STILL PARKED with NO CAS and NO write, so the live continuation's REAL outcome is never
+  evicted; a row whose id is ABSENT is the genuine wedge and IS finalized.
+- **A STANDALONE (non-plan) wedge settles on a REPEAT confirm/verify — replayed only when PROVEN idempotent.**
+  `agent/confirmation.ts#conflictOutcome` calls `recoverStandaloneWedge(actionId, { selfHoldsLiveMarker: true })`
+  as its FIRST statement: a standalone gated action left `confirmed` with NO persisted result (its side effect
+  committed but the result+status transaction rolled back, or the process died) settles on a REPEAT
+  confirm/verify. `transfer_money` — the ONLY standalone write tool with a PROVEN-idempotent SDK write (the ledger
+  PK dedups the same key) — is IDEMPOTENTLY REPLAYED, persisting its TRUE result and terminal status atomically;
+  any OTHER standalone write tool transitions to the explicit, queryable terminal `needs_reconciliation` state
+  (never a fabricated failure, rollback or blind re-run), surfaced by `GET /api/actions` + a UI
+  manual-reconciliation card. `recoverStandaloneWedge` returns `undefined` (defer) when the row is not a
+  `confirmed` wedge, when its result IS stored, when ANOTHER live continuation in this process owns it (the
+  caller's own live marker is subtracted via `selfHoldsLiveMarker`), or when the row is PLAN-LINKED (left to the
+  executor's `executeGatedToolOnce` path).
 - **No pre-park plan-status check exists** — neither `securityGateway.handleToolCall` nor
   `executor.runPlan`'s `runToolNode` consults the plan status before parking. Prevention of a
   post-cancel executable action relies on the post-run CANCEL SWEEP: `sweepCancelledPlan(sessionId,
@@ -532,7 +547,7 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
 ## Known Issues
 
 - **Cross-action transfer serialization depends on SQLite's DB-level single-writer lock, and the gateway's confirm-time re-risk transaction does not include the SDK execution.** `security/security-gateway.ts#authorizeTransfer` re-risks in ONE `prisma.$transaction` that CAS-claims the action FIRST and only THEN reads the in-flight-inclusive effective total (`computeEffectiveTransferTotalWith`) and re-runs `evaluateTransferRisk` (escalating to MFA when the day's total would exceed the limit), so concurrent confirms of DISTINCT parked transfers serialize only through SQLite's single-writer lock - with no explicit isolation level or `SELECT ... FOR UPDATE`; and a crash between that commit and `agent/confirmation.ts#executeAuthorizedAction` (which runs the transfer, then persists `resultJson` and `recordActionResult`) leaves a `confirmed`-but-unledgered action counted as in-flight (over-conservative, never under-counting).
-- **`inFlightConfirmations` is PER-PROCESS.** A `confirmed` + `resultJson=null` row whose live continuation runs in a DIFFERENT process/instance is not distinguished from a genuine wedge (the registry is an in-process liveness hint, not a durable marker); multi-instance deploy is not covered.
+- **`liveConfirmations` is PER-PROCESS.** A `confirmed` + `resultJson=null` row whose live continuation runs in a DIFFERENT process/instance is not distinguished from a genuine wedge (the registry is a per-process, ref-counted liveness hint, not a durable marker); multi-instance deploy is not covered.
 - **Execution takeover is a TTL HEURISTIC.** `EXECUTION_CLAIM_TTL_MS = 600_000ms` is computed from the REAL clock: a single tool call legitimately blocked beyond the TTL can be overtaken (its writes are fenced, so it can never clobber the takeover, but it is preempted), so preemption is a heuristic, never a liveness proof.
 - **File-size budget exceeded.** `agent/task-control.ts` (~1198 lines) and `agent/confirmation.ts` (~1027 lines) exceed the ~1000-line soft guideline and are extraction candidates.
 
@@ -580,7 +595,8 @@ Vitest (`tests/`, sibling). This node is designed to be testable WITHOUT network
 - `./agent/system-prompt.ts` → banking system prompt builder + hallucination/permission rules
 - `./agent/session.ts` → per-session `AgentState` + transcript load/create/persist
 - `./agent/run-turn.ts` → one chat turn: prompt, event→stream mapping, persistence; `resumeTurn`
-- `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path + executed-node recovery + committed-side-effect wedge finalization (`inFlightConfirmations`)
+- `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path + executed-node recovery + committed-side-effect wedge finalization (ref-counted `liveConfirmations` in `confirmation-recovery.ts`)
+- `./agent/confirmation-recovery.ts` → ref-counted per-process live-confirmation registry (`retainAction`/`releaseAction`/`isActionLive`/`liveCount`) + standalone (non-plan) wedge recovery (`recoverStandaloneWedge`: idempotent replay of the PROVEN-idempotent `transfer_money`, else the terminal queryable `needs_reconciliation` state)
 - `./agent/card-emitter.ts` → pure `toCards(toolName, result): ChatCard[]` mapping + card helpers
 - `./agent/task-control.ts` → node-output JSON shape + token-fenced DAG plan persistence/load mapping + PLAN-ownership-aware node claim/write/reclaim (`claimNodeOwnedByPlan`, `planExecutionClaimHeld`, `buildNodeClaimPorts`, `clearStaleNodeClaims`) + pause/resume/cancel/retry/getTaskPlan glue (ownership-checked; EXECUTOR vs CONTROL write mode — see `task-fencing.ts`)
 - `./agent/task-fencing.ts` → FENCED plan/node write primitives: `toNodeUpdate`/`jsonNodeOutput`/`isMissingNodeError`, `settlePlanFromNodes`, `recordDecidedNodeFenced` (single-statement ownership CASes used by a lost-claim confirm-continuation)
