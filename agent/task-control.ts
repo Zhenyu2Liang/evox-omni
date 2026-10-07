@@ -529,7 +529,7 @@ export function createTaskPersistence(
       }
       if (planToken !== undefined) {
         // FENCED on the PLAN claim (an EXECUTOR write whose node has no NODE token — the `submit_plan`
-        // inline PlanDeps declares no `claimNode`): ONE atomic `updateMany` filtered by the PARENT task
+        // inline PlanDeps' SOFT `claimNode` mints no node token): ONE atomic `updateMany` filtered by the PARENT task
         // still carrying this run's claim token (`task: { executionToken: planToken }`) and — when the
         // NEW status is terminal — a not-yet-terminal stored node, so a run whose plan claim was taken
         // over writes NOTHING instead of clobbering the takeover's terminal node row. `count === 0` ⇒
