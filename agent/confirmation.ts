@@ -66,6 +66,7 @@ import {
   retainAction,
   settlePendingAction,
 } from './confirmation-recovery';
+import { buildRecoveryAudit, decideConvergence } from './execution-convergence';
 
 /**
  * The security gateway's runtime surface.
@@ -509,19 +510,28 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
         if (existing.status === 'executed') {
           return recoverExecutedPlanAction(existing);
         }
-        // DEFER while a confirm/verify continuation is applying THIS action's side effect RIGHT NOW in
-        // this process (the ref-counted `liveConfirmations` registry in `confirmation-recovery.ts`):
-        // the row is `confirmed` with no result yet ONLY because that LIVE continuation has not written
-        // it. Finalizing here would evict its real outcome and settle the node `failed` for work that
-        // actually succeeded; instead it is reported STILL PARKED on that live decision (no CAS, no
-        // write). A `confirmed` row with NO live continuation is the genuine WEDGE and IS finalized below.
-        if (existing.status === 'confirmed' && !isActionLive(existing.id)) {
+        // ONE evidence-based convergence decision (see `./execution-convergence`): consult the
+        // PERSISTED facts — a committed `ExecutionReceipt`, a stored result, a live continuation
+        // — BEFORE settling, so a successful, irreversible side effect is never finalized `failed`
+        // merely because its result+status write rolled back. A row a confirm/verify continuation is
+        // applying RIGHT NOW (in-process `liveConfirmations`, or a standalone lease) is DEFERRED —
+        // reported STILL PARKED on that live decision (no CAS, no write) so its real outcome is never
+        // evicted — while a result-less row with NO evidence is the genuine WEDGE and IS finalized
+        // (plan-linked => terminal `failed` for manual review). The tool is NEVER re-invoked on a guess.
+        const decision = await decideConvergence(existing);
+        if (decision.write && existing.status === 'confirmed') {
           const won = await settlePendingAction({
             actionId: existing.id,
-            status: readStoredResult(existing)?.ok === true ? 'executed' : 'failed',
+            status: decision.status,
+            result: decision.result,
             from: ['confirmed'],
+            audit: buildRecoveryAudit(existing, decision),
+            dedupeKey: `exec:${existing.id}`,
           });
-          if (won) return recoverExecutedPlanAction(existing);
+          if (won) {
+            const refreshed = (await getPendingAction(existing.id)) ?? existing;
+            return recoverExecutedPlanAction(refreshed);
+          }
         }
         return {
           ok: false,

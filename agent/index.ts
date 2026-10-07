@@ -21,8 +21,10 @@ import {
   hasActiveLease,
   leaseNowMs,
   recoverStandaloneWedge,
+  settlePendingAction,
   type ConfirmableActionRow,
 } from './confirmation-recovery';
+import { buildRecoveryAudit, decideConvergence } from './execution-convergence';
 import {
   cancelTask as cancelTaskInternal,
   findTaskByPendingAction,
@@ -176,6 +178,22 @@ export async function recoverAction(
   // node from the PERSISTED result (or settles it `failed` / manual-reconciliation) — the tool is
   // never re-run on a mere guess.
   if (row !== null && isPlanLinked(link)) {
+    // Evidence-based convergence at the recovery ENTRY POINT: a plan-linked row whose side effect is
+    // PROVEN committed (a durable `ExecutionReceipt`, or a persisted result) is recorded `executed`
+    // on the ACTION first — the tool is NEVER re-invoked — so an irreversible posted effect is
+    // never left dangling `confirmed`. The owning plan is then resumed (below) so the NODE backfills
+    // its REAL outcome from that persisted result without re-applying the side effect.
+    const decision = await decideConvergence(row);
+    if (decision.write && decision.status === 'executed') {
+      await settlePendingAction({
+        actionId,
+        status: decision.status,
+        result: decision.result,
+        from: ['confirmed'],
+        audit: buildRecoveryAudit(row, decision),
+        dedupeKey: `exec:${actionId}`,
+      });
+    }
     const located = await findTaskByPendingAction(row.sessionId, actionId);
     if (located !== undefined) {
       try {
