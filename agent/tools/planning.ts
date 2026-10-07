@@ -39,6 +39,8 @@ import {
   releaseTaskExecution,
 } from '@/lib/db/repositories/task';
 import {
+  buildNodeClaimPorts,
+  clearStaleNodeClaims,
   createTaskPersistence,
   defaultPollControls,
   planExecutionClaimHeld,
@@ -307,7 +309,8 @@ export async function runSubmitPlan(
   const planNow = deps.now ?? (() => demoNow());
   const accumulated = new Map<string, TaskNodeResult>();
   // The plan's executor slot token (minted just below, before the run starts): the SAME per-run token
-  // this run fences its writes on, read by the both-sink publish gate AND the SOFT `claimNode` port.
+  // this run fences its plan/node writes on, read by the both-sink publish gate AND the ATOMIC node
+  // claim ports built just after the claim (see `buildNodeClaimPorts`).
   const claimToken = newId('taskclaim');
   const onNodeUpdate = async (node: TaskNodeResult): Promise<void> => {
     // PLAN-OWNERSHIP GATE (BOTH sinks): publish NOTHING while this run no longer owns the plan's
@@ -337,17 +340,19 @@ export async function runSubmitPlan(
       summary: `计划「${goal}」已在执行中，本次未重复启动`,
     };
   }
+  // WON the slot: nothing to reclaim on a FRESH plan (every node is `pending` with a NULL token), but
+  // calling it keeps the initial pass identical to resume/retry/confirm-continuation (see
+  // `clearStaleNodeClaims`).
+  await clearStaleNodeClaims(plan.id, claimToken);
 
-  // PER-NODE PLAN-OWNERSHIP CLAIM (SOFT): the executor asks `claimNode` before EVERY node, so wiring
-  // this port is what makes the INITIAL run stop at its next node boundary once its plan claim is lost.
-  // `claimNode` READS this run's PLAN claim (`planExecutionClaimHeld`) instead of minting a per-node
-  // token: after a concurrent resume/retry rotated `AgentTask.executionToken` the read returns false,
-  // the executor BREAKS the walk and launches NO successor node tool. It claims no node token — so the
-  // takeover stays free to (re)claim the node it inherits — and `releaseNode` is therefore a no-op.
-  // Node writes stay PLAN-token fenced via `createTaskPersistence` below (the same fence a
-  // skip/condition/note node uses), so a taken-over run overwrites no node row either.
-  const claimNode = async (): Promise<boolean> => planExecutionClaimHeld(plan.id, claimToken);
-  const releaseNode = async (): Promise<void> => {};
+  // PER-NODE PLAN-OWNERSHIP CLAIM (ATOMIC): the executor asks `claimNode` before EVERY node. With this
+  // run's PLAN claim threaded in, `buildNodeClaimPorts` mints an ATOMIC per-node token through the
+  // single-statement plan-ownership CAS `claimNodeOwnedByPlan`, so ownership is verified in the SAME
+  // statement as the claim — there is NO TOCTOU window between the read and the tool launch, so a
+  // concurrent takeover that rotates `AgentTask.executionToken` can no longer let this run launch a
+  // successor tool. The same map handed to `createTaskPersistence` fences every node WRITE on the claim
+  // this run handed out.
+  const { claimNode, releaseNode, nodeTokens } = buildNodeClaimPorts(plan.id, claimToken);
 
   let result: TaskPlan;
   try {
@@ -360,15 +365,18 @@ export async function runSubmitPlan(
         // observed at this run's next node checkpoint, so a LIVE plan really stops (the persisted
         // `AgentTask.status` is the source of truth — see `defaultPollControls`).
         controls: defaultPollControls(plan.id),
-        // PER-NODE CLAIM + WRITE FENCES keyed on this run's PLAN claim: `claimNode` stops the run at
-        // its next node boundary once the plan claim is lost (so a taken-over initial run launches no
-        // successor tool), `releaseNode` is its no-op counterpart, and `createTaskPersistence` fences
-        // every node write on the PLAN claim — so a run whose claim was taken over can neither launch a
-        // successor tool nor overwrite the takeover's plan/node rows (an executor write with NO claim is
-        // SKIPPED, never written unfenced).
+        // PER-NODE CLAIM + WRITE FENCES keyed on this run's PLAN claim: `claimNode` is the ATOMIC
+        // plan-ownership node CAS, so a taken-over initial run fails its next claim and launches no
+        // successor tool; `releaseNode` releases that node token (and renews the plan lease), and
+        // `createTaskPersistence` fences every node write on the claim this run handed out — so a run
+        // whose claim was taken over can neither launch a successor tool nor overwrite the takeover's
+        // plan/node rows (a fenced executor write with NO claim is SKIPPED, never written unfenced).
         claimNode,
         releaseNode,
-        ...createTaskPersistence(plan.id, { planToken: claimToken }),
+        ...createTaskPersistence(plan.id, {
+          planToken: claimToken,
+          nodeToken: (nodeId) => nodeTokens.get(nodeId),
+        }),
       },
       { signal: deps.signal, now: deps.now },
     );

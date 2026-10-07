@@ -184,11 +184,36 @@ async function claimNodeOwnedByPlan(
 }
 
 /**
+ * CLEAR every NON-TERMINAL node execution claim of `planId`, FENCED on the caller having just WON the
+ * plan claim `planToken`.
+ *
+ * A stale-claim takeover (`claimTaskExecution` matching an aged `AgentTask.executionClaimedAt`) rotates
+ * the PLAN token, which fences the zombie's PLAN writes — but each node the zombie already claimed still
+ * carries the zombie's FRESH node token, which is neither NULL nor stale, so the takeover's atomic
+ * `claimNodeOwnedByPlan` CAS would REFUSE it and the plan would wedge at `'running'`. Clearing the
+ * non-terminal node claims under the WINNER's own plan token (a loser's `updateMany` matches 0 rows, so
+ * "exactly one takeover winner" is preserved) makes those nodes reclaimable again.
+ *
+ * A fresh plan has NULL node tokens and a clean release has NULL node tokens, so this is a cheap no-op
+ * on the happy path; TERMINAL nodes are never touched (they must never be re-run).
+ */
+export async function clearStaleNodeClaims(planId: string, planToken: string): Promise<void> {
+  await prisma.agentTaskNode.updateMany({
+    where: {
+      taskId: planId,
+      status: { notIn: TERMINAL_NODE_STATUSES },
+      task: { executionToken: planToken },
+    },
+    data: { executionToken: null, executionClaimedAt: null },
+  });
+}
+
+/**
  * Whether `planId`'s PLAN execution claim is still held by `token` — a single cheap read used to GATE a
  * publication (so a run whose plan claim was taken over emits NO stale `plan_update`; see
- * `agent/tools/planning.ts`) and as the SOFT per-node claim of the `submit_plan` inline PlanDeps (which
- * holds no node token): a run that no longer owns the plan stops at its next node boundary instead of
- * running a successor tool call.
+ * `agent/tools/planning.ts`). Every real executor pass threads this same claim into the ATOMIC node
+ * claims of `buildNodeClaimPorts`, so a run that no longer owns the plan also fails its next node claim
+ * instead of running a successor tool call.
  */
 export async function planExecutionClaimHeld(planId: string, token: string): Promise<boolean> {
   const row = await prisma.agentTask.findUnique({
@@ -761,6 +786,10 @@ export async function resumeTask(
   if (!(await claimTaskExecution(taskId, token, { staleBefore: staleExecutionClaimBefore() }))) {
     return reloadPlan(sessionId, taskId);
   }
+  // WON the slot: let this pass RECLAIM the previous owner's non-terminal nodes, whose still-fresh node
+  // tokens would otherwise refuse the atomic node CAS (see `clearStaleNodeClaims`). Fenced on `token`,
+  // so a losing racer clears nothing.
+  await clearStaleNodeClaims(taskId, token);
 
   try {
     const result = await executor.runPlan(
@@ -1002,6 +1031,9 @@ export async function retryTask(
   if (!(await claimTaskExecution(taskId, token, { staleBefore: staleExecutionClaimBefore() }))) {
     return reloadPlan(sessionId, taskId);
   }
+  // WON the slot: reclaim the previous owner's non-terminal nodes so this retry can claim them (see
+  // `clearStaleNodeClaims`). Fenced on `token`, so a losing racer clears nothing.
+  await clearStaleNodeClaims(taskId, token);
 
   try {
     const result = await lifecycle.retryPlan(
@@ -1142,6 +1174,10 @@ export async function resumeTaskForAction(
     const plan = await reloadPlan(sessionId, located.taskId);
     return { taskId: located.taskId, nodeId: located.nodeId, plan };
   }
+
+  // WON the slot: let this continuation RECLAIM the previous owner's non-terminal nodes (see
+  // `clearStaleNodeClaims`) before the resume walks the DAG, fenced on `planToken`.
+  await clearStaleNodeClaims(located.taskId, planToken);
 
   try {
     // WON the claim ⇒ every plan/node write this continuation makes is FENCED on `planToken` (see

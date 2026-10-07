@@ -145,8 +145,9 @@ interface TaskPersistenceOptions {                    // fences this run's write
 function createTaskPersistence(planId: string, opts?: TaskPersistenceOptions): TaskPersistence;   // planner PlanDeps partials bound to planId (= AgentTask.id). `opts.mode` (default 'executor') selects the write path: EXECUTOR mode (every run path — resumeTask/retryTask/runSubmitPlan) FENCES every write on the node token (else the plan token) and a token-FENCED write whose claim was lost is SKIPPED (the repository primitive returns null/false) — an executor pass has NO unfenced fallback (`if (executorMode) return;`); CONTROL mode (`pauseTask`/`cancelTask`) writes UNFENCED as a deliberate control write (it holds NO claim to fence on), never an executor write.
 function toTaskPlan(row: AgentTaskWithNodes): TaskPlan;           // persisted task row (+ ordered nodes) → frozen TaskPlan
 function defaultPollControls(planId: string): PlanControlPort;   // durable row status → planner controls ('paused'⇒pause, 'cancelled'⇒cancel)
-export function planExecutionClaimHeld(planId: string, token: string): Promise<boolean>;   // cheap read of `AgentTask.executionToken` — gates the `plan_update` publication (see `agent/tools/planning.ts`) and the `submit_plan` inline soft claim
-export function buildNodeClaimPorts(planId: string, planToken: string | undefined): { claimNode: NonNullable<PlanDeps['claimNode']>; releaseNode: NonNullable<PlanDeps['releaseNode']>; nodeTokens: Map<string, string> };   // atomic PLAN-OWNERSHIP-aware node claim/release ports + the per-node token map shared with `createTaskPersistence`'s `nodeToken` resolver
+export function planExecutionClaimHeld(planId: string, token: string): Promise<boolean>;   // cheap read of `AgentTask.executionToken` — gates the `plan_update`/`onNodeUpdate` publication (see `agent/tools/planning.ts`); NEVER a security check (node ownership is the atomic CAS below)
+export function clearStaleNodeClaims(planId: string, planToken: string): Promise<void>;  // CLEARS every NON-TERMINAL node execution claim of the plan, FENCED on the caller's just-won PLAN token; called immediately after EVERY successful `claimTaskExecution` (`runSubmitPlan` / `resumeTask` / `retryTask` / `resumeTaskForAction`'s WON path) so a takeover can RECLAIM the previous owner's non-terminal nodes instead of wedging at `running`. A loser's `updateMany` matches 0 rows (preserving "exactly one takeover winner"), and a fresh plan / clean release is a no-op
+export function buildNodeClaimPorts(planId: string, planToken: string | undefined): { claimNode: NonNullable<PlanDeps['claimNode']>; releaseNode: NonNullable<PlanDeps['releaseNode']>; nodeTokens: Map<string, string> };   // atomic PLAN-OWNERSHIP-aware node claim/release ports + the per-node token map shared with `createTaskPersistence`'s `nodeToken` resolver; used by EVERY executor pass — `resumeTask`/`retryTask`/`resumeTaskForAction` (via `buildPlanDeps`) AND the initial `submit_plan` run (`tools/planning.ts`)
 function getTaskPlan(sessionId: string, taskId: string): Promise<TaskPlan>;                            // ownership-checked read
 function pauseTask(sessionId: string, taskId: string, opts?: TaskControlOptions): Promise<TaskPlan>;   // persists durable status 'paused'
 function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan>;      // CAS-flips a resumable row to 'running' (from-set KEEPS 'running'), then acquires the PLAN-level DB execution claim (`claimTaskExecution` with the TTL stale horizon `staleBefore`; lost => persisted plan, NO second executor; released in a finally), then runs with `explicitResume:true`; terminal (success) nodes skipped
@@ -240,11 +241,14 @@ rows FIRST: `createTask({sessionId, userId, goal})` returns the `AgentTask` whos
 plan id; then `plan = { ...dag.buildPlan({sessionId, goal, nodes, now}), id: task.id }` and one
 `createTaskNode(...)` per node in declaration order (`order` = index, `status:'pending'`). It then CLAIMS
 the plan's executor slot (`claimTaskExecution(plan.id, newId('taskclaim'))`; a lost claim returns
-`ok:false` and runs NOTHING) and runs
-`executor.runPlan(plan, { runTool, onNodeUpdate, controls, ...createTaskPersistence(plan.id, { planToken: claimToken }) }, {signal, now})`,
-so every node status/output is persisted incrementally (`persistNode`, FENCED on the plan claim — the
-inline PlanDeps declares no `claimNode`, so a node write carries no NODE token and falls back to the
-PLAN-token fence) and the plan survives a refresh;
+`ok:false` and runs NOTHING), clears the plan's non-terminal node claims under the won token
+(`clearStaleNodeClaims` — a no-op on a fresh plan) and runs
+`executor.runPlan(plan, { runTool, onNodeUpdate, controls, claimNode, releaseNode, ...createTaskPersistence(plan.id, { planToken: claimToken, nodeToken: (nodeId) => nodeTokens.get(nodeId) }) }, {signal, now})`
+with `{ claimNode, releaseNode, nodeTokens } = buildNodeClaimPorts(plan.id, claimToken)` — the SAME
+ATOMIC plan-ownership-aware node claim every other executor pass uses, so ownership is verified in the
+SAME statement as the claim and there is NO TOCTOU window between the read and the tool launch — so
+every node status/output is persisted incrementally (`persistNode`, FENCED on the plan claim via the
+per-node token, else the PLAN-token fence) and the plan survives a refresh;
 the claim is released in a `finally`.
 `plan.id === AgentTask.id === taskId` on EVERY control path (`loadPlan` is `getTask` → `toTaskPlan`).
 A parked (gated) node stores the human decision it waits on inside `AgentTaskNode.output` as
@@ -373,9 +377,9 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   `AgentTask.executionToken`): `resumeTask`/`retryTask` acquire a `newId('taskclaim')` token BEFORE
   `executor.runPlan` and release it in a `finally`, so a second concurrent caller that loses the claim
   returns the persisted plan WITHOUT starting a second executor. Each NODE additionally claims its own
-  slot (`buildPlanDeps` exposes `claimNode`/`releaseNode` → `buildNodeClaimPorts` →
-  `claimNodeOwnedByPlan`/`claimNodeExecution` / `releaseNodeExecution`),
-  claimed BEFORE the node's write and released even for a parked node. The IN-PROCESS single-flight
+  slot (`buildNodeClaimPorts` → `claimNodeOwnedByPlan`/`claimNodeExecution` / `releaseNodeExecution`),
+  wired for EVERY executor pass — `buildPlanDeps` (resume/retry/confirm-continuation) AND the initial
+  `runSubmitPlan` — claimed BEFORE the node's write and released even for a parked node. The IN-PROCESS single-flight
   (`confirmation.ts#executeGatedTool`) is keyed by the NODE identity (`nodeExecutionKey(taskId, nodeId)`
   when both are present) — NEVER by `sessionId`+tool+args alone, so two INDEPENDENT plans with identical
   tool+args run independently; a STANDALONE call (no plan node) is executed directly. The DB
@@ -398,6 +402,12 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   The horizon is derived from the REAL clock (`Date.now()`), NEVER the demo clock (`demoNow()` pinned to
   2026-09-25), because `executionClaimedAt` uses the real clock. `resumeTask`/`retryTask`/`resumeTaskForAction`
   pass it to `claimTaskExecution`; `buildPlanDeps`'s `claimNode` passes it to `claimNodeExecution`.
+  A WON takeover additionally calls `clearStaleNodeClaims(taskId, wonToken)`, which CLEARS the previous
+  owner's NON-TERMINAL node claims: those carry a FRESH node token that is neither NULL nor stale, so
+  without the clear the takeover's atomic `claimNodeOwnedByPlan` would refuse every node and the plan
+  would wedge at `running`. The initial `runSubmitPlan` calls it too (a no-op on a fresh plan), so EVERY
+  `claimTaskExecution` winner runs the identical reclaim step; the fence on the won token keeps
+  "exactly one takeover winner" (a loser's `updateMany` matches 0 rows).
 - **A run's plan/node writes are FENCED on its execution claim, and that claim is renewed ONLY at node
   boundaries.** `resumeTask`/`retryTask`/`runSubmitPlan`/`resumeTaskForAction` thread their PLAN claim token
   into `buildPlanDeps` → `createTaskPersistence(planId, { planToken, nodeToken })`, and `buildPlanDeps#claimNode`
@@ -415,10 +425,10 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   STUCK inside a tool call still ages out and becomes takeover-able (the takeover those write fences guard).
   EVERY executor node outcome flows through this port — `running`/`success`/`failed`/`parked`/`cancelled`, a dependency-`skipped` node, and a `kind:'condition'`/`kind:'note'` node — and a node write with no node token (skip/condition/note, which never `claimNode`) falls back to the PLAN-token fence.
 - **PLAN-ownership is verified in the SAME statement as a node CLAIM and as an executor node WRITE, and a node claim REFUSES a TERMINAL node.**
-  `buildNodeClaimPorts` (`agent/task-control.ts`) builds the planner `claimNode`/`releaseNode` ports plus the per-node token map shared with `createTaskPersistence`'s `nodeToken` resolver; when the run holds a PLAN claim, `claimNode` takes the ATOMIC plan-ownership-aware CAS `claimNodeOwnedByPlan` INSTEAD of the node-token-only `claimNodeExecution`.
+  `buildNodeClaimPorts` (`agent/task-control.ts`) builds the planner `claimNode`/`releaseNode` ports plus the per-node token map shared with `createTaskPersistence`'s `nodeToken` resolver; when the run holds a PLAN claim, `claimNode` takes the ATOMIC plan-ownership-aware CAS `claimNodeOwnedByPlan` INSTEAD of the node-token-only `claimNodeExecution`. These ports are wired for EVERY executor pass — `buildPlanDeps` (resumeTask/retryTask/resumeTaskForAction) AND `runSubmitPlan`'s initial run — so an INITIAL executor that LOSES its plan claim mid-run fails its next node claim and launches no successor tool (no soft read, no TOCTOU window between the read and the tool launch).
   `claimNodeOwnedByPlan` is ONE `prisma.agentTaskNode.updateMany` whose `where` requires `task:{executionToken:planToken}` (the parent `AgentTask` still carries THIS run's PLAN claim) AND `status:{notIn:TERMINAL_NODE_STATUSES}` (`TERMINAL_NODE_STATUSES = ['success','failed','skipped','cancelled']`), so a superseded ("zombie") executor whose PLAN claim was taken over can never (re)claim a node, run a successor tool, or re-claim an already-completed node; the node-token staleness horizon is preserved (a NULL/stale node claim stays reclaimable), so liveness is unchanged.
   `createTaskPersistence.persistNode` executor writes additionally carry `task:{executionToken:planToken}` and refuse a TERMINAL-clobber — that guard is applied ONLY when the NEW status is itself terminal, so the CURRENT plan owner's legitimate reopen (`retryPlan` writing `pending`) still passes while a terminal result may never overwrite a terminal node.
-  `buildPlanDeps` threads the PLAN token into these claim ports and into the `nodeToken` resolver, so an executor that LOSES its PLAN claim cannot re-claim/overwrite a completed node, run a successor tool, publish a stale progress event (the sink is gated on `planExecutionClaimHeld` — see the live-streaming section), or return a misleading result.
+  Both `buildPlanDeps` and `runSubmitPlan` thread the PLAN token into these claim ports and into the `nodeToken` resolver, so an executor that LOSES its PLAN claim cannot re-claim/overwrite a completed node, run a successor tool, publish a stale progress event (the sink is gated on `planExecutionClaimHeld` — see the live-streaming section), or return a misleading result.
 - **A `resumeTaskForAction` that LOSES the plan claim still records the human decision — through an atomic
   ownership CAS, never an unfenced write.** The continuation
   mints a FRESH PLAN token via `claimTaskExecution(located.taskId, newId('taskclaim'), { staleBefore:
@@ -524,7 +534,7 @@ Stub signatures and `./tools/CONTEXT.md` diverge from the REAL SDK — implement
 - **Cross-action transfer serialization depends on SQLite's DB-level single-writer lock, and the gateway's confirm-time re-risk transaction does not include the SDK execution.** `security/security-gateway.ts#authorizeTransfer` re-risks in ONE `prisma.$transaction` that CAS-claims the action FIRST and only THEN reads the in-flight-inclusive effective total (`computeEffectiveTransferTotalWith`) and re-runs `evaluateTransferRisk` (escalating to MFA when the day's total would exceed the limit), so concurrent confirms of DISTINCT parked transfers serialize only through SQLite's single-writer lock - with no explicit isolation level or `SELECT ... FOR UPDATE`; and a crash between that commit and `agent/confirmation.ts#executeAuthorizedAction` (which runs the transfer, then persists `resultJson` and `recordActionResult`) leaves a `confirmed`-but-unledgered action counted as in-flight (over-conservative, never under-counting).
 - **`inFlightConfirmations` is PER-PROCESS.** A `confirmed` + `resultJson=null` row whose live continuation runs in a DIFFERENT process/instance is not distinguished from a genuine wedge (the registry is an in-process liveness hint, not a durable marker); multi-instance deploy is not covered.
 - **Execution takeover is a TTL HEURISTIC.** `EXECUTION_CLAIM_TTL_MS = 600_000ms` is computed from the REAL clock: a single tool call legitimately blocked beyond the TTL can be overtaken (its writes are fenced, so it can never clobber the takeover, but it is preempted), so preemption is a heuristic, never a liveness proof.
-- **File-size budget exceeded.** `agent/task-control.ts` (~1169 lines) and `agent/confirmation.ts` (~1007 lines) exceed the ~1000-line soft guideline and are extraction candidates.
+- **File-size budget exceeded.** `agent/task-control.ts` (~1198 lines) and `agent/confirmation.ts` (~1027 lines) exceed the ~1000-line soft guideline and are extraction candidates.
 
 ## Notes for Agents
 
@@ -572,7 +582,7 @@ Vitest (`tests/`, sibling). This node is designed to be testable WITHOUT network
 - `./agent/run-turn.ts` → one chat turn: prompt, event→stream mapping, persistence; `resumeTurn`
 - `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path + executed-node recovery + committed-side-effect wedge finalization (`inFlightConfirmations`)
 - `./agent/card-emitter.ts` → pure `toCards(toolName, result): ChatCard[]` mapping + card helpers
-- `./agent/task-control.ts` → node-output JSON shape + token-fenced DAG plan persistence/load mapping + PLAN-ownership-aware node claim/write (`claimNodeOwnedByPlan`, `planExecutionClaimHeld`, `buildNodeClaimPorts`) + pause/resume/cancel/retry/getTaskPlan glue (ownership-checked; EXECUTOR vs CONTROL write mode — see `task-fencing.ts`)
+- `./agent/task-control.ts` → node-output JSON shape + token-fenced DAG plan persistence/load mapping + PLAN-ownership-aware node claim/write/reclaim (`claimNodeOwnedByPlan`, `planExecutionClaimHeld`, `buildNodeClaimPorts`, `clearStaleNodeClaims`) + pause/resume/cancel/retry/getTaskPlan glue (ownership-checked; EXECUTOR vs CONTROL write mode — see `task-fencing.ts`)
 - `./agent/task-fencing.ts` → FENCED plan/node write primitives: `toNodeUpdate`/`jsonNodeOutput`/`isMissingNodeError`, `settlePlanFromNodes`, `recordDecidedNodeFenced` (single-statement ownership CASes used by a lost-claim confirm-continuation)
 - `./agent/index.ts` → node facade (runtime surface: create/run/resume/confirm/verify/cancel/toCards + DAG control glue `pauseTask`/`resumeTask`/`cancelTask`/`retryTask`/`getTaskPlan`)
 - `./agent/tools` → registered banking tools: one module per family + `createToolRegistry` (child node)
