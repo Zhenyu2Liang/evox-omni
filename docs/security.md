@@ -452,6 +452,6 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - **执行认领 / fence 的并发正确性建立在 SQLite 单写者假设之上**——多进程 / 多实例部署未验证；
 - **确认活跃注册表是进程内 / 引用计数** —— `agent/confirmation-recovery.ts#liveConfirmations`（`retainAction` / `releaseAction` / `isActionLive` / `liveCount`）只在本进程内可见：一个 `confirmed` + `resultJson=null` 的动作若其**活跃续跑运行在另一个进程 / 实例**中，就**无法**与**真楔子**区分（不会被识别为「仍被拥有」）——**多实例部署未覆盖**；此外**独立楔子恢复只对 `transfer_money` 证明了幂等**，其余写工具**不**重跑、一律收敛 `needs_reconciliation` 交人工结算（**不**重跑未证幂等的写工具）。
 
-> **实现规模与测试态（实测）**：`agent/task-control.ts` **~1205 行**、`agent/confirmation.ts` **~1030 行**（均超出 ~1000 行软性指南，属抽取候选）；`npx vitest run` **101 文件 / 665 用例**通过。
+> **实现规模与测试态（实测）**：`agent/task-control.ts` **~1212 行**、`agent/confirmation.ts` **~1105 行**（均超出 ~1000 行软性指南，属抽取候选）；`npx vitest run` **101 文件 / 665 用例**通过。
 
 > 验收场景与断言见 [`test-cases.md`](./test-cases.md)；已知限制见 [`known-risks.md`](./known-risks.md)。
