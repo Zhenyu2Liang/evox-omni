@@ -243,7 +243,7 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
   There is NO `useAgentStream`/`ChatWindow`/`Composer` test; DOM coverage is ONLY the real-browser suite `tests/e2e/acceptance.e2e.ts` (playwright-core, `npx tsx`, NOT Vitest).
 - **Untested fold rules of thumb** (candidates, NOT existing tests): a `fetchPendingActions` fixture with actionable AND
   `needs_reconciliation` rows should rebuild the decision slot AND the `pendingReconciliations` list (an actionless
-  `ReconciliationCard` per reconciliation row) without clobbering a live decision.
+  `ReconciliationCard` per reconciliation row) without clobbering a live decision; `Composer` should be enter-to-send
 - `Composer`: enter-to-send + disabled-when-busy behaviour.
 
 ## Routing Table
