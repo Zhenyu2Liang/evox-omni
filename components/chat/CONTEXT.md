@@ -147,7 +147,7 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 | `message_end` | finalise message content/cards; clear `streamingText` |
 | `tool_start` / `tool_end` | upsert a `ToolEventView` (status started→success/error/blocked); a `blocked` entry also records its `toolName` |
 | `card` | append `card` to the current assistant message's `cards` — **except a `plan` card**, which is promoted into `activePlan` (never an inline card); see "Plan dedupe" |
-| `plan_update` | UPSERT `activePlan` under the **generation fence** (see "Plan dedupe"): an OLDER generation for the same id is rejected, a NEWER one wins, and a missing generation falls back to the `updatedAt` guard; a different id replaces the slot (one live plan at a time) |
+| `plan_update` | UPSERT `activePlan` under the **generation fence** (see "Plan dedupe"): an OLDER generation for the same id is rejected, an equal-or-NEWER one wins, and a missing generation falls back to the `updatedAt` guard; a different id replaces the slot (one live plan at a time) |
 | `confirmation_required` | set `pendingAction` `{ kind: 'confirmation', summary: event.action, actionId: event.actionId }` |
 | `mfa_required` | set `pendingAction` `{ kind: 'mfa', summary: mfaSummary(state, event.hint), actionId: event.actionId, hint: event.hint }`; the summary's `toolName` is the actual gated tool the stream reported as blocked, omitted when the stream carried none |
 | `security_event` | append a `system` `ChatMessage` (content = `event.message`; `event.kind` is not surfaced) |
@@ -175,7 +175,7 @@ plan's execution token is (re)claimed (initial claim or a stale-owner takeover),
 SAME id:
 
 - both sides present → an **older** incoming generation is **rejected** (returns the state unchanged),
-  a **newer** generation **replaces** the view even when `updatedAt` is equal/older;
+  an incoming generation that is **equal or newer** **wins** even when `updatedAt` is equal/older;
 - **either** side missing a generation → "no fence info" → the backward-compatible `updatedAt` guard
   (`current.updatedAt > plan.updatedAt` → keep) applies;
 - a DIFFERENT plan id still replaces the slot unconditionally (the fence is per-id).
@@ -299,7 +299,7 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
 - `useAgentStream` is a **pure fold** over `AgentStreamEvent[]` → unit-test it with scripted event
   sequences (from the faux-provider scenarios) under the root `tests/` suite: card attachment,
   plan promotion/upsert (one plan view per id), the generation fence (an older generation for the same
-  id is rejected; a newer one replaces an equal/older `updatedAt`), tool-event upsert, confirmation/mfa
+  id is rejected; an equal-or-newer one wins over an equal/older `updatedAt`), tool-event upsert, confirmation/mfa
   transitions with `kind`, error→banner, done→idle.
 - **No component/DOM test layer exists** — `@testing-library/react`/`jsdom`/`happy-dom` are NOT dependencies and `vitest.config.ts` runs `environment: 'node'`.
   There is NO `useAgentStream`/`ChatWindow`/`Composer` test; DOM coverage is ONLY the real-browser suite `tests/e2e/acceptance.e2e.ts` (playwright-core, `npx tsx`, NOT Vitest).

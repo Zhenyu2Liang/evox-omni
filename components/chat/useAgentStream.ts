@@ -233,9 +233,9 @@ function cardTargetId(state: ChatUIState): string | undefined {
  * Generation fence (same plan id): the agent stamps a monotonic execution `generation` whenever the
  * plan's execution token is (re)claimed (initial claim or a stale-owner takeover). When BOTH the
  * incoming and the stored snapshot carry a generation, an OLDER incoming generation is REJECTED
- * outright — even if its `updatedAt` looks fresher/equal — and a NEWER generation replaces the view
- * even if its `updatedAt` is equal/older. When EITHER side is missing a generation there is no fence
- * information, so the (backward-compatible) `updatedAt` guard applies.
+ * outright — even if its `updatedAt` looks fresher — and an incoming generation that is EQUAL OR
+ * NEWER is ACCEPTED even if its `updatedAt` is equal/older. When EITHER side is missing a generation
+ * there is no fence information, so the (backward-compatible) `updatedAt` guard applies.
  */
 function upsertPlan(state: ChatUIState, plan: TaskPlan, generation?: number): ChatUIState {
   const current = state.activePlan;
@@ -243,8 +243,10 @@ function upsertPlan(state: ChatUIState, plan: TaskPlan, generation?: number): Ch
     const incomingGeneration = plan.generation ?? generation;
     const storedGeneration = current.generation;
     if (incomingGeneration !== undefined && storedGeneration !== undefined) {
-      if (incomingGeneration < storedGeneration) return state; // stale generation — reject
-      if (incomingGeneration > storedGeneration) return { ...state, activePlan: plan };
+      // A lower generation belongs to a superseded executor — never overwrite the newer state.
+      if (incomingGeneration < storedGeneration) return state;
+      // Same/newer generation: the event wins, even when `updatedAt` is equal or older.
+      return { ...state, activePlan: plan };
     }
     if (current.updatedAt > plan.updatedAt) {
       return state;
