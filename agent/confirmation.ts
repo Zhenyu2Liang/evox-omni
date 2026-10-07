@@ -57,6 +57,12 @@ import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { resumeTurn } from './run-turn';
 import type { RunTurnDeps } from './run-turn';
 import { findTaskByPendingAction, resumeTaskForAction } from './task-control';
+import {
+  isActionLive,
+  recoverStandaloneWedge,
+  releaseAction,
+  retainAction,
+} from './confirmation-recovery';
 
 /**
  * The security gateway's runtime surface.
@@ -359,7 +365,14 @@ function isParkedOutcome(outcome: GatedToolOutcome): boolean {
  * is still a single atomic CAS. It is bounded by the continuation's own lifetime (each entry is
  * removed in a `finally`; a hung continuation IS still running, so deferring to it is correct).
  */
-const inFlightConfirmations = new Set<string>();
+/*
+ * The live-confirmation registry is now a REFERENCE COUNT kept in `./confirmation-recovery.ts`
+ * (`isActionLive` / `retainAction` / `releaseAction`). WHY a COUNT and not a `Set`: a rejected
+ * DUPLICATE confirm (fast gateway `CONFLICT`) finishes FIRST, and its `finally` must NOT clear the
+ * marker a FIRST, still-running continuation still owns — the marker is dropped only when the count
+ * returns to ZERO. Consumers keep the SAME truthiness semantics (`isActionLive(id)` is true while any
+ * continuation is live), so the live-vs-wedge distinction in `executeGatedToolOnce` is unchanged.
+ */
 
 const IN_FLIGHT_PLAN_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'pending',
@@ -499,7 +512,7 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
         // outcome and settle the node `failed` for work that actually succeeded; instead the node is
         // reported as STILL PARKED on that live human decision (no CAS, no write). A `confirmed` row
         // with NO live continuation is the genuine WEDGE and IS finalized below.
-        if (existing.status === 'confirmed' && !inFlightConfirmations.has(existing.id)) {
+        if (existing.status === 'confirmed' && !isActionLive(existing.id)) {
           const won = await claimPendingAction({
             actionId: existing.id,
             from: ['confirmed'],
