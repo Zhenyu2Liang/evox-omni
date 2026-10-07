@@ -240,7 +240,7 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
   plan promotion/upsert (one plan view per id), tool-event upsert, confirmation/mfa transitions
   with `kind`, error→banner, done→idle.
 - **No component/DOM test layer exists** — `@testing-library/react`/`jsdom`/`happy-dom` are NOT dependencies and `vitest.config.ts` runs `environment: 'node'`.
-  the single live plan and the single active decision card.
+  There is NO `useAgentStream`/`ChatWindow`/`Composer` test; DOM coverage is ONLY the real-browser suite `tests/e2e/acceptance.e2e.ts` (playwright-core, `npx tsx`, NOT Vitest).
 - Refresh restore: a `fetchPendingActions` fixture carrying actionable AND `needs_reconciliation` rows
   must rebuild the decision slot AND the `pendingReconciliations` list (an actionless
   `ReconciliationCard` per reconciliation row) without clobbering a live decision.
