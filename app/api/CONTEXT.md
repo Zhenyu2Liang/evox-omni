@@ -27,10 +27,11 @@ session/user from the `banking_session` cookie, never from a query param.
 | --- | --- | --- | --- | --- |
 | GET | `/api/health` | — | `{ status:'ok', time:number, llmMode:'live'\|'mock' }` | `@/lib/config` |
 | POST | `/api/chat` | body `ChatTurnRequest`; `?stream=0\|1` (default 1) | stream ⇒ SSE of `AgentStreamEvent` ending `{"type":"done"}`; non-stream ⇒ `ChatTurnResponse` | `@/agent` `runTurn` / `resumeTurn` |
-| GET | `/api/actions` | — (cookie session only) | `PendingAction[]` — the caller session's surfaced actions (`SURFACED_STATUSES` = `pending`/`awaiting_mfa`/`needs_reconciliation`); refresh-restore | `@/lib/db/repositories/pendingAction` `listPendingActions` |
+| GET | `/api/actions` | — (cookie session only) | `SurfacedPendingAction[]` = `PendingAction & { attention: 'decision'\|'processing'\|'recoverable'\|'reconciliation' }` — READ-ONLY; the caller session's surfaced actions (`DECISION_STATUSES` = `pending`/`awaiting_mfa`/`needs_reconciliation` surfaced unconditionally + any NON-settled `confirmed` wedge, classified by `classifyConfirmedAction`); refresh-restore | `@/lib/db/repositories/pendingAction` `listPendingActions` + `@/agent` `classifyConfirmedAction`/`leaseNowMs` |
 | POST | `/api/actions/[id]/confirm` | body `{}` | `ActionResponse` (cookie identity; ownership enforced: cross-session/user → `403 SECURITY_DENIED`; MFA escalation surfaced) | `_lib/agent-bridge` `confirmOwned` → `@/agent` `confirm` (forwards `{userId,sessionId}`) |
 | POST | `/api/actions/[id]/verify` | body `{ code: string }` | `ActionResponse` (wrong code ⇒ 200 with `data.ok=false`, `status:'awaiting_mfa'`; ownership enforced) | `_lib/agent-bridge` `verifyOwned` → `@/agent` `verify` (forwards `{userId,sessionId}`) |
 | POST | `/api/actions/[id]/cancel` | body `{}` | `ActionResponse` (`status:'cancelled'`; ownership enforced) | `_lib/agent-bridge` `cancelOwned` → `@/agent` `cancel` (forwards `{userId,sessionId}`) |
+| POST | `/api/actions/[id]/recover` | body `{}` | `ActionResponse` — the refresh-reachable recovery entry point (standalone wedge replay / `needs_reconciliation`; plan-linked → resume the owning plan); `_lib/agent-bridge` `recoverOwned` → `@/agent` `recoverAction` (forwards `{userId,sessionId}`) |
 | GET | `/api/tasks` | — (cookie session only) | `{ plans: TaskPlan[] }` | persisted `AgentTask` rows via `@/lib/db/repositories/task` |
 | GET | `/api/tasks/[id]` | — (cookie session only) | `AppTaskPlan` — a `TaskPlan` whose `results` ADDITIVELY carry each node's `pendingActionId` | persisted `AgentTask` row via `@/lib/db/repositories/task` |
 | POST | `/api/tasks/[id]` | body `{ action:'pause'\|'resume'\|'cancel'\|'retry' }` | `TaskPlan` | `@/agent` execution control via `_lib/agent-bridge` (ownership enforced) |
@@ -229,10 +230,11 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 
 - `./health/route.ts` → `GET /api/health` liveness + `llmMode` probe
 - `./chat/route.ts` → `POST /api/chat` — one agent turn (SSE stream or JSON), session cookie on every response
-- `./actions/route.ts` → `GET /api/actions` — the caller session's surfaced pending actions (`SURFACED_STATUSES`: `pending`/`awaiting_mfa`/`needs_reconciliation`) (cookie-only identity; refresh-restore)
+- `./actions/route.ts` → `GET /api/actions` — READ-ONLY discovery of the caller session's surfaced pending actions (`DECISION_STATUSES`: `pending`/`awaiting_mfa`/`needs_reconciliation` surfaced unconditionally + any NON-settled `confirmed` wedge), each with an advisory `attention` (`decision`/`processing`/`recoverable`/`reconciliation`) (cookie-only identity; refresh-restore)
 - `./actions/[id]/confirm/route.ts` → `POST /api/actions/[id]/confirm` — execute a confirmed pending action (cookie identity, ownership-enforced, MFA-escalation surfaced)
 - `./actions/[id]/verify/route.ts` → `POST /api/actions/[id]/verify` — MFA code submission for a RED action (ownership-enforced)
 - `./actions/[id]/cancel/route.ts` → `POST /api/actions/[id]/cancel` — cancel a pending action (ownership-enforced)
+- `./actions/[id]/recover/route.ts` → `POST /api/actions/[id]/recover` — the refresh-reachable recovery entry point for a stranded standalone wedge (settle / replay / `needs_reconciliation`; plan-linked → resume the owning plan) (cookie identity, ownership-enforced)
 - `./tasks/route.ts` → `GET /api/tasks` — list the caller session's task plans (cookie-scoped)
 - `./tasks/[id]/route.ts` → `GET`/`POST /api/tasks/[id]` — read one plan (ownership-enforced, `pendingActionId` exposed) / control its execution (pause|resume|cancel|retry)
 - `./audit/route.ts` → `GET /api/audit` — audit entries + summary (cookie-scoped)
@@ -280,12 +282,19 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   not meaningful). A `cancel` of an unknown/settled action surfaces the owner's thrown
   `AppError('NOT_FOUND'|'CONFLICT')`.
 - **`GET /api/actions`** is the refresh-restore endpoint: `requireIdentity` → `listPendingActions({ sessionId })`
-  filtered to `SURFACED_STATUSES` = `pending`/`awaiting_mfa` (non-terminal — still awaiting a human
+  filtered to `DECISION_STATUSES` = `pending`/`awaiting_mfa` (non-terminal — still awaiting a human
   decision) plus `needs_reconciliation` (TERMINAL — the manual-reconciliation entry for a gated side
-  effect whose outcome could not be recorded; it must stay user-visible until a human settles it) →
-  mapped to the frozen `PendingAction` contract
-  (JSON args/summary via `safeParse`, epoch-ms timestamps) → `200 { ok:true, data: PendingAction[] }`.
-  Never contains the MFA code.
+  effect whose outcome could not be recorded; it must stay user-visible until a human settles it) plus any
+  NON-settled `confirmed` wedge (a decision neither `settled` nor terminal), each carrying an advisory
+  `attention` class from `classifyConfirmedAction` (`decision|processing|recoverable|reconciliation`) →
+  mapped to `SurfacedPendingAction` (the frozen `PendingAction` contract with JSON args/summary via `safeParse`, epoch-ms timestamps) → `200 { ok:true, data: SurfacedPendingAction[] }`.
+  Never contains the MFA code. STRICTLY READ-ONLY (no writes, no lease, no replay).
+- **`POST /api/actions/[id]/recover`** (cookie identity) is the explicit manual-recovery entry: it looks up the
+  action, authorizes it to the caller, then delegates to `@/agent#recoverAction(id)` — `classifyConfirmedAction`
+  → `settleFromCommittedReceipt` / `recoverStandaloneWedge` / `settlePendingAction` (receipt-first, idempotent).
+  A standalone `transfer_money` wedge replays from the committed `ExecutionReceipt` (side effect exactly once);
+  any other standalone write tool settles to the queryable `needs_reconciliation`; an already-settled action is
+  a no-op. Returns the refreshed action + `events`.
 - **Task plans & control (`/api/tasks*`).** Read models come from the persisted `AgentTask`/`AgentTaskNode`
   rows via `@/lib/db/repositories/task`, mapped to `AppTaskPlan` in `_lib/task-plans.ts` (each node's
   `pendingActionId` lifted from its parsed `output`). `GET /api/tasks` is cookie-scoped (a session-less
