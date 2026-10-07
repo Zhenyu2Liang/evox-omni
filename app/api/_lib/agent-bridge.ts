@@ -22,11 +22,12 @@ import {
   findTaskByPendingAction,
   getTaskPlan,
   pauseTask,
+  recoverAction as agentRecover,
   resumeTask,
   retryTask,
   verifyAction as agentVerify,
 } from '@/agent';
-import type { ConfirmationOutcome, ConfirmOptions } from '@/agent';
+import type { ConfirmationOutcome, ConfirmOptions, RecoverOptions } from '@/agent';
 import type { TaskPlan } from '@/lib/contracts/task';
 import { AppError } from '@/lib/errors';
 
@@ -110,6 +111,21 @@ export function cancelOwned(
   ownership: OwnershipOptions,
 ): Promise<ConfirmationOutcome> {
   return agentCancel(actionId, ownershipBag(ownership));
+}
+
+/**
+ * RECOVER a stranded standalone wedge for this action, forwarding its ownership context.
+ *
+ * Delegates to the `@/agent` facade's `recoverAction`, which RE-resolves the trusted owner from
+ * PERSISTED state (a request-supplied `userId`/`sessionId` is an assertion that fails closed) and
+ * runs the receipt-first standalone recovery. Never re-invokes a non-idempotent tool; when there is
+ * nothing to recover it returns an honest `ok:false` outcome carrying the row's persisted status.
+ */
+export function recoverOwned(
+  actionId: string,
+  ownership: OwnershipOptions,
+): Promise<ConfirmationOutcome> {
+  return agentRecover(actionId, ownershipBag(ownership) as RecoverOptions);
 }
 
 /** A plan node parked on a pending action, resolved to its owning session + plan id. */
