@@ -11,9 +11,14 @@
  *    fails);
  *  - any OTHER write tool (`apply_virtual_card`, `set_card_limit`, …) transitions to the explicit,
  *    queryable `needs_reconciliation` status — NEVER a fabricated failure, NEVER a rollback.
- * `GET /api/actions` SURFACES `pending`/`awaiting_mfa`/`needs_reconciliation` (NOT
- * `confirmed`/`executed`/`failed`), so a recovered `executed`/`failed` action must NOT appear while a
- * `needs_reconciliation` one MUST.
+ * `GET /api/actions` SURFACES every row that still needs the user or still needs settling:
+ * `pending`/`awaiting_mfa` (attention `decision`) and `needs_reconciliation` (attention
+ * `reconciliation`) — PLUS, under the NEW contract, a `confirmed` row that is NOT SETTLED (no
+ * persisted result): attention `processing` while it still holds a non-expired persisted execution
+ * lease, `recoverable` when it is a proven-idempotent standalone tool, else `reconciliation`. So a
+ * standalone wedge stranded at `confirmed` IS VISIBLE after a plain refresh (the user can find the
+ * recovery entry), while a SETTLED `executed`/`failed` row is NOT surfaced — the `not.toContain`
+ * assertions further down stay correct.
  *
  * Real app-entry layer: the REAL Next.js route handlers, the REAL confirmation continuation, the REAL
  * Banking SDK and the REAL isolated test SQLite (`prisma/test.db`) run in-process; only the MODEL is
@@ -111,8 +116,13 @@ it('a STANDALONE transfer wedge is replayed idempotently to executed (side effec
   expect(wedged?.resultJson).toBeNull();
   expect(await p.transaction.count({ where: debitWhere })).toBe(1);
   expect((await p.account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance).toBe(23380);
-  // The defect: a wedged `confirmed` row is INVISIBLE to the UI (confirmed is not surfaced).
-  expect(listedWhileWedged.ids).not.toContain(id);
+  // NEW CONTRACT (`GET /api/actions` classifies a NON-SETTLED `confirmed` row): a standalone wedge
+  // stranded at `confirmed` with NO active execution lease is SURFACED — `attention` `recoverable`
+  // (a safely recoverable tool) or `reconciliation` (one that must be settled manually) — so the
+  // user can find the recovery entry AFTER a plain refresh. It is no longer the old "invisible
+  // `confirmed` row" defect. (A `confirmed` row WITH a non-expired persisted lease is `processing`;
+  // a settled `executed`/`failed` row is still hidden.)
+  expect(listedWhileWedged.ids).toContain(id);
 
   // REPEAT confirm → proven-idempotent replay on the SAME ledger key → terminal `executed`.
   spy.mockRestore();
