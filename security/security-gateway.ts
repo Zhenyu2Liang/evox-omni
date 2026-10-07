@@ -99,8 +99,8 @@ export interface ActionOwnership {
   sessionId: string;
 }
 
-/** `authorizeAction` options: REQUIRED ownership plus an optional strong-verification code. */
-export type AuthorizeOptions = ActionOwnership & { mfaCode?: string };
+/** `authorizeAction` options: REQUIRED ownership plus an optional strong-verification code. `confirmed` is an accepted-but-ignored caller hint (a YELLOW action is authorized by the atomic `pending → confirmed` claim; a RED action by `mfaCode`). */
+export type AuthorizeOptions = ActionOwnership & { mfaCode?: string; confirmed?: boolean };
 
 /** `cancelAction` options: REQUIRED ownership only. */
 export type CancelOptions = ActionOwnership;

@@ -199,7 +199,7 @@ flowchart TD
   恰好一次的守卫是 **DB 级**的：`lib/db/repositories/task.ts#claimTaskExecution`（**计划级** token，`finally` 中释放）与 `#claimNodeExecution`（**节点级** token，`finally` 中释放），加上经
   `lib/ledger.ts#nodeExecutionKey(taskId, nodeId)` 的**节点身份合并**。去重身份的范围是**稳定的计划 / 节点 / 执行身份**——**不是** `sessionId` + tool + args：
   **独立调用**（无计划节点）只靠 DB 的 `PendingAction` 状态 CAS，而**两个不同计划**即使 session+tool+args 相同也**各自独立运行**；转账再经 `ledgerKeyForAction({ id, taskId, nodeId })` 派生的幂等键（计划节点 ⇒ `nodeExecutionKey`；独立调用 ⇒ 动作 `id`）幂等——**不重复副作用**。
-  **陈旧执行领取接管**：DB 执行领取（`claimTaskExecution` / `claimNodeExecution`）支持陈旧接管——resume/retry 传入 `staleBefore = staleExecutionClaimBefore()`（`agent/task-control.ts`；`EXECUTION_CLAIM_TTL_MS = 600000` ≈ 10 分钟，基于**真实时钟** `Date.now()`，**非**演示时钟），`where.OR = [ executionToken IS NULL, executionClaimedAt < staleBefore ]`：**仅当**所有者被证明**陈旧**（`executionClaimedAt < staleBefore`）时才接管；**正在推进**的执行器在每个**节点边界**经 `renewTaskExecutionClaim(taskId, token)` 续租（token 条件式、**非**后台定时器、**在被阻塞于单次工具调用期间绝不续租**）以保持领取新鲜、通常不被接管，但一个**长时间阻塞于单次工具调用**的进程**仍可能被接管**并仍可能**尝试**继续工作（其节点 / 计划结果写入被 token fence 拒绝，故**无副作用**）；并发接管**只允许一个赢家**（赢家重盖 `executionClaimedAt`，败者匹配 0 行）；旧所有者的 `releaseTaskExecution` / `releaseNodeExecution`（`finally` 中调用）按 token CAS **成为空操作**；被接管的旧所有者对**节点 / 计划结果**的写入也被 token **隔离**——`repositories/task.ts#updateTaskNode` / `#claimTaskStatus` 的 `fenceToken` 与写入在**同一条** `updateMany` 内（**非**读后写），旧所有者的写入匹配 0 行而被拒绝。
+  **陈旧执行领取接管**：DB 执行领取（`claimTaskExecution` / `claimNodeExecution`）支持陈旧接管——resume/retry 传入 `staleBefore = staleExecutionClaimBefore()`（`agent/task-control.ts`；`EXECUTION_CLAIM_TTL_MS = 600000` ≈ 10 分钟，基于**真实时钟** `Date.now()`，**非**演示时钟），`where.OR = [ executionToken IS NULL, executionClaimedAt < staleBefore ]`：**仅当**所有者被证明**陈旧**（`executionClaimedAt < staleBefore`）时才接管；**正在推进**的执行器在每个**节点边界**经 `renewTaskExecutionClaim(taskId, token)` 续租（token 条件式、**非**后台定时器、**在被阻塞于单次工具调用期间绝不续租**）以保持领取新鲜、通常不被接管，但一个**长时间阻塞于单次工具调用**的进程**仍可能被接管**并仍可能**尝试**继续工作（其节点 / 计划结果写入被 token fence 拒绝，故**无副作用**）；并发接管**只允许一个赢家**（赢家重盖 `executionClaimedAt`，败者匹配 0 行）；旧所有者的 `releaseTaskExecution` / `releaseNodeExecution`（`finally` 中调用）按 token CAS **成为空操作**；被接管的旧所有者对**节点 / 计划结果**的写入也被 token **隔离**——`repositories/task.ts#updateTaskNode` / `#claimTaskStatus` 的 `fenceToken` 与写入在**同一条** `updateMany` 内（**非**读后写），旧所有者的写入匹配 0 行而被拒绝。**计划所有权与终态节点在同一语句内校验**：节点领取经 `agent/task-control.ts#claimNodeOwnedByPlan` 的**单条** `prisma.agentTaskNode.updateMany` CAS，**同时**要求 `task: { executionToken: planToken }`（**计划所有权**）与 `status: { notIn: TERMINAL_NODE_STATUSES }`（`['success','failed','skipped','cancelled']`）——已**失去计划领取**的执行者**无法**重新领取终态节点、**无法**运行其后继工具；执行器节点写入另带 **terminal-clobber 守卫**（仅当**新**状态为终态时生效，故当前所有者合法的 `failed`→`pending` 重开仍通过）；发布侧由 `planExecutionClaimHeld(planId, claimToken)` 门控——被接管的执行者**不**再发出**迟到**的 `plan_update` 快照（`agent/tools/planning.ts`）。
 - **暂停保持（pause retention）**：在**已暂停**的计划里确认一个停放节点，**只**记录该节点的结果；计划
   **保持暂停**直到一次显式 resume（`task-control.ts#resumeTaskForAction` 调 `lifecycle.resumePlan` 时
   不传 `explicitResume`；`resumePlan` 先核算 `stillPaused` 并返回暂停快照，暂不推进）。
@@ -214,9 +214,10 @@ flowchart TD
   - `agent/confirmation.ts#executeGatedToolOnce` 以 `findInFlightPlanAction(taskId, nodeId)` 守卫（唯一事实来源是该计划节点**已持久化**的 `PendingAction` 行，状态集 `pending|awaiting_mfa|confirmed|executed`）：同一计划节点已有持久化动作时**不再**为该节点铸造第二个 `PendingAction`。
   既有动作为 `executed` **且带耐久 `resultJson`** 时，`recoverExecutedPlanAction` 从该持久化结果**回填**节点结果（补齐为 `success` 并继续后续节点）——**不重新调用工具**，非幂等副作用（如 `set_card_limit`）**绝不重放**（此恢复路径**有意不经过网关**，避免为该节点铸造第二个动作）。
   既有动作为 `executed` 但**无存储结果**（遗留行）时，恢复**同样不重新调用工具**：它以**显式失败结果**（「该节点此前已执行但未留存结果，需人工核对（不会重新执行）。」）终结该节点。
-  既有动作为 `confirmed` **且带存储结果**（结果已持久化、终态状态未及写入）时，resume 以 CAS（`confirmed → executed`）把动作**终结**并回填节点结果——**不重跑、不伪造回滚**。
+  既有动作为 `confirmed` **且带存储结果**（结果已持久化、终态状态未及写入）时，resume 以 CAS（`confirmed` → `readStoredResult(existing)?.ok === true ? 'executed' : 'failed'`）把动作**终结**并回填节点结果——**存储结果为失败**（`ok:false`）时动作 / 节点 / 计划**一律**收敛到 `failed`，**不重跑、不伪造回滚**。
   该恢复对所有门控写工具**通用**且**幂等**（无额外写入、无新确认、无重复副作用）；真正处于 `pending`/`awaiting_mfa` 的动作仍返回**已停放结果**、继续等待真实人工确认。
-- **结果与终态状态的原子写入**——`agent/confirmation.ts#executeAuthorizedAction` 在**单个** `prisma.$transaction` 内同写 `PendingAction.resultJson` 与**终态状态**（`executed`/`failed`），关闭"结果已存、状态却停在 `confirmed`/`waiting_confirmation`"的搁浅窗口；带存储结果的 `confirmed` 动作在 resume 时以 CAS（`confirmed → executed`）+ 回填终结，**无重跑、无伪造回滚**。
+- **结果与终态状态的原子写入**——`agent/confirmation.ts#executeAuthorizedAction` 在**单个** `prisma.$transaction` 内同写 `PendingAction.resultJson` 与**终态状态**（`executed`/`failed`），关闭"结果已存、状态却停在 `confirmed`/`waiting_confirmation`"的搁浅窗口；带存储结果的 `confirmed` 动作在 resume 时以 CAS（`confirmed` → `readStoredResult(existing)?.ok === true ? 'executed' : 'failed'`）+ 回填终结，**存储结果为失败**时动作 / 节点 / 计划一律收敛 `failed`，**无重跑、无伪造回滚**。
+- **副作用已提交、结果事务回滚的楔子动作有明确归属**——SDK 副作用已提交而结果 + 终态状态的 `$transaction` 回滚时，动作滞留 `confirmed` + `resultJson=null`；`agent/confirmation.ts#executeGatedToolOnce` 以进程内 `inFlightConfirmations` 注册表区分**真楔子**（无活跃续跑）与**仍由活跃续跑拥有**的行（重新停放、**不写入**）——真楔子被**终结为 `failed`** 并路由到**显式人工核对**（消息含 `人工核对`），工具**绝不**重跑、**绝不**伪造回滚，计划**绝不**滞留在 `waiting_confirmation`。该注册表是**进程内**的（见 §14【未验证】）。
 
 ---
 
@@ -366,6 +367,8 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 | 计划取消授权检查 | `security-gateway.ts#authorizeAction`（CAS 事务内重读计划状态） | 确认已取消计划的动作 | 同一 CAS 事务内重读计划 ⇒ 已取消则回滚认领并返回 `plan_cancelled` ⇒ HTTP 200 `{ok:false, status:'cancelled', code:'SECURITY_DENIED'}`（**刻意**的非 403） |
 | 计划状态 CAS | `repositories/task.ts#claimTaskStatus` | pause/cancel/resume/retry | 单条 `updateMany`；**终态不可复活**；输家返回持久化行 |
 | 账本幂等 | `lib/ledger.ts#ledgerKeyForAction` / `#ledgerTxIdForAction` · `confirmation.ts#executeAuthorizedAction` | `transfer_money` | 键由 `ledgerKeyForAction({ id, taskId, nodeId })` 统一派生（计划节点 ⇒ `nodeExecutionKey`，独立调用 ⇒ 动作 `id`），`ledgerTxIdForAction` 由此得出账本主键；`risk-engine.ts#computeInFlightTransferTotal` 经该键去重 ⇒ 账本重放且**恰好计数一次**，不重复扣款 |
+| 计划所有权节点领取 | `agent/task-control.ts#claimNodeOwnedByPlan` · `agent/tools/planning.ts#planExecutionClaimHeld` | 执行器的节点领取 / 发布 | **单条** `updateMany` CAS **同时**要求计划所有权（`task.executionToken === planToken`）与 `status: { notIn: TERMINAL_NODE_STATUSES }`：失去计划领取的执行者不能重开终态节点、不能运行后继工具；发布由 `planExecutionClaimHeld` 门控，被接管者**不**发迟到 `plan_update` |
+| 楔子动作归属 | `agent/confirmation.ts#executeGatedToolOnce`（`inFlightConfirmations`） | 副作用已提交、结果事务回滚（`confirmed` + `resultJson=null`） | 进程内注册表区分**真楔子**与**活跃续跑拥有**的行：真楔子终结 `failed` + `人工核对`（工具**绝不**重跑，计划**绝不**停在 `waiting_confirmation`） |
 
 ## 14. 代码强制 vs 模拟 · What is Enforced vs Simulated（诚实清单）
 
@@ -382,7 +385,9 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - **执行认领 token fence（被接管的旧所有者无法伪造 / 覆盖结果）**——`agent/task-control.ts#createTaskPersistence` 把节点 / 计划结果写入路由到 `lib/db/repositories/task.ts` 的 **token-fenced 原子原语**：`updateTaskNode(..., { fenceToken })`（**单条** `updateMany`，要求 `executionToken === fenceToken`，认领丢失时返回 `null`）与 `claimTaskStatus(..., { fenceToken })`（认领丢失时返回 `false`）；fence 与写入在**同一条语句**内（**非**读后写）⇒ 认领被接管的「僵尸」执行者**无法**伪造或覆盖节点 / 计划结果（也无法据此叙述）；
   fence **覆盖每一条执行器写入路径**（首次 `submit_plan` 运行、依赖跳过、condition / note 节点，以及确认续跑）；持久化端口以显式 `mode:'executor'`（**始终**加 fence）与 `mode:'control'`（**仅**刻意不加 fence 的 `pauseTask`/`cancelTask`，因其不持有领取）区分两种写入；**本模块内不存在非 CAS / 未加 fence 的写入**；
   当**确认续跑**丢失计划领取时，它**不**推进计划，而是经 `agent/task-fencing.ts#recordDecidedNodeFenced` 以**无所有者 CAS**（`where { task: { executionToken: null } }`，随后 `settlePlanFromNodes`）记下该已决定节点，使**活跃所有者**继续、人工决定**永不丢失**；
-- **已执行门控节点的状态安全恢复（回填，非重放）**——`agent/confirmation.ts#recoverExecutedPlanAction` 对已 `executed` 的门控计划节点，从 `executeAuthorizedAction` 持久化的**耐久** `PendingAction.resultJson` **回填**节点结果，**不重新调用工具**，因此非幂等副作用（如 `set_card_limit`）**绝不重放**；对**无存储结果**的遗留行，恢复也**不重新调用工具**，而以「已执行但未留存结果，需人工核对」的显式失败结果终结该节点；
+- **已执行门控节点的状态安全恢复（回填，非重放）**——`agent/confirmation.ts#recoverExecutedPlanAction` 对已 `executed` 的门控计划节点，从 `executeAuthorizedAction` 持久化的**耐久** `PendingAction.resultJson` **回填**节点结果，**不重新调用工具**，因此非幂等副作用（如 `set_card_limit`）**绝不重放**；对**无存储结果**的遗留行，恢复也**不重新调用工具**，而以「已执行但未留存结果，需人工核对」的显式失败结果终结该节点；带存储结果的 `confirmed` 动作以 CAS（`confirmed` → `readStoredResult(existing)?.ok === true ? 'executed' : 'failed'`）+ 回填终结，**失败存储结果一律收敛 `failed`**；
+- **计划所有权节点领取（同一条语句内的 CAS）**——`agent/task-control.ts#claimNodeOwnedByPlan` 的单条 `updateMany` **同时**校验**计划所有权**（`task.executionToken === planToken`）与**非终态**（`status: { notIn: TERMINAL_NODE_STATUSES }`）：一个**失去计划领取**的执行者**无法**重开终态节点、也**无法**运行其后继工具；执行器写入另带 **terminal-clobber 守卫**（仅当**新**状态为终态时生效，故当前所有者合法的 `failed`→`pending` 重开仍通过）；发布侧由 `planExecutionClaimHeld` 门控，被接管者**不发**迟到 `plan_update`；
+- **楔子动作的显式归属**——副作用已提交而结果事务回滚（`confirmed` + `resultJson=null`）时，`agent/confirmation.ts#executeGatedToolOnce` 以进程内 `inFlightConfirmations` 区分真楔子与仍被**活跃续跑拥有**的行：真楔子终结 `failed` 并路由**人工核对**（消息含 `人工核对`），工具**绝不**重跑、计划**绝不**停在 `waiting_confirmation`；**该注册表是进程内的（见【未验证】）**；
 - 熔断（连续 3 次 MFA 失败锁会话）、注入检测（纵深防御）、幻觉防护（只报工具结果的事实）；
 - 审计写入（门控动作 + 安全事件）。
 
@@ -412,6 +417,7 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - **原子累计限额认领的串行化依赖 SQLite 文件锁**（见「原子累计限额主张」的注意项）——SQLite 特有，
   未在其他数据库引擎 / 多写者部署上验证；
 - **陈旧接管的接管视界是启发式**：`agent/task-control.ts` 的 `EXECUTION_CLAIM_TTL_MS = 600000`（≈10 分钟）是**启发式**边界——在**单次工具调用**内阻塞**极久**的进程仍可能被接管（其节点 / 计划结果写入已被 token fence 拒绝，但接管这个动作本身仍会发生）；
-- **执行认领 / fence 的并发正确性建立在 SQLite 单写者假设之上**——多进程 / 多实例部署未验证。
+- **执行认领 / fence 的并发正确性建立在 SQLite 单写者假设之上**——多进程 / 多实例部署未验证；
+- **`inFlightConfirmations` 是进程内注册表** —— 一个 `confirmed` + `resultJson=null` 的动作若其**活跃续跑运行在另一个进程 / 实例**中，就**无法**与**真楔子**区分（它不会被识别为「仍被拥有」）——**多实例部署未覆盖**。
 
 > 验收场景与断言见 [`test-cases.md`](./test-cases.md)；已知限制见 [`known-risks.md`](./known-risks.md)。

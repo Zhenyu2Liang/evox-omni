@@ -41,6 +41,12 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   - `ledgerKeyForAction(action)` → the canonical de-dup IDENTITY of a `PendingAction`: `nodeExecutionKey(taskId, nodeId)` when the action is plan-linked (`taskId` AND `nodeId` both non-null/non-empty after trim), else the action's own `id`.
   - `ledgerTxIdForAction(userId, action)` → `idempotentTransferTxId(userId, ledgerKeyForAction(action))`, the ledger-row id `security/risk-engine` must look up to EXCLUDE an already-ledgered in-flight action from the cumulative daily-transfer total.
     Callers must use THIS (never `idempotentTransferTxId(userId, action.id)`) so a plan node's lookup MATCHES the id its row was generated with — otherwise the action is not recognized and is double-counted.
+- `prisma-cli-env.ts` — shared Prisma-CLI **env policy + binary resolution**, the one piece every entry point that spawns the Prisma CLI imports (uses Node built-ins only — `node:fs`/`node:path` — no `@/` alias, no side effects at import).
+  - `SCHEMA_ENGINE_RUST_LOG = 'info'` plus the two pinning helpers: `pinSchemaEngineLogging(env = process.env)` MUTATES and returns `env`; `prismaCliEnv(env?)` returns a NEW object and never mutates its input.
+    Both force `RUST_LOG='info'` and default `RUST_BACKTRACE='1'`,
+    because Prisma's schema-engine error mapper parses the engine's stderr as `split(/\r?\n/).slice(1)`:
+    an ambient `RUST_LOG` at/above `warn` suppresses the engine's line-0 INFO banner, the real diagnostic (e.g. the `P1003 Database … does not exist` probe that `db push` relies on before creating a fresh SQLite file) lands at index 0 and is discarded, and the CLI fails with an opaque empty `Error: Schema engine error:`.
+  - `CliInvocation` (`{ command, args }`), `resolveRepoRoot(startDir = process.cwd())` (walks up to the dir holding `package.json` + `next.config.mjs`), `resolvePrismaBin(repoRoot)` (`node_modules/prisma/build/index.js`, else `undefined`), `resolveTsxBin(repoRoot)` (`node_modules/tsx/dist/cli.mjs`, else `undefined`), `cliCommand(localBin, npxArgs)` (prefers the project-local bin launched with `process.execPath`; falls back to `cmd.exe /d /s /c "npx …"` on Windows / the plain command on POSIX).
 - `contracts/` — the FROZEN cross-module type definitions (see routing table below).
 - `db/` — Prisma client singleton + per-aggregate repositories (the only data-access layer).
 - `index.ts` — convenience barrel re-exporting `contracts`, `errors`, `money`, `config`, `constants`,
@@ -83,16 +89,20 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
 - `./lib/ledger.ts` → deterministic idempotency keys + canonical action→ledger-row identity — `idempotentTransferTxId`, `nodeExecutionKey`, `ledgerKeyForAction`, `ledgerTxIdForAction`.
+- `./lib/prisma-cli-env.ts` → Prisma-CLI env pinning + bin resolution — `SCHEMA_ENGINE_RUST_LOG`, `pinSchemaEngineLogging`, `prismaCliEnv`, `CliInvocation`, `resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`; re-exported by `tests/helpers/prisma-cli.ts` (its public API is unchanged) and consumed by `scripts/db-push.ts` (the `npm run db:push` / `db:reset` deploy entry).
 - `./lib/index.ts` → convenience barrel for `@/lib` imports (no `db`).
 
 ## Status
 
 - Fully implemented: every `lib/*.ts` util helper (`errors`, `money`, `config`, `constants`, `ids`,
-  `date`, `clock`, `json`, `ledger`), `db/client.ts`, and all `lib/db/repositories/*` aggregate modules.
+  `date`, `clock`, `json`, `ledger`, `prisma-cli-env`), `db/client.ts`, and all `lib/db/repositories/*` aggregate modules.
 
 ## Notes for Agents
 
 - If you need a value that every layer shares (limit, threshold, code), add it to `constants.ts`, not locally.
+- Prisma-CLI environment policy lives ONLY in `lib/prisma-cli-env.ts`
+  (`tests/setup.ts` and the E2E harness reach it via `tests/helpers/prisma-cli.ts`; the deploy path via `scripts/db-push.ts`).
+  Import it instead of re-implementing the `RUST_LOG=info` pin or the local-binary resolution at a call site, so a cold-checkout `db push` keeps provisioning a fresh SQLite file.
 - The DB target is chosen **only** by `process.env.DATABASE_URL` (read at module load by
   `lib/db/client.ts` → `resolveDatabaseUrl()`), with a cwd-based `prisma/dev.db` fallback — there is **no
   dotenv in `lib`** (implicit `.env` loading comes from Next.js's dev/build env loader or the Prisma CLI).

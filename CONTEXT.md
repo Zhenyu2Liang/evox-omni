@@ -78,16 +78,20 @@ This is exactly what demo **Test 4** (prompt injection) proves.
   A successfully posted side effect keeps its action at `executed` and is **retained** — never rolled back or cosmetically reverted; the ledger, the action status and the API response stay consistent.
 - **Executed-node recovery** (`agent/confirmation.ts`): when a plan resumes and a gated node's `PendingAction` is already `executed` (side effect posted, node result not yet persisted), the node's `success` is backfilled by `recoverExecutedPlanAction` from the **persisted** `PendingAction.resultJson` written by `executeAuthorizedAction` — the tool is **never re-invoked**.
   Recovery is **generic** across all gated write tools and **idempotent** (no extra write, no fresh confirmation, no duplicate side effect).
-  A `confirmed` action that already has a stored result is finalized on resume via a single CAS (`confirmed` → `executed`) plus the same backfill — no re-run, no fabricated rollback.
+  A `confirmed` action that already has a stored result is finalized on resume via a single CAS (`confirmed` → `readStoredResult(existing)?.ok===true ? 'executed' : 'failed'`, via `claimPendingAction`) plus the same backfill — no re-run, no fabricated rollback; `ok:false` settles action + node + plan at `failed`.
   An `executed` action that has **no** stored result (legacy/pre-upgrade row) is also **not** re-invoked; the node settles with an explicit "executed but no stored result — needs manual reconciliation" outcome.
+  When the SDK side effect commits but the result+status `$transaction` rolls back (a `confirmed` row stuck with `resultJson=null`), the action is finalized `failed` and routed to explicit manual reconciliation (message contains `人工核对`); the tool is never re-invoked and the plan is never left `waiting_confirmation`.
+  A new in-process `inFlightConfirmations` registry (mirroring `inFlightExecutions`) distinguishes a genuine wedge (no live continuation) from a `confirmed`+null row still owned by a live continuation (re-parked, no write) — see `agent/confirmation.ts#executeGatedToolOnce`.
   `pending` / `awaiting_mfa` still await the real human decision.
 - **The execution result and the terminal action status are written in ONE atomic `prisma.$transaction`** (`agent/confirmation.ts#executeAuthorizedAction`), closing the window where a saved result could be stranded at `confirmed` / `waiting_confirmation`.
 - **Executor write FENCING** (`agent/task-control.ts` + `agent/task-fencing.ts`) covers **every** executor path: the initial `submit_plan` run, dependency-skip and condition/note nodes, and the confirm-continuation.
   Ownership is validated **atomically in the SAME DB statement as the write** (a single-statement CAS on the node/plan `executionToken`), so a resumed / lost-claim executor can no longer overwrite a takeover's node or plan result, mark a completed dependent `skipped`, or advance downstream.
+  A node CLAIM and a node WRITE additionally verify **PLAN ownership** (the parent `AgentTask.executionToken` must equal this executor's plan token) in the SAME statement, and a node claim REFUSES a **TERMINAL** node (`success`/`failed`/`skipped`/`cancelled`), so a taken-over executor cannot re-claim a completed node or run its successor tool.
+  A fenced-out plan write emits **no** `onPlanUpdate` (`agent/tools/planning.ts` gates the sink on the live plan claim), so no stale progress event is published; a legitimately reopened node (`retryPlan` writing `pending`) by the CURRENT plan owner is still allowed.
   `createTaskPersistence` distinguishes an explicit `mode:'executor'` (always fenced: `updateTaskNode(..., { fenceToken })` returns the `null` "lost" sentinel, `claimTaskStatus(..., { fenceToken })` returns `false`) from `mode:'control'` (the deliberate, unfenced `pauseTask` / `cancelTask` writes).
   When the confirm-continuation **loses** the plan claim it does **not** advance the plan; it records the decided node through a fenced no-owner CAS (`agent/task-fencing.ts#recordDecidedNodeFenced`) so the live owner continues and the human decision is never lost.
 - **Execution takeover** (`agent/task-control.ts`): `resume`/`retry` take over a plan/node `executionToken` only when the owner is stale (`EXECUTION_CLAIM_TTL_MS = 600000ms`, computed from the **real** clock).
-  A progressing executor keeps its claim fresh via **node-boundary lease renewal** (`renewTaskExecutionClaim`, never a background timer), but a **long-blocked owner can still be overtaken** (a single tool call blocked beyond the TTL), so takeover is a **TTL heuristic**, not a liveness proof.
+  A progressing executor keeps its claim fresh via **node-boundary lease renewal** (`renewTaskExecutionClaim`, never a background timer), but a **long-blocked owner can still be overtaken** (a single tool call blocked beyond the TTL), so takeover is a **TTL heuristic**, not a liveness proof. Atomicity of the takeover/claim CAS is verified only within a single process/DB; multi-process / multi-instance contention is **not** stress-tested, and the `inFlightConfirmations` registry is per-process (a live continuation in another instance is not recognized).
   The takeover is **fenced**: the overtaken executor's writes are **rejected** by the same-statement CAS, threading the claim token from `claimTaskExecution`/`buildPlanDeps`.
   Concurrent takeovers yield exactly one winner.
 ## Security Model (code-enforced, LLM-immutable)
@@ -164,7 +168,7 @@ Modern digital-banking fintech: deep-blue + white + light-grey; rounded cards, s
 status badges, agent task timeline; 🟢🟡🔴 used for permission status. Amounts prefixed `¥`.
 ## Commands
 - Install: `npm install`
-- Prisma: `npx prisma generate` · `npx prisma db push` · `npm run db:seed`
+- Prisma: `npm run db:generate` · `npm run db:push` (`tsx scripts/db-push.ts`, pins `RUST_LOG=info`) · `npm run db:seed`
 - Dev: `npm run dev` (http://localhost:3000)
 - Build: `npm run build`
 - Test: `npm run test` (Vitest, mock LLM + test SQLite)
@@ -175,8 +179,14 @@ Four layers (see `tests/CONTEXT.md`): (1) pure unit tests (`tests/unit/` — sec
 root review specs (`tests/review-*.test.ts`); (4) real-browser e2e acceptance (`tests/e2e/acceptance.e2e.ts`,
 playwright-core-driven on an isolated `prisma/e2e.db`, run via `npx tsx`, not Vitest).
 Clean-env bootstrap (`tests/setup.ts`, Vitest `setupFiles`): self-bootstraps a **usable** Prisma Client (usability probe) and provisions the **isolated** `prisma/test.db` **fail-loud**, keyed on a **sha1 marker of `prisma/schema.prisma`** so the schema is re-pushed **only when it changes**; `prisma/dev.db` is untouched.
-Cold-start provisioning pins `RUST_LOG=info` for the Prisma schema-engine child process (`tests/helpers/prisma-cli.ts#pinSchemaEngineLogging`), because an ambient `RUST_LOG` at/above `warn` suppressed the engine's INFO banner and made Prisma drop the real (line-1) error, surfacing as the opaque empty `Error: Schema engine error:` on a fresh SQLite file.
+Cold-start provisioning pins `RUST_LOG=info` for the Prisma schema-engine child process (`lib/prisma-cli-env.ts#pinSchemaEngineLogging`, re-exported by `tests/helpers/prisma-cli.ts`), because an ambient `RUST_LOG` at/above `warn` suppresses the engine's INFO banner and makes Prisma drop the real (line-1) error, surfacing as the opaque empty `Error: Schema engine error:` on a fresh SQLite file.
+The same pin is the shipped deploy path: `npm run db:push` → `scripts/db-push.ts` (also sets `RUST_BACKTRACE=1`, resolves the local Prisma CLI, passes extra args through, exits with the child's code); `db:reset` = `tsx scripts/db-push.ts --force-reset && tsx prisma/seed.ts`.
 With that pin the DEFAULT `npx vitest run` and the DEFAULT browser E2E auto-provision the isolated DB — no manual prep, no skip flag, no pre-written marker.
+## Known Issues (open / unclosed)
+- **Plan-ownership & write fencing are enforced in-process on a single SQLite DB.** Atomicity of the takeover/claim CAS is verified only within a single process/DB; multi-process / multi-instance contention is not stress-tested.
+- **`inFlightConfirmations` is per-process.** A `confirmed` + `resultJson=null` row whose live continuation runs in a different process/instance is not distinguished from a genuine wedge (multi-instance deploy not covered).
+- **Execution takeover is a TTL heuristic** (`EXECUTION_CLAIM_TTL_MS = 600000ms`, real clock): a single tool call legitimately blocked beyond the TTL can be overtaken (its writes are fenced, but it is preempted).
+- **File-size soft guideline exceeded**: `agent/task-control.ts` (~1169 lines) and `agent/confirmation.ts` (~1006 lines) — extraction candidates.
 ## Routing Table
 - `./app` → Next.js App Router: pages (dashboard, agent chat, bills, cards, subscriptions, security center, audit) + API route handlers (chat/SSE, actions confirm|verify|cancel, tasks control, audit, security, read models)
 - `./components` → React UI: chat cards (balance/transfer/confirm/MFA/anomaly/plan), charts, banking tiles, ui primitives
@@ -185,10 +195,11 @@ With that pin the DEFAULT `npx vitest run` and the DEFAULT browser E2E auto-prov
 - `./security` → Security Gateway + permission engine, risk engine, MFA, circuit breaker, injection guard
 - `./planner` → DAG task planner + executor (`submit_plan` backing)
 - `./audit` → Audit logger + security-event recorder
-- `./lib` → Shared kernel: contracts, errors, money, config, constants, clock, Prisma client + repositories
+- `./lib` → Shared kernel: contracts, errors, money, config, constants, clock, ledger, prisma-cli-env, Prisma client + repositories
 - `./prisma` → Prisma schema + seed data (applied via `prisma db push`; NO `migrations/` directory)
 - `./tests` → Four layers: unit (security/planner/sdk/lib/agent) + faux-LLM scenario integration + in-process route-handler HTTP integration (`app/*-http.test.ts`, `review-*.test.ts`) + real-browser e2e acceptance (`e2e/`, isolated `prisma/e2e.db`)
 - `./docs` → Competition docs: architecture.md, security.md, test-cases.md, known-risks.md (sibling — read-only, escalate writes here to root)
+- `./scripts` → Deploy scripts: `db-push.ts` (pins `RUST_LOG=info` for the Prisma schema-engine, resolves the local CLI, passes extra args through, exits with the child's code)
 - `./README.md` → setup, demo account, mock MFA code, demo script, known limits (sibling/root-owned)
 
 ## Notes for Agents
