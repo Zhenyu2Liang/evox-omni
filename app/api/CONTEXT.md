@@ -27,7 +27,7 @@ session/user from the `banking_session` cookie, never from a query param.
 | --- | --- | --- | --- | --- |
 | GET | `/api/health` | — | `{ status:'ok', time:number, llmMode:'live'\|'mock' }` | `@/lib/config` |
 | POST | `/api/chat` | body `ChatTurnRequest`; `?stream=0\|1` (default 1) | stream ⇒ SSE of `AgentStreamEvent` ending `{"type":"done"}`; non-stream ⇒ `ChatTurnResponse` | `@/agent` `runTurn` / `resumeTurn` |
-| GET | `/api/actions` | — (cookie session only) | `PendingAction[]` — the caller session's NON-TERMINAL actions (`pending`/`awaiting_mfa`); refresh-restore | `@/lib/db/repositories/pendingAction` `listPendingActions` |
+| GET | `/api/actions` | — (cookie session only) | `PendingAction[]` — the caller session's surfaced actions (`SURFACED_STATUSES` = `pending`/`awaiting_mfa`/`needs_reconciliation`); refresh-restore | `@/lib/db/repositories/pendingAction` `listPendingActions` |
 | POST | `/api/actions/[id]/confirm` | body `{}` | `ActionResponse` (cookie identity; ownership enforced: cross-session/user → `403 SECURITY_DENIED`; MFA escalation surfaced) | `_lib/agent-bridge` `confirmOwned` → `@/agent` `confirm` (forwards `{userId,sessionId}`) |
 | POST | `/api/actions/[id]/verify` | body `{ code: string }` | `ActionResponse` (wrong code ⇒ 200 with `data.ok=false`, `status:'awaiting_mfa'`; ownership enforced) | `_lib/agent-bridge` `verifyOwned` → `@/agent` `verify` (forwards `{userId,sessionId}`) |
 | POST | `/api/actions/[id]/cancel` | body `{}` | `ActionResponse` (`status:'cancelled'`; ownership enforced) | `_lib/agent-bridge` `cancelOwned` → `@/agent` `cancel` (forwards `{userId,sessionId}`) |
@@ -229,7 +229,7 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
 
 - `./health/route.ts` → `GET /api/health` liveness + `llmMode` probe
 - `./chat/route.ts` → `POST /api/chat` — one agent turn (SSE stream or JSON), session cookie on every response
-- `./actions/route.ts` → `GET /api/actions` — the caller session's NON-TERMINAL pending actions (cookie-only identity; refresh-restore)
+- `./actions/route.ts` → `GET /api/actions` — the caller session's surfaced pending actions (`SURFACED_STATUSES`: `pending`/`awaiting_mfa`/`needs_reconciliation`) (cookie-only identity; refresh-restore)
 - `./actions/[id]/confirm/route.ts` → `POST /api/actions/[id]/confirm` — execute a confirmed pending action (cookie identity, ownership-enforced, MFA-escalation surfaced)
 - `./actions/[id]/verify/route.ts` → `POST /api/actions/[id]/verify` — MFA code submission for a RED action (ownership-enforced)
 - `./actions/[id]/cancel/route.ts` → `POST /api/actions/[id]/cancel` — cancel a pending action (ownership-enforced)
@@ -280,7 +280,10 @@ cancel(actionId: string, opts?: ConfirmOptions): Promise<ConfirmationOutcome>;
   not meaningful). A `cancel` of an unknown/settled action surfaces the owner's thrown
   `AppError('NOT_FOUND'|'CONFLICT')`.
 - **`GET /api/actions`** is the refresh-restore endpoint: `requireIdentity` → `listPendingActions({ sessionId })`
-  filtered to NON-TERMINAL (`pending`/`awaiting_mfa`) → mapped to the frozen `PendingAction` contract
+  filtered to `SURFACED_STATUSES` = `pending`/`awaiting_mfa` (non-terminal — still awaiting a human
+  decision) plus `needs_reconciliation` (TERMINAL — the manual-reconciliation entry for a gated side
+  effect whose outcome could not be recorded; it must stay user-visible until a human settles it) →
+  mapped to the frozen `PendingAction` contract
   (JSON args/summary via `safeParse`, epoch-ms timestamps) → `200 { ok:true, data: PendingAction[] }`.
   Never contains the MFA code.
 - **Task plans & control (`/api/tasks*`).** Read models come from the persisted `AgentTask`/`AgentTaskNode`
