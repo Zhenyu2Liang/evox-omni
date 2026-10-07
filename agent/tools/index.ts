@@ -13,6 +13,7 @@
  */
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { AppError } from '@/lib/errors';
+import type { ExecutionFenceCheck } from '@/banking-sdk';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import { createGetBalanceTool, runGetBalance } from './account';
@@ -101,6 +102,14 @@ export interface ToolExecutionResult {
 export interface ToolRunOptions {
   /** At-most-once key for a side-effecting call; passed verbatim to the SDK's `idempotencyKey`. */
   idempotencyKey?: string;
+  /**
+   * WRITE-BOUNDARY fence: an opaque async check the Banking SDK `await`s INSIDE its write transaction,
+   * immediately before the business write (see `@/banking-sdk#attachExecutionFence`). Built by the
+   * agent layer (`../execution-fence`) for a plan-node (GREEN inline) or confirm/verify execution; a
+   * check that THROWS rolls the transaction back, so a write whose execution right was taken over /
+   * cancelled commits NO side effect. ADDITIVE: absent ⇒ unchanged behavior for every caller.
+   */
+  fence?: ExecutionFenceCheck;
 }
 
 /** A model-free runner for one tool: `(userId, args, opts?) => ToolExecutionResult` (never throws). */

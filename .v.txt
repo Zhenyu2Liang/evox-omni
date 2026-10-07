@@ -1,0 +1,23 @@
+[33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cjs-node-api-deprecated for more details.[39m
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/projects/banking-agent/.genesis/workers/worker_T1_A11[39m
+
+[90mstdout[2m | tests/review-unified-boundaries.test.ts[2m > [22m[2ma plan-linked posted transfer must recover from its receipt instead of being finalized failed
+[22m[39mREVIEW_PLAN_RECEIPT_IGNORED {"http":200,"responseOk":true,"actionStatus":"executed","planStatus":"success","nodeStatus":"success","balance":23380,"debits":1,"executionAudits":1}
+
+[90mstdout[2m | tests/review-unified-boundaries.test.ts[2m > [22m[2ma transient audit insert failure must not permanently strand a settled transfer without audit
+[22m[39mREVIEW_AUDIT_FAILURE_SWALLOWED {"firstHttp":500,"recoveryOk":true,"actionStatus":"executed","receiptCount":1,"executionAudits":1}
+
+[90mstdout[2m | tests/review-unified-boundaries.test.ts[2m > [22m[2moverlapping different requests using the same execution key must conflict and never return a wrong recipient
+[22m[39mREVIEW_CONCURRENT_DIGEST_BYPASS {"winnerRecipient":"张伟","loserOk":false,"loserCode":"CONFLICT","ledgerRecipient":"contact_zhangwei","ledgerAmount":-200,"receipts":1}
+
+[90mstdout[2m | tests/review-unified-boundaries.test.ts[2m > [22m[2ma taken-over then cancelled plan must fence a blocked SDK write before any side effect commits
+[22m[39mREVIEW_SDK_FENCE_MISSING {"sdkCalls":1,"confirmedCancelStatus":"cancelled","budgetsWhenCancelled":0,"budgetsAfterOldRelease":0,"winnerStatus":"failed","storedStatus":"cancelled","oldStatus":"cancelled"}
+
+ [32m✓[39m tests/review-unified-boundaries.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 316[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m   Start at [22m 18:19:50
+[2m   Duration [22m 1.30s[2m (transform 325ms, setup 109ms, collect 703ms, tests 316ms, environment 0ms, prepare 46ms)[22m
+

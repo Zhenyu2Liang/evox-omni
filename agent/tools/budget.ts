@@ -10,7 +10,7 @@
  */
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { Type, type Static } from '@mariozechner/pi-ai';
-import { banking } from '@/banking-sdk';
+import { attachExecutionFence, banking } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
 import { AppError } from '@/lib/errors';
 import { formatCNY } from '@/lib/money';
@@ -60,14 +60,20 @@ export async function runReserveBudget(
   // (the SDK dedupes on it), so a repeated (plan, node) never double-creates a reservation.
   const idempotencyKey = opts?.idempotencyKey ?? input.idempotencyKey;
   try {
-    const budget = await banking.budget.reserveBudget({
+    const sdkInput = {
       userId,
       name: input.name,
       amount: input.amount,
       purpose: input.purpose,
       dueDate: input.dueDate,
       idempotencyKey,
-    });
+    };
+    // WRITE-BOUNDARY fence: carried on the SDK INPUT OBJECT (its only transport — the spy/SDK read it
+    // from the object) so the SDK awaits it INSIDE its write transaction, immediately before the
+    // insert. A throwing fence (plan taken over / cancelled while this call was in flight) rolls the
+    // transaction back with NO budget row.
+    if (opts?.fence !== undefined) attachExecutionFence(sdkInput, opts.fence);
+    const budget = await banking.budget.reserveBudget(sdkInput);
     const purpose = budget.purpose ? `，用途：${budget.purpose}` : '';
     const due = budget.dueDate ? `，到期：${formatDateTime(budget.dueDate)}` : '';
     return {

@@ -641,6 +641,12 @@ function buildPlanDeps(
     releaseNode,
     // Durable steering: a pause/cancel persisted by a control request stops THIS run at its next
     // checkpoint (see `defaultPollControls`).
+    // Execution-right re-check: consulted AFTER an async node notification resolves and BEFORE the
+    // next notification / node tool launch. Wired ONLY with a PLAN claim (this run's `planToken`); a
+    // run whose claim was taken over mid-walk then takes the planner's `'owned'` branch — zero writes,
+    // NO successor tool, no stale progress event. A claim-less walk keeps the old behavior.
+    isRunOwner:
+      planToken === undefined ? undefined : () => planExecutionClaimHeld(planId, planToken),
     controls: defaultPollControls(planId),
     ...createTaskPersistence(planId, {
       mode,

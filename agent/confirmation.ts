@@ -54,6 +54,7 @@ import { AppError } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
 import { ledgerKeyForAction, nodeExecutionKey } from '@/lib/ledger';
 import { createToolRegistry, type ToolExecutionResult } from './tools';
+import { buildConfirmFence, buildPlanNodeFence } from './execution-fence';
 import { resumeTurn } from './run-turn';
 import type { RunTurnDeps } from './run-turn';
 import { findTaskByPendingAction, resumeTaskForAction } from './task-control';
@@ -559,7 +560,13 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     // takes no key. (`executeDirect` forwards `idempotencyKey` to every runner.)
     const opts =
       ctx.taskId !== undefined && ctx.nodeId !== undefined
-        ? { idempotencyKey: nodeExecutionKey(ctx.taskId, ctx.nodeId) }
+        ? {
+            idempotencyKey: nodeExecutionKey(ctx.taskId, ctx.nodeId),
+            // WRITE-BOUNDARY fence: the SDK awaits it inside its write transaction, so a GREEN plan
+            // node whose plan was taken over / cancelled while its tool call was in flight commits
+            // NO side effect.
+            fence: await buildPlanNodeFence(ctx.taskId, ctx.nodeId),
+          }
         : undefined;
     const result = await registry.executeDirect(ctx.toolName, ctx.args, opts);
     return {
@@ -758,7 +765,13 @@ async function executeAuthorizedAction(
   });
   let result: ToolExecutionResult;
   try {
-    result = await registry.executeDirect(action.toolName, action.args, { idempotencyKey });
+    // WRITE-BOUNDARY fence (confirm/verify path): authority is the ACTION's own exactly-once gateway
+    // claim plus its execution lease / live continuation — NOT the plan's `executionToken`, which
+    // `resumeTaskForAction` legitimately mints/rotates/releases around this continuation. It therefore
+    // asserts only that the owning plan was not CANCELLED while the blocked write was in flight; a
+    // cancelled plan's write rolls the transaction back with NO side effect.
+    const fence = await buildConfirmFence(link?.taskId, link?.nodeId);
+    result = await registry.executeDirect(action.toolName, action.args, { idempotencyKey, fence });
   } catch (e) {
     // A boundary throw is the REAL failure — recorded as `failed`, never swallowed, never a success.
     result = { ok: false, error: AppError.from(e).message };
