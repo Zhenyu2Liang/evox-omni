@@ -147,14 +147,20 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
   not co-located here (the root owns the test tree).
 - The **exhaustive `CardRenderer` mapping** is enforced at compile time (`assertNever` default branch):
   a new `ChatCard` variant breaks `tsc`/`next build` until a renderer is added — this is the primary
-  regression guard.
+  regression guard. NOTE: adding a new `AgentStreamEvent` variant is NOT guarded — `useAgentStream`'s
+  `applyEvent` ends in a silent `default: return state`.
 - Unit-testable without a DOM: `ui/Money` formatting, `StatusBadge` tier→label mapping, the
   `useAgentStream` event→state reducer (pure fold, testable with `AgentStreamEvent[]` fixtures from the
   faux-provider scenarios), the `useAgentStream` refresh-restore reconciliation fold (seeds
   `pendingReconciliations` from `GET /api/actions`), and `PlanCard.controlActionsFor` (status → control-set mapping).
-- **There is NO component/DOM test layer.** `@testing-library/react`, `jsdom` and `happy-dom` are NOT dependencies and no component render test exists; `vitest.config.ts` runs `environment: 'node'`. DOM-level coverage is ONLY the real-browser e2e suite (playwright-core on `prisma/e2e.db`): `tests/e2e/acceptance.e2e.ts` (`npx tsx`, NOT Vitest). Its helpers select on DOM contracts owned here (`AgentTaskTimeline`'s `ol.space-y-3 > li`, node-name `span.text-sm.font-medium.text-banking-deep`, status `span.rounded-full`) — a new status chip must preserve these classes.
-A
+- **There is NO component/DOM test layer.** `@testing-library/react`, `jsdom` and `happy-dom` are NOT dependencies and no component render test exists; `vitest.config.ts` runs `environment: 'node'`.
+- DOM-level coverage is ONLY the real-browser e2e suite (playwright-core on `prisma/e2e.db`): `tests/e2e/acceptance.e2e.ts` (`npx tsx`, NOT Vitest — `.e2e.ts` is outside the Vitest include glob). Its helpers (`tests/e2e/helpers.ts`) select on DOM contracts owned here, so a new status chip must preserve them:
+  `AgentTaskTimeline`'s `ol.space-y-3 > li` (plan node rows), node-name `span.text-sm.font-medium.text-banking-deep`, node status `span.rounded-full` (`Badge`'s `rounded-full` shell — helpers `planNodeRows`, `nodeStatus`, `waitForNodeStatus`), plus `waitForConfirmCard`/`clickConfirm`, `waitForMfaCard`/`submitMfa`, `waitForStatusText`.
 
+## Known Issues
+
+- **Out-of-order `plan_update` can regress the live plan view.** `components/chat/useAgentStream.ts#upsertPlan` (L224–230) guards only with a strict `>` on `updatedAt` and only for the SAME `plan.id`. An older-generation snapshot wins when it carries a DIFFERENT `plan.id` (replaces the slot unconditionally) or when the timestamps are equal. Neither `TaskPlan` nor `AgentStreamEvent` carries a generation/epoch/revision/`executionToken` field, so there is nothing to fence a stale event against. `applyEvent` also ends in a silent `default: return state` (L378–379) — no `assertNever` — so a new `AgentStreamEvent` variant would no-op silently.
+- **`GET /api/actions` row gate.** `components/chat/actions.ts#toPendingActionRef` (L329–349) keeps ONLY `'pending' | 'awaiting_mfa' | 'needs_reconciliation'` and drops every other status. A new "processing"/"recoverable" status must be added to that allow-list (L338) to be surfaced by the refresh restore.
 
 ## Routing Table
 
