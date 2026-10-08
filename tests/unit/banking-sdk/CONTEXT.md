@@ -59,7 +59,7 @@ The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
 
 ## Routing Table
 
-- `./transfer.test.ts` · `./subscription.test.ts` · `./investment.test.ts` · `./atomicity.test.ts` · `./idempotent.test.ts`
+- `./transfer.test.ts` · `./transfer-receipt.test.ts` · `./subscription.test.ts` · `./investment.test.ts` · `./atomicity.test.ts` · `./idempotent.test.ts` (SDK-direct, gateway-independent)
 - `../../helpers` → test-DB lifecycle + fixtures (sibling — this node)
 
 ## Notes for Agents
