@@ -34,6 +34,8 @@ Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` 
   (`persistPlan` only ever carries `status:'running'`); after release exactly one run executes the
   node (stable `runTool` ctx → same `nodeExecutionKey`).
 
+- `executor-execution-right.test.ts` (4 specs, DB-backed) — plan-takeover execution-right barriers through the REAL `buildNodeClaimPorts` + `planExecutionClaimHeld` ports (from `@/agent/task-control`): claim a plan, rotate its token (takeover), then drive `runPlan` and assert the superseded ("zombie") run performs ZERO tool calls, ZERO node writes and publishes NO stale settlement (only the up-front `status:'running'` snapshot), while an already-run node's committed success fact survives.
+
 ## Constraints
 
 - Side effects (tool calls, persistence, clock) are **injected** — most specs need no DB and no LLM;
