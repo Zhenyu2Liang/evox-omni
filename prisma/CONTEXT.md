@@ -49,20 +49,21 @@ Prisma models (see `schema.prisma` for exact fields):
   reconciliation arithmetic runs in cents, so totals never accumulate float drift.
 - **Balance reconciliation model** — each account has an explicit OPENING balance and the STORED balance
   is `opening + Σ(that account's seeded transactions)`:
-  - `acct_checking` (活期账户): opening **¥42,622.30** + ledger **−¥19,042.30** = stored **¥23,580.00**.
+  - `acct_checking` (活期账户): opening **¥11,208.18** + ledger **¥12,371.82** = stored **¥23,580.00**.
   - `acct_savings` (储蓄账户): opening **¥50,000.00** + ledger **¥0.00** (no seeded transactions) =
     stored **¥50,000.00**.
-  Every seeded transaction is `DEBIT` (negative) and attached to `acct_checking`; `acct_savings` has no
-  ledger rows, so its opening equals its stored balance. A seed-time guard fails loud if a future edit
-  pushes the reconciled checking balance out of the ¥23,5xx demo band, and every run echoes the model.
+  Checking has 214 DEBIT expenses and 18 CREDIT income/refund rows; savings has no ledger rows.
+  The opening checking balance is derived from the chosen ¥23,580 demo balance and the full signed
+  ledger. Seed guards require integer cents, unique ids, a nonnegative opening and no future
+  transaction beyond the demo clock. Each run prints the reconciliation.
 - **Canonical stable ids** are preserved for the ids the app + E2E suite address by name (`user_liming`,
   `acct_checking`/`acct_savings`, `card_credit`/`card_debit`, `contact_zhangwei/wangfang/mama/lihua`,
   `prod_wenjiana/b/jinrong/huobi`, `tx_anomaly_apple`, the `tx_sep_*`/`tx_aug_*` ledger ids).
   `tests/helpers/fixtures.ts` is an **independent, hand-maintained mirror** of the same demo world for
   the non-E2E Vitest suite — it is NOT generated from this seed and is NOT required to match these exact
   cent values (the stable ids / categories / merchants / condition thresholds are what must stay aligned).
-- Row counts: `User 1 · Account 2 · Transaction 30 · Contact 4 · Card 2 · CardLimit 1 · Subscription 4 ·
-  InvestmentProduct 4 · InvestmentHolding 1 · Budget 1 · ScheduledTask 2`.
+- Row counts: `User 1 · Account 2 · Transaction 232 (180 fractional amounts) · Contact 8 · Card 2 · CardLimit 4 · Subscription 6 ·
+  InvestmentProduct 4 · InvestmentHolding 3 · Budget 3 · ScheduledTask 2`.
 - **Idempotent**: user + investment products are `upsert`ed by stable id; every user-scoped child table is
   scoped-`deleteMany({ where: { userId } })`'d then recreated in FK-safe order — deletes are confined to
   the DEMO USER (and the stable product ids), never another user's rows or unrelated tables. Re-running
@@ -86,17 +87,14 @@ Prisma models (see `schema.prisma` for exact fields):
 
 ## Design Decisions
 
-- **"本月消费 ≈ ¥5,800" EXCLUDES the anomaly.** September 2026 ordinary expense transactions sum to
-  exactly **¥5,800.00** (580,000 cents) with **娱乐 = ¥2,680.50** (so the "若本月娱乐 > 2000" condition
-  holds). The Apple Store **¥6,999.00** anomaly (`tx_anomaly_apple`, category 购物, channel CARD,
-  `2026-09-20 18:32`, `isAnomaly: true`) is a **separate, additional** row — NOT part of the ¥5,800.00.
-  The 妈妈 transfer (`tx_sep_transfer_mama`, ¥500.00) is dated `2026-09-04` (NOT the demo day), so the
-  demo-day (Sep 25) daily-transfer window stays ¥0 and a ¥200 transfer still classifies YELLOW.
-  → **`analyze_spending` (banking-sdk) must therefore not fold anomalies into the 本月消费 total** (the
-  `tests/helpers/fixtures.ts` mirror builds its own `MONTHLY_SPEND_TOTAL` separately from its
-  `ANOMALY_TRANSACTION`).
+- **Six months of demo data (April–September 2026).** September ordinary expenses are
+  **¥6,937.05**, including **娱乐 ¥2,843.99** (> ¥2,000); August ordinary expenses are **¥7,375.54**.
+  The Apple Store **¥6,999.00** anomaly remains a separate flagged row. Salary, project bonus and
+  refund are CREDIT rows and are excluded from expense/category totals. No outgoing transfer is
+  seeded on Sep 25, so the first small transfer remains YELLOW.
+  The independent unit-test fixtures retain their original ¥5,800 sample; they are not the demo seed.
 - Money is signed CNY (`Float`); negative = expense/outflow, positive = income/inflow. Seed values are
-  authored in integer cents and stored via `yuan()`; transactions are expense-only (`direction: 'DEBIT'`).
+  authored in integer cents and stored via `yuan()`; direction follows the amount sign (DEBIT/CREDIT).
 - SQLite has no native enums — every enum-like/status field is a `String` (allowed values documented at
   the top of `schema.prisma`). JSON-ish payloads are JSON text in `String` columns.
 

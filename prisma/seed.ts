@@ -2,8 +2,9 @@
  * prisma/seed.ts — the demo database seed for the AI Banking Agent (SQLite sandbox).
  *
  * Anchors every row to the demo clock: DEMO_NOW = 2026-09-25 12:00 local. September 2026 is the
- * "current month" (¥5,800.00 ordinary spend incl. ¥2,680.50 娱乐 + the Apple Store ¥6,999.00
- * anomaly), August 2026 is "last month" (for 环比/trend). Dates are built from LOCAL components
+ * "current month"; April–September provide six months of spending/income/trend data.
+ * The existing ¥5,800.00 September expenses and Apple Store anomaly are retained and augmented.
+ * Dates are built from LOCAL components
  * only — we deliberately do NOT import `../lib/date` and never call `Date.now()`.
  *
  * MONEY IS CENT-EXACT: every amount is written as an integer number of CENTS (分) through the
@@ -11,8 +12,8 @@
  * column) with no float artifacts, and every total (the balance reconciliation below) is exact.
  *
  * BALANCE RECONCILIATION: each account has an explicit OPENING balance, and the STORED balance is
- * `opening + Σ(that account's seeded transactions)`. All seeded transactions are DEBIT (negative)
- * and attached to the CHECKING account; SAVINGS has no seeded transactions (opening == stored).
+ * `opening + Σ(that account's seeded transactions)`. Checking includes expenses (DEBIT) and
+ * income/refunds (CREDIT); SAVINGS has no seeded transactions (opening == stored).
  * See the "Balance reconciliation model" block below and prisma/CONTEXT.md.
  *
  * IDEMPOTENT: the demo user + investment products are `upsert`ed by their stable id, and every
@@ -43,6 +44,7 @@ import { prisma, resolveDatabaseUrl } from '../lib/db/client';
 const sep = (day: number, hour = 0, minute = 0): Date => new Date(2026, 8, day, hour, minute);
 const aug = (day: number, hour = 0, minute = 0): Date => new Date(2026, 7, day, hour, minute);
 const oct = (day: number, hour = 0, minute = 0): Date => new Date(2026, 9, day, hour, minute);
+const at = (month: number, day: number, hour = 0, minute = 0): Date => new Date(2026, month - 1, day, hour, minute);
 
 // ---------------------------------------------------------------------------
 // Stable ids (the ids the app + E2E suite depend on).
@@ -67,7 +69,7 @@ const yuan = (cents: number): number => cents / 100;
 const fmt = (cents: number): string => (cents / 100).toFixed(2);
 
 // ---------------------------------------------------------------------------
-// Transactions (amounts are integer CENTS; all are DEBIT/negative on the checking account).
+// Transactions (signed integer CENTS, expenses and income on the checking account).
 // ---------------------------------------------------------------------------
 
 interface SeedTransaction {
@@ -84,16 +86,17 @@ interface SeedTransaction {
 }
 
 /**
- * September 2026 ordinary expenses on the checking account.
- * Sum of magnitudes = EXACTLY ¥5,800.00 (580,000 cents) with 娱乐 = ¥2,680.50 — this drives the
- * spending analysis and the "若本月娱乐 > 2000" condition. The ¥6,999.00 anomaly is a SEPARATE row.
+ * Original September 2026 ordinary expenses, before EVERY_MONTH_EXTRAS are added.
+ * This base is ¥5,800.00 (580,000 cents), including 娱乐 ¥2,680.50. The expanded month totals
+ * ¥6,937.05, including 娱乐 ¥2,843.99, preserving the "若本月娱乐 > 2000" condition.
+ * The ¥6,999.00 anomaly is a SEPARATE row.
  * 美团外卖 + 星巴克 sit on 2026-09-25 so a "今日消费" window exists; the 妈妈 transfer is on
  * 2026-09-04 (NOT the demo day), so the demo-day (Sep 25) daily-transfer window stays ¥0.
  */
 const SEPTEMBER_TRANSACTIONS: readonly SeedTransaction[] = [
   // 餐饮 = ¥446.90 (CARD)
   { id: 'tx_sep_haidilao', amountCents: -30_060, category: '餐饮', merchant: '海底捞', channel: 'CARD', occurredAt: sep(5, 19, 20) },
-  { id: 'tx_sep_meituan', amountCents: -4_580, category: '餐饮', merchant: '美团外卖', channel: 'CARD', occurredAt: sep(25, 12, 10) },
+  { id: 'tx_sep_meituan', amountCents: -4_580, category: '餐饮', merchant: '美团外卖', channel: 'CARD', occurredAt: sep(25, 11, 40) },
   { id: 'tx_sep_starbucks', amountCents: -3_800, category: '餐饮', merchant: '星巴克', channel: 'CARD', occurredAt: sep(25, 9, 5) },
   { id: 'tx_sep_kfc', amountCents: -6_250, category: '餐饮', merchant: '肯德基', channel: 'CARD', occurredAt: sep(12, 12, 40) },
   // 出行 = ¥636.70 (APP)
@@ -147,17 +150,94 @@ const AUGUST_TRANSACTIONS: readonly SeedTransaction[] = [
   { id: 'tx_aug_ent', amountCents: -68_320, category: '娱乐', merchant: '娱乐支出', channel: 'CARD', occurredAt: aug(25, 21, 0) },
 ];
 
+interface ExpenseTemplate {
+  key: string;
+  cents: number;
+  category: string;
+  merchant: string;
+  channel: string;
+  day: number;
+  fixed?: boolean;
+  counterpartyId?: string;
+}
+
+/** Daily purchases supplement every month; recurring fees stay consistent with subscriptions. */
+const EVERY_MONTH_EXTRAS: readonly ExpenseTemplate[] = [
+  { key: 'breakfast', cents: 1_280, category: '餐饮', merchant: '早餐铺', channel: 'CARD', day: 2 },
+  { key: 'shaxian', cents: 2_860, category: '餐饮', merchant: '沙县小吃', channel: 'CARD', day: 6 },
+  { key: 'luckin', cents: 1_990, category: '餐饮', merchant: '瑞幸咖啡', channel: 'APP', day: 12 },
+  { key: 'fruit', cents: 4_235, category: '餐饮', merchant: '百果园', channel: 'CARD', day: 19 },
+  { key: 'parking', cents: 1_850, category: '出行', merchant: '商场停车场', channel: 'APP', day: 3 },
+  { key: 'bicycle', cents: 375, category: '出行', merchant: '共享单车', channel: 'APP', day: 8 },
+  { key: 'fuel', cents: 27_736, category: '出行', merchant: '中国石化', channel: 'CARD', day: 17 },
+  { key: 'bookstore', cents: 7_642, category: '购物', merchant: '新华书店', channel: 'CARD', day: 7 },
+  { key: 'hema', cents: 12_867, category: '购物', merchant: '盒马鲜生', channel: 'APP', day: 21 },
+  { key: 'weekend_movie', cents: 6_780, category: '娱乐', merchant: '万达影城', channel: 'APP', day: 15 },
+  { key: 'gym_visit', cents: 8_990, category: '娱乐', merchant: '健身房单次体验', channel: 'CARD', day: 23 },
+  { key: 'broadband', cents: 8_900, category: '居住', merchant: '宽带月费', channel: 'APP', day: 9, fixed: true },
+  { key: 'clinic', cents: 3_550, category: '医疗', merchant: '社区卫生服务中心', channel: 'CARD', day: 14 },
+  { key: 'courier', cents: 1_235, category: '其他', merchant: '顺丰快递', channel: 'APP', day: 24 },
+  { key: 'fitness_member', cents: 18_850, category: '订阅', merchant: '健身会员', channel: 'SUBSCRIPTION', day: 18, fixed: true },
+  { key: 'cloud_member', cents: 1_280, category: '订阅', merchant: '云盘会员', channel: 'SUBSCRIPTION', day: 23, fixed: true },
+];
+
+/** April–July history gives the six-month chart actual data rather than four empty months. */
+const HISTORICAL_EXPENSES: readonly ExpenseTemplate[] = [
+  { key: 'rent', cents: 280_000, category: '居住', merchant: '房租', channel: 'TRANSFER', day: 1, fixed: true, counterpartyId: 'contact_landlord' },
+  { key: 'haidilao', cents: 28_860, category: '餐饮', merchant: '海底捞', channel: 'CARD', day: 5 },
+  { key: 'meituan', cents: 3_590, category: '餐饮', merchant: '美团外卖', channel: 'APP', day: 11 },
+  { key: 'starbucks', cents: 3_200, category: '餐饮', merchant: '星巴克', channel: 'CARD', day: 16 },
+  { key: 'restaurant', cents: 12_875, category: '餐饮', merchant: '家常菜馆', channel: 'CARD', day: 22 },
+  { key: 'rail', cents: 46_550, category: '出行', merchant: '高铁票', channel: 'APP', day: 4 },
+  { key: 'didi', cents: 4_628, category: '出行', merchant: '滴滴出行', channel: 'APP', day: 13 },
+  { key: 'metro', cents: 600, category: '出行', merchant: '地铁', channel: 'APP', day: 20, fixed: true },
+  { key: 'uniqlo', cents: 39_990, category: '购物', merchant: '优衣库', channel: 'CARD', day: 6 },
+  { key: 'jd', cents: 54_900, category: '购物', merchant: '京东', channel: 'APP', day: 10 },
+  { key: 'taobao', cents: 23_865, category: '购物', merchant: '淘宝', channel: 'APP', day: 18 },
+  { key: 'concert', cents: 128_000, category: '娱乐', merchant: '演唱会门票', channel: 'CARD', day: 8 },
+  { key: 'steam', cents: 16_800, category: '娱乐', merchant: 'Steam', channel: 'CARD', day: 15 },
+  { key: 'ktv', cents: 36_650, category: '娱乐', merchant: 'KTV', channel: 'CARD', day: 21 },
+  { key: 'utilities', cents: 18_374, category: '居住', merchant: '水电费', channel: 'APP', day: 3 },
+  { key: 'pharmacy', cents: 8_650, category: '医疗', merchant: '药店', channel: 'CARD', day: 12 },
+  { key: 'netflix', cents: 6_800, category: '订阅', merchant: 'Netflix', channel: 'SUBSCRIPTION', day: 15, fixed: true },
+  { key: 'spotify', cents: 1_500, category: '订阅', merchant: 'Spotify', channel: 'SUBSCRIPTION', day: 15, fixed: true },
+  { key: 'icloud', cents: 600, category: '订阅', merchant: 'iCloud', channel: 'SUBSCRIPTION', day: 21, fixed: true },
+  { key: 'video', cents: 2_500, category: '订阅', merchant: '视频会员', channel: 'SUBSCRIPTION', day: 17, fixed: true },
+  { key: 'family', cents: 50_000, category: '转账', merchant: '转账给妈妈', channel: 'TRANSFER', day: 4, counterpartyId: 'contact_mama' },
+  { key: 'phone', cents: 10_000, category: '其他', merchant: '话费充值', channel: 'APP', day: 7, fixed: true },
+];
+
+/** Deterministic cents variations model different baskets/fare totals; fixed bills are unchanged. */
+function monthlyExpenses(month: number, templates: readonly ExpenseTemplate[]): SeedTransaction[] {
+  return templates.map((t, index) => ({
+    id: `tx_${month}_${t.key}`,
+    amountCents: -(t.cents + (t.fixed ? 0 : (month - 4) * 37 + index * 11)),
+    category: t.category,
+    merchant: t.merchant,
+    channel: t.channel,
+    occurredAt: at(month, t.day, 10 + index % 10, index * 7 % 60),
+    counterpartyId: t.counterpartyId,
+  }));
+}
+
+const DEMO_MONTHS = [4, 5, 6, 7, 8, 9] as const;
+const ADDITIONAL_TRANSACTIONS: readonly SeedTransaction[] = DEMO_MONTHS.flatMap((month) => [
+  ...(month <= 7 ? monthlyExpenses(month, HISTORICAL_EXPENSES) : []),
+  ...monthlyExpenses(month, EVERY_MONTH_EXTRAS),
+  { id: `tx_${month}_salary`, amountCents: 1_087_636 + month * 2_345, category: '工资', merchant: '公司工资入账', channel: 'TRANSFER', occurredAt: at(month, 10, 9, 0) },
+  { id: `tx_${month}_bonus`, amountCents: 38_650 + month * 557, category: '其他收入', merchant: '项目奖金', channel: 'TRANSFER', occurredAt: at(month, 20, 15, 30) },
+  { id: `tx_${month}_refund`, amountCents: 10_850 + month * 137, category: '退款', merchant: '淘宝退款', channel: 'APP', occurredAt: at(month, 22, 16, 15) },
+]);
+
 // ---------------------------------------------------------------------------
 // Balance reconciliation model.
 //
 //   STORED balance = OPENING balance + Σ(that account's seeded transactions)
 //
-// All seeded transactions are DEBIT (negative) on CHECKING; SAVINGS has none, so its opening
-// equals its stored balance. The checking OPENING is picked so the reconciled STORED balance
-// lands exactly on ¥23,580.00 (the demo narrative figure, root CONTEXT "活期 ¥23,580").
+// Income and expense rows are on CHECKING; SAVINGS has none. Choose an opening balance for
+// the expanded six-month ledger while retaining the demo's ¥23,580.00 checking balance.
 // ---------------------------------------------------------------------------
 
-const OPENING_CHECKING_CENTS = 4_262_230; // ¥42,622.30 — pre-ledger opening balance
 const OPENING_SAVINGS_CENTS = 5_000_000; // ¥50,000.00 — savings has no seeded transactions
 
 /** Every seeded ledger row, in insertion order (checking account only). */
@@ -165,19 +245,27 @@ const CHECKING_TRANSACTIONS: readonly SeedTransaction[] = [
   ...SEPTEMBER_TRANSACTIONS,
   ANOMALY_TRANSACTION,
   ...AUGUST_TRANSACTIONS,
+  ...ADDITIONAL_TRANSACTIONS,
 ];
 
-/** Net ledger effect on checking (negative: all rows are DEBIT expenses). */
-const CHECKING_SPEND_CENTS = CHECKING_TRANSACTIONS.reduce((sum, t) => sum + t.amountCents, 0);
-const CHECKING_BALANCE_CENTS = OPENING_CHECKING_CENTS + CHECKING_SPEND_CENTS; // 2,358,000 = ¥23,580.00
+/** Net ledger effect includes signed expenses, salaries, bonuses and refunds. */
+const CHECKING_LEDGER_CENTS = CHECKING_TRANSACTIONS.reduce((sum, t) => sum + t.amountCents, 0);
+const OPENING_CHECKING_CENTS = 2_358_000 - CHECKING_LEDGER_CENTS;
+const CHECKING_BALANCE_CENTS = OPENING_CHECKING_CENTS + CHECKING_LEDGER_CENTS; // 2,358,000 = ¥23,580.00
 const SAVINGS_BALANCE_CENTS = OPENING_SAVINGS_CENTS; // no savings transactions → opening == stored
 
 // Fail loud if a future edit drifts the reconciled balance out of the ¥23,5xx demo band.
 if (Math.floor(CHECKING_BALANCE_CENTS / 100) !== 23_580) {
   throw new Error(
     `[seed] reconciled checking balance ¥${fmt(CHECKING_BALANCE_CENTS)} left the ¥23,5xx demo band ` +
-      `(opening ¥${fmt(OPENING_CHECKING_CENTS)} + ledger ¥${fmt(CHECKING_SPEND_CENTS)})`,
+      `(opening ¥${fmt(OPENING_CHECKING_CENTS)} + ledger ¥${fmt(CHECKING_LEDGER_CENTS)})`,
   );
+}
+
+const demoCutoff = sep(25, 12).getTime();
+if (OPENING_CHECKING_CENTS < 0 || new Set(CHECKING_TRANSACTIONS.map((t) => t.id)).size !== CHECKING_TRANSACTIONS.length ||
+    CHECKING_TRANSACTIONS.some((t) => !Number.isSafeInteger(t.amountCents) || t.amountCents === 0 || t.occurredAt.getTime() > demoCutoff)) {
+  throw new Error('[seed] invalid opening balance, duplicate transaction id, non-cent amount or future transaction');
 }
 
 // ---------------------------------------------------------------------------
@@ -216,6 +304,9 @@ const CARDS = [
 
 const CARD_LIMITS = [
   { id: 'limit_credit_ent', cardId: CARD_CREDIT, category: '娱乐', amount: yuan(300_000) }, // ¥3,000.00
+  { id: 'limit_credit_dining', cardId: CARD_CREDIT, category: '餐饮', amount: yuan(200_050) },
+  { id: 'limit_credit_travel', cardId: CARD_CREDIT, category: '出行', amount: yuan(120_075) },
+  { id: 'limit_credit_shopping', cardId: CARD_CREDIT, category: '购物', amount: yuan(450_080) },
 ];
 
 const CONTACTS = [
@@ -223,6 +314,10 @@ const CONTACTS = [
   { id: 'contact_wangfang', userId: USER_ID, name: '王芳', phone: '137****0003', bank: '工商银行', remark: null },
   { id: 'contact_mama', userId: USER_ID, name: '妈妈', phone: '136****0004', bank: '建设银行', remark: '家人' },
   { id: 'contact_lihua', userId: USER_ID, name: '李华', phone: '135****0005', bank: '农业银行', remark: null },
+  { id: 'contact_landlord', userId: USER_ID, name: '房东', phone: '134****0006', bank: '建设银行', remark: '每月房租' },
+  { id: 'contact_chenchen', userId: USER_ID, name: '陈晨', phone: '133****0007', bank: '招商银行', remark: '同事，聚餐AA' },
+  { id: 'contact_wangqiang', userId: USER_ID, name: '王强', phone: '132****0008', bank: '工商银行', remark: '朋友' },
+  { id: 'contact_partner', userId: USER_ID, name: '爱人', phone: '131****0009', bank: '中国银行', remark: '生日10月20日' },
 ];
 
 /** Monthly subscription fees (cents) — mirror the seeded 订阅 ledger rows; charged again in October. */
@@ -231,6 +326,8 @@ const SUBSCRIPTIONS = [
   { id: 'sub_spotify', userId: USER_ID, name: 'Spotify', amount: yuan(1_500), cycle: 'MONTHLY', nextChargeAt: oct(15), status: 'ACTIVE', remind: false },
   { id: 'sub_icloud', userId: USER_ID, name: 'iCloud', amount: yuan(600), cycle: 'MONTHLY', nextChargeAt: oct(21), status: 'ACTIVE', remind: false },
   { id: 'sub_video', userId: USER_ID, name: '视频会员', amount: yuan(2_500), cycle: 'MONTHLY', nextChargeAt: oct(17), status: 'ACTIVE', remind: false },
+  { id: 'sub_fitness', userId: USER_ID, name: '健身会员', amount: yuan(18_850), cycle: 'MONTHLY', nextChargeAt: oct(18), status: 'ACTIVE', remind: true },
+  { id: 'sub_cloud', userId: USER_ID, name: '云盘会员', amount: yuan(1_280), cycle: 'MONTHLY', nextChargeAt: oct(23), status: 'ACTIVE', remind: true },
 ];
 
 const PRODUCTS = [
@@ -243,10 +340,14 @@ const PRODUCTS = [
 /** Holding: ¥5,000.00 principal at ¥5,178.36 market value → ¥178.36 unrealised profit (> 0). */
 const HOLDINGS = [
   { id: 'holding_wenjiana', userId: USER_ID, productId: 'prod_wenjiana', amount: yuan(500_000), marketValue: yuan(517_836), boughtAt: aug(10, 10, 0), status: 'HOLDING' },
+  { id: 'holding_huobi', userId: USER_ID, productId: 'prod_huobi', amount: yuan(800_050), marketValue: yuan(803_276), boughtAt: aug(18, 10, 30), status: 'HOLDING' },
+  { id: 'holding_wenjib', userId: USER_ID, productId: 'prod_wenjib', amount: yuan(1_000_000), marketValue: yuan(1_012_895), boughtAt: aug(2, 14, 0), status: 'HOLDING' },
 ];
 
 const BUDGETS = [
   { id: 'budget_birthday', userId: USER_ID, name: '生日礼物', amount: yuan(200_000), purpose: '生日计划', status: 'RESERVED', dueDate: oct(20) },
+  { id: 'budget_travel', userId: USER_ID, name: '周末旅行', amount: yuan(150_075), purpose: '旅行计划', status: 'RESERVED', dueDate: oct(10) },
+  { id: 'budget_study', userId: USER_ID, name: '学习课程', amount: yuan(88_888), purpose: '学习计划', status: 'RESERVED', dueDate: oct(15) },
 ];
 
 const SCHEDULED_TASKS = [
@@ -354,7 +455,7 @@ async function seed(): Promise<void> {
     userId: USER_ID,
     amount: yuan(t.amountCents),
     currency: 'CNY',
-    direction: 'DEBIT' as const,
+    direction: t.amountCents < 0 ? 'DEBIT' : 'CREDIT',
     category: t.category,
     merchant: t.merchant,
     channel: t.channel,
@@ -376,7 +477,7 @@ async function seed(): Promise<void> {
 async function printSummary(): Promise<void> {
   console.log('');
   console.log('Balance reconciliation (stored = opening + Σ transactions):');
-  console.log(`  checking  opening ¥${fmt(OPENING_CHECKING_CENTS)}  + ledger ${fmt(CHECKING_SPEND_CENTS)}  = ¥${fmt(CHECKING_BALANCE_CENTS)}`);
+  console.log(`  checking  opening ¥${fmt(OPENING_CHECKING_CENTS)}  + ledger ${fmt(CHECKING_LEDGER_CENTS)}  = ¥${fmt(CHECKING_BALANCE_CENTS)}`);
   console.log(`  savings   opening ¥${fmt(OPENING_SAVINGS_CENTS)}  + ledger ${fmt(0)}  = ¥${fmt(SAVINGS_BALANCE_CENTS)}`);
 
   const counts = {

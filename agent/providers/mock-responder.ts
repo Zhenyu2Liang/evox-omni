@@ -682,16 +682,23 @@ const PRODUCT_ID_BY_NAME: Record<string, string> = {
   货币基金: 'prod_huobi',
 };
 
-/** Subscription NAMES → seeded ids (mirror `tests/helpers/fixtures.ts` buildSubscriptions). */
+/** Subscription names → canonical demo seed ids (fixtures cover the original four). */
 const SUBSCRIPTION_ID_BY_NAME: Record<string, string> = {
   Netflix: 'sub_netflix',
   Spotify: 'sub_spotify',
   iCloud: 'sub_icloud',
   视频会员: 'sub_video',
+  健身会员: 'sub_fitness',
+  云盘会员: 'sub_cloud',
 };
 
-/** The single seeded investment holding id a scripted redemption targets (best effort; see fixtures). */
+/** Default holding for an unspecified redemption; named products use their own seeded holding. */
 const DEMO_HOLDING_ID = 'holding_wenjiana';
+const HOLDING_ID_BY_NAME: Record<string, string> = {
+  稳健理财A: DEMO_HOLDING_ID,
+  稳健理财B: 'holding_wenjib',
+  货币基金: 'holding_huobi',
+};
 
 /** 🔴 `subscribe_investment` — e.g. "申购稳健理财A 1000元". */
 function classifySubscribeInvestment(text: string): AssistantMessage | undefined {
@@ -722,11 +729,12 @@ function resolveProductId(name: string): string {
   return PRODUCT_ID_BY_NAME[name] ?? name;
 }
 
-/** 🔴 `redeem_investment` — e.g. "赎回稳健理财A" (best effort; the seeded holding is `holding_wenjiana`). */
+/** 🔴 `redeem_investment` — e.g. "赎回稳健理财A"; resolve named demo holdings before the default. */
 function classifyRedeemInvestment(text: string): AssistantMessage | undefined {
   const redeem = /赎回/.test(text) || (/取出/.test(text) && /(理财|基金|产品)/.test(text));
   if (!redeem) return undefined;
-  return toolCall('redeem_investment', { holdingId: DEMO_HOLDING_ID });
+  const name = knownNameInText(text, HOLDING_ID_BY_NAME);
+  return toolCall('redeem_investment', { holdingId: name ? HOLDING_ID_BY_NAME[name] : DEMO_HOLDING_ID });
 }
 
 /** 🟡 `cancel_subscription` — e.g. "取消Netflix订阅" / "取消订阅Netflix". */
