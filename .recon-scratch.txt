@@ -1,0 +1,15 @@
+﻿.env.local copied: True (115 bytes)
+--- gitignore matches for .env ---
+9: next-env.d.ts
+29: # Environment
+30: # NOTE: this demo intentionally ships a .env with NON-SECRET defaults so it runs out of the box.
+31: # Real API keys must never be committed; they belong in .env.local (ignored below).
+32: .env.local
+33: .env.*.local
+34: !.env
+35: !.env.example
+--- git status ---
+
+--- is .env.local ignored? ---
+.env.local
+
