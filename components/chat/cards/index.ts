@@ -12,3 +12,5 @@ export * from './AnomalyCard';
 export * from './PlanCard';
 export * from './ErrorCard';
 export * from './CardRenderer';
+export * from './confirmationStatus';
+export * from './maskPhone';

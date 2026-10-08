@@ -6,6 +6,10 @@
 historical RED/requiresMfa flag on confirmed or terminal outcomes does not reopen that action's
 verification card. Stale same-action MFA events are removed; a different next-plan action's event
 is preserved. Domain failures, including needs_reconciliation, remain visible error events.
+For a TERMINAL (settled) server status it emits the additive `action_settled` signal so a settled
+decision card stops looking actionable on BOTH the live and inline surfaces.
+`TransferCard` (cards node) renders a masked recipient phone via `./cards/maskPhone`, so no raw
+phone number is shown.
 
 The interactive chat surface: the message list, the composer, the tool/task status timeline, the
 streaming text, and the stateful `useAgentStream` hook that folds `AgentStreamEvent`s into UI state.
@@ -115,7 +119,10 @@ a failed code) gets an `mfa_required` `AgentStreamEvent` ensured (synthesised wh
 one) and is **not** turned into a spurious `error`; any other `ok:false` outcome gets an `error` event
 appended when the server sent none (e.g. a wrong MFA code arrives as `ok:false` +
 `status:'awaiting_mfa'` + `mfaResult:'failed'` with an EMPTY event list). `recoverAction` reuses the
-same normalisation, so a failed recovery is a safe event list, never a raw throw.
+same normalisation, so a failed recovery is a safe event list, never a raw throw. For a TERMINAL
+server `status` (`executed` / `failed` / `cancelled` / `needs_reconciliation`) it also appends the
+ADDITIVE `action_settled` event (see the fold table) so a settled decision card stops looking
+actionable.
 
 ## Attention classes (additive `GET /api/actions` field)
 
@@ -155,13 +162,17 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 | `plan_update` | UPSERT `activePlan` under the **generation fence** (see "Plan dedupe"): an OLDER generation for the same id is rejected, an equal-or-NEWER one wins, and a missing generation falls back to the `updatedAt` guard; a different id replaces the slot (one live plan at a time) |
 | `confirmation_required` | set `pendingAction` `{ kind: 'confirmation', summary: event.action, actionId: event.actionId }` |
 | `mfa_required` | set `pendingAction` `{ kind: 'mfa', summary: mfaSummary(state, event.hint), actionId: event.actionId, hint: event.hint }`; the summary's `toolName` is the actual gated tool the stream reported as blocked, omitted when the stream carried none |
+| `action_settled` (ADDITIVE — read structurally, NOT a member of the frozen `AgentStreamEvent` union) | emitted by `actions.ts#postAction` for a TERMINAL server status: stamps the server-reported `status` (+ optional `message`) onto the matching inline `confirmation` card's `action` (runtime fields read by `ConfirmationCard`) and clears the live `pendingAction` when it is the SAME action; a server that omits it keeps today's behaviour |
 | `security_event` | append a `system` `ChatMessage` (content = `event.message`; `event.kind` is not surfaced) |
 | `error` | set `error` (never throw to the UI) |
 | `done` | clear `busy` |
 
 The MFA summary's `hint` is carried on `pendingAction.hint` so `ChatWindow` can render it; `pull()`
-keeps the settle rule — `pendingAction` is cleared after a NON-error turn (a domain `error` keeps the
-decision visible so the user can retry).
+folds the events FIRST (so an `action_settled` signal still sees the decision it belongs to), then
+applies the settle rule: `pendingAction` is cleared after a NON-error turn UNLESS that same turn
+carries a decision-establishing event — a `confirmation_required`/`mfa_required` (a fresh YELLOW/RED
+gate, or a YELLOW→RED escalation response, which carries no `error`) keeps its decision so the card
+stays actionable. A domain `error` likewise keeps the decision visible so the user can retry.
 
 ### Plan dedupe (at most ONE plan view per plan id) + generation fence
 
@@ -196,9 +207,29 @@ the SAME `CardActionHandlers` bundle built in `ChatWindow`, so confirm/verify/ca
 `./app` routes — the browser never executes a banking op and no parallel confirm flow exists.
 
 If the agent ALSO emits a matching inline `confirmation`/`mfa` `card`, `ChatWindow` suppresses that
-duplicate (`withoutDuplicateDecisionCard`, matched by `actionId` for MFA and by the summary for
-confirmation) so exactly one card is visible for the active action; a message left empty by the
+duplicate (`withoutDuplicateDecisionCard`, matched by `actionId` for MFA and by `decisionKey(action)`
+for confirmation) so exactly one card is visible for the active action; a message left empty by the
 removal is dropped (no empty bubble). Older/unrelated decision cards are preserved.
+
+### Settled-action status (a TERMINAL status stops looking actionable, on BOTH surfaces)
+
+A gated action can settle on a later turn (an `action_settled` signal, or a `status`-carrying
+response): a TERMINAL status replaces the 取消/确认 controls with a single status badge on BOTH
+surfaces — the live decision clears and the inline card is stamped.
+
+| status | badge |
+| --- | --- |
+| `executed` | 已执行 |
+| `failed` | 失败 (+ the server reason) |
+| `cancelled` | 已取消 |
+| `needs_reconciliation` | 需人工核对 |
+
+A NON-terminal or ABSENT status keeps the buttons (today's behaviour). The badge text/tone come from
+the cards node's `terminalStatusView`; this layer only supplies the status — via the `ConfirmationCard`
+`status`/`statusMessage` props (`ChatWindow#PendingDecisionCard`) or by stamping the runtime
+`status`/`message` fields onto the inline card's `action` (the `action_settled` fold). Duplicate
+suppression and settle-matching use `decisionKey` (a status-independent summary identity) in
+`./decisionKey.ts`, so a stamped runtime status never defeats either.
 
 ### Out-of-band card (one per restored attention row)
 
@@ -321,8 +352,9 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
 - `./Composer.tsx` → input + send
 - `./ToolEventList.tsx` → tool/task status timeline (no chain-of-thought)
 - `./StreamingText.tsx` → incremental assistant text
-- `./useAgentStream.ts` → the event→state hook (chat state machine, with the plan generation fence) + refresh recovery (plan, pending action AND out-of-band attention) + recovery entry + plan control + MFA attempt counter
-- `./actions.ts` → typed client fetch helpers + `ChatEndpoints`/`DEFAULT_ENDPOINTS`/`fetchTaskPlan`/`controlTask`/`fetchPendingActions`/`recoverAction` + the `PendingActionRef` attention mapping
+- `./useAgentStream.ts` → the event→state hook (chat state machine, with the plan generation fence + the additive `action_settled` settle fold) + refresh recovery (plan, pending action AND out-of-band attention) + recovery entry + plan control + MFA attempt counter
+- `./actions.ts` → typed client fetch helpers + `ChatEndpoints`/`DEFAULT_ENDPOINTS`/`fetchTaskPlan`/`controlTask`/`fetchPendingActions`/`recoverAction` + the `PendingActionRef` attention mapping + the additive `action_settled` emission for a TERMINAL `status`
+- `./decisionKey.ts` → the status-independent identity key (`decisionKey`) shared by duplicate suppression (`ChatWindow#isDuplicateDecisionCard`) and settle-matching (`settleAction`)
 - `./cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher + the non-union `ReconciliationCard` (out-of-band: processing/recoverable/reconciliation) + the `AttentionClass`/`OutOfBandAttention` types
 - `./index.ts` → re-exports the chat surface + action helpers + the attention types
 - `../../ui/` → primitives used here (dependency — read-only)

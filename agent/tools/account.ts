@@ -2,7 +2,7 @@
  * account — `get_balance`
  *
  * The registered banking tool the model may call for balance reads. Param schema is TypeBox
- * (`Type`/`Static` from `@mariozechner/pi-ai`); `execute` calls the Banking SDK and returns an
+ * (`Type`/`Static` from `@earendil-works/pi-ai`); `execute` calls the Banking SDK and returns an
  * `AgentToolResult`, THROWING `AppError` (`@/lib/errors`) on failure. The plain
  * `runGetBalance(userId, args)` runner is the model-free path used by the registry's
  * `executeDirect` (the gateway-authorized execution path); it CATCHES and returns
@@ -13,8 +13,8 @@
  * agent's `beforeToolCall`. `userId` is SERVER-INJECTED via `createToolRegistry(userId)`; the
  * model never supplies it.
  */
-import type { AgentTool } from '@mariozechner/pi-agent-core';
-import { Type, type Static } from '@mariozechner/pi-ai';
+import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
 import type { BalanceView } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';

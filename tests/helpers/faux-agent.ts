@@ -3,33 +3,33 @@
  *
  * Scenario tests exercise the full pipeline (Agent runtime → registered banking tools →
  * Security Gateway `beforeToolCall` → Banking SDK → audit) while keeping the MODEL
- * deterministic and offline, via `registerFauxProvider()` (from `@mariozechner/pi-ai`) and
+ * deterministic and offline, via `fauxProvider()` (from `@earendil-works/pi-ai`) and
  * `LLM_MODE=mock`. Only the model is scripted — the tools, the security chokepoint and the
  * DB are the production ones. This is what makes the 12 demo scenarios provable without a
  * network or an API key.
  *
  * The agent is built with the SAME wiring as `@/agent/banking-agent.ts` (constructor path:
- * `new Agent({ initialState, beforeToolCall, afterToolCall, sessionId })`), differing ONLY in the
+ * `new Agent({ initialState, streamFn, beforeToolCall, afterToolCall, sessionId })`), differing ONLY in the
  * model (a scripted faux provider instead of the live/mock provider resolved from config).
  *
- * Key SDK facts this helper relies on (pi-agent-core 0.73.1):
- *   - `new Agent({ initialState, beforeToolCall, afterToolCall, sessionId, ... })`.
+ * Key SDK facts this helper relies on (pi-agent-core 1.1.0):
+ *   - `new Agent({ initialState, streamFn, beforeToolCall, afterToolCall, sessionId, ... })`.
  *   - `agent.prompt(input)` / `agent.continue()` settle when the turn ends.
  *   - `agent.subscribe(listener)` streams `AgentEvent`s.
  *   - `beforeToolCall` returning `{ block: true, reason }` prevents execution (the security gate).
- *   - `registerFauxProvider().setResponses(steps)` REPLACES the queue; ONE step is consumed per
+ *   - `fauxProvider().setResponses(steps)` REPLACES the queue; ONE step is consumed per
  *     model call (an empty queue ⇒ an error assistant message ⇒ `stopReason:'error'`).
  */
-import { Agent } from '@mariozechner/pi-agent-core';
+import { Agent } from '@earendil-works/pi-agent-core';
 import type {
   AfterToolCallContext,
   AfterToolCallResult,
   AgentTool,
   BeforeToolCallContext,
   BeforeToolCallResult,
-} from '@mariozechner/pi-agent-core';
-import { fauxAssistantMessage, fauxToolCall, registerFauxProvider } from '@mariozechner/pi-ai';
-import type { FauxProviderRegistration, FauxResponseStep } from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-agent-core';
+import { createModels, fauxAssistantMessage, fauxToolCall, fauxProvider } from '@earendil-works/pi-ai';
+import type { FauxProviderHandle, FauxResponseStep, JsonObject } from '@earendil-works/pi-ai';
 import type { ToolName } from '@/lib/contracts/tools';
 import { newId } from '@/lib/ids';
 import { createToolRegistry } from '@/agent/tools';
@@ -70,7 +70,7 @@ const FAUX_REGISTRATION = Symbol.for('tests/helpers/faux-agent/registration');
 function stepToFaux(step: FauxStep): FauxResponseStep {
   if (step.kind === 'tool') {
     // A `toolCall` content block (NOT the stopReason) is what makes the agent loop execute a tool.
-    return fauxAssistantMessage([fauxToolCall(step.toolCall.tool, step.toolCall.args)], {
+    return fauxAssistantMessage([fauxToolCall(step.toolCall.tool, JSON.parse(JSON.stringify(step.toolCall.args)) as JsonObject)], {
       stopReason: 'toolUse',
     });
   }
@@ -85,7 +85,9 @@ export function buildFauxAgent(options: FauxAgentOptions): Agent {
   const sessionId = options.sessionId ?? newId('sess');
   const userId = DEMO_USER_ID;
 
-  const registration = registerFauxProvider();
+  const registration = fauxProvider();
+  const models = createModels();
+  models.setProvider(registration.provider);
   registration.setResponses(options.script.map(stepToFaux));
 
   // `userId` is SERVER-INJECTED (never from model text / tool args). `submit_plan` runs its DAG
@@ -124,6 +126,7 @@ export function buildFauxAgent(options: FauxAgentOptions): Agent {
 
   const agent = new Agent({
     sessionId,
+    streamFn: models.streamSimple.bind(models),
     initialState: {
       systemPrompt,
       model: registration.getModel(),
@@ -145,8 +148,8 @@ export function buildFauxAgent(options: FauxAgentOptions): Agent {
 }
 
 /** The faux provider registration attached to an agent built by `buildFauxAgent` (else `undefined`). */
-export function fauxRegistrationOf(agent: Agent): FauxProviderRegistration | undefined {
-  return (agent as unknown as Record<symbol, FauxProviderRegistration | undefined>)[
+export function fauxRegistrationOf(agent: Agent): FauxProviderHandle | undefined {
+  return (agent as unknown as Record<symbol, FauxProviderHandle | undefined>)[
     FAUX_REGISTRATION
   ];
 }

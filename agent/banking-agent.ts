@@ -12,14 +12,14 @@
  * tools and `messages`), so a continuation turn after a human confirmation keeps the SAME
  * conversation; `serialize()` hands the current state back to `./session` for persistence.
  */
-import { Agent } from '@mariozechner/pi-agent-core';
+import { Agent } from '@earendil-works/pi-agent-core';
 import type {
   AfterToolCallContext,
   AfterToolCallResult,
   AgentMessage,
   BeforeToolCallContext,
   BeforeToolCallResult,
-} from '@mariozechner/pi-agent-core';
+} from '@earendil-works/pi-agent-core';
 import { getConfig, type AppConfig } from '@/lib/config';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { TaskPlan } from '@/lib/contracts/task';
@@ -27,8 +27,9 @@ import { security } from '@/security';
 import { createToolRegistry, type ToolRegistry } from './tools';
 import { executeGatedTool } from './confirmation';
 import { buildAutomaticWriteFence } from './execution-fence';
-import { resolveModel } from './providers';
+import { resolveProvider } from './providers';
 import { buildSystemPrompt } from './system-prompt';
+import { normalizeToolResultMessages } from './message-normalize';
 import type { SessionSnapshot } from './session';
 
 /**
@@ -136,7 +137,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     },
   });
 
-  const model = resolveModel(config);
+  const { model, streamFn } = resolveProvider(config);
   const systemPrompt = buildSystemPrompt({
     userId,
     toolNames: registry.list().map((tool) => tool.name as ToolName),
@@ -181,11 +182,12 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
 
   const agent = new Agent({
     sessionId,
+    streamFn,
     initialState: {
       systemPrompt,
       model,
       tools: registry.list(),
-      messages: restored?.messages ?? [],
+      messages: normalizeToolResultMessages(restored?.messages ?? []),
     },
     beforeToolCall,
     afterToolCall,

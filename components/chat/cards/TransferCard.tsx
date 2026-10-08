@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import type { TransferResult } from '@/banking-sdk';
 import { Badge, Card, Money } from '../../ui';
+import { maskPhone } from './maskPhone';
 
 export interface TransferCardProps {
   data: TransferResult;
@@ -24,7 +25,7 @@ export function TransferCard({ data, className }: TransferCardProps) {
     >
       <dl className="flex flex-col gap-2">
         <Field label="收款人" value={recipient.name} />
-        <Field label="手机号" value={recipient.phone} />
+        <Field label="手机号" value={maskPhone(recipient.phone)} />
         {recipient.bank ? <Field label="银行" value={recipient.bank} /> : null}
         <Field label="金额" value={<Money amount={amount} />} />
         {newBalance !== undefined ? (

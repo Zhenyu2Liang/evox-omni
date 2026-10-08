@@ -6,8 +6,8 @@ The **complete and exhaustive capability set** of the agent, as one module per t
 Each family module exports, per tool:
 
 1. a `create<Name>Tool(userId: string): AgentTool<typeof <Name>Params>` **factory**
-   (`@mariozechner/pi-agent-core`) returning an `AgentTool` whose params are a **TypeBox** schema
-   (`Type`/`Static` re-exported by `@mariozechner/pi-ai`) — `execute` calls the Banking SDK and
+   (`@earendil-works/pi-agent-core`) returning an `AgentTool` whose params are a **TypeBox** schema
+   (`Type`/`Static` re-exported by `@earendil-works/pi-ai`) — `execute` calls the Banking SDK and
    returns an `AgentToolResult`, **throwing `AppError`** (`@/lib/errors`) on failure; and
 2. a plain `run<X>(userId, args, opts?): Promise<ToolExecutionResult>` runner — the model-free path
    used by the registry's `executeDirect`; it **catches** and returns `ToolExecutionResult{ok:false,error}`.
@@ -24,7 +24,7 @@ GREEN/YELLOW/RED tier, confirmation and MFA are decided by **code**. See parent 
 Frozen facade (`index.ts`):
 
 ```ts
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '@earendil-works/pi-agent-core';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { RiskLevel } from '@/lib/contracts/risk';
 
@@ -204,7 +204,7 @@ Frozen imports (exist; DO NOT redefine): `../lib/contracts/tools` (`ToolName`), 
 (`RiskLevel`), `../lib/contracts/task` (`TaskNodeSpec`, `TaskNodeResult`, `TaskPlan`, …),
 `../lib/errors` (`AppError`), `../lib/ledger` (`nodeExecutionKey`), `../lib/ids` (`newId`),
 `../lib/db/repositories/task` (`claimTaskExecution`, `releaseTaskExecution`, `createTask`,
-`createTaskNode`). Pi SDK: `AgentTool` (`@mariozechner/pi-agent-core`), `Type`/`Static` (`@mariozechner/pi-ai`).
+`createTaskNode`). Pi SDK: `AgentTool` (`@earendil-works/pi-agent-core`), `Type`/`Static` (`@earendil-works/pi-ai`).
 
 Sibling nodes consumed (read-only; escalate changes to the owner):
 - `../banking-sdk` → `banking.{account,transaction,transfer,contact,card,subscription,investment,budget,task,dashboard}.*`

@@ -23,18 +23,18 @@
  *   - honest failure narration (never claims success),
  *   - blocked gated calls → "awaiting confirmation" (YELLOW) / "awaiting MFA" (RED), not executed.
  *
- * Self-contained: imports only `@/agent/providers/mock-responder` + `@mariozechner/pi-ai` faux
+ * Self-contained: imports only `@/agent/providers/mock-responder` + `@earendil-works/pi-ai` faux
  * helpers. Contact ids mirror `tests/helpers/fixtures.ts`
  * (contact_zhangwei 张伟, contact_wangfang 王芳, the duplicate 王芳 = contact_wangfang_2).
  */
 import { describe, expect, it } from 'vitest';
-import { fauxAssistantMessage, fauxText, fauxToolCall } from '@mariozechner/pi-ai';
+import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai';
 import type {
   AssistantMessage,
   Message,
   ToolResultMessage,
   UserMessage,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 
 import { respond } from '@/agent/providers/mock-responder';
 import type { MockContext } from '@/agent/providers/mock-responder';

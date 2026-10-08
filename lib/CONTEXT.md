@@ -33,6 +33,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   `new Date(demoNow(override))`.
 - `json.ts` — SQLite JSON-text column helpers: `safeParse<T>(text, fallback)` (returns `fallback` for
   null/undefined/empty/invalid JSON) and `toJson(value)` (`'null'` when value is `undefined`).
+- `phone.ts` — mask-aware phone matching & masking (pure, never throws): `maskAwarePhoneMatch(value, stored)` → TRUE iff a RAW value matches a MASKED stored phone (exact, digit-substring either direction, or an anchored wildcard pattern from the stored phone's `*`-split fragments); `maskPhone(phone)` → first-3 + `****` + last-4. Lets a RAW phone lookup match the demo's MASKED-stored `Contact.phone` values.
 - `ledger.ts` — deterministic idempotency keys + the canonical action→ledger-row IDENTITY.
   - `idempotentTransferTxId(userId, idempotencyKey)` → the canonical transfer-ledger id,
     `txidem_` + the first 32 hex chars of `sha256("<userId>\u0000<idempotencyKey>")`.
@@ -109,6 +110,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
 - `./lib/ledger.ts` → deterministic idempotency keys + canonical action→ledger-row identity — `idempotentTransferTxId`, `nodeExecutionKey`, `ledgerKeyForAction`, `ledgerTxIdForAction`, plus the EXECUTION-RECEIPT helpers `executionReceiptId` / `requestDigest`.
+- `./lib/phone.ts` → mask-aware phone matching & masking — `maskAwarePhoneMatch(value, stored)` (raw↔masked) and `maskPhone(phone)`; the shared helper that lets a RAW phone lookup match the demo's MASKED-stored `Contact.phone` values (used by the `security/recipient-resolution.ts` write path AND the `lib/db/repositories/contact.ts#searchContacts` read path).
 - `./lib/prisma-cli-env.ts` → Prisma-CLI env pinning + bin resolution — `SCHEMA_ENGINE_RUST_LOG`, `pinSchemaEngineLogging`, `prismaCliEnv`, `CliInvocation`, `resolveRepoRoot`, `resolvePrismaBin`, `resolveTsxBin`, `cliCommand`; re-exported by `tests/helpers/prisma-cli.ts` (its public API is unchanged) and consumed by `scripts/db-push.ts` (the `npm run db:push` / `db:reset` deploy entry).
 - `./lib/index.ts` → convenience barrel for `@/lib` imports (no `db`).
 

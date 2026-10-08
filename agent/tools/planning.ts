@@ -16,8 +16,8 @@
  * tool whose runner requires `SubmitPlanDeps` (`sessionId` + `runTool`). `index.ts`'s
  * `createToolRegistry` receives those deps through its optional `opts` (see `./index.ts`).
  */
-import type { AgentTool } from '@mariozechner/pi-agent-core';
-import { Type, type Static } from '@mariozechner/pi-ai';
+import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { Type, type Static } from '@earendil-works/pi-ai';
 import type { ToolName } from '@/lib/contracts/tools';
 import type {
   TaskCondition,

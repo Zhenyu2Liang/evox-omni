@@ -8,8 +8,8 @@
  * Tier: 🟢 GREEN (read-only).
  * No permission/risk/MFA logic here. `userId` is SERVER-INJECTED; the model never supplies it.
  */
-import type { AgentTool } from '@mariozechner/pi-agent-core';
-import { Type, type Static } from '@mariozechner/pi-ai';
+import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
 import type { SpendingAnalysis } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';

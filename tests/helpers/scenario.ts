@@ -19,9 +19,9 @@
  *   2. `confirmAction()` / `verifyAction()` — a HUMAN decision executes the ORIGINAL validated
  *      args through the gateway's authorized path, then `agent.continue()` narrates the outcome.
  */
-import type { Agent, AgentEvent, AgentMessage } from '@mariozechner/pi-agent-core';
-import { fauxAssistantMessage } from '@mariozechner/pi-ai';
-import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { Agent, AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
+import { fauxAssistantMessage } from '@earendil-works/pi-ai';
+import type { AssistantMessage, JsonValue, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 import type {
   AgentStreamEvent,
   ChatCard,
@@ -34,7 +34,7 @@ import type { RiskLevel } from '@/lib/contracts/risk';
 import type { ToolName } from '@/lib/contracts/tools';
 import { newId } from '@/lib/ids';
 import { demoNow } from '@/lib/clock';
-import { safeParse } from '@/lib/json';
+import { safeParse, toJson } from '@/lib/json';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import { security } from '@/security';
 import {
@@ -102,7 +102,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isAssistantMessage(message: AgentMessage): message is AssistantMessage {
+function isAssistantMessage(message: unknown): message is AssistantMessage {
   return isRecord(message) && message.role === 'assistant';
 }
 
@@ -448,7 +448,7 @@ function buildToolResultMessage(
     toolCallId,
     toolName,
     content: [{ type: 'text', text }],
-    details: toolResult.data,
+    details: toolResult.data === undefined ? undefined : JSON.parse(toJson(toolResult.data)) as JsonValue,
     isError: toolResult.ok !== true,
     timestamp,
   };

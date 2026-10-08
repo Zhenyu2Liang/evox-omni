@@ -43,6 +43,13 @@ import {
   setPendingActionStatus,
 } from '../lib/db/repositories/pendingAction';
 import { getSession } from '../lib/db/repositories/session';
+import {
+  buildRecipientClarifyMessage,
+  canonicalizeTransferArgs,
+  maskPhone,
+  resolveAccountLabel,
+  resolveTransferRecipient,
+} from './recipient-resolution';
 import { prisma } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 import { safeParse } from '../lib/json';
@@ -471,27 +478,65 @@ async function findReusableAction(
 }
 
 /**
+ * Outcome of the internal park path. `created` ⇒ a `PendingAction` was persisted (or reused);
+ * `plan_cancelled` ⇒ refused because the owning `AgentTask` is already `'cancelled'`; `clarify` ⇒ a
+ * transfer recipient could not be resolved unambiguously, so NOTHING was persisted (no `PendingAction`,
+ * no MFA challenge) and the caller must ask the user to clarify.
+ */
+type CreatePendingActionResult =
+  | { kind: 'created'; action: PendingAction }
+  | { kind: 'plan_cancelled' }
+  | { kind: 'clarify'; message: string };
+
+/**
  * Persist a gated call as a `PendingAction` with a `PendingActionSummary`.
  *
- * Returns `null` when the call is plan-scoped (`ctx.taskId`) and the owning `AgentTask` is already
- * `'cancelled'`. The plan-status read and the row insert run in ONE transaction, so a plan cancelled
- * concurrently cannot slip a fresh action in between the read and the write (create-time half of the
- * plan-cancel → authorize race guard). `handleToolCall` turns the refusal into a clean `deny`; the
- * public `SecurityGateway.createPendingAction` wrapper maps it to a `CONFLICT`.
+ * For `transfer_money` the recipient is resolved SERVER-SIDE at park time (mirroring the SDK), so the
+ * confirmation card names the SAME contact the SDK will resolve at execution: an unresolvable/ambiguous
+ * recipient returns `{ kind: 'clarify' }` without persisting anything, and a resolved one canonicalizes
+ * the args to the resolved `contactId` BEFORE the dedupe (so a re-park compares canonical args and the
+ * args the SDK later executes are the ones validated here).
+ *
+ * Returns `{ kind: 'plan_cancelled' }` when the call is plan-scoped (`ctx.taskId`) and the owning
+ * `AgentTask` is already `'cancelled'`. The plan-status read and the row insert run in ONE transaction,
+ * so a plan cancelled concurrently cannot slip a fresh action in between the read and the write
+ * (create-time half of the plan-cancel → authorize race guard). `handleToolCall` turns the refusal into
+ * a clean `deny`; the public `SecurityGateway.createPendingAction` wrapper maps it to a `CONFLICT`.
  */
 async function gatewayCreatePendingAction(
   ctx: GatewayContext,
   ev: SecurityEvaluation,
-): Promise<PendingAction | null> {
+): Promise<CreatePendingActionResult> {
+  let recipient: { name: string; phone: string } | undefined;
+  let accountLabel: string | undefined;
+
   if (ctx.toolName === 'transfer_money') {
     ctx = { ...ctx, args: { ...ctx.args, amount: normalizeTransferAmount(ctx.args.amount) } };
+
+    // Resolve the recipient at park time so the card and the execution agree on the SAME contact. A
+    // non-resolved recipient is a clarification request, NOT a parked action.
+    const res = await resolveTransferRecipient(ctx.userId, ctx.args);
+    if (res.status !== 'resolved') {
+      return { kind: 'clarify', message: buildRecipientClarifyMessage(res) };
+    }
+
+    // Canonicalize to the resolved `contactId` BEFORE the dedupe: a re-park then compares the same
+    // canonical args, and the args stored on the action are exactly what the SDK will execute.
+    const sourceAccountId = ctx.args.sourceAccountId;
+    ctx = { ...ctx, args: canonicalizeTransferArgs(ctx.args, res.contact.id) };
+    recipient = { name: res.contact.name, phone: res.contact.phone };
+    accountLabel = await resolveAccountLabel(
+      ctx.userId,
+      typeof sourceAccountId === 'string' ? sourceAccountId : undefined,
+    );
   }
+
   // A plan node that is re-parked for the same operation reuses its existing action (and its
   // existing MFA challenge) instead of minting a duplicate.
   const reusable = await findReusableAction(ctx, ev);
-  if (reusable) return toContractPendingAction(reusable);
+  if (reusable) return { kind: 'created', action: toContractPendingAction(reusable) };
 
-  const summary = buildPendingActionSummary(ctx, ev);
+  const summary = buildPendingActionSummary(ctx, ev, recipient, accountLabel);
   const status: PendingActionStatus = ev.requiresMfa ? 'awaiting_mfa' : 'pending';
 
   // The owning-plan status check and the row insert share ONE transaction: a plan cancelled
@@ -527,12 +572,12 @@ async function gatewayCreatePendingAction(
     return { refused: false as const, row };
   });
 
-  if (created.refused) return null;
+  if (created.refused) return { kind: 'plan_cancelled' };
 
   // RED actions get a code-free challenge up-front so the UI can prompt for MFA.
   if (ev.requiresMfa) await issueChallenge(created.row.id);
 
-  return toContractPendingAction(created.row);
+  return { kind: 'created', action: toContractPendingAction(created.row) };
 }
 
 /** Serialize the opaque block reason the runtime returns to the model. */
@@ -949,16 +994,30 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
   }
 
   // Gated (YELLOW/RED) — persist the pending action and block with its id.
-  const action = await gatewayCreatePendingAction(ctx, evaluation);
+  const result = await gatewayCreatePendingAction(ctx, evaluation);
+
+  // An unresolvable/ambiguous transfer recipient → BLOCK with a PLAIN model-readable message (never a
+  // `BLOCK_REASON_PREFIX` payload, which the model cannot read) and NO pending action. `evaluation.blocked`
+  // stays true; the model asks the user to clarify the recipient.
+  if (result.kind === 'clarify') {
+    return {
+      evaluation,
+      decision: { ...decision, kind: 'deny' },
+      blockReason: result.message,
+    };
+  }
+
   // Plan-scoped call whose owning plan is already cancelled → REFUSE cleanly (returned, not thrown)
   // so the agent layer reports a refusal rather than an infra failure.
-  if (action === null) {
+  if (result.kind === 'plan_cancelled') {
     return {
       evaluation,
       decision: { ...decision, kind: 'deny' },
       blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny' })}`,
     };
   }
+
+  const action = result.action;
   return {
     evaluation,
     decision: { ...decision, pendingActionId: action.id },
@@ -970,15 +1029,19 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
 export const securityGateway: SecurityGateway = {
   evaluate: gatewayEvaluate,
   decide: gatewayDecide,
-  // Public interface stays non-null: the internal implementation returns `null` only when a
-  // plan-scoped call's owning plan is already cancelled. A direct caller that bypassed
-  // `handleToolCall` gets a CONFLICT instead of a `null` action.
+  // Public interface stays non-null: the internal implementation returns `plan_cancelled` only when a
+  // plan-scoped call's owning plan is already cancelled (a direct caller that bypassed `handleToolCall`
+  // gets a CONFLICT instead of a `null` action) and `clarify` when a transfer recipient could not be
+  // resolved unambiguously (surfaced as a VALIDATION error carrying the model-readable message).
   createPendingAction: async (ctx: GatewayContext, ev: SecurityEvaluation) => {
-    const action = await gatewayCreatePendingAction(ctx, ev);
-    if (action === null) {
+    const result = await gatewayCreatePendingAction(ctx, ev);
+    if (result.kind === 'plan_cancelled') {
       throw new AppError('CONFLICT', '操作所属的任务计划已取消，无法创建待处理操作。');
     }
-    return action;
+    if (result.kind === 'clarify') {
+      throw new AppError('VALIDATION', result.message);
+    }
+    return result.action;
   },
   serializeBlockReason,
   parseBlockReason,
@@ -990,12 +1053,20 @@ export const securityGateway: SecurityGateway = {
 
 /**
  * Build the user-facing `PendingActionSummary` for a gated call (title, key/value fields
- * such as 收款人 / 金额 / 账户 / 风险等级, `requiresMfa`, `mfaHint`). Pure — formatting only.
- * Exported for reuse/testing.
+ * such as 收款人 / 收款手机号 / 金额 / 账户 / 风险等级, `requiresMfa`, `mfaHint`). Pure — formatting
+ * only. Exported for reuse/testing.
+ *
+ * For `transfer_money` the optional `recipient` (the SERVER-RESOLVED contact from
+ * `resolveTransferRecipient`) supplies the 收款人 name and an ADDITIONAL, MASKED 收款手机号 field;
+ * `accountLabel` (from `resolveAccountLabel`) overrides the 账户 field. Both are omitted by callers
+ * that only need the legacy heuristic (e.g. tests) — the field order stays
+ * 收款人 → [收款手机号] → 金额 → 账户 → 风险等级.
  */
 export function buildPendingActionSummary(
   ctx: GatewayContext,
   ev: SecurityEvaluation,
+  recipient?: { name: string; phone: string },
+  accountLabel?: string,
 ): import('../lib/contracts/security').PendingActionSummary {
   const policy = getToolPolicy(ctx.toolName);
   const amount = resolveAmount(ctx.args);
@@ -1005,20 +1076,26 @@ export function buildPendingActionSummary(
     fields.push({
       label: '收款人',
       value:
+        recipient?.name ??
         pickString(ctx.args, ['toName', 'name', 'recipient', 'payee', 'contactName', 'to']) ??
         '（未指定）',
     });
+    // Masked (never raw) so the card never leaks the recipient's full phone number.
+    if (recipient) fields.push({ label: '收款手机号', value: maskPhone(recipient.phone) });
     fields.push({ label: '金额', value: formatCNY(amount ?? 0) });
     fields.push({
       label: '账户',
       value:
+        accountLabel ??
         pickString(ctx.args, [
+          'sourceAccountId',
           'fromAccount',
           'account',
           'fromAccountId',
           'from',
           'toAccount',
-        ]) ?? '默认活期账户',
+        ]) ??
+        '默认活期账户',
     });
     fields.push({ label: '风险等级', value: RISK_LABEL[ev.tier] });
   } else {
@@ -1041,3 +1118,17 @@ export function buildPendingActionSummary(
 
 /** Re-exported for the agent layer's convenience (the raw evaluation shape). */
 export type { ToolEvaluation };
+
+/**
+ * Recipient-resolution helpers live in `./recipient-resolution` (a cohesive, DB-backed module).
+ * Re-exported here so the established `@/security/security-gateway` import surface (notably
+ * `maskPhone` and `RecipientResolution`) is preserved for existing callers and tests.
+ */
+export {
+  buildRecipientClarifyMessage,
+  canonicalizeTransferArgs,
+  maskPhone,
+  resolveAccountLabel,
+  resolveTransferRecipient,
+} from './recipient-resolution';
+export type { RecipientResolution } from './recipient-resolution';

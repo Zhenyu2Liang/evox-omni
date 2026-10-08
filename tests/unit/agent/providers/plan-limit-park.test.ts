@@ -15,8 +15,8 @@
  * mutation. `console.log` dumps the frames so a sibling test node can mirror the HTTP-level stream.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { fauxAssistantMessage, fauxText, fauxToolCall } from '@mariozechner/pi-ai';
-import type { AssistantMessage, Message, UserMessage } from '@mariozechner/pi-ai';
+import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai';
+import type { AssistantMessage, Message, UserMessage } from '@earendil-works/pi-ai';
 
 import { respond } from '@/agent/providers/mock-responder';
 import type { MockContext } from '@/agent/providers/mock-responder';
@@ -234,6 +234,7 @@ describe('plan parking through the mock model (runTurn → confirmAction)', () =
       'setlimit:success',
     ]);
     // Then the narration turn: session first, done last.
+    expect(outcome.events.filter((event) => event.type === 'error')).toHaveLength(0);
     expect(outcome.events[1]!.type).toBe('session');
     expect(outcome.events[outcome.events.length - 1]!.type).toBe('done');
     // The REAL tool summary is narrated (never fabricated).

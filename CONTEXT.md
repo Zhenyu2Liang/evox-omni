@@ -22,7 +22,7 @@ decide *whether it is allowed to do it*. Permission is decided by TypeScript cod
 User
  ↓  Next.js Web App (React + Tailwind + Recharts)
  ↓
-Pi Agent  (@mariozechner/pi-agent-core Agent + @mariozechner/pi-ai)
+Pi Agent  (@earendil-works/pi-agent-core Agent + @earendil-works/pi-ai)
  │   intent understanding · context · planning · tool calling · NL reply
  ↓
 Agent Planner (planner/ — DAG)
@@ -44,7 +44,7 @@ Pi Agent → Tool Request → Security Gateway → permission tier (GREEN/YELLOW
 ## Tech Stack (frozen)
 - **TypeScript** end-to-end. No Python / FastAPI / Java. No microservices.
 - Frontend: **Next.js (App Router) + React + Tailwind CSS + Recharts**.
-- Agent: **`@mariozechner/pi-agent-core` (^0.73.1)** + **`@mariozechner/pi-ai` (^0.73.1)**.
+- Agent: **`@earendil-works/pi-agent-core` (1.1.0)** + **`@earendil-works/pi-ai` (1.1.0)**.
   Tool schemas use **TypeBox** (`Type`, `Static` re-exported by pi-ai).
 - Persistence: **Prisma + SQLite**.
 - Validation: **zod** (API boundaries) + TypeBox (tool params).
@@ -53,8 +53,8 @@ Pi Agent → Tool Request → Security Gateway → permission tier (GREEN/YELLOW
 The Pi Agent is used strictly as **Agent Runtime + Planner + Tool Caller**. It is constructed with
 ONLY the registered banking tools. There is **no** bash/shell/write/edit/file/SQL tool registered —
 so injection that asks for one simply has no tool to call.
-Concrete SDK facts the implementation relies on (verified against pi-agent-core 0.73.1):
-- `new Agent({ initialState, beforeToolCall, afterToolCall, convertToLlm, transformContext, sessionId, ... })`.
+Concrete SDK facts the implementation relies on (verified against pi-agent-core 1.1.0):
+- `new Agent({ initialState, streamFn, beforeToolCall, afterToolCall, convertToLlm, transformContext, sessionId, ... })`.
 - `AgentTool<TParams>` = `{ name, description, parameters (TypeBox), label, execute(toolCallId, params, signal, onUpdate) }`.
   `execute` returns `AgentToolResult<T> = { content: (Text|Image)[], details: T, terminate? }` and **throws on failure**.
 - `agent.prompt(input)` / `agent.continue()` return when the run settles; `agent.subscribe(listener)` streams
@@ -63,7 +63,8 @@ Concrete SDK facts the implementation relies on (verified against pi-agent-core 
   emits an error tool-result to the model. This is how GREEN/YELLOW/RED is enforced *in code*: the model
   literally cannot execute a gated tool.
 - `AgentState` (`systemPrompt`, `model`, `tools`, `messages`) is JSON-serializable → persisted per session.
-- **`registerFauxProvider()`** (from pi-ai) provides a scripted in-memory model. We use it for the
+- `resolveProvider()` returns `{ model, streamFn }`; `streamFn` is bound to an explicit `Models` collection. Live uses `builtinModels()`; mock uses `createModels().setProvider(handle.provider)`. No temporary `/compat` or global registration API is used. Minimum Node.js: 22.19.0.
+- **`fauxProvider()`** (from pi-ai) provides a scripted in-memory model. We use it for the
   deterministic **offline/mock LLM mode** and all agent tests — same Agent/tool/security pipeline, only
   the model is scripted.
 ### Two-phase execution (the confirmation model)

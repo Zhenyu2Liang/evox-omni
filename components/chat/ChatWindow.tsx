@@ -25,6 +25,8 @@ import type { ChatEndpoints } from './actions';
 import type { CardActionHandlers } from './cards';
 import type { PendingHumanDecision } from './useAgentStream';
 import { useAgentStream } from './useAgentStream';
+import { decisionKey } from './decisionKey';
+import { asTerminalStatus } from './cards/confirmationStatus';
 import { ConfirmationCard, MfaCard, PlanCard, ReconciliationCard } from './cards';
 import { MessageBubble } from './MessageBubble';
 import { StreamingText } from './StreamingText';
@@ -47,7 +49,7 @@ function isDuplicateDecisionCard(card: ChatCard, pending: PendingHumanDecision):
     return card.actionId === pending.actionId;
   }
   if (card.type === 'confirmation' && pending.kind === 'confirmation') {
-    return JSON.stringify(card.action) === JSON.stringify(pending.summary);
+    return decisionKey(card.action) === decisionKey(pending.summary);
   }
   return false;
 }
@@ -90,6 +92,7 @@ interface PendingDecisionCardProps {
 /** The ONE active human-decision card: confirm/verify/cancel all POST to the `./app` routes. */
 function PendingDecisionCard({ pending, action, busy, error, attempts }: PendingDecisionCardProps) {
   if (pending.kind === 'confirmation') {
+    const runtime = pending.summary as unknown as { status?: unknown; message?: unknown };
     return (
       <ConfirmationCard
         action={pending.summary}
@@ -98,6 +101,8 @@ function PendingDecisionCard({ pending, action, busy, error, attempts }: Pending
         onCancel={action.onCancel}
         busy={busy}
         error={error}
+        status={asTerminalStatus(runtime.status)}
+        statusMessage={typeof runtime.message === 'string' ? runtime.message : undefined}
       />
     );
   }

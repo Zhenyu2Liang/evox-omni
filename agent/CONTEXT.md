@@ -9,8 +9,8 @@ confirmed. A transfer can re-enter recovery authorization after an audited unloc
 still require proven committed evidence or manual reconciliation. Standalone recovery builds its audit from the current
 persisted authorization inside the status/result/audit transaction, including receipt fallbacks.
 
-`./agent` is the ONLY node in the codebase that talks to `@mariozechner/pi-agent-core` /
-`@mariozechner/pi-ai`. It is the runtime glue that turns the frozen contracts into a running
+`./agent` is the ONLY node in the codebase that talks to `@earendil-works/pi-agent-core` /
+`@earendil-works/pi-ai`. It is the runtime glue that turns the frozen contracts into a running
 banking agent. It owns, in one place:
 
 1. constructing the Pi `Agent` (`banking-agent.ts`),
@@ -35,7 +35,7 @@ trigger an execution. See root `../CONTEXT.md`.
 The public surface is the facade `./agent/index.ts`, consumed by `app/api` route handlers and
 `tests/`. All cross-module types are IMPORTED from `../lib/contracts/*` — never redeclared here.
 Pi SDK types (`Agent`, `AgentTool`, `AgentState`, `AgentEvent`, `Model`, `Type`/`Static`) are
-imported from `@mariozechner/pi-agent-core` / `@mariozechner/pi-ai` and DO NOT leak past the
+imported from `@earendil-works/pi-agent-core` / `@earendil-works/pi-ai` and DO NOT leak past the
 facade boundary except where explicitly noted.
 
 ```ts
@@ -89,6 +89,7 @@ interface ResumeTurnInput {
   sessionId: string;
   toolResult: ToolExecutionResult;   // the REAL result of the gated tool (not model text)
   toolCallId?: string;
+  toolName?: ToolName;          // server-owned action name, or submit_plan for a DAG node
 }
 function runTurn(req: ChatTurnRequest, deps?: RunTurnDeps): Promise<ChatTurnResponse>;
 function resumeTurn(input: ResumeTurnInput, deps?: RunTurnDeps): Promise<ChatTurnResponse>;
@@ -136,7 +137,8 @@ function confirmationCard(action: PendingActionSummary): ChatCard;
 function mfaCard(actionId: string, hint?: string): ChatCard;
 
 // --- agent/providers/index.ts ----------------------------------------------
-function resolveModel(cfg?: AppConfig): Model;   // mock ⇒ registerFauxProvider; live ⇒ pi-ai model
+function resolveProvider(cfg?: AppConfig): ModelRuntime; // { model, streamFn }; pass both to Agent
+function resolveModel(cfg?: AppConfig): Model<any>; // inspection facade; not enough to construct Agent
 function providerId(cfg?: AppConfig): string;
 
 // --- agent/tools/index.ts (see ./tools/CONTEXT.md) --------------------------
@@ -221,6 +223,9 @@ Human decision (API route → `confirmation.ts`):
    `executeGatedTool`/`registry.executeDirect` — **NOT** the LLM — write the audit entry, then call
    `resumeTurn(...)`, which injects the REAL tool result and calls `agent.continue()` so the model
    only *narrates the factual outcome*.
+   Production confirmation supplies the expected tool name (submit_plan for a linked DAG node).
+   Missing original calls are narration errors; another tool's result is never overwritten as a
+   fallback. Reused call ids target the latest matching id/name pair.
 5. If the continuation itself fails (`agent.continue()` rejects — a model/narration error), the gated
    action has ALREADY executed and ALREADY been audited: `resumeTurn` catches the rejection, emits an
    `error` stream event and still returns the turn; `confirmation` keeps its outcome `result`-driven
@@ -432,6 +437,13 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
 - **Hallucination guard**: assistant replies derive ONLY from real tool results. A tool returning
   `ok:false` MUST be reported as a failure; the agent MUST NOT invent balances/results and MUST NOT
   claim a gated tool already executed.
+- **Provider transcript validity (DeepSeek / OpenAI-compatible)**: every persisted `role:'toolResult'`
+  message MUST answer the assistant `toolCall` of the run it belongs to (matching `toolCallId`) — no
+  orphan, no duplicate, no fabricated id. `resumeTurn` REPLACES the turn-time (blocked) placeholder
+  IN PLACE via `withRealToolResult` (never appends a second result after the model's narration), and
+  `banking-agent` normalizes `AgentState.messages` on restore via `normalizeToolResultMessages`, so the
+  invariant holds across the first turn, multi-turn persistence, confirm/MFA continuation and a
+  refresh/resume. This keeps DeepSeek's rule "a `tool` message must respond to a preceding `tool_calls`".
 - **A continuation failure is not a business failure**: after a confirmed execution, a failing
   `agent.continue()` is surfaced as an `error` event / a flagged message — NEVER swallowed and NEVER
   turned into a success (the caller always receives the REAL `ToolExecutionResult`).
@@ -443,7 +455,7 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
   All modules return `Result<T>` or throw `AppError` at boundaries; NEVER swallow, NEVER let a raw
   exception reach the model.
 - **Provider selection is isolated** in `providers/`; the rest of the node never imports pi-ai model
-  constructors directly (it receives a `Model` from `resolveModel`).
+  constructors directly (it receives `{ model, streamFn }` from `resolveProvider`).
 - **Dependency direction**: `agent` DEPENDS ON `lib`, `banking-sdk`, `security`, `planner`, `audit` —
   never the reverse. No inter-module cycles. `components`/`app` depend on `agent`, never vice versa.
 - **Files ≲ ~1000 lines**; split by responsibility. No pi-Agent logic outside this node.
@@ -478,11 +490,13 @@ REQUIRED from siblings (must align at integration; assumed signatures):
 - `banking-sdk` functions take `userId` as the first argument and throw typed `AppError`.
 - `sessions.getSession`, `sessions.createSession({userId, stateJson})`, `sessions.updateSessionState(id, stateJson)`.
 
-## Pi SDK Reconciliation (verified against installed 0.73.1)
+## Pi SDK Reconciliation (verified against installed 1.1.0)
 
-Implement against `node_modules/@mariozechner/*` (stubs / `./tools/CONTEXT.md` diverge):
+Implement against `node_modules/@earendil-works/*` (stubs / `./tools/CONTEXT.md` diverge):
 - `AgentTool<TParameters extends TSchema, TDetails = any>` — generic is a **TypeBox TSchema**, NOT `Static<>`; a heterogeneous registry uses `AgentTool<any>` (`AgentTool<unknown>` does NOT compile). `execute(toolCallId, params: Static<TParameters>, signal?, onUpdate?): Promise<AgentToolResult<TDetails>>` with `AgentToolResult<T> = { content: (TextContent|ImageContent)[]; details: T; terminate? }`.
-- `Model<TApi extends Api>` requires a type argument (this node uses `Model<any>`); `registerFauxProvider().getModel(): Model<string>` is the mock.
+- `Model<TApi extends Api>` requires a type argument (this node uses `Model<any>`); mock uses `fauxProvider()` plus `createModels().setProvider(handle.provider)`.
+- `AgentOptions.streamFn` is required. Production receives `Models.streamSimple.bind(models)` with `builtinModels()` for live and a per-runtime collection for mock. `normalizeContext()` is required when calling a stream function directly outside Agent.
+- Tool-call arguments and tool-result details must be JSON values; boundary adapters serialize DTOs before passing them to Pi.
 - `AgentOptions.beforeToolCall?: (ctx: BeforeToolCallContext, signal?) => Promise<BeforeToolCallResult|undefined>` with `ctx.toolCall` (`.name`/`.arguments`) and `ctx.args: unknown`; return `{ block: true, reason }`.
 
 ## Known Issues
@@ -494,8 +508,8 @@ Implement against `node_modules/@mariozechner/*` (stubs / `./tools/CONTEXT.md` d
 
 ## Notes for Agents
 
-- Pi SDK type/function names (`Agent`, `AgentTool`, `AgentState`, `AgentEvent`, `registerFauxProvider`,
-  `Type`, `Static`) are relied on per the verified 0.73.1 facts in root `../CONTEXT.md`; confirm exact
+- Pi SDK type/function names (`Agent`, `AgentTool`, `AgentState`, `AgentEvent`, `fauxProvider`,
+  `Type`, `Static`) are relied on per the verified 1.1.0 facts in root `../CONTEXT.md`; confirm exact
   exported identifiers against the installed packages (see the Pi SDK Reconciliation section above).
 - `system-prompt.ts` may list ONLY the tools actually present in `ToolRegistry` — no phantom capabilities.
 - `ConfirmationOutcome.requiresMfa` is the EFFECTIVE MFA requirement and `tier` is the EFFECTIVE tier (RED whenever `requiresMfa`). `app/api/actions/[id]/confirm|verify/route.ts` should surface `outcome.requiresMfa`; the current `outcome.tier === 'RED'` derivation still agrees because the tier is effective. Owner of `./app` — escalate route edits to the parent.
@@ -529,8 +543,9 @@ Vitest (`tests/`, read-only sibling); designed to run WITHOUT network:
 - `./agent/banking-agent.ts` → constructs the Pi `Agent`, wires tools + `beforeToolCall`/`afterToolCall`, provider, restored `AgentState`
 - `./agent/system-prompt.ts` → banking system prompt builder + hallucination/permission rules
 - `./agent/session.ts` → per-session `AgentState` + transcript load/create/persist
-- `./agent/run-turn.ts` → one chat turn: prompt, event→stream mapping, persistence; `resumeTurn`
-- `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path (result + terminal status + recovery audit settled in ONE `$transaction`) + executed-node recovery + committed-side-effect wedge finalization (ref-counted `liveConfirmations` in `confirmation-recovery.ts`); the exported `recoverAction(actionId, opts?)` (`agent/index.ts` → `POST /api/actions/[id]/recover`) drives the same settlement path explicitly
+- `./agent/message-normalize.ts` → provider transcript validity: `normalizeToolResultMessages` (keep only a `toolResult` that answers the assistant `toolCall` run it follows — heals orphans/duplicates on restore) + `withRealToolResult` (replace the turn-time blocked placeholder IN PLACE, drop the trailing narration)
+- `./agent/run-turn.ts` → one chat turn: prompt, event→stream mapping, persistence; `resumeTurn` places the REAL result IN PLACE of the turn-time blocked placeholder for its original `toolCallId` (see `message-normalize`) and drops the trailing narration, so the transcript stays valid for OpenAI-compatible providers
+- `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path (result + terminal status + recovery audit settled in ONE `$transaction`) + executed-node recovery + committed-side-effect wedge finalization (ref-counted `liveConfirmations` in `confirmation-recovery.ts`); the exported `recoverAction(actionId, opts?)` (`agent/index.ts` → `POST /api/actions/[id]/recover`) drives the same settlement path explicitly; `cancelAction` maps a gateway `CONFLICT` (a terminal / already-executed / in-flight row) to a stable `ok:false` carrying the CURRENT persisted status (HTTP 200, via `conflictOutcome`), exactly like confirm/verify — no rollback, no terminal mutation
 - `./agent/confirmation-recovery.ts` → ref-counted per-process live-confirmation registry (`retainAction`/`releaseAction`/`isActionLive`/`liveCount`) + unified settlement classifier `classifyConfirmedAction(row, nowMs)` → `settled|processing|recoverable|needs_reconciliation` + `settlePendingAction`/`settleFromCommittedReceipt` + persisted execution LEASE (`EXECUTION_LEASE_TTL_MS = 120000`; `setPendingActionLease`/`clearPendingActionLease`/`hasActiveLease`/`leaseNowMs`; taken ONLY for `pending`/`awaiting_mfa`) + standalone (non-plan) wedge recovery (`recoverStandaloneWedge`: receipt-first idempotent replay for every `RECOVERABLE_STANDALONE_TOOLS` member — currently `transfer_money` only — else the terminal queryable `needs_reconciliation` state)
 - `./agent/execution-convergence.ts` → shared normal-confirmation and recovery decision: verified committed evidence, completion/transaction observation, liveness, stored result, then manual reconciliation. Unknown action outcome is `needs_reconciliation`, not an inferred failure.
 - `./agent/execution-fence.ts` → conditional first writes on the SDK transaction client: plan/node identity or confirmed action + owning plan not cancelled; no permission policy is decided by SDK.

@@ -9,7 +9,7 @@ permission, and the circuit breaker locks a session after 3 consecutive MFA fail
 
 ## API Surface
 
-Fifteen spec files (grouped below by concern), each with **real assertions** (no `it.todo` remain),
+Sixteen spec files (grouped below by concern), each with **real assertions** (no `it.todo` remain),
 targeting `@/security/<module>` via the `@/security` facade (`{gateway, permission, risk, mfa,
 circuitBreaker, injection}`) or the module directly:
 
@@ -24,6 +24,7 @@ circuitBreaker, injection}`) or the module directly:
 - `gateway-audit-trail.test.ts` — the `TOOL_INTENT` map + `deriveIntent` (pure, LLM-immutable label) and the persistence touch-points (`createPendingAction`/`handleToolCall` persist the ORIGINAL `userRequest` + derived `intent`; `toContractPendingAction` surfaces both). DB-backed.
 - `authorize-hardening.test.ts` — `authorizeAction`/`cancelAction`/`recordActionResult` hardening: repeat confirm → `CONFLICT`, cancel/confirm after settle → `CONFLICT`, ownership mismatch → `SECURITY_DENIED`, execution-time re-risk of a YELLOW-parked transfer (against a RAW prior `Transaction` row), `recordActionResult` TRUE terminal status, locked session → `status:'locked'`. DB-backed, unique sessionId.
 - `authorize-concurrency.test.ts` — gateway concurrency / execution-time re-risk driven through the REAL `@/agent` confirm/verify façade: (1) two SIMULTANEOUS confirms of ONE YELLOW action → EXACTLY ONE executes (atomic exactly-once claim), the loser a typed `ok:false`/`CONFLICT`, balance moves once, only the winner is audited, and a later SEQUENTIAL confirm is `ok:false`; (2) TWO queued YELLOW ¥600 transfers → after the FIRST executes the SECOND re-risks to RED at execution time and returns `awaiting_mfa` (no execution) yet stays completable via `verifyAction(code)`. DB-backed, unique persisted session.
+- `recipient-resolution.test.ts` — SERVER-SIDE transfer recipient resolution at park time (`resolveTransferRecipient`): park by exact name / partial phone / `contactId` → summary 收款人 == resolved real name and 收款手机号 == `maskPhone(phone)` (field order 收款人 · 收款手机号 · 金额 · 账户 · 风险等级) and the persisted `argsJson` is canonical (`contactId` present, NO `name`/`phone`); missing recipient / unknown name / AMBIGUOUS (duplicate name) → plain clarify DENY and NO `PendingAction` row. DB-backed, unique sessionId.
 
 **Transfer limits & concurrency**
 - `transfer-limits-concurrency.test.ts` — dynamic transfer-risk + concurrency regression driven through the REAL gateway/`@/agent` façade and Banking SDK: two DISTINCT ¥600 transfers parked & confirmed concurrently → exactly ONE executes and `computeDailyTransferTotal(userId) ≤ 1000` with the loser escalated (`awaiting_mfa`, `requiresMfa`, tier `RED`); cross-session accumulation of the USER-scoped day total; the exactly-¥1000 boundary (allowed) vs ¥1001 (escalates); 3+ queued transfers preserve the ≤¥1000 invariant; repeat confirm of the SAME action → `CONFLICT` with exactly one execution; balance/ledger consistency (success ⇒ exactly one debit + one ledger row; concurrent insufficient balance ⇒ no overspend). DB-backed, unique persisted session.
@@ -53,6 +54,7 @@ circuitBreaker, injection}`) or the module directly:
 - Helper imports use the correct relative path from this node: `../../helpers/db` and `../../helpers/fixtures` (`../../helpers/scenario` for `newSessionId`), NOT `../helpers/*`.
 - DB-backed specs set `vi.setConfig({ hookTimeout: 60_000 })` — the `useFreshDatabase()` per-test truncate+seed is I/O-heavy and can exceed Vitest's 10 s default hook timeout on Windows. This is a local workaround; the root-owned `vitest.config.ts` still has no global `hookTimeout`.
 - Gateway persistence facts the specs assert: `createPendingAction` persists YELLOW as status `'pending'` (there is no `'awaiting_confirmation'` value in `PendingActionStatus`) and RED as `'awaiting_mfa'`; `parseBlockReason` returns `{ actionId, decisionKind }` (field is `decisionKind`).
+- A gated `transfer_money` MUST pass exactly ONE recipient selector (`contactId`|`phone`|`name`): the gateway resolves it SERVER-SIDE at park time, canonicalizes args to `{...args, contactId}` and drops `phone`/`name`; the summary exposes 收款人 + masked 收款手机号. `toName`/`name`-only legacy args that are not exactly-one-resolvable now clarify (no `PendingAction`). Fixtures pass `contactId:'contact_zhangwei'`.
 - `securityGateway.authorizeAction`/`cancelAction` REQUIRE non-optional `{ userId, sessionId }` ownership (no demo-user fallback; missing/mismatching → `AppError('SECURITY_DENIED')`), and `NOT_FOUND` is still checked first. Specs pass `{ userId: DEMO_USER_ID, sessionId }`, where `sessionId` is the session the action was parked with. On execution-time re-risk escalation a parked YELLOW transfer is persisted as `'awaiting_mfa'` (tier `RED`, `requiresMfa: true`) and returned as `{ ok:false, status:'awaiting_mfa', tier:'RED', requiresMfa:true, code:'LIMIT_EXCEEDED' }`.
 - `computeDailyTransferTotal(userId, now?)` resolves the window as `[startOfDay(now), now]` — INCLUSIVE at both ends (the upper bound is passed as `now + 1`), so future-dated transfers are EXCLUDED.
 - `authorize-concurrency.test.ts` drives the REAL `@/agent` `confirmAction`/`verifyAction` façade (not just `securityGateway`), so it needs a PERSISTED session (`getOrCreateSession(DEMO_USER_ID)`) — `agent/confirmation.ts` resolves the owner from the session row; that also provides circuit-breaker isolation.
@@ -60,7 +62,7 @@ circuitBreaker, injection}`) or the module directly:
 ## Routing Table
 
 - `./permission-engine.test.ts` · `./risk-engine.test.ts` · `./risk-engine-rerisk.test.ts`
-- `./gateway.test.ts` · `./gateway-audit-trail.test.ts` · `./authorize-hardening.test.ts` · `./authorize-concurrency.test.ts`
+- `./gateway.test.ts` · `./gateway-audit-trail.test.ts` · `./authorize-hardening.test.ts` · `./authorize-concurrency.test.ts` · `./recipient-resolution.test.ts`
 - `./transfer-limits-concurrency.test.ts` → dynamic transfer-risk + concurrency/limit invariants through the real gateway/`@/agent` façade + SDK
 - `./injection-guard.test.ts`
 - `./circuit-breaker.test.ts` · `./circuit-breaker-audit.test.ts` · `./circuit-breaker-reset.test.ts`

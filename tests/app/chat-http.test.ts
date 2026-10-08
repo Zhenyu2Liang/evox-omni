@@ -116,7 +116,7 @@ function expectNoMfaLeak(label: string, ...bodies: unknown[]): void {
  *
  * `text_delta` frames are OMITTED on purpose: the faux provider splits assistant text into
  * RANDOM-sized chunks (`splitStringByTokenSize` uses `Math.random()` in
- * `@mariozechner/pi-ai/dist/providers/faux.js`), so the NUMBER of text-delta frames legitimately
+ * `@earendil-works/pi-ai/dist/providers/faux.js`), so the NUMBER of text-delta frames legitimately
  * varies run-to-run. Everything else — the message boundaries (`message_start`/`message_end`), the
  * tool calls, the cards and the terminating `done` — is deterministic, and the streamed TEXT is
  * compared separately via `streamedText()`.

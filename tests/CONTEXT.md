@@ -15,7 +15,10 @@ These tests do not prove live-model quality, real MFA or production-bank readine
 - deploy-db-push.test.ts: the real isolated-database deployment entrypoint.
 - helpers/: shared fixtures, DB reset and Prisma CLI helpers.
 - setup.ts: generated-client readiness and isolated database provisioning.
-- e2e/: separate real Chrome acceptance, not collected by Vitest.
+- e2e/: separate real Chrome acceptance, not collected by Vitest. Also holds the LIVE DeepSeek
+  acceptance harness (live-acceptance.e2e.ts, run via `npx tsx`) and its current-state findings
+  (LIVE-ACCEPTANCE-REPORT.md); evidence PNGs under e2e/screenshots/live/ (dir `.gitignore` is `*`,
+  force-add). Live runs need `.env.local` (gitignored) + an isolated prisma/live-acceptance.db.
 
 Historical duplicate review probes are removed; maintained suites cover their invariants.
 Do not recreate round/commit-specific copies or commit generated test logs.

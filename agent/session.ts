@@ -8,7 +8,7 @@
  * ADOPTS the persisted id back onto the snapshot so subsequent `save`/`load` round-trips are
  * consistent (see `getOrCreateSession`, the canonical create path).
  */
-import type { AgentState } from '@mariozechner/pi-agent-core';
+import type { AgentState } from '@earendil-works/pi-agent-core';
 import type { ChatMessage } from '@/lib/contracts/agent';
 import { newId } from '@/lib/ids';
 import { safeParse, toJson } from '@/lib/json';
