@@ -6,18 +6,19 @@
  * and drives the REAL `/agent` UI through a REAL headless Chrome. Only the bank is simulated (SQLite).
  *
  * ------------------------------------------------------------------------------------------------
- * DISCLOSED MODEL-ID OVERRIDE
+ * MODEL ID — PROVIDED CONFIG BY DEFAULT, OPT-IN FORCE OVERRIDE
  * ------------------------------------------------------------------------------------------------
- * The provided `.env.local` sets `LLM_MODEL=deepseek-flash`, which is NOT a registered pi-ai model id:
- * pi-ai's `deepseek` registry exposes ONLY `deepseek-v4-flash` / `deepseek-v4-pro`. When the id is
- * unregistered, `agent/providers/provider-live.ts` (lines 18-19, 59-70) falls back to a literal
- * `Model` with `baseUrl: 'https://api.openai.com/v1'`, so the DeepSeek key is sent to OpenAI and every
- * LLM call fails with `401 Incorrect API key provided: ...`. (App DEFECT — reported, never patched.)
+ * The provided `.env.local` sets `LLM_MODEL=deepseek-flash`, which is NOT a registered pi-ai model id
+ * (pi-ai's `deepseek` registry exposes ONLY `deepseek-v4-flash` / `deepseek-v4-pro`). By DEFAULT this
+ * harness does NOT touch `LLM_MODEL`: the spawned `next dev` loads the PROVIDED `.env.local` value, so
+ * `agent/providers/provider-live.ts#resolveLiveModel` is exercised FOR REAL
+ * (an unregistered id for a KNOWN provider resolves to that provider's own registered default,
+ * `deepseek-v4-flash` at `https://api.deepseek.com`, with a loud `console.warn`).
  *
- * To still exercise the LIVE DeepSeek API this harness sets `process.env.LLM_MODEL='deepseek-v4-flash'`
- * (a REGISTERED id → baseUrl `https://api.deepseek.com`, api `openai-completions`) BEFORE booting.
- * Everything else (key, provider, base URL, mock off) is the provided `.env.local` unchanged. Every
- * result below is therefore labelled "LIVE with disclosed model-id override".
+ * Set `LIVE_FORCE_MODEL=<id>` (non-empty) to FORCE `process.env.LLM_MODEL=<id>` for the spawned server
+ * (logged as a forced override); every result is then labelled "LIVE with forced model-id override".
+ * Everything else (key, provider, model, mock off) is the provided `.env.local` unchanged.
+ * By default the run therefore exercises `resolveLiveModel` on the PROVIDED id, not an override.
  *
  * Run:  npx tsx tests/e2e/live-acceptance.e2e.ts
  * Subset: `LIVE_SCENARIOS=1,3` (comma-separated scenario ids) runs only those journeys.
@@ -87,20 +88,22 @@ const RECIPIENT_NAME = '张伟';
 const RECIPIENT_CONTACT_ID = 'contact_zhangwei';
 const CREDIT_CARD_ID = 'card_credit';
 
-/**
- * DISCLOSED OVERRIDE — `deepseek-flash` (the value in the provided `.env.local`) is NOT a registered
- * pi-ai id, so `agent/providers/provider-live.ts` silently falls back to an OpenAI base URL. Using a
- * REGISTERED id keeps the run genuinely LIVE against DeepSeek's own endpoint.
- */
-const LIVE_MODEL_OVERRIDE = 'deepseek-v4-flash';
-
 /** Point this process — provisioning CLIs + the spawned dev server — at the ISOLATED live DB. */
 function configureLiveEnv(): void {
   process.env['DATABASE_URL'] = LIVE_DB_URL;
   process.env['LLM_MODE'] = 'live';
   process.env['LLM_PROVIDER'] = 'deepseek';
-  // DISCLOSED OVERRIDE — see the file header. `deepseek-flash` is not a registered pi-ai id.
-  process.env['LLM_MODEL'] = LIVE_MODEL_OVERRIDE;
+  // MODEL ID — PROVIDED CONFIG BY DEFAULT, OPT-IN FORCE OVERRIDE.
+  // By default we do NOT set `LLM_MODEL`, so the spawned `next dev` loads the PROVIDED `.env.local`
+  // value (`LLM_MODEL=deepseek-flash`) and `agent/providers/provider-live.ts#resolveLiveModel` is
+  // exercised FOR REAL (an unregistered id for a KNOWN provider resolves to that provider's own
+  // registered default, not a silent OpenAI base URL). Set `LIVE_FORCE_MODEL=<id>` to force an id.
+  const forced = process.env['LIVE_FORCE_MODEL']?.trim();
+  if (forced) {
+    process.env['LLM_MODEL'] = forced;
+  } else {
+    delete process.env['LLM_MODEL'];
+  }
 }
 
 /** Probe the freshly provisioned live DB (node child, so DATABASE_URL is applied before construction). */
@@ -605,22 +608,15 @@ async function scenarioTransferRecipientByName(ctx: Ctx): Promise<string> {
   );
 }
 
-/**
- * Can the BY-PHONE leg be verified at all? The seeded contacts store MASKED phones (`139****0002`) and
- * `search_contact` matches a phone by SUBSTRING (`banking-sdk/contact.ts#searchContacts`). A live model
- * normalises the mask away (OBSERVED: it queried `13900000002`) and the tool then legitimately finds no
- * contact, so "transfer by phone" cannot resolve against this demo data. Report SKIP with that exact
- * reason rather than asserting a success the seed cannot produce (never a fabricated failure).
- */
-async function byPhoneSkipReason(): Promise<string | undefined> {
-  const phone = await readContactPhone(RECIPIENT_CONTACT_ID);
-  if (!phone.includes('*')) return undefined;
-  return `无法验证：种子库联系人 ${RECIPIENT_NAME} 的手机号为掩码「${phone}」，search_contact 按手机号子串匹配，实时模型把掩码规整为 ${phone.replace(/\*/g, '')} 后工具返回「未找到匹配联系人」（真实工具结果）→ 「按手机号解析收款人」在该演示数据上结构性不可行（演示种子数据限制，非转账链路缺陷）`;
-}
+/** The seeded contact's DE-MASKED phone (`139****0002` → `13900000002`) — the raw by-phone leg. */
+const RAW_RECIPIENT_PHONE = '13900000002';
 
-/** By-PHONE leg: a transfer addressed by a contact's full phone number must resolve to that contact. */
-async function scenarioTransferRecipientByPhone(ctx: Ctx): Promise<string> {
-  const phone = await readContactPhone(RECIPIENT_CONTACT_ID);
+/**
+ * One by-PHONE leg: a transfer addressed by `phone` must resolve to the seeded contact through the
+ * mask-aware recipient resolution (`security/recipient-resolution.ts`), render a confirmation card
+ * with the SERVER-RESOLVED real name + a masked phone, and then CANCEL without moving money.
+ */
+async function transferByPhoneLeg(ctx: Ctx, phone: string, label: string): Promise<string> {
   return withPage(
     ctx.browser,
     async (page) => {
@@ -628,19 +624,44 @@ async function scenarioTransferRecipientByPhone(ctx: Ctx): Promise<string> {
       await gotoAgent(page, ctx.baseUrl);
       const before = await snapshot(ctx.baseUrl);
       await submitChat(page, MSG.transferByPhone(phone));
-      await awaitConfirmCard(page, ctx.baseUrl);
+      try {
+        await awaitConfirmCard(page, ctx.baseUrl);
+      } catch (error) {
+        await captureLive(page, `${label}-no-card`);
+        const seeded = await readSeedRecipientPhone();
+        throw new Error(
+          `${errText(error)}；种子库 ${RECIPIENT_NAME} 手机号=${seeded}；持久化工具调用：${await persistedRecipientCalls()}`,
+        );
+      }
       const fields = await readConfirmFields(page);
       const resolved = assertRecipient(fields, RECIPIENT_NAME);
-      await captureLive(page, 's2-by-phone');
+      // READ-ONLY cross-check: the parked YELLOW action must be visible on `GET /api/actions`.
+      const parked = await fetchParkedActions(page, ctx.baseUrl);
+      if (parked === undefined || !parked.some((a) => a.toolName === 'transfer_money')) {
+        throw new Error(`确认卡已渲染但 GET /api/actions 未返回 transfer_money 待处理操作：${describeActions(parked)}`);
+      }
+      await captureLive(page, label);
       await clickCancel(page);
       const after = await snapshot(ctx.baseUrl);
       if (after.balance !== before.balance) throw new Error(`取消后余额变化：${before.balance} → ${after.balance}`);
       const added = diffLedger(before.ledger.transactions, after.ledger.transactions).added;
       if (added.length > 0) throw new Error(`取消后账本新增：${added.map((tx) => tx.id).join('、')}`);
-      return `「${MSG.transferByPhone(phone)}」（库里手机号 ${phone}）→ 确认卡收款人=${resolved}；取消 → 未动账`;
+      return `「${MSG.transferByPhone(phone)}」→ 确认卡收款人=${resolved}；GET /api/actions → ${describeActions(parked)}；取消 → 余额 ${before.balance} 未变、账本无新增`;
     },
-    { label: 's2-by-phone' },
+    { label },
   );
+}
+
+/**
+ * By-PHONE leg: a transfer addressed by a contact's phone must resolve to that contact. Because the
+ * seeded contact stores a MASKED phone (`139****0002`), BOTH the masked form (as seeded) AND its
+ * DE-MASKED raw form (`13900000002`) are exercised end-to-end and asserted on the rendered DOM.
+ */
+async function scenarioTransferRecipientByPhone(ctx: Ctx): Promise<string> {
+  const maskedPhone = await readContactPhone(RECIPIENT_CONTACT_ID);
+  const masked = await transferByPhoneLeg(ctx, maskedPhone, 's2-by-phone-masked');
+  const raw = await transferByPhoneLeg(ctx, RAW_RECIPIENT_PHONE, 's2-by-phone-raw');
+  return `掩码号（种子 ${maskedPhone}）：${masked} ｜ 真实号（${RAW_RECIPIENT_PHONE}）：${raw}`;
 }
 
 // --- scenario 3: decimal transfer ¥200.37 --------------------------------------------------------
@@ -941,12 +962,7 @@ async function scenarioCommittedContinuationFailed(
 const SCENARIOS: readonly Scenario[] = [
   { id: '1', name: '1-live-balance-matches-db', run: scenarioBalance },
   { id: '2', name: '2-live-transfer-recipient-by-name', run: scenarioTransferRecipientByName },
-  {
-    id: '2p',
-    name: '2p-live-transfer-recipient-by-phone',
-    run: scenarioTransferRecipientByPhone,
-    skipReason: byPhoneSkipReason,
-  },
+  { id: '2p', name: '2p-live-transfer-recipient-by-phone', run: scenarioTransferRecipientByPhone },
   { id: '3', name: '3-live-decimal-transfer-200.37', run: scenarioDecimalTransfer },
   { id: '5', name: '5-live-cancel-idempotent-terminal-ux', run: scenarioCancelAndIdempotency },
   { id: '6', name: '6-live-multiturn-and-continuations', run: scenarioMultiTurn },
@@ -1006,7 +1022,12 @@ async function main(): Promise<void> {
   });
 
   console.log('== AI Banking Agent 真实浏览器 + 真实 DeepSeek 在线验收 (tests/e2e/live) ==');
-  console.log(`· LIVE with disclosed model-id override（提供的 'deepseek-flash' 不是合法 pi-ai id；使用 '${LIVE_MODEL_OVERRIDE}'）`);
+  const forcedModel = process.env['LIVE_FORCE_MODEL']?.trim();
+  console.log(
+    forcedModel
+      ? `· LIVE with FORCED model-id override（LIVE_FORCE_MODEL='${forcedModel}'）`
+      : "· LIVE with PROVIDED model id（不覆盖 LLM_MODEL：使用 .env.local 的 'deepseek-flash'，由 provider-live.ts#resolveLiveModel 解析为已注册默认值）",
+  );
 
   const executablePath = resolveBrowserExecutable();
   if (executablePath === undefined) {
@@ -1024,7 +1045,9 @@ async function main(): Promise<void> {
     console.log('· 重置 LIVE 数据库 →（缺 Prisma Client 时先 prisma generate）→ db push 阶梯 → probe → tsx prisma/seed.ts');
     resetLiveDatabase();
 
-    console.log(`· LLM_MODE=${process.env['LLM_MODE']} LLM_PROVIDER=${process.env['LLM_PROVIDER']} LLM_MODEL=${process.env['LLM_MODEL']}（真实 DeepSeek API）`);
+    console.log(
+      `· LLM_MODE=${process.env['LLM_MODE']} LLM_PROVIDER=${process.env['LLM_PROVIDER']} LLM_MODEL=${process.env['LLM_MODEL'] ?? '（未覆盖 → 由 .env.local 提供）'}（真实 DeepSeek API）`,
+    );
     devServer = await bootDevServer({ timeoutMs: NAV_TIMEOUT_MS, attempts: 2 });
     const baseUrl = devServer.baseUrl;
     console.log(`· next dev (pid=${devServer.pid}) → ${baseUrl}（/api/health 与 /agent 均已就绪）`);
