@@ -33,6 +33,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   `new Date(demoNow(override))`.
 - `json.ts` — SQLite JSON-text column helpers: `safeParse<T>(text, fallback)` (returns `fallback` for
   null/undefined/empty/invalid JSON) and `toJson(value)` (`'null'` when value is `undefined`).
+- `phone.ts` — mask-aware phone matching & masking (pure, never throws): `maskAwarePhoneMatch(value, stored)` → TRUE iff a RAW value matches a MASKED stored phone (exact, digit-substring either direction, or an anchored wildcard pattern from the stored phone's `*`-split fragments); `maskPhone(phone)` → first-3 + `****` + last-4. Lets a RAW phone lookup match the demo's MASKED-stored `Contact.phone` values.
 - `ledger.ts` — deterministic idempotency keys + the canonical action→ledger-row IDENTITY.
   - `idempotentTransferTxId(userId, idempotencyKey)` → the canonical transfer-ledger id,
     `txidem_` + the first 32 hex chars of `sha256("<userId>\u0000<idempotencyKey>")`.
