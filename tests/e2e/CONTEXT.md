@@ -241,6 +241,8 @@ only the LLM is live.
 
 ## Routing Table
 - `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 6 journeys → structured report → non-zero exit on FAIL)
+- `./live-acceptance.e2e.ts` → REAL-browser + REAL-LLM (`LLM_MODE=live`) acceptance harness against DeepSeek; own isolated DB `prisma/live-acceptance.db`; `LIVE_SCENARIOS` subset; embeds the TASK-A persisted-tool-arg evidence dump (`persistedRecipientCalls`)
+- `./LIVE-ACCEPTANCE-REPORT.md` → current-state report of the live runs + app defects found (DEFECT #1 provider fallback; DEFECT #2 transfer recipient resolution)
 - `./helpers.ts` → shared harness (isolated E2E DB + reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card + per-node timeline, read-model HTTP helpers, wedge fixtures + `seedStandaloneWedge`/direct-DB fact queries (`queryPendingActionStatus`/`queryExecutionAudit`), reporter, fail-fast navigation)
 - `./screenshots/` → git-ignored failure screenshots
 - `../app` → HTTP route-handler specs (the in-process acceptance layer this harness complements) (sibling — read-only)
