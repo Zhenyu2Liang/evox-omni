@@ -83,13 +83,13 @@ async function countTransactions(): Promise<number> {
 
 /** Persist a YELLOW gated transfer (¥200, no MFA) for the given session. */
 async function createYellowAction(sessionId: string): Promise<PendingAction> {
-  const ctx = ctxFor('transfer_money', { amount: 200, toName: '张伟' }, sessionId);
+  const ctx = ctxFor('transfer_money', { amount: 200, contactId: 'contact_zhangwei' }, sessionId);
   return securityGateway.createPendingAction(ctx, await securityGateway.evaluate(ctx));
 }
 
 /** Persist a RED gated transfer (¥5000, MFA required) for the given session. */
 async function createRedAction(sessionId: string): Promise<PendingAction> {
-  const ctx = ctxFor('transfer_money', { amount: 5000, toName: '张伟' }, sessionId);
+  const ctx = ctxFor('transfer_money', { amount: 5000, contactId: 'contact_zhangwei' }, sessionId);
   return securityGateway.createPendingAction(ctx, await securityGateway.evaluate(ctx));
 }
 
@@ -283,7 +283,7 @@ describe('security-gateway · evaluate (needs test SQLite)', () => {
 
 describe('security-gateway · createPendingAction (needs test SQLite)', () => {
   it("persists a PendingAction row (YELLOW → 'pending', RED → 'awaiting_mfa') and returns it with the summary", async () => {
-    const yellowCtx = ctxFor('transfer_money', { amount: 200, toName: '张伟' });
+    const yellowCtx = ctxFor('transfer_money', { amount: 200, contactId: 'contact_zhangwei' });
     const yellowEv = await securityGateway.evaluate(yellowCtx);
     expect(yellowEv.tier).toBe('YELLOW');
 
@@ -299,7 +299,7 @@ describe('security-gateway · createPendingAction (needs test SQLite)', () => {
     expect(yellowRow?.status).toBe('pending');
     expect(yellowRow?.userId).toBe(DEMO_USER_ID);
 
-    const redCtx = ctxFor('transfer_money', { amount: 5000, toName: '张伟' });
+    const redCtx = ctxFor('transfer_money', { amount: 5000, contactId: 'contact_zhangwei' });
     const redEv = await securityGateway.evaluate(redCtx);
     expect(redEv.tier).toBe('RED');
 
@@ -357,7 +357,7 @@ describe('security-gateway · createPendingAction (needs test SQLite)', () => {
   });
 
   it('the persisted args are the validated originals (used later for the authorized execution path)', async () => {
-    const args = { amount: 200, toName: '张伟', remark: '测试备注' };
+    const args = { amount: 200, contactId: 'contact_zhangwei', remark: '测试备注' };
     const ctx = ctxFor('transfer_money', args);
     const ev = await securityGateway.evaluate(ctx);
 
@@ -523,7 +523,7 @@ describe('security-gateway · handleToolCall composition', () => {
 
   it('YELLOW tool → blocked: PendingAction persisted + a round-trippable blockReason', async () => {
     const res = await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 200, toName: '张伟' }),
+      ctxFor('transfer_money', { amount: 200, contactId: 'contact_zhangwei' }),
     );
 
     expect(res.evaluation.blocked).toBe(true);
@@ -542,7 +542,7 @@ describe('security-gateway · handleToolCall composition', () => {
 
   it('RED tool → blocked with decision kind require_mfa', async () => {
     const res = await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 5000, toName: '张伟' }),
+      ctxFor('transfer_money', { amount: 5000, contactId: 'contact_zhangwei' }),
     );
 
     expect(res.evaluation.tier).toBe('RED');
@@ -560,10 +560,10 @@ describe('security-gateway · handleToolCall composition', () => {
     expect(await checkingBalance()).toBe(CHECKING_BALANCE);
 
     await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 5000, toName: '张伟' }, newSessionId()),
+      ctxFor('transfer_money', { amount: 5000, contactId: 'contact_zhangwei' }, newSessionId()),
     );
     await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 200, toName: '妈妈' }, newSessionId()),
+      ctxFor('transfer_money', { amount: 200, contactId: 'contact_mama' }, newSessionId()),
     );
     await securityGateway.handleToolCall(ctxFor('get_balance', {}, newSessionId()));
 
