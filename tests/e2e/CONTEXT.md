@@ -231,18 +231,19 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
 A SECOND, independent real-browser harness that drives the REAL `next dev` app against the REAL
 DeepSeek API (`LLM_MODE=live`) instead of the scripted mock — same real Chrome + real route handlers,
 only the LLM is live.
-- Run: `npx tsx tests/e2e/live-acceptance.e2e.ts`; subset via `LIVE_SCENARIOS=1,3` (ids `1,2,2p,3,4,5,6,7`).
+- Run: `npx tsx tests/e2e/live-acceptance.e2e.ts`; subset via `LIVE_SCENARIOS=1,3` (ids `1,2,2p,3,4,5,6,7`; selecting `2` also pulls `2p`).
 - Own isolated DB `prisma/live-acceptance.db` (never `e2e.db`/`dev.db`/`test.db`); `configureLiveEnv()` sets `DATABASE_URL`.
-- `.env.local` (gitignored) supplies provider config; copied into the worktree, used, NEVER committed.
-- DISCLOSED override: the provided `LLM_MODEL=deepseek-flash` is not a registered pi-ai id (app DEFECT #1 — silent OpenAI baseUrl fallback); the harness forces `deepseek-v4-flash`, so the run stays genuinely Live.
+- Loads the worktree-root `.env.local` into its own `process.env` before booting (presence-only; values never printed / committed); the spawned `next dev` inherits it.
+- `LIVE_FORCE_MODEL` is an OPT-IN model override; by DEFAULT it does NOT override, so `agent/providers/provider-live.ts#resolveLiveModel` resolves the PROVIDED `.env.local` id for real.
+- `PARK_ATTEMPTS` retry/nudge logic for the flaky park; `awaitSessionCookie()` bounded wait for the `banking_session` cookie; one idempotent `cleanup()` stops the ACTIVE dev server (incl. the scenario-7 reboot), wired to exit/signals.
 - TASK-A evidence tooling: `persistedRecipientCalls()` parses every `AgentSession.stateJson` and prints each `transfer_money`/`search_contact` `toolCall` arg object VERBATIM; `LIVE_S2_PROMPT`/`LIVE_S3_PROMPT` override the two transfer prompts.
-- Current live outcomes + reported app defects live in `./LIVE-ACCEPTANCE-REPORT.md`: PASS 1/4/5/6/7; FAIL 2 & 3 (DEFECT #2); SKIP 2p (masked seed phone).
-- DEFECT #2 (app, reported only): the live model puts the MASKED phone (or the name) into `transfer_money`'s `contactId` slot; `security/security-gateway.ts#resolveTransferRecipient` treats a populated `contactId` as an ID and has no name/masked-phone fallback → `not_found`.
+- Current live outcomes (see `./LIVE-ACCEPTANCE-REPORT.md`): PASS 7 ｜ FAIL 1 ｜ SKIP 0.
+  All scenarios pass live except the S2p RAW-phone leg — an APP-side `search_contact` read-path gap (a raw phone does not substring-match the MASKED seed phone `139****0002`), a fix OUTSIDE this node.
 
 ## Routing Table
 - `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 6 journeys → structured report → non-zero exit on FAIL)
 - `./live-acceptance.e2e.ts` → REAL-browser + REAL-LLM (`LLM_MODE=live`) acceptance harness against DeepSeek; own isolated DB `prisma/live-acceptance.db`; `LIVE_SCENARIOS` subset; embeds the TASK-A persisted-tool-arg evidence dump (`persistedRecipientCalls`)
-- `./LIVE-ACCEPTANCE-REPORT.md` → current-state report of the live runs + app defects found (DEFECT #1 provider fallback; DEFECT #2 transfer recipient resolution)
+- `./LIVE-ACCEPTANCE-REPORT.md` → current-state report of the live runs (all 8 scenarios PASS live except the S2p raw-phone `search_contact` read-path gap)
 - `./helpers.ts` → shared harness (isolated E2E DB + reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card + per-node timeline, read-model HTTP helpers, wedge fixtures + `seedStandaloneWedge`/direct-DB fact queries (`queryPendingActionStatus`/`queryExecutionAudit`), reporter, fail-fast navigation)
 - `./screenshots/` → git-ignored failure screenshots
 - `../app` → HTTP route-handler specs (the in-process acceptance layer this harness complements) (sibling — read-only)
