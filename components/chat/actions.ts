@@ -66,6 +66,14 @@ const JSON_HEADERS: Record<string, string> = {
   Accept: 'application/json',
 };
 
+/** Terminal `PendingActionStatus` values: the action is SETTLED, so the UI must show a fact, not controls. */
+const TERMINAL_ACTION_STATUSES: readonly string[] = [
+  'executed',
+  'failed',
+  'cancelled',
+  'needs_reconciliation',
+];
+
 /**
  * Normalize ANY throwable into a SAFE, single-line user-facing message.
  * Never returns a raw stack trace.
@@ -559,6 +567,19 @@ async function postAction(url: string, body: Record<string, unknown>): Promise<C
     const hasErrorEvent = events.some((event) => event.type === 'error');
     if (domainOk === false && !hasErrorEvent) {
       events.push({ type: 'error', message: message ?? GENERIC_ERROR });
+    }
+
+    // SETTLEMENT signal (ADDITIVE, non-frozen AgentStreamEvent). A TERMINAL server status means the
+    // action is done: the reducer stamps it onto the inline confirmation card so a settled card can
+    // never keep looking actionable. Read structurally downstream; an older server that omits a
+    // terminal status simply never emits this, preserving today's behaviour.
+    if (actionId !== undefined && status !== undefined && TERMINAL_ACTION_STATUSES.includes(status)) {
+      events.push({
+        type: 'action_settled',
+        actionId,
+        status,
+        ...(message !== undefined ? { message } : {}),
+      } as unknown as AgentStreamEvent);
     }
 
     return { sessionId, events };
