@@ -219,6 +219,47 @@ COMPLETELY unaffected by both guards, and a committed ledger debit is NEVER roll
 const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 ```
 
+### Park-time transfer-recipient resolution (confirmation card ⇄ execution agreement)
+
+`transfer_money` is resolved SERVER-SIDE at PARK time (after the amount normalization, BEFORE the dedupe
+and the insert) by the exported helpers below — mirroring `banking-sdk/transfer.ts#resolveRecipient` EXACTLY
+(the same `lib/db/repositories/contact` lookups), so the confirmation card names the SAME contact the SDK
+resolves at execution.
+
+```ts
+type RecipientResolution =
+  | { status:'resolved'; contact:{ id:string; name:string; phone:string } }
+  | { status:'not_found'; kind:'contactId'|'phone'|'name'; supplied:string }
+  | { status:'ambiguous'; kind:'contactId'|'phone'|'name'; supplied:string; candidates:Array<{name:string;phone:string}> }
+  | { status:'invalid'; detail:string }
+async function resolveTransferRecipient(userId: string, args: Record<string,unknown>): Promise<RecipientResolution>
+function maskPhone(phone: string): string                     // PURE 脱敏: first 3 + '****' + last 4; short input safe ('139'→'****', '1391234'→'139****'); never a raw phone
+function canonicalizeTransferArgs(args, contactId: string): Record<string,unknown>   // PURE: sets contactId and DELETES phone/name (the SDK requires EXACTLY ONE recipient field); amount/remark/sourceAccountId preserved
+async function resolveAccountLabel(userId: string, sourceAccountId: string|undefined): Promise<string|undefined>  // the caller's OWN account name, else undefined
+function buildRecipientClarifyMessage(res: Exclude<RecipientResolution,{status:'resolved'}>): string   // PURE, Chinese, phone-masked, code-free
+type CreatePendingActionResult = { kind:'created'; action: PendingAction } | { kind:'plan_cancelled' } | { kind:'clarify'; message:string }   // gatewayCreatePendingAction's return type
+```
+
+- Supplied-recipient counting matches the SDK: a field counts iff `!== undefined && !== ''`; EXACTLY ONE of
+  `contactId` | `phone` | `name` must be supplied, else `invalid`.
+- `contactId` → `getContact(id)` (missing/foreign owner → `not_found`). `phone` → `searchContacts`, then
+  EXACT (`c.phone === phone`) else the `contains` pool (empty → `not_found`, >1 → `ambiguous`).
+  `name` → EXACT name match (0 → `not_found`, >1 → `ambiguous`).
+- A non-`resolved` recipient makes `gatewayCreatePendingAction` return `{ kind:'clarify' }`: **NOTHING is
+  persisted** (no `PendingAction`, no MFA challenge) and nothing can execute. `handleToolCall` turns it into a
+  BLOCK (`evaluation.blocked` stays true, `decision.kind='deny'`, NO `action`) whose `blockReason` is the PLAIN
+  model-readable `buildRecipientClarifyMessage(res)` — deliberately NOT a `BLOCK_REASON_PREFIX` JSON payload
+  (the model must read it and ask the user to clarify). `SecurityGateway.createPendingAction` maps it to
+  `AppError('VALIDATION', message)`, and `{ kind:'plan_cancelled' }` to `AppError('CONFLICT', …)`.
+- A `resolved` recipient canonicalizes `ctx.args` to the resolved `contactId` BEFORE `findReusableAction`, so a
+  re-park compares canonical args and the args persisted on the action are exactly the ones the SDK executes.
+- `buildPendingActionSummary(ctx, ev, recipient?, accountLabel?)` stays SYNC/exported/PURE. For `transfer_money`
+  the 收款人 field is `recipient.name` (fallback: the `toName`/`name`/… pickString heuristic,
+  `'（未指定）'`), a `recipient` present ADDITIONALLY pushes `收款手机号 = maskPhone(recipient.phone)` (masked,
+  never raw), and 账户 is `accountLabel` (from `resolveAccountLabel(userId, sourceAccountId)`) else the
+  pickString heuristic (`sourceAccountId`/`fromAccount`/…) else `'默认活期账户'`. Field order:
+  收款人 → [收款手机号] → 金额 → 账户 → 风险等级.
+
 ## Flow: evaluate → decide → pendingAction → authorize
 
 ```
