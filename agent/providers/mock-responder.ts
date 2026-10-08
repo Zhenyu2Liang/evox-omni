@@ -9,7 +9,7 @@
  *  - No Prisma / banking-sdk / network / filesystem access.
  *  - No `Date.now()` / `Math.random()` that could change the CONTENT of a reply. Tool-call ids
  *    are EXPLICIT and stable (e.g. `call_get_balance`) so a run is byte-for-byte reproducible.
- *  - Only `@mariozechner/pi-ai` (faux helpers + message types) is imported.
+ *  - Only `@earendil-works/pi-ai` (faux helpers + message types) is imported.
  *
  * The decision state machine:
  *  1. If a tool just ran (the most recent `toolResult` follows the most recent user message),
@@ -22,13 +22,14 @@
  * the security gateway; a block simply surfaces back as a `toolResult` and is narrated as
  * "awaiting confirmation / verification, not executed".
  */
-import { fauxAssistantMessage, fauxText, fauxToolCall } from '@mariozechner/pi-ai';
+import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai';
 import type {
   AssistantMessage,
+  JsonObject,
   Message,
   ToolResultMessage,
   UserMessage,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
 
 /** Minimal structural view of the pi-ai `Context` this responder needs (a `Context` is assignable to it). */
 export interface MockContext {
@@ -822,7 +823,7 @@ function userTextBefore(messages: Message[], lastUserIndex: number): string | un
 
 function toolCall(name: string, args: Record<string, unknown>): AssistantMessage {
   return fauxAssistantMessage(
-    [fauxText(ACTION_TEXT[name] ?? '好的，我来处理一下。'), fauxToolCall(name, args, { id: `call_${name}` })],
+    [fauxText(ACTION_TEXT[name] ?? '好的，我来处理一下。'), fauxToolCall(name, JSON.parse(JSON.stringify(args)) as JsonObject, { id: `call_${name}` })],
     { stopReason: 'toolUse' },
   );
 }

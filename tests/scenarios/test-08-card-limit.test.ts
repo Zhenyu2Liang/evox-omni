@@ -8,7 +8,7 @@
  * Helpers: ../helpers (fauxAgent/scenario), ../helpers/db, ../helpers/fixtures.
  */
 import { describe, expect, it } from 'vitest';
-import type { Agent } from '@mariozechner/pi-agent-core';
+import type { Agent } from '@earendil-works/pi-agent-core';
 
 import { buildFauxAgent, tool, final } from '../helpers/faux-agent';
 import {

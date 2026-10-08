@@ -37,7 +37,7 @@ SQLite 中模拟。
 ```mermaid
 flowchart TD
     U["用户 User<br/>自然语言金融需求"] --> W["Next.js Web App<br/>React + Tailwind + Recharts"]
-    W --> A["Pi Agent<br/>@mariozechner/pi-agent-core + pi-ai<br/>意图理解 · 规划 · 工具调用"]
+    W --> A["Pi Agent<br/>@earendil-works/pi-agent-core + pi-ai<br/>意图理解 · 规划 · 工具调用"]
     A --> P["Agent Planner (planner/)<br/>DAG 规划与执行"]
     P --> T["Custom Banking Tools (agent/tools)<br/>已注册 · TypeBox 参数校验"]
     T --> G["Security Gateway (security/security-gateway.ts)<br/>beforeToolCall ← 安全咽喉"]
@@ -116,19 +116,20 @@ Constraints），也是**路由表**（把领域映射到子目录）。顶层�
 ## 5. 深入 · Pi Agent（运行时 + 规划器 + 工具调用器）
 
 Pi Agent 严格地被当作 **Agent Runtime + Planner + Tool Caller** 使用，它是本仓库中**唯一**
-与 `@mariozechner/pi-agent-core` / `@mariozechner/pi-ai` 对话的节点（`agent/`）。
+与 `@earendil-works/pi-agent-core` / `@earendil-works/pi-ai` 对话的节点（`agent/`）。
 
 - 用**仅注册的银行工具**构造 Agent——**没有** bash / shell / write / edit / file / SQL 工具被注册，
   因此一段要求「给我一个 shell/SQL 工具」的注入攻击**根本没有工具可调**。
-- 关键 SDK 事实（对照 pi-agent-core 0.73.1 验证）：
-  - `new Agent({ initialState, beforeToolCall, afterToolCall, convertToLlm, transformContext, sessionId, ... })`
+- Pi 1.1 使用 `@earendil-works/pi-agent-core` / `@earendil-works/pi-ai`；`resolveProvider()` 返回模型及绑定 provider 集合的 `streamFn`，无全局注册或临时兼容层。
+- 关键 SDK 事实（对照 pi-agent-core 1.1.0 验证）：
+  - `new Agent({ initialState, streamFn, beforeToolCall, afterToolCall, convertToLlm, transformContext, sessionId, ... })`
   - `AgentTool<TParams>` = `{ name, description, parameters (TypeBox), label, execute(...) }`；
     `execute` 成功返回 `AgentToolResult<T>`，失败时**抛出异常**。
   - `agent.prompt(input)` / `agent.continue()` 在 run 结束时返回；`agent.subscribe(listener)` 流式推送 `AgentEvent`。
   - **`beforeToolCall` 是安全咽喉。** 返回 `{ block: true, reason }` 会阻止执行，并向模型发出一个
     错误工具结果。🟢/🟡/🔴 正是**在代码里**这样被强制的：模型**字面上无法**执行一个被门控的工具。
   - `AgentState`（`systemPrompt` / `model` / `tools` / `messages`）可 JSON 序列化 → 按会话持久化。
-  - `registerFauxProvider()`（来自 pi-ai）提供脚本化的内存模型，用于**离线/模拟 LLM 模式**与全部智能体测试：
+  - `fauxProvider()`（来自 pi-ai）提供脚本化的内存模型，用于**离线/模拟 LLM 模式**与全部智能体测试：
     同一套 Agent / 工具 / 安全流水线，只有模型被脚本化。
 
 **不变式**：模型提出「下一步做什么」，但每个工具调用都要穿过 `beforeToolCall →
@@ -137,7 +138,7 @@ securityGateway.handleToolCall`；被门控的工具会被阻断、其参数被�
 
 真实集成类型（`agent/`）包括：`BankingAgentRuntime`、`SessionSnapshot`、`ToolRegistry`、
 `ToolExecutionResult`、`runTurn` / `resumeTurn`、`confirmAction` / `verifyAction` / `cancelAction`、
-`resolveModel`（live/mock 选择）等。
+`resolveProvider`（live/mock 模型及流函数选择）、`resolveModel`（模型检查）等。
 
 ---
 

@@ -2,6 +2,9 @@
   "name": "ai-banking-agent",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "description": "AI Banking Agent competition demo — Pi Agent + custom Banking Tools + Security Gateway",
   "scripts": {
     "dev": "next dev",
@@ -18,8 +21,8 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
-    "@mariozechner/pi-agent-core": "^0.73.1",
-    "@mariozechner/pi-ai": "^0.73.1",
+    "@earendil-works/pi-agent-core": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
     "@prisma/client": "^6.2.1",
     "next": "^15.1.6",
     "react": "^19.0.0",

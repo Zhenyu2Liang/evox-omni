@@ -7,7 +7,7 @@ user message → Pi Agent (scripted model) → banking tool → Security Gateway
 risk tier (GREEN auto / YELLOW confirm / RED MFA) → Banking SDK → audit — and asserts the observable
 outcome (agent text, tool events, cards, `PendingAction`/audit rows, DB side effects).
 
-Only the **model** is mocked (`registerFauxProvider()`, `LLM_MODE=mock`); the tools, security
+Only the **model** is mocked (`fauxProvider()`, `LLM_MODE=mock`); the tools, security
 chokepoint and DB are the real ones — so these prove the real security behaviour, not a mock of it.
 
 Current status: **all 12 specs are implemented with real assertions and passing** (no `it.todo`

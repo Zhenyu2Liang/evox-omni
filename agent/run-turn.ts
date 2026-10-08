@@ -34,11 +34,11 @@ import { getConfig } from '@/lib/config';
 import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
 import { newId } from '@/lib/ids';
-import { safeParse } from '@/lib/json';
+import { safeParse, toJson } from '@/lib/json';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import { security } from '@/security';
-import type { AgentEvent, AgentMessage } from '@mariozechner/pi-agent-core';
-import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
+import type { AssistantMessage, JsonValue, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 import { createBankingAgent } from './banking-agent';
 import { confirmationCard, errorCard, mfaCard, toCards } from './card-emitter';
 import { withRealToolResult } from './message-normalize';
@@ -51,6 +51,8 @@ export interface ResumeTurnInput {
   sessionId: string;
   toolResult: ToolExecutionResult;
   toolCallId?: string;
+  /** Server-owned action name; never attribute its result to another tool. */
+  toolName?: ToolName;
 }
 
 /** MFA prompt hint surfaced to the UI (never contains the code). */
@@ -85,7 +87,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isAssistantMessage(message: AgentMessage): message is AssistantMessage {
+function isAssistantMessage(message: unknown): message is AssistantMessage {
   return isRecord(message) && message.role === 'assistant';
 }
 
@@ -494,13 +496,13 @@ export async function runTurn(
 /* ------------------------------------------------------------------------------ resumeTurn */
 
 /** The last tool call the model proposed (scanned backwards through the agent transcript). */
-function findLastToolCall(messages: readonly AgentMessage[]): ToolCall | null {
+function findLastToolCall(messages: readonly AgentMessage[], toolName?: ToolName): ToolCall | null {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (!isAssistantMessage(message)) continue;
     for (let j = message.content.length - 1; j >= 0; j -= 1) {
       const part = message.content[j];
-      if (part.type === 'toolCall') return part;
+      if (part.type === 'toolCall' && (toolName === undefined || part.name === toolName)) return part;
     }
   }
   return null;
@@ -519,17 +521,23 @@ function findToolCallById(messages: readonly AgentMessage[], id: string): ToolCa
 }
 
 /**
- * Resolve WHICH tool call the REAL result belongs to: the caller's explicit id, else the last tool
- * call the model proposed. NOTHING is fabricated — when neither exists (a degenerate transcript that
- * never occurs on the live gated path, where the blocked call is always persisted) the result is
- * still placed so the continuation can run.
+ * Resolve WHICH tool call the REAL result belongs to: explicit id, else the latest call of the
+ * server-owned action's tool. A crash can leave a parked action without its persisted call;
+ * report narration failure in that case rather than overwriting another tool's factual result.
+ * The legacy model-double path without an action name retains its model-only fallback.
  */
 function resolveToolResultTarget(
   messages: readonly AgentMessage[],
   explicitId?: string,
+  expectedName?: ToolName,
 ): { toolCallId: string; toolName: string } {
   const matched = explicitId !== undefined ? findToolCallById(messages, explicitId) : null;
-  const call = matched ?? findLastToolCall(messages);
+  const call = matched ?? findLastToolCall(messages, expectedName);
+  if (expectedName !== undefined && (
+    call === null || call.name !== expectedName || (explicitId !== undefined && matched === null)
+  )) {
+    throw new AppError('CONFLICT', `无法定位 ${expectedName} 的原始工具调用，交易结果已保留，未修改其他工具结果。`);
+  }
   return { toolCallId: explicitId ?? call?.id ?? '', toolName: call?.name ?? 'unknown' };
 }
 
@@ -554,7 +562,7 @@ function buildToolResultMessage(
     toolCallId,
     toolName,
     content: [{ type: 'text', text }],
-    details: input.toolResult.data,
+    details: input.toolResult.data === undefined ? undefined : JSON.parse(toJson(input.toolResult.data)) as JsonValue,
     isError: input.toolResult.ok !== true,
     timestamp,
   };
@@ -595,6 +603,7 @@ export async function resumeTurn(
     const { toolCallId, toolName } = resolveToolResultTarget(
       runtime.agent.state.messages,
       input.toolCallId,
+      input.toolName,
     );
     const toolResultMessage = buildToolResultMessage(input, toolCallId, toolName, now());
     runtime.agent.state.messages = withRealToolResult(

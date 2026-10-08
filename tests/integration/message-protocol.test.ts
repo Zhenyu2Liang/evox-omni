@@ -33,12 +33,12 @@
  * (`getOrCreateSession`) keeps the process-local circuit breaker / confirmation registry isolated.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
-import type { AssistantMessage, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import type { AssistantMessage, ToolResultMessage } from '@earendil-works/pi-ai';
 import { confirmAction, getOrCreateSession, loadSession, runTurn, saveSession, verifyAction } from '@/agent';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import { MFA_CODE } from '@/lib/constants';
-import { disconnectTestPrisma, resetDatabase } from '@/tests/helpers/db';
+import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
 
 beforeEach(async () => {
@@ -183,6 +183,37 @@ async function persistedMessages(sessionId: string): Promise<readonly AgentMessa
 /* ------------------------------------------------------------------ tests */
 
 describe('message-protocol — the persisted pi transcript stays provider-valid', () => {
+  it('preserves contact-query history when a restart lost the parked transfer call', async () => {
+    const snapshot = await getOrCreateSession(DEMO_USER_ID);
+    const turn = await runTurn({ sessionId: snapshot.sessionId, message: '给张伟转200元' });
+    const decision = parkedDecision(turn.events);
+    if (decision === null) throw new Error('expected a parked transfer');
+    const persisted = await loadSession(snapshot.sessionId);
+    if (persisted === null) throw new Error('missing session');
+    const queryIndex = persisted.agentState.messages.findIndex((message) =>
+      isToolResult(message) && message.toolName === 'search_contact');
+    expect(queryIndex).toBeGreaterThan(0);
+    // Simulate a crash after the DB action was parked but before the full turn snapshot saved.
+    const earlierHistory = persisted.agentState.messages.slice(0, queryIndex + 1);
+    persisted.agentState.messages = earlierHistory;
+    await saveSession(persisted);
+    const debitsBefore = await getTestPrisma().transaction.count({ where: {
+      userId: DEMO_USER_ID, direction: 'DEBIT', amount: -200,
+    } });
+
+    const outcome = await confirmAction(decision.actionId);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.status).toBe('executed');
+    expect(outcome.events).toContainEqual({ type: 'error', message: expect.stringContaining('无法定位 transfer_money') });
+    expect(outcome.message).toContain('结果播报失败');
+    expect(await persistedMessages(snapshot.sessionId)).toEqual(earlierHistory);
+    expect(await getTestPrisma().transaction.count({ where: {
+      userId: DEMO_USER_ID, direction: 'DEBIT', amount: -200,
+    } })).toBe(debitsBefore + 1);
+    expect((await getTestPrisma().pendingAction.findUnique({ where: { id: decision.actionId } }))?.status)
+      .toBe('executed');
+  });
+
   it('a YELLOW park → confirm persists a transcript where every toolResult answers a preceding toolCall', async () => {
     const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
 

@@ -1,20 +1,26 @@
-import type { Model } from '@mariozechner/pi-ai';
+import type { Model } from '@earendil-works/pi-ai';
 import { getConfig, type AppConfig } from '@/lib/config';
-import { createLiveModel } from './provider-live';
-import { createMockModel } from './provider-mock';
+import { createLiveRuntime } from './provider-live';
+import { createMockRuntime } from './provider-mock';
+import type { ModelRuntime } from './types';
 
 /**
  * Facade of the providers node.
  *
- * `resolveModel` reads `getConfig()` at CALL TIME (so tests can toggle `LLM_MODE`),
- * dispatching to `createMockModel` (mock) or `createLiveModel` (live). The rest of the
- * agent node receives the returned `Model` and NEVER constructs one itself.
+ * `resolveProvider` reads `getConfig()` at CALL TIME (so tests can toggle `LLM_MODE`).
+ * Pi 1.x requires both a Model and a streamFn bound to its provider collection.
+ * Each Agent receives this pair together, without a global provider registry.
  */
-export function resolveModel(cfg?: AppConfig): Model<any> {
+export function resolveProvider(cfg?: AppConfig): ModelRuntime {
   const resolved = cfg ?? getConfig();
   return resolved.llmMode === 'mock'
-    ? createMockModel(resolved)
-    : createLiveModel(resolved);
+    ? createMockRuntime(resolved)
+    : createLiveRuntime(resolved);
+}
+
+/** Model-only inspection facade; Agent construction must use resolveProvider(). */
+export function resolveModel(cfg?: AppConfig): Model<any> {
+  return resolveProvider(cfg).model;
 }
 
 /**

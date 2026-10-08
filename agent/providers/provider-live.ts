@@ -1,13 +1,14 @@
 import {
-  getEnvApiKey,
-  getModels,
-  getProviders,
+  createProvider,
+  envApiKeyAuth,
   type Api,
-  type KnownProvider,
   type Model,
-} from '@mariozechner/pi-ai';
+} from '@earendil-works/pi-ai';
+import { builtinModels, getBuiltinModels, getBuiltinProviders, type BuiltinProvider } from '@earendil-works/pi-ai/providers/all';
+import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy';
 import type { AppConfig } from '@/lib/config';
 import { AppError } from '@/lib/errors';
+import type { ModelRuntime } from './types';
 
 /**
  * Chat-completions is the widest-compatible api dialect for an OpenAI-compatible endpoint.
@@ -45,9 +46,10 @@ export interface LiveModelRegistry {
 }
 
 const DEFAULT_REGISTRY: LiveModelRegistry = {
-  getProviders: () => getProviders() as string[],
-  // `getModels` is runtime-safe: an unknown provider yields `[]` (never a throw).
-  getModels: (provider) => getModels(provider as KnownProvider) as Model<any>[],
+  getProviders: () => getBuiltinProviders(),
+  getModels: (provider) => getBuiltinProviders().includes(provider as BuiltinProvider)
+    ? getBuiltinModels(provider as BuiltinProvider) as Model<any>[]
+    : [],
 };
 
 export interface LiveModelDeps {
@@ -101,8 +103,8 @@ function customModel(provider: string, modelId: string, baseUrl: string): Model<
  *  1. **Registry hit** — `modelId` is registered for `provider` ⇒ that `Model` verbatim
  *     (correct api dialect, base URL, headers, limits and pricing), no warning.
  *  2. **Provider default** — `provider` IS registered (`getProviders()`), but `modelId` is not.
- *     A registered model id would otherwise be silently pointed at a hardcoded foreign host
- *     (the live `deepseek`/`deepseek-flash` 401 defect), so resolve THAT provider's own default
+ *     Never silently point an unknown model id at a hardcoded foreign host;
+ *     resolve THAT provider's own default
  *     (`getModels(provider)[0]`) and warn loudly naming requested vs used id.
  *  3. **Unknown provider** (custom OpenAI-compatible endpoint) — a literal `Model` is built ONLY
  *     for an EXPLICIT base URL (`<PROVIDER>_BASE_URL` → `LLM_BASE_URL`) or when the provider
@@ -178,14 +180,26 @@ export function resolveLiveModel(
  * substitution emits a LOUD `console.warn`.
  *
  * The API key is NOT attached to the returned `Model` (the type has no key field): the Pi AI
- * stream layer resolves it from the environment at request time. We only check for its PRESENCE
- * (via `getEnvApiKey`, whose truthiness is the only thing read) so the live demo fails fast and
- * clearly instead of mid-stream — for KNOWN providers only, since the key variable of an unknown
- * provider cannot be known.
+ * Models collection resolves provider-scoped auth at request time. Common API-key providers
+ * also get a synchronous presence check so the live demo fails clearly before streaming.
+ * Custom endpoints use `<PROVIDER>_API_KEY` through their explicitly registered provider.
  */
 export function createLiveModel(cfg: AppConfig): Model<any> {
-  const isKnownProvider = (getProviders() as string[]).includes(cfg.llmProvider);
-  if (isKnownProvider && !getEnvApiKey(cfg.llmProvider)) {
+  // Common API-key providers can fail fast synchronously. Request-time auth is
+  // resolved by Models; no key is attached to a persisted Model or AgentState.
+  const keyVariables: Record<string, string[]> = {
+    deepseek: ['DEEPSEEK_API_KEY'],
+    openai: ['OPENAI_API_KEY'],
+    anthropic: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'],
+    google: ['GEMINI_API_KEY', 'GOOGLE_API_KEY'],
+    groq: ['GROQ_API_KEY'],
+    openrouter: ['OPENROUTER_API_KEY'],
+    xai: ['XAI_API_KEY'],
+    mistral: ['MISTRAL_API_KEY'],
+    cerebras: ['CEREBRAS_API_KEY'],
+  };
+  const variables = keyVariables[cfg.llmProvider];
+  if (variables && !variables.some((name) => process.env[name]?.trim())) {
     throw new AppError(
       'VALIDATION',
       `No API key found in the environment for provider "${cfg.llmProvider}". ` +
@@ -197,4 +211,21 @@ export function createLiveModel(cfg: AppConfig): Model<any> {
   const { model, warning } = resolveLiveModel(cfg.llmProvider, cfg.llmModel);
   if (warning) console.warn(warning);
   return model;
+}
+
+/** Pi 1.x routes requests through an explicit, provider-scoped Models collection. */
+export function createLiveRuntime(cfg: AppConfig): ModelRuntime {
+  const model = createLiveModel(cfg);
+  const models = builtinModels();
+  if (!models.getProvider(model.provider)) {
+    const keyVariable = `${model.provider.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`;
+    models.setProvider(createProvider({
+      id: model.provider,
+      baseUrl: model.baseUrl,
+      models: [model],
+      auth: { apiKey: envApiKeyAuth(`${model.provider} API key`, [keyVariable]) },
+      api: openAICompletionsApi(),
+    }));
+  }
+  return { model, streamFn: models.streamSimple.bind(models) };
 }

@@ -14,7 +14,7 @@
  * nothing executes (no new holding, balance untouched).
  */
 import { describe, it, expect } from 'vitest';
-import type { Agent } from '@mariozechner/pi-agent-core';
+import type { Agent } from '@earendil-works/pi-agent-core';
 import { buildFauxAgent, tool, final } from '../helpers/faux-agent';
 import { runTurn, verifyAction, newSessionId } from '../helpers/scenario';
 import { useFreshDatabase, getTestPrisma } from '../helpers/db';

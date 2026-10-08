@@ -6,7 +6,7 @@
  * Fixtures: demo user 李明; assert the outcome named in each it().
  * Helpers: ../helpers (fauxAgent/scenario), ../helpers/db, ../helpers/fixtures.
  *
- * Only the MODEL is scripted (`registerFauxProvider`, `LLM_MODE=mock`); the tools, the
+ * Only the MODEL is scripted (`fauxProvider`, `LLM_MODE=mock`); the tools, the
  * security chokepoint (`beforeToolCall`) and the SQLite DB are the real ones. The point of
  * this spec: the model CANNOT move money past MFA — `subscribe_investment` is RED, the gateway
  * BLOCKS it, and nothing is executed until a HUMAN submits the code.

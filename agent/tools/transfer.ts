@@ -14,8 +14,8 @@
  * NOTE: the model's tool call is BLOCKED by `beforeToolCall` until a human confirms; the
  * confirmed AND validated original args are what reach `runTransferMoney` — never model text.
  */
-import type { AgentTool } from '@mariozechner/pi-agent-core';
-import { Type, type Static } from '@mariozechner/pi-ai';
+import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { Type, type Static } from '@earendil-works/pi-ai';
 import { attachExecutionFence, banking } from '@/banking-sdk';
 import type { TransferResult } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';

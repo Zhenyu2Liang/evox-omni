@@ -18,15 +18,15 @@
  *    and dropping the trailing narration — never appending a second result for the same `toolCallId`
  *    (which would land after the narration message and violate the adjacency rule).
  */
-import type { AgentMessage } from '@mariozechner/pi-agent-core';
-import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import type { AssistantMessage, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** An assistant message (carries text and/or `toolCall` parts). */
-export function isAssistantMessage(message: AgentMessage): message is AssistantMessage {
+export function isAssistantMessage(message: unknown): message is AssistantMessage {
   return isRecord(message) && message.role === 'assistant';
 }
 
@@ -46,8 +46,8 @@ function toolCallsOf(message: AgentMessage): ToolCall[] {
 }
 
 /** Does this assistant message declare a `toolCall` with `id`? */
-function hasToolCall(message: AgentMessage, id: string): boolean {
-  return toolCallsOf(message).some((call) => call.id === id);
+function hasToolCall(message: AgentMessage, id: string, name: string): boolean {
+  return toolCallsOf(message).some((call) => call.id === id && call.name === name);
 }
 
 /**
@@ -96,7 +96,15 @@ export function withRealToolResult(
   result: ToolResultMessage,
 ): AgentMessage[] {
   const base = normalizeToolResultMessages(messages);
-  const callIndex = base.findIndex((message) => hasToolCall(message, result.toolCallId));
+  // Providers (and the mock) may reuse ids across turns. Target the most recent
+  // matching call, never an earlier query/result with the same id.
+  let callIndex = -1;
+  for (let i = base.length - 1; i >= 0; i -= 1) {
+    if (hasToolCall(base[i], result.toolCallId, result.toolName)) {
+      callIndex = i;
+      break;
+    }
+  }
   if (callIndex < 0) return [...base, result];
 
   // The contiguous run of tool results answering that assistant message.

@@ -11,7 +11,7 @@
  * agent's `beforeToolCall` → `security.gateway.handleToolCall`; a gated tool is blocked and its
  * args persisted as a `PendingAction` until a human confirms (see parent `../CONTEXT.md`).
  */
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { AppError } from '@/lib/errors';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
 import { withBankingExecution, type BankingExecutionContext } from '@/banking-sdk';

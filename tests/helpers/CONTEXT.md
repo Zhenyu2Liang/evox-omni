@@ -96,7 +96,7 @@ to fsync and the suite balloons toward the 10-minute tool timeout:
 ## Notes for Agents
 
 - Every DB-backed suite should start with `useFreshDatabase()` so each test runs against a known world.
-- `registerFauxProvider()` (from `@mariozechner/pi-ai`) is how the model is scripted; see the root
+- `fauxProvider()` (from `@earendil-works/pi-ai`) supplies a per-test handle; register `handle.provider` in `createModels()` and pass its bound `streamSimple` as Agent `streamFn`. No global registration or unregister step. See the root
   `CONTEXT.md` "Pi Agent Integration" for the Agent/tool/`beforeToolCall` SDK facts.
 - The circuit breaker is in-process keyed by `sessionId` — always use a unique id per test.
 - Need a fast/reliable suite? Keep the "Fast test-DB path" invariant intact — do NOT remove the

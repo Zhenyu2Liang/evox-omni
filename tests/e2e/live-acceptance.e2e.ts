@@ -8,12 +8,9 @@
  * ------------------------------------------------------------------------------------------------
  * MODEL ID — PROVIDED CONFIG BY DEFAULT, OPT-IN FORCE OVERRIDE
  * ------------------------------------------------------------------------------------------------
- * The provided `.env.local` sets `LLM_MODEL=deepseek-flash`, which is NOT a registered pi-ai model id
- * (pi-ai's `deepseek` registry exposes ONLY `deepseek-v4-flash` / `deepseek-v4-pro`). By DEFAULT this
- * harness does NOT touch `LLM_MODEL`: the spawned `next dev` loads the PROVIDED `.env.local` value, so
- * `agent/providers/provider-live.ts#resolveLiveModel` is exercised FOR REAL
- * (an unregistered id for a KNOWN provider resolves to that provider's own registered default,
- * `deepseek-v4-flash` at `https://api.deepseek.com`, with a loud `console.warn`).
+ * Pi 1.1 registers `deepseek-flash` directly at https://api.deepseek.com.
+ * By default the harness uses the provided .env.local model id unchanged.
+ * This exercises the native Models collection and the real DeepSeek adapter.
  *
  * Set `LIVE_FORCE_MODEL=<id>` (non-empty) to FORCE `process.env.LLM_MODEL=<id>` for the spawned server
  * (logged as a forced override); every result is then labelled "LIVE with forced model-id override".
@@ -141,9 +138,8 @@ function loadDotEnvLocal(): void {
   process.env['LLM_PROVIDER'] = 'deepseek';
   // MODEL ID — PROVIDED CONFIG BY DEFAULT, OPT-IN FORCE OVERRIDE.
   // By default we do NOT set `LLM_MODEL`, so the spawned `next dev` loads the PROVIDED `.env.local`
-  // value (`LLM_MODEL=deepseek-flash`) and `agent/providers/provider-live.ts#resolveLiveModel` is
-  // exercised FOR REAL (an unregistered id for a KNOWN provider resolves to that provider's own
-  // registered default, not a silent OpenAI base URL). Set `LIVE_FORCE_MODEL=<id>` to force an id.
+  // value (LLM_MODEL=deepseek-flash), now registered directly by Pi 1.1.
+  // Set LIVE_FORCE_MODEL=<id> to force a different model id.
   const forced = process.env['LIVE_FORCE_MODEL']?.trim();
   if (forced) {
     process.env['LLM_MODEL'] = forced;
@@ -1160,7 +1156,7 @@ async function main(): Promise<void> {
   console.log(
     forcedModel
       ? `· LIVE with FORCED model-id override（LIVE_FORCE_MODEL='${forcedModel}'）`
-      : "· LIVE with PROVIDED model id（不覆盖 LLM_MODEL：使用 .env.local 的 'deepseek-flash'，由 provider-live.ts#resolveLiveModel 解析为已注册默认值）",
+      : "· LIVE with PROVIDED model id（不覆盖 LLM_MODEL：Pi 1.1 直接识别 .env.local 的 'deepseek-flash'）",
   );
 
   const executablePath = resolveBrowserExecutable();

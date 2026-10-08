@@ -4,7 +4,7 @@ const nextConfig = {
   // providers). Marking it external keeps it out of the webpack bundle, avoiding
   // spurious "Cannot find module 'node:fs'/'node:os'/'node:path'" errors caused by
   // its dynamic runtime requires (e.g. dist/providers/openai-codex-responses.js).
-  serverExternalPackages: ['@prisma/client', '@mariozechner/pi-ai', '@mariozechner/pi-agent-core'],
+  serverExternalPackages: ['@prisma/client', '@earendil-works/pi-ai', '@earendil-works/pi-agent-core'],
 };
 
 export default nextConfig;

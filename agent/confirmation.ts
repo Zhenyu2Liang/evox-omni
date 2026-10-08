@@ -843,7 +843,13 @@ async function executeAuthorizedAction(
   const planEvents = await resumeOwningPlan(action, result, userId, opts);
 
   const { events } = await resumeTurn(
-    { sessionId: action.sessionId, toolResult: result },
+    {
+      sessionId: action.sessionId,
+      toolResult: result,
+      // DAG nodes execute inside the model's outer submit_plan call. Standalone
+      // actions must match their own tool; never reuse an unrelated query call.
+      toolName: link?.taskId ? 'submit_plan' : action.toolName,
+    },
     opts?.deps,
   );
   emitAll(events, opts);

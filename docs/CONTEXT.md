@@ -70,7 +70,7 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   real-browser acceptance harness `tests/e2e`, run via tsx, not vitest)
   and the regression categories they cover (concurrency & limits, cumulative-risk dedup, identity &
   session, MFA escalation, DAG pause/cancel/resume/refresh, mock action routing, injection, shared
-  kernel); the offline `LLM_MODE=mock` + `registerFauxProvider` determinism story; run commands.
+  kernel); the offline `LLM_MODE=mock` + `fauxProvider` determinism story; run commands.
   §1/§4 list the frozen regression probes (`tests/integration/node-result-recovery.test.ts`,
   `tests/integration/node-recovery.test.ts`) plus the frozen acceptance spec
   `tests/integration/confirmation-continuation.test.ts` (4 tests), the invariant-grouped boundary/integrity/fencing

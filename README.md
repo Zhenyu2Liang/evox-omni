@@ -55,7 +55,7 @@
 User（自然语言）
  ↓  Next.js Web App（React + Tailwind + Recharts）
  ↓
-Pi Agent Runtime  (@mariozechner/pi-agent-core + @mariozechner/pi-ai)
+Pi Agent Runtime  (@earendil-works/pi-agent-core + @earendil-works/pi-ai)
  │   意图理解 · 上下文 · 规划 · 工具调用 · 自然语言回复
  ↓
 Agent Planner (planner/ — DAG)
@@ -92,11 +92,11 @@ Pi Agent → Tool Request → Security Gateway → permission tier (GREEN/YELLOW
 | 层 | 选型 |
 |---|---|
 | 前端 | **Next.js 15**（App Router）+ **React 19** + **TypeScript** + **Tailwind CSS 3** + **Recharts 2** |
-| Agent 运行时 | **`@mariozechner/pi-agent-core` `^0.73.1`** + **`@mariozechner/pi-ai` `^0.73.1`**（工具 schema 用 TypeBox） |
+| Agent 运行时 | **`@earendil-works/pi-agent-core` `1.1.0`** + **`@earendil-works/pi-ai` `1.1.0`**（工具 schema 用 TypeBox） |
 | 持久化 | **Prisma 6** + **SQLite** |
 | 校验 | **zod**（API 边界）+ TypeBox（工具参数） |
 | 测试 | **Vitest 2**（离线 deterministic：mock LLM + 测试用 SQLite）· **`playwright-core` `^1.63`**（真实浏览器验收：本机 headless Chrome/Edge，不下载浏览器） |
-| 运行时 | **Node.js ≥ 20**（本项目在 Node 25 上构建/运行） |
+| 运行时 | **Node.js ≥ 22.19.0**（本项目在 Node 25 上构建/运行） |
 
 ---
 
@@ -111,10 +111,11 @@ Pi Agent **只**被用作 **Agent Runtime + Planner + Tool Caller**：
 - **模型可以决定"做什么"，但不能决定"是否被允许"** — 每个模型提出的工具调用都经过
   `beforeToolCall → security.gateway.securityGateway.handleToolCall`；被闸门拦下的调用会被阻止，
   参数被持久化为 `PendingAction`，只有 **人工** 确认后才真正执行。模型文本永远无法触发一次执行。
+- **Pi 1.1 原生接入** — `resolveProvider()` 同时提供模型和绑定 `Models` 集合的 `streamFn`；mock 使用独立 `fauxProvider()`，live 使用服务商原生适配器。升级说明见 [docs/pi-upgrade.md](docs/pi-upgrade.md)。
 - **支持两种 LLM 模式** —
-  - `LLM_MODE=mock`：内置的 **脚本化确定性模型**（`registerFauxProvider()`），**无需网络、无需 API Key**，
+  - `LLM_MODE=mock`：内置的 **脚本化确定性模型**（`fauxProvider()`），**无需网络、无需 API Key**，
     用于所有 Agent 测试与离线演示；
-  - `LLM_MODE=live`：通过 `@mariozechner/pi-ai` 调用真实服务商（需要 API Key）。
+  - `LLM_MODE=live`：通过 `@earendil-works/pi-ai` 调用真实服务商（需要 API Key）。
 
 ---
 
@@ -249,7 +250,7 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 
 ## 10. 启动方式 / Getting started
 
-**前置要求：Node.js ≥ 20（本项目在 Node 25 上构建/运行）。**
+**前置要求：Node.js ≥ 22.19.0（本项目在 Node 25 上构建/运行）。**
 
 ```bash
 # 1) 安装依赖

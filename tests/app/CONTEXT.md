@@ -165,8 +165,8 @@ complementing the in-process `tests/scenarios/*` suites.
 
 ## Faux-provider gotcha (important for SSE assertions)
 
-`registerFauxProvider()` splits assistant text into **random-sized** `text_delta` chunks
-(`splitStringByTokenSize` uses `Math.random()` in `@mariozechner/pi-ai/dist/providers/faux.js`), so the
+`fauxProvider()` splits assistant text into **random-sized** `text_delta` chunks
+(`splitStringByTokenSize` uses `Math.random()` in `@earendil-works/pi-ai/dist/providers/faux.js`), so the
 **number** of `text_delta` frames varies run-to-run. When mirroring SSE frames against JSON-path events,
 do NOT compare raw `text_delta` counts: project the structural events (excluding `text_delta`) and
 compare the concatenated streamed text separately (`project()` + `streamedText()` in `chat-http.test.ts`).

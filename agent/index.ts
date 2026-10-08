@@ -65,7 +65,8 @@ export { newSession, loadSession, saveSession, getOrCreateSession } from './sess
 export type { SessionSnapshot } from './session';
 export { createToolRegistry } from './tools';
 export type { ToolRegistry, ToolExecutionResult } from './tools';
-export { resolveModel, providerId } from './providers';
+export { resolveProvider, resolveModel, providerId } from './providers';
+export type { ModelRuntime } from './providers/types';
 
 // --- standalone-wedge recovery entry point (`./confirmation-recovery`) ---------------------------
 

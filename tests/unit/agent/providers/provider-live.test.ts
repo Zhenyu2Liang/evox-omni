@@ -1,31 +1,18 @@
 /**
- * provider-live — NODE-LOCAL spec for the LIVE model resolution.
- *
- * Pins the fix for the live `deepseek`/`deepseek-flash` 401: `deepseek-flash` is NOT a registered
- * pi-ai model id, and the old fallback silently returned a literal `Model` pointed at
- * `https://api.openai.com/v1` — i.e. it sent the DeepSeek API key to OpenAI's host. The resolver
- * must instead resolve a model for the SAME configured provider (its registered default) and warn
- * loudly, and it must NEVER return a model whose `baseUrl` belongs to a different provider.
- *
- * PURE: the pure `resolveLiveModel` helper is driven against the REAL installed pi-ai registry
- * (no key, no network) and against injected fake registries/envs for the branch coverage.
- *
- * How to run (the repo-root `vitest.config.ts` only globs `tests/**`, a read-only sibling of this
- * node, so a node-local spec is NOT auto-discovered by `npm run test`; the CLI filter alone also
- * cannot widen `include`):
- *   npx vitest run --config agent/providers/vitest.provider-live.config.ts
- * (`agent/providers/vitest.provider-live.config.ts` aliases `@` to the repo root and includes
- * exactly this file.)
+ * Pure live model resolution tests, auto-discovered by the root Vitest config.
+ * Pi 1.1 registers deepseek-flash directly; unknown model ids retain the
+ * provider-local fallback with a warning. Custom endpoints must be explicit.
+ * Run: npm run test -- tests/unit/agent/providers/provider-live.test.ts
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Model } from '@mariozechner/pi-ai';
+import type { Model } from '@earendil-works/pi-ai';
 
 import {
   createLiveModel,
   providerBaseUrlEnvVar,
   resolveLiveModel,
   type LiveModelRegistry,
-} from './provider-live';
+} from '@/agent/providers/provider-live';
 import { AppError } from '@/lib/errors';
 
 /** A fake registry so every branch is exercised deterministically, without the shipped data. */
@@ -59,20 +46,16 @@ afterEach(() => {
 });
 
 describe('resolveLiveModel — the real installed pi-ai registry', () => {
-  it('maps deepseek/deepseek-flash to the DeepSeek default model, never an OpenAI host', () => {
+  it('honours the registered deepseek-flash id without substituting an older model', () => {
     const { model: resolved, warning } = resolveLiveModel('deepseek', 'deepseek-flash', { env: {} });
 
-    expect(resolved.id).toBe('deepseek-v4-flash');
+    expect(resolved.id).toBe('deepseek-flash');
     expect(resolved.provider).toBe('deepseek');
     expect(resolved.api).toBe('openai-completions');
     expect(resolved.baseUrl).toBe('https://api.deepseek.com');
     expect(resolved.baseUrl).not.toContain('openai.com');
 
-    // LOUD + explicit: names the REQUESTED and the ACTUALLY-USED model id.
-    expect(warning).toBeDefined();
-    expect(warning).toContain('deepseek-flash');
-    expect(warning).toContain('deepseek-v4-flash');
-    expect(warning).toContain('deepseek');
+    expect(warning).toBeUndefined();
   });
 
   it('honours a REGISTERED model id verbatim (no warning)', () => {
@@ -168,7 +151,7 @@ describe('resolveLiveModel — unknown provider (custom endpoint)', () => {
 });
 
 describe('createLiveModel — env-key presence check + warning', () => {
-  it('builds the DeepSeek default model for LLM_PROVIDER=deepseek / LLM_MODEL=deepseek-flash', () => {
+  it('builds exactly deepseek-flash and never surfaces the API key', () => {
     vi.stubEnv('DEEPSEEK_API_KEY', 'not-a-real-key');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -179,17 +162,12 @@ describe('createLiveModel — env-key presence check + warning', () => {
       demoUserId: 'user_liming',
     });
 
-    expect(resolved.id).toBe('deepseek-v4-flash');
+    expect(resolved.id).toBe('deepseek-flash');
     expect(resolved.api).toBe('openai-completions');
     expect(resolved.baseUrl).toBe('https://api.deepseek.com');
 
-    expect(warn).toHaveBeenCalledTimes(1);
-    const message = String(warn.mock.calls[0]?.[0]);
-    expect(message).toContain('deepseek-flash');
-    expect(message).toContain('deepseek-v4-flash');
-    expect(message).toContain('https://api.deepseek.com');
-    // The key VALUE is never surfaced.
-    expect(message).not.toContain('not-a-real-key');
+    expect(warn).not.toHaveBeenCalled();
+    expect(JSON.stringify(resolved)).not.toContain('not-a-real-key');
   });
 
   it('fails fast (VALIDATION) for a known provider with no key in the environment', () => {

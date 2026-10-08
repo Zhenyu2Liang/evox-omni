@@ -219,7 +219,7 @@ GREEN 路径可在 `beforeToolCall` 咽喉处被断言验证（见 `test-cases.m
 **性质：🧪 模拟（mock 供应商）；live 模式仅非确定性。**
 
 **限制**：在 `LLM_MODE=live` 下，模型的自然语言输出是**非确定性**的；因此演示与测试默认使用
-**mock 模式**（`registerFauxProvider()` 脚本化模型，`LLM_MODE=mock`）。
+**mock 模式**（`fauxProvider()` 脚本化模型，`LLM_MODE=mock`）。
 
 **为何可接受**：系统的**安全与正确性不依赖 LLM 文本**——层级、确认、MFA、资金移动全部由代码决定。
 mock 模式让整条流水线（Agent + 工具 + 安全）**离线、确定、可断言**，正是自动化测试与稳定演示所需。

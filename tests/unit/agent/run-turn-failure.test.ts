@@ -1,7 +1,4 @@
 /**
- * STAGING COPY — root must relocate to tests/unit/agent/run-turn-failure.test.ts
- * (tests/ is outside the ./agent write scope).
- *
  * run-turn-failure.test.ts — hardening of the confirmation CONTINUATION failure path.
  *
  * A gated (YELLOW/RED) action is executed and AUDITED *before* `agent.continue()` narrates it
@@ -23,10 +20,10 @@
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { confirmAction, getOrCreateSession, resumeTurn } from '@/agent';
+import { confirmAction, getOrCreateSession, loadSession, resumeTurn, saveSession } from '@/agent';
 import { security } from '@/security';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
-import type { ToolResultMessage } from '@mariozechner/pi-ai';
+import { fauxAssistantMessage, fauxToolCall, type ToolResultMessage } from '@earendil-works/pi-ai';
 import { CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 
@@ -135,6 +132,16 @@ async function parkTransfer(sessionId: string, amount: number): Promise<string> 
 
   expect(auth.evaluation.blocked).toBe(true);
   expect(auth.action).toBeDefined();
+  // Model double: persist the same original tool call that a real Agent parks.
+  // Continuation must not succeed by inventing a result for an empty transcript.
+  const snapshot = await loadSession(sessionId);
+  if (snapshot === null) throw new Error('missing test session');
+  snapshot.agentState.messages.push(
+    fauxAssistantMessage([fauxToolCall('transfer_money', { name: RECIPIENT.name, amount }, { id: auth.action!.id })], { stopReason: 'toolUse' }),
+    { role: 'toolResult', toolCallId: auth.action!.id, toolName: 'transfer_money',
+      content: [{ type: 'text', text: '等待确认' }], isError: true, timestamp: Date.now() },
+  );
+  await saveSession(snapshot);
   return auth.action!.id;
 }
 
