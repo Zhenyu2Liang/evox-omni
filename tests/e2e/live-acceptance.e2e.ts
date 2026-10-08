@@ -72,6 +72,7 @@ import {
   withPage,
   type DevServer,
   type LedgerView,
+  type PendingActionView,
   type Reporter,
 } from './helpers';
 
@@ -205,6 +206,86 @@ function readContactPhone(contactId: string): Promise<string> {
     const contact = await db.contact.findUnique({ where: { id: contactId }, select: { phone: true } });
     if (!contact) throw new Error(`缺少联系人 ${contactId}`);
     return contact.phone;
+  });
+}
+
+/** The seeded recipient phone straight from the DB (never throws — a failure is reported as text). */
+async function readSeedRecipientPhone(): Promise<string> {
+  try {
+    return await readContactPhone(RECIPIENT_CONTACT_ID);
+  } catch (e) {
+    return `读取失败：${errText(e)}`;
+  }
+}
+
+/**
+ * Read-only `GET /api/actions` cross-check (identity = the page's HttpOnly `banking_session` cookie).
+ * Returns `undefined` when the page has no session cookie yet; a transport error is rethrown so the
+ * cross-check can never silently pass on a malformed response.
+ */
+async function fetchParkedActions(page: Page, baseUrl: string): Promise<PendingActionView[] | undefined> {
+  const cookie = await readSessionCookie(page);
+  if (cookie === undefined) return undefined;
+  return fetchPendingActions(baseUrl, cookie);
+}
+
+/** One-line rendering of `GET /api/actions` evidence (never throws). */
+function describeActions(actions: PendingActionView[] | undefined): string {
+  if (actions === undefined) return '（无 cookie）';
+  if (actions.length === 0) return '[]';
+  return actions
+    .map((a) => `{id:${a.id},tool:${a.toolName},tier:${a.tier},status:${a.status},attention:${a.attention ?? '-'}}`)
+    .join(' ');
+}
+
+/**
+ * EVIDENCE DUMP: every persisted `transfer_money` / `search_contact` tool call across ALL
+ * `AgentSession` rows, with the tool-call ARGUMENT OBJECT printed VERBATIM (the exact arg shape the
+ * LIVE model produced, including which of `contactId` / `phone` / `name` it populated).
+ *
+ * The frozen client stream contract (`lib/contracts/agent.ts`) exposes no raw tool args, but
+ * `AgentSession.stateJson` persists `agentState.messages`, so the model's arguments are recoverable
+ * from the SAME DB the run used. Read-only; never throws (a row-level parse failure is reported).
+ */
+async function persistedRecipientCalls(): Promise<string> {
+  return withDb(async (db) => {
+    const sessions = await db.agentSession.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, stateJson: true } });
+    const lines: string[] = [];
+    for (const session of sessions) {
+      let messages: unknown[] = [];
+      try {
+        const parsed = JSON.parse(session.stateJson) as { agentState?: { messages?: unknown } };
+        const raw = parsed.agentState?.messages;
+        messages = Array.isArray(raw) ? raw : [];
+      } catch {
+        lines.push(`session=${session.id} stateJson 解析失败`);
+        continue;
+      }
+      messages.forEach((rawMessage, index) => {
+        if (typeof rawMessage !== 'object' || rawMessage === null) return;
+        const message = rawMessage as Record<string, unknown>;
+        const role = typeof message['role'] === 'string' ? message['role'] : '?';
+        if (role === 'assistant' && Array.isArray(message['content'])) {
+          for (const rawPart of message['content'] as unknown[]) {
+            if (typeof rawPart !== 'object' || rawPart === null) continue;
+            const part = rawPart as Record<string, unknown>;
+            if (part['type'] !== 'toolCall') continue;
+            const name = typeof part['name'] === 'string' ? part['name'] : '';
+            if (name !== 'transfer_money' && name !== 'search_contact') continue;
+            lines.push(`session=${session.id} msg#${index} assistant→ toolCall ${name} args=${JSON.stringify(part['arguments'])}`);
+          }
+        } else if (role === 'toolResult') {
+          const name = typeof message['toolName'] === 'string' ? message['toolName'] : '?';
+          if (name !== 'transfer_money' && name !== 'search_contact') return;
+          const content = Array.isArray(message['content']) ? (message['content'] as unknown[]) : [];
+          const text = content
+            .map((p) => (typeof p === 'object' && p !== null && typeof (p as Record<string, unknown>)['text'] === 'string' ? ((p as Record<string, unknown>)['text'] as string) : ''))
+            .join(' ');
+          lines.push(`session=${session.id} msg#${index} toolResult ${name} isError=${String(message['isError'])} text=${text.replace(/\s+/g, ' ').slice(0, 400)}`);
+        }
+      });
+    }
+    return lines.length > 0 ? lines.join('\n') : '（无持久化的 transfer_money/search_contact 调用）';
   });
 }
 
@@ -443,6 +524,15 @@ const MSG = {
   cardLimit: '我的信用卡额度是多少',
 } as const;
 
+/**
+ * LIVE-experiment OVERRIDES for the two transfer prompts (default: the canonical `MSG` prompts).
+ * Lets a diagnostic run pin a DIFFERENT identifier phrasing (`LIVE_S2_PROMPT` / `LIVE_S3_PROMPT`,
+ * e.g. `给联系人张伟转200元`) WITHOUT editing the scenarios. Assertions and the default prompt are
+ * unchanged; the values are read once at module load.
+ */
+const PROMPT_S2 = process.env['LIVE_S2_PROMPT']?.trim() || MSG.transferByName;
+const PROMPT_S3 = process.env['LIVE_S3_PROMPT']?.trim() || MSG.transferDecimal;
+
 const TRANSFER_AMOUNT = 200;
 const DECIMAL_AMOUNT = 200.37;
 const LARGE_AMOUNT = 5000;
@@ -486,17 +576,30 @@ async function scenarioTransferRecipientByName(ctx: Ctx): Promise<string> {
       attachCollectors(page);
       await gotoAgent(page, ctx.baseUrl);
       const before = await snapshot(ctx.baseUrl);
-      await submitChat(page, MSG.transferByName);
-      await awaitConfirmCard(page, ctx.baseUrl);
+      await submitChat(page, PROMPT_S2);
+      try {
+        await awaitConfirmCard(page, ctx.baseUrl);
+      } catch (error) {
+        await captureLive(page, 's2-no-card');
+        const phone = await readSeedRecipientPhone();
+        throw new Error(
+          `${errText(error)}；种子库 ${RECIPIENT_NAME} 手机号=${phone}；持久化工具调用：${await persistedRecipientCalls()}`,
+        );
+      }
       const fields = await readConfirmFields(page);
       const resolved = assertRecipient(fields, RECIPIENT_NAME);
+      // READ-ONLY cross-check: the parked YELLOW action must be visible on `GET /api/actions`.
+      const parked = await fetchParkedActions(page, ctx.baseUrl);
+      if (parked === undefined || !parked.some((a) => a.toolName === 'transfer_money')) {
+        throw new Error(`确认卡已渲染但 GET /api/actions 未返回 transfer_money 待处理操作：${describeActions(parked)}`);
+      }
       await captureLive(page, 's2-by-name');
       await clickCancel(page);
       const after = await snapshot(ctx.baseUrl);
       if (after.balance !== before.balance) throw new Error(`取消后余额变化：${before.balance} → ${after.balance}`);
       const added = diffLedger(before.ledger.transactions, after.ledger.transactions).added;
       if (added.length > 0) throw new Error(`取消后账本新增：${added.map((tx) => tx.id).join('、')}`);
-      return `「${MSG.transferByName}」→ 确认卡收款人=${resolved}（真实姓名 + 掩码手机号）；取消 → 余额 ${before.balance} 未变、账本无新增`;
+      return `「${PROMPT_S2}」→ 确认卡收款人=${resolved}（真实姓名 + 掩码手机号）；GET /api/actions → ${describeActions(parked)}；取消 → 余额 ${before.balance} 未变、账本无新增`;
     },
     { label: 's2-by-name' },
   );
@@ -550,8 +653,16 @@ async function scenarioDecimalTransfer(ctx: Ctx): Promise<string> {
       await gotoAgent(page, ctx.baseUrl);
       const before = await snapshot(ctx.baseUrl);
       const beforeDb = await readCheckingBalance();
-      await submitChat(page, MSG.transferDecimal);
-      await awaitConfirmCard(page, ctx.baseUrl);
+      await submitChat(page, PROMPT_S3);
+      try {
+        await awaitConfirmCard(page, ctx.baseUrl);
+      } catch (error) {
+        await captureLive(page, 's3-no-card');
+        const phone = await readSeedRecipientPhone();
+        throw new Error(
+          `${errText(error)}；种子库 ${RECIPIENT_NAME} 手机号=${phone}；持久化工具调用：${await persistedRecipientCalls()}`,
+        );
+      }
       const fields = await readConfirmFields(page);
       if (!JSON.stringify(fields).includes('200.37')) {
         throw new Error(`确认卡金额应为 200.37，实际字段：${JSON.stringify(fields)}`);
@@ -562,6 +673,11 @@ async function scenarioDecimalTransfer(ctx: Ctx): Promise<string> {
       if (mid.balance !== before.balance || midDb !== beforeDb) {
         throw new Error(`确认前余额已变化：API ${before.balance}→${mid.balance}，DB ${beforeDb}→${midDb}`);
       }
+      // READ-ONLY cross-check: the parked YELLOW action must be visible on `GET /api/actions` BEFORE confirm.
+      const parked = await fetchParkedActions(page, ctx.baseUrl);
+      if (parked === undefined || !parked.some((a) => a.toolName === 'transfer_money')) {
+        throw new Error(`确认卡已渲染但 GET /api/actions 未返回 transfer_money 待处理操作：${describeActions(parked)}`);
+      }
       await captureLive(page, 's3-decimal-preconfirm');
       await page.getByRole('button', { name: '确认', exact: true }).first().click();
       const settled = await waitForTransferSettled(ctx.baseUrl, before, DECIMAL_AMOUNT);
@@ -570,7 +686,7 @@ async function scenarioDecimalTransfer(ctx: Ctx): Promise<string> {
       if (settled.occurrences !== 1) {
         throw new Error(`SQLite 中 -200.37 的 DEBIT 行应为 1 条，实际 ${settled.occurrences} 条`);
       }
-      return `「${MSG.transferDecimal}」→ 卡片金额 200.37；确认前余额未变（API=${mid.balance}，DB=${midDb}）→ 确认 → API 余额 ${settled.balance}、SQLite Account.balance=${afterDb}，账本新增 -200.37 DEBIT 一条（${settled.txIds[0]}），扣款 -200.37 恰好一次`;
+      return `「${PROMPT_S3}」→ 卡片金额 200.37；GET /api/actions → ${describeActions(parked)}；确认前余额未变（API=${mid.balance}，DB=${midDb}）→ 确认 → API 余额 ${settled.balance}、SQLite Account.balance=${afterDb}，账本新增 -200.37 DEBIT 一条（${settled.txIds[0]}），扣款 -200.37 恰好一次`;
     },
     { label: 's3-decimal' },
   );
@@ -963,6 +1079,13 @@ async function main(): Promise<void> {
   for (const issue of netLog.issues.slice(0, 20)) {
     console.log(`· [4xx/5xx] ${issue.method} ${issue.status} ${issue.url} — ${issue.body.slice(0, 200).replace(/\s+/g, ' ')}`);
   }
+
+  // TASK-A EVIDENCE: the ACTUAL arg shape the LIVE model produced, recovered from the SAME DB the run
+  // used (`AgentSession.stateJson` → `agentState.messages`). Printed verbatim for every run.
+  console.log('· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：');
+  console.log(await persistedRecipientCalls());
+  console.log(`· 【证据】种子库收款人 ${RECIPIENT_NAME} 手机号=${await readSeedRecipientPhone()}`);
+
   console.log(`== 汇总：PASS ${reporter.passes} ｜ FAIL ${reporter.failures} ｜ SKIP ${reporter.skips} ==`);
   process.exitCode = reporter.failures > 0 ? 1 : 0;
 }
