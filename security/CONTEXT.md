@@ -206,7 +206,7 @@ action yet). There is NO demo-user fallback anywhere: an `actionId` alone is no 
 **Plan-cancel guards (fail-closed; the gateway READS the owning plan's status).** To close the
 plan-cancel → authorize race even when the plan's bulk revoke is lost or neutralized, the gateway
 reads `AgentTask.status` at two points: (1) CREATE/PARK — `gatewayCreatePendingAction` reads the
-owning `AgentTask` INSIDE the SAME `$transaction` that inserts the row and returns `null` when the
+owning `AgentTask` INSIDE the SAME `$transaction` that inserts the row and returns `{ kind:'plan_cancelled' }` when the
 plan is `'cancelled'` (⇒ `handleToolCall` returns a clean `deny` with a `blockReason` and NO live
 `action`); (2) AUTHORIZE — BOTH `authorizeTransfer` (YELLOW CAS tx) and `authorizeWithMfa`
 (strong-verification claim tx) re-read the plan via the action's persisted `row.taskId` INSIDE the
