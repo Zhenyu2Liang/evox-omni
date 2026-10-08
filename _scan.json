@@ -1,0 +1,5 @@
+cwd=D:\projects\banking-agent\.genesis\workers\worker_T1_A82
+nm_exists=false
+nmread_err=ENOENT: no such file or directory, scandir 'D:\projects\banking-agent\.genesis\workers\worker_T1_A82\node_modules'
+atmario_err=ENOENT: no such file or directory, scandir 'D:\projects\banking-agent\.genesis\workers\worker_T1_A82\node_modules\@mariozechner'
+resolve_err=No "exports" main defined in D:\projects\banking-agent\node_modules\@mariozechner\pi-ai\package.json
