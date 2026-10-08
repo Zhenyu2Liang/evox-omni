@@ -1,0 +1,12 @@
+﻿efee49f Merge commit '8dc42c04da03b65433b39a7c345e89e69a7c2484' into evogit-agent-T1-A87
+8dc42c0 test(e2e/live): opt-in model override + run both masked & raw by-phone legs
+3b02f62 Agent: auto-commit fallback
+dfd5e6a Remove stray diagnostic file _scan.json
+605f880 Merge commit 'cbc64ea86d2662fd3d7530317ca1226f237b704a'; commit '58a74c4132dcac6e069d603f18a6994b849d05bf' into evogit-agent-T1-A1
+58a74c4 Fix transfer-recipient resolution: tolerate value/slot the model supplies
+cbc64ea Merge commit 'c4ee04d1b19c6ec0fc97b30c5c4c3fe77199c0e6' into evogit-agent-T1-A82
+c4ee04d fix(agent/providers): resolve live models per provider, never cross hosts
+892d976 Agent: auto-commit fallback
+cc3c182 Merge commit '8b6b728369041d80c2db1c5a6ff05c830ea7dd6c'; commit 'eb84a1816ebb474988ca6b6bdeec4a34f2cdc39a' into evogit-agent-T1-A1
+8b6b728 Update CONTEXT.md for ./tests
+7116488 Update CONTEXT.md for ./tests/e2e

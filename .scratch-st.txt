@@ -1,0 +1,20 @@
+﻿ M .recon-scratch.txt
+ M tests/e2e/screenshots/live/01-s1-balance.png
+ M tests/e2e/screenshots/live/02-s2-by-name.png
+?? .live-run-1-clean.txt
+?? .live-run-1.txt
+?? .live-tail.txt
+?? .scratch-devcmd.txt
+?? .scratch-diff.txt
+?? .scratch-env.txt
+?? .scratch-envfiles.txt
+?? .scratch-envkeys.txt
+?? .scratch-envkeys2.txt
+?? .scratch-envlines.txt
+?? .scratch-git.txt
+?? .scratch-helperlines.txt
+?? .scratch-list.txt
+?? .scratch-log.txt
+?? .scratch-p2lines.txt
+?? .scratch-st.txt
+?? .scratch-status.txt

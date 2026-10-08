@@ -1,0 +1,18 @@
+﻿== AI Banking Agent 真实浏览器 + 真实 DeepSeek 在线验收 (tests/e2e/live) ==
+· LIVE with PROVIDED model id（不覆盖 LLM_MODEL：使用 .env.local 的 'deepseek-flash'，由 provider-live.ts#resolveLiveModel 解析为已注册默认值）
+· 隔离 LIVE 数据库：file:D:/projects/banking-agent/.genesis/workers/worker_T1_A87/prisma/live-acceptance.db（prisma/dev.db 与 prisma/test.db 不受影响）
+· 重置 LIVE 数据库 →（缺 Prisma Client 时先 prisma generate）→ db push 阶梯 → probe → tsx prisma/seed.ts
+node.exe : · 基础设施失败：EPERM, Permission denied: \\?\D:\projects\banking-agent\.genesis\workers\worker_T1_A87\prisma\live-
+acceptance.db '\\?\D:\projects\banking-agent\.genesis\workers\worker_T1_A87\prisma\live-acceptance.db'
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (· 基础设施失败：EPERM,...-acceptance.db':String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+FAIL infrastructure — EPERM, Permission denied: \\?\D:\projects\banking-agent\.genesis\workers\worker_T1_A87\prisma\live-acceptance.db '\\?\D:\projects\banking-agent\.genesis\workers\worker_T1_A87\prisma\live-acceptance.db'
+· 累计网络 4xx/5xx：0，console error：0，pageerror：0
+· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：
+（无持久化的 transfer_money/search_contact 调用）
+· 【证据】种子库收款人 张伟 手机号=139****0002
+== 汇总：PASS 0 ｜ FAIL 1 ｜ SKIP 0 ==

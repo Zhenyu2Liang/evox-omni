@@ -1,0 +1,119 @@
+﻿
+> tests\e2e\helpers.ts:44:/** Generous default for DOM waits (Next dev client hydration can lag on a cold compile). */
+  tests\e2e\helpers.ts:45:export const DEFAULT_TIMEOUT_MS = 45_000;
+  tests\e2e\helpers.ts:46:/** Navigation timeout — the first `/agent` request can trigger a 60s+ dev-server compile. */
+  tests\e2e\helpers.ts:47:export const NAV_TIMEOUT_MS = 180_000;
+  tests\e2e\helpers.ts:48:
+  tests\e2e\helpers.ts:49:/** The repository root (contains `package.json` + `next.config.mjs`), found by walking up fr
+om cwd. */
+  tests\e2e\helpers.ts:50:export const REPO_ROOT = resolveRepoRoot();
+> tests\e2e\helpers.ts:406:/** A booted `next dev` server on a free port. */
+  tests\e2e\helpers.ts:407:export interface DevServer {
+  tests\e2e\helpers.ts:408:  readonly port: number;
+  tests\e2e\helpers.ts:409:  readonly baseUrl: string;
+  tests\e2e\helpers.ts:410:  readonly pid: number;
+  tests\e2e\helpers.ts:411:  /** Bounded tail of the dev-server stdout/stderr (for diagnostics). */
+  tests\e2e\helpers.ts:412:  output(): string;
+> tests\e2e\helpers.ts:437: * The command that boots Next dev.
+  tests\e2e\helpers.ts:438: *
+  tests\e2e\helpers.ts:439: * PREFERRED — the project-local Next CLI launched with the SAME Node that runs this harness
+> tests\e2e\helpers.ts:440: * (`<process.execPath> node_modules/next/dist/bin/next dev -p <port>`): no `npx`/shell shim
+  tests\e2e\helpers.ts:441: * resolution, no `.cmd` re-serialization, and identical behaviour on Windows and POSIX. Thi
+s is the
+> tests\e2e\helpers.ts:442: * reliable direct-binary invocation (both `node_modules/.bin/next*` shims and `npx` were fl
+aky here:
+  tests\e2e\helpers.ts:443: * an EMPTY stdout pipe / never-ready server).
+  tests\e2e\helpers.ts:444: *
+> tests\e2e\helpers.ts:445: * FALLBACK (only when the local binary is missing) — `cmd.exe /d /s /c "npx next dev -p <po
+rt>"` on
+> tests\e2e\helpers.ts:446: * Windows (there is no `npx` binary, only `npx.cmd`) / `npx next dev -p <port>` on POSIX. W
+e
+  tests\e2e\helpers.ts:447: * deliberately do NOT use Node's `shell: true`: `shell:true` + args re-serialization produc
+ed the
+  tests\e2e\helpers.ts:448: * empty stdout pipe in this environment.
+  tests\e2e\helpers.ts:449: */
+> tests\e2e\helpers.ts:450:function devServerCommand(port: number): { command: string; args: string[] } {
+  tests\e2e\helpers.ts:451:  const nextBin = resolveNextBin();
+  tests\e2e\helpers.ts:452:  if (nextBin !== undefined) {
+  tests\e2e\helpers.ts:453:    return { command: process.execPath, args: [nextBin, 'dev', '-p', String(port)] };
+  tests\e2e\helpers.ts:454:  }
+  tests\e2e\helpers.ts:455:  if (process.platform === 'win32') {
+> tests\e2e\helpers.ts:456:    return { command: 'cmd.exe', args: ['/d', '/s', '/c', `npx next dev -p ${port}`] };
+  tests\e2e\helpers.ts:457:  }
+> tests\e2e\helpers.ts:458:  return { command: 'npx', args: ['next', 'dev', '-p', String(port)] };
+  tests\e2e\helpers.ts:459:}
+  tests\e2e\helpers.ts:460:
+  tests\e2e\helpers.ts:461:/**
+> tests\e2e\helpers.ts:462: * Boot Next dev detached (its own process group/tree, so it can be killed whole). Both stdo
+ut and
+  tests\e2e\helpers.ts:463: * stderr are captured into a bounded tail (exposed via `output()`) for diagnostics. Starts 
+the
+  tests\e2e\helpers.ts:464: * process only — callers must `waitForAppReady` before driving the UI.
+  tests\e2e\helpers.ts:465: */
+  tests\e2e\helpers.ts:466:export function startDevServer(port: number): DevServer {
+> tests\e2e\helpers.ts:467:  const { command, args } = devServerCommand(port);
+  tests\e2e\helpers.ts:468:  const child: ChildProcess = spawn(command, args, {
+  tests\e2e\helpers.ts:469:    cwd: REPO_ROOT,
+  tests\e2e\helpers.ts:470:    detached: true,
+  tests\e2e\helpers.ts:471:    windowsHide: true,
+  tests\e2e\helpers.ts:472:    stdio: ['ignore', 'pipe', 'pipe'],
+  tests\e2e\helpers.ts:473:    env: {
+> tests\e2e\helpers.ts:482:  if (pid === undefined) throw new Error('无法启动 next dev（未获得 pid）');
+  tests\e2e\helpers.ts:483:
+  tests\e2e\helpers.ts:484:  let log = '';
+  tests\e2e\helpers.ts:485:  const append = (chunk: Buffer | string) => {
+  tests\e2e\helpers.ts:486:    log = (log + chunk.toString()).slice(-16_000);
+  tests\e2e\helpers.ts:487:  };
+  tests\e2e\helpers.ts:488:  child.stdout?.on('data', append);
+> tests\e2e\helpers.ts:546: * Generous default timeout — the first request triggers Next dev's cold compile.
+  tests\e2e\helpers.ts:547: */
+  tests\e2e\helpers.ts:548:export async function waitForHealth(baseUrl: string, opts: { timeoutMs?: number; output?: ()
+ => string } = {}): Promise<void> {
+  tests\e2e\helpers.ts:549:  const timeoutMs = opts.timeoutMs ?? NAV_TIMEOUT_MS;
+  tests\e2e\helpers.ts:550:  const deadline = Date.now() + timeoutMs;
+  tests\e2e\helpers.ts:551:  let last = '尚无响应';
+  tests\e2e\helpers.ts:552:  for (;;) {
+> tests\e2e\helpers.ts:601: * Boot Next dev and wait for FULL readiness (`/api/health` + `/agent`). On failure the proc
+ess tree is
+  tests\e2e\helpers.ts:602: * killed and the boot is retried ONCE on a fresh port; when every attempt fails the capture
+d
+  tests\e2e\helpers.ts:603: * dev-server log tail is printed and a descriptive error is thrown (the entry script then F
+AILs every
+  tests\e2e\helpers.ts:604: * journey and exits non-zero — never a silent pass).
+  tests\e2e\helpers.ts:605: */
+  tests\e2e\helpers.ts:606:export async function bootDevServer(opts: { timeoutMs?: number; attempts?: number } = {}): P
+romise<DevServer> {
+  tests\e2e\helpers.ts:607:  const attempts = opts.attempts ?? 2;
+> tests\e2e\helpers.ts:620:      console.error(`· next dev 启动失败（第 ${attempt}/${attempts} 次，port=${port}）：${errText(e)}`
+);
+  tests\e2e\helpers.ts:621:      if (attempt < attempts) await sleep(1500);
+  tests\e2e\helpers.ts:622:    }
+  tests\e2e\helpers.ts:623:  }
+> tests\e2e\helpers.ts:624:  console.error(`· next dev 启动最终失败，dev-server 日志尾部：\n${lastLog.slice(-2000)}`);
+> tests\e2e\helpers.ts:625:  throw new Error(`next dev 启动失败（已重试 ${attempts} 次）：${errText(lastError)}`);
+  tests\e2e\helpers.ts:626:}
+  tests\e2e\helpers.ts:627:
+  tests\e2e\helpers.ts:628:// --- deterministic fixture state ---------------------------------------------------------
+--------
+  tests\e2e\helpers.ts:629:
+  tests\e2e\helpers.ts:630:/**
+  tests\e2e\helpers.ts:631: * The ISOLATED E2E SQLite file + its WAL/SHM/journal sidecars, relative to the project's `p
+risma/`
+> tests\e2e\helpers.ts:651: * and Next dev does NOT override an already-set `process.env` value with `.env`, so this re
+liably
+  tests\e2e\helpers.ts:652: * isolates every E2E run from the shared dev database. Returns the URL (for logging).
+  tests\e2e\helpers.ts:653: */
+  tests\e2e\helpers.ts:654:export function useIsolatedDatabase(): string {
+  tests\e2e\helpers.ts:655:  process.env['DATABASE_URL'] = E2E_DB_URL;
+  tests\e2e\helpers.ts:656:  return E2E_DB_URL;
+  tests\e2e\helpers.ts:657:}
+> tests\e2e\helpers.ts:959: * Read the Next dev SSR error message when the page rendered Next's error shell
+  tests\e2e\helpers.ts:960: * (`<html id="__next_error__">` + `<template data-next-error-message=...>`), else `undefine
+d`.
+  tests\e2e\helpers.ts:961: * Lets callers fail fast on a broken page instead of waiting the whole DOM timeout.
+  tests\e2e\helpers.ts:962: */
+  tests\e2e\helpers.ts:963:export async function readSsrPageError(page: Page): Promise<string | undefined> {
+  tests\e2e\helpers.ts:964:  const shell = page.locator('html#__next_error__');
+  tests\e2e\helpers.ts:965:  if ((await shell.count()) === 0) return undefined;
+
+

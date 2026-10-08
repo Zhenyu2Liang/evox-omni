@@ -1,0 +1,19 @@
+﻿
+LineNumber Line                                                                                                        
+---------- ----                                                                                                        
+       466 export function startDevServer(port: number): DevServer {                                                   
+       473     env: {                                                                                                  
+       477       DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL,                                              
+       606 export async function bootDevServer(opts: { timeoutMs?: number; attempts?: number } = {}): Promise<DevSer...
+       612     const server = startDevServer(port);                                                                    
+       648  * server via `startDevServer`) — at the ISOLATED E2E DB by setting `process.env.DATABASE_URL`.             
+       650  * `lib/db/client.ts` reads `process.env.DATABASE_URL` FIRST (only falling back to `prisma/dev.db`),        
+       655   process.env['DATABASE_URL'] = E2E_DB_URL;                                                                 
+       667  * Vitest global setup). `DATABASE_URL` defaults to `E2E_DB_URL`, so every provisioning step                
+       673     env: { ...process.env, DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL },                       
+       714     env: { ...process.env, DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL },                       
+       724 /** Seed the ISOLATED E2E DB via `tsx prisma/seed.ts` (honours `DATABASE_URL` = `E2E_DB_URL`). */           
+       757     env: { ...process.env, DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL },                       
+       798  * Every CLI step is given `DATABASE_URL` = `E2E_DB_URL` (see `runCliStep`), and any CLI failure throws     
+
+

@@ -1,0 +1,35 @@
+﻿
+LineNumber Line                                                                                                        
+---------- ----                                                                                                        
+         5  * REAL Next.js dev server against the REAL DeepSeek API (`LLM_MODE=live`, `LLM_PROVIDER=deepseek`)         
+        11  * The provided `.env.local` sets `LLM_MODEL=deepseek-flash`, which is NOT a registered pi-ai model id      
+        12  * (pi-ai's `deepseek` registry exposes ONLY `deepseek-v4-flash` / `deepseek-v4-pro`). By DEFAULT this      
+        13  * harness does NOT touch `LLM_MODEL`: the spawned `next dev` loads the PROVIDED `.env.local` value, so     
+        16  * `deepseek-v4-flash` at `https://api.deepseek.com`, with a loud `console.warn`).                          
+        20  * Everything else (key, provider, model, mock off) is the provided `.env.local` unchanged.                 
+        93   process.env['DATABASE_URL'] = LIVE_DB_URL;                                                                
+        94   process.env['LLM_MODE'] = 'live';                                                                         
+        95   process.env['LLM_PROVIDER'] = 'deepseek';                                                                 
+        97   // By default we do NOT set `LLM_MODEL`, so the spawned `next dev` loads the PROVIDED `.env.local`        
+        98   // value (`LLM_MODEL=deepseek-flash`) and `agent/providers/provider-live.ts#resolveLiveModel` is          
+       101   const forced = process.env['LIVE_FORCE_MODEL']?.trim();                                                   
+       103     process.env['LLM_MODEL'] = forced;                                                                      
+       105     delete process.env['LLM_MODEL'];                                                                        
+       536 const PROMPT_S2 = process.env['LIVE_S2_PROMPT']?.trim() || MSG.transferByName;                              
+       537 const PROMPT_S3 = process.env['LIVE_S3_PROMPT']?.trim() || MSG.transferDecimal;                             
+       889  * reboot the SAME app on the SAME DB with `DEEPSEEK_API_KEY='invalid'` so ONLY the continuation LLM        
+       896   originalKey: string | undefined,                                                                          
+       930   process.env['DEEPSEEK_API_KEY'] = 'invalid';                                                              
+       947   if (originalKey === undefined) delete process.env['DEEPSEEK_API_KEY'];                                    
+       948   else process.env['DEEPSEEK_API_KEY'] = originalKey;                                                       
+       974   const raw = process.env['LIVE_SCENARIOS'];                                                                
+       987   const originalKey = process.env['DEEPSEEK_API_KEY'];                                                      
+      1024   console.log('== AI Banking Agent 真实浏览器 + 真实 DeepSeek 在线验收 (tests/e2e/live) ==');                          
+      1025   const forcedModel = process.env['LIVE_FORCE_MODEL']?.trim();                                              
+      1029       : "· LIVE with PROVIDED model id（不覆盖 LLM_MODEL：使用 .env.local 的 'deepseek-flash'，由 provider-live.ts#...
+      1049       `· LLM_MODE=${process.env['LLM_MODE']} LLM_PROVIDER=${process.env['LLM_PROVIDER']} LLM_MODEL=${proc...
+      1081           await scenarioCommittedContinuationFailed(browser, server, originalKey),                          
+      1085         if (originalKey === undefined) delete process.env['DEEPSEEK_API_KEY'];                              
+      1086         else process.env['DEEPSEEK_API_KEY'] = originalKey;                                                 
+
+

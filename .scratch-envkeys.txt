@@ -1,0 +1,6 @@
+﻿LLM_MODE
+LLM_PROVIDER
+LLM_MODEL
+DEEPSEEK_API_KEY
+4
+--- env process key present: False

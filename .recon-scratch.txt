@@ -1,15 +1,42 @@
-﻿.env.local copied: True (115 bytes)
---- gitignore matches for .env ---
-9: next-env.d.ts
-29: # Environment
-30: # NOTE: this demo intentionally ships a .env with NON-SECRET defaults so it runs out of the box.
-31: # Real API keys must never be committed; they belong in .env.local (ignored below).
-32: .env.local
-33: .env.*.local
-34: !.env
-35: !.env.example
---- git status ---
-
---- is .env.local ignored? ---
-.env.local
-
+﻿5: * Next.js dev server on a free port, launches the machine's real headless Chrome via
+44: /** Generous default for DOM waits (Next dev client hydration can lag on a cold compile). */
+49: /** The repository root (contains `package.json` + `next.config.mjs`), found by walking up from cwd. */
+406: /** A booted `next dev` server on a free port. */
+430: /** Project-local Next CLI entry (`node_modules/next/dist/bin/next`), or `undefined` if absent. */
+431: function resolveNextBin(): string | undefined {
+432: const bin = path.join(REPO_ROOT, 'node_modules', 'next', 'dist', 'bin', 'next');
+437: * The command that boots Next dev.
+439: * PREFERRED — the project-local Next CLI launched with the SAME Node that runs this harness
+440: * (`<process.execPath> node_modules/next/dist/bin/next dev -p <port>`): no `npx`/shell shim
+442: * reliable direct-binary invocation (both `node_modules/.bin/next*` shims and `npx` were flaky here:
+445: * FALLBACK (only when the local binary is missing) — `cmd.exe /d /s /c "npx next dev -p <port>"` on
+446: * Windows (there is no `npx` binary, only `npx.cmd`) / `npx next dev -p <port>` on POSIX. We
+451: const nextBin = resolveNextBin();
+452: if (nextBin !== undefined) {
+453: return { command: process.execPath, args: [nextBin, 'dev', '-p', String(port)] };
+456: return { command: 'cmd.exe', args: ['/d', '/s', '/c', `npx next dev -p ${port}`] };
+458: return { command: 'npx', args: ['next', 'dev', '-p', String(port)] };
+462: * Boot Next dev detached (its own process group/tree, so it can be killed whole). Both stdout and
+466: export function startDevServer(port: number): DevServer {
+468: const child: ChildProcess = spawn(command, args, {
+473: env: {
+475: NEXT_TELEMETRY_DISABLED: '1',
+482: if (pid === undefined) throw new Error('无法启动 next dev（未获得 pid）');
+546: * Generous default timeout — the first request triggers Next dev's cold compile.
+601: * Boot Next dev and wait for FULL readiness (`/api/health` + `/agent`). On failure the process tree is
+606: export async function bootDevServer(opts: { timeoutMs?: number; attempts?: number } = {}): Promise<DevServer> {
+620: console.error(`· next dev 启动失败（第 ${attempt}/${attempts} 次，port=${port}）：${errText(e)}`);
+624: console.error(`· next dev 启动最终失败，dev-server 日志尾部：\n${lastLog.slice(-2000)}`);
+625: throw new Error(`next dev 启动失败（已重试 ${attempts} 次）：${errText(lastError)}`);
+648: * server via `startDevServer`) — at the ISOLATED E2E DB by setting `process.env.DATABASE_URL`.
+650: * `lib/db/client.ts` reads `process.env.DATABASE_URL` FIRST (only falling back to `prisma/dev.db`),
+651: * and Next dev does NOT override an already-set `process.env` value with `.env`, so this reliably
+673: env: { ...process.env, DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL },
+714: env: { ...process.env, DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL },
+757: env: { ...process.env, DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL },
+769: // cannot be opened. A probe/seed throw here is treated like a push failure, so the next rung runs.
+959: * Read the Next dev SSR error message when the page rendered Next's error shell
+960: * (`<html id="__next_error__">` + `<template data-next-error-message=...>`), else `undefined`.
+964: const shell = page.locator('html#__next_error__');
+966: const template = page.locator('template[data-next-error-message]').first();
+969: ? await template.getAttribute('data-next-error-message').catch(() => null)

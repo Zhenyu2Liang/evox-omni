@@ -1,0 +1,50 @@
+﻿SUCCESS: The process with PID 61956 (child process of PID 58916) has been terminated.
+SUCCESS: The process with PID 58916 (child process of PID 64620) has been terminated.
+SUCCESS: The process with PID 60388 (child process of PID 55052) has been terminated.
+SUCCESS: The process with PID 64620 (child process of PID 55052) has been terminated.
+SUCCESS: The process with PID 55052 (child process of PID 49184) has been terminated.
+SUCCESS: The process with PID 49184 (child process of PID 34348) has been terminated.
+
+SUCCESS: The process with PID 65712 (child process of PID 66692) has been terminated.
+SUCCESS: The process with PID 66692 (child process of PID 63268) has been terminated.
+SUCCESS: The process with PID 59800 (child process of PID 10296) has been terminated.
+SUCCESS: The process with PID 63268 (child process of PID 10296) has been terminated.
+SUCCESS: The process with PID 10296 (child process of PID 44820) has been terminated.
+SUCCESS: The process with PID 12540 (child process of PID 14600) has been terminated.
+SUCCESS: The process with PID 44820 (child process of PID 14600) has been terminated.
+SUCCESS: The process with PID 14600 (child process of PID 48272) has been terminated.
+SUCCESS: The process with PID 48272 (child process of PID 59336) has been terminated.
+
+taskkill : ERROR: The process "55508" not found.
+At line:1 char:153
++ ... ); foreach ($p in $roots) { try { taskkill /F /T /PID $p 2>&1 | Out-S ...
++                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ERROR: The process "55508" not found.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+taskkill : ERROR: The process "35748" not found.
+At line:1 char:153
++ ... ); foreach ($p in $roots) { try { taskkill /F /T /PID $p 2>&1 | Out-S ...
++                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ERROR: The process "35748" not found.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+taskkill : ERROR: The process "10296" not found.
+At line:1 char:153
++ ... ); foreach ($p in $roots) { try { taskkill /F /T /PID $p 2>&1 | Out-S ...
++                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ERROR: The process "10296" not found.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+taskkill : ERROR: The process "64620" not found.
+At line:1 char:153
++ ... ); foreach ($p in $roots) { try { taskkill /F /T /PID $p 2>&1 | Out-S ...
++                                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (ERROR: The process "64620" not found.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+
