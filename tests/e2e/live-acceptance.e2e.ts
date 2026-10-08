@@ -20,7 +20,13 @@
  * Everything else (key, provider, model, mock off) is the provided `.env.local` unchanged.
  * By default the run therefore exercises `resolveLiveModel` on the PROVIDED id, not an override.
  *
- * Run:  npx tsx tests/e2e/live-acceptance.e2e.ts
+ * ENV LOADING: before booting anything the harness reads the worktree-root `.env.local` into ITS OWN
+ * `process.env` (simple Next-like `KEY=VALUE` parse). `startDevServer` spawns `next dev` with
+ * `env: { ...process.env }`, so every spawned server is GUARANTEED to carry the real
+ * `DEEPSEEK_API_KEY` instead of depending on Next loading `.env.local` on its own (which produced
+ * booted servers without a key → `POST /api/chat` → 400 `VALIDATION No API key found …`). The key
+ * value is never printed, logged or committed.
+ * * Run:  npx tsx tests/e2e/live-acceptance.e2e.ts
  * Subset: `LIVE_SCENARIOS=1,3` (comma-separated scenario ids) runs only those journeys.
  *
  * Output contract: one `PASS|FAIL|SKIP <scenario> — <evidence>` line per scenario; exit non-zero iff
@@ -33,7 +39,7 @@
  * harness never runs under `npm run test`.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { Browser, Page } from 'playwright-core';
 import type { PrismaClient } from '@prisma/client';
@@ -88,8 +94,48 @@ const RECIPIENT_NAME = '张伟';
 const RECIPIENT_CONTACT_ID = 'contact_zhangwei';
 const CREDIT_CARD_ID = 'card_credit';
 
-/** Point this process — provisioning CLIs + the spawned dev server — at the ISOLATED live DB. */
-function configureLiveEnv(): void {
+/**
+ * Merge the worktree-root `.env.local` into THIS process's `process.env` (Next-like `KEY=VALUE` parse),
+ * BEFORE any `next dev` is booted — `startDevServer` passes `env: { ...process.env }`, so every spawned
+ * server inherits the REAL `DEEPSEEK_API_KEY` instead of relying on Next to load `.env.local` itself
+ * (relying on that left booted servers keyless → `POST /api/chat` → 400
+ * `VALIDATION No API key found in the environment for provider "deepseek"`).
+ *
+ * Parsing rules mirror Next's dotenv loading: skip blank and `#` comment lines, strip an optional
+ * `export ` prefix, split on the FIRST `=`, and drop ONE layer of surrounding single/double quotes
+ * from the value. Absent/ unreadable file → no-op. The values are NEVER printed, logged or committed.
+ */
+function loadDotEnvLocal(): void {
+  const file = path.join(REPO_ROOT, '.env.local');
+  if (!existsSync(file)) return;
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return;
+  }
+  let loaded = 0;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line === '' || line.startsWith('#')) continue;
+    const withoutExport = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
+    const eq = withoutExport.indexOf('=');
+    if (eq <= 0) continue;
+    const key = withoutExport.slice(0, eq).trim();
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
+    let value = withoutExport.slice(eq + 1).trim();
+    const quoted =
+      value.length >= 2 &&
+      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")));
+    if (quoted) value = value.slice(1, -1);
+    process.env[key] = value;
+    loaded += 1;
+  }
+  // Count only — NEVER the values (the file holds the provider API key).
+  console.log(`· 已从 .env.local 载入 ${loaded} 个环境变量（仅计数，不打印取值）`);
+}
+
+/** Point this process — provisioning CLIs + the spawned dev server — at the ISOLATED live DB. */function configureLiveEnv(): void {
   process.env['DATABASE_URL'] = LIVE_DB_URL;
   process.env['LLM_MODE'] = 'live';
   process.env['LLM_PROVIDER'] = 'deepseek';
@@ -540,7 +586,57 @@ const TRANSFER_AMOUNT = 200;
 const DECIMAL_AMOUNT = 200.37;
 const LARGE_AMOUNT = 5000;
 
-// --- scenario 1: balance matches the DB ---------------------------------------------------------
+/**
+ * Scenario 7 park-robustness knobs. The LIVE model SOMETIMES answers the transfer prompt with only
+ * `search_contact` + a question ("请确认是否向张伟转账 ¥200.00？") WITHOUT calling `transfer_money`, so
+ * the gateway never parks a `PendingAction`, `GET /api/actions` stays `[]` and the park times out.
+ * The park therefore POLLS `/api/actions` and, when nothing is parked, NUDGES the model in the SAME
+ * session and re-checks — bounded attempts, never a fabricated park.
+ */
+const PARK_ATTEMPTS = 3;
+const PARK_POLL_MS = 60_000;
+/**
+ * The `banking_session` cookie is minted by the `/api/chat` RESPONSE, and the route awaits the WHOLE
+ * turn (`runTurn`) before sending that response (see `app/api/chat/route.ts`). With the LIVE model a
+ * turn takes seconds, so reading cookies immediately after `submitChat` (which only clicks 发送) raced
+ * the `Set-Cookie` and left `readSessionCookie` `undefined` → the park aborted before it began. The
+ * park therefore WAITS (bounded) for the cookie the first turn mints, then polls the persisted state.
+ */
+const PARK_COOKIE_WAIT_MS = 120_000;
+const PARK_NUDGES = ['确认，请发起转账', '请直接调用转账工具发起这笔转账'] as const;
+
+/** The parked `transfer_money` action from `GET /api/actions` (awaiting a human decision), or `undefined`. */
+function findParkedTransfer(
+  actions: readonly PendingActionView[],
+): PendingActionView | undefined {
+  return actions.find(
+    (action) => action.toolName === 'transfer_money' && (action.status === 'pending' || action.status === 'awaiting_mfa'),
+  );
+}
+
+/**
+ * Wait (bounded) for the `banking_session` cookie the first chat turn mints, then return it as a
+ * `Cookie` header value. The cookie is only sent with the `/api/chat` RESPONSE, which the route emits
+ * after the WHOLE turn has run, so a LIVE turn means the cookie arrives seconds after `submitChat`
+ * returns — reading it immediately races the `Set-Cookie`. On timeout the assistant text +
+ * `/api/actions` are appended for evidence (the wait itself is not weakened).
+ */
+async function awaitSessionCookie(page: Page, baseUrl: string, timeoutMs = PARK_COOKIE_WAIT_MS): Promise<string> {
+  let cookie: string | undefined;
+  try {
+    await waitFor(
+      async () => {
+        cookie = await readSessionCookie(page);
+        return cookie !== undefined;
+      },
+      { timeoutMs, description: '`banking_session` cookie（由 /api/chat 响应下发）' },
+    );
+  } catch (e) {
+    throw new Error(`${errText(e)} ｜ ${await noCardDiagnostics(page, baseUrl)}`);
+  }
+  if (cookie === undefined) throw new Error('未取得 banking_session cookie');
+  return cookie;
+}// --- scenario 1: balance matches the DB ---------------------------------------------------------
 
 async function scenarioBalance(ctx: Ctx): Promise<string> {
   return withPage(
@@ -885,10 +981,13 @@ async function scenarioLargeTransferMfa(ctx: Ctx): Promise<string> {
 // --- scenario 7: SDK committed but the model continuation FAILS ----------------------------------
 
 /**
- * Engineer "the SDK write commits, the model continuation fails": park a YELLOW `transfer_money`, then
- * reboot the SAME app on the SAME DB with `DEEPSEEK_API_KEY='invalid'` so ONLY the continuation LLM
- * call fails, then hit the confirm endpoint with the SAME session cookie. The action must still settle
- * `executed` with exactly ONE debit. (Read-only against app code.)
+ * Engineer "the SDK write commits, the model continuation fails": DETERMINISTICALLY park a YELLOW
+ * `transfer_money` — WAIT for the first turn to mint the `banking_session` cookie (it is sent with the
+ * `/api/chat` response, i.e. only after the whole LIVE turn has run), poll `GET /api/actions` for the
+ * parked row and, when the live model merely narrated without calling the tool, NUDGE it in the SAME
+ * session (bounded attempts) — then reboot the SAME app on the SAME DB with `DEEPSEEK_API_KEY='invalid'`
+ * so ONLY the continuation LLM call fails, then hit the confirm endpoint with the SAME session cookie.
+ * The action must still settle `executed` with exactly ONE debit. (Read-only against app code.)
  */
 async function scenarioCommittedContinuationFailed(
   browser: Browser,
@@ -910,17 +1009,42 @@ async function scenarioCommittedContinuationFailed(
       attachCollectors(page);
       await gotoAgent(page, baseUrl);
       await submitChat(page, MSG.transferByName);
-      await awaitConfirmCard(page, baseUrl);
-      cookie = (await readSessionCookie(page)) ?? '';
-      if (!cookie) throw new Error('未取得 banking_session cookie');
-      const actions = await fetchPendingActions(baseUrl, cookie);
-      actionId = actions.find((a) => a.toolName === 'transfer_money')?.id ?? '';
-      if (!actionId) throw new Error(`GET /api/actions 未返回 transfer_money：${JSON.stringify(actions)}`);
+      // The turn mints the `banking_session` cookie on its RESPONSE; wait (bounded) for it instead of
+      // racing the Set-Cookie.
+      cookie = await awaitSessionCookie(page, baseUrl);
+      // ROBUST / DETERMINISTIC PARK — the model is not trusted to CALL the gated tool on the first
+      // turn (it often only narrates a question). Poll the persisted server state, and NUDGE in the
+      // SAME session until a `transfer_money` action is actually parked (bounded attempts).
+      let parked: PendingActionView | undefined;
+      for (let attempt = 1; attempt <= PARK_ATTEMPTS && parked === undefined; attempt += 1) {
+        try {
+          parked = await waitFor(
+            async () => findParkedTransfer(await fetchPendingActions(baseUrl, cookie)) ?? false,
+            {
+              timeoutMs: PARK_POLL_MS,
+              description: `GET /api/actions 出现 pending/awaiting_mfa 的 transfer_money 待处理项（第 ${attempt}/${PARK_ATTEMPTS} 次）`,
+            },
+          );
+        } catch {
+          parked = undefined; // a timeout is expected when the model only narrated — nudge and retry
+        }
+        if (parked === undefined && attempt < PARK_ATTEMPTS) {
+          const nudge = PARK_NUDGES[Math.min(attempt - 1, PARK_NUDGES.length - 1)];
+          console.log(`· 场景7：第 ${attempt} 次未出现待确认转账（模型可能只叙述未调用工具），发送跟进消息「${nudge}」`);
+          await submitChat(page, nudge);
+        }
+      }
+      if (parked === undefined) {
+        await captureLive(page, 's7-no-park');
+        throw new Error(
+          `场景7 未能停放 transfer_money 待处理项（已尝试 ${PARK_ATTEMPTS} 次，含 ${PARK_ATTEMPTS - 1} 次跟进消息）｜ ${await noCardDiagnostics(page, baseUrl)}`,
+        );
+      }
+      actionId = parked.id;
       await captureLive(page, 's7-parked');
     },
     { label: 's7-park' },
   );
-
   const before = await snapshot(baseUrl);
   const beforeDb = await readCheckingBalance();
 
@@ -977,6 +1101,10 @@ function selectedIds(): string[] | undefined {
 }
 
 async function main(): Promise<void> {
+  // DEFECT-B FIX: load the worktree-root `.env.local` into THIS process BEFORE anything boots, so every
+  // spawned `next dev` (which inherits `process.env`, see `startDevServer`) carries the real
+  // `DEEPSEEK_API_KEY` instead of a keyless environment (400 `VALIDATION No API key found …`).
+  loadDotEnvLocal();
   const reporter = createReporter();
   const only = selectedIds();
   // Selecting `2` also pulls in its `2p` (by-phone) companion leg.
@@ -988,15 +1116,21 @@ async function main(): Promise<void> {
 
   let browser: Browser | undefined;
   let devServer: DevServer | undefined;
+  // The ACTIVE server handle. Scenario 7 reboots the app by reassigning `server.current`, so teardown
+  // must always stop the CURRENT one — stopping only the initially booted `devServer` leaked scenario
+  // 7's last server, which kept `prisma/live-acceptance.db` locked (next run: EPERM) and held an open
+  // stdout pipe (hanging the PowerShell invocation).
+  let server: ServerHandle | undefined;
   const cleanup = () => {
-    if (devServer) {
+    const active = server?.current ?? devServer;
+    if (active) {
       try {
-        devServer.stop();
+        active.stop();
       } catch {
         /* best-effort */
       }
-      devServer = undefined;
     }
+    devServer = undefined;
     if (browser) {
       void browser.close().catch(() => undefined);
     }
@@ -1059,7 +1193,8 @@ async function main(): Promise<void> {
 
     console.log(`· 真实浏览器：${executablePath}`);
     browser = await launchBrowser(executablePath);
-    const server: ServerHandle = { current: devServer };
+    const activeServer: ServerHandle = { current: devServer };
+    server = activeServer;
 
     for (const scenario of chosen) {
       try {
@@ -1068,7 +1203,7 @@ async function main(): Promise<void> {
           reporter.skip(scenario.name, skip);
           continue;
         }
-        reporter.pass(scenario.name, await scenario.run({ browser, baseUrl, server }));
+        reporter.pass(scenario.name, await scenario.run({ browser, baseUrl, server: activeServer }));
       } catch (error) {
         reporter.fail(scenario.name, errText(error));
       }
@@ -1078,7 +1213,7 @@ async function main(): Promise<void> {
       try {
         reporter.pass(
           '7-live-committed-continuation-failed',
-          await scenarioCommittedContinuationFailed(browser, server, originalKey),
+          await scenarioCommittedContinuationFailed(browser, activeServer, originalKey),
         );
       } catch (error) {
         reporter.fail('7-live-committed-continuation-failed', errText(error));
