@@ -52,7 +52,7 @@ function ctxFor(
 
 /** Park a YELLOW `transfer_money` action (status `pending`) for the given session. */
 async function parkYellowTransfer(sessionId: string, amount: number): Promise<PendingAction> {
-  const ctx = ctxFor('transfer_money', { amount, toName: '张伟' }, sessionId);
+  const ctx = ctxFor('transfer_money', { amount, contactId: 'contact_zhangwei' }, sessionId);
   return securityGateway.createPendingAction(ctx, await securityGateway.evaluate(ctx));
 }
 

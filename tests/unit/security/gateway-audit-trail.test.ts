@@ -68,7 +68,7 @@ describe('security-gateway · deriveIntent (pure, code-driven)', () => {
 describe('security-gateway · pending-action audit trail (needs test SQLite)', () => {
   it('persists the ORIGINAL userRequest + a non-empty intent on the row and surfaces both on the contract (YELLOW)', async () => {
     const userRequest = '帮张伟转 200 元';
-    const ctx = ctxFor('transfer_money', { amount: 200, toName: '张伟' }, userRequest);
+    const ctx = ctxFor('transfer_money', { amount: 200, contactId: 'contact_zhangwei' }, userRequest);
     const ev = await securityGateway.evaluate(ctx);
     expect(ev.tier).toBe('YELLOW');
 
