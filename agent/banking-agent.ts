@@ -29,6 +29,7 @@ import { executeGatedTool } from './confirmation';
 import { buildAutomaticWriteFence } from './execution-fence';
 import { resolveModel } from './providers';
 import { buildSystemPrompt } from './system-prompt';
+import { normalizeToolResultMessages } from './message-normalize';
 import type { SessionSnapshot } from './session';
 
 /**
@@ -185,7 +186,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
       systemPrompt,
       model,
       tools: registry.list(),
-      messages: restored?.messages ?? [],
+      messages: normalizeToolResultMessages(restored?.messages ?? []),
     },
     beforeToolCall,
     afterToolCall,
