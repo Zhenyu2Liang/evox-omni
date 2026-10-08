@@ -64,6 +64,7 @@ The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
 
 ## Notes for Agents
 
+- Every spec here calls the Banking SDK directly (`banking.transfer.createTransfer`, `banking.investment.*`, `banking.subscription.*`, `banking.budget.*`, `banking.task.*`, `banking.transaction.*`, `banking.account.*`) and imports NOTHING from `security/`; `banking-sdk/index.ts` has no `security` dependency. So a change confined to `security/security-gateway.ts` (server-side recipient resolution at park time, park-time arg canonicalization, confirmation-summary fields) does NOT affect these specs — the recipient resolution tested here is the SDK's own `createTransfer` behavior, exercised in isolation without the gateway.
 - Helpers are reached via `../../helpers/{db,fixtures}` from this node (not `../helpers/*`).
 - `useFreshDatabase()` is called once per file; each test starts from `resetDatabase()` (truncate + canonical seed).
 - The atomicity spec lives in THIS node and is auto-discovered by the root `vitest.config.ts`
