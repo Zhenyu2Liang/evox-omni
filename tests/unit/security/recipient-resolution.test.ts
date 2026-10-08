@@ -43,7 +43,7 @@ vi.setConfig({ hookTimeout: 60_000 });
 
 useFreshDatabase();
 
-/** The seeded 戴伟 contact (`tests/helpers/fixtures.ts` CONTACTS[0]). */
+/** The seeded 张伟 contact (`tests/helpers/fixtures.ts` CONTACTS[0]). */
 const ZHANGWEI_ID = 'contact_zhangwei';
 const ZHANGWEI_NAME = '张伟';
 const ZHANGWEI_PHONE = '139****0002';
