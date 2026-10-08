@@ -59,3 +59,4 @@ Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` 
 - `./executor.test.ts` → runPlan state machine + plan controls
 - `./lifecycle.test.ts` → durable persisted-plan lifecycle (pause/cancel/retry/resume)
 - `./executor-claim-scope.test.ts` → DB `(taskId,nodeId)` node-execution claim CAS + cross-run de-dup scope
+- `./executor-execution-right.test.ts` → plan-takeover execution-right barriers (real `buildNodeClaimPorts`/`planExecutionClaimHeld` ports; DB-backed)
