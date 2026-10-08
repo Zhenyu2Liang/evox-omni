@@ -1089,12 +1089,26 @@ export async function cancelAction(
   const cancelled = await cancelledPlanOutcome(actionId, identity.sessionId);
   if (cancelled !== undefined) return cancelled;
 
-  // `cancelAction` throws `AppError('NOT_FOUND'|'SECURITY_DENIED'|'CONFLICT')` for an
-  // unknown/foreign/settled action; the API layer maps it to the error envelope (never swallowed).
-  const action = await gateway.cancelAction(actionId, {
-    userId: identity.userId,
-    sessionId: identity.sessionId,
-  });
+  // `cancelAction` throws `AppError('NOT_FOUND'|'SECURITY_DENIED')` for an unknown/foreign action --
+  // those PROPAGATE (never translated; the API layer maps them to the error envelope).
+  // A `CONFLICT` means the action is NO LONGER CANCELLABLE (already terminal -- executed / failed /
+  // cancelled / needs_reconciliation -- or a confirm/execute is in flight): that is a DOMAIN
+  // outcome, not an error. Mirror `confirmAction`/`verifyAction` -- surface a CLEAR, STABLE
+  // `ok:false` outcome carrying the action's CURRENT persisted status via `conflictOutcome`
+  // (`{ ok:false, actionId, status, tier, requiresMfa, message, events:[] }`; the API maps it to
+  // HTTP 200) instead of a raw `409`. The gateway's exactly-once CAS / terminal guard is UNCHANGED:
+  // it still REFUSES the transition (0 rows claimed); only the refusal's SHAPE is stabilized here,
+  // so nothing is rolled back and no terminal row is mutated.
+  let action: PendingAction;
+  try {
+    action = await gateway.cancelAction(actionId, {
+      userId: identity.userId,
+      sessionId: identity.sessionId,
+    });
+  } catch (e) {
+    if (e instanceof AppError && e.code === 'CONFLICT') return conflictOutcome(actionId, e);
+    throw e; // NOT_FOUND / SECURITY_DENIED propagate -- the action is never touched
+  }
 
   await recordAudit({
     timestamp: demoNow(),
