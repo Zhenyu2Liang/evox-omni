@@ -1,0 +1,36 @@
+﻿seed.ts:90: * 美团外卖 + 星巴克 sit on 2026-09-25 so a "今日消费" window exists; the 妈妈 transfer is on
+seed.ts:123: // 转账 = ¥500.00 (TRANSFER) — to contact 妈妈, dated 2026-09-04 (NOT the demo day)
+seed.ts:124: { id: 'tx_sep_transfer_mama', amountCents: -50_000, category: '转账', merchant: '转账给妈妈', channel: 'TRANSFER', counterpartyId: 'contact_mama', occurredAt: sep(4, 19, 0) },
+seed.ts:126: { id: 'tx_sep_phone', amountCents: -5_000, category: '其他', merchant: '话费充值', channel: 'APP', occurredAt: sep(7, 9, 30) },
+seed.ts:144: { id: 'tx_aug_dining', amountCents: -135_260, category: '餐饮', merchant: '餐饮支出', channel: 'CARD', occurredAt: aug(14, 19, 30) },
+seed.ts:222: { id: 'contact_zhangwei', userId: USER_ID, name: '张伟', phone: '139****0002', bank: '招商银行', remark: null },
+seed.ts:223: { id: 'contact_wangfang', userId: USER_ID, name: '王芳', phone: '137****0003', bank: '工商银行', remark: null },
+seed.ts:224: { id: 'contact_mama', userId: USER_ID, name: '妈妈', phone: '136****0004', bank: '建设银行', remark: '家人' },
+seed.ts:225: { id: 'contact_lihua', userId: USER_ID, name: '李华', phone: '135****0005', bank: '农业银行', remark: null },
+seed.ts:258: payload: JSON.stringify({ note: '妈妈生日，记得准备礼物' }),
+seed.ts:338: update: { name: '李明', phone: '138****0001', avatarEmoji: '🧑' },
+seed.ts:339: create: { id: USER_ID, name: '李明', phone: '138****0001', avatarEmoji: '🧑' },
+recipient-resolution.test.ts:9: * Rules under test (exactly ONE of `contactId|phone|name` may be supplied):
+recipient-resolution.test.ts:11: *   - `phone` → exact match, else a `contains` fallback (`not_found` when empty, `ambiguous` > 1);
+recipient-resolution.test.ts:14: * On `resolved` the args are CANONICALIZED to `{...args, contactId}` (with `phone`/`name` DELETED) and
+recipient-resolution.test.ts:32: maskPhone,
+recipient-resolution.test.ts:46: /** The seeded 张伟 contact (`tests/helpers/fixtures.ts` CONTACTS[0]). */
+recipient-resolution.test.ts:48: const ZHANGWEI_NAME = '张伟';
+recipient-resolution.test.ts:49: const ZHANGWEI_PHONE = '139****0002';
+recipient-resolution.test.ts:90: it('resolves 张伟 by NAME → canonical contactId args + masked summary', async () => {
+recipient-resolution.test.ts:97: expect(fieldValue(action, '收款手机号')).toBe('139****0002');
+recipient-resolution.test.ts:98: expect(fieldValue(action, '收款手机号')).toBe(maskPhone(ZHANGWEI_PHONE));
+recipient-resolution.test.ts:103: expect('phone' in action.args).toBe(false);
+recipient-resolution.test.ts:111: expect('phone' in persisted).toBe(false);
+recipient-resolution.test.ts:114: it('resolves a PARTIAL phone (contains fallback) → canonical contactId args + masked summary', async () => {
+recipient-resolution.test.ts:115: const action = await parkTransfer({ amount: 200, phone: '0002' });
+recipient-resolution.test.ts:121: expect(fieldValue(action, '收款手机号')).toBe(maskPhone(ZHANGWEI_PHONE));
+recipient-resolution.test.ts:124: expect('phone' in action.args).toBe(false);
+recipient-resolution.test.ts:129: expect('phone' in persisted).toBe(false);
+recipient-resolution.test.ts:139: expect(fieldValue(action, '收款手机号')).toBe(maskPhone(ZHANGWEI_PHONE));
+recipient-resolution.test.ts:142: expect('phone' in action.args).toBe(false);
+recipient-resolution.test.ts:154: expect(res.action && fieldValue(res.action, '收款手机号')).toBe(maskPhone(ZHANGWEI_PHONE));
+recipient-resolution.test.ts:157: expect(res.action !== undefined && 'phone' in res.action.args).toBe(false);
+recipient-resolution.test.ts:226: // A SECOND contact literally named 张伟 makes the name selector unresolvable by equality.
+recipient-resolution.test.ts:232: phone: '131****0009',
+recipient-resolution.test.ts:246: // Candidates are phone-MASKED (never a raw number on the clarify message).
