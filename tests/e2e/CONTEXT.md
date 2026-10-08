@@ -227,6 +227,18 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
 - **No real browser ⇒ SKIP, not FAIL.** When neither Chrome nor Edge is found (and `E2E_BROWSER_PATH`
   is unset) every journey emits `SKIP` with the reason; the run does not fail.
 
+## Live-LLM acceptance harness (`./live-acceptance.e2e.ts`)
+A SECOND, independent real-browser harness that drives the REAL `next dev` app against the REAL
+DeepSeek API (`LLM_MODE=live`) instead of the scripted mock — same real Chrome + real route handlers,
+only the LLM is live.
+- Run: `npx tsx tests/e2e/live-acceptance.e2e.ts`; subset via `LIVE_SCENARIOS=1,3` (ids `1,2,2p,3,4,5,6,7`).
+- Own isolated DB `prisma/live-acceptance.db` (never `e2e.db`/`dev.db`/`test.db`); `configureLiveEnv()` sets `DATABASE_URL`.
+- `.env.local` (gitignored) supplies provider config; copied into the worktree, used, NEVER committed.
+- DISCLOSED override: the provided `LLM_MODEL=deepseek-flash` is not a registered pi-ai id (app DEFECT #1 — silent OpenAI baseUrl fallback); the harness forces `deepseek-v4-flash`, so the run stays genuinely Live.
+- TASK-A evidence tooling: `persistedRecipientCalls()` parses every `AgentSession.stateJson` and prints each `transfer_money`/`search_contact` `toolCall` arg object VERBATIM; `LIVE_S2_PROMPT`/`LIVE_S3_PROMPT` override the two transfer prompts.
+- Current live outcomes + reported app defects live in `./LIVE-ACCEPTANCE-REPORT.md`: PASS 1/4/5/6/7; FAIL 2 & 3 (DEFECT #2); SKIP 2p (masked seed phone).
+- DEFECT #2 (app, reported only): the live model puts the MASKED phone (or the name) into `transfer_money`'s `contactId` slot; `security/security-gateway.ts#resolveTransferRecipient` treats a populated `contactId` as an ID and has no name/masked-phone fallback → `not_found`.
+
 ## Routing Table
 - `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 6 journeys → structured report → non-zero exit on FAIL)
 - `./helpers.ts` → shared harness (isolated E2E DB + reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card + per-node timeline, read-model HTTP helpers, wedge fixtures + `seedStandaloneWedge`/direct-DB fact queries (`queryPendingActionStatus`/`queryExecutionAudit`), reporter, fail-fast navigation)
