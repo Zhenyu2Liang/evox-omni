@@ -195,8 +195,12 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   own-property (`__reactProps$…`/`__reactFiber$…`), so interacting then silently DROPS the click
   (no `POST /api/chat` is issued) and React's hydration resets the `fill()`.
   `waitForComposerHydration` waits on that real DOM condition — never a fixed sleep.
-- **Robust dev-server boot.** `bootDevServer()` prefers the project-local Next CLI
-  (`<process.execPath> node_modules/next/dist/bin/next dev -p <port>`) and falls back to
+- **Robust dev-server boot.** `bootDevServer()` prefers the direct Next CLI
+  (`<process.execPath> <next bin> dev -p <port>`), locating the binary via `resolveNextBin()`, which
+  tries the project-local `REPO_ROOT/node_modules/next/dist/bin/next` FIRST and then Node's own
+  resolution (`createRequire(import.meta.url).resolve('next/dist/bin/next')`) so a worktree with NO
+  local `node_modules` still finds the hoisted/shared `next` (each accepted only when it exists on
+  disk). Only when neither resolves does it fall back to
   `cmd.exe /d /s /c "npx next dev …"` (Windows) / `npx next dev …` (POSIX) — deliberately NOT Node's
   `shell: true`, which re-serialized args and produced an empty stdout pipe. It waits for BOTH
   `/api/health` AND `/agent` and retries ONCE on a fresh port; when every attempt fails it prints the
@@ -237,21 +241,26 @@ only the LLM is live.
 - `LIVE_FORCE_MODEL` is an OPT-IN model override; by DEFAULT it does NOT override, so `agent/providers/provider-live.ts#resolveLiveModel` resolves the PROVIDED `.env.local` id for real.
 - `PARK_ATTEMPTS` retry/nudge logic for the flaky park; `awaitSessionCookie()` bounded wait for the `banking_session` cookie; one idempotent `cleanup()` stops the ACTIVE dev server (incl. the scenario-7 reboot), wired to exit/signals.
 - TASK-A evidence tooling: `persistedRecipientCalls()` parses every `AgentSession.stateJson` and prints each `transfer_money`/`search_contact` `toolCall` arg object VERBATIM; `LIVE_S2_PROMPT`/`LIVE_S3_PROMPT` override the two transfer prompts.
-- Current live outcome (see `./LIVE-ACCEPTANCE-REPORT.md`): **every one of the 8 scenarios PASSES live**
+- Current live outcome (see `./LIVE-ACCEPTANCE-REPORT.md`): a clean FULL run reached
+  `== 汇总：PASS 8 ｜ FAIL 0 ｜ SKIP 0 ==` (`EXIT=0`). **Every one of the 8 scenarios PASSES live**
   (1, 2, 2p — BOTH phone legs — 3, 4, 5, 6, 7), cross-checked against the DB/API. The formerly-failing
   S2p RAW-phone leg (`13900000002`) now PASSES: the APP read path `lib/db/repositories/contact.ts#searchContacts`
   is mask-aware via `lib/phone.ts#maskAwarePhoneMatch`, so a raw number resolves to the MASKED seed phone `139****0002`.
-- **Known live blocker (INFRASTRUCTURE, not app/model):** the `next dev` boot is intermittently flaky on a
-  worktree with NO local `node_modules` — `helpers.ts#resolveNextBin()` hard-codes the worktree-local
-  `node_modules` path, so it returns undefined and `devServerCommand()` falls back to the known-flaky
-  `npx` path (empty stdout / never-ready → `应用未就绪（180000ms）：/api/health（fetch failed）`). Because
-  scenario 7 reboots the app it is the most affected; a FULL 8/8 run therefore occasionally aborts at boot
-  before any scenario starts (`FAIL infrastructure`). Scenario 7 is confirmed green via `LIVE_SCENARIOS='2,6,7'`.
+- The `next dev` boot is now first-attempt reliable even in a worktree with NO local `node_modules`,
+  because `helpers.ts#resolveNextBin()` falls back to Node's own module resolution
+  (`createRequire(import.meta.url).resolve('next/dist/bin/next')`) so the reliable direct-binary path
+  is taken instead of the former flaky `npx` path.
+- **Live-model narration flake (model nondeterminism, NOT infrastructure / app logic):** the LIVE
+  model occasionally replies to a money prompt with a confirmation *question* and never calls the
+  gated tool that turn, so no confirmation/MFA card appears and the card wait times out
+  (`/api/actions=[]`, only `search_contact` persisted). It is not deterministic — the same prompt
+  parks correctly on other runs — so re-running the affected scenario (or the full suite) confirms it
+  green. Only scenario 7 has nudge/retry (`PARK_ATTEMPTS`).
 
 ## Routing Table
 - `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 6 journeys → structured report → non-zero exit on FAIL)
 - `./live-acceptance.e2e.ts` → REAL-browser + REAL-LLM (`LLM_MODE=live`) acceptance harness against DeepSeek; own isolated DB `prisma/live-acceptance.db`; `LIVE_SCENARIOS` subset; embeds the TASK-A persisted-tool-arg evidence dump (`persistedRecipientCalls`)
-- `./LIVE-ACCEPTANCE-REPORT.md` → current-state report of the live runs (all 8 scenarios PASS live — including the formerly-failing S2p raw-phone leg; plus the honest `next dev` boot-flake / live-narration-flake blockers)
+- `./LIVE-ACCEPTANCE-REPORT.md` → current-state report of the live runs (a clean FULL run — `PASS 8 ｜ FAIL 0 ｜ SKIP 0` — with all 8 scenarios PASS live including the formerly-failing S2p raw-phone leg; plus the honest live-model narration-flake blocker)
 - `./helpers.ts` → shared harness (isolated E2E DB + reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card + per-node timeline, read-model HTTP helpers, wedge fixtures + `seedStandaloneWedge`/direct-DB fact queries (`queryPendingActionStatus`/`queryExecutionAudit`), reporter, fail-fast navigation)
 - `./screenshots/` → git-ignored failure screenshots
 - `../app` → HTTP route-handler specs (the in-process acceptance layer this harness complements) (sibling — read-only)
