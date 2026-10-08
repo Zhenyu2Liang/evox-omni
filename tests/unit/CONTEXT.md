@@ -17,7 +17,7 @@ the root `vitest.config.ts` (`include: ['tests/**/*.{test,spec}.ts']`), so a pla
 runs them all — no scoped config is required for any of them.
 
 - `security/` (16 specs) — `permission-engine`, `risk-engine`, `risk-engine-rerisk`, `gateway`,
-  `gateway-audit-trail`, `authorize-hardening`, `authorize-concurrency`, `injection-guard`,
+  `gateway-audit-trail`, `authorize-hardening`, `authorize-concurrency`, `recipient-resolution`, `injection-guard`,
   `circuit-breaker`, `circuit-breaker-audit`, `circuit-breaker-reset`, `mfa`, `mfa-audit`,
   `risk-engine-dedup` (pure, DB-free: dedups the in-flight transfer total via `computeInFlightTransferTotal`,
   excluding parked transfers whose ledger `Transaction` row already exists), `transfer-limits-concurrency`.
