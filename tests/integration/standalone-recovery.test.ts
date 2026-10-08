@@ -398,9 +398,17 @@ it('repeat confirm + page refresh after recovery stay consistent (idempotent, no
 it('a STANDALONE transfer whose replay FAILS settles failed (never executed) and is not surfaced', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
-  // A recipient that does not exist: the SDK rejects EVERY attempt, so the idempotent REPLAY fails
-  // too — the recovered terminal state must be `failed`, never a fabricated `executed`.
-  const id = await parkStandalone(s, 'transfer_money', { name: '不存在的人', amount: 150 }, '给不存在的人转150元');
+  // Park with a RESOLVABLE, seeded recipient: the gateway resolves the transfer recipient
+  // SERVER-SIDE at park time (`security/security-gateway.ts#resolveTransferRecipient`), so an
+  // unresolvable name would be rejected as a clarify/validation error and NO `PendingAction`
+  // would ever be persisted. The parked args are canonicalized to the resolved `contactId`.
+  const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: 150 }, '给张伟转150元');
+  // THEN remove that contact BEFORE the first confirm so the SDK's EXECUTION-TIME resolution
+  // (`banking-sdk/transfer.ts#resolveRecipient` re-reads the contact by id) fails NOT_FOUND:
+  // the business write fails, so the idempotent REPLAY fails too — the recovered terminal state
+  // must be `failed`, never a fabricated `executed`. (Contact has no FK dependents;
+  // `resetDatabase()` in `beforeEach` re-seeds it for the next test.)
+  await p.contact.delete({ where: { id: 'contact_zhangwei' } });
 
   const txBefore = await p.transaction.count({ where: { userId } });
 

@@ -164,7 +164,11 @@ it('a wrong MFA code remains an error rather than a fresh verification decision'
 });
 it('a terminal result preserves a verification event for a different next plan action', async () => {
   mockResponse('executed', { ok: true, events: [{ type: 'mfa_required', actionId: 'next-action' }] });
-  expect((await clientRecover('action')).events).toEqual([{ type: 'mfa_required', actionId: 'next-action' }]);
+  const events = (await clientRecover('action')).events;
+  // The verification event belongs to a DIFFERENT next plan action and must survive a terminal settle.
+  expect(events).toContainEqual({ type: 'mfa_required', actionId: 'next-action' });
+  // The merged client normalizer additionally surfaces the terminal settlement (additive, intended).
+  expect(events).toContainEqual({ type: 'action_settled', actionId: 'action', status: 'executed', message: '需人工核对或已结束' });
 });
 
 it.each(['needs_reconciliation', 'failed', 'cancelled', 'locked'])('the real confirm route does not request MFA for RED %s', async status => {

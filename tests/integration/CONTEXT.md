@@ -31,6 +31,8 @@ remain recoverable from Git.
 | node-result-recovery.test.ts | Stored results, repeated/concurrent recovery and unknown side effects |
 | standalone-recovery.test.ts | Standalone wedges, safe replay and visible unknown outcomes |
 | restart-recovery.test.ts | Persisted evidence after module/registry reset |
+| message-protocol.test.ts | Persisted pi transcript validity: every toolResult answers a preceding toolCall (no orphan/duplicate/fabricated id) |
+| terminal-state-settle.test.ts | Confirm/cancel on terminal actions (stable 200 domain outcome, no rollback/double-charge) |
 
 Run npm run test -- tests/integration. Observe ../CONTEXT.md database isolation and no-weakening rules.
 These are in-process integration tests, not browser E2E.

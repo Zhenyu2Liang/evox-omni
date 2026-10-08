@@ -13,11 +13,12 @@
  * Fixtures: demo user 李明; recipient 张伟 (contact `contact_zhangwei`); funding account
  * 活期账户 `acct_checking` @ ¥23,580.
  *
- * NOTE on the recipient arg: `buildPendingActionSummary` renders the 收款人 field from the
- * args' name-ish keys — `contactId` is deliberately NOT resolved for display. The model
- * therefore addresses 张伟 by NAME so the confirmation summary/card shows 收款人 张伟 (the
- * demo's acceptance bar). The transfer still resolves to the seeded contact, which is proven
- * by asserting the written transaction's `counterpartyId === contact_zhangwei`.
+ * NOTE on the recipient arg: the model may still address 张伟 by NAME, but the gateway now resolves
+ * the recipient SERVER-SIDE at park time (`security-gateway#resolveTransferRecipient`, mirroring the
+ * SDK) and canonicalizes the PERSISTED args to `{ amount, remark, contactId }` (the model's
+ * `name`/`phone` selector is dropped). The confirmation summary therefore shows 收款人 (the resolved
+ * real name) plus an ADDITIONAL, MASKED 收款手机号 field, in the order
+ * 收款人 → 收款手机号 → 金额 → 账户 → 风险等级.
  *
  * Helpers: ../helpers (faux-agent/scenario), ../helpers/db, ../helpers/fixtures.
  */
@@ -48,6 +49,13 @@ const USER_MESSAGE = '给张伟转200元，备注AA';
 
 /** The exact args the scripted model proposes for `transfer_money`. */
 const TRANSFER_ARGS = { name: ZHANGWEI.name, amount: AMOUNT, remark: REMARK };
+
+/**
+ * The args the gateway PERSISTS for the parked action: the recipient resolved server-side at park
+ * time and canonicalized to `contactId` (the model's `name`/`phone` selector is dropped). Asserted
+ * with `toEqual` so a legacy/drifted key (e.g. `name`) would fail.
+ */
+const CANONICAL_ARGS = { amount: AMOUNT, remark: REMARK, contactId: ZHANGWEI.id };
 
 /** The model's ONE tool call, followed by a first-turn narration (so the script never runs dry). */
 const SCRIPT = [tool('transfer_money', TRANSFER_ARGS), final('转账已提交，等待你确认后执行。')];
@@ -104,18 +112,21 @@ describe('Scenario 2 — 给张伟转200元 (YELLOW confirm)', () => {
     expect(row.riskLevel).toBe('YELLOW');
     expect(row.requiresMfa).toBe(false);
     expect(row.status).toBe('pending');
-    expect(JSON.parse(row.argsJson)).toMatchObject(TRANSFER_ARGS);
+    // Canonicalized at park time: the resolved `contactId` only, with the model's `name` dropped.
+    expect(JSON.parse(row.argsJson)).toEqual(CANONICAL_ARGS);
 
     // `summaryJson` is the exact `PendingActionSummary` the gateway persists for the caller.
     const summary = JSON.parse(row.summaryJson) as PendingActionSummary;
     expect(summary.tier).toBe('YELLOW');
     expect(fieldValue(summary, '收款人')).toBe(ZHANGWEI.name);
+    expect(fieldValue(summary, '收款手机号')).toBe('139****0002');
     expect(fieldValue(summary, '金额')).toBe(formatCNY(AMOUNT));
 
     // `res.confirmation.action` is loaded back from the persisted row → identical fields.
     expect(pending.confirmation?.action).toEqual(summary);
     expect(pending.confirmation?.action.fields).toEqual([
       { label: '收款人', value: ZHANGWEI.name },
+      { label: '收款手机号', value: '139****0002' },
       { label: '金额', value: formatCNY(AMOUNT) },
       { label: '账户', value: '默认活期账户' },
       { label: '风险等级', value: RISK_LABEL.YELLOW },
@@ -174,12 +185,9 @@ describe('Scenario 2 — 给张伟转200元 (YELLOW confirm)', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe('confirmed');
 
-    // Execution used the ORIGINAL args the gateway validated/persisted — not model text.
-    expect(JSON.parse(rows[0].argsJson)).toMatchObject({
-      name: ZHANGWEI.name,
-      amount: AMOUNT,
-      remark: REMARK,
-    });
+    // Execution used the ORIGINAL canonical args the gateway validated/persisted (resolved
+    // `contactId`, no model-supplied `name`) — not model text.
+    expect(JSON.parse(rows[0].argsJson)).toEqual(CANONICAL_ARGS);
     const executed = await prisma.transaction.findFirstOrThrow({
       where: { accountId: CHECKING.id, counterpartyId: ZHANGWEI.id, amount: -AMOUNT },
     });
