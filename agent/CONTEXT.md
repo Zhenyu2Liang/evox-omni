@@ -432,6 +432,13 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
 - **Hallucination guard**: assistant replies derive ONLY from real tool results. A tool returning
   `ok:false` MUST be reported as a failure; the agent MUST NOT invent balances/results and MUST NOT
   claim a gated tool already executed.
+- **Provider transcript validity (DeepSeek / OpenAI-compatible)**: every persisted `role:'toolResult'`
+  message MUST answer the assistant `toolCall` of the run it belongs to (matching `toolCallId`) — no
+  orphan, no duplicate, no fabricated id. `resumeTurn` REPLACES the turn-time (blocked) placeholder
+  IN PLACE via `withRealToolResult` (never appends a second result after the model's narration), and
+  `banking-agent` normalizes `AgentState.messages` on restore via `normalizeToolResultMessages`, so the
+  invariant holds across the first turn, multi-turn persistence, confirm/MFA continuation and a
+  refresh/resume. This keeps DeepSeek's rule "a `tool` message must respond to a preceding `tool_calls`".
 - **A continuation failure is not a business failure**: after a confirmed execution, a failing
   `agent.continue()` is surfaced as an `error` event / a flagged message — NEVER swallowed and NEVER
   turned into a success (the caller always receives the REAL `ToolExecutionResult`).
@@ -529,8 +536,9 @@ Vitest (`tests/`, read-only sibling); designed to run WITHOUT network:
 - `./agent/banking-agent.ts` → constructs the Pi `Agent`, wires tools + `beforeToolCall`/`afterToolCall`, provider, restored `AgentState`
 - `./agent/system-prompt.ts` → banking system prompt builder + hallucination/permission rules
 - `./agent/session.ts` → per-session `AgentState` + transcript load/create/persist
-- `./agent/run-turn.ts` → one chat turn: prompt, event→stream mapping, persistence; `resumeTurn`
-- `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path (result + terminal status + recovery audit settled in ONE `$transaction`) + executed-node recovery + committed-side-effect wedge finalization (ref-counted `liveConfirmations` in `confirmation-recovery.ts`); the exported `recoverAction(actionId, opts?)` (`agent/index.ts` → `POST /api/actions/[id]/recover`) drives the same settlement path explicitly
+- `./agent/message-normalize.ts` → provider transcript validity: `normalizeToolResultMessages` (keep only a `toolResult` that answers the assistant `toolCall` run it follows — heals orphans/duplicates on restore) + `withRealToolResult` (replace the turn-time blocked placeholder IN PLACE, drop the trailing narration)
+- `./agent/run-turn.ts` → one chat turn: prompt, event→stream mapping, persistence; `resumeTurn` places the REAL result IN PLACE of the turn-time blocked placeholder for its original `toolCallId` (see `message-normalize`) and drops the trailing narration, so the transcript stays valid for OpenAI-compatible providers
+- `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path (result + terminal status + recovery audit settled in ONE `$transaction`) + executed-node recovery + committed-side-effect wedge finalization (ref-counted `liveConfirmations` in `confirmation-recovery.ts`); the exported `recoverAction(actionId, opts?)` (`agent/index.ts` → `POST /api/actions/[id]/recover`) drives the same settlement path explicitly; `cancelAction` maps a gateway `CONFLICT` (a terminal / already-executed / in-flight row) to a stable `ok:false` carrying the CURRENT persisted status (HTTP 200, via `conflictOutcome`), exactly like confirm/verify — no rollback, no terminal mutation
 - `./agent/confirmation-recovery.ts` → ref-counted per-process live-confirmation registry (`retainAction`/`releaseAction`/`isActionLive`/`liveCount`) + unified settlement classifier `classifyConfirmedAction(row, nowMs)` → `settled|processing|recoverable|needs_reconciliation` + `settlePendingAction`/`settleFromCommittedReceipt` + persisted execution LEASE (`EXECUTION_LEASE_TTL_MS = 120000`; `setPendingActionLease`/`clearPendingActionLease`/`hasActiveLease`/`leaseNowMs`; taken ONLY for `pending`/`awaiting_mfa`) + standalone (non-plan) wedge recovery (`recoverStandaloneWedge`: receipt-first idempotent replay for every `RECOVERABLE_STANDALONE_TOOLS` member — currently `transfer_money` only — else the terminal queryable `needs_reconciliation` state)
 - `./agent/execution-convergence.ts` → shared normal-confirmation and recovery decision: verified committed evidence, completion/transaction observation, liveness, stored result, then manual reconciliation. Unknown action outcome is `needs_reconciliation`, not an inferred failure.
 - `./agent/execution-fence.ts` → conditional first writes on the SDK transaction client: plan/node identity or confirmed action + owning plan not cancelled; no permission policy is decided by SDK.

@@ -39,10 +39,11 @@ Spec files (implemented — real assertions against the test SQLite), targeting 
   the SDK barrel `banking.budget.reserveBudget` / `banking.task.createScheduledTask` — repeated key
   → same `id` + exactly ONE row (`count({ where: { idempotencyKey } })`), absent/empty/whitespace
   key and two different keys → two rows (legacy behavior preserved).
+- `transfer-receipt.test.ts` — COMMITTED-FACT (execution-receipt) semantics of `banking.transfer.createTransfer`, driven DIRECTLY through the SDK: same `idempotencyKey` + same request replays the ORIGINAL result (no second debit / one ledger row / one `ExecutionReceipt`); same key + different request → `CONFLICT`; a LEGACY ledger row with no receipt replays even when the contact was renamed/deleted (`idempotentTransferTxId` identity); a fresh unknown recipient still → `NOT_FOUND`; a fresh transfer writes a receipt whose `resultJson` == the returned `TransferResult`. DB-backed via `../../helpers/db`, `lib/ledger` + the real `ExecutionReceipt` table.
 
 ## Status
 
-All five specs are implemented with real assertions and pass offline
+All six specs (incl. `transfer-receipt.test.ts`) are implemented with real assertions and pass offline
 (`npx vitest run tests/unit/banking-sdk` → 5 files / 56 tests green against `prisma/test.db`).
 The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
 `seedDemoData({ withAmbiguousContact: true })` inside the ambiguity case.
@@ -58,11 +59,12 @@ The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
 
 ## Routing Table
 
-- `./transfer.test.ts` · `./subscription.test.ts` · `./investment.test.ts` · `./atomicity.test.ts` · `./idempotent.test.ts`
+- `./transfer.test.ts` · `./transfer-receipt.test.ts` · `./subscription.test.ts` · `./investment.test.ts` · `./atomicity.test.ts` · `./idempotent.test.ts` (SDK-direct, gateway-independent)
 - `../../helpers` → test-DB lifecycle + fixtures (sibling — this node)
 
 ## Notes for Agents
 
+- Every spec here calls the Banking SDK directly (`banking.transfer.createTransfer`, `banking.investment.*`, `banking.subscription.*`, `banking.budget.*`, `banking.task.*`, `banking.transaction.*`, `banking.account.*`) and imports NOTHING from `security/`; `banking-sdk/index.ts` has no `security` dependency. So a change confined to `security/security-gateway.ts` (server-side recipient resolution at park time, park-time arg canonicalization, confirmation-summary fields) does NOT affect these specs — the recipient resolution tested here is the SDK's own `createTransfer` behavior, exercised in isolation without the gateway.
 - Helpers are reached via `../../helpers/{db,fixtures}` from this node (not `../helpers/*`).
 - `useFreshDatabase()` is called once per file; each test starts from `resetDatabase()` (truncate + canonical seed).
 - The atomicity spec lives in THIS node and is auto-discovered by the root `vitest.config.ts`

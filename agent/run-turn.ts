@@ -39,8 +39,9 @@ import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import { security } from '@/security';
 import type { AgentEvent, AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
-import { createBankingAgent, type BankingAgentRuntime } from './banking-agent';
+import { createBankingAgent } from './banking-agent';
 import { confirmationCard, errorCard, mfaCard, toCards } from './card-emitter';
+import { withRealToolResult } from './message-normalize';
 import { getOrCreateSession, loadSession, saveSession } from './session';
 import { readPendingActionId } from './task-control';
 import type { ToolExecutionResult } from './tools';
@@ -505,19 +506,44 @@ function findLastToolCall(messages: readonly AgentMessage[]): ToolCall | null {
   return null;
 }
 
+/** The model's tool call with the given id (scanned backwards), or `null` when none matches. */
+function findToolCallById(messages: readonly AgentMessage[], id: string): ToolCall | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (!isAssistantMessage(message)) continue;
+    for (const part of message.content) {
+      if (part.type === 'toolCall' && part.id === id) return part;
+    }
+  }
+  return null;
+}
+
 /**
- * Build the pi tool-result message carrying the REAL outcome of a gated tool. Appending it (rather
- * than re-prompting) is what lets `agent.continue()` run: the last transcript entry must be a
- * user/tool-result message for the model to narrate the factual result.
+ * Resolve WHICH tool call the REAL result belongs to: the caller's explicit id, else the last tool
+ * call the model proposed. NOTHING is fabricated — when neither exists (a degenerate transcript that
+ * never occurs on the live gated path, where the blocked call is always persisted) the result is
+ * still placed so the continuation can run.
+ */
+function resolveToolResultTarget(
+  messages: readonly AgentMessage[],
+  explicitId?: string,
+): { toolCallId: string; toolName: string } {
+  const matched = explicitId !== undefined ? findToolCallById(messages, explicitId) : null;
+  const call = matched ?? findLastToolCall(messages);
+  return { toolCallId: explicitId ?? call?.id ?? '', toolName: call?.name ?? 'unknown' };
+}
+
+/**
+ * Build the pi tool-result message carrying the REAL outcome of a gated tool. It is placed next to
+ * its tool call (see `withRealToolResult`) so `agent.continue()` — which requires the last transcript
+ * entry to be a user/tool-result message — can run and let the model narrate the factual result.
  */
 function buildToolResultMessage(
   input: ResumeTurnInput,
-  runtime: BankingAgentRuntime,
+  toolCallId: string,
+  toolName: string,
   timestamp: number,
 ): ToolResultMessage {
-  const lastCall = findLastToolCall(runtime.agent.state.messages);
-  const toolCallId = input.toolCallId ?? lastCall?.id ?? newId('tool');
-  const toolName = lastCall?.name ?? 'unknown';
   const text =
     input.toolResult.summary ??
     input.toolResult.error ??
@@ -563,8 +589,18 @@ export async function resumeTurn(
 
   const unsubscribe = runtime.agent.subscribe(createEventHandler(buffer, now));
   try {
-    const toolResultMessage = buildToolResultMessage(input, runtime, now());
-    runtime.agent.state.messages = [...runtime.agent.state.messages, toolResultMessage];
+    // Attribute the REAL outcome to the ORIGINAL tool call and REPLACE the turn-time (blocked)
+    // placeholder in place — never append a second result for the same id (which would sit after the
+    // narration and trip the provider's "tool message must answer a preceding tool_calls" rule).
+    const { toolCallId, toolName } = resolveToolResultTarget(
+      runtime.agent.state.messages,
+      input.toolCallId,
+    );
+    const toolResultMessage = buildToolResultMessage(input, toolCallId, toolName, now());
+    runtime.agent.state.messages = withRealToolResult(
+      runtime.agent.state.messages,
+      toolResultMessage,
+    );
     await runtime.agent.continue();
   } catch (error) {
     // The gated business action ALREADY executed and is ALREADY audited (see `./confirmation`).

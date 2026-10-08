@@ -22,6 +22,8 @@ no LLM; DB-backed specs run against the isolated test SQLite (`../helpers/db`). 
     `sha256("<userId>\u0000<key>")`, asserted against an independent `node:crypto` computation and
     the `/^txidem_[0-9a-f]{32}$/` pattern; distinct per `(userId, key)`.
   - A namespace cross-check proving `nxe:` and `txidem_` keys can never collide.
+- `execution-receipt.test.ts` — **pure, no DB, no LLM**. Covers the committed-fact identity helpers in `@/lib/ledger`: `executionReceiptId(userId, key)` (frozen `rcpt_` + first 32 hex of `sha256("<userId>\u0000<key>")`) and `requestDigest(parts)` (stable sha256 hex of the KEY-SORTED canonical JSON — insertion-order independent, sorts nested objects, normalizes an absent `undefined` part like explicit `null`), each checked against an independent `node:crypto` reference plus a `rcpt_`/`txidem_` collision cross-check.
+- `prisma-cli-env.test.ts` — **pure, no DB, no LLM**. Locks the shared schema-engine env policy in `@/lib/prisma-cli-env`: `SCHEMA_ENGINE_RUST_LOG === 'info'`, the MUTATING `pinSchemaEngineLogging(env)` (forces `RUST_LOG=info`, `RUST_BACKTRACE` default `1`/preserved if set, mutates and returns the SAME object), and the NON-mutating `prismaCliEnv(env)` (returns a NEW env, leaves its input untouched, carries every other ambient key through).
 
 ## Constraints
 
@@ -36,3 +38,5 @@ no LLM; DB-backed specs run against the isolated test SQLite (`../helpers/db`). 
 
 - `./pendingAction.claim.test.ts` → PendingAction atomic-claim persistence primitives (DB-backed)
 - `./ledger-keys.test.ts` → plan-node + transfer-ledger de-dup scope identity keys (pure)
+- `./execution-receipt.test.ts` → committed-fact receipt id + canonical request digest (pure)
+- `./prisma-cli-env.test.ts` → schema-engine RUST_LOG pinning policy, mutate vs copy (pure)

@@ -37,6 +37,10 @@ import {
   sendChatTurn,
   verifyAction,
 } from './actions';
+// VALUE import from the DIRECT module path (NOT the `./cards` barrel) so this module's runtime graph
+// does not pull in every card component; `decisionKey` is the shared decision-identity helper.
+import { asTerminalStatus } from './cards/confirmationStatus';
+import { decisionKey } from './decisionKey';
 
 /**
  * The summary for an MFA prompt. The `mfa_required` event carries no tool name, so `toolName` is
@@ -312,8 +316,76 @@ function mfaSummary(state: ChatUIState, hint: string | undefined): MfaActionSumm
   return summary;
 }
 
+/**
+ * A settled-action signal emitted by `./actions#postAction` when a server action route reports a
+ * TERMINAL status. ADDITIVE — the frozen `AgentStreamEvent` union is unchanged — so it is read
+ * structurally; a server that never emits it falls back to the previous behaviour.
+ */
+interface ActionSettledEvent {
+  type: 'action_settled';
+  actionId: string;
+  status: string;
+  message?: string;
+}
+
+function asActionSettledEvent(event: AgentStreamEvent): ActionSettledEvent | undefined {
+  const record = event as unknown as { type?: unknown; actionId?: unknown; status?: unknown; message?: unknown };
+  if (record.type !== 'action_settled') return undefined;
+  if (typeof record.actionId !== 'string' || typeof record.status !== 'string') return undefined;
+  return {
+    type: 'action_settled',
+    actionId: record.actionId,
+    status: record.status,
+    ...(typeof record.message === 'string' ? { message: record.message } : {}),
+  };
+}
+
+/**
+ * Fold a settled-action signal: stamp the server-reported status (+ optional reason) onto the
+ * matching inline `confirmation` card(s) so a settled card shows a terminal badge instead of inert
+ * buttons, and — for a TERMINAL status — clear the live decision when it is the SAME action.
+ */
+function settleAction(state: ChatUIState, event: ActionSettledEvent): ChatUIState {
+  const pending = state.pendingAction;
+  const matchesPending = pending !== undefined && pending.actionId === event.actionId;
+  const key = matchesPending && pending ? decisionKey(pending.summary) : undefined;
+
+  let changed = false;
+  const messages = state.messages.map((message) => {
+    const cards = message.cards;
+    if (!cards || cards.length === 0) return message;
+    let cardChanged = false;
+    const nextCards = cards.map((card) => {
+      if (card.type !== 'confirmation') return card;
+      const stamped = (card.action as unknown as { actionId?: unknown }).actionId;
+      const sameAction = stamped === event.actionId;
+      const sameSummary = key !== undefined && decisionKey(card.action) === key;
+      if (!sameAction && !sameSummary) return card;
+      cardChanged = true;
+      const nextAction = {
+        ...card.action,
+        ...(event.message !== undefined ? { message: event.message } : {}),
+        status: event.status,
+      } as PendingActionSummary;
+      return { ...card, action: nextAction };
+    });
+    if (!cardChanged) return message;
+    changed = true;
+    return { ...message, cards: nextCards };
+  });
+
+  const withCards = changed ? { ...state, messages } : state;
+  if (matchesPending && asTerminalStatus(event.status) !== undefined) {
+    return { ...withCards, pendingAction: undefined };
+  }
+  return withCards;
+}
+
 /** Fold ONE event into the state (immutable — returns a new state object). */
 function applyEvent(state: ChatUIState, event: AgentStreamEvent): ChatUIState {
+  const settled = asActionSettledEvent(event);
+  if (settled) return settleAction(state, settled);
+
   switch (event.type) {
     case 'session':
       return { ...state, sessionId: event.sessionId };
@@ -576,10 +648,19 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
       setState((prev) => {
         // Seed the (server-confirmed) sessionId, then let a `session` event take precedence.
         const base = res.sessionId ? { ...prev, sessionId: res.sessionId } : prev;
-        const settled = events.some((e) => e.type === 'error')
-          ? base
-          : { ...base, pendingAction: undefined };
-        return { ...reduceAgentEvents(settled, events), busy: false };
+        // Fold FIRST so a settlement signal (`action_settled`) still sees the decision it belongs to,
+        // then apply the generic settle rule: a non-error turn clears the decision it acted on.
+        const reduced = reduceAgentEvents(base, events);
+        const hasError = events.some((e) => e.type === 'error');
+        // NEVER clear a decision the SAME turn just established: a `confirmation_required` /
+        // `mfa_required` (a fresh YELLOW/RED gate, or a YELLOW→RED escalation whose response carries
+        // no `error`) must survive so its card stays actionable. Folding before the clear without this
+        // guard would wipe it, which is why the guard is required, not optional.
+        const establishesDecision = events.some(
+          (e) => e.type === 'confirmation_required' || e.type === 'mfa_required',
+        );
+        const clearPending = !hasError && !establishesDecision;
+        return { ...reduced, ...(clearPending ? { pendingAction: undefined } : {}), busy: false };
       });
     } catch (e) {
       const message = errorMessage(e);

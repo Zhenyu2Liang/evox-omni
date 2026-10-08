@@ -253,6 +253,14 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 
 - GREEN auto-executed reads write NO `AuditLog` row (audit rows are gated-only); assert GREEN at the
   tool-event / DB-state level.
+- At PARK time the gateway resolves the recipient SERVER-SIDE and CANONICALIZES the persisted transfer
+  args to the resolved `contactId` (original `name`/`phone` deleted); a non-schema key (e.g. `toName`)
+  or BOTH/neither of `contactId|phone|name` is a `VALIDATION` deny with NOTHING persisted. The transfer
+  confirmation card summary now carries FIVE fields (`收款人`, `收款手机号` = `maskPhone(phone)`,
+  `金额`, `账户`, `风险等级`). NO spec under `./tests/app` asserts either the canonicalized `contactId`
+  or the `fields` array, so both are currently UNASSERTED coverage gaps.
+  (`malicious-input-http.test.ts` L275/L305 use `toName` in the confirm request body/query — INERT,
+  since the confirm route executes the PRE-PARKED action's args and ignores request-supplied args.)
 - The remaining HTTP coverage gap is the `/api/chat` SSE `error`-frame, which is unreachable over the
   real HTTP + mock path (see the "Known gap" section above).
 - `actions-recovery-http.test.ts` covers the RECOVERY surface end-to-end: a STANDALONE `transfer_money`

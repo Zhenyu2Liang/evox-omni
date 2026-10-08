@@ -1,7 +1,8 @@
 'use client';
 
-import type { PendingActionSummary } from '@/lib/contracts/security';
+import type { PendingActionStatus, PendingActionSummary } from '@/lib/contracts/security';
 import { Badge, Button, Card, Money, StatusBadge } from '../../ui';
+import { asTerminalStatus, terminalStatusView } from './confirmationStatus';
 
 export interface ConfirmationCardProps {
   action: PendingActionSummary;
@@ -10,8 +11,26 @@ export interface ConfirmationCardProps {
   onCancel?: (actionId: string) => void;
   busy?: boolean;
   error?: string;
+  /**
+   * The action's current status. When TERMINAL the card reports the settled fact instead of the
+   * (now meaningless) 取消/确认 controls. The chat layer may instead stamp a runtime `status` field
+   * onto `action` (the frozen `PendingActionSummary` has no such field) — this prop wins over it.
+   */
+  status?: PendingActionStatus;
+  /** Optional one-line explanation for a terminal status (e.g. the failure reason). */
+  statusMessage?: string;
   className?: string;
 }
+
+/**
+ * `PendingActionSummary` plus the non-contract, runtime-only fields the chat layer stamps onto an
+ * inline card's `action` object after settlement. Read structurally (never declared in the frozen
+ * contract).
+ */
+type PendingActionSummaryWithRuntime = PendingActionSummary & {
+  status?: unknown;
+  message?: unknown;
+};
 
 /**
  * YELLOW/RED confirmation surface for a gated banking action.
@@ -20,14 +39,27 @@ export interface ConfirmationCardProps {
  * from the chat container, which POST to the `./app` action routes. The SERVER re-validates the
  * original args and executes the operation through the security gateway's authorized path — the
  * browser (and the model) can never trigger a transfer directly.
+ *
+ * Once the action SETTLES (a terminal status), the controls are replaced by the factual status badge
+ * so a settled action can never still look actionable.
  */
 export function ConfirmationCard(p: ConfirmationCardProps) {
-  const { action, actionId, onConfirm, onCancel, busy, error, className } = p;
+  const { action, actionId, onConfirm, onCancel, busy, error, status, statusMessage, className } = p;
 
   const canCancel = Boolean(actionId && onCancel);
   const canConfirm = Boolean(actionId && onConfirm);
 
-  const footer = (
+  const withRuntime = action as PendingActionSummaryWithRuntime;
+  const terminal = asTerminalStatus(status) ?? asTerminalStatus(withRuntime.status);
+  const rawReason = statusMessage ?? withRuntime.message;
+  const reason = typeof rawReason === 'string' ? rawReason : undefined;
+  const terminalView = terminal ? terminalStatusView(terminal, reason) : undefined;
+
+  const footer = terminalView ? (
+    <div className="flex items-center justify-end gap-2">
+      <Badge tone={terminalView.tone}>{terminalView.label}</Badge>
+    </div>
+  ) : (
     <div className="flex items-center justify-end gap-2">
       <Button
         variant="secondary"
@@ -83,6 +115,10 @@ export function ConfirmationCard(p: ConfirmationCardProps) {
           </div>
         ) : null}
       </dl>
+
+      {terminalView?.explanation ? (
+        <p className="mt-3 text-sm text-banking-navy/70">{terminalView.explanation}</p>
+      ) : null}
 
       {error ? (
         <div className="mt-3">

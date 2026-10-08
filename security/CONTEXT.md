@@ -151,7 +151,9 @@ function deriveIntent(toolName: ToolName): string                   // TOOL_INTE
 // (ctx.taskId / ctx.nodeId, `null` when absent); `toContractPendingAction` surfaces userRequest and
 // intent on the returned PendingAction (the plan link is read back via `getPendingActionPlanLink`).
 // A plan-scoped call (`ctx.taskId`) whose owning `AgentTask` is already `'cancelled'` is REFUSED: the
-// internal path returns `null` (⇒ `handleToolCall` yields a clean `deny`); the exported
+// internal path returns `{ kind: 'plan_cancelled' }` (⇒ `handleToolCall` yields a clean `deny`) or
+// `{ kind: 'clarify' }` for an unresolvable/ambiguous transfer recipient (⇒ a PLAIN deny block reason,
+// nothing persisted); the exported
 // `createPendingAction` maps that to a thrown `CONFLICT` so its public return type stays non-null.
 function sameArgs(a: unknown, b: unknown): boolean   // PURE, key-order-insensitive deep equality of tool args
 ```
@@ -204,7 +206,7 @@ action yet). There is NO demo-user fallback anywhere: an `actionId` alone is no 
 **Plan-cancel guards (fail-closed; the gateway READS the owning plan's status).** To close the
 plan-cancel → authorize race even when the plan's bulk revoke is lost or neutralized, the gateway
 reads `AgentTask.status` at two points: (1) CREATE/PARK — `gatewayCreatePendingAction` reads the
-owning `AgentTask` INSIDE the SAME `$transaction` that inserts the row and returns `null` when the
+owning `AgentTask` INSIDE the SAME `$transaction` that inserts the row and returns `{ kind:'plan_cancelled' }` when the
 plan is `'cancelled'` (⇒ `handleToolCall` returns a clean `deny` with a `blockReason` and NO live
 `action`); (2) AUTHORIZE — BOTH `authorizeTransfer` (YELLOW CAS tx) and `authorizeWithMfa`
 (strong-verification claim tx) re-read the plan via the action's persisted `row.taskId` INSIDE the
@@ -218,6 +220,47 @@ COMPLETELY unaffected by both guards, and a committed ledger debit is NEVER roll
 ```ts
 const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 ```
+
+### Park-time transfer-recipient resolution (confirmation card ⇄ execution agreement)
+
+`transfer_money` is resolved SERVER-SIDE at PARK time (after the amount normalization, BEFORE the dedupe
+and the insert) by the exported helpers below — mirroring `banking-sdk/transfer.ts#resolveRecipient` EXACTLY
+(the same `lib/db/repositories/contact` lookups), so the confirmation card names the SAME contact the SDK
+resolves at execution.
+
+```ts
+type RecipientResolution =
+  | { status:'resolved'; contact:{ id:string; name:string; phone:string } }
+  | { status:'not_found'; kind:'contactId'|'phone'|'name'; supplied:string }
+  | { status:'ambiguous'; kind:'contactId'|'phone'|'name'; supplied:string; candidates:Array<{name:string;phone:string}> }
+  | { status:'invalid'; detail:string }
+async function resolveTransferRecipient(userId: string, args: Record<string,unknown>): Promise<RecipientResolution>
+function maskPhone(phone: string): string                     // PURE 脱敏: first 3 + '****' + last 4; short input safe ('139'→'****', '1391234'→'139****'); never a raw phone
+function canonicalizeTransferArgs(args, contactId: string): Record<string,unknown>   // PURE: sets contactId and DELETES phone/name (the SDK requires EXACTLY ONE recipient field); amount/remark/sourceAccountId preserved
+async function resolveAccountLabel(userId: string, sourceAccountId: string|undefined): Promise<string|undefined>  // the caller's OWN account name, else undefined
+function buildRecipientClarifyMessage(res: Exclude<RecipientResolution,{status:'resolved'}>): string   // PURE, Chinese, phone-masked, code-free
+type CreatePendingActionResult = { kind:'created'; action: PendingAction } | { kind:'plan_cancelled' } | { kind:'clarify'; message:string }   // gatewayCreatePendingAction's return type
+```
+
+- Supplied-recipient counting matches the SDK: a field counts iff `!== undefined && !== ''`; EXACTLY ONE of
+  `contactId` | `phone` | `name` must be supplied, else `invalid`.
+- `contactId` → `getContact(id)` (missing/foreign owner → `not_found`). `phone` → `searchContacts`, then
+  EXACT (`c.phone === phone`) else the `contains` pool (empty → `not_found`, >1 → `ambiguous`).
+  `name` → EXACT name match (0 → `not_found`, >1 → `ambiguous`).
+- A non-`resolved` recipient makes `gatewayCreatePendingAction` return `{ kind:'clarify' }`: **NOTHING is
+  persisted** (no `PendingAction`, no MFA challenge) and nothing can execute. `handleToolCall` turns it into a
+  BLOCK (`evaluation.blocked` stays true, `decision.kind='deny'`, NO `action`) whose `blockReason` is the PLAIN
+  model-readable `buildRecipientClarifyMessage(res)` — deliberately NOT a `BLOCK_REASON_PREFIX` JSON payload
+  (the model must read it and ask the user to clarify). `SecurityGateway.createPendingAction` maps it to
+  `AppError('VALIDATION', message)`, and `{ kind:'plan_cancelled' }` to `AppError('CONFLICT', …)`.
+- A `resolved` recipient canonicalizes `ctx.args` to the resolved `contactId` BEFORE `findReusableAction`, so a
+  re-park compares canonical args and the args persisted on the action are exactly the ones the SDK executes.
+- `buildPendingActionSummary(ctx, ev, recipient?, accountLabel?)` stays SYNC/exported/PURE. For `transfer_money`
+  the 收款人 field is `recipient.name` (fallback: the `toName`/`name`/… pickString heuristic,
+  `'（未指定）'`), a `recipient` present ADDITIONALLY pushes `收款手机号 = maskPhone(recipient.phone)` (masked,
+  never raw), and 账户 is `accountLabel` (from `resolveAccountLabel(userId, sourceAccountId)`) else the
+  pickString heuristic (`sourceAccountId`/`fromAccount`/…) else `'默认活期账户'`. Field order:
+  收款人 → [收款手机号] → 金额 → 账户 → 风险等级.
 
 ## Flow: evaluate → decide → pendingAction → authorize
 
@@ -240,7 +283,7 @@ const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
                 │
       YELLOW/RED (blocked):
                 ▼
-        createPendingAction(ctx, ev) ──► existing action for the same (taskId,nodeId) + tool + args + tier/requiresMfa, ELSE a new PendingAction (status: pending | awaiting_mfa; persists userRequest + code-derived intent + the taskId/nodeId plan link) + PendingActionSummary
+        createPendingAction(ctx, ev) ──► (transfer_money: the recipient is resolved SERVER-SIDE; a non-`resolved` recipient returns 'clarify' and NOTHING is persisted) ELSE an existing action for the same (taskId,nodeId) + tool + canonical args + tier/requiresMfa, ELSE a new PendingAction (status: pending | awaiting_mfa; persists userRequest + code-derived intent + the taskId/nodeId plan link) + PendingActionSummary
                 ▼
         serializeBlockReason(decision, action) ──► '__SECURITY_BLOCK__{...actionId...}'
                 ▼

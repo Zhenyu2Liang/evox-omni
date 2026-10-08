@@ -34,10 +34,12 @@ Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` 
   (`persistPlan` only ever carries `status:'running'`); after release exactly one run executes the
   node (stable `runTool` ctx → same `nodeExecutionKey`).
 
+- `executor-execution-right.test.ts` (4 specs, DB-backed) — plan-takeover execution-right barriers through the REAL `buildNodeClaimPorts` + `planExecutionClaimHeld` ports (from `@/agent/task-control`): claim a plan, rotate its token (takeover), then drive `runPlan` and assert the superseded ("zombie") run performs ZERO tool calls, ZERO node writes and publishes NO stale settlement (only the up-front `status:'running'` snapshot), while an already-run node's committed success fact survives.
+
 ## Constraints
 
 - Side effects (tool calls, persistence, clock) are **injected** — most specs need no DB and no LLM;
-  `executor-claim-scope.test.ts` IS DB-backed (real `AgentTask`/`AgentTaskNode` rows for the CAS, via
+  `executor-claim-scope.test.ts` and `executor-execution-right.test.ts` ARE DB-backed (real `AgentTask`/`AgentTaskNode` rows for the CAS, via
   `useFreshDatabase()` → `../../helpers/db`).
 - Deterministic order/timestamps: assert stable ordering by declaration order among equally-ready nodes.
 - `evaluateCondition` is total: a missing dot-path resolves to `false`.
@@ -48,7 +50,7 @@ Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` 
 ## Notes for Agents
 
 - Run: `npx vitest run tests/unit/planner --no-file-parallelism` (`dag`/`executor`/`lifecycle` are pure;
-  `executor-claim-scope.test.ts` requires the test SQLite).
+  `executor-claim-scope.test.ts` and `executor-execution-right.test.ts` require the test SQLite).
 - All planner specs are green (no known-red cases).
 
 ## Routing Table
@@ -57,3 +59,4 @@ Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` 
 - `./executor.test.ts` → runPlan state machine + plan controls
 - `./lifecycle.test.ts` → durable persisted-plan lifecycle (pause/cancel/retry/resume)
 - `./executor-claim-scope.test.ts` → DB `(taskId,nodeId)` node-execution claim CAS + cross-run de-dup scope
+- `./executor-execution-right.test.ts` → plan-takeover execution-right barriers (real `buildNodeClaimPorts`/`planExecutionClaimHeld` ports; DB-backed)
