@@ -43,8 +43,13 @@ import {
   setPendingActionStatus,
 } from '../lib/db/repositories/pendingAction';
 import { getSession } from '../lib/db/repositories/session';
-import { getContact, searchContacts } from '../lib/db/repositories/contact';
-import { getAccount } from '../lib/db/repositories/account';
+import {
+  buildRecipientClarifyMessage,
+  canonicalizeTransferArgs,
+  maskPhone,
+  resolveAccountLabel,
+  resolveTransferRecipient,
+} from './recipient-resolution';
 import { prisma } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 import { safeParse } from '../lib/json';
@@ -223,154 +228,6 @@ function resolveAmount(args: Record<string, unknown>): number | undefined {
   if (!('amount' in args)) return undefined;
   const amount = parseAmount(args.amount as string | number | null | undefined);
   return Number.isFinite(amount) ? amount : undefined;
-}
-
-/** A non-empty string counts as a supplied recipient field (mirrors the SDK's `suppliedRecipientFields`). */
-function isPresent(value: unknown): value is string {
-  return typeof value === 'string' && value !== '';
-}
-
-/**
- * Result of a SERVER-SIDE transfer-recipient resolution performed at park time. `resolved` names the
- * exact contact the SDK will resolve at execution; every other status is a clarification request
- * (nothing is parked).
- */
-export type RecipientResolution =
-  | { status: 'resolved'; contact: { id: string; name: string; phone: string } }
-  | { status: 'not_found'; kind: 'contactId' | 'phone' | 'name'; supplied: string }
-  | {
-      status: 'ambiguous';
-      kind: 'contactId' | 'phone' | 'name';
-      supplied: string;
-      candidates: Array<{ name: string; phone: string }>;
-    }
-  | { status: 'invalid'; detail: string };
-
-/**
- * Resolve the transfer recipient SERVER-SIDE at park time, mirroring `banking-sdk/transfer.ts`
- * `resolveRecipient` EXACTLY so the confirmation card names the SAME contact the SDK will resolve at
- * execution. Exactly ONE of `contactId` | `phone` | `name` must be supplied (`contactId` → look up and
- * owner-check; `phone` → exact-then-contains; `name` → exact). Never throws: an unresolvable/ambiguous
- * recipient is REPORTED (`not_found` / `ambiguous` / `invalid`) so the caller can ask the user to
- * clarify. The classification is a pure function of the validated args — never of model text.
- */
-export async function resolveTransferRecipient(
-  userId: string,
-  args: Record<string, unknown>,
-): Promise<RecipientResolution> {
-  const supplied: Array<'contactId' | 'phone' | 'name'> = (
-    ['contactId', 'phone', 'name'] as const
-  ).filter((key) => isPresent(args[key]));
-  if (supplied.length !== 1) {
-    return {
-      status: 'invalid',
-      detail: `exactly one of contactId|phone|name must be supplied (received: ${supplied.length})`,
-    };
-  }
-  const kind = supplied[0];
-
-  if (kind === 'contactId') {
-    const id = args.contactId as string;
-    const row = await getContact(id);
-    if (!row || row.userId !== userId) return { status: 'not_found', kind, supplied: id };
-    return { status: 'resolved', contact: { id: row.id, name: row.name, phone: row.phone } };
-  }
-
-  if (kind === 'phone') {
-    const phone = args.phone as string;
-    const matches = await searchContacts(userId, phone);
-    const exact = matches.filter((c) => c.phone === phone);
-    const pool = exact.length > 0 ? exact : matches.filter((c) => c.phone.includes(phone));
-    if (pool.length === 0) return { status: 'not_found', kind, supplied: phone };
-    if (pool.length > 1) {
-      return {
-        status: 'ambiguous',
-        kind,
-        supplied: phone,
-        candidates: pool.map((c) => ({ name: c.name, phone: c.phone })),
-      };
-    }
-    return {
-      status: 'resolved',
-      contact: { id: pool[0].id, name: pool[0].name, phone: pool[0].phone },
-    };
-  }
-
-  const name = args.name as string;
-  const matches = await searchContacts(userId, name);
-  const exact = matches.filter((c) => c.name === name);
-  if (exact.length === 0) return { status: 'not_found', kind, supplied: name };
-  if (exact.length > 1) {
-    return {
-      status: 'ambiguous',
-      kind,
-      supplied: name,
-      candidates: exact.map((c) => ({ name: c.name, phone: c.phone })),
-    };
-  }
-  return {
-    status: 'resolved',
-    contact: { id: exact[0].id, name: exact[0].name, phone: exact[0].phone },
-  };
-}
-
-/**
- * 手机号脱敏: keep the first 3 and last 4 characters, mask the middle with `****` (e.g. `139****0002`).
- * Safe for ANY input — never throws and never reveals more than first-3 + last-4; a string too short to
- * keep both is masked from index 3 (or fully masked). Never emit a raw phone on a confirmation card.
- */
-export function maskPhone(phone: string): string {
-  const value = typeof phone === 'string' ? phone : '';
-  if (value.length <= 7) return value.length <= 3 ? '****' : `${value.slice(0, 3)}****`;
-  return `${value.slice(0, 3)}****${value.slice(-4)}`;
-}
-
-/**
- * Express a transfer's recipient ONLY via the resolved `contactId`, DELETING `phone` / `name`: the SDK
- * requires EXACTLY ONE recipient field, so keeping the original selector would make execution throw
- * `VALIDATION`. `amount`, `remark` and `sourceAccountId` are preserved EXACTLY.
- */
-export function canonicalizeTransferArgs(
-  args: Record<string, unknown>,
-  contactId: string,
-): Record<string, unknown> {
-  const next: Record<string, unknown> = { ...args, contactId };
-  delete next.phone;
-  delete next.name;
-  return next;
-}
-
-/**
- * Label for the funding account on the confirmation card: the real account name when `sourceAccountId`
- * names one of the caller's OWN accounts, else `undefined` (so the caller falls back to the default
- * label). Never throws — an unknown/foreign id simply yields no label.
- */
-export async function resolveAccountLabel(
-  userId: string,
-  sourceAccountId: string | undefined,
-): Promise<string | undefined> {
-  if (typeof sourceAccountId !== 'string' || sourceAccountId === '') return undefined;
-  const account = await getAccount(sourceAccountId);
-  if (!account || account.userId !== userId) return undefined;
-  return account.name;
-}
-
-/**
- * Model-readable Chinese clarification for an unresolvable/ambiguous transfer recipient. Code-free and
- * phone-masked (a raw phone is never emitted). The agent's `beforeToolCall` returns this verbatim so
- * the model asks the user to clarify instead of parking an operation.
- */
-export function buildRecipientClarifyMessage(
-  res: Exclude<RecipientResolution, { status: 'resolved' }>,
-): string {
-  if (res.status === 'not_found') {
-    return `未能找到与「${res.supplied}」匹配的收款联系人，请向用户确认收款人的姓名或手机号后再试。`;
-  }
-  if (res.status === 'ambiguous') {
-    const candidates = res.candidates.map((c) => `${c.name}（${maskPhone(c.phone)}）`).join('、');
-    return `「${res.supplied}」匹配到多个联系人（${candidates}），请向用户确认具体收款人（提供联系人全名或手机号）。`;
-  }
-  return '请提供且仅提供一个收款人标识（联系人 id、手机号或姓名）后重试。';
 }
 
 /** Best-effort string read of the first present, non-empty candidate key. */
@@ -1261,3 +1118,17 @@ export function buildPendingActionSummary(
 
 /** Re-exported for the agent layer's convenience (the raw evaluation shape). */
 export type { ToolEvaluation };
+
+/**
+ * Recipient-resolution helpers live in `./recipient-resolution` (a cohesive, DB-backed module).
+ * Re-exported here so the established `@/security/security-gateway` import surface (notably
+ * `maskPhone` and `RecipientResolution`) is preserved for existing callers and tests.
+ */
+export {
+  buildRecipientClarifyMessage,
+  canonicalizeTransferArgs,
+  maskPhone,
+  resolveAccountLabel,
+  resolveTransferRecipient,
+} from './recipient-resolution';
+export type { RecipientResolution } from './recipient-resolution';

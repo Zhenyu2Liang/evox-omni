@@ -26,6 +26,10 @@ This node is the `beforeToolCall` chokepoint and the sole authority on 🟢/🟡
   cancellation, current effective daily total and verified MFA. A raced committed ledger is not
   counted twice. The agent also invokes the breaker check inside the SDK write fence. Receipt-only
   reconstruction does not authorize a new write and can proceed while locked.
+- `recipient-resolution.ts` (a cohesive, DB-backed module imported AND re-exported by
+  `security-gateway.ts`, so the `@/security/security-gateway` import surface — incl. `maskPhone` and
+  `RecipientResolution` — is preserved) owns PARK-time `transfer_money` recipient resolution; see the
+  "Park-time transfer-recipient resolution" section below.
 
 Import the facade (`import { security } from '../security'`) or the sub-modules directly.
 All public types are local interfaces (NOT in `lib/contracts`) except the frozen cross-module
@@ -221,12 +225,13 @@ COMPLETELY unaffected by both guards, and a committed ledger debit is NEVER roll
 const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
 ```
 
-### Park-time transfer-recipient resolution (confirmation card ⇄ execution agreement)
+### `recipient-resolution.ts` — Park-time transfer-recipient resolution (confirmation card ⇄ execution agreement)
 
 `transfer_money` is resolved SERVER-SIDE at PARK time (after the amount normalization, BEFORE the dedupe
-and the insert) by the exported helpers below — mirroring `banking-sdk/transfer.ts#resolveRecipient` EXACTLY
-(the same `lib/db/repositories/contact` lookups), so the confirmation card names the SAME contact the SDK
-resolves at execution.
+and the insert) by the cohesive `./recipient-resolution.ts` module (imported AND re-exported by
+`security-gateway.ts`, so the established `@/security/security-gateway` import surface — incl. `maskPhone`
+and `RecipientResolution` — is preserved). Its helpers mirror `banking-sdk/transfer.ts#resolveRecipient`
+(the same contact data), so the confirmation card names the SAME contact the SDK resolves at execution.
 
 ```ts
 type RecipientResolution =
@@ -234,7 +239,8 @@ type RecipientResolution =
   | { status:'not_found'; kind:'contactId'|'phone'|'name'; supplied:string }
   | { status:'ambiguous'; kind:'contactId'|'phone'|'name'; supplied:string; candidates:Array<{name:string;phone:string}> }
   | { status:'invalid'; detail:string }
-async function resolveTransferRecipient(userId: string, args: Record<string,unknown>): Promise<RecipientResolution>
+async function resolveTransferRecipient(userId: string, args: Record<string,unknown>): Promise<RecipientResolution>   // NEVER throws; tolerant of the value/slot the model supplies
+function maskAwarePhoneMatch(value: string, stored: string): boolean   // PURE mask-aware phone match (rules below)
 function maskPhone(phone: string): string                     // PURE 脱敏: first 3 + '****' + last 4; short input safe ('139'→'****', '1391234'→'139****'); never a raw phone
 function canonicalizeTransferArgs(args, contactId: string): Record<string,unknown>   // PURE: sets contactId and DELETES phone/name (the SDK requires EXACTLY ONE recipient field); amount/remark/sourceAccountId preserved
 async function resolveAccountLabel(userId: string, sourceAccountId: string|undefined): Promise<string|undefined>  // the caller's OWN account name, else undefined
@@ -242,11 +248,31 @@ function buildRecipientClarifyMessage(res: Exclude<RecipientResolution,{status:'
 type CreatePendingActionResult = { kind:'created'; action: PendingAction } | { kind:'plan_cancelled' } | { kind:'clarify'; message:string }   // gatewayCreatePendingAction's return type
 ```
 
-- Supplied-recipient counting matches the SDK: a field counts iff `!== undefined && !== ''`; EXACTLY ONE of
-  `contactId` | `phone` | `name` must be supplied, else `invalid`.
-- `contactId` → `getContact(id)` (missing/foreign owner → `not_found`). `phone` → `searchContacts`, then
-  EXACT (`c.phone === phone`) else the `contains` pool (empty → `not_found`, >1 → `ambiguous`).
-  `name` → EXACT name match (0 → `not_found`, >1 → `ambiguous`).
+Resolution is **TOLERANT of the value/slot the model supplies** — a live model echoing whatever
+`search_contact` returned may put a NAME into `contactId`, a MASKED phone into `contactId` (e.g.
+`139****0002`), or a DE-MASKED phone into `phone`; all of those still resolve. The rules, in order:
+
+- **Selectors (one or more)**: every PRESENT selector value across `contactId` | `phone` | `name` is considered
+  (`isPresent` = `typeof === 'string' && !== ''`); ONE OR MORE are accepted — EXACTLY ONE is NOT required. ZERO
+  present selectors → `{ status:'invalid', detail }` (which `buildRecipientClarifyMessage` renders as the
+  `请提供且仅提供一个收款人标识…` message). `kind`/`supplied` on `not_found`/`ambiguous` describe the FIRST
+  supplied selector, so the existing clarify messages stay stable.
+- **Owner isolation (free)**: the caller's contacts are loaded ONCE via `listContacts(userId)` and matched IN
+  MEMORY, so only the caller's OWN contacts are ever considered — a foreign/unknown id can never resolve or leak.
+- **Per-value match**: a supplied VALUE matches a contact iff ANY identity facet matches — exact `contact.id`,
+  exact `contact.name`, OR `maskAwarePhoneMatch(value, contact.phone)`.
+- **Mask-aware phone match** `maskAwarePhoneMatch(value, stored)` is TRUE iff ANY of:
+  `value === stored` (covers `contactId:"139****0002"` vs stored `139****0002`);
+  `storedDigits.includes(valueDigits)` (the existing partial behaviour, e.g. `phone:"0002"` vs `139****0002` →
+  `1390002` contains `0002`); `valueDigits.includes(storedDigits)` (reverse partial, defensive) — both with
+  every `*` stripped and guarded against empty digits; OR a WILDCARD RegExp built from `stored.split('*')`'s
+  non-empty (RegExp-escaped) fragments joined by `\d*` and anchored `^…$`, tested against the value with its
+  `*` stripped (so `phone:"13900000002"` matches `139****0002` via `^139\d*0002$`). No non-empty fragment →
+  `false`; built only from escaped literals, so it never throws.
+- **Union → outcome**: the candidates gathered from EVERY supplied value are UNIQUED by contact id. EXACTLY ONE
+  distinct → `{ status:'resolved', contact }`; ZERO → `not_found`; MORE THAN ONE → `ambiguous` (carrying the
+  `candidates` array of `{name, phone}`). This makes a 重名 AND a set of CONTRADICTORY selectors (e.g. `contactId`
+  resolves 张伟 while `name` says 王芳) both `ambiguous`.
 - A non-`resolved` recipient makes `gatewayCreatePendingAction` return `{ kind:'clarify' }`: **NOTHING is
   persisted** (no `PendingAction`, no MFA challenge) and nothing can execute. `handleToolCall` turns it into a
   BLOCK (`evaluation.blocked` stays true, `decision.kind='deny'`, NO `action`) whose `blockReason` is the PLAIN
@@ -429,7 +455,7 @@ Frozen imports (already exist, DO NOT redefine): `lib/contracts/{risk,tools,secu
 (`AppError`, `Result`, `ok`, `err`, `ErrorCode`), `lib/constants` (`DAILY_TRANSFER_LIMIT`, `MFA_CODE`,
 `MFA_MAX_ATTEMPTS`, `RISK_LABEL`), `lib/money` (`formatCNY`, `parseAmount`), `lib/json` (`safeParse`),
 `lib/clock` (`demoNow`), `lib/date` (`startOfDay`), `lib/db/client` (`prisma`, the singleton), `@prisma/client`
-(the `Prisma` namespace / `TransactionClient` type).
+(the `Prisma` namespace / `TransactionClient` type; `recipient-resolution.ts` also imports `type Contact`).
 
 Repository functions this node consumes (confirmed signatures — do NOT fork):
 - `../audit` → `recordSecurityEvent(event: SecurityEvent): Promise<void>` (sibling node; implemented, callers `await` it — but its writes are BEST-EFFORT and swallow persistence failures, see Known Issues)
@@ -443,6 +469,8 @@ Repository functions this node consumes (confirmed signatures — do NOT fork):
   `getMfaChallenge(actionId): Promise<MfaChallenge | null>` (carries `code` — never expose it),
   `incrementMfaAttempts(actionId): Promise<MfaChallenge>`, `updateMfaChallengeStatus(actionId, status): Promise<MfaChallenge>`, `resetMfaAttempts(actionId): Promise<MfaChallenge>`
 - `lib/db/repositories/transaction` → `listTransactions(query): Promise<Transaction[]>` (used by `risk.computeDailyTransferTotal`; its range is half-open `[from, to)`, so the inclusive upper bound is passed as `now + 1ms`). `risk.computeEffectiveTransferTotalWith` queries `client.transaction.findMany` directly (same window/filters) so it can run inside a `$transaction`.
+- `lib/db/repositories/contact` → `listContacts(userId): Promise<Contact[]>` (used by `recipient-resolution.resolveTransferRecipient` to load the caller's OWN contacts once and match them in memory; the park path no longer uses `getContact`/`searchContacts`)
+- `lib/db/repositories/account` → `getAccount(id): Promise<Account | null>` (used by `recipient-resolution.resolveAccountLabel` to name the caller's OWN funding account)
 
 ## Test Strategy
 
