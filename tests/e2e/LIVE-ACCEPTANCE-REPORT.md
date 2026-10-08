@@ -143,21 +143,36 @@ Legend: **prompt** → **rendered DOM** → **DB / API cross-check** → verdict
   loudly (or resolve to `provider.defaultModel`), never leak a provider key to the wrong host.
 - **Workaround (disclosed, kept):** harness sets `LLM_MODEL=deepseek-v4-flash` before boot.
 
-### DEFECT #2 — `transfer_money` recipient resolution non-deterministic vs `search_contact`
-- **File (evidence-based):** the transfer tool path `agent/tools/transfer.ts` (recipient /
-  `contactId` resolution) descending into `banking-sdk/transfer.ts` +
-  `banking-sdk/contact.ts#searchContacts`.
-- **Symptom:** in the SAME live run, `search_contact('张伟')` returned a match
-  (`139****0002`, 招商银行), but `transfer_money({recipient:'张伟'})` returned
-  `未能找到与「张伟」匹配的收款联系人，请向用户确认收款人的姓名或手机号后再试。`
-  (also with `13900000002`). Scenarios 5 & 6 used the SAME prompt `给张伟转200元` on the
-  SAME seeded data and DID park a YELLOW `transfer_money` action.
-- **Evidence:** scenarios 2 & 3 FAIL in the final run (no card); scenarios 5 & 6 PASS;
-  scenario 3 PASSED on the earlier diagnostic run. Same seed, same prompt, different runs.
-- **Suspected root cause:** the recipient resolution is not robust to the identifier form the
-  live model chooses (contact id vs name vs raw vs masked phone), and/or the transfer tool's
-  own lookup differs from `search_contact`'s substring match — so a recipient the agent just
-  resolved can be rejected by the write tool. Non-deterministic across runs.
+### DEFECT #2 — `transfer_money` recipient resolution rejects a name placed in the `phone` slot
+- **File (evidence-based):** the recipient-resolution merged fix
+  `security/security-gateway.ts#resolveTransferRecipient` (~L257; name-path ~L299–314,
+  phone-path ~L279–296) + `buildRecipientClarifyMessage` (~L367), backed by
+  `lib/db/repositories/contact.ts#searchContacts` (`OR:[name contains, phone contains]`).
+- **Symptom:** in the SAME live run, `search_contact` DID resolve the contact
+  (`找到 1 位匹配「张伟」的联系人：张伟（139****0002，招商银行）`), yet `transfer_money` returned,
+  verbatim: `未能找到与「张伟」匹配的收款联系人，请向用户确认收款人的姓名或手机号后再试。`
+  (a second call echoed `未能找到与「13900000002」匹配的收款联系人`). Scenarios 5 & 6 used the
+  SAME prompt `给张伟转200元` on the SAME seeded data and DID park a YELLOW action.
+- **Evidence:** scenarios 2 & 3 FAIL in the final run (no card, `/api/actions=[]`); scenarios
+  5 & 6 PASS; scenario 3 PASSED on the earlier diagnostic run. Raw log `live-final.out`
+  (in git history at `aae3cf4`).
+- **Root cause (deduced from the resolver logic + the echoed `supplied` value):** the name-path
+  filters `searchContacts(name)` by EXACT name match. Since the seed name is exactly `张伟` AND
+  `search_contact` (the SAME repository query) succeeded, the name-path CANNOT have failed for
+  `「张伟」`. The phone-path is `matches = searchContacts(phone); exact = matches.filter(c =>
+  c.phone === phone); pool = exact.length>0 ? exact : matches.filter(c => c.phone.includes(phone))`.
+  For `phone === '张伟'`: `searchContacts('张伟')` returns the contact (its name contains 张伟),
+  but `c.phone === '张伟'` and `c.phone.includes('张伟')` are BOTH false → empty pool → `not_found`
+  with `supplied='张伟'` — matching the observed message EXACTLY. Therefore **the live model
+  passed the recipient NAME in the `phone` (or `contactId`) tool-arg slot**, and the resolver has
+  NO name-fallback when the selected slot holds a name-like value; its exact/contains phone match
+  also rejects the model's normalized `13900000002` against the MASKED seed phone `139****0002`.
+  Non-determinism = the model choosing different arg shapes across runs. (Raw tool-args cannot be
+  captured client-side: the frozen `AgentStreamEvent`/`ToolEventView` contract
+  (`lib/contracts/agent.ts`) exposes no raw args, so the field is inferred, not directly observed.)
+- **Blast radius:** a live model that puts the recipient name (or a de-masked phone) in the
+  `phone`/wrong arg slot makes a recipient the agent just resolved un-transferable; the write tool
+  bounces it back and the model narrates the clarify message as a failure.
 
 ## Benign artifacts (not defects)
 

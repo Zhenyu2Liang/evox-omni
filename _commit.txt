@@ -1,6 +1,0 @@
-﻿[evogit-agent-T1-A72 150215c] Add LIVE acceptance report (harness delivered, no live run executed; documents model-id defect)
- 1 file changed, 126 insertions(+)
- create mode 100644 tests/e2e/LIVE-ACCEPTANCE-REPORT.md
-?? _commit.txt
-150215c Add LIVE acceptance report (harness delivered, no live run executed; documents model-id defect)
-cd35ffe Add live DeepSeek browser acceptance harness (tests/e2e/live-acceptance.e2e.ts)
