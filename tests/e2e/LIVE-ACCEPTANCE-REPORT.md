@@ -142,7 +142,7 @@ scenario). Run 3 is the authoritative **targeted** run that also lands S7 green.
   (`maskAwarePhoneMatch`) + the gateway's `resolveTransferRecipient`. Scenario 2 (by name) and the
   masked-phone leg of 2p both park a card with the REAL recipient.
 - **Raw-phone recipient resolution (READ path)** — `lib/db/repositories/contact.ts#searchContacts` +
-  `lib/phone.ts#maskAwarePhoneMatch` (see 2p above). This closes the LAST residual failure.
+  `lib/phone.ts#maskAwarePhoneMatch` (see 2p above). Scenario 2p's raw-phone leg is now a PASS.
 
 ## Blockers (honest)
 
