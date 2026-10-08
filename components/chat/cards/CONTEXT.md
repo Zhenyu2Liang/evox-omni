@@ -11,10 +11,14 @@ It also holds `ReconciliationCard` — a NON-union, actionless card for a termin
 action. It is NOT a `ChatCard` variant and is NOT dispatched by `CardRenderer`; `ChatWindow` renders it
 directly (see below).
 
+Two pure, non-`'use client'` helper modules live here too: `./confirmationStatus.ts` (the terminal
+status → badge mapping used by `ConfirmationCard`) and `./maskPhone.ts` (phone 脱敏 used by
+`TransferCard`).
+
 ## API Surface
 
-Named exports, re-exported from `./index.ts`. `ChatCard`/`PendingActionSummary`/`TaskPlan` from
-`@/lib/contracts/*`; SDK DTOs type-only from `@/banking-sdk`.
+Named exports, re-exported from `./index.ts`. `ChatCard`/`PendingActionSummary`/`PendingActionStatus`/
+`TaskPlan` from `@/lib/contracts/*`; SDK DTOs type-only from `@/banking-sdk`.
 
 ```ts
 // types.ts — concrete payload shapes for the `data: unknown` fields + action-handler bundle
@@ -50,6 +54,20 @@ export interface CardRendererProps { card: ChatCard; action?: CardActionHandlers
 export function CardRenderer(p: CardRendererProps): JSX.Element;   // 'use client'
 ```
 
+```ts
+// confirmationStatus.ts — pure terminal-status → badge mapping (NO 'use client')
+export type BadgeTone = NonNullable<BadgeProps['tone']>;   // the ui/Badge tone union, re-used
+export type TerminalActionStatus = 'executed' | 'failed' | 'cancelled' | 'needs_reconciliation';
+export function isTerminalStatus(value: unknown): value is TerminalActionStatus;
+export function asTerminalStatus(value: unknown): TerminalActionStatus | undefined;
+export interface TerminalStatusView { tone: BadgeTone; label: string; explanation?: string; }
+export const RECONCILIATION_EXPLANATION: string;   // the needs_reconciliation one-liner
+export function terminalStatusView(status: TerminalActionStatus, reason?: string): TerminalStatusView;
+
+// maskPhone.ts — pure phone 脱敏 helper (NO 'use client')
+export function maskPhone(phone?: string | null): string;
+```
+
 ### The 11 `ChatCard` renderers (all `'use client'`, named exports)
 
 ```ts
@@ -57,13 +75,14 @@ export interface BalanceCardProps { data: BalanceView; className?: string; }
 export function BalanceCard(p: BalanceCardProps): JSX.Element;        // total + per-account tiles
 
 export interface TransferCardProps { data: TransferResult; className?: string; }
-export function TransferCard(p: TransferCardProps): JSX.Element;      // recipient + amount + new balance
+export function TransferCard(p: TransferCardProps): JSX.Element;      // recipient (masked phone) + amount + new balance
 
-// confirmation = PendingActionSummary + actionId + [取消]/[确认] → confirm endpoint
+// confirmation = PendingActionSummary + actionId + [取消]/[确认] → confirm endpoint.
+// A TERMINAL `status` replaces the buttons with a status badge (see "ConfirmationCard — terminal-status rendering").
 export interface ConfirmationCardProps { action: PendingActionSummary; actionId?: string;
   onConfirm?: (actionId: string) => void; onCancel?: (actionId: string) => void;
-  busy?: boolean; error?: string; className?: string; }
-export function ConfirmationCard(p: ConfirmationCardProps): JSX.Element; // title + fields + tier badge
+  busy?: boolean; error?: string; status?: PendingActionStatus; statusMessage?: string; className?: string; }
+export function ConfirmationCard(p: ConfirmationCardProps): JSX.Element; // title + fields + tier badge (+ terminal badge instead of buttons)
 
 // MfaCard — RED verification; shows hint ONLY, never the code. [取消]/[验证]
 export interface MfaCardProps { actionId: string; hint?: string;
@@ -94,6 +113,39 @@ export function PlanCard(p: PlanCardProps): JSX.Element;              // status 
 export interface ErrorCardProps { message: string; code?: string; detail?: string; className?: string; }
 export function ErrorCard(p: ErrorCardProps): JSX.Element;            // safe, agent-facing error surface
 ```
+
+### `ConfirmationCard` — terminal-status rendering
+
+`ConfirmationCard` reads the action's status so a SETTLED gated action can never keep looking
+actionable. The status is taken from, in order: the `status` PROP, else a runtime `status` field the
+chat layer stamps onto the inline card's `action` object. `PendingActionSummary` is FROZEN and has no
+such field, so it is read structurally through a LOCAL type (`PendingActionSummary & { status?:
+unknown; message?: unknown }`) — the contract is never edited. The optional one-line explanation comes
+from the `statusMessage` PROP, else the runtime `action.message`. **Props win over the runtime fields
+in both cases.** The per-status logic lives in the pure, unit-testable `./confirmationStatus.ts`
+(`isTerminalStatus` / `asTerminalStatus` / `terminalStatusView`, with an `assertNever` guard so a new
+terminal status is a compile error).
+
+| `status` | kind | footer | body |
+| --- | --- | --- | --- |
+| *(absent)* | non-terminal | 取消 + 确认 buttons (unchanged) | fields + amount |
+| `pending` / `awaiting_mfa` / `confirmed` / `locked` | non-terminal | 取消 + 确认 buttons (unchanged) | fields + amount |
+| `executed` | terminal | `Badge tone="success"` → 已执行 | fields + amount |
+| `failed` | terminal | `Badge tone="danger"` → 失败 | + the failure reason line ONLY when a non-empty `reason` is supplied |
+| `cancelled` | terminal | `Badge tone="neutral"` → 已取消 | fields + amount |
+| `needs_reconciliation` | terminal | `Badge tone="warn"` → 需人工核对 | + the standard one-liner `该操作结果未能确认，需人工核对处理。` |
+
+The tier `<StatusBadge>` in the title and the `fields`/`amount` body render are UNCHANGED for every
+status; the existing `error` prop still renders as a danger `Badge`. Terminal statuses never claim more
+than the server says (`executed` says only 已执行). Colours come ONLY from `ui/Badge` tones via the
+local `BadgeTone = NonNullable<BadgeProps['tone']>` — never hard-coded.
+
+### Phone masking — `./maskPhone.ts`
+
+`TransferCard` renders the recipient phone through `maskPhone(phone)` (脱敏) so a full number is never
+shown in the chat. Rules: absent / empty / whitespace-only → `''`; trimmed length ≤ 4 → `'****'`;
+5–10 chars → first 2 + `*`-masked middle + last 2 (7 chars → `'13***45'`); ≥ 11 chars → first 3 +
+exactly 4 stars + last 4 (11-digit → `'138****5678'`). Pure and unit-testable.
 
 ### `ReconciliationCard` — the non-union, actionless card
 
@@ -147,9 +199,11 @@ That section carries relationship text only — no status glyphs.
 
 `CardRenderer` narrows the frozen `data: unknown` field to the concrete DTO above; the `./app` serialiser
 must populate `cards[].data` with exactly these shapes. It also threads the shared `CardActionHandlers`
-into the interactive cards (`onControl`/`busy` → `PlanCard`; `mfaAttempts` → `MfaCard.attempts`). Note:
-the `plan` renderer here is NOT the live plan path — a `plan` card is promoted into `activePlan` and
-rendered ONCE by `../../chat/ChatWindow` (see `../CONTEXT.md` "Plan dedupe" and "Human-decision card").
+into the interactive cards (`onControl`/`busy` → `PlanCard`; `mfaAttempts` → `MfaCard.attempts`). The
+`confirmation` case passes `action={p.card.action}` only — `ConfirmationCard` reads the action's runtime
+`status`/`message` fields itself, so no `CardRenderer` change is needed. Note: the `plan` renderer here
+is NOT the live plan path — a `plan` card is promoted into `activePlan` and rendered ONCE by
+`../../chat/ChatWindow` (see `../CONTEXT.md` "Plan dedupe" and "Human-decision card").
 `ReconciliationCard` is intentionally NOT a variant of this union (it is not agent-emitted — it is a
 client-side restore surface; see the section above).
 
@@ -161,13 +215,19 @@ client-side restore surface; see the section above).
 
 - **Exhaustiveness is mandatory**: `CardRenderer` switches on `card.type` with a `default` of
   `assertNever(card: never)`. Adding a `ChatCard` variant must break the build here.
-- **All Client Components** (`'use client'`) — rendered inside the streaming chat.
+- **All Client Components** (`'use client'`) — rendered inside the streaming chat. The two helper
+  modules (`confirmationStatus.ts`, `maskPhone.ts`) are PURE and carry NO directive (like `types.ts`).
 - **Interactive cards never execute money movement themselves.** `ConfirmationCard`/`MfaCard` call the
   confirm/verify/cancel handlers passed from `../../chat/ChatWindow`, which POST to `./app` action routes.
   `PlanCard`'s task-control footer likewise calls the injected `onControl` only. `AnomalyCard`'s
   `onAcknowledge`/`onViewDetail`/`onFreeze` are supplied by `ChatWindow` too and simply
   `stream.send(...)` an ordinary chat message (chat → agent → Security Gateway); 冻结银行卡 drives
   `freeze_card` → YELLOW confirmation. The browser only calls fetch; the server re-validates + executes.
+- **Terminal-status-aware `ConfirmationCard`**: a terminal status (the `status` prop, else the runtime
+  `action.status`) hides 取消/确认 and shows a `ui/Badge` status pill; statuses and their tones come from
+  `./confirmationStatus.ts` only — never hard-code a tier/status colour.
+- **Phone numbers are masked**: `TransferCard` renders recipient phones via `./maskPhone.ts`; never
+  render a raw phone number.
 - **MFA secrecy**: `MfaCard` renders `hint` + the failed-attempt count only — never the code
   (`MFA_CODE` is server-side; do not import).
 - **`ReconciliationCard` is actionless and non-union.** It renders a terminal `needs_reconciliation`
@@ -183,12 +243,18 @@ client-side restore surface; see the section above).
 ## Test Strategy
 
 - Primary guard is **compile-time**: the `assertNever` default makes a new card variant a `tsc` error,
-  and the `Record<TaskPlanStatus, …>` label/tone maps are exhaustive over the frozen plan statuses.
+  the `Record<TaskPlanStatus, …>` label/tone maps are exhaustive over the frozen plan statuses, and
+  `terminalStatusView`'s `assertNever` makes a new `TerminalActionStatus` a `tsc` error.
+- `./confirmationStatus.ts` (`isTerminalStatus`/`asTerminalStatus`/`terminalStatusView`) and
+  `./maskPhone.ts` are PURE — unit-testable without a DOM (terminal/non-terminal classification, the
+  `failed` reason only when non-empty, the `needs_reconciliation` one-liner, and each masking length band).
 - RTL render tests under the root `tests/` suite render each card with a fixture `ChatCard` and assert
   key content (amount via `Money`, tier badge label, field rows, MFA hint present / code absent).
 - `CardRenderer` dispatch test: each `card.type` renders its component; unknown key fails to compile.
 - `ReconciliationCard` render test: a terminal `needs_reconciliation` `PendingActionSummary` renders the
   amber warning + fields/amount with NO confirm/cancel/MFA control.
+- `ConfirmationCard` render test: a runtime terminal `status` on `action` (or the `status` prop) hides
+  取消/确认 and shows the matching `Badge` label; a non-terminal/absent status keeps the buttons.
 - `PlanCard`'s dependency-label resolution (dep ids → node names, empty → `起始节点（无依赖）`, unknown id
   fallback) is the behavioural bit to assert; the timeline itself is delegated to `AgentTaskTimeline`.
   Its status→control mapping (`controlActionsFor`) and emitted `TaskControlAction`s are also behavioural.
@@ -196,11 +262,13 @@ client-side restore surface; see the section above).
 ## Routing Table
 
 - `./types.ts` → card-data payload interfaces + `TaskControlAction` + `CardActionHandlers`
+- `./confirmationStatus.ts` → pure terminal-status → badge mapping for `ConfirmationCard` (`isTerminalStatus`/`asTerminalStatus`/`terminalStatusView`/`BadgeTone`/`TerminalStatusView`/`RECONCILIATION_EXPLANATION`)
+- `./maskPhone.ts` → pure phone 脱敏 helper used by `TransferCard`
 - `./CardRenderer.tsx` → the exhaustive `card.type` dispatcher
 - `./BalanceCard.tsx` `./TransferCard.tsx` `./ConfirmationCard.tsx` `./MfaCard.tsx` `./SpendingCard.tsx`
   `./CardsCard.tsx` `./InvestmentsCard.tsx` `./SubscriptionsCard.tsx` `./AnomalyCard.tsx`
   `./PlanCard.tsx` `./ErrorCard.tsx` → the individual `ChatCard` renderers
 - `./ReconciliationCard.tsx` → the non-union, actionless terminal-`needs_reconciliation` card (rendered by `../ChatWindow`, not `CardRenderer`)
-- `./index.ts` → re-exports the cards, `CardRenderer`, and the types
+- `./index.ts` → re-exports the cards, `CardRenderer`, the status/masking helpers, and the types (barrel stays NEUTRAL — no `'use client'`)
 - `../` → `ChatWindow`/`MessageBubble` render `CardRenderer` (parent — read-only)
 - `../../banking/`, `../../charts/`, `../../ui/` → composed here (dependencies — read-only)
