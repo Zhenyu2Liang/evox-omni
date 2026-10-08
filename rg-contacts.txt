@@ -1,0 +1,23 @@
+﻿D:\projects\banking-agent\.genesis\workers\worker_T1_A96\agent\tools\contact.ts:45: /** Model-free runner — `banking.contact.searchContacts(userId, query)`. */
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\agent\tools\contact.ts:52: const contacts = await banking.contact.searchContacts(userId, query);
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\banking-sdk\contact.ts:21: export async function searchContacts(userId: string, query: string): Promise<ContactView[]> {
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\banking-sdk\contact.ts:22: const rows = await contacts.searchContacts(userId, query);
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\banking-sdk\transfer.ts:192: const matches = await contacts.searchContacts(userId, phone);
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\banking-sdk\transfer.ts:205: const matches = await contacts.searchContacts(userId, name);
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\lib\db\repositories\contact.ts:3: import { maskAwarePhoneMatch } from '../../phone';
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\lib\db\repositories\contact.ts:32: export function searchContacts(userId: string, keyword: string): Promise<Contact[]> {
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\lib\db\repositories\contact.ts:40: maskAwarePhoneMatch(keyword, contact.phone),
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\lib\phone.ts:25: export function maskAwarePhoneMatch(value: string, stored: string): boolean {
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\security\recipient-resolution.ts:66: export function maskAwarePhoneMatch(value: string, stored: string): boolean {
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\security\recipient-resolution.ts:92: return maskAwarePhoneMatch(value, contact.phone);
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:26: * are a `vi.spyOn(contactRepo, 'searchContacts')` hold (a controllable barrier, never a fabricated
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:103: // re-resolving the mutable recipient, so `searchContacts` is entered exactly ONCE (the first call).
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:104: const searchSpy = vi.spyOn(contactRepo, 'searchContacts');
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:149: // Thread the barrier: hold the FIRST call inside `searchContacts` while the SECOND completes.
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:150: const original = contactRepo.searchContacts;
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:152: const spy = vi.spyOn(contactRepo, 'searchContacts').mockImplementation(async (uid, keyword) => {
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:213: // Hold the `王芳` ¥300 call inside `searchContacts`, then let the `张伟` ¥200 call win the write.
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:214: const original = contactRepo.searchContacts;
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:216: const spy = vi.spyOn(contactRepo, 'searchContacts').mockImplementation(async (uid, keyword) => {
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:288: // The replay must NOT re-resolve the mutable recipient: `searchContacts` runs for the FIRST call
+D:\projects\banking-agent\.genesis\workers\worker_T1_A96\tests\integration\transfer-replay.test.ts:290: const searchSpy = vi.spyOn(contactRepo, 'searchContacts');

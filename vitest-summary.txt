@@ -1,0 +1,25 @@
+[90mstdout[2m | tests/integration/standalone-recovery.test.ts[2m > [22m[2ma STANDALONE transfer whose replay FAILS settles failed (never executed) and is not surfaced
+[22m[39mREVIEW_STANDALONE_FAILED_REPLAY {"firstHttp":500,"repeatedHttp":200,"repeatedOk":false,"actionStatus":"failed","replayOk":false,"txBefore":30,"txAfter":30,"balance":23580,"visible":false}
+[90mstdout[2m | tests/integration/execution-integrity.test.ts[2m > [22m[2man obsolete resumed executor cannot mark a takeover completed node failed
+[22m[39mREVIEW_OBSOLETE_LATE_FAILURE {"takeoverStatus":"success","finalStatus":"success","nodeStatus":"success","nodeError":null,"budgets":1}
+[90mstdout[2m | tests/integration/execution-integrity.test.ts[2m > [22m[2ma stored successful result stays consistent when the separate terminal status write fails
+[22m[39mREVIEW_ATOMIC_RESULT_STATUS {"failureHttp":500,"failureOk":false,"actionStatus":"confirmed","hasResult":false,"consistent":true,"retryHttp":200,"retryOk":false,"cards":1}
+[90mstdout[2m | tests/integration/obsolete-executor.test.ts[2m > [22m[2man obsolete executor's late failure must not flip a takeover-completed dependency node to failed or skipped
+[22m[39mREVIEW_OBSOLETE_FAILURE_FLIP {"takeoverStatus":"success","finalStatus":"success","budgetStatus":"success","budgetError":null,"tailStatus":"success"}
+[22m[39mREVIEW_CONFIRMATION_MARKER_ABNORMAL_EXIT {"failedVerifyHttp":500,"injectionCalls":1,"wedgedStatus":"confirmed","wedgedResult":null,"wedgedPlan":"waiting_confirmation","resumedStatus":"success","recoveredPlan":"success","recoveredNode":"success","recoveredAction":"executed","recoveredError":null,"balance":18580,"debits":1}
+[90mstdout[2m | tests/integration/execution-audit.test.ts[2m > [22m[2ma CRITICAL execution-audit insert failure rolls back the debit, ledger and receipt before recovery
+[90mstdout[2m | tests/integration/execution-audit.test.ts[2m > [22m[2ma HISTORICAL already-posted but missing-audit row is idempotently BACKFILLED on recovery (never failed, no second debit)
+[90mstdout[2m | tests/integration/transfer-receipts.test.ts[2m > [22m[2mREVIEW_RECEIPT_WRITE_ROLLBACK: a failed receipt write rolls the debit + ledger row back atomically
+[90mstdout[2m | tests/integration/node-result-recovery.test.ts[2m > [22m[2mFAILED-result finalization marks the action, node and plan failed and never executed
+[22m[39mREVIEW_RESULT_RECOVERY_FAILED {"firstHttp":500,"faultCalls":1,"resumed":"failed","actionStatus":"failed","nodeStatus":"failed","resultOk":false}
+[90mstdout[2m | tests/integration/node-result-recovery.test.ts[2m > [22m[2ma committed side effect whose result transaction rolled back settles the node terminally as failed
+[22m[39mREVIEW_RESULT_RECOVERY_TX_ROLLBACK_WEDGE {"firstHttp":500,"faultCalls":1,"afterFault":"confirmed","resultAfterFault":null,"cardsAfterFault":1,"resumed":"failed","resumedAgain":"failed","nodeStatus":"failed","nodeError":"¸Ã½Úµã´ËÇ°ÒÑÖ´ĞĞµ«Î´Áô´æ½á¹û£¬ĞèÈË¹¤ºË¶Ô£¨²»»áÖØĞÂÖ´ĞĞ£©¡£","cards":1}
+[22m[39mREVIEW_CARD_CANCEL_FENCE_MISSING {"cancelledStatus":"cancelled","limitWhenCancelled":3000,"limitAfterRelease":3000,"actionStatus":"failed","storedPlan":"cancelled","confirmationOk":false}
+[90mstdout[2m | tests/integration/confirmation-evidence.test.ts[2m > [22m[2mfailure of required execution audit must roll back the debit and receipt as claimed in the report
+ [32m?[39m tests/unit/agent/run-turn-failure.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 414[2mms[22m[39m
+ [32m?[39m tests/scenarios/test-05-failure-report.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 295[2mms[22m[39m
+[90mstdout[2m | tests/integration/confirmation-continuation.test.ts[2m > [22m[2ma STANDALONE transferred action must recover or visibly enter reconciliation after result persistence failure
+[22m[39mREVIEW_REDEEM_IDENTITY {"firstAction":"cmuzn9msg000hf8bgjxb5ekxj","secondAction":"cmuzn9msz000lf8bg39hj5733","firstOk":true,"secondOk":false,"secondStatus":"failed","firstBalance":28630,"secondBalance":28630}
+[90mstdout[2m | tests/integration/node-recovery.test.ts[2m > [22m[2mresume recovers an already-executed gated node after its plan callback fails
+[2m Test Files [22m [1m[32m103 passed[39m[22m[90m (103)[39m
+[2m   Duration [22m 127.16s[2m (transform 1.26s, setup 24.16s, collect 28.78s, tests 58.54s, environment 12ms, prepare 4.80s)[22m
