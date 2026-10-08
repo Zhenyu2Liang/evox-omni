@@ -283,7 +283,7 @@ type CreatePendingActionResult = { kind:'created'; action: PendingAction } | { k
                 │
       YELLOW/RED (blocked):
                 ▼
-        createPendingAction(ctx, ev) ──► existing action for the same (taskId,nodeId) + tool + args + tier/requiresMfa, ELSE a new PendingAction (status: pending | awaiting_mfa; persists userRequest + code-derived intent + the taskId/nodeId plan link) + PendingActionSummary
+        createPendingAction(ctx, ev) ──► (transfer_money: the recipient is resolved SERVER-SIDE; a non-`resolved` recipient returns 'clarify' and NOTHING is persisted) ELSE an existing action for the same (taskId,nodeId) + tool + canonical args + tier/requiresMfa, ELSE a new PendingAction (status: pending | awaiting_mfa; persists userRequest + code-derived intent + the taskId/nodeId plan link) + PendingActionSummary
                 ▼
         serializeBlockReason(decision, action) ──► '__SECURITY_BLOCK__{...actionId...}'
                 ▼
