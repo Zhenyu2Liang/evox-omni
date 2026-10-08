@@ -24,6 +24,14 @@ Two modes, chosen at call time from `AppConfig.llmMode`:
 // provider-live.ts
 export function createLiveModel(cfg: AppConfig): Model<any>;   // real model; needs network + key
 
+// provider-live.ts — PURE, injectable mapping used by createLiveModel (unit-testable offline)
+export type LiveModelEnv = Record<string, string | undefined>;
+export interface LiveModelRegistry { getProviders(): string[]; getModels(provider: string): Model<any>[]; }
+export interface LiveModelDeps { registry?: LiveModelRegistry; env?: LiveModelEnv; }
+export interface LiveModelResolution { model: Model<any>; warning?: string; }
+export function resolveLiveModel(provider: string, modelId: string, deps?: LiveModelDeps): LiveModelResolution;
+export function providerBaseUrlEnvVar(provider: string): string;   // `<PROVIDER>_BASE_URL` derivation
+
 // provider-mock.ts
 export function createMockModel(cfg: AppConfig): Model<any>;   // offline, deterministic, interactive
 
@@ -134,12 +142,38 @@ Purity contract: `mock-responder.ts` imports only `@mariozechner/pi-ai` faux hel
 (no prisma / banking-sdk / network / filesystem), and uses EXPLICIT stable tool-call ids (e.g.
 `call_get_balance`) so output is byte-for-byte reproducible.
 
-`createLiveModel` resolves, in order: (1) the Pi AI model registry via `getModels(provider)`
-(runtime-safe — `[]` for unknown providers), returning the fully-specified built-in `Model`; else
-(2) a literal `Model<any>` (`api: 'openai-completions'`) for a custom endpoint. For KNOWN providers
-it checks the env for an API key (`getEnvApiKey`) and throws `AppError('VALIDATION')` if absent — a
-clear demo-time failure instead of a mid-stream one. The key is never attached to the returned
-`Model`, logged, or surfaced by `providerId`.
+### `createLiveModel` / `resolveLiveModel` — live model resolution
+
+`createLiveModel(cfg)` is a thin wrapper: for a KNOWN provider it checks the env for an API key
+(`getEnvApiKey`; only its truthiness is read) and throws `AppError('VALIDATION')` when absent — a
+clear demo-time failure instead of a mid-stream one — then delegates the mapping to the pure,
+exported `resolveLiveModel(provider, modelId, { registry?, env? })` helper (injectable registry
+accessors + env) and `console.warn`s its `warning`. The key value is never read into a
+logged/returned variable, never attached to the returned `Model`, and never surfaced by
+`providerId`.
+
+`resolveLiveModel` resolution order. The returned `Model`'s `baseUrl`/`api` ALWAYS belong to
+`cfg.llmProvider`: a configured provider's key is NEVER sent to another host.
+
+1. **Registry hit** — `getModels(provider)` (runtime-safe: `[]` for an unknown provider) contains
+   `modelId` ⇒ that fully-specified built-in `Model` verbatim (correct api dialect, base URL,
+   headers, limits, pricing) and NO warning.
+2. **Provider default** — `getProviders()` includes `provider` but `modelId` is NOT registered ⇒
+   that provider's OWN first registered model (`getModels(provider)[0]`) plus a LOUD `warning`
+   naming the REQUESTED vs the ACTUALLY-USED id and base URL. This covers the live
+   `deepseek`/`deepseek-flash` case: `deepseek-flash` is not a registered pi-ai id (the registry has
+   `deepseek-v4-flash`, `deepseek-v4-pro`), so it resolves to `deepseek-v4-flash` at
+   `https://api.deepseek.com` instead of a hardcoded `https://api.openai.com/v1` literal that would
+   send the DeepSeek key to OpenAI's host. A known provider exposing no models at all throws
+   `AppError('VALIDATION')`.
+3. **Unknown provider** (custom OpenAI-compatible endpoint) ⇒ a literal `Model<any>`
+   (`api: 'openai-completions'`) is built ONLY for an EXPLICIT base URL — `<PROVIDER>_BASE_URL`
+   (provider id upper-cased, non-alphanumerics → `_`, e.g. `MY_LLM_BASE_URL`) then the shared
+   `LLM_BASE_URL` — or when the provider genuinely IS the OpenAI host
+   (`OPENAI_FAMILY_PROVIDERS`, i.e. `openai`), where the OpenAI base URL is correct rather than a
+   leak. Otherwise it FAILS LOUDLY with `AppError('VALIDATION')` naming the env var to set — it
+   never guesses somebody else's host. A literal custom endpoint also emits a `warning` naming the
+   endpoint.
 
 ## Constraints
 
@@ -151,6 +185,9 @@ clear demo-time failure instead of a mid-stream one. The key is never attached t
 - **Never leak secrets.** API keys come from the environment only; they must never appear in
   `AppConfig`, logs, returned values, or `providerId`. The key is NOT a `Model` field — the Pi AI
   stream layer reads it from the env at request time.
+- **Never cross hosts.** A resolved `Model` must target `cfg.llmProvider`: the OpenAI base URL is
+  used ONLY for a provider that really is the OpenAI host, and an unregistered provider without an
+  explicit base URL fails loudly instead of receiving another provider's traffic/key.
 - **`live` is demo-only**; `mock` is the required path for all tests (root determinism rule).
 - **The rest of `./agent` never constructs a `Model`** — it calls `resolveModel` and receives one.
 - **`mock-responder` decides WHAT to do next, never WHETHER it is allowed.** It only emits tool
@@ -164,15 +201,19 @@ clear demo-time failure instead of a mid-stream one. The key is never attached t
 
 - `@mariozechner/pi-ai` — `Model` (type), `registerFauxProvider()` + `fauxAssistantMessage` /
   `fauxText` / `fauxToolCall` + the `Context`/`Message`/`AssistantMessage`/`ToolResultMessage` types
-  (mock), `getModels()` / `getProviders()` / `getEnvApiKey()` (live). Identifiers CONFIRMED against
-  the installed 0.73.1 `.d.ts` files.
+  (mock), `getModels()` / `getProviders()` / `getEnvApiKey()` (live). `getModels` is runtime-safe
+  (`[]` for an unknown provider) and `getProviders()` returns the registered provider ids; the
+  registry's FIRST model per provider is that provider's natural default. Identifiers CONFIRMED
+  against the installed 0.73.1 `.d.ts` files.
 - `@/lib/config` — `AppConfig { llmMode: 'live'|'mock'; llmProvider: string; llmModel: string;
-  demoUserId: string }`, `getConfig()`.
-- `@/lib/errors` — `AppError` (thrown by `createLiveModel` when a known provider has no env key).
+  demoUserId: string }`, `getConfig()`. NOTE: `AppConfig` has NO base-URL field, so a custom
+  endpoint's base URL comes from the environment (`<PROVIDER>_BASE_URL` / `LLM_BASE_URL`).
+- `@/lib/errors` — `AppError` (thrown by `createLiveModel`/`resolveLiveModel`: a known provider with
+  no env key, a known provider exposing no models, or an unknown provider with no base URL).
 
 ## Test Strategy
 
-Vitest (`../tests`, sibling). This node is a thin, well-isolated boundary:
+Vitest. This node is a thin, well-isolated boundary:
 - `mock-responder.respond` — PURE, table-driven unit tests (no DB, no network) covering fuzzy
   intents, multi-turn context reuse, insufficient-info clarification, ambiguous-name clarification,
   failure narration, and blocked→awaiting-confirmation. Build `context.messages` with the real
@@ -181,16 +222,30 @@ Vitest (`../tests`, sibling). This node is a thin, well-isolated boundary:
   (run-turn + security) runs offline — the primary integration coverage.
 - `providerId()` is pure: `"mock"` in mock mode, `${provider}:${model}` in live mode; the API key
   never appears in the return value.
-- `live` mode is not unit-tested (network + key); it is exercised manually for the demo.
+- `resolveLiveModel` — PURE and DB-free: driven against the REAL installed pi-ai registry (no key,
+  no network) for the `deepseek`/`deepseek-flash` → `deepseek-v4-flash` @
+  `https://api.deepseek.com` mapping, plus injected fake registries/envs for the provider-default,
+  custom-endpoint, shared/`<PROVIDER>_BASE_URL` override and loud-failure branches, and
+  `createLiveModel`'s env-key presence check + warning (asserting the key VALUE never appears).
+  `live` mode itself (real network + key) is exercised manually for the demo.
 
-The responder unit spec lives at `tests/unit/agent/providers/provider-mock.test.ts` and the
-gated-plan spec at `tests/unit/agent/providers/plan-limit-park.test.ts`; both are auto-discovered by
-the ROOT `vitest.config.ts` (`test.include: ['tests/**/*.{test,spec}.ts']`) via `npm run test`;
-`tests/` is a read-only SIBLING of this node (no test files live under `./agent/providers/`).
+The specs live at `tests/unit/agent/providers/provider-mock.test.ts` and
+`tests/unit/agent/providers/plan-limit-park.test.ts`, auto-discovered by the ROOT `vitest.config.ts`
+(`test.include: ['tests/**/*.{test,spec}.ts']`) via `npm run test`. `tests/` is a read-only SIBLING
+of this node, so the node-local spec `agent/providers/provider-live.test.ts` is NOT auto-discovered
+and the CLI filter alone cannot widen `include`; it runs through its own runner
+(`agent/providers/vitest.provider-live.config.ts`, `@` aliased to the repo root, `include` exactly
+that spec):
+
+```
+npx vitest run --config agent/providers/vitest.provider-live.config.ts
+```
 
 ## Routing Table
 
-- `./agent/providers/provider-live.ts` → `createLiveModel(cfg)` — real Pi AI model (demo-only)
+- `./agent/providers/provider-live.ts` → `createLiveModel(cfg)` (real Pi AI model, demo-only) + the PURE exported `resolveLiveModel(provider, modelId, { registry?, env? })` / `providerBaseUrlEnvVar(provider)` resolution helper (registry hit → provider default → explicit custom endpoint, else loud `AppError`)
+- `./agent/providers/provider-live.test.ts` → node-local pure spec for `resolveLiveModel` + `createLiveModel` (not under `tests/`)
+- `./agent/providers/vitest.provider-live.config.ts` → runner config for the node-local spec above
 - `./agent/providers/provider-mock.ts` → `createMockModel(cfg)` — self-requeuing faux factory (offline, deterministic, interactive)
 - `./agent/providers/mock-responder.ts` → `respond(context)` — PURE scripted decision logic (intent → tool call / clarify / narrate); `classify` (READ routes) + `classifyDirectAction` (gated ACTION routes: set_card_limit / freeze_card / subscribe_investment / redeem_investment / cancel_subscription) + `handlePlan` (conditional DAG)
 - `./agent/providers/index.ts` → node facade: `resolveModel`, `providerId`
