@@ -243,7 +243,7 @@ async function resolveTransferRecipient(userId: string, args: Record<string,unkn
 // `maskAwarePhoneMatch` / `maskPhone` are NOT defined here — the single implementation lives in the shared
 // `lib/phone` module and is RE-EXPORTED by this module, so this module's import surface is unchanged:
 function maskAwarePhoneMatch(value: string, stored: string): boolean   // RE-EXPORTED from `../lib/phone`; PURE mask-aware phone match (rules below)
-function maskPhone(phone: string): string                     // PURE 脱敏: first 3 + '****' + last 4; short input safe ('139'→'****', '1391234'→'139****'); never a raw phone
+function maskPhone(phone: string): string                     // RE-EXPORTED from `../lib/phone`; PURE 脱敏: first 3 + '****' + last 4; short input safe ('139'→'****', '1391234'→'139****'); never a raw phone
 function canonicalizeTransferArgs(args, contactId: string): Record<string,unknown>   // PURE: sets contactId and DELETES phone/name (the SDK requires EXACTLY ONE recipient field); amount/remark/sourceAccountId preserved
 async function resolveAccountLabel(userId: string, sourceAccountId: string|undefined): Promise<string|undefined>  // the caller's OWN account name, else undefined
 function buildRecipientClarifyMessage(res: Exclude<RecipientResolution,{status:'resolved'}>): string   // PURE, Chinese, phone-masked, code-free
