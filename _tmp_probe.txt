@@ -1,0 +1,4 @@
+﻿LLM_MODE=live
+LLM_PROVIDER=deepseek
+LLM_MODEL=deepseek-flash
+DEEPSEEK_API_KEY=<redacted len=35>
