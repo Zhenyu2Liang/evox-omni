@@ -432,6 +432,13 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
 - **Hallucination guard**: assistant replies derive ONLY from real tool results. A tool returning
   `ok:false` MUST be reported as a failure; the agent MUST NOT invent balances/results and MUST NOT
   claim a gated tool already executed.
+- **Provider transcript validity (DeepSeek / OpenAI-compatible)**: every persisted `role:'toolResult'`
+  message MUST answer the assistant `toolCall` of the run it belongs to (matching `toolCallId`) — no
+  orphan, no duplicate, no fabricated id. `resumeTurn` REPLACES the turn-time (blocked) placeholder
+  IN PLACE via `withRealToolResult` (never appends a second result after the model's narration), and
+  `banking-agent` normalizes `AgentState.messages` on restore via `normalizeToolResultMessages`, so the
+  invariant holds across the first turn, multi-turn persistence, confirm/MFA continuation and a
+  refresh/resume. This keeps DeepSeek's rule "a `tool` message must respond to a preceding `tool_calls`".
 - **A continuation failure is not a business failure**: after a confirmed execution, a failing
   `agent.continue()` is surfaced as an `error` event / a flagged message — NEVER swallowed and NEVER
   turned into a success (the caller always receives the REAL `ToolExecutionResult`).
