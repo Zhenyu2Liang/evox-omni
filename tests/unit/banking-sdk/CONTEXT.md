@@ -39,6 +39,7 @@ Spec files (implemented — real assertions against the test SQLite), targeting 
   the SDK barrel `banking.budget.reserveBudget` / `banking.task.createScheduledTask` — repeated key
   → same `id` + exactly ONE row (`count({ where: { idempotencyKey } })`), absent/empty/whitespace
   key and two different keys → two rows (legacy behavior preserved).
+- `transfer-receipt.test.ts` — COMMITTED-FACT (execution-receipt) semantics of `banking.transfer.createTransfer`, driven DIRECTLY through the SDK: same `idempotencyKey` + same request replays the ORIGINAL result (no second debit / one ledger row / one `ExecutionReceipt`); same key + different request → `CONFLICT`; a LEGACY ledger row with no receipt replays even when the contact was renamed/deleted (`idempotentTransferTxId` identity); a fresh unknown recipient still → `NOT_FOUND`; a fresh transfer writes a receipt whose `resultJson` == the returned `TransferResult`. DB-backed via `../../helpers/db`, `lib/ledger` + the real `ExecutionReceipt` table.
 
 ## Status
 
