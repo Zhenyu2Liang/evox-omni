@@ -50,7 +50,7 @@ Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` 
 ## Notes for Agents
 
 - Run: `npx vitest run tests/unit/planner --no-file-parallelism` (`dag`/`executor`/`lifecycle` are pure;
-  `executor-claim-scope.test.ts` requires the test SQLite).
+  `executor-claim-scope.test.ts` and `executor-execution-right.test.ts` require the test SQLite).
 - All planner specs are green (no known-red cases).
 
 ## Routing Table
