@@ -41,3 +41,4 @@ no LLM; DB-backed specs run against the isolated test SQLite (`../helpers/db`). 
 - `./ledger-keys.test.ts` → plan-node + transfer-ledger de-dup scope identity keys (pure)
 - `./execution-receipt.test.ts` → committed-fact receipt id + canonical request digest (pure)
 - `./prisma-cli-env.test.ts` → schema-engine RUST_LOG pinning policy, mutate vs copy (pure)
+- `./contact.search.test.ts` → `contact#searchContacts` mask-aware phone/name resolution, RAW/MASKED/name/empty (DB-backed)
