@@ -594,7 +594,15 @@ const LARGE_AMOUNT = 5000;
  * session and re-checks — bounded attempts, never a fabricated park.
  */
 const PARK_ATTEMPTS = 3;
-const PARK_POLL_MS = 90_000;
+const PARK_POLL_MS = 60_000;
+/**
+ * The `banking_session` cookie is minted by the `/api/chat` RESPONSE, and the route awaits the WHOLE
+ * turn (`runTurn`) before sending that response (see `app/api/chat/route.ts`). With the LIVE model a
+ * turn takes seconds, so reading cookies immediately after `submitChat` (which only clicks 发送) raced
+ * the `Set-Cookie` and left `readSessionCookie` `undefined` → the park aborted before it began. The
+ * park therefore WAITS (bounded) for the cookie the first turn mints, then polls the persisted state.
+ */
+const PARK_COOKIE_WAIT_MS = 120_000;
 const PARK_NUDGES = ['确认，请发起转账', '请直接调用转账工具发起这笔转账'] as const;
 
 /** The parked `transfer_money` action from `GET /api/actions` (awaiting a human decision), or `undefined`. */
@@ -605,7 +613,30 @@ function findParkedTransfer(
     (action) => action.toolName === 'transfer_money' && (action.status === 'pending' || action.status === 'awaiting_mfa'),
   );
 }
-// --- scenario 1: balance matches the DB ---------------------------------------------------------
+
+/**
+ * Wait (bounded) for the `banking_session` cookie the first chat turn mints, then return it as a
+ * `Cookie` header value. The cookie is only sent with the `/api/chat` RESPONSE, which the route emits
+ * after the WHOLE turn has run, so a LIVE turn means the cookie arrives seconds after `submitChat`
+ * returns — reading it immediately races the `Set-Cookie`. On timeout the assistant text +
+ * `/api/actions` are appended for evidence (the wait itself is not weakened).
+ */
+async function awaitSessionCookie(page: Page, baseUrl: string, timeoutMs = PARK_COOKIE_WAIT_MS): Promise<string> {
+  let cookie: string | undefined;
+  try {
+    await waitFor(
+      async () => {
+        cookie = await readSessionCookie(page);
+        return cookie !== undefined;
+      },
+      { timeoutMs, description: '`banking_session` cookie（由 /api/chat 响应下发）' },
+    );
+  } catch (e) {
+    throw new Error(`${errText(e)} ｜ ${await noCardDiagnostics(page, baseUrl)}`);
+  }
+  if (cookie === undefined) throw new Error('未取得 banking_session cookie');
+  return cookie;
+}// --- scenario 1: balance matches the DB ---------------------------------------------------------
 
 async function scenarioBalance(ctx: Ctx): Promise<string> {
   return withPage(
@@ -951,11 +982,12 @@ async function scenarioLargeTransferMfa(ctx: Ctx): Promise<string> {
 
 /**
  * Engineer "the SDK write commits, the model continuation fails": DETERMINISTICALLY park a YELLOW
- * `transfer_money` (poll `GET /api/actions` for the parked row and, when the live model merely
- * narrated without calling the tool, NUDGE it in the SAME session — bounded attempts), then reboot the
- * SAME app on the SAME DB with `DEEPSEEK_API_KEY='invalid'` so ONLY the continuation LLM call fails,
- * then hit the confirm endpoint with the SAME session cookie. The action must still settle `executed`
- * with exactly ONE debit. (Read-only against app code.)
+ * `transfer_money` — WAIT for the first turn to mint the `banking_session` cookie (it is sent with the
+ * `/api/chat` response, i.e. only after the whole LIVE turn has run), poll `GET /api/actions` for the
+ * parked row and, when the live model merely narrated without calling the tool, NUDGE it in the SAME
+ * session (bounded attempts) — then reboot the SAME app on the SAME DB with `DEEPSEEK_API_KEY='invalid'`
+ * so ONLY the continuation LLM call fails, then hit the confirm endpoint with the SAME session cookie.
+ * The action must still settle `executed` with exactly ONE debit. (Read-only against app code.)
  */
 async function scenarioCommittedContinuationFailed(
   browser: Browser,
@@ -977,10 +1009,9 @@ async function scenarioCommittedContinuationFailed(
       attachCollectors(page);
       await gotoAgent(page, baseUrl);
       await submitChat(page, MSG.transferByName);
-      const sessionCookie = await readSessionCookie(page);
-      if (!sessionCookie) throw new Error('未取得 banking_session cookie');
-      cookie = sessionCookie;
-
+      // The turn mints the `banking_session` cookie on its RESPONSE; wait (bounded) for it instead of
+      // racing the Set-Cookie.
+      cookie = await awaitSessionCookie(page, baseUrl);
       // ROBUST / DETERMINISTIC PARK — the model is not trusted to CALL the gated tool on the first
       // turn (it often only narrates a question). Poll the persisted server state, and NUDGE in the
       // SAME session until a `transfer_money` action is actually parked (bounded attempts).
@@ -1103,7 +1134,8 @@ async function main(): Promise<void> {
     if (browser) {
       void browser.close().catch(() => undefined);
     }
-  };  process.on('exit', cleanup);
+  };
+  process.on('exit', cleanup);
   process.on('SIGINT', () => {
     cleanup();
     process.exit(130);
@@ -1182,7 +1214,8 @@ async function main(): Promise<void> {
         reporter.pass(
           '7-live-committed-continuation-failed',
           await scenarioCommittedContinuationFailed(browser, activeServer, originalKey),
-        );      } catch (error) {
+        );
+      } catch (error) {
         reporter.fail('7-live-committed-continuation-failed', errText(error));
         if (originalKey === undefined) delete process.env['DEEPSEEK_API_KEY'];
         else process.env['DEEPSEEK_API_KEY'] = originalKey;
