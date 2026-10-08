@@ -151,7 +151,9 @@ function deriveIntent(toolName: ToolName): string                   // TOOL_INTE
 // (ctx.taskId / ctx.nodeId, `null` when absent); `toContractPendingAction` surfaces userRequest and
 // intent on the returned PendingAction (the plan link is read back via `getPendingActionPlanLink`).
 // A plan-scoped call (`ctx.taskId`) whose owning `AgentTask` is already `'cancelled'` is REFUSED: the
-// internal path returns `null` (⇒ `handleToolCall` yields a clean `deny`); the exported
+// internal path returns `{ kind: 'plan_cancelled' }` (⇒ `handleToolCall` yields a clean `deny`) or
+// `{ kind: 'clarify' }` for an unresolvable/ambiguous transfer recipient (⇒ a PLAIN deny block reason,
+// nothing persisted); the exported
 // `createPendingAction` maps that to a thrown `CONFLICT` so its public return type stays non-null.
 function sameArgs(a: unknown, b: unknown): boolean   // PURE, key-order-insensitive deep equality of tool args
 ```
