@@ -237,13 +237,21 @@ only the LLM is live.
 - `LIVE_FORCE_MODEL` is an OPT-IN model override; by DEFAULT it does NOT override, so `agent/providers/provider-live.ts#resolveLiveModel` resolves the PROVIDED `.env.local` id for real.
 - `PARK_ATTEMPTS` retry/nudge logic for the flaky park; `awaitSessionCookie()` bounded wait for the `banking_session` cookie; one idempotent `cleanup()` stops the ACTIVE dev server (incl. the scenario-7 reboot), wired to exit/signals.
 - TASK-A evidence tooling: `persistedRecipientCalls()` parses every `AgentSession.stateJson` and prints each `transfer_money`/`search_contact` `toolCall` arg object VERBATIM; `LIVE_S2_PROMPT`/`LIVE_S3_PROMPT` override the two transfer prompts.
-- Current live outcomes (see `./LIVE-ACCEPTANCE-REPORT.md`): PASS 7 ｜ FAIL 1 ｜ SKIP 0.
-  All scenarios pass live except the S2p RAW-phone leg — an APP-side `search_contact` read-path gap (a raw phone does not substring-match the MASKED seed phone `139****0002`), a fix OUTSIDE this node.
+- Current live outcome (see `./LIVE-ACCEPTANCE-REPORT.md`): **every one of the 8 scenarios PASSES live**
+  (1, 2, 2p — BOTH phone legs — 3, 4, 5, 6, 7), cross-checked against the DB/API. The formerly-failing
+  S2p RAW-phone leg (`13900000002`) now PASSES: the APP read path `lib/db/repositories/contact.ts#searchContacts`
+  is mask-aware via `lib/phone.ts#maskAwarePhoneMatch`, so a raw number resolves to the MASKED seed phone `139****0002`.
+- **Known live blocker (INFRASTRUCTURE, not app/model):** the `next dev` boot is intermittently flaky on a
+  worktree with NO local `node_modules` — `helpers.ts#resolveNextBin()` hard-codes the worktree-local
+  `node_modules` path, so it returns undefined and `devServerCommand()` falls back to the known-flaky
+  `npx` path (empty stdout / never-ready → `应用未就绪（180000ms）：/api/health（fetch failed）`). Because
+  scenario 7 reboots the app it is the most affected; a FULL 8/8 run therefore occasionally aborts at boot
+  before any scenario starts (`FAIL infrastructure`). Scenario 7 is confirmed green via `LIVE_SCENARIOS='2,6,7'`.
 
 ## Routing Table
 - `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 6 journeys → structured report → non-zero exit on FAIL)
 - `./live-acceptance.e2e.ts` → REAL-browser + REAL-LLM (`LLM_MODE=live`) acceptance harness against DeepSeek; own isolated DB `prisma/live-acceptance.db`; `LIVE_SCENARIOS` subset; embeds the TASK-A persisted-tool-arg evidence dump (`persistedRecipientCalls`)
-- `./LIVE-ACCEPTANCE-REPORT.md` → current-state report of the live runs (all 8 scenarios PASS live except the S2p raw-phone `search_contact` read-path gap)
+- `./LIVE-ACCEPTANCE-REPORT.md` → current-state report of the live runs (all 8 scenarios PASS live — including the formerly-failing S2p raw-phone leg; plus the honest `next dev` boot-flake / live-narration-flake blockers)
 - `./helpers.ts` → shared harness (isolated E2E DB + reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card + per-node timeline, read-model HTTP helpers, wedge fixtures + `seedStandaloneWedge`/direct-DB fact queries (`queryPendingActionStatus`/`queryExecutionAudit`), reporter, fail-fast navigation)
 - `./screenshots/` → git-ignored failure screenshots
 - `../app` → HTTP route-handler specs (the in-process acceptance layer this harness complements) (sibling — read-only)
