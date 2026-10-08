@@ -42,7 +42,7 @@ Spec files (implemented — real assertions against the test SQLite), targeting 
 
 ## Status
 
-All five specs are implemented with real assertions and pass offline
+All six specs (incl. `transfer-receipt.test.ts`) are implemented with real assertions and pass offline
 (`npx vitest run tests/unit/banking-sdk` → 5 files / 56 tests green against `prisma/test.db`).
 The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
 `seedDemoData({ withAmbiguousContact: true })` inside the ambiguity case.
