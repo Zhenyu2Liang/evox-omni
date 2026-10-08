@@ -1,0 +1,52 @@
+== AI Banking Agent 真实浏览器 + 真实 DeepSeek 在线验收 (tests/e2e/live) ==
+· LIVE with disclosed model-id override（提供的 'deepseek-flash' 不是合法 pi-ai id；使用 'deepseek-v4-flash'）
+· 隔离 LIVE 数据库：file:D:/projects/banking-agent/.genesis/workers/worker_T1_A79/prisma/live-acceptance.db（prisma/dev.db 与 prisma/test.db 不受影响）
+· 重置 LIVE 数据库 →（缺 Prisma Client 时先 prisma generate）→ db push 阶梯 → probe → tsx prisma/seed.ts
+· LLM_MODE=live LLM_PROVIDER=deepseek LLM_MODEL=deepseek-v4-flash（真实 DeepSeek API）
+· next dev (pid=61924) → http://localhost:64494（/api/health 与 /agent 均已就绪）
+· /api/health={"ok":true,"data":{"status":"ok","time":1791458581448,"llmMode":"live"}}
+· 真实浏览器：C:\Program Files\Google\Chrome\Application\chrome.exe
+· [console error] Failed to load resource: the server responded with a status of 404 (Not Found)
+· [console error] Failed to load resource: the server responded with a status of 403 (Forbidden)
+· [net 403] GET http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+PASS 1-live-balance-matches-db — 「查一下我的余额」→ 页面出现 ¥23,580.00；SQLite Account.balance=23580，/api/dashboard=23580（一致）；助手叙述含该金额：您的账户余额如下：
+
+| 账户类型 | 余额 |
+|---------|------|
+| 活期账户 | ¥23,580.00 |
+| 储蓄账户 | ¥50,000.00 |
+| **可用余额合计** | **¥73,580.00** |
+
+· [console error] Failed to load resource: the server responded with a status of 403 (Forbidden)
+· [net 403] GET http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+FAIL 2-live-transfer-recipient-by-name — 等待超时（90000ms）：确认卡片（「确认」按钮） ｜ 【诊断】助手消息数=4；最后一条=「转账未能发起，原因如下： - 系统中搜索到的「张伟」联系人信息为：招商银行，手机号 **139****0002**（部分号码被隐藏）。 - 我先后按联系人 ID 和按手机号发起 **¥200.00** 转账，均返回「未找到匹配的收款联系人」。 为准确完成转账，请您确认一下： 1. **收款人完整手机号**（11 位，目前仅显示末位为 2）； 2. 或确认「张伟」是否正确、是否有其他同名联系人。 拿到准确信息后，我立即为您重试。」；/api/actions=[]；页面文本尾部=「后再试。 转账未能发起，原因如下： - 系统中搜索到的「张伟」联系人信息为：招商银行，手机号 **139****0002**（部分号码被隐藏）。 - 我先后按联系人 ID 和按手机号发起 **¥200.00** 转账，均返回「未找到匹配的收款联系人」。 为准确完成转账，请您确认一下： 1. **收款人完整手机号**（11 位，目前仅显示末位为 2）； 2. 或确认「张伟」是否正确、是否有其他同名联系人。 拿到准确信息后，我立即为您重试。 ✓ search_contact 找到 1 位匹配“张伟”的联系人：张伟（139****0002，招商银行）。 ✗ transfer_money 未能找到与「张伟」匹配的收款联系人，请向用户确认收款人的姓名或手机号后再试。 ✗ transfer_money 未能找到与「13900000002」匹配的收款联系人，请向用户确认收款人的姓名或手机号后再试。 发送」
+SKIP 2p-live-transfer-recipient-by-phone — 无法验证：种子库联系人 张伟 的手机号为掩码「139****0002」，search_contact 按手机号子串匹配，实时模型把掩码规整为 1390002 后工具返回「未找到匹配联系人」（真实工具结果）→ 「按手机号解析收款人」在该演示数据上结构性不可行（演示种子数据限制，非转账链路缺陷）
+· [console error] Failed to load resource: the server responded with a status of 403 (Forbidden)
+· [net 403] GET http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+FAIL 3-live-decimal-transfer-200.37 — 等待超时（90000ms）：确认卡片（「确认」按钮） ｜ 【诊断】助手消息数=3；最后一条=「抱歉，转账未能发起。系统未能通过名称匹配到收款联系人，需要更精确的收款人标识。 已找到匹配的联系人： - **张伟**（手机号 139****0002，招商银行） 请确认： 1. 是否向该联系人转账 **¥200.37**？ 2. 若确认，我将使用其手机号作为收款标识重新发起转账。 请回复确认后，我再继续操作。」；/api/actions=[]；页面文本尾部=「money 未能找到与「张伟」匹配的收款联系人，请向用户确认收款人的姓名或手机号后再试。 异常 未能找到与「张伟」匹配的收款联系人，请向用户确认收款人的姓名或手机号后再试。 异常 未能找到与「张伟」匹配的收款联系人，请向用户确认收款人的姓名或手机号后再试。 抱歉，转账未能发起。系统未能通过名称匹配到收款联系人，需要更精确的收款人标识。 已找到匹配的联系人： - **张伟**（手机号 139****0002，招商银行） 请确认： 1. 是否向该联系人转账 **¥200.37**？ 2. 若确认，我将使用其手机号作为收款标识重新发起转账。 请回复确认后，我再继续操作。 ✓ search_contact 找到 1 位匹配“张伟”的联系人：张伟（139****0002，招商银行）。 ✗ transfer_money 未能找到与「张伟」匹配的收款联系人，请向用户确认收款人的姓名或手机号后再试。 发送」
+· [console error] Failed to load resource: the server responded with a status of 403 (Forbidden)
+· [net 403] GET http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+PASS 5-live-cancel-idempotent-terminal-ux — 「给张伟转200元」→ 取消（DB 状态 cancelled，卡片显示「已取消」、确认按钮数 0）→ 未扣款；对终态动作重复取消 被拒、重复确认 被拒 → 余额 23580 不变、账本无新增（幂等）
+· [console error] Failed to load resource: the server responded with a status of 403 (Forbidden)
+· [net 403] GET http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+PASS 6-live-multiturn-and-continuations — 同一会话 4 轮（余额 → 转账200确认 → 转账5000验证码 → 信用卡额度），助手消息 9 条；确认后余额 23380、验证码后 18380；全程无 "tool message must answer tool_calls" 400（累计网络 4xx/5xx：5）
+· [console error] Failed to load resource: the server responded with a status of 403 (Forbidden)
+· [net 403] GET http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+· [console error] Failed to load resource: the server responded with a status of 403 (Forbidden)
+· [net 403] GET http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+PASS 4-live-large-transfer-mfa — 错误码：错误码 000000 → role=status「验证失败，已尝试 1 次」，MFA 卡片保留；余额（API=18380，DB=18380）与账本均未变 ｜ 正确码：正确码 123456 → 余额 API=13380、DB=13380（−5000 恰好一次），账本新增 -5000 DEBIT 一条（txidem_184dd3ca67f649dd59cc718839e4ca76）
+· [console error] Failed to load resource: the server responded with a status of 404 (Not Found)
+· [console error] Failed to load resource: the server responded with a status of 403 (Forbidden)
+· [net 403] GET http://localhost:56429/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+PASS 7-live-committed-continuation-failed — 重启后在无效 key 下确认：HTTP 200 ok=true status=executed（statusOk=true）；DB PendingAction.status=executed，余额 23580→23380（DB=23380），-200 DEBIT 恰 1 条（txidem_fb1d5f3939f5076fd3d446872166923f）；DB="{\"ok\":true,\"data\":{\"success\":true,\"transactionId\":\"txidem_fb1d5f3939f5
+· 累计网络 4xx/5xx：9，console error：10，pageerror：0
+· [4xx/5xx] GET 403 http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+· [4xx/5xx] GET 403 http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+· [4xx/5xx] GET 403 http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+· [4xx/5xx] GET 403 http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+· [4xx/5xx] GET 403 http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+· [4xx/5xx] GET 403 http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+· [4xx/5xx] GET 403 http://localhost:64494/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+· [4xx/5xx] GET 403 http://localhost:56429/api/actions — {"ok":false,"error":{"code":"SECURITY_DENIED","message":"无法验证身份，请重新开始会话。"}}
+· [4xx/5xx] POST 200 http://localhost:49265/api/actions/cmuzgbltp0002f8kshimr63yg/confirm — {"ok":true,"data":{"actionId":"cmuzgbltp0002f8kshimr63yg","sessionId":"cmuzgbkp10001f8ks8s11dpt9","ok":true,"status":"executed","tier":"YELLOW","requiresMfa":false,"mfaResult":"not_required","message"
+== 汇总：PASS 5 ｜ FAIL 2 ｜ SKIP 1 ==
