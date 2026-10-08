@@ -17,6 +17,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
@@ -427,10 +428,31 @@ export function killProcessTree(pid: number): void {
   }
 }
 
-/** Project-local Next CLI entry (`node_modules/next/dist/bin/next`), or `undefined` if absent. */
+/**
+ * The Next CLI entry (`node_modules/next/dist/bin/next`), or `undefined` if it truly cannot be found.
+ *
+ * TWO resolution strategies, tried in order — the FIRST is the normal case, the SECOND is what makes
+ * boot reliable in a worktree that deliberately has NO local `node_modules`:
+ *
+ *  1. PROJECT-LOCAL — `REPO_ROOT/node_modules/next/dist/bin/next`. Used when this checkout has its own
+ *     `node_modules` (the usual case).
+ *  2. NODE RESOLUTION — Node's OWN algorithm (`require.resolve('next/dist/bin/next')`, via
+ *     `createRequire`), which walks UP the directory tree from this harness into any hoisted/shared
+ *     `node_modules` (e.g. the monorepo-root `next`). Without it a no-local-`node_modules` worktree
+ *     resolves NOTHING here, so {@link devServerCommand} would fall back to the KNOWN-FLAKY
+ *     `npx next dev` path (empty stdout pipe / never-ready server).
+ *
+ * A resolved path is accepted only when the file actually EXISTS on disk.
+ */
 function resolveNextBin(): string | undefined {
-  const bin = path.join(REPO_ROOT, 'node_modules', 'next', 'dist', 'bin', 'next');
-  return existsSync(bin) ? bin : undefined;
+  const localBin = path.join(REPO_ROOT, 'node_modules', 'next', 'dist', 'bin', 'next');
+  if (existsSync(localBin)) return localBin;
+  try {
+    const resolved = createRequire(import.meta.url).resolve('next/dist/bin/next');
+    return existsSync(resolved) ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
