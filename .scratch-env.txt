@@ -1,8 +1,0 @@
-﻿env.local exists: True
-shell DEEPSEEK_API_KEY present: False
-shell LLM_MODE: 
-shell LLM_MODEL: 
-KEYLINE: LLM_MODE
-KEYLINE: LLM_PROVIDER
-KEYLINE: LLM_MODEL
-KEYLINE: DEEPSEEK_API_KEY

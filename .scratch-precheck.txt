@@ -1,4 +1,0 @@
-﻿env.local exists: True
-env.local size: 115
-shell DEEPSEEK key present: False
-node_modules present: True
