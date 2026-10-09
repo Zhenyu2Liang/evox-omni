@@ -265,6 +265,48 @@ export async function queryExecutionAudit(dedupeKey: string): Promise<ExecutionA
   }
 }
 
+/** A `SecurityEvent` row read straight from the isolated E2E DB (`securityEvent` table). */
+export interface SecurityEventRow {
+  kind: string;
+  severity: string;
+  sessionId: string;
+  message: string;
+  /** The `detail` JSON parsed back into a value, or `undefined` when the row carries none. */
+  detail: Record<string, unknown> | undefined;
+}
+
+/**
+ * Read `SecurityEvent` rows from the isolated E2E DB, newest first, optionally filtered by
+ * `sessionId` and/or `kind`. Persistence is the source of truth for the breaker audit
+ * (`CIRCUIT_BREAKER_TRIPPED` / `SECURITY_RESET`), so a DOM assertion can be cross-checked here.
+ */
+export async function querySecurityEvents(
+  filter: { sessionId?: string; kind?: string } = {},
+): Promise<SecurityEventRow[]> {
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient();
+  try {
+    const rows = await prisma.securityEvent.findMany({
+      where: {
+        ...(filter.sessionId !== undefined ? { sessionId: filter.sessionId } : {}),
+        ...(filter.kind !== undefined ? { kind: filter.kind } : {}),
+      },
+      orderBy: { timestamp: 'desc' },
+      take: 50,
+    });
+    return rows.map((row) => ({
+      kind: row.kind,
+      severity: row.severity,
+      sessionId: row.sessionId,
+      message: row.message,
+      detail:
+        row.detail === null ? undefined : (JSON.parse(row.detail) as Record<string, unknown>),
+    }));
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
 /** Resolve after `ms` milliseconds. */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
