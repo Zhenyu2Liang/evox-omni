@@ -33,9 +33,9 @@ circuitBreaker, injection}`) or the module directly:
 - `injection-guard.test.ts` — `scan` (pure, `INJECTION_PATTERNS` table) + `reportInjection` (DB writes an `INJECTION_ATTEMPT` SecurityEvent; no-op when benign).
 
 **Circuit breaker**
-- `circuit-breaker.test.ts` — `getState`/`isLocked`/`recordFailure`/`recordSuccess`/`reset`; trips at `MFA_MAX_ATTEMPTS = 3`. In-process, keyed by `sessionId`.
+- `circuit-breaker.test.ts` — `getState`/`isLocked`/`recordFailure`/`recordSuccess`/`reset`; trips at `MFA_MAX_ATTEMPTS = 3`. DURABLE, OWNER-keyed (`session:<actor>` for unpersisted test ids).
 - `circuit-breaker-audit.test.ts` — `CIRCUIT_BREAKER_TRIPPED` event completeness + a tripped breaker DENIES EVERY tier (incl. GREEN reads) via `gateway.evaluate`/`decide`. DB-backed, unique sessionId.
-- `circuit-breaker-reset.test.ts` — the `resetSession()` unlock path clears in-memory state + records a `SECURITY_RESET` event. DB-backed, unique sessionId.
+- `circuit-breaker-reset.test.ts` — the `resetSession()` unlock path: the REAL-clock cooldown gate (boundary derived from the persisted `lockedAt` — via an injected real-derived `now` AND the DEFAULT server clock/back-dated lock), the code/wrong-code gate, the ATOMIC unlock + STRICT `SECURITY_RESET` audit (audit failure rolls the clear back and keeps the lock; concurrent unlock records exactly ONE event; a stale CAS expectation preserves a newer RE-LOCK). DB-backed, unique sessionId.
 
 **MFA**
 - `mfa.test.ts` — `issueChallenge`/`verify`/`getChallenge`; `MFA_CODE = '123456'`; code-free views. Needs test SQLite.
@@ -44,7 +44,7 @@ circuitBreaker, injection}`) or the module directly:
 ## Constraints
 
 - `permission-engine` and `injection-guard.scan` are PURE (no DB/network) — assert determinism.
-- Breaker state is in-process keyed by `sessionId`: use a **unique sessionId** per test (session isolation is asserted too).
+- Breaker state is DURABLE and OWNER-keyed (`user:<id>` for a real session/user, else `session:<actor>`): use a **unique sessionId/actor** per test (a fresh test id with no session/user row isolates the owner).
 - Never assert that a tier depends on model/user text — that is the whole point of the model.
 - Import frozen types from `@/lib/contracts/*`; assert through the public facades.
 - DB-backed specs call `useFreshDatabase()` once (file-level `beforeEach` reset+seed).

@@ -54,7 +54,7 @@ Pi runtime、网关、SDK 和 SQLite；仅用可控屏障安排竞争时序。�
 | --- | --- |
 | `npx prisma generate` | exit 0 |
 | `npx tsc --noEmit` | exit 0，0 错误 |
-| `npx vitest run`（与 E2E 串行） | 108 文件 / 743 用例通过，0 失败、0 跳过 |
+| `npx vitest run`（与 E2E 串行） | 113 文件 / 811 用例通过，0 失败、0 跳过 |
 | `npx next build`（预先 provision + seed 隔离 build 库） | exit 0 |
 | `npx tsx tests/e2e/acceptance.e2e.ts` | 真实 Chrome，PASS 7 / FAIL 0 / SKIP 0 |
 | 旧 schema → 当前 schema 的隔离升级验证 | 原预算内容保留；跨用户同 key 独立，同用户唯一约束有效 |

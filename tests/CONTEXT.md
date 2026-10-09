@@ -108,4 +108,10 @@ cross-browser, accessibility or performance matrix.
   (no `123456` prefill, placeholder reveals no code), the disabled unlock button while empty, a wrong
   code rejected (lock retained) and the correct code unlocking (0/3 + audited `SECURITY_RESET`).
   The journey TYPES the code before clicking unlock (no prefill exists).
-- Cooldown-clock behavior and atomic unlock+audit are NOT covered here (deferred to a separate task).
+- Unit layer: `unit/security/circuit-breaker-reset.test.ts` + `unit/security/circuit-breaker-persistence.test.ts`
+  drive the REAL-clock cooldown gate (`realNow()`, never the pinned demo clock) — the not-yet-elapsed and
+  elapsed boundaries are derived from the persisted `lockedAt`, exercised via BOTH an injected
+  real-derived `now` AND the DEFAULT server clock (a back-dated locked row for the elapsed side) — plus the
+  atomic unlock: a STRICT reset-event failure rolls the clear back and throws (lock unchanged, zero
+  events), a concurrent unlock records exactly ONE `SECURITY_RESET` (the CAS loser is a no-op), and a
+  stale CAS expectation leaves a newer RE-LOCK intact.

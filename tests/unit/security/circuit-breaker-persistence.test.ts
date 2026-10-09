@@ -14,7 +14,8 @@
  *  6. it SUCCEEDS via the elapsed cooldown (`now >= lockedAt + RESET_COOLDOWN_MS`) with no code;
  *  7. the LLM can NEVER unlock: NO file under `agent/tools/**` references the circuit breaker.
  *
- * Uses the isolated `prisma/test.db` (`useFreshDatabase()`); "now" always comes from the demo clock.
+ * Uses the isolated `prisma/test.db` (`useFreshDatabase()`). The cooldown boundary is derived from
+ * the REAL-stamped persisted `lockedAt` (`realNow()`, never the pinned demo clock).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,7 +30,6 @@ import {
 import { getBreakerState } from '@/lib/db/repositories/circuitBreaker';
 import { createSession } from '@/lib/db/repositories/session';
 import { MFA_CODE, MFA_MAX_ATTEMPTS, RESET_COOLDOWN_MS } from '@/lib/constants';
-import { demoNow } from '@/lib/clock';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
 import { DEMO_USER_ID } from '../../helpers/fixtures';
 
@@ -126,7 +126,9 @@ describe('circuit-breaker · GATED unlock', () => {
       code: 'CIRCUIT_OPEN',
     });
     await expect(
-      resetSession(session, { now: demoNow() + RESET_COOLDOWN_MS - 1 }),
+      // The lock is stamped on the REAL clock, so derive the not-yet-elapsed boundary from the
+      // PERSISTED `lockedAt` (NOT `demoNow()` — the pinned demo instant is unrelated to the real lock).
+      resetSession(session, { now: before.lockedAt! + RESET_COOLDOWN_MS - 1 }),
     ).rejects.toMatchObject({ code: 'CIRCUIT_OPEN' });
 
     // The lock (and the recorded trip) survives every refused attempt.
@@ -176,7 +178,8 @@ describe('circuit-breaker · GATED unlock', () => {
     await trip(session);
     const lockedAt = (await getState(session)).lockedAt!;
 
-    // The trip is stamped with the demo clock, so the cooldown boundary is deterministic.
+    // The lock is stamped on the REAL clock (`realNow()`), so the cooldown boundary is derived from
+    // the PERSISTED `lockedAt` — never the pinned demo clock.
     const state = await resetSession(session, { now: lockedAt + RESET_COOLDOWN_MS });
 
     expect(state.locked).toBe(false);
