@@ -426,7 +426,7 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
   `app/api/security/reset/route.ts` (`POST /api/security/reset`, cookie identity via `requireIdentity`)
   invokes `security.circuitBreaker.resetSession(sessionId, { actor, reason, verificationCode })` — the GATED audited unlock that
   clears the lock AND records a `SECURITY_RESET` `SecurityEvent`. A tripped session is therefore no longer
-  locked for the process lifetime once a human calls this route.
+  locked for the process lifetime once a human calls this route with a correct `verificationCode` or after the cooldown (`RESET_COOLDOWN_MS`); an ungated call is refused with `CIRCUIT_OPEN` / HTTP 423.
 - **`mfa_required` is MISSING from `lib/contracts/audit.ts`.**
   `SecurityEventKind` has no `mfa_required` member, so the transfer escalation (YELLOW→RED at execution time)
   emits an EXISTING kind (`LIMIT_EXCEEDED`, severity `high`) with a COMPLETE `detail`
