@@ -549,8 +549,15 @@ async function journeyInvestmentFlow(browser: Browser, baseUrl: string): Promise
       // with a generous budget for the dev server's FIRST hit on the investment execution path.
       await waitForAssistantText(page, '理财申购结果：', 90_000);
 
+      // The SETTLED subscribe MFA card re-renders inline in its assistant message once the subscribe
+      // action settles (its duplicate-suppression ends), so a naive `count > 0` wait would return
+      // immediately on that stale card, and `.first()` would submit the code against the WRONG
+      // (already-executed) action. Count the code inputs before the redeem turn, then wait for one
+      // MORE — the LIVE redeem decision card, which `ChatWindow` always renders LAST — and let
+      // `submitMfa` drive that LAST card.
+      const beforeMfaCount = await page.locator(SELECTORS.mfaInput).count();
       await submitChat(page, MSG.redeem);
-      await waitForMfaCard(page);
+      await waitForMfaCard(page, 90_000, beforeMfaCount + 1);
       await submitMfa(page, '123456');
       await waitForAssistantText(page, '理财赎回结果：', 90_000);
 
