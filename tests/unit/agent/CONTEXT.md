@@ -28,6 +28,8 @@ Every spec keeps the in-process circuit breaker isolated with a UNIQUE persisted
 - `providers/provider-mock.test.ts` — pure, DB-free spec for `@/agent/providers/mock-responder`
   (`respond(context)`): fuzzy intent → tool call, two-call recipient resolution, multi-turn reuse,
   clarifications, honest failure narration, blocked gated calls (YELLOW/RED "not executed").
+- `providers/provider-live.test.ts` — pure `@/agent/providers/provider-live` model resolution: registered ids verbatim, unknown id → provider default + warning, custom endpoint via `<PROVIDER>_BASE_URL`/`LLM_BASE_URL`, fail-loud for unknown host, API key never surfaced.
+- `providers/provider-runtime.test.ts` — the explicit-provider runtime (`provider-mock`/`provider-live`): independent offline mock Agents, the real DeepSeek adapter serializing a confirmed continuation, custom OpenAI-compatible host registration.
 - `providers/plan-limit-park.test.ts` → pins the gated `submit_plan` conditional plan
   (`analyze` → `check` → `setlimit`, set_card_limit YELLOW) that PARKS in `waiting_confirmation`,
   then confirms.
