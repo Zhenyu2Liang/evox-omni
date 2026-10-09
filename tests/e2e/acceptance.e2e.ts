@@ -55,8 +55,8 @@ import {
   waitForAssistantText,
   waitForComposerHydration,
   waitForConfirmCard,
+  waitForElementHydration,
   waitForMfaCard,
-  waitForMfaSettled,
   waitForNodeStatus,
   waitForPlanStatus,
   waitForStatusText,
@@ -544,14 +544,15 @@ async function journeyInvestmentFlow(browser: Browser, baseUrl: string): Promise
       await submitChat(page, MSG.subscribe);
       await waitForMfaCard(page);
       await submitMfa(page, '123456');
-      await waitForMfaSettled(page);
-      await waitForAssistantText(page, '理财申购结果：');
+      // The narration lead IS the success evidence (the SAME pattern journey b uses for a RED verify):
+      // a successful verify clears the MFA card and the model then emits `理财申购结果：`. Await THAT,
+      // with a generous budget for the dev server's FIRST hit on the investment execution path.
+      await waitForAssistantText(page, '理财申购结果：', 90_000);
 
       await submitChat(page, MSG.redeem);
       await waitForMfaCard(page);
       await submitMfa(page, '123456');
-      await waitForMfaSettled(page);
-      await waitForAssistantText(page, '理财赎回结果：');
+      await waitForAssistantText(page, '理财赎回结果：', 90_000);
 
       const settled = await waitFor(
         async () => {
@@ -642,6 +643,22 @@ async function journeyAnomalyDetection(browser: Browser, baseUrl: string): Promi
 }
 
 /**
+ * Click the `/security` breaker control AFTER React has HYDRATED it.
+ *
+ * The control is a CLIENT component (`app/security/ResetBreakerButton.tsx`): its SSR HTML is visible
+ * — and clickable "by shape" — BEFORE hydration, and a click at that instant is silently DROPPED
+ * (no `POST /api/security/reset`), so no `role=status` message ever appears and the following
+ * `waitForStatusText` times out. This waits on the same real-DOM hydration condition as
+ * `waitForComposerHydration`, keyed on the control's own 6-digit code input.
+ */
+async function clickBreakerReset(page: Page, name: string | RegExp): Promise<void> {
+  const button = page.getByRole('button', typeof name === 'string' ? { name, exact: true } : { name });
+  await button.first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+  await waitForElementHydration(page, SELECTORS.breakerCodeInput);
+  await button.first().click();
+}
+
+/**
  * (j) CIRCUIT-BREAKER lock (DURABLE, per-OWNER `user:user_liming`): reset the account breaker to a
  * known zero state, then submit THREE consecutive wrong MFA codes (`000000`) on a RED transfer — after
  * each, RENDERED `role=status` shows `验证失败，已尝试 N 次`. The third trips the breaker: the security
@@ -667,9 +684,7 @@ async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Pro
 
       // (2) reset the ACCOUNT breaker so the three failures below start from a known zero state.
       await page.goto(`${baseUrl}/security`, { waitUntil: 'domcontentloaded' });
-      const resetButton = page.getByRole('button', { name: /重置熔断计数|解除熔断限制/ });
-      await resetButton.first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
-      await resetButton.first().click();
+      await clickBreakerReset(page, /重置熔断计数|解除熔断限制/);
       await waitForStatusText(page, '已解除，当前失败0/3次');
 
       // (3) three consecutive WRONG MFA codes on a RED transfer → trip the per-owner breaker.
@@ -710,9 +725,7 @@ async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Pro
         .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
 
       // (6) GATED unlock with the mock code → breaker cleared + audited.
-      const unlockButton = page.getByRole('button', { name: '解除熔断限制', exact: true });
-      await unlockButton.first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
-      await unlockButton.first().click();
+      await clickBreakerReset(page, '解除熔断限制');
       await waitForStatusText(page, '已解除，当前失败0/3次');
       await page
         .getByText('SECURITY_RESET', { exact: true })

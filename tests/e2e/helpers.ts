@@ -974,29 +974,44 @@ export const SELECTORS = {
   assistantText: 'div.bg-white p.whitespace-pre-wrap',
   /** `components/chat/cards/MfaCard.tsx` — the verification code input. */
   mfaInput: 'input[aria-label="验证码"]',
+  /** `app/security/ResetBreakerButton.tsx` — the GATED unlock control's 6-digit code input. */
+  breakerCodeInput: 'input[aria-label="6 位验证码"]',
 } as const;
 
 /**
- * Wait until the SSR composer `<textarea>` has been HYDRATED by React.
+ * Wait until a server-rendered DOM node has been HYDRATED by React: it carries a React own-property
+ * (`__reactProps$…` / `__reactFiber$…`).
  *
- * Before hydration the DOM node exists (it is server-rendered) but carries NO React own-property
- * (`__reactProps$…` / `__reactFiber$…`): a `fill()`/click at that instant is silently DROPPED (no
- * `POST /api/chat`) AND React's hydration re-renders the controlled `<textarea>` back to empty
- * (resetting the fill). Waiting for the React own-property key is a real DOM condition — never a
- * fixed sleep — so the first turn is landed deterministically instead of racing hydration.
+ * A client component's SSR HTML is visible (and "actionable" by shape) BEFORE hydration, but its
+ * `onClick` is not attached yet — a click at that instant is silently DROPPED (no network request).
+ * Waiting for the React own-property key is a real DOM condition — never a fixed sleep.
  */
-export async function waitForComposerHydration(page: Page, timeoutMs = NAV_TIMEOUT_MS): Promise<void> {
+export async function waitForElementHydration(
+  page: Page,
+  selector: string,
+  timeoutMs = NAV_TIMEOUT_MS,
+): Promise<void> {
   await page.waitForFunction(
-    (selector: string) => {
-      const el = document.querySelector(selector);
+    (sel: string) => {
+      const el = document.querySelector(sel);
       if (!el) return false;
       return Object.keys(el).some(
         (key) => key.startsWith('__reactProps$') || key.startsWith('__reactFiber$'),
       );
     },
-    SELECTORS.composer,
+    selector,
     { timeout: timeoutMs },
   );
+}
+
+/**
+ * Wait until the SSR composer `<textarea>` has been HYDRATED by React. Before hydration the node
+ * exists (server-rendered) but carries NO React own-property, so a `fill()`/click is silently
+ * DROPPED (no `POST /api/chat`) AND hydration re-renders the controlled `<textarea>` back to empty
+ * (resetting the fill) — landing the first turn deterministically instead of racing hydration.
+ */
+export async function waitForComposerHydration(page: Page, timeoutMs = NAV_TIMEOUT_MS): Promise<void> {
+  await waitForElementHydration(page, SELECTORS.composer, timeoutMs);
 }
 
 /** Navigate to the chat page and wait for the composer to render AND hydrate (fail-fast on SSR error). */
@@ -1118,15 +1133,21 @@ export async function submitMfa(page: Page, code: string, timeoutMs = 45_000): P
   await clickWhenEnabled(page.getByRole('button', { name: '验证', exact: true }), 'MFA 验证按钮', timeoutMs);
 }
 
-/** Wait for the MFA card's `验证` button to be enabled again (the verify round-trip has settled). */
+/**
+ * Wait for the MFA round-trip to SETTLE, decided by RENDERED DOM:
+ *   - the card is GONE (count 0) → the decision SUCCEEDED and its pending action was cleared, or
+ *   - the card stayed but its `验证` button is enabled again → the decision FAILED (retry allowed).
+ * A successful verify REMOVES the whole card (`ChatWindow` renders it only while a pending action
+ * exists), so requiring a re-enabled `验证` button would never settle on the success path.
+ */
 export async function waitForMfaSettled(page: Page, timeoutMs = 45_000): Promise<void> {
   await waitFor(
     async () => {
       const button = page.getByRole('button', { name: '验证', exact: true }).first();
-      if ((await button.count()) === 0) return false;
+      if ((await button.count()) === 0) return true;
       return (await button.isEnabled()) ? true : false;
     },
-    { timeoutMs, description: 'MFA 卡片结束忙碌（验证按钮重新可用）' },
+    { timeoutMs, description: 'MFA 回合已结束（验证成功移除卡片 / 验证失败按钮重新可用）' },
   );
 }
 
