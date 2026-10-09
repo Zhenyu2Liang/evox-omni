@@ -38,7 +38,7 @@ runs them all — no scoped config is required for any of them.
   result, a different request → `CONFLICT`, a legacy receipt-less ledger row is recognized, a fresh miss
   → `NOT_FOUND`).
 - `agent/` (6 specs + `providers/` 4 specs) — end-to-end confirmation-flow audit specs against the real DB +
-  gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `task-cancel-revokes`, `run-turn-failure`;
+  gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `message-normalize` (`withRealToolResult` restores the REAL result over a stale parked `等待确认`), `task-control`, `task-cancel-revokes`, `run-turn-failure` (continuation failure never rephrased as success);
   `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec.
   `providers/plan-limit-park.test.ts` pins the mock `submit_plan` gated conditional plan
   (analyze -> check -> setlimit) that PARKS in `waiting_confirmation`, then confirms.
