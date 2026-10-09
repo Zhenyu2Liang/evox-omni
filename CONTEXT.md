@@ -134,9 +134,6 @@ Additional code-level controls:
   Recovery settlement and its strict audit are atomic (`exec:<actionId>` or `reconcile:<actionId>`).
   A failed audit rolls back THAT transaction. It cannot undo an earlier committed business write;
   transfer's required execution audit instead shares the original debit transaction.
-  Recovery settlement and its strict audit are atomic (`exec:<actionId>` or `reconcile:<actionId>`).
-  A failed audit rolls back THAT transaction. It cannot undo an earlier committed business write;
-  transfer's required execution audit instead shares the original debit transaction.
 ## Shared Contracts (frozen — DO NOT redefine)
 All cross-module types live in **`lib/contracts/`** and are owned by the root. Child nodes IMPORT them;
 they must not redeclare or fork them. Key files:
