@@ -9,7 +9,7 @@ One module per aggregate. Each exports narrow, typed async functions over the sh
 `client: Prisma.TransactionClient = prisma`, so a caller can route several of its calls through ONE
 `prisma.$transaction` handle. The default keeps every existing caller working unchanged. This exists so a
 plan-level cancel and a concurrent authorization CAS can be composed into a single transaction and cannot
-interleave. All other repository modules use the shared singleton only.
+interleave. Two further aggregates accept an optional `client` for the SAME atomic-composition reason: `securityEvent.ts#insertSecurityEvent` (commit a security event in the caller's transaction) and `circuitBreaker.ts#resetBreakerState` (unlock + its `SECURITY_RESET` audit atomically together). All other repository modules use the shared singleton only.
 
 ## API Surface
 
