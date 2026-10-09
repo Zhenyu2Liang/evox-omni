@@ -9,7 +9,7 @@
  * `CircuitBreakerState` declares no relations, so its `truncateAll()` position in the test DB is free.
  */
 import type { CircuitBreakerState } from '@prisma/client';
-import { prisma } from '../client';
+import { prisma, type DbClient } from '../client';
 
 /** A breaker state snapshot (independent of the Prisma row shape). */
 export interface BreakerSnapshot {
@@ -18,9 +18,15 @@ export interface BreakerSnapshot {
   lockedAt: Date | null;
 }
 
-/** Read the persisted breaker row for an owner key, or `null` when none exists yet. */
-export function getBreakerState(key: string): Promise<CircuitBreakerState | null> {
-  return prisma.circuitBreakerState.findUnique({ where: { key } });
+/**
+ * Read the persisted breaker row for an owner key, or `null` when none exists yet.
+ *
+ * `client` defaults to the global Prisma client. Callers that read the breaker from INSIDE an open
+ * interactive transaction (the SDK write-boundary recheck) MUST pass that transaction's client —
+ * otherwise the read blocks on the global pool until the transaction times out.
+ */
+export function getBreakerState(key: string, client?: DbClient): Promise<CircuitBreakerState | null> {
+  return (client ?? prisma).circuitBreakerState.findUnique({ where: { key } });
 }
 
 export interface UpsertFailureInput {

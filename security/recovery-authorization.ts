@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db/client';
+import type { DbClient } from '@/lib/db/client';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import { getSession } from '@/lib/db/repositories/session';
 import { AppError } from '@/lib/errors';
@@ -12,9 +13,13 @@ import { computeEffectiveTransferTotalWith, evaluateTransferRisk } from './risk-
 import { issueChallenge } from './mfa';
 import type { ActionOwnership, AuthorizationResult } from './security-gateway';
 
-/** Applies only to recovery that may create a NEW debit, never to read-only receipt recovery. */
-export async function assertRecoverySessionUnlocked(sessionId: string): Promise<void> {
-  await assertSessionMayWrite(sessionId);
+/**
+ * Applies only to recovery that may create a NEW debit, never to read-only receipt recovery.
+ * `client` binds the breaker read to the enclosing interactive transaction's client when called
+ * from inside one (the recheck before a new debit), avoiding a single-connection deadlock.
+ */
+export async function assertRecoverySessionUnlocked(sessionId: string, client?: DbClient): Promise<void> {
+  await assertSessionMayWrite(sessionId, client);
 }
 
 /** Revalidate persisted authorization and current policy before an idempotent recovery attempt. */
@@ -46,7 +51,7 @@ export async function authorizeRecoveryAction(actionId: string, actor: ActionOwn
     if (await tx.transaction.findUnique({ where: { id: ledgerTxIdForAction(actor.userId, current) } })) {
       return { requiresMfa: current.requiresMfa || current.riskLevel === 'RED', allowed: true };
     }
-    await assertRecoverySessionUnlocked(actor.sessionId);
+    await assertRecoverySessionUnlocked(actor.sessionId, tx);
     if (current.taskId && (await tx.agentTask.findUnique({ where: { id: current.taskId } }))?.status === 'cancelled') {
       throw new AppError('SECURITY_DENIED', '操作所属计划已取消，不能恢复新的资金变更。');
     }

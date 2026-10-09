@@ -52,6 +52,7 @@ import {
 } from '../lib/db/repositories/circuitBreaker';
 import { getSession } from '../lib/db/repositories/session';
 import { getUser } from '../lib/db/repositories/user';
+import type { DbClient } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 
 export interface CircuitBreakerState {
@@ -96,11 +97,15 @@ const DEFAULT_RESET_REASON = '用户通过安全中心主动解除所属账户�
  * Resolve the OWNER a breaker mutation applies to. Prefers the persisted session's user so the lock
  * is shared across a user's sessions and survives a process restart; falls back to the user id,
  * then to a synthesized session key for unpersisted actors (e.g. test ids).
+ *
+ * `client` optionally binds the reads to an OPEN interactive transaction's client. It defaults to
+ * the global Prisma client (the correct choice outside a transaction); an in-transaction caller MUST
+ * pass its transaction client to avoid deadlocking on a single-connection datasource.
  */
-export async function resolveBreakerOwner(actor: string): Promise<BreakerOwner> {
-  const session = await getSession(actor);
+export async function resolveBreakerOwner(actor: string, client?: DbClient): Promise<BreakerOwner> {
+  const session = await getSession(actor, client);
   if (session?.userId) return { key: `user:${session.userId}`, userId: session.userId };
-  const user = await getUser(actor);
+  const user = await getUser(actor, client);
   if (user?.id) return { key: `user:${user.id}`, userId: user.id };
   return { key: `session:${actor}` };
 }
@@ -116,17 +121,24 @@ function toState(actor: string, snapshot: BreakerSnapshot | null): CircuitBreake
   };
 }
 
-/** Read the persisted breaker state for the actor's owner. */
-export async function getState(actor: string): Promise<CircuitBreakerState> {
-  const { key } = await resolveBreakerOwner(actor);
-  const row = await getBreakerState(key);
+/**
+ * Read the persisted breaker state for the actor's owner. `client` optionally binds the reads to an
+ * open interactive transaction (see {@link resolveBreakerOwner}); it defaults to the global client.
+ */
+export async function getState(actor: string, client?: DbClient): Promise<CircuitBreakerState> {
+  const { key } = await resolveBreakerOwner(actor, client);
+  const row = await getBreakerState(key, client);
   return toState(actor, row);
 }
 
-/** Whether the actor's owner is currently locked (fail-closed gate read). */
-export async function isLocked(actor: string): Promise<boolean> {
-  const { key } = await resolveBreakerOwner(actor);
-  const row = await getBreakerState(key);
+/**
+ * Whether the actor's owner is currently locked (fail-closed gate read). `client` optionally binds
+ * the reads to an open interactive transaction (see {@link resolveBreakerOwner}); it defaults to the
+ * global client — correct outside a transaction, deadlocking inside one on a single-connection DB.
+ */
+export async function isLocked(actor: string, client?: DbClient): Promise<boolean> {
+  const { key } = await resolveBreakerOwner(actor, client);
+  const row = await getBreakerState(key, client);
   return row?.locked ?? false;
 }
 
