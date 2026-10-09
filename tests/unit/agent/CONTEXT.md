@@ -24,9 +24,12 @@ Every spec keeps the in-process circuit breaker isolated with a UNIQUE persisted
   survives cancel (no fake rollback).
 - `run-turn-failure.test.ts` — the continuation-failure contract: a failing tool result / a
   `continue()` rejection is never swallowed and never rephrased as a success.
+- `message-normalize.test.ts` — `@/agent/message-normalize#withRealToolResult`: on a REUSED tool-call id the earlier factual result is preserved and the parked `等待确认` placeholder is replaced by the REAL executed result.
 - `providers/provider-mock.test.ts` — pure, DB-free spec for `@/agent/providers/mock-responder`
   (`respond(context)`): fuzzy intent → tool call, two-call recipient resolution, multi-turn reuse,
   clarifications, honest failure narration, blocked gated calls (YELLOW/RED "not executed").
+- `providers/provider-live.test.ts` — pure `@/agent/providers/provider-live` model resolution: registered ids verbatim, unknown id → provider default + warning, custom endpoint via `<PROVIDER>_BASE_URL`/`LLM_BASE_URL`, fail-loud for unknown host, API key never surfaced.
+- `providers/provider-runtime.test.ts` — the explicit-provider runtime (`provider-mock`/`provider-live`): independent offline mock Agents, the real DeepSeek adapter serializing a confirmed continuation, custom OpenAI-compatible host registration.
 - `providers/plan-limit-park.test.ts` → pins the gated `submit_plan` conditional plan
   (`analyze` → `check` → `setlimit`, set_card_limit YELLOW) that PARKS in `waiting_confirmation`,
   then confirms.
@@ -70,7 +73,10 @@ The repeated-confirm spec asserts the second call is `ok:false` and that the fun
 - `./task-control.test.ts` → submit_plan persistence + task-control ownership
 - `./task-cancel-revokes.test.ts` → cancel revokes parked action / cancel-vs-confirm race / executed work preserved
 - `./run-turn-failure.test.ts` → continuation-failure contract (`resumeTurn`, `confirmAction`)
+- `./message-normalize.test.ts` → `withRealToolResult` real-result attribution (reused call id)
 - `./providers/provider-mock.test.ts` → pure `mock-responder` behaviour (regex over the LLM text)
+- `./providers/provider-live.test.ts` → pure live-model resolution (registry/fallback/fail-loud)
+- `./providers/provider-runtime.test.ts` → explicit mock/live provider runtime
 - `./providers/plan-limit-park.test.ts` → gated `submit_plan` conditional plan (parks, then confirms)
 - `../helpers/db.ts` → `getTestPrisma()` (lazy), `resetDatabase`, `disconnectTestPrisma` (sibling — this node)
 
