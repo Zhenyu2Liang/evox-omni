@@ -37,7 +37,7 @@ runs them all — no scoped config is required for any of them.
   `transfer-receipt` (COMMITTED-FACT / execution-receipt replay: same key+request replays the ORIGINAL
   result, a different request → `CONFLICT`, a legacy receipt-less ledger row is recognized, a fresh miss
   → `NOT_FOUND`).
-- `agent/` (5 specs + `providers/`) — end-to-end confirmation-flow audit specs against the real DB +
+- `agent/` (6 specs + `providers/` 4 specs) — end-to-end confirmation-flow audit specs against the real DB +
   gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `task-cancel-revokes`, `run-turn-failure`;
   `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec.
   `providers/plan-limit-park.test.ts` pins the mock `submit_plan` gated conditional plan
