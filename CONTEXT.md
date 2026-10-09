@@ -127,6 +127,7 @@ Additional code-level controls:
   `SecurityEvent` (+ a UI security event) — but **never grants permission** (defense-in-depth only). It does NOT inject a system reminder into the model context.
 - **Hallucination guard**: the model may only report facts that came from a tool result. If a tool returns
   `success:false`, the agent must report failure (demo **Test 5**).
+  A server-authored fact channel (`agent/grounding.ts#buildFinancialFacts` / `groundAssistantText`, wired in `agent/run-turn.ts` at the assistant `message_end`) compares the final assistant text against the turn's REAL tool results and REPLACES an inconsistent message with a server-authored correction — a transfer / balance / recipient / status can only be stated from real tool results.
 - **Audit** (`audit/`): auditing is decided by SIDE EFFECT, not by permission colour — every write tool (`security/permission-engine.ts` `ToolPolicy.write`, consumed via `isWriteTool`) is audited, including the GREEN `reserve_budget`; read-only GREEN calls are **not** audited (see `lib/contracts/audit.ts`).
   A write-tool audit row is inserted in the SAME `prisma.$transaction` as the business write (`strict`), so an audit failure rolls the business write back — no un-audited side effect (`agent/write-audit.ts`).
   Its dedupe key is owner-scoped `write:<tool>:<owner>:<identity>` (`agent/write-audit.ts#writeAuditKey`), so a per-user local idempotency key cannot collide across users and never collides with `exec:<actionId>` / `reconcile:<actionId>`.
