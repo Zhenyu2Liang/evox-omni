@@ -41,12 +41,23 @@ import type { AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, JsonValue, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 import { createBankingAgent } from './banking-agent';
 import { confirmationCard, errorCard, mfaCard, toCards } from './card-emitter';
+import { buildFinancialFacts, groundAssistantText } from './grounding';
 import { withRealToolResult } from './message-normalize';
+import type { ModelRuntime } from './providers/types';
 import { getOrCreateSession, loadSession, saveSession } from './session';
 import { readPendingActionId } from './task-control';
 import type { ToolExecutionResult } from './tools';
 
-export interface RunTurnDeps { config?: AppConfig; now?: () => number; }
+export interface RunTurnDeps {
+  config?: AppConfig;
+  now?: () => number;
+  /**
+   * TEST SEAM (additive, optional): inject a scripted `{ model, streamFn }` pair so `runTurn`/
+   * `resumeTurn` can be driven deterministically by a faux provider, exactly as `createBankingAgent`
+   * would resolve it from config. Absent ⇒ unchanged behavior (`resolveProvider(config)`).
+   */
+  provider?: ModelRuntime;
+}
 export interface ResumeTurnInput {
   sessionId: string;
   toolResult: ToolExecutionResult;
@@ -129,10 +140,35 @@ interface TurnBuffer {
   assistants: ChatMessage[];
   /** The assistant message currently streaming (tool events / cards attach here). */
   current: ChatMessage | null;
+  /** Real tool results collected this turn — the authoritative facts grounding compares against. */
+  factResults: Array<{ toolName: string; result: ToolExecutionResult }>;
 }
 
 function createTurnBuffer(): TurnBuffer {
-  return { events: [], assistants: [], current: null };
+  return { events: [], assistants: [], current: null, factResults: [] };
+}
+
+/** True when this assistant message carries a tool call (i.e. it is NOT the terminal narration). */
+function hasToolCallPart(message: AssistantMessage): boolean {
+  return (
+    Array.isArray(message.content) &&
+    message.content.some((part) => isRecord(part) && part.type === 'toolCall')
+  );
+}
+
+/**
+ * Ground one assistant message's text IN PLACE against the turn's real tool results
+ * (`./grounding`). Never throws — a grounding bug surfaces as an `error` event instead of aborting
+ * the turn that already produced a real outcome. Only the `message_end` content is rewritten; no
+ * `text_delta` is mutated and no card is invented.
+ */
+function groundMessage(buffer: TurnBuffer, message: ChatMessage | null): void {
+  if (message === null || message.content === '') return;
+  try {
+    message.content = groundAssistantText(message.content, buildFinancialFacts(buffer.factResults));
+  } catch (error) {
+    buffer.events.push({ type: 'error', message: safeToString(error) });
+  }
 }
 
 function newAssistantMessage(now: number): ChatMessage {
@@ -301,6 +337,7 @@ async function handleToolExecutionEnd(
     };
     upsertToolEvent(buffer.current, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
+    buffer.factResults.push({ toolName, result: execResult });
     emitToolCards(buffer, toolName, execResult);
     return;
   }
@@ -315,6 +352,7 @@ async function handleToolExecutionEnd(
     const view: ToolEventView = { toolCallId, toolName, status: 'error', summary: message };
     upsertToolEvent(buffer.current, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
+    buffer.factResults.push({ toolName, result: { ok: false, error: message } });
     emitCard(buffer, errorCard(message));
     return;
   }
@@ -390,6 +428,9 @@ function createEventHandler(
           const full = textOfContent(event.message.content);
           const assistant = buffer.current ?? newAssistantMessage(now());
           if (assistant.content === '' && full !== '') assistant.content = full;
+          // Ground the TERMINAL narration (no tool call) once every tool result is known. The
+          // `message_end` event references this same object, so the UI receives the grounded text.
+          if (!hasToolCallPart(event.message)) groundMessage(buffer, assistant);
           buffer.events.push({ type: 'message_end', message: assistant });
           return;
         }
@@ -464,6 +505,7 @@ export async function runTurn(
     userId: config.demoUserId,
     snapshot,
     config,
+    provider: deps?.provider,
     onPlanUpdate: (plan) => relayPlanSnapshot(buffer, relay, plan),
   });
 
@@ -486,6 +528,8 @@ export async function runTurn(
   };
 
   snapshot.agentState = runtime.serialize().agentState;
+  // Safety net: re-ground the terminal narration before persisting (idempotent).
+  groundMessage(buffer, buffer.current);
   snapshot.transcript.push(userMessage, ...buffer.assistants);
   await saveSession(snapshot);
 
@@ -592,6 +636,7 @@ export async function resumeTurn(
     userId: snapshot.userId,
     snapshot,
     config,
+    provider: deps?.provider,
     onPlanUpdate: (plan) => relayPlanSnapshot(buffer, relay, plan),
   });
 
@@ -610,6 +655,9 @@ export async function resumeTurn(
       runtime.agent.state.messages,
       toolResultMessage,
     );
+    // Seed the authoritative facts with the injected REAL result so the continuation narration is
+    // grounded against it (never against the model's own prose).
+    buffer.factResults.push({ toolName: input.toolName ?? '', result: input.toolResult });
     await runtime.agent.continue();
   } catch (error) {
     // The gated business action ALREADY executed and is ALREADY audited (see `./confirmation`).
@@ -625,6 +673,8 @@ export async function resumeTurn(
   }
 
   snapshot.agentState = runtime.serialize().agentState;
+  // Safety net: re-ground the terminal narration before persisting (idempotent).
+  groundMessage(buffer, buffer.current);
   snapshot.transcript.push(...buffer.assistants);
   await saveSession(snapshot);
 

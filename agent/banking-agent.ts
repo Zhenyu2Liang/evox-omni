@@ -28,6 +28,7 @@ import { createToolRegistry, type ToolRegistry } from './tools';
 import { executeGatedTool } from './confirmation';
 import { buildAutomaticWriteFence } from './execution-fence';
 import { resolveProvider } from './providers';
+import type { ModelRuntime } from './providers/types';
 import { buildSystemPrompt } from './system-prompt';
 import { normalizeToolResultMessages } from './message-normalize';
 import type { SessionSnapshot } from './session';
@@ -76,6 +77,13 @@ export interface BankingAgentOptions {
    * per-node progress (backward compatible — the model/agent pipeline is unchanged).
    */
   onPlanUpdate?: (plan: TaskPlan) => void | Promise<void>;
+  /**
+   * TEST SEAM (additive, optional): a scripted `{ model, streamFn }` pair used INSTEAD of
+   * `resolveProvider(config)`, so tests can drive the REAL agent with a faux provider while every
+   * other collaborator (tools, security chokepoint, SDK, DB) stays production. Absent ⇒ unchanged
+   * behavior (the config-resolved live/mock provider).
+   */
+  provider?: ModelRuntime;
 }
 export interface BankingAgentRuntime {
   agent: Agent;
@@ -137,7 +145,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     },
   });
 
-  const { model, streamFn } = resolveProvider(config);
+  const { model, streamFn } = options.provider ?? resolveProvider(config);
   const systemPrompt = buildSystemPrompt({
     userId,
     toolNames: registry.list().map((tool) => tool.name as ToolName),
