@@ -176,7 +176,8 @@ that accepts one.
 - `./securityEvent.ts` → SecurityEvent
 - `./session.ts` → AgentSession
 - `./pendingAction.ts` → PendingAction + MfaChallenge (+ plan-scoped `listPendingActionsByTask` / `revokePendingActionsByTask`, the `getPendingActionPlanLink` reader, and the optional-`client` transaction-composable variants of every function)
-- `./index.ts` → namespace barrel
+- `./index.ts` → namespace barrel (`users, accounts, transactions, contacts, cards, subscriptions, investments, budgets, tasks, scheduledTasks, auditLogs, securityEvents, sessions, pendingActions, executionReceipts, manualReviews, circuitBreakers`)
+- `./circuitBreaker.ts` → CircuitBreakerState (durable OWNER-scoped breaker; `resetBreakerState` takes an optional `client` + `expect` CAS)
 
 ## Notes for Agents
 
