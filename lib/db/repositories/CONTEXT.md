@@ -134,7 +134,7 @@ that accepts one.
   `createMfaChallenge(input, client?)` (`maxAttempts` default 3),
   `getMfaChallenge(actionId, client?)`, `incrementMfaAttempts(actionId, client?)`,
   `updateMfaChallengeStatus(actionId, status, client?)`, `resetMfaAttempts(actionId, client?)` (sets `attempts` 0).
-- `index.ts` — namespace barrel: `users, accounts, transactions, contacts, cards, subscriptions, investments, budgets, tasks, scheduledTasks, auditLogs, securityEvents, sessions, pendingActions`.
+- `index.ts` — namespace barrel: `users, accounts, transactions, contacts, cards, subscriptions, investments, budgets, tasks, scheduledTasks, auditLogs, securityEvents, sessions, pendingActions, executionReceipts, manualReviews, circuitBreakers`.
 
 ## JSON-text columns (serialize with `toJson` / parse with `safeParse`)
 
