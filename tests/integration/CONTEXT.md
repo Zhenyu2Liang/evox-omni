@@ -36,3 +36,14 @@ remain recoverable from Git.
 
 Run npm run test -- tests/integration. Observe ../CONTEXT.md database isolation and no-weakening rules.
 These are in-process integration tests, not browser E2E.
+
+## Scope notes
+
+No suite here asserts on MODEL-generated narration/prose (the model is absent). Assertions observe
+PERSISTED DB state (balances, row/node/plan statuses, counts, audits, receipts) and SERVER-side
+route/outcome strings (ConfirmationOutcome.message, API data.message, node.error/node.output).
+The only model-adjacent suite is message-protocol.test.ts: it uses the deterministic mock through
+real facades and asserts transcript STRUCTURE (toolCall/toolResult pairing), not prose.
+Hallucination-guard / financial-narration checks (success-vs-failure wording, invented balance) live
+OUTSIDE this node — see tests/scenarios/ (test-05-failure-report, test-02-transfer-confirm,
+mock-integration) and tests/unit/agent/.
