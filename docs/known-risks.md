@@ -301,12 +301,13 @@ SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多
 
 **限制**：仓库**已有**真实浏览器端到端 harness（`tests/e2e/`）：它用 `playwright-core` 启动**系统**无头
 浏览器（Chrome 优先 / Edge 兜底，无需下载浏览器），启动**真实** `next dev`，在真实 `/agent` 输入框
-输入中文，并对**渲染后的 DOM**（卡片 / 按钮 / 徽章 / 文本）断言其覆盖的 5 条 journey。它**只**覆盖：
-🟡 转账确认、🔴 转账 MFA（成功 + 错误码）、计划暂停/继续、计划取消、刷新后恢复停靠决策；仅模型被
+输入中文，并对**渲染后的 DOM**（卡片 / 按钮 / 徽章 / 文本）断言其覆盖的 7 条 journey。它**只**覆盖：
+🟡 转账确认、🔴 转账 MFA（成功 + 错误码）、计划暂停/继续、计划取消、刷新后恢复停靠决策、
+已入账但缺终态操作的楔子刷新恢复、人工接管；仅模型被
 脚本化（`LLM_MODE=mock`）。它**不**覆盖：live LLM、真实银行 / 网络、生产构建（`next build` /
 `next start`）、跨浏览器（仅 Chrome，Edge 兜底未测）、视觉 / a11y、负载 / 性能。它是**单机**验收，**不**证明安全模型已被完全封闭。
 
-**默认命令与自举**：默认命令 `npx tsx tests/e2e/acceptance.e2e.ts` 会**自举 Prisma client**——`tests/e2e/helpers.ts#resetDemoDatabaseOnce` 先调用 `tests/helpers/prisma-cli.ts#ensurePrismaClientGenerated`，其就绪判据是**可用性探针** `prismaClientUsable`（**真正**构造一次 `PrismaClient`），而非 `node_modules/.prisma/client/schema.prisma` 这类工作区产物路径（**非权威**代理）——因此**干净检出**下**无需** `E2E_SKIP_DB_RESET` 即可运行；provisioning 失败**大声报错**（`runCliStep` 退出码非 0 即抛错，携带**完整** stdout+stderr），**不** warn-and-continue；首选 `prisma db push` 失败时沿**有序回退阶梯**继续（`--force-reset --skip-generate` → `--skip-generate` → 无 flag），**全部失败**时逐级汇总输出 + 丰富诊断（`DATABASE_URL` / cwd / CLI 路径 / 引擎是否存在）后**抛错**。它使用**隔离**的 `prisma/e2e.db`，**绝不**触碰 `prisma/dev.db`；`afterPush` 先做可用性探针再执行 `tsx prisma/seed.ts`，连续两次运行从**同一份种子数据**开始（E2E PASS 5 / FAIL 0 / SKIP 0）。
+**默认命令与自举**：默认命令 `npx tsx tests/e2e/acceptance.e2e.ts` 会**自举 Prisma client**——`tests/e2e/helpers.ts#resetDemoDatabaseOnce` 先调用 `tests/helpers/prisma-cli.ts#ensurePrismaClientGenerated`，其就绪判据是**可用性探针** `prismaClientUsable`（**真正**构造一次 `PrismaClient`），而非 `node_modules/.prisma/client/schema.prisma` 这类工作区产物路径（**非权威**代理）——因此**干净检出**下**无需** `E2E_SKIP_DB_RESET` 即可运行；provisioning 失败**大声报错**（`runCliStep` 退出码非 0 即抛错，携带**完整** stdout+stderr），**不** warn-and-continue；首选 `prisma db push` 失败时沿**有序回退阶梯**继续（`--force-reset --skip-generate` → `--skip-generate` → 无 flag），**全部失败**时逐级汇总输出 + 丰富诊断（`DATABASE_URL` / cwd / CLI 路径 / 引擎是否存在）后**抛错**。它使用**隔离**的 `prisma/e2e.db`，**绝不**触碰 `prisma/dev.db`；`afterPush` 先做可用性探针再执行 `tsx prisma/seed.ts`，连续两次运行从**同一份种子数据**开始（E2E PASS 7 / FAIL 0 / SKIP 0）。
 **GREEN 测试全绿 ≠ 安全闭环**：仅靠 🟢 读取路径的测试**不**构成对安全模型的证明——闭环只能来自对失败路径（🟡/🔴 门控、确认 / 验证、取消、熔断、注入）的**显式**验证。
 
 `tests/app/` 下的验收仍独立：它们是**进程内 HTTP 集成测试**（`describe('[integration] …')`），
@@ -374,7 +375,7 @@ SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多
   `schemaHash`（schema 未变则不重建）、标记的**原子写**（temp + rename）、删除 `-wal/-shm/-journal`。
   E2E harness 以**同一方式**自举（`tests/e2e/helpers.ts#resetDemoDatabaseOnce`，失败先自动恢复、再以两个
   完整错误抛出）；**默认冷启动**：Vitest 自举 `prisma/test.db`、E2E 自举 `prisma/e2e.db`（`afterPush` 先做可用性探针、再执行 `tsx prisma/seed.ts`，失败重试 2 次）——**绝不**触碰 `prisma/dev.db`；连续两次 E2E 从**同一份种子数据**开始，`prisma/schema.prisma` 变更会重建测试库。
-- **干净环境自举的 `RUST_LOG` 根因 · 部署路径**：这份共享固定策略位于**非测试**模块 `lib/prisma-cli-env.ts`（`SCHEMA_ENGINE_RUST_LOG`、`pinSchemaEngineLogging`、`prismaCliEnv`、`CliInvocation`、`resolveRepoRoot` / `resolvePrismaBin` / `resolveTsxBin` / `cliCommand`），并由 `tests/helpers/prisma-cli.ts` 再导出（**公共 API 不变**）；它对 Prisma schema-engine 子进程强制 `RUST_LOG=info`；部署路径复用同一份逻辑——`npm run db:push` → `tsx scripts/db-push.ts`（同时置 `RUST_BACKTRACE=1`、解析项目内 Prisma CLI、透传额外参数、以子进程退出码退出），`npm run db:reset` = `tsx scripts/db-push.ts --force-reset && tsx prisma/seed.ts`；根因是外层 `RUST_LOG` ≥ `warn` 抑制了引擎的 INFO 横幅，令 Prisma CLI 的报错映射 `e.split(/\r?\n/).slice(1)` 把**第 0 行**真实错误丢弃，只剩空 `Error: Schema engine error:`——在**全新 SQLite 文件**上把 `P1003` 可探针诊断破坏成空消息。因此默认 `npx vitest run` 与默认浏览器 E2E 自动 provision 隔离库（默认 E2E PASS 5 / FAIL 0 / SKIP 0），`prisma/dev.db` 不受影响；部署顺序为 `db push` → `db:seed` → `build`（构建会预渲染查询 SQLite 的路由），由 `tests/deploy-db-push.test.ts` 以环境 `RUST_LOG=warn` 驱动**真实** `scripts/db-push.ts` 佐证。
+- **干净环境自举的 `RUST_LOG` 根因 · 部署路径**：这份共享固定策略位于**非测试**模块 `lib/prisma-cli-env.ts`（`SCHEMA_ENGINE_RUST_LOG`、`pinSchemaEngineLogging`、`prismaCliEnv`、`CliInvocation`、`resolveRepoRoot` / `resolvePrismaBin` / `resolveTsxBin` / `cliCommand`），并由 `tests/helpers/prisma-cli.ts` 再导出（**公共 API 不变**）；它对 Prisma schema-engine 子进程强制 `RUST_LOG=info`；部署路径复用同一份逻辑——`npm run db:push` → `tsx scripts/db-push.ts`（同时置 `RUST_BACKTRACE=1`、解析项目内 Prisma CLI、透传额外参数、以子进程退出码退出），`npm run db:reset` = `tsx scripts/db-push.ts --force-reset && tsx prisma/seed.ts`；根因是外层 `RUST_LOG` ≥ `warn` 抑制了引擎的 INFO 横幅，令 Prisma CLI 的报错映射 `e.split(/\r?\n/).slice(1)` 把**第 0 行**真实错误丢弃，只剩空 `Error: Schema engine error:`——在**全新 SQLite 文件**上把 `P1003` 可探针诊断破坏成空消息。因此默认 `npx vitest run` 与默认浏览器 E2E 自动 provision 隔离库（默认 E2E PASS 7 / FAIL 0 / SKIP 0），`prisma/dev.db` 不受影响；部署顺序为 `db push` → `db:seed` → `build`（构建会预渲染查询 SQLite 的路由），由 `tests/deploy-db-push.test.ts` 以环境 `RUST_LOG=warn` 驱动**真实** `scripts/db-push.ts` 佐证。
 - **文件大小软性上限被超出**：`agent/task-control.ts`（~1212 行）与 `agent/confirmation.ts`（~1105 行）超出根约束的 ~1000 行软性上限——**抽取候选**，不影响任何语义保证。
 - **新增模型 / 列的升级与兼容（纯增量）**：`ExecutionReceipt` 模型与 `AuditLog.dedupeKey`（`String? @unique`）是**纯增量**的结构变更，经 `prisma db push` 应用——本仓库**没有 `migrations/` 目录**（`prisma/schema.prisma` 直接 push）。一致性**绝不**靠**清库 / 重置 / 重新 seed** 解决：历史「**已入账但缺审计**」的行支持**幂等审计回填**（**不二次扣款**、**绝不**把 `executed` 翻回 `failed`）。
 
