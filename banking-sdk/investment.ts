@@ -9,10 +9,10 @@
  * `redeemInvestment` closes exactly one HOLDING → throws `AppError('CONFLICT')` if it was already
  * redeemed.
  *
- * Both writes run in a SINGLE interactive transaction (`runInTransaction`): the balance change and
- * the holding change commit together or not at all, so no partial debit/credit can survive. The
- * debit is a conditional decrement (`balance >= amount`) → a negative balance is impossible even
- * under concurrency.
+ * Both writes run in a SINGLE interactive transaction (`runInTransaction`): the balance change, the
+ * holding change and the account-flow `Transaction` row commit together or not at all, so no partial
+ * debit/credit can survive. The debit is a conditional decrement (`balance >= amount`) → a negative
+ * balance is impossible even under concurrency.
  *
  * Optional at-most-once semantics (`input.idempotencyKey`, supplied by the planner as
  * `nodeExecutionKey(taskId, nodeId)`): a replayed plan node re-runs the tool, so a repeat with the
@@ -23,14 +23,17 @@
  * replays that original result, while a DIFFERENT or absent identity on an already-REDEEMED holding
  * throws `CONFLICT` — never a false success.
  *
- * Note: subscribing/redeeming moves the funding-account BALANCE only — it deliberately does NOT
- * write a `Transaction` row, so the demo's 本月 spending analysis stays anchored at ¥5,800.
+ * Note: subscribing/redeeming moves the funding-account BALANCE and writes an investment-flow
+ * `Transaction` row (category `INVESTMENT_FLOW_CATEGORY`) in the SAME transaction, so investment
+ * principal is kept out of the 本月 spending analysis (anchored at ¥5,800) and is never mislabeled
+ * as 大额消费.
  */
 import type { InvestmentHolding, InvestmentProduct } from '@prisma/client';
 import { demoNow } from '../lib/clock';
 import { accounts, investments } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { round2, subtractMoney } from '../lib/money';
+import { INVESTMENT_FLOW_CATEGORY } from './categories';
 import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction, type Tx } from './tx';
 import type {
@@ -198,6 +201,23 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
         userId: input.userId,
       });
     }
+    // Account-flow row: mirrors the funding-account DEBIT as a ledger `Transaction` in the SAME
+    // transaction, categorized as investment flow (`INVESTMENT_FLOW_CATEGORY`) so principal is kept
+    // out of consumption analysis and is never mislabeled as salary/大额消费.
+    await tx.transaction.create({
+      data: {
+        accountId: account.id,
+        userId: input.userId,
+        amount: -amount, // DECREASE: negative
+        direction: 'DEBIT',
+        category: INVESTMENT_FLOW_CATEGORY,
+        merchant: '认购' + product.name,
+        channel: 'APP',
+        occurredAt: new Date(now),
+        currency: 'CNY',
+      },
+    });
+
     return { holding, newBalance: updated.balance };
   };
 
@@ -292,6 +312,23 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
     await tx.investmentHolding.update({
       where: { id: holding.id },
       data: { redeemExecutionKey: key ?? null, redeemResult: JSON.stringify(payload) },
+    });
+
+    // Account-flow row: mirrors the funding-account CREDIT as a ledger `Transaction` in the SAME
+    // transaction, categorized as investment flow (`INVESTMENT_FLOW_CATEGORY`) so redeemed principal
+    // is never mislabeled as salary/大额消费 income.
+    await tx.transaction.create({
+      data: {
+        accountId: account.id,
+        userId: input.userId,
+        amount: credit, // INCREASE: positive
+        direction: 'CREDIT',
+        category: INVESTMENT_FLOW_CATEGORY,
+        merchant: '赎回',
+        channel: 'APP',
+        occurredAt: new Date(now),
+        currency: 'CNY',
+      },
     });
 
     return payload;
