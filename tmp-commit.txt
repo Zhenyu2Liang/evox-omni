@@ -1,5 +1,0 @@
-﻿[evogit-agent-T2-A28 275ffa9] test: regression coverage for investment flow-ledger (issue 2) and DEBIT-only anomaly (issue 3); run agent grounding tests in default vitest run
- 7 files changed, 651 insertions(+), 84 deletions(-)
- create mode 100644 tests/helpers/write-failure.ts
- create mode 100644 tests/unit/banking-sdk/anomaly.test.ts
- create mode 100644 tests/unit/banking-sdk/investment-flow.test.ts

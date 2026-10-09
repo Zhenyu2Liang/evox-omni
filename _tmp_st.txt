@@ -1,3 +1,0 @@
-﻿?? _tmp_commit.txt
-?? _tmp_sha.txt
-?? _tmp_st.txt

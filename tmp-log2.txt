@@ -1,1 +1,0 @@
-﻿275ffa9 test: regression coverage for investment flow-ledger (issue 2) and DEBIT-only anomaly (issue 3); run agent grounding tests in default vitest run
