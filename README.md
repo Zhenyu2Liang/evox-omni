@@ -40,10 +40,10 @@
   转账依然被判为 🔴 RED、依然需要人工验证码。权限既不会被提高，也不会被绕过。
 - **🚫 幻觉防护 / 如实报告（Test 5）** — 模型只能陈述来自工具结果的事实；工具返回 `success:false` 时，
   Agent 必须如实报告失败，绝不允许编造成功。
+  **结构化事实通道（grounding）** 在服务端为模型注入事实依据（`agent/grounding.ts#buildFinancialFacts` / `groundAssistantText`）：转账/余额/收款人/状态只能来自真实工具结果，否则回复在 `message_end` 被服务端校正（标记 `（系统校正）`）。
 - **🔗 跨场景任务串联** — 一个自然语言请求可以组合多个能力（例如"预留预算 + 定时提醒"），
   每个动钱的节点仍逐个经过安全闸门。
-- **📜 全链路审计** — 每个被闸门拦截的操作（确认 / 验证 / 取消）都会写入 `AuditLog`；
-  每个安全控制决策（熔断、注入检测、验证码失败）都会写入 `SecurityEvent`。
+- **📜 全链路审计（按副作用判定）** — 审计由操作是否产生**副作用**决定（`security/permission-engine.ts` 的 `ToolPolicy.write` / `isWriteTool()`），**与权限颜色无关**：🟢 GREEN 自动写入（如 `reserve_budget`）同样入审计，且审计行与被审计业务写入在**同一个 `prisma.$transaction` 内**（`agent/write-audit.ts`，strict：审计失败回滚业务写入）；去重键按所有者隔离 `write:<tool>:<owner>:<identity>`，与门控身份 `exec:<actionId>` / `reconcile:<actionId>` 互不冲突。每个安全控制决策（熔断、注入检测、验证码失败）都写入 `SecurityEvent`。
 
 ---
 
@@ -230,16 +230,15 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 - **会话身份来自 HttpOnly Cookie（查询参数不授权）** — 请求身份**仅**从 HttpOnly 的 `banking_session` Cookie 解析（会话 id 由 `POST /api/chat` 下发），`userId` 由服务端从该 `AgentSession` 行读出；`?sessionId=` / `?userId=` 等 **查询参数一律被忽略**，绝不能伪造 / 覆盖 / 扩大身份。缺失 Cookie 或未知会话 ⇒ `403 SECURITY_DENIED`（fail-closed）。
 - **原子化的日累计限额（已落账去重）** — 当日转账累计（已执行流水 + 在途授权 `PendingAction`）在 **同一个数据库事务** 内计算，`transfer_money` 的「确认」在同一事务内做原子 claim，杜绝并发确认绕过 ¥1000 阈值；多个各自 YELLOW 的小额转账会在 **执行时** 被重新评估并升级为 🔴 RED（需 MFA）。流水 id 的 **生成** 与 **查询** 使用同一套确定性 key（`lib/ledger.ts` 的 `ledgerTxIdForAction` / `idempotentTransferTxId`）：一个已写入流水、但 `PendingAction` 仍为 `confirmed` 的计划转账会被 **恰好计一次**（按已执行流水计），而真正尚未落账的动作仍按在途计入。因此 ¥1000 保持 🟡 YELLOW、¥1000.01 升级为 🔴 RED，且不会因重复计数被误升级。
 - **计划取消与授权的原子性** — 取消计划是原子的：**撤销该计划所有尚未授权/未执行的待确认操作** 与 **将计划标记为 `cancelled`** 在同一个数据库事务内完成；`confirm` / `verify` 的授权在做原子 claim 的 **同一个事务内重新读取所属计划状态**，若计划已在此前被取消，则在事务内 **回退这次 claim**（不执行、不写流水）。**已经落账的交易会被保留**（其对应动作恒记 `executed`），不会被撤销或伪造回滚。
-- **投资申购 / 赎回幂等** — `subscribe_investment` 携带稳定的「节点执行幂等键」（`lib/ledger.ts` 的 `nodeExecutionKey(taskId, nodeId)`）：幂等记录 + 扣款 + 生成持仓在 **同一个数据库事务** 内完成，因此计划在效果已落账后恢复执行时 **不会二次扣款**。`redeem_investment` 在 **同一个数据库事务** 内持久化本次赎回的**执行身份**（`redeemExecutionKey`）与**原始结果**（`redeemResult`）：**同身份重放**返回原结果、**不重复入账**；**异身份（或无身份）对已赎回持仓 → `CONFLICT` 拒绝**（绝不伪造成功）；条件状态流转（`status != REDEEMED`）保证并发下 **恰好一次入账**。
+- **投资申购 / 赎回幂等** — `subscribe_investment` 携带稳定的「节点执行幂等键」（`lib/ledger.ts` 的 `nodeExecutionKey(taskId, nodeId)`）：幂等记录 + 扣款 + 生成持仓在 **同一个数据库事务** 内完成，因此计划在效果已落账后恢复执行时 **不会二次扣款**。`redeem_investment` 在 **同一个数据库事务** 内持久化本次赎回的**执行身份**（`redeemExecutionKey`）与**原始结果**（`redeemResult`）：**同身份重放**返回原结果、**不重复入账**；**异身份（或无身份）对已赎回持仓 → `CONFLICT` 拒绝**（绝不伪造成功）；条件状态流转（`status != REDEEMED`）保证并发下 **恰好一次入账**。此外，申购/赎回在**同一个 `prisma.$transaction` 内**写入账户 `Transaction` 流水行（幂等），分类为 `INVESTMENT_FLOW_CATEGORY = '投资'`（`banking-sdk/categories.ts`），因此理财本金**不会**被计入日常消费/工资统计。
 - **提示词注入防御（injection-guard）** — 对用户输入做启发式检测，命中则记录 `SecurityEvent`
   并向前端发出安全事件（`security_event{kind:'injection'}`）；但它 **只做纵深防御，绝不授予权限**。
   检测结果**不会**被注入模型上下文（不加任何"系统提醒"），也不改变任何授权结论。
-- **幻觉防护（hallucination guard）** — 模型只能报告来自工具结果的事实；`success:false` 必须如实报告失败。
+- **幻觉防护（hallucination guard）** — 模型只能报告来自工具结果的事实；`success:false` 必须如实报告失败。**结构化事实通道（grounding）** 在服务端为模型注入事实依据（`agent/grounding.ts#buildFinancialFacts` / `groundAssistantText`）：转账/余额/收款人/状态只能来自真实工具结果，否则回复在 `message_end` 被服务端校正（标记 `（系统校正）`）。
 - **模拟 MFA（短信验证码）** — 🔴 RED 操作需要输入验证码；错误验证码会累加失败次数。
   **UI 永不显示验证码**，需由用户输入。
-- **熔断（circuit-breaker）** — 连续 **3 次** 验证码失败会 **锁定该会话（fail-closed：拒绝该会话的*所有*工具调用，*包括 🟢 GREEN 查询*）**
-  并写入 `SecurityEvent`（`CIRCUIT_BREAKER_TRIPPED`，severity `high`）。熔断是 LLM 无法清除的硬闸门；**只有用户通过安全中心**（`POST /api/security/reset` → `circuitBreaker.resetSession`，写入 `SECURITY_RESET` 事件）**的经审计操作才能解除**。
-- **审计（audit，严格 + 幂等）** — 每个被闸门拦截的操作（确认 / 验证 / 取消）写入 `AuditLog`；
+- **熔断（circuit-breaker，DB 持久化 · 按所有者）** — 连续 **3 次** 验证码失败会 **锁定该所有者（fail-closed：拒绝*所有*工具调用，*包括 🟢 GREEN 查询*）** 并写入 `SecurityEvent`（`CIRCUIT_BREAKER_TRIPPED`，severity `high`）。锁状态**持久化在 `CircuitBreakerState`**（Prisma），键为 `user:<userId>` / `session:<actor>`，因此**新建会话或进程重启都无法绕过**。熔断是 LLM 无法清除的硬闸门（**没有解锁工具**）；**只有用户通过安全中心**（`POST /api/security/reset` → `circuitBreaker.resetSession`）**的经审计操作才能解除**，且解除本身**被门控**（需额外验证码 `123456` **或** 冷却 `RESET_COOLDOWN_MS = 60_000`），写入 `SECURITY_RESET` 事件。
+- **审计（audit，按副作用 + 严格 + 幂等）** — **审计由是否产生副作用决定，而非权限颜色**：`security/permission-engine.ts` 的 `ToolPolicy.write` / `isWriteTool()` 列出的写入工具（含 🟢 GREEN 的 `reserve_budget`）**都会写入 `AuditLog`**，且审计行经 `agent/write-audit.ts` 与业务写入**在同一个 `prisma.$transaction` 内**（strict：审计失败回滚业务写入），去重键按所有者隔离 `write:<tool>:<owner>:<identity>`；
   执行 / 恢复的审计**与被审计的业务事实在同一个 `$transaction` 内**写入（`audit/audit-logger.ts#recordAudit(entry, { client, dedupeKey, strict })`）：`strict:true`（执行 / 恢复审计）会**重抛真实插入错误**、从而**回滚该业务写入**，仅当 **Prisma `P2002` 唯一冲突 + 同 `dedupeKey` 行已存在**时才吸收为幂等重复 —— 因此「已结算却无审计」不可能发生；唯一 `dedupeKey`（`AuditLog.dedupeKey String? @unique`，形如 `exec:<ledgerKey>`，即该动作的执行身份 / `actionId`）令重复恢复**绝不**重复记账；
   历史上「已入账但缺审计」的行支持**幂等回填**（去重键不变，**绝不**重新扣款、**绝不**把 `executed` 改成 `failed`）；每个安全控制决策写入 `SecurityEvent`。
 - **提交事实优先的幂等结算（committed-fact-first）** — `transfer_money` 在**一个 `prisma.$transaction`** 内写入「扣款 + 账本 `Transaction` + `ExecutionReceipt`（`@@unique([userId, key])`，保存**原始结果** `resultJson`、请求指纹 `requestDigest` 与关联 `txId`）」，因此重放**先查已提交凭据**（`banking-sdk/transfer.ts#replayCommitted(userId, key, digest)`，在任何可变查询之前）：**同身份 + 同 `requestDigest`** ⇒ 直接返回**原始结果**（不重放副作用）；**同身份 + 异 digest** ⇒ `AppError('CONFLICT', 'same execution identity, different request')`；**无凭据的遗留确定性流水行**（`lib/ledger.ts#idempotentTransferTxId` 派生的旧流水 id）同样被识别为**已入账**并按其持久化字段重放，绝不因收款人被改名而误判 `NOT_FOUND`。
@@ -454,13 +453,13 @@ npm run build         # 生产构建（页面在构建期预渲染，必须先�
 | 7 | 看看有没有异常交易 | 🟢 GREEN · `detect_anomaly` · Apple Store ¥6,999 @ 2026-09-20 18:32 |
 | 8 | 把信用卡娱乐限额调整到1500 | 🟡 YELLOW · `set_card_limit` → 确认 · 限额 = ¥1500 |
 | 9 | 买5000元稳健理财A | 🔴 RED · `subscribe_investment` → 验证码 · 生成持仓 |
-| 10 | （连续 3 次错误验证码） | 熔断触发（`CIRCUIT_BREAKER_TRIPPED`）· 该会话**所有操作被锁定（含 🟢 查询，fail-closed）** · 需在安全中心解除 |
+| 10 | （连续 3 次错误验证码） | 熔断触发（`CIRCUIT_BREAKER_TRIPPED`）· 该所有者**所有操作被锁定（含 🟢 查询，fail-closed），跨会话、重启后仍生效** · 解除需在安全中心（额外验证码或 60s 冷却后） |
 | 11 | 如果本月娱乐消费超过2000，就把娱乐限额调成1500 | `submit_plan` DAG：分析 → 条件 → 受闸门的 `set_card_limit`（🟡） |
 | 12 | 爱人11月20日生日，帮我准备1000元预算 | 计划：`reserve_budget`（🟢）+ `create_scheduled_task`（🟡 确认）· **只创建预算/任务/提醒记录，不会真正下单鲜花/蛋糕** |
 
 ### 15.3 测试分层 / Test layers
 
-测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）。清理重复历史探针后，当前仓库含 **100** 个测试文件 / **716** 条测试（前三层），全量验证通过：
+测试分为 **四层**（只有模型被 mock；工具、安全网关、路由处理器、数据库都是真实实现）。清理重复历史探针后，当前仓库含 **113** 个测试文件 / **811** 条测试（前三层），全量验证通过：
 
 1. **纯单元测试（pure unit）** — `tests/unit/`：`security`（权限策略表、转账阈值、网关 decide、注入检测、熔断、MFA、风控）、`planner`（DAG 校验 / 拓扑序 / 成环 / 条件）、`banking-sdk`（资金不变量等）；无网络、无真实 LLM。
 2. **faux-LLM 场景集成测试（scenario）** — `tests/scenarios/test-01…test-12`：用脚本化模型（`LLM_MODE=mock` + 隔离的测试 SQLite `prisma/test.db`）驱动 **完整流水线**，逐个覆盖 12 个验收场景。
@@ -525,12 +524,10 @@ RED 终态不会再次要求验证码；并发恢复在事务内使用当前授�
 - **验证码是模拟的**（固定 `123456`），不发送真实短信；且 UI 不显示验证码。
 - **演示时钟被固定。** 应用内所有"现在"默认使用 `DEMO_NOW = 2026-09-25 12:00（本地时间）`（`lib/constants.ts`），经 `lib/clock.ts` 的 `demoNow(override?)` 统一派发，
   以保证本月/上月/今日窗口、消费分析、当日转账累计与种子数据保持一致 —— 它 **不是真实系统时间**。
-- **异常检测为演示级规则。** 基于单笔金额阈值（>¥5,000，`ANOMALY_AMOUNT_THRESHOLD`）与种子标记，
-  并非真实风控模型。
-- **理财产品为虚构数据**，收益率/持仓均非真实市场数据；申购/赎回仅调整账户余额、不写交易流水（演示简化）。
-- **熔断器为进程内状态**（按 `sessionId` 记录），服务重启即重置；非分布式/持久化实现。
-- **审计范围有限。** 仅对 **受闸门的操作**（YELLOW/RED 的确认 / 验证 / 取消）写 `AuditLog`；
-  🟢 GREEN 自动执行的读取 **不写审计** —— 这是**设计选择**（非缺陷）：GREEN 读取无人工决策，故不入审计。
+- **异常检测为演示级规则。** 基于单笔**支出（DEBIT）**金额阈值（>¥5,000，`ANOMALY_AMOUNT_THRESHOLD`）与种子标记，**仅对借记**生效（大额收入如工资/退款不会被误判为"大额消费"），并非真实风控模型。
+- **理财产品为虚构数据**，收益率/持仓均非真实市场数据；申购/赎回会调整账户余额，并在**同一个事务内**写入一条 `投资` 分类的 `Transaction` 流水行（`INVESTMENT_FLOW_CATEGORY = '投资'`，幂等），因此本金不计入日常消费/工资统计。
+- **熔断器为 DB 持久化、按所有者（`CircuitBreakerState`，键 `user:<userId>` / `session:<actor>`）**，锁**跨会话/重启仍生效**；解锁被门控（验证码 `123456` 或冷却 60s）并审计。仅在**单进程/单 SQLite** 下验证，非分布式集群实现。
+- **审计范围以「副作用」为界。** 所有**写入工具**（`ToolPolicy.write` / `isWriteTool()`，含 🟢 GREEN 的 `reserve_budget`）写入 `AuditLog`，且审计与业务写入同事务（strict）；🟢 GREEN 的**纯读取**（如余额/流水查询）**不写审计** —— 这是**设计选择**（非缺陷）：读操作无副作用、无人工决策，故不入审计。
 - **`change_password` 为演示专用**（无凭据存储），以 `AuditLog` 记录为准。
 - **`LLM_MODE=live` 时结果不确定**（真实大模型的非确定性）；所有自动化测试与演示均使用
   `LLM_MODE=mock`（脚本化模型）以保证可复现。
@@ -540,7 +537,7 @@ RED 终态不会再次要求验证码；并发恢复在事务内使用当前授�
   未来动作意图（`ScheduledTask` 行），**没有被任何在线调度器在其 `runAt` 时间执行**；Test 12 也
   **不会真正下单鲜花 / 蛋糕**。
 - **单进程 / SQLite / 单演示用户**，通过 Cookie 维护会话；非生产级多用户/高可用架构。
-- **多进程 / 集群下的竞争未被压力测试。** 并发保护依赖 **单个 SQLite 文件的写锁**（`prisma db push` 工作流、无 `migrations/` 目录）+ **DB 事务**，因此只在 **单进程** 下验证过串行化；面向真实的高并发多实例集群既未压测也未验证。**熔断器（circuit-breaker）为进程内状态**（按 `sessionId` 记录），**服务重启即重置**，不是分布式/持久化实现。
+- **多进程 / 集群下的竞争未被压力测试。** 并发保护依赖 **单个 SQLite 文件的写锁**（`prisma db push` 工作流、无 `migrations/` 目录）+ **DB 事务**，因此只在 **单进程** 下验证过串行化；面向真实的高并发多实例集群既未压测也未验证。**熔断器（circuit-breaker）已改为 DB 持久化、按所有者（`CircuitBreakerState`，键 `user:<userId>` / `session:<actor>`）**，锁**跨会话/重启仍生效**；但其持久化只在**单进程/单 SQLite** 下验证，多实例集群的竞争仍未压测。
 - **执行接管已实现 fencing token（【已实现】✅ 代码强制）；TTL 仍是启发式。** `resume` / `retry` 仅在 `executionClaimedAt` 陈旧（TTL）或所有者长时间阻塞（未续租约）时接管 `executionToken`：仍在推进的执行者通过**节点边界租约续期**（`renewTaskExecutionClaim`）保持 claim 新鲜，而被接管的旧执行者的写入经**带 token 条件的原子写入原语**（`updateTaskNode` / `claimTaskStatus` 的 `fenceToken`；claim 丢失即被拒）**被拒绝**，无法覆盖接管者的结果。Fencing 覆盖**每个执行者路径**（初次 `submit_plan` 执行、依赖跳过与条件/说明节点、确认续跑）：所有权在与写入**同一条 SQL 的原子 CAS** 中断言；确认续跑若**丢失**计划 claim 则不推进计划，而经带 fence 的无主 CAS（`agent/task-fencing.ts#recordDecidedNodeFenced`）落库人工决策节点。TTL（`EXECUTION_CLAIM_TTL_MS = 600000ms`）仍是**启发式**阈值，并非已证得的活性判据——**单次工具调用阻塞超过 TTL 的所有者仍可被接管**，只是其写入会失败。**首次 `submit_plan` 执行与 `resume` / `retry` / 确认续跑统一经同一套原子节点认领端口**（`agent/tools/planning.ts#runSubmitPlan` → `buildNodeClaimPorts` / `claimNodeOwnedByPlan`）：接管者赢得计划 claim 后会清理僵尸的非终态节点 claim（`agent/task-control.ts#clearStaleNodeClaims`）以便重新认领，而僵尸随后的认领 / 写入与任何迟到工具调用都被拒绝、迟到进度被抑制。
 - **schema engine 冷启动报错的根因已定位并修复（【已实现】✅ 代码强制）。** 在全新 SQLite 文件上，环境中 `RUST_LOG` 达到/高于 `warn` 会压掉 Prisma schema-engine 的 INFO 横幅；Prisma 的错误映射会丢弃第 0 行输出，于是真正的（第 1 行）错误也被丢弃，只剩下**空内容的 `Error: Schema engine error:`**，并连带毁掉「库不存在（`P1003`）」这一探测结果，使冷启动 `db push` 失败。修复方式是为 schema-engine 子进程**固定 `RUST_LOG=info`**（`lib/prisma-cli-env.ts#pinSchemaEngineLogging`，经 `tests/helpers/prisma-cli.ts` 再导出），因此**默认的 `npx vitest run` 与默认浏览器 E2E 均可自动 provision 隔离库**——无需手动准备、无需跳过开关、无需预写标记。
 - **计划级所有权 fencing 覆盖节点 claim 与写入（【已实现】✅ 代码强制）。** 丢失计划执行 claim 的执行者**停止推进**：无法再 claim / 覆盖已完成节点、无法运行后继工具、无法发布迟到的 `onPlanUpdate`、也不会返回误导性结果——`agent/task-control.ts` 的 `claimNodeOwnedByPlan` 用**单条 `prisma.agentTaskNode.updateMany` 原子 CAS** 同时要求 `task:{executionToken:planToken}`（计划所有权）**且** `status:{notIn:TERMINAL_NODE_STATUSES}`（拒绝 `success`/`failed`/`skipped`/`cancelled` 终态节点），`planExecutionClaimHeld` 则为发布闸门；`agent/tools/planning.ts` 的 `onPlanUpdate` 以 `planExecutionClaimHeld` 为门槛。
