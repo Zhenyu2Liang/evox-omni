@@ -400,7 +400,10 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
 - **UNLOCK CONDITIONS (explicit)** — a locked OWNER/account is cleared ONLY by the deliberate, audited security-center
   action `resetSession(actor, { actor, reason, verificationCode?, now? })`, which records a COMPLETE `SECURITY_RESET` event
   (`actor`, `reason`, `wasLocked`, `previousFailures`, `priorLockedAt?`):
-  - the model/LLM can NEVER unlock the breaker (no tool touches the state);
+  - the model/LLM can NEVER unlock the breaker (no tool exposed to the model touches this state);
+  - unlocking a TRIPPED breaker requires EXTRA verification: a correct `verificationCode` (`MFA_CODE`) OR an elapsed cooldown (`now >= lockedAt + RESET_COOLDOWN_MS`, `RESET_COOLDOWN_MS = 60_000`); otherwise `resetSession` throws `AppError('CIRCUIT_OPEN')` and leaves the lock INTACT — a bare session cookie is REFUSED;
+  - it is reachable ONLY via the audited `POST /api/security/reset` (cookie-gated) → UI `app/security/ResetBreakerButton.tsx`; `reset(actor)` is the ungated, unaudited, route-less test-only clear;
+  - a locked session/challenge always wins over a correct MFA code on the ordinary path — `mfa.verify` checks the lock first;
   - `recordSuccess` does NOT unlock a tripped breaker (a correct MFA code on a NON-locked path only resets the counter);
   - a correct MFA code submitted WHILE locked is rejected and does NOT unlock (`mfa.verify` checks the lock first);
   - unlock clears ALL breaker state and restarts the failure counter from 0;
