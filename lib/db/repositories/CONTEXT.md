@@ -15,7 +15,7 @@ interleave. Two further aggregates accept an optional `client` for the SAME atom
 
 Model return types come from `@prisma/client`. JSON-text columns are stored/parsed with `lib/json`.
 All functions below are implemented (real Prisma data access).
-The trailing optional `client?` parameter is documented only for `pendingAction.ts` — the aggregate
+The trailing optional `client?` parameter is documented for `pendingAction.ts` (every function)
 that accepts one.
 
 - `user.ts` (`User`) — `getUser(id)`, `getUserByPhone(phone)`, `listUsers()`,
