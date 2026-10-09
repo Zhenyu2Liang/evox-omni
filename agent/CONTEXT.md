@@ -512,7 +512,7 @@ Implement against `node_modules/@earendil-works/*` (stubs / `./tools/CONTEXT.md`
 - **`liveConfirmations` is PER-PROCESS.** A `confirmed` + `resultJson=null` row whose live continuation runs in a DIFFERENT process/instance is not distinguished from a genuine wedge (the registry is a per-process, ref-counted liveness hint, not a durable marker); multi-instance deploy is not covered.
 - **Execution takeover is a TTL HEURISTIC.** `EXECUTION_CLAIM_TTL_MS = 600_000ms` is computed from the REAL clock: a single tool call legitimately blocked beyond the TTL can be overtaken (its writes are fenced, so it can never clobber the takeover, but it is preempted), so preemption is a heuristic, never a liveness proof.
 - **File-size budget exceeded.** `agent/task-control.ts` (1212 lines) and `agent/confirmation.ts` (1105 lines) exceed the ~1000-line soft guideline and remain extraction candidates (two extractions already landed: `agent/execution-convergence.ts`, `agent/execution-fence.ts`).
-- **Residual streaming gap in fact grounding (cosmetic, by design).** `text_delta` events stream the model's RAW prose LIVE before the assistant `message_end`, so a false-success / wrong-balance sentence is briefly visible while streaming and is REPLACED by the server-authored correction only at `message_end` (the UI reducer clears the transient `streamingText` and upserts the grounded `message_end` content). Closing the stream-time window needs a new event/contract variant in `lib/contracts` (out of this node, e.g. withholding deltas until grounded) — left as a documented limitation; the FINAL persisted / UI text is ALWAYS the grounded one.
+
 
 ## Notes for Agents
 
