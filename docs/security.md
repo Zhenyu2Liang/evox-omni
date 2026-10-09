@@ -10,7 +10,6 @@ GREEN 预算的聊天直接调用、独立调用和计划节点均在 SDK 写事
 已提交凭证的只读回填继续可用。恢复授权认领后重读风险信息，状态/结果/审计落地事务再次读取当前授权，
 防止并发 RED 升级被旧 YELLOW 快照覆盖。严格审计去重校验保持不变。
 验证码仅面向 `pending/awaiting_mfa` 决策；终态的历史 `requiresMfa` 不表示仍需验证。
-详见 [本轮确认边界修复](repair-confirmation-boundaries.md)。
 
 当前恢复边界：已提交结果可只读重建；无凭证且可能新增扣款的恢复必须经 `security/recovery-authorization.ts` 复核身份、熔断、计划状态、累计金额及 MFA，SDK 写事务内再查熔断。锁定时拒绝新扣款（HTTP 423）；并发已入账的同一动作不会再次计入授权金额。
 
@@ -277,13 +276,58 @@ flowchart TD
 
 ## 8. 幻觉防护 · Hallucination Protection
 
-系统对模型输出做**事实性约束**（`agent/system-prompt.ts` 导出 `HALLUCINATION_RULE`）：
+助手文本是**原始输出**（RAW）：系统用**提示层规则 + 代码强制的服务端事实校正通道**两层约束它。
+提示层只**请求**模型遵守（`agent/system-prompt.ts` 导出 `HALLUCINATION_RULE`）；
+校正通道则在**代码里**把与真实工具结果不一致的消息**替换**为服务端撰写的事实。
+
+### 8.1 提示层约束 · Prompt-Level Rule
 
 - 助手回复**只**源于**真实工具结果**——模型只能报告来自工具结果的事实。
 - 若工具返回 `success:false`（或 `ok:false`），智能体**必须如实汇报失败**，**绝不**编造余额/结果，
   也**绝不**声称一个被门控的工具已经执行。
 - 每张发给 UI 的卡片都必须源自**真实工具结果**或**真实安全决策**——绝不来自模型散文
   （`card-emitter.toCards` 是纯的、全函数的：未知形状 ⇒ 错误卡片）。
+
+### 8.2 服务端可信事实库 · Server-Authored Trusted Facts
+
+`agent/grounding-facts.ts#buildFinancialFacts` 把本回合的**真实工具结果**蒸馏为**服务端撰写**的
+结构化事实（纯函数：无 DB、无 pi 依赖），它是校正判定的**唯一依据**：
+
+- **账户**：`get_balance` 的每个账户建为 `TrustedAccount`，按账户类型经 `ACCOUNT_TYPE_KEYS`
+  给出双语键（`CHECKING` → 活期 / checking，`SAVINGS` → 储蓄 / savings，`CREDIT` → 信用 / credit），
+  并保留权威的 `totalBalance` 与各账户余额；
+- **每笔写入**：`SIDE_EFFECT_TOOLS` 中的 13 个产生副作用的工具各对应一条 `TrustedWrite`，
+  其 `outcome ∈ { 'succeeded' | 'failed' | 'unknown' }`，并携带权威的 `amount` / `recipient` /
+  `balanceAfter` 以及工具自己的 `summary` / `error`；
+- **`unknown` 是一等结果**：`isUnknownOutcome(result)` 认可服务端显式标注的不确定结果
+  （`data.outcome === 'unknown'`、`data.needsReconciliation === true`，或结果文案含
+  人工核对 / 无法核实 / 待核对 / needs reconciliation）；它**绝不**被折叠成成功，也**绝不**被折叠成失败；
+- **金额比较**用绝对容差 `MONEY_TOLERANCE = 0.01`（`sameAmount`）；
+- 事实**按工具身份逐笔记账**——不存在「本回合有任何写入成功」这类全局标记。
+
+### 8.3 结构化校正 · Structural Grounding
+
+`agent/grounding.ts#groundAssistantText(text, facts)` 把助手的**最终文本**与上述事实做
+**结构化**比对：按（操作身份、账户、金额、收款人、执行状态）判定，而不是依赖关键词清单、
+金额正则或全局 `anyWriteSucceeded` 标记（双语词表只用于把子句**分类**，判定本身是结构化的）：
+
+- 声称某操作「已完成」，而本回合没有该操作的写入记录 ⇒ 服务端改写的「未记录到该操作的执行结果」；
+- 声称「已完成」而该操作实际 `failed` ⇒ 带真实 `error` / `summary` 的服务端失败陈述；
+- 声称「已完成」而金额 / 收款人与真实写入不符 ⇒ 服务端改写的真实结果（收款人 + 金额）；
+- 声称「失败」而该操作实际 `succeeded` ⇒ 服务端改写的成功陈述；
+- 断言的余额与权威余额不符，或本回合没有权威余额 ⇒ 服务端改写为真实余额（无权威余额时改为「无法核实」）；
+- 声称「已完成」而结果是 `unknown` ⇒ 统一播报「**待核对**」，**绝不**报成「成功」「失败」或「资金未变」。
+
+「待确认 / 待验证」或只读陈述**永不**被改写；不一致的消息被**替换**（而非追加矛盾文本）为服务端
+撰写的更正，多处不一致的更正**组合**成一段文本（`CORRECTION_TAG = （系统校正）`）。
+
+### 8.4 流式与幂等 · Streaming & Idempotency
+
+`agent/run-turn.ts` **缓冲**终局的金融叙述：`message_update` 的文本增量只累积、**不**下发，
+在 `message_end` 处一次性下发**已校正**的聚合文本，并让随后的 `message_end` 携带**同一内容**——
+因此 UI **永不**先看到未校正的金融事实；回合结束与续跑结束各有一次持久化前的兜底校正。
+校正按**服务端消息 id**（`groundedIds`）幂等：同一条消息只校正一次，重复调用是无操作；
+`（系统校正）` 标记（`CORRECTION_TAG`）**只是信息性**的、**不是**跳过键——带该标记的文本仍会被再次校正。
 
 **演示 Test 5（failure report）** 验证：一笔 ¥30000 转账（`INSUFFICIENT_FUNDS`，超过 ¥23,580 余额）
 在人工 MFA 决策后经 SDK 执行被拒，审计行状态为 `failed`，续跑播报**同一个**真实失败，
@@ -337,7 +381,9 @@ interface BreakerSnapshot { failures: number; locked: boolean; lockedAt: Date | 
 - **解锁受门控**：`resetSession(actor, opts?: ResetSessionOptions)` 仅在 `opts.verificationCode === MFA_CODE`（`'123456'`）**或** `now >= lockedAt + RESET_COOLDOWN_MS`（`RESET_COOLDOWN_MS = 60_000`）时才解锁；否则抛 `AppError('CIRCUIT_OPEN')` 并**保持锁定不变**。
   解锁成功后写入一条 `SECURITY_RESET` `SecurityEvent`（`severity: 'medium'`、`detail: { actor, reason, wasLocked, previousFailures, priorLockedAt? }`）。
   `recordSuccess` 与"锁定期间提交正确验证码"都**不会**解锁（锁定优先）。
-- **模型没有解锁工具**：`resetSession` **只能**经受 `banking_session` Cookie 门控的 `POST /api/security/reset` 到达（UI 入口 `app/security/ResetBreakerButton.tsx` **预填**验证码 `123456`；裸露的空 Cookie 被拒绝）；无路由、不写审计的 `reset(actor)` 仅供测试使用。
+- **模型没有解锁工具**：`resetSession` **只能**经受 `banking_session` Cookie 门控的 `POST /api/security/reset` 到达。
+  UI 入口 `app/security/ResetBreakerButton.tsx` 的解锁输入框**默认为空**（`INPUT_PLACEHOLDER = 请输入 6 位验证码`，**不**预填任何验证码），空提交被直接阻止（按钮在空输入时禁用 + 提交前守卫）。
+  演示验证码**绝不**预填，也**绝不**返回给 UI 或模型；裸露的空 Cookie 被拒绝；无路由、不写审计的 `reset(actor)` 仅供测试使用。
 - 熔断器是 **LLM 无法清除的硬门**：3 次连续 MFA 失败即锁死**该用户账户的全部操作（含读取）**且**持久化**；只有用户主动的安全中心解锁（经审计，带验证码或越过冷却）能恢复。
 
 **演示 Test 10（circuit breaker）**：连续 3 次错误验证码 ⇒ 熔断跳闸（`CIRCUIT_BREAKER_TRIPPED`），
