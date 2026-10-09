@@ -50,7 +50,7 @@ runs them all — no scoped config is required for any of them.
   `getPendingActionOwnership`). DB-backed. Plus `ledger-keys.test.ts` - pure: `lib/ledger` de-dup-scope
   identity keys (`nodeExecutionKey` = `nxe:<taskId>:<nodeId>`, plan/node-scoped so two DIFFERENT plans
   never merge while the SAME (task,node) always dedupes; `idempotentTransferTxId` = `txidem_` + first 32
-  hex of sha256 over `<userId>` + NUL + key).
+  hex of sha256 over `<userId>` + NUL + key). Plus `execution-receipt.test.ts` (pure: `executionReceiptId` + canonical `requestDigest`), `prisma-cli-env.test.ts` (pure: schema-engine `RUST_LOG` pin policy), and `contact.search.test.ts` (DB-backed: `contact#searchContacts` masked phone/name resolution).
 
 Each spec imports the module under test directly from its `@/…` façade path
 (e.g. `@/security`, `@/planner`, `@/banking-sdk`, `@/agent`, `@/lib/db/repositories/pendingAction`)
