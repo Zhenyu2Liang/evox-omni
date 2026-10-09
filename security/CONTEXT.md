@@ -92,7 +92,7 @@ with no ledger row compute `600 + 600 = 1200 > 1000` → RED/MFA.
 interface CircuitBreakerState { sessionId: string; failures: number; max: number; locked: boolean; lockedAt?: number }
 interface ResetSessionOptions { actor?: string; reason?: string }
 function getState(sessionId: string): CircuitBreakerState
-function isLocked(sessionId: string): boolean
+async function isLocked(actor: string, client?: DbClient): Promise<boolean>
 async function recordFailure(sessionId: string): Promise<CircuitBreakerState>   // trips at MFA_MAX_ATTEMPTS; emits CIRCUIT_BREAKER_TRIPPED exactly once per trip
 function recordSuccess(sessionId: string): CircuitBreakerState                  // resets consecutive failures (does NOT unlock a tripped breaker)
 function reset(sessionId: string): void                                         // clears all state for a session (sync, no I/O; used by tests)
