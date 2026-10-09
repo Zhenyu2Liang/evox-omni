@@ -99,12 +99,16 @@ async function isLocked(actor: string, client?: DbClient): Promise<boolean>
 async function recordFailure(actor: string): Promise<CircuitBreakerState>   // trips at MFA_MAX_ATTEMPTS; emits CIRCUIT_BREAKER_TRIPPED exactly once per trip
 async function recordSuccess(actor: string): Promise<CircuitBreakerState>                  // resets consecutive failures (does NOT unlock a tripped breaker)
 async function reset(actor: string): Promise<void>                                         // ungated, unaudited, route-less test-only clear
-async function resetSession(actor: string, opts?: ResetSessionOptions): Promise<CircuitBreakerState>   // GATED, audited security-center UNLOCK: clears state + emits SECURITY_RESET
+async function resetSession(actor: string, opts?: ResetSessionOptions): Promise<CircuitBreakerState>   // GATED, audited security-center UNLOCK: ATOMIC CAS state clear + STRICT SECURITY_RESET audit in ONE `prisma.$transaction`
 ```
 State is DURABLE: it lives in the DB (Prisma model `CircuitBreakerState`, via `lib/db/repositories/circuitBreaker.ts`) keyed by the OWNER, not by the raw session id and not in process memory.
 The owner key is derived by `resolveBreakerOwner(actor)`: the persisted session's `userId` (`user:<userId>`), else the user actor (`user:<id>`), else a synthesized `session:<actor>` for unpersisted actors.
 Because a real user's key is shared by ALL of that user's sessions, a lock survives a NEW SESSION and a PROCESS RESTART — rotating the session id cannot bypass it.
 Every mutation is async and accepts an optional `client?: DbClient` to bind its reads/writes to an OPEN interactive transaction (the SDK write-boundary recheck passes the transaction client to avoid deadlocking on a single-connection DB).
+ELAPSED-TIME timing uses the REAL wall clock: `recordFailure` stamps `lockedAt` with `realNow()` (`lib/clock`, `Date.now()`) — never the pinned `demoNow()` demo clock — so a lock genuinely ages in real time.
+`resetSession`'s cooldown gate also defaults to `realNow()` (an explicit `now` epoch-ms/`Date` override remains for tests), so a FRESH lock is NOT cooldown-elapsed and it elapses after `RESET_COOLDOWN_MS` of real time.
+The unlock is an ATOMIC compare-and-set: the state clear (`resetBreakerState(key, { client: tx, expect })`) and the STRICT `SECURITY_RESET` audit (`recordSecurityEvent(..., { client: tx, strict: true })`) commit in ONE `prisma.$transaction`, so an unlock is never reported without its committed audit and a strict-audit failure rolls both back and THROWS (the lock stays UNCHANGED).
+A lost CAS — a concurrent unlock already cleared it, or the owner RE-LOCKED with a new `lockedAt` between the gate read and the CAS — is a benign no-op that writes nothing and records no event, so an old request can never clear a newer lock.
 Event details are COMPLETE audit records:
 - `CIRCUIT_BREAKER_TRIPPED` (severity `high`, top-level `userId` when resolved) → `detail: { failures, max, result: 'session_locked' }`; emitted exactly once per trip (a further failure while locked neither recounts nor re-emits).
 - `SECURITY_RESET` (severity `medium`, top-level `userId` when resolved) → `detail: { actor, reason, wasLocked, previousFailures, priorLockedAt? }`; `actor` defaults to `'user'`, `reason` to a generic Chinese string; `priorLockedAt` is present only when the prior state had a `lockedAt`.
@@ -401,7 +405,8 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
   action `resetSession(actor, { actor, reason, verificationCode?, now? })`, which records a COMPLETE `SECURITY_RESET` event
   (`actor`, `reason`, `wasLocked`, `previousFailures`, `priorLockedAt?`):
   - the model/LLM can NEVER unlock the breaker (no tool exposed to the model touches this state);
-  - unlocking a TRIPPED breaker requires EXTRA verification: a correct `verificationCode` (`MFA_CODE`) OR an elapsed cooldown (`now >= lockedAt + RESET_COOLDOWN_MS`, `RESET_COOLDOWN_MS = 60_000`); otherwise `resetSession` throws `AppError('CIRCUIT_OPEN')` and leaves the lock INTACT — a bare session cookie is REFUSED;
+  - unlocking a TRIPPED breaker requires EXTRA verification: a correct `verificationCode` (`MFA_CODE`) OR an elapsed cooldown (`now >= lockedAt + RESET_COOLDOWN_MS`, `RESET_COOLDOWN_MS = 60_000`) measured on the REAL wall clock (`realNow()`; the lock's `lockedAt` is real-stamped too), so a fresh lock is not cooldown-elapsed and a lock elapses after 60s of real time; otherwise `resetSession` throws `AppError('CIRCUIT_OPEN')` and leaves the lock INTACT — a bare session cookie is REFUSED;
+  - the unlock is an ATOMIC CAS + STRICT audit: the state clear and its `SECURITY_RESET` event commit in ONE `prisma.$transaction`; a strict-audit failure rolls both back and throws (lock UNCHANGED), and a lost CAS (concurrent unlock, or a newer re-lock) writes nothing and records no event;
   - it is reachable ONLY via the audited `POST /api/security/reset` (cookie-gated) → UI `app/security/ResetBreakerButton.tsx`; `reset(actor)` is the ungated, unaudited, route-less test-only clear;
   - `recordSuccess` does NOT unlock a tripped breaker (a correct MFA code on a NON-locked path only resets the counter);
   - a correct MFA code submitted WHILE locked is rejected and does NOT unlock (`mfa.verify` checks the lock first);
@@ -443,8 +448,9 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
   Detection, the `INJECTION_ATTEMPT` event, and never-grants-permission all hold (defense-in-depth unaffected).
 - **"Repeated blocked high-risk attempts" is NOT a breaker trigger.**
   `recordFailure` is called ONLY from `mfa.ts` on a wrong code; no code path counts blocked/denied attempts.
-- **Security-event writes are best-effort.**
+- **Security-event writes are best-effort — the breaker UNLOCK is the exception.**
   `recordSecurityEvent` (sibling `audit/`) logs and swallows persistence failures, so an awaited event write can silently fail; the breaker's durable persisted `locked` flag remains authoritative.
+  `resetSession` is the ONE caller that writes STRICT and ATOMICALLY: its `SECURITY_RESET` event and the state clear share one `prisma.$transaction`, so a failed audit rolls the unlock back and the lock stays unchanged.
 - **`HIGH_RISK_BLOCKED` / `ANOMALY_FLAGGED` event kinds are declared but never written**
   by this node (it emits `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET`
   and — for the transfer escalation — `LIMIT_EXCEEDED`).
