@@ -53,7 +53,12 @@ it('[integration] a GREEN reserve_budget write is audited with its tool args, id
   expect(outcome.ok, outcome.error).toBe(true);
 
   const prisma = getTestPrisma();
-  const budget = await prisma.budget.findFirstOrThrow({ where: { userId } });
+  const key = nodeExecutionKey('task_write_audit', 'node_write_audit');
+  // The row THIS write created — addressed by its own plan-node execution identity, so we compare
+  // like-for-like and never accidentally pick up an unrelated seeded budget.
+  const budget = await prisma.budget.findUniqueOrThrow({
+    where: { userId_idempotencyKey: { userId, idempotencyKey: key } },
+  });
   const rows = await prisma.auditLog.findMany();
   expect(rows, 'exactly one audit row for one side effect').toHaveLength(1);
   const row = rows[0];
@@ -74,7 +79,6 @@ it('[integration] a GREEN reserve_budget write is audited with its tool args, id
   expect(row.nodeId).toBe('node_write_audit');
 
   // The ORIGINAL request (args) and the result actually persisted.
-  const key = nodeExecutionKey('task_write_audit', 'node_write_audit');
   expect(JSON.parse(row.toolArgs!)).toMatchObject({
     userId,
     name: '生日预算',
@@ -82,7 +86,7 @@ it('[integration] a GREEN reserve_budget write is audited with its tool args, id
     idempotencyKey: key,
   });
   expect(JSON.parse(row.toolResult!)).toMatchObject({ ok: true, data: { id: budget.id, amount: 1000 } });
-  expect(row.dedupeKey).toBe(`write:reserve_budget:key:${key}`);
+  expect(row.dedupeKey).toBe(`write:reserve_budget:${userId}:key:${key}`);
   expect(row.dedupeKey?.startsWith('exec:')).toBe(false);
 });
 
@@ -103,11 +107,14 @@ it('[integration] the SAME execution identity double-writes neither the side eff
   expect(await prisma.budget.count({ where: { userId, name: '旅行预算' } })).toBe(1);
   // One audit per (tool, execution identity) — the replay path writes/audits nothing.
   expect(await prisma.auditLog.count({ where: { toolName: 'reserve_budget' } })).toBe(2);
-  expect(await prisma.auditLog.count({ where: { dedupeKey: `write:reserve_budget:key:${nodeExecutionKey('task_write_audit', 'node_write_audit')}` } })).toBe(1);
+  expect(await prisma.auditLog.count({ where: { dedupeKey: `write:reserve_budget:${userId}:key:${nodeExecutionKey('task_write_audit', 'node_write_audit')}` } })).toBe(1);
 });
 
 it('[integration] a failing write audit rolls the business write back — no un-audited side effect', async () => {
   const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const prisma = getTestPrisma();
+  // The seeded world already ships one unrelated budget; the failed write must not move it.
+  const budgetsBefore = await prisma.budget.count({ where: { userId } });
 
   const insert = auditStore.insertAuditLog.bind(auditStore);
   const spy = vi.spyOn(auditStore, 'insertAuditLog').mockImplementation(async (entry, opts) => {
@@ -121,8 +128,13 @@ it('[integration] a failing write audit rolls the business write back — no un-
 
   expect(spy).toHaveBeenCalled();
   expect(outcome.ok).toBe(false);
-  const prisma = getTestPrisma();
-  expect(await prisma.budget.count({ where: { userId } }), 'the budget insert must roll back with its audit').toBe(0);
+  // The reservation this call tried to create must NOT survive its failed audit …
+  expect(
+    await prisma.budget.count({ where: { userId, name: '生日预算' } }),
+    'no un-audited reservation may survive',
+  ).toBe(0);
+  // … and nothing else may have shifted either — no un-audited business change.
+  expect(await prisma.budget.count({ where: { userId } }), 'the budget insert must roll back with its audit').toBe(budgetsBefore);
   expect(await prisma.auditLog.count()).toBe(0);
 });
 
@@ -140,6 +152,9 @@ it('[integration] the existing gated audit identity is unchanged (exec:<actionId
   const actionId = parked.pendingActionId!;
 
   const prisma = getTestPrisma();
+  // The seed already ships TRANSFER-channel rows (转账给妈妈 / 房租); the confirmed transfer must add
+  // EXACTLY ONE more ledger row — assert the delta, not an absolute count.
+  const transfersBefore = await prisma.transaction.count({ where: { userId, channel: 'TRANSFER' } });
   const parkedAudits = await prisma.auditLog.findMany({ where: { sessionId } });
   const confirmed = await confirmPost(
     new NextRequest(`http://localhost/api/actions/${actionId}`, {
@@ -157,5 +172,5 @@ it('[integration] the existing gated audit identity is unchanged (exec:<actionId
   expect(transferAudits.some((row) => row.dedupeKey?.startsWith('write:') === true)).toBe(false);
   // The decision-keyed audits are ADDITIVE to the parked state, not a rewrite of it.
   expect(parkedAudits.length).toBeLessThanOrEqual(transferAudits.length + parkedAudits.length);
-  expect(await prisma.transaction.count({ where: { userId, channel: 'TRANSFER' } })).toBe(1);
+  expect(await prisma.transaction.count({ where: { userId, channel: 'TRANSFER' } })).toBe(transfersBefore + 1);
 });
