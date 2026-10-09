@@ -12,7 +12,7 @@ This node is the `beforeToolCall` chokepoint and the sole authority on 🟢/🟡
 
 ## API Surface
 
-- `execution-policy.ts` exports `assertSessionMayWrite(sessionId)` through `security.writePolicy`.
+- `execution-policy.ts` exports `assertSessionMayWrite(sessionId, client?)` through `security.writePolicy`.
   Ordinary confirm, MFA verify and replay recovery share this breaker check inside the SDK write
   transaction, after the action/plan conditional writes. Policy denial propagates as CIRCUIT_OPEN;
   committed receipt-only reconstruction remains available while locked.
