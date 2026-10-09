@@ -1,3 +1,0 @@
-﻿[evogit-agent-T2-A30 6862f3b] feat(security): DB-backed per-user circuit breaker (persist lock, gated unlock) - WIP
- 9 files changed, 277 insertions(+), 97 deletions(-)
- create mode 100644 lib/db/repositories/circuitBreaker.ts

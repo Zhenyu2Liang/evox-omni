@@ -39,7 +39,7 @@ export interface SecurityStatus {
 }
 
 /** Injected circuit-breaker lookup; returns the authoritative lock state for a session. */
-export type BreakerLookup = (sessionId: string) => boolean;
+export type BreakerLookup = (sessionId: string) => boolean | Promise<boolean>;
 
 export interface SecurityStatusOptions {
   /** Authoritative lock state from the security node's breaker; overrides the event-derived fallback. */
@@ -104,7 +104,7 @@ export async function getSecurityStatus(
 
     let locked: boolean;
     if (options?.isLocked) {
-      locked = options.isLocked(sessionId);
+      locked = await options.isLocked(sessionId);
     } else {
       const stream = await securityEventStore.findSecurityEvents({
         sessionId,
