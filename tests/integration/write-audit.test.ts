@@ -82,7 +82,7 @@ it('[integration] a GREEN reserve_budget write is audited with its tool args, id
     idempotencyKey: key,
   });
   expect(JSON.parse(row.toolResult!)).toMatchObject({ ok: true, data: { id: budget.id, amount: 1000 } });
-  expect(row.dedupeKey).toBe(`write:reserve_budget:key:${key}`);
+  expect(row.dedupeKey).toBe(`write:reserve_budget:${userId}:key:${key}`);
   expect(row.dedupeKey?.startsWith('exec:')).toBe(false);
 });
 
@@ -103,7 +103,7 @@ it('[integration] the SAME execution identity double-writes neither the side eff
   expect(await prisma.budget.count({ where: { userId, name: '旅行预算' } })).toBe(1);
   // One audit per (tool, execution identity) — the replay path writes/audits nothing.
   expect(await prisma.auditLog.count({ where: { toolName: 'reserve_budget' } })).toBe(2);
-  expect(await prisma.auditLog.count({ where: { dedupeKey: `write:reserve_budget:key:${nodeExecutionKey('task_write_audit', 'node_write_audit')}` } })).toBe(1);
+  expect(await prisma.auditLog.count({ where: { dedupeKey: `write:reserve_budget:${userId}:key:${nodeExecutionKey('task_write_audit', 'node_write_audit')}` } })).toBe(1);
 });
 
 it('[integration] a failing write audit rolls the business write back — no un-audited side effect', async () => {
