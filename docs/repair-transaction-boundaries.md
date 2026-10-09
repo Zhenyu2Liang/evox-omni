@@ -20,7 +20,7 @@
 | 原统一边界用例 + 上述四项 + 新增 SDK 边界测试 | 24/24 通过 |
 | `npx tsc --noEmit` | exit 0 |
 | `npx vitest run` | 103 文件、685 用例全部通过，0 失败、0 跳过 |
-| `npx tsx tests/e2e/acceptance.e2e.ts` | 真实本地 headless Chrome，PASS 6 / FAIL 0 / SKIP 0 |
+| `npx tsx tests/e2e/acceptance.e2e.ts` | 真实本地 headless Chrome，PASS 7 / FAIL 0 / SKIP 0 |
 | `npm run build` | exit 0，编译及页面生成成功 |
 
 真实浏览器覆盖转账确认、MFA 正确/错误码、计划暂停/恢复、取消后旧确认入口、刷新恢复确认/MFA 卡片，以及已入账但未落状态的操作恢复；核对余额、流水和审计。
@@ -34,4 +34,4 @@
 - 纯模拟银行 SDK，无真实资金或支付网关。
 - 验证为单进程 SQLite 与本地 Chrome；未完成真实多进程/多实例竞争压测、跨浏览器矩阵或真实 LLM 验证。
 - 本轮将**转账**必需执行审计并入资金事务；其他写工具的业务提交和审计仍可能分属不同事务，结果缺失时按证据核对或进入人工核对。
-- 执行租约、进程内熔断器等既有部署限制仍以 `known-risks.md` 为准；不据此宣称所有安全问题已解决。
+- 执行租约、多进程/多实例竞态等既有部署限制仍以 `known-risks.md` 为准；不据此宣称所有安全问题已解决。

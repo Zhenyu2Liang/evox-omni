@@ -12,7 +12,7 @@ This node is the `beforeToolCall` chokepoint and the sole authority on 🟢/🟡
 
 ## API Surface
 
-- `execution-policy.ts` exports `assertSessionMayWrite(sessionId)` through `security.writePolicy`.
+- `execution-policy.ts` exports `assertSessionMayWrite(sessionId, client?)` through `security.writePolicy`.
   Ordinary confirm, MFA verify and replay recovery share this breaker check inside the SDK write
   transaction, after the action/plan conditional writes. Policy denial propagates as CIRCUIT_OPEN;
   committed receipt-only reconstruction remains available while locked.
@@ -38,12 +38,13 @@ types it consumes and returns (`SecurityEvaluation`, `SecurityDecision`, `Pendin
 
 ### `permission-engine.ts` — static policy table + evaluator (PURE, no I/O)
 ```ts
-interface ToolPolicy { tier: RiskLevel; static: boolean; description: string }
+interface ToolPolicy { tier: RiskLevel; static: boolean; write: boolean; description: string }   // `write` = persists a side effect ⇒ AUDITED regardless of colour
 interface EvaluateToolContext { userId: string; sessionId: string; dailyTransferTotal: number }
 interface ToolEvaluation { tier: RiskLevel; requiresConfirmation: boolean; requiresMfa: boolean; reasons: string[] }
 
 const TOOL_POLICY: Record<ToolName, ToolPolicy>            // the frozen GREEN/YELLOW/RED table
 function getToolPolicy(toolName: ToolName): ToolPolicy
+function isWriteTool(toolName: ToolName): boolean          // `TOOL_POLICY[tool].write`; audit-by-side-effect, grants nothing
 function evaluateTool(toolName: ToolName, args: Record<string, unknown>, ctx: EvaluateToolContext): ToolEvaluation
 ```
 `evaluateTool` returns the EFFECTIVE tier including dynamic resolution: for `transfer_money` it
@@ -87,20 +88,26 @@ legitimately-YELLOW transfer to RED/MFA (repo acceptance case 7). The **concurre
 untouched**: parked actions with NO ledger row yet still sum, so two ¥600 actions both still `confirmed`
 with no ledger row compute `600 + 600 = 1200 > 1000` → RED/MFA.
 
-### `circuit-breaker.ts` — session-scoped consecutive-failure breaker (in-memory)
+### `circuit-breaker.ts` — OWNER-scoped consecutive-failure breaker (DB-backed, durable)
 ```ts
-interface CircuitBreakerState { sessionId: string; failures: number; max: number; locked: boolean; lockedAt?: number }
-interface ResetSessionOptions { actor?: string; reason?: string }
-function getState(sessionId: string): CircuitBreakerState
-function isLocked(sessionId: string): boolean
-async function recordFailure(sessionId: string): Promise<CircuitBreakerState>   // trips at MFA_MAX_ATTEMPTS; emits CIRCUIT_BREAKER_TRIPPED exactly once per trip
-function recordSuccess(sessionId: string): CircuitBreakerState                  // resets consecutive failures (does NOT unlock a tripped breaker)
-function reset(sessionId: string): void                                         // clears all state for a session (sync, no I/O; used by tests)
-async function resetSession(sessionId: string, opts?: ResetSessionOptions): Promise<CircuitBreakerState>   // the security-center UNLOCK: reset() + emits SECURITY_RESET (awaited recordSecurityEvent)
+interface CircuitBreakerState { sessionId: string; failures: number; max: number; locked: boolean; lockedAt?: number }   // `sessionId` is the caller-supplied actor, NOT the internal owner key
+interface BreakerOwner { key: string; userId?: string }   // `key` = `user:<userId>` | `session:<actor>`
+interface ResetSessionOptions { actor?: string; reason?: string; verificationCode?: string; now?: number | Date }
+async function resolveBreakerOwner(actor: string, client?: DbClient): Promise<BreakerOwner>   // session.userId → `user:<userId>`; else user id → `user:<id>`; else `session:<actor>`
+async function getState(actor: string, client?: DbClient): Promise<CircuitBreakerState>
+async function isLocked(actor: string, client?: DbClient): Promise<boolean>
+async function recordFailure(actor: string): Promise<CircuitBreakerState>   // trips at MFA_MAX_ATTEMPTS; emits CIRCUIT_BREAKER_TRIPPED exactly once per trip
+async function recordSuccess(actor: string): Promise<CircuitBreakerState>                  // resets consecutive failures (does NOT unlock a tripped breaker)
+async function reset(actor: string): Promise<void>                                         // ungated, unaudited, route-less test-only clear
+async function resetSession(actor: string, opts?: ResetSessionOptions): Promise<CircuitBreakerState>   // GATED, audited security-center UNLOCK: clears state + emits SECURITY_RESET
 ```
+State is DURABLE: it lives in the DB (Prisma model `CircuitBreakerState`, via `lib/db/repositories/circuitBreaker.ts`) keyed by the OWNER, not by the raw session id and not in process memory.
+The owner key is derived by `resolveBreakerOwner(actor)`: the persisted session's `userId` (`user:<userId>`), else the user actor (`user:<id>`), else a synthesized `session:<actor>` for unpersisted actors.
+Because a real user's key is shared by ALL of that user's sessions, a lock survives a NEW SESSION and a PROCESS RESTART — rotating the session id cannot bypass it.
+Every mutation is async and accepts an optional `client?: DbClient` to bind its reads/writes to an OPEN interactive transaction (the SDK write-boundary recheck passes the transaction client to avoid deadlocking on a single-connection DB).
 Event details are COMPLETE audit records:
-- `CIRCUIT_BREAKER_TRIPPED` (severity `high`) → `detail: { failures, max, result: 'session_locked' }`; emitted exactly once per trip (a further failure while locked neither recounts nor re-emits).
-- `SECURITY_RESET` (severity `medium`) → `detail: { actor, reason, wasLocked, previousFailures, priorLockedAt? }`; `actor` defaults to `'user'`, `reason` to a generic Chinese string; `priorLockedAt` is present only when the prior state had a `lockedAt`.
+- `CIRCUIT_BREAKER_TRIPPED` (severity `high`, top-level `userId` when resolved) → `detail: { failures, max, result: 'session_locked' }`; emitted exactly once per trip (a further failure while locked neither recounts nor re-emits).
+- `SECURITY_RESET` (severity `medium`, top-level `userId` when resolved) → `detail: { actor, reason, wasLocked, previousFailures, priorLockedAt? }`; `actor` defaults to `'user'`, `reason` to a generic Chinese string; `priorLockedAt` is present only when the prior state had a `lockedAt`.
 
 ### `mfa.ts` — mock MFA (code = `MFA_CODE`, NEVER returned)
 ```ts
@@ -222,7 +229,7 @@ COMPLETELY unaffected by both guards, and a committed ledger debit is NEVER roll
 
 ### `index.ts` — facade
 ```ts
-const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
+const security = { gateway, permission, risk, mfa, circuitBreaker, injection, recovery, writePolicy }
 ```
 
 ### `recipient-resolution.ts` — Park-time transfer-recipient resolution (confirmation card ⇄ execution agreement)
@@ -383,16 +390,19 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
   (`recordFailure`/`resetSession`/`reportInjection` are awaited). Never leak a raw exception or the MFA code to the model/UI.
   Ownership rejection uses `AppError('SECURITY_DENIED')` — `ErrorCode` has NO `FORBIDDEN`.
 - **Circuit breaker is a hard gate the LLM cannot clear**: 3 consecutive MFA failures (`MFA_MAX_ATTEMPTS`)
-  trip it for the session and emit `CIRCUIT_BREAKER_TRIPPED`.
+  trip it for the OWNER/account and emit `CIRCUIT_BREAKER_TRIPPED` (severity `high`, top-level `userId`, EXACTLY ONCE per trip).
 - **A tripped breaker denies ALL tiers — including 🟢 GREEN reads** (intended hard gate).
   `gatewayEvaluate` sets `blocked = locked || tier !== 'GREEN'`, so when tripped even a low-risk read
   (e.g. `get_balance`) is denied with decision `deny` / reason `HIGH_RISK_BLOCKED`. This is deliberate:
-  a session that just produced three consecutive failed strong-verifications is treated as compromised, so
+  an OWNER/account that just produced three consecutive failed strong-verifications is treated as compromised, so
   it fails closed for EVERY call (it must not even be able to probe balances) until a human deliberately unlocks it.
-- **UNLOCK CONDITIONS (explicit)** — a locked session is cleared ONLY by the deliberate, audited security-center
-  action `resetSession(sessionId, { actor, reason })`, which records a COMPLETE `SECURITY_RESET` event
+  It also blocks SDK writes: `security/execution-policy.ts#assertSessionMayWrite(sessionId, client?)` throws `AppError('CIRCUIT_OPEN')` (HTTP 423).
+- **UNLOCK CONDITIONS (explicit)** — a locked OWNER/account is cleared ONLY by the deliberate, audited security-center
+  action `resetSession(actor, { actor, reason, verificationCode?, now? })`, which records a COMPLETE `SECURITY_RESET` event
   (`actor`, `reason`, `wasLocked`, `previousFailures`, `priorLockedAt?`):
-  - the model/LLM can NEVER unlock the breaker (no tool touches the state);
+  - the model/LLM can NEVER unlock the breaker (no tool exposed to the model touches this state);
+  - unlocking a TRIPPED breaker requires EXTRA verification: a correct `verificationCode` (`MFA_CODE`) OR an elapsed cooldown (`now >= lockedAt + RESET_COOLDOWN_MS`, `RESET_COOLDOWN_MS = 60_000`); otherwise `resetSession` throws `AppError('CIRCUIT_OPEN')` and leaves the lock INTACT — a bare session cookie is REFUSED;
+  - it is reachable ONLY via the audited `POST /api/security/reset` (cookie-gated) → UI `app/security/ResetBreakerButton.tsx`; `reset(actor)` is the ungated, unaudited, route-less test-only clear;
   - `recordSuccess` does NOT unlock a tripped breaker (a correct MFA code on a NON-locked path only resets the counter);
   - a correct MFA code submitted WHILE locked is rejected and does NOT unlock (`mfa.verify` checks the lock first);
   - unlock clears ALL breaker state and restarts the failure counter from 0;
@@ -412,11 +422,11 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
   trusted owner from persisted state (`getPendingActionOwnership` + `getSession`), treating request-supplied
   ids as a fail-closed ASSERTION. Residual gap: the cookie carries no signed/HMAC token, so the check
   defends against mis-routing rather than a caller who already knows the `actionId` in the same session.
-- **The circuit-breaker unlock IS wired to an app route.**
+- **The circuit-breaker unlock is wired to a cookie-gated app route.**
   `app/api/security/reset/route.ts` (`POST /api/security/reset`, cookie identity via `requireIdentity`)
-  invokes `security.circuitBreaker.resetSession(sessionId, { actor, reason })` — the audited unlock that
-  clears the lock AND records a `SECURITY_RESET` `SecurityEvent`. A tripped session is therefore no longer
-  locked for the process lifetime once a human calls this route.
+  invokes `security.circuitBreaker.resetSession(sessionId, { actor, reason, verificationCode })` — the GATED audited unlock that
+  clears the lock AND records a `SECURITY_RESET` `SecurityEvent`. The durable lock is therefore cleared
+  only when a human calls this route with a correct `verificationCode` or after the cooldown (`RESET_COOLDOWN_MS`); an ungated call is refused with `CIRCUIT_OPEN` / HTTP 423.
 - **`mfa_required` is MISSING from `lib/contracts/audit.ts`.**
   `SecurityEventKind` has no `mfa_required` member, so the transfer escalation (YELLOW→RED at execution time)
   emits an EXISTING kind (`LIMIT_EXCEEDED`, severity `high`) with a COMPLETE `detail`
@@ -434,7 +444,7 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
 - **"Repeated blocked high-risk attempts" is NOT a breaker trigger.**
   `recordFailure` is called ONLY from `mfa.ts` on a wrong code; no code path counts blocked/denied attempts.
 - **Security-event writes are best-effort.**
-  `recordSecurityEvent` (sibling `audit/`) logs and swallows persistence failures, so an awaited event write can silently fail; the breaker's in-memory `locked` flag remains authoritative.
+  `recordSecurityEvent` (sibling `audit/`) logs and swallows persistence failures, so an awaited event write can silently fail; the breaker's durable persisted `locked` flag remains authoritative.
 - **`HIGH_RISK_BLOCKED` / `ANOMALY_FLAGGED` event kinds are declared but never written**
   by this node (it emits `CIRCUIT_BREAKER_TRIPPED`, `MFA_FAILURE`, `INJECTION_ATTEMPT`, `SECURITY_RESET`
   and — for the transfer escalation — `LIMIT_EXCEEDED`).
@@ -479,8 +489,8 @@ Repository functions this node consumes (confirmed signatures — do NOT fork):
 Vitest. This node is designed to be unit-testable WITHOUT network or clock:
 - Pure units (`permission-engine`, `risk.evaluateTransferRisk`, `injection.scan`, `decide`,
   `serialize`/`parseBlockReason`, `buildPendingActionSummary`, `deriveIntent`) — table-driven, no DB.
-- Breaker/MFA/gateway I/O units — run against the test SQLite (`lib/db`) with unique `sessionId`s
-  per test to isolate the in-memory breaker; assert `recordFailure` emits `CIRCUIT_BREAKER_TRIPPED`
+- Breaker/MFA/gateway I/O units — run against the test SQLite (`lib/db`) with a unique USER/session identity
+  per test, since the breaker state PERSISTS per owner (a lock survives a new session and a process restart); assert `recordFailure` emits `CIRCUIT_BREAKER_TRIPPED`
   and `resetSession` emits `SECURITY_RESET`. The gateway audit-trail specs assert the persisted
   `userRequest` + `intent` round-trip through `createPendingAction`/`handleToolCall`.
 - Authorization-hardening units
@@ -508,5 +518,5 @@ This is a **leaf node** — it has no child directories; the modules above are i
 - After the agent layer executes an authorized action (or it fails), call `securityGateway.recordActionResult(id, 'executed'|'failed')` so the persisted terminal status is truthful and a later confirm/cancel is a `CONFLICT`.
 - `authorizeAction`/`cancelAction`/`handleToolCall` REQUIRE a caller identity — never add a demo-user fallback; callers must pass `{ userId, sessionId }`.
 - **All tests live under the root-owned `../tests/`** (the root `vitest.config.ts` discovers only `tests/**`): this node's security unit specs — including the DB-free dedup spec `tests/unit/security/risk-engine-dedup.test.ts` — run via `npx vitest run tests/unit/security`.
-- **GREEN auto-executed reads are NOT audited.** The only `recordAudit` callers are the gated paths in `agent/confirmation.ts` (confirm/verify + cancel); a GREEN tool that executes inline writes no `AuditLog` row (by design, per `lib/contracts/audit`).
+- **Auditing is by SIDE EFFECT, not by colour** (`ToolPolicy.write` / `isWriteTool`). GREEN WRITES such as `reserve_budget` (`write: true`) ARE audited — `agent/write-audit.ts` writes the `AuditLog` INSIDE the same `prisma.$transaction` as the business write (`strict: true`, dedupe key `write:<tool>:<owner>:<identity>`), so no side effect can commit un-audited; only GREEN READ-ONLY calls (`write: false`) write no `AuditLog` row. The gated paths in `agent/confirmation.ts` (confirm/verify + cancel) are audited separately (`exec:<actionId>` / `reconcile:<actionId>`).
 - **This node READS the owning plan's status at its two plan-cancel guard points, but is otherwise plan-UNAWARE.** `security-gateway.ts` never inspects the plan's node graph or its status transitions, and `cancelAction` only cancels ONE pending action (atomic `['pending','awaiting_mfa'] → 'cancelled'` claim). It DOES read `AgentTask.status` as a fail-closed cancel guard at create/park time (`gatewayCreatePendingAction`, same-tx as the insert), authorize time (both `authorizeTransfer` and `authorizeWithMfa`, same-tx as the CAS claim — the claim is reversed to `cancelled` and a clean `ok:false` is RETURNED, never thrown) — see the plan-cancel-guards paragraph above. This is what closes the cancel→authorize race when the plan-level bulk revoke (`agent/task-control.ts` `revokeParkedActions`/`sweepCancelledPlan`) is lost or neutralized; the sibling `agent/` node ALSO refuses at `agent/confirmation.ts` `cancelledPlanOutcome` BEFORE authorizing. The gateway loads the plan ONLY for its `status` (never its nodes) — no plan graph is traversed here.

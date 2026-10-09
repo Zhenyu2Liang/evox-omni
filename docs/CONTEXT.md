@@ -3,7 +3,7 @@
 `repair-recovery-security.md` records the `95ff994` follow-up repair: new-debit recovery authorization,
 card/subscription resource ownership, separate reconciliation audit identities and truthful recovery
 responses. Its three original probes are unchanged; one older HTTP assertion is tightened to the
-manual-review contract. Current suite: 100 files / 716 tests; separate browser acceptance: 7 journeys.
+manual-review contract. Current suite: 113 files / 811 tests; separate browser acceptance: 7 journeys.
 
 ## Intent
 
@@ -89,14 +89,14 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   records the clean-env init root cause (`RUST_LOG`), further specs (`tests/integration/node-result-recovery.test.ts`,
   `tests/integration/obsolete-executor.test.ts`, `tests/integration/node-result-recovery.test.ts`, `tests/deploy-db-push.test.ts`,
   `tests/unit/lib/prisma-cli-env.test.ts`) and the deploy ordering (`npm run db:push` → `db:seed` → `build`);
-  the maintained suites now live in tests/integration; current size is **100 files / 716 tests**.
+  the maintained suites now live in tests/integration; current size is **113 files / 811 tests**.
 - `docs/known-risks.md` — honest limitations (mock data, simulated MFA, no real payment, heuristic
-  anomaly detection, fictional investments, spending analysis excludes anomalies, in-process
-  breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with
+  anomaly detection, fictional investments, spending analysis excludes anomalies, pinned demo clock,
+  limited audit scope, non-deterministic live LLM), each tagged with
   exactly one of the three buckets and framed as *limitation + why it is acceptable for a
   competition demo*; carries the 【已实现】 entries for the unified convergence / write-boundary fence /
-  in-tx digest replay / strict-keyed audit and the 【未验证】 multi-instance caveat (summary-table rows 18–20,
-  §18–§20). Documents the standalone `needs_reconciliation` reconciliation boundary (only
+  in-tx digest replay / strict-keyed audit and the 【未验证】 multi-instance caveat (summary-table rows 17–19,
+  §17–§19). Documents the standalone `needs_reconciliation` reconciliation boundary (only
   `transfer_money` is proven idempotent for standalone recovery), the per-process ref-counted
   `liveConfirmations` liveness registry (with the persisted per-row execution lease,
   `EXECUTION_LEASE_TTL_MS = 120000`, distinct from the plan-takeover `EXECUTION_CLAIM_TTL_MS = 600000`),
@@ -207,6 +207,6 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   `npm run db:seed` → `npm run build` (the build prerenders routes that query SQLite). The `ExecutionReceipt`
   model and `AuditLog.dedupeKey` are additive and applied via `prisma db push` (there is NO `migrations/`
   directory); consistency is NEVER resolved by wiping or re-seeding the DB.
-- **Measured state**: cleanup validation → 100 files / 716 tests pass and typecheck → 0 errors.
+- **Measured state**: cleanup validation → 113 files / 811 tests pass and typecheck → 0 errors.
   Previous functional validation: build → exit 0; E2E → PASS 7 / FAIL 0 / SKIP 0. Cleanup does not
   change production logic, and did not rerun build/browser acceptance. See docs/test-cases.md.
