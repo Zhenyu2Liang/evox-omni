@@ -91,12 +91,12 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   `tests/unit/lib/prisma-cli-env.test.ts`) and the deploy ordering (`npm run db:push` → `db:seed` → `build`);
   the maintained suites now live in tests/integration; current size is **113 files / 811 tests**.
 - `docs/known-risks.md` — honest limitations (mock data, simulated MFA, no real payment, heuristic
-  anomaly detection, fictional investments, spending analysis excludes anomalies, DB-backed
-  per-user circuit breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with
+  anomaly detection, fictional investments, spending analysis excludes anomalies, pinned demo clock,
+  limited audit scope, non-deterministic live LLM), each tagged with
   exactly one of the three buckets and framed as *limitation + why it is acceptable for a
   competition demo*; carries the 【已实现】 entries for the unified convergence / write-boundary fence /
-  in-tx digest replay / strict-keyed audit and the 【未验证】 multi-instance caveat (summary-table rows 18–20,
-  §18–§20). Documents the standalone `needs_reconciliation` reconciliation boundary (only
+  in-tx digest replay / strict-keyed audit and the 【未验证】 multi-instance caveat (summary-table rows 17–19,
+  §17–§19). Documents the standalone `needs_reconciliation` reconciliation boundary (only
   `transfer_money` is proven idempotent for standalone recovery), the per-process ref-counted
   `liveConfirmations` liveness registry (with the persisted per-row execution lease,
   `EXECUTION_LEASE_TTL_MS = 120000`, distinct from the plan-takeover `EXECUTION_CLAIM_TTL_MS = 600000`),

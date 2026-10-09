@@ -18,7 +18,7 @@
 SDK 在写事务内执行检查，期间已触发熔断的预算操作返回失败且不新增预算；后续依赖节点不执行。
 模型不能通过 JSON 参数提供或替换此检查。
 
-熔断状态仍为单进程内存态；这不构成跨进程、重启后或多实例部署的安全保证。
+熔断状态持久化于数据库并按用户（`CircuitBreakerState`，owner key `user:<userId>` / `session:<actor>`），跨新会话与进程重启留存；剩余边界是按 DB，多实例各自持有独立库时不互相协调。
 已提交转账的凭证读取与状态回填继续使用原有恢复通道。
 
 ## 预算幂等与索引升级
@@ -47,7 +47,7 @@ Pi runtime、网关、SDK 和 SQLite；仅用可控屏障安排竞争时序。�
 原有两条“允许缺金额/允许四舍五入”的测试契约改为拒绝非法输入，并保留合法金额与余额/流水断言；
 原有“跳过非法在途金额”改为失败关闭。幂等 helper 单测只适配复合查询形状，业务断言保留。
 
-验证使用隔离 test/E2E/build/upgrade 数据库。真实浏览器仅覆盖现有 6 个旅程；
+验证使用隔离 test/E2E/build/upgrade 数据库。真实浏览器覆盖现有 7 个旅程；
 上述新竞争和跨用户场景由集成测试覆盖，不宣称已经浏览器或多实例验收。
 
 | 验证命令/场景 | 本地结果 |
@@ -56,7 +56,7 @@ Pi runtime、网关、SDK 和 SQLite；仅用可控屏障安排竞争时序。�
 | `npx tsc --noEmit` | exit 0，0 错误 |
 | `npx vitest run`（与 E2E 串行） | 108 文件 / 743 用例通过，0 失败、0 跳过 |
 | `npx next build`（预先 provision + seed 隔离 build 库） | exit 0 |
-| `npx tsx tests/e2e/acceptance.e2e.ts` | 真实 Chrome，PASS 6 / FAIL 0 / SKIP 0 |
+| `npx tsx tests/e2e/acceptance.e2e.ts` | 真实 Chrome，PASS 7 / FAIL 0 / SKIP 0 |
 | 旧 schema → 当前 schema 的隔离升级验证 | 原预算内容保留；跨用户同 key 独立，同用户唯一约束有效 |
 
 测试运行顺序要求：E2E 初始化会重置 `prisma/e2e.db`，部署保护测试会检查该共享文件的时间戳。

@@ -463,8 +463,8 @@ interface BreakerSnapshot { failures: number; locked: boolean; lockedAt: Date | 
 
 - **真实浏览器验收存在，但不证明安全模型被完全封闭**：`tests/e2e/` 有一个真实浏览器 harness
   （`playwright-core` 启动**系统**无头 Chrome，**无需**下载浏览器；非 `npm run test`，用 `tsx` 显式运行），
-  它对**渲染后的 DOM** 断言，仅覆盖 5 条 journey（🟡 转账确认、🔴 转账 MFA 成功 + 错误码、计划暂停/继续、
-  计划取消、刷新恢复）——**不**覆盖 live LLM、真实银行 / 网络、生产构建、跨浏览器、视觉 / a11y、负载 / 性能。
+  它对**渲染后的 DOM** 断言，仅覆盖 7 条 journey（🟡 转账确认、🔴 转账 MFA（成功 + 错误码）、计划暂停/继续、
+  计划取消、刷新后恢复停靠决策、已入账但缺终态操作的楔子刷新恢复、人工接管）——**不**覆盖 live LLM、真实银行 / 网络、生产构建、跨浏览器、视觉 / a11y、负载 / 性能。
   `tests/app/*` 是**进程内 HTTP 路由集成测试**（标记 `[integration]`）：`import` **真实**路由处理器并用
   `NextRequest` 对象直接调用——**只有模型被脚本化**，**不是**浏览器测试；
 - **熔断状态是持久化且按用户的，但只在本 DB 内共享**：`CircuitBreakerState` 按 owner key（`user:<userId>` / `session:<actor>`）持久化，因此一个用户被锁定后**跨新会话与进程重启**仍然被锁、且该用户的所有会话共用同一把键；剩余的真实边界是**按 DB**——多实例共享**同一个库**时一致，各自持有**独立库**时不互相协调；
