@@ -1,0 +1,175 @@
+﻿node.exe : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cj
+s-node-api-deprecated for more details.[39m
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/projects/banking-agent/.genesis/workers/worker_T2_A1[39m
+
+ [32m✓[39m tests/app/security-workflow-http.test.ts[2m > [22m[integration] POST /api/actions/[id]/confirm — two YELLOW parks in ONE session[2m > [22m1 — the SECOND ¥600 confirm escalates to RED/MFA and moves NO money
+ [32m✓[39m tests/app/security-workflow-http.test.ts[2m > [22m[integration] POST /api/actions/[id]/verify — completing an escalated transfer[2m > [22m2 — verify(MFA_CODE) on the escalated ¥600 executes exactly once and audits RED/mfaRequired/success
+ [32m✓[39m tests/app/security-workflow-http.test.ts[2m > [22m[integration] POST /api/actions/[id]/verify — a WRONG code on an escalated transfer[2m > [22m3 — a wrong code is a normal 200 with ok:false / awaiting_mfa / mfaResult:failed and moves NO money
+ [32m✓[39m tests/app/security-workflow-http.test.ts[2m > [22m[integration] POST /api/tasks/[id] cancel — revokes the plan parked action; a later confirm is refused[2m > [22m4 — cancel first: the parked YELLOW action is revoked, the plan is terminal, and a later confirm is refused with NO money moved
+ [32m✓[39m tests/app/security-workflow-http.test.ts[2m > [22m[integration] POST /api/tasks/[id] cancel — an already-completed plan is terminal and the executed transfer is preserved[2m > [22m5 — confirm first: the executed transfer is preserved truthfully (no rollback) and a later cancel keeps the executed nodes
+ [32m✓[39m tests/app/security-workflow-http.test.ts[2m > [22m[integration] POST /api/tasks/[id] pause — a MID-RUN pause stops the NEXT node[2m > [22m6 — pausing WHILE node a runs halts node b (never executed); resume re-runs ONLY node b[33m 486[2mms[22m[39m
+ [32m✓[39m tests/app/security-workflow-http.test.ts[2m > [22m[integration] identity — a query param NEVER authenticates on verify/cancel/tasks/reset[2m > [22m7 — NO cookie + a forged ?sessionId=<victim>&userId=<victim> on verify/cancel/tasks/reset is 403 everywhere and leaves the victim untouched
+ [32m✓[39m tests/app/security-workflow-http.test.ts[2m > [22m[integration] identity — a query param NEVER authenticates on verify/cancel/tasks/reset[2m > [22m8 — a FOREIGN valid cookie + a forged ?sessionId=<victim> query is 403 on verify/cancel/tasks and leaves the victim untouched
+ [31m×[39m tests/app/security-workflow-http.test.ts[2m > [22m[integration] identity — a query param NEVER authenticates on verify/cancel/tasks/reset[2m > [22m9 — /api/security/reset: a forged ?sessionId=<victim> query never unlocks the VICTIM session
+[31m   → Scenario 4 / it 9: the MFA code leaked into a response body: the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string[39m
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] rejects both fractional-cent requests through natural-language HTTP before creating authorization
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] SDK rejects invalid amount 999.995 without rounding or creating financial facts
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] SDK rejects invalid amount 0.005 without rounding or creating financial facts
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] SDK rejects invalid amount NaN without rounding or creating financial facts
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] SDK rejects invalid amount Infinity without rounding or creating financial facts
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] SDK rejects invalid amount 0 without rounding or creating financial facts
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] SDK rejects invalid amount -1 without rounding or creating financial facts
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] legacy fractional-cent pending actions cannot be confirmed concurrently
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] an invalid legacy in-flight amount fails closed without authorizing a new transfer
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] concurrent 999.99 + 0.01 uses exact cents and requires MFA only above 1000
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] concurrent 999.99 + 0.02 uses exact cents and requires MFA only above 1000[33m 402[2mms[22m[39m
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] ordinary cent amounts remain valid despite binary floating-point representation
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] GREEN standalone budget cannot write after three real MFA failures trip the session
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] GREEN plan budget cannot write after three real MFA failures trip the session
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] GREEN chat budget cannot write after three real MFA failures trip the session
+ [31m×[39m tests/integration/money-budget.test.ts[2m > [22m[integration] same local budget key belongs to each user, and each owner replays only their own row
+[31m   → expected false to be true // Object.is equality[39m
+ [32m✓[39m tests/integration/money-budget.test.ts[2m > [22m[integration] concurrent SDK replays of one owner/key create only one budget
+ [31m×[39m tests/integration/write-audit.test.ts[2m > [22m[integration] a GREEN reserve_budget write is audited with its tool args, identity and TRUE result
+[31m   → expected { ok: true, data: { …(5) } } to match object { ok: true, data: { …(2) } }
+(3 matching properties omitted from actual)[39m
+ [32m✓[39m tests/integration/write-audit.test.ts[2m > [22m[integration] the SAME execution identity double-writes neither the side effect nor the audit
+ [31m×[39m tests/integration/write-audit.test.ts[2m > [22m[integration] a failing write audit rolls the business write back — no un-audited side effect
+[31m   → the budget insert must roll back with its audit: expected 1 to be +0 // Object.is equality[39m
+ [31m×[39m tests/integration/write-audit.test.ts[2m > [22m[integration] the existing gated audit identity is unchanged (exec:<actionId>, never write:)
+[31m   → expected 3 to be 1 // Object.is equality[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[1m[7m Failed Tests 5 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/app/security-workflow-http.test.ts[2m > [22m[integration] identity — a query
+ param NEVER authenticates on verify/cancel/tasks/reset[2m > [22m9 — /api/security/reset: a forged ?sessionId=<victim
+> query never unlocks the VICTIM session
+[31m[1mAssertionError[22m: Scenario 4 / it 9: the MFA code leaked into a response body: the given combination of arg
+uments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, o
+r a weakset instead of a string[39m
+[36m [2m❯[22m expectNoMfaLeak tests/app/security-workflow-http.test.ts:[2m99:92[22m[39m
+    [90m 97| [39m[35mfunction[39m [34mexpectNoMfaLeak[39m(label[33m:[39m string[33m,[39m [33m...[39mbodies
+[33m:[39m unknown[])[33m:[39m [35mvoid[39m {
+    [90m 98| [39m  [35mfor[39m ([35mconst[39m body [35mof[39m bodies) {
+    [90m 99| [39m    [34mexpect[39m([33mJSON[39m[33m.[39m[34mstringify[39m(body)[33m,[39m [32m`[39m[36m$
+{[39mlabel[36m}[39m[32m: the MFA code leaked into a[39m…
+    [90m   | [39m                                                                                           [31m^[3
+9m
+    [90m100| [39m      [33mMFA_CODE[39m[33m,[39m
+    [90m101| [39m    )[33m;[39m
+[90m [2m❯[22m tests/app/security-workflow-http.test.ts:[2m1001:5[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/integration/money-budget.test.ts[2m > [22m[integration] same local budget ke
+y belongs to each user, and each owner replays only their own row
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m tests/integration/money-budget.test.ts:[2m221:41[22m[39m
+    [90m219| [39m    [34mreserve[39m(other[33m.[39mid[33m,[39m sessionB[33m,[39m [32m'B的预算'[39m[33m,[39m 
+[34m10[39m[33m,[39m [32m'个人财务信息B'[39m)[33m,[39m
+    [90m220| [39m  ])[33m;[39m
+    [90m221| [39m  [34mexpect[39m(a[33m.[39mok)[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m [34mexpect[
+39m(b[33m.[39mok)[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m   | [39m                                        [31m^[39m
+    [90m222| [39m  [34mexpect[39m(a[33m.[39mdata)[33m.[39m[34mtoMatchObject[39m({ name[33m:[39m [32m'A的预算'
+[39m[33m,[39m amount[33m:[39m [34m1000[39m[33m,[39m purpos…
+    [90m223| [39m  [34mexpect[39m(b[33m.[39mdata)[33m.[39m[34mtoMatchObject[39m({ name[33m:[39m [32m'B的预算'
+[39m[33m,[39m amount[33m:[39m [34m10[39m[33m,[39m purpose[33m:[39m…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/integration/write-audit.test.ts[2m > [22m[integration] a GREEN reserve_budge
+t write is audited with its tool args, identity and TRUE result
+[31m[1mAssertionError[22m: expected { ok: true, data: { …(5) } } to match object { ok: true, data: { …(2) } }
+(3 matching properties omitted from actual)[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  Object {[22m
+[2m    "data": Object {[22m
+[2m      "amount": 1000,[22m
+[32m-     "id": "budget_birthday",[39m
+[31m+     "id": "cmv0oasdr0003f8fc5idor4q4",[39m
+[2m    },[22m
+[2m    "ok": true,[22m
+[2m  }[22m
+
+[36m [2m❯[22m tests/integration/write-audit.test.ts:[2m84:39[22m[39m
+    [90m 82| [39m    idempotencyKey[33m:[39m key[33m,[39m
+    [90m 83| [39m  })[33m;[39m
+    [90m 84| [39m  [34mexpect[39m([33mJSON[39m[33m.[39m[34mparse[39m(row[33m.[39mtoolResult[33m![39m))[3
+3m.[39m[34mtoMatchObject[39m({ ok[33m:[39m [35mtrue[39m[33m,[39m data[33m:[39m …
+    [90m   | [39m                                      [31m^[39m
+    [90m 85| [39m  [34mexpect[39m(row[33m.[39mdedupeKey)[33m.[39m[34mtoBe[39m([32m`write:reserve_budget:key:
+[39m[36m${[39mkey[36m}[39m[32m`[39m)[33m;[39m
+    [90m 86| [39m  [34mexpect[39m(row[33m.[39mdedupeKey[33m?.[39m[34mstartsWith[39m([32m'exec:'[39m))[33m.
+[39m[34mtoBe[39m([35mfalse[39m)[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/integration/write-audit.test.ts[2m > [22m[integration] a failing write audit
+ rolls the business write back — no un-audited side effect
+[31m[1mAssertionError[22m: the budget insert must roll back with its audit: expected 1 to be +0 // Object.is equalit
+y[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 0[39m
+[31m+ 1[39m
+
+[36m [2m❯[22m tests/integration/write-audit.test.ts:[2m125:111[22m[39m
+    [90m123| [39m  [34mexpect[39m(outcome[33m.[39mok)[33m.[39m[34mtoBe[39m([35mfalse[39m)[33m;[39m
+    [90m124| [39m  [35mconst[39m prisma [33m=[39m [34mgetTestPrisma[39m()[33m;[39m
+    [90m125| [39m  [34mexpect[39m([35mawait[39m prisma[33m.[39mbudget[33m.[39m[34mcount[39m({ where[33m:[
+39m { userId } })[33m,[39m [32m'the budget[39m…
+    [90m   | [39m                                                                                                    
+          [31m^[39m
+    [90m126| [39m  [34mexpect[39m([35mawait[39m prisma[33m.[39mauditLog[33m.[39m[34mcount[39m())[33m.[39m
+[34mtoBe[39m([34m0[39m)[33m;[39m
+    [90m127| [39m})[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/5]⎯[22m[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/integration/write-audit.test.ts[2m > [22m[integration] the existing gated au
+dit identity is unchanged (exec:<actionId>, never write:)
+[31m[1mAssertionError[22m: expected 3 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 3[39m
+
+[36m [2m❯[22m tests/integration/write-audit.test.ts:[2m160:86[22m[39m
+    [90m158| [39m  [90m// The decision-keyed audits are ADDITIVE to the parked state, not a[39m…
+    [90m159| [39m  [34mexpect[39m(parkedAudits[33m.[39mlength)[33m.[39m[34mtoBeLessThanOrEqual[39m(transferAu
+dits[33m.[39mlengt…
+    [90m160| [39m  [34mexpect[39m([35mawait[39m prisma[33m.[39mtransaction[33m.[39m[34mcount[39m({ where[3
+3m:[39m { userId[33m,[39m channel[33m:[39m [32m'T[39m…
+    [90m   | [39m                                                                                     [31m^[39m
+    [90m161| [39m})[33m;[39m
+    [90m162| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/5]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m3 failed[39m[22m[90m (3)[39m
+[2m      Tests [22m [1m[31m5 failed[39m[22m[2m | [22m[1m[32m25 passed[39m[22m[90m (30)[39m
+[2m   Start at [22m 15:57:51
+[2m   Duration [22m 5.54s[2m (transform 461ms, setup 309ms, collect 1.79s, tests 2.93s, environment 0ms, prepare 141ms)[22m
+
