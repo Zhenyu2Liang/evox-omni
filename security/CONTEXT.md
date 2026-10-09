@@ -87,7 +87,7 @@ legitimately-YELLOW transfer to RED/MFA (repo acceptance case 7). The **concurre
 untouched**: parked actions with NO ledger row yet still sum, so two ¥600 actions both still `confirmed`
 with no ledger row compute `600 + 600 = 1200 > 1000` → RED/MFA.
 
-### `circuit-breaker.ts` — session-scoped consecutive-failure breaker (in-memory)
+### `circuit-breaker.ts` — OWNER-scoped consecutive-failure breaker (DB-backed, durable)
 ```ts
 interface CircuitBreakerState { sessionId: string; failures: number; max: number; locked: boolean; lockedAt?: number }
 interface ResetSessionOptions { actor?: string; reason?: string }
