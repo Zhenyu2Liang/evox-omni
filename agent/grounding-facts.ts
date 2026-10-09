@@ -456,7 +456,32 @@ function accountHintedBy(window: string, accounts: readonly TrustedAccount[]): T
   return matches.length === 1 ? matches[0] : undefined;
 }
 
-const NUMBER_AFTER = /(?:¥|￥|CNY|RMB)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)|([0-9][0-9,]*(?:\.[0-9]{1,2})?)\s*元|([0-9][0-9,]*(?:\.[0-9]{1,2})?)/i;
+/**
+ * A connector that DIRECTLY introduces a balance value (zh + en) — a balance is only ASSERTED when
+ * the number is introduced this way, never when it merely sits near the keyword (e.g. the comparison
+ * `balance 23580 < amount 30000` inside an error detail is NOT a claim).
+ */
+const BALANCE_CONNECTOR = '(?:为|是|等于|：|:|＝|=|\\bis\\b|\\bof\\b)';
+/** A currency PREFIX that directly tags a balance value. */
+const CURRENCY_PREFIX = '(?:¥|￥|CNY|RMB)';
+/** A currency SUFFIX that directly tags a balance value. */
+const CURRENCY_SUFFIX = '(?:元|块)';
+
+/**
+ * Match an ASSERTED balance amount that IMMEDIATELY follows the balance keyword, allowing only
+ * whitespace, a connector and/or a currency marker in between. Groups: (1) connector, (2) currency
+ * prefix, (3) the number, (4) currency suffix. A value counts as ASSERTED only when a connector OR
+ * a currency marker (prefix/suffix) introduces it with no other word in between — so a bare
+ * comparison (`balance 23580`) or a condition phrase (`余额不足 ¥30,000`) never counts.
+ */
+const ASSERTED_BALANCE = new RegExp(
+  '^[\\s]*' +
+    `(?:(${BALANCE_CONNECTOR})[\\s]*)?` +
+    `(?:(${CURRENCY_PREFIX})[\\s]*)?` +
+    '([0-9][0-9,]*(?:\\.[0-9]{1,2})?)' +
+    `(?:[\\s]*(${CURRENCY_SUFFIX}))?`,
+  'i',
+);
 
 /** Extract every balance-labeled amount (+ the account it points at) from the text. */
 export function extractBalanceClaims(
@@ -470,9 +495,12 @@ export function extractBalanceClaims(
       const at = lower.indexOf(keyword.toLowerCase());
       if (at < 0) continue;
       const after = clause.slice(at + keyword.length, at + keyword.length + 26);
-      const match = NUMBER_AFTER.exec(after);
+      const match = ASSERTED_BALANCE.exec(after);
       if (match === null) continue;
-      const value = parseAmount(match[1] ?? match[2] ?? match[3] ?? '');
+      // The number must be INTRODUCED by a connector or a currency marker — a bare number that
+      // merely follows the keyword (a comparison, a condition, an error detail) is not a claim.
+      if (match[1] === undefined && match[2] === undefined && match[4] === undefined) continue;
+      const value = parseAmount(match[3] ?? '');
       if (!Number.isFinite(value)) continue;
       const account = accountHintedBy(clause.slice(0, at), accounts);
       claims.push({ amount: value, ...(account !== undefined ? { account } : {}) });
