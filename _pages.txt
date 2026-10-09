@@ -1,0 +1,9 @@
+D:\projects\banking-agent\.genesis\workers\worker_T2_A1\app\page.tsx forceDynamic=False
+D:\projects\banking-agent\.genesis\workers\worker_T2_A1\app\actions\page.tsx forceDynamic=False
+D:\projects\banking-agent\.genesis\workers\worker_T2_A1\app\agent\page.tsx forceDynamic=False
+D:\projects\banking-agent\.genesis\workers\worker_T2_A1\app\audit\page.tsx forceDynamic=False
+D:\projects\banking-agent\.genesis\workers\worker_T2_A1\app\bills\page.tsx forceDynamic=False
+D:\projects\banking-agent\.genesis\workers\worker_T2_A1\app\cards\page.tsx forceDynamic=False
+D:\projects\banking-agent\.genesis\workers\worker_T2_A1\app\manual\page.tsx forceDynamic=False
+D:\projects\banking-agent\.genesis\workers\worker_T2_A1\app\security\page.tsx forceDynamic=False
+D:\projects\banking-agent\.genesis\workers\worker_T2_A1\app\subscriptions\page.tsx forceDynamic=False
