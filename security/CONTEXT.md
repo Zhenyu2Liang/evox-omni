@@ -89,7 +89,8 @@ with no ledger row compute `600 + 600 = 1200 > 1000` → RED/MFA.
 
 ### `circuit-breaker.ts` — OWNER-scoped consecutive-failure breaker (DB-backed, durable)
 ```ts
-interface CircuitBreakerState { sessionId: string; failures: number; max: number; locked: boolean; lockedAt?: number }
+interface CircuitBreakerState { sessionId: string; failures: number; max: number; locked: boolean; lockedAt?: number }   // `sessionId` is the caller-supplied actor, NOT the internal owner key
+interface BreakerOwner { key: string; userId?: string }   // `key` = `user:<userId>` | `session:<actor>`
 interface ResetSessionOptions { actor?: string; reason?: string }
 function getState(sessionId: string): CircuitBreakerState
 async function isLocked(actor: string, client?: DbClient): Promise<boolean>
