@@ -13,12 +13,20 @@
  * (a `CIRCUIT_BREAKER_TRIPPED` with no later `SECURITY_RESET`). Wiring the breaker in as the
  * injected callback keeps the authoritative state free of a hard import cycle.
  *
- * Error strategy: event writes are BEST-EFFORT and NEVER throw into the request path — a
- * persistence failure is logged and swallowed, and `recordSecurityEvent` resolves with the
+ * Error strategy: event writes are BEST-EFFORT by default and NEVER throw into the request path —
+ * a persistence failure is logged and swallowed, and `recordSecurityEvent` resolves with the
  * input event rather than rejecting.
+ *
+ * Callers that compose the write into a business `prisma.$transaction` (e.g. the security node's
+ * "unlock + SECURITY_RESET audit land together" contract) may additionally supply a transaction
+ * `client` — the row is then written on the caller's already-open transaction — and/or opt into
+ * STRICT mode (`RecordSecurityEventOptions.strict: true`): a real persistence failure then REJECTS
+ * (propagating the original error unchanged) so the caller's transaction rolls back its business
+ * writes. These semantics MIRROR `./audit-logger.ts#recordAudit`'s `strict` option.
  */
 import type { SecurityEvent, SecurityEventKind } from '@/lib/contracts/audit';
 import { insertSecurityEvent, findSecurityEvents } from '@/lib/db/repositories/securityEvent';
+import type { DbClient } from '@/lib/db/client';
 import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
 
@@ -50,28 +58,56 @@ export interface SecurityStatusOptions {
   filter?: SecurityEventFilter;
 }
 
+/** Optional composition + strict-write controls forwarded to the repository insert. */
+export interface RecordSecurityEventOptions {
+  /** Transaction client — write the event inside the caller's `prisma.$transaction`. */
+  client?: DbClient;
+  /**
+   * STRICT write mode. When `true`, a REAL persistence failure REJECTS (the original error is
+   * propagated unchanged) so the caller's enclosing `prisma.$transaction` rolls back its business
+   * writes. When falsy/undefined the best-effort default applies (catch, log, resolve with the
+   * input event). Mirrors `RecordAuditOptions.strict` in `./audit-logger.ts`.
+   */
+  strict?: boolean;
+}
+
 /**
  * Repository bindings this module delegates to (`@/lib/db/repositories/securityEvent`).
  * Exposed as a seam so tests can stub persistence without a live Prisma client.
  */
-export const securityEventStore = { insertSecurityEvent, findSecurityEvents };
+export const securityEventStore = {
+  insertSecurityEvent: insertSecurityEvent as (
+    event: SecurityEvent,
+    opts?: RecordSecurityEventOptions,
+  ) => Promise<SecurityEvent>,
+  findSecurityEvents,
+};
 
 /** Scan window for deriving lock state from the event stream (independent of `recentLimit`). */
 const LOCK_SCAN_LIMIT = 100;
 
 /**
- * Persist a security event. `timestamp` defaults to `demoNow()` (the demo clock) when omitted; `id` is
- * assigned by the repository.
+ * Persist a security event. `timestamp` defaults to `demoNow()` (the demo clock) when omitted (a
+ * caller may supply its own, e.g. a real-clock value); `id` is assigned by the repository.
  *
- * Never rejects: on persistence failure it logs the error and resolves with the input event.
+ * By default NEVER rejects: on persistence failure it logs the error and resolves with the input
+ * event. With `opts.strict === true` it REJECTS on a real persistence failure (propagating the
+ * original error unchanged) so the caller's enclosing `prisma.$transaction` rolls back its business
+ * writes. `opts.client` writes the row on the caller's already-open transaction client.
  */
 export async function recordSecurityEvent(
   event: Omit<SecurityEvent, 'id' | 'timestamp'> & { timestamp?: number },
+  opts?: RecordSecurityEventOptions,
 ): Promise<SecurityEvent> {
   const full: SecurityEvent = { ...event, timestamp: event.timestamp ?? demoNow() };
   try {
-    return await securityEventStore.insertSecurityEvent(full);
+    return await securityEventStore.insertSecurityEvent(full, opts);
   } catch (e) {
+    if (opts?.strict) {
+      // Strict mode: a real persistence failure must propagate so the caller's transaction rolls
+      // back its business writes.
+      throw e;
+    }
     // Best-effort write: a failed security-event append must never break the flow.
     console.error('[audit] failed to persist security event', e);
     return full;

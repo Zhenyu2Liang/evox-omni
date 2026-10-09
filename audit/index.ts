@@ -17,6 +17,7 @@ export type {
   SecurityStatus,
   SecurityStatusOptions,
   BreakerLookup,
+  RecordSecurityEventOptions,
 } from './security-events';
 
 /** Single object collecting the node's public functions. */

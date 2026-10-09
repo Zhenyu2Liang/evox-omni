@@ -23,10 +23,10 @@ re-exports each function and its types.
   - types: `AuditFilter` (`{ sessionId?, toolName?, riskLevel?, status?, limit? }`), `AuditSummary`, `RecordAuditOptions` (`{ client?: Prisma.TransactionClient; dedupeKey?: string; strict?: boolean }`).
   - `auditStore` — repository bindings seam (testability; see Dependencies).
 - `audit/security-events.ts`
-  - `recordSecurityEvent(event: Omit<SecurityEvent,'id'|'timestamp'> & { timestamp? }): Promise<SecurityEvent>` — append one event; `timestamp` defaults to `demoNow()` (the demo clock).
+  - `recordSecurityEvent(event: Omit<SecurityEvent,'id'|'timestamp'> & { timestamp? }, opts?: RecordSecurityEventOptions): Promise<SecurityEvent>` — append one event; `timestamp` defaults to `demoNow()` (the demo clock) unless the caller supplies one. Best-effort by default (never rejects); `opts.client` writes on the caller's already-open transaction and `opts.strict === true` makes a REAL persistence failure REJECT so the caller's `prisma.$transaction` rolls back.
   - `listSecurityEvents(filter?: SecurityEventFilter): Promise<SecurityEvent[]>` — query newest-first.
   - `getSecurityStatus(sessionId, options?): Promise<SecurityStatus>` — `{ locked, recentEvents }`.
-  - types: `SecurityEventFilter` (`{ sessionId?, kind?, limit? }`), `SecurityStatus`, `SecurityStatusOptions` (`{ isLocked?, recentLimit?, filter? }`), `BreakerLookup`.
+  - types: `SecurityEventFilter` (`{ sessionId?, kind?, limit? }`), `SecurityStatus`, `SecurityStatusOptions` (`{ isLocked?, recentLimit?, filter? }`), `BreakerLookup`, `RecordSecurityEventOptions` (`{ client?: DbClient; strict?: boolean }`).
   - `securityEventStore` — repository bindings seam (testability; see Dependencies).
 
 ## Constraints
@@ -36,7 +36,7 @@ re-exports each function and its types.
   or absorb a contradictory outcome as the same event. The manual-review audit and action state
   land in one strict transaction; a failed audit leaves the prior state available for retry.
 
-- **Transaction composition**: `recordAudit(entry, { client, dedupeKey, strict })` accepts a `Prisma.TransactionClient` (`client`) so an audit write CAN be folded into the caller's `prisma.$transaction`, and an optional unique `dedupeKey` makes a repeat write of the SAME execution identity idempotent. `recordSecurityEvent` accepts NO `client`/`tx` and always writes via the global `prisma` singleton (`@/lib/db/client`), so a security-event write is NOT transaction-composable.
+- **Transaction composition**: `recordAudit(entry, { client, dedupeKey, strict })` accepts a `Prisma.TransactionClient` (`client`) so an audit write CAN be folded into the caller's `prisma.$transaction`, and an optional unique `dedupeKey` makes a repeat write of the SAME execution identity idempotent. `recordSecurityEvent(event, { client, strict })` mirrors this: `client` is forwarded to `insertSecurityEvent` so the security-event row lands on the caller's already-open transaction (relying on the `../lib/db/repositories/securityEvent` signature `insertSecurityEvent(event, opts?: { client?: DbClient })`; the `securityEventStore` seam casts the imported function so this node compiles before AND after that lib change lands), and `strict: true` REJECTS on a real persistence failure so the caller's transaction rolls back its business writes (the "unlock + SECURITY_RESET audit land together" contract).
 - **Dependency direction**: `lib` ← `audit`. This node imports ONLY `lib/contracts/*`,
   `lib/db/repositories/*`, `lib/db/client`, `lib/errors`, and `lib/clock`. It **MUST NOT** import
   `security`, `agent`, `planner`, or `banking-sdk` — the Security Gateway depends on `audit` for
@@ -44,7 +44,7 @@ re-exports each function and its types.
   `recordAudit` is therefore INLINED rather than imported from `banking-sdk`.)
 - **Never redeclare frozen types**: `AuditEntry`, `AuditStatus`, `SecurityEvent`,
   `SecurityEventKind` come from `@/lib/contracts/audit` — import, never fork.
-- **Error strategy — best-effort by default, strict on request**: `recordAudit` / `recordSecurityEvent` are best-effort by DEFAULT and never throw into the request path — on persistence failure they `console.error` and resolve with the input entry/event. A caller may opt into `recordAudit(..., { strict: true })`, in which case a real persistence failure REJECTS (the original error is propagated unchanged) so the caller's enclosing `prisma.$transaction` rolls back its business writes; the ONLY failure strict mode absorbs is a VERIFIED duplicate of the SAME `dedupeKey` — a Prisma unique-constraint violation (P2002) AND a row with that exact key already present on the same client (`findUnique` back-read) — treated as an idempotent no-op. A missing `dedupeKey`, an absent back-read row, or a throwing back-read all rethrow the ORIGINAL insert error. Reads/query functions delegate to the store seam and wrap any non-`AppError` via `AppError.from(e)` (code `INTERNAL`) and rethrow — never silently swallowed.
+- **Error strategy — best-effort by default, strict on request**: `recordAudit` / `recordSecurityEvent` are best-effort by DEFAULT and never throw into the request path — on persistence failure they `console.error` and resolve with the input entry/event. A caller may opt into STRICT mode (`{ strict: true }` on `recordAudit` OR `recordSecurityEvent`), in which case a real persistence failure REJECTS (the original error is propagated unchanged) so the caller's enclosing `prisma.$transaction` rolls back its business writes. `recordSecurityEvent` strict mode has NO dedupe absorption (a security-event insert has no unique key), so it always rethrows. For `recordAudit`, the ONLY failure strict mode absorbs is a VERIFIED duplicate of the SAME `dedupeKey` — a Prisma unique-constraint violation (P2002) AND a row with that exact key already present on the same client (`findUnique` back-read) — treated as an idempotent no-op. A missing `dedupeKey`, an absent back-read row, or a throwing back-read all rethrow the ORIGINAL insert error. Reads/query functions delegate to the store seam and wrap any non-`AppError` via `AppError.from(e)` (code `INTERNAL`) and rethrow — never silently swallowed.
 - **Audit entries must be complete**: every `recordAudit` call carries the required fields —
   `timestamp, sessionId, userRequest, intent, toolName, riskLevel, confirmationRequired,
   confirmed, mfaRequired, mfaResult, toolResult, status` (see `AuditEntry` in lib/contracts).
@@ -65,7 +65,7 @@ re-exports each function and its types.
   `findAuditLogs(filter: { sessionId?; toolName?; riskLevel?; status?; limit? }): Promise<AuditEntry[]>`,
   `aggregateAuditLogs(): Promise<{ total; byRisk; byStatus }>`. JSON-serializes `toolResult`; `dedupeKey` maps to the unique `AuditLog.dedupeKey` column.
 - `@/lib/db/repositories/securityEvent` (owned by `./lib`) — surface used:
-  `insertSecurityEvent(event: SecurityEvent): Promise<SecurityEvent>`,
+  `insertSecurityEvent(event: SecurityEvent, opts?: { client?: DbClient }): Promise<SecurityEvent>` (the optional `client` param is a PARALLEL `./lib` change; the audit seam CASTS the imported function so this node compiles with either signature),
   `findSecurityEvents(filter: { sessionId?; kind?; limit? }): Promise<SecurityEvent[]>`. JSON-serializes `detail`.
 - Repository params are structural (primitives / `lib/contracts` types) so `lib` never imports `audit`.
 - `./security` (circuit-breaker lock state) is a **runtime** dependency injected via
@@ -86,6 +86,7 @@ re-exports each function and its types.
 - **Unit tests** (Vitest, no DB required): stub `auditStore` / `securityEventStore` (or the
   repositories) to assert filtering, newest-first ordering, summary aggregation, `timestamp`
   defaulting, and the never-throw-on-write contract (a throwing store still resolves).
+- `recordSecurityEvent` composition/strict behavior is exercised by stubbing `securityEventStore.insertSecurityEvent` to throw: `strict: true` rethrows the ORIGINAL error object, a falsy/omitted `strict` logs and resolves with the input event, and `{ client }` is forwarded through the seam unchanged.
 - Strict mode is exercised by stubbing `auditStore.insertAuditLog` to throw: `strict: true` rethrows
   the ORIGINAL error, EXCEPT a P2002 unique violation whose `dedupeKey` row is found by the
   back-read on the same client AND matches the session/tool/risk/decision/business result identity
