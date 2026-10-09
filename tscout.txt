@@ -1,0 +1,2 @@
+﻿lib/db/repositories/auditLog.ts(195,13): error TS1005: ',' expected.
+lib/db/repositories/auditLog.ts(195,18): error TS1005: ',' expected.
