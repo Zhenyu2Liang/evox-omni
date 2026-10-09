@@ -98,7 +98,7 @@ async function isLocked(actor: string, client?: DbClient): Promise<boolean>
 async function recordFailure(actor: string): Promise<CircuitBreakerState>   // trips at MFA_MAX_ATTEMPTS; emits CIRCUIT_BREAKER_TRIPPED exactly once per trip
 async function recordSuccess(actor: string): Promise<CircuitBreakerState>                  // resets consecutive failures (does NOT unlock a tripped breaker)
 async function reset(actor: string): Promise<void>                                         // ungated, unaudited, route-less test-only clear
-async function resetSession(actor: string, opts?: ResetSessionOptions): Promise<CircuitBreakerState>   // the security-center UNLOCK: reset() + emits SECURITY_RESET (awaited recordSecurityEvent)
+async function resetSession(actor: string, opts?: ResetSessionOptions): Promise<CircuitBreakerState>   // GATED, audited security-center UNLOCK: clears state + emits SECURITY_RESET
 ```
 Event details are COMPLETE audit records:
 - `CIRCUIT_BREAKER_TRIPPED` (severity `high`) → `detail: { failures, max, result: 'session_locked' }`; emitted exactly once per trip (a further failure while locked neither recounts nor re-emits).
