@@ -205,17 +205,18 @@ planner, then driven by the real action/task handlers — confirm/verify RESUMES
 writes the REAL tool result back (asserted on `AgentTaskNode`, a real `Transaction` row and the
 decremented balance), pause/cancel/retry, refresh recovery, listing and 403/404 auth.
 
-## Known gap — `423 CIRCUIT_OPEN` is UNREACHABLE over real HTTP
+## `423 CIRCUIT_OPEN` envelope — reachable via the breaker unlock, NOT the action routes
 
-The confirm/verify route doc comments mention a `423 CIRCUIT_OPEN` error envelope and
-`app/api/_lib/http.ts` maps the code (`CIRCUIT_OPEN: 423`), but **nothing ever throws
-`AppError('CIRCUIT_OPEN')`** — a repo-wide scan finds the code only in that doc comment, the status map
-and the `ErrorCode` union (`lib/errors.ts`). On a tripped breaker
-`security-gateway.authorizeAction` returns the lock as a **domain** outcome
-(`{ ok:false, status:'locked' }`), which `@/agent` `confirmAction`/`verifyAction` surface as a normal
-**HTTP 200** with `data.ok:false` / `data.status:'locked'`. `actions-http.test.ts` therefore asserts the
-reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED` high-severity
-`SecurityEvent`, and denied follow-up action calls) instead of a fabricated 423.
+The gated breaker unlock (`security/circuit-breaker.ts#resetSession`, called by
+`POST /api/security/reset`) THROWS `AppError('CIRCUIT_OPEN')` when a LOCKED owner supplies no/incorrect
+`verificationCode` (and the cooldown has not elapsed); the route propagates it as HTTP `423` — pinned
+end-to-end (body-less / wrong code → 423, correct `MFA_CODE` → 200) by `security-workflow-http.test.ts`.
+The confirm/verify routes, by contrast, surface a tripped breaker as a **domain** outcome: on a tripped
+breaker `security-gateway.authorizeAction` returns the lock as `{ ok:false, status:'locked' }`, which
+`@/agent` `confirmAction`/`verifyAction` report as a normal **HTTP 200** with `data.ok:false` /
+`data.status:'locked'`. `actions-http.test.ts` therefore asserts those reachable invariants (200 /
+`ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED` high-severity `SecurityEvent`, and denied follow-up
+action calls) instead of a fabricated 423.
 
 ## Test Strategy
 
