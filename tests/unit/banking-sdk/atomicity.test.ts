@@ -21,6 +21,7 @@ import type { RedeemInvestmentInput, SubscribeInvestmentInput, TransferInput } f
 import { AppError } from '@/lib/errors';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
 import { DEMO_USER_ID } from '../../helpers/fixtures';
+import { withInjectedWriteFailure } from '../../helpers/write-failure';
 
 // Fresh seeded DB before each case + Prisma disconnect afterwards.
 useFreshDatabase();
@@ -75,87 +76,6 @@ async function capture(fn: () => Promise<unknown>): Promise<unknown> {
     return error;
   }
   throw new Error('expected the call to reject, but it resolved');
-}
-
-/* --------------------------------------------------------- write-failure injection */
-
-interface TxRunner {
-  $transaction: (arg: unknown) => Promise<unknown>;
-}
-
-/** What the injected method does when called — it must throw (a bare Error or a typed `AppError`). */
-type FailureThrower = () => never;
-
-/** The default injection: a bare (non-SDK) error, i.e. an unexpected infrastructure failure. */
-function injectedBareFailure(model: string, method: string): FailureThrower {
-  return () => {
-    throw new Error(`injected failure: ${model}.${method}`);
-  };
-}
-
-/**
- * Wrap the shared Prisma client so the interactive transaction's `tx` throws on exactly one
- * `model.method`; every other access is forwarded to the REAL `tx`. Because the real transaction is
- * still used, any earlier write in the unit is genuinely rolled back when the injected method throws.
- */
-function injectWriteFailure(tx: unknown, model: string, method: string, fail: FailureThrower): unknown {
-  return new Proxy(tx as object, {
-    get(target, prop) {
-      if (prop === model) {
-        const modelClient = Reflect.get(target, prop) as object;
-        return new Proxy(modelClient, {
-          get(modelTarget, modelProp) {
-            if (modelProp === method) {
-              return () => {
-                fail();
-              };
-            }
-            const value = Reflect.get(modelTarget, modelProp);
-            return typeof value === 'function'
-              ? (value as (...args: unknown[]) => unknown).bind(modelTarget)
-              : value;
-          },
-        });
-      }
-      const value = Reflect.get(target, prop);
-      return typeof value === 'function' ? (value as (...args: unknown[]) => unknown).bind(target) : value;
-    },
-  });
-}
-
-/** Run `work` with `model.method` throwing inside the SDK's interactive transaction. */
-async function withInjectedWriteFailure<T>(
-  model: string,
-  method: string,
-  work: () => Promise<T>,
-  fail: FailureThrower = injectedBareFailure(model, method),
-): Promise<T> {
-  const client = db() as unknown as TxRunner;
-  const original = client.$transaction;
-  if (typeof original !== 'function') {
-    throw new Error('withInjectedWriteFailure: client.$transaction is not a function');
-  }
-  const injected: TxRunner['$transaction'] = (arg: unknown) =>
-    original.call(client, (tx: unknown) =>
-      (arg as (client: unknown) => Promise<unknown>)(injectWriteFailure(tx, model, method, fail)),
-    );
-
-  // Install/restore the mock ourselves via `defineProperty` — `vi.spyOn` + `restoreAllMocks`
-  // does NOT round-trip Prisma's `$transaction` (a later read comes back `undefined`).
-  Object.defineProperty(client, '$transaction', {
-    value: injected,
-    configurable: true,
-    writable: true,
-  });
-  try {
-    return await work();
-  } finally {
-    Object.defineProperty(client, '$transaction', {
-      value: original,
-      configurable: true,
-      writable: true,
-    });
-  }
 }
 
 /* ---------------------------------------------------------------------- tests */
