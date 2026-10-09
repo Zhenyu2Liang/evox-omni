@@ -24,6 +24,7 @@ Every spec keeps the in-process circuit breaker isolated with a UNIQUE persisted
   survives cancel (no fake rollback).
 - `run-turn-failure.test.ts` — the continuation-failure contract: a failing tool result / a
   `continue()` rejection is never swallowed and never rephrased as a success.
+- `message-normalize.test.ts` — `@/agent/message-normalize#withRealToolResult`: on a REUSED tool-call id the earlier factual result is preserved and the parked `等待确认` placeholder is replaced by the REAL executed result.
 - `providers/provider-mock.test.ts` — pure, DB-free spec for `@/agent/providers/mock-responder`
   (`respond(context)`): fuzzy intent → tool call, two-call recipient resolution, multi-turn reuse,
   clarifications, honest failure narration, blocked gated calls (YELLOW/RED "not executed").
