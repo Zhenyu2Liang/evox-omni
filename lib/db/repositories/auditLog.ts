@@ -191,7 +191,6 @@ function toAuditEntry(row: AuditLog): AuditEntry {
     confirmed: row.confirmed,
     mfaRequired: row.mfaRequired,
     mfaResult: (row.mfaResult ?? undefined) as AuditEntry['mfaResult'],
-    toolResult:
     toolArgs: row.toolArgs == null ? undefined : safeParse<unknown>(row.toolArgs, undefined),
     toolResult:
       row.toolResult == null ? undefined : safeParse<unknown>(row.toolResult, undefined),

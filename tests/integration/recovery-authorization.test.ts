@@ -78,7 +78,7 @@ it('a locked session can reconstruct a committed result without creating another
   for (let i = 0; i < 3; i++) await recordFailure(action.sessionId);
   const recovered = await call(recoverPost, action.id, action.sessionId);
   expect(recovered.body.data).toMatchObject({ ok: true, status: 'executed' });
-  expect(getState(action.sessionId).locked).toBe(true); expect(await balance()).toBe(23380);
+  expect((await getState(action.sessionId)).locked).toBe(true); expect(await balance()).toBe(23380);
   expect(await p.auditLog.count({ where: { dedupeKey: `exec:${action.id}` } })).toBe(1);
   expect(await p.transaction.count({ where: { userId, amount: -200, channel: 'TRANSFER' } })).toBe(1);
 });
