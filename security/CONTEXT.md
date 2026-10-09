@@ -96,7 +96,7 @@ async function resolveBreakerOwner(actor: string, client?: DbClient): Promise<Br
 async function getState(actor: string, client?: DbClient): Promise<CircuitBreakerState>
 async function isLocked(actor: string, client?: DbClient): Promise<boolean>
 async function recordFailure(actor: string): Promise<CircuitBreakerState>   // trips at MFA_MAX_ATTEMPTS; emits CIRCUIT_BREAKER_TRIPPED exactly once per trip
-function recordSuccess(sessionId: string): CircuitBreakerState                  // resets consecutive failures (does NOT unlock a tripped breaker)
+async function recordSuccess(actor: string): Promise<CircuitBreakerState>                  // resets consecutive failures (does NOT unlock a tripped breaker)
 function reset(sessionId: string): void                                         // clears all state for a session (sync, no I/O; used by tests)
 async function resetSession(sessionId: string, opts?: ResetSessionOptions): Promise<CircuitBreakerState>   // the security-center UNLOCK: reset() + emits SECURITY_RESET (awaited recordSecurityEvent)
 ```
