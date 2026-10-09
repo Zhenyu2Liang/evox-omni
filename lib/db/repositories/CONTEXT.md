@@ -147,7 +147,7 @@ that accepts one.
 - Input DTOs live in the module that owns them; reuse `lib/contracts` types (`RiskLevel`,
   `PendingActionSummary`, `PendingActionStatus`, `TaskCondition`, `AuditEntry`, `SecurityEvent`) instead of redefining them.
 - No risk/permission logic — repositories are dumb persistence only.
-- `pendingAction.ts` is the ONE aggregate whose functions take the optional trailing
+- `pendingAction.ts` is the aggregate whose EVERY function takes the optional trailing
   `client: Prisma.TransactionClient = prisma`; the default must stay the `../client` singleton so existing
   callers compile and behave identically. This parameter exists purely to compose the cancel/authorize flow
   into one transaction — never replace a `claim*`/`revoke*` CAS with a read-modify-write to achieve it.
