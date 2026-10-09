@@ -9,8 +9,9 @@
  * server, then calls `router.refresh()` so the Server Component re-renders with the fresh breaker
  * state (failure count back to 0, unlocked).
  *
- * The breaker is GATED and PER-ACCOUNT: while the account is locked a correct mock code
- * (default/placeholder `123456`) is REQUIRED — a bare session cookie is REFUSED with HTTP
+ * The breaker is GATED and PER-ACCOUNT: while the account is locked a correct mock code is
+ * REQUIRED — the input starts EMPTY and the code is NEVER prefilled or revealed; the user must
+ * actively type the 6-digit code. Without a correct code the unlock is REFUSED with HTTP
  * `423 CIRCUIT_OPEN`, and that refusal message is surfaced here verbatim.
  *
  * Label reflects the current state: "解除熔断限制" while locked, "重置熔断计数" otherwise.
@@ -41,16 +42,21 @@ type ApiEnvelope<T> =
   | { ok: true; data: T }
   | { ok: false; error: { code: string; message: string } };
 
-/** Demo mock verification code (public in the README) — prefills the unlock input. */
-const DEFAULT_VERIFICATION_CODE = '123456';
+/** Neutral empty-input hint; the correct mock code is never prefilled or shown. */
+const INPUT_PLACEHOLDER = '请输入 6 位验证码';
 
 export function ResetBreakerButton({ locked = false, className }: ResetBreakerButtonProps) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [code, setCode] = useState(DEFAULT_VERIFICATION_CODE);
+  const [code, setCode] = useState('');
   const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null);
 
   async function handleClick() {
+    // Strong verification must be an ACTIVE user action — never submit an empty code.
+    if (code.trim() === '') {
+      setStatus({ ok: false, message: '请输入 6 位验证码后再提交。' });
+      return;
+    }
     setBusy(true);
     setStatus(null);
     try {
@@ -88,7 +94,7 @@ export function ResetBreakerButton({ locked = false, className }: ResetBreakerBu
             autoComplete="one-time-code"
             maxLength={6}
             aria-label="6 位验证码"
-            placeholder={DEFAULT_VERIFICATION_CODE}
+            placeholder={INPUT_PLACEHOLDER}
             value={code}
             disabled={busy}
             onChange={(e) => setCode(e.target.value)}
@@ -98,7 +104,7 @@ export function ResetBreakerButton({ locked = false, className }: ResetBreakerBu
         <button
           type="button"
           onClick={handleClick}
-          disabled={busy}
+          disabled={busy || code.trim() === ''}
           className={[
             'rounded-xl px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors',
             'disabled:cursor-not-allowed disabled:opacity-60',
