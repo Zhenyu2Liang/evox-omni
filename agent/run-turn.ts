@@ -142,10 +142,23 @@ interface TurnBuffer {
   current: ChatMessage | null;
   /** Real tool results collected this turn — the authoritative facts grounding compares against. */
   factResults: Array<{ toolName: string; result: ToolExecutionResult }>;
+  /**
+   * The RAW text of the assistant message currently streaming. Deltas are BUFFERED here (never
+   * streamed live) so the text is emitted ONLY after grounding at `message_end` — a pre-grounding
+   * financial fact can never reach the UI.
+   */
+  pendingText: string;
+  /**
+   * SERVER-tracked ids of the messages already grounded this turn. The grounding module no longer
+   * skips on a text marker, so idempotency MUST be keyed here — on the server-owned message id —
+   * NEVER on a string the model can produce (a model that includes the correction tag in its own
+   * text is STILL verified).
+   */
+  groundedIds: Set<string>;
 }
 
 function createTurnBuffer(): TurnBuffer {
-  return { events: [], assistants: [], current: null, factResults: [] };
+  return { events: [], assistants: [], current: null, factResults: [], pendingText: '', groundedIds: new Set() };
 }
 
 /** True when this assistant message carries a tool call (i.e. it is NOT the terminal narration). */
@@ -159,13 +172,18 @@ function hasToolCallPart(message: AssistantMessage): boolean {
 /**
  * Ground one assistant message's text IN PLACE against the turn's real tool results
  * (`./grounding`). Never throws — a grounding bug surfaces as an `error` event instead of aborting
- * the turn that already produced a real outcome. Only the `message_end` content is rewritten; no
- * `text_delta` is mutated and no card is invented.
+ * the turn that already produced a real outcome. Idempotent SERVER-side, keyed by the message id
+ * (`buffer.groundedIds`) — NEVER by a text marker the model could forge, so a model that includes
+ * the correction tag in its own text is STILL verified. The rewritten content is what the
+ * `message_end` event (and the streamed `text_delta`) carry; no card is invented.
  */
 function groundMessage(buffer: TurnBuffer, message: ChatMessage | null): void {
   if (message === null || message.content === '') return;
+  if (buffer.groundedIds.has(message.id)) return;
   try {
-    message.content = groundAssistantText(message.content, buildFinancialFacts(buffer.factResults));
+    const facts = buildFinancialFacts(buffer.factResults);
+    message.content = groundAssistantText(message.content, facts);
+    buffer.groundedIds.add(message.id);
   } catch (error) {
     buffer.events.push({ type: 'error', message: safeToString(error) });
   }
@@ -409,6 +427,7 @@ function createEventHandler(
           if (!isAssistantMessage(event.message)) return; // ignore user / toolResult messages
           const assistant = newAssistantMessage(now());
           buffer.current = assistant;
+          buffer.pendingText = '';
           buffer.assistants.push(assistant);
           buffer.events.push({ type: 'message_start', message: { ...assistant } });
           return;
@@ -419,19 +438,33 @@ function createEventHandler(
           if (assistantEvent.type !== 'text_delta') return;
           const delta = assistantEvent.delta;
           if (delta === '') return;
+          // BUFFER the raw delta — do NOT stream it. The message's text is emitted ONLY after
+          // grounding at `message_end`, so a raw (ungrounded) financial fact can never reach the UI.
+          buffer.pendingText += delta;
           if (buffer.current !== null) buffer.current.content += delta;
-          buffer.events.push({ type: 'text_delta', delta });
           return;
         }
         case 'message_end': {
           if (!isAssistantMessage(event.message)) return;
           const full = textOfContent(event.message.content);
           const assistant = buffer.current ?? newAssistantMessage(now());
-          if (assistant.content === '' && full !== '') assistant.content = full;
-          // Ground the TERMINAL narration (no tool call) once every tool result is known. The
-          // `message_end` event references this same object, so the UI receives the grounded text.
+          // The message's full text is authoritative; the buffered deltas are the fallback when the
+          // provider streamed `message_update`s but reports an empty content array on `message_end`.
+          const text = full !== '' ? full : buffer.pendingText;
+          if (text !== '') assistant.content = text;
+          // Ground the TERMINAL narration (no tool call) once every tool result is known. The event
+          // below references this same object, and the aggregated delta carries its content, so the
+          // UI receives ONLY the grounded text.
           if (!hasToolCallPart(event.message)) groundMessage(buffer, assistant);
+          // Emit the message's FINAL (grounded) text as ONE aggregated `text_delta`, immediately
+          // followed by the `message_end` carrying the SAME content. The UI accumulates deltas into
+          // `streamingText` and replaces it with `message_end.content`, so their concatenation per
+          // message is identical — and no pre-grounding financial fact is ever streamed.
+          if (assistant.content !== '') {
+            buffer.events.push({ type: 'text_delta', delta: assistant.content });
+          }
           buffer.events.push({ type: 'message_end', message: assistant });
+          buffer.pendingText = '';
           return;
         }
         case 'tool_execution_start': {
