@@ -18,6 +18,25 @@ export interface BreakerSnapshot {
   lockedAt: Date | null;
 }
 
+/** The canonical "fresh / unlocked / no row" snapshot. */
+const EMPTY_SNAPSHOT: BreakerSnapshot = { failures: 0, locked: false, lockedAt: null };
+
+/** The state a CAS reset must observe to apply; compared by exact millisecond `lockedAt`. */
+export interface ResetBreakerExpectation {
+  locked: boolean;
+  lockedAt: Date | null;
+}
+
+/** Result of {@link resetBreakerState}: whether the (conditional) clear applied, + before/after. */
+export interface ResetBreakerResult {
+  /** `true` when the clear was written; `false` when an `expect` CAS did not match (no write). */
+  applied: boolean;
+  /** The pre-clear snapshot (`null` when no row existed). */
+  before: BreakerSnapshot | null;
+  /** The post-clear snapshot — equals `before` when `applied` is `false` (`EMPTY_SNAPSHOT` if no row). */
+  after: BreakerSnapshot;
+}
+
 /**
  * Read the persisted breaker row for an owner key, or `null` when none exists yet.
  *
@@ -80,23 +99,62 @@ export async function recordSuccessState(key: string): Promise<BreakerSnapshot> 
   return { failures: row.failures, locked: row.locked, lockedAt: row.lockedAt };
 }
 
+/** Snapshot a raw row (or `null`) into the shape callers consume. */
+function toSnapshot(row: CircuitBreakerState | null): BreakerSnapshot | null {
+  return row ? { failures: row.failures, locked: row.locked, lockedAt: row.lockedAt } : null;
+}
+
 /**
- * Clear (unlock) an owner's breaker state. Returns the PRE-clear snapshot so the caller can write a
- * complete `SECURITY_RESET` audit record. Callers MUST enforce the unlock gate before invoking this.
+ * Whether the current snapshot satisfies the CAS expectation: `locked` equal, and `lockedAt` equal
+ * by MILLISECOND value (`null` compares as `null`). A missing row never matches.
+ */
+function matchesExpectation(
+  current: BreakerSnapshot | null,
+  expect: ResetBreakerExpectation,
+): boolean {
+  if (!current) return false;
+  return (
+    current.locked === expect.locked &&
+    (current.lockedAt?.getTime() ?? null) === (expect.lockedAt?.getTime() ?? null)
+  );
+}
+
+/**
+ * Clear (unlock) an owner's breaker state to `{failures:0, locked:false, lockedAt:null}`. Returns the
+ * PRE-clear snapshot so the caller can write a complete `SECURITY_RESET` audit record. Callers MUST
+ * enforce the unlock gate before invoking this.
+ *
+ * - Without `opts.expect`: UNCONDITIONAL clear (previous behavior) — always writes, `applied: true`.
+ * - With `opts.expect`: an atomic compare-and-set — the clear is written ONLY when the current row
+ *   matches `expect` (see {@link matchesExpectation}); on a mismatch NOTHING is written and it
+ *   returns `applied: false` with `before` (= `after`) equal to the current snapshot (or the
+ *   `EMPTY_SNAPSHOT` when no row exists, so `after` stays a non-null snapshot).
+ *
+ * `opts.client` optionally routes BOTH the read and the write through an OPEN interactive
+ * transaction's client (so an unlock can commit in the same `prisma.$transaction` as its audit
+ * event). When omitted, this opens its own `prisma.$transaction`.
  */
 export async function resetBreakerState(
   key: string,
-): Promise<{ before: BreakerSnapshot | null; after: BreakerSnapshot }> {
-  return prisma.$transaction(async tx => {
-    const current = await tx.circuitBreakerState.findUnique({ where: { key } });
-    const before = current
-      ? { failures: current.failures, locked: current.locked, lockedAt: current.lockedAt }
-      : null;
-    const row = await tx.circuitBreakerState.upsert({
+  opts?: { client?: DbClient; expect?: ResetBreakerExpectation },
+): Promise<ResetBreakerResult> {
+  const run = async (db: DbClient): Promise<ResetBreakerResult> => {
+    const current = await db.circuitBreakerState.findUnique({ where: { key } });
+    const before = toSnapshot(current);
+    if (opts?.expect && !matchesExpectation(before, opts.expect)) {
+      return { applied: false, before, after: before ?? EMPTY_SNAPSHOT };
+    }
+    const row = await db.circuitBreakerState.upsert({
       where: { key },
       create: { key, failures: 0, locked: false, lockedAt: null },
       update: { failures: 0, locked: false, lockedAt: null },
     });
-    return { before, after: { failures: row.failures, locked: row.locked, lockedAt: row.lockedAt } };
-  });
+    return {
+      applied: true,
+      before,
+      after: { failures: row.failures, locked: row.locked, lockedAt: row.lockedAt },
+    };
+  };
+
+  return opts?.client ? run(opts.client) : prisma.$transaction(run);
 }
