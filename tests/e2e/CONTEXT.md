@@ -255,6 +255,14 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   single-card page `.last()` === `.first()`. Journey `h` (two RED flows in one page) passes
   `beforeMfaCount + 1` to the redeem leg's `waitForMfaCard`; `clickLastWhenEnabled` exists because the
   general `clickWhenEnabled` is `.first()`-scoped for `submitChat`/`clickConfirm`.
+- **Security-center breaker control (journey `j`).** `app/security/ResetBreakerButton.tsx` renders a
+  CONTROLLED 6-digit code input (`input[aria-label="6 位验证码"]`, `SELECTORS.breakerCodeInput`) that
+  starts EMPTY and never reveals the mock code, plus a button DISABLED while the input is empty
+  (`解除熔断限制` while locked, else `重置熔断计数`). `fillBreakerCode(page, code)` waits
+  `waitForElementHydration` on that input (its SSR node carries no React own-property, so a pre-hydration
+  `fill()` is silently reset) then `fill`s; `clickBreakerReset(page, name, code)` fills BEFORE clicking.
+  A `POST /api/security/reset` refusal while locked surfaces as `role=status`
+  `解除熔断需要额外的安全验证…` with the lock intact.
 - **Per-node timeline.** `planNodeRows()` scopes to `ol.space-y-3 > li` inside the live card (avoiding
   the SECOND copy of every node name in the card's 依赖关系 dependency list), reading the node name
   (`span.text-sm.font-medium.text-banking-deep`) + its status `span.rounded-full` badge.
