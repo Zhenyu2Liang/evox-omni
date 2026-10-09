@@ -31,6 +31,9 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   convenience wrappers defaulting to the demo clock — `demoTodayRange(override?)`, `demoMonthRange(override?)`,
   `demoPreviousMonthRange(override?)` — each delegates to the matching `date.ts` helper via
   `new Date(demoNow(override))`.
+  It also exports `realNow(): number` — the server's REAL wall clock (`Date.now()`), used ONLY for
+  SECURITY elapsed-time gates (circuit-breaker lock timestamp / unlock cooldown, `now >= lockedAt + RESET_COOLDOWN_MS`);
+  never use it for business dates, and never use `demoNow()` for security cooldown timing.
 - `json.ts` — SQLite JSON-text column helpers: `safeParse<T>(text, fallback)` (returns `fallback` for
   null/undefined/empty/invalid JSON) and `toJson(value)` (`'null'` when value is `undefined`).
 - `phone.ts` — mask-aware phone matching & masking (pure, never throws): `maskAwarePhoneMatch(value, stored)` → TRUE iff a RAW value matches a MASKED stored phone (exact, digit-substring either direction, or an anchored wildcard pattern from the stored phone's `*`-split fragments); `maskPhone(phone)` → first-3 + `****` + last-4. Lets a RAW phone lookup match the demo's MASKED-stored `Contact.phone` values.
