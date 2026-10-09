@@ -38,7 +38,7 @@ types it consumes and returns (`SecurityEvaluation`, `SecurityDecision`, `Pendin
 
 ### `permission-engine.ts` — static policy table + evaluator (PURE, no I/O)
 ```ts
-interface ToolPolicy { tier: RiskLevel; static: boolean; description: string }
+interface ToolPolicy { tier: RiskLevel; static: boolean; write: boolean; description: string }   // `write` = persists a side effect ⇒ AUDITED regardless of colour
 interface EvaluateToolContext { userId: string; sessionId: string; dailyTransferTotal: number }
 interface ToolEvaluation { tier: RiskLevel; requiresConfirmation: boolean; requiresMfa: boolean; reasons: string[] }
 
