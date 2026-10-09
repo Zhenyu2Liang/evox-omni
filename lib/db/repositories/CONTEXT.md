@@ -91,7 +91,7 @@ that accepts one.
 - `securityEvent.ts` (`SecurityEvent`) — `SecurityEventInput {sessionId, userId?, kind, severity, message, detail?, timestamp?}`,
   `SecurityEventQuery {userId?, sessionId?, kind?, limit?}`;
   `createSecurityEvent(input)`, `listSecurityEvents(query?)`, `countSecurityEvents(query?)`; plus
-  `insertSecurityEvent(event): Promise<SecurityEvent>`, `findSecurityEvents(filter): Promise<SecurityEvent[]>`
+  `insertSecurityEvent(event, opts?: { client?: DbClient }): Promise<SecurityEvent>` (the optional `client` commits the append in the caller's `$transaction`), `findSecurityEvents(filter): Promise<SecurityEvent[]>`
   (consumed by `audit/`).
 - `session.ts` (`AgentSession`) — `listSessions(userId)`, `getSession(id)`, `createSession({userId, stateJson, status?, locked?})`,
   `updateSessionState(id, stateJson)`, `setSessionLocked(id, locked)`, `updateSessionStatus(id, status)`, `deleteSession(id)`.
