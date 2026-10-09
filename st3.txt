@@ -1,0 +1,143 @@
+﻿diff --git a/banking-sdk/categories.ts b/banking-sdk/categories.ts
+new file mode 100644
+index 0000000..7753eb9
+--- /dev/null
++++ b/banking-sdk/categories.ts
+@@ -0,0 +1,5 @@
++/**
++ * Category used for investment subscribe/redeem account-flow rows, so investment principal is
++ * kept out of consumption analysis and is never mislabeled as salary/大额消费.
++ */
++export const INVESTMENT_FLOW_CATEGORY = '投资';
+diff --git a/banking-sdk/investment.ts b/banking-sdk/investment.ts
+index 8854062..70d1c0d 100644
+--- a/banking-sdk/investment.ts
++++ b/banking-sdk/investment.ts
+@@ -9,10 +9,10 @@
+  * `redeemInvestment` closes exactly one HOLDING → throws `AppError('CONFLICT')` if it was already
+  * redeemed.
+  *
+- * Both writes run in a SINGLE interactive transaction (`runInTransaction`): the balance change and
+- * the holding change commit together or not at all, so no partial debit/credit can survive. The
+- * debit is a conditional decrement (`balance >= amount`) → a negative balance is impossible even
+- * under concurrency.
++ * Both writes run in a SINGLE interactive transaction (`runInTransaction`): the balance change, the
++ * holding change and the account-flow `Transaction` row commit together or not at all, so no partial
++ * debit/credit can survive. The debit is a conditional decrement (`balance >= amount`) → a negative
++ * balance is impossible even under concurrency.
+  *
+  * Optional at-most-once semantics (`input.idempotencyKey`, supplied by the planner as
+  * `nodeExecutionKey(taskId, nodeId)`): a replayed plan node re-runs the tool, so a repeat with the
+@@ -23,8 +23,10 @@
+  * replays that original result, while a DIFFERENT or absent identity on an already-REDEEMED holding
+  * throws `CONFLICT` — never a false success.
+  *
+- * Note: subscribing/redeeming moves the funding-account BALANCE only — it deliberately does NOT
+- * write a `Transaction` row, so the demo's 本月 spending analysis stays anchored at ¥5,800.
++ * Note: subscribing/redeeming moves the funding-account BALANCE and writes an investment-flow
++ * `Transaction` row (category `INVESTMENT_FLOW_CATEGORY`) in the SAME transaction, so investment
++ * principal is kept out of the 本月 spending analysis (anchored at ¥5,800) and is never mislabeled
++ * as 大额消费.
+  */
+ import type { InvestmentHolding, InvestmentProduct } from '@prisma/client';
+ import { demoNow } from '../lib/clock';
+@@ -32,6 +34,7 @@ import { accounts, investments } from '../lib/db/repositories';
+ import { AppError } from '../lib/errors';
+ import { round2, subtractMoney } from '../lib/money';
+ import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
++import { INVESTMENT_FLOW_CATEGORY } from './categories';
+ import { runInTransaction, type Tx } from './tx';
+ import type {
+   HoldingStatus,
+@@ -198,6 +201,23 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
+         userId: input.userId,
+       });
+     }
++    // Account-flow row: mirrors the funding-account DEBIT as a ledger `Transaction` in the SAME
++    // transaction, categorized as investment flow (`INVESTMENT_FLOW_CATEGORY`) so principal is kept
++    // out of consumption analysis and is never mislabeled as salary/大额消费.
++    await tx.transaction.create({
++      data: {
++        accountId: account.id,
++        userId: input.userId,
++        amount: -amount, // DECREASE: negative
++        direction: 'DEBIT',
++        category: INVESTMENT_FLOW_CATEGORY,
++        merchant: '认购' + product.name,
++        channel: 'APP',
++        occurredAt: new Date(now),
++        currency: 'CNY',
++      },
++    });
++
+     return { holding, newBalance: updated.balance };
+   };
+ 
+@@ -294,6 +314,23 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
+       data: { redeemExecutionKey: key ?? null, redeemResult: JSON.stringify(payload) },
+     });
+ 
++    // Account-flow row: mirrors the funding-account CREDIT as a ledger `Transaction` in the SAME
++    // transaction, categorized as investment flow (`INVESTMENT_FLOW_CATEGORY`) so redeemed principal
++    // is never mislabeled as salary/大额消费 income.
++    await tx.transaction.create({
++      data: {
++        accountId: account.id,
++        userId: input.userId,
++        amount: credit, // INCREASE: positive
++        direction: 'CREDIT',
++        category: INVESTMENT_FLOW_CATEGORY,
++        merchant: '赎回',
++        channel: 'APP',
++        occurredAt: new Date(now),
++        currency: 'CNY',
++      },
++    });
++
+     return payload;
+   });
+ }
+diff --git a/banking-sdk/transaction.ts b/banking-sdk/transaction.ts
+index 13ee651..813f9c6 100644
+--- a/banking-sdk/transaction.ts
++++ b/banking-sdk/transaction.ts
+@@ -9,6 +9,7 @@ import { ANOMALY_AMOUNT_THRESHOLD } from '../lib/constants';
+ import { demoNow } from '../lib/clock';
+ import { monthRange, previousMonthRange } from '../lib/date';
+ import { AppError } from '../lib/errors';
++import { INVESTMENT_FLOW_CATEGORY } from './categories';
+ import { addMoney, round2 } from '../lib/money';
+ import { transactions } from '../lib/db/repositories';
+ import type {
+@@ -84,7 +85,13 @@ export async function analyzeSpending(
+ export async function detectAnomaly(userId: string): Promise<AnomalyReport> {
+   const rows = await transactions.listTransactions({ userId });
+   const anomalies = rows
+-    .filter((row) => Math.abs(row.amount) > ANOMALY_AMOUNT_THRESHOLD)
++    .filter(
++      (row) =>
++        row.isAnomaly ||
++        (row.direction === 'DEBIT' &&
++          row.category !== INVESTMENT_FLOW_CATEGORY &&
++          Math.abs(row.amount) > ANOMALY_AMOUNT_THRESHOLD),
++    )
+     .map((row) => toAnomalyItem(row));
+ 
+   return { anomalies, scanned: rows.length, generatedAt: demoNow() };
+@@ -136,10 +143,15 @@ function severityFor(absoluteAmount: number): AnomalySeverity {
+ /**
+  * Ordinary DEBIT rows in `[from, to)`. Rows flagged `isAnomaly` are EXCLUDED so the seeded
+  * ¥6,999 Apple Store anomaly never inflates the spend totals (本月 must be exactly ¥5,800).
++ * Investment-flow rows (category `INVESTMENT_FLOW_CATEGORY`) are EXCLUDED as well: moving principal
++ * into/out of a product is not consumption spend.
+  */
+ async function ordinaryDebits(userId: string, from: Date, to: Date): Promise<TransactionRow[]> {
+   const rows = await transactions.listTransactions({ userId, from, to });
+-  return rows.filter((row) => row.direction === 'DEBIT' && !row.isAnomaly);
++  return rows.filter(
++    (row) =>
++      row.direction === 'DEBIT' && !row.isAnomaly && row.category !== INVESTMENT_FLOW_CATEGORY,
++  );
+ }
+ 
+ /** Cent-safe sum of the magnitudes of the given (DEBIT) rows. */
