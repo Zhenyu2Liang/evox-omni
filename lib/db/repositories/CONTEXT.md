@@ -95,6 +95,13 @@ that accepts one.
   (consumed by `audit/`).
 - `session.ts` (`AgentSession`) — `listSessions(userId)`, `getSession(id)`, `createSession({userId, stateJson, status?, locked?})`,
   `updateSessionState(id, stateJson)`, `setSessionLocked(id, locked)`, `updateSessionStatus(id, status)`, `deleteSession(id)`.
+- `circuitBreaker.ts` (`CircuitBreakerState`) — `BreakerSnapshot {failures, locked, lockedAt}`, `ResetBreakerExpectation {locked, lockedAt}`, `ResetBreakerResult {applied, before, after}`;
+  `getBreakerState(key, client?): Promise<CircuitBreakerState | null>` (the optional `client` is for an in-transaction read — a global read inside an open transaction deadlocks on a single-connection DB),
+  `upsertFailure({key, userId?, max, now}): Promise<BreakerSnapshot & {didLock}>` (one consecutive failure; locks on reaching `max`; idempotent while already locked),
+  `recordSuccessState(key): Promise<BreakerSnapshot>` (counter reset WITHOUT unlocking),
+  `resetBreakerState(key, opts?: { client?: DbClient; expect?: ResetBreakerExpectation }): Promise<ResetBreakerResult>` — clears to `{failures:0, locked:false, lockedAt:null}`.
+  WITHOUT `expect`: an UNCONDITIONAL clear (`applied: true`). WITH `expect`: an atomic compare-and-set — the clear is written ONLY when the current row matches `expect` (`locked` equal AND `lockedAt` equal by millisecond value, `null`==`null`); on mismatch NOTHING is written and it returns `applied:false` with `before` (= `after`) = the current snapshot (`EMPTY_SNAPSHOT` when no row, so `after` stays a non-null `BreakerSnapshot`).
+  `opts.client` routes BOTH the read and the write through that client (so an unlock + its audit commit in one `$transaction`); omitted → its own `prisma.$transaction`. Callers still own the unlock POLICY.
 - `pendingAction.ts` (`PendingAction`, `MfaChallenge`) — `PendingActionWithMfa = PendingAction & { mfa }`,
   `PendingActionOwnership {id, userId, sessionId, status}`, `PendingActionPlanLink {id, taskId, nodeId}`;
   `CreatePendingActionInput {sessionId, userId, toolName, args, tier, requiresMfa, summary, status?, userRequest?, intent?, taskId?, nodeId?}`
