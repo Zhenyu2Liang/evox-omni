@@ -228,7 +228,7 @@ COMPLETELY unaffected by both guards, and a committed ledger debit is NEVER roll
 
 ### `index.ts` — facade
 ```ts
-const security = { gateway, permission, risk, mfa, circuitBreaker, injection }
+const security = { gateway, permission, risk, mfa, circuitBreaker, injection, recovery, writePolicy }
 ```
 
 ### `recipient-resolution.ts` — Park-time transfer-recipient resolution (confirmation card ⇄ execution agreement)
