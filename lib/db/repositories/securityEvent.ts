@@ -79,6 +79,7 @@ export async function insertSecurityEvent(
       kind: event.kind,
       severity: event.severity,
       message: event.message,
+      userId: event.userId ?? null,
       detail: event.detail == null ? null : toJson(event.detail),
     },
   });
@@ -116,6 +117,7 @@ function toSecurityEventEntry(row: SecurityEvent): SecurityEventEntry {
     id: row.id,
     timestamp: row.timestamp.getTime(),
     sessionId: row.sessionId,
+    userId: row.userId ?? undefined,
     kind: row.kind as SecurityEventKind,
     severity: row.severity as SecurityEventEntry['severity'],
     message: row.message,

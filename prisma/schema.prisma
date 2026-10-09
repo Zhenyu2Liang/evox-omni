@@ -391,6 +391,22 @@ model MfaChallenge {
   expiresAt   DateTime?
 }
 
+// Durable SECURITY CIRCUIT-BREAKER state. Persisted (NOT in-process) and keyed by the OWNER
+// (`user:<userId>` for a real session/user, else `session:<actor>`), so a new session or a new
+// process cannot bypass a lock. `failures` counts consecutive failed strong-verifications;
+// reaching the threshold sets `locked` + `lockedAt`. Clearing a lock additionally requires the
+// mock verification code OR an elapsed cooldown (see `security/circuit-breaker.ts`).
+model CircuitBreakerState {
+  key       String    @id
+  userId    String?
+  failures  Int       @default(0)
+  locked    Boolean   @default(false)
+  lockedAt  DateTime?
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId])
+}
+
 // Unified EXECUTION RECEIPT / transaction-fact: the durable proof that a gated side effect with a
 // given execution identity (`userId` + `key`) ALREADY COMMITTED. `requestDigest` is the canonical
 // fingerprint of the ORIGINAL request, so a replay with the SAME identity returns the stored

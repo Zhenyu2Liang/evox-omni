@@ -25,6 +25,8 @@ export interface SecurityEvent {
   id?: string;
   timestamp: number;
   sessionId: string;
+  /** Owning user id, when the event can be attributed to a user (persisted for per-user audit). */
+  userId?: string;
   kind: SecurityEventKind;
   severity: 'low' | 'medium' | 'high';
   message: string;
