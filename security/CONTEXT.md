@@ -100,6 +100,10 @@ async function recordSuccess(actor: string): Promise<CircuitBreakerState>       
 async function reset(actor: string): Promise<void>                                         // ungated, unaudited, route-less test-only clear
 async function resetSession(actor: string, opts?: ResetSessionOptions): Promise<CircuitBreakerState>   // GATED, audited security-center UNLOCK: clears state + emits SECURITY_RESET
 ```
+State is DURABLE: it lives in the DB (Prisma model `CircuitBreakerState`, via `lib/db/repositories/circuitBreaker.ts`) keyed by the OWNER, not by the raw session id and not in process memory.
+The owner key is derived by `resolveBreakerOwner(actor)`: the persisted session's `userId` (`user:<userId>`), else the user actor (`user:<id>`), else a synthesized `session:<actor>` for unpersisted actors.
+Because a real user's key is shared by ALL of that user's sessions, a lock survives a NEW SESSION and a PROCESS RESTART — rotating the session id cannot bypass it.
+Every mutation is async and accepts an optional `client?: DbClient` to bind its reads/writes to an OPEN interactive transaction (the SDK write-boundary recheck passes the transaction client to avoid deadlocking on a single-connection DB).
 Event details are COMPLETE audit records:
 - `CIRCUIT_BREAKER_TRIPPED` (severity `high`) → `detail: { failures, max, result: 'session_locked' }`; emitted exactly once per trip (a further failure while locked neither recounts nor re-emits).
 - `SECURITY_RESET` (severity `medium`) → `detail: { actor, reason, wasLocked, previousFailures, priorLockedAt? }`; `actor` defaults to `'user'`, `reason` to a generic Chinese string; `priorLockedAt` is present only when the prior state had a `lockedAt`.
