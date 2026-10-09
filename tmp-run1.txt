@@ -1,0 +1,55 @@
+﻿node.exe : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cj
+s-node-api-deprecated for more details.[39m
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/projects/banking-agent/.genesis/workers/worker_T2_A28[39m
+
+ [32m✓[39m tests/unit/banking-sdk/investment-flow.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 679[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/transfer-receipt.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 488[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/idempotent.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 426[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/investment.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 635[2mms[22m[39m
+   [33m[2m✓[22m[39m banking-sdk/investment · listHoldings[2m > [22meach HoldingView carries productName / riskLevel / amount / profit / boughtAt / status [33m345[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/transfer.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 579[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/atomicity.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 294[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/subscription.test.ts [2m([22m[2m10 tests[22m[2m)[22m[90m 293[2mms[22m[39m
+ [31m❯[39m tests/unit/banking-sdk/anomaly.test.ts [2m([22m[2m8 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[90m 284[2mms[22m[39m
+[31m   [31m×[31m banking-sdk/transaction · detectAnomaly flags EXPENSE rows only[2m > [22mlistAnomalies (persisted isAnomaly rows) reports only the Apple Store row[90m 12[2mms[22m[31m[39m
+[31m     → expected [ undefined ] to deeply equal [ 'tx_anomaly_apple' ][39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[1m[7m Failed Tests 1 [27m[22m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[31m[1m[7m FAIL [27m[22m[39m tests/unit/banking-sdk/anomaly.test.ts[2m > [22mbanking-sdk/transaction · detectAn
+omaly flags EXPENSE rows only[2m > [22mlistAnomalies (persisted isAnomaly rows) reports only the Apple Store row
+[31m[1mAssertionError[22m: expected [ undefined ] to deeply equal [ 'tx_anomaly_apple' ][39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[2m  Array [[22m
+[32m-   "tx_anomaly_apple",[39m
+[31m+   undefined,[39m
+[2m  ][22m
+
+[36m [2m❯[22m tests/unit/banking-sdk/anomaly.test.ts:[2m203:42[22m[39m
+    [90m201| [39m    [35mconst[39m flagged[33m:[39m [33mTransactionView[39m[] [33m=[39m [35mawait[39m banki
+ng[33m.[39mtransaction[33m.[39m[34mlistA[39m…
+    [90m202| [39m
+    [90m203| [39m    [34mexpect[39m(flagged[33m.[39m[34mmap[39m((row) [33m=>[39m row[33m.[39mid))[33m.[39
+m[34mtoEqual[39m([[33mANOMALY_TRANSACTION[39m[33m.[39m…
+    [90m   | [39m                                         [31m^[39m
+    [90m204| [39m  })[33m;[39m
+    [90m205| [39m})[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m7 passed[39m[22m[90m (8)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m81 passed[39m[22m[90m (82)[39m
+[2m   Start at [22m 15:10:55
+[2m   Duration [22m 15.27s[2m (transform 239ms, setup 9.52s, collect 887ms, tests 3.68s, environment 1ms, prepare 345ms)[22m
+
+EXIT=1

@@ -1,0 +1,381 @@
+﻿node.exe : [33mThe CJS build of Vite's Node API is deprecated. See https://vite.dev/guide/troubleshooting.html#vite-cj
+s-node-api-deprecated for more details.[39m
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([33mThe CJS bu...e details.[39m:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90mD:/projects/banking-agent/.genesis/workers/worker_T2_A28[39m
+
+ [32m✓[39m tests/app/security-workflow-http.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 995[2mms[22m[39m
+   [33m[2m✓[22m[39m [integration] identity — a query param NEVER authenticates on verify/cancel/tasks/reset[2m > [22m7 — NO cookie + a forged ?sessionId=<victim>&userId=<victim> on verify/cancel/tasks/reset is 403 everywhere and leaves the victim untouched [33m345[2mms[22m[39m
+ [32m✓[39m tests/app/cancel-safety-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 444[2mms[22m[39m
+ [32m✓[39m tests/app/concurrent-execution-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 447[2mms[22m[39m
+[90mstdout[2m | tests/integration/action-refresh.test.ts[2m > [22m[2m[integration] state convergence across a refresh / restart[2m > [22m[2man IN-FLIGHT confirm is surfaced as `processing` and a concurrent duplicate is refused without a second side effect
+[22m[39mREVIEW_CONVERGENCE_PROCESSING_REFRESH {"barrierEngaged":true,"barrierCalls":1,"inFlightStatus":"confirmed","inFlightResult":null,"inFlightLease":"lease_e4d910a7-0d4e-412c-96e8-6500c951a61c","inFlightLeaseFuture":true,"refreshHttp":200,"refreshAttention":"processing","refreshStatus":"confirmed","debitsWhileInFlight":0,"duplicateHttp":200,"duplicateOk":false,"duplicateStatus":"confirmed","leaseSurvivedDuplicate":true,"refreshAttentionAfterDuplicate":"processing","finalHttp":200,"finalOk":true,"finalResponseStatus":"executed","storedStatus":"executed","storedResult":"{\"ok\":true,\"data\":{\"success\":true,\"transactionId\":\"txidem_e3e69b10f0ff774f7cf842cae8894528\",\"newBalance\":23380,\"recipient\":{\"contactId\":\"contact_zhangwei\",\"name\":\"张伟\",\"phone\":\"139****0002\",\"bank\":\"招商银行\"},\"amount\":200,\"occurredAt\":1790308800000},\"summary\":\"已向 张伟 转账 ¥200.00，账户余额 ¥23,380.00。\"}","storedLease":null,"debitsFinal":1,"balanceFinal":23380,"surfacedAfter":false}
+
+[90mstdout[2m | tests/integration/action-refresh.test.ts[2m > [22m[2m[integration] state convergence across a refresh / restart[2m > [22m[2man IN-FLIGHT MFA verify is surfaced as `processing` too (verify variant)
+[22m[39mREVIEW_CONVERGENCE_PROCESSING_VERIFY {"barrierEngaged":true,"barrierCalls":1,"inFlightStatus":"confirmed","inFlightResult":null,"inFlightLease":"lease_3c87b7a0-8b76-44b9-8fff-b1f9a368d746","refreshAttention":"processing","refreshStatus":"confirmed","finalOk":true,"finalResponseStatus":"executed","mfaResult":"success","storedStatus":"executed","storedLease":null,"debitFinal":1,"balanceFinal":18580,"surfacedAfter":false}
+
+[90mstdout[2m | tests/integration/action-refresh.test.ts[2m > [22m[2m[integration] state convergence across a refresh / restart[2m > [22m[2ma no-result wedge stays VISIBLE after a refresh AND after a module reload, and is recoverable from the refreshed entry
+[22m[39mREVIEW_CONVERGENCE_WEDGE_AFTER_REFRESH {"wedgeCalls":1,"firstHttp":500,"wedgedStatus":"confirmed","wedgedResult":null,"wedgedLease":null,"refreshHttp":200,"refreshVisible":true,"refreshAttention":"recoverable","refreshStatus":"confirmed","liveAfterReload":0,"reloadHttp":200,"reloadVisible":true,"reloadAttention":"recoverable","reloadStatus":"confirmed","discoveredIdMatches":true,"recoveredHttp":200,"recoveredOk":true,"recoveredActionId":"cmv0mr2ml000ef8ksm8r4r7vk","recoveredStatus":"executed","storedStatus":"executed","storedResult":"{\"ok\":true,\"data\":{\"success\":true,\"transactionId\":\"txidem_31ba29df7f54737492ddb8b9d2afe11d\",\"newBalance\":23280,\"recipient\":{\"contactId\":\"contact_zhangwei\",\"name\":\"张伟\",\"phone\":\"139****0002\",\"bank\":\"招商银行\"},\"amount\":300,\"occurredAt\":1790308800000},\"summary\":\"已向 张伟 转账 ¥300.00，账户余额 ¥23,280.00。\"}","debitFinal":1,"balanceFinal":23280,"surfacedAfter":false}
+
+[90mstdout[2m | tests/integration/action-refresh.test.ts[2m > [22m[2m[integration] state convergence across a refresh / restart[2m > [22m[2mrecovery does NOT downgrade a success and is idempotent on a repeat recovery + refresh
+[22m[39mREVIEW_CONVERGENCE_RECOVERY_IDEMPOTENT {"firstHttp":500,"rec1Http":200,"rec1Ok":true,"rec1Message":"该操作此前已执行但结果未留存，已从其已提交的执行凭证中恢复成功（副作用仅发生一次，未重新执行）。","statusAfterRecovery":"executed","resultAfterRecovery":true,"auditAfterRecovery":1,"debitAfterRecovery":1,"balanceAfterRecovery":23330,"rec2Http":200,"rec2Ok":false,"rec2Status":"executed","rec2Message":"该操作当前无需恢复。","statusAfterRepeat":"executed","auditAfterRepeat":1,"debitAfterRepeat":1,"balanceAfterRepeat":23330,"surfacedAfter":false}
+
+ [32m✓[39m tests/integration/action-refresh.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 476[2mms[22m[39m
+ [32m✓[39m tests/app/actions-http.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 805[2mms[22m[39m
+ [32m✓[39m tests/unit/security/gateway.test.ts [2m([22m[2m27 tests[22m[2m)[22m[33m 1141[2mms[22m[39m
+ [32m✓[39m tests/app/tasks-http.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 949[2mms[22m[39m
+   [33m[2m✓[22m[39m [integration] GET /api/tasks/[id] + GET /api/tasks — refresh recovery / listing[2m > [22mGET /api/tasks lists the session plans newest-first; an absent session yields { plans: [] } [33m330[2mms[22m[39m
+[90mstdout[2m | tests/integration/takeover-controls.test.ts[2m > [22m[2mREVIEW_TAKEOVER_AT_NODE_CLAIM: a takeover while blocked in the running notification launches zero tools and publishes no stale progress
+[22m[39mREVIEW_TAKEOVER_AT_NODE_CLAIM {"callsAtBarrier":0,"oldToolCalls":0,"lateNodeUpdates":[],"latePlans":[],"takeoverStatus":"success","oldStatus":"success","storedStatus":"success","nodeStatus":"success","budgets":1}
+
+[90mstdout[2m | tests/integration/takeover-controls.test.ts[2m > [22m[2mREVIEW_TAKEOVER_BEFORE_WRITE: a takeover fences the pre-write zombie so no duplicate side effect is ever committed
+[22m[39mREVIEW_TAKEOVER_BEFORE_WRITE {"sdkAtBarrier":0,"sdkWrites":2,"oldToolCalls":1,"budgetsAtTakeover":1,"budgets":1,"keys":["nxe:cmv0mr70x0009f8w4t0ys8y2z:budget"],"lateNodeUpdates":[],"latePlans":[],"takeoverStatus":"success","oldStatus":"success","storedStatus":"success","nodeStatus":"success"}
+
+[90mstdout[2m | tests/integration/takeover-controls.test.ts[2m > [22m[2mREVIEW_CANCEL_FIRST: a taken-over then cancelled plan fences the blocked SDK write before any side effect
+[22m[39mREVIEW_CANCEL_FIRST {"sdkCalls":1,"cancelledStatus":"cancelled","budgetsAfterRelease":0,"winnerStatus":{"id":"cmv0mr71v000gf8w4x64xqqbg","sessionId":"cmv0mr71u000ff8w46e47eo7r","goal":"屏障c：取消优先","status":"cancelled","nodes":[{"id":"budget","name":"屏障c预算","dependencies":[],"kind":"tool","tool":"reserve_budget","args":{"name":"屏障c预算","amount":10}}],"results":[{"id":"budget","name":"屏障c预算","status":"cancelled","tool":"reserve_budget","output":{"cancelled":true,"reason":"cancelled by user","executedNodes":[]},"startedAt":1790308800000,"endedAt":1790308800000}],"createdAt":1791530082931,"generation":2,"updatedAt":1791530082965},"storedStatus":"cancelled","oldStatus":"cancelled"}
+
+[90mstdout[2m | tests/integration/takeover-controls.test.ts[2m > [22m[2mREVIEW_BUSINESS_COMMITS_FIRST: a cancel after the side effect committed retains the committed fact
+[22m[39mREVIEW_BUSINESS_COMMITS_FIRST {"budgetsAtBarrier":1,"sdkWrites":1,"cancelledStatus":"cancelled","budgetsAfterRelease":1,"storedStatus":"cancelled","oldStatus":"success"}
+
+[90mstdout[2m | tests/integration/takeover-controls.test.ts[2m > [22m[2mREVIEW_PAUSE_THEN_CONFIRM: confirming a parked node on a paused plan keeps the plan paused
+[22m[39mREVIEW_PAUSE_THEN_CONFIRM {"confirmOk":true,"pausedStatus":"paused","planAfterConfirm":"paused","budgetsAfterConfirm":0,"balanceAfterConfirm":23380,"debitsAfterConfirm":1,"resumedStatus":"success","storedStatus":"success","nodeStatuses":["b:success","t:success"],"budgetsAfterResume":1}
+
+[90mstdout[2m | tests/integration/takeover-controls.test.ts[2m > [22m[2mREVIEW_CONCURRENT_TAKEOVER: two concurrent resumes of one stale claim yield exactly one executor
+[22m[39mREVIEW_CONCURRENT_TAKEOVER {"replyStatuses":["success","running"],"planStatus":"success","nodeStatus":"success","budgets":1,"keys":["nxe:cmv0mr75w0014f8w41w6aw947:budget"]}
+
+ [32m✓[39m tests/integration/takeover-controls.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 477[2mms[22m[39m
+ [32m✓[39m tests/app/dag-recovery-http.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 445[2mms[22m[39m
+ [32m✓[39m tests/unit/security/transfer-limits-concurrency.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 677[2mms[22m[39m
+[90mstdout[2m | tests/integration/standalone-recovery.test.ts[2m > [22m[2ma STANDALONE transfer wedge is replayed idempotently to executed (side effect exactly once)
+[22m[39mREVIEW_STANDALONE_TRANSFER_REPLAY {"firstHttp":500,"repeatedHttp":200,"repeatedOk":true,"actionStatus":"executed","storedResultOk":true,"debitFinal":1,"balanceFinal":23380,"visibleAfter":false}
+
+[90mstdout[2m | tests/integration/standalone-recovery.test.ts[2m > [22m[2ma STANDALONE apply_virtual_card wedge cannot be replayed → settles needs_reconciliation, stays visible, no duplicate card
+[22m[39mREVIEW_STANDALONE_VIRTUAL_CARD_RECONCILE {"firstHttp":500,"repeatedHttp":200,"repeatedOk":false,"actionStatus":"needs_reconciliation","virtualBefore":0,"virtualAfter":1,"txBefore":31,"txAfter":31,"balance":23580,"visible":true,"listedRowStatus":"needs_reconciliation"}
+
+[90mstdout[2m | tests/integration/standalone-recovery.test.ts[2m > [22m[2ma STANDALONE set_card_limit wedge is never replayed (needs_reconciliation) and never re-applies its old limit
+[22m[39mREVIEW_STANDALONE_CARD_LIMIT_RECONCILE {"firstHttp":500,"repeatedHttp":200,"repeatedOk":false,"actionStatus":"needs_reconciliation","finalLimitRows":1,"finalLimitAmount":500,"txAfter":31,"balance":23580,"visible":true}
+
+[90mstdout[2m | tests/integration/standalone-recovery.test.ts[2m > [22m[2ma SIMULATED PROCESS RESTART (fresh module graph, empty liveness registry) still recovers the standalone wedge
+[22m[39mREVIEW_STANDALONE_PROCESS_RESTART {"firstHttp":500,"recoveredHttp":200,"recoveredOk":false,"actionStatus":"needs_reconciliation","virtualCount":1,"visible":true}
+
+[90mstdout[2m | tests/integration/standalone-recovery.test.ts[2m > [22m[2mrepeat confirm + page refresh after recovery stay consistent (idempotent, no extra side effect)
+[22m[39mREVIEW_STANDALONE_REPEAT_REFRESH {"recoveredStatus":"needs_reconciliation","againHttp":200,"againStatus":"needs_reconciliation","storedStatus":"needs_reconciliation","virtualAfterRecovery":1,"virtualAfterAgain":1,"txAfterRecovery":31,"txAfterAgain":31,"balanceAfterRecovery":23580,"balanceAfterAgain":23580,"visible":true,"refreshedRowStatus":"needs_reconciliation"}
+
+[90mstdout[2m | tests/integration/standalone-recovery.test.ts[2m > [22m[2ma STANDALONE transfer whose replay FAILS settles failed (never executed) and is not surfaced
+[22m[39mREVIEW_STANDALONE_FAILED_REPLAY {"firstHttp":500,"repeatedHttp":200,"repeatedOk":false,"actionStatus":"failed","replayOk":false,"txBefore":31,"txAfter":31,"balance":23580,"visible":false}
+
+ [32m✓[39m tests/integration/standalone-recovery.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 550[2mms[22m[39m
+[90mstdout[2m | tests/integration/execution-barriers.test.ts[2m > [22m[2ma takeover at the pre-tool barrier stops the zombie before its successor tool and publishes no stale progress
+[22m[39mREVIEW_BARRIER_PRE_TOOL {"barrierToolCalls":0,"oldFirstCalls":0,"oldSuccessorCalls":0,"lateNodeUpdates":[],"latePlans":[],"takeoverStatus":"success","oldStatus":"success","storedStatus":"success","storedNodeStatuses":["first:success","second:success"],"budgets":2,"budgetsAtTakeover":2,"winnerNodeStatuses":["first:success","second:success"]}
+
+[90mstdout[2m | tests/integration/execution-barriers.test.ts[2m > [22m[2ma takeover during a blocked async notification leaves the zombie with ZERO tool calls and zero stale progress
+[22m[39mREVIEW_BARRIER_NOTIFICATION {"callsAtBarrier":0,"oldToolCalls":0,"lateNodeUpdates":[],"latePlans":[],"takeoverStatus":"success","oldStatus":"success","storedStatus":"success","storedNodeStatuses":["budget:success"],"budgets":1,"budgetsAtTakeover":1}
+
+[90mstdout[2m | tests/integration/execution-barriers.test.ts[2m > [22m[2ma takeover between the node claim and the tool write fences the zombie write and keeps exactly one side effect
+[22m[39mREVIEW_BARRIER_PRE_WRITE {"oldToolCalls":1,"writesAtBarrier":0,"oldWriteCalls":1,"lateNodeUpdates":[],"latePlans":[],"nodeStatusAtTakeover":"success","takeoverStatus":"success","oldStatus":"success","storedStatus":"success","storedNodeStatus":"success","budgets":1,"budgetsAtTakeover":1,"budgetKeys":["nxe:cmv0mral6000kf8r4hqjq0xws:budget"]}
+
+[90mstdout[2m | tests/integration/execution-barriers.test.ts[2m > [22m[2ma takeover after a committed gated side effect preserves the success fact and never duplicates the side effect or its audit
+[22m[39mREVIEW_COMMITTED_SIDE_EFFECT {"confirmedOk":true,"confirmActionStatus":"executed","confirmPlanStatus":"success","confirmNodeStatus":"success","resumedStatus":"success","duplicateOk":false,"finalPlanStatus":"success","finalNodeStatus":"success","actionStatus":"executed","cardLimits":[1500],"auditCount":1,"auditStatuses":["success"],"auditHasResult":[true],"tasksForSession":1,"actionsOfTask":1}
+
+ [32m✓[39m tests/integration/execution-barriers.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 428[2mms[22m[39m
+ [32m✓[39m tests/app/chat-http.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 453[2mms[22m[39m
+ [32m✓[39m tests/app/identity-http.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 493[2mms[22m[39m
+ [32m✓[39m tests/app/mfa-escalation-upgrade-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 446[2mms[22m[39m
+ [32m✓[39m tests/app/session-takeover-http.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 506[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/lifecycle.test.ts [2m([22m[2m20 tests[22m[2m)[22m[90m 8[2mms[22m[39m
+ [32m✓[39m tests/app/ledger-consistency-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 586[2mms[22m[39m
+[90mstdout[2m | tests/integration/restart-recovery.test.ts[2m > [22m[2ma standalone transfer wedge recovers from PERSISTED evidence after the in-process registry is cleared
+[22m[39mREVIEW_RESTART_STANDALONE {"injectionCalls":1,"wedgedStatus":"confirmed","wedgedResult":null,"wedgedLease":null,"liveBeforeRestart":1,"liveAfterRestart":0,"refreshStatus":"confirmed","refreshAttention":"recoverable","discoveredIdMatches":true,"recoveredHttp":200,"recoveredOk":true,"recoveredStatus":"executed","storedStatus":"executed","storedResultOk":true,"receipts":1,"debits":1,"balance":23380,"auditRows":1}
+
+[90mstdout[2m | tests/integration/restart-recovery.test.ts[2m > [22m[2ma plan-linked transfer wedge resumes and backfills its node from persisted evidence after a restart
+[22m[39mREVIEW_RESTART_PLAN {"injectionCalls":1,"wedgedStatus":"confirmed","wedgedResult":null,"liveAfterRestart":0,"resumeHttp":200,"planStatus":"success","storedPlanStatus":"success","nodeStatus":"success","actionStatus":"executed","actionResultOk":true,"receipts":1,"debits":1,"balance":23380,"auditRows":1}
+
+[90mstdout[2m | tests/integration/restart-recovery.test.ts[2m > [22m[2mrepeat recovery across a module reset is idempotent (no second debit, no second execution audit)
+[22m[39mREVIEW_RESTART_REPEAT_IDEMPOTENT {"live1":0,"live2":0,"rec1Http":200,"rec1Ok":true,"rec1Status":"executed","rec2Http":200,"rec2Ok":false,"rec2Status":"executed","storedStatus":"executed","receipts":1,"debits":1,"balance":23380,"auditRows":1}
+
+ [32m✓[39m tests/integration/restart-recovery.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 664[2mms[22m[39m
+ [32m✓[39m tests/app/malicious-input-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 462[2mms[22m[39m
+ [32m✓[39m tests/app/task-resume-retry-http.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 298[2mms[22m[39m
+ [32m✓[39m tests/app/nl-entry-http.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 376[2mms[22m[39m
+ [32m✓[39m tests/app/plan-pause-terminal-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 388[2mms[22m[39m
+ [32m✓[39m tests/app/confirm-continuation-fencing.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 592[2mms[22m[39m
+ [32m✓[39m tests/integration/message-protocol.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 412[2mms[22m[39m
+ [32m✓[39m tests/app/plan-linkage-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 357[2mms[22m[39m
+[90mstdout[2m | tests/integration/transfer-history.test.ts[2m > [22m[2mREVIEW_TXN_CONTACT_RENAMED — a committed transfer is recovered from its committed evidence after the recipient contact is renamed
+[22m[39mREVIEW_TXN_CONTACT_RENAMED {"http":200,"ok":true,"status":"executed","message":"该操作此前已执行但结果未留存，已从其已提交的执行凭证中恢复成功（副作用仅发生一次，未重新执行）。","storedStatus":"executed","resultOk":true,"debitsBefore":1,"debitsAfter":2,"transferDebitsAfter":1,"finalBalance":23380,"debitCounterparty":"contact_zhangwei"}
+
+[90mstdout[2m | tests/integration/transfer-history.test.ts[2m > [22m[2mREVIEW_TXN_CONTACT_DELETED — recovery survives deletion of the recipient contact (the committed evidence is looked up first)
+[22m[39mREVIEW_TXN_CONTACT_DELETED {"http":200,"ok":true,"status":"executed","message":"该操作此前已执行但结果未留存，已从其已提交的执行凭证中恢复成功（副作用仅发生一次，未重新执行）。","storedStatus":"executed","debitsBefore":1,"debitsAfter":2,"transferDebitsAfter":1,"finalBalance":23380}
+
+[90mstdout[2m | tests/integration/transfer-history.test.ts[2m > [22m[2mREVIEW_TXN_PLAN_CANCEL — a committed plan transfer fact is retained across a plan cancellation and never downgraded
+[22m[39mREVIEW_TXN_PLAN_CANCEL {"cancelHttp":200,"cancelStatus":"cancelled","storedPlanStatus":"cancelled","afterCancelAction":"confirmed","afterCancelDebits":1,"afterCancelAmountDebits":2,"afterCancelBalance":23380,"repeatedHttp":200,"repeatedOk":false,"repeatedStatus":"confirmed","repeatedMessage":"该操作所属的任务计划已取消（cmv0mrm4q000cf8z4xbc3vo0w），已拒绝执行。","afterRepeatAction":"confirmed","afterRepeatDebits":1,"afterRepeatAmountDebits":2,"afterRepeatBalance":23380,"visible":true,"resumeHttp":200,"resumeStatus":"cancelled","afterResumeAction":"confirmed","debitsBefore":1,"debitCounterparty":"contact_zhangwei"}
+
+ [32m✓[39m tests/integration/transfer-history.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 343[2mms[22m[39m
+ [32m✓[39m tests/app/cumulative-risk-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 515[2mms[22m[39m
+ [32m✓[39m tests/app/cancel-during-authorization-http.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 416[2mms[22m[39m
+ [32m✓[39m tests/integration/recovery-authorization.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 1149[2mms[22m[39m
+[90mstdout[2m | tests/integration/committed-outcomes.test.ts[2m > [22m[2ma plan-linked transfer wedge recovers to the committed truth on resume: success node, executed action, one receipt, one debit
+[22m[39mREVIEW_COMMITTED_PLAN_WEDGE {"firstHttp":500,"wedgedStatus":"confirmed","planStatus":"success","nodeStatus":"success","actionStatus":"executed","resultOk":true,"receipts":1,"debits":1,"balance":23380}
+
+[90mstdout[2m | tests/integration/committed-outcomes.test.ts[2m > [22m[2ma standalone transfer wedge recovers via the recover route from its committed receipt: executed, one receipt, one debit, surfaced no more
+[22m[39mREVIEW_COMMITTED_STANDALONE_RECOVER {"firstHttp":500,"recoverHttp":200,"recoverOk":true,"actionStatus":"executed","resultOk":true,"receipts":1,"debits":1,"balance":23330,"surfaced":false}
+
+[90mstdout[2m | tests/integration/committed-outcomes.test.ts[2m > [22m[2ma standalone apply_virtual_card wedge (not proven idempotent) settles needs_reconciliation with exactly one card and stays surfaced
+[22m[39mREVIEW_COMMITTED_VIRTUAL_CARD_WEDGE {"firstHttp":500,"recoverHttp":200,"recoverOk":false,"recoverStatus":"needs_reconciliation","actionStatus":"needs_reconciliation","virtualBefore":0,"virtualAfter":1,"txBefore":31,"txAfter":31,"balance":23580,"surfaced":true,"surfacedStatus":"needs_reconciliation"}
+
+ [32m✓[39m tests/integration/committed-outcomes.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 365[2mms[22m[39m
+ [32m✓[39m tests/app/mfa-escalation-http.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 410[2mms[22m[39m
+[90mstdout[2m | tests/integration/execution-integrity.test.ts[2m > [22m[2mthe initial submit executor cannot overwrite a takeover completed node
+[22m[39mREVIEW_EXEC_INITIAL_TAKEOVER {"takeoverStatus":"success","finalStatus":"success","nodeStatus":"success","budgets":1}
+
+[90mstdout[2m | tests/integration/execution-integrity.test.ts[2m > [22m[2man obsolete resumed executor cannot persist a late success over the takeover node result
+[22m[39mREVIEW_OBSOLETE_LATE_SUCCESS {"takeoverStatus":"success","finalStatus":"success","nodeStatus":"success","nodeOutput":"{\"id\":\"cmv0mrrfn000ff83oml2ovi10\",\"name\":\"执行完整性晚成功预算\",\"amount\":10,\"status\":\"RESERVED\",\"createdAt\":1791530109348}","budgets":1}
+
+[90mstdout[2m | tests/integration/execution-integrity.test.ts[2m > [22m[2man obsolete resumed executor cannot mark a takeover completed node failed
+[22m[39mREVIEW_OBSOLETE_LATE_FAILURE {"takeoverStatus":"success","finalStatus":"success","nodeStatus":"success","nodeError":null,"budgets":1}
+
+[90mstdout[2m | tests/integration/execution-integrity.test.ts[2m > [22m[2ma stale node token cannot write a partial result after the takeover completed the node
+[22m[39mREVIEW_STALE_NODE_TOKEN_PARTIAL {"takeoverStatus":"success","capturedToken":"string","nodeStatus":"success","nodeOutput":"{\"id\":\"cmv0mrri3000xf83ojeojbgne\",\"name\":\"执行完整性部分写入预算\",\"amount\":10,\"status\":\"RESERVED\",\"createdAt\":1791530109436}"}
+
+[90mstdout[2m | tests/integration/execution-integrity.test.ts[2m > [22m[2man obsolete resumed executor cannot skip a dependent already completed by the takeover
+[22m[39mREVIEW_OBSOLETE_DEPENDENT_SKIP {"takeoverStatus":"success","finalStatus":"success","budgetStatus":"success","tailStatus":"success"}
+
+[90mstdout[2m | tests/integration/execution-integrity.test.ts[2m > [22m[2ma stored successful result stays consistent when the separate terminal status write fails
+[22m[39mREVIEW_RESULT_STATUS_ATOMIC {"firstOk":true,"firstStatus":"executed","actionStatus":"executed","hasResult":true,"savedOk":true,"consistent":true,"planStatus":"success","repeat":false,"amount":1500,"rows":1}
+
+[90mstdout[2m | tests/integration/execution-integrity.test.ts[2m > [22m[2mthe result payload and the terminal status are written in one atomic transaction
+[22m[39mREVIEW_ATOMIC_RESULT_STATUS {"failureHttp":500,"failureOk":false,"actionStatus":"confirmed","hasResult":false,"consistent":true,"retryHttp":200,"retryOk":false,"cards":1}
+
+ [32m✓[39m tests/integration/execution-integrity.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 577[2mms[22m[39m
+[90mstdout[2m | tests/integration/obsolete-executor.test.ts[2m > [22m[2man obsolete/replaced executor must not reclaim and overwrite a completed successor node
+[22m[39mREVIEW_OBSOLETE_SUCCESSOR_RECLAIM {"takeoverStatus":"success","finalStatus":"success","secondStatus":"success","obsoleteSuccessorCalls":0,"budgets":2}
+
+[90mstdout[2m | tests/integration/obsolete-executor.test.ts[2m > [22m[2man obsolete initial executor must publish no late plan-progress event after takeover success
+[22m[39mREVIEW_OBSOLETE_PROGRESS_EVENT {"takeoverStatus":"success","persistedStatus":"success","lateStatuses":[]}
+
+[90mstdout[2m | tests/integration/obsolete-executor.test.ts[2m > [22m[2man obsolete executor's late failure must not flip a takeover-completed dependency node to failed or skipped
+[22m[39mREVIEW_OBSOLETE_FAILURE_FLIP {"takeoverStatus":"success","finalStatus":"success","budgetStatus":"success","budgetError":null,"tailStatus":"success"}
+
+[90mstdout[2m | tests/integration/obsolete-executor.test.ts[2m > [22m[2mtwo concurrent takeovers of one stale claim yield exactly one executor (node runs once)
+[22m[39mREVIEW_OBSOLETE_CONCURRENT_WINNER {"planStatus":"success","budgetNodeStatus":"success","budgets":1}
+
+ [32m✓[39m tests/integration/obsolete-executor.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 439[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/executor-execution-right.test.ts [2m([22m[2m4 tests[22m[2m)[22m[90m 300[2mms[22m[39m
+ [32m✓[39m tests/app/manual-review-http.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 1058[2mms[22m[39m
+[90mstdout[2m | tests/integration/transfer-replay.test.ts[2m > [22m[2mREVIEW_REPLAY_SERIAL_IDEMPOTENT: two sequential identical calls replay one committed transfer
+[22m[39mREVIEW_REPLAY_SERIAL_IDEMPOTENT {"searchCalls":1,"sameTxId":true,"firstTxId":"txidem_5456649e6cfbd474441b9a55dd742e96","ledgerRowId":"txidem_5456649e6cfbd474441b9a55dd742e96","debits":1,"receipts":1,"finalBalance":23380}
+
+[90mstdout[2m | tests/integration/transfer-replay.test.ts[2m > [22m[2mREVIEW_REPLAY_CONCURRENT_SAME_REQUEST: overlapping identical calls debited exactly once
+[22m[39mREVIEW_REPLAY_CONCURRENT_SAME_REQUEST {"held":1,"searchCalls":2,"sameTxId":true,"firstBalance":23380,"secondBalance":23380,"debits":1,"receipts":1,"finalBalance":23380}
+
+[90mstdout[2m | tests/integration/transfer-replay.test.ts[2m > [22m[2mREVIEW_REPLAY_CONCURRENT_DIFFERENT_REQUEST: overlapping different request conflicts, winner matches its ledger row
+[22m[39mREVIEW_REPLAY_CONCURRENT_DIFFERENT_REQUEST {"held":1,"searchCalls":2,"loserOk":false,"loserCode":"CONFLICT","winnerRecipient":"张伟","winnerAmount":200,"ledgerRecipient":"contact_zhangwei","ledgerAmount":-200,"zhangweiDebits":1,"wangfangDebits":0,"receipts":1}
+
+[90mstdout[2m | tests/integration/transfer-replay.test.ts[2m > [22m[2mREVIEW_REPLAY_RETURNS_ORIGINAL_SNAPSHOT: a replay returns the committed snapshot, never the current request
+[22m[39mREVIEW_REPLAY_RETURNS_ORIGINAL_SNAPSHOT {"searchCalls":1,"replayedTxId":"txidem_aea296c63b9d1a56c135d15043b41630","ledgerRowId":"txidem_aea296c63b9d1a56c135d15043b41630","receiptId":"rcpt_aea296c63b9d1a56c135d15043b41630","sameAsStored":true,"replayedRecipient":"张伟"}
+
+ [32m✓[39m tests/integration/transfer-replay.test.ts [2m([22m[2m4 tests[22m[2m)[22m[90m 266[2mms[22m[39m
+ [32m✓[39m tests/app/confirm-continuation-no-owner-fencing.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 350[2mms[22m[39m
+[90mstdout[2m | tests/integration/confirmation-liveness.test.ts[2m > [22m[2m[integration] live-confirmation REFERENCE-COUNT marker lifecycle[2m > [22m[2m(a) a rejected duplicate verify must not clear the first still-live continuation marker
+[22m[39mREVIEW_CONFIRMATION_MARKER_DUPLICATE {"duplicateHttp":200,"duplicateOk":false,"duplicateStatus":"confirmed","duringStatus":"confirmed","duringResult":null,"resumedStatus":"waiting_confirmation","firstOk":true,"firstStatus":"executed","afterAction":"executed","finalPlan":"success","finalNode":"success","authCalls":2,"balance":18580,"debits":1}
+
+[90mstdout[2m | tests/integration/confirmation-liveness.test.ts[2m > [22m[2m[integration] live-confirmation REFERENCE-COUNT marker lifecycle[2m > [22m[2m(b) an abnormal exit must release the liveness bookkeeping so a later recovery progresses
+[22m[39mREVIEW_CONFIRMATION_MARKER_ABNORMAL_EXIT {"failedVerifyHttp":500,"injectionCalls":1,"wedgedStatus":"confirmed","wedgedResult":null,"wedgedPlan":"waiting_confirmation","resumedStatus":"success","recoveredPlan":"success","recoveredNode":"success","recoveredAction":"executed","recoveredError":null,"balance":18580,"debits":1}
+
+[90mstdout[2m | tests/integration/confirmation-liveness.test.ts[2m > [22m[2m[integration] live-confirmation REFERENCE-COUNT marker lifecycle[2m > [22m[2m(c) final PendingAction / node / plan / API-response states are all consistent
+[22m[39mREVIEW_CONFIRMATION_MARKER_CONSISTENCY {"http":200,"responseOk":true,"responseStatus":"executed","responseTier":"RED","responseRequiresMfa":true,"responseMfaResult":"success","dbAction":"executed","dbPlan":"success","dbNode":"success","listed":0,"balance":18580,"debits":1}
+
+ [32m✓[39m tests/integration/confirmation-liveness.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 411[2mms[22m[39m
+ [32m✓[39m tests/app/plan-parking-http.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 440[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/providers/provider-mock.test.ts [2m([22m[2m16 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+[90mstdout[2m | tests/integration/execution-audit.test.ts[2m > [22m[2ma CRITICAL execution-audit insert failure rolls back the debit, ledger and receipt before recovery
+[22m[39mREVIEW_AUDIT_ROLLBACK {"injected":1,"firstHttp":500,"wedgedStatus":"confirmed","wedgedResultNull":true,"receiptAfterFault":0,"auditsAfterFault":0,"recoveryOk":true,"recoveredStatus":"executed","recoveredResultOk":true,"auditsAfterRecovery":1,"debitsAfterRecovery":1}
+
+[90mstdout[2m | tests/integration/execution-audit.test.ts[2m > [22m[2ma HISTORICAL already-posted but missing-audit row is idempotently BACKFILLED on recovery (never failed, no second debit)
+[22m[39mREVIEW_AUDIT_BACKFILL {"missingBefore":0,"deletedByCleanup":1,"recoveryStatus":"executed","actionAfterRecovery":"executed","auditsAfterRecovery":1,"debitsAfterRecovery":1,"repeatStatus":"executed","actionAfterRepeat":"executed","auditsAfterRepeat":1,"debitsAfterRepeat":1}
+
+[90mstdout[2m | tests/integration/execution-audit.test.ts[2m > [22m[2ma repeat recovery is idempotent — exactly ONE execution audit and ONE debit, never downgraded
+[22m[39mREVIEW_AUDIT_REPEAT_IDEMPOTENT {"rec1Ok":true,"status1":"executed","audit1":1,"debit1":1,"balance1":23380,"rec2Ok":false,"rec2Status":"executed","status2":"executed","audit2":1,"debit2":1,"balance2":23380}
+
+ [32m✓[39m tests/integration/execution-audit.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 367[2mms[22m[39m
+[90mstdout[2m | tests/integration/transfer-receipts.test.ts[2m > [22m[2mREVIEW_RECEIPT_WRITE_ROLLBACK: a failed receipt write rolls the debit + ledger row back atomically
+[22m[39mREVIEW_RECEIPT_WRITE_ROLLBACK {"spyCalls":1,"debits":0,"receipts":0,"ledgerRow":null,"balance":23580}
+
+[90mstdout[2m | tests/integration/transfer-receipts.test.ts[2m > [22m[2mREVIEW_SAME_IDENTITY_CONCURRENT_RECOVERY: two concurrent recoveries apply the side effect exactly once
+[22m[39mREVIEW_SAME_IDENTITY_CONCURRENT_RECOVERY {"firstHttp":200,"secondHttp":200,"firstOk":true,"secondOk":true,"firstStatus":"executed","secondStatus":"executed","settledStatus":"executed","debits":1,"receipts":1,"finalBalance":23380}
+
+[90mstdout[2m | tests/integration/transfer-receipts.test.ts[2m > [22m[2mREVIEW_IDENTITY_REQUEST_CONFLICT: the same key for a different request is rejected (CONFLICT) with no extra debit
+[22m[39mREVIEW_IDENTITY_REQUEST_CONFLICT {"code":"CONFLICT","debits100":1,"debits200":0,"receipts":1,"finalBalance":23480}
+
+[90mstdout[2m | tests/integration/transfer-receipts.test.ts[2m > [22m[2mREVIEW_RECEIPT_REPLAY_IDEMPOTENT: same key + same request replays the original result with one debit
+[22m[39mREVIEW_RECEIPT_REPLAY_IDEMPOTENT {"sameTxId":true,"firstBalance":23460,"secondBalance":23460,"receiptId":"rcpt_19aa19d9bb0e58246b73c0c858740bc8","debits":1,"finalBalance":23460}
+
+ [32m✓[39m tests/integration/transfer-receipts.test.ts [2m([22m[2m4 tests[22m[2m)[22m[90m 293[2mms[22m[39m
+ [32m✓[39m tests/app/actions-recovery-http.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 318[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/investment-flow.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 444[2mms[22m[39m
+ [32m✓[39m tests/unit/security/mfa.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 674[2mms[22m[39m
+[90mstdout[2m | tests/integration/node-result-recovery.test.ts[2m > [22m[2mSUCCESS-result recovery applies the side effect exactly once without re-invoking the tool
+[22m[39mREVIEW_RESULT_RECOVERY_SUCCESS {"firstHttp":500,"faultCalls":1,"afterFault":"confirmed","resultAfterFault":null,"nodeAfterFault":"waiting_confirmation","laterLimit":500,"resumed":"success","actionStatus":"executed","nodeStatus":"success","amount":500}
+
+[90mstdout[2m | tests/integration/node-result-recovery.test.ts[2m > [22m[2mFAILED-result finalization marks the action, node and plan failed and never executed
+[22m[39mREVIEW_RESULT_RECOVERY_FAILED {"firstHttp":500,"faultCalls":1,"resumed":"failed","actionStatus":"failed","nodeStatus":"failed","resultOk":false}
+
+[90mstdout[2m | tests/integration/node-result-recovery.test.ts[2m > [22m[2mrepeat recovery is idempotent — the side effect is applied exactly once
+[22m[39mREVIEW_RESULT_RECOVERY_IDEMPOTENT {"firstResume":"success","secondResume":"success","actionStatus":"executed","nodeStatus":"success","amount":500,"parked":1}
+
+[90mstdout[2m | tests/integration/node-result-recovery.test.ts[2m > [22m[2mconcurrent recovery applies the side effect exactly once
+[22m[39mREVIEW_RESULT_RECOVERY_CONCURRENT {"firstResume":"success","secondResume":"running","planStatus":"success","actionStatus":"executed","nodeStatus":"success","amount":500,"parked":1,"executed":1}
+
+[90mstdout[2m | tests/integration/node-result-recovery.test.ts[2m > [22m[2mrecovery after a simulated process restart is driven purely from persisted server state
+[22m[39mREVIEW_RESULT_RECOVERY_RESTART {"freshActionStatus":"confirmed","freshResultJson":"{\"ok\":true,\"data\":{\"cardId\":\"card_credit\",\"category\":\"娱乐\",\"amount\":1500},\"summary\":\"限额已调整\"}","freshPlanStatus":"running","freshNodeStatus":"running","resumed":"success","actionStatus":"executed","nodeStatus":"success","amount":500}
+
+[90mstdout[2m | tests/integration/node-result-recovery.test.ts[2m > [22m[2ma committed side effect whose result transaction rolled back settles the node terminally as failed
+[22m[39mREVIEW_RESULT_RECOVERY_TX_ROLLBACK_WEDGE {"firstHttp":500,"faultCalls":1,"afterFault":"confirmed","resultAfterFault":null,"cardsAfterFault":1,"resumed":"failed","resumedAgain":"failed","nodeStatus":"failed","nodeError":"该节点此前已执行但未留存结果，需人工核对（不会重新执行）。","cards":1}
+
+ [32m✓[39m tests/integration/node-result-recovery.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 636[2mms[22m[39m
+ [32m✓[39m tests/integration/money-budget.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 928[2mms[22m[39m
+   [33m[2m✓[22m[39m [integration] concurrent 999.99 + 0.02 uses exact cents and requires MFA only above 1000 [33m310[2mms[22m[39m
+ [32m✓[39m tests/integration/confirmation-policy.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 1063[2mms[22m[39m
+   [33m[2m✓[22m[39m the client keeps cancelled terminal even with a stale MFA event [33m332[2mms[22m[39m
+ [32m✓[39m tests/unit/security/authorize-hardening.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 639[2mms[22m[39m
+ [32m✓[39m tests/unit/security/recipient-resolution.test.ts [2m([22m[2m8 tests[22m[2m)[22m[90m 273[2mms[22m[39m
+ [32m✓[39m tests/unit/security/permission-engine.test.ts [2m([22m[2m24 tests[22m[2m)[22m[90m 8[2mms[22m[39m
+ [32m✓[39m tests/scenarios/mock-integration.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 387[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/task-cancel-revokes.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 368[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-02-transfer-confirm.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 437[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/transfer-receipt.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 376[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/idempotent.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 572[2mms[22m[39m
+[90mstdout[2m | tests/unit/agent/providers/plan-limit-park.test.ts[2m > [22m[2mplan parking through the mock model (runTurn → confirmAction)[2m > [22m[2mparks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)
+[22m[39mPARKING FRAMES:
+[{"type":"session","sessionId":"cmv0msa7z0001f8d0ciu2nd08"},{"type":"message_start"},{"type":"text_delta","delta":"好的，我来为你规划一个任务计划。"},{"type":"message_end","content":"好的，我来为你规划一个任务计划。"},{"type":"tool_start","toolName":"submit_plan","status":"started"},{"type":"plan_update","planStatus":"running","nodes":["analyze:running","check:pending","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:pending","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:success","setlimit:pending"]},{"type":"plan_update","planStatus":"running","nodes":["analyze:success","check:success","setlimit:running"]},{"type":"plan_update","planStatus":"waiting_confirmation","nodes":["analyze:success","check:success","setlimit:waiting_confirmation"]},{"type":"tool_end","toolName":"submit_plan","status":"success"},{"type":"card","cardType":"plan"},{"type":"message_start"},{"type":"text_delta","delta":"这笔操作（任务计划）需要你确认后"},{"type":"text_delta","delta":"才会执行，目前状态为「等待确认」"},{"type":"text_delta","delta":"，尚未执行。请你确认后我"},{"type":"text_delta","delta":"才会为你执行。"},{"type":"message_end","content":"这笔操作（任务计划）需要你确认后才会执行，目前状态为「等待确认」，尚未执行。请你确认后我才会为你执行。"},{"type":"confirmation_required","actionId":"cmv0msa8u0009f8d0f9nzy5jx","tier":"YELLOW","toolName":"set_card_limit"},{"type":"card","cardType":"confirmation"},{"type":"done"}]
+
+[90mstdout[2m | tests/unit/agent/providers/plan-limit-park.test.ts[2m > [22m[2mplan parking through the mock model (runTurn → confirmAction)[2m > [22m[2mparks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)
+[22m[39mCONFIRM FRAMES:
+[{"type":"plan_update","planStatus":"success","nodes":["analyze:success","check:success","setlimit:success"]},{"type":"session","sessionId":"cmv0msa7z0001f8d0ciu2nd08"},{"type":"message_start"},{"type":"text_delta","delta":"任务计划：已为卡片 ****66"},{"type":"text_delta","delta":"88 的「娱乐」设置限额 ¥1,500."},{"type":"text_delta","delta":"00"},{"type":"message_end","content":"任务计划：已为卡片 ****6688 的「娱乐」设置限额 ¥1,500.00"},{"type":"done"}]
+
+ [32m✓[39m tests/unit/agent/providers/plan-limit-park.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 292[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-11-conditional-dag.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 400[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 462[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/investment.test.ts [2m([22m[2m13 tests[22m[2m)[22m[33m 722[2mms[22m[39m
+   [33m[2m✓[22m[39m banking-sdk/investment · listHoldings[2m > [22meach HoldingView carries productName / riskLevel / amount / profit / boughtAt / status [33m354[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/transfer.test.ts [2m([22m[2m15 tests[22m[2m)[22m[33m 675[2mms[22m[39m
+   [33m[2m✓[22m[39m banking-sdk/transfer · validation + funds[2m > [22ma missing recipient (no id/phone/name) → throws AppError('VALIDATION') [33m338[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/executor.test.ts [2m([22m[2m14 tests[22m[2m)[22m[90m 6[2mms[22m[39m
+ [32m✓[39m tests/unit/security/authorize-concurrency.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 390[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/dag.test.ts [2m([22m[2m22 tests[22m[2m)[22m[90m 5[2mms[22m[39m
+ [32m✓[39m agent/grounding.test.ts [2m([22m[2m23 tests[22m[2m)[22m[90m 4[2mms[22m[39m
+[90mstdout[2m | tests/integration/confirmation-evidence.test.ts[2m > [22m[2ma committed transfer followed by an SDK return-path exception must converge executed through the normal confirmation path
+[22m[39mREVIEW_COMMIT_THEN_EXCEPTION {"firstHttp":200,"firstOk":true,"recoveryOk":false,"status":"executed","receiptCount":1,"balance":23380,"debits":1,"executionAuditStatus":"success"}
+
+[90mstdout[2m | tests/integration/confirmation-evidence.test.ts[2m > [22m[2ma pre-receipt plan-linked posted transfer must retain its proven ledger success on recovery
+[22m[39mREVIEW_LEGACY_PLAN_LEDGER_IGNORED {"recoveryOk":true,"actionStatus":"executed","planStatus":"success","nodeStatus":"success","receipts":0,"balance":23380,"debits":1}
+
+[90mstdout[2m | tests/integration/confirmation-evidence.test.ts[2m > [22m[2mcancellation completed before a blocked card-limit SDK write must prevent that write
+[22m[39mREVIEW_CARD_CANCEL_FENCE_MISSING {"cancelledStatus":"cancelled","limitWhenCancelled":3000,"limitAfterRelease":3000,"actionStatus":"failed","storedPlan":"cancelled","confirmationOk":false}
+
+[90mstdout[2m | tests/integration/confirmation-evidence.test.ts[2m > [22m[2mfailure of required execution audit must roll back the debit and receipt as claimed in the report
+[22m[39mREVIEW_AUDIT_BUSINESS_NOT_ATOMIC {"http":500,"actionStatus":"confirmed","balance":23580,"debits":0,"receipts":0,"executionAudits":0}
+
+ [32m✓[39m tests/integration/confirmation-evidence.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 367[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/run-turn-failure.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 262[2mms[22m[39m
+ [32m✓[39m tests/unit/planner/executor-claim-scope.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 221[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-12-birthday-plan.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 392[2mms[22m[39m
+ [32m✓[39m agent/grounding-integration.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 338[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-04-prompt-injection.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 353[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/atomicity.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 233[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/task-control.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 311[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-09-investment-mfa.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 303[2mms[22m[39m
+[90mstdout[2m | tests/integration/executor-leases.test.ts[2m > [22m[2mtwo concurrent takeovers of a stale plan claim yield exactly one winner (node runs once)
+[22m[39mREVIEW_EXECUTION_FENCING concurrent_takeover {"statuses":[200,200],"count":1,"planStatus":"success","budgetNodeStatus":"success","executionToken":null}
+
+[90mstdout[2m | tests/integration/executor-leases.test.ts[2m > [22m[2ma live, heartbeating owner keeps its fresh claim: a concurrent resume starts no second executor
+[22m[39mREVIEW_EXECUTION_FENCING live_owner_not_preempted {"concurrentStatus":200,"concurrentPlanStatus":"running","tokenHeld":true,"tokenUnchanged":true,"midCount":1,"count":1,"planStatus":"success","budgetNodeStatus":"success"}
+
+ [32m✓[39m tests/integration/executor-leases.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 299[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-03-transfer-mfa.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 356[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-10-circuit-breaker.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 366[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/confirmation.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 293[2mms[22m[39m
+ [32m✓[39m tests/integration/sdk-transaction-fences.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 689[2mms[22m[39m
+ [32m✓[39m tests/integration/terminal-state-settle.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 568[2mms[22m[39m
+   [33m[2m✓[22m[39m cancelling an EXECUTED action is a stable 200 domain outcome that never rolls back the committed side effect [33m313[2mms[22m[39m
+ [32m✓[39m tests/unit/security/injection-guard.test.ts [2m([22m[2m15 tests[22m[2m)[22m[90m 285[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/subscription.test.ts [2m([22m[2m10 tests[22m[2m)[22m[90m 293[2mms[22m[39m
+ [32m✓[39m tests/unit/banking-sdk/anomaly.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 338[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-05-failure-report.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 321[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 339[2mms[22m[39m
+[90mstdout[2m | tests/integration/confirmation-continuation.test.ts[2m > [22m[2man INITIAL submit executor must stop all successor tool calls after losing its plan claim
+[22m[39mREVIEW_INITIAL_SUCCESSOR_CONTINUES {"takeoverStatus":"success","finalStatus":"success","oldStatus":"success","oldSuccessorCalls":0,"lateNodeStatuses":[],"budgets":2}
+
+[90mstdout[2m | tests/integration/confirmation-continuation.test.ts[2m > [22m[2ma rejected duplicate confirm must not clear the first still-live continuation marker
+[22m[39mREVIEW_LIVE_CONFIRMATION_MARKER {"duplicate":true,"duplicateOk":false,"duringStatus":"confirmed","resumedStatus":"waiting_confirmation","firstOk":true,"finalAction":"executed","finalPlan":"success","finalNode":"success","amount":1500}
+
+[90mstdout[2m | tests/integration/confirmation-continuation.test.ts[2m > [22m[2mwithout a duplicate request the live confirmation is retained and finishes normally
+[22m[39mREVIEW_LIVE_CONFIRMATION_MARKER {"duplicate":false,"duringStatus":"confirmed","resumedStatus":"waiting_confirmation","firstOk":true,"finalAction":"executed","finalPlan":"success","finalNode":"success","amount":1500}
+
+[90mstdout[2m | tests/integration/confirmation-continuation.test.ts[2m > [22m[2ma STANDALONE transferred action must recover or visibly enter reconciliation after result persistence failure
+[22m[39mREVIEW_STANDALONE_RESULT_GAP {"firstHttp":500,"repeatedOk":true,"actionStatus":"executed","taskId":null,"result":"{\"ok\":true,\"data\":{\"success\":true,\"transactionId\":\"txidem_8d2fe5fefc8531a8af033fab3dfc1700\",\"newBalance\":23380,\"recipient\":{\"contactId\":\"contact_zhangwei\",\"name\":\"张伟\",\"phone\":\"139****0002\",\"bank\":\"招商银行\"},\"amount\":200,\"occurredAt\":1790308800000},\"summary\":\"已向 张伟 转账 ¥200.00，账户余额 ¥23,380.00。\"}","visibleActions":0,"balance":23380,"debitCount":1}
+
+ [32m✓[39m tests/integration/confirmation-continuation.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 456[2mms[22m[39m
+[90mstdout[2m | tests/integration/financial-node-concurrency.test.ts[2m > [22m[2ma plan transfer already ledgered but still confirmed is counted once
+[22m[39mREVIEW_PLAN_LEDGER {"alreadyLedgered":600,"laterTier":"YELLOW","laterRequiresMfa":false,"laterStatus":"executed"}
+
+[90mstdout[2m | tests/integration/financial-node-concurrency.test.ts[2m > [22m[2mresuming an investment node during post-effect persistence cannot debit twice
+[22m[39mREVIEW_INVESTMENT_REPLAY {"resumeStatus":"success","balance":22580,"purchases":1}
+
+[90mstdout[2m | tests/integration/financial-node-concurrency.test.ts[2m > [22m[2ma plan cancellation completed before authorization CAS prevents the debit
+[22m[39mREVIEW_CANCEL_GAP {"cancelled":"cancelled","actionStatus":"cancelled","total":0}
+
+ [32m✓[39m tests/integration/financial-node-concurrency.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 381[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker-audit.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 385[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/providers/provider-live.test.ts [2m([22m[2m12 tests[22m[2m)[22m[90m 4[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/confirmation-idempotency.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 405[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine-dedup.test.ts [2m([22m[2m9 tests[22m[2m)[22m[90m 3[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-01-balance.test.ts [2m([22m[2m6 tests[22m[2m)[22m[90m 289[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-08-card-limit.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 645[2mms[22m[39m
+[90mstdout[2m | tests/integration/write-idempotency.test.ts[2m > [22m[2mcancel preserves the executed truth when a transfer is ledgered before result persistence
+[22m[39mREVIEW_EXECUTED_TRUTH {"planStatus":"cancelled","responseStatus":"executed","storedStatus":"executed","balance":23380,"debits":[-200]}
+
+[90mstdout[2m | tests/integration/write-idempotency.test.ts[2m > [22m[2ma virtual card node cannot create another card during the action-to-node persistence window
+[22m[39mREVIEW_VIRTUAL_CARD_REPLAY {"cards":["cardidem_08eae8c2d7b86fd483d12e6475701d21"]}
+
+[90mstdout[2m | tests/integration/write-idempotency.test.ts[2m > [22m[2ma distinct redemption action cannot report another credit for an already redeemed holding
+[22m[39mREVIEW_REDEEM_IDENTITY {"firstAction":"cmv0msx1r000hf8oss0el6c8q","secondAction":"cmv0msx2b000nf8osqb0sgvhk","firstOk":true,"secondOk":false,"secondStatus":"failed","firstBalance":28630,"secondBalance":28630}
+
+ [32m✓[39m tests/integration/write-idempotency.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 547[2mms[22m[39m
+ [32m✓[39m tests/unit/security/gateway-audit-trail.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 365[2mms[22m[39m
+[90mstdout[2m | tests/integration/initial-executor-fencing.test.ts[2m > [22m[2man INITIAL submit executor publishes no stale node/plan progress and stays DB-consistent after losing its plan claim
+[22m[39mREVIEW_INITIAL_FENCING_CONSISTENCY {"takeoverStatus":"success","oldStatus":"success","oldSuccessorCalls":0,"lateNodeUpdates":0,"latePlanSnapshots":0,"storedStatus":"success","storedNodeStatuses":["first:success","second:success"],"takeoverNodeStatuses":["first:success","second:success"],"oldSuccessorStatus":"pending","budgets":2,"budgetsAtTakeover":2}
+
+ [32m✓[39m tests/integration/initial-executor-fencing.test.ts [2m([22m[2m1 test[22m[2m)[22m[90m 256[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-06-spending-analysis.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 317[2mms[22m[39m
+ [32m✓[39m tests/scenarios/test-07-anomaly.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 280[2mms[22m[39m
+ [32m✓[39m tests/unit/security/risk-engine-rerisk.test.ts [2m([22m[2m8 tests[22m[2m)[22m[90m 277[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/pendingAction.claim.test.ts [2m([22m[2m7 tests[22m[2m)[22m[90m 268[2mms[22m[39m
+ [32m✓[39m tests/unit/security/mfa-audit.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 343[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/providers/provider-runtime.test.ts [2m([22m[2m3 tests[22m[2m)[22m[90m 97[2mms[22m[39m
+[90mstdout[2m | tests/integration/node-recovery.test.ts[2m > [22m[2mresume recovers an already-executed gated node after its plan callback fails
+[22m[39mREVIEW_EXECUTED_NODE_RECOVERY {"responseOk":true,"responseStatus":"executed","actionStatus":"executed","firstResume":"success","repeatConfirmOk":false,"secondResume":"success","cards":1,"budgets":1}
+
+[90mstdout[2m | tests/integration/node-recovery.test.ts[2m > [22m[2mresume can recover a persisted executor claim whose owner died long ago
+[22m[39mREVIEW_STALE_EXECUTOR_CLAIM {"status":"success","token":null,"claimedAt":null,"budgets":1}
+
+ [32m✓[39m tests/integration/node-recovery.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 375[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/prisma-cli-env.test.ts [2m([22m[2m10 tests[22m[2m)[22m[90m 3[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/execution-receipt.test.ts [2m([22m[2m9 tests[22m[2m)[22m[90m 3[2mms[22m[39m
+ [32m✓[39m tests/unit/security/circuit-breaker-reset.test.ts [2m([22m[2m5 tests[22m[2m)[22m[90m 251[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/ledger-keys.test.ts [2m([22m[2m11 tests[22m[2m)[22m[90m 3[2mms[22m[39m
+ [32m✓[39m tests/deploy-db-push.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 17375[2mms[22m[39m
+   [33m[2m✓[22m[39m scripts/db-push.ts — cold deploy under RUST_LOG=warn[2m > [22mself-provisions a MISSING isolated SQLite file and exits 0 [33m17374[2mms[22m[39m
+ [32m✓[39m tests/unit/lib/contact.search.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 499[2mms[22m[39m
+ [32m✓[39m tests/unit/agent/message-normalize.test.ts [2m([22m[2m2 tests[22m[2m)[22m[90m 2[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m111 passed[39m[22m[90m (111)[39m
+[2m      Tests [22m [1m[32m795 passed[39m[22m[90m (795)[39m
+[2m   Start at [22m 15:14:32
+[2m   Duration [22m 119.07s[2m (transform 1.18s, setup 9.75s, collect 30.32s, tests 62.42s, environment 12ms, prepare 4.78s)[22m
+

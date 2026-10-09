@@ -1,0 +1,5 @@
+﻿agent/CONTEXT.md:544:- **Fact-grounding specs live IN-NODE** and run via the agent-local config: `agent/grounding.test.ts` (pure units for `buildFinancialFacts`/`groundAssistantText`) + `agent/grounding-integration.test.ts` (end-to-end through the REAL `runTurn`, model scripted via the `RunTurnDeps.provider` seam, isolated `prisma/test.db`) → `npx vitest run --config ./agent/vitest.agent.config.ts` (from the repo root).
+agent/CONTEXT.md:554:- `./agent/vitest.agent.config.ts` → dedicated Vitest config for `agent/**/*.test.ts` (the root config includes only `tests/**`); run from the repo root with `npx vitest run --config ./agent/vitest.agent.config.ts`. Pure units in `grounding.test.ts`; end-to-end grounding through the REAL `runTurn` (scripted faux provider) in `grounding-integration.test.ts`
+agent/grounding-integration.test.ts:15: * test DB — is production code. `LLM_MODE=mock` (vitest.agent.config.ts) keeps the run fully offline.
+agent/vitest.agent.config.ts:11: *   npx vitest run --config ./agent/vitest.agent.config.ts
+

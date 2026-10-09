@@ -1,0 +1,12 @@
+﻿banking-sdk/types.ts:157:  idempotencyKey?: string;
+banking-sdk/types.ts:223:  idempotencyKey?: string;
+banking-sdk/types.ts:296:   * `InvestmentHolding.idempotencyKey`; the planner passes `nodeExecutionKey(taskId, nodeId)`.
+banking-sdk/types.ts:299:  idempotencyKey?: string;
+banking-sdk/types.ts:312:  idempotencyKey?: string;
+banking-sdk/types.ts:354:  idempotencyKey?: string;
+banking-sdk/types.ts:389:  idempotencyKey?: string;
+security/risk-engine.ts:122: * Prisma surface (so it runs inside a transaction). Same window as `computeDailyTransferTotal`
+security/risk-engine.ts:151: * ledger write (and thus `computeDailyTransferTotal`, which only counts executed rows) has
+security/risk-engine.ts:229:export async function computeDailyTransferTotal(userId: string, now?: number): Promise<number> {
+security/risk-engine.ts:253: * This helper RE-COMPUTES the day's outgoing-transfer total FRESH (`computeDailyTransferTotal`)
+security/risk-engine.ts:265:  const dailyTotal = await computeDailyTransferTotal(userId, now);

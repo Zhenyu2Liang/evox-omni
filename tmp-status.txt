@@ -1,0 +1,23 @@
+﻿ M tests/helpers/fixtures.ts
+ M tests/unit/banking-sdk/atomicity.test.ts
+ M vitest.config.ts
+?? tests/helpers/write-failure.ts
+?? tests/unit/banking-sdk/anomaly.test.ts
+?? tests/unit/banking-sdk/investment-flow.test.ts
+?? tmp-diff.txt
+?? tmp-edit.mjs
+?? tmp-edit2.mjs
+?? tmp-edit3.mjs
+?? tmp-eol.txt
+?? tmp-fail.txt
+?? tmp-grep.txt
+?? tmp-grep2.txt
+?? tmp-grep3.txt
+?? tmp-grep4.txt
+?? tmp-out.txt
+?? tmp-out2.txt
+?? tmp-out3.txt
+?? tmp-run-full-summary.txt
+?? tmp-run-full.txt
+?? tmp-run1.txt
+?? tmp-status.txt
