@@ -127,9 +127,13 @@ Additional code-level controls:
   `SecurityEvent` (+ a UI security event) — but **never grants permission** (defense-in-depth only). It does NOT inject a system reminder into the model context.
 - **Hallucination guard**: the model may only report facts that came from a tool result. If a tool returns
   `success:false`, the agent must report failure (demo **Test 5**).
-- **Audit** (`audit/`): every **gated action** (confirm / verify / cancel of a YELLOW/RED `PendingAction`)
-  writes an `AuditLog` row, and every security control decision (circuit-breaker trip, injection detection,
-  MFA failure) writes a `SecurityEvent`. GREEN auto-executed reads are **not** audited (see `lib/contracts/audit.ts`).
+- **Audit** (`audit/`): auditing is decided by SIDE EFFECT, not by permission colour — every write tool (`security/permission-engine.ts` `ToolPolicy.write`, consumed via `isWriteTool`) is audited, including the GREEN `reserve_budget`; read-only GREEN calls are **not** audited (see `lib/contracts/audit.ts`).
+  A write-tool audit row is inserted in the SAME `prisma.$transaction` as the business write (`strict`), so an audit failure rolls the business write back — no un-audited side effect (`agent/write-audit.ts`).
+  Its dedupe key is owner-scoped `write:<tool>:<owner>:<identity>` (`agent/write-audit.ts#writeAuditKey`), so a per-user local idempotency key cannot collide across users and never collides with `exec:<actionId>` / `reconcile:<actionId>`.
+  Every **gated action** (confirm / verify / cancel of a YELLOW/RED `PendingAction`) writes an `AuditLog` row, and every security control decision (circuit-breaker trip / lock / unlock, injection detection, MFA failure) writes a `SecurityEvent`.
+  Recovery settlement and its strict audit are atomic (`exec:<actionId>` or `reconcile:<actionId>`).
+  A failed audit rolls back THAT transaction. It cannot undo an earlier committed business write;
+  transfer's required execution audit instead shares the original debit transaction.
   Recovery settlement and its strict audit are atomic (`exec:<actionId>` or `reconcile:<actionId>`).
   A failed audit rolls back THAT transaction. It cannot undo an earlier committed business write;
   transfer's required execution audit instead shares the original debit transaction.
