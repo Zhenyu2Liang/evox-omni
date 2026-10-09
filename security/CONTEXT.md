@@ -424,7 +424,7 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
   defends against mis-routing rather than a caller who already knows the `actionId` in the same session.
 - **The circuit-breaker unlock IS wired to an app route.**
   `app/api/security/reset/route.ts` (`POST /api/security/reset`, cookie identity via `requireIdentity`)
-  invokes `security.circuitBreaker.resetSession(sessionId, { actor, reason })` — the audited unlock that
+  invokes `security.circuitBreaker.resetSession(sessionId, { actor, reason, verificationCode })` — the GATED audited unlock that
   clears the lock AND records a `SECURITY_RESET` `SecurityEvent`. A tripped session is therefore no longer
   locked for the process lifetime once a human calls this route.
 - **`mfa_required` is MISSING from `lib/contracts/audit.ts`.**
