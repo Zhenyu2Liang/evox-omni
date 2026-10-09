@@ -649,19 +649,41 @@ async function journeyAnomalyDetection(browser: Browser, baseUrl: string): Promi
   );
 }
 
+/** The mock strong-verification code (`lib/constants.MFA_CODE`), typed by hand into the breaker input. */
+const MOCK_MFA_CODE = '123456';
+
 /**
- * Click the `/security` breaker control AFTER React has HYDRATED it.
+ * TYPE `code` into the `/security` breaker control's 6-digit code input AFTER React has HYDRATED it.
  *
- * The control is a CLIENT component (`app/security/ResetBreakerButton.tsx`): its SSR HTML is visible
+ * The input is a CLIENT component's CONTROLLED field (`app/security/ResetBreakerButton.tsx`): its SSR
+ * node exists BEFORE hydration but carries no React own-property, so a `fill()` at that instant is
+ * silently reset when hydration re-renders the controlled value. This waits on the same real-DOM
+ * hydration condition as `waitForComposerHydration`, keyed on the control's own 6-digit code input.
+ */
+async function fillBreakerCode(page: Page, code: string): Promise<void> {
+  await waitForElementHydration(page, SELECTORS.breakerCodeInput);
+  const input = page.locator(SELECTORS.breakerCodeInput).first();
+  await input.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+  await input.fill(code);
+}
+
+/**
+ * TYPE the mock code into the `/security` breaker control and CLICK it, AFTER React has HYDRATED it.
+ *
+ * The controlled code input starts EMPTY — the mock code is NEVER prefilled or revealed — and the
+ * unlock button is DISABLED while the input is empty, so the code MUST be typed before the click (a
+ * click on the empty disabled button is a no-op / actionability timeout).
+ *
+ * The control (`app/security/ResetBreakerButton.tsx`) is a CLIENT component: its SSR HTML is visible
  * — and clickable "by shape" — BEFORE hydration, and a click at that instant is silently DROPPED
  * (no `POST /api/security/reset`), so no `role=status` message ever appears and the following
  * `waitForStatusText` times out. This waits on the same real-DOM hydration condition as
  * `waitForComposerHydration`, keyed on the control's own 6-digit code input.
  */
-async function clickBreakerReset(page: Page, name: string | RegExp): Promise<void> {
+async function clickBreakerReset(page: Page, name: string | RegExp, code: string): Promise<void> {
   const button = page.getByRole('button', typeof name === 'string' ? { name, exact: true } : { name });
   await button.first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
-  await waitForElementHydration(page, SELECTORS.breakerCodeInput);
+  await fillBreakerCode(page, code);
   await button.first().click();
 }
 
@@ -670,8 +692,13 @@ async function clickBreakerReset(page: Page, name: string | RegExp): Promise<voi
  * known zero state, then submit THREE consecutive wrong MFA codes (`000000`) on a RED transfer — after
  * each, RENDERED `role=status` shows `验证失败，已尝试 N 次`. The third trips the breaker: the security
  * center shows `已熔断` + `失败 3 / 3 次` + a `CIRCUIT_BREAKER_TRIPPED` row (severity `high`, DB-cross-
- * checked), and the lock PERSISTS across a plain reload. Finally the GATED `解除熔断限制` (prefilled
- * `123456`) unlocks it and records a `SECURITY_RESET` event (DOM + DB).
+ * checked), and the lock PERSISTS across a plain reload.
+ *
+ * On the LOCKED security center the code input starts EMPTY — the mock code is NEVER prefilled or
+ * revealed — and the unlock button is DISABLED while the input is empty, so a missing code cannot be
+ * submitted; a WRONG code (`000000`) is REFUSED by the route (its refusal message surfaces) and the
+ * lock stays; only the CORRECT `123456` (TYPED by the journey) unlocks it and records a
+ * `SECURITY_RESET` event (DOM + DB).
  */
 async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Promise<string> {
   return withPage(
@@ -689,9 +716,11 @@ async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Pro
       );
       const sessionId = cookie.slice(cookie.indexOf('=') + 1);
 
-      // (2) reset the ACCOUNT breaker so the three failures below start from a known zero state.
+      // (2) reset the ACCOUNT breaker so the three failures below start from a known zero state. The
+      // code input starts EMPTY (never prefilled) and the button is DISABLED while empty, so the mock
+      // code is TYPED before the click.
       await page.goto(`${baseUrl}/security`, { waitUntil: 'domcontentloaded' });
-      await clickBreakerReset(page, /重置熔断计数|解除熔断限制/);
+      await clickBreakerReset(page, /重置熔断计数|解除熔断限制/, MOCK_MFA_CODE);
       await waitForStatusText(page, '已解除，当前失败0/3次');
 
       // (3) three consecutive WRONG MFA codes on a RED transfer → trip the per-owner breaker.
@@ -731,8 +760,40 @@ async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Pro
         .first()
         .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
 
-      // (6) GATED unlock with the mock code → breaker cleared + audited.
-      await clickBreakerReset(page, '解除熔断限制');
+      // (6) LOCKED-state unlock guards (all on this security-center visit):
+      //   (a) the code input arrives EMPTY and its placeholder never reveals the mock code;
+      //   (b) with an EMPTY input the unlock button is DISABLED — a missing code cannot be submitted;
+      //   (c) a WRONG code is REFUSED (the route's message surfaces) and the lock stays.
+      await waitForElementHydration(page, SELECTORS.breakerCodeInput);
+      const codeInput = page.locator(SELECTORS.breakerCodeInput).first();
+      await codeInput.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+      const initialCode = await codeInput.inputValue();
+      if (initialCode !== '') {
+        throw new Error(`锁定态验证码输入框应为空（不得预填），实际「${initialCode}」`);
+      }
+      const placeholder = (await codeInput.getAttribute('placeholder')) ?? '';
+      if (placeholder.includes(MOCK_MFA_CODE)) {
+        throw new Error(`验证码输入框 placeholder 泄露了验证码：「${placeholder}」`);
+      }
+
+      const unlockButton = page.getByRole('button', { name: '解除熔断限制', exact: true }).first();
+      await unlockButton.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+      if (!(await unlockButton.isDisabled())) {
+        throw new Error('验证码为空时「解除熔断限制」按钮应为禁用状态（缺失验证码不应可提交）');
+      }
+
+      await fillBreakerCode(page, '000000');
+      await unlockButton.click();
+      await waitForStatusText(page, '解除熔断需要额外的安全验证');
+      // The WRONG-code refusal must NOT unlock: the lock persists across a plain reload.
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page
+        .getByText('已熔断', { exact: true })
+        .first()
+        .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+
+      // (7) GATED unlock with the CORRECT mock code → breaker cleared + audited.
+      await clickBreakerReset(page, '解除熔断限制', MOCK_MFA_CODE);
       await waitForStatusText(page, '已解除，当前失败0/3次');
       await page
         .getByText('SECURITY_RESET', { exact: true })
@@ -743,7 +804,7 @@ async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Pro
         throw new Error('SecurityEvent(SECURITY_RESET) 未持久化');
       }
 
-      return `会话 ${sessionId}：重置熔断计数 → 3 次错误验证码(000000) 逐次「验证失败，已尝试 1/2/3 次」→ 安全中心「已熔断」+「失败 3 / 3 次」+ CIRCUIT_BREAKER_TRIPPED(high) → reload 仍锁定 → 「解除熔断限制」(123456) → 已解除(0/3) 且 SECURITY_RESET 已审计`;
+      return `会话 ${sessionId}：重置熔断计数 → 3 次错误验证码(000000) 逐次「验证失败，已尝试 1/2/3 次」→ 安全中心「已熔断」+「失败 3 / 3 次」+ CIRCUIT_BREAKER_TRIPPED(high) → reload 仍锁定；锁定态输入框为空且 placeholder 不含验证码、空输入时「解除熔断限制」按钮禁用、错误码(000000)被拒(锁定仍在)、正确码(123456) → 已解除(0/3) 且 SECURITY_RESET 已审计`;
     },
     { label: 'j-circuit-breaker-lock' },
   );
