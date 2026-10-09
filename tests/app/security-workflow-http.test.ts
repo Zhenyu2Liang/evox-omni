@@ -93,12 +93,20 @@ function expectDenied<T>(res: HttpResult<Envelope<T>>): void {
   expect(res.data?.error?.code).toBe('SECURITY_DENIED');
 }
 
-/** Assert the literal mock MFA code never leaks into a response body we captured. */
+/**
+ * Assert the literal mock MFA code never leaks into a response body we captured.
+ *
+ * `JSON.stringify(undefined)` returns `undefined` (NOT a string), so a captured body with no
+ * serializable value (e.g. an optional `data?.data` on an error envelope) would make
+ * `expect(...).not.toContain(...)` THROW ("the given combination of arguments (undefined and string)
+ * is invalid") instead of actually running the leak check. Coerce the serialization to a real string
+ * so the assertion EVALUATES for EVERY captured body — including an absent/`undefined` one — rather
+ * than crashing the test or being silently skipped.
+ */
 function expectNoMfaLeak(label: string, ...bodies: unknown[]): void {
   for (const body of bodies) {
-    expect(JSON.stringify(body), `${label}: the MFA code leaked into a response body`).not.toContain(
-      MFA_CODE,
-    );
+    const serialized = JSON.stringify(body) ?? String(body);
+    expect(serialized, `${label}: the MFA code leaked into a response body`).not.toContain(MFA_CODE);
   }
 }
 
@@ -968,6 +976,15 @@ describe('[integration] identity — a query param NEVER authenticates on verify
     expect(foreignRes.data?.ok).toBe(false);
     expect(foreignRes.data?.error?.code).toBe('CIRCUIT_OPEN');
     expect(await resetEventsFor(foreign)).toBe(0);
+
+    // (b') The VICTIM's OWN valid cookie + the same forged ?sessionId=<victim> query: identity is
+    // cookie-only, so the route acts as the locked account and the gated unlock still REFUSES
+    // (423 CIRCUIT_OPEN) — the forged query unlocked NOTHING. A lock clears ONLY through a verified
+    // security-center code, never via the caller-controlled query string.
+    const victimOwnReset = await resetCall({ sessionId: victim, query: forged });
+    expect(victimOwnReset.status).toBe(423);
+    expect(victimOwnReset.data?.ok).toBe(false);
+    expect(victimOwnReset.data?.error?.code).toBe('CIRCUIT_OPEN');
 
     // The VICTIM session was NEVER unlocked: still locked, still zero reset events, and an end-to-end
     // probe proves the lock still denies even the CORRECT mock MFA code.
