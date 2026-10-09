@@ -359,7 +359,7 @@ function toContractPendingAction(row: PrismaPendingAction): PendingAction {
 /** Full evaluation: circuit breaker + permission/risk engines + daily-transfer lookup. */
 async function gatewayEvaluate(ctx: GatewayContext): Promise<SecurityEvaluation> {
   const dailyTotal = await computeDailyTransferTotal(ctx.userId);
-  const locked = isLocked(ctx.sessionId);
+  const locked = await isLocked(ctx.sessionId);
 
   const te = evaluateTool(ctx.toolName, ctx.args, {
     userId: ctx.userId,
@@ -889,7 +889,7 @@ async function authorizeAction(
   const effectiveRequiresMfa = row.requiresMfa || action.tier === 'RED';
 
   // Circuit breaker is a hard gate the LLM (and even a correct code) cannot bypass.
-  if (isLocked(row.sessionId)) {
+  if (await isLocked(row.sessionId)) {
     return {
       ok: false,
       status: 'locked',

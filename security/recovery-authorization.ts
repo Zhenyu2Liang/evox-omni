@@ -25,7 +25,7 @@ export async function authorizeRecoveryAction(actionId: string, actor: ActionOwn
       (await getSession(actor.sessionId))?.userId !== actor.userId) {
     throw new AppError('SECURITY_DENIED', '无权恢复该操作。');
   }
-  assertRecoverySessionUnlocked(actor.sessionId);
+  await assertRecoverySessionUnlocked(actor.sessionId);
   if (row.toolName !== 'transfer_money') throw new AppError('SECURITY_DENIED', '该工具不允许重新执行业务恢复。');
   const args = safeParse<Record<string, unknown>>(row.argsJson, {});
   const amount = normalizeTransferAmount(args.amount);
