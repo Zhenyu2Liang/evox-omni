@@ -895,7 +895,12 @@ async function expectVictimUntouched(before: {
   expect(task.status, 'the victim plan must stay parked').toBe('waiting_confirmation');
   expect(await checkingBalance()).toBe(SEEDED_BALANCE);
   expect(await transfersTo(RECIPIENT.id)).toHaveLength(0);
-  expect(await getTestPrisma().auditLog.count({ where: { sessionId: before.victim } })).toBe(0);
+  // Auditing is decided by the SIDE EFFECT, not the permission colour, so the victim's own GREEN
+  // `reserve_budget` (task node v1) IS audited. The rejected identity attempts must therefore add
+  // NOTHING: that single write audit is the session's entire audit history, and no denied operation
+  // is ever audited under the victim's session.
+  const audits = await getTestPrisma().auditLog.findMany({ where: { sessionId: before.victim } });
+  expect(audits.map((row) => row.toolName), 'a rejected identity attempt must write no audit').toEqual(['reserve_budget']);
 }
 
 describe('[integration] identity — a query param NEVER authenticates on verify/cancel/tasks/reset', () => {

@@ -309,6 +309,9 @@ model AuditLog {
   mfaRequired          Boolean  @default(false)
   mfaResult            String?
   toolResult           String? // JSON text
+  toolArgs             String? // JSON text — validated arguments of a SIDE-EFFECTING write
+  taskId               String? // owning AgentTask (plan-driven write), null for standalone calls
+  nodeId               String? // owning AgentTaskNode (plan-driven write), null for standalone calls
   status               String
   detail               String?
   // Idempotency key that makes this audit entry write-once (dedupes a repeated audit).

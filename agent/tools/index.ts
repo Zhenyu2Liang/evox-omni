@@ -15,6 +15,7 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { AppError } from '@/lib/errors';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
 import { withBankingExecution, type BankingExecutionContext } from '@/banking-sdk';
+import { buildWriteCommitAudit, type WriteAuditIdentity } from '../write-audit';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import { createGetBalanceTool, runGetBalance } from './account';
@@ -114,6 +115,32 @@ export interface ToolRunOptions {
   /** Required transfer audit, composed into the SDK's debit/ledger/receipt transaction. */
   onTransferCommit?: BankingExecutionContext['onTransferCommit'];
   onTransactionCommitted?: BankingExecutionContext['onTransactionCommitted'];
+  /**
+   * SIDE-EFFECT audit identity (see `../write-audit`): when supplied, the tool's business write and
+   * its STRICT AuditLog row commit in the SAME `$transaction`, so an audit failure rolls the write
+   * back. Auditing is decided by the WRITE, not by the permission colour — a GREEN write is audited
+   * exactly like a gated action. ADDITIVE: absent ⇒ no change (a bare SDK call is not an agent write).
+   */
+  sessionId?: string;
+  userRequest?: string;
+  taskId?: string;
+  nodeId?: string;
+}
+
+/** Builds the write-audit hook for `executeDirect` when the caller supplied a trusted audit identity. */
+function writeAuditContext(
+  name: ToolName,
+  userId: string,
+  opts?: ToolRunOptions,
+): Partial<BankingExecutionContext> {
+  if (opts?.sessionId === undefined) return {};
+  const identity: WriteAuditIdentity = {
+    sessionId: opts.sessionId,
+    userRequest: opts.userRequest ?? '',
+    ...(opts.taskId !== undefined ? { taskId: opts.taskId } : {}),
+    ...(opts.nodeId !== undefined ? { nodeId: opts.nodeId } : {}),
+  };
+  return { onWriteCommit: buildWriteCommitAudit(name, userId, identity) };
 }
 
 /** A model-free runner for one tool: `(userId, args, opts?) => ToolExecutionResult` (never throws). */
@@ -144,6 +171,8 @@ export interface ToolRegistry {
 export interface CreateToolRegistryOptions {
   /** Trusted write-boundary check for Pi's automatic execution path, supplied by its session owner. */
   automaticWriteFence?: () => Promise<ExecutionFenceCheck>;
+  /** Trusted write-audit identity for Pi's automatic execution path, supplied by its session owner. */
+  automaticWriteAudit?: () => WriteAuditIdentity;
   /** Required for a usable `submit_plan`; the agent binds its session + gateway-routed `runTool`. */
   submitPlan?: SubmitPlanDeps;
 }
@@ -265,6 +294,7 @@ export function createToolRegistry(
   // submit_plan creates its own per-node contexts through executeGatedTool and must not inherit one.
   if (opts?.automaticWriteFence) {
     const buildFence = opts.automaticWriteFence;
+    const buildAudit = opts.automaticWriteAudit;
     for (const name of TOOL_NAMES) {
       if (name === 'submit_plan') continue;
       const tool = tools[name];
@@ -272,7 +302,9 @@ export function createToolRegistry(
       tools[name] = {
         ...tool,
         execute: async (...args: Parameters<typeof execute>) => withBankingExecution(
-          { fence: await buildFence() }, () => execute(...args),
+          { fence: await buildFence(), ...(buildAudit !== undefined
+            ? { onWriteCommit: buildWriteCommitAudit(name, userId, buildAudit()) }
+            : {}) }, () => execute(...args),
         ),
       };
     }
@@ -329,7 +361,12 @@ export function createToolRegistry(
       opts?: ToolRunOptions,
     ): Promise<ToolExecutionResult> {
       return withBankingExecution(
-        { fence: opts?.fence, onTransferCommit: opts?.onTransferCommit, onTransactionCommitted: opts?.onTransactionCommitted },
+        {
+          fence: opts?.fence,
+          onTransferCommit: opts?.onTransferCommit,
+          onTransactionCommitted: opts?.onTransactionCommitted,
+          ...writeAuditContext(name, userId, opts),
+        },
         () => runners[name](userId, args, opts),
       );
     },

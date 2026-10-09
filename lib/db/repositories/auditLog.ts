@@ -111,6 +111,7 @@ export async function insertAuditLog(
     data: {
       timestamp: new Date(entry.timestamp),
       sessionId: entry.sessionId,
+      userId: entry.userId ?? null,
       userRequest: entry.userRequest,
       intent: entry.intent ?? null,
       toolName: entry.toolName,
@@ -119,7 +120,10 @@ export async function insertAuditLog(
       confirmed: entry.confirmed,
       mfaRequired: entry.mfaRequired,
       mfaResult: entry.mfaResult ?? null,
+      toolArgs: entry.toolArgs === undefined ? null : toJson(entry.toolArgs),
       toolResult: entry.toolResult === undefined ? null : toJson(entry.toolResult),
+      taskId: entry.taskId ?? null,
+      nodeId: entry.nodeId ?? null,
       status: entry.status,
       detail: entry.detail ?? null,
       dedupeKey: opts.dedupeKey ?? null,
@@ -178,6 +182,7 @@ function toAuditEntry(row: AuditLog): AuditEntry {
     id: row.id,
     timestamp: row.timestamp.getTime(),
     sessionId: row.sessionId,
+    userId: row.userId ?? undefined,
     userRequest: row.userRequest,
     intent: row.intent ?? undefined,
     toolName: row.toolName,
@@ -187,8 +192,12 @@ function toAuditEntry(row: AuditLog): AuditEntry {
     mfaRequired: row.mfaRequired,
     mfaResult: (row.mfaResult ?? undefined) as AuditEntry['mfaResult'],
     toolResult:
+    toolArgs: row.toolArgs == null ? undefined : safeParse<unknown>(row.toolArgs, undefined),
+    toolResult:
       row.toolResult == null ? undefined : safeParse<unknown>(row.toolResult, undefined),
     status: row.status as AuditStatus,
     detail: row.detail ?? undefined,
+    taskId: row.taskId ?? undefined,
+    nodeId: row.nodeId ?? undefined,
   };
 }
