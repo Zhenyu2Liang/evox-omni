@@ -180,6 +180,8 @@ AgentTask, AgentTaskNode, ScheduledTask, ExecutionReceipt, AuditLog, SecurityEve
 Seed: demo user **李明** (活期 ¥23,580, 信用卡额度 ¥18,000, 本月消费 ~¥5,800), contacts
 **张伟/王芳/妈妈/李华**, 20–30 transactions incl. the anomaly **Apple Store ¥6,999 @ 2026-09-20 18:32**,
 3–5 investment products, 3–5 subscriptions.
+Investment 申购/赎回 write account `Transaction` flow rows in the SAME transaction as the balance + holding change, classified `INVESTMENT_FLOW_CATEGORY = '投资'` (`banking-sdk/categories.ts`), so investment principal never counts as daily consumption/salary.
+Anomaly detection (`banking-sdk/transaction.ts#detectAnomaly`) is DEBIT-only, so large income (工资/退款) is never flagged as a 大额消费 while the Apple Store ¥6,999 sample is still detected.
 Compatibility: the `ExecutionReceipt` model and `AuditLog.dedupeKey` are **additive** schema additions applied via `prisma db push` (NO `migrations/` directory); a receipt-less legacy ledger row is still recognized as already-posted, and consistency is **NEVER** resolved by wiping / re-seeding the DB (`db:reset` rebuilds from scratch — a rebuild, not a repair).
 ## Constraints
 - **File size**: keep files ≲ ~1000 lines; split by responsibility. Extract shared code to the lowest common ancestor.
