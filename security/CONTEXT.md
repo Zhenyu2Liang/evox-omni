@@ -105,7 +105,7 @@ The owner key is derived by `resolveBreakerOwner(actor)`: the persisted session'
 Because a real user's key is shared by ALL of that user's sessions, a lock survives a NEW SESSION and a PROCESS RESTART — rotating the session id cannot bypass it.
 Every mutation is async and accepts an optional `client?: DbClient` to bind its reads/writes to an OPEN interactive transaction (the SDK write-boundary recheck passes the transaction client to avoid deadlocking on a single-connection DB).
 Event details are COMPLETE audit records:
-- `CIRCUIT_BREAKER_TRIPPED` (severity `high`) → `detail: { failures, max, result: 'session_locked' }`; emitted exactly once per trip (a further failure while locked neither recounts nor re-emits).
+- `CIRCUIT_BREAKER_TRIPPED` (severity `high`, top-level `userId` when resolved) → `detail: { failures, max, result: 'session_locked' }`; emitted exactly once per trip (a further failure while locked neither recounts nor re-emits).
 - `SECURITY_RESET` (severity `medium`) → `detail: { actor, reason, wasLocked, previousFailures, priorLockedAt? }`; `actor` defaults to `'user'`, `reason` to a generic Chinese string; `priorLockedAt` is present only when the prior state had a `lockedAt`.
 
 ### `mfa.ts` — mock MFA (code = `MFA_CODE`, NEVER returned)
