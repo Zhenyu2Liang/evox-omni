@@ -44,6 +44,7 @@ interface ToolEvaluation { tier: RiskLevel; requiresConfirmation: boolean; requi
 
 const TOOL_POLICY: Record<ToolName, ToolPolicy>            // the frozen GREEN/YELLOW/RED table
 function getToolPolicy(toolName: ToolName): ToolPolicy
+function isWriteTool(toolName: ToolName): boolean          // `TOOL_POLICY[tool].write`; audit-by-side-effect, grants nothing
 function evaluateTool(toolName: ToolName, args: Record<string, unknown>, ctx: EvaluateToolContext): ToolEvaluation
 ```
 `evaluateTool` returns the EFFECTIVE tier including dynamic resolution: for `transfer_money` it
