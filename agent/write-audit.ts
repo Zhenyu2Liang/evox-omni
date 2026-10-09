@@ -31,9 +31,9 @@ export interface WriteAuditIdentity {
   nodeId?: string;
 }
 
-/** Audit dedupe key of one execution identity — `write:<tool>:<identity>` (never `exec:`/`reconcile:`). */
-export function writeAuditKey(toolName: string, identity: string): string {
-  return `write:${toolName}:${identity}`;
+/** Audit dedupe key of one execution identity — `write:<tool>:<owner>:<identity>` (never `exec:`/`reconcile:`). The OWNER is required: the identity may be a per-user LOCAL key (e.g. a budget's `idempotencyKey`), so without the owner two distinct users would collide on the globally-unique `dedupeKey`; same owner + same identity is still the only duplicate. */
+export function writeAuditKey(toolName: string, owner: string, identity: string): string {
+  return `write:${toolName}:${owner}:${identity}`;
 }
 
 /**
@@ -67,7 +67,7 @@ export function buildWriteCommitAudit(
         ...(identity.taskId !== undefined ? { taskId: identity.taskId } : {}),
         ...(identity.nodeId !== undefined ? { nodeId: identity.nodeId } : {}),
       },
-      { client: tx, dedupeKey: writeAuditKey(event.toolName, event.identity), strict: true },
+      { client: tx, dedupeKey: writeAuditKey(event.toolName, userId, event.identity), strict: true },
     );
   };
 }
