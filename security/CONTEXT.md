@@ -390,7 +390,7 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
   (`recordFailure`/`resetSession`/`reportInjection` are awaited). Never leak a raw exception or the MFA code to the model/UI.
   Ownership rejection uses `AppError('SECURITY_DENIED')` — `ErrorCode` has NO `FORBIDDEN`.
 - **Circuit breaker is a hard gate the LLM cannot clear**: 3 consecutive MFA failures (`MFA_MAX_ATTEMPTS`)
-  trip it for the session and emit `CIRCUIT_BREAKER_TRIPPED`.
+  trip it for the OWNER/account and emit `CIRCUIT_BREAKER_TRIPPED` (severity `high`, top-level `userId`, EXACTLY ONCE per trip).
 - **A tripped breaker denies ALL tiers — including 🟢 GREEN reads** (intended hard gate).
   `gatewayEvaluate` sets `blocked = locked || tier !== 'GREEN'`, so when tripped even a low-risk read
   (e.g. `get_balance`) is denied with decision `deny` / reason `HIGH_RISK_BLOCKED`. This is deliberate:
