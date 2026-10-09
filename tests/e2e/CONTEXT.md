@@ -258,7 +258,7 @@ only the LLM is live.
   green. Only scenario 7 has nudge/retry (`PARK_ATTEMPTS`).
 
 ## Routing Table
-- `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 6 journeys → structured report → non-zero exit on FAIL)
+- `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 7 journeys → structured report → non-zero exit on FAIL)
 - `./live-acceptance.e2e.ts` → REAL-browser + REAL-LLM (`LLM_MODE=live`) acceptance harness against DeepSeek; own isolated DB `prisma/live-acceptance.db`; `LIVE_SCENARIOS` subset; embeds the TASK-A persisted-tool-arg evidence dump (`persistedRecipientCalls`)
 - `./LIVE-ACCEPTANCE-REPORT.md` → current-state report of the live runs (a clean FULL run — `PASS 8 ｜ FAIL 0 ｜ SKIP 0` — with all 8 scenarios PASS live including the formerly-failing S2p raw-phone leg; plus the honest live-model narration-flake blocker)
 - `./helpers.ts` → shared harness (isolated E2E DB + reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card + per-node timeline, read-model HTTP helpers, wedge fixtures + `seedStandaloneWedge`/direct-DB fact queries (`queryPendingActionStatus`/`queryExecutionAudit`), reporter, fail-fast navigation)
