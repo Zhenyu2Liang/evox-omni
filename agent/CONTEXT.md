@@ -133,7 +133,7 @@ function buildConfirmFence(taskId: string | null | undefined, nodeId: string | n
 
 // --- agent/card-emitter.ts --------------------------------------------------
 function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCard[];  // PURE, total
-function errorCard(message: string): ChatCard;   // write-audit anchor check
+function errorCard(message: string): ChatCard;
 function confirmationCard(action: PendingActionSummary): ChatCard;
 function mfaCard(actionId: string, hint?: string): ChatCard;
 
