@@ -64,7 +64,6 @@ live 浏览器验收会调用真实模型 API，需本地配置 Key。
 | 检查 | 结果 |
 | --- | --- |
 | `npm run typecheck` | 0 错误 |
-| `npm run test` | 107 文件 / 752 用例通过 |
 | `npm run build` | 通过，使用独立验证库 |
 | mock 浏览器验收 | 7 PASS / 0 FAIL / 0 SKIP |
 | live 最终定向复验（`LIVE_SCENARIOS=3,6`） | 2 PASS / 0 FAIL / 0 SKIP |
