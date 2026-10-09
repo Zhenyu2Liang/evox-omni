@@ -73,7 +73,10 @@ The repeated-confirm spec asserts the second call is `ok:false` and that the fun
 - `./task-control.test.ts` → submit_plan persistence + task-control ownership
 - `./task-cancel-revokes.test.ts` → cancel revokes parked action / cancel-vs-confirm race / executed work preserved
 - `./run-turn-failure.test.ts` → continuation-failure contract (`resumeTurn`, `confirmAction`)
+- `./message-normalize.test.ts` → `withRealToolResult` real-result attribution (reused call id)
 - `./providers/provider-mock.test.ts` → pure `mock-responder` behaviour (regex over the LLM text)
+- `./providers/provider-live.test.ts` → pure live-model resolution (registry/fallback/fail-loud)
+- `./providers/provider-runtime.test.ts` → explicit mock/live provider runtime
 - `./providers/plan-limit-park.test.ts` → gated `submit_plan` conditional plan (parks, then confirms)
 - `../helpers/db.ts` → `getTestPrisma()` (lazy), `resetDatabase`, `disconnectTestPrisma` (sibling — this node)
 
