@@ -26,7 +26,16 @@
  *   - The model/LLM can NEVER unlock the breaker: no tool, no tool argument and no model text can
  *     clear it (no tool exposed to the model touches this state).
  *   - Unlocking a TRIPPED breaker requires EXTRA verification: the mock `MFA_CODE` OR an elapsed
- *     cooldown (`now >= lockedAt + RESET_COOLDOWN_MS`). A bare session cookie is REFUSED.
+ *     cooldown (`now >= lockedAt + RESET_COOLDOWN_MS`). The cooldown boundary is measured on the
+ *     REAL wall clock (`realNow()`, never the pinned demo clock): the lock timestamp written by
+ *     `recordFailure` is a real instant and the gate's default `now` is real too, so a FRESH lock is
+ *     NOT cooldown-elapsed and a lock genuinely elapses after `RESET_COOLDOWN_MS` of real time. A
+ *     bare session cookie is REFUSED.
+ *   - The unlock is an ATOMIC compare-and-set: the state clear and its `SECURITY_RESET`
+ *     `SecurityEvent` commit in ONE `prisma.$transaction` (the audit is written STRICT), so an unlock
+ *     can never be reported without a committed audit, and a strict-audit failure rolls the clear
+ *     back and throws (the lock stays UNCHANGED). The CAS is taken on the snapshot the gate read, so
+ *     a concurrent unlock or a newer RE-LOCK is preserved and the stale request is a benign no-op.
  *   - `recordSuccess` does NOT unlock a tripped breaker. A correct MFA code on a NON-locked path
  *     only resets the consecutive-failure counter; `locked` stays true.
  *   - A correct MFA code submitted WHILE locked is rejected and does NOT unlock: `mfa.verify`
@@ -42,7 +51,7 @@
  */
 import { AppError } from '../lib/errors';
 import { MFA_CODE, MFA_MAX_ATTEMPTS, RESET_COOLDOWN_MS } from '../lib/constants';
-import { demoNow } from '../lib/clock';
+import { realNow } from '../lib/clock';
 import {
   getBreakerState,
   upsertFailure,
@@ -52,7 +61,7 @@ import {
 } from '../lib/db/repositories/circuitBreaker';
 import { getSession } from '../lib/db/repositories/session';
 import { getUser } from '../lib/db/repositories/user';
-import type { DbClient } from '../lib/db/client';
+import { prisma, type DbClient } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 
 export interface CircuitBreakerState {
@@ -83,7 +92,7 @@ export interface ResetSessionOptions {
   reason?: string;
   /** Mock strong-verification code — accepted unlock when it equals `MFA_CODE`. */
   verificationCode?: string;
-  /** Explicit clock (epoch ms or `Date`) for the cooldown gate. Defaults to the demo clock. */
+  /** Explicit clock (epoch ms or `Date`) for the cooldown gate. Defaults to the REAL clock (`realNow()`). */
   now?: number | Date;
 }
 
@@ -156,7 +165,7 @@ export async function recordFailure(actor: string): Promise<CircuitBreakerState>
     key,
     userId,
     max: MFA_MAX_ATTEMPTS,
-    now: new Date(demoNow()),
+    now: new Date(realNow()),
   });
 
   if (snapshot.didLock) {
@@ -204,7 +213,9 @@ export async function resetSession(
   const before = await getBreakerState(key);
 
   if (before?.locked) {
-    const now = opts?.now === undefined ? demoNow() : opts.now instanceof Date ? opts.now.getTime() : opts.now;
+    // SECURITY elapsed-time timing uses the REAL wall clock (never the pinned demo clock): a lock
+    // stamped/timed with `demoNow()` could never elapse in real time.
+    const now = opts?.now === undefined ? realNow() : opts.now instanceof Date ? opts.now.getTime() : opts.now;
     const lockedAt = before.lockedAt?.getTime();
     const codeAccepted = opts?.verificationCode !== undefined && opts.verificationCode === MFA_CODE;
     const cooldownElapsed = lockedAt !== undefined && now >= lockedAt + RESET_COOLDOWN_MS;
@@ -219,23 +230,37 @@ export async function resetSession(
   const actorName = opts?.actor?.trim() ? opts.actor.trim() : DEFAULT_RESET_ACTOR;
   const reason = opts?.reason?.trim() ? opts.reason.trim() : DEFAULT_RESET_REASON;
 
-  await resetBreakerState(key);
-
-  await recordSecurityEvent({
-    sessionId: actor,
-    ...(userId !== undefined ? { userId } : {}),
-    kind: 'SECURITY_RESET',
-    severity: 'medium',
-    message: before?.locked
-      ? `账户安全熔断已由「${actorName}」解除，所有操作已恢复。原因：${reason}`
-      : `已清除该账户的安全限制状态。原因：${reason}`,
-    detail: {
-      actor: actorName,
-      reason,
-      wasLocked: before?.locked ?? false,
-      previousFailures: before?.failures ?? 0,
-      ...(before?.lockedAt ? { priorLockedAt: before.lockedAt.getTime() } : {}),
-    },
+  // ATOMIC unlock + STRICT audit: the state clear and its SECURITY_RESET event commit in ONE
+  // transaction. A strict audit failure rolls the clear back, so the lock state stays UNCHANGED and
+  // this throws (never a reported-successful unlock that did not commit). The clear is a CAS on the
+  // snapshot we gated against: if the state changed between the gate read and the CAS — a concurrent
+  // unlock already cleared it, or the owner RE-LOCKED with a new `lockedAt` — nothing is written and
+  // NO duplicate event is recorded; a lost CAS is a benign no-op that PRESERVES whatever state now
+  // stands (an old request can never clobber a newer lock).
+  const expect = { locked: before?.locked ?? false, lockedAt: before?.lockedAt ?? null };
+  await prisma.$transaction(async tx => {
+    const result = await resetBreakerState(key, { client: tx, expect });
+    if (!result.applied) return; // lost CAS — newer state preserved, no write, no audit
+    const prior = result.before;
+    await recordSecurityEvent(
+      {
+        sessionId: actor,
+        ...(userId !== undefined ? { userId } : {}),
+        kind: 'SECURITY_RESET',
+        severity: 'medium',
+        message: prior?.locked
+          ? `账户安全熔断已由「${actorName}」解除，所有操作已恢复。原因：${reason}`
+          : `已清除该账户的安全限制状态。原因：${reason}`,
+        detail: {
+          actor: actorName,
+          reason,
+          wasLocked: prior?.locked ?? false,
+          previousFailures: prior?.failures ?? 0,
+          ...(prior?.lockedAt ? { priorLockedAt: prior.lockedAt.getTime() } : {}),
+        },
+      },
+      { client: tx, strict: true },
+    );
   });
 
   return getState(actor);
