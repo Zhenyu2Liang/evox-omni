@@ -203,15 +203,15 @@ describe('mfa · verify success', () => {
     // A wrong code first, so the reset is observable.
     const failed = unwrap(await verify(action.id, '000000'));
     expect(failed.ok).toBe(false);
-    expect(security.circuitBreaker.getState(sessionId).failures).toBe(1);
+    expect((await security.circuitBreaker.getState(sessionId)).failures).toBe(1);
 
     const succeeded = unwrap(await verify(action.id, MFA_CODE));
     expect(succeeded.ok).toBe(true);
 
-    const breaker = security.circuitBreaker.getState(sessionId);
+    const breaker = await security.circuitBreaker.getState(sessionId);
     expect(breaker.failures).toBe(0);
     expect(breaker.locked).toBe(false);
-    expect(security.circuitBreaker.isLocked(sessionId)).toBe(false);
+    expect(await security.circuitBreaker.isLocked(sessionId)).toBe(false);
   });
 });
 
@@ -265,7 +265,7 @@ describe('mfa · verify failure + breaker', () => {
     expect(results[2].locked).toBe(true);
 
     // The breaker really tripped (not just flagged in the returned value).
-    const breaker = security.circuitBreaker.getState(sessionId);
+    const breaker = await security.circuitBreaker.getState(sessionId);
     expect(breaker.locked).toBe(true);
     expect(breaker.failures).toBe(MFA_MAX_ATTEMPTS);
 

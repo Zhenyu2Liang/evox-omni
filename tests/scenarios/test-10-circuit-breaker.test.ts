@@ -5,8 +5,11 @@
  * (beforeToolCall) → RED MFA (wrong code x3) → circuit breaker trips → SecurityEvent + audit.
  *
  * Only the MODEL is scripted; the tools, the Security Gateway `beforeToolCall` chokepoint and the
- * SecurityEvent rows are the real ones. The breaker state is in-process keyed by `sessionId`, so
- * every test mints a UNIQUE `newSessionId()` (a lock must never leak into another spec).
+ * SecurityEvent rows are the real ones. Breaker state is DURABLE (`CircuitBreakerState`) and keyed by
+ * the OWNER — `user:<userId>` for a persisted session, else `session:<actor>` — so every test mints a
+ * UNIQUE `newSessionId()` actor (no `AgentSession` row → its own `session:<id>` owner) and
+ * `useFreshDatabase()` clears the persisted state between tests: a lock never leaks into another spec.
+ *
  *
  * Asserted outcome (see the `it` list): the failure counter increments 1→2→3, the breaker trips and
  * locks the session, a `CIRCUIT_BREAKER_TRIPPED` / severity `high` SecurityEvent is persisted, and a
@@ -63,7 +66,7 @@ async function failMfaThreeTimes(agent: Agent, actionId: string): Promise<void> 
 describe('Scenario 10 — 连续错误MFA触发熔断 (circuit breaker)', () => {
   useFreshDatabase();
 
-  it('a UNIQUE sessionId is used so the breaker lock cannot leak into other suites', () => {
+  it('a UNIQUE sessionId is used so the breaker lock cannot leak into other suites', async () => {
     const sessionA = newSessionId();
     const sessionB = newSessionId();
 
@@ -71,12 +74,12 @@ describe('Scenario 10 — 连续错误MFA触发熔断 (circuit breaker)', () => 
     expect(sessionA).not.toBe(sessionB);
 
     // A freshly-minted session starts unlocked with a clean failure counter (threshold = 3).
-    const state = security.circuitBreaker.getState(sessionA);
+    const state = await security.circuitBreaker.getState(sessionA);
     expect(state.failures).toBe(0);
     expect(state.max).toBe(3);
     expect(state.locked).toBe(false);
-    expect(security.circuitBreaker.isLocked(sessionA)).toBe(false);
-    expect(security.circuitBreaker.isLocked(sessionB)).toBe(false);
+    expect(await security.circuitBreaker.isLocked(sessionA)).toBe(false);
+    expect(await security.circuitBreaker.isLocked(sessionB)).toBe(false);
   });
 
   it('3 consecutive wrong MFA codes ("000000") on a RED action increment the failure counter', async () => {
@@ -88,12 +91,12 @@ describe('Scenario 10 — 连续错误MFA触发熔断 (circuit breaker)', () => 
     const firstAttempt = await verifyAction(agent, actionId, WRONG_CODE);
     expect(firstAttempt.text).toContain('验证码错误');
     expect((await prisma.mfaChallenge.findUnique({ where: { actionId } }))?.attempts).toBe(1);
-    expect(security.circuitBreaker.getState(sessionId).failures).toBe(1);
+    expect((await security.circuitBreaker.getState(sessionId)).failures).toBe(1);
 
     // 2nd wrong code → attempt #2 + breaker failure #2.
     await verifyAction(agent, actionId, WRONG_CODE);
     expect((await prisma.mfaChallenge.findUnique({ where: { actionId } }))?.attempts).toBe(2);
-    expect(security.circuitBreaker.getState(sessionId).failures).toBe(2);
+    expect((await security.circuitBreaker.getState(sessionId)).failures).toBe(2);
 
     // 3rd wrong code → attempt #3 (threshold reached): the challenge is `locked`.
     const thirdAttempt = await verifyAction(agent, actionId, WRONG_CODE);
@@ -101,7 +104,7 @@ describe('Scenario 10 — 连续错误MFA触发熔断 (circuit breaker)', () => 
     expect(challenge?.attempts).toBe(3);
     expect(challenge?.maxAttempts).toBe(3);
     expect(challenge?.status).toBe('locked');
-    expect(security.circuitBreaker.getState(sessionId).failures).toBe(3);
+    expect((await security.circuitBreaker.getState(sessionId)).failures).toBe(3);
 
     // The human-facing outcome of the third attempt is the locked message (not "try again").
     expect(thirdAttempt.text).toContain('锁定');
@@ -112,12 +115,12 @@ describe('Scenario 10 — 连续错误MFA触发熔断 (circuit breaker)', () => 
     const { agent, actionId } = await driveRedAction(sessionId);
 
     // Not tripped before the failures.
-    expect(security.circuitBreaker.isLocked(sessionId)).toBe(false);
+    expect(await security.circuitBreaker.isLocked(sessionId)).toBe(false);
 
     await failMfaThreeTimes(agent, actionId);
 
-    expect(security.circuitBreaker.isLocked(sessionId)).toBe(true);
-    const state = security.circuitBreaker.getState(sessionId);
+    expect(await security.circuitBreaker.isLocked(sessionId)).toBe(true);
+    const state = await security.circuitBreaker.getState(sessionId);
     expect(state.locked).toBe(true);
     expect(state.failures).toBeGreaterThanOrEqual(3);
     expect(state.lockedAt).toBeTypeOf('number');
