@@ -30,7 +30,7 @@ runs them all — no scoped config is required for any of them.
   second separate `runPlan` of the same node loses the claim, writes nothing, and halts - NO in-process
   Map), `executor-execution-right` (DB-backed: a rotated plan token makes the superseded "zombie" run perform ZERO tool calls/writes and publish no stale settlement, while a committed node success survives), `lifecycle` (durable persisted-plan
   `pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`).
-- `banking-sdk/` (5 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
+- `banking-sdk/` (6 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
   `atomicity` (ledger-write rollback + concurrent overspend / double-redeem through the real tx), and
   `idempotent` (the shared at-most-once CREATE helper: same key replays exactly ONE row for both
   `reserveBudget` and `createScheduledTask`; absent key keeps legacy create-a-row behavior).
