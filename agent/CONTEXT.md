@@ -131,6 +131,12 @@ function buildRecoveryAudit(action: ConvergenceActionRow, decision: ConvergenceD
 function buildPlanNodeFence(taskId: string | null | undefined, nodeId: string | null | undefined): Promise<ExecutionFenceCheck | undefined>;
 function buildConfirmFence(taskId: string | null | undefined, nodeId: string | null | undefined): Promise<ExecutionFenceCheck | undefined>;
 
+// --- agent/write-audit.ts (audit by SIDE EFFECT, not by colour) -------------
+type WriteCommitHook = NonNullable<BankingExecutionContext['onWriteCommit']>;   // the SDK write-audit hook
+interface WriteAuditIdentity { sessionId: string; userRequest: string; taskId?: string; nodeId?: string }   // trusted, SERVER-resolved — never model args
+function writeAuditKey(toolName: string, owner: string, identity: string): string;   // `write:<tool>:<owner>:<identity>`
+function buildWriteCommitAudit(tool: ToolName, userId: string, identity: WriteAuditIdentity): WriteCommitHook;   // AuditEntry: confirmationRequired:false, confirmed:false, mfaRequired:false, status:'success'
+
 // --- agent/card-emitter.ts --------------------------------------------------
 function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCard[];  // PURE, total
 function errorCard(message: string): ChatCard;
