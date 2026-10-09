@@ -17,6 +17,9 @@ import { cookies } from 'next/headers';
 import { ChatWindow } from '@/components';
 import { SESSION_COOKIE } from '@/lib/constants';
 
+// Reads the request cookie, so it must render per request — never statically prerendered at build.
+export const dynamic = 'force-dynamic';
+
 export default async function AgentPage() {
   const cookieStore = await cookies();
   const sessionId = cookieStore.get(SESSION_COOKIE)?.value ?? undefined;

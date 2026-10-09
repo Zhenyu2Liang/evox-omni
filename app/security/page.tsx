@@ -30,6 +30,9 @@ import {
 } from '@/components/security';
 import { ResetBreakerButton } from './ResetBreakerButton';
 
+// Reads the request cookie + live Prisma data, so it must render per request.
+export const dynamic = 'force-dynamic';
+
 export default async function SecurityPage() {
   const sessionId = (await cookies()).get(SESSION_COOKIE)?.value ?? '';
 
