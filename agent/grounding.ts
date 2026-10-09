@@ -98,7 +98,7 @@ export function groundAssistantText(text: string, facts: FinancialFacts): string
 
   for (const claim of extractBalanceClaims(text, facts.accounts)) {
     const verdict = classifyBalanceClaim(claim.amount, claim.account, facts);
-    if (verdict === 'ok' || verdict === 'none') continue;
+    if (verdict === 'ok') continue;
     if (verdict === 'unverifiable') push(UNVERIFIABLE_BALANCE_STATEMENT);
     else push(balanceCorrection(claim.account, facts));
   }

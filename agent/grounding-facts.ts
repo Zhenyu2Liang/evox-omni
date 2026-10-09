@@ -371,10 +371,16 @@ export function sameAmount(a: number, b: number): boolean {
   return Math.abs(a - b) <= MONEY_TOLERANCE;
 }
 
-/** Split text into clauses on sentence terminators AND commas (keeps claims locally scoped). */
+/**
+ * Clause separator: sentence terminators AND separators. A comma INSIDE a number (a thousands
+ * separator, e.g. `¥23,580.00`) is deliberately NOT a separator — splitting there truncates the
+ * amount into a bogus small claim (23) and mis-corrects an honest statement.
+ */
+const CLAUSE_SEPARATOR = /[。；;！!？?\n，]|,(?![0-9])|(?<![0-9]),/;
+/** Split text into clauses on sentence terminators AND separators (keeps claims locally scoped). */
 function splitClauses(text: string): string[] {
   return text
-    .split(/[。；;！!？?\n，,]/)
+    .split(CLAUSE_SEPARATOR)
     .map((clause) => clause.trim())
     .filter((clause) => clause !== '');
 }
