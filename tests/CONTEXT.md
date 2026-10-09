@@ -59,3 +59,30 @@ with scripts/db-push.ts. WAL and connection limits are infrastructure, not autho
 The model, bank and MFA are simulated. Concurrency uses one process and SQLite; multi-instance
 contention and real bank integrations are unverified. Browser acceptance is local Chrome, not a
 cross-browser, accessibility or performance matrix.
+
+## Notes for Agents — hallucination-guard / narration-grounding coverage
+
+- Assertions that constrain the assistant's NARRATION text (grounding / "no invented success or
+  balance") are scattered, not centralized:
+  - MODEL-GENERATED (mock/scripted model text): `scenarios/mock-integration.test.ts` (real mock
+    model), `scenarios/test-01-balance.test.ts`, `unit/agent/providers/provider-mock.test.ts`
+    (failure + blocked-gated narration, `not.toMatch(/已成功|已完成|已执行|转账成功/)`),
+    `unit/agent/providers/plan-limit-park.test.ts` (`¥1,500.00`), `e2e/acceptance.e2e.ts`
+    (scripted success-lead literal `转账处理结果：`, positive + wrong-MFA negative).
+  - SERVER-SIDE outcome text (NOT model prose): `unit/agent/run-turn-failure.test.ts`
+    (`outcome.message`), `integration/recovery-authorization.test.ts` (`data.message`).
+  - Injected tool-result text: `unit/agent/run-turn-failure.test.ts` (`text === FAILURE_TEXT`,
+    `not.toContain('成功'/'操作完成')`), `unit/agent/message-normalize.test.ts`.
+- NO generic, model-independent hallucination guard exists: no test parses arbitrary model prose and
+  cross-checks financial figures against the ledger/tool result. Anti-fabrication is enforced
+  structurally (a gated tool cannot execute ⇒ no DB write / `tool_end:blocked`), which does NOT
+  constrain narration wording. `unit/agent/run-turn-failure.test.ts` guards only the injected
+  tool-result text; `scenarios/test-05` + `mock-integration` guard only the failing-transfer
+  success-phrase regexp (`/已向.*转账|转账成功|已成功转出/`).
+- NUANCE: many `decision.text` / `res.text` assertions in `scenarios/` are satisfied by the
+  helper-seeded factual fallback `narrationFor(result)` in `helpers/scenario.ts` (echoes the real
+  tool result when the faux script queue is dry), NOT by model output — they cannot detect a
+  hallucinating model. See `scenarios/CONTEXT.md`.
+- `agent/system-prompt.ts#HALLUCINATION_RULE` / `buildSystemPrompt` has NO test anywhere; the only
+  test-tree reference is `helpers/faux-agent.ts` (builds the agent; never asserted).
+- `unit` has a spec for provider/mock narration but no spec for `agent/system-prompt.ts`.
