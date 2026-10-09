@@ -144,6 +144,10 @@ DTOs (all in `./types.ts`): `AccountView`, `AccountType`, `BalanceView`, `Transa
 - **`task` payload** is stored as JSON text written with `lib/json.toJson` (the repository path and the idempotent path write the identical column value); read back via `lib/json.safeParse`.
 - **`contact.toContactView`** is exported for reuse by `transfer.ts` (internal helper — not a DTO).
 
+## Known Issues
+
+- **`detectAnomaly` is DIRECTION-AGNOSTIC** (`transaction.ts:87`): it flags any row with `Math.abs(amount) > ANOMALY_AMOUNT_THRESHOLD` (¥5,000, `lib/constants.ts:13`), ignoring `direction`/`category`. The seeded monthly salary income rows (`prisma/seed.ts:227`, id `tx_<month>_salary`, category `工资`, direction CREDIT, ~¥11,000 each) thus surface as "大额消费" anomalies with severity `high` — 6 false positives. The explicitly-flagged Apple Store row (`isAnomaly=true`) and `listAnomalies` (flag-based) are unaffected. The test fixture DB (`tests/helpers/fixtures.ts`) seeds only DEBIT rows, so the bug appears only against the real `prisma/seed.ts` dataset.
+
 ## Notes for Agents
 
 - New transfer mutations use `normalizeTransferAmount`; fractional cents are rejected instead of
