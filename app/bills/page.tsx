@@ -33,6 +33,9 @@ function monthBounds(month: string): { from: number; to: number } {
   return { from: start.getTime(), to: end.getTime() };
 }
 
+// Reads live Prisma data, so it must render per request — never statically prerendered at build.
+export const dynamic = 'force-dynamic';
+
 export default async function BillsPage({ searchParams }: BillsPageProps) {
   const userId = getConfig().demoUserId;
   const { month: monthParam } = await searchParams;

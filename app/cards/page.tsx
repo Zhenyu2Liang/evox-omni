@@ -20,6 +20,9 @@ import { banking } from '@/banking-sdk';
 import type { CardView } from '@/banking-sdk';
 import { CardTile, EmptyState } from '@/components';
 
+// Reads live Prisma data, so it must render per request — never statically prerendered at build.
+export const dynamic = 'force-dynamic';
+
 export default async function CardsPage() {
   const userId = getConfig().demoUserId;
 
