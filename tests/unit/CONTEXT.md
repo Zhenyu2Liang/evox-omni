@@ -39,7 +39,9 @@ runs them all — no scoped config is required for any of them.
   → `NOT_FOUND`).
 - `agent/` (6 specs + `providers/` 4 specs) — end-to-end confirmation-flow audit specs against the real DB +
   gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `message-normalize` (`withRealToolResult` restores the REAL result over a stale parked `等待确认`), `task-control`, `task-cancel-revokes`, `run-turn-failure` (continuation failure never rephrased as success);
-  `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec.
+  `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec (incl. honest failure /
+  not-yet-executed narration); `providers/provider-live.test.ts` is the pure model-resolution spec and
+  `providers/provider-runtime.test.ts` the explicit-provider runtime spec.
   `providers/plan-limit-park.test.ts` pins the mock `submit_plan` gated conditional plan
   (analyze -> check -> setlimit) that PARKS in `waiting_confirmation`, then confirms.
 - `lib/` (2 specs) — `pendingAction.claim.test.ts` — `lib/db/repositories/pendingAction`: the atomic,
