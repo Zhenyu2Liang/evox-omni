@@ -16,7 +16,7 @@ imports + node built-ins only, to avoid tsx/tsconfig path surprises).
 
 ## API Surface
 - `acceptance.e2e.ts` — the SINGLE entry point. Sets the isolated DB → resets it to the canonical
-  seed → boots the app → waits for readiness → launches Chrome → runs the 6 journeys → prints
+  seed → boots the app → waits for readiness → launches Chrome → runs the 7 journeys (a–g) → prints
   exactly one `PASS|FAIL|SKIP <journey> — <evidence>` line per journey → exits non-zero iff ANY
   journey FAILED (a SKIP does not fail the run).
 - `helpers.ts` — shared harness (details below).
