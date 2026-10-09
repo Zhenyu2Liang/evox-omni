@@ -40,7 +40,7 @@
   转账依然被判为 🔴 RED、依然需要人工验证码。权限既不会被提高，也不会被绕过。
 - **🚫 幻觉防护 / 如实报告（Test 5）** — 模型只能陈述来自工具结果的事实；工具返回 `success:false` 时，
   Agent 必须如实报告失败，绝不允许编造成功。
-  **结构化事实通道（grounding）** 在服务端为模型注入事实依据（`agent/grounding.ts#buildFinancialFacts` / `groundAssistantText`）：转账/余额/收款人/状态只能来自真实工具结果，否则回复在 `message_end` 被服务端校正（标记 `（系统校正）`）。
+  **服务端事实通道（grounding）** 用真实工具结果核验并**替换**不一致的模型文本（`agent/grounding.ts#groundAssistantText` / `agent/grounding-facts.ts#buildFinancialFacts`，接入 `agent/run-turn.ts` 的 `message_end`）：转账/余额/收款人/状态只能来自真实工具结果，否则回复被服务端校正（标记 `（系统校正）`）。判定按**操作身份**（工具）结构化进行（`grounding-facts.ts#OPERATION_CATEGORIES`）：`transfer` 只由 `transfer_money` 支撑、`budget` 只由 `reserve_budget` 支撑，因此**一次预算写入不能支撑「转账成功」**；结果真正**未知**（如进入人工核对）时只表述为「待核对」，**绝不**写成成功、失败或「资金未变」。
 - **🔗 跨场景任务串联** — 一个自然语言请求可以组合多个能力（例如"预留预算 + 定时提醒"），
   每个动钱的节点仍逐个经过安全闸门。
 - **📜 全链路审计（按副作用判定）** — 审计由操作是否产生**副作用**决定（`security/permission-engine.ts` 的 `ToolPolicy.write` / `isWriteTool()`），**与权限颜色无关**：🟢 GREEN 自动写入（如 `reserve_budget`）同样入审计，且审计行与被审计业务写入在**同一个 `prisma.$transaction` 内**（`agent/write-audit.ts`，strict：审计失败回滚业务写入）；去重键按所有者隔离 `write:<tool>:<owner>:<identity>`，与门控身份 `exec:<actionId>` / `reconcile:<actionId>` 互不冲突。每个安全控制决策（熔断、注入检测、验证码失败）都写入 `SecurityEvent`。
@@ -234,10 +234,10 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 - **提示词注入防御（injection-guard）** — 对用户输入做启发式检测，命中则记录 `SecurityEvent`
   并向前端发出安全事件（`security_event{kind:'injection'}`）；但它 **只做纵深防御，绝不授予权限**。
   检测结果**不会**被注入模型上下文（不加任何"系统提醒"），也不改变任何授权结论。
-- **幻觉防护（hallucination guard）** — 模型只能报告来自工具结果的事实；`success:false` 必须如实报告失败。**结构化事实通道（grounding）** 在服务端为模型注入事实依据（`agent/grounding.ts#buildFinancialFacts` / `groundAssistantText`）：转账/余额/收款人/状态只能来自真实工具结果，否则回复在 `message_end` 被服务端校正（标记 `（系统校正）`）。
+- **幻觉防护（hallucination guard）** — 模型只能报告来自工具结果的事实；`success:false` 必须如实报告失败。**服务端事实通道（grounding）** 用真实工具结果核验并**替换**不一致的模型文本（`agent/grounding.ts#groundAssistantText` / `agent/grounding-facts.ts#buildFinancialFacts`，接入 `agent/run-turn.ts` 的 `message_end`）：转账/余额/收款人/状态只能来自真实工具结果，否则回复被服务端校正（标记 `（系统校正）`）。判定按**操作身份**（工具）结构化进行（`grounding-facts.ts#OPERATION_CATEGORIES`）：`transfer` 只由 `transfer_money` 支撑、`budget` 只由 `reserve_budget` 支撑，因此**一次预算写入不能支撑「转账成功」**；结果真正**未知**（如进入人工核对）时只表述为「待核对」，**绝不**写成成功、失败或「资金未变」。
 - **模拟 MFA（短信验证码）** — 🔴 RED 操作需要输入验证码；错误验证码会累加失败次数。
   **UI 永不显示验证码**，需由用户输入。
-- **熔断（circuit-breaker，DB 持久化 · 按所有者）** — 连续 **3 次** 验证码失败会 **锁定该所有者（fail-closed：拒绝*所有*工具调用，*包括 🟢 GREEN 查询*）** 并写入 `SecurityEvent`（`CIRCUIT_BREAKER_TRIPPED`，severity `high`）。锁状态**持久化在 `CircuitBreakerState`**（Prisma），键为 `user:<userId>` / `session:<actor>`，因此**新建会话或进程重启都无法绕过**。熔断是 LLM 无法清除的硬闸门（**没有解锁工具**）；**只有用户通过安全中心**（`POST /api/security/reset` → `circuitBreaker.resetSession`）**的经审计操作才能解除**，且解除本身**被门控**（需额外验证码 `123456` **或** 冷却 `RESET_COOLDOWN_MS = 60_000`），写入 `SECURITY_RESET` 事件。
+- **熔断（circuit-breaker，DB 持久化 · 按所有者 · 加固）** — 连续 **3 次** 验证码失败会 **锁定该所有者（fail-closed：拒绝*所有*工具调用，*包括 🟢 GREEN 查询*）** 并写入 `SecurityEvent`（`CIRCUIT_BREAKER_TRIPPED`，severity `high`）。锁状态**持久化在 `CircuitBreakerState`**（Prisma），键为 `user:<userId>` / `session:<actor>`，因此**新建会话或进程重启都无法绕过**；锁定时间戳与解锁冷却期按服务器**真实时钟**（`lib/clock.ts#realNow()`，非演示时钟）计时。熔断是 LLM 无法清除的硬闸门（**没有解锁工具**）；**只有用户通过安全中心**（`POST /api/security/reset` → `circuitBreaker.resetSession`）**的经审计操作才能解除**，且解除本身**被门控**（需额外验证码 `123456` **或** 冷却 `RESET_COOLDOWN_MS = 60_000`）。**解锁原子且严格审计**：清除状态与写入 `SECURITY_RESET` 事件在**同一个 `prisma.$transaction`** 内提交（strict），审计失败即回滚清除、锁保持不变；安全中心的解锁输入框**默认为空**，绝不预填验证码。
 - **审计（audit，按副作用 + 严格 + 幂等）** — **审计由是否产生副作用决定，而非权限颜色**：`security/permission-engine.ts` 的 `ToolPolicy.write` / `isWriteTool()` 列出的写入工具（含 🟢 GREEN 的 `reserve_budget`）**都会写入 `AuditLog`**，且审计行经 `agent/write-audit.ts` 与业务写入**在同一个 `prisma.$transaction` 内**（strict：审计失败回滚业务写入），去重键按所有者隔离 `write:<tool>:<owner>:<identity>`；
   执行 / 恢复的审计**与被审计的业务事实在同一个 `$transaction` 内**写入（`audit/audit-logger.ts#recordAudit(entry, { client, dedupeKey, strict })`）：`strict:true`（执行 / 恢复审计）会**重抛真实插入错误**、从而**回滚该业务写入**，仅当 **Prisma `P2002` 唯一冲突 + 同 `dedupeKey` 行已存在**时才吸收为幂等重复 —— 因此「已结算却无审计」不可能发生；唯一 `dedupeKey`（`AuditLog.dedupeKey String? @unique`，形如 `exec:<ledgerKey>`，即该动作的执行身份 / `actionId`）令重复恢复**绝不**重复记账；
   历史上「已入账但缺审计」的行支持**幂等回填**（去重键不变，**绝不**重新扣款、**绝不**把 `executed` 改成 `failed`）；每个安全控制决策写入 `SecurityEvent`。
@@ -412,7 +412,7 @@ npm run build         # 生产构建（页面在构建期预渲染，必须先�
 > **模拟短信验证码：`123456`**
 >
 > 这是**竞赛演示用的固定测试验证码**（`lib/constants.ts` 中的 `MFA_CODE`）。
-> 演示环境不发送真实短信；**UI 永不显示该验证码**，需要由用户在验证框中手动输入。
+> 演示环境不发送真实短信；**UI 永不显示该验证码**，需要由用户在验证框中手动输入（安全中心的解锁输入框**默认为空**，绝不预填）。
 > 真实生产系统绝不会使用固定验证码。
 
 ---
@@ -524,9 +524,10 @@ RED 终态不会再次要求验证码；并发恢复在事务内使用当前授�
 - **验证码是模拟的**（固定 `123456`），不发送真实短信；且 UI 不显示验证码。
 - **演示时钟被固定。** 应用内所有"现在"默认使用 `DEMO_NOW = 2026-09-25 12:00（本地时间）`（`lib/constants.ts`），经 `lib/clock.ts` 的 `demoNow(override?)` 统一派发，
   以保证本月/上月/今日窗口、消费分析、当日转账累计与种子数据保持一致 —— 它 **不是真实系统时间**。
+  **例外：安全类的时间闸门**（熔断锁定时间戳与解锁冷却期）使用服务器**真实时钟** `lib/clock.ts#realNow()`，否则以演示时钟计时的锁永远不会在真实时间中到期。
 - **异常检测为演示级规则。** 基于单笔**支出（DEBIT）**金额阈值（>¥5,000，`ANOMALY_AMOUNT_THRESHOLD`）与种子标记，**仅对借记**生效（大额收入如工资/退款不会被误判为"大额消费"），并非真实风控模型。
 - **理财产品为虚构数据**，收益率/持仓均非真实市场数据；申购/赎回会调整账户余额，并在**同一个事务内**写入一条 `投资` 分类的 `Transaction` 流水行（`INVESTMENT_FLOW_CATEGORY = '投资'`，幂等），因此本金不计入日常消费/工资统计。
-- **熔断器为 DB 持久化、按所有者（`CircuitBreakerState`，键 `user:<userId>` / `session:<actor>`）**，锁**跨会话/重启仍生效**；解锁被门控（验证码 `123456` 或冷却 60s）并审计。仅在**单进程/单 SQLite** 下验证，非分布式集群实现。
+- **熔断器为 DB 持久化、按所有者（`CircuitBreakerState`，键 `user:<userId>` / `session:<actor>`）**，锁**跨会话/重启仍生效**；锁定与冷却按服务器**真实时钟**计时，解锁被门控（验证码 `123456` 或冷却 60s），其状态清除与 `SECURITY_RESET` 审计**同事务原子提交**（审计失败则锁保持不变）。仅在**单进程/单 SQLite** 下验证，非分布式集群实现。
 - **审计范围以「副作用」为界。** 所有**写入工具**（`ToolPolicy.write` / `isWriteTool()`，含 🟢 GREEN 的 `reserve_budget`）写入 `AuditLog`，且审计与业务写入同事务（strict）；🟢 GREEN 的**纯读取**（如余额/流水查询）**不写审计** —— 这是**设计选择**（非缺陷）：读操作无副作用、无人工决策，故不入审计。
 - **`change_password` 为演示专用**（无凭据存储），以 `AuditLog` 记录为准。
 - **`LLM_MODE=live` 时结果不确定**（真实大模型的非确定性）；所有自动化测试与演示均使用
