@@ -490,7 +490,7 @@ Vitest. This node is designed to be unit-testable WITHOUT network or clock:
 - Pure units (`permission-engine`, `risk.evaluateTransferRisk`, `injection.scan`, `decide`,
   `serialize`/`parseBlockReason`, `buildPendingActionSummary`, `deriveIntent`) — table-driven, no DB.
 - Breaker/MFA/gateway I/O units — run against the test SQLite (`lib/db`) with a unique USER/session identity
-  per test to isolate the in-memory breaker; assert `recordFailure` emits `CIRCUIT_BREAKER_TRIPPED`
+  per test, since the breaker state PERSISTS per owner (a lock survives a new session and a process restart); assert `recordFailure` emits `CIRCUIT_BREAKER_TRIPPED`
   and `resetSession` emits `SECURITY_RESET`. The gateway audit-trail specs assert the persisted
   `userRequest` + `intent` round-trip through `createPendingAction`/`handleToolCall`.
 - Authorization-hardening units
