@@ -197,11 +197,19 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   (`异常交易提醒` / `Apple Store` / `-¥6,999.00` / `风险 低`); the assistant does NOT claim
   `未发现可疑交易`. SECONDARY: `GET /api/bills` `anomalies` is exactly the one `tx_anomaly_apple`
   DEBIT row (DEBIT-only, no CREDIT).
-- **j-circuit-breaker-lock** (DURABLE per-OWNER lock): reset the account breaker, then THREE consecutive
-  wrong MFA codes (`000000`) on a RED transfer (after each, `role=status` shows `验证失败，已尝试 N 次`)
-  trip it → security center `已熔断` + `失败 3 / 3 次` + a DB-cross-checked `CIRCUIT_BREAKER_TRIPPED`;
-  the lock PERSISTS across a plain reload; the GATED `解除熔断限制` (`123456`) unlocks it and audits a
-  `SECURITY_RESET` event.
+- **j-circuit-breaker-lock** (DURABLE per-OWNER lock): reset the account breaker to a known zero state,
+  then THREE consecutive wrong MFA codes (`000000`) on a RED transfer (after each, `role=status` shows
+  `验证失败，已尝试 N 次`) trip it → security center `已熔断` + `失败 3 / 3 次` + a DB-cross-checked
+  `CIRCUIT_BREAKER_TRIPPED` (severity `high`).
+  The `/security` breaker control's 6-digit code input starts EMPTY — the mock code `123456` is NEVER
+  prefilled or revealed (asserted `value === ''` AND the placeholder does not contain `123456`) — and its
+  unlock button is DISABLED while the input is empty, so a MISSING code cannot be submitted (the lock
+  stays). A WRONG code (`000000`) is REFUSED by the route (its message `解除熔断需要额外的安全验证…`
+  surfaces) and the lock PERSISTS across a plain reload; only the CORRECT `123456` clears the breaker
+  (`已解除，当前失败0/3次`) and records a `SECURITY_RESET` event (DOM + DB).
+  The code is TYPED (`fillBreakerCode`, after `waitForElementHydration`) BEFORE
+  `clickBreakerReset(page, name, code)` clicks — the empty disabled button would otherwise be an
+  actionability no-op.
 
 ## Coverage notes
 - **Covers:** real-browser NL → card → human-decision flows; MFA success + wrong-code rejection;
