@@ -102,7 +102,12 @@ complementing the in-process `tests/scenarios/*` suites.
   cancelling a plan revokes its parked action (plus cancel/confirm race orderings); a MID-RUN pause
   issued through `POST /api/tasks/[id]` halts the next node while resume re-runs only that node; and
   identity stays COOKIE-ONLY — a forged `?sessionId=`/`?userId=` query NEVER authenticates on
-  `verify`/`cancel`/`tasks`/`reset`.
+  `verify`/`cancel`/`tasks`/`reset`. It ALSO pins the AUDITED UNLOCK GATE of `POST /api/security/reset`
+  (a tripped owner is reached by `MFA_MAX_ATTEMPTS` wrong verifies on a RED action): a body-less `{}`
+  or a WRONG `verificationCode` is refused `423 CIRCUIT_OPEN` (lock left intact, NO `SECURITY_RESET`
+  event) while the CORRECT `MFA_CODE` unlocks `200` with exactly ONE `SECURITY_RESET` event for the
+  owner (shared across the owner's sessions); a NOT-locked owner needs no code; no body ever leaks the
+  MFA code.
 - `session-takeover-http.test.ts` — cookie-only takeover/isolation: a body `sessionId` that disagrees
   with the cookie (incl. no cookie) → `409` with NO `Set-Cookie`; cross-session action/plan isolation
   (403, victim action stays pending); missing-cookie fail-closed 403 across confirm/verify/cancel/tasks/
