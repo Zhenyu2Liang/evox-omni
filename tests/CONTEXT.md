@@ -73,7 +73,19 @@ cross-browser, accessibility or performance matrix.
     (`outcome.message`), `integration/recovery-authorization.test.ts` (`data.message`).
   - Injected tool-result text: `unit/agent/run-turn-failure.test.ts` (`text === FAILURE_TEXT`,
     `not.toContain('成功'/'操作完成')`), `unit/agent/message-normalize.test.ts`.
-- NO generic, model-independent hallucination guard exists: no test parses arbitrary model prose and
+- A SERVER-AUTHORED grounding guard now exists: `agent/grounding.ts#groundAssistantText` structurally
+  compares the assistant's terminal text against the turn's REAL tool results
+  (`agent/grounding-facts.ts#buildFinancialFacts`) and REPLACES an inconsistent message with a
+  server-authored correction; `agent/run-turn.ts#TurnBuffer` buffers until `message_end` so a wrong
+  fact is never streamed before the correction. `integration/grounding-regression.test.ts` pins it
+  through the REAL `runTurn`/`resumeTurn` pipeline (faux provider via `RunTurnDeps.provider`): no-tool
+  false success, checking/savings balance mismatch, budget-vs-transfer conflation, wrong
+  recipient/amount, unknown-outcome wording (待核对), mixed + English false-success phrasings, a
+  model-forged `（系统校正）` tag (informational only — NOT a skip key), and streamed/final/persisted
+  consistency. Anti-fabrication is ALSO enforced structurally (a gated tool cannot execute ⇒ no DB
+  write / `tool_end:blocked`), which alone does NOT constrain narration wording — the guard does.
+  `unit/agent/run-turn-failure.test.ts` guards the injected tool-result text; `scenarios/test-05` +
+  `mock-integration` guard the failing-transfer success-phrase regexp (`/已向.*转账|转账成功|已成功转出/`).
   cross-checks financial figures against the ledger/tool result. Anti-fabrication is enforced
   structurally (a gated tool cannot execute ⇒ no DB write / `tool_end:blocked`), which does NOT
   constrain narration wording. `unit/agent/run-turn-failure.test.ts` guards only the injected
