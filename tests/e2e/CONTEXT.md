@@ -67,6 +67,13 @@ Harness helpers (`helpers.ts`):
   the DOM (assistant narration / plan badges) and add a real read-route cross-check.
 - Wait on real DOM conditions, never fixed sleeps; keep generous timeouts for Next dev cold compile.
 
+## Coverage gaps (flows with NO real-browser journey)
+New journeys must also be registered in `acceptance.e2e.ts#JOURNEYS` (a-transfer-confirm, b-transfer-mfa, c-plan-pause-resume, d-plan-cancel, e-refresh-action-recovery, f-wedge-refresh-recover, g-manual-handoff).
+These three demo flows are currently covered ONLY by vitest, never by a real browser:
+- **Investment 申购/赎回 + resulting cash-flow row** — mock triggers in `agent/providers/mock-responder.ts` (`申购|认购|买入|购买` / `赎回`); RED ⇒ MFA; invest result renders NO chat card (`agent/card-emitter.ts` returns `[]`), so assert on narration. Owning vitest: `tests/scenarios/test-09-investment-mfa.test.ts`, `tests/unit/banking-sdk/investment*.test.ts`.
+- **Anomaly detection (Apple Store ¥6,999 flagged; salary/income not)** — mock trigger `异常|可疑|奇怪|盗刷|被刷|乱扣|乱花|不对的消费` (GREEN); renders the `anomaly` card. Owning vitest: `tests/scenarios/test-07-anomaly.test.ts`, `tests/unit/banking-sdk/anomaly.test.ts`.
+- **Circuit breaker lock/unlock (3 consecutive wrong MFA codes + gated reset)** — owning vitest: `tests/scenarios/test-10-circuit-breaker.test.ts`, `tests/app/security-workflow-http.test.ts`.
+
 ## Prerequisites (in order, in a fresh worktree)
 1. `npm install`
 - No manual `prisma generate` step: `resetDemoDatabase()` GENERATES the Prisma Client itself when it is
