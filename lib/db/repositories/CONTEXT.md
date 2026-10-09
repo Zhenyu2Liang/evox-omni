@@ -9,13 +9,13 @@ One module per aggregate. Each exports narrow, typed async functions over the sh
 `client: Prisma.TransactionClient = prisma`, so a caller can route several of its calls through ONE
 `prisma.$transaction` handle. The default keeps every existing caller working unchanged. This exists so a
 plan-level cancel and a concurrent authorization CAS can be composed into a single transaction and cannot
-interleave. All other repository modules use the shared singleton only.
+interleave. Two further aggregates accept an optional `client` for the SAME atomic-composition reason: `securityEvent.ts#insertSecurityEvent` (commit a security event in the caller's transaction) and `circuitBreaker.ts#resetBreakerState` (unlock + its `SECURITY_RESET` audit atomically together). All other repository modules use the shared singleton only.
 
 ## API Surface
 
 Model return types come from `@prisma/client`. JSON-text columns are stored/parsed with `lib/json`.
 All functions below are implemented (real Prisma data access).
-The trailing optional `client?` parameter is documented only for `pendingAction.ts` — the aggregate
+The trailing optional `client?` parameter is documented for `pendingAction.ts` (every function)
 that accepts one.
 
 - `user.ts` (`User`) — `getUser(id)`, `getUserByPhone(phone)`, `listUsers()`,
@@ -91,10 +91,17 @@ that accepts one.
 - `securityEvent.ts` (`SecurityEvent`) — `SecurityEventInput {sessionId, userId?, kind, severity, message, detail?, timestamp?}`,
   `SecurityEventQuery {userId?, sessionId?, kind?, limit?}`;
   `createSecurityEvent(input)`, `listSecurityEvents(query?)`, `countSecurityEvents(query?)`; plus
-  `insertSecurityEvent(event): Promise<SecurityEvent>`, `findSecurityEvents(filter): Promise<SecurityEvent[]>`
+  `insertSecurityEvent(event, opts?: { client?: DbClient }): Promise<SecurityEvent>` (the optional `client` commits the append in the caller's `$transaction`), `findSecurityEvents(filter): Promise<SecurityEvent[]>`
   (consumed by `audit/`).
 - `session.ts` (`AgentSession`) — `listSessions(userId)`, `getSession(id)`, `createSession({userId, stateJson, status?, locked?})`,
   `updateSessionState(id, stateJson)`, `setSessionLocked(id, locked)`, `updateSessionStatus(id, status)`, `deleteSession(id)`.
+- `circuitBreaker.ts` (`CircuitBreakerState`) — `BreakerSnapshot {failures, locked, lockedAt}`, `ResetBreakerExpectation {locked, lockedAt}`, `ResetBreakerResult {applied, before, after}`;
+  `getBreakerState(key, client?): Promise<CircuitBreakerState | null>` (the optional `client` is for an in-transaction read — a global read inside an open transaction deadlocks on a single-connection DB),
+  `upsertFailure({key, userId?, max, now}): Promise<BreakerSnapshot & {didLock}>` (one consecutive failure; locks on reaching `max`; idempotent while already locked),
+  `recordSuccessState(key): Promise<BreakerSnapshot>` (counter reset WITHOUT unlocking),
+  `resetBreakerState(key, opts?: { client?: DbClient; expect?: ResetBreakerExpectation }): Promise<ResetBreakerResult>` — clears to `{failures:0, locked:false, lockedAt:null}`.
+  WITHOUT `expect`: an UNCONDITIONAL clear (`applied: true`). WITH `expect`: an atomic compare-and-set — the clear is written ONLY when the current row matches `expect` (`locked` equal AND `lockedAt` equal by millisecond value, `null`==`null`); on mismatch NOTHING is written and it returns `applied:false` with `before` (= `after`) = the current snapshot (`EMPTY_SNAPSHOT` when no row, so `after` stays a non-null `BreakerSnapshot`).
+  `opts.client` routes BOTH the read and the write through that client (so an unlock + its audit commit in one `$transaction`); omitted → its own `prisma.$transaction`. Callers still own the unlock POLICY.
 - `pendingAction.ts` (`PendingAction`, `MfaChallenge`) — `PendingActionWithMfa = PendingAction & { mfa }`,
   `PendingActionOwnership {id, userId, sessionId, status}`, `PendingActionPlanLink {id, taskId, nodeId}`;
   `CreatePendingActionInput {sessionId, userId, toolName, args, tier, requiresMfa, summary, status?, userRequest?, intent?, taskId?, nodeId?}`
@@ -127,7 +134,7 @@ that accepts one.
   `createMfaChallenge(input, client?)` (`maxAttempts` default 3),
   `getMfaChallenge(actionId, client?)`, `incrementMfaAttempts(actionId, client?)`,
   `updateMfaChallengeStatus(actionId, status, client?)`, `resetMfaAttempts(actionId, client?)` (sets `attempts` 0).
-- `index.ts` — namespace barrel: `users, accounts, transactions, contacts, cards, subscriptions, investments, budgets, tasks, scheduledTasks, auditLogs, securityEvents, sessions, pendingActions`.
+- `index.ts` — namespace barrel: `users, accounts, transactions, contacts, cards, subscriptions, investments, budgets, tasks, scheduledTasks, auditLogs, securityEvents, sessions, pendingActions, executionReceipts, manualReviews, circuitBreakers`.
 
 ## JSON-text columns (serialize with `toJson` / parse with `safeParse`)
 
@@ -140,7 +147,7 @@ that accepts one.
 - Input DTOs live in the module that owns them; reuse `lib/contracts` types (`RiskLevel`,
   `PendingActionSummary`, `PendingActionStatus`, `TaskCondition`, `AuditEntry`, `SecurityEvent`) instead of redefining them.
 - No risk/permission logic — repositories are dumb persistence only.
-- `pendingAction.ts` is the ONE aggregate whose functions take the optional trailing
+- `pendingAction.ts` is the aggregate whose EVERY function takes the optional trailing
   `client: Prisma.TransactionClient = prisma`; the default must stay the `../client` singleton so existing
   callers compile and behave identically. This parameter exists purely to compose the cancel/authorize flow
   into one transaction — never replace a `claim*`/`revoke*` CAS with a read-modify-write to achieve it.
@@ -169,7 +176,8 @@ that accepts one.
 - `./securityEvent.ts` → SecurityEvent
 - `./session.ts` → AgentSession
 - `./pendingAction.ts` → PendingAction + MfaChallenge (+ plan-scoped `listPendingActionsByTask` / `revokePendingActionsByTask`, the `getPendingActionPlanLink` reader, and the optional-`client` transaction-composable variants of every function)
-- `./index.ts` → namespace barrel
+- `./index.ts` → namespace barrel (`users, accounts, transactions, contacts, cards, subscriptions, investments, budgets, tasks, scheduledTasks, auditLogs, securityEvents, sessions, pendingActions, executionReceipts, manualReviews, circuitBreakers`)
+- `./circuitBreaker.ts` → CircuitBreakerState (durable OWNER-scoped breaker; `resetBreakerState` takes an optional `client` + `expect` CAS)
 
 ## Notes for Agents
 

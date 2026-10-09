@@ -31,6 +31,9 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   convenience wrappers defaulting to the demo clock — `demoTodayRange(override?)`, `demoMonthRange(override?)`,
   `demoPreviousMonthRange(override?)` — each delegates to the matching `date.ts` helper via
   `new Date(demoNow(override))`.
+  It also exports `realNow(): number` — the server's REAL wall clock (`Date.now()`), used ONLY for
+  SECURITY elapsed-time gates (circuit-breaker lock timestamp / unlock cooldown, `now >= lockedAt + RESET_COOLDOWN_MS`);
+  never use it for business dates, and never use `demoNow()` for security cooldown timing.
 - `json.ts` — SQLite JSON-text column helpers: `safeParse<T>(text, fallback)` (returns `fallback` for
   null/undefined/empty/invalid JSON) and `toJson(value)` (`'null'` when value is `undefined`).
 - `phone.ts` — mask-aware phone matching & masking (pure, never throws): `maskAwarePhoneMatch(value, stored)` → TRUE iff a RAW value matches a MASKED stored phone (exact, digit-substring either direction, or an anchored wildcard pattern from the stored phone's `*`-split fragments); `maskPhone(phone)` → first-3 + `****` + last-4. Lets a RAW phone lookup match the demo's MASKED-stored `Contact.phone` values.
@@ -107,7 +110,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/config.ts` → `getConfig()` runtime env config.
 - `./lib/ids.ts` → `newId(prefix?)` id generation.
 - `./lib/date.ts` → pure local-timezone date-range/format helpers.
-- `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
+- `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers, plus `realNow()` (the server REAL wall clock `Date.now()`) used ONLY for SECURITY elapsed-time gates (breaker lock timestamp / unlock cooldown) — never for business dates.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
 - `./lib/ledger.ts` → deterministic idempotency keys + canonical action→ledger-row identity — `idempotentTransferTxId`, `nodeExecutionKey`, `ledgerKeyForAction`, `ledgerTxIdForAction`, plus the EXECUTION-RECEIPT helpers `executionReceiptId` / `requestDigest`.
 - `./lib/phone.ts` → mask-aware phone matching & masking — `maskAwarePhoneMatch(value, stored)` (raw↔masked) and `maskPhone(phone)`; the shared helper that lets a RAW phone lookup match the demo's MASKED-stored `Contact.phone` values (used by the `security/recipient-resolution.ts` write path AND the `lib/db/repositories/contact.ts#searchContacts` read path).
