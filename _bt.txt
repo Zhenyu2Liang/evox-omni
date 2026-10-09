@@ -1,0 +1,30 @@
+ Detected additional lockfiles: 
+   * D:\projects\banking-agent\.genesis\workers\worker_T2_A1\package-lock.json
+System.Management.Automation.RemoteException
+   ? Next.js 15.5.26
+   - Environments: .env
+
+   Creating an optimized production build ...
+ ? Compiled successfully in 5.9s
+   Linting and checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/24) ...
+   Generating static pages (6/24) 
+   Generating static pages (12/24) 
+   Generating static pages (18/24) 
+Error occurred prerendering page "/cards". Read more: https://nextjs.org/docs/messages/prerender-error
+Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.card.findMany()` invocation:
+System.Management.Automation.RemoteException
+System.Management.Automation.RemoteException
+The table `main.Card` does not exist in the current database.
+    at async Module.Z (D:\projects\banking-agent\.genesis\workers\worker_T2_A1\.next\server\chunks\662.js:1:8870)
+    at async j (D:\projects\banking-agent\.genesis\workers\worker_T2_A1\.next\server\app\cards\page.js:2:9325) {
+  code: 'P2021',
+  meta: [Object],
+  clientVersion: '6.19.3',
+  digest: '1102126562'
+}
+Export encountered an error on /cards/page: /cards, exiting the build.
+ ? Next.js build worker exited with code: 1 and signal: null
+
