@@ -50,6 +50,7 @@ import {
   getJson,
   idCtx,
   postJson,
+  postRaw,
   taskUrl,
   type HttpResult,
 } from './harness';
@@ -850,6 +851,29 @@ function resetCall(opts: ForgeOpts = {}) {
 }
 
 /**
+ * `POST /api/security/reset` with NO body at all — the route folds an ABSENT/empty body into `{}`
+ * (`app/api/_lib/http.ts#parseOptionalBody`), so this exercises the "no code supplied" unlock gate.
+ */
+function resetCallNoBody(opts: ForgeOpts = {}) {
+  return postRaw<Envelope<ResetData>>(
+    resetPost,
+    appendQuery('/api/security/reset', opts.query),
+    '',
+    { sessionId: opts.sessionId },
+  );
+}
+
+/** `POST /api/security/reset { verificationCode }` — supply an explicit (correct or WRONG) code. */
+function resetCallWithCode(code: string, opts: ForgeOpts = {}) {
+  return postJson<Envelope<ResetData>>(
+    resetPost,
+    appendQuery('/api/security/reset', opts.query),
+    { verificationCode: code },
+    { sessionId: opts.sessionId },
+  );
+}
+
+/**
  * A fresh VICTIM session that OWNS both a chat-parked YELLOW transfer and a durable GATED task, plus
  * a FOREIGN valid session that owns neither. Both resources belong to the SAME victim session, so a
  * forged query (or cookie) that slipped past identity would be directly observable.
@@ -1002,9 +1026,10 @@ describe('[integration] identity — a query param NEVER authenticates on verify
     expect(await getTestPrisma().auditLog.count({ where: { sessionId: victim } })).toBe(0);
 
     // (c) The GATED unlock's POSITIVE path: the deliberate security-center action supplies the mock
-    // strong-verification code, so the OWNER finally clears. (The HTTP reset route above carries NO
-    // code — a production gap — so the code-bearing unlock goes through the very `@/security` facade
-    // the route calls.) The lock is PER USER: clearing it releases BOTH of the user's sessions at once.
+    // strong-verification code, so the OWNER finally clears. The REAL HTTP reset route accepts the
+    // same OPTIONAL `verificationCode` (pinned end-to-end in the dedicated unlock-gate suite below);
+    // here the same `@/security` facade the route delegates to is invoked directly to prove the
+    // unlock is PER USER — clearing it releases BOTH of the user's sessions at once.
     const unlocked = await security.circuitBreaker.resetSession(victim, { verificationCode: MFA_CODE });
     expect(unlocked.locked).toBe(false);
     expect(unlocked.failures).toBe(0);
@@ -1022,5 +1047,123 @@ describe('[integration] identity — a query param NEVER authenticates on verify
       probe.data,
       probe.data?.data,
     );
+  });
+});
+
+/* ============================================================================================== *
+ * SCENARIO 5 — the AUDITED UNLOCK GATE on the REAL `POST /api/security/reset` route (ISSUE 2)
+ * ============================================================================================== *
+ * An auditor flagged that a bare session cookie must NEVER clear a tripped breaker. This suite pins
+ * the gate at the HTTP layer: the `banking_session` cookie authenticates the CALLER, but the unlock
+ * itself is decided in code by `security/circuit-breaker.ts#resetSession` — while the OWNER is
+ * LOCKED it REQUIRES a correct mock `verificationCode` (`MFA_CODE`) OR an elapsed cooldown, else it
+ * THROWS `AppError('CIRCUIT_OPEN')` → HTTP 423 and the lock is LEFT INTACT (no `SECURITY_RESET`
+ * event). The route folds an ABSENT/empty body into `{}` (`_lib/http#parseOptionalBody`), so a
+ * code-less POST is exactly what a bare cookie can send; when the owner is NOT locked no code is
+ * required. The breaker is PER USER, so clearing it releases ALL of the owner's sessions at once.
+ * ============================================================================================== */
+
+/** Park a RED (MFA) transfer and trip the owner's breaker with `MFA_MAX_ATTEMPTS` WRONG codes. */
+async function lockOwner(): Promise<{ sessionId: string; actionId: string }> {
+  const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+
+  // A ¥5000 transfer exceeds `DAILY_TRANSFER_LIMIT` ⇒ RED at park time, so it awaits the mock code.
+  const turn = await chatTurn('给张伟转5000元', sessionId);
+  expect(turn.sessionId, 'the chat turn must reuse the session').toBe(sessionId);
+  const action = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { sessionId } });
+  expect(action.toolName).toBe('transfer_money');
+  expect(action.riskLevel, 'a ¥5000 transfer is RED at park time').toBe('RED');
+
+  // Trip the breaker through the REAL verify route with the OWNER's OWN cookie (3 consecutive
+  // failures). The demo clock is FIXED, so the cooldown never elapses — a code is REQUIRED to clear.
+  for (let attempt = 0; attempt < MFA_MAX_ATTEMPTS; attempt += 1) {
+    const res = await verifyCall(action.id, { sessionId, code: '000000' });
+    expect(res.status, 'a wrong MFA code returns a normal 200 envelope').toBe(200);
+  }
+  expect((await security.circuitBreaker.getState(sessionId)).locked, 'the owner must be locked').toBe(true);
+
+  return { sessionId, actionId: action.id };
+}
+
+/** Count the `SECURITY_RESET` audit events recorded for a session. */
+function countResetEvents(sessionId: string): Promise<number> {
+  return getTestPrisma().securityEvent.count({ where: { sessionId, kind: 'SECURITY_RESET' } });
+}
+
+describe('[integration] POST /api/security/reset — the AUDITED unlock gate (ISSUE 2)', () => {
+  it('10 — while LOCKED, a body-less reset is REFUSED (423 CIRCUIT_OPEN) and leaves the lock intact', async () => {
+    const { sessionId } = await lockOwner();
+
+    const res = await resetCallNoBody({ sessionId });
+    expect(res.status).toBe(423);
+    expect(res.data?.ok).toBe(false);
+    expect(res.data?.error?.code).toBe('CIRCUIT_OPEN');
+
+    // Fail-closed: the lock is LEFT INTACT and NO `SECURITY_RESET` event was written.
+    expect((await security.circuitBreaker.getState(sessionId)).locked).toBe(true);
+    expect(await countResetEvents(sessionId)).toBe(0);
+
+    expectNoMfaLeak('Scenario 5 / it 10', res.data, res.data?.data);
+  });
+
+  it('11 — while LOCKED, a WRONG verificationCode is REFUSED (423 CIRCUIT_OPEN) and leaves the lock intact', async () => {
+    const { sessionId } = await lockOwner();
+    const wrong = '000000';
+    expect(wrong).not.toBe(MFA_CODE);
+
+    const res = await resetCallWithCode(wrong, { sessionId });
+    expect(res.status).toBe(423);
+    expect(res.data?.ok).toBe(false);
+    expect(res.data?.error?.code).toBe('CIRCUIT_OPEN');
+
+    expect((await security.circuitBreaker.getState(sessionId)).locked).toBe(true);
+    expect(await countResetEvents(sessionId)).toBe(0);
+
+    expectNoMfaLeak('Scenario 5 / it 11', res.data, res.data?.data);
+  });
+
+  it('12 — while LOCKED, the CORRECT verificationCode unlocks (200, audited exactly once, per owner)', async () => {
+    const { sessionId } = await lockOwner();
+    // A SECOND session of the SAME owner proves the breaker (and the unlock) is PER USER.
+    const sibling = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    expect(sibling).not.toBe(sessionId);
+    expect(
+      (await security.circuitBreaker.getState(sibling)).locked,
+      'the lock is shared across the owner’s sessions',
+    ).toBe(true);
+    expect(await countResetEvents(sessionId)).toBe(0);
+
+    const res = await resetCallWithCode(MFA_CODE, { sessionId });
+    expect(res.status).toBe(200);
+    const data = payload(res);
+    expect(data.sessionId).toBe(sessionId);
+    expect(data.locked).toBe(false);
+    expect(data.failures).toBe(0);
+
+    // Unlocked for BOTH of the owner's sessions.
+    expect((await security.circuitBreaker.getState(sessionId)).locked).toBe(false);
+    expect((await security.circuitBreaker.getState(sibling)).locked).toBe(false);
+
+    // EXACTLY ONE `SECURITY_RESET` event, attributed to the locked owner.
+    const resets = await getTestPrisma().securityEvent.findMany({ where: { kind: 'SECURITY_RESET' } });
+    expect(resets).toHaveLength(1);
+    expect(resets[0]!.sessionId).toBe(sessionId);
+    expect(resets[0]!.userId).toBe(DEMO_USER_ID);
+
+    expectNoMfaLeak('Scenario 5 / it 12', res.data, res.data?.data);
+  });
+
+  it('13 — while NOT locked, a body-less reset SUCCEEDS (the code is required only while locked)', async () => {
+    // A fresh session on a freshly-seeded DB: no breaker state ⇒ nothing to unlock ⇒ no code needed.
+    const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    expect((await security.circuitBreaker.getState(sessionId)).locked).toBe(false);
+
+    const res = await resetCallNoBody({ sessionId });
+    expect(res.status).toBe(200);
+    const data = payload(res);
+    expect(data.locked).toBe(false);
+    expect(data.failures).toBe(0);
+
+    expectNoMfaLeak('Scenario 5 / it 13', res.data, res.data?.data);
   });
 });

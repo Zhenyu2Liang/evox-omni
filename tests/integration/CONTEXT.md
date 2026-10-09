@@ -33,17 +33,21 @@ remain recoverable from Git.
 | restart-recovery.test.ts | Persisted evidence after module/registry reset |
 | message-protocol.test.ts | Persisted pi transcript validity: every toolResult answers a preceding toolCall (no orphan/duplicate/fabricated id) |
 | terminal-state-settle.test.ts | Confirm/cancel on terminal actions (stable 200 domain outcome, no rollback/double-charge) |
+| grounding-regression.test.ts | Real runTurn/resumeTurn pipeline: code-enforced financial-fact grounding replaces an ungrounded/contradictory narration (no false success; streamed == terminal == persisted) |
 
 Run npm run test -- tests/integration. Observe ../CONTEXT.md database isolation and no-weakening rules.
 These are in-process integration tests, not browser E2E.
 
 ## Scope notes
 
-No suite here asserts on MODEL-generated narration/prose (the model is absent). Assertions observe
-PERSISTED DB state (balances, row/node/plan statuses, counts, audits, receipts) and SERVER-side
-route/outcome strings (ConfirmationOutcome.message, API data.message, node.error/node.output).
-The only model-adjacent suite is message-protocol.test.ts: it uses the deterministic mock through
-real facades and asserts transcript STRUCTURE (toolCall/toolResult pairing), not prose.
-Hallucination-guard / financial-narration checks (success-vs-failure wording, invented balance) live
-OUTSIDE this node — see tests/scenarios/ (test-05-failure-report, test-02-transfer-confirm,
-mock-integration) and tests/unit/agent/.
+Most suites here assert on MODEL-independent data. Assertions observe PERSISTED DB state (balances,
+row/node/plan statuses, counts, audits, receipts) and SERVER-side route/outcome strings
+(ConfirmationOutcome.message, API data.message, node.error/node.output).
+Two suites are model-adjacent, both driving the deterministic mock/scripted model through real
+facades: message-protocol.test.ts asserts transcript STRUCTURE (toolCall/toolResult pairing), not prose;
+and grounding-regression.test.ts drives the real runTurn/resumeTurn pipeline with a scripted provider
+to pin the code-enforced financial-fact grounding — an ungrounded or contradictory narration is
+replaced by the server-authored correction, asserted through public stream events + loadSession
+(grounding itself is never re-implemented). Other hallucination-guard checks (success-vs-failure
+wording, invented balance) live OUTSIDE this node — see tests/scenarios/ (test-05-failure-report,
+test-02-transfer-confirm, mock-integration) and tests/unit/agent/.

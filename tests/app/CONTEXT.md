@@ -102,7 +102,12 @@ complementing the in-process `tests/scenarios/*` suites.
   cancelling a plan revokes its parked action (plus cancel/confirm race orderings); a MID-RUN pause
   issued through `POST /api/tasks/[id]` halts the next node while resume re-runs only that node; and
   identity stays COOKIE-ONLY — a forged `?sessionId=`/`?userId=` query NEVER authenticates on
-  `verify`/`cancel`/`tasks`/`reset`.
+  `verify`/`cancel`/`tasks`/`reset`. It ALSO pins the AUDITED UNLOCK GATE of `POST /api/security/reset`
+  (a tripped owner is reached by `MFA_MAX_ATTEMPTS` wrong verifies on a RED action): a body-less `{}`
+  or a WRONG `verificationCode` is refused `423 CIRCUIT_OPEN` (lock left intact, NO `SECURITY_RESET`
+  event) while the CORRECT `MFA_CODE` unlocks `200` with exactly ONE `SECURITY_RESET` event for the
+  owner (shared across the owner's sessions); a NOT-locked owner needs no code; no body ever leaks the
+  MFA code.
 - `session-takeover-http.test.ts` — cookie-only takeover/isolation: a body `sessionId` that disagrees
   with the cookie (incl. no cookie) → `409` with NO `Set-Cookie`; cross-session action/plan isolation
   (403, victim action stays pending); missing-cookie fail-closed 403 across confirm/verify/cancel/tasks/
@@ -200,17 +205,18 @@ planner, then driven by the real action/task handlers — confirm/verify RESUMES
 writes the REAL tool result back (asserted on `AgentTaskNode`, a real `Transaction` row and the
 decremented balance), pause/cancel/retry, refresh recovery, listing and 403/404 auth.
 
-## Known gap — `423 CIRCUIT_OPEN` is UNREACHABLE over real HTTP
+## `423 CIRCUIT_OPEN` envelope — reachable via the breaker unlock, NOT the action routes
 
-The confirm/verify route doc comments mention a `423 CIRCUIT_OPEN` error envelope and
-`app/api/_lib/http.ts` maps the code (`CIRCUIT_OPEN: 423`), but **nothing ever throws
-`AppError('CIRCUIT_OPEN')`** — a repo-wide scan finds the code only in that doc comment, the status map
-and the `ErrorCode` union (`lib/errors.ts`). On a tripped breaker
-`security-gateway.authorizeAction` returns the lock as a **domain** outcome
-(`{ ok:false, status:'locked' }`), which `@/agent` `confirmAction`/`verifyAction` surface as a normal
-**HTTP 200** with `data.ok:false` / `data.status:'locked'`. `actions-http.test.ts` therefore asserts the
-reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED` high-severity
-`SecurityEvent`, and denied follow-up action calls) instead of a fabricated 423.
+The gated breaker unlock (`security/circuit-breaker.ts#resetSession`, called by
+`POST /api/security/reset`) THROWS `AppError('CIRCUIT_OPEN')` when a LOCKED owner supplies no/incorrect
+`verificationCode` (and the cooldown has not elapsed); the route propagates it as HTTP `423` — pinned
+end-to-end (body-less / wrong code → 423, correct `MFA_CODE` → 200) by `security-workflow-http.test.ts`.
+The confirm/verify routes, by contrast, surface a tripped breaker as a **domain** outcome: on a tripped
+breaker `security-gateway.authorizeAction` returns the lock as `{ ok:false, status:'locked' }`, which
+`@/agent` `confirmAction`/`verifyAction` report as a normal **HTTP 200** with `data.ok:false` /
+`data.status:'locked'`. `actions-http.test.ts` therefore asserts those reachable invariants (200 /
+`ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED` high-severity `SecurityEvent`, and denied follow-up
+action calls) instead of a fabricated 423.
 
 ## Test Strategy
 
@@ -236,7 +242,7 @@ reachable invariants (200 / `ok:false` / `'locked'`, a `CIRCUIT_BREAKER_TRIPPED`
 - `./dag-recovery-http.test.ts` → DAG control/recovery e2e (pause/resume/cancel/retry) + refresh restore (`GET /api/tasks/[id]`, `GET /api/actions`)
 - `./malicious-input-http.test.ts` → prompt-injection over HTTP still gated + follow-up arg-override cannot change executed args
 - `./nl-entry-http.test.ts` → natural-language entry via `POST /api/chat` → gated tool → confirm/verify completes
-- `./security-workflow-http.test.ts` → reviewer regression e2e: two-park YELLOW→RED execution-time escalation in one session, plan-cancel revokes its parked action + cancel/confirm race orderings, a mid-run pause (via the real handler) halting the next node + resume re-running only that node, and forged-query-never-authenticates on verify/cancel/tasks/reset
+- `./security-workflow-http.test.ts` → reviewer regression e2e: two-park YELLOW→RED execution-time escalation in one session, plan-cancel revokes its parked action + cancel/confirm race orderings, a mid-run pause (via the real handler) halting the next node + resume re-running only that node, forged-query-never-authenticates on verify/cancel/tasks/reset, and the `POST /api/security/reset` AUDITED UNLOCK GATE (locked owner: missing/wrong code → `423 CIRCUIT_OPEN` with the lock intact + no `SECURITY_RESET` event; correct `MFA_CODE` → `200` locked:false/failures:0 + exactly ONE `SECURITY_RESET` event; not-locked → `200` with no code; no MFA-code leak)
 - `./session-takeover-http.test.ts` → cookie-only takeover/isolation (body `sessionId` ≠ cookie → 409 no cookie; cross-session isolation 403; missing-cookie fail-closed; forged query never authenticates)
 - `./cancel-during-authorization-http.test.ts` → cancel landing while a park is in flight (controlled barrier): no executable PendingAction survives, daily total stays 0, both race orderings
 - `./task-resume-retry-http.test.ts` → concurrent real `resume`/`retry` over HTTP (rendezvous barrier): unfinished node runs EXACTLY ONCE, persisted status consistent
