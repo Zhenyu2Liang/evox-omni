@@ -2,16 +2,16 @@
  * Security Center — `/security` (Server Component, RSC by default).
  *
  * Data (fetched on the server, direct read models — no HTTP hop):
- *   `security.circuitBreaker.getState(sessionId)` → authoritative lock + failure count
+ *   `await security.circuitBreaker.getState(sessionId)` → authoritative lock + failure count
  *   `audit.getSecurityStatus(sessionId, { isLocked })` → `SecurityStatus` (`{ locked, recentEvents }`)
  *   `audit.listSecurityEvents({ sessionId })`     → `SecurityEvent[]`
  *   Session id: the `banking_session` cookie (`SESSION_COOKIE`).
  *
  * Composes (`@/components/security` — read-only sibling; the component library owns the API):
  *   `PermissionLegend`      → 🟢/🟡/🔴 permission-tier legend (driven by `RISK_LABEL`)
- *   `CircuitBreakerStatus`  → session breaker lock state (tripped / failures vs max attempts)
+ *   `CircuitBreakerStatus`  → account breaker lock state (tripped / failures vs max attempts)
  *   `SecurityEventList`     → the recent verifications feed + the session security-event table
- *   `ResetBreakerButton`    → (client) clears this session's breaker via `POST /api/security/reset`
+ *   `ResetBreakerButton`    → (client) GATED unlock of this account's breaker via `POST /api/security/reset`
  *
  * Display only: every tier, lock and event here is produced by `@/audit` / `@/security`; this
  * page never decides permission. All props passed to the components are JSON-serializable
@@ -33,8 +33,8 @@ import { ResetBreakerButton } from './ResetBreakerButton';
 export default async function SecurityPage() {
   const sessionId = (await cookies()).get(SESSION_COOKIE)?.value ?? '';
 
-  // Authoritative in-process breaker state for this session (failure count + lock).
-  const breaker = security.circuitBreaker.getState(sessionId);
+  // Authoritative breaker state for this ACCOUNT (DB-backed, per-user; async read).
+  const breaker = await security.circuitBreaker.getState(sessionId);
 
   const status: SecurityStatus = await audit.getSecurityStatus(sessionId, {
     isLocked: (sid) => security.circuitBreaker.isLocked(sid),
@@ -56,7 +56,7 @@ export default async function SecurityPage() {
         <PermissionLegend />
       </section>
 
-      {/* Circuit breaker — after repeated MFA failures, high-risk ops are locked for the session. */}
+      {/* Circuit breaker — after repeated MFA failures, high-risk ops are locked for the account. */}
       <section className="flex flex-col gap-3">
         <h2 className="text-lg font-medium text-banking-deep">熔断状态</h2>
         <CircuitBreakerStatus
@@ -66,7 +66,7 @@ export default async function SecurityPage() {
         />
         {breaker.locked ? (
           <p className="text-sm text-banking-navy">
-            如已确认为误操作，可在此解除本会话的熔断限制。
+            如已确认为误操作，可在此解除本账户的熔断限制（需输入 6 位验证码）。
           </p>
         ) : null}
         <ResetBreakerButton locked={breaker.locked} className="self-start" />

@@ -4,7 +4,8 @@ import { executeGatedTool, getOrCreateSession } from '@/agent';
 import { banking } from '@/banking-sdk';
 import { auditStore } from '@/audit/audit-logger';
 import { recovery } from '@/security';
-import { getState, recordFailure } from '@/security/circuit-breaker';
+import { getState, recordFailure, resetSession } from '@/security/circuit-breaker';
+import { MFA_CODE } from '@/lib/constants';
 import * as actionRepo from '@/lib/db/repositories/pendingAction';
 import { recoverAction as clientRecover } from '@/components/chat/actions';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
@@ -36,7 +37,7 @@ async function bounded(promise: Promise<unknown>) {
 }
 async function lock(sessionId: string) {
   for (let i = 0; i < 3; i++) await recordFailure(sessionId);
-  expect(getState(sessionId).locked).toBe(true);
+  expect((await getState(sessionId)).locked).toBe(true);
 }
 async function park(amount = 200) {
   const sessionId = (await getOrCreateSession(userId)).sessionId;
@@ -75,7 +76,14 @@ it.each([200, 2000])('a write-time breaker denial of %s stays recoverable and re
   expect(await p.executionReceipt.count()).toBe(0);
   expect(await p.auditLog.count({ where: { dedupeKey: `exec:${action.id}` } })).toBe(0);
   expect((await call(recoverPost, action.id, action.sessionId)).http).toBe(423);
-  expect((await resetPost(request('reset', action.sessionId))).status).toBe(200);
+  // A bare session cookie is REFUSED while the owner is locked: the unlock is GATED (code/cooldown),
+  // so the code-less route path throws CIRCUIT_OPEN and writes NO reset event.
+  const refused = await resetPost(request('reset', action.sessionId));
+  expect(refused.status).toBe(423);
+  expect((await refused.json()).error.code).toBe('CIRCUIT_OPEN');
+  expect(await p.securityEvent.count({ where: { sessionId: action.sessionId, kind: 'SECURITY_RESET' } })).toBe(0);
+  // The deliberate, AUDITED security-center unlock (mock strong-verification code) clears the lock.
+  await resetSession(action.sessionId, { actor: 'user', reason: '确认边界回归解除熔断', verificationCode: MFA_CODE });
   expect(await p.securityEvent.count({ where: { sessionId: action.sessionId, kind: 'SECURITY_RESET' } })).toBe(1);
   expect((await call(recoverPost, action.id, action.sessionId)).body.data).toMatchObject({ ok: true, status: 'executed' });
   await call(confirmPost, action.id, action.sessionId);

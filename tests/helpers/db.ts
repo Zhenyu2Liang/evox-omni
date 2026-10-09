@@ -82,7 +82,8 @@ export function ensureTestPragmas(): Promise<void> {
  * empty. Table order MUST respect relations (MfaChallenge→PendingAction, AgentTaskNode→AgentTask,
  * CardLimit→Card, Transaction→Account, InvestmentHolding→User+InvestmentProduct,
  * Card/Account/Subscription/Budget/ScheduledTask/Contact/AgentSession→User, AuditLog/SecurityEvent→User).
- * `ExecutionReceipt` declares no relations, so its position in the order is free.
+ * `ExecutionReceipt` and `CircuitBreakerState` declare no relations, so their position in the order
+ * is free.
  * Does NOT re-seed.
  */
 export async function truncateAll(): Promise<void> {
@@ -105,6 +106,7 @@ export async function truncateAll(): Promise<void> {
   await prisma.contact.deleteMany();
   await prisma.auditLog.deleteMany();
   await prisma.securityEvent.deleteMany();
+  await prisma.circuitBreakerState.deleteMany();
   await prisma.agentSession.deleteMany();
   await prisma.investmentProduct.deleteMany();
   await prisma.user.deleteMany();
@@ -113,10 +115,11 @@ export async function truncateAll(): Promise<void> {
 /**
  * `truncateAll()` then `fixtures.seedDemoData()` — the canonical "fresh world" for a test.
  *
- * NOTE on in-process security state: the circuit breaker (`@/security/circuit-breaker`) is keyed
- * by `sessionId` and exports only `reset(sessionId)` — there is NO global reset. Suites therefore
- * use a UNIQUE `sessionId` per test (`scenario.newSessionId()`) for isolation, and this helper
- * intentionally does not touch the breaker.
+ * NOTE on the security circuit breaker: it is DURABLE (`CircuitBreakerState`), keyed by OWNER — not
+ * by session id — so a lock is shared by ALL of a user's sessions and survives a new process
+ * (`security/circuit-breaker.ts`). `truncateAll()` therefore also clears `circuitBreakerState`, so a
+ * lock can never leak from one test into the next. Suites that need an UNRELATED breaker owner can
+ * still use a fresh actor id with no `AgentSession`/`User` row (it resolves to `session:<id>`).
  */
 export async function resetDatabase(): Promise<void> {
   await truncateAll();

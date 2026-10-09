@@ -21,7 +21,7 @@ import {
   updateMfaChallengeStatus,
   resetMfaAttempts,
 } from '../lib/db/repositories/pendingAction';
-import { isLocked, recordFailure, recordSuccess } from './circuit-breaker';
+import { isLocked, recordFailure, recordSuccess, resolveBreakerOwner } from './circuit-breaker';
 import { recordSecurityEvent } from '../audit';
 
 /** Safe, code-free view of a challenge handed to the caller/UI. */
@@ -119,7 +119,7 @@ export async function verify(actionId: string, code: string): Promise<Result<Mfa
   // LOCKED wins: a locked session or a locked challenge fails verification regardless of the
   // submitted code. Do NOT mark verified, do NOT reset the breaker, do NOT consume an attempt
   // and do NOT emit a new event.
-  if (isLocked(sessionId) || challenge.status === 'locked') {
+  if ((await isLocked(sessionId)) || challenge.status === 'locked') {
     return ok({
       ok: false,
       attemptsLeft: Math.max(0, challenge.maxAttempts - challenge.attempts),
@@ -132,27 +132,29 @@ export async function verify(actionId: string, code: string): Promise<Result<Mfa
     return ok({
       ok: true,
       attemptsLeft: challenge.maxAttempts - challenge.attempts,
-      locked: isLocked(sessionId),
+      locked: await isLocked(sessionId),
     });
   }
 
   // Correct code → verify + reset the consecutive-failure counter.
   if (code === challenge.code) {
     await updateMfaChallengeStatus(actionId, 'verified');
-    recordSuccess(sessionId);
+    await recordSuccess(sessionId);
     return ok({
       ok: true,
       attemptsLeft: challenge.maxAttempts,
-      locked: isLocked(sessionId),
+      locked: await isLocked(sessionId),
     });
   }
 
   // Wrong code → count the attempt, feed the breaker, then emit a COMPLETE MFA_FAILURE record.
   const after = await incrementMfaAttempts(actionId);
   const breaker = await recordFailure(sessionId);
+  const owner = await resolveBreakerOwner(sessionId);
   const attemptsLeft = Math.max(0, after.maxAttempts - after.attempts);
   await recordSecurityEvent({
     sessionId,
+    ...(owner.userId !== undefined ? { userId: owner.userId } : {}),
     kind: 'MFA_FAILURE',
     severity: 'medium',
     message: `验证码错误（第 ${after.attempts} 次失败）。`,
