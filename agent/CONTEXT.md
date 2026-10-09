@@ -84,6 +84,7 @@ function getOrCreateSession(userId: string, sessionId?: string): Promise<Session
 interface RunTurnDeps {
   config?: AppConfig;           // defaults to lib/config getConfig()
   now?: () => number;           // injectable clock for deterministic tests
+  provider?: ModelRuntime;      // TEST SEAM (additive): scripted {model,streamFn}; absent ⇒ resolveProvider(config)
 }
 interface ResumeTurnInput {
   sessionId: string;
