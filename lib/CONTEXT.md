@@ -107,7 +107,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/config.ts` → `getConfig()` runtime env config.
 - `./lib/ids.ts` → `newId(prefix?)` id generation.
 - `./lib/date.ts` → pure local-timezone date-range/format helpers.
-- `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
+- `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers, plus `realNow()` (the server REAL wall clock `Date.now()`) used ONLY for SECURITY elapsed-time gates (breaker lock timestamp / unlock cooldown) — never for business dates.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
 - `./lib/ledger.ts` → deterministic idempotency keys + canonical action→ledger-row identity — `idempotentTransferTxId`, `nodeExecutionKey`, `ledgerKeyForAction`, `ledgerTxIdForAction`, plus the EXECUTION-RECEIPT helpers `executionReceiptId` / `requestDigest`.
 - `./lib/phone.ts` → mask-aware phone matching & masking — `maskAwarePhoneMatch(value, stored)` (raw↔masked) and `maskPhone(phone)`; the shared helper that lets a RAW phone lookup match the demo's MASKED-stored `Contact.phone` values (used by the `security/recipient-resolution.ts` write path AND the `lib/db/repositories/contact.ts#searchContacts` read path).
