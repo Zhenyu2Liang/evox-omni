@@ -540,6 +540,7 @@ Vitest (`tests/`, read-only sibling); designed to run WITHOUT network:
 - Full-pipeline scenarios (the 12 demo Tests) run `runTurn` + `confirmAction`/`verifyAction` with `LLM_MODE=mock` (faux scripts) — proving gating, MFA, injection refusal and the hallucination guard.
 - The offline mock model (`providers/`) is the default `LLM_MODE=mock` runtime and drives the REAL pipeline (runTurn → `createBankingAgent` → mock → tools → gateway → SDK → DB) end-to-end offline, incl. `POST /api/chat` E2E: a GREEN read, a parked YELLOW/RED transfer, a `submit_plan` DAG, and honest `INSUFFICIENT_FUNDS` failure narration. A conditional plan that also asks to adjust a card spend limit parks its YELLOW `set_card_limit` node, so the plan-level `confirmation_required` frame is reachable through the mock model (see `./providers/CONTEXT.md`).
 - Agent unit specs live under `tests/unit/agent/` (`confirmation*.test.ts`, `task-control.test.ts`, `task-cancel-revokes.test.ts`, `run-turn-failure.test.ts`, `providers/*.test.ts`); auto-discovered by the ROOT `vitest.config.ts`, run via `npm run test`.
+- **Fact-grounding specs live IN-NODE** and run via the agent-local config: `agent/grounding.test.ts` (pure units for `buildFinancialFacts`/`groundAssistantText`) + `agent/grounding-integration.test.ts` (end-to-end through the REAL `runTurn`, model scripted via the `RunTurnDeps.provider` seam, isolated `prisma/test.db`) → `npx vitest run --config ./agent/vitest.agent.config.ts` (from the repo root).
 
 ## Routing Table
 
