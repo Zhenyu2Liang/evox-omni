@@ -8,6 +8,11 @@
  * are validated independently by each tool. The agent may decide WHAT to do next;
  * it may never decide WHETHER it is allowed.
  *
+ * This module also carries the code-enforced notion of "produces a side effect"
+ * (`ToolPolicy.write`): AUDITING is decided by that flag, NOT by the permission colour, so a GREEN
+ * write is audited exactly like a gated action. The flag grants NOTHING — `tier` alone decides what
+ * may execute (see `./security-gateway`).
+ *
  * This module performs NO I/O and is fully pure/deterministic.
  */
 import type { RiskLevel } from '../lib/contracts/risk';
@@ -21,6 +26,12 @@ export interface ToolPolicy {
   tier: RiskLevel;
   /** `true` when the tier is fixed by the table; `false` when it is computed at runtime. */
   static: boolean;
+  /**
+   * `true` when the tool PERSISTS a side effect (a write). Side-effecting operations are audited
+   * regardless of their permission colour — see `@/agent/write-audit`. This is a metadata fact about
+   * the capability, never a permission: the tier still decides whether the call may execute.
+   */
+  write: boolean;
   /** Human-readable policy note (Chinese), surfaced in the audit log / UI. */
   description: string;
 }
@@ -47,40 +58,41 @@ export interface ToolEvaluation {
  */
 export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
   // 🟢 GREEN — low-risk reads; auto-execute, no confirmation.
-  get_balance: { tier: 'GREEN', static: true, description: '查询余额' },
-  get_transactions: { tier: 'GREEN', static: true, description: '查询交易流水' },
-  search_contact: { tier: 'GREEN', static: true, description: '查询联系人' },
-  analyze_spending: { tier: 'GREEN', static: true, description: '消费分析' },
-  detect_anomaly: { tier: 'GREEN', static: true, description: '异常交易检测' },
-  get_cards: { tier: 'GREEN', static: true, description: '查询银行卡' },
-  list_subscriptions: { tier: 'GREEN', static: true, description: '查询订阅' },
-  list_investments: { tier: 'GREEN', static: true, description: '查询理财产品' },
-  compare_investments: { tier: 'GREEN', static: true, description: '理财产品对比' },
-  get_investment_holdings: { tier: 'GREEN', static: true, description: '查询理财持仓' },
-  get_dashboard_summary: { tier: 'GREEN', static: true, description: '资产概览' },
-  list_scheduled_tasks: { tier: 'GREEN', static: true, description: '查询定时任务' },
-  reserve_budget: { tier: 'GREEN', static: true, description: '预算预留' },
+  get_balance: { tier: 'GREEN', static: true, write: false, description: '查询余额' },
+  get_transactions: { tier: 'GREEN', static: true, write: false, description: '查询交易流水' },
+  search_contact: { tier: 'GREEN', static: true, write: false, description: '查询联系人' },
+  analyze_spending: { tier: 'GREEN', static: true, write: false, description: '消费分析' },
+  detect_anomaly: { tier: 'GREEN', static: true, write: false, description: '异常交易检测' },
+  get_cards: { tier: 'GREEN', static: true, write: false, description: '查询银行卡' },
+  list_subscriptions: { tier: 'GREEN', static: true, write: false, description: '查询订阅' },
+  list_investments: { tier: 'GREEN', static: true, write: false, description: '查询理财产品' },
+  compare_investments: { tier: 'GREEN', static: true, write: false, description: '理财产品对比' },
+  get_investment_holdings: { tier: 'GREEN', static: true, write: false, description: '查询理财持仓' },
+  get_dashboard_summary: { tier: 'GREEN', static: true, write: false, description: '资产概览' },
+  list_scheduled_tasks: { tier: 'GREEN', static: true, write: false, description: '查询定时任务' },
+  // The ONLY GREEN tool that produces a side effect — audited like every other write.
+  reserve_budget: { tier: 'GREEN', static: true, write: true, description: '预算预留' },
 
   // 🟡 YELLOW — medium risk; requires user confirmation.
-  set_card_limit: { tier: 'YELLOW', static: true, description: '设置卡片限额' },
-  cancel_subscription: { tier: 'YELLOW', static: true, description: '取消订阅' },
-  freeze_card: { tier: 'YELLOW', static: true, description: '冻结银行卡' },
-  apply_virtual_card: { tier: 'YELLOW', static: true, description: '申请虚拟卡' },
-  set_subscription_reminder: { tier: 'YELLOW', static: true, description: '设置订阅提醒' },
-  create_scheduled_task: { tier: 'YELLOW', static: true, description: '创建定时任务' },
+  set_card_limit: { tier: 'YELLOW', static: true, write: true, description: '设置卡片限额' },
+  cancel_subscription: { tier: 'YELLOW', static: true, write: true, description: '取消订阅' },
+  freeze_card: { tier: 'YELLOW', static: true, write: true, description: '冻结银行卡' },
+  apply_virtual_card: { tier: 'YELLOW', static: true, write: true, description: '申请虚拟卡' },
+  set_subscription_reminder: { tier: 'YELLOW', static: true, write: true, description: '设置订阅提醒' },
+  create_scheduled_task: { tier: 'YELLOW', static: true, write: true, description: '创建定时任务' },
 
   // 🔴 RED — high risk; requires strong verification (mock MFA).
-  subscribe_investment: { tier: 'RED', static: true, description: '认购理财产品' },
-  redeem_investment: { tier: 'RED', static: true, description: '赎回理财产品' },
-  report_lost_card: { tier: 'RED', static: true, description: '银行卡挂失' },
-  unfreeze_card: { tier: 'RED', static: true, description: '解冻银行卡' },
-  change_password: { tier: 'RED', static: true, description: '修改密码' },
+  subscribe_investment: { tier: 'RED', static: true, write: true, description: '认购理财产品' },
+  redeem_investment: { tier: 'RED', static: true, write: true, description: '赎回理财产品' },
+  report_lost_card: { tier: 'RED', static: true, write: true, description: '银行卡挂失' },
+  unfreeze_card: { tier: 'RED', static: true, write: true, description: '解冻银行卡' },
+  change_password: { tier: 'RED', static: true, write: true, description: '修改密码' },
 
   // DYNAMIC — tier computed from amount + daily total (see risk-engine).
-  transfer_money: { tier: 'YELLOW', static: false, description: '转账（按金额/日累计动态分级，始终需确认）' },
+  transfer_money: { tier: 'YELLOW', static: false, write: true, description: '转账（按金额/日累计动态分级，始终需确认）' },
 
-  // Planner meta-tool — NOT risk-gated (allow).
-  submit_plan: { tier: 'GREEN', static: true, description: '规划元工具（不做风控）' },
+  // Planner meta-tool — NOT risk-gated (allow). Its nodes' side effects are audited per node tool.
+  submit_plan: { tier: 'GREEN', static: true, write: false, description: '规划元工具（不做风控）' },
 };
 
 /** Look up the static policy for a tool. Throws `AppError('VALIDATION')` for an unknown tool. */
@@ -88,6 +100,14 @@ export function getToolPolicy(toolName: ToolName): ToolPolicy {
   const policy = TOOL_POLICY[toolName];
   if (!policy) throw new AppError('VALIDATION', `未知工具: ${toolName}`);
   return policy;
+}
+
+/**
+ * `true` when the tool persists a side effect and must therefore be AUDITED, whatever its colour.
+ * Consumed by the write-audit path (`@/agent/write-audit`); it grants no capability.
+ */
+export function isWriteTool(toolName: ToolName): boolean {
+  return getToolPolicy(toolName).write;
 }
 
 /**

@@ -14,3 +14,4 @@ export * as sessions from './session';
 export * as pendingActions from './pendingAction';
 export * as executionReceipts from './executionReceipt';
 export * as manualReviews from './manualReview';
+export * as circuitBreakers from './circuitBreaker';

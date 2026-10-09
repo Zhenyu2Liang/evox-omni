@@ -565,6 +565,12 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
         ? { idempotencyKey: nodeExecutionKey(ctx.taskId, ctx.nodeId) }
         : {}),
       fence: await buildAutomaticWriteFence(ctx.sessionId, ctx.taskId, ctx.nodeId),
+      // SIDE-EFFECT audit identity (GREEN writes included): the runner couples the business write and
+      // its strict audit row into ONE transaction — an audit failure rolls the write back.
+      sessionId: ctx.sessionId,
+      userRequest: ctx.userRequest,
+      ...(ctx.taskId !== undefined ? { taskId: ctx.taskId } : {}),
+      ...(ctx.nodeId !== undefined ? { nodeId: ctx.nodeId } : {}),
     };
     const result = await registry.executeDirect(ctx.toolName, ctx.args, opts);
     return {

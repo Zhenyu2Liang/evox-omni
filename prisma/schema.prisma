@@ -309,6 +309,9 @@ model AuditLog {
   mfaRequired          Boolean  @default(false)
   mfaResult            String?
   toolResult           String? // JSON text
+  toolArgs             String? // JSON text — validated arguments of a SIDE-EFFECTING write
+  taskId               String? // owning AgentTask (plan-driven write), null for standalone calls
+  nodeId               String? // owning AgentTaskNode (plan-driven write), null for standalone calls
   status               String
   detail               String?
   // Idempotency key that makes this audit entry write-once (dedupes a repeated audit).
@@ -389,6 +392,22 @@ model MfaChallenge {
   status      String    @default("pending") // "pending" | "verified" | "failed" | "locked"
   createdAt   DateTime  @default(now())
   expiresAt   DateTime?
+}
+
+// Durable SECURITY CIRCUIT-BREAKER state. Persisted (NOT in-process) and keyed by the OWNER
+// (`user:<userId>` for a real session/user, else `session:<actor>`), so a new session or a new
+// process cannot bypass a lock. `failures` counts consecutive failed strong-verifications;
+// reaching the threshold sets `locked` + `lockedAt`. Clearing a lock additionally requires the
+// mock verification code OR an elapsed cooldown (see `security/circuit-breaker.ts`).
+model CircuitBreakerState {
+  key       String    @id
+  userId    String?
+  failures  Int       @default(0)
+  locked    Boolean   @default(false)
+  lockedAt  DateTime?
+  updatedAt DateTime  @updatedAt
+
+  @@index([userId])
 }
 
 // Unified EXECUTION RECEIPT / transaction-fact: the durable proof that a gated side effect with a

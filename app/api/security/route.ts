@@ -8,8 +8,10 @@
  *  - Delegates to `@/audit`: `getSecurityStatus(sessionId, { isLocked })` +
  *    `listSecurityEvents({ sessionId })`; the authoritative lock state is supplied by the
  *    security node's circuit breaker (`@/security` → `circuitBreaker.isLocked`).
+ *  - The breaker is DB-backed and PER-ACCOUNT, so its reads are async: `circuitBreaker.getState`
+ *    and `circuitBreaker.isLocked` both return a `Promise` and MUST be awaited.
  *  - Success: `200 { ok: true, data: { status; events; circuitBreaker } }`, where
- *    `circuitBreaker` surfaces the raw failure counter (`circuitBreaker.getState`);
+ *    `circuitBreaker` surfaces the raw failure counter (`await circuitBreaker.getState`);
  *    any failure maps through the shared error envelope.
  *
  * Thin by design: `validate (zod) → delegate → serialize`. No business logic, no Prisma here.
@@ -25,7 +27,7 @@ import { resolveIdentity } from '../_lib/session';
 export interface SecurityData {
   status: SecurityStatus;
   events: SecurityEvent[];
-  /** Raw circuit-breaker counters for the session (failure count vs trip threshold). */
+  /** Raw circuit-breaker counters for the account (failure count vs trip threshold). */
   circuitBreaker: { failures: number; max: number; locked: boolean };
 }
 
@@ -38,7 +40,7 @@ export async function GET(req: NextRequest): Promise<Response> {
       isLocked: (sid) => security.circuitBreaker.isLocked(sid),
     });
     const events = await audit.listSecurityEvents({ sessionId });
-    const breaker = security.circuitBreaker.getState(sessionId);
+    const breaker = await security.circuitBreaker.getState(sessionId);
 
     const data: SecurityData = {
       status,

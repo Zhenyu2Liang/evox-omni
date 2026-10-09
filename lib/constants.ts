@@ -9,6 +9,13 @@ export const MFA_CODE = '123456';
 /** Consecutive MFA failures before the circuit breaker trips for the session. */
 export const MFA_MAX_ATTEMPTS = 3;
 
+/**
+ * Cooldown (ms) after a circuit-breaker trip during which unlocking REQUIRES the mock
+ * verification code. Once this window elapses since `lockedAt`, the lock may be cleared
+ * without a code (the explicit cooldown condition). See `security/circuit-breaker.ts`.
+ */
+export const RESET_COOLDOWN_MS = 60_000;
+
 /** Transaction amount above which `detect_anomaly` flags a suspicious spend. */
 export const ANOMALY_AMOUNT_THRESHOLD = 5000;
 

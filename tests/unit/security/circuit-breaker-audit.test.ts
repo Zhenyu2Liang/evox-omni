@@ -6,15 +6,21 @@
  * `SecurityEvent` rows behind them, and `@/security/security-gateway`
  * (`securityGateway.evaluate` / `decide`) while the session's breaker is locked.
  *
- * Breaker state is IN-PROCESS keyed by sessionId → EVERY test uses a UNIQUE sessionId so one
- * test's trip cannot leak into another. Event persistence needs the test SQLite (`useFreshDatabase()`).
+ * Breaker state is DURABLE and keyed by the breaker OWNER (`security/circuit-breaker.ts`
+ * `resolveBreakerOwner`). The actor ids here (`newId('cbaudit')`) have no `AgentSession`/`User` row,
+ * so each is a distinct `session:<actor>` owner; `useFreshDatabase()` clears `circuitBreakerState`
+ * between tests as well. Event persistence needs the test SQLite.
+ *
+ * The unlock is GATED: a LOCKED owner is only cleared with the mock `MFA_CODE` (or an elapsed
+ * cooldown), so every locked-session reset below passes `verificationCode`; a code-less attempt is
+ * asserted to be REFUSED and to write NO audit event.
  */
 import { describe, expect, it, vi } from 'vitest';
 
 import { recordFailure, resetSession } from '@/security/circuit-breaker';
 import { securityGateway, type GatewayContext } from '@/security/security-gateway';
 import type { ToolName } from '@/lib/contracts/tools';
-import { MFA_MAX_ATTEMPTS } from '@/lib/constants';
+import { MFA_CODE, MFA_MAX_ATTEMPTS } from '@/lib/constants';
 import { newId } from '@/lib/ids';
 import { getTestPrisma, useFreshDatabase } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
@@ -26,7 +32,7 @@ vi.setConfig({ hookTimeout: 60_000 });
 
 useFreshDatabase();
 
-/** A unique sessionId per test — breaker state is in-process keyed by sessionId. */
+/** A unique breaker owner per test (no `AgentSession` row → `session:<id>` key). */
 const freshSessionId = (): string => newId('cbaudit');
 
 /** The `CIRCUIT_BREAKER_TRIPPED` security-event rows persisted for a session. */
@@ -55,7 +61,7 @@ function detailOf(row: { detail: string | null }): Record<string, unknown> {
   return JSON.parse(row.detail ?? '{}') as Record<string, unknown>;
 }
 
-/** A proposed tool call for the gateway (sessionId scopes the in-process breaker). */
+/** A proposed tool call for the gateway (`sessionId` resolves to that actor's breaker owner). */
 function ctxFor(
   toolName: ToolName,
   args: Record<string, unknown>,
@@ -93,6 +99,7 @@ describe('circuit-breaker · SECURITY_RESET audit event (audited unlock)', () =>
     await resetSession(sessionId, {
       actor: 'security-admin',
       reason: '用户致电客服核实身份后解除',
+      verificationCode: MFA_CODE,
     });
 
     const events = await resetEvents(sessionId);
@@ -109,7 +116,7 @@ describe('circuit-breaker · SECURITY_RESET audit event (audited unlock)', () =>
     const sessionId = freshSessionId();
     await tripBreaker(sessionId);
 
-    await resetSession(sessionId);
+    await resetSession(sessionId, { verificationCode: MFA_CODE });
 
     const events = await resetEvents(sessionId);
     expect(events).toHaveLength(1);
@@ -134,6 +141,19 @@ describe('circuit-breaker · SECURITY_RESET audit event (audited unlock)', () =>
     expect(detail.previousFailures).toBe(1);
     expect('priorLockedAt' in detail).toBe(false);
     expect(detail.priorLockedAt).toBeUndefined();
+  });
+
+  it('a REFUSED (code-less) unlock of a locked session writes NO SECURITY_RESET event', async () => {
+    const sessionId = freshSessionId();
+    await tripBreaker(sessionId);
+
+    await expect(resetSession(sessionId)).rejects.toMatchObject({
+      name: 'AppError',
+      code: 'CIRCUIT_OPEN',
+    });
+
+    // A refused unlock must leave no audit trail claiming the account was unlocked.
+    expect(await resetEvents(sessionId)).toHaveLength(0);
   });
 });
 
@@ -167,7 +187,7 @@ describe('circuit-breaker · locked session denies EVERY tier (incl. 🟢 GREEN 
       true,
     );
 
-    await resetSession(sessionId);
+    await resetSession(sessionId, { verificationCode: MFA_CODE });
 
     const ev = await securityGateway.evaluate(ctxFor('get_balance', {}, sessionId));
     expect(ev.blocked).toBe(false);

@@ -23,8 +23,8 @@
  * the pair bypass the ¥1000 RED/MFA threshold.
  *
  * Deterministic DB lifecycle: reset + seed before each test, disconnect after. A UNIQUE session id
- * per scenario (the in-process circuit breaker is keyed by `sessionId`); NO fake timers — the demo
- * clock `DEMO_NOW = 2026-09-25 12:00` anchors the day-transfer window.
+ * per scenario (the DURABLE breaker is keyed PER OWNER — `user:<userId>`, else `session:<id>` — and
+ * cleared by the per-test truncate); NO fake timers — the demo clock `DEMO_NOW` anchors the day-transfer window.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -895,7 +895,12 @@ async function expectVictimUntouched(before: {
   expect(task.status, 'the victim plan must stay parked').toBe('waiting_confirmation');
   expect(await checkingBalance()).toBe(SEEDED_BALANCE);
   expect(await transfersTo(RECIPIENT.id)).toHaveLength(0);
-  expect(await getTestPrisma().auditLog.count({ where: { sessionId: before.victim } })).toBe(0);
+  // Auditing is decided by the SIDE EFFECT, not the permission colour, so the victim's own GREEN
+  // `reserve_budget` (task node v1) IS audited. The rejected identity attempts must therefore add
+  // NOTHING: that single write audit is the session's entire audit history, and no denied operation
+  // is ever audited under the victim's session.
+  const audits = await getTestPrisma().auditLog.findMany({ where: { sessionId: before.victim } });
+  expect(audits.map((row) => row.toolName), 'a rejected identity attempt must write no audit').toEqual(['reserve_budget']);
 }
 
 describe('[integration] identity — a query param NEVER authenticates on verify/cancel/tasks/reset', () => {
@@ -940,7 +945,7 @@ describe('[integration] identity — a query param NEVER authenticates on verify
       const res = await verifyCall(actionId, { sessionId: victim, code: '000000' });
       expect(res.status).toBe(200);
     }
-    expect(security.circuitBreaker.getState(victim).locked, 'the victim breaker must be tripped').toBe(
+    expect((await security.circuitBreaker.getState(victim)).locked, 'the victim breaker must be tripped').toBe(
       true,
     );
 
@@ -951,21 +956,22 @@ describe('[integration] identity — a query param NEVER authenticates on verify
     // the victim stays locked with no reset event.
     const forged = `sessionId=${encodeURIComponent(victim)}`;
     expectDenied(await resetCall({ query: forged }));
-    expect(security.circuitBreaker.getState(victim).locked).toBe(true);
+    expect((await security.circuitBreaker.getState(victim)).locked).toBe(true);
     expect(await resetEventsFor(victim)).toBe(0);
 
-    // (b) A FOREIGN valid cookie + the same forged query: the route HONESTLY resets the CALLER's OWN
-    // session (200 for the foreign session, one SECURITY_RESET event) — never the victim's.
+    // (b) A FOREIGN valid cookie + the same forged query: identity is cookie-only, so the route acts as
+    // the CALLER's own session — but that SAME user's breaker is LOCKED, so the gated unlock REFUSES.
     const foreign = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
     expect(foreign).not.toBe(victim);
     const foreignRes = await resetCall({ sessionId: foreign, query: forged });
-    expect(foreignRes.status).toBe(200);
-    expect(payload(foreignRes).sessionId).toBe(foreign);
-    expect(await resetEventsFor(foreign)).toBe(1);
+    expect(foreignRes.status).toBe(423);
+    expect(foreignRes.data?.ok).toBe(false);
+    expect(foreignRes.data?.error?.code).toBe('CIRCUIT_OPEN');
+    expect(await resetEventsFor(foreign)).toBe(0);
 
     // The VICTIM session was NEVER unlocked: still locked, still zero reset events, and an end-to-end
     // probe proves the lock still denies even the CORRECT mock MFA code.
-    expect(security.circuitBreaker.getState(victim).locked).toBe(true);
+    expect((await security.circuitBreaker.getState(victim)).locked).toBe(true);
     expect(await resetEventsFor(victim)).toBe(0);
     const probe = await verifyCall(actionId, { sessionId: victim, code: MFA_CODE });
     expect(probe.status).toBe(200);
@@ -977,6 +983,20 @@ describe('[integration] identity — a query param NEVER authenticates on verify
     expect(await checkingBalance()).toBe(SEEDED_BALANCE);
     expect(await transfersTo(RECIPIENT.id)).toHaveLength(0);
     expect(await getTestPrisma().auditLog.count({ where: { sessionId: victim } })).toBe(0);
+
+    // (c) The GATED unlock's POSITIVE path: the deliberate security-center action supplies the mock
+    // strong-verification code, so the OWNER finally clears. (The HTTP reset route above carries NO
+    // code — a production gap — so the code-bearing unlock goes through the very `@/security` facade
+    // the route calls.) The lock is PER USER: clearing it releases BOTH of the user's sessions at once.
+    const unlocked = await security.circuitBreaker.resetSession(victim, { verificationCode: MFA_CODE });
+    expect(unlocked.locked).toBe(false);
+    expect(unlocked.failures).toBe(0);
+    expect((await security.circuitBreaker.getState(victim)).locked).toBe(false);
+    expect((await security.circuitBreaker.getState(foreign)).locked).toBe(false);
+    const resets = await getTestPrisma().securityEvent.findMany({ where: { kind: 'SECURITY_RESET' } });
+    expect(resets).toHaveLength(1);
+    expect(resets[0]!.sessionId).toBe(victim);
+    expect(resets[0]!.userId).toBe(DEMO_USER_ID);
 
     expectNoMfaLeak(
       'Scenario 4 / it 9',

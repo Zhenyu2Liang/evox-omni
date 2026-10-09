@@ -4,13 +4,20 @@
  *
  * `reserveBudget` accepts an OPTIONAL `idempotencyKey`: a repeat by the SAME user/key replays the
  * already-persisted reservation instead of creating a second row (see `./idempotent.ts`).
+ *
+ * AUDIT (by SIDE EFFECT, not by permission colour): `reserveBudget` is a GREEN tool that writes, so
+ * its insert is audited through the execution context's `onWriteCommit` hook — awaited INSIDE the very
+ * same transaction, so a failing audit rolls the reservation back and the write can never be committed
+ * un-audited. A REPLAY (the keyed row already exists, or the unique-conflict fallback re-read) writes
+ * nothing and therefore audits nothing: no duplicate side effect, no duplicate audit.
  */
 import type { Budget } from '@prisma/client';
 import { budgets } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { readExecutionFence } from './fence';
+import { bankingExecutionContext } from './execution-context';
 import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
-import { runInTransaction } from './tx';
+import { runInTransaction, type Tx } from './tx';
 import type { BudgetStatus, BudgetView, ReserveBudgetInput } from './types';
 
 /** Maps a `Budget` row to its public view model. */
@@ -49,6 +56,33 @@ function reservationData(input: ReserveBudgetInput): {
 }
 
 /**
+ * Record the reservation's SIDE EFFECT in the enclosing transaction (no-op when no trusted audit
+ * context is installed — a bare SDK call is not an agent write).
+ */
+async function auditReservation(
+  tx: Tx,
+  identity: string,
+  input: ReserveBudgetInput,
+  data: BudgetView,
+): Promise<void> {
+  const onWriteCommit = bankingExecutionContext()?.onWriteCommit;
+  if (onWriteCommit === undefined) return;
+  await onWriteCommit(tx, {
+    toolName: 'reserve_budget',
+    identity,
+    args: {
+      userId: input.userId,
+      name: input.name,
+      amount: input.amount,
+      purpose: input.purpose,
+      dueDate: input.dueDate,
+      idempotencyKey: input.idempotencyKey,
+    },
+    data,
+  });
+}
+
+/**
  * Reserve a budget envelope; returns the created budget.
  *
  * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, a repeated call with the
@@ -75,8 +109,15 @@ export async function reserveBudget(input: ReserveBudgetInput): Promise<BudgetVi
       find: (tx) => tx.budget.findUnique({ where: {
         userId_idempotencyKey: { userId: input.userId, idempotencyKey: key },
       } }),
-      create: (tx, replayKey) =>
-        tx.budget.create({ data: { ...reservationData(input), idempotencyKey: replayKey } }),
+      create: async (tx, replayKey) => {
+        const created = await tx.budget.create({
+          data: { ...reservationData(input), idempotencyKey: replayKey },
+        });
+        // Reached ONLY on a real insert: a replay returns from `find` (or the P2002 fallback re-read)
+        // and never lands here, so the audit is written at most once per execution identity.
+        await auditReservation(tx, `key:${replayKey}`, input, toBudgetView(created));
+        return created;
+      },
     });
     return toBudgetView(replayed);
   }
@@ -86,12 +127,18 @@ export async function reserveBudget(input: ReserveBudgetInput): Promise<BudgetVi
   if (fence !== undefined) {
     const row = await runInTransaction(async (tx) => {
       await fence(tx);
-      return tx.budget.create({ data: reservationData(input) });
+      const created = await tx.budget.create({ data: reservationData(input) });
+      await auditReservation(tx, `row:${created.id}`, input, toBudgetView(created));
+      return created;
     });
     return toBudgetView(row);
   }
 
-  const row = await runInTransaction((tx) => tx.budget.create({ data: reservationData(input) }));
+  const row = await runInTransaction(async (tx) => {
+    const created = await tx.budget.create({ data: reservationData(input) });
+    await auditReservation(tx, `row:${created.id}`, input, toBudgetView(created));
+    return created;
+  });
   return toBudgetView(row);
 }
 

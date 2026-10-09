@@ -129,6 +129,9 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   // runner is the gateway-authorized execution path, so a gated plan node still parks for a human.
   const registry = createToolRegistry(userId, {
     automaticWriteFence: () => buildAutomaticWriteFence(sessionId),
+    // SIDE-EFFECT audit for the model's automatic (non-plan) tool calls: the business write and its
+    // strict audit row commit in the SAME SDK transaction (a failing audit rolls the write back).
+    automaticWriteAudit: () => ({ sessionId, userRequest: latestUserRequest() }),
     submitPlan: {
       sessionId,
       runTool: (toolName, args, ctx) =>

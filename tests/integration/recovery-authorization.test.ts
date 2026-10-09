@@ -62,7 +62,7 @@ it('recovery rechecks a breaker that trips after recovery authorization but befo
   try {
     await bounded(reached.promise);
     for (let i = 0; i < 3; i++) await recordFailure(action.sessionId);
-    expect(getState(action.sessionId).locked).toBe(true);
+    expect((await getState(action.sessionId)).locked).toBe(true);
   } finally { release.resolve(); response = await running; barrier.mockRestore(); }
   expect(response!.http).toBe(423); expect(await balance()).toBe(23580);
   expect((await p.pendingAction.findUniqueOrThrow({ where: { id: action.id } })).status).toBe('confirmed');

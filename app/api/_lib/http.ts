@@ -82,6 +82,25 @@ export async function parseBody<T>(schema: z.ZodType<T>, req: Request): Promise<
 }
 
 /**
+ * Parse + validate an OPTIONAL JSON request body.
+ *
+ * Identical to {@link parseBody} except that an ABSENT or EMPTY body is treated as `{}` instead of a
+ * validation error — for handlers whose every field is optional (e.g. `POST /api/security/reset`,
+ * whose body may carry an optional verification code, so a body-less POST still gets a proper
+ * response instead of a `400`). Malformed JSON or a schema mismatch still throws
+ * `AppError('VALIDATION')`, exactly like {@link parseBody}.
+ */
+export async function parseOptionalBody<T>(schema: z.ZodType<T>, req: Request): Promise<T> {
+  const raw = await req.text();
+  const body = raw.trim() === '' ? '{}' : raw;
+  // Re-wrap the already-read raw body so the shared `parseBody` owns the JSON + schema validation.
+  return parseBody(
+    schema,
+    new Request(req.url, { method: 'POST', body, headers: { 'content-type': 'application/json' } }),
+  );
+}
+
+/**
  * Parse + validate the URL search params against a zod schema.
  * Throws `AppError('VALIDATION')` on a schema mismatch.
  */
