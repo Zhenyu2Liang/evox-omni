@@ -394,7 +394,7 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
 - **A tripped breaker denies ALL tiers — including 🟢 GREEN reads** (intended hard gate).
   `gatewayEvaluate` sets `blocked = locked || tier !== 'GREEN'`, so when tripped even a low-risk read
   (e.g. `get_balance`) is denied with decision `deny` / reason `HIGH_RISK_BLOCKED`. This is deliberate:
-  a session that just produced three consecutive failed strong-verifications is treated as compromised, so
+  an OWNER/account that just produced three consecutive failed strong-verifications is treated as compromised, so
   it fails closed for EVERY call (it must not even be able to probe balances) until a human deliberately unlocks it.
 - **UNLOCK CONDITIONS (explicit)** — a locked session is cleared ONLY by the deliberate, audited security-center
   action `resetSession(sessionId, { actor, reason })`, which records a COMPLETE `SECURITY_RESET` event
