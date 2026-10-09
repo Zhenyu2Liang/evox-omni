@@ -61,6 +61,9 @@ Each spec imports the module under test directly from its `@/…` façade path
 - Pure where possible: no network, no real clock (`now` is injected), no LLM. DB-backed cases
   (`computeDailyTransferTotal`, gateway persistence, MFA challenges, SDK invariants, PendingAction
   claims) use the test SQLite via `../helpers/db` and are annotated as such in their file header.
+- EXCEPTION to "no real clock": the SECURITY-only cooldown gate (`security/circuit-breaker.ts`) uses the
+  REAL wall clock (`realNow()`), so its specs (`security/circuit-breaker-reset` / `-persistence`) derive
+  the boundary from the persisted `lockedAt` and also exercise the DEFAULT server clock — never the demo clock.
 - **Unique `sessionId`** for any breaker-related case.
 - Import frozen types from `@/lib/contracts/*`; never redeclare. Assert through public facades
   (`@/security`, `@/planner`, `@/banking-sdk`, `@/agent`).
