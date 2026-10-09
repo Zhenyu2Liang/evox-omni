@@ -398,7 +398,7 @@ Resolution is **TOLERANT of the value/slot the model supplies** — a live model
   it fails closed for EVERY call (it must not even be able to probe balances) until a human deliberately unlocks it.
   It also blocks SDK writes: `security/execution-policy.ts#assertSessionMayWrite(sessionId, client?)` throws `AppError('CIRCUIT_OPEN')` (HTTP 423).
 - **UNLOCK CONDITIONS (explicit)** — a locked OWNER/account is cleared ONLY by the deliberate, audited security-center
-  action `resetSession(sessionId, { actor, reason })`, which records a COMPLETE `SECURITY_RESET` event
+  action `resetSession(actor, { actor, reason, verificationCode?, now? })`, which records a COMPLETE `SECURITY_RESET` event
   (`actor`, `reason`, `wasLocked`, `previousFailures`, `priorLockedAt?`):
   - the model/LLM can NEVER unlock the breaker (no tool touches the state);
   - `recordSuccess` does NOT unlock a tripped breaker (a correct MFA code on a NON-locked path only resets the counter);
