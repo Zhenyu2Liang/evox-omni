@@ -446,9 +446,11 @@ describe('groundAssistantText — composition & safety', () => {
     expect(groundAssistantText('   ', facts)).toBe('   ');
   });
 
-  it('returns a fully consistent narration unchanged', () => {
+  it('returns a fully consistent narration unchanged (the CURRENT post-write balance)', () => {
     const facts = buildFinancialFacts([balanceResult(), transferSucceeded()]);
-    const text = '已成功向张伟转账 ¥200.00，当前活期账户余额为 ¥23,580.00。';
+    // After the successful ¥200 transfer the CURRENT 活期 balance is ¥23,380.00 — a narration stating
+    // that CURRENT balance is honest and stays intact.
+    const text = '已成功向张伟转账 ¥200.00，当前活期账户余额为 ¥23,380.00。';
     expect(groundAssistantText(text, facts)).toBe(text);
   });
 });
