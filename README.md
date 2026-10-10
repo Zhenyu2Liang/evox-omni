@@ -40,7 +40,7 @@
   转账依然被判为 🔴 RED、依然需要人工验证码。权限既不会被提高，也不会被绕过。
 - **🚫 幻觉防护 / 如实报告（Test 5）** — 模型只能陈述来自工具结果的事实；工具返回 `success:false` 时，
   Agent 必须如实报告失败，绝不允许编造成功。
-  **服务端事实通道（grounding）** 用真实工具结果核验并**替换**不一致的模型文本（`agent/grounding.ts#groundAssistantText` / `agent/grounding-facts.ts#buildFinancialFacts`，接入 `agent/run-turn.ts` 的 `message_end`）：转账/余额/收款人/状态只能来自真实工具结果，否则回复被服务端校正（标记 `（系统校正）`）。判定按**操作身份**（工具）结构化进行（`grounding-facts.ts#OPERATION_CATEGORIES`）：`transfer` 只由 `transfer_money` 支撑、`budget` 只由 `reserve_budget` 支撑，因此**一次预算写入不能支撑「转账成功」**；结果真正**未知**（如进入人工核对）时只表述为「待核对」，**绝不**写成成功、失败或「资金未变」。
+  **服务端事实通道（grounding）** 把**用户可见事实判为服务端权威**：金额 / 收款人 / 账户余额 / 执行状态只能来自本轮**真实工具结果**，并**绑定到产生它的那次具体操作**（调用身份 `toolCallId` / `actionId`；计划节点另带 `taskId` / `nodeId`），因此**同一工具的不同操作绝不互相支撑或混淆**。账户余额来自按**结果顺序**维护的每账户当前余额账本——一次**成功写入**更新该账户余额，一次**历史查询**不会覆盖它；结果真正**未知**（如进入人工核对）时只表述为「待核对」，**绝不**写成成功、失败或「资金未变」。判定为**结构化**比较（`agent/grounding-facts.ts#buildFinancialFacts` / `OPERATION_CATEGORIES`）：`transfer` 只由 `transfer_money` 支撑、`budget` 只由 `reserve_budget` 支撑，因此**一次预算写入不能支撑「转账成功」**。若最终回答与真实工具结果不一致，服务端在**展示之前**即用**服务端改写的消息替换**它（`agent/grounding.ts#groundAssistantText`，接入 `agent/run-turn.ts` 的 `message_end`，标记 `（系统校正）`——该标记**仅为说明**、绝不是跳过核验的开关），因此**错误事实不会被先展示、事后才更正**。
 - **🔗 跨场景任务串联** — 一个自然语言请求可以组合多个能力（例如"预留预算 + 定时提醒"），
   每个动钱的节点仍逐个经过安全闸门。
 - **📜 全链路审计（按副作用判定）** — 审计由操作是否产生**副作用**决定（`security/permission-engine.ts` 的 `ToolPolicy.write` / `isWriteTool()`），**与权限颜色无关**：🟢 GREEN 自动写入（如 `reserve_budget`）同样入审计，且审计行与被审计业务写入在**同一个 `prisma.$transaction` 内**（`agent/write-audit.ts`，strict：审计失败回滚业务写入）；去重键按所有者隔离 `write:<tool>:<owner>:<identity>`，与门控身份 `exec:<actionId>` / `reconcile:<actionId>` 互不冲突。每个安全控制决策（熔断、注入检测、验证码失败）都写入 `SecurityEvent`。
@@ -234,7 +234,7 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 - **提示词注入防御（injection-guard）** — 对用户输入做启发式检测，命中则记录 `SecurityEvent`
   并向前端发出安全事件（`security_event{kind:'injection'}`）；但它 **只做纵深防御，绝不授予权限**。
   检测结果**不会**被注入模型上下文（不加任何"系统提醒"），也不改变任何授权结论。
-- **幻觉防护（hallucination guard）** — 模型只能报告来自工具结果的事实；`success:false` 必须如实报告失败。**服务端事实通道（grounding）** 用真实工具结果核验并**替换**不一致的模型文本（`agent/grounding.ts#groundAssistantText` / `agent/grounding-facts.ts#buildFinancialFacts`，接入 `agent/run-turn.ts` 的 `message_end`）：转账/余额/收款人/状态只能来自真实工具结果，否则回复被服务端校正（标记 `（系统校正）`）。判定按**操作身份**（工具）结构化进行（`grounding-facts.ts#OPERATION_CATEGORIES`）：`transfer` 只由 `transfer_money` 支撑、`budget` 只由 `reserve_budget` 支撑，因此**一次预算写入不能支撑「转账成功」**；结果真正**未知**（如进入人工核对）时只表述为「待核对」，**绝不**写成成功、失败或「资金未变」。
+- **幻觉防护（hallucination guard）** — 模型只能报告来自工具结果的事实；`success:false` 必须如实报告失败。**服务端事实通道（grounding）** 把**用户可见事实判为服务端权威**：金额 / 收款人 / 账户余额 / 执行状态只能来自本轮**真实工具结果**，并**绑定到产生它的那次具体操作**（调用身份 `toolCallId` / `actionId`；计划节点另带 `taskId` / `nodeId`），因此**同一工具的不同操作绝不互相支撑或混淆**。账户余额来自按**结果顺序**维护的每账户当前余额账本——一次**成功写入**更新该账户余额，一次**历史查询**不会覆盖它；结果真正**未知**（如进入人工核对）时只表述为「待核对」，**绝不**写成成功、失败或「资金未变」。判定为**结构化**比较（`agent/grounding-facts.ts#buildFinancialFacts` / `OPERATION_CATEGORIES`）：`transfer` 只由 `transfer_money` 支撑、`budget` 只由 `reserve_budget` 支撑，因此**一次预算写入不能支撑「转账成功」**。若最终回答与真实工具结果不一致，服务端在**展示之前**即用**服务端改写的消息替换**它（`agent/grounding.ts#groundAssistantText`，接入 `agent/run-turn.ts` 的 `message_end`，标记 `（系统校正）`——该标记**仅为说明**、绝不是跳过核验的开关），因此**错误事实不会被先展示、事后才更正**。
 - **模拟 MFA（短信验证码）** — 🔴 RED 操作需要输入验证码；错误验证码会累加失败次数。
   **UI 永不显示验证码**，需由用户输入。
 - **熔断（circuit-breaker，DB 持久化 · 按所有者 · 加固）** — 连续 **3 次** 验证码失败会 **锁定该所有者（fail-closed：拒绝*所有*工具调用，*包括 🟢 GREEN 查询*）** 并写入 `SecurityEvent`（`CIRCUIT_BREAKER_TRIPPED`，severity `high`）。锁状态**持久化在 `CircuitBreakerState`**（Prisma），键为 `user:<userId>` / `session:<actor>`，因此**新建会话或进程重启都无法绕过**；锁定时间戳与解锁冷却期按服务器**真实时钟**（`lib/clock.ts#realNow()`，非演示时钟）计时。熔断是 LLM 无法清除的硬闸门（**没有解锁工具**）；**只有用户通过安全中心**（`POST /api/security/reset` → `circuitBreaker.resetSession`）**的经审计操作才能解除**，且解除本身**被门控**（需额外验证码 `123456` **或** 冷却 `RESET_COOLDOWN_MS = 60_000`）。**解锁原子且严格审计**：清除状态与写入 `SECURITY_RESET` 事件在**同一个 `prisma.$transaction`** 内提交（strict），审计失败即回滚清除、锁保持不变；安全中心的解锁输入框**默认为空**，绝不预填验证码。
@@ -549,6 +549,7 @@ RED 终态不会再次要求验证码；并发恢复在事务内使用当前授�
 - **⚠️ 未验证 —— 计划接管与执行租约都是 TTL 启发式：** 计划 / 节点接管用 `EXECUTION_CLAIM_TTL_MS = 600000ms`（约 10 分钟）：单次工具调用合法阻塞超过该 TTL 的所有者仍可被接管（其写入被 fence 拒绝，但确被抢占）；`classifyConfirmedAction` 判定 `processing` 所依据的执行租约是 **另一个** TTL `EXECUTION_LEASE_TTL_MS = 120000ms`。两者都**不是活性证明**；多进程 / 多实例争用的原子性**只在单进程 / 单 DB 内验证过**，未做压力测试。
 - **⚠️ 未验证 —— 文件规模超软阈值：** `agent/task-control.ts`（约 1205 行）与 `agent/confirmation.ts`（约 1030 行）超出约 1000 行的软性指引，是可抽取拆分的候选。
 - **`app/api/actions/route.ts` 中模块私有的 `DECISION_STATUSES` 常量当前非行为性**（没有任何读取路径依赖它），是清理候选（不影响行为）。
+- **事实核验（grounding）是「代码强制」而非「完全核验」（【已实现】✅ 代码强制 /【未验证】⚠️）。** 服务端事实通道只保证**用户可见的金额 / 收款人 / 账户余额 / 执行状态**来自本轮真实工具结果、并按具体操作（`toolCallId` / `actionId`，计划节点另带 `taskId` / `nodeId`）绑定；账户余额按结果顺序维护的每账户账本给出（成功写入更新、历史查询不覆盖）；不一致的回答在展示前被服务端改写替换。它并**不是**对模型全部输出的形式化验证，也**不等于**「金融事实已完全核验」：**未由工具结果覆盖**的表述（如对未来预测、主观建议）不在核验范围，判定依赖**结构化启发式**（操作身份 / 账户 / 金额 / 收款人 / 结果状态），不保证覆盖所有措辞变体。该能力的测试均在 `LLM_MODE=mock`（脚本化模型）下进行，**真实 LLM（`LLM_MODE=live`）下的稳健性未验证**。
 - **诚实的状态分级：** 本 README 描述的能力应区分 **【已实现】✅ 代码强制 /【模拟】🧪 演示替身 /【未验证】⚠️ 尚未覆盖** 三态（逐项见 [`docs/known-risks.md`](docs/known-risks.md)）。**测试全绿 ≠ 安全模型已闭合**：本 Demo 未做形式化验证，也未覆盖多进程集群、真实 LLM、真实支付通道；请在演示与评审中如实标注，不要把"单元 / 集成 / 浏览器测试通过"表述为"安全闭环已证明"。
 
 ---
