@@ -2,13 +2,14 @@
  * grounding-facts.ts — STRUCTURED trusted facts + bilingual claim extraction for fact grounding.
  *
  * The model's prose is RAW output. This module turns the turn's REAL tool results into a STRUCTURED,
- * server-owned fact base — accounts (per account), write outcomes (per TOOL identity, with amount and
+ * server-owned fact base — accounts (per account, AS-OF a query AND CURRENT after every write), write
+ * outcomes (per OPERATION identity: tool + toolCallId/actionId/taskId/nodeId, with amount and
  * recipient), authoritative money amounts — and extracts the CLAIMS a piece of text makes about them
  * (which operation, done/failed/pending, which amount, which recipient, which account).
  *
- * Design: compare STRUCTURE (tool identity, number, entity, account) — never pile up ad-hoc phrases.
- * The word lists below are small, per-category and BILINGUAL (zh + en); they only CLASSIFY a clause,
- * the DECISION is made structurally in `./grounding` against the trusted facts.
+ * Design: compare STRUCTURE (operation identity, number, entity, account) — never pile up ad-hoc
+ * phrases. The word lists below are small, per-category and BILINGUAL (zh + en); they only CLASSIFY a
+ * clause, the DECISION is made structurally in `./grounding` against the trusted facts.
  *
  * PURE: no DB access, no pi imports (only a TYPE-ONLY tools import, erased at compile time).
  */
@@ -58,16 +59,30 @@ export interface TrustedRecipient {
  */
 export type TrustedWriteOutcome = 'succeeded' | 'failed' | 'unknown';
 
-/** One authoritative write result, keyed by TOOL identity (never by a global "some write worked"). */
+/**
+ * One authoritative write result, keyed by OPERATION identity — the tool PLUS the server-side call
+ * identity (`toolCallId`, plus `actionId`/`taskId`/`nodeId` when the operation parked/ran in a plan).
+ * A completion claim is matched to the specific operation it refers to, never to a global
+ * "some write of this tool family succeeded". Optional fields are OMITTED when absent.
+ */
 export interface TrustedWrite {
   toolName: string;
   outcome: TrustedWriteOutcome;
+  /** The pi tool-call id of THIS operation (server-generated), when known. */
+  toolCallId?: string;
+  /** The persisted `PendingAction` id when the operation was gated, when known. */
+  actionId?: string;
+  /** The owning DAG plan / node when the operation ran as a plan node, when known. */
+  taskId?: string;
+  nodeId?: string;
   /** The authoritative amount the write moved/reserved (from the SDK DTO), when known. */
   amount?: number;
   /** The authoritative recipient (transfers), when known. */
   recipient?: TrustedRecipient;
   /** The authoritative account balance AFTER the write (from the SDK DTO), when known. */
   balanceAfter?: number;
+  /** The account the write debited (server-resolved), when known. */
+  accountId?: string;
   /** The tool's server-authored summary text. */
   summary?: string;
   /** The SDK error message for a failed write. */
@@ -76,8 +91,14 @@ export interface TrustedWrite {
 
 /** Authoritative financial facts distilled from the turn's REAL tool results. */
 export interface FinancialFacts {
-  /** Per-account authoritative balances (from `get_balance`). */
+  /** Per-account authoritative balances AS-OF the `get_balance` query that reported them. */
   accounts: TrustedAccount[];
+  /**
+   * Per-account CURRENT balances, applied in RESULT ORDER: a `get_balance` SETS an account balance
+   * (a fresh authoritative read) and a SUCCESSFUL write that returns a new balance UPDATES that
+   * account. Checking/savings/credit never mix. Used for 「当前余额」 claims.
+   */
+  currentBalances: TrustedAccount[];
   /** Flat list of every authoritative amount (account balances, dashboard figures, …). */
   balances: number[];
   /** The authoritative available total (from `get_balance.totalAvailable`), when present. */
@@ -88,18 +109,63 @@ export interface FinancialFacts {
   hasToolResults: boolean;
 }
 
+/**
+ * One tool result as the turn's `factResults` buffer carries it: the tool name, its REAL
+ * `ToolExecutionResult`, and the server-side OPERATION identity. The extras are additive/optional so
+ * an existing `{ toolName, result }` call still type-checks.
+ */
+export interface FactInput {
+  toolName: string;
+  result: ToolExecutionResult;
+  toolCallId?: string;
+  actionId?: string;
+  taskId?: string;
+  nodeId?: string;
+  /** The account the operation debited (from the tool's server-resolved args), when known. */
+  sourceAccountId?: string;
+}
+
 /* --------------------------------------------------------------------------- trusted fact build */
 
 /** Extract the structured trusted facts from the turn's REAL results. */
-export function buildFinancialFacts(
-  results: ReadonlyArray<{ toolName: string; result: ToolExecutionResult }>,
-): FinancialFacts {
+export function buildFinancialFacts(results: ReadonlyArray<FactInput>): FinancialFacts {
   const accounts: TrustedAccount[] = [];
   const balances: number[] = [];
   let totalBalance: number | undefined;
   const writes: TrustedWrite[] = [];
 
-  for (const { toolName, result } of results) {
+  // The CURRENT-balance ledger, applied in RESULT ORDER. Keyed by account id (else name|type).
+  const currentOrder: TrustedAccount[] = [];
+  const currentByKey = new Map<string, TrustedAccount>();
+  const keyOf = (account: TrustedAccount): string => account.id ?? `${account.name ?? ''}|${account.type ?? ''}`;
+  const upsertCurrent = (account: TrustedAccount): TrustedAccount => {
+    const key = keyOf(account);
+    const existing = currentByKey.get(key);
+    if (existing !== undefined) {
+      existing.balance = account.balance;
+      if (account.id !== undefined) existing.id = account.id;
+      if (account.name !== undefined) existing.name = account.name;
+      if (account.type !== undefined) existing.type = account.type;
+      return existing;
+    }
+    const clone: TrustedAccount = { ...account };
+    currentByKey.set(key, clone);
+    currentOrder.push(clone);
+    return clone;
+  };
+  /** Resolve the account a write debited: explicit id, else the single CHECKING account, else lone. */
+  const resolveTarget = (accountId?: string): TrustedAccount | undefined => {
+    if (accountId !== undefined && accountId !== '') {
+      for (const account of currentOrder) if (account.id === accountId) return account;
+      return undefined;
+    }
+    const checking = currentOrder.filter((account) => account.type === 'CHECKING');
+    if (checking.length === 1) return checking[0];
+    return currentOrder.length === 1 ? currentOrder[0] : undefined;
+  };
+
+  for (const entry of results) {
+    const { toolName, result } = entry;
     if (toolName === 'get_balance') {
       const data = result.data;
       if (isRecord(data)) {
@@ -115,6 +181,7 @@ export function buildFinancialFacts(
             };
             accounts.push(account);
             balances.push(raw.balance);
+            upsertCurrent(account);
           }
         }
       }
@@ -127,11 +194,20 @@ export function buildFinancialFacts(
         }
       }
     }
-    if (SIDE_EFFECT_TOOLS.has(toolName)) writes.push(toTrustedWrite(toolName, result));
+    if (SIDE_EFFECT_TOOLS.has(toolName)) {
+      const write = toTrustedWrite(toolName, result, entry);
+      writes.push(write);
+      // A SUCCESSFUL write that reported a new balance updates its account's CURRENT balance.
+      if (write.outcome === 'succeeded' && write.balanceAfter !== undefined) {
+        const target = resolveTarget(entry.sourceAccountId ?? write.accountId);
+        if (target !== undefined) target.balance = write.balanceAfter;
+      }
+    }
   }
 
   return {
     accounts,
+    currentBalances: currentOrder,
     balances,
     ...(totalBalance !== undefined ? { totalBalance } : {}),
     writes,
@@ -139,18 +215,34 @@ export function buildFinancialFacts(
   };
 }
 
-/** Map one REAL write result into its structured trusted form (amount / recipient / balance after). */
-function toTrustedWrite(toolName: string, result: ToolExecutionResult): TrustedWrite {
+/** Map one REAL write result into its structured trusted form (identity / amount / recipient / balance). */
+function toTrustedWrite(toolName: string, result: ToolExecutionResult, entry: FactInput): TrustedWrite {
   const outcome: TrustedWriteOutcome =
     result.ok === true ? 'succeeded' : isUnknownOutcome(result) ? 'unknown' : 'failed';
   const data = isRecord(result.data) ? result.data : undefined;
   const write: TrustedWrite = { toolName, outcome };
+
+  if (entry.toolCallId !== undefined && entry.toolCallId !== '') write.toolCallId = entry.toolCallId;
+  if (entry.actionId !== undefined && entry.actionId !== '') write.actionId = entry.actionId;
+  if (entry.taskId !== undefined && entry.taskId !== '') write.taskId = entry.taskId;
+  if (entry.nodeId !== undefined && entry.nodeId !== '') write.nodeId = entry.nodeId;
+  if (entry.sourceAccountId !== undefined && entry.sourceAccountId !== '') {
+    write.accountId = entry.sourceAccountId;
+  }
 
   if (data !== undefined) {
     if (isFiniteNumber(data.amount)) write.amount = data.amount;
     if (isFiniteNumber(data.newBalance)) write.balanceAfter = data.newBalance;
     const recipient = toRecipient(data.recipient);
     if (recipient !== undefined) write.recipient = recipient;
+    if (write.accountId === undefined) {
+      for (const key of ['accountId', 'sourceAccountId'] as const) {
+        if (typeof data[key] === 'string' && data[key] !== '') {
+          write.accountId = data[key] as string;
+          break;
+        }
+      }
+    }
   }
   if (result.summary !== undefined) write.summary = result.summary;
   if (result.error !== undefined) write.error = result.error;
@@ -202,7 +294,10 @@ export const OPERATION_CATEGORIES: Record<
   OperationCategory,
   { tools: readonly string[]; triggers: readonly string[] }
 > = {
-  transfer: { tools: ['transfer_money'], triggers: ['转账', '转出', '汇款', '打款', 'transfer', 'remit'] },
+  transfer: {
+    tools: ['transfer_money'],
+    triggers: ['转账', '转出', '汇款', '打款', '收到', '到账', 'transfer', 'remit'],
+  },
   card_limit: { tools: ['set_card_limit'], triggers: ['限额', '额度', 'limit'] },
   freeze_card: { tools: ['freeze_card'], triggers: ['冻结', 'freeze'] },
   unfreeze_card: { tools: ['unfreeze_card'], triggers: ['解冻', 'unfreeze'] },
@@ -233,7 +328,11 @@ export type AssertionKind = 'done' | 'failed' | 'pending' | 'none';
 export interface OperationClaim {
   category: OperationCategory;
   assertion: AssertionKind;
-  /** The clause the claim was found in (the amount/recipient are read from here). */
+  /**
+   * The claim WINDOW: the clause the trigger was found in PLUS its following neighbours (a claim's
+   * amount/recipient may sit in a neighbouring clause, e.g. 「转账成功，金额30000元，收款人李华。」).
+   * The amount/recipient are read from here.
+   */
   clause: string;
 }
 
@@ -344,10 +443,18 @@ function isDoneByVerb(clause: string, triggers: readonly string[]): boolean {
   return false;
 }
 
+/** How many CLAUSES a claim window spans (the trigger clause + this many following neighbours). */
+const CLAIM_WINDOW_SIZE = 3;
+
 /** Extract every operation claim the text makes, one per (clause, category). */
 export function extractOperationClaims(text: string): OperationClaim[] {
+  const clauses = splitClauses(text);
   const claims: OperationClaim[] = [];
-  for (const clause of splitClauses(text)) {
+  for (let i = 0; i < clauses.length; i += 1) {
+    const clause = clauses[i];
+    // A claim's supporting details (amount, recipient) may live in NEIGHBOURING clauses, so the
+    // window (not just the trigger clause) is what the structural comparison reads.
+    const window = clauses.slice(i, i + CLAIM_WINDOW_SIZE).join('，');
     for (const [category, spec] of Object.entries(OPERATION_CATEGORIES) as Array<
       [OperationCategory, { tools: readonly string[]; triggers: readonly string[] }]
     >) {
@@ -355,7 +462,7 @@ export function extractOperationClaims(text: string): OperationClaim[] {
       if (!hit) continue;
       let assertion = analyzeAssertion(clause);
       if (assertion === 'none' && isDoneByVerb(clause, spec.triggers)) assertion = 'done';
-      claims.push({ category, assertion, clause });
+      claims.push({ category, assertion, clause: window });
     }
   }
   return claims;
@@ -401,6 +508,29 @@ export function extractMoneyAmounts(clause: string): number[] {
   while ((match = CURRENCY_AMOUNT.exec(cleaned)) !== null) {
     const value = parseAmount(match[1] ?? match[2] ?? '');
     if (Number.isFinite(value)) amounts.push(value);
+  }
+  return amounts;
+}
+
+/**
+ * A bare (currency-UNMARKED) number that sits IMMEDIATELY after a money word (转账/金额/…). Stops an
+ * unmarked amount (e.g. 「已成功向张伟转账30000。」) from being invisible to the structural check,
+ * WITHOUT reading every stray digit in the sentence as money.
+ */
+const MONEY_WORD_AMOUNT = /(?:转账|转出|汇款|打款|金额|转给|amount|transfer)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/gi;
+
+/**
+ * Every amount a claim asserts: currency-marked amounts PLUS bare amounts directly introduced by a
+ * money word. Card masks excluded. Used by the payment-detail mismatch check.
+ */
+export function extractClaimAmounts(clause: string): number[] {
+  const amounts = extractMoneyAmounts(clause);
+  const cleaned = stripMaskedNumbers(clause);
+  let match: RegExpExecArray | null;
+  MONEY_WORD_AMOUNT.lastIndex = 0;
+  while ((match = MONEY_WORD_AMOUNT.exec(cleaned)) !== null) {
+    const value = parseAmount(match[1] ?? '');
+    if (Number.isFinite(value) && !amounts.some((amount) => sameAmount(amount, value))) amounts.push(value);
   }
   return amounts;
 }
@@ -507,6 +637,20 @@ export function extractBalanceClaims(
     }
   }
   return claims;
+}
+
+/** The CURRENT balance of an account (after every write applied this turn), never a stale as-of one. */
+export function currentBalance(
+  account: TrustedAccount,
+  facts: FinancialFacts,
+): number {
+  const current = facts.currentBalances ?? [];
+  const byId = account.id !== undefined ? current.find((item) => item.id === account.id) : undefined;
+  if (byId !== undefined) return byId.balance;
+  const byIdentity = current.find(
+    (item) => item.name === account.name && item.type === account.type,
+  );
+  return byIdentity !== undefined ? byIdentity.balance : account.balance;
 }
 
 /* ------------------------------------------------------------------------------------ helpers */

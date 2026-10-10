@@ -33,7 +33,7 @@ remain recoverable from Git.
 | restart-recovery.test.ts | Persisted evidence after module/registry reset |
 | message-protocol.test.ts | Persisted pi transcript validity: every toolResult answers a preceding toolCall (no orphan/duplicate/fabricated id) |
 | terminal-state-settle.test.ts | Confirm/cancel on terminal actions (stable 200 domain outcome, no rollback/double-charge) |
-| grounding-regression.test.ts | Real runTurn/resumeTurn pipeline: code-enforced financial-fact grounding replaces an ungrounded/contradictory narration (no false success; streamed == terminal == persisted) |
+| grounding-regression.test.ts | Real runTurn/resumeTurn pipeline: code-enforced financial-fact grounding replaces an ungrounded/contradictory narration (no false success; streamed == terminal == persisted); plus PURE-level coverage of missed facts (cross-clause/unmarked amount, tool-call-bearing message), post-write-vs-stale per-account balance authority, and same-tool-twice per-operation claim mapping (incl. unknown → 待核对) |
 
 Run npm run test -- tests/integration. Observe ../CONTEXT.md database isolation and no-weakening rules.
 These are in-process integration tests, not browser E2E.

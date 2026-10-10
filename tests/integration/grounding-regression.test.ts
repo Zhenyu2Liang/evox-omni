@@ -31,7 +31,7 @@
  * per-session `AgentState` are keyed by the session.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createModels, fauxAssistantMessage, fauxToolCall, fauxProvider } from '@earendil-works/pi-ai';
+import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from '@earendil-works/pi-ai';
 import type { FauxResponseStep, JsonObject } from '@earendil-works/pi-ai';
 import { loadSession, resumeTurn, runTurn } from '@/agent';
 import type { ModelRuntime, ToolExecutionResult } from '@/agent';
@@ -39,6 +39,10 @@ import type { AgentStreamEvent, ChatMessage } from '@/lib/contracts/agent';
 import { newId } from '@/lib/ids';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
+// The grounding DECISION is PURE and lives in `agent/grounding` (the `@/agent` facade does not
+// re-export it). Importing the precedented subpath keeps this whole file compiling so the cases
+// below fail as genuine ASSERTION failures, never as module-resolution errors.
+import { buildFinancialFacts, groundAssistantText } from '@/agent/grounding';
 
 /* ------------------------------------------------------------------------------------- harness */
 
@@ -501,5 +505,307 @@ describe('grounding — a fabricated balance with no tool result is neutralized'
     for (const delta of deltas(res.events)) expect(delta).not.toContain('888,888');
     // The persisted transcript is exactly the grounded text.
     expect(await persistedAssistantText(res.sessionId)).toBe(text);
+  });
+});
+
+/* ==================================================================================================
+ * MISSED-FACT / STALE-BALANCE / PER-OPERATION MAPPING
+ *
+ * The cases below pin three financial-fact-grounding defects through the SAME real pipeline (and the
+ * same PURE decision): (a) a false financial fact that sits in ANOTHER clause than the operation verb,
+ * carries no ¥/元 marker, or shares a message with a tool call is still corrected; (b) a write's
+ * POST-write balance outranks the stale pre-write balance PER ACCOUNT (never a flat amount pool);
+ * (c) the SAME tool executed twice maps EVERY claim to ITS OWN operation's real result.
+ * Assertions pin the CORRECT (server-authoritative) behavior.
+ * ================================================================================================== */
+
+/** The REAL `get_balance` result shape (`BalanceView`): the seeded 活期 + 储蓄 accounts and total. */
+const GET_BALANCE_RESULT: ToolExecutionResult = {
+  ok: true,
+  summary: '可用余额合计 ¥73,580.00，共 2 个账户：活期账户 ¥23,580.00、储蓄账户 ¥50,000.00。',
+  data: {
+    totalAvailable: TOTAL_AVAILABLE,
+    currency: 'CNY',
+    accounts: [
+      {
+        id: 'acct_checking',
+        type: 'CHECKING',
+        name: '活期账户',
+        numberMasked: '****8821',
+        balance: CHECKING_BALANCE,
+        currency: 'CNY',
+      },
+      {
+        id: 'acct_savings',
+        type: 'SAVINGS',
+        name: '储蓄账户',
+        numberMasked: '****3309',
+        balance: SAVINGS_BALANCE,
+        currency: 'CNY',
+      },
+    ],
+  },
+};
+
+/** The same REAL transfer but with a DIFFERENT post-write 活期 balance (guards 2a's authority). */
+const REAL_TRANSFER_ALT_BALANCE: ToolExecutionResult = {
+  ok: true,
+  summary: '已向 张伟 转账 ¥200.00。',
+  data: {
+    amount: 200,
+    newBalance: 23180,
+    recipient: { name: '张伟', contactId: 'contact_zhangwei' },
+  },
+};
+
+/** A REAL failed `transfer_money` (李华 / ¥5,000) carrying IDENTIFYING structured data. */
+const FAILED_TRANSFER: ToolExecutionResult = {
+  ok: false,
+  error: 'INSUFFICIENT_FUNDS：账户余额不足。',
+  data: { amount: 5000, recipient: { name: '李华', contactId: 'contact_lihua' } },
+};
+
+/** A REAL gated write whose outcome is UNKNOWN (needs reconciliation) — 李华 / ¥5,000. */
+const UNKNOWN_TRANSFER_LIHUA: ToolExecutionResult = {
+  ok: false,
+  data: {
+    amount: 5000,
+    recipient: { name: '李华', contactId: 'contact_lihua' },
+    needsReconciliation: true,
+  },
+};
+
+/** Facts for the [query, then write] order: `get_balance` (pre-write) THEN the ¥200 transfer write. */
+function queryThenWriteFacts(): ReturnType<typeof buildFinancialFacts> {
+  return buildFinancialFacts([
+    { toolName: 'get_balance', result: GET_BALANCE_RESULT },
+    { toolName: 'transfer_money', result: REAL_TRANSFER },
+  ]);
+}
+
+/** The false completion claim used across the per-operation mapping cases (李华 / ¥5,000). */
+const CLAIM_PEER_TO_FAILURE = '已成功向李华转账 ¥5,000.00。';
+/** The claim that matches its OWN successful operation (张伟 / ¥200). */
+const CLAIM_PEER_TO_SUCCESS = '已成功向张伟转账 ¥200.00。';
+
+describe('grounding — a MISSED financial fact is corrected to its own operation', () => {
+  it('1a: a transfer claim whose amount/recipient sit in OTHER clauses is still corrected', async () => {
+    const { sessionId, toolCallId } = await parkYellowTransfer();
+
+    // The transfer verb, the amount and the recipient live in THREE different comma-separated clauses.
+    const res = await resumeWith(sessionId, REAL_TRANSFER, '转账成功，金额30000元，收款人李华。', toolCallId);
+    expect(errorMessages(res.events)).toEqual([]);
+
+    const text = finalAssistantText(res.events);
+    expect(text).toContain(CORRECTION_TAG);
+    // The REAL structured outcome wins: recipient + amount come from the tool result, not the model.
+    expect(text).toContain('张伟');
+    expect(text).toContain('¥200.00');
+    expect(text).not.toContain('李华');
+    expect(text).not.toMatch(/30[,.]?000/);
+    // The false text was NEVER streamed.
+    for (const delta of deltas(res.events)) {
+      expect(delta).not.toContain('李华');
+      expect(delta).not.toMatch(/30[,.]?000/);
+    }
+    expect(await persistedAssistantText(sessionId)).toBe(text);
+  });
+
+  it('1b: a transfer claim with an UNMARKED amount (no ¥ / 元) is still corrected', async () => {
+    const { sessionId, toolCallId } = await parkYellowTransfer();
+
+    // The amount carries NO ¥ / 元 marker — but it is still a financial amount claim.
+    const res = await resumeWith(sessionId, REAL_TRANSFER, '已成功向张伟转账30000。', toolCallId);
+    expect(errorMessages(res.events)).toEqual([]);
+
+    const text = finalAssistantText(res.events);
+    expect(text).toContain(CORRECTION_TAG);
+    expect(text).toContain('张伟');
+    expect(text).toContain('¥200.00');
+    expect(text).not.toMatch(/30[,.]?000/);
+    for (const delta of deltas(res.events)) expect(delta).not.toMatch(/30[,.]?000/);
+    expect(await persistedAssistantText(sessionId)).toBe(text);
+  });
+
+  it('1c: a fabricated receipt with NO tool result at all is corrected and moves no money', async () => {
+    const prisma = getTestPrisma();
+    const txBefore = await prisma.transaction.count();
+
+    // ONE text-only step (no tool): the model claims a receipt it never verified.
+    const runtime = scriptedRuntime([fauxAssistantMessage('张伟已经收到30000元。')]);
+    const res = await runTurn(
+      { sessionId: newId('sess'), message: '张伟收到钱了吗？' },
+      { provider: runtime },
+    );
+    expect(errorMessages(res.events)).toEqual([]);
+
+    const text = finalAssistantText(res.events);
+    expect(text).toContain(CORRECTION_TAG);
+    expect(text).not.toContain('已经收到');
+    expect(text).not.toMatch(/30[,.]?000/);
+    for (const delta of deltas(res.events)) {
+      expect(delta).not.toContain('已经收到');
+      expect(delta).not.toMatch(/30[,.]?000/);
+    }
+    expect(await persistedAssistantText(res.sessionId)).toBe(text);
+
+    // No side effect: the fabricated receipt is ungrounded and nothing moved.
+    expect(await prisma.transaction.count()).toBe(txBefore);
+    expect(await prisma.executionReceipt.count()).toBe(0);
+  });
+
+  it('1d: a message that ALSO carries a tool call is ground-checked too', async () => {
+    // ONE message carries BOTH a real `get_balance` call AND a false financial fact in its text part.
+    const runtime = scriptedRuntime([
+      fauxAssistantMessage([fauxText(FALSE_SUCCESS), fauxToolCall('get_balance', {})], {
+        stopReason: 'toolUse',
+      }),
+      fauxAssistantMessage('以上是本次查询的说明。'),
+    ]);
+    const res = await runTurn(
+      { sessionId: newId('sess'), message: '我的余额是多少？' },
+      { provider: runtime },
+    );
+    expect(errorMessages(res.events)).toEqual([]);
+    // The tool-call step + the terminal narration.
+    expect(assistantMessages(res.events).length).toBe(2);
+
+    // The false fact is NEVER streamed, even though it shared a message with a tool call.
+    for (const delta of deltas(res.events)) {
+      expect(delta).not.toContain('转账已经成功完成');
+      expect(delta).not.toContain('¥500');
+    }
+    // The tool-call-bearing message WAS ground-checked (a server correction is present).
+    expect(assistantMessages(res.events).some((message) => message.content.includes(CORRECTION_TAG))).toBe(
+      true,
+    );
+    // The persisted assistant transcript never carries the false claim either.
+    const snapshot = await loadSession(res.sessionId);
+    const persistedAssistant = snapshot!.transcript
+      .filter((message) => message.role === 'assistant')
+      .map((message) => message.content);
+    expect(persistedAssistant.length).toBe(2);
+    expect(persistedAssistant.join(' ')).not.toContain('转账已经成功完成');
+
+    // The reloaded last-assistant transcript equals the terminal content.
+    expect(await persistedAssistantText(res.sessionId)).toBe(finalAssistantText(res.events));
+  });
+});
+
+describe('grounding — the POST-WRITE balance outranks the stale pre-write balance', () => {
+  it('2a: the post-write 活期 balance survives; the pre-write figure is NOT re-imposed', () => {
+    const facts = queryThenWriteFacts();
+    const correct = '当前活期账户余额为 ¥23,380.00。';
+    // The write landed and moved the 活期 balance to ¥23,380 — the correct post-write figure survives.
+    expect(groundAssistantText(correct, facts)).toBe(correct);
+
+    // GUARD: without the write, ¥23,380 is NOT authoritative — the get_balance figure wins.
+    const queryOnly = buildFinancialFacts([{ toolName: 'get_balance', result: GET_BALANCE_RESULT }]);
+    expect(groundAssistantText(correct, queryOnly)).toContain(CORRECTION_TAG);
+
+    // GUARD: authority comes from THIS write's `newBalance` — a different post-write balance corrects
+    // the claim instead of accepting a coincidental figure.
+    const otherWrite = buildFinancialFacts([
+      { toolName: 'get_balance', result: GET_BALANCE_RESULT },
+      { toolName: 'transfer_money', result: REAL_TRANSFER_ALT_BALANCE },
+    ]);
+    const corrected = groundAssistantText(correct, otherWrite);
+    expect(corrected).toContain(CORRECTION_TAG);
+    expect(corrected).not.toContain('23,380');
+    const matching = '当前活期账户余额为 ¥23,180.00。';
+    expect(groundAssistantText(matching, otherWrite)).toBe(matching);
+  });
+
+  it('2b: the stale pre-write 活期 balance is corrected to the post-write value', () => {
+    const facts = queryThenWriteFacts();
+    const stale = '当前活期账户余额为 ¥23,580.00。';
+    const corrected = groundAssistantText(stale, facts);
+    expect(corrected).toContain(CORRECTION_TAG);
+    expect(corrected).toContain('23,380');
+    expect(corrected).not.toContain('23,580');
+  });
+
+  it('2c: 活期 / 储蓄 / 信用 resolve PER ACCOUNT, never against a flat amount pool', () => {
+    const facts = queryThenWriteFacts();
+
+    // 储蓄 states its OWN figure — correct, survives byte-identical.
+    const savingsOwn = '您的储蓄账户余额为 ¥50,000.00。';
+    expect(groundAssistantText(savingsOwn, facts)).toBe(savingsOwn);
+
+    // The SAVINGS figure claimed as the 活期 balance is NOT accepted via another account's balance.
+    const savingsAsChecking = '您的活期账户余额为 ¥50,000.00。';
+    const fixedSavings = groundAssistantText(savingsAsChecking, facts);
+    expect(fixedSavings).toContain(CORRECTION_TAG);
+    expect(fixedSavings).toContain('23,380');
+    expect(fixedSavings).not.toContain('50,000');
+
+    // The TOTAL claimed as the 活期 balance is likewise not accepted.
+    const totalAsChecking = '您的活期账户余额为 ¥73,580.00。';
+    const fixedTotal = groundAssistantText(totalAsChecking, facts);
+    expect(fixedTotal).toContain(CORRECTION_TAG);
+    expect(fixedTotal).toContain('23,380');
+    expect(fixedTotal).not.toContain('73,580');
+
+    // A 信用-labelled figure never inherits ANOTHER account's balance (no flat pool).
+    const creditClaim = '您的信用账户可用余额为 ¥50,000.00。';
+    const fixedCredit = groundAssistantText(creditClaim, facts);
+    expect(fixedCredit).not.toBe(creditClaim);
+    expect(fixedCredit).not.toContain('50,000');
+  });
+});
+
+describe('grounding — the same tool executed twice maps EVERY claim to ITS OWN result', () => {
+  it('3a: [success, failure] — a completion claim about the FAILED op is corrected to ITS OWN failure', () => {
+    const facts = buildFinancialFacts([
+      { toolName: 'transfer_money', result: REAL_TRANSFER },
+      { toolName: 'transfer_money', result: FAILED_TRANSFER },
+    ]);
+
+    const failed = groundAssistantText(CLAIM_PEER_TO_FAILURE, facts);
+    expect(failed).toContain(CORRECTION_TAG);
+    expect(failed).toContain('实际执行失败');
+    expect(failed).not.toContain('已成功');
+
+    // The claim that matches ITS OWN success survives byte-identical.
+    expect(groundAssistantText(CLAIM_PEER_TO_SUCCESS, facts)).toBe(CLAIM_PEER_TO_SUCCESS);
+  });
+
+  it('3b: [failure, success] — the reversed order maps each claim the same way', () => {
+    const facts = buildFinancialFacts([
+      { toolName: 'transfer_money', result: FAILED_TRANSFER },
+      { toolName: 'transfer_money', result: REAL_TRANSFER },
+    ]);
+
+    const failed = groundAssistantText(CLAIM_PEER_TO_FAILURE, facts);
+    expect(failed).toContain(CORRECTION_TAG);
+    expect(failed).toContain('实际执行失败');
+    expect(failed).not.toContain('已成功');
+
+    expect(groundAssistantText(CLAIM_PEER_TO_SUCCESS, facts)).toBe(CLAIM_PEER_TO_SUCCESS);
+  });
+
+  it('3c: an UNKNOWN outcome among others renders 待核对 for ITS OWN claim', () => {
+    const orders = [
+      buildFinancialFacts([
+        { toolName: 'transfer_money', result: REAL_TRANSFER },
+        { toolName: 'transfer_money', result: UNKNOWN_TRANSFER_LIHUA },
+      ]),
+      buildFinancialFacts([
+        { toolName: 'transfer_money', result: UNKNOWN_TRANSFER_LIHUA },
+        { toolName: 'transfer_money', result: REAL_TRANSFER },
+      ]),
+    ];
+
+    for (const facts of orders) {
+      const unknown = groundAssistantText(CLAIM_PEER_TO_FAILURE, facts);
+      expect(unknown).toContain(CORRECTION_TAG);
+      expect(unknown).toContain('待核对');
+      expect(unknown).not.toContain('成功');
+      expect(unknown).not.toContain('失败');
+      expect(unknown).not.toContain('资金未变');
+
+      // The claim that matches ITS OWN success still survives.
+      expect(groundAssistantText(CLAIM_PEER_TO_SUCCESS, facts)).toBe(CLAIM_PEER_TO_SUCCESS);
+    }
   });
 });

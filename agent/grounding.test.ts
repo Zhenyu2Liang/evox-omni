@@ -20,6 +20,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolExecutionResult } from './tools';
 import { CORRECTION_TAG, SIDE_EFFECT_TOOLS, buildFinancialFacts, groundAssistantText } from './grounding';
+import { extractOperationClaims } from './grounding-facts';
 
 /** One `{ toolName, result }` entry as the turn's `factResults` buffer stores it. */
 type FactResult = { toolName: string; result: ToolExecutionResult };
@@ -446,9 +447,281 @@ describe('groundAssistantText — composition & safety', () => {
     expect(groundAssistantText('   ', facts)).toBe('   ');
   });
 
-  it('returns a fully consistent narration unchanged', () => {
+  it('returns a fully consistent narration unchanged (the CURRENT post-write balance)', () => {
     const facts = buildFinancialFacts([balanceResult(), transferSucceeded()]);
-    const text = '已成功向张伟转账 ¥200.00，当前活期账户余额为 ¥23,580.00。';
+    // After the successful ¥200 transfer the CURRENT 活期 balance is ¥23,380.00 — a narration stating
+    // that CURRENT balance is honest and stays intact.
+    const text = '已成功向张伟转账 ¥200.00，当前活期账户余额为 ¥23,380.00。';
     expect(groundAssistantText(text, facts)).toBe(text);
+  });
+});
+
+/* ============================================================ STRUCTURAL EDGE CASES (appended) */
+
+/**
+ * A real SUCCEEDED `transfer_money` write for a SPECIFIC recipient + amount — the SAME tool as
+ * `transferSucceeded()`, a DISTINCT operation (own amount/recipient/newBalance).
+ */
+function transferSucceededTo(name: string, amount: number, newBalance: number): FactResult {
+  return {
+    toolName: 'transfer_money',
+    result: {
+      ok: true,
+      summary: `已向 ${name} 转账 ¥${amount}.00。`,
+      data: { amount, newBalance, recipient: { name } },
+    },
+  };
+}
+
+/**
+ * A real FAILED `transfer_money` write for a SPECIFIC recipient + amount — the SAME tool as
+ * `transferFailed()`, a DISTINCT operation (own amount/recipient in the DTO).
+ */
+function transferFailedTo(name: string, amount: number): FactResult {
+  return {
+    toolName: 'transfer_money',
+    result: {
+      ok: false,
+      error: `INSUFFICIENT_FUNDS：向 ${name} 转账 ¥${amount}.00 失败。`,
+      data: { amount, recipient: { name } },
+    },
+  };
+}
+
+/* ------------------------------- (a)/(b) claim details in OTHER clauses / unmarked amounts */
+
+describe('groundAssistantText — claim details split across clauses or stated without a currency mark', () => {
+  it('(a) corrects a success claim whose amount+recipient live in DIFFERENT clauses', () => {
+    // 「转账成功」(clause 1) vs 「金额30000元，收款人李华」(clauses 2-3): the verb and its details are
+    // separated, so the window spans all three clauses and the STRUCTURAL comparison catches it.
+    const facts = buildFinancialFacts([transferSucceeded()]);
+    const out = groundAssistantText('转账成功，金额30000元，收款人李华。', facts);
+    expect(out).toContain(CORRECTION_TAG);
+    expect(out).toContain('张伟');
+    expect(out).toContain('¥200.00');
+    expect(out).not.toContain('李华');
+    expect(out).not.toContain('30,000.00');
+    expect(out).not.toContain('30000');
+    expect(out).not.toContain('转账成功');
+  });
+
+  it('(b) corrects a success claim carrying a BARE (currency-unmarked) amount', () => {
+    const facts = buildFinancialFacts([transferSucceeded()]);
+    const out = groundAssistantText('已成功向张伟转账30000。', facts);
+    expect(out).toContain(CORRECTION_TAG);
+    expect(out).toContain('张伟');
+    expect(out).toContain('¥200.00');
+    expect(out).not.toContain('30000');
+    expect(out).not.toBe('已成功向张伟转账30000。');
+  });
+});
+
+/* ------------------------------------------------------ (c) a receipt claim with no tool result */
+
+describe('groundAssistantText — a receipt claim with NO tool result this turn', () => {
+  it('(c) corrects a bare "收到" claim when the turn produced no tool results at all', () => {
+    const facts = buildFinancialFacts([]);
+    const out = groundAssistantText('张伟已经收到30000元。', facts);
+    expect(out).toContain(CORRECTION_TAG);
+    expect(out).toContain('未记录到该操作的执行结果');
+    expect(out).not.toBe('张伟已经收到30000元。');
+  });
+});
+
+/* ---------------------------------------------------------- (d) CURRENT (post-write) balances */
+
+describe('groundAssistantText — balances are compared to the CURRENT (post-write) value', () => {
+  it('(d) accepts the CURRENT 活期 balance after the ¥200 write', () => {
+    const facts = buildFinancialFacts([balanceResult(), transferSucceeded()]);
+    const text = '您的活期账户余额为 ¥23,380.00。';
+    expect(groundAssistantText(text, facts)).toBe(text);
+  });
+
+  it('(d) corrects the STALE 活期 balance (a query that PRECEDED the write) to the CURRENT one', () => {
+    const facts = buildFinancialFacts([balanceResult(), transferSucceeded()]);
+    const out = groundAssistantText('您的活期账户余额为 ¥23,580.00。', facts);
+    expect(out).toContain(CORRECTION_TAG);
+    expect(out).toContain('¥23,380.00');
+    expect(out).not.toContain('23,580.00');
+  });
+
+  it('(d) never mixes accounts: 储蓄 claimed with the checking amount is corrected, naming the account', () => {
+    const facts = buildFinancialFacts([balanceResult(), transferSucceeded()]);
+    const out = groundAssistantText('您的储蓄账户余额为 ¥23,380.00。', facts);
+    expect(out).toContain(CORRECTION_TAG);
+    expect(out).toContain('储蓄账户');
+    expect(out).toContain('¥50,000.00');
+    expect(out).not.toContain('23,380.00');
+  });
+
+  it('(d) never mixes accounts: 活期 claimed with the savings amount is corrected, naming the account', () => {
+    const facts = buildFinancialFacts([balanceResult(), transferSucceeded()]);
+    const out = groundAssistantText('您的活期账户余额为 ¥50,000.00。', facts);
+    expect(out).toContain(CORRECTION_TAG);
+    expect(out).toContain('活期账户');
+    expect(out).toContain('¥23,380.00');
+    expect(out).not.toContain('50,000.00');
+  });
+
+  it('(d) RESULT-ORDER: a get_balance that PRECEDES the write never overrides the write balanceAfter', () => {
+    // Multiple get_balance calls, THEN the write: the write UPDATES the CURRENT 活期 balance.
+    const facts = buildFinancialFacts([balanceResult(), balanceResult(), transferSucceeded()]);
+    expect(facts.currentBalances).toEqual([
+      { id: 'acct-checking', name: '活期账户', type: 'CHECKING', balance: 23380 },
+      { id: 'acct-savings', name: '储蓄账户', type: 'SAVINGS', balance: 50000 },
+    ]);
+    const text = '您的活期账户余额为 ¥23,380.00。';
+    expect(groundAssistantText(text, facts)).toBe(text);
+
+    // ...whereas a get_balance AFTER the write is a FRESH authoritative read and re-SETS the account.
+    const after = buildFinancialFacts([transferSucceeded(), balanceResult()]);
+    expect(after.currentBalances).toEqual([
+      { id: 'acct-checking', name: '活期账户', type: 'CHECKING', balance: 23580 },
+      { id: 'acct-savings', name: '储蓄账户', type: 'SAVINGS', balance: 50000 },
+    ]);
+  });
+});
+
+/* --------------------------------------------- (e) the SAME tool twice — per-OPERATION identity */
+
+describe('groundAssistantText — the SAME tool twice: each claim maps to ITS OWN operation', () => {
+  it('(e) case 1 (1st ok, 2nd failed): the 2nd claim is corrected, the 1st is accepted', () => {
+    const facts = buildFinancialFacts([
+      transferSucceededTo('张伟', 200, 23380),
+      transferFailedTo('李华', 300),
+    ]);
+
+    const second = '第二笔转账200元已完成。';
+    const secondOut = groundAssistantText(second, facts);
+    expect(secondOut).toContain(CORRECTION_TAG);
+    expect(secondOut).toContain('实际执行失败');
+    expect(secondOut).toContain('李华');
+    expect(secondOut).not.toBe(second);
+
+    const first = '第一笔转账200元已完成。';
+    expect(groundAssistantText(first, facts)).toBe(first);
+  });
+
+  it('(e) case 2 (1st failed, 2nd ok): the 1st claim is corrected, the 2nd is accepted', () => {
+    const facts = buildFinancialFacts([
+      transferFailedTo('李华', 300),
+      transferSucceededTo('张伟', 200, 23380),
+    ]);
+
+    const first = '第一笔转账300元已完成。';
+    const firstOut = groundAssistantText(first, facts);
+    expect(firstOut).toContain(CORRECTION_TAG);
+    expect(firstOut).toContain('实际执行失败');
+    expect(firstOut).toContain('李华');
+    expect(firstOut).not.toBe(first);
+
+    // an ordinal outranks the stated amount: the FIRST operation really failed even though the text
+    // names the 2nd's amount (200).
+    expect(groundAssistantText('第一笔转账200元已完成。', facts)).toContain('实际执行失败');
+
+    const second = '第二笔转账200元已完成。';
+    expect(groundAssistantText(second, facts)).toBe(second);
+  });
+
+  it('(e) binds to a DISTINCT operation by amount / recipient when no ordinal is stated', () => {
+    const facts = buildFinancialFacts([
+      transferSucceededTo('张伟', 200, 23380),
+      transferFailedTo('李华', 300),
+    ]);
+
+    const okByAmount = '转账200元已完成。';
+    expect(groundAssistantText(okByAmount, facts)).toBe(okByAmount);
+
+    const badByAmount = '转账300元已完成。';
+    const badOut = groundAssistantText(badByAmount, facts);
+    expect(badOut).toContain('实际执行失败');
+    expect(badOut).toContain('李华');
+
+    const badByRecipient = '已成功向李华转账。';
+    expect(groundAssistantText(badByRecipient, facts)).toContain('实际执行失败');
+  });
+});
+
+/* ------------------------------------------------ (f) UNKNOWN outcome (same-tool) stays 待核对 */
+
+describe('groundAssistantText — an UNKNOWN outcome is 待核对, never success/failure/unchanged', () => {
+  it('(f) corrects a success claim to 待核对', () => {
+    const facts = buildFinancialFacts([transferUnknown()]);
+    const out = groundAssistantText('已成功为您转账 ¥200.00。', facts);
+    expect(out).toContain('待核对');
+    expect(out).not.toContain('实际执行成功');
+    expect(out).not.toContain('实际执行失败');
+    expect(out).not.toContain('资金未变');
+    expect(out).not.toContain('未发生');
+  });
+
+  it('(f) corrects a failure claim to 待核对', () => {
+    const facts = buildFinancialFacts([transferUnknown()]);
+    const text = '本次转账失败，资金未转出。';
+    const out = groundAssistantText(text, facts);
+    expect(out).toContain('待核对');
+    expect(out).not.toContain('实际执行成功');
+    expect(out).not.toContain('实际执行失败');
+    expect(out).not.toBe(text);
+  });
+
+  it('(f) corrects a "funds unchanged" claim to 待核对', () => {
+    const facts = buildFinancialFacts([transferUnknown()]);
+    const out = groundAssistantText('本次转账未发生，资金未变动。', facts);
+    expect(out).toContain('待核对');
+    expect(out).not.toContain('实际执行成功');
+    expect(out).not.toContain('实际执行失败');
+    expect(out).not.toContain('未发生');
+    expect(out).not.toContain('资金未变');
+  });
+
+  it('(f) treats an inline needsReconciliation result identically', () => {
+    const facts = buildFinancialFacts([
+      { toolName: 'transfer_money', result: { ok: false, data: { needsReconciliation: true } } },
+    ]);
+    const out = groundAssistantText('已成功为您转账 ¥200.00。', facts);
+    expect(out).toContain('待核对');
+    expect(out).not.toContain('实际执行成功');
+    expect(out).not.toContain('实际执行失败');
+  });
+});
+
+/* ----------------------- (g) the assertion is classified from the TRIGGER clause alone */
+
+describe('extractOperationClaims / groundAssistantText - assertion from the trigger clause, details from the window', () => {
+  it('(g) a NEIGHBOUR clause mentioning 失败 does NOT flip a 成功 claim to failed', () => {
+    const claims = extractOperationClaims('转账已成功完成，同时也有一笔操作失败了。');
+    const transfer = claims.find((claim) => claim.category === 'transfer');
+    expect(transfer).toBeDefined();
+    // The TRIGGER clause 「转账已成功完成」 asserts completion; the trailing neighbour clause must not
+    // re-polarize the claim into a failure.
+    expect(transfer!.assertion).toBe('done');
+    expect(transfer!.assertion).not.toBe('failed');
+    // ...while the WINDOW still spans the trigger clause + its neighbours for detail (amount/recipient) matching.
+    expect(transfer!.clause).toContain('转账已成功完成');
+    expect(transfer!.clause).toContain('同时也有一笔操作失败了');
+  });
+
+  it('(g) a mixed success/failure wording against a REAL failed transfer is corrected to the failure', () => {
+    const facts = buildFinancialFacts([transferFailed()]);
+    const text = '转账已成功完成，同时也有一笔操作失败了。';
+    const out = groundAssistantText(text, facts);
+    expect(out).toContain(CORRECTION_TAG);
+    expect(out).toContain('失败');
+    expect(out).not.toContain('成功');
+    expect(out).not.toContain('已成功完成');
+    expect(out).not.toBe(text);
+  });
+
+  it('(g) NEIGHBOUR-clause detail matching still fires: a real 张伟 ¥200 success corrects 李华 ¥30000', () => {
+    const facts = buildFinancialFacts([transferSucceededTo('张伟', 200, 23380)]);
+    const text = '转账成功，金额30000元，收款人李华。';
+    const out = groundAssistantText(text, facts);
+    expect(out).toContain(CORRECTION_TAG);
+    // The correction names the REAL recipient + REAL amount read from the neighbouring clauses.
+    expect(out).toContain('张伟');
+    expect(out).toContain('¥200.00');
+    expect(out).not.toContain('30000');
+    expect(out).not.toContain('李华');
   });
 });
