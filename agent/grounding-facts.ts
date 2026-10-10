@@ -551,6 +551,13 @@ export interface BalanceClaim {
   amount: number;
   /** The account the claim points at (resolved from the surrounding text), when unambiguous. */
   account?: TrustedAccount;
+  /**
+   * The account-TYPE word the claim NAMED (活期/储蓄/信用/…, via `ACCOUNT_TYPE_KEYS`) when it could
+   * NOT be resolved to a known account — set ONLY when the claim names a specific account type that
+   * is absent from the turn's authoritative accounts. Such a claim must be verified against THAT
+   * account alone and is therefore `unverifiable`, never matched against the flat amount pool.
+   */
+  namedAccountLabel?: string;
 }
 
 const BALANCE_KEYWORDS: readonly string[] = [
@@ -577,13 +584,38 @@ export function accountKeys(account: TrustedAccount): string[] {
   return keys;
 }
 
-/** The account a text window points at (a window may only match ONE account to count as a hint). */
+/**
+ * The account-TYPE word a text window NAMES (from the closed `ACCOUNT_TYPE_KEYS` vocabulary), when it
+ * names one. Deliberately does NOT treat the generic word 账户/account as naming an account, so
+ * 「您的账户余额」 stays an unnamed (pool-checked) claim.
+ */
+function accountTypeNamedBy(window: string): string | undefined {
+  const lower = window.toLowerCase();
+  for (const keys of Object.values(ACCOUNT_TYPE_KEYS)) {
+    for (const key of keys) {
+      if (lower.includes(key.toLowerCase())) return key;
+    }
+  }
+  return undefined;
+}
+
+/** The account a text window points at (a window may only match ONE DISTINCT account to count as a hint). */
 function accountHintedBy(window: string, accounts: readonly TrustedAccount[]): TrustedAccount | undefined {
   const lower = window.toLowerCase();
   const matches = accounts.filter((account) =>
     accountKeys(account).some((key) => lower.includes(key.toLowerCase())),
   );
-  return matches.length === 1 ? matches[0] : undefined;
+  // Duplicate rows of the SAME account (e.g. the same account reported by two `get_balance` calls)
+  // are ONE account, so they never turn an unambiguous hint into an ambiguous one.
+  const distinct = [
+    ...new Map(
+      matches.map((account): [string, TrustedAccount] => [
+        account.id ?? `${account.name ?? ''}|${account.type ?? ''}`,
+        account,
+      ]),
+    ).values(),
+  ];
+  return distinct.length === 1 ? distinct[0] : undefined;
 }
 
 /**
@@ -633,7 +665,15 @@ export function extractBalanceClaims(
       const value = parseAmount(match[3] ?? '');
       if (!Number.isFinite(value)) continue;
       const account = accountHintedBy(clause.slice(0, at), accounts);
-      claims.push({ amount: value, ...(account !== undefined ? { account } : {}) });
+      // When the window names a specific account TYPE that does not resolve to a known account, the
+      // claim must stay bound to that account (unverifiable), never fall through to the flat pool.
+      const namedAccountLabel =
+        account === undefined ? accountTypeNamedBy(clause.slice(0, at)) : undefined;
+      claims.push({
+        amount: value,
+        ...(account !== undefined ? { account } : {}),
+        ...(namedAccountLabel !== undefined ? { namedAccountLabel } : {}),
+      });
     }
   }
   return claims;

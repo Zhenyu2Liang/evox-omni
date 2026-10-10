@@ -100,7 +100,7 @@ export function groundAssistantText(text: string, facts: FinancialFacts): string
   }
 
   for (const claim of extractBalanceClaims(text, facts.accounts)) {
-    const verdict = classifyBalanceClaim(claim.amount, claim.account, facts);
+    const verdict = classifyBalanceClaim(claim.amount, claim.account, claim.namedAccountLabel, facts);
     if (verdict === 'ok') continue;
     if (verdict === 'unverifiable') push(UNVERIFIABLE_BALANCE_STATEMENT);
     else push(balanceCorrection(claim.account, facts));
@@ -221,11 +221,16 @@ function mismatchStatement(write: TrustedWrite): string {
 function classifyBalanceClaim(
   amount: number,
   account: Parameters<typeof balanceCorrection>[0],
+  namedAccountLabel: string | undefined,
   facts: FinancialFacts,
 ): 'ok' | 'wrong' | 'unverifiable' {
   // A claim against a specific account is compared to that account's CURRENT balance (after every
   // write applied this turn), never to a stale as-of-query value.
   if (account !== undefined) return sameAmount(amount, currentBalance(account, facts)) ? 'ok' : 'wrong';
+  // A claim that NAMED an account type absent from this turn's authoritative accounts stays bound to
+  // that (unknown) account: it can never be satisfied by another account's coincidentally-equal
+  // balance, so it is unverifiable rather than matched against the flat amount pool.
+  if (namedAccountLabel !== undefined) return 'unverifiable';
   const authoritative = authoritativeAmounts(facts);
   if (authoritative.length === 0) return 'unverifiable';
   return authoritative.some((actual) => sameAmount(actual, amount)) ? 'ok' : 'wrong';
