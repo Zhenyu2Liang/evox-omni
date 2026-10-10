@@ -460,8 +460,8 @@ export function extractOperationClaims(text: string): OperationClaim[] {
     >) {
       const hit = spec.triggers.some((trigger) => clause.toLowerCase().includes(trigger.toLowerCase()));
       if (!hit) continue;
-      let assertion = analyzeAssertion(window);
-      if (assertion === 'none' && isDoneByVerb(window, spec.triggers)) assertion = 'done';
+      let assertion = analyzeAssertion(clause);
+      if (assertion === 'none' && isDoneByVerb(clause, spec.triggers)) assertion = 'done';
       claims.push({ category, assertion, clause: window });
     }
   }
