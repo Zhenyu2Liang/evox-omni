@@ -45,7 +45,7 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
 - `docs/security.md` — three permission tiers + the frozen policy table + dynamic `transfer_money`
   rules (`DAILY_TRANSFER_LIMIT=1000`); the Security Gateway `beforeToolCall` chokepoint;
   code-enforced / LLM-immutable permissions; prompt-injection defense (`injection-guard`, Test 4);
-  hallucination protection (facts only from tool results); MFA (`MFA_CODE='123456'`,
+  hallucination protection (server-authoritative facts bound **per operation** — `toolCallId`/`actionId` + plan `taskId`/`nodeId` — plus a **per-account current-balance ledger**, `unknown`→待核对, and a server-authored correction that replaces inconsistent assistant text **before** it is streamed; **live-LLM robustness UNVERIFIED**, see §8.5); MFA (`MFA_CODE='123456'`,
   `MFA_MAX_ATTEMPTS=3`); circuit breaker; audit log fields (`AuditEntry` / `SecurityEventKind`);
   the **reliable/keyed audit** contract (`audit/audit-logger.ts#recordAudit(entry, {client, dedupeKey, strict})` —
   `strict:true` rethrows a real insert error and ONLY absorbs a verified duplicate (P2002 on the exact
