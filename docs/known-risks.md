@@ -41,6 +41,7 @@ GREEN 自动写入在事务内复核熔断状态，覆盖聊天、独立调用�
 - **SDK 写入边界的执行权 fence**（第 17、19 条）— `banking-sdk/fence.ts` 以**不可枚举 Symbol** `EXECUTION_FENCE` 承载一个**不透明**的异步检查（`attachExecutionFence` 返回**同一对象引用**、`readExecutionFence` 读取；**无法**经 JSON / 工具参数注入）；`banking-sdk/{transfer,budget}.ts` 与 `banking-sdk/idempotent.ts` 在**写入事务内部、业务写入之前** `await` 该检查——抛错即回滚，**无业务行落库**。`agent/execution-fence.ts` 构造两种权威：`buildPlanNodeFence(taskId,nodeId)`（内联 🟢 计划节点路径——工具启动时**读取**持久化的计划 / 节点 `executionToken`、`generation`、状态，写入边界**重读**；token 轮换 / 代际变更 / 取消 / 状态不允许 / 节点领取被替换 ⇒ `AppError('CONFLICT')`）与 `buildConfirmFence(taskId,nodeId)`（确认续跑路径——**仅**断言**所属计划未被取消**，因为 `resumeTaskForAction` 会合法地铸造 / 轮换 / 释放计划 token）。**事务外的检查不是最终保证**：fence 与业务写入在**同一个 `$transaction`** 内。取消先行会阻断旧执行者的写入；业务先行则保留真实事实。
 - **事务事实优先 · 事务内摘要校验的转账**（第 14、19 条）— `banking-sdk/transfer.ts` 把借方、账本 `Transaction` 与 `ExecutionReceipt` 写入**同一个 `prisma.$transaction`**；重放时**先**（任何可变查找之前）经 `replayCommitted` 读**已提交回执**，事务内命中同一身份时以**同一个事务客户端**读回执并校验 `requestDigest`：**同键 + 同请求 ⇒ 原始结果**；**同键 + 不同请求 ⇒ `AppError('CONFLICT')`（无新副作用）**；**缺回执 ⇒ `CONFLICT`**；**无回执的遗留账本行**（`idempotentTransferTxId`）仍被识别为**已入账**。
 - **可靠 / 键控审计**（第 8、17、19 条）：严格插入失败回滚调用方事务；重复键须核验事件身份和结果。审计按**副作用**判定（`security/permission-engine.ts` 的 `ToolPolicy.write` / `isWriteTool`）：门控动作沿用独立身份 `exec:<actionId>` / `reconcile:<actionId>`，非门控的自动执行写入用按属主隔离的 `write:<tool>:<owner>:<identity>`（`agent/write-audit.ts#writeAuditKey`），🟢 `reserve_budget` 这类 GREEN 写入**同样被审计**。一次非门控自动写入的审计与业务写入同事务；转账必需执行审计与扣款、流水、回执同事务。其余门控工具的业务写入与其状态 / 审计结算为**另一事务**，不能承诺审计故障能撤销此前已提交业务。历史缺失审计可核验回填；人工核对用独立 `reconcile:<actionId>`，保留原成功记录。
+- **金融事实校正通道**（第 20 条）— 助手可见的金额 / 收款人 / 账户余额 / 执行状态**只**来自**真实工具结果**，并**按操作身份绑定**（工具调用的 `toolCallId` / 动作 `actionId`，计划节点另带 `taskId` + `nodeId`），同一工具的多次调用**各自记账、绝不混淆**；事实库维护**逐账户当前余额账本**（按结果顺序，成功写入以权威 `balanceAfter` 更新、后续只读的历史查询不回写）；`unknown` / `needs_reconciliation` 一律播报「待核对」；不一致的助手消息在下发前被**服务端替换**（`agent/grounding-facts.ts` / `agent/grounding.ts` / `agent/run-turn.ts`）——错误金融事实**绝不**先行流出。**但**该通道的自动化证明**仅在脚本化模型下**完成（见【未验证】）。
 - 同桶其余条目：第 4 条（启发式异常检测）、第 6 条（消费分析按设计排除异常）、第 13 条（注入守卫不改变授权结论）；第 18 条为工程性说明。
 
 ### 🧪 【模拟】模拟后端 / 刻意受限
@@ -50,7 +51,7 @@ GREEN 自动写入在事务内复核熔断状态，覆盖聊天、独立调用�
 - **模拟银行 SDK**（第 1、3 条）— `transfer_money` 只写一条模拟 `Transaction` 借贷行并调整余额；系统不连接任何真实银行核心系统、不发起任何真实支付。
 - **固定演示时钟**（第 7 条）— `DEMO_NOW = 2026-09-25 12:00 本地`（`lib/constants.ts`、`lib/clock.ts` `demoNow()`）让本月/上月/今日窗口、消费分析与 system prompt 的「今天」保持一致。
 - **🟢 只读调用按设计不审计**（第 8 条）— 审计按**副作用**判定（`ToolPolicy.write` / `isWriteTool`）：门控动作（YELLOW/RED 的 confirm / verify / cancel）、安全事件与**每一个副作用写入**（含 🟢 `reserve_budget`）都写审计行；只有 🟢 **只读调用**（余额、流水、分析等）不写审计行（`audit/`、`lib/contracts/audit.ts`）。
-- 同桶其余条目：第 2 条（固定验证码 MFA）、第 5 条（虚构投资产品）、第 9 条（mock 供应商）、第 10 条（`reserve_budget` 不锁资金）、第 11 条（定时任务不执行）、第 12 条（Test 12 只创建记录）。
+- 同桶其余条目：第 2 条（固定验证码 MFA）、第 5 条（虚构投资产品）、第 9 条（mock 供应商）、第 10 条（`reserve_budget` 不锁资金）、第 11 条（定时任务不执行）、第 12 条（Test 12 只创建记录）、第 20 条（校正通道的自动化证明在 mock 供应商下完成）。
 
 ### ⚠️ 【未验证】本仓库未证明
 
@@ -64,6 +65,7 @@ GREEN 自动写入在事务内复核熔断状态，覆盖聊天、独立调用�
 - **接管受 TTL 启发式约束 · fence 覆盖全部执行器写入** —— **每一条执行器写入路径**（首次 `submit_plan` 运行、依赖跳过、condition / note 节点、确认续跑）都按领取 token 在**同一条 SQL 语句**内原子隔离（`createTaskPersistence` 经 `claimTaskStatus(..., {fenceToken})` / `updateTaskNode(..., {fenceToken})`；确认续跑丢失领取时经 `agent/task-fencing.ts#recordDecidedNodeFenced` 走**无所有者 CAS**，仅**刻意**不加 fence 的 `pauseTask`/`cancelTask`「control」写入不持领取）；接管**仅在领取被证明陈旧**时发生（TTL 视界 `EXECUTION_CLAIM_TTL_MS = 600000` ms，基于**真实** `Date.now()`），推进中的执行者靠**节点边界**的租约续期保持新鲜（`renewTaskExecutionClaim`，token 条件式，**非**后台定时器）。仍需诚实记录的是：该 TTL 视界本身只是**启发式**——一个**长时间阻塞在单次工具调用内**的进程**仍可能被接管**并尝试继续（其写入已被 fence 拒绝，故无副作用）（第 17 条）。**另一个不同的 TTL** 是持久化**执行租约** `EXECUTION_LEASE_TTL_MS = 120000`（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`），它驱动 `classifyConfirmedAction` 把仍在运行的续跑判为 `processing`——它**同样只是启发式**，而非活性证明；它与计划接管的 `EXECUTION_CLAIM_TTL_MS = 600000` 是**两个不同**的 TTL（第 17、19 条）。
 - **活跃确认注册表是进程内的（第 17 条）** —— 判断一个 `confirmed` + `resultJson=null` 的动作是**真楔子**（无活跃续跑）还是**仍由活跃续跑拥有**（重新停放、**不写入**），靠的是**进程内**的 `agent/confirmation-recovery.ts#liveConfirmations`（**引用计数** `Map<string, number>`，`retainAction` / `releaseAction` / `isActionLive` / `liveCount`）；在**另一个进程 / 实例**里运行的活跃续跑**不被识别**，因此**多实例部署未覆盖**（第 17、19 条）。与之配套的持久化**执行租约**（`PendingAction.executionLeaseOwner` / `executionLeaseExpiresAt`，`EXECUTION_LEASE_TTL_MS = 120000`）是**按 DB 行**的，与 `liveConfirmations` 一样**不跨进程 / 实例**共享——另一实例的活跃续跑既不留进程内标记、也不持本进程可见的租约，故**不被识别**。
 - **仅 `transfer_money` 被证明幂等（第 19 条）** —— 独立（非计划）楔子恢复**仅**对 `transfer_money` 走**幂等重放**（`RECOVERABLE_STANDALONE_TOOLS` 的唯一成员），其余**每一个**独立门控写工具**不被重放**，而收敛为**终态** `needs_reconciliation` 由人工带外核对——「这些工具的重放幂等性」在本仓库**未被证明**（第 19 条）。`transfer_money` 的**可证幂等重放**来自 `banking-sdk/transfer.ts` 在**同一个 `$transaction`** 内与借方 / 账本行一同提交的 `ExecutionReceipt`（`replayCommitted` 先于**任何可变查找**判定：同身份 + 同 `requestDigest` ⇒ 原始结果；同身份 + 不同摘要 ⇒ `CONFLICT`），其余独立写工具收敛为 `needs_reconciliation`，经 `GET /api/actions`、页面 `/actions` 与 `POST /api/actions/[id]/recover` 呈现 / 结算。
+- **金融事实校正通道只在脚本化模型下被证明（第 20 条）** —— 该通道（`agent/grounding-facts.ts` / `agent/grounding.ts` / `agent/run-turn.ts`）的正确性证据**全部**来自**纯单元测试**与**脚本化 `fauxProvider`** 的回合集成测试；**真实 live LLM** 下的鲁棒性（模型能否总被纠正、是否存在绕过校正的措辞）**未**由本仓库证明。它是**按回合 / 进程内**的纯逻辑、不持有跨进程状态，但整套系统在**多进程 / 多实例**部署下的行为仍未验证（与第 14、17 条同源）。
 
 ---
 
@@ -88,6 +90,7 @@ GREEN 自动写入在事务内复核熔断状态，覆盖聊天、独立调用�
 | 17 | 计划生命周期的诚实边界（DB 原子执行领取（含陈旧接管，接管后经 `clearStaleNodeClaims` 回收僵尸的非终态节点）/ **token-fenced 计划·节点写入** / **SDK 写入边界执行权 fence**（`buildPlanNodeFence` / `buildConfirmFence`，事务内、业务写入前）/ **统一证据收敛** `decideConvergence`（receipt → live → stored → none）/ **同事务可靠·键控审计**（`recordAudit` `strict` + `dedupeKey`）/ 首次 `submit_plan` 运行即经原子计划所有权节点领取（`buildNodeClaimPorts`）/ 原子取消 / 取消计划授权复核 / 节点幂等 / **已执行节点恢复＝结果回填** / 无假回滚 / 终态仅靠 CAS 约定 / 楔子判别经**引用计数** `liveConfirmations`（进程内）/ **多进程 · 多实例竞态未压测**（原子性仅在单进程 + 单个 SQLite 下验证）） | ✅ 已实现（DB 原子领取 + token-fenced 写入 + **写入边界 fence** + **统一证据收敛** + **同事务严格审计** + 原子取消 + 取消复核 + 节点幂等 + 已执行恢复回填）；TTL 启发式、**进程内** `liveConfirmations` 与**多进程 / 多实例竞态**属 ⚠️ 未验证 | `agent/task-control.ts`、`agent/execution-convergence.ts`、`agent/execution-fence.ts`、`agent/confirmation.ts`、`agent/confirmation-recovery.ts`、`agent/task-fencing.ts`、`agent/tools/planning.ts`、`planner/lifecycle.ts`、`banking-sdk/fence.ts`、`lib/db/repositories/{task,pendingAction}.ts`、`security/security-gateway.ts`、`banking-sdk/investment.ts`、`prisma/schema.prisma` |
 | 18 | 其他工程性注意（测试串行、`change_password` 无凭据存储、干净环境自举的 `RUST_LOG` 根因 + provisioning 失败大声报错、部署路径 `npm run db:push` → `tsx scripts/db-push.ts`（顺序 `db push` → `db:seed` → `build`）、`ExecutionReceipt` 模型与 `AuditLog.dedupeKey` 为**纯增量**（经 `prisma db push` 应用，**无 `migrations/` 目录**；一致性**绝不以清库 / 重置 / 重新 seed 解决**）、`agent/task-control.ts` / `agent/confirmation.ts` 超出 ~1000 行软性上限） | ✅ 说明 | `vitest.config.ts`、`tests/setup.ts`、`lib/prisma-cli-env.ts`、`scripts/db-push.ts`、`prisma/schema.prisma`、`banking-sdk/` |
 | 19 | 独立（非计划）楔子恢复：`confirmed` + `resultJson=null` 的独立门控动作，经**统一证据收敛** `agent/execution-convergence.ts#decideConvergence`（receipt → live → stored → none）判定——**仅 `transfer_money` 被证明幂等**（经**已提交回执** `ExecutionReceipt` / 原账本行幂等重放，事务内校验 `requestDigest`），其余独立门控写工具一律收敛为**终态** `needs_reconciliation`（人工带外核对，**不重跑、不伪造回滚**）；写入边界由 `banking-sdk/fence.ts` + `agent/execution-fence.ts#buildConfirmFence` 保证仅「所属计划未取消」时可提交；活跃确认注册表为**进程内**引用计数、执行租约为**按 DB 行** | ✅ 已实现（幂等重放 / 人工核对收敛 / 证据收敛 / 写入边界 fence，代码强制）；**仅 `transfer_money` 被证明幂等**属 ⚠️ 未验证 | `agent/execution-convergence.ts`、`agent/execution-fence.ts`、`agent/confirmation-recovery.ts`、`agent/confirmation.ts`、`banking-sdk/fence.ts`、`banking-sdk/transfer.ts`、`lib/ledger.ts`、`lib/db/repositories/executionReceipt.ts`、`lib/contracts/security.ts`、`app/api/actions/route.ts`、`app/api/actions/[id]/recover/route.ts`、`app/actions/page.tsx`、`components/chat/useAgentStream.ts`、`components/chat/cards/ReconciliationCard.tsx` |
+| 20 | 金融事实校正通道的正直边界：助手可见的金额 / 收款人 / 账户余额 / 执行状态只来自**真实工具结果**、**按操作身份绑定**（`toolCallId`/`actionId` + 计划节点 `taskId`/`nodeId`）、维护**逐账户当前余额账本**、`unknown` 一律「待核对」、不一致消息被服务端**替换**（错误事实绝不先行流出）；**live LLM 鲁棒性**与**多进程 / 多实例**行为属 ⚠️ 未验证 | ✅ 已实现（代码强制：服务端权威事实 + 操作身份绑定 + 余额账本 + 待核对 + 下发前服务端替换）；**live LLM 鲁棒性**属 ⚠️ 未验证 | `agent/grounding-facts.ts`、`agent/grounding.ts`、`agent/run-turn.ts`、`agent/system-prompt.ts` |
 
 ---
 
@@ -387,6 +390,24 @@ SQLite 单文件写锁**提供；在**其他数据库引擎 / 多写入者 / 多
 **⚠️ 未验证的边界**：**仅 `transfer_money` 被证明幂等**，因此**只有**它能被安全**重放**；`apply_virtual_card`、`subscribe_investment`、`redeem_investment`、`set_card_limit`、`freeze_card`、`change_password` 等其余独立门控写工具的**重放幂等性在本仓库未经证明**，故它们**不被重放**，而是显式停下、收敛为 `needs_reconciliation`。此外，该判别所依赖的活跃确认注册表（第 17 条）是**进程内**的，多实例部署未覆盖。
 
 **为何可接受**：这是**显式 fail-closed** 的取舍——宁可把一个**已提交副作用**的楔子交给人工核对，也**绝不**对**未证明幂等**的写操作发起可能**二次生效**的重放。演示里最常见的 🟡/🔴 资金动作 `transfer_money` 通过统一账本键获得**可证**的幂等重放，可在崩溃后**安全自愈**；其余写工具则如实暴露边界、要求人工核对。它同时保证了「无重复扣款 / 无伪造回滚」，并把「重放幂等性仅对转账成立」这一诚实边界**显式**呈现在 API 与 UI 上。
+
+---
+
+## 20. 金融事实校正通道的正直边界 · Financial-Fact Grounding Honesty
+
+**性质：✅ 已实现（代码强制：服务端权威事实 · 操作身份绑定 · 逐账户余额账本 · 待核对 · 服务端替换）；live LLM 鲁棒性属【未验证】。**
+
+**限制**：助手可见的金融事实**不**是模型的自述，而是**服务端**从本回合**真实工具结果**蒸馏并由代码校验的**权威事实**（`agent/grounding-facts.ts` → `agent/grounding.ts`，由 `agent/run-turn.ts` 在**任何金融事实下发之前**调用）：
+
+- **按操作身份逐笔记账**：每条事实绑定到**具体那一次操作**——工具调用的 `toolCallId` / 已停放动作的 `actionId`，计划节点另带 `taskId` + `nodeId`——因此本回合对**同一工具**的多次调用（例如两笔 `transfer_money`）**各自记账、绝不混淆**，不存在「本回合有任何写入成功」这类全局标记。
+- **逐账户当前余额账本**：事实库按**结果到达顺序**维护每个账户的**当前余额**；一笔成功写入以权威 `balanceAfter` 更新该账户，**后续只读的历史查询不回写**当前余额。断言的余额与权威值不符（或无权威值）时，消息被替换为真实余额 / 「无法核实」。
+- **`unknown` / `needs_reconciliation` 一律「待核对」**：不确定结果**既不**报成功、**也不**报失败，更**不**报「资金未变」，统一由服务端播报「待核对」。
+- **服务端替换（而非追加矛盾）**：与真实工具结果不一致的助手消息被**整体替换**为服务端撰写的更正（`CORRECTION_TAG = （系统校正）`，**信息性、非跳过键**）；校正按**服务端消息 id**（`groundedIds`）幂等。
+- **错误事实绝不先行流出**：`run-turn.ts` **缓冲**金融叙述，`message_update` 的增量只累积、不下发，在下发 / 持久化前完成校正（每一条助手叙述，包括与工具调用同处的消息）。
+
+**⚠️ 未验证的边界**：该通道的自动化证明（纯单元测试 + 脚本化 `fauxProvider` 回合集成测试）**全部**建立在**脚本化模型**之上；**真实 live LLM** 下的鲁棒性——模型是否总能被纠正、是否存在绕过校正的措辞——**未**由本仓库证明。此外，整套系统的**多进程 / 多实例**部署行为仍未验证（与第 14、17 条同源）；校正通道本身是**按回合 / 进程内**的纯逻辑，不持有跨进程状态。
+
+**为何可接受**：演示的核心承诺是「智能体只能报告**真实工具结果**的事实」。校正通道把这一承诺**从提示层落到代码层**——不依赖 LLM 是否听话：事实的**来源**（真实工具结果）、**绑定**（操作身份）与**呈现**（下发前替换）都由 TypeScript 决定；同时本文件**不**声称该通道已被**完全核验**或对 live LLM 已证明鲁棒——`unknown` 如实播报「待核对」，正是「绝不用推测填补未知」的体现。
 
 ---
 
