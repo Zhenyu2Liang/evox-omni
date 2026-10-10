@@ -1,0 +1,174 @@
+diff --git a/agent/grounding.ts b/agent/grounding.ts
+index 4373557..bf80022 100644
+--- a/agent/grounding.ts
++++ b/agent/grounding.ts
+@@ -9,10 +9,11 @@
+  * decides permission — the model decides WHAT to do, code decides WHETHER it is allowed (root
+  * invariant).
+  *
+- * Every decision is STRUCTURAL — per operation identity (tool), per account, per amount, per
+- * recipient, per outcome state — never a global "some write succeeded" flag, and never a
+- * model-producible text marker. Idempotency is tracked SERVER-SIDE by message id (see `./run-turn`),
+- * so a forged tag in the model's text cannot skip verification.
++ * Every decision is STRUCTURAL — per OPERATION identity (the specific tool call, not the whole tool
++ * family), per account (CURRENT balance, not a stale as-of one), per amount, per recipient, per
++ * outcome state — never a global "some write succeeded" flag, and never a model-producible text
++ * marker. Idempotency is tracked SERVER-SIDE by message id (see `./run-turn`), so a forged tag in the
++ * model's text cannot skip verification.
+  *
+  * PURE: no DB access, no pi imports. The decision is `groundAssistantText`; `buildFinancialFacts` is
+  * re-exported from `./grounding-facts` for callers. Both are wired into `./run-turn` at the assistant
+@@ -21,9 +22,10 @@
+ import { formatCNY } from '@/lib/money';
+ import {
+   OPERATION_CATEGORIES,
++  currentBalance,
+   extractBalanceClaims,
++  extractClaimAmounts,
+   extractClaimedRecipient,
+-  extractMoneyAmounts,
+   extractOperationClaims,
+   sameAmount,
+   type FinancialFacts,
+@@ -33,6 +35,7 @@ import {
+ export { buildFinancialFacts, SIDE_EFFECT_TOOLS } from './grounding-facts';
+ export type {
+   BalanceClaim,
++  FactInput,
+   FinancialFacts,
+   OperationCategory,
+   TrustedAccount,
+@@ -73,7 +76,7 @@ export function groundAssistantText(text: string, facts: FinancialFacts): string
+   };
+ 
+   for (const claim of extractOperationClaims(text)) {
+-    const write = pickWrite(facts, claim.category);
++    const write = matchWrite(facts, claim.category, claim.clause);
+     if (claim.assertion === 'done') {
+       if (write === undefined) {
+         push(UNGROUNDED_SUCCESS_STATEMENT);
+@@ -108,28 +111,76 @@ export function groundAssistantText(text: string, facts: FinancialFacts): string
+ 
+ /* ------------------------------------------------------------------------------- rule internals */
+ 
+-/** The authoritative write for an operation family: prefer the latest SUCCESS, then failure, then unknown. */
+-function pickWrite(facts: FinancialFacts, category: string): TrustedWrite | undefined {
++/**
++ * Match a completion/failure claim to the SPECIFIC operation it refers to, never to the whole tool
++ * family (the old "prefer the latest success" picker conflated two distinct same-tool operations).
++ * Discriminators, in order: an explicit ordinal (第一笔/第二次/…), an amount that matches exactly one
++ * operation, a recipient that matches exactly one operation. When several same-tool operations exist
++ * and the claim cannot be bound to one, return `undefined` so the claim is corrected as ungrounded
++ * (「未记录到该操作的执行结果」) rather than accepted against the wrong operation.
++ */
++function matchWrite(facts: FinancialFacts, category: string, window: string): TrustedWrite | undefined {
+   const tools = operationTools(category);
+   const candidates = facts.writes.filter((write) => tools.includes(write.toolName));
+   if (candidates.length === 0) return undefined;
+-  for (let i = candidates.length - 1; i >= 0; i -= 1) if (candidates[i].outcome === 'succeeded') return candidates[i];
+-  for (let i = candidates.length - 1; i >= 0; i -= 1) if (candidates[i].outcome === 'failed') return candidates[i];
+-  return candidates[candidates.length - 1];
++  if (candidates.length === 1) return candidates[0];
++
++  const ordinal = ordinalIndex(window);
++  if (ordinal !== undefined && ordinal >= 0 && ordinal < candidates.length) return candidates[ordinal];
++
++  const claimedAmounts = extractClaimAmounts(window);
++  if (claimedAmounts.length > 0) {
++    const byAmount = candidates.filter(
++      (write) => write.amount !== undefined && claimedAmounts.some((amount) => sameAmount(amount, write.amount!)),
++    );
++    if (byAmount.length === 1) return byAmount[0];
++  }
++
++  const claimedRecipient = extractClaimedRecipient(window);
++  if (claimedRecipient !== undefined) {
++    const byRecipient = candidates.filter(
++      (write) => write.recipient?.name !== undefined && sameName(claimedRecipient, write.recipient.name),
++    );
++    if (byRecipient.length === 1) return byRecipient[0];
++  }
++
++  return undefined;
++}
++
++/** The zh/en ordinal an operation claim names (第一笔/第二次/…), 0-based; `undefined` when absent. */
++function ordinalIndex(window: string): number | undefined {
++  const zhDigits: Record<string, number> = {
++    一: 0,
++    二: 1,
++    两: 1,
++    三: 2,
++    四: 3,
++    五: 4,
++    六: 5,
++    七: 6,
++    八: 7,
++    九: 8,
++    十: 9,
++  };
++  const match = /第\s*([一二两三四五六七八九十1-9])\s*(?:笔|次|个|项)?/.exec(window);
++  if (match === null) return undefined;
++  const token = match[1];
++  if (/[1-9]/.test(token)) return Number(token) - 1;
++  return zhDigits[token];
+ }
+ 
+ function operationTools(category: string): readonly string[] {
+   return OPERATION_CATEGORIES[category as keyof typeof OPERATION_CATEGORIES]?.tools ?? [];
+ }
+ 
+-/** Does the claim contradict the authoritative amount / recipient of a SUCCEEDED write? */
+-function writeMismatch(clause: string, write: TrustedWrite): boolean {
++/** Does the claim contradict the authoritative amount / recipient of the matched write? */
++function writeMismatch(window: string, write: TrustedWrite): boolean {
+   if (write.amount !== undefined) {
+-    const claimed = extractMoneyAmounts(clause);
++    const claimed = extractClaimAmounts(window);
+     if (claimed.length > 0 && !claimed.some((amount) => sameAmount(amount, write.amount!))) return true;
+   }
+   if (write.recipient?.name !== undefined) {
+-    const claimedRecipient = extractClaimedRecipient(clause);
++    const claimedRecipient = extractClaimedRecipient(window);
+     if (claimedRecipient !== undefined && !sameName(claimedRecipient, write.recipient.name)) return true;
+   }
+   return false;
+@@ -172,7 +223,9 @@ function classifyBalanceClaim(
+   account: Parameters<typeof balanceCorrection>[0],
+   facts: FinancialFacts,
+ ): 'ok' | 'wrong' | 'unverifiable' {
+-  if (account !== undefined) return sameAmount(amount, account.balance) ? 'ok' : 'wrong';
++  // A claim against a specific account is compared to that account's CURRENT balance (after every
++  // write applied this turn), never to a stale as-of-query value.
++  if (account !== undefined) return sameAmount(amount, currentBalance(account, facts)) ? 'ok' : 'wrong';
+   const authoritative = authoritativeAmounts(facts);
+   if (authoritative.length === 0) return 'unverifiable';
+   return authoritative.some((actual) => sameAmount(actual, amount)) ? 'ok' : 'wrong';
+@@ -182,23 +235,24 @@ function classifyBalanceClaim(
+ function authoritativeAmounts(facts: FinancialFacts): number[] {
+   const amounts = [...facts.balances];
+   if (facts.totalBalance !== undefined) amounts.push(facts.totalBalance);
++  for (const account of facts.currentBalances ?? []) amounts.push(account.balance);
+   for (const write of facts.writes) if (write.balanceAfter !== undefined) amounts.push(write.balanceAfter);
+   return amounts;
+ }
+ 
+ /** Build the server-authored balance statement, per account when the claim pointed at one. */
+ function balanceCorrection(
+-  account: { name?: string; type?: string; balance: number } | undefined,
++  account: { id?: string; name?: string; type?: string; balance: number } | undefined,
+   facts: FinancialFacts,
+ ): string {
+   if (account !== undefined) {
+     const label = account.name ?? account.type ?? '该账户';
+-    return `${CORRECTION_TAG}${label}的余额为 ${formatCNY(account.balance)}，请以系统数据为准。`;
++    return `${CORRECTION_TAG}${label}的余额为 ${formatCNY(currentBalance(account, facts))}，请以系统数据为准。`;
+   }
+   if (facts.totalBalance !== undefined) {
+     return `${CORRECTION_TAG}你的账户可用余额合计为 ${formatCNY(facts.totalBalance)}。`;
+   }
+-  const listed = facts.accounts
++  const listed = (facts.currentBalances ?? facts.accounts)
+     .map((item) => `${item.name ?? item.type ?? '账户'} ${formatCNY(item.balance)}`)
+     .join('、');
+   return `${CORRECTION_TAG}你的账户余额为：${listed}。`;
