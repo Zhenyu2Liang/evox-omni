@@ -20,6 +20,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ToolExecutionResult } from './tools';
 import { CORRECTION_TAG, SIDE_EFFECT_TOOLS, buildFinancialFacts, groundAssistantText } from './grounding';
+import { extractOperationClaims } from './grounding-facts';
 
 /** One `{ toolName, result }` entry as the turn's `factResults` buffer stores it. */
 type FactResult = { toolName: string; result: ToolExecutionResult };
@@ -682,5 +683,45 @@ describe('groundAssistantText — an UNKNOWN outcome is 待核对, never success
     expect(out).toContain('待核对');
     expect(out).not.toContain('实际执行成功');
     expect(out).not.toContain('实际执行失败');
+  });
+});
+
+/* ----------------------- (g) the assertion is classified from the TRIGGER clause alone */
+
+describe('extractOperationClaims / groundAssistantText - assertion from the trigger clause, details from the window', () => {
+  it('(g) a NEIGHBOUR clause mentioning 失败 does NOT flip a 成功 claim to failed', () => {
+    const claims = extractOperationClaims('转账已成功完成，同时也有一笔操作失败了。');
+    const transfer = claims.find((claim) => claim.category === 'transfer');
+    expect(transfer).toBeDefined();
+    // The TRIGGER clause 「转账已成功完成」 asserts completion; the trailing neighbour clause must not
+    // re-polarize the claim into a failure.
+    expect(transfer!.assertion).toBe('done');
+    expect(transfer!.assertion).not.toBe('failed');
+    // ...while the WINDOW still spans the trigger clause + its neighbours for detail (amount/recipient) matching.
+    expect(transfer!.clause).toContain('转账已成功完成');
+    expect(transfer!.clause).toContain('同时也有一笔操作失败了');
+  });
+
+  it('(g) a mixed success/failure wording against a REAL failed transfer is corrected to the failure', () => {
+    const facts = buildFinancialFacts([transferFailed()]);
+    const text = '转账已成功完成，同时也有一笔操作失败了。';
+    const out = groundAssistantText(text, facts);
+    expect(out).toContain(CORRECTION_TAG);
+    expect(out).toContain('失败');
+    expect(out).not.toContain('成功');
+    expect(out).not.toContain('已成功完成');
+    expect(out).not.toBe(text);
+  });
+
+  it('(g) NEIGHBOUR-clause detail matching still fires: a real 张伟 ¥200 success corrects 李华 ¥30000', () => {
+    const facts = buildFinancialFacts([transferSucceededTo('张伟', 200, 23380)]);
+    const text = '转账成功，金额30000元，收款人李华。';
+    const out = groundAssistantText(text, facts);
+    expect(out).toContain(CORRECTION_TAG);
+    // The correction names the REAL recipient + REAL amount read from the neighbouring clauses.
+    expect(out).toContain('张伟');
+    expect(out).toContain('¥200.00');
+    expect(out).not.toContain('30000');
+    expect(out).not.toContain('李华');
   });
 });
