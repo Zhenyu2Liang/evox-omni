@@ -41,7 +41,7 @@ import type { AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, JsonValue, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 import { createBankingAgent } from './banking-agent';
 import { confirmationCard, errorCard, mfaCard, toCards } from './card-emitter';
-import { buildFinancialFacts, groundAssistantText } from './grounding';
+import { buildFinancialFacts, groundAssistantText, type FactInput } from './grounding';
 import { withRealToolResult } from './message-normalize';
 import type { ModelRuntime } from './providers/types';
 import { getOrCreateSession, loadSession, saveSession } from './session';
@@ -64,6 +64,11 @@ export interface ResumeTurnInput {
   toolCallId?: string;
   /** Server-owned action name; never attribute its result to another tool. */
   toolName?: ToolName;
+  /** The gated `PendingAction` this result belongs to (server-owned), when the caller knows it. */
+  actionId?: string;
+  /** The owning DAG plan / node when this result executed as a plan node, when the caller knows it. */
+  taskId?: string;
+  nodeId?: string;
 }
 
 /** MFA prompt hint surfaced to the UI (never contains the code). */
@@ -141,7 +146,12 @@ interface TurnBuffer {
   /** The assistant message currently streaming (tool events / cards attach here). */
   current: ChatMessage | null;
   /** Real tool results collected this turn — the authoritative facts grounding compares against. */
-  factResults: Array<{ toolName: string; result: ToolExecutionResult }>;
+  /**
+   * Real tool results collected this turn — the authoritative facts grounding compares against.
+   * Each entry also carries the server-side OPERATION identity (`toolCallId`, plus the action /
+   * plan-node ids when this turn genuinely knows them) so a claim binds to the SPECIFIC operation.
+   */
+  factResults: FactInput[];
   /**
    * The RAW text of the assistant message currently streaming. Deltas are BUFFERED here (never
    * streamed live) so the text is emitted ONLY after grounding at `message_end` — a pre-grounding
@@ -159,14 +169,6 @@ interface TurnBuffer {
 
 function createTurnBuffer(): TurnBuffer {
   return { events: [], assistants: [], current: null, factResults: [], pendingText: '', groundedIds: new Set() };
-}
-
-/** True when this assistant message carries a tool call (i.e. it is NOT the terminal narration). */
-function hasToolCallPart(message: AssistantMessage): boolean {
-  return (
-    Array.isArray(message.content) &&
-    message.content.some((part) => isRecord(part) && part.type === 'toolCall')
-  );
 }
 
 /**
@@ -355,7 +357,7 @@ async function handleToolExecutionEnd(
     };
     upsertToolEvent(buffer.current, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
-    buffer.factResults.push({ toolName, result: execResult });
+    buffer.factResults.push({ toolName, result: execResult, toolCallId });
     emitToolCards(buffer, toolName, execResult);
     return;
   }
@@ -370,7 +372,7 @@ async function handleToolExecutionEnd(
     const view: ToolEventView = { toolCallId, toolName, status: 'error', summary: message };
     upsertToolEvent(buffer.current, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
-    buffer.factResults.push({ toolName, result: { ok: false, error: message } });
+    buffer.factResults.push({ toolName, result: { ok: false, error: message }, toolCallId });
     emitCard(buffer, errorCard(message));
     return;
   }
@@ -452,10 +454,12 @@ function createEventHandler(
           // provider streamed `message_update`s but reports an empty content array on `message_end`.
           const text = full !== '' ? full : buffer.pendingText;
           if (text !== '') assistant.content = text;
-          // Ground the TERMINAL narration (no tool call) once every tool result is known. The event
-          // below references this same object, and the aggregated delta carries its content, so the
-          // UI receives ONLY the grounded text.
-          if (!hasToolCallPart(event.message)) groundMessage(buffer, assistant);
+          // Ground EVERY assistant message's text once the tool results known SO FAR are collected —
+          // INCLUDING a message that ALSO carries a `toolCall` part (a model may state a financial fact
+          // in the same message it plans a call with), so no ungrounded fact ever reaches the UI. The
+          // event below references this same object and the aggregated delta carries its content, so
+          // the UI receives ONLY the grounded text. Idempotent, and re-run by the pre-persist safety net.
+          groundMessage(buffer, assistant);
           // Emit the message's FINAL (grounded) text as ONE aggregated `text_delta`, immediately
           // followed by the `message_end` carrying the SAME content. The UI accumulates deltas into
           // `streamingText` and replaces it with `message_end.content`, so their concatenation per
@@ -689,8 +693,17 @@ export async function resumeTurn(
       toolResultMessage,
     );
     // Seed the authoritative facts with the injected REAL result so the continuation narration is
-    // grounded against it (never against the model's own prose).
-    buffer.factResults.push({ toolName: input.toolName ?? '', result: input.toolResult });
+    // grounded against it (never against the model's own prose). The server-side OPERATION identity
+    // (the resolved call id + the action / plan-node ids the caller supplied) is threaded through so
+    // the claim is bound to THIS operation.
+    buffer.factResults.push({
+      toolName: input.toolName ?? '',
+      result: input.toolResult,
+      ...(toolCallId !== undefined && toolCallId !== '' ? { toolCallId } : {}),
+      ...(input.actionId !== undefined ? { actionId: input.actionId } : {}),
+      ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+      ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}),
+    });
     await runtime.agent.continue();
   } catch (error) {
     // The gated business action ALREADY executed and is ALREADY audited (see `./confirmation`).
