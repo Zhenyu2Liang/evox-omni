@@ -11,6 +11,8 @@ import { monthRange, previousMonthRange } from '../lib/date';
 import { AppError } from '../lib/errors';
 import { addMoney, round2 } from '../lib/money';
 import { transactions } from '../lib/db/repositories';
+import { prisma } from '../lib/db/client';
+import { getCards } from './card';
 import { INVESTMENT_FLOW_CATEGORY } from './categories';
 import type {
   AnomalyItem,
@@ -94,7 +96,10 @@ export async function detectAnomaly(userId: string): Promise<AnomalyReport> {
     )
     .map((row) => toAnomalyItem(row));
 
-  return { anomalies, scanned: rows.length, generatedAt: demoNow() };
+  const acknowledgements = await prisma.auditLog.findMany({ where: { userId, toolName: 'acknowledge_transaction' }, select: { detail: true } });
+  const acknowledged = new Set(acknowledgements.map(row => row.detail));
+  return { anomalies: anomalies.map(item => ({ ...item, acknowledged: acknowledged.has(item.transaction.id) })),
+    cards: await getCards(userId), scanned: rows.length, generatedAt: demoNow() };
 }
 
 /** Previously flagged anomalies for the user (rows with `isAnomaly = true`). */

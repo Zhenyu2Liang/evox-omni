@@ -16,6 +16,10 @@
 import { cookies } from 'next/headers';
 import { ChatWindow } from '@/components';
 import { SESSION_COOKIE } from '@/lib/constants';
+import { loadSession } from '@/agent/session';
+import { prisma } from '@/lib/db/client';
+import type { ChatMessage } from '@/lib/contracts/agent';
+import type { AnomalyReport } from '@/banking-sdk';
 
 // Reads the request cookie, so it must render per request — never statically prerendered at build.
 export const dynamic = 'force-dynamic';
@@ -23,6 +27,23 @@ export const dynamic = 'force-dynamic';
 export default async function AgentPage() {
   const cookieStore = await cookies();
   const sessionId = cookieStore.get(SESSION_COOKIE)?.value ?? undefined;
+  const snapshot = sessionId ? await loadSession(sessionId) : null;
+  const latestTask = snapshot ? await prisma.agentTask.findFirst({ where: { sessionId: snapshot.sessionId, userId: snapshot.userId }, orderBy: { createdAt: 'desc' }, select: { id: true } }) : null;
+  const rows = snapshot ? await prisma.pendingAction.findMany({ where: { sessionId: snapshot.sessionId, userId: snapshot.userId } }) : [];
+  const statuses = new Map(rows.map(row => [row.id, row.status]));
+  const ackRows = snapshot ? await prisma.auditLog.findMany({ where: { userId: snapshot.userId, toolName: 'acknowledge_transaction' }, select: { detail: true } }) : [];
+  const acknowledgements = new Set(ackRows.map(row => row.detail));
+  const initialMessages: ChatMessage[] = (snapshot?.transcript ?? []).map(message => ({ ...message,
+    cards: (message.cards ?? []).filter(card => card.type !== 'plan').map(card => {
+      if (card.type === 'mfa') return { ...card, status: statuses.get(card.actionId) };
+      if (card.type === 'confirmation' && card.action.actionId) return { ...card, action: { ...card.action, status: statuses.get(card.action.actionId) } };
+      if (card.type === 'anomaly') {
+        const report = card.data as AnomalyReport;
+        return { ...card, data: { ...report, anomalies: report.anomalies.map(item => ({ ...item, acknowledged: acknowledgements.has(item.transaction.id) })) } };
+      }
+      return card;
+    }),
+  }));
 
   return (
     <main className="mx-auto flex max-w-3xl flex-col gap-4 p-6">
@@ -33,7 +54,7 @@ export default async function AgentPage() {
         </p>
       </header>
 
-      <ChatWindow sessionId={sessionId} className="min-h-[60vh]" />
+      <ChatWindow sessionId={sessionId} taskId={latestTask?.id} initialMessages={initialMessages} className="min-h-[60vh]" />
     </main>
   );
 }

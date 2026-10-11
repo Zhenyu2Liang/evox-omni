@@ -111,12 +111,14 @@ export interface SpendingAnalysis {
 export type AnomalySeverity = 'low' | 'medium' | 'high';
 
 export interface AnomalyItem {
+  acknowledged?: boolean;
   transaction: TransactionView;
   reason: string;
   severity: AnomalySeverity;
 }
 
 export interface AnomalyReport {
+  cards?: CardView[];
   anomalies: AnomalyItem[];
   /** Number of transactions scanned. */
   scanned: number;
@@ -272,6 +274,7 @@ export interface InvestmentComparison {
 }
 
 export interface HoldingView {
+  product?: ProductView;
   id: string;
   productId: string;
   productName: string;

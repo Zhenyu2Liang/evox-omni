@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client';
 import type { AuditLog } from '@prisma/client';
 import { prisma } from '../client';
 import { toJson, safeParse } from '../../json';
+import { redactRequest, redactSecrets } from '../../sensitive';
 import type { RiskLevel } from '../../contracts/risk';
 import type { AuditEntry, AuditStatus } from '../../contracts/audit';
 
@@ -64,7 +65,7 @@ export function createAuditLog(input: AuditLogInput): Promise<AuditLog> {
     data: {
       sessionId: input.sessionId,
       userId: input.userId ?? null,
-      userRequest: input.userRequest,
+      userRequest: redactRequest(input.userRequest),
       intent: input.intent ?? null,
       toolName: input.toolName,
       riskLevel: input.riskLevel,
@@ -72,9 +73,9 @@ export function createAuditLog(input: AuditLogInput): Promise<AuditLog> {
       confirmed: input.confirmed ?? false,
       mfaRequired: input.mfaRequired ?? false,
       mfaResult: input.mfaResult ?? null,
-      toolResult: input.toolResult === undefined ? null : toJson(input.toolResult),
+      toolResult: input.toolResult === undefined ? null : toJson(redactSecrets(input.toolResult)),
       status: input.status,
-      detail: input.detail ?? null,
+      detail: input.detail ? String(redactSecrets(input.detail)) : null,
       ...(input.timestamp ? { timestamp: input.timestamp } : {}),
     },
   });
@@ -112,7 +113,7 @@ export async function insertAuditLog(
       timestamp: new Date(entry.timestamp),
       sessionId: entry.sessionId,
       userId: entry.userId ?? null,
-      userRequest: entry.userRequest,
+      userRequest: redactRequest(entry.userRequest),
       intent: entry.intent ?? null,
       toolName: entry.toolName,
       riskLevel: entry.riskLevel,
@@ -120,12 +121,12 @@ export async function insertAuditLog(
       confirmed: entry.confirmed,
       mfaRequired: entry.mfaRequired,
       mfaResult: entry.mfaResult ?? null,
-      toolArgs: entry.toolArgs === undefined ? null : toJson(entry.toolArgs),
-      toolResult: entry.toolResult === undefined ? null : toJson(entry.toolResult),
+      toolArgs: entry.toolArgs === undefined ? null : toJson(redactSecrets(entry.toolArgs)),
+      toolResult: entry.toolResult === undefined ? null : toJson(redactSecrets(entry.toolResult)),
       taskId: entry.taskId ?? null,
       nodeId: entry.nodeId ?? null,
       status: entry.status,
-      detail: entry.detail ?? null,
+      detail: entry.detail ? String(redactSecrets(entry.detail)) : null,
       dedupeKey: opts.dedupeKey ?? null,
     },
   });
@@ -183,7 +184,7 @@ function toAuditEntry(row: AuditLog): AuditEntry {
     timestamp: row.timestamp.getTime(),
     sessionId: row.sessionId,
     userId: row.userId ?? undefined,
-    userRequest: row.userRequest,
+    userRequest: redactRequest(row.userRequest),
     intent: row.intent ?? undefined,
     toolName: row.toolName,
     riskLevel: row.riskLevel as RiskLevel,
@@ -191,9 +192,9 @@ function toAuditEntry(row: AuditLog): AuditEntry {
     confirmed: row.confirmed,
     mfaRequired: row.mfaRequired,
     mfaResult: (row.mfaResult ?? undefined) as AuditEntry['mfaResult'],
-    toolArgs: row.toolArgs == null ? undefined : safeParse<unknown>(row.toolArgs, undefined),
+    toolArgs: row.toolArgs == null ? undefined : redactSecrets(safeParse<unknown>(row.toolArgs, undefined)),
     toolResult:
-      row.toolResult == null ? undefined : safeParse<unknown>(row.toolResult, undefined),
+      row.toolResult == null ? undefined : redactSecrets(safeParse<unknown>(row.toolResult, undefined)),
     status: row.status as AuditStatus,
     detail: row.detail ?? undefined,
     taskId: row.taskId ?? undefined,

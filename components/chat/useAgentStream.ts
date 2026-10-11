@@ -41,6 +41,7 @@ import {
 // does not pull in every card component; `decisionKey` is the shared decision-identity helper.
 import { asTerminalStatus } from './cards/confirmationStatus';
 import { decisionKey } from './decisionKey';
+import { redactRequest } from '@/lib/sensitive';
 
 /**
  * The summary for an MFA prompt. The `mfa_required` event carries no tool name, so `toolName` is
@@ -186,6 +187,8 @@ function readRememberedPlanId(): string | undefined {
 
 /** Replace the message with the same `id`, else append (immutable). */
 function upsertMessage(messages: ChatMessage[], next: ChatMessage): ChatMessage[] {
+  next = { ...next, cards: (next.cards ?? []).filter((card, index, cards) =>
+    card.type !== 'plan' && cards.findIndex(other => JSON.stringify(other) === JSON.stringify(card)) === index) };
   const index = messages.findIndex((m) => m.id === next.id);
   if (index === -1) return [...messages, next];
   const copy = messages.slice();
@@ -286,7 +289,8 @@ function attachCard(state: ChatUIState, card: ChatCard): ChatUIState {
     return { ...state, messages: [...state.messages, message] };
   }
   const messages = state.messages.map((m) =>
-    m.id === targetId ? { ...m, cards: [...(m.cards ?? []), card] } : m,
+    m.id === targetId && !(m.cards ?? []).some(existing => JSON.stringify(existing) === JSON.stringify(card))
+      ? { ...m, cards: [...(m.cards ?? []), card] } : m,
   );
   return { ...state, messages };
 }
@@ -356,6 +360,10 @@ function settleAction(state: ChatUIState, event: ActionSettledEvent): ChatUIStat
     if (!cards || cards.length === 0) return message;
     let cardChanged = false;
     const nextCards = cards.map((card) => {
+      if (card.type === 'mfa' && card.actionId === event.actionId) {
+        cardChanged = true;
+        return { ...card, status: event.status, message: event.message };
+      }
       if (card.type !== 'confirmation') return card;
       const stamped = (card.action as unknown as { actionId?: unknown }).actionId;
       const sameAction = stamped === event.actionId;
@@ -393,20 +401,22 @@ function applyEvent(state: ChatUIState, event: AgentStreamEvent): ChatUIState {
     case 'message_start':
       return {
         ...state,
-        messages: upsertMessage(state.messages, event.message),
+        messages: upsertMessage(state.messages, { ...event.message, cards: [] }),
         currentAssistantId: event.message.id,
       };
 
     case 'text_delta':
       return { ...state, streamingText: state.streamingText + event.delta };
 
-    case 'message_end':
+    case 'message_end': {
+      for (const card of event.message.cards ?? []) if (card.type === 'plan') state = upsertPlan(state, card.plan);
       return {
         ...state,
         messages: upsertMessage(state.messages, event.message),
         streamingText: '',
         currentAssistantId: undefined,
       };
+    }
 
     case 'tool_start':
     case 'tool_end': {
@@ -447,7 +457,8 @@ function applyEvent(state: ChatUIState, event: AgentStreamEvent): ChatUIState {
         ...state,
         pendingAction: {
           kind: 'mfa',
-          summary: mfaSummary(state, event.hint),
+          summary: event.action ?? (state.pendingAction?.actionId === event.actionId
+            ? { ...state.pendingAction.summary, tier: 'RED', requiresMfa: true } : mfaSummary(state, event.hint)),
           actionId: event.actionId,
           ...(event.hint !== undefined ? { hint: event.hint } : {}),
         },
@@ -640,7 +651,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
    * Shared "run one turn" path: flip `busy`, run `load()`, fold the returned events and settle
    * `pendingAction` (kept only if the turn reported an `error`). Never throws to the UI.
    */
-  const pull = useCallback(async (load: () => Promise<ChatTurnResponse>) => {
+  const pull = useCallback(async (load: () => Promise<ChatTurnResponse>, settlesDecision = true) => {
     setState((prev) => ({ ...prev, busy: true, error: undefined }));
     try {
       const res = await load();
@@ -659,7 +670,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
         const establishesDecision = events.some(
           (e) => e.type === 'confirmation_required' || e.type === 'mfa_required',
         );
-        const clearPending = !hasError && !establishesDecision;
+        const clearPending = settlesDecision && !hasError && !establishesDecision;
         return { ...reduced, ...(clearPending ? { pendingAction: undefined } : {}), busy: false };
       });
     } catch (e) {
@@ -673,6 +684,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
 
   const send = useCallback(
     async (text: string) => {
+      text = redactRequest(text);
       const userMessage: ChatMessage = {
         id: nextLocalId('user'),
         role: 'user',
@@ -686,6 +698,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
           sessionId !== undefined ? { sessionId, message: text } : { message: text },
           endpoints,
         ),
+        false,
       );
     },
     [state.sessionId, endpoints, pull],
@@ -757,7 +770,14 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
         setState((prev) => ({ ...prev, busy: false, error: errorMessage(undefined) }));
         return;
       }
-      setState((prev) => ({ ...upsertPlan(prev, plan), busy: false }));
+      const refs = await fetchPendingActions(endpoints);
+      setState((prev) => {
+        let next = upsertPlan(prev, plan);
+        if (plan.status === 'cancelled' && next.pendingAction && !refs.some(ref => ref.id === next.pendingAction!.actionId)) {
+          next = settleAction(next, { type: 'action_settled', actionId: next.pendingAction.actionId, status: 'cancelled' });
+        }
+        return { ...next, pendingAction: pickPendingAction(refs), pendingReconciliations: pickAttention(refs), busy: false };
+      });
     },
     [state.activePlan?.id, endpoints],
   );

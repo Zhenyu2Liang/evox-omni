@@ -345,6 +345,7 @@ export async function listHoldings(userId: string): Promise<HoldingView[]> {
     id: row.id,
     productId: row.productId,
     productName: row.product.name,
+    product: toProductView(row.product),
     riskLevel: row.product.riskLevel as InvestmentRiskLevel,
     amount: row.amount,
     marketValue: row.marketValue ?? undefined,

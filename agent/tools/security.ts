@@ -23,10 +23,7 @@ import { AppError } from '@/lib/errors';
 import type { ToolExecutionResult } from './index';
 
 /** `change_password` params. */
-export const ChangePasswordParams = Type.Object({
-  currentPassword: Type.String({ description: '当前密码' }),
-  newPassword: Type.String({ minLength: 6, description: '新密码（至少 6 位）' }),
-});
+export const ChangePasswordParams = Type.Object({});
 export type ChangePasswordArgs = Static<typeof ChangePasswordParams>;
 
 /** Registered AgentTool for `change_password` (🔴 RED). */
@@ -34,10 +31,10 @@ export function createChangePasswordTool(userId: string): AgentTool<typeof Chang
   return {
     name: 'change_password',
     label: '修改密码',
-    description: '修改登录密码（高风险，需要短信验证码验证）。',
+    description: '演示修改密码的强验证流程；不接收真实密码，不改变真实凭证。直接用空参数调用，再由用户在界面验证。',
     parameters: ChangePasswordParams,
     execute: async (_toolCallId, params) => {
-      const result = await runChangePassword(userId, params);
+      const result = await runChangePassword(userId, params as Record<string, unknown>);
       if (!result.ok) throw new AppError('TOOL_FAILED', result.error ?? 'change_password failed');
       return {
         content: [{ type: 'text', text: result.summary ?? '操作成功' }],
@@ -56,8 +53,8 @@ export async function runChangePassword(
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
   try {
-    const currentPassword = args.currentPassword;
-    const newPassword = args.newPassword;
+    const currentPassword = args.currentPassword ?? '[演示凭证]';
+    const newPassword = args.newPassword ?? '[演示凭证]';
     if (typeof currentPassword !== 'string' || currentPassword === '') {
       throw new AppError('VALIDATION', 'change_password 需要 currentPassword');
     }

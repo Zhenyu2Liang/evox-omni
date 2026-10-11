@@ -11,6 +11,7 @@
  */
 import type {
   AnomalyReport,
+  AnomalyItem,
   BalanceView,
   CardView,
   HoldingView,
@@ -82,7 +83,7 @@ export interface CardActionHandlers {
   onCancel?: (actionId: string) => void;
   onAcknowledge?: () => void; // anomaly: 这是本人交易
   onViewDetail?: () => void; // anomaly: 查看详情
-  onFreeze?: () => void; // anomaly: 冻结银行卡
+  onFreeze?: (anomaly: AnomalyItem, cardId: string) => void;
   onTaskControl?: (action: TaskControlAction) => void; // plan: pause/resume/cancel/retry
   onRecover?: (actionId: string) => void; // out-of-band: POST /api/actions/:id/recover
   mfaAttempts?: number; // MFA: number of failed verification attempts so far

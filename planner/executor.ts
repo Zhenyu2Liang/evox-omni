@@ -22,7 +22,7 @@ import type { TaskNodeResult, TaskNodeSpec, TaskNodeStatus, TaskPlan, TaskPlanSt
 import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
-import { evaluateCondition, topologicalOrder, transitiveDependents } from './dag';
+import { assertConditionResolvable, evaluateCondition, topologicalOrder, transitiveDependents } from './dag';
 
 /**
  * Outcome of one tool invocation, as reported by the injected `runTool` port.
@@ -617,6 +617,7 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
 
       if (node.kind === 'condition') {
         const startedAt = now();
+        if (node.condition) assertConditionResolvable(node.condition, buildScope());
         const truthy = node.condition ? evaluateCondition(node.condition, buildScope()) : false;
         await setNode({
           id: node.id,

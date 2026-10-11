@@ -90,6 +90,13 @@ export function validatePlan(nodes: TaskNodeSpec[], knownTools: Set<string>): Re
     } else if (node.kind === 'condition') {
       if (!node.condition || typeof node.condition !== 'object') {
         problems.push(`condition node '${label}' is missing a 'condition'`);
+      } else {
+        const condition = node.condition;
+        if (typeof condition.path !== 'string' || !condition.path.trim() ||
+            !['>', '>=', '<', '<=', '==', '!='].includes(condition.op) ||
+            !isPrimitive(condition.value) || (typeof condition.value === 'number' && !Number.isFinite(condition.value))) {
+          problems.push(`condition node '${label}' requires a valid path/op/value`);
+        }
       }
     } else if (node.kind !== 'note') {
       problems.push(`node '${label}' has an unsupported kind '${String(node.kind)}'`);
@@ -359,6 +366,16 @@ export function evaluateCondition(condition: TaskCondition, scope: Record<string
     }
     default:
       return false;
+  }
+}
+
+/** A missing/non-comparable output is an execution error, not a false business condition. */
+export function assertConditionResolvable(condition: TaskCondition, scope: Record<string, unknown>): void {
+  const result = resolvePath(scope, condition.path);
+  if (!result.found || (['>', '>=', '<', '<='].includes(condition.op)
+    ? toNumber(result.value) === undefined || toNumber(condition.value) === undefined
+    : !safeEquals(result.value, condition.value).comparable)) {
+    throw new AppError('VALIDATION', `条件无法求值：${condition.path}，请核对依赖节点的真实输出字段。`);
   }
 }
 

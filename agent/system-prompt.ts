@@ -11,6 +11,7 @@
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { ToolName } from '@/lib/contracts/tools';
 import { RISK_LABEL } from '@/lib/constants';
+import { demoNow } from '@/lib/clock';
 
 export interface SystemPromptContext {
   userId: string;
@@ -113,6 +114,12 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     renderToolList(ctx.toolNames),
     '',
     '## 事实来源',
+    `业务时钟：${new Date(demoNow() + 8 * 3600000).toISOString().slice(0, 19)}，时区 Asia/Shanghai。`,
+    '工具结果包含服务端结构化结果和内部 id。操作前先查询；请用对应对象的 id，不要把卡号掩码或产品代码猜成内部 id。唯一名称、卡片尾号和产品代码也可由服务端解析。',
+    '定时任务优先使用 runAtLocal（YYYY-MM-DDTHH:mm，北京时间），保留用户明确的年份和时刻，不要自行猜算 epoch。此 demo 只记录任务，不保证到期执行。',
+    '条件计划使用 {path,op,value}，消费分析输出字段为 total，余额输出字段为 totalAvailable。例如 {path:"n1.total",op:">",value:2000}。依赖节点必须先成功。',
+    '用户已明确提出冻结卡片、设置订阅提醒等操作时，查询匹配对象后调用相应工具生成确认卡，不要因需要确认而停在口头建议。',
+    'change_password 只演示强验证，请用空参数调用；禁止要求用户在聊天里提供当前密码、新密码或真实凭证。',
     HALLUCINATION_RULE,
     '任何金额、余额、交易、产品或持仓等金融事实，都必须来自工具返回结果。',
     '若工具返回 success:false 或 ok:false，必须如实报告失败及其原因，绝不编造成功、绝不虚构数据。',

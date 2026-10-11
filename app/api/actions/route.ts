@@ -96,6 +96,7 @@ function toContractPendingAction(row: PendingActionRow): PendingAction {
   const tier = row.riskLevel as RiskLevel;
   const parsedSummary = safeParse<PendingActionSummary>(row.summaryJson, FALLBACK_SUMMARY);
   const summary: PendingActionSummary = {
+    actionId: row.id,
     ...parsedSummary,
     toolName,
     tier,

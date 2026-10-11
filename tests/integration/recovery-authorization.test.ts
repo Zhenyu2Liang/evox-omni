@@ -151,8 +151,18 @@ it.each(resourceTools)('%s refuses another user resource even with valid own con
   const action = await executeGatedTool({ userId: other.id, sessionId, toolName, userRequest: '资源归属回归',
     args: { cardId: 'card_credit', category: '娱乐', amount: 1500, subscriptionId: 'sub_netflix', remind: true, userId },
   });
-  expect(action.pendingActionId).toBeTruthy();
-  const row = await p.pendingAction.findUniqueOrThrow({ where: { id: action.pendingActionId! } });
+  // Resolution now denies foreign resources before parking. Also exercise execution against a
+  // deliberately planted legacy/corrupt row, retaining the original write-boundary assertions.
+  expect(action.pendingActionId).toBeUndefined();
+  expect(await state()).toBe(before);
+  const requiresMfa = ['unfreeze_card', 'report_lost_card'].includes(toolName);
+  const row = await actionRepo.createPendingAction({ sessionId, userId: other.id, toolName,
+    args: { cardId: 'card_credit', category: '娱乐', amount: 1500, subscriptionId: 'sub_netflix', remind: true, userId },
+    tier: requiresMfa ? 'RED' : 'YELLOW', requiresMfa,
+    status: requiresMfa ? 'awaiting_mfa' : 'pending',
+    summary: { title: 'legacy foreign resource', toolName, tier: requiresMfa ? 'RED' : 'YELLOW', requiresMfa, fields: [] },
+  });
+  if (requiresMfa) await actionRepo.createMfaChallenge({ actionId: row.id, code: '123456' });
   const response = await call(row.requiresMfa ? verifyPost : confirmPost, row.id, sessionId, row.requiresMfa ? { code: '123456' } : {});
   expect(response.body.data.ok).toBe(false); expect(response.body.data.status).toBe('failed');
   expect(await state()).toBe(before);

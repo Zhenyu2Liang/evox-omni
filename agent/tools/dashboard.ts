@@ -62,7 +62,7 @@ function summarizeDashboard(summary: DashboardSummary): string {
     `总资产 ${formatCNY(summary.totalAssets)}`,
     `活期 ${formatCNY(summary.checkingBalance)}`,
     `信用可用 ${formatCNY(summary.creditAvailable)}`,
-    `${summary.month} 消费 ${formatCNY(summary.monthSpend)}`,
+    `${summary.month} 正常消费（不含异常及投资）${formatCNY(summary.monthSpend)}`,
     `近期交易 ${summary.recentTransactions.length} 笔`,
   ];
   if (summary.latestAnomaly !== null) {

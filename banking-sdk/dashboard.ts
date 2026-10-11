@@ -8,6 +8,7 @@ import { demoNow } from '../lib/clock';
 import { addMoney } from '../lib/money';
 import { analyzeSpending, listAnomalies, listTransactions } from './transaction';
 import type { DashboardSummary } from './types';
+import { listHoldings } from './investment';
 
 /** How many recent transactions the dashboard surfaces. */
 const RECENT_TRANSACTION_LIMIT = 5;
@@ -30,7 +31,7 @@ export async function getDashboardSummary(userId: string): Promise<DashboardSumm
     .reduce((acc, card) => addMoney(acc, card.availableLimit ?? 0), 0);
 
   return {
-    totalAssets,
+    totalAssets: (await listHoldings(userId)).reduce((total, holding) => addMoney(total, holding.marketValue ?? holding.amount), totalAssets),
     checkingBalance: checking?.balance ?? 0,
     creditAvailable,
     monthSpend: analysis.total,

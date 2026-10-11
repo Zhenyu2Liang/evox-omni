@@ -34,6 +34,7 @@ export type PendingActionStatus =
   | 'needs_reconciliation';
 
 export interface PendingActionSummary {
+  actionId?: string;
   title: string;
   toolName: ToolName;
   tier: RiskLevel;

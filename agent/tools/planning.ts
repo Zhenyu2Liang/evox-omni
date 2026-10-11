@@ -135,7 +135,11 @@ export const SubmitPlanParams = Type.Object({
       kind: Type.String({ description: '节点类型：tool | condition | note' }),
       tool: Type.Optional(Type.String({ description: 'kind=tool 时调用的工具名' })),
       args: Type.Optional(Type.Object({}, { description: 'kind=tool 时工具参数' })),
-      condition: Type.Optional(Type.Object({}, { description: 'kind=condition 时的判断条件' })),
+      condition: Type.Optional(Type.Object({
+        path: Type.String({ description: '依赖节点输出路径，例如 n1.total（消费分析），n1.totalAvailable（余额查询）' }),
+        op: Type.Union(['>', '>=', '<', '<=', '==', '!='].map(value => Type.Literal(value))),
+        value: Type.Union([Type.Number(), Type.String(), Type.Boolean()]),
+      }, { description: 'kind=condition 时必须使用 path/op/value，不使用 left/right/type' })),
     }),
     { description: 'DAG 节点列表' },
   ),

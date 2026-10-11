@@ -111,6 +111,7 @@ function PendingDecisionCard({ pending, action, busy, error, attempts }: Pending
   return (
     <MfaCard
       actionId={actionId}
+      action={pending.summary}
       hint={hint}
       onSubmit={(code) => action.onVerify?.(actionId, code)}
       onCancel={action.onCancel}
@@ -152,9 +153,7 @@ export function ChatWindow({
     onConfirm: (id) => void stream.confirm(id),
     onVerify: (id, code) => void stream.verify(id, code),
     onCancel: (id) => void stream.cancel(id),
-    onAcknowledge: () => void stream.send('这笔交易是我本人消费'),
-    onViewDetail: () => void stream.send('我想查看这笔交易的详情'),
-    onFreeze: () => void stream.send('冻结我的银行卡'),
+    onFreeze: (anomaly, cardId) => void stream.send(`交易 ${anomaly.transaction.id}（${anomaly.transaction.merchant}）触发安全提醒。我选择冻结卡片 ${cardId}，请生成确认卡。`),
     onTaskControl: (a) => void stream.controlTask(a),
     onRecover: (id) => void stream.recover(id),
     mfaAttempts: stream.mfaAttempts,
@@ -172,6 +171,7 @@ export function ChatWindow({
   return (
     <div className={`flex h-full min-h-0 flex-col bg-banking-light ${className ?? ''}`.trim()}>
       <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        {stream.error && !pending ? <p role="alert" className="text-banking-danger">{stream.error}</p> : null}
         {isEmpty && stream.restoring ? (
           <div className="flex flex-col items-center justify-center gap-3 py-10">
             <Spinner />

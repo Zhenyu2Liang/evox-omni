@@ -41,6 +41,7 @@ import type { AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, JsonValue, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 import { createBankingAgent } from './banking-agent';
 import { confirmationCard, errorCard, mfaCard, toCards } from './card-emitter';
+import { redactRequest } from '@/lib/sensitive';
 import type { FactInput } from './grounding-facts';
 import { renderFinancialResponse, UNAVAILABLE_RESPONSE } from './financial-response';
 import { withRealToolResult } from './message-normalize';
@@ -123,7 +124,7 @@ function textOfContent(content: unknown): string {
 
 /** Extract the plain text carried in an `AgentToolResult` / a tool-result message. */
 function textOfResult(result: unknown): string {
-  return isRecord(result) ? textOfContent(result.content) : '';
+  return isRecord(result) ? textOfContent(Array.isArray(result.content) ? result.content.slice(0, 1) : result.content) : '';
 }
 
 function isToolExecutionResult(value: unknown): value is ToolExecutionResult {
@@ -242,12 +243,12 @@ async function loadPendingSummary(
   };
   const row = await getPendingAction(actionId);
   if (row === null) return fallback;
-  return safeParse<PendingActionSummary>(row.summaryJson, {
+  return { ...safeParse<PendingActionSummary>(row.summaryJson, {
     ...fallback,
     toolName: row.toolName as ToolName,
     tier: row.riskLevel as RiskLevel,
     requiresMfa: row.requiresMfa,
-  });
+  }), actionId };
 }
 
 /* ------------------------------------------------------- live `submit_plan` (DAG) progress */
@@ -313,8 +314,8 @@ async function emitParkedDecision(buffer: TurnBuffer, relay: PlanRelay): Promise
   relay.parkedActionId = undefined;
   const summary = await loadPendingSummary(actionId, relay.parkedToolName ?? 'submit_plan');
   if (summary.tier === 'RED' || summary.requiresMfa) {
-    buffer.events.push({ type: 'mfa_required', actionId, hint: MFA_HINT });
-    emitCard(buffer, mfaCard(actionId, MFA_HINT));
+    buffer.events.push({ type: 'mfa_required', actionId, hint: MFA_HINT, action: summary });
+    emitCard(buffer, mfaCard(actionId, MFA_HINT, summary));
     return;
   }
   buffer.events.push({ type: 'confirmation_required', action: summary, actionId });
@@ -386,8 +387,9 @@ async function handleToolExecutionEnd(
   buffer.events.push({ type: 'tool_end', toolEvent: blockView });
 
   if (parsed !== null && parsed.decisionKind === 'require_mfa') {
-    buffer.events.push({ type: 'mfa_required', actionId: parsed.actionId, hint: MFA_HINT });
-    emitCard(buffer, mfaCard(parsed.actionId, MFA_HINT));
+    const summary = await loadPendingSummary(parsed.actionId, toolName);
+    buffer.events.push({ type: 'mfa_required', actionId: parsed.actionId, hint: MFA_HINT, action: summary });
+    emitCard(buffer, mfaCard(parsed.actionId, MFA_HINT, summary));
     return;
   }
 
@@ -517,6 +519,7 @@ export async function runTurn(
   req: ChatTurnRequest,
   deps?: RunTurnDeps,
 ): Promise<ChatTurnResponse> {
+  req = { ...req, message: redactRequest(req.message) };
   const config = deps?.config ?? getConfig();
   const now = deps?.now ?? (() => demoNow());
 

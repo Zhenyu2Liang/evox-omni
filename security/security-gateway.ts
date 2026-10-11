@@ -56,6 +56,10 @@ import { safeParse } from '../lib/json';
 import { formatCNY, normalizeTransferAmount, parseAmount } from '../lib/money';
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
+import { resolveBankingArgs } from '../lib/banking-selectors';
+import { scheduledTime } from '../lib/scheduled-time';
+import { redactRequest, redactSecrets } from '../lib/sensitive';
+import { formatDateTime } from '../lib/date';
 import type { ErrorCode } from '../lib/errors';
 
 /** Prefix wrapped around the serialized block reason so `parseBlockReason` is exact. */
@@ -348,7 +352,7 @@ function toContractPendingAction(row: PrismaPendingAction): PendingAction {
     tier: row.riskLevel as RiskLevel,
     requiresMfa: row.requiresMfa,
     status: row.status as PendingActionStatus,
-    summary: safeParse<PendingActionSummary>(row.summaryJson, fallbackSummary),
+    summary: { ...safeParse<PendingActionSummary>(row.summaryJson, fallbackSummary), actionId: row.id },
     userRequest: row.userRequest ?? undefined,
     intent: row.intent ?? undefined,
     createdAt: row.createdAt.getTime(),
@@ -507,6 +511,12 @@ async function gatewayCreatePendingAction(
   ctx: GatewayContext,
   ev: SecurityEvaluation,
 ): Promise<CreatePendingActionResult> {
+  ctx = { ...ctx, args: await resolveBankingArgs(ctx.userId, ctx.toolName, ctx.args),
+    userRequest: redactRequest(ctx.userRequest) };
+  if (ctx.toolName === 'create_scheduled_task') {
+    ctx.args = { ...ctx.args, runAt: scheduledTime(ctx.args, ctx.userRequest) };
+  }
+  if (ctx.toolName === 'change_password') ctx.args = redactSecrets(ctx.args) as Record<string, unknown>;
   let recipient: { name: string; phone: string } | undefined;
   let accountLabel: string | undefined;
 
@@ -537,6 +547,37 @@ async function gatewayCreatePendingAction(
   if (reusable) return { kind: 'created', action: toContractPendingAction(reusable) };
 
   const summary = buildPendingActionSummary(ctx, ev, recipient, accountLabel);
+  if (ctx.args.cardId) {
+    const card = await prisma.card.findFirst({ where: { id: String(ctx.args.cardId), userId: ctx.userId } });
+    if (card) summary.fields.unshift({ label: '卡片', value: `${({ CREDIT: '信用卡', DEBIT: '借记卡', VIRTUAL: '虚拟卡' } as Record<string, string>)[card.type] ?? card.type} ${card.numberMasked}` });
+  }
+  if (ctx.args.productId) {
+    const product = await prisma.investmentProduct.findUnique({ where: { id: String(ctx.args.productId) } });
+    if (product) summary.fields.unshift({ label: '产品', value: `${product.name}（${product.code}）` });
+  }
+  if (ctx.args.holdingId) {
+    const holding = await prisma.investmentHolding.findFirst({ where: { id: String(ctx.args.holdingId), userId: ctx.userId }, include: { product: true } });
+    if (holding) summary.fields.unshift({ label: '持仓', value: `${holding.product.name}（${holding.id}）` });
+  }
+  if (ctx.args.subscriptionId) {
+    const subscription = await prisma.subscription.findFirst({ where: { id: String(ctx.args.subscriptionId), userId: ctx.userId } });
+    if (subscription) summary.fields.unshift({ label: '订阅', value: subscription.name });
+  }
+  if (ctx.toolName === 'set_subscription_reminder') summary.fields.push({ label: '提醒设置', value: ctx.args.remind === true ? '开启' : '关闭' });
+  if (ctx.toolName === 'set_card_limit' && ctx.args.amount !== undefined) summary.fields.push({ label: '新限额', value: formatCNY(Number(ctx.args.amount)) });
+  if (['subscribe_investment', 'redeem_investment'].includes(ctx.toolName)) {
+    const account = await prisma.account.findFirst({ where: { userId: ctx.userId, type: 'CHECKING' } });
+    summary.fields.push({ label: ctx.toolName === 'subscribe_investment' ? '付款账户' : '入账账户', value: account?.name ?? '账户待核对' });
+  }
+  for (const [key, label] of [['category','类别'],['limit','新限额'],['daysBefore','提前天数'],['name','名称'],['remark','备注']] as const) {
+    if (ctx.args[key] !== undefined) summary.fields.push({ label, value: String(ctx.args[key]) });
+  }
+  if (ctx.toolName === 'create_scheduled_task') summary.fields.push({ label: '执行时间（北京时间）', value: formatDateTime(Number(ctx.args.runAt)) });
+  if (ctx.toolName === 'create_scheduled_task') {
+    summary.fields.push({ label: '任务类型', value: String(ctx.args.kind) });
+    if (ctx.args.payload) summary.fields.push({ label: '任务内容', value: JSON.stringify(redactSecrets(ctx.args.payload)) });
+    summary.fields.push({ label: '演示范围', value: '仅保存任务记录，不承诺到期执行' });
+  }
   const status: PendingActionStatus = ev.requiresMfa ? 'awaiting_mfa' : 'pending';
 
   // The owning-plan status check and the row insert share ONE transaction: a plan cancelled
@@ -994,7 +1035,12 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
   }
 
   // Gated (YELLOW/RED) — persist the pending action and block with its id.
-  const result = await gatewayCreatePendingAction(ctx, evaluation);
+  let result: CreatePendingActionResult;
+  try { result = await gatewayCreatePendingAction(ctx, evaluation); }
+  catch (error) {
+    if (!(error instanceof AppError) || error.code !== 'VALIDATION') throw error;
+    return { evaluation, decision: { ...decision, kind: 'deny' }, blockReason: error.message };
+  }
 
   // An unresolvable/ambiguous transfer recipient → BLOCK with a PLAIN model-readable message (never a
   // `BLOCK_REASON_PREFIX` payload, which the model cannot read) and NO pending action. `evaluation.blocked`

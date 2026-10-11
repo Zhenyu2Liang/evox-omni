@@ -13,6 +13,7 @@
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { AppError } from '@/lib/errors';
+import { resolveBankingArgs } from '@/lib/banking-selectors';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
 import { withBankingExecution, type BankingExecutionContext } from '@/banking-sdk';
 import { buildWriteCommitAudit, type WriteAuditIdentity } from '../write-audit';
@@ -289,6 +290,19 @@ export function createToolRegistry(
       : createUnconfiguredSubmitPlanTool(),
   };
 
+  // Pi sees structured, server-owned identifiers as well as the human-readable summary.
+  for (const name of TOOL_NAMES) {
+    if (name === 'submit_plan') continue;
+    const tool = tools[name];
+    const execute = tool.execute.bind(tool);
+    tools[name] = { ...tool, execute: async (...args: Parameters<typeof execute>) => {
+      if (name === 'compare_investments') args[1] = await resolveBankingArgs(userId, name, args[1] as Record<string, unknown>);
+      const result = await execute(...args);
+      return { ...result, content: [...result.content, { type: 'text' as const,
+        text: `服务端结构化结果（引用其中的 id，不要猜测）：${JSON.stringify(result.details)}` }] };
+    } };
+  }
+
   // Pi invokes AgentTool.execute directly after beforeToolCall. Scope the trusted SDK context here
   // too, so a breaker tripped while a GREEN tool was in flight cannot bypass the transaction fence.
   // submit_plan creates its own per-node contexts through executeGatedTool and must not inherit one.
@@ -360,6 +374,10 @@ export function createToolRegistry(
       args: Record<string, unknown>,
       opts?: ToolRunOptions,
     ): Promise<ToolExecutionResult> {
+      if (name === 'compare_investments') {
+        try { args = await resolveBankingArgs(userId, name, args); }
+        catch (error) { return { ok: false, error: AppError.from(error).message }; }
+      }
       return withBankingExecution(
         {
           fence: opts?.fence,
