@@ -19,7 +19,6 @@ import type {
   InvestResult,
   InvestmentComparison,
   InvestmentRiskLevel,
-  RedeemInvestmentInput,
   SubscribeInvestmentInput,
   ProductView,
 } from '@/banking-sdk';
@@ -274,7 +273,7 @@ export function createRedeemInvestmentTool(
   return {
     name: 'redeem_investment',
     label: '赎回理财',
-    description: '赎回指定理财持仓（高风险，需要短信验证码验证）。',
+    description: '全额赎回指定理财持仓（不支持部分赎回）；服务端展示到账金额，再经短信验证码验证。',
     parameters: RedeemInvestmentParams,
     execute: async (_toolCallId, params) => {
       const result = await runRedeemInvestment(userId, params);
@@ -303,10 +302,10 @@ export async function runRedeemInvestment(
     const result: InvestResult = await banking.investment.redeemInvestment({
       userId,
       holdingId,
+      expectedRedemptionAmount: args.expectedRedemptionAmount as number | undefined,
       // At-most-once: forwarded verbatim to the SDK's `idempotencyKey` (absent ⇒ unchanged behavior).
-      // Minimal cast — the SDK input type does not (yet) declare the field.
       idempotencyKey: opts?.idempotencyKey,
-    } as RedeemInvestmentInput);
+    });
     const balance =
       result.newBalance != null ? `，账户余额 ${formatCNY(result.newBalance)}` : '';
     return {

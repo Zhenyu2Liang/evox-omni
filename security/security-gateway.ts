@@ -53,7 +53,7 @@ import {
 import { prisma } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 import { safeParse } from '../lib/json';
-import { formatCNY, normalizeTransferAmount, parseAmount } from '../lib/money';
+import { formatCNY, moneyToCents, normalizeTransferAmount, parseAmount, round2 } from '../lib/money';
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
 import { resolveBankingArgs } from '../lib/banking-selectors';
@@ -476,9 +476,16 @@ async function findReusableAction(
         row.toolName === ctx.toolName &&
         row.riskLevel === ev.tier &&
         row.requiresMfa === ev.requiresMfa &&
-        sameArgs(safeParse<Record<string, unknown>>(row.argsJson, {}), ctx.args),
+        sameArgs(requestArgs(ctx.toolName, safeParse<Record<string, unknown>>(row.argsJson, {})), requestArgs(ctx.toolName, ctx.args)),
     ) ?? null
   );
+}
+
+/** The redemption quote belongs to the original server decision, not the model's request identity. */
+function requestArgs(tool: ToolName, args: Record<string, unknown>): Record<string, unknown> {
+  if (tool !== 'redeem_investment') return args;
+  const { expectedRedemptionAmount: _quote, ...request } = args;
+  return request;
 }
 
 /**
@@ -517,6 +524,11 @@ async function gatewayCreatePendingAction(
     ctx.args = { ...ctx.args, runAt: scheduledTime(ctx.args, ctx.userRequest) };
   }
   if (ctx.toolName === 'change_password') ctx.args = redactSecrets(ctx.args) as Record<string, unknown>;
+  if (ctx.toolName === 'apply_virtual_card' && ctx.args.monthlyLimit !== undefined) {
+    const cents = moneyToCents(ctx.args.monthlyLimit);
+    if (cents < 0) throw new AppError('VALIDATION', '月限额不能为负数。');
+    ctx.args = { ...ctx.args, monthlyLimit: cents / 100 };
+  }
   let recipient: { name: string; phone: string } | undefined;
   let accountLabel: string | undefined;
 
@@ -558,6 +570,20 @@ async function gatewayCreatePendingAction(
   if (ctx.args.holdingId) {
     const holding = await prisma.investmentHolding.findFirst({ where: { id: String(ctx.args.holdingId), userId: ctx.userId }, include: { product: true } });
     if (holding) summary.fields.unshift({ label: '持仓', value: `${holding.product.name}（${holding.id}）` });
+    if (holding && ctx.toolName === 'redeem_investment') {
+      const amount = round2(holding.marketValue ?? holding.amount);
+      ctx.args = { ...ctx.args, expectedRedemptionAmount: amount };
+      summary.fields.push(
+        { label: '赎回范围', value: '全部赎回该笔持仓（不支持部分赎回）' },
+        { label: '持仓本金', value: formatCNY(holding.amount) },
+        { label: '赎回到账金额', value: formatCNY(amount) },
+        { label: '金额变化', value: '金额变化时停止执行，需重新确认' },
+      );
+    }
+  }
+  if (ctx.toolName === 'apply_virtual_card') {
+    summary.fields.push({ label: '月限额', value: ctx.args.monthlyLimit === undefined ? '未设置（本次仅开卡）' : formatCNY(Number(ctx.args.monthlyLimit)) });
+    summary.fields.push({ label: '演示范围', value: '保存卡片及月限额配置；Demo 不提供刷卡支付' });
   }
   if (ctx.args.subscriptionId) {
     const subscription = await prisma.subscription.findFirst({ where: { id: String(ctx.args.subscriptionId), userId: ctx.userId } });

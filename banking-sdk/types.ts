@@ -218,6 +218,8 @@ export interface ReportLostCardInput {
 export interface ApplyVirtualCardInput {
   userId: string;
   label?: string;
+  /** Optional monthly limit configuration in CNY; never inferred from a free-text label. */
+  monthlyLimit?: number;
   /**
    * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT issue a
    * second card: the card id is derived deterministically from (userId, key), and the existing
@@ -307,6 +309,8 @@ export interface SubscribeInvestmentInput {
 export interface RedeemInvestmentInput {
   userId: string;
   holdingId: string;
+  /** Server-snapshotted full redemption amount shown before MFA; changes require a new decision. */
+  expectedRedemptionAmount?: number;
   /**
    * Optional idempotency key — the redemption's EXECUTION IDENTITY. A repeat with the SAME
    * key on an already-REDEEMED holding REPLAYS the original redemption (same `amount`, current

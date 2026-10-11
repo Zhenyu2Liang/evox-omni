@@ -40,7 +40,7 @@ export async function resolveBankingArgs(userId: string, tool: ToolName, input: 
   if (tool === 'redeem_investment') {
     const rows = await prisma.investmentHolding.findMany({ where: { userId }, include: { product: true } });
     // An exact historical ID can replay its result; a name selects current holdings only.
-    const candidates = rows.some(row => row.id === args.holdingId) ? rows : rows.filter(row => row.status === 'ACTIVE');
+    const candidates = rows.some(row => row.id === args.holdingId) ? rows : rows.filter(row => row.status === 'HOLDING');
     args.holdingId = select(candidates, args.holdingId, r => [r.product.name, r.product.code], '持仓').id;
   }
   return args;

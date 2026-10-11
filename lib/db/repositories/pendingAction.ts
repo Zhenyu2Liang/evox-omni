@@ -330,3 +330,22 @@ export function resetMfaAttempts(
 ): Promise<MfaChallenge> {
   return client.mfaChallenge.update({ where: { actionId }, data: { attempts: 0 } });
 }
+
+/** Only called inside the audited account-unlock transaction; never grants execution. */
+export async function renewLockedMfaChallenges(
+  owner: { userId?: string; sessionId: string },
+  client: Prisma.TransactionClient,
+): Promise<number> {
+  const result = await client.mfaChallenge.updateMany({
+    where: {
+      status: 'locked',
+      action: {
+        ...(owner.userId ? { userId: owner.userId } : { sessionId: owner.sessionId }),
+        status: 'awaiting_mfa',
+        requiresMfa: true,
+      },
+    },
+    data: { attempts: 0, status: 'pending' },
+  });
+  return result.count;
+}

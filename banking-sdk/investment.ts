@@ -32,7 +32,7 @@ import type { InvestmentHolding, InvestmentProduct } from '@prisma/client';
 import { demoNow } from '../lib/clock';
 import { accounts, investments } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
-import { round2, subtractMoney } from '../lib/money';
+import { moneyToCents, round2, subtractMoney } from '../lib/money';
 import { INVESTMENT_FLOW_CATEGORY } from './categories';
 import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction, type Tx } from './tx';
@@ -270,13 +270,20 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
   }
 
   const key = normalizeIdempotencyKey(input.idempotencyKey);
-  const credit = round2(holding.marketValue ?? holding.amount);
   const now = demoNow();
 
   return runInTransaction(async (tx): Promise<InvestResult> => {
+    // Re-read the value at the write boundary: a stale pre-MFA quote cannot authorize a new amount.
+    const current = await tx.investmentHolding.findUnique({ where: { id: holding.id } });
+    if (!current || current.userId !== input.userId) throw new AppError('NOT_FOUND', '持仓不存在');
+    const credit = round2(current.marketValue ?? current.amount);
+    if (current.status === 'HOLDING' && input.expectedRedemptionAmount !== undefined &&
+        moneyToCents(input.expectedRedemptionAmount) !== moneyToCents(credit)) {
+      throw new AppError('CONFLICT', '赎回金额已变化，请重新确认该持仓后再验证。');
+    }
     // Atomic HOLDING → REDEEMED transition: count 0 means it was already redeemed (no double credit).
     const closed = await tx.investmentHolding.updateMany({
-      where: { id: holding.id, userId: input.userId, status: { not: 'REDEEMED' } },
+      where: { id: holding.id, userId: input.userId, status: 'HOLDING' },
       data: { status: 'REDEEMED' },
     });
 

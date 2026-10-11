@@ -61,6 +61,7 @@ import {
 } from '../lib/db/repositories/circuitBreaker';
 import { getSession } from '../lib/db/repositories/session';
 import { getUser } from '../lib/db/repositories/user';
+import { renewLockedMfaChallenges } from '../lib/db/repositories/pendingAction';
 import { prisma, type DbClient } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 
@@ -200,7 +201,8 @@ export async function recordSuccess(actor: string): Promise<CircuitBreakerState>
  * nothing to unlock, so the benign counter clear proceeds without a code.
  *
  * Unlock clears ALL breaker state (failures → 0, locked → false, lockedAt cleared) so the failure
- * counter restarts from scratch; it does NOT itself grant execution.
+ * counter restarts from scratch. It also renews exhausted challenges of still-awaiting MFA actions
+ * for this owner inside the same audited transaction; it does NOT itself grant execution.
  *
  * The emitted event detail is a COMPLETE audit record: `actor`, `reason`, `wasLocked`,
  * `previousFailures` and, when it was set, `priorLockedAt`.
@@ -242,6 +244,11 @@ export async function resetSession(
     const result = await resetBreakerState(key, { client: tx, expect });
     if (!result.applied) return; // lost CAS — newer state preserved, no write, no audit
     const prior = result.before;
+    // A legitimate unlock renews exhausted challenges for this owner's still-undecided actions.
+    // Terminal/cancelled actions remain terminal; verification is still required before any write.
+    const renewedMfaChallenges = prior?.locked
+      ? await renewLockedMfaChallenges({ userId, sessionId: actor }, tx)
+      : 0;
     await recordSecurityEvent(
       {
         sessionId: actor,
@@ -256,6 +263,7 @@ export async function resetSession(
           reason,
           wasLocked: prior?.locked ?? false,
           previousFailures: prior?.failures ?? 0,
+          renewedMfaChallenges,
           ...(prior?.lockedAt ? { priorLockedAt: prior.lockedAt.getTime() } : {}),
         },
       },
