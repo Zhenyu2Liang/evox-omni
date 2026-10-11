@@ -1,19 +1,11 @@
 /**
- * grounding-facts.ts — STRUCTURED trusted facts + bilingual claim extraction for fact grounding.
- *
- * The model's prose is RAW output. This module turns the turn's REAL tool results into a STRUCTURED,
- * server-owned fact base — accounts (per account, AS-OF a query AND CURRENT after every write), write
- * outcomes (per OPERATION identity: tool + toolCallId/actionId/taskId/nodeId, with amount and
- * recipient), authoritative money amounts — and extracts the CLAIMS a piece of text makes about them
- * (which operation, done/failed/pending, which amount, which recipient, which account).
- *
- * Design: compare STRUCTURE (operation identity, number, entity, account) — never pile up ad-hoc
- * phrases. The word lists below are small, per-category and BILINGUAL (zh + en); they only CLASSIFY a
- * clause, the DECISION is made structurally in `./grounding` against the trusted facts.
- *
- * PURE: no DB access, no pi imports (only a TYPE-ONLY tools import, erased at compile time).
+ * Real tool results -> operation identities, current account balances and available totals.
+ * The production renderer consumes this ledger directly; it does not parse model prose.
+ * Bilingual claim utilities below are retained only for the deprecated grounding regression suite.
+ * Pure: no database access or Pi runtime imports.
  */
-import { parseAmount } from '@/lib/money';
+import { addMoney, parseAmount, subtractMoney } from '@/lib/money';
+import { financialOperationKey } from './financial-operation-key';
 import type { ToolExecutionResult } from './tools';
 
 /**
@@ -43,6 +35,8 @@ export interface TrustedAccount {
   /** `AccountView.type`: `CHECKING` | `SAVINGS` | … */
   type?: string;
   balance: number;
+  /** False after an inconclusive money operation; a fresh account read restores authority. */
+  balanceKnown?: boolean;
 }
 
 /** The structured recipient of a write (from `TransferResult.recipient`). */
@@ -133,6 +127,7 @@ export function buildFinancialFacts(results: ReadonlyArray<FactInput>): Financia
   const balances: number[] = [];
   let totalBalance: number | undefined;
   const writes: TrustedWrite[] = [];
+  const writeByKey = new Map<string, TrustedWrite>();
 
   // The CURRENT-balance ledger, applied in RESULT ORDER. Keyed by account id (else name|type).
   const currentOrder: TrustedAccount[] = [];
@@ -143,6 +138,7 @@ export function buildFinancialFacts(results: ReadonlyArray<FactInput>): Financia
     const existing = currentByKey.get(key);
     if (existing !== undefined) {
       existing.balance = account.balance;
+      existing.balanceKnown = account.balanceKnown;
       if (account.id !== undefined) existing.id = account.id;
       if (account.name !== undefined) existing.name = account.name;
       if (account.type !== undefined) existing.type = account.type;
@@ -168,7 +164,7 @@ export function buildFinancialFacts(results: ReadonlyArray<FactInput>): Financia
     const { toolName, result } = entry;
     if (toolName === 'get_balance') {
       const data = result.data;
-      if (isRecord(data)) {
+      if (result.ok && isRecord(data)) {
         if (isFiniteNumber(data.totalAvailable)) totalBalance = data.totalAvailable;
         if (Array.isArray(data.accounts)) {
           for (const raw of data.accounts) {
@@ -196,11 +192,28 @@ export function buildFinancialFacts(results: ReadonlyArray<FactInput>): Financia
     }
     if (SIDE_EFFECT_TOOLS.has(toolName)) {
       const write = toTrustedWrite(toolName, result, entry);
+      const key = financialOperationKey(entry);
+      const previous = key === undefined ? undefined : writeByKey.get(key);
+      // Replaying an executed receipt must neither add a second operation nor restore its old
+      // balance over a subsequent operation's balance. Unknown outcomes may later be reconciled.
+      if (previous?.outcome === 'succeeded') continue;
+      if (previous !== undefined) writes.splice(writes.indexOf(previous), 1);
       writes.push(write);
+      if (key !== undefined) writeByKey.set(key, write);
+      const target = resolveTarget(entry.sourceAccountId ?? write.accountId);
       // A SUCCESSFUL write that reported a new balance updates its account's CURRENT balance.
       if (write.outcome === 'succeeded' && write.balanceAfter !== undefined) {
-        const target = resolveTarget(entry.sourceAccountId ?? write.accountId);
-        if (target !== undefined) target.balance = write.balanceAfter;
+        if (target !== undefined) {
+          totalBalance = totalBalance !== undefined && target.balanceKnown !== false
+            ? addMoney(totalBalance, subtractMoney(write.balanceAfter, target.balance)) : undefined;
+          target.balance = write.balanceAfter;
+          target.balanceKnown = undefined;
+        } else totalBalance = undefined;
+      } else if (['transfer_money', 'subscribe_investment', 'redeem_investment'].includes(toolName) && write.outcome !== 'failed') {
+        // No proof of the money operation's outcome/current balance: do not repeat a pre-write
+        // snapshot as a CURRENT balance or claim the funds are unchanged.
+        for (const account of target ? [target] : currentOrder) account.balanceKnown = false;
+        totalBalance = undefined;
       }
     }
   }
@@ -218,7 +231,7 @@ export function buildFinancialFacts(results: ReadonlyArray<FactInput>): Financia
 /** Map one REAL write result into its structured trusted form (identity / amount / recipient / balance). */
 function toTrustedWrite(toolName: string, result: ToolExecutionResult, entry: FactInput): TrustedWrite {
   const outcome: TrustedWriteOutcome =
-    result.ok === true ? 'succeeded' : isUnknownOutcome(result) ? 'unknown' : 'failed';
+    isUnknownOutcome(result) ? 'unknown' : result.ok === true ? 'succeeded' : 'failed';
   const data = isRecord(result.data) ? result.data : undefined;
   const write: TrustedWrite = { toolName, outcome };
 
@@ -256,7 +269,7 @@ function toTrustedWrite(toolName: string, result: ToolExecutionResult, entry: Fa
 function isUnknownOutcome(result: ToolExecutionResult): boolean {
   const data = isRecord(result.data) ? result.data : undefined;
   if (data !== undefined) {
-    if (data.outcome === 'unknown' || data.needsReconciliation === true) return true;
+    if (data.outcome === 'unknown' || data.needsReconciliation === true || data.status === 'needs_reconciliation') return true;
   }
   const message = `${result.error ?? ''} ${result.summary ?? ''}`;
   return /人工核对|无法核实|待核对|needs reconciliation/i.test(message);

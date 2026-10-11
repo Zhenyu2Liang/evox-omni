@@ -104,6 +104,7 @@ export async function compareInvestments(ids: string[]): Promise<InvestmentCompa
 interface SubscribeOutcome {
   holding: InvestmentHolding;
   newBalance: number;
+  sourceAccountId?: string;
 }
 
 /** Map a persisted holding (plus the balance after the write) onto the public `InvestResult`. */
@@ -114,6 +115,7 @@ function toSubscribeResult(outcome: SubscribeOutcome): InvestResult {
     productId: outcome.holding.productId,
     amount: outcome.holding.amount,
     newBalance: outcome.newBalance,
+    sourceAccountId: outcome.sourceAccountId,
     occurredAt: outcome.holding.boughtAt.getTime(),
   };
 }
@@ -218,7 +220,7 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
       },
     });
 
-    return { holding, newBalance: updated.balance };
+    return { holding, newBalance: updated.balance, sourceAccountId: account.id };
   };
 
   const key = normalizeIdempotencyKey(input.idempotencyKey);
@@ -233,7 +235,7 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
       const existing = await tx.investmentHolding.findUnique({ where: { idempotencyKey: key } });
       if (existing === null) return null;
       const current = await tx.account.findUnique({ where: { id: account.id } });
-      return { holding: existing, newBalance: current?.balance ?? 0 };
+      return { holding: existing, newBalance: current?.balance ?? 0, sourceAccountId: account.id };
     },
     create: (tx, replayKey) => debitAndCreate(tx, replayKey),
   });
@@ -304,6 +306,7 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
       productId: holding.productId,
       amount: credit,
       newBalance: credited.balance,
+      sourceAccountId: account.id,
       occurredAt: now,
     };
 

@@ -167,6 +167,8 @@ export interface TransferRecipient {
 export interface TransferResult {
   success: boolean;
   transactionId?: string;
+  /** Server-resolved funding account; also persisted in the original execution receipt. */
+  sourceAccountId?: string;
   /** Funding-account balance after the debit (CNY). */
   newBalance?: number;
   recipient: TransferRecipient;
@@ -319,6 +321,8 @@ export interface InvestResult {
   amount: number;
   /** Funding-account balance after the operation (CNY). */
   newBalance?: number;
+  /** Server-resolved funding account. */
+  sourceAccountId?: string;
   /** Epoch ms. */
   occurredAt: number;
 }

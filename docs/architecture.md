@@ -395,7 +395,7 @@ sequenceDiagram
   模型看到「待确认/待验证」后向用户回复。
 - **第二阶段（人工决策）**：`POST /api/actions/:id/confirm`（🟡，或 MFA 后的 🔴）· `.../verify`（🔴 MFA 码）
   · `.../cancel`。服务器通过网关的**授权执行路径**（**不是 LLM**）用**原始已校验参数**经 Banking SDK 执行、
-  写审计日志、把**真实**工具结果注入会话，并调用 `agent.continue()` 让模型叙述事实性结果。
+  写审计日志、把**真实**工具结果注入会话，并调用 `agent.continue()` 继续规划。用户可见的金融结果由 `financial-response.ts` 按真实工具结果生成；模型自由叙述不进入 UI 或持久化文本。
 - **原子性（Atomic Claim + 执行时再风控）**：确认在**一个** `prisma.$transaction` 内完成，其**第一条语句**
   就是 `PendingAction` 的比较并写入（compare-and-set，`pending → confirmed`）；**仍在同一事务内**重新推导
   当日转账累计并**重跑**风险评定（`security/security-gateway.ts` → `authorizeTransfer`）。再风控所用的累计值

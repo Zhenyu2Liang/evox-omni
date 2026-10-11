@@ -41,7 +41,8 @@ import type { AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, JsonValue, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 import { createBankingAgent } from './banking-agent';
 import { confirmationCard, errorCard, mfaCard, toCards } from './card-emitter';
-import { buildFinancialFacts, groundAssistantText, type FactInput } from './grounding';
+import type { FactInput } from './grounding-facts';
+import { renderFinancialResponse, UNAVAILABLE_RESPONSE } from './financial-response';
 import { withRealToolResult } from './message-normalize';
 import type { ModelRuntime } from './providers/types';
 import { getOrCreateSession, loadSession, saveSession } from './session';
@@ -64,6 +65,9 @@ export interface ResumeTurnInput {
   toolCallId?: string;
   /** Server-owned action name; never attribute its result to another tool. */
   toolName?: ToolName;
+  /** Actual bank tool for a DAG result injected into Pi's outer submit_plan call. */
+  resultToolName?: ToolName;
+  sourceAccountId?: string;
   /** The gated `PendingAction` this result belongs to (server-owned), when the caller knows it. */
   actionId?: string;
   /** The owning DAG plan / node when this result executed as a plan node, when the caller knows it. */
@@ -145,19 +149,12 @@ interface TurnBuffer {
   assistants: ChatMessage[];
   /** The assistant message currently streaming (tool events / cards attach here). */
   current: ChatMessage | null;
-  /** Real tool results collected this turn — the authoritative facts grounding compares against. */
   /**
-   * Real tool results collected this turn — the authoritative facts grounding compares against.
-   * Each entry also carries the server-side OPERATION identity (`toolCallId`, plus the action /
-   * plan-node ids when this turn genuinely knows them) so a claim binds to the SPECIFIC operation.
+   * Real tool results and execution identities, consumed by the server-owned response renderer.
    */
   factResults: FactInput[];
-  /**
-   * The RAW text of the assistant message currently streaming. Deltas are BUFFERED here (never
-   * streamed live) so the text is emitted ONLY after grounding at `message_end` — a pre-grounding
-   * financial fact can never reach the UI.
-   */
-  pendingText: string;
+  sourceAccounts: Map<string, string>;
+  requestText?: string;
   /**
    * SERVER-tracked ids of the messages already grounded this turn. The grounding module no longer
    * skips on a text marker, so idempotency MUST be keyed here — on the server-owned message id —
@@ -167,26 +164,32 @@ interface TurnBuffer {
   groundedIds: Set<string>;
 }
 
-function createTurnBuffer(): TurnBuffer {
-  return { events: [], assistants: [], current: null, factResults: [], pendingText: '', groundedIds: new Set() };
+function createTurnBuffer(requestText?: string): TurnBuffer {
+  return { events: [], assistants: [], current: null, factResults: [], sourceAccounts: new Map(), requestText, groundedIds: new Set() };
 }
 
 /**
- * Ground one assistant message's text IN PLACE against the turn's real tool results
- * (`./grounding`). Never throws — a grounding bug surfaces as an `error` event instead of aborting
- * the turn that already produced a real outcome. Idempotent SERVER-side, keyed by the message id
- * (`buffer.groundedIds`) — NEVER by a text marker the model could forge, so a model that includes
- * the correction tag in its own text is STILL verified. The rewritten content is what the
- * `message_end` event (and the streamed `text_delta`) carry; no card is invented.
+ * Render one UI message from real results only. Presentation errors fail closed without changing
+ * the business operation's outcome. Message identity makes rendering idempotent; model text and
+ * correction labels are never evidence. Cards keep their existing server-owned execution path.
  */
 function groundMessage(buffer: TurnBuffer, message: ChatMessage | null): void {
-  if (message === null || message.content === '') return;
+  if (message === null) return;
   if (buffer.groundedIds.has(message.id)) return;
   try {
-    const facts = buildFinancialFacts(buffer.factResults);
-    message.content = groundAssistantText(message.content, facts);
+    const pendingEvent = [...buffer.events].reverse().find(event => event.type === 'mfa_required' || event.type === 'confirmation_required');
+    message.content = renderFinancialResponse(buffer.factResults, {
+      requestText: buffer.requestText,
+      locked: buffer.events.some(event => event.type === 'security_event' && event.kind === 'locked'),
+      ...(pendingEvent?.type === 'mfa_required' ? { pending: 'mfa' as const }
+        : pendingEvent?.type === 'confirmation_required' ? { pending: 'confirmation' as const } : {}),
+    });
     buffer.groundedIds.add(message.id);
   } catch (error) {
+    // Fail closed for presentation: the financial write may already have committed. Never send
+    // raw model text or invent a failure/success when rendering the authoritative facts failed.
+    message.content = UNAVAILABLE_RESPONSE;
+    buffer.groundedIds.add(message.id);
     buffer.events.push({ type: 'error', message: safeToString(error) });
   }
 }
@@ -357,7 +360,7 @@ async function handleToolExecutionEnd(
     };
     upsertToolEvent(buffer.current, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
-    buffer.factResults.push({ toolName, result: execResult, toolCallId });
+    buffer.factResults.push({ toolName, result: execResult, toolCallId, sourceAccountId: buffer.sourceAccounts.get(toolCallId) });
     emitToolCards(buffer, toolName, execResult);
     return;
   }
@@ -372,7 +375,7 @@ async function handleToolExecutionEnd(
     const view: ToolEventView = { toolCallId, toolName, status: 'error', summary: message };
     upsertToolEvent(buffer.current, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
-    buffer.factResults.push({ toolName, result: { ok: false, error: message }, toolCallId });
+    buffer.factResults.push({ toolName, result: { ok: false, error: message }, toolCallId, sourceAccountId: buffer.sourceAccounts.get(toolCallId) });
     emitCard(buffer, errorCard(message));
     return;
   }
@@ -429,37 +432,32 @@ function createEventHandler(
           if (!isAssistantMessage(event.message)) return; // ignore user / toolResult messages
           const assistant = newAssistantMessage(now());
           buffer.current = assistant;
-          buffer.pendingText = '';
           buffer.assistants.push(assistant);
           buffer.events.push({ type: 'message_start', message: { ...assistant } });
           return;
         }
         case 'message_update': {
-          const assistantEvent = event.assistantMessageEvent;
-          // ONLY text deltas — never emit thinking/chain-of-thought.
-          if (assistantEvent.type !== 'text_delta') return;
-          const delta = assistantEvent.delta;
-          if (delta === '') return;
-          // BUFFER the raw delta — do NOT stream it. The message's text is emitted ONLY after
-          // grounding at `message_end`, so a raw (ungrounded) financial fact can never reach the UI.
-          buffer.pendingText += delta;
-          if (buffer.current !== null) buffer.current.content += delta;
+          // Neither free model prose nor reasoning is a UI result. Real results are rendered at
+          // message_end; no raw delta is accumulated on the persisted ChatMessage either.
           return;
         }
         case 'message_end': {
           if (!isAssistantMessage(event.message)) return;
-          const full = textOfContent(event.message.content);
           const assistant = buffer.current ?? newAssistantMessage(now());
-          // The message's full text is authoritative; the buffered deltas are the fallback when the
-          // provider streamed `message_update`s but reports an empty content array on `message_end`.
-          const text = full !== '' ? full : buffer.pendingText;
-          if (text !== '') assistant.content = text;
-          // Ground EVERY assistant message's text once the tool results known SO FAR are collected —
-          // INCLUDING a message that ALSO carries a `toolCall` part (a model may state a financial fact
-          // in the same message it plans a call with), so no ungrounded fact ever reaches the UI. The
-          // event below references this same object and the aggregated delta carries its content, so
-          // the UI receives ONLY the grounded text. Idempotent, and re-run by the pre-persist safety net.
-          groundMessage(buffer, assistant);
+          // The provider chooses tools, but contributes no user-visible financial prose.
+          if (event.message.content.some(part => part.type === 'toolCall')) {
+            // Tool-selection messages are model planning, not execution evidence. Keep the tool
+            // timeline/cards, but publish none of their free prose (including a false prelude).
+            assistant.content = '';
+            buffer.groundedIds.add(assistant.id);
+          } else groundMessage(buffer, assistant);
+          // Pi persists these same message objects as model history. Keep the model's subsequent
+          // context consistent with what the user saw, while retaining tool calls and thinking
+          // blocks required by the provider protocol. Invented prose must not survive a refresh.
+          event.message.content = [
+            ...event.message.content.filter(part => part.type !== 'text'),
+            ...(assistant.content ? [{ type: 'text' as const, text: assistant.content }] : []),
+          ];
           // Emit the message's FINAL (grounded) text as ONE aggregated `text_delta`, immediately
           // followed by the `message_end` carrying the SAME content. The UI accumulates deltas into
           // `streamingText` and replaces it with `message_end.content`, so their concatenation per
@@ -468,10 +466,10 @@ function createEventHandler(
             buffer.events.push({ type: 'text_delta', delta: assistant.content });
           }
           buffer.events.push({ type: 'message_end', message: assistant });
-          buffer.pendingText = '';
           return;
         }
         case 'tool_execution_start': {
+          if (isRecord(event.args) && typeof event.args.sourceAccountId === 'string') buffer.sourceAccounts.set(event.toolCallId, event.args.sourceAccountId);
           const view: ToolEventView = {
             toolCallId: event.toolCallId,
             toolName: event.toolName,
@@ -523,7 +521,7 @@ export async function runTurn(
   const now = deps?.now ?? (() => demoNow());
 
   const snapshot = await getOrCreateSession(config.demoUserId, req.sessionId);
-  const buffer = createTurnBuffer();
+  const buffer = createTurnBuffer(req.message);
   buffer.events.push({ type: 'session', sessionId: snapshot.sessionId });
 
   // Injection scan is defense-in-depth ONLY — it records a SecurityEvent but NEVER grants
@@ -697,8 +695,9 @@ export async function resumeTurn(
     // (the resolved call id + the action / plan-node ids the caller supplied) is threaded through so
     // the claim is bound to THIS operation.
     buffer.factResults.push({
-      toolName: input.toolName ?? '',
+      toolName: input.resultToolName ?? input.toolName ?? '',
       result: input.toolResult,
+      ...(input.sourceAccountId !== undefined ? { sourceAccountId: input.sourceAccountId } : {}),
       ...(toolCallId !== undefined && toolCallId !== '' ? { toolCallId } : {}),
       ...(input.actionId !== undefined ? { actionId: input.actionId } : {}),
       ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),

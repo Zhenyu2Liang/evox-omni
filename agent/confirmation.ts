@@ -855,6 +855,8 @@ async function executeAuthorizedAction(
       // DAG nodes execute inside the model's outer submit_plan call. Standalone
       // actions must match their own tool; never reuse an unrelated query call.
       toolName: link?.taskId ? 'submit_plan' : action.toolName,
+      resultToolName: action.toolName,
+      ...(typeof action.args.sourceAccountId === 'string' ? { sourceAccountId: action.args.sourceAccountId } : {}),
       // The server-side OPERATION identity of this execution (grounding binds a claim to it).
       actionId,
       ...(typeof link?.taskId === 'string' ? { taskId: link.taskId } : {}),

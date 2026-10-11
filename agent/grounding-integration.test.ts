@@ -53,6 +53,7 @@ const FALSE_SUCCESS = '转账已经成功完成，¥500 已转给张伟。';
 const WRONG_BALANCE = '你的账户可用余额为 ¥999,999.99。';
 /** The CONSISTENT narration of the authoritative `get_balance` total. */
 const CORRECT_BALANCE = '你的账户可用余额合计为 ¥73,580.00。';
+const SERVER_BALANCE = '（系统校正）活期账户当前余额为 ¥23,580.00；储蓄账户当前余额为 ¥50,000.00；账户可用余额合计为 ¥73,580.00。';
 
 /**
  * The REAL `transfer_money` result the confirmation path injects on a resume (向 张伟 转账 ¥200.00,
@@ -241,7 +242,7 @@ describe('grounding — no ungrounded financial fact reaches the UI (through the
     // (c) the terminal message IS the server-authored correction.
     const text = finalAssistantText(res.events);
     expect(text).toContain(CORRECTION_TAG);
-    expect(text).toContain('未记录到该操作的执行结果');
+    expect(text).toBe(SERVER_BALANCE);
     expect(text).not.toContain('转账已经成功完成');
     expect(text).not.toContain('¥500');
 
@@ -292,15 +293,15 @@ describe('grounding — no ungrounded financial fact reaches the UI (through the
     expect(await persistedAssistantText(res.sessionId)).toBe(text);
   });
 
-  it('4: leaves a CONSISTENT narration byte-identical (conservative non-firing)', async () => {
+  it('4: renders the same server facts even when model narration is correct', async () => {
     const runtime = scriptedRuntime([toolStep('get_balance', {}), fauxAssistantMessage(CORRECT_BALANCE)]);
     const res = await runTurn(
       { sessionId: newId('sess'), message: '我的余额是多少？' },
       { provider: runtime },
     );
     expect(errorMessages(res.events)).toEqual([]);
-    expect(finalAssistantText(res.events)).toBe(CORRECT_BALANCE);
-    expect(await persistedAssistantText(res.sessionId)).toBe(CORRECT_BALANCE);
+    expect(finalAssistantText(res.events)).toBe(SERVER_BALANCE);
+    expect(await persistedAssistantText(res.sessionId)).toBe(SERVER_BALANCE);
   });
 
   it('5: a claimed-but-ungrounded transfer with NO tool call moves no money', async () => {
@@ -346,8 +347,8 @@ describe('grounding — no ungrounded financial fact reaches the UI (through the
 
     // A parked call is NOT a successful write: the honest narration is not rewritten.
     const text = finalAssistantText(res.events);
-    expect(text).not.toContain(CORRECTION_TAG);
-    expect(text).toContain('需要你的确认');
+    expect(text).toBe('（系统校正）该操作尚未执行，等待确认，请本人核对操作卡片。');
+    expect(text).not.toContain('实际执行成功');
 
     // The call parked — recorded, but NO money moved.
     expect(await prisma.pendingAction.count()).toBe(1);
@@ -386,9 +387,10 @@ describe('grounding — the confirm continuation (resumeTurn) is grounded agains
     const res = await resumeWith(sessionId, REAL_TRANSFER, correct, toolCallId);
     expect(errorMessages(res.events)).toEqual([]);
 
-    expect(finalAssistantText(res.events)).toBe(correct);
-    expect(streamedText(res.events)).toContain(correct);
-    expect(await persistedAssistantText(sessionId)).toBe(correct);
+    const expected = '（系统校正）转账处理结果：第1笔操作实际执行成功；收款人 张伟；金额 ¥200.00；执行时账户余额 ¥23,380.00。';
+    expect(finalAssistantText(res.events)).toBe(expected);
+    expect(streamedText(res.events)).toContain(expected);
+    expect(await persistedAssistantText(sessionId)).toBe(expected);
   });
 });
 
@@ -447,8 +449,7 @@ describe('grounding — a message that ALSO carries a toolCall is grounded (the 
     // (a) the toolCall-carrying message WAS grounded: its own content is the server correction, and
     // the false phrasing never survived in a message that also planned a call.
     const toolCallMessage = messages[0];
-    expect(toolCallMessage.content).toContain(CORRECTION_TAG);
-    expect(toolCallMessage.content).toContain('未记录到该操作的执行结果');
+    expect(toolCallMessage.content).toBe(''); // Planning prose is never execution evidence.
     expect(toolCallMessage.content).not.toContain('转账已经成功完成');
     expect(toolCallMessage.content).not.toContain('¥500');
 
@@ -554,7 +555,8 @@ describe('grounding — investment flows are grounded by OPERATION identity', ()
     // ...but NO 申购 write happened this turn, so the success claim is corrected — never accepted.
     const text = finalAssistantText(res.events);
     expect(text).toContain(CORRECTION_TAG);
-    expect(text).toContain('未记录到该操作的执行结果');
+    expect(text).toContain('理财产品（查询时结果）');
+    expect(text).not.toContain('理财申购处理结果');
     expect(text).not.toContain('已成功申购');
     for (const delta of deltas(res.events)) expect(delta).not.toContain('已成功申购');
     expect(await persistedAssistantText(res.sessionId)).toBe(text);
@@ -594,7 +596,8 @@ describe('grounding — the bill / spending-analysis flow is grounded too', () =
     // the server replaces it with the explicit "no trusted balance" correction, never the invention.
     const text = finalAssistantText(res.events);
     expect(text).toContain(CORRECTION_TAG);
-    expect(text).toContain('未查询到可信的账户余额');
+    expect(text).toContain('账单分析（查询时结果）');
+    expect(text).not.toContain('账户当前余额');
     expect(text).not.toContain('888,888.88');
     for (const delta of deltas(res.events)) expect(delta).not.toContain('888,888.88');
     expect(await persistedAssistantText(res.sessionId)).toBe(text);
@@ -623,7 +626,7 @@ describe('grounding — a RED gated call (MFA) parks and its false completion cl
     // Parked for the human decision, but the false completion claim is corrected.
     const text = finalAssistantText(res.events);
     expect(text).toContain(CORRECTION_TAG);
-    expect(text).toContain('未记录到该操作的执行结果');
+    expect(text).toBe('（系统校正）该操作尚未执行，等待验证码验证。');
     expect(text).not.toContain('转账已经成功完成');
     for (const delta of deltas(res.events)) expect(delta).not.toContain('转账已经成功完成');
     expect(await persistedAssistantText(res.sessionId)).toBe(text);

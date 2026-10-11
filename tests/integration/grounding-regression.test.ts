@@ -291,11 +291,13 @@ describe('grounding — balance claims are checked against the server-authoritat
 
     const text = finalAssistantText(res.events);
     expect(text).toContain(CORRECTION_TAG);
-    // The SAVINGS account's real balance wins — the checking figure is never restated.
+    // The server renders BOTH actual accounts. Each amount must remain attached to its own account.
     expect(text).toContain('50,000.00');
     expect(text).toContain('储蓄账户');
-    expect(text).not.toContain('23,580');
-    for (const delta of deltas(res.events)) expect(delta).not.toContain('23,580');
+    expect(text).toContain('活期账户当前余额为 ¥23,580.00');
+    expect(text).toContain('储蓄账户当前余额为 ¥50,000.00');
+    expect(text).not.toContain('储蓄余额为 ¥23,580.00');
+    for (const delta of deltas(res.events)) expect(delta).not.toContain('储蓄余额为 ¥23,580.00');
     expect(await persistedAssistantText(res.sessionId)).toBe(text);
   });
 });
@@ -325,7 +327,9 @@ describe('grounding — a GREEN budget write is never conflated with a transfer 
     const text = finalAssistantText(res.events);
     expect(text).toContain(CORRECTION_TAG);
     expect(text).not.toContain('转账已经成功完成');
-    expect(text).not.toContain('¥500');
+    expect(text).toContain('预算预留处理结果');
+    expect(text).toContain('金额 ¥500.00');
+    expect(text).not.toContain('转账处理结果');
 
     // No transfer side effect: no new ledger row, no execution receipt.
     expect(await prisma.transaction.count()).toBe(txBefore);

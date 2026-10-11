@@ -47,7 +47,10 @@ Two suites are model-adjacent, both driving the deterministic mock/scripted mode
 facades: message-protocol.test.ts asserts transcript STRUCTURE (toolCall/toolResult pairing), not prose;
 and grounding-regression.test.ts drives the real runTurn/resumeTurn pipeline with a scripted provider
 to pin the code-enforced financial-fact grounding — an ungrounded or contradictory narration is
-replaced by the server-authored correction, asserted through public stream events + loadSession
+replaced by the server-owned result narrative, asserted through public stream events + loadSession
 (grounding itself is never re-implemented). Other hallucination-guard checks (success-vs-failure
 wording, invented balance) live OUTSIDE this node — see tests/scenarios/ (test-05-failure-report,
 test-02-transfer-confirm, mock-integration) and tests/unit/agent/.
+
+
+inancial-response-boundary.test.ts drives real Pi, SSE and persistence with adversarial narration, including tool-call preludes, decimal SDK debit, UNKNOWN and DAG continuation attribution. No model-authored financial prose enters the UI or subsequent Pi prose history.

@@ -9,7 +9,11 @@
  * decides permission — the model decides WHAT to do, code decides WHETHER it is allowed (root
  * invariant).
  *
- * Every decision is STRUCTURAL — per OPERATION identity (the specific tool call, not the whole tool
+ * LEGACY COMPATIBILITY ONLY: this prose heuristic is retained for its existing regression suite.
+ * It is NOT the production financial output boundary. `run-turn.ts` uses `financial-response.ts`,
+ * whose input is real tool results only and which never publishes model-authored prose.
+ *
+ * Every decision below is best effort — per OPERATION identity (the specific tool call, not the whole tool
  * family), per account (CURRENT balance, not a stale as-of one), per amount, per recipient, per
  * outcome state — never a global "some write succeeded" flag, and never a model-producible text
  * marker. Idempotency is tracked SERVER-SIDE by message id (see `./run-turn`), so a forged tag in the
@@ -64,6 +68,7 @@ const UNVERIFIABLE_BALANCE_STATEMENT =
  * UNCHANGED when it is consistent; otherwise a SERVER-authored Chinese replacement (never an appended
  * contradiction). Distinct corrections COMPOSE.
  */
+/** @deprecated Do not use for user-visible financial output. Use renderFinancialResponse instead. */
 export function groundAssistantText(text: string, facts: FinancialFacts): string {
   if (text.trim() === '') return text;
 

@@ -40,7 +40,7 @@
   转账依然被判为 🔴 RED、依然需要人工验证码。权限既不会被提高，也不会被绕过。
 - **🚫 幻觉防护 / 如实报告（Test 5）** — 模型只能陈述来自工具结果的事实；工具返回 `success:false` 时，
   Agent 必须如实报告失败，绝不允许编造成功。
-  **服务端事实通道（grounding）** 把**用户可见事实判为服务端权威**：金额 / 收款人 / 账户余额 / 执行状态只能来自本轮**真实工具结果**，并**绑定到产生它的那次具体操作**（调用身份 `toolCallId` / `actionId`；计划节点另带 `taskId` / `nodeId`），因此**同一工具的不同操作绝不互相支撑或混淆**。账户余额来自按**结果顺序**维护的每账户当前余额账本——一次**成功写入**更新该账户余额，一次**历史查询**不会覆盖它；结果真正**未知**（如进入人工核对）时只表述为「待核对」，**绝不**写成成功、失败或「资金未变」。判定为**结构化**比较（`agent/grounding-facts.ts#buildFinancialFacts` / `OPERATION_CATEGORIES`）：`transfer` 只由 `transfer_money` 支撑、`budget` 只由 `reserve_budget` 支撑，因此**一次预算写入不能支撑「转账成功」**。若最终回答与真实工具结果不一致，服务端在**展示之前**即用**服务端改写的消息替换**它（`agent/grounding.ts#groundAssistantText`，接入 `agent/run-turn.ts` 的 `message_end`，标记 `（系统校正）`——该标记**仅为说明**、绝不是跳过核验的开关），因此**错误事实不会被先展示、事后才更正**。
+  服务端金融结果由 `agent/financial-response.ts` 根据真实工具结果直接生成，模型自由文本不进入用户可见金融叙述。模型继续负责意图理解、工具选择和任务规划。操作按 actionId、taskId/nodeId、银行流水身份或工具调用身份逐笔展示；账户余额及合计随成功写入同步更新，未知资金结果显示待核对。工具调用消息中的模型前言不展示，后续模型历史与系统结果保持一致。旧 `groundAssistantText` 仅保留兼容回归，不再接入生产输出。
 - **🔗 跨场景任务串联** — 一个自然语言请求可以组合多个能力（例如"预留预算 + 定时提醒"），
   每个动钱的节点仍逐个经过安全闸门。
 - **📜 全链路审计（按副作用判定）** — 审计由操作是否产生**副作用**决定（`security/permission-engine.ts` 的 `ToolPolicy.write` / `isWriteTool()`），**与权限颜色无关**：🟢 GREEN 自动写入（如 `reserve_budget`）同样入审计，且审计行与被审计业务写入在**同一个 `prisma.$transaction` 内**（`agent/write-audit.ts`，strict：审计失败回滚业务写入）；去重键按所有者隔离 `write:<tool>:<owner>:<identity>`，与门控身份 `exec:<actionId>` / `reconcile:<actionId>` 互不冲突。每个安全控制决策（熔断、注入检测、验证码失败）都写入 `SecurityEvent`。
@@ -234,7 +234,7 @@ UI 只展示 **任务步骤、工具状态与结果** —— **绝不展示 LLM 
 - **提示词注入防御（injection-guard）** — 对用户输入做启发式检测，命中则记录 `SecurityEvent`
   并向前端发出安全事件（`security_event{kind:'injection'}`）；但它 **只做纵深防御，绝不授予权限**。
   检测结果**不会**被注入模型上下文（不加任何"系统提醒"），也不改变任何授权结论。
-- **幻觉防护（hallucination guard）** — 模型只能报告来自工具结果的事实；`success:false` 必须如实报告失败。**服务端事实通道（grounding）** 把**用户可见事实判为服务端权威**：金额 / 收款人 / 账户余额 / 执行状态只能来自本轮**真实工具结果**，并**绑定到产生它的那次具体操作**（调用身份 `toolCallId` / `actionId`；计划节点另带 `taskId` / `nodeId`），因此**同一工具的不同操作绝不互相支撑或混淆**。账户余额来自按**结果顺序**维护的每账户当前余额账本——一次**成功写入**更新该账户余额，一次**历史查询**不会覆盖它；结果真正**未知**（如进入人工核对）时只表述为「待核对」，**绝不**写成成功、失败或「资金未变」。判定为**结构化**比较（`agent/grounding-facts.ts#buildFinancialFacts` / `OPERATION_CATEGORIES`）：`transfer` 只由 `transfer_money` 支撑、`budget` 只由 `reserve_budget` 支撑，因此**一次预算写入不能支撑「转账成功」**。若最终回答与真实工具结果不一致，服务端在**展示之前**即用**服务端改写的消息替换**它（`agent/grounding.ts#groundAssistantText`，接入 `agent/run-turn.ts` 的 `message_end`，标记 `（系统校正）`——该标记**仅为说明**、绝不是跳过核验的开关），因此**错误事实不会被先展示、事后才更正**。
+- **幻觉防护（服务端结果输出）** — 服务端金融结果由 `agent/financial-response.ts` 根据真实工具结果直接生成，模型自由文本不进入用户可见金融叙述。模型继续负责意图理解、工具选择和任务规划。操作按 actionId、taskId/nodeId、银行流水身份或工具调用身份逐笔展示；账户余额及合计随成功写入同步更新，未知资金结果显示待核对。工具调用消息中的模型前言不展示，后续模型历史与系统结果保持一致。旧 `groundAssistantText` 仅保留兼容回归，不再接入生产输出。
 - **模拟 MFA（短信验证码）** — 🔴 RED 操作需要输入验证码；错误验证码会累加失败次数。
   **UI 永不显示验证码**，需由用户输入。
 - **熔断（circuit-breaker，DB 持久化 · 按所有者 · 加固）** — 连续 **3 次** 验证码失败会 **锁定该所有者（fail-closed：拒绝*所有*工具调用，*包括 🟢 GREEN 查询*）** 并写入 `SecurityEvent`（`CIRCUIT_BREAKER_TRIPPED`，severity `high`）。锁状态**持久化在 `CircuitBreakerState`**（Prisma），键为 `user:<userId>` / `session:<actor>`，因此**新建会话或进程重启都无法绕过**；锁定时间戳与解锁冷却期按服务器**真实时钟**（`lib/clock.ts#realNow()`，非演示时钟）计时。熔断是 LLM 无法清除的硬闸门（**没有解锁工具**）；**只有用户通过安全中心**（`POST /api/security/reset` → `circuitBreaker.resetSession`）**的经审计操作才能解除**，且解除本身**被门控**（需额外验证码 `123456` **或** 冷却 `RESET_COOLDOWN_MS = 60_000`）。**解锁原子且严格审计**：清除状态与写入 `SECURITY_RESET` 事件在**同一个 `prisma.$transaction`** 内提交（strict），审计失败即回滚清除、锁保持不变；安全中心的解锁输入框**默认为空**，绝不预填验证码。
