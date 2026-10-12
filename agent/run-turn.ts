@@ -48,6 +48,7 @@ import { parseBankingGuidance, filterMissingFields, providedRequestFields, type 
 import { withActionPolicy } from '@/lib/action-summary';
 import { listProducts } from '@/lib/db/repositories/investment';
 import { invalidRequestedComparison, requestedComparison } from '@/lib/request-constraints';
+import { invalidRequestedPurchase } from '@/lib/request-purchases';
 import { withRealToolResult } from './message-normalize';
 import type { ModelRuntime } from './providers/types';
 import { getOrCreateSession, loadSession, saveSession } from './session';
@@ -536,9 +537,12 @@ export async function runTurn(
   // Validate product presence against the real catalogue. This read only calibrates questions;
   // it is not a tool result, a financial statement, an ownership check or an authorization.
   try {
-    const products = /理财|申购|认购|产品|基金/.test(req.message) || requestedComparison(req.message).length > 0 ? await listProducts() : [];
+    const products = /理财|申购|认购|购买|产品|基金/.test(req.message) || requestedComparison(req.message).length > 0 ? await listProducts() : [];
     buffer.providedFields = providedRequestFields(req.message, products);
-    if (invalidRequestedComparison(req.message, products)) buffer.serverGuidance = { code: 'product_selection_invalid' };
+    if (invalidRequestedComparison(req.message, products) ||
+        (/理财|申购|认购|产品|基金/.test(req.message) && invalidRequestedPurchase(req.message, products))) {
+      buffer.serverGuidance = { code: 'product_selection_invalid' };
+    }
   } catch { buffer.providedFields = []; }
   buffer.events.push({ type: 'session', sessionId: snapshot.sessionId });
 

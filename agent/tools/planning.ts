@@ -30,7 +30,7 @@ import type {
 } from '@/lib/contracts/task';
 import { dag, executor, type NodeExecutionContext, type PlanToolOutcome } from '@/planner';
 import { AppError } from '@/lib/errors';
-import { assertRequestedProducts, enforceRequestedOrder, requestEntityAliases } from '@/lib/request-constraints';
+import { assertRequestedPlanProducts, enforceRequestedOrder, enforceRequestedSuccess, requestEntityAliases } from '@/lib/request-constraints';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import {
@@ -278,9 +278,10 @@ export async function runSubmitPlan(
   let nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
   try {
     const request = deps.userRequest?.() ?? '';
-    await assertRequestedProducts('submit_plan', {}, request);
-    for (const node of nodes) if (node.tool) await assertRequestedProducts(node.tool, node.args ?? {}, request);
-    nodes = enforceRequestedOrder(nodes, request, request ? await requestEntityAliases(userId) : undefined);
+    await assertRequestedPlanProducts(nodes, request);
+    const names = request ? await requestEntityAliases(userId) : undefined;
+    nodes = enforceRequestedOrder(nodes, request, names);
+    nodes = enforceRequestedSuccess(nodes, request, names);
   } catch (error) { return { ok: false, error: AppError.from(error).message }; }
 
   const knownTools = new Set<string>(KNOWN_TOOL_NAMES);

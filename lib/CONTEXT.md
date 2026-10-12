@@ -9,6 +9,8 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 
 ## API Surface
 
+- `request-constraints.ts` validates exact product comparisons, ordered steps and explicit success prerequisites before plan creation. `request-purchases.ts` binds each purchase to its own product/cent amount and rejects extra/missing plan nodes; it is pure and never changes permissions. Ambiguous conditions fail before writes. Resource aliases use repositories and never model-written node labels.
+
 - `errors.ts` — `ErrorCode`, `AppError` (+ `AppError.from`), `Result<T>`, `ok()` / `err()`.
   Project-wide convention: return `Result<T>` or throw `AppError` at tool/SDK boundaries.
 - `money.ts` — CNY helpers: `CNY` (`'¥'`), `round2`, `formatCNY` (`¥1,234.56`, negatives `-¥...`),

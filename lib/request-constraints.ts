@@ -1,11 +1,12 @@
-import { prisma } from './db/client';
+import { listProducts } from './db/repositories/investment';
+import { listContacts } from './db/repositories/contact';
+import { listCards } from './db/repositories/card';
+import { listSubscriptions } from './db/repositories/subscription';
 import { AppError } from './errors';
 import type { TaskNodeSpec } from './contracts/task';
+import { assertPurchase, assertPlanPurchases, normalizeProduct as normalize, productAliases as aliases,
+  type RequestProduct as Product } from './request-purchases';
 
-type Product = { id: string; name: string; code: string };
-const normalize = (value: string) => value.trim().replace(/^[“"「『]+|[”"」』]+$/g, '')
-  .replace(/^(?:理财产品|产品)\s*/, '').toLowerCase();
-const aliases = (product: Product) => [product.id, product.name, product.code].map(normalize);
 
 /** Bounded command grammar: quoted/exact product names and A-and-B comparisons, not model prose. */
 export function requestedComparison(text: string): string[] {
@@ -24,8 +25,7 @@ export function invalidRequestedComparison(request: string, products: readonly P
 /** Identity aliases are read from owned resources, never from model-generated node labels. */
 export async function requestEntityAliases(userId: string): Promise<ReadonlyMap<string, string[]>> {
   const [contacts, cards, subscriptions, products] = await Promise.all([
-    prisma.contact.findMany({ where: { userId } }), prisma.card.findMany({ where: { userId } }),
-    prisma.subscription.findMany({ where: { userId } }), prisma.investmentProduct.findMany(),
+    listContacts(userId), listCards(userId), listSubscriptions(userId), listProducts(),
   ]);
   return new Map([
     ...contacts.map(row => [row.id, [row.name, row.phone]] as [string, string[]]),
@@ -43,7 +43,7 @@ function investmentComparison(request: string, products: readonly Product[]): st
 
 export async function assertRequestedProducts(tool: string, args: Record<string, unknown>, request: string): Promise<void> {
   if (!request || !['compare_investments', 'subscribe_investment', 'redeem_investment', 'submit_plan'].includes(tool)) return;
-  const rows = await prisma.investmentProduct.findMany({ select: { id: true, name: true, code: true } });
+  const rows = await listProducts();
   const comparison = investmentComparison(request, rows);
   const selected = comparison.map(name => rows.find(row => aliases(row).includes(name)));
   if (selected.some(row => !row)) {
@@ -57,19 +57,13 @@ export async function assertRequestedProducts(tool: string, args: Record<string,
       throw new AppError('VALIDATION', '对比对象与本次请求不一致，请选择原请求中的产品；未执行产品对比。');
     }
   }
-  if (tool === 'subscribe_investment') {
-    const clause = /(?:申购|认购|购买)\s*([^，。；;\n]+)/.exec(request)?.[1];
-    if (!clause) return; // Context-only requests still use the existing owned-selector resolution.
-    const named = rows.filter(row => aliases(row).some(name => clause.toLowerCase().includes(name)));
-    const target = rows.find(row => typeof args.productId === 'string' && aliases(row).includes(normalize(args.productId)));
-    if (named.length === 1 && target?.id !== named[0].id) {
-      throw new AppError('VALIDATION', '申购产品与本次请求不一致，请核对产品名称或代码；未创建申购授权。');
-    }
-    const literal = normalize(clause.split(/\s*[¥￥]?\d|\s+|\d+(?:\.\d+)?元/)[0]);
-    if (literal && !named.length && !/一款|适合|推荐|低风险|稳健型|产品$/.test(literal)) {
-      throw new AppError('VALIDATION', '未找到你指定的申购产品，请先查询并选择准确名称或代码；不会代选其他产品。');
-    }
-  }
+  if (tool === 'subscribe_investment') assertPurchase(args, request, rows);
+}
+
+export async function assertRequestedPlanProducts(nodes: readonly TaskNodeSpec[], request: string): Promise<void> {
+  await assertRequestedProducts('submit_plan', {}, request);
+  for (const node of nodes) if (node.tool) await assertRequestedProducts(node.tool, node.args ?? {}, request);
+  if (request) assertPlanPurchases(nodes, request, await listProducts());
 }
 
 const commands: Record<string, RegExp> = {
@@ -95,9 +89,16 @@ const commands: Record<string, RegExp> = {
 
 /** Enforce explicit first/then/finally phases using trusted request spans and actual tool identities. */
 export function enforceRequestedOrder(nodes: TaskNodeSpec[], request: string, names: ReadonlyMap<string, string[]> = new Map()): TaskNodeSpec[] {
-  const markers = [...request.matchAll(/(首先|先|随后|然后|再|最后)(?=\s*(?:预留|查询|查看|查|看|分析|转|给|设置|将|把|创建|安排|取消|申购|认购|赎回|冻结|解冻|挂失|比较|对比|申请|修改))/g)];
+  const markers = [...request.matchAll(/(首先|先|随后|然后|再|最后)(?=\s*(?:从|用|预留|查询|查看|查|看|分析|转|给|设置|将|把|创建|安排|取消|申购|认购|赎回|冻结|解冻|挂失|比较|对比|申请|修改))/g)];
   if (markers.length < 2 || !markers.some(marker => ['首先', '先'].includes(marker[1]))) return nodes;
   const phases = markers.map((marker, i) => request.slice(marker.index! + marker[0].length, markers[i + 1]?.index ?? request.length));
+  const amountSpans = phases.map(phase => {
+    let span = phase.toLowerCase();
+    for (const aliases of names.values()) for (const alias of aliases) {
+      if (/[^\d.*\s]/.test(alias)) span = span.replaceAll(alias.toLowerCase(), '');
+    }
+    return span;
+  });
   const rank = new Map<string, number>();
   const used = new Set<number>();
   for (const node of nodes) {
@@ -107,13 +108,13 @@ export function enforceRequestedOrder(nodes: TaskNodeSpec[], request: string, na
     let matches = phases.map((phase, i) => command.test(phase) ? i : -1).filter(i => i >= 0);
     if (matches.length > 1 && typeof node.args?.amount === 'number') {
       const amount = String(node.args.amount);
-      matches = matches.filter(i => [...phases[i].matchAll(/\d+(?:\.\d+)?/g)].some(value => Number(value[0]) === Number(amount)));
+      matches = matches.filter(i => [...amountSpans[i].matchAll(/\d+(?:\.\d+)?/g)].some(value => Number(value[0]) === Number(amount)));
     }
     if (matches.length > 1) {
       const selectors = ['name', 'phone', 'contactId', 'cardId', 'subscriptionId', 'productId']
         .map(field => node.args?.[field]).filter((value): value is string => typeof value === 'string');
       const literals = selectors.flatMap(value => names.get(value) ?? [value]);
-      const selected = matches.filter(i => literals.some(value => phases[i].includes(value)));
+      const selected = matches.filter(i => literals.some(value => phases[i].toLowerCase().includes(value.toLowerCase())));
       if (selected.length) matches = selected;
     }
     if (matches.length !== 1) {
@@ -136,4 +137,42 @@ export function enforceRequestedOrder(nodes: TaskNodeSpec[], request: string, na
     const predecessors = nodes.filter(previous => rank.get(previous.id) === phase - 1).map(previous => previous.id);
     return { ...node, after: [...new Set([...(node.after ?? []), ...predecessors])] };
   });
+}
+
+/** Match real tool identities and owned aliases, never model-written node names or goals. */
+function nodesInSpan(nodes: readonly TaskNodeSpec[], span: string, names: ReadonlyMap<string, string[]>): TaskNodeSpec[] {
+  let candidates = nodes.filter(node => node.kind === 'tool' && commands[node.tool ?? '']?.test(span));
+  // An operation mentioned inside a reminder name is not another command in this span.
+  if (candidates.length > 1) {
+    const firstVerb = Math.min(...candidates.map(node => commands[node.tool!]!.exec(span)!.index));
+    candidates = candidates.filter(node => commands[node.tool!]!.exec(span)!.index === firstVerb);
+  }
+  const amounts = [...span.matchAll(/(\d+(?:\.\d+)?)\s*元/g)].map(match => Number(match[1]));
+  if (candidates.length > 1 && amounts.length) candidates = candidates.filter(node => amounts.includes(Number(node.args?.amount)));
+  if (candidates.length > 1) {
+    const specific = candidates.filter(node => ['name', 'phone', 'contactId', 'cardId', 'subscriptionId', 'productId']
+      .some(field => typeof node.args?.[field] === 'string' && (names.get(node.args[field] as string) ?? [node.args[field] as string])
+        .some(alias => span.toLowerCase().includes(alias.toLowerCase()))));
+    if (specific.length) candidates = specific;
+  }
+  return candidates;
+}
+
+/** Explicit success conditions strengthen persisted hard dependencies before any node is executed. */
+export function enforceRequestedSuccess(nodes: TaskNodeSpec[], request: string, names: ReadonlyMap<string, string[]> = new Map()): TaskNodeSpec[] {
+  let bound = nodes;
+  for (const gate of request.matchAll(/([^，,。；;\n]*?)成功(?:(?:之后|以后|后|时)\s*[，,]?\s*(?:才|再|然后|就)?|\s*[，,]?\s*才)\s*([^，,。；;\n]+)/g)) {
+    const [, sourceSpan, targetSpan] = gate;
+    if (/不必|不用|无需|不需要|不要求|无论|不管/.test(sourceSpan)) continue;
+    const sources = nodesInSpan(bound, sourceSpan, names);
+    const targets = nodesInSpan(bound, targetSpan, names);
+    if (sources.length !== 1 || targets.length !== 1 || sources[0].id === targets[0].id) {
+      throw new AppError('VALIDATION', '无法确定“成功后才执行”的前后步骤，请明确操作对象和金额；尚未执行计划。');
+    }
+    const source = sources[0].id;
+    bound = bound.map(node => node.id !== targets[0].id ? node : {
+      ...node, dependencies: [...new Set([...node.dependencies, source])], after: node.after?.filter(id => id !== source),
+    });
+  }
+  return bound;
 }

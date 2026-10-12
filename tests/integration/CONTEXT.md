@@ -1,5 +1,7 @@
 # integration — Maintained cross-module regressions
 
+`request-step-binding.test.ts` exercises actual task execution and confirmation/MFA routes: success-only prerequisites, failed-transfer descendant suppression, per-purchase product/cent binding, independent MFA decisions and replay, and whole-plan rejection of substituted/extra/missing purchases before automatic writes.
+
 `decision-guidance.test.ts` covers route/ledger MFA escalation across multiple decisions, full
 streamed summaries and legacy refresh, plus strict guidance validation and Pi/SSE/session output.
 
