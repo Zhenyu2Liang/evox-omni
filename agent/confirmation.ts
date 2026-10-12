@@ -550,7 +550,7 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     if (auth.evaluation.blocked) {
       return {
         ok: false,
-        requiresConfirmation: true,
+        requiresConfirmation: auth.action !== undefined,
         pendingActionId: auth.action?.id,
         error: auth.blockReason ?? auth.decision.message,
       };

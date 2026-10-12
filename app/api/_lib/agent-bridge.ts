@@ -25,6 +25,8 @@ import {
   recoverAction as agentRecover,
   resumeTask,
   retryTask,
+  rollbackTask,
+  nextPlanDecision,
   verifyAction as agentVerify,
 } from '@/agent';
 import type { ConfirmationOutcome, ConfirmOptions, RecoverOptions } from '@/agent';
@@ -32,7 +34,7 @@ import type { TaskPlan } from '@/lib/contracts/task';
 import { AppError } from '@/lib/errors';
 
 /** The four execution-control actions `POST /api/tasks/[id]` accepts. */
-export type TaskControlAction = 'pause' | 'resume' | 'cancel' | 'retry';
+export type TaskControlAction = 'pause' | 'resume' | 'cancel' | 'retry' | 'rollback';
 
 /**
  * Shape of an `@/agent` task-control capability: given the owning session and the task id, steer
@@ -59,6 +61,7 @@ const CONTROL_FNS: Record<TaskControlAction, TaskControlFn | undefined> = {
   resume: resumeTask,
   cancel: cancelTask,
   retry: retryTask,
+  rollback: rollbackTask,
 };
 
 /**
@@ -164,5 +167,9 @@ export async function withPlanUpdate(
   if (located === undefined) return outcome;
   const plan = await getTaskPlan(located.sessionId, located.taskId);
   const events = outcome.events.filter(event => event.type !== 'plan_update' || event.plan.id !== plan.id);
-  return { ...outcome, events: [...events, { type: 'plan_update', plan }] };
+  const decision = await nextPlanDecision(located.sessionId, located.taskId);
+  const filtered = decision && 'actionId' in decision
+    ? events.filter(event => !((event.type === 'mfa_required' || event.type === 'confirmation_required') && event.actionId === decision.actionId))
+    : events;
+  return { ...outcome, events: [...filtered, { type: 'plan_update', plan }, ...(decision ? [decision] : [])] };
 }

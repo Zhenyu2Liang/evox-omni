@@ -40,6 +40,7 @@ const CONTROL_LABEL: Record<TaskControlAction, string> = {
   resume: '继续',
   cancel: '取消',
   retry: '重试',
+  rollback: '回退预算和任务记录',
 };
 
 const CONTROL_VARIANT: Record<TaskControlAction, 'secondary' | 'danger'> = {
@@ -47,6 +48,7 @@ const CONTROL_VARIANT: Record<TaskControlAction, 'secondary' | 'danger'> = {
   resume: 'secondary',
   cancel: 'danger',
   retry: 'secondary',
+  rollback: 'secondary',
 };
 
 /**
@@ -63,7 +65,7 @@ function controlActionsFor(status: TaskPlanStatus): TaskControlAction[] {
     case 'paused':
       return ['resume', 'cancel'];
     case 'failed':
-      return ['retry'];
+      return ['retry', 'cancel'];
     case 'success':
     case 'cancelled':
       return [];
@@ -76,9 +78,11 @@ function controlActionsFor(status: TaskPlanStatus): TaskControlAction[] {
  * start-of-graph label when it has none. Relationship text only — no status glyphs here.
  */
 function dependencyLabel(node: TaskNodeSpec, nameById: Map<string, string>): string {
-  if (node.dependencies.length === 0) return '起始节点（无依赖）';
+  const ordered = (node.after ?? []).map(id => nameById.get(id) ?? id);
+  const suffix = ordered.length ? `顺序：等待 ${ordered.join('、')} 结束` : '';
+  if (node.dependencies.length === 0) return suffix || '起始节点（无依赖）';
   const names = node.dependencies.map((id) => nameById.get(id) ?? id);
-  return `依赖于: ${names.join('、')}`;
+  return `依赖于: ${names.join('、')}${suffix ? `；${suffix}` : ''}`;
 }
 
 /**
@@ -93,6 +97,11 @@ function dependencyLabel(node: TaskNodeSpec, nameById: Map<string, string>): str
 export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
   const nameById = new Map<string, string>(plan.nodes.map((node) => [node.id, node.name]));
   const controls = controlActionsFor(plan.status);
+  // Completed record-creation plans may also be cancelled before explicit compensation.
+  if (plan.status === 'success' && plan.results.some(result => result.status === 'success' && !result.compensation &&
+      ['reserve_budget', 'create_scheduled_task'].includes(result.tool ?? ''))) controls.push('cancel');
+  if (plan.status === 'cancelled' && plan.results.some(result => result.status === 'success' && !result.compensation &&
+      ['reserve_budget', 'create_scheduled_task'].includes(result.tool ?? ''))) controls.push('rollback');
 
   const footer =
     controls.length > 0 ? (
@@ -126,6 +135,15 @@ export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
     >
       <div className="space-y-3">
         <AgentTaskTimeline plan={plan} results={plan.results} />
+        {plan.status === 'cancelled' && plan.results.some(result => result.status === 'success' &&
+          ['reserve_budget', 'create_scheduled_task'].includes(result.tool ?? '')) &&
+          <p className="text-sm text-gray-600">回退仅释放本计划的预算记录、取消本计划的定时任务记录；已入账交易、理财及卡片变更保留。</p>}
+        {plan.results.some(result => result.compensation) && <section aria-label="回退结果" className="space-y-2">
+          <h4 className="text-sm font-semibold">回退结果（原执行记录保留）</h4>
+          {plan.results.filter(result => result.compensation).map(result => <p key={result.id} className="text-sm">
+            {result.name}：{result.compensation!.message}
+          </p>)}
+        </section>}
 
         <section className="space-y-2">
           <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">依赖关系</h4>

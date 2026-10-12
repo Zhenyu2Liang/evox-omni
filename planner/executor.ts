@@ -603,6 +603,12 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
         continue;
       }
 
+      // A restored plan must still wait for its order-only predecessors.
+      if ((node.after ?? []).some(id => !TERMINAL.has(results.get(id)?.status as TaskNodeStatus))) {
+        parked = true;
+        break;
+      }
+
       // Transitive skip propagation: a dependency that did not succeed (skipped,
       // failed or cancelled) blocks this node too, so it becomes skipped.
       const depBlocked = node.dependencies.some((dep) => {

@@ -46,8 +46,8 @@ const gateway = security.gateway.securityGateway;
 /**
  * Latest user utterance in the transcript, as plain text.
  *
- * AUDIT ONLY: it is passed to the gateway as `userRequest` (what the user asked) and NEVER has any
- * influence on the permission tier / confirmation / MFA decision — those come from the code policy
+ * Trusted request text is used for audit and entity/order constraints. It NEVER grants permission
+ * or reduces the permission tier / confirmation / MFA requirement — those come from the code policy
  * table alone (see `@/security`). Returns `''` when the transcript has no user message yet.
  */
 function latestUserText(messages: readonly AgentMessage[]): string {
@@ -134,6 +134,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     automaticWriteAudit: () => ({ sessionId, userRequest: latestUserRequest() }),
     submitPlan: {
       sessionId,
+      userRequest: latestUserRequest,
       runTool: (toolName, args, ctx) =>
         executeGatedTool({
           sessionId,

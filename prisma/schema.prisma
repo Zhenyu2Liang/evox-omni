@@ -257,8 +257,10 @@ model AgentTaskNode {
   args         String? // JSON text
   condition    String? // JSON text
   dependencies String? // JSON text (array of nodeIds)
+  after        String? // JSON text: order-only predecessors
   status       String    @default("pending")
   output       String? // JSON text
+  compensation String? // JSON text: separate, durable rollback receipt; execution result stays intact
   error        String?
   order        Int
   startedAt    DateTime?

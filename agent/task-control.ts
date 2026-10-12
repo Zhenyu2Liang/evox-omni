@@ -404,6 +404,7 @@ function toNodeSpec(node: AgentTaskWithNodes['nodes'][number]): TaskNodeSpec {
     id: node.nodeId,
     name: node.name,
     dependencies: safeParse<string[]>(node.dependencies, []),
+    ...(node.after ? { after: safeParse<string[]>(node.after, []) } : {}),
     kind: node.kind as TaskNodeKind,
     tool: node.tool ?? undefined,
     args: safeParse<Record<string, unknown> | undefined>(node.args, undefined),
@@ -422,6 +423,7 @@ function toNodeResult(node: AgentTaskWithNodes['nodes'][number]): TaskNodeResult
     error: node.error ?? undefined,
     startedAt: node.startedAt?.getTime(),
     endedAt: node.endedAt?.getTime(),
+    ...(node.compensation ? { compensation: safeParse(node.compensation, undefined) } : {}),
   };
 }
 
@@ -743,7 +745,7 @@ export async function pauseTask(
     }),
     paused,
   );
-  return paused;
+  return reloadPlan(sessionId, taskId);
 }
 
 /**
@@ -1004,7 +1006,7 @@ export async function cancelTask(
   if (revoke.failed.length > 0) {
     await recordRevokeFailure(row.sessionId, taskId, revoke.failed, bulkRevoked + settledRevoked);
   }
-  return cancelled;
+  return reloadPlan(sessionId, taskId);
 }
 
 /**

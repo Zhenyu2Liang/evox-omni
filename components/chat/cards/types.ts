@@ -53,7 +53,7 @@ export interface AnomalyCardData {
 }
 
 /** Control action requested from a plan card's task-control buttons. */
-export type TaskControlAction = 'pause' | 'resume' | 'cancel' | 'retry';
+export type TaskControlAction = 'pause' | 'resume' | 'cancel' | 'retry' | 'rollback';
 
 /**
  * How the chat surface must treat a restored `GET /api/actions` row. It is additive on top of the

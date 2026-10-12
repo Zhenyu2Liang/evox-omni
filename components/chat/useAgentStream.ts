@@ -248,6 +248,7 @@ function cardTargetId(state: ChatUIState): string | undefined {
 function upsertPlan(state: ChatUIState, plan: TaskPlan, generation?: number): ChatUIState {
   const current = state.activePlan;
   if (current && current.id === plan.id) {
+    if (current.status === 'cancelled' && plan.status !== 'cancelled') return state;
     const incomingGeneration = plan.generation ?? generation;
     const storedGeneration = current.generation;
     if (incomingGeneration !== undefined && storedGeneration !== undefined) {

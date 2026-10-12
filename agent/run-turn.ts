@@ -47,6 +47,7 @@ import { renderFinancialResponse, UNAVAILABLE_RESPONSE } from './financial-respo
 import { parseBankingGuidance, filterMissingFields, providedRequestFields, type BankingGuidance, type GuidanceField } from './banking-guidance';
 import { withActionPolicy } from '@/lib/action-summary';
 import { listProducts } from '@/lib/db/repositories/investment';
+import { invalidRequestedComparison, requestedComparison } from '@/lib/request-constraints';
 import { withRealToolResult } from './message-normalize';
 import type { ModelRuntime } from './providers/types';
 import { getOrCreateSession, loadSession, saveSession } from './session';
@@ -160,6 +161,7 @@ interface TurnBuffer {
   sourceAccounts: Map<string, string>;
   requestText?: string;
   providedFields?: GuidanceField[];
+  serverGuidance?: BankingGuidance;
   /**
    * SERVER-tracked ids of the messages already grounded this turn. The grounding module no longer
    * skips on a text marker, so idempotency MUST be keyed here — on the server-owned message id —
@@ -185,7 +187,7 @@ function groundMessage(buffer: TurnBuffer, message: ChatMessage | null, guidance
     const pendingEvent = [...buffer.events].reverse().find(event => event.type === 'mfa_required' || event.type === 'confirmation_required');
     message.content = renderFinancialResponse(buffer.factResults, {
       requestText: buffer.requestText,
-      guidance: filterMissingFields(guidance, buffer.providedFields ?? []),
+      guidance: buffer.serverGuidance ?? filterMissingFields(guidance, buffer.providedFields ?? []),
       locked: buffer.events.some(event => event.type === 'security_event' && event.kind === 'locked'),
       ...(pendingEvent?.type === 'mfa_required' ? { pending: 'mfa' as const }
         : pendingEvent?.type === 'confirmation_required' ? { pending: 'confirmation' as const } : {}),
@@ -534,7 +536,9 @@ export async function runTurn(
   // Validate product presence against the real catalogue. This read only calibrates questions;
   // it is not a tool result, a financial statement, an ownership check or an authorization.
   try {
-    buffer.providedFields = providedRequestFields(req.message, /理财|申购|认购|产品|基金/.test(req.message) ? await listProducts() : []);
+    const products = /理财|申购|认购|产品|基金/.test(req.message) || requestedComparison(req.message).length > 0 ? await listProducts() : [];
+    buffer.providedFields = providedRequestFields(req.message, products);
+    if (invalidRequestedComparison(req.message, products)) buffer.serverGuidance = { code: 'product_selection_invalid' };
   } catch { buffer.providedFields = []; }
   buffer.events.push({ type: 'session', sessionId: snapshot.sessionId });
 

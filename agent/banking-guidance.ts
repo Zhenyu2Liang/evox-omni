@@ -7,6 +7,7 @@ const MISSING_FIELDS = {
   reminder_content: '提醒内容', subscription: '订阅名称', limit_category: '消费限额分类',
 } as const;
 const CAPABILITY_MESSAGES = {
+  product_selection_invalid: '未找到你指定的理财产品，或产品选择与请求不一致。请先查询产品列表，再明确准确名称或代码；不会自动替换成其他产品。',
   partial_redemption_unsupported: '本 Demo 只支持整笔持仓全额赎回，不支持部分赎回。本次未创建赎回授权。如需全额赎回，请明确说明；也可先查询持仓。',
   investment_funding_account_unsupported: '本 Demo 的理财申购仅支持活期账户，不能使用储蓄账户。本次未创建申购授权，也不会替你更换付款账户。如接受活期账户，请重新明确发起申购。',
   credit_line_adjustment_unsupported: '本 Demo 支持设置卡片的分类消费限额，不支持修改信用卡总授信额度。本次未创建额度调整授权。如需分类限额，请说明分类和金额。',

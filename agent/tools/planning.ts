@@ -30,6 +30,7 @@ import type {
 } from '@/lib/contracts/task';
 import { dag, executor, type NodeExecutionContext, type PlanToolOutcome } from '@/planner';
 import { AppError } from '@/lib/errors';
+import { assertRequestedProducts, enforceRequestedOrder, requestEntityAliases } from '@/lib/request-constraints';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import {
@@ -67,6 +68,8 @@ export type PlanRunTool = (
 export interface SubmitPlanDeps {
   /** Session that owns the plan (persisted as `AgentTask`/`AgentTaskNode`). */
   sessionId: string;
+  /** Trusted current user text; model-proposed goal/names cannot supply request constraints. */
+  userRequest?: () => string;
   /** Gateway-routed per-node runner (see `PlanRunTool`). */
   runTool: PlanRunTool;
   /** Called on every node status change; the agent forwards it as the `plan_update` stream event. */
@@ -132,6 +135,7 @@ export const SubmitPlanParams = Type.Object({
       id: Type.String({ description: '节点唯一 id' }),
       name: Type.String({ description: '节点名称' }),
       dependencies: Type.Array(Type.String(), { description: '依赖的节点 id 列表' }),
+      after: Type.Optional(Type.Array(Type.String(), { description: '仅等待结束的顺序依赖，不继承条件为 false 的分支跳过' })),
       kind: Type.String({ description: '节点类型：tool | condition | note' }),
       tool: Type.Optional(Type.String({ description: 'kind=tool 时调用的工具名' })),
       args: Type.Optional(Type.Object({}, { description: 'kind=tool 时工具参数' })),
@@ -159,6 +163,7 @@ function toTaskNodeSpec(node: IncomingPlanNode): TaskNodeSpec {
     id: node.id,
     name: node.name,
     dependencies: node.dependencies,
+    ...(node.after ? { after: node.after } : {}),
     kind: node.kind as TaskNodeKind,
     tool: node.tool,
     args: node.args as Record<string, unknown> | undefined,
@@ -270,7 +275,13 @@ export async function runSubmitPlan(
     return { ok: false, error: '缺少计划节点（nodes）' };
   }
 
-  const nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
+  let nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
+  try {
+    const request = deps.userRequest?.() ?? '';
+    await assertRequestedProducts('submit_plan', {}, request);
+    for (const node of nodes) if (node.tool) await assertRequestedProducts(node.tool, node.args ?? {}, request);
+    nodes = enforceRequestedOrder(nodes, request, request ? await requestEntityAliases(userId) : undefined);
+  } catch (error) { return { ok: false, error: AppError.from(error).message }; }
 
   const knownTools = new Set<string>(KNOWN_TOOL_NAMES);
   const validation = dag.validatePlan(nodes, knownTools);
@@ -300,6 +311,7 @@ export async function runSubmitPlan(
         args: node.args ?? null,
         condition: node.condition ?? null,
         dependencies: node.dependencies,
+        after: node.after,
         status: 'pending',
       });
     }

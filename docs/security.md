@@ -420,6 +420,12 @@ interface BreakerSnapshot { failures: number; locked: boolean; lockedAt: Date | 
 
 ## 12. 沙箱保证 · Sandbox Guarantees
 
+### 用户显式回退与请求约束
+
+`POST /api/tasks/[id]` 的 `rollback` 仅在本人会话的已取消计划上生效，不是模型工具。服务端从原成功节点结果定位资源，并核实 owner 与 `nodeExecutionKey`；预算仅 RESERVED→RELEASED，定时记录仅 SCHEDULED→CANCELLED。原执行输出/状态不改写。撤销、节点 compensation 回执及严格 `rollback_task` 审计同事务；并发/重复请求复用回执，审计失败全部回滚。已入账资金、理财、卡片变更保留；已使用或归属不符的资源记 conflict，由人工核对。
+
+产品选择用当前用户请求的明确名称/代码和对比命令校验，不允许模型用相似产品替换；整计划在任何节点执行前检查。明确顺序通过服务端校验的 `after` 依赖持久化，与条件成功依赖分开。不能把这一有界语法校验宣称为任意自然语言意图的完整证明。
+
 演示严格限定在安全沙箱内：
 
 - **没有真实银行**：所有数据都在 SQLite 中模拟（种子用户**李明**，活期 ¥23,580 等）。
