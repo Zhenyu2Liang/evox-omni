@@ -13,6 +13,8 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 
 - `request-constraints.ts` validates exact product comparisons, ordered steps and explicit success prerequisites before plan creation. `request-purchases.ts` binds each purchase to its own product/cent amount and rejects extra/missing plan nodes; it is pure and never changes permissions. Ambiguous conditions fail before writes. Resource aliases use repositories and never model-written node labels.
 
+  `resolveRequestedRedemptions` canonicalizes fresh plan selectors through the existing owner-scoped resolver and requires a current HOLDING. `requestEntityAliases` includes only the user's active holdings and their actual product metadata. Negation after an operation is not an operation veto; condition references are handled separately. These checks do not replace write-time ownership, quote or MFA checks.
+
 - `errors.ts` — `ErrorCode`, `AppError` (+ `AppError.from`), `Result<T>`, `ok()` / `err()`.
   Project-wide convention: return `Result<T>` or throw `AppError` at tool/SDK boundaries.
 - `money.ts` — CNY helpers: `CNY` (`'¥'`), `round2`, `formatCNY` (`¥1,234.56`, negatives `-¥...`),

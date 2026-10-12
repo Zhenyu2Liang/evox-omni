@@ -1,9 +1,10 @@
-import { listProducts } from './db/repositories/investment';
+import { listProducts, listHoldings } from './db/repositories/investment';
 import { listContacts } from './db/repositories/contact';
 import { listCards } from './db/repositories/card';
 import { listSubscriptions } from './db/repositories/subscription';
 import { AppError } from './errors';
 import type { TaskNodeSpec } from './contracts/task';
+import { resolveBankingArgs } from './banking-selectors';
 import { assertPurchase, assertPlanPurchases, normalizeProduct as normalize, productAliases as aliases,
   type RequestProduct as Product } from './request-purchases';
 
@@ -24,8 +25,8 @@ export function invalidRequestedComparison(request: string, products: readonly P
 
 /** Identity aliases are read from owned resources, never from model-generated node labels. */
 export async function requestEntityAliases(userId: string): Promise<ReadonlyMap<string, string[]>> {
-  const [contacts, cards, subscriptions, products] = await Promise.all([
-    listContacts(userId), listCards(userId), listSubscriptions(userId), listProducts(),
+  const [contacts, cards, subscriptions, products, holdings] = await Promise.all([
+    listContacts(userId), listCards(userId), listSubscriptions(userId), listProducts(), listHoldings(userId, 'HOLDING'),
   ]);
   return new Map([
     ...contacts.map(row => [row.id, [row.name, row.phone]] as [string, string[]]),
@@ -33,7 +34,20 @@ export async function requestEntityAliases(userId: string): Promise<ReadonlyMap<
       ...(row.type === 'CREDIT' ? ['信用卡'] : row.type === 'DEBIT' ? ['借记卡', '储蓄卡'] : ['虚拟卡'])]] as [string, string[]]),
     ...subscriptions.map(row => [row.id, [row.name]] as [string, string[]]),
     ...products.map(row => [row.id, [row.name, row.code]] as [string, string[]]),
+    ...holdings.map(row => [row.id, [row.id, row.productId, row.product.name, row.product.code]] as [string, string[]]),
   ]);
+}
+
+/** Fresh plans bind a unique currently owned holding before earlier nodes can write. */
+export async function resolveRequestedRedemptions(userId: string, nodes: TaskNodeSpec[]): Promise<TaskNodeSpec[]> {
+  if (!nodes.some(node => node.kind === 'tool' && node.tool === 'redeem_investment')) return nodes;
+  const active = new Set((await listHoldings(userId, 'HOLDING')).map(row => row.id));
+  return Promise.all(nodes.map(async node => {
+    if (node.kind !== 'tool' || node.tool !== 'redeem_investment') return node;
+    const args = await resolveBankingArgs(userId, 'redeem_investment', node.args ?? {});
+    if (!active.has(String(args.holdingId))) throw new AppError('VALIDATION', '该持仓当前不可赎回，请查询本人有效持仓；尚未执行计划。');
+    return { ...node, args };
+  }));
 }
 
 function investmentComparison(request: string, products: readonly Product[]): string[] {
@@ -113,10 +127,11 @@ export function enforceRequestedOrder(nodes: TaskNodeSpec[], request: string, na
       matches = matches.filter(i => [...amountSpans[i].matchAll(/\d+(?:\.\d+)?/g)].some(value => Number(value[0]) === Number(amount)));
     }
     if (matches.length > 1) {
-      const selectors = ['name', 'phone', 'contactId', 'cardId', 'subscriptionId', 'productId']
+      const selectors = ['name', 'phone', 'contactId', 'cardId', 'subscriptionId', 'productId', 'holdingId']
         .map(field => node.args?.[field]).filter((value): value is string => typeof value === 'string');
       const literals = selectors.flatMap(value => names.get(value) ?? [value]);
-      const selected = matches.filter(i => literals.some(value => phases[i].toLowerCase().includes(value.toLowerCase())));
+      const exact = matches.filter(i => selectors.some(value => phases[i].toLowerCase().includes(value.toLowerCase())));
+      const selected = exact.length ? exact : matches.filter(i => literals.some(value => phases[i].toLowerCase().includes(value.toLowerCase())));
       if (selected.length) matches = selected;
     }
     if (matches.length !== 1) {
@@ -152,7 +167,7 @@ function nodesInSpan(nodes: readonly TaskNodeSpec[], span: string, names: Readon
   const amounts = [...span.matchAll(/(\d+(?:\.\d+)?)\s*元/g)].map(match => Number(match[1]));
   if (candidates.length > 1 && amounts.length) candidates = candidates.filter(node => amounts.includes(Number(node.args?.amount)));
   if (candidates.length > 1) {
-    const specific = candidates.filter(node => ['name', 'phone', 'contactId', 'cardId', 'subscriptionId', 'productId']
+    const specific = candidates.filter(node => ['name', 'phone', 'contactId', 'cardId', 'subscriptionId', 'productId', 'holdingId']
       .some(field => typeof node.args?.[field] === 'string' && (names.get(node.args[field] as string) ?? [node.args[field] as string])
         .some(alias => span.toLowerCase().includes(alias.toLowerCase()))));
     if (specific.length) candidates = specific;

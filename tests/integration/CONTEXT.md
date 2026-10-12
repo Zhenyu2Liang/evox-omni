@@ -1,5 +1,7 @@
 # integration — Maintained cross-module regressions
 
+`request-scope-holdings.test.ts` retains the two failing 110e20a probes and validates qualifier scope, complete-plan repair, real confirmation/MFA, owned current-holding binding, ambiguity/foreign/inactive refusals before automatic writes and distinct same-product holding IDs. Controlled transport is not genuine DeepSeek evidence.
+
 `live-complete-plan.test.ts` rejects standalone first writes and incomplete DAGs before any authorization or automatic budget. A bounded repair creates one complete plan; confirmations resume its persisted nodes with no model narration or duplicate debits. Transport is controlled, not genuine DeepSeek.
 
 live-recovery.test.ts drives real Pi/gateway/SQLite through bounded planning failures, no-effect

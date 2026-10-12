@@ -30,7 +30,7 @@ import type {
 } from '@/lib/contracts/task';
 import { dag, executor, type NodeExecutionContext, type PlanToolOutcome } from '@/planner';
 import { AppError } from '@/lib/errors';
-import { assertRequestedPlanProducts, enforceRequestedOrder, enforceRequestedSuccess, requestEntityAliases } from '@/lib/request-constraints';
+import { assertRequestedPlanProducts, enforceRequestedOrder, enforceRequestedSuccess, requestEntityAliases, resolveRequestedRedemptions } from '@/lib/request-constraints';
 import { assertCompleteRequestedPlan } from '@/lib/request-steps';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
@@ -262,6 +262,7 @@ export function createSubmitPlanTool(
 export async function preflightRequestedPlan(userId: string, args: Record<string, unknown>, request: string): Promise<TaskNodeSpec[]> {
   if (!Array.isArray(args.nodes)) throw new AppError('VALIDATION', '缺少计划节点（nodes）');
   let nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
+  nodes = await resolveRequestedRedemptions(userId, nodes);
   await assertRequestedPlanProducts(nodes, request);
   const names = request ? await requestEntityAliases(userId) : undefined;
   nodes = enforceRequestedOrder(nodes, request, names);
