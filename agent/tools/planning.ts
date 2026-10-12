@@ -30,6 +30,8 @@ import type {
 } from '@/lib/contracts/task';
 import { dag, executor, type NodeExecutionContext, type PlanToolOutcome } from '@/planner';
 import { AppError } from '@/lib/errors';
+import { assertRequestedPlanProducts, enforceRequestedOrder, enforceRequestedSuccess, requestEntityAliases, resolveRequestedRedemptions } from '@/lib/request-constraints';
+import { assertCompleteRequestedPlan } from '@/lib/request-steps';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import {
@@ -67,6 +69,8 @@ export type PlanRunTool = (
 export interface SubmitPlanDeps {
   /** Session that owns the plan (persisted as `AgentTask`/`AgentTaskNode`). */
   sessionId: string;
+  /** Trusted current user text; model-proposed goal/names cannot supply request constraints. */
+  userRequest?: () => string;
   /** Gateway-routed per-node runner (see `PlanRunTool`). */
   runTool: PlanRunTool;
   /** Called on every node status change; the agent forwards it as the `plan_update` stream event. */
@@ -132,10 +136,15 @@ export const SubmitPlanParams = Type.Object({
       id: Type.String({ description: '节点唯一 id' }),
       name: Type.String({ description: '节点名称' }),
       dependencies: Type.Array(Type.String(), { description: '依赖的节点 id 列表' }),
+      after: Type.Optional(Type.Array(Type.String(), { description: '仅等待结束的顺序依赖，不继承条件为 false 的分支跳过' })),
       kind: Type.String({ description: '节点类型：tool | condition | note' }),
       tool: Type.Optional(Type.String({ description: 'kind=tool 时调用的工具名' })),
       args: Type.Optional(Type.Object({}, { description: 'kind=tool 时工具参数' })),
-      condition: Type.Optional(Type.Object({}, { description: 'kind=condition 时的判断条件' })),
+      condition: Type.Optional(Type.Object({
+        path: Type.String({ description: '依赖节点输出路径，例如 n1.total（消费分析），n1.totalAvailable（余额查询）' }),
+        op: Type.Union(['>', '>=', '<', '<=', '==', '!='].map(value => Type.Literal(value))),
+        value: Type.Union([Type.Number(), Type.String(), Type.Boolean()]),
+      }, { description: 'kind=condition 时必须使用 path/op/value，不使用 left/right/type' })),
     }),
     { description: 'DAG 节点列表' },
   ),
@@ -155,6 +164,7 @@ function toTaskNodeSpec(node: IncomingPlanNode): TaskNodeSpec {
     id: node.id,
     name: node.name,
     dependencies: node.dependencies,
+    ...(node.after ? { after: node.after } : {}),
     kind: node.kind as TaskNodeKind,
     tool: node.tool,
     args: node.args as Record<string, unknown> | undefined,
@@ -249,6 +259,18 @@ export function createSubmitPlanTool(
  * concurrent run already owns the plan, or any node fails; a gated node surfaces via the plan
  * snapshot (`waiting_confirmation`/`waiting_verification`).
  */
+export async function preflightRequestedPlan(userId: string, args: Record<string, unknown>, request: string): Promise<TaskNodeSpec[]> {
+  if (!Array.isArray(args.nodes)) throw new AppError('VALIDATION', '缺少计划节点（nodes）');
+  let nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
+  nodes = await resolveRequestedRedemptions(userId, nodes);
+  await assertRequestedPlanProducts(nodes, request);
+  const names = request ? await requestEntityAliases(userId) : undefined;
+  nodes = enforceRequestedOrder(nodes, request, names);
+  nodes = enforceRequestedSuccess(nodes, request, names);
+  assertCompleteRequestedPlan(nodes, request, names);
+  return nodes;
+}
+
 export async function runSubmitPlan(
   userId: string,
   args: Record<string, unknown>,
@@ -266,7 +288,10 @@ export async function runSubmitPlan(
     return { ok: false, error: '缺少计划节点（nodes）' };
   }
 
-  const nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
+  let nodes: TaskNodeSpec[];
+  try {
+    nodes = await preflightRequestedPlan(userId, args, deps.userRequest?.() ?? '');
+  } catch (error) { return { ok: false, error: AppError.from(error).message }; }
 
   const knownTools = new Set<string>(KNOWN_TOOL_NAMES);
   const validation = dag.validatePlan(nodes, knownTools);
@@ -296,6 +321,7 @@ export async function runSubmitPlan(
         args: node.args ?? null,
         condition: node.condition ?? null,
         dependencies: node.dependencies,
+        after: node.after,
         status: 'pending',
       });
     }

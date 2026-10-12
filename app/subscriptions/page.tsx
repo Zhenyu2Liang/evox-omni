@@ -38,6 +38,9 @@ function totalAnnualCost(rows: SubscriptionView[]): number {
   return rows.reduce((sum, row) => addMoney(sum, annualCost(row)), 0);
 }
 
+// Reads live Prisma data, so it must render per request — never statically prerendered at build.
+export const dynamic = 'force-dynamic';
+
 export default async function SubscriptionsPage() {
   const userId = getConfig().demoUserId;
 

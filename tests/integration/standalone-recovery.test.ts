@@ -247,6 +247,7 @@ it('a STANDALONE set_card_limit wedge is never replayed (needs_reconciliation) a
   // the wedged tool, it would clobber this back to ¥1500 — the assertion below catches any replay.
   await p.cardLimit.updateMany({ where: limitWhere, data: { amount: 500 } });
 
+  const txBeforeRepeat = await p.transaction.count({ where: { userId } });
   const repeated = await confirmRaw(id, s);
   const stored = await p.pendingAction.findUnique({ where: { id } });
   const finalLimits = await p.cardLimit.findMany({ where: limitWhere });
@@ -274,7 +275,7 @@ it('a STANDALONE set_card_limit wedge is never replayed (needs_reconciliation) a
   expect(stored?.status).toBe('needs_reconciliation');
   expect(finalLimits.length).toBe(1); // no duplicate limit row
   expect(finalLimits[0].amount).toBe(500); // NOT re-applied — the tool was never re-invoked
-  expect(txAfter).toBe(30); // no ledger movement
+  expect(txAfter).toBe(txBeforeRepeat); // no ledger movement
   expect(balance).toBe(CHECKING_BALANCE);
   expect(listed.ids).toContain(id); // `needs_reconciliation` MUST be surfaced
 });

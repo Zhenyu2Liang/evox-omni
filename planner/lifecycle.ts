@@ -104,6 +104,7 @@ function snapshotWith(
       };
     }),
     createdAt: plan.createdAt,
+    generation: plan.generation,
     updatedAt,
   };
 }

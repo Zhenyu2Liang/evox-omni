@@ -1,0 +1,226 @@
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { executeGatedTool, getOrCreateSession, rollbackTask } from '@/agent';
+import { runTurn, loadSession } from '@/agent';
+import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
+import { runSubmitPlan } from '@/agent/tools/planning';
+import { initialChatUIState, reduceAgentEvents } from '@/components/chat/useAgentStream';
+import { pausePlan } from '@/planner/lifecycle';
+import { assertRequestedProducts, enforceRequestedOrder, invalidRequestedComparison } from '@/lib/request-constraints';
+import { auditStore } from '@/audit/audit-logger';
+import type { TaskNodeSpec, TaskPlan } from '@/lib/contracts/task';
+import { POST as taskPost, GET as taskGet } from '@/app/api/tasks/[id]/route';
+import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
+import { idCtx, postJson, getJson, taskUrl, actionUrl } from '@/tests/app/harness';
+import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
+
+const userId = 'user_liming';
+beforeEach(() => resetDatabase(), 30000);
+afterEach(() => vi.restoreAllMocks());
+afterAll(() => disconnectTestPrisma());
+const node = (id: string, tool: string, args = {}, dependencies: string[] = []): TaskNodeSpec => ({ id, name: id, kind: 'tool', tool, args, dependencies });
+const runner = (sessionId: string, request = '') => (tool: string, args: Record<string, unknown>, ctx: { taskId: string; nodeId: string }) =>
+  executeGatedTool({ sessionId, userId, toolName: tool as Parameters<typeof executeGatedTool>[0]['toolName'], args,
+    userRequest: request, ...ctx });
+async function control(sessionId: string, taskId: string, action: string) {
+  return postJson<{ ok: boolean; data: TaskPlan }>((req) => taskPost(req, idCtx(taskId)), taskUrl(taskId), { action }, { sessionId });
+}
+async function confirmNode(sessionId: string, taskId: string, nodeId: string) {
+  const action = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { taskId, nodeId, status: 'pending' } });
+  const response = await postJson<{ data: { events: { type: string; actionId?: string; action?: { toolName: string } }[] } }>((req) => confirmPost(req, idCtx(action.id)), actionUrl(action.id, 'confirm'), {}, { sessionId });
+  expect(response.status).toBe(200);
+  const next = response.data!.data.events.find(event => event.type === 'confirmation_required' && event.actionId !== action.id);
+  expect(next?.action?.toolName).toBe(nodeId === 'reminder' ? 'transfer_money' : 'set_card_limit');
+}
+async function partialPlan() {
+  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const result = await runSubmitPlan(userId, { goal: 'partial plan', nodes: [
+    node('budget', 'reserve_budget', { name: 'rollback-budget', amount: 99.99 }),
+    node('reminder', 'create_scheduled_task', { name: 'rollback-reminder', kind: 'REMINDER', runAtLocal: '2026-11-20T09:00' }, ['budget']),
+    node('transfer', 'transfer_money', { name: '张伟', amount: 12.34 }, ['reminder']),
+    node('limit', 'set_card_limit', { cardId: 'card_credit', category: '娱乐', amount: 1500.25 }, ['transfer']),
+  ] }, { sessionId, runTool: runner(sessionId) });
+  expect(result.ok).toBe(true);
+  const taskId = (result.data as TaskPlan).id;
+  await confirmNode(sessionId, taskId, 'reminder');
+  await confirmNode(sessionId, taskId, 'transfer');
+  return { sessionId, taskId };
+}
+
+describe('trusted product selection', () => {
+  it('shows a server-authored clarification even when the model only lists products and uses ordinary prose', async () => {
+    const mock = fauxProvider(), models = createModels(); models.setProvider(mock.provider);
+    mock.setResponses([
+      fauxAssistantMessage([fauxToolCall('list_investments', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage('Here are the available products.'),
+    ]);
+    const result = await runTurn({ message: '对比稳健理财A和进取理财B的风险，然后申购稳健理财A1000.13元' },
+      { provider: { model: mock.getModel(), streamFn: models.streamSimple.bind(models) } });
+    const final = result.events.filter(event => event.type === 'message_end').at(-1)!;
+    if (final.type !== 'message_end') throw new Error('missing final message');
+    expect(final.message.content).toContain('不会自动替换成其他产品');
+    expect(final.message.content).toContain('未找到你指定的理财产品');
+    expect((await loadSession(result.sessionId))?.transcript.at(-1)?.content).toBe(final.message.content);
+    expect(await getTestPrisma().pendingAction.count()).toBe(0);
+  });
+  it('rejects an unknown comparison product and stops a follow-on purchase before authorization', async () => {
+    const sessionId = (await getOrCreateSession(userId)).sessionId;
+    const request = '对比稳健理财A和进取理财B的风险，然后申购稳健理财A 1000.13元';
+    const comparison = await executeGatedTool({ sessionId, userId, toolName: 'compare_investments',
+      args: { productIds: ['prod_wenjiana', 'prod_wenjib'] }, userRequest: request });
+    expect(comparison.ok).toBe(false);
+    expect(comparison.error).toContain('不会自动替换');
+    const purchase = await executeGatedTool({ sessionId, userId, toolName: 'subscribe_investment',
+      args: { productId: 'prod_wenjiana', amount: 1000.13 }, userRequest: request });
+    expect(purchase.ok).toBe(false);
+    expect(await getTestPrisma().pendingAction.count()).toBe(0);
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(23580);
+  });
+  it('accepts exact quoted names/codes, rejects dropped or substituted known products', async () => {
+    await expect(assertRequestedProducts('compare_investments', { productIds: ['prod_wenjiana', 'prod_wenjib'] }, '对比“稳健理财A”和“稳健理财B”的风险')).resolves.toBeUndefined();
+    await expect(assertRequestedProducts('compare_investments', { productIds: ['prod_wenjiana', 'prod_wenjib'] }, '对比一下理财产品稳健理财A与稳健理财B')).resolves.toBeUndefined();
+    await expect(assertRequestedProducts('compare_investments', { productIds: ['prod_wenjiana'] }, '对比WJA001与WJB002')).rejects.toThrow('对象与本次请求不一致');
+    await expect(assertRequestedProducts('subscribe_investment', { productId: 'prod_wenjib' }, '申购稳健理财A 1000元')).rejects.toThrow('申购产品与本次请求不一致');
+    const products = await getTestPrisma().investmentProduct.findMany();
+    expect(invalidRequestedComparison('对比WJA001与WJB002', products)).toBe(false);
+    expect(invalidRequestedComparison('对比信用卡与借记卡，另申购稳健理财A', products)).toBe(false);
+  });
+  it('preflights the whole plan before a leading automatic write', async () => {
+    const sessionId = (await getOrCreateSession(userId)).sessionId;
+    const result = await runSubmitPlan(userId, { goal: 'invented goal', nodes: [
+      node('a', 'reserve_budget', { name: 'must-not-exist', amount: 3.33 }),
+      node('b', 'compare_investments', { productIds: ['prod_wenjiana', 'prod_wenjib'] }),
+    ] }, { sessionId, runTool: runner(sessionId), userRequest: () => '先预留3.33元，再对比稳健理财A和进取理财B' });
+    expect(result.ok).toBe(false);
+    expect(await getTestPrisma().budget.count({ where: { name: 'must-not-exist' } })).toBe(0);
+    expect(await getTestPrisma().agentTask.count()).toBe(0);
+  });
+});
+
+describe('explicit order without false-condition propagation', () => {
+  const request = '先预留99.99元出游预算，再查询2026年9月消费；若消费超过999999元就将信用卡娱乐限额设置为1500.25元；最后创建2026年11月20日09:00的出游提醒';
+  const nodes: TaskNodeSpec[] = [
+    node('reminder', 'create_scheduled_task', { name: 'ordered-reminder', kind: 'REMINDER', runAtLocal: '2026-11-20T09:00' }),
+    node('limit', 'set_card_limit', { cardId: 'card_credit', category: '娱乐', amount: 1500.25 }, ['condition']),
+    { id: 'condition', name: 'condition', kind: 'condition', dependencies: ['spending'], condition: { path: 'spending.total', op: '>', value: 999999 } },
+    node('spending', 'analyze_spending', { month: '2026-09' }),
+    node('budget', 'reserve_budget', { name: 'ordered-budget', amount: 99.99 }),
+  ];
+  it('corrects shuffled root nodes, persists order edges, and still offers the final reminder when the condition is false', async () => {
+    const sessionId = (await getOrCreateSession(userId)).sessionId;
+    const result = await runSubmitPlan(userId, { goal: 'model goal does not establish order', nodes },
+      { sessionId, runTool: runner(sessionId, request), userRequest: () => request });
+    expect(result.ok).toBe(true);
+    const plan = result.data as TaskPlan;
+    expect(plan.nodes.find(n => n.id === 'spending')?.after).toContain('budget');
+    expect(plan.nodes.find(n => n.id === 'reminder')?.after).toEqual(expect.arrayContaining(['spending', 'condition', 'limit']));
+    expect(plan.results.find(n => n.id === 'condition')?.status).toBe('skipped');
+    expect(plan.results.find(n => n.id === 'limit')?.status).toBe('skipped');
+    expect(plan.results.find(n => n.id === 'reminder')?.status).toBe('waiting_confirmation');
+    expect(await getTestPrisma().pendingAction.count({ where: { toolName: 'set_card_limit' } })).toBe(0);
+    const read = await getJson<{ data: TaskPlan }>((req) => taskGet(req, idCtx(plan.id)), taskUrl(plan.id), { sessionId });
+    expect(read.data!.data.nodes).toEqual(plan.nodes);
+    expect(read.data!.data.generation).toBe(plan.generation);
+  });
+  it('recognizes unpunctuated order and fails closed for repeated ambiguous same-tool steps', () => {
+    expect(enforceRequestedOrder([node('b', 'get_balance'), node('t', 'transfer_money', { amount: 2 })], '先查询余额再转账2元')[1].after).toContain('b');
+    expect(enforceRequestedOrder([node('b', 'get_balance'), node('t', 'transfer_money', { amount: 2 })], '先查询余额，再给张伟转账2元')[1].after).toContain('b');
+    const aliases = new Map([['contact_zhangwei', ['张伟']], ['contact_lihua', ['李华']]]);
+    const bound = enforceRequestedOrder([
+      node('a', 'transfer_money', { amount: 2, contactId: 'contact_zhangwei' }),
+      node('b', 'transfer_money', { amount: 2, contactId: 'contact_lihua' }),
+    ], '先转账2元给张伟，再转账2元给李华', aliases);
+    expect(bound[1].after).toContain('a');
+    expect(() => enforceRequestedOrder([node('a', 'transfer_money', { amount: 2 }), node('b', 'transfer_money', { amount: 2 })], '先转账2元给张伟，再转账2元给李华')).toThrow('对应关系');
+  });
+});
+
+describe('cancel snapshot and transactional compensation', () => {
+  it('forwards the next RED decision with its own complete summary after a YELLOW confirmation', async () => {
+    const sessionId = (await getOrCreateSession(userId)).sessionId;
+    const result = await runSubmitPlan(userId, { goal: 'two transfers', nodes: [
+      node('small', 'transfer_money', { name: '张伟', amount: 20 }),
+      node('large', 'transfer_money', { name: '李华', amount: 1200.12 }, ['small']),
+    ] }, { sessionId, runTool: runner(sessionId) });
+    const taskId = (result.data as TaskPlan).id;
+    const first = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { taskId, nodeId: 'small' } });
+    const response = await postJson<{ data: { events: { type: string; actionId?: string; action?: { tier: string; fields: unknown[] } }[] } }>(
+      req => confirmPost(req, idCtx(first.id)), actionUrl(first.id, 'confirm'), {}, { sessionId });
+    expect(response.status).toBe(200);
+    const gate = response.data!.data.events.find(event => event.type === 'mfa_required');
+    const next = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { taskId, nodeId: 'large' } });
+    expect(gate?.actionId).toBe(next.id);
+    expect(gate?.action?.tier).toBe('RED');
+    expect(gate?.action?.fields).toContainEqual({ label: '收款人', value: '李华' });
+    expect(gate?.action?.fields).toContainEqual({ label: '金额', value: '¥1,200.12' });
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(23560);
+    expect(next.status).toBe('awaiting_mfa');
+  });
+  it('returns current generation/time after pause, resume, cancel and rejects late nonterminal UI events', async () => {
+    const { sessionId, taskId } = await partialPlan();
+    await control(sessionId, taskId, 'pause');
+    await control(sessionId, taskId, 'resume');
+    const response = await control(sessionId, taskId, 'cancel');
+    const stored = await getTestPrisma().agentTask.findUniqueOrThrow({ where: { id: taskId } });
+    const plan = response.data!.data;
+    expect(plan.status).toBe('cancelled');
+    expect(plan.generation).toBe(stored.generation);
+    expect(plan.updatedAt).toBe(stored.updatedAt.getTime());
+    expect(pausePlan({ ...plan, status: 'running' }, { now: () => 1 }).generation).toBe(plan.generation);
+    const state = initialChatUIState({ activePlan: plan });
+    const next = reduceAgentEvents(state, [{ type: 'plan_update', plan: { ...plan, status: 'waiting_confirmation', generation: (plan.generation ?? 0) + 1 } }]);
+    expect(next.activePlan?.status).toBe('cancelled');
+  });
+  it('reverts only owned budget/task records, keeps transfer facts, and repeats/concurrency do not duplicate audit', async () => {
+    const { sessionId, taskId } = await partialPlan();
+    await control(sessionId, taskId, 'cancel');
+    const db = getTestPrisma();
+    const before = await db.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
+    const executions = await db.agentTaskNode.findMany({ where: { taskId, status: 'success' }, select: { nodeId: true, output: true } });
+    const responses = await Promise.all([control(sessionId, taskId, 'rollback'), control(sessionId, taskId, 'rollback')]);
+    expect(responses.map(res => res.status)).toEqual([200, 200]);
+    expect((await db.budget.findFirstOrThrow({ where: { name: 'rollback-budget' } })).status).toBe('RELEASED');
+    expect((await db.scheduledTask.findFirstOrThrow({ where: { name: 'rollback-reminder' } })).status).toBe('CANCELLED');
+    expect((await db.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(before.balance);
+    expect(await db.transaction.count({ where: { channel: 'TRANSFER', amount: -12.34 } })).toBe(1);
+    expect(await db.agentTaskNode.findMany({ where: { taskId, status: 'success' }, select: { nodeId: true, output: true } })).toEqual(executions);
+    expect(await db.auditLog.count({ where: { toolName: 'rollback_task' } })).toBe(3);
+    const transfer = responses[0].data!.data.results.find(row => row.id === 'transfer')!;
+    expect(transfer.compensation?.status).toBe('retained');
+    const read = await getJson<{ data: TaskPlan }>((req) => taskGet(req, idCtx(taskId)), taskUrl(taskId), { sessionId });
+    expect(read.data!.data.results.filter(row => row.compensation?.status === 'reverted')).toHaveLength(2);
+  });
+  it('fails closed for active plans and other sessions', async () => {
+    const { sessionId, taskId } = await partialPlan();
+    expect((await control(sessionId, taskId, 'rollback')).status).toBe(409);
+    await control(sessionId, taskId, 'cancel');
+    const other = (await getOrCreateSession(userId)).sessionId;
+    expect((await control(other, taskId, 'rollback')).status).toBe(403);
+    expect((await getTestPrisma().budget.findFirstOrThrow({ where: { name: 'rollback-budget' } })).status).toBe('RESERVED');
+  });
+  it('rolls back compensation, receipts and audits together when a strict audit write fails', async () => {
+    const { sessionId, taskId } = await partialPlan();
+    await control(sessionId, taskId, 'cancel');
+    const insert = auditStore.insertAuditLog;
+    vi.spyOn(auditStore, 'insertAuditLog').mockImplementation((entry, options) => {
+      if (entry.toolName === 'rollback_task' && entry.nodeId === 'budget') throw new Error('audit unavailable');
+      return insert(entry, options);
+    });
+    await expect(rollbackTask(sessionId, taskId)).rejects.toThrow('audit unavailable');
+    const db = getTestPrisma();
+    expect((await db.budget.findFirstOrThrow({ where: { name: 'rollback-budget' } })).status).toBe('RESERVED');
+    expect((await db.scheduledTask.findFirstOrThrow({ where: { name: 'rollback-reminder' } })).status).toBe('SCHEDULED');
+    expect(await db.auditLog.count({ where: { toolName: 'rollback_task' } })).toBe(0);
+    expect(await db.agentTaskNode.count({ where: { taskId, compensation: { not: null } } })).toBe(0);
+  });
+  it('does not revoke a record whose execution identity was replaced or a budget already used', async () => {
+    const { sessionId, taskId } = await partialPlan();
+    await control(sessionId, taskId, 'cancel');
+    const db = getTestPrisma();
+    await db.budget.updateMany({ where: { name: 'rollback-budget' }, data: { status: 'USED' } });
+    await db.scheduledTask.updateMany({ where: { name: 'rollback-reminder' }, data: { idempotencyKey: 'foreign-record' } });
+    const result = await rollbackTask(sessionId, taskId);
+    expect(result.results.filter(row => row.compensation?.status === 'conflict')).toHaveLength(2);
+    expect((await db.budget.findFirstOrThrow({ where: { name: 'rollback-budget' } })).status).toBe('USED');
+    expect((await db.scheduledTask.findFirstOrThrow({ where: { name: 'rollback-reminder' } })).status).toBe('SCHEDULED');
+  });
+});

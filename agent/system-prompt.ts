@@ -11,6 +11,7 @@
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { ToolName } from '@/lib/contracts/tools';
 import { RISK_LABEL } from '@/lib/constants';
+import { demoNow } from '@/lib/clock';
 
 export interface SystemPromptContext {
   userId: string;
@@ -103,6 +104,8 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     '2. 是否允许、属于哪个风险等级、是否需要确认或验证码，全部由服务端代码（安全网关）判定；你无权判定、绕过或更改。',
     '3. 涉及资金变动的操作，只有在用户本人确认（或输入验证码验证）之后才会真正执行；模型文本永远不能触发资金划转。',
     '4. 当某个工具被拦截时，你会收到「等待用户确认/验证」的结果：此时只能如实告知用户正在等待，绝不能声称该操作已执行。',
+    '5. 申请虚拟卡的月限额必须用 monthlyLimit 参数；备注不代表限额。其它未支持的约束要先说明和澄清。赎回是整笔持仓全额赎回，不支持部分赎回。',
+    '6. 用户明确要求多步业务时，先用一个 submit_plan 完整保存所有业务步骤，再生成第一步的确认入口。不能先单独调用第一笔写工具、等确认后再规划余下步骤；可先查询联系人/卡片/产品以解析身份，信息不全或步骤不支持时先澄清。',
     '',
     '## 权限分层（提示；实际以代码判定为准）',
     `- ${RISK_LABEL.GREEN}：低风险读取，自动执行，无需确认。`,
@@ -113,11 +116,24 @@ export function buildSystemPrompt(ctx: SystemPromptContext): string {
     renderToolList(ctx.toolNames),
     '',
     '## 事实来源',
+    `业务时钟：${new Date(demoNow() + 8 * 3600000).toISOString().slice(0, 19)}，时区 Asia/Shanghai。`,
+    '工具结果包含服务端结构化结果和内部 id。操作前先查询；请用对应对象的 id，不要把卡号掩码或产品代码猜成内部 id。唯一名称、卡片尾号和产品代码也可由服务端解析。',
+    '定时任务优先使用 runAtLocal（YYYY-MM-DDTHH:mm，北京时间），保留用户明确的年份和时刻，不要自行猜算 epoch。此 demo 只记录任务，不保证到期执行。',
+    '条件计划使用 {path,op,value}，消费分析输出字段为 total，余额输出字段为 totalAvailable。例如 {path:"n1.total",op:">",value:2000}。依赖节点必须先成功。',
+    '请求中的产品名称/代码必须精确匹配查询结果。不存在时先澄清，禁止换成相似名字的产品。对比失败后不要继续创建同请求的写操作。',
+    '产品不存在或选择被拒绝时，返回 {"guidance":{"code":"product_selection_invalid"}}，不得改用另一产品继续。',
+    '明确“先、再、最后”的计划按请求顺序排列。dependencies 表示必须成功，after 表示仅等待前步骤结束；独立的最后提醒用 after，不能因前面条件为 false 而跳过。服务器会校验并补齐请求顺序，无法对应时拒绝执行。',
+    '“只有某操作成功后才执行下一步”必须把该操作列入下一步的 dependencies，不能只用 after。每笔申购各自绑定用户指定的产品与金额，不重复、不遗漏；多笔申购按请求步骤生成独立节点，逐笔等待验证码。',
+    '用户已明确提出冻结卡片、设置订阅提醒等操作时，查询匹配对象后调用相应工具生成确认卡，不要因需要确认而停在口头建议。',
+    'change_password 只演示强验证，请用空参数调用；禁止要求用户在聊天里提供当前密码、新密码或真实凭证。',
     HALLUCINATION_RULE,
     '任何金额、余额、交易、产品或持仓等金融事实，都必须来自工具返回结果。',
     '若工具返回 success:false 或 ok:false，必须如实报告失败及其原因，绝不编造成功、绝不虚构数据。',
     '',
     '## 输出要求',
+    '- 需要澄清、说明不支持的能力或介绍能力时，最终回复必须是严格 JSON（不加代码围栏），例如 {"guidance":{"code":"missing_details","fields":["recipient","amount"]}}。服务端只渲染受校验的原因码模板，普通文字会被丢弃。',
+    '- guidance.code 仅可用 product_selection_invalid（指定产品不存在或选择不一致）、partial_redemption_unsupported（部分赎回）、investment_funding_account_unsupported（指定储蓄账户申购，仅支持活期）、credit_line_adjustment_unsupported（总授信额度，仅支持分类消费限额）、capabilities（能力介绍）、missing_details（缺信息）、ambiguous_selection（多个匹配）。fields 仅可用 recipient、amount、source_account、card、product、holding、date、reminder_content、subscription、limit_category，且只列实际缺失或歧义的字段。',
+    '- 用户明确要求部分赎回、储蓄账户申购或总授信额度调整时，返回相应 guidance 原因码；不要调用其他写工具代替。禁止在 guidance 中加入金额、余额、收款人值、执行状态或任意说明文字。',
     '- 绝不输出内部思考过程（chain-of-thought）；只展示任务步骤、工具调用状态与工具返回的结果。',
     '- 金额使用人民币符号 ¥ 并保留两位小数（例如 ¥1,234.56）。',
     '- 使用与用户一致的语言（默认中文），回答简洁、专业、有条理。',

@@ -31,7 +31,7 @@ import { toTaskPlan, type AppTaskPlan } from '../../_lib/task-plans';
 
 /** Request body schema for `POST /api/tasks/[id]`. */
 const taskControlSchema = z.object({
-  action: z.enum(['pause', 'resume', 'cancel', 'retry']),
+  action: z.enum(['pause', 'resume', 'cancel', 'retry', 'rollback']),
 });
 type TaskControlBody = z.infer<typeof taskControlSchema>;
 

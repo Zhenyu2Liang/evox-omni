@@ -36,6 +36,7 @@ import {
   fetchDashboardSummary,
   fetchLedger,
   fetchPendingActions,
+  getJson,
   gotoAgent,
   hasAssistantText,
   launchBrowser,
@@ -54,12 +55,14 @@ import {
   waitForAssistantText,
   waitForComposerHydration,
   waitForConfirmCard,
+  waitForElementHydration,
   waitForMfaCard,
   waitForNodeStatus,
   waitForPlanStatus,
   waitForStatusText,
   queryExecutionAudit,
   queryPendingActionStatus,
+  querySecurityEvents,
   seedStandaloneWedge,
   WEDGE_ACTION_ID,
   WEDGE_AMOUNT,
@@ -90,6 +93,12 @@ const MSG = {
    * the PlanCard renders a REAL `暂停`/`取消` control. Used by journeys c (pause/resume) and d (cancel).
    */
   gatedPlan: '如果我这个月消费超过2000，就把信用卡娱乐限额调整到1500元',
+  /** RED `subscribe_investment` (稳健理财A, ≥ ¥1,000) → MFA card; writes a 投资-category DEBIT ledger row. */
+  subscribe: '申购稳健理财A 1000元',
+  /** RED `redeem_investment` (one-shot holding) → MFA card; writes a 投资-category CREDIT ledger row. */
+  redeem: '赎回稳健理财A',
+  /** GREEN `detect_anomaly` → an `anomaly` chat card (the seeded Apple Store ¥6,999 anomaly). */
+  anomaly: '帮我看有没有异常消费',
 } as const;
 
 /** Assistant narration lead emitted on a completed transfer (`NARRATION_LEAD.transfer_money`). */
@@ -519,6 +528,288 @@ async function journeyWedgeRefreshRecover(browser: Browser, baseUrl: string): Pr
   );
 }
 
+/**
+ * (h) INVESTMENT flow: 申购 (RED `subscribe_investment`, ≥ ¥1,000) then 赎回 (RED `redeem_investment`).
+ * Both are RED, so each parks an MFA challenge (mock code `123456`). PRIMARY evidence is RENDERED DOM:
+ * the assistant narration leads `理财申购结果：` / `理财赎回结果：`. SECONDARY: the SDK writes
+ * 投资-category ledger rows (`认购稳健理财A` DEBIT + `赎回` CREDIT) — cross-checked via `GET /api/bills`.
+ * The 稳健理财A holding is ONE-SHOT (a second redeem is a `CONFLICT`), so redeem is typed once per run.
+ */
+async function journeyInvestmentFlow(browser: Browser, baseUrl: string): Promise<string> {
+  return withPage(
+    browser,
+    async (page) => {
+      await gotoAgent(page, baseUrl);
+
+      await submitChat(page, MSG.subscribe);
+      await waitForMfaCard(page);
+      await submitMfa(page, '123456');
+      // The narration lead IS the success evidence (the SAME pattern journey b uses for a RED verify):
+      // a successful verify clears the MFA card and the model then emits `理财申购结果：`. Await THAT,
+      // with a generous budget for the dev server's FIRST hit on the investment execution path.
+      await waitForAssistantText(page, '理财申购结果：', 90_000);
+
+      // The SETTLED subscribe MFA card re-renders inline in its assistant message once the subscribe
+      // action settles (its duplicate-suppression ends), so a naive `count > 0` wait would return
+      // immediately on that stale card, and `.first()` would submit the code against the WRONG
+      // (already-executed) action. Count the code inputs before the redeem turn, then wait for one
+      // MORE — the LIVE redeem decision card, which `ChatWindow` always renders LAST — and let
+      // `submitMfa` drive that LAST card.
+      const beforeMfaCount = await page.locator(SELECTORS.mfaInput).count();
+      await submitChat(page, MSG.redeem);
+      await waitForMfaCard(page, 90_000, beforeMfaCount + 1);
+      await submitMfa(page, '123456');
+      await waitForAssistantText(page, '理财赎回结果：', 90_000);
+
+      const settled = await waitFor(
+        async () => {
+          const bills = await getJson<LedgerView>(`${baseUrl}/api/bills`);
+          const debit = bills.transactions.find(
+            (tx) => tx.direction === 'DEBIT' && tx.category === '投资' && tx.merchant === '认购稳健理财A',
+          );
+          const credit = bills.transactions.find(
+            (tx) => tx.direction === 'CREDIT' && tx.category === '投资' && tx.merchant === '赎回',
+          );
+          return debit && credit ? { debit: debit.amount, credit: credit.amount } : false;
+        },
+        {
+          description: '账本出现「投资」类：认购稳健理财A（DEBIT）与赎回（CREDIT）流水',
+          timeoutMs: 30_000,
+        },
+      );
+
+      return `「${MSG.subscribe}」→ MFA 123456 → 助手「理财申购结果：」；「${MSG.redeem}」→ MFA 123456 → 助手「理财赎回结果：」；账本 category=投资 认购稳健理财A ${settled.debit}（DEBIT）/ 赎回 +${settled.credit}（CREDIT）`;
+    },
+    { label: 'h-investment-flow' },
+  );
+}
+
+/**
+ * (i) ANOMALY detection (GREEN `detect_anomaly`): the rendered `AnomalyCard` must show the seeded
+ * Apple Store ¥6,999 anomaly (title `异常交易提醒`, merchant `Apple Store`, `-¥6,999.00`,
+ * badge `风险 低`) and the assistant must NOT claim `未发现可疑交易`. SECONDARY: `GET /api/bills`
+ * `anomalies` is exactly that one DEBIT row (no CREDIT anomaly — detection is DEBIT-only).
+ */
+async function journeyAnomalyDetection(browser: Browser, baseUrl: string): Promise<string> {
+  interface AnomalyPayload {
+    anomalies: Array<{
+      transaction: { id: string; merchant: string; amount: number; direction: 'DEBIT' | 'CREDIT' };
+    }>;
+  }
+
+  return withPage(
+    browser,
+    async (page) => {
+      await gotoAgent(page, baseUrl);
+      await submitChat(page, MSG.anomaly);
+
+      await page
+        .getByText('异常交易提醒', { exact: false })
+        .first()
+        .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+      if ((await page.getByText('Apple Store', { exact: true }).count()) === 0) {
+        throw new Error('AnomalyCard 未渲染商户「Apple Store」');
+      }
+      if ((await page.getByText('-¥6,999.00', { exact: true }).count()) === 0) {
+        throw new Error('AnomalyCard 未渲染金额「-¥6,999.00」');
+      }
+      if ((await page.getByText('风险 低', { exact: false }).count()) === 0) {
+        throw new Error('AnomalyCard 未渲染「风险 低」徽标');
+      }
+      if ((await hasAssistantText(page, '未发现可疑交易')) !== false) {
+        throw new Error('已检测到异常，但助手文本出现了「未发现可疑交易」');
+      }
+
+      const settled = await waitFor(
+        async () => {
+          const bills = await getJson<AnomalyPayload>(`${baseUrl}/api/bills`);
+          if (bills.anomalies.some((a) => a.transaction.direction === 'CREDIT')) {
+            throw new Error('anomalies 中出现了 CREDIT 方向的可疑交易（异常检测应仅针对 DEBIT）');
+          }
+          if (bills.anomalies.length !== 1) return false;
+          const only = bills.anomalies[0];
+          if (
+            only.transaction.id !== 'tx_anomaly_apple' ||
+            only.transaction.merchant !== 'Apple Store' ||
+            only.transaction.amount !== -6999
+          ) {
+            return false;
+          }
+          return { count: bills.anomalies.length, amount: only.transaction.amount };
+        },
+        {
+          description: 'GET /api/bills anomalies 恰为 1 条 Apple Store -6999 DEBIT（tx_anomaly_apple），无 CREDIT',
+          timeoutMs: 30_000,
+        },
+      );
+
+      return `「${MSG.anomaly}」→ AnomalyCard 标题「异常交易提醒」/ 商户 Apple Store / -¥6,999.00 / 徽标「风险 低」；助手未出现「未发现可疑交易」；GET /api/bills anomalies=${settled.count} 条（Apple Store ${settled.amount}），无 CREDIT`;
+    },
+    { label: 'i-anomaly-detection' },
+  );
+}
+
+/** The mock strong-verification code (`lib/constants.MFA_CODE`), typed by hand into the breaker input. */
+const MOCK_MFA_CODE = '123456';
+
+/**
+ * TYPE `code` into the `/security` breaker control's 6-digit code input AFTER React has HYDRATED it.
+ *
+ * The input is a CLIENT component's CONTROLLED field (`app/security/ResetBreakerButton.tsx`): its SSR
+ * node exists BEFORE hydration but carries no React own-property, so a `fill()` at that instant is
+ * silently reset when hydration re-renders the controlled value. This waits on the same real-DOM
+ * hydration condition as `waitForComposerHydration`, keyed on the control's own 6-digit code input.
+ */
+async function fillBreakerCode(page: Page, code: string): Promise<void> {
+  await waitForElementHydration(page, SELECTORS.breakerCodeInput);
+  const input = page.locator(SELECTORS.breakerCodeInput).first();
+  await input.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+  await input.fill(code);
+}
+
+/**
+ * TYPE the mock code into the `/security` breaker control and CLICK it, AFTER React has HYDRATED it.
+ *
+ * The controlled code input starts EMPTY — the mock code is NEVER prefilled or revealed — and the
+ * unlock button is DISABLED while the input is empty, so the code MUST be typed before the click (a
+ * click on the empty disabled button is a no-op / actionability timeout).
+ *
+ * The control (`app/security/ResetBreakerButton.tsx`) is a CLIENT component: its SSR HTML is visible
+ * — and clickable "by shape" — BEFORE hydration, and a click at that instant is silently DROPPED
+ * (no `POST /api/security/reset`), so no `role=status` message ever appears and the following
+ * `waitForStatusText` times out. This waits on the same real-DOM hydration condition as
+ * `waitForComposerHydration`, keyed on the control's own 6-digit code input.
+ */
+async function clickBreakerReset(page: Page, name: string | RegExp, code: string): Promise<void> {
+  const button = page.getByRole('button', typeof name === 'string' ? { name, exact: true } : { name });
+  await button.first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+  await fillBreakerCode(page, code);
+  await button.first().click();
+}
+
+/**
+ * (j) CIRCUIT-BREAKER lock (DURABLE, per-OWNER `user:user_liming`): reset the account breaker to a
+ * known zero state, then submit THREE consecutive wrong MFA codes (`000000`) on a RED transfer — after
+ * each, RENDERED `role=status` shows `验证失败，已尝试 N 次`. The third trips the breaker: the security
+ * center shows `已熔断` + `失败 3 / 3 次` + a `CIRCUIT_BREAKER_TRIPPED` row (severity `high`, DB-cross-
+ * checked), and the lock PERSISTS across a plain reload.
+ *
+ * On the LOCKED security center the code input starts EMPTY — the mock code is NEVER prefilled or
+ * revealed — and the unlock button is DISABLED while the input is empty, so a missing code cannot be
+ * submitted; a WRONG code (`000000`) is REFUSED by the route (its refusal message surfaces) and the
+ * lock stays; only the CORRECT `123456` (TYPED by the journey) unlocks it and records a
+ * `SECURITY_RESET` event (DOM + DB).
+ */
+async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Promise<string> {
+  return withPage(
+    browser,
+    async (page) => {
+      // (1) mint the identity cookie via the FIRST chat turn (identity is COOKIE-ONLY).
+      await gotoAgent(page, baseUrl);
+      await submitChat(page, MSG.balance);
+      const cookie = await waitFor(
+        async () => {
+          const value = await readSessionCookie(page);
+          return value === undefined ? false : value;
+        },
+        { description: '银行会话 cookie（banking_session）', timeoutMs: NAV_TIMEOUT_MS },
+      );
+      const sessionId = cookie.slice(cookie.indexOf('=') + 1);
+
+      // (2) reset the ACCOUNT breaker so the three failures below start from a known zero state. The
+      // code input starts EMPTY (never prefilled) and the button is DISABLED while empty, so the mock
+      // code is TYPED before the click.
+      await page.goto(`${baseUrl}/security`, { waitUntil: 'domcontentloaded' });
+      await clickBreakerReset(page, /重置熔断计数|解除熔断限制/, MOCK_MFA_CODE);
+      await waitForStatusText(page, '已解除，当前失败0/3次');
+
+      // (3) three consecutive WRONG MFA codes on a RED transfer → trip the per-owner breaker.
+      await gotoAgent(page, baseUrl);
+      await submitChat(page, MSG.transferRed);
+      await waitForMfaCard(page);
+      for (const attempt of [1, 2, 3]) {
+        await submitMfa(page, '000000');
+        await waitForStatusText(page, `验证失败，已尝试${attempt}次`);
+      }
+
+      // (4) the lock is shown on the security center AND persisted.
+      await page.goto(`${baseUrl}/security`, { waitUntil: 'domcontentloaded' });
+      await page
+        .getByText('已熔断', { exact: true })
+        .first()
+        .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+      const body = (await page.locator('main').innerText()).replace(/\s+/g, '');
+      if (!body.includes('失败3/3次')) throw new Error('安全中心未显示「失败 3 / 3 次」');
+      if (!body.includes('CIRCUIT_BREAKER_TRIPPED')) {
+        throw new Error('安全中心未渲染 CIRCUIT_BREAKER_TRIPPED 安全事件行');
+      }
+      const tripped = (await querySecurityEvents({ sessionId })).find(
+        (event) => event.kind === 'CIRCUIT_BREAKER_TRIPPED',
+      );
+      if (tripped === undefined) {
+        throw new Error(`SecurityEvent(CIRCUIT_BREAKER_TRIPPED) 未持久化（sessionId=${sessionId}）`);
+      }
+      if (tripped.severity !== 'high') {
+        throw new Error(`CIRCUIT_BREAKER_TRIPPED severity 应为 high，实际 ${tripped.severity}`);
+      }
+
+      // (5) the lock PERSISTS across a plain reload.
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page
+        .getByText('已熔断', { exact: true })
+        .first()
+        .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+
+      // (6) LOCKED-state unlock guards (all on this security-center visit):
+      //   (a) the code input arrives EMPTY and its placeholder never reveals the mock code;
+      //   (b) with an EMPTY input the unlock button is DISABLED — a missing code cannot be submitted;
+      //   (c) a WRONG code is REFUSED (the route's message surfaces) and the lock stays.
+      await waitForElementHydration(page, SELECTORS.breakerCodeInput);
+      const codeInput = page.locator(SELECTORS.breakerCodeInput).first();
+      await codeInput.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+      const initialCode = await codeInput.inputValue();
+      if (initialCode !== '') {
+        throw new Error(`锁定态验证码输入框应为空（不得预填），实际「${initialCode}」`);
+      }
+      const placeholder = (await codeInput.getAttribute('placeholder')) ?? '';
+      if (placeholder.includes(MOCK_MFA_CODE)) {
+        throw new Error(`验证码输入框 placeholder 泄露了验证码：「${placeholder}」`);
+      }
+
+      const unlockButton = page.getByRole('button', { name: '解除熔断限制', exact: true }).first();
+      await unlockButton.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+      if (!(await unlockButton.isDisabled())) {
+        throw new Error('验证码为空时「解除熔断限制」按钮应为禁用状态（缺失验证码不应可提交）');
+      }
+
+      await fillBreakerCode(page, '000000');
+      await unlockButton.click();
+      await waitForStatusText(page, '解除熔断需要额外的安全验证');
+      // The WRONG-code refusal must NOT unlock: the lock persists across a plain reload.
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page
+        .getByText('已熔断', { exact: true })
+        .first()
+        .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+
+      // (7) GATED unlock with the CORRECT mock code → breaker cleared + audited.
+      await clickBreakerReset(page, '解除熔断限制', MOCK_MFA_CODE);
+      await waitForStatusText(page, '已解除，当前失败0/3次');
+      await page
+        .getByText('SECURITY_RESET', { exact: true })
+        .first()
+        .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
+      const resets = await querySecurityEvents({});
+      if (!resets.some((event) => event.kind === 'SECURITY_RESET')) {
+        throw new Error('SecurityEvent(SECURITY_RESET) 未持久化');
+      }
+
+      return `会话 ${sessionId}：重置熔断计数 → 3 次错误验证码(000000) 逐次「验证失败，已尝试 1/2/3 次」→ 安全中心「已熔断」+「失败 3 / 3 次」+ CIRCUIT_BREAKER_TRIPPED(high) → reload 仍锁定；锁定态输入框为空且 placeholder 不含验证码、空输入时「解除熔断限制」按钮禁用、错误码(000000)被拒(锁定仍在)、正确码(123456) → 已解除(0/3) 且 SECURITY_RESET 已审计`;
+    },
+    { label: 'j-circuit-breaker-lock' },
+  );
+}
+
 interface Journey {
   name: string;
   run: (browser: Browser, baseUrl: string) => Promise<string>;
@@ -532,6 +823,9 @@ const JOURNEYS: readonly Journey[] = [
   { name: 'e-refresh-action-recovery', run: journeyRefreshRecovery },
   { name: 'f-wedge-refresh-recover', run: journeyWedgeRefreshRecover },
   { name: 'g-manual-handoff', run: journeyManualReview },
+  { name: 'h-investment-flow', run: journeyInvestmentFlow },
+  { name: 'i-anomaly-detection', run: journeyAnomalyDetection },
+  { name: 'j-circuit-breaker-lock', run: journeyCircuitBreakerLock },
 ];
 
 // --- entry point --------------------------------------------------------------------------------

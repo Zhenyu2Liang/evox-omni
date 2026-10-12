@@ -42,12 +42,12 @@ export function SpendingCard({ data, className }: SpendingCardProps) {
     <Card
       className={className}
       title={`${data.month} 消费分析`}
-      description="本月支出概览、分类占比与月度趋势"
+      description="正常消费分类与趋势（不含异常交易及投资资金流）"
     >
       <div className="space-y-4">
         <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
           <div>
-            <div className="text-xs text-slate-500">本月支出</div>
+            <div className="text-xs text-slate-500">正常消费</div>
             <Money amount={data.total} className="text-2xl font-semibold text-banking-deep" />
           </div>
           <div>

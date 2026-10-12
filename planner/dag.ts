@@ -90,12 +90,22 @@ export function validatePlan(nodes: TaskNodeSpec[], knownTools: Set<string>): Re
     } else if (node.kind === 'condition') {
       if (!node.condition || typeof node.condition !== 'object') {
         problems.push(`condition node '${label}' is missing a 'condition'`);
+      } else {
+        const condition = node.condition;
+        if (typeof condition.path !== 'string' || !condition.path.trim() ||
+            !['>', '>=', '<', '<=', '==', '!='].includes(condition.op) ||
+            !isPrimitive(condition.value) || (typeof condition.value === 'number' && !Number.isFinite(condition.value))) {
+          problems.push(`condition node '${label}' requires a valid path/op/value`);
+        }
       }
     } else if (node.kind !== 'note') {
       problems.push(`node '${label}' has an unsupported kind '${String(node.kind)}'`);
     }
 
-    const deps = Array.isArray(node.dependencies) ? node.dependencies : [];
+    if (node.after !== undefined && (!Array.isArray(node.after) || !node.after.every(id => typeof id === 'string'))) {
+      problems.push(`node '${label}' has invalid ordering predecessors`);
+    }
+    const deps = [...(Array.isArray(node.dependencies) ? node.dependencies : []), ...(Array.isArray(node.after) ? node.after : [])];
     for (const dep of deps) {
       if (!knownIds.has(dep)) problems.push(`node '${label}' depends on unknown node '${dep}'`);
     }
@@ -138,14 +148,14 @@ export function topologicalOrder(nodes: TaskNodeSpec[]): TaskNodeSpec[] {
     if (!byId.has(n.id)) continue;
     if (indegree.has(n.id)) continue;
     let deg = 0;
-    for (const d of n.dependencies) if (byId.has(d)) deg += 1;
+    for (const d of new Set([...n.dependencies, ...(n.after ?? [])])) if (byId.has(d)) deg += 1;
     indegree.set(n.id, deg);
   }
 
   const dependents = new Map<string, string[]>();
   for (const n of nodes) {
     if (!byId.has(n.id)) continue;
-    for (const d of n.dependencies) {
+    for (const d of new Set([...n.dependencies, ...(n.after ?? [])])) {
       if (!byId.has(d)) continue;
       const arr = dependents.get(d);
       if (arr) arr.push(n.id);
@@ -223,7 +233,8 @@ export function getReadyNodes(nodes: TaskNodeSpec[], results: TaskNodeResult[]):
       const depStatus = statusById.get(dep);
       return depStatus !== undefined && READY_DEP_STATUSES.has(depStatus);
     });
-    if (depsReady) ready.push(node);
+    const orderReady = (node.after ?? []).every(dep => ['success', 'skipped', 'failed', 'cancelled'].includes(statusById.get(dep) ?? ''));
+    if (depsReady && orderReady) ready.push(node);
   }
   return ready;
 }
@@ -359,6 +370,16 @@ export function evaluateCondition(condition: TaskCondition, scope: Record<string
     }
     default:
       return false;
+  }
+}
+
+/** A missing/non-comparable output is an execution error, not a false business condition. */
+export function assertConditionResolvable(condition: TaskCondition, scope: Record<string, unknown>): void {
+  const result = resolvePath(scope, condition.path);
+  if (!result.found || (['>', '>=', '<', '<='].includes(condition.op)
+    ? toNumber(result.value) === undefined || toNumber(condition.value) === undefined
+    : !safeEquals(result.value, condition.value).comparable)) {
+    throw new AppError('VALIDATION', `条件无法求值：${condition.path}，请核对依赖节点的真实输出字段。`);
   }
 }
 

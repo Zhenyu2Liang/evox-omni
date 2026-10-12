@@ -4,6 +4,8 @@
  */
 import type { TaskPlan } from '@/lib/contracts/task';
 export { getManualReviewInbox, openManualReview, resolveManualReview } from './manual-review';
+export { rollbackTask } from './task-rollback';
+export { nextPlanDecision } from './task-decision';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { PlanToolOutcome } from '@/planner';
 import { getSession } from '@/lib/db/repositories/session';

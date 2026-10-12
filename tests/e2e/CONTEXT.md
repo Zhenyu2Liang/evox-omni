@@ -16,7 +16,7 @@ imports + node built-ins only, to avoid tsx/tsconfig path surprises).
 
 ## API Surface
 - `acceptance.e2e.ts` — the SINGLE entry point. Sets the isolated DB → resets it to the canonical
-  seed → boots the app → waits for readiness → launches Chrome → runs the 6 journeys → prints
+  seed → boots the app → waits for readiness → launches Chrome → runs the 10 journeys (a–j) → prints
   exactly one `PASS|FAIL|SKIP <journey> — <evidence>` line per journey → exits non-zero iff ANY
   journey FAILED (a SKIP does not fail the run).
 - `helpers.ts` — shared harness (details below).
@@ -66,6 +66,18 @@ Harness helpers (`helpers.ts`):
 - **RENDERED DOM is PRIMARY; DB/ledger is SECONDARY.** Money journeys keep their primary evidence on
   the DOM (assistant narration / plan badges) and add a real read-route cross-check.
 - Wait on real DOM conditions, never fixed sleeps; keep generous timeouts for Next dev cold compile.
+
+## Coverage gaps (flows with NO real-browser journey)
+New journeys must be registered in `acceptance.e2e.ts#JOURNEYS` (a-transfer-confirm, b-transfer-mfa,
+c-plan-pause-resume, d-plan-cancel, e-refresh-action-recovery, f-wedge-refresh-recover,
+g-manual-handoff, h-investment-flow, i-anomaly-detection, j-circuit-breaker-lock).
+None currently: the three former gaps now EACH have a real-browser journey —
+Investment 申购/赎回 + cash-flow row (journey `h`), Anomaly detection (journey `i`),
+Circuit-breaker lock/unlock (journey `j`). Their vitest owners remain the primary
+unit/scenario coverage: `tests/scenarios/test-09-investment-mfa.test.ts` (+
+`tests/unit/banking-sdk/investment*.test.ts`), `tests/scenarios/test-07-anomaly.test.ts` (+
+`tests/unit/banking-sdk/anomaly.test.ts`), `tests/scenarios/test-10-circuit-breaker.test.ts`
+(+ `tests/app/security-workflow-http.test.ts`).
 
 ## Prerequisites (in order, in a fresh worktree)
 1. `npm install`
@@ -175,14 +187,38 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   asserts on the DOM-reachable read routes + direct DB facts: balance exactly one `−¥200`, exactly ONE new
   `−200 DEBIT`/张伟 ledger row, `PendingAction.status='executed'`, and a durable recovery
   `AuditLog` (`dedupeKey=exec:pa_ewedge_1`) at `success`/`transfer_money` for the owning session.
+- **h-investment-flow** (two RED MFA flows in ONE page): `申购稳健理财A 1000元` → MfaCard → `123456`
+  → assistant `理财申购结果：`; THEN `赎回稳健理财A` → MfaCard → `123456` → assistant `理财赎回结果：`.
+  SECONDARY: `GET /api/bills` shows a `投资`-category DEBIT `认购稳健理财A` AND a CREDIT `赎回` row.
+  Because the SETTLED subscribe inline MFA card re-renders in its message once its action settles
+  (its duplicate-suppression ends while the next action is not yet active), the redeem leg counts the
+  code inputs before the redeem turn and waits for ONE MORE (see Design notes).
+- **i-anomaly-detection** (GREEN `detect_anomaly`): `帮我看有没有异常消费` → rendered `AnomalyCard`
+  (`异常交易提醒` / `Apple Store` / `-¥6,999.00` / `风险 低`); the assistant does NOT claim
+  `未发现可疑交易`. SECONDARY: `GET /api/bills` `anomalies` is exactly the one `tx_anomaly_apple`
+  DEBIT row (DEBIT-only, no CREDIT).
+- **j-circuit-breaker-lock** (DURABLE per-OWNER lock): reset the account breaker to a known zero state,
+  then THREE consecutive wrong MFA codes (`000000`) on a RED transfer (after each, `role=status` shows
+  `验证失败，已尝试 N 次`) trip it → security center `已熔断` + `失败 3 / 3 次` + a DB-cross-checked
+  `CIRCUIT_BREAKER_TRIPPED` (severity `high`).
+  The `/security` breaker control's 6-digit code input starts EMPTY — the mock code `123456` is NEVER
+  prefilled or revealed (asserted `value === ''` AND the placeholder does not contain `123456`) — and its
+  unlock button is DISABLED while the input is empty, so a MISSING code cannot be submitted (the lock
+  stays). A WRONG code (`000000`) is REFUSED by the route (its message `解除熔断需要额外的安全验证…`
+  surfaces) and the lock PERSISTS across a plain reload; only the CORRECT `123456` clears the breaker
+  (`已解除，当前失败0/3次`) and records a `SECURITY_RESET` event (DOM + DB).
+  The code is TYPED (`fillBreakerCode`, after `waitForElementHydration`) BEFORE
+  `clickBreakerReset(page, name, code)` clicks — the empty disabled button would otherwise be an
+  actionability no-op.
 
 ## Coverage notes
 - **Covers:** real-browser NL → card → human-decision flows; MFA success + wrong-code rejection;
+  TWO RED MFA flows in one page (journey `h`) driving the LIVE (last-rendered) decision card;
   GENUINE plan pause→resume with per-node status badges; plan cancel + rejected stale-confirm;
   no-money-moved assertions (balance + ledger + card limit); refresh rehydration from persisted
   server state; a plain refresh/navigation recovery of a committed-but-unrecorded standalone wedge
-  (exactly one debit, `executed` status, durable recovery audit); structured honest reporting;
-  whole-tree teardown.
+  (exactly one debit, `executed` status, durable recovery audit); an anomaly card (journey `i`) and a
+  durable circuit-breaker lock/unlock (journey `j`); structured honest reporting; whole-tree teardown.
 - **Does NOT cover:** the real LLM (`LLM_MODE=live`); real bank/network; the production build
   (`next build` / `next start`); cross-browser (Chrome only, Edge as fallback and untested);
   visual/a11y regression; load/perf; the security unit + scenario layers (owned by
@@ -209,6 +245,24 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   bubble (frozen; nothing rewrites `message.cards`) and as the live `stream.activePlan` card after the
   messages. `planCard()` therefore selects the LAST match (`PLAN_CARD_XPATH … [last()]`), so
   plan-control outcomes are read from the app-authoritative live card.
+- **Live MFA card selection.** Like the PlanCard, a RED gated tool emits BOTH an `mfa_required` event
+  (rendered as the LIVE decision card AFTER the whole message list) AND an inline `mfa` ChatCard in the
+  assistant message. `ChatWindow` suppresses the inline duplicate only WHILE that action is active;
+  once it SETTLES the inline card re-renders (an `mfa` card carries no status field), so a page can show
+  SEVERAL `input[aria-label="验证码"]` elements. `waitForMfaCard(page, timeoutMs, minCount = 1)` waits
+  for the count to REACH `minCount` (so a stale card cannot make a naive `count > 0` wait return early),
+  and `submitMfa` fills/clicks `.last()` — the LIVE card `ChatWindow` always renders LAST. On a
+  single-card page `.last()` === `.first()`. Journey `h` (two RED flows in one page) passes
+  `beforeMfaCount + 1` to the redeem leg's `waitForMfaCard`; `clickLastWhenEnabled` exists because the
+  general `clickWhenEnabled` is `.first()`-scoped for `submitChat`/`clickConfirm`.
+- **Security-center breaker control (journey `j`).** `app/security/ResetBreakerButton.tsx` renders a
+  CONTROLLED 6-digit code input (`input[aria-label="6 位验证码"]`, `SELECTORS.breakerCodeInput`) that
+  starts EMPTY and never reveals the mock code, plus a button DISABLED while the input is empty
+  (`解除熔断限制` while locked, else `重置熔断计数`). `fillBreakerCode(page, code)` waits
+  `waitForElementHydration` on that input (its SSR node carries no React own-property, so a pre-hydration
+  `fill()` is silently reset) then `fill`s; `clickBreakerReset(page, name, code)` fills BEFORE clicking.
+  A `POST /api/security/reset` refusal while locked surfaces as `role=status`
+  `解除熔断需要额外的安全验证…` with the lock intact.
 - **Per-node timeline.** `planNodeRows()` scopes to `ol.space-y-3 > li` inside the live card (avoiding
   the SECOND copy of every node name in the card's 依赖关系 dependency list), reading the node name
   (`span.text-sm.font-medium.text-banking-deep`) + its status `span.rounded-full` badge.
@@ -258,7 +312,7 @@ only the LLM is live.
   green. Only scenario 7 has nudge/retry (`PARK_ATTEMPTS`).
 
 ## Routing Table
-- `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 6 journeys → structured report → non-zero exit on FAIL)
+- `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 10 journeys a–j → structured report → non-zero exit on FAIL)
 - `./live-acceptance.e2e.ts` → REAL-browser + REAL-LLM (`LLM_MODE=live`) acceptance harness against DeepSeek; own isolated DB `prisma/live-acceptance.db`; `LIVE_SCENARIOS` subset; embeds the TASK-A persisted-tool-arg evidence dump (`persistedRecipientCalls`)
 - `./LIVE-ACCEPTANCE-REPORT.md` → current-state report of the live runs (a clean FULL run — `PASS 8 ｜ FAIL 0 ｜ SKIP 0` — with all 8 scenarios PASS live including the formerly-failing S2p raw-phone leg; plus the honest live-model narration-flake blocker)
 - `./helpers.ts` → shared harness (isolated E2E DB + reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card + per-node timeline, read-model HTTP helpers, wedge fixtures + `seedStandaloneWedge`/direct-DB fact queries (`queryPendingActionStatus`/`queryExecutionAudit`), reporter, fail-fast navigation)

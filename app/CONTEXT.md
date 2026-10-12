@@ -201,32 +201,35 @@ The `action` routes call `confirm`/`verify`/`cancel` through `app/api/_lib/agent
 - **Integration/acceptance** (the 12 demo scenarios) are driven through `../agent` + `../tests`, not here;
   the app node contributes the SSE/JSON transport tests for `POST /api/chat` (stream frames + `done`,
   and `?stream=0` fallback).
-- **Build sanity** for this node: `npm run typecheck` + `npm run build` (the latter needs a provisioned
-  SQLite DB — `npx prisma db push` + `npm run db:seed` — because the data pages are prerendered).
+- **Build sanity** for this node: `npm run typecheck` + `npm run build` (the build needs NO provisioned
+  SQLite DB — the DB/cookie-backed server pages are `force-dynamic`; see the section below).
 
 ## Build-time Rendering (static vs dynamic)
 
 Next ^15.1.6 App Router: a page is **statically prerendered at build time** unless it uses a dynamic API
-(`cookies()`, `headers()`, `searchParams`) or opts out. No page/route in `app/` exports
-`dynamic`/`revalidate`/`dynamicParams`/`fetchCache`/`runtime`/`force-static`/`force-dynamic`/`noStore` —
-the static/dynamic split is driven purely by dynamic-API usage.
+(`cookies()`, `headers()`, `searchParams`) or opts out. Every DB/cookie-backed server page in `app/`
+opts out explicitly with the standard one-line marker `export const dynamic = 'force-dynamic'`:
 
-- **Static (prerendered at build → the read model's Prisma query runs during `next build`)** — import
-  `@/banking-sdk` and call a read model in render with NO dynamic API:
-  - `app/page.tsx` `/` — `banking.dashboard.getDashboardSummary(userId)` (line 26).
-  - `app/cards/page.tsx` `/cards` — `banking.card.getCards(userId)` (line 27).
-  - `app/subscriptions/page.tsx` `/subscriptions` — `banking.subscription.listSubscriptions(userId)` (line 44).
-- **Dynamic (rendered per request, NOT prerendered)**:
-  - `app/agent/page.tsx` `/agent` — `await cookies()` (line 21).
-  - `app/audit/page.tsx` `/audit` — `await cookies()` (line 71).
-  - `app/security/page.tsx` `/security` — `await cookies()` (line 34).
-  - `app/bills/page.tsx` `/bills` — awaits `searchParams` (line 38).
+- **`force-dynamic` (server-rendered on demand, NEVER prerendered)** — every server page that reads
+  live Prisma data and/or the request cookie:
+  - `app/page.tsx` `/` — `banking.dashboard.getDashboardSummary(userId)`.
+  - `app/agent/page.tsx` `/agent` — `await cookies()`.
+  - `app/audit/page.tsx` `/audit` — `await cookies()` + `audit.*`.
+  - `app/bills/page.tsx` `/bills` — `await searchParams` + `banking.transaction.*`.
+  - `app/cards/page.tsx` `/cards` — `banking.card.getCards(userId)`.
+  - `app/security/page.tsx` `/security` — `await cookies()` + `security`/`audit`.
+  - `app/subscriptions/page.tsx` `/subscriptions` — `banking.subscription.listSubscriptions(userId)`.
+- **Static (prerendered at build)** — the two client pages read their data at RUNTIME via
+  `fetch('/api/*')`; their page module never touches the cookie or the DB, so they need no DB at build:
+  `app/actions/page.tsx` `/actions`, `app/manual/page.tsx` `/manual`.
 - `app/layout.tsx` + `app/_components/NavBar.tsx` (client-only) — no DB access.
-- `app/api/**/route.ts` — Route Handlers, dynamic by default (no static opt-in) → never prerendered.
+- `app/api/**/route.ts` — Route Handlers, dynamic by default (no static opt-in) — never prerendered.
 
-**Consequence**: `npm run build` (`next build`) executes the three static pages' Prisma queries at build
-time, so the SQLite DB MUST be pushed + seeded first (`npx prisma db push` + `npm run db:seed`) or the
-prerender fails. README §10 orders: `db:generate` → `db:push` → `db:seed` → `dev`/`build`.
+**Consequence**: with every DB/cookie-backed server page opted out (`dynamic = 'force-dynamic'`),
+`npm run build` performs NO Prisma reads at build time. The only prerendered pages are `/actions`,
+`/manual` and `/_not-found`, none of which touch the DB, so a provisioned SQLite DB is NOT required for
+`next build` (the README order `db:generate` → `db:push` → `db:seed` → `dev`/`build` is still
+the order for a fully runnable app).
 
 ## Routing Table
 

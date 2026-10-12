@@ -40,11 +40,15 @@ Spec files (implemented — real assertions against the test SQLite), targeting 
   → same `id` + exactly ONE row (`count({ where: { idempotencyKey } })`), absent/empty/whitespace
   key and two different keys → two rows (legacy behavior preserved).
 - `transfer-receipt.test.ts` — COMMITTED-FACT (execution-receipt) semantics of `banking.transfer.createTransfer`, driven DIRECTLY through the SDK: same `idempotencyKey` + same request replays the ORIGINAL result (no second debit / one ledger row / one `ExecutionReceipt`); same key + different request → `CONFLICT`; a LEGACY ledger row with no receipt replays even when the contact was renamed/deleted (`idempotentTransferTxId` identity); a fresh unknown recipient still → `NOT_FOUND`; a fresh transfer writes a receipt whose `resultJson` == the returned `TransferResult`. DB-backed via `../../helpers/db`, `lib/ledger` + the real `ExecutionReceipt` table.
+- `anomaly.test.ts` — `banking.transaction.detectAnomaly` is **DEBIT-only**: it reports a row when it is explicitly flagged (`isAnomaly`) OR it is a DEBIT whose magnitude exceeds `ANOMALY_AMOUNT_THRESHOLD` (¥5,000) and is not an `INVESTMENT_FLOW_CATEGORY` row, so large INCOME (工资 +¥11,000) / refund CREDITs and >¥5,000 投资 debits are never misreported as 大额消费, while the Apple Store ¥6,999 sample stays the ONLY automatic finding.
+  Probe rows are inserted TEST-LOCALLY (never in the shared fixtures) so the fixture world's anomaly count (asserted by `tests/scenarios/test-07-anomaly.test.ts`) stays exactly 1; `listAnomalies` (persisted `isAnomaly` rows) reports only the Apple Store row.
+- `investment-flow.test.ts` — the subscribe/redeem account-flow `Transaction` row: a subscribe writes its flow row (`category = INVESTMENT_FLOW_CATEGORY='投资'`, DEBIT, `-amount`, merchant `认购<product>`, `channel:'APP'`) in the SAME transaction as the funding-account debit + new holding, and a redeem writes the mirrored CREDIT row (`+marketValue`, merchant `赎回`) with the credit + HOLDING→REDEEMED flip.
+  The flow row is classification-neutral (never in `analyzeSpending`, never `大额消费`, not counted toward the ¥1,000 daily-transfer limit) and AT-MOST-ONCE (a repeat and two CONCURRENT calls with the SAME key debit/credit exactly once; a distinct/absent key on an already-redeemed holding → `CONFLICT`); a forced flow-row insert failure rolls the balance + holding back with it (bare error + typed `AppError`).
 
 ## Status
 
-All six specs (incl. `transfer-receipt.test.ts`) are implemented with real assertions and pass offline
-(`npx vitest run tests/unit/banking-sdk` → 5 files / 56 tests green against `prisma/test.db`).
+All eight specs are implemented with real assertions and pass offline against `prisma/test.db`
+(`npx vitest run tests/unit/banking-sdk`).
 The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
 `seedDemoData({ withAmbiguousContact: true })` inside the ambiguity case.
 
@@ -59,7 +63,7 @@ The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
 
 ## Routing Table
 
-- `./transfer.test.ts` · `./transfer-receipt.test.ts` · `./subscription.test.ts` · `./investment.test.ts` · `./atomicity.test.ts` · `./idempotent.test.ts` (SDK-direct, gateway-independent)
+- `./transfer.test.ts` · `./transfer-receipt.test.ts` · `./subscription.test.ts` · `./investment.test.ts` · `./investment-flow.test.ts` · `./anomaly.test.ts` · `./atomicity.test.ts` · `./idempotent.test.ts` (SDK-direct, gateway-independent)
 - `../../helpers` → test-DB lifecycle + fixtures (sibling — this node)
 
 ## Notes for Agents

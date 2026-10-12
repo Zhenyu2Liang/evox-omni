@@ -20,7 +20,8 @@ export type ChatCard =
   | { type: 'balance'; data: unknown }
   | { type: 'transfer'; data: unknown }
   | { type: 'confirmation'; action: PendingActionSummary }
-  | { type: 'mfa'; actionId: string; hint?: string }
+  | { type: 'mfa'; actionId: string; hint?: string; action?: PendingActionSummary; status?: string; message?: string }
+  | { type: 'transactions'; data: unknown }
   | { type: 'spending'; data: unknown }
   | { type: 'cards'; data: unknown }
   | { type: 'investments'; data: unknown }
@@ -34,6 +35,8 @@ export interface ChatMessage {
   role: ChatRole;
   content: string;
   timestamp: number;
+  /** Server offers this only before gateway/executor/write entry, including trusted preflight refusal. */
+  retryRequest?: string;
   cards?: ChatCard[];
   toolEvents?: ToolEventView[];
 }
@@ -49,7 +52,7 @@ export type AgentStreamEvent =
   | { type: 'card'; card: ChatCard }
   | { type: 'plan_update'; plan: TaskPlan; generation?: number }
   | { type: 'confirmation_required'; action: PendingActionSummary; actionId: string }
-  | { type: 'mfa_required'; actionId: string; hint?: string }
+  | { type: 'mfa_required'; actionId: string; hint?: string; action?: PendingActionSummary }
   | { type: 'security_event'; kind: string; message: string }
   | { type: 'message_end'; message: ChatMessage }
   | { type: 'error'; message: string }

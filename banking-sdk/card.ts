@@ -23,7 +23,7 @@
 import type { Card as CardRow, CardLimit as CardLimitRow } from '@prisma/client';
 import { cards } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
-import { round2 } from '../lib/money';
+import { moneyToCents, round2 } from '../lib/money';
 import { idempotentCardId, isUniqueViolation, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction } from './tx';
 import type {
@@ -164,6 +164,7 @@ export async function reportLostCard(
  * Issue a new virtual card; returns the created card.
  * `input.label` is accepted for API compatibility but not persisted (no label column in the demo
  * schema). The masked number is generated as `****` + 4 digits, avoiding the user's existing masks.
+ * `monthlyLimit` is an explicit cent-valid configuration saved at creation (no card-payment API).
  *
  * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, the card id is derived
  * deterministically from `(userId, key)` and reused as the primary key, so a repeat of the SAME key
@@ -178,6 +179,15 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
   }
 
   const key = normalizeIdempotencyKey(input.idempotencyKey);
+  const cents = input.monthlyLimit === undefined ? undefined : moneyToCents(input.monthlyLimit);
+  if (cents !== undefined && cents < 0) throw new AppError('VALIDATION', '月限额不能为负数。');
+  const monthlyLimit = cents === undefined ? undefined : cents / 100;
+  const replay = (card: CardRow): CardRow => {
+    if (card.monthlyLimit !== (monthlyLimit ?? null)) {
+      throw new AppError('CONFLICT', '同一幂等身份不能申请不同月限额的虚拟卡。');
+    }
+    return card;
+  };
   if (key === undefined) {
     const existing = await cards.listCards(userId);
     const numberMasked = generateMaskedNumber(new Set(existing.map((card) => card.numberMasked)));
@@ -188,6 +198,7 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
       network: VIRTUAL_CARD_NETWORK,
       numberMasked,
       status: 'ACTIVE',
+      monthlyLimit,
     } }));
 
     // A brand-new card carries no per-category limits.
@@ -202,7 +213,7 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
   try {
     row = await runInTransaction(async (tx): Promise<CardRow> => {
       const replayed = await tx.card.findUnique({ where: { id: cardId } });
-      if (replayed) return replayed;
+      if (replayed) return replay(replayed);
 
       const own = await tx.card.findMany({ where: { userId } });
       const numberMasked = generateMaskedNumber(new Set(own.map((card) => card.numberMasked)));
@@ -215,6 +226,7 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
           network: VIRTUAL_CARD_NETWORK,
           numberMasked,
           status: 'ACTIVE',
+          monthlyLimit,
         },
       });
     });
@@ -223,7 +235,7 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
     // card written). Re-read the committed card and replay it.
     if (isUniqueViolation(error)) {
       const committed = await cards.getCard(cardId);
-      if (committed) return loadCardView(committed);
+      if (committed) return loadCardView(replay(committed));
     }
     throw error;
   }

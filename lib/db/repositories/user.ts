@@ -1,8 +1,8 @@
 import type { User } from '@prisma/client';
-import { prisma } from '../client';
+import { prisma, type DbClient } from '../client';
 
-export function getUser(id: string): Promise<User | null> {
-  return prisma.user.findUnique({ where: { id } });
+export function getUser(id: string, client?: DbClient): Promise<User | null> {
+  return (client ?? prisma).user.findUnique({ where: { id } });
 }
 
 export function getUserByPhone(phone: string): Promise<User | null> {

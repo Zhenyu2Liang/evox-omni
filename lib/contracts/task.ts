@@ -7,6 +7,8 @@ export interface TaskNodeSpec {
   id: string;
   name: string;
   dependencies: string[];
+  /** Ordering only: a false condition does not skip an independent later step. */
+  after?: string[];
   kind: TaskNodeKind;
   tool?: string;
   args?: Record<string, unknown>;
@@ -22,6 +24,14 @@ export interface TaskNodeResult {
   error?: string;
   startedAt?: number;
   endedAt?: number;
+  compensation?: TaskCompensation;
+}
+
+export interface TaskCompensation {
+  status: 'reverted' | 'retained' | 'conflict';
+  message: string;
+  resourceId?: string;
+  completedAt: number;
 }
 
 export type TaskPlanStatus = 'pending' | 'running' | 'paused' | 'waiting_confirmation' | 'success' | 'failed' | 'cancelled';

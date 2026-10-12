@@ -550,7 +550,7 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     if (auth.evaluation.blocked) {
       return {
         ok: false,
-        requiresConfirmation: true,
+        requiresConfirmation: auth.action !== undefined,
         pendingActionId: auth.action?.id,
         error: auth.blockReason ?? auth.decision.message,
       };
@@ -565,6 +565,12 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
         ? { idempotencyKey: nodeExecutionKey(ctx.taskId, ctx.nodeId) }
         : {}),
       fence: await buildAutomaticWriteFence(ctx.sessionId, ctx.taskId, ctx.nodeId),
+      // SIDE-EFFECT audit identity (GREEN writes included): the runner couples the business write and
+      // its strict audit row into ONE transaction — an audit failure rolls the write back.
+      sessionId: ctx.sessionId,
+      userRequest: ctx.userRequest,
+      ...(ctx.taskId !== undefined ? { taskId: ctx.taskId } : {}),
+      ...(ctx.nodeId !== undefined ? { nodeId: ctx.nodeId } : {}),
     };
     const result = await registry.executeDirect(ctx.toolName, ctx.args, opts);
     return {
@@ -849,6 +855,12 @@ async function executeAuthorizedAction(
       // DAG nodes execute inside the model's outer submit_plan call. Standalone
       // actions must match their own tool; never reuse an unrelated query call.
       toolName: link?.taskId ? 'submit_plan' : action.toolName,
+      resultToolName: action.toolName,
+      ...(typeof action.args.sourceAccountId === 'string' ? { sourceAccountId: action.args.sourceAccountId } : {}),
+      // The server-side OPERATION identity of this execution (grounding binds a claim to it).
+      actionId,
+      ...(typeof link?.taskId === 'string' ? { taskId: link.taskId } : {}),
+      ...(typeof link?.nodeId === 'string' ? { nodeId: link.nodeId } : {}),
     },
     opts?.deps,
   );
@@ -898,7 +910,7 @@ function blockedOutcome(
 ): ConfirmationOutcome {
   if (view.requiresMfa) {
     const events: AgentStreamEvent[] = view.status === 'pending' || view.status === 'awaiting_mfa'
-      ? [{ type: 'mfa_required', actionId }] : [];
+      ? [{ type: 'mfa_required', actionId, action: view.action?.summary }] : [];
     emitAll(events, opts);
     return {
       ok: false,

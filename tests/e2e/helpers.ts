@@ -265,6 +265,48 @@ export async function queryExecutionAudit(dedupeKey: string): Promise<ExecutionA
   }
 }
 
+/** A `SecurityEvent` row read straight from the isolated E2E DB (`securityEvent` table). */
+export interface SecurityEventRow {
+  kind: string;
+  severity: string;
+  sessionId: string;
+  message: string;
+  /** The `detail` JSON parsed back into a value, or `undefined` when the row carries none. */
+  detail: Record<string, unknown> | undefined;
+}
+
+/**
+ * Read `SecurityEvent` rows from the isolated E2E DB, newest first, optionally filtered by
+ * `sessionId` and/or `kind`. Persistence is the source of truth for the breaker audit
+ * (`CIRCUIT_BREAKER_TRIPPED` / `SECURITY_RESET`), so a DOM assertion can be cross-checked here.
+ */
+export async function querySecurityEvents(
+  filter: { sessionId?: string; kind?: string } = {},
+): Promise<SecurityEventRow[]> {
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient();
+  try {
+    const rows = await prisma.securityEvent.findMany({
+      where: {
+        ...(filter.sessionId !== undefined ? { sessionId: filter.sessionId } : {}),
+        ...(filter.kind !== undefined ? { kind: filter.kind } : {}),
+      },
+      orderBy: { timestamp: 'desc' },
+      take: 50,
+    });
+    return rows.map((row) => ({
+      kind: row.kind,
+      severity: row.severity,
+      sessionId: row.sessionId,
+      message: row.message,
+      detail:
+        row.detail === null ? undefined : (JSON.parse(row.detail) as Record<string, unknown>),
+    }));
+  } finally {
+    await prisma.$disconnect();
+  }
+}
+
 /** Resolve after `ms` milliseconds. */
 export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -932,29 +974,44 @@ export const SELECTORS = {
   assistantText: 'div.bg-white p.whitespace-pre-wrap',
   /** `components/chat/cards/MfaCard.tsx` — the verification code input. */
   mfaInput: 'input[aria-label="验证码"]',
+  /** `app/security/ResetBreakerButton.tsx` — the GATED unlock control's 6-digit code input. */
+  breakerCodeInput: 'input[aria-label="6 位验证码"]',
 } as const;
 
 /**
- * Wait until the SSR composer `<textarea>` has been HYDRATED by React.
+ * Wait until a server-rendered DOM node has been HYDRATED by React: it carries a React own-property
+ * (`__reactProps$…` / `__reactFiber$…`).
  *
- * Before hydration the DOM node exists (it is server-rendered) but carries NO React own-property
- * (`__reactProps$…` / `__reactFiber$…`): a `fill()`/click at that instant is silently DROPPED (no
- * `POST /api/chat`) AND React's hydration re-renders the controlled `<textarea>` back to empty
- * (resetting the fill). Waiting for the React own-property key is a real DOM condition — never a
- * fixed sleep — so the first turn is landed deterministically instead of racing hydration.
+ * A client component's SSR HTML is visible (and "actionable" by shape) BEFORE hydration, but its
+ * `onClick` is not attached yet — a click at that instant is silently DROPPED (no network request).
+ * Waiting for the React own-property key is a real DOM condition — never a fixed sleep.
  */
-export async function waitForComposerHydration(page: Page, timeoutMs = NAV_TIMEOUT_MS): Promise<void> {
+export async function waitForElementHydration(
+  page: Page,
+  selector: string,
+  timeoutMs = NAV_TIMEOUT_MS,
+): Promise<void> {
   await page.waitForFunction(
-    (selector: string) => {
-      const el = document.querySelector(selector);
+    (sel: string) => {
+      const el = document.querySelector(sel);
       if (!el) return false;
       return Object.keys(el).some(
         (key) => key.startsWith('__reactProps$') || key.startsWith('__reactFiber$'),
       );
     },
-    SELECTORS.composer,
+    selector,
     { timeout: timeoutMs },
   );
+}
+
+/**
+ * Wait until the SSR composer `<textarea>` has been HYDRATED by React. Before hydration the node
+ * exists (server-rendered) but carries NO React own-property, so a `fill()`/click is silently
+ * DROPPED (no `POST /api/chat`) AND hydration re-renders the controlled `<textarea>` back to empty
+ * (resetting the fill) — landing the first turn deterministically instead of racing hydration.
+ */
+export async function waitForComposerHydration(page: Page, timeoutMs = NAV_TIMEOUT_MS): Promise<void> {
+  await waitForElementHydration(page, SELECTORS.composer, timeoutMs);
 }
 
 /** Navigate to the chat page and wait for the composer to render AND hydrate (fail-fast on SSR error). */
@@ -1003,6 +1060,22 @@ async function clickWhenEnabled(locator: Locator, description: string, timeoutMs
     { timeoutMs, description },
   );
   await locator.first().click();
+}
+
+/**
+ * Click the LAST match of `locator` once it exists and is enabled. The LIVE human-decision card is
+ * always rendered LAST by `ChatWindow` (after the whole message list), so a page showing BOTH a
+ * settled inline card and the live one has its actionable control LAST.
+ */
+async function clickLastWhenEnabled(locator: Locator, description: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
+  await waitFor(
+    async () => {
+      if ((await locator.count()) === 0) return false;
+      return (await locator.last().isEnabled()) ? true : false;
+    },
+    { timeoutMs, description },
+  );
+  await locator.last().click();
 }
 
 /** Type `text` into the composer and submit it (waits for hydration + the input to be free first). */
@@ -1059,32 +1132,53 @@ export async function mfaCardPresent(page: Page): Promise<boolean> {
   return (await page.locator(SELECTORS.mfaInput).count()) > 0;
 }
 
-/** Wait for the MFA card (`身份验证` + code input) to be visible. */
-export async function waitForMfaCard(page: Page, timeoutMs = 90_000): Promise<void> {
-  await waitFor(async () => ((await page.locator(SELECTORS.mfaInput).count()) > 0 ? true : false), {
+/**
+ * Wait until at least `minCount` MFA cards (`身份验证` + code input) are rendered AND the LAST one is
+ * visible.
+ *
+ * The actionable card is the LIVE decision card, which `ChatWindow` renders LAST (after the whole
+ * message list); a SETTLED inline MFA card can linger in an earlier assistant message once its
+ * action's duplicate-suppression ends, so a multi-card page has its actionable card LAST.
+ * `minCount` (default 1) lets a caller wait for the count to REACH a value — needed when a stale
+ * inline card is already present, so a naive `count > 0` wait would return immediately.
+ */
+export async function waitForMfaCard(page: Page, timeoutMs = 90_000, minCount = 1): Promise<void> {
+  await waitFor(async () => ((await page.locator(SELECTORS.mfaInput).count()) >= minCount ? true : false), {
     timeoutMs,
-    description: 'MFA 卡片（身份验证 / 验证码输入框）',
+    description: minCount <= 1 ? 'MFA 卡片（身份验证 / 验证码输入框）' : `MFA 卡片 ≥ ${minCount} 张（身份验证 / 验证码输入框）`,
   });
-  await page.locator(SELECTORS.mfaInput).first().waitFor({ state: 'visible', timeout: timeoutMs });
+  await page.locator(SELECTORS.mfaInput).last().waitFor({ state: 'visible', timeout: timeoutMs });
 }
 
-/** Fill the MFA code and click `验证`. */
+/**
+ * Fill the MFA code and click `验证` on the LAST-rendered card.
+ *
+ * The actionable card is the LIVE decision card, rendered LAST by `ChatWindow` (after the message
+ * list); a SETTLED inline MFA card in an earlier message renders FIRST, so targeting `.last()` drives
+ * the live card when both are present. On a single-card page `.last()` === `.first()`.
+ */
 export async function submitMfa(page: Page, code: string, timeoutMs = 45_000): Promise<void> {
-  const input = page.locator(SELECTORS.mfaInput).first();
+  const input = page.locator(SELECTORS.mfaInput).last();
   await input.waitFor({ state: 'visible', timeout: timeoutMs });
   await input.fill(code);
-  await clickWhenEnabled(page.getByRole('button', { name: '验证', exact: true }), 'MFA 验证按钮', timeoutMs);
+  await clickLastWhenEnabled(page.getByRole('button', { name: '验证', exact: true }), 'MFA 验证按钮', timeoutMs);
 }
 
-/** Wait for the MFA card's `验证` button to be enabled again (the verify round-trip has settled). */
+/**
+ * Wait for the MFA round-trip to SETTLE, decided by RENDERED DOM:
+ *   - the card is GONE (count 0) → the decision SUCCEEDED and its pending action was cleared, or
+ *   - the card stayed but its `验证` button is enabled again → the decision FAILED (retry allowed).
+ * A successful verify REMOVES the whole card (`ChatWindow` renders it only while a pending action
+ * exists), so requiring a re-enabled `验证` button would never settle on the success path.
+ */
 export async function waitForMfaSettled(page: Page, timeoutMs = 45_000): Promise<void> {
   await waitFor(
     async () => {
       const button = page.getByRole('button', { name: '验证', exact: true }).first();
-      if ((await button.count()) === 0) return false;
+      if ((await button.count()) === 0) return true;
       return (await button.isEnabled()) ? true : false;
     },
-    { timeoutMs, description: 'MFA 卡片结束忙碌（验证按钮重新可用）' },
+    { timeoutMs, description: 'MFA 回合已结束（验证成功移除卡片 / 验证失败按钮重新可用）' },
   );
 }
 

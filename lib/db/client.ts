@@ -1,5 +1,19 @@
 import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
+
+/**
+ * A Prisma handle a repository can read/write through: the process-wide {@link prisma} singleton OR
+ * an OPEN interactive-transaction client (`Prisma.TransactionClient`).
+ *
+ * WHY: a read that logically belongs to an already-open transaction MUST run on that transaction's
+ * client. Issuing it through the global `prisma` instead can DEADLOCK — with a single-connection
+ * datasource (`?connection_limit=1`) the open interactive transaction holds the only connection, so
+ * a global read waits for a free connection until Prisma's interactive-transaction timeout expires
+ * ("Transaction already closed"). Repositories therefore accept this as an OPTIONAL second argument,
+ * defaulting to the global client so every existing caller is unchanged.
+ */
+export type DbClient = PrismaClient | Prisma.TransactionClient;
 
 /**
  * Resolves the SQLite database URL.

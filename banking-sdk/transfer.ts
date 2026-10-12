@@ -72,6 +72,7 @@ function replayResult(existing: Transaction, recipient: TransferRecipient): Tran
   return {
     success: true,
     transactionId: existing.id,
+    sourceAccountId: existing.accountId,
     recipient,
     amount: Math.abs(existing.amount),
     remark: existing.remark ?? undefined,
@@ -354,6 +355,7 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
       const snapshot: TransferResult = {
         success: true,
         transactionId: transaction.id,
+        sourceAccountId: account.id,
         newBalance: updated.balance,
         recipient: toRecipient(recipient),
         amount,
@@ -399,6 +401,7 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
   return {
     success: true,
     transactionId: outcome.transactionId,
+    sourceAccountId: account.id,
     newBalance: outcome.newBalance,
     recipient: toRecipient(recipient),
     amount,

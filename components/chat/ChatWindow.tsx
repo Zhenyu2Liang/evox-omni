@@ -45,11 +45,12 @@ export interface ChatWindowProps {
 
 /** Does an inline card already represent the SAME active decision as the pending action? */
 function isDuplicateDecisionCard(card: ChatCard, pending: PendingHumanDecision): boolean {
-  if (card.type === 'mfa' && pending.kind === 'mfa') {
+  if (card.type === 'mfa') {
     return card.actionId === pending.actionId;
   }
-  if (card.type === 'confirmation' && pending.kind === 'confirmation') {
-    return decisionKey(card.action) === decisionKey(pending.summary);
+  if (card.type === 'confirmation') {
+    return card.action.actionId === pending.actionId ||
+      (pending.kind === 'confirmation' && decisionKey(card.action) === decisionKey(pending.summary));
   }
   return false;
 }
@@ -111,6 +112,7 @@ function PendingDecisionCard({ pending, action, busy, error, attempts }: Pending
   return (
     <MfaCard
       actionId={actionId}
+      action={pending.summary}
       hint={hint}
       onSubmit={(code) => action.onVerify?.(actionId, code)}
       onCancel={action.onCancel}
@@ -138,6 +140,8 @@ export function ChatWindow({
 
   const lastMessageId =
     visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1].id : undefined;
+  // Only the newest reply may offer a planning retry. Starting any new turn retires old buttons.
+  const retryRequest = visibleMessages.at(-1)?.role === 'assistant' ? visibleMessages.at(-1)?.retryRequest : undefined;
 
   // Auto-scroll the list to the bottom as new content arrives.
   useEffect(() => {
@@ -152,9 +156,7 @@ export function ChatWindow({
     onConfirm: (id) => void stream.confirm(id),
     onVerify: (id, code) => void stream.verify(id, code),
     onCancel: (id) => void stream.cancel(id),
-    onAcknowledge: () => void stream.send('这笔交易是我本人消费'),
-    onViewDetail: () => void stream.send('我想查看这笔交易的详情'),
-    onFreeze: () => void stream.send('冻结我的银行卡'),
+    onFreeze: (anomaly, cardId) => void stream.send(`交易 ${anomaly.transaction.id}（${anomaly.transaction.merchant}）触发安全提醒。我选择冻结卡片 ${cardId}，请生成确认卡。`),
     onTaskControl: (a) => void stream.controlTask(a),
     onRecover: (id) => void stream.recover(id),
     mfaAttempts: stream.mfaAttempts,
@@ -172,6 +174,7 @@ export function ChatWindow({
   return (
     <div className={`flex h-full min-h-0 flex-col bg-banking-light ${className ?? ''}`.trim()}>
       <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        {stream.error && !pending ? <p role="alert" className="text-banking-danger">{stream.error}</p> : null}
         {isEmpty && stream.restoring ? (
           <div className="flex flex-col items-center justify-center gap-3 py-10">
             <Spinner />
@@ -224,6 +227,11 @@ export function ChatWindow({
       )}
 
       <div className="border-t border-banking-light bg-white p-3">
+        {retryRequest && !pending && stream.pendingReconciliations.length === 0 && (
+          <button type="button" disabled={stream.busy || stream.restoring}
+            className="mb-2 rounded-lg border border-banking-blue px-3 py-2 text-sm text-banking-blue disabled:opacity-50"
+            onClick={() => void stream.send(retryRequest)}>重试规划</button>
+        )}
         <Composer onSend={stream.send} busy={stream.busy} disabled={stream.busy} />
       </div>
     </div>

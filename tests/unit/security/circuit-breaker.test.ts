@@ -1,13 +1,18 @@
 /**
- * Unit: security/circuit-breaker — session-scoped consecutive-failure breaker (in-process state).
+ * Unit: security/circuit-breaker — OWNER-scoped consecutive-failure breaker (DURABLE state).
  *
- * Targets `@/security/circuit-breaker`: getState(sessionId), isLocked(sessionId),
- * recordFailure(sessionId), recordSuccess(sessionId), reset(sessionId) (+ type CircuitBreakerState).
+ * Targets `@/security/circuit-breaker`: the ASYNC `getState(actor)`, `isLocked(actor)`,
+ * `recordFailure(actor)`, `recordSuccess(actor)`, `reset(actor)` (+ type `CircuitBreakerState`).
  *
- * State lives IN-PROCESS keyed by sessionId (NOT the DB) → EVERY test MUST use a UNIQUE sessionId,
- * otherwise tests leak state into one another. `recordFailure` emits a SecurityEvent via ./audit
- * (only on the tripping call) → trips are verified against the test SQLite; `getState`/`isLocked`/
- * `recordSuccess`/`reset` are otherwise pure.
+ * State is PERSISTED (`CircuitBreakerState`) and keyed by the breaker OWNER — never by the raw
+ * session id: `getSession(actor)` → `user:<userId>`; else `getUser(actor)` → `user:<id>`; else
+ * `session:<actor>`. The actor ids used here (`newId('cb')` / `newId('cbtrip')`) have NO
+ * `AgentSession` row and no matching `User` row, so each resolves to a DISTINCT `session:<actor>`
+ * key and the isolation assertions still hold. `useFreshDatabase()` clears `circuitBreakerState`
+ * between tests, so nothing leaks either way.
+ *
+ * `recordFailure` emits a `SecurityEvent` via `./audit` (only on the tripping call) → trips are
+ * verified against the test SQLite; the other calls are pure DB reads/writes.
  */
 import { describe, it, expect } from 'vitest';
 import { getState, isLocked, recordFailure, recordSuccess, reset } from '@/security/circuit-breaker';
@@ -18,7 +23,10 @@ import { useFreshDatabase, getTestPrisma } from '../../helpers/db';
 // Trip persistence writes a `SecurityEvent` row → give the suite a fresh, isolated test DB.
 useFreshDatabase();
 
-/** A unique sessionId per test — breaker state is in-process keyed by sessionId. */
+/**
+ * A unique owner per test. The id belongs to no `AgentSession`/`User` row, so its breaker key is
+ * `session:<id>` — a brand-new, unrelated owner every time.
+ */
 const newSessionId = (): string => newId('cb');
 
 /** The `CIRCUIT_BREAKER_TRIPPED` security-event rows persisted for a session. */
@@ -35,11 +43,11 @@ async function tripBreaker(sessionId: string): Promise<void> {
   }
 }
 
-describe('circuit-breaker · fresh state (unique sessionId per test)', () => {
-  it('a brand-new sessionId → getState: failures 0, max MFA_MAX_ATTEMPTS, locked false, lockedAt undefined', () => {
+describe('circuit-breaker · fresh state (unique actor per test)', () => {
+  it('a brand-new actor → getState: failures 0, max MFA_MAX_ATTEMPTS, locked false, lockedAt undefined', async () => {
     const sessionId = newSessionId();
 
-    const state = getState(sessionId);
+    const state = await getState(sessionId);
 
     expect(MFA_MAX_ATTEMPTS).toBe(3);
     expect(state.sessionId).toBe(sessionId);
@@ -49,10 +57,10 @@ describe('circuit-breaker · fresh state (unique sessionId per test)', () => {
     expect(state.lockedAt).toBeUndefined();
   });
 
-  it('isLocked(newSessionId) → false', () => {
+  it('isLocked(newSessionId) → false', async () => {
     const sessionId = newSessionId();
 
-    expect(isLocked(sessionId)).toBe(false);
+    expect(await isLocked(sessionId)).toBe(false);
   });
 });
 
@@ -65,7 +73,7 @@ describe('circuit-breaker · consecutive failures / trip', () => {
     expect(state.failures).toBe(1);
     expect(state.locked).toBe(false);
     expect(state.lockedAt).toBeUndefined();
-    expect(isLocked(sessionId)).toBe(false);
+    expect(await isLocked(sessionId)).toBe(false);
     // A single failure writes no security event.
     expect(await tripEvents(sessionId)).toHaveLength(0);
   });
@@ -78,8 +86,8 @@ describe('circuit-breaker · consecutive failures / trip', () => {
 
     expect(state.failures).toBe(2);
     expect(state.locked).toBe(false);
-    expect(isLocked(sessionId)).toBe(false);
-    expect(getState(sessionId).failures).toBe(2);
+    expect(await isLocked(sessionId)).toBe(false);
+    expect((await getState(sessionId)).failures).toBe(2);
     expect(await tripEvents(sessionId)).toHaveLength(0);
   });
 
@@ -93,7 +101,7 @@ describe('circuit-breaker · consecutive failures / trip', () => {
     expect(state.failures).toBe(MFA_MAX_ATTEMPTS);
     expect(state.locked).toBe(true);
     expect(typeof state.lockedAt).toBe('number');
-    expect(isLocked(sessionId)).toBe(true);
+    expect(await isLocked(sessionId)).toBe(true);
   });
 
   it('tripping emits a CIRCUIT_BREAKER_TRIPPED SecurityEvent with severity "high" (needs test SQLite)', async () => {
@@ -115,13 +123,13 @@ describe('circuit-breaker · consecutive failures / trip', () => {
   it('further failures after trip keep locked true (idempotent trip)', async () => {
     const sessionId = newSessionId();
     await tripBreaker(sessionId);
-    expect(isLocked(sessionId)).toBe(true);
+    expect(await isLocked(sessionId)).toBe(true);
 
     const state = await recordFailure(sessionId);
 
     expect(state.locked).toBe(true);
     expect(state.failures).toBe(MFA_MAX_ATTEMPTS); // not recounted
-    expect(isLocked(sessionId)).toBe(true);
+    expect(await isLocked(sessionId)).toBe(true);
     // The trip is emitted exactly once — a 4th failure must NOT re-emit.
     expect(await tripEvents(sessionId)).toHaveLength(1);
   });
@@ -132,58 +140,58 @@ describe('circuit-breaker · success / reset semantics', () => {
     const sessionId = newSessionId();
     await recordFailure(sessionId);
     await recordFailure(sessionId);
-    expect(getState(sessionId).failures).toBe(2);
+    expect((await getState(sessionId)).failures).toBe(2);
 
-    const state = recordSuccess(sessionId);
+    const state = await recordSuccess(sessionId);
 
     expect(state.failures).toBe(0);
     expect(state.locked).toBe(false);
-    expect(getState(sessionId).failures).toBe(0);
-    expect(isLocked(sessionId)).toBe(false);
+    expect((await getState(sessionId)).failures).toBe(0);
+    expect(await isLocked(sessionId)).toBe(false);
   });
 
   it('recordSuccess does NOT unlock an already-tripped breaker (locked stays true)', async () => {
     const sessionId = newSessionId();
     await tripBreaker(sessionId);
-    expect(isLocked(sessionId)).toBe(true);
+    expect(await isLocked(sessionId)).toBe(true);
 
-    const state = recordSuccess(sessionId);
+    const state = await recordSuccess(sessionId);
 
     expect(state.failures).toBe(0);
     expect(state.locked).toBe(true);
-    expect(isLocked(sessionId)).toBe(true);
+    expect(await isLocked(sessionId)).toBe(true);
   });
 
   it('reset(sessionId) clears all state → failures 0, locked false (used by admin / security-center reset)', async () => {
     const sessionId = newSessionId();
     await tripBreaker(sessionId);
-    expect(isLocked(sessionId)).toBe(true);
+    expect(await isLocked(sessionId)).toBe(true);
 
-    reset(sessionId);
+    await reset(sessionId);
 
-    const state = getState(sessionId);
+    const state = await getState(sessionId);
     expect(state.failures).toBe(0);
     expect(state.locked).toBe(false);
     expect(state.lockedAt).toBeUndefined();
-    expect(isLocked(sessionId)).toBe(false);
+    expect(await isLocked(sessionId)).toBe(false);
   });
 });
 
-describe('circuit-breaker · session isolation', () => {
-  it('two distinct sessionIds are independent: tripping A does not lock B', async () => {
+describe('circuit-breaker · owner isolation', () => {
+  it('two distinct actor ids are independent: tripping A does not lock B', async () => {
     const sessionA = newSessionId();
     const sessionB = newSessionId();
 
     await tripBreaker(sessionA);
 
-    expect(isLocked(sessionA)).toBe(true);
-    expect(isLocked(sessionB)).toBe(false);
-    expect(getState(sessionB).failures).toBe(0);
+    expect(await isLocked(sessionA)).toBe(true);
+    expect(await isLocked(sessionB)).toBe(false);
+    expect((await getState(sessionB)).failures).toBe(0);
     expect(await tripEvents(sessionA)).toHaveLength(1);
     expect(await tripEvents(sessionB)).toHaveLength(0);
   });
 
-  it('failures are counted per sessionId (interleaved A/B failures do not sum)', async () => {
+  it('failures are counted per owner (interleaved A/B failures do not sum)', async () => {
     const sessionA = newSessionId();
     const sessionB = newSessionId();
 
@@ -191,14 +199,14 @@ describe('circuit-breaker · session isolation', () => {
     await recordFailure(sessionB);
     await recordFailure(sessionA);
 
-    const stateA = getState(sessionA);
-    const stateB = getState(sessionB);
+    const stateA = await getState(sessionA);
+    const stateB = await getState(sessionB);
 
     expect(stateA.failures).toBe(2);
     expect(stateA.locked).toBe(false);
     expect(stateB.failures).toBe(1);
     expect(stateB.locked).toBe(false);
-    expect(isLocked(sessionA)).toBe(false);
-    expect(isLocked(sessionB)).toBe(false);
+    expect(await isLocked(sessionA)).toBe(false);
+    expect(await isLocked(sessionB)).toBe(false);
   });
 });

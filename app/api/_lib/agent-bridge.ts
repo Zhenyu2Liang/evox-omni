@@ -25,6 +25,8 @@ import {
   recoverAction as agentRecover,
   resumeTask,
   retryTask,
+  rollbackTask,
+  nextPlanDecision,
   verifyAction as agentVerify,
 } from '@/agent';
 import type { ConfirmationOutcome, ConfirmOptions, RecoverOptions } from '@/agent';
@@ -32,7 +34,7 @@ import type { TaskPlan } from '@/lib/contracts/task';
 import { AppError } from '@/lib/errors';
 
 /** The four execution-control actions `POST /api/tasks/[id]` accepts. */
-export type TaskControlAction = 'pause' | 'resume' | 'cancel' | 'retry';
+export type TaskControlAction = 'pause' | 'resume' | 'cancel' | 'retry' | 'rollback';
 
 /**
  * Shape of an `@/agent` task-control capability: given the owning session and the task id, steer
@@ -59,6 +61,7 @@ const CONTROL_FNS: Record<TaskControlAction, TaskControlFn | undefined> = {
   resume: resumeTask,
   cancel: cancelTask,
   retry: retryTask,
+  rollback: rollbackTask,
 };
 
 /**
@@ -152,19 +155,21 @@ export async function locateOwningPlan(
 }
 
 /**
- * Append the refreshed plan to a successful continuation so the browser can refresh its plan view.
+ * Append the persisted plan after continuation events, including failed business outcomes.
  *
- * Returns `outcome` unchanged when there is no owning plan, the decision did not succeed, or the
- * runtime already emitted a `plan_update`. Otherwise re-reads the plan (ownership-checked) and
- * appends a `plan_update` event. This only RE-READS + FORWARDS — no DAG logic, no re-resume.
+ * A narration can contain an older plan card. The last event must reflect the ownership-checked
+ * database snapshot, so retry failures cannot leave the UI in waiting_confirmation.
  */
 export async function withPlanUpdate(
   outcome: ConfirmationOutcome,
   located: LocatedPlan | undefined,
 ): Promise<ConfirmationOutcome> {
   if (located === undefined) return outcome;
-  if (outcome.ok !== true) return outcome;
-  if (outcome.events.some((event) => event.type === 'plan_update')) return outcome;
   const plan = await getTaskPlan(located.sessionId, located.taskId);
-  return { ...outcome, events: [...outcome.events, { type: 'plan_update', plan }] };
+  const events = outcome.events.filter(event => event.type !== 'plan_update' || event.plan.id !== plan.id);
+  const decision = await nextPlanDecision(located.sessionId, located.taskId);
+  const filtered = decision && 'actionId' in decision
+    ? events.filter(event => !((event.type === 'mfa_required' || event.type === 'confirmation_required') && event.actionId === decision.actionId))
+    : events;
+  return { ...outcome, events: [...filtered, { type: 'plan_update', plan }, ...(decision ? [decision] : [])] };
 }

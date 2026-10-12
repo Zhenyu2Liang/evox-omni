@@ -1,10 +1,5 @@
 # docs — Competition Documentation
 
-`repair-recovery-security.md` records the `95ff994` follow-up repair: new-debit recovery authorization,
-card/subscription resource ownership, separate reconciliation audit identities and truthful recovery
-responses. Its three original probes are unchanged; one older HTTP assertion is tightened to the
-manual-review contract. Current suite: 100 files / 716 tests; separate browser acceptance: 7 journeys.
-
 ## Intent
 
 The **competition-facing documentation** for the AI Banking Agent demo: precise, demo-oriented
@@ -15,7 +10,7 @@ each references actual module paths, constants, tool names and spec files.
 The audience is a Chinese competition review; the goal is to explain *why this is an agent with
 code-enforced security*, not a chat skin over a bank app.
 
-Every limitation is tagged with **exactly one** of three buckets, used consistently across all four
+Every limitation is tagged with **exactly one** of three buckets, used consistently across the
 docs: ✅ **已实现 / implemented** (code-enforced, LLM-immutable), 🧪 **模拟 / simulated**
 (mock backend or deliberately limited design), ⚠️ **未验证·未完成 / unverified·open** (not proven
 in this repo, or dependent on a specific runtime environment such as multi-process/multi-instance).
@@ -50,7 +45,7 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
 - `docs/security.md` — three permission tiers + the frozen policy table + dynamic `transfer_money`
   rules (`DAILY_TRANSFER_LIMIT=1000`); the Security Gateway `beforeToolCall` chokepoint;
   code-enforced / LLM-immutable permissions; prompt-injection defense (`injection-guard`, Test 4);
-  hallucination protection (facts only from tool results); MFA (`MFA_CODE='123456'`,
+  hallucination protection (server-authoritative facts bound **per operation** — `toolCallId`/`actionId` + plan `taskId`/`nodeId` — plus a **per-account current-balance ledger**, `unknown`→待核对, and a server-authored correction that replaces inconsistent assistant text **before** it is streamed; **live-LLM robustness UNVERIFIED**, see §8.5); MFA (`MFA_CODE='123456'`,
   `MFA_MAX_ATTEMPTS=3`); circuit breaker; audit log fields (`AuditEntry` / `SecurityEventKind`);
   the **reliable/keyed audit** contract (`audit/audit-logger.ts#recordAudit(entry, {client, dedupeKey, strict})` —
   `strict:true` rethrows a real insert error and ONLY absorbs a verified duplicate (P2002 on the exact
@@ -89,14 +84,14 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   records the clean-env init root cause (`RUST_LOG`), further specs (`tests/integration/node-result-recovery.test.ts`,
   `tests/integration/obsolete-executor.test.ts`, `tests/integration/node-result-recovery.test.ts`, `tests/deploy-db-push.test.ts`,
   `tests/unit/lib/prisma-cli-env.test.ts`) and the deploy ordering (`npm run db:push` → `db:seed` → `build`);
-  the maintained suites now live in tests/integration; current size is **100 files / 716 tests**.
+  the maintained suites now live in tests/integration; current size is **113 files / 811 tests**.
 - `docs/known-risks.md` — honest limitations (mock data, simulated MFA, no real payment, heuristic
-  anomaly detection, fictional investments, spending analysis excludes anomalies, in-process
-  breaker, pinned demo clock, limited audit scope, non-deterministic live LLM), each tagged with
+  anomaly detection, fictional investments, spending analysis excludes anomalies, pinned demo clock,
+  limited audit scope, non-deterministic live LLM), each tagged with
   exactly one of the three buckets and framed as *limitation + why it is acceptable for a
   competition demo*; carries the 【已实现】 entries for the unified convergence / write-boundary fence /
-  in-tx digest replay / strict-keyed audit and the 【未验证】 multi-instance caveat (summary-table rows 18–20,
-  §18–§20). Documents the standalone `needs_reconciliation` reconciliation boundary (only
+  in-tx digest replay / strict-keyed audit and the 【未验证】 multi-instance caveat (summary-table rows 17–19,
+  §17–§19). Documents the standalone `needs_reconciliation` reconciliation boundary (only
   `transfer_money` is proven idempotent for standalone recovery), the per-process ref-counted
   `liveConfirmations` liveness registry (with the persisted per-row execution lease,
   `EXECUTION_LEASE_TTL_MS = 120000`, distinct from the plan-takeover `EXECUTION_CLAIM_TTL_MS = 600000`),
@@ -105,6 +100,11 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   `AuditLog.dedupeKey` via `prisma db push`, no `migrations/`, never resolved by wiping/re-seeding), the
   clean-env init root cause, the `lib/prisma-cli-env.ts` policy and the deploy ordering as an engineering note,
   together with the file-size soft-guideline overrun.
+
+- `docs/money-budget-boundaries.md` → monetary/budget safety boundaries: the `normalizeTransferAmount` integer-cent contract, the session-injected `buildAutomaticWriteFence` (plan/node ownership + breaker, re-checked inside the SDK write transaction), the budget idempotency identity `(userId, idempotencyKey)` and the `db push` index-upgrade procedure.
+- `docs/pi-upgrade.md` → Pi 1.1 upgrade notes: the new package names `@earendil-works/pi-agent-core` / `pi-ai` 1.1.0, Node.js >= 22.19.0, the explicit `streamFn` requirement, and live `builtinModels()` vs the per-runtime `fauxProvider()`.
+- `docs/manual-review.md` → the demo manual-handoff contract: the Cookie-owned `/manual` page + `GET/POST /api/manual-reviews` persisting `ManualReview` (operator/reason/notes/decision, `activeKey`); an open review blocks task status/execution claims and continue only retries explicitly failed work through the original confirmation/MFA.
+- `docs/repair-*.md` (3 files: confirmation-boundaries / recovery-security / transaction-boundaries) → historical per-round repair records (change-log style). Retained for provenance; `README.md` links to two of them, so removing or changing them must be coordinated with the root/README task.
 
 ## Constraints
 
@@ -124,6 +124,10 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
 - `./security.md` → permission tiers, gateway, injection/hallucination defense, MFA, circuit breaker, strict/keyed audit, write-boundary fence, sandbox
 - `./test-cases.md` → 12 demo scenarios + unit coverage + offline/mock test strategy + real-browser acceptance harness + regression specs
 - `./known-risks.md` → honest limitations, each tagged with one of the three buckets + demo acceptability rationale
+- `./money-budget-boundaries.md` → monetary/budget safety boundaries: integer-cent amount contract, the SDK in-tx session-breaker fence for automatic budget writes, the `(userId, idempotencyKey)` budget identity and the db-push index-upgrade path
+- `./pi-upgrade.md` → Pi Agent / pi-ai 1.1 upgrade notes (new package names, explicit `streamFn`, live vs faux providers)
+- `./manual-review.md` → demo manual-handoff contract (`/manual` + `/api/manual-reviews`, `ManualReview`, `needs_reconciliation` handling)
+- `./repair-*.md` → historical per-round repair records (change-log style; NOT current-state deliverables) — cross-referenced by the root `../README.md`, so handle removal there
 - `../tests/e2e/CONTEXT.md` → real-browser acceptance harness (journeys + honest caveats; sibling — read-only)
 - `../CONTEXT.md` → root context (pipeline, tech stack, security model, tool catalogue) — source of truth (read-only)
 - `../README.md` → setup, demo account, mock MFA code, demo script (root-owned, sibling — read-only)
@@ -207,6 +211,4 @@ in this repo, or dependent on a specific runtime environment such as multi-proce
   `npm run db:seed` → `npm run build` (the build prerenders routes that query SQLite). The `ExecutionReceipt`
   model and `AuditLog.dedupeKey` are additive and applied via `prisma db push` (there is NO `migrations/`
   directory); consistency is NEVER resolved by wiping or re-seeding the DB.
-- **Measured state**: cleanup validation → 100 files / 716 tests pass and typecheck → 0 errors.
-  Previous functional validation: build → exit 0; E2E → PASS 7 / FAIL 0 / SKIP 0. Cleanup does not
-  change production logic, and did not rerun build/browser acceptance. See docs/test-cases.md.
+- **Measured state**: typecheck → 0 errors; Vitest → 113 files / 811 tests pass; build → exit 0; real-browser acceptance → PASS 7 / FAIL 0 / SKIP 0. See docs/test-cases.md.

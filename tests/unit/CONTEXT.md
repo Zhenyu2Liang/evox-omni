@@ -24,28 +24,33 @@ runs them all — no scoped config is required for any of them.
   `authorize-concurrency` proves the concurrent-confirm exactly-once claim **and** execution-time
   re-risk of a stale parked transfer end-to-end through the REAL `@/agent` `confirmAction`/
   `verifyAction` façade (needs a persisted session).
-- `planner/` (4 specs) — `dag` (validate / topological order / readiness / conditions / `buildPlan`),
+- `planner/` (5 specs) — `dag` (validate / topological order / readiness / conditions / `buildPlan`),
   `executor` (`runPlan` node-state machine + `PlanControls`), `executor-claim-scope` (DB-backed: exactly-once node-executor
   claim by the stable `(taskId,nodeId)` identity via `claimNodeExecution`/`releaseNodeExecution`; a
   second separate `runPlan` of the same node loses the claim, writes nothing, and halts - NO in-process
-  Map), `lifecycle` (durable persisted-plan
+  Map), `executor-execution-right` (DB-backed: a rotated plan token makes the superseded "zombie" run perform ZERO tool calls/writes and publish no stale settlement, while a committed node success survives), `lifecycle` (durable persisted-plan
   `pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`).
-- `banking-sdk/` (5 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
+- `banking-sdk/` (6 specs) — `transfer`, `subscription`, `investment` (domain invariants), and
   `atomicity` (ledger-write rollback + concurrent overspend / double-redeem through the real tx), and
   `idempotent` (the shared at-most-once CREATE helper: same key replays exactly ONE row for both
-  `reserveBudget` and `createScheduledTask`; absent key keeps legacy create-a-row behavior).
-- `agent/` (5 specs + `providers/`) — end-to-end confirmation-flow audit specs against the real DB +
-  gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `task-control`, `task-cancel-revokes`, `run-turn-failure`;
-  `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec.
+  `reserveBudget` and `createScheduledTask`; absent key keeps legacy create-a-row behavior), and
+  `transfer-receipt` (COMMITTED-FACT / execution-receipt replay: same key+request replays the ORIGINAL
+  result, a different request → `CONFLICT`, a legacy receipt-less ledger row is recognized, a fresh miss
+  → `NOT_FOUND`).
+- `agent/` (6 specs + `providers/` 4 specs) — end-to-end confirmation-flow audit specs against the real DB +
+  gateway + `@/agent`: `confirmation-idempotency`, `confirmation`, `message-normalize` (`withRealToolResult` restores the REAL result over a stale parked `等待确认`), `task-control`, `task-cancel-revokes`, `run-turn-failure` (continuation failure never rephrased as success);
+  `providers/provider-mock.test.ts` is the DB-free `mock-responder` spec (incl. honest failure /
+  not-yet-executed narration); `providers/provider-live.test.ts` is the pure model-resolution spec and
+  `providers/provider-runtime.test.ts` the explicit-provider runtime spec.
   `providers/plan-limit-park.test.ts` pins the mock `submit_plan` gated conditional plan
   (analyze -> check -> setlimit) that PARKS in `waiting_confirmation`, then confirms.
-- `lib/` (2 specs) — `pendingAction.claim.test.ts` — `lib/db/repositories/pendingAction`: the atomic,
+- `lib/` (5 specs) — `pendingAction.claim.test.ts` — `lib/db/repositories/pendingAction`: the atomic,
   ownership-aware persistence primitives (`claimPendingAction` exactly-once `pending → confirmed`,
   the `from`-set match, `userId`/`sessionId` scoping, `setPendingActionStatus` +
   `getPendingActionOwnership`). DB-backed. Plus `ledger-keys.test.ts` - pure: `lib/ledger` de-dup-scope
   identity keys (`nodeExecutionKey` = `nxe:<taskId>:<nodeId>`, plan/node-scoped so two DIFFERENT plans
   never merge while the SAME (task,node) always dedupes; `idempotentTransferTxId` = `txidem_` + first 32
-  hex of sha256 over `<userId>` + NUL + key).
+  hex of sha256 over `<userId>` + NUL + key). Plus `execution-receipt.test.ts` (pure: `executionReceiptId` + canonical `requestDigest`), `prisma-cli-env.test.ts` (pure: schema-engine `RUST_LOG` pin policy), and `contact.search.test.ts` (DB-backed: `contact#searchContacts` masked phone/name resolution).
 
 Each spec imports the module under test directly from its `@/…` façade path
 (e.g. `@/security`, `@/planner`, `@/banking-sdk`, `@/agent`, `@/lib/db/repositories/pendingAction`)
@@ -56,6 +61,9 @@ Each spec imports the module under test directly from its `@/…` façade path
 - Pure where possible: no network, no real clock (`now` is injected), no LLM. DB-backed cases
   (`computeDailyTransferTotal`, gateway persistence, MFA challenges, SDK invariants, PendingAction
   claims) use the test SQLite via `../helpers/db` and are annotated as such in their file header.
+- EXCEPTION to "no real clock": the SECURITY-only cooldown gate (`security/circuit-breaker.ts`) uses the
+  REAL wall clock (`realNow()`), so its specs (`security/circuit-breaker-reset` / `-persistence`) derive
+  the boundary from the persisted `lockedAt` and also exercise the DEFAULT server clock — never the demo clock.
 - **Unique `sessionId`** for any breaker-related case.
 - Import frozen types from `@/lib/contracts/*`; never redeclare. Assert through public facades
   (`@/security`, `@/planner`, `@/banking-sdk`, `@/agent`).

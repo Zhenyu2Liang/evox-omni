@@ -2,9 +2,14 @@
 
 import { useState } from 'react';
 import { Badge, Button, Card } from '../../ui';
+import type { PendingActionSummary } from '@/lib/contracts/security';
+import { asTerminalStatus } from './confirmationStatus';
 
 export interface MfaCardProps {
   actionId: string;
+  action?: Omit<PendingActionSummary, 'toolName'>;
+  status?: string;
+  statusMessage?: string;
   hint?: string;
   onSubmit?: (code: string) => void;
   onCancel?: (actionId: string) => void;
@@ -25,7 +30,9 @@ export function MfaCard(p: MfaCardProps) {
   const [code, setCode] = useState('');
 
   const trimmed = code.trim();
-  const canSubmit = trimmed.length > 0 && !busy;
+  const terminal = asTerminalStatus(p.status);
+  const readOnly = terminal !== undefined || (p.status !== undefined && !['pending', 'awaiting_mfa'].includes(p.status));
+  const canSubmit = /^\d{6}$/.test(trimmed) && !busy && !readOnly;
 
   const submit = () => {
     if (!canSubmit) return;
@@ -44,13 +51,17 @@ export function MfaCard(p: MfaCardProps) {
   );
 
   return (
-    <Card className={className} title="身份验证" footer={footer}>
+    <Card className={className} title="身份验证" footer={readOnly ? undefined : footer}>
       <div className="flex flex-col gap-3">
-        <p className="text-sm text-banking-navy/70">
+        {p.action ? <dl className="space-y-2 text-sm">{p.action.fields.map((field, index) =>
+          <div key={`${field.label}-${index}`} className="flex justify-between gap-3"><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl> : null}
+        {terminal ? <p role="status">{p.statusMessage ?? ({ executed: '已执行', failed: '执行失败', cancelled: '已取消', confirmed: '已确认', locked: '已锁定', needs_reconciliation: '待核对' }[terminal])}</p> : null}
+        {readOnly && !terminal ? <p role="status">{p.status === 'locked' ? '已锁定，请到安全中心处理。' : '处理中，请在待处理操作中核对。'}</p> : null}
+        {!readOnly ? <p className="text-sm text-banking-navy/70">
           {hint ?? '该操作属于高风险操作，请输入短信验证码完成验证。'}
-        </p>
+        </p> : null}
 
-        <input
+        {!readOnly ? <input
           type="text"
           inputMode="numeric"
           autoComplete="one-time-code"
@@ -66,7 +77,7 @@ export function MfaCard(p: MfaCardProps) {
             }
           }}
           className="w-full rounded-xl border border-banking-navy/20 bg-banking-light px-3 py-2 text-sm text-banking-navy outline-none transition focus:border-banking-accent disabled:opacity-60"
-        />
+        /> : null}
 
         {typeof attempts === 'number' && attempts > 0 ? (
           <p className="text-xs text-banking-warn" role="status">

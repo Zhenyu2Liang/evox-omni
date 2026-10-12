@@ -26,7 +26,7 @@
 | 新增恢复安全用例 | 15/15 通过，含可控屏障与审计故障注入 |
 | `npx tsc --noEmit` | exit 0 |
 | `npx vitest run` | 105 文件 / 703 用例通过，0 失败、0 跳过，exit 0 |
-| `npx tsx tests/e2e/acceptance.e2e.ts` | 真实本地 headless Chrome，PASS 6 / FAIL 0 / SKIP 0，exit 0 |
+| `npx tsx tests/e2e/acceptance.e2e.ts` | 真实本地 headless Chrome，PASS 7 / FAIL 0 / SKIP 0，exit 0 |
 | `npm run db:push` → `npm run db:seed` → `npm run build` | 外部隔离 SQLite，exit 0；编译及静态生成成功；构建前后 `prisma/dev.db` SHA256 相同 |
 
 新增测试检查：恢复授权后、实际写入前熔断；锁定会话只读恢复；累计升级及正确/错误 MFA；¥1000 同动作并发恢复在状态落地前/后的两种时序；六类资源越权和伪造身份；SDK 缺失身份；读取后所有者变化；原成功审计不变；核对事件去重；核对审计故障回滚并重试。
@@ -40,6 +40,6 @@
 ## 边界与工作区
 
 - 无 schema、依赖或迁移变更；没有清空开发库。浏览器使用 `prisma/e2e.db`，单元/集成测试使用 `prisma/test.db`，构建使用 `D:/projects/.codex-review/banking-repair-95ff994/build.db`。
-- 熔断器仍为进程内实现。多进程/多实例竞争、其他数据库引擎、真实银行接入仍未验证；非转账工具的业务与状态审计尚未全部原子化。
+- 熔断器状态持久化于数据库并按用户。多进程/多实例竞争、其他数据库引擎、真实银行接入仍未验证；非转账工具的业务与状态审计尚未全部原子化。
 - 本轮只对上述缺陷和覆盖场景给出修复结论，不宣称安全问题全部解决。
 - 开始时已存在未跟踪的 `_envcheck.txt`，本轮未修改、未提交。不能把整个工作区称为无未跟踪文件。

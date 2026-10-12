@@ -8,6 +8,7 @@ import type {
   SpendingAnalysis,
   SubscriptionView,
   TransferResult,
+  TransactionView,
 } from '@/banking-sdk';
 import type { CardActionHandlers, InvestmentsCardData } from './types';
 import { AnomalyCard } from './AnomalyCard';
@@ -21,6 +22,7 @@ import { PlanCard } from './PlanCard';
 import { SpendingCard } from './SpendingCard';
 import { SubscriptionsCard } from './SubscriptionsCard';
 import { TransferCard } from './TransferCard';
+import { TransactionsCard } from './TransactionsCard';
 
 export interface CardRendererProps {
   card: ChatCard;
@@ -38,15 +40,17 @@ export function CardRenderer(p: CardRendererProps) {
       return <BalanceCard data={p.card.data as BalanceView} className={p.className} />;
     case 'transfer':
       return <TransferCard data={p.card.data as TransferResult} className={p.className} />;
+    case 'transactions':
+      return <TransactionsCard data={p.card.data as TransactionView[]} />;
     case 'confirmation':
       return (
         <ConfirmationCard
           action={p.card.action}
-          actionId={p.action?.actionId}
+          actionId={p.card.action.actionId ?? p.action?.actionId}
           onConfirm={p.action?.onConfirm}
           onCancel={p.action?.onCancel}
           busy={p.action?.busy}
-          error={p.action?.error}
+          error={p.card.action.actionId === p.action?.actionId ? p.action?.error : undefined}
           className={p.className}
         />
       );
@@ -55,12 +59,15 @@ export function CardRenderer(p: CardRendererProps) {
       return (
         <MfaCard
           actionId={actionId}
+          action={p.card.action}
+          status={p.card.status}
+          statusMessage={p.card.message}
           hint={hint}
           onSubmit={(code: string) => p.action?.onVerify?.(actionId, code)}
           onCancel={p.action?.onCancel}
           busy={p.action?.busy}
-          error={p.action?.error}
-          attempts={p.action?.mfaAttempts}
+          error={actionId === p.action?.actionId ? p.action?.error : undefined}
+          attempts={actionId === p.action?.actionId ? p.action?.mfaAttempts : undefined}
           className={p.className}
         />
       );

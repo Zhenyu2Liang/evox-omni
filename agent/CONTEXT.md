@@ -2,6 +2,14 @@
 
 ## Intent
 
+Explicit multi-step requests must pass whole-plan tool/object/amount coverage before gateway/task/SDK entry. The runtime tracks preflight refusals by tool-call identity, so only those no-entry refusals can use the existing single live planning recovery. Confirmations resume persisted DAG nodes without another model request.
+
+Live planning may recover once before any write/plan/authorization attempt, retaining original user
+identity and read-tool/result pairs. Valid guidance and server-side selection refusal stop recovery.
+Gated decisions and submit_plan finish without another model narration request; live confirmation
+results are rendered and persisted directly from authoritative facts. Retry presentation and stage
+notices live in live-recovery.ts and run-turn.ts; they grant no execution permission.
+
 Confirm/verify/replay recovery share `buildConfirmFence` + `guardExecutionFence`: the persisted
 action session is checked by security at the SDK mutation boundary. A CIRCUIT_OPEN denial is not
 normalised into a failed business result; no new side effect is landed and the action stays
@@ -84,6 +92,7 @@ function getOrCreateSession(userId: string, sessionId?: string): Promise<Session
 interface RunTurnDeps {
   config?: AppConfig;           // defaults to lib/config getConfig()
   now?: () => number;           // injectable clock for deterministic tests
+  provider?: ModelRuntime;      // TEST SEAM (additive): scripted {model,streamFn}; absent ⇒ resolveProvider(config)
 }
 interface ResumeTurnInput {
   sessionId: string;
@@ -129,6 +138,12 @@ function buildRecoveryAudit(action: ConvergenceActionRow, decision: ConvergenceD
 // --- agent/execution-fence.ts (SDK-write execution fence) -------------------
 function buildPlanNodeFence(taskId: string | null | undefined, nodeId: string | null | undefined): Promise<ExecutionFenceCheck | undefined>;
 function buildConfirmFence(taskId: string | null | undefined, nodeId: string | null | undefined): Promise<ExecutionFenceCheck | undefined>;
+
+// --- agent/write-audit.ts (audit by SIDE EFFECT, not by colour) -------------
+type WriteCommitHook = NonNullable<BankingExecutionContext['onWriteCommit']>;   // the SDK write-audit hook
+interface WriteAuditIdentity { sessionId: string; userRequest: string; taskId?: string; nodeId?: string }   // trusted, SERVER-resolved — never model args
+function writeAuditKey(toolName: string, owner: string, identity: string): string;   // `write:<tool>:<owner>:<identity>`
+function buildWriteCommitAudit(tool: ToolName, userId: string, identity: WriteAuditIdentity): WriteCommitHook;   // AuditEntry: confirmationRequired:false, confirmed:false, mfaRequired:false, status:'success'
 
 // --- agent/card-emitter.ts --------------------------------------------------
 function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCard[];  // PURE, total
@@ -197,7 +212,7 @@ each closes over the gateway-routed `TaskRunTool` and resolves the owner from th
 | `agent_start` | — |
 | `turn_start` | — |
 | `message_start` (assistant) | `message_start` |
-| `message_update` (text delta) | `text_delta` (delta only; NO chain-of-thought) |
+| `message_update` (text delta) | Discard model prose; emit server-rendered text once at `message_end` |
 | `tool_execution_start` | `tool_start` (`ToolEventView.status:'started'`, tier from the security evaluation) |
 | `tool_execution_update` | `tool_end` (`status:'updated'`) |
 | `tool_execution_end` (ok) | `tool_end` (`status:'success'`) + `card`(s) from `toCards` |
@@ -434,9 +449,12 @@ A `submit_plan` turn is observable in the UI, not just returned as a plan card:
 - **`userId` is server-injected** (from the session / `lib/config.demoUserId`), never taken from the
   model or user text. Tools are built per-user via `createToolRegistry(userId)`.
 - **Money moves ONLY via human confirmation** (two-phase model) — never from model text.
-- **Hallucination guard**: assistant replies derive ONLY from real tool results. A tool returning
-  `ok:false` MUST be reported as a failure; the agent MUST NOT invent balances/results and MUST NOT
-  claim a gated tool already executed.
+- **Financial output**: `financial-response.ts` generates text from actual tool results; it never
+  receives model prose. `run-turn.ts` discards raw deltas and tool-call preludes, then publishes and
+  persists the same canonical result in the UI and Pi history. Stable execution identities separate
+  writes; account balances and totals update together. UNKNOWN outcomes remain 待核对 and invalidate
+  pre-write current snapshots. Known failures remain failures; gated operations remain unexecuted.
+  `grounding.ts` is a deprecated compatibility-test helper, not the production security boundary.
 - **Provider transcript validity (DeepSeek / OpenAI-compatible)**: every persisted `role:'toolResult'`
   message MUST answer the assistant `toolCall` of the run it belongs to (matching `toolCallId`) — no
   orphan, no duplicate, no fabricated id. `resumeTurn` REPLACES the turn-time (blocked) placeholder
@@ -504,7 +522,8 @@ Implement against `node_modules/@earendil-works/*` (stubs / `./tools/CONTEXT.md`
 - **Cross-action transfer serialization depends on SQLite's DB-level single-writer lock, and the gateway's confirm-time re-risk transaction does not include the SDK execution.** `security/security-gateway.ts#authorizeTransfer` re-risks in ONE `prisma.$transaction` that CAS-claims the action FIRST and only THEN reads the in-flight-inclusive effective total (`computeEffectiveTransferTotalWith`) and re-runs `evaluateTransferRisk` (escalating to MFA when the day's total would exceed the limit), so concurrent confirms of DISTINCT parked transfers serialize only through SQLite's single-writer lock - with no explicit isolation level or `SELECT ... FOR UPDATE`; and a crash between that commit and `agent/confirmation.ts#executeAuthorizedAction` (which runs the transfer, then persists `resultJson` and `recordActionResult`) leaves a `confirmed`-but-unledgered action counted as in-flight (over-conservative, never under-counting).
 - **`liveConfirmations` is PER-PROCESS.** A `confirmed` + `resultJson=null` row whose live continuation runs in a DIFFERENT process/instance is not distinguished from a genuine wedge (the registry is a per-process, ref-counted liveness hint, not a durable marker); multi-instance deploy is not covered.
 - **Execution takeover is a TTL HEURISTIC.** `EXECUTION_CLAIM_TTL_MS = 600_000ms` is computed from the REAL clock: a single tool call legitimately blocked beyond the TTL can be overtaken (its writes are fenced, so it can never clobber the takeover, but it is preempted), so preemption is a heuristic, never a liveness proof.
-- **File-size budget exceeded.** `agent/task-control.ts` (1212 lines) and `agent/confirmation.ts` (1105 lines) exceed the ~1000-line soft guideline and remain extraction candidates (two extractions already landed: `agent/execution-convergence.ts`, `agent/execution-fence.ts`).
+- **File-size budget exceeded.** `agent/task-control.ts` (1215 lines) and `agent/confirmation.ts` (1154 lines) exceed the ~1000-line soft guideline and remain extraction candidates (two extractions already landed: `agent/execution-convergence.ts`, `agent/execution-fence.ts`). The fact-grounding files are within budget: `agent/grounding-facts.ts` (704 lines) and `agent/grounding.ts` (264 lines).
+
 
 ## Notes for Agents
 
@@ -516,6 +535,7 @@ Implement against `node_modules/@earendil-works/*` (stubs / `./tools/CONTEXT.md`
 - The human-decision stream events are emitted from two distinct sites (same names, different payloads): `confirmation_required` ONLY from `run-turn.ts` (turn-time, via `handleToolExecutionEnd` for a directly-blocked gated tool, or `emitParkedDecision` for a parked DAG node) and NEVER from `confirmation.ts`; `mfa_required` from `run-turn.ts` (with `hint: MFA_HINT` + an MFA card) AND from `confirmation.ts#blockedOutcome` (with ONLY `{ actionId }` — no `hint`, no card) when a confirm/verify authorization still requires verification (wrong code ⇒ `awaiting_mfa`, or `locked`).
 - Every card emitted to the UI must originate from a real tool result (or a real security decision) —
   never from model prose. `card-emitter.toCards` is PURE and total (unknown shape ⇒ `error` card).
+- The assistant's prose is grounded by CODE, not only by the `HALLUCINATION_RULE` prompt text: `run-turn.ts` feeds every REAL tool result into `grounding-facts.buildFinancialFacts` (STRUCTURED per-account balances + per-OPERATION-IDENTITY write outcomes carrying amount/recipient/outcome-state) and `grounding.groundAssistantText` REPLACES a false-success / wrong-recipient / wrong-amount / wrong-account / no-authority-balance message with a server-authored correction. EVERY assistant message's text is grounded — INCLUDING one that ALSO carries a `toolCall` part (the delta stream is buffered and grounded at `message_end`) — and the real `toolCallId` (+ the action / plan-node ids where genuinely known) is threaded from `handleToolExecutionEnd`, `resumeTurn` and the confirm continuation (`confirmation.ts`) so a claim binds to the SPECIFIC operation. The verdict is STRUCTURAL (operation identity, account, amount, recipient, outcome state) — never a global "some write succeeded" flag and never a model-producible text marker (idempotency is tracked server-side by message id). `RunTurnDeps.provider` is the additive, optional seam that scripts the model for the REAL `runTurn` — use it to prove grounding end-to-end; do NOT rely on the test-only `tests/helpers/scenario.ts` re-instantiation for that.
 - `submit_plan` is meta (not risk-gated): it validates the DAG, then runs it via `planner.runPlan` with
   `runTool = executeGatedTool`; individual money-moving nodes still gate through the gateway.
 - **Plan-node actions are BORN plan-linked.** Every REAL `runTool` adapter forwards the executor's
@@ -537,6 +557,7 @@ Vitest (`tests/`, read-only sibling); designed to run WITHOUT network:
 - Full-pipeline scenarios (the 12 demo Tests) run `runTurn` + `confirmAction`/`verifyAction` with `LLM_MODE=mock` (faux scripts) — proving gating, MFA, injection refusal and the hallucination guard.
 - The offline mock model (`providers/`) is the default `LLM_MODE=mock` runtime and drives the REAL pipeline (runTurn → `createBankingAgent` → mock → tools → gateway → SDK → DB) end-to-end offline, incl. `POST /api/chat` E2E: a GREEN read, a parked YELLOW/RED transfer, a `submit_plan` DAG, and honest `INSUFFICIENT_FUNDS` failure narration. A conditional plan that also asks to adjust a card spend limit parks its YELLOW `set_card_limit` node, so the plan-level `confirmation_required` frame is reachable through the mock model (see `./providers/CONTEXT.md`).
 - Agent unit specs live under `tests/unit/agent/` (`confirmation*.test.ts`, `task-control.test.ts`, `task-cancel-revokes.test.ts`, `run-turn-failure.test.ts`, `providers/*.test.ts`); auto-discovered by the ROOT `vitest.config.ts`, run via `npm run test`.
+- **Fact-grounding specs live IN-NODE** and run via the agent-local config: `agent/grounding.test.ts` (pure units for the structured fact base + claim extraction (trigger-clause assertion classification + window-based detail matching) + `groundAssistantText`: per-operation identity, bilingual mixed/English false-success, forged `（系统校正）` tag, no-authority balance, per-account 活期/储蓄 mismatch, amount+recipient mismatch, unknown outcome, conservative non-firing) + `agent/grounding-integration.test.ts` (end-to-end through the REAL `runTurn`, model scripted via the `RunTurnDeps.provider` seam, isolated `prisma/test.db`; proves buffered grounded-only deltas, `resumeTurn` continuation consistency and unknown-outcome handling) → `npx vitest run --config ./agent/vitest.agent.config.ts` (from the repo root).
 
 ## Routing Table
 
@@ -544,7 +565,10 @@ Vitest (`tests/`, read-only sibling); designed to run WITHOUT network:
 - `./agent/system-prompt.ts` → banking system prompt builder + hallucination/permission rules
 - `./agent/session.ts` → per-session `AgentState` + transcript load/create/persist
 - `./agent/message-normalize.ts` → provider transcript validity: `normalizeToolResultMessages` (keep only a `toolResult` that answers the assistant `toolCall` run it follows — heals orphans/duplicates on restore) + `withRealToolResult` (replace the turn-time blocked placeholder IN PLACE, drop the trailing narration)
-- `./agent/run-turn.ts` → one chat turn: prompt, event→stream mapping, persistence; `resumeTurn` places the REAL result IN PLACE of the turn-time blocked placeholder for its original `toolCallId` (see `message-normalize`) and drops the trailing narration, so the transcript stays valid for OpenAI-compatible providers
+- `./agent/run-turn.ts` → one chat turn: prompt, event→stream mapping, persistence; assistant text deltas are BUFFERED (`TurnBuffer.pendingText`) and EVERY assistant message — INCLUDING one that ALSO carries a `toolCall` part — is GROUNDED at `message_end` (text unchanged when the turn produced no financial tool results), and only then flushed as ONE aggregated `text_delta` whose concatenation EQUALS `message_end.content`, so raw pre-grounding financial facts NEVER reach the UI first and the emitted / final / persisted text are all the grounded text; grounding idempotency is a SERVER-side `message.id` set (`TurnBuffer.groundedIds`), so a model-forged `（系统校正）` tag cannot skip verification. `resumeTurn` places the REAL result IN PLACE of the turn-time blocked placeholder for its original `toolCallId` (see `message-normalize`) and drops the trailing narration, and GROUNDS the continuation narration against the injected REAL result, so the transcript stays valid for OpenAI-compatible providers
+- `./agent/grounding-facts.ts` builds the real-result ledger, operation identities, per-account current balances and totals. Unknown money results invalidate current balances until a fresh read; successful replay receipts are not applied twice. Claim extraction utilities are retained for legacy tests only.
+- `./agent/grounding.ts` is a deprecated compatibility heuristic, used by the existing pure regression suite only. Production UI does not call it. `./agent/financial-response.ts` renders real results directly, without model-prose input; `financial-operation-key.ts` binds real operations. `run-turn.ts` suppresses tool-call preludes, streams/persists canonical results and keeps Pi prose history consistent.
+- `./agent/vitest.agent.config.ts` → dedicated Vitest config for `agent/**/*.test.ts` (the root config includes only `tests/**`); run from the repo root with `npx vitest run --config ./agent/vitest.agent.config.ts`. Pure units in `grounding.test.ts`; end-to-end grounding through the REAL `runTurn` (scripted faux provider) in `grounding-integration.test.ts`
 - `./agent/confirmation.ts` → two-phase continuation: confirm/verify/cancel + gateway-authorized execution path (result + terminal status + recovery audit settled in ONE `$transaction`) + executed-node recovery + committed-side-effect wedge finalization (ref-counted `liveConfirmations` in `confirmation-recovery.ts`); the exported `recoverAction(actionId, opts?)` (`agent/index.ts` → `POST /api/actions/[id]/recover`) drives the same settlement path explicitly; `cancelAction` maps a gateway `CONFLICT` (a terminal / already-executed / in-flight row) to a stable `ok:false` carrying the CURRENT persisted status (HTTP 200, via `conflictOutcome`), exactly like confirm/verify — no rollback, no terminal mutation
 - `./agent/confirmation-recovery.ts` → ref-counted per-process live-confirmation registry (`retainAction`/`releaseAction`/`isActionLive`/`liveCount`) + unified settlement classifier `classifyConfirmedAction(row, nowMs)` → `settled|processing|recoverable|needs_reconciliation` + `settlePendingAction`/`settleFromCommittedReceipt` + persisted execution LEASE (`EXECUTION_LEASE_TTL_MS = 120000`; `setPendingActionLease`/`clearPendingActionLease`/`hasActiveLease`/`leaseNowMs`; taken ONLY for `pending`/`awaiting_mfa`) + standalone (non-plan) wedge recovery (`recoverStandaloneWedge`: receipt-first idempotent replay for every `RECOVERABLE_STANDALONE_TOOLS` member — currently `transfer_money` only — else the terminal queryable `needs_reconciliation` state)
 - `./agent/execution-convergence.ts` → shared normal-confirmation and recovery decision: verified committed evidence, completion/transaction observation, liveness, stored result, then manual reconciliation. Unknown action outcome is `needs_reconciliation`, not an inferred failure.
@@ -561,3 +585,4 @@ Vitest (`tests/`, read-only sibling); designed to run WITHOUT network:
 
 - `./agent/execution-evidence.ts` → request/receipt/ledger evidence reader shared by normal confirmation and recovery
 - `./agent/execution-audit.ts` → trusted transfer commit callback; required audit joins the debit transaction
+- `./agent/write-audit.ts` → AUDIT BY SIDE EFFECT, NOT BY COLOUR: `writeAuditKey` + `buildWriteCommitAudit` build the `WriteCommitHook`; the audit FIRES only on an actual SDK business write (the writing SDK fn awaits `onWriteCommit` inside that write's own `$transaction`), so a GREEN read audits nothing while a GREEN write `reserve_budget` is audited like any gated action; `write-audit.ts` reads `getToolPolicy(tool).tier`, and the declarative side-effect marker is `security/permission-engine`'s `ToolPolicy.write` (`isWriteTool`); the strict `recordAudit(..., { client: tx, dedupeKey: writeAuditKey(...), strict: true })` runs in the SAME `prisma.$transaction` as the business write, so an audit failure rolls the write back — no un-audited side effect; the OWNER-scoped key `write:<tool>:<owner>:<identity>` never collides with the gated `exec:<actionId>`/`reconcile:<actionId>` identities; the SDK never imports this module (the callback travels via `banking-sdk/execution-context.ts`'s `BankingExecutionContext.onWriteCommit`/`WriteCommitEvent`), and `agent/tools/index.ts` supplies it — `CreateToolRegistryOptions.automaticWriteAudit` for the model's automatic path (built in `banking-agent.ts` from the session id + latest user request) and `writeAuditContext` for `executeDirect`

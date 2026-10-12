@@ -12,6 +12,7 @@ import type { AgentState } from '@earendil-works/pi-agent-core';
 import type { ChatMessage } from '@/lib/contracts/agent';
 import { newId } from '@/lib/ids';
 import { safeParse, toJson } from '@/lib/json';
+import { redactSecrets } from '@/lib/sensitive';
 import {
   createSession,
   getSession,
@@ -65,7 +66,7 @@ function serialize(snapshot: SessionSnapshot): string {
     createdAt: snapshot.createdAt,
     updatedAt: snapshot.updatedAt,
   };
-  return toJson(persisted);
+  return toJson(redactSecrets(persisted));
 }
 
 /** Create a new in-memory session snapshot (not yet persisted); sessionId = newId('sess'). */
@@ -86,7 +87,7 @@ export async function loadSession(sessionId: string): Promise<SessionSnapshot | 
   const row = await getSession(sessionId);
   if (row === null) return null;
 
-  const persisted = safeParse<PersistedSession>(row.stateJson, {});
+  const persisted = redactSecrets(safeParse<PersistedSession>(row.stateJson, {})) as PersistedSession;
   return {
     sessionId: row.id,
     userId: row.userId,

@@ -142,6 +142,7 @@ export function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCa
     // Known tools with NO dedicated variant in the frozen `ChatCard` union: emit no card. Their
     // outcome is still conveyed by the assistant message + the `ToolEventView` timeline entry.
     case 'get_transactions':
+      return Array.isArray(data) ? [{ type: 'transactions', data }] : [malformed(toolName)];
     case 'search_contact':
     case 'get_dashboard_summary':
     case 'list_scheduled_tasks':
@@ -169,6 +170,6 @@ export function confirmationCard(action: PendingActionSummary): ChatCard {
 }
 
 /** An MFA-required card. PURE. */
-export function mfaCard(actionId: string, hint?: string): ChatCard {
-  return hint === undefined ? { type: 'mfa', actionId } : { type: 'mfa', actionId, hint };
+export function mfaCard(actionId: string, hint?: string, action?: PendingActionSummary): ChatCard {
+  return { type: 'mfa', actionId, ...(hint === undefined ? {} : { hint }), ...(action ? { action } : {}) };
 }

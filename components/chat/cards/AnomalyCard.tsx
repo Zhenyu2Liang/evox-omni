@@ -1,6 +1,7 @@
 'use client';
 
-import type { AnomalyReport, AnomalySeverity } from '@/banking-sdk';
+import type { AnomalyReport, AnomalySeverity, AnomalyItem } from '@/banking-sdk';
+import { useState } from 'react';
 import { formatDateTime } from '@/lib/date';
 import { Card } from '../../ui/Card';
 import { Badge } from '../../ui/Badge';
@@ -12,7 +13,7 @@ export interface AnomalyCardProps {
   data: AnomalyReport;
   onAcknowledge?: () => void;
   onViewDetail?: () => void;
-  onFreeze?: () => void;
+  onFreeze?: (anomaly: AnomalyItem, cardId: string) => void;
   className?: string;
 }
 
@@ -35,6 +36,22 @@ function severityTone(severity: AnomalySeverity): 'danger' | 'warn' | 'neutral' 
  * the browser never performs a banking operation here.
  */
 export function AnomalyCard({ data, onAcknowledge, onViewDetail, onFreeze, className }: AnomalyCardProps) {
+  const [expanded, setExpanded] = useState<string>();
+  const [acknowledged, setAcknowledged] = useState<string[]>([]);
+  const [selectedCard, setSelectedCard] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function acknowledge(anomaly: AnomalyItem) {
+    setBusy(true); setError('');
+    try {
+      const response = await fetch(`/api/transactions/${encodeURIComponent(anomaly.transaction.id)}/acknowledge`, { method: 'POST' });
+      const result = await response.json();
+      if (!response.ok || !result.ok) throw new Error(result.error?.message ?? '确认失败');
+      setAcknowledged(ids => [...ids, anomaly.transaction.id]);
+      onAcknowledge?.();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : '确认失败'); }
+    finally { setBusy(false); }
+  }
   if (data.anomalies.length === 0) {
     return (
       <Card className={className} padding="md">
@@ -60,6 +77,7 @@ export function AnomalyCard({ data, onAcknowledge, onViewDetail, onFreeze, class
       description={`已扫描 ${data.scanned} 笔交易，发现 ${data.anomalies.length} 笔可疑交易。`}
     >
       <div className="space-y-3">
+        {error ? <p role="alert">{error}</p> : null}
         {data.anomalies.map((anomaly) => (
           <div
             key={anomaly.transaction.id}
@@ -87,15 +105,23 @@ export function AnomalyCard({ data, onAcknowledge, onViewDetail, onFreeze, class
             </div>
 
             <p className="mt-2 text-sm text-slate-600">{anomaly.reason}</p>
+            {expanded === anomaly.transaction.id ? <dl className="mt-2 text-xs space-y-1">
+              <div>交易编号：{anomaly.transaction.id}</div><div>账户：{anomaly.transaction.accountId}</div>
+              <div>渠道：{anomaly.transaction.channel ?? '未提供'}</div><div>备注：{anomaly.transaction.remark ?? '无'}</div>
+            </dl> : null}
 
             <div className="mt-3 flex flex-wrap gap-2">
-              <Button variant="secondary" size="sm" onClick={() => onAcknowledge?.()}>
-                这是本人交易
+              <Button variant="secondary" size="sm" disabled={busy || anomaly.acknowledged || acknowledged.includes(anomaly.transaction.id)} onClick={() => void acknowledge(anomaly)}>
+                {anomaly.acknowledged || acknowledged.includes(anomaly.transaction.id) ? '已确认本人交易' : '这是本人交易'}
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => onViewDetail?.()}>
+              <Button variant="ghost" size="sm" onClick={() => { setExpanded(anomaly.transaction.id); onViewDetail?.(); }}>
                 查看详情
               </Button>
-              <Button variant="danger" size="sm" onClick={() => onFreeze?.()}>
+              <select aria-label="选择要冻结的卡片" value={selectedCard} onChange={event => setSelectedCard(event.target.value)} className="text-xs rounded border px-2">
+                <option value="">选择要冻结的卡片</option>
+                {(data.cards ?? []).map(card => <option key={card.id} value={card.id}>{card.type} {card.numberMasked}</option>)}
+              </select>
+              <Button variant="danger" size="sm" disabled={!selectedCard} onClick={() => onFreeze?.(anomaly, selectedCard)}>
                 冻结银行卡
               </Button>
             </div>

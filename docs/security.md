@@ -1,5 +1,17 @@
 # 安全模型文档 · Security Model
 
+### 前端授权与敏感输入
+
+计划提交先按可信用户请求校验产品及金额，再绑定顺序和明确的成功前提。`request-purchases` 按每个申购命令的独立范围校验产品与整数分金额，整组预检拒绝重复或遗漏节点；每笔授权仍走原确认/MFA。`enforceRequestedSuccess` 把明确的成功前提写入节点 `dependencies`，失败节点的后继因此跳过，不创建待确认操作。只要求等待结束的独立步骤仍使用 `after`；绑定有歧义时不创建计划或预算记录，不依赖模型填写的目标/节点名称。
+
+写操作在创建待处理动作前解析本人资源，名称歧义/不存在则拒绝，不把其他用户资源或任意 ID 带入确认。服务器生成摘要并绑定 actionId，确认、MFA 与刷新恢复展示收款人/金额/账户或卡片、产品、订阅设置和任务时间。终态 MFA 只展示状态；重试重新获取可信待处理动作，不复用失败动作。
+
+虚拟卡月限额为明确的整数分配置，备注不作为限额；同一开卡幂等身份不能改成不同月限额。赎回名称/代码只选 `HOLDING`，有多个持仓时拒绝歧义，历史精确 ID 保留原结果重放语义。服务器将全额赎回金额写入待处理操作，执行事务内重读持仓值；变化则拒绝，不按新金额执行旧授权。
+
+经原验证码/冷却门控和 CAS 的账户解锁，在同一严格审计事务内重置所属用户仍为 `awaiting_mfa` 的耗尽挑战，事件记录 `renewedMfaChallenges`。取消/已完成动作及他人挑战不受影响；审计失败连同解锁和挑战恢复全部回滚。解锁不执行业务，原操作仍需要正确验证码。
+
+异常本人确认接口只接受 Cookie 身份及本人流水，幂等写审计，不修改资金。冻结另选具体银行卡，仍走原权限网关。模拟改密工具无密码参数；可识别凭证在进入模型、聊天持久化和审计前脱敏，不实现真实凭证修改，不承诺通用秘密识别。
+
 转账金额在授权前验证为整数分，拒绝超过两位小数；风控、待处理操作和新扣款共用同一金额校验。
 GREEN 预算的聊天直接调用、独立调用和计划节点均在 SDK 写事务内检查可信会话熔断状态。
 预算幂等身份为 `(userId, idempotencyKey)`，正常查询与唯一冲突回查使用同一归属条件。
@@ -10,13 +22,12 @@ GREEN 预算的聊天直接调用、独立调用和计划节点均在 SDK 写事
 已提交凭证的只读回填继续可用。恢复授权认领后重读风险信息，状态/结果/审计落地事务再次读取当前授权，
 防止并发 RED 升级被旧 YELLOW 快照覆盖。严格审计去重校验保持不变。
 验证码仅面向 `pending/awaiting_mfa` 决策；终态的历史 `requiresMfa` 不表示仍需验证。
-详见 [本轮确认边界修复](repair-confirmation-boundaries.md)。
 
 当前恢复边界：已提交结果可只读重建；无凭证且可能新增扣款的恢复必须经 `security/recovery-authorization.ts` 复核身份、熔断、计划状态、累计金额及 MFA，SDK 写事务内再查熔断。锁定时拒绝新扣款（HTTP 423）；并发已入账的同一动作不会再次计入授权金额。
 
 卡片与订阅写工具只使用服务端用户身份。SDK 要求 `userId`，既在读取时核对所有者，也把所有者限定进实际写条件。伪造工具参数中的 `userId` 不能越权。
 
-证据缺失/矛盾的人工核对使用独立审计键 `reconcile:<actionId>`，保留已有 `exec:<actionId>` 成功记录。核对审计与 `needs_reconciliation` 状态原子落地，接口返回 `ok=false`；失败可重试。完整复现和验证见 [本轮修复报告](repair-recovery-security.md)。
+证据缺失/矛盾的人工核对使用独立审计键 `reconcile:<actionId>`，保留已有 `exec:<actionId>` 成功记录。核对审计与 `needs_reconciliation` 状态原子落地，接口返回 `ok=false`；失败可重试。
 
 > **一句话原则**：智能体可以决定*下一步做什么*；它**永远不能**决定*它是否有权限去做*。
 > 权限、确认与 MFA 只由 TypeScript 代码（一张静态策略表 + 确定性动态规则）判定，
@@ -79,7 +90,7 @@ GREEN 预算的聊天直接调用、独立调用和计划节点均在 SDK 写事
 ```mermaid
 flowchart TD
     A["agent.beforeToolCall<br/>securityGateway.handleToolCall(ctx)"] --> B["risk.computeDailyTransferTotal(userId)"]
-    B --> C{"circuitBreaker.isLocked(sessionId)?"}
+    B --> C{"circuitBreaker.isLocked(actor)?<br/>按用户键 user / session"}
     C -- 已锁定 --> DENY["deny · HIGH_RISK_BLOCKED"]
     C -- 否 --> D["permission.evaluateTool(tool, args, ctx)<br/>transfer_money ⇒ risk.evaluateTransferRisk"]
     D --> E["evaluate → SecurityEvaluation<br/>{ tier, requiresConfirmation, requiresMfa, blocked }"]
@@ -277,7 +288,11 @@ flowchart TD
 
 ## 8. 幻觉防护 · Hallucination Protection
 
-系统对模型输出做**事实性约束**（`agent/system-prompt.ts` 导出 `HALLUCINATION_RULE`）：
+助手文本是**原始输出**（RAW）：系统用**提示层规则 + 代码强制的服务端事实校正通道**两层约束它。
+提示层只**请求**模型遵守（`agent/system-prompt.ts` 导出 `HALLUCINATION_RULE`）；
+校正通道则在**代码里**把与真实工具结果不一致的消息**替换**为服务端撰写的事实。
+
+### 8.1 提示层约束 · Prompt-Level Rule
 
 - 助手回复**只**源于**真实工具结果**——模型只能报告来自工具结果的事实。
 - 若工具返回 `success:false`（或 `ok:false`），智能体**必须如实汇报失败**，**绝不**编造余额/结果，
@@ -285,11 +300,32 @@ flowchart TD
 - 每张发给 UI 的卡片都必须源自**真实工具结果**或**真实安全决策**——绝不来自模型散文
   （`card-emitter.toCards` 是纯的、全函数的：未知形状 ⇒ 错误卡片）。
 
-**演示 Test 5（failure report）** 验证：一笔 ¥30000 转账（`INSUFFICIENT_FUNDS`，超过 ¥23,580 余额）
-在人工 MFA 决策后经 SDK 执行被拒，审计行状态为 `failed`，续跑播报**同一个**真实失败，
-且**不**出现任何「转账成功」措辞。
+### 8.2 服务端结果与操作身份
 
----
+`agent/financial-response.ts#renderFinancialResponse` 的输入只有真实 `FactInput[]` 及服务端确认/MFA 状态，没有模型文本参数。金额、收款人、状态和余额直接取自该次工具执行结果；不从自由文本识别“第几笔”或匹配金额来决定结果。`actionId`、计划/节点身份及银行流水身份用于区分重放和独立执行；不同操作即使参数相同仍分别展示。
+
+只读工具的摘要由已注册的银行 SDK runner 生成。`submit_plan` 的模型目标、节点描述和摘要不作为金融事实输出。澄清使用 `agent/banking-guidance.ts` 的封闭原因码与字段名：模型只选择代码，服务端渲染能力限制或缺失字段模板。JSON 围栏及已声明的字段列表可以接收，任意文字、金额、状态、额外属性或未知字段均拒绝；不输出模型自述的余额或交易结论。有真实写入结果或待确认操作时，澄清不能覆盖它们。明确给出的现有产品与单笔合法数值金额会从缺失字段中移除；这只校准问题，不授权或决定执行。无效模型回复使用静态能力说明，不猜测缺少哪些信息。
+
+执行时转账升级为 RED 时，同一授权事务更新风险列和完整 `summaryJson`（包括风险等级字段）；MFA 事件携带操作 ID、收款人、金额和有效风险摘要。前端按操作 ID 将旧确认卡替换为验证码卡，处理一笔操作不会清除另一笔待处理决定。刷新时重新使用数据库的当前权限规范化摘要，兼容历史黄色摘要。
+
+### 8.3 当前余额与未知结果
+
+`buildFinancialFacts` 按结果顺序维护账户余额。转账和理财结果携带服务端解析的 `sourceAccountId`；成功写入更新对应账户，合计按分值差额同步更新。重放已执行动作不重复应用历史余额。随后重新查询账户可取得新的权威快照。
+
+未知资金操作使受影响账户的当前余额及合计失去确定性，直到再次查询；该操作结果始终显示待核对。余额查询只能证明查询时余额，不能证明某笔未知交易成功或失败。操作结果中的 `newBalance` 标为“执行时账户余额”，与当前余额区分。
+
+### 8.4 流式、持久化与失败处理
+
+模型增量在 `message_update` 中缓冲，不下发。`message_end` 发布服务端生成的结果；携带 toolCall 的模型前言不展示，工具时间线和确认卡继续保留。持久化的 UI 文本与流式结果一致，Pi 历史中的文本也替换为系统结果，工具调用/结果配对与协议所需 thinking 块保留。
+
+结果渲染异常时使用固定待核对提示，不回退到原始模型文本，也不把已经提交的业务操作假报为失败。原 `groundAssistantText` 是兼容性文本规则，保留旧回归测试，但不是生产输出的安全边界。
+
+### 8.5 演示边界
+
+- 【已实现】服务端结果输出、操作身份去重、账户与合计更新、未知结果保守展示、流式及刷新一致性。
+- 【模拟】银行 SDK 和固定验证码，没有真实银行资金或短信通道。
+- 【限制】当前 demo 不展示模型自由生成的金融解释。复杂分析通过已注册分析工具的结果和卡片呈现；没有工具结果时提示补充需求，因此真实模型未调用工具时可能需要用户重述。
+- 【未验证】多实例并发部署与跨浏览器矩阵。工具结果仍依赖银行 SDK 本身的正确性；有限 live 场景不能证明所有意图均能被模型正确识别。
 
 ## 9. MFA（模拟验证） · Mock MFA
 
@@ -321,26 +357,29 @@ flowchart TD
 
 ## 10. 熔断器 · Circuit Breaker
 
-`security/circuit-breaker.ts` 是**会话级、连续失败**熔断器（**进程内内存态**）：
+`security/circuit-breaker.ts` 是**按用户（owner）、连续失败**的熔断器，其状态**持久化在数据库中**（Prisma 模型 `CircuitBreakerState`，经 `lib/db/repositories/circuitBreaker.ts` 读写），**不驻留进程内存**：
 
 ```ts
-interface CircuitBreakerState { sessionId: string; failures: number; max: number; locked: boolean; lockedAt?: number }
+// prisma/schema.prisma — 持久化的熔断状态行
+model CircuitBreakerState { key String @id; userId String?; failures Int @default(0); locked Boolean @default(false); lockedAt DateTime?; updatedAt DateTime @updatedAt }
+// lib/db/repositories/circuitBreaker.ts — 读 / 写快照
+interface BreakerSnapshot { failures: number; locked: boolean; lockedAt: Date | null }
 ```
 
-- `recordFailure(sessionId)`：达到 `MFA_MAX_ATTEMPTS`（3）时**跳闸**，发出 `CIRCUIT_BREAKER_TRIPPED`，
-  随后**该会话的*所有*操作被封禁（fail-closed：连 🟢 GREEN 查询也被拒绝）**。
-- `recordSuccess(sessionId)`：重置**连续**失败计数（**不**解锁已跳闸的熔断器）。
-- `isLocked(sessionId)`：作为硬门——被锁定时网关对**任何**工具调用直接 `deny`（block reason `HIGH_RISK_BLOCKED`），
-  **包括 🟢 GREEN 读取**（`gatewayEvaluate`：`blocked = locked || tier !== 'GREEN'`，故锁定后所有层级一律拒绝）。
-- 解锁的**唯一**运行时路径是安全中心的**经审计**动作 `resetSession(sessionId, { actor, reason })`
-  （接线到 `POST /api/security/reset`，该路由本身受 `banking_session` Cookie 门控）：它清空该会话熔断状态
-  并写入一条 `SECURITY_RESET` `SecurityEvent`。`recordSuccess` 与"锁定期间提交正确验证码"都**不会**解锁
-  （锁定优先）。同步、无 I/O 的 `reset(sessionId)` 仅供测试使用（不写审计）。
-- 熔断器是 **LLM 无法清除的硬门**：3 次连续 MFA 失败即锁死**该会话的全部操作（含读取）**；
-  只有用户主动的安全中心解锁（经审计）能恢复。
+- `recordFailure(actor)`：达到 `MFA_MAX_ATTEMPTS`（3）时**跳闸**，并**每次跳闸恰好**发出**一条** `CIRCUIT_BREAKER_TRIPPED` `SecurityEvent`（`severity: 'high'`、顶层 `userId`、`detail: { failures, max, result: 'session_locked' }`）。`lockedAt` 取**服务端真实时钟** `lib/clock.ts#realNow()`。
+- **锁定后所有操作一律拒绝（fail-closed）**：被锁定时网关对**任何**工具调用直接 `deny`（block reason `HIGH_RISK_BLOCKED`），**包括 🟢 GREEN 读取**（`gatewayEvaluate`：`blocked = locked || tier !== 'GREEN'`）；写入路径另在 SDK 边界经 `security/execution-policy.ts#assertSessionMayWrite` 抛 `AppError('CIRCUIT_OPEN')`（HTTP **423**）。
+- `recordSuccess(actor)`：只重置**连续**失败计数（**不**解锁已跳闸的熔断器）。
+- `isLocked(actor, client?)`：硬门读取（会话 / 用户标识经 `resolveBreakerOwner` 归一为 owner key）。
+- **解锁受门控**：`resetSession(actor, opts?: ResetSessionOptions)` 仅在 `opts.verificationCode === MFA_CODE`（`'123456'`）**或** `now >= lockedAt + RESET_COOLDOWN_MS`（`RESET_COOLDOWN_MS = 60_000`）时才解锁；否则抛 `AppError('CIRCUIT_OPEN')` 并**保持锁定不变**。
+  解锁成功后写入一条 `SECURITY_RESET` `SecurityEvent`（`severity: 'medium'`、`detail: { actor, reason, wasLocked, previousFailures, priorLockedAt? }`）。
+  `recordSuccess` 与"锁定期间提交正确验证码"都**不会**解锁（锁定优先）。
+- **模型没有解锁工具**：`resetSession` **只能**经受 `banking_session` Cookie 门控的 `POST /api/security/reset` 到达。
+  UI 入口 `app/security/ResetBreakerButton.tsx` 的解锁输入框**默认为空**（`INPUT_PLACEHOLDER = 请输入 6 位验证码`，**不**预填任何验证码），空提交被直接阻止（按钮在空输入时禁用 + 提交前守卫）。
+  演示验证码**绝不**预填，也**绝不**返回给 UI 或模型；裸露的空 Cookie 被拒绝；无路由、不写审计的 `reset(actor)` 仅供测试使用。
+- 熔断器是 **LLM 无法清除的硬门**：3 次连续 MFA 失败即锁死**该用户账户的全部操作（含读取）**且**持久化**；只有用户主动的安全中心解锁（经审计，带验证码或越过冷却）能恢复。
 
 **演示 Test 10（circuit breaker）**：连续 3 次错误验证码 ⇒ 熔断跳闸（`CIRCUIT_BREAKER_TRIPPED`），
-该会话**所有操作被锁（含 🟢 查询，fail-closed）**。
+该用户**所有操作被锁（含 🟢 查询，fail-closed）**，且锁定跨新会话 / 进程重启留存。
 
 ---
 
@@ -351,9 +390,13 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 **写审计的规则**：
 
-- 每个**被门控动作**（YELLOW/RED `PendingAction` 的 confirm / verify / cancel）写一条 `AuditLog` 行。
+- 审计**按副作用（side effect）判定，而非按权限颜色**：`security/permission-engine.ts` 的 `ToolPolicy.write` / `isWriteTool(toolName)` 标记**会持久化副作用**的工具（共 **13** 个）。
+- 每个**被门控动作**（YELLOW/RED `PendingAction` 的 confirm / verify / cancel）写一条 `AuditLog` 行，其去重身份为 `exec:<actionId>`（执行）/ `reconcile:<actionId>`（人工核对）。
+- 每个**产生副作用的工具**都留痕：被门控的 🟡/🔴 写工具走上一条的门控身份（`exec:` / `reconcile:`）；**不经门控即执行**的写工具（🟢 `reserve_budget` 是**唯一**产生副作用的 GREEN 工具）则写一条写审计 `AuditLog` 行——写审计钩子对**每一个**注册工具安装（`agent/tools/index.ts#writeAuditContext`）。
+  该行由 `agent/write-audit.ts#buildWriteCommitAudit` 构造（`confirmationRequired:false`、`confirmed:false`、`mfaRequired:false`、`status:'success'`），并以 `recordAudit(..., { client: tx, dedupeKey: writeAuditKey(...), strict: true })` 在**与业务写入同一个 `prisma.$transaction`** 内插入——**审计失败即回滚业务写入**，因此**不存在未被审计的副作用**。
+  去重键**按所有者（owner）作用域**：`writeAuditKey(toolName, owner, identity)` → `write:<tool>:<owner>:<identity>`，使每个用户的本地幂等键**不会跨用户碰撞**，也**永不**与门控身份 `exec:<actionId>` / `reconcile:<actionId>` / `manual:<id>:<phase>` 碰撞；SDK **不**导入写审计模块，回调经 `banking-sdk/execution-context.ts#onWriteCommit` 传递。
 - 每个安全控制决策（熔断跳闸、注入检测、MFA 失败）写一条 `SecurityEvent`。
-- **🟢 GREEN 自动执行的读取不写审计**——审计行为只在门控决策处写入（见 `lib/contracts/audit.ts`）。
+- **只有 🟢 GREEN 的只读调用不写审计**——所有产生副作用的工具（GREEN 写入含在内）都留痕。
 
 **`recordAudit(entry, { client?, dedupeKey?, strict? })`**（`audit/audit-logger.ts`）：
 
@@ -379,6 +422,20 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 ## 12. 沙箱保证 · Sandbox Guarantees
 
+### 用户显式回退与请求约束
+
+live 故障恢复只重试模型规划，不重放整个银行请求。检查当前回合的工具启动、授权和计划事件；任何写工具（含 GREEN 预算）或 submit_plan 已进入网关/执行器即关闭自动规划恢复。唯一额外允许的路径是运行时按工具调用身份记录的、进入网关/执行器前的多步规划拒绝，不根据模型文字或工具错误字符串判断“未执行”。只读查询及其工具调用/结果配对保留，原用户请求不重复插入，也不被恢复指令替换。有效 guidance 与服务端产品校验拒绝优先；认证/协议错误不自动重试。最新服务端回复可在尚未进入写入流程时提供原需求重试入口，旧入口随下一条用户消息退出；客户端同步锁防止连续点击并发发送。
+
+包含写操作的显式多步需求须先有完整计划。预检按可信用户请求、实际工具参数和自有资源别名，逐步匹配对象/金额并拒绝额外写节点；通过后仍执行顺序、成功条件、DAG 验证和原权限门控。独立写调用不能绕过检查，计划上下文由执行器注入，不读取模型参数里的 taskId。计划在第一笔确认前保存全部节点，确认后沿原计划继续，不调用模型寻找剩余步骤。有限命令语法的边界见 known-risks，不把此检查当作通用自然语言证明。
+
+步骤识别按已支持的业务动词与否定位置区分操作和附加要求，不再因为整段出现“不要”就删除正向操作；否定附加部分的对象/金额不会给前面的操作背书。“转账失败时不要创建提醒”按结果条件引用处理，成功依赖仍由原校验绑定。赎回节点在计划持久化前复用 `resolveBankingArgs` 解析本人唯一持仓，并要求当前 HOLDING；实体别名包括实际持仓 ID 及其所属产品名称/代码。匹配只使用该持仓的事实，不用模型附带的 productId 为另一个持仓背书。执行时仍重新核对所有权、报价、确认/MFA 和执行权；新计划的有效持仓检查不改变历史结果的幂等恢复。
+
+live 模式在生成门控操作或计划后结束该轮模型调用，用可信工具结果展示状态。确认后的所属计划由既有执行器继续；结果写回模型历史供后续对话使用，不再调用模型播报，也不因模型故障把业务成功改成失败。模型请求超时/取消不证明银行操作回滚；已进入写入流程的中断提示用户核对已有结果与办理入口。网络传输最多重试一次，独立取消信号不会被当作可恢复超时。
+
+`POST /api/tasks/[id]` 的 `rollback` 仅在本人会话的已取消计划上生效，不是模型工具。服务端从原成功节点结果定位资源，并核实 owner 与 `nodeExecutionKey`；预算仅 RESERVED→RELEASED，定时记录仅 SCHEDULED→CANCELLED。原执行输出/状态不改写。撤销、节点 compensation 回执及严格 `rollback_task` 审计同事务；并发/重复请求复用回执，审计失败全部回滚。已入账资金、理财、卡片变更保留；已使用或归属不符的资源记 conflict，由人工核对。
+
+产品选择用当前用户请求的明确名称/代码和对比命令校验，不允许模型用相似产品替换；整计划在任何节点执行前检查。明确顺序通过服务端校验的 `after` 依赖持久化，与条件成功依赖分开。不能把这一有界语法校验宣称为任意自然语言意图的完整证明。
+
 演示严格限定在安全沙箱内：
 
 - **没有真实银行**：所有数据都在 SQLite 中模拟（种子用户**李明**，活期 ¥23,580 等）。
@@ -401,9 +458,9 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 | 网关阻断 | `security-gateway.ts` | YELLOW/RED | `block:true` + `PendingAction` |
 | 注入检测 | `injection-guard.ts` | 可疑用户文本 | `INJECTION_ATTEMPT`（**不授予权限**） |
 | MFA | `mfa.ts` | RED | 校验 `123456`；失败喂熔断 |
-| 熔断 | `circuit-breaker.ts` | 3 次连续失败 | 会话**全部操作**锁定（含读取，fail-closed）+ `CIRCUIT_BREAKER_TRIPPED` |
-| 熔断解锁 | `circuit-breaker.ts` · `POST /api/security/reset` | 用户在安全中心主动解除 | 清空熔断状态 + `SECURITY_RESET`（**经审计**） |
-| 审计 | `audit/` | 门控决策 / 安全控制 | `AuditLog` / `SecurityEvent` |
+| 熔断 | `circuit-breaker.ts` · `repositories/circuitBreaker.ts` | 同一用户键连续 3 次 MFA 失败 | 该**用户账户**全部操作锁定（含 🟢 读取，fail-closed）、状态**持久化**（跨新会话 / 进程重启留存）+ 每次跳闸**恰好一条** `CIRCUIT_BREAKER_TRIPPED` |
+| 熔断解锁 | `circuit-breaker.ts#resetSession` · `POST /api/security/reset` | 验证码 `123456` **或** 冷却 `RESET_COOLDOWN_MS = 60_000` 已过（冷却按**真实时钟** `realNow()` 计） | 在**单事务**内清除状态 + **严格审计** `SECURITY_RESET`（审计失败即回滚、锁定保持；CAS 使并发只落一次、旧解锁不动新锁定）；两者都不满足则 `AppError('CIRCUIT_OPEN')`（HTTP 423）且**锁定保持** |
+| 审计 | `audit/` | 门控决策 / 安全控制 / **副作用写入**（按副作用判定） | `AuditLog` / `SecurityEvent` |
 | 会话标识 | `app/api/chat/route.ts` | `POST /api/chat` | cookie-only；body `sessionId` ≠ cookie（含无 cookie）⇒ `409 CONFLICT`，**不签发** cookie |
 | 计划取消撤销 | `repositories/pendingAction.ts#revokePendingActionsByTask` · `task-control.ts#cancelTask` | 取消计划 | 批量 `updateMany` 撤销（`pending\|awaiting_mfa → cancelled`）与计划 `status='cancelled'` 终态写入**同在 `cancelTask` 的单个 `prisma.$transaction` 内**；节点扫描（`node.output.pendingActionId`）+ 运行后扫描 `sweepCancelledPlan` 仅为**兜底（FALLBACK）** |
 | 计划取消授权检查 | `security-gateway.ts#authorizeAction`（CAS 事务内重读计划状态） | 确认已取消计划的动作 | 同一 CAS 事务内重读计划 ⇒ 已取消则回滚认领并返回 `plan_cancelled` ⇒ HTTP 200 `{ok:false, status:'cancelled', code:'SECURITY_DENIED'}`（**刻意**的非 403） |
@@ -438,8 +495,8 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 - **统一状态收敛**：`decideConvergence` 在正常确认/MFA、计划重跑及独立恢复中优先读取已核验的回执与关联流水。历史无回执流水需核验执行键、用户、金额、收款人、备注及付款账户；不匹配则人工核对。未知动作状态为 `needs_reconciliation`，计划节点可以停止为 `failed`，后者表示工作流停止，不代表交易失败。
 - **SDK 写入保护**：工具注册表用服务端 `AsyncLocalStorage` 传递可信执行上下文，所有实际 SDK 写入经 `runInTransaction`。其第一条条件写入校验计划/节点身份或已授权动作与所属计划未取消，随后才写业务数据。卡片、订阅、投资、预算、定时任务及转账均接入；JSON 工具参数不能替换该上下文。暂停只阻止后续节点，已授权节点确认完成后计划仍保持暂停。
 - **可靠且带键的审计**：正常转账和转账恢复通过 `onTransferCommit` 将关键执行审计与扣款、流水、回执同事务提交，审计错误回滚四者。状态/结果在后续结算事务落库。历史缺审计记录（含已 `executed` 操作）可幂等补齐；严格审计只吸收同执行身份及业务结果的重复，拒绝不同工具或成功/失败混用同一键。其他写工具的业务与状态审计仍分属两个事务，不能据此宣称所有业务审计原子。
-- 熔断（连续 3 次 MFA 失败锁会话）、注入检测（纵深防御）、幻觉防护（只报工具结果的事实）；
-- 审计写入（门控动作 + 安全事件）。
+- 熔断（同一**用户键**连续 3 次 MFA 失败即锁定该账户全部操作，状态**持久化在数据库**并跨新会话 / 进程重启留存；解锁在**单个事务**内清除状态 + **严格审计**，模型**无**解锁工具）、注入检测（纵深防御）、幻觉防护（只报工具结果的事实 + **服务端撰写的事实校正通道** `agent/grounding-facts.ts` / `agent/financial-response.ts` / `agent/run-turn.ts`——事实**按操作身份**逐笔记账、维护**逐账户当前余额账本**、`unknown` 一律「待核对」、并在任何事实下发前完成校正；故障注入与任意错误叙述由脚本化模型验证；另已完成有限 DeepSeek live 场景，见测试文档）；
+- 审计写入（**按副作用**：门控动作 + 不经门控的副作用写入 + 安全事件；写审计与业务写入同事务）。
 
 **【模拟】为演示而模拟（非真实能力，已刻意限定）：**
 
@@ -458,17 +515,18 @@ interface CircuitBreakerState { sessionId: string; failures: number; max: number
 
 - **真实浏览器验收存在，但不证明安全模型被完全封闭**：`tests/e2e/` 有一个真实浏览器 harness
   （`playwright-core` 启动**系统**无头 Chrome，**无需**下载浏览器；非 `npm run test`，用 `tsx` 显式运行），
-  它对**渲染后的 DOM** 断言，仅覆盖 5 条 journey（🟡 转账确认、🔴 转账 MFA 成功 + 错误码、计划暂停/继续、
-  计划取消、刷新恢复）——**不**覆盖 live LLM、真实银行 / 网络、生产构建、跨浏览器、视觉 / a11y、负载 / 性能。
+  它对**渲染后的 DOM** 断言，覆盖 10 条 journey（🟡 转账确认、🔴 转账 MFA（成功 + 错误码）、计划暂停/继续、
+  计划取消、刷新后恢复停靠决策、已入账但缺终态操作的楔子刷新恢复、人工接管、理财流水、异常检测与熔断解锁）——此 harness 使用 mock，**不**覆盖 live LLM、真实银行 / 网络、生产构建、跨浏览器、视觉 / a11y、负载 / 性能。
   `tests/app/*` 是**进程内 HTTP 路由集成测试**（标记 `[integration]`）：`import` **真实**路由处理器并用
   `NextRequest` 对象直接调用——**只有模型被脚本化**，**不是**浏览器测试；
-- **熔断器是进程内 / 单进程内存态**（非分布式、不持久化）；
-- **演示时钟被固定**（`DEMO_NOW = 2026-09-25 12:00 本地`）；**🟢 GREEN 只读操作按设计不写审计**；
+- **熔断状态是持久化且按用户的，但只在本 DB 内共享**：`CircuitBreakerState` 按 owner key（`user:<userId>` / `session:<actor>`）持久化，因此一个用户被锁定后**跨新会话与进程重启**仍然被锁、且该用户的所有会话共用同一把键；剩余的真实边界是**按 DB**——多实例共享**同一个库**时一致，各自持有**独立库**时不互相协调；
+- **演示时钟被固定**（`DEMO_NOW = 2026-09-25 12:00 本地`，业务 / UI 日期用 `demoNow()`）；**安全耗时门**（熔断锁定时间戳 / 解锁冷却 `RESET_COOLDOWN_MS`，以及计划接管 `EXECUTION_CLAIM_TTL_MS`）改用服务端**真实时钟** `lib/clock.ts#realNow()`，故冷却能真正流逝；**🟢 GREEN 只读操作按设计不写审计**；
 - **原子累计限额认领的串行化依赖 SQLite 文件锁**（见「原子累计限额主张」的注意项）——SQLite 特有，
   未在其他数据库引擎 / 多写者部署上验证；
 - **陈旧接管的接管视界是启发式**：`agent/task-control.ts` 的 `EXECUTION_CLAIM_TTL_MS = 600000`（≈10 分钟）是**启发式**边界——在**单次工具调用**内阻塞**极久**的进程仍可能被接管（其节点 / 计划结果写入已被 token fence 拒绝，但接管这个动作本身仍会发生）；
 - **执行认领 / fence 的并发正确性建立在 SQLite 单写者假设之上**——多进程 / 多实例部署未验证；
 - **确认活跃注册表是进程内 / 引用计数** —— `agent/confirmation-recovery.ts#liveConfirmations`（`retainAction` / `releaseAction` / `isActionLive` / `liveCount`）只在本进程内可见：一个 `confirmed` + `resultJson=null` 的动作若其**活跃续跑运行在另一个进程 / 实例**中，就**无法**与**真楔子**区分（不会被识别为「仍被拥有」）——**多实例部署未覆盖**；此外**独立楔子恢复只对 `transfer_money` 证明了幂等**，其余写工具**不**重跑、一律收敛 `needs_reconciliation` 交人工结算（**不**重跑未证幂等的写工具）。
+- **live 意图覆盖有限**：金融结果由服务端直接生成，不依赖模型措辞校验；真实模型是否总能调用正确工具、在模糊表达下是否充分澄清仍需场景验证。多进程部署未验证。
 
 > `agent/task-control.ts` 与 `agent/confirmation.ts` 超出约 1000 行软性指南，属抽取候选；当前测试布局与验收结果见 [测试用例](test-cases.md)。
 

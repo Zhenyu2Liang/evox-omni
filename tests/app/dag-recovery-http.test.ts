@@ -128,13 +128,14 @@ async function newPersistedSessionId(): Promise<string> {
 
 /** The gateway-authorized per-node runner (a gated node parks instead of executing). */
 function gatewayRunTool(sessionId: string, userRequest = '') {
-  return (toolName: string, args: Record<string, unknown>) =>
+  return (toolName: string, args: Record<string, unknown>, ctx: { taskId: string; nodeId: string }) =>
     executeGatedTool({
       sessionId,
       userId: DEMO_USER_ID,
       toolName: toolName as Parameters<typeof executeGatedTool>[0]['toolName'],
       args,
       userRequest,
+      ...ctx,
     });
 }
 
@@ -236,10 +237,12 @@ describe('[integration] POST /api/tasks/[id] pause → resume — no re-executio
     expect(budgetAAfter!.id).toBe(budgetA!.id);
     expect(await countBudgets('预留预算B')).toBe(0); // n3 still not started
 
-    // n2 re-parked on a FRESH pending action (a re-run minted a new gate).
+    // n2 resumes with the SAME node identity and the SAME pending action.
     const reparkedActionId = readPendingActionId(resultOf(resumed, 'n2').output);
     expect(typeof reparkedActionId).toBe('string');
-    expect(reparkedActionId).not.toBe(readPendingActionId(resultOf(plan, 'n2').output));
+    // A real plan runner carries task/node identity: resume reuses its persisted gate.
+    expect(reparkedActionId).toBe(readPendingActionId(resultOf(plan, 'n2').output));
+    expect(await getTestPrisma().pendingAction.count({ where: { taskId, nodeId: 'n2' } })).toBe(1);
 
     // --- Confirm the re-parked action: n2 executes for real and the plan CONTINUES to n3 (completes).
     const confirmRes = await postJson<Envelope<{ ok: boolean; status: string; tier: string; events: { type: string; plan?: TaskPlan }[] }>>(

@@ -11,6 +11,9 @@ import { monthRange, previousMonthRange } from '../lib/date';
 import { AppError } from '../lib/errors';
 import { addMoney, round2 } from '../lib/money';
 import { transactions } from '../lib/db/repositories';
+import { prisma } from '../lib/db/client';
+import { getCards } from './card';
+import { INVESTMENT_FLOW_CATEGORY } from './categories';
 import type {
   AnomalyItem,
   AnomalyReport,
@@ -84,10 +87,19 @@ export async function analyzeSpending(
 export async function detectAnomaly(userId: string): Promise<AnomalyReport> {
   const rows = await transactions.listTransactions({ userId });
   const anomalies = rows
-    .filter((row) => Math.abs(row.amount) > ANOMALY_AMOUNT_THRESHOLD)
+    .filter(
+      (row) =>
+        row.isAnomaly ||
+        (row.direction === 'DEBIT' &&
+          row.category !== INVESTMENT_FLOW_CATEGORY &&
+          Math.abs(row.amount) > ANOMALY_AMOUNT_THRESHOLD),
+    )
     .map((row) => toAnomalyItem(row));
 
-  return { anomalies, scanned: rows.length, generatedAt: demoNow() };
+  const acknowledgements = await prisma.auditLog.findMany({ where: { userId, toolName: 'acknowledge_transaction' }, select: { detail: true } });
+  const acknowledged = new Set(acknowledgements.map(row => row.detail));
+  return { anomalies: anomalies.map(item => ({ ...item, acknowledged: acknowledged.has(item.transaction.id) })),
+    cards: await getCards(userId), scanned: rows.length, generatedAt: demoNow() };
 }
 
 /** Previously flagged anomalies for the user (rows with `isAnomaly = true`). */
@@ -136,10 +148,15 @@ function severityFor(absoluteAmount: number): AnomalySeverity {
 /**
  * Ordinary DEBIT rows in `[from, to)`. Rows flagged `isAnomaly` are EXCLUDED so the seeded
  * ¥6,999 Apple Store anomaly never inflates the spend totals (本月 must be exactly ¥5,800).
+ * Investment-flow rows (category `INVESTMENT_FLOW_CATEGORY`) are EXCLUDED as well: moving principal
+ * into/out of a product is not consumption spend.
  */
 async function ordinaryDebits(userId: string, from: Date, to: Date): Promise<TransactionRow[]> {
   const rows = await transactions.listTransactions({ userId, from, to });
-  return rows.filter((row) => row.direction === 'DEBIT' && !row.isAnomaly);
+  return rows.filter(
+    (row) =>
+      row.direction === 'DEBIT' && !row.isAnomaly && row.category !== INVESTMENT_FLOW_CATEGORY,
+  );
 }
 
 /** Cent-safe sum of the magnitudes of the given (DEBIT) rows. */

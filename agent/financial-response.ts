@@ -1,0 +1,115 @@
+/**
+ * The UI's financial narrative is authored here, from tool results only. Model prose is not an
+ * input: neither wording, punctuation nor a forged status can select a different operation.
+ * Tool summaries below are produced by the registered SDK runners, not by the model. The planning
+ * tool is handled separately because its goal/node descriptions originate from model arguments.
+ */
+import { formatCNY } from '@/lib/money';
+import { buildFinancialFacts, isRecord, SIDE_EFFECT_TOOLS, type FactInput, type TrustedWrite } from './grounding-facts';
+import { renderBankingGuidance, type BankingGuidance } from './banking-guidance';
+
+export const FINANCIAL_RESPONSE_TAG = '（系统校正）';
+export const UNVERIFIED_RESPONSE = `${FINANCIAL_RESPONSE_TAG}本次对话中未记录到该操作的执行结果。请补充操作类型、账户、收款人或金额，我会先核对系统数据。`;
+export const UNAVAILABLE_RESPONSE = `${FINANCIAL_RESPONSE_TAG}系统结果暂时无法展示，请查看操作记录或人工核对；当前执行结果待核对。`;
+
+const WRITE_LABELS: Readonly<Record<string, string>> = {
+  transfer_money: '转账', reserve_budget: '预算预留', set_card_limit: '限额调整',
+  freeze_card: '卡片冻结', unfreeze_card: '卡片解冻', report_lost_card: '卡片挂失',
+  apply_virtual_card: '虚拟卡申请', cancel_subscription: '订阅取消',
+  set_subscription_reminder: '订阅提醒', create_scheduled_task: '定时任务记录',
+  subscribe_investment: '理财申购', redeem_investment: '理财赎回', change_password: '密码修改',
+};
+
+const READ_LABELS: Readonly<Record<string, string>> = {
+  get_transactions: '交易记录', search_contact: '联系人查询', analyze_spending: '账单分析',
+  detect_anomaly: '异常检测', get_cards: '卡片查询', list_subscriptions: '订阅查询',
+  list_investments: '理财产品', compare_investments: '产品对比',
+  get_investment_holdings: '理财持仓', get_dashboard_summary: '资产概览',
+  list_scheduled_tasks: '定时任务查询',
+};
+
+export { financialOperationKey } from './financial-operation-key';
+
+function renderWrite(write: TrustedWrite, ordinal: number): string {
+  const label = WRITE_LABELS[write.toolName] ?? '银行操作';
+  const resultLabel = write.toolName === 'subscribe_investment' || write.toolName === 'redeem_investment'
+    ? `${label}结果` : `${label}处理结果`;
+  const lead = `${resultLabel}：第${ordinal}笔操作`;
+  if (write.outcome === 'unknown') return `${lead}待核对，请通过操作记录或人工核实。`;
+  if (write.outcome === 'failed') return `${lead}实际执行失败${write.error ? `：${write.error}` : '。'}`;
+  const details: string[] = [`${lead}实际执行成功`];
+  if (write.recipient?.name) details.push(`收款人 ${write.recipient.name}`);
+  if (write.amount !== undefined) details.push(`金额 ${formatCNY(write.amount)}`);
+  if (write.balanceAfter !== undefined) details.push(`执行时账户余额 ${formatCNY(write.balanceAfter)}`);
+  // Non-money writes have their own server-authored SDK summaries (card/category/holding details).
+  if (write.toolName !== 'transfer_money' && write.summary) details.push(write.summary);
+  return `${details.join('；')}。`;
+}
+
+export interface FinancialResponseOptions {
+  pending?: 'confirmation' | 'mfa';
+  /** Original USER request, only echoed as a request; never a financial result or model prose. */
+  requestText?: string;
+  locked?: boolean;
+  guidance?: BankingGuidance;
+}
+
+/** Always renders the actual operations in result order; there is no prose-to-operation matching. */
+export function renderFinancialResponse(
+  entries: readonly FactInput[],
+  options: FinancialResponseOptions = {},
+): string {
+  const facts = buildFinancialFacts(entries);
+  const sections: string[] = [];
+  if (options.locked) return `${FINANCIAL_RESPONSE_TAG}账户已安全锁定，请先在安全中心处理。`;
+  if (facts.currentBalances.length > 0) {
+    const lines = facts.currentBalances.map(account => account.balanceKnown === false
+      ? `${account.name ?? account.type ?? '账户'}当前余额待核对`
+      : `${account.name ?? account.type ?? '账户'}当前余额为 ${formatCNY(account.balance)}`);
+    if (facts.totalBalance !== undefined) lines.push(`账户可用余额合计为 ${formatCNY(facts.totalBalance)}`);
+    else lines.push('账户可用余额合计待核对');
+    sections.push(`${lines.join('；')}。`);
+  }
+  facts.writes.forEach((write, index) => sections.push(renderWrite(write, index + 1)));
+
+  // Only the latest read of each type is described. Balance reads were rendered from the current
+  // ledger above, so a pre-transfer summary cannot restore an old balance/total.
+  const reads = new Map<string, FactInput>();
+  for (const entry of entries) if (!SIDE_EFFECT_TOOLS.has(entry.toolName) && (entry.toolName !== 'get_balance' || !entry.result.ok)) reads.set(entry.toolName, entry);
+  for (const entry of reads.values()) {
+    if (entry.toolName === 'submit_plan') {
+      const plan = isRecord(entry.result.data) ? entry.result.data : undefined;
+      const status = plan?.status;
+      const labels: Readonly<Record<string, string>> = {
+        success: '已完成', failed: '执行失败', cancelled: '已取消', paused: '已暂停',
+        waiting_confirmation: '等待确认', waiting_verification: '等待验证码验证',
+        running: '执行中', pending: '等待执行',
+      };
+      sections.push(`计划状态：${typeof status === 'string' ? labels[status] ?? '请查看计划卡片' : '请查看计划卡片'}。`);
+      continue;
+    }
+    const label = entry.toolName === 'get_balance' ? '余额查询' : READ_LABELS[entry.toolName];
+    if (!label) continue; // Unknown/model-invented tools are never authoritative sources.
+    if (!entry.result.ok) sections.push(`${label}未取得结果${entry.result.error ? `：${entry.result.error}` : '。'}`);
+    else if (entry.result.summary) sections.push(`${label}（查询时结果）：${entry.result.summary}`);
+    else if (entry.toolName === 'analyze_spending' && isRecord(entry.result.data) && typeof entry.result.data.total === 'number') {
+      sections.push(`账单分析：消费合计 ${formatCNY(entry.result.data.total)}。`);
+    } else sections.push(`${label}已查询，请查看系统结果卡片。`);
+  }
+  if (options.pending === 'mfa') sections.push('该操作尚未执行，等待验证码验证。');
+  else if (options.pending === 'confirmation') sections.push('该操作尚未执行，等待确认，请本人核对操作卡片。');
+  // Guidance is not execution evidence and cannot contradict an actual write or pending gate.
+  if (options.guidance && facts.writes.length === 0 && !options.pending) {
+    const request = 'fields' in options.guidance && options.requestText
+      ? `针对你的需求 ${JSON.stringify(options.requestText.slice(0, 200))}，` : '';
+    sections.push(request + renderBankingGuidance(options.guidance));
+  }
+  if (sections.length) return `${FINANCIAL_RESPONSE_TAG}${sections.join('\n')}`;
+  if (options.requestText) {
+    const request = JSON.stringify(options.requestText.slice(0, 200));
+    // An invalid/absent guidance payload does not establish WHICH field is missing. Do not
+    // manufacture a repeated question about details the user may already have supplied.
+    return `${FINANCIAL_RESPONSE_TAG}本次对话中未记录到该操作的执行结果。你的需求是 ${request}。请明确要办理的受支持业务，或先查询相关记录。Demo 理财申购仅支持活期账户，赎回仅支持整笔全额，不支持部分赎回；卡片额度调整仅支持分类消费限额，不支持总授信额度调整。不要在聊天里输入真实密码。`;
+  }
+  return UNVERIFIED_RESPONSE;
+}

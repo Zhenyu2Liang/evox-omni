@@ -23,6 +23,7 @@ export interface CreateTaskNodeInput {
   args?: Record<string, unknown> | null;
   condition?: TaskCondition | null;
   dependencies?: string[];
+  after?: string[];
   status?: string;
 }
 
@@ -196,6 +197,7 @@ export function createTaskNode(input: CreateTaskNodeInput): Promise<AgentTaskNod
       args: input.args == null ? null : toJson(input.args),
       condition: input.condition == null ? null : toJson(input.condition),
       dependencies: input.dependencies == null ? null : toJson(input.dependencies),
+      after: input.after == null ? null : toJson(input.after),
       status: input.status ?? 'pending',
     },
   });

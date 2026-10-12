@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { banking, type AnomalyItem, type SpendingAnalysis, type TransactionView } from '@/banking-sdk';
 import { errorResponse, jsonResponse, parseQuery } from '../_lib/http';
 import { resolveUserId } from '../_lib/session';
+import { monthRange } from '@/lib/date';
 
 /** Max ledger rows surfaced in the bills table. */
 const BILLS_TRANSACTION_LIMIT = 50;
@@ -43,11 +44,14 @@ export async function GET(req: NextRequest): Promise<Response> {
   try {
     const { month } = parseQuery(billsQuerySchema, req);
     const userId = resolveUserId();
-    const [analysis, transactions, anomalies] = await Promise.all([
-      banking.transaction.analyzeSpending(userId, { month }),
-      banking.transaction.listTransactions(userId, { limit: BILLS_TRANSACTION_LIMIT }),
+    const analysis = await banking.transaction.analyzeSpending(userId, { month });
+    const [year, monthNumber] = analysis.month.split('-').map(Number);
+    const { start, end } = monthRange(new Date(year, monthNumber - 1, 1));
+    const [transactions, allAnomalies] = await Promise.all([
+      banking.transaction.listTransactions(userId, { from: start.getTime(), to: end.getTime() - 1, limit: BILLS_TRANSACTION_LIMIT }),
       banking.transaction.listAnomalies(userId),
     ]);
+    const anomalies = allAnomalies.filter(item => item.transaction.occurredAt >= start.getTime() && item.transaction.occurredAt < end.getTime());
     const data: BillsData = { analysis, transactions, anomalies };
     return jsonResponse(data);
   } catch (e) {

@@ -20,7 +20,7 @@ Import from the barrel (`../helpers`) or a specific module.
     `synchronous=NORMAL`, `busy_timeout=10000`) ONCE per process (memoized). Called by both
     `truncateAll()` and `seedDemoData()`, so it holds on every entry path.
   - `truncateAll(): Promise<void>` — delete all rows in FK-safe order (children → parents).
-  - `resetDatabase(): Promise<void>` — `truncateAll()` + `fixtures.seedDemoData()` (the circuit breaker has no global reset; isolation comes from a unique `sessionId` per test).
+  - `resetDatabase(): Promise<void>` — `truncateAll()` + `fixtures.seedDemoData()`. `truncateAll()` also clears the DURABLE, owner-keyed `CircuitBreakerState` table, so a breaker lock never leaks between tests that reset.
   - `useFreshDatabase(): void` — register Vitest hooks (`beforeEach` → `resetDatabase()`, `afterAll` → disconnect).
   - `disconnectTestPrisma(): Promise<void>` — idempotent Prisma disconnect.
 - `fixtures.ts` — the canonical demo dataset (constants) + seeder:
@@ -98,6 +98,7 @@ to fsync and the suite balloons toward the 10-minute tool timeout:
 - Every DB-backed suite should start with `useFreshDatabase()` so each test runs against a known world.
 - `fauxProvider()` (from `@earendil-works/pi-ai`) supplies a per-test handle; register `handle.provider` in `createModels()` and pass its bound `streamSimple` as Agent `streamFn`. No global registration or unregister step. See the root
   `CONTEXT.md` "Pi Agent Integration" for the Agent/tool/`beforeToolCall` SDK facts.
-- The circuit breaker is in-process keyed by `sessionId` — always use a unique id per test.
+- The circuit breaker is DURABLE (`CircuitBreakerState` table) and owner-keyed — NOT in-process and NOT keyed by the raw `sessionId`: `security/circuit-breaker.ts#resolveBreakerOwner` maps a known session/user to `user:<userId>`, else `session:<actor>`, so a real user's lock is shared by ALL of that user's sessions and survives a new SESSION / process restart.
+- For breaker isolation use a unique USER (or an actor id with no `AgentSession`/`User` row, resolving to `session:<actor>`) — a unique session id alone is NOT enough; `resetDatabase()` / `truncateAll()` clears the table for the normal DB-backed suites.
 - Need a fast/reliable suite? Keep the "Fast test-DB path" invariant intact — do NOT remove the
   pragmas or the `connection_limit=1` URL, and do NOT weaken isolation to gain speed.

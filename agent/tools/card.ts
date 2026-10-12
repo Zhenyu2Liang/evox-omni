@@ -273,7 +273,8 @@ export async function runReportLostCard(
 
 /** `apply_virtual_card` params (SDK `ApplyVirtualCardInput`; `userId` is server-injected). */
 export const ApplyVirtualCardParams = Type.Object({
-  label: Type.Optional(Type.String({ description: '虚拟卡备注/用途' })),
+  label: Type.Optional(Type.String({ description: '虚拟卡备注/用途，不表示限额配置' })),
+  monthlyLimit: Type.Optional(Type.Number({ minimum: 0, description: '用户要求的月限额（元，最多两位小数）；必须填写在此字段，不能仅写备注' })),
 });
 export type ApplyVirtualCardArgs = Static<typeof ApplyVirtualCardParams>;
 
@@ -282,7 +283,7 @@ export function createApplyVirtualCardTool(userId: string): AgentTool<typeof App
   return {
     name: 'apply_virtual_card',
     label: '申请虚拟卡',
-    description: '为当前用户申请一张虚拟卡（需要用户确认）。',
+    description: '为当前用户申请虚拟卡，可配置月限额（需要用户确认）；Demo 不提供刷卡支付。',
     parameters: ApplyVirtualCardParams,
     execute: async (_toolCallId, params) => {
       const result = await runApplyVirtualCard(userId, params as Record<string, unknown>);
@@ -297,25 +298,26 @@ export function createApplyVirtualCardTool(userId: string): AgentTool<typeof App
   };
 }
 
-/** Model-free runner — `banking.card.applyVirtualCard({ userId, label, idempotencyKey? })`. */
+/** Model-free runner — forwards explicit limit configuration and execution identity to the SDK. */
 export async function runApplyVirtualCard(
   userId: string,
   args: Record<string, unknown>,
   opts?: ToolRunOptions,
 ): Promise<ToolExecutionResult> {
-  const { label } = args as unknown as ApplyVirtualCardArgs;
+  const { label, monthlyLimit } = args as unknown as ApplyVirtualCardArgs;
   try {
     const card = await banking.card.applyVirtualCard({
       userId,
       label,
+      monthlyLimit,
       idempotencyKey: opts?.idempotencyKey,
     });
     const status = CARD_STATUS_LABELS[card.status] ?? card.status;
-    const suffix = label ? `（${label}）` : '';
+    const limit = card.monthlyLimit === undefined ? '未设置月限额' : `月限额 ${formatCNY(card.monthlyLimit)}`;
     return {
       ok: true,
       data: card,
-      summary: `已开通虚拟卡 ${card.numberMasked}${suffix}（当前状态：${status}）`,
+      summary: `已开通虚拟卡 ${card.numberMasked}；${limit}（当前状态：${status}；Demo 无刷卡支付）`,
     };
   } catch (e) {
     return { ok: false, error: AppError.from(e).message };

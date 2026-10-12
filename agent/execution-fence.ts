@@ -173,7 +173,7 @@ export async function buildAutomaticWriteFence(
     // Standalone calls have no plan CAS: obtain the SQLite writer slot before checking the
     // session policy, just as confirmed writes do. This is an identity-preserving write.
     await client.agentSession.updateMany({ where: { id: sessionId }, data: { id: sessionId } });
-    writePolicy.assertSessionMayWrite(sessionId);
+    await writePolicy.assertSessionMayWrite(sessionId, client);
   };
 }
 
@@ -214,6 +214,6 @@ export async function buildConfirmFence(
     }
     // Shared by ordinary confirm, MFA verify and recovery; the SDK invokes this in its write tx.
     // Receipt-only reads bypass the SDK mutation transaction and remain available while locked.
-    if (sessionId !== undefined) writePolicy.assertSessionMayWrite(sessionId);
+    if (sessionId !== undefined) await writePolicy.assertSessionMayWrite(sessionId, client);
   };
 }

@@ -3,9 +3,8 @@
 确认链路和恢复重放共用 SDK 写事务内的操作/计划/会话熔断围栏；工具错误归一化后仍保留策略拒绝的
 `CIRCUIT_OPEN`，避免落为错误的交易终态。恢复授权在事务认领后重读风险，恢复落地事务以当前持久化
 授权构建审计和返回元数据。前端及确认接口仅为显式待决策状态生成 MFA 事件，保留下一节点的独立事件。
-详见 [确认边界修复](repair-confirmation-boundaries.md)。
 
-恢复入口有两条执行边界：核验已提交凭证后只读回填；无凭证且可能首次转账时进入 `security/recovery-authorization.ts`，复核当前授权，并通过 SDK 事务内围栏再次检查熔断。卡片/订阅写操作由工具层传入服务端身份，SDK 用所有者条件保护实际写入。执行审计 `exec:<actionId>` 与人工核对事件 `reconcile:<actionId>` 分开去重，避免审计冲突阻止状态收敛。详见 [本轮修复报告](repair-recovery-security.md)。
+恢复入口有两条执行边界：核验已提交凭证后只读回填；无凭证且可能首次转账时进入 `security/recovery-authorization.ts`，复核当前授权，并通过 SDK 事务内围栏再次检查熔断。卡片/订阅写操作由工具层传入服务端身份，SDK 用所有者条件保护实际写入。执行审计 `exec:<actionId>` 与人工核对事件 `reconcile:<actionId>` 分开去重，避免审计冲突阻止状态收敛。
 
 > 一个**比赛演示（competition demo）**级的 *AI 银行智能体*：用户用自然语言描述一个金融需求，
 > 智能体理解意图、规划任务、调用**银行工具**，并在一个**由代码强制、模型不可篡改**的权限与
@@ -396,7 +395,7 @@ sequenceDiagram
   模型看到「待确认/待验证」后向用户回复。
 - **第二阶段（人工决策）**：`POST /api/actions/:id/confirm`（🟡，或 MFA 后的 🔴）· `.../verify`（🔴 MFA 码）
   · `.../cancel`。服务器通过网关的**授权执行路径**（**不是 LLM**）用**原始已校验参数**经 Banking SDK 执行、
-  写审计日志、把**真实**工具结果注入会话，并调用 `agent.continue()` 让模型叙述事实性结果。
+  写审计日志、把**真实**工具结果注入会话，并调用 `agent.continue()` 继续规划。用户可见的金融结果由 `financial-response.ts` 按真实工具结果生成；模型自由叙述不进入 UI 或持久化文本。
 - **原子性（Atomic Claim + 执行时再风控）**：确认在**一个** `prisma.$transaction` 内完成，其**第一条语句**
   就是 `PendingAction` 的比较并写入（compare-and-set，`pending → confirmed`）；**仍在同一事务内**重新推导
   当日转账累计并**重跑**风险评定（`security/security-gateway.ts` → `authorizeTransfer`）。再风控所用的累计值

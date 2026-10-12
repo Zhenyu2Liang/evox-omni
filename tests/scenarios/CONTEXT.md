@@ -69,6 +69,30 @@ Specs register their own DB lifecycle hooks (see Constraints) rather than callin
 - The GREEN auto-execute path persists NO `AuditLog` row (audit rows are written for gated
   confirm/verify/cancel decisions) — assert GREEN at the `beforeToolCall` chokepoint instead.
 
+## Notes for Agents — what a `.text` assertion actually tests
+
+Assistant-NARRATION assertions (`res.text` / `decision.text` / `after.text` / `verifyRes.text` /
+`confirmRes.text`) come in three kinds — know which one a spec uses before trusting it as a
+"model must not hallucinate" check:
+
+- **Helper-seeded, NOT model-generated**: `../helpers/scenario.ts#decideAndContinue` appends a
+  factual `narrationFor(result)` fallback when the faux script queue is dry, so the post-decision
+  text is the REAL tool result's `summary`/`error` echoed by the helper. This covers test-02:241-243,
+  test-03:171+201-203, test-05:120/133/134, test-09:161. These prove the narration carries the real
+  outcome, but they cannot detect a hallucinating MODEL (the helper wrote the text).
+- **Server/gateway message**: a RED `confirmAction` without MFA (or a locked session) returns
+  `auth.message` as `text` — test-03:141, test-09:137, test-10:89/107 (`验证码`/`验证码错误`/`锁定`).
+- **Model text**: test-01:140 (`res.text` = the scripted `final(NARRATION)`), and EVERY text
+  assertion in `mock-integration.test.ts` (it runs the production `@/agent` pipeline + the REAL mock
+  model, so its narration assertions are genuine model output).
+
+No spec provides a generic, model-independent hallucination guard. The closest is
+`mock-integration.test.ts:219` (`continued` must NOT match `SUCCESS_PHRASING` on a failed transfer),
+but it is scenario-specific. `expectHealthyTurn` only guards non-empty reply + no `error` event, not
+factual correctness. No scenario test asserts on the system-prompt text.
+FINANCIAL-VALUE assertions (balance ¥23,580 / ¥200.00 / ¥18,580, card payloads, plan node outputs)
+are all SERVER-SIDE (SDK/DB/plan), not narration text.
+
 ## Routing Table
 
 - `./test-01-balance.test.ts` … `./test-12-birthday-plan.test.ts` → one spec per demo scenario

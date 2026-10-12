@@ -270,7 +270,7 @@ describe('security-gateway · evaluate (needs test SQLite)', () => {
     for (let i = 0; i < MFA_MAX_ATTEMPTS; i += 1) {
       await security.circuitBreaker.recordFailure(sessionId);
     }
-    expect(security.circuitBreaker.isLocked(sessionId)).toBe(true);
+    expect(await security.circuitBreaker.isLocked(sessionId)).toBe(true);
 
     const ctx = ctxFor('get_balance', {}, sessionId);
     const ev = await securityGateway.evaluate(ctx);
@@ -411,7 +411,7 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
   it("RED action with a wrong code → ok false, mfaResult 'failed', breaker failure recorded", async () => {
     const sessionId = newSessionId();
     const action = await createRedAction(sessionId);
-    expect(security.circuitBreaker.getState(sessionId).failures).toBe(0);
+    expect((await security.circuitBreaker.getState(sessionId)).failures).toBe(0);
 
     const res = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId, mfaCode: '000000' });
 
@@ -420,8 +420,8 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
     expect(res.requiresMfa).toBe(true);
     expect(res.mfaResult).toBe('failed');
 
-    expect(security.circuitBreaker.getState(sessionId).failures).toBe(1);
-    expect(security.circuitBreaker.isLocked(sessionId)).toBe(false);
+    expect((await security.circuitBreaker.getState(sessionId)).failures).toBe(1);
+    expect(await security.circuitBreaker.isLocked(sessionId)).toBe(false);
 
     const row = await getTestPrisma().pendingAction.findUnique({ where: { id: action.id } });
     expect(row?.status).toBe('awaiting_mfa');
@@ -440,7 +440,7 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
     expect(res.message).not.toContain(MFA_CODE);
 
     // A success resets the consecutive-failure counter.
-    expect(security.circuitBreaker.getState(sessionId).failures).toBe(0);
+    expect((await security.circuitBreaker.getState(sessionId)).failures).toBe(0);
 
     const row = await getTestPrisma().pendingAction.findUnique({ where: { id: action.id } });
     expect(row?.status).toBe('confirmed');
@@ -453,7 +453,7 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
     for (let i = 0; i < MFA_MAX_ATTEMPTS; i += 1) {
       await security.circuitBreaker.recordFailure(sessionId);
     }
-    expect(security.circuitBreaker.isLocked(sessionId)).toBe(true);
+    expect(await security.circuitBreaker.isLocked(sessionId)).toBe(true);
 
     const res = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId, mfaCode: MFA_CODE });
 

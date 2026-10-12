@@ -9,10 +9,10 @@
  * `redeemInvestment` closes exactly one HOLDING → throws `AppError('CONFLICT')` if it was already
  * redeemed.
  *
- * Both writes run in a SINGLE interactive transaction (`runInTransaction`): the balance change and
- * the holding change commit together or not at all, so no partial debit/credit can survive. The
- * debit is a conditional decrement (`balance >= amount`) → a negative balance is impossible even
- * under concurrency.
+ * Both writes run in a SINGLE interactive transaction (`runInTransaction`): the balance change, the
+ * holding change and the account-flow `Transaction` row commit together or not at all, so no partial
+ * debit/credit can survive. The debit is a conditional decrement (`balance >= amount`) → a negative
+ * balance is impossible even under concurrency.
  *
  * Optional at-most-once semantics (`input.idempotencyKey`, supplied by the planner as
  * `nodeExecutionKey(taskId, nodeId)`): a replayed plan node re-runs the tool, so a repeat with the
@@ -23,14 +23,17 @@
  * replays that original result, while a DIFFERENT or absent identity on an already-REDEEMED holding
  * throws `CONFLICT` — never a false success.
  *
- * Note: subscribing/redeeming moves the funding-account BALANCE only — it deliberately does NOT
- * write a `Transaction` row, so the demo's 本月 spending analysis stays anchored at ¥5,800.
+ * Note: subscribing/redeeming moves the funding-account BALANCE and writes an investment-flow
+ * `Transaction` row (category `INVESTMENT_FLOW_CATEGORY`) in the SAME transaction, so investment
+ * principal is kept out of the 本月 spending analysis (anchored at ¥5,800) and is never mislabeled
+ * as 大额消费.
  */
 import type { InvestmentHolding, InvestmentProduct } from '@prisma/client';
 import { demoNow } from '../lib/clock';
 import { accounts, investments } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
-import { round2, subtractMoney } from '../lib/money';
+import { moneyToCents, round2, subtractMoney } from '../lib/money';
+import { INVESTMENT_FLOW_CATEGORY } from './categories';
 import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction, type Tx } from './tx';
 import type {
@@ -101,6 +104,7 @@ export async function compareInvestments(ids: string[]): Promise<InvestmentCompa
 interface SubscribeOutcome {
   holding: InvestmentHolding;
   newBalance: number;
+  sourceAccountId?: string;
 }
 
 /** Map a persisted holding (plus the balance after the write) onto the public `InvestResult`. */
@@ -111,6 +115,7 @@ function toSubscribeResult(outcome: SubscribeOutcome): InvestResult {
     productId: outcome.holding.productId,
     amount: outcome.holding.amount,
     newBalance: outcome.newBalance,
+    sourceAccountId: outcome.sourceAccountId,
     occurredAt: outcome.holding.boughtAt.getTime(),
   };
 }
@@ -198,7 +203,24 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
         userId: input.userId,
       });
     }
-    return { holding, newBalance: updated.balance };
+    // Account-flow row: mirrors the funding-account DEBIT as a ledger `Transaction` in the SAME
+    // transaction, categorized as investment flow (`INVESTMENT_FLOW_CATEGORY`) so principal is kept
+    // out of consumption analysis and is never mislabeled as salary/大额消费.
+    await tx.transaction.create({
+      data: {
+        accountId: account.id,
+        userId: input.userId,
+        amount: -amount, // DECREASE: negative
+        direction: 'DEBIT',
+        category: INVESTMENT_FLOW_CATEGORY,
+        merchant: '认购' + product.name,
+        channel: 'APP',
+        occurredAt: new Date(now),
+        currency: 'CNY',
+      },
+    });
+
+    return { holding, newBalance: updated.balance, sourceAccountId: account.id };
   };
 
   const key = normalizeIdempotencyKey(input.idempotencyKey);
@@ -213,7 +235,7 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
       const existing = await tx.investmentHolding.findUnique({ where: { idempotencyKey: key } });
       if (existing === null) return null;
       const current = await tx.account.findUnique({ where: { id: account.id } });
-      return { holding: existing, newBalance: current?.balance ?? 0 };
+      return { holding: existing, newBalance: current?.balance ?? 0, sourceAccountId: account.id };
     },
     create: (tx, replayKey) => debitAndCreate(tx, replayKey),
   });
@@ -248,13 +270,20 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
   }
 
   const key = normalizeIdempotencyKey(input.idempotencyKey);
-  const credit = round2(holding.marketValue ?? holding.amount);
   const now = demoNow();
 
   return runInTransaction(async (tx): Promise<InvestResult> => {
+    // Re-read the value at the write boundary: a stale pre-MFA quote cannot authorize a new amount.
+    const current = await tx.investmentHolding.findUnique({ where: { id: holding.id } });
+    if (!current || current.userId !== input.userId) throw new AppError('NOT_FOUND', '持仓不存在');
+    const credit = round2(current.marketValue ?? current.amount);
+    if (current.status === 'HOLDING' && input.expectedRedemptionAmount !== undefined &&
+        moneyToCents(input.expectedRedemptionAmount) !== moneyToCents(credit)) {
+      throw new AppError('CONFLICT', '赎回金额已变化，请重新确认该持仓后再验证。');
+    }
     // Atomic HOLDING → REDEEMED transition: count 0 means it was already redeemed (no double credit).
     const closed = await tx.investmentHolding.updateMany({
-      where: { id: holding.id, userId: input.userId, status: { not: 'REDEEMED' } },
+      where: { id: holding.id, userId: input.userId, status: 'HOLDING' },
       data: { status: 'REDEEMED' },
     });
 
@@ -284,6 +313,7 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
       productId: holding.productId,
       amount: credit,
       newBalance: credited.balance,
+      sourceAccountId: account.id,
       occurredAt: now,
     };
 
@@ -292,6 +322,23 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
     await tx.investmentHolding.update({
       where: { id: holding.id },
       data: { redeemExecutionKey: key ?? null, redeemResult: JSON.stringify(payload) },
+    });
+
+    // Account-flow row: mirrors the funding-account CREDIT as a ledger `Transaction` in the SAME
+    // transaction, categorized as investment flow (`INVESTMENT_FLOW_CATEGORY`) so redeemed principal
+    // is never mislabeled as salary/大额消费 income.
+    await tx.transaction.create({
+      data: {
+        accountId: account.id,
+        userId: input.userId,
+        amount: credit, // INCREASE: positive
+        direction: 'CREDIT',
+        category: INVESTMENT_FLOW_CATEGORY,
+        merchant: '赎回',
+        channel: 'APP',
+        occurredAt: new Date(now),
+        currency: 'CNY',
+      },
     });
 
     return payload;
@@ -305,6 +352,7 @@ export async function listHoldings(userId: string): Promise<HoldingView[]> {
     id: row.id,
     productId: row.productId,
     productName: row.product.name,
+    product: toProductView(row.product),
     riskLevel: row.product.riskLevel as InvestmentRiskLevel,
     amount: row.amount,
     marketValue: row.marketValue ?? undefined,

@@ -53,9 +53,16 @@ import {
 import { prisma } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 import { safeParse } from '../lib/json';
-import { formatCNY, normalizeTransferAmount, parseAmount } from '../lib/money';
+import { formatCNY, moneyToCents, normalizeTransferAmount, parseAmount, round2 } from '../lib/money';
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
+import { resolveBankingArgs } from '../lib/banking-selectors';
+import { assertRequestedProducts } from '../lib/request-constraints';
+import { requiresCompletePlan, COMPLETE_PLAN_NOTICE } from '../lib/request-steps';
+import { withActionPolicy } from '../lib/action-summary';
+import { scheduledTime } from '../lib/scheduled-time';
+import { redactRequest, redactSecrets } from '../lib/sensitive';
+import { formatDateTime } from '../lib/date';
 import type { ErrorCode } from '../lib/errors';
 
 /** Prefix wrapped around the serialized block reason so `parseBlockReason` is exact. */
@@ -348,7 +355,9 @@ function toContractPendingAction(row: PrismaPendingAction): PendingAction {
     tier: row.riskLevel as RiskLevel,
     requiresMfa: row.requiresMfa,
     status: row.status as PendingActionStatus,
-    summary: safeParse<PendingActionSummary>(row.summaryJson, fallbackSummary),
+    summary: withActionPolicy(safeParse<PendingActionSummary>(row.summaryJson, fallbackSummary), {
+      actionId: row.id, tier: row.riskLevel as RiskLevel, requiresMfa: row.requiresMfa,
+    }),
     userRequest: row.userRequest ?? undefined,
     intent: row.intent ?? undefined,
     createdAt: row.createdAt.getTime(),
@@ -359,7 +368,7 @@ function toContractPendingAction(row: PrismaPendingAction): PendingAction {
 /** Full evaluation: circuit breaker + permission/risk engines + daily-transfer lookup. */
 async function gatewayEvaluate(ctx: GatewayContext): Promise<SecurityEvaluation> {
   const dailyTotal = await computeDailyTransferTotal(ctx.userId);
-  const locked = isLocked(ctx.sessionId);
+  const locked = await isLocked(ctx.sessionId);
 
   const te = evaluateTool(ctx.toolName, ctx.args, {
     userId: ctx.userId,
@@ -472,9 +481,16 @@ async function findReusableAction(
         row.toolName === ctx.toolName &&
         row.riskLevel === ev.tier &&
         row.requiresMfa === ev.requiresMfa &&
-        sameArgs(safeParse<Record<string, unknown>>(row.argsJson, {}), ctx.args),
+        sameArgs(requestArgs(ctx.toolName, safeParse<Record<string, unknown>>(row.argsJson, {})), requestArgs(ctx.toolName, ctx.args)),
     ) ?? null
   );
+}
+
+/** The redemption quote belongs to the original server decision, not the model's request identity. */
+function requestArgs(tool: ToolName, args: Record<string, unknown>): Record<string, unknown> {
+  if (tool !== 'redeem_investment') return args;
+  const { expectedRedemptionAmount: _quote, ...request } = args;
+  return request;
 }
 
 /**
@@ -507,6 +523,17 @@ async function gatewayCreatePendingAction(
   ctx: GatewayContext,
   ev: SecurityEvaluation,
 ): Promise<CreatePendingActionResult> {
+  ctx = { ...ctx, args: await resolveBankingArgs(ctx.userId, ctx.toolName, ctx.args),
+    userRequest: redactRequest(ctx.userRequest) };
+  if (ctx.toolName === 'create_scheduled_task') {
+    ctx.args = { ...ctx.args, runAt: scheduledTime(ctx.args, ctx.userRequest) };
+  }
+  if (ctx.toolName === 'change_password') ctx.args = redactSecrets(ctx.args) as Record<string, unknown>;
+  if (ctx.toolName === 'apply_virtual_card' && ctx.args.monthlyLimit !== undefined) {
+    const cents = moneyToCents(ctx.args.monthlyLimit);
+    if (cents < 0) throw new AppError('VALIDATION', '月限额不能为负数。');
+    ctx.args = { ...ctx.args, monthlyLimit: cents / 100 };
+  }
   let recipient: { name: string; phone: string } | undefined;
   let accountLabel: string | undefined;
 
@@ -537,6 +564,51 @@ async function gatewayCreatePendingAction(
   if (reusable) return { kind: 'created', action: toContractPendingAction(reusable) };
 
   const summary = buildPendingActionSummary(ctx, ev, recipient, accountLabel);
+  if (ctx.args.cardId) {
+    const card = await prisma.card.findFirst({ where: { id: String(ctx.args.cardId), userId: ctx.userId } });
+    if (card) summary.fields.unshift({ label: '卡片', value: `${({ CREDIT: '信用卡', DEBIT: '借记卡', VIRTUAL: '虚拟卡' } as Record<string, string>)[card.type] ?? card.type} ${card.numberMasked}` });
+  }
+  if (ctx.args.productId) {
+    const product = await prisma.investmentProduct.findUnique({ where: { id: String(ctx.args.productId) } });
+    if (product) summary.fields.unshift({ label: '产品', value: `${product.name}（${product.code}）` });
+  }
+  if (ctx.args.holdingId) {
+    const holding = await prisma.investmentHolding.findFirst({ where: { id: String(ctx.args.holdingId), userId: ctx.userId }, include: { product: true } });
+    if (holding) summary.fields.unshift({ label: '持仓', value: `${holding.product.name}（${holding.id}）` });
+    if (holding && ctx.toolName === 'redeem_investment') {
+      const amount = round2(holding.marketValue ?? holding.amount);
+      ctx.args = { ...ctx.args, expectedRedemptionAmount: amount };
+      summary.fields.push(
+        { label: '赎回范围', value: '全部赎回该笔持仓（不支持部分赎回）' },
+        { label: '持仓本金', value: formatCNY(holding.amount) },
+        { label: '赎回到账金额', value: formatCNY(amount) },
+        { label: '金额变化', value: '金额变化时停止执行，需重新确认' },
+      );
+    }
+  }
+  if (ctx.toolName === 'apply_virtual_card') {
+    summary.fields.push({ label: '月限额', value: ctx.args.monthlyLimit === undefined ? '未设置（本次仅开卡）' : formatCNY(Number(ctx.args.monthlyLimit)) });
+    summary.fields.push({ label: '演示范围', value: '保存卡片及月限额配置；Demo 不提供刷卡支付' });
+  }
+  if (ctx.args.subscriptionId) {
+    const subscription = await prisma.subscription.findFirst({ where: { id: String(ctx.args.subscriptionId), userId: ctx.userId } });
+    if (subscription) summary.fields.unshift({ label: '订阅', value: subscription.name });
+  }
+  if (ctx.toolName === 'set_subscription_reminder') summary.fields.push({ label: '提醒设置', value: ctx.args.remind === true ? '开启' : '关闭' });
+  if (ctx.toolName === 'set_card_limit' && ctx.args.amount !== undefined) summary.fields.push({ label: '新限额', value: formatCNY(Number(ctx.args.amount)) });
+  if (['subscribe_investment', 'redeem_investment'].includes(ctx.toolName)) {
+    const account = await prisma.account.findFirst({ where: { userId: ctx.userId, type: 'CHECKING' } });
+    summary.fields.push({ label: ctx.toolName === 'subscribe_investment' ? '付款账户' : '入账账户', value: account?.name ?? '账户待核对' });
+  }
+  for (const [key, label] of [['category','类别'],['limit','新限额'],['daysBefore','提前天数'],['name','名称'],['remark','备注']] as const) {
+    if (ctx.args[key] !== undefined) summary.fields.push({ label, value: String(ctx.args[key]) });
+  }
+  if (ctx.toolName === 'create_scheduled_task') summary.fields.push({ label: '执行时间（北京时间）', value: formatDateTime(Number(ctx.args.runAt)) });
+  if (ctx.toolName === 'create_scheduled_task') {
+    summary.fields.push({ label: '任务类型', value: String(ctx.args.kind) });
+    if (ctx.args.payload) summary.fields.push({ label: '任务内容', value: JSON.stringify(redactSecrets(ctx.args.payload)) });
+    summary.fields.push({ label: '演示范围', value: '仅保存任务记录，不承诺到期执行' });
+  }
   const status: PendingActionStatus = ev.requiresMfa ? 'awaiting_mfa' : 'pending';
 
   // The owning-plan status check and the row insert share ONE transaction: a plan cancelled
@@ -803,7 +875,9 @@ async function authorizeTransfer(
       // the code) can complete it. The escalation is persisted — never a silently-ignored return.
       await tx.pendingAction.update({
         where: { id: row.id },
-        data: { status: 'awaiting_mfa', riskLevel: 'RED', requiresMfa: true },
+        data: { status: 'awaiting_mfa', riskLevel: 'RED', requiresMfa: true,
+          summaryJson: JSON.stringify(withActionPolicy(action.summary, { actionId: row.id, tier: 'RED', requiresMfa: true })),
+        },
       });
       return { kind: 'escalated' as const, effectiveTotal, projected: risk.projectedDailyTotal };
     }
@@ -847,7 +921,9 @@ async function authorizeTransfer(
       requiresMfa: true,
       code: 'LIMIT_EXCEEDED',
       message: TRANSFER_ESCALATED_MESSAGE,
-      action: { ...action, tier: 'RED', requiresMfa: true, status: 'awaiting_mfa' },
+      action: { ...action, tier: 'RED', requiresMfa: true, status: 'awaiting_mfa',
+        summary: withActionPolicy(action.summary, { actionId: row.id, tier: 'RED', requiresMfa: true }),
+      },
     };
   }
 
@@ -889,7 +965,7 @@ async function authorizeAction(
   const effectiveRequiresMfa = row.requiresMfa || action.tier === 'RED';
 
   // Circuit breaker is a hard gate the LLM (and even a correct code) cannot bypass.
-  if (isLocked(row.sessionId)) {
+  if (await isLocked(row.sessionId)) {
     return {
       ok: false,
       status: 'locked',
@@ -978,8 +1054,21 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
   // yet, so only presence/non-emptiness can be asserted here.
   assertCallerIdentity(ctx);
 
+  // Trusted DAG context is injected by the executor, not accepted from model arguments.
+  if (!ctx.taskId && getToolPolicy(ctx.toolName).write && requiresCompletePlan(ctx.userRequest)) {
+    throw new AppError('VALIDATION', COMPLETE_PLAN_NOTICE);
+  }
+
   const evaluation = await gatewayEvaluate(ctx);
   const decision = gatewayDecide(evaluation);
+
+  if (decision.kind !== 'deny') {
+    try { await assertRequestedProducts(ctx.toolName, ctx.args, ctx.userRequest); }
+    catch (error) {
+      if (!(error instanceof AppError) || error.code !== 'VALIDATION') throw error;
+      return { evaluation: { ...evaluation, blocked: true }, decision: { ...decision, kind: 'deny' }, blockReason: error.message };
+    }
+  }
 
   // GREEN — allow the tool to execute inline.
   if (!evaluation.blocked) return { evaluation, decision };
@@ -994,7 +1083,12 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
   }
 
   // Gated (YELLOW/RED) — persist the pending action and block with its id.
-  const result = await gatewayCreatePendingAction(ctx, evaluation);
+  let result: CreatePendingActionResult;
+  try { result = await gatewayCreatePendingAction(ctx, evaluation); }
+  catch (error) {
+    if (!(error instanceof AppError) || error.code !== 'VALIDATION') throw error;
+    return { evaluation, decision: { ...decision, kind: 'deny' }, blockReason: error.message };
+  }
 
   // An unresolvable/ambiguous transfer recipient → BLOCK with a PLAIN model-readable message (never a
   // `BLOCK_REASON_PREFIX` payload, which the model cannot read) and NO pending action. `evaluation.blocked`

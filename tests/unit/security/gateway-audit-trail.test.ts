@@ -88,7 +88,7 @@ describe('security-gateway · pending-action audit trail (needs test SQLite)', (
 
   it('persists userRequest + intent for a RED action too (status awaiting_mfa)', async () => {
     const userRequest = '帮我认购 5 万元稳健理财';
-    const ctx = ctxFor('subscribe_investment', { productId: 'inv_test', amount: 50000 }, userRequest);
+    const ctx = ctxFor('subscribe_investment', { productId: 'prod_wenjiana', amount: 50000 }, userRequest);
     const ev = await securityGateway.evaluate(ctx);
     expect(ev.tier).toBe('RED');
     expect(ev.requiresMfa).toBe(true);
@@ -106,7 +106,7 @@ describe('security-gateway · pending-action audit trail (needs test SQLite)', (
 
   it('handleToolCall persists userRequest + intent before blocking and returns them on the action', async () => {
     const userRequest = '把信用卡额度调到 5000';
-    const ctx = ctxFor('set_card_limit', { limit: 5000 }, userRequest);
+    const ctx = ctxFor('set_card_limit', { cardId: 'card_credit', category: '娱乐', amount: 5000 }, userRequest);
 
     const auth = await securityGateway.handleToolCall(ctx);
 
@@ -122,7 +122,7 @@ describe('security-gateway · pending-action audit trail (needs test SQLite)', (
   });
 
   it('an empty userRequest is preserved verbatim while the intent stays non-empty', async () => {
-    const ctx = ctxFor('freeze_card', { cardId: 'card_test' }, '');
+    const ctx = ctxFor('freeze_card', { cardId: 'card_credit' }, '');
     const ev = await securityGateway.evaluate(ctx);
 
     const action = await securityGateway.createPendingAction(ctx, ev);

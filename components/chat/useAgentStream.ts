@@ -41,6 +41,8 @@ import {
 // does not pull in every card component; `decisionKey` is the shared decision-identity helper.
 import { asTerminalStatus } from './cards/confirmationStatus';
 import { decisionKey } from './decisionKey';
+import { redactRequest } from '@/lib/sensitive';
+import { withActionPolicy } from '@/lib/action-summary';
 
 /**
  * The summary for an MFA prompt. The `mfa_required` event carries no tool name, so `toolName` is
@@ -186,6 +188,8 @@ function readRememberedPlanId(): string | undefined {
 
 /** Replace the message with the same `id`, else append (immutable). */
 function upsertMessage(messages: ChatMessage[], next: ChatMessage): ChatMessage[] {
+  next = { ...next, cards: (next.cards ?? []).filter((card, index, cards) =>
+    card.type !== 'plan' && cards.findIndex(other => JSON.stringify(other) === JSON.stringify(card)) === index) };
   const index = messages.findIndex((m) => m.id === next.id);
   if (index === -1) return [...messages, next];
   const copy = messages.slice();
@@ -244,6 +248,7 @@ function cardTargetId(state: ChatUIState): string | undefined {
 function upsertPlan(state: ChatUIState, plan: TaskPlan, generation?: number): ChatUIState {
   const current = state.activePlan;
   if (current && current.id === plan.id) {
+    if (current.status === 'cancelled' && plan.status !== 'cancelled') return state;
     const incomingGeneration = plan.generation ?? generation;
     const storedGeneration = current.generation;
     if (incomingGeneration !== undefined && storedGeneration !== undefined) {
@@ -286,7 +291,8 @@ function attachCard(state: ChatUIState, card: ChatCard): ChatUIState {
     return { ...state, messages: [...state.messages, message] };
   }
   const messages = state.messages.map((m) =>
-    m.id === targetId ? { ...m, cards: [...(m.cards ?? []), card] } : m,
+    m.id === targetId && !(m.cards ?? []).some(existing => JSON.stringify(existing) === JSON.stringify(card))
+      ? { ...m, cards: [...(m.cards ?? []), card] } : m,
   );
   return { ...state, messages };
 }
@@ -356,6 +362,10 @@ function settleAction(state: ChatUIState, event: ActionSettledEvent): ChatUIStat
     if (!cards || cards.length === 0) return message;
     let cardChanged = false;
     const nextCards = cards.map((card) => {
+      if (card.type === 'mfa' && card.actionId === event.actionId) {
+        cardChanged = true;
+        return { ...card, status: event.status, message: event.message };
+      }
       if (card.type !== 'confirmation') return card;
       const stamped = (card.action as unknown as { actionId?: unknown }).actionId;
       const sameAction = stamped === event.actionId;
@@ -393,20 +403,22 @@ function applyEvent(state: ChatUIState, event: AgentStreamEvent): ChatUIState {
     case 'message_start':
       return {
         ...state,
-        messages: upsertMessage(state.messages, event.message),
+        messages: upsertMessage(state.messages, { ...event.message, cards: [] }),
         currentAssistantId: event.message.id,
       };
 
     case 'text_delta':
       return { ...state, streamingText: state.streamingText + event.delta };
 
-    case 'message_end':
+    case 'message_end': {
+      for (const card of event.message.cards ?? []) if (card.type === 'plan') state = upsertPlan(state, card.plan);
       return {
         ...state,
         messages: upsertMessage(state.messages, event.message),
         streamingText: '',
         currentAssistantId: undefined,
       };
+    }
 
     case 'tool_start':
     case 'tool_end': {
@@ -442,16 +454,38 @@ function applyEvent(state: ChatUIState, event: AgentStreamEvent): ChatUIState {
         },
       };
 
-    case 'mfa_required':
+    case 'mfa_required': {
+      const inline = state.messages.flatMap(message => message.cards ?? []).find(card =>
+        (card.type === 'confirmation' && card.action.actionId === event.actionId) ||
+        (card.type === 'mfa' && card.actionId === event.actionId));
+      const source = event.action ?? (state.pendingAction?.actionId === event.actionId
+        ? state.pendingAction.summary : inline?.type === 'confirmation' ? inline.action
+          : inline?.type === 'mfa' ? inline.action : undefined);
+      const summary = source
+        ? withActionPolicy(source as PendingActionSummary, { actionId: event.actionId, tier: 'RED', requiresMfa: true })
+        : mfaSummary(state, event.hint);
+      // Replace this action's old decision, preserving every other action and terminal card.
+      const messages = state.messages.map(message => ({ ...message, cards: message.cards?.map(card => {
+        if (card.type === 'confirmation' && card.action.actionId === event.actionId &&
+            asTerminalStatus((card.action as PendingActionSummary & { status?: string }).status) === undefined) {
+          return { type: 'mfa' as const, actionId: event.actionId, action: summary as PendingActionSummary, hint: event.hint };
+        }
+        if (card.type === 'mfa' && card.actionId === event.actionId && asTerminalStatus(card.status) === undefined) {
+          return { ...card, action: summary as PendingActionSummary, hint: event.hint };
+        }
+        return card;
+      }) }));
       return {
         ...state,
+        messages,
         pendingAction: {
           kind: 'mfa',
-          summary: mfaSummary(state, event.hint),
+          summary,
           actionId: event.actionId,
           ...(event.hint !== undefined ? { hint: event.hint } : {}),
         },
       };
+    }
 
     case 'security_event':
       return {
@@ -502,7 +536,7 @@ function restoredMfaSummary(summary?: PendingActionSummary): MfaActionSummary {
     title: summary.title,
     ...(summary.toolName ? { toolName: summary.toolName } : {}),
     tier: 'RED',
-    fields: summary.fields ?? [],
+    fields: withActionPolicy(summary, { tier: 'RED', requiresMfa: true }).fields,
     requiresMfa: true,
   };
   if (summary.mfaHint !== undefined) result.mfaHint = summary.mfaHint;
@@ -635,12 +669,13 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
   const applyEvents = useCallback((events: AgentStreamEvent[]) => {
     setState((prev) => reduceAgentEvents(prev, events));
   }, []);
+  const sendingRef = useRef(false);
 
   /**
    * Shared "run one turn" path: flip `busy`, run `load()`, fold the returned events and settle
    * `pendingAction` (kept only if the turn reported an `error`). Never throws to the UI.
    */
-  const pull = useCallback(async (load: () => Promise<ChatTurnResponse>) => {
+  const pull = useCallback(async (load: () => Promise<ChatTurnResponse>, settlesDecision = true, actionId?: string) => {
     setState((prev) => ({ ...prev, busy: true, error: undefined }));
     try {
       const res = await load();
@@ -659,7 +694,8 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
         const establishesDecision = events.some(
           (e) => e.type === 'confirmation_required' || e.type === 'mfa_required',
         );
-        const clearPending = !hasError && !establishesDecision;
+        const clearPending = settlesDecision && !hasError && !establishesDecision &&
+          (actionId === undefined || reduced.pendingAction?.actionId === actionId);
         return { ...reduced, ...(clearPending ? { pendingAction: undefined } : {}), busy: false };
       });
     } catch (e) {
@@ -673,6 +709,10 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
 
   const send = useCallback(
     async (text: string) => {
+      if (sendingRef.current) return;
+      sendingRef.current = true;
+      try {
+      text = redactRequest(text);
       const userMessage: ChatMessage = {
         id: nextLocalId('user'),
         role: 'user',
@@ -686,18 +726,20 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
           sessionId !== undefined ? { sessionId, message: text } : { message: text },
           endpoints,
         ),
+        false,
       );
+      } finally { sendingRef.current = false; }
     },
     [state.sessionId, endpoints, pull],
   );
 
   const confirm = useCallback(
-    (actionId: string) => pull(() => confirmAction(actionId, endpoints)),
+    (actionId: string) => pull(() => confirmAction(actionId, endpoints), true, actionId),
     [pull, endpoints],
   );
   const verify = useCallback(
     async (actionId: string, code: string) => {
-      await pull(() => verifyAction(actionId, code, endpoints));
+      await pull(() => verifyAction(actionId, code, endpoints), true, actionId);
       // A WRONG code keeps the SAME `mfa` decision active and sets `error` — count the attempt so the
       // MFA card can show "第 N 次尝试". A success/cancel clears `pendingAction` (and the reset effect
       // zeroes the counter); a new action changes actionId/kind, which also resets it.
@@ -710,7 +752,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
     [pull, endpoints],
   );
   const cancel = useCallback(
-    (actionId: string) => pull(() => cancelAction(actionId, endpoints)),
+    (actionId: string) => pull(() => cancelAction(actionId, endpoints), true, actionId),
     [pull, endpoints],
   );
 
@@ -723,7 +765,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
    */
   const recover = useCallback(
     async (actionId: string) => {
-      await pull(() => recoverAction(actionId, endpoints));
+      await pull(() => recoverAction(actionId, endpoints), true, actionId);
       setState((prev) =>
         prev.error !== undefined
           ? prev
@@ -757,7 +799,14 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
         setState((prev) => ({ ...prev, busy: false, error: errorMessage(undefined) }));
         return;
       }
-      setState((prev) => ({ ...upsertPlan(prev, plan), busy: false }));
+      const refs = await fetchPendingActions(endpoints);
+      setState((prev) => {
+        let next = upsertPlan(prev, plan);
+        if (plan.status === 'cancelled' && next.pendingAction && !refs.some(ref => ref.id === next.pendingAction!.actionId)) {
+          next = settleAction(next, { type: 'action_settled', actionId: next.pendingAction.actionId, status: 'cancelled' });
+        }
+        return { ...next, pendingAction: pickPendingAction(refs), pendingReconciliations: pickAttention(refs), busy: false };
+      });
     },
     [state.activePlan?.id, endpoints],
   );

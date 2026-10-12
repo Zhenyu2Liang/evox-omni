@@ -9,6 +9,12 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 
 ## API Surface
 
+- `request-steps.ts` recognizes bounded explicit Chinese multi-step requests and validates one-to-one tool/object/cent-amount coverage before a plan or write. It never supplies tool arguments or permissions; runtime and gateway require complete plans before standalone side effects. Ambiguous/unsupported language remains a documented boundary.
+
+- `request-constraints.ts` validates exact product comparisons, ordered steps and explicit success prerequisites before plan creation. `request-purchases.ts` binds each purchase to its own product/cent amount and rejects extra/missing plan nodes; it is pure and never changes permissions. Ambiguous conditions fail before writes. Resource aliases use repositories and never model-written node labels.
+
+  `resolveRequestedRedemptions` canonicalizes fresh plan selectors through the existing owner-scoped resolver and requires a current HOLDING. `requestEntityAliases` includes only the user's active holdings and their actual product metadata. Negation after an operation is not an operation veto; condition references are handled separately. These checks do not replace write-time ownership, quote or MFA checks.
+
 - `errors.ts` — `ErrorCode`, `AppError` (+ `AppError.from`), `Result<T>`, `ok()` / `err()`.
   Project-wide convention: return `Result<T>` or throw `AppError` at tool/SDK boundaries.
 - `money.ts` — CNY helpers: `CNY` (`'¥'`), `round2`, `formatCNY` (`¥1,234.56`, negatives `-¥...`),
@@ -31,6 +37,9 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   convenience wrappers defaulting to the demo clock — `demoTodayRange(override?)`, `demoMonthRange(override?)`,
   `demoPreviousMonthRange(override?)` — each delegates to the matching `date.ts` helper via
   `new Date(demoNow(override))`.
+  It also exports `realNow(): number` — the server's REAL wall clock (`Date.now()`), used ONLY for
+  SECURITY elapsed-time gates (circuit-breaker lock timestamp / unlock cooldown, `now >= lockedAt + RESET_COOLDOWN_MS`);
+  never use it for business dates, and never use `demoNow()` for security cooldown timing.
 - `json.ts` — SQLite JSON-text column helpers: `safeParse<T>(text, fallback)` (returns `fallback` for
   null/undefined/empty/invalid JSON) and `toJson(value)` (`'null'` when value is `undefined`).
 - `phone.ts` — mask-aware phone matching & masking (pure, never throws): `maskAwarePhoneMatch(value, stored)` → TRUE iff a RAW value matches a MASKED stored phone (exact, digit-substring either direction, or an anchored wildcard pattern from the stored phone's `*`-split fragments); `maskPhone(phone)` → first-3 + `****` + last-4. Lets a RAW phone lookup match the demo's MASKED-stored `Contact.phone` values.
@@ -107,7 +116,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 - `./lib/config.ts` → `getConfig()` runtime env config.
 - `./lib/ids.ts` → `newId(prefix?)` id generation.
 - `./lib/date.ts` → pure local-timezone date-range/format helpers.
-- `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers.
+- `./lib/clock.ts` → demo clock: `demoNow()` + demo range wrappers, plus `realNow()` (the server REAL wall clock `Date.now()`) used ONLY for SECURITY elapsed-time gates (breaker lock timestamp / unlock cooldown) — never for business dates.
 - `./lib/json.ts` → JSON-text column (de)serialization for SQLite.
 - `./lib/ledger.ts` → deterministic idempotency keys + canonical action→ledger-row identity — `idempotentTransferTxId`, `nodeExecutionKey`, `ledgerKeyForAction`, `ledgerTxIdForAction`, plus the EXECUTION-RECEIPT helpers `executionReceiptId` / `requestDigest`.
 - `./lib/phone.ts` → mask-aware phone matching & masking — `maskAwarePhoneMatch(value, stored)` (raw↔masked) and `maskPhone(phone)`; the shared helper that lets a RAW phone lookup match the demo's MASKED-stored `Contact.phone` values (used by the `security/recipient-resolution.ts` write path AND the `lib/db/repositories/contact.ts#searchContacts` read path).

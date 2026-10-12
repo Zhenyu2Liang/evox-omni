@@ -32,6 +32,7 @@
  * no side effect, no tool execution. Thin by design: `validate (zod) → delegate → serialize`.
  */
 import type { NextRequest } from 'next/server';
+import { withActionPolicy } from '@/lib/action-summary';
 import type { PendingAction as PendingActionRow } from '@prisma/client';
 import {
   listPendingActions,
@@ -95,12 +96,13 @@ function toContractPendingAction(row: PendingActionRow): PendingAction {
   const toolName = row.toolName as ToolName;
   const tier = row.riskLevel as RiskLevel;
   const parsedSummary = safeParse<PendingActionSummary>(row.summaryJson, FALLBACK_SUMMARY);
-  const summary: PendingActionSummary = {
+  const summary: PendingActionSummary = withActionPolicy({
+    actionId: row.id,
     ...parsedSummary,
     toolName,
     tier,
     requiresMfa: row.requiresMfa,
-  };
+  }, { actionId: row.id, tier, requiresMfa: row.requiresMfa });
   return {
     id: row.id,
     sessionId: row.sessionId,

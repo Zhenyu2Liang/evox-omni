@@ -45,7 +45,7 @@ export function AssetSummaryCard({ summary, className }: AssetSummaryCardProps) 
         <AssetStat label="总资产" amount={summary.totalAssets} />
         <AssetStat label="活期余额" amount={summary.checkingBalance} />
         <AssetStat label="信用卡额度" amount={summary.creditAvailable} />
-        <AssetStat label={`本月消费 · ${summary.month}`} amount={summary.monthSpend} />
+        <AssetStat label={`正常消费（不含异常及投资）· ${summary.month}`} amount={summary.monthSpend} />
       </div>
     </Card>
   );

@@ -63,7 +63,7 @@ export async function runAnalyzeSpending(
 /** Concise Chinese summary of a spending analysis (the text the model narrates). */
 function summarizeSpending(analysis: SpendingAnalysis): string {
   const mom = analysis.momChangePct >= 0 ? `+${analysis.momChangePct}%` : `${analysis.momChangePct}%`;
-  const parts = [`${analysis.month} 消费合计 ${formatCNY(analysis.total)}（环比 ${mom}）`];
+  const parts = [`${analysis.month} 消费合计 ${formatCNY(analysis.total)}（正常消费，不含异常及投资资金流；环比 ${mom}）`];
 
   const topCategory = analysis.byCategory[0];
   if (topCategory !== undefined) {

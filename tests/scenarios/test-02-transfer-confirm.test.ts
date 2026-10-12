@@ -130,6 +130,7 @@ describe('Scenario 2 — 给张伟转200元 (YELLOW confirm)', () => {
       { label: '金额', value: formatCNY(AMOUNT) },
       { label: '账户', value: '默认活期账户' },
       { label: '风险等级', value: RISK_LABEL.YELLOW },
+      { label: '备注', value: 'AA' },
     ]);
   });
 

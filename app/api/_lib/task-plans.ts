@@ -51,6 +51,7 @@ function toNodeSpec(node: AgentTaskNode): TaskNodeSpec {
     id: node.nodeId,
     name: node.name,
     dependencies: safeParse<string[]>(node.dependencies, []),
+    ...(node.after ? { after: safeParse<string[]>(node.after, []) } : {}),
     kind: node.kind as TaskNodeKind,
     tool: node.tool ?? undefined,
     args: safeParse<Record<string, unknown> | undefined>(node.args, undefined),
@@ -75,6 +76,7 @@ function toNodeResult(node: AgentTaskNode): AppTaskNodeResult {
     error: node.error ?? undefined,
     startedAt: node.startedAt?.getTime(),
     endedAt: node.endedAt?.getTime(),
+    ...(node.compensation ? { compensation: safeParse(node.compensation, undefined) } : {}),
     pendingActionId: readPendingActionId(output),
   };
 }
@@ -96,6 +98,7 @@ export function toTaskPlan(row: AgentTaskWithNodes): AppTaskPlan {
     nodes: row.nodes.map(toNodeSpec),
     results: row.nodes.map(toNodeResult),
     createdAt: row.createdAt.getTime(),
+    generation: row.generation,
     updatedAt: row.updatedAt.getTime(),
   };
 }

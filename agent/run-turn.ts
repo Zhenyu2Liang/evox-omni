@@ -39,20 +39,47 @@ import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import { security } from '@/security';
 import type { AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, JsonValue, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
-import { createBankingAgent } from './banking-agent';
+import { createBankingAgent, type BankingAgentRuntime } from './banking-agent';
 import { confirmationCard, errorCard, mfaCard, toCards } from './card-emitter';
+import { redactRequest } from '@/lib/sensitive';
+import type { FactInput } from './grounding-facts';
+import { renderFinancialResponse, UNAVAILABLE_RESPONSE } from './financial-response';
+import { parseBankingGuidance, filterMissingFields, providedRequestFields, type BankingGuidance, type GuidanceField } from './banking-guidance';
+import { withActionPolicy } from '@/lib/action-summary';
+import { listProducts } from '@/lib/db/repositories/investment';
+import { invalidRequestedComparison, requestedComparison } from '@/lib/request-constraints';
+import { invalidRequestedPurchase } from '@/lib/request-purchases';
 import { withRealToolResult } from './message-normalize';
+import type { ModelRuntime } from './providers/types';
 import { getOrCreateSession, loadSession, saveSession } from './session';
 import { readPendingActionId } from './task-control';
 import type { ToolExecutionResult } from './tools';
+import { canRecoverPlanning, unfinishedPlanning, transientModelFailure, recoveryNotice, startedMutation, PLANNING_RECOVERY_INSTRUCTION } from './live-recovery';
 
-export interface RunTurnDeps { config?: AppConfig; now?: () => number; }
+export interface RunTurnDeps {
+  config?: AppConfig;
+  now?: () => number;
+  /**
+   * TEST SEAM (additive, optional): inject a scripted `{ model, streamFn }` pair so `runTurn`/
+   * `resumeTurn` can be driven deterministically by a faux provider, exactly as `createBankingAgent`
+   * would resolve it from config. Absent ⇒ unchanged behavior (`resolveProvider(config)`).
+   */
+  provider?: ModelRuntime;
+}
 export interface ResumeTurnInput {
   sessionId: string;
   toolResult: ToolExecutionResult;
   toolCallId?: string;
   /** Server-owned action name; never attribute its result to another tool. */
   toolName?: ToolName;
+  /** Actual bank tool for a DAG result injected into Pi's outer submit_plan call. */
+  resultToolName?: ToolName;
+  sourceAccountId?: string;
+  /** The gated `PendingAction` this result belongs to (server-owned), when the caller knows it. */
+  actionId?: string;
+  /** The owning DAG plan / node when this result executed as a plan node, when the caller knows it. */
+  taskId?: string;
+  nodeId?: string;
 }
 
 /** MFA prompt hint surfaced to the UI (never contains the code). */
@@ -103,7 +130,7 @@ function textOfContent(content: unknown): string {
 
 /** Extract the plain text carried in an `AgentToolResult` / a tool-result message. */
 function textOfResult(result: unknown): string {
-  return isRecord(result) ? textOfContent(result.content) : '';
+  return isRecord(result) ? textOfContent(Array.isArray(result.content) ? result.content.slice(0, 1) : result.content) : '';
 }
 
 function isToolExecutionResult(value: unknown): value is ToolExecutionResult {
@@ -129,10 +156,53 @@ interface TurnBuffer {
   assistants: ChatMessage[];
   /** The assistant message currently streaming (tool events / cards attach here). */
   current: ChatMessage | null;
+  /**
+   * Real tool results and execution identities, consumed by the server-owned response renderer.
+   */
+  factResults: FactInput[];
+  sourceAccounts: Map<string, string>;
+  requestText?: string;
+  providedFields?: GuidanceField[];
+  serverGuidance?: BankingGuidance;
+  lastGuidance?: BankingGuidance;
+  /**
+   * SERVER-tracked ids of the messages already grounded this turn. The grounding module no longer
+   * skips on a text marker, so idempotency MUST be keyed here — on the server-owned message id —
+   * NEVER on a string the model can produce (a model that includes the correction tag in its own
+   * text is STILL verified).
+   */
+  groundedIds: Set<string>;
 }
 
-function createTurnBuffer(): TurnBuffer {
-  return { events: [], assistants: [], current: null };
+function createTurnBuffer(requestText?: string): TurnBuffer {
+  return { events: [], assistants: [], current: null, factResults: [], sourceAccounts: new Map(), requestText, groundedIds: new Set() };
+}
+
+/**
+ * Render one UI message from real results only. Presentation errors fail closed without changing
+ * the business operation's outcome. Message identity makes rendering idempotent; model text and
+ * correction labels are never evidence. Cards keep their existing server-owned execution path.
+ */
+function groundMessage(buffer: TurnBuffer, message: ChatMessage | null, guidance?: BankingGuidance): void {
+  if (message === null) return;
+  if (buffer.groundedIds.has(message.id)) return;
+  try {
+    const pendingEvent = [...buffer.events].reverse().find(event => event.type === 'mfa_required' || event.type === 'confirmation_required');
+    message.content = renderFinancialResponse(buffer.factResults, {
+      requestText: buffer.requestText,
+      guidance: buffer.serverGuidance ?? filterMissingFields(guidance, buffer.providedFields ?? []),
+      locked: buffer.events.some(event => event.type === 'security_event' && event.kind === 'locked'),
+      ...(pendingEvent?.type === 'mfa_required' ? { pending: 'mfa' as const }
+        : pendingEvent?.type === 'confirmation_required' ? { pending: 'confirmation' as const } : {}),
+    });
+    buffer.groundedIds.add(message.id);
+  } catch (error) {
+    // Fail closed for presentation: the financial write may already have committed. Never send
+    // raw model text or invent a failure/success when rendering the authoritative facts failed.
+    message.content = UNAVAILABLE_RESPONSE;
+    buffer.groundedIds.add(message.id);
+    buffer.events.push({ type: 'error', message: safeToString(error) });
+  }
 }
 
 function newAssistantMessage(now: number): ChatMessage {
@@ -183,12 +253,12 @@ async function loadPendingSummary(
   };
   const row = await getPendingAction(actionId);
   if (row === null) return fallback;
-  return safeParse<PendingActionSummary>(row.summaryJson, {
+  return withActionPolicy(safeParse<PendingActionSummary>(row.summaryJson, {
     ...fallback,
     toolName: row.toolName as ToolName,
     tier: row.riskLevel as RiskLevel,
     requiresMfa: row.requiresMfa,
-  });
+  }), { actionId, tier: row.riskLevel as RiskLevel, requiresMfa: row.requiresMfa });
 }
 
 /* ------------------------------------------------------- live `submit_plan` (DAG) progress */
@@ -254,8 +324,8 @@ async function emitParkedDecision(buffer: TurnBuffer, relay: PlanRelay): Promise
   relay.parkedActionId = undefined;
   const summary = await loadPendingSummary(actionId, relay.parkedToolName ?? 'submit_plan');
   if (summary.tier === 'RED' || summary.requiresMfa) {
-    buffer.events.push({ type: 'mfa_required', actionId, hint: MFA_HINT });
-    emitCard(buffer, mfaCard(actionId, MFA_HINT));
+    buffer.events.push({ type: 'mfa_required', actionId, hint: MFA_HINT, action: summary });
+    emitCard(buffer, mfaCard(actionId, MFA_HINT, summary));
     return;
   }
   buffer.events.push({ type: 'confirmation_required', action: summary, actionId });
@@ -286,8 +356,17 @@ type ToolExecutionEndEvent = Extract<AgentEvent, { type: 'tool_execution_end' }>
 async function handleToolExecutionEnd(
   buffer: TurnBuffer,
   event: ToolExecutionEndEvent,
+  rejectedCalls: ReadonlyMap<string, string>,
 ): Promise<void> {
   const { toolCallId, toolName } = event;
+
+  const rejection = rejectedCalls.get(toolCallId);
+  if (rejection) {
+    const view: ToolEventView = { toolCallId, toolName, status: 'blocked', summary: '完整计划未通过校验，尚未开始本次写操作；需要补齐全部步骤的对象和金额。' };
+    upsertToolEvent(buffer.current, view);
+    buffer.events.push({ type: 'tool_end', toolEvent: view });
+    return; // Planning refusal is not a failed bank execution or a persisted authorization.
+  }
 
   if (!event.isError) {
     const details = isRecord(event.result) ? event.result.details : undefined;
@@ -301,6 +380,7 @@ async function handleToolExecutionEnd(
     };
     upsertToolEvent(buffer.current, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
+    buffer.factResults.push({ toolName, result: execResult, toolCallId, sourceAccountId: buffer.sourceAccounts.get(toolCallId) });
     emitToolCards(buffer, toolName, execResult);
     return;
   }
@@ -315,6 +395,7 @@ async function handleToolExecutionEnd(
     const view: ToolEventView = { toolCallId, toolName, status: 'error', summary: message };
     upsertToolEvent(buffer.current, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
+    buffer.factResults.push({ toolName, result: { ok: false, error: message }, toolCallId, sourceAccountId: buffer.sourceAccounts.get(toolCallId) });
     emitCard(buffer, errorCard(message));
     return;
   }
@@ -325,8 +406,9 @@ async function handleToolExecutionEnd(
   buffer.events.push({ type: 'tool_end', toolEvent: blockView });
 
   if (parsed !== null && parsed.decisionKind === 'require_mfa') {
-    buffer.events.push({ type: 'mfa_required', actionId: parsed.actionId, hint: MFA_HINT });
-    emitCard(buffer, mfaCard(parsed.actionId, MFA_HINT));
+    const summary = await loadPendingSummary(parsed.actionId, toolName);
+    buffer.events.push({ type: 'mfa_required', actionId: parsed.actionId, hint: MFA_HINT, action: summary });
+    emitCard(buffer, mfaCard(parsed.actionId, MFA_HINT, summary));
     return;
   }
 
@@ -363,6 +445,7 @@ function findRunFailure(messages: readonly AgentMessage[]): AssistantMessage | n
 function createEventHandler(
   buffer: TurnBuffer,
   now: () => number,
+  rejectedCalls: ReadonlyMap<string, string> = new Map(),
 ): (event: AgentEvent) => Promise<void> {
   return async (event: AgentEvent): Promise<void> => {
     try {
@@ -376,24 +459,42 @@ function createEventHandler(
           return;
         }
         case 'message_update': {
-          const assistantEvent = event.assistantMessageEvent;
-          // ONLY text deltas — never emit thinking/chain-of-thought.
-          if (assistantEvent.type !== 'text_delta') return;
-          const delta = assistantEvent.delta;
-          if (delta === '') return;
-          if (buffer.current !== null) buffer.current.content += delta;
-          buffer.events.push({ type: 'text_delta', delta });
+          // Neither free model prose nor reasoning is a UI result. Real results are rendered at
+          // message_end; no raw delta is accumulated on the persisted ChatMessage either.
           return;
         }
         case 'message_end': {
           if (!isAssistantMessage(event.message)) return;
-          const full = textOfContent(event.message.content);
           const assistant = buffer.current ?? newAssistantMessage(now());
-          if (assistant.content === '' && full !== '') assistant.content = full;
+          buffer.lastGuidance = event.message.stopReason === 'stop'
+            ? filterMissingFields(parseBankingGuidance(textOfContent(event.message.content)), buffer.providedFields ?? []) : undefined;
+          // The provider chooses tools, but contributes no user-visible financial prose.
+          if (event.message.content.some(part => part.type === 'toolCall')) {
+            // Tool-selection messages are model planning, not execution evidence. Keep the tool
+            // timeline/cards, but publish none of their free prose (including a false prelude).
+            assistant.content = '';
+            buffer.groundedIds.add(assistant.id);
+          } else groundMessage(buffer, assistant, event.message.stopReason === 'stop'
+            ? parseBankingGuidance(textOfContent(event.message.content)) : undefined);
+          // Pi persists these same message objects as model history. Keep the model's subsequent
+          // context consistent with what the user saw, while retaining tool calls and thinking
+          // blocks required by the provider protocol. Invented prose must not survive a refresh.
+          event.message.content = [
+            ...event.message.content.filter(part => part.type !== 'text'),
+            ...(assistant.content ? [{ type: 'text' as const, text: assistant.content }] : []),
+          ];
+          // Emit the message's FINAL (grounded) text as ONE aggregated `text_delta`, immediately
+          // followed by the `message_end` carrying the SAME content. The UI accumulates deltas into
+          // `streamingText` and replaces it with `message_end.content`, so their concatenation per
+          // message is identical — and no pre-grounding financial fact is ever streamed.
+          if (assistant.content !== '') {
+            buffer.events.push({ type: 'text_delta', delta: assistant.content });
+          }
           buffer.events.push({ type: 'message_end', message: assistant });
           return;
         }
         case 'tool_execution_start': {
+          if (isRecord(event.args) && typeof event.args.sourceAccountId === 'string') buffer.sourceAccounts.set(event.toolCallId, event.args.sourceAccountId);
           const view: ToolEventView = {
             toolCallId: event.toolCallId,
             toolName: event.toolName,
@@ -414,7 +515,7 @@ function createEventHandler(
           return;
         }
         case 'tool_execution_end': {
-          await handleToolExecutionEnd(buffer, event);
+          await handleToolExecutionEnd(buffer, event, rejectedCalls);
           return;
         }
         case 'agent_end': {
@@ -436,16 +537,85 @@ function createEventHandler(
 
 /* -------------------------------------------------------------------------------- runTurn */
 
+/** Discard only an unexecuted terminal reply, retaining prior queries and their protocol pairs. */
+function discardTerminalReply(runtime: BankingAgentRuntime, buffer: TurnBuffer): void {
+  const last = runtime.agent.state.messages.at(-1);
+  if (isAssistantMessage(last) && (!last.content.some(part => part.type === 'toolCall') ||
+      last.stopReason === 'error' || last.stopReason === 'aborted')) runtime.agent.state.messages.pop();
+  const current = buffer.current;
+  if (current && !current.cards?.length && !current.toolEvents?.length) {
+    const start = buffer.events.findIndex(event => event.type === 'message_start' && event.message.id === current.id);
+    if (start >= 0) buffer.events.splice(start);
+    buffer.assistants = buffer.assistants.filter(message => message.id !== current.id);
+    buffer.groundedIds.delete(current.id);
+    buffer.current = null;
+  }
+}
+
+/** A server-written narrative is conversation memory, never a new tool call or provider usage. */
+function publishServerReply(runtime: BankingAgentRuntime, buffer: TurnBuffer, now: () => number, content: string, retryRequest?: string): void {
+  const message = { ...newAssistantMessage(now()), content, ...(retryRequest ? { retryRequest } : {}) };
+  buffer.current = message;
+  buffer.assistants.push(message);
+  buffer.groundedIds.add(message.id);
+  buffer.events.push({ type: 'message_start', message: { ...message } }, { type: 'text_delta', delta: content }, { type: 'message_end', message });
+  const model = runtime.agent.state.model;
+  runtime.agent.state.messages.push({ role: 'assistant', content: [{ type: 'text', text: content }],
+    api: model.api, provider: model.provider, model: model.id, timestamp: message.timestamp, stopReason: 'stop',
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+}
+
+/** At most one recovery of planning, before any write attempt. Never re-prompt the original turn. */
+async function runLivePrompt(runtime: BankingAgentRuntime, buffer: TurnBuffer, request: string, now: () => number): Promise<string | undefined> {
+  let failure: string | undefined;
+  let instruction: AgentMessage | undefined;
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const messageStart = runtime.agent.state.messages.length;
+      buffer.lastGuidance = undefined;
+      failure = undefined;
+      try {
+        if (attempt === 0) await runtime.agent.prompt(request);
+        else await runtime.agent.continue();
+        const failed = findRunFailure(runtime.agent.state.messages.slice(messageStart));
+        if (failed) failure = failed.errorMessage || '模型请求中断';
+      } catch (error) { failure = safeToString(error); }
+      const guidance = Boolean(buffer.serverGuidance ?? buffer.lastGuidance);
+      if (attempt !== 0 || !canRecoverPlanning(request, buffer.events, buffer.factResults, guidance, failure, runtime.planningRejections)) break;
+      discardTerminalReply(runtime, buffer);
+      buffer.events = buffer.events.filter(event => event.type !== 'error');
+      instruction = { role: 'system', content: PLANNING_RECOVERY_INSTRUCTION, timestamp: now() };
+      runtime.agent.state.messages.push(instruction);
+    }
+  } finally {
+    // The recovery instruction belongs to this attempt, not to subsequent user requests.
+    if (instruction) runtime.agent.state.messages = runtime.agent.state.messages.filter(message => message !== instruction);
+  }
+  return failure;
+}
+
 /** Run one agent turn; returns the stream events emitted during it. */
 export async function runTurn(
   req: ChatTurnRequest,
   deps?: RunTurnDeps,
 ): Promise<ChatTurnResponse> {
+  req = { ...req, message: redactRequest(req.message) };
   const config = deps?.config ?? getConfig();
   const now = deps?.now ?? (() => demoNow());
 
   const snapshot = await getOrCreateSession(config.demoUserId, req.sessionId);
-  const buffer = createTurnBuffer();
+  const buffer = createTurnBuffer(req.message);
+  // Validate product presence against the real catalogue. This read only calibrates questions;
+  // it is not a tool result, a financial statement, an ownership check or an authorization.
+  try {
+    const products = /理财|申购|认购|购买|产品|基金/.test(req.message) || requestedComparison(req.message).length > 0 ? await listProducts() : [];
+    buffer.providedFields = providedRequestFields(req.message, products);
+    if (invalidRequestedComparison(req.message, products) ||
+        (/理财|申购|认购|产品|基金/.test(req.message) && invalidRequestedPurchase(req.message, products))) {
+      buffer.serverGuidance = { code: 'product_selection_invalid' };
+    }
+  } catch { buffer.providedFields = []; }
   buffer.events.push({ type: 'session', sessionId: snapshot.sessionId });
 
   // Injection scan is defense-in-depth ONLY — it records a SecurityEvent but NEVER grants
@@ -464,18 +634,46 @@ export async function runTurn(
     userId: config.demoUserId,
     snapshot,
     config,
+    provider: deps?.provider,
     onPlanUpdate: (plan) => relayPlanSnapshot(buffer, relay, plan),
   });
 
-  const unsubscribe = runtime.agent.subscribe(createEventHandler(buffer, now));
+  const unsubscribe = runtime.agent.subscribe(createEventHandler(buffer, now, runtime.planningRejections));
+  let liveFailure: string | undefined;
   try {
-    await runtime.agent.prompt(req.message);
+    if (config.llmMode === 'live') liveFailure = await runLivePrompt(runtime, buffer, req.message, now);
+    else await runtime.agent.prompt(req.message);
   } finally {
     // Flush AFTER the run settles (the parked `PendingAction` row is committed by then) and even
     // when the run failed — the user must still be able to take the parked decision.
     await flushParkedDecision(buffer, relay);
     unsubscribe();
     runtime.dispose();
+  }
+
+  const unfinished = config.llmMode === 'live' && unfinishedPlanning(req.message, buffer.events, buffer.factResults,
+    Boolean(buffer.serverGuidance ?? buffer.lastGuidance), runtime.planningRejections);
+  if (config.llmMode === 'live' && (liveFailure || unfinished)) {
+    discardTerminalReply(runtime, buffer);
+    const notice = recoveryNotice(buffer.events, liveFailure, req.message, buffer.factResults, runtime.planningRejections);
+    // A provider outage does not establish a business failure. Keep all real outcomes/cards.
+    const facts = buffer.factResults.length || startedMutation(buffer.events, runtime.planningRejections)
+      ? renderFinancialResponse(buffer.factResults, { requestText: req.message,
+          pending: buffer.events.some(event => event.type === 'mfa_required') ? 'mfa'
+            : buffer.events.some(event => event.type === 'confirmation_required') ? 'confirmation' : undefined }) + '\n' : '';
+    const retryable = canRecoverPlanning(req.message, buffer.events, buffer.factResults,
+      Boolean(buffer.serverGuidance ?? buffer.lastGuidance), liveFailure, runtime.planningRejections);
+    buffer.events = buffer.events.filter(event => event.type !== 'error');
+    publishServerReply(runtime, buffer, now, facts + notice, retryable ? req.message : undefined);
+    if (liveFailure) buffer.events.push({ type: 'error', message: notice });
+  } else if (config.llmMode === 'live' && buffer.current?.content === '' &&
+      (buffer.factResults.length || startedMutation(buffer.events, runtime.planningRejections))) {
+    publishServerReply(runtime, buffer, now, renderFinancialResponse(buffer.factResults, {
+      guidance: buffer.serverGuidance ?? buffer.lastGuidance,
+      locked: buffer.events.some(event => event.type === 'security_event' && event.kind === 'locked'),
+      pending: buffer.events.some(event => event.type === 'mfa_required') ? 'mfa'
+        : buffer.events.some(event => event.type === 'confirmation_required') ? 'confirmation' : undefined,
+    }));
   }
 
   const userMessage: ChatMessage = {
@@ -486,6 +684,8 @@ export async function runTurn(
   };
 
   snapshot.agentState = runtime.serialize().agentState;
+  // Safety net: re-ground the terminal narration before persisting (idempotent).
+  groundMessage(buffer, buffer.current);
   snapshot.transcript.push(userMessage, ...buffer.assistants);
   await saveSession(snapshot);
 
@@ -592,6 +792,7 @@ export async function resumeTurn(
     userId: snapshot.userId,
     snapshot,
     config,
+    provider: deps?.provider,
     onPlanUpdate: (plan) => relayPlanSnapshot(buffer, relay, plan),
   });
 
@@ -610,7 +811,24 @@ export async function resumeTurn(
       runtime.agent.state.messages,
       toolResultMessage,
     );
-    await runtime.agent.continue();
+    // Seed the authoritative facts with the injected REAL result so the continuation narration is
+    // grounded against it (never against the model's own prose). The server-side OPERATION identity
+    // (the resolved call id + the action / plan-node ids the caller supplied) is threaded through so
+    // the claim is bound to THIS operation.
+    buffer.factResults.push({
+      toolName: input.resultToolName ?? input.toolName ?? '',
+      result: input.toolResult,
+      ...(input.sourceAccountId !== undefined ? { sourceAccountId: input.sourceAccountId } : {}),
+      ...(toolCallId !== undefined && toolCallId !== '' ? { toolCallId } : {}),
+      ...(input.actionId !== undefined ? { actionId: input.actionId } : {}),
+      ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
+      ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}),
+    });
+    if (config.llmMode === 'live') {
+      // Owning DAG continuation already ran in confirmation.ts. Financial prose is server-owned,
+      // so another model request adds latency and can propose unrelated new writes.
+      publishServerReply(runtime, buffer, now, renderFinancialResponse(buffer.factResults));
+    } else await runtime.agent.continue();
   } catch (error) {
     // The gated business action ALREADY executed and is ALREADY audited (see `./confirmation`).
     // A continuation failure (model/narration error) must NEVER be swallowed — it is surfaced as an
@@ -625,6 +843,8 @@ export async function resumeTurn(
   }
 
   snapshot.agentState = runtime.serialize().agentState;
+  // Safety net: re-ground the terminal narration before persisting (idempotent).
+  groundMessage(buffer, buffer.current);
   snapshot.transcript.push(...buffer.assistants);
   await saveSession(snapshot);
 

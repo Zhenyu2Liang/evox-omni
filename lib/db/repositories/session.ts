@@ -1,5 +1,5 @@
 import type { AgentSession } from '@prisma/client';
-import { prisma } from '../client';
+import { prisma, type DbClient } from '../client';
 
 export interface CreateSessionInput {
   userId: string;
@@ -19,8 +19,8 @@ export function createSession(input: CreateSessionInput): Promise<AgentSession> 
   });
 }
 
-export function getSession(id: string): Promise<AgentSession | null> {
-  return prisma.agentSession.findUnique({ where: { id } });
+export function getSession(id: string, client?: DbClient): Promise<AgentSession | null> {
+  return (client ?? prisma).agentSession.findUnique({ where: { id } });
 }
 
 export function listSessions(userId: string): Promise<AgentSession[]> {

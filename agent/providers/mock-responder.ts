@@ -30,6 +30,7 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from '@earendil-works/pi-ai';
+import { parseBankingGuidance, type BankingGuidance } from '../banking-guidance';
 
 /** Minimal structural view of the pi-ai `Context` this responder needs (a `Context` is assignable to it). */
 export interface MockContext {
@@ -64,6 +65,32 @@ export function respond(context: MockContext): AssistantMessage {
   }
 
   return classify(lastUser, messages);
+}
+
+/** Banking runtime negotiates structured guidance; the plain responder stays compatible for callers. */
+export function respondWithGuidance(context: MockContext): AssistantMessage {
+  const reply = respond(context);
+  if (reply.content.some(part => part.type === 'toolCall') || parseBankingGuidance(contentToText(reply.content))) return reply;
+  const messages = context.messages ?? [];
+  const index = findLastUserIndex(messages);
+  const text = index < 0 ? '' : contentToText((messages[index] as UserMessage).content);
+  const lastResult = lastToolResultAfter(messages, index);
+  const guidance = (value: BankingGuidance) => plain(JSON.stringify({ guidance: value }));
+  if (isTransferIntent(text)) {
+    const intent = parseTransfer(text);
+    const fields: ('recipient' | 'amount')[] = [];
+    if ((!intent.recipient && !intent.reuseRecipient) || (intent.reuseRecipient && !priorTransferRecipient(messages))) fields.push('recipient');
+    if (intent.amount == null) fields.push('amount');
+    if (fields.length) return guidance({ code: 'missing_details', fields });
+    if (lastResult?.toolName === 'search_contact') return guidance({ code: 'ambiguous_selection', fields: ['recipient'] });
+  }
+  // A settled banking result is narrated from real facts, never turned into a missing-field claim.
+  if (lastResult) return reply;
+  if (/(申购|认购|买入|购买)/.test(text) || /买[^\n]{0,6}(理财|基金|产品)/.test(text)) {
+    if (!extractProductName(text)) return guidance({ code: 'missing_details', fields: ['product'] });
+    if (parseAmount(text) == null) return guidance({ code: 'missing_details', fields: ['amount'] });
+  }
+  return reply;
 }
 
 /* ============================================================ narration */
@@ -174,6 +201,17 @@ function humanTool(toolName: string): string {
 
 function classify(text: string, messages: Message[]): AssistantMessage {
   const t = text.trim();
+  // Script the same closed guidance protocol as live mode; these are mock intent routes, not permissions.
+  if (/赎回/.test(t) && /(部分|只赎回\s*\d|只想.*赎回\s*\d|剩下.*持有|不要全额赎回)/.test(t)) {
+    return plain(JSON.stringify({ guidance: { code: 'partial_redemption_unsupported' } }));
+  }
+  if (/(申购|认购|买)/.test(t) && /储蓄账户/.test(t)) {
+    return plain(JSON.stringify({ guidance: { code: 'investment_funding_account_unsupported' } }));
+  }
+  if (/(总授信额度|总额度)/.test(t) && /(调整|提高|修改)/.test(t)) {
+    return plain(JSON.stringify({ guidance: { code: 'credit_line_adjustment_unsupported' } }));
+  }
+  if (/(能做什么|有哪些功能|介绍.*能力)/.test(t)) return plain(JSON.stringify({ guidance: { code: 'capabilities' } }));
   if (t === '' || /^(你好|您好|hi|hello|哈喽|嗨|在吗)[!！。？?~～\s]*$/i.test(t)) {
     return plain(HELP_TEXT);
   }
@@ -791,7 +829,7 @@ function classifyActionFollowUp(text: string, messages: Message[]): AssistantMes
       DEFAULT_CARD_LIMIT_CATEGORY;
     return toolCall('set_card_limit', { cardId: resolveCardId(priorUser), category, amount });
   }
-  if (/要申购.*多少钱/.test(priorReply) && priorUser) {
+  if ((/要申购.*多少钱/.test(priorReply) || (priorReply.includes('请补充金额') && /(申购|认购|购买)/.test(priorUser ?? ''))) && priorUser) {
     const productName = extractProductName(priorUser);
     if (productName) {
       return toolCall('subscribe_investment', { productId: resolveProductId(productName), amount });

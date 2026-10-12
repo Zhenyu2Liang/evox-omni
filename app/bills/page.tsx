@@ -33,6 +33,9 @@ function monthBounds(month: string): { from: number; to: number } {
   return { from: start.getTime(), to: end.getTime() };
 }
 
+// Reads live Prisma data, so it must render per request — never statically prerendered at build.
+export const dynamic = 'force-dynamic';
+
 export default async function BillsPage({ searchParams }: BillsPageProps) {
   const userId = getConfig().demoUserId;
   const { month: monthParam } = await searchParams;
@@ -41,7 +44,7 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
   const analysis: SpendingAnalysis = await banking.transaction.analyzeSpending(userId, month !== undefined ? { month } : {});
   const { from, to } = monthBounds(analysis.month);
   const transactions: TransactionView[] = await banking.transaction.listTransactions(userId, { from, to });
-  const anomalies: AnomalyItem[] = await banking.transaction.listAnomalies(userId);
+  const anomalies: AnomalyItem[] = (await banking.transaction.listAnomalies(userId)).filter(item => item.transaction.occurredAt >= from && item.transaction.occurredAt < to);
 
   const columns: TableColumn<TransactionView>[] = [
     { key: 'occurredAt', header: '时间', render: (row) => formatDateTime(row.occurredAt) },
@@ -57,7 +60,7 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
         <div>
           <h1 className="text-2xl font-semibold text-banking-deep">账单</h1>
           <p className="mt-1 text-sm text-banking-navy">
-            {analysis.month} · 共 {transactions.length} 笔交易 · {anomalies.length} 项异常 · 本月支出 <Money amount={analysis.total} />
+            {analysis.month} · 共 {transactions.length} 笔交易 · {anomalies.length} 项异常 · 正常消费 <Money amount={analysis.total} />（不含异常及投资资金流）
           </p>
         </div>
         <form className="flex items-center gap-2" method="get">
@@ -68,7 +71,7 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
       </header>
 
       <section className="grid gap-4 sm:grid-cols-3">
-        <Card title="本月支出">
+        <Card title="正常消费（不含异常及投资）">
           <Money amount={analysis.total} className="text-2xl font-semibold text-banking-deep" />
           <p className="mt-1 text-xs text-banking-navy">
             环比 {analysis.momChangePct >= 0 ? '+' : '-'}{Math.abs(analysis.momChangePct)}% · 上月 <Money amount={analysis.prevTotal} />

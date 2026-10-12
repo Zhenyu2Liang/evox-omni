@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db/client';
+import type { DbClient } from '@/lib/db/client';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import { getSession } from '@/lib/db/repositories/session';
 import { AppError } from '@/lib/errors';
@@ -12,9 +13,13 @@ import { computeEffectiveTransferTotalWith, evaluateTransferRisk } from './risk-
 import { issueChallenge } from './mfa';
 import type { ActionOwnership, AuthorizationResult } from './security-gateway';
 
-/** Applies only to recovery that may create a NEW debit, never to read-only receipt recovery. */
-export function assertRecoverySessionUnlocked(sessionId: string): void {
-  assertSessionMayWrite(sessionId);
+/**
+ * Applies only to recovery that may create a NEW debit, never to read-only receipt recovery.
+ * `client` binds the breaker read to the enclosing interactive transaction's client when called
+ * from inside one (the recheck before a new debit), avoiding a single-connection deadlock.
+ */
+export async function assertRecoverySessionUnlocked(sessionId: string, client?: DbClient): Promise<void> {
+  await assertSessionMayWrite(sessionId, client);
 }
 
 /** Revalidate persisted authorization and current policy before an idempotent recovery attempt. */
@@ -25,7 +30,7 @@ export async function authorizeRecoveryAction(actionId: string, actor: ActionOwn
       (await getSession(actor.sessionId))?.userId !== actor.userId) {
     throw new AppError('SECURITY_DENIED', '无权恢复该操作。');
   }
-  assertRecoverySessionUnlocked(actor.sessionId);
+  await assertRecoverySessionUnlocked(actor.sessionId);
   if (row.toolName !== 'transfer_money') throw new AppError('SECURITY_DENIED', '该工具不允许重新执行业务恢复。');
   const args = safeParse<Record<string, unknown>>(row.argsJson, {});
   const amount = normalizeTransferAmount(args.amount);
@@ -46,7 +51,7 @@ export async function authorizeRecoveryAction(actionId: string, actor: ActionOwn
     if (await tx.transaction.findUnique({ where: { id: ledgerTxIdForAction(actor.userId, current) } })) {
       return { requiresMfa: current.requiresMfa || current.riskLevel === 'RED', allowed: true };
     }
-    assertRecoverySessionUnlocked(actor.sessionId);
+    await assertRecoverySessionUnlocked(actor.sessionId, tx);
     if (current.taskId && (await tx.agentTask.findUnique({ where: { id: current.taskId } }))?.status === 'cancelled') {
       throw new AppError('SECURITY_DENIED', '操作所属计划已取消，不能恢复新的资金变更。');
     }
@@ -67,7 +72,7 @@ export async function authorizeRecoveryAction(actionId: string, actor: ActionOwn
 
   if (!outcome.allowed) {
     await issueChallenge(actionId);
-    await recordSecurityEvent({ sessionId: actor.sessionId, kind: 'LIMIT_EXCEEDED', severity: 'high',
+    await recordSecurityEvent({ sessionId: actor.sessionId, userId: actor.userId, kind: 'LIMIT_EXCEEDED', severity: 'high',
       message: '恢复转账需重新进行安全验证，尚未产生资金变更。',
       detail: { actionId, decision: 'recovery_requires_mfa', amount },
     });

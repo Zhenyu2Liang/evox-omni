@@ -15,6 +15,7 @@ export interface InvestmentProductTileProps {
   product: ProductView;
   holding?: HoldingView;
   className?: string;
+  metadataKnown?: boolean;
 }
 
 /** Risk level → badge tone (lower risk = calmer colour). */
@@ -40,7 +41,7 @@ function formatRate(rate: number): string {
   return `${rate.toFixed(2)}%`;
 }
 
-export function InvestmentProductTile({ product, holding, className }: InvestmentProductTileProps) {
+export function InvestmentProductTile({ product, holding, className, metadataKnown = true }: InvestmentProductTileProps) {
   const cls = ['space-y-3', className].filter(Boolean).join(' ');
 
   return (
@@ -59,17 +60,17 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
         <div>
           <div className="text-xs text-banking-navy/60">预期年化</div>
           <div className="text-sm font-semibold text-banking-success">
-            {formatRate(product.expectedRate)}
+            {metadataKnown ? formatRate(product.expectedRate) : '待核对'}
           </div>
         </div>
         <div>
           <div className="text-xs text-banking-navy/60">期限</div>
-          <div className="text-sm font-semibold text-banking-deep">{product.termDays} 天</div>
+          <div className="text-sm font-semibold text-banking-deep">{metadataKnown ? `${product.termDays} 天` : '待核对'}</div>
         </div>
         <div>
           <div className="text-xs text-banking-navy/60">起购</div>
           <div className="text-sm font-semibold text-banking-deep">
-            <Money amount={product.minAmount} />
+            {metadataKnown ? <Money amount={product.minAmount} /> : '待核对'}
           </div>
         </div>
       </div>

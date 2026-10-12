@@ -15,6 +15,7 @@ interface TileEntry {
   key: string;
   product: ProductView;
   holding?: HoldingView;
+  metadataKnown?: boolean;
 }
 
 /**
@@ -40,21 +41,15 @@ function productFromHolding(h: HoldingView): ProductView {
  */
 function buildEntries(data: InvestmentsCardData): TileEntry[] {
   const holdings = data.holdings ?? [];
-  const holdingByProductId = new Map<string, HoldingView>();
-  for (const holding of holdings) holdingByProductId.set(holding.productId, holding);
-
   const entries: TileEntry[] = [];
-  const seen = new Set<string>();
-
-  for (const product of data.products ?? []) {
-    entries.push({ key: product.id, product, holding: holdingByProductId.get(product.id) });
-    seen.add(product.id);
-  }
-
+  const products = new Map((data.products ?? []).map(product => [product.id, product]));
+  const seen = new Set(holdings.map(holding => holding.productId));
   for (const holding of holdings) {
-    if (seen.has(holding.productId)) continue;
-    entries.push({ key: `holding-${holding.id}`, product: productFromHolding(holding), holding });
-    seen.add(holding.productId);
+    const product = products.get(holding.productId) ?? holding.product;
+    entries.push({ key: `holding-${holding.id}`, product: product ?? productFromHolding(holding), holding, metadataKnown: product !== undefined });
+  }
+  for (const product of data.products ?? []) {
+    if (!seen.has(product.id)) entries.push({ key: product.id, product });
   }
 
   return entries;
@@ -115,6 +110,7 @@ export function InvestmentsCard(p: InvestmentsCardProps) {
                 key={entry.key}
                 product={entry.product}
                 holding={entry.holding}
+                metadataKnown={entry.metadataKnown}
               />
             ))}
           </div>

@@ -197,7 +197,7 @@ it.each(['standalone', 'plan', 'chat'] as const)(
     try {
       await bounded(reached.promise);
       for (let i = 0; i < 3; i++) await call(verifyPost, blocker, sessionId, { code: '000000' });
-      expect(getState(sessionId).locked).toBe(true);
+      expect((await getState(sessionId)).locked).toBe(true);
       expect(await p.budget.count()).toBe(before);
     } finally { release.resolve(); outcome = await running; }
     expect(await p.budget.count()).toBe(before);
