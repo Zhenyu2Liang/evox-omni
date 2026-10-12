@@ -29,7 +29,8 @@ export async function requestEntityAliases(userId: string): Promise<ReadonlyMap<
   ]);
   return new Map([
     ...contacts.map(row => [row.id, [row.name, row.phone]] as [string, string[]]),
-    ...cards.map(row => [row.id, [row.numberMasked, row.numberMasked.replace(/\*/g, '')]] as [string, string[]]),
+    ...cards.map(row => [row.id, [row.numberMasked, row.numberMasked.replace(/\*/g, ''),
+      ...(row.type === 'CREDIT' ? ['信用卡'] : row.type === 'DEBIT' ? ['借记卡', '储蓄卡'] : ['虚拟卡'])]] as [string, string[]]),
     ...subscriptions.map(row => [row.id, [row.name]] as [string, string[]]),
     ...products.map(row => [row.id, [row.name, row.code]] as [string, string[]]),
   ]);
@@ -66,13 +67,13 @@ export async function assertRequestedPlanProducts(nodes: readonly TaskNodeSpec[]
   if (request) assertPlanPurchases(nodes, request, await listProducts());
 }
 
-const commands: Record<string, RegExp> = {
+export const REQUEST_COMMANDS: Readonly<Record<string, RegExp>> = {
   reserve_budget: /预留|(?:建立|创建|记录|设置).*预算/,
   analyze_spending: /(?:查询|查看|分析|查一下|看看|看下).*(?:消费|账单|支出)/,
   get_balance: /余额/,
   get_transactions: /流水|交易记录/,
   detect_anomaly: /异常/,
-  transfer_money: /转账|转给/,
+  transfer_money: /转账|转给|给.{1,30}转(?=\s*[\d一二三四五六七八九十百千万])|转(?=\s*\d)/,
   set_card_limit: /限额/,
   freeze_card: /(?<!解)冻结/,
   unfreeze_card: /解冻/,
@@ -86,6 +87,7 @@ const commands: Record<string, RegExp> = {
   apply_virtual_card: /虚拟卡/,
   change_password: /改密|修改.*密码/,
 };
+const commands = REQUEST_COMMANDS;
 
 /** Enforce explicit first/then/finally phases using trusted request spans and actual tool identities. */
 export function enforceRequestedOrder(nodes: TaskNodeSpec[], request: string, names: ReadonlyMap<string, string[]> = new Map()): TaskNodeSpec[] {

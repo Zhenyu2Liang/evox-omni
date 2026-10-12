@@ -31,6 +31,7 @@ import type {
 import { dag, executor, type NodeExecutionContext, type PlanToolOutcome } from '@/planner';
 import { AppError } from '@/lib/errors';
 import { assertRequestedPlanProducts, enforceRequestedOrder, enforceRequestedSuccess, requestEntityAliases } from '@/lib/request-constraints';
+import { assertCompleteRequestedPlan } from '@/lib/request-steps';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import {
@@ -258,6 +259,17 @@ export function createSubmitPlanTool(
  * concurrent run already owns the plan, or any node fails; a gated node surfaces via the plan
  * snapshot (`waiting_confirmation`/`waiting_verification`).
  */
+export async function preflightRequestedPlan(userId: string, args: Record<string, unknown>, request: string): Promise<TaskNodeSpec[]> {
+  if (!Array.isArray(args.nodes)) throw new AppError('VALIDATION', '缺少计划节点（nodes）');
+  let nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
+  await assertRequestedPlanProducts(nodes, request);
+  const names = request ? await requestEntityAliases(userId) : undefined;
+  nodes = enforceRequestedOrder(nodes, request, names);
+  nodes = enforceRequestedSuccess(nodes, request, names);
+  assertCompleteRequestedPlan(nodes, request, names);
+  return nodes;
+}
+
 export async function runSubmitPlan(
   userId: string,
   args: Record<string, unknown>,
@@ -275,13 +287,9 @@ export async function runSubmitPlan(
     return { ok: false, error: '缺少计划节点（nodes）' };
   }
 
-  let nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
+  let nodes: TaskNodeSpec[];
   try {
-    const request = deps.userRequest?.() ?? '';
-    await assertRequestedPlanProducts(nodes, request);
-    const names = request ? await requestEntityAliases(userId) : undefined;
-    nodes = enforceRequestedOrder(nodes, request, names);
-    nodes = enforceRequestedSuccess(nodes, request, names);
+    nodes = await preflightRequestedPlan(userId, args, deps.userRequest?.() ?? '');
   } catch (error) { return { ok: false, error: AppError.from(error).message }; }
 
   const knownTools = new Set<string>(KNOWN_TOOL_NAMES);

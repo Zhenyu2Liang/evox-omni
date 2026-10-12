@@ -313,7 +313,9 @@ describe('grounding — a GREEN budget write is never conflated with a transfer 
       fauxAssistantMessage(FALSE_SUCCESS),
     ]);
     const res = await runTurn(
-      { sessionId: newId('sess'), message: '预留 500 作为房租预算，然后再转 500 给张伟。' },
+      // A complete single budget request lets this test exercise a committed GREEN write.
+      // Multi-step requests now reject an incomplete plan before that write (separate coverage).
+      { sessionId: newId('sess'), message: '预留 500 作为房租预算。' },
       { provider: runtime },
     );
     expect(errorMessages(res.events)).toEqual([]);

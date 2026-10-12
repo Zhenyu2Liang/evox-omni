@@ -35,7 +35,7 @@ export interface ChatMessage {
   role: ChatRole;
   content: string;
   timestamp: number;
-  /** Server offers this only when this turn has not attempted a write/plan/authorization. */
+  /** Server offers this only before gateway/executor/write entry, including trusted preflight refusal. */
   retryRequest?: string;
   cards?: ChatCard[];
   toolEvents?: ToolEventView[];

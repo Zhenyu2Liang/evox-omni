@@ -1,5 +1,7 @@
 # integration — Maintained cross-module regressions
 
+`live-complete-plan.test.ts` rejects standalone first writes and incomplete DAGs before any authorization or automatic budget. A bounded repair creates one complete plan; confirmations resume its persisted nodes with no model narration or duplicate debits. Transport is controlled, not genuine DeepSeek.
+
 live-recovery.test.ts drives real Pi/gateway/SQLite through bounded planning failures, no-effect
 recovery, committed budget preservation and real transfer confirmation without a narration request.
 live-retry-ui.test.ts covers latest-reply button visibility and refresh input (server rendering only).

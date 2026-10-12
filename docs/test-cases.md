@@ -2,6 +2,8 @@
 
 ## live 规划与故障恢复
 
+`tests/integration/live-complete-plan.test.ts` 使用 live 运行路径和受控模型传输，验证首步独立调用被拒、只补做一次完整规划、缺步骤时无预算/授权/转账、同额不同收款人、错对象/错金额/重复写节点拒绝、单笔与联系人查询不受影响，以及确认后无模型请求、两条流水和完整持久化。八个旧 HTTP/任务测试夹具现传递真实计划/节点上下文；暂停恢复断言复用同一授权并且仅有一个 PendingAction，避免测试夹具把计划节点伪装成独立操作。预算后编造转账的 grounding 用例改用完整的单笔预算请求，仍保留原来的真实预算与虚假转账断言；多步缺节点不执行预算另有覆盖。真实 DeepSeek 与故意不完整响应的前端验收分别记录于 `docs/live-complete-plan-report.md`。
+
 `tests/integration/live-recovery.test.ts` 使用真实 Pi、工具、数据库与确认执行流程，只有模型传输被脚本化。覆盖仅口头回复后的单次规划恢复、查询与工具结果配对、恢复耗尽后的持久化重试入口、有效澄清/产品拒绝/认证错误不重试、预算已提交后不重放、确认后的真实转账只扣款一次且无播报请求。`agent/providers/request-options.test.ts` 验证每请求截止时间（包括响应流停滞）、一次传输重试及独立取消；`tests/integration/live-retry-ui.test.ts` 验证最新回复的按钮与旧入口退出，不代替浏览器点击测试。
 
 专项命令：`npx vitest run tests/integration/live-recovery.test.ts tests/integration/live-retry-ui.test.ts agent/providers/request-options.test.ts`。真实 DeepSeek 前端和故障注入前端的证据另行记录，故障代理返回的错误不冒充真实模型回复。

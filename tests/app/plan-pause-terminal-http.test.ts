@@ -112,13 +112,14 @@ async function newPersistedSessionId(): Promise<string> {
 
 /** The gateway-authorized per-node runner (a gated node parks instead of executing). */
 function gatewayRunTool(sessionId: string, userRequest = '') {
-  return (toolName: string, args: Record<string, unknown>) =>
+  return (toolName: string, args: Record<string, unknown>, ctx: { taskId: string; nodeId: string }) =>
     executeGatedTool({
       sessionId,
       userId: DEMO_USER_ID,
       toolName: toolName as Parameters<typeof executeGatedTool>[0]['toolName'],
       args,
       userRequest,
+      ...ctx,
     });
 }
 

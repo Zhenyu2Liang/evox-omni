@@ -2,6 +2,8 @@
 
 ## Intent
 
+Explicit multi-step requests must pass whole-plan tool/object/amount coverage before gateway/task/SDK entry. The runtime tracks preflight refusals by tool-call identity, so only those no-entry refusals can use the existing single live planning recovery. Confirmations resume persisted DAG nodes without another model request.
+
 Live planning may recover once before any write/plan/authorization attempt, retaining original user
 identity and read-tool/result pairs. Valid guidance and server-side selection refusal stop recovery.
 Gated decisions and submit_plan finish without another model narration request; live confirmation

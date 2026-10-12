@@ -9,6 +9,8 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 
 ## API Surface
 
+- `request-steps.ts` recognizes bounded explicit Chinese multi-step requests and validates one-to-one tool/object/cent-amount coverage before a plan or write. It never supplies tool arguments or permissions; runtime and gateway require complete plans before standalone side effects. Ambiguous/unsupported language remains a documented boundary.
+
 - `request-constraints.ts` validates exact product comparisons, ordered steps and explicit success prerequisites before plan creation. `request-purchases.ts` binds each purchase to its own product/cent amount and rejects extra/missing plan nodes; it is pure and never changes permissions. Ambiguous conditions fail before writes. Resource aliases use repositories and never model-written node labels.
 
 - `errors.ts` — `ErrorCode`, `AppError` (+ `AppError.from`), `Result<T>`, `ok()` / `err()`.

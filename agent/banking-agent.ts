@@ -33,6 +33,10 @@ import type { ModelRuntime } from './providers/types';
 import { buildSystemPrompt } from './system-prompt';
 import { normalizeToolResultMessages } from './message-normalize';
 import type { SessionSnapshot } from './session';
+import { requiresCompletePlan, COMPLETE_PLAN_NOTICE } from '@/lib/request-steps';
+import { isWriteTool } from '@/security/permission-engine';
+import { preflightRequestedPlan } from './tools/planning';
+import { AppError } from '@/lib/errors';
 
 /**
  * The security gateway's runtime surface.
@@ -91,6 +95,8 @@ export interface BankingAgentRuntime {
   sessionId: string;
   userId: string;
   registry: ToolRegistry;
+  /** Server-owned evidence of refusal BEFORE gateway/task/SDK entry; never inferred from model text. */
+  planningRejections: ReadonlyMap<string, string>;
   /** Current pi AgentState + UI transcript, ready to persist. */
   serialize(): SessionSnapshot;
   /** Remove all stream listeners. */
@@ -121,6 +127,7 @@ export type AfterToolCallHook = (
 export function createBankingAgent(options: BankingAgentOptions): BankingAgentRuntime {
   const config = options.config ?? getConfig();
   const { sessionId, userId } = options;
+  const planningRejections = new Map<string, string>();
   const restored = options.snapshot?.agentState;
 
   /** Current user request, read lazily so it always reflects the live transcript (audit-only). */
@@ -168,6 +175,21 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     const toolName = context.toolCall.name as ToolName;
     const args = (context.args ?? context.toolCall.arguments ?? {}) as Record<string, unknown>;
 
+    const request = latestUserRequest();
+    if (requiresCompletePlan(request)) {
+      let rejection: string | undefined;
+      if (toolName !== 'submit_plan' && isWriteTool(toolName)) rejection = COMPLETE_PLAN_NOTICE;
+      else if (toolName === 'submit_plan') {
+        try { await preflightRequestedPlan(userId, args, request); }
+        catch (error) { if (!(error instanceof AppError) || error.code !== 'VALIDATION') throw error; rejection = error.message; }
+      }
+      if (rejection) {
+        planningRejections.set(context.toolCall.id, rejection);
+        stopAfterDecision = true;
+        return { block: true, reason: rejection };
+      }
+    }
+
     const auth = await gateway.handleToolCall({
       sessionId,
       userId,
@@ -194,9 +216,11 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   // A persisted gate or completed DAG is already a useful response. No model narration is needed
   // to expose it; the server renderer supplies facts, while confirmation resumes the owning DAG.
   let stopAfterDecision = false;
-  const finishTurn: FinishTurn = turn => config.llmMode === 'live' &&
-    (stopAfterDecision || turn.toolResults.some(result => result.toolName === 'submit_plan'))
-    ? { action: 'end' } : undefined;
+  const finishTurn: FinishTurn = turn => {
+    const stop = stopAfterDecision || turn.toolResults.some(result => result.toolName === 'submit_plan');
+    stopAfterDecision = false;
+    return config.llmMode === 'live' && stop ? { action: 'end' } : undefined;
+  };
 
   /** Listeners registered by THIS module, removed by `dispose()`. */
   const unsubscribers: Array<() => void> = [];
@@ -220,6 +244,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     sessionId,
     userId,
     registry,
+    planningRejections,
     serialize(): SessionSnapshot {
       const now = Date.now();
       return {

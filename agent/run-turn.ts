@@ -356,8 +356,17 @@ type ToolExecutionEndEvent = Extract<AgentEvent, { type: 'tool_execution_end' }>
 async function handleToolExecutionEnd(
   buffer: TurnBuffer,
   event: ToolExecutionEndEvent,
+  rejectedCalls: ReadonlyMap<string, string>,
 ): Promise<void> {
   const { toolCallId, toolName } = event;
+
+  const rejection = rejectedCalls.get(toolCallId);
+  if (rejection) {
+    const view: ToolEventView = { toolCallId, toolName, status: 'blocked', summary: '完整计划未通过校验，尚未开始本次写操作；需要补齐全部步骤的对象和金额。' };
+    upsertToolEvent(buffer.current, view);
+    buffer.events.push({ type: 'tool_end', toolEvent: view });
+    return; // Planning refusal is not a failed bank execution or a persisted authorization.
+  }
 
   if (!event.isError) {
     const details = isRecord(event.result) ? event.result.details : undefined;
@@ -436,6 +445,7 @@ function findRunFailure(messages: readonly AgentMessage[]): AssistantMessage | n
 function createEventHandler(
   buffer: TurnBuffer,
   now: () => number,
+  rejectedCalls: ReadonlyMap<string, string> = new Map(),
 ): (event: AgentEvent) => Promise<void> {
   return async (event: AgentEvent): Promise<void> => {
     try {
@@ -505,7 +515,7 @@ function createEventHandler(
           return;
         }
         case 'tool_execution_end': {
-          await handleToolExecutionEnd(buffer, event);
+          await handleToolExecutionEnd(buffer, event, rejectedCalls);
           return;
         }
         case 'agent_end': {
@@ -572,7 +582,7 @@ async function runLivePrompt(runtime: BankingAgentRuntime, buffer: TurnBuffer, r
         if (failed) failure = failed.errorMessage || '模型请求中断';
       } catch (error) { failure = safeToString(error); }
       const guidance = Boolean(buffer.serverGuidance ?? buffer.lastGuidance);
-      if (attempt !== 0 || !canRecoverPlanning(request, buffer.events, buffer.factResults, guidance, failure)) break;
+      if (attempt !== 0 || !canRecoverPlanning(request, buffer.events, buffer.factResults, guidance, failure, runtime.planningRejections)) break;
       discardTerminalReply(runtime, buffer);
       buffer.events = buffer.events.filter(event => event.type !== 'error');
       instruction = { role: 'system', content: PLANNING_RECOVERY_INSTRUCTION, timestamp: now() };
@@ -628,7 +638,7 @@ export async function runTurn(
     onPlanUpdate: (plan) => relayPlanSnapshot(buffer, relay, plan),
   });
 
-  const unsubscribe = runtime.agent.subscribe(createEventHandler(buffer, now));
+  const unsubscribe = runtime.agent.subscribe(createEventHandler(buffer, now, runtime.planningRejections));
   let liveFailure: string | undefined;
   try {
     if (config.llmMode === 'live') liveFailure = await runLivePrompt(runtime, buffer, req.message, now);
@@ -642,22 +652,22 @@ export async function runTurn(
   }
 
   const unfinished = config.llmMode === 'live' && unfinishedPlanning(req.message, buffer.events, buffer.factResults,
-    Boolean(buffer.serverGuidance ?? buffer.lastGuidance));
+    Boolean(buffer.serverGuidance ?? buffer.lastGuidance), runtime.planningRejections);
   if (config.llmMode === 'live' && (liveFailure || unfinished)) {
     discardTerminalReply(runtime, buffer);
-    const notice = recoveryNotice(buffer.events, liveFailure, req.message, buffer.factResults);
+    const notice = recoveryNotice(buffer.events, liveFailure, req.message, buffer.factResults, runtime.planningRejections);
     // A provider outage does not establish a business failure. Keep all real outcomes/cards.
-    const facts = buffer.factResults.length || startedMutation(buffer.events)
+    const facts = buffer.factResults.length || startedMutation(buffer.events, runtime.planningRejections)
       ? renderFinancialResponse(buffer.factResults, { requestText: req.message,
           pending: buffer.events.some(event => event.type === 'mfa_required') ? 'mfa'
             : buffer.events.some(event => event.type === 'confirmation_required') ? 'confirmation' : undefined }) + '\n' : '';
     const retryable = canRecoverPlanning(req.message, buffer.events, buffer.factResults,
-      Boolean(buffer.serverGuidance ?? buffer.lastGuidance), liveFailure);
+      Boolean(buffer.serverGuidance ?? buffer.lastGuidance), liveFailure, runtime.planningRejections);
     buffer.events = buffer.events.filter(event => event.type !== 'error');
     publishServerReply(runtime, buffer, now, facts + notice, retryable ? req.message : undefined);
     if (liveFailure) buffer.events.push({ type: 'error', message: notice });
   } else if (config.llmMode === 'live' && buffer.current?.content === '' &&
-      (buffer.factResults.length || startedMutation(buffer.events))) {
+      (buffer.factResults.length || startedMutation(buffer.events, runtime.planningRejections))) {
     publishServerReply(runtime, buffer, now, renderFinancialResponse(buffer.factResults, {
       guidance: buffer.serverGuidance ?? buffer.lastGuidance,
       locked: buffer.events.some(event => event.type === 'security_event' && event.kind === 'locked'),

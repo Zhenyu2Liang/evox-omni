@@ -58,6 +58,7 @@ import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
 import { resolveBankingArgs } from '../lib/banking-selectors';
 import { assertRequestedProducts } from '../lib/request-constraints';
+import { requiresCompletePlan, COMPLETE_PLAN_NOTICE } from '../lib/request-steps';
 import { withActionPolicy } from '../lib/action-summary';
 import { scheduledTime } from '../lib/scheduled-time';
 import { redactRequest, redactSecrets } from '../lib/sensitive';
@@ -1052,6 +1053,11 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
   // Caller identity is REQUIRED (fail-closed) — no demo-user fallback. There is no persisted action
   // yet, so only presence/non-emptiness can be asserted here.
   assertCallerIdentity(ctx);
+
+  // Trusted DAG context is injected by the executor, not accepted from model arguments.
+  if (!ctx.taskId && getToolPolicy(ctx.toolName).write && requiresCompletePlan(ctx.userRequest)) {
+    throw new AppError('VALIDATION', COMPLETE_PLAN_NOTICE);
+  }
 
   const evaluation = await gatewayEvaluate(ctx);
   const decision = gatewayDecide(evaluation);

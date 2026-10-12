@@ -435,13 +435,14 @@ function transferNode(id: string, amount: number, deps: string[] = []): SeedNode
 
 /** The gateway-authorized per-node runner (a gated node parks instead of executing). */
 function gatewayRunTool(sessionId: string, userRequest = '') {
-  return (toolName: string, args: Record<string, unknown>) =>
+  return (toolName: string, args: Record<string, unknown>, ctx: { taskId: string; nodeId: string }) =>
     executeGatedTool({
       sessionId,
       userId: DEMO_USER_ID,
       toolName: toolName as Parameters<typeof executeGatedTool>[0]['toolName'],
       args,
       userRequest,
+      ...ctx,
     });
 }
 
@@ -684,8 +685,8 @@ describe('[integration] POST /api/tasks/[id] pause — a MID-RUN pause stops the
     // A per-node runner that still executes each node through the gateway (exactly like the seed
     // runner) — plus a one-shot, AWAITED mid-run pause so the 'paused' row is committed before the
     // node returns and the executor reaches node 'b'.
-    const runTool = async (toolName: string, args: Record<string, unknown>) => {
-      const outcome = await base(toolName, args);
+    const runTool = async (toolName: string, args: Record<string, unknown>, ctx: { taskId: string; nodeId: string }) => {
+      const outcome = await base(toolName, args, ctx);
       if (!pauseIssued) {
         pauseIssued = true;
         // Resolve the plan id: the FIRST `plan_update` snapshot (emitted for node 'a' before its
