@@ -2,6 +2,12 @@
 
 ## Intent
 
+Live planning may recover once before any write/plan/authorization attempt, retaining original user
+identity and read-tool/result pairs. Valid guidance and server-side selection refusal stop recovery.
+Gated decisions and submit_plan finish without another model narration request; live confirmation
+results are rendered and persisted directly from authoritative facts. Retry presentation and stage
+notices live in live-recovery.ts and run-turn.ts; they grant no execution permission.
+
 Confirm/verify/replay recovery share `buildConfirmFence` + `guardExecutionFence`: the persisted
 action session is checked by security at the SDK mutation boundary. A CIRCUIT_OPEN denial is not
 normalised into a failed business result; no new side effect is landed and the action stays

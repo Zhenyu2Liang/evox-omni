@@ -1,5 +1,9 @@
 # integration — Maintained cross-module regressions
 
+live-recovery.test.ts drives real Pi/gateway/SQLite through bounded planning failures, no-effect
+recovery, committed budget preservation and real transfer confirmation without a narration request.
+live-retry-ui.test.ts covers latest-reply button visibility and refresh input (server rendering only).
+
 `request-step-binding.test.ts` exercises actual task execution and confirmation/MFA routes: success-only prerequisites, failed-transfer descendant suppression, per-purchase product/cent binding, independent MFA decisions and replay, and whole-plan rejection of substituted/extra/missing purchases before automatic writes.
 
 `decision-guidance.test.ts` covers route/ledger MFA escalation across multiple decisions, full

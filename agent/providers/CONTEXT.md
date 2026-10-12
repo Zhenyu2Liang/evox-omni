@@ -2,6 +2,11 @@
 
 ## Intent
 
+request-options.ts bounds each live request (including body streaming) with a deadline and at most
+one transport retry. An explicit caller cancellation stays aborted; only the deadline is mapped to
+a transient timeout. Defaults: 30 seconds, maximum provider-requested retry delay 1500ms. The
+LLM_REQUEST_TIMEOUT_MS override accepts 1000–120000ms. Offline faux streams remain unchanged.
+
 This node owns the model/provider wiring. Pi packages are pinned to 1.1.0 under
 @earendil-works; Node.js >=22.19.0 is required. The production Agent receives a
 ModelRuntime pair from resolveProvider(), not a model without a stream function.

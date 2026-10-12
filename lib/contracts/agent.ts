@@ -35,6 +35,8 @@ export interface ChatMessage {
   role: ChatRole;
   content: string;
   timestamp: number;
+  /** Server offers this only when this turn has not attempted a write/plan/authorization. */
+  retryRequest?: string;
   cards?: ChatCard[];
   toolEvents?: ToolEventView[];
 }

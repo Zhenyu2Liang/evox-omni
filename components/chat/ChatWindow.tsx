@@ -140,6 +140,8 @@ export function ChatWindow({
 
   const lastMessageId =
     visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1].id : undefined;
+  // Only the newest reply may offer a planning retry. Starting any new turn retires old buttons.
+  const retryRequest = visibleMessages.at(-1)?.role === 'assistant' ? visibleMessages.at(-1)?.retryRequest : undefined;
 
   // Auto-scroll the list to the bottom as new content arrives.
   useEffect(() => {
@@ -225,6 +227,11 @@ export function ChatWindow({
       )}
 
       <div className="border-t border-banking-light bg-white p-3">
+        {retryRequest && !pending && stream.pendingReconciliations.length === 0 && (
+          <button type="button" disabled={stream.busy || stream.restoring}
+            className="mb-2 rounded-lg border border-banking-blue px-3 py-2 text-sm text-banking-blue disabled:opacity-50"
+            onClick={() => void stream.send(retryRequest)}>重试规划</button>
+        )}
         <Composer onSend={stream.send} busy={stream.busy} disabled={stream.busy} />
       </div>
     </div>

@@ -669,6 +669,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
   const applyEvents = useCallback((events: AgentStreamEvent[]) => {
     setState((prev) => reduceAgentEvents(prev, events));
   }, []);
+  const sendingRef = useRef(false);
 
   /**
    * Shared "run one turn" path: flip `busy`, run `load()`, fold the returned events and settle
@@ -708,6 +709,9 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
 
   const send = useCallback(
     async (text: string) => {
+      if (sendingRef.current) return;
+      sendingRef.current = true;
+      try {
       text = redactRequest(text);
       const userMessage: ChatMessage = {
         id: nextLocalId('user'),
@@ -724,6 +728,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
         ),
         false,
       );
+      } finally { sendingRef.current = false; }
     },
     [state.sessionId, endpoints, pull],
   );

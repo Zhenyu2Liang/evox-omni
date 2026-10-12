@@ -1,5 +1,11 @@
 # 测试用例与 Demo 验收
 
+## live 规划与故障恢复
+
+`tests/integration/live-recovery.test.ts` 使用真实 Pi、工具、数据库与确认执行流程，只有模型传输被脚本化。覆盖仅口头回复后的单次规划恢复、查询与工具结果配对、恢复耗尽后的持久化重试入口、有效澄清/产品拒绝/认证错误不重试、预算已提交后不重放、确认后的真实转账只扣款一次且无播报请求。`agent/providers/request-options.test.ts` 验证每请求截止时间（包括响应流停滞）、一次传输重试及独立取消；`tests/integration/live-retry-ui.test.ts` 验证最新回复的按钮与旧入口退出，不代替浏览器点击测试。
+
+专项命令：`npx vitest run tests/integration/live-recovery.test.ts tests/integration/live-retry-ui.test.ts agent/providers/request-options.test.ts`。真实 DeepSeek 前端和故障注入前端的证据另行记录，故障代理返回的错误不冒充真实模型回复。
+
 `tests/integration/request-step-binding.test.ts` 使用真实任务执行器、数据库和确认/MFA 路由，覆盖转账失败后成功条件的下游跳过且无授权、成功后的正常门控、多产品逐笔申购及错码/重放、同金额不同产品代码、错误产品/对调金额/重复/遗漏/未知产品的全计划预检，以及有歧义时未创建任何计划或自动预算。既有 `task-feature-hardening` 保留独立提醒不继承条件跳过的用例。live 验收另通过真实前端按钮执行，不以该集成测试代替浏览器测试。
 
 ## 请求约束、取消状态与补偿回退

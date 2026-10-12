@@ -9,6 +9,7 @@ import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completio
 import type { AppConfig } from '@/lib/config';
 import { AppError } from '@/lib/errors';
 import type { ModelRuntime } from './types';
+import { withLiveRequestLimits } from './request-options';
 
 /**
  * Chat-completions is the widest-compatible api dialect for an OpenAI-compatible endpoint.
@@ -227,5 +228,5 @@ export function createLiveRuntime(cfg: AppConfig): ModelRuntime {
       api: openAICompletionsApi(),
     }));
   }
-  return { model, streamFn: models.streamSimple.bind(models) };
+  return { model, streamFn: withLiveRequestLimits(models.streamSimple.bind(models)) };
 }

@@ -16,6 +16,7 @@ import { Agent } from '@earendil-works/pi-agent-core';
 import type {
   AfterToolCallContext,
   AfterToolCallResult,
+  FinishTurn,
   AgentMessage,
   BeforeToolCallContext,
   BeforeToolCallResult,
@@ -176,6 +177,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     });
 
     if (auth.evaluation.blocked) {
+      stopAfterDecision = true;
       return { block: true, reason: auth.blockReason ?? auth.decision.message };
     }
     return undefined;
@@ -188,6 +190,13 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   const afterToolCall = async (
     _context: AfterToolCallContext,
   ): Promise<AfterToolCallResult | undefined> => undefined;
+
+  // A persisted gate or completed DAG is already a useful response. No model narration is needed
+  // to expose it; the server renderer supplies facts, while confirmation resumes the owning DAG.
+  let stopAfterDecision = false;
+  const finishTurn: FinishTurn = turn => config.llmMode === 'live' &&
+    (stopAfterDecision || turn.toolResults.some(result => result.toolName === 'submit_plan'))
+    ? { action: 'end' } : undefined;
 
   /** Listeners registered by THIS module, removed by `dispose()`. */
   const unsubscribers: Array<() => void> = [];
@@ -203,6 +212,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     },
     beforeToolCall,
     afterToolCall,
+    finishTurn,
   });
 
   return {

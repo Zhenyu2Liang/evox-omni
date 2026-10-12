@@ -39,7 +39,7 @@ import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import { security } from '@/security';
 import type { AgentEvent, AgentMessage } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, JsonValue, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
-import { createBankingAgent } from './banking-agent';
+import { createBankingAgent, type BankingAgentRuntime } from './banking-agent';
 import { confirmationCard, errorCard, mfaCard, toCards } from './card-emitter';
 import { redactRequest } from '@/lib/sensitive';
 import type { FactInput } from './grounding-facts';
@@ -54,6 +54,7 @@ import type { ModelRuntime } from './providers/types';
 import { getOrCreateSession, loadSession, saveSession } from './session';
 import { readPendingActionId } from './task-control';
 import type { ToolExecutionResult } from './tools';
+import { canRecoverPlanning, unfinishedPlanning, transientModelFailure, recoveryNotice, startedMutation, PLANNING_RECOVERY_INSTRUCTION } from './live-recovery';
 
 export interface RunTurnDeps {
   config?: AppConfig;
@@ -163,6 +164,7 @@ interface TurnBuffer {
   requestText?: string;
   providedFields?: GuidanceField[];
   serverGuidance?: BankingGuidance;
+  lastGuidance?: BankingGuidance;
   /**
    * SERVER-tracked ids of the messages already grounded this turn. The grounding module no longer
    * skips on a text marker, so idempotency MUST be keyed here — on the server-owned message id —
@@ -454,6 +456,8 @@ function createEventHandler(
         case 'message_end': {
           if (!isAssistantMessage(event.message)) return;
           const assistant = buffer.current ?? newAssistantMessage(now());
+          buffer.lastGuidance = event.message.stopReason === 'stop'
+            ? filterMissingFields(parseBankingGuidance(textOfContent(event.message.content)), buffer.providedFields ?? []) : undefined;
           // The provider chooses tools, but contributes no user-visible financial prose.
           if (event.message.content.some(part => part.type === 'toolCall')) {
             // Tool-selection messages are model planning, not execution evidence. Keep the tool
@@ -523,6 +527,64 @@ function createEventHandler(
 
 /* -------------------------------------------------------------------------------- runTurn */
 
+/** Discard only an unexecuted terminal reply, retaining prior queries and their protocol pairs. */
+function discardTerminalReply(runtime: BankingAgentRuntime, buffer: TurnBuffer): void {
+  const last = runtime.agent.state.messages.at(-1);
+  if (isAssistantMessage(last) && (!last.content.some(part => part.type === 'toolCall') ||
+      last.stopReason === 'error' || last.stopReason === 'aborted')) runtime.agent.state.messages.pop();
+  const current = buffer.current;
+  if (current && !current.cards?.length && !current.toolEvents?.length) {
+    const start = buffer.events.findIndex(event => event.type === 'message_start' && event.message.id === current.id);
+    if (start >= 0) buffer.events.splice(start);
+    buffer.assistants = buffer.assistants.filter(message => message.id !== current.id);
+    buffer.groundedIds.delete(current.id);
+    buffer.current = null;
+  }
+}
+
+/** A server-written narrative is conversation memory, never a new tool call or provider usage. */
+function publishServerReply(runtime: BankingAgentRuntime, buffer: TurnBuffer, now: () => number, content: string, retryRequest?: string): void {
+  const message = { ...newAssistantMessage(now()), content, ...(retryRequest ? { retryRequest } : {}) };
+  buffer.current = message;
+  buffer.assistants.push(message);
+  buffer.groundedIds.add(message.id);
+  buffer.events.push({ type: 'message_start', message: { ...message } }, { type: 'text_delta', delta: content }, { type: 'message_end', message });
+  const model = runtime.agent.state.model;
+  runtime.agent.state.messages.push({ role: 'assistant', content: [{ type: 'text', text: content }],
+    api: model.api, provider: model.provider, model: model.id, timestamp: message.timestamp, stopReason: 'stop',
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
+}
+
+/** At most one recovery of planning, before any write attempt. Never re-prompt the original turn. */
+async function runLivePrompt(runtime: BankingAgentRuntime, buffer: TurnBuffer, request: string, now: () => number): Promise<string | undefined> {
+  let failure: string | undefined;
+  let instruction: AgentMessage | undefined;
+  try {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const messageStart = runtime.agent.state.messages.length;
+      buffer.lastGuidance = undefined;
+      failure = undefined;
+      try {
+        if (attempt === 0) await runtime.agent.prompt(request);
+        else await runtime.agent.continue();
+        const failed = findRunFailure(runtime.agent.state.messages.slice(messageStart));
+        if (failed) failure = failed.errorMessage || '模型请求中断';
+      } catch (error) { failure = safeToString(error); }
+      const guidance = Boolean(buffer.serverGuidance ?? buffer.lastGuidance);
+      if (attempt !== 0 || !canRecoverPlanning(request, buffer.events, buffer.factResults, guidance, failure)) break;
+      discardTerminalReply(runtime, buffer);
+      buffer.events = buffer.events.filter(event => event.type !== 'error');
+      instruction = { role: 'system', content: PLANNING_RECOVERY_INSTRUCTION, timestamp: now() };
+      runtime.agent.state.messages.push(instruction);
+    }
+  } finally {
+    // The recovery instruction belongs to this attempt, not to subsequent user requests.
+    if (instruction) runtime.agent.state.messages = runtime.agent.state.messages.filter(message => message !== instruction);
+  }
+  return failure;
+}
+
 /** Run one agent turn; returns the stream events emitted during it. */
 export async function runTurn(
   req: ChatTurnRequest,
@@ -567,14 +629,41 @@ export async function runTurn(
   });
 
   const unsubscribe = runtime.agent.subscribe(createEventHandler(buffer, now));
+  let liveFailure: string | undefined;
   try {
-    await runtime.agent.prompt(req.message);
+    if (config.llmMode === 'live') liveFailure = await runLivePrompt(runtime, buffer, req.message, now);
+    else await runtime.agent.prompt(req.message);
   } finally {
     // Flush AFTER the run settles (the parked `PendingAction` row is committed by then) and even
     // when the run failed — the user must still be able to take the parked decision.
     await flushParkedDecision(buffer, relay);
     unsubscribe();
     runtime.dispose();
+  }
+
+  const unfinished = config.llmMode === 'live' && unfinishedPlanning(req.message, buffer.events, buffer.factResults,
+    Boolean(buffer.serverGuidance ?? buffer.lastGuidance));
+  if (config.llmMode === 'live' && (liveFailure || unfinished)) {
+    discardTerminalReply(runtime, buffer);
+    const notice = recoveryNotice(buffer.events, liveFailure, req.message, buffer.factResults);
+    // A provider outage does not establish a business failure. Keep all real outcomes/cards.
+    const facts = buffer.factResults.length || startedMutation(buffer.events)
+      ? renderFinancialResponse(buffer.factResults, { requestText: req.message,
+          pending: buffer.events.some(event => event.type === 'mfa_required') ? 'mfa'
+            : buffer.events.some(event => event.type === 'confirmation_required') ? 'confirmation' : undefined }) + '\n' : '';
+    const retryable = canRecoverPlanning(req.message, buffer.events, buffer.factResults,
+      Boolean(buffer.serverGuidance ?? buffer.lastGuidance), liveFailure);
+    buffer.events = buffer.events.filter(event => event.type !== 'error');
+    publishServerReply(runtime, buffer, now, facts + notice, retryable ? req.message : undefined);
+    if (liveFailure) buffer.events.push({ type: 'error', message: notice });
+  } else if (config.llmMode === 'live' && buffer.current?.content === '' &&
+      (buffer.factResults.length || startedMutation(buffer.events))) {
+    publishServerReply(runtime, buffer, now, renderFinancialResponse(buffer.factResults, {
+      guidance: buffer.serverGuidance ?? buffer.lastGuidance,
+      locked: buffer.events.some(event => event.type === 'security_event' && event.kind === 'locked'),
+      pending: buffer.events.some(event => event.type === 'mfa_required') ? 'mfa'
+        : buffer.events.some(event => event.type === 'confirmation_required') ? 'confirmation' : undefined,
+    }));
   }
 
   const userMessage: ChatMessage = {
@@ -725,7 +814,11 @@ export async function resumeTurn(
       ...(input.taskId !== undefined ? { taskId: input.taskId } : {}),
       ...(input.nodeId !== undefined ? { nodeId: input.nodeId } : {}),
     });
-    await runtime.agent.continue();
+    if (config.llmMode === 'live') {
+      // Owning DAG continuation already ran in confirmation.ts. Financial prose is server-owned,
+      // so another model request adds latency and can propose unrelated new writes.
+      publishServerReply(runtime, buffer, now, renderFinancialResponse(buffer.factResults));
+    } else await runtime.agent.continue();
   } catch (error) {
     // The gated business action ALREADY executed and is ALREADY audited (see `./confirmation`).
     // A continuation failure (model/narration error) must NEVER be swallowed — it is surfaced as an
