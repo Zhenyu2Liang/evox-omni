@@ -1,7 +1,7 @@
 import { createModels, fauxProvider, type Model } from '@earendil-works/pi-ai';
 import type { Context } from '@earendil-works/pi-ai';
 import type { AppConfig } from '@/lib/config';
-import { respond } from './mock-responder';
+import { respondWithGuidance } from './mock-responder';
 import type { ModelRuntime } from './types';
 
 /**
@@ -23,9 +23,9 @@ export function createMockRuntime(_cfg: AppConfig): ModelRuntime {
   const reg = fauxProvider();
   const models = createModels();
   models.setProvider(reg.provider);
-  const factory = (context: Context): ReturnType<typeof respond> => {
+  const factory = (context: Context): ReturnType<typeof respondWithGuidance> => {
     reg.appendResponses([factory]); // re-queue: one step consumed per model call
-    return respond(context);
+    return respondWithGuidance(context);
   };
   reg.setResponses([factory]);
   return { model: reg.getModel(), streamFn: models.streamSimple.bind(models) };

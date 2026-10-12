@@ -6,6 +6,7 @@
  */
 import { formatCNY } from '@/lib/money';
 import { buildFinancialFacts, isRecord, SIDE_EFFECT_TOOLS, type FactInput, type TrustedWrite } from './grounding-facts';
+import { renderBankingGuidance, type BankingGuidance } from './banking-guidance';
 
 export const FINANCIAL_RESPONSE_TAG = '（系统校正）';
 export const UNVERIFIED_RESPONSE = `${FINANCIAL_RESPONSE_TAG}本次对话中未记录到该操作的执行结果。请补充操作类型、账户、收款人或金额，我会先核对系统数据。`;
@@ -50,6 +51,7 @@ export interface FinancialResponseOptions {
   /** Original USER request, only echoed as a request; never a financial result or model prose. */
   requestText?: string;
   locked?: boolean;
+  guidance?: BankingGuidance;
 }
 
 /** Always renders the actual operations in result order; there is no prose-to-operation matching. */
@@ -96,17 +98,18 @@ export function renderFinancialResponse(
   }
   if (options.pending === 'mfa') sections.push('该操作尚未执行，等待验证码验证。');
   else if (options.pending === 'confirmation') sections.push('该操作尚未执行，等待确认，请本人核对操作卡片。');
+  // Guidance is not execution evidence and cannot contradict an actual write or pending gate.
+  if (options.guidance && facts.writes.length === 0 && !options.pending) {
+    const request = 'fields' in options.guidance && options.requestText
+      ? `针对你的需求 ${JSON.stringify(options.requestText.slice(0, 200))}，` : '';
+    sections.push(request + renderBankingGuidance(options.guidance));
+  }
   if (sections.length) return `${FINANCIAL_RESPONSE_TAG}${sections.join('\n')}`;
   if (options.requestText) {
     const request = JSON.stringify(options.requestText.slice(0, 200));
-    const text = options.requestText;
-    const clarification = /密码/.test(text) ? '本演示仅验证修改密码流程，不接收真实密码。请说“演示修改密码”，再在操作卡中验证。'
-      : /卡|限额/.test(text) ? '请说明卡片类型或尾号，以及要冻结、解冻、挂失或调整哪一项限额；无须提供完整卡号。'
-      : /理财|投资|申购|赎回|风险/.test(text) ? '请说明产品名称、风险等级偏好或持仓，以及金额。可先查询产品和持仓；演示不提供正式风险测评或投资建议。'
-      : /订阅|续费/.test(text) ? '请说明订阅名称，以及要取消还是开启续费提醒。'
-      : /提醒|定时/.test(text) ? '请补充提醒内容和未来的完整日期、北京时间。'
-      : '请补充操作类型、账户或金额；转账请说明转给谁、多少钱。';
-    return `${FINANCIAL_RESPONSE_TAG}本次对话中未记录到该操作的执行结果。针对你的需求 ${request}，${clarification}我会先核对系统数据。`;
+    // An invalid/absent guidance payload does not establish WHICH field is missing. Do not
+    // manufacture a repeated question about details the user may already have supplied.
+    return `${FINANCIAL_RESPONSE_TAG}本次对话中未记录到该操作的执行结果。你的需求是 ${request}。请明确要办理的受支持业务，或先查询相关记录。Demo 理财申购仅支持活期账户，赎回仅支持整笔全额，不支持部分赎回；卡片额度调整仅支持分类消费限额，不支持总授信额度调整。不要在聊天里输入真实密码。`;
   }
   return UNVERIFIED_RESPONSE;
 }

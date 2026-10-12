@@ -57,6 +57,7 @@ import { formatCNY, moneyToCents, normalizeTransferAmount, parseAmount, round2 }
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
 import { resolveBankingArgs } from '../lib/banking-selectors';
+import { withActionPolicy } from '../lib/action-summary';
 import { scheduledTime } from '../lib/scheduled-time';
 import { redactRequest, redactSecrets } from '../lib/sensitive';
 import { formatDateTime } from '../lib/date';
@@ -352,7 +353,9 @@ function toContractPendingAction(row: PrismaPendingAction): PendingAction {
     tier: row.riskLevel as RiskLevel,
     requiresMfa: row.requiresMfa,
     status: row.status as PendingActionStatus,
-    summary: { ...safeParse<PendingActionSummary>(row.summaryJson, fallbackSummary), actionId: row.id },
+    summary: withActionPolicy(safeParse<PendingActionSummary>(row.summaryJson, fallbackSummary), {
+      actionId: row.id, tier: row.riskLevel as RiskLevel, requiresMfa: row.requiresMfa,
+    }),
     userRequest: row.userRequest ?? undefined,
     intent: row.intent ?? undefined,
     createdAt: row.createdAt.getTime(),
@@ -870,7 +873,9 @@ async function authorizeTransfer(
       // the code) can complete it. The escalation is persisted — never a silently-ignored return.
       await tx.pendingAction.update({
         where: { id: row.id },
-        data: { status: 'awaiting_mfa', riskLevel: 'RED', requiresMfa: true },
+        data: { status: 'awaiting_mfa', riskLevel: 'RED', requiresMfa: true,
+          summaryJson: JSON.stringify(withActionPolicy(action.summary, { actionId: row.id, tier: 'RED', requiresMfa: true })),
+        },
       });
       return { kind: 'escalated' as const, effectiveTotal, projected: risk.projectedDailyTotal };
     }
@@ -914,7 +919,9 @@ async function authorizeTransfer(
       requiresMfa: true,
       code: 'LIMIT_EXCEEDED',
       message: TRANSFER_ESCALATED_MESSAGE,
-      action: { ...action, tier: 'RED', requiresMfa: true, status: 'awaiting_mfa' },
+      action: { ...action, tier: 'RED', requiresMfa: true, status: 'awaiting_mfa',
+        summary: withActionPolicy(action.summary, { actionId: row.id, tier: 'RED', requiresMfa: true }),
+      },
     };
   }
 

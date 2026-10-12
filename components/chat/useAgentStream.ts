@@ -42,6 +42,7 @@ import {
 import { asTerminalStatus } from './cards/confirmationStatus';
 import { decisionKey } from './decisionKey';
 import { redactRequest } from '@/lib/sensitive';
+import { withActionPolicy } from '@/lib/action-summary';
 
 /**
  * The summary for an MFA prompt. The `mfa_required` event carries no tool name, so `toolName` is
@@ -452,17 +453,38 @@ function applyEvent(state: ChatUIState, event: AgentStreamEvent): ChatUIState {
         },
       };
 
-    case 'mfa_required':
+    case 'mfa_required': {
+      const inline = state.messages.flatMap(message => message.cards ?? []).find(card =>
+        (card.type === 'confirmation' && card.action.actionId === event.actionId) ||
+        (card.type === 'mfa' && card.actionId === event.actionId));
+      const source = event.action ?? (state.pendingAction?.actionId === event.actionId
+        ? state.pendingAction.summary : inline?.type === 'confirmation' ? inline.action
+          : inline?.type === 'mfa' ? inline.action : undefined);
+      const summary = source
+        ? withActionPolicy(source as PendingActionSummary, { actionId: event.actionId, tier: 'RED', requiresMfa: true })
+        : mfaSummary(state, event.hint);
+      // Replace this action's old decision, preserving every other action and terminal card.
+      const messages = state.messages.map(message => ({ ...message, cards: message.cards?.map(card => {
+        if (card.type === 'confirmation' && card.action.actionId === event.actionId &&
+            asTerminalStatus((card.action as PendingActionSummary & { status?: string }).status) === undefined) {
+          return { type: 'mfa' as const, actionId: event.actionId, action: summary as PendingActionSummary, hint: event.hint };
+        }
+        if (card.type === 'mfa' && card.actionId === event.actionId && asTerminalStatus(card.status) === undefined) {
+          return { ...card, action: summary as PendingActionSummary, hint: event.hint };
+        }
+        return card;
+      }) }));
       return {
         ...state,
+        messages,
         pendingAction: {
           kind: 'mfa',
-          summary: event.action ?? (state.pendingAction?.actionId === event.actionId
-            ? { ...state.pendingAction.summary, tier: 'RED', requiresMfa: true } : mfaSummary(state, event.hint)),
+          summary,
           actionId: event.actionId,
           ...(event.hint !== undefined ? { hint: event.hint } : {}),
         },
       };
+    }
 
     case 'security_event':
       return {
@@ -513,7 +535,7 @@ function restoredMfaSummary(summary?: PendingActionSummary): MfaActionSummary {
     title: summary.title,
     ...(summary.toolName ? { toolName: summary.toolName } : {}),
     tier: 'RED',
-    fields: summary.fields ?? [],
+    fields: withActionPolicy(summary, { tier: 'RED', requiresMfa: true }).fields,
     requiresMfa: true,
   };
   if (summary.mfaHint !== undefined) result.mfaHint = summary.mfaHint;
@@ -651,7 +673,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
    * Shared "run one turn" path: flip `busy`, run `load()`, fold the returned events and settle
    * `pendingAction` (kept only if the turn reported an `error`). Never throws to the UI.
    */
-  const pull = useCallback(async (load: () => Promise<ChatTurnResponse>, settlesDecision = true) => {
+  const pull = useCallback(async (load: () => Promise<ChatTurnResponse>, settlesDecision = true, actionId?: string) => {
     setState((prev) => ({ ...prev, busy: true, error: undefined }));
     try {
       const res = await load();
@@ -670,7 +692,8 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
         const establishesDecision = events.some(
           (e) => e.type === 'confirmation_required' || e.type === 'mfa_required',
         );
-        const clearPending = settlesDecision && !hasError && !establishesDecision;
+        const clearPending = settlesDecision && !hasError && !establishesDecision &&
+          (actionId === undefined || reduced.pendingAction?.actionId === actionId);
         return { ...reduced, ...(clearPending ? { pendingAction: undefined } : {}), busy: false };
       });
     } catch (e) {
@@ -705,12 +728,12 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
   );
 
   const confirm = useCallback(
-    (actionId: string) => pull(() => confirmAction(actionId, endpoints)),
+    (actionId: string) => pull(() => confirmAction(actionId, endpoints), true, actionId),
     [pull, endpoints],
   );
   const verify = useCallback(
     async (actionId: string, code: string) => {
-      await pull(() => verifyAction(actionId, code, endpoints));
+      await pull(() => verifyAction(actionId, code, endpoints), true, actionId);
       // A WRONG code keeps the SAME `mfa` decision active and sets `error` — count the attempt so the
       // MFA card can show "第 N 次尝试". A success/cancel clears `pendingAction` (and the reset effect
       // zeroes the counter); a new action changes actionId/kind, which also resets it.
@@ -723,7 +746,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
     [pull, endpoints],
   );
   const cancel = useCallback(
-    (actionId: string) => pull(() => cancelAction(actionId, endpoints)),
+    (actionId: string) => pull(() => cancelAction(actionId, endpoints), true, actionId),
     [pull, endpoints],
   );
 
@@ -736,7 +759,7 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
    */
   const recover = useCallback(
     async (actionId: string) => {
-      await pull(() => recoverAction(actionId, endpoints));
+      await pull(() => recoverAction(actionId, endpoints), true, actionId);
       setState((prev) =>
         prev.error !== undefined
           ? prev

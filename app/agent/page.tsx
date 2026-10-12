@@ -20,6 +20,10 @@ import { loadSession } from '@/agent/session';
 import { prisma } from '@/lib/db/client';
 import type { ChatMessage } from '@/lib/contracts/agent';
 import type { AnomalyReport } from '@/banking-sdk';
+import { withActionPolicy } from '@/lib/action-summary';
+import type { PendingActionSummary } from '@/lib/contracts/security';
+import type { RiskLevel } from '@/lib/contracts/risk';
+import { safeParse } from '@/lib/json';
 
 // Reads the request cookie, so it must render per request — never statically prerendered at build.
 export const dynamic = 'force-dynamic';
@@ -30,13 +34,22 @@ export default async function AgentPage() {
   const snapshot = sessionId ? await loadSession(sessionId) : null;
   const latestTask = snapshot ? await prisma.agentTask.findFirst({ where: { sessionId: snapshot.sessionId, userId: snapshot.userId }, orderBy: { createdAt: 'desc' }, select: { id: true } }) : null;
   const rows = snapshot ? await prisma.pendingAction.findMany({ where: { sessionId: snapshot.sessionId, userId: snapshot.userId } }) : [];
-  const statuses = new Map(rows.map(row => [row.id, row.status]));
+  const decisions = new Map(rows.map(row => [row.id, row]));
   const ackRows = snapshot ? await prisma.auditLog.findMany({ where: { userId: snapshot.userId, toolName: 'acknowledge_transaction' }, select: { detail: true } }) : [];
   const acknowledgements = new Set(ackRows.map(row => row.detail));
   const initialMessages: ChatMessage[] = (snapshot?.transcript ?? []).map(message => ({ ...message,
     cards: (message.cards ?? []).filter(card => card.type !== 'plan').map(card => {
-      if (card.type === 'mfa') return { ...card, status: statuses.get(card.actionId) };
-      if (card.type === 'confirmation' && card.action.actionId) return { ...card, action: { ...card.action, status: statuses.get(card.action.actionId) } };
+      if (card.type === 'mfa' || (card.type === 'confirmation' && card.action.actionId)) {
+        const id = card.type === 'mfa' ? card.actionId : card.action.actionId!;
+        const row = decisions.get(id);
+        if (!row) return card;
+        const fallback = card.action;
+        const stored = safeParse<PendingActionSummary | undefined>(row.summaryJson, fallback);
+        const action = stored && withActionPolicy(stored, { actionId: id, tier: row.riskLevel as RiskLevel, requiresMfa: row.requiresMfa });
+        if (row.status === 'awaiting_mfa' && action) return { type: 'mfa' as const, actionId: id, action };
+        if (card.type === 'mfa') return { ...card, action, status: row.status };
+        return { ...card, action: { ...action!, status: row.status } };
+      }
       if (card.type === 'anomaly') {
         const report = card.data as AnomalyReport;
         return { ...card, data: { ...report, anomalies: report.anomalies.map(item => ({ ...item, acknowledged: acknowledgements.has(item.transaction.id) })) } };

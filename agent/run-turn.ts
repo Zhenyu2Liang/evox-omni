@@ -44,6 +44,9 @@ import { confirmationCard, errorCard, mfaCard, toCards } from './card-emitter';
 import { redactRequest } from '@/lib/sensitive';
 import type { FactInput } from './grounding-facts';
 import { renderFinancialResponse, UNAVAILABLE_RESPONSE } from './financial-response';
+import { parseBankingGuidance, filterMissingFields, providedRequestFields, type BankingGuidance, type GuidanceField } from './banking-guidance';
+import { withActionPolicy } from '@/lib/action-summary';
+import { listProducts } from '@/lib/db/repositories/investment';
 import { withRealToolResult } from './message-normalize';
 import type { ModelRuntime } from './providers/types';
 import { getOrCreateSession, loadSession, saveSession } from './session';
@@ -156,6 +159,7 @@ interface TurnBuffer {
   factResults: FactInput[];
   sourceAccounts: Map<string, string>;
   requestText?: string;
+  providedFields?: GuidanceField[];
   /**
    * SERVER-tracked ids of the messages already grounded this turn. The grounding module no longer
    * skips on a text marker, so idempotency MUST be keyed here — on the server-owned message id —
@@ -174,13 +178,14 @@ function createTurnBuffer(requestText?: string): TurnBuffer {
  * the business operation's outcome. Message identity makes rendering idempotent; model text and
  * correction labels are never evidence. Cards keep their existing server-owned execution path.
  */
-function groundMessage(buffer: TurnBuffer, message: ChatMessage | null): void {
+function groundMessage(buffer: TurnBuffer, message: ChatMessage | null, guidance?: BankingGuidance): void {
   if (message === null) return;
   if (buffer.groundedIds.has(message.id)) return;
   try {
     const pendingEvent = [...buffer.events].reverse().find(event => event.type === 'mfa_required' || event.type === 'confirmation_required');
     message.content = renderFinancialResponse(buffer.factResults, {
       requestText: buffer.requestText,
+      guidance: filterMissingFields(guidance, buffer.providedFields ?? []),
       locked: buffer.events.some(event => event.type === 'security_event' && event.kind === 'locked'),
       ...(pendingEvent?.type === 'mfa_required' ? { pending: 'mfa' as const }
         : pendingEvent?.type === 'confirmation_required' ? { pending: 'confirmation' as const } : {}),
@@ -243,12 +248,12 @@ async function loadPendingSummary(
   };
   const row = await getPendingAction(actionId);
   if (row === null) return fallback;
-  return { ...safeParse<PendingActionSummary>(row.summaryJson, {
+  return withActionPolicy(safeParse<PendingActionSummary>(row.summaryJson, {
     ...fallback,
     toolName: row.toolName as ToolName,
     tier: row.riskLevel as RiskLevel,
     requiresMfa: row.requiresMfa,
-  }), actionId };
+  }), { actionId, tier: row.riskLevel as RiskLevel, requiresMfa: row.requiresMfa });
 }
 
 /* ------------------------------------------------------- live `submit_plan` (DAG) progress */
@@ -452,7 +457,8 @@ function createEventHandler(
             // timeline/cards, but publish none of their free prose (including a false prelude).
             assistant.content = '';
             buffer.groundedIds.add(assistant.id);
-          } else groundMessage(buffer, assistant);
+          } else groundMessage(buffer, assistant, event.message.stopReason === 'stop'
+            ? parseBankingGuidance(textOfContent(event.message.content)) : undefined);
           // Pi persists these same message objects as model history. Keep the model's subsequent
           // context consistent with what the user saw, while retaining tool calls and thinking
           // blocks required by the provider protocol. Invented prose must not survive a refresh.
@@ -525,6 +531,11 @@ export async function runTurn(
 
   const snapshot = await getOrCreateSession(config.demoUserId, req.sessionId);
   const buffer = createTurnBuffer(req.message);
+  // Validate product presence against the real catalogue. This read only calibrates questions;
+  // it is not a tool result, a financial statement, an ownership check or an authorization.
+  try {
+    buffer.providedFields = providedRequestFields(req.message, /理财|申购|认购|产品|基金/.test(req.message) ? await listProducts() : []);
+  } catch { buffer.providedFields = []; }
   buffer.events.push({ type: 'session', sessionId: snapshot.sessionId });
 
   // Injection scan is defense-in-depth ONLY — it records a SecurityEvent but NEVER grants

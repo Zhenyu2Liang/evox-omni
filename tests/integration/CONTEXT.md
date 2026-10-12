@@ -1,5 +1,8 @@
 # integration — Maintained cross-module regressions
 
+`decision-guidance.test.ts` covers route/ledger MFA escalation across multiple decisions, full
+streamed summaries and legacy refresh, plus strict guidance validation and Pi/SSE/session output.
+
 `frontend-followup-fixes.test.ts` covers explicit virtual-card limits and replay, full redemption quote/transaction consistency and name/code ambiguity, plus owner-scoped MFA challenge renewal with strict unlock-audit rollback. It uses production gateways/SDK and isolated test SQLite; live browser evidence is documented in `docs/frontend-followup-report.md`.
 
 Real DB/route/gateway/executor tests; only model responses and execution scheduling are controlled.

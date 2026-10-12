@@ -910,7 +910,7 @@ function blockedOutcome(
 ): ConfirmationOutcome {
   if (view.requiresMfa) {
     const events: AgentStreamEvent[] = view.status === 'pending' || view.status === 'awaiting_mfa'
-      ? [{ type: 'mfa_required', actionId }] : [];
+      ? [{ type: 'mfa_required', actionId, action: view.action?.summary }] : [];
     emitAll(events, opts);
     return {
       ok: false,

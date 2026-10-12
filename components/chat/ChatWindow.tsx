@@ -45,11 +45,12 @@ export interface ChatWindowProps {
 
 /** Does an inline card already represent the SAME active decision as the pending action? */
 function isDuplicateDecisionCard(card: ChatCard, pending: PendingHumanDecision): boolean {
-  if (card.type === 'mfa' && pending.kind === 'mfa') {
+  if (card.type === 'mfa') {
     return card.actionId === pending.actionId;
   }
-  if (card.type === 'confirmation' && pending.kind === 'confirmation') {
-    return decisionKey(card.action) === decisionKey(pending.summary);
+  if (card.type === 'confirmation') {
+    return card.action.actionId === pending.actionId ||
+      (pending.kind === 'confirmation' && decisionKey(card.action) === decisionKey(pending.summary));
   }
   return false;
 }

@@ -2,6 +2,9 @@
 
 ## Intent
 
+Execution-time transfer escalation commits RED policy and the complete red summary together.
+`lib/action-summary.ts` normalizes displayed risk fields from current policy, including legacy rows.
+
 The heart of the "AI Banking Agent" safety model. It answers ONE question, in TypeScript,
 for every tool the model proposes: **is this allowed, and what must a human do first?**
 

@@ -2,6 +2,10 @@
 
 ## Intent
 
+MFA escalation replaces the matching inline decision by action ID and retains the full server
+summary. Settling one action preserves a different pending decision. Refresh summaries and risk
+fields follow current authorization via `lib/action-summary.ts`; terminal cards remain terminal.
+
 `actions.ts#postAction` synthesises MFA only for explicit pending/awaiting_mfa decisions. A
 historical RED/requiresMfa flag on confirmed or terminal outcomes does not reopen that action's
 verification card. Stale same-action MFA events are removed; a different next-plan action's event
