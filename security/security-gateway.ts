@@ -57,6 +57,7 @@ import { formatCNY, moneyToCents, normalizeTransferAmount, parseAmount, round2 }
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
 import { resolveBankingArgs } from '../lib/banking-selectors';
+import { assertRequestedProducts } from '../lib/request-constraints';
 import { withActionPolicy } from '../lib/action-summary';
 import { scheduledTime } from '../lib/scheduled-time';
 import { redactRequest, redactSecrets } from '../lib/sensitive';
@@ -1054,6 +1055,14 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
 
   const evaluation = await gatewayEvaluate(ctx);
   const decision = gatewayDecide(evaluation);
+
+  if (decision.kind !== 'deny') {
+    try { await assertRequestedProducts(ctx.toolName, ctx.args, ctx.userRequest); }
+    catch (error) {
+      if (!(error instanceof AppError) || error.code !== 'VALIDATION') throw error;
+      return { evaluation: { ...evaluation, blocked: true }, decision: { ...decision, kind: 'deny' }, blockReason: error.message };
+    }
+  }
 
   // GREEN — allow the tool to execute inline.
   if (!evaluation.blocked) return { evaluation, decision };
