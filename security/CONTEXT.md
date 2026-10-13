@@ -12,4 +12,4 @@ This layer decides permission, confirmation, verification, risk and lock state i
 
 `execution-policy.ts` checks write policy on the actual transaction client. `recovery-authorization.ts` grants only currently permitted new recovery effects; verified receipts bypass new mutation and remain recoverable during a lock. Unknown outcomes are not failures and must not be retried blindly.
 
-Model tools exclude arbitrary code, SQL, shell, files and external HTTP. Public journal readers exclude raw thinking and credentials. Financial claims are rendered by the agent from SDK and receipt facts. See `docs/security.md` and `docs/known-risks.md`.
+Model tools exclude arbitrary code, SQL, shell, files and external HTTP. Public journal readers exclude raw thinking and credentials. Financial claims are rendered by the agent from SDK and receipt facts. See `docs/cn/security.md` and `docs/cn/known-risks.md`.

@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "stc": {
+      "source": "daimonia-ai/STC-Simplified-Technical-Chinese",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "6ae942e780380fe42b340f30e2fa26e321ba03d851b8fb3b58b8bb75116a96d8"
+    }
+  }
+}

@@ -31,4 +31,4 @@ workflow and current approval.
 
 `grounding-facts.ts` projects exact structured account/write facts. `financial-response.ts` renders authoritative financial statements. Planning text, model-generated correction tags and prose are never execution evidence. Public APIs expose grounded events and safe metadata; raw thinking remains internal.
 
-Use the central tool catalog and financial string contracts. See `docs/architecture.md`, `docs/agent-durability.md` and `docs/security.md` for current behavior and limits.
+Use the central tool catalog and financial string contracts. See `docs/cn/architecture.md`, `docs/cn/agent-durability.md` and `docs/cn/security.md` for current behavior and limits.

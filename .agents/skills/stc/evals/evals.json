@@ -1,0 +1,75 @@
+{
+  "skill_name": "stc",
+  "evals": [
+    {
+      "id": 1,
+      "name": "rewrite-weekly-report",
+      "prompt": "下面是我们组周报里的一段，帮我按简明技术性中文改一下，改完直接给我正文：\n\n本周我们进行了大量的优化工作，系统性能得到了显著提升。同时，我们对相关流程进行了梳理，进一步沉淀了团队经验，基本形成了闭环。值得注意的是，部分用户反馈登录偶尔会失败，可能和网关配置有关，我们会尽快跟进。",
+      "expected_output": "按 for document 改写：主语写名称或待补项，不写“我们”；去掉虚动词、程度词、模糊量词、行话和套话；保留“可能”；不编造原文没有的数字，缺的信息写成待补项。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "webdev-delete-flow",
+      "prompt": "我在做一个网盘应用，帮我写删除文件这个流程的界面文案：列表里的删除按钮、二次确认弹窗（标题、正文、两个按钮）、删除成功的提示、删除失败的报错（网络断了的情况）。按简明技术性中文写。",
+      "expected_output": "按 for web dev 写：不用复数人称和第三人称代词；按钮以动词开头且不超过 6 个字；删除、移除等动作词按推荐词表的意思用；不可恢复的后果用“警告”；报错写清发生了什么和下一步。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "instruction-agents-md",
+      "prompt": "我要给团队的 AGENTS.md 加几条规则，内容是：提交代码前要跑测试；不能直接推到 main 分支；最好给新函数写单元测试；紧急修复可以先上线，但要在一天内补文档。帮我写成规则，按简明技术性中文写。",
+      "expected_output": "按 for instruction writing 写：强度词只用必须、不得、宜、不宜、可、不必、能、不能；一条只写一个要求；紧急修复的例外写在同一条里；时间写成阿拉伯数字。",
+      "files": []
+    },
+    {
+      "id": 4,
+      "name": "task-receipt-awaiting-publish",
+      "prompt": "用 STC 根据这些已确认事实写一份任务回执：页面文案已修改，预览已生成，检查通过；用户明确要求确认预览后再发布；线上当前仍显示旧版。",
+      "expected_output": "结果、用户动作和知会分段；发布确认只放在需要你；不声称已上线，不编造截止时间或额外问题。",
+      "files": []
+    },
+    {
+      "id": 5,
+      "name": "task-receipt-no-action",
+      "prompt": "用 STC 写任务回执。已确认事实：用户要求的材料索引已按日期倒序整理，全部链接已核对；用户没有待处理的动作，也没有其他需知事项。",
+      "expected_output": "做完了只写已经完成的结果；需要你和知会写无；不为凑段落要求用户再次确认。",
+      "files": []
+    },
+    {
+      "id": 6,
+      "name": "direct-answer-without-receipt",
+      "prompt": "导出按钮在哪里？只回答位置。已知按钮在报告页右上角。按 STC 回答。",
+      "expected_output": "直接回答报告页右上角，不套任务回执，不添加无关说明。",
+      "files": []
+    },
+    {
+      "id": 7,
+      "name": "deliverable-body-without-receipt",
+      "prompt": "按 STC 把“请在周五之前完成反馈意见的提交”改短一点，只给改写后的句子。",
+      "expected_output": "只给改写句子，保留周五前和提交反馈；不附任务回执、检查过程或解释。",
+      "files": []
+    },
+    {
+      "id": 8,
+      "name": "research-receipt-without-invented-decision",
+      "prompt": "用 STC 写任务回执。已确认事实：用户只要求了解两种检索方法，报告已经保存到 methods.md，结论是小型文档库优先使用关键词检索；用户没有提出更换系统或选择实施方案。",
+      "expected_output": "回执给出报告和核心结论，需要你写无；不把调研包装成必须由用户选择的系统改造方案。",
+      "files": []
+    },
+    {
+      "id": 9,
+      "name": "configuration-absence-is-needed",
+      "prompt": "按 STC 回答：清单里的 350 条域名是否已加载？已知本机 NO_PROXY 只有本地和 Tailscale 例外，没有这 350 条。只回答结论。",
+      "expected_output": "明确保留这 350 条尚未加载的事实。只交付一次回答，不追加检查消息或同义改写。",
+      "files": []
+    },
+    {
+      "id": 10,
+      "name": "standalone-unrelated-exclusion",
+      "prompt": "按 STC 审阅并改写这份午餐菜单，只给菜单正文：午餐：西红柿炒鸡蛋，没有东坡肉。菜单只用于告诉同事午餐吃什么。",
+      "expected_output": "结合菜单用途删除无关的东坡肉排除说明。机器未给疑点时，Agent 仍执行 G20 的语义判断。",
+      "files": []
+    }
+  ]
+}

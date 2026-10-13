@@ -1,20 +1,26 @@
 # AI Banking Agent
 
-A financial technology competition demo that turns natural-language requests into inspectable banking operations. Built with Next.js, TypeScript, Pi Core and Prisma/SQLite.
+银行智能体比赛演示项目。
+系统把自然语言请求转成可检查的银行操作。
+技术栈为 Next.js、TypeScript、Pi Core 和 Prisma/SQLite。
 
-The application uses simulated banking data and verification. No real banking or payment service is connected.
+项目使用模拟账户和身份验证。
+项目未接入真实银行或支付服务。
 
-## Features
+## 功能
 
-- Transfers by contact, name or phone, with confirmation and verification.
-- Spending analysis, anomaly detection and investment comparison, purchase and redemption.
-- Card controls, subscription management and scheduled reminders or payment intents.
-- Multi-step workflows with pause, resume, cancellation and manual handoff.
-- Persisted agent events, execution receipts and recovery controls.
+- 按联系人、姓名或手机号转账。
+- 消费分析、异常交易识别和理财申购、赎回。
+- 卡片控制、订阅管理和定时提醒。
+- 多步工作流的暂停、恢复、取消和人工接管。
+- 事件日志、执行回执和崩溃恢复。
 
-## Quick start
+## 首次运行
 
-Requires **Node.js 22.19+** and **pnpm 12.3.4**, as declared in [package.json](package.json).
+使用 Node.js 22.19 及以上版本和 pnpm 12.3.4。
+版本要求来自 [package.json](package.json)。
+
+首次建立模拟数据时，执行以下命令：
 
 ```sh
 pnpm install --frozen-lockfile
@@ -24,32 +30,37 @@ pnpm db:seed
 pnpm dev
 ```
 
-Open [http://localhost:3000/agent](http://localhost:3000/agent). The default model mode is `mock`, which runs without an API key or network access. Try asking for your balance, recent spending or a transfer to a seeded contact. The demo verification code is `123456`.
+打开[对话页面](http://localhost:3000/agent)。
+默认 `mock` 模式无需密钥或网络。
+模拟验证码为 `123456`。
 
-For live model configuration, including DeepSeek, follow the [development guide](docs/development.md#model-configuration). Put credentials in `.env.local`.
+警告：再次执行 `pnpm db:seed` 会重建演示数据。
+数据库操作与 DeepSeek 配置见[开发指南](docs/cn/development.md)。
+真实模型密钥保存在 `.env.local`。
 
-## Common commands
+## 常用命令
 
-| Command | Purpose |
+| 命令 | 用途 |
 | --- | --- |
-| `pnpm dev` | Start the development server |
-| `pnpm typecheck` | Check TypeScript types |
-| `pnpm lint` | Run ESLint |
-| `pnpm test` | Run the offline test suite |
-| `pnpm build` / `pnpm start` | Build and serve the production application |
-| `pnpm db:studio` | Inspect the local database |
-| `pnpm db:reset` | Delete the demo database and seed a fresh dataset; stop the application first |
-| `pnpm scheduler:tick` | Process one batch of due scheduled intents |
-| `pnpm agent:recover` / `pnpm agent:worker` | Recover interrupted runs once or run the recovery worker |
+| `pnpm dev` | 启动开发服务 |
+| `pnpm typecheck` | 检查 TypeScript 类型 |
+| `pnpm lint` | 检查代码规范 |
+| `pnpm test` | 运行离线测试 |
+| `pnpm build` / `pnpm start` | 构建并启动生产服务 |
+| `pnpm db:studio` | 查看本地数据库 |
+| `pnpm db:reset` | 删除模拟数据库并重建数据；执行前停止服务 |
+| `pnpm scheduler:tick` | 检查到期定时任务 |
+| `pnpm agent:recover` | 恢复一批中断运行 |
+| `pnpm agent:worker` | 启动常驻恢复服务 |
 
-## Documentation
+## 文档
 
-Start with the [documentation index](docs/README.md).
+开发说明统一放在 [docs/cn](docs/cn/README.md)。
 
-- [Development guide](docs/development.md): configuration, database lifecycle, testing and change workflows.
-- [Architecture](docs/architecture.md): module boundaries, authorization and execution paths.
-- [Durable agent execution](docs/agent-durability.md): event persistence, retry policies and the Pi Durable decision.
-- [Financial values](docs/financial-values.md): Decimal, BigInt, units and settlement rules.
-- [Security](docs/security.md) and [known limits](docs/known-risks.md): enforced policy and simulator boundaries.
+- [开发指南](docs/cn/development.md)：安装、配置和运行。
+- [架构设计](docs/cn/architecture.md)：模块职责和执行流程。
+- [持久化与恢复](docs/cn/agent-durability.md)：事件、重试和恢复。
+- [金融数值与结算](docs/cn/financial-values.md)：单位、精度和结算。
+- [安全设计](docs/cn/security.md)与[当前限制](docs/cn/known-risks.md)：权限和模拟边界。
 
-The competition requirements are recorded in [req.md](req.md).
+比赛要求见 [req.md](req.md)。

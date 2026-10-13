@@ -1,0 +1,42 @@
+# 术语表
+
+中文说明使用下表名称。
+代码标识、接口名和状态值保留英文原文。
+
+| 中文名称 | 英文或代码标识 | 含义 |
+| --- | --- | --- |
+| 银行智能体 | Agent | 理解请求并提出银行工具调用的运行组件 |
+| 运行 | `AgentRun` | 一次已登记输入的执行过程 |
+| 模型请求 | `ModelRequest` | 一轮已保存上下文的模型服务请求 |
+| 工具调用 | `ToolInvocation` | 具有服务端身份的单次工具执行 |
+| 事件日志 | `AgentRunEvent` | 按运行内序号保存的事件 |
+| 检查点 | checkpoint | 能恢复执行的完整持久化状态 |
+| 执行租约 | lease | 有时限的执行所有权 |
+| 提交校验 | fence | 提交时检查执行者仍持有所有权 |
+| 执行键 | operation key | 用于识别和去重业务操作的服务端键 |
+| 输入摘要 | request digest | 规范输入的摘要，用于识别参数变化 |
+| 执行回执 | `ExecutionReceipt` | 已提交业务的完整原结果 |
+| 重放 | replay | 读取并返回已保存的原结果 |
+| 重试 | retry | 重新执行同一调用，并增加尝试次数 |
+| 恢复 | recovery | 从持久化状态继续原运行或工作流 |
+| 人工核对 | reconciliation | 结果不能证明时，由人工核对证据 |
+| 待确认操作 | `PendingAction` | 等待用户确认或认证的原操作 |
+| 多因子认证 | MFA | 高风险操作的强化身份认证机制 |
+| 工作流 | workflow | 由节点及依赖组成的业务执行过程 |
+| 有向无环图 | DAG | 没有循环依赖的任务图 |
+| 预算额度 | budget envelope | 记账预算，不冻结可提现资金 |
+| 入账金额 | booked amount | 已提交账本的整数分金额 |
+| 估值 | valuation | 尚未舍入为入账金额的价值估计 |
+| 年化收益率 | `annualYieldRate` | 无量纲比例，展示时转换为百分数 |
+| 银行业务工具库 | SDK、`banking-sdk/` | 执行所属用户的模拟银行业务 |
+| 有符号 64 位整数 | INT64 | 当前已入账金额的数据库存储范围 |
+| 绿色权限 | GREEN | 当前策略允许自动执行 |
+| 黄色权限 | YELLOW | 执行前需要用户确认 |
+| 红色权限 | RED | 执行前需要多因子认证 |
+| 模拟模型 | mock | 使用脚本回复，不联系模型服务商 |
+| 在线模型 | live | 请求已配置的模型服务商 |
+
+MFA 的全称是 Multi-Factor Authentication。
+DAG 的全称是 Directed Acyclic Graph。
+SDK 的全称是 Software Development Kit。
+当前 MFA 使用模拟验证码，能力边界见[当前限制](known-risks.md)。

@@ -1,0 +1,71 @@
+# 文档维护规则
+
+## 适用范围
+
+本规则用于维护 `docs/cn/`。
+开发者与 AI 修改文档时，必须遵守本规则。
+
+正文必须使用中文。
+正文必须遵守 [STC 技能](../../.agents/skills/stc/SKILL.md)。
+代码、命令、文件路径和接口名必须保留准确写法。
+代码与注释的语言约定见用户或项目指令。
+
+## 内容归属
+
+每个规则必须只在 1 份专题文档中解释。
+其他文档必须链接对应专题。
+
+| 内容 | 文档 |
+| --- | --- |
+| 文档入口 | [README.md](README.md) |
+| 名称与定义 | [terms.md](terms.md) |
+| 环境、命令、数据库操作 | [development.md](development.md) |
+| 模块职责与执行顺序 | [architecture.md](architecture.md) |
+| 事件、检查点、重试与恢复 | [agent-durability.md](agent-durability.md) |
+| 金融单位与结算 | [financial-values.md](financial-values.md) |
+| 权限、认证与审计 | [security.md](security.md) |
+| 人工接管与证据处理 | [manual-review.md](manual-review.md) |
+| 定时任务与提醒 | [scheduled-tasks.md](scheduled-tasks.md) |
+| 测试方法与证据范围 | [test-cases.md](test-cases.md) |
+| 模拟能力与未验证条件 | [known-risks.md](known-risks.md) |
+
+项目根目录的 `README.md` 必须保留项目入口职责。
+详细开发说明必须放在 `docs/cn/`。
+
+## 事实与措辞
+
+- 改动契约时，必须同时更新对应专题。
+- 描述功能时，必须区分已提供、模拟和未验证能力。
+- 引用测试结果时，必须写清执行范围和证据来源。
+- 不得把旧验收数量写成当前测试结果。
+- 新增名称前，必须检查并更新术语表。
+- 用户只需当前说明时，不得新增重复修复报告。
+- 代码不支持的旧格式，不得写成可用功能。
+- 文档示例必须使用占位密钥。
+- 不得读取或公开 `.env.local` 的凭据。
+
+## 修改与核验步骤
+
+1. 阅读对应代码和现有专题。
+2. 检查重叠内容，确定信息归属。
+3. 修改事实变化影响的段落。
+4. 更新目录和引用路径。
+5. 检查句意、术语、单位与权限条件。
+6. 运行 STC 检查命令。
+7. 核验源码路径与文档链接。
+
+普通专题必须按 `for-document` 检查。
+本规则必须按 `for-instruction-writing` 检查。
+机器检查报告的错误必须修复。
+Anti-Echo 疑点必须删除或记录具体保留理由。
+文档变化后，必须重新核验疑点。
+复核记录可保存到工作区的 `.pnpm-store/`。
+
+```sh
+node .agents/skills/stc/tools/cli.mjs check docs/cn/README.md --profile for-document --anti-echo
+node .agents/skills/stc/tools/cli.mjs check docs/cn/CONTEXT.md --profile for-instruction-writing --anti-echo
+```
+
+临时文件必须保存在当前工作区。
+删除旧文件前，必须将独有的有效事实写入专题。
+删除旧文件后，必须更新全部引用。
