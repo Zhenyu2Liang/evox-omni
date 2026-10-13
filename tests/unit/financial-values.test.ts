@@ -81,4 +81,14 @@ describe('exact financial values', () => {
     expect(() => valuationToMinor('-0.001')).toThrow();
     expect(() => moneyToCents('0.005')).toThrow();
   });
+
+  it.each(['1e-9999999999999999', '1e99999999999999999999', '0e99999999999999999999'])
+    ('rejects the unsupported exponent in %s before Decimal can underflow to zero', value => {
+      expect(() => decimalText(value)).toThrow(expect.objectContaining({ code: 'VALIDATION' }));
+    });
+
+  it('normalizes supported values even when a long mantissa needs a larger exponent', () => {
+    expect(decimalText(`0.${'0'.repeat(119)}1e129`)).toBe('1000000000');
+    expect(decimalText(`1${'0'.repeat(111)}e-129`)).toBe('0.000000000000000001');
+  });
 });

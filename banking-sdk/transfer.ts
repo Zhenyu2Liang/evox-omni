@@ -39,6 +39,7 @@ import { demoNow } from '../lib/clock';
 import { executionReceiptId, idempotentTransferTxId, requestDigest } from '@/lib/ledger';
 import { accounts, contacts, executionReceipts, transactions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
+import { maskAwarePhoneMatch } from '../lib/phone';
 import { safeParse, toJson } from '../lib/json';
 import { centsToMoney, moneyToCents, normalizeMoney, normalizeTransferAmount, type MoneyAmount } from '../lib/money';
 import { toContactView } from './contact';
@@ -157,7 +158,7 @@ async function resolveRecipient(userId: string, input: TransferInput): Promise<C
     const phone = input.phone;
     const matches = await contacts.searchContacts(userId, phone);
     const exact = matches.filter((c) => c.phone === phone);
-    const pool = exact.length > 0 ? exact : matches.filter((c) => c.phone.includes(phone));
+    const pool = exact.length > 0 ? exact : matches.filter((c) => maskAwarePhoneMatch(phone, c.phone));
     if (pool.length === 0) throw new AppError('NOT_FOUND', `No contact matches phone ${phone}`);
     if (pool.length > 1) {
       throw new AppError('CONFLICT', `Multiple contacts match phone ${phone}`, {

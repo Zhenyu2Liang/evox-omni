@@ -138,18 +138,20 @@ async function assertPlanNodeUnchanged(
  * replaced. A write that would have been launched by a superseded executor therefore rolls back with
  * NO side effect.
  *
- * Returns `undefined` when either id is absent (a standalone call has no plan claim to fence on), or
- * when the plan/node row cannot be read at START (nothing to capture — existing behavior preserved).
+ * Returns `undefined` only for standalone calls. An incomplete link or missing plan/node fails closed.
  */
 export async function buildPlanNodeFence(
   taskId: string | null | undefined,
   nodeId: string | null | undefined,
 ): Promise<ExecutionFenceCheck | undefined> {
-  if (!isUsableId(taskId) || !isUsableId(nodeId)) return undefined;
+  if (taskId == null && nodeId == null) return undefined;
+  if (!isUsableId(taskId) || !isUsableId(nodeId)) {
+    throw fenceConflict('Incomplete workflow execution identity', { taskId, nodeId });
+  }
   const plan = await getTask(taskId);
-  if (plan === null) return undefined;
+  if (plan === null) throw fenceConflict('Workflow no longer exists', { taskId, nodeId });
   const node = await getTaskNode(taskId, nodeId);
-  if (node === null) return undefined;
+  if (node === null) throw fenceConflict('Workflow node no longer exists', { taskId, nodeId });
 
   const captured: CapturedPlanIdentity = {
     planToken: plan.executionToken,

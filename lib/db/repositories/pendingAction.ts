@@ -203,15 +203,23 @@ export const setPendingActionStatus = updatePendingActionStatus;
  * It never GRANTS anything: the row's status CAS is still the authority; the lease is a TTL-bounded
  * liveness hint (see the agent layer's `EXECUTION_LEASE_TTL_MS`).
  */
-export function setPendingActionLease(
+export async function claimPendingActionLease(
   actionId: string,
-  lease: { owner: string; expiresAt: Date },
+  lease: { owner: string; expiresAt: Date; now: Date },
   client: Prisma.TransactionClient = prisma,
-): Promise<PendingAction> {
-  return client.pendingAction.update({
-    where: { id: actionId },
+): Promise<boolean> {
+  const result = await client.pendingAction.updateMany({
+    where: {
+      id: actionId,
+      status: { in: ['pending', 'awaiting_mfa'] },
+      OR: [
+        { executionLeaseOwner: null },
+        { executionLeaseExpiresAt: { lte: lease.now } },
+      ],
+    },
     data: { executionLeaseOwner: lease.owner, executionLeaseExpiresAt: lease.expiresAt },
   });
+  return result.count === 1;
 }
 
 /**

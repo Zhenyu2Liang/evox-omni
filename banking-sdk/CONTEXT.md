@@ -18,6 +18,8 @@ Transfers atomically debit an owned checking account, create its ledger entry an
 
 Investment purchase and redemption atomically change account balance, holding and ledger. Purchase stores its original SDK outcome; redemption stores its exact valuation, rounding policy, settled amount and original balance. Same-identity retries return those outcomes. A distinct redemption identity cannot redeem a closed holding again.
 
+Investment replay validates complete original results before resolving mutable purchase eligibility or the current checking account. Redemption validates canonical amount/balance fields, holding/product identity, timestamp, original valuation and HALF_UP settlement; a changed supplied approval amount conflicts. Invalid evidence never credits again. Transfer phone resolution uses the shared masked-phone matcher and refuses ambiguous matches.
+
 Budget and scheduled-intent creates use owner-scoped replay checks. Virtual cards use deterministic execution identities and verify monthly limits. Card transitions and subscriptions validate ownership and state. A budget is an accounting envelope rather than a funds hold.
 
 ## Errors and reads

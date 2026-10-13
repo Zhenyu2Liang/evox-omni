@@ -126,11 +126,25 @@ function parseSubscribeResult(holding: InvestmentHolding): InvestResult {
  * data-integrity failure of an already-closed redemption: surface it as `CONFLICT` rather than
  * letting a raw exception escape the SDK (never a fabricated success, never swallowed).
  */
-function parseRedeemResult(stored: string, holdingId: string): InvestResult {
+function parseRedeemResult(holding: InvestmentHolding, expectedAmount?: string): InvestResult {
   try {
-    return JSON.parse(stored) as InvestResult;
+    if (holding.status !== 'REDEEMED' || holding.redeemResult === null) throw new Error('Missing original redemption result.');
+    const result: unknown = JSON.parse(holding.redeemResult);
+    if (typeof result !== 'object' || result === null || Array.isArray(result)) throw new Error('Invalid redemption result.');
+    const stored = result as Record<string, unknown>;
+    if (stored.success !== true || stored.holdingId !== holding.id || stored.productId !== holding.productId ||
+        typeof stored.amount !== 'string' || normalizeMoney(stored.amount) !== stored.amount || moneyToCents(stored.amount) < 0n ||
+        typeof stored.newBalance !== 'string' || normalizeMoney(stored.newBalance) !== stored.newBalance || moneyToCents(stored.newBalance) < 0n ||
+        typeof stored.sourceAccountId !== 'string' || stored.sourceAccountId.length === 0 ||
+        typeof stored.occurredAt !== 'number' || !Number.isSafeInteger(stored.occurredAt) || !Number.isFinite(new Date(stored.occurredAt).getTime()) ||
+        typeof stored.redemptionValuation !== 'string' || nonNegativeDecimal(stored.redemptionValuation) !== stored.redemptionValuation ||
+        stored.settlementRounding !== 'HALF_UP' || valuationToMinor(stored.redemptionValuation) !== moneyToCents(stored.amount) ||
+        expectedAmount !== undefined && moneyToCents(expectedAmount) !== moneyToCents(stored.amount)) {
+      throw new Error('Redemption result does not match the committed holding or settlement.');
+    }
+    return stored as unknown as InvestResult;
   } catch {
-    throw new AppError('CONFLICT', '该持仓已赎回', { holdingId, status: 'REDEEMED' });
+    throw new AppError('CONFLICT', 'The investment redemption has no valid matching original execution result.', { holdingId: holding.id });
   }
 }
 
@@ -144,27 +158,8 @@ function parseRedeemResult(stored: string, holdingId: string): InvestResult {
  * a second time or reconstructs a balance from current account state.
  */
 export async function subscribeInvestment(input: SubscribeInvestmentInput): Promise<InvestResult> {
-  const product = await investments.getProduct(input.productId);
-  if (product === null) {
-    throw new AppError('NOT_FOUND', `投资产品不存在：${input.productId}`, {
-      productId: input.productId,
-    });
-  }
-
   const amountMinor = moneyToCents(input.amount);
-  if (amountMinor <= 0n || amountMinor < product.minAmountMinor) {
-    throw new AppError('VALIDATION', `Purchase amount is below the minimum ${centsToMoney(product.minAmountMinor)}.`, {
-      amount: centsToMoney(amountMinor),
-      minAmount: centsToMoney(product.minAmountMinor),
-    });
-  }
-
-  const account = await accounts.getCheckingAccount(input.userId);
-  if (account === null) {
-    throw new AppError('NOT_FOUND', `未找到用户的活期账户：${input.userId}`, {
-      userId: input.userId,
-    });
-  }
+  if (amountMinor <= 0n) throw new AppError('VALIDATION', 'Purchase amount must be positive.');
 
   const now = demoNow();
 
@@ -173,6 +168,16 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
     tx: Tx,
     replayKey: string | undefined,
   ): Promise<InvestResult> => {
+    // Mutable eligibility applies only to a new purchase, after committed-result replay.
+    const product = await investments.getProduct(input.productId);
+    if (product === null) throw new AppError('NOT_FOUND', 'Investment product does not exist.', { productId: input.productId });
+    if (amountMinor < product.minAmountMinor) {
+      throw new AppError('VALIDATION', `Purchase amount is below the minimum ${centsToMoney(product.minAmountMinor)}.`, {
+        amount: centsToMoney(amountMinor), minAmount: centsToMoney(product.minAmountMinor),
+      });
+    }
+    const account = await accounts.getCheckingAccount(input.userId);
+    if (account === null) throw new AppError('NOT_FOUND', 'Checking account does not exist.', { userId: input.userId });
     // Atomic sufficient-funds check + debit (rolls back with nothing written when short).
     const debited = await tx.account.updateMany({
       where: { id: account.id, userId: input.userId, balanceMinor: { gte: amountMinor } },
@@ -277,13 +282,6 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
     });
   }
 
-  const account = await accounts.getCheckingAccount(input.userId);
-  if (account === null) {
-    throw new AppError('NOT_FOUND', `未找到用户的活期账户：${input.userId}`, {
-      userId: input.userId,
-    });
-  }
-
   const key = normalizeIdempotencyKey(input.idempotencyKey);
   const now = demoNow();
 
@@ -293,13 +291,15 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
     if (!current || current.userId !== input.userId) throw new AppError('NOT_FOUND', 'Investment holding does not exist.');
     if (current.status !== 'HOLDING') {
       if (key !== undefined && current.redeemExecutionKey === key && current.redeemResult !== null) {
-        return parseRedeemResult(current.redeemResult, input.holdingId);
+        return parseRedeemResult(current, input.expectedRedemptionAmount);
       }
       throw new AppError('CONFLICT', 'Investment holding has already been redeemed.', {
         holdingId: input.holdingId,
         status: current.status,
       });
     }
+    const account = await accounts.getCheckingAccount(input.userId);
+    if (account === null) throw new AppError('NOT_FOUND', 'Checking account does not exist.', { userId: input.userId });
     const redemptionValuation = current.estimatedMarketValue === null
       ? centsToMoney(current.principalAmountMinor)
       : nonNegativeDecimal(current.estimatedMarketValue);
@@ -321,8 +321,8 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
       const storedKey = stored?.redeemExecutionKey ?? null;
       const storedResult = stored?.redeemResult ?? null;
       // SAME identity → replay the ORIGINAL result (credit nothing); anything else → CONFLICT.
-      if (key !== undefined && storedKey !== null && storedKey === key && storedResult !== null) {
-        return parseRedeemResult(storedResult, input.holdingId);
+      if (key !== undefined && stored && storedKey !== null && storedKey === key && storedResult !== null) {
+        return parseRedeemResult(stored, input.expectedRedemptionAmount);
       }
       throw new AppError('CONFLICT', '该持仓已赎回', {
         holdingId: input.holdingId,

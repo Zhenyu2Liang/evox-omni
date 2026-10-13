@@ -5,7 +5,7 @@ import { prepareBankingCommand } from '@/lib/contracts/command';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { AgentRunStatus } from '@/lib/contracts/runtime';
 import { catalogEntry } from '@/lib/contracts/tool-catalog';
-import { beginAgentRun, finalizeReceiptedAgentRun, getAgentRun, listRunInvocations, restoreInvocationFromReceipt } from '@/lib/db/repositories/agentRun';
+import { beginAgentRun, finalizeReceiptedAgentRun, getAgentRun, listRunInvocations, restoreInvocationFromReceipt, runPendingActionWhere, synchronizeRunActionInvocations } from '@/lib/db/repositories/agentRun';
 import { prisma } from '@/lib/db/client';
 import { createToolRegistry, TOOL_NAMES } from '@/agent/tools';
 import { readCommandReceipt } from '@/agent/command-execution';
@@ -84,13 +84,15 @@ async function verifiedResponse(invocation: ToolInvocation, run: AgentRun): Prom
 /** Explicit recovery restores facts or retries reads. It never authorizes or replays a bank write. */
 export async function recoverOwnedRun(runId: string, identity: RunIdentity, invocationId?: string): Promise<RunRecoveryResponse> {
   const original = await ownedRun(runId, identity);
+  await synchronizeRunActionInvocations(runId, identity.sessionId, identity.userId);
   const invocations = await listRunInvocations(runId);
   const selected = invocationId ? invocations.filter(invocation => invocation.id === invocationId) : invocations;
   if (invocationId && selected.length === 0) throw new AppError('NOT_FOUND', 'Tool invocation not found');
   const outcomes: RunRecoveryResponse['outcomes'] = [];
   // Receipt facts are safe to recover even when a confirmation run currently owns the session.
   for (const invocation of selected) {
-    if (invocation.status === 'completed') { outcomes.push({ invocationId: invocation.id, action: 'replayed' }); continue; }
+    if (invocation.status === 'completed' && invocation.resultJson !== null) { outcomes.push({ invocationId: invocation.id, action: 'replayed' }); continue; }
+    if (invocation.status === 'cancelled') { outcomes.push({ invocationId: invocation.id, action: 'stopped', reason: 'CANCELLED' }); continue; }
     const resultJson = await verifiedResponse(invocation, original);
     if (resultJson !== undefined) {
       await restoreInvocationFromReceipt({ invocationId: invocation.id, userId: original.userId, toolName: invocation.toolName, operationKey: invocation.operationKey, resultJson });
@@ -100,6 +102,7 @@ export async function recoverOwnedRun(runId: string, identity: RunIdentity, invo
   await finalizeReceiptedAgentRun(runId, identity.sessionId, identity.userId);
   const current = await ownedRun(runId, identity);
   if (current.status === 'completed') return { run: await getOwnedRunSummary(runId, identity), outcomes, message: 'Previously committed results were recovered. No bank write was repeated.' };
+  if (current.status === 'failed' && current.errorCode === 'CANCELLED') return { run: await getOwnedRunSummary(runId, identity), outcomes, message: 'The original operation was cancelled. No operation was repeated.' };
   if (current.status === 'waiting_confirmation' || current.status === 'waiting_verification') {
     for (const invocation of selected.filter(invocation => !outcomes.some(outcome => outcome.invocationId === invocation.id))) outcomes.push({ invocationId: invocation.id, action: 'waiting', reason: 'AUTHORIZATION_REQUIRED' });
     return { run: await getOwnedRunSummary(runId, identity), outcomes, message: 'The original confirmation or verification is still required.' };
@@ -131,12 +134,12 @@ export async function recoverOwnedRun(runId: string, identity: RunIdentity, invo
       outcomes.push({ invocationId: outcome.invocationId, action: outcome.action, ...('reason' in outcome ? { reason: outcome.reason } : {}) });
     }
     const remaining = await listRunInvocations(runId);
-    const pending = await prisma.pendingAction.findMany({ where: { sessionId: identity.sessionId, userId: identity.userId, status: { in: ['pending', 'awaiting_mfa', 'confirmed', 'needs_reconciliation'] } }, select: { status: true } });
+    const pending = await prisma.pendingAction.findMany({ where: { ...runPendingActionWhere(identity.sessionId, identity.userId, remaining), status: { in: ['pending', 'awaiting_mfa', 'confirmed', 'needs_reconciliation'] } }, select: { status: true } });
     let status: Exclude<AgentRunStatus, 'running'>;
     if (remaining.some(invocation => invocation.status === 'waiting_verification') || pending.some(action => action.status === 'awaiting_mfa')) status = 'waiting_verification';
     else if (remaining.some(invocation => invocation.status === 'waiting_confirmation') || pending.some(action => action.status === 'pending') || outcomes.some(outcome => outcome.action === 'waiting')) status = 'waiting_confirmation';
-    else if (remaining.length === 0 || remaining.some(invocation => invocation.status === 'needs_reconciliation' || invocation.status === 'interrupted') || pending.length !== 0) status = 'interrupted';
-    else if (remaining.some(invocation => invocation.status === 'failed')) status = 'failed';
+    else if (remaining.length === 0 || remaining.some(invocation => invocation.status === 'needs_reconciliation' || invocation.status === 'interrupted' || (invocation.status === 'completed' && invocation.resultJson === null)) || pending.length !== 0) status = 'interrupted';
+    else if (remaining.some(invocation => invocation.status === 'failed' || invocation.status === 'cancelled')) status = 'failed';
     else status = 'completed';
     await journal.finish(status);
     return { run: await getOwnedRunSummary(runId, identity), outcomes,

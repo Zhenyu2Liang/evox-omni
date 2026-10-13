@@ -148,8 +148,8 @@ export async function finishInvocationWithEvent(lease: AgentRunLease, input: Fin
     await assertAgentRunLease(lease, tx);
     const invocation = await tx.toolInvocation.findUnique({ where: { id: input.invocationId } });
     if (!invocation || invocation.runId !== lease.runId) throw new AppError('NOT_FOUND', 'Tool invocation not found');
-    // A bank receipt may already have recovered the result; raw end events cannot rewrite that fact.
-    if (invocation.status === 'completed' && invocation.resultJson !== null) return appendInTransaction(lease.runId, event, tx);
+    // Persisted receipt or action decisions cannot be rewritten by a late provider event.
+    if ((invocation.status === 'completed' && invocation.resultJson !== null) || invocation.status === 'cancelled' || invocation.status === 'failed' || invocation.status === 'needs_reconciliation') return appendInTransaction(lease.runId, event, tx);
     const waiting = invocation.status === 'waiting_confirmation' || invocation.status === 'waiting_verification';
     await tx.toolInvocation.update({ where: { id: invocation.id }, data: {
       status: waiting ? invocation.status : input.status,
@@ -191,18 +191,58 @@ export function getAgentRun(runId: string): Promise<AgentRun | null> {
   return prisma.agentRun.findUnique({ where: { id: runId } });
 }
 
-/** A paused run can settle from receipts without owning or disturbing a newer session run. */
+/** Only actions linked to this run may determine its recovery state. */
+export function runPendingActionWhere(sessionId: string, userId: string, invocations: readonly ToolInvocation[]): Prisma.PendingActionWhereInput {
+  const taskIds = new Set<string>();
+  for (const invocation of invocations) {
+    if (invocation.operationKey.startsWith('nxe:')) {
+      const taskId = invocation.operationKey.split(':')[1];
+      if (taskId) taskIds.add(taskId);
+    }
+    if (invocation.toolName === 'submit_plan') {
+      const result = safeParse<{ data?: { id?: unknown } } | null>(invocation.resultJson, null);
+      if (typeof result?.data?.id === 'string') taskIds.add(result.data.id);
+    }
+  }
+  return { sessionId, userId, OR: [
+    { invocationId: { in: invocations.map(invocation => invocation.id) } },
+    { id: { in: invocations.map(invocation => invocation.operationKey) } },
+    { taskId: { in: [...taskIds] } },
+  ] };
+}
+
+/** Synchronize persisted action decisions without authorizing or executing another operation. */
+export async function synchronizeRunActionInvocations(runId: string, sessionId: string, userId: string): Promise<void> {
+  await prisma.$transaction(async tx => {
+    const run = await tx.agentRun.findUnique({ where: { id: runId } });
+    if (!run || run.sessionId !== sessionId || run.userId !== userId) throw new AppError('SECURITY_DENIED', 'Run recovery identity is not valid');
+    const invocations = await tx.toolInvocation.findMany({ where: { runId }, select: { id: true } });
+    const actions = await tx.pendingAction.findMany({ where: {
+      sessionId, userId, invocationId: { in: invocations.map(invocation => invocation.id) },
+      status: { in: ['executed', 'cancelled', 'failed', 'needs_reconciliation'] },
+    }, select: { id: true } });
+    for (const action of actions) await settleInvocationFromAction(action.id, tx);
+  });
+}
+
+/** A paused run can settle from stored terminal facts without disturbing a newer session run. */
 export async function finalizeReceiptedAgentRun(runId: string, sessionId: string, userId: string): Promise<void> {
   await prisma.$transaction(async tx => {
     const run = await tx.agentRun.findUnique({ where: { id: runId } });
     if (!run || run.sessionId !== sessionId || run.userId !== userId) throw new AppError('SECURITY_DENIED', 'Run recovery identity is not valid');
     if (run.status === 'running' || run.status === 'completed') return;
     const invocations = await tx.toolInvocation.findMany({ where: { runId } });
-    if (invocations.length === 0 || invocations.some(invocation => invocation.status !== 'completed')) return;
-    const outstanding = await tx.pendingAction.count({ where: { sessionId, userId, status: { in: ['pending', 'awaiting_mfa', 'confirmed', 'needs_reconciliation'] } } });
+    if (invocations.length === 0 || invocations.some(invocation => !['completed', 'cancelled', 'failed'].includes(invocation.status))) return;
+    if (invocations.some(invocation => invocation.status === 'completed' && invocation.resultJson === null)) return;
+    const outstanding = await tx.pendingAction.count({ where: { ...runPendingActionWhere(sessionId, userId, invocations), status: { in: ['pending', 'awaiting_mfa', 'confirmed', 'needs_reconciliation'] } } });
     if (outstanding !== 0) return;
-    await tx.agentRun.update({ where: { id: runId }, data: { status: 'completed', finishedAt: new Date(), errorCode: null } });
-    await appendInTransaction(runId, { channel: 'internal', eventType: 'run_reconciled', payloadJson: JSON.stringify({ runId, status: 'completed' }) }, tx);
+    const failed = invocations.find(invocation => invocation.status === 'failed');
+    const cancelled = invocations.some(invocation => invocation.status === 'cancelled');
+    const status = failed || cancelled ? 'failed' : 'completed';
+    const errorCode = failed ? failed.errorCode ?? 'TOOL_FAILED' : cancelled ? 'CANCELLED' : null;
+    if (run.status === status && run.errorCode === errorCode) return;
+    await tx.agentRun.update({ where: { id: runId }, data: { status, finishedAt: new Date(), errorCode } });
+    await appendInTransaction(runId, { channel: 'internal', eventType: 'run_reconciled', payloadJson: JSON.stringify({ runId, status, errorCode }) }, tx);
   });
 }
 
@@ -286,6 +326,7 @@ export async function settleInvocationFromAction(actionId: string, client: Prism
   else if (action.status === 'failed') status = 'failed';
   else if (action.status === 'needs_reconciliation') status = 'needs_reconciliation';
   if (!status) return;
+  if (invocation.status === status && (resultJson === undefined || invocation.resultJson === resultJson)) return;
   const updated = await client.toolInvocation.updateMany({ where: { id: invocation.id, status: { not: 'completed' } }, data: {
     status, ...(resultJson ? { resultJson } : {}), finishedAt: status === 'needs_reconciliation' ? null : new Date(),
     errorCode: status === 'failed' ? 'TOOL_FAILED' : status === 'needs_reconciliation' ? 'COMMIT_STATE_UNKNOWN' : null,

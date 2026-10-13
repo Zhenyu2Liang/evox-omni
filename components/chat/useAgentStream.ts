@@ -323,28 +323,9 @@ function mfaSummary(state: ChatUIState, hint: string | undefined): MfaActionSumm
 }
 
 /**
- * A settled-action signal emitted by `./actions#postAction` when a server action route reports a
- * TERMINAL status. ADDITIVE — the frozen `AgentStreamEvent` union is unchanged — so it is read
- * structurally; a server that never emits it falls back to the previous behaviour.
+ * The current typed settlement signal emitted by action transport and persisted run recovery.
  */
-interface ActionSettledEvent {
-  type: 'action_settled';
-  actionId: string;
-  status: string;
-  message?: string;
-}
-
-function asActionSettledEvent(event: AgentStreamEvent): ActionSettledEvent | undefined {
-  const record = event as unknown as { type?: unknown; actionId?: unknown; status?: unknown; message?: unknown };
-  if (record.type !== 'action_settled') return undefined;
-  if (typeof record.actionId !== 'string' || typeof record.status !== 'string') return undefined;
-  return {
-    type: 'action_settled',
-    actionId: record.actionId,
-    status: record.status,
-    ...(typeof record.message === 'string' ? { message: record.message } : {}),
-  };
-}
+type ActionSettledEvent = Extract<AgentStreamEvent, { type: 'action_settled' }>;
 
 /**
  * Fold a settled-action signal: stamp the server-reported status (+ optional reason) onto the
@@ -384,8 +365,26 @@ function settleAction(state: ChatUIState, event: ActionSettledEvent): ChatUIStat
     return { ...message, cards: nextCards };
   });
 
-  const withCards = changed ? { ...state, messages } : state;
-  if (matchesPending && asTerminalStatus(event.status) !== undefined) {
+  let withCards = changed ? { ...state, messages } : state;
+  const terminal = asTerminalStatus(event.status);
+  if (terminal !== undefined) {
+    const pendingReconciliations = state.pendingReconciliations.flatMap(row => {
+      if (row.actionId !== event.actionId) return [row];
+      return terminal === 'needs_reconciliation' ? [{ ...row, attention: 'reconciliation' as const }] : [];
+    });
+    if (terminal === 'needs_reconciliation' && !pendingReconciliations.some(row => row.actionId === event.actionId)) {
+      const inline = state.messages.flatMap(message => message.cards ?? []).find(card =>
+        (card.type === 'confirmation' && card.action.actionId === event.actionId) ||
+        (card.type === 'mfa' && card.actionId === event.actionId));
+      const summary = matchesPending && pending?.summary.toolName ? pending.summary
+        : inline?.type === 'confirmation' ? inline.action : inline?.type === 'mfa' ? inline.action : undefined;
+      if (summary?.toolName) pendingReconciliations.push({
+        actionId: event.actionId, summary: { ...summary, toolName: summary.toolName }, attention: 'reconciliation',
+      });
+    }
+    withCards = { ...withCards, pendingReconciliations };
+  }
+  if (matchesPending && terminal !== undefined) {
     return { ...withCards, pendingAction: undefined };
   }
   return withCards;
@@ -393,8 +392,7 @@ function settleAction(state: ChatUIState, event: ActionSettledEvent): ChatUIStat
 
 /** Fold ONE event into the state (immutable — returns a new state object). */
 function applyEvent(state: ChatUIState, event: AgentStreamEvent): ChatUIState {
-  const settled = asActionSettledEvent(event);
-  if (settled) return settleAction(state, settled);
+  if (event.type === 'action_settled') return settleAction(state, event);
 
   switch (event.type) {
     case 'session':
@@ -765,24 +763,12 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
   /**
    * Trigger the RECOVERY entry for an out-of-band action (`POST /api/actions/:id/recover`). The
    * server re-checks ownership and settles the action through the gateway's authorized path — the
-   * browser never replays a banking op itself. Folds the returned events like any other action; on
-   * SUCCESS the card is dropped from the out-of-band list (a FAILED recovery keeps it so the user can
-   * retry). Best-effort: a failure surfaces a SAFE `error` and never throws to the UI.
+   * browser never replays a banking op itself. The settlement event updates the attention entry:
+   * final known outcomes remove recovery controls; uncertain outcomes remain visible for manual
+   * reconciliation. A transport failure leaves the entry available and surfaces a safe error.
    */
   const recover = useCallback(
-    async (actionId: string) => {
-      await pull(() => recoverAction(actionId, endpoints), true, actionId);
-      setState((prev) =>
-        prev.error !== undefined
-          ? prev
-          : {
-              ...prev,
-              pendingReconciliations: prev.pendingReconciliations.filter(
-                (r) => r.actionId !== actionId,
-              ),
-            },
-      );
-    },
+    (actionId: string) => pull(() => recoverAction(actionId, endpoints), true, actionId),
     [pull, endpoints],
   );
 

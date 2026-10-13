@@ -1,5 +1,5 @@
 import type { Prisma, ExecutionReceipt } from '@prisma/client';
-import { prisma } from '@/lib/db/client';
+import { dbClient, prisma } from '@/lib/db/client';
 import { withinTransaction } from '@/lib/db/unit-of-work';
 import { AppError } from '@/lib/errors';
 import { executionReceiptId, requestDigest } from '@/lib/ledger';
@@ -41,7 +41,7 @@ async function verifiedResponse(command: BankingCommand, receipt: ExecutionRecei
 
 /** Original receipts are returned before consulting any mutable account or resource. */
 export async function readCommandReceipt(command: BankingCommand): Promise<ToolExecutionResult | undefined> {
-  const receipt = await prisma.executionReceipt.findUnique({
+  const receipt = await dbClient().executionReceipt.findUnique({
     where: { userId_key: { userId: command.userId, key: command.operationKey } },
   });
   if (!receipt) return;

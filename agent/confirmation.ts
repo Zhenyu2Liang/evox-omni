@@ -41,11 +41,11 @@ import { recordAudit } from '@/audit';
 import { getSession } from '@/lib/db/repositories/session';
 import {
   clearPendingActionLease,
+  claimPendingActionLease,
   getPendingAction,
   getPendingActionOwnership,
   getPendingActionPlanLink,
   listPendingActionsByTask,
-  setPendingActionLease,
 } from '@/lib/db/repositories/pendingAction';
 import { getTask } from '@/lib/db/repositories/task';
 import { newId } from '@/lib/ids';
@@ -948,13 +948,15 @@ async function verifyActionImpl(
  * (`EXECUTION_LEASE_TTL_MS`) is the bounded fallback for a crashed process. Returns the owner token to
  * release with, or `undefined` when no lease was taken (row gone, or not a decidable state).
  */
-async function beginExecutionLease(actionId: string): Promise<string | undefined> {
-  const row = await getPendingAction(actionId);
-  if (row === null) return undefined;
-  if (row.status !== 'pending' && row.status !== 'awaiting_mfa') return undefined;
+async function beginExecutionLease(actionId: string): Promise<{ owner?: string; blocked: boolean }> {
   const owner = newId('lease');
-  await setPendingActionLease(actionId, { owner, expiresAt: leaseExpiryFor(leaseNowMs()) });
-  return owner;
+  const now = leaseNowMs();
+  const claimed = await claimPendingActionLease(actionId, {
+    owner, now: new Date(now), expiresAt: leaseExpiryFor(now),
+  });
+  if (claimed) return { owner, blocked: false };
+  const row = await getPendingAction(actionId);
+  return { blocked: row?.status === 'pending' || row?.status === 'awaiting_mfa' };
 }
 
 /**
@@ -975,10 +977,13 @@ async function endExecutionLease(actionId: string, owner: string | undefined): P
  * are cleared in a `finally`, so a completed continuation (success, refusal, or a rolled-back result
  * transaction) leaves NO trace and a later re-run FINALIZES the wedged row.
  */
-async function withLiveConfirmation<T>(
+async function withLiveConfirmation(
   actionId: string,
-  run: () => Promise<T>,
-): Promise<T> {
+  run: () => Promise<ConfirmationOutcome>,
+  opts?: ConfirmOptions,
+): Promise<ConfirmationOutcome> {
+  // Validate ownership before changing even the execution-liveness metadata.
+  await resolveTrustedIdentity(actionId, opts);
   retainAction(actionId);
   let leaseOwner: string | undefined;
   try {
@@ -987,7 +992,11 @@ async function withLiveConfirmation<T>(
     // (→ a no-op `endExecutionLease`) and the `finally` still runs `releaseAction`. Every cleanup is
     // itself nested so a throwing `endExecutionLease` can never skip the ref-count release — the lease
     // self-heals via its TTL anyway, but a leaked ref-count would defer recovery forever.
-    leaseOwner = await beginExecutionLease(actionId);
+    const lease = await beginExecutionLease(actionId);
+    leaseOwner = lease.owner;
+    if (lease.blocked) {
+      return await conflictOutcome(actionId, new AppError('CONFLICT', 'Another continuation owns this decision.'));
+    }
     return await run();
   } finally {
     try {
@@ -1008,7 +1017,7 @@ export function confirmAction(
   actionId: string,
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
-  return withLiveConfirmation(actionId, () => confirmActionImpl(actionId, opts));
+  return withLiveConfirmation(actionId, () => confirmActionImpl(actionId, opts), opts);
 }
 
 /** RED — verify the mock MFA code, then authorize + execute (same LIVE marking as `confirmAction`). */
@@ -1017,7 +1026,7 @@ export function verifyAction(
   code: string,
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
-  return withLiveConfirmation(actionId, () => verifyActionImpl(actionId, code, opts));
+  return withLiveConfirmation(actionId, () => verifyActionImpl(actionId, code, opts), opts);
 }
 
 /** Cancel a pending action; no execution. */

@@ -20,18 +20,33 @@ import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 
 const userId = 'user_liming';
+const reservationArgs = { name: 'Birthday budget', amount: '1000' };
+const reservationRequest = 'Reserve 1000 for a birthday budget';
 beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
 afterAll(() => disconnectTestPrisma());
 
-/** One plan-node-shaped GREEN write: the node identity is the SDK idempotency key. */
+/** A running workflow with real execution claims owns the automatic banking write. */
+async function seedRunningWriteNode(sessionId: string) {
+  await getTestPrisma().agentTask.create({ data: {
+    id: 'task_write_audit', userId, sessionId, goal: reservationRequest,
+    status: 'running', executionToken: 'write-audit-plan-owner', executionClaimedAt: new Date(),
+    nodes: { create: [{
+      nodeId: 'node_write_audit', name: 'Reserve birthday budget', kind: 'tool',
+      tool: 'reserve_budget', args: JSON.stringify(reservationArgs), dependencies: '[]', order: 0,
+      status: 'running', executionToken: 'write-audit-node-owner', executionClaimedAt: new Date(),
+    }] },
+  } });
+}
+
+/** One authorized GREEN write: the persisted node identity is the SDK idempotency key. */
 function reservePlanNode(sessionId: string, taskId: string, nodeId: string) {
   return executeGatedTool({
     userId,
     sessionId,
     toolName: 'reserve_budget',
-    args: { name: '生日预算', amount: '1000' },
-    userRequest: '预留1000元生日预算',
+    args: reservationArgs,
+    userRequest: reservationRequest,
     taskId,
     nodeId,
   });
@@ -51,6 +66,7 @@ async function reserveStandalone(sessionId: string, idempotencyKey: string) {
 
 it('[integration] a GREEN reserve_budget write is audited with its tool args, identity and TRUE result', async () => {
   const sessionId = (await getOrCreateSession(userId)).sessionId;
+  await seedRunningWriteNode(sessionId);
 
   const outcome = await reservePlanNode(sessionId, 'task_write_audit', 'node_write_audit');
   expect(outcome.ok, outcome.error).toBe(true);
@@ -77,14 +93,14 @@ it('[integration] a GREEN reserve_budget write is audited with its tool args, id
   // Authorization/identity: server-resolved owner + session, never model-supplied.
   expect(row.userId).toBe(userId);
   expect(row.sessionId).toBe(sessionId);
-  expect(row.userRequest).toBe('预留1000元生日预算');
+  expect(row.userRequest).toBe(reservationRequest);
   expect(row.taskId).toBe('task_write_audit');
   expect(row.nodeId).toBe('node_write_audit');
 
   // The ORIGINAL request (args) and the result actually persisted.
   expect(JSON.parse(row.toolArgs!)).toMatchObject({
     userId,
-    name: '生日预算',
+    name: reservationArgs.name,
     amount: '1000.00',
     idempotencyKey: key,
   });
@@ -96,6 +112,7 @@ it('[integration] a GREEN reserve_budget write is audited with its tool args, id
 
 it('[integration] the SAME execution identity double-writes neither the side effect nor the audit', async () => {
   const sessionId = (await getOrCreateSession(userId)).sessionId;
+  await seedRunningWriteNode(sessionId);
 
   const first = await reservePlanNode(sessionId, 'task_write_audit', 'node_write_audit');
   const second = await reservePlanNode(sessionId, 'task_write_audit', 'node_write_audit');
@@ -107,7 +124,7 @@ it('[integration] the SAME execution identity double-writes neither the side eff
   await reserveStandalone(sessionId, 'standalone-key');
 
   const prisma = getTestPrisma();
-  expect(await prisma.budget.count({ where: { userId, name: '生日预算' } })).toBe(1);
+  expect(await prisma.budget.count({ where: { userId, name: reservationArgs.name } })).toBe(1);
   expect(await prisma.budget.count({ where: { userId, name: 'Travel budget' } })).toBe(1);
   // One audit per (tool, execution identity) — the replay path writes/audits nothing.
   expect(await prisma.auditLog.count({ where: { toolName: 'reserve_budget' } })).toBe(2);
@@ -116,6 +133,7 @@ it('[integration] the SAME execution identity double-writes neither the side eff
 
 it('[integration] a failing write audit rolls the business write back — no un-audited side effect', async () => {
   const sessionId = (await getOrCreateSession(userId)).sessionId;
+  await seedRunningWriteNode(sessionId);
   const prisma = getTestPrisma();
   // The seeded world already ships one unrelated budget; the failed write must not move it.
   const budgetsBefore = await prisma.budget.count({ where: { userId } });
@@ -134,7 +152,7 @@ it('[integration] a failing write audit rolls the business write back — no un-
   expect(outcome.ok).toBe(false);
   // The reservation this call tried to create must NOT survive its failed audit …
   expect(
-    await prisma.budget.count({ where: { userId, name: '生日预算' } }),
+    await prisma.budget.count({ where: { userId, name: reservationArgs.name } }),
     'no un-audited reservation may survive',
   ).toBe(0);
   // … and nothing else may have shifted either — no un-audited business change.

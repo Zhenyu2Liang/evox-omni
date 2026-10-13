@@ -41,4 +41,50 @@ describe('incremental chat transport', () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1]?.body as string).requestId).toBe('request-fixed');
     expect(result.runId).toBe('run');
   });
+
+  it('reports an incomplete stream while retaining the durable run identity and delivered events', async () => {
+    const started: AgentStreamEvent = { type: 'session', sessionId: 'session-new', runId: 'run-new' };
+    const body = `data: ${JSON.stringify(started)}\n\ndata: {"type":"text_delta","delta":"Partial reply"}\n\n`;
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })));
+    const delivered: AgentStreamEvent[] = [];
+    const result = await sendChatTurn({ message: 'Read balance' }, undefined, event => delivered.push(event));
+    expect(result.sessionId).toBe('session-new');
+    expect(result.runId).toBe('run-new');
+    expect(result.events.slice(0, 2)).toEqual([started, { type: 'text_delta', delta: 'Partial reply' }]);
+    expect(result.events.at(-1)).toMatchObject({ type: 'error' });
+    expect(delivered).toEqual(result.events);
+  });
+
+  it('retains received events when the stream reader fails after the session frame', async () => {
+    let reads = 0;
+    const started: AgentStreamEvent = { type: 'session', sessionId: 'session-new', runId: 'run-new' };
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (reads++ === 0) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(started)}\n\n`));
+        else controller.error(new Error('Transport disconnected'));
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(body, { headers: { 'Content-Type': 'text/event-stream' } })));
+    const delivered: AgentStreamEvent[] = [];
+    const result = await sendChatTurn({ message: 'Read balance' }, undefined, event => delivered.push(event));
+    expect(result.sessionId).toBe('session-new');
+    expect(result.runId).toBe('run-new');
+    expect(result.events[0]).toEqual(started);
+    expect(result.events.at(-1)).toMatchObject({ type: 'error' });
+    expect(delivered).toEqual(result.events);
+  });
+
+  it('accepts a final completion event without a terminating blank line', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('data: {"type":"done"}', {
+      headers: { 'Content-Type': 'text/event-stream' },
+    })));
+    expect((await sendChatTurn({ message: 'Read balance' })).events).toEqual([{ type: 'done' }]);
+  });
+
+  it.each([{}, null, { sessionId: 'session' }, { sessionId: 'session', events: {} }])(
+    'rejects an incomplete JSON chat response %j', async (data) => {
+      vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true, data })));
+      expect((await sendChatTurn({ message: 'Read balance' })).events).toMatchObject([{ type: 'error' }]);
+    },
+  );
 });

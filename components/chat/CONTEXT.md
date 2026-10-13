@@ -279,8 +279,11 @@ failure — it NEVER throws to the UI.
 ### Recovery entry (`recover`)
 
 `useAgentStream.recover(actionId)` runs the shared `pull()` over `recoverAction`, folding the returned
-events like any other action. On **success** (no `error` folded) the row is dropped from
-`pendingReconciliations`; on a **failure** it is kept so the user can retry. It never throws to the UI.
+events like any other action. The typed `action_settled` event converges both decision cards and
+`pendingReconciliations`: known final outcomes remove recovery controls; `needs_reconciliation`
+converts the entry to manual attention and preserves an active decision's summary immediately.
+A transport failure leaves the entry available. Cleanup never depends on the absence of an error.
+It never throws to the UI.
 
 ### Plan control (pause / resume / cancel / retry)
 
@@ -350,6 +353,10 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
   There is NO `useAgentStream`/`ChatWindow`/`Composer` test; DOM coverage is ONLY the real-browser suite `tests/e2e/acceptance.e2e.ts` (playwright-core, `npx tsx`, NOT Vitest).
 - `tests/unit/planner/action-contract.test.ts` verifies current response envelopes, complete policy and
   summary fields, explicit attention, rejection of obsolete shapes and preservation of MFA and settlement events.
+- `tests/unit/planner/chat-stream.test.ts` verifies incremental delivery, durable identity preservation
+  across reader failures, missing completion signals, and complete JSON chat response contracts.
+- `tests/unit/planner/action-attention-state.test.ts` verifies restored attention convergence and
+  immediate manual reconciliation visibility after an uncertain terminal outcome.
 - **Untested fold rules of thumb** (candidates, NOT existing tests): a restored action fixture with
   actionable AND out-of-band rows (`confirmed` → `processing`/`recoverable`, `needs_reconciliation` →
   `reconciliation`) should rebuild the decision slot AND the `pendingReconciliations` list (one

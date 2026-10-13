@@ -140,42 +140,48 @@ async function readSseStream(body: ReadableStream<Uint8Array>, onEvent?: (event:
   let buffer = '';
   let finished = false;
 
-  while (!finished) {
-    const { value, done } = await reader.read();
-    if (value) buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+  const publish = (event: AgentStreamEvent) => {
+    events.push(event);
+    onEvent?.(event);
+    if (event.type === 'done') finished = true;
+  };
 
-    let boundary = buffer.indexOf('\n\n');
-    while (boundary !== -1) {
-      const frame = buffer.slice(0, boundary);
-      buffer = buffer.slice(boundary + 2);
-      const event = parseSseFrame(frame);
-      if (event) {
-        events.push(event);
-        onEvent?.(event);
-        if (event.type === 'done') {
-          finished = true;
-          break;
+  try {
+    while (!finished) {
+      const { value, done } = await reader.read();
+      if (value) buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+
+      let boundary = buffer.indexOf('\n\n');
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const event = parseSseFrame(frame);
+        if (event) {
+          publish(event);
+          if (finished) break;
         }
+        boundary = buffer.indexOf('\n\n');
       }
-      boundary = buffer.indexOf('\n\n');
+
+      if (done) break;
+      if (finished) {
+        void reader.cancel().catch(() => undefined);
+        break;
+      }
     }
 
-    if (done) {
-      break;
+    // Flush a final frame without a terminating blank line, including a final done event.
+    if (!finished && buffer.trim() !== '') {
+      const event = parseSseFrame(buffer);
+      if (event) publish(event);
     }
-    if (finished) {
-      void reader.cancel().catch(() => undefined);
-      break;
-    }
-  }
 
-  // Flush any trailing frame that arrived without a terminating blank line.
-  if (!finished && buffer.trim() !== '') {
-    const event = parseSseFrame(buffer);
-    if (event) {
-      events.push(event);
-      onEvent?.(event);
-    }
+    if (!finished) publish({ type: 'error', message: 'The response stream ended before completion. Inspect the saved run before retrying.' });
+  } catch {
+    // A failed read must retain every frame already published, including the durable run identity.
+    publish({ type: 'error', message: 'The response stream was interrupted. Inspect the saved run before retrying.' });
+  } finally {
+    reader.releaseLock();
   }
 
   return events;
@@ -212,13 +218,16 @@ function asTaskPlan(value: unknown): TaskPlan | undefined {
 }
 
 /** Narrow the decoded current response payload to its session and events. */
-function normalizeTurn(value: unknown): { sessionId?: string; runId?: string; events?: AgentStreamEvent[] } {
-  if (!value || typeof value !== 'object') return {};
+function normalizeTurn(value: unknown): ChatTurnResponse | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return;
   const record = value as Record<string, unknown>;
+  if (typeof record.sessionId !== 'string' || record.sessionId.trim() === '' ||
+      !Array.isArray(record.events) || !record.events.every(event => event && typeof event === 'object' && typeof event.type === 'string') ||
+      (record.runId !== undefined && (typeof record.runId !== 'string' || record.runId.trim() === ''))) return;
   return {
-    sessionId: typeof record.sessionId === 'string' ? record.sessionId : undefined,
-    runId: typeof record.runId === 'string' ? record.runId : undefined,
-    events: Array.isArray(record.events) ? (record.events as AgentStreamEvent[]) : undefined,
+    sessionId: record.sessionId,
+    ...(typeof record.runId === 'string' ? { runId: record.runId } : {}),
+    events: record.events as AgentStreamEvent[],
   };
 }
 
@@ -455,8 +464,9 @@ export function sendChatTurn(
       if (errorMessage) {
         return failure(fallbackSession, errorMessage);
       }
-      const { sessionId, runId, events } = normalizeTurn(data);
-      const turnEvents = events ?? [];
+      const turn = normalizeTurn(data);
+      if (!turn) return failure(fallbackSession, GENERIC_ERROR);
+      const { sessionId, runId, events: turnEvents } = turn;
       for (const event of turnEvents) onEvent?.(event);
       return {
         sessionId: firstSessionId(turnEvents) ?? sessionId ?? fallbackSession,

@@ -5,6 +5,8 @@ import { AppError } from '@/lib/errors';
 
 const mocks = vi.hoisted(() => ({
   getAgentRun: vi.fn(), listRunInvocations: vi.fn(), beginAgentRun: vi.fn(), finalizeReceiptedAgentRun: vi.fn(), restoreInvocationFromReceipt: vi.fn(), finishAgentRun: vi.fn(), renewAgentRunLease: vi.fn(), assertAgentRunLease: vi.fn(),
+  synchronizeRunActionInvocations: vi.fn(),
+  runPendingActionWhere: vi.fn(),
   readCommandReceipt: vi.fn(), executeDirect: vi.fn(), recoverInvocation: vi.fn(), getSession: vi.fn(),
   pendingFindFirst: vi.fn(), pendingFindMany: vi.fn(),
 }));
@@ -66,6 +68,7 @@ describe('owned runtime recovery service and HTTP boundary', () => {
     mocks.recoverInvocation.mockImplementation(async (_lease, id: string, port: { execute: (value: ToolInvocation) => Promise<string> }) => {
       const resultJson = await port.execute(record);
       record.status = 'completed';
+      record.resultJson = resultJson;
       return { invocationId: id, action: 'retried', resultJson };
     });
     const response = await recoverOwnedRun('run-1', owner);
@@ -83,6 +86,21 @@ describe('owned runtime recovery service and HTTP boundary', () => {
     expect(mocks.recoverInvocation).not.toHaveBeenCalled();
     expect(mocks.executeDirect).not.toHaveBeenCalled();
     expect(mocks.finishAgentRun).toHaveBeenCalledWith(expect.anything(), 'waiting_confirmation', undefined);
+  });
+
+  it('returns a persisted cancellation without granting another execution lease', async () => {
+    mocks.getAgentRun.mockResolvedValue(run('waiting_confirmation'));
+    mocks.synchronizeRunActionInvocations.mockImplementation(async () => {
+      mocks.listRunInvocations.mockResolvedValue([invocation('cancelled', 'transfer_money')]);
+    });
+    mocks.finalizeReceiptedAgentRun.mockImplementation(async () => {
+      mocks.getAgentRun.mockResolvedValue({ ...run('failed'), errorCode: 'CANCELLED' });
+    });
+    const response = await recoverOwnedRun('run-1', owner);
+    expect(response.run).toMatchObject({ status: 'failed', errorCode: 'CANCELLED' });
+    expect(response.outcomes).toEqual([{ invocationId: 'invocation-1', action: 'stopped', reason: 'CANCELLED' }]);
+    expect(mocks.beginAgentRun).not.toHaveBeenCalled();
+    expect(mocks.executeDirect).not.toHaveBeenCalled();
   });
 
   it('releases the lease when a recovery executor attempts to send a write', async () => {

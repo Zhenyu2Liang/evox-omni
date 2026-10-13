@@ -15,7 +15,7 @@ Each holding DTO includes its complete product. Missing product metadata is an i
 
 ## Decimal arithmetic and validation
 
-`lib/decimal.ts` uses an isolated decimal.js configuration, with 120 significant digits for intermediate calculations. Supported domain values have at most 40 integer digits and 18 fractional digits. Financial inputs are strings only; numeric JSON values are rejected. Inputs and results are validated against the same bounds. Addition, subtraction and multiplication preserve values exactly within the domain; nonterminating or over-scale division is rejected instead of silently rounded. `normalizeMoney` explicitly normalizes booked amounts; missing values are not silently interpreted as zero. Workflow scalar counts retain a distinct number contract.
+`lib/decimal.ts` uses an isolated decimal.js configuration, with 120 significant digits for intermediate calculations. Supported domain values have at most 40 integer digits and 18 fractional digits. Financial inputs are strings only; numeric JSON values are rejected. Scientific exponents are bounded before Decimal construction to prevent extreme inputs from silently underflowing to zero. Inputs and results are validated against the same bounds. Addition, subtraction and multiplication preserve values exactly within the domain; nonterminating or over-scale division is rejected instead of silently rounded. `normalizeMoney` explicitly normalizes booked amounts; missing values are not silently interpreted as zero. Workflow scalar counts retain a distinct number contract.
 
 SQLite's DECIMAL declaration has NUMERIC affinity and may store binary floating point; it does not enforce a decimal precision or scale. Therefore precise decimals are persisted as canonical TEXT and validated at repository and SDK boundaries. No SQLite SUM, CAST or arithmetic is applied to these text fields. A future PostgreSQL adapter can use NUMERIC with explicit precision and scale behind the same domain contract.
 
@@ -25,7 +25,11 @@ Booked money still rejects fractional cents. The demo redemption settlement poli
 
 The gateway and SDK use the same settlement conversion. Authorization binds the rounded amount; the SDK re-reads the estimate inside the write transaction and rejects a changed settlement amount before any credit. A completed redemption stores its exact quote (`redemptionValuation`), rounding policy (`settlementRounding`), final amount, original balance and execution identity together. Same-identity retries return that original result even if the estimate subsequently changes. Zero settlement is valid for a total loss; negative or malformed valuations fail before mutation.
 
+Redemption replay validates the complete result against the holding, canonical amount/balance fields and original valuation/rounding rule. A supplied approval amount must still match that original settlement. Incomplete, malformed or contradictory results are conflicts and never trigger another credit.
+
 Purchases persist their complete original SDK result in `subscribeResult` inside the same transaction. Replay verifies that result against the holding and returns the original balance and source account. A missing or corrupt original purchase result is a conflict rather than a reconstructed result.
+
+Committed investment results are replayed before resolving the current checking account or applying the current product minimum. These mutable eligibility checks run inside the transaction only for new effects. A later account classification or product change cannot erase the original result.
 
 This simulator accepts an explicit estimated market value. It does not implement market-data ingestion, fund shares, NAV pricing or interest accrual. Introducing those products requires separate units, pricing timestamps, sources and product-specific calculations rather than interpreting cash principal as fund shares.
 

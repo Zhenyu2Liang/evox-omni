@@ -3,7 +3,7 @@ import { Agent } from '@earendil-works/pi-agent-core';
 import { NextRequest } from 'next/server';
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
 import { AgentRunJournal, beginRun, readRunPresentation, recoverInvocation } from '@/agent/durable';
-import { appendRuntimeEvent, restoreInvocationFromReceipt } from '@/lib/db/repositories/agentRun';
+import { appendRuntimeEvent, restoreInvocationFromReceipt, settleInvocationFromAction } from '@/lib/db/repositories/agentRun';
 import { banking } from '@/banking-sdk';
 import { createToolRegistry } from '@/agent/tools';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
@@ -12,7 +12,7 @@ import { GET as getRun } from '@/app/api/runs/[id]/route';
 import { POST as recoverRun } from '@/app/api/runs/[id]/recover/route';
 import { createPendingAction } from '@/lib/db/repositories/pendingAction';
 import { settlePendingAction } from '@/agent/confirmation-recovery';
-import { getOrCreateSession, runTurn } from '@/agent';
+import { cancelAction, getOrCreateSession, runTurn } from '@/agent';
 import * as executionFence from '@/agent/execution-fence';
 
 const userId = 'user_liming';
@@ -134,6 +134,73 @@ describe('durable Agent runtime with real database records', () => {
     expect((await getTestPrisma().toolInvocation.findUniqueOrThrow({ where: { id: invocation.id } })).status).toBe('completed');
     expect(await getTestPrisma().agentRunEvent.count({ where: { runId: lease.runId, eventType: 'invocation_recovered' } })).toBe(1);
     await new AgentRunJournal(reclaimed.lease!).finish('completed');
+  });
+
+  it('converges a cancelled parked invocation without another execution or repeated recovery events', async () => {
+    const { journal, lease, run } = await admit();
+    await journal.recordAgentEvent({ type: 'tool_execution_start', toolCallId: 'cancelled-call', toolName: 'transfer_money', args: { contactId: 'contact_zhangwei', amount: '200.00' } });
+    const invocation = journal.invocationForCall('cancelled-call')!;
+    const action = await createPendingAction({
+      sessionId: lease.sessionId, userId, invocationId: invocation.id, toolName: 'transfer_money',
+      args: { contactId: 'contact_zhangwei', amount: '200.00' }, status: 'pending', tier: 'YELLOW', requiresMfa: false,
+      summary: { title: 'Transfer', toolName: 'transfer_money', tier: 'YELLOW', requiresMfa: false, fields: [] },
+    });
+    await journal.parkInvocation('cancelled-call', 'waiting_confirmation', action.id);
+    await journal.recordAgentEvent({ type: 'tool_execution_end', toolCallId: 'cancelled-call', toolName: 'transfer_money', result: { content: [], details: {} }, isError: true });
+    await journal.finish('waiting_confirmation');
+    expect((await cancelAction(action.id, { sessionId: lease.sessionId, userId })).status).toBe('cancelled');
+    const request = () => new NextRequest(`http://localhost/api/runs/${run.id}/recover`, {
+      method: 'POST', headers: { cookie: `banking_session=${lease.sessionId}` }, body: '{}',
+    });
+    const context = { params: Promise.resolve({ id: run.id }) };
+    const response = await recoverRun(request(), context);
+    expect(response.status).toBe(200);
+    expect((await response.json()).data).toMatchObject({ run: { status: 'failed', errorCode: 'CANCELLED' }, outcomes: [{ invocationId: invocation.id, action: 'stopped', reason: 'CANCELLED' }] });
+    expect((await getTestPrisma().toolInvocation.findUniqueOrThrow({ where: { id: invocation.id } })).status).toBe('cancelled');
+    expect((await recoverRun(request(), context)).status).toBe(200);
+    expect(await getTestPrisma().agentRunEvent.count({ where: { runId: run.id, eventType: 'invocation_settled_from_action' } })).toBe(1);
+    expect(await getTestPrisma().agentRunEvent.count({ where: { runId: run.id, eventType: 'run_reconciled' } })).toBe(1);
+    expect(await getTestPrisma().executionReceipt.count()).toBe(0);
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2358000n);
+  });
+
+  it('records a late provider end event without overwriting a cancelled action decision', async () => {
+    const { journal, lease } = await admit();
+    await journal.recordAgentEvent({ type: 'tool_execution_start', toolCallId: 'late-call', toolName: 'transfer_money', args: {} });
+    const invocation = journal.invocationForCall('late-call')!;
+    const action = await createPendingAction({
+      sessionId: lease.sessionId, userId, invocationId: invocation.id, toolName: 'transfer_money', args: {},
+      status: 'cancelled', tier: 'YELLOW', requiresMfa: false,
+      summary: { title: 'Transfer', toolName: 'transfer_money', tier: 'YELLOW', requiresMfa: false, fields: [] },
+    });
+    await journal.parkInvocation('late-call', 'waiting_confirmation', action.id);
+    await getTestPrisma().$transaction(tx => settleInvocationFromAction(action.id, tx));
+    await journal.recordAgentEvent({ type: 'tool_execution_end', toolCallId: 'late-call', toolName: 'transfer_money', result: { content: [], details: {} }, isError: true });
+    expect((await getTestPrisma().toolInvocation.findUniqueOrThrow({ where: { id: invocation.id } })).status).toBe('cancelled');
+    expect(await getTestPrisma().agentRunEvent.count({ where: { runId: lease.runId, channel: 'raw', eventType: 'tool_execution_end' } })).toBe(1);
+    await journal.finish('failed', 'CANCELLED');
+  });
+
+  it('settles an earlier run independently of unrelated pending actions and a newer live lease', async () => {
+    const { journal, lease, run, input } = await admit();
+    await journal.recordAgentEvent({ type: 'tool_execution_start', toolCallId: 'earlier-read', toolName: 'get_balance', args: {} });
+    await journal.recordAgentEvent({ type: 'tool_execution_end', toolCallId: 'earlier-read', toolName: 'get_balance', result: { content: [], details: { totalAvailable: '73580.00' } }, isError: false });
+    await journal.finish('interrupted');
+    const unrelated = await createPendingAction({
+      sessionId: lease.sessionId, userId, toolName: 'transfer_money', args: { amount: '300.00' },
+      status: 'pending', tier: 'YELLOW', requiresMfa: false,
+      summary: { title: 'Another transfer', toolName: 'transfer_money', tier: 'YELLOW', requiresMfa: false, fields: [] },
+    });
+    const newer = await beginRun({ ...input, requestId: 'newer-request' });
+    expect(newer.lease).toBeDefined();
+    const response = await recoverRun(new NextRequest(`http://localhost/api/runs/${run.id}/recover`, {
+      method: 'POST', headers: { cookie: `banking_session=${lease.sessionId}` }, body: '{}',
+    }), { params: Promise.resolve({ id: run.id }) });
+    expect(response.status).toBe(200);
+    expect((await response.json()).data.run.status).toBe('completed');
+    expect((await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: unrelated.id } })).status).toBe('pending');
+    expect((await getTestPrisma().agentSession.findUniqueOrThrow({ where: { id: lease.sessionId } })).activeRunId).toBe(newer.run.id);
+    await new AgentRunJournal(newer.lease!).finish('completed');
   });
 
   it('recovers an interrupted read through the real owned HTTP endpoint with the same invocation identity', async () => {

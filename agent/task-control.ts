@@ -58,6 +58,8 @@ import { recordSecurityEvent } from '@/audit';
 import { AppError, type ErrorCode } from '@/lib/errors';
 import { newId } from '@/lib/ids';
 import { safeParse } from '@/lib/json';
+import { demoNow } from '@/lib/clock';
+import { restoreCommittedCancellationNodes } from './cancellation-evidence';
 import { prisma } from '@/lib/db/client';
 import { getSession } from '@/lib/db/repositories/session';
 import { assertNoOpenManualReview } from '@/lib/db/repositories/manualReview';
@@ -74,12 +76,10 @@ import {
   listTasksBySession,
   releaseNodeExecution,
   releaseTaskExecution,
-  updateTaskNode,
   updateTaskStatus,
   type AgentTaskWithNodes,
 } from '@/lib/db/repositories/task';
 import {
-  isMissingNodeError,
   jsonNodeOutput,
   recordDecidedNodeFenced,
   toNodeUpdate,
@@ -581,13 +581,12 @@ export function createTaskPersistence(
       // the takeover's node row. ONLY a CONTROL pass (`mode: 'control'` — the deliberate pause/cancel
       // writer, which holds no claim by design) reaches the unfenced write below.
       if (executorMode) return;
-      try {
-        await updateTaskNode(planId, node.id, toNodeUpdate(node));
-      } catch (error) {
-        // A plan built outside `submit_plan` has no node rows; not a persistence failure.
-        if (isMissingNodeError(error)) return;
-        throw error; // every other failure surfaces — never swallowed
-      }
+      // Cancellation works from an earlier snapshot. A real executor may have settled a node
+      // while actions were being revoked; preserve its committed terminal result atomically.
+      await prisma.agentTaskNode.updateMany({
+        where: { taskId: planId, nodeId: node.id, status: { notIn: TERMINAL_NODE_STATUSES } },
+        data: { ...toNodeUpdate(node), output: jsonNodeOutput(node) },
+      });
     },
     async loadPlan(id: string): Promise<TaskPlan | undefined> {
       const row = await getTask(id);
@@ -984,6 +983,7 @@ export async function cancelTask(
   const settledRevoked = await prisma.$transaction(async (tx) => {
     const revoked = await revokePendingActionsByTask(taskId, ['pending', 'awaiting_mfa'], tx);
     await tx.agentTask.update({ where: { id: taskId }, data: { status: 'cancelled' } });
+    await restoreCommittedCancellationNodes(tx, taskId, userId, (opts.now ?? demoNow)());
     return revoked;
   });
 

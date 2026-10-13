@@ -9,13 +9,21 @@ export type DecimalAmount = string;
 const FinancialDecimal = Decimal.clone({ precision: 120, rounding: Decimal.ROUND_HALF_UP });
 const MAX_INTEGER_DIGITS = 40;
 const MAX_FRACTION_DIGITS = 18;
+const MAX_TEXT_LENGTH = 128;
+const MAX_EXPONENT = MAX_TEXT_LENGTH + Math.max(MAX_INTEGER_DIGITS, MAX_FRACTION_DIGITS);
 
 /** Normalize bounded decimal text without accepting binary numeric inputs. */
 export function decimalText(input: string): DecimalAmount {
   if (typeof input !== 'string') throw new AppError('VALIDATION', 'Financial decimals must be decimal text.');
   const text = input;
-  if (text.length > 128 || !/^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(text)) {
+  if (text.length > MAX_TEXT_LENGTH || !/^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(text)) {
     throw new AppError('VALIDATION', 'Invalid financial decimal text.');
+  }
+  // A bounded mantissa cannot need a larger exponent within the supported value/scale range.
+  // Validate before construction: Decimal can silently underflow extreme exponents to zero.
+  const exponent = Number(/[eE]([+-]?\d+)$/.exec(text)?.[1] ?? '0');
+  if (!Number.isSafeInteger(exponent) || Math.abs(exponent) > MAX_EXPONENT) {
+    throw new AppError('VALIDATION', 'Financial decimal exponent exceeds the supported range.');
   }
   const value = new FinancialDecimal(text);
   if (!value.isFinite() || value.abs().gte('1e40') || value.decimalPlaces() > MAX_FRACTION_DIGITS) {

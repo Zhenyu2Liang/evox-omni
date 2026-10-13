@@ -10,6 +10,10 @@ The authenticator is explicitly a demo adapter using `123456`; no SMS is sent. C
 
 All registered writes use one transaction for mutation, strict audit, original response receipt and invocation completion. Receipts check owner, tool and digest. Transfer projections also match their actual ledger. Workflow tokens, generations, confirmation claims, session locks and runtime leases are checked at the mutation boundary. A stale owner cannot commit new work. Already-committed work retains its result after later cancellation or handoff.
 
+Human-decision leases use an atomic claim on an undecided action without an active owner. Duplicate requests cannot replace or release another continuation's lease, and ownership is checked before modifying lease metadata. Explicit workflow identities with missing plans or nodes fail closed rather than becoming standalone writes.
+
+Cancellation preserves terminal node results and verifies receipts inside its settlement transaction for effects whose node state has not yet been saved. Verified commits restore the original successful result; posted effects with missing or inconsistent evidence remain marked for reconciliation. Cancellation never repeats a bank command to discover its outcome.
+
 The model has no shell, filesystem, SQL, arbitrary HTTP or code execution tools. Schemas and the plan compiler restrict executable capabilities. Three distinct suspicious instruction signals within ten minutes lock the account. Repeated business failures have their own window. Signal identity prevents duplicate delivery from inflating counts; incident, resulting lock and trip audit commit together.
 
 Financial statements are server-authored from structured results. Planning prose cannot prove execution. Unknown outcomes retain reconciliation status. Every observed Pi event is retained internally after credential redaction; thinking is internal. Public APIs expose grounded UI events and safe execution metadata. Audit endpoints and summaries require owned session identity.
