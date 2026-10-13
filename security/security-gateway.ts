@@ -623,6 +623,8 @@ async function gatewayCreatePendingAction(
   // The owning-plan status check and the row insert share ONE transaction: a plan cancelled
   // concurrently cannot slip a new action in between the read and the write.
   const created = await prisma.$transaction(async (tx) => {
+    // A reclaimed runtime or workflow owner cannot leave a new executable action behind.
+    await ctx.runtimeFence?.(tx);
     if (ctx.taskId) {
       const plan = await tx.agentTask.findUnique({
         where: { id: ctx.taskId },

@@ -86,6 +86,25 @@ pnpm scheduler:tick
 
 A process manager or host scheduler must invoke it repeatedly for unattended dispatch. The `/schedules` page can also request a check. Due payments reach fresh confirmation or MFA; a worker does not approve them. Time overrides for trusted demonstrations and dispatch details are documented in [scheduled tasks](scheduled-tasks.md).
 
+Agent process recovery has separate commands:
+
+```bash
+pnpm agent:recover
+pnpm agent:worker
+```
+
+The first performs one bounded pass; the second remains resident and drains its active recovery on graceful shutdown. It resumes expired or interrupted runs using the original model checkpoint and invocation identities. Persisted retry limits, backoff, run leases and session revisions govern admission. Uncertain writes require reconciliation, and original confirmation/MFA decisions remain pending. Keep the original model/provider configuration available after a restart; the worker will not switch the recorded run to a different provider. See [Agent durability](agent-durability.md).
+
+Start the resident command separately alongside the web service under your process manager. The default interval is 5 seconds and each pass discovers at most 25 runs; arguments can set a bounded interval and batch size:
+
+```sh
+pnpm agent:worker --interval-ms 5000 --limit 25
+```
+
+The interval must be between 250 and 60000 milliseconds and the batch size between 1 and 100. `SIGINT` and `SIGTERM` stop admission and drain the active recovery. `SIGKILL` leaves persisted work for a later lease holder. Tick output contains safe run identifiers, statuses and error codes, never request text or credentials. A conflict with a live execution is `busy`; a persisted permanent checkpoint failure reports its actual terminal status.
+
+Agent run leases last 120 seconds. Independent workflow executor leases last 600 seconds. Discovery waits for these ownership limits instead of assuming that every restart proves the previous executor is dead. Independent graph recovery uses its persisted definition and needs no model request; model continuation requires the original provider configuration. Paused graphs, open manual reviews and original human approvals need their existing explicit controls.
+
 ## Validation
 
 Run the standard checks from the repository root:

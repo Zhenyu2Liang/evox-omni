@@ -1,8 +1,9 @@
 import { Prisma } from '@prisma/client';
 import type { AgentTask, AgentTaskNode } from '@prisma/client';
-import { prisma } from '../client';
+import { prisma, type DbClient } from '../client';
 import { toJson } from '../../json';
 import type { TaskCondition, TaskPlanStatus } from '../../contracts/task';
+import { ensureStandaloneWorkflowRun, synchronizeStandaloneWorkflowRun } from './workflowRun';
 
 export type AgentTaskWithNodes = AgentTask & { nodes: AgentTaskNode[] };
 
@@ -11,6 +12,8 @@ export interface CreateTaskInput {
   userId: string;
   goal: string;
   status?: string;
+  runId?: string;
+  parentInvocationId?: string;
 }
 
 export interface CreateTaskNodeInput {
@@ -42,38 +45,49 @@ export function createTask(input: CreateTaskInput): Promise<AgentTask> {
       userId: input.userId,
       goal: input.goal,
       status: input.status ?? 'pending',
+      runId: input.runId,
+      parentInvocationId: input.parentInvocationId,
     },
   });
 }
 
 /** Save a complete workflow definition before making it executable. */
-export function createTaskGraph(
+export async function createTaskGraph(
   input: CreateTaskInput,
   nodes: readonly Omit<CreateTaskNodeInput, 'taskId' | 'order'>[],
+  client: DbClient = prisma,
 ): Promise<AgentTaskWithNodes> {
-  return prisma.agentTask.create({
-    data: {
-      sessionId: input.sessionId,
-      userId: input.userId,
-      goal: input.goal,
-      status: input.status ?? 'pending',
-      nodes: {
-        create: nodes.map((node, order) => ({
-          nodeId: node.nodeId,
-          name: node.name,
-          kind: node.kind,
-          order,
-          tool: node.tool ?? null,
-          args: node.args == null ? null : toJson(node.args),
-          condition: node.condition == null ? null : toJson(node.condition),
-          dependencies: node.dependencies == null ? null : toJson(node.dependencies),
-          after: node.after == null ? null : toJson(node.after),
-          status: node.status ?? 'pending',
-        })),
+  const persist = async (transaction: DbClient): Promise<AgentTaskWithNodes> => {
+    const task = await transaction.agentTask.create({
+      data: {
+        sessionId: input.sessionId,
+        userId: input.userId,
+        goal: input.goal,
+        status: input.status ?? 'pending',
+        runId: input.runId,
+        parentInvocationId: input.parentInvocationId,
+        nodes: {
+          create: nodes.map((node, order) => ({
+            nodeId: node.nodeId,
+            name: node.name,
+            kind: node.kind,
+            order,
+            tool: node.tool ?? null,
+            args: node.args == null ? null : toJson(node.args),
+            condition: node.condition == null ? null : toJson(node.condition),
+            dependencies: node.dependencies == null ? null : toJson(node.dependencies),
+            after: node.after == null ? null : toJson(node.after),
+            status: node.status ?? 'pending',
+          })),
+        },
       },
-    },
-    include: { nodes: { orderBy: { order: 'asc' } } },
-  });
+      include: { nodes: { orderBy: { order: 'asc' } } },
+    });
+    if (task.runId !== null) return task;
+    const runId = await ensureStandaloneWorkflowRun(task, transaction);
+    return { ...task, runId };
+  };
+  return '$transaction' in client ? client.$transaction(persist) : persist(client);
 }
 
 export function getTask(id: string): Promise<AgentTaskWithNodes | null> {
@@ -209,9 +223,12 @@ export async function releaseTaskExecution(
   taskId: string,
   token: string,
 ): Promise<void> {
-  await prisma.agentTask.updateMany({
-    where: { id: taskId, executionToken: token },
-    data: { executionToken: null, executionClaimedAt: null },
+  await prisma.$transaction(async transaction => {
+    await transaction.agentTask.updateMany({
+      where: { id: taskId, executionToken: token },
+      data: { executionToken: null, executionClaimedAt: null },
+    });
+    await synchronizeStandaloneWorkflowRun(taskId, transaction);
   });
 }
 
@@ -237,9 +254,8 @@ export function getTaskNode(
   taskId: string,
   nodeId: string,
 ): Promise<AgentTaskNode | null> {
-  return prisma.agentTaskNode.findFirst({
-    where: { taskId, nodeId },
-    orderBy: { order: 'asc' },
+  return prisma.agentTaskNode.findUnique({
+    where: { taskId_nodeId: { taskId, nodeId } },
   });
 }
 
@@ -248,8 +264,8 @@ export function getTaskNode(
  *
  * Two modes, selected by whether `opts.fenceToken` is supplied:
  *
- * - **Control write (`opts` omitted or `fenceToken` undefined)** — resolve the
- *   first row matching the logical `(taskId, nodeId)` pair and `update` it, returning the updated
+ * - **Control write (`opts` omitted or `fenceToken` undefined)** — address the
+ *   unique `(taskId, nodeId)` pair and `update` it, returning the updated
  *   `AgentTaskNode`. THROWS when the node does not exist.
  *
  * - **Fenced (`opts.fenceToken` supplied)** — a SINGLE atomic conditional statement (`updateMany`
@@ -257,7 +273,7 @@ export function getTaskNode(
  *   `executionToken` still equals the caller's token. The token check lives INSIDE the same
  *   statement (never a read-then-write), so a stale "zombie" executor whose claim was taken over
  *   can NEVER overwrite the takeover's result.
- *   - Claim still owned → the row is written, then re-read via the `(taskId, nodeId)` first-row
+ *   - Claim still owned → the row is written, then re-read via the `(taskId, nodeId)` unique
  *     lookup, and returned as `AgentTaskNode | null`.
  *   - Claim LOST (0 rows matched) → NO write happens and the **"lost" sentinel `null`** is
  *     returned. This is deliberately different from the unfenced path's throw-when-absent: a
@@ -293,9 +309,7 @@ export function updateTaskNode(
 
   const fenceToken = opts?.fenceToken;
   if (fenceToken === undefined) {
-    return firstNodeId(taskId, nodeId).then((id) =>
-      prisma.agentTaskNode.update({ where: { id }, data }),
-    );
+    return prisma.agentTaskNode.update({ where: { taskId_nodeId: { taskId, nodeId } }, data });
   }
 
   return (async () => {
@@ -304,9 +318,8 @@ export function updateTaskNode(
       data,
     });
     if (result.count === 0) return null;
-    return prisma.agentTaskNode.findFirst({
-      where: { taskId, nodeId },
-      orderBy: { order: 'asc' },
+    return prisma.agentTaskNode.findUnique({
+      where: { taskId_nodeId: { taskId, nodeId } },
     });
   })();
 }
@@ -316,9 +329,7 @@ export function updateTaskNodeStatus(
   nodeId: string,
   status: string,
 ): Promise<AgentTaskNode> {
-  return firstNodeId(taskId, nodeId).then((id) =>
-    prisma.agentTaskNode.update({ where: { id }, data: { status } }),
-  );
+  return prisma.agentTaskNode.update({ where: { taskId_nodeId: { taskId, nodeId } }, data: { status } });
 }
 
 /**
@@ -330,11 +341,8 @@ export function updateTaskNodeStatus(
  * its `executionClaimedAt` is older than that instant (a stale-claim takeover). Returns `true` iff
  * exactly one row was updated (this caller won).
  *
- * NOTE: `(taskId, nodeId)` is NOT a DB-unique pair, so this `updateMany` targets ALL rows matching
- * the pair (normally exactly one). If a pair were ever duplicated more than one row would be
- * claimed and the `count === 1` check would report the claim as lost. The same fail-safe note as
- * `claimTaskExecution` applies: a set token with a NULL `executionClaimedAt` is not reclaimable via
- * the stale path.
+ * The database enforces a unique `(taskId, nodeId)` pair. A set token with a NULL
+ * `executionClaimedAt` remains unclaimable through the stale path, just as for a plan claim.
  */
 export async function claimNodeExecution(
   taskId: string,
@@ -375,21 +383,4 @@ export async function releaseNodeExecution(
 
 export function deleteTask(id: string): Promise<void> {
   return prisma.agentTask.delete({ where: { id } }).then(() => undefined);
-}
-
-/**
- * Resolves the row id of the FIRST node matching the logical `(taskId, nodeId)` pair.
- * `(taskId, nodeId)` is not a DB unique constraint, so node-addressed writes go through
- * this lookup to update exactly one row. Throws when the node does not exist.
- */
-async function firstNodeId(taskId: string, nodeId: string): Promise<string> {
-  const node = await prisma.agentTaskNode.findFirst({
-    where: { taskId, nodeId },
-    orderBy: { order: 'asc' },
-    select: { id: true },
-  });
-  if (!node) {
-    throw new Error(`AgentTaskNode not found (taskId="${taskId}", nodeId="${nodeId}")`);
-  }
-  return node.id;
 }

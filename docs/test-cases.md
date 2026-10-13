@@ -91,8 +91,12 @@ Primary specs: `tests/unit/security/`, `tests/app/identity-http.test.ts`, `tests
 - Recovery uses verified persistent evidence. Missing terminal state after a proven commit converges to the original success result without a second business write.
 - Lost or rotated execution authority prevents obsolete executors from mutating business state, replacing results or publishing late progress.
 - Recovering an executed plan node restores its persisted result without invoking the tool again. A cancelled plan cannot start downstream work.
+- A fresh process can reclaim an expired run after real `SIGKILL`. Incomplete model output is regenerated from the stored request, and a complete original decision executes only its recorded calls.
+- A complete model result before tool admission, a committed DAG predecessor and a parked transfer before session persistence retain their original graph, operation and authorization identities.
+- Model attempts, recovery admissions and transient backoff are persisted. Different tool declarations, provider endpoints, newer conversation revisions and missing write evidence stop automatic continuation.
+- Workflow child reads and writes have their own durable invocation records. Explicit workflow retry does not bypass fresh authorization or reset the operation key.
 
-Primary specs: `agent/durable/*.test.ts`, `tests/integration/agent-durability.test.ts`, `tests/integration/committed-outcomes.test.ts`, `tests/integration/node-result-recovery.test.ts`, `tests/integration/obsolete-executor.test.ts`, `tests/integration/restart-recovery.test.ts` and `tests/integration/recovery-authorization.test.ts`.
+Primary specs: `agent/durable/*.test.ts`, `tests/integration/agent-durability.test.ts`, `tests/integration/process-restart.test.ts`, `tests/integration/standalone-workflow-restart.test.ts`, `tests/integration/model-checkpoint-boundaries.test.ts`, `tests/integration/workflow-invocations.test.ts`, `tests/unit/agent/recovery-worker.test.ts`, `tests/integration/committed-outcomes.test.ts`, `tests/integration/node-result-recovery.test.ts`, `tests/integration/obsolete-executor.test.ts`, `tests/integration/restart-recovery.test.ts` and `tests/integration/recovery-authorization.test.ts`.
 
 ### Planning, response integrity and current API contracts
 

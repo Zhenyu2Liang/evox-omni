@@ -98,7 +98,7 @@ type RecoverableActionRow = ConfirmableActionRow & { riskLevel: string; requires
 
 /**
  * Resolve the TRUSTED owner of a pending action from PERSISTED state — never from the request
- * (the `confirmation.ts#resolveTrustedIdentity` contract, re-applied for the recovery entry point).
+ * (the `confirmation/identity.ts#resolveTrustedIdentity` contract, re-applied for recovery).
  * The row supplies the owning `sessionId`; the owning `userId` comes from that session row. Any
  * request-supplied `userId`/`sessionId` is an ASSERTION: a mismatch FAILS CLOSED with
  * `SECURITY_DENIED`. An unknown action is `NOT_FOUND`; ownership that cannot be established (no

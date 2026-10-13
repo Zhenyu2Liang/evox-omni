@@ -52,6 +52,9 @@ import {
 } from '../task-control';
 import type { ToolExecutionResult } from './index';
 import { compileRequestedPlan } from './plan-compiler';
+import { withWorkflowExecutionClaim } from '../workflows/execution-context';
+import { prisma } from '@/lib/db/client';
+import type { ExecutionFenceCheck } from '@/banking-sdk';
 
 /**
  * Gateway-routed runner for a single plan node — supplied by the agent layer. MUST route through
@@ -71,6 +74,9 @@ export type PlanRunTool = (
 export interface SubmitPlanDeps {
   /** Session that owns the plan (persisted as `AgentTask`/`AgentTaskNode`). */
   sessionId: string;
+  /** Server-owned source call identity, never supplied through the model's tool arguments. */
+  invocationIdentity?: (callId: string) => { runId: string; parentInvocationId: string } | undefined;
+  runtimeFence?: ExecutionFenceCheck;
   /** Trusted current user text; model-proposed goal/names cannot supply request constraints. */
   userRequest?: () => string;
   /** Persisted trusted intent, including clarification revisions. */
@@ -212,6 +218,7 @@ export function createSubmitPlanTool(
         userId,
         params as unknown as Record<string, unknown>,
         deps,
+        deps.invocationIdentity?.(_toolCallId),
       );
       if (!result.ok) {
         throw new AppError('TOOL_FAILED', result.error ?? 'submit_plan failed');
@@ -248,6 +255,7 @@ export async function runSubmitPlan(
   userId: string,
   args: Record<string, unknown>,
   deps: SubmitPlanDeps,
+  source?: { runId: string; parentInvocationId: string },
 ): Promise<ToolExecutionResult> {
   // `userId` (the owner) is used below to mint the durable AgentTask row; each node then executes
   // through the gateway-routed `deps.runTool`, which the agent already bound to this user.
@@ -278,11 +286,15 @@ export async function runSubmitPlan(
   // rows are persisted up-front too, so the incremental `persistNode` updates below address real rows.
   let plan: TaskPlan;
   try {
-    const task = await createTaskGraph({ sessionId: deps.sessionId, userId, goal }, nodes.map(node => ({
+    const graphNodes = nodes.map(node => ({
       nodeId: node.id, name: node.name, kind: node.kind, tool: node.tool ?? null,
       args: node.args ?? null, condition: node.condition ?? null,
       dependencies: node.dependencies, after: node.after, status: 'pending',
-    })));
+    }));
+    const task = await prisma.$transaction(async client => {
+      await deps.runtimeFence?.(client);
+      return createTaskGraph({ sessionId: deps.sessionId, userId, goal, ...source }, graphNodes, client);
+    });
     plan = {
       ...dag.buildPlan({ sessionId: deps.sessionId, goal, nodes, now: deps.now }),
       id: task.id,
@@ -359,7 +371,8 @@ export async function runSubmitPlan(
     result = await executor.runPlan(
       plan,
       {
-        runTool: deps.runTool,
+        runTool: (toolName, args, context) => withWorkflowExecutionClaim({ taskId: context.taskId, nodeId: context.nodeId,
+          planToken: claimToken, nodeToken: nodeTokens.get(context.nodeId) }, () => deps.runTool(toolName as ToolName, args, context)),
         // EXECUTION-RIGHT re-check consulted by the executor AFTER every async node notification
         // resolves and BEFORE it launches the node's tool: a taken-over initial run returns the
         // `'owned'` back-off branch (ZERO writes, NO tool call) instead of launching its next node.

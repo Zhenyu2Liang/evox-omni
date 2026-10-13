@@ -204,7 +204,7 @@ describe('message-protocol — the persisted pi transcript stays provider-valid'
     const outcome = await confirmAction(decision.actionId);
     expect(outcome.ok).toBe(true);
     expect(outcome.status).toBe('executed');
-    expect(outcome.events).toContainEqual({ type: 'error', message: expect.stringContaining('无法定位 transfer_money') });
+    expect(outcome.events).toContainEqual({ type: 'error', message: expect.stringContaining('original transfer_money tool call could not be located') });
     expect(outcome.message).toContain('结果播报失败');
     expect(await persistedMessages(snapshot.sessionId)).toEqual(earlierHistory);
     expect(await getTestPrisma().transaction.count({ where: {

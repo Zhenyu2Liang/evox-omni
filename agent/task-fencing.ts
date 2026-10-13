@@ -29,6 +29,7 @@ import type { PlanToolOutcome } from '@/planner';
 import { demoNow } from '@/lib/clock';
 import { toJson } from '@/lib/json';
 import { prisma } from '@/lib/db/client';
+import { synchronizeStandaloneWorkflowRun } from '@/lib/db/repositories/workflowRun';
 import {
   getTask,
   getTaskNode,
@@ -172,11 +173,14 @@ export async function settlePlanFromNodes(taskId: string): Promise<boolean> {
     : 'failed';
   if (row.status === settled) return false;
 
-  const written = await prisma.agentTask.updateMany({
-    where: { id: taskId, executionToken: null, status: { in: SETTLEABLE_PLAN_STATUSES } },
-    data: { status: settled },
+  return prisma.$transaction(async transaction => {
+    const written = await transaction.agentTask.updateMany({
+      where: { id: taskId, executionToken: null, status: { in: SETTLEABLE_PLAN_STATUSES } },
+      data: { status: settled },
+    });
+    if (written.count > 0) await synchronizeStandaloneWorkflowRun(taskId, transaction);
+    return written.count > 0;
   });
-  return written.count > 0;
 }
 
 /**

@@ -206,6 +206,8 @@ model Budget {
 
 model AgentTask {
   id        String   @id @default(cuid())
+  runId String?
+  parentInvocationId String?
   sessionId String
   userId    String
   goal      String
@@ -223,6 +225,7 @@ model AgentTask {
   manualReviews ManualReview[]
 
   @@index([sessionId])
+  @@unique([runId, parentInvocationId])
 }
 
 // Demo operator workflow. Closing a review never asserts that a banking write succeeded.
@@ -275,7 +278,7 @@ model AgentTaskNode {
   task AgentTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
   @@index([taskId])
-  @@index([taskId, nodeId])
+  @@unique([taskId, nodeId])
 }
 
 model ScheduledTask {
@@ -500,12 +503,39 @@ model AgentRun {
   startedAt DateTime @default(now())
   finishedAt DateTime?
   errorCode String?
+  baseRevision Int @default(0)
+  checkpointJson String?
+  checkpointStage String?
+  recoveryAttempts Int @default(0)
+  maxRecoveryAttempts Int @default(3)
+  nextRecoveryAt DateTime?
+  recoveryErrorCode String?
+  modelRequests ModelRequest[]
   events AgentRunEvent[]
   invocations ToolInvocation[]
 
   @@unique([sessionId, requestId])
   @@index([sessionId, startedAt])
   @@index([status, leaseExpiresAt])
+}
+
+model ModelRequest {
+  id String @id @default(cuid())
+  runId String
+  ordinal Int
+  requestDigest String
+  inputJson String
+  resultJson String?
+  status String @default("started")
+  attempt Int @default(1)
+  maxAttempts Int @default(3)
+  errorCode String?
+  startedAt DateTime @default(now())
+  finishedAt DateTime?
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, ordinal])
+  @@index([runId, status])
 }
 
 model AgentRunEvent {
@@ -527,6 +557,11 @@ model ToolInvocation {
   runId String
   ordinal Int
   callId String
+  modelRequestId String?
+  origin String @default("pi")
+  parentInvocationId String?
+  taskId String?
+  nodeId String?
   toolName String
   argsJson String
   requestDigest String
@@ -542,6 +577,7 @@ model ToolInvocation {
   run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
 
   @@unique([runId, ordinal])
+  @@unique([taskId, nodeId])
   @@index([runId, callId])
   @@index([operationKey])
   @@index([status])

@@ -26,6 +26,11 @@ ModelRuntime pair from resolveProvider(), not a model without a stream function.
 - providerBaseUrlEnvVar(provider) derives the provider-specific base URL variable.
 - mock-responder.ts: respond(context) is a pure scripted decision function over
   messages. It drives the offline demo without changing the banking tools/security.
+- mock/: the dispatcher selects separate transfer, card, investment, subscription and
+  plan handlers. Exact amount parsing, conversation projection, deterministic reply
+  construction and fact narration are independent pure modules. Family handlers cannot
+  import database access, live providers or banking execution; boundary tests enforce
+  those imports and an acyclic dependency graph.
 
 ## Native Pi runtime
 
@@ -70,7 +75,7 @@ Root Vitest auto-discovers provider tests under tests/unit/agent/providers/:
   serialization of confirmed tool results, custom endpoint auth. Adapter tests use
   an injected fetch and fake keys; they make no paid model requests.
 
-Run npm run test -- tests/unit/agent/providers and npm run typecheck. Browser entry
+Run pnpm test tests/unit/agent/providers and pnpm typecheck. Browser entry
 points remain tests/e2e/acceptance.e2e.ts (mock) and live-acceptance.e2e.ts (real API,
 requires local credentials). Both use isolated databases. Historical live reports
 refer to their recorded baseline, not automatically to the current Pi version.

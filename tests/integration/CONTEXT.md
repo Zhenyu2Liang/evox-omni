@@ -46,11 +46,15 @@ remain recoverable from Git.
 | node-result-recovery.test.ts | Stored results, repeated/concurrent recovery and unknown side effects |
 | standalone-recovery.test.ts | Standalone wedges, safe replay and visible unknown outcomes |
 | restart-recovery.test.ts | Persisted evidence after module/registry reset |
+| process-restart.test.ts | Real SIGKILL and fresh-process model, read, write, DAG and authorization recovery |
+| standalone-workflow-restart.test.ts | Real independent graph restart, controls, predecessor receipts and executor/manual ownership |
+| model-checkpoint-boundaries.test.ts | Model intent/result boundaries, persisted attempts/backoff and lease/revision commit fences |
+| workflow-invocations.test.ts | Durable child intents, stable node identities, verified receipt replay and source graph recovery |
 | message-protocol.test.ts | Persisted pi transcript validity: every toolResult answers a preceding toolCall (no orphan/duplicate/fabricated id) |
 | terminal-state-settle.test.ts | Confirm/cancel on terminal actions (stable 200 domain outcome, no rollback/double-charge) |
 | grounding-regression.test.ts | Real runTurn/resumeTurn pipeline: code-enforced financial-fact grounding replaces an ungrounded/contradictory narration (no false success; streamed == terminal == persisted); plus PURE-level coverage of missed facts (cross-clause/unmarked amount, tool-call-bearing message), post-write-vs-stale per-account balance authority, and same-tool-twice per-operation claim mapping (incl. unknown → 待核对) |
 
-Run npm run test -- tests/integration. Observe ../CONTEXT.md database isolation and no-weakening rules.
+Run pnpm exec vitest run tests/integration. Observe ../CONTEXT.md database isolation and no-weakening rules.
 These are in-process integration tests, not browser E2E.
 
 ## Scope notes

@@ -1,4 +1,6 @@
 /** Persisted runtime identities are independent of provider-assigned tool call IDs. */
+export const WORKFLOW_EXECUTION_LEASE_MS = 600_000;
+
 export type AgentRunStatus =
   | 'running' | 'waiting_confirmation' | 'waiting_verification'
   | 'completed' | 'failed' | 'interrupted';

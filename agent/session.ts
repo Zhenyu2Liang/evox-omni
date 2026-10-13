@@ -14,6 +14,8 @@ import { newId } from '@/lib/ids';
 import { safeParse, toJson } from '@/lib/json';
 import { redactSecrets } from '@/lib/sensitive';
 import type { ConversationIntent } from '@/lib/contracts/intent';
+import type { AgentRunLease } from '@/lib/contracts/runtime';
+import { commitRunSession } from '@/lib/db/repositories/agentRun';
 import {
   createSession,
   getSession,
@@ -107,9 +109,15 @@ export async function loadSession(sessionId: string): Promise<SessionSnapshot | 
 }
 
 /** Persist (upsert) a session snapshot. */
-export async function saveSession(snapshot: SessionSnapshot): Promise<void> {
+export async function saveSession(snapshot: SessionSnapshot, execution?: { lease: AgentRunLease; checkpointJson: string }): Promise<void> {
   const updatedAt = Date.now();
   const stateJson = serialize({ ...snapshot, updatedAt });
+  if (execution) {
+    snapshot.revision = await commitRunSession(execution.lease, snapshot.revision, stateJson,
+      snapshot.intent ? toJson(snapshot.intent) : null, execution.checkpointJson);
+    snapshot.updatedAt = updatedAt;
+    return;
+  }
 
   const existing = await getSession(snapshot.sessionId);
   if (existing !== null) {

@@ -33,6 +33,7 @@ import type {
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { ToolName } from '@/lib/contracts/tools';
 import { newId } from '@/lib/ids';
+import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
 import { safeParse, toJson } from '@/lib/json';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
@@ -47,6 +48,7 @@ import {
 } from '@/agent';
 import { recordAudit } from '@/audit';
 import { DEMO_USER_ID } from './fixtures';
+import { getTestPrisma } from './db';
 import { fauxRegistrationOf } from './faux-agent';
 
 /** Everything a spec needs to assert about one completed agent turn. */
@@ -399,6 +401,29 @@ function assemble(sessionId: string, buffer: TurnBuffer): ScenarioResult {
 /** Send one user message and collect the resulting turn. */
 export async function runTurn(input: RunTurnInput): Promise<ScenarioResult> {
   const { sessionId, message, agent } = input;
+  if (agent.sessionId !== sessionId) {
+    throw new AppError('SECURITY_DENIED', 'The scenario agent and session identities must match.');
+  }
+  // This raw-Agent harness bypasses the production turn admission path. Persist its server-minted
+  // fixture identity so workflow journals verify the same owned session as the HTTP runtime.
+  const session = await getTestPrisma().agentSession.upsert({
+    where: { id: sessionId },
+    update: {},
+    create: {
+      id: sessionId,
+      userId: DEMO_USER_ID,
+      stateJson: toJson({
+        agentState: agent.state,
+        transcript: [],
+        userId: DEMO_USER_ID,
+        createdAt: demoNow(),
+        updatedAt: demoNow(),
+      }),
+    },
+  });
+  if (session.userId !== DEMO_USER_ID) {
+    throw new AppError('SECURITY_DENIED', 'The scenario session belongs to another user.');
+  }
   const buffer = createTurnBuffer();
   buffer.events.push({ type: 'session', sessionId });
 

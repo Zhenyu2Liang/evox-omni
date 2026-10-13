@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentRun, AgentRunEvent, ToolInvocation, Prisma } from '@prisma/client';
+import type { AgentRun, AgentRunEvent, ToolInvocation, ModelRequest, Prisma } from '@prisma/client';
 import { prisma, type DbClient } from '../client';
 import { AppError } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
 import { catalogEntry } from '@/lib/contracts/tool-catalog';
 import type { AgentRunLease, AgentRunStatus, RuntimeEventChannel, ToolInvocationStatus, ToolReplayPolicy } from '@/lib/contracts/runtime';
+import { WORKFLOW_EXECUTION_LEASE_MS } from '@/lib/contracts/runtime';
 
 const DEFAULT_LEASE_MS = 120_000;
 
@@ -20,6 +21,8 @@ export interface BeginAgentRunInput {
   recover?: boolean;
   /** Persisted run identity used by explicit recovery, independently of a transport request ID. */
   existingRunId?: string;
+  expectedRevision?: number;
+  checkpointJson?: string;
 }
 
 export interface BegunAgentRun {
@@ -36,11 +39,14 @@ export async function beginAgentRun(input: BeginAgentRunInput): Promise<BegunAge
     const session = await tx.agentSession.findUnique({ where: { id: input.sessionId } });
     if (!session || session.userId !== input.userId) throw new AppError('NOT_FOUND', 'Session not found');
     if (session.status !== 'active') throw new AppError('SECURITY_DENIED', 'Session is not active');
+    if (input.expectedRevision !== undefined && session.revision !== input.expectedRevision) throw new AppError('CONFLICT', 'The conversation changed before execution admission');
     const existing = input.existingRunId
       ? await tx.agentRun.findUnique({ where: { id: input.existingRunId } })
       : input.requestId === undefined ? null : await tx.agentRun.findUnique({ where: { sessionId_requestId: { sessionId: input.sessionId, requestId: input.requestId } } });
     if (input.existingRunId && (!input.recover || !existing || existing.sessionId !== input.sessionId || existing.userId !== input.userId)) throw new AppError('SECURITY_DENIED', 'Run recovery identity is not valid');
     if (existing && existing.requestDigest !== input.requestDigest) throw new AppError('CONFLICT', 'Request identity was reused with different input');
+    if (input.recover && existing && existing.baseRevision !== session.revision) throw new AppError('CONFLICT', 'A newer conversation revision prevents continuation');
+    if (input.recover && existing && existing.recoveryAttempts >= existing.maxRecoveryAttempts) throw new AppError('CONFLICT', 'Run recovery attempts are exhausted');
     if (existing && existing.status !== 'running' && existing.status !== 'interrupted' && !(input.recover && existing.status === 'failed')) return { run: existing, reused: true };
     if (session.activeRunId && session.runLeaseExpiresAt && session.runLeaseExpiresAt > now) {
       if (existing?.id === session.activeRunId) return { run: existing, reused: true };
@@ -53,8 +59,9 @@ export async function beginAgentRun(input: BeginAgentRunInput): Promise<BegunAge
     const token = randomUUID();
     const expiresAt = new Date(now.getTime() + leaseMs);
     const run = existing
-      ? await tx.agentRun.update({ where: { id: existing.id }, data: { status: 'running', leaseToken: token, leaseExpiresAt: expiresAt, finishedAt: null, errorCode: null } })
-      : await tx.agentRun.create({ data: { sessionId: input.sessionId, userId: input.userId, requestId: input.requestId, requestDigest: input.requestDigest, requestJson: input.requestJson, leaseToken: token, leaseExpiresAt: expiresAt, startedAt: now } });
+      ? await tx.agentRun.update({ where: { id: existing.id }, data: { status: 'running', leaseToken: token, leaseExpiresAt: expiresAt, finishedAt: null, errorCode: null, ...(input.recover ? { recoveryAttempts: { increment: 1 }, nextRecoveryAt: null } : {}) } })
+      : await tx.agentRun.create({ data: { sessionId: input.sessionId, userId: input.userId, requestId: input.requestId, requestDigest: input.requestDigest, requestJson: input.requestJson, leaseToken: token, leaseExpiresAt: expiresAt, startedAt: now, baseRevision: session.revision,
+        checkpointJson: input.checkpointJson, checkpointStage: input.checkpointJson ? 'input' : null } });
     const claimed = await tx.agentSession.updateMany({
       where: { id: input.sessionId, userId: input.userId, activeRunId: session.activeRunId, runLeaseToken: session.runLeaseToken, runLeaseExpiresAt: session.runLeaseExpiresAt },
       data: { activeRunId: run.id, runLeaseToken: token, runLeaseExpiresAt: expiresAt },
@@ -75,7 +82,7 @@ export async function assertAgentRunLease(lease: AgentRunLease, client: DbClient
   const run = await client.agentRun.findUnique({ where: { id: lease.runId } });
   const session = await client.agentSession.findUnique({ where: { id: lease.sessionId } });
   if (!run || run.sessionId !== lease.sessionId || run.userId !== lease.userId || run.leaseToken !== lease.token || run.status !== 'running' || !run.leaseExpiresAt || (!allowExpired && run.leaseExpiresAt <= now) ||
-      !session || session.userId !== lease.userId || session.activeRunId !== lease.runId || session.runLeaseToken !== lease.token || !session.runLeaseExpiresAt || (!allowExpired && session.runLeaseExpiresAt <= now)) {
+      !session || session.userId !== lease.userId || session.revision !== run.baseRevision || session.activeRunId !== lease.runId || session.runLeaseToken !== lease.token || !session.runLeaseExpiresAt || (!allowExpired && session.runLeaseExpiresAt <= now)) {
     throw new AppError('CONFLICT', 'Agent run execution lease is no longer valid');
   }
   return run;
@@ -120,6 +127,11 @@ export interface StartInvocationInput {
   argsJson: string;
   requestDigest: string;
   policy: ToolReplayPolicy;
+  modelRequestId?: string;
+  origin?: string;
+  parentInvocationId?: string;
+  taskId?: string;
+  nodeId?: string;
 }
 
 /** A started event and the stable tool identity become durable together before tool preflight. */
@@ -131,6 +143,8 @@ export async function startInvocationWithEvent(lease: AgentRunLease, input: Star
       id: input.id, runId: lease.runId, ordinal: allocated.nextOrdinal,
       callId: input.callId, toolName: input.toolName, argsJson: input.argsJson, requestDigest: input.requestDigest,
       operationKey: `inv:${input.id}`, replaySafety: input.policy.safety, maxAttempts: input.policy.maxAttempts,
+      modelRequestId: input.modelRequestId, origin: input.origin ?? 'pi', parentInvocationId: input.parentInvocationId,
+      taskId: input.taskId, nodeId: input.nodeId,
     } });
     return { invocation, event: await appendInTransaction(lease.runId, event, tx) };
   });
@@ -175,8 +189,14 @@ export async function updateInvocationAuthorization(lease: AgentRunLease, invoca
 export async function finishAgentRun(lease: AgentRunLease, status: Exclude<AgentRunStatus, 'running'>, errorCode?: string): Promise<AgentRun> {
   return prisma.$transaction(async tx => {
     await assertAgentRunLease(lease, tx, new Date(), true);
+    const model = await tx.modelRequest.findFirst({ where: { runId: lease.runId }, orderBy: { ordinal: 'desc' } });
+    if (status === 'failed' && model?.status === 'failed' && model.errorCode === 'MODEL_TRANSIENT' && model.attempt < model.maxAttempts) {
+      status = 'interrupted';
+      errorCode = 'MODEL_TRANSIENT';
+    }
     if (status === 'interrupted' || status === 'failed') await markInterruptedInvocations(lease.runId, tx);
-    const run = await tx.agentRun.update({ where: { id: lease.runId }, data: { status, errorCode: errorCode ?? null, finishedAt: new Date(), leaseToken: null, leaseExpiresAt: null } });
+    const run = await tx.agentRun.update({ where: { id: lease.runId }, data: { status, errorCode: errorCode ?? null, finishedAt: new Date(), leaseToken: null, leaseExpiresAt: null,
+      ...(errorCode === 'MODEL_TRANSIENT' && status === 'interrupted' ? { nextRecoveryAt: new Date(Date.now() + 2000) } : {}) } });
     await appendInTransaction(lease.runId, { channel: 'internal', eventType: 'run_finished', payloadJson: JSON.stringify({ status, errorCode: errorCode ?? null }) }, tx);
     await tx.agentSession.updateMany({ where: { id: lease.sessionId, activeRunId: lease.runId, runLeaseToken: lease.token }, data: { activeRunId: null, runLeaseToken: null, runLeaseExpiresAt: null } });
     return run;
@@ -230,7 +250,8 @@ export async function finalizeReceiptedAgentRun(runId: string, sessionId: string
   await prisma.$transaction(async tx => {
     const run = await tx.agentRun.findUnique({ where: { id: runId } });
     if (!run || run.sessionId !== sessionId || run.userId !== userId) throw new AppError('SECURITY_DENIED', 'Run recovery identity is not valid');
-    if (run.status === 'running' || run.status === 'completed') return;
+    if (run.status === 'running' || run.status === 'completed' || run.checkpointStage === 'workflow_only') return;
+    if (run.checkpointJson && run.checkpointStage !== 'session_committed') return;
     const invocations = await tx.toolInvocation.findMany({ where: { runId } });
     if (invocations.length === 0 || invocations.some(invocation => !['completed', 'cancelled', 'failed'].includes(invocation.status))) return;
     if (invocations.some(invocation => invocation.status === 'completed' && invocation.resultJson === null)) return;
@@ -257,8 +278,127 @@ export function listRunInvocations(runId: string, client: DbClient = prisma): Pr
 }
 
 /** Internal worker discovery; all subsequent mutations still require a freshly acquired lease. */
-export function listRecoverableAgentRuns(now = new Date(), limit = 100): Promise<AgentRun[]> {
-  return prisma.agentRun.findMany({ where: { OR: [{ status: 'interrupted' }, { status: 'running', OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] }] }, orderBy: { startedAt: 'asc' }, take: limit });
+export async function listRecoverableAgentRuns(now = new Date(), limit = 100): Promise<AgentRun[]> {
+  const workflows = await prisma.agentTask.findMany({ where: {
+    runId: { not: null }, parentInvocationId: null, status: { in: ['pending', 'running'] },
+    manualReviews: { none: { status: 'open' } },
+    OR: [{ executionToken: null }, { executionClaimedAt: { lt: new Date(now.getTime() - WORKFLOW_EXECUTION_LEASE_MS) } }],
+  }, select: { runId: true } });
+  return prisma.agentRun.findMany({ where: { AND: [
+    { OR: [{ checkpointStage: null }, { checkpointStage: { not: 'workflow_only' } },
+      { checkpointStage: 'workflow_only', id: { in: workflows.flatMap(task => task.runId ? [task.runId] : []) } }] },
+    { OR: [{ nextRecoveryAt: null }, { nextRecoveryAt: { lte: now } }] },
+    { recoveryAttempts: { lt: prisma.agentRun.fields.maxRecoveryAttempts } },
+    { OR: [{ recoveryErrorCode: null }, { recoveryErrorCode: { notIn: ['RECONCILIATION_REQUIRED', 'WORKFLOW_REQUIRES_ATTENTION', 'CHECKPOINT_MISSING'] } }] },
+    { OR: [{ status: 'interrupted' }, { status: 'running', OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }] }] },
+  ] }, orderBy: { startedAt: 'asc' }, take: limit });
+}
+
+/** Store only complete execution boundaries; partial provider output remains event evidence. */
+export async function saveRunCheckpoint(lease: AgentRunLease, stage: string, checkpointJson: string): Promise<void> {
+  await prisma.$transaction(async tx => {
+    await assertAgentRunLease(lease, tx);
+    await tx.agentRun.update({ where: { id: lease.runId }, data: { checkpointJson, checkpointStage: stage } });
+    await appendInTransaction(lease.runId, { channel: 'internal', eventType: 'checkpoint', payloadJson: JSON.stringify({ stage }) }, tx);
+  });
+}
+
+/** The provider is called only after its input and bounded retry identity have committed. */
+export async function startModelRequest(lease: AgentRunLease, requestDigest: string, inputJson: string, checkpointJson: string): Promise<ModelRequest> {
+  return prisma.$transaction(async tx => {
+    await assertAgentRunLease(lease, tx);
+    const previous = await tx.modelRequest.findFirst({ where: { runId: lease.runId }, orderBy: { ordinal: 'desc' } });
+    let request: ModelRequest;
+    if (previous && previous.status !== 'completed') {
+      if (previous.requestDigest !== requestDigest && previous.status !== 'failed') throw new AppError('CONFLICT', 'An unfinished model request cannot be replaced');
+      if (previous.status === 'failed' && previous.errorCode !== 'MODEL_TRANSIENT') throw new AppError('CONFLICT', 'The model request failure is permanent');
+      if (previous.attempt >= previous.maxAttempts) throw new AppError('CONFLICT', 'Model request retry limit reached');
+      request = await tx.modelRequest.update({ where: { id: previous.id }, data: { attempt: { increment: 1 }, status: 'started', errorCode: null, finishedAt: null, requestDigest, inputJson } });
+    } else {
+      request = await tx.modelRequest.create({ data: { runId: lease.runId, ordinal: (previous?.ordinal ?? 0) + 1, requestDigest, inputJson } });
+    }
+    await tx.agentRun.update({ where: { id: lease.runId }, data: { checkpointJson, checkpointStage: 'model_intent' } });
+    await appendInTransaction(lease.runId, { channel: 'internal', eventType: 'model_request_started', payloadJson: JSON.stringify({ modelRequestId: request.id, ordinal: request.ordinal, attempt: request.attempt }) }, tx);
+    return request;
+  });
+}
+
+export async function completeModelRequest(lease: AgentRunLease, requestId: string, resultJson: string, checkpointJson: string, errorCode?: string): Promise<void> {
+  await prisma.$transaction(async tx => {
+    await assertAgentRunLease(lease, tx);
+    const updated = await tx.modelRequest.updateMany({ where: { id: requestId, runId: lease.runId, status: 'started' }, data: {
+      status: errorCode ? 'failed' : 'completed', resultJson: errorCode ? null : resultJson, errorCode: errorCode ?? null, finishedAt: new Date(),
+    } });
+    if (updated.count !== 1) throw new AppError('CONFLICT', 'Model request completion is no longer owned');
+    // Error and aborted messages are not complete model results and cannot authorize tool calls.
+    if (!errorCode) await tx.agentRun.update({ where: { id: lease.runId }, data: { checkpointJson, checkpointStage: 'model_result' } });
+    await appendInTransaction(lease.runId, { channel: 'internal', eventType: errorCode ? 'model_request_failed' : 'model_request_completed', payloadJson: JSON.stringify({ modelRequestId: requestId, errorCode: errorCode ?? null }) }, tx);
+  });
+}
+
+/** Session writes check both revision and execution ownership in the same SQLite transaction. */
+export async function commitRunSession(lease: AgentRunLease, expectedRevision: number, stateJson: string, intentJson: string | null, checkpointJson: string): Promise<number> {
+  return prisma.$transaction(async tx => {
+    const run = await assertAgentRunLease(lease, tx);
+    const updated = await tx.agentSession.updateMany({ where: { id: lease.sessionId, userId: lease.userId, revision: expectedRevision, activeRunId: lease.runId, runLeaseToken: lease.token }, data: { stateJson, intentJson, revision: { increment: 1 } } });
+    if (updated.count !== 1) throw new AppError('CONFLICT', 'The conversation changed during this execution');
+    const latest = await tx.modelRequest.findFirst({ where: { runId: lease.runId }, orderBy: { ordinal: 'desc' } });
+    let savedCheckpoint = checkpointJson;
+    let checkpointStage = 'session_committed';
+    if (latest?.status === 'failed' && run.checkpointJson) {
+      const retained = JSON.parse(run.checkpointJson) as { snapshot: { revision: number; transcript: unknown[] }; inputMessagePersisted?: boolean };
+      retained.snapshot.revision = expectedRevision + 1;
+      retained.snapshot.transcript = (JSON.parse(stateJson) as { transcript: unknown[] }).transcript;
+      retained.inputMessagePersisted = true;
+      savedCheckpoint = JSON.stringify(retained);
+      checkpointStage = 'model_intent';
+    } else {
+      const saved = JSON.parse(checkpointJson) as { snapshot: { revision: number } };
+      saved.snapshot.revision = expectedRevision + 1;
+      savedCheckpoint = JSON.stringify(saved);
+    }
+    await tx.agentRun.update({ where: { id: lease.runId }, data: { baseRevision: expectedRevision + 1, checkpointJson: savedCheckpoint, checkpointStage } });
+    return expectedRevision + 1;
+  });
+}
+
+/** Only a resumed, owner-checked graph may settle its original outer Pi invocation. */
+export async function settlePlanInvocation(lease: AgentRunLease, invocationId: string, resultJson: string, waiting?: 'waiting_confirmation' | 'waiting_verification'): Promise<void> {
+  await prisma.$transaction(async tx => {
+    await assertAgentRunLease(lease, tx);
+    const item = await tx.toolInvocation.findUnique({ where: { id: invocationId } });
+    if (!item || item.runId !== lease.runId || item.toolName !== 'submit_plan' || item.origin !== 'pi') throw new AppError('CONFLICT', 'Workflow continuation does not match its outer invocation');
+    await tx.toolInvocation.update({ where: { id: item.id }, data: { status: waiting ?? 'completed', resultJson, errorCode: null, finishedAt: waiting ? null : new Date() } });
+    await appendInTransaction(lease.runId, { channel: 'internal', eventType: 'workflow_result_recovered', payloadJson: JSON.stringify({ invocationId, status: waiting ?? 'completed' }) }, tx);
+  });
+}
+
+/** Recovery backoff is persisted so each worker process observes the same retry schedule. */
+export async function scheduleRunRecovery(runId: string, errorCode: string, transient: boolean): Promise<void> {
+  await prisma.$transaction(async tx => {
+    const run = await tx.agentRun.findUniqueOrThrow({ where: { id: runId } });
+    if (run.status === 'running' || run.status === 'completed' || run.status.startsWith('waiting_')) return;
+    const retryable = transient && run.recoveryAttempts < run.maxRecoveryAttempts;
+    await tx.agentRun.update({ where: { id: runId }, data: { status: retryable ? 'interrupted' : 'failed', recoveryErrorCode: errorCode, errorCode,
+      nextRecoveryAt: retryable ? new Date(Date.now() + 1000 * 2 ** run.recoveryAttempts) : null } });
+  });
+}
+
+export async function parkRunRecovery(runId: string, reason: string): Promise<void> {
+  await prisma.agentRun.updateMany({ where: { id: runId, status: 'interrupted', leaseToken: null }, data: { recoveryErrorCode: reason, nextRecoveryAt: null } });
+}
+
+/** An obsolete checkpoint is terminal; workers must not repeatedly attempt an unsafe resume. */
+export async function stopObsoleteRun(runId: string): Promise<boolean> {
+  return prisma.$transaction(async tx => {
+    const run = await tx.agentRun.findUniqueOrThrow({ where: { id: runId } });
+    const session = await tx.agentSession.findUnique({ where: { id: run.sessionId } });
+    if (session?.revision === run.baseRevision || run.status === 'completed') return false;
+    await tx.agentRun.update({ where: { id: runId }, data: { status: 'failed', errorCode: 'CONVERSATION_CHANGED', recoveryErrorCode: 'CONVERSATION_CHANGED', leaseToken: null, leaseExpiresAt: null, finishedAt: new Date() } });
+    await tx.agentSession.updateMany({ where: { id: run.sessionId, activeRunId: run.id, runLeaseToken: run.leaseToken }, data: { activeRunId: null, runLeaseToken: null, runLeaseExpiresAt: null } });
+    await appendInTransaction(runId, { channel: 'internal', eventType: 'continuation_stopped', payloadJson: JSON.stringify({ reason: 'CONVERSATION_CHANGED' }) }, tx);
+    return true;
+  });
 }
 
 export interface RestoreReceiptInput {

@@ -303,7 +303,7 @@ export interface StandaloneWedgeOutcome {
 
 /**
  * Does a persisted `resultJson` payload hold a usable execution result? Mirrors the decode rule of
- * `confirmation.ts#readStoredResult` (a JSON object carrying a boolean `ok`) — a stored result means
+ * `confirmation/gated-execution.ts#recoverExecutedPlanAction` (a JSON object carrying a boolean `ok`) — a stored result means
  * the atomic result+status write DID commit, so the row is not a wedge.
  */
 function hasPersistedResult(resultJson: string | null): boolean {

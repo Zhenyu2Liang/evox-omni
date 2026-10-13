@@ -6,9 +6,12 @@ import { AppError } from '@/lib/errors';
 const mocks = vi.hoisted(() => ({
   getAgentRun: vi.fn(), listRunInvocations: vi.fn(), beginAgentRun: vi.fn(), finalizeReceiptedAgentRun: vi.fn(), restoreInvocationFromReceipt: vi.fn(), finishAgentRun: vi.fn(), renewAgentRunLease: vi.fn(), assertAgentRunLease: vi.fn(),
   synchronizeRunActionInvocations: vi.fn(),
+  scheduleRunRecovery: vi.fn(),
+  parkRunRecovery: vi.fn(),
   runPendingActionWhere: vi.fn(),
   readCommandReceipt: vi.fn(), executeDirect: vi.fn(), recoverInvocation: vi.fn(), getSession: vi.fn(),
   pendingFindFirst: vi.fn(), pendingFindMany: vi.fn(),
+  handleToolCall: vi.fn(),
 }));
 vi.mock('@/lib/db/repositories/agentRun', () => mocks);
 vi.mock('@/lib/db/client', () => ({ prisma: { pendingAction: { findFirst: mocks.pendingFindFirst, findMany: mocks.pendingFindMany } } }));
@@ -16,6 +19,7 @@ vi.mock('@/lib/db/repositories/session', () => ({ getSession: mocks.getSession }
 vi.mock('@/agent/command-execution', () => ({ readCommandReceipt: mocks.readCommandReceipt }));
 vi.mock('@/agent/tools', () => ({ TOOL_NAMES: ['get_balance', 'list_subscriptions', 'transfer_money', 'submit_plan'], createToolRegistry: () => ({ executeDirect: mocks.executeDirect }) }));
 vi.mock('./recovery', () => ({ recoverInvocation: mocks.recoverInvocation }));
+vi.mock('@/security', () => ({ security: { gateway: { securityGateway: { handleToolCall: mocks.handleToolCall } } } }));
 import { getOwnedRunSummary, recoverOwnedRun } from './service';
 import { GET } from '@/app/api/runs/[id]/route';
 import { POST } from '@/app/api/runs/[id]/recover/route';
@@ -23,10 +27,10 @@ import { POST } from '@/app/api/runs/[id]/recover/route';
 const now = new Date('2026-10-13T00:00:00Z');
 const owner = { sessionId: 'session-1', userId: 'user-1' };
 function run(status = 'interrupted'): AgentRun {
-  return { id: 'run-1', ...owner, requestId: 'request-1', requestDigest: 'original-digest', requestJson: '{"thinking":"private reasoning","password":"private credential"}', status, nextSequence: 17, nextOrdinal: 1, leaseToken: null, leaseExpiresAt: null, startedAt: now, finishedAt: null, errorCode: null };
+  return { id: 'run-1', ...owner, baseRevision: 0, checkpointJson: null, checkpointStage: null, recoveryAttempts: 0, maxRecoveryAttempts: 3, nextRecoveryAt: null, recoveryErrorCode: null, requestId: 'request-1', requestDigest: 'original-digest', requestJson: '{"thinking":"private reasoning","password":"private credential"}', status, nextSequence: 17, nextOrdinal: 1, leaseToken: null, leaseExpiresAt: null, startedAt: now, finishedAt: null, errorCode: null };
 }
 function invocation(status = 'interrupted', toolName = 'get_balance'): ToolInvocation {
-  return { id: 'invocation-1', runId: 'run-1', ordinal: 1, callId: 'provider-1', toolName, argsJson: '{}', requestDigest: 'digest', operationKey: 'inv:invocation-1', replaySafety: toolName === 'get_balance' ? 'read_only' : 'reconcile_only', status, resultJson: null, errorCode: null, attempt: 1, maxAttempts: 3, startedAt: now, finishedAt: null };
+  return { id: 'invocation-1', runId: 'run-1', modelRequestId: null, origin: 'pi', parentInvocationId: null, taskId: null, nodeId: null, ordinal: 1, callId: 'provider-1', toolName, argsJson: '{}', requestDigest: 'digest', operationKey: 'inv:invocation-1', replaySafety: toolName === 'get_balance' ? 'read_only' : 'reconcile_only', status, resultJson: null, errorCode: null, attempt: 1, maxAttempts: 3, startedAt: now, finishedAt: null };
 }
 beforeEach(() => {
   vi.resetAllMocks();
@@ -35,10 +39,31 @@ beforeEach(() => {
   mocks.getSession.mockImplementation(async (id: string) => ({ id, userId: owner.userId }));
   mocks.pendingFindFirst.mockResolvedValue(null);
   mocks.pendingFindMany.mockResolvedValue([]);
+  mocks.handleToolCall.mockResolvedValue({ evaluation: { blocked: false } });
   mocks.beginAgentRun.mockResolvedValue({ run: run('running'), lease: { runId: 'run-1', ...owner, token: 'new-lease' }, reused: true });
 });
 
 describe('owned runtime recovery service and HTTP boundary', () => {
+  it('parks a corrupt receipt for an interrupted write instead of repeatedly failing before admission', async () => {
+    mocks.listRunInvocations.mockResolvedValue([invocation('interrupted', 'transfer_money')]);
+    mocks.readCommandReceipt.mockRejectedValue(new AppError('CONFLICT', 'The receipt is inconsistent'));
+    const response = await recoverOwnedRun('run-1', owner);
+    expect(response.outcomes).toEqual([{ invocationId: 'invocation-1', action: 'reconciliation_required', reason: 'COMMITTED_RECEIPT_INVALID' }]);
+    expect(mocks.recoverInvocation).not.toHaveBeenCalled();
+    expect(mocks.finishAgentRun).toHaveBeenCalledWith(expect.anything(), 'interrupted', undefined);
+  });
+  it('verifies every completed write before continuing a selected read invocation', async () => {
+    const query = invocation();
+    const write = { ...invocation('completed', 'transfer_money'), id: 'unselected-write', ordinal: 2,
+      operationKey: 'inv:unselected-write', resultJson: JSON.stringify({ ok: true, data: { amount: '200.00' } }) };
+    mocks.listRunInvocations.mockResolvedValue([query, write]);
+    mocks.readCommandReceipt.mockResolvedValue(undefined);
+    mocks.recoverInvocation.mockResolvedValue({ action: 'retried', invocationId: query.id, resultJson: '{}' });
+    const response = await recoverOwnedRun('run-1', owner, query.id);
+    expect(mocks.readCommandReceipt).toHaveBeenCalledWith(expect.objectContaining({ operationKey: write.operationKey }));
+    expect(response.outcomes).toContainEqual({ invocationId: write.id, action: 'reconciliation_required', reason: 'COMMITTED_RECEIPT_INVALID' });
+    expect(mocks.finishAgentRun).toHaveBeenCalledWith(expect.anything(), 'interrupted', undefined);
+  });
   it('returns only safe run and invocation metadata', async () => {
     const summary = await getOwnedRunSummary('run-1', owner);
     expect(summary).toMatchObject({ id: 'run-1', lastSequence: 17, invocations: [{ id: 'invocation-1', toolName: 'get_balance' }] });

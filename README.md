@@ -40,6 +40,7 @@ For live model configuration, including DeepSeek, follow the [development guide]
 | `pnpm db:studio` | Inspect the local database |
 | `pnpm db:reset` | Delete the demo database and seed a fresh dataset; stop the application first |
 | `pnpm scheduler:tick` | Process one batch of due scheduled intents |
+| `pnpm agent:recover` / `pnpm agent:worker` | Recover interrupted runs once or run the recovery worker |
 
 ## Documentation
 

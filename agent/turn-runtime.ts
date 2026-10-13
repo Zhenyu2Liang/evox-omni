@@ -5,6 +5,8 @@ import { TOOL_NAMES } from './tools';
 import { AgentRunJournal, beginRun, readRunPresentation, snapshotRuntimeValue } from './durable';
 import type { SessionSnapshot } from './session';
 import { newId } from '@/lib/ids';
+import { getConfig, type AppConfig } from '@/lib/config';
+import { encodeCheckpoint } from './durable/checkpoint';
 
 export interface TurnRuntime {
   journal: AgentRunJournal;
@@ -29,8 +31,10 @@ export async function withDurableTurn(
   requestId: string | undefined,
   onEvent: ((event: AgentStreamEvent) => void | Promise<void>) | undefined,
   execute: (context: TurnRuntime) => Promise<ChatTurnResponse>,
+  config: AppConfig = getConfig(),
 ): Promise<ChatTurnResponse> {
-  const admission = await beginRun({ sessionId: snapshot.sessionId, userId: snapshot.userId, requestId: requestId ?? newId('request'), request });
+  const admission = await beginRun({ sessionId: snapshot.sessionId, userId: snapshot.userId, requestId: requestId ?? newId('request'), request, expectedRevision: snapshot.revision,
+    checkpointJson: encodeCheckpoint(snapshot, config) });
   if (!admission.lease) {
     const events = await presentationEvents(admission.run.id, snapshot.userId);
     for (const event of events) await onEvent?.(event);

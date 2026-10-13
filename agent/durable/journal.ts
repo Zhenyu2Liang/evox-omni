@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { Agent, AgentEvent } from '@earendil-works/pi-agent-core';
+import type { Agent, AgentEvent, PrepareRequestContext, AgentRequestUpdate, AgentMessage } from '@earendil-works/pi-agent-core';
+import { toToolDeclaration } from '@earendil-works/pi-ai';
 import type { ToolInvocation } from '@prisma/client';
 import type { DbClient } from '@/lib/db/client';
 import type { AgentRunLease, AgentRunStatus, RuntimeEventChannel, ToolInvocationStatus } from '@/lib/contracts/runtime';
@@ -7,10 +8,15 @@ import {
   appendRuntimeEvent, assertAgentRunLease, beginAgentRun, finishAgentRun, finishInvocationWithEvent,
   renewAgentRunLease, startInvocationWithEvent, updateInvocationAuthorization,
   type BegunAgentRun, type BeginAgentRunInput,
+  saveRunCheckpoint, startModelRequest, completeModelRequest,
 } from '@/lib/db/repositories/agentRun';
 import { AppError } from '@/lib/errors';
 import { encodeRuntimeValue, runtimeRequestDigest, snapshotRuntimeValue } from './serialization';
 import { toolReplayPolicy, type RetryPolicyCapabilities } from './retry-policy';
+import type { SessionSnapshot } from '@/agent/session';
+import type { AppConfig } from '@/lib/config';
+import { encodeCheckpoint } from './checkpoint';
+import { transientModelFailure } from '@/agent/live-recovery';
 
 export interface BeginRunInput extends Omit<BeginAgentRunInput, 'requestDigest' | 'requestJson'> {
   request: unknown;
@@ -31,10 +37,55 @@ export class AgentRunJournal {
   private heartbeatFailure: unknown;
   private persistenceFailure: unknown;
   private finished = false;
+  private snapshot?: () => SessionSnapshot;
+  private config?: AppConfig;
+  private modelRequestId?: string;
+  private originalModelInput?: { messages: AgentMessage[]; tools: unknown[] };
 
   constructor(lease: AgentRunLease, capabilities: RetryPolicyCapabilities = {}) {
     this.lease = lease;
     this.capabilities = capabilities;
+  }
+
+  bindRuntime(snapshot: () => SessionSnapshot, config: AppConfig): void {
+    this.snapshot = snapshot;
+    this.config = config;
+  }
+
+  restoreModelRequestIdentity(id: string, inputJson?: string): void {
+    this.modelRequestId = id;
+    if (inputJson) {
+      const input = JSON.parse(inputJson) as { messages?: AgentMessage[]; tools?: unknown[] };
+      if (!Array.isArray(input.messages) || !Array.isArray(input.tools)) throw new AppError('CONFLICT', 'The original model request context and tool definitions are required');
+      this.originalModelInput = { messages: input.messages, tools: input.tools };
+    }
+  }
+
+  checkpoint(stage: string): Promise<void> {
+    if (!this.snapshot || !this.config) return Promise.reject(new AppError('CONFLICT', 'A durable runtime checkpoint is not bound'));
+    const json = encodeCheckpoint(this.snapshot(), this.config);
+    return this.enqueue(() => saveRunCheckpoint(this.lease, stage, json));
+  }
+
+  prepareModelRequest(request: PrepareRequestContext): Promise<AgentRequestUpdate | undefined> {
+    if (!this.snapshot || !this.config) return Promise.reject(new AppError('CONFLICT', 'A durable model runtime is not bound'));
+    const original = this.originalModelInput;
+    const tools = (request.context.tools ?? []).map(toToolDeclaration);
+    if (original && runtimeRequestDigest('tool_declarations', original.tools) !== runtimeRequestDigest('tool_declarations', tools)) return Promise.reject(new AppError('CONFLICT', 'The original tool definitions are required for continuation'));
+    const messages = original?.messages ?? request.context.messages;
+    const snapshot = this.snapshot();
+    snapshot.agentState = { ...snapshot.agentState, messages, model: request.model };
+    const input = { messages, systemPrompt: snapshot.agentState.systemPrompt, model: request.model, tools };
+    const digest = runtimeRequestDigest('model_request', input);
+    const json = encodeRuntimeValue(input);
+    const checkpoint = encodeCheckpoint(snapshot, this.config);
+    this.modelRequestId = undefined;
+    return this.enqueue(async () => {
+      const attempt = await startModelRequest(this.lease, digest, json, checkpoint);
+      this.modelRequestId = attempt.id;
+      this.originalModelInput = undefined;
+      return original ? { context: { ...request.context, messages } } : undefined;
+    });
   }
 
   private enqueue<T>(write: () => Promise<T>): Promise<T> {
@@ -62,6 +113,16 @@ export class AgentRunJournal {
   recordAgentEvent(event: AgentEvent): Promise<void> {
     const snapshot = snapshotRuntimeValue(event) as AgentEvent;
     const recorded = { channel: 'raw' as const, eventType: event.type, payloadJson: JSON.stringify(snapshot) };
+    if (event.type === 'message_end' && event.message.role === 'assistant' && this.modelRequestId && this.snapshot && this.config) {
+      const requestId = this.modelRequestId;
+      const failed = ['error', 'aborted', 'length'].includes(event.message.stopReason);
+      const errorCode = failed ? transientModelFailure(event.message.errorMessage ?? '') ? 'MODEL_TRANSIENT' : 'MODEL_PERMANENT' : undefined;
+      const checkpointJson = encodeCheckpoint(this.snapshot(), this.config);
+      return this.enqueue(async () => {
+        await appendRuntimeEvent(this.lease, recorded);
+        await completeModelRequest(this.lease, requestId, encodeRuntimeValue(event.message), checkpointJson, errorCode);
+      });
+    }
     if (event.type === 'tool_execution_start') {
       const input = {
         id: `call_${randomUUID()}`,
@@ -70,6 +131,7 @@ export class AgentRunJournal {
         argsJson: encodeRuntimeValue(event.args),
         requestDigest: runtimeRequestDigest(event.toolName, event.args),
         policy: toolReplayPolicy(event.toolName, this.capabilities),
+        modelRequestId: this.modelRequestId,
       };
       return this.enqueue(async () => {
         if (this.activeCalls.has(input.callId)) throw new AppError('CONFLICT', 'Overlapping provider tool call identities are ambiguous');

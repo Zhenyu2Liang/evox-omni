@@ -19,6 +19,8 @@
     "db:generate": "prisma generate",
     "db:push": "tsx scripts/db-push.ts",
     "scheduler:tick": "tsx scripts/scheduler.ts",
+    "agent:recover": "tsx scripts/agent-recovery.ts --once",
+    "agent:worker": "tsx scripts/agent-recovery.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "tsx scripts/db-push.ts --force-reset && tsx prisma/seed.ts",
     "db:studio": "prisma studio"

@@ -13,7 +13,7 @@ import { AgentRunJournal } from './journal';
 
 const lease = { runId: 'run-1', sessionId: 'session-1', userId: 'user-1', token: 'lease-1' };
 function invocation(id: string, callId: string): ToolInvocation {
-  return { id, runId: lease.runId, ordinal: 1, callId, toolName: 'get_balance', argsJson: '{}', requestDigest: 'digest', operationKey: `inv:${id}`, replaySafety: 'read_only', status: 'started', resultJson: null, errorCode: null, attempt: 1, maxAttempts: 3, startedAt: new Date(), finishedAt: null };
+  return { id, runId: lease.runId, modelRequestId: null, origin: 'pi', parentInvocationId: null, taskId: null, nodeId: null, ordinal: 1, callId, toolName: 'get_balance', argsJson: '{}', requestDigest: 'digest', operationKey: `inv:${id}`, replaySafety: 'read_only', status: 'started', resultJson: null, errorCode: null, attempt: 1, maxAttempts: 3, startedAt: new Date(), finishedAt: null };
 }
 
 beforeEach(() => {

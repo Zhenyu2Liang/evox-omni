@@ -12,7 +12,8 @@
  * tools and `messages`), so a continuation turn after a human confirmation keeps the SAME
  * conversation; `serialize()` hands the current state back to `./session` for persistence.
  */
-import { Agent } from '@earendil-works/pi-agent-core';
+import { Agent, runToolCall, type AgentEvent } from '@earendil-works/pi-agent-core';
+import type { AssistantMessage, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
 import type {
   AfterToolCallContext,
   AfterToolCallResult,
@@ -109,6 +110,7 @@ export interface BankingAgentRuntime {
   serialize(): SessionSnapshot;
   /** Remove all stream listeners. */
   dispose(): void;
+  executeCheckpointCall(call: ToolCall, assistant: AssistantMessage, emit: (event: AgentEvent) => Promise<void>): Promise<ToolResultMessage>;
 }
 /**
  * Facade-level name of the runtime `beforeToolCall` hook.
@@ -154,6 +156,11 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     automaticWriteAudit: () => ({ sessionId, userRequest: latestUserRequest() }),
     submitPlan: {
       sessionId,
+      invocationIdentity: callId => {
+        const invocation = options.journal?.invocationForCall(callId);
+        return invocation ? { runId: invocation.runId, parentInvocationId: invocation.id } : undefined;
+      },
+      runtimeFence: client => options.journal?.assertLeaseOwned(client) ?? Promise.resolve(),
       userRequest: latestUserRequest,
       conversationIntent: options.conversationIntent,
       runTool: (toolName, args, ctx) =>
@@ -211,6 +218,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
       args,
       userRequest: latestUserRequest(),
       invocationId: options.journal?.invocationForCall(context.toolCall.id)?.id,
+      runtimeFence: client => options.journal?.assertLeaseOwned(client) ?? Promise.resolve(),
     });
 
     if (auth.action && options.journal) {
@@ -258,7 +266,16 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     beforeToolCall,
     afterToolCall,
     finishTurn,
+    prepareRequest: request => options.journal?.prepareModelRequest(request),
   });
+
+  options.journal?.bindRuntime(runtimeSnapshot, config);
+
+  function runtimeSnapshot(): SessionSnapshot {
+    return { sessionId, userId, agentState: agent.state, transcript: options.snapshot?.transcript ?? [],
+      createdAt: options.snapshot?.createdAt ?? Date.now(), updatedAt: Date.now(), revision: options.snapshot?.revision ?? 0,
+      intent: options.snapshot?.intent };
+  }
 
   return {
     agent,
@@ -266,6 +283,15 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     userId,
     registry,
     planningRejections,
+    async executeCheckpointCall(call, assistant, emit) {
+      await emit({ type: 'tool_execution_start', toolCallId: call.id, toolName: call.name, args: call.arguments });
+      const outcome = await runToolCall(call, { tools: registry.list(), assistantMessage: assistant,
+        context: { messages: agent.state.messages, tools: registry.list() }, beforeToolCall, afterToolCall,
+        onUpdate: result => emit({ type: 'tool_execution_update', toolCallId: call.id, toolName: call.name, args: call.arguments, partialResult: result }) });
+      await emit({ type: 'tool_execution_end', toolCallId: call.id, toolName: call.name, result: outcome.result, isError: outcome.isError });
+      return { role: 'toolResult', toolCallId: call.id, toolName: call.name, content: outcome.result.content,
+        details: outcome.result.details, isError: outcome.isError, timestamp: Date.now() };
+    },
     serialize(): SessionSnapshot {
       const now = Date.now();
       return {

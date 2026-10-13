@@ -16,9 +16,15 @@ Pi Core already offers the necessary barrier: [Agent.subscribe()](https://github
 
 `AgentRun` admits an input, stores its request identity, and owns a fenced session execution lease. A repeated request ID with the same digest locates the original run; a different digest is a conflict. Recovery reclaims that run rather than minting new operation identities.
 
+The admission transaction also saves a complete input checkpoint and the session's base revision. Subsequent checkpoints contain the original provider configuration, model endpoint, Agent messages, conversation intent and transcript. The session commit checks both revision and the current run lease in the same transaction; an older owner cannot overwrite a replacement's conversation or post a bank effect.
+
+`ModelRequest` records an ordinal, input digest, complete request context, provider model, tool declarations, status and bounded attempt count. `prepareRequest` commits its intent before contacting the provider. A complete assistant `message_end` commits the result and a complete checkpoint before any tool preflight. Streaming partials remain raw evidence and never become executable tool decisions. Error, aborted and truncated messages do not become complete results.
+
 `AgentRunEvent` appends each event with a monotonically increasing run-local sequence. The `raw` channel retains original lifecycle events, model deltas, and tool evidence. The `ui` channel stores server-grounded presentation events. HTTP readers can read only `ui`; raw reasoning is internal. Structured credentials and recognizable bearer/API tokens are redacted before storage. Original request digests use unredacted canonical inputs, so redaction does not collapse distinct operations.
 
 `ToolInvocation` uses a server-generated ID and a run-local ordinal. Provider call IDs are correlation data and may repeat in later rounds. Concurrent calls with the same provider identity are rejected because their completion events would be ambiguous. A started event and invocation creation commit together. The default banking operation key is derived from the invocation ID. Pending commands may bind the invocation to the authoritative command identity before parking.
+
+`origin` distinguishes Pi and workflow child calls. The original model request, parent invocation, task and node are explicit identities. Every DAG bank tool uses this same invocation table, including automatic reads and tools resumed through HTTP or scheduler paths. A node's invocation and `nodeExecutionKey` survive takeover and retry. Unique source graph and node constraints prevent a second graph or operation identity from being created for the same recorded intent.
 
 The invocation request digest identifies the model-facing request. A bank command's receipt digest identifies the normalized domain command. These serve different boundaries: receipt reconciliation must first verify the bank's owner, command, operation key, and normalized digest, then supply the verified original receipt to the invocation recovery function.
 
@@ -50,10 +56,47 @@ If a bank receipt exists but the Agent end event was not saved, restore the orig
 
 `GET /api/runs/:id` returns invocation metadata for the cookie-owned session and user. It excludes raw messages, reasoning, arguments, request text, and lease tokens. `GET /api/runs/:id/events` reads the grounded presentation channel with an exclusive sequence cursor. Raw events remain internal.
 
-`POST /api/runs/:id/recover` accepts only an optional original invocation ID. It first verifies immutable bank receipts, then reclaims the original run if an interrupted GREEN read needs a bounded retry. Gated reads, confirmation, and MFA still require their original authorization. The endpoint never sends a bank write, grants a new approval, or blindly repeats a workflow submission.
+`POST /api/runs/:id/recover` accepts only an optional original invocation ID. It verifies immutable bank receipts, reclaims the original run, retries eligible interrupted GREEN reads through fresh security evaluation, resumes the original graph, and continues the original complete model checkpoint when execution evidence is resolved. A complete recorded assistant decision with no started invocation executes its original calls through the ordinary schema validation and gateway hooks. A partial assistant decision is discarded and its original model request is regenerated. New decisions still require current permission, confirmation and MFA; unknown committed effects stop for reconciliation.
 
 Pending-action settlement synchronizes approved read results and terminal decisions into the linked invocation in the same transaction. Explicit recovery also reconciles stored terminal actions before deciding whether authorization is still pending. Financial writes synchronize their completed invocation through the banking receipt transaction. A later Pi end event remains in the raw journal but cannot replace a completed receipt or a terminal action decision. Repeated synchronization does not append duplicate settlement events.
 
 A run's outstanding actions are scoped to its invocation IDs, operation keys and submitted plan identity. Unrelated pending actions and newer session runs cannot prevent an older run from converging to its terminal facts. Cancelled invocations settle the original run as failed with `CANCELLED` without a new tool attempt.
 
-Interrupted model generation is deliberately reported as interrupted when there is no recoverable tool result. The saved state checkpoint supports inspection and future model continuation, but this recovery endpoint does not regenerate model planning after a crash. This keeps the supported recovery guarantee explicit: original tool results and banking command outcomes are recoverable, while automatic process-level model replay is not implemented.
+## Process restart and model continuation
+
+The model's in-memory stream is not resumed at a byte offset. Recovery regenerates an unfinished model request from its exact saved input, with the same model, endpoint and tool declaration fingerprint. Each model intent allows at most three total attempts. Authentication, invalid-request, validation and other permanent failures stop; transient model failures retain the complete input checkpoint and use persisted backoff. A run allows at most three recovery admissions, independently of tool attempt limits.
+
+| Durable boundary at interruption | Recovery behavior |
+| --- | --- |
+| Input admitted, runtime not constructed | Construct the original configured runtime from the admission checkpoint |
+| Model intent saved, response incomplete | Retry the original bounded model request; never execute partial tool calls |
+| Complete assistant decision saved, call not started | Validate and execute the recorded call ID and arguments through current gateway hooks |
+| Eligible read intent started, result absent | Retry the same invocation and operation identity with current security evaluation |
+| Bank write committed, response or Pi end event lost | Verify the receipt and ledger, then insert the original result into the original model context |
+| Write outcome cannot be proved | Preserve reconciliation state and suspend automatic worker recovery |
+| Confirmation or MFA persisted before session save | Rebuild the original parked call in session state and wait for the original decision |
+| Authorized effect committed, result narration interrupted | Verify the original action, call binding and bank receipt; continue its saved narration without another command |
+| DAG predecessor committed | Resume the unique original graph, preserve completed nodes and reuse child invocations |
+| Graph intent saved but graph not created | Create its first graph only after proving no child effect exists and checking the new lease |
+| Session state committed but run finalization lost | Finalize without another model request or bank effect |
+| Newer session revision or different provider/tool definitions | Stop the obsolete continuation rather than overwrite or reinterpret it |
+
+[`agent/durable/continuation.ts`](../agent/durable/continuation.ts) reconstructs the original provider call/result adjacency. [`workflow-resumption.ts`](../agent/durable/workflow-resumption.ts) resumes the graph under the current run fence. A paused or cancelled graph is not advanced automatically. Redacted credentials cannot be supplied as real operation arguments.
+
+Run `pnpm agent:recover` for one bounded recovery pass, or `pnpm agent:worker` for a resident worker. The worker uses lease-protected admission, persisted backoff and attempt caps; concurrent workers may discover the same run but only the admitted owner executes it. Graceful shutdown drains the current recovery before stopping. This worker is separate from `pnpm scheduler:tick`, which dispatches due business schedules.
+
+Run leases expire after 120 seconds and renew during live execution. A restart does not bypass a still-valid lease. The worker's default discovery interval is 5 seconds. Shutdown stops admission and drains the current recovery; a forceful kill leaves work for the next eligible owner.
+
+## Independent workflow recovery
+
+HTTP and scheduled workflows can have no outer Pi call or model request. Their full graph and recovery source commit together, with `requestJson.kind = "workflow"` and `checkpointStage = "workflow_only"`. [`standalone-workflow.ts`](../agent/durable/standalone-workflow.ts) resumes this original graph without calling a model. A completed child does not imply that the whole graph completed.
+
+Discovery requires the graph to be pending or running, with no live executor and no open manual review. Workflow execution claims expire after 600 seconds by default; discovery and claim admission share the same constant. A null claim permits admission immediately. The driver verifies saved query outputs against invocation results and verifies completed financial predecessors against their original receipt and ledger before downstream work can consume them. Missing evidence parks the run for reconciliation.
+
+Paused, failed, cancelled and parked human decisions preserve their original control state. Automatic recovery does not invoke the explicit failed-node retry path. A user-requested retry can produce fresh authorization only after proving the earlier attempt did not commit; it retains the node invocation and operation key. Source run state and ordinary task lease release or final node settlement synchronize transactionally.
+
+An independent graph can survive later conversation revisions because it has its own complete input. Admission aligns its base revision only when neither a session executor nor a task executor is live; all new effects remain fenced by the admitted run and node ownership. Model continuation, by contrast, stops when its original conversation revision has changed.
+
+## Verification
+
+[`process-restart.test.ts`](../tests/integration/process-restart.test.ts) uses real child processes and `SIGKILL` to cover partial model generation, a complete decision before tool intent, read interruption, a committed budget, a committed DAG predecessor, a parked transfer followed by approval, and interrupted narration after an authorized transfer. It verifies original invocation and graph identities, one bank effect and one success audit. [`standalone-workflow-restart.test.ts`](../tests/integration/standalone-workflow-restart.test.ts) covers independent graph restart, committed predecessors, parked approvals, control retention, receipt integrity and live/manual ownership. Additional transaction tests cover model retry limits, persisted backoff, permanent failure, lease replacement and newer conversation revisions.
