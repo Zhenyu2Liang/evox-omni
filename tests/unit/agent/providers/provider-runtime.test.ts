@@ -51,14 +51,14 @@ describe('Pi 1.x explicit provider runtime', () => {
       payload = await request.json();
       return response();
     };
-    const call = fauxAssistantMessage([fauxToolCall('transfer_money', { amount: 200.37 }, { id: 'transfer-1' })], { stopReason: 'toolUse' });
+    const call = fauxAssistantMessage([fauxToolCall('transfer_money', { amount: '200.37' }, { id: 'transfer-1' })], { stopReason: 'toolUse' });
     const messages: Message[] = withRealToolResult([
       { role: 'user', content: '给张伟转200.37元', timestamp: 1 }, call,
       { role: 'toolResult', toolCallId: 'transfer-1', toolName: 'transfer_money', content: [{ type: 'text', text: '等待确认' }], isError: true, timestamp: 2 },
       fauxAssistantMessage('请确认。'),
     ], {
       role: 'toolResult', toolCallId: 'transfer-1', toolName: 'transfer_money',
-      content: [{ type: 'text', text: '已入账200.37元' }], details: { amount: 200.37 }, isError: false, timestamp: 3,
+      content: [{ type: 'text', text: '已入账200.37元' }], details: { amount: '200.37' }, isError: false, timestamp: 3,
     }) as Message[];
     const stream = await runtime.streamFn(runtime.model, normalizeContext({ messages }), { fetch, maxRetries: 0 });
     const result = await stream.result();

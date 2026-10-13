@@ -45,7 +45,7 @@ const PLAN_NODES = [
     dependencies: ['n1'],
     kind: 'tool',
     tool: 'transfer_money',
-    args: { name: '张伟', amount: 200 },
+    args: { name: '张伟', amount: '200.00' },
   },
 ];
 

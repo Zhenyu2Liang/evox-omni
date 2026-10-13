@@ -160,7 +160,7 @@ describe('respond — transfer resolution across two model calls', () => {
     const call = firstToolCall(second);
     expect(call).toBeDefined();
     expect(call!.name).toBe('transfer_money');
-    expect(call!.args).toEqual({ contactId: 'contact_zhangwei', amount: 200, remark: 'AA' });
+    expect(call!.args).toEqual({ contactId: 'contact_zhangwei', amount: '200', remark: 'AA' });
   });
 });
 
@@ -171,7 +171,7 @@ describe('respond — multi-turn context reuse', () => {
     const priorTransfer = fauxAssistantMessage(
       [
         fauxText('好的，我来为你处理这笔转账。'),
-        fauxToolCall('transfer_money', { contactId: 'contact_zhangwei', amount: 200 }, {
+        fauxToolCall('transfer_money', { contactId: 'contact_zhangwei', amount: '200.00' }, {
           id: 'call_transfer_money',
         }),
       ],
@@ -195,7 +195,7 @@ describe('respond — multi-turn context reuse', () => {
     const call = firstToolCall(msg);
     expect(call).toBeDefined();
     expect(call!.name).toBe('transfer_money');
-    expect(call!.args).toMatchObject({ contactId: 'contact_zhangwei', amount: 100 });
+    expect(call!.args).toMatchObject({ contactId: 'contact_zhangwei', amount: '100' });
     // No second recipient lookup — the recipient is reused from history.
     expect(call!.name).not.toBe('search_contact');
   });
@@ -290,7 +290,7 @@ describe('respond — blocked gated call (awaiting human decision)', () => {
       fauxText('好的，我来为你处理这笔转账。'),
       fauxToolCall(
         'transfer_money',
-        { contactId: 'contact_zhangwei', amount: 200 },
+        { contactId: 'contact_zhangwei', amount: '200.00' },
         { id: 'call_transfer_money' },
       ),
     ],

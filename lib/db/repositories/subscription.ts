@@ -1,23 +1,24 @@
 import type { Subscription } from '@prisma/client';
-import { prisma } from '../client';
+import { dbClient } from '../client';
+import { moneyToCents, type MoneyInput } from '../../money';
 
 export function listSubscriptions(userId: string, status?: string): Promise<Subscription[]> {
-  return prisma.subscription.findMany({
+  return dbClient().subscription.findMany({
     where: { userId, ...(status !== undefined ? { status } : {}) },
     orderBy: { nextChargeAt: 'asc' },
   });
 }
 
 export function getSubscription(id: string): Promise<Subscription | null> {
-  return prisma.subscription.findUnique({ where: { id } });
+  return dbClient().subscription.findUnique({ where: { id } });
 }
 
-export function createSubscription(input: { userId: string; name: string; amount: number; cycle?: string; nextChargeAt: Date; status?: string; remind?: boolean }): Promise<Subscription> {
-  return prisma.subscription.create({
+export function createSubscription(input: { userId: string; name: string; amount: MoneyInput; cycle?: string; nextChargeAt: Date; status?: string; remind?: boolean }): Promise<Subscription> {
+  return dbClient().subscription.create({
     data: {
       userId: input.userId,
       name: input.name,
-      amount: input.amount,
+      amountMinor: moneyToCents(input.amount),
       ...(input.cycle !== undefined ? { cycle: input.cycle } : {}),
       nextChargeAt: input.nextChargeAt,
       ...(input.status !== undefined ? { status: input.status } : {}),
@@ -27,14 +28,14 @@ export function createSubscription(input: { userId: string; name: string; amount
 }
 
 export function updateSubscriptionStatus(id: string, status: string): Promise<Subscription> {
-  return prisma.subscription.update({
+  return dbClient().subscription.update({
     where: { id },
     data: { status },
   });
 }
 
 export function setSubscriptionReminder(id: string, remind: boolean): Promise<Subscription> {
-  return prisma.subscription.update({
+  return dbClient().subscription.update({
     where: { id },
     data: { remind },
   });

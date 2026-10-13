@@ -50,8 +50,8 @@ const INTENT = deriveIntent('transfer_money');
 /** Recipient 张伟 (`contact_zhangwei`) — resolves unambiguously to the seeded contact. */
 const RECIPIENT = CONTACTS[0];
 /** ≤ ¥1000 ⇒ YELLOW; > ¥1000 ⇒ RED (per the security policy table). */
-const YELLOW_AMOUNT = 200;
-const RED_AMOUNT = 5000;
+const YELLOW_AMOUNT = '200.00';
+const RED_AMOUNT = '5000.00';
 
 /* ------------------------------------------------------------------------------- helpers */
 
@@ -70,7 +70,7 @@ async function newPersistedSessionId(): Promise<string> {
  * Propose a `transfer_money` call through the REAL gateway; assert it was BLOCKED (gated) and a
  * `PendingAction` was persisted, then return that action's id.
  */
-async function parkTransfer(sessionId: string, amount: number): Promise<string> {
+async function parkTransfer(sessionId: string, amount: string): Promise<string> {
   const auth = await gateway.handleToolCall({
     sessionId,
     userId: DEMO_USER_ID,

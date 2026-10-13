@@ -16,26 +16,26 @@
  * gateway's confirmation flow, never directly by this page.
  */
 import { getConfig } from '@/lib/config';
-import { addMoney } from '@/lib/money';
+import { addMoney, centsToMoney, moneyToCents, type MoneyAmount } from '@/lib/money';
 import { banking } from '@/banking-sdk';
 import type { SubscriptionCycle, SubscriptionView } from '@/banking-sdk';
 import { Badge, Card, EmptyState, Money, SubscriptionTile } from '@/components';
 
 /** Billings per year for each cycle — used to annualise a subscription's fee. */
-const BILLINGS_PER_YEAR: Record<SubscriptionCycle, number> = {
-  MONTHLY: 12,
-  QUARTERLY: 4,
-  YEARLY: 1,
+const BILLINGS_PER_YEAR: Record<SubscriptionCycle, bigint> = {
+  MONTHLY: 12n,
+  QUARTERLY: 4n,
+  YEARLY: 1n,
 };
 
 /** Annualised cost of a single subscription (cent-safe). */
-function annualCost(subscription: SubscriptionView): number {
-  return addMoney(0, subscription.amount * BILLINGS_PER_YEAR[subscription.cycle]);
+function annualCost(subscription: SubscriptionView): MoneyAmount {
+  return centsToMoney(moneyToCents(subscription.amount) * BILLINGS_PER_YEAR[subscription.cycle]);
 }
 
 /** Sum of every subscription's annualised cost, cent-safe. */
-function totalAnnualCost(rows: SubscriptionView[]): number {
-  return rows.reduce((sum, row) => addMoney(sum, annualCost(row)), 0);
+function totalAnnualCost(rows: SubscriptionView[]): MoneyAmount {
+  return rows.reduce((sum, row) => addMoney(sum, annualCost(row)), '0.00');
 }
 
 // Reads live Prisma data, so it must render per request — never statically prerendered at build.

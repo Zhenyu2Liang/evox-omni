@@ -125,13 +125,13 @@ describe('mock-responder — conditional LIMIT-ADJUSTMENT plan (gated node)', ()
     expect(nodes[1]).toMatchObject({
       kind: 'condition',
       dependencies: ['analyze'],
-      condition: { path: 'analyze.total', op: '>', value: 2000 },
+      condition: { path: 'analyze.total', op: '>', value: '2000' },
     });
     expect(nodes[2]).toMatchObject({
       kind: 'tool',
       tool: 'set_card_limit',
       dependencies: ['check'],
-      args: { cardId: 'card_credit', category: '娱乐', amount: 1500 },
+      args: { cardId: 'card_credit', category: '娱乐', amount: '1500' },
     });
   });
 
@@ -206,14 +206,14 @@ describe('plan parking through the mock model (runTurn → confirmAction)', () =
     expect(safeParse(pending.argsJson, {})).toMatchObject({
       cardId: 'card_credit',
       category: '娱乐',
-      amount: 1500,
+      amount: '1500.00',
     });
 
     // The seeded 娱乐 limit is still 3000 — the gated node did NOT execute.
     const before = await prisma.cardLimit.findFirstOrThrow({
       where: { cardId: 'card_credit', category: '娱乐' },
     });
-    expect(before.amount).toBe(3000);
+    expect(before.amountMinor).toBe(300000n);
 
     /* ---- 3. POST-CONFIRM continuation ------------------------------------------- */
     const outcome = await confirmAction(actionId!);
@@ -250,7 +250,7 @@ describe('plan parking through the mock model (runTurn → confirmAction)', () =
     const after = await getTestPrisma().cardLimit.findFirstOrThrow({
       where: { cardId: 'card_credit', category: '娱乐' },
     });
-    expect(after.amount).toBe(1500);
+    expect(after.amountMinor).toBe(150000n);
   });
 });
 

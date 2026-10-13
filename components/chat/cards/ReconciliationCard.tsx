@@ -8,11 +8,8 @@ import { Badge, Button, Card, Money, type BadgeProps } from '../../ui';
 export interface ReconciliationCardProps {
   action: PendingActionSummary;
   actionId?: string;
-  /**
-   * How the row must be treated (`processing` / `recoverable` / `reconciliation`). Defaults to
-   * `reconciliation` so an actionless legacy call-site keeps the original 待人工核对 rendering.
-   */
-  attention?: OutOfBandAttention;
+  /** Server-classified treatment: processing, recoverable or reconciliation. */
+  attention: OutOfBandAttention;
   /**
    * Recovery entry — when supplied (and `actionId` is present), a 恢复执行 button is rendered for the
    * `recoverable` / `reconciliation` states. It calls the injected handler ONLY (which POSTs to
@@ -92,7 +89,7 @@ function accentClassFor(attention: OutOfBandAttention): string {
  * A `processing` row renders NO button (the work is still owned by a live continuation).
  */
 export function ReconciliationCard(p: ReconciliationCardProps) {
-  const { action, actionId, attention = 'reconciliation', onRecover, busy, error, className } = p;
+  const { action, actionId, attention, onRecover, busy, error, className } = p;
 
   const copy = COPY[attention];
   const canRecover = Boolean(actionId && onRecover);
@@ -143,7 +140,7 @@ export function ReconciliationCard(p: ReconciliationCardProps) {
               <dd className="text-right font-medium text-banking-navy">{field.value}</dd>
             </div>
           ))}
-          {typeof action.amount === 'number' ? (
+          {typeof action.amount === 'string' ? (
             <div className="flex items-center justify-between gap-4 border-t border-banking-navy/10 pt-2 text-sm">
               <dt className="text-banking-navy/70">金额</dt>
               <dd className="font-semibold text-banking-deep">

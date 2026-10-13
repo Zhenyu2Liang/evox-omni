@@ -27,6 +27,8 @@ const NAV_ITEMS: readonly NavItem[] = [
   { href: '/subscriptions', label: '订阅' },
   { href: '/security', label: '安全中心' },
   { href: '/audit', label: '审计日志' },
+  { href: '/runs', label: 'Agent runs' },
+  { href: '/schedules', label: '\u5b9a\u65f6\u4efb\u52a1' },
 ];
 
 function isActive(pathname: string, href: string): boolean {

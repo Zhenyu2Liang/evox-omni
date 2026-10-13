@@ -16,6 +16,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 import { computeDailyTransferTotal, evaluateTransferRisk } from '@/security/risk-engine';
 import { DAILY_TRANSFER_LIMIT } from '@/lib/constants';
+import { addMoney, moneyToCents } from '@/lib/money';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
 import { ACCOUNTS, DEMO_USER_ID } from '../../helpers/fixtures';
 
@@ -36,7 +37,7 @@ const OTHER_USER_ID = 'user_other';
 const OTHER_ACCOUNT_ID = 'acct_other';
 
 interface NewTransaction {
-  amount: number;
+  amount: string;
   direction: 'DEBIT' | 'CREDIT';
   channel: 'APP' | 'CARD' | 'TRANSFER' | 'SUBSCRIPTION';
   occurredAt: Date;
@@ -52,7 +53,7 @@ function insertTransaction(tx: NewTransaction) {
     data: {
       accountId: tx.accountId ?? CHECKING_ACCOUNT_ID,
       userId: tx.userId ?? DEMO_USER_ID,
-      amount: tx.amount,
+      amountMinor: moneyToCents(tx.amount),
       currency: 'CNY',
       direction: tx.direction,
       category: tx.category ?? '转账',
@@ -65,9 +66,9 @@ function insertTransaction(tx: NewTransaction) {
 
 describe('risk-engine · evaluateTransferRisk · boundary (limit ¥1000)', () => {
   it('¥200, no prior transfers → tier YELLOW, requiresConfirmation true, requiresMfa false', () => {
-    expect(DAILY_TRANSFER_LIMIT).toBe(1000);
+    expect(DAILY_TRANSFER_LIMIT).toBe('1000.00');
 
-    const result = evaluateTransferRisk({ amount: 200, dailyTransferTotal: 0 });
+    const result = evaluateTransferRisk({ amount: '200.00', dailyTransferTotal: '0.00' });
 
     expect(result.tier).toBe('YELLOW');
     expect(result.requiresConfirmation).toBe(true);
@@ -75,31 +76,31 @@ describe('risk-engine · evaluateTransferRisk · boundary (limit ¥1000)', () =>
   });
 
   it('amount exactly ¥1000, dailyTotal 0 → YELLOW (not strictly greater than the limit)', () => {
-    const result = evaluateTransferRisk({ amount: DAILY_TRANSFER_LIMIT, dailyTransferTotal: 0 });
+    const result = evaluateTransferRisk({ amount: DAILY_TRANSFER_LIMIT, dailyTransferTotal: '0.00' });
 
     expect(result.tier).toBe('YELLOW');
     expect(result.requiresMfa).toBe(false);
   });
 
   it('amount ¥1000.01, dailyTotal 0 → RED, requiresMfa true', () => {
-    const result = evaluateTransferRisk({ amount: 1000.01, dailyTransferTotal: 0 });
+    const result = evaluateTransferRisk({ amount: '1000.01', dailyTransferTotal: '0.00' });
 
     expect(result.tier).toBe('RED');
     expect(result.requiresMfa).toBe(true);
   });
 
   it('amount ¥500 with dailyTotal 600 (projected ¥1100) → RED (day rule; amount alone is small)', () => {
-    const result = evaluateTransferRisk({ amount: 500, dailyTransferTotal: 600 });
+    const result = evaluateTransferRisk({ amount: '500.00', dailyTransferTotal: '600.00' });
 
     expect(result.tier).toBe('RED');
     expect(result.requiresMfa).toBe(true);
-    expect(result.projectedDailyTotal).toBe(1100);
+    expect(result.projectedDailyTotal).toBe('1100.00');
     // The deciding rule is the DAY total, not the single-transaction amount.
-    expect(result.reasons.join(' ')).toContain('累计');
+    expect(result.reasons.join(' ')).toContain('projected daily total');
   });
 
   it('amount ¥500 with dailyTotal 500 (projected exactly ¥1000) → YELLOW (not strictly greater)', () => {
-    const result = evaluateTransferRisk({ amount: 500, dailyTransferTotal: 500 });
+    const result = evaluateTransferRisk({ amount: '500.00', dailyTransferTotal: '500.00' });
 
     expect(result.projectedDailyTotal).toBe(DAILY_TRANSFER_LIMIT);
     expect(result.tier).toBe('YELLOW');
@@ -110,11 +111,11 @@ describe('risk-engine · evaluateTransferRisk · boundary (limit ¥1000)', () =>
 describe('risk-engine · evaluateTransferRisk · result shape', () => {
   it('requiresConfirmation is ALWAYS true for transfers (both YELLOW and RED)', () => {
     const inputs = [
-      { amount: 0, dailyTransferTotal: 0 },
-      { amount: 200, dailyTransferTotal: 0 },
-      { amount: 500, dailyTransferTotal: 900 },
-      { amount: 5000, dailyTransferTotal: 0 },
-      { amount: 500, dailyTransferTotal: 600 },
+      { amount: '0.00', dailyTransferTotal: '0.00' },
+      { amount: '200.00', dailyTransferTotal: '0.00' },
+      { amount: '500.00', dailyTransferTotal: '900.00' },
+      { amount: '5000.00', dailyTransferTotal: '0.00' },
+      { amount: '500.00', dailyTransferTotal: '600.00' },
     ];
 
     for (const input of inputs) {
@@ -124,11 +125,11 @@ describe('risk-engine · evaluateTransferRisk · result shape', () => {
 
   it("requiresMfa === (tier === 'RED')", () => {
     const inputs = [
-      { amount: 200, dailyTransferTotal: 0 },
-      { amount: DAILY_TRANSFER_LIMIT, dailyTransferTotal: 0 },
-      { amount: 500, dailyTransferTotal: 500 },
-      { amount: 1000.01, dailyTransferTotal: 0 },
-      { amount: 500, dailyTransferTotal: 600 },
+      { amount: '200.00', dailyTransferTotal: '0.00' },
+      { amount: DAILY_TRANSFER_LIMIT, dailyTransferTotal: '0.00' },
+      { amount: '500.00', dailyTransferTotal: '500.00' },
+      { amount: '1000.01', dailyTransferTotal: '0.00' },
+      { amount: '500.00', dailyTransferTotal: '600.00' },
     ];
 
     for (const input of inputs) {
@@ -139,29 +140,29 @@ describe('risk-engine · evaluateTransferRisk · result shape', () => {
   });
 
   it('reports amount, dailyTotal (echoed) and projectedDailyTotal === dailyTotal + amount', () => {
-    const result = evaluateTransferRisk({ amount: 300, dailyTransferTotal: 400 });
+    const result = evaluateTransferRisk({ amount: '300.00', dailyTransferTotal: '400.00' });
 
-    expect(result.amount).toBe(300);
-    expect(result.dailyTotal).toBe(400);
-    expect(result.projectedDailyTotal).toBe(400 + 300);
+    expect(result.amount).toBe('300.00');
+    expect(result.dailyTotal).toBe('400.00');
+    expect(result.projectedDailyTotal).toBe('700.00');
   });
 
   it('reasons[] is non-empty and explains the deciding rule (amount vs day total)', () => {
-    const overAmount = evaluateTransferRisk({ amount: DAILY_TRANSFER_LIMIT + 1, dailyTransferTotal: 0 });
+    const overAmount = evaluateTransferRisk({ amount: addMoney(DAILY_TRANSFER_LIMIT, '1.00'), dailyTransferTotal: '0.00' });
     expect(overAmount.reasons.length).toBeGreaterThan(0);
-    expect(overAmount.reasons.join(' ')).toContain('单笔');
+    expect(overAmount.reasons.join(' ')).toContain('strong verification');
 
-    const overDay = evaluateTransferRisk({ amount: 500, dailyTransferTotal: 600 });
+    const overDay = evaluateTransferRisk({ amount: '500.00', dailyTransferTotal: '600.00' });
     expect(overDay.reasons.length).toBeGreaterThan(0);
-    expect(overDay.reasons.join(' ')).toContain('累计');
+    expect(overDay.reasons.join(' ')).toContain('projected daily total');
 
-    const yellow = evaluateTransferRisk({ amount: 200, dailyTransferTotal: 0 });
+    const yellow = evaluateTransferRisk({ amount: '200.00', dailyTransferTotal: '0.00' });
     expect(yellow.reasons.length).toBeGreaterThan(0);
-    expect(yellow.reasons.join(' ')).toContain('限额');
+    expect(yellow.reasons.join(' ')).toContain('explicit confirmation');
   });
 
   it('is deterministic: identical input yields a deep-equal result', () => {
-    const input = { amount: 750, dailyTransferTotal: 300 };
+    const input = { amount: '750.00', dailyTransferTotal: '300.00' };
 
     const first = evaluateTransferRisk(input);
     const second = evaluateTransferRisk({ ...input });
@@ -175,47 +176,47 @@ describe('risk-engine · computeDailyTransferTotal (needs test SQLite)', () => {
   it('returns 0 when the user has no transfers today', async () => {
     // Fresh seed: the only TRANSFER-channel debits are `tx_sep_transfer_mama` (Sep 4) and
     // `tx_aug_rent` (last month) — both before the demo day (Sep 25) start.
-    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe('0.00');
   });
 
   it("sums only TODAY's outgoing DEBIT transfers for the given userId", async () => {
     await insertTransaction({
-      amount: -300,
+      amount: '-300.00',
       direction: 'DEBIT',
       channel: 'TRANSFER',
       occurredAt: new Date(2026, 8, 25, 8, 0),
     });
     await insertTransaction({
-      amount: -150,
+      amount: '-150.00',
       direction: 'DEBIT',
       channel: 'TRANSFER',
       occurredAt: new Date(2026, 8, 25, 9, 30),
     });
 
     // DEBIT amounts are stored negative; the repository returns the ABSOLUTE total.
-    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe(450);
+    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe('450.00');
   });
 
   it('excludes transfers from other days (a prior day relative to now)', async () => {
     await insertTransaction({
-      amount: -5000,
+      amount: '-5000.00',
       direction: 'DEBIT',
       channel: 'TRANSFER',
       occurredAt: new Date(2026, 8, 24, 23, 59), // yesterday, just before the day boundary
     });
     await insertTransaction({
-      amount: -200,
+      amount: '-200.00',
       direction: 'DEBIT',
       channel: 'TRANSFER',
       occurredAt: new Date(2026, 8, 25, 8, 0),
     });
 
-    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe(200);
+    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe('200.00');
   });
 
   it('is deterministic via the injected now: a fixed now selects exactly one calendar day', async () => {
     await insertTransaction({
-      amount: -100,
+      amount: '-100.00',
       direction: 'DEBIT',
       channel: 'TRANSFER',
       occurredAt: new Date(2026, 8, 25, 8, 0),
@@ -225,15 +226,15 @@ describe('risk-engine · computeDailyTransferTotal (needs test SQLite)', () => {
     const sept26Noon = new Date(2026, 8, 26, 12, 0).getTime();
 
     // Default `now` is the demo clock (2026-09-25 12:00 local) → the 25th transfer counts.
-    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe(100);
-    expect(await computeDailyTransferTotal(DEMO_USER_ID, sept25Noon)).toBe(100);
+    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe('100.00');
+    expect(await computeDailyTransferTotal(DEMO_USER_ID, sept25Noon)).toBe('100.00');
     // The 26th's day starts after the 25th transfer → nothing in its window.
-    expect(await computeDailyTransferTotal(DEMO_USER_ID, sept26Noon)).toBe(0);
+    expect(await computeDailyTransferTotal(DEMO_USER_ID, sept26Noon)).toBe('0.00');
   });
 
   it('excludes incoming CREDIT transactions', async () => {
     await insertTransaction({
-      amount: 800,
+      amount: '800.00',
       direction: 'CREDIT',
       channel: 'TRANSFER',
       occurredAt: new Date(2026, 8, 25, 10, 0),
@@ -241,12 +242,12 @@ describe('risk-engine · computeDailyTransferTotal (needs test SQLite)', () => {
       merchant: '收到转账',
     });
 
-    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe('0.00');
   });
 
   it('excludes non-transfer debits (e.g. card purchases)', async () => {
     await insertTransaction({
-      amount: -120,
+      amount: '-120.00',
       direction: 'DEBIT',
       channel: 'CARD',
       occurredAt: new Date(2026, 8, 25, 11, 0),
@@ -254,13 +255,13 @@ describe('risk-engine · computeDailyTransferTotal (needs test SQLite)', () => {
       merchant: '星巴克',
     });
     await insertTransaction({
-      amount: -50,
+      amount: '-50.00',
       direction: 'DEBIT',
       channel: 'TRANSFER',
       occurredAt: new Date(2026, 8, 25, 12, 0),
     });
 
-    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe(50);
+    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe('50.00');
   });
 
   it("scopes to the given userId (another user's transfers today are not counted)", async () => {
@@ -275,7 +276,7 @@ describe('risk-engine · computeDailyTransferTotal (needs test SQLite)', () => {
         type: 'CHECKING',
         name: '活期账户',
         number: '****0001',
-        balance: 8000,
+        balanceMinor: 800_000n,
         currency: 'CNY',
       },
     });
@@ -283,19 +284,19 @@ describe('risk-engine · computeDailyTransferTotal (needs test SQLite)', () => {
     await insertTransaction({
       userId: OTHER_USER_ID,
       accountId: OTHER_ACCOUNT_ID,
-      amount: -700,
+      amount: '-700.00',
       direction: 'DEBIT',
       channel: 'TRANSFER',
       occurredAt: new Date(2026, 8, 25, 9, 0),
     });
     await insertTransaction({
-      amount: -90,
+      amount: '-90.00',
       direction: 'DEBIT',
       channel: 'TRANSFER',
       occurredAt: new Date(2026, 8, 25, 9, 30),
     });
 
-    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe(90);
-    expect(await computeDailyTransferTotal(OTHER_USER_ID)).toBe(700);
+    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe('90.00');
+    expect(await computeDailyTransferTotal(OTHER_USER_ID)).toBe('700.00');
   });
 });

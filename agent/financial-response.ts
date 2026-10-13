@@ -92,7 +92,7 @@ export function renderFinancialResponse(
     if (!label) continue; // Unknown/model-invented tools are never authoritative sources.
     if (!entry.result.ok) sections.push(`${label}未取得结果${entry.result.error ? `：${entry.result.error}` : '。'}`);
     else if (entry.result.summary) sections.push(`${label}（查询时结果）：${entry.result.summary}`);
-    else if (entry.toolName === 'analyze_spending' && isRecord(entry.result.data) && typeof entry.result.data.total === 'number') {
+    else if (entry.toolName === 'analyze_spending' && isRecord(entry.result.data) && typeof entry.result.data.total === 'string') {
       sections.push(`账单分析：消费合计 ${formatCNY(entry.result.data.total)}。`);
     } else sections.push(`${label}已查询，请查看系统结果卡片。`);
   }

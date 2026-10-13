@@ -38,6 +38,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { confirmAction, getOrCreateSession, verifyAction } from '@/agent';
 import { AppError } from '@/lib/errors';
 import { DAILY_TRANSFER_LIMIT, MFA_CODE } from '@/lib/constants';
+import { addMoney, moneyToCents, type MoneyInput } from '@/lib/money';
 import { security } from '@/security';
 import { CONTACTS, DEMO_USER_ID } from '../../helpers/fixtures';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
@@ -62,11 +63,11 @@ const LIHUA = CONTACTS[3];
 /** The seeded checking (活期) account every transfer debits. */
 const FUNDING_ACCOUNT_ID = 'acct_checking';
 /** Seeded 活期 balance (`tests/helpers/fixtures.ACCOUNTS`). */
-const STARTING_BALANCE = 23580;
+const STARTING_BALANCE = 2_358_000n;
 /** ¥600 ≤ ¥1000 alone (YELLOW); a second one makes the day total ¥1200 > the ¥1000 limit. */
-const HALF_LIMIT = 600;
+const HALF_LIMIT = '600.00';
 /** Balance we temporarily lower to so the SDK must refuse (¥500 < ¥600). */
-const UNDER_FUNDED_BALANCE = 500;
+const UNDER_FUNDED_BALANCE = 50_000n;
 
 type ConfirmOutcome = Awaited<ReturnType<typeof confirmAction>>;
 
@@ -81,7 +82,7 @@ async function newPersistedSessionId(): Promise<string> {
 async function parkTransfer(
   sessionId: string,
   recipientName: string,
-  amount: number,
+  amount: MoneyInput,
 ): Promise<string> {
   const auth = await gateway.handleToolCall({
     sessionId,
@@ -96,9 +97,9 @@ async function parkTransfer(
 }
 
 /** The funding account's current balance (the money-movement proof). */
-async function balanceOf(): Promise<number> {
+async function balanceOf(): Promise<bigint> {
   const row = await getTestPrisma().account.findUnique({ where: { id: FUNDING_ACCOUNT_ID } });
-  return row!.balance;
+  return row!.balanceMinor;
 }
 
 /** The persisted status of a `PendingAction` row. */
@@ -136,8 +137,8 @@ async function ledgerTotal(recipientNames: readonly string[]): Promise<number> {
 }
 
 /** The user-scoped EXECUTED day-transfer total (the public risk-engine helper). */
-function dailyTotal(): Promise<number> {
-  return security.risk.computeDailyTransferTotal(DEMO_USER_ID);
+async function dailyTotal(): Promise<bigint> {
+  return moneyToCents(await security.risk.computeDailyTransferTotal(DEMO_USER_ID));
 }
 
 function isFulfilled(
@@ -190,14 +191,14 @@ describe('transfer limits · concurrent confirmations hold the ≤ ¥1000 day-to
     expect(loser.message).not.toContain(MFA_CODE); // never leaks the code
 
     // THE INVARIANT: the day's EXECUTED transfer total never exceeds the ¥1000 confirmation-only limit.
-    expect(await dailyTotal()).toBeLessThanOrEqual(DAILY_TRANSFER_LIMIT);
+    expect(await dailyTotal()).toBeLessThanOrEqual(moneyToCents(DAILY_TRANSFER_LIMIT));
 
     // Money moved EXACTLY ONCE (¥600): one debit, one ledger row for the winner, one audit row.
     const recipientOf = new Map<string, string>([
       [first, ZHANGWEI.name],
       [second, WANGFANG.name],
     ]);
-    expect(await balanceOf()).toBe(STARTING_BALANCE - HALF_LIMIT);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - moneyToCents(HALF_LIMIT));
     expect(await transferLedgerCount(recipientOf.get(winners[0]!.actionId)!)).toBe(1);
     expect(await transferLedgerCount(recipientOf.get(loser.actionId)!)).toBe(0);
     expect(await ledgerTotal([ZHANGWEI.name, WANGFANG.name])).toBe(1);
@@ -212,7 +213,7 @@ describe('transfer limits · concurrent confirmations hold the ≤ ¥1000 day-to
     expect(verified.ok).toBe(true);
     expect(verified.status).toBe('executed');
     expect(await actionStatus(loser.actionId)).toBe('executed');
-    expect(await balanceOf()).toBe(STARTING_BALANCE - HALF_LIMIT * 2);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - moneyToCents(HALF_LIMIT) * 2n);
     expect(await transferLedgerCount(recipientOf.get(loser.actionId)!)).toBe(1);
   });
 });
@@ -234,8 +235,8 @@ describe('transfer limits · the day total is USER-scoped (cross-session accumul
     const firstConfirm = await confirmAction(inA);
     expect(firstConfirm.ok).toBe(true);
     expect(firstConfirm.status).toBe('executed');
-    expect(await dailyTotal()).toBe(HALF_LIMIT);
-    expect(await balanceOf()).toBe(STARTING_BALANCE - HALF_LIMIT);
+    expect(await dailyTotal()).toBe(moneyToCents(HALF_LIMIT));
+    expect(await balanceOf()).toBe(STARTING_BALANCE - moneyToCents(HALF_LIMIT));
 
     // B's ¥600 now crosses the limit (¥600 + ¥600 = ¥1200 > ¥1000) despite being in ANOTHER session:
     // it escalates to RED, does NOT execute, and writes no ledger row.
@@ -245,8 +246,8 @@ describe('transfer limits · the day total is USER-scoped (cross-session accumul
     expect(secondConfirm.requiresMfa).toBe(true);
     expect(secondConfirm.tier).toBe('RED');
 
-    expect(await dailyTotal()).toBeLessThanOrEqual(DAILY_TRANSFER_LIMIT);
-    expect(await balanceOf()).toBe(STARTING_BALANCE - HALF_LIMIT);
+    expect(await dailyTotal()).toBeLessThanOrEqual(moneyToCents(DAILY_TRANSFER_LIMIT));
+    expect(await balanceOf()).toBe(STARTING_BALANCE - moneyToCents(HALF_LIMIT));
     expect(await actionStatus(inB)).toBe('awaiting_mfa');
     expect(await transferLedgerCount(WANGFANG.name)).toBe(0);
   });
@@ -272,7 +273,7 @@ describe('transfer limits · the STRICT ¥1000 boundary', () => {
     expect(atLimitAuth.requiresMfa).toBe(false);
 
     // ── one over (¥1001) ⇒ RED at park time (amount > ¥1000).
-    const overLimit = await parkTransfer(sessionId, WANGFANG.name, DAILY_TRANSFER_LIMIT + 1);
+    const overLimit = await parkTransfer(sessionId, WANGFANG.name, addMoney(DAILY_TRANSFER_LIMIT, '1.00'));
     expect(await actionRiskLevel(overLimit)).toBe('RED');
     expect(await actionStatus(overLimit)).toBe('awaiting_mfa');
 
@@ -331,10 +332,10 @@ describe('transfer limits · three queued ¥600 transfers preserve the ≤ ¥100
     }
 
     // The day total and the balance both reflect EXACTLY the number of executions (never more).
-    expect(await dailyTotal()).toBeLessThanOrEqual(DAILY_TRANSFER_LIMIT);
-    expect(await dailyTotal()).toBe(HALF_LIMIT * executed.length);
+    expect(await dailyTotal()).toBeLessThanOrEqual(moneyToCents(DAILY_TRANSFER_LIMIT));
+    expect(await dailyTotal()).toBe(moneyToCents(HALF_LIMIT) * BigInt(executed.length));
     expect(await ledgerTotal([ZHANGWEI.name, WANGFANG.name, LIHUA.name])).toBe(executed.length);
-    expect(await balanceOf()).toBe(STARTING_BALANCE - HALF_LIMIT * executed.length);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - moneyToCents(HALF_LIMIT) * BigInt(executed.length));
     expect(executed.length).toBeGreaterThanOrEqual(1); // the first claim always passes (¥0 + ¥600)
   });
 });
@@ -344,12 +345,12 @@ describe('transfer limits · three queued ¥600 transfers preserve the ≤ ¥100
 describe('transfer limits · repeat confirm of the SAME action (exactly-once execution)', () => {
   it('confirm then confirm again (sequential) is a typed ok:false and executes exactly once', async () => {
     const sessionId = await newPersistedSessionId();
-    const actionId = await parkTransfer(sessionId, ZHANGWEI.name, 200);
+    const actionId = await parkTransfer(sessionId, ZHANGWEI.name, '200.00');
 
     const first = await confirmAction(actionId);
     expect(first.ok).toBe(true);
     expect(first.status).toBe('executed');
-    expect(await balanceOf()).toBe(STARTING_BALANCE - 200);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - 20_000n);
     expect(await transferLedgerCount(ZHANGWEI.name)).toBe(1);
 
     // The repeat is a typed DOMAIN outcome (never a thrown error at the façade, never a second run).
@@ -359,7 +360,7 @@ describe('transfer limits · repeat confirm of the SAME action (exactly-once exe
     expect(repeat.message.length).toBeGreaterThan(0);
 
     // Still exactly one execution / debit / ledger row / audit row.
-    expect(await balanceOf()).toBe(STARTING_BALANCE - 200);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - 20_000n);
     expect(await transferLedgerCount(ZHANGWEI.name)).toBe(1);
     expect(await getTestPrisma().auditLog.count({ where: { sessionId } })).toBe(1);
   });
@@ -367,7 +368,7 @@ describe('transfer limits · repeat confirm of the SAME action (exactly-once exe
   it('gateway authorizeAction twice → the second throws AppError(CONFLICT); two SIMULTANEOUS confirms of one action execute once', async () => {
     // (a) Direct gateway double-authorize: the second is rejected as CONFLICT.
     const sessionId = newSessionId();
-    const gatewayAction = await parkTransfer(sessionId, WANGFANG.name, 200);
+    const gatewayAction = await parkTransfer(sessionId, WANGFANG.name, '200.00');
 
     const authorized = await gateway.authorizeAction(gatewayAction, {
       userId: DEMO_USER_ID,
@@ -384,7 +385,7 @@ describe('transfer limits · repeat confirm of the SAME action (exactly-once exe
 
     // (b) Two SIMULTANEOUS confirms of the SAME action → exactly one wins, money moves once.
     const sessionId2 = await newPersistedSessionId();
-    const actionId = await parkTransfer(sessionId2, LIHUA.name, 300);
+    const actionId = await parkTransfer(sessionId2, LIHUA.name, '300.00');
 
     const outcomes = domainOutcomes(
       await Promise.allSettled([confirmAction(actionId), confirmAction(actionId)]),
@@ -400,7 +401,7 @@ describe('transfer limits · repeat confirm of the SAME action (exactly-once exe
       expect(outcome.message.length).toBeGreaterThan(0);
     }
 
-    expect(await balanceOf()).toBe(STARTING_BALANCE - 300);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - 30_000n);
     expect(await transferLedgerCount(LIHUA.name)).toBe(1);
     expect(await getTestPrisma().auditLog.count({ where: { sessionId: sessionId2 } })).toBe(1);
   });
@@ -413,7 +414,7 @@ describe('transfer limits · balance & ledger consistency (no overspend)', () =>
     // Temporarily lower the funding balance below a single ¥600 transfer.
     await getTestPrisma().account.update({
       where: { id: FUNDING_ACCOUNT_ID },
-      data: { balance: UNDER_FUNDED_BALANCE },
+      data: { balanceMinor: UNDER_FUNDED_BALANCE },
     });
     expect(await balanceOf()).toBe(UNDER_FUNDED_BALANCE);
 
@@ -445,7 +446,7 @@ describe('transfer limits · balance & ledger consistency (no overspend)', () =>
     // The balance never went negative and was never overspent.
     const finalBalance = await balanceOf();
     expect(finalBalance).toBe(UNDER_FUNDED_BALANCE);
-    expect(finalBalance).toBeGreaterThanOrEqual(0);
+    expect(finalBalance).toBeGreaterThanOrEqual(0n);
 
     // No overspend ledger row was written; executions === successful debits.
     const successfulDebits = await ledgerTotal([ZHANGWEI.name, WANGFANG.name]);
@@ -455,7 +456,7 @@ describe('transfer limits · balance & ledger consistency (no overspend)', () =>
 
   it('a successful confirm writes EXACTLY one debit + one ledger row', async () => {
     const sessionId = await newPersistedSessionId();
-    const actionId = await parkTransfer(sessionId, ZHANGWEI.name, 250);
+    const actionId = await parkTransfer(sessionId, ZHANGWEI.name, '250.00');
 
     const outcome = await confirmAction(actionId);
     expect(outcome.ok).toBe(true);
@@ -465,9 +466,9 @@ describe('transfer limits · balance & ledger consistency (no overspend)', () =>
       where: { channel: 'TRANSFER', merchant: `转账给${ZHANGWEI.name}` },
     });
     expect(debits).toHaveLength(1);
-    expect(debits[0]!.amount).toBe(-250); // DEBIT rows are stored negative
+    expect(debits[0]!.amountMinor).toBe(-25_000n);
     expect(debits[0]!.direction).toBe('DEBIT');
-    expect(await balanceOf()).toBe(STARTING_BALANCE - 250);
-    expect(await dailyTotal()).toBe(250);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - 25_000n);
+    expect(await dailyTotal()).toBe(25_000n);
   });
 });

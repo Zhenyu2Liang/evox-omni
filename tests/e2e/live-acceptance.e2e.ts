@@ -17,12 +17,8 @@
  * Everything else (key, provider, model, mock off) is the provided `.env.local` unchanged.
  * By default the run therefore exercises `resolveLiveModel` on the PROVIDED id, not an override.
  *
- * ENV LOADING: before booting anything the harness reads the worktree-root `.env.local` into ITS OWN
- * `process.env` (simple Next-like `KEY=VALUE` parse). `startDevServer` spawns `next dev` with
- * `env: { ...process.env }`, so every spawned server is GUARANTEED to carry the real
- * `DEEPSEEK_API_KEY` instead of depending on Next loading `.env.local` on its own (which produced
- * booted servers without a key → `POST /api/chat` → 400 `VALIDATION No API key found …`). The key
- * value is never printed, logged or committed.
+ * Environment loading uses the application's Next.js loader before any process is spawned.
+ * The harness does not read or parse environment files directly and never displays their values.
  * * Run:  npx tsx tests/e2e/live-acceptance.e2e.ts
  * Subset: `LIVE_SCENARIOS=1,3` (comma-separated scenario ids) runs only those journeys.
  *
@@ -36,7 +32,10 @@
  * harness never runs under `npm run test`.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
+import nextEnv from '@next/env';
+
+const { loadEnvConfig } = nextEnv;
 import path from 'node:path';
 import type { Browser, Page } from 'playwright-core';
 import type { PrismaClient } from '@prisma/client';
@@ -48,7 +47,7 @@ import {
   runPrismaGenerate,
   runCliStep as runCliStepShared,
 } from '../helpers/prisma-cli';
-import { formatCNY } from '../../lib/money';
+import { centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
 import {
   NAV_TIMEOUT_MS,
   REPO_ROOT,
@@ -92,44 +91,11 @@ const RECIPIENT_CONTACT_ID = 'contact_zhangwei';
 const CREDIT_CARD_ID = 'card_credit';
 
 /**
- * Merge the worktree-root `.env.local` into THIS process's `process.env` (Next-like `KEY=VALUE` parse),
- * BEFORE any `next dev` is booted — `startDevServer` passes `env: { ...process.env }`, so every spawned
- * server inherits the REAL `DEEPSEEK_API_KEY` instead of relying on Next to load `.env.local` itself
- * (relying on that left booted servers keyless → `POST /api/chat` → 400
- * `VALIDATION No API key found in the environment for provider "deepseek"`).
- *
- * Parsing rules mirror Next's dotenv loading: skip blank and `#` comment lines, strip an optional
- * `export ` prefix, split on the FIRST `=`, and drop ONE layer of surrounding single/double quotes
- * from the value. Absent/ unreadable file → no-op. The values are NEVER printed, logged or committed.
+ * Apply the same environment precedence as Next.js without inspecting file contents or logging values.
  */
-function loadDotEnvLocal(): void {
-  const file = path.join(REPO_ROOT, '.env.local');
-  if (!existsSync(file)) return;
-  let text: string;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    return;
-  }
-  let loaded = 0;
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (line === '' || line.startsWith('#')) continue;
-    const withoutExport = line.startsWith('export ') ? line.slice('export '.length).trim() : line;
-    const eq = withoutExport.indexOf('=');
-    if (eq <= 0) continue;
-    const key = withoutExport.slice(0, eq).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
-    let value = withoutExport.slice(eq + 1).trim();
-    const quoted =
-      value.length >= 2 &&
-      ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")));
-    if (quoted) value = value.slice(1, -1);
-    process.env[key] = value;
-    loaded += 1;
-  }
-  // Count only — NEVER the values (the file holds the provider API key).
-  console.log(`· 已从 .env.local 载入 ${loaded} 个环境变量（仅计数，不打印取值）`);
+function loadRuntimeEnvironment(): void {
+  loadEnvConfig(REPO_ROOT, true, { info: () => undefined, error: () => { throw new Error('Live environment configuration could not be loaded.'); } });
+  console.log('Live environment configuration loaded without displaying values.');
 }
 
 /** Point this process — provisioning CLIs + the spawned dev server — at the ISOLATED live DB. */function configureLiveEnv(): void {
@@ -143,8 +109,6 @@ function loadDotEnvLocal(): void {
   const forced = process.env['LIVE_FORCE_MODEL']?.trim();
   if (forced) {
     process.env['LLM_MODEL'] = forced;
-  } else {
-    delete process.env['LLM_MODEL'];
   }
 }
 
@@ -217,22 +181,22 @@ async function withDb<T>(fn: (db: PrismaClient) => Promise<T>): Promise<T> {
 }
 
 /** The CHECKING account balance (authoritative, straight from SQLite). */
-function readCheckingBalance(): Promise<number> {
+function readCheckingBalance(): Promise<string> {
   return withDb(async (db) => {
     const account = await db.account.findUnique({ where: { id: DEMO_CHECKING_ID } });
     if (!account) throw new Error(`缺少账户 ${DEMO_CHECKING_ID}`);
-    return account.balance;
+    return centsToMoney(account.balanceMinor);
   });
 }
 
 /** DEBIT `Transaction` rows on the CHECKING account, newest first. */
-function readCheckingDebits(): Promise<{ id: string; amount: number; merchant: string }[]> {
+function readCheckingDebits(): Promise<{ id: string; amountMinor: bigint; merchant: string }[]> {
   return withDb(async (db) =>
     db.transaction.findMany({
       where: { accountId: DEMO_CHECKING_ID, direction: 'DEBIT' },
       orderBy: { occurredAt: 'desc' },
       take: 20,
-      select: { id: true, amount: true, merchant: true },
+      select: { id: true, amountMinor: true, merchant: true },
     }),
   );
 }
@@ -439,7 +403,7 @@ async function confirmButtonCount(page: Page): Promise<number> {
 }
 
 /** The demo user's money state via the app's REAL read routes. */
-async function snapshot(baseUrl: string): Promise<{ balance: number; ledger: LedgerView }> {
+async function snapshot(baseUrl: string): Promise<{ balance: string; ledger: LedgerView }> {
   const [dashboard, ledger] = await Promise.all([fetchDashboardSummary(baseUrl), fetchLedger(baseUrl)]);
   return { balance: dashboard.checkingBalance, ledger };
 }
@@ -455,10 +419,10 @@ async function snapshot(baseUrl: string): Promise<{ balance: number; ledger: Led
  */
 async function waitForTransferSettled(
   baseUrl: string,
-  before: { balance: number; ledger: LedgerView },
-  amount: number,
+  before: { balance: string; ledger: LedgerView },
+  amount: string,
   timeoutMs = 120_000,
-): Promise<{ balance: number; dbBalance: number; txIds: string[]; occurrences: number }> {
+): Promise<{ balance: string; dbBalance: string; txIds: string[]; occurrences: number }> {
   const preexistingIds = new Set(before.ledger.transactions.map((tx) => tx.id));
   return waitFor(
     async () => {
@@ -468,18 +432,18 @@ async function waitForTransferSettled(
         readCheckingDebits(),
       ]);
       const added = diffLedger(before.ledger.transactions, after.ledger.transactions).added.filter(
-        (tx) => tx.amount === -amount && tx.direction === 'DEBIT' && tx.merchant.includes(RECIPIENT_NAME),
+        (tx) => moneyToCents(tx.amount) === -moneyToCents(amount) && tx.direction === 'DEBIT' && tx.merchant.includes(RECIPIENT_NAME),
       );
       const matching = debits.filter(
-        (tx) => tx.amount === -amount && tx.merchant.includes(RECIPIENT_NAME) && !preexistingIds.has(tx.id),
+        (tx) => tx.amountMinor === -moneyToCents(amount) && tx.merchant.includes(RECIPIENT_NAME) && !preexistingIds.has(tx.id),
       );
-      const expected = Math.round((before.balance - amount) * 100) / 100;
+      const expected = subtractMoney(before.balance, amount);
       if (after.balance !== expected || dbBalance !== expected || added.length !== 1) return false;
       return { balance: after.balance, dbBalance, txIds: added.map((tx) => tx.id), occurrences: matching.length };
     },
     {
       timeoutMs,
-      description: `转账 ${amount} 已落库：余额 ${before.balance} → ${before.balance - amount}，账本新增 1 条 -${amount} DEBIT`,
+      description: `Transfer ${amount}: balance ${before.balance} -> ${subtractMoney(before.balance, amount)} with one debit.`,
     },
   );
 }
@@ -578,9 +542,9 @@ const MSG = {
 const PROMPT_S2 = process.env['LIVE_S2_PROMPT']?.trim() || MSG.transferByName;
 const PROMPT_S3 = process.env['LIVE_S3_PROMPT']?.trim() || MSG.transferDecimal;
 
-const TRANSFER_AMOUNT = 200;
-const DECIMAL_AMOUNT = 200.37;
-const LARGE_AMOUNT = 5000;
+const TRANSFER_AMOUNT = '200.00';
+const DECIMAL_AMOUNT = '200.37';
+const LARGE_AMOUNT = '5000.00';
 
 /**
  * Scenario 7 park-robustness knobs. The LIVE model SOMETIMES answers the transfer prompt with only
@@ -1097,10 +1061,8 @@ function selectedIds(): string[] | undefined {
 }
 
 async function main(): Promise<void> {
-  // DEFECT-B FIX: load the worktree-root `.env.local` into THIS process BEFORE anything boots, so every
-  // spawned `next dev` (which inherits `process.env`, see `startDevServer`) carries the real
-  // `DEEPSEEK_API_KEY` instead of a keyless environment (400 `VALIDATION No API key found …`).
-  loadDotEnvLocal();
+  // Spawned server processes inherit the application loader's environment without exposing values.
+  loadRuntimeEnvironment();
   const reporter = createReporter();
   const only = selectedIds();
   // Selecting `2` also pulls in its `2p` (by-phone) companion leg.
@@ -1155,8 +1117,8 @@ async function main(): Promise<void> {
   const forcedModel = process.env['LIVE_FORCE_MODEL']?.trim();
   console.log(
     forcedModel
-      ? `· LIVE with FORCED model-id override（LIVE_FORCE_MODEL='${forcedModel}'）`
-      : "· LIVE with PROVIDED model id（不覆盖 LLM_MODEL：Pi 1.1 直接识别 .env.local 的 'deepseek-flash'）",
+      ? 'Live run uses an explicitly requested model override.'
+      : 'Live run uses the configured model.',
   );
 
   const executablePath = resolveBrowserExecutable();
@@ -1176,7 +1138,7 @@ async function main(): Promise<void> {
     resetLiveDatabase();
 
     console.log(
-      `· LLM_MODE=${process.env['LLM_MODE']} LLM_PROVIDER=${process.env['LLM_PROVIDER']} LLM_MODEL=${process.env['LLM_MODEL'] ?? '（未覆盖 → 由 .env.local 提供）'}（真实 DeepSeek API）`,
+      'Live provider configuration is applied; configuration values are not displayed.',
     );
     devServer = await bootDevServer({ timeoutMs: NAV_TIMEOUT_MS, attempts: 2 });
     const baseUrl = devServer.baseUrl;

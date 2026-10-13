@@ -79,7 +79,7 @@ const expired = () => new Date(Date.now() - 660000);
 const pauseOnRead = (s: string): PlanRunTool => async () => {
   const row = (await getTestPrisma().agentTask.findFirst({ where: { sessionId: s }, orderBy: { createdAt: 'desc' } }))!;
   await taskControl.pauseTask(s, row.id);
-  return { ok: true, data: { balance: 23580 } };
+  return { ok: true, data: { balance: '23580.00' } };
 };
 
 it('an obsolete/replaced executor must not reclaim and overwrite a completed successor node', async () => {
@@ -94,8 +94,8 @@ it('an obsolete/replaced executor must not reclaim and overwrite a completed suc
         goal: '过期执行者不得重占后续节点',
         nodes: [
           { id: 'read', name: '读余额', kind: 'tool', tool: 'get_balance', args: {}, dependencies: [] },
-          { id: 'first', name: '第一预算', kind: 'tool', tool: 'reserve_budget', args: { name: '过期执行者第一预算', amount: 10 }, dependencies: ['read'] },
-          { id: 'second', name: '第二预算', kind: 'tool', tool: 'reserve_budget', args: { name: '过期执行者第二预算', amount: 20 }, dependencies: ['first'] },
+          { id: 'first', name: '第一预算', kind: 'tool', tool: 'reserve_budget', args: { name: '过期执行者第一预算', amount: '10' }, dependencies: ['read'] },
+          { id: 'second', name: '第二预算', kind: 'tool', tool: 'reserve_budget', args: { name: '过期执行者第二预算', amount: '20' }, dependencies: ['first'] },
         ],
       },
       { sessionId: s, runTool: pauseOnRead(s) },
@@ -161,7 +161,7 @@ it('an obsolete initial executor must publish no late plan-progress event after 
   // UI — after the takeover wins, the obsolete executor must forward NOTHING.
   const obsoleteRun = runSubmitPlan(
     userId,
-    { goal: '过期进度事件', nodes: [{ id: 'budget', name: '预算', kind: 'tool', tool: 'reserve_budget', args: { name: '过期事件预算', amount: 10 }, dependencies: [] }] },
+    { goal: '过期进度事件', nodes: [{ id: 'budget', name: '预算', kind: 'tool', tool: 'reserve_budget', args: { name: '过期事件预算', amount: '10' }, dependencies: [] }] },
     {
       sessionId: s,
       onPlanUpdate: async (plan) => {
@@ -208,7 +208,7 @@ it("an obsolete executor's late failure must not flip a takeover-completed depen
         goal: '过期执行者晚失败不得改写下游',
         nodes: [
           { id: 'read', name: '读余额', kind: 'tool', tool: 'get_balance', args: {}, dependencies: [] },
-          { id: 'budget', name: '预算', kind: 'tool', tool: 'reserve_budget', args: { name: '过期失败依赖预算', amount: 10 }, dependencies: ['read'] },
+          { id: 'budget', name: '预算', kind: 'tool', tool: 'reserve_budget', args: { name: '过期失败依赖预算', amount: '10' }, dependencies: ['read'] },
           { id: 'tail', name: '收尾', kind: 'note', dependencies: ['budget'] },
         ],
       },
@@ -265,7 +265,7 @@ it('two concurrent takeovers of one stale claim yield exactly one executor (node
         goal: '并发接管唯一赢家',
         nodes: [
           { id: 'read', name: '读余额', kind: 'tool', tool: 'get_balance', args: {}, dependencies: [] },
-          { id: 'budget', name: '预算', kind: 'tool', tool: 'reserve_budget', args: { name: '并发接管唯一预算', amount: 10 }, dependencies: ['read'] },
+          { id: 'budget', name: '预算', kind: 'tool', tool: 'reserve_budget', args: { name: '并发接管唯一预算', amount: '10' }, dependencies: ['read'] },
         ],
       },
       { sessionId: s, runTool: pauseOnRead(s) },

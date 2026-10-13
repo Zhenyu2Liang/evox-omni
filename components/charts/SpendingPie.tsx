@@ -2,7 +2,7 @@
 
 import { Cell, Legend, Pie, PieChart, Tooltip } from 'recharts';
 import type { CategorySpend } from '@/banking-sdk';
-import { formatCNY } from '@/lib/money';
+import { formatCNY, moneyToChartNumber } from '@/lib/money';
 import { BANKING_PALETTE, ChartFrame, ChartTooltip, isChartEmpty, seriesColor } from './chartTheme';
 
 export interface SpendingPieProps {
@@ -13,14 +13,15 @@ export interface SpendingPieProps {
 
 export function SpendingPie(p: SpendingPieProps) {
   const height = p.height ?? 280;
-  const active = !isChartEmpty(p.data.map((d) => d.amount));
+  const coordinates = p.data.map(point => ({ ...point, shareCoordinate: Number(point.share) }));
+  const active = !isChartEmpty(p.data.map(point => moneyToChartNumber(point.amount)));
 
   return (
     <ChartFrame height={height} className={p.className} active={active}>
       <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
         <Pie
-          data={p.data}
-          dataKey="share"
+          data={coordinates}
+          dataKey="shareCoordinate"
           nameKey="category"
           innerRadius="55%"
           outerRadius="80%"
@@ -34,8 +35,8 @@ export function SpendingPie(p: SpendingPieProps) {
           content={
             <ChartTooltip
               formatter={(value, item) => {
-                const amount = Number((item.payload as CategorySpend | undefined)?.amount ?? 0);
-                return `${formatCNY(amount)} · ${value.toFixed(1)}%`;
+                const point = item.payload as CategorySpend | undefined;
+                return `${formatCNY(point?.amount ?? '0.00')} · ${point?.share ?? value.toFixed(2)}%`;
               }}
             />
           }

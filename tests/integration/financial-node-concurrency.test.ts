@@ -1,4 +1,5 @@
 import { beforeEach, afterAll, afterEach, expect, it, vi } from 'vitest';
+import { toJson } from '@/lib/json';
 import { NextRequest } from 'next/server';
 import { getOrCreateSession, executeGatedTool, confirmAction, verifyAction } from '@/agent';
 import { runSubmitPlan } from '@/agent/tools/planning';
@@ -19,12 +20,12 @@ async function confirm(id:string,s:string,code?:string){const path=code?'verify'
 
 it('a plan transfer already ledgered but still confirmed is counted once',async()=>{
  const s=(await getOrCreateSession(userId)).sessionId;
- await runSubmitPlan(userId,{goal:'转600',nodes:[node('transfer_money',{name:'张伟',amount:600})]},{sessionId:s,runTool:runner(s)});
+ await runSubmitPlan(userId,{goal:'转600',nodes:[node('transfer_money',{name:'张伟',amount:'600'})]},{sessionId:s,runTool:runner(s)});
  const action=(await getTestPrisma().pendingAction.findFirst({where:{sessionId:s}}))!;
  const original=gateway.recordActionResult.bind(gateway);const reached=deferred(),release=deferred();
  vi.spyOn(gateway,'recordActionResult').mockImplementation(async(...args:any[])=>{if(args[0]===action.id){reached.release();await release.promise;}return (original as any)(...args);});
  const first=confirm(action.id,s);let later:any,total:any;
- try{await bounded(reached.promise);total=await security.risk.computeDailyTransferTotal(userId);later=await executeGatedTool({sessionId:s,userId,toolName:'transfer_money',args:{name:'张伟',amount:100},userRequest:'转100'});if(later.pendingActionId)later=await confirm(later.pendingActionId,s);}
+ try{await bounded(reached.promise);total=await security.risk.computeDailyTransferTotal(userId);later=await executeGatedTool({sessionId:s,userId,toolName:'transfer_money',args:{name:'张伟',amount:'100'},userRequest:'转100'});if(later.pendingActionId)later=await confirm(later.pendingActionId,s);}
  finally{release.release();await first;}
  console.log('REVIEW_PLAN_LEDGER',JSON.stringify({alreadyLedgered:total,laterTier:later.tier,laterRequiresMfa:later.requiresMfa,laterStatus:later.status}));
  expect(later.requiresMfa).toBe(false);
@@ -32,7 +33,7 @@ it('a plan transfer already ledgered but still confirmed is counted once',async(
 
 it('resuming an investment node during post-effect persistence cannot debit twice',async()=>{
  const s=(await getOrCreateSession(userId)).sessionId;
- const result=await runSubmitPlan(userId,{goal:'买理财',nodes:[node('subscribe_investment',{productId:'prod_wenjiana',amount:1000})]},{sessionId:s,runTool:runner(s)});
+ const result=await runSubmitPlan(userId,{goal:'买理财',nodes:[node('subscribe_investment',{productId:'prod_wenjiana',amount:'1000'})]},{sessionId:s,runTool:runner(s)});
  const plan:any=result.data;const firstAction=(await getTestPrisma().pendingAction.findFirst({where:{sessionId:s}}))!;
  const original=gateway.recordActionResult.bind(gateway);const reached=deferred(),release=deferred();
  vi.spyOn(gateway,'recordActionResult').mockImplementation(async(...args:any[])=>{if(args[0]===firstAction.id){reached.release();await release.promise;}return (original as any)(...args);});
@@ -40,15 +41,15 @@ it('resuming an investment node during post-effect persistence cannot debit twic
  try{await bounded(reached.promise);resumed=await post(plan.id,'resume',s);second=await getTestPrisma().pendingAction.findFirst({where:{sessionId:s,id:{not:firstAction.id}}});}
  finally{release.release();await first;}
  if(second)await confirm(second.id,s,'123456');
- const balance=await getTestPrisma().account.findFirst({where:{userId,type:'CHECKING'}});const purchases=await getTestPrisma().investmentHolding.count({where:{userId,amount:1000}});
- console.log('REVIEW_INVESTMENT_REPLAY',JSON.stringify({secondAction:second?.id,resumeStatus:resumed.data?.status,balance:balance?.balance,purchases}));
- expect(balance?.balance).toBe(22580);expect(purchases).toBe(1);
+ const balance=await getTestPrisma().account.findFirst({where:{userId,type:'CHECKING'}});const purchases=await getTestPrisma().investmentHolding.count({where:{userId,principalAmountMinor:100000n}});
+ console.log('REVIEW_INVESTMENT_REPLAY',toJson({secondAction:second?.id,resumeStatus:resumed.data?.status,balance:balance?.balanceMinor,purchases}));
+ expect(balance?.balanceMinor).toBe(2258000n);expect(purchases).toBe(1);
 });
 
 it('a plan cancellation completed before authorization CAS prevents the debit',async()=>{
  const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
  const beforeTool=deferred(),allowTool=deferred(),afterTool=deferred(),finishTool=deferred();let actionId='';
- const running=runSubmitPlan(userId,{goal:'转账取消竞争',nodes:[node('transfer_money',{name:'张伟',amount:200})]},{sessionId:s,runTool:async(tool,args,ctx)=>{beforeTool.release();await allowTool.promise;const result=await runner(s)(tool,args,ctx);actionId=result.pendingActionId!;afterTool.release();await finishTool.promise;return result;}});
+ const running=runSubmitPlan(userId,{goal:'转账取消竞争',nodes:[node('transfer_money',{name:'张伟',amount:'200'})]},{sessionId:s,runTool:async(tool,args,ctx)=>{beforeTool.release();await allowTool.promise;const result=await runner(s)(tool,args,ctx);actionId=result.pendingActionId!;afterTool.release();await finishTool.promise;return result;}});
  const afterBulk=deferred(),allowCancel=deferred(),beforeAuthorize=deferred(),allowAuthorize=deferred();
  let cancelling:Promise<any>|undefined,confirming:Promise<any>|undefined,cancelled:any;
  try{
@@ -65,5 +66,5 @@ it('a plan cancellation completed before authorization CAS prevents the debit',a
  }finally{allowTool.release();finishTool.release();allowCancel.release();allowAuthorize.release();await Promise.allSettled([running,...(cancelling?[cancelling]:[]),...(confirming?[confirming]:[])])}
  const total=await security.risk.computeDailyTransferTotal(userId);const action=await p.pendingAction.findUnique({where:{id:actionId}});
  console.log('REVIEW_CANCEL_GAP',JSON.stringify({cancelled:cancelled?.data?.status,actionStatus:action?.status,total}));
- expect(cancelled.data.status).toBe('cancelled');expect(total).toBe(0);
+ expect(cancelled.data.status).toBe('cancelled');expect(total).toBe('0.00');
 });

@@ -2,6 +2,7 @@ import type { PendingAction, MfaChallenge } from '@prisma/client';
 import { type Prisma } from '@prisma/client';
 import { prisma } from '../client';
 import { toJson } from '../../json';
+import { AppError } from '../../errors';
 import type { RiskLevel } from '../../contracts/risk';
 import type { PendingActionSummary, PendingActionStatus } from '../../contracts/security';
 
@@ -42,6 +43,8 @@ export interface CreatePendingActionInput {
    * `null` (absent) for actions created outside the planner.
    */
   nodeId?: string;
+  invocationId?: string;
+  authorizationDecisionId?: string;
 }
 
 export interface CreateMfaChallengeInput {
@@ -49,6 +52,7 @@ export interface CreateMfaChallengeInput {
   code: string;
   maxAttempts?: number;
   expiresAt?: Date | null;
+  commandDigest?: string;
 }
 
 /**
@@ -98,6 +102,8 @@ export function createPendingAction(
       intent: input.intent ?? null,
       taskId: input.taskId ?? null,
       nodeId: input.nodeId ?? null,
+      invocationId: input.invocationId ?? null,
+      authorizationDecisionId: input.authorizationDecisionId ?? null,
     },
   });
 }
@@ -242,6 +248,10 @@ export async function claimPendingAction(
   input: ClaimPendingActionInput,
   client: Prisma.TransactionClient = prisma,
 ): Promise<boolean> {
+  if (input.to === 'confirmed') {
+    if (client === prisma) return prisma.$transaction(tx => claimPendingAction(input, tx));
+    await assertActionMayStart(input.actionId, client);
+  }
   const result = await client.pendingAction.updateMany({
     where: {
       id: input.actionId,
@@ -252,6 +262,15 @@ export async function claimPendingAction(
     data: { status: input.to },
   });
   return result.count === 1;
+}
+
+/** Serialize a new authorization against manual handoff; existing in-flight commands may settle. */
+export async function assertActionMayStart(actionId: string, client: Prisma.TransactionClient): Promise<void> {
+  await client.pendingAction.updateMany({ where: { id: actionId }, data: { id: actionId } });
+  const action = await client.pendingAction.findUnique({ where: { id: actionId }, select: { taskId: true } });
+  if (action?.taskId && await client.manualReview.findFirst({ where: { taskId: action.taskId, status: 'open' } })) {
+    throw new AppError('CONFLICT', 'This workflow is under manual review; a new command cannot start.');
+  }
 }
 
 /**
@@ -294,7 +313,8 @@ export function createMfaChallenge(
       actionId: input.actionId,
       code: input.code,
       maxAttempts: input.maxAttempts ?? 3,
-      expiresAt: input.expiresAt ?? null,
+      expiresAt: input.expiresAt ?? new Date(Date.now() + 5 * 60_000),
+      commandDigest: input.commandDigest,
     },
   });
 }
@@ -345,7 +365,7 @@ export async function renewLockedMfaChallenges(
         requiresMfa: true,
       },
     },
-    data: { attempts: 0, status: 'pending' },
+    data: { attempts: 0, status: 'pending', expiresAt: new Date(Date.now() + 5 * 60_000), verifiedAt: null, consumedAt: null },
   });
   return result.count;
 }

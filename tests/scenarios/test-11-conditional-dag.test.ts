@@ -27,20 +27,19 @@ import {
 } from '../helpers/scenario';
 import { getTestPrisma, useFreshDatabase } from '../helpers/db';
 import { MONTHLY_SPEND_TOTAL } from '../helpers/fixtures';
+import { centsToMoney, moneyToCents } from '@/lib/money';
 
 describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额到1500', () => {
   useFreshDatabase();
 
   /** Condition threshold of the scenario (本月娱乐 > ¥2,000). */
-  const CONDITION_THRESHOLD = 2000;
-  /** A threshold that can never be exceeded (¥5,800 > ¥99,999 is false) — flips the condition off. */
-  const IMPOSSIBLE_THRESHOLD = 99999;
+  const CONDITION_THRESHOLD = '2000';
   /** Seeded per-category limit (fixtures.CARD_LIMITS: card_credit 娱乐 ¥3,000). */
-  const SEEDED_ENTERTAINMENT_LIMIT = 3000;
+  const SEEDED_ENTERTAINMENT_LIMIT = '3000';
   /** The new limit the plan node proposes (and the confirmed value). */
-  const ENTERTAINMENT_LIMIT = 1500;
+  const ENTERTAINMENT_LIMIT = '1500';
   /** 本月娱乐 spend in the fixtures (演唱会1880 + KTV480 + Steam200 + 影院120). */
-  const MONTHLY_ENTERTAINMENT_SPEND = 2680;
+  const MONTHLY_ENTERTAINMENT_SPEND = '2680';
 
   /** One model-proposed plan node (the loose shape `submit_plan` accepts). */
   interface ProposedNode {
@@ -54,10 +53,9 @@ describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额�
   }
 
   /**
-   * The conditional DAG the model proposes. `conditionValue` is injectable so a test can flip the
-   * condition TRUE (`2000`, since 本月 total is ¥5,800) or FALSE (`99999`).
+   * The compiler binds this proposal to the trusted category, operator and threshold.
    */
-  function conditionalDag(conditionValue: number): { goal: string; nodes: ProposedNode[] } {
+  function conditionalDag(conditionValue: string): { goal: string; nodes: ProposedNode[] } {
     return {
       goal: '若本月娱乐消费超过2000则调整娱乐限额',
       nodes: [
@@ -89,7 +87,7 @@ describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额�
   }
 
   /** Drive one `submit_plan` turn in a FRESH session (uniqueness isolates the in-process breaker). */
-  async function submitConditionalPlan(conditionValue: number): Promise<{
+  async function submitConditionalPlan(conditionValue: string): Promise<{
     sessionId: string;
     agent: ReturnType<typeof buildFauxAgent>;
     res: ScenarioResult;
@@ -144,25 +142,25 @@ describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额�
     expect(result.status).toBe('success');
     const output = result.output as {
       month: string;
-      total: number;
-      byCategory: Array<{ category: string; amount: number }>;
+      total: string;
+      byCategory: Array<{ category: string; amount: string }>;
     };
     expect(output.month).toBe('2026-09');
-    expect(output.total).toBe(MONTHLY_SPEND_TOTAL);
+    expect(output.total).toBe(centsToMoney(moneyToCents(MONTHLY_SPEND_TOTAL) + moneyToCents('6999')));
     // 娱乐 is what the condition targets — the seed makes it ¥2,680 (the largest category).
     const entertainment = output.byCategory.find((entry) => entry.category === '娱乐');
-    expect(entertainment?.amount).toBe(MONTHLY_ENTERTAINMENT_SPEND);
+    expect(entertainment?.amount).toBe(centsToMoney(moneyToCents(MONTHLY_ENTERTAINMENT_SPEND)));
   });
 
-  it('the plan contains a condition node evaluating analyze.total > 2000', async () => {
+  it('compiles the user condition against category spending instead of total spending', async () => {
     const { res } = await submitConditionalPlan(CONDITION_THRESHOLD);
     const plan = requirePlan(res);
 
     const cond = nodeSpec(plan, 'cond');
     expect(cond.kind).toBe('condition');
-    expect(cond.condition).toEqual({ path: 'analyze.total', op: '>', value: 2000 });
+    expect(cond.condition).toEqual({ path: 'analyze.categoryTotals.\u5a31\u4e50', op: '>', value: '2000' });
 
-    // Evaluated against the REAL analysis output: ¥5,800 > 2,000 ⇒ true.
+    // The category's actual booked amount exceeds the unchanged requested threshold.
     const result = nodeResult(plan, 'cond');
     expect(result.status).toBe('success');
     expect(result.output).toEqual({ result: true });
@@ -176,7 +174,7 @@ describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额�
     expect(setlimit.kind).toBe('tool');
     expect(setlimit.tool).toBe('set_card_limit');
     expect(setlimit.dependencies).toEqual(['cond']);
-    expect(setlimit.args).toEqual({ cardId: 'card_credit', category: '娱乐', amount: 1500 });
+    expect(setlimit.args).toEqual({ cardId: 'card_credit', category: '娱乐', amount: '1500' });
   });
 
   it('the plan card / plan_update events expose the node kinds and dependency order', async () => {
@@ -207,14 +205,15 @@ describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额�
   });
 
   it('the set_card_limit node runs when the condition is true and is skipped when false', async () => {
-    // TRUE — 本月 total (¥5,800) > 2,000 ⇒ the condition succeeds, so the gated node is REACHED.
+    // The existing category amount exceeds the requested threshold.
     const truthy = await submitConditionalPlan(CONDITION_THRESHOLD);
     const truthyPlan = requirePlan(truthy.res);
     expect(nodeResult(truthyPlan, 'cond').status).toBe('success');
     expect(nodeResult(truthyPlan, 'setlimit').status).toBe('waiting_confirmation');
 
-    // FALSE — 本月 total (¥5,800) > 99,999 is false ⇒ the condition skips, so its dependent is skipped.
-    const falsy = await submitConditionalPlan(IMPOSSIBLE_THRESHOLD);
+    // Total spending stays above the threshold while category spending falls below it.
+    await getTestPrisma().transaction.update({ where: { id: 'tx_sep_concert' }, data: { amountMinor: -10_000n } });
+    const falsy = await submitConditionalPlan(CONDITION_THRESHOLD);
     const falsyPlan = requirePlan(falsy.res);
     expect(nodeResult(falsyPlan, 'cond').status).toBe('skipped');
     expect(nodeResult(falsyPlan, 'setlimit').status).toBe('skipped');
@@ -253,13 +252,13 @@ describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额�
     const before = await prisma.cardLimit.findFirst({
       where: { cardId: 'card_credit', category: '娱乐' },
     });
-    expect(before?.amount).toBe(SEEDED_ENTERTAINMENT_LIMIT);
+    expect(before?.amountMinor).toBe(moneyToCents(SEEDED_ENTERTAINMENT_LIMIT));
 
     // Human confirmation executes the ORIGINAL validated args → 娱乐 limit becomes ¥1,500.
     await confirmAction(agent, actionId);
     const after = await prisma.cardLimit.findFirst({
       where: { cardId: 'card_credit', category: '娱乐' },
     });
-    expect(after?.amount).toBe(ENTERTAINMENT_LIMIT);
+    expect(after?.amountMinor).toBe(moneyToCents(ENTERTAINMENT_LIMIT));
   });
 });

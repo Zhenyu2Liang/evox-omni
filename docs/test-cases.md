@@ -1,128 +1,139 @@
-# 测试用例与 Demo 验收
+# Testing and acceptance
 
-## live 规划与故障恢复
+The test suite checks the banking simulator through unit, scenario, route-handler, cross-module and real-browser layers. Vitest runs with `LLM_MODE=mock`; tests of the live execution path script only model transport while retaining the project's Pi runtime, tools, security checks and database execution. These tests verify application behavior independently of a model provider's availability.
 
-`tests/integration/request-scope-holdings.test.ts` 固化 110e20a 的两个原始失败复现并增加边界，共 16 例：附加否定不丢步骤、缺步无授权、完整修复后两笔扣款、明确否定不被当成必须执行步骤、持仓 ID/名称/代码绑定、MFA 与后续转账、重复验证幂等、跨用户/歧义/已赎回/产品伪装拒绝，以及同产品不同 ID 的顺序。只有模型传输受控，其他链路为真实项目代码和隔离 SQLite。真实前端与 DeepSeek 验收见 `docs/request-scope-holdings-report.md`。
+For the development environment and configuration, see [Development](development.md). For implementation guarantees and their limits, see [Security](security.md), [Agent durability](agent-durability.md) and [Known risks](known-risks.md).
 
-`tests/integration/live-complete-plan.test.ts` 使用 live 运行路径和受控模型传输，验证首步独立调用被拒、只补做一次完整规划、缺步骤时无预算/授权/转账、同额不同收款人、错对象/错金额/重复写节点拒绝、单笔与联系人查询不受影响，以及确认后无模型请求、两条流水和完整持久化。八个旧 HTTP/任务测试夹具现传递真实计划/节点上下文；暂停恢复断言复用同一授权并且仅有一个 PendingAction，避免测试夹具把计划节点伪装成独立操作。预算后编造转账的 grounding 用例改用完整的单笔预算请求，仍保留原来的真实预算与虚假转账断言；多步缺节点不执行预算另有覆盖。真实 DeepSeek 与故意不完整响应的前端验收分别记录于 `docs/live-complete-plan-report.md`。
+## Commands and isolation
 
-`tests/integration/live-recovery.test.ts` 使用真实 Pi、工具、数据库与确认执行流程，只有模型传输被脚本化。覆盖仅口头回复后的单次规划恢复、查询与工具结果配对、恢复耗尽后的持久化重试入口、有效澄清/产品拒绝/认证错误不重试、预算已提交后不重放、确认后的真实转账只扣款一次且无播报请求。`agent/providers/request-options.test.ts` 验证每请求截止时间（包括响应流停滞）、一次传输重试及独立取消；`tests/integration/live-retry-ui.test.ts` 验证最新回复的按钮与旧入口退出，不代替浏览器点击测试。
+```sh
+pnpm test
+pnpm test tests/unit
+pnpm test tests/scenarios
+pnpm test tests/app tests/integration
+pnpm test agent/durable tests/integration/agent-durability.test.ts
+pnpm typecheck
+pnpm lint
+pnpm exec tsx tests/e2e/acceptance.e2e.ts
+```
 
-专项命令：`npx vitest run tests/integration/live-recovery.test.ts tests/integration/live-retry-ui.test.ts agent/providers/request-options.test.ts`。真实 DeepSeek 前端和故障注入前端的证据另行记录，故障代理返回的错误不冒充真实模型回复。
+`pnpm test` uses `vitest.config.ts`, which collects tests under `tests/` and `agent/`. Browser acceptance has a separate entry point and is not collected by Vitest. Read each command's output for the current passed, failed and skipped totals; this guide does not maintain a duplicated suite count.
 
-`tests/integration/request-step-binding.test.ts` 使用真实任务执行器、数据库和确认/MFA 路由，覆盖转账失败后成功条件的下游跳过且无授权、成功后的正常门控、多产品逐笔申购及错码/重放、同金额不同产品代码、错误产品/对调金额/重复/遗漏/未知产品的全计划预检，以及有歧义时未创建任何计划或自动预算。既有 `task-feature-hardening` 保留独立提醒不继承条件跳过的用例。live 验收另通过真实前端按钮执行，不以该集成测试代替浏览器测试。
+Vitest provisions `prisma/test.db`; browser acceptance provisions `prisma/e2e.db`. Both override `DATABASE_URL` with the isolated database before application code runs, generate a usable Prisma Client and create the current schema. Database-backed suites seed their own fixtures. Provisioning pins Prisma schema-engine logging and preserves diagnostics on failure.
 
-## 请求约束、取消状态与补偿回退
+Vitest files run sequentially because they share a resettable test database. Run browser acceptance separately from Vitest and from development/build processes that share Next.js generated artifacts. Database setup failures must be diagnosed in the isolated test database rather than resolved by resetting the development database.
 
-`tests/integration/task-feature-hardening.test.ts` 经真实路由、执行器和 SQLite 验证：产品不存在/对象替换不产生授权，查询后的明确澄清在 SSE 与持久化对话中一致；显式顺序持久化，条件为假不跳过独立提醒；取消响应的 generation/updatedAt 与 DB 一致，晚到非终态事件不能复活取消计划；连续确认自动返回下一步的 YELLOW/RED 卡及绑定摘要；回退只撤销本人计划的预算/定时记录，保留流水和原节点成功结果。还覆盖并发/重复、跨会话、已使用/身份不符资源及严格审计失败时的事务回滚。
+Browser acceptance uses `playwright-core` with installed system Chrome; Edge is a detection fallback. `E2E_BROWSER_PATH` can select an executable. The harness selects a free port, starts the actual Next.js development server and tears down its process tree when finished. Its database provisioning is automatic; a manual development database reset is unnecessary. Details are in [Browser harness context](../tests/e2e/CONTEXT.md).
 
-真实 live 前端验收使用隔离库：暂停时确认当前节点后仍暂停，恢复才进入下一节点；取消立即显示终态；回退预算和提醒后刷新结果保留，已确认的小数转账余额与流水保持不变。此为本地有限场景验收，不代表任意自然语言或多实例部署均已验证。
+Production build validation is separate: prepare a database with the current schema before `pnpm build`, because prerendered routes query it. Follow the database commands in [Development](development.md). There is no test step for converting an old database.
 
-测试按功能分为单元、场景、路由/跨模块集成和浏览器验收；
-普通测试只模拟模型响应，银行 SDK、权限控制和数据库使用真实项目实现。
+## Test layers
 
-当前验证结果见 [前端修复验收](frontend-repair-report.md)，不以历史测试数量代替当前验收。
+| Location | Responsibility |
+| --- | --- |
+| `tests/unit/` | Domain validation, SDK transactions, authorization, DAG execution, API/UI contracts and persistence helpers |
+| `agent/**/*.test.ts` | Durable runtime, provider transport and server-authored financial response behavior |
+| `tests/scenarios/` | End-to-end agent scenarios with controlled model responses |
+| `tests/app/` | In-process calls to actual Next.js route handlers, including cookie identity and action/task controls |
+| `tests/integration/` | Cross-module execution, persistence, recovery, concurrency and financial invariants |
+| `tests/deploy-db-push.test.ts` | Current-schema provisioning, explicit SQLite reset and workspace boundaries |
+| `tests/e2e/` | Real-browser journeys against the running application |
 
-`tests/integration/frontend-review-fixes.test.ts` 覆盖名称/尾号归属和歧义、授权摘要、北京时间、条件路径、持仓元数据/重复持仓渲染、MFA 终态、异常确认幂等、密码脱敏及流式卡片收敛。真实前端修复验收使用隔离数据库和真实 DeepSeek，不直接写接口替代按钮操作。
-真实浏览器验收为 7 个旅程。
+Route-handler integration executes real application code but does not validate browser rendering or the network stack. Browser assertions use rendered DOM as primary evidence, supplemented by read APIs and database facts for balances, ledger entries and audits.
 
-## 运行
+## Core agent scenarios
 
-    npm run test
-    npm run test -- tests/unit
-    npm run test -- tests/scenarios
-    npm run test -- tests/app tests/integration
-    npx tsc --noEmit
-    npx tsx tests/e2e/acceptance.e2e.ts
-
-Vitest 与浏览器验收分别运行。测试库 prisma/test.db、浏览器库 prisma/e2e.db 均与开发库隔离。
-测试基础设施自举生成客户端和库，不能用清空开发库解决失败。
-构建需准备数据库；升级已有库用 npm run db:push -- --skip-generate 增量应用 schema，
-只有新建隔离演示库才运行种子。
-
-## 12 个核心演示场景
-
-| 场景 | 测试文件（tests/scenarios/） | 验收要点 |
+| Scenario | Test under `tests/scenarios/` | Required behavior |
 | --- | --- | --- |
-| 查询余额 | test-01-balance.test.ts | GREEN 自动查询，数据来自 SDK |
-| 小额转账 | test-02-transfer-confirm.test.ts | 明确确认后执行，余额与流水一致 |
-| 大额转账 | test-03-transfer-mfa.test.ts | RED 强验证；错码不扣款 |
-| 注入防护 | test-04-prompt-injection.test.ts | 恶意输入不绕过权限/MFA |
-| 失败反馈 | test-05-failure-report.test.ts | 如实报告失败，不编造成功 |
-| 消费分析 | test-06-spending-analysis.test.ts | 分类汇总与账单匹配 |
-| 异常交易 | test-07-anomaly.test.ts | 根据实际交易识别异常 |
-| 卡片限额 | test-08-card-limit.test.ts | 修改需用户确认 |
-| 理财操作 | test-09-investment-mfa.test.ts | 申购受 RED/MFA 约束 |
-| 安全熔断 | test-10-circuit-breaker.test.ts | 连续失败锁定，关键决定入审计 |
-| 条件 DAG | test-11-conditional-dag.test.ts | 依赖/条件控制后续工具 |
-| 生日计划 | test-12-birthday-plan.test.ts | 预算/计划记录，不宣称资金锁定或真实订购 |
+| Balance query | `test-01-balance.test.ts` | GREEN query returns SDK facts |
+| Small transfer | `test-02-transfer-confirm.test.ts` | Explicit confirmation precedes debit; balance and ledger agree |
+| Large transfer | `test-03-transfer-mfa.test.ts` | RED verification is required; an incorrect code moves no money |
+| Prompt injection | `test-04-prompt-injection.test.ts` | Input cannot bypass permissions or verification |
+| Execution failure | `test-05-failure-report.test.ts` | Failure is reported without invented success |
+| Spending analysis | `test-06-spending-analysis.test.ts` | Category totals reflect booked transactions |
+| Anomaly detection | `test-07-anomaly.test.ts` | Detection uses transaction data |
+| Card limits | `test-08-card-limit.test.ts` | A limit change requires confirmation |
+| Investment operation | `test-09-investment-mfa.test.ts` | Purchase is gated by RED/MFA policy |
+| Circuit breaker | `test-10-circuit-breaker.test.ts` | Repeated verification failure locks execution and creates audit evidence |
+| Conditional plan | `test-11-conditional-dag.test.ts` | Dependencies and conditions control downstream nodes |
+| Birthday plan | `test-12-birthday-plan.test.ts` | Budget and plan records do not imply actual locked funds or external purchases |
 
-mock-integration.test.ts 补充无需 API Key 的完整流水线。
+`mock-integration.test.ts` exercises the complete offline agent pipeline without an API key.
 
-## 安全与状态一致性
+## Regression invariants
 
-| 目录 | 覆盖 |
+### Financial precision and settlement
+
+- Financial JSON inputs are decimal strings; numeric inputs and fractional cents for booked money are rejected.
+- Booked amounts use integer cents with signed INT64 bounds. Rates and unrounded valuations retain Decimal precision and use canonical strings in SQLite.
+- `annualYieldRate` is a dimensionless ratio, with percentage conversion confined to presentation.
+- Redemption applies the explicit HALF_UP settlement rule once. Authorization and execution agree on the settled amount; a changed quote cannot silently change an approved credit.
+- Purchase and redemption replay return complete original results. Missing or corrupt current execution evidence is rejected rather than synthesized.
+
+Primary specs: `tests/unit/financial-values.test.ts`, `tests/unit/banking-sdk/investment-precision.test.ts`, `tests/unit/banking-sdk/investment-flow.test.ts`, `tests/integration/money-budget.test.ts`, `tests/integration/transfer-receipts.test.ts` and `tests/integration/refactor-financial-commands.test.ts`.
+
+### Authorization, identity and transaction boundaries
+
+- A cumulative daily transfer total at the policy boundary remains YELLOW; exceeding it escalates to RED.
+- Authorization binds the operation's identity and financial parameters. Cookie-owned user/session identity cannot be replaced by client-supplied identity.
+- Repeated or concurrent confirmation cannot duplicate a committed debit.
+- Business mutation, ledger evidence, execution receipt and required execution audit commit atomically. A required audit failure rolls back the write.
+- A committed receipt must match its owner, request and ledger evidence. Reusing an execution identity for a different request is a conflict.
+- The SDK rechecks execution authority inside the write transaction through the trusted invocation context. Cancellation that commits first blocks a later write; a business transaction that commits first remains a recorded fact.
+
+Primary specs: `tests/unit/security/`, `tests/app/identity-http.test.ts`, `tests/app/concurrent-execution-http.test.ts`, `tests/integration/sdk-transaction-fences.test.ts`, `tests/integration/execution-audit.test.ts`, `tests/integration/transfer-replay.test.ts` and `tests/integration/write-idempotency.test.ts`.
+
+### Durable events, tool invocations and recovery
+
+- Pi events are persisted with ordered run sequences and tool invocation identities, including lifecycle and streaming events.
+- A completed invocation replays its saved result. Pending confirmation/verification waits for authorization rather than retrying the tool.
+- Read-only operations and receipt-backed idempotent writes have explicit retry capabilities and attempt limits. Unknown commit state requires reconciliation; permanent authorization or validation errors are not transient retries.
+- Recovery uses verified persistent evidence. Missing terminal state after a proven commit converges to the original success result without a second business write.
+- Lost or rotated execution authority prevents obsolete executors from mutating business state, replacing results or publishing late progress.
+- Recovering an executed plan node restores its persisted result without invoking the tool again. A cancelled plan cannot start downstream work.
+
+Primary specs: `agent/durable/*.test.ts`, `tests/integration/agent-durability.test.ts`, `tests/integration/committed-outcomes.test.ts`, `tests/integration/node-result-recovery.test.ts`, `tests/integration/obsolete-executor.test.ts`, `tests/integration/restart-recovery.test.ts` and `tests/integration/recovery-authorization.test.ts`.
+
+### Planning, response integrity and current API contracts
+
+- Multi-step requests require a complete, validated plan before automatic writes or authorization creation. Step bindings reject omitted, duplicated, substituted or ambiguous recipients/products.
+- Pause blocks later nodes; cancel revokes parked actions. Compensation affects only eligible owned budget/scheduled resources and does not erase booked transactions.
+- Financial narration is derived from operation-specific server facts. Unknown results do not become invented success, failure or unchanged balances.
+- Frontend parsers require the current API envelope, explicit action state/attention and complete product metadata. Obsolete field aliases and fabricated default financial values are rejected.
+
+Primary specs: `tests/integration/live-complete-plan.test.ts`, `tests/integration/request-step-binding.test.ts`, `tests/integration/request-scope-holdings.test.ts`, `tests/integration/task-feature-hardening.test.ts`, `agent/financial-response.test.ts`, `tests/integration/financial-response-boundary.test.ts` and `tests/unit/planner/action-contract.test.ts`.
+
+Provider transport deadlines, stalled streams, bounded transport retry and request cancellation are covered by `agent/providers/request-options.test.ts`. Controlled live-path recovery and retry UI state are covered by `tests/integration/live-recovery.test.ts` and `tests/integration/live-retry-ui.test.ts`. These exercise the live code path with scripted transport; they are not proof of a real provider response.
+
+### Manual review and scheduled dispatch
+
+`tests/app/manual-review-http.test.ts` checks durable review records, refresh, execution blocking during review, authorization after a continue decision, preservation of posted facts, rejection of unknown-result retries, identity, decision deduplication and audit rollback. See [Manual review](manual-review.md).
+
+`tests/app/scheduled-dispatch-http.test.ts` and `tests/unit/planner/scheduled-command.test.ts` check scheduled dispatch through the current command and authorization contracts. See [Scheduled tasks](scheduled-tasks.md).
+
+For a more detailed cross-module index, see [Integration test context](../tests/integration/CONTEXT.md).
+
+## Browser acceptance journeys
+
+The registered journeys in `tests/e2e/acceptance.e2e.ts` exercise the following behavior:
+
+| Journey | Evidence |
 | --- | --- |
-| tests/unit/security | 权限、累计限额、MFA、熔断、注入、原子授权与审计 |
-| tests/unit/planner | DAG、节点执行、独占认领、暂停/恢复/取消/重试 |
-| tests/unit/banking-sdk | 转账、订阅、理财、持久幂等和原子性 |
-| tests/unit/agent | 确认续跑、计划控制、失败反馈和模拟模型 |
-| tests/unit/lib | 账本身份、持久回执、操作认领和 CLI 环境 |
-| tests/app | 真实路由的身份、确认/MFA、账本、并发、恢复和人工接管 |
-| tests/integration | 跨模块执行围栏、已提交事实、回执、恢复权限、金额与审计 |
-| tests/deploy-db-push.test.ts | 真实部署入口在隔离库自举，保持共享库不变 |
+| `a-transfer-confirm` | Confirmation, balance change and one new debit ledger entry |
+| `b-transfer-mfa` | Correct-code success; incorrect code retains verification and moves no money |
+| `c-plan-pause-resume` | Pause/resume controls and preservation of completed nodes |
+| `d-plan-cancel` | Cancellation rejects stale confirmation without changing money or limits |
+| `e-refresh-action-recovery` | Refresh restores YELLOW confirmation and RED verification |
+| `f-wedge-refresh-recover` | Recovery of a committed action lacking terminal state, without a second debit |
+| `g-manual-handoff` | Review persists across refresh; continue still requires authorization; unknown outcomes remain controlled |
+| `h-investment-flow` | Purchase/redemption update holdings, balance and investment ledger entries |
+| `i-anomaly-detection` | Income is not mistaken for suspicious spending; seeded anomalous spending is displayed |
+| `j-circuit-breaker-lock` | Lock persists across refresh; invalid unlock codes fail; valid unlock creates audit evidence |
 
-跨模块规格按业务命名，索引见 [集成测试索引](../tests/integration/CONTEXT.md)。
-核心不变量：
+The harness can seed a fault-window fixture in its isolated database. This verifies the recovery surface and convergence behavior; it does not claim that the browser induced a real process crash. A skipped journey is reported with its reason and is not acceptance evidence for that journey.
 
-- 日累计恰好 1000 元保持 YELLOW，超过时升级 RED；超两位小数拒绝。
-- 并发/重复确认只执行一次；取消先提交阻止新写入，业务先提交保留入账事实。
-- 同一执行身份重放原结果，不同请求不能共用授权或回执。
-- 旧执行器丢失执行权后不能写入副作用、覆盖结果或发布迟到进度。
-- 恢复依据持久证据；未知结果进入人工核对，不臆测成败或重新执行。
-- 转账扣款、流水、回执、关键执行审计同事务；审计失败回滚。
-- Cookie 所属用户/会话决定授权，客户端参数不能冒充身份。
+## Evidence boundaries
 
-## 人工接管
+Offline suites and browser acceptance simulate model output. The banking backend, products and MFA are themselves competition simulators. Real-provider acceptance records in `*-report.md` document specific historical runs and their limitations; they do not establish general natural-language robustness.
 
-tests/app/manual-review-http.test.ts 的 11 项用例覆盖持久记录、刷新读取、人工期间阻止继续/重试、
-继续仍需确认/MFA、入账事实保留、余额不足操作入口、未知结果拒绝重跑、跨会话拒绝、
-并发决定去重和审计回滚。详见 [人工接管](manual-review.md)。
-
-## 真实浏览器
-
-入口 tests/e2e/acceptance.e2e.ts 使用 playwright-core 和本机 headless Chrome，
-启动真实应用、使用隔离库、操作真实页面；不由 Vitest 收集。
-
-| 旅程 | 核对内容 |
-| --- | --- |
-| a-transfer-confirm | 确认、余额及新增借方流水 |
-| b-transfer-mfa | 正确码成功；错码保留验证入口且资金不变 |
-| c-plan-pause-resume | 真实暂停/继续；成功节点不重跑 |
-| d-plan-cancel | 旧确认被拒；资金、流水和限额不变 |
-| e-refresh-action-recovery | 刷新恢复 YELLOW/RED 入口 |
-| f-wedge-refresh-recover | 恢复已入账但缺终态操作，不重复扣款 |
-| g-manual-handoff | 转人工、刷新保留、记录后继续仍待确认；未知结果只登记/结束 |
-| h-investment-subscribe-redeem | 申购与赎回的持仓、余额和投资分类流水 |
-| i-bill-anomaly | 正常收入不误报，异常支出样例被识别 |
-| j-security-breaker | 锁定跨刷新有效，空/错码不解锁，正确码解锁并审计 |
-
-故障窗口的初始状态可由隔离夹具构造，不声称浏览器制造了真实服务崩溃。
-路由集成是进程内调用，不能冒充真实网络/浏览器验收。
-
-## 验证边界
-
-模型使用 LLM_MODE=mock，银行和 MFA 为模拟。真实 LLM 质量、真实资金、多实例、
-跨浏览器、性能与无障碍尚未由这些测试验证。全绿不等于生产安全认证。
-其余限制见 [安全设计](security.md) 和 [已知风险](known-risks.md)。
-
-
-## 服务端金融结果输出回归
-
-`agent/financial-response.test.ts`：账户与合计的分值更新、储蓄/活期隔离、同参数不同身份、重放不恢复旧余额、未知结果失效当前快照、重新查询以及计划描述不进入金融结果。
-
-`tests/integration/financial-response-boundary.test.ts`：真实 Pi 回合及续接，覆盖分句错误收款人、错误金额混入正确手续费、确认词掩盖成功、无工具假收款、未知结果假报资金未变、英文变体、伪造校正标签。检查流式消息、UI 持久化、Pi 后续历史、SDK 小数扣款与账本，以及 DAG 实际工具归属。
-
-旧 grounding 集成用例仍保留，依赖模型措辞逐字保留的断言改为服务端输出契约；余额、流水、权限、未知结果和刷新一致性继续检查。旧纯文本规则测试仅用于兼容，生产输出不依赖该规则。
-
-本次另用真实 DeepSeek、真实 Next 服务与独立 `live-repair-841-*.db` 验证 7 项：live 健康检查、余额查询、小数转账确认、转账后当前合计、错误 MFA 无扣款、正确 MFA 大额转账、真实 Chrome 页面查询。¥200.37 转账后活期 ¥23,379.63、合计 ¥73,379.63；再转 ¥5,000 后活期 ¥18,379.63、合计 ¥68,379.63。每笔核对数据库及唯一借方流水。该有限 live 验收未覆盖 UNKNOWN 故障注入或全部模糊意图；这些未知结果边界由脚本化模型集成测试验证。
+These suites do not establish real bank integration, real-money settlement, multi-instance deployment safety, cross-browser coverage, load capacity or accessibility conformance. Production build validation must be reported separately from development-server browser acceptance.

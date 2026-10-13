@@ -10,6 +10,7 @@
  */
 import type { CircuitBreakerState } from '@prisma/client';
 import { prisma, type DbClient } from '../client';
+import type { Prisma } from '@prisma/client';
 
 /** A breaker state snapshot (independent of the Prisma row shape). */
 export interface BreakerSnapshot {
@@ -66,8 +67,9 @@ export interface UpsertFailureInput {
  */
 export async function upsertFailure(
   input: UpsertFailureInput,
+  client?: Prisma.TransactionClient,
 ): Promise<BreakerSnapshot & { didLock: boolean }> {
-  return prisma.$transaction(async tx => {
+  const apply = async (tx: Prisma.TransactionClient) => {
     const current = await tx.circuitBreakerState.findUnique({ where: { key: input.key } });
     if (current?.locked) {
       return { failures: current.failures, locked: true, lockedAt: current.lockedAt, didLock: false };
@@ -86,7 +88,8 @@ export async function upsertFailure(
       },
     });
     return { failures: row.failures, locked: row.locked, lockedAt: row.lockedAt, didLock };
-  });
+  };
+  return client ? apply(client) : prisma.$transaction(apply);
 }
 
 /** Reset the consecutive-failure counter to 0 WITHOUT unlocking (a successful verification). */

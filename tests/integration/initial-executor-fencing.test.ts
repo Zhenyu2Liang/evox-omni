@@ -22,7 +22,7 @@ it('an INITIAL submit executor publishes no stale node/plan progress and stays D
  const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();const reached=deferred(),release=deferred();
  let planId='';let oldSuccessorCalls=0;let afterTakeover=false;
  const lateNodeUpdates:any[]=[];const latePlanSnapshots:any[]=[];
- const oldRun=runSubmitPlan(userId,{goal:'首次提交接管一致性',nodes:[{id:'first',name:'首次一致性第一预算',kind:'tool',tool:'reserve_budget',args:{name:'首次一致性第一预算',amount:10},dependencies:[]},{id:'second',name:'首次一致性第二预算',kind:'tool',tool:'reserve_budget',args:{name:'首次一致性第二预算',amount:20},dependencies:['first']}]},{sessionId:s,onNodeUpdate:node=>{if(afterTakeover)lateNodeUpdates.push(node);},onPlanUpdate:plan=>{if(afterTakeover)latePlanSnapshots.push(plan);},runTool:async(tool,args,ctx)=>{planId=ctx.taskId;const value=await runner(s)(tool,args,ctx);if(ctx.nodeId==='first'){reached.release();await release.promise;}else{oldSuccessorCalls++;}return value;}});
+ const oldRun=runSubmitPlan(userId,{goal:'首次提交接管一致性',nodes:[{id:'first',name:'首次一致性第一预算',kind:'tool',tool:'reserve_budget',args:{name:'首次一致性第一预算',amount:'10'},dependencies:[]},{id:'second',name:'首次一致性第二预算',kind:'tool',tool:'reserve_budget',args:{name:'首次一致性第二预算',amount:'20'},dependencies:['first']}]},{sessionId:s,onNodeUpdate:node=>{if(afterTakeover)lateNodeUpdates.push(node);},onPlanUpdate:plan=>{if(afterTakeover)latePlanSnapshots.push(plan);},runTool:async(tool,args,ctx)=>{planId=ctx.taskId;const value=await runner(s)(tool,args,ctx);if(ctx.nodeId==='first'){reached.release();await release.promise;}else{oldSuccessorCalls++;}return value;}});
  let takeover:any,oldResult:any,budgetsAtTakeover=0;
  try{
   await bounded(reached.promise);

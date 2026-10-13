@@ -2,20 +2,21 @@
  * InvestmentProductTile — read-model tile: a product / holding (risk level, expected rate, term, amount).
  *
  * Server-safe presentational component: no `'use client'`, no hooks, no data access — the
- * `ProductView` / optional `HoldingView` DTOs arrive via props. Money renders only through
- * `ui/Money`; the investment risk level uses `ui/Badge` (non-permission-tier status).
+ * `ProductView` / optional `HoldingView` DTOs arrive via props. Booked money uses `ui/Money`;
+ * estimates use `ui/DecimalMoney`. Risk levels use `ui/Badge` independently of permission tiers.
  */
 import type { HoldingView, ProductView } from '@/banking-sdk';
 import { Badge } from '../ui/Badge';
 import type { BadgeProps } from '../ui/Badge';
 import { Card } from '../ui/Card';
 import { Money } from '../ui/Money';
+import { DecimalMoney } from '../ui/DecimalMoney';
+import { rateRatioToPercent } from '@/lib/decimal';
 
 export interface InvestmentProductTileProps {
   product: ProductView;
   holding?: HoldingView;
   className?: string;
-  metadataKnown?: boolean;
 }
 
 /** Risk level → badge tone (lower risk = calmer colour). */
@@ -36,12 +37,12 @@ const RISK_LABEL: Record<ProductView['riskLevel'], string> = {
   R5: '高风险',
 };
 
-/** Formats an annual percentage rate, e.g. `3.25` → `3.25%` (rates are not money). */
-function formatRate(rate: number): string {
-  return `${rate.toFixed(2)}%`;
+/** Formats a dimensionless annual yield ratio as a percentage for display. */
+function formatRate(rate: string): string {
+  return `${rateRatioToPercent(rate)}%`;
 }
 
-export function InvestmentProductTile({ product, holding, className, metadataKnown = true }: InvestmentProductTileProps) {
+export function InvestmentProductTile({ product, holding, className }: InvestmentProductTileProps) {
   const cls = ['space-y-3', className].filter(Boolean).join(' ');
 
   return (
@@ -60,17 +61,17 @@ export function InvestmentProductTile({ product, holding, className, metadataKno
         <div>
           <div className="text-xs text-banking-navy/60">预期年化</div>
           <div className="text-sm font-semibold text-banking-success">
-            {metadataKnown ? formatRate(product.expectedRate) : '待核对'}
+            {formatRate(product.annualYieldRate)}
           </div>
         </div>
         <div>
           <div className="text-xs text-banking-navy/60">期限</div>
-          <div className="text-sm font-semibold text-banking-deep">{metadataKnown ? `${product.termDays} 天` : '待核对'}</div>
+          <div className="text-sm font-semibold text-banking-deep">{`${product.termDays} 天`}</div>
         </div>
         <div>
           <div className="text-xs text-banking-navy/60">起购</div>
           <div className="text-sm font-semibold text-banking-deep">
-            {metadataKnown ? <Money amount={product.minAmount} /> : '待核对'}
+            <Money amount={product.minAmount} />
           </div>
         </div>
       </div>
@@ -92,7 +93,7 @@ export function InvestmentProductTile({ product, holding, className, metadataKno
             <div className="flex items-center justify-between gap-3 text-sm">
               <span className="text-banking-navy/60">市值</span>
               <span className="font-medium text-banking-deep">
-                <Money amount={holding.marketValue} />
+                <DecimalMoney amount={holding.marketValue} />
               </span>
             </div>
           ) : null}
@@ -100,7 +101,7 @@ export function InvestmentProductTile({ product, holding, className, metadataKno
             <div className="flex items-center justify-between gap-3 text-sm">
               <span className="text-banking-navy/60">收益</span>
               <span className="font-medium text-banking-deep">
-                <Money amount={holding.profit} signed />
+                <DecimalMoney amount={holding.profit} signed />
               </span>
             </div>
           ) : null}

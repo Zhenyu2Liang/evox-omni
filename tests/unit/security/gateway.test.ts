@@ -26,6 +26,7 @@ import type {
   SecurityEvaluation,
 } from '@/lib/contracts/security';
 import { security } from '@/security';
+import { type MoneyAmount } from '@/lib/money';
 import {
   BLOCK_REASON_PREFIX,
   buildPendingActionSummary,
@@ -40,7 +41,7 @@ useFreshDatabase();
 
 /** The seeded checking account (`tests/helpers/fixtures.ts` ACCOUNTS[0]). */
 const CHECKING_ACCOUNT_ID = 'acct_checking';
-const CHECKING_BALANCE = 23580;
+const CHECKING_BALANCE = 2_358_000n;
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -71,10 +72,10 @@ function evaluation(
 }
 
 /** Current balance of the seeded checking account (unchanged ⇔ no money moved). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<bigint> {
   const account = await getTestPrisma().account.findUnique({ where: { id: CHECKING_ACCOUNT_ID } });
   if (!account) throw new Error('test seed is missing the checking account');
-  return account.balance;
+  return account.balanceMinor;
 }
 
 async function countTransactions(): Promise<number> {
@@ -83,13 +84,13 @@ async function countTransactions(): Promise<number> {
 
 /** Persist a YELLOW gated transfer (¥200, no MFA) for the given session. */
 async function createYellowAction(sessionId: string): Promise<PendingAction> {
-  const ctx = ctxFor('transfer_money', { amount: 200, contactId: 'contact_zhangwei' }, sessionId);
+  const ctx = ctxFor('transfer_money', { amount: '200.00', contactId: 'contact_zhangwei' }, sessionId);
   return securityGateway.createPendingAction(ctx, await securityGateway.evaluate(ctx));
 }
 
 /** Persist a RED gated transfer (¥5000, MFA required) for the given session. */
 async function createRedAction(sessionId: string): Promise<PendingAction> {
-  const ctx = ctxFor('transfer_money', { amount: 5000, contactId: 'contact_zhangwei' }, sessionId);
+  const ctx = ctxFor('transfer_money', { amount: '5000.00', contactId: 'contact_zhangwei' }, sessionId);
   return securityGateway.createPendingAction(ctx, await securityGateway.evaluate(ctx));
 }
 
@@ -99,7 +100,7 @@ const PURE_ACTION: PendingAction = {
   id: 'pa_pure_1',
   sessionId: 'sess_pure',
   toolName: 'transfer_money',
-  args: { amount: 200, toName: '张伟' },
+  args: { amount: '200.00', name: '张伟' },
   tier: 'YELLOW',
   requiresMfa: false,
   status: 'pending',
@@ -138,7 +139,7 @@ describe('security-gateway · decide (pure: tier → decision kind)', () => {
 
   it('YELLOW evaluation → decision kind require_confirmation', () => {
     const ev = evaluation('transfer_money', 'YELLOW', { requiresMfa: false });
-    const decision = securityGateway.decide(ev, ctxFor('transfer_money', { amount: 200 }));
+    const decision = securityGateway.decide(ev, ctxFor('transfer_money', { amount: '200.00' }));
 
     expect(decision.kind).toBe('require_confirmation');
     expect(decision.tier).toBe('YELLOW');
@@ -147,7 +148,7 @@ describe('security-gateway · decide (pure: tier → decision kind)', () => {
 
   it('RED evaluation → decision kind require_mfa', () => {
     const ev = evaluation('transfer_money', 'RED', { requiresMfa: true });
-    const decision = securityGateway.decide(ev, ctxFor('transfer_money', { amount: 5000 }));
+    const decision = securityGateway.decide(ev, ctxFor('transfer_money', { amount: '5000.00' }));
 
     expect(decision.kind).toBe('require_mfa');
     expect(decision.tier).toBe('RED');
@@ -165,8 +166,8 @@ describe('security-gateway · decide (pure: tier → decision kind)', () => {
 
     const kinds = [
       securityGateway.decide(green, ctxFor('get_balance')).kind,
-      securityGateway.decide(yellow, ctxFor('transfer_money', { amount: 200 })).kind,
-      securityGateway.decide(red, ctxFor('transfer_money', { amount: 5000 })).kind,
+      securityGateway.decide(yellow, ctxFor('transfer_money', { amount: '200.00' })).kind,
+      securityGateway.decide(red, ctxFor('transfer_money', { amount: '5000.00' })).kind,
       securityGateway.decide(locked, ctxFor('get_balance')).kind,
     ];
     expect(kinds).toEqual(['allow', 'require_confirmation', 'require_mfa', 'deny']);
@@ -246,18 +247,18 @@ describe('security-gateway · evaluate (needs test SQLite)', () => {
   });
 
   it('transfer_money ¥200 (seeded day total 0) → YELLOW, blocked, confirmation but no MFA', async () => {
-    const ev = await securityGateway.evaluate(ctxFor('transfer_money', { amount: 200 }));
+    const ev = await securityGateway.evaluate(ctxFor('transfer_money', { amount: '200.00' }));
 
     expect(ev.tier).toBe('YELLOW');
     expect(ev.blocked).toBe(true);
     expect(ev.requiresConfirmation).toBe(true);
     expect(ev.requiresMfa).toBe(false);
-    expect(ev.amount).toBe(200);
-    expect(ev.dailyTotal).toBe(0);
+    expect(ev.amount).toBe('200.00');
+    expect(ev.dailyTotal).toBe('0.00');
   });
 
   it('transfer_money ¥5000 → RED, blocked, requires strong verification', async () => {
-    const ev = await securityGateway.evaluate(ctxFor('transfer_money', { amount: 5000 }));
+    const ev = await securityGateway.evaluate(ctxFor('transfer_money', { amount: '5000.00' }));
 
     expect(ev.tier).toBe('RED');
     expect(ev.blocked).toBe(true);
@@ -283,7 +284,7 @@ describe('security-gateway · evaluate (needs test SQLite)', () => {
 
 describe('security-gateway · createPendingAction (needs test SQLite)', () => {
   it("persists a PendingAction row (YELLOW → 'pending', RED → 'awaiting_mfa') and returns it with the summary", async () => {
-    const yellowCtx = ctxFor('transfer_money', { amount: 200, contactId: 'contact_zhangwei' });
+    const yellowCtx = ctxFor('transfer_money', { amount: '200.00', contactId: 'contact_zhangwei' });
     const yellowEv = await securityGateway.evaluate(yellowCtx);
     expect(yellowEv.tier).toBe('YELLOW');
 
@@ -299,7 +300,7 @@ describe('security-gateway · createPendingAction (needs test SQLite)', () => {
     expect(yellowRow?.status).toBe('pending');
     expect(yellowRow?.userId).toBe(DEMO_USER_ID);
 
-    const redCtx = ctxFor('transfer_money', { amount: 5000, contactId: 'contact_zhangwei' });
+    const redCtx = ctxFor('transfer_money', { amount: '5000.00', contactId: 'contact_zhangwei' });
     const redEv = await securityGateway.evaluate(redCtx);
     expect(redEv.tier).toBe('RED');
 
@@ -318,26 +319,26 @@ describe('security-gateway · createPendingAction (needs test SQLite)', () => {
     expect(await getTestPrisma().mfaChallenge.findUnique({ where: { actionId: yellow.id } })).toBeNull();
   });
 
-  it('buildPendingActionSummary for transfer_money includes the fields 收款人 / 金额 / 账户 / 风险等级', async () => {
-    const ctx = ctxFor('transfer_money', { amount: 200, toName: '张伟' });
+  it('buildPendingActionSummary includes recipient, amount, account and risk fields', async () => {
+    const ctx = ctxFor('transfer_money', { amount: '200.00', name: '张伟' });
     const ev = await securityGateway.evaluate(ctx);
     const summary = buildPendingActionSummary(ctx, ev);
 
-    expect(summary.fields.map((f) => f.label)).toEqual(['收款人', '金额', '账户', '风险等级']);
+    expect(summary.fields.map((f) => f.label)).toEqual(['收款人', 'Amount', '账户', '风险等级']);
     const byLabel = new Map(summary.fields.map((f) => [f.label, f.value]));
     expect(byLabel.get('收款人')).toBe('张伟');
-    expect(byLabel.get('金额')).toBe(formatCNY(200));
+    expect(byLabel.get('Amount')).toBe(formatCNY('200.00'));
     expect(byLabel.get('账户')).toBe('默认活期账户');
     expect(byLabel.get('风险等级')).toBe(RISK_LABEL.YELLOW);
 
     expect(summary.title).toBe(security.permission.getToolPolicy('transfer_money').description);
     expect(summary.toolName).toBe('transfer_money');
     expect(summary.tier).toBe('YELLOW');
-    expect(summary.amount).toBe(200);
+    expect(summary.amount).toBe('200.00');
   });
 
   it('RED action summary sets requiresMfa true + a code-free mfaHint; YELLOW summary sets requiresMfa false', async () => {
-    const yellowCtx = ctxFor('transfer_money', { amount: 200, toName: '张伟' });
+    const yellowCtx = ctxFor('transfer_money', { amount: '200.00', name: '张伟' });
     const yellowSummary = buildPendingActionSummary(
       yellowCtx,
       await securityGateway.evaluate(yellowCtx),
@@ -345,7 +346,7 @@ describe('security-gateway · createPendingAction (needs test SQLite)', () => {
     expect(yellowSummary.requiresMfa).toBe(false);
     expect(yellowSummary.mfaHint).toBeUndefined();
 
-    const redCtx = ctxFor('transfer_money', { amount: 5000, toName: '张伟' });
+    const redCtx = ctxFor('transfer_money', { amount: '5000.00', name: '张伟' });
     const redSummary = buildPendingActionSummary(redCtx, await securityGateway.evaluate(redCtx));
     expect(redSummary.requiresMfa).toBe(true);
     expect(typeof redSummary.mfaHint).toBe('string');
@@ -357,16 +358,17 @@ describe('security-gateway · createPendingAction (needs test SQLite)', () => {
   });
 
   it('the persisted args are the validated originals (used later for the authorized execution path)', async () => {
-    const args = { amount: 200, contactId: 'contact_zhangwei', remark: '测试备注' };
+    const args = { amount: '200.00', contactId: 'contact_zhangwei', remark: '测试备注' };
     const ctx = ctxFor('transfer_money', args);
     const ev = await securityGateway.evaluate(ctx);
 
     const action = await securityGateway.createPendingAction(ctx, ev);
-    expect(action.args).toEqual(args);
+    const canonicalArgs = { ...args, amount: '200.00' as MoneyAmount };
+    expect(action.args).toEqual(canonicalArgs);
 
     const row = await getTestPrisma().pendingAction.findUnique({ where: { id: action.id } });
     expect(row).not.toBeNull();
-    expect(JSON.parse(row?.argsJson ?? 'null')).toEqual(args);
+    expect(JSON.parse(row?.argsJson ?? 'null')).toEqual(canonicalArgs);
   });
 });
 
@@ -523,7 +525,7 @@ describe('security-gateway · handleToolCall composition', () => {
 
   it('YELLOW tool → blocked: PendingAction persisted + a round-trippable blockReason', async () => {
     const res = await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 200, contactId: 'contact_zhangwei' }),
+      ctxFor('transfer_money', { amount: '200.00', contactId: 'contact_zhangwei' }),
     );
 
     expect(res.evaluation.blocked).toBe(true);
@@ -542,7 +544,7 @@ describe('security-gateway · handleToolCall composition', () => {
 
   it('RED tool → blocked with decision kind require_mfa', async () => {
     const res = await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 5000, contactId: 'contact_zhangwei' }),
+      ctxFor('transfer_money', { amount: '5000.00', contactId: 'contact_zhangwei' }),
     );
 
     expect(res.evaluation.tier).toBe('RED');
@@ -560,10 +562,10 @@ describe('security-gateway · handleToolCall composition', () => {
     expect(await checkingBalance()).toBe(CHECKING_BALANCE);
 
     await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 5000, contactId: 'contact_zhangwei' }, newSessionId()),
+      ctxFor('transfer_money', { amount: '5000.00', contactId: 'contact_zhangwei' }, newSessionId()),
     );
     await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 200, contactId: 'contact_mama' }, newSessionId()),
+      ctxFor('transfer_money', { amount: '200.00', contactId: 'contact_mama' }, newSessionId()),
     );
     await securityGateway.handleToolCall(ctxFor('get_balance', {}, newSessionId()));
 

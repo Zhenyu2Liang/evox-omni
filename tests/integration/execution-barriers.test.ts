@@ -120,8 +120,8 @@ it('a takeover at the pre-tool barrier stops the zombie before its successor too
     {
       goal: '屏障一：工具前接管',
       nodes: [
-        { id: 'first', name: '屏障一第一预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障一第一预算', amount: 10 }, dependencies: [] },
-        { id: 'second', name: '屏障一第二预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障一第二预算', amount: 20 }, dependencies: ['first'] },
+        { id: 'first', name: '屏障一第一预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障一第一预算', amount: '10' }, dependencies: [] },
+        { id: 'second', name: '屏障一第二预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障一第二预算', amount: '20' }, dependencies: ['first'] },
       ],
     },
     {
@@ -231,7 +231,7 @@ it('a takeover during a blocked async notification leaves the zombie with ZERO t
     {
       goal: '屏障二：通知阻塞接管',
       nodes: [
-        { id: 'budget', name: '屏障二预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障二预算', amount: 30 }, dependencies: [] },
+        { id: 'budget', name: '屏障二预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障二预算', amount: '30' }, dependencies: [] },
       ],
     },
     {
@@ -322,7 +322,7 @@ it('a takeover between the node claim and the tool write fences the zombie write
     {
       goal: '屏障三：写入前接管',
       nodes: [
-        { id: 'budget', name: '屏障三预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障三预算', amount: 40 }, dependencies: [] },
+        { id: 'budget', name: '屏障三预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障三预算', amount: '40' }, dependencies: [] },
       ],
     },
     {
@@ -433,7 +433,7 @@ it('a takeover after a committed gated side effect preserves the success fact an
     {
       goal: '屏障四：已提交副作用保留',
       nodes: [
-        { id: 'limit', name: '屏障四限额', kind: 'tool', tool: 'set_card_limit', args: { cardId: card.id, category: '娱乐', amount: 1500 }, dependencies: [] },
+        { id: 'limit', name: '屏障四限额', kind: 'tool', tool: 'set_card_limit', args: { cardId: card.id, category: '娱乐', amount: '1500' }, dependencies: [] },
       ],
     },
     { sessionId: s, runTool: runner(s) },
@@ -474,7 +474,7 @@ it('a takeover after a committed gated side effect preserves the success fact an
       finalPlanStatus: planRow.status,
       finalNodeStatus: node?.status,
       actionStatus: actionRow.status,
-      cardLimits: limits.map((l) => l.amount),
+      cardLimits: limits.map((l) => l.amountMinor.toString()),
       auditCount: audits.length,
       auditStatuses: audits.map((a) => a.status),
       auditHasResult: audits.map((a) => a.toolResult !== null),
@@ -494,7 +494,7 @@ it('a takeover after a committed gated side effect preserves the success fact an
   expect(actionRow.status).toBe('executed');
   // (3) The side effect occurred EXACTLY once.
   expect(limits).toHaveLength(1);
-  expect(limits[0]?.amount).toBe(1500);
+  expect(limits[0]?.amountMinor).toBe(150000n);
   // (4) EXACTLY ONE execution audit for the committed action, with its real result.
   expect(audits).toHaveLength(1);
   expect(audits[0]?.status).toBe('success');

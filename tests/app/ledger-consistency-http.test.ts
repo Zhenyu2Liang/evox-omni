@@ -39,7 +39,7 @@ import type { ActionResponse } from '@/app/api/_lib/types';
 import { getOrCreateSession } from '@/agent';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
 import { MFA_CODE } from '@/lib/constants';
-import { addMoney, round2, subtractMoney } from '@/lib/money';
+import { addMoney, centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import {
@@ -58,23 +58,23 @@ const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** Recipient 张伟 — resolves unambiguously from the seeded contacts. */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 
 /** The confirmed-transfer amount in Test 1 (≤ ¥1000 ⇒ YELLOW, confirmation only). */
-const CONFIRMED_AMOUNT = 200;
+const CONFIRMED_AMOUNT = '200';
 /** The RED amount in the wrong-MFA refusal (Test 2) (> ¥1000 ⇒ strong verification). */
-const RED_AMOUNT = 5000;
+const RED_AMOUNT = '5000';
 /** The cancel amount in the cancel refusal (Test 2) (≤ ¥1000 ⇒ YELLOW). */
-const CANCEL_AMOUNT = 200;
+const CANCEL_AMOUNT = '200';
 /** The overdraft amount whose execution fails honestly (INSUFFICIENT_FUNDS) (Test 3). */
-const OVERDRAFT_AMOUNT = 30000;
+const OVERDRAFT_AMOUNT = '30000';
 
 /**
  * The amounts of the N transfers Test 4 confirms. Each is ≤ ¥1000 AND the running total stays
  * ≤ ¥1000 (200 + 300 + 150 = 650), so EVERY transfer is a plain YELLOW confirmation — no
  * execution-time escalation to RED/MFA.
  */
-const ACCUMULATED_AMOUNTS = [200, 300, 150] as const;
+const ACCUMULATED_AMOUNTS = ['200', '300', '150'] as const;
 
 /**
  * The route's JSON envelope — the transport shape (NOT a frozen `@/lib/contracts` type). Declared
@@ -166,9 +166,9 @@ function cancelAction(id: string, sessionId?: string): Promise<HttpResult<Envelo
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /**
@@ -176,9 +176,9 @@ async function checkingBalance(): Promise<number> {
  * the balance must agree with. The seeded rows are NOT expected to sum to the seeded balance (the
  * seed is a snapshot, not a replay of history), so the invariant asserted is on the DELTAS.
  */
-async function checkingLedgerSum(): Promise<number> {
+async function checkingLedgerSum(): Promise<string> {
   const rows = await getTestPrisma().transaction.findMany({ where: { accountId: CHECKING.id } });
-  return rows.reduce((sum, tx) => addMoney(sum, tx.amount), 0);
+  return centsToMoney(rows.reduce((sum, transaction) => sum + transaction.amountMinor, 0n));
 }
 
 /** Every ledger row paid to 张伟 (the money-moved-exactly-once probe; the seed pays 妈妈 instead). */
@@ -188,8 +188,8 @@ function zhangweiTransfers() {
 
 /** A cheap immutable snapshot of the checking ledger state (balance + ledger sum + 张伟 rows). */
 interface LedgerSnapshot {
-  balance: number;
-  ledgerSum: number;
+  balance: string;
+  ledgerSum: string;
   transferCount: number;
 }
 
@@ -262,8 +262,8 @@ describe('[integration] POST /api/actions/[id]/confirm — confirmed transfer le
     const after = await snapshotLedger();
 
     // 1a. The balance decrement EQUALS the transfer amount (cent-safe).
-    expect(subtractMoney(before.balance, after.balance)).toBe(round2(CONFIRMED_AMOUNT));
-    expect(after.balance).toBe(SEEDED_BALANCE - CONFIRMED_AMOUNT);
+    expect(subtractMoney(before.balance, after.balance)).toBe(normalizeMoney(CONFIRMED_AMOUNT));
+    expect(after.balance).toBe(subtractMoney(SEEDED_BALANCE, CONFIRMED_AMOUNT));
 
     // 1b. Exactly ONE new ledger row exists, matching amount / direction / recipient / account.
     const transfers = await zhangweiTransfers();
@@ -271,7 +271,7 @@ describe('[integration] POST /api/actions/[id]/confirm — confirmed transfer le
     const tx = transfers[0];
     expect(tx.userId).toBe(DEMO_USER_ID);
     expect(tx.accountId).toBe(CHECKING.id);
-    expect(tx.amount).toBe(-CONFIRMED_AMOUNT);
+    expect(tx.amountMinor).toBe(-moneyToCents(CONFIRMED_AMOUNT));
     expect(tx.direction).toBe('DEBIT');
     expect(tx.category).toBe('转账');
     expect(tx.channel).toBe('TRANSFER');
@@ -282,7 +282,7 @@ describe('[integration] POST /api/actions/[id]/confirm — confirmed transfer le
     // 1c. The balance delta and the sum of ledger deltas AGREE — both equal the amount.
     const balanceDelta = subtractMoney(before.balance, after.balance);
     const ledgerDelta = subtractMoney(before.ledgerSum, after.ledgerSum);
-    expect(ledgerDelta).toBe(round2(CONFIRMED_AMOUNT));
+    expect(ledgerDelta).toBe(normalizeMoney(CONFIRMED_AMOUNT));
     expect(balanceDelta).toBe(ledgerDelta);
 
     // 1d. Exactly one audit `success` row records the single confirmed decision.
@@ -365,9 +365,9 @@ describe('[integration] POST /api/actions/[id]/verify — honest failure moves N
 
 describe('[integration] POST /api/actions/[id]/confirm — N confirmed transfers accumulate', () => {
   it('[integration] 4 — three confirmed YELLOW transfers reduce the balance by the EXACT sum and leave exactly three transfer ledger rows', async () => {
-    const total = ACCUMULATED_AMOUNTS.reduce((sum, amount) => addMoney(sum, amount), 0);
+    const total = ACCUMULATED_AMOUNTS.reduce((sum, amount) => addMoney(sum, amount), '0.00');
     // The running total must stay within the ¥1000 confirmation-only limit so every transfer is YELLOW.
-    expect(total).toBeLessThanOrEqual(1000);
+    expect(moneyToCents(total)).toBeLessThanOrEqual(moneyToCents('1000.00'));
 
     const before = await snapshotLedger();
     expect(before.balance).toBe(SEEDED_BALANCE);
@@ -391,15 +391,16 @@ describe('[integration] POST /api/actions/[id]/confirm — N confirmed transfers
     const after = await snapshotLedger();
 
     // The balance is reduced by the EXACT sum; the ledger delta agrees.
-    expect(subtractMoney(before.balance, after.balance)).toBe(round2(total));
-    expect(subtractMoney(before.ledgerSum, after.ledgerSum)).toBe(round2(total));
-    expect(after.balance).toBe(SEEDED_BALANCE - total);
+    expect(subtractMoney(before.balance, after.balance)).toBe(normalizeMoney(total));
+    expect(subtractMoney(before.ledgerSum, after.ledgerSum)).toBe(normalizeMoney(total));
+    expect(after.balance).toBe(subtractMoney(SEEDED_BALANCE, total));
 
     // Exactly N transfer ledger rows exist, one per transfer amount, each a DEBIT to 张伟.
     const transfers = await zhangweiTransfers();
     expect(transfers).toHaveLength(ACCUMULATED_AMOUNTS.length);
-    const ledgerAmounts = transfers.map((tx) => tx.amount).sort((a, b) => a - b);
-    const expectedAmounts = ACCUMULATED_AMOUNTS.map((amount) => -amount).sort((a, b) => a - b);
+    const orderMinorUnits = (left: bigint, right: bigint) => left < right ? -1 : left > right ? 1 : 0;
+    const ledgerAmounts = transfers.map(transaction => transaction.amountMinor).sort(orderMinorUnits);
+    const expectedAmounts = ACCUMULATED_AMOUNTS.map(amount => -moneyToCents(amount)).sort(orderMinorUnits);
     expect(ledgerAmounts).toEqual(expectedAmounts);
     for (const tx of transfers) {
       expect(tx.direction).toBe('DEBIT');

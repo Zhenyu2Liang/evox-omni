@@ -1,20 +1,20 @@
 import type { Contact } from '@prisma/client';
-import { prisma } from '../client';
+import { dbClient } from '../client';
 import { maskAwarePhoneMatch } from '../../phone';
 
 export function listContacts(userId: string): Promise<Contact[]> {
-  return prisma.contact.findMany({
+  return dbClient().contact.findMany({
     where: { userId },
     orderBy: { name: 'asc' },
   });
 }
 
 export function getContact(id: string): Promise<Contact | null> {
-  return prisma.contact.findUnique({ where: { id } });
+  return dbClient().contact.findUnique({ where: { id } });
 }
 
 export function getContactByName(userId: string, name: string): Promise<Contact | null> {
-  return prisma.contact.findFirst({
+  return dbClient().contact.findFirst({
     where: { userId, name },
     orderBy: { id: 'asc' },
   });
@@ -31,7 +31,7 @@ export function getContactByName(userId: string, name: string): Promise<Contact 
  */
 export function searchContacts(userId: string, keyword: string): Promise<Contact[]> {
   const needle = keyword.toLowerCase();
-  return prisma.contact
+  return dbClient().contact
     .findMany({ where: { userId }, orderBy: { name: 'asc' } })
     .then((contacts) =>
       contacts.filter(
@@ -43,7 +43,7 @@ export function searchContacts(userId: string, keyword: string): Promise<Contact
 }
 
 export function createContact(input: { userId: string; name: string; phone: string; bank?: string | null; remark?: string | null }): Promise<Contact> {
-  return prisma.contact.create({
+  return dbClient().contact.create({
     data: {
       userId: input.userId,
       name: input.name,

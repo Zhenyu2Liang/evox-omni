@@ -40,7 +40,8 @@ import { idCtx, postJson, taskUrl, type HttpResult } from './harness';
 /** Primary 活期账户 (¥23,580) — the default funding account every transfer debits. */
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** The seeded checking balance (¥23,580) — a parked transfer must never move it. */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, moneyToCents, normalizeMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 /** The recipient resolved by name from the seeded contacts. */
 const RECIPIENT_NAME = '张伟';
 /** The single node id used by every seeded plan in this spec. */
@@ -87,12 +88,12 @@ interface SeedNode {
 }
 
 /** The 🟢 GREEN node used as the COUNTABLE execution probe (exactly one `Budget` row per run). */
-function budgetNode(id: string, budgetName: string, amount: number, deps: string[] = []): SeedNode {
+function budgetNode(id: string, budgetName: string, amount: string, deps: string[] = []): SeedNode {
   return { id, name: '预留预算', dependencies: deps, kind: 'tool', tool: 'reserve_budget', args: { name: budgetName, amount } };
 }
 
 /** The YELLOW `transfer_money` node (gated → PARKS for a human decision instead of executing). */
-function transferNode(id: string, amount: number, deps: string[] = []): SeedNode {
+function transferNode(id: string, amount: string, deps: string[] = []): SeedNode {
   return { id, name: `给${RECIPIENT_NAME}转账`, dependencies: deps, kind: 'tool', tool: 'transfer_money', args: { name: RECIPIENT_NAME, amount } };
 }
 
@@ -163,9 +164,9 @@ function nodeOutputActionId(output: string | null): string | undefined {
 }
 
 /** The seeded 活期 account's CURRENT balance (a parked transfer must leave it untouched). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Count the `Budget` rows with the given name (2 ⇒ two independent executions). */
@@ -189,7 +190,7 @@ describe('[integration] the parked PendingAction carries its owning plan/node LI
   it('[integration] a gated DAG node parks with taskId === plan.id and nodeId === the parked node, readable via getPendingActionPlanLink', async () => {
     const sessionId = await newPersistedSessionId();
     const { taskId, plan } = await seedPlan(sessionId, `给${RECIPIENT_NAME}转200元`, [
-      transferNode(NODE_ID, 200),
+      transferNode(NODE_ID, '200'),
     ]);
 
     // Preconditions: ONE node, gated (YELLOW transfer) → PARKED, nothing executed yet.
@@ -233,7 +234,7 @@ describe('[integration] the parked PendingAction carries its owning plan/node LI
   it('[integration] re-driving the SAME parked node through POST /api/tasks/[id] {action:"resume"} REUSES the action and leaves the link unchanged', async () => {
     const sessionId = await newPersistedSessionId();
     const { taskId, plan } = await seedPlan(sessionId, `给${RECIPIENT_NAME}转200元`, [
-      transferNode(NODE_ID, 200),
+      transferNode(NODE_ID, '200'),
     ]);
     const actionId = readPendingActionId(resultOf(plan, NODE_ID).output)!;
 
@@ -291,8 +292,8 @@ describe('[integration] two INDEPENDENT plans in ONE session with IDENTICAL tool
     const sessionId = await newPersistedSessionId();
     const marker = '计划隔离预算';
 
-    const first = await seedPlan(sessionId, '预留预算（计划一）', [budgetNode(NODE_ID, marker, 500)]);
-    const second = await seedPlan(sessionId, '预留预算（计划二）', [budgetNode(NODE_ID, marker, 500)]);
+    const first = await seedPlan(sessionId, '预留预算（计划一）', [budgetNode(NODE_ID, marker, '500')]);
+    const second = await seedPlan(sessionId, '预留预算（计划二）', [budgetNode(NODE_ID, marker, '500')]);
 
     // Two DISTINCT durable plans in the ONE session, both fully executed.
     expect(first.taskId).not.toBe(second.taskId);
@@ -311,7 +312,7 @@ describe('[integration] two INDEPENDENT plans in ONE session with IDENTICAL tool
       where: { userId: DEMO_USER_ID, name: marker },
       orderBy: { id: 'asc' },
     });
-    expect(rows.map((row) => row.amount)).toEqual([500, 500]);
+    expect(rows.map((row) => row.amountMinor)).toEqual([moneyToCents('500.00'), moneyToCents('500.00')]);
     // Each reservation carries its OWN at-most-once key (`nxe:<taskId>:<nodeId>`) → distinct keys.
     expect(new Set(rows.map((row) => row.idempotencyKey)).size).toBe(2);
   });
@@ -320,10 +321,10 @@ describe('[integration] two INDEPENDENT plans in ONE session with IDENTICAL tool
     const sessionId = await newPersistedSessionId();
 
     const first = await seedPlan(sessionId, `给${RECIPIENT_NAME}转200元（计划一）`, [
-      transferNode(NODE_ID, 200),
+      transferNode(NODE_ID, '200'),
     ]);
     const second = await seedPlan(sessionId, `给${RECIPIENT_NAME}转200元（计划二）`, [
-      transferNode(NODE_ID, 200),
+      transferNode(NODE_ID, '200'),
     ]);
 
     expect(first.taskId).not.toBe(second.taskId);

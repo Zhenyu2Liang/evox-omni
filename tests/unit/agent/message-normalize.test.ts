@@ -16,7 +16,7 @@ describe('confirmation result attribution', () => {
       fauxAssistantMessage([fauxToolCall(earlierName, {}, { id: 'reused-id' })], { stopReason: 'toolUse' }),
       previous,
       { role: 'user' as const, content: '再转200.37元', timestamp: 2 },
-      fauxAssistantMessage([fauxToolCall('transfer_money', { amount: 200.37 }, { id: 'reused-id' })], { stopReason: 'toolUse' }),
+      fauxAssistantMessage([fauxToolCall('transfer_money', { amount: '200.37' }, { id: 'reused-id' })], { stopReason: 'toolUse' }),
       { ...real, isError: true, content: [{ type: 'text' as const, text: '等待确认' }] },
       fauxAssistantMessage('请确认。'),
     ];

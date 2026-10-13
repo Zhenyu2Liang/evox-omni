@@ -6,11 +6,9 @@
  * `resultJson === null` — a WEDGE. A repeat confirm/verify is rejected by the gateway's exactly-once
  * CAS with `CONFLICT`, and `agent/confirmation-recovery.ts#recoverStandaloneWedge` is the ONLY place
  * that row can settle:
- *  - a PROVEN-idempotent standalone tool (`transfer_money` ONLY) is REPLAYED on its ledger key (the
- *    action id) → side effect EXACTLY ONCE, terminal `executed` (or `failed` when the replay itself
- *    fails);
- *  - any OTHER write tool (`apply_virtual_card`, `set_card_limit`, …) transitions to the explicit,
- *    queryable `needs_reconciliation` status — NEVER a fabricated failure, NEVER a rollback.
+ *  - a verified command receipt reconstructs the original successful result without another write;
+ *  - absent a receipt, only proven idempotent transfer recovery may re-enter authorization;
+ *  - other unknown writes require reconciliation without a blind retry or fabricated failure.
  * `GET /api/actions` SURFACES every row that still needs the user or still needs settling:
  * `pending`/`awaiting_mfa` (attention `decision`) and `needs_reconciliation` (attention
  * `reconciliation`) — PLUS, under the NEW contract, a `confirmed` row that is NOT SETTLED (no
@@ -28,6 +26,7 @@
  */
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { centsToMoney } from '@/lib/money';
 import { getOrCreateSession, executeGatedTool } from '@/agent';
 import type { ToolName } from '@/lib/contracts/tools';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
@@ -37,7 +36,7 @@ import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/help
 
 const userId = 'user_liming';
 /** Seeded 活期 balance (fixtures ACCOUNTS) — unchanged by a card action, −amount after a transfer. */
-const CHECKING_BALANCE = 23580;
+const CHECKING_BALANCE = '23580.00';
 
 beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
@@ -99,9 +98,9 @@ function wedgeResultTransaction() {
 it('a STANDALONE transfer wedge is replayed idempotently to executed (side effect exactly once)', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
-  const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: 200 }, '给张伟转200元');
+  const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '200' }, '给张伟转200元');
 
-  const debitWhere = { userId, amount: -200, counterpartyId: 'contact_zhangwei' };
+  const debitWhere = { userId, amountMinor: -20000n, counterpartyId: 'contact_zhangwei' };
   expect(await p.transaction.count({ where: debitWhere })).toBe(0);
 
   const spy = wedgeResultTransaction();
@@ -115,7 +114,7 @@ it('a STANDALONE transfer wedge is replayed idempotently to executed (side effec
   expect(wedged?.status).toBe('confirmed');
   expect(wedged?.resultJson).toBeNull();
   expect(await p.transaction.count({ where: debitWhere })).toBe(1);
-  expect((await p.account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance).toBe(23380);
+  expect((await p.account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor).toBe(2338000n);
   // NEW CONTRACT (`GET /api/actions` classifies a NON-SETTLED `confirmed` row): a standalone wedge
   // stranded at `confirmed` with NO active execution lease is SURFACED — `attention` `recoverable`
   // (a safely recoverable tool) or `reconciliation` (one that must be settled manually) — so the
@@ -130,7 +129,7 @@ it('a STANDALONE transfer wedge is replayed idempotently to executed (side effec
   const stored = await p.pendingAction.findUnique({ where: { id } });
   const listed = await listActions(s);
   const debitFinal = await p.transaction.count({ where: debitWhere });
-  const balanceFinal = (await p.account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
+  const balanceFinal = centsToMoney((await p.account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
 
   console.log(
     'REVIEW_STANDALONE_TRANSFER_REPLAY',
@@ -150,11 +149,11 @@ it('a STANDALONE transfer wedge is replayed idempotently to executed (side effec
   expect(repeated.body.data?.ok).toBe(true);
   expect(stored?.status).toBe('executed');
   expect(debitFinal).toBe(1); // no second debit
-  expect(balanceFinal).toBe(23380);
+  expect(balanceFinal).toBe('23380.00');
   expect(listed.ids).not.toContain(id); // `executed` is terminal & NOT surfaced
 });
 
-it('a STANDALONE apply_virtual_card wedge cannot be replayed → settles needs_reconciliation, stays visible, no duplicate card', async () => {
+it('a standalone virtual-card wedge recovers its original receipt without issuing another card', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
   const id = await parkStandalone(s, 'apply_virtual_card', { label: '旅行备用' }, '申请一张虚拟卡');
@@ -175,13 +174,13 @@ it('a STANDALONE apply_virtual_card wedge cannot be replayed → settles needs_r
   expect(wedged?.resultJson).toBeNull();
   expect(await p.card.count({ where: virtualWhere })).toBe(1); // side effect committed exactly once
 
-  // REPEAT confirm → NOT proven idempotent for a standalone key → explicit `needs_reconciliation`.
+  // The command receipt is committed with the card; repeat confirmation only reconstructs that fact.
   spy.mockRestore();
   const repeated = await confirmRaw(id, s);
   const stored = await p.pendingAction.findUnique({ where: { id } });
   const virtualAfter = await p.card.count({ where: virtualWhere });
   const txAfter = await p.transaction.count({ where: { userId } });
-  const balance = (await p.account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
+  const balance = centsToMoney((await p.account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
   const listed = await listActions(s);
   const listedRow = listed.actions.find((a) => a.id === id);
 
@@ -203,31 +202,50 @@ it('a STANDALONE apply_virtual_card wedge cannot be replayed → settles needs_r
   );
 
   expect(repeated.status).toBe(200);
-  expect(repeated.body.data?.ok).toBe(false);
-  expect(repeated.body.data?.status).toBe('needs_reconciliation');
-  expect(stored?.status).toBe('needs_reconciliation'); // VISIBLE, non-`confirmed` terminal state
+  expect(repeated.body.data?.ok).toBe(true);
+  expect(repeated.body.data?.status).toBe('executed');
+  expect(stored?.status).toBe('executed');
   expect(virtualAfter).toBe(1); // the repeat must NOT issue a SECOND virtual card
   expect(txAfter).toBe(txBefore); // no ledger movement
   expect(balance).toBe(CHECKING_BALANCE);
-  expect(listed.ids).toContain(id); // `needs_reconciliation` MUST be surfaced
-  expect(listedRow?.status).toBe('needs_reconciliation');
+  expect(await p.executionReceipt.count({ where: { userId, key: id } })).toBe(1);
+  expect(listed.ids).not.toContain(id);
+  expect(listedRow).toBeUndefined();
 });
 
-it('a STANDALONE set_card_limit wedge is never replayed (needs_reconciliation) and never re-applies its old limit', async () => {
+it('an orphaned virtual-card action without a receipt remains unknown and is never retried', async () => {
+  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const p = getTestPrisma();
+  const action = await pendingActionRepo.createPendingAction({
+    sessionId, userId, toolName: 'apply_virtual_card', args: { label: 'Unknown card issuance' },
+    status: 'confirmed', tier: 'YELLOW', requiresMfa: false,
+    summary: { title: 'Unknown card issuance', toolName: 'apply_virtual_card', tier: 'YELLOW', requiresMfa: false, fields: [] },
+  });
+  expect(await p.executionReceipt.count({ where: { userId, key: action.id } })).toBe(0);
+  const recovered = await confirmRaw(action.id, sessionId);
+  expect(recovered.status).toBe(200);
+  expect(recovered.body.data).toMatchObject({ ok: false, status: 'needs_reconciliation' });
+  expect((await p.pendingAction.findUniqueOrThrow({ where: { id: action.id } })).status).toBe('needs_reconciliation');
+  expect(await p.card.count({ where: { userId, type: 'VIRTUAL' } })).toBe(0);
+  expect((await listActions(sessionId)).ids).toContain(action.id);
+  expect(await p.executionReceipt.count({ where: { userId, key: action.id } })).toBe(0);
+});
+
+it('a standalone limit-change receipt is recovered without re-applying its historical limit', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
   const limitWhere = { cardId: 'card_credit', category: '娱乐' };
   const id = await parkStandalone(
     s,
     'set_card_limit',
-    { cardId: 'card_credit', category: '娱乐', amount: 1500 },
+    { cardId: 'card_credit', category: '娱乐', amount: '1500' },
     '把娱乐限额设成1500',
   );
 
   // Seeded 娱乐 limit is ¥3000 — the pending write is ¥1500, so an applied write is OBSERVABLE.
   const seeded = await p.cardLimit.findMany({ where: limitWhere });
   expect(seeded.length).toBe(1);
-  expect(seeded[0].amount).toBe(3000);
+  expect(seeded[0].amountMinor).toBe(300000n);
 
   const spy = wedgeResultTransaction();
   const first = await confirmRaw(id, s);
@@ -241,18 +259,18 @@ it('a STANDALONE set_card_limit wedge is never replayed (needs_reconciliation) a
   expect(wedged?.resultJson).toBeNull();
   const applied = await p.cardLimit.findMany({ where: limitWhere });
   expect(applied.length).toBe(1); // replace semantics — never a SECOND row
-  expect(applied[0].amount).toBe(1500); // exactly the requested amount
+  expect(applied[0].amountMinor).toBe(150000n); // Exactly the requested amount.
 
   // A LATER, independently authorized change to the same limit (¥500). If the repeat confirm re-invoked
   // the wedged tool, it would clobber this back to ¥1500 — the assertion below catches any replay.
-  await p.cardLimit.updateMany({ where: limitWhere, data: { amount: 500 } });
+  await p.cardLimit.updateMany({ where: limitWhere, data: { amountMinor: 50000n } });
 
   const txBeforeRepeat = await p.transaction.count({ where: { userId } });
   const repeated = await confirmRaw(id, s);
   const stored = await p.pendingAction.findUnique({ where: { id } });
   const finalLimits = await p.cardLimit.findMany({ where: limitWhere });
   const txAfter = await p.transaction.count({ where: { userId } });
-  const balance = (await p.account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
+  const balance = centsToMoney((await p.account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
   const listed = await listActions(s);
 
   console.log(
@@ -263,7 +281,7 @@ it('a STANDALONE set_card_limit wedge is never replayed (needs_reconciliation) a
       repeatedOk: repeated.body.data?.ok,
       actionStatus: stored?.status,
       finalLimitRows: finalLimits.length,
-      finalLimitAmount: finalLimits[0]?.amount,
+      finalLimitAmount: finalLimits[0] ? centsToMoney(finalLimits[0].amountMinor) : null,
       txAfter,
       balance,
       visible: listed.ids.includes(id),
@@ -271,13 +289,13 @@ it('a STANDALONE set_card_limit wedge is never replayed (needs_reconciliation) a
   );
 
   expect(repeated.status).toBe(200);
-  expect(repeated.body.data?.status).toBe('needs_reconciliation');
-  expect(stored?.status).toBe('needs_reconciliation');
+  expect(repeated.body.data?.status).toBe('executed');
+  expect(stored?.status).toBe('executed');
   expect(finalLimits.length).toBe(1); // no duplicate limit row
-  expect(finalLimits[0].amount).toBe(500); // NOT re-applied — the tool was never re-invoked
+  expect(finalLimits[0].amountMinor).toBe(50000n); // The original operation is never re-applied.
   expect(txAfter).toBe(txBeforeRepeat); // no ledger movement
   expect(balance).toBe(CHECKING_BALANCE);
-  expect(listed.ids).toContain(id); // `needs_reconciliation` MUST be surfaced
+  expect(listed.ids).not.toContain(id);
 });
 
 it('a SIMULATED PROCESS RESTART (fresh module graph, empty liveness registry) still recovers the standalone wedge', async () => {
@@ -323,10 +341,10 @@ it('a SIMULATED PROCESS RESTART (fresh module graph, empty liveness registry) st
   );
 
   expect(recovered.status).toBe(200);
-  expect(stored?.status).toBe('needs_reconciliation');
+  expect(stored?.status).toBe('executed');
   expect(stored?.status).not.toBe('confirmed');
   expect(virtualCount).toBe(1); // no duplicate card across the "restart"
-  expect(listed.ids).toContain(id);
+  expect(listed.ids).not.toContain(id);
 });
 
 it('repeat confirm + page refresh after recovery stay consistent (idempotent, no extra side effect)', async () => {
@@ -349,17 +367,17 @@ it('repeat confirm + page refresh after recovery stay consistent (idempotent, no
   // First recovery.
   const recovered = await confirmRaw(id, s);
   expect(recovered.status).toBe(200);
-  expect(recovered.body.data?.status).toBe('needs_reconciliation');
+  expect(recovered.body.data?.status).toBe('executed');
 
   const virtualAfterRecovery = await p.card.count({ where: virtualWhere });
-  const balanceAfterRecovery = (await p.account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
+  const balanceAfterRecovery = centsToMoney((await p.account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
   const txAfterRecovery = await p.transaction.count({ where: { userId } });
 
   // The SAME confirm AGAIN — idempotent: terminal status unchanged, no new side effect.
   const again = await confirmRaw(id, s);
   const stored = await p.pendingAction.findUnique({ where: { id } });
   const virtualAfterAgain = await p.card.count({ where: virtualWhere });
-  const balanceAfterAgain = (await p.account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
+  const balanceAfterAgain = centsToMoney((await p.account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
   const txAfterAgain = await p.transaction.count({ where: { userId } });
 
   // The page-refresh path.
@@ -385,15 +403,15 @@ it('repeat confirm + page refresh after recovery stay consistent (idempotent, no
   );
 
   expect(again.status).toBe(200);
-  expect(stored?.status).toBe('needs_reconciliation');
+  expect(stored?.status).toBe('executed');
   expect(stored?.status).toBe(recovered.body.data?.status); // unchanged terminal status
   expect(virtualAfterAgain).toBe(virtualAfterRecovery); // no additional side effect
   expect(virtualAfterAgain).toBe(1);
   expect(txAfterAgain).toBe(txAfterRecovery);
   expect(balanceAfterAgain).toBe(balanceAfterRecovery);
   expect(balanceAfterAgain).toBe(CHECKING_BALANCE);
-  expect(refreshed.ids).toContain(id); // visibility matches the `needs_reconciliation` status
-  expect(refreshedRow?.status).toBe('needs_reconciliation');
+  expect(refreshed.ids).not.toContain(id);
+  expect(refreshedRow).toBeUndefined();
 });
 
 it('a STANDALONE transfer whose replay FAILS settles failed (never executed) and is not surfaced', async () => {
@@ -403,7 +421,7 @@ it('a STANDALONE transfer whose replay FAILS settles failed (never executed) and
   // SERVER-SIDE at park time (`security/security-gateway.ts#resolveTransferRecipient`), so an
   // unresolvable name would be rejected as a clarify/validation error and NO `PendingAction`
   // would ever be persisted. The parked args are canonicalized to the resolved `contactId`.
-  const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: 150 }, '给张伟转150元');
+  const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '150' }, '给张伟转150元');
   // THEN remove that contact BEFORE the first confirm so the SDK's EXECUTION-TIME resolution
   // (`banking-sdk/transfer.ts#resolveRecipient` re-reads the contact by id) fails NOT_FOUND:
   // the business write fails, so the idempotent REPLAY fails too — the recovered terminal state
@@ -427,7 +445,7 @@ it('a STANDALONE transfer whose replay FAILS settles failed (never executed) and
   const stored = await p.pendingAction.findUnique({ where: { id } });
   const storedResult = stored?.resultJson ? JSON.parse(stored.resultJson) : null;
   const txAfter = await p.transaction.count({ where: { userId } });
-  const balance = (await p.account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
+  const balance = centsToMoney((await p.account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
   const listed = await listActions(s);
 
   console.log(

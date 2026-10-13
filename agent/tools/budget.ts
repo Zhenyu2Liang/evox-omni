@@ -10,16 +10,17 @@
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
-import { attachExecutionFence, banking } from '@/banking-sdk';
+import { banking } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
 import { AppError } from '@/lib/errors';
-import { formatCNY } from '@/lib/money';
+import { centsToMoney, formatCNY, moneyToCents } from '@/lib/money';
 import type { ToolExecutionResult, ToolRunOptions } from './index';
+import { MoneyParameter } from './money-schema';
 
 /** `reserve_budget` params (SDK `ReserveBudgetInput` minus the server-injected `userId`). */
 export const ReserveBudgetParams = Type.Object({
   name: Type.String({ description: '预算名称' }),
-  amount: Type.Number({ description: '预留金额（CNY）' }),
+  amount: MoneyParameter,
   purpose: Type.Optional(Type.String({ description: '用途说明' })),
   dueDate: Type.Optional(Type.Number({ description: '到期时间（epoch ms）' })),
   idempotencyKey: Type.Optional(
@@ -63,16 +64,11 @@ export async function runReserveBudget(
     const sdkInput = {
       userId,
       name: input.name,
-      amount: input.amount,
+      amount: centsToMoney(moneyToCents(input.amount)),
       purpose: input.purpose,
       dueDate: input.dueDate,
       idempotencyKey,
     };
-    // WRITE-BOUNDARY fence: carried on the SDK INPUT OBJECT (its only transport — the spy/SDK read it
-    // from the object) so the SDK awaits it INSIDE its write transaction, immediately before the
-    // insert. A throwing fence (plan taken over / cancelled while this call was in flight) rolls the
-    // transaction back with NO budget row.
-    if (opts?.fence !== undefined) attachExecutionFence(sdkInput, opts.fence);
     const budget = await banking.budget.reserveBudget(sdkInput);
     const purpose = budget.purpose ? `，用途：${budget.purpose}` : '';
     const due = budget.dueDate ? `，到期：${formatDateTime(budget.dueDate)}` : '';

@@ -6,9 +6,12 @@
  *    `components`) import them from the SDK barrel (`banking-sdk/index.ts`).
  *  - They are VIEW MODELS: the SDK implementation maps Prisma rows onto these. Prisma model
  *    types MUST NOT leak out of the SDK.
- *  - Money is CNY `number`, 2-decimal (format via `lib/money`). Timestamps are epoch
+ *  - Money is canonical CNY decimal text; rates and percentages are decimal text. Timestamps are epoch
  *    milliseconds (`number`), matching `lib/contracts`.
  */
+
+import type { MoneyAmount, MoneyInput } from '../lib/money';
+import type { DecimalAmount } from '../lib/decimal';
 
 /* ------------------------------------------------------------------ account */
 
@@ -21,13 +24,13 @@ export interface AccountView {
   /** Masked account number, e.g. `****8821`. */
   numberMasked: string;
   /** Current balance in CNY. */
-  balance: number;
+  balance: MoneyAmount;
   currency: string;
 }
 
 export interface BalanceView {
   /** Sum of all account balances (CNY). */
-  totalAvailable: number;
+  totalAvailable: MoneyAmount;
   currency: string;
   accounts: AccountView[];
   /** Epoch ms. */
@@ -43,7 +46,7 @@ export interface TransactionView {
   id: string;
   accountId: string;
   /** Signed amount (CNY): negative = expense, positive = income. */
-  amount: number;
+  amount: MoneyAmount;
   currency: string;
   direction: TransactionDirection;
   category: string;
@@ -74,32 +77,38 @@ export interface SpendingQuery {
 
 export interface CategorySpend {
   category: string;
-  amount: number;
+  amount: MoneyAmount;
   /** Share of total spend, percent 0–100. */
-  share: number;
+  share: string;
 }
 
 export interface MerchantSpend {
   merchant: string;
-  amount: number;
+  amount: MoneyAmount;
   count: number;
 }
 
 export interface MonthlyTrendPoint {
   /** `YYYY-MM`. */
   month: string;
-  amount: number;
+  amount: MoneyAmount;
 }
 
 export interface SpendingAnalysis {
   /** `YYYY-MM` window analysed. */
   month: string;
   /** Total spend in the window (positive CNY). */
-  total: number;
+  total: MoneyAmount;
   /** Total spend in the previous month (positive CNY). */
-  prevTotal: number;
+  prevTotal: MoneyAmount;
   /** Month-over-month change, percent (0 when `prevTotal` is 0). */
-  momChangePct: number;
+  momChangePct: string;
+  /** All booked consumption, including flagged rows. */
+  bookedTotal: MoneyAmount;
+  /** Flagged consumption is reported separately, never silently omitted. */
+  flaggedTotal: MoneyAmount;
+  /** Stable category keys for compiled workflow conditions. */
+  categoryTotals: Record<string, MoneyAmount>;
   byCategory: CategorySpend[];
   topMerchant: MerchantSpend | null;
   /** Rolling window of the most recent months, oldest → newest. */
@@ -147,7 +156,7 @@ export interface TransferInput {
   /** …or by name (ambiguous name → `CONFLICT`). */
   name?: string;
   /** Positive CNY amount. */
-  amount: number;
+  amount: MoneyInput;
   remark?: string;
   /** Funding account; defaults to the user's primary CHECKING account. */
   sourceAccountId?: string;
@@ -167,14 +176,14 @@ export interface TransferRecipient {
 }
 
 export interface TransferResult {
-  success: boolean;
-  transactionId?: string;
+  success: true;
+  transactionId: string;
   /** Server-resolved funding account; also persisted in the original execution receipt. */
-  sourceAccountId?: string;
+  sourceAccountId: string;
   /** Funding-account balance after the debit (CNY). */
-  newBalance?: number;
+  newBalance: MoneyAmount;
   recipient: TransferRecipient;
-  amount: number;
+  amount: MoneyAmount;
   remark?: string;
   /** Epoch ms. */
   occurredAt: number;
@@ -187,7 +196,7 @@ export type CardStatus = 'ACTIVE' | 'FROZEN' | 'LOST' | 'PENDING';
 
 export interface CardLimitView {
   category: string;
-  amount: number;
+  amount: MoneyAmount;
 }
 
 export interface CardView {
@@ -196,9 +205,9 @@ export interface CardView {
   network: string;
   numberMasked: string;
   status: CardStatus;
-  creditLimit?: number;
-  availableLimit?: number;
-  monthlyLimit?: number;
+  creditLimit?: MoneyAmount;
+  availableLimit?: MoneyAmount;
+  monthlyLimit?: MoneyAmount;
   limits: CardLimitView[];
 }
 
@@ -208,7 +217,7 @@ export interface SetCardLimitInput {
   cardId: string;
   category: string;
   /** CNY cap for the category. */
-  amount: number;
+  amount: MoneyInput;
 }
 
 export interface ReportLostCardInput {
@@ -217,9 +226,8 @@ export interface ReportLostCardInput {
 
 export interface ApplyVirtualCardInput {
   userId: string;
-  label?: string;
   /** Optional monthly limit configuration in CNY; never inferred from a free-text label. */
-  monthlyLimit?: number;
+  monthlyLimit?: MoneyInput;
   /**
    * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT issue a
    * second card: the card id is derived deterministically from (userId, key), and the existing
@@ -237,7 +245,7 @@ export type SubscriptionStatus = 'ACTIVE' | 'CANCELLED';
 export interface SubscriptionView {
   id: string;
   name: string;
-  amount: number;
+  amount: MoneyAmount;
   cycle: SubscriptionCycle;
   /** Next charge, epoch ms. */
   nextChargeAt: number;
@@ -255,11 +263,11 @@ export interface ProductView {
   code: string;
   name: string;
   riskLevel: InvestmentRiskLevel;
-  /** Expected annual return, percent (e.g. 3.25). */
-  expectedRate: number;
+  /** Expected annual yield as a dimensionless ratio (e.g. "0.032575" means 3.2575%). */
+  annualYieldRate: DecimalAmount;
   termDays: number;
   /** Minimum subscription amount (CNY). */
-  minAmount: number;
+  minAmount: MoneyAmount;
   description?: string;
 }
 
@@ -269,23 +277,24 @@ export interface ProductQuery {
 
 export interface InvestmentComparison {
   products: ProductView[];
-  /** Product id with the highest `expectedRate`, if any. */
+  /** Product id with the highest `annualYieldRate`, if any. */
   highestRateId?: string;
   /** Product id with the lowest risk level, if any. */
   lowestRiskId?: string;
 }
 
 export interface HoldingView {
-  product?: ProductView;
+  product: ProductView;
   id: string;
   productId: string;
   productName: string;
   riskLevel: InvestmentRiskLevel;
   /** Principal invested (CNY). */
-  amount: number;
-  marketValue?: number;
+  amount: MoneyAmount;
+  /** Unrounded estimated market value (CNY), independent of settlement precision. */
+  marketValue?: DecimalAmount;
   /** `marketValue - amount`, when `marketValue` is known. */
-  profit?: number;
+  profit?: DecimalAmount;
   /** Epoch ms. */
   boughtAt: number;
   status: HoldingStatus;
@@ -295,11 +304,11 @@ export interface SubscribeInvestmentInput {
   userId: string;
   productId: string;
   /** CNY amount; must be ≥ product `minAmount`. */
-  amount: number;
+  amount: MoneyInput;
   /**
    * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT
-   * double-debit: the holding already persisted for the key is replayed (same `holdingId` /
-   * `amount`, current balance) instead of creating a second one. Stored on
+   * double-debit: the full original result, including the original account balance, is replayed
+   * from the holding's transactionally persisted `subscribeResult`. The key is stored on
    * `InvestmentHolding.idempotencyKey`; the planner passes `nodeExecutionKey(taskId, nodeId)`.
    * Absent → unchanged behavior.
    */
@@ -310,11 +319,11 @@ export interface RedeemInvestmentInput {
   userId: string;
   holdingId: string;
   /** Server-snapshotted full redemption amount shown before MFA; changes require a new decision. */
-  expectedRedemptionAmount?: number;
+  expectedRedemptionAmount?: MoneyInput;
   /**
    * Optional idempotency key — the redemption's EXECUTION IDENTITY. A repeat with the SAME
-   * key on an already-REDEEMED holding REPLAYS the original redemption (same `amount`, current
-   * balance); a DISTINCT (or absent) key on an already-REDEEMED holding always throws
+   * key on an already-REDEEMED holding REPLAYS the original redemption and original balance;
+   * a DISTINCT (or absent) key on an already-REDEEMED holding always throws
    * `CONFLICT` — never a false success. The identity and original result are persisted on the
    * holding (`redeemExecutionKey` / `redeemResult`); the planner passes `nodeExecutionKey(taskId, nodeId)`.
    */
@@ -325,13 +334,17 @@ export interface InvestResult {
   success: boolean;
   holdingId: string;
   productId: string;
-  amount: number;
+  amount: MoneyAmount;
   /** Funding-account balance after the operation (CNY). */
-  newBalance?: number;
+  newBalance: MoneyAmount;
   /** Server-resolved funding account. */
-  sourceAccountId?: string;
+  sourceAccountId: string;
   /** Epoch ms. */
   occurredAt: number;
+  /** Exact CNY valuation used for redemption before rounding to booked minor units. */
+  redemptionValuation?: DecimalAmount;
+  /** Rounding rule applied once when a redemption is settled. */
+  settlementRounding?: 'HALF_UP';
 }
 
 /* -------------------------------------------------------------------- budget */
@@ -341,7 +354,7 @@ export type BudgetStatus = 'RESERVED' | 'USED' | 'RELEASED';
 export interface BudgetView {
   id: string;
   name: string;
-  amount: number;
+  amount: MoneyAmount;
   purpose?: string;
   status: BudgetStatus;
   /** Epoch ms. */
@@ -353,7 +366,7 @@ export interface BudgetView {
 export interface ReserveBudgetInput {
   userId: string;
   name: string;
-  amount: number;
+  amount: MoneyInput;
   purpose?: string;
   /** Epoch ms. */
   dueDate?: number;
@@ -368,7 +381,7 @@ export interface ReserveBudgetInput {
 /* --------------------------------------------------------------- task (sched) */
 
 export type ScheduledTaskKind = 'REMINDER' | 'PAYMENT' | 'TRANSFER';
-export type ScheduledTaskStatus = 'SCHEDULED' | 'DONE' | 'CANCELLED';
+export type ScheduledTaskStatus = 'SCHEDULED' | 'DISPATCHING' | 'AWAITING_CONFIRMATION' | 'DONE' | 'FAILED' | 'CANCELLED';
 
 export interface ScheduledTaskView {
   id: string;
@@ -381,6 +394,9 @@ export interface ScheduledTaskView {
   requiresConfirmation: boolean;
   /** Epoch ms. */
   createdAt: number;
+  dispatchTaskId?: string;
+  deliveredAt?: number;
+  dispatchError?: string;
 }
 
 export interface CreateScheduledTaskInput {
@@ -403,14 +419,14 @@ export interface CreateScheduledTaskInput {
 /* ----------------------------------------------------------------- dashboard */
 
 export interface DashboardSummary {
-  /** Sum of all account balances (CNY). */
-  totalAssets: number;
+  /** Cash plus active estimated holding values (CNY), without settlement rounding. */
+  totalAssets: DecimalAmount;
   /** Primary CHECKING account balance (CNY). */
-  checkingBalance: number;
+  checkingBalance: MoneyAmount;
   /** Sum of credit-card available limits (CNY). */
-  creditAvailable: number;
+  creditAvailable: MoneyAmount;
   /** Current-month spend (positive CNY). */
-  monthSpend: number;
+  monthSpend: MoneyAmount;
   /** `YYYY-MM`. */
   month: string;
   recentTransactions: TransactionView[];

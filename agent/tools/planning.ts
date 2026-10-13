@@ -19,6 +19,8 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
 import type { ToolName } from '@/lib/contracts/tools';
+import { TOOL_NAMES } from '@/lib/contracts/tool-catalog';
+import type { ConversationIntent } from '@/lib/contracts/intent';
 import type {
   TaskCondition,
   TaskNodeKind,
@@ -36,8 +38,7 @@ import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import {
   claimTaskExecutionWithGeneration,
-  createTask,
-  createTaskNode,
+  createTaskGraph,
   releaseTaskExecution,
 } from '@/lib/db/repositories/task';
 import {
@@ -50,6 +51,7 @@ import {
   sweepCancelledPlan,
 } from '../task-control';
 import type { ToolExecutionResult } from './index';
+import { compileRequestedPlan } from './plan-compiler';
 
 /**
  * Gateway-routed runner for a single plan node — supplied by the agent layer. MUST route through
@@ -71,6 +73,8 @@ export interface SubmitPlanDeps {
   sessionId: string;
   /** Trusted current user text; model-proposed goal/names cannot supply request constraints. */
   userRequest?: () => string;
+  /** Persisted trusted intent, including clarification revisions. */
+  conversationIntent?: () => ConversationIntent | undefined;
   /** Gateway-routed per-node runner (see `PlanRunTool`). */
   runTool: PlanRunTool;
   /** Called on every node status change; the agent forwards it as the `plan_update` stream event. */
@@ -93,40 +97,8 @@ export interface SubmitPlanDeps {
  */
 export const SUBMIT_PLAN_TOOL_NAME = 'submit_plan' as const satisfies ToolName;
 
-/**
- * The 25 non-meta registered banking tool names a plan node may reference.
- *
- * Declared LOCALLY (instead of importing the runtime value `TOOL_NAMES` from `./index`) on purpose:
- * `index.ts` imports this module, so importing its value back would create a runtime import cycle.
- * `submit_plan` itself is deliberately EXCLUDED — a plan must never recurse into `submit_plan`.
- */
-const KNOWN_TOOL_NAMES: readonly ToolName[] = [
-  'get_balance',
-  'get_transactions',
-  'search_contact',
-  'analyze_spending',
-  'detect_anomaly',
-  'get_cards',
-  'list_subscriptions',
-  'list_investments',
-  'compare_investments',
-  'get_investment_holdings',
-  'get_dashboard_summary',
-  'list_scheduled_tasks',
-  'reserve_budget',
-  'transfer_money',
-  'set_card_limit',
-  'cancel_subscription',
-  'freeze_card',
-  'apply_virtual_card',
-  'set_subscription_reminder',
-  'create_scheduled_task',
-  'subscribe_investment',
-  'redeem_investment',
-  'report_lost_card',
-  'unfreeze_card',
-  'change_password',
-];
+/** The pure shared catalog avoids registry cycles and prohibits recursive plan submission. */
+const KNOWN_TOOL_NAMES = TOOL_NAMES.filter(name => name !== SUBMIT_PLAN_TOOL_NAME);
 
 /** `submit_plan` params — the proposed DAG (validated against the frozen `TaskNodeSpec` shape). */
 export const SubmitPlanParams = Type.Object({
@@ -259,7 +231,8 @@ export function createSubmitPlanTool(
  * concurrent run already owns the plan, or any node fails; a gated node surfaces via the plan
  * snapshot (`waiting_confirmation`/`waiting_verification`).
  */
-export async function preflightRequestedPlan(userId: string, args: Record<string, unknown>, request: string): Promise<TaskNodeSpec[]> {
+export async function preflightRequestedPlan(userId: string, args: Record<string, unknown>, request: string,
+  intent?: ConversationIntent): Promise<TaskNodeSpec[]> {
   if (!Array.isArray(args.nodes)) throw new AppError('VALIDATION', '缺少计划节点（nodes）');
   let nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
   nodes = await resolveRequestedRedemptions(userId, nodes);
@@ -268,7 +241,7 @@ export async function preflightRequestedPlan(userId: string, args: Record<string
   nodes = enforceRequestedOrder(nodes, request, names);
   nodes = enforceRequestedSuccess(nodes, request, names);
   assertCompleteRequestedPlan(nodes, request, names);
-  return nodes;
+  return compileRequestedPlan(nodes, new Set(KNOWN_TOOL_NAMES), request, intent);
 }
 
 export async function runSubmitPlan(
@@ -290,7 +263,8 @@ export async function runSubmitPlan(
 
   let nodes: TaskNodeSpec[];
   try {
-    nodes = await preflightRequestedPlan(userId, args, deps.userRequest?.() ?? '');
+    const intent = deps.conversationIntent?.();
+    nodes = await preflightRequestedPlan(userId, args, intent?.requestText ?? deps.userRequest?.() ?? '', intent);
   } catch (error) { return { ok: false, error: AppError.from(error).message }; }
 
   const knownTools = new Set<string>(KNOWN_TOOL_NAMES);
@@ -304,27 +278,16 @@ export async function runSubmitPlan(
   // rows are persisted up-front too, so the incremental `persistNode` updates below address real rows.
   let plan: TaskPlan;
   try {
-    const task = await createTask({ sessionId: deps.sessionId, userId, goal });
+    const task = await createTaskGraph({ sessionId: deps.sessionId, userId, goal }, nodes.map(node => ({
+      nodeId: node.id, name: node.name, kind: node.kind, tool: node.tool ?? null,
+      args: node.args ?? null, condition: node.condition ?? null,
+      dependencies: node.dependencies, after: node.after, status: 'pending',
+    })));
     plan = {
       ...dag.buildPlan({ sessionId: deps.sessionId, goal, nodes, now: deps.now }),
       id: task.id,
       generation: task.generation,
     };
-    for (const [order, node] of plan.nodes.entries()) {
-      await createTaskNode({
-        taskId: task.id,
-        nodeId: node.id,
-        name: node.name,
-        kind: node.kind,
-        order,
-        tool: node.tool ?? null,
-        args: node.args ?? null,
-        condition: node.condition ?? null,
-        dependencies: node.dependencies,
-        after: node.after,
-        status: 'pending',
-      });
-    }
   } catch (e) {
     // A persistence failure is a real `submit_plan` failure — reported as a value, never swallowed.
     return { ok: false, error: AppError.from(e).message };

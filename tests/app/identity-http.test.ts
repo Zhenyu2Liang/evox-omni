@@ -67,7 +67,8 @@ import {
 /** Primary 活期账户 (¥23,580) — the default funding account every transfer debits. */
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, normalizeMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 /** Recipient resolved by name from the seeded contacts (the money-moved probe). */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** The recipient name the transfer trigger / seeded plan resolves. */
@@ -118,7 +119,7 @@ interface SeedNode {
 }
 
 /** A two-step DAG: a GREEN read, then a gated transfer (which parks for a human decision). */
-function transferPlanNodes(amount: number): SeedNode[] {
+function transferPlanNodes(amount: string): SeedNode[] {
   return [
     { id: 'n1', name: '查询余额', dependencies: [], kind: 'tool', tool: 'get_balance', args: {} },
     {
@@ -273,9 +274,9 @@ function securityReset(opts: CallOpts = {}) {
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to 张伟 (the money-moved probe). */
@@ -298,7 +299,7 @@ afterAll(async () => {
 describe('[integration] identity — a MISSING cookie fails closed (403) on every write/auth route', () => {
   it('1 — confirm/verify/cancel + task POST + GET task/[id] + security/reset + GET actions all 403 SECURITY_DENIED, and nothing settles', async () => {
     const parking = await parkYellowTransfer();
-    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
 
     // NO cookie anywhere → `requireIdentity` rejects (fail-closed) BEFORE any business logic runs.
     expectDenied(await confirmAction(parking.actionId));
@@ -344,7 +345,7 @@ describe('[integration] identity — a MISSING cookie fails closed (403) on ever
 describe('[integration] identity — an UNKNOWN session cookie fails closed (403) on every write/auth route', () => {
   it('2 — an unknown session id cookie (no matching AgentSession row) is 403 SECURITY_DENIED everywhere', async () => {
     const parking = await parkYellowTransfer();
-    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
     // A syntactically valid id that maps to NO persisted session row — it can never resolve to a user.
     const unknownCookieId = newId('sess');
 
@@ -425,7 +426,7 @@ describe('[integration] identity — a VALID cookie that does NOT own the target
   });
 
   it('4b — a foreign OWNER cookie is 403 on task control AND task read; the plan stays parked', async () => {
-    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
     const foreignSessionId = await newPersistedSessionId();
 
     expectDenied(await taskControl(taskId, 'pause', { sessionId: foreignSessionId }));

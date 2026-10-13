@@ -14,7 +14,7 @@
 import type { Budget } from '@prisma/client';
 import { budgets } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
-import { readExecutionFence } from './fence';
+import { centsToMoney, moneyToCents } from '../lib/money';
 import { bankingExecutionContext } from './execution-context';
 import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction, type Tx } from './tx';
@@ -25,7 +25,7 @@ function toBudgetView(row: Budget): BudgetView {
   return {
     id: row.id,
     name: row.name,
-    amount: row.amount,
+    amount: centsToMoney(row.amountMinor),
     purpose: row.purpose ?? undefined,
     status: row.status as BudgetStatus,
     dueDate: row.dueDate?.getTime() ?? undefined,
@@ -40,7 +40,7 @@ function toBudgetView(row: Budget): BudgetView {
 function reservationData(input: ReserveBudgetInput): {
   userId: string;
   name: string;
-  amount: number;
+  amountMinor: bigint;
   purpose?: string;
   status: string;
   dueDate?: Date;
@@ -48,7 +48,7 @@ function reservationData(input: ReserveBudgetInput): {
   return {
     userId: input.userId,
     name: input.name,
-    amount: input.amount,
+    amountMinor: moneyToCents(input.amount),
     purpose: input.purpose,
     status: 'RESERVED',
     dueDate: input.dueDate !== undefined ? new Date(input.dueDate) : undefined,
@@ -73,7 +73,7 @@ async function auditReservation(
     args: {
       userId: input.userId,
       name: input.name,
-      amount: input.amount,
+      amount: data.amount,
       purpose: input.purpose,
       dueDate: input.dueDate,
       idempotencyKey: input.idempotencyKey,
@@ -89,26 +89,29 @@ async function auditReservation(
  * SAME user/key replays the persisted reservation (same `id`, no second row). Another user's local
  * key is independent. Absent → unchanged behavior.
  *
- * An optional execution fence MAY be carried on `input` (see `./fence`); when present it is awaited
- * INSIDE the write transaction, immediately BEFORE the insert — a fence that throws rolls the
- * transaction back with NO budget row written.
+ * The trusted invocation context provides the write fence inside the transaction.
  */
 export async function reserveBudget(input: ReserveBudgetInput): Promise<BudgetView> {
-  if (!(input.amount > 0)) {
+  if (moneyToCents(input.amount) <= 0n) {
     throw new AppError('VALIDATION', '预算金额必须大于 0', { amount: input.amount });
   }
 
-  const fence = readExecutionFence(input);
   const key = normalizeIdempotencyKey(input.idempotencyKey);
   if (key !== undefined) {
     const replayed = await createIdempotent<Budget>({
       key,
-      fence,
       // This callback is also used by createIdempotent's unique-conflict fallback. Both reads
       // resolve only this owner's execution identity; a foreign row can never be replayed.
-      find: (tx) => tx.budget.findUnique({ where: {
-        userId_idempotencyKey: { userId: input.userId, idempotencyKey: key },
-      } }),
+      find: async (tx) => {
+        const existing = await tx.budget.findUnique({ where: {
+          userId_idempotencyKey: { userId: input.userId, idempotencyKey: key },
+        } });
+        if (existing && (existing.amountMinor !== moneyToCents(input.amount) || existing.name !== input.name ||
+          existing.purpose !== (input.purpose ?? null) || (existing.dueDate?.getTime() ?? null) !== (input.dueDate ?? null))) {
+          throw new AppError('CONFLICT', 'The execution identity belongs to a different budget envelope.');
+        }
+        return existing;
+      },
       create: async (tx, replayKey) => {
         const created = await tx.budget.create({
           data: { ...reservationData(input), idempotencyKey: replayKey },
@@ -120,18 +123,6 @@ export async function reserveBudget(input: ReserveBudgetInput): Promise<BudgetVi
       },
     });
     return toBudgetView(replayed);
-  }
-
-  // Fenced insert (no key): the fence and the insert share ONE transaction, so a throwing fence
-  // commits nothing. Without a fence, keep the plain repository write unchanged.
-  if (fence !== undefined) {
-    const row = await runInTransaction(async (tx) => {
-      await fence(tx);
-      const created = await tx.budget.create({ data: reservationData(input) });
-      await auditReservation(tx, `row:${created.id}`, input, toBudgetView(created));
-      return created;
-    });
-    return toBudgetView(row);
   }
 
   const row = await runInTransaction(async (tx) => {

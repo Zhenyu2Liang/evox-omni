@@ -3,8 +3,8 @@
  *
  * Pipeline: user message → Pi Agent (faux script) → banking tool → Security Gateway
  * (beforeToolCall) → GREEN auto → Banking SDK → audit.
- * Fixtures: demo user 李明; the current-month ordinary spend totals ¥5,800 (of which 娱乐 ¥2,680)
- * and EXCLUDES the ¥6,999 Apple Store anomaly (a separate `isAnomaly` row).
+ * Fixtures: booked spending includes the flagged Apple Store transaction; flagged amounts remain
+ * separately visible, and investment principal movements are excluded from consumption.
  * Helpers: ../helpers (fauxAgent/scenario), ../helpers/db, ../helpers/fixtures.
  */
 import { afterAll, beforeEach, describe, it, expect } from 'vitest';
@@ -19,6 +19,7 @@ import {
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '../helpers/db';
 import { MONTHLY_SPEND_TOTAL, buildCurrentMonthSpend } from '../helpers/fixtures';
 import type { SpendingAnalysis } from '@/banking-sdk';
+import { absoluteMinor, addMoney, moneyToCents } from '@/lib/money';
 
 describe('Scenario 6 — 分析本月消费 (GREEN analyze_spending)', () => {
   beforeEach(async () => {
@@ -38,7 +39,7 @@ describe('Scenario 6 — 分析本月消费 (GREEN analyze_spending)', () => {
     const agent = buildFauxAgent({
       sessionId,
       script: callThen(
-        '本月消费合计 ¥5,800.00，最大分类为娱乐 ¥2,680.00。',
+        'Booked monthly spending is CNY 12,799.00; flagged spending is CNY 6,999.00.',
         'analyze_spending',
         {}, // no `month` → defaults to the current month of the demo clock (2026-09)
       ),
@@ -66,30 +67,30 @@ describe('Scenario 6 — 分析本月消费 (GREEN analyze_spending)', () => {
     expect(await getTestPrisma().pendingAction.count()).toBe(0);
   });
 
-  it('the result total is approximately ¥5,800 (MONTHLY_SPEND_TOTAL) for the current month', async () => {
+  it('includes every booked expense and exposes flagged spending separately without hiding it', async () => {
     const res = await analyzeThisMonth();
     const analysis = spendingData(res);
 
     // The fixture constant is the canonical current-month ordinary spend.
     const fixtureTotal = buildCurrentMonthSpend().reduce(
-      (sum, row) => sum + Math.abs(row.amount),
-      0,
+      (sum, row) => sum + absoluteMinor(moneyToCents(row.amount)),
+      0n,
     );
-    expect(fixtureTotal).toBe(MONTHLY_SPEND_TOTAL);
+    expect(fixtureTotal).toBe(moneyToCents(MONTHLY_SPEND_TOTAL));
 
-    expect(analysis.total).toBeCloseTo(MONTHLY_SPEND_TOTAL, 2);
-    // The ¥6,999 Apple Store anomaly is EXCLUDED — the total must not absorb it.
-    expect(analysis.total).not.toBeCloseTo(MONTHLY_SPEND_TOTAL + 6999, 2);
+    expect(analysis.total).toBe(addMoney(MONTHLY_SPEND_TOTAL, '6999.00'));
+    expect(analysis.bookedTotal).toBe(analysis.total);
+    expect(analysis.flaggedTotal).toBe('6999.00');
 
     // …and it genuinely exists in the DB as a flagged anomaly row.
     const anomaly = await getTestPrisma().transaction.findUnique({
       where: { id: 'tx_anomaly_apple' },
     });
     expect(anomaly?.isAnomaly).toBe(true);
-    expect(Math.abs(anomaly?.amount ?? 0)).toBe(6999);
+    expect(absoluteMinor(anomaly?.amountMinor ?? 0n)).toBe(699_900n);
 
-    // The largest ordinary spend is therefore NOT the anomaly.
-    expect(analysis.largest?.merchant).not.toBe('Apple Store');
+    // Risk tagging does not remove this factual expense from the spending read model.
+    expect(analysis.largest?.merchant).toBe('Apple Store');
   });
 
   it('byCategory includes 娱乐 with the expected amount', async () => {
@@ -98,29 +99,29 @@ describe('Scenario 6 — 分析本月消费 (GREEN analyze_spending)', () => {
 
     const entertainment = analysis.byCategory.find((entry) => entry.category === '娱乐');
     expect(entertainment).toBeDefined();
-    expect(entertainment?.amount).toBeCloseTo(2680, 2);
-    expect(entertainment?.share).toBeGreaterThan(0);
+    expect(entertainment?.amount).toBe('2680.00');
+    expect(moneyToCents(entertainment?.share)).toBeGreaterThan(0n);
   });
 
   it('topMerchant and monthlyTrend are populated in the result', async () => {
     const res = await analyzeThisMonth();
     const analysis = spendingData(res);
 
-    // topMerchant: the merchant with the greatest ordinary spend (演唱会门票 ¥1,880).
+    // The largest booked merchant includes flagged expenses.
     expect(analysis.topMerchant).not.toBeNull();
-    expect(analysis.topMerchant?.merchant).toBe('演唱会门票');
-    expect(analysis.topMerchant?.amount).toBeCloseTo(1880, 2);
+    expect(analysis.topMerchant?.merchant).toBe('Apple Store');
+    expect(analysis.topMerchant?.amount).toBe('6999.00');
     expect(analysis.topMerchant?.count).toBeGreaterThanOrEqual(1);
 
     // monthlyTrend: a 6-month rolling window, oldest → newest, ending on the current month.
     expect(analysis.monthlyTrend.length).toBe(6);
     expect(
       analysis.monthlyTrend.every(
-        (point) => typeof point.month === 'string' && point.amount >= 0,
+        point => typeof point.month === 'string' && moneyToCents(point.amount) >= 0n,
       ),
     ).toBe(true);
     const current = analysis.monthlyTrend[analysis.monthlyTrend.length - 1];
-    expect(current.amount).toBeCloseTo(MONTHLY_SPEND_TOTAL, 2);
+    expect(current.amount).toBe(addMoney(MONTHLY_SPEND_TOTAL, '6999.00'));
   });
 
   it('a spending card is surfaced to the UI (no chain-of-thought text) and no error occurs', async () => {

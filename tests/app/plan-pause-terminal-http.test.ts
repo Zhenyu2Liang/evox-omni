@@ -45,7 +45,8 @@ import { actionUrl, getJson, idCtx, postJson, taskUrl, tasksUrl, type HttpResult
 /** Primary 活期账户 (¥23,580) — the default funding account every transfer debits. */
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { moneyToCents } from '@/lib/money';
+const SEEDED_BALANCE = moneyToCents(CHECKING.balance);
 /** The recipient resolved by name from the seeded contacts. */
 const RECIPIENT_NAME = '张伟';
 
@@ -60,12 +61,12 @@ interface SeedNode {
 }
 
 /** The 🟢 GREEN node used as the COUNTABLE execution probe (one `Budget` row per run). */
-function budgetNode(id: string, name: string, budgetName: string, amount: number, deps: string[] = []): SeedNode {
+function budgetNode(id: string, name: string, budgetName: string, amount: string, deps: string[] = []): SeedNode {
   return { id, name, dependencies: deps, kind: 'tool', tool: 'reserve_budget', args: { name: budgetName, amount } };
 }
 
 /** The YELLOW `transfer_money` node (gated → PARKS for a human decision instead of executing). */
-function transferNode(id: string, amount: number, deps: string[] = []): SeedNode {
+function transferNode(id: string, amount: string, deps: string[] = []): SeedNode {
   return { id, name: `给${RECIPIENT_NAME}转账`, dependencies: deps, kind: 'tool', tool: 'transfer_money', args: { name: RECIPIENT_NAME, amount } };
 }
 
@@ -163,9 +164,9 @@ describe('[integration] POST /api/tasks/[id] pause → confirm a parked node →
   it('confirming a parked node in a paused plan does NOT advance it; only an explicit resume runs the rest', async () => {
     // n1: 🟢 GREEN probe (ONE Budget row). n2: YELLOW transfer → PARKS. n3: GREEN probe (blocked).
     const { sessionId, taskId, plan } = await seedPlan('先预留预算A，再给张伟转200元，最后预留预算B', [
-      budgetNode('n1', '预留预算A', '预留预算A', 1200),
-      transferNode('n2', 200, ['n1']),
-      budgetNode('n3', '预留预算B', '预留预算B', 800, ['n2']),
+      budgetNode('n1', '预留预算A', '预留预算A', '1200'),
+      transferNode('n2', '200', ['n1']),
+      budgetNode('n3', '预留预算B', '预留预算B', '800', ['n2']),
     ]);
 
     // Seed precondition: n1 executed, n2 parked, n3 never started.
@@ -211,8 +212,8 @@ describe('[integration] POST /api/tasks/[id] pause → confirm a parked node →
     expect(outcome.status).toBe('executed');
 
     // The real transfer moved exactly ¥200; n2 durably settled `success`.
-    expect((await getTestPrisma().account.findUnique({ where: { id: CHECKING.id } }))!.balance).toBe(
-      SEEDED_BALANCE - 200,
+    expect((await getTestPrisma().account.findUnique({ where: { id: CHECKING.id } }))!.balanceMinor).toBe(
+      SEEDED_BALANCE - moneyToCents('200.00'),
     );
     expect(await nodeStatuses(taskId)).toEqual(['success', 'success', 'pending']);
 
@@ -242,8 +243,8 @@ describe('[integration] POST /api/tasks/[id] pause → confirm a parked node →
 describe('[integration] POST /api/tasks/[id] terminal-state protection — a cancelled plan stays cancelled', () => {
   it('resume/retry/pause on a cancelled plan are no-ops (route AND DB agree), moving no money', async () => {
     const { sessionId, taskId, plan } = await seedPlan('先预留预算C，再给张伟转200元', [
-      budgetNode('n1', '预留预算C', '预留预算C', 600),
-      transferNode('n2', 200, ['n1']),
+      budgetNode('n1', '预留预算C', '预留预算C', '600'),
+      transferNode('n2', '200', ['n1']),
     ]);
     expect(nodeStatusOf(plan, 'n1')).toBe('success');
     expect(nodeStatusOf(plan, 'n2')).toBe('waiting_confirmation');
@@ -288,7 +289,7 @@ describe('[integration] POST /api/tasks/[id] terminal-state protection — a can
     }
 
     // NOTHING moved: the cancelled plan revoked its parked transfer, so the balance is untouched.
-    expect((await getTestPrisma().account.findUnique({ where: { id: CHECKING.id } }))!.balance).toBe(SEEDED_BALANCE);
+    expect((await getTestPrisma().account.findUnique({ where: { id: CHECKING.id } }))!.balanceMinor).toBe(SEEDED_BALANCE);
     expect((await getTestPrisma().pendingAction.findUnique({ where: { id: parkedActionId! } }))!.status).toBe(
       'cancelled',
     );
@@ -306,8 +307,8 @@ describe('[integration] POST /api/tasks/[id] terminal-state protection — a com
   it('retry/resume on a completed plan keep it success and never re-execute a node', async () => {
     // Two 🟢 GREEN probes only → the plan runs to completion (`success`) with no park.
     const { sessionId, taskId, plan } = await seedPlan('先预留预算F，再预留预算G', [
-      budgetNode('n1', '预留预算F', '预留预算F', 500),
-      budgetNode('n2', '预留预算G', '预留预算G', 700, ['n1']),
+      budgetNode('n1', '预留预算F', '预留预算F', '500'),
+      budgetNode('n2', '预留预算G', '预留预算G', '700', ['n1']),
     ]);
     expect(plan.status).toBe('success');
     expect(await nodeStatuses(taskId)).toEqual(['success', 'success']);

@@ -165,7 +165,7 @@ describe('circuit-breaker · locked session denies EVERY tier (incl. 🟢 GREEN 
     const calls: ReadonlyArray<{ toolName: ToolName; args: Record<string, unknown> }> = [
       { toolName: 'get_balance', args: {} }, // 🟢 GREEN read
       { toolName: 'set_card_limit', args: {} }, // 🟡 YELLOW
-      { toolName: 'transfer_money', args: { amount: 200 } }, // 🟡 YELLOW (dynamic)
+      { toolName: 'transfer_money', args: { amount: '200.00' } }, // 🟡 YELLOW (dynamic)
       { toolName: 'subscribe_investment', args: {} }, // 🔴 RED
     ];
 

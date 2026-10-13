@@ -56,8 +56,7 @@ export interface AnomalyCardData {
 export type TaskControlAction = 'pause' | 'resume' | 'cancel' | 'retry' | 'rollback';
 
 /**
- * How the chat surface must treat a restored `GET /api/actions` row. It is additive on top of the
- * row `status` (a legacy server that omits it is handled by deriving it from `status`):
+ * Required server classification for a restored GET /api/actions row:
  *  - `decision`       — a LIVE human decision (`pending` / `awaiting_mfa`) → confirm/MFA card.
  *  - `processing`     — a `confirmed` row with an ACTIVE execution lease (work still in flight;
  *                       nothing for the user to do, just show it is being processed).

@@ -13,6 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { validatePlan, topologicalOrder, getReadyNodes, evaluateCondition, buildPlan } from '@/planner/dag';
 import { AppError, type Result } from '@/lib/errors';
 import type { TaskCondition, TaskNodeResult, TaskNodeSpec } from '@/lib/contracts/task';
+import { BANKING_TOOL_OUTPUTS } from '@/lib/contracts/tool-output';
 
 /** A `kind:'tool'` node with sensible defaults; override any field. */
 function toolNode(id: string, over: Partial<TaskNodeSpec> = {}): TaskNodeSpec {
@@ -75,6 +76,58 @@ describe('planner/dag · validatePlan', () => {
     const res = validatePlan(cyclic, new Set(['get_balance']));
     expectValidationError(res);
   });
+
+  it('rejects a condition referencing an unsupported output field before execution', () => {
+    const nodes: TaskNodeSpec[] = [toolNode('balance'), {
+      id: 'condition', name: 'Check balance', kind: 'condition', dependencies: ['balance'],
+      condition: cond('balance.missing', '>', '0.00'),
+    }];
+    expectValidationError(validatePlan(nodes, new Set(['get_balance']), BANKING_TOOL_OUTPUTS));
+  });
+
+  it('requires an explicit data dependency for every condition reference', () => {
+    const nodes: TaskNodeSpec[] = [toolNode('balance'), {
+      id: 'condition', name: 'Check balance', kind: 'condition', dependencies: [],
+      after: ['balance'], condition: cond('balance.totalAvailable', '>', '0.00'),
+    }];
+    expectValidationError(validatePlan(nodes, new Set(['get_balance']), BANKING_TOOL_OUTPUTS));
+  });
+
+  it('accepts declared array output fields and decimal condition values', () => {
+    const nodes: TaskNodeSpec[] = [toolNode('balance'), {
+      id: 'condition', name: 'Check balance', kind: 'condition', dependencies: ['balance'],
+      condition: cond('balance.accounts.0.balance', '>=', '0.20'),
+    }];
+    expect(validatePlan(nodes, new Set(['get_balance']), BANKING_TOOL_OUTPUTS).ok).toBe(true);
+  });
+
+  it('requires exact text for financial literals and numeric scalars for counts', () => {
+    const nodes: TaskNodeSpec[] = [toolNode('source'), {
+      id: 'condition', name: 'Compare source', kind: 'condition', dependencies: ['source'],
+      condition: cond('source.totalAvailable', '>', 0.2),
+    }];
+    expectValidationError(validatePlan(nodes, new Set(['get_balance']), BANKING_TOOL_OUTPUTS));
+    nodes[1].condition = cond('source.totalAvailable', '>', '0.20');
+    expect(validatePlan(nodes, new Set(['get_balance']), BANKING_TOOL_OUTPUTS).ok).toBe(true);
+    nodes[0].tool = 'detect_anomaly';
+    nodes[1].condition = cond('source.scanned', '>', 3);
+    expect(validatePlan(nodes, new Set(['detect_anomaly']), BANKING_TOOL_OUTPUTS).ok).toBe(true);
+    nodes[1].condition = cond('source.scanned', '>', '3');
+    expectValidationError(validatePlan(nodes, new Set(['detect_anomaly']), BANKING_TOOL_OUTPUTS));
+  });
+
+  it('rejects malformed numeric and mismatched boolean literals before any workflow is saved', () => {
+    const nodes: TaskNodeSpec[] = [toolNode('balance'), {
+      id: 'condition', name: 'Check balance', kind: 'condition', dependencies: ['balance'],
+      condition: cond('balance.totalAvailable', '>', 'invalid'),
+    }];
+    expectValidationError(validatePlan(nodes, new Set(['get_balance']), BANKING_TOOL_OUTPUTS));
+    nodes[0].tool = 'transfer_money';
+    nodes[1].condition = cond('balance.success', '==', 'true');
+    expectValidationError(validatePlan(nodes, new Set(['transfer_money']), BANKING_TOOL_OUTPUTS));
+    nodes[1].condition.value = true;
+    expect(validatePlan(nodes, new Set(['transfer_money']), BANKING_TOOL_OUTPUTS).ok).toBe(true);
+  });
 });
 
 describe('planner/dag · topologicalOrder', () => {
@@ -109,9 +162,9 @@ describe('planner/dag · topologicalOrder', () => {
 describe('planner/dag · getReadyNodes', () => {
   const nodes = [toolNode('a'), toolNode('b', { dependencies: ['a'] })];
 
-  it('returns only pending/absent nodes whose every dependency reached success/skip', () => {
+  it('returns only pending nodes whose business dependencies succeeded', () => {
     expect(getReadyNodes(nodes, [result('a', 'success')]).map((n) => n.id)).toEqual(['b']);
-    expect(getReadyNodes(nodes, [result('a', 'skipped')]).map((n) => n.id)).toEqual(['b']);
+    expect(getReadyNodes(nodes, [result('a', 'skipped')]).map((n) => n.id)).toEqual([]);
   });
 
   it('excludes nodes whose dependency is still pending/running', () => {
@@ -120,13 +173,13 @@ describe('planner/dag · getReadyNodes', () => {
     expect(pending).toEqual(['a']);
     expect(pending).not.toContain('b');
 
-    // `a` running → resolved, but not success/skip → nothing is ready.
+    // `a` running has not succeeded, so nothing is ready.
     expect(getReadyNodes(nodes, [result('a', 'running')]).map((n) => n.id)).toEqual([]);
   });
 
   it('excludes a node whose dependency failed', () => {
     // A dependency in a terminal FAILURE state must NOT unlock its dependent
-    // (readiness requires a terminal success/skip dependency).
+    // Readiness requires successful hard dependencies.
     expect(getReadyNodes(nodes, [result('a', 'failed')]).map((n) => n.id)).toEqual([]);
   });
 
@@ -134,9 +187,21 @@ describe('planner/dag · getReadyNodes', () => {
     const independent = [toolNode('a'), toolNode('b')];
     expect(getReadyNodes(independent, []).map((n) => n.id)).toEqual(['a', 'b']);
   });
+
+  it('allows independent steps to follow a skipped or failed ordering predecessor', () => {
+    const ordered = [toolNode('a'), toolNode('b', { after: ['a'] })];
+    expect(getReadyNodes(ordered, [result('a', 'skipped')]).map(node => node.id)).toEqual(['b']);
+    expect(getReadyNodes(ordered, [result('a', 'failed')]).map(node => node.id)).toEqual(['b']);
+    expect(getReadyNodes(ordered, [result('a', 'running')]).map(node => node.id)).toEqual([]);
+  });
 });
 
 describe('planner/dag · evaluateCondition', () => {
+  it('compares decimal strings exactly beyond JavaScript safe integer precision', () => {
+    const scope = { balance: { amount: '9007199254740992.01' } };
+    expect(evaluateCondition(cond('balance.amount', '>', '9007199254740992.00'), scope)).toBe(true);
+    expect(evaluateCondition(cond('balance.amount', '==', '9007199254740992.010'), scope)).toBe(true);
+  });
   it('resolves a dot-path (e.g. analyze_entertainment.total) against scope', () => {
     const scope = { analyze_entertainment: { total: 300, count: 4 } };
     expect(evaluateCondition(cond('analyze_entertainment.total', '>', 100), scope)).toBe(true);

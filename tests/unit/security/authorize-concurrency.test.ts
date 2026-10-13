@@ -29,6 +29,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { confirmAction, getOrCreateSession, verifyAction } from '@/agent';
 import { AppError } from '@/lib/errors';
 import { MFA_CODE } from '@/lib/constants';
+import { moneyToCents } from '@/lib/money';
 import { security } from '@/security';
 import { CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { getTestPrisma, useFreshDatabase } from '@/tests/helpers/db';
@@ -49,9 +50,9 @@ const ZHANGWEI = CONTACTS[0];
 const WANGFANG = CONTACTS[1];
 const FUNDING_ACCOUNT_ID = 'acct_checking';
 /** Seeded 活期 balance (`tests/helpers/fixtures.ACCOUNTS`). */
-const STARTING_BALANCE = 23580;
+const STARTING_BALANCE = 2_358_000n;
 /** Each queued transfer is ≤ ¥1000 (YELLOW alone); together ¥1200 > the ¥1000 daily limit. */
-const HALF_LIMIT = 600;
+const HALF_LIMIT = '600.00';
 
 /* ----------------------------------------------------------------------------------- helpers */
 
@@ -64,7 +65,7 @@ async function newPersistedSessionId(): Promise<string> {
 async function parkTransfer(
   sessionId: string,
   recipientName: string,
-  amount: number,
+  amount: string,
 ): Promise<string> {
   const auth = await gateway.handleToolCall({
     sessionId,
@@ -79,9 +80,9 @@ async function parkTransfer(
 }
 
 /** The funding account's current balance (the money-movement proof). */
-async function balanceOf(): Promise<number> {
+async function balanceOf(): Promise<bigint> {
   const row = await getTestPrisma().account.findUnique({ where: { id: FUNDING_ACCOUNT_ID } });
-  return row!.balance;
+  return row!.balanceMinor;
 }
 
 /** The persisted status of a `PendingAction` row. */
@@ -107,7 +108,7 @@ const isWinner = (r: PromiseSettledResult<ConfirmOutcome>): r is PromiseFulfille
 describe('authorizeAction · concurrent confirm (exactly-once execution)', () => {
   it('two SIMULTANEOUS confirms of one YELLOW action: exactly one executes; balance moves once', async () => {
     const sessionId = await newPersistedSessionId();
-    const actionId = await parkTransfer(sessionId, ZHANGWEI.name, 200);
+    const actionId = await parkTransfer(sessionId, ZHANGWEI.name, '200.00');
     expect(await actionStatus(actionId)).toBe('pending');
     expect(await balanceOf()).toBe(STARTING_BALANCE);
 
@@ -137,7 +138,7 @@ describe('authorizeAction · concurrent confirm (exactly-once execution)', () =>
     }
 
     // Money moved EXACTLY once — no double debit, one ledger row.
-    expect(await balanceOf()).toBe(STARTING_BALANCE - 200);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - 20_000n);
     expect(await actionStatus(actionId)).toBe('executed');
     expect(await transferLedgerCount(ZHANGWEI.name)).toBe(1);
 
@@ -150,7 +151,7 @@ describe('authorizeAction · concurrent confirm (exactly-once execution)', () =>
     const third = await confirmAction(actionId);
     expect(third.ok).toBe(false);
     expect(third.actionId).toBe(actionId);
-    expect(await balanceOf()).toBe(STARTING_BALANCE - 200);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - 20_000n);
     expect(await transferLedgerCount(ZHANGWEI.name)).toBe(1);
   });
 });
@@ -178,7 +179,7 @@ describe('authorizeAction · two queued YELLOW transfers escalate at execution t
     expect(firstConfirm.ok).toBe(true);
     expect(firstConfirm.status).toBe('executed');
     expect(await actionStatus(first)).toBe('executed');
-    expect(await balanceOf()).toBe(STARTING_BALANCE - HALF_LIMIT);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - moneyToCents(HALF_LIMIT));
 
     // The SECOND confirmation RE-RISKS against the FRESH day total (¥600 + ¥600 = ¥1200 > ¥1000):
     // it must NOT execute and must come back `awaiting_mfa`.
@@ -190,7 +191,7 @@ describe('authorizeAction · two queued YELLOW transfers escalate at execution t
     expect(secondConfirm.message).not.toContain(MFA_CODE); // never leaks the code
 
     // NOT executed: balance unchanged, action still unsettled, no ledger row for 王芳.
-    expect(await balanceOf()).toBe(STARTING_BALANCE - HALF_LIMIT);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - moneyToCents(HALF_LIMIT));
     expect(await actionStatus(second)).toBe('awaiting_mfa');
     expect(await transferLedgerCount(WANGFANG.name)).toBe(0);
 
@@ -199,7 +200,7 @@ describe('authorizeAction · two queued YELLOW transfers escalate at execution t
     expect(verified.ok).toBe(true);
     expect(verified.status).toBe('executed');
     expect(await actionStatus(second)).toBe('executed');
-    expect(await balanceOf()).toBe(STARTING_BALANCE - HALF_LIMIT * 2);
+    expect(await balanceOf()).toBe(STARTING_BALANCE - moneyToCents(HALF_LIMIT) * 2n);
     expect(await transferLedgerCount(WANGFANG.name)).toBe(1);
   });
 });

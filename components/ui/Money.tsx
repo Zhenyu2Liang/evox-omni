@@ -1,7 +1,7 @@
-import { formatCNY } from '@/lib/money';
+import { formatCNY, moneyToCents, type MoneyInput } from '@/lib/money';
 
 export interface MoneyProps {
-  amount: number;
+  amount: MoneyInput | bigint;
   signed?: boolean;
   className?: string;
 }
@@ -13,7 +13,7 @@ export interface MoneyProps {
  */
 export function Money({ amount, signed = false, className }: MoneyProps) {
   const text = formatCNY(amount);
-  const showPlus = signed === true && amount > 0;
+  const showPlus = signed === true && (typeof amount === 'bigint' ? amount : moneyToCents(amount)) > 0n;
   return (
     <span className={['tabular-nums', className].filter(Boolean).join(' ')}>
       {showPlus ? `+${text}` : text}

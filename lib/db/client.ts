@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { PrismaClient } from '@prisma/client';
 import type { Prisma } from '@prisma/client';
+import { currentTransaction } from './unit-of-work.ts';
 
 /**
  * A Prisma handle a repository can read/write through: the process-wide {@link prisma} singleton OR
@@ -35,6 +36,11 @@ const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 export const prisma: PrismaClient =
   globalForPrisma.prisma ??
   new PrismaClient({ datasources: { db: { url: resolveDatabaseUrl() } } });
+
+/** Explicit repository port for the current command's unit of work. */
+export function dbClient(): DbClient {
+  return currentTransaction() ?? prisma;
+}
 
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = prisma;

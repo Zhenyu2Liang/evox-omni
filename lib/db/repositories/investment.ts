@@ -1,43 +1,45 @@
 import type { InvestmentProduct, InvestmentHolding } from '@prisma/client';
-import { prisma } from '../client';
+import { dbClient } from '../client';
+import { moneyToCents, type MoneyInput } from '../../money';
+import { nonNegativeDecimal } from '../../decimal';
 
 export type HoldingWithProduct = InvestmentHolding & { product: InvestmentProduct };
 
 export function listProducts(): Promise<InvestmentProduct[]> {
-  return prisma.investmentProduct.findMany({ orderBy: { code: 'asc' } });
+  return dbClient().investmentProduct.findMany({ orderBy: { code: 'asc' } });
 }
 
 export function getProduct(id: string): Promise<InvestmentProduct | null> {
-  return prisma.investmentProduct.findUnique({ where: { id } });
+  return dbClient().investmentProduct.findUnique({ where: { id } });
 }
 
 export function getProductByCode(code: string): Promise<InvestmentProduct | null> {
-  return prisma.investmentProduct.findUnique({ where: { code } });
+  return dbClient().investmentProduct.findUnique({ where: { code } });
 }
 
 export function listProductsByRisk(riskLevel: string): Promise<InvestmentProduct[]> {
-  return prisma.investmentProduct.findMany({
+  return dbClient().investmentProduct.findMany({
     where: { riskLevel },
     orderBy: { code: 'asc' },
   });
 }
 
-export function createProduct(input: { code: string; name: string; riskLevel: string; expectedRate: number; termDays: number; minAmount: number; description?: string | null }): Promise<InvestmentProduct> {
-  return prisma.investmentProduct.create({
+export function createProduct(input: { code: string; name: string; riskLevel: string; annualYieldRate: string; termDays: number; minAmount: MoneyInput; description?: string | null }): Promise<InvestmentProduct> {
+  return dbClient().investmentProduct.create({
     data: {
       code: input.code,
       name: input.name,
       riskLevel: input.riskLevel,
-      expectedRate: input.expectedRate,
+      annualYieldRate: nonNegativeDecimal(input.annualYieldRate),
       termDays: input.termDays,
-      minAmount: input.minAmount,
+      minAmountMinor: moneyToCents(input.minAmount),
       ...(input.description !== undefined ? { description: input.description } : {}),
     },
   });
 }
 
 export function listHoldings(userId: string, status?: string): Promise<HoldingWithProduct[]> {
-  return prisma.investmentHolding.findMany({
+  return dbClient().investmentHolding.findMany({
     where: { userId, ...(status !== undefined ? { status } : {}) },
     include: { product: true },
     orderBy: { boughtAt: 'desc' },
@@ -45,19 +47,19 @@ export function listHoldings(userId: string, status?: string): Promise<HoldingWi
 }
 
 export function getHolding(id: string): Promise<HoldingWithProduct | null> {
-  return prisma.investmentHolding.findUnique({
+  return dbClient().investmentHolding.findUnique({
     where: { id },
     include: { product: true },
   });
 }
 
-export function createHolding(input: { userId: string; productId: string; amount: number; marketValue?: number | null; boughtAt?: Date; status?: string }): Promise<InvestmentHolding> {
-  return prisma.investmentHolding.create({
+export function createHolding(input: { userId: string; productId: string; amount: MoneyInput; marketValue?: MoneyInput | null; boughtAt?: Date; status?: string }): Promise<InvestmentHolding> {
+  return dbClient().investmentHolding.create({
     data: {
       userId: input.userId,
       productId: input.productId,
-      amount: input.amount,
-      ...(input.marketValue !== undefined ? { marketValue: input.marketValue } : {}),
+      principalAmountMinor: moneyToCents(input.amount),
+      ...(input.marketValue !== undefined ? { estimatedMarketValue: input.marketValue === null ? null : nonNegativeDecimal(input.marketValue) } : {}),
       ...(input.boughtAt !== undefined ? { boughtAt: input.boughtAt } : {}),
       ...(input.status !== undefined ? { status: input.status } : {}),
     },
@@ -65,17 +67,14 @@ export function createHolding(input: { userId: string; productId: string; amount
 }
 
 export function updateHoldingStatus(id: string, status: string): Promise<InvestmentHolding> {
-  return prisma.investmentHolding.update({
+  return dbClient().investmentHolding.update({
     where: { id },
     data: { status },
   });
 }
 
 /** Sum of the user's principal invested across active (`HOLDING`) positions (CNY). */
-export async function sumActiveHoldings(userId: string): Promise<number> {
-  const agg = await prisma.investmentHolding.aggregate({
-    where: { userId, status: 'HOLDING' },
-    _sum: { amount: true },
-  });
-  return agg._sum.amount ?? 0;
+export async function sumActiveHoldings(userId: string): Promise<bigint> {
+  const rows = await dbClient().investmentHolding.findMany({ where: { userId, status: 'HOLDING' }, select: { principalAmountMinor: true } });
+  return rows.reduce((total, row) => total + row.principalAmountMinor, 0n);
 }

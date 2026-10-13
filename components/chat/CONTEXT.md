@@ -111,11 +111,11 @@ export function recoverAction(actionId: string, endpoints?: ChatEndpoints): Prom
 export function fetchTaskPlan(id: string, endpoints?: ChatEndpoints): Promise<TaskPlan | undefined>;
 // POST the SAME `task(id)` URL with `{ action }`; resolves the post-control snapshot, else undefined.
 export function controlTask(id: string, action: TaskControlAction, endpoints?: ChatEndpoints): Promise<TaskPlan | undefined>;
-// GET `actions`; tolerant of a top-level array OR `{ actions: [...] }`; keeps ACTIONABLE
+// GET `actions`; requires `{ ok:true, data: [...] }` with complete current rows; keeps ACTIONABLE
 // (pending | awaiting_mfa) rows AND OUT-OF-BAND rows (`confirmed` in-flight/recoverable +
 // TERMINAL needs_reconciliation) — the latter carry no confirm/MFA path but must be SHOWN so the
-// user sees their state and can reconcile/recover. Each ref carries an `attention` class (the
-// additive server field, else derived from `status`). Best-effort — resolves `[]` on ANY failure.
+// user sees their state and can reconcile/recover. Each ref requires the explicit server
+// `attention` classification. Best-effort reads resolve `[]` on any failure; malformed rows are discarded.
 export interface PendingActionRef { id: string; status: PendingActionStatus; tier: RiskLevel;
   requiresMfa: boolean; summary: PendingActionSummary; attention: AttentionClass; }
 export function fetchPendingActions(endpoints?: ChatEndpoints): Promise<PendingActionRef[]>;
@@ -135,11 +135,11 @@ actionable.
 
 ## Attention classes (additive `GET /api/actions` field)
 
-`GET /api/actions` returns the caller session's attention rows. Each row MAY carry an additive
-`attention: AttentionClass` (`'decision' | 'processing' | 'recoverable' | 'reconciliation'`); when the
-server omits it, `actions.ts#toPendingActionRef` **derives** it from `status`
-(`pending`/`awaiting_mfa` → `decision`, `needs_reconciliation` → `reconciliation`, `confirmed` →
-`processing`). The class decides the UI treatment:
+`GET /api/actions` returns the caller session's complete current rows in the success envelope.
+Each row requires `attention: AttentionClass`
+(`'decision' | 'processing' | 'recoverable' | 'reconciliation'`). Missing classification or policy
+fields, obsolete response shapes and flat summary views are rejected without reconstruction.
+The explicit server classification decides the UI treatment:
 
 | `attention` | trigger | treatment |
 | --- | --- | --- |
@@ -171,7 +171,7 @@ ChatUIState` (plus `initialChatUIState()` and the `ChatUIState` type) so it is u
 | `plan_update` | UPSERT `activePlan` under the **generation fence** (see "Plan dedupe"): an OLDER generation for the same id is rejected, an equal-or-NEWER one wins, and a missing generation falls back to the `updatedAt` guard; a different id replaces the slot (one live plan at a time) |
 | `confirmation_required` | set `pendingAction` `{ kind: 'confirmation', summary: event.action, actionId: event.actionId }` |
 | `mfa_required` | set `pendingAction` `{ kind: 'mfa', summary: mfaSummary(state, event.hint), actionId: event.actionId, hint: event.hint }`; the summary's `toolName` is the actual gated tool the stream reported as blocked, omitted when the stream carried none |
-| `action_settled` (ADDITIVE — read structurally, NOT a member of the frozen `AgentStreamEvent` union) | emitted by `actions.ts#postAction` for a TERMINAL server status: stamps the server-reported `status` (+ optional `message`) onto the matching inline `confirmation` card's `action` (runtime fields read by `ConfirmationCard`) and clears the live `pendingAction` when it is the SAME action; a server that omits it keeps today's behaviour |
+| `action_settled` (typed `AgentStreamEvent`) | emitted by `actions.ts#postAction` for a terminal current action response: stamps the server status and message onto the matching inline confirmation card and clears the live decision for that same action |
 | `security_event` | append a `system` `ChatMessage` (content = `event.message`; `event.kind` is not surfaced) |
 | `error` | set `error` (never throw to the UI) |
 | `done` | clear `busy` |
@@ -348,7 +348,9 @@ resets it to `0` whenever the decision settles/clears or is replaced (success, c
   transitions with `kind`, error→banner, done→idle.
 - **No component/DOM test layer exists** — `@testing-library/react`/`jsdom`/`happy-dom` are NOT dependencies and `vitest.config.ts` runs `environment: 'node'`.
   There is NO `useAgentStream`/`ChatWindow`/`Composer` test; DOM coverage is ONLY the real-browser suite `tests/e2e/acceptance.e2e.ts` (playwright-core, `npx tsx`, NOT Vitest).
-- **Untested fold rules of thumb** (candidates, NOT existing tests): a `fetchPendingActions` fixture with
+- `tests/unit/planner/action-contract.test.ts` verifies current response envelopes, complete policy and
+  summary fields, explicit attention, rejection of obsolete shapes and preservation of MFA and settlement events.
+- **Untested fold rules of thumb** (candidates, NOT existing tests): a restored action fixture with
   actionable AND out-of-band rows (`confirmed` → `processing`/`recoverable`, `needs_reconciliation` →
   `reconciliation`) should rebuild the decision slot AND the `pendingReconciliations` list (one
   `ReconciliationCard` per row, with a 恢复执行 button only for `recoverable`/`reconciliation`) without

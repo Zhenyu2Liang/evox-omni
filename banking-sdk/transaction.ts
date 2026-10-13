@@ -7,13 +7,15 @@
  */
 import { ANOMALY_AMOUNT_THRESHOLD } from '../lib/constants';
 import { demoNow } from '../lib/clock';
-import { monthRange, previousMonthRange } from '../lib/date';
+import { businessCalendarParts, businessDate, monthRange, previousMonthRange } from '../lib/date';
 import { AppError } from '../lib/errors';
-import { addMoney, round2 } from '../lib/money';
+import { absoluteMinor, centsToMoney, moneyToCents, percentageRatio } from '../lib/money';
+import { compareDecimal } from '../lib/decimal';
 import { transactions } from '../lib/db/repositories';
-import { prisma } from '../lib/db/client';
+import { dbClient } from '../lib/db/client';
 import { getCards } from './card';
-import { INVESTMENT_FLOW_CATEGORY } from './categories';
+import { INVESTMENT_FLOW_CATEGORY, SPENDING_CATEGORIES } from './categories';
+import { runInTransaction } from './tx';
 import type {
   AnomalyItem,
   AnomalyReport,
@@ -36,7 +38,7 @@ type TransactionRow = Awaited<ReturnType<typeof transactions.listTransactions>>[
 const TREND_MONTHS = 6;
 
 /** Fallback anomaly reason for rows whose `anomalyReason` is empty. */
-const DEFAULT_ANOMALY_REASON = `大额消费（>¥${ANOMALY_AMOUNT_THRESHOLD.toLocaleString('en-US')}）`;
+const DEFAULT_ANOMALY_REASON = `Large consumption above CNY ${ANOMALY_AMOUNT_THRESHOLD}.`;
 
 const MONTH_PATTERN = /^(\d{4})-(\d{2})$/;
 
@@ -63,24 +65,36 @@ export async function analyzeSpending(
   const base = query.month !== undefined ? parseMonth(query.month) : new Date(demoNow());
   const { start, end } = monthRange(base);
   const prev = previousMonthRange(base);
+  const calendar = businessCalendarParts(base);
 
-  const monthOrdinary = await ordinaryDebits(userId, start, end);
-  const prevOrdinary = await ordinaryDebits(userId, prev.start, prev.end);
-
-  const total = sumDebits(monthOrdinary);
-  const prevTotal = sumDebits(prevOrdinary);
-  const momChangePct = prevTotal === 0 ? 0 : round2(((total - prevTotal) / prevTotal) * 100);
-
-  return {
-    month: formatMonth(base),
-    total,
-    prevTotal,
-    momChangePct,
-    byCategory: buildByCategory(monthOrdinary, total),
-    topMerchant: buildTopMerchant(monthOrdinary),
-    monthlyTrend: await buildMonthlyTrend(userId, base),
-    largest: buildLargest(monthOrdinary),
-  };
+  return runInTransaction(async () => {
+    const trendStart = businessDate(calendar.year, calendar.month - TREND_MONTHS + 1);
+    const rows = (await transactions.listTransactions({ userId, from: trendStart, to: end }))
+      .filter(row => row.direction === 'DEBIT' && row.category !== INVESTMENT_FLOW_CATEGORY);
+    const windowRows = (from: Date, to: Date) => rows.filter(row => row.occurredAt >= from && row.occurredAt < to);
+    const booked = windowRows(start, end);
+    const totalMinor = sumDebits(booked);
+    const prevMinor = sumDebits(windowRows(prev.start, prev.end));
+    const byCategory = buildByCategory(booked, totalMinor);
+    const categoryTotals: Record<string, string> = Object.fromEntries(SPENDING_CATEGORIES.map(category => [category, '0.00']));
+    for (const row of rows) categoryTotals[row.category] = '0.00';
+    for (const category of byCategory) categoryTotals[category.category] = category.amount;
+    const monthlyTrend: MonthlyTrendPoint[] = [];
+    for (let offset = TREND_MONTHS - 1; offset >= 0; offset -= 1) {
+      const monthDate = businessDate(calendar.year, calendar.month - offset);
+      const range = monthRange(monthDate);
+      monthlyTrend.push({ month: formatMonth(monthDate), amount: centsToMoney(sumDebits(windowRows(range.start, range.end))) });
+    }
+    const total = centsToMoney(totalMinor);
+    return {
+      month: formatMonth(base), total, bookedTotal: total,
+      flaggedTotal: centsToMoney(sumDebits(booked.filter(row => row.isAnomaly))),
+      prevTotal: centsToMoney(prevMinor),
+      momChangePct: percentageRatio(totalMinor - prevMinor, prevMinor),
+      byCategory, categoryTotals, topMerchant: buildTopMerchant(booked), monthlyTrend,
+      largest: buildLargest(booked),
+    };
+  });
 }
 
 /** Scan transactions for anomalies (large/irregular spends) and return a report. READ-ONLY. */
@@ -92,11 +106,11 @@ export async function detectAnomaly(userId: string): Promise<AnomalyReport> {
         row.isAnomaly ||
         (row.direction === 'DEBIT' &&
           row.category !== INVESTMENT_FLOW_CATEGORY &&
-          Math.abs(row.amount) > ANOMALY_AMOUNT_THRESHOLD),
+          absoluteMinor(row.amountMinor) > moneyToCents(ANOMALY_AMOUNT_THRESHOLD)),
     )
     .map((row) => toAnomalyItem(row));
 
-  const acknowledgements = await prisma.auditLog.findMany({ where: { userId, toolName: 'acknowledge_transaction' }, select: { detail: true } });
+  const acknowledgements = await dbClient().auditLog.findMany({ where: { userId, toolName: 'acknowledge_transaction' }, select: { detail: true } });
   const acknowledged = new Set(acknowledgements.map(row => row.detail));
   return { anomalies: anomalies.map(item => ({ ...item, acknowledged: acknowledged.has(item.transaction.id) })),
     cards: await getCards(userId), scanned: rows.length, generatedAt: demoNow() };
@@ -115,7 +129,7 @@ function toTransactionView(row: TransactionRow): TransactionView {
   return {
     id: row.id,
     accountId: row.accountId,
-    amount: row.amount,
+    amount: centsToMoney(row.amountMinor),
     currency: row.currency,
     direction: row.direction as TransactionDirection,
     category: row.category,
@@ -134,92 +148,68 @@ function toAnomalyItem(row: TransactionRow): AnomalyItem {
   return {
     transaction: toTransactionView(row),
     reason: row.anomalyReason ?? DEFAULT_ANOMALY_REASON,
-    severity: severityFor(Math.abs(row.amount)),
+    severity: severityFor(absoluteMinor(row.amountMinor)),
   };
 }
 
 /** Deterministic severity bucket relative to `ANOMALY_AMOUNT_THRESHOLD`. */
-function severityFor(absoluteAmount: number): AnomalySeverity {
-  if (absoluteAmount > ANOMALY_AMOUNT_THRESHOLD * 2) return 'high';
-  if (absoluteAmount > ANOMALY_AMOUNT_THRESHOLD * 1.5) return 'medium';
+function severityFor(absoluteAmount: bigint): AnomalySeverity {
+  const threshold = moneyToCents(ANOMALY_AMOUNT_THRESHOLD);
+  if (absoluteAmount > threshold * 2n) return 'high';
+  if (absoluteAmount * 2n > threshold * 3n) return 'medium';
   return 'low';
 }
 
-/**
- * Ordinary DEBIT rows in `[from, to)`. Rows flagged `isAnomaly` are EXCLUDED so the seeded
- * ¥6,999 Apple Store anomaly never inflates the spend totals (本月 must be exactly ¥5,800).
- * Investment-flow rows (category `INVESTMENT_FLOW_CATEGORY`) are EXCLUDED as well: moving principal
- * into/out of a product is not consumption spend.
- */
-async function ordinaryDebits(userId: string, from: Date, to: Date): Promise<TransactionRow[]> {
-  const rows = await transactions.listTransactions({ userId, from, to });
-  return rows.filter(
-    (row) =>
-      row.direction === 'DEBIT' && !row.isAnomaly && row.category !== INVESTMENT_FLOW_CATEGORY,
-  );
-}
-
-/** Cent-safe sum of the magnitudes of the given (DEBIT) rows. */
-function sumDebits(rows: TransactionRow[]): number {
-  return rows.reduce((acc, row) => addMoney(acc, Math.abs(row.amount)), 0);
+/** Sum booked consumption in minor units, including flagged rows. */
+function sumDebits(rows: TransactionRow[]): bigint {
+  return rows.reduce((total, row) => total + absoluteMinor(row.amountMinor), 0n);
 }
 
 /** Per-category totals, greatest first (ties broken by category name for determinism). */
-function buildByCategory(rows: TransactionRow[], total: number): CategorySpend[] {
-  const totals = new Map<string, number>();
+function buildByCategory(rows: TransactionRow[], total: bigint): CategorySpend[] {
+  const totals = new Map<string, bigint>();
   for (const row of rows) {
-    totals.set(row.category, addMoney(totals.get(row.category) ?? 0, Math.abs(row.amount)));
+    totals.set(row.category, (totals.get(row.category) ?? 0n) + absoluteMinor(row.amountMinor));
   }
   return [...totals.entries()]
     .map(([category, amount]) => ({
       category,
-      amount,
-      share: total === 0 ? 0 : round2((amount / total) * 100),
+      amount: centsToMoney(amount),
+      share: percentageRatio(amount, total),
     }))
-    .sort((a, b) => b.amount - a.amount || a.category.localeCompare(b.category));
+    .sort((a, b) => compareDecimal(b.amount, a.amount) || a.category.localeCompare(b.category));
 }
 
-/** The merchant with the greatest ordinary spend, or null when there is none. */
+/** The merchant with the greatest booked consumption, or null when there is none. */
 function buildTopMerchant(rows: TransactionRow[]): MerchantSpend | null {
-  const totals = new Map<string, { amount: number; count: number }>();
+  const totals = new Map<string, { amount: bigint; count: number }>();
   for (const row of rows) {
-    const current = totals.get(row.merchant) ?? { amount: 0, count: 0 };
+    const current = totals.get(row.merchant) ?? { amount: 0n, count: 0 };
     totals.set(row.merchant, {
-      amount: addMoney(current.amount, Math.abs(row.amount)),
+      amount: current.amount + absoluteMinor(row.amountMinor),
       count: current.count + 1,
     });
   }
 
   let top: MerchantSpend | null = null;
   for (const [merchant, { amount, count }] of totals) {
-    const isGreater = top === null || amount > top.amount;
-    const isTieBreak = top !== null && amount === top.amount && merchant.localeCompare(top.merchant) < 0;
-    if (isGreater || isTieBreak) top = { merchant, amount, count };
+    const isGreater = top === null || amount > moneyToCents(top.amount);
+    const isTieBreak = top !== null && amount === moneyToCents(top.amount) && merchant.localeCompare(top.merchant) < 0;
+    if (isGreater || isTieBreak) top = { merchant, amount: centsToMoney(amount), count };
   }
   return top;
 }
 
-/** The largest ordinary DEBIT in the window by |amount|, or null when there is none. */
+/** The largest booked consumption by magnitude, including flagged rows. */
 function buildLargest(rows: TransactionRow[]): TransactionView | null {
   let largest: TransactionRow | null = null;
   for (const row of rows) {
-    if (largest === null || Math.abs(row.amount) > Math.abs(largest.amount)) largest = row;
+    if (largest === null || absoluteMinor(row.amountMinor) > absoluteMinor(largest.amountMinor)) largest = row;
   }
   return largest === null ? null : toTransactionView(largest);
 }
 
-/** Ordinary spend for each of the last `TREND_MONTHS` months, oldest → newest. */
-async function buildMonthlyTrend(userId: string, base: Date): Promise<MonthlyTrendPoint[]> {
-  const points: MonthlyTrendPoint[] = [];
-  for (let offset = TREND_MONTHS - 1; offset >= 0; offset -= 1) {
-    const monthDate = new Date(base.getFullYear(), base.getMonth() - offset, 1);
-    const { start, end } = monthRange(monthDate);
-    points.push({ month: formatMonth(monthDate), amount: sumDebits(await ordinaryDebits(userId, start, end)) });
-  }
-  return points;
-}
-
-/** Parses a `YYYY-MM` label into the first instant of that local month. */
+/** Parses a month label into its first banking-calendar instant. */
 function parseMonth(month: string): Date {
   const match = MONTH_PATTERN.exec(month);
   if (match === null) {
@@ -230,10 +220,11 @@ function parseMonth(month: string): Date {
   if (monthIndex < 0 || monthIndex > 11) {
     throw new AppError('VALIDATION', `Invalid month "${month}": month must be 01–12.`);
   }
-  return new Date(year, monthIndex, 1);
+  return businessDate(year, monthIndex);
 }
 
-/** Formats a `Date` as a local `YYYY-MM` label. */
+/** Formats an instant as a banking-calendar month label. */
 function formatMonth(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+  const calendar = businessCalendarParts(date);
+  return `${calendar.year}-${String(calendar.month + 1).padStart(2, '0')}`;
 }

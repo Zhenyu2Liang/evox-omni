@@ -17,7 +17,13 @@ import { resolveBankingArgs } from '@/lib/banking-selectors';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
 import { withBankingExecution, type BankingExecutionContext } from '@/banking-sdk';
 import { buildWriteCommitAudit, type WriteAuditIdentity } from '../write-audit';
+import { executeBankingCommand } from '../command-execution';
+import { prepareBankingCommand } from '@/lib/contracts/command';
+import { newId } from '@/lib/ids';
+import { isWriteTool } from '@/security/permission-engine';
 import type { ToolName } from '@/lib/contracts/tools';
+import { TOOL_NAMES } from '@/lib/contracts/tool-catalog';
+export { TOOL_NAMES } from '@/lib/contracts/tool-catalog';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import { createGetBalanceTool, runGetBalance } from './account';
 import {
@@ -85,6 +91,7 @@ export interface ToolExecutionResult {
   data?: unknown;
   summary?: string;
   error?: string;
+  errorCode?: import('@/lib/errors').ErrorCode;
   tier?: RiskLevel;
 }
 
@@ -99,23 +106,23 @@ export interface ToolExecutionResult {
  *    `subscribe_investment` / `redeem_investment` / `apply_virtual_card` — the plan-node and
  *    confirmation paths pass `@/lib/ledger#nodeExecutionKey(taskId, nodeId)`, so a replay of the
  *    SAME `(plan, node)` dedupes its side effect instead of creating a duplicate row.
- * Any other tool ignores the option. Omitting `opts` keeps the old behavior exactly, so all existing
- * two-argument call sites stay valid.
+ * Tool effects use the execution identity and trusted context supplied by their caller.
  */
 export interface ToolRunOptions {
   /** At-most-once key for a side-effecting call; passed verbatim to the SDK's `idempotencyKey`. */
   idempotencyKey?: string;
   /**
    * WRITE-BOUNDARY fence: an opaque async check the Banking SDK `await`s INSIDE its write transaction,
-   * immediately before the business write (see `@/banking-sdk#attachExecutionFence`). Built by the
+   * immediately before the business write through the trusted invocation context. Built by the
    * agent layer (`../execution-fence`) for a plan-node (GREEN inline) or confirm/verify execution; a
    * check that THROWS rolls the transaction back, so a write whose execution right was taken over /
-   * cancelled commits NO side effect. ADDITIVE: absent ⇒ unchanged behavior for every caller.
+   * cancelled commits NO side effect.
    */
   fence?: ExecutionFenceCheck;
   /** Required transfer audit, composed into the SDK's debit/ledger/receipt transaction. */
   onTransferCommit?: BankingExecutionContext['onTransferCommit'];
   onTransactionCommitted?: BankingExecutionContext['onTransactionCommitted'];
+  onCommandCommit?: import('../command-execution').CommandExecutionOptions['onCommit'];
   /**
    * SIDE-EFFECT audit identity (see `../write-audit`): when supplied, the tool's business write and
    * its STRICT AuditLog row commit in the SAME `$transaction`, so an audit failure rolls the write
@@ -174,43 +181,10 @@ export interface CreateToolRegistryOptions {
   automaticWriteFence?: () => Promise<ExecutionFenceCheck>;
   /** Trusted write-audit identity for Pi's automatic execution path, supplied by its session owner. */
   automaticWriteAudit?: () => WriteAuditIdentity;
+  operationIdentity?: (callId: string, name: ToolName, args: Record<string, unknown>) => Promise<string>;
   /** Required for a usable `submit_plan`; the agent binds its session + gateway-routed `runTool`. */
   submitPlan?: SubmitPlanDeps;
 }
-
-/** The exact, exhaustive set of registered tool names — equal to the frozen `ToolName` union (26). */
-export const TOOL_NAMES: readonly ToolName[] = [
-  // 🟢 GREEN — read-only
-  'get_balance',
-  'get_transactions',
-  'search_contact',
-  'analyze_spending',
-  'detect_anomaly',
-  'get_cards',
-  'list_subscriptions',
-  'list_investments',
-  'compare_investments',
-  'get_investment_holdings',
-  'get_dashboard_summary',
-  'list_scheduled_tasks',
-  'reserve_budget',
-  // 🟡 YELLOW — require confirmation
-  'transfer_money',
-  'set_card_limit',
-  'cancel_subscription',
-  'freeze_card',
-  'apply_virtual_card',
-  'set_subscription_reminder',
-  'create_scheduled_task',
-  // 🔴 RED — require MFA
-  'subscribe_investment',
-  'redeem_investment',
-  'report_lost_card',
-  'unfreeze_card',
-  'change_password',
-  // META — not risk-gated
-  'submit_plan',
-];
 
 /** Error message surfaced when `submit_plan` is invoked without the injected deps. */
 const SUBMIT_PLAN_UNCONFIGURED = 'submit_plan 未配置（缺少 sessionId/runTool 注入）';
@@ -290,40 +264,6 @@ export function createToolRegistry(
       : createUnconfiguredSubmitPlanTool(),
   };
 
-  // Pi sees structured, server-owned identifiers as well as the human-readable summary.
-  for (const name of TOOL_NAMES) {
-    if (name === 'submit_plan') continue;
-    const tool = tools[name];
-    const execute = tool.execute.bind(tool);
-    tools[name] = { ...tool, execute: async (...args: Parameters<typeof execute>) => {
-      if (name === 'compare_investments') args[1] = await resolveBankingArgs(userId, name, args[1] as Record<string, unknown>);
-      const result = await execute(...args);
-      return { ...result, content: [...result.content, { type: 'text' as const,
-        text: `服务端结构化结果（引用其中的 id，不要猜测）：${JSON.stringify(result.details)}` }] };
-    } };
-  }
-
-  // Pi invokes AgentTool.execute directly after beforeToolCall. Scope the trusted SDK context here
-  // too, so a breaker tripped while a GREEN tool was in flight cannot bypass the transaction fence.
-  // submit_plan creates its own per-node contexts through executeGatedTool and must not inherit one.
-  if (opts?.automaticWriteFence) {
-    const buildFence = opts.automaticWriteFence;
-    const buildAudit = opts.automaticWriteAudit;
-    for (const name of TOOL_NAMES) {
-      if (name === 'submit_plan') continue;
-      const tool = tools[name];
-      const execute = tool.execute.bind(tool);
-      tools[name] = {
-        ...tool,
-        execute: async (...args: Parameters<typeof execute>) => withBankingExecution(
-          { fence: await buildFence(), ...(buildAudit !== undefined
-            ? { onWriteCommit: buildWriteCommitAudit(name, userId, buildAudit()) }
-            : {}) }, () => execute(...args),
-        ),
-      };
-    }
-  }
-
   // Model-free runners: also exhaustive over `ToolName` (missing key ⇒ compile error). `userId` is
   // the closed-over one — it is NEVER read from `args`. Every runner may accept the optional `opts`;
   // the side-effecting ones read `opts.idempotencyKey` (see `ToolRunOptions`), the rest ignore it.
@@ -361,7 +301,7 @@ export function createToolRegistry(
     },
   };
 
-  return {
+  const registry: ToolRegistry = {
     tools,
     list(): AgentTool<any>[] {
       return TOOL_NAMES.map((name) => tools[name]);
@@ -378,15 +318,52 @@ export function createToolRegistry(
         try { args = await resolveBankingArgs(userId, name, args); }
         catch (error) { return { ok: false, error: AppError.from(error).message }; }
       }
-      return withBankingExecution(
-        {
+      const writeContext = writeAuditContext(name, userId, opts);
+      let auditedInTransaction = false;
+      const context: BankingExecutionContext = {
+          sessionId: opts?.sessionId,
           fence: opts?.fence,
           onTransferCommit: opts?.onTransferCommit,
           onTransactionCommitted: opts?.onTransactionCommitted,
-          ...writeAuditContext(name, userId, opts),
-        },
-        () => runners[name](userId, args, opts),
-      );
+          ...(writeContext.onWriteCommit ? { onWriteCommit: async (client, event) => {
+            await writeContext.onWriteCommit!(client, event);
+            auditedInTransaction = true;
+          } } : {}),
+      };
+      if (!isWriteTool(name)) return withBankingExecution(context, () => runners[name](userId, args, opts));
+      try {
+        const command = prepareBankingCommand(userId, opts?.idempotencyKey ?? newId('operation'), name, args);
+        return await executeBankingCommand(command, () => runners[name](userId, command.args, { ...opts, idempotencyKey: command.operationKey }), {
+        context,
+        onCommit: opts?.onCommandCommit ?? (context.onWriteCommit ? async (client, result) => {
+          if (auditedInTransaction) return;
+          await context.onWriteCommit!(client, {
+          toolName: name, identity: command.operationKey, args: { ...command.args, userId }, data: result.data,
+          });
+        } : undefined),
+        });
+      } catch (error) {
+        const failure = AppError.from(error);
+        return { ok: false, error: failure.message, errorCode: failure.code };
+      }
     },
   };
+  // Runtime calls and human decisions use exactly the same command execution boundary.
+  for (const name of TOOL_NAMES) {
+    if (name === 'submit_plan') continue;
+    const definition = tools[name];
+    tools[name] = { ...definition, execute: async (callId, params) => {
+      const args = params as Record<string, unknown>;
+      const identity = opts?.automaticWriteAudit?.();
+      const result = await registry.executeDirect(name, args, {
+        ...(isWriteTool(name) ? { idempotencyKey: await opts?.operationIdentity?.(callId, name, args) ?? newId('operation') } : {}),
+        ...(opts?.automaticWriteFence ? { fence: await opts.automaticWriteFence() } : {}),
+        ...identity,
+      });
+      if (!result.ok) throw new AppError(result.errorCode ?? 'TOOL_FAILED', result.error ?? 'Banking tool failed.');
+      return { content: [{ type: 'text', text: result.summary ?? 'Operation completed.' },
+        { type: 'text', text: `Structured banking result: ${JSON.stringify(result.data)}` }], details: result.data };
+    } };
+  }
+  return registry;
 }

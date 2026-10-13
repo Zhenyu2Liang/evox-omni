@@ -24,9 +24,8 @@
  * ledger row whose receipt is missing, or whose digest differs, is an explicit CONFLICT; a match
  * replays the receipt's ORIGINAL result VERBATIM (the current request is never spliced onto it).
  *
- * An optional EXECUTION FENCE may be carried on the input (see `./fence`); when present it is
- * awaited INSIDE the write transaction, immediately BEFORE the debit, so a fence that throws rolls
- * the transaction back with NO debit, ledger row or receipt written.
+ * The active execution context fences the transaction before business writes; a rejected fence
+ * rolls back the debit, ledger and receipt together.
  *
  * Throws `AppError`:
  *  - `VALIDATION`        — missing/invalid recipient or non-positive amount.
@@ -35,15 +34,14 @@
  *                          replay reuses an execution identity for a different request.
  *  - `INSUFFICIENT_FUNDS`— funding account balance < amount.
  */
-import type { Account, Contact, Transaction } from '@prisma/client';
+import type { Account, Contact, ExecutionReceipt, Transaction } from '@prisma/client';
 import { demoNow } from '../lib/clock';
 import { executionReceiptId, idempotentTransferTxId, requestDigest } from '@/lib/ledger';
 import { accounts, contacts, executionReceipts, transactions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { safeParse, toJson } from '../lib/json';
-import { normalizeTransferAmount, parseAmount, round2 } from '../lib/money';
+import { centsToMoney, moneyToCents, normalizeMoney, normalizeTransferAmount, type MoneyAmount } from '../lib/money';
 import { toContactView } from './contact';
-import { readExecutionFence } from './fence';
 import { isUniqueViolation } from './idempotent';
 import { runInTransaction } from './tx';
 import { bankingExecutionContext } from './execution-context';
@@ -67,28 +65,37 @@ function selector(value: string | undefined): string | null {
   return value !== undefined && value !== '' ? value : null;
 }
 
-/** Build the TransferResult for an idempotent replay from the already-persisted ledger row. */
-function replayResult(existing: Transaction, recipient: TransferRecipient): TransferResult {
-  return {
-    success: true,
-    transactionId: existing.id,
-    sourceAccountId: existing.accountId,
-    recipient,
-    amount: Math.abs(existing.amount),
-    remark: existing.remark ?? undefined,
-    occurredAt: existing.occurredAt.getTime(),
-  };
-}
-
-/**
- * A MINIMAL recipient reconstructed from PERSISTED ledger fields ONLY — used when the counterparty
- * no longer resolves (renamed/deleted contact). It NEVER invents a contact id/phone: the name is the
- * one the ledger row itself recorded (`merchant` = `转账给<name>`), and an empty phone stays empty.
- */
-function ledgerRecipient(existing: Transaction): TransferRecipient {
-  const prefix = '转账给';
-  const recorded = existing.merchant.startsWith(prefix) ? existing.merchant.slice(prefix.length) : '';
-  return { contactId: existing.counterpartyId ?? undefined, name: recorded || '收款人', phone: '' };
+/** Validate an immutable result against its receipt and ledger without resolving mutable contacts. */
+function verifiedReceiptResult(
+  userId: string, key: string, digest: string, receipt: ExecutionReceipt | null, ledger: Transaction | null,
+): TransferResult {
+  if (receipt && receipt.requestDigest !== digest) {
+    throw new AppError('CONFLICT', 'same execution identity, different request', {
+      key, expectedDigest: receipt.requestDigest, actualDigest: digest,
+    });
+  }
+  const conflict = () => new AppError('CONFLICT', 'Transfer execution evidence cannot be verified; manual reconciliation required', { key });
+  if (!receipt || !ledger || receipt.id !== executionReceiptId(userId, key) || receipt.userId !== userId ||
+      receipt.key !== key || receipt.toolName !== TRANSFER_TOOL || receipt.txId !== ledger.id ||
+      ledger.id !== idempotentTransferTxId(userId, key) || ledger.userId !== userId ||
+      ledger.direction !== 'DEBIT' || ledger.channel !== 'TRANSFER' || ledger.currency !== 'CNY' || ledger.amountMinor >= 0n) {
+    throw conflict();
+  }
+  const stored = safeParse<TransferResult | null>(receipt.resultJson, null);
+  if (stored === null || stored.success !== true || stored.transactionId !== ledger.id ||
+      stored.sourceAccountId !== ledger.accountId || typeof stored.amount !== 'string' ||
+      typeof stored.newBalance !== 'string' || stored.occurredAt !== ledger.occurredAt.getTime() ||
+      selector(stored.remark) !== selector(ledger.remark ?? undefined) ||
+      stored.recipient?.contactId !== ledger.counterpartyId || typeof stored.recipient.name !== 'string' ||
+      typeof stored.recipient.phone !== 'string') {
+    throw conflict();
+  }
+  try {
+    if (moneyToCents(stored.amount) !== -ledger.amountMinor || moneyToCents(stored.newBalance) < 0n) throw conflict();
+  } catch {
+    throw conflict();
+  }
+  return stored;
 }
 
 /**
@@ -96,57 +103,15 @@ function ledgerRecipient(existing: Transaction): TransferRecipient {
  * MUTABLE lookup (recipient / funding-account resolution). Returns the replayed `TransferResult`,
  * or `null` when nothing has committed yet.
  *
- *  - an `ExecutionReceipt` for the identity: the request digest MUST match, in which case the
- *    ORIGINAL result snapshot is replayed verbatim; a differing digest is an explicit CONFLICT.
- *  - else a LEGACY deterministic ledger row (debit present, no receipt): recognized as
- *    already-credited and replayed from persisted fields — never re-resolved by name, never a
- *    spurious NOT_FOUND.
+ * A complete matching receipt and ledger replay the original result snapshot. Incomplete or
+ * contradictory evidence fails closed and requires reconciliation; ledger rows are never used
+ * to reconstruct missing results.
  */
-async function replayCommitted(userId: string, key: string, digest: string, input: TransferInput): Promise<TransferResult | null> {
+async function replayCommitted(userId: string, key: string, digest: string): Promise<TransferResult | null> {
   const receipt = await executionReceipts.getExecutionReceipt(userId, key);
   const ledger = await transactions.getTransaction(idempotentTransferTxId(userId, key));
-  if (receipt) {
-    if (receipt.toolName !== TRANSFER_TOOL || receipt.requestDigest !== digest || !ledger ||
-        receipt.txId !== ledger.id || ledger.userId !== userId || ledger.direction !== 'DEBIT' || ledger.channel !== 'TRANSFER') {
-      throw new AppError('CONFLICT', 'same execution identity, different request', {
-        key,
-        expectedDigest: receipt.requestDigest,
-        actualDigest: digest,
-      });
-    }
-    const stored = safeParse<TransferResult | null>(receipt.resultJson, null);
-    if (stored === null || stored.success !== true || stored.transactionId !== ledger.id ||
-        stored.amount !== -ledger.amount || stored.recipient?.contactId !== ledger.counterpartyId) {
-      throw new AppError('CONFLICT', `Execution receipt ${receipt.id} cannot be verified; manual reconciliation required`, {
-        key,
-      });
-    }
-    return stored;
-  }
-
-  const legacy = ledger;
-  if (!legacy) return null;
-  // Old ledgers have no request digest. Verify every persisted field; never silently replay a
-  // different request under the same key, and never resolve the original name through mutable data.
-  const selectors = suppliedRecipientFields(input);
-  let sameRecipient = selectors.length === 1 && (
-    (input.contactId !== undefined && input.contactId === legacy.counterpartyId) ||
-    (input.name !== undefined && legacy.merchant === `转账给${input.name}`)
-  );
-  if (selectors.length === 1 && input.phone !== undefined && legacy.counterpartyId) {
-    const contact = await contacts.getContact(legacy.counterpartyId);
-    sameRecipient = contact?.userId === userId && contact.phone === input.phone;
-  }
-  if (legacy.userId !== userId || legacy.direction !== 'DEBIT' || legacy.channel !== 'TRANSFER' ||
-      legacy.currency !== 'CNY' || -legacy.amount !== round2(parseAmount(input.amount)) || !sameRecipient ||
-      (input.sourceAccountId !== undefined && legacy.accountId !== input.sourceAccountId) ||
-      (selector(legacy.remark ?? undefined) !== selector(input.remark))) {
-    throw new AppError('CONFLICT', '历史流水无法核验为同一请求，需人工核对', { key, txId: legacy.id });
-  }
-  const account = await accounts.getAccount(legacy.accountId);
-  if (!account || account.userId !== userId) throw new AppError('CONFLICT', '历史流水账户无法核验，需人工核对');
-  // A historical post-debit balance is unavailable. Omit it rather than report today's balance.
-  return replayResult(legacy, ledgerRecipient(legacy));
+  if (!receipt && !ledger) return null;
+  return verifiedReceiptResult(userId, key, digest, receipt, ledger);
 }
 
 /** Read committed evidence only. This function never executes or retries a transfer. */
@@ -156,9 +121,9 @@ export async function getCommittedTransfer(input: TransferInput): Promise<Transf
   const digest = requestDigest({
     userId: input.userId, toolName: TRANSFER_TOOL,
     name: selector(input.name), contactId: selector(input.contactId), phone: selector(input.phone),
-    amount: round2(parseAmount(input.amount)), sourceAccountId: selector(input.sourceAccountId), remark: selector(input.remark),
+    amount: normalizeMoney(input.amount), sourceAccountId: selector(input.sourceAccountId), remark: selector(input.remark),
   });
-  return replayCommitted(input.userId, key, digest, input);
+  return replayCommitted(input.userId, key, digest);
 }
 
 /** Exactly one of `contactId` | `phone` | `name` must be supplied. */
@@ -247,9 +212,9 @@ async function resolveFundingAccount(userId: string, input: TransferInput): Prom
  */
 export async function createTransfer(input: TransferInput): Promise<TransferResult> {
   const amount = normalizeTransferAmount(input.amount);
+  const amountMinor = moneyToCents(amount);
 
   const key = input.idempotencyKey?.trim();
-  const fence = readExecutionFence(input);
   const txId = key ? idempotentTransferTxId(input.userId, key) : undefined;
   const digest = requestDigest({
     userId: input.userId,
@@ -266,7 +231,7 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
   // recognized from persisted facts and never re-resolved through data (the recipient by name) that
   // may have changed since the side effect committed.
   if (key !== undefined) {
-    const committed = await replayCommitted(input.userId, key, digest, input);
+    const committed = await replayCommitted(input.userId, key, digest);
     if (committed) return committed;
   }
 
@@ -276,7 +241,7 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
   const occurredAt = demoNow();
 
   type Outcome =
-    | { kind: 'executed'; transactionId: string; newBalance: number }
+    | { kind: 'executed'; transactionId: string; newBalance: MoneyAmount }
     | { kind: 'replayed'; result: TransferResult };
 
   let outcome: Outcome;
@@ -284,48 +249,28 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
     outcome = await runInTransaction(async (tx): Promise<Outcome> => {
       if (txId !== undefined && key !== undefined) {
         const existing = await tx.transaction.findUnique({ where: { id: txId } });
-        if (existing) {
+        const receipt = await executionReceipts.getExecutionReceipt(input.userId, key, tx);
+        if (existing || receipt) {
           // A committed ledger row under this identity is a replay ONLY when the persisted receipt
           // proves it is the SAME request — the receipt is read with the SAME tx client and its
           // ORIGINAL result is returned VERBATIM. A missing receipt (or a differing digest) is an
           // explicit CONFLICT: the current request's recipient/amount is never spliced onto the
           // winner's row.
-          const receipt = await executionReceipts.getExecutionReceipt(input.userId, key, tx);
-          if (!receipt) {
-            throw new AppError('CONFLICT', 'same execution identity, different request', { key, txId });
-          }
-          if (receipt.requestDigest !== digest) {
-            throw new AppError('CONFLICT', 'same execution identity, different request', {
-              key,
-              expectedDigest: receipt.requestDigest,
-              actualDigest: digest,
-            });
-          }
-          const stored = safeParse<TransferResult | null>(receipt.resultJson, null);
-          if (stored === null) {
-            throw new AppError('INTERNAL', `Execution receipt ${receipt.id} has an unreadable result`, {
-              key,
-            });
-          }
-          return { kind: 'replayed', result: stored };
+          return { kind: 'replayed', result: verifiedReceiptResult(input.userId, key, digest, receipt, existing) };
         }
       }
 
-      // SERVER-GENERATED execution fence: awaited INSIDE this write transaction, immediately BEFORE
-      // the business write, so a fence that throws rolls the transaction back with NO side effect.
-      await fence?.(tx);
-
       // Atomic sufficient-funds check + debit (unchanged behavior).
       const debited = await tx.account.updateMany({
-        where: { id: account.id, userId: input.userId, balance: { gte: amount } },
-        data: { balance: { decrement: amount } },
+        where: { id: account.id, userId: input.userId, balanceMinor: { gte: amountMinor } },
+        data: { balanceMinor: { decrement: amountMinor } },
       });
       if (debited.count === 0) {
         const current = await tx.account.findUnique({ where: { id: account.id } });
         throw new AppError(
           'INSUFFICIENT_FUNDS',
-          `Insufficient funds: balance ${current?.balance ?? 0} < amount ${amount}`,
-          { balance: current?.balance ?? 0, amount },
+          `Insufficient funds: balance ${centsToMoney(current?.balanceMinor ?? 0n)} < amount ${amount}`,
+          { balance: centsToMoney(current?.balanceMinor ?? 0n), amount },
         );
       }
 
@@ -334,7 +279,7 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
           ...(txId !== undefined ? { id: txId } : {}),
           accountId: account.id,
           userId: input.userId,
-          amount: -amount,
+          amountMinor: -amountMinor,
           direction: 'DEBIT',
           category: '转账',
           merchant: '转账给' + recipient.name,
@@ -356,7 +301,7 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
         success: true,
         transactionId: transaction.id,
         sourceAccountId: account.id,
-        newBalance: updated.balance,
+        newBalance: centsToMoney(updated.balanceMinor),
         recipient: toRecipient(recipient),
         amount,
         remark: input.remark,
@@ -380,7 +325,7 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
       // A required audit failure aborts this very transaction: no debit, ledger or receipt survives.
       await bankingExecutionContext()?.onTransferCommit?.(tx, snapshot);
 
-      return { kind: 'executed', transactionId: transaction.id, newBalance: updated.balance };
+      return { kind: 'executed', transactionId: transaction.id, newBalance: centsToMoney(updated.balanceMinor) };
     });
   } catch (error) {
     // Concurrent same-key race: another call committed the row/receipt first → our tx rolled back
@@ -388,7 +333,7 @@ export async function createTransfer(input: TransferInput): Promise<TransferResu
     // request digest and throws CONFLICT on a mismatch — the catch NEVER guesses a replay for an
     // unverified ledger row.
     if (txId !== undefined && key !== undefined && isUniqueViolation(error)) {
-      const committed = await replayCommitted(input.userId, key, digest, input);
+      const committed = await replayCommitted(input.userId, key, digest);
       if (committed) return committed;
     }
     throw error;

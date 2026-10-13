@@ -12,8 +12,8 @@
  *
  * The Banking SDK executes banking writes and knows nothing about plans/claims/tokens, so the agent
  * layer hands the guarantee to the write boundary through a trusted invocation context
- * (`banking-sdk/execution-context.ts`; legacy Symbol input fences remain supported). Neither
- * mechanism can be injected through JSON/tool args. The SDK awaits the check INSIDE its write transaction,
+ * (`banking-sdk/execution-context.ts`). The context cannot be injected through JSON/tool args.
+ * The SDK awaits the check INSIDE its write transaction,
  * immediately BEFORE the business write, so a check that THROWS rolls the transaction back and NO
  * business row is persisted (see `banking-sdk/budget.ts`, `banking-sdk/idempotent.ts`,
  * `banking-sdk/transfer.ts`).
@@ -112,7 +112,12 @@ async function assertPlanNodeUnchanged(
   // commits first (this CAS fails) or waits until this business transaction commits.
   const plan = await client.agentTask.updateMany({
     where: { id: taskId, executionToken: captured.planToken, generation: captured.generation,
-      status: { in: [...WRITABLE_PLAN_STATUSES] } },
+      OR: [
+        { status: { in: [...WRITABLE_PLAN_STATUSES] } },
+        // A handoff stops the next checkpoint while retaining this already-started command.
+        ...(captured.planStatus === 'running' || captured.planStatus === 'waiting_confirmation'
+          ? [{ status: 'paused', manualReviews: { some: { status: 'open' } } }] : []),
+      ] },
     data: { generation: { increment: 0 } },
   });
   if (plan.count !== 1) throw fenceConflict('计划执行权已被接管、取消或暂停', { taskId, nodeId });

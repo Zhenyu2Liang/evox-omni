@@ -122,7 +122,7 @@ function DecisionRow({ row }: { row: PendingActionRef }) {
               <dd className="text-right font-medium text-banking-navy">{field.value}</dd>
             </div>
           ))}
-          {typeof summary.amount === 'number' ? (
+          {summary.amount !== undefined ? (
             <div className="flex items-center justify-between gap-4 border-t border-banking-navy/10 pt-2 text-sm">
               <dt className="text-banking-navy/70">金额</dt>
               <dd className="font-semibold text-banking-deep">

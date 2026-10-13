@@ -54,7 +54,7 @@ describe('executionReceiptId — committed-fact receipt identity', () => {
 });
 
 describe('requestDigest — canonical request fingerprint', () => {
-  const base = { userId: 'user_liming', toolName: 'transfer_money', name: '张伟', amount: 200 };
+  const base = { userId: 'user_liming', toolName: 'transfer_money', name: '张伟', amount: '200.00' };
 
   it('is deterministic and a lowercase hex sha256', () => {
     expect(requestDigest(base)).toBe(requestDigest(base));
@@ -63,7 +63,7 @@ describe('requestDigest — canonical request fingerprint', () => {
   });
 
   it('is INDEPENDENT of key insertion order', () => {
-    const reordered = { amount: 200, name: '张伟', toolName: 'transfer_money', userId: 'user_liming' };
+    const reordered = { amount: '200.00', name: '张伟', toolName: 'transfer_money', userId: 'user_liming' };
     expect(requestDigest(reordered)).toBe(requestDigest(base));
   });
 
@@ -74,11 +74,17 @@ describe('requestDigest — canonical request fingerprint', () => {
   });
 
   it('normalizes an absent `undefined` part the same as an explicit `null`', () => {
-    expect(requestDigest({ amount: 200, remark: undefined })).toBe(requestDigest({ amount: 200, remark: null }));
+    expect(requestDigest({ amount: '200.00', remark: undefined })).toBe(requestDigest({ amount: '200.00', remark: null }));
+  });
+
+  it('keeps malformed numeric amounts distinct from canonical amount strings', () => {
+    expect(requestDigest({ ...base, amount: 200 })).not.toBe(requestDigest(base));
+    expect(requestDigest({ minorUnits: 9_007_199_254_740_993n }))
+      .toBe(requestDigest({ minorUnits: '9007199254740993' }));
   });
 
   it('changes when any request field changes (a different request is never the same identity)', () => {
-    expect(requestDigest({ ...base, amount: 300 })).not.toBe(requestDigest(base));
+    expect(requestDigest({ ...base, amount: '300.00' })).not.toBe(requestDigest(base));
     expect(requestDigest({ ...base, name: '王芳' })).not.toBe(requestDigest(base));
     expect(requestDigest({ ...base, remark: '房租' })).not.toBe(requestDigest(base));
     expect(requestDigest({ ...base, userId: 'user_other' })).not.toBe(requestDigest(base));

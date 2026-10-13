@@ -20,6 +20,7 @@ import type { ToolName } from '../lib/contracts/tools';
 import { evaluateTransferRisk } from './risk-engine';
 import { AppError } from '../lib/errors';
 import { normalizeTransferAmount } from '../lib/money';
+import { TOOL_CATALOG, TOOL_NAMES, isCatalogToolName } from '../lib/contracts/tool-catalog';
 
 export interface ToolPolicy {
   /** Static risk tier for the tool. `transfer_money` is dynamic (see `static: false`). */
@@ -32,7 +33,7 @@ export interface ToolPolicy {
    * the capability, never a permission: the tier still decides whether the call may execute.
    */
   write: boolean;
-  /** Human-readable policy note (Chinese), surfaced in the audit log / UI. */
+  /** Human-readable policy note, surfaced in the audit log and UI. */
   description: string;
 }
 
@@ -41,7 +42,7 @@ export interface EvaluateToolContext {
   userId: string;
   sessionId: string;
   /** Sum of today's outgoing transfers for `userId` (from `risk-engine.computeDailyTransferTotal`). */
-  dailyTransferTotal: number;
+  dailyTransferTotal: import('../lib/money').MoneyInput;
 }
 
 export interface ToolEvaluation {
@@ -56,49 +57,16 @@ export interface ToolEvaluation {
  * Keys MUST cover every `ToolName`. `transfer_money` is dynamic (`static: false`);
  * `submit_plan` is a planner meta-tool and is NOT risk-gated.
  */
-export const TOOL_POLICY: Record<ToolName, ToolPolicy> = {
-  // 🟢 GREEN — low-risk reads; auto-execute, no confirmation.
-  get_balance: { tier: 'GREEN', static: true, write: false, description: '查询余额' },
-  get_transactions: { tier: 'GREEN', static: true, write: false, description: '查询交易流水' },
-  search_contact: { tier: 'GREEN', static: true, write: false, description: '查询联系人' },
-  analyze_spending: { tier: 'GREEN', static: true, write: false, description: '消费分析' },
-  detect_anomaly: { tier: 'GREEN', static: true, write: false, description: '异常交易检测' },
-  get_cards: { tier: 'GREEN', static: true, write: false, description: '查询银行卡' },
-  list_subscriptions: { tier: 'GREEN', static: true, write: false, description: '查询订阅' },
-  list_investments: { tier: 'GREEN', static: true, write: false, description: '查询理财产品' },
-  compare_investments: { tier: 'GREEN', static: true, write: false, description: '理财产品对比' },
-  get_investment_holdings: { tier: 'GREEN', static: true, write: false, description: '查询理财持仓' },
-  get_dashboard_summary: { tier: 'GREEN', static: true, write: false, description: '资产概览' },
-  list_scheduled_tasks: { tier: 'GREEN', static: true, write: false, description: '查询定时任务' },
-  // The ONLY GREEN tool that produces a side effect — audited like every other write.
-  reserve_budget: { tier: 'GREEN', static: true, write: true, description: '预算预留' },
-
-  // 🟡 YELLOW — medium risk; requires user confirmation.
-  set_card_limit: { tier: 'YELLOW', static: true, write: true, description: '设置卡片限额' },
-  cancel_subscription: { tier: 'YELLOW', static: true, write: true, description: '取消订阅' },
-  freeze_card: { tier: 'YELLOW', static: true, write: true, description: '冻结银行卡' },
-  apply_virtual_card: { tier: 'YELLOW', static: true, write: true, description: '申请虚拟卡' },
-  set_subscription_reminder: { tier: 'YELLOW', static: true, write: true, description: '设置订阅提醒' },
-  create_scheduled_task: { tier: 'YELLOW', static: true, write: true, description: '创建定时任务' },
-
-  // 🔴 RED — high risk; requires strong verification (mock MFA).
-  subscribe_investment: { tier: 'RED', static: true, write: true, description: '认购理财产品' },
-  redeem_investment: { tier: 'RED', static: true, write: true, description: '赎回理财产品' },
-  report_lost_card: { tier: 'RED', static: true, write: true, description: '银行卡挂失' },
-  unfreeze_card: { tier: 'RED', static: true, write: true, description: '解冻银行卡' },
-  change_password: { tier: 'RED', static: true, write: true, description: '修改密码' },
-
-  // DYNAMIC — tier computed from amount + daily total (see risk-engine).
-  transfer_money: { tier: 'YELLOW', static: false, write: true, description: '转账（按金额/日累计动态分级，始终需确认）' },
-
-  // Planner meta-tool — NOT risk-gated (allow). Its nodes' side effects are audited per node tool.
-  submit_plan: { tier: 'GREEN', static: true, write: false, description: '规划元工具（不做风控）' },
-};
+export const TOOL_POLICY: Record<ToolName, ToolPolicy> = Object.fromEntries(TOOL_NAMES.map(name => {
+  const entry = TOOL_CATALOG[name];
+  return [name, Object.freeze({ tier: entry.defaultTier, static: entry.authorization === 'static',
+    write: entry.effect === 'write', description: entry.description })];
+})) as Record<ToolName, ToolPolicy>;
 
 /** Look up the static policy for a tool. Throws `AppError('VALIDATION')` for an unknown tool. */
 export function getToolPolicy(toolName: ToolName): ToolPolicy {
+  if (!isCatalogToolName(toolName)) throw new AppError('VALIDATION', `Unknown banking tool: ${toolName}`);
   const policy = TOOL_POLICY[toolName];
-  if (!policy) throw new AppError('VALIDATION', `未知工具: ${toolName}`);
   return policy;
 }
 

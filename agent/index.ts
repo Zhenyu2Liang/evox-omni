@@ -6,6 +6,8 @@ import type { TaskPlan } from '@/lib/contracts/task';
 export { getManualReviewInbox, openManualReview, resolveManualReview } from './manual-review';
 export { rollbackTask } from './task-rollback';
 export { nextPlanDecision } from './task-decision';
+export { tickScheduledTasks, getScheduleInbox } from './scheduled-dispatcher';
+import { synchronizeScheduledWorkflow } from './scheduled-dispatcher';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { PlanToolOutcome } from '@/planner';
 import { getSession } from '@/lib/db/repositories/session';
@@ -316,18 +318,24 @@ export function pauseTask(sessionId: string, taskId: string): Promise<TaskPlan> 
 }
 
 /** Resume (re-run) a paused/parked task plan (ownership-checked). */
-export function resumeTask(sessionId: string, taskId: string): Promise<TaskPlan> {
-  return resumeTaskInternal(sessionId, taskId, { runTool: taskRunToolFor(sessionId) });
+export async function resumeTask(sessionId: string, taskId: string): Promise<TaskPlan> {
+  const plan = await resumeTaskInternal(sessionId, taskId, { runTool: taskRunToolFor(sessionId) });
+  await synchronizeScheduledWorkflow(taskId);
+  return plan;
 }
 
 /** Cancel a task plan (ownership-checked); returns the cancelled snapshot. */
-export function cancelTask(sessionId: string, taskId: string): Promise<TaskPlan> {
-  return cancelTaskInternal(sessionId, taskId);
+export async function cancelTask(sessionId: string, taskId: string): Promise<TaskPlan> {
+  const plan = await cancelTaskInternal(sessionId, taskId);
+  await synchronizeScheduledWorkflow(taskId);
+  return plan;
 }
 
 /** Retry the failed nodes of a task plan (ownership-checked), then re-run it. */
-export function retryTask(sessionId: string, taskId: string): Promise<TaskPlan> {
-  return retryTaskInternal(sessionId, taskId, { runTool: taskRunToolFor(sessionId) });
+export async function retryTask(sessionId: string, taskId: string): Promise<TaskPlan> {
+  const plan = await retryTaskInternal(sessionId, taskId, { runTool: taskRunToolFor(sessionId) });
+  await synchronizeScheduledWorkflow(taskId);
+  return plan;
 }
 
 /** Read a task plan as the frozen `TaskPlan` contract (ownership-checked). */

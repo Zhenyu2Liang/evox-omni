@@ -23,7 +23,7 @@
 import type { Card as CardRow, CardLimit as CardLimitRow } from '@prisma/client';
 import { cards } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
-import { moneyToCents, round2 } from '../lib/money';
+import { centsToMoney, moneyToCents } from '../lib/money';
 import { idempotentCardId, isUniqueViolation, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction } from './tx';
 import type {
@@ -46,10 +46,10 @@ function toCardView(row: CardRow, limits: CardLimitRow[]): CardView {
     network: row.network,
     numberMasked: row.numberMasked,
     status: row.status as CardStatus,
-    creditLimit: row.creditLimit ?? undefined,
-    availableLimit: row.availableLimit ?? undefined,
-    monthlyLimit: row.monthlyLimit ?? undefined,
-    limits: limits.map((limit) => ({ category: limit.category, amount: limit.amount })),
+    creditLimit: row.creditLimitMinor === null ? undefined : centsToMoney(row.creditLimitMinor),
+    availableLimit: row.availableLimitMinor === null ? undefined : centsToMoney(row.availableLimitMinor),
+    monthlyLimit: row.monthlyLimitMinor === null ? undefined : centsToMoney(row.monthlyLimitMinor),
+    limits: limits.map((limit) => ({ category: limit.category, amount: centsToMoney(limit.amountMinor) })),
   };
 }
 
@@ -91,8 +91,10 @@ async function transitionTo(
 
 /** All cards owned by the user (with per-category limits). */
 export async function getCards(userId: string): Promise<CardView[]> {
-  const rows = await cards.listCards(userId);
-  return Promise.all(rows.map(loadCardView));
+  return runInTransaction(async () => {
+    const rows = await cards.listCards(userId);
+    return Promise.all(rows.map(loadCardView));
+  });
 }
 
 /** Set/replace the per-category spend limit on a card; returns the updated card. */
@@ -103,8 +105,8 @@ export async function setCardLimit(input: SetCardLimitInput): Promise<CardView> 
   if (category === '') {
     throw new AppError('VALIDATION', '缺少限额分类', { cardId: row.id, category: input?.category });
   }
-  const amount = round2(input?.amount);
-  if (!Number.isFinite(amount) || amount < 0) {
+  const amountMinor = moneyToCents(input?.amount);
+  if (amountMinor < 0n) {
     throw new AppError('VALIDATION', '限额必须是不小于 0 的金额', {
       cardId: row.id,
       category,
@@ -116,7 +118,7 @@ export async function setCardLimit(input: SetCardLimitInput): Promise<CardView> 
   // in ONE transaction, so a failure can never leave the category without its limit.
   await runInTransaction(async (tx) => {
     await tx.cardLimit.deleteMany({ where: { card: { id: row.id, userId: input.userId }, category } });
-    await tx.cardLimit.create({ data: { card: { connect: { id: row.id, userId: input.userId } }, category, amount } });
+    await tx.cardLimit.create({ data: { card: { connect: { id: row.id, userId: input.userId } }, category, amountMinor } });
   });
 
   return loadCardView(row);
@@ -139,8 +141,7 @@ export async function unfreezeCard(cardId: string, userId: string): Promise<Card
 
 /**
  * Report a card lost (status → LOST); returns the updated card.
- * The optional `reason` is accepted for API compatibility; the demo schema stores no reason column
- * (the calling layer captures it in the audit record).
+ * The calling layer records the optional reason in the audit trail.
  */
 export async function reportLostCard(
   cardId: string,
@@ -162,8 +163,7 @@ export async function reportLostCard(
 
 /**
  * Issue a new virtual card; returns the created card.
- * `input.label` is accepted for API compatibility but not persisted (no label column in the demo
- * schema). The masked number is generated as `****` + 4 digits, avoiding the user's existing masks.
+ * The masked number is generated as `****` + 4 digits, avoiding the user's existing masks.
  * `monthlyLimit` is an explicit cent-valid configuration saved at creation (no card-payment API).
  *
  * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, the card id is derived
@@ -180,10 +180,10 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
 
   const key = normalizeIdempotencyKey(input.idempotencyKey);
   const cents = input.monthlyLimit === undefined ? undefined : moneyToCents(input.monthlyLimit);
-  if (cents !== undefined && cents < 0) throw new AppError('VALIDATION', '月限额不能为负数。');
-  const monthlyLimit = cents === undefined ? undefined : cents / 100;
+  if (cents !== undefined && cents < 0n) throw new AppError('VALIDATION', 'Monthly limit must be non-negative.');
+  const monthlyLimitMinor = cents;
   const replay = (card: CardRow): CardRow => {
-    if (card.monthlyLimit !== (monthlyLimit ?? null)) {
+    if (card.monthlyLimitMinor !== (monthlyLimitMinor ?? null)) {
       throw new AppError('CONFLICT', '同一幂等身份不能申请不同月限额的虚拟卡。');
     }
     return card;
@@ -198,7 +198,7 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
       network: VIRTUAL_CARD_NETWORK,
       numberMasked,
       status: 'ACTIVE',
-      monthlyLimit,
+      monthlyLimitMinor,
     } }));
 
     // A brand-new card carries no per-category limits.
@@ -226,7 +226,7 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
           network: VIRTUAL_CARD_NETWORK,
           numberMasked,
           status: 'ACTIVE',
-          monthlyLimit,
+          monthlyLimitMinor,
         },
       });
     });

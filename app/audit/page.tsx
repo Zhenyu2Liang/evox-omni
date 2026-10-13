@@ -17,6 +17,7 @@ import type { AuditEntry, AuditStatus } from '@/lib/contracts/audit';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import { RISK_LABEL, SESSION_COOKIE } from '@/lib/constants';
 import { formatDateTime } from '@/lib/date';
+import { getSession } from '@/lib/db/repositories/session';
 import { Badge, Card, EmptyState, StatusBadge, Table } from '@/components';
 import type { TableColumn } from '@/components';
 
@@ -73,8 +74,10 @@ export const dynamic = 'force-dynamic';
 export default async function AuditPage() {
   const sessionId = (await cookies()).get(SESSION_COOKIE)?.value ?? '';
 
-  const entries: AuditEntry[] = await audit.listAudit({ sessionId });
-  const summary: AuditSummary = await audit.getAuditSummary();
+  const owner = sessionId ? await getSession(sessionId) : null;
+  const filter = { sessionId, userId: owner?.userId };
+  const entries: AuditEntry[] = owner ? await audit.listAudit(filter) : [];
+  const summary: AuditSummary = owner ? await audit.getAuditSummary(filter) : { total: 0, byRisk: {}, byStatus: {} };
 
   return (
     <main className="mx-auto flex max-w-5xl flex-col gap-6 p-6">

@@ -32,15 +32,16 @@ import { runSubmitPlan } from '@/agent/tools/planning';
 import type { TaskPlan } from '@/lib/contracts/task';
 import { CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
+import { centsToMoney, subtractMoney } from '@/lib/money';
 
 /** Recipient 张伟 — resolves unambiguously to the seeded contact. */
 const RECIPIENT = CONTACTS[0];
 /** ≤ ¥1000 ⇒ YELLOW (confirmation-only); a successful transfer debits exactly this. */
-const TRANSFER_AMOUNT = 200;
+const TRANSFER_AMOUNT = '200.00';
 /** The default funding account (`tests/helpers/fixtures.ACCOUNTS`). */
 const FUNDING_ACCOUNT_ID = 'acct_checking';
 /** Seeded 活期 balance; a single ¥200 debit yields `STARTING_BALANCE - TRANSFER_AMOUNT`. */
-const STARTING_BALANCE = 23580;
+const STARTING_BALANCE = '23580.00';
 
 const GOAL = '先查余额再给张伟转200元';
 
@@ -114,9 +115,9 @@ async function runPlan(
 }
 
 /** The funding account's current balance (the money-movement proof). */
-async function balanceOf(accountId: string = FUNDING_ACCOUNT_ID): Promise<number> {
+async function balanceOf(accountId: string = FUNDING_ACCOUNT_ID): Promise<string> {
   const row = await getTestPrisma().account.findUnique({ where: { id: accountId } });
-  return row!.balance;
+  return centsToMoney(row!.balanceMinor);
 }
 
 /** The persisted status of a `PendingAction`. */
@@ -217,10 +218,10 @@ describe('cancel-vs-confirm race', () => {
     const balance = await balanceOf();
     const txs = await transferTxCount();
     expect(txs).toBeLessThanOrEqual(1);
-    expect([23380, 23580]).toContain(balance);
+    expect([subtractMoney(STARTING_BALANCE, TRANSFER_AMOUNT), STARTING_BALANCE]).toContain(balance);
 
     // The money state and the terminal action status must agree (one coherent outcome).
-    if (balance === STARTING_BALANCE - TRANSFER_AMOUNT) {
+    if (balance === subtractMoney(STARTING_BALANCE, TRANSFER_AMOUNT)) {
       expect(status).toBe('executed');
       expect(txs).toBe(1);
     } else {
@@ -246,7 +247,7 @@ describe('cancel preserves already-executed work', () => {
     await confirmAction(n1ActionId).catch(() => undefined);
 
     // Money moved exactly once for the executed node.
-    expect(await balanceOf()).toBe(STARTING_BALANCE - TRANSFER_AMOUNT);
+    expect(await balanceOf()).toBe(subtractMoney(STARTING_BALANCE, TRANSFER_AMOUNT));
     expect(await transferTxCount()).toBe(1);
 
     // n1 is now `success`; n2 is parked awaiting its own human decision.
@@ -271,7 +272,7 @@ describe('cancel preserves already-executed work', () => {
     expect(reloaded.results[1].status).toBe('cancelled');
 
     // Cancel rolled back NOTHING: the executed ¥200 debit and its ledger row still exist.
-    expect(await balanceOf()).toBe(STARTING_BALANCE - TRANSFER_AMOUNT);
+    expect(await balanceOf()).toBe(subtractMoney(STARTING_BALANCE, TRANSFER_AMOUNT));
     expect(await transferTxCount()).toBe(1);
 
     // The plan's remaining parked action was revoked; the executed one is terminal (`executed`).

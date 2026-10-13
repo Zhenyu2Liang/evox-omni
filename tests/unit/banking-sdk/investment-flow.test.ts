@@ -27,6 +27,8 @@ import { INVESTMENT_FLOW_CATEGORY } from '@/banking-sdk/categories';
 import { ANOMALY_AMOUNT_THRESHOLD } from '@/lib/constants';
 import { demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
+import { absoluteMinor, addMoney, centsToMoney, moneyToCents } from '@/lib/money';
+import { compareDecimal } from '@/lib/decimal';
 import { computeDailyTransferTotal } from '@/security/risk-engine';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
 import { ANOMALY_TRANSACTION, DEMO_USER_ID, MONTHLY_SPEND_TOTAL } from '../../helpers/fixtures';
@@ -37,10 +39,10 @@ useFreshDatabase();
 
 /** Funding account every subscribe/redeem moves (fixture balance ¥23,580). */
 const CHECKING = 'acct_checking';
-const CHECKING_START = 23580;
+const CHECKING_START = '23580.00';
 /** The single seeded HOLDING (marketValue ¥5,050) — the redeem target. */
 const SEEDED_HOLDING = 'holding_wenjiana';
-const HOLDING_MARKET_VALUE = 5050;
+const HOLDING_MARKET_VALUE = '5050.00';
 /** 稳健理财A — minAmount ¥1,000. */
 const PRODUCT = 'prod_wenjiana';
 
@@ -48,10 +50,10 @@ function db() {
   return getTestPrisma();
 }
 
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await db().account.findUnique({ where: { id: CHECKING } });
   if (!account) throw new Error(`${CHECKING} missing from fixtures`);
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 function holdingCount(): Promise<number> {
@@ -72,7 +74,7 @@ function subscribe(idempotencyKey?: string) {
   return banking.investment.subscribeInvestment({
     userId: DEMO_USER_ID,
     productId: PRODUCT,
-    amount: 5000,
+    amount: '5000.00',
     ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
   });
 }
@@ -113,18 +115,18 @@ describe('banking-sdk/investment · flow ledger row (consistency)', () => {
     const result = await subscribe();
 
     expect(result.success).toBe(true);
-    expect(result.newBalance).toBe(18580);
-    expect(await checkingBalance()).toBe(18580);
+    expect(result.newBalance).toBe('18580.00');
+    expect(await checkingBalance()).toBe('18580.00');
 
     // The holding really landed…
     const holding = await db().investmentHolding.findUnique({ where: { id: result.holdingId } });
-    expect(holding).toMatchObject({ productId: PRODUCT, amount: 5000, status: 'HOLDING' });
+    expect(holding).toMatchObject({ productId: PRODUCT, principalAmountMinor: 500_000n, status: 'HOLDING' });
 
     // …and so did exactly one ledger row mirroring the debit, in the investment-flow category.
     const flow = await flowRows();
     expect(flow).toHaveLength(1);
     expect(flow[0]).toMatchObject({
-      amount: -5000,
+      amount: '-5000.00',
       direction: 'DEBIT',
       category: INVESTMENT_FLOW_CATEGORY,
       merchant: '认购稳健理财A',
@@ -138,8 +140,8 @@ describe('banking-sdk/investment · flow ledger row (consistency)', () => {
     const result = await redeem();
 
     expect(result.amount).toBe(HOLDING_MARKET_VALUE);
-    expect(result.newBalance).toBe(28630); // 23580 + 5050
-    expect(await checkingBalance()).toBe(28630);
+    expect(result.newBalance).toBe('28630.00');
+    expect(await checkingBalance()).toBe('28630.00');
 
     const holding = await db().investmentHolding.findUnique({ where: { id: SEEDED_HOLDING } });
     expect(holding?.status).toBe('REDEEMED');
@@ -160,29 +162,29 @@ describe('banking-sdk/investment · flow ledger row (consistency)', () => {
 
 describe('banking-sdk/investment · flow ledger row (classification)', () => {
   it('a >¥5,000 flow in BOTH directions is excluded from spending, anomalies and the daily-transfer limit', async () => {
-    expect(ANOMALY_AMOUNT_THRESHOLD).toBe(5000);
+    expect(ANOMALY_AMOUNT_THRESHOLD).toBe('5000.00');
     // Before any flow: the day's transfer total is 0 (the seeded ¥500 转账 is dated Sep 4, not today).
-    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe('0.00');
 
     // A ¥6,000 subscribe (magnitude ABOVE the ¥5,000 anomaly threshold) and a ¥5,050 redeem.
     const subscribed = await banking.investment.subscribeInvestment({
       userId: DEMO_USER_ID,
       productId: PRODUCT,
-      amount: 6000,
+      amount: '6000.00',
     });
-    expect(subscribed.newBalance).toBe(17580);
+    expect(subscribed.newBalance).toBe('17580.00');
     await redeem();
 
     const flow = await flowRows();
-    expect(flow.map((row) => row.amount).sort((a, b) => a - b)).toEqual([-6000, HOLDING_MARKET_VALUE]);
+    expect(flow.map((row) => row.amount).sort(compareDecimal)).toEqual(['-6000.00', HOLDING_MARKET_VALUE]);
     expect(flow.every((row) => row.category === INVESTMENT_FLOW_CATEGORY)).toBe(true);
     // `channel: 'APP'` is what keeps the flow out of the ¥1,000 daily-TRANSFER window.
     expect(flow.every((row) => row.channel === 'APP')).toBe(true);
-    expect(Math.abs(flow[0].amount)).toBeGreaterThan(ANOMALY_AMOUNT_THRESHOLD);
+    expect(absoluteMinor(moneyToCents(flow[0].amount))).toBeGreaterThan(moneyToCents(ANOMALY_AMOUNT_THRESHOLD));
 
     // NOT consumption: 本月 stays anchored at ¥5,800 and no 投资 category / 认购 merchant appears.
     const spend = await banking.transaction.analyzeSpending(DEMO_USER_ID);
-    expect(spend.total).toBe(MONTHLY_SPEND_TOTAL);
+    expect(spend.total).toBe(addMoney(MONTHLY_SPEND_TOTAL, centsToMoney(absoluteMinor(moneyToCents(ANOMALY_TRANSACTION.amount)))));
     expect(spend.byCategory.map((entry) => entry.category)).not.toContain(INVESTMENT_FLOW_CATEGORY);
     expect(spend.largest?.merchant).not.toBe('认购稳健理财A');
 
@@ -191,7 +193,7 @@ describe('banking-sdk/investment · flow ledger row (classification)', () => {
     expect(report.anomalies.map((item) => item.transaction.id)).toEqual([ANOMALY_TRANSACTION.id]);
 
     // NOT a transfer: the day's transfer total is still 0 despite a ¥6,000 account-flow debit.
-    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+    expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe('0.00');
   });
 });
 
@@ -202,11 +204,10 @@ describe('banking-sdk/investment · at-most-once (idempotency)', () => {
     const first = await subscribe(KEY);
     const replay = await subscribe(KEY);
 
-    expect(first.newBalance).toBe(18580);
-    expect(replay.holdingId).toBe(first.holdingId);
-    expect(replay.amount).toBe(first.amount);
+    expect(first.newBalance).toBe('18580.00');
+    expect(replay).toEqual(first);
     // Debited exactly once: the balance is unchanged by the replay…
-    expect(await checkingBalance()).toBe(18580);
+    expect(await checkingBalance()).toBe('18580.00');
     // …exactly ONE holding carries the key, and exactly ONE flow row was written.
     expect(await db().investmentHolding.count({ where: { idempotencyKey: KEY } })).toBe(1);
     expect(await flowRows()).toHaveLength(1);
@@ -220,8 +221,8 @@ describe('banking-sdk/investment · at-most-once (idempotency)', () => {
     );
 
     expect(values[0].holdingId).toBe(values[1].holdingId);
-    expect(values.map((value: InvestResult) => value.amount)).toEqual([5000, 5000]);
-    expect(await checkingBalance()).toBe(18580);
+    expect(values.map((value: InvestResult) => value.amount)).toEqual(['5000.00', '5000.00']);
+    expect(await checkingBalance()).toBe('18580.00');
     expect(await db().investmentHolding.count({ where: { idempotencyKey: KEY } })).toBe(1);
     expect(await flowRows()).toHaveLength(1);
   });
@@ -242,13 +243,13 @@ describe('banking-sdk/investment · at-most-once (idempotency)', () => {
       SEEDED_HOLDING,
       SEEDED_HOLDING,
     ]);
-    expect(await checkingBalance()).toBe(28630);
+    expect(await checkingBalance()).toBe('28630.00');
     expect(await flowRows()).toHaveLength(1);
   });
 
   it('an absent or DISTINCT key on an already-redeemed holding → CONFLICT with no extra credit/flow row', async () => {
     await redeem('plan:task_redeem:node_1');
-    expect(await checkingBalance()).toBe(28630);
+    expect(await checkingBalance()).toBe('28630.00');
     expect(await flowRows()).toHaveLength(1);
 
     const absent = await rejectionOf(() => redeem());
@@ -260,7 +261,7 @@ describe('banking-sdk/investment · at-most-once (idempotency)', () => {
     expect((distinct as AppError).code).toBe('CONFLICT');
 
     // Never a second credit, never a second flow row.
-    expect(await checkingBalance()).toBe(28630);
+    expect(await checkingBalance()).toBe('28630.00');
     expect(await flowRows()).toHaveLength(1);
   });
 });

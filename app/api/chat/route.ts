@@ -10,9 +10,9 @@
  *        failure emits `{"type":"error","message":<safe>}` then `done`.
  *      - `?stream=0` or `Accept: application/json` → `200 { ok:true, data: ChatTurnResponse }`
  *        where `data = { sessionId, events: AgentStreamEvent[] }`.
- *  - Delegates to the agent runtime `runTurn({ sessionId, message })` (`@/agent`). `runTurn`
- *    resolves the demo user internally and returns the FULL ordered event list (there is no
- *    `onEvent` sink), so streaming writes the returned events as SSE frames.
+ *  - Delegates to `runTurn` with a persist-first event sink. Streaming publishes each event after
+ *    the runtime journal commits it; the JSON mode returns the same ordered presentation events.
+ *    `requestId` binds a retried request to its original run within the cookie-owned session.
  *  - IDENTITY IS COOKIE-ONLY. The turn's session comes ONLY from the `banking_session` cookie
  *    (`resolveSessionId`); it is NEVER taken from the request body. A body `sessionId` that
  *    DISAGREES with the cookie — INCLUDING the case where there is no cookie — is rejected with
@@ -39,10 +39,13 @@ import {
   sseResponse,
 } from '../_lib/http';
 import { resolveSessionId } from '../_lib/session';
+import { getOrCreateSession } from '@/agent/session';
+import { getConfig } from '@/lib/config';
 
 /** Request body schema for `POST /api/chat` (`ChatTurnRequest`). */
 const chatTurnRequestSchema = z.object({
   sessionId: z.string().min(1).optional(),
+  requestId: z.string().min(1).max(128).optional(),
   message: z.string().min(1),
 });
 export type ChatTurnBody = z.infer<typeof chatTurnRequestSchema>;
@@ -83,30 +86,32 @@ export async function POST(req: NextRequest): Promise<Response> {
       throw new AppError('CONFLICT', '会话标识不匹配，请刷新后重试。');
     }
 
-    const res = await runTurn({ sessionId: cookieSessionId, message: payload.message });
-    const cookie = sessionCookie(res.sessionId);
-
     if (!wantsStream(req, stream)) {
-      return jsonResponse<ChatTurnResponse>(res, { headers: { 'Set-Cookie': cookie } });
+      const result = await runTurn({ sessionId: cookieSessionId, requestId: payload.requestId, message: payload.message });
+      return jsonResponse<ChatTurnResponse>(result, { headers: { 'Set-Cookie': sessionCookie(result.sessionId) } });
     }
-
+    const snapshot = await getOrCreateSession(getConfig().demoUserId, cookieSessionId);
+    const cookie = sessionCookie(snapshot.sessionId);
+    let connected = true;
     const body = new ReadableStream<Uint8Array>({
-      start(controller) {
+      async start(controller) {
         try {
-          for (const evt of res.events) controller.enqueue(encoder.encode(sseFrame(evt)));
-          // runTurn already appends a trailing done event; only add our own terminator
-          // when the runtime did not (robust against future changes to the list).
-          const last = res.events[res.events.length - 1];
-          if (last?.type !== 'done') controller.enqueue(encoder.encode(sseFrame({ type: 'done' })));
+          const result = await runTurn({ sessionId: snapshot.sessionId, requestId: payload.requestId, message: payload.message }, {
+            onEvent(event) { if (connected) controller.enqueue(encoder.encode(sseFrame(event))); },
+          });
+          if (connected && result.events.at(-1)?.type !== 'done') controller.enqueue(encoder.encode(sseFrame({ type: 'done' })));
         } catch (e) {
           // A mid-turn failure never leaks the raw exception (or the MFA code): the centralized
           // `mapAppError` yields a safe message, then the stream is terminated cleanly.
           const { message: safe } = mapAppError(e).body.error;
-          controller.enqueue(encoder.encode(sseFrame({ type: 'error', message: safe })));
-          controller.enqueue(encoder.encode(sseFrame({ type: 'done' })));
+          if (connected) {
+            controller.enqueue(encoder.encode(sseFrame({ type: 'error', message: safe })));
+            controller.enqueue(encoder.encode(sseFrame({ type: 'done' })));
+          }
         }
-        controller.close();
+        if (connected) controller.close();
       },
+      cancel() { connected = false; },
     });
 
     return sseResponse(body, { headers: { 'Set-Cookie': cookie } });

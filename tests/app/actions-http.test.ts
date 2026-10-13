@@ -44,14 +44,15 @@ const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** Recipient 张伟 — resolves unambiguously from the seeded contacts. */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 
 /** 张伟's transfer amount in the YELLOW scenario (≤ ¥1000 ⇒ confirmation only). */
-const YELLOW_AMOUNT = 200;
+const YELLOW_AMOUNT = '200';
 /** 张伟's transfer amount in the RED scenario (> ¥1000 ⇒ strong verification). */
-const RED_AMOUNT = 5000;
+const RED_AMOUNT = '5000';
 /** 张伟's transfer amount that exceeds the ¥23,580 balance (⇒ INSUFFICIENT_FUNDS at execution). */
-const OVERDRAFT_AMOUNT = 30000;
+const OVERDRAFT_AMOUNT = '30000';
 
 /**
  * The route's JSON envelope — the transport shape (NOT a frozen `@/lib/contracts` type). Declared
@@ -157,9 +158,9 @@ function cancelAction(id: string, sessionId?: string): Promise<HttpResult<Envelo
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to 张伟 (the money-moved-exactly-once probe). */
@@ -218,10 +219,10 @@ describe('[integration] POST /api/actions/[id]/confirm — YELLOW transfer', () 
     expect(data.sessionId).toBe(turn.sessionId);
 
     // Exactly once: the balance is debited by the parked amount and ONE ledger row went to 张伟.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - YELLOW_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, YELLOW_AMOUNT));
     const transfers = await zhangweiTransfers();
     expect(transfers).toHaveLength(1);
-    expect(transfers[0].amount).toBe(-YELLOW_AMOUNT);
+    expect(transfers[0].amountMinor).toBe(-moneyToCents(YELLOW_AMOUNT));
 
     // The confirmed decision wrote exactly one audit `success` row for this session.
     const audits = await getTestPrisma().auditLog.findMany({ where: { sessionId: turn.sessionId } });
@@ -237,7 +238,7 @@ describe('[integration] POST /api/actions/[id]/confirm — YELLOW transfer', () 
     expect(againData.ok).toBe(false);
     expect(againData.status).toBe('executed');
 
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - YELLOW_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, YELLOW_AMOUNT));
     expect(await zhangweiTransfers()).toHaveLength(1);
     expect(await getTestPrisma().auditLog.count({ where: { sessionId: turn.sessionId } })).toBe(1);
 
@@ -266,10 +267,10 @@ describe('[integration] POST /api/actions/[id]/verify — RED transfer', () => {
     expect(data.tier).toBe('RED');
     expect(data.mfaResult).toBe('success');
 
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - RED_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, RED_AMOUNT));
     const transfers = await zhangweiTransfers();
     expect(transfers).toHaveLength(1);
-    expect(transfers[0].amount).toBe(-RED_AMOUNT);
+    expect(transfers[0].amountMinor).toBe(-moneyToCents(RED_AMOUNT));
 
     const audit = await getTestPrisma().auditLog.findFirstOrThrow({
       where: { sessionId: turn.sessionId, toolName: 'transfer_money' },

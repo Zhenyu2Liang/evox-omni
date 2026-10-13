@@ -33,6 +33,7 @@ import { getOrCreateSession, executeGatedTool } from '@/agent';
 import { runSubmitPlan, type PlanRunTool } from '@/agent/tools/planning';
 import { pauseTask } from '@/agent/task-control';
 import { banking } from '@/banking-sdk';
+import * as executionFence from '@/agent/execution-fence';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
@@ -134,7 +135,7 @@ async function pausedPlan(s: string, node: Record<string, unknown>): Promise<any
       runTool: async () => {
         const row = await getTestPrisma().agentTask.findFirst({ where: { sessionId: s }, orderBy: { createdAt: 'desc' } });
         await pauseTask(s, row!.id);
-        return { ok: true, data: { balance: 23580 } };
+        return { ok: true, data: { balance: '23580.00' } };
       },
     },
   );
@@ -158,7 +159,7 @@ it('REVIEW_TAKEOVER_AT_NODE_CLAIM: a takeover while blocked in the running notif
 
   const oldRun = runSubmitPlan(
     userId,
-    { goal: '屏障a：认领后通知阻塞', nodes: [{ id: 'budget', name: '屏障a预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障a预算', amount: 30 }, dependencies: [] }] },
+    { goal: '屏障a：认领后通知阻塞', nodes: [{ id: 'budget', name: '屏障a预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障a预算', amount: '30' }, dependencies: [] }] },
     {
       sessionId: s,
       onNodeUpdate: async (node) => {
@@ -236,7 +237,7 @@ it('REVIEW_TAKEOVER_BEFORE_WRITE: a takeover fences the pre-write zombie so no d
 
   const oldRun = runSubmitPlan(
     userId,
-    { goal: '屏障b：写入前接管', nodes: [{ id: 'budget', name: '屏障b预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障b预算', amount: 40 }, dependencies: [] }] },
+    { goal: '屏障b：写入前接管', nodes: [{ id: 'budget', name: '屏障b预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障b预算', amount: '40' }, dependencies: [] }] },
     {
       sessionId: s,
       onNodeUpdate: (node) => {
@@ -321,22 +322,28 @@ it('REVIEW_CANCEL_FIRST: a taken-over then cancelled plan fences the blocked SDK
   let cancelled: any;
   const spy = vi.spyOn(banking.budget, 'reserveBudget').mockImplementation(async (input) => {
     calls++;
-    if (calls === 1) {
-      reached.release();
-      await release.promise;
-    }
     return original(input);
+  });
+  const capture = executionFence.buildAutomaticWriteFence;
+  let capturedFences = 0;
+  const captureSpy = vi.spyOn(executionFence, 'buildAutomaticWriteFence').mockImplementation(async (...args) => {
+    const fence = await capture(...args);
+    capturedFences++;
+    reached.release();
+    await release.promise;
+    return fence;
   });
 
   const oldRun = runSubmitPlan(
     userId,
-    { goal: '屏障c：取消优先', nodes: [{ id: 'budget', name: '屏障c预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障c预算', amount: 10 }, dependencies: [] }] },
+    { goal: '屏障c：取消优先', nodes: [{ id: 'budget', name: '屏障c预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障c预算', amount: '10' }, dependencies: [] }] },
     { sessionId: s, runTool: (tool, args, ctx) => { planId = ctx.taskId ?? planId; return runner(s)(tool, args, ctx); } },
   );
   try {
     await bounded(reached.promise);
-    // (c-fired) The SDK write is blocked and has committed NOTHING yet.
-    expect(calls).toBe(1);
+    // Both executors stop after capturing their fences and before acquiring the bank writer.
+    expect(capturedFences).toBe(1);
+    expect(calls).toBe(0);
     expect(await p.budget.count({ where: { name: '屏障c预算' } })).toBe(0);
     const oldToken = (await p.agentTask.findUniqueOrThrow({ where: { id: planId } })).executionToken;
     await p.agentTask.update({ where: { id: planId }, data: { executionClaimedAt: expired() } });
@@ -357,6 +364,7 @@ it('REVIEW_CANCEL_FIRST: a taken-over then cancelled plan fences the blocked SDK
     oldResult = await oldRun;
     if (takeoverRun) takeover = await takeoverRun;
     spy.mockRestore();
+    captureSpy.mockRestore();
   }
 
   const stored = await p.agentTask.findUniqueOrThrow({ where: { id: planId } });
@@ -367,7 +375,7 @@ it('REVIEW_CANCEL_FIRST: a taken-over then cancelled plan fences the blocked SDK
   );
 
   // Cancel-first fenced the blocked write: ZERO side effects, before AND after release.
-  expect(calls).toBe(1);
+  expect(calls).toBe(0);
   expect(budgets).toBe(0);
   expect(stored.status).toBe('cancelled');
 });
@@ -387,20 +395,21 @@ it('REVIEW_BUSINESS_COMMITS_FIRST: a cancel after the side effect committed reta
   let cancelled: any;
   let sdkWrites = 0;
   const spy = vi.spyOn(banking.budget, 'reserveBudget').mockImplementation(async (input) => {
-    const result = await original(input); // the write COMMITS here
+    const result = await original(input);
     sdkWrites++;
-    commits++;
-    if (commits === 1) {
-      reached.release();
-      await release.promise; // BARRIER: business already committed; hold before returning
-    }
     return result;
   });
 
   const oldRun = runSubmitPlan(
     userId,
-    { goal: '屏障d：业务先提交', nodes: [{ id: 'budget', name: '屏障d预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障d预算', amount: 15 }, dependencies: [] }] },
-    { sessionId: s, runTool: (tool, args, ctx) => { planId = ctx.taskId ?? planId; return runner(s)(tool, args, ctx); } },
+    { goal: '屏障d：业务先提交', nodes: [{ id: 'budget', name: '屏障d预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障d预算', amount: '15' }, dependencies: [] }] },
+    { sessionId: s, runTool: async (tool, args, ctx) => {
+      planId = ctx.taskId ?? planId;
+      const result = await runner(s)(tool, args, ctx);
+      commits++;
+      if (commits === 1) { reached.release(); await release.promise; }
+      return result;
+    } },
   );
   let budgetsAtBarrier = 0;
   try {
@@ -443,8 +452,8 @@ it('REVIEW_PAUSE_THEN_CONFIRM: confirming a parked node on a paused plan keeps t
     {
       goal: '屏障e：暂停后确认',
       nodes: [
-        { id: 't', name: '转200', kind: 'tool', tool: 'transfer_money', args: { name: '张伟', amount: 200 }, dependencies: [] },
-        { id: 'b', name: '预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障e预算', amount: 10 }, dependencies: ['t'] },
+        { id: 't', name: '转200', kind: 'tool', tool: 'transfer_money', args: { name: '张伟', amount: '200' }, dependencies: [] },
+        { id: 'b', name: '预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障e预算', amount: '10' }, dependencies: ['t'] },
       ],
     },
     { sessionId: s, runTool: runner(s) },
@@ -459,8 +468,8 @@ it('REVIEW_PAUSE_THEN_CONFIRM: confirming a parked node on a paused plan keeps t
   const confirmed = await confirmRaw(actionId, s);
   const afterConfirm = await p.agentTask.findUniqueOrThrow({ where: { id: plan.id } });
   const budgetsAfterConfirm = await p.budget.count({ where: { name: '屏障e预算' } });
-  const balanceAfterConfirm = (await p.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance;
-  const debitsAfterConfirm = await p.transaction.count({ where: { userId, amount: -200, counterpartyId: 'contact_zhangwei' } });
+  const balanceAfterConfirm = (await p.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor.toString();
+  const debitsAfterConfirm = await p.transaction.count({ where: { userId, amountMinor: -20000n, counterpartyId: 'contact_zhangwei' } });
 
   const resumed = await task(plan.id, 'resume', s);
   const stored = await p.agentTask.findUniqueOrThrow({ where: { id: plan.id }, include: { nodes: true } });
@@ -473,7 +482,7 @@ it('REVIEW_PAUSE_THEN_CONFIRM: confirming a parked node on a paused plan keeps t
   // The human decision executed the transfer EXACTLY once…
   expect(confirmed.body.data?.ok).toBe(true);
   expect(debitsAfterConfirm).toBe(1);
-  expect(balanceAfterConfirm).toBe(23380);
+  expect(balanceAfterConfirm).toBe('2338000');
   // …but the paused plan did NOT advance to the dependent budget node.
   expect(afterConfirm.status).toBe('paused');
   expect(budgetsAfterConfirm).toBe(0);
@@ -489,7 +498,7 @@ it('REVIEW_PAUSE_THEN_CONFIRM: confirming a parked node on a paused plan keeps t
 it('REVIEW_CONCURRENT_TAKEOVER: two concurrent resumes of one stale claim yield exactly one executor', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
-  const plan = await pausedPlan(s, { id: 'budget', name: '屏障f预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障f预算', amount: 10 }, dependencies: ['read'] });
+  const plan = await pausedPlan(s, { id: 'budget', name: '屏障f预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障f预算', amount: '10' }, dependencies: ['read'] });
 
   // Simulate a CRASHED owner: a STALE token 60s past the 600_000ms TTL, so BOTH concurrent resumes
   // attempt the atomic `claimTaskExecution(..., { staleBefore })` takeover.

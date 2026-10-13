@@ -52,7 +52,7 @@ const CHECKING_ACCOUNT_ID = 'acct_checking';
 const CHECKING_ACCOUNT_NAME = '活期账户';
 
 /** EXACT field order the transfer confirmation card MUST emit. */
-const RECIPIENT_FIELD_ORDER = ['收款人', '收款手机号', '金额', '账户', '风险等级'];
+const RECIPIENT_FIELD_ORDER = ['收款人', '收款手机号', 'Amount', '账户', '风险等级'];
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -88,7 +88,7 @@ async function parkTransfer(
 
 describe('security-gateway · transfer recipient resolution — resolved selectors', () => {
   it('resolves 张伟 by NAME → canonical contactId args + masked summary', async () => {
-    const action = await parkTransfer({ amount: 200, name: ZHANGWEI_NAME });
+    const action = await parkTransfer({ amount: '200.00', name: ZHANGWEI_NAME });
 
     expect(action.status).toBe('pending');
     expect(action.tier).toBe('YELLOW');
@@ -112,7 +112,7 @@ describe('security-gateway · transfer recipient resolution — resolved selecto
   });
 
   it('resolves a PARTIAL phone (contains fallback) → canonical contactId args + masked summary', async () => {
-    const action = await parkTransfer({ amount: 200, phone: '0002' });
+    const action = await parkTransfer({ amount: '200.00', phone: '0002' });
 
     expect(action.status).toBe('pending');
     expect(action.tier).toBe('YELLOW');
@@ -130,7 +130,7 @@ describe('security-gateway · transfer recipient resolution — resolved selecto
   });
 
   it('resolves by contactId through BOTH createPendingAction and handleToolCall (identical result)', async () => {
-    const action = await parkTransfer({ amount: 200, contactId: ZHANGWEI_ID });
+    const action = await parkTransfer({ amount: '200.00', contactId: ZHANGWEI_ID });
 
     expect(action.status).toBe('pending');
     expect(action.tier).toBe('YELLOW');
@@ -143,7 +143,7 @@ describe('security-gateway · transfer recipient resolution — resolved selecto
 
     // The REAL `beforeToolCall` entry point (`handleToolCall`) parks the SAME action.
     const res = await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 200, contactId: ZHANGWEI_ID }),
+      ctxFor('transfer_money', { amount: '200.00', contactId: ZHANGWEI_ID }),
     );
     expect(res.evaluation.blocked).toBe(true);
     expect(res.decision.kind).toBe('require_confirmation');
@@ -159,7 +159,7 @@ describe('security-gateway · transfer recipient resolution — resolved selecto
 
   it('labels the funding account from a valid sourceAccountId (活期账户)', async () => {
     const action = await parkTransfer({
-      amount: 200,
+      amount: '200.00',
       contactId: ZHANGWEI_ID,
       sourceAccountId: CHECKING_ACCOUNT_ID,
     });
@@ -172,7 +172,7 @@ describe('security-gateway · transfer recipient resolution — resolved selecto
   });
 
   it('is exposed identically through the @/security facade', async () => {
-    const ctx = ctxFor('transfer_money', { amount: 200, contactId: ZHANGWEI_ID });
+    const ctx = ctxFor('transfer_money', { amount: '200.00', contactId: ZHANGWEI_ID });
     const facadeGateway = security.gateway.securityGateway;
     const action = await facadeGateway.createPendingAction(ctx, await facadeGateway.evaluate(ctx));
 
@@ -187,7 +187,7 @@ describe('security-gateway · transfer recipient resolution — resolved selecto
 describe('security-gateway · transfer recipient resolution — unresolvable selectors', () => {
   it('MISSING recipient → plain clarify DENY, nothing persisted, wrapper throws VALIDATION', async () => {
     const before = await getTestPrisma().pendingAction.count();
-    const ctx = ctxFor('transfer_money', { amount: 200 });
+    const ctx = ctxFor('transfer_money', { amount: '200.00' });
 
     const res = await securityGateway.handleToolCall(ctx);
 
@@ -199,7 +199,7 @@ describe('security-gateway · transfer recipient resolution — unresolvable sel
     expect(await getTestPrisma().pendingAction.count()).toBe(before);
 
     // The public wrapper surfaces the same clarification as a typed VALIDATION error.
-    const wrapCtx = ctxFor('transfer_money', { amount: 200 });
+    const wrapCtx = ctxFor('transfer_money', { amount: '200.00' });
     const err = await securityGateway
       .createPendingAction(wrapCtx, await securityGateway.evaluate(wrapCtx))
       .catch((e: unknown) => e);
@@ -212,7 +212,7 @@ describe('security-gateway · transfer recipient resolution — unresolvable sel
     const before = await getTestPrisma().pendingAction.count();
 
     const res = await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 200, name: '不存在的人' }),
+      ctxFor('transfer_money', { amount: '200.00', name: '不存在的人' }),
     );
 
     expect(res.decision.kind).toBe('deny');
@@ -237,7 +237,7 @@ describe('security-gateway · transfer recipient resolution — unresolvable sel
     const before = await getTestPrisma().pendingAction.count();
 
     const res = await securityGateway.handleToolCall(
-      ctxFor('transfer_money', { amount: 200, name: ZHANGWEI_NAME }),
+      ctxFor('transfer_money', { amount: '200.00', name: ZHANGWEI_NAME }),
     );
 
     expect(res.decision.kind).toBe('deny');

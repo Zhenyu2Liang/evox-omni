@@ -12,6 +12,6 @@ export function safeParse<T>(text: string | null | undefined, fallback: T): T {
 
 /** Serializes a value to JSON text. Returns the string `'null'` when value is undefined. */
 export function toJson(value: unknown): string {
-  const out = JSON.stringify(value);
+  const out = JSON.stringify(value, (_key, entry) => typeof entry === 'bigint' ? entry.toString() : entry);
   return out === undefined ? 'null' : out;
 }

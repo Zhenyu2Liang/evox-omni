@@ -54,7 +54,7 @@ describe('banking-sdk/subscription · listSubscriptions', () => {
     expect(netflix).toMatchObject({
       id: 'sub_netflix',
       name: 'Netflix',
-      amount: 68,
+      amount: '68.00',
       cycle: 'MONTHLY',
       status: 'ACTIVE',
       remind: false,
@@ -82,7 +82,7 @@ describe('banking-sdk/subscription · listSubscriptions', () => {
       expect(sub.id.length).toBeGreaterThan(0);
       expect(typeof sub.name).toBe('string');
       expect(sub.name.length).toBeGreaterThan(0);
-      expect(typeof sub.amount).toBe('number');
+      expect(typeof sub.amount).toBe('string');
       expect(['MONTHLY', 'QUARTERLY', 'YEARLY']).toContain(sub.cycle);
       expect(Number.isFinite(sub.nextChargeAt)).toBe(true);
       expect(sub.status).toBe('ACTIVE');
@@ -152,7 +152,7 @@ describe('banking-sdk/subscription · setSubscriptionReminder', () => {
     expect(updated).toMatchObject({
       id: 'sub_spotify',
       name: 'Spotify',
-      amount: 15,
+      amount: '15.00',
       cycle: 'MONTHLY',
       status: 'ACTIVE',
       remind: true,

@@ -2,7 +2,7 @@
  * banking-sdk · money-movement ATOMICITY regression.
  *
  * Runs under the MAIN Vitest config (`vitest.config.ts`, which includes `tests/**`), so it is part
- * of a plain `npm run test` — NOT behind a private/scoped config.
+ * of a plain `pnpm test` — NOT behind a private/scoped config.
  *
  * WHAT it proves (the two hazards the interactive-transaction fix closes):
  *   1. Ledger-write failure ROLLBACK — if the second write of a money unit fails, the first (the
@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { banking } from '@/banking-sdk';
 import type { RedeemInvestmentInput, SubscribeInvestmentInput, TransferInput } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
+import { moneyToCents } from '@/lib/money';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
 import { DEMO_USER_ID } from '../../helpers/fixtures';
 import { withInjectedWriteFailure } from '../../helpers/write-failure';
@@ -27,10 +28,10 @@ import { withInjectedWriteFailure } from '../../helpers/write-failure';
 useFreshDatabase();
 /** Funding account every transfer/subscribe/redeem touches (seed balance ¥23,580). */
 const CHECKING = 'acct_checking';
-const CHECKING_START = 23580;
+const CHECKING_START = 2_358_000n;
 /** The single seeded HOLDING (marketValue ¥5,050) — the redeem target. */
 const SEEDED_HOLDING = 'holding_wenjiana';
-const HOLDING_MARKET_VALUE = 5050;
+const HOLDING_MARKET_VALUE = 505_000n;
 /** 稳健理财A — minAmount ¥1,000. */
 const PRODUCT = 'prod_wenjiana';
 
@@ -38,14 +39,14 @@ function db() {
   return getTestPrisma();
 }
 
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<bigint> {
   const account = await db().account.findUnique({ where: { id: CHECKING } });
   if (!account) throw new Error(`${CHECKING} missing from fixtures`);
-  return account.balance;
+  return account.balanceMinor;
 }
 
-async function setCheckingBalance(balance: number): Promise<void> {
-  await db().account.update({ where: { id: CHECKING }, data: { balance } });
+async function setCheckingBalance(balance: string): Promise<void> {
+  await db().account.update({ where: { id: CHECKING }, data: { balanceMinor: moneyToCents(balance) } });
 }
 
 /** Count of the user's 转账 ledger rows carrying one of `remarks` (isolates the ones we wrote). */
@@ -82,12 +83,12 @@ async function capture(fn: () => Promise<unknown>): Promise<unknown> {
 
 describe('banking-sdk · atomicity: concurrent overspend', () => {
   it('two racing transfers against a balance funding only one — exactly one succeeds, the other is INSUFFICIENT_FUNDS, balance never negative', async () => {
-    const start = 300;
+    const start = '300.00';
     await setCheckingBalance(start);
 
     const results = await Promise.allSettled([
-      transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200, remark: 'RACE_A' }),
-      transfer({ userId: DEMO_USER_ID, contactId: 'contact_wangfang', amount: 200, remark: 'RACE_B' }),
+      transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: '200.00', remark: 'RACE_A' }),
+      transfer({ userId: DEMO_USER_ID, contactId: 'contact_wangfang', amount: '200.00', remark: 'RACE_B' }),
     ]);
 
     const fulfilled = results.filter((r) => r.status === 'fulfilled');
@@ -102,8 +103,8 @@ describe('banking-sdk · atomicity: concurrent overspend', () => {
 
     // The single successful debit applied; balance is exactly 100 (never negative).
     const balance = await checkingBalance();
-    expect(balance).toBe(start - 200);
-    expect(balance).toBeGreaterThanOrEqual(0);
+    expect(balance).toBe(moneyToCents(start) - 20_000n);
+    expect(balance).toBeGreaterThanOrEqual(0n);
 
     // Exactly ONE of the two racing transfers wrote its ledger row.
     expect(await transferLedgerCount(['RACE_A', 'RACE_B'])).toBe(1);
@@ -149,7 +150,7 @@ describe('banking-sdk · atomicity: ledger-write failure rolls back the debit', 
 
     const error = await capture(() =>
       withInjectedWriteFailure('transaction', 'create', () =>
-        transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200, remark: 'ROLLBACK' }),
+        transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: '200.00', remark: 'ROLLBACK' }),
       ),
     );
 
@@ -171,7 +172,7 @@ describe('banking-sdk · atomicity: ledger-write failure rolls back the debit', 
       withInjectedWriteFailure(
         'transaction',
         'create',
-        () => transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: 200, remark: 'ROLLBACK_TYPED' }),
+        () => transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: '200.00', remark: 'ROLLBACK_TYPED' }),
         () => {
           throw new AppError('INTERNAL', 'ledger write failed');
         },
@@ -193,7 +194,7 @@ describe('banking-sdk · atomicity: ledger-write failure rolls back the debit', 
     const ledgerRowsBefore = await allLedgerCount();
     expect(await checkingBalance()).toBe(CHECKING_START);
 
-    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: PRODUCT, amount: 2000 };
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: PRODUCT, amount: '2000.00' };
     const error = await capture(() =>
       withInjectedWriteFailure('investmentHolding', 'create', () =>
         banking.investment.subscribeInvestment(input),

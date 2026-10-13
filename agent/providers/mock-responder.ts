@@ -67,7 +67,7 @@ export function respond(context: MockContext): AssistantMessage {
   return classify(lastUser, messages);
 }
 
-/** Banking runtime negotiates structured guidance; the plain responder stays compatible for callers. */
+/** Add structured banking guidance to the deterministic intent classifier's reply. */
 export function respondWithGuidance(context: MockContext): AssistantMessage {
   const reply = respond(context);
   if (reply.content.some(part => part.type === 'toolCall') || parseBankingGuidance(contentToText(reply.content))) return reply;
@@ -283,7 +283,7 @@ function isTransferIntent(text: string): boolean {
 
 interface TransferIntent {
   recipient?: string;
-  amount?: number;
+  amount?: string;
   remark?: string;
   reuseRecipient: boolean;
   explicitReuse: boolean;
@@ -587,13 +587,13 @@ function handlePlan(text: string): AssistantMessage {
   return toolCall('submit_plan', { goal: text, nodes });
 }
 
-function parseThreshold(text: string): number | undefined {
+function parseThreshold(text: string): string | undefined {
   const m = text.match(/(?:超过|大于|高于|多于|超出|>=?|＞)\s*(\d+(?:\.\d+)?)/);
-  return m ? Number(m[1]) : undefined;
+  return m?.[1];
 }
 
 /** Spend threshold a conditional plan defaults to when it names no explicit 超过/大于 number. */
-const PLAN_DEFAULT_THRESHOLD = 2000;
+const PLAN_DEFAULT_THRESHOLD = '2000.00';
 
 /**
  * Seeded credit-card id a scripted limit-adjustment plan targets. It is a DEMO-MODEL scripted id:
@@ -629,7 +629,7 @@ const LIMIT_ADJUSTMENT_AMOUNT_RE = new RegExp(`(?:${LIMIT_ADJUSTMENT_VERB})\\s*(
 
 interface CardLimitAdjustment {
   category: string;
-  amount: number;
+  amount: string;
 }
 
 /**
@@ -646,7 +646,7 @@ function parseCardLimitAdjustment(text: string): CardLimitAdjustment | undefined
   if (!m) return undefined;
   const category =
     CARD_LIMIT_CATEGORIES.find((candidate) => text.includes(candidate)) ?? DEFAULT_CARD_LIMIT_CATEGORY;
-  return { category, amount: Number(m[1]) };
+  return { category, amount: m[1] };
 }
 
 /* ------------------------------------------------------------- direct actions */
@@ -688,9 +688,9 @@ function classifySetCardLimit(text: string): AssistantMessage | undefined {
 }
 
 /** The amount AFTER the adjustment verb (dedicated pattern), else `parseAmount` as a fallback. */
-function parseLimitAdjustmentAmount(text: string): number | undefined {
+function parseLimitAdjustmentAmount(text: string): string | undefined {
   const m = text.match(LIMIT_ADJUSTMENT_AMOUNT_RE);
-  if (m) return Number(m[1]);
+  if (m) return m[1];
   return parseAmount(text);
 }
 
@@ -839,7 +839,7 @@ function classifyActionFollowUp(text: string, messages: Message[]): AssistantMes
 }
 
 /** The whole message is just an amount (a bare answer to a clarification), e.g. "1500" / "1500元". */
-function parseAmountOnly(text: string): number | undefined {
+function parseAmountOnly(text: string): string | undefined {
   const t = text.trim();
   if (!/^\d+(?:\.\d+)?\s*(?:元|块钱|块|人民币)?\s*[。.!！]?$/.test(t)) return undefined;
   return parseAmount(t);
@@ -909,69 +909,69 @@ function extractContactQuery(text: string): string {
 
 /* ------------------------------------------------------------- amount parsing */
 
-function parseAmount(text: string): number | undefined {
+function parseAmount(text: string): string | undefined {
   const arabic = text.match(/(\d+(?:\.\d+)?)\s*(?:元|块钱|块|人民币|rmb|¥|￥)/i);
-  if (arabic) return Number(arabic[1]);
+  if (arabic) return arabic[1];
 
   const cn = text.match(/([零一二三四五六七八九十百千万两]+)\s*(?:元|块钱|块|人民币)/);
   if (cn) {
-    const value = chineseToNumber(cn[1]);
+    const value = chineseToIntegerText(cn[1]);
     if (value != null) return value;
   }
 
   const afterVerb = text.match(/(?:转|汇|打|给)[^\d零一二三四五六七八九十百千万两]{0,4}?(\d+(?:\.\d+)?)/);
-  if (afterVerb) return Number(afterVerb[1]);
+  if (afterVerb) return afterVerb[1];
 
   const afterVerbCn = text.match(/(?:转|汇|打)[^\d]{0,4}?([零一二三四五六七八九十百千万两]+)/);
   if (afterVerbCn) {
-    const value = chineseToNumber(afterVerbCn[1]);
+    const value = chineseToIntegerText(afterVerbCn[1]);
     if (value != null) return value;
   }
 
   const anyNumber = text.match(/(\d+(?:\.\d+)?)/);
-  return anyNumber ? Number(anyNumber[1]) : undefined;
+  return anyNumber?.[1];
 }
 
-const CN_DIGITS: Record<string, number> = {
-  零: 0,
-  一: 1,
-  二: 2,
-  两: 2,
-  三: 3,
-  四: 4,
-  五: 5,
-  六: 6,
-  七: 7,
-  八: 8,
-  九: 9,
+const CN_DIGITS: Record<string, bigint> = {
+  零: 0n,
+  一: 1n,
+  二: 2n,
+  两: 2n,
+  三: 3n,
+  四: 4n,
+  五: 5n,
+  六: 6n,
+  七: 7n,
+  八: 8n,
+  九: 9n,
 };
 
-const CN_UNITS: Record<string, number> = { 十: 10, 百: 100, 千: 1000, 万: 10000 };
+const CN_UNITS: Record<string, bigint> = { 十: 10n, 百: 100n, 千: 1000n, 万: 10000n };
 
 /** Compact Chinese-numeral parser (handles 五百 / 两千 / 二十五 / 一万 etc.). */
-function chineseToNumber(input: string): number | undefined {
-  let total = 0;
-  let section = 0;
-  let current = 0;
+function chineseToIntegerText(input: string): string | undefined {
+  let total = 0n;
+  let section = 0n;
+  let current = 0n;
   for (const ch of input) {
     if (ch in CN_DIGITS) {
       current = CN_DIGITS[ch];
     } else if (ch in CN_UNITS) {
       const unit = CN_UNITS[ch];
-      if (unit === 10000) {
+      if (unit === 10000n) {
         section = (section + current) * unit;
         total += section;
-        section = 0;
-        current = 0;
+        section = 0n;
+        current = 0n;
       } else {
-        section += (current === 0 ? 1 : current) * unit;
-        current = 0;
+        section += (current === 0n ? 1n : current) * unit;
+        current = 0n;
       }
     } else {
       return undefined;
     }
   }
-  return total + section + current;
+  return String(total + section + current);
 }
 
 /* ------------------------------------------------------------- message helpers */

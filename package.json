@@ -2,6 +2,8 @@
   "name": "ai-banking-agent",
   "version": "1.0.0",
   "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
   "engines": {
     "node": ">=22.19.0"
   },
@@ -16,6 +18,7 @@
     "test:watch": "vitest",
     "db:generate": "prisma generate",
     "db:push": "tsx scripts/db-push.ts",
+    "scheduler:tick": "tsx scripts/scheduler.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "tsx scripts/db-push.ts --force-reset && tsx prisma/seed.ts",
     "db:studio": "prisma studio"
@@ -24,6 +27,7 @@
     "@earendil-works/pi-agent-core": "1.1.0",
     "@earendil-works/pi-ai": "1.1.0",
     "@prisma/client": "^6.2.1",
+    "decimal.js": "^10.6.0",
     "next": "^15.1.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -34,6 +38,7 @@
     "seed": "tsx prisma/seed.ts"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.7",
     "@types/node": "^22.10.7",
     "@types/react": "^19.0.7",
     "@types/react-dom": "^19.0.3",

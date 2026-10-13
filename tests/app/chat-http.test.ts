@@ -32,7 +32,8 @@ const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** Recipient 张伟 — resolves unambiguously from the seeded contacts. */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** The seeded checking balance (¥23,580) — no GREEN read or parked transfer may change it. */
-const SEEDED_BALANCE = CHECKING.balance;
+import { moneyToCents } from '@/lib/money';
+const SEEDED_BALANCE = moneyToCents(CHECKING.balance);
 
 /**
  * The route's JSON envelope — the transport shape (NOT a frozen `@/lib/contracts` type). Declared
@@ -210,14 +211,16 @@ describe('[integration] POST /api/chat (real route handler, mock model) — GREE
     expect(turn.sessionId.length).toBeGreaterThan(0);
 
     const events = turn.events;
-    expect(events[0]).toEqual({ type: 'session', sessionId: turn.sessionId });
+    expect(typeof turn.runId).toBe('string');
+    expect(turn.runId?.length).toBeGreaterThan(0);
+    expect(events[0]).toEqual({ type: 'session', sessionId: turn.sessionId, runId: turn.runId });
     expect(lastToolEnd(events, 'get_balance')?.status).toBe('success');
     expect(cardTypes(events)).toContain('balance');
     expect(events[events.length - 1]).toEqual({ type: 'done' });
 
     // A GREEN read auto-executes but moves no money and parks nothing.
     const checking = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-    expect(checking.balance).toBe(SEEDED_BALANCE);
+    expect(checking.balanceMinor).toBe(SEEDED_BALANCE);
     expect(await getTestPrisma().pendingAction.count()).toBe(0);
     expectNoMfaLeak('Test 1', res.data);
   });
@@ -254,7 +257,7 @@ describe('[integration] POST /api/chat (real route handler, mock model) — gate
       0,
     );
     const checking = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-    expect(checking.balance).toBe(SEEDED_BALANCE);
+    expect(checking.balanceMinor).toBe(SEEDED_BALANCE);
     expectNoMfaLeak('Test 2', res.data);
   });
 
@@ -281,7 +284,7 @@ describe('[integration] POST /api/chat (real route handler, mock model) — gate
       0,
     );
     const checking = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-    expect(checking.balance).toBe(SEEDED_BALANCE);
+    expect(checking.balanceMinor).toBe(SEEDED_BALANCE);
     expectNoMfaLeak('Test 3', res.data);
   });
 
@@ -316,7 +319,7 @@ describe('[integration] POST /api/chat (real route handler, mock model) — gate
       0,
     );
     const checking = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-    expect(checking.balance).toBe(SEEDED_BALANCE);
+    expect(checking.balanceMinor).toBe(SEEDED_BALANCE);
     expectNoMfaLeak('Test 4', res.data);
   });
 });

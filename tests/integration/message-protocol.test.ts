@@ -198,7 +198,7 @@ describe('message-protocol — the persisted pi transcript stays provider-valid'
     persisted.agentState.messages = earlierHistory;
     await saveSession(persisted);
     const debitsBefore = await getTestPrisma().transaction.count({ where: {
-      userId: DEMO_USER_ID, direction: 'DEBIT', amount: -200,
+      userId: DEMO_USER_ID, direction: 'DEBIT', amountMinor: -20000n,
     } });
 
     const outcome = await confirmAction(decision.actionId);
@@ -208,7 +208,7 @@ describe('message-protocol — the persisted pi transcript stays provider-valid'
     expect(outcome.message).toContain('结果播报失败');
     expect(await persistedMessages(snapshot.sessionId)).toEqual(earlierHistory);
     expect(await getTestPrisma().transaction.count({ where: {
-      userId: DEMO_USER_ID, direction: 'DEBIT', amount: -200,
+      userId: DEMO_USER_ID, direction: 'DEBIT', amountMinor: -20000n,
     } })).toBe(debitsBefore + 1);
     expect((await getTestPrisma().pendingAction.findUnique({ where: { id: decision.actionId } }))?.status)
       .toBe('executed');

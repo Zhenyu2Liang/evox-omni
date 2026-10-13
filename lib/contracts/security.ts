@@ -1,5 +1,6 @@
 import type { RiskLevel } from './risk';
 import type { ToolName } from './tools';
+import type { MoneyAmount } from '../money';
 
 export type SecurityDecisionKind = 'allow' | 'require_confirmation' | 'require_mfa' | 'deny';
 
@@ -9,8 +10,8 @@ export interface SecurityEvaluation {
   requiresConfirmation: boolean;
   requiresMfa: boolean;
   reasons: string[];
-  amount?: number;
-  dailyTotal?: number;
+  amount?: MoneyAmount;
+  dailyTotal?: MoneyAmount;
   blocked: boolean;
   blockReason?: string;
 }
@@ -39,7 +40,7 @@ export interface PendingActionSummary {
   toolName: ToolName;
   tier: RiskLevel;
   fields: Array<{ label: string; value: string }>;
-  amount?: number;
+  amount?: MoneyAmount;
   requiresMfa: boolean;
   mfaHint?: string;
 }

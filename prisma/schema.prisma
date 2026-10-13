@@ -2,7 +2,9 @@
 //
 // Demo sandbox: all banking data is simulated. SQLite has no native enum type, so every
 // enum-like field is stored as a `String` (the allowed values are documented per field).
-// Money values use `Float` (CNY). JSON-ish payloads are stored as JSON text in `String`.
+// Booked money uses signed BigInt minor units (CNY cents).
+// Rates and unrounded valuations use canonical decimal TEXT, avoiding SQLite REAL coercion.
+// Public JSON amounts are canonical decimal strings. JSON payloads use String columns.
 //
 // Field notes:
 //   - `balance` / `amount` are signed: negative = expense/outflow, positive = income/inflow.
@@ -57,7 +59,7 @@ model Account {
   type     String // "CHECKING" | "SAVINGS"
   name     String
   number   String // masked, e.g. "****8821"
-  balance  Float
+  balanceMinor BigInt @map("balance_minor")
   currency String  @default("CNY")
 
   user         User          @relation(fields: [userId], references: [id])
@@ -70,7 +72,7 @@ model Transaction {
   id             String   @id @default(cuid())
   accountId      String
   userId         String
-  amount         Float // negative = expense, positive = income
+  amountMinor    BigInt @map("amount_minor") // negative = expense, positive = income
   currency       String   @default("CNY")
   direction      String // "DEBIT" | "CREDIT"
   category       String // 餐饮/出行/购物/娱乐/居住/医疗/订阅/转账/其他
@@ -109,9 +111,9 @@ model Card {
   network        String   @default("UnionPay")
   numberMasked   String
   status         String   @default("ACTIVE") // "ACTIVE" | "FROZEN" | "LOST" | "PENDING"
-  creditLimit    Float?
-  availableLimit Float?
-  monthlyLimit   Float?
+  creditLimitMinor    BigInt? @map("credit_limit_minor")
+  availableLimitMinor BigInt? @map("available_limit_minor")
+  monthlyLimitMinor   BigInt? @map("monthly_limit_minor")
 
   user   User        @relation(fields: [userId], references: [id])
   limits CardLimit[]
@@ -123,7 +125,7 @@ model CardLimit {
   id       String @id @default(cuid())
   cardId   String
   category String // 娱乐/餐饮/购物/出行/其他
-  amount   Float
+  amountMinor BigInt @map("amount_minor")
 
   card Card @relation(fields: [cardId], references: [id])
 
@@ -134,7 +136,7 @@ model Subscription {
   id           String   @id @default(cuid())
   userId       String
   name         String
-  amount       Float
+  amountMinor  BigInt @map("amount_minor")
   cycle        String   @default("MONTHLY")
   nextChargeAt DateTime
   status       String   @default("ACTIVE") // "ACTIVE" | "CANCELLED"
@@ -150,9 +152,9 @@ model InvestmentProduct {
   code         String  @unique
   name         String
   riskLevel    String // "R1" | "R2" | "R3" | "R4" | "R5"
-  expectedRate Float // percent, e.g. 3.25
+  annualYieldRate String @map("annual_yield_rate") // Exact dimensionless ratio; "0.032575" means 3.2575 percent.
   termDays     Int
-  minAmount    Float
+  minAmountMinor BigInt @map("min_amount_minor")
   description  String?
 
   holdings InvestmentHolding[]
@@ -162,8 +164,9 @@ model InvestmentHolding {
   id          String   @id @default(cuid())
   userId      String
   productId   String
-  amount      Float
-  marketValue Float?
+  principalAmountMinor BigInt @map("principal_amount_minor")
+  estimatedMarketValue String? @map("estimated_market_value") // Exact CNY valuation, before settlement rounding.
+  subscribeResult String? // Original SDK purchase outcome, persisted in the purchase transaction.
   boughtAt    DateTime @default(now())
   status      String   @default("HOLDING") // "HOLDING" | "REDEEMED"
   // Redeem execution identity + ORIGINAL result (persisted when the holding closes): a replay with
@@ -172,8 +175,7 @@ model InvestmentHolding {
   redeemExecutionKey String?
   redeemResult       String? // JSON text of the original redemption result payload
   // Replay key: `<planId>:<nodeId>` so a replayed plan node replays the existing holding
-  // instead of duplicating it. NULL for rows created outside the planner. SQLite UNIQUE allows
-  // multiple NULLs, so pre-existing rows are unaffected.
+  // instead of duplicating it. Unkeyed fixture/imported holdings have no replay identity.
   idempotencyKey String? @unique
 
   user    User              @relation(fields: [userId], references: [id])
@@ -187,7 +189,7 @@ model Budget {
   id        String    @id @default(cuid())
   userId    String
   name      String
-  amount    Float
+  amountMinor BigInt @map("amount_minor")
   purpose   String?
   status    String    @default("RESERVED") // "RESERVED" | "USED" | "RELEASED"
   dueDate   DateTime?
@@ -279,6 +281,7 @@ model AgentTaskNode {
 model ScheduledTask {
   id                   String   @id @default(cuid())
   userId               String
+  sessionId            String?
   name                 String
   kind                 String // "REMINDER" | "PAYMENT" | "TRANSFER"
   payload              String? // JSON text
@@ -286,14 +289,31 @@ model ScheduledTask {
   status               String   @default("SCHEDULED") // "SCHEDULED" | "DONE" | "CANCELLED"
   requiresConfirmation Boolean  @default(true)
   // Replay key: `<planId>:<nodeId>` so a replayed plan node replays the existing scheduled task
-  // instead of duplicating it. NULL for rows created outside the planner. SQLite UNIQUE allows
-  // multiple NULLs, so pre-existing rows are unaffected.
+  // instead of duplicating it. Unkeyed scheduled intents have no replay identity.
   idempotencyKey       String?  @unique
   createdAt            DateTime @default(now())
+  dispatchTaskId       String?  @unique
+  deliveredAt          DateTime?
+  dispatchError        String?
 
   user User @relation(fields: [userId], references: [id])
+  notification ScheduledNotification?
 
   @@index([userId])
+}
+
+// A delivered reminder is a durable user-visible fact, unique per scheduled intent.
+model ScheduledNotification {
+  id              String   @id @default(cuid())
+  scheduledTaskId String   @unique
+  userId          String
+  sessionId       String
+  message         String
+  createdAt       DateTime @default(now())
+
+  scheduledTask ScheduledTask @relation(fields: [scheduledTaskId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }
 
 model AuditLog {
@@ -348,6 +368,11 @@ model AgentSession {
   locked    Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  revision Int @default(0)
+  intentJson String?
+  activeRunId String?
+  runLeaseToken String?
+  runLeaseExpiresAt DateTime?
 
   user User @relation(fields: [userId], references: [id])
 
@@ -367,6 +392,8 @@ model PendingAction {
   resultJson  String? // JSON text of the original execution result payload (written when the action executes)
   userRequest String? // the user's original natural-language request (audit)
   intent      String? // derived intent label (audit)
+  authorizationDecisionId String?
+  invocationId String?
   // Owning plan (`AgentTask.id`) + owning node (`AgentTaskNode.nodeId`), persisted AT CREATION so a
   // plan-level cancel can revoke EVERY associated operation even when the node's `output` JSON was
   // never written / was overwritten. NULL for actions created outside the planner.
@@ -394,6 +421,9 @@ model MfaChallenge {
   status      String    @default("pending") // "pending" | "verified" | "failed" | "locked"
   createdAt   DateTime  @default(now())
   expiresAt   DateTime?
+  commandDigest String?
+  verifiedAt DateTime?
+  consumedAt DateTime?
 }
 
 // Durable SECURITY CIRCUIT-BREAKER state. Persisted (NOT in-process) and keyed by the OWNER
@@ -426,7 +456,104 @@ model ExecutionReceipt {
   requestDigest String
   resultJson    String // JSON text of the original result snapshot
   txId          String?
+  // Versioned command identity and full response shared by every banking write.
+  commandDigest String?
+  responseJson String?
   createdAt     DateTime @default(now())
 
   @@unique([userId, key])
+}
+
+model AuthorizationDecision {
+  id String @id @default(cuid())
+  sessionId String
+  userId String
+  toolName String
+  commandDigest String
+  commandJson String
+  policyVersion String
+  decision String
+  tier String
+  reasonsJson String
+  riskInputsJson String
+  taskId String?
+  nodeId String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
+
+  @@index([sessionId, createdAt])
+  @@index([userId, createdAt])
+}
+
+model AgentRun {
+  id String @id @default(cuid())
+  sessionId String
+  userId String
+  requestId String?
+  requestDigest String
+  requestJson String
+  status String @default("running")
+  nextSequence Int @default(0)
+  nextOrdinal Int @default(0)
+  leaseToken String?
+  leaseExpiresAt DateTime?
+  startedAt DateTime @default(now())
+  finishedAt DateTime?
+  errorCode String?
+  events AgentRunEvent[]
+  invocations ToolInvocation[]
+
+  @@unique([sessionId, requestId])
+  @@index([sessionId, startedAt])
+  @@index([status, leaseExpiresAt])
+}
+
+model AgentRunEvent {
+  id String @id @default(cuid())
+  runId String
+  sequence Int
+  channel String @default("raw")
+  eventType String
+  payloadJson String
+  createdAt DateTime @default(now())
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, sequence])
+  @@index([runId, channel, sequence])
+}
+
+model ToolInvocation {
+  id String @id @default(cuid())
+  runId String
+  ordinal Int
+  callId String
+  toolName String
+  argsJson String
+  requestDigest String
+  operationKey String
+  replaySafety String
+  status String @default("started")
+  resultJson String?
+  errorCode String?
+  attempt Int @default(1)
+  maxAttempts Int @default(1)
+  startedAt DateTime @default(now())
+  finishedAt DateTime?
+  run AgentRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, ordinal])
+  @@index([runId, callId])
+  @@index([operationKey])
+  @@index([status])
+}
+
+model RiskSignal {
+  id String @id @default(cuid())
+  ownerKey String
+  sessionId String
+  kind String
+  dedupeKey String? @unique
+  createdAt DateTime @default(now())
+
+  @@index([ownerKey, kind, createdAt])
 }

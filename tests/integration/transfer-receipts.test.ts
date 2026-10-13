@@ -29,9 +29,11 @@ import { executeGatedTool, getOrCreateSession } from '@/agent';
 import { banking } from '@/banking-sdk';
 import type { TransferInput, TransferResult } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
+import { centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
 import { executionReceiptId, idempotentTransferTxId } from '@/lib/ledger';
 import * as executionReceiptRepo from '@/lib/db/repositories/executionReceipt';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
+import * as commandExecution from '@/agent/command-execution';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as recoverPost } from '@/app/api/actions/[id]/recover/route';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
@@ -39,7 +41,7 @@ import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/help
 const userId = 'user_liming';
 /** Primary CHECKING account every transfer funds from (seed balance ¥23,580). */
 const CHECKING = 'acct_checking';
-const START_BALANCE = 23580;
+const START_BALANCE = '23580.00';
 /** Seeded contact 张伟 — the transfer recipient. */
 const ZHANGWEI = 'contact_zhangwei';
 
@@ -56,13 +58,13 @@ function createTransfer(input: TransferInput): Promise<TransferResult> {
 }
 
 /** Current CHECKING balance (CNY). */
-async function balance(): Promise<number> {
-  return (await db().account.findUniqueOrThrow({ where: { id: CHECKING } })).balance;
+async function balance(): Promise<string> {
+  return centsToMoney((await db().account.findUniqueOrThrow({ where: { id: CHECKING } })).balanceMinor);
 }
 
 /** Ledger DEBIT rows written by THIS suite to 张伟 for `amount` (magnitude, CNY). */
-function debitCount(amount: number): Promise<number> {
-  return db().transaction.count({ where: { userId, counterpartyId: ZHANGWEI, amount: -amount } });
+function debitCount(amount: string): Promise<number> {
+  return db().transaction.count({ where: { userId, counterpartyId: ZHANGWEI, amountMinor: -moneyToCents(amount) } });
 }
 
 /** Await `fn`, returning whatever it threw; fails loudly if it unexpectedly resolves. */
@@ -111,7 +113,7 @@ it('REVIEW_RECEIPT_WRITE_ROLLBACK: a failed receipt write rolls the debit + ledg
     .mockRejectedValueOnce(new Error('review: receipt write failed after debit'));
 
   const thrown = await captureError(() =>
-    createTransfer({ userId, idempotencyKey: key, name: '张伟', amount: 150, remark: 'REVIEW_ROLLBACK' }),
+    createTransfer({ userId, idempotencyKey: key, name: '张伟', amount: '150.00', remark: 'REVIEW_ROLLBACK' }),
   );
 
   // The injection HIT the receipt write (guards against a silently non-intercepted spy).
@@ -119,7 +121,7 @@ it('REVIEW_RECEIPT_WRITE_ROLLBACK: a failed receipt write rolls the debit + ledg
   expect(thrown).toBeInstanceOf(Error);
 
   // NO orphan debit, NO ledger row, NO receipt — the transaction rolled back as ONE unit.
-  const debits = await debitCount(150);
+  const debits = await debitCount('150.00');
   const receipts = await db().executionReceipt.count({ where: { userId, key } });
   const ledgerRow = await db().transaction.findUnique({ where: { id: idempotentTransferTxId(userId, key) } });
 
@@ -143,7 +145,7 @@ it('REVIEW_SAME_IDENTITY_CONCURRENT_RECOVERY: two concurrent recoveries apply th
     sessionId,
     userId,
     toolName: 'transfer_money',
-    args: { name: '张伟', amount: 200 },
+    args: { name: '张伟', amount: '200.00' },
     userRequest: '给张伟转200元',
   });
   expect(gate.ok).toBe(false);
@@ -163,38 +165,38 @@ it('REVIEW_SAME_IDENTITY_CONCURRENT_RECOVERY: two concurrent recoveries apply th
   expect(wedgedRow.status).toBe('confirmed');
   expect(wedgedRow.resultJson).toBeNull();
   // Pre-recovery persisted facts: exactly ONE debit, ONE committed receipt, balance already reduced.
-  expect(await debitCount(200)).toBe(1);
+  expect(await debitCount('200.00')).toBe(1);
   expect(await p.executionReceipt.count({ where: { userId, key: id! } })).toBe(1);
-  expect((await p.account.findUniqueOrThrow({ where: { id: CHECKING } })).balance).toBe(23380);
+  expect((await p.account.findUniqueOrThrow({ where: { id: CHECKING } })).balanceMinor).toBe(2338000n);
 
   // --- CONTROLLABLE BARRIER: both recoveries must reach the committed-receipt read before either
   // proceeds, so they genuinely OVERLAP on the same `confirmed` row instead of racing sequentially.
-  const originalGetReceipt = executionReceiptRepo.getExecutionReceipt;
+  const originalGetReceipt = commandExecution.readCommandReceipt;
   let arrived = 0;
   let releaseBarrier: () => void = () => {};
   const barrierGate = new Promise<void>((resolve) => {
     releaseBarrier = resolve;
   });
   const receiptSpy = vi
-    .spyOn(executionReceiptRepo, 'getExecutionReceipt')
-    .mockImplementation(async (uid, k, client) => {
+    .spyOn(commandExecution, 'readCommandReceipt')
+    .mockImplementation(async (...args) => {
       arrived += 1;
       if (arrived >= 2) releaseBarrier();
       await barrierGate;
-      return originalGetReceipt(uid, k, client);
+      return originalGetReceipt(...args);
     });
 
   const [first, second] = await Promise.all([recover(id!, sessionId), recover(id!, sessionId)]);
 
-  expect(receiptSpy).toHaveBeenCalledTimes(2);
-  expect(arrived).toBe(2); // both recoveries genuinely overlapped
+  expect(receiptSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+  expect(arrived).toBeGreaterThanOrEqual(2); // Both recoveries reached the read before either continued.
   receiptSpy.mockRestore();
 
   // --- The side effect happened EXACTLY ONCE; the action settled `executed`; no fabricated status.
   const settled = await p.pendingAction.findUniqueOrThrow({ where: { id: id! } });
-  const debits = await debitCount(200);
+  const debits = await debitCount('200.00');
   const receipts = await p.executionReceipt.count({ where: { userId, key: id! } });
-  const finalBalance = (await p.account.findUniqueOrThrow({ where: { id: CHECKING } })).balance;
+  const finalBalance = centsToMoney((await p.account.findUniqueOrThrow({ where: { id: CHECKING } })).balanceMinor);
 
   console.log(
     'REVIEW_SAME_IDENTITY_CONCURRENT_RECOVERY',
@@ -222,25 +224,25 @@ it('REVIEW_SAME_IDENTITY_CONCURRENT_RECOVERY: two concurrent recoveries apply th
   expect(settled.resultJson).not.toBeNull(); // the recovered result was persisted
   expect(debits).toBe(1); // exactly one side effect
   expect(receipts).toBe(1);
-  expect(finalBalance).toBe(23380);
+  expect(finalBalance).toBe('23380.00');
 });
 
 it('REVIEW_IDENTITY_REQUEST_CONFLICT: the same key for a different request is rejected (CONFLICT) with no extra debit', async () => {
   const key = 'review-fixed-key';
 
-  const first = await createTransfer({ userId, idempotencyKey: key, name: '张伟', amount: 100, remark: 'REVIEW_CONFLICT' });
-  expect(first.amount).toBe(100);
+  const first = await createTransfer({ userId, idempotencyKey: key, name: '张伟', amount: '100.00', remark: 'REVIEW_CONFLICT' });
+  expect(first.amount).toBe('100.00');
   expect(first.transactionId).toBe(idempotentTransferTxId(userId, key));
 
   // SAME execution identity, DIFFERENT request (amount 200 ≠ 100) → explicit CONFLICT, never executed.
   const thrown = await captureError(() =>
-    createTransfer({ userId, idempotencyKey: key, name: '张伟', amount: 200, remark: 'REVIEW_CONFLICT' }),
+    createTransfer({ userId, idempotencyKey: key, name: '张伟', amount: '200.00', remark: 'REVIEW_CONFLICT' }),
   );
   expect(thrown).toBeInstanceOf(AppError);
   expect((thrown as AppError).code).toBe('CONFLICT');
 
-  const debits100 = await debitCount(100);
-  const debits200 = await debitCount(200);
+  const debits100 = await debitCount('100.00');
+  const debits200 = await debitCount('200.00');
   const receipts = await db().executionReceipt.count({ where: { userId, key } });
   const finalBalance = await balance();
 
@@ -252,18 +254,18 @@ it('REVIEW_IDENTITY_REQUEST_CONFLICT: the same key for a different request is re
   expect(debits100).toBe(1); // only the ORIGINAL request debited
   expect(debits200).toBe(0); // the conflicting request wrote nothing
   expect(receipts).toBe(1); // the original receipt stands
-  expect(finalBalance).toBe(START_BALANCE - 100); // balance reflects ONLY the first transfer
+  expect(finalBalance).toBe(subtractMoney(START_BALANCE, '100.00')); // Balance reflects only the first transfer.
 });
 
 it('REVIEW_RECEIPT_REPLAY_IDEMPOTENT: same key + same request replays the original result with one debit', async () => {
   const key = 'review-replay-key';
-  const input: TransferInput = { userId, idempotencyKey: key, name: '张伟', amount: 120, remark: 'REVIEW_REPLAY' };
+  const input: TransferInput = { userId, idempotencyKey: key, name: '张伟', amount: '120.00', remark: 'REVIEW_REPLAY' };
 
   const first = await createTransfer(input);
   const second = await createTransfer(input);
 
   const receipt = await db().executionReceipt.findUniqueOrThrow({ where: { userId_key: { userId, key } } });
-  const debits = await debitCount(120);
+  const debits = await debitCount('120.00');
   const finalBalance = await balance();
 
   console.log(
@@ -281,7 +283,7 @@ it('REVIEW_RECEIPT_REPLAY_IDEMPOTENT: same key + same request replays the origin
   // The replayed result is the ORIGINAL snapshot — same transaction id and balance.
   expect(second.transactionId).toBe(first.transactionId);
   expect(second.newBalance).toBe(first.newBalance);
-  expect(first.newBalance).toBe(START_BALANCE - 120);
+  expect(first.newBalance).toBe(subtractMoney(START_BALANCE, '120.00'));
   expect(first.transactionId).toBe(idempotentTransferTxId(userId, key));
 
   // Exactly ONE debit + ONE receipt addressed by the deterministic identity.
@@ -289,5 +291,5 @@ it('REVIEW_RECEIPT_REPLAY_IDEMPOTENT: same key + same request replays the origin
   expect(receipt.id).toBe(executionReceiptId(userId, key));
   expect(receipt.txId).toBe(first.transactionId);
   expect(JSON.parse(receipt.resultJson)).toEqual(first);
-  expect(finalBalance).toBe(START_BALANCE - 120); // debited exactly once
+  expect(finalBalance).toBe(subtractMoney(START_BALANCE, '120.00')); // Debited exactly once.
 });

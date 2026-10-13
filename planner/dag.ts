@@ -14,15 +14,15 @@ import type { TaskCondition, TaskNodeResult, TaskNodeSpec, TaskNodeStatus, TaskP
 import { AppError, err, ok, type Result } from '@/lib/errors';
 import { newId } from '@/lib/ids';
 import { demoNow } from '@/lib/clock';
+import { outputFieldAt, type ToolOutputContracts } from '@/lib/contracts/tool-output';
+import { compareDecimal } from '@/lib/decimal';
 
 /**
- * A dependency status that unlocks its dependents: the dependency either
- * succeeded or was skipped (its branch intentionally did not run). A dependency
- * that `failed` or was `cancelled` — or that is still in flight (`pending` /
- * `running` / `waiting_confirmation` / `waiting_verification`) — leaves its
- * dependents NOT ready.
+ * A hard dependency unlocks its dependents only after success. A skipped,
+ * failed, cancelled, or in-flight dependency leaves its dependents not ready.
+ * Ordering-only predecessors use `after` and require a terminal status.
  */
-const READY_DEP_STATUSES: ReadonlySet<TaskNodeStatus> = new Set<TaskNodeStatus>(['success', 'skipped']);
+const READY_DEP_STATUSES: ReadonlySet<TaskNodeStatus> = new Set<TaskNodeStatus>(['success']);
 
 /**
  * Input to `buildPlan`. `now` and `id` are injectable for deterministic tests;
@@ -51,7 +51,7 @@ export interface BuildPlanInput {
  * are collected into a single message (and the raw list in `detail`) so callers
  * can surface everything at once.
  */
-export function validatePlan(nodes: TaskNodeSpec[], knownTools: Set<string>): Result<void> {
+export function validatePlan(nodes: TaskNodeSpec[], knownTools: Set<string>, outputContracts?: ToolOutputContracts): Result<void> {
   const problems: string[] = [];
   const seenIds = new Set<string>();
   const knownIds = new Set<string>();
@@ -102,12 +102,58 @@ export function validatePlan(nodes: TaskNodeSpec[], knownTools: Set<string>): Re
       problems.push(`node '${label}' has an unsupported kind '${String(node.kind)}'`);
     }
 
+    if (!Array.isArray(node.dependencies) || !node.dependencies.every(id => typeof id === 'string')) {
+      problems.push(`node '${label}' has invalid dependencies`);
+    }
     if (node.after !== undefined && (!Array.isArray(node.after) || !node.after.every(id => typeof id === 'string'))) {
       problems.push(`node '${label}' has invalid ordering predecessors`);
     }
     const deps = [...(Array.isArray(node.dependencies) ? node.dependencies : []), ...(Array.isArray(node.after) ? node.after : [])];
     for (const dep of deps) {
       if (!knownIds.has(dep)) problems.push(`node '${label}' depends on unknown node '${dep}'`);
+    }
+  }
+
+  if (problems.length > 0) return err(new AppError('VALIDATION', problems.join('; '), problems));
+
+  const byId = new Map(nodes.map(node => [node.id, node]));
+  for (const node of nodes) {
+    if (node?.kind !== 'condition' || typeof node.condition?.path !== 'string') continue;
+    const [sourceId, ...fieldPath] = node.condition.path.split('.');
+    const source = byId.get(sourceId);
+    if (!source || fieldPath.length === 0) {
+      problems.push(`condition node '${node.id}' requires a reference to an existing node output field`);
+      continue;
+    }
+    if (!transitiveDependents(nodes, sourceId).includes(node.id)) {
+      problems.push(`condition node '${node.id}' must depend on its data source '${sourceId}'`);
+    }
+    const contract = source.kind === 'condition'
+      ? { type: 'object' as const, fields: { result: { type: 'boolean' as const } } }
+      : source.tool ? outputContracts?.[source.tool] : undefined;
+    const field = contract ? outputFieldAt(contract, fieldPath) : undefined;
+    if (outputContracts && !field) {
+      problems.push(`condition node '${node.id}' references an unsupported output field '${node.condition.path}'`);
+    } else if (field && ['>', '>=', '<', '<='].includes(node.condition.op)
+      && !['decimal', 'number'].includes(field.type)) {
+      problems.push(`condition node '${node.id}' requires a numeric output field for ordering comparison`);
+    } else if (field && ['object', 'array'].includes(field.type)) {
+      problems.push(`condition node '${node.id}' must reference a comparable scalar output field`);
+    }
+    if (field?.type === 'decimal' || field?.type === 'number') {
+      try {
+        const literal = node.condition.value;
+        if (field.type === 'decimal' && typeof literal !== 'string') throw new Error('Expected exact decimal text.');
+        if (field.type === 'number' && typeof literal !== 'number') throw new Error('Expected a numeric scalar.');
+        if (typeof literal !== 'string' && typeof literal !== 'number') throw new Error('Expected a numeric literal.');
+        compareDecimal(literal, 0);
+      } catch {
+        problems.push(`condition node '${node.id}' requires a valid decimal comparison value`);
+      }
+    } else if (field?.type === 'boolean' && typeof node.condition.value !== 'boolean') {
+      problems.push(`condition node '${node.id}' requires a boolean comparison value`);
+    } else if (field?.type === 'string' && typeof node.condition.value !== 'string') {
+      problems.push(`condition node '${node.id}' requires a string comparison value`);
     }
   }
 
@@ -210,10 +256,10 @@ export function topologicalOrder(nodes: TaskNodeSpec[]): TaskNodeSpec[] {
 
 /**
  * Return the nodes that can execute given the current `results`: nodes not yet
- * resolved (`pending`, or absent from `results`) whose EVERY dependency has a
- * status of `success` or `skipped`.
+ * resolved (`pending`, or absent from `results`) whose every hard dependency
+ * succeeded and every ordering-only predecessor reached a terminal status.
  *
- * A dependency that `failed` or was `cancelled` — like one still in flight
+ * A dependency that was skipped, failed, or cancelled — like one still in flight
  * (`pending` / `running` / `waiting_confirmation` / `waiting_verification`) —
  * leaves its dependents NOT ready. Declaration order is preserved.
  *
@@ -273,16 +319,13 @@ export function transitiveDependents(nodes: TaskNodeSpec[], id: string): string[
   return nodes.filter((node) => reachable.has(node.id)).map((node) => node.id);
 }
 
-/** Coerce a primitive to a finite number, or `undefined` when it is not numeric. */
-function toNumber(value: unknown): number | undefined {
-  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (trimmed === '') return undefined;
-    const n = Number(trimmed);
-    return Number.isFinite(n) ? n : undefined;
-  }
-  return undefined;
+/** Validate decimal input without converting financial values to binary floating point. */
+function toDecimal(value: unknown): string | number | bigint | undefined {
+  if (typeof value !== 'number' && typeof value !== 'string' && typeof value !== 'bigint') return undefined;
+  try {
+    compareDecimal(value, value);
+    return value;
+  } catch { return undefined; }
 }
 
 /** Is `value` a comparable primitive (`number` | `string` | `boolean`)? */
@@ -297,10 +340,10 @@ function isPrimitive(value: unknown): value is number | string | boolean {
  */
 function safeEquals(left: unknown, right: unknown): { comparable: boolean; equal: boolean } {
   if (!isPrimitive(left) || !isPrimitive(right)) return { comparable: false, equal: false };
+  const ln = toDecimal(left);
+  const rn = toDecimal(right);
+  if (ln !== undefined && rn !== undefined) return { comparable: true, equal: compareDecimal(ln, rn) === 0 };
   if (typeof left === typeof right) return { comparable: true, equal: left === right };
-  const ln = toNumber(left);
-  const rn = toNumber(right);
-  if (ln !== undefined && rn !== undefined) return { comparable: true, equal: ln === rn };
   return { comparable: false, equal: false };
 }
 
@@ -332,7 +375,7 @@ function resolvePath(scope: Record<string, unknown>, path: string): { found: boo
  * non-object) resolves to `false`.
  *
  * Comparison uses `op` (`> >= < <= == !=`):
- *  - numeric ops coerce numbers and numeric strings to `number`; an
+ *  - ordering ops compare exact aligned decimal coefficients; an
  *    incomparable pair (non-numeric, missing, object/array) yields `false`;
  *  - `==`/`!=` compare equal-typed primitives (with a numeric-string bridge for
  *    `'42' == 42`); an incomparable/mismatched pair yields `false` (for both ops).
@@ -352,13 +395,14 @@ export function evaluateCondition(condition: TaskCondition, scope: Record<string
     case '>=':
     case '<':
     case '<=': {
-      const ln = toNumber(left);
-      const rn = toNumber(right);
+      const ln = toDecimal(left);
+      const rn = toDecimal(right);
       if (ln === undefined || rn === undefined) return false;
-      if (condition.op === '>') return ln > rn;
-      if (condition.op === '>=') return ln >= rn;
-      if (condition.op === '<') return ln < rn;
-      return ln <= rn;
+      const comparison = compareDecimal(ln, rn);
+      if (condition.op === '>') return comparison > 0;
+      if (condition.op === '>=') return comparison >= 0;
+      if (condition.op === '<') return comparison < 0;
+      return comparison <= 0;
     }
     case '==': {
       const eq = safeEquals(left, right);
@@ -377,9 +421,9 @@ export function evaluateCondition(condition: TaskCondition, scope: Record<string
 export function assertConditionResolvable(condition: TaskCondition, scope: Record<string, unknown>): void {
   const result = resolvePath(scope, condition.path);
   if (!result.found || (['>', '>=', '<', '<='].includes(condition.op)
-    ? toNumber(result.value) === undefined || toNumber(condition.value) === undefined
+    ? toDecimal(result.value) === undefined || toDecimal(condition.value) === undefined
     : !safeEquals(result.value, condition.value).comparable)) {
-    throw new AppError('VALIDATION', `条件无法求值：${condition.path}，请核对依赖节点的真实输出字段。`);
+    throw new AppError('VALIDATION', `Condition output is missing or incomparable: ${condition.path}`);
   }
 }
 

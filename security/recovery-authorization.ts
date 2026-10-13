@@ -5,7 +5,6 @@ import { getSession } from '@/lib/db/repositories/session';
 import { AppError } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
 import { normalizeTransferAmount } from '@/lib/money';
-import { demoNow } from '@/lib/clock';
 import { ledgerTxIdForAction } from '@/lib/ledger';
 import { recordSecurityEvent } from '@/audit';
 import { assertSessionMayWrite } from './execution-policy';
@@ -60,7 +59,7 @@ export async function authorizeRecoveryAction(actionId: string, actor: ActionOwn
     const needsMfa = current.requiresMfa || current.riskLevel === 'RED' || risk.requiresMfa;
     const challenge = needsMfa ? await tx.mfaChallenge.findUnique({ where: { actionId } }) : null;
     const verified = challenge?.status === 'verified' &&
-      (challenge.expiresAt === null || challenge.expiresAt.getTime() > demoNow());
+      challenge.expiresAt !== null && challenge.expiresAt.getTime() > Date.now();
     if (needsMfa && !verified) {
       await tx.pendingAction.update({ where: { id: actionId }, data: {
         status: 'awaiting_mfa', riskLevel: 'RED', requiresMfa: true,

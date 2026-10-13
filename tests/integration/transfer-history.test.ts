@@ -22,15 +22,16 @@ import { POST as taskPost } from '@/app/api/tasks/[id]/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { GET as actionsGet } from '@/app/api/actions/route';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
+import { centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
 
 const userId = 'user_liming';
 /** The seeded 活期 account every transfer debits (¥23,580). */
 const CHECKING = 'acct_checking';
-const SEEDED_BALANCE = 23580;
+const SEEDED_BALANCE = '23580.00';
 /** The seeded recipient resolved by name. */
 const CONTACT = 'contact_zhangwei';
-const AMOUNT = 200;
-const AFTER_TRANSFER = SEEDED_BALANCE - AMOUNT;
+const AMOUNT = '200';
+const AFTER_TRANSFER = subtractMoney(SEEDED_BALANCE, AMOUNT);
 
 beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
@@ -76,13 +77,13 @@ async function list(s: string) {
  */
 function debitRow() {
   return getTestPrisma().transaction.findFirstOrThrow({
-    where: { userId, amount: -AMOUNT, counterpartyId: CONTACT },
+    where: { userId, amountMinor: -moneyToCents(AMOUNT), counterpartyId: CONTACT },
   });
 }
 /** The transfer's own debit rows (the ledger fact): exactly ONE for a committed transfer. */
 function transferDebits() {
   return getTestPrisma().transaction.count({
-    where: { userId, amount: -AMOUNT, counterpartyId: CONTACT },
+    where: { userId, amountMinor: -moneyToCents(AMOUNT), counterpartyId: CONTACT },
   });
 }
 /**
@@ -90,10 +91,10 @@ function transferDebits() {
  * so "no second debit was ever created" is proven against the whole ledger, not just the scoped rows.
  */
 function amountDebits() {
-  return getTestPrisma().transaction.count({ where: { userId, amount: -AMOUNT } });
+  return getTestPrisma().transaction.count({ where: { userId, amountMinor: -moneyToCents(AMOUNT) } });
 }
 async function balance() {
-  return (await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING } })).balance;
+  return centsToMoney((await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING } })).balanceMinor);
 }
 
 /**
@@ -180,7 +181,7 @@ it('REVIEW_TXN_CONTACT_RENAMED — a committed transfer is recovered from its co
   expect(transferDebitsAfter).toBe(1);
   expect(debitsAfter).toBe(debitsBefore + 1);
   expect(debit.counterpartyId).toBe(CONTACT);
-  expect(debit.amount).toBe(-AMOUNT);
+  expect(debit.amountMinor).toBe(-moneyToCents(AMOUNT));
 });
 
 it('REVIEW_TXN_CONTACT_DELETED — recovery survives deletion of the recipient contact (the committed evidence is looked up first)', async () => {
@@ -350,7 +351,7 @@ it('REVIEW_TXN_PLAN_CANCEL — a committed plan transfer fact is retained across
   expect(afterCancelAmountDebits).toBe(debitsBefore + 1); // no second debit anywhere in the ledger
   expect(afterCancelBalance).toBe(AFTER_TRANSFER);
   expect(debit.counterpartyId).toBe(CONTACT);
-  expect(debit.amount).toBe(-AMOUNT);
+  expect(debit.amountMinor).toBe(-moneyToCents(AMOUNT));
 
   // ── The repeat human decision on the cancelled plan is REFUSED (fails closed), it does NOT move
   //    money again and does NOT settle the retained fact as a failure/cancellation. ───────────────

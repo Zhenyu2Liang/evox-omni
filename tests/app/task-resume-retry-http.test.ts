@@ -99,12 +99,12 @@ interface SeedNode {
 }
 
 /** The 🟢 GREEN node used as the COUNTABLE execution probe (one `Budget` row per run). */
-function budgetNode(id: string, name: string, budgetName: string, amount: number, deps: string[] = []): SeedNode {
+function budgetNode(id: string, name: string, budgetName: string, amount: string, deps: string[] = []): SeedNode {
   return { id, name, dependencies: deps, kind: 'tool', tool: 'reserve_budget', args: { name: budgetName, amount } };
 }
 
 /** The YELLOW `transfer_money` node (gated → PARKS for a human decision instead of executing). */
-function transferNode(id: string, amount: number, deps: string[] = []): SeedNode {
+function transferNode(id: string, amount: string, deps: string[] = []): SeedNode {
   return { id, name: `给${RECIPIENT_NAME}转账`, dependencies: deps, kind: 'tool', tool: 'transfer_money', args: { name: RECIPIENT_NAME, amount } };
 }
 
@@ -170,7 +170,7 @@ async function seedPausedPlan(marker: string): Promise<{ sessionId: string; task
       goal: '先读余额，再预留并发预算',
       nodes: [
         { id: 'n1', name: '读余额', kind: 'tool', tool: 'get_balance', args: {}, dependencies: [] },
-        budgetNode('n2', '预留并发预算', marker, 1200, ['n1']),
+        budgetNode('n2', '预留并发预算', marker, '1200', ['n1']),
       ],
     },
     {
@@ -306,8 +306,8 @@ describe('[integration] POST /api/tasks/[id] concurrent retry — the failed nod
   it('[integration] two overlapping {action:"retry"} requests re-gate the failed node once and settle one consistent status', async () => {
     const marker = '并发重试预算';
     const { sessionId, taskId, plan } = await seedPlan('先预留并发重试预算，再给张伟转200元', [
-      budgetNode('n1', marker, marker, 600),
-      transferNode('n2', 200, ['n1']),
+      budgetNode('n1', marker, marker, '600'),
+      transferNode('n2', '200', ['n1']),
     ]);
     expect(nodeStatusOf(plan, 'n1')).toBe('success');
     expect(nodeStatusOf(plan, 'n2')).toBe('waiting_confirmation');
@@ -318,7 +318,7 @@ describe('[integration] POST /api/tasks/[id] concurrent retry — the failed nod
     // Drain EVERY account so the confirmed transfer FAILS honestly (`INSUFFICIENT_FUNDS`) whichever
     // account the SDK resolves as the funding source — the ONLY way a plan node becomes `failed`
     // (a gated node parks, it never fails inline). Mirrors `dag-recovery-http.test.ts`.
-    await getTestPrisma().account.updateMany({ where: { userId: DEMO_USER_ID }, data: { balance: 0 } });
+    await getTestPrisma().account.updateMany({ where: { userId: DEMO_USER_ID }, data: { balanceMinor: 0n } });
     const confirmRes = await postJson<Envelope<{ ok: boolean; status: string }>>(
       confirmPost,
       actionUrl(firstActionId!, 'confirm'),

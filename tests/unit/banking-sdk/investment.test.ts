@@ -19,6 +19,7 @@ import type {
   SubscribeInvestmentInput,
 } from '@/banking-sdk';
 import { AppError, type ErrorCode } from '@/lib/errors';
+import { compareDecimal } from '@/lib/decimal';
 import { useFreshDatabase } from '../../helpers/db';
 import { ACCOUNTS, DEMO_USER_ID, PRODUCTS } from '../../helpers/fixtures';
 
@@ -62,7 +63,7 @@ describe('banking-sdk/investment · listProducts', () => {
     expect(r2.every((p) => p.riskLevel === 'R2')).toBe(true);
   });
 
-  it('each ProductView carries id / code / name / riskLevel / expectedRate / termDays / minAmount', async () => {
+  it('each ProductView carries id / code / name / riskLevel / annualYieldRate / termDays / minAmount', async () => {
     const all = await banking.investment.listProducts();
     const view = all.find((p) => p.id === WENJIANA) as ProductView | undefined;
     expect(view).toBeDefined();
@@ -71,9 +72,9 @@ describe('banking-sdk/investment · listProducts', () => {
       code: 'WJA001',
       name: '稳健理财A',
       riskLevel: 'R2',
-      expectedRate: 3.25,
+      annualYieldRate: '0.0325',
       termDays: 90,
-      minAmount: 1000,
+      minAmount: '1000.00',
     });
 
     // Every product exposes the full public shape with the right primitive types.
@@ -82,15 +83,15 @@ describe('banking-sdk/investment · listProducts', () => {
       expect(typeof product.code).toBe('string');
       expect(typeof product.name).toBe('string');
       expect(['R1', 'R2', 'R3', 'R4', 'R5']).toContain(product.riskLevel);
-      expect(typeof product.expectedRate).toBe('number');
+      expect(typeof product.annualYieldRate).toBe('string');
       expect(typeof product.termDays).toBe('number');
-      expect(typeof product.minAmount).toBe('number');
+      expect(typeof product.minAmount).toBe('string');
     }
   });
 });
 
 describe('banking-sdk/investment · compareInvestments', () => {
-  it('returns the products plus highestRateId (max expectedRate) and lowestRiskId (lowest risk level)', async () => {
+  it('returns products plus highestRateId and lowestRiskId', async () => {
     const cmp: InvestmentComparison = await banking.investment.compareInvestments(ALL_PRODUCT_IDS);
 
     expect(cmp.products).toHaveLength(4);
@@ -99,8 +100,8 @@ describe('banking-sdk/investment · compareInvestments', () => {
     expect(cmp.lowestRiskId).toBe(HUOBI);
 
     const highest = cmp.products.find((p) => p.id === cmp.highestRateId);
-    const maxRate = Math.max(...cmp.products.map((p) => p.expectedRate));
-    expect(highest?.expectedRate).toBe(maxRate);
+    const maxRate = cmp.products.reduce((highest, product) => compareDecimal(product.annualYieldRate, highest) > 0 ? product.annualYieldRate : highest, '0');
+    expect(highest?.annualYieldRate).toBe(maxRate);
 
     const lowest = cmp.products.find((p) => p.id === cmp.lowestRiskId);
     expect(lowest?.riskLevel).toBe('R1');
@@ -116,21 +117,21 @@ describe('banking-sdk/investment · compareInvestments', () => {
 
 describe('banking-sdk/investment · subscribeInvestment', () => {
   it("an amount below the product minAmount → throws AppError('VALIDATION')", async () => {
-    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: WENJIANA, amount: 500 };
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: WENJIANA, amount: '500.00' };
     const error = await expectAppErrorCode(banking.investment.subscribeInvestment(input), 'VALIDATION');
-    expect(error.detail).toMatchObject({ amount: 500, minAmount: 1000 });
+    expect(error.detail).toMatchObject({ amount: '500.00', minAmount: '1000.00' });
   });
 
   it('¥5000 into 稳健理财A (min 1000) succeeds and debits the account (newBalance 18580)', async () => {
-    expect(CHECKING_START).toBe(23580);
+    expect(CHECKING_START).toBe('23580.00');
 
-    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: WENJIANA, amount: 5000 };
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: WENJIANA, amount: '5000.00' };
     const result: InvestResult = await banking.investment.subscribeInvestment(input);
 
     expect(result.success).toBe(true);
     expect(result.productId).toBe(WENJIANA);
-    expect(result.amount).toBe(5000);
-    expect(result.newBalance).toBe(18580);
+    expect(result.amount).toBe('5000.00');
+    expect(result.newBalance).toBe('18580.00');
     expect(typeof result.holdingId).toBe('string');
     expect(result.holdingId.length).toBeGreaterThan(0);
     expect(Number.isFinite(result.occurredAt)).toBe(true);
@@ -138,14 +139,14 @@ describe('banking-sdk/investment · subscribeInvestment', () => {
     // The funding account was really debited in the DB.
     const balance = await banking.account.getBalance(DEMO_USER_ID);
     const checking = balance.accounts.find((a) => a.id === 'acct_checking');
-    expect(checking?.balance).toBe(18580);
+    expect(checking?.balance).toBe('18580.00');
   });
 
   it("an unknown productId → throws AppError('NOT_FOUND')", async () => {
     const input: SubscribeInvestmentInput = {
       userId: DEMO_USER_ID,
       productId: 'prod_does_not_exist',
-      amount: 5000,
+      amount: '5000.00',
     };
     const error = await expectAppErrorCode(banking.investment.subscribeInvestment(input), 'NOT_FOUND');
     expect(error.detail).toMatchObject({ productId: 'prod_does_not_exist' });
@@ -153,20 +154,20 @@ describe('banking-sdk/investment · subscribeInvestment', () => {
 
   it("insufficient funds → throws AppError('INSUFFICIENT_FUNDS')", async () => {
     // 999999 clears the ¥10,000 minAmount of 进取混合C but far exceeds the ¥23,580 balance.
-    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: JINRONG, amount: 999999 };
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: JINRONG, amount: '999999.00' };
     const error = await expectAppErrorCode(banking.investment.subscribeInvestment(input), 'INSUFFICIENT_FUNDS');
-    expect(error.detail).toMatchObject({ balance: 23580, amount: 999999 });
+    expect(error.detail).toMatchObject({ balance: '23580.00', amount: '999999.00' });
   });
 
   it('creates a HOLDING and returns InvestResult { success, holdingId, productId, amount, newBalance, occurredAt }', async () => {
-    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: WENJIB, amount: 5000 };
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: WENJIB, amount: '5000.00' };
     const result: InvestResult = await banking.investment.subscribeInvestment(input);
 
     expect(result.success).toBe(true);
     expect(result.holdingId).toEqual(expect.any(String));
     expect(result.productId).toBe(WENJIB);
-    expect(result.amount).toBe(5000);
-    expect(result.newBalance).toBe(18580);
+    expect(result.amount).toBe('5000.00');
+    expect(result.newBalance).toBe('18580.00');
     expect(Number.isFinite(result.occurredAt)).toBe(true);
 
     const holdings = await banking.investment.listHoldings(DEMO_USER_ID);
@@ -176,7 +177,7 @@ describe('banking-sdk/investment · subscribeInvestment', () => {
       productId: WENJIB,
       productName: '稳健理财B',
       riskLevel: 'R2',
-      amount: 5000,
+      amount: '5000.00',
       status: 'HOLDING',
     });
   });
@@ -184,7 +185,7 @@ describe('banking-sdk/investment · subscribeInvestment', () => {
 
 describe('banking-sdk/investment · redeemInvestment', () => {
   it('flips a holding HOLDING → REDEEMED and credits the funding account', async () => {
-    expect(CHECKING_START).toBe(23580);
+    expect(CHECKING_START).toBe('23580.00');
 
     const input: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING };
     const result: InvestResult = await banking.investment.redeemInvestment(input);
@@ -193,8 +194,8 @@ describe('banking-sdk/investment · redeemInvestment', () => {
     expect(result.holdingId).toBe(SEEDED_HOLDING);
     expect(result.productId).toBe(WENJIANA);
     // Credited by marketValue (5050), not principal (5000).
-    expect(result.amount).toBe(5050);
-    expect(result.newBalance).toBe(28630); // 23580 + 5050
+    expect(result.amount).toBe('5050.00');
+    expect(result.newBalance).toBe('28630.00');
     expect(Number.isFinite(result.occurredAt)).toBe(true);
 
     // The holding is closed and no longer reported among the active holdings.
@@ -203,7 +204,7 @@ describe('banking-sdk/investment · redeemInvestment', () => {
 
     const balance = await banking.account.getBalance(DEMO_USER_ID);
     const checking = balance.accounts.find((a) => a.id === 'acct_checking');
-    expect(checking?.balance).toBe(28630);
+    expect(checking?.balance).toBe('28630.00');
   });
 
   it("redeeming an unknown / already-redeemed holding → throws AppError('NOT_FOUND' | 'CONFLICT')", async () => {
@@ -240,9 +241,9 @@ describe('banking-sdk/investment · listHoldings', () => {
       productId: WENJIANA,
       productName: '稳健理财A',
       riskLevel: 'R2',
-      amount: 5000,
-      marketValue: 5050,
-      profit: 50, // marketValue - amount
+      amount: '5000.00',
+      marketValue: '5050',
+      profit: '50',
       status: 'HOLDING',
     });
     expect(typeof view?.boughtAt).toBe('number');

@@ -2,6 +2,7 @@
 
 import type { SpendingAnalysis } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
+import { compareDecimal } from '@/lib/decimal';
 import { Card } from '../../ui/Card';
 import { Money } from '../../ui/Money';
 import { EmptyState } from '../../ui/EmptyState';
@@ -33,21 +34,21 @@ export function SpendingCard({ data, className }: SpendingCardProps) {
     );
   }
 
-  const momUp = data.momChangePct > 0;
-  const momFlat = data.momChangePct === 0;
+  const momUp = compareDecimal(data.momChangePct, '0') > 0;
+  const momFlat = compareDecimal(data.momChangePct, '0') === 0;
   const momClass = momFlat ? 'text-slate-500' : momUp ? 'text-banking-danger' : 'text-banking-success';
-  const momText = `${momUp ? '+' : ''}${data.momChangePct.toFixed(1)}%`;
+  const momText = `${momUp ? '+' : ''}${data.momChangePct}%`;
 
   return (
     <Card
       className={className}
       title={`${data.month} 消费分析`}
-      description="正常消费分类与趋势（不含异常交易及投资资金流）"
+      description={'\u5df2\u5165\u8d26\u6d88\u8d39\u5206\u7c7b\u4e0e\u8d8b\u52bf\uff08\u5305\u542b\u6807\u8bb0\u5f02\u5e38\u4ea4\u6613\uff0c\u4e0d\u542b\u6295\u8d44\u8d44\u91d1\u6d41\uff09'}
     >
       <div className="space-y-4">
         <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
           <div>
-            <div className="text-xs text-slate-500">正常消费</div>
+            <div className="text-xs text-slate-500">{'\u5df2\u5165\u8d26\u6d88\u8d39'}</div>
             <Money amount={data.total} className="text-2xl font-semibold text-banking-deep" />
           </div>
           <div>

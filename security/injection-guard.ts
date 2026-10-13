@@ -12,7 +12,7 @@
  * (the gateway / agent layer, which owns `sessionId`) invokes `reportInjection` at the
  * async boundary to persist the event.
  */
-import { recordSecurityEvent } from '../audit';
+import { recordRiskSignal } from './incidents';
 
 export interface InjectionScanResult {
   suspicious: boolean;
@@ -68,13 +68,13 @@ export async function reportInjection(
   sessionId: string,
   text: string,
   result: InjectionScanResult,
+  dedupeKey?: string,
 ): Promise<void> {
   if (!result.suspicious) return;
 
-  await recordSecurityEvent({
+  await recordRiskSignal({
     sessionId,
-    kind: 'INJECTION_ATTEMPT',
-    severity: 'medium',
+    kind: 'suspicious_instruction', eventKind: 'INJECTION_ATTEMPT', dedupeKey,
     message: result.note,
     detail: { matched: result.matched, text },
   });

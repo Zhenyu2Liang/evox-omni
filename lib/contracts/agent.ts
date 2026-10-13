@@ -1,5 +1,5 @@
 import type { RiskLevel } from './risk';
-import type { PendingActionSummary } from './security';
+import type { PendingActionStatus, PendingActionSummary } from './security';
 import type { TaskPlan } from './task';
 
 export type { PendingActionSummary } from './security';
@@ -41,10 +41,10 @@ export interface ChatMessage {
   toolEvents?: ToolEventView[];
 }
 
-export interface ChatTurnRequest { sessionId?: string; message: string; }
+export interface ChatTurnRequest { sessionId?: string; requestId?: string; message: string; }
 
 export type AgentStreamEvent =
-  | { type: 'session'; sessionId: string }
+  | { type: 'session'; sessionId: string; runId?: string }
   | { type: 'message_start'; message: ChatMessage }
   | { type: 'text_delta'; delta: string }
   | { type: 'tool_start'; toolEvent: ToolEventView }
@@ -53,9 +53,10 @@ export type AgentStreamEvent =
   | { type: 'plan_update'; plan: TaskPlan; generation?: number }
   | { type: 'confirmation_required'; action: PendingActionSummary; actionId: string }
   | { type: 'mfa_required'; actionId: string; hint?: string; action?: PendingActionSummary }
+  | { type: 'action_settled'; actionId: string; status: PendingActionStatus; message?: string }
   | { type: 'security_event'; kind: string; message: string }
   | { type: 'message_end'; message: ChatMessage }
   | { type: 'error'; message: string }
   | { type: 'done' };
 
-export interface ChatTurnResponse { sessionId: string; events: AgentStreamEvent[]; }
+export interface ChatTurnResponse { sessionId: string; runId?: string; events: AgentStreamEvent[]; }

@@ -24,6 +24,7 @@ export interface WriteCommitEvent {
 
 /** Trusted server callbacks, scoped to one invocation; never read from model arguments. */
 export interface BankingExecutionContext {
+  sessionId?: string;
   fence?: ExecutionFenceCheck;
   onTransferCommit?: (tx: Prisma.TransactionClient, result: TransferResult) => Promise<void>;
   /**

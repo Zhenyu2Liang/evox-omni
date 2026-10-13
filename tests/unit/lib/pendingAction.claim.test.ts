@@ -40,7 +40,7 @@ async function seedAction(status: 'pending' | 'cancelled' = 'pending') {
     sessionId,
     userId: DEMO_USER_ID,
     toolName: 'transfer_money',
-    args: { name: '张伟', amount: 200 },
+    args: { name: '张伟', amount: '200.00' },
     tier: 'YELLOW',
     requiresMfa: false,
     summary: SUMMARY,

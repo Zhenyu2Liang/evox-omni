@@ -30,7 +30,7 @@ interface PendingRow {
 /** Build a parked `transfer_money` row exactly as the gateway would persist it. */
 function parkedTransfer(
   id: string,
-  amount: number,
+  amount: string,
   opts: { userId?: string; status?: string; toolName?: string; argsJson?: string } = {},
 ): PendingRow {
   return {
@@ -74,55 +74,55 @@ function stubClient(rows: PendingRow[], ledgerRows: Iterable<string> = []): Pris
 
 describe('risk-engine · computeInFlightTransferTotal · ledger dedup', () => {
   it('EXCLUDES an in-flight action whose ledger row already exists (counted once, via executed)', async () => {
-    const action = parkedTransfer('act_ledgered', 600);
+    const action = parkedTransfer('act_ledgered', '600.00');
     const client = stubClient([action], [idempotentTransferTxId(USER_ID, 'act_ledgered')]);
 
-    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe(0);
+    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe('0.00');
   });
 
   it('COUNTS an in-flight action with no ledger row yet', async () => {
-    const client = stubClient([parkedTransfer('act_parked', 600)]);
+    const client = stubClient([parkedTransfer('act_parked', '600.00')]);
 
-    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe(600);
+    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe('600.00');
   });
 
   it('preserves the concurrency defence: two ¥600 in-flight actions with NO ledger rows sum to ¥1200', async () => {
-    const client = stubClient([parkedTransfer('act_a', 600), parkedTransfer('act_b', 600)]);
+    const client = stubClient([parkedTransfer('act_a', '600.00'), parkedTransfer('act_b', '600.00')]);
 
     // Both are still parked (never ledgered), so both count → the second confirm sees 1200 > 1000 → RED.
-    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe(1200);
+    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe('1200.00');
   });
 
   it('still drops the action being evaluated via excludeActionId', async () => {
-    const client = stubClient([parkedTransfer('act_a', 600), parkedTransfer('act_b', 600)]);
+    const client = stubClient([parkedTransfer('act_a', '600.00'), parkedTransfer('act_b', '600.00')]);
 
-    expect(await computeInFlightTransferTotal(client, USER_ID, 'act_a')).toBe(600);
+    expect(await computeInFlightTransferTotal(client, USER_ID, 'act_a')).toBe('600.00');
   });
 
   it('counts only the un-ledgered side of a mix (A ledgered, B not)', async () => {
     const client = stubClient(
-      [parkedTransfer('act_a', 600), parkedTransfer('act_b', 600)],
+      [parkedTransfer('act_a', '600.00'), parkedTransfer('act_b', '600.00')],
       [idempotentTransferTxId(USER_ID, 'act_a')],
     );
 
-    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe(600);
+    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe('600.00');
   });
 
   it('applies the ledger dedup together with excludeActionId', async () => {
     const client = stubClient(
-      [parkedTransfer('act_a', 600), parkedTransfer('act_b', 600), parkedTransfer('act_c', 300)],
+      [parkedTransfer('act_a', '600.00'), parkedTransfer('act_b', '600.00'), parkedTransfer('act_c', '300.00')],
       [idempotentTransferTxId(USER_ID, 'act_a')],
     );
 
     // A is ledgered (dropped by dedup), B is the action being evaluated (dropped by exclude) → only C.
-    expect(await computeInFlightTransferTotal(client, USER_ID, 'act_b')).toBe(300);
+    expect(await computeInFlightTransferTotal(client, USER_ID, 'act_b')).toBe('300.00');
   });
 
   it('fails closed on a malformed/non-finite amount instead of undercounting authorized work', async () => {
     const client = stubClient([
-      parkedTransfer('act_bad_json', 0, { argsJson: '{ not json' }),
-      parkedTransfer('act_bad_amount', 0, { argsJson: JSON.stringify({ amount: 'abc' }) }),
-      parkedTransfer('act_ok', 250),
+      parkedTransfer('act_bad_json', '0.00', { argsJson: '{ not json' }),
+      parkedTransfer('act_bad_amount', '0.00', { argsJson: JSON.stringify({ amount: 'abc' }) }),
+      parkedTransfer('act_ok', '250.00'),
     ]);
 
     await expect(computeInFlightTransferTotal(client, USER_ID))
@@ -131,13 +131,13 @@ describe('risk-engine · computeInFlightTransferTotal · ledger dedup', () => {
 
   it('scopes to the given userId and to transfer_money actions only', async () => {
     const client = stubClient([
-      parkedTransfer('act_mine', 100),
-      parkedTransfer('act_other_user', 700, { userId: 'user_other' }),
-      parkedTransfer('act_other_tool', 800, { toolName: 'set_card_limit' }),
-      parkedTransfer('act_pending', 900, { status: 'pending' }),
+      parkedTransfer('act_mine', '100.00'),
+      parkedTransfer('act_other_user', '700.00', { userId: 'user_other' }),
+      parkedTransfer('act_other_tool', '800.00', { toolName: 'set_card_limit' }),
+      parkedTransfer('act_pending', '900.00', { status: 'pending' }),
     ]);
 
-    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe(100);
+    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe('100.00');
   });
 
   it('returns 0 without querying the ledger when there are no in-flight rows', async () => {
@@ -152,7 +152,7 @@ describe('risk-engine · computeInFlightTransferTotal · ledger dedup', () => {
       },
     } as unknown as PrismaLike;
 
-    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe(0);
+    expect(await computeInFlightTransferTotal(client, USER_ID)).toBe('0.00');
     expect(ledgerQueried).toBe(false);
   });
 });

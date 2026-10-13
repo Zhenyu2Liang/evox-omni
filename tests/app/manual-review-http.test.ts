@@ -13,6 +13,7 @@ import { claimTaskExecution, claimTaskStatus } from '@/lib/db/repositories/task'
 import { MFA_CODE } from '@/lib/constants';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
+import * as executionFences from '@/agent/execution-fence';
 
 type Handler = (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;
 const p = getTestPrisma;
@@ -29,7 +30,7 @@ async function call(handler: Handler, sessionId?: string, body?: object, id = 'u
   return { http: response.status, body: await response.json() };
 }
 
-async function failedPlan(amount = 200) {
+async function failedPlan(amount = '200') {
   const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
   await runSubmitPlan(DEMO_USER_ID, { goal: '异常查询后转账', nodes: [
     { id: 'before', name: '查询卡片', kind: 'tool', tool: 'get_cards', args: {}, dependencies: [] },
@@ -50,7 +51,7 @@ async function open(sessionId: string, target: { taskId?: string; actionId?: str
 }
 
 async function money() {
-  return { balance: (await p().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance,
+  return { balance: (await p().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor,
     ledger: await p().transaction.findMany({ where: { userId: DEMO_USER_ID, channel: 'TRANSFER' }, orderBy: { id: 'asc' } }) };
 }
 
@@ -69,7 +70,7 @@ describe('[integration] manual handoff', () => {
     expect((await p().agentTask.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('failed');
   });
 
-  it.each([200, 2000])('manual continue for %s still parks for original confirmation/MFA and preserves prior successes', async (amount) => {
+  it.each(['200', '2000'])('manual continue for %s still parks for original confirmation/MFA and preserves prior successes', async (amount) => {
     const { sessionId, taskId } = await failedPlan(amount);
     const before = await money();
     const previous = await p().agentTaskNode.findFirstOrThrow({ where: { taskId, nodeId: 'before' } });
@@ -81,18 +82,18 @@ describe('[integration] manual handoff', () => {
     expect(resumed.http).toBe(200);
     expect(resumed.body.data.status).toBe('waiting_confirmation');
     const approval = await p().pendingAction.findFirstOrThrow({ where: { taskId } });
-    expect(approval.requiresMfa).toBe(amount > 1000);
+    expect(approval.requiresMfa).toBe(amount === '2000');
     expect(await money()).toEqual(before);
     const after = await p().agentTaskNode.findFirstOrThrow({ where: { taskId, nodeId: 'before' } });
     expect(after.startedAt).toEqual(previous.startedAt);
     expect(after.output).toEqual(previous.output);
-    if (amount > 1000) {
+    if (amount === '2000') {
       const confirmed = await call(confirmPost, sessionId, {}, approval.id);
       expect(confirmed.body.data.requiresMfa).toBe(true);
       expect(await money()).toEqual(before);
       expect((await call(verifyPost, sessionId, { code: MFA_CODE }, approval.id)).body.data.ok).toBe(true);
     } else expect((await call(confirmPost, sessionId, {}, approval.id)).body.data.ok).toBe(true);
-    expect((await money()).balance).toBe(before.balance - amount);
+    expect((await money()).balance).toBe(before.balance - BigInt(amount) * 100n);
     expect((await p().agentTask.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('success');
     expect(await p().auditLog.count({ where: { dedupeKey: { startsWith: `manual:${review.id}:` } } })).toBe(2);
   });
@@ -100,7 +101,7 @@ describe('[integration] manual handoff', () => {
   it('stopping a failed plan preserves a previously posted debit and its executed action', async () => {
     const { sessionId, taskId } = await failedPlan();
     const outcome = await executeGatedTool({ sessionId, userId: DEMO_USER_ID, toolName: 'transfer_money',
-      args: { name: '张伟', amount: 100 }, userRequest: '已完成的转账' });
+      args: { name: '张伟', amount: '100' }, userRequest: '已完成的转账' });
     expect((await call(confirmPost, sessionId, {}, outcome.pendingActionId!)).body.data.ok).toBe(true);
     await p().pendingAction.update({ where: { id: outcome.pendingActionId! }, data: { taskId, nodeId: 'before' } });
     const before = await money();
@@ -143,7 +144,7 @@ describe('[integration] manual handoff', () => {
     const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
     const before = await money();
     const parked = await executeGatedTool({ sessionId, userId: DEMO_USER_ID, toolName: 'transfer_money',
-      args: { name: '张伟', amount: 30000 }, userRequest: '给张伟转30000元' });
+      args: { name: '张伟', amount: '30000' }, userRequest: '给张伟转30000元' });
     const failed = await call(verifyPost, sessionId, { code: MFA_CODE }, parked.pendingActionId!);
     expect(failed.body.data.ok).toBe(false);
     expect(failed.body.data.status).toBe('failed');
@@ -193,12 +194,135 @@ describe('[integration] manual handoff', () => {
     expect((await p().agentTask.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('failed');
   });
 
-  it('refuses handoff of an executing or terminal plan', async () => {
+  it('refuses handoff of terminal plans', async () => {
     const { sessionId, taskId } = await failedPlan();
-    for (const status of ['running', 'success', 'cancelled']) {
+    for (const status of ['success', 'cancelled']) {
       await p().agentTask.update({ where: { id: taskId }, data: { status } });
       expect((await call(openPost, sessionId, { taskId, reason: '尝试接管当前任务' })).http).toBe(409);
     }
     expect(await p().manualReview.count()).toBe(0);
+  });
+
+  it('requests control of a running workflow without rotating its live claim', async () => {
+    const { sessionId, taskId } = await failedPlan();
+    await p().agentTaskNode.updateMany({ where: { taskId }, data: { status: 'pending', error: null } });
+    await p().agentTaskNode.updateMany({ where: { taskId, nodeId: 'read' }, data: { status: 'running' } });
+    await p().agentTask.update({ where: { id: taskId }, data: {
+      status: 'running', executionToken: 'live-executor', executionClaimedAt: new Date(),
+    } });
+    const before = await money();
+    const review = await open(sessionId, { taskId });
+    const stored = await p().agentTask.findUniqueOrThrow({ where: { id: taskId } });
+    expect(stored.status).toBe('paused');
+    expect(stored.executionToken).toBe('live-executor');
+    const state = (await call(inboxGet, sessionId)).body.data.reviews[0];
+    expect(state.handoffStatus).toBe('human_review_requested');
+    expect(state.mayStop).toBe(false);
+    expect(state.mayResume).toBe(false);
+    expect((await call(resolvePost, sessionId, { resolution: 'resume', notes: 'Release workflow after inspection' }, review.id)).http).toBe(409);
+    expect(await money()).toEqual(before);
+  });
+
+  it('releases a parked workflow with its original approval identity intact', async () => {
+    const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+    const result = await runSubmitPlan(DEMO_USER_ID, { goal: 'Review before transfer', nodes: [
+      { id: 'pay', name: 'Transfer', kind: 'tool', tool: 'transfer_money',
+        args: { name: '\u5f20\u4f1f', amount: '200.00' }, dependencies: [] },
+    ] }, { sessionId, runTool: (toolName, args, ctx) => executeGatedTool({
+      sessionId, userId: DEMO_USER_ID, toolName, args, userRequest: 'Review before transfer', ...ctx,
+    }) });
+    expect(result.ok).toBe(true);
+    const task = await p().agentTask.findFirstOrThrow({ where: { sessionId } });
+    const approval = await p().pendingAction.findFirstOrThrow({ where: { taskId: task.id } });
+    const before = await money();
+    const review = await open(sessionId, { taskId: task.id });
+    expect((await call(inboxGet, sessionId)).body.data.reviews[0].mayResume).toBe(true);
+    const blocked = await call(confirmPost, sessionId, {}, approval.id);
+    expect(blocked.http).toBe(200);
+    expect(blocked.body.data.ok).toBe(false);
+    expect(blocked.body.data.status).toBe('pending');
+    expect(blocked.body.data.message).toContain('manual review');
+    expect(await money()).toEqual(before);
+    const resolved = await call(resolvePost, sessionId, { resolution: 'resume', notes: 'Continue with original user authorization' }, review.id);
+    expect(resolved.http).toBe(200);
+    expect(resolved.body.data.workflowStatus).toBe('waiting_confirmation');
+    expect(await p().pendingAction.count({ where: { taskId: task.id } })).toBe(1);
+    expect((await p().pendingAction.findUniqueOrThrow({ where: { id: approval.id } })).status).toBe('pending');
+    expect(await money()).toEqual(before);
+    expect((await call(confirmPost, sessionId, {}, approval.id)).body.data.ok).toBe(true);
+    expect((await money()).balance).toBe(before.balance - 20_000n);
+  });
+
+  it('lets an already-started automatic command finish and pauses before the next step', async () => {
+    const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+    let entered!: () => void;
+    const atFence = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const buildFence = executionFences.buildAutomaticWriteFence;
+    vi.spyOn(executionFences, 'buildAutomaticWriteFence').mockImplementationOnce(async (...args) => {
+      const fence = await buildFence(...args);
+      entered();
+      await barrier;
+      return fence;
+    });
+    const running = runSubmitPlan(DEMO_USER_ID, { goal: 'Operator checkpoint after budget', nodes: [
+      { id: 'budget', name: 'Create budget', kind: 'tool', tool: 'reserve_budget', dependencies: [],
+        args: { name: 'operator-checkpoint', amount: '12.34' } },
+      { id: 'balance', name: 'Read balance', kind: 'tool', tool: 'get_balance', args: {}, dependencies: ['budget'] },
+    ] }, { sessionId, runTool: (toolName, args, ctx) => executeGatedTool({
+      sessionId, userId: DEMO_USER_ID, toolName, args, userRequest: 'Operator checkpoint after budget', ...ctx,
+    }) });
+    await atFence;
+    const task = await p().agentTask.findFirstOrThrow({ where: { sessionId } });
+    const review = await open(sessionId, { taskId: task.id });
+    expect((await p().agentTask.findUniqueOrThrow({ where: { id: task.id } })).executionToken).toBe(task.executionToken);
+    release();
+    const result = await running;
+    expect(result.ok).toBe(true);
+    const stopped = await p().agentTask.findUniqueOrThrow({ where: { id: task.id }, include: { nodes: true } });
+    expect(stopped.status).toBe('paused');
+    expect(stopped.nodes.find(node => node.nodeId === 'budget')?.status).toBe('success');
+    expect(stopped.nodes.find(node => node.nodeId === 'balance')?.status).toBe('pending');
+    expect(await p().budget.count({ where: { name: 'operator-checkpoint', amountMinor: 1234n } })).toBe(1);
+    expect((await call(inboxGet, sessionId)).body.data.reviews[0].handoffStatus).toBe('operator_controlled');
+    expect((await call(resolvePost, sessionId, { resolution: 'resume', notes: 'Continue after the safe checkpoint' }, review.id)).http).toBe(200);
+    expect((await call(controlPost, sessionId, { action: 'resume' }, task.id)).body.data.status).toBe('success');
+    expect(await p().budget.count({ where: { name: 'operator-checkpoint' } })).toBe(1);
+  });
+
+  it('retains an already-confirmed debit while an operator request blocks future authorization', async () => {
+    const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+    await runSubmitPlan(DEMO_USER_ID, { goal: 'Retain confirmed debit', nodes: [
+      { id: 'pay', name: 'Transfer', kind: 'tool', tool: 'transfer_money', dependencies: [],
+        args: { name: '\u5f20\u4f1f', amount: '200.00' } },
+    ] }, { sessionId, runTool: (toolName, args, ctx) => executeGatedTool({
+      sessionId, userId: DEMO_USER_ID, toolName, args, userRequest: 'Retain confirmed debit', ...ctx,
+    }) });
+    const task = await p().agentTask.findFirstOrThrow({ where: { sessionId } });
+    const approval = await p().pendingAction.findFirstOrThrow({ where: { taskId: task.id } });
+    let entered!: () => void;
+    const atFence = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    const buildFence = executionFences.buildConfirmFence;
+    vi.spyOn(executionFences, 'buildConfirmFence').mockImplementationOnce(async (...args) => {
+      const fence = await buildFence(...args);
+      entered();
+      await barrier;
+      return fence;
+    });
+    const before = await money();
+    const confirming = call(confirmPost, sessionId, {}, approval.id);
+    await atFence;
+    const review = await open(sessionId, { taskId: task.id });
+    expect((await call(inboxGet, sessionId)).body.data.reviews[0].handoffStatus).toBe('human_review_requested');
+    release();
+    expect((await confirming).body.data.ok).toBe(true);
+    expect((await money()).balance).toBe(before.balance - 20_000n);
+    expect((await p().pendingAction.findUniqueOrThrow({ where: { id: approval.id } })).status).toBe('executed');
+    expect((await p().agentTask.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('paused');
+    expect((await call(resolvePost, sessionId, { resolution: 'stop', notes: 'Keep the committed debit and stop automatic work' }, review.id)).http).toBe(200);
+    expect((await money()).balance).toBe(before.balance - 20_000n);
   });
 });

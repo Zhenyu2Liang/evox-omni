@@ -34,7 +34,7 @@ function birthdayPlanArgs(): { goal: string; nodes: Record<string, unknown>[] } 
         dependencies: [],
         kind: 'tool',
         tool: 'reserve_budget',
-        args: { name: BUDGET_NAME, amount: 1000, purpose: '生日' },
+        args: { name: BUDGET_NAME, amount: '1000', purpose: '生日' },
       },
       {
         id: 'remind',
@@ -91,7 +91,7 @@ describe('Scenario 12 — 生日预算计划 (reserve_budget + create_scheduled_
     expect(budgetNode).toBeDefined();
     expect(budgetNode?.kind).toBe('tool');
     expect(budgetNode?.tool).toBe('reserve_budget');
-    expect(budgetNode?.args).toMatchObject({ name: BUDGET_NAME, amount: 1000, purpose: '生日' });
+    expect(budgetNode?.args).toMatchObject({ name: BUDGET_NAME, amount: '1000', purpose: '生日' });
 
     const remindNode = plan.nodes.find((node) => node.id === 'remind');
     expect(remindNode).toBeDefined();
@@ -148,7 +148,7 @@ describe('Scenario 12 — 生日预算计划 (reserve_budget + create_scheduled_
     // The GREEN node returned the created BudgetView (no confirmation).
     expect(budgetResult?.output).toMatchObject({
       name: BUDGET_NAME,
-      amount: 1000,
+      amount: '1000.00',
       purpose: '生日',
       status: 'RESERVED',
     });
@@ -158,7 +158,7 @@ describe('Scenario 12 — 生日预算计划 (reserve_budget + create_scheduled_
       where: { userId: DEMO_USER_ID, name: BUDGET_NAME },
     });
     expect(budgetRow).not.toBeNull();
-    expect(budgetRow?.amount).toBe(1000);
+    expect(budgetRow?.amountMinor).toBe(100_000n);
     expect(budgetRow?.purpose).toBe('生日');
     expect(budgetRow?.status).toBe('RESERVED');
 

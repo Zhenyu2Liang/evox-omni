@@ -12,6 +12,8 @@
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { executeGatedTool, getOrCreateSession } from '@/agent';
+import { createToolRegistry } from '@/agent/tools';
+import { buildAutomaticWriteFence } from '@/agent/execution-fence';
 import { auditStore } from '@/audit/audit-logger';
 import { nodeExecutionKey } from '@/lib/ledger';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
@@ -28,7 +30,7 @@ function reservePlanNode(sessionId: string, taskId: string, nodeId: string) {
     userId,
     sessionId,
     toolName: 'reserve_budget',
-    args: { name: '生日预算', amount: 1000 },
+    args: { name: '生日预算', amount: '1000' },
     userRequest: '预留1000元生日预算',
     taskId,
     nodeId,
@@ -36,13 +38,14 @@ function reservePlanNode(sessionId: string, taskId: string, nodeId: string) {
 }
 
 /** One standalone GREEN write carrying its own key. */
-function reserveStandalone(sessionId: string, idempotencyKey: string) {
-  return executeGatedTool({
-    userId,
+async function reserveStandalone(sessionId: string, idempotencyKey: string) {
+  return createToolRegistry(userId).executeDirect('reserve_budget', {
+    name: 'Travel budget', amount: '500.00',
+  }, {
     sessionId,
-    toolName: 'reserve_budget',
-    args: { name: '旅行预算', amount: 500, idempotencyKey },
-    userRequest: '预留500元旅行预算',
+    idempotencyKey,
+    fence: await buildAutomaticWriteFence(sessionId),
+    userRequest: 'Reserve 500 for travel',
   });
 }
 
@@ -82,10 +85,11 @@ it('[integration] a GREEN reserve_budget write is audited with its tool args, id
   expect(JSON.parse(row.toolArgs!)).toMatchObject({
     userId,
     name: '生日预算',
-    amount: 1000,
+    amount: '1000.00',
     idempotencyKey: key,
   });
-  expect(JSON.parse(row.toolResult!)).toMatchObject({ ok: true, data: { id: budget.id, amount: 1000 } });
+  expect(await prisma.executionReceipt.count({ where: { userId, key } })).toBe(1);
+  expect(JSON.parse(row.toolResult!)).toMatchObject({ ok: true, data: { id: budget.id, amount: '1000.00' } });
   expect(row.dedupeKey).toBe(`write:reserve_budget:${userId}:key:${key}`);
   expect(row.dedupeKey?.startsWith('exec:')).toBe(false);
 });
@@ -104,7 +108,7 @@ it('[integration] the SAME execution identity double-writes neither the side eff
 
   const prisma = getTestPrisma();
   expect(await prisma.budget.count({ where: { userId, name: '生日预算' } })).toBe(1);
-  expect(await prisma.budget.count({ where: { userId, name: '旅行预算' } })).toBe(1);
+  expect(await prisma.budget.count({ where: { userId, name: 'Travel budget' } })).toBe(1);
   // One audit per (tool, execution identity) — the replay path writes/audits nothing.
   expect(await prisma.auditLog.count({ where: { toolName: 'reserve_budget' } })).toBe(2);
   expect(await prisma.auditLog.count({ where: { dedupeKey: `write:reserve_budget:${userId}:key:${nodeExecutionKey('task_write_audit', 'node_write_audit')}` } })).toBe(1);
@@ -145,7 +149,7 @@ it('[integration] the existing gated audit identity is unchanged (exec:<actionId
     userId,
     sessionId,
     toolName: 'transfer_money',
-    args: { name: '张伟', amount: 200 },
+    args: { name: '张伟', amount: '200' },
     userRequest: '给张伟转200元',
   });
   expect(parked.pendingActionId).toBeTruthy();

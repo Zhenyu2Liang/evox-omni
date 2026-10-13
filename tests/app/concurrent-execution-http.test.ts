@@ -74,11 +74,12 @@ import {
 /** Primary 活期账户 (¥23,580) — the funding account the parked transfer debits. */
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 /** Recipient 张伟 — the parked transfer's payee (the money-moved-at-most-once probe). */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** The parked transfer amount (≤ ¥1000 ⇒ YELLOW / confirmation-only). */
-const TRANSFER_AMOUNT = 200;
+const TRANSFER_AMOUNT = '200';
 /** How long a barrier waits for its second arrival before falling back (guards against a HANG). */
 const BARRIER_TIMEOUT_MS = 3000;
 
@@ -131,7 +132,7 @@ function balanceNode(id: string, deps: string[] = []): SeedNode {
 }
 
 /** The 🟢 GREEN node used as the COUNTABLE execution probe (one `Budget` row per real execution). */
-function budgetNode(id: string, budgetName: string, amount: number, deps: string[] = []): SeedNode {
+function budgetNode(id: string, budgetName: string, amount: string, deps: string[] = []): SeedNode {
   return {
     id,
     name: '预留并发预算',
@@ -143,7 +144,7 @@ function budgetNode(id: string, budgetName: string, amount: number, deps: string
 }
 
 /** The YELLOW `transfer_money` node (gated → PARKS for a human decision instead of executing). */
-function transferNode(id: string, amount: number, deps: string[] = []): SeedNode {
+function transferNode(id: string, amount: string, deps: string[] = []): SeedNode {
   return {
     id,
     name: `给${ZHANGWEI.name}转账`,
@@ -199,9 +200,9 @@ function executableActions(sessionId: string) {
 }
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /**
@@ -411,8 +412,8 @@ async function expectExactlyOnceLedgerAndConsistentState(state: {
   // (1) EXACTLY-ONCE MONEY.
   const transfers = await zhangweiTransfers();
   expect(transfers).toHaveLength(1);
-  expect(transfers[0]!.amount).toBe(-TRANSFER_AMOUNT);
-  expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+  expect(transfers[0]!.amountMinor).toBe(-moneyToCents(TRANSFER_AMOUNT));
+  expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
 
   // (2) The human decision executed the ORIGINAL action exactly once — and nothing else ever did.
   const settled = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: actionId } });
@@ -455,7 +456,7 @@ async function expectExactlyOnceLedgerAndConsistentState(state: {
   const ledger = await zhangweiTransfers();
   expect(ledger).toHaveLength(1); // still exactly ONE ledger row
   expect(ledger[0]!.id).toBe(transfers[0]!.id); // the SAME row — no second debit
-  expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+  expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
 }
 
 /* -------------------------------------------------------------------------------- lifecycle */
@@ -479,7 +480,7 @@ describe('[integration] WINDOW A — a control request landing after the node si
       DEMO_USER_ID,
       {
         goal: '先读余额，再预留并发预算',
-        nodes: [balanceNode('n1'), budgetNode('n2', marker, 1200, ['n1'])],
+        nodes: [balanceNode('n1'), budgetNode('n2', marker, '1200', ['n1'])],
       },
       { sessionId, runTool: held.runTool },
     );
@@ -527,7 +528,7 @@ describe('[integration] WINDOW A — a control request landing after the node si
       DEMO_USER_ID,
       {
         goal: '先读余额，再预留并发预算',
-        nodes: [balanceNode('n1'), budgetNode('n2', marker, 1200, ['n1'])],
+        nodes: [balanceNode('n1'), budgetNode('n2', marker, '1200', ['n1'])],
       },
       { sessionId, runTool: held.runTool },
     );
@@ -561,7 +562,7 @@ describe('[integration] WINDOW B — the confirm-continuation racing a concurren
   /** Seed the shared Window B plan: 🟢 `reserve_budget` (done) → YELLOW `transfer_money` (PARKED). */
   async function seedParkedTransferPlan(marker: string) {
     const seeded = await seedPlan('先预留预算，再给张伟转200元', [
-      budgetNode('n1', marker, 600),
+      budgetNode('n1', marker, '600'),
       transferNode('n2', TRANSFER_AMOUNT, ['n1']),
     ]);
     // Preconditions: n1 already executed (ONE Budget row); n2 is PARKED on a real plan-linked action.

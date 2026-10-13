@@ -53,13 +53,13 @@ import { CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 /** Recipient 张伟 — the parked transfer's payee. */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** The parked transfer amount (≤ ¥1000 ⇒ YELLOW / confirmation-only). */
-const TRANSFER_AMOUNT = 200;
+const TRANSFER_AMOUNT = '200';
 /** The pre-existing 🟢 node's countable side-effect marker — exactly ONE `Budget` row per execution. */
 const MARKER_BUDGET = '无主续行预算A';
 /** The token a simulated takeover stamps on the plan WHILE the recorder is writing. */
 const TAKEOVER_TOKEN = 'takeover-b';
 /** The decided outcome (branch-3 happy path) recorded onto the parked node. */
-const DECIDED_DATA = { status: 'executed', recipient: '张伟', amount: 200 };
+const DECIDED_DATA = { status: 'executed', recipient: '张伟', amount: '200.00' };
 
 /* ----------------------------------------------------------------------------- plan seeding */
 
@@ -74,7 +74,7 @@ interface SeedNode {
 }
 
 /** A 🟢 GREEN node used as the COUNTABLE execution probe (one `Budget` row per real execution). */
-function budgetNode(id: string, budgetName: string, amount: number, deps: string[] = []): SeedNode {
+function budgetNode(id: string, budgetName: string, amount: string, deps: string[] = []): SeedNode {
   return {
     id,
     name: '预留预算',
@@ -86,7 +86,7 @@ function budgetNode(id: string, budgetName: string, amount: number, deps: string
 }
 
 /** The YELLOW `transfer_money` node (gated → PARKS for a human decision instead of executing). */
-function transferNode(id: string, amount: number, deps: string[] = []): SeedNode {
+function transferNode(id: string, amount: string, deps: string[] = []): SeedNode {
   return {
     id,
     name: `给${ZHANGWEI.name}转账`,
@@ -173,7 +173,7 @@ async function seedParkedNoOwnerPlan(): Promise<SeededPark> {
     DEMO_USER_ID,
     {
       goal: '先预留一笔预算，再给张伟转200元',
-      nodes: [budgetNode('n1', MARKER_BUDGET, 600), transferNode('n2', TRANSFER_AMOUNT, ['n1'])],
+      nodes: [budgetNode('n1', MARKER_BUDGET, '600'), transferNode('n2', TRANSFER_AMOUNT, ['n1'])],
     },
     { sessionId, runTool: gatewayRunTool(sessionId) },
   );

@@ -11,6 +11,7 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import type { BalanceView } from '@/banking-sdk';
+import { moneyToCents } from '@/lib/money';
 import { security } from '@/security';
 import { buildFauxAgent, final, tool } from '../helpers/faux-agent';
 import {
@@ -57,7 +58,7 @@ describe('Scenario 1 — 查询余额 (GREEN auto-execute)', () => {
     const seeded = await prisma.account.findUnique({ where: { id: CHECKING.id } });
     expect(seeded).not.toBeNull();
     expect(seeded!.name).toBe('活期账户');
-    expect(seeded!.balance).toBe(23580);
+    expect(seeded!.balanceMinor).toBe(moneyToCents('23580.00'));
 
     // The scripted model proposes get_balance and the turn runs to completion.
     const sessionId = newSessionId('s1');
@@ -100,12 +101,12 @@ describe('Scenario 1 — 查询余额 (GREEN auto-execute)', () => {
     // The card payload is the SDK's `BalanceView` (see agent/card-emitter.ts).
     const data = cards[0].data as BalanceView;
     expect(data.currency).toBe('CNY');
-    expect(data.totalAvailable).toBe(73580);
+    expect(data.totalAvailable).toBe('73580.00');
 
     const checking = data.accounts.find((account) => account.id === CHECKING.id);
     expect(checking).toBeDefined();
     expect(checking!.name).toBe('活期账户');
-    expect(checking!.balance).toBe(23580);
+    expect(checking!.balance).toBe('23580.00');
     expect(checking!.currency).toBe('CNY');
   });
 

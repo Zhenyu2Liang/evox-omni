@@ -112,8 +112,8 @@ owned by `./app`; the component layer only depends on this shape:
 - `POST /api/actions/:id/cancel` — body `{}` → `ChatTurnResponse`.
 - `GET /api/actions` — body none → the caller session's `PendingAction` rows requiring attention: the
   NON-TERMINAL `pending`/`awaiting_mfa` decisions PLUS the TERMINAL `needs_reconciliation` manual-reconciliation
-  entries (accepted as a bare array or `{ actions: [...] }`). Drives the **refresh restore** of both the
-  in-flight confirm/MFA decision and the display-only reconciliation list; read tolerantly by
+  entries in `{ ok:true, data: [...] }` with complete summaries and explicit attention. Drives the **refresh restore** of both the
+  in-flight confirm/MFA decision and the display-only reconciliation list; validated strictly by
   `fetchPendingActions` (never throws → best-effort `[]`). **Owned by `./app` (see Notes for Agents).**
 - `GET /api/tasks/:id` — `{ ok:true, data: TaskPlan }` (plan refresh recovery); `POST /api/tasks/:id` body
   `{ action: 'pause'|'resume'|'cancel'|'retry' }` → `{ ok:true, data: TaskPlan }` (snapshot AFTER the control).

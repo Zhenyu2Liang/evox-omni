@@ -78,7 +78,7 @@ describe('planner/executor · ordering + happy path', () => {
   });
 
   it('a kind:tool node whose runTool returns { ok:true, data } → node success carrying the data/summary', async () => {
-    const data = { balance: 12345, currency: 'CNY' };
+    const data = { balance: '12345.00', currency: 'CNY' };
     const h = harness(() => ({ ok: true, data, summary: 'balance fetched' }));
     const out = await runPlan(makePlan([toolNode('a')]), h.deps, { now: () => NOW });
     const r = findResult(out, 'a') as TaskNodeResult & { summary?: string };
@@ -171,6 +171,33 @@ describe('planner/executor · conditions + failure isolation', () => {
 });
 
 describe('planner/executor · observability + persistence', () => {
+  it('settles invalid condition output as failed while continuing an independent branch', async () => {
+    const h = harness(() => ({ ok: true, data: { totalAvailable: '0.20' } }), { persist: true });
+    const plan = makePlan([
+      toolNode('balance'),
+      { id: 'condition', name: 'Check balance', kind: 'condition', dependencies: ['balance'],
+        condition: { path: 'balance.missing', op: '>', value: '0.00' } },
+      toolNode('dependent', { dependencies: ['condition'] }),
+      toolNode('independent'),
+    ]);
+    const out = await runPlan(plan, h.deps, { now: () => NOW });
+    expect(out.status).toBe('failed');
+    expect(findResult(out, 'condition')?.status).toBe('failed');
+    expect(findResult(out, 'condition')?.error).toContain('balance.missing');
+    expect(findResult(out, 'dependent')?.status).toBe('skipped');
+    expect(findResult(out, 'independent')?.status).toBe('success');
+    expect(h.persisted.at(-1)?.status).toBe('failed');
+  });
+
+  it('persists a node transition before publishing the update', async () => {
+    const operations: string[] = [];
+    await runPlan(makePlan([toolNode('a')]), {
+      runTool: async () => ({ ok: true, data: {} }),
+      persistNode: async (_planId, node) => { operations.push(`persist:${node.status}`); },
+      onNodeUpdate: node => { operations.push(`publish:${node.status}`); },
+    });
+    expect(operations).toEqual(['persist:running', 'publish:running', 'persist:success', 'publish:success']);
+  });
   it('deps.onNodeUpdate is emitted on every node status change', async () => {
     const h = harness(() => ({ ok: true, data: {} }));
     await runPlan(makePlan([toolNode('a')]), h.deps, { now: () => NOW });

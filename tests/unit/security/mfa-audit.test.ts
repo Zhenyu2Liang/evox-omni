@@ -36,7 +36,7 @@ function seedAction(sessionId: string) {
     sessionId,
     userId: DEMO_USER_ID,
     toolName: 'transfer_money',
-    args: { amount: 5000, toName: '张伟' },
+    args: { amount: '5000.00', contactId: 'contact_zhangwei' },
     tier: 'RED',
     requiresMfa: true,
     status: 'awaiting_mfa',

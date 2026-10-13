@@ -111,7 +111,7 @@ const gateway = security.gateway.securityGateway;
 /** The demo request ("给张伟转200元，备注AA"), its recipient and a YELLOW amount (≤ ¥1000). */
 const USER_MESSAGE = '给张伟转200元，备注AA';
 const RECIPIENT = CONTACTS[0];
-const YELLOW_AMOUNT = 200;
+const YELLOW_AMOUNT = '200.00';
 /** The real failure the SDK/tool reported (must never be rephrased as a success). */
 const FAILURE_TEXT = '付款账户余额不足，转账未完成';
 
@@ -121,7 +121,7 @@ function lastRuntime(): { agent: { state: { messages: ToolResultMessage[] } } } 
 }
 
 /** Propose a `transfer_money` call through the REAL gateway; assert it was gated + persisted. */
-async function parkTransfer(sessionId: string, amount: number): Promise<string> {
+async function parkTransfer(sessionId: string, amount: string): Promise<string> {
   const auth = await gateway.handleToolCall({
     sessionId,
     userId: DEMO_USER_ID,

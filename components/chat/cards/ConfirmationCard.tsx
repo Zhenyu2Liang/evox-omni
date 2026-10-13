@@ -106,7 +106,7 @@ export function ConfirmationCard(p: ConfirmationCardProps) {
             <dd className="text-right font-medium text-banking-navy">{field.value}</dd>
           </div>
         ))}
-        {typeof action.amount === 'number' && !action.fields.some(field => field.label === '金额') ? (
+        {typeof action.amount === 'string' && !action.fields.some(field => field.label === '金额') ? (
           <div className="flex items-center justify-between gap-4 border-t border-banking-navy/10 pt-2 text-sm">
             <dt className="text-banking-navy/70">金额</dt>
             <dd className="font-semibold text-banking-deep">

@@ -6,6 +6,8 @@ import type { Account } from '@prisma/client';
 import { demoNow } from '../lib/clock';
 import { accounts } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
+import { centsToMoney } from '../lib/money';
+import { runInTransaction } from './tx';
 import type { AccountType, AccountView, BalanceView } from './types';
 
 /** Map a persisted `Account` row onto the public `AccountView` view model. */
@@ -16,23 +18,22 @@ function toAccountView(row: Account): AccountView {
     name: row.name,
     // The seed already stores a masked value (e.g. `****8821`).
     numberMasked: row.number,
-    balance: row.balance,
+    balance: centsToMoney(row.balanceMinor),
     currency: row.currency,
   };
 }
 
 /** Total available balance plus per-account breakdown for the user. */
 export async function getBalance(userId: string): Promise<BalanceView> {
-  const [totalAvailable, rows] = await Promise.all([
-    accounts.getTotalBalance(userId),
-    accounts.listAccounts(userId),
-  ]);
-  return {
-    totalAvailable,
-    currency: 'CNY',
-    accounts: rows.map(toAccountView),
-    asOf: demoNow(),
-  };
+  return runInTransaction(async () => {
+    const rows = await accounts.listAccounts(userId);
+    return {
+      totalAvailable: centsToMoney(rows.reduce((total, row) => total + row.balanceMinor, 0n)),
+      currency: 'CNY',
+      accounts: rows.map(toAccountView),
+      asOf: demoNow(),
+    };
+  });
 }
 
 /** All accounts owned by the user. */

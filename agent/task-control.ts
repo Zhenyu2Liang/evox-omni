@@ -63,6 +63,7 @@ import { getSession } from '@/lib/db/repositories/session';
 import { assertNoOpenManualReview } from '@/lib/db/repositories/manualReview';
 import {
   getPendingActionPlanLink,
+  listPendingActionsByTask,
   revokePendingActionsByTask,
 } from '@/lib/db/repositories/pendingAction';
 import {
@@ -647,7 +648,7 @@ function buildPlanDeps(
     // Execution-right re-check: consulted AFTER an async node notification resolves and BEFORE the
     // next notification / node tool launch. Wired ONLY with a PLAN claim (this run's `planToken`); a
     // run whose claim was taken over mid-walk then takes the planner's `'owned'` branch — zero writes,
-    // NO successor tool, no stale progress event. A claim-less walk keeps the old behavior.
+    // NO successor tool, no stale progress event. Control-only walks have no execution claim.
     isRunOwner:
       planToken === undefined ? undefined : () => planExecutionClaimHeld(planId, planToken),
     controls: defaultPollControls(planId),
@@ -848,9 +849,8 @@ async function revokeParkedActions(
   row: AgentTaskWithNodes,
 ): Promise<RevokeSummary> {
   const summary: RevokeSummary = { revoked: [], alreadySettled: [], failed: [] };
-  for (const node of row.nodes) {
-    const actionId = readPendingActionId(safeParse(node.output, undefined));
-    if (actionId === undefined) continue;
+  for (const action of await listPendingActionsByTask(row.id)) {
+    const actionId = action.id;
     try {
       await gateway.cancelAction(actionId, { userId, sessionId });
       summary.revoked.push(actionId);
@@ -1073,16 +1073,13 @@ export async function retryTask(
 /**
  * Reverse lookup: which task/node is parked on `actionId`?
  *
- * PREFERS the action's PERSISTED plan link (`PendingAction.taskId`/`nodeId`, written at gate time),
- * verified against the owning task's session; FALLS BACK to scanning the session's tasks and reading
- * each node's `output` (see `TaskNodeOutput`) for a pre-link action.
+ * Uses the action's persisted task/node link, verified against the task's owning session.
  */
 export async function findTaskByPendingAction(
   sessionId: string,
   actionId: string,
 ): Promise<{ taskId: string; nodeId: string } | undefined> {
-  // PRIMARY: the action's persisted plan link, verified so a link to a foreign/absent task is ignored
-  // rather than trusted.
+  // Unverified, absent or foreign plan links grant no continuation authority.
   const link = await getPendingActionPlanLink(actionId);
   if (link !== null && link.taskId !== null && link.nodeId !== null) {
     const linked = await getTask(link.taskId);
@@ -1091,18 +1088,6 @@ export async function findTaskByPendingAction(
     }
   }
 
-  // FALLBACK: scan the session's tasks and read each node's `output` (see `TaskNodeOutput`) — for an
-  // action persisted before the plan link existed (or whose link is null).
-  const tasks = await listTasksBySession(sessionId);
-  for (const task of tasks) {
-    const row = await getTask(task.id);
-    if (row === null) continue;
-    for (const node of row.nodes) {
-      if (readPendingActionId(safeParse(node.output, undefined)) === actionId) {
-        return { taskId: task.id, nodeId: node.nodeId };
-      }
-    }
-  }
   return undefined;
 }
 

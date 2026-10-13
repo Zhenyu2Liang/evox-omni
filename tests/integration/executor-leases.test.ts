@@ -94,7 +94,7 @@ const budgetNode = {
   name: '预算',
   kind: 'tool' as const,
   tool: 'reserve_budget',
-  args: { name: '围栏预算', amount: 10 },
+  args: { name: '围栏预算', amount: '10' },
   dependencies: ['read'],
 };
 
@@ -115,7 +115,7 @@ async function pausedPlan(s: string, node: any) {
           orderBy: { createdAt: 'desc' },
         });
         await pauseTask(s, row!.id);
-        return { ok: true, data: { balance: 23580 } };
+        return { ok: true, data: { balance: '23580.00' } };
       },
     },
   );

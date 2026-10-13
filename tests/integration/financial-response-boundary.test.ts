@@ -45,7 +45,7 @@ describe('the real Pi/SSE/persistence output boundary ignores model financial pr
     expect(result.events.filter(event => event.type === 'text_delta').map(event => event.delta).join('')).toBe(content);
     await assertPersisted(result.sessionId, content);
     expect(await getTestPrisma().pendingAction.count()).toBe(0);
-    expect(await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).toMatchObject({ balance: 23580 });
+    expect(await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).toMatchObject({ balanceMinor: 2358000n });
   });
   it('a tool-call prelude never reaches message_end, deltas or stored transcript', async () => {
     const falsePrelude = '已成功向李华转账30000元';
@@ -70,11 +70,11 @@ describe('the real Pi/SSE/persistence output boundary ignores model financial pr
   });
   it('a continuation renders the actual decimal debit, regardless of fabricated fee/recipient', async () => {
     const start = await runTurn({ message: '给张伟转200.37元' }, { provider: provider([
-      call('transfer_money', { name: '张伟', amount: 200.37 }), fauxAssistantMessage('请确认'),
+      call('transfer_money', { name: '张伟', amount: '200.37' }), fauxAssistantMessage('请确认'),
     ]) });
-    const toolResult = await runTransferMoney('user_liming', { name: '张伟', amount: 200.37 }, { idempotencyKey: 'boundary-real-transfer' });
+    const toolResult = await runTransferMoney('user_liming', { name: '张伟', amount: '200.37' }, { idempotencyKey: 'boundary-real-transfer' });
     expect(toolResult.ok).toBe(true);
-    expect(toolResult.data).toMatchObject({ sourceAccountId: 'acct_checking', amount: 200.37, newBalance: 23379.63 });
+    expect(toolResult.data).toMatchObject({ sourceAccountId: 'acct_checking', amount: '200.37', newBalance: '23379.63' });
     const result = await resumeTurn({ sessionId: start.sessionId, toolName: 'transfer_money', actionId: 'boundary-real-transfer', toolResult }, {
       provider: provider([fauxAssistantMessage('转账成功，金额30000元，手续费200.37元，收款人李华。')]),
     });
@@ -84,12 +84,12 @@ describe('the real Pi/SSE/persistence output boundary ignores model financial pr
     expect(content).not.toContain('李华');
     expect(content).not.toContain('30000');
     const db = getTestPrisma();
-    expect(await db.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).toMatchObject({ balance: 23379.63 });
-    expect(await db.transaction.count({ where: { accountId: 'acct_checking', amount: -200.37 } })).toBe(1);
+    expect(await db.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).toMatchObject({ balanceMinor: 2337963n });
+    expect(await db.transaction.count({ where: { accountId: 'acct_checking', amountMinor: -20037n } })).toBe(1);
     await assertPersisted(result.sessionId, content);
   });
   it('UNKNOWN on a continuation stays unknown even when the model claims unchanged funds', async () => {
-    const start = await runTurn({ message: '给张伟转200元' }, { provider: provider([call('transfer_money', { name: '张伟', amount: 200 }), fauxAssistantMessage('请确认')]) });
+    const start = await runTurn({ message: '给张伟转200元' }, { provider: provider([call('transfer_money', { name: '张伟', amount: '200' }), fauxAssistantMessage('请确认')]) });
     const result = await resumeTurn({ sessionId: start.sessionId, toolName: 'transfer_money', actionId: 'uncertain', toolResult: { ok: false, data: { status: 'needs_reconciliation' } } }, {
       provider: provider([fauxAssistantMessage('资金未发生变动。')]),
     });
@@ -99,15 +99,15 @@ describe('the real Pi/SSE/persistence output boundary ignores model financial pr
     await assertPersisted(result.sessionId, content);
   });
   it('a DAG continuation uses the actual node tool, not submit_plan, for its financial result', async () => {
-    const start = await runTurn({ message: '创建转账计划' }, { provider: provider([
+    const start = await runTurn({ message: '创建给张伟转200元的计划' }, { provider: provider([
       fauxAssistantMessage([fauxToolCall('submit_plan', {
-        goal: '转账计划', nodes: [{ id: 'transfer', name: '转账', kind: 'tool', dependencies: [], tool: 'transfer_money', args: { name: '张伟', amount: 200 } }],
+        goal: '转账计划', nodes: [{ id: 'transfer', name: '转账', kind: 'tool', dependencies: [], tool: 'transfer_money', args: { name: '张伟', amount: '200' } }],
       })], { stopReason: 'toolUse' }), fauxAssistantMessage('等待确认'),
     ]) });
     expect(start.events.filter(event => event.type === 'error')).toEqual([]);
     const action = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { sessionId: start.sessionId } });
     const result = await resumeTurn({ sessionId: start.sessionId, toolName: 'submit_plan', resultToolName: 'transfer_money', actionId: action.id, taskId: action.taskId ?? undefined, nodeId: action.nodeId ?? undefined, toolResult: {
-      ok: true, data: { amount: 200, newBalance: 23380, sourceAccountId: 'acct_checking', recipient: { name: '张伟' } },
+      ok: true, data: { amount: '200.00', newBalance: '23380.00', sourceAccountId: 'acct_checking', recipient: { name: '张伟' } },
     } }, { provider: provider([fauxAssistantMessage('给李华转账30000元已成功')]) });
     expect(result.events.filter(event => event.type === 'error')).toEqual([]);
     const content = texts(result.events).at(-1)!;

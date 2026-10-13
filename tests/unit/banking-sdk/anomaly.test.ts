@@ -25,6 +25,7 @@ import type { AnomalyItem } from '@/banking-sdk';
 import { INVESTMENT_FLOW_CATEGORY } from '@/banking-sdk/categories';
 import { ANOMALY_AMOUNT_THRESHOLD } from '@/lib/constants';
 import { demoNow } from '@/lib/clock';
+import { absoluteMinor, addMoney, centsToMoney, moneyToCents } from '@/lib/money';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
 import {
   ANOMALY_TRANSACTION,
@@ -38,7 +39,7 @@ useFreshDatabase();
 
 const CHECKING = 'acct_checking';
 /** The salary income row the DEBIT-only rule is exercised against (fixture: +¥11,000, 工资). */
-const SALARY_AMOUNT = 11000;
+const SALARY_AMOUNT = '11000.00';
 
 function db() {
   return getTestPrisma();
@@ -53,13 +54,14 @@ function probeAt(): Date {
 /** Insert a ledger row directly (test-local dataset — the shared fixtures stay untouched). */
 function insertRow(row: {
   id: string;
-  amount: number;
+  amount: string;
   direction: 'DEBIT' | 'CREDIT';
   category: string;
   merchant: string;
   isAnomaly?: boolean;
   anomalyReason?: string;
 }): Promise<unknown> {
+  const { amount, ...fields } = row;
   return db().transaction.create({
     data: {
       accountId: CHECKING,
@@ -67,7 +69,8 @@ function insertRow(row: {
       currency: 'CNY',
       occurredAt: probeAt(),
       channel: 'APP',
-      ...row,
+      ...fields,
+      amountMinor: moneyToCents(amount),
     },
   });
 }
@@ -82,7 +85,7 @@ describe('banking-sdk/transaction · detectAnomaly flags EXPENSE rows only', () 
   it('the seeded salary income (+¥11,000, 工资) is a CREDIT and is NOT flagged', async () => {
     // Fixture sanity: the probe row really exists in the world being scanned (not vacuously absent).
     const salary = await db().transaction.findUnique({ where: { id: SALARY_TRANSACTION_ID } });
-    expect(salary).toMatchObject({ amount: SALARY_AMOUNT, direction: 'CREDIT', category: '工资' });
+    expect(salary).toMatchObject({ amountMinor: moneyToCents(SALARY_AMOUNT), direction: 'CREDIT', category: '工资' });
 
     const report = await banking.transaction.detectAnomaly(DEMO_USER_ID);
 
@@ -94,7 +97,8 @@ describe('banking-sdk/transaction · detectAnomaly flags EXPENSE rows only', () 
   it('the salary CREDIT also stays out of the 本月 consumption analysis', async () => {
     const spend = await banking.transaction.analyzeSpending(DEMO_USER_ID);
 
-    expect(spend.total).toBe(MONTHLY_SPEND_TOTAL); // income never inflates consumption
+    expect(spend.total).toBe(addMoney(MONTHLY_SPEND_TOTAL, centsToMoney(absoluteMinor(moneyToCents(ANOMALY_TRANSACTION.amount)))));
+    expect(spend.flaggedTotal).toBe(centsToMoney(absoluteMinor(moneyToCents(ANOMALY_TRANSACTION.amount))));
     expect(spend.byCategory.map((entry) => entry.category)).not.toContain('工资');
     expect(spend.largest?.merchant).not.toBe('工资');
   });
@@ -107,7 +111,7 @@ describe('banking-sdk/transaction · detectAnomaly flags EXPENSE rows only', () 
       transaction: {
         id: ANOMALY_TRANSACTION.id,
         merchant: ANOMALY_TRANSACTION.merchant,
-        amount: ANOMALY_TRANSACTION.amount,
+        amount: centsToMoney(moneyToCents(ANOMALY_TRANSACTION.amount)),
         direction: 'DEBIT',
         occurredAt: ANOMALY_TRANSACTION.occurredAt,
       },
@@ -119,7 +123,7 @@ describe('banking-sdk/transaction · detectAnomaly flags EXPENSE rows only', () 
   it('a large refund CREDIT (>¥5,000) is not misreported as an anomaly', async () => {
     await insertRow({
       id: 'tx_probe_refund',
-      amount: 6000,
+      amount: '6000.00',
       direction: 'CREDIT',
       category: '退款',
       merchant: '商户退款',
@@ -131,7 +135,7 @@ describe('banking-sdk/transaction · detectAnomaly flags EXPENSE rows only', () 
   it('an operator-flagged row (isAnomaly: true) is surfaced regardless of direction', async () => {
     await insertRow({
       id: 'tx_probe_flagged_credit',
-      amount: 7000,
+      amount: '7000.00',
       direction: 'CREDIT',
       category: '其他',
       merchant: '人工标记',
@@ -146,18 +150,18 @@ describe('banking-sdk/transaction · detectAnomaly flags EXPENSE rows only', () 
       (item) => item.transaction.id === 'tx_probe_flagged_credit',
     );
     expect(flagged).toMatchObject({
-      transaction: { direction: 'CREDIT', amount: 7000 },
+      transaction: { direction: 'CREDIT', amount: '7000.00' },
       reason: '人工复核标记',
     });
   });
 
   it('a >¥5,000 DEBIT is still flagged, and the TEST-LOCAL probe leaves the fixture count at 1', async () => {
-    expect(ANOMALY_AMOUNT_THRESHOLD).toBe(5000);
+    expect(ANOMALY_AMOUNT_THRESHOLD).toBe('5000.00');
     expect(await anomalyIds()).toEqual([ANOMALY_TRANSACTION.id]);
 
     await insertRow({
       id: 'tx_probe_large_debit',
-      amount: -8000,
+      amount: '-8000.00',
       direction: 'DEBIT',
       category: '购物',
       merchant: '家电城',
@@ -167,10 +171,10 @@ describe('banking-sdk/transaction · detectAnomaly flags EXPENSE rows only', () 
     expect(report.anomalies).toHaveLength(2);
     const probe = report.anomalies.find((item) => item.transaction.id === 'tx_probe_large_debit');
     expect(probe).toMatchObject({
-      transaction: { amount: -8000, direction: 'DEBIT', category: '购物' },
+      transaction: { amount: '-8000.00', direction: 'DEBIT', category: '购物' },
       severity: 'medium', // |−8000| > threshold × 1.5 (¥7,500)
     });
-    expect(probe?.reason).toContain('大额消费');
+    expect(probe?.reason).toContain('Large consumption');
 
     // Removing the probe restores the canonical count — proving the extra row is test-local and the
     // shared fixture world (asserted by test-07) still has exactly ONE anomaly.
@@ -184,15 +188,15 @@ describe('banking-sdk/transaction · detectAnomaly flags EXPENSE rows only', () 
     const subscribed = await banking.investment.subscribeInvestment({
       userId: DEMO_USER_ID,
       productId: 'prod_wenjiana',
-      amount: 6000,
+      amount: '6000.00',
     });
-    expect(subscribed.newBalance).toBe(17580);
+    expect(subscribed.newBalance).toBe('17580.00');
 
     const flow = await db().transaction.findFirst({
       where: { userId: DEMO_USER_ID, category: INVESTMENT_FLOW_CATEGORY, direction: 'DEBIT' },
     });
-    expect(flow).toMatchObject({ amount: -6000, channel: 'APP' });
-    expect(Math.abs(flow?.amount ?? 0)).toBeGreaterThan(ANOMALY_AMOUNT_THRESHOLD);
+    expect(flow).toMatchObject({ amountMinor: -600_000n, channel: 'APP' });
+    expect(absoluteMinor(flow?.amountMinor ?? 0n)).toBeGreaterThan(moneyToCents(ANOMALY_AMOUNT_THRESHOLD));
 
     expect(await anomalyIds()).toEqual([ANOMALY_TRANSACTION.id]);
   });

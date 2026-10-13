@@ -22,6 +22,7 @@ import type { TaskNodeResult, TaskNodeStatus, TaskPlan, TaskPlanStatus } from '@
 import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
 import { transitiveDependents } from './dag';
+import { settleToolNode } from './node-outcome';
 import {
   isTerminalStatus,
   persistPlanSnapshot,
@@ -336,41 +337,12 @@ export async function resumePlan(
   for (const r of plan.results) results.set(r.id, { ...r });
   const previous = results.get(node.id);
 
-  let status: TaskNodeStatus;
-  if (outcome.ok) {
-    status = 'success';
-  } else if (outcome.requiresConfirmation || outcome.pendingActionId !== undefined) {
-    const isRed = (node as { riskLevel?: unknown }).riskLevel === 'RED';
-    status = isRed ? 'waiting_verification' : 'waiting_confirmation';
-  } else {
-    status = 'failed';
-  }
-
-  const updated: TaskNodeResult & { summary?: string; pendingActionId?: string } = {
-    id: node.id,
-    name: node.name,
-    status,
-    tool: node.tool,
-    startedAt: previous?.startedAt ?? now(),
-    endedAt: now(),
-  };
-  if (status === 'success') {
-    let output = outcome.data;
-    if (output === undefined && outcome.summary !== undefined) output = { summary: outcome.summary };
-    updated.output = output;
-    if (outcome.summary !== undefined) updated.summary = outcome.summary;
-  } else if (status === 'failed') {
-    updated.error = outcome.error ?? `tool '${node.tool ?? node.id}' failed`;
-  } else {
-    updated.output =
-      outcome.pendingActionId !== undefined ? { pendingActionId: outcome.pendingActionId } : undefined;
-    updated.error = outcome.error;
-    if (outcome.pendingActionId !== undefined) updated.pendingActionId = outcome.pendingActionId;
-  }
+  const updated = settleToolNode(node, outcome, previous?.startedAt ?? now(), now());
+  const status = updated.status;
 
   results.set(node.id, updated);
-  await deps.onNodeUpdate({ ...updated });
   await deps.persistNode?.(plan.id, { ...updated });
+  await deps.onNodeUpdate({ ...updated });
 
   const planStatus: TaskPlanStatus = stillPaused
     ? 'paused'

@@ -21,6 +21,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
+import { centsToMoney, formatCNY, moneyToCents } from '../../lib/money';
 import type { Browser, Locator, Page } from 'playwright-core';
 import {
   cliCommand,
@@ -50,7 +51,7 @@ export const NAV_TIMEOUT_MS = 180_000;
 /** The repository root (contains `package.json` + `next.config.mjs`), found by walking up from cwd. */
 export const REPO_ROOT = resolveRepoRoot();
 /** Scratch dir for failure screenshots (git-ignored — never committed). */
-export const SCREENSHOTS_DIR = path.join(REPO_ROOT, 'tests', 'e2e', 'screenshots');
+export const SCREENSHOTS_DIR = path.join(REPO_ROOT, 'output', 'playwright');
 
 // --- standalone gated-action WEDGE recovery (journey `f-wedge-refresh-recover`) -------------------
 //
@@ -104,13 +105,13 @@ export const WEDGE_TX_ID = idempotentTransferTxId('user_liming', WEDGE_LEDGER_KE
 /** The committed `ExecutionReceipt` id for the wedge. */
 export const WEDGE_RECEIPT_ID = executionReceiptId('user_liming', WEDGE_LEDGER_KEY);
 /** The amount (CNY) of the committed debit. */
-export const WEDGE_AMOUNT = 200;
+export const WEDGE_AMOUNT = '200.00';
 /** The sticky (YELLOW) risk level of the wedge action. */
 export const WEDGE_TIER = 'YELLOW';
 /** The recovery audit `dedupeKey` written by `landStandalone` (`'exec:' + actionId`). */
 export const WEDGE_AUDIT_DEDUPE_KEY = `exec:${WEDGE_ACTION_ID}`;
 /** The demo clock instant (`demoNow()` = 2026-09-25 12:00 LOCAL) used for the seeded timestamps. */
-export const WEDGE_DEMO_NOW = new Date(2026, 8, 25, 12, 0, 0);
+export const WEDGE_DEMO_NOW = new Date('2026-09-25T12:00:00+08:00');
 
 /**
  * SEED the standalone wedge directly into the isolated E2E DB (`prisma/e2e.db`), inserting ONLY the
@@ -128,16 +129,17 @@ export async function seedStandaloneWedge(params: { sessionId: string }): Promis
   const occurredAt = WEDGE_DEMO_NOW;
   try {
     await prisma.$transaction(async (tx) => {
-      await tx.account.update({
+      const recipient = await tx.contact.findUniqueOrThrow({ where: { id: 'contact_zhangwei' } });
+      const updatedAccount = await tx.account.update({
         where: { id: 'acct_checking' },
-        data: { balance: { decrement: WEDGE_AMOUNT } },
+        data: { balanceMinor: { decrement: moneyToCents(WEDGE_AMOUNT) } },
       });
       await tx.transaction.create({
         data: {
           id: WEDGE_TX_ID,
           accountId: 'acct_checking',
           userId: 'user_liming',
-          amount: -WEDGE_AMOUNT,
+          amountMinor: -moneyToCents(WEDGE_AMOUNT),
           currency: 'CNY',
           direction: 'DEBIT',
           category: '转账',
@@ -166,10 +168,10 @@ export async function seedStandaloneWedge(params: { sessionId: string }): Promis
           resultJson: JSON.stringify({
             success: true,
             transactionId: WEDGE_TX_ID,
-            newBalance: 23380,
-            recipient: { contactId: 'contact_zhangwei', name: '张伟', phone: '' },
+            sourceAccountId: updatedAccount.id,
+            newBalance: centsToMoney(updatedAccount.balanceMinor),
+            recipient: { contactId: recipient.id, name: recipient.name, phone: recipient.phone, bank: recipient.bank ?? undefined },
             amount: WEDGE_AMOUNT,
-            remark: null,
             occurredAt: occurredAt.getTime(),
           }),
           txId: WEDGE_TX_ID,
@@ -191,7 +193,7 @@ export async function seedStandaloneWedge(params: { sessionId: string }): Promis
             tier: WEDGE_TIER,
             fields: [
               { label: '收款人', value: '张伟' },
-              { label: '金额', value: `¥${WEDGE_AMOUNT.toFixed(2)}` },
+              { label: '金额', value: formatCNY(WEDGE_AMOUNT) },
             ],
             amount: WEDGE_AMOUNT,
             requiresMfa: false,
@@ -891,12 +893,18 @@ export function resetDemoDatabase(opts: { attempts?: number } = {}): void {
 
 // --- browser factory ----------------------------------------------------------------------------
 
-/** Well-known Windows browser locations (Chrome first, Edge as fallback). */
+/** Common installed browser locations; an explicit executable override still takes precedence. */
 const CANDIDATE_BROWSER_PATHS = [
   'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
   'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+  '/usr/bin/google-chrome',
+  '/usr/bin/chromium',
+  '/usr/bin/chromium-browser',
 ];
 
 /** Resolve the real Chrome (or Edge) executable; `E2E_BROWSER_PATH` overrides detection. */
@@ -1198,7 +1206,7 @@ export async function waitForStatusText(page: Page, needle: string, timeoutMs = 
 /** A `TransactionView` from the bills read model (signed amount: negative = DEBIT/expense). */
 export interface LedgerTransaction {
   id: string;
-  amount: number;
+  amount: string;
   direction: 'DEBIT' | 'CREDIT';
   category: string;
   merchant: string;
@@ -1212,13 +1220,13 @@ export interface LedgerView {
 
 /** The `GET /api/dashboard` payload (the subset the harness asserts on). */
 export interface DashboardView {
-  checkingBalance: number;
+  checkingBalance: string;
 }
 
 /** A `CardView` limit row (`GET /api/cards`). */
 export interface CardLimitView {
   category: string;
-  amount: number;
+  amount: string;
 }
 
 /** A `CardView` (`GET /api/cards`). */
@@ -1285,7 +1293,7 @@ export function fetchPendingActions(baseUrl: string, cookie: string): Promise<Pe
 }
 
 /** The `value` of one card's per-category limit, or `undefined` when the card/category is absent. */
-export function cardCategoryLimit(cards: readonly CardView[], cardId: string, category: string): number | undefined {
+export function cardCategoryLimit(cards: readonly CardView[], cardId: string, category: string): string | undefined {
   const card = cards.find((candidate) => candidate.id === cardId);
   return card?.limits.find((limit) => limit.category === category)?.amount;
 }

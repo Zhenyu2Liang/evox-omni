@@ -17,7 +17,7 @@
  * Optional at-most-once semantics (`input.idempotencyKey`, supplied by the planner as
  * `nodeExecutionKey(taskId, nodeId)`): a replayed plan node re-runs the tool, so a repeat with the
  * SAME key must not debit/credit twice. `subscribeInvestment` stores the caller's key on the
- * `InvestmentHolding` and replays the persisted holding (`./idempotent.ts`). `redeemInvestment`
+ * `InvestmentHolding` and replays its full original `subscribeResult` (`./idempotent.ts`). `redeemInvestment`
  * persists the redemption's EXECUTION IDENTITY (`redeemExecutionKey`) and ORIGINAL result payload
  * (`redeemResult`) on the holding inside the SAME transaction: a repeat with the SAME identity
  * replays that original result, while a DIFFERENT or absent identity on an already-REDEEMED holding
@@ -25,14 +25,15 @@
  *
  * Note: subscribing/redeeming moves the funding-account BALANCE and writes an investment-flow
  * `Transaction` row (category `INVESTMENT_FLOW_CATEGORY`) in the SAME transaction, so investment
- * principal is kept out of the 本月 spending analysis (anchored at ¥5,800) and is never mislabeled
+ * principal is kept out of booked consumption analysis and is never mislabeled
  * as 大额消费.
  */
 import type { InvestmentHolding, InvestmentProduct } from '@prisma/client';
 import { demoNow } from '../lib/clock';
 import { accounts, investments } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
-import { moneyToCents, round2, subtractMoney } from '../lib/money';
+import { assertMinorUnits, centsToMoney, moneyToCents, normalizeMoney } from '../lib/money';
+import { compareDecimal, nonNegativeDecimal, subtractDecimal, valuationToMinor } from '../lib/decimal';
 import { INVESTMENT_FLOW_CATEGORY } from './categories';
 import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction, type Tx } from './tx';
@@ -58,9 +59,9 @@ function toProductView(row: InvestmentProduct): ProductView {
     code: row.code,
     name: row.name,
     riskLevel: row.riskLevel as InvestmentRiskLevel,
-    expectedRate: row.expectedRate,
+    annualYieldRate: nonNegativeDecimal(row.annualYieldRate),
     termDays: row.termDays,
-    minAmount: row.minAmount,
+    minAmount: centsToMoney(row.minAmountMinor),
     description: row.description ?? undefined,
   };
 }
@@ -87,7 +88,7 @@ export async function compareInvestments(ids: string[]): Promise<InvestmentCompa
   let highest: ProductView | undefined;
   let lowest: ProductView | undefined;
   for (const product of products) {
-    if (highest === undefined || product.expectedRate > highest.expectedRate) highest = product;
+    if (highest === undefined || compareDecimal(product.annualYieldRate, highest.annualYieldRate) > 0) highest = product;
     if (lowest === undefined || RISK_RANK[product.riskLevel] < RISK_RANK[lowest.riskLevel]) {
       lowest = product;
     }
@@ -100,24 +101,24 @@ export async function compareInvestments(ids: string[]): Promise<InvestmentCompa
   };
 }
 
-/** A subscribe outcome: the persisted holding plus the funding-account balance after the write. */
-interface SubscribeOutcome {
-  holding: InvestmentHolding;
-  newBalance: number;
-  sourceAccountId?: string;
-}
-
-/** Map a persisted holding (plus the balance after the write) onto the public `InvestResult`. */
-function toSubscribeResult(outcome: SubscribeOutcome): InvestResult {
-  return {
-    success: true,
-    holdingId: outcome.holding.id,
-    productId: outcome.holding.productId,
-    amount: outcome.holding.amount,
-    newBalance: outcome.newBalance,
-    sourceAccountId: outcome.sourceAccountId,
-    occurredAt: outcome.holding.boughtAt.getTime(),
-  };
+/** Replay only a complete original purchase outcome matching its persisted holding. */
+function parseSubscribeResult(holding: InvestmentHolding): InvestResult {
+  try {
+    if (holding.subscribeResult === null) throw new Error('Missing original purchase result.');
+    const result: unknown = JSON.parse(holding.subscribeResult);
+    if (typeof result !== 'object' || result === null || Array.isArray(result)) throw new Error('Invalid purchase result.');
+    const stored = result as Record<string, unknown>;
+    if (stored.success !== true || stored.holdingId !== holding.id || stored.productId !== holding.productId ||
+        stored.amount !== centsToMoney(holding.principalAmountMinor) || typeof stored.newBalance !== 'string' ||
+        normalizeMoney(stored.newBalance) !== stored.newBalance || moneyToCents(stored.newBalance) < 0n ||
+        typeof stored.sourceAccountId !== 'string' || stored.sourceAccountId.length === 0 ||
+        stored.occurredAt !== holding.boughtAt.getTime()) {
+      throw new Error('Purchase result does not match the committed holding.');
+    }
+    return stored as unknown as InvestResult;
+  } catch {
+    throw new AppError('CONFLICT', 'The investment purchase has no valid original execution result.', { holdingId: holding.id });
+  }
 }
 
 /**
@@ -139,8 +140,8 @@ function parseRedeemResult(stored: string, holdingId: string): InvestResult {
  * account cannot cover the amount the call throws `INSUFFICIENT_FUNDS` and nothing is written.
  *
  * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, a repeat with the SAME
- * key replays the persisted holding (same `holdingId` / `amount`, current balance) and never debits
- * a second time (see `./idempotent.ts`). Absent → unchanged behavior.
+ * key replays the full original result persisted in the purchase transaction and never debits
+ * a second time or reconstructs a balance from current account state.
  */
 export async function subscribeInvestment(input: SubscribeInvestmentInput): Promise<InvestResult> {
   const product = await investments.getProduct(input.productId);
@@ -150,11 +151,11 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
     });
   }
 
-  const amount = round2(input.amount);
-  if (!(amount > 0) || amount < product.minAmount) {
-    throw new AppError('VALIDATION', `认购金额不满足要求（起购 ¥${product.minAmount}）`, {
-      amount: input.amount,
-      minAmount: product.minAmount,
+  const amountMinor = moneyToCents(input.amount);
+  if (amountMinor <= 0n || amountMinor < product.minAmountMinor) {
+    throw new AppError('VALIDATION', `Purchase amount is below the minimum ${centsToMoney(product.minAmountMinor)}.`, {
+      amount: centsToMoney(amountMinor),
+      minAmount: centsToMoney(product.minAmountMinor),
     });
   }
 
@@ -171,17 +172,17 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
   const debitAndCreate = async (
     tx: Tx,
     replayKey: string | undefined,
-  ): Promise<SubscribeOutcome> => {
+  ): Promise<InvestResult> => {
     // Atomic sufficient-funds check + debit (rolls back with nothing written when short).
     const debited = await tx.account.updateMany({
-      where: { id: account.id, userId: input.userId, balance: { gte: amount } },
-      data: { balance: { decrement: amount } },
+      where: { id: account.id, userId: input.userId, balanceMinor: { gte: amountMinor } },
+      data: { balanceMinor: { decrement: amountMinor } },
     });
     if (debited.count === 0) {
       const current = await tx.account.findUnique({ where: { id: account.id } });
       throw new AppError('INSUFFICIENT_FUNDS', '账户余额不足，无法完成认购', {
-        balance: current?.balance ?? 0,
-        amount,
+        balance: centsToMoney(current?.balanceMinor ?? 0n),
+        amount: centsToMoney(amountMinor),
       });
     }
 
@@ -189,8 +190,8 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
       data: {
         userId: input.userId,
         productId: input.productId,
-        amount,
-        marketValue: amount,
+        principalAmountMinor: amountMinor,
+        estimatedMarketValue: nonNegativeDecimal(centsToMoney(amountMinor)),
         boughtAt: new Date(now),
         status: 'HOLDING',
         idempotencyKey: replayKey,
@@ -210,7 +211,7 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
       data: {
         accountId: account.id,
         userId: input.userId,
-        amount: -amount, // DECREASE: negative
+        amountMinor: -amountMinor,
         direction: 'DEBIT',
         category: INVESTMENT_FLOW_CATEGORY,
         merchant: '认购' + product.name,
@@ -220,26 +221,40 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
       },
     });
 
-    return { holding, newBalance: updated.balance, sourceAccountId: account.id };
+    const result: InvestResult = {
+      success: true,
+      holdingId: holding.id,
+      productId: holding.productId,
+      amount: centsToMoney(holding.principalAmountMinor),
+      newBalance: centsToMoney(updated.balanceMinor),
+      sourceAccountId: account.id,
+      occurredAt: holding.boughtAt.getTime(),
+    };
+    await tx.investmentHolding.update({
+      where: { id: holding.id },
+      data: { subscribeResult: JSON.stringify(result) },
+    });
+    return result;
   };
 
   const key = normalizeIdempotencyKey(input.idempotencyKey);
   if (key === undefined) {
-    return toSubscribeResult(await runInTransaction((tx) => debitAndCreate(tx, undefined)));
+    return runInTransaction((tx) => debitAndCreate(tx, undefined));
   }
 
   // Keyed path: ONE transaction keys the holding on `key`; a repeat replays it (no second debit).
-  const outcome = await createIdempotent<SubscribeOutcome>({
+  return createIdempotent<InvestResult>({
     key,
     find: async (tx) => {
       const existing = await tx.investmentHolding.findUnique({ where: { idempotencyKey: key } });
       if (existing === null) return null;
-      const current = await tx.account.findUnique({ where: { id: account.id } });
-      return { holding: existing, newBalance: current?.balance ?? 0, sourceAccountId: account.id };
+      if (existing.userId !== input.userId || existing.productId !== input.productId || existing.principalAmountMinor !== amountMinor) {
+        throw new AppError('CONFLICT', 'The execution identity belongs to a different investment purchase.');
+      }
+      return parseSubscribeResult(existing);
     },
     create: (tx, replayKey) => debitAndCreate(tx, replayKey),
   });
-  return toSubscribeResult(outcome);
 }
 
 /**
@@ -275,11 +290,24 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
   return runInTransaction(async (tx): Promise<InvestResult> => {
     // Re-read the value at the write boundary: a stale pre-MFA quote cannot authorize a new amount.
     const current = await tx.investmentHolding.findUnique({ where: { id: holding.id } });
-    if (!current || current.userId !== input.userId) throw new AppError('NOT_FOUND', '持仓不存在');
-    const credit = round2(current.marketValue ?? current.amount);
+    if (!current || current.userId !== input.userId) throw new AppError('NOT_FOUND', 'Investment holding does not exist.');
+    if (current.status !== 'HOLDING') {
+      if (key !== undefined && current.redeemExecutionKey === key && current.redeemResult !== null) {
+        return parseRedeemResult(current.redeemResult, input.holdingId);
+      }
+      throw new AppError('CONFLICT', 'Investment holding has already been redeemed.', {
+        holdingId: input.holdingId,
+        status: current.status,
+      });
+    }
+    const redemptionValuation = current.estimatedMarketValue === null
+      ? centsToMoney(current.principalAmountMinor)
+      : nonNegativeDecimal(current.estimatedMarketValue);
+    const creditMinor = valuationToMinor(redemptionValuation);
+    const credit = centsToMoney(creditMinor);
     if (current.status === 'HOLDING' && input.expectedRedemptionAmount !== undefined &&
-        moneyToCents(input.expectedRedemptionAmount) !== moneyToCents(credit)) {
-      throw new AppError('CONFLICT', '赎回金额已变化，请重新确认该持仓后再验证。');
+        moneyToCents(input.expectedRedemptionAmount) !== creditMinor) {
+      throw new AppError('CONFLICT', 'The redemption amount changed and requires a new confirmation.');
     }
     // Atomic HOLDING → REDEEMED transition: count 0 means it was already redeemed (no double credit).
     const closed = await tx.investmentHolding.updateMany({
@@ -302,9 +330,11 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
       });
     }
 
+    const currentAccount = await tx.account.findUniqueOrThrow({ where: { id: account.id, userId: input.userId } });
+    const balanceMinor = assertMinorUnits(currentAccount.balanceMinor + creditMinor);
     const credited = await tx.account.update({
-      where: { id: account.id },
-      data: { balance: { increment: credit } },
+      where: { id: account.id, userId: input.userId, balanceMinor: currentAccount.balanceMinor },
+      data: { balanceMinor },
     });
 
     const payload: InvestResult = {
@@ -312,9 +342,11 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
       holdingId: holding.id,
       productId: holding.productId,
       amount: credit,
-      newBalance: credited.balance,
+      newBalance: centsToMoney(credited.balanceMinor),
       sourceAccountId: account.id,
       occurredAt: now,
+      redemptionValuation,
+      settlementRounding: 'HALF_UP',
     };
 
     // Persist the execution identity + ORIGINAL payload in the SAME transaction: a replay with the
@@ -331,7 +363,7 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
       data: {
         accountId: account.id,
         userId: input.userId,
-        amount: credit, // INCREASE: positive
+        amountMinor: creditMinor,
         direction: 'CREDIT',
         category: INVESTMENT_FLOW_CATEGORY,
         merchant: '赎回',
@@ -354,9 +386,11 @@ export async function listHoldings(userId: string): Promise<HoldingView[]> {
     productName: row.product.name,
     product: toProductView(row.product),
     riskLevel: row.product.riskLevel as InvestmentRiskLevel,
-    amount: row.amount,
-    marketValue: row.marketValue ?? undefined,
-    profit: row.marketValue != null ? subtractMoney(row.marketValue, row.amount) : undefined,
+    amount: centsToMoney(row.principalAmountMinor),
+    marketValue: row.estimatedMarketValue === null ? undefined : nonNegativeDecimal(row.estimatedMarketValue),
+    profit: row.estimatedMarketValue !== null
+      ? subtractDecimal(nonNegativeDecimal(row.estimatedMarketValue), centsToMoney(row.principalAmountMinor))
+      : undefined,
     boughtAt: row.boughtAt.getTime(),
     status: row.status as HoldingStatus,
   }));

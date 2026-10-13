@@ -64,7 +64,8 @@ import {
 /** Primary 活期账户 (¥23,580) — the default funding account every transfer debits. */
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 /** The recipient resolved by name from the seeded contacts. */
 const RECIPIENT_NAME = '张伟';
 
@@ -119,7 +120,7 @@ interface SeedNode {
 }
 
 /** A two-step DAG: a GREEN read, then a gated transfer (which parks for a human decision). */
-function transferPlanNodes(amount: number): SeedNode[] {
+function transferPlanNodes(amount: string): SeedNode[] {
   return [
     { id: 'n1', name: '查询余额', dependencies: [], kind: 'tool', tool: 'get_balance', args: {} },
     {
@@ -184,7 +185,7 @@ afterAll(async () => {
 
 describe('[integration] POST /api/tasks/[id] — real task control (pause / cancel / retry)', () => {
   it('pause — halts the parked plan and persists the paused snapshot (status:paused)', async () => {
-    const { sessionId, taskId, plan } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    const { sessionId, taskId, plan } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
     expect(plan.status).toBe('waiting_confirmation');
 
     const res = await postJson<Envelope<TaskPlan>>(
@@ -209,7 +210,7 @@ describe('[integration] POST /api/tasks/[id] — real task control (pause / canc
   });
 
   it('cancel — halts the plan and cancels every remaining node (executed node keeps its result)', async () => {
-    const { sessionId, taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    const { sessionId, taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
 
     const res = await postJson<Envelope<TaskPlan>>(
       taskPost,
@@ -301,7 +302,7 @@ describe('[integration] POST /api/actions/[id]/{confirm,verify} — resume the p
   it('confirm (YELLOW) — resumes the parked YELLOW node and writes the REAL transfer result back', async () => {
     const { sessionId, taskId, plan } = await seedPlan(
       '先查余额再给张伟转200元',
-      transferPlanNodes(200),
+      transferPlanNodes('200'),
     );
     const parkedActionId = readPendingActionId(resultOf(plan, 'n2').output);
     expect(typeof parkedActionId).toBe('string');
@@ -325,10 +326,10 @@ describe('[integration] POST /api/actions/[id]/{confirm,verify} — resume the p
     expect(resumed).toBeDefined();
     const n2 = resultOf(resumed!, 'n2');
     expect(n2.status).toBe('success');
-    const transfer = n2.output as { amount: number; transactionId: string; newBalance: number };
-    expect(transfer.amount).toBe(200);
+    const transfer = n2.output as { amount: string; transactionId: string; newBalance: string };
+    expect(transfer.amount).toBe('200.00');
     expect(typeof transfer.transactionId).toBe('string');
-    expect(transfer.newBalance).toBe(SEEDED_BALANCE - 200);
+    expect(transfer.newBalance).toBe(subtractMoney(SEEDED_BALANCE, '200.00'));
 
     // Durable side effects: plan settled success, node persisted, a real ledger row + the debit.
     const row = await getTestPrisma().agentTask.findUnique({ where: { id: taskId } });
@@ -343,16 +344,16 @@ describe('[integration] POST /api/actions/[id]/{confirm,verify} — resume the p
       where: { id: transfer.transactionId },
     });
     expect(ledger).not.toBeNull();
-    expect(ledger!.amount).toBe(-200);
+    expect(ledger!.amountMinor).toBe(-moneyToCents('200.00'));
     const account = await getTestPrisma().account.findUnique({ where: { id: CHECKING.id } });
-    expect(account!.balance).toBe(SEEDED_BALANCE - 200);
+    expect(centsToMoney(account!.balanceMinor)).toBe(subtractMoney(SEEDED_BALANCE, '200.00'));
   });
 
   it('verify (RED) — resumes the parked RED node after MFA and writes the REAL transfer result back', async () => {
     // amount 5000 > the ¥1000 daily limit ⇒ RED (MFA-gated).
     const { sessionId, taskId, plan } = await seedPlan(
       '先查余额再给张伟转5000元',
-      transferPlanNodes(5000),
+      transferPlanNodes('5000'),
     );
     const parkedActionId = readPendingActionId(resultOf(plan, 'n2').output);
     expect(typeof parkedActionId).toBe('string');
@@ -384,14 +385,14 @@ describe('[integration] POST /api/actions/[id]/{confirm,verify} — resume the p
     expect(resumed).toBeDefined();
     const n2 = resultOf(resumed!, 'n2');
     expect(n2.status).toBe('success');
-    const transfer = n2.output as { amount: number; transactionId: string; newBalance: number };
-    expect(transfer.amount).toBe(5000);
-    expect(transfer.newBalance).toBe(SEEDED_BALANCE - 5000);
+    const transfer = n2.output as { amount: string; transactionId: string; newBalance: string };
+    expect(transfer.amount).toBe('5000.00');
+    expect(transfer.newBalance).toBe(subtractMoney(SEEDED_BALANCE, '5000.00'));
 
     const row = await getTestPrisma().agentTask.findUnique({ where: { id: taskId } });
     expect(row!.status).toBe('success');
     const account = await getTestPrisma().account.findUnique({ where: { id: CHECKING.id } });
-    expect(account!.balance).toBe(SEEDED_BALANCE - 5000);
+    expect(centsToMoney(account!.balanceMinor)).toBe(subtractMoney(SEEDED_BALANCE, '5000.00'));
   });
 });
 
@@ -399,7 +400,7 @@ describe('[integration] GET /api/tasks/[id] + GET /api/tasks — refresh recover
   it('GET /api/tasks/[id] returns the persisted plan (refresh recovery for a seeded parked plan)', async () => {
     const { sessionId, taskId, plan } = await seedPlan(
       '先查余额再给张伟转200元',
-      transferPlanNodes(200),
+      transferPlanNodes('200'),
     );
 
     const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(taskId), {
@@ -481,7 +482,7 @@ describe('[integration] GET /api/tasks/[id] + GET /api/tasks — refresh recover
 
 describe('[integration] task endpoints — authorization (cookie-only identity)', () => {
   it('POST /api/tasks/[id] without a session (no cookie) → 403 SECURITY_DENIED', async () => {
-    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
 
     const res = await postJson<Envelope<unknown>>(
       taskPost,
@@ -498,7 +499,7 @@ describe('[integration] task endpoints — authorization (cookie-only identity)'
   });
 
   it('POST /api/tasks/[id] with a valid but FOREIGN session → 403 SECURITY_DENIED (ownership)', async () => {
-    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
     // A REAL persisted session that does NOT own the task: identity passes, ownership fails.
     const foreignSessionId = await newPersistedSessionId();
 
@@ -542,7 +543,7 @@ describe('[integration] task endpoints — authorization (cookie-only identity)'
   });
 
   it('GET /api/tasks/[id] with no cookie → 403 SECURITY_DENIED (identity is cookie-only)', async () => {
-    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
 
     const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(taskId), {
       ctx: idCtx(taskId),
@@ -553,7 +554,7 @@ describe('[integration] task endpoints — authorization (cookie-only identity)'
   });
 
   it('GET /api/tasks/[id] for a task owned by a FOREIGN session → 403 SECURITY_DENIED', async () => {
-    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes(200));
+    const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
     const foreignSessionId = await newPersistedSessionId();
 
     const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(taskId), {

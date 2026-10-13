@@ -1,5 +1,6 @@
 import type { AgentSession } from '@prisma/client';
 import { prisma, type DbClient } from '../client';
+import { AppError } from '../../errors';
 
 export interface CreateSessionInput {
   userId: string;
@@ -30,11 +31,17 @@ export function listSessions(userId: string): Promise<AgentSession[]> {
   });
 }
 
-export function updateSessionState(
+export async function updateSessionState(
   id: string,
   stateJson: string,
+  options: { expectedRevision?: number; intentJson?: string | null } = {},
 ): Promise<AgentSession> {
-  return prisma.agentSession.update({ where: { id }, data: { stateJson } });
+  const result = await prisma.agentSession.updateMany({
+    where: { id, ...(options.expectedRevision !== undefined ? { revision: options.expectedRevision } : {}) },
+    data: { stateJson, revision: { increment: 1 }, ...(options.intentJson !== undefined ? { intentJson: options.intentJson } : {}) },
+  });
+  if (result.count !== 1) throw new AppError('CONFLICT', 'The conversation changed while this turn was running.');
+  return prisma.agentSession.findUniqueOrThrow({ where: { id } });
 }
 
 export function setSessionLocked(

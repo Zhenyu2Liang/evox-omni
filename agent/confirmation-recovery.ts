@@ -40,6 +40,7 @@ import { transferExecutionAudit } from './execution-audit';
 import { buildConfirmFence, guardExecutionFence } from './execution-fence';
 import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
 import { recovery } from '@/security';
+import { settleInvocationFromAction } from '@/lib/db/repositories/agentRun';
 
 /* ----------------------------------------------------------------------------------------- *
  * 1. Live-confirmation registry — REFERENCE-COUNTED (in-process AUXILIARY hint)
@@ -244,7 +245,7 @@ export interface SettlePendingActionInput {
  *
  * Critical audit writes are strict. Only verified duplicate identities/results are absorbed.
  * Transfers already wrote their required execution audit in the debit/ledger/receipt transaction;
- * this transaction lands state and repairs pre-upgrade missing audits without another debit.
+ * this transaction lands state and reconciles verified audit-storage faults without another debit.
  */
 export async function settlePendingAction(input: SettlePendingActionInput): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
@@ -276,6 +277,7 @@ export async function settlePendingAction(input: SettlePendingActionInput): Prom
           : { client: tx, strict: true },
       );
     }
+    await settleInvocationFromAction(input.actionId, tx);
     return true;
   });
 }
@@ -394,9 +396,9 @@ export function summaryFromReceipt(toolName: string, stored: Record<string, unkn
     recipient !== undefined && typeof recipient.name === 'string' && recipient.name !== ''
       ? recipient.name
       : '收款人';
-  const amount = typeof stored.amount === 'number' ? stored.amount : undefined;
+  const amount = typeof stored.amount === 'string' ? stored.amount : undefined;
   if (amount === undefined) return undefined;
-  const newBalance = typeof stored.newBalance === 'number' ? stored.newBalance : undefined;
+  const newBalance = typeof stored.newBalance === 'string' ? stored.newBalance : undefined;
   const balance = newBalance !== undefined ? `，账户余额 ${formatCNY(newBalance)}` : '';
   return `已向 ${name} 转账 ${formatCNY(amount)}${balance}。`;
 }
@@ -488,6 +490,7 @@ async function replayStandaloneAction(
     result = await createToolRegistry(row.userId).executeDirect(toolName, args, {
       idempotencyKey, fence: guarded.fence,
       onTransferCommit: executionAudit.onTransferCommit,
+      onCommandCommit: executionAudit.onCommandCommit,
       onTransactionCommitted: () => { sideEffectCommitted = true; },
     });
   } catch (e) {

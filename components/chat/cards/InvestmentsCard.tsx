@@ -4,6 +4,9 @@ import type { HoldingView, ProductView } from '@/banking-sdk';
 import { InvestmentProductTile } from '../../banking';
 import { Badge, Card, EmptyState, Money } from '../../ui';
 import type { InvestmentsCardData } from './types';
+import { addMoney } from '@/lib/money';
+import { addDecimal } from '@/lib/decimal';
+import { DecimalMoney } from '../../ui/DecimalMoney';
 
 export interface InvestmentsCardProps {
   data: InvestmentsCardData;
@@ -15,29 +18,10 @@ interface TileEntry {
   key: string;
   product: ProductView;
   holding?: HoldingView;
-  metadataKnown?: boolean;
 }
 
 /**
- * Minimal product descriptor for a holding whose product was not supplied in `data.products`, so the
- * holding can still be rendered through `InvestmentProductTile`. Only the identity fields are known
- * (name / risk level); product-only metadata defaults to `0`.
- */
-function productFromHolding(h: HoldingView): ProductView {
-  return {
-    id: h.productId,
-    code: h.productId,
-    name: h.productName,
-    riskLevel: h.riskLevel,
-    expectedRate: 0,
-    termDays: 0,
-    minAmount: 0,
-  };
-}
-
-/**
- * Build one entry per product, pairing each with its holding by `productId`; holdings whose product
- * is absent from `data.products` still get an entry (with a product derived from the holding).
+ * Pair each holding with its complete product metadata, then include unheld catalogue products.
  */
 function buildEntries(data: InvestmentsCardData): TileEntry[] {
   const holdings = data.holdings ?? [];
@@ -45,8 +29,9 @@ function buildEntries(data: InvestmentsCardData): TileEntry[] {
   const products = new Map((data.products ?? []).map(product => [product.id, product]));
   const seen = new Set(holdings.map(holding => holding.productId));
   for (const holding of holdings) {
+    if (!holding.product) throw new Error('Investment holding product metadata is missing.');
     const product = products.get(holding.productId) ?? holding.product;
-    entries.push({ key: `holding-${holding.id}`, product: product ?? productFromHolding(holding), holding, metadataKnown: product !== undefined });
+    entries.push({ key: `holding-${holding.id}`, product, holding });
   }
   for (const product of data.products ?? []) {
     if (!seen.has(product.id)) entries.push({ key: product.id, product });
@@ -77,11 +62,11 @@ export function InvestmentsCard(p: InvestmentsCardProps) {
     );
   }
 
-  const investedAmount = holdings.reduce((sum, h) => sum + h.amount, 0);
+  const investedAmount = holdings.reduce((sum, holding) => addMoney(sum, holding.amount), '0.00');
   const hasMarketValue = holdings.some((h) => h.marketValue !== undefined);
-  const totalMarketValue = holdings.reduce((sum, h) => sum + (h.marketValue ?? h.amount), 0);
+  const totalMarketValue = holdings.reduce((sum, holding) => addDecimal(sum, holding.marketValue ?? holding.amount), '0');
   const hasProfit = holdings.some((h) => h.profit !== undefined);
-  const totalProfit = holdings.reduce((sum, h) => sum + (h.profit ?? 0), 0);
+  const totalProfit = holdings.reduce((sum, holding) => addDecimal(sum, holding.profit ?? '0'), '0');
 
   return (
     <div className={className}>
@@ -94,12 +79,12 @@ export function InvestmentsCard(p: InvestmentsCardProps) {
               </span>
               {hasMarketValue ? (
                 <span>
-                  持仓市值 <Money amount={totalMarketValue} />
+                  持仓市值 <DecimalMoney amount={totalMarketValue} />
                 </span>
               ) : null}
               {hasProfit ? (
                 <span>
-                  累计收益 <Money amount={totalProfit} signed />
+                  累计收益 <DecimalMoney amount={totalProfit} signed />
                 </span>
               ) : null}
             </div>
@@ -110,7 +95,6 @@ export function InvestmentsCard(p: InvestmentsCardProps) {
                 key={entry.key}
                 product={entry.product}
                 holding={entry.holding}
-                metadataKnown={entry.metadataKnown}
               />
             ))}
           </div>

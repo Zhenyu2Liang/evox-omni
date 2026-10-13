@@ -29,6 +29,7 @@ import { POST as chatPost } from '@/app/api/chat/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { GET as tasksGet } from '@/app/api/tasks/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
+import { runTurn } from '@/agent';
 import type { AgentStreamEvent, ChatCard, ChatTurnResponse } from '@/lib/contracts/agent';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import { MFA_CODE } from '@/lib/constants';
@@ -59,7 +60,8 @@ const SEEDED_ENTERTAINMENT_LIMIT = CARD_LIMITS.find(
   (limit) => limit.cardId === 'card_credit' && limit.category === '娱乐',
 )!.amount;
 /** The new limit the parked node proposes (and the confirmed value). */
-const NEW_ENTERTAINMENT_LIMIT = 1500;
+const NEW_ENTERTAINMENT_LIMIT = '1500';
+import { moneyToCents } from '@/lib/money';
 
 /**
  * The route's JSON envelope — the transport shape (NOT a frozen `@/lib/contracts` type). Declared
@@ -144,6 +146,27 @@ afterAll(async () => {
 /* ------------------------------------------------------------------------------------ specs */
 
 describe('[integration] POST /api/chat — a conditional DAG plan PARKS on a gated node (real HTTP + mock)', () => {
+  it('runTurn binds first-person monthly consumption to the total and keeps the resulting limit change gated', async () => {
+    const request = '\u5982\u679c\u6211\u8fd9\u4e2a\u6708\u6d88\u8d39\u8d85\u8fc72000\uff0c\u5c31\u628a\u4fe1\u7528\u5361\u5a31\u4e50\u9650\u989d\u8c03\u6574\u52301500\u5143';
+    const result = await runTurn({ message: request });
+    const plans = await getTestPrisma().agentTask.findMany({ where: { sessionId: result.sessionId },
+      include: { nodes: { orderBy: { order: 'asc' } } } });
+    expect(plans).toHaveLength(1);
+    const plan = plans[0];
+    expect(plan.status).toBe('waiting_confirmation');
+    expect(plan.nodes.map(node => node.status)).toEqual(['success', 'success', 'waiting_confirmation']);
+    expect(JSON.parse(plan.nodes[1].condition!)).toEqual({ path: 'analyze.total', op: '>', value: '2000' });
+    expect(JSON.parse(plan.nodes[0].args!).month).toBe('2026-09');
+    const action = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { taskId: plan.id } });
+    expect(action.status).toBe('pending');
+    expect(action.riskLevel).toBe('YELLOW');
+    expect(JSON.parse(action.argsJson)).toMatchObject({ cardId: 'card_credit', category: '\u5a31\u4e50', amount: '1500.00' });
+    expect((await getTestPrisma().cardLimit.findFirstOrThrow({ where: { cardId: 'card_credit', category: '\u5a31\u4e50' } })).amountMinor)
+      .toBe(moneyToCents(SEEDED_ENTERTAINMENT_LIMIT));
+    expect(result.events.some(event => event.type === 'error')).toBe(false);
+    expect(confirmationOf(result.events)?.actionId).toBe(action.id);
+  });
+
   it('the streamed DAG walks analyze→check→setlimit and settles in waiting_confirmation', async () => {
     const { sessionId, events } = await parkPlanTurn();
 
@@ -226,7 +249,7 @@ describe('[integration] the PARKING turn moved nothing and persisted the plan + 
     const limit = await prisma.cardLimit.findFirst({
       where: { cardId: 'card_credit', category: '娱乐' },
     });
-    expect(limit?.amount).toBe(SEEDED_ENTERTAINMENT_LIMIT);
+    expect(limit?.amountMinor).toBe(moneyToCents(SEEDED_ENTERTAINMENT_LIMIT));
   });
 });
 
@@ -265,7 +288,7 @@ describe('[integration] POST /api/actions/[id]/confirm — resumes the parked pl
     const limit = await getTestPrisma().cardLimit.findFirst({
       where: { cardId: 'card_credit', category: '娱乐' },
     });
-    expect(limit?.amount).toBe(NEW_ENTERTAINMENT_LIMIT);
+    expect(limit?.amountMinor).toBe(moneyToCents(NEW_ENTERTAINMENT_LIMIT));
 
     // The resumed plan is durable — the AgentTask settled `success`.
     const row = await getTestPrisma().agentTask.findUnique({ where: { id: resumed.plan.id } });

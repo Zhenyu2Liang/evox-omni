@@ -16,8 +16,9 @@ import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
 import type { CardStatus, CardType, CardView } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
-import { formatCNY } from '@/lib/money';
+import { centsToMoney, formatCNY, moneyToCents } from '@/lib/money';
 import type { ToolExecutionResult, ToolRunOptions } from './index';
+import { MoneyParameter } from './money-schema';
 
 /** Chinese labels for a card type (for user-facing summaries). */
 const CARD_TYPE_LABELS: Record<CardType, string> = {
@@ -90,7 +91,7 @@ export async function runGetCards(
 export const SetCardLimitParams = Type.Object({
   cardId: Type.String({ description: '卡片 id' }),
   category: Type.String({ description: '限额分类，如 娱乐/餐饮/购物/出行' }),
-  amount: Type.Number({ description: '该分类限额（CNY）' }),
+  amount: MoneyParameter,
 });
 export type SetCardLimitArgs = Static<typeof SetCardLimitParams>;
 
@@ -125,7 +126,7 @@ export async function runSetCardLimit(
       userId,
       cardId: input.cardId,
       category: input.category,
-      amount: input.amount,
+      amount: centsToMoney(moneyToCents(input.amount)),
     });
     const limit = card.limits.find((entry) => entry.category === input.category);
     const amount = limit ? limit.amount : input.amount;
@@ -273,8 +274,7 @@ export async function runReportLostCard(
 
 /** `apply_virtual_card` params (SDK `ApplyVirtualCardInput`; `userId` is server-injected). */
 export const ApplyVirtualCardParams = Type.Object({
-  label: Type.Optional(Type.String({ description: '虚拟卡备注/用途，不表示限额配置' })),
-  monthlyLimit: Type.Optional(Type.Number({ minimum: 0, description: '用户要求的月限额（元，最多两位小数）；必须填写在此字段，不能仅写备注' })),
+  monthlyLimit: Type.Optional(MoneyParameter),
 });
 export type ApplyVirtualCardArgs = Static<typeof ApplyVirtualCardParams>;
 
@@ -304,12 +304,11 @@ export async function runApplyVirtualCard(
   args: Record<string, unknown>,
   opts?: ToolRunOptions,
 ): Promise<ToolExecutionResult> {
-  const { label, monthlyLimit } = args as unknown as ApplyVirtualCardArgs;
+  const { monthlyLimit } = args as unknown as ApplyVirtualCardArgs;
   try {
     const card = await banking.card.applyVirtualCard({
       userId,
-      label,
-      monthlyLimit,
+      monthlyLimit: monthlyLimit === undefined ? undefined : centsToMoney(moneyToCents(monthlyLimit)),
       idempotencyKey: opts?.idempotencyKey,
     });
     const status = CARD_STATUS_LABELS[card.status] ?? card.status;

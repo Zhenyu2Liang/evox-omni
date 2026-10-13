@@ -52,7 +52,7 @@ Harness helpers (`helpers.ts`):
 
 ## Constraints
 - **Never matches vitest.** Every file avoids `.test.`/`.spec.` (the entry is `.e2e.ts`), so
-  `npm run test` never picks it up. Run it explicitly: `npx tsx tests/e2e/acceptance.e2e.ts`.
+  `pnpm test` never picks it up. Run it explicitly: `pnpm exec tsx tests/e2e/acceptance.e2e.ts`.
 - **Type-checked.** These files ARE compiled by `tsc --noEmit` (tsconfig `include: **/*.ts`) → must
   stay at 0 errors even though vitest transpiles without type-checking.
 - **Never fake a pass.** A journey that cannot be automated in-browser emits a `SKIP` + concrete
@@ -80,9 +80,9 @@ unit/scenario coverage: `tests/scenarios/test-09-investment-mfa.test.ts` (+
 (+ `tests/app/security-workflow-http.test.ts`).
 
 ## Prerequisites (in order, in a fresh worktree)
-1. `npm install`
+1. `pnpm install`
 - No manual `prisma generate` step: `resetDemoDatabase()` GENERATES the Prisma Client itself when it is
-  missing or unusable (and self-heals a partially-provisioned `node_modules`), so a clean `npm install`-only
+  missing or unusable (and self-heals a partially-provisioned `node_modules`), so a clean `pnpm install`-only
   checkout is sufficient (see "Isolated E2E database").
 - A **free port** is chosen at runtime. **System Chrome** is used (Chrome first, Edge fallback;
   `E2E_BROWSER_PATH` overrides detection). **No `playwright install` / browser download** — headless
@@ -92,7 +92,7 @@ unit/scenario coverage: `tests/scenarios/test-09-investment-mfa.test.ts` (+
 
 ## How to run
 ```
-npx tsx tests/e2e/acceptance.e2e.ts
+pnpm exec tsx tests/e2e/acceptance.e2e.ts
 ```
 One line per journey; the process exits non-zero when any journey FAILs.
 
@@ -116,7 +116,7 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
      `prisma generate` when the generated artifacts
      (`node_modules/.prisma/client/{schema.prisma,index.js,default.js}`) are absent OR the client does
      not actually construct (a throwaway `require('@prisma/client'); new PrismaClient()` probe — the
-     bare-`npm install` postinstall stub throws `did not initialize yet`), so a
+     bare-`pnpm install` postinstall stub throws `did not initialize yet`), so a
      partially-provisioned or stale `node_modules` self-heals. Readiness is gated on the USABILITY probe
      (`prismaClientUsable`); artifact presence is accepted as a non-authoritative confirming signal.
   2. **Primary rung** (byte-for-byte unchanged): `prisma db push --skip-generate` → probe → seed.
@@ -141,7 +141,7 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   summary, `node_modules/@prisma/engines/schema-engine*` presence). The whole attempt is retried
   `attempts` times (default 2) with a short backoff — SQLite on Windows is occasionally lock-prone.
 - CLIs are invoked like the dev server: project-local binaries (`REPO_ROOT/node_modules/...` launched
-  with `process.execPath`), else `cmd.exe /d /s /c "npx …"` on Windows / a plain command on POSIX.
+  with `process.execPath`), else `pnpm exec` on the supported shell.
 - `E2E_SKIP_DB_RESET=1` keeps the current DB (e.g. to inspect post-run data) — the journeys then
   require a freshly seeded DB.
 - WHY a reset every run: money journeys are tiered from the FROZEN demo day's accumulated outgoing
@@ -237,7 +237,7 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   resolution (`createRequire(import.meta.url).resolve('next/dist/bin/next')`) so a worktree with NO
   local `node_modules` still finds the hoisted/shared `next` (each accepted only when it exists on
   disk). Only when neither resolves does it fall back to
-  `cmd.exe /d /s /c "npx next dev …"` (Windows) / `npx next dev …` (POSIX) — deliberately NOT Node's
+  `cmd.exe /d /s /c "pnpm exec next dev …"` (Windows) / `pnpm exec next dev …` (POSIX) — deliberately NOT Node's
   `shell: true`, which re-serialized args and produced an empty stdout pipe. It waits for BOTH
   `/api/health` AND `/agent` and retries ONCE on a fresh port; when every attempt fails it prints the
   captured dev-server log tail and the entry script FAILs every journey.
@@ -289,9 +289,10 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
 A SECOND, independent real-browser harness that drives the REAL `next dev` app against the REAL
 DeepSeek API (`LLM_MODE=live`) instead of the scripted mock — same real Chrome + real route handlers,
 only the LLM is live.
-- Run: `npx tsx tests/e2e/live-acceptance.e2e.ts`; subset via `LIVE_SCENARIOS=1,3` (ids `1,2,2p,3,4,5,6,7`; selecting `2` also pulls `2p`).
+- Run: `pnpm exec tsx tests/e2e/live-acceptance.e2e.ts`; subset via `LIVE_SCENARIOS=1,3` (ids `1,2,2p,3,4,5,6,7`; selecting `2` also pulls `2p`).
 - Own isolated DB `prisma/live-acceptance.db` (never `e2e.db`/`dev.db`/`test.db`); `configureLiveEnv()` sets `DATABASE_URL`.
-- Loads the worktree-root `.env.local` into its own `process.env` before booting (presence-only; values never printed / committed); the spawned `next dev` inherits it.
+- Uses the Next.js environment loader before booting; it does not directly read or parse `.env.local`,
+  and configuration values are never printed. Spawned processes inherit the configured environment.
 - `LIVE_FORCE_MODEL` is an OPT-IN model override; by DEFAULT it does NOT override, so `agent/providers/provider-live.ts#resolveLiveModel` resolves the PROVIDED `.env.local` id for real.
 - `PARK_ATTEMPTS` retry/nudge logic for the flaky park; `awaitSessionCookie()` bounded wait for the `banking_session` cookie; one idempotent `cleanup()` stops the ACTIVE dev server (incl. the scenario-7 reboot), wired to exit/signals.
 - TASK-A evidence tooling: `persistedRecipientCalls()` parses every `AgentSession.stateJson` and prints each `transfer_money`/`search_contact` `toolCall` arg object VERBATIM; `LIVE_S2_PROMPT`/`LIVE_S3_PROMPT` override the two transfer prompts.
@@ -303,7 +304,7 @@ only the LLM is live.
 - The `next dev` boot is now first-attempt reliable even in a worktree with NO local `node_modules`,
   because `helpers.ts#resolveNextBin()` falls back to Node's own module resolution
   (`createRequire(import.meta.url).resolve('next/dist/bin/next')`) so the reliable direct-binary path
-  is taken instead of the former flaky `npx` path.
+  is taken before the package-manager fallback path.
 - **Live-model narration flake (model nondeterminism, NOT infrastructure / app logic):** the LIVE
   model occasionally replies to a money prompt with a confirmation *question* and never calls the
   gated tool that turn, so no confirmation/MFA card appears and the card wait times out

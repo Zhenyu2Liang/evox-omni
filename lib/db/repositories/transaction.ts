@@ -1,5 +1,6 @@
 import type { Prisma, Transaction } from '@prisma/client';
-import { prisma } from '../client';
+import { dbClient } from '../client';
+import { absoluteMinor, moneyToCents, type MoneyInput } from '../../money';
 
 /** Filter for transaction listing. Range is [from, to). */
 export interface TransactionQuery {
@@ -13,7 +14,7 @@ export interface TransactionQuery {
 }
 
 /** Aggregate of debits grouped by category. */
-export interface CategoryTotal { category: string; total: number; count: number; }
+export interface CategoryTotal { category: string; total: bigint; count: number; }
 
 /**
  * Transactions for `query.userId`, most recent first (`occurredAt` descending).
@@ -32,7 +33,7 @@ export function listTransactions(query: TransactionQuery): Promise<Transaction[]
   if (query.channel !== undefined) where.channel = query.channel;
   if (query.direction !== undefined) where.direction = query.direction;
 
-  return prisma.transaction.findMany({
+  return dbClient().transaction.findMany({
     where,
     orderBy: { occurredAt: 'desc' },
     ...(query.limit !== undefined ? { take: query.limit } : {}),
@@ -40,15 +41,15 @@ export function listTransactions(query: TransactionQuery): Promise<Transaction[]
 }
 
 export function getTransaction(id: string): Promise<Transaction | null> {
-  return prisma.transaction.findUnique({ where: { id } });
+  return dbClient().transaction.findUnique({ where: { id } });
 }
 
-export function createTransaction(input: { accountId: string; userId: string; amount: number; direction: 'DEBIT' | 'CREDIT'; category: string; merchant: string; channel?: string | null; remark?: string | null; counterpartyId?: string | null; occurredAt: Date; isAnomaly?: boolean; anomalyReason?: string | null; currency?: string }): Promise<Transaction> {
-  return prisma.transaction.create({
+export function createTransaction(input: { accountId: string; userId: string; amount: MoneyInput; direction: 'DEBIT' | 'CREDIT'; category: string; merchant: string; channel?: string | null; remark?: string | null; counterpartyId?: string | null; occurredAt: Date; isAnomaly?: boolean; anomalyReason?: string | null; currency?: string }): Promise<Transaction> {
+  return dbClient().transaction.create({
     data: {
       accountId: input.accountId,
       userId: input.userId,
-      amount: input.amount,
+      amountMinor: moneyToCents(input.amount),
       direction: input.direction,
       category: input.category,
       merchant: input.merchant,
@@ -67,34 +68,27 @@ export function createTransaction(input: { accountId: string; userId: string; am
  * Absolute total of DEBIT amounts in [from, to).
  * DEBIT amounts are stored negative, so the absolute value of the aggregate is returned.
  */
-export async function sumDebitsInRange(userId: string, from: Date, to: Date): Promise<number> {
-  const agg = await prisma.transaction.aggregate({
-    where: { userId, direction: 'DEBIT', occurredAt: { gte: from, lt: to } },
-    _sum: { amount: true },
-  });
-  return Math.abs(agg._sum.amount ?? 0);
+export async function sumDebitsInRange(userId: string, from: Date, to: Date): Promise<bigint> {
+  const rows = await listTransactions({ userId, direction: 'DEBIT', from, to });
+  return rows.reduce((total, row) => total + absoluteMinor(row.amountMinor), 0n);
 }
 
 /** Debit totals grouped by category in [from, to), sorted by total descending. */
 export async function listByCategory(userId: string, from: Date, to: Date): Promise<CategoryTotal[]> {
-  const rows = await prisma.transaction.groupBy({
-    by: ['category'],
-    where: { userId, direction: 'DEBIT', occurredAt: { gte: from, lt: to } },
-    _sum: { amount: true },
-    _count: { _all: true },
-  });
-  return rows
-    .map((row) => ({
-      category: row.category,
-      total: Math.abs(row._sum.amount ?? 0),
-      count: row._count._all,
-    }))
-    .sort((a, b) => b.total - a.total || a.category.localeCompare(b.category));
+  const rows = await listTransactions({ userId, direction: 'DEBIT', from, to });
+  const totals = new Map<string, CategoryTotal>();
+  for (const row of rows) {
+    const current = totals.get(row.category) ?? { category: row.category, total: 0n, count: 0 };
+    current.total += absoluteMinor(row.amountMinor);
+    current.count += 1;
+    totals.set(row.category, current);
+  }
+  return [...totals.values()].sort((a, b) => a.total < b.total ? 1 : a.total > b.total ? -1 : a.category.localeCompare(b.category));
 }
 
 /** Previously flagged anomalies (`isAnomaly = true`), most recent first. */
 export function listAnomalies(userId: string, limit?: number): Promise<Transaction[]> {
-  return prisma.transaction.findMany({
+  return dbClient().transaction.findMany({
     where: { userId, isAnomaly: true },
     orderBy: { occurredAt: 'desc' },
     ...(limit !== undefined ? { take: limit } : {}),
@@ -103,7 +97,7 @@ export function listAnomalies(userId: string, limit?: number): Promise<Transacti
 
 /** Transactions whose merchant, remark or category contains `keyword`, most recent first. */
 export function searchTransactions(userId: string, keyword: string, limit?: number): Promise<Transaction[]> {
-  return prisma.transaction.findMany({
+  return dbClient().transaction.findMany({
     where: {
       userId,
       OR: [
@@ -118,7 +112,7 @@ export function searchTransactions(userId: string, keyword: string, limit?: numb
 }
 
 export function countTransactionsSince(userId: string, since: Date): Promise<number> {
-  return prisma.transaction.count({
+  return dbClient().transaction.count({
     where: { userId, occurredAt: { gte: since } },
   });
 }
@@ -130,15 +124,7 @@ export function countTransactionsSince(userId: string, since: Date): Promise<num
  * value of the aggregate is returned. Used by the risk engine to compute the day's
  * running transfer total.
  */
-export async function sumOutgoingTransfersSince(userId: string, sinceMs: number): Promise<number> {
-  const agg = await prisma.transaction.aggregate({
-    where: {
-      userId,
-      direction: 'DEBIT',
-      channel: 'TRANSFER',
-      occurredAt: { gte: new Date(sinceMs) },
-    },
-    _sum: { amount: true },
-  });
-  return Math.abs(agg._sum.amount ?? 0);
+export async function sumOutgoingTransfersSince(userId: string, sinceMs: number): Promise<bigint> {
+  const rows = await listTransactions({ userId, direction: 'DEBIT', channel: 'TRANSFER', from: new Date(sinceMs) });
+  return rows.reduce((total, row) => total + absoluteMinor(row.amountMinor), 0n);
 }

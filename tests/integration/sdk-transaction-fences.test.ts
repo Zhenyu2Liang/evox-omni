@@ -2,6 +2,8 @@ import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { banking } from '@/banking-sdk';
 import { createToolRegistry } from '@/agent/tools';
 import { AppError } from '@/lib/errors';
+import { toJson } from '@/lib/json';
+import { centsToMoney } from '@/lib/money';
 import type { ToolName } from '@/lib/contracts/tools';
 import { NextRequest } from 'next/server';
 import { getOrCreateSession, executeGatedTool } from '@/agent';
@@ -23,7 +25,7 @@ const mutations: ToolName[] = ['transfer_money', 'reserve_budget', 'set_card_lim
 
 async function businessState() {
   const p = getTestPrisma();
-  return JSON.stringify(await Promise.all([
+  return toJson(await Promise.all([
     p.account.findMany({ orderBy: { id: 'asc' } }), p.transaction.findMany({ orderBy: { id: 'asc' } }),
     p.card.findMany({ orderBy: { id: 'asc' } }), p.cardLimit.findMany({ orderBy: { id: 'asc' } }),
     p.subscription.findMany({ orderBy: { id: 'asc' } }), p.budget.findMany({ orderBy: { id: 'asc' } }),
@@ -35,18 +37,18 @@ async function businessState() {
 it.each(mutations)('%s reaches the trusted transaction fence and commits no business mutation when it rejects', async tool => {
   const p = getTestPrisma();
   const subscription = await p.subscription.findFirstOrThrow();
-  const product = await p.investmentProduct.findFirstOrThrow({ orderBy: { minAmount: 'asc' } });
+  const product = await p.investmentProduct.findFirstOrThrow({ orderBy: { minAmountMinor: 'asc' } });
   const holding = await p.investmentHolding.findFirstOrThrow({ where: { userId, status: 'HOLDING' } });
   if (tool === 'unfreeze_card') await p.card.update({ where: { id: 'card_credit' }, data: { status: 'FROZEN' } });
   const args: Partial<Record<ToolName, Record<string, unknown>>> = {
-    transfer_money: { name: '张伟', amount: 200 }, reserve_budget: { name: '写入围栏预算', amount: 10 },
-    set_card_limit: { cardId: 'card_credit', category: '娱乐', amount: 1500 },
+    transfer_money: { name: '张伟', amount: '200' }, reserve_budget: { name: '写入围栏预算', amount: '10' },
+    set_card_limit: { cardId: 'card_credit', category: '娱乐', amount: '1500' },
     freeze_card: { cardId: 'card_credit' }, unfreeze_card: { cardId: 'card_credit' },
     report_lost_card: { cardId: 'card_credit' }, apply_virtual_card: { label: '写入围栏虚拟卡' },
     cancel_subscription: { subscriptionId: subscription.id },
     set_subscription_reminder: { subscriptionId: subscription.id, remind: !subscription.remind },
     create_scheduled_task: { name: '写入围栏任务', kind: 'REMINDER', runAt: Date.now() + 86400000 },
-    subscribe_investment: { productId: product.id, amount: product.minAmount },
+    subscribe_investment: { productId: product.id, amount: centsToMoney(product.minAmountMinor) },
     redeem_investment: { holdingId: holding.id },
   };
   const before = await businessState(); let fences = 0;
@@ -57,17 +59,16 @@ it.each(mutations)('%s reaches the trusted transaction fence and commits no busi
   expect(fences).toBe(1); expect(result.ok).toBe(false); expect(await businessState()).toBe(before);
 });
 
-it('legacy same-key/different-request rejects, and matching history replays without guessing its original balance', async () => {
-  const p = getTestPrisma(); const key = 'repair:legacy:request-match';
-  const input = { userId, name: '张伟', amount: 200, idempotencyKey: key };
+it('a committed ledger without its receipt requires reconciliation and cannot execute again', async () => {
+  const p = getTestPrisma(); const key = 'repair:missing-receipt';
+  const input = { userId, name: '张伟', amount: '200', idempotencyKey: key };
   const original = await banking.transfer.createTransfer(input);
   expect((await p.executionReceipt.deleteMany({ where: { userId, key } })).count).toBe(1);
   await p.contact.update({ where: { id: 'contact_zhangwei' }, data: { name: '张伟的新名字' } });
-  const replay = await banking.transfer.getCommittedTransfer(input);
-  expect(replay?.transactionId).toBe(original.transactionId); expect(replay?.recipient.name).toBe('张伟');
-  expect(replay?.newBalance).toBeUndefined();
-  await expect(banking.transfer.createTransfer({ ...input, amount: 300 })).rejects.toMatchObject({ code: 'CONFLICT' });
-  expect((await p.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(23380);
+  await expect(banking.transfer.getCommittedTransfer(input)).rejects.toMatchObject({ code: 'CONFLICT' });
+  await expect(banking.transfer.createTransfer(input)).rejects.toMatchObject({ code: 'CONFLICT' });
+  await expect(banking.transfer.createTransfer({ ...input, amount: '300' })).rejects.toMatchObject({ code: 'CONFLICT' });
+  expect((await p.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2338000n);
   expect(await p.transaction.count({ where: { id: original.transactionId } })).toBe(1);
 });
 
@@ -80,7 +81,7 @@ async function call(handler: Route, id: string, sessionId: string) {
 }
 async function parkTransfer() {
   const sessionId = (await getOrCreateSession(userId)).sessionId;
-  const parked = await executeGatedTool({ sessionId, userId, toolName: 'transfer_money', args: { name: '张伟', amount: 200 }, userRequest: '审计和历史恢复回归' });
+  const parked = await executeGatedTool({ sessionId, userId, toolName: 'transfer_money', args: { name: '张伟', amount: '200' }, userRequest: '审计和历史恢复回归' });
   expect(parked.pendingActionId).toBeTruthy();
   return { sessionId, id: parked.pendingActionId! };
 }
@@ -93,8 +94,8 @@ it('an already executed historical action with missing audit is repaired exactly
   const repaired = await call(recoverPost, id, sessionId); expect(repaired.body.data.ok).toBe(true);
   const repeat = await call(recoverPost, id, sessionId); expect(repeat.body.data.status).toBe('executed');
   expect(await p.auditLog.count({ where: { dedupeKey: `exec:${id}` } })).toBe(1);
-  expect(await p.transaction.count({ where: { userId, amount: -200, counterpartyId: 'contact_zhangwei' } })).toBe(1);
-  expect((await p.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(23380);
+  expect(await p.transaction.count({ where: { userId, amountMinor: -20000n, counterpartyId: 'contact_zhangwei' } })).toBe(1);
+  expect((await p.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2338000n);
 });
 
 it('a receipt inconsistent with its ledger routes recovery to reconciliation without re-execution', async () => {
@@ -102,16 +103,19 @@ it('a receipt inconsistent with its ledger routes recovery to reconciliation wit
   const fault = vi.spyOn(actionRepo, 'setPendingActionStatus').mockRejectedValueOnce(new Error('repair: status unavailable'));
   const first = await call(confirmPost, id, sessionId); expect(first.http).toBe(500); expect(fault).toHaveBeenCalledTimes(1); fault.mockRestore();
   const receipt = await p.executionReceipt.findFirstOrThrow({ where: { userId, key: id } });
-  await p.executionReceipt.update({ where: { id: receipt.id }, data: { resultJson: JSON.stringify({ ...JSON.parse(receipt.resultJson), amount: 999 }) } });
+  await p.executionReceipt.update({ where: { id: receipt.id }, data: {
+    resultJson: JSON.stringify({ ...JSON.parse(receipt.resultJson), amount: '999.00' }),
+    responseJson: JSON.stringify({ ...JSON.parse(receipt.responseJson!), data: { ...JSON.parse(receipt.responseJson!).data, amount: '999.00' } }),
+  } });
   const recovered = await call(recoverPost, id, sessionId);
   expect(recovered.body.data.status).toBe('needs_reconciliation');
   expect((await p.pendingAction.findUniqueOrThrow({ where: { id } })).status).toBe('needs_reconciliation');
-  expect((await p.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(23380);
-  expect(await p.transaction.count({ where: { userId, amount: -200, counterpartyId: 'contact_zhangwei' } })).toBe(1);
+  expect((await p.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2338000n);
+  expect(await p.transaction.count({ where: { userId, amountMinor: -20000n, counterpartyId: 'contact_zhangwei' } })).toBe(1);
 });
 
 it('strict audit dedupe never absorbs a different tool or business outcome under the same key', async () => {
-  const entry: AuditEntry = { timestamp: Date.now(), sessionId: 'repair:audit-session', userRequest: '审计身份', toolName: 'transfer_money', riskLevel: 'YELLOW', confirmationRequired: true, confirmed: true, mfaRequired: false, status: 'success', toolResult: { ok: true, data: { transactionId: 'repair:tx', amount: 200 } } };
+  const entry: AuditEntry = { timestamp: Date.now(), sessionId: 'repair:audit-session', userRequest: '审计身份', toolName: 'transfer_money', riskLevel: 'YELLOW', confirmationRequired: true, confirmed: true, mfaRequired: false, status: 'success', toolResult: { ok: true, data: { transactionId: 'repair:tx', amount: '200.00' } } };
   await recordAudit(entry, { dedupeKey: 'repair:audit-identity', strict: true });
   await expect(recordAudit({ ...entry, toolName: 'apply_virtual_card' }, { dedupeKey: 'repair:audit-identity', strict: true })).rejects.toMatchObject({ code: 'P2002' });
   await expect(recordAudit({ ...entry, status: 'failed', toolResult: { ok: false } }, { dedupeKey: 'repair:audit-identity', strict: true })).rejects.toMatchObject({ code: 'P2002' });

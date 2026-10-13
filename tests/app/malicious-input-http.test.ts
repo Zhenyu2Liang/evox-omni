@@ -43,12 +43,13 @@ const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** 王芳 — the payee the attacker tries to SUBSTITUTE via overriding body/query args. */
 const WANGFANG = CONTACTS.find((contact) => contact.name === '王芳')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 
 /** 张伟's transfer amount in the YELLOW scenario (≤ ¥1000 ⇒ confirmation only). */
-const YELLOW_AMOUNT = 200;
+const YELLOW_AMOUNT = '200';
 /** The amount the attacker tries to sneak in via overriding request args (must never be executed). */
-const INJECTED_AMOUNT = 9000;
+const INJECTED_AMOUNT = '9000';
 
 /**
  * The route's JSON envelope — the transport shape (NOT a frozen `@/lib/contracts` type). Declared
@@ -159,9 +160,9 @@ function verifyAction(
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to a given counterparty (the money-moved probe). */
@@ -266,9 +267,9 @@ describe('[integration] POST /api/actions/[id]/confirm — the executed args are
     expect(row.riskLevel).toBe('YELLOW');
     expect(row.status).toBe('pending');
     // The gateway persisted the VALIDATED original args — the only args that may ever execute.
-    const persisted = JSON.parse(row.argsJson) as { contactId?: string; amount?: number };
+    const persisted = JSON.parse(row.argsJson) as { contactId?: string; amount?: string };
     expect(persisted.contactId).toBe(ZHANGWEI.id);
-    expect(persisted.amount).toBe(YELLOW_AMOUNT);
+    expect(persisted.amount).toBe(normalizeMoney(YELLOW_AMOUNT));
 
     // The attacker tries to REPLACE the args with a ¥9,000 transfer to 王芳, via the request body.
     const res = await confirmAction(row.id, turn.sessionId, {
@@ -282,14 +283,14 @@ describe('[integration] POST /api/actions/[id]/confirm — the executed args are
     expect(data.tier).toBe('YELLOW');
 
     // The ORIGINAL ¥200 to 张伟 executed — exactly once.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - YELLOW_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, YELLOW_AMOUNT));
     const toZhangwei = await transfersTo(ZHANGWEI.id);
     expect(toZhangwei).toHaveLength(1);
-    expect(toZhangwei[0].amount).toBe(-YELLOW_AMOUNT);
+    expect(toZhangwei[0].amountMinor).toBe(-moneyToCents(YELLOW_AMOUNT));
 
     // The substituted payee (王芳) received NOTHING, and nothing of ¥9,000 moved.
     expect(await transfersTo(WANGFANG.id)).toHaveLength(0);
-    expect(await getTestPrisma().transaction.findMany({ where: { amount: -INJECTED_AMOUNT } })).toHaveLength(0);
+    expect(await getTestPrisma().transaction.findMany({ where: { amountMinor: -moneyToCents(INJECTED_AMOUNT) } })).toHaveLength(0);
 
     expectNoMfaLeak('(b1) body override', res.data);
   });
@@ -312,13 +313,13 @@ describe('[integration] POST /api/actions/[id]/confirm — the executed args are
     expect(data.tier).toBe('YELLOW');
 
     // The ORIGINAL ¥200 to 张伟 executed — exactly once; the query override is ignored.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - YELLOW_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, YELLOW_AMOUNT));
     const toZhangwei = await transfersTo(ZHANGWEI.id);
     expect(toZhangwei).toHaveLength(1);
-    expect(toZhangwei[0].amount).toBe(-YELLOW_AMOUNT);
+    expect(toZhangwei[0].amountMinor).toBe(-moneyToCents(YELLOW_AMOUNT));
 
     expect(await transfersTo(WANGFANG.id)).toHaveLength(0);
-    expect(await getTestPrisma().transaction.findMany({ where: { amount: -INJECTED_AMOUNT } })).toHaveLength(0);
+    expect(await getTestPrisma().transaction.findMany({ where: { amountMinor: -moneyToCents(INJECTED_AMOUNT) } })).toHaveLength(0);
 
     expectNoMfaLeak('(b2) query override', res.data);
   });
@@ -360,7 +361,7 @@ describe('[integration] POST /api/actions/[id]/confirm — forged identity query
     expect(legitimate.status).toBe(200);
     expect(payload(legitimate).ok).toBe(true);
     expect(payload(legitimate).status).toBe('executed');
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - YELLOW_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, YELLOW_AMOUNT));
     expect(await transfersTo(ZHANGWEI.id)).toHaveLength(1);
 
     expectNoMfaLeak('(c) forged identity', forgedQuery.data, foreignCookie.data, legitimate.data);

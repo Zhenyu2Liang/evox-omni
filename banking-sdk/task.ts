@@ -15,6 +15,9 @@ import { AppError } from '../lib/errors';
 import { runInTransaction } from './tx';
 import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
 import { safeParse, toJson } from '../lib/json';
+import { normalizeTransferAmount } from '../lib/money';
+import { requestDigest } from '../lib/ledger';
+import { bankingExecutionContext } from './execution-context';
 import type {
   CreateScheduledTaskInput,
   ScheduledTaskKind,
@@ -40,6 +43,9 @@ function toScheduledTaskView(row: ScheduledTask): ScheduledTaskView {
     status: row.status as ScheduledTaskStatus,
     requiresConfirmation: row.requiresConfirmation,
     createdAt: row.createdAt.getTime(),
+    dispatchTaskId: row.dispatchTaskId ?? undefined,
+    deliveredAt: row.deliveredAt?.getTime(),
+    dispatchError: row.dispatchError ?? undefined,
   };
 }
 
@@ -65,18 +71,31 @@ export async function createScheduledTask(
   }
 
   const key = normalizeIdempotencyKey(input.idempotencyKey);
+  const payload = input.payload == null ? null : {
+    ...input.payload,
+    ...(input.payload.amount !== undefined ? { amount: normalizeTransferAmount(input.payload.amount) } : {}),
+  };
   if (key !== undefined) {
     const replayed = await createIdempotent<ScheduledTask>({
       key,
-      find: (tx) => tx.scheduledTask.findUnique({ where: { idempotencyKey: key } }),
+      find: async (tx) => {
+        const existing = await tx.scheduledTask.findUnique({ where: { idempotencyKey: key } });
+        if (existing && (existing.userId !== input.userId || existing.name !== input.name || existing.kind !== input.kind ||
+          existing.runAt.getTime() !== input.runAt || existing.requiresConfirmation !== (input.requiresConfirmation ?? true) ||
+          requestDigest({ payload: safeParse<Record<string, unknown> | null>(existing.payload, null) }) !== requestDigest({ payload }))) {
+          throw new AppError('CONFLICT', 'The execution identity belongs to a different scheduled intent.');
+        }
+        return existing;
+      },
       create: (tx, replayKey) =>
         tx.scheduledTask.create({
           data: {
             userId: input.userId,
+            sessionId: bankingExecutionContext()?.sessionId,
             name: input.name,
             kind: input.kind,
             runAt: new Date(input.runAt),
-            payload: input.payload == null ? null : toJson(input.payload),
+            payload: payload === null ? null : toJson(payload),
             requiresConfirmation: input.requiresConfirmation ?? true,
             status: 'SCHEDULED',
             idempotencyKey: replayKey,
@@ -88,10 +107,11 @@ export async function createScheduledTask(
 
   const row = await runInTransaction((tx) => tx.scheduledTask.create({ data: {
     userId: input.userId,
+    sessionId: bankingExecutionContext()?.sessionId,
     name: input.name,
     kind: input.kind,
     runAt: new Date(input.runAt),
-    payload: input.payload == null ? null : toJson(input.payload),
+    payload: payload === null ? null : toJson(payload),
     requiresConfirmation: input.requiresConfirmation ?? true,
   } }));
   return toScheduledTaskView(row);
@@ -103,13 +123,17 @@ export async function listScheduledTasks(userId: string): Promise<ScheduledTaskV
   return rows.map(toScheduledTaskView);
 }
 
-/** Cancel a scheduled task (status → CANCELLED); returns the updated task. */
+/** Cancel an undispatched intent. A dispatched workflow must use its fenced plan cancellation route. */
 export async function cancelScheduledTask(id: string): Promise<ScheduledTaskView> {
-  const existing = await scheduledTasks.getScheduledTask(id);
-  if (existing === null) {
-    throw new AppError('NOT_FOUND', `计划任务不存在：${id}`, { id });
-  }
-
-  const row = await runInTransaction((tx) => tx.scheduledTask.update({ where: { id }, data: { status: 'CANCELLED' } }));
+  const row = await runInTransaction(async tx => {
+    const cancelled = await tx.scheduledTask.updateMany({
+      where: { id, dispatchTaskId: null, status: 'SCHEDULED' }, data: { status: 'CANCELLED' },
+    });
+    const current = await tx.scheduledTask.findUnique({ where: { id } });
+    if (!current) throw new AppError('NOT_FOUND', 'The scheduled intent does not exist.', { id });
+    if (cancelled.count === 1 || current.status === 'CANCELLED' && current.dispatchTaskId === null) return current;
+    throw new AppError('CONFLICT', 'The scheduled intent has already been dispatched. Cancel its owning workflow instead.',
+      { dispatchTaskId: current.dispatchTaskId, status: current.status });
+  });
   return toScheduledTaskView(row);
 }

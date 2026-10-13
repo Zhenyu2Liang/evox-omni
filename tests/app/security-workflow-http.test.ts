@@ -64,10 +64,11 @@ const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** Recipient 王芳 — the SECOND parked transfer (the one that must escalate at confirm time). */
 const WANGFANG = CONTACTS.find((contact) => contact.name === '王芳')!;
 /** The seeded checking balance. */
-const SEEDED_BALANCE = CHECKING.balance;
+import { addMoney, centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 
 /** Both parked transfers use the same amount: ¥600 each ≤ ¥1000, ¥600 + ¥600 > ¥1000. */
-const TRANSFER_AMOUNT = 600;
+const TRANSFER_AMOUNT = '600';
 
 /**
  * The route's JSON envelope — the app-layer transport shape (NOT a frozen `@/lib/contracts` type).
@@ -165,9 +166,9 @@ function verifyAction(
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (seeded ¥23,580). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to `contactId` (the money-moved-exactly-once probe). */
@@ -202,8 +203,8 @@ function parkFor<T extends { argsJson: string }>(
  */
 async function parkTwoTransfers() {
   // The two amounts must straddle the ¥1000 confirmation-only limit — assert the arithmetic.
-  expect(TRANSFER_AMOUNT).toBeLessThanOrEqual(DAILY_TRANSFER_LIMIT);
-  expect(TRANSFER_AMOUNT * 2).toBeGreaterThan(DAILY_TRANSFER_LIMIT);
+  expect(moneyToCents(TRANSFER_AMOUNT)).toBeLessThanOrEqual(moneyToCents(DAILY_TRANSFER_LIMIT));
+  expect(moneyToCents(TRANSFER_AMOUNT) * 2n).toBeGreaterThan(moneyToCents(DAILY_TRANSFER_LIMIT));
 
   // 1) Park the ¥600 transfer to 张伟 (fresh session).
   const first = await chatTurn('给张伟转600元');
@@ -267,7 +268,7 @@ describe('[integration] POST /api/actions/[id]/confirm — two YELLOW parks in O
     expect(dataA.status).toBe('executed');
     expect(dataA.tier).toBe('YELLOW');
     expect(await transfersTo(ZHANGWEI.id)).toHaveLength(1);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
 
     // CONFIRM B — the day total is now ¥600, so ¥600 + ¥600 > ¥1000 ⇒ strong verification required.
     const resB = await confirmAction(actionB.id, sessionId);
@@ -286,7 +287,7 @@ describe('[integration] POST /api/actions/[id]/confirm — two YELLOW parks in O
 
     // Fail-closed: the escalated confirm moved NO money (only A's ¥600 is gone).
     expect(await transfersTo(WANGFANG.id)).toHaveLength(0);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
 
     expectNoMfaLeak('Scenario 1 / it 1', resA.data, resA.data?.data, resB.data, resB.data?.data);
   });
@@ -318,10 +319,10 @@ describe('[integration] POST /api/actions/[id]/verify — completing an escalate
     expect(data.mfaResult).toBe('success');
 
     // Both transfers moved EXACTLY ONCE: ¥23,580 − ¥600 − ¥600.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - 2 * TRANSFER_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, addMoney(TRANSFER_AMOUNT, TRANSFER_AMOUNT)));
     const wangfang = await transfersTo(WANGFANG.id);
     expect(wangfang).toHaveLength(1);
-    expect(wangfang[0].amount).toBe(-TRANSFER_AMOUNT);
+    expect(wangfang[0].amountMinor).toBe(-moneyToCents(TRANSFER_AMOUNT));
     expect(await transfersTo(ZHANGWEI.id)).toHaveLength(1);
 
     // The escalated decision is audited with the EFFECTIVE RED/MFA flags — never the stale YELLOW
@@ -364,7 +365,7 @@ describe('[integration] POST /api/actions/[id]/verify — a WRONG code on an esc
 
     // Fail-closed: only A's ¥600 moved and a failed MFA attempt writes NO audit row
     // (A's single `success` row may exist — only `failed` is forbidden).
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
     expect(await transfersTo(WANGFANG.id)).toHaveLength(0);
     expect(await getTestPrisma().auditLog.count({ where: { sessionId, mfaResult: 'failed' } })).toBe(0);
 
@@ -395,7 +396,7 @@ describe('[integration] POST /api/actions/[id]/verify — a WRONG code on an esc
 /** Recipient 张伟 (declared above) — the payee of Scenario 2's parked YELLOW transfer. */
 const RECIPIENT = ZHANGWEI;
 /** Scenario 2's YELLOW transfers move ¥200 — ≤ `DAILY_TRANSFER_LIMIT`, so they park YELLOW. */
-const PARKED_AMOUNT = 200;
+const PARKED_AMOUNT = '200';
 /** The COUNTABLE GREEN probe's budget name (exactly ONE row per successful execution). */
 const PROBE_BUDGET = '预留预算S2';
 
@@ -410,7 +411,7 @@ interface SeedNode {
 }
 
 /** GREEN probe node — `reserve_budget` writes exactly ONE `Budget` row per run. */
-function budgetNode(id: string, budgetName: string, amount: number, deps: string[] = []): SeedNode {
+function budgetNode(id: string, budgetName: string, amount: string, deps: string[] = []): SeedNode {
   return {
     id,
     name: budgetName,
@@ -422,7 +423,7 @@ function budgetNode(id: string, budgetName: string, amount: number, deps: string
 }
 
 /** YELLOW `transfer_money` node — gated, so it PARKS a `PendingAction` instead of executing. */
-function transferNode(id: string, amount: number, deps: string[] = []): SeedNode {
+function transferNode(id: string, amount: string, deps: string[] = []): SeedNode {
   return {
     id,
     name: `给${RECIPIENT.name}转账`,
@@ -497,11 +498,11 @@ function cancelTaskRequest(taskId: string, sessionId: string): Promise<HttpResul
  */
 async function seedParkedTransferPlan() {
   const { sessionId, taskId, plan } = await seedPlan('先预留预算S2，再给张伟转200元', [
-    budgetNode('n1', PROBE_BUDGET, 1200),
+    budgetNode('n1', PROBE_BUDGET, '1200'),
     transferNode('n2', PARKED_AMOUNT, ['n1']),
   ]);
 
-  expect(PARKED_AMOUNT).toBeLessThanOrEqual(DAILY_TRANSFER_LIMIT);
+  expect(moneyToCents(PARKED_AMOUNT)).toBeLessThanOrEqual(moneyToCents(DAILY_TRANSFER_LIMIT));
 
   expect(plan.status).toBe('waiting_confirmation');
   expect(nodeStatusOf(plan, 'n1')).toBe('success');
@@ -579,8 +580,8 @@ describe('[integration] POST /api/tasks/[id] cancel — an already-completed pla
 
     const zhangwei = await transfersTo(RECIPIENT.id);
     expect(zhangwei).toHaveLength(1);
-    expect(zhangwei[0].amount).toBe(-PARKED_AMOUNT);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - PARKED_AMOUNT);
+    expect(zhangwei[0].amountMinor).toBe(-moneyToCents(PARKED_AMOUNT));
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, PARKED_AMOUNT));
 
     // The plan continued (the executed node's real outcome was written back): both nodes `success`.
     const completedNodes = await getTestPrisma().agentTaskNode.findMany({
@@ -623,8 +624,8 @@ describe('[integration] POST /api/tasks/[id] cancel — an already-completed pla
     // The executed transfer is PRESERVED truthfully — exactly ONE ±¥200 row, balance still debited.
     const afterRows = await transfersTo(RECIPIENT.id);
     expect(afterRows).toHaveLength(1);
-    expect(afterRows[0].amount).toBe(-PARKED_AMOUNT);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - PARKED_AMOUNT);
+    expect(afterRows[0].amountMinor).toBe(-moneyToCents(PARKED_AMOUNT));
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, PARKED_AMOUNT));
     // The GREEN probe was neither re-run nor rolled back, and the action row is still `executed`.
     expect(await countBudgets(PROBE_BUDGET)).toBe(1);
     expect(
@@ -704,8 +705,8 @@ describe('[integration] POST /api/tasks/[id] pause — a MID-RUN pause stops the
       {
         goal,
         nodes: [
-          budgetNode('a', MIDRUN_BUDGET_A, 1200),
-          budgetNode('b', MIDRUN_BUDGET_B, 800, ['a']),
+          budgetNode('a', MIDRUN_BUDGET_A, '1200'),
+          budgetNode('b', MIDRUN_BUDGET_B, '800', ['a']),
         ],
       },
       {
@@ -899,7 +900,7 @@ async function seedVictim(): Promise<{
   const goal = '先预留预算V，再给张伟转200元';
   const result = await runSubmitPlan(
     DEMO_USER_ID,
-    { goal, nodes: [budgetNode('v1', VICTIM_BUDGET, 1200), transferNode('v2', PARKED_AMOUNT, ['v1'])] },
+    { goal, nodes: [budgetNode('v1', VICTIM_BUDGET, '1200'), transferNode('v2', PARKED_AMOUNT, ['v1'])] },
     { sessionId: victim, runTool: gatewayRunTool(victim, goal) },
   );
   const plan = result.data as TaskPlan | undefined;

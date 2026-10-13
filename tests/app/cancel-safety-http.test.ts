@@ -61,12 +61,13 @@ import { actionUrl, idCtx, postJson, taskUrl, type HttpResult, type RouteHandler
 /** The primary 活期账户 (¥23,580) — the account the parked transfer would draw from. */
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 /** Recipient 张伟 — the parked transfer's payee (the money-moved-at-most-once probe). */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 
 /** The parked transfer amount (≤ ¥1000 ⇒ confirmation-only / YELLOW at PARK time). */
-const TRANSFER_AMOUNT = 200;
+const TRANSFER_AMOUNT = '200';
 /** The natural-language request the parked transfer is attributed to (audit + gate context). */
 const TRANSFER_REQUEST = `给张伟转${TRANSFER_AMOUNT}元`;
 /** The single plan node's id (the node whose `output` link is the object of window (a)). */
@@ -194,9 +195,9 @@ function parkingBarrier(sessionId: string): ParkingBarrier {
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to 张伟 (the money-moved-at-most-once probe). */
@@ -300,7 +301,7 @@ describe('[integration] plan cancel safety — WINDOW (a): the parked action exi
     // (7) STRICT no-movement: no 张伟 debit, the balance is untouched and the day total is still ¥0.
     expect(await zhangweiTransfers()).toHaveLength(0);
     expect(await checkingBalance()).toBe(SEEDED_BALANCE);
-    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe('0.00');
   });
 });
 
@@ -479,7 +480,7 @@ describe('[integration] cancel vs confirm concurrency on the SAME parked action 
     expect(parked.nodeId).toBe(NODE_ID);
     expect(await checkingBalance()).toBe(SEEDED_BALANCE);
     expect(await zhangweiTransfers()).toHaveLength(0);
-    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe('0.00');
 
     // --- The CONTROLLED BARRIER: BOTH decisions must be in flight before either proceeds.
     const barrier = makeBarrier(2);
@@ -523,9 +524,9 @@ describe('[integration] cancel vs confirm concurrency on the SAME parked action 
     const transfers = await zhangweiTransfers();
     if (executed) {
       expect(transfers, 'the winning confirm must debit 张伟 EXACTLY once').toHaveLength(1);
-      expect(transfers[0]!.amount).toBe(-TRANSFER_AMOUNT);
+      expect(transfers[0]!.amountMinor).toBe(-moneyToCents(TRANSFER_AMOUNT));
       expect(transfers[0]!.direction).toBe('DEBIT');
-      expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+      expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
     } else {
       expect(transfers, 'a winning cancel must move NO money').toHaveLength(0);
       expect(await checkingBalance()).toBe(SEEDED_BALANCE);
@@ -533,7 +534,7 @@ describe('[integration] cancel vs confirm concurrency on the SAME parked action 
 
     // --- The day total agrees with the winner (¥0 cancelled / ¥200 executed).
     expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(
-      executed ? TRANSFER_AMOUNT : 0,
+      executed ? normalizeMoney(TRANSFER_AMOUNT) : '0.00',
     );
 
     // --- EXACTLY ONE audit row — the ONE decision that took effect (the loser audits nothing).
@@ -565,7 +566,7 @@ describe('[integration] cancel vs confirm concurrency on the SAME parked action 
     // (3) STRICT no-movement: no 张伟 debit, the balance is untouched, the day total is still ¥0.
     expect(await getTestPrisma().transaction.count({ where: { counterpartyId: ZHANGWEI.id } })).toBe(0);
     expect(await checkingBalance()).toBe(SEEDED_BALANCE);
-    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe('0.00');
 
     // (4) EXACTLY ONE audit row — the cancelled decision.
     const audits = await getTestPrisma().auditLog.findMany({ where: { sessionId } });
@@ -586,9 +587,9 @@ describe('[integration] cancel vs confirm concurrency on the SAME parked action 
 
     const transfers = await zhangweiTransfers();
     expect(transfers, 'the winning confirm must debit 张伟 EXACTLY once').toHaveLength(1);
-    expect(transfers[0]!.amount).toBe(-TRANSFER_AMOUNT);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
-    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(TRANSFER_AMOUNT);
+    expect(transfers[0]!.amountMinor).toBe(-moneyToCents(TRANSFER_AMOUNT));
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(normalizeMoney(TRANSFER_AMOUNT));
 
     // (2) The late cancel is REFUSED — the completed transfer is never rolled back.
     const cancelled = await cancelActionHttp(actionId, sessionId);
@@ -602,8 +603,8 @@ describe('[integration] cancel vs confirm concurrency on the SAME parked action 
     const finalRow = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: actionId } });
     expect(finalRow.status).toBe('executed');
     expect(await zhangweiTransfers()).toHaveLength(1);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
-    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(TRANSFER_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(normalizeMoney(TRANSFER_AMOUNT));
 
     // (4) EXACTLY ONE audit row — the successful decision.
     const audits = await getTestPrisma().auditLog.findMany({ where: { sessionId } });

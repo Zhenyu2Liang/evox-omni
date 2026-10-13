@@ -35,6 +35,7 @@ import { cancelAction, getOrCreateSession, loadSession, resumeTurn, runTurn } fr
 import type { ModelRuntime, ToolExecutionResult } from '@/agent';
 import type { AgentStreamEvent, ChatMessage } from '@/lib/contracts/agent';
 import { newId } from '@/lib/ids';
+import { addMoney } from '@/lib/money';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 
@@ -44,8 +45,8 @@ import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/help
 const CORRECTION_TAG = '（系统校正）';
 
 /** The seeded 活期 balance and its authoritative available total (¥23,580 + ¥50,000 savings). */
-const CHECKING_BALANCE = 23580;
-const TOTAL_AVAILABLE = 73580;
+const CHECKING_BALANCE = '23580.00';
+const TOTAL_AVAILABLE = '73580.00';
 
 /** A false-completion narration: `get_balance` ran, but NO transfer result exists this turn. */
 const FALSE_SUCCESS = '转账已经成功完成，¥500 已转给张伟。';
@@ -63,8 +64,9 @@ const REAL_TRANSFER: ToolExecutionResult = {
   ok: true,
   summary: '已向 张伟 转账 ¥200.00。',
   data: {
-    amount: 200,
-    newBalance: 23380,
+    amount: '200.00',
+    newBalance: '23380.00',
+    sourceAccountId: 'acct_checking',
     recipient: { name: '张伟', contactId: 'contact_zhangwei' },
   },
 };
@@ -164,7 +166,7 @@ async function persistedAssistantText(sessionId: string): Promise<string | undef
  */
 async function parkYellowTransfer(): Promise<{ sessionId: string; toolCallId?: string }> {
   const runtime = scriptedRuntime([
-    toolStep('transfer_money', { name: '张伟', amount: 200 }),
+    toolStep('transfer_money', { name: '张伟', amount: '200.00' }),
     fauxAssistantMessage('转账需要你的确认，请在确认卡片中完成操作。'),
   ]);
   const res = await runTurn(
@@ -265,7 +267,7 @@ describe('grounding — no ungrounded financial fact reaches the UI (through the
     expect(text).not.toContain('999');
     // The authoritative server amount (the available total printed by `formatCNY`).
     expect(text).toContain('73,580.00');
-    expect(TOTAL_AVAILABLE).toBe(CHECKING_BALANCE + 50000);
+    expect(TOTAL_AVAILABLE).toBe(addMoney(CHECKING_BALANCE, '50000.00'));
 
     // The WRONG balance was never streamed either.
     for (const delta of deltas(res.events)) expect(delta).not.toContain('999,999');
@@ -324,8 +326,8 @@ describe('grounding — no ungrounded financial fact reaches the UI (through the
     expect(await persistedAssistantText(res.sessionId)).toBe(text);
 
     const balanceAfter = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-    expect(balanceAfter.balance).toBe(CHECKING_BALANCE);
-    expect(balanceAfter.balance).toBe(balanceBefore.balance);
+    expect(balanceAfter.balanceMinor).toBe(2358000n);
+    expect(balanceAfter.balanceMinor).toBe(balanceBefore.balanceMinor);
     expect(await prisma.transaction.count()).toBe(txBefore);
     expect(await prisma.executionReceipt.count()).toBe(0);
     expect(await prisma.pendingAction.count()).toBe(0);
@@ -336,7 +338,7 @@ describe('grounding — no ungrounded financial fact reaches the UI (through the
     const balanceBefore = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
 
     const runtime = scriptedRuntime([
-      toolStep('transfer_money', { name: '张伟', amount: 200 }),
+      toolStep('transfer_money', { name: '张伟', amount: '200.00' }),
       fauxAssistantMessage('转账需要你的确认，请在确认卡片中完成操作。'),
     ]);
     const res = await runTurn(
@@ -354,8 +356,8 @@ describe('grounding — no ungrounded financial fact reaches the UI (through the
     expect(await prisma.pendingAction.count()).toBe(1);
     expect(await prisma.executionReceipt.count()).toBe(0);
     const balanceAfter = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-    expect(balanceAfter.balance).toBe(balanceBefore.balance);
-    expect(balanceAfter.balance).toBe(CHECKING_BALANCE);
+    expect(balanceAfter.balanceMinor).toBe(balanceBefore.balanceMinor);
+    expect(balanceAfter.balanceMinor).toBe(2358000n);
     // The demo user owns the parked action (server-injected identity, never model text).
     expect((await prisma.pendingAction.findFirstOrThrow()).userId).toBe(DEMO_USER_ID);
   });
@@ -611,7 +613,7 @@ describe('grounding — a RED gated call (MFA) parks and its false completion cl
     const balanceBefore = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
 
     const runtime = scriptedRuntime([
-      toolStep('transfer_money', { name: '张伟', amount: 2000 }),
+      toolStep('transfer_money', { name: '张伟', amount: '2000.00' }),
       fauxAssistantMessage('转账已经成功完成，¥2,000 已转给张伟。'),
     ]);
     const res = await runTurn(
@@ -638,7 +640,7 @@ describe('grounding — a RED gated call (MFA) parks and its false completion cl
     expect(await prisma.executionReceipt.count()).toBe(0);
     expect(await prisma.transaction.count()).toBe(txBefore);
     const balanceAfter = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-    expect(balanceAfter.balance).toBe(balanceBefore.balance);
+    expect(balanceAfter.balanceMinor).toBe(balanceBefore.balanceMinor);
   });
 });
 
@@ -662,7 +664,7 @@ describe('grounding — a cancelled gated action narrates nothing (nothing to gr
     expect(await prisma.executionReceipt.count()).toBe(0);
     expect(await prisma.transaction.count()).toBe(txBefore);
     const balanceAfter = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-    expect(balanceAfter.balance).toBe(balanceBefore.balance);
+    expect(balanceAfter.balanceMinor).toBe(balanceBefore.balanceMinor);
     expect((await prisma.pendingAction.findFirstOrThrow()).status).toBe('cancelled');
   });
 });

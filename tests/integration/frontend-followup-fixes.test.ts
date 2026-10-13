@@ -32,26 +32,26 @@ async function exhaust(actionId: string) {
 
 describe('frontend follow-up: virtual card configuration', () => {
   it('discloses and persists the confirmed monthly limit, including replay', async () => {
-    const { action } = await park('apply_virtual_card', { monthlyLimit: 2000.50, label: '旅行' });
+    const { action } = await park('apply_virtual_card', { monthlyLimit: '2000.50' });
     expect(action.summary.fields).toContainEqual({ label: '月限额', value: '¥2,000.50' });
     const first = await runApplyVirtualCard(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
     const second = await runApplyVirtualCard(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
     expect(first.ok).toBe(true); expect(second.data).toEqual(first.data);
     expect(first.summary).toContain('月限额 ¥2,000.50');
     const rows = await db().card.findMany({ where: { type: 'VIRTUAL' } });
-    expect(rows).toHaveLength(1); expect(rows[0].monthlyLimit).toBe(2000.50);
-    await expect(banking.card.applyVirtualCard({ userId: DEMO_USER_ID, monthlyLimit: 9999, idempotencyKey: action.id }))
+    expect(rows).toHaveLength(1); expect(rows[0].monthlyLimitMinor).toBe(200050n);
+    await expect(banking.card.applyVirtualCard({ userId: DEMO_USER_ID, monthlyLimit: '9999.00', idempotencyKey: action.id }))
       .rejects.toThrow('幂等');
-    expect((await db().card.findUniqueOrThrow({ where: { id: rows[0].id } })).monthlyLimit).toBe(2000.50);
+    expect((await db().card.findUniqueOrThrow({ where: { id: rows[0].id } })).monthlyLimitMinor).toBe(200050n);
   });
-  it('does not describe an arbitrary label as an enforced limit', async () => {
-    const { action } = await park('apply_virtual_card', { label: '月限额2000.50元' });
+  it('creates a card without inventing a monthly limit when none was configured', async () => {
+    const { action } = await park('apply_virtual_card', {});
     expect(action.summary.fields).toContainEqual({ label: '月限额', value: '未设置（本次仅开卡）' });
     const result = await runApplyVirtualCard(DEMO_USER_ID, action.args);
     expect(result.ok).toBe(true); expect(result.summary).toContain('未设置月限额');
     expect(result.summary).not.toContain('2000.50');
   });
-  it.each([-1, 1.001, Infinity])('rejects invalid limit %s before issuing a card', async monthlyLimit => {
+  it.each(['-1', '1.001', 'Infinity'])('rejects invalid limit %s before issuing a card', async monthlyLimit => {
     await expect(park('apply_virtual_card', { monthlyLimit })).rejects.toThrow();
     await expect(banking.card.applyVirtualCard({ userId: DEMO_USER_ID, monthlyLimit })).rejects.toThrow();
     expect(await db().card.count({ where: { type: 'VIRTUAL' } })).toBe(0);
@@ -66,33 +66,44 @@ describe('frontend follow-up: redemption scope and selectors', () => {
     await expect(resolveBankingArgs('other-owner', 'redeem_investment', { holdingId: 'holding_wenjiana' })).rejects.toThrow('未找到');
   });
   it('rejects ambiguous current names; a historical ID remains available for safe replay', async () => {
-    await db().investmentHolding.create({ data: { userId: DEMO_USER_ID, productId: 'prod_wenjiana', amount: 1000, status: 'HOLDING' } });
+    await db().investmentHolding.create({ data: { userId: DEMO_USER_ID, productId: 'prod_wenjiana', principalAmountMinor: 100000n, status: 'HOLDING' } });
     await expect(resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId: '稳健理财A' })).rejects.toThrow('不唯一');
     await db().investmentHolding.updateMany({ data: { status: 'REDEEMED' } });
     await expect(resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId: '稳健理财A' })).rejects.toThrow('未找到');
     expect((await resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId: 'holding_wenjiana' })).holdingId).toBe('holding_wenjiana');
   });
   it('shows full market-value redemption in the MFA card and credits that exact amount once', async () => {
-    const { action } = await park('redeem_investment', { holdingId: 'WJA001', expectedRedemptionAmount: 1 });
-    expect(action.args.expectedRedemptionAmount).toBe(5050); // supplied model value never wins
+    const { action } = await park('redeem_investment', { holdingId: 'WJA001', expectedRedemptionAmount: '1.00' });
+    expect(action.args.expectedRedemptionAmount).toBe('5050.00'); // Supplied model value never wins.
     const html = renderToStaticMarkup(createElement(MfaCard, { actionId: action.id, action: action.summary }));
-    expect(html).toContain('全部赎回'); expect(html).toContain('本金');
+    expect(html).toContain('全部赎回'); expect(html).toContain('Principal');
     expect(html).toContain('¥5,000.00'); expect(html).toContain('¥5,050.00');
     const result = await runRedeemInvestment(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
     const replay = await runRedeemInvestment(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
     expect(result.ok).toBe(true); expect(replay.data).toEqual(result.data);
-    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(28630);
+    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2863000n);
     expect(await db().transaction.count({ where: { category: '投资', direction: 'CREDIT' } })).toBe(1);
   });
   it('rejects a changed value without closing the holding or moving funds', async () => {
     const { action } = await park('redeem_investment', { holdingId: 'holding_wenjiana' });
-    await db().investmentHolding.update({ where: { id: 'holding_wenjiana' }, data: { marketValue: 5060 } });
+    await db().investmentHolding.update({ where: { id: 'holding_wenjiana' }, data: { estimatedMarketValue: '5060' } });
     const before = await db().transaction.count();
     const result = await runRedeemInvestment(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
-    expect(result.ok).toBe(false); expect(result.error).toContain('重新确认');
-    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(23580);
+    expect(result.ok).toBe(false); expect(result.error).toContain('requires a new confirmation');
+    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2358000n);
     expect((await db().investmentHolding.findUniqueOrThrow({ where: { id: 'holding_wenjiana' } })).status).toBe('HOLDING');
     expect(await db().transaction.count()).toBe(before);
+  });
+  it('binds the same rounded settlement in the approval card, execution and original receipt', async () => {
+    await db().investmentHolding.update({ where: { id: 'holding_wenjiana' }, data: { estimatedMarketValue: '5050.005' } });
+    const { action } = await park('redeem_investment', { holdingId: 'holding_wenjiana' });
+    expect(action.args.expectedRedemptionAmount).toBe('5050.01');
+    const html = renderToStaticMarkup(createElement(MfaCard, { actionId: action.id, action: action.summary }));
+    expect(html).toContain('¥5,050.01');
+    const result = await runRedeemInvestment(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ amount: '5050.01', redemptionValuation: '5050.005', settlementRounding: 'HALF_UP' });
+    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2863001n);
   });
   it('reuses a plan decision with its original quote instead of silently authorizing a changed value', async () => {
     const snapshot = newSession(DEMO_USER_ID); await saveSession(snapshot);
@@ -100,10 +111,10 @@ describe('frontend follow-up: redemption scope and selectors', () => {
     const request = { sessionId: snapshot.sessionId, userId: DEMO_USER_ID, toolName: 'redeem_investment' as const,
       taskId: task.id, nodeId: 'redeem', args: { holdingId: 'holding_wenjiana' }, userRequest: '赎回稳健理财A' };
     const first = await gateway.handleToolCall(request);
-    await db().investmentHolding.update({ where: { id: 'holding_wenjiana' }, data: { marketValue: 5060 } });
+    await db().investmentHolding.update({ where: { id: 'holding_wenjiana' }, data: { estimatedMarketValue: '5060' } });
     const replay = await gateway.handleToolCall(request);
     expect(replay.action?.id).toBe(first.action?.id);
-    expect(replay.action?.args.expectedRedemptionAmount).toBe(5050);
+    expect(replay.action?.args.expectedRedemptionAmount).toBe('5050.00');
     expect(await db().pendingAction.count({ where: { taskId: task.id } })).toBe(1);
   });
 });

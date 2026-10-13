@@ -34,6 +34,7 @@ import { requestDigest } from '@/lib/ledger';
  * Structural shape mirrors the repository filter so it can be passed straight through.
  */
 export interface AuditFilter {
+  userId?: string;
   sessionId?: string;
   toolName?: string;
   riskLevel?: RiskLevel;
@@ -146,9 +147,9 @@ export async function listAudit(filter: AuditFilter): Promise<AuditEntry[]> {
 }
 
 /** Aggregate counts (total / byRisk / byStatus) over the whole audit log. Read-only. */
-export async function getAuditSummary(): Promise<AuditSummary> {
+export async function getAuditSummary(filter: AuditFilter = {}): Promise<AuditSummary> {
   try {
-    const summary = await auditStore.aggregateAuditLogs();
+    const summary = await auditStore.aggregateAuditLogs(filter);
     return {
       total: summary.total,
       byRisk: summary.byRisk,

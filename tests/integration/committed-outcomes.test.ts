@@ -36,10 +36,11 @@ import { POST as recoverPost } from '@/app/api/actions/[id]/recover/route';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
 import { GET as actionsGet } from '@/app/api/actions/route';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
+import { centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
 
 const userId = 'user_liming';
 /** Seeded 活期 balance (fixtures ACCOUNTS) — debited by the transferred amount. */
-const CHECKING_BALANCE = 23580;
+const CHECKING_BALANCE = '23580.00';
 
 beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
@@ -110,12 +111,12 @@ const runner = (sessionId: string) =>
       nodeId: ctx.nodeId,
     });
 
-const debitCount = (amount: number) =>
+const debitCount = (amount: string) =>
   getTestPrisma().transaction.count({
-    where: { userId, amount: -amount, counterpartyId: 'contact_zhangwei' },
+    where: { userId, amountMinor: -moneyToCents(amount), counterpartyId: 'contact_zhangwei' },
   });
 const checkingBalance = async () =>
-  (await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance;
+  centsToMoney((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor);
 
 it('a plan-linked transfer wedge recovers to the committed truth on resume: success node, executed action, one receipt, one debit', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
@@ -132,7 +133,7 @@ it('a plan-linked transfer wedge recovers to the committed truth on resume: succ
           name: '转账',
           kind: 'tool',
           tool: 'transfer_money',
-          args: { name: '张伟', amount: 200 },
+          args: { name: '张伟', amount: '200.00' },
           dependencies: [],
         },
       ],
@@ -144,8 +145,10 @@ it('a plan-linked transfer wedge recovers to the committed truth on resume: succ
 
   const nodeKey = nodeExecutionKey(plan.id, 'transfer');
   const pending = await p.pendingAction.findFirstOrThrow({ where: { taskId: plan.id } });
+  expect(pending.taskId).toBe(plan.id);
+  expect(pending.nodeId).toBe('transfer');
   expect(ledgerKeyForAction({ id: pending.id, taskId: plan.id, nodeId: 'transfer' })).toBe(nodeKey);
-  expect(await debitCount(200)).toBe(0);
+  expect(await debitCount('200.00')).toBe(0);
 
   // CONFIRM with the result-landing fault: the ¥200 SDK side effect COMMITS, the transaction rolls back.
   const spy = wedgeResultTransaction();
@@ -161,8 +164,8 @@ it('a plan-linked transfer wedge recovers to the committed truth on resume: succ
   const receiptKey = nodeExecutionKey(plan.id, 'transfer');
   expect(await p.executionReceipt.count({ where: { userId, key: receiptKey } })).toBe(1);
   expect(await p.executionReceipt.findUnique({ where: { id: executionReceiptId(userId, receiptKey) } })).not.toBeNull();
-  expect(await debitCount(200)).toBe(1);
-  expect(await checkingBalance()).toBe(CHECKING_BALANCE - 200);
+  expect(await debitCount('200.00')).toBe(1);
+  expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '200.00'));
 
   // RESUME the owning plan → the node is backfilled from the COMMITTED receipt, never re-run.
   const resumed = await task(plan.id, s, 'resume');
@@ -183,7 +186,7 @@ it('a plan-linked transfer wedge recovers to the committed truth on resume: succ
       actionStatus: storedAction.status,
       resultOk: storedResult?.ok,
       receipts: await p.executionReceipt.count({ where: { userId, key: receiptKey } }),
-      debits: await debitCount(200),
+      debits: await debitCount('200.00'),
       balance: await checkingBalance(),
     }),
   );
@@ -194,8 +197,8 @@ it('a plan-linked transfer wedge recovers to the committed truth on resume: succ
   expect(storedResult?.ok).toBe(true); // the persisted result is the TRUE outcome
   // Tool never re-invoked → still exactly ONE receipt + ONE debit + a stable balance.
   expect(await p.executionReceipt.count({ where: { userId, key: receiptKey } })).toBe(1);
-  expect(await debitCount(200)).toBe(1);
-  expect(await checkingBalance()).toBe(CHECKING_BALANCE - 200);
+  expect(await debitCount('200.00')).toBe(1);
+  expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '200.00'));
 });
 
 it('a standalone transfer wedge recovers via the recover route from its committed receipt: executed, one receipt, one debit, surfaced no more', async () => {
@@ -206,12 +209,12 @@ it('a standalone transfer wedge recovers via the recover route from its committe
     sessionId: s,
     userId,
     toolName: 'transfer_money',
-    args: { name: '张伟', amount: 250 },
+    args: { name: '张伟', amount: '250.00' },
     userRequest: '给张伟转250元',
   });
   const id = gated.pendingActionId!;
   expect(id).toBeTruthy();
-  expect(await debitCount(250)).toBe(0);
+  expect(await debitCount('250.00')).toBe(0);
 
   const spy = wedgeResultTransaction();
   const first = await confirm(id, s);
@@ -227,8 +230,8 @@ it('a standalone transfer wedge recovers via the recover route from its committe
   expect(receiptKey).toBe(id);
   expect(await p.executionReceipt.count({ where: { userId, key: receiptKey } })).toBe(1);
   expect(await p.executionReceipt.findUnique({ where: { id: executionReceiptId(userId, receiptKey) } })).not.toBeNull();
-  expect(await debitCount(250)).toBe(1);
-  expect(await checkingBalance()).toBe(CHECKING_BALANCE - 250);
+  expect(await debitCount('250.00')).toBe(1);
+  expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '250.00'));
 
   // RECOVER through the refresh-reachable entry point — receipt-first, the tool is NEVER re-run.
   const recovered = await recover(id, s);
@@ -245,7 +248,7 @@ it('a standalone transfer wedge recovers via the recover route from its committe
       actionStatus: stored.status,
       resultOk: storedResult?.ok,
       receipts: await p.executionReceipt.count({ where: { userId, key: receiptKey } }),
-      debits: await debitCount(250),
+      debits: await debitCount('250.00'),
       balance: await checkingBalance(),
       surfaced: listed.ids.includes(id),
     }),
@@ -256,12 +259,12 @@ it('a standalone transfer wedge recovers via the recover route from its committe
   expect(stored.status).toBe('executed');
   expect(storedResult?.ok).toBe(true);
   expect(await p.executionReceipt.count({ where: { userId, key: receiptKey } })).toBe(1);
-  expect(await debitCount(250)).toBe(1); // exactly one debit
-  expect(await checkingBalance()).toBe(CHECKING_BALANCE - 250);
+  expect(await debitCount('250.00')).toBe(1); // exactly one debit
+  expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '250.00'));
   expect(listed.ids).not.toContain(id); // `executed` is terminal & NOT surfaced
 });
 
-it('a standalone apply_virtual_card wedge (not proven idempotent) settles needs_reconciliation with exactly one card and stays surfaced', async () => {
+it('a standalone virtual-card wedge recovers its atomic receipt with exactly one card', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
   const virtualWhere = { userId, type: 'VIRTUAL' as const };
@@ -291,9 +294,7 @@ it('a standalone apply_virtual_card wedge (not proven idempotent) settles needs_
   expect(wedged.resultJson).toBeNull();
   expect(await p.card.count({ where: virtualWhere })).toBe(1);
 
-  // RECOVER → the tool is NOT proven idempotent for a standalone key, so it must NOT be replayed:
-  // the row transitions to the explicit, queryable `needs_reconciliation` state (neither failed nor
-  // executed), and NO second virtual card is ever issued.
+  // The unified command receipt proves the original card was committed. Recovery never issues another.
   const recovered = await recover(id, s);
   const stored = await p.pendingAction.findUniqueOrThrow({ where: { id } });
   const virtualAfter = await p.card.count({ where: virtualWhere });
@@ -318,12 +319,13 @@ it('a standalone apply_virtual_card wedge (not proven idempotent) settles needs_
   );
 
   expect(recovered.http).toBe(200);
-  expect(recovered.body.data?.ok).toBe(false);
-  expect(recovered.body.data?.status).toBe('needs_reconciliation');
-  expect(stored.status).toBe('needs_reconciliation'); // NOT failed, NOT executed
+  expect(recovered.body.data?.ok).toBe(true);
+  expect(recovered.body.data?.status).toBe('executed');
+  expect(stored.status).toBe('executed');
   expect(virtualAfter).toBe(1); // never re-run → no second virtual card
   expect(await p.transaction.count({ where: { userId } })).toBe(txBefore); // no ledger movement
   expect(await checkingBalance()).toBe(CHECKING_BALANCE);
-  expect(listed.ids).toContain(id); // `needs_reconciliation` MUST stay surfaced
-  expect(listed.row(id)?.status).toBe('needs_reconciliation');
+  expect(await p.executionReceipt.count({ where: { userId, key: id } })).toBe(1);
+  expect((await p.auditLog.findUniqueOrThrow({ where: { dedupeKey: `exec:${id}` } })).status).toBe('success');
+  expect(listed.ids).not.toContain(id);
 });

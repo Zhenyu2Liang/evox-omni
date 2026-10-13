@@ -28,7 +28,7 @@ import { cardsOfType, confirmAction, newSessionId, runTurn, toolEventsOf } from 
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '../helpers/db';
 import { ACCOUNTS, CONTACTS, DEMO_USER_ID } from '../helpers/fixtures';
 import { RISK_LABEL } from '@/lib/constants';
-import { formatCNY } from '@/lib/money';
+import { formatCNY, moneyToCents } from '@/lib/money';
 import type { PendingActionSummary } from '@/lib/contracts/security';
 
 beforeEach(async () => {
@@ -43,7 +43,7 @@ const CHECKING = ACCOUNTS[0];
 /** Recipient 张伟 / `contact_zhangwei`. */
 const ZHANGWEI = CONTACTS[0];
 
-const AMOUNT = 200;
+const AMOUNT = '200';
 const REMARK = 'AA';
 const USER_MESSAGE = '给张伟转200元，备注AA';
 
@@ -55,7 +55,7 @@ const TRANSFER_ARGS = { name: ZHANGWEI.name, amount: AMOUNT, remark: REMARK };
  * time and canonicalized to `contactId` (the model's `name`/`phone` selector is dropped). Asserted
  * with `toEqual` so a legacy/drifted key (e.g. `name`) would fail.
  */
-const CANONICAL_ARGS = { amount: AMOUNT, remark: REMARK, contactId: ZHANGWEI.id };
+const CANONICAL_ARGS = { amount: '200.00', remark: REMARK, contactId: ZHANGWEI.id };
 
 /** The model's ONE tool call, followed by a first-turn narration (so the script never runs dry). */
 const SCRIPT = [tool('transfer_money', TRANSFER_ARGS), final('转账已提交，等待你确认后执行。')];
@@ -120,14 +120,14 @@ describe('Scenario 2 — 给张伟转200元 (YELLOW confirm)', () => {
     expect(summary.tier).toBe('YELLOW');
     expect(fieldValue(summary, '收款人')).toBe(ZHANGWEI.name);
     expect(fieldValue(summary, '收款手机号')).toBe('139****0002');
-    expect(fieldValue(summary, '金额')).toBe(formatCNY(AMOUNT));
+    expect(fieldValue(summary, 'Amount')).toBe(formatCNY(AMOUNT));
 
     // `res.confirmation.action` is loaded back from the persisted row → identical fields.
     expect(pending.confirmation?.action).toEqual(summary);
     expect(pending.confirmation?.action.fields).toEqual([
       { label: '收款人', value: ZHANGWEI.name },
       { label: '收款手机号', value: '139****0002' },
-      { label: '金额', value: formatCNY(AMOUNT) },
+      { label: 'Amount', value: formatCNY(AMOUNT) },
       { label: '账户', value: '默认活期账户' },
       { label: '风险等级', value: RISK_LABEL.YELLOW },
       { label: '备注', value: 'AA' },
@@ -152,7 +152,7 @@ describe('Scenario 2 — 给张伟转200元 (YELLOW confirm)', () => {
     expect(cards).toHaveLength(1);
     expect(cards[0].action.toolName).toBe('transfer_money');
     expect(fieldValue(cards[0].action, '收款人')).toBe(ZHANGWEI.name);
-    expect(fieldValue(cards[0].action, '金额')).toBe(formatCNY(AMOUNT));
+    expect(fieldValue(cards[0].action, 'Amount')).toBe(formatCNY(AMOUNT));
   });
 
   it('NO Transaction row and no balance change exist while the action is pending', async () => {
@@ -173,8 +173,8 @@ describe('Scenario 2 — 给张伟转200元 (YELLOW confirm)', () => {
     expect(transferDebits).toBe(0);
 
     const account = await prisma.account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-    expect(account.balance).toBe(CHECKING.balance);
-    expect(account.balance).toBe(23580);
+    expect(account.balanceMinor).toBe(moneyToCents(CHECKING.balance));
+    expect(account.balanceMinor).toBe(2_358_000n);
   });
 
   it('confirm(actionId) executes the ORIGINAL validated args through the SDK authorized path', async () => {
@@ -190,7 +190,7 @@ describe('Scenario 2 — 给张伟转200元 (YELLOW confirm)', () => {
     // `contactId`, no model-supplied `name`) — not model text.
     expect(JSON.parse(rows[0].argsJson)).toEqual(CANONICAL_ARGS);
     const executed = await prisma.transaction.findFirstOrThrow({
-      where: { accountId: CHECKING.id, counterpartyId: ZHANGWEI.id, amount: -AMOUNT },
+      where: { accountId: CHECKING.id, counterpartyId: ZHANGWEI.id, amountMinor: -moneyToCents(AMOUNT) },
     });
     expect(executed.counterpartyId).toBe(ZHANGWEI.id);
     expect(executed.remark).toBe(REMARK);
@@ -205,7 +205,7 @@ describe('Scenario 2 — 给张伟转200元 (YELLOW confirm)', () => {
 
     // Scoped by `counterpartyId` — the seed happens to contain an unrelated ¥200 娱乐 spend.
     const debits = await prisma.transaction.findMany({
-      where: { accountId: CHECKING.id, counterpartyId: ZHANGWEI.id, amount: -AMOUNT },
+      where: { accountId: CHECKING.id, counterpartyId: ZHANGWEI.id, amountMinor: -moneyToCents(AMOUNT) },
     });
     expect(debits).toHaveLength(1);
     expect(debits[0].direction).toBe('DEBIT');
@@ -215,8 +215,8 @@ describe('Scenario 2 — 给张伟转200元 (YELLOW confirm)', () => {
     expect(debits[0].remark).toBe(REMARK);
 
     const account = await prisma.account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-    expect(account.balance).toBe(CHECKING.balance - AMOUNT);
-    expect(account.balance).toBe(23380);
+    expect(account.balanceMinor).toBe(moneyToCents(CHECKING.balance) - moneyToCents(AMOUNT));
+    expect(account.balanceMinor).toBe(2_338_000n);
 
     expect(after.error).toBeUndefined();
   });

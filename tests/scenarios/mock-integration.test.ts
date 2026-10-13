@@ -35,6 +35,7 @@ import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import { MFA_CODE } from '@/lib/constants';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, CONTACTS } from '@/tests/helpers/fixtures';
+import { moneyToCents } from '@/lib/money';
 
 /* ------------------------------------------------------------------ fixtures */
 
@@ -170,11 +171,11 @@ describe('mock-model integration — the real production pipeline, OFFLINE', () 
     // Real money moved through the SDK: a DEBIT written and the balance dropped 23,580 → 23,380.
     const prisma = getTestPrisma();
     const debits = await prisma.transaction.findMany({
-      where: { accountId: CHECKING.id, counterpartyId: ZHANGWEI.id, amount: -200 },
+      where: { accountId: CHECKING.id, counterpartyId: ZHANGWEI.id, amountMinor: -20_000n },
     });
     expect(debits).toHaveLength(1);
     const account = await prisma.account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-    expect(account.balance).toBe(CHECKING.balance - 200);
+    expect(account.balanceMinor).toBe(moneyToCents(CHECKING.balance) - 20_000n);
   });
 
   it('Test 3 — "给张伟转5000元" is RED and requires MFA, then verify(123456) executes', async () => {
@@ -197,7 +198,7 @@ describe('mock-model integration — the real production pipeline, OFFLINE', () 
     expect(continued).toMatch(/5,000|5000/);
 
     const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-    expect(account.balance).toBe(CHECKING.balance - 5000);
+    expect(account.balanceMinor).toBe(moneyToCents(CHECKING.balance) - 500_000n);
   });
 
   it('Test 5 — "给张伟转30000元" is RED + MFA, and the real INSUFFICIENT_FUNDS failure is reported truthfully', async () => {
@@ -222,7 +223,7 @@ describe('mock-model integration — the real production pipeline, OFFLINE', () 
     const prisma = getTestPrisma();
     expect(await prisma.transaction.count({ where: { counterpartyId: ZHANGWEI.id } })).toBe(0);
     const account = await prisma.account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-    expect(account.balance).toBe(CHECKING.balance);
+    expect(account.balanceMinor).toBe(moneyToCents(CHECKING.balance));
   });
 
   it('Test 6 — "分析一下我这个月的消费" / "帮我看下这个月花了多少" run analyze_spending and narrate', async () => {

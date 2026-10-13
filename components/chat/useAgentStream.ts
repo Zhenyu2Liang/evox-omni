@@ -243,7 +243,7 @@ function cardTargetId(state: ChatUIState): string | undefined {
  * incoming and the stored snapshot carry a generation, an OLDER incoming generation is REJECTED
  * outright — even if its `updatedAt` looks fresher — and an incoming generation that is EQUAL OR
  * NEWER is ACCEPTED even if its `updatedAt` is equal/older. When EITHER side is missing a generation
- * there is no fence information, so the (backward-compatible) `updatedAt` guard applies.
+ * the plan has not supplied an execution generation, so timestamp ordering applies.
  */
 function upsertPlan(state: ChatUIState, plan: TaskPlan, generation?: number): ChatUIState {
   const current = state.activePlan;
@@ -540,7 +540,7 @@ function restoredMfaSummary(summary?: PendingActionSummary): MfaActionSummary {
     requiresMfa: true,
   };
   if (summary.mfaHint !== undefined) result.mfaHint = summary.mfaHint;
-  if (typeof summary.amount === 'number') result.amount = summary.amount;
+  if (typeof summary.amount === 'string') result.amount = summary.amount;
   return result;
 }
 
@@ -675,17 +675,22 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
    * Shared "run one turn" path: flip `busy`, run `load()`, fold the returned events and settle
    * `pendingAction` (kept only if the turn reported an `error`). Never throws to the UI.
    */
-  const pull = useCallback(async (load: () => Promise<ChatTurnResponse>, settlesDecision = true, actionId?: string) => {
+  const pull = useCallback(async (load: (onEvent: (event: AgentStreamEvent) => void) => Promise<ChatTurnResponse>, settlesDecision = true, actionId?: string) => {
     setState((prev) => ({ ...prev, busy: true, error: undefined }));
+    const delivered = new Set<AgentStreamEvent>();
+    const onEvent = (event: AgentStreamEvent) => {
+      delivered.add(event);
+      setState(previous => reduceAgentEvents(previous, [event]));
+    };
     try {
-      const res = await load();
+      const res = await load(onEvent);
       const events = res.events ?? [];
       setState((prev) => {
         // Seed the (server-confirmed) sessionId, then let a `session` event take precedence.
         const base = res.sessionId ? { ...prev, sessionId: res.sessionId } : prev;
         // Fold FIRST so a settlement signal (`action_settled`) still sees the decision it belongs to,
         // then apply the generic settle rule: a non-error turn clears the decision it acted on.
-        const reduced = reduceAgentEvents(base, events);
+        const reduced = reduceAgentEvents(base, events.filter(event => !delivered.has(event)));
         const hasError = events.some((e) => e.type === 'error');
         // NEVER clear a decision the SAME turn just established: a `confirmation_required` /
         // `mfa_required` (a fresh YELLOW/RED gate, or a YELLOW→RED escalation whose response carries
@@ -721,10 +726,11 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
       };
       setState((prev) => ({ ...prev, messages: [...prev.messages, userMessage], error: undefined }));
       const sessionId = state.sessionId;
-      await pull(() =>
+      await pull(onEvent =>
         sendChatTurn(
           sessionId !== undefined ? { sessionId, message: text } : { message: text },
           endpoints,
+          onEvent,
         ),
         false,
       );

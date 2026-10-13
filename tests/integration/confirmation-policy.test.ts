@@ -13,6 +13,8 @@ import { POST as verifyPost } from '@/app/api/actions/[id]/verify/route';
 import { POST as recoverPost } from '@/app/api/actions/[id]/recover/route';
 import { POST as resetPost } from '@/app/api/security/reset/route';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
+import { centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
+import * as executionFence from '@/agent/execution-fence';
 
 // Route + SDK + SQLite integration; only scheduling barriers and explicit faults are injected.
 const userId = 'user_liming';
@@ -28,7 +30,7 @@ async function call(handler: Route, id: string, sessionId: string, body: object 
   const response = await handler(request(id, sessionId, body), { params: Promise.resolve({ id }) });
   return { http: response.status, body: await response.json() };
 }
-const balance = async () => (await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance;
+const balance = async () => centsToMoney((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor);
 function deferred() { let resolve!: () => void; const promise = new Promise<void>(r => resolve = r); return { promise, resolve }; }
 async function bounded(promise: Promise<unknown>) {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -39,7 +41,7 @@ async function lock(sessionId: string) {
   for (let i = 0; i < 3; i++) await recordFailure(sessionId);
   expect((await getState(sessionId)).locked).toBe(true);
 }
-async function park(amount = 200) {
+async function park(amount = '200') {
   const sessionId = (await getOrCreateSession(userId)).sessionId;
   const action = await executeGatedTool({ userId, sessionId, toolName: 'transfer_money',
     args: { name: '张伟', amount }, userRequest: '确认边界回归' });
@@ -53,23 +55,25 @@ async function rolledBackTransfer() {
     return insert(entry, opts);
   });
   expect((await call(confirmPost, action.id, action.sessionId)).http).toBe(500);
-  fault.mockRestore(); expect(await balance()).toBe(23580);
+  fault.mockRestore(); expect(await balance()).toBe('23580.00');
   return action;
 }
 
-it.each([200, 2000])('a write-time breaker denial of %s stays recoverable and requires an audited unlock', async amount => {
+it.each(['200', '2000'])('a write-time breaker denial of %s stays recoverable and requires an audited unlock', async amount => {
   const p = getTestPrisma(); const action = await park(amount);
-  const reached = deferred(), release = deferred(); const transfer = banking.transfer.createTransfer;
-  const barrier = vi.spyOn(banking.transfer, 'createTransfer').mockImplementation(async input => {
-    reached.resolve(); await release.promise; return transfer(input);
+  const reached = deferred(), release = deferred(); const capture = executionFence.buildConfirmFence;
+  const barrier = vi.spyOn(executionFence, 'buildConfirmFence').mockImplementation(async (...input) => {
+    const fence = await capture(...input);
+    reached.resolve(); await release.promise; return fence;
   });
-  const running = call(amount > 1000 ? verifyPost : confirmPost, action.id, action.sessionId,
-    amount > 1000 ? { code: '123456' } : {});
+  const requiresMfa = moneyToCents(amount) > 100000n;
+  const running = call(requiresMfa ? verifyPost : confirmPost, action.id, action.sessionId,
+    requiresMfa ? { code: '123456' } : {});
   let blocked: Awaited<ReturnType<typeof call>>;
   try { await bounded(reached.promise); await lock(action.sessionId); }
   finally { release.resolve(); blocked = await running; barrier.mockRestore(); }
   expect(blocked!.http).toBe(423); expect(blocked!.body.error.code).toBe('CIRCUIT_OPEN');
-  expect(await balance()).toBe(23580);
+  expect(await balance()).toBe('23580.00');
   expect(await p.pendingAction.findUniqueOrThrow({ where: { id: action.id } })).toMatchObject({
     status: 'confirmed', resultJson: null, executionLeaseOwner: null, executionLeaseExpiresAt: null,
   });
@@ -87,8 +91,8 @@ it.each([200, 2000])('a write-time breaker denial of %s stays recoverable and re
   expect(await p.securityEvent.count({ where: { sessionId: action.sessionId, kind: 'SECURITY_RESET' } })).toBe(1);
   expect((await call(recoverPost, action.id, action.sessionId)).body.data).toMatchObject({ ok: true, status: 'executed' });
   await call(confirmPost, action.id, action.sessionId);
-  expect(await balance()).toBe(23580 - amount);
-  expect(await p.transaction.count({ where: { userId, amount: -amount, channel: 'TRANSFER' } })).toBe(1);
+  expect(await balance()).toBe(subtractMoney('23580.00', amount));
+  expect(await p.transaction.count({ where: { userId, amountMinor: -moneyToCents(amount), channel: 'TRANSFER' } })).toBe(1);
   expect(await p.executionReceipt.count()).toBe(1);
   expect(await p.auditLog.count({ where: { dedupeKey: `exec:${action.id}` } })).toBe(1);
 });
@@ -96,11 +100,12 @@ it.each([200, 2000])('a write-time breaker denial of %s stays recoverable and re
 it('the same write fence protects a non-transfer card mutation after confirmation', async () => {
   const p = getTestPrisma(); const sessionId = (await getOrCreateSession(userId)).sessionId;
   const action = await executeGatedTool({ userId, sessionId, toolName: 'set_card_limit',
-    args: { cardId: 'card_credit', category: '娱乐', amount: 1500 }, userRequest: '限额确认' });
+    args: { cardId: 'card_credit', category: '娱乐', amount: '1500' }, userRequest: '限额确认' });
   const before = await p.cardLimit.findMany({ where: { cardId: 'card_credit' } });
-  const reached = deferred(), release = deferred(); const setLimit = banking.card.setCardLimit;
-  vi.spyOn(banking.card, 'setCardLimit').mockImplementation(async input => {
-    reached.resolve(); await release.promise; return setLimit(input);
+  const reached = deferred(), release = deferred(); const capture = executionFence.buildConfirmFence;
+  vi.spyOn(executionFence, 'buildConfirmFence').mockImplementation(async (...input) => {
+    const fence = await capture(...input);
+    reached.resolve(); await release.promise; return fence;
   });
   const running = call(confirmPost, action.pendingActionId!, sessionId);
   let response: Awaited<ReturnType<typeof call>>;
@@ -113,7 +118,7 @@ it('the same write fence protects a non-transfer card mutation after confirmatio
 
 it.each(['CONFLICT', 'CIRCUIT_OPEN'] as const)('a stale recovery uses the committed RED decision in the %s receipt fallback', async denial => {
   const p = getTestPrisma(); const action = await rolledBackTransfer();
-  await banking.transfer.createTransfer({ userId, name: '张伟', amount: 900, idempotencyKey: 'boundary:other-channel' });
+  await banking.transfer.createTransfer({ userId, name: '张伟', amount: '900', idempotencyKey: 'boundary:other-channel' });
   const reached = deferred(), release = deferred(); const authorize = recovery.authorizeRecoveryAction;
   let authorizations = 0;
   vi.spyOn(recovery, 'authorizeRecoveryAction').mockImplementation(async (...args) => {
@@ -131,13 +136,13 @@ it.each(['CONFLICT', 'CIRCUIT_OPEN'] as const)('a stale recovery uses the commit
   } finally { release.resolve(); result = await stale; }
   expect(result!.http).toBe(200);
   expect(result!.body.data).toMatchObject({ ok: true, status: 'executed', tier: 'RED', requiresMfa: true });
-  expect(await balance()).toBe(22480);
-  expect(await p.transaction.count({ where: { userId, amount: -200, channel: 'TRANSFER' } })).toBe(1);
+  expect(await balance()).toBe('22480.00');
+  expect(await p.transaction.count({ where: { userId, amountMinor: -20000n, channel: 'TRANSFER' } })).toBe(1);
   expect(await p.auditLog.findUniqueOrThrow({ where: { dedupeKey: `exec:${action.id}` } })).toEqual(auditBefore);
 });
 
 it('recovery still rejects a duplicate audit with a different business result', async () => {
-  const p = getTestPrisma(); const action = await park(2000);
+  const p = getTestPrisma(); const action = await park('2000');
   const fault = vi.spyOn(actionRepo, 'setPendingActionStatus').mockRejectedValueOnce(new Error('landing unavailable'));
   expect((await call(verifyPost, action.id, action.sessionId, { code: '123456' })).http).toBe(500);
   fault.mockRestore();
@@ -145,7 +150,7 @@ it('recovery still rejects a duplicate audit with a different business result', 
   const wrong = JSON.parse(audit.toolResult!); wrong.data.amount = 999;
   await p.auditLog.update({ where: { id: audit.id }, data: { toolResult: JSON.stringify(wrong) } });
   expect((await call(recoverPost, action.id, action.sessionId)).http).toBe(500);
-  expect(await balance()).toBe(21580);
+  expect(await balance()).toBe('21580.00');
   expect(await p.pendingAction.findUniqueOrThrow({ where: { id: action.id } })).toMatchObject({ status: 'confirmed', resultJson: null });
   expect(await p.auditLog.findUniqueOrThrow({ where: { id: audit.id } })).toMatchObject({ toolResult: JSON.stringify(wrong) });
 });
@@ -180,20 +185,20 @@ it('a terminal result preserves a verification event for a different next plan a
 });
 
 it.each(['needs_reconciliation', 'failed', 'cancelled', 'locked'])('the real confirm route does not request MFA for RED %s', async status => {
-  const p = getTestPrisma(); const action = await park(2000);
+  const p = getTestPrisma(); const action = await park('2000');
   await p.pendingAction.update({ where: { id: action.id }, data: { status } });
   const response = await call(confirmPost, action.id, action.sessionId);
   expect(response.http).toBe(200);
   expect(response.body.data).toMatchObject({ ok: false, status, tier: 'RED', requiresMfa: true });
   expect(response.body.data.events.some((event: { type: string }) => event.type === 'mfa_required')).toBe(false);
-  expect(await balance()).toBe(23580);
+  expect(await balance()).toBe('23580.00');
 });
 
 it('a locked RED decision retains its historical MFA requirement without requesting another code', async () => {
-  const action = await park(2000); await lock(action.sessionId);
+  const action = await park('2000'); await lock(action.sessionId);
   const response = await call(confirmPost, action.id, action.sessionId);
   expect(response.http).toBe(200);
   expect(response.body.data).toMatchObject({ ok: false, status: 'locked', tier: 'RED', requiresMfa: true });
   expect(response.body.data.events.some((event: { type: string }) => event.type === 'mfa_required')).toBe(false);
-  expect(await balance()).toBe(23580);
+  expect(await balance()).toBe('23580.00');
 });

@@ -59,10 +59,11 @@ const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** Recipient 王芳 — the SECOND parked transfer (the one that must UPGRADE at confirm time). */
 const WANGFANG = CONTACTS.find((contact) => contact.name === '王芳')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { addMoney, centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 
 /** Both parked transfers use the same amount: ¥600 each ≤ ¥1000, ¥600 + ¥600 > ¥1000. */
-const TRANSFER_AMOUNT = 600;
+const TRANSFER_AMOUNT = '600';
 
 /**
  * The route's JSON envelope — the app-layer transport shape (NOT a frozen `@/lib/contracts` type).
@@ -159,9 +160,9 @@ function verifyAction(
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (seeded ¥23,580). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to `contactId` (the money-moved-exactly-once probe). */
@@ -196,8 +197,8 @@ function parkFor<T extends { argsJson: string }>(
  */
 async function parkTwoTransfers() {
   // The two amounts must straddle the ¥1000 confirmation-only limit — assert the arithmetic.
-  expect(TRANSFER_AMOUNT).toBeLessThanOrEqual(DAILY_TRANSFER_LIMIT);
-  expect(TRANSFER_AMOUNT * 2).toBeGreaterThan(DAILY_TRANSFER_LIMIT);
+  expect(moneyToCents(TRANSFER_AMOUNT)).toBeLessThanOrEqual(moneyToCents(DAILY_TRANSFER_LIMIT));
+  expect(moneyToCents(TRANSFER_AMOUNT) * 2n).toBeGreaterThan(moneyToCents(DAILY_TRANSFER_LIMIT));
 
   // 1) Park the ¥600 transfer to 张伟 (fresh session — no cookie ⇒ the route mints + sets the cookie).
   const first = await chatTurn('给张伟转600元');
@@ -251,7 +252,7 @@ async function parkBothThenConfirmFirst() {
   expect(dataA.tier).toBe('YELLOW');
   expect(dataA.requiresMfa).toBe(false);
   expect(await transfersTo(ZHANGWEI.id)).toHaveLength(1);
-  expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+  expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
 
   return { ...parked, resA };
 }
@@ -299,7 +300,7 @@ describe('[integration] POST /api/actions/[id]/confirm — execution-time YELLOW
 
     // Fail-closed: the upgraded confirm moved NO money — only A's ¥600 is gone, 王芳 got nothing.
     expect(await transfersTo(WANGFANG.id)).toHaveLength(0);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
 
     // The upgrade-blocked confirm settles nothing ⇒ it writes NO audit row (audit is gated-only, and
     // only a settled execution writes one). A's single YELLOW success row is the only one present.
@@ -336,10 +337,10 @@ describe('[integration] POST /api/actions/[id]/verify — completing the upgrade
     expect(data.mfaResult).toBe('success');
 
     // Money moved EXACTLY ONCE for B: ¥23,580 − ¥600 (A) − ¥600 (B); 王芳 got exactly one ¥600 debit.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - 2 * TRANSFER_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, addMoney(TRANSFER_AMOUNT, TRANSFER_AMOUNT)));
     const wangfang = await transfersTo(WANGFANG.id);
     expect(wangfang).toHaveLength(1);
-    expect(wangfang[0].amount).toBe(-TRANSFER_AMOUNT);
+    expect(wangfang[0].amountMinor).toBe(-moneyToCents(TRANSFER_AMOUNT));
     expect(await transfersTo(ZHANGWEI.id)).toHaveLength(1);
 
     // AUDIT CONSISTENCY: exactly the two gated decisions are audited — the plain YELLOW confirm (A)
@@ -398,7 +399,7 @@ describe('[integration] POST /api/actions/[id]/verify — completing the upgrade
     expect(data.requiresMfa).toBe(true);
 
     // Fail-closed: only A's ¥600 moved; B never executed and the failed attempt is NOT audited.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
     expect(await transfersTo(WANGFANG.id)).toHaveLength(0);
     expect(await transfersTo(ZHANGWEI.id)).toHaveLength(1);
     const audits = await getTestPrisma().auditLog.findMany({ where: { sessionId } });

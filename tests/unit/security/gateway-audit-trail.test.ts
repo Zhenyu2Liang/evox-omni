@@ -68,7 +68,7 @@ describe('security-gateway · deriveIntent (pure, code-driven)', () => {
 describe('security-gateway · pending-action audit trail (needs test SQLite)', () => {
   it('persists the ORIGINAL userRequest + a non-empty intent on the row and surfaces both on the contract (YELLOW)', async () => {
     const userRequest = '帮张伟转 200 元';
-    const ctx = ctxFor('transfer_money', { amount: 200, contactId: 'contact_zhangwei' }, userRequest);
+    const ctx = ctxFor('transfer_money', { amount: '200.00', contactId: 'contact_zhangwei' }, userRequest);
     const ev = await securityGateway.evaluate(ctx);
     expect(ev.tier).toBe('YELLOW');
 
@@ -88,7 +88,7 @@ describe('security-gateway · pending-action audit trail (needs test SQLite)', (
 
   it('persists userRequest + intent for a RED action too (status awaiting_mfa)', async () => {
     const userRequest = '帮我认购 5 万元稳健理财';
-    const ctx = ctxFor('subscribe_investment', { productId: 'prod_wenjiana', amount: 50000 }, userRequest);
+    const ctx = ctxFor('subscribe_investment', { productId: 'prod_wenjiana', amount: '50000.00' }, userRequest);
     const ev = await securityGateway.evaluate(ctx);
     expect(ev.tier).toBe('RED');
     expect(ev.requiresMfa).toBe(true);
@@ -106,7 +106,7 @@ describe('security-gateway · pending-action audit trail (needs test SQLite)', (
 
   it('handleToolCall persists userRequest + intent before blocking and returns them on the action', async () => {
     const userRequest = '把信用卡额度调到 5000';
-    const ctx = ctxFor('set_card_limit', { cardId: 'card_credit', category: '娱乐', amount: 5000 }, userRequest);
+    const ctx = ctxFor('set_card_limit', { cardId: 'card_credit', category: '娱乐', amount: '5000.00' }, userRequest);
 
     const auth = await securityGateway.handleToolCall(ctx);
 

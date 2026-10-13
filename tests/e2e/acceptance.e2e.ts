@@ -21,6 +21,7 @@
  * vitest's include glob `tests/**\/*.{test,spec}.ts` and never runs under `npm run test`.
  */
 import type { Browser, Page } from 'playwright-core';
+import { moneyToCents, subtractMoney } from '../../lib/money';
 import { journeyManualReview } from './manual-review.e2e-helper';
 import {
   NAV_TIMEOUT_MS,
@@ -108,8 +109,8 @@ const TRANSFER_OK_NARRATION = '转账处理结果：';
 const DEMO_CREDIT_CARD_ID = 'card_credit';
 const ENTERTAINMENT_CATEGORY = '娱乐';
 const RECIPIENT_NAME = '张伟';
-const TRANSFER_YELLOW_AMOUNT = 200;
-const TRANSFER_RED_AMOUNT = 2000;
+const TRANSFER_YELLOW_AMOUNT = '200.00';
+const TRANSFER_RED_AMOUNT = '2000.00';
 
 /** The gated plan's node names (its timeline rows), matched by distinctive substring. */
 const PLAN_NODE_ANALYZE = '查询消费情况'; // analyze (GREEN analyze_spending) — completes immediately.
@@ -128,11 +129,11 @@ async function waitForComposer(page: Page): Promise<void> {
 /** The demo user's money-relevant read state, from the app's real read routes. */
 interface MoneySnapshot {
   /** Primary CHECKING balance (CNY). */
-  balance: number;
+  balance: string;
   /** The transaction ledger (`GET /api/bills`). */
   ledger: LedgerView;
   /** The credit card's 娱乐 category limit (CNY), or `undefined`. */
-  entLimit: number | undefined;
+  entLimit: string | undefined;
 }
 
 /** Snapshot the demo user's balance + ledger + 娱乐 card limit via the real read routes. */
@@ -170,14 +171,14 @@ async function journeyTransferConfirm(browser: Browser, baseUrl: string): Promis
       const settled = await waitFor(
         async () => {
           const [dashboard, ledger] = await Promise.all([fetchDashboardSummary(baseUrl), fetchLedger(baseUrl)]);
-          if (dashboard.checkingBalance !== before.balance - TRANSFER_YELLOW_AMOUNT) return false;
+          if (dashboard.checkingBalance !== subtractMoney(before.balance, TRANSFER_YELLOW_AMOUNT)) return false;
           const match = diffLedger(before.ledger.transactions, ledger.transactions).added.find(
-            (tx) => tx.amount === -TRANSFER_YELLOW_AMOUNT && tx.direction === 'DEBIT' && tx.merchant.includes(RECIPIENT_NAME),
+            (tx) => moneyToCents(tx.amount) === -moneyToCents(TRANSFER_YELLOW_AMOUNT) && tx.direction === 'DEBIT' && tx.merchant.includes(RECIPIENT_NAME),
           );
           return match ? { balance: dashboard.checkingBalance, merchant: match.merchant } : false;
         },
         {
-          description: `余额应为 ${before.balance - TRANSFER_YELLOW_AMOUNT}（−${TRANSFER_YELLOW_AMOUNT}）且账本新增 -${TRANSFER_YELLOW_AMOUNT} DEBIT（${RECIPIENT_NAME}）`,
+          description: `Balance ${subtractMoney(before.balance, TRANSFER_YELLOW_AMOUNT)} and one debit for ${RECIPIENT_NAME}.`,
           timeoutMs: 30_000,
         },
       );
@@ -207,14 +208,14 @@ async function journeyTransferMfa(browser: Browser, baseUrl: string): Promise<st
       const settled = await waitFor(
         async () => {
           const [dashboard, ledger] = await Promise.all([fetchDashboardSummary(baseUrl), fetchLedger(baseUrl)]);
-          if (dashboard.checkingBalance !== before.balance - TRANSFER_RED_AMOUNT) return false;
+          if (dashboard.checkingBalance !== subtractMoney(before.balance, TRANSFER_RED_AMOUNT)) return false;
           const match = diffLedger(before.ledger.transactions, ledger.transactions).added.find(
-            (tx) => tx.amount === -TRANSFER_RED_AMOUNT && tx.direction === 'DEBIT' && tx.merchant.includes(RECIPIENT_NAME),
+            (tx) => moneyToCents(tx.amount) === -moneyToCents(TRANSFER_RED_AMOUNT) && tx.direction === 'DEBIT' && tx.merchant.includes(RECIPIENT_NAME),
           );
           return match ? { balance: dashboard.checkingBalance } : false;
         },
         {
-          description: `余额应为 ${before.balance - TRANSFER_RED_AMOUNT}（−${TRANSFER_RED_AMOUNT}）且账本新增 -${TRANSFER_RED_AMOUNT} DEBIT（${RECIPIENT_NAME}）`,
+          description: `Balance ${subtractMoney(before.balance, TRANSFER_RED_AMOUNT)} and one debit for ${RECIPIENT_NAME}.`,
           timeoutMs: 30_000,
         },
       );
@@ -471,9 +472,9 @@ async function journeyWedgeRefreshRecover(browser: Browser, baseUrl: string): Pr
       await waitFor(
         async () => {
           const dashboard = await fetchDashboardSummary(baseUrl);
-          return dashboard.checkingBalance === before.balance - WEDGE_AMOUNT;
+          return dashboard.checkingBalance === subtractMoney(before.balance, WEDGE_AMOUNT);
         },
-        { description: `wedge 注入后余额应为 ${before.balance - WEDGE_AMOUNT}`, timeoutMs: 30_000 },
+        { description: `Balance after the committed wedge: ${subtractMoney(before.balance, WEDGE_AMOUNT)}`, timeoutMs: 30_000 },
       );
 
       // (d) PLAIN navigation to /actions — the actionId is NEVER passed to the browser.
@@ -492,9 +493,9 @@ async function journeyWedgeRefreshRecover(browser: Browser, baseUrl: string): Pr
           ]);
           const row = actions.find((candidate) => candidate.id === WEDGE_ACTION_ID);
           if (row !== undefined && row.attention === 'recoverable') return false;
-          if (dashboard.checkingBalance !== before.balance - WEDGE_AMOUNT) return false;
+          if (dashboard.checkingBalance !== subtractMoney(before.balance, WEDGE_AMOUNT)) return false;
           const added = diffLedger(before.ledger.transactions, ledger.transactions).added.filter(
-            (tx) => tx.amount === -WEDGE_AMOUNT && tx.direction === 'DEBIT' && tx.merchant.includes(RECIPIENT_NAME),
+            (tx) => moneyToCents(tx.amount) === -moneyToCents(WEDGE_AMOUNT) && tx.direction === 'DEBIT' && tx.merchant.includes(RECIPIENT_NAME),
           );
           if (added.length !== 1) return false;
           return { balance: dashboard.checkingBalance, addedDebits: added.length };
@@ -565,7 +566,7 @@ async function journeyInvestmentFlow(browser: Browser, baseUrl: string): Promise
         async () => {
           const bills = await getJson<LedgerView>(`${baseUrl}/api/bills`);
           const debit = bills.transactions.find(
-            (tx) => tx.direction === 'DEBIT' && tx.category === '投资' && tx.merchant === '认购稳健理财A',
+            (tx) => tx.direction === 'DEBIT' && tx.category === '投资' && tx.merchant === '认购稳健理财A' && tx.amount === '-1000.00',
           );
           const credit = bills.transactions.find(
             (tx) => tx.direction === 'CREDIT' && tx.category === '投资' && tx.merchant === '赎回',
@@ -593,7 +594,7 @@ async function journeyInvestmentFlow(browser: Browser, baseUrl: string): Promise
 async function journeyAnomalyDetection(browser: Browser, baseUrl: string): Promise<string> {
   interface AnomalyPayload {
     anomalies: Array<{
-      transaction: { id: string; merchant: string; amount: number; direction: 'DEBIT' | 'CREDIT' };
+      transaction: { id: string; merchant: string; amount: string; direction: 'DEBIT' | 'CREDIT' };
     }>;
   }
 
@@ -631,7 +632,7 @@ async function journeyAnomalyDetection(browser: Browser, baseUrl: string): Promi
           if (
             only.transaction.id !== 'tx_anomaly_apple' ||
             only.transaction.merchant !== 'Apple Store' ||
-            only.transaction.amount !== -6999
+            only.transaction.amount !== '-6999.00'
           ) {
             return false;
           }

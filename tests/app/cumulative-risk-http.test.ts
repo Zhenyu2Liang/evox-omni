@@ -54,7 +54,8 @@ const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** Recipient 张伟 — the payee of every transfer in this spec (the money-moved probe). */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { addMoney, centsToMoney, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 
 /** The singleton gateway object every runtime call routes through (the security chokepoint). */
 const gateway = security.gateway.securityGateway;
@@ -89,7 +90,7 @@ async function ensureSession(): Promise<string> {
  * path (`beforeToolCall`) — and return the persisted `PendingAction` id. The day total is not touched
  * here; parking only EVALUATES risk at park time.
  */
-async function park(sessionId: string, amount: number): Promise<string> {
+async function park(sessionId: string, amount: string): Promise<string> {
   const auth = await gateway.handleToolCall({
     sessionId,
     userId: DEMO_USER_ID,
@@ -132,9 +133,9 @@ function verifyHttp(
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to 张伟 (the money-moved-exactly-once probe). */
@@ -148,7 +149,7 @@ function pendingRow(id: string) {
 }
 
 /** The public cumulative day-transfer reader — the assertion surface for the ¥1,000/day rule. */
-function dailyTotal(): Promise<number> {
+function dailyTotal(): Promise<string> {
   return security.risk.computeDailyTransferTotal(DEMO_USER_ID);
 }
 
@@ -169,8 +170,8 @@ describe('[integration] POST /api/actions/[id]/confirm — cumulative day total 
     const sessionId = await ensureSession();
 
     // Park both transfers while the day total is ¥0 ⇒ both are confirmation-only (YELLOW).
-    const six = await park(sessionId, 600);
-    const one = await park(sessionId, 100);
+    const six = await park(sessionId, '600');
+    const one = await park(sessionId, '100');
     for (const id of [six, one]) {
       const row = await pendingRow(id);
       expect(row.riskLevel).toBe('YELLOW');
@@ -221,10 +222,10 @@ describe('[integration] POST /api/actions/[id]/confirm — cumulative day total 
 
     // The assertion surface: the day's transfer total counts the ¥600 EXACTLY ONCE (700 = 600 + 100),
     // never twice (1,300) and never zero.
-    expect(await dailyTotal()).toBe(600 + 100);
+    expect(await dailyTotal()).toBe('700.00');
 
     // Money moved exactly once per action: the balance is down by exactly ¥700.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - (600 + 100));
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, '700.00'));
     expect(await zhangweiTransfers()).toHaveLength(2);
   });
 });
@@ -234,8 +235,8 @@ describe('[integration] POST /api/actions/[id]/confirm — concurrent ¥600 + ¥
     const sessionId = await ensureSession();
 
     // Park both while the day total is ¥0 ⇒ both are confirmation-only (YELLOW) at PARK time.
-    const a = await park(sessionId, 600);
-    const b = await park(sessionId, 600);
+    const a = await park(sessionId, '600');
+    const b = await park(sessionId, '600');
     for (const id of [a, b]) {
       const row = await pendingRow(id);
       expect(row.riskLevel).toBe('YELLOW');
@@ -259,7 +260,7 @@ describe('[integration] POST /api/actions/[id]/confirm — concurrent ¥600 + ¥
     expect(escalated[0].status).toBe('awaiting_mfa');
 
     // Money moved EXACTLY ONCE: the cleared ¥600 only; the escalated one is parked, not debited.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - 600);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, '600.00'));
     expect(await zhangweiTransfers()).toHaveLength(1);
 
     // The escalated action is PERSISTED as RED / MFA / awaiting_mfa (never silently dropped).
@@ -276,9 +277,9 @@ describe('[integration] POST /api/actions/[id]/confirm — concurrent ¥600 + ¥
     expect(doneData.status).toBe('executed');
 
     // Now BOTH ¥600s have moved: the balance is down by exactly ¥1,200 and the day total is ¥1,200.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - 1200);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, '1200.00'));
     expect(await zhangweiTransfers()).toHaveLength(2);
-    expect(await dailyTotal()).toBe(1200);
+    expect(await dailyTotal()).toBe('1200.00');
   });
 });
 
@@ -300,14 +301,14 @@ describe('[integration] transfer risk boundaries — ¥1,000 stays YELLOW, ¥1,0
     expect(data.tier).toBe('YELLOW');
     expect(data.requiresMfa).toBe(false);
 
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - DAILY_TRANSFER_LIMIT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, DAILY_TRANSFER_LIMIT));
     expect(await dailyTotal()).toBe(DAILY_TRANSFER_LIMIT);
     expect(await zhangweiTransfers()).toHaveLength(1);
   });
 
   it('3b — a transfer of ¥1,000.01 (one cent over the limit) is RED: confirm refuses without MFA, verify completes it', async () => {
     const sessionId = await ensureSession();
-    const overLimit = DAILY_TRANSFER_LIMIT + 0.01;
+    const overLimit = addMoney(DAILY_TRANSFER_LIMIT, '0.01');
     const id = await park(sessionId, overLimit);
 
     // Amount > the single-transfer limit ⇒ RED and strong verification required at PARK time.
@@ -333,8 +334,8 @@ describe('[integration] transfer risk boundaries — ¥1,000 stays YELLOW, ¥1,0
     const doneData = payload(done);
     expect(doneData.ok).toBe(true);
     expect(doneData.status).toBe('executed');
-    expect(await checkingBalance()).toBeCloseTo(SEEDED_BALANCE - overLimit, 2);
-    expect(await dailyTotal()).toBeCloseTo(overLimit, 2);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, overLimit));
+    expect(await dailyTotal()).toBe(overLimit);
     expect(await zhangweiTransfers()).toHaveLength(1);
   });
 });

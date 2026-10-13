@@ -22,13 +22,14 @@ import {
 import { useFreshDatabase, getTestPrisma } from '../helpers/db';
 import { CARD_LIMITS } from '../helpers/fixtures';
 import type { RiskLevel } from '@/lib/contracts/risk';
+import { moneyToCents } from '@/lib/money';
 
 /** The seeded 娱乐 limit (¥3000) that the scenario must change to ¥1500. */
 const SEEDED = CARD_LIMITS.find(
   (limit) => limit.cardId === 'card_credit' && limit.category === '娱乐',
 );
-const SEEDED_AMOUNT = SEEDED?.amount ?? 3000;
-const TARGET_AMOUNT = 1500;
+const SEEDED_AMOUNT = SEEDED?.amount ?? '3000';
+const TARGET_AMOUNT = '1500';
 
 /** The exact args the model proposes (matches `agent/tools/card.ts` `SetCardLimitParams`). */
 const SET_LIMIT_ARGS = { cardId: 'card_credit', category: '娱乐', amount: TARGET_AMOUNT };
@@ -107,8 +108,8 @@ describe('Scenario 8 — 信用卡娱乐限额调整到1500 (YELLOW confirm)', (
     });
     // Only the untouched seeded row: nothing was written while the action is pending.
     expect(rows.length).toBe(1);
-    expect(rows[0].amount).toBe(SEEDED_AMOUNT);
-    expect(rows[0].amount).not.toBe(TARGET_AMOUNT);
+    expect(rows[0].amountMinor).toBe(moneyToCents(SEEDED_AMOUNT));
+    expect(rows[0].amountMinor).not.toBe(moneyToCents(TARGET_AMOUNT));
   });
 
   it('after confirm the 娱乐 limit is persisted as ¥1500', async () => {
@@ -124,7 +125,7 @@ describe('Scenario 8 — 信用卡娱乐限额调整到1500 (YELLOW confirm)', (
       where: { cardId: 'card_credit', category: '娱乐' },
     });
     expect(rows.length).toBe(1);
-    expect(rows[0].amount).toBe(TARGET_AMOUNT);
+    expect(rows[0].amountMinor).toBe(moneyToCents(TARGET_AMOUNT));
   });
 
   it('the audit row has riskLevel YELLOW and status success', async () => {

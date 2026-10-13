@@ -35,12 +35,12 @@ async function scriptedGuidance(message: string, text: string) {
 describe('multiple decisions upgrade coherently through real routes and rendered cards', () => {
   it('persists and streams the full RED summary, replaces the old card, and debits only after MFA', async () => {
     const { sessionId } = await getOrCreateSession('user_liming');
-    async function park(name: string, amount: number) {
+    async function park(name: string, amount: string) {
       const result = await executeGatedTool({ sessionId, userId: 'user_liming', toolName: 'transfer_money',
         args: { name, amount }, userRequest: '两笔独立转账' });
       return db().pendingAction.findUniqueOrThrow({ where: { id: result.pendingActionId! } });
     }
-    const a = await park('张伟', 600.25), b = await park('李华', 500.50);
+    const a = await park('张伟', '600.25'), b = await park('李华', '500.50');
     const aSummary = JSON.parse(a.summaryJson) as PendingActionSummary;
     const bSummary = JSON.parse(b.summaryJson) as PendingActionSummary;
     aSummary.actionId = a.id; bSummary.actionId = b.id;
@@ -48,7 +48,7 @@ describe('multiple decisions upgrade coherently through real routes and rendered
     const upgraded = await route(confirmPost, b.id, sessionId);
     expect(upgraded).toMatchObject({ status: 'awaiting_mfa', tier: 'RED', requiresMfa: true });
     const event = upgraded.events.find((e: AgentStreamEvent) => e.type === 'mfa_required');
-    expect(event.action).toMatchObject({ actionId: b.id, tier: 'RED', requiresMfa: true, amount: 500.5 });
+    expect(event.action).toMatchObject({ actionId: b.id, tier: 'RED', requiresMfa: true, amount: '500.50' });
     expect(event.action.fields).toContainEqual({ label: '收款人', value: '李华' });
     expect(event.action.fields).toContainEqual({ label: '风险等级', value: '🔴 红色' });
     const stored = await db().pendingAction.findUniqueOrThrow({ where: { id: b.id } });
@@ -65,22 +65,22 @@ describe('multiple decisions upgrade coherently through real routes and rendered
     expect(html).toContain('李华'); expect(html).toContain('¥500.50'); expect(html).toContain('🔴 红色');
     expect(html).not.toContain('🟡 黄色'); expect(html).not.toMatch(/>确认<\/button>/);
     expect((await route(verifyPost, b.id, sessionId, { code: '000000' })).ok).toBe(false);
-    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(22979.75);
+    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2297975n);
     expect((await route(verifyPost, b.id, sessionId, { code: '123456' })).ok).toBe(true);
-    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(22479.25);
-    expect(await db().transaction.count({ where: { amount: -500.5, channel: 'TRANSFER' } })).toBe(1);
+    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2247925n);
+    expect(await db().transaction.count({ where: { amountMinor: -50050n, channel: 'TRANSFER' } })).toBe(1);
   });
-  it('normalizes legacy stored yellow fields on the cookie-owned refresh endpoint', async () => {
+  it('refreshes the action card after a persisted policy escalation', async () => {
     const { sessionId } = await getOrCreateSession('user_liming');
     const action = await executeGatedTool({ sessionId, userId: 'user_liming', toolName: 'transfer_money',
-      args: { name: '李华', amount: 500.5 }, userRequest: '历史升级操作' });
+      args: { name: '李华', amount: '500.50' }, userRequest: '历史升级操作' });
     await db().pendingAction.update({ where: { id: action.pendingActionId! }, data: { riskLevel: 'RED', requiresMfa: true, status: 'awaiting_mfa' } });
     const response = await listActions(new NextRequest('http://localhost/api/actions', { headers: { cookie: `banking_session=${sessionId}` } }));
     const restored = (await response.json()).data[0];
     expect(restored.summary).toMatchObject({ actionId: action.pendingActionId, tier: 'RED', requiresMfa: true });
     expect(restored.summary.fields).toContainEqual({ label: '风险等级', value: '🔴 红色' });
   });
-  it('a legacy bare MFA event still locates the right inline action without erasing a different card', () => {
+  it('an incremental MFA escalation preserves the current action details', () => {
     const summary: PendingActionSummary = { actionId: 'b', title: '转账', toolName: 'transfer_money',
       tier: 'YELLOW', requiresMfa: false, fields: [{ label: '金额', value: '¥500.50' }, { label: '风险等级', value: '🟡 黄色' }] };
     const state = reduceAgentEvents(initialChatUIState({ messages: [{ id: 'b', role: 'assistant', content: '', timestamp: 0,
@@ -106,7 +106,7 @@ describe('structured guidance survives Pi/SSE/session persistence without financ
     expect(stored?.transcript.at(-1)?.content).toBe(final.message.content);
     expect(JSON.stringify(stored?.agentState.messages)).toContain(expected);
     expect(await db().pendingAction.count()).toBe(0);
-    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(23580);
+    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2358000n);
   });
   it('asks only for the missing amount, without asking again for the already-specified product', async () => {
     const response = await scriptedGuidance('申购稳健理财A', '{"guidance":{"code":"missing_details","fields":["product","amount"]}}');
@@ -144,8 +144,8 @@ describe('structured guidance survives Pi/SSE/session persistence without financ
     await runTurn({ sessionId: start.sessionId, message: '1000.66元' });
     const action = await db().pendingAction.findFirstOrThrow({ where: { sessionId: start.sessionId } });
     expect(action).toMatchObject({ toolName: 'subscribe_investment', status: 'awaiting_mfa', riskLevel: 'RED' });
-    expect(JSON.parse(action.argsJson)).toMatchObject({ productId: 'prod_wenjiana', amount: 1000.66 });
-    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(23580);
+    expect(JSON.parse(action.argsJson)).toMatchObject({ productId: 'prod_wenjiana', amount: '1000.66' });
+    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2358000n);
   });
   it('a malformed model response cannot make the fallback invent missing product or amount', async () => {
     const response = await scriptedGuidance('稳健理财B只赎回1000元', '抱歉，请提供产品名称和金额，已收到30000元');

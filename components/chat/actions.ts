@@ -17,10 +17,9 @@
  *    URL accepts `POST { action }` to steer a running plan (`pause`/`resume`/`cancel`/`retry`).
  *  - `GET /api/actions` returns the caller-session's attention rows: LIVE decisions (`pending` /
  *    `awaiting_mfa`), an in-flight `confirmed` row, a recoverable result-less `confirmed` wedge, and a
- *    terminal `needs_reconciliation` row. Each row MAY carry an additive `attention` class
- *    (`decision|processing|recoverable|reconciliation`); when absent it is derived from `status`.
- *    The exact body shape is not frozen, so `fetchPendingActions` consumes it TOLERANTLY (a
- *    top-level array OR `{ actions: [...] }`, rows that are `PendingAction`-like or summary-view).
+ *    terminal `needs_reconciliation` row. The response is `{ ok:true, data: [...] }`; each row
+ *    supplies its complete summary, policy fields and explicit server `attention` classification.
+ *    Malformed rows are discarded without reconstructing missing values or inventing controls.
  *
  * Hard rules: these helpers NEVER throw. Every failure (network, parse, `!response.ok`, domain error)
  * surfaces as an `{ type:'error'; message }` event folded into the returned `ChatTurnResponse`, and
@@ -32,7 +31,7 @@ import type { AgentStreamEvent, ChatTurnRequest, ChatTurnResponse } from '@/lib/
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { PendingActionStatus, PendingActionSummary } from '@/lib/contracts/security';
 import type { TaskPlan } from '@/lib/contracts/task';
-import type { ToolName } from '@/lib/contracts/tools';
+import { isCatalogToolName } from '@/lib/contracts/tool-catalog';
 // Type-only: the card node owns `TaskControlAction` + `AttentionClass`; a type import is erased at
 // build time, so this never pulls the (client) card components into this module's runtime graph.
 import type { AttentionClass, TaskControlAction } from './cards';
@@ -67,12 +66,22 @@ const JSON_HEADERS: Record<string, string> = {
 };
 
 /** Terminal `PendingActionStatus` values: the action is SETTLED, so the UI must show a fact, not controls. */
-const TERMINAL_ACTION_STATUSES: readonly string[] = [
+const TERMINAL_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'executed',
   'failed',
   'cancelled',
   'needs_reconciliation',
 ];
+
+/** Current action response states, including decisions and terminal outcomes. */
+const ACTION_STATUSES: readonly PendingActionStatus[] = [
+  'pending', 'awaiting_mfa', 'confirmed', 'executed', 'failed', 'cancelled', 'locked', 'needs_reconciliation',
+];
+
+function asActionStatus(value: unknown): PendingActionStatus | undefined {
+  return typeof value === 'string' && (ACTION_STATUSES as readonly string[]).includes(value)
+    ? value as PendingActionStatus : undefined;
+}
 
 /**
  * Normalize ANY throwable into a SAFE, single-line user-facing message.
@@ -124,7 +133,7 @@ function parseSseFrame(frame: string): AgentStreamEvent | undefined {
  * Read a `text/event-stream` body into an ordered `AgentStreamEvent[]`.
  * Frames are blank-line (`\n\n`) separated; parsing stops after the `done` event.
  */
-async function readSseStream(body: ReadableStream<Uint8Array>): Promise<AgentStreamEvent[]> {
+async function readSseStream(body: ReadableStream<Uint8Array>, onEvent?: (event: AgentStreamEvent) => void): Promise<AgentStreamEvent[]> {
   const events: AgentStreamEvent[] = [];
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -133,7 +142,7 @@ async function readSseStream(body: ReadableStream<Uint8Array>): Promise<AgentStr
 
   while (!finished) {
     const { value, done } = await reader.read();
-    if (value) buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+    if (value) buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
 
     let boundary = buffer.indexOf('\n\n');
     while (boundary !== -1) {
@@ -142,6 +151,7 @@ async function readSseStream(body: ReadableStream<Uint8Array>): Promise<AgentStr
       const event = parseSseFrame(frame);
       if (event) {
         events.push(event);
+        onEvent?.(event);
         if (event.type === 'done') {
           finished = true;
           break;
@@ -162,30 +172,34 @@ async function readSseStream(body: ReadableStream<Uint8Array>): Promise<AgentStr
   // Flush any trailing frame that arrived without a terminating blank line.
   if (!finished && buffer.trim() !== '') {
     const event = parseSseFrame(buffer);
-    if (event) events.push(event);
+    if (event) {
+      events.push(event);
+      onEvent?.(event);
+    }
   }
 
   return events;
 }
 
 /**
- * Split the app envelope `{ ok, data | error }` from a bare payload.
- * A body without an `ok` discriminant is treated as a bare payload (`{ data: body }`).
+ * Decode only the current app envelope `{ ok, data | error }`.
+ * A raw payload or malformed envelope is a contract failure.
  */
 function unwrapEnvelope(json: unknown): { data?: unknown; errorMessage?: string } {
   if (json && typeof json === 'object') {
     const record = json as Record<string, unknown>;
     if (record.ok === false) {
       const error = record.error;
-      const message =
-        error && typeof error === 'object' ? (error as Record<string, unknown>).message : undefined;
-      return { errorMessage: typeof message === 'string' ? message : GENERIC_ERROR };
+      if (!error || typeof error !== 'object' || Array.isArray(error)) return { errorMessage: GENERIC_ERROR };
+      const detail = error as Record<string, unknown>;
+      return { errorMessage: typeof detail.code === 'string' && typeof detail.message === 'string' && detail.message.trim()
+        ? detail.message : GENERIC_ERROR };
     }
-    if (record.ok === true) {
+    if (record.ok === true && Object.prototype.hasOwnProperty.call(record, 'data')) {
       return { data: record.data };
     }
   }
-  return { data: json };
+  return { errorMessage: GENERIC_ERROR };
 }
 
 /** Narrow an unknown payload to a `TaskPlan` (id + nodes + results discriminator). */
@@ -197,12 +211,13 @@ function asTaskPlan(value: unknown): TaskPlan | undefined {
     : undefined;
 }
 
-/** Narrow an unknown payload to `{ sessionId?, events? }` (used for bare `ChatTurnResponse`s). */
-function normalizeTurn(value: unknown): { sessionId?: string; events?: AgentStreamEvent[] } {
+/** Narrow the decoded current response payload to its session and events. */
+function normalizeTurn(value: unknown): { sessionId?: string; runId?: string; events?: AgentStreamEvent[] } {
   if (!value || typeof value !== 'object') return {};
   const record = value as Record<string, unknown>;
   return {
     sessionId: typeof record.sessionId === 'string' ? record.sessionId : undefined,
+    runId: typeof record.runId === 'string' ? record.runId : undefined,
     events: Array.isArray(record.events) ? (record.events as AgentStreamEvent[]) : undefined,
   };
 }
@@ -292,12 +307,12 @@ export interface PendingActionRef {
   attention: AttentionClass;
 }
 
-/** Coerce an untrusted value to a `RiskLevel`, falling back when it is not one of the three tiers. */
-function asRiskLevel(value: unknown, fallback: RiskLevel): RiskLevel {
-  return value === 'GREEN' || value === 'YELLOW' || value === 'RED' ? value : fallback;
+/** Accept only one of the current policy tiers. */
+function asRiskLevel(value: unknown): RiskLevel | undefined {
+  return value === 'GREEN' || value === 'YELLOW' || value === 'RED' ? value : undefined;
 }
 
-/** The set of valid `AttentionClass` values, for tolerant coercion of the server field. */
+/** The current server attention classifications. */
 const ATTENTION_CLASSES: readonly AttentionClass[] = [
   'decision',
   'processing',
@@ -312,69 +327,24 @@ function asAttentionClass(value: unknown): AttentionClass | undefined {
     : undefined;
 }
 
-/**
- * Derive the attention class from a row `status` when the server did not supply one (backward
- * compatible). `confirmed` falls back to `processing` — a `confirmed` row is by definition
- * mid-execution, and only the (additive) server `attention` field distinguishes a genuinely
- * recoverable wedge; without it the safe default is "still being processed" (no recovery button).
- */
-function deriveAttention(
-  status: 'pending' | 'awaiting_mfa' | 'confirmed' | 'needs_reconciliation',
-): AttentionClass {
-  switch (status) {
-    case 'pending':
-    case 'awaiting_mfa':
-      return 'decision';
-    case 'needs_reconciliation':
-      return 'reconciliation';
-    case 'confirmed':
-      return 'processing';
-  }
-}
-
-/** Coerce an untrusted `fields` value to the frozen `PendingActionSummary['fields']` shape. */
-function normalizeFields(value: unknown): Array<{ label: string; value: string }> {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((field): field is Record<string, unknown> => Boolean(field) && typeof field === 'object')
-    .map((field) => ({ label: String(field.label ?? ''), value: String(field.value ?? '') }));
+/** Verify a complete server summary against the row's current identity and policy. */
+function extractSummary(row: Record<string, unknown>, tier: RiskLevel, requiresMfa: boolean): PendingActionSummary | undefined {
+  const raw = row.summary;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return;
+  const summary = raw as Record<string, unknown>;
+  if (typeof summary.title !== 'string' || summary.title.trim() === '' ||
+      typeof summary.toolName !== 'string' || !isCatalogToolName(summary.toolName) ||
+      summary.toolName !== row.toolName || summary.tier !== tier || summary.requiresMfa !== requiresMfa ||
+      !Array.isArray(summary.fields) || !summary.fields.every(field => field !== null && typeof field === 'object' &&
+        typeof field.label === 'string' && typeof field.value === 'string') ||
+      (summary.actionId !== undefined && summary.actionId !== row.id) ||
+      (summary.amount !== undefined && typeof summary.amount !== 'string') ||
+      (summary.mfaHint !== undefined && typeof summary.mfaHint !== 'string')) return;
+  return raw as PendingActionSummary;
 }
 
 /**
- * The `toolName` for a normalised summary. A `PendingAction` always carries one; a malformed row
- * that does not gets `''` (a display-only placeholder — the summary never drives execution; the
- * server owns the truth via the action id).
- */
-function summaryToolName(row: Record<string, unknown>, source?: Record<string, unknown>): ToolName {
-  const candidate = source?.toolName ?? row.toolName;
-  return (typeof candidate === 'string' ? candidate : '') as ToolName;
-}
-
-/** Build a `PendingActionSummary` from a `PendingAction`-like row (tolerant of a summary-view row). */
-function extractSummary(
-  row: Record<string, unknown>,
-  tier: RiskLevel,
-  requiresMfa: boolean,
-): PendingActionSummary {
-  const raw = row.summary && typeof row.summary === 'object' ? (row.summary as Record<string, unknown>) : undefined;
-  // A summary-view row carries the summary fields on the row itself.
-  const source = raw && typeof raw.title === 'string' ? raw : typeof row.title === 'string' ? row : undefined;
-  if (!source) {
-    return { title: '需要安全验证', toolName: summaryToolName(row), tier, fields: [], requiresMfa };
-  }
-  return {
-    title: source.title as string,
-    toolName: summaryToolName(row, source),
-    tier: asRiskLevel(source.tier, tier),
-    fields: normalizeFields(source.fields),
-    requiresMfa: source.requiresMfa === true || requiresMfa,
-    ...(typeof source.amount === 'number' ? { amount: source.amount } : {}),
-    ...(typeof source.mfaHint === 'string' ? { mfaHint: source.mfaHint } : {}),
-  };
-}
-
-/**
- * Map ONE untrusted `PendingAction`-like row to a `PendingActionRef`, or `undefined` when it must be
+ * Validate one current server row as a `PendingActionRef`, or `undefined` when it must be
  * dropped (missing id, or a status that is neither actionable nor one of the out-of-band states).
  *
  * Retained statuses: `pending` / `awaiting_mfa` (actionable), `confirmed` (an in-flight OR a
@@ -382,9 +352,9 @@ function extractSummary(
  * non-actionable status (`executed` / `failed` / `cancelled` / `locked`) is dropped.
  */
 function toPendingActionRef(row: unknown): PendingActionRef | undefined {
-  if (!row || typeof row !== 'object') return undefined;
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return undefined;
   const record = row as Record<string, unknown>;
-  const id = typeof record.id === 'string' && record.id.length > 0 ? record.id : undefined;
+  const id = typeof record.id === 'string' && record.id.trim().length > 0 ? record.id : undefined;
   if (id === undefined) return undefined;
 
   const status = record.status;
@@ -397,25 +367,22 @@ function toPendingActionRef(row: unknown): PendingActionRef | undefined {
     return undefined;
   }
 
-  const rawSummary = record.summary;
-  const summaryRecord =
-    rawSummary && typeof rawSummary === 'object' ? (rawSummary as Record<string, unknown>) : undefined;
-  const tier = asRiskLevel(record.tier ?? record.riskLevel ?? summaryRecord?.tier, 'YELLOW');
-  const requiresMfa = record.requiresMfa === true || summaryRecord?.requiresMfa === true;
-
-  // Prefer the additive server `attention`; fall back to deriving it from `status` (tolerant of an
-  // older server that does not emit it yet).
-  const attention = asAttentionClass(record.attention) ?? deriveAttention(status);
-
-  return { id, status, tier, requiresMfa, summary: extractSummary(record, tier, requiresMfa), attention };
+  const tier = asRiskLevel(record.tier);
+  const attention = asAttentionClass(record.attention);
+  if (tier === undefined || attention === undefined || typeof record.requiresMfa !== 'boolean') return;
+  if ((status === 'pending' || status === 'awaiting_mfa') && attention !== 'decision') return;
+  if (status === 'confirmed' && attention === 'decision') return;
+  if (status === 'needs_reconciliation' && attention !== 'reconciliation') return;
+  const summary = extractSummary(record, tier, record.requiresMfa);
+  if (summary === undefined) return;
+  return { id, status, tier, requiresMfa: record.requiresMfa, summary, attention };
 }
 
 /**
  * `GET /api/actions` — the caller-session's actions that need the user's attention, for refresh
  * restore.
  *
- * Consumed TOLERANTLY (the route's exact shape is not frozen): accepts a top-level array or
- * `{ actions: [...] }`, and each row may be a `PendingAction` or a summary-view row. ACTIONABLE rows
+ * Accepts only the current success envelope containing an array of complete rows. ACTIONABLE rows
  * (`pending` / `awaiting_mfa`) AND out-of-band rows (`confirmed` in-flight/recoverable,
  * `needs_reconciliation`) are retained (the latter carry no confirm/MFA path but must be SHOWN so the
  * user sees the state and can reconcile/recover); the other terminal statuses (`executed` / `failed`
@@ -436,14 +403,10 @@ export async function fetchPendingActions(
     const { data, errorMessage } = unwrapEnvelope(json);
     if (errorMessage) return [];
 
-    const rows = Array.isArray(data)
-      ? data
-      : data && typeof data === 'object' && Array.isArray((data as Record<string, unknown>).actions)
-        ? ((data as Record<string, unknown>).actions as unknown[])
-        : [];
+    if (!Array.isArray(data)) return [];
 
     const refs: PendingActionRef[] = [];
-    for (const row of rows) {
+    for (const row of data) {
       const ref = toPendingActionRef(row);
       if (ref) refs.push(ref);
     }
@@ -460,17 +423,19 @@ export async function fetchPendingActions(
 export function sendChatTurn(
   req: ChatTurnRequest,
   endpoints: ChatEndpoints = DEFAULT_ENDPOINTS,
+  onEvent?: (event: AgentStreamEvent) => void,
 ): Promise<ChatTurnResponse> {
   const fallbackSession = req.sessionId ?? '';
   return (async () => {
     try {
+      const requestId = req.requestId ?? crypto.randomUUID();
       const res = await fetch(endpoints.chat, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'text/event-stream, application/json',
         },
-        body: JSON.stringify(req),
+        body: JSON.stringify({ ...req, requestId }),
       });
 
       if (!res.ok) {
@@ -479,8 +444,10 @@ export function sendChatTurn(
 
       const contentType = res.headers.get('content-type') ?? '';
       if (contentType.includes('text/event-stream') && res.body) {
-        const events = await readSseStream(res.body);
-        return { sessionId: firstSessionId(events) ?? fallbackSession, events };
+        const events = await readSseStream(res.body, onEvent);
+        const sessionEvent = events.find(event => event.type === 'session');
+        return { sessionId: firstSessionId(events) ?? fallbackSession,
+          ...(sessionEvent?.type === 'session' && sessionEvent.runId ? { runId: sessionEvent.runId } : {}), events };
       }
 
       const json: unknown = await res.json();
@@ -488,10 +455,12 @@ export function sendChatTurn(
       if (errorMessage) {
         return failure(fallbackSession, errorMessage);
       }
-      const { sessionId, events } = normalizeTurn(data);
+      const { sessionId, runId, events } = normalizeTurn(data);
       const turnEvents = events ?? [];
+      for (const event of turnEvents) onEvent?.(event);
       return {
         sessionId: firstSessionId(turnEvents) ?? sessionId ?? fallbackSession,
+        ...(runId ? { runId } : {}),
         events: turnEvents,
       };
     } catch (e) {
@@ -503,8 +472,8 @@ export function sendChatTurn(
 /**
  * POST an action (confirm/verify/cancel/recover) and normalise the response.
  *
- * The action routes return `{ ok:true, data: ActionResponse }` (or the error envelope), but a bare
- * `ChatTurnResponse` is also tolerated. `data.ok` is the DOMAIN outcome (a failed action is a normal
+ * The action routes return `{ ok:true, data: ActionResponse }` or the error envelope.
+ * `data.ok` is the DOMAIN outcome (a failed action is a normal
  * `200` with `ok:false`), so the event list must carry the signal the reducer folds:
  *
  *  - ESCALATION / MFA prompt (`requiresMfa && tier==='RED'`, not yet executed, NOT a failed verify):
@@ -535,22 +504,31 @@ async function postAction(url: string, body: Record<string, unknown>): Promise<C
       return failure('', errorMessage);
     }
 
-    const record = data && typeof data === 'object' ? (data as Record<string, unknown>) : {};
-    const sessionId = typeof record.sessionId === 'string' ? record.sessionId : '';
-    let events = Array.isArray(record.events) ? [...(record.events as AgentStreamEvent[])] : [];
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return failure('', GENERIC_ERROR);
+    const record = data as Record<string, unknown>;
+    const status = asActionStatus(record.status);
+    const tier = asRiskLevel(record.tier);
+    if (typeof record.sessionId !== 'string' || record.sessionId.trim() === '' ||
+        typeof record.actionId !== 'string' || record.actionId.trim() === '' ||
+        typeof record.ok !== 'boolean' || typeof record.requiresMfa !== 'boolean' ||
+        typeof record.message !== 'string' || status === undefined || tier === undefined ||
+        !Array.isArray(record.events) || !record.events.every(event => event !== null && typeof event === 'object' && typeof event.type === 'string') ||
+        (record.mfaResult !== undefined && record.mfaResult !== 'success' && record.mfaResult !== 'failed' && record.mfaResult !== 'not_required')) {
+      return failure('', GENERIC_ERROR);
+    }
+    const sessionId = record.sessionId;
+    const actionId = record.actionId;
     const domainOk = record.ok;
-    const message = typeof record.message === 'string' ? record.message : undefined;
-    const actionId = typeof record.actionId === 'string' ? record.actionId : undefined;
-    const tier = typeof record.tier === 'string' ? record.tier : undefined;
-    const status = typeof record.status === 'string' ? record.status : undefined;
-    const requiresMfa = record.requiresMfa === true;
-    const mfaResult = typeof record.mfaResult === 'string' ? record.mfaResult : undefined;
+    const requiresMfa = record.requiresMfa;
+    const message = record.message;
+    const mfaResult = record.mfaResult;
+    let events = [...record.events] as AgentStreamEvent[];
 
     const executed = domainOk === true || status === 'executed' || status === 'confirmed';
     const awaitingDecision = status === 'pending' || status === 'awaiting_mfa';
     // A historical RED requirement is not a new verification decision. Preserve events for any
     // DIFFERENT action parked by a resumed plan, but never reopen this action's terminal card.
-    if (status !== undefined && !awaitingDecision && actionId !== undefined) {
+    if (!awaitingDecision) {
       events = events.filter(event => event.type !== 'mfa_required' || event.actionId !== actionId);
     }
 
@@ -558,7 +536,7 @@ async function postAction(url: string, body: Record<string, unknown>): Promise<C
     // failure and intentionally falls through to the error-appending branch below.
     if (awaitingDecision && requiresMfa && tier === 'RED' && !executed && mfaResult !== 'failed') {
       const hasMfaEvent = events.some((event) => event.type === 'mfa_required');
-      if (!hasMfaEvent && actionId !== undefined) {
+      if (!hasMfaEvent) {
         events.push({ type: 'mfa_required', actionId });
       }
       return { sessionId, events };
@@ -566,20 +544,19 @@ async function postAction(url: string, body: Record<string, unknown>): Promise<C
 
     const hasErrorEvent = events.some((event) => event.type === 'error');
     if (domainOk === false && !hasErrorEvent) {
-      events.push({ type: 'error', message: message ?? GENERIC_ERROR });
+      events.push({ type: 'error', message });
     }
 
-    // SETTLEMENT signal (ADDITIVE, non-frozen AgentStreamEvent). A TERMINAL server status means the
+    // The typed settlement signal carries the server's terminal status. This means the
     // action is done: the reducer stamps it onto the inline confirmation card so a settled card can
-    // never keep looking actionable. Read structurally downstream; an older server that omits a
-    // terminal status simply never emits this, preserving today's behaviour.
-    if (actionId !== undefined && status !== undefined && TERMINAL_ACTION_STATUSES.includes(status)) {
+    // never keep looking actionable.
+    if (TERMINAL_ACTION_STATUSES.includes(status)) {
       events.push({
         type: 'action_settled',
         actionId,
         status,
-        ...(message !== undefined ? { message } : {}),
-      } as unknown as AgentStreamEvent);
+        message,
+      });
     }
 
     return { sessionId, events };

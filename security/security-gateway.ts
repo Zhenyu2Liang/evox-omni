@@ -36,6 +36,7 @@ import {
 import { isLocked } from './circuit-breaker';
 import { getChallenge, issueChallenge, verify } from './mfa';
 import {
+  assertActionMayStart,
   claimPendingAction,
   createPendingAction as repoCreatePending,
   getPendingAction,
@@ -53,7 +54,10 @@ import {
 import { prisma } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 import { safeParse } from '../lib/json';
-import { formatCNY, moneyToCents, normalizeTransferAmount, parseAmount, round2 } from '../lib/money';
+import { formatCNY, moneyToCents, normalizeTransferAmount, centsToMoney, type MoneyAmount } from '../lib/money';
+import { valuationToMinor } from '../lib/decimal';
+import { canonicalCommandArgs } from '../lib/contracts/command';
+import { recordAuthorizationDecision } from './authorization-record';
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
 import { resolveBankingArgs } from '../lib/banking-selectors';
@@ -83,6 +87,10 @@ export interface GatewayContext {
   taskId?: string;
   /** Owning node (`AgentTaskNode.nodeId`) alongside `taskId`; absent for a top-level tool call. */
   nodeId?: string;
+  invocationId?: string;
+  authorizationDecisionId?: string;
+  /** Trusted runtime fence, supplied by the host rather than JSON or model arguments. */
+  runtimeFence?: import('@/banking-sdk').ExecutionFenceCheck;
 }
 
 /** Result of a human confirm/verify decision on a pending action. */
@@ -113,8 +121,8 @@ export interface ActionOwnership {
   sessionId: string;
 }
 
-/** `authorizeAction` options: REQUIRED ownership plus an optional strong-verification code. `confirmed` is an accepted-but-ignored caller hint (a YELLOW action is authorized by the atomic `pending → confirmed` claim; a RED action by `mfaCode`). */
-export type AuthorizeOptions = ActionOwnership & { mfaCode?: string; confirmed?: boolean };
+/** Ownership is required; strong-verification decisions additionally supply the factor code. */
+export type AuthorizeOptions = ActionOwnership & { mfaCode?: string };
 
 /** `cancelAction` options: REQUIRED ownership only. */
 export type CancelOptions = ActionOwnership;
@@ -231,10 +239,9 @@ function isDecisionKind(value: unknown): value is SecurityDecisionKind {
 }
 
 /** Extract a finite amount from `args.amount` when the key is present; `undefined` otherwise. */
-function resolveAmount(args: Record<string, unknown>): number | undefined {
+function resolveAmount(args: Record<string, unknown>): MoneyAmount | undefined {
   if (!('amount' in args)) return undefined;
-  const amount = parseAmount(args.amount as string | number | null | undefined);
-  return Number.isFinite(amount) ? amount : undefined;
+  try { return centsToMoney(moneyToCents(args.amount)); } catch { return undefined; }
 }
 
 /** Best-effort string read of the first present, non-empty candidate key. */
@@ -525,14 +532,15 @@ async function gatewayCreatePendingAction(
 ): Promise<CreatePendingActionResult> {
   ctx = { ...ctx, args: await resolveBankingArgs(ctx.userId, ctx.toolName, ctx.args),
     userRequest: redactRequest(ctx.userRequest) };
+  ctx.args = canonicalCommandArgs(ctx.args);
   if (ctx.toolName === 'create_scheduled_task') {
     ctx.args = { ...ctx.args, runAt: scheduledTime(ctx.args, ctx.userRequest) };
   }
   if (ctx.toolName === 'change_password') ctx.args = redactSecrets(ctx.args) as Record<string, unknown>;
   if (ctx.toolName === 'apply_virtual_card' && ctx.args.monthlyLimit !== undefined) {
     const cents = moneyToCents(ctx.args.monthlyLimit);
-    if (cents < 0) throw new AppError('VALIDATION', '月限额不能为负数。');
-    ctx.args = { ...ctx.args, monthlyLimit: cents / 100 };
+    if (cents < 0n) throw new AppError('VALIDATION', 'Monthly limits cannot be negative.');
+    ctx.args = { ...ctx.args, monthlyLimit: centsToMoney(cents) };
   }
   let recipient: { name: string; phone: string } | undefined;
   let accountLabel: string | undefined;
@@ -576,18 +584,19 @@ async function gatewayCreatePendingAction(
     const holding = await prisma.investmentHolding.findFirst({ where: { id: String(ctx.args.holdingId), userId: ctx.userId }, include: { product: true } });
     if (holding) summary.fields.unshift({ label: '持仓', value: `${holding.product.name}（${holding.id}）` });
     if (holding && ctx.toolName === 'redeem_investment') {
-      const amount = round2(holding.marketValue ?? holding.amount);
+      const amount = centsToMoney(holding.estimatedMarketValue === null
+        ? holding.principalAmountMinor : valuationToMinor(holding.estimatedMarketValue));
       ctx.args = { ...ctx.args, expectedRedemptionAmount: amount };
       summary.fields.push(
         { label: '赎回范围', value: '全部赎回该笔持仓（不支持部分赎回）' },
-        { label: '持仓本金', value: formatCNY(holding.amount) },
+        { label: 'Principal', value: formatCNY(centsToMoney(holding.principalAmountMinor)) },
         { label: '赎回到账金额', value: formatCNY(amount) },
         { label: '金额变化', value: '金额变化时停止执行，需重新确认' },
       );
     }
   }
   if (ctx.toolName === 'apply_virtual_card') {
-    summary.fields.push({ label: '月限额', value: ctx.args.monthlyLimit === undefined ? '未设置（本次仅开卡）' : formatCNY(Number(ctx.args.monthlyLimit)) });
+    summary.fields.push({ label: '月限额', value: ctx.args.monthlyLimit === undefined ? '未设置（本次仅开卡）' : formatCNY(String(ctx.args.monthlyLimit)) });
     summary.fields.push({ label: '演示范围', value: '保存卡片及月限额配置；Demo 不提供刷卡支付' });
   }
   if (ctx.args.subscriptionId) {
@@ -595,7 +604,7 @@ async function gatewayCreatePendingAction(
     if (subscription) summary.fields.unshift({ label: '订阅', value: subscription.name });
   }
   if (ctx.toolName === 'set_subscription_reminder') summary.fields.push({ label: '提醒设置', value: ctx.args.remind === true ? '开启' : '关闭' });
-  if (ctx.toolName === 'set_card_limit' && ctx.args.amount !== undefined) summary.fields.push({ label: '新限额', value: formatCNY(Number(ctx.args.amount)) });
+  if (ctx.toolName === 'set_card_limit' && ctx.args.amount !== undefined) summary.fields.push({ label: '新限额', value: formatCNY(String(ctx.args.amount)) });
   if (['subscribe_investment', 'redeem_investment'].includes(ctx.toolName)) {
     const account = await prisma.account.findFirst({ where: { userId: ctx.userId, type: 'CHECKING' } });
     summary.fields.push({ label: ctx.toolName === 'subscribe_investment' ? '付款账户' : '入账账户', value: account?.name ?? '账户待核对' });
@@ -638,6 +647,8 @@ async function gatewayCreatePendingAction(
         // plan-level cancel can revoke the operation even if the node output JSON was never written.
         taskId: ctx.taskId,
         nodeId: ctx.nodeId,
+        invocationId: ctx.invocationId,
+        authorizationDecisionId: ctx.authorizationDecisionId,
       },
       tx,
     );
@@ -838,6 +849,7 @@ async function authorizeTransfer(
   // effective-total read + dynamic risk. Reading after the write is what makes concurrent confirms
   // of different action ids serialize instead of racing on a stale day total.
   const outcome = await prisma.$transaction(async (tx) => {
+    await assertActionMayStart(row.id, tx);
     const claim = await tx.pendingAction.updateMany({
       where: {
         id: row.id,
@@ -963,6 +975,9 @@ async function authorizeAction(
 
   const action = toContractPendingAction(row);
   const effectiveRequiresMfa = row.requiresMfa || action.tier === 'RED';
+  if (row.taskId && await prisma.manualReview.findFirst({ where: { taskId: row.taskId, status: 'open' } })) {
+    throw new AppError('CONFLICT', 'This workflow is under manual review; a new command cannot start.');
+  }
 
   // Circuit breaker is a hard gate the LLM (and even a correct code) cannot bypass.
   if (await isLocked(row.sessionId)) {
@@ -1061,11 +1076,18 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
 
   const evaluation = await gatewayEvaluate(ctx);
   const decision = gatewayDecide(evaluation);
+  ctx = { ...ctx, authorizationDecisionId: await recordAuthorizationDecision(ctx, decision) };
+  const recordDenial = async (reason: string): Promise<void> => {
+    await recordAuthorizationDecision(ctx, { ...decision, kind: 'deny', evaluation: {
+      ...evaluation, blocked: true, blockReason: reason, reasons: [...evaluation.reasons, reason],
+    } });
+  };
 
   if (decision.kind !== 'deny') {
     try { await assertRequestedProducts(ctx.toolName, ctx.args, ctx.userRequest); }
     catch (error) {
       if (!(error instanceof AppError) || error.code !== 'VALIDATION') throw error;
+      await recordDenial(error.message);
       return { evaluation: { ...evaluation, blocked: true }, decision: { ...decision, kind: 'deny' }, blockReason: error.message };
     }
   }
@@ -1087,6 +1109,7 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
   try { result = await gatewayCreatePendingAction(ctx, evaluation); }
   catch (error) {
     if (!(error instanceof AppError) || error.code !== 'VALIDATION') throw error;
+    await recordDenial(error.message);
     return { evaluation, decision: { ...decision, kind: 'deny' }, blockReason: error.message };
   }
 
@@ -1094,6 +1117,7 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
   // `BLOCK_REASON_PREFIX` payload, which the model cannot read) and NO pending action. `evaluation.blocked`
   // stays true; the model asks the user to clarify the recipient.
   if (result.kind === 'clarify') {
+    await recordDenial(result.message);
     return {
       evaluation,
       decision: { ...decision, kind: 'deny' },
@@ -1104,6 +1128,7 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
   // Plan-scoped call whose owning plan is already cancelled → REFUSE cleanly (returned, not thrown)
   // so the agent layer reports a refusal rather than an infra failure.
   if (result.kind === 'plan_cancelled') {
+    await recordDenial('WORKFLOW_CANCELLED');
     return {
       evaluation,
       decision: { ...decision, kind: 'deny' },
@@ -1152,8 +1177,8 @@ export const securityGateway: SecurityGateway = {
  *
  * For `transfer_money` the optional `recipient` (the SERVER-RESOLVED contact from
  * `resolveTransferRecipient`) supplies the 收款人 name and an ADDITIONAL, MASKED 收款手机号 field;
- * `accountLabel` (from `resolveAccountLabel`) overrides the 账户 field. Both are omitted by callers
- * that only need the legacy heuristic (e.g. tests) — the field order stays
+ * `accountLabel` (from `resolveAccountLabel`) overrides the account field. Pure formatter tests
+ * may omit server-resolved display metadata; the field order stays
  * 收款人 → [收款手机号] → 金额 → 账户 → 风险等级.
  */
 export function buildPendingActionSummary(
@@ -1171,12 +1196,12 @@ export function buildPendingActionSummary(
       label: '收款人',
       value:
         recipient?.name ??
-        pickString(ctx.args, ['toName', 'name', 'recipient', 'payee', 'contactName', 'to']) ??
+        pickString(ctx.args, ['name']) ??
         '（未指定）',
     });
     // Masked (never raw) so the card never leaks the recipient's full phone number.
     if (recipient) fields.push({ label: '收款手机号', value: maskPhone(recipient.phone) });
-    fields.push({ label: '金额', value: formatCNY(amount ?? 0) });
+    fields.push({ label: 'Amount', value: formatCNY(amount ?? '0.00') });
     fields.push({
       label: '账户',
       value:

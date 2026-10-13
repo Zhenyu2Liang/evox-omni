@@ -7,7 +7,7 @@ export const normalizeProduct = (value: string) => value.trim().replace(/^[“"�
   .replace(/^(?:理财产品|产品)\s*/, '').toLowerCase();
 export const productAliases = (product: RequestProduct) => [product.id, product.name, product.code].map(normalizeProduct);
 
-interface Purchase { productId?: string; cents?: number }
+interface Purchase { productId?: string; cents?: bigint }
 const mismatch = () => new AppError('VALIDATION', '申购产品与本次请求不一致，或金额与对应步骤不一致；请逐笔核对产品和金额，未创建申购授权。');
 
 /** Each command has its own span. Code digits are removed before reading monetary amounts. */
@@ -81,7 +81,7 @@ export function assertPlanPurchases(nodes: readonly TaskNodeSpec[], request: str
     const candidates = remaining.map((purchase, i) => matches(purchase, node.args ?? {}, rows) ? i : -1).filter(i => i >= 0);
     if (!candidates.length) throw mismatch();
     // Identical requested pairs are separate steps. Different interpretations require clarification.
-    if (new Set(candidates.map(i => JSON.stringify(remaining[i]))).size > 1) {
+    if (new Set(candidates.map(i => `${remaining[i].productId ?? ''}:${remaining[i].cents?.toString() ?? ''}`)).size > 1) {
       throw new AppError('VALIDATION', '无法确定申购节点对应哪一步，请逐笔明确产品和金额；尚未执行计划。');
     }
     remaining.splice(candidates[0], 1);

@@ -9,6 +9,7 @@ import type { ManualResolution, ManualReviewInbox, ManualReviewRecord } from '@/
 import type { ToolName } from '@/lib/contracts/tools';
 import { getToolPolicy } from '@/security/permission-engine';
 import { committedExecutionResult } from './execution-evidence';
+import { reviewControlState, type ReviewControlState } from './manual-review-policy';
 
 type Identity = { sessionId: string; userId: string };
 type Target = { taskId?: string; actionId?: string };
@@ -59,25 +60,32 @@ async function mayRetry(task: Task | null, actions: PendingAction[]): Promise<bo
   return true;
 }
 
-function record(row: ManualReview, retry: boolean): ManualReviewRecord {
+function record(row: ManualReview, retry: boolean, controls?: ReviewControlState): ManualReviewRecord {
   return {
     id: row.id, taskId: row.taskId ?? undefined, actionId: row.actionId ?? undefined,
     title: row.title, reason: row.reason, status: row.status as 'open' | 'closed',
     operatorName: row.operatorName, notes: row.notes ?? undefined,
     resolution: (row.resolution as ManualResolution | null) ?? undefined,
     createdAt: row.createdAt.toISOString(), resolvedAt: row.resolvedAt?.toISOString(), mayRetry: retry,
+    ...controls,
   };
 }
 
 async function audit(tx: Prisma.TransactionClient, row: ManualReview, phase: 'open' | 'close'): Promise<void> {
+  const task = row.taskId ? await tx.agentTask.findUnique({ where: { id: row.taskId }, include: { nodes: true } }) : null;
+  const actions = row.taskId ? await tx.pendingAction.findMany({ where: { taskId: row.taskId } }) : [];
+  const controls = reviewControlState(row.status as 'open' | 'closed', task, actions);
   await recordAudit({
-    timestamp: demoNow(), sessionId: row.sessionId, userRequest: row.reason,
+    timestamp: demoNow(), sessionId: row.sessionId, userId: row.userId, userRequest: row.reason,
     intent: 'manual_review', toolName: 'manual_review', riskLevel: 'YELLOW',
     confirmationRequired: false, confirmed: false, mfaRequired: false,
-    status: phase === 'open' ? 'blocked' : row.resolution === 'retry' ? 'allowed' : 'cancelled',
-    detail: `${row.operatorName}：${phase === 'open' ? '接管异常任务' : row.resolution === 'retry' ? '允许重新发起确认' : '结束自动处理'}；${row.notes ?? row.reason}`,
+    status: phase === 'open' ? 'blocked' : row.resolution === 'retry' || row.resolution === 'resume' ? 'allowed' : 'cancelled',
+    detail: `${row.operatorName}: ${phase === 'open' ? 'control_requested'
+      : row.resolution === 'retry' ? 'failed_work_retry_permitted'
+      : row.resolution === 'resume' ? 'operator_control_released' : 'automatic_work_stopped'}; ${row.notes ?? row.reason}`,
     toolResult: { reviewId: row.id, taskId: row.taskId, actionId: row.actionId,
-      operatorId: row.operatorId, operatorName: row.operatorName, resolution: row.resolution, notes: row.notes },
+      operatorId: row.operatorId, operatorName: row.operatorName, resolution: row.resolution, notes: row.notes,
+      handoffStatus: controls.handoffStatus, workflowStatus: controls.workflowStatus },
   }, { client: tx, strict: true, dedupeKey: `manual:${row.id}:${phase}` });
 }
 
@@ -91,11 +99,16 @@ export async function getManualReviewInbox(identity: Identity): Promise<ManualRe
   const active = new Set(reviews.filter((r) => r.status === 'open').map((r) => r.activeKey));
   const candidates: ManualReviewInbox['candidates'] = [];
   for (const task of tasks) {
-    if (task.status !== 'failed' || task.executionToken !== null || active.has(`task:${task.id}`)) continue;
-    if (actions.some((a) => a.taskId === task.id && ['pending', 'awaiting_mfa', 'confirmed'].includes(a.status))) continue;
+    if (!['failed', 'running', 'paused', 'waiting_confirmation', 'pending'].includes(task.status)
+      || active.has(`task:${task.id}`)) continue;
+    const taskActions = actions.filter(action => action.taskId === task.id);
+    if (task.status === 'failed' && (task.executionToken !== null
+      || taskActions.some(action => ['pending', 'awaiting_mfa', 'confirmed'].includes(action.status)))) continue;
     candidates.push({ taskId: task.id, title: task.goal,
-      error: task.nodes.filter((n) => n.status === 'failed').map((n) => n.error ?? `${n.name}失败`).join('；'),
-      mayRetry: await mayRetry(task, actions.filter((a) => a.taskId === task.id)) });
+      error: task.status === 'failed' ? task.nodes.filter(node => node.status === 'failed').map(node => node.error ?? `${node.name} failed`).join('; ')
+        : 'Request operator control at the next safe workflow checkpoint.',
+      mayRetry: await mayRetry(task, taskActions),
+      mayResume: reviewControlState('open', task, taskActions).mayResume, workflowStatus: task.status });
   }
   for (const action of actions) {
     if (!standaloneReviewable(action) || active.has(`action:${action.id}`)) continue;
@@ -104,9 +117,13 @@ export async function getManualReviewInbox(identity: Identity): Promise<ManualRe
       error: action.status === 'failed' ? '操作已失败，可登记核对说明；修改需求后请重新发起请求。'
         : '执行结果不明，禁止重跑；可登记核对说明并结束自动处理。', mayRetry: false });
   }
-  return { operatorName, candidates, reviews: await Promise.all(reviews.map(async (row) => record(row,
-    row.taskId !== null && await mayRetry(tasks.find((t) => t.id === row.taskId) ?? null,
-      actions.filter((a) => a.taskId === row.taskId))))) };
+  return { operatorName, candidates, reviews: await Promise.all(reviews.map(async row => {
+    const task = tasks.find(candidate => candidate.id === row.taskId) ?? null;
+    const taskActions = row.taskId ? actions.filter(action => action.taskId === row.taskId)
+      : actions.filter(action => action.id === row.actionId);
+    return record(row, row.taskId !== null && await mayRetry(task, taskActions),
+      reviewControlState(row.status as 'open' | 'closed', task, taskActions));
+  })) };
 }
 
 export async function openManualReview(identity: Identity, target: Target, reason: string): Promise<ManualReviewRecord> {
@@ -116,13 +133,24 @@ export async function openManualReview(identity: Identity, target: Target, reaso
     await tx.agentSession.updateMany({ where: { id: identity.sessionId, userId: identity.userId }, data: { id: identity.sessionId } });
     let title: string;
     const key = target.taskId ? `task:${target.taskId}` : `action:${target.actionId}`;
+    const existing = await tx.manualReview.findUnique({ where: { activeKey: key } });
+    if (existing) { own(existing, identity); return existing; }
     if (target.taskId) {
       const task = await tx.agentTask.findUnique({ where: { id: target.taskId } });
       if (!task) throw new AppError('NOT_FOUND', '任务不存在。');
       own(task, identity);
-      if (task.status !== 'failed' || task.executionToken !== null) throw new AppError('CONFLICT', '仅可接管已停止执行的失败任务。');
-      const activeActions = await tx.pendingAction.count({ where: { taskId: task.id, status: { in: ['pending', 'awaiting_mfa', 'confirmed'] } } });
-      if (activeActions) throw new AppError('CONFLICT', '任务仍有待确认或处理中操作，请先处理这些操作。');
+      if (!['failed', 'running', 'paused', 'waiting_confirmation', 'pending'].includes(task.status)) {
+        throw new AppError('CONFLICT', 'A terminal workflow cannot be handed to an operator.');
+      }
+      if (task.status === 'failed') {
+        const activeActions = await tx.pendingAction.count({ where: { taskId: task.id, status: { in: ['pending', 'awaiting_mfa', 'confirmed'] } } });
+        if (task.executionToken !== null || activeActions) {
+          throw new AppError('CONFLICT', 'The failed workflow still has unresolved execution or authorization.');
+        }
+      } else {
+        // Pause the walk without revoking the already-started command's claim or result authority.
+        await tx.agentTask.update({ where: { id: task.id }, data: { status: 'paused' } });
+      }
       title = task.goal;
     } else {
       const action = await tx.pendingAction.findUnique({ where: { id: target.actionId! } });
@@ -131,8 +159,6 @@ export async function openManualReview(identity: Identity, target: Target, reaso
       if (!standaloneReviewable(action)) throw new AppError('CONFLICT', '请先核对恢复结果；计划内操作请从失败任务转人工。');
       title = action.userRequest ?? action.toolName;
     }
-    const existing = await tx.manualReview.findUnique({ where: { activeKey: key } });
-    if (existing) return existing;
     const created = await tx.manualReview.create({ data: { ...identity, ...target, activeKey: key,
       title, reason, operatorId: identity.userId, operatorName, createdAt: new Date(demoNow()) } });
     await audit(tx, created, 'open');
@@ -153,6 +179,9 @@ export async function resolveManualReview(identity: Identity, id: string, resolu
   if (resolution === 'retry' && !(await mayRetry(task, attempts))) {
     throw new AppError('CONFLICT', '执行结果不明或任务不可重试，请记录核对说明并结束自动处理。');
   }
+  if (resolution === 'resume' && !reviewControlState('open', task, attempts).mayResume) {
+    throw new AppError('CONFLICT', 'The workflow has not reached a resumable operator checkpoint.');
+  }
   const row = await prisma.$transaction(async (tx) => {
     const won = await tx.manualReview.updateMany({ where: { id, ...identity, status: 'open' },
       data: { status: 'closed', activeKey: null, resolution, notes, operatorId: identity.userId, operatorName, resolvedAt: new Date(demoNow()) } });
@@ -166,16 +195,29 @@ export async function resolveManualReview(identity: Identity, id: string, resolu
             JSON.stringify(current.nodes) !== JSON.stringify(task?.nodes) || JSON.stringify(currentActions) !== JSON.stringify(attempts)) {
           throw new AppError('CONFLICT', '任务状态已变化，请刷新后重新核对。');
         }
+      } else if (resolution === 'resume') {
+        if (!reviewControlState('open', current, currentActions).mayResume) {
+          throw new AppError('CONFLICT', 'The workflow changed before control could be released.');
+        }
+        const awaitsAuthorization = current.nodes.some(node => ['waiting_confirmation', 'waiting_verification'].includes(node.status));
+        await tx.agentTask.update({ where: { id: prior.taskId }, data: { status: awaitsAuthorization ? 'waiting_confirmation' : 'paused' } });
       } else {
-        if (!['failed', 'cancelled'].includes(current.status) || current.executionToken !== null) throw new AppError('CONFLICT', '任务仍在执行，请等待执行结束。');
+        if (!reviewControlState('open', current, currentActions).mayStop
+          || !['failed', 'cancelled', 'paused', 'waiting_confirmation', 'pending'].includes(current.status)) {
+          throw new AppError('CONFLICT', 'Wait until the current command reaches a safe checkpoint.');
+        }
         await tx.pendingAction.updateMany({ where: { taskId: prior.taskId, status: { in: ['pending', 'awaiting_mfa'] } }, data: { status: 'cancelled' } });
         await tx.agentTask.update({ where: { id: prior.taskId }, data: { status: 'cancelled', generation: { increment: 1 } } });
         await tx.agentTaskNode.updateMany({ where: { taskId: prior.taskId, status: { in: ['pending', 'running', 'waiting_confirmation', 'waiting_verification'] } }, data: { status: 'cancelled', endedAt: new Date(demoNow()) } });
+        await tx.scheduledTask.updateMany({ where: { dispatchTaskId: prior.taskId, ...identity,
+          status: { notIn: ['DONE', 'CANCELLED'] } }, data: { status: 'CANCELLED' } });
       }
     }
     const resolved = await tx.manualReview.findUniqueOrThrow({ where: { id } });
     await audit(tx, resolved, 'close');
     return resolved;
   });
-  return record(row, resolution === 'retry');
+  const resolvedTask = row.taskId ? await prisma.agentTask.findUnique({ where: { id: row.taskId }, include: { nodes: true } }) : null;
+  const resolvedActions = row.taskId ? await prisma.pendingAction.findMany({ where: { taskId: row.taskId } }) : [];
+  return record(row, resolution === 'retry', reviewControlState('closed', resolvedTask, resolvedActions));
 }

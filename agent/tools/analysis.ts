@@ -14,7 +14,8 @@ import { banking } from '@/banking-sdk';
 import type { SpendingAnalysis } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
 import { AppError } from '@/lib/errors';
-import { formatCNY } from '@/lib/money';
+import { absoluteMinor, centsToMoney, formatCNY, moneyToCents } from '@/lib/money';
+import { compareDecimal } from '@/lib/decimal';
 import type { ToolExecutionResult } from './index';
 
 /** `analyze_spending` params — `YYYY-MM` window (SDK `SpendingQuery`); defaults to current month. */
@@ -62,8 +63,8 @@ export async function runAnalyzeSpending(
 
 /** Concise Chinese summary of a spending analysis (the text the model narrates). */
 function summarizeSpending(analysis: SpendingAnalysis): string {
-  const mom = analysis.momChangePct >= 0 ? `+${analysis.momChangePct}%` : `${analysis.momChangePct}%`;
-  const parts = [`${analysis.month} 消费合计 ${formatCNY(analysis.total)}（正常消费，不含异常及投资资金流；环比 ${mom}）`];
+  const mom = compareDecimal(analysis.momChangePct, '0') > 0 ? `+${analysis.momChangePct}%` : `${analysis.momChangePct}%`;
+  const parts = [`${analysis.month} \u5df2\u5165\u8d26\u6d88\u8d39\u5408\u8ba1 ${formatCNY(analysis.total)}\uff08\u4e0d\u542b\u6295\u8d44\u8d44\u91d1\u6d41\uff1b\u73af\u6bd4 ${mom}\uff09`];
 
   const topCategory = analysis.byCategory[0];
   if (topCategory !== undefined) {
@@ -74,7 +75,7 @@ function summarizeSpending(analysis: SpendingAnalysis): string {
   }
   if (analysis.largest !== null) {
     parts.push(
-      `最大单笔 ${analysis.largest.merchant} ${formatCNY(Math.abs(analysis.largest.amount))}` +
+      `最大单笔 ${analysis.largest.merchant} ${formatCNY(centsToMoney(absoluteMinor(moneyToCents(analysis.largest.amount))))}` +
         `（${formatDateTime(analysis.largest.occurredAt)}）`,
     );
   }

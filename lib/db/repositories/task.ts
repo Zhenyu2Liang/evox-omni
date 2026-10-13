@@ -46,6 +46,36 @@ export function createTask(input: CreateTaskInput): Promise<AgentTask> {
   });
 }
 
+/** Save a complete workflow definition before making it executable. */
+export function createTaskGraph(
+  input: CreateTaskInput,
+  nodes: readonly Omit<CreateTaskNodeInput, 'taskId' | 'order'>[],
+): Promise<AgentTaskWithNodes> {
+  return prisma.agentTask.create({
+    data: {
+      sessionId: input.sessionId,
+      userId: input.userId,
+      goal: input.goal,
+      status: input.status ?? 'pending',
+      nodes: {
+        create: nodes.map((node, order) => ({
+          nodeId: node.nodeId,
+          name: node.name,
+          kind: node.kind,
+          order,
+          tool: node.tool ?? null,
+          args: node.args == null ? null : toJson(node.args),
+          condition: node.condition == null ? null : toJson(node.condition),
+          dependencies: node.dependencies == null ? null : toJson(node.dependencies),
+          after: node.after == null ? null : toJson(node.after),
+          status: node.status ?? 'pending',
+        })),
+      },
+    },
+    include: { nodes: { orderBy: { order: 'asc' } } },
+  });
+}
+
 export function getTask(id: string): Promise<AgentTaskWithNodes | null> {
   return prisma.agentTask.findUnique({
     where: { id },
@@ -218,7 +248,7 @@ export function getTaskNode(
  *
  * Two modes, selected by whether `opts.fenceToken` is supplied:
  *
- * - **Unfenced (`opts` omitted or `fenceToken` undefined)** — the legacy behavior: resolve the
+ * - **Control write (`opts` omitted or `fenceToken` undefined)** — resolve the
  *   first row matching the logical `(taskId, nodeId)` pair and `update` it, returning the updated
  *   `AgentTaskNode`. THROWS when the node does not exist.
  *

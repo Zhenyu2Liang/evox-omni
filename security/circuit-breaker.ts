@@ -162,12 +162,13 @@ export async function isLocked(actor: string, client?: DbClient): Promise<boolea
  */
 export async function recordFailure(actor: string): Promise<CircuitBreakerState> {
   const { key, userId } = await resolveBreakerOwner(actor);
+  return prisma.$transaction(async tx => {
   const snapshot = await upsertFailure({
     key,
     userId,
     max: MFA_MAX_ATTEMPTS,
     now: new Date(realNow()),
-  });
+  }, tx);
 
   if (snapshot.didLock) {
     await recordSecurityEvent({
@@ -177,10 +178,11 @@ export async function recordFailure(actor: string): Promise<CircuitBreakerState>
       severity: 'high',
       message: `连续验证失败，账户已被锁定（连续 ${snapshot.failures} 次失败，所有操作已暂停，含查询类）。`,
       detail: { failures: snapshot.failures, max: MFA_MAX_ATTEMPTS, result: 'session_locked' },
-    });
+    }, { client: tx, strict: true });
   }
 
   return toState(actor, snapshot);
+  });
 }
 
 /** Record a success — resets the consecutive failure counter (does NOT unlock a tripped breaker). */

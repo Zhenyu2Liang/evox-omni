@@ -5,6 +5,7 @@ import { listSubscriptions } from './db/repositories/subscription';
 import { AppError } from './errors';
 import type { TaskNodeSpec } from './contracts/task';
 import { resolveBankingArgs } from './banking-selectors';
+import { compareDecimal } from './decimal';
 import { assertPurchase, assertPlanPurchases, normalizeProduct as normalize, productAliases as aliases,
   type RequestProduct as Product } from './request-purchases';
 
@@ -122,9 +123,9 @@ export function enforceRequestedOrder(nodes: TaskNodeSpec[], request: string, na
     const command = commands[node.tool ?? ''];
     if (!command) continue; // Read-only catalog lookups are allowed prerequisites.
     let matches = phases.map((phase, i) => command.test(phase) ? i : -1).filter(i => i >= 0);
-    if (matches.length > 1 && typeof node.args?.amount === 'number') {
-      const amount = String(node.args.amount);
-      matches = matches.filter(i => [...amountSpans[i].matchAll(/\d+(?:\.\d+)?/g)].some(value => Number(value[0]) === Number(amount)));
+    if (matches.length > 1 && typeof node.args?.amount === 'string') {
+      const amount = node.args.amount;
+      matches = matches.filter(i => [...amountSpans[i].matchAll(/\d+(?:\.\d+)?/g)].some(value => compareDecimal(value[0], amount) === 0));
     }
     if (matches.length > 1) {
       const selectors = ['name', 'phone', 'contactId', 'cardId', 'subscriptionId', 'productId', 'holdingId']
@@ -164,8 +165,11 @@ function nodesInSpan(nodes: readonly TaskNodeSpec[], span: string, names: Readon
     const firstVerb = Math.min(...candidates.map(node => commands[node.tool!]!.exec(span)!.index));
     candidates = candidates.filter(node => commands[node.tool!]!.exec(span)!.index === firstVerb);
   }
-  const amounts = [...span.matchAll(/(\d+(?:\.\d+)?)\s*元/g)].map(match => Number(match[1]));
-  if (candidates.length > 1 && amounts.length) candidates = candidates.filter(node => amounts.includes(Number(node.args?.amount)));
+  const amounts = [...span.matchAll(/(\d+(?:\.\d+)?)\s*元/g)].map(match => match[1]);
+  if (candidates.length > 1 && amounts.length) candidates = candidates.filter(node => {
+    const amount = node.args?.amount;
+    return typeof amount === 'string' && amounts.some(value => compareDecimal(value, amount) === 0);
+  });
   if (candidates.length > 1) {
     const specific = candidates.filter(node => ['name', 'phone', 'contactId', 'cardId', 'subscriptionId', 'productId', 'holdingId']
       .some(field => typeof node.args?.[field] === 'string' && (names.get(node.args[field] as string) ?? [node.args[field] as string])

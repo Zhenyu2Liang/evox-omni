@@ -89,14 +89,22 @@ export function buildFauxAgent(options: FauxAgentOptions): Agent {
   const models = createModels();
   models.setProvider(registration.provider);
   registration.setResponses(options.script.map(stepToFaux));
+  let agent!: Agent;
+  const userRequest = (): string => {
+    const message = [...agent.state.messages].reverse().find(candidate => candidate.role === 'user');
+    if (!message || message.role !== 'user') return '';
+    if (typeof message.content === 'string') return message.content;
+    return message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
+  };
 
   // `userId` is SERVER-INJECTED (never from model text / tool args). `submit_plan` runs its DAG
   // through the gateway-authorized path so a gated plan node still parks for a human.
   const registry = createToolRegistry(userId, {
     submitPlan: {
       sessionId,
-      runTool: (toolName, args) =>
-        executeGatedTool({ sessionId, userId, toolName, args, userRequest: '' }),
+      userRequest,
+      runTool: (toolName, args, ctx) =>
+        executeGatedTool({ sessionId, userId, toolName, args, userRequest: userRequest(), ...ctx }),
     },
   });
 
@@ -113,7 +121,7 @@ export function buildFauxAgent(options: FauxAgentOptions): Agent {
   ): Promise<BeforeToolCallResult | undefined> => {
     const toolName = context.toolCall.name as ToolName;
     const args = (context.args ?? context.toolCall.arguments ?? {}) as Record<string, unknown>;
-    const auth = await gateway.handleToolCall({ sessionId, userId, toolName, args, userRequest: '' });
+    const auth = await gateway.handleToolCall({ sessionId, userId, toolName, args, userRequest: userRequest() });
     if (auth.evaluation.blocked) {
       return { block: true, reason: auth.blockReason ?? auth.decision.message };
     }
@@ -124,7 +132,7 @@ export function buildFauxAgent(options: FauxAgentOptions): Agent {
     _context: AfterToolCallContext,
   ): Promise<AfterToolCallResult | undefined> => undefined;
 
-  const agent = new Agent({
+  agent = new Agent({
     sessionId,
     streamFn: models.streamSimple.bind(models),
     initialState: {

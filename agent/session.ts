@@ -13,6 +13,7 @@ import type { ChatMessage } from '@/lib/contracts/agent';
 import { newId } from '@/lib/ids';
 import { safeParse, toJson } from '@/lib/json';
 import { redactSecrets } from '@/lib/sensitive';
+import type { ConversationIntent } from '@/lib/contracts/intent';
 import {
   createSession,
   getSession,
@@ -26,6 +27,8 @@ export interface SessionSnapshot {
   transcript: ChatMessage[];
   createdAt: number;
   updatedAt: number;
+  revision: number;
+  intent?: ConversationIntent;
 }
 
 /** The JSON blob persisted under `stateJson` (everything needed to rebuild a `SessionSnapshot`). */
@@ -35,6 +38,7 @@ interface PersistedSession {
   userId?: string;
   createdAt?: number;
   updatedAt?: number;
+  intent?: ConversationIntent;
 }
 
 /**
@@ -65,6 +69,7 @@ function serialize(snapshot: SessionSnapshot): string {
     userId: snapshot.userId,
     createdAt: snapshot.createdAt,
     updatedAt: snapshot.updatedAt,
+    intent: snapshot.intent,
   };
   return toJson(redactSecrets(persisted));
 }
@@ -79,6 +84,7 @@ export function newSession(userId: string): SessionSnapshot {
     transcript: [],
     createdAt: now,
     updatedAt: now,
+    revision: 0,
   };
 }
 
@@ -95,6 +101,8 @@ export async function loadSession(sessionId: string): Promise<SessionSnapshot | 
     transcript: persisted.transcript ?? [],
     createdAt: persisted.createdAt ?? row.createdAt.getTime(),
     updatedAt: persisted.updatedAt ?? row.updatedAt.getTime(),
+    revision: row.revision,
+    intent: safeParse<ConversationIntent | undefined>(row.intentJson, persisted.intent),
   };
 }
 
@@ -105,7 +113,11 @@ export async function saveSession(snapshot: SessionSnapshot): Promise<void> {
 
   const existing = await getSession(snapshot.sessionId);
   if (existing !== null) {
-    await updateSessionState(snapshot.sessionId, stateJson);
+    const updated = await updateSessionState(snapshot.sessionId, stateJson, {
+      expectedRevision: snapshot.revision,
+      intentJson: snapshot.intent ? toJson(snapshot.intent) : null,
+    });
+    snapshot.revision = updated.revision;
     snapshot.updatedAt = updatedAt;
     return;
   }

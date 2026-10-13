@@ -11,7 +11,7 @@
  *     repeat with the SAME key replays the persisted row WITHOUT calling `create` again; a lost
  *     `P2002` race re-reads the winner's committed row; any other error propagates and writes nothing.
  *   - through the SDK barrel: `reserveBudget` / `createScheduledTask` replay on a repeated key
- *     (same `id`, exactly ONE row), and keep the legacy behavior (two rows) when the key is
+ *     (same `id`, exactly ONE row), and create independent rows when the key is
  *     absent, empty/whitespace-only, or a different key is used.
  *
  * DB-backed: uses the isolated test SQLite via `../../helpers/db` (fresh canonical fixtures per case).
@@ -81,7 +81,7 @@ describe('banking-sdk · idempotent: createIdempotent (direct, real Budget table
         data: {
           userId: DEMO_USER_ID,
           name: '直接幂等',
-          amount: 300,
+          amountMinor: 30_000n,
           status: 'RESERVED',
           idempotencyKey: replayKey,
         },
@@ -99,7 +99,7 @@ describe('banking-sdk · idempotent: createIdempotent (direct, real Budget table
     // The insert happened exactly once; the replay returned the SAME row.
     expect(create).toHaveBeenCalledTimes(1);
     expect(second.id).toBe(first.id);
-    expect(second.amount).toBe(300);
+    expect(second.amountMinor).toBe(30_000n);
     expect(await db().budget.count({ where: { idempotencyKey: key } })).toBe(1);
   });
 
@@ -110,7 +110,7 @@ describe('banking-sdk · idempotent: createIdempotent (direct, real Budget table
       data: {
         userId: DEMO_USER_ID,
         name: 'race-winner',
-        amount: 100,
+        amountMinor: 10_000n,
         status: 'RESERVED',
         idempotencyKey: key,
       },
@@ -168,7 +168,7 @@ describe('banking-sdk · idempotent: reserveBudget', () => {
     const input: ReserveBudgetInput = {
       userId: DEMO_USER_ID,
       name: '旅行预留',
-      amount: 800,
+      amount: '800.00',
       purpose: '旅行',
       idempotencyKey: key,
     };
@@ -177,14 +177,14 @@ describe('banking-sdk · idempotent: reserveBudget', () => {
     const second = await banking.budget.reserveBudget(input);
 
     expect(second.id).toBe(first.id);
-    expect(second.amount).toBe(800);
+    expect(second.amount).toBe('800.00');
     expect(second.purpose).toBe('旅行');
     expect(await db().budget.count({ where: { idempotencyKey: key } })).toBe(1);
   });
 
-  it('absent idempotencyKey keeps the legacy behavior: two calls create two rows', async () => {
+  it('absent idempotencyKey creates independent reservations', async () => {
     const before = await db().budget.count({ where: { userId: DEMO_USER_ID } });
-    const input: ReserveBudgetInput = { userId: DEMO_USER_ID, name: '无键预留', amount: 100 };
+    const input: ReserveBudgetInput = { userId: DEMO_USER_ID, name: '无键预留', amount: '100.00' };
 
     const first = await banking.budget.reserveBudget(input);
     const second = await banking.budget.reserveBudget(input);
@@ -197,7 +197,7 @@ describe('banking-sdk · idempotent: reserveBudget', () => {
     const input: ReserveBudgetInput = {
       userId: DEMO_USER_ID,
       name: '空白键预留',
-      amount: 100,
+      amount: '100.00',
       idempotencyKey: '   ',
     };
 
@@ -217,13 +217,13 @@ describe('banking-sdk · idempotent: reserveBudget', () => {
     const first = await banking.budget.reserveBudget({
       userId: DEMO_USER_ID,
       name: '预算甲',
-      amount: 100,
+      amount: '100.00',
       idempotencyKey: k1,
     });
     const second = await banking.budget.reserveBudget({
       userId: DEMO_USER_ID,
       name: '预算乙',
-      amount: 100,
+      amount: '100.00',
       idempotencyKey: k2,
     });
 
@@ -255,7 +255,7 @@ describe('banking-sdk · idempotent: createScheduledTask', () => {
     expect(await db().scheduledTask.count({ where: { idempotencyKey: key } })).toBe(1);
   });
 
-  it('absent idempotencyKey keeps the legacy behavior: two calls create two rows', async () => {
+  it('absent idempotencyKey creates independent scheduled tasks', async () => {
     const before = await db().scheduledTask.count({ where: { userId: DEMO_USER_ID } });
     const input: CreateScheduledTaskInput = {
       userId: DEMO_USER_ID,

@@ -63,7 +63,8 @@ import {
 /** Primary 活期账户 (¥23,580) — the default funding account every transfer debits. */
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, normalizeMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 /** Recipient resolved by name from the seeded contacts (the money-moved probe). */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 
@@ -247,9 +248,9 @@ function securityReset(opts: CallOpts = {}) {
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to 张伟 (the money-moved probe). */

@@ -3,12 +3,12 @@ import { buildFinancialFacts, type FactInput } from './grounding-facts';
 import { renderFinancialResponse } from './financial-response';
 
 const balance: FactInput = { toolName: 'get_balance', toolCallId: 'balance-1', result: { ok: true, data: {
-  totalAvailable: 73580, accounts: [
-    { id: 'checking', name: '活期账户', type: 'CHECKING', balance: 23580 },
-    { id: 'savings', name: '储蓄账户', type: 'SAVINGS', balance: 50000 },
+  totalAvailable: '73580.00', accounts: [
+    { id: 'checking', name: '活期账户', type: 'CHECKING', balance: '23580.00' },
+    { id: 'savings', name: '储蓄账户', type: 'SAVINGS', balance: '50000.00' },
   ],
 } } };
-function transfer(id: string, amount = 200, newBalance = 23380): FactInput {
+function transfer(id: string, amount = '200.00', newBalance = '23380.00'): FactInput {
   return { toolName: 'transfer_money', actionId: id, result: { ok: true, data: {
     amount, newBalance, sourceAccountId: 'checking', recipient: { name: '张伟' },
   } } };
@@ -22,7 +22,7 @@ describe('server-owned financial result presentation', () => {
     expect(text).not.toContain('30,000');
   });
   it('updates account and total together after a decimal transfer', () => {
-    const text = renderFinancialResponse([balance, transfer('a', 200.37, 23379.63)]);
+    const text = renderFinancialResponse([balance, transfer('a', '200.37', '23379.63')]);
     expect(text).toContain('活期账户当前余额为 ¥23,379.63');
     expect(text).toContain('储蓄账户当前余额为 ¥50,000.00');
     expect(text).toContain('账户可用余额合计为 ¥73,379.63');
@@ -31,7 +31,7 @@ describe('server-owned financial result presentation', () => {
   });
   it('an explicit savings write never updates checking', () => {
     const entry = transfer('a');
-    entry.result.data = { amount: 200, newBalance: 49800, sourceAccountId: 'savings', recipient: { name: '张伟' } };
+    entry.result.data = { amount: '200.00', newBalance: '49800.00', sourceAccountId: 'savings', recipient: { name: '张伟' } };
     const text = renderFinancialResponse([balance, entry]);
     expect(text).toContain('活期账户当前余额为 ¥23,580.00');
     expect(text).toContain('储蓄账户当前余额为 ¥49,800.00');
@@ -52,19 +52,19 @@ describe('server-owned financial result presentation', () => {
   });
   it('replaying the same action cannot restore an old balance over a later transfer', () => {
     const first = transfer('a');
-    const text = renderFinancialResponse([balance, first, transfer('b', 100, 23280), first]);
+    const text = renderFinancialResponse([balance, first, transfer('b', '100.00', '23280.00'), first]);
     expect(text).toContain('账户可用余额合计为 ¥73,280.00');
     expect(text).toContain('活期账户当前余额为 ¥23,280.00');
     expect(text.match(/实际执行成功/g)).toHaveLength(2);
   });
   it('distinct node identities are not deduplicated by equal parameters', () => {
     const a = { ...transfer('a'), actionId: undefined, taskId: 'plan', nodeId: 'a' };
-    const b = { ...transfer('b', 200, 23180), actionId: undefined, taskId: 'plan', nodeId: 'b' };
+    const b = { ...transfer('b', '200.00', '23180.00'), actionId: undefined, taskId: 'plan', nodeId: 'b' };
     expect(buildFinancialFacts([a, b, a]).writes).toHaveLength(2);
   });
   it('distinct ledger receipts stay separate when a provider reuses a call id', () => {
-    const a: FactInput = { toolName: 'transfer_money', toolCallId: 'reused', result: { ok: true, data: { transactionId: 'tx-a', amount: 200 } } };
-    const b: FactInput = { toolName: 'transfer_money', toolCallId: 'reused', result: { ok: true, data: { transactionId: 'tx-b', amount: 200 } } };
+    const a: FactInput = { toolName: 'transfer_money', toolCallId: 'reused', result: { ok: true, data: { transactionId: 'tx-a', amount: '200.00' } } };
+    const b: FactInput = { toolName: 'transfer_money', toolCallId: 'reused', result: { ok: true, data: { transactionId: 'tx-b', amount: '200.00' } } };
     expect(buildFinancialFacts([a, b, a]).writes).toHaveLength(2);
   });
   it('UNKNOWN invalidates the affected current balance and total without claiming failure', () => {
@@ -103,7 +103,7 @@ describe('server-owned financial result presentation', () => {
     expect(text).not.toContain('73,580');
   });
   it('expense analysis displays the server result, not a balance or write conclusion', () => {
-    const text = renderFinancialResponse([{ toolName: 'analyze_spending', result: { ok: true, data: { total: 6937.05 } } }]);
+    const text = renderFinancialResponse([{ toolName: 'analyze_spending', result: { ok: true, data: { total: '6937.05' } } }]);
     expect(text).toContain('消费合计 ¥6,937.05');
     expect(text).not.toContain('账户当前余额');
     expect(text).not.toContain('实际执行成功');

@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AnomalyItem, AnomalyReport } from '@/banking-sdk';
 import { ANOMALY_AMOUNT_THRESHOLD } from '@/lib/constants';
+import { absoluteMinor, moneyToCents, normalizeMoney } from '@/lib/money';
 import { security } from '@/security';
 import { buildFauxAgent, final, tool } from '../helpers/faux-agent';
 import { cardsOfType, newSessionId, runTurn, toolEventsOf } from '../helpers/scenario';
@@ -63,16 +64,16 @@ describe('Scenario 7 — 异常交易检测 (GREEN detect_anomaly)', () => {
   });
 
   it('the Apple Store ¥6,999 anomaly is flagged (amount > ANOMALY_AMOUNT_THRESHOLD ¥5,000)', async () => {
-    expect(ANOMALY_AMOUNT_THRESHOLD).toBe(5000);
+    expect(ANOMALY_AMOUNT_THRESHOLD).toBe('5000.00');
 
     const { res } = await runAnomalyTurn();
     const apple = appleAnomaly(anomalyReportOf(res));
 
     expect(apple).toBeDefined();
     expect(apple?.transaction.id).toBe(ANOMALY_TRANSACTION.id);
-    expect(apple?.transaction.amount).toBe(ANOMALY_TRANSACTION.amount);
-    expect(Math.abs(apple?.transaction.amount ?? 0)).toBe(6999);
-    expect(Math.abs(apple?.transaction.amount ?? 0)).toBeGreaterThan(ANOMALY_AMOUNT_THRESHOLD);
+    expect(apple?.transaction.amount).toBe(normalizeMoney(ANOMALY_TRANSACTION.amount));
+    expect(absoluteMinor(moneyToCents(apple?.transaction.amount))).toBe(699_900n);
+    expect(absoluteMinor(moneyToCents(apple?.transaction.amount))).toBeGreaterThan(moneyToCents(ANOMALY_AMOUNT_THRESHOLD));
     expect(apple?.severity).toBe('low');
   });
 
@@ -102,7 +103,7 @@ describe('Scenario 7 — 异常交易检测 (GREEN detect_anomaly)', () => {
       transaction: {
         id: ANOMALY_TRANSACTION.id,
         merchant: ANOMALY_TRANSACTION.merchant,
-        amount: ANOMALY_TRANSACTION.amount,
+        amount: normalizeMoney(ANOMALY_TRANSACTION.amount),
         occurredAt: ANOMALY_OCCURRED_AT,
       },
     });

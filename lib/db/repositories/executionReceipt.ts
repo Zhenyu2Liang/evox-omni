@@ -1,6 +1,6 @@
 import type { ExecutionReceipt } from '@prisma/client';
 import { type Prisma } from '@prisma/client';
-import { prisma } from '../client';
+import { dbClient } from '../client';
 
 /**
  * Repository for the unified `ExecutionReceipt` aggregate — the durable proof that a gated side
@@ -30,7 +30,7 @@ export interface PutExecutionReceiptInput {
 export function getExecutionReceipt(
   userId: string,
   key: string,
-  client: Prisma.TransactionClient = prisma,
+  client: Prisma.TransactionClient = dbClient(),
 ): Promise<ExecutionReceipt | null> {
   return client.executionReceipt.findUnique({ where: { userId_key: { userId, key } } });
 }
@@ -42,7 +42,7 @@ export function getExecutionReceipt(
  */
 export function putExecutionReceipt(
   input: PutExecutionReceiptInput,
-  client: Prisma.TransactionClient = prisma,
+  client: Prisma.TransactionClient = dbClient(),
 ): Promise<ExecutionReceipt> {
   return client.executionReceipt.create({
     data: {

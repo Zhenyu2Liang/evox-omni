@@ -22,14 +22,15 @@ import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as cancelPost } from '@/app/api/actions/[id]/cancel/route';
 import type { PendingActionStatus } from '@/lib/contracts/security';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
+import { centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
 
 // The seeded demo user + checking account (see `tests/helpers/fixtures.ts`). 张伟 is a real seeded
 // contact — the gateway resolves the recipient SERVER-SIDE at park time, so a resolvable name is REQUIRED.
 const userId = 'user_liming';
 const CHECKING_ACCOUNT_ID = 'acct_checking';
-const OPENING_BALANCE = 23580;
+const OPENING_BALANCE = '23580.00';
 const RECIPIENT = '张伟';
-const AMOUNT = 200;
+const AMOUNT = '200';
 
 beforeEach(() => resetDatabase());
 afterAll(() => disconnectTestPrisma());
@@ -65,11 +66,11 @@ async function parkTransfer(amount = AMOUNT) {
 }
 
 const balance = async () =>
-  (await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING_ACCOUNT_ID } })).balance;
+  centsToMoney((await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING_ACCOUNT_ID } })).balanceMinor);
 
 /** Count the transfer DEBIT ledger rows for the demo user at a given magnitude. */
-const transferDebits = (amount: number) =>
-  getTestPrisma().transaction.count({ where: { userId, amount: -amount, channel: 'TRANSFER' } });
+const transferDebits = (amount: string) =>
+  getTestPrisma().transaction.count({ where: { userId, amountMinor: -moneyToCents(amount), channel: 'TRANSFER' } });
 
 const actionRow = (id: string) =>
   getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id } });
@@ -94,7 +95,7 @@ it('cancelling an EXECUTED action is a stable 200 domain outcome that never roll
   const confirmed = await call(confirmPost, action.id, action.sessionId);
   expect(confirmed.http).toBe(200);
   expect(confirmed.body.data).toMatchObject({ ok: true, status: 'executed', tier: 'YELLOW' });
-  expect(await balance()).toBe(OPENING_BALANCE - AMOUNT);
+  expect(await balance()).toBe(subtractMoney(OPENING_BALANCE, AMOUNT));
   expect(await transferDebits(AMOUNT)).toBe(1);
   const settled = await actionRow(action.id);
   expect(settled.status).toBe('executed');
@@ -109,7 +110,7 @@ it('cancelling an EXECUTED action is a stable 200 domain outcome that never roll
   expect((cancelled.body.data as { message: string }).message).toBeTruthy();
 
   // NON-DESTRUCTIVE: money, ledger and the terminal row are all unchanged (no rollback, no re-charge).
-  expect(await balance()).toBe(OPENING_BALANCE - AMOUNT);
+  expect(await balance()).toBe(subtractMoney(OPENING_BALANCE, AMOUNT));
   expect(await transferDebits(AMOUNT)).toBe(1);
   expect(await actionRow(action.id)).toMatchObject({ status: 'executed', resultJson: settled.resultJson });
   expect(await p.auditLog.count({ where: { dedupeKey: `exec:${action.id}` } })).toBe(1);
@@ -143,7 +144,7 @@ it('a REPEAT confirm of an executed transfer is idempotent and never double-char
   const first = await call(confirmPost, action.id, action.sessionId);
   expect(first.http).toBe(200);
   expect(first.body.data).toMatchObject({ ok: true, status: 'executed' });
-  expect(await balance()).toBe(OPENING_BALANCE - AMOUNT);
+  expect(await balance()).toBe(subtractMoney(OPENING_BALANCE, AMOUNT));
   expect(await transferDebits(AMOUNT)).toBe(1);
 
   // The SECOND confirm of the SAME action is refused by the exactly-once CAS: a stable 200 `ok:false`
@@ -154,8 +155,8 @@ it('a REPEAT confirm of an executed transfer is idempotent and never double-char
   expect(outcome).toMatchObject({ actionId: action.id, tier: 'YELLOW' });
 
   // EXACTLY ONE debit/ledger row and a single-debit balance: the repeat confirm is a factual no-op.
-  expect(await p.transaction.count({ where: { userId, amount: -AMOUNT, channel: 'TRANSFER' } })).toBe(1);
-  expect(await balance()).toBe(OPENING_BALANCE - AMOUNT);
+  expect(await p.transaction.count({ where: { userId, amountMinor: -moneyToCents(AMOUNT), channel: 'TRANSFER' } })).toBe(1);
+  expect(await balance()).toBe(subtractMoney(OPENING_BALANCE, AMOUNT));
   expect(await p.executionReceipt.count()).toBe(1);
   expect(await actionRow(action.id)).toMatchObject({ status: 'executed' });
 });

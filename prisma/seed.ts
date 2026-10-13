@@ -1,15 +1,13 @@
 /**
  * prisma/seed.ts — the demo database seed for the AI Banking Agent (SQLite sandbox).
  *
- * Anchors every row to the demo clock: DEMO_NOW = 2026-09-25 12:00 local. September 2026 is the
+ * Anchors every row to the demo clock: DEMO_NOW = 2026-09-25 12:00 UTC+8. September 2026 is the
  * "current month"; April–September provide six months of spending/income/trend data.
  * The existing ¥5,800.00 September expenses and Apple Store anomaly are retained and augmented.
- * Dates are built from LOCAL components
- * only — we deliberately do NOT import `../lib/date` and never call `Date.now()`.
+ * Dates are built with the UTC+8 banking business calendar and never depend on the host time zone.
  *
- * MONEY IS CENT-EXACT: every amount is written as an integer number of CENTS (分) through the
- * local `yuan()` helper, so each stored value is a realistic two-decimal CNY `number` (Float
- * column) with no float artifacts, and every total (the balance reconciliation below) is exact.
+ * Booked money is persisted as BigInt minor units. Rates and unrounded valuations use exact
+ * decimal text. Legacy integer fixture inputs are converted before monetary arithmetic.
  *
  * BALANCE RECONCILIATION: each account has an explicit OPENING balance, and the STORED balance is
  * `opening + Σ(that account's seeded transactions)`. Checking includes expenses (DEBIT) and
@@ -21,7 +19,7 @@
  * recreated. Re-running therefore yields the exact same data — no duplicates — and the deletes are
  * confined to the DEMO USER (no other user's rows or unrelated tables are ever touched).
  *
- * NON-DESTRUCTIVE: before writing anything the seed makes a BEST-EFFORT rolling backup of the
+ * DEMO RESEED: this command replaces demo rows. Before writing it makes a BEST-EFFORT rolling backup of the
  * resolved SQLite file to `<dbFile>.backup.db` (same directory, overwritten each run). The backup
  * is never fatal — a missing/in-memory DB just logs a warning. Re-seed procedure:
  *   · `npm run db:seed`  → backup the current DB, then rebuild the demo dataset (this file).
@@ -33,18 +31,24 @@
  */
 import { copyFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import nextEnv from '@next/env';
 import { DEFAULT_DEMO_USER_ID } from '../lib/constants';
-import { prisma, resolveDatabaseUrl } from '../lib/db/client';
+import { centsToMoney, assertMinorUnits } from '../lib/money';
+import { businessDate } from '../lib/date';
+
+// Resolve the same application configuration as deployment before Prisma loads default dotenv values.
+nextEnv.loadEnvConfig(process.cwd(), false, { info: () => undefined,
+  error: () => { throw new Error('Environment configuration could not be loaded.'); } });
+const { prisma, resolveDatabaseUrl } = await import('../lib/db/client');
 
 // ---------------------------------------------------------------------------
-// Demo clock — LOCAL-component date helpers (see root CONTEXT.md "Demo Clock").
-// `month` is 0-based in `new Date(...)`, so 8 = September, 7 = August, 9 = October 2026.
+// Demo clock uses zero-based months in the banking business calendar.
 // ---------------------------------------------------------------------------
 
-const sep = (day: number, hour = 0, minute = 0): Date => new Date(2026, 8, day, hour, minute);
-const aug = (day: number, hour = 0, minute = 0): Date => new Date(2026, 7, day, hour, minute);
-const oct = (day: number, hour = 0, minute = 0): Date => new Date(2026, 9, day, hour, minute);
-const at = (month: number, day: number, hour = 0, minute = 0): Date => new Date(2026, month - 1, day, hour, minute);
+const sep = (day: number, hour = 0, minute = 0): Date => businessDate(2026, 8, day, hour, minute);
+const aug = (day: number, hour = 0, minute = 0): Date => businessDate(2026, 7, day, hour, minute);
+const oct = (day: number, hour = 0, minute = 0): Date => businessDate(2026, 9, day, hour, minute);
+const at = (month: number, day: number, hour = 0, minute = 0): Date => businessDate(2026, month - 1, day, hour, minute);
 
 // ---------------------------------------------------------------------------
 // Stable ids (the ids the app + E2E suite depend on).
@@ -58,24 +62,25 @@ const CARD_CREDIT = 'card_credit';
 const CARD_DEBIT = 'card_debit';
 
 // ---------------------------------------------------------------------------
-// Money — every amount is an integer number of CENTS (分). `yuan()` turns cents into a
-// two-decimal CNY `number`; all reconciliation arithmetic is done in cents so it is exact.
+// Money fixture boundaries accept only exact integer cents; all arithmetic uses BigInt.
 // ---------------------------------------------------------------------------
 
-/** Integer cents → CNY `number` (two decimals). */
-const yuan = (cents: number): number => cents / 100;
+function minorUnits(cents: number | bigint): bigint {
+  if (typeof cents === 'number' && !Number.isSafeInteger(cents)) throw new Error('Seed cents must be exact integers.');
+  return assertMinorUnits(BigInt(cents));
+}
 
 /** Integer cents → a fixed two-decimal string (logging/assertions only). */
-const fmt = (cents: number): string => (cents / 100).toFixed(2);
+const fmt = (cents: bigint): string => centsToMoney(cents);
 
 // ---------------------------------------------------------------------------
 // Transactions (signed integer CENTS, expenses and income on the checking account).
 // ---------------------------------------------------------------------------
 
-interface SeedTransaction {
+interface SeedTransactionInput {
   id: string;
   /** Signed CNY in cents (negative = expense/outflow). */
-  amountCents: number;
+  amountCents: number | bigint;
   category: string;
   merchant: string;
   channel: string;
@@ -85,6 +90,8 @@ interface SeedTransaction {
   anomalyReason?: string;
 }
 
+type SeedTransaction = Omit<SeedTransactionInput, 'amountCents'> & { amountCents: bigint };
+
 /**
  * Original September 2026 ordinary expenses, before EVERY_MONTH_EXTRAS are added.
  * This base is ¥5,800.00 (580,000 cents), including 娱乐 ¥2,680.50. The expanded month totals
@@ -93,7 +100,7 @@ interface SeedTransaction {
  * 美团外卖 + 星巴克 sit on 2026-09-25 so a "今日消费" window exists; the 妈妈 transfer is on
  * 2026-09-04 (NOT the demo day), so the demo-day (Sep 25) daily-transfer window stays ¥0.
  */
-const SEPTEMBER_TRANSACTIONS: readonly SeedTransaction[] = [
+const SEPTEMBER_TRANSACTIONS: readonly SeedTransactionInput[] = [
   // 餐饮 = ¥446.90 (CARD)
   { id: 'tx_sep_haidilao', amountCents: -30_060, category: '餐饮', merchant: '海底捞', channel: 'CARD', occurredAt: sep(5, 19, 20) },
   { id: 'tx_sep_meituan', amountCents: -4_580, category: '餐饮', merchant: '美团外卖', channel: 'CARD', occurredAt: sep(25, 11, 40) },
@@ -130,7 +137,7 @@ const SEPTEMBER_TRANSACTIONS: readonly SeedTransaction[] = [
 ];
 
 /** The Apple Store anomaly — MUST stay > ¥5,000 (id/date preserved): ¥6,999.00 @ 2026-09-20 18:32. */
-const ANOMALY_TRANSACTION: SeedTransaction = {
+const ANOMALY_TRANSACTION: SeedTransactionInput = {
   id: 'tx_anomaly_apple',
   amountCents: -699_900,
   category: '购物',
@@ -142,7 +149,7 @@ const ANOMALY_TRANSACTION: SeedTransaction = {
 };
 
 /** August 2026 (last month) — varied expenses = ¥6,243.30 so month-over-month trends are sensible. */
-const AUGUST_TRANSACTIONS: readonly SeedTransaction[] = [
+const AUGUST_TRANSACTIONS: readonly SeedTransactionInput[] = [
   { id: 'tx_aug_rent', amountCents: -250_000, category: '居住', merchant: '房租', channel: 'TRANSFER', occurredAt: aug(1, 9, 0) },
   { id: 'tx_aug_dining', amountCents: -135_260, category: '餐饮', merchant: '餐饮支出', channel: 'CARD', occurredAt: aug(14, 19, 30) },
   { id: 'tx_aug_travel', amountCents: -62_000, category: '出行', merchant: '出行支出', channel: 'APP', occurredAt: aug(20, 8, 45) },
@@ -211,7 +218,7 @@ const HISTORICAL_EXPENSES: readonly ExpenseTemplate[] = [
 function monthlyExpenses(month: number, templates: readonly ExpenseTemplate[]): SeedTransaction[] {
   return templates.map((t, index) => ({
     id: `tx_${month}_${t.key}`,
-    amountCents: -(t.cents + (t.fixed ? 0 : (month - 4) * 37 + index * 11)),
+    amountCents: -(minorUnits(t.cents) + (t.fixed ? 0n : BigInt(month - 4) * 37n + BigInt(index) * 11n)),
     category: t.category,
     merchant: t.merchant,
     channel: t.channel,
@@ -224,9 +231,9 @@ const DEMO_MONTHS = [4, 5, 6, 7, 8, 9] as const;
 const ADDITIONAL_TRANSACTIONS: readonly SeedTransaction[] = DEMO_MONTHS.flatMap((month) => [
   ...(month <= 7 ? monthlyExpenses(month, HISTORICAL_EXPENSES) : []),
   ...monthlyExpenses(month, EVERY_MONTH_EXTRAS),
-  { id: `tx_${month}_salary`, amountCents: 1_087_636 + month * 2_345, category: '工资', merchant: '公司工资入账', channel: 'TRANSFER', occurredAt: at(month, 10, 9, 0) },
-  { id: `tx_${month}_bonus`, amountCents: 38_650 + month * 557, category: '其他收入', merchant: '项目奖金', channel: 'TRANSFER', occurredAt: at(month, 20, 15, 30) },
-  { id: `tx_${month}_refund`, amountCents: 10_850 + month * 137, category: '退款', merchant: '淘宝退款', channel: 'APP', occurredAt: at(month, 22, 16, 15) },
+  { id: `tx_${month}_salary`, amountCents: 1_087_636n + BigInt(month) * 2_345n, category: '工资', merchant: '公司工资入账', channel: 'TRANSFER', occurredAt: at(month, 10, 9, 0) },
+  { id: `tx_${month}_bonus`, amountCents: 38_650n + BigInt(month) * 557n, category: '其他收入', merchant: '项目奖金', channel: 'TRANSFER', occurredAt: at(month, 20, 15, 30) },
+  { id: `tx_${month}_refund`, amountCents: 10_850n + BigInt(month) * 137n, category: '退款', merchant: '淘宝退款', channel: 'APP', occurredAt: at(month, 22, 16, 15) },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -238,7 +245,7 @@ const ADDITIONAL_TRANSACTIONS: readonly SeedTransaction[] = DEMO_MONTHS.flatMap(
 // the expanded six-month ledger while retaining the demo's ¥23,580.00 checking balance.
 // ---------------------------------------------------------------------------
 
-const OPENING_SAVINGS_CENTS = 5_000_000; // ¥50,000.00 — savings has no seeded transactions
+const OPENING_SAVINGS_CENTS = 5_000_000n;
 
 /** Every seeded ledger row, in insertion order (checking account only). */
 const CHECKING_TRANSACTIONS: readonly SeedTransaction[] = [
@@ -246,16 +253,16 @@ const CHECKING_TRANSACTIONS: readonly SeedTransaction[] = [
   ANOMALY_TRANSACTION,
   ...AUGUST_TRANSACTIONS,
   ...ADDITIONAL_TRANSACTIONS,
-];
+].map(row => ({ ...row, amountCents: minorUnits(row.amountCents) }));
 
 /** Net ledger effect includes signed expenses, salaries, bonuses and refunds. */
-const CHECKING_LEDGER_CENTS = CHECKING_TRANSACTIONS.reduce((sum, t) => sum + t.amountCents, 0);
-const OPENING_CHECKING_CENTS = 2_358_000 - CHECKING_LEDGER_CENTS;
+const CHECKING_LEDGER_CENTS = CHECKING_TRANSACTIONS.reduce((sum, t) => sum + t.amountCents, 0n);
+const OPENING_CHECKING_CENTS = 2_358_000n - CHECKING_LEDGER_CENTS;
 const CHECKING_BALANCE_CENTS = OPENING_CHECKING_CENTS + CHECKING_LEDGER_CENTS; // 2,358,000 = ¥23,580.00
 const SAVINGS_BALANCE_CENTS = OPENING_SAVINGS_CENTS; // no savings transactions → opening == stored
 
 // Fail loud if a future edit drifts the reconciled balance out of the ¥23,5xx demo band.
-if (Math.floor(CHECKING_BALANCE_CENTS / 100) !== 23_580) {
+if (CHECKING_BALANCE_CENTS !== 2_358_000n) {
   throw new Error(
     `[seed] reconciled checking balance ¥${fmt(CHECKING_BALANCE_CENTS)} left the ¥23,5xx demo band ` +
       `(opening ¥${fmt(OPENING_CHECKING_CENTS)} + ledger ¥${fmt(CHECKING_LEDGER_CENTS)})`,
@@ -263,8 +270,8 @@ if (Math.floor(CHECKING_BALANCE_CENTS / 100) !== 23_580) {
 }
 
 const demoCutoff = sep(25, 12).getTime();
-if (OPENING_CHECKING_CENTS < 0 || new Set(CHECKING_TRANSACTIONS.map((t) => t.id)).size !== CHECKING_TRANSACTIONS.length ||
-    CHECKING_TRANSACTIONS.some((t) => !Number.isSafeInteger(t.amountCents) || t.amountCents === 0 || t.occurredAt.getTime() > demoCutoff)) {
+if (OPENING_CHECKING_CENTS < 0n || new Set(CHECKING_TRANSACTIONS.map((t) => t.id)).size !== CHECKING_TRANSACTIONS.length ||
+    CHECKING_TRANSACTIONS.some((t) => t.amountCents === 0n || t.occurredAt.getTime() > demoCutoff)) {
   throw new Error('[seed] invalid opening balance, duplicate transaction id, non-cent amount or future transaction');
 }
 
@@ -273,8 +280,8 @@ if (OPENING_CHECKING_CENTS < 0 || new Set(CHECKING_TRANSACTIONS.map((t) => t.id)
 // ---------------------------------------------------------------------------
 
 const ACCOUNTS = [
-  { id: ACCT_CHECKING, userId: USER_ID, type: 'CHECKING', name: '活期账户', number: '****8821', balance: yuan(CHECKING_BALANCE_CENTS), currency: 'CNY' },
-  { id: ACCT_SAVINGS, userId: USER_ID, type: 'SAVINGS', name: '储蓄账户', number: '****3309', balance: yuan(SAVINGS_BALANCE_CENTS), currency: 'CNY' },
+  { id: ACCT_CHECKING, userId: USER_ID, type: 'CHECKING', name: '活期账户', number: '****8821', balanceMinor: CHECKING_BALANCE_CENTS, currency: 'CNY' },
+  { id: ACCT_SAVINGS, userId: USER_ID, type: 'SAVINGS', name: '储蓄账户', number: '****3309', balanceMinor: SAVINGS_BALANCE_CENTS, currency: 'CNY' },
 ];
 
 const CARDS = [
@@ -285,9 +292,9 @@ const CARDS = [
     network: 'UnionPay',
     numberMasked: '****6688',
     status: 'ACTIVE',
-    creditLimit: yuan(1_800_000), // ¥18,000.00
-    availableLimit: yuan(1_800_000),
-    monthlyLimit: yuan(1_800_000),
+    creditLimitMinor: 1_800_000n,
+    availableLimitMinor: 1_800_000n,
+    monthlyLimitMinor: 1_800_000n,
   },
   {
     id: CARD_DEBIT,
@@ -296,17 +303,17 @@ const CARDS = [
     network: 'UnionPay',
     numberMasked: '****8821',
     status: 'ACTIVE',
-    creditLimit: null,
-    availableLimit: null,
-    monthlyLimit: null,
+    creditLimitMinor: null,
+    availableLimitMinor: null,
+    monthlyLimitMinor: null,
   },
 ];
 
 const CARD_LIMITS = [
-  { id: 'limit_credit_ent', cardId: CARD_CREDIT, category: '娱乐', amount: yuan(300_000) }, // ¥3,000.00
-  { id: 'limit_credit_dining', cardId: CARD_CREDIT, category: '餐饮', amount: yuan(200_050) },
-  { id: 'limit_credit_travel', cardId: CARD_CREDIT, category: '出行', amount: yuan(120_075) },
-  { id: 'limit_credit_shopping', cardId: CARD_CREDIT, category: '购物', amount: yuan(450_080) },
+  { id: 'limit_credit_ent', cardId: CARD_CREDIT, category: '娱乐', amountMinor: 300_000n },
+  { id: 'limit_credit_dining', cardId: CARD_CREDIT, category: '餐饮', amountMinor: 200_050n },
+  { id: 'limit_credit_travel', cardId: CARD_CREDIT, category: '出行', amountMinor: 120_075n },
+  { id: 'limit_credit_shopping', cardId: CARD_CREDIT, category: '购物', amountMinor: 450_080n },
 ];
 
 const CONTACTS = [
@@ -322,32 +329,32 @@ const CONTACTS = [
 
 /** Monthly subscription fees (cents) — mirror the seeded 订阅 ledger rows; charged again in October. */
 const SUBSCRIPTIONS = [
-  { id: 'sub_netflix', userId: USER_ID, name: 'Netflix', amount: yuan(6_800), cycle: 'MONTHLY', nextChargeAt: oct(15), status: 'ACTIVE', remind: false },
-  { id: 'sub_spotify', userId: USER_ID, name: 'Spotify', amount: yuan(1_500), cycle: 'MONTHLY', nextChargeAt: oct(15), status: 'ACTIVE', remind: false },
-  { id: 'sub_icloud', userId: USER_ID, name: 'iCloud', amount: yuan(600), cycle: 'MONTHLY', nextChargeAt: oct(21), status: 'ACTIVE', remind: false },
-  { id: 'sub_video', userId: USER_ID, name: '视频会员', amount: yuan(2_500), cycle: 'MONTHLY', nextChargeAt: oct(17), status: 'ACTIVE', remind: false },
-  { id: 'sub_fitness', userId: USER_ID, name: '健身会员', amount: yuan(18_850), cycle: 'MONTHLY', nextChargeAt: oct(18), status: 'ACTIVE', remind: true },
-  { id: 'sub_cloud', userId: USER_ID, name: '云盘会员', amount: yuan(1_280), cycle: 'MONTHLY', nextChargeAt: oct(23), status: 'ACTIVE', remind: true },
+  { id: 'sub_netflix', userId: USER_ID, name: 'Netflix', amountMinor: 6_800n, cycle: 'MONTHLY', nextChargeAt: oct(15), status: 'ACTIVE', remind: false },
+  { id: 'sub_spotify', userId: USER_ID, name: 'Spotify', amountMinor: 1_500n, cycle: 'MONTHLY', nextChargeAt: oct(15), status: 'ACTIVE', remind: false },
+  { id: 'sub_icloud', userId: USER_ID, name: 'iCloud', amountMinor: 600n, cycle: 'MONTHLY', nextChargeAt: oct(21), status: 'ACTIVE', remind: false },
+  { id: 'sub_video', userId: USER_ID, name: '视频会员', amountMinor: 2_500n, cycle: 'MONTHLY', nextChargeAt: oct(17), status: 'ACTIVE', remind: false },
+  { id: 'sub_fitness', userId: USER_ID, name: '健身会员', amountMinor: 18_850n, cycle: 'MONTHLY', nextChargeAt: oct(18), status: 'ACTIVE', remind: true },
+  { id: 'sub_cloud', userId: USER_ID, name: '云盘会员', amountMinor: 1_280n, cycle: 'MONTHLY', nextChargeAt: oct(23), status: 'ACTIVE', remind: true },
 ];
 
 const PRODUCTS = [
-  { id: 'prod_wenjiana', code: 'WJA001', name: '稳健理财A', riskLevel: 'R2', expectedRate: 3.25, termDays: 90, minAmount: yuan(100_000), description: '低风险稳健型' },
-  { id: 'prod_wenjib', code: 'WJB002', name: '稳健理财B', riskLevel: 'R2', expectedRate: 3.6, termDays: 180, minAmount: yuan(500_000), description: '低风险稳健型' },
-  { id: 'prod_jinrong', code: 'JR003', name: '进取混合C', riskLevel: 'R3', expectedRate: 5.1, termDays: 365, minAmount: yuan(1_000_000), description: '中风险混合型' },
-  { id: 'prod_huobi', code: 'MMF001', name: '货币基金', riskLevel: 'R1', expectedRate: 2.1, termDays: 30, minAmount: yuan(10_000), description: '现金管理型' },
+  { id: 'prod_wenjiana', code: 'WJA001', name: '稳健理财A', riskLevel: 'R2', annualYieldRate: '0.0325', termDays: 90, minAmountMinor: 100_000n, description: '低风险稳健型' },
+  { id: 'prod_wenjib', code: 'WJB002', name: '稳健理财B', riskLevel: 'R2', annualYieldRate: '0.036', termDays: 180, minAmountMinor: 500_000n, description: '低风险稳健型' },
+  { id: 'prod_jinrong', code: 'JR003', name: '进取混合C', riskLevel: 'R3', annualYieldRate: '0.051', termDays: 365, minAmountMinor: 1_000_000n, description: '中风险混合型' },
+  { id: 'prod_huobi', code: 'MMF001', name: '货币基金', riskLevel: 'R1', annualYieldRate: '0.021', termDays: 30, minAmountMinor: 10_000n, description: '现金管理型' },
 ];
 
 /** Holding: ¥5,000.00 principal at ¥5,178.36 market value → ¥178.36 unrealised profit (> 0). */
 const HOLDINGS = [
-  { id: 'holding_wenjiana', userId: USER_ID, productId: 'prod_wenjiana', amount: yuan(500_000), marketValue: yuan(517_836), boughtAt: aug(10, 10, 0), status: 'HOLDING' },
-  { id: 'holding_huobi', userId: USER_ID, productId: 'prod_huobi', amount: yuan(800_050), marketValue: yuan(803_276), boughtAt: aug(18, 10, 30), status: 'HOLDING' },
-  { id: 'holding_wenjib', userId: USER_ID, productId: 'prod_wenjib', amount: yuan(1_000_000), marketValue: yuan(1_012_895), boughtAt: aug(2, 14, 0), status: 'HOLDING' },
+  { id: 'holding_wenjiana', userId: USER_ID, productId: 'prod_wenjiana', principalAmountMinor: 500_000n, estimatedMarketValue: '5178.36', boughtAt: aug(10, 10, 0), status: 'HOLDING' },
+  { id: 'holding_huobi', userId: USER_ID, productId: 'prod_huobi', principalAmountMinor: 800_050n, estimatedMarketValue: '8032.76', boughtAt: aug(18, 10, 30), status: 'HOLDING' },
+  { id: 'holding_wenjib', userId: USER_ID, productId: 'prod_wenjib', principalAmountMinor: 1_000_000n, estimatedMarketValue: '10128.95', boughtAt: aug(2, 14, 0), status: 'HOLDING' },
 ];
 
 const BUDGETS = [
-  { id: 'budget_birthday', userId: USER_ID, name: '生日礼物', amount: yuan(200_000), purpose: '生日计划', status: 'RESERVED', dueDate: oct(20) },
-  { id: 'budget_travel', userId: USER_ID, name: '周末旅行', amount: yuan(150_075), purpose: '旅行计划', status: 'RESERVED', dueDate: oct(10) },
-  { id: 'budget_study', userId: USER_ID, name: '学习课程', amount: yuan(88_888), purpose: '学习计划', status: 'RESERVED', dueDate: oct(15) },
+  { id: 'budget_birthday', userId: USER_ID, name: '生日礼物', amountMinor: 200_000n, purpose: '生日计划', status: 'RESERVED', dueDate: oct(20) },
+  { id: 'budget_travel', userId: USER_ID, name: '周末旅行', amountMinor: 150_075n, purpose: '旅行计划', status: 'RESERVED', dueDate: oct(10) },
+  { id: 'budget_study', userId: USER_ID, name: '学习课程', amountMinor: 88_888n, purpose: '学习计划', status: 'RESERVED', dueDate: oct(15) },
 ];
 
 const SCHEDULED_TASKS = [
@@ -366,7 +373,7 @@ const SCHEDULED_TASKS = [
     userId: USER_ID,
     name: '房租自动转账',
     kind: 'TRANSFER',
-    payload: JSON.stringify({ amount: yuan(250_000), toName: '房东' }),
+    payload: JSON.stringify({ amount: centsToMoney(250_000n), contactId: 'contact_landlord' }),
     runAt: oct(1, 9, 0),
     status: 'SCHEDULED',
     requiresConfirmation: true,
@@ -453,9 +460,9 @@ async function seed(): Promise<void> {
     id: t.id,
     accountId: ACCT_CHECKING,
     userId: USER_ID,
-    amount: yuan(t.amountCents),
+    amountMinor: t.amountCents,
     currency: 'CNY',
-    direction: t.amountCents < 0 ? 'DEBIT' : 'CREDIT',
+    direction: t.amountCents < 0n ? 'DEBIT' : 'CREDIT',
     category: t.category,
     merchant: t.merchant,
     channel: t.channel,
@@ -478,7 +485,7 @@ async function printSummary(): Promise<void> {
   console.log('');
   console.log('Balance reconciliation (stored = opening + Σ transactions):');
   console.log(`  checking  opening ¥${fmt(OPENING_CHECKING_CENTS)}  + ledger ${fmt(CHECKING_LEDGER_CENTS)}  = ¥${fmt(CHECKING_BALANCE_CENTS)}`);
-  console.log(`  savings   opening ¥${fmt(OPENING_SAVINGS_CENTS)}  + ledger ${fmt(0)}  = ¥${fmt(SAVINGS_BALANCE_CENTS)}`);
+  console.log(`  savings   opening ¥${fmt(OPENING_SAVINGS_CENTS)}  + ledger ${fmt(0n)}  = ¥${fmt(SAVINGS_BALANCE_CENTS)}`);
 
   const counts = {
     User: await prisma.user.count(),

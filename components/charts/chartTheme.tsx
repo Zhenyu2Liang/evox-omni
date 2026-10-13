@@ -92,7 +92,7 @@ export interface ChartTooltipProps {
   payload?: ChartTooltipItem[];
   label?: string | number;
   /**
-   * Formats one item's value. Defaults to `formatCNY(Number(value))`.
+   * Formats one item's chart coordinate; the default prefers the original decimal amount.
    * `item.payload` exposes the original datum for composite labels.
    */
   formatter?: (value: number, item: ChartTooltipItem) => string;
@@ -111,7 +111,10 @@ export function ChartTooltip(p: ChartTooltipProps) {
         {p.payload.map((item, i) => {
           const value = Number(item.value);
           const safe = Number.isFinite(value) ? value : 0;
-          const text = p.formatter ? p.formatter(safe, item) : formatCNY(safe);
+          const original = item.payload && typeof item.payload === 'object' && 'amount' in item.payload
+            ? (item.payload as { amount?: unknown }).amount : undefined;
+          const text = p.formatter ? p.formatter(safe, item)
+            : formatCNY(typeof original === 'string' ? original : safe.toFixed(2));
           return (
             <li key={i} className="flex items-center gap-2 text-xs text-banking-navy">
               <span

@@ -57,11 +57,12 @@ import {
 /** Primary 活期账户 (¥23,580) — the funding account the parked transfer debits. */
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 /** Recipient 张伟 — the parked transfer's payee (the money-moved-at-most-once probe). */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** The parked transfer amount (≤ ¥1000 ⇒ YELLOW / confirmation-only). */
-const TRANSFER_AMOUNT = 200;
+const TRANSFER_AMOUNT = '200';
 /** The pre-existing 🟢 node's countable side effect marker (ONE `Budget` row per real execution). */
 const MARKER_UPSTREAM = '确认续行预算A';
 /** The DOWNSTREAM 🟢 node's marker — proving the LOST continuation never advanced the plan. */
@@ -96,18 +97,6 @@ function decodeJson(raw: string | null): unknown {
   return JSON.parse(raw!) as unknown;
 }
 
-/** Deep-search a JSON-ish value for a numeric literal (tolerant of the SDK's result nesting). */
-function containsNumber(value: unknown, target: number): boolean {
-  if (typeof value === 'number') return value === target;
-  if (Array.isArray(value)) return value.some((item) => containsNumber(item, target));
-  if (value !== null && typeof value === 'object') {
-    return Object.values(value as Record<string, unknown>).some((item) =>
-      containsNumber(item, target),
-    );
-  }
-  return false;
-}
-
 /* ----------------------------------------------------------------------------- plan seeding */
 
 /** A plan node as supplied to `runSubmitPlan` (the model-free DAG runner). */
@@ -121,7 +110,7 @@ interface SeedNode {
 }
 
 /** A 🟢 GREEN node used as the COUNTABLE execution probe (one `Budget` row per real execution). */
-function budgetNode(id: string, budgetName: string, amount: number, deps: string[] = []): SeedNode {
+function budgetNode(id: string, budgetName: string, amount: string, deps: string[] = []): SeedNode {
   return {
     id,
     name: '预留预算',
@@ -133,7 +122,7 @@ function budgetNode(id: string, budgetName: string, amount: number, deps: string
 }
 
 /** The YELLOW `transfer_money` node (gated → PARKS for a human decision instead of executing). */
-function transferNode(id: string, amount: number, deps: string[] = []): SeedNode {
+function transferNode(id: string, amount: string, deps: string[] = []): SeedNode {
   return {
     id,
     name: `给${ZHANGWEI.name}转账`,
@@ -189,9 +178,9 @@ function zhangweiTransfers() {
 }
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** The durable `AgentTask` row (its claim columns ARE the ownership state under test). */
@@ -254,9 +243,9 @@ describe('[integration] the confirm-continuation LOSING the plan execution claim
       {
         goal: '先预留一笔预算，再给张伟转200元，最后再预留一笔预算',
         nodes: [
-          budgetNode('n1', MARKER_UPSTREAM, 600),
+          budgetNode('n1', MARKER_UPSTREAM, '600'),
           transferNode('n2', TRANSFER_AMOUNT, ['n1']),
-          budgetNode('n3', MARKER_DOWNSTREAM, 700, ['n2']),
+          budgetNode('n3', MARKER_DOWNSTREAM, '700', ['n2']),
         ],
       },
       { sessionId, runTool: gatewayRunTool(sessionId, '先预留一笔预算，再给张伟转200元，最后再预留一笔预算') },
@@ -322,15 +311,16 @@ describe('[integration] the confirm-continuation LOSING the plan execution claim
       'the decided node output must carry the REAL transfer result (its recipient)',
     ).toContain(ZHANGWEI.name);
     expect(
-      containsNumber(decidedOutput, TRANSFER_AMOUNT),
+      typeof decidedOutput === 'object' && decidedOutput !== null
+        && 'amount' in decidedOutput && decidedOutput.amount === normalizeMoney(TRANSFER_AMOUNT),
       'the decided node output must carry the transferred amount',
     ).toBe(true);
 
     // --- MONEY MOVED EXACTLY ONCE (the human decision, not model text).
     const transfers = await zhangweiTransfers();
     expect(transfers).toHaveLength(1);
-    expect(transfers[0]!.amount).toBe(-TRANSFER_AMOUNT);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+    expect(transfers[0]!.amountMinor).toBe(-moneyToCents(TRANSFER_AMOUNT));
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
     const settledAction = await getTestPrisma().pendingAction.findUniqueOrThrow({
       where: { id: actionId! },
     });
@@ -358,7 +348,7 @@ describe('[integration] the confirm-continuation LOSING the plan execution claim
     const ledgerAfterResume = await zhangweiTransfers();
     expect(ledgerAfterResume).toHaveLength(1);
     expect(ledgerAfterResume[0]!.id).toBe(transfers[0]!.id);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
 
     // The durable read model agrees with the durable rows.
     const readBack = await readTask(taskId, sessionId);

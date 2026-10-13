@@ -1,27 +1,14 @@
 /**
- * `scripts/db-push.ts` — the SUPPORTED deployment entrypoint for `prisma db push`.
- *
- * WHY THIS WRAPPER EXISTS: running `npx prisma db push` (the bare command the deploy docs used to
- * show) against a MISSING SQLite file prints an opaque EMPTY `Error: Schema engine error:` and fails.
- * ROOT CAUSE: Prisma's schema-engine error mapper does `err.split(/\r?\n/).slice(1)` — it DROPS line 0
- * because it expects the engine's `INFO` banner there. An ambient `RUST_LOG` at/above `warn`
- * suppresses that banner, so the mapper also discards the LEGITIMATE line-0 `P1003 database does not
- * exist` that `db push` relies on to create a brand-new SQLite file. Pinning `RUST_LOG=info` restores
- * the banner. Full mechanism: `lib/prisma-cli-env.ts#SCHEMA_ENGINE_RUST_LOG`.
- *
- * This wrapper therefore:
- *   1. pins the schema-engine log level (`pinSchemaEngineLogging()`) BEFORE spawning the CLI,
- *   2. resolves the PROJECT-LOCAL Prisma CLI (`resolvePrismaBin(resolveRepoRoot())`) and runs it with
- *      the SAME Node that runs this script (`cliCommand`), falling back to `npx` only if the local
- *      binary is absent, and
- *   3. passes every extra argument through (`process.argv.slice(2)`, e.g. `--force-reset` for
- *      `npm run db:reset`) and exits with the child's exit code.
- *
- * It self-provisions a MISSING SQLite file (no manual DB creation, no readiness marker, no skip
- * flag): the pinned env makes `db push`'s `P1003` probe survive parsing, so the engine creates the
- * database and applies the schema. Invoked via `npm run db:push` / `npm run db:reset`.
+ * Synchronize the current demo schema through the project-local Prisma CLI.
+ * Load application configuration without displaying values, preserve schema-engine diagnostics
+ * for cold database creation, and forward explicit CLI flags. There is no old-schema conversion.
+ * Invoked through pnpm db:push or the explicit simulated-data reset command.
  */
 import { spawnSync } from 'node:child_process';
+import { rmSync } from 'node:fs';
+import path from 'node:path';
+import nextEnv from '@next/env';
+const { loadEnvConfig } = nextEnv;
 import {
   cliCommand,
   pinSchemaEngineLogging,
@@ -30,31 +17,45 @@ import {
   resolveRepoRoot,
 } from '../lib/prisma-cli-env';
 
-// Pin the schema-engine log level on THIS process, so `process.env` (and therefore the child CLI)
-// carries `RUST_LOG=info` even before the explicit per-spawn env below.
-pinSchemaEngineLogging();
-
-const repoRoot = resolveRepoRoot();
-const invocation = cliCommand(resolvePrismaBin(repoRoot), [
-  'prisma',
-  'db',
-  'push',
-  ...process.argv.slice(2),
-]);
-
-const result = spawnSync(invocation.command, invocation.args, {
-  cwd: repoRoot,
-  stdio: 'inherit',
-  env: prismaCliEnv(process.env),
-});
-
-if (result.error !== undefined && result.error !== null) {
-  const code = (result.error as NodeJS.ErrnoException).code;
-  console.error(
-    `[db:push] 无法启动 Prisma CLI（${invocation.command}）：${result.error.message}` +
-      (code === undefined ? '' : `（code=${code}）`),
-  );
-  process.exit(1);
+/** An explicit demo reset replaces the SQLite file and its WAL sidecars as one dataset. */
+export function resetDemoDatabase(url: string, repoRoot: string): void {
+  if (!url.startsWith('file:')) throw new Error('Demo reset requires a SQLite file database.');
+  const filename = url.slice('file:'.length).split('?')[0];
+  if (!filename || filename === ':memory:') throw new Error('Demo reset requires a persistent SQLite file.');
+  const databasePath = path.isAbsolute(filename) ? filename : path.resolve(repoRoot, 'prisma', filename);
+  const relative = path.relative(repoRoot, databasePath);
+  if (!relative || relative.startsWith('..' + path.sep) || relative === '..' || path.isAbsolute(relative)) {
+    throw new Error('Demo reset databases must be inside the current workspace.');
+  }
+  for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(databasePath + suffix, { force: true });
 }
 
-process.exit(result.status ?? 1);
+/** Synchronize the current schema; previous database schemas are unsupported. */
+export async function runDatabasePush(): Promise<number> {
+  pinSchemaEngineLogging();
+  const repoRoot = resolveRepoRoot();
+  // Use the application's environment loader without displaying configuration values.
+  loadEnvConfig(repoRoot, false, { info: () => undefined, error: () => { throw new Error('Environment configuration could not be loaded.'); } });
+  const args = process.argv.slice(2);
+  if (args.includes('--force-reset')) {
+    resetDemoDatabase(process.env.DATABASE_URL ?? 'file:./dev.db', repoRoot);
+  }
+  const invocation = cliCommand(resolvePrismaBin(repoRoot), ['prisma', 'db', 'push', ...args]);
+  const result = spawnSync(invocation.command, invocation.args, {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: prismaCliEnv(process.env),
+  });
+  if (result.error) {
+    console.error(`[db:push] Could not start the Prisma CLI: ${result.error.message}`);
+    return 1;
+  }
+  return result.status ?? 1;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === path.join(resolveRepoRoot(), 'scripts', 'db-push.ts')) {
+  void runDatabasePush().then(code => { process.exitCode = code; }).catch(error => {
+    console.error(error instanceof Error ? error.message : 'Database deployment failed.');
+    process.exitCode = 1;
+  });
+}

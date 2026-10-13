@@ -41,10 +41,11 @@ import { POST as verifyPost } from '@/app/api/actions/[id]/verify/route';
 import { POST as recoverPost } from '@/app/api/actions/[id]/recover/route';
 import { GET as actionsGet } from '@/app/api/actions/route';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
+import { centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
 
 const userId = 'user_liming';
 /** Seeded 活期 balance (fixtures ACCOUNTS) — debited by the transferred amount. */
-const CHECKING_BALANCE = 23580;
+const CHECKING_BALANCE = '23580.00';
 
 beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
@@ -162,19 +163,19 @@ async function parkStandalone(
   return id!;
 }
 
-const debitCount = (amount: number) =>
+const debitCount = (amount: string) =>
   getTestPrisma().transaction.count({
-    where: { userId, amount: -amount, counterpartyId: 'contact_zhangwei' },
+    where: { userId, amountMinor: -moneyToCents(amount), counterpartyId: 'contact_zhangwei' },
   });
 const checkingBalance = async () =>
-  (await getTestPrisma().account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
+  centsToMoney((await getTestPrisma().account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
 
 describe('[integration] state convergence across a refresh / restart', () => {
   it('an IN-FLIGHT confirm is surfaced as `processing` and a concurrent duplicate is refused without a second side effect', async () => {
     const s = (await getOrCreateSession(userId)).sessionId;
     const p = getTestPrisma();
-    const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: 200 }, '给张伟转200元');
-    expect(await debitCount(200)).toBe(0);
+    const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '200.00' }, '给张伟转200元');
+    expect(await debitCount('200.00')).toBe(0);
 
     const barrier = holdNextAuthorizeAction();
     const firstRun = confirmRaw(id, s);
@@ -199,7 +200,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
       duringExpiryMs = during?.executionLeaseExpiresAt?.getTime() ?? null;
       // (1) The page refresh lands INSIDE the in-flight window.
       listedDuring = await listActions(s);
-      debitsWhileInFlight = await debitCount(200);
+      debitsWhileInFlight = await debitCount('200.00');
       // (2) A CONCURRENT duplicate confirm for the SAME action, while the first still holds it.
       duplicate = await confirmRaw(id, s);
       leaseAfterDuplicate = (await p.pendingAction.findUnique({ where: { id } }))?.executionLeaseOwner;
@@ -212,7 +213,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
 
     const stored = await p.pendingAction.findUnique({ where: { id } });
     const listedAfter = await listActions(s);
-    const debitsFinal = await debitCount(200);
+    const debitsFinal = await debitCount('200.00');
     const balanceFinal = await checkingBalance();
 
     console.log(
@@ -277,7 +278,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
     expect(stored?.resultJson).not.toBeNull();
     expect(stored?.executionLeaseOwner).toBeNull(); // released in the `finally`
     expect(debitsFinal).toBe(1); // the duplicate produced NO second debit
-    expect(balanceFinal).toBe(CHECKING_BALANCE - 200);
+    expect(balanceFinal).toBe(subtractMoney(CHECKING_BALANCE, '200.00'));
     expect(listedAfter.ids).not.toContain(id); // terminal `executed` is no longer surfaced
     expect(listedAfter.row(id)).toBeUndefined();
   });
@@ -286,7 +287,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
     const s = (await getOrCreateSession(userId)).sessionId;
     const p = getTestPrisma();
     // ¥5000 ⇒ RED ⇒ parked `awaiting_mfa`.
-    const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: 5000 }, '给张伟转5000元');
+    const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '5000.00' }, '给张伟转5000元');
     const parked = await p.pendingAction.findUnique({ where: { id } });
     expect(parked?.status).toBe('awaiting_mfa');
     expect(parked?.requiresMfa).toBe(true);
@@ -326,7 +327,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
         mfaResult: first?.body?.data?.mfaResult,
         storedStatus: stored?.status,
         storedLease: stored?.executionLeaseOwner,
-        debitFinal: await debitCount(5000),
+        debitFinal: await debitCount('5000.00'),
         balanceFinal: await checkingBalance(),
         surfacedAfter: listedAfter.ids.includes(id),
       }),
@@ -347,15 +348,15 @@ describe('[integration] state convergence across a refresh / restart', () => {
     expect(first?.body?.data?.status).toBe('executed');
     expect(stored?.status).toBe('executed');
     expect(stored?.executionLeaseOwner).toBeNull();
-    expect(await debitCount(5000)).toBe(1);
-    expect(await checkingBalance()).toBe(CHECKING_BALANCE - 5000);
+    expect(await debitCount('5000.00')).toBe(1);
+    expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '5000.00'));
     expect(listedAfter.ids).not.toContain(id);
   });
 
   it('a no-result wedge stays VISIBLE after a refresh AND after a module reload, and is recoverable from the refreshed entry', async () => {
     const s = (await getOrCreateSession(userId)).sessionId;
     const p = getTestPrisma();
-    const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: 300 }, '给张伟转300元');
+    const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '300.00' }, '给张伟转300元');
 
     const wedge = wedgeResultTransaction();
     const first = await confirmRaw(id, s);
@@ -367,7 +368,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
     expect(wedged?.status).toBe('confirmed');
     expect(wedged?.resultJson).toBeNull();
     expect(wedged?.executionLeaseOwner).toBeNull(); // released by the `finally` — a genuine WEDGE
-    expect(await debitCount(300)).toBe(1); // the side effect DID commit
+    expect(await debitCount('300.00')).toBe(1); // the side effect DID commit
 
     // (1) Plain refresh, SAME process: the wedge is visible and recovery-capable.
     const listedBefore = await listActions(s);
@@ -416,7 +417,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
         recoveredStatus: recovered.body.data?.status,
         storedStatus: stored?.status,
         storedResult: stored?.resultJson,
-        debitFinal: await debitCount(300),
+        debitFinal: await debitCount('300.00'),
         balanceFinal: await checkingBalance(),
         surfacedAfter: listedAfterRecovery.ids.includes(id),
       }),
@@ -446,15 +447,15 @@ describe('[integration] state convergence across a refresh / restart', () => {
     expect(recovered.body.data?.status).toBe('executed');
     expect(stored?.status).toBe('executed');
     expect(stored?.resultJson).not.toBeNull();
-    expect(await debitCount(300)).toBe(1); // exactly one side effect across the whole saga
-    expect(await checkingBalance()).toBe(CHECKING_BALANCE - 300);
+    expect(await debitCount('300.00')).toBe(1); // exactly one side effect across the whole saga
+    expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '300.00'));
     expect(listedAfterRecovery.ids).not.toContain(id); // terminal ⇒ no longer surfaced
   });
 
   it('recovery does NOT downgrade a success and is idempotent on a repeat recovery + refresh', async () => {
     const s = (await getOrCreateSession(userId)).sessionId;
     const p = getTestPrisma();
-    const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: 250 }, '给张伟转250元');
+    const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '250.00' }, '给张伟转250元');
 
     const wedge = wedgeResultTransaction();
     const first = await confirmRaw(id, s);
@@ -470,14 +471,14 @@ describe('[integration] state convergence across a refresh / restart', () => {
     const rec1 = await recoverRaw(id, s);
     const stored1 = await p.pendingAction.findUnique({ where: { id } });
     const audit1 = await p.auditLog.count({ where: { dedupeKey: `exec:${id}` } });
-    const debit1 = await debitCount(250);
+    const debit1 = await debitCount('250.00');
     const balance1 = await checkingBalance();
 
     // Recovery #2 — the SAME entry point again (a repeat click / a second refresh-driven recovery).
     const rec2 = await recoverRaw(id, s);
     const stored2 = await p.pendingAction.findUnique({ where: { id } });
     const audit2 = await p.auditLog.count({ where: { dedupeKey: `exec:${id}` } });
-    const debit2 = await debitCount(250);
+    const debit2 = await debitCount('250.00');
     const balance2 = await checkingBalance();
 
     // And the refresh path after the repeat.
@@ -515,7 +516,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
     expect(stored1?.resultJson ? JSON.parse(stored1.resultJson).ok : null).toBe(true);
     expect(audit1).toBe(1); // ONE execution audit row for this action
     expect(debit1).toBe(1);
-    expect(balance1).toBe(CHECKING_BALANCE - 250);
+    expect(balance1).toBe(subtractMoney(CHECKING_BALANCE, '250.00'));
 
     // Recovery #2 must NOT downgrade the success, must NOT re-run the tool and must NOT re-audit.
     expect(rec2.status).toBe(200);

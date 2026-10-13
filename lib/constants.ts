@@ -1,7 +1,7 @@
 import type { RiskLevel } from './contracts/risk';
 
 /** Daily transfer threshold above which a transfer escalates to RED. */
-export const DAILY_TRANSFER_LIMIT = 1000;
+export const DAILY_TRANSFER_LIMIT = '1000.00';
 
 /** Mock MFA code accepted by the demo verification flow. */
 export const MFA_CODE = '123456';
@@ -17,7 +17,7 @@ export const MFA_MAX_ATTEMPTS = 3;
 export const RESET_COOLDOWN_MS = 60_000;
 
 /** Transaction amount above which `detect_anomaly` flags a suspicious spend. */
-export const ANOMALY_AMOUNT_THRESHOLD = 5000;
+export const ANOMALY_AMOUNT_THRESHOLD = '5000.00';
 
 /** Seeded demo user id (李明). */
 export const DEFAULT_DEMO_USER_ID = 'user_liming';
@@ -31,7 +31,7 @@ export const DEFAULT_DEMO_USER_ID = 'user_liming';
  * ALL relative-date logic in the running app MUST default to this clock (overridable by an
  * explicit `now` argument so tests stay deterministic). See `lib/clock.ts` (`demoNow()`).
  */
-export const DEMO_NOW = new Date(2026, 8, 25, 12, 0, 0).getTime();
+export const DEMO_NOW = Date.parse('2026-09-25T12:00:00+08:00');
 
 /** Cookie name holding the demo agent session id. */
 export const SESSION_COOKIE = 'banking_session';

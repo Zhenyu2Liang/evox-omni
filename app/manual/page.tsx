@@ -14,8 +14,8 @@ async function request<T>(url: string, body?: unknown): Promise<T> {
   return envelope.data as T;
 }
 
-function ReviewForm({ title, label, onSubmit, busy, mayRetry }: {
-  title: string; label: string; busy: boolean; mayRetry?: boolean;
+function ReviewForm({ title, label, onSubmit, busy, mayRetry, mayResume, mayStop = true }: {
+  title: string; label: string; busy: boolean; mayRetry?: boolean; mayResume?: boolean; mayStop?: boolean;
   onSubmit: (text: string, resolution: ManualResolution) => Promise<void>;
 }) {
   const [text, setText] = useState('');
@@ -26,11 +26,13 @@ function ReviewForm({ title, label, onSubmit, busy, mayRetry }: {
         className="mt-2 w-full rounded-xl border border-gray-300 p-3 font-normal" placeholder="至少填写 5 个字" />
     </label>
     <div className="flex flex-wrap gap-2">
-      <Button loading={busy} disabled={text.trim().length < 5} onClick={() => void onSubmit(text, 'stop')}>
+      <Button loading={busy} disabled={!mayStop || text.trim().length < 5} onClick={() => void onSubmit(text, 'stop')}>
         {label === '转人工原因' ? '转人工处理' : '记录并结束自动处理'}
       </Button>
       {mayRetry && <Button variant="secondary" disabled={busy || text.trim().length < 5}
         onClick={() => void onSubmit(text, 'retry')}>记录并继续任务</Button>}
+      {mayResume && <Button variant="secondary" disabled={busy || text.trim().length < 5}
+        onClick={() => void onSubmit(text, 'resume')}>{'\u8bb0\u5f55\u5e76\u6062\u590d\u539f\u4efb\u52a1'}</Button>}
     </div>
   </div>;
 }
@@ -52,7 +54,11 @@ export default function ManualPage() {
 
   async function continueTask(review: ManualReviewRecord) {
     if (!review.taskId) return;
-    const plan = await request<{ status: string }>(`/api/tasks/${review.taskId}`, { action: 'retry' });
+    if (review.resolution === 'resume' && review.workflowStatus === 'waiting_confirmation') {
+      setNotice('\u5df2\u91ca\u653e\u4eba\u5de5\u63a7\u5236\uff0c\u8bf7\u56de\u5230 AI \u52a9\u624b\u5904\u7406\u539f\u5f85\u786e\u8ba4\u64cd\u4f5c\u3002');
+      return;
+    }
+    const plan = await request<{ status: string }>(`/api/tasks/${review.taskId}`, { action: review.resolution === 'resume' ? 'resume' : 'retry' });
     setNotice(plan.status === 'waiting_confirmation' ? '任务已重新发起，请到 AI 助手确认操作或完成 MFA。'
       : plan.status === 'success' ? '任务已完成。' : '任务状态已更新，请到 AI 助手查看。');
   }
@@ -60,14 +66,14 @@ export default function ManualPage() {
   function open(target: ManualReviewTarget, reason: string) {
     return act(async () => {
       await request('/api/manual-reviews', { taskId: target.taskId, actionId: target.actionId, reason });
-      setNotice('已转人工处理，任务的自动继续和重试已停止。');
+      setNotice('\u5df2\u8bf7\u6c42\u4eba\u5de5\u63a7\u5236\uff0c\u5f53\u524d\u64cd\u4f5c\u5230\u8fbe\u5b89\u5168\u68c0\u67e5\u70b9\u540e\u505c\u6b62\u81ea\u52a8\u7ee7\u7eed\u3002');
     });
   }
 
   function resolve(review: ManualReviewRecord, notes: string, resolution: ManualResolution) {
     return act(async () => {
       const saved = await request<ManualReviewRecord>(`/api/manual-reviews/${review.id}`, { resolution, notes });
-      if (resolution === 'retry') await continueTask(saved);
+      if (resolution === 'retry' || resolution === 'resume') await continueTask(saved);
       else setNotice('已记录处理结论并结束自动处理；已入账交易保留，结果不明的操作仍需核对。');
     });
   }
@@ -88,13 +94,20 @@ export default function ManualPage() {
         <div className="space-y-3">
           <Badge tone={review.status === 'open' ? 'warn' : 'neutral'}>{review.status === 'open' ? '人工处理中' : '已记录处理结论'}</Badge>
           <p className="text-sm">转人工原因：{review.reason}</p>
+          {review.handoffStatus === 'human_review_requested' && <p role="status" className="text-sm text-banking-navy">
+            {'\u7b49\u5f85\u5f53\u524d\u64cd\u4f5c\u5230\u8fbe\u5b89\u5168\u68c0\u67e5\u70b9\uff0c\u8bf7\u5237\u65b0\u540e\u518d\u8bb0\u5f55\u5904\u7406\u7ed3\u8bba\u3002'}
+          </p>}
           {review.status === 'open' ? <ReviewForm title={review.title} label="核对说明" busy={busy} mayRetry={review.mayRetry}
+            mayResume={review.mayResume} mayStop={review.mayStop}
             onSubmit={(text, resolution) => resolve(review, text, resolution)} /> : <>
             <p className="text-sm">核对说明：{review.notes}</p>
             <p className="text-xs text-gray-500">处理时间：{review.resolvedAt && new Date(review.resolvedAt).toLocaleString('zh-CN')}</p>
-            <p className="text-sm">处理结论：{review.resolution === 'retry' ? '允许重新发起确认；继续执行仍受原权限约束' : '结束自动处理；保留真实交易结果'}</p>
+            <p className="text-sm">处理结论：{review.resolution === 'retry' ? '允许重新发起确认；继续执行仍受原权限约束'
+              : review.resolution === 'resume' ? '\u5df2\u91ca\u653e\u4eba\u5de5\u63a7\u5236\uff1b\u7ee7\u7eed\u6267\u884c\u4ecd\u9700\u539f\u6743\u9650\u786e\u8ba4\u548c\u9a8c\u8bc1' : '结束自动处理；保留真实交易结果'}</p>
             {review.resolution === 'retry' && review.mayRetry && <Button disabled={busy} variant="secondary"
               onClick={() => void act(() => continueTask(review))}>继续任务（重新确认）</Button>}
+            {review.resolution === 'resume' && review.mayResume && <Button disabled={busy} variant="secondary"
+              onClick={() => void act(() => continueTask(review))}>{'\u7ee7\u7eed\u539f\u4efb\u52a1'}</Button>}
           </>}
         </div>
       </Card>

@@ -33,6 +33,7 @@ export interface AuditLogQuery {
 
 /** Filter for {@link findAuditLogs} — mirrors the audit node's `AuditFilter` (structural). */
 export interface AuditLogFindFilter {
+  userId?: string;
   sessionId?: string;
   toolName?: string;
   riskLevel?: RiskLevel | string;
@@ -137,6 +138,7 @@ export async function insertAuditLog(
 export async function findAuditLogs(filter: AuditLogFindFilter = {}): Promise<AuditEntry[]> {
   const rows = await prisma.auditLog.findMany({
     where: {
+      ...(filter.userId ? { userId: filter.userId } : {}),
       ...(filter.sessionId ? { sessionId: filter.sessionId } : {}),
       ...(filter.toolName ? { toolName: filter.toolName } : {}),
       ...(filter.riskLevel ? { riskLevel: filter.riskLevel } : {}),
@@ -149,8 +151,9 @@ export async function findAuditLogs(filter: AuditLogFindFilter = {}): Promise<Au
 }
 
 /** Aggregate counts (`total` / `byRisk` / `byStatus`) over the whole audit log. */
-export async function aggregateAuditLogs(): Promise<AuditLogAggregate> {
+export async function aggregateAuditLogs(query: Omit<AuditLogQuery, 'limit'> = {}): Promise<AuditLogAggregate> {
   const rows = await prisma.auditLog.findMany({
+    where: auditWhere(query),
     select: { riskLevel: true, status: true },
   });
   const byRisk: Record<string, number> = {};

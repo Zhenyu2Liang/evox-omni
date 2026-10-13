@@ -44,12 +44,13 @@ const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** Recipient 王芳 — the injected same-day transfer that raises the day total. */
 const WANGFANG = CONTACTS.find((contact) => contact.name === '王芳')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 
 /** The parked transfer amount (≤ ¥1000 ⇒ confirmation-only at PARK time). */
-const PARKED_AMOUNT = 200;
+const PARKED_AMOUNT = '200';
 /** The same-day outbound transfer injected AFTER parking (raises the executed day total to ¥900). */
-const INJECTED_AMOUNT = 900;
+const INJECTED_AMOUNT = '900';
 
 /**
  * The route's JSON envelope — the transport shape (NOT a frozen `@/lib/contracts` type). Declared
@@ -128,9 +129,9 @@ function verifyAction(
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to 张伟 (the parked-transfer money-moved-exactly-once probe). */
@@ -151,9 +152,9 @@ function wangfangTransfers() {
  */
 async function parkThenRaiseDayTotal() {
   // The two amounts must straddle the ¥1000 confirmation-only limit — assert the arithmetic.
-  expect(PARKED_AMOUNT).toBeLessThanOrEqual(DAILY_TRANSFER_LIMIT);
-  expect(INJECTED_AMOUNT).toBeLessThanOrEqual(DAILY_TRANSFER_LIMIT);
-  expect(INJECTED_AMOUNT + PARKED_AMOUNT).toBeGreaterThan(DAILY_TRANSFER_LIMIT);
+  expect(moneyToCents(PARKED_AMOUNT)).toBeLessThanOrEqual(moneyToCents(DAILY_TRANSFER_LIMIT));
+  expect(moneyToCents(INJECTED_AMOUNT)).toBeLessThanOrEqual(moneyToCents(DAILY_TRANSFER_LIMIT));
+  expect(moneyToCents(INJECTED_AMOUNT) + moneyToCents(PARKED_AMOUNT)).toBeGreaterThan(moneyToCents(DAILY_TRANSFER_LIMIT));
 
   // 1) Park the ¥200 transfer (day total is ¥0 at PARK time ⇒ confirmation-only / YELLOW).
   const turn = await chatTurn('给张伟转200元');
@@ -194,7 +195,7 @@ describe('[integration] POST /api/actions/[id]/confirm — YELLOW→RED executio
     // Precondition: the injected ¥900 is the ONLY same-day transfer; the parked action is unresolved.
     expect(await wangfangTransfers()).toHaveLength(1);
     expect(await zhangweiTransfers()).toHaveLength(0);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - INJECTED_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, INJECTED_AMOUNT));
 
     // CONFIRM (owning cookie) → the gateway re-risks at EXECUTION time and refuses the MFA-less path.
     const res = await confirmAction(row.id, turn.sessionId);
@@ -208,7 +209,7 @@ describe('[integration] POST /api/actions/[id]/confirm — YELLOW→RED executio
     // NO money moved by the parked action — 张伟 still has nothing, the balance is only down by the
     // injected ¥900 (never by the parked ¥200).
     expect(await zhangweiTransfers()).toHaveLength(0);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - INJECTED_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, INJECTED_AMOUNT));
 
     // The escalation is PERSISTED on the action: now RED / MFA / awaiting_mfa.
     const after = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: row.id } });
@@ -252,10 +253,10 @@ describe('[integration] POST /api/actions/[id]/verify — completing an escalate
     expect(data.mfaResult).toBe('success');
 
     // Money moved EXACTLY ONCE: 张伟 −200 (plus the injected −900), no double execution.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - INJECTED_AMOUNT - PARKED_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(subtractMoney(SEEDED_BALANCE, INJECTED_AMOUNT), PARKED_AMOUNT));
     const transfers = await zhangweiTransfers();
     expect(transfers).toHaveLength(1);
-    expect(transfers[0].amount).toBe(-PARKED_AMOUNT);
+    expect(transfers[0].amountMinor).toBe(-moneyToCents(PARKED_AMOUNT));
     expect(await wangfangTransfers()).toHaveLength(1);
 
     // The FINAL audit row is consistent: mfaRequired === true AND riskLevel === 'RED' (the EFFECTIVE
@@ -291,7 +292,7 @@ describe('[integration] POST /api/actions/[id]/verify — a WRONG code on an esc
     expect(data.requiresMfa).toBe(true);
 
     // Fail-closed: NO money moved and NO audit row was written.
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - INJECTED_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, INJECTED_AMOUNT));
     expect(await zhangweiTransfers()).toHaveLength(0);
     expect(await getTestPrisma().auditLog.count({ where: { sessionId: turn.sessionId } })).toBe(0);
 

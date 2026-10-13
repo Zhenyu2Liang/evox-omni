@@ -16,14 +16,14 @@ export async function journeyManualReview(browser: Browser, baseUrl: string): Pr
         goal: '人工核对查询失败后调整限额', status: 'failed', nodes: { create: [
           { nodeId: 'before', name: '已完成的查询', kind: 'note', status: 'success', order: 0, dependencies: '[]', output: '{"checked":true}' },
           { nodeId: 'read', name: '暂时失败的查询', kind: 'tool', tool: 'get_balance', args: '{}', status: 'failed', error: '查询服务暂不可用', order: 1, dependencies: '["before"]' },
-          { nodeId: 'limit', name: '调整娱乐限额', kind: 'tool', tool: 'set_card_limit', args: '{"cardId":"card_credit","category":"娱乐","amount":1400}', status: 'skipped', order: 2, dependencies: '["read"]' },
+          { nodeId: 'limit', name: '调整娱乐限额', kind: 'tool', tool: 'set_card_limit', args: '{"cardId":"card_credit","category":"娱乐","amount":"1400.00"}', status: 'skipped', order: 2, dependencies: '["read"]' },
         ] } } });
       const before = await p.cardLimit.findFirstOrThrow({ where: { cardId: 'card_credit', category: '娱乐' } });
       await page.goto(`${baseUrl}/manual`, { waitUntil: 'domcontentloaded' });
       const reason = page.getByRole('textbox', { name: '转人工原因：人工核对查询失败后调整限额', exact: true });
       await reason.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
       await reason.fill('查询暂时失败，请人工核对后继续');
-      await page.getByRole('button', { name: '转人工处理', exact: true }).click();
+      await page.locator('section').filter({ has: reason }).getByRole('button', { name: '转人工处理', exact: true }).click();
       await page.getByText('人工处理中', { exact: true }).waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.getByText('人工处理中', { exact: true }).waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
@@ -38,15 +38,16 @@ export async function journeyManualReview(browser: Browser, baseUrl: string): Pr
       const approval = await p.pendingAction.findFirstOrThrow({ where: { taskId: task.id } });
       const after = await p.cardLimit.findFirstOrThrow({ where: { cardId: 'card_credit', category: '娱乐' } });
       if (review.status !== 'closed' || review.resolution !== 'retry' || !review.notes || !review.operatorName.includes('李明')) throw new Error('处理人、说明或结论未持久化');
-      if (approval.status !== 'pending' || after.amount !== before.amount) throw new Error('人工继续绕过了用户确认');
+      if (approval.status !== 'pending' || after.amountMinor !== before.amountMinor) throw new Error('Manual continuation bypassed user confirmation.');
       if (await p.auditLog.count({ where: { dedupeKey: { startsWith: `manual:${review.id}:` } } }) !== 2) throw new Error('缺少转人工/处理结论审计');
 
       // A second fixture is unknown, not failed: the browser must offer stop/annotation only.
       const unknown = await p.pendingAction.create({ data: { sessionId, userId: 'user_liming', toolName: 'freeze_card',
         argsJson: '{"cardId":"card_credit"}', summaryJson: '{}', riskLevel: 'YELLOW', status: 'needs_reconciliation', userRequest: '结果不明的冻结操作' } });
       await page.reload({ waitUntil: 'domcontentloaded' });
-      await page.getByRole('textbox', { name: '转人工原因：结果不明的冻结操作', exact: true }).fill('冻结结果不明，请登记人工核对');
-      await page.getByRole('button', { name: '转人工处理', exact: true }).click();
+      const unknownReason = page.getByRole('textbox', { name: '转人工原因：结果不明的冻结操作', exact: true });
+      await unknownReason.fill('冻结结果不明，请登记人工核对');
+      await page.locator('section').filter({ has: unknownReason }).getByRole('button', { name: '转人工处理', exact: true }).click();
       const notes = page.getByRole('textbox', { name: '核对说明：结果不明的冻结操作', exact: true });
       await notes.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
       if (await page.getByRole('button', { name: '记录并继续任务', exact: true }).count()) throw new Error('未知结果不应提供继续入口');

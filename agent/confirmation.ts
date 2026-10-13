@@ -69,6 +69,7 @@ import {
 } from './confirmation-recovery';
 import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
 import { transferExecutionAudit } from './execution-audit';
+import { synchronizeScheduledWorkflow } from './scheduled-dispatcher';
 
 /**
  * The security gateway's runtime surface.
@@ -115,68 +116,11 @@ export interface GatedToolOutcome {
   pendingActionId?: string;
 }
 
-/** The union of what the gateway's `AuthorizationResult` carries across its legacy/frozen shapes. */
-interface RawAuth {
-  ok: boolean;
-  tier?: RiskLevel;
-  requiresMfa?: boolean;
-  status?: PendingActionStatus;
-  message?: string;
-  mfaResult?: 'success' | 'failed' | 'not_required';
-  actionId?: string;
-  code?: string;
-  action?: PendingAction;
-}
-
-/**
- * Unified view over the gateway's `AuthorizationResult`.
- *
- * The security node is mid-migration: the CURRENT shape carries `status`/`message`/`mfaResult`/
- * `action`, while the FROZEN shape carries `code` (no `status`, no `action`). Reading every field
- * through this ONE normalizer keeps `tsc --noEmit` green against the current type AND the merged one
- * — no code here ever touches `auth.status` / `auth.code` / `auth.action` directly.
- */
-interface AuthView {
-  ok: boolean;
-  tier: RiskLevel;
-  requiresMfa: boolean;
-  /** Resulting status: the legacy shape carries it; the frozen shape omits it (derived below). */
-  status: PendingActionStatus;
-  /** Safe, user-facing message (never leaks the MFA code). */
-  message: string;
-  mfaResult?: 'success' | 'failed' | 'not_required';
-  /** Present on the frozen shape's success branch. */
-  actionId?: string;
-  /** Failure code (frozen shape only). */
-  code?: string;
-  /** The updated pending action, when the gateway returns one. */
-  action?: PendingAction;
-}
-
-/** Normalize whatever `AuthorizationResult` the gateway returns into one stable `AuthView`. */
-function viewAuth(auth: AuthorizationResult): AuthView {
-  const a = auth as unknown as RawAuth;
-  const requiresMfa = a.requiresMfa === true;
-  return {
-    ok: a.ok,
-    tier: a.tier ?? 'YELLOW',
-    requiresMfa,
-    // `status` exists only on the legacy shape; the frozen shape omits it, so derive an honest one.
-    status:
-      a.status ?? (a.ok ? 'confirmed' : a.code === 'CIRCUIT_OPEN' ? 'locked' : 'awaiting_mfa'),
-    message: a.message ?? '操作无法执行。',
-    mfaResult: a.mfaResult,
-    actionId: a.actionId,
-    code: a.code,
-    action: a.action,
-  };
-}
-
 /**
  * The EFFECTIVE tier for an authorization result: MFA is a RED-only control, so any `requiresMfa`
  * yields RED (this is what surfaces an execution-time-escalated YELLOW transfer as RED).
  */
-function effectiveTier(view: AuthView): RiskLevel {
+function effectiveTier(view: AuthorizationResult): RiskLevel {
   return view.requiresMfa ? 'RED' : view.tier;
 }
 
@@ -259,29 +203,6 @@ async function cancelledPlanOutcome(
     message: `该操作所属的任务计划已取消（${located.taskId}），已拒绝执行。`,
     events: [],
   };
-}
-
-/** The identity bag the merged gateway accepts on `recordActionResult` (legacy: ignored). */
-type RecordActionResult = (
-  actionId: string,
-  status: 'executed' | 'failed',
-  opts?: { userId?: string; sessionId?: string },
-) => Promise<void>;
-
-/**
- * Record an action's TRUE terminal status WITH the trusted identity.
- *
- * The security node's current `recordActionResult(actionId, status)` takes no identity; the cast
- * keeps this call site forward-compatible with the merged signature
- * (`recordActionResult(actionId, status, { userId, sessionId })`) without touching that node.
- */
-function recordActionResult(
-  actionId: string,
-  status: 'executed' | 'failed',
-  identity: TrustedIdentity,
-): Promise<void> {
-  const fn = gateway.recordActionResult as unknown as RecordActionResult;
-  return fn(actionId, status, { userId: identity.userId, sessionId: identity.sessionId });
 }
 
 /** Forward every event to the caller's optional streaming hook (no-op when absent). */
@@ -431,8 +352,8 @@ interface StoredToolResult {
  * Decode the durable execution result stored on a `PendingAction` (`resultJson`, a JSON-text
  * `ToolExecutionResult`). `listPendingActionsByTask` selects EVERY column (no projection), so the
  * loaded row already carries it. Returns `undefined` when nothing usable was stored — an
- * empty/absent/invalid payload, or a legacy row executed before the agent layer began persisting
- * results — so the caller treats it as a terminal manual-review outcome (NEVER re-invoking the tool
+ * empty, absent or invalid payload without trustworthy execution evidence. The caller treats it
+ * as a manual-review outcome (NEVER re-invoking the tool
  * to re-apply a non-idempotent side effect).
  */
 function readStoredResult(action: PendingActionRow): StoredToolResult | undefined {
@@ -460,7 +381,7 @@ function readStoredResult(action: PendingActionRow): StoredToolResult | undefine
  * `set_card_limit`) would RE-APPLY its side effect and clobber a value the user independently
  * changed AFTER this action had already executed.
  *
- * NO stored result (a legacy row executed before the agent layer began persisting results) settles
+ * A missing or corrupt stored result settles
  * the node TERMINALLY as `failed` for manual review: the tool is NEVER re-invoked, so a
  * non-idempotent side effect can never be re-applied and the plan still settles instead of being
  * wedged in-flight.
@@ -470,7 +391,7 @@ async function recoverExecutedPlanAction(action: PendingActionRow): Promise<Gate
   if (stored !== undefined) {
     return { ok: stored.ok, data: stored.data, summary: stored.summary, error: stored.error };
   }
-  // NO stored result (a legacy row executed before the agent layer began persisting results). The
+  // Missing execution evidence must not trigger another side effect. The
   // tool is DELIBERATELY NOT re-invoked: re-running a tool that does not consume the SDK
   // idempotency key (e.g. `set_card_limit`) would RE-APPLY its side effect and clobber a value the
   // user independently changed after this action had already executed. The node is settled
@@ -557,6 +478,7 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
     }
 
     const registry = createToolRegistry(ctx.userId);
+    const policyFence = await buildAutomaticWriteFence(ctx.sessionId, ctx.taskId, ctx.nodeId);
     // A PLAN-NODE call passes its NODE idempotency key so a re-run of the SAME node (a replay, a
     // resume, a retry) replays its SDK-level side effect instead of repeating it; a standalone call
     // takes no key. (`executeDirect` forwards `idempotencyKey` to every runner.)
@@ -564,7 +486,10 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
       ...(ctx.taskId !== undefined && ctx.nodeId !== undefined
         ? { idempotencyKey: nodeExecutionKey(ctx.taskId, ctx.nodeId) }
         : {}),
-      fence: await buildAutomaticWriteFence(ctx.sessionId, ctx.taskId, ctx.nodeId),
+      fence: async (client: Parameters<typeof policyFence>[0]) => {
+        await ctx.runtimeFence?.(client);
+        await policyFence(client);
+      },
       // SIDE-EFFECT audit identity (GREEN writes included): the runner couples the business write and
       // its strict audit row into ONE transaction — an audit failure rolls the write back.
       sessionId: ctx.sessionId,
@@ -698,6 +623,7 @@ async function resumeOwningPlan(
       },
     );
     if (resumed === undefined) return [];
+    await synchronizeScheduledWorkflow(resumed.plan.id);
     // The planner's resume path wrote the executed node's REAL outcome (success carrying the tool's
     // data/summary, or failed carrying its error) into the plan before re-running the downstream
     // nodes; that snapshot is what the UI renders as continued DAG progress.
@@ -725,7 +651,7 @@ async function resumeOwningPlan(
  */
 async function executeAuthorizedAction(
   actionId: string,
-  view: AuthView,
+  view: AuthorizationResult,
   identity: TrustedIdentity,
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
@@ -742,7 +668,7 @@ async function executeAuthorizedAction(
   // fail closed — the trusted owner is the session row, and there is NO demo-user fallback.
   const session = await getSession(identity.sessionId);
   if (session?.userId === undefined || session.userId === '') {
-    await recordActionResult(actionId, 'failed', identity);
+    await gateway.recordActionResult(actionId, 'failed');
     throw new AppError('SECURITY_DENIED', `无法解析待处理操作的所有者会话: ${identity.sessionId}`);
   }
   const userId = identity.userId;
@@ -783,6 +709,7 @@ async function executeAuthorizedAction(
     // conditional writes serialize against cancellation before any banking mutation.
     result = await registry.executeDirect(action.toolName, action.args, {
       idempotencyKey, fence: guarded.fence, onTransferCommit: executionAudit.onTransferCommit,
+      onCommandCommit: executionAudit.onCommandCommit,
       onTransactionCommitted: () => { sideEffectCommitted = true; },
     });
   } catch (e) {
@@ -839,7 +766,7 @@ async function executeAuthorizedAction(
   // never turn a successfully-executed action into an error response.
   try {
     if (decision.status === 'executed' || decision.status === 'failed') {
-      await recordActionResult(actionId, decision.status, identity);
+      await gateway.recordActionResult(actionId, decision.status);
     }
   } catch {
     // Non-fatal: the atomic transaction above already persisted the TRUE terminal status.
@@ -905,7 +832,7 @@ async function executeAuthorizedAction(
  */
 function blockedOutcome(
   actionId: string,
-  view: AuthView,
+  view: AuthorizationResult,
   opts?: ConfirmOptions,
 ): ConfirmationOutcome {
   if (view.requiresMfa) {
@@ -962,7 +889,7 @@ async function confirmActionImpl(
     throw e; // SECURITY_DENIED / NOT_FOUND propagate — the action is never executed
   }
 
-  const view = viewAuth(auth);
+  const view = auth;
   if (!view.ok) return blockedOutcome(actionId, view, opts);
 
   return executeAuthorizedAction(actionId, view, identity, opts);
@@ -992,7 +919,7 @@ async function verifyActionImpl(
     throw e;
   }
 
-  const view = viewAuth(auth);
+  const view = auth;
   // A wrong code can keep the existing awaiting_mfa decision. A locked/terminal outcome retains
   // its historical RED requirement but must not request a new code.
   if (!view.ok) return blockedOutcome(actionId, view, opts);

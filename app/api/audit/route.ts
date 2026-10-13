@@ -22,7 +22,7 @@ import { audit, type AuditFilter, type AuditSummary } from '@/audit';
 import type { AuditEntry } from '@/lib/contracts/audit';
 import { jsonResponse, errorResponse, parseQuery } from '../_lib/http';
 import { limitQuerySchema } from '../_lib/schemas';
-import { resolveIdentity } from '../_lib/session';
+import { requireIdentity } from '../_lib/session';
 
 /**
  * Query schema for `GET /api/audit`.
@@ -61,10 +61,11 @@ export async function GET(req: NextRequest): Promise<Response> {
   try {
     const query = parseQuery(auditQuerySchema, req);
     // Trusted session scope (cookie-only); a `?sessionId=` query param is never authoritative.
-    const identity = await resolveIdentity(req);
+    const identity = await requireIdentity(req);
 
     const filter: AuditFilter = {
-      sessionId: identity?.sessionId,
+      sessionId: identity.sessionId,
+      userId: identity.userId,
       toolName: query.toolName,
       riskLevel: query.riskLevel,
       status: query.status,
@@ -72,7 +73,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     };
 
     const entries = await audit.listAudit(filter);
-    const summary = await audit.getAuditSummary();
+    const summary = await audit.getAuditSummary(filter);
 
     return jsonResponse<AuditData>({ entries, summary });
   } catch (e) {

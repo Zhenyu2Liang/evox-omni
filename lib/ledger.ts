@@ -124,6 +124,7 @@ export function requestDigest(parts: Record<string, unknown>): string {
 
 /** Recursively canonicalize a value: sort object keys, normalize `undefined` to `null`. */
 function canonicalize(value: unknown): unknown {
+  if (typeof value === 'bigint') return value.toString();
   if (Array.isArray(value)) return value.map(canonicalize);
   if (value !== null && typeof value === 'object') {
     const source = value as Record<string, unknown>;

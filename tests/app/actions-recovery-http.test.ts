@@ -33,12 +33,14 @@ import type { PendingActionStatus } from '@/lib/contracts/security';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { actionUrl, getJson, idCtx, postJson, type HttpResult } from './harness';
+import { banking } from '@/banking-sdk';
 
 const RECIPIENT_NAME = '张伟';
 /** Seeded 活期 balance (¥23,580): −200 after the wedged transfer's committed side effect. */
-const SEEDED_BALANCE = 23580;
-const TRANSFER_AMOUNT = 200;
-const EXPECTED_BALANCE_AFTER = SEEDED_BALANCE - TRANSFER_AMOUNT;
+import { centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = '23580.00';
+const TRANSFER_AMOUNT = '200';
+const EXPECTED_BALANCE_AFTER = subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT);
 
 /** The route envelope (structural transport shape; NOT a frozen contract type). */
 interface Envelope<T> {
@@ -112,16 +114,16 @@ function gatewayRunTool(sessionId: string, userRequest: string): PlanRunTool {
 /** The number of committed −200 debits to the seeded recipient (the side-effect counter). */
 function debitCount(): Promise<number> {
   return getTestPrisma().transaction.count({
-    where: { userId: DEMO_USER_ID, amount: -TRANSFER_AMOUNT, counterpartyId: 'contact_zhangwei' },
+    where: { userId: DEMO_USER_ID, amountMinor: -moneyToCents(TRANSFER_AMOUNT), counterpartyId: 'contact_zhangwei' },
   });
 }
 
 /** The seeded 活期 account's CURRENT balance. */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findFirstOrThrow({
     where: { userId: DEMO_USER_ID, type: 'CHECKING' },
   });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** The persisted `PendingAction` row (throws when absent — a missing action is a bug). */
@@ -215,7 +217,7 @@ describe('standalone /actions recovery surface', () => {
             name: '调整限额',
             kind: 'tool',
             tool: 'set_card_limit',
-            args: { cardId: card.id, category: '娱乐', amount: 1500 },
+            args: { cardId: card.id, category: '娱乐', amount: '1500' },
             dependencies: [],
           },
         ],
@@ -230,6 +232,7 @@ describe('standalone /actions recovery surface', () => {
     expect(action.nodeId).toBe('limit');
 
     // Confirm, but fault the atomic result+status write → the plan-node action wedges.
+    const businessWrite = vi.spyOn(banking.card, 'setCardLimit');
     const spy = wedgeResultTransaction();
     await confirmWith(action.id, sessionId);
     expect(spy.mock.calls.length).toBe(1);
@@ -238,6 +241,10 @@ describe('standalone /actions recovery surface', () => {
     const wedged = await actionRow(action.id);
     expect(wedged.status).toBe('confirmed');
     expect(wedged.resultJson).toBeNull();
+    expect(businessWrite).toHaveBeenCalledTimes(1);
+    const receipt = await prisma.executionReceipt.findFirstOrThrow({ where: { userId: DEMO_USER_ID, toolName: 'set_card_limit' } });
+    expect(JSON.parse(receipt.responseJson ?? '{}').ok).toBe(true);
+    expect((await prisma.cardLimit.findFirstOrThrow({ where: { cardId: card.id, category: '\u5a31\u4e50' } })).amountMinor).toBe(150_000n);
 
     // DISCOVERY: the plan-linked wedge is surfaced with an actionable attention class — never
     // `processing` (no live lease) — so `/actions` can offer the recovery action after a refresh.
@@ -254,9 +261,9 @@ describe('standalone /actions recovery surface', () => {
       recovered as HttpResult<Envelope<{ ok: boolean; actionId: string; events?: unknown[] }>>,
     );
     expect(outcome.actionId).toBe(action.id);
-    // This limit mutation has no durable receipt after status landing failed. Recovery must
-    // report manual review, not business success merely because the request was handled.
-    expect(outcome.ok).toBe(false);
+    // The atomic receipt proves the commit independently of the failed action-status landing.
+    expect(outcome.ok).toBe(true);
+    expect(businessWrite).toHaveBeenCalledTimes(1);
 
     // The plan (and its node) settle TERMINALLY — never left `waiting_confirmation`, and the tool is
     // NEVER re-invoked (the persisted action is no longer `confirmed`).
@@ -264,10 +271,9 @@ describe('standalone /actions recovery surface', () => {
     const node = await prisma.agentTaskNode.findFirstOrThrow({ where: { taskId: planId, nodeId: 'limit' } });
     const settled = await actionRow(action.id);
 
-    expect(plan.status).not.toBe('waiting_confirmation');
-    expect(['success', 'failed']).toContain(plan.status);
-    expect(['success', 'failed']).toContain(node.status);
-    expect(settled.status).toBe('needs_reconciliation');
+    expect(plan.status).toBe('success');
+    expect(node.status).toBe('success');
+    expect(settled.status).toBe('executed');
     expect(settled.status).not.toBe('confirmed');
 
     // Idempotent, honest recovery: a REPEAT recover is a settled no-op (no duplicate side effect,
@@ -280,6 +286,7 @@ describe('standalone /actions recovery surface', () => {
     });
     expect(planAfter.status).toBe(plan.status);
     expect(nodeAfter.status).toBe(node.status);
+    expect(businessWrite).toHaveBeenCalledTimes(1);
     expect(await prisma.cardLimit.count({ where: { cardId: card.id, category: '娱乐' } })).toBeLessThanOrEqual(1);
   });
 });

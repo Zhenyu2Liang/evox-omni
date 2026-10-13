@@ -38,8 +38,8 @@ Spec files (implemented — real assertions against the test SQLite), targeting 
   re-reads the winner's committed row, any other error propagates and writes nothing); and through
   the SDK barrel `banking.budget.reserveBudget` / `banking.task.createScheduledTask` — repeated key
   → same `id` + exactly ONE row (`count({ where: { idempotencyKey } })`), absent/empty/whitespace
-  key and two different keys → two rows (legacy behavior preserved).
-- `transfer-receipt.test.ts` — COMMITTED-FACT (execution-receipt) semantics of `banking.transfer.createTransfer`, driven DIRECTLY through the SDK: same `idempotencyKey` + same request replays the ORIGINAL result (no second debit / one ledger row / one `ExecutionReceipt`); same key + different request → `CONFLICT`; a LEGACY ledger row with no receipt replays even when the contact was renamed/deleted (`idempotentTransferTxId` identity); a fresh unknown recipient still → `NOT_FOUND`; a fresh transfer writes a receipt whose `resultJson` == the returned `TransferResult`. DB-backed via `../../helpers/db`, `lib/ledger` + the real `ExecutionReceipt` table.
+  key and two different keys → independent rows.
+- `transfer-receipt.test.ts` — current execution receipts: the same key and canonical decimal-string request replay the full original result without another debit. Contact rename or deletion cannot rewrite a valid snapshot. Missing receipts, missing ledgers, corrupt results, obsolete numeric digests and conflicting requests fail closed with `CONFLICT`; no result is reconstructed from ledger fields. Fresh transfers persist the returned result in the same transaction as the debit and ledger.
 - `anomaly.test.ts` — `banking.transaction.detectAnomaly` is **DEBIT-only**: it reports a row when it is explicitly flagged (`isAnomaly`) OR it is a DEBIT whose magnitude exceeds `ANOMALY_AMOUNT_THRESHOLD` (¥5,000) and is not an `INVESTMENT_FLOW_CATEGORY` row, so large INCOME (工资 +¥11,000) / refund CREDITs and >¥5,000 投资 debits are never misreported as 大额消费, while the Apple Store ¥6,999 sample stays the ONLY automatic finding.
   Probe rows are inserted TEST-LOCALLY (never in the shared fixtures) so the fixture world's anomaly count (asserted by `tests/scenarios/test-07-anomaly.test.ts`) stays exactly 1; `listAnomalies` (persisted `isAnomaly` rows) reports only the Apple Store row.
 - `investment-flow.test.ts` — the subscribe/redeem account-flow `Transaction` row: a subscribe writes its flow row (`category = INVESTMENT_FLOW_CATEGORY='投资'`, DEBIT, `-amount`, merchant `认购<product>`, `channel:'APP'`) in the SAME transaction as the funding-account debit + new holding, and a redeem writes the mirrored CREDIT row (`+marketValue`, merchant `赎回`) with the credit + HOLDING→REDEEMED flip.
@@ -47,8 +47,8 @@ Spec files (implemented — real assertions against the test SQLite), targeting 
 
 ## Status
 
-All eight specs are implemented with real assertions and pass offline against `prisma/test.db`
-(`npx vitest run tests/unit/banking-sdk`).
+The specs run offline against the isolated test database
+(`pnpm exec vitest run tests/unit/banking-sdk`).
 The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
 `seedDemoData({ withAmbiguousContact: true })` inside the ambiguity case.
 
@@ -72,7 +72,7 @@ The transfer spec seeds the duplicate 王芳 via `truncateAll()` +
 - Helpers are reached via `../../helpers/{db,fixtures}` from this node (not `../helpers/*`).
 - `useFreshDatabase()` is called once per file; each test starts from `resetDatabase()` (truncate + canonical seed).
 - The atomicity spec lives in THIS node and is auto-discovered by the root `vitest.config.ts`
-  (`include: ['tests/**/*.{test,spec}.ts']`) — a plain `npm run test` runs it; no scoped config exists.
+  (`include: ['tests/**/*.{test,spec}.ts']`) — a plain `pnpm test` runs it; no scoped config exists.
 - Failure injection MUST keep the real `$transaction`: patch `$transaction` via `Object.defineProperty`
   (not `vi.spyOn`/`restoreAllMocks`, which does not round-trip Prisma's method) and forward every
   non-injected call to the real `tx`, so the earlier debit genuinely rolls back.

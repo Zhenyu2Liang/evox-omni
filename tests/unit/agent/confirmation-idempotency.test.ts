@@ -13,7 +13,7 @@
  * gateway, SDK and DB are the production ones. A UNIQUE persisted session per test keeps the
  * in-process circuit breaker (keyed by sessionId, no global reset) isolated.
  *
- * Runs under the default config: `npm run test`.
+ * Runs under the default config: `pnpm test`.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -21,6 +21,7 @@ import { cancelAction, confirmAction, getOrCreateSession } from '@/agent';
 import { security } from '@/security';
 import { CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
+import { centsToMoney, subtractMoney } from '@/lib/money';
 
 /** The gateway's ONLY runtime member; the agent node captures this same object. */
 const gateway = security.gateway.securityGateway;
@@ -28,10 +29,10 @@ const gateway = security.gateway.securityGateway;
 /** Recipient 张伟 — resolves unambiguously to the seeded contact. */
 const RECIPIENT = CONTACTS[0];
 /** ≤ ¥1000 ⇒ YELLOW (confirmation-only). */
-const YELLOW_AMOUNT = 200;
+const YELLOW_AMOUNT = '200.00';
 const FUNDING_ACCOUNT_ID = 'acct_checking';
 /** Seeded 活期 balance (`tests/helpers/fixtures.ACCOUNTS`). */
-const STARTING_BALANCE = 23580;
+const STARTING_BALANCE = '23580.00';
 const USER_MESSAGE = '给张伟转200元，备注AA';
 
 /* ---------------------------------------------------------------------------------- helpers */
@@ -60,9 +61,9 @@ async function parkTransfer(sessionId: string): Promise<string> {
 }
 
 /** The funding account's current balance (the money-movement proof). */
-async function balanceOf(accountId: string = FUNDING_ACCOUNT_ID): Promise<number> {
+async function balanceOf(accountId: string = FUNDING_ACCOUNT_ID): Promise<string> {
   const row = await getTestPrisma().account.findUnique({ where: { id: accountId } });
-  return row!.balance;
+  return centsToMoney(row!.balanceMinor);
 }
 
 /** The persisted status of a `PendingAction`. */
@@ -93,7 +94,7 @@ describe('confirmation idempotency', () => {
     expect(first.status).toBe('executed');
     expect(first.actionId).toBe(actionId);
     // Money moved exactly once.
-    expect(await balanceOf()).toBe(STARTING_BALANCE - YELLOW_AMOUNT);
+    expect(await balanceOf()).toBe(subtractMoney(STARTING_BALANCE, YELLOW_AMOUNT));
     expect(await actionStatus(actionId)).toBe('executed');
 
     const second = await confirmAction(actionId);
@@ -104,7 +105,7 @@ describe('confirmation idempotency', () => {
     expect(typeof second.message).toBe('string');
     expect(second.message.length).toBeGreaterThan(0);
     // Still debited exactly once.
-    expect(await balanceOf()).toBe(STARTING_BALANCE - YELLOW_AMOUNT);
+    expect(await balanceOf()).toBe(subtractMoney(STARTING_BALANCE, YELLOW_AMOUNT));
 
     // Only the successful execution wrote an audit row (the CONFLICT wrote none).
     const audits = await getTestPrisma().auditLog.findMany({ where: { sessionId } });

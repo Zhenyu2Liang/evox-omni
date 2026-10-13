@@ -25,6 +25,7 @@
  */
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
 import { getOrCreateSession, executeGatedTool } from '@/agent';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import type { ToolName } from '@/lib/contracts/tools';
@@ -34,7 +35,7 @@ import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/help
 
 const userId = 'user_liming';
 /** Seeded 活期 balance (fixtures ACCOUNTS) — debited by the transferred amount. */
-const CHECKING_BALANCE = 23580;
+const CHECKING_BALANCE = '23580.00';
 
 beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
@@ -130,12 +131,12 @@ function wedgeResultTransaction() {
     .mockRejectedValueOnce(new Error('review: restart-independence result transaction failed'));
 }
 
-const debitCount = (amount: number) =>
+const debitCount = (amount: string) =>
   getTestPrisma().transaction.count({
-    where: { userId, amount: -amount, counterpartyId: 'contact_zhangwei' },
+    where: { userId, amountMinor: -moneyToCents(amount), counterpartyId: 'contact_zhangwei' },
   });
 const checkingBalance = async () =>
-  (await getTestPrisma().account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
+  centsToMoney((await getTestPrisma().account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
 
 /** Defensive: a lingering persisted lease would look like `processing`; clear it so only evidence remains. */
 async function clearLeaseIfAny(id: string): Promise<void> {
@@ -152,8 +153,8 @@ async function clearLeaseIfAny(id: string): Promise<void> {
 it('a standalone transfer wedge recovers from PERSISTED evidence after the in-process registry is cleared', async () => {
   const sessionId = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
-  const id = await parkStandalone(sessionId, 'transfer_money', { name: '张伟', amount: 200 }, '给张伟转200元');
-  expect(await debitCount(200)).toBe(0);
+  const id = await parkStandalone(sessionId, 'transfer_money', { name: '张伟', amount: '200.00' }, '给张伟转200元');
+  expect(await debitCount('200.00')).toBe(0);
 
   const spy = wedgeResultTransaction();
   const first = await confirmWith(confirmPost, id, sessionId);
@@ -168,8 +169,8 @@ it('a standalone transfer wedge recovers from PERSISTED evidence after the in-pr
   expect(wedged.resultJson).toBeNull();
   // …while the SDK side effect DID commit (debit + ledger + receipt written in ONE tx) — the only
   // durable truth a restarted process can read.
-  expect(await debitCount(200)).toBe(1);
-  expect(await checkingBalance()).toBe(CHECKING_BALANCE - 200);
+  expect(await debitCount('200.00')).toBe(1);
+  expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '200.00'));
   expect(await p.executionReceipt.count({ where: { userId, key: id } })).toBe(1);
   await clearLeaseIfAny(id);
 
@@ -215,7 +216,7 @@ it('a standalone transfer wedge recovers from PERSISTED evidence after the in-pr
       storedStatus: stored.status,
       storedResultOk: stored.resultJson ? JSON.parse(stored.resultJson).ok : null,
       receipts: await p.executionReceipt.count({ where: { userId, key: id } }),
-      debits: await debitCount(200),
+      debits: await debitCount('200.00'),
       balance: await checkingBalance(),
       auditRows,
     }),
@@ -241,8 +242,8 @@ it('a standalone transfer wedge recovers from PERSISTED evidence after the in-pr
   expect(stored.status).toBe('executed');
   expect(stored.resultJson ? JSON.parse(stored.resultJson).ok : null).toBe(true);
   expect(await p.executionReceipt.count({ where: { userId, key: id } })).toBe(1); // still ONE receipt
-  expect(await debitCount(200)).toBe(1); // exactly ONE debit — never re-executed
-  expect(await checkingBalance()).toBe(CHECKING_BALANCE - 200);
+  expect(await debitCount('200.00')).toBe(1); // exactly ONE debit — never re-executed
+  expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '200.00'));
   expect(auditRows).toBe(1); // exactly ONE execution audit for this action
 
   beforeRestart.releaseAction(id); // tidy the retained marker on the OLD graph
@@ -261,7 +262,7 @@ it('a plan-linked transfer wedge resumes and backfills its node from persisted e
           name: '转账',
           kind: 'tool',
           tool: 'transfer_money',
-          args: { name: '张伟', amount: 200 },
+          args: { name: '张伟', amount: '200.00' },
           dependencies: [],
         },
       ],
@@ -272,6 +273,8 @@ it('a plan-linked transfer wedge resumes and backfills its node from persisted e
   expect(plan.status).toBe('waiting_confirmation');
 
   const pending = await p.pendingAction.findFirstOrThrow({ where: { taskId: plan.id } });
+  expect(pending.taskId).toBe(plan.id);
+  expect(pending.nodeId).toBe('transfer');
   const receiptKey = `nxe:${plan.id}:transfer`;
 
   const spy = wedgeResultTransaction();
@@ -285,7 +288,7 @@ it('a plan-linked transfer wedge resumes and backfills its node from persisted e
   expect(wedged.status).toBe('confirmed');
   expect(wedged.resultJson).toBeNull();
   expect(await p.executionReceipt.count({ where: { userId, key: receiptKey } })).toBe(1);
-  expect(await debitCount(200)).toBe(1);
+  expect(await debitCount('200.00')).toBe(1);
   await clearLeaseIfAny(pending.id);
 
   // SIMULATED SERVICE RESTART — only PERSISTED state survives.
@@ -319,7 +322,7 @@ it('a plan-linked transfer wedge resumes and backfills its node from persisted e
       actionStatus: storedAction.status,
       actionResultOk: storedAction.resultJson ? JSON.parse(storedAction.resultJson).ok : null,
       receipts: await p.executionReceipt.count({ where: { userId, key: receiptKey } }),
-      debits: await debitCount(200),
+      debits: await debitCount('200.00'),
       balance: await checkingBalance(),
       auditRows,
     }),
@@ -333,15 +336,15 @@ it('a plan-linked transfer wedge resumes and backfills its node from persisted e
   expect(storedAction.status).toBe('executed');
   expect(storedAction.resultJson ? JSON.parse(storedAction.resultJson).ok : null).toBe(true);
   expect(await p.executionReceipt.count({ where: { userId, key: receiptKey } })).toBe(1); // ONE receipt
-  expect(await debitCount(200)).toBe(1); // exactly ONE debit — never re-executed
-  expect(await checkingBalance()).toBe(CHECKING_BALANCE - 200);
+  expect(await debitCount('200.00')).toBe(1); // exactly ONE debit — never re-executed
+  expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '200.00'));
   expect(auditRows).toBe(1); // exactly ONE execution audit for the node's action
 });
 
 it('repeat recovery across a module reset is idempotent (no second debit, no second execution audit)', async () => {
   const sessionId = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
-  const id = await parkStandalone(sessionId, 'transfer_money', { name: '张伟', amount: 200 }, '给张伟转200元');
+  const id = await parkStandalone(sessionId, 'transfer_money', { name: '张伟', amount: '200.00' }, '给张伟转200元');
 
   const spy = wedgeResultTransaction();
   const first = await confirmWith(confirmPost, id, sessionId);
@@ -352,7 +355,7 @@ it('repeat recovery across a module reset is idempotent (no second debit, no sec
   expect(first.status).toBe(500);
   expect(wedged.status).toBe('confirmed');
   expect(wedged.resultJson).toBeNull();
-  expect(await debitCount(200)).toBe(1);
+  expect(await debitCount('200.00')).toBe(1);
   await clearLeaseIfAny(id);
 
   // Recovery #1 — through a FIRST freshly imported handler/registry.
@@ -385,7 +388,7 @@ it('repeat recovery across a module reset is idempotent (no second debit, no sec
       rec2Status: rec2.data?.status,
       storedStatus: stored.status,
       receipts: await p.executionReceipt.count({ where: { userId, key: id } }),
-      debits: await debitCount(200),
+      debits: await debitCount('200.00'),
       balance: await checkingBalance(),
       auditRows,
     }),
@@ -405,7 +408,7 @@ it('repeat recovery across a module reset is idempotent (no second debit, no sec
   expect(rec2.data?.status).toBe('executed'); // reports the CURRENT persisted status
   expect(stored.status).toBe('executed'); // unchanged — never downgraded
   expect(await p.executionReceipt.count({ where: { userId, key: id } })).toBe(1); // ONE receipt
-  expect(await debitCount(200)).toBe(1); // no second ledger movement
-  expect(await checkingBalance()).toBe(CHECKING_BALANCE - 200); // no second debit
+  expect(await debitCount('200.00')).toBe(1); // no second ledger movement
+  expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '200.00')); // No second debit.
   expect(auditRows).toBe(1); // no second execution audit (`exec:<id>` dedupe key)
 });

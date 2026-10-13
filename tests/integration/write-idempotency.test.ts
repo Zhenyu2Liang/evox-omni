@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
+import { toJson } from '@/lib/json';
 import { NextRequest } from 'next/server';
 import { getOrCreateSession, executeGatedTool } from '@/agent';
 import { runSubmitPlan } from '@/agent/tools/planning';
@@ -18,16 +19,16 @@ async function confirm(id:string,s:string,code?:string){const res=await (code?ve
 
 it('cancel preserves the executed truth when a transfer is ledgered before result persistence',async()=>{
  const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
- const result=await runSubmitPlan(userId,{goal:'转账后取消',nodes:[node('transfer_money',{name:'张伟',amount:200})]},{sessionId:s,runTool:runner(s)});
+ const result=await runSubmitPlan(userId,{goal:'转账后取消',nodes:[node('transfer_money',{name:'张伟',amount:'200'})]},{sessionId:s,runTool:runner(s)});
  const plan:any=result.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
  const original=gateway.recordActionResult.bind(gateway),reached=deferred(),release=deferred();
  vi.spyOn(gateway,'recordActionResult').mockImplementation(async(...args:any[])=>{if(args[0]===action.id){reached.release();await release.promise;}return (original as any)(...args);});
  const confirming=confirm(action.id,s);let cancelled:any,response:any;
  try{await bounded(reached.promise);cancelled=await task(plan.id,'cancel',s);}finally{release.release();response=await confirming;}
  const stored=await p.pendingAction.findUnique({where:{id:action.id}});const account=await p.account.findFirst({where:{userId,type:'CHECKING'}});
- const debits=await p.transaction.findMany({where:{userId,channel:'TRANSFER',direction:'DEBIT',amount:-200}});
- console.log('REVIEW_EXECUTED_TRUTH',JSON.stringify({planStatus:cancelled.status,responseStatus:response.status,storedStatus:stored?.status,balance:account?.balance,debits:debits.map(x=>x.amount)}));
- expect(account?.balance).toBe(23380);expect(debits.length).toBe(1);expect(response.status).toBe('executed');expect(stored?.status).toBe('executed');
+ const debits=await p.transaction.findMany({where:{userId,channel:'TRANSFER',direction:'DEBIT',amountMinor:-20000n}});
+ console.log('REVIEW_EXECUTED_TRUTH',toJson({planStatus:cancelled.status,responseStatus:response.status,storedStatus:stored?.status,balance:account?.balanceMinor,debits:debits.map(x=>x.amountMinor)}));
+ expect(account?.balanceMinor).toBe(2338000n);expect(debits.length).toBe(1);expect(response.status).toBe('executed');expect(stored?.status).toBe('executed');
 });
 
 it('a virtual card node cannot create another card during the action-to-node persistence window',async()=>{
@@ -48,8 +49,8 @@ it('a virtual card node cannot create another card during the action-to-node per
 it('a distinct redemption action cannot report another credit for an already redeemed holding',async()=>{
  const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
  const call=()=>executeGatedTool({sessionId:s,userId,toolName:'redeem_investment',args:{holdingId:'holding_wenjiana'},userRequest:'赎回理财'});
- const a=await call();const first=await confirm(a.pendingActionId!,s,'123456');const firstBalance=(await p.account.findFirst({where:{userId,type:'CHECKING'}}))!.balance;
- const b=await call();const second=await confirm(b.pendingActionId!,s,'123456');const secondBalance=(await p.account.findFirst({where:{userId,type:'CHECKING'}}))!.balance;
- console.log('REVIEW_REDEEM_IDENTITY',JSON.stringify({firstAction:a.pendingActionId,secondAction:b.pendingActionId,firstOk:first.ok,secondOk:second.ok,secondStatus:second.status,secondResult:second.result,firstBalance,secondBalance}));
- expect(first.ok).toBe(true);expect(firstBalance).toBe(28630);expect(secondBalance).toBe(firstBalance);expect(second.ok).toBe(false);
+ const a=await call();const first=await confirm(a.pendingActionId!,s,'123456');const firstBalance=(await p.account.findFirst({where:{userId,type:'CHECKING'}}))!.balanceMinor;
+ const b=await call();const second=await confirm(b.pendingActionId!,s,'123456');const secondBalance=(await p.account.findFirst({where:{userId,type:'CHECKING'}}))!.balanceMinor;
+ console.log('REVIEW_REDEEM_IDENTITY',toJson({firstAction:a.pendingActionId,secondAction:b.pendingActionId,firstOk:first.ok,secondOk:second.ok,secondStatus:second.status,secondResult:second.result,firstBalance,secondBalance}));
+ expect(first.ok).toBe(true);expect(firstBalance).toBe(2863000n);expect(secondBalance).toBe(firstBalance);expect(second.ok).toBe(false);
 });

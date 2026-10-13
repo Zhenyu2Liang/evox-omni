@@ -49,10 +49,11 @@ const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** Recipient 张伟 — the parked transfer's payee (the money-moved-at-most-once probe). */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 
 /** The parked transfer amount (≤ ¥1000 ⇒ confirmation-only / YELLOW at PARK time). */
-const TRANSFER_AMOUNT = 200;
+const TRANSFER_AMOUNT = '200';
 /** The natural-language request the parked transfer is attributed to (audit + gate context). */
 const TRANSFER_REQUEST = `给张伟转${TRANSFER_AMOUNT}元`;
 
@@ -178,9 +179,9 @@ function parkingBarrier(sessionId: string): ParkingBarrier {
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to 张伟 (the money-moved-at-most-once probe). */
@@ -255,7 +256,7 @@ describe('[integration] cancel during authorization — the cancel WINS (lands, 
     // NOTHING moved: no 张伟 debit, the balance is untouched and the day total is still ¥0.
     expect(await zhangweiTransfers()).toHaveLength(0);
     expect(await checkingBalance()).toBe(SEEDED_BALANCE);
-    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(0);
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe('0.00');
 
     // NO newly-executable PendingAction survives for the session (the revoked one is `cancelled`).
     expect(await executableActions(sessionId)).toHaveLength(0);
@@ -310,9 +311,9 @@ describe('[integration] cancel during authorization — the CONFIRM WINS (lands,
     // The ledger reflects ONLY the authorized movement: exactly ONE ¥200 debit to 张伟.
     const transfers = await zhangweiTransfers();
     expect(transfers).toHaveLength(1);
-    expect(transfers[0].amount).toBe(-TRANSFER_AMOUNT);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - TRANSFER_AMOUNT);
-    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(TRANSFER_AMOUNT);
+    expect(transfers[0].amountMinor).toBe(-moneyToCents(TRANSFER_AMOUNT));
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
+    expect(await security.risk.computeDailyTransferTotal(DEMO_USER_ID)).toBe(normalizeMoney(TRANSFER_AMOUNT));
 
     // The action is TERMINAL (`executed`): the refused cancel left NO re-executable action behind.
     expect(await executableActions(sessionId)).toHaveLength(0);

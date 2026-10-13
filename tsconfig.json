@@ -12,6 +12,7 @@
     "moduleResolution": "bundler",
     "jsx": "preserve",
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "incremental": true,
     "baseUrl": ".",
     "paths": {

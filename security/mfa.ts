@@ -12,7 +12,7 @@
  */
 import { AppError, ok, err } from '../lib/errors';
 import type { Result } from '../lib/errors';
-import { MFA_CODE, MFA_MAX_ATTEMPTS } from '../lib/constants';
+import { MFA_MAX_ATTEMPTS } from '../lib/constants';
 import {
   getPendingAction,
   getMfaChallenge,
@@ -23,6 +23,19 @@ import {
 } from '../lib/db/repositories/pendingAction';
 import { isLocked, recordFailure, recordSuccess, resolveBreakerOwner } from './circuit-breaker';
 import { recordSecurityEvent } from '../audit';
+import { realNow } from '../lib/clock';
+import { prisma } from '../lib/db/client';
+import { requestDigest } from '../lib/ledger';
+import { safeParse } from '../lib/json';
+import { canonicalCommandArgs } from '../lib/contracts/command';
+import { stepUpAuthenticator } from './step-up-authenticator';
+
+export const MFA_CHALLENGE_TTL_MS = 5 * 60_000;
+
+function challengeDigest(action: { userId: string; toolName: string; argsJson: string }): string {
+  return requestDigest({ userId: action.userId, toolName: action.toolName,
+    args: canonicalCommandArgs(safeParse<Record<string, unknown>>(action.argsJson, {})) });
+}
 
 /** Safe, code-free view of a challenge handed to the caller/UI. */
 export interface MfaChallengeView {
@@ -46,7 +59,7 @@ export interface MfaVerifyResult {
 }
 
 /** Generic, code-free delivery hint shown to the user. */
-const DELIVERY_HINT = '为完成高风险操作，请输入 6 位短信验证码。';
+const DELIVERY_HINT = 'Enter the 6-digit demo verification code. No SMS is sent.';
 
 /** Persisted challenge row shape needed to build a view (structural — no repo import coupling). */
 interface ChallengeRow {
@@ -82,15 +95,23 @@ export async function issueChallenge(actionId: string): Promise<MfaChallengeView
 
   const existing = await getMfaChallenge(actionId);
   if (existing) {
+    if (existing.expiresAt && existing.expiresAt.getTime() > realNow() &&
+        existing.commandDigest === challengeDigest(action)) return toView(existing);
     await resetMfaAttempts(actionId);
-    const refreshed = await updateMfaChallengeStatus(actionId, 'pending');
+    const refreshed = await prisma.mfaChallenge.update({ where: { actionId }, data: {
+      status: 'pending', code: await stepUpAuthenticator().issue(actionId, action.userId),
+      expiresAt: new Date(realNow() + MFA_CHALLENGE_TTL_MS), commandDigest: challengeDigest(action),
+      verifiedAt: null, consumedAt: null,
+    } });
     return toView(refreshed);
   }
 
   const challenge = await createMfaChallenge({
     actionId,
-    code: MFA_CODE,
+    code: await stepUpAuthenticator().issue(actionId, action.userId),
     maxAttempts: MFA_MAX_ATTEMPTS,
+    expiresAt: new Date(realNow() + MFA_CHALLENGE_TTL_MS),
+    commandDigest: challengeDigest(action),
   });
   return toView(challenge);
 }
@@ -115,6 +136,11 @@ export async function verify(actionId: string, code: string): Promise<Result<Mfa
     return err(new AppError('NOT_FOUND', `未找到待处理操作: ${actionId}`));
   }
   const sessionId = action.sessionId;
+  if (challenge.consumedAt) return err(new AppError('MFA_FAILED', 'This verification challenge has already been consumed.'));
+  if (!challenge.expiresAt || challenge.expiresAt.getTime() <= realNow() ||
+      (challenge.commandDigest !== null && challenge.commandDigest !== challengeDigest(action))) {
+    return err(new AppError('MFA_FAILED', 'The verification challenge expired or the operation changed. Request a new challenge.'));
+  }
 
   // LOCKED wins: a locked session or a locked challenge fails verification regardless of the
   // submitted code. Do NOT mark verified, do NOT reset the breaker, do NOT consume an attempt
@@ -137,8 +163,8 @@ export async function verify(actionId: string, code: string): Promise<Result<Mfa
   }
 
   // Correct code → verify + reset the consecutive-failure counter.
-  if (code === challenge.code) {
-    await updateMfaChallengeStatus(actionId, 'verified');
+  if (stepUpAuthenticator().verify(challenge.code, code)) {
+    await prisma.mfaChallenge.update({ where: { actionId }, data: { status: 'verified', verifiedAt: new Date(realNow()) } });
     await recordSuccess(sessionId);
     return ok({
       ok: true,

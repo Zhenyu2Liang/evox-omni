@@ -23,6 +23,7 @@ import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import { assertConditionResolvable, evaluateCondition, topologicalOrder, transitiveDependents } from './dag';
+import { settleToolNode } from './node-outcome';
 
 /**
  * Outcome of one tool invocation, as reported by the injected `runTool` port.
@@ -343,8 +344,8 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
    */
   const setNode = async (result: TaskNodeResult): Promise<void> => {
     results.set(result.id, { ...result });
-    await deps.onNodeUpdate({ ...result });
     await deps.persistNode?.(plan.id, { ...result });
+    await deps.onNodeUpdate({ ...result });
     // (the full plan snapshot is NOT re-persisted per node — see the walk below)
   };
 
@@ -480,52 +481,12 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
         return 'stopped';
       }
 
-      // Gated tool: it did NOT execute — park the node for human confirmation/MFA.
-      if (outcome.requiresConfirmation || (!outcome.ok && outcome.pendingActionId !== undefined)) {
-        const isRed = (node as { riskLevel?: unknown }).riskLevel === 'RED';
+      const settled = settleToolNode(node, outcome, startedAt, now());
+      await setNode(settled);
+      if (settled.status === 'waiting_confirmation' || settled.status === 'waiting_verification') {
         planStatus = 'waiting_confirmation';
-        const parked: TaskNodeResult & { pendingActionId?: string } = {
-          id: node.id,
-          name: node.name,
-          status: isRed ? 'waiting_verification' : 'waiting_confirmation',
-          tool: node.tool,
-          output: outcome.pendingActionId !== undefined ? { pendingActionId: outcome.pendingActionId } : undefined,
-          error: outcome.error,
-          startedAt,
-          endedAt: now(),
-        };
-        if (outcome.pendingActionId !== undefined) parked.pendingActionId = outcome.pendingActionId;
-        await setNode(parked);
         return 'parked';
       }
-
-      if (outcome.ok) {
-        let output = outcome.data;
-        if (output === undefined && outcome.summary !== undefined) output = { summary: outcome.summary };
-        const success: TaskNodeResult & { summary?: string } = {
-          id: node.id,
-          name: node.name,
-          status: 'success',
-          tool: node.tool,
-          output,
-          startedAt,
-          endedAt: now(),
-        };
-        if (outcome.summary !== undefined) success.summary = outcome.summary;
-        await setNode(success);
-        return 'settled';
-      }
-
-      // Failure: record it and continue — never throw.
-      await setNode({
-        id: node.id,
-        name: node.name,
-        status: 'failed',
-        tool: node.tool,
-        error: outcome.error ?? `tool '${node.tool ?? node.id}' failed`,
-        startedAt,
-        endedAt: now(),
-      });
       return 'settled';
     } finally {
       // A parked/success/failed node ALWAYS releases its claim, so a later
@@ -595,6 +556,10 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
       }
 
       const node = order[index];
+      if (await ownerLost()) {
+        claimLost = true;
+        break;
+      }
       const existing = results.get(node.id);
 
       // Already settled in a prior pass/run — leave the recorded result intact.
@@ -623,8 +588,18 @@ export async function runPlan(plan: TaskPlan, deps: PlanDeps, opts: RunPlanOptio
 
       if (node.kind === 'condition') {
         const startedAt = now();
-        if (node.condition) assertConditionResolvable(node.condition, buildScope());
-        const truthy = node.condition ? evaluateCondition(node.condition, buildScope()) : false;
+        let truthy: boolean;
+        try {
+          if (!node.condition) throw new AppError('VALIDATION', 'The condition step has no expression.');
+          const scope = buildScope();
+          assertConditionResolvable(node.condition, scope);
+          truthy = evaluateCondition(node.condition, scope);
+        } catch (error) {
+          await setNode({ id: node.id, name: node.name, status: 'failed',
+            error: AppError.from(error).message, startedAt, endedAt: now() });
+          index += 1;
+          continue;
+        }
         await setNode({
           id: node.id,
           name: node.name,

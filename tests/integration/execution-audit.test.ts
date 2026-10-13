@@ -11,8 +11,8 @@
  *  (1) CRITICAL-FAILURE → ROLLBACK — if the execution audit insert throws, the settle rolls back
  *      ATOMICALLY with the debit, ledger and receipt. The authorized action stays recoverable;
  *      later recovery performs its first committed debit and audit exactly once.
- *  (2) BACKFILL — a HISTORICAL row whose side effect posted but whose execution audit is missing
- *      (a legacy/pre-upgrade row) is BACKFILLED on recovery: the recover path re-writes the audit
+ *  (2) INTEGRITY REPAIR — a committed action whose execution audit was deleted by a storage fault
+ *      is repaired on recovery: the recover path re-writes the audit
  *      from the committed receipt, lands `executed` (NEVER `failed`) and a REPEAT recovery adds no
  *      second audit and no second debit. (Empirically verified — see the assertions.)
  *  (3) IDEMPOTENT REPEAT — two consecutive recoveries leave EXACTLY ONE execution audit and
@@ -31,10 +31,11 @@ import { auditStore } from '@/audit/audit-logger';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as recoverPost } from '@/app/api/actions/[id]/recover/route';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
+import { centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
 
 const userId = 'user_liming';
 /** Seeded 活期 balance (fixtures ACCOUNTS) — debited by the transferred amount. */
-const CHECKING_BALANCE = 23580;
+const CHECKING_BALANCE = '23580.00';
 
 beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
@@ -59,7 +60,7 @@ const confirm = (id: string, s: string) => postAction(confirmPost, id, s, 'confi
 const recover = (id: string, s: string) => postAction(recoverPost, id, s, 'recover');
 
 /** Park a STANDALONE (no plan link) `transfer_money` and return its `PendingAction` id. */
-async function parkTransfer(sessionId: string, amount: number): Promise<string> {
+async function parkTransfer(sessionId: string, amount: string): Promise<string> {
   const gated = await executeGatedTool({
     sessionId,
     userId,
@@ -99,9 +100,9 @@ function failExecutionAuditOnce(id: string) {
   return { spy, fired: () => injected, calls: () => spy.mock.calls.length };
 }
 
-const debitRows = (amount: number) =>
+const debitRows = (amount: string) =>
   getTestPrisma().transaction.count({
-    where: { userId, amount: -amount, counterpartyId: 'contact_zhangwei' },
+    where: { userId, amountMinor: -moneyToCents(amount), counterpartyId: 'contact_zhangwei' },
   });
 /** The execution audit row for an action is uniquely identified by its `dedupeKey`. */
 const executionAudits = (id: string) =>
@@ -110,13 +111,13 @@ const executionAudits = (id: string) =>
 const receiptCount = (id: string) =>
   getTestPrisma().executionReceipt.count({ where: { userId, key: id } });
 const checkingBalance = async () =>
-  (await getTestPrisma().account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
+  centsToMoney((await getTestPrisma().account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
 
 it('a CRITICAL execution-audit insert failure rolls back the debit, ledger and receipt before recovery', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
-  const id = await parkTransfer(s, 200);
-  expect(await debitRows(200)).toBe(0);
+  const id = await parkTransfer(s, '200.00');
+  expect(await debitRows('200.00')).toBe(0);
 
   // Make the execution-audit insert (dedupeKey `exec:<id>`) throw ONCE.
   const fault = failExecutionAuditOnce(id);
@@ -132,7 +133,7 @@ it('a CRITICAL execution-audit insert failure rolls back the debit, ledger and r
 
   // The required audit now shares the banking transaction. This strengthens the former contract:
   // an audit-storage failure must leave ZERO business writes, not a posted-but-unaudited transfer.
-  expect(await debitRows(200)).toBe(0);
+  expect(await debitRows('200.00')).toBe(0);
   expect(await checkingBalance()).toBe(CHECKING_BALANCE);
   expect(await receiptCount(id)).toBe(0);
   expect(await executionAudits(id)).toBe(0);
@@ -142,7 +143,7 @@ it('a CRITICAL execution-audit insert failure rolls back the debit, ledger and r
   const recovered = await recover(id, s);
   const after = await p.pendingAction.findUniqueOrThrow({ where: { id } });
   const audits = await executionAudits(id);
-  const debits = await debitRows(200);
+  const debits = await debitRows('200.00');
 
   console.log(
     'REVIEW_AUDIT_ROLLBACK',
@@ -167,13 +168,13 @@ it('a CRITICAL execution-audit insert failure rolls back the debit, ledger and r
   expect(after.resultJson ? JSON.parse(after.resultJson).ok : null).toBe(true);
   expect(audits).toBe(1); // exactly ONE execution audit — backfilled by the recovery
   expect(debits).toBe(1); // STILL exactly one debit — the recovery never re-ran the tool
-  expect(await checkingBalance()).toBe(CHECKING_BALANCE - 200);
+  expect(await checkingBalance()).toBe(subtractMoney(CHECKING_BALANCE, '200.00'));
 });
 
-it('a HISTORICAL already-posted but missing-audit row is idempotently BACKFILLED on recovery (never failed, no second debit)', async () => {
+it('repairs an audit-storage deletion from a current committed receipt without another debit', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
-  const id = await parkTransfer(s, 200);
+  const id = await parkTransfer(s, '200.00');
 
   // Build the committed WEDGE: the SDK side effect commits, but the result+status transaction
   // genuinely rolls back — so NO execution audit row is ever written for this action.
@@ -187,13 +188,11 @@ it('a HISTORICAL already-posted but missing-audit row is idempotently BACKFILLED
   expect(wedged.status).toBe('confirmed');
   expect(wedged.resultJson).toBeNull();
   expect(await receiptCount(id)).toBe(1); // the side effect DID commit (receipt present)
-  expect(await debitRows(200)).toBe(1);
+  expect(await debitRows('200.00')).toBe(1);
 
-  // Simulate a LEGACY/pre-upgrade row whose side effect posted without an audit: ensure the
-  // execution audit is genuinely absent before recovery.
+  // Inject a storage-integrity fault after the current debit and mandatory audit committed.
   const deleted = await p.auditLog.deleteMany({ where: { dedupeKey: `exec:${id}` } });
-  // The audit now committed with the debit before the status-write fault. Remove that audit only
-  // to model a genuine pre-upgrade posted record with a missing audit, preserving the backfill test.
+  // Recovery must use the current verified receipt to repair the deleted audit exactly once.
   expect(deleted.count).toBe(1);
   expect(await executionAudits(id)).toBe(0);
 
@@ -201,7 +200,7 @@ it('a HISTORICAL already-posted but missing-audit row is idempotently BACKFILLED
   const recovered1 = await recover(id, s);
   const after1 = await p.pendingAction.findUniqueOrThrow({ where: { id } });
   const audit1 = await executionAudits(id);
-  const debit1 = await debitRows(200);
+  const debit1 = await debitRows('200.00');
 
   expect(recovered1.status).toBe(200);
   expect(recovered1.body.data?.status).toBe('executed');
@@ -214,7 +213,7 @@ it('a HISTORICAL already-posted but missing-audit row is idempotently BACKFILLED
   const recovered2 = await recover(id, s);
   const after2 = await p.pendingAction.findUniqueOrThrow({ where: { id } });
   const audit2 = await executionAudits(id);
-  const debit2 = await debitRows(200);
+  const debit2 = await debitRows('200.00');
 
   console.log(
     'REVIEW_AUDIT_BACKFILL',
@@ -242,7 +241,7 @@ it('a HISTORICAL already-posted but missing-audit row is idempotently BACKFILLED
 it('a repeat recovery is idempotent — exactly ONE execution audit and ONE debit, never downgraded', async () => {
   const s = (await getOrCreateSession(userId)).sessionId;
   const p = getTestPrisma();
-  const id = await parkTransfer(s, 200);
+  const id = await parkTransfer(s, '200.00');
 
   const wedge = wedgeResultTransaction();
   const first = await confirm(id, s);
@@ -253,14 +252,14 @@ it('a repeat recovery is idempotent — exactly ONE execution audit and ONE debi
   const rec1 = await recover(id, s);
   const after1 = await p.pendingAction.findUniqueOrThrow({ where: { id } });
   const audit1 = await executionAudits(id);
-  const debit1 = await debitRows(200);
+  const debit1 = await debitRows('200.00');
   const balance1 = await checkingBalance();
 
   // Recovery #2 — the SAME entry point again (a repeat click / a refresh-driven recovery).
   const rec2 = await recover(id, s);
   const after2 = await p.pendingAction.findUniqueOrThrow({ where: { id } });
   const audit2 = await executionAudits(id);
-  const debit2 = await debitRows(200);
+  const debit2 = await debitRows('200.00');
   const balance2 = await checkingBalance();
 
   console.log(
@@ -285,7 +284,7 @@ it('a repeat recovery is idempotent — exactly ONE execution audit and ONE debi
   expect(after1.status).toBe('executed');
   expect(audit1).toBe(1);
   expect(debit1).toBe(1);
-  expect(balance1).toBe(CHECKING_BALANCE - 200);
+  expect(balance1).toBe(subtractMoney(CHECKING_BALANCE, '200.00'));
 
   expect(rec2.status).toBe(200);
   expect(rec2.body.data?.status).toBe('executed'); // reports the persisted status truthfully

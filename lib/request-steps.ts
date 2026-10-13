@@ -3,7 +3,7 @@ import { AppError } from './errors';
 import { moneyToCents } from './money';
 import { REQUEST_COMMANDS } from './request-constraints';
 
-type Step = { tool: string; span: string };
+export type RequestedStep = { tool: string; span: string };
 const WRITE_TOOLS = new Set(['reserve_budget', 'transfer_money', 'set_card_limit', 'freeze_card',
   'unfreeze_card', 'report_lost_card', 'cancel_subscription', 'set_subscription_reminder',
   'create_scheduled_task', 'subscribe_investment', 'redeem_investment', 'apply_virtual_card', 'change_password']);
@@ -12,7 +12,7 @@ const NEGATION = '(?:不要|不必|不用|无需|不需要|不要求)';
 const SEPARATOR = new RegExp(`(?:[，,。；;\\n]+|(?:随后|然后|接着|再|最后|并且|以及|同时|和|但是|但|不过|而)(?=\\s*(?:${NEGATION}\\s*)?${VERB}))`, 'g');
 
 /** Bounded explicit Chinese commands only; prose is never proof of authorization/completeness. */
-export function requestedSteps(request: string): Step[] {
+export function requestedSteps(request: string): RequestedStep[] {
   const explicit = request.replace(/(?:只有|仅当)[^，,。；;\n]*?成功(?:之后|以后|后)?\s*[，,]?\s*(?:才|再)\s*/g, '')
     // A timing/bypass demand attached to a transfer is not a second payment instruction.
     // This removes no permissions: the original transfer remains subject to confirmation/MFA.
@@ -51,18 +51,18 @@ const identityFields: Readonly<Record<string, string[]>> = {
   cancel_subscription: ['subscriptionId'], set_subscription_reminder: ['subscriptionId'],
 };
 
-function matches(node: TaskNodeSpec, step: Step, names: ReadonlyMap<string, string[]>): boolean {
+export function matchesRequestedStep(node: TaskNodeSpec, step: RequestedStep, names: ReadonlyMap<string, string[]>): boolean {
   if (node.kind !== 'tool' || node.tool !== step.tool) return false;
   let amountSpan = step.span.toLowerCase();
   for (const aliases of names.values()) for (const alias of aliases) {
     if (/[^\d.*\s]/.test(alias)) amountSpan = amountSpan.replaceAll(alias.toLowerCase(), '');
   }
   if (node.args?.amount !== undefined) {
-    if (typeof node.args.amount !== 'number' || !Number.isFinite(node.args.amount)) return false;
+    if (typeof node.args.amount !== 'string') return false;
     try {
       const expected = moneyToCents(node.args.amount);
       const amounts = [...amountSpan.matchAll(/(\d+(?:\.\d+)?)(万)?/g)].flatMap(m => {
-        try { return [moneyToCents(Number(m[1]) * (m[2] ? 10000 : 1))]; } catch { return []; }
+        try { return [moneyToCents(m[1]) * (m[2] ? 10000n : 1n)]; } catch { return []; }
       });
       if (!amounts.includes(expected)) return false;
     } catch { return false; }
@@ -82,7 +82,7 @@ export function assertCompleteRequestedPlan(nodes: readonly TaskNodeSpec[], requ
   const steps = requestedSteps(request);
   const available = new Set(nodes.filter(node => node.kind === 'tool'));
   for (const step of steps) {
-    const candidate = [...available].find(node => matches(node, step, names));
+    const candidate = [...available].find(node => matchesRequestedStep(node, step, names));
     if (!candidate) throw new AppError('VALIDATION', '计划遗漏步骤或对象/金额与请求不一致，尚未生成办理入口。' + COMPLETE_PLAN_NOTICE);
     available.delete(candidate);
   }

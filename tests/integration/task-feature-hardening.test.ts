@@ -34,10 +34,10 @@ async function confirmNode(sessionId: string, taskId: string, nodeId: string) {
 async function partialPlan() {
   const sessionId = (await getOrCreateSession(userId)).sessionId;
   const result = await runSubmitPlan(userId, { goal: 'partial plan', nodes: [
-    node('budget', 'reserve_budget', { name: 'rollback-budget', amount: 99.99 }),
+    node('budget', 'reserve_budget', { name: 'rollback-budget', amount: '99.99' }),
     node('reminder', 'create_scheduled_task', { name: 'rollback-reminder', kind: 'REMINDER', runAtLocal: '2026-11-20T09:00' }, ['budget']),
-    node('transfer', 'transfer_money', { name: '张伟', amount: 12.34 }, ['reminder']),
-    node('limit', 'set_card_limit', { cardId: 'card_credit', category: '娱乐', amount: 1500.25 }, ['transfer']),
+    node('transfer', 'transfer_money', { name: '张伟', amount: '12.34' }, ['reminder']),
+    node('limit', 'set_card_limit', { cardId: 'card_credit', category: '娱乐', amount: '1500.25' }, ['transfer']),
   ] }, { sessionId, runTool: runner(sessionId) });
   expect(result.ok).toBe(true);
   const taskId = (result.data as TaskPlan).id;
@@ -70,10 +70,10 @@ describe('trusted product selection', () => {
     expect(comparison.ok).toBe(false);
     expect(comparison.error).toContain('不会自动替换');
     const purchase = await executeGatedTool({ sessionId, userId, toolName: 'subscribe_investment',
-      args: { productId: 'prod_wenjiana', amount: 1000.13 }, userRequest: request });
+      args: { productId: 'prod_wenjiana', amount: '1000.13' }, userRequest: request });
     expect(purchase.ok).toBe(false);
     expect(await getTestPrisma().pendingAction.count()).toBe(0);
-    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(23580);
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2358000n);
   });
   it('accepts exact quoted names/codes, rejects dropped or substituted known products', async () => {
     await expect(assertRequestedProducts('compare_investments', { productIds: ['prod_wenjiana', 'prod_wenjib'] }, '对比“稳健理财A”和“稳健理财B”的风险')).resolves.toBeUndefined();
@@ -87,7 +87,7 @@ describe('trusted product selection', () => {
   it('preflights the whole plan before a leading automatic write', async () => {
     const sessionId = (await getOrCreateSession(userId)).sessionId;
     const result = await runSubmitPlan(userId, { goal: 'invented goal', nodes: [
-      node('a', 'reserve_budget', { name: 'must-not-exist', amount: 3.33 }),
+      node('a', 'reserve_budget', { name: 'must-not-exist', amount: '3.33' }),
       node('b', 'compare_investments', { productIds: ['prod_wenjiana', 'prod_wenjib'] }),
     ] }, { sessionId, runTool: runner(sessionId), userRequest: () => '先预留3.33元，再对比稳健理财A和进取理财B' });
     expect(result.ok).toBe(false);
@@ -100,10 +100,10 @@ describe('explicit order without false-condition propagation', () => {
   const request = '先预留99.99元出游预算，再查询2026年9月消费；若消费超过999999元就将信用卡娱乐限额设置为1500.25元；最后创建2026年11月20日09:00的出游提醒';
   const nodes: TaskNodeSpec[] = [
     node('reminder', 'create_scheduled_task', { name: 'ordered-reminder', kind: 'REMINDER', runAtLocal: '2026-11-20T09:00' }),
-    node('limit', 'set_card_limit', { cardId: 'card_credit', category: '娱乐', amount: 1500.25 }, ['condition']),
-    { id: 'condition', name: 'condition', kind: 'condition', dependencies: ['spending'], condition: { path: 'spending.total', op: '>', value: 999999 } },
+    node('limit', 'set_card_limit', { cardId: 'card_credit', category: '娱乐', amount: '1500.25' }, ['condition']),
+    { id: 'condition', name: 'condition', kind: 'condition', dependencies: ['spending'], condition: { path: 'spending.total', op: '>', value: '999999' } },
     node('spending', 'analyze_spending', { month: '2026-09' }),
-    node('budget', 'reserve_budget', { name: 'ordered-budget', amount: 99.99 }),
+    node('budget', 'reserve_budget', { name: 'ordered-budget', amount: '99.99' }),
   ];
   it('corrects shuffled root nodes, persists order edges, and still offers the final reminder when the condition is false', async () => {
     const sessionId = (await getOrCreateSession(userId)).sessionId;
@@ -122,15 +122,15 @@ describe('explicit order without false-condition propagation', () => {
     expect(read.data!.data.generation).toBe(plan.generation);
   });
   it('recognizes unpunctuated order and fails closed for repeated ambiguous same-tool steps', () => {
-    expect(enforceRequestedOrder([node('b', 'get_balance'), node('t', 'transfer_money', { amount: 2 })], '先查询余额再转账2元')[1].after).toContain('b');
-    expect(enforceRequestedOrder([node('b', 'get_balance'), node('t', 'transfer_money', { amount: 2 })], '先查询余额，再给张伟转账2元')[1].after).toContain('b');
+    expect(enforceRequestedOrder([node('b', 'get_balance'), node('t', 'transfer_money', { amount: '2' })], '先查询余额再转账2元')[1].after).toContain('b');
+    expect(enforceRequestedOrder([node('b', 'get_balance'), node('t', 'transfer_money', { amount: '2' })], '先查询余额，再给张伟转账2元')[1].after).toContain('b');
     const aliases = new Map([['contact_zhangwei', ['张伟']], ['contact_lihua', ['李华']]]);
     const bound = enforceRequestedOrder([
-      node('a', 'transfer_money', { amount: 2, contactId: 'contact_zhangwei' }),
-      node('b', 'transfer_money', { amount: 2, contactId: 'contact_lihua' }),
+      node('a', 'transfer_money', { amount: '2', contactId: 'contact_zhangwei' }),
+      node('b', 'transfer_money', { amount: '2', contactId: 'contact_lihua' }),
     ], '先转账2元给张伟，再转账2元给李华', aliases);
     expect(bound[1].after).toContain('a');
-    expect(() => enforceRequestedOrder([node('a', 'transfer_money', { amount: 2 }), node('b', 'transfer_money', { amount: 2 })], '先转账2元给张伟，再转账2元给李华')).toThrow('对应关系');
+    expect(() => enforceRequestedOrder([node('a', 'transfer_money', { amount: '2' }), node('b', 'transfer_money', { amount: '2' })], '先转账2元给张伟，再转账2元给李华')).toThrow('对应关系');
   });
 });
 
@@ -138,8 +138,8 @@ describe('cancel snapshot and transactional compensation', () => {
   it('forwards the next RED decision with its own complete summary after a YELLOW confirmation', async () => {
     const sessionId = (await getOrCreateSession(userId)).sessionId;
     const result = await runSubmitPlan(userId, { goal: 'two transfers', nodes: [
-      node('small', 'transfer_money', { name: '张伟', amount: 20 }),
-      node('large', 'transfer_money', { name: '李华', amount: 1200.12 }, ['small']),
+      node('small', 'transfer_money', { name: '张伟', amount: '20' }),
+      node('large', 'transfer_money', { name: '李华', amount: '1200.12' }, ['small']),
     ] }, { sessionId, runTool: runner(sessionId) });
     const taskId = (result.data as TaskPlan).id;
     const first = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { taskId, nodeId: 'small' } });
@@ -151,8 +151,8 @@ describe('cancel snapshot and transactional compensation', () => {
     expect(gate?.actionId).toBe(next.id);
     expect(gate?.action?.tier).toBe('RED');
     expect(gate?.action?.fields).toContainEqual({ label: '收款人', value: '李华' });
-    expect(gate?.action?.fields).toContainEqual({ label: '金额', value: '¥1,200.12' });
-    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(23560);
+    expect(gate?.action?.fields).toContainEqual({ label: 'Amount', value: '¥1,200.12' });
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2356000n);
     expect(next.status).toBe('awaiting_mfa');
   });
   it('returns current generation/time after pause, resume, cancel and rejects late nonterminal UI events', async () => {
@@ -180,8 +180,8 @@ describe('cancel snapshot and transactional compensation', () => {
     expect(responses.map(res => res.status)).toEqual([200, 200]);
     expect((await db.budget.findFirstOrThrow({ where: { name: 'rollback-budget' } })).status).toBe('RELEASED');
     expect((await db.scheduledTask.findFirstOrThrow({ where: { name: 'rollback-reminder' } })).status).toBe('CANCELLED');
-    expect((await db.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balance).toBe(before.balance);
-    expect(await db.transaction.count({ where: { channel: 'TRANSFER', amount: -12.34 } })).toBe(1);
+    expect((await db.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(before.balanceMinor);
+    expect(await db.transaction.count({ where: { channel: 'TRANSFER', amountMinor: -1234n } })).toBe(1);
     expect(await db.agentTaskNode.findMany({ where: { taskId, status: 'success' }, select: { nodeId: true, output: true } })).toEqual(executions);
     expect(await db.auditLog.count({ where: { toolName: 'rollback_task' } })).toBe(3);
     const transfer = responses[0].data!.data.results.find(row => row.id === 'transfer')!;

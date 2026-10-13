@@ -56,17 +56,18 @@ import {
 /** Primary 活期账户 (¥23,580) — the default funding account every transfer debits. */
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { moneyToCents } from '@/lib/money';
+const SEEDED_BALANCE = moneyToCents(CHECKING.balance);
 /** The recipient resolved by name from the seeded contacts. */
 const RECIPIENT_NAME = '张伟';
 
 /** The 🟢 GREEN node used as the COUNTABLE execution probe (one `Budget` row per run). */
-function budgetNode(id: string, name: string, budgetName: string, amount: number, deps: string[] = []): SeedNode {
+function budgetNode(id: string, name: string, budgetName: string, amount: string, deps: string[] = []): SeedNode {
   return { id, name, dependencies: deps, kind: 'tool', tool: 'reserve_budget', args: { name: budgetName, amount } };
 }
 
 /** The YELLOW `transfer_money` node (gated → PARKS for a human decision instead of executing). */
-function transferNode(id: string, amount: number, deps: string[] = []): SeedNode {
+function transferNode(id: string, amount: string, deps: string[] = []): SeedNode {
   return { id, name: `给${RECIPIENT_NAME}转账`, dependencies: deps, kind: 'tool', tool: 'transfer_money', args: { name: RECIPIENT_NAME, amount } };
 }
 
@@ -182,9 +183,9 @@ describe('[integration] POST /api/tasks/[id] pause → resume — no re-executio
   it('pause halts before the pending node; resume skips the successful one and the plan completes', async () => {
     // n1: 🟢 GREEN probe (ONE Budget row). n2: YELLOW transfer → PARKS. n3: GREEN probe (blocked).
     const { sessionId, taskId, plan } = await seedPlan('先预留预算A，再给张伟转200元，最后预留预算B', [
-      budgetNode('n1', '预留预算A', '预留预算A', 1200),
-      transferNode('n2', 200, ['n1']),
-      budgetNode('n3', '预留预算B', '预留预算B', 800, ['n2']),
+      budgetNode('n1', '预留预算A', '预留预算A', '1200'),
+      transferNode('n2', '200', ['n1']),
+      budgetNode('n3', '预留预算B', '预留预算B', '800', ['n2']),
     ]);
 
     // The seeded run executed n1 (exactly one Budget A), parked n2, and never reached n3.
@@ -266,15 +267,15 @@ describe('[integration] POST /api/tasks/[id] pause → resume — no re-executio
     expect(await countBudgets('预留预算B')).toBe(1);
     // The real transfer moved exactly ¥200 out of the checking account.
     const account = await getTestPrisma().account.findUnique({ where: { id: CHECKING.id } });
-    expect(account!.balance).toBe(SEEDED_BALANCE - 200);
+    expect(account!.balanceMinor).toBe(SEEDED_BALANCE - moneyToCents('200.00'));
   });
 });
 
 describe('[integration] POST /api/tasks/[id] cancel — terminal state, executed work preserved', () => {
   it('cancels the remaining nodes, keeps the executed node, revokes the parked action, moves no money', async () => {
     const { sessionId, taskId, plan } = await seedPlan('先预留预算C，再给张伟转200元', [
-      budgetNode('n1', '预留预算C', '预留预算C', 600),
-      transferNode('n2', 200, ['n1']),
+      budgetNode('n1', '预留预算C', '预留预算C', '600'),
+      transferNode('n2', '200', ['n1']),
     ]);
     expect(nodeStatusOf(plan, 'n1')).toBe('success');
     expect(nodeStatusOf(plan, 'n2')).toBe('waiting_confirmation');
@@ -307,7 +308,7 @@ describe('[integration] POST /api/tasks/[id] cancel — terminal state, executed
     // The executed node's side effect is NOT rolled back (irreversible) and is NOT duplicated.
     expect(await countBudgets('预留预算C')).toBe(1);
     // NOTHING moved: the parked transfer never ran and the balance is untouched.
-    expect((await getTestPrisma().account.findUnique({ where: { id: CHECKING.id } }))!.balance).toBe(SEEDED_BALANCE);
+    expect((await getTestPrisma().account.findUnique({ where: { id: CHECKING.id } }))!.balanceMinor).toBe(SEEDED_BALANCE);
     // The parked action was REVOKED through the gateway (a later confirm can never move money).
     const revoked = await getTestPrisma().pendingAction.findUnique({ where: { id: parkedActionId! } });
     expect(revoked!.status).toBe('cancelled');
@@ -317,8 +318,8 @@ describe('[integration] POST /api/tasks/[id] cancel — terminal state, executed
 describe('[integration] POST /api/tasks/[id] retry — re-runs ONLY the failed node', () => {
   it('re-runs the failed gated node (fresh gate) while the successful node is not re-executed', async () => {
     const { sessionId, taskId, plan } = await seedPlan('先预留预算R，再给张伟转200元', [
-      budgetNode('n1', '预留预算R', '预留预算R', 600),
-      transferNode('n2', 200, ['n1']),
+      budgetNode('n1', '预留预算R', '预留预算R', '600'),
+      transferNode('n2', '200', ['n1']),
     ]);
     expect(nodeStatusOf(plan, 'n1')).toBe('success');
     expect(nodeStatusOf(plan, 'n2')).toBe('waiting_confirmation');
@@ -332,7 +333,7 @@ describe('[integration] POST /api/tasks/[id] retry — re-runs ONLY the failed n
     // Drain EVERY account so the confirmed transfer FAILS honestly (`INSUFFICIENT_FUNDS`) whichever
     // account the SDK resolves as the funding source — the ONLY way a plan node becomes `failed`
     // (a gated node parks, it never fails inline).
-    await getTestPrisma().account.updateMany({ where: { userId: DEMO_USER_ID }, data: { balance: 0 } });
+    await getTestPrisma().account.updateMany({ where: { userId: DEMO_USER_ID }, data: { balanceMinor: 0n } });
 
     const confirmRes = await postJson<Envelope<{ ok: boolean; status: string; tier: string }>>(
       confirmPost,
@@ -384,9 +385,9 @@ describe('[integration] POST /api/tasks/[id] retry — re-runs ONLY the failed n
 describe('[integration] GET /api/tasks/[id] + GET /api/actions — refresh restore', () => {
   it('GET /api/tasks/[id] returns per-node statuses AND the parked node pendingActionId', async () => {
     const { sessionId, taskId, plan } = await seedPlan('先预留预算D，再给张伟转200元，最后预留预算E', [
-      budgetNode('n1', '预留预算D', '预留预算D', 300),
-      transferNode('n2', 200, ['n1']),
-      budgetNode('n3', '预留预算E', '预留预算E', 400, ['n2']),
+      budgetNode('n1', '预留预算D', '预留预算D', '300'),
+      transferNode('n2', '200', ['n1']),
+      budgetNode('n3', '预留预算E', '预留预算E', '400', ['n2']),
     ]);
     const parkedActionId = readPendingActionId(resultOf(plan, 'n2').output);
     expect(typeof parkedActionId).toBe('string');

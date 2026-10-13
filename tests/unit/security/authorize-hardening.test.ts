@@ -29,6 +29,7 @@ import { securityGateway, type GatewayContext } from '@/security/security-gatewa
 import { getTestPrisma, useFreshDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { newSessionId } from '@/tests/helpers/scenario';
+import { moneyToCents } from '@/lib/money';
 
 // The per-test DB reset + seed (`useFreshDatabase`) is I/O heavy and can exceed the default hook
 // timeout; give it more room (assertions/determinism untouched).
@@ -51,7 +52,7 @@ function ctxFor(
 }
 
 /** Park a YELLOW `transfer_money` action (status `pending`) for the given session. */
-async function parkYellowTransfer(sessionId: string, amount: number): Promise<PendingAction> {
+async function parkYellowTransfer(sessionId: string, amount: string): Promise<PendingAction> {
   const ctx = ctxFor('transfer_money', { amount, contactId: 'contact_zhangwei' }, sessionId);
   return securityGateway.createPendingAction(ctx, await securityGateway.evaluate(ctx));
 }
@@ -66,12 +67,12 @@ async function statusOf(actionId: string): Promise<string | undefined> {
  * Insert a raw outgoing TRANSFER debit (NEGATIVE amount) into the demo user's checking account —
  * only TRANSFER/DEBIT rows are counted by `computeDailyTransferTotal` / the re-risk check.
  */
-async function insertOutgoingTransfer(amount: number, occurredAt: Date): Promise<void> {
+async function insertOutgoingTransfer(amount: string, occurredAt: Date): Promise<void> {
   await getTestPrisma().transaction.create({
     data: {
       accountId: CHECKING_ACCOUNT_ID,
       userId: DEMO_USER_ID,
-      amount, // negative = DEBIT (outflow)
+      amountMinor: moneyToCents(amount),
       currency: 'CNY',
       direction: 'DEBIT',
       category: '转账',
@@ -96,7 +97,7 @@ async function expectAppError(
 describe('authorizeAction · exactly-once claim (no duplicate re-authorization)', () => {
   it('a repeat confirm on an already-confirmed action throws CONFLICT and does NOT re-authorize', async () => {
     const sessionId = newSessionId();
-    const action = await parkYellowTransfer(sessionId, 200);
+    const action = await parkYellowTransfer(sessionId, '200.00');
     expect(await statusOf(action.id)).toBe('pending');
 
     const first = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId });
@@ -118,7 +119,7 @@ describe('authorizeAction · exactly-once claim (no duplicate re-authorization)'
 describe('authorizeAction / cancelAction · settling transitions reject the other path', () => {
   it('confirm-after-cancel throws CONFLICT', async () => {
     const sessionId = newSessionId();
-    const action = await parkYellowTransfer(sessionId, 200);
+    const action = await parkYellowTransfer(sessionId, '200.00');
     const cancelled = await securityGateway.cancelAction(action.id, { userId: DEMO_USER_ID, sessionId });
     expect(cancelled.status).toBe('cancelled');
 
@@ -128,7 +129,7 @@ describe('authorizeAction / cancelAction · settling transitions reject the othe
 
   it('cancel-after-confirm throws CONFLICT', async () => {
     const sessionId = newSessionId();
-    const action = await parkYellowTransfer(sessionId, 200);
+    const action = await parkYellowTransfer(sessionId, '200.00');
     await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId });
     expect(await statusOf(action.id)).toBe('confirmed');
 
@@ -140,7 +141,7 @@ describe('authorizeAction / cancelAction · settling transitions reject the othe
 describe('authorizeAction / cancelAction · ownership (userId / sessionId)', () => {
   it('a mismatching userId is rejected with SECURITY_DENIED (confirm + cancel) and the row is untouched', async () => {
     const sessionId = newSessionId();
-    const action = await parkYellowTransfer(sessionId, 200);
+    const action = await parkYellowTransfer(sessionId, '200.00');
 
     await expectAppError(
       securityGateway.authorizeAction(action.id, { userId: 'user_someone_else', sessionId }),
@@ -155,7 +156,7 @@ describe('authorizeAction / cancelAction · ownership (userId / sessionId)', () 
 
   it('a mismatching sessionId is rejected with SECURITY_DENIED', async () => {
     const sessionId = newSessionId();
-    const action = await parkYellowTransfer(sessionId, 200);
+    const action = await parkYellowTransfer(sessionId, '200.00');
 
     await expectAppError(
       securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId: newSessionId() }),
@@ -170,7 +171,7 @@ describe('authorizeAction / cancelAction · ownership (userId / sessionId)', () 
 
   it('the matching userId/sessionId is accepted', async () => {
     const sessionId = newSessionId();
-    const action = await parkYellowTransfer(sessionId, 200);
+    const action = await parkYellowTransfer(sessionId, '200.00');
 
     const res = await securityGateway.authorizeAction(action.id, {
       userId: DEMO_USER_ID,
@@ -185,12 +186,12 @@ describe('authorizeAction · execution-time transfer re-risk (anti bypass)', () 
   it('a YELLOW-parked ¥600 transfer escalates to MFA when the FRESH daily total exceeds ¥1000, then completes WITH the code', async () => {
     const sessionId = newSessionId();
     // Parked at ¥600 with no prior transfers → YELLOW (confirmation only).
-    const action = await parkYellowTransfer(sessionId, 600);
+    const action = await parkYellowTransfer(sessionId, '600.00');
     expect(action.tier).toBe('YELLOW');
     expect(action.requiresMfa).toBe(false);
 
     // Another ¥600 transfer lands earlier today, so the FRESH total is ¥600 → ¥600 + ¥600 = ¥1200 > ¥1000.
-    await insertOutgoingTransfer(-600, DEMO_DAY_MORNING);
+    await insertOutgoingTransfer('-600.00', DEMO_DAY_MORNING);
 
     // Confirmation ALONE must now be refused: the transfer escalated to RED at execution time.
     const escalated = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId });
@@ -210,10 +211,10 @@ describe('authorizeAction · execution-time transfer re-risk (anti bypass)', () 
 
   it('a YELLOW-parked transfer that stays under the FRESH limit confirms with no code', async () => {
     const sessionId = newSessionId();
-    const action = await parkYellowTransfer(sessionId, 600);
+    const action = await parkYellowTransfer(sessionId, '600.00');
 
     // A prior ¥300 → ¥600 + ¥300 = ¥900 ≤ ¥1000 → still YELLOW.
-    await insertOutgoingTransfer(-300, DEMO_DAY_MORNING);
+    await insertOutgoingTransfer('-300.00', DEMO_DAY_MORNING);
 
     const res = await securityGateway.authorizeAction(action.id, { userId: DEMO_USER_ID, sessionId });
     expect(res.ok).toBe(true);
@@ -225,7 +226,7 @@ describe('authorizeAction · execution-time transfer re-risk (anti bypass)', () 
 describe('recordActionResult · true terminal status', () => {
   it("persists 'executed' and 'failed', and a confirm after 'executed' is CONFLICT", async () => {
     const sessionId = newSessionId();
-    const executed = await parkYellowTransfer(sessionId, 200);
+    const executed = await parkYellowTransfer(sessionId, '200.00');
     await securityGateway.recordActionResult(executed.id, 'executed');
     expect(await statusOf(executed.id)).toBe('executed');
 
@@ -233,7 +234,7 @@ describe('recordActionResult · true terminal status', () => {
     await expectAppError(securityGateway.authorizeAction(executed.id, { userId: DEMO_USER_ID, sessionId }), 'CONFLICT');
     expect(await statusOf(executed.id)).toBe('executed');
 
-    const failed = await parkYellowTransfer(sessionId, 200);
+    const failed = await parkYellowTransfer(sessionId, '200.00');
     await securityGateway.recordActionResult(failed.id, 'failed');
     expect(await statusOf(failed.id)).toBe('failed');
   });
@@ -241,7 +242,7 @@ describe('recordActionResult · true terminal status', () => {
   it("is exposed on the securityGateway object (facade-visible) and does not throw for a failure status", async () => {
     expect(typeof securityGateway.recordActionResult).toBe('function');
     const sessionId = newSessionId();
-    const action = await parkYellowTransfer(sessionId, 200);
+    const action = await parkYellowTransfer(sessionId, '200.00');
     await expect(securityGateway.recordActionResult(action.id, 'failed')).resolves.toBeUndefined();
   });
 });
@@ -249,7 +250,7 @@ describe('recordActionResult · true terminal status', () => {
 describe('authorizeAction · circuit breaker stays the first hard gate', () => {
   it("a locked session refuses a confirm with status 'locked' (row unchanged)", async () => {
     const sessionId = newSessionId();
-    const action = await parkYellowTransfer(sessionId, 200);
+    const action = await parkYellowTransfer(sessionId, '200.00');
 
     for (let i = 0; i < MFA_MAX_ATTEMPTS; i += 1) {
       await recordFailure(sessionId);

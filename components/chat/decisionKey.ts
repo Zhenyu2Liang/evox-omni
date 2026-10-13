@@ -37,7 +37,7 @@ export function decisionKey(action: DecisionKeyInput): string {
     title: typeof record.title === 'string' ? record.title : '',
     toolName: typeof record.toolName === 'string' ? record.toolName : '',
     tier: typeof record.tier === 'string' ? record.tier : '',
-    amount: typeof record.amount === 'number' ? record.amount : null,
+    amount: typeof record.amount === 'string' ? record.amount : null,
     requiresMfa: record.requiresMfa === true,
     fields,
   });

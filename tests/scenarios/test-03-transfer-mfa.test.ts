@@ -37,9 +37,9 @@ const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 
 /** The exact RED transfer: ¥5000 to 张伟 (> the ¥1000 threshold). */
-const TRANSFER_ARGS: { contactId: string; amount: number } = {
+const TRANSFER_ARGS: { contactId: string; amount: string } = {
   contactId: ZHANGWEI.id,
-  amount: 5000,
+  amount: '5000',
 };
 const USER_REQUEST = '给张伟转5000元';
 
@@ -52,10 +52,11 @@ function zhangweiTransfers(): Promise<Transaction[]> {
 }
 
 /** The live 活期账户 balance. */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<bigint> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return account.balanceMinor;
 }
+import { moneyToCents } from '@/lib/money';
 
 /** Drive a fresh turn whose single model step proposes the RED transfer (blocked by the gateway). */
 async function proposeRedTransfer() {
@@ -88,7 +89,7 @@ describe('Scenario 3 — 给张伟转5000元 (RED MFA)', () => {
       userRequest: USER_REQUEST,
     });
 
-    expect(TRANSFER_ARGS.amount).toBeGreaterThan(DAILY_TRANSFER_LIMIT);
+    expect(moneyToCents(TRANSFER_ARGS.amount)).toBeGreaterThan(moneyToCents(DAILY_TRANSFER_LIMIT));
     expect(evaluation.tier).toBe('RED');
     expect(evaluation.requiresConfirmation).toBe(true);
     expect(evaluation.requiresMfa).toBe(true);
@@ -124,11 +125,11 @@ describe('Scenario 3 — 给张伟转5000元 (RED MFA)', () => {
     // A RED action parks as `awaiting_mfa` (the gateway sets that status for MFA-gated calls).
     expect(row.status).toBe('awaiting_mfa');
     // The ORIGINAL validated args are what the gateway persisted (executed later, never model text).
-    expect(JSON.parse(row.argsJson)).toMatchObject(TRANSFER_ARGS);
+    expect(JSON.parse(row.argsJson)).toMatchObject({ ...TRANSFER_ARGS, amount: '5000.00' });
 
     // No money has moved while the action waits for the human decision.
     expect(await zhangweiTransfers()).toHaveLength(0);
-    expect(await checkingBalance()).toBe(CHECKING.balance);
+    expect(await checkingBalance()).toBe(moneyToCents(CHECKING.balance));
   });
 
   it('confirm without an MFA code does NOT execute the transfer (still awaiting MFA / no Transaction)', async () => {
@@ -142,7 +143,7 @@ describe('Scenario 3 — 给张伟转5000元 (RED MFA)', () => {
     expect(decide.mfa).toBeUndefined();
 
     expect(await zhangweiTransfers()).toHaveLength(0);
-    expect(await checkingBalance()).toBe(CHECKING.balance);
+    expect(await checkingBalance()).toBe(moneyToCents(CHECKING.balance));
 
     const row = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: actionId } });
     expect(row.status).toBe('awaiting_mfa');
@@ -157,13 +158,13 @@ describe('Scenario 3 — 给张伟转5000元 (RED MFA)', () => {
     const transfers = await zhangweiTransfers();
     expect(transfers).toHaveLength(1);
     expect(transfers[0].direction).toBe('DEBIT');
-    expect(transfers[0].amount).toBe(-5000);
+    expect(transfers[0].amountMinor).toBe(-500_000n);
     expect(transfers[0].category).toBe('转账');
     expect(transfers[0].channel).toBe('TRANSFER');
     expect(transfers[0].counterpartyId).toBe(ZHANGWEI.id);
 
     // 23,580 → 18,580.
-    expect(await checkingBalance()).toBe(CHECKING.balance - 5000);
+    expect(await checkingBalance()).toBe(moneyToCents(CHECKING.balance) - 500_000n);
 
     const row = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: actionId } });
     expect(row.status).toBe('confirmed');

@@ -26,11 +26,11 @@ export function providedRequestFields(
   const fields: GuidanceField[] = [];
   const named = products.filter(product => [product.id, product.name, product.code].some(name => text.includes(name)));
   if (named.length === 1) fields.push('product');
-  const amounts = new Set<number>();
+  const amounts = new Set<bigint>();
   for (const match of text.matchAll(/(?<![\d.+-])(?:[¥￥]\s*(\d+(?:\.\d+)?)(?![\d.])|(\d+(?:\.\d+)?)\s*元)/g)) {
     try {
       const cents = moneyToCents(match[1] ?? match[2]);
-      if (cents > 0) amounts.add(cents);
+      if (cents > 0n) amounts.add(cents);
     } catch { /* A fractional-cent/invalid amount is still missing a valid value. */ }
   }
   if (amounts.size === 1) fields.push('amount');

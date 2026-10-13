@@ -26,6 +26,7 @@ import { PRODUCTS, ACCOUNTS, DEMO_USER_ID } from '../helpers/fixtures';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import { MFA_CODE } from '@/lib/constants';
 import { security } from '@/security';
+import { moneyToCents } from '@/lib/money';
 
 /** 稳健理财A — the RED subscription target (R2, min ¥1,000). */
 const PRODUCT = PRODUCTS.find((product) => product.name === '稳健理财A') ?? PRODUCTS[0];
@@ -33,7 +34,7 @@ const PRODUCT = PRODUCTS.find((product) => product.name === '稳健理财A') ?? 
 const CHECKING = ACCOUNTS.find((account) => account.id === 'acct_checking') ?? ACCOUNTS[0];
 
 /** The subscription amount from the demo prompt "买5000元稳健理财A". */
-const SUBSCRIBE_AMOUNT = 5000;
+const SUBSCRIBE_AMOUNT = '5000';
 const USER_MESSAGE = '买5000元稳健理财A';
 
 /**
@@ -66,7 +67,7 @@ describe('Scenario 9 — 买5000元稳健理财A (RED MFA)', () => {
     const evaluation = security.permission.evaluateTool(
       'subscribe_investment',
       { productId: PRODUCT.id, amount: SUBSCRIBE_AMOUNT },
-      { userId: DEMO_USER_ID, sessionId, dailyTransferTotal: 0 },
+      { userId: DEMO_USER_ID, sessionId, dailyTransferTotal: '0.00' },
     );
     expect(evaluation.tier).toBe('RED');
     expect(evaluation.requiresMfa).toBe(true);
@@ -116,7 +117,7 @@ describe('Scenario 9 — 买5000元稳健理财A (RED MFA)', () => {
     expect(row?.status).toBe('awaiting_mfa');
     expect(JSON.parse(row?.argsJson ?? '{}')).toMatchObject({
       productId: PRODUCT.id,
-      amount: SUBSCRIBE_AMOUNT,
+      amount: '5000.00',
     });
   });
 
@@ -128,8 +129,8 @@ describe('Scenario 9 — 买5000元稳健理财A (RED MFA)', () => {
     const prisma = getTestPrisma();
     const holdingsBefore = await prisma.investmentHolding.count();
     const balanceBefore = (await prisma.account.findUnique({ where: { id: CHECKING.id } }))
-      ?.balance;
-    expect(balanceBefore).toBe(CHECKING.balance);
+      ?.balanceMinor;
+    expect(balanceBefore).toBe(moneyToCents(CHECKING.balance));
 
     const confirmRes = await confirmAction(agent, actionId);
 
@@ -138,7 +139,7 @@ describe('Scenario 9 — 买5000元稳健理财A (RED MFA)', () => {
     expect(confirmRes.toolEvents).toHaveLength(0);
 
     expect(await prisma.investmentHolding.count()).toBe(holdingsBefore);
-    expect((await prisma.account.findUnique({ where: { id: CHECKING.id } }))?.balance).toBe(
+    expect((await prisma.account.findUnique({ where: { id: CHECKING.id } }))?.balanceMinor).toBe(
       balanceBefore,
     );
 
@@ -166,8 +167,8 @@ describe('Scenario 9 — 买5000元稳健理财A (RED MFA)', () => {
     const created = after.find((holding) => !before.some((prev) => prev.id === holding.id));
     expect(created?.productId).toBe(PRODUCT.id);
     expect(created?.userId).toBe(DEMO_USER_ID);
-    expect(created?.amount).toBe(SUBSCRIBE_AMOUNT);
-    expect(created?.marketValue).toBe(SUBSCRIBE_AMOUNT);
+    expect(created?.principalAmountMinor).toBe(moneyToCents(SUBSCRIBE_AMOUNT));
+    expect(created?.estimatedMarketValue).toBe(String(SUBSCRIBE_AMOUNT));
     expect(created?.status).toBe('HOLDING');
   });
 
@@ -177,14 +178,14 @@ describe('Scenario 9 — 买5000元稳健理财A (RED MFA)', () => {
     expect(actionId).not.toBe('');
 
     const prisma = getTestPrisma();
-    const before = (await prisma.account.findUnique({ where: { id: CHECKING.id } }))?.balance;
-    expect(before).toBe(CHECKING.balance);
+    const before = (await prisma.account.findUnique({ where: { id: CHECKING.id } }))?.balanceMinor;
+    expect(before).toBe(moneyToCents(CHECKING.balance));
 
     await verifyAction(agent, actionId, MFA_CODE);
 
-    const after = (await prisma.account.findUnique({ where: { id: CHECKING.id } }))?.balance;
-    expect(after).toBe(CHECKING.balance - SUBSCRIBE_AMOUNT);
-    expect(after).toBe(18580);
+    const after = (await prisma.account.findUnique({ where: { id: CHECKING.id } }))?.balanceMinor;
+    expect(after).toBe(moneyToCents(CHECKING.balance) - moneyToCents(SUBSCRIBE_AMOUNT));
+    expect(after).toBe(1_858_000n);
   });
 
   it('the audit row records mfaRequired true and mfaResult success (riskLevel RED)', async () => {

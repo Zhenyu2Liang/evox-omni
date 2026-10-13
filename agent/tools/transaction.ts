@@ -14,7 +14,7 @@ import { banking } from '@/banking-sdk';
 import type { AnomalyReport, TransactionQuery, TransactionView } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
 import { AppError } from '@/lib/errors';
-import { formatCNY } from '@/lib/money';
+import { addMoney, absoluteMinor, centsToMoney, formatCNY, moneyToCents } from '@/lib/money';
 import type { ToolExecutionResult } from './index';
 
 /** `get_transactions` params — window/category/limit filter (SDK `TransactionQuery`). */
@@ -130,10 +130,11 @@ function toTransactionQuery(args: Record<string, unknown>): TransactionQuery {
 /** Concise Chinese summary of a transaction list (the text the model narrates). */
 function summarizeTransactions(rows: TransactionView[]): string {
   if (rows.length === 0) return '未找到符合条件的交易。';
-  const income = rows.filter((row) => row.amount > 0).reduce((acc, row) => acc + row.amount, 0);
+  const income = rows.filter(row => moneyToCents(row.amount) > 0n)
+    .reduce((sum, row) => addMoney(sum, row.amount), '0.00');
   const expense = rows
-    .filter((row) => row.amount < 0)
-    .reduce((acc, row) => acc + Math.abs(row.amount), 0);
+    .filter(row => moneyToCents(row.amount) < 0n)
+    .reduce((sum, row) => addMoney(sum, centsToMoney(absoluteMinor(moneyToCents(row.amount)))), '0.00');
   const latest = rows[0];
   return (
     `共 ${rows.length} 笔交易：收入 ${formatCNY(income)}、支出 ${formatCNY(expense)}；` +

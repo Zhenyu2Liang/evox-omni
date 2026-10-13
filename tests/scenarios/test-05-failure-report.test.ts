@@ -22,6 +22,7 @@ import { newSessionId, runTurn, toolEventsOf, verifyAction, type ScenarioResult 
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '../helpers/db';
 import { ACCOUNTS, CONTACTS } from '../helpers/fixtures';
 import { MFA_CODE } from '@/lib/constants';
+import { moneyToCents } from '@/lib/money';
 
 beforeEach(async () => {
   await resetDatabase();
@@ -35,7 +36,7 @@ const RECIPIENT = CONTACTS.find((c) => c.name === '张伟')!;
 const CHECKING = ACCOUNTS.find((a) => a.type === 'CHECKING')!;
 
 /** Far above both the ¥1,000 RED threshold and the ¥23,580 balance ⇒ RED + INSUFFICIENT_FUNDS. */
-const TRANSFER_AMOUNT = 30000;
+const TRANSFER_AMOUNT = '30000';
 /**
  * Fragment of the SDK's insufficient-funds message. `runTransferMoney` catches the SDK's
  * `AppError('INSUFFICIENT_FUNDS')` and returns `{ ok:false, error: <message> }`, so the CODE is not
@@ -156,9 +157,9 @@ describe('Scenario 5 — 转账失败如实上报 (INSUFFICIENT_FUNDS)', () => {
     const prisma = getTestPrisma();
 
     // The funding account is untouched (a transfer would debit it).
-    expect(CHECKING.balance).toBe(23580);
+    expect(CHECKING.balance).toBe('23580.00');
     const account = await prisma.account.findUnique({ where: { id: CHECKING.id } });
-    expect(account?.balance).toBe(CHECKING.balance);
+    expect(account?.balanceMinor).toBe(moneyToCents(CHECKING.balance));
 
     // No new ledger row at all, and specifically nothing to 张伟.
     expect(await prisma.transaction.count()).toBe(txCountBefore);

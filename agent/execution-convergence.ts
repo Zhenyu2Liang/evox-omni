@@ -92,7 +92,7 @@ function readStored(resultJson: string | null): ToolExecutionResult | undefined 
 /**
  * Decide how a persisted `PendingAction` must converge, from PERSISTED FACTS ONLY (priority order):
  *
- * 1. Verified receipt + ledger, or a matching legacy deterministic ledger, proves success.
+ * 1. A verified current receipt and its committed business evidence prove success.
  * 2. A normal completion uses the same decision. Lost results after a committed SDK transaction
  *    require reconciliation unless persisted evidence above proves the actual outcome.
  * 3. Live markers/persisted leases defer recovery; stored results are reused without re-execution.
@@ -117,7 +117,7 @@ export async function decideConvergence(
   try {
     committed = await committedExecutionResult(action);
   } catch (error) {
-    // Conflicting/corrupt historical evidence is UNKNOWN, never proof of failure. Database read
+    // Conflicting/corrupt execution evidence is UNKNOWN, never proof of failure. Database read
     // failures must propagate so callers cannot overwrite an outcome they could not inspect.
     if (!(error instanceof AppError) || error.code !== 'CONFLICT') throw error;
     return { status: 'needs_reconciliation', result: { ok: false, error: error.message }, evidence: 'none', write: true };

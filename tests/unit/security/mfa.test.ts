@@ -37,7 +37,7 @@ function seedAction(sessionId: string) {
     sessionId,
     userId: DEMO_USER_ID,
     toolName: 'transfer_money',
-    args: { amount: 5000, toName: '张伟' },
+    args: { amount: '5000.00', contactId: 'contact_zhangwei' },
     tier: 'RED',
     requiresMfa: true,
     status: 'awaiting_mfa',
@@ -114,7 +114,7 @@ describe('mfa · issueChallenge', () => {
     expect(row?.code).toBe(MFA_CODE);
   });
 
-  it('re-issuing for the same action refreshes the challenge view', async () => {
+  it('re-issuing a valid challenge preserves the attempt counter and verification state', async () => {
     const sessionId = newSessionId();
     const action = await seedAction(sessionId);
     await issueChallenge(action.id);
@@ -125,26 +125,26 @@ describe('mfa · issueChallenge', () => {
     expect(failed.attemptsLeft).toBe(MFA_MAX_ATTEMPTS - 1);
     expect((await getChallenge(action.id))?.attempts).toBe(1);
 
-    // ...re-issuing resets it.
+    // Re-issuing cannot replenish attempts and bypass the strong verification threshold.
     const reissued = await issueChallenge(action.id);
     expect(reissued.actionId).toBe(action.id);
-    expect(reissued.attempts).toBe(0);
+    expect(reissued.attempts).toBe(1);
     expect(reissued.maxAttempts).toBe(MFA_MAX_ATTEMPTS);
     expect(reissued.verified).toBe(false);
 
     const afterReset = await getTestPrisma().mfaChallenge.findUnique({
       where: { actionId: action.id },
     });
-    expect(afterReset?.attempts).toBe(0);
+    expect(afterReset?.attempts).toBe(1);
     expect(afterReset?.status).toBe('pending');
 
-    // Re-issuing also de-verifies an already-verified challenge.
+    // A valid verification belongs to this immutable operation until expiry or consumption.
     expect(unwrap(await verify(action.id, MFA_CODE)).ok).toBe(true);
     expect((await getChallenge(action.id))?.verified).toBe(true);
 
     const reissuedAfterSuccess = await issueChallenge(action.id);
-    expect(reissuedAfterSuccess.verified).toBe(false);
-    expect(reissuedAfterSuccess.attempts).toBe(0);
+    expect(reissuedAfterSuccess.verified).toBe(true);
+    expect(reissuedAfterSuccess.attempts).toBe(1);
   });
 
   it('an unknown / non-existent action surfaces a thrown AppError', async () => {

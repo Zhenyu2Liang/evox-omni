@@ -21,13 +21,16 @@
  * dependency is merely hoisted ABOVE the repo root (e.g. a linked worktree).
  */
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { cliCommand, removeSqliteFiles, resolveRepoRoot, resolveTsxBin } from './helpers/prisma-cli';
+import { resetDemoDatabase } from '@/scripts/db-push';
 
 const repoRoot = resolveRepoRoot();
 const prismaDir = path.join(repoRoot, 'prisma');
+const { DatabaseSync } = createRequire(path.join(repoRoot, 'package.json'))('node:sqlite') as typeof import('node:sqlite');
 
 /** A cheap change-detection stamp (`mtimeMs:size`), or `(absent)` when the file does not exist. */
 function fileStamp(filePath: string): string {
@@ -40,6 +43,42 @@ function fileStamp(filePath: string): string {
 }
 
 describe('scripts/db-push.ts — cold deploy under RUST_LOG=warn', () => {
+  it('recreates a WAL-mode demo database with the current schema after an explicit reset', () => {
+    const dbName = `verify-reset-${process.pid}.db`;
+    const dbPath = path.join(prismaDir, dbName);
+    const sidecars = [dbName, `${dbName}-wal`, `${dbName}-shm`, `${dbName}-journal`];
+    const shared = ['dev.db', 'test.db', 'e2e.db'].map(name => path.join(prismaDir, name));
+    const before = shared.map(fileStamp);
+    removeSqliteFiles(prismaDir, sidecars);
+    try {
+      const initial = new DatabaseSync(dbPath);
+      initial.exec('PRAGMA journal_mode = WAL; CREATE TABLE "ResetFixture" ("id" TEXT PRIMARY KEY); INSERT INTO "ResetFixture" VALUES (\'simulated\');');
+      expect(initial.prepare('PRAGMA journal_mode').get()?.journal_mode).toBe('wal');
+      initial.close();
+      const invocation = cliCommand(resolveTsxBin(repoRoot), ['tsx', path.join('scripts', 'db-push.ts'), '--force-reset', '--skip-generate']);
+      const result = spawnSync(invocation.command, invocation.args, {
+        cwd: repoRoot, encoding: 'utf8', env: { ...process.env, DATABASE_URL: `file:${dbPath}`, RUST_LOG: 'warn' },
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, `${result.stdout ?? ''}${result.stderr ?? ''}`).toBe(0);
+      const current = new DatabaseSync(dbPath);
+      try {
+        expect(current.prepare('PRAGMA integrity_check').get()?.integrity_check).toBe('ok');
+        expect(current.prepare('SELECT name FROM sqlite_schema WHERE name = ?').get('ResetFixture')).toBeUndefined();
+        expect(current.prepare('PRAGMA table_info("InvestmentProduct")').all())
+          .toContainEqual(expect.objectContaining({ name: 'annual_yield_rate', type: 'TEXT' }));
+      } finally { current.close(); }
+    } finally {
+      expect(shared.map(fileStamp)).toEqual(before);
+      removeSqliteFiles(prismaDir, sidecars);
+    }
+  }, 120_000);
+
+  it('refuses to reset an out-of-workspace or non-file database', () => {
+    expect(() => resetDemoDatabase('file:../../outside.db', repoRoot)).toThrow('inside the current workspace');
+    expect(() => resetDemoDatabase('file::memory:', repoRoot)).toThrow('persistent SQLite file');
+  });
+
   it(
     'self-provisions a MISSING isolated SQLite file and exits 0',
     () => {

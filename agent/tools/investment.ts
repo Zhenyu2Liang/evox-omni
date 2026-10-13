@@ -23,8 +23,10 @@ import type {
   ProductView,
 } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
-import { formatCNY } from '@/lib/money';
+import { addMoney, centsToMoney, formatCNY, moneyToCents, type MoneyInput } from '@/lib/money';
+import { addDecimal, formatDecimalCNY, rateRatioToPercent } from '@/lib/decimal';
 import type { ToolExecutionResult, ToolRunOptions } from './index';
+import { MoneyParameter } from './money-schema';
 
 /* ----------------------------------------------------------- list_investments */
 
@@ -71,7 +73,7 @@ export async function runListInvestments(
     const detail = products
       .map(
         (p) =>
-          `${p.code} ${p.name}（${p.riskLevel}，预期年化 ${p.expectedRate}%，期限 ${p.termDays} 天，起投 ${formatCNY(p.minAmount)}）`,
+          `${p.code} ${p.name}（${p.riskLevel}，预期年化 ${rateRatioToPercent(p.annualYieldRate)}%，期限 ${p.termDays} 天，起投 ${formatCNY(p.minAmount)}）`,
       )
       .join('；');
     return {
@@ -131,7 +133,7 @@ export async function runCompareInvestments(
     const top = comparison.highestRateId ? byId.get(comparison.highestRateId) : undefined;
     const low = comparison.lowestRiskId ? byId.get(comparison.lowestRiskId) : undefined;
     const parts = [`已对比 ${comparison.products.length} 只理财产品`];
-    if (top) parts.push(`最高预期年化：${top.name} ${top.expectedRate}%`);
+    if (top) parts.push(`最高预期年化：${top.name} ${rateRatioToPercent(top.annualYieldRate)}%`);
     if (low) parts.push(`最低风险：${low.name}（${low.riskLevel}）`);
     return { ok: true, data: comparison, summary: `${parts.join('；')}。` };
   } catch (e) {
@@ -177,12 +179,12 @@ export async function runGetInvestmentHoldings(
     if (holdings.length === 0) {
       return { ok: true, data: holdings, summary: '当前没有理财持仓。' };
     }
-    const principal = holdings.reduce((sum, h) => sum + h.amount, 0);
-    const profit = holdings.reduce((sum, h) => sum + (h.profit ?? 0), 0);
+    const principal = holdings.reduce((sum, holding) => addMoney(sum, holding.amount), '0.00');
+    const profit = holdings.reduce((sum, holding) => addDecimal(sum, holding.profit ?? '0'), '0');
     return {
       ok: true,
       data: holdings,
-      summary: `共 ${holdings.length} 笔持仓，本金合计 ${formatCNY(principal)}，收益合计 ${formatCNY(profit)}。`,
+      summary: `Holdings: ${holdings.length}; total principal: ${formatCNY(principal)}; total estimated return: ${formatDecimalCNY(profit)}.`,
     };
   } catch (e) {
     return { ok: false, error: AppError.from(e).message };
@@ -194,7 +196,7 @@ export async function runGetInvestmentHoldings(
 /** `subscribe_investment` params (SDK `SubscribeInvestmentInput`; `userId` server-injected). */
 export const SubscribeInvestmentParams = Type.Object({
   productId: Type.String({ description: '产品 id' }),
-  amount: Type.Number({ description: '申购金额（CNY，需 ≥ 产品起投金额）' }),
+  amount: MoneyParameter,
 });
 export type SubscribeInvestmentArgs = Static<typeof SubscribeInvestmentParams>;
 
@@ -228,12 +230,9 @@ export async function runSubscribeInvestment(
 ): Promise<ToolExecutionResult> {
   try {
     const productId = args.productId;
-    const amount = args.amount;
+    const amount = centsToMoney(moneyToCents(args.amount));
     if (typeof productId !== 'string' || productId === '') {
       throw new AppError('VALIDATION', 'subscribe_investment 需要 productId');
-    }
-    if (typeof amount !== 'number' || !Number.isFinite(amount)) {
-      throw new AppError('VALIDATION', 'subscribe_investment 需要合法的 amount');
     }
     const result: InvestResult = await banking.investment.subscribeInvestment({
       userId,
@@ -302,7 +301,7 @@ export async function runRedeemInvestment(
     const result: InvestResult = await banking.investment.redeemInvestment({
       userId,
       holdingId,
-      expectedRedemptionAmount: args.expectedRedemptionAmount as number | undefined,
+      expectedRedemptionAmount: args.expectedRedemptionAmount as MoneyInput | undefined,
       // At-most-once: forwarded verbatim to the SDK's `idempotencyKey` (absent ⇒ unchanged behavior).
       idempotencyKey: opts?.idempotencyKey,
     });

@@ -1,5 +1,7 @@
 # Dependencies
 node_modules/
+.npm-cache/
+.pnpm-store/
 .pnp
 .pnp.js
 
@@ -37,6 +39,7 @@ prisma/*.db-shm
 
 # Testing
 /coverage
+/output/playwright/
 .vitest/
 test-results/
 

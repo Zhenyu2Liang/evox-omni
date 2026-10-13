@@ -37,6 +37,12 @@ import { requiresCompletePlan, COMPLETE_PLAN_NOTICE } from '@/lib/request-steps'
 import { isWriteTool } from '@/security/permission-engine';
 import { preflightRequestedPlan } from './tools/planning';
 import { AppError } from '@/lib/errors';
+import type { ConversationIntent } from '@/lib/contracts/intent';
+import { intentRequestText } from './intent-context';
+import type { AgentRunJournal } from './durable';
+import { ledgerKeyForAction } from '@/lib/ledger';
+import { prisma } from '@/lib/db/client';
+import { newId } from '@/lib/ids';
 
 /**
  * The security gateway's runtime surface.
@@ -79,7 +85,7 @@ export interface BankingAgentOptions {
    * Optional LIVE DAG-progress sink: invoked with the full plan snapshot after every node change of
    * a `submit_plan` run, so `./run-turn` can stream `plan_update` and the parked-node decision
    * events. When omitted, a `submit_plan` turn still surfaces its plan card but streams no
-   * per-node progress (backward compatible — the model/agent pipeline is unchanged).
+   * per-node progress through the workflow stream.
    */
   onPlanUpdate?: (plan: TaskPlan) => void | Promise<void>;
   /**
@@ -89,6 +95,8 @@ export interface BankingAgentOptions {
    * behavior (the config-resolved live/mock provider).
    */
   provider?: ModelRuntime;
+  conversationIntent?: () => ConversationIntent | undefined;
+  journal?: AgentRunJournal;
 }
 export interface BankingAgentRuntime {
   agent: Agent;
@@ -131,18 +139,23 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   const restored = options.snapshot?.agentState;
 
   /** Current user request, read lazily so it always reflects the live transcript (audit-only). */
-  const latestUserRequest = (): string => latestUserText(agent.state.messages);
+  const latestUserRequest = (): string => intentRequestText(options.conversationIntent?.(), latestUserText(agent.state.messages));
 
   // `userId` is SERVER-INJECTED here — never taken from tool args or model text. The planner's node
   // runner is the gateway-authorized execution path, so a gated plan node still parks for a human.
   const registry = createToolRegistry(userId, {
-    automaticWriteFence: () => buildAutomaticWriteFence(sessionId),
+    automaticWriteFence: async () => {
+      const fence = await buildAutomaticWriteFence(sessionId);
+      return async client => { await options.journal?.assertLeaseOwned(client); await fence(client); };
+    },
+    operationIdentity: async callId => options.journal?.invocationForCall(callId)?.operationKey ?? newId('operation'),
     // SIDE-EFFECT audit for the model's automatic (non-plan) tool calls: the business write and its
     // strict audit row commit in the SAME SDK transaction (a failing audit rolls the write back).
     automaticWriteAudit: () => ({ sessionId, userRequest: latestUserRequest() }),
     submitPlan: {
       sessionId,
       userRequest: latestUserRequest,
+      conversationIntent: options.conversationIntent,
       runTool: (toolName, args, ctx) =>
         executeGatedTool({
           sessionId,
@@ -152,6 +165,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
           userRequest: latestUserRequest(),
           taskId: ctx.taskId,
           nodeId: ctx.nodeId,
+          runtimeFence: client => options.journal?.assertLeaseOwned(client) ?? Promise.resolve(),
         }),
       ...(options.onPlanUpdate !== undefined ? { onPlanUpdate: options.onPlanUpdate } : {}),
     },
@@ -196,7 +210,14 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
       toolName,
       args,
       userRequest: latestUserRequest(),
+      invocationId: options.journal?.invocationForCall(context.toolCall.id)?.id,
     });
+
+    if (auth.action && options.journal) {
+      const stored = await prisma.pendingAction.findUniqueOrThrow({ where: { id: auth.action.id } });
+      await options.journal.parkInvocation(context.toolCall.id,
+        auth.action.requiresMfa ? 'waiting_verification' : 'waiting_confirmation', ledgerKeyForAction(stored));
+    }
 
     if (auth.evaluation.blocked) {
       stopAfterDecision = true;
@@ -254,6 +275,8 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
         transcript: options.snapshot?.transcript ?? [],
         createdAt: options.snapshot?.createdAt ?? now,
         updatedAt: now,
+        revision: options.snapshot?.revision ?? 0,
+        intent: options.snapshot?.intent,
       };
     },
     dispose(): void {

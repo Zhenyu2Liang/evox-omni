@@ -10,6 +10,7 @@
 import type { Subscription as SubscriptionRow } from '@prisma/client';
 import { subscriptions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
+import { centsToMoney } from '../lib/money';
 import { runInTransaction } from './tx';
 import type { SubscriptionCycle, SubscriptionStatus, SubscriptionView } from './types';
 
@@ -18,7 +19,7 @@ function toSubscriptionView(row: SubscriptionRow): SubscriptionView {
   return {
     id: row.id,
     name: row.name,
-    amount: row.amount,
+    amount: centsToMoney(row.amountMinor),
     cycle: row.cycle as SubscriptionCycle,
     nextChargeAt: row.nextChargeAt.getTime(),
     status: row.status as SubscriptionStatus,

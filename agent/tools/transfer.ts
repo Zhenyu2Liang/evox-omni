@@ -16,18 +16,19 @@
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
-import { attachExecutionFence, banking } from '@/banking-sdk';
+import { banking } from '@/banking-sdk';
 import type { TransferResult } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
-import { formatCNY } from '@/lib/money';
+import { formatCNY, normalizeTransferAmount } from '@/lib/money';
 import type { ToolExecutionResult, ToolRunOptions } from './index';
+import { MoneyParameter } from './money-schema';
 
 /** `transfer_money` params (SDK `TransferInput` minus the server-injected `userId`). */
 export const TransferMoneyParams = Type.Object({
   contactId: Type.Optional(Type.String({ description: '收款联系人 id（优先）' })),
   phone: Type.Optional(Type.String({ description: '或按手机号指定收款人' })),
   name: Type.Optional(Type.String({ description: '或按姓名指定收款人（重名时报冲突）' })),
-  amount: Type.Number({ description: '转账金额（正数，CNY，最多两位小数）' }),
+  amount: MoneyParameter,
   remark: Type.Optional(Type.String({ description: '转账备注' })),
   sourceAccountId: Type.Optional(Type.String({ description: '付款账户；默认主活期账户' })),
 });
@@ -71,10 +72,7 @@ export async function runTransferMoney(
   opts?: ToolRunOptions,
 ): Promise<ToolExecutionResult> {
   try {
-    const amount = args.amount;
-    if (typeof amount !== 'number' || !Number.isFinite(amount)) {
-      throw new AppError('VALIDATION', 'transfer_money 需要合法的 amount');
-    }
+    const amount = normalizeTransferAmount(args.amount);
     const sdkInput = {
       userId,
       contactId: typeof args.contactId === 'string' ? args.contactId : undefined,
@@ -86,10 +84,6 @@ export async function runTransferMoney(
       // At-most-once: absent ⇒ unchanged behavior; present ⇒ the ledger row id is deterministic.
       idempotencyKey: opts?.idempotencyKey,
     };
-    // WRITE-BOUNDARY fence: carried on the SDK INPUT OBJECT so the SDK awaits it INSIDE its write
-    // transaction, immediately before the debit. A throwing fence rolls the transaction back with NO
-    // debit / ledger row / receipt.
-    if (opts?.fence !== undefined) attachExecutionFence(sdkInput, opts.fence);
     const result: TransferResult = await banking.transfer.createTransfer(sdkInput);
     const balance = result.newBalance != null ? `，账户余额 ${formatCNY(result.newBalance)}` : '';
     return {

@@ -1,87 +1,89 @@
 import { AppError } from './errors';
 
-/** Chinese yuan symbol used for all amounts in the demo. */
+/** Canonical CNY decimal text at JSON and presentation boundaries. */
+export type MoneyAmount = string;
+/** Financial inputs use decimal text and never JavaScript numbers. */
+export type MoneyInput = string;
 export const CNY = '¥';
+export const MAX_MINOR_UNITS = 9_223_372_036_854_775_807n;
+export const MIN_MINOR_UNITS = -9_223_372_036_854_775_808n;
 
-/** Rounds a money amount to 2 decimals (cent-safe, avoids float drift). */
-export function round2(n: number): number {
-  if (!Number.isFinite(n)) return n;
-  return Math.round((n + Number.EPSILON) * 100) / 100;
-}
-
-/** Converts a money amount to an integer number of cents. */
-function toCents(n: number): number {
-  return Math.round((n + Number.EPSILON) * 100);
-}
-
-/** Converts an integer number of cents back to a money amount. */
-function fromCents(cents: number): number {
-  return cents / 100;
-}
-
-/**
- * Formats an amount as CNY, e.g. `¥1,234.56`.
- * Thousands separators, always 2 decimals; negatives render as `-¥1,234.56`.
- */
-export function formatCNY(amount: number): string {
-  const rounded = round2(amount);
-  const safe = Number.isFinite(rounded) ? rounded : 0;
-  const negative = safe < 0;
-  const fixed = Math.abs(safe).toFixed(2);
-  const dot = fixed.indexOf('.');
-  const intPart = fixed.slice(0, dot);
-  const decPart = fixed.slice(dot + 1);
-  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
-  return `${negative ? '-' : ''}${CNY}${grouped}.${decPart}`;
-}
-
-/**
- * Parses a user/model supplied amount into a number.
- * Strips `¥`/`￥`, thousands separators and whitespace.
- * Empty / null / undefined yields `0` (never `NaN`).
- * A non-empty, non-numeric string yields `NaN` so callers can reject it explicitly.
- */
-export function parseAmount(input: string | number | null | undefined): number {
-  if (input === null || input === undefined) return 0;
-  if (typeof input === 'number') return Number.isFinite(input) ? input : 0;
+function decimalText(input: unknown): string {
+  if (typeof input !== 'string') throw new AppError('VALIDATION', 'Money input must be decimal text.');
   const cleaned = input.replace(/[¥￥,\s]/g, '');
-  if (cleaned === '') return 0;
-  const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : NaN;
+  if (cleaned.length > 128) throw new AppError('VALIDATION', 'Money input exceeds the supported length.');
+  return cleaned;
 }
 
-/**
- * Validate an amount without rounding fractional cents into a different operation.
- * The small relative tolerance only absorbs IEEE-754 representation noise (e.g. 0.29 * 100).
- * Authorization and execution must both use this same canonical number of cents.
- */
-export function moneyToCents(input: unknown): number {
-  if (typeof input !== 'number' && typeof input !== 'string') {
-    throw new AppError('VALIDATION', '金额必须为合法数字，且最多保留两位小数。');
+function parseExactMinor(input: unknown): bigint {
+  const match = /^([+-]?)(\d+)(?:\.(\d{1,2}))?$/.exec(decimalText(input));
+  if (!match) throw new AppError('VALIDATION', 'Money must have at most two decimal places.');
+  const absolute = BigInt(match[2]) * 100n + BigInt((match[3] ?? '').padEnd(2, '0'));
+  return match[1] === '-' ? -absolute : absolute;
+}
+
+/** Parse exact CNY and enforce the signed 64-bit range for database-bound values. */
+export function moneyToCents(input: unknown): bigint {
+  return assertMinorUnits(parseExactMinor(input));
+}
+
+/** Guard the database's signed 64-bit integer range before every persisted value. */
+export function assertMinorUnits(minor: bigint): bigint {
+  if (minor < MIN_MINOR_UNITS || minor > MAX_MINOR_UNITS) {
+    throw new AppError('VALIDATION', 'Money exceeds the supported signed 64-bit range.');
   }
-  const amount = typeof input === 'number' ? input : parseAmount(input);
-  const scaled = amount * 100;
-  const cents = Math.round(scaled);
-  const tolerance = Number.EPSILON * Math.max(1, Math.abs(scaled)) * 2;
-  if (!Number.isFinite(amount) || !Number.isSafeInteger(cents) || Math.abs(scaled - cents) > tolerance) {
-    throw new AppError('VALIDATION', '金额必须为合法数字，且最多保留两位小数。');
-  }
-  return cents;
+  return minor;
 }
 
-/** Positive CNY amount shared by transfer authorization, persistence and the SDK write path. */
-export function normalizeTransferAmount(input: unknown): number {
-  const cents = moneyToCents(input);
-  if (cents <= 0) throw new AppError('VALIDATION', '转账金额必须大于 0，且最多保留两位小数。');
-  return cents / 100;
+/** Format exact minor units without converting them to a JavaScript number. */
+export function centsToMoney(minor: bigint): MoneyAmount {
+  const negative = minor < 0n;
+  const absolute = negative ? -minor : minor;
+  return `${negative ? '-' : ''}${absolute / 100n}.${String(absolute % 100n).padStart(2, '0')}`;
 }
 
-/** Cent-safe addition of two money amounts. */
-export function addMoney(a: number, b: number): number {
-  return fromCents(toCents(a) + toCents(b));
+/** Normalize a boundary input to canonical two-decimal JSON text. */
+export function normalizeMoney(input: MoneyInput): MoneyAmount {
+  return centsToMoney(moneyToCents(input));
 }
 
-/** Cent-safe subtraction of two money amounts (`a - b`). */
-export function subtractMoney(a: number, b: number): number {
-  return fromCents(toCents(a) - toCents(b));
+export function normalizeTransferAmount(input: unknown): MoneyAmount {
+  const minor = moneyToCents(input);
+  if (minor <= 0n) throw new AppError('VALIDATION', 'Transfer amount must be positive.');
+  return centsToMoney(minor);
+}
+
+export function addMoney(left: MoneyInput, right: MoneyInput): MoneyAmount {
+  return centsToMoney(parseExactMinor(left) + parseExactMinor(right));
+}
+
+export function subtractMoney(left: MoneyInput, right: MoneyInput): MoneyAmount {
+  return centsToMoney(parseExactMinor(left) - parseExactMinor(right));
+}
+
+export function absoluteMinor(minor: bigint): bigint {
+  return minor < 0n ? -minor : minor;
+}
+
+/** Percentage rounded half away from zero to two decimals using integer arithmetic. */
+export function percentageRatio(numerator: bigint, denominator: bigint): string {
+  if (denominator === 0n) return '0.00';
+  const negative = (numerator < 0n) !== (denominator < 0n);
+  const scaled = absoluteMinor(numerator) * 10_000n;
+  const divisor = absoluteMinor(denominator);
+  const rounded = (scaled + divisor / 2n) / divisor;
+  return centsToMoney(negative ? -rounded : rounded);
+}
+
+/** Formats a CNY amount; a bigint argument explicitly denotes minor units. */
+export function formatCNY(amount: MoneyInput | bigint): string {
+  const minor = typeof amount === 'bigint' ? amount : parseExactMinor(amount);
+  const [integer, fraction] = centsToMoney(absoluteMinor(minor)).split('.');
+  const grouped = integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${minor < 0n ? '-' : ''}${CNY}${grouped}.${fraction}`;
+}
+
+/** The only lossy conversion; call exclusively when creating chart coordinates. */
+export function moneyToChartNumber(amount: MoneyInput): number {
+  return Number(centsToMoney(parseExactMinor(amount)));
 }

@@ -16,7 +16,7 @@ function provider(responses: ReturnType<typeof fauxAssistantMessage>[]) {
     calls++; return models.streamSimple(...args);
   }, calls: () => calls };
 }
-const transfer = () => fauxAssistantMessage([fauxToolCall('transfer_money', { name: '张伟', amount: 200.37 })], { stopReason: 'toolUse' });
+const transfer = () => fauxAssistantMessage([fauxToolCall('transfer_money', { name: '张伟', amount: '200.37' })], { stopReason: 'toolUse' });
 const text = (result: Awaited<ReturnType<typeof runTurn>>) => result.events.flatMap(e => e.type === 'message_end' ? [e.message.content] : []).join('\n');
 
 describe('live planning recovery [integration: real Pi, gateway and database; scripted transport]', () => {
@@ -25,7 +25,7 @@ describe('live planning recovery [integration: real Pi, gateway and database; sc
     const result = await runTurn({ message: '给张伟转账200.37元' }, { config, provider: runtime });
     expect(result.events.some(e => e.type === 'confirmation_required')).toBe(true);
     expect(await getTestPrisma().pendingAction.count()).toBe(1);
-    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: ACCOUNTS[0].id } })).balance).toBe(23580);
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: ACCOUNTS[0].id } })).balanceMinor).toBe(2358000n);
     const saved = await loadSession(result.sessionId);
     expect(saved?.transcript.filter(m => m.role === 'user')).toHaveLength(1);
     expect(text(result)).not.toContain('请明确要办理的受支持业务');
@@ -44,7 +44,7 @@ describe('live planning recovery [integration: real Pi, gateway and database; sc
     const result = await runTurn({ message: '给张伟转账200.37元' }, { config, provider: runtime });
     const before = runtime.calls();
     const outcome = await resumeTurn({ sessionId: result.sessionId, toolName: 'transfer_money', resultToolName: 'transfer_money',
-      toolResult: { ok: true, summary: '测试的服务端真实结果', data: { amount: 200.37, newBalance: 23379.63 } } }, { config, provider: runtime });
+      toolResult: { ok: true, summary: 'Verified server result', data: { amount: '200.37', newBalance: '23379.63' } } }, { config, provider: runtime });
     expect(runtime.calls()).toBe(before);
     expect(text(outcome)).toContain('23,379.63');
     expect(outcome.events.some(e => e.type === 'error')).toBe(false);
@@ -100,7 +100,7 @@ describe('live planning recovery [integration: real Pi, gateway and database; sc
     expect(result.events.filter(e => e.type === 'message_end').at(-1)).not.toHaveProperty('message.retryRequest');
   });
   it('retains a committed automatic budget and refuses to replay after narration times out', async () => {
-    const runtime = provider([fauxAssistantMessage([fauxToolCall('reserve_budget', { name: 'live-interruption', amount: 66.66 })], { stopReason: 'toolUse' }),
+    const runtime = provider([fauxAssistantMessage([fauxToolCall('reserve_budget', { name: 'live-interruption', amount: '66.66' })], { stopReason: 'toolUse' }),
       fauxAssistantMessage('', { stopReason: 'error', errorMessage: 'Request timed out.' })]);
     const result = await runTurn({ message: '预留66.66元作为live-interruption预算' }, { config, provider: runtime });
     expect(runtime.calls()).toBe(2);
@@ -138,7 +138,7 @@ describe('live planning recovery [integration: real Pi, gateway and database; sc
     const outcome = await confirmAction(action.id, { deps: { config, provider: runtime } });
     expect(outcome.ok).toBe(true);
     expect(runtime.calls()).toBe(1);
-    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: ACCOUNTS[0].id } })).balance).toBe(23379.63);
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: ACCOUNTS[0].id } })).balanceMinor).toBe(2337963n);
     const saved = await loadSession(parked.sessionId);
     expect(saved?.transcript.at(-1)?.content).toContain('23,379.63');
     const calls = new Set(saved?.agentState.messages.flatMap(m => m.role === 'assistant' ? m.content.filter(p => p.type === 'toolCall').map(p => p.type === 'toolCall' ? p.id : '') : []));
@@ -146,6 +146,6 @@ describe('live planning recovery [integration: real Pi, gateway and database; sc
     expect(results).toHaveLength(1);
     expect(results?.every(m => m.role === 'toolResult' && calls.has(m.toolCallId))).toBe(true);
     await confirmAction(action.id, { deps: { config, provider: runtime } });
-    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: ACCOUNTS[0].id } })).balance).toBe(23379.63);
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: ACCOUNTS[0].id } })).balanceMinor).toBe(2337963n);
   });
 });

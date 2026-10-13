@@ -55,6 +55,9 @@ import { getOrCreateSession, loadSession, saveSession } from './session';
 import { readPendingActionId } from './task-control';
 import type { ToolExecutionResult } from './tools';
 import { canRecoverPlanning, unfinishedPlanning, transientModelFailure, recoveryNotice, startedMutation, PLANNING_RECOVERY_INSTRUCTION } from './live-recovery';
+import { withDurableTurn, type TurnRuntime } from './turn-runtime';
+import { advanceConversationIntent } from './intent-context';
+import type { SessionSnapshot } from './session';
 
 export interface RunTurnDeps {
   config?: AppConfig;
@@ -65,6 +68,7 @@ export interface RunTurnDeps {
    * would resolve it from config. Absent ⇒ unchanged behavior (`resolveProvider(config)`).
    */
   provider?: ModelRuntime;
+  onEvent?: (event: AgentStreamEvent) => void | Promise<void>;
 }
 export interface ResumeTurnInput {
   sessionId: string;
@@ -596,15 +600,24 @@ async function runLivePrompt(runtime: BankingAgentRuntime, buffer: TurnBuffer, r
 }
 
 /** Run one agent turn; returns the stream events emitted during it. */
-export async function runTurn(
+export async function runTurn(req: ChatTurnRequest, deps?: RunTurnDeps): Promise<ChatTurnResponse> {
+  req = { ...req, message: redactRequest(req.message) };
+  const snapshot = await getOrCreateSession((deps?.config ?? getConfig()).demoUserId, req.sessionId);
+  return withDurableTurn(snapshot, { kind: 'input', message: req.message }, req.requestId, deps?.onEvent,
+    context => performTurn(req, deps, snapshot, context));
+}
+
+async function performTurn(
   req: ChatTurnRequest,
-  deps?: RunTurnDeps,
+  deps: RunTurnDeps | undefined,
+  snapshot: SessionSnapshot,
+  context: TurnRuntime,
 ): Promise<ChatTurnResponse> {
   req = { ...req, message: redactRequest(req.message) };
   const config = deps?.config ?? getConfig();
   const now = deps?.now ?? (() => demoNow());
 
-  const snapshot = await getOrCreateSession(config.demoUserId, req.sessionId);
+  snapshot.intent = advanceConversationIntent(snapshot.intent, req.message, { now });
   const buffer = createTurnBuffer(req.message);
   // Validate product presence against the real catalogue. This read only calibrates questions;
   // it is not a tool result, a financial statement, an ownership check or an authorization.
@@ -616,29 +629,52 @@ export async function runTurn(
       buffer.serverGuidance = { code: 'product_selection_invalid' };
     }
   } catch { buffer.providedFields = []; }
-  buffer.events.push({ type: 'session', sessionId: snapshot.sessionId });
+  buffer.events.push({ type: 'session', sessionId: snapshot.sessionId, runId: context.journal.lease.runId });
+  await context.publish(buffer.events);
 
   // Injection scan is defense-in-depth ONLY — it records a SecurityEvent but NEVER grants
   // permission (the gateway remains the sole authority).
   const scan = security.injection.scan(req.message);
   if (scan.suspicious) {
-    await security.injection.reportInjection(snapshot.sessionId, req.message, scan);
+    await security.injection.reportInjection(snapshot.sessionId, req.message, scan, `injection:${context.journal.lease.runId}`);
     buffer.events.push({ type: 'security_event', kind: 'injection', message: scan.note });
   }
 
   // LIVE DAG progress for a `submit_plan` turn: the sink fires from inside `executor.runPlan` on
   // every node change, so the UI sees the plan timeline update and the parked node's decision.
   const relay: PlanRelay = {};
+  const publishProgress = () => {
+    if (config.llmMode !== 'live') return context.publish(buffer.events);
+    // Publish empty tool-selection messages once their real call starts, so cards have a stable
+    // parent. Terminal planning prose and provider errors wait for the recovery decision.
+    const planningIds = new Set(buffer.assistants.filter(message => message.content === '' && message.toolEvents?.length)
+      .map(message => message.id));
+    return context.publish(buffer.events.filter(event => {
+      if (event.type === 'error' || event.type === 'text_delta') return false;
+      if (event.type === 'message_start' || event.type === 'message_end') return planningIds.has(event.message.id);
+      return true;
+    }));
+  };
   const runtime = createBankingAgent({
     sessionId: snapshot.sessionId,
-    userId: config.demoUserId,
+    userId: snapshot.userId,
     snapshot,
     config,
     provider: deps?.provider,
-    onPlanUpdate: (plan) => relayPlanSnapshot(buffer, relay, plan),
+    conversationIntent: () => snapshot.intent,
+    journal: context.journal,
+    onPlanUpdate: async plan => { await relayPlanSnapshot(buffer, relay, plan); await publishProgress(); },
   });
 
-  const unsubscribe = runtime.agent.subscribe(createEventHandler(buffer, now, runtime.planningRejections));
+  const unsubscribeJournal = context.journal.subscribe(runtime.agent);
+  const handler = createEventHandler(buffer, now, runtime.planningRejections);
+  const unsubscribe = runtime.agent.subscribe(async event => {
+    await handler(event);
+    if (event.type === 'message_end' || event.type === 'tool_execution_end') {
+      await context.journal.recordEvent('checkpoint', runtime.serialize().agentState, 'internal');
+    }
+    await publishProgress();
+  });
   let liveFailure: string | undefined;
   try {
     if (config.llmMode === 'live') liveFailure = await runLivePrompt(runtime, buffer, req.message, now);
@@ -648,6 +684,7 @@ export async function runTurn(
     // when the run failed — the user must still be able to take the parked decision.
     await flushParkedDecision(buffer, relay);
     unsubscribe();
+    unsubscribeJournal();
     runtime.dispose();
   }
 
@@ -684,6 +721,7 @@ export async function runTurn(
   };
 
   snapshot.agentState = runtime.serialize().agentState;
+  if (buffer.events.some(event => event.type === 'confirmation_required' || event.type === 'mfa_required' || event.type === 'plan_update')) snapshot.intent.status = 'submitted';
   // Safety net: re-ground the terminal narration before persisting (idempotent).
   groundMessage(buffer, buffer.current);
   snapshot.transcript.push(userMessage, ...buffer.assistants);
@@ -724,7 +762,7 @@ function findToolCallById(messages: readonly AgentMessage[], id: string): ToolCa
  * Resolve WHICH tool call the REAL result belongs to: explicit id, else the latest call of the
  * server-owned action's tool. A crash can leave a parked action without its persisted call;
  * report narration failure in that case rather than overwriting another tool's factual result.
- * The legacy model-double path without an action name retains its model-only fallback.
+ * Programmatic continuation without an action name selects the latest recorded tool call.
  */
 function resolveToolResultTarget(
   messages: readonly AgentMessage[],
@@ -769,20 +807,24 @@ function buildToolResultMessage(
 }
 
 /** Resume a session after a human confirmation: inject the real tool result and `agent.continue()`. */
-export async function resumeTurn(
+export async function resumeTurn(input: ResumeTurnInput, deps?: RunTurnDeps): Promise<ChatTurnResponse> {
+  const snapshot = await loadSession(input.sessionId);
+  if (!snapshot) throw new AppError('NOT_FOUND', 'Conversation not found.');
+  return withDurableTurn(snapshot, { kind: 'authorization_result', ...input }, undefined, deps?.onEvent,
+    context => performResume(input, deps, snapshot, context));
+}
+
+async function performResume(
   input: ResumeTurnInput,
-  deps?: RunTurnDeps,
+  deps: RunTurnDeps | undefined,
+  snapshot: SessionSnapshot,
+  context: TurnRuntime,
 ): Promise<ChatTurnResponse> {
   const config = deps?.config ?? getConfig();
   const now = deps?.now ?? (() => demoNow());
 
-  const snapshot = await loadSession(input.sessionId);
-  if (snapshot === null) {
-    throw new AppError('NOT_FOUND', `未找到会话: ${input.sessionId}`);
-  }
-
   const buffer = createTurnBuffer();
-  buffer.events.push({ type: 'session', sessionId: snapshot.sessionId });
+  buffer.events.push({ type: 'session', sessionId: snapshot.sessionId, runId: context.journal.lease.runId });
 
   // A continuation can drive a `submit_plan` DAG too (the model may plan while narrating), so the
   // same live-progress relay is installed here.
@@ -793,10 +835,13 @@ export async function resumeTurn(
     snapshot,
     config,
     provider: deps?.provider,
-    onPlanUpdate: (plan) => relayPlanSnapshot(buffer, relay, plan),
+    journal: context.journal,
+    onPlanUpdate: async plan => { await relayPlanSnapshot(buffer, relay, plan); await context.publish(buffer.events); },
   });
 
-  const unsubscribe = runtime.agent.subscribe(createEventHandler(buffer, now));
+  const unsubscribeJournal = context.journal.subscribe(runtime.agent);
+  const handler = createEventHandler(buffer, now);
+  const unsubscribe = runtime.agent.subscribe(async event => { await handler(event); await context.publish(buffer.events); });
   try {
     // Attribute the REAL outcome to the ORIGINAL tool call and REPLACE the turn-time (blocked)
     // placeholder in place — never append a second result for the same id (which would sit after the
@@ -839,6 +884,7 @@ export async function resumeTurn(
     // still needs its human decision surfaced.
     await flushParkedDecision(buffer, relay);
     unsubscribe();
+    unsubscribeJournal();
     runtime.dispose();
   }
 

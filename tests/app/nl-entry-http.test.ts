@@ -41,7 +41,8 @@ import { actionUrl, chatUrl, idCtx, postJson, type HttpResult } from './harness'
 /** The primary 活期账户 (¥23,580) — the default funding account a RED subscribe debits. */
 const CHECKING = ACCOUNTS.find((account) => account.type === 'CHECKING')!;
 /** The seeded checking balance (¥23,580). */
-const SEEDED_BALANCE = CHECKING.balance;
+import { centsToMoney, moneyToCents, normalizeMoney, subtractMoney } from '@/lib/money';
+const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 /** Recipient 张伟 — the actor of the (never-taken) transfer clarification probe. */
 const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 
@@ -49,14 +50,14 @@ const ZHANGWEI = CONTACTS.find((contact) => contact.name === '张伟')!;
 const CREDIT_CARD_ID = 'card_credit';
 const ENTERTAINMENT_CATEGORY = '娱乐';
 /** The seeded 娱乐 limit (fixtures CARD_LIMITS) — it must change 3000 → 1500 after the confirm. */
-const SEEDED_ENT_LIMIT = 3000;
+const SEEDED_ENT_LIMIT = '3000';
 /** The NL request targets ¥1500. */
-const NEW_ENT_LIMIT = 1500;
+const NEW_ENT_LIMIT = '1500';
 
 /** Seeded 稳健理财A (R2, ¥1,000 min) — the product a RED `subscribe_investment` buys into. */
 const PRODUCT_ID = 'prod_wenjiana';
 /** The subscribe amount in the NL request. */
-const SUBSCRIBE_AMOUNT = 1000;
+const SUBSCRIBE_AMOUNT = '1000';
 /** The seeded holding count for 稳健理财A (fixtures buildHoldings ships exactly one). */
 const SEEDED_HOLDINGS = 1;
 
@@ -165,9 +166,9 @@ function verifyAction(
 /* ----------------------------------------------------------------------------- DB helpers */
 
 /** Current 活期 balance (¥23,580 seeded). */
-async function checkingBalance(): Promise<number> {
+async function checkingBalance(): Promise<string> {
   const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } });
-  return account.balance;
+  return centsToMoney(account.balanceMinor);
 }
 
 /** Every ledger row paid to 张伟 (the money-moved probe for the clarification turn). */
@@ -221,7 +222,7 @@ describe('[integration] POST /api/chat NL → YELLOW set_card_limit → POST /ap
       where: { cardId: CREDIT_CARD_ID, category: ENTERTAINMENT_CATEGORY },
     });
     expect(before).toHaveLength(1);
-    expect(before[0].amount).toBe(SEEDED_ENT_LIMIT);
+    expect(before[0].amountMinor).toBe(moneyToCents(SEEDED_ENT_LIMIT));
 
     // The human confirm executes the ORIGINAL validated args (娱乐 → ¥1500) exactly once.
     const res = await confirmAction(row.id, turn.sessionId);
@@ -238,7 +239,7 @@ describe('[integration] POST /api/chat NL → YELLOW set_card_limit → POST /ap
       where: { cardId: CREDIT_CARD_ID, category: ENTERTAINMENT_CATEGORY },
     });
     expect(after).toHaveLength(1);
-    expect(after[0].amount).toBe(NEW_ENT_LIMIT);
+    expect(after[0].amountMinor).toBe(moneyToCents(NEW_ENT_LIMIT));
   });
 });
 
@@ -282,10 +283,10 @@ describe('[integration] POST /api/chat NL → RED subscribe_investment → POST 
     const holdings = await holdingsOfProduct();
     expect(holdings).toHaveLength(SEEDED_HOLDINGS + 1);
     expect(
-      holdings.some((holding) => holding.amount === SUBSCRIBE_AMOUNT && holding.status === 'HOLDING'),
+      holdings.some((holding) => holding.principalAmountMinor === moneyToCents(SUBSCRIBE_AMOUNT) && holding.status === 'HOLDING'),
       'expected the newly-created HOLDING to carry the requested amount',
     ).toBe(true);
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE - SUBSCRIBE_AMOUNT);
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, SUBSCRIBE_AMOUNT));
   });
 });
 

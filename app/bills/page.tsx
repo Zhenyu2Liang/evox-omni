@@ -17,6 +17,7 @@ import { banking } from '@/banking-sdk';
 import type { AnomalyItem, SpendingAnalysis, TransactionView } from '@/banking-sdk';
 import { AnomalyBanner, Card, EmptyState, MiniSparkline, Money, SpendingBar, SpendingPie, SpendingTrend, Table } from '@/components';
 import type { TableColumn } from '@/components';
+import { compareDecimal } from '@/lib/decimal';
 
 /** Only a `YYYY-MM` month (01–12) is honoured; anything else falls back to the demo month. */
 const MONTH_PATTERN = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -60,7 +61,7 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
         <div>
           <h1 className="text-2xl font-semibold text-banking-deep">账单</h1>
           <p className="mt-1 text-sm text-banking-navy">
-            {analysis.month} · 共 {transactions.length} 笔交易 · {anomalies.length} 项异常 · 正常消费 <Money amount={analysis.total} />（不含异常及投资资金流）
+            {analysis.month} · 共 {transactions.length} 笔交易 · {anomalies.length} 项异常 · {'\u5df2\u5165\u8d26\u6d88\u8d39'} <Money amount={analysis.total} />{'\uff08\u4e0d\u542b\u6295\u8d44\u8d44\u91d1\u6d41\uff09'}
           </p>
         </div>
         <form className="flex items-center gap-2" method="get">
@@ -71,18 +72,18 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
       </header>
 
       <section className="grid gap-4 sm:grid-cols-3">
-        <Card title="正常消费（不含异常及投资）">
+        <Card title={'\u5df2\u5165\u8d26\u6d88\u8d39\uff08\u4e0d\u542b\u6295\u8d44\uff09'}>
           <Money amount={analysis.total} className="text-2xl font-semibold text-banking-deep" />
           <p className="mt-1 text-xs text-banking-navy">
-            环比 {analysis.momChangePct >= 0 ? '+' : '-'}{Math.abs(analysis.momChangePct)}% · 上月 <Money amount={analysis.prevTotal} />
+            环比 {compareDecimal(analysis.momChangePct, '0') > 0 ? '+' : ''}{analysis.momChangePct}% · 上月 <Money amount={analysis.prevTotal} />
           </p>
         </Card>
         <Card title="最大单笔">
-          <Money amount={analysis.largest?.amount ?? 0} signed className="text-2xl font-semibold text-banking-deep" />
+          <Money amount={analysis.largest?.amount ?? '0.00'} signed className="text-2xl font-semibold text-banking-deep" />
           <p className="mt-1 text-xs text-banking-navy">{analysis.largest?.merchant ?? '本月暂无支出'}</p>
         </Card>
         <Card title="常去商户">
-          <Money amount={analysis.topMerchant?.amount ?? 0} className="text-2xl font-semibold text-banking-deep" />
+          <Money amount={analysis.topMerchant?.amount ?? '0.00'} className="text-2xl font-semibold text-banking-deep" />
           <p className="mt-1 text-xs text-banking-navy">{analysis.topMerchant?.merchant ?? '本月暂无支出'}</p>
         </Card>
       </section>

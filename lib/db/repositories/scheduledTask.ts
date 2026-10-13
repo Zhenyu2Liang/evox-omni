@@ -1,5 +1,5 @@
 import type { ScheduledTask } from '@prisma/client';
-import { prisma } from '../client';
+import { dbClient } from '../client';
 import { toJson } from '../../json';
 
 export interface CreateScheduledTaskInput {
@@ -16,20 +16,20 @@ export function listScheduledTasks(
   userId: string,
   status?: string,
 ): Promise<ScheduledTask[]> {
-  return prisma.scheduledTask.findMany({
+  return dbClient().scheduledTask.findMany({
     where: { userId, ...(status ? { status } : {}) },
     orderBy: { runAt: 'asc' },
   });
 }
 
 export function getScheduledTask(id: string): Promise<ScheduledTask | null> {
-  return prisma.scheduledTask.findUnique({ where: { id } });
+  return dbClient().scheduledTask.findUnique({ where: { id } });
 }
 
 export function createScheduledTask(
   input: CreateScheduledTaskInput,
 ): Promise<ScheduledTask> {
-  return prisma.scheduledTask.create({
+  return dbClient().scheduledTask.create({
     data: {
       userId: input.userId,
       name: input.name,
@@ -46,9 +46,9 @@ export function updateScheduledTaskStatus(
   id: string,
   status: string,
 ): Promise<ScheduledTask> {
-  return prisma.scheduledTask.update({ where: { id }, data: { status } });
+  return dbClient().scheduledTask.update({ where: { id }, data: { status } });
 }
 
 export function deleteScheduledTask(id: string): Promise<void> {
-  return prisma.scheduledTask.delete({ where: { id } }).then(() => undefined);
+  return dbClient().scheduledTask.delete({ where: { id } }).then(() => undefined);
 }

@@ -13,6 +13,7 @@ import { initialChatUIState, reduceAgentEvents } from '@/components/chat/useAgen
 import { POST as acknowledge } from '@/app/api/transactions/[id]/acknowledge/route';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import type { TaskNodeSpec } from '@/lib/contracts/task';
+import type { HoldingView } from '@/banking-sdk';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { InvestmentsCard } from '@/components/chat/cards/InvestmentsCard';
@@ -22,6 +23,7 @@ import { createTask } from '@/lib/db/repositories/task';
 import { getTaskPlan } from '@/agent/task-control';
 import type { ConfirmationOutcome } from '@/agent';
 import { GET as bills } from '@/app/api/bills/route';
+import { addDecimal, compareDecimal } from '@/lib/decimal';
 
 beforeEach(resetDatabase);
 describe('frontend review: production boundaries', () => {
@@ -52,33 +54,34 @@ describe('frontend review: production boundaries', () => {
     expect(scheduledTime({ runAt: Date.parse('2025-10-15T09:00:00Z') }, '2026年10月15日上午9点提醒电费')).toBe(Date.parse('2026-10-15T09:00:00+08:00'));
     expect(scheduledTime({ runAtLocal: '2026-10-15T09:00' })).toBe(Date.parse('2026-10-15T09:00:00+08:00'));
     expect(scheduledTime({}, '2026年10月15日下午3点30分提醒电费')).toBe(Date.parse('2026-10-15T15:30:00+08:00'));
-    expect(() => scheduledTime({}, '2026年10月15日上午9点及2026年10月16日上午9点')).toThrow('多个执行时间');
+    expect(() => scheduledTime({}, '2026年10月15日上午9点及2026年10月16日上午9点')).toThrow('exactly one requested execution time');
     expect(() => scheduledTime({ runAtLocal: '2026-02-30T09:00' })).toThrow();
     expect(() => scheduledTime({ runAt: 100 })).toThrow();
   });
   it('rejects malformed conditions and missing outputs, preserving actual false comparisons', () => {
     const nodes = [{ id: 'n1', name: 'bad', dependencies: [], kind: 'condition', condition: { left: 'n0.total', right: 2000, op: '>' } }] as unknown as TaskNodeSpec[];
     expect(validatePlan(nodes, new Set()).ok).toBe(false);
-    expect(() => assertConditionResolvable({ path: 'n1.totalSpending', op: '>', value: 2000 }, { n1: { total: 3000 } })).toThrow('条件无法求值');
+    expect(() => assertConditionResolvable({ path: 'n1.totalSpending', op: '>', value: 2000 }, { n1: { total: 3000 } })).toThrow('Condition output is missing or incomparable');
     expect(() => assertConditionResolvable({ path: 'n1.total', op: '>', value: 2000 }, { n1: { total: 1000 } })).not.toThrow();
   });
   it('supplies actual product metadata for each holding and totals cash plus active market value', async () => {
     const holdings = await banking.investment.listHoldings(DEMO_USER_ID);
-    expect(holdings[0].product?.expectedRate).toBeGreaterThan(0);
+    expect(compareDecimal(holdings[0].product!.annualYieldRate, '0')).toBe(1);
     const cash = await banking.account.getBalance(DEMO_USER_ID);
     const overview = await banking.dashboard.getDashboardSummary(DEMO_USER_ID);
-    expect(overview.totalAssets).toBeCloseTo(cash.totalAvailable + holdings.reduce((sum, row) => sum + (row.marketValue ?? row.amount), 0), 2);
+    expect(compareDecimal(overview.totalAssets, addDecimal(cash.totalAvailable,
+      holdings.reduce((sum, row) => addDecimal(sum, row.marketValue ?? row.amount), '0')))).toBe(0);
   });
-  it('renders every holding of one product; unknown product metadata is never fabricated as zero', async () => {
+  it('renders every holding of one product and rejects missing product metadata', async () => {
     const holdings = await banking.investment.listHoldings(DEMO_USER_ID);
     const original = holdings.find(row => row.productId === 'prod_wenjiana')!;
-    const duplicate = { ...original, id: 'another-holding', amount: 1000.66 };
+    const duplicate = { ...original, id: 'another-holding', amount: '1000.66' };
     const html = renderToStaticMarkup(createElement(InvestmentsCard, { data: { holdings: [original, duplicate] } }));
     expect((html.match(/持有金额/g) ?? []).length).toBe(2);
     expect(html).toContain('3.25%');
-    const legacy = renderToStaticMarkup(createElement(InvestmentsCard, { data: { holdings: [{ ...original, product: undefined }] } }));
-    expect(legacy).toContain('待核对');
-    expect(legacy).not.toContain('0.00%');
+    const incomplete = { ...original, product: undefined } as unknown as HoldingView;
+    expect(() => renderToStaticMarkup(createElement(InvestmentsCard, { data: { holdings: [incomplete] } })))
+      .toThrow('Investment holding product metadata is missing.');
   });
   it('renders server-provided MFA details and removes terminal verification controls', () => {
     const action = { title: '转账', toolName: 'transfer_money' as const, tier: 'RED' as const, requiresMfa: true,

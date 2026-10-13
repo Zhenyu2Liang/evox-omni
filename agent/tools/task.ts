@@ -30,7 +30,10 @@ const KIND_LABELS: Record<ScheduledTaskKind, string> = {
 /** Chinese labels for a scheduled-task status (for user-facing summaries). */
 const STATUS_LABELS: Record<ScheduledTaskStatus, string> = {
   SCHEDULED: '待执行',
+  DISPATCHING: 'Dispatching',
+  AWAITING_CONFIRMATION: 'Awaiting user authorization',
   DONE: '已完成',
+  FAILED: 'Failed',
   CANCELLED: '已取消',
 };
 
@@ -91,7 +94,7 @@ export async function runListScheduledTasks(
 export const CreateScheduledTaskParams = Type.Object({
   name: Type.String({ description: '任务名称' }),
   kind: Type.String({ description: '任务类型：REMINDER | PAYMENT | TRANSFER' }),
-  runAt: Type.Optional(Type.Number({ description: '兼容旧调用的 epoch ms；优先使用 runAtLocal' })),
+  runAt: Type.Optional(Type.Number({ description: 'UTC epoch milliseconds; explicit user-requested dates are bound by the server.' })),
   runAtLocal: Type.Optional(Type.String({ description: '北京时间，例如 2026-10-15T09:00。保留用户明确指定的年份、月份和时间。' })),
   payload: Type.Optional(Type.Object({}, { description: '任务载荷（JSON）' })),
   requiresConfirmation: Type.Optional(Type.Boolean({ description: '执行前是否需要确认，默认 true' })),

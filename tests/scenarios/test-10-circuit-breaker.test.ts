@@ -24,17 +24,18 @@ import { useFreshDatabase, getTestPrisma } from '../helpers/db';
 import { DEMO_USER_ID } from '../helpers/fixtures';
 import { security } from '@/security';
 import { MFA_CODE } from '@/lib/constants';
+import { moneyToCents } from '@/lib/money';
 
 /** A deliberately WRONG 6-digit code (never the demo code). */
 const WRONG_CODE = '000000';
 
 /** The canonical RED action: `subscribe_investment` is STATICALLY RED → requires MFA. */
 const RED_TOOL = 'subscribe_investment';
-const RED_ARGS = { productId: 'prod_wenjiana', amount: 5000 };
+const RED_ARGS = { productId: 'prod_wenjiana', amount: '5000' };
 
 /** The seeded funding account + balance (a successful ¥5000 subscription would change it). */
 const CHECKING_ACCOUNT_ID = 'acct_checking';
-const CHECKING_BALANCE = 23580;
+const CHECKING_BALANCE = '23580.00';
 
 /**
  * Drive ONE RED tool call through the full pipeline and return the awaiting-MFA action id.
@@ -160,7 +161,7 @@ describe('Scenario 10 — 连续错误MFA触发熔断 (circuit breaker)', () => 
     const holdingsBefore = await prisma.investmentHolding.count();
     const balanceBefore = (
       await prisma.account.findUnique({ where: { id: CHECKING_ACCOUNT_ID } })
-    )?.balance;
+    )?.balanceMinor;
 
     // Even the CORRECT demo code cannot authorize a locked session (the breaker is checked FIRST).
     const auth = await security.gateway.securityGateway.authorizeAction(actionId, {
@@ -190,8 +191,8 @@ describe('Scenario 10 — 连续错误MFA触发熔断 (circuit breaker)', () => 
     expect(await prisma.investmentHolding.count()).toBe(holdingsBefore);
     const balanceAfter = (
       await prisma.account.findUnique({ where: { id: CHECKING_ACCOUNT_ID } })
-    )?.balance;
+    )?.balanceMinor;
     expect(balanceAfter).toBe(balanceBefore);
-    expect(balanceAfter).toBe(CHECKING_BALANCE);
+    expect(balanceAfter).toBe(moneyToCents(CHECKING_BALANCE));
   });
 });

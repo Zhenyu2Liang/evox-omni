@@ -29,10 +29,11 @@ import { POST as taskPost } from '@/app/api/tasks/[id]/route';
 import { POST as verifyPost } from '@/app/api/actions/[id]/verify/route';
 import { GET as actionsGet } from '@/app/api/actions/route';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
+import { centsToMoney } from '@/lib/money';
 
 const userId = 'user_liming';
 /** A RED transfer (> ¥1000 ⇒ RED ⇒ parked `awaiting_mfa`). */
-const RED_TRANSFER = { name: '张伟', amount: 5000 } as const;
+const RED_TRANSFER = { name: '张伟', amount: '5000' } as const;
 
 beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
@@ -102,8 +103,8 @@ async function readPlan(planId: string) {
   return getTestPrisma().agentTask.findUnique({ where: { id: planId }, include: { nodes: true } });
 }
 const debitCount = () =>
-  getTestPrisma().transaction.count({ where: { userId, counterpartyId: 'contact_zhangwei', amount: -5000 } });
-const balance = async () => (await getTestPrisma().account.findFirst({ where: { userId, type: 'CHECKING' } }))?.balance;
+  getTestPrisma().transaction.count({ where: { userId, counterpartyId: 'contact_zhangwei', amountMinor: -500000n } });
+const balance = async () => centsToMoney((await getTestPrisma().account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
 
 describe('[integration] live-confirmation REFERENCE-COUNT marker lifecycle', () => {
   it('(a) a rejected duplicate verify must not clear the first still-live continuation marker', async () => {
@@ -180,7 +181,7 @@ describe('[integration] live-confirmation REFERENCE-COUNT marker lifecycle', () 
     expect(after?.nodes[0]?.status).toBe('success');
     expect(after?.status).toBe('success');
     // Side effect exactly once.
-    expect(await balance()).toBe(18580);
+    expect(await balance()).toBe('18580.00');
     expect(await debitCount()).toBe(before + 1);
   });
 
@@ -241,7 +242,7 @@ describe('[integration] live-confirmation REFERENCE-COUNT marker lifecycle', () 
     expect(recovered?.nodes[0]?.status).toBe('success');
     expect(recoveredAction?.status).toBe('executed');
     // The tool was NEVER re-invoked: side effect still exactly once.
-    expect(await balance()).toBe(18580);
+    expect(await balance()).toBe('18580.00');
     expect(await debitCount()).toBe(before + 1);
   });
 
@@ -286,7 +287,7 @@ describe('[integration] live-confirmation REFERENCE-COUNT marker lifecycle', () 
     expect(dbPlan?.status).toBe('success');
     // A settled gated action is no longer surfaced for a human decision.
     expect(listed.data?.length).toBe(0);
-    expect(await balance()).toBe(18580);
+    expect(await balance()).toBe('18580.00');
     expect(await debitCount()).toBe(before + 1);
   });
 });
