@@ -19,7 +19,7 @@ function cn(...parts: Array<string | false | null | undefined>): string {
 }
 
 const BASE_CLASSES =
-  'inline-flex items-center justify-center gap-2 rounded-xl font-medium transition disabled:opacity-50 disabled:cursor-not-allowed';
+  'inline-flex items-center justify-center gap-2 rounded-xl font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-banking-accent disabled:opacity-50 disabled:cursor-not-allowed';
 
 const SIZE_CLASSES: Record<NonNullable<ButtonProps['size']>, string> = {
   sm: 'px-3 py-1.5 text-sm',
@@ -28,7 +28,7 @@ const SIZE_CLASSES: Record<NonNullable<ButtonProps['size']>, string> = {
 };
 
 const VARIANT_CLASSES: Record<NonNullable<ButtonProps['variant']>, string> = {
-  primary: 'bg-banking-accent text-white hover:bg-banking-navy',
+  primary: 'bg-banking-accent text-white hover:bg-banking-deep',
   secondary: 'bg-banking-light text-banking-navy hover:bg-gray-200',
   ghost: 'bg-transparent text-banking-navy hover:bg-banking-light',
   danger: 'bg-banking-danger text-white hover:bg-red-700',

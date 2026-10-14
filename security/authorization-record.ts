@@ -6,7 +6,7 @@ import { redactSecrets } from '@/lib/sensitive';
 import type { SecurityDecision } from '@/lib/contracts/security';
 import type { GatewayContext } from './security-gateway';
 
-export const AUTHORIZATION_POLICY_VERSION = 'banking-policy-v2';
+export const AUTHORIZATION_POLICY_VERSION = 'banking-policy-v3';
 
 /** Persist decision facts, including denials, without recording hidden model reasoning. */
 export async function recordAuthorizationDecision(context: GatewayContext, decision: SecurityDecision): Promise<string> {

@@ -1,4 +1,4 @@
-import type { AgentRun, ToolInvocation } from '@prisma/client';
+import type { AgentRun, ToolInvocation } from '@/lib/db/prisma';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import type { AgentRunStatus } from '@/lib/contracts/runtime';
 import type { ToolName } from '@/lib/contracts/tools';

@@ -25,7 +25,8 @@
  */
 import { beforeEach, afterAll, it, expect } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan, type PlanRunTool } from '@/agent/tools/planning';
 import * as taskControl from '@/agent/task-control';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
@@ -83,7 +84,7 @@ const pauseOnRead = (s: string): PlanRunTool => async () => {
 };
 
 it('an obsolete/replaced executor must not reclaim and overwrite a completed successor node', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   // Plan: read balance → first budget → second budget (the successor). The lead `read` node pauses the
   // plan, so `first`/`second` are still `pending` when the obsolete executor resumes it.
@@ -149,7 +150,7 @@ it('an obsolete/replaced executor must not reclaim and overwrite a completed suc
 });
 
 it('an obsolete initial executor must publish no late plan-progress event after takeover success', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const reached = deferred();
   const release = deferred();
@@ -198,7 +199,7 @@ it('an obsolete initial executor must publish no late plan-progress event after 
 });
 
 it("an obsolete executor's late failure must not flip a takeover-completed dependency node to failed or skipped", async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   // Plan: read balance → budget (the dependency node the takeover completes) → tail (note, downstream).
   const plan: any = (
@@ -256,7 +257,7 @@ it("an obsolete executor's late failure must not flip a takeover-completed depen
 });
 
 it('two concurrent takeovers of one stale claim yield exactly one executor (node runs once)', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const plan: any = (
     await runSubmitPlan(

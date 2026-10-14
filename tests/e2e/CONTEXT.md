@@ -16,10 +16,28 @@ imports + node built-ins only, to avoid tsx/tsconfig path surprises).
 
 ## API Surface
 - `acceptance.e2e.ts` — the SINGLE entry point. Sets the isolated DB → resets it to the canonical
-  seed → boots the app → waits for readiness → launches Chrome → runs the 10 journeys (a–j) → prints
+  seed → boots the app → waits for readiness → launches Chrome → runs localization, workspace and banking journeys → prints
   exactly one `PASS|FAIL|SKIP <journey> — <evidence>` line per journey → exits non-zero iff ANY
   journey FAILED (a SKIP does not fail the run).
 - `helpers.ts` — shared harness (details below).
+- `developer-mode.e2e-helper.ts` — opt-in diagnostics, persistent normal history, shared chat reset,
+  retained bank/run evidence, confirmation cancellation and mobile modal visibility.
+- `i18n.e2e-helper.ts` — Chinese default, language persistence, localized server pages and no resubmission.
+- `hydration.e2e-helper.ts` — clean startup and pre-hydration browser root-attribute injection; records console errors.
+- `ui-shell.e2e-helper.ts` — responsive grouped navigation, draft suggestions, IME and HTTP request IDs.
+- `tool-lifecycle.e2e-helper.ts` — subscription authorization settles the original call, subsequent
+  requests never render its old activity in the live panel, and reload restores terminal history.
+  A DOM mutation observer checks transient flashes; `LIVE_SCENARIOS=8` runs the same journey with DeepSeek.
+- `card-management.e2e-helper.ts` — native card addition/deletion, independent MFA, proposal refresh,
+  idempotent receipts and audits, Agent capability exclusion, mobile layout and schedule navigation.
+  `LIVE_SCENARIOS=10` runs the same journey with DeepSeek.
+- `conversation.e2e-helper.ts` — natural funding explanations, small talk and scheduled-task capability
+  answers, abandoned-draft isolation, refresh persistence, unchanged banking data and a later explicit
+  transfer confirmation. `LIVE_SCENARIOS=11` runs the same journey with DeepSeek. Chinese prompts and
+  semantic answer markers live in `conversation.zh-CN.json`; no exact live-model prose is required.
+  The signed-input and analysis journey rejects negative money before generation, recalls the original
+  request before/after reload, and analyzes prior subscription query data without another authorization.
+  `LIVE_SCENARIOS=12` runs the same assertions with the live model.
 - `screenshots/` — git-ignored failure screenshots (`.gitignore` ignores everything but itself).
 - `CONTEXT.md` — this file.
 
@@ -28,8 +46,8 @@ Harness helpers (`helpers.ts`):
   `bootDevServer` (project-local Next CLI, readiness gated on `/api/health` + `/agent`, one retry on
   a fresh port), `killProcessTree` (whole-tree teardown).
 - **Isolated DB**: `E2E_DB_URL` (absolute `file:` URL to `prisma/e2e.db`), `useIsolatedDatabase()`
-  (sets `process.env.DATABASE_URL`), `resetDemoDatabase()` (generate-or-heal the Client → the shared
-  ORDERED `prisma db push` ladder → seed; each rung deletes the DB first; FULL un-truncated CLI
+  (sets `process.env.DATABASE_URL`), `resetDemoDatabase()` (generate-or-heal the Client → remove isolated
+  DB and sidecars → plain `prisma db push` → probe → seed; FULL un-truncated CLI
   diagnostics on failure). See "Isolated E2E database".
 - Browser: `resolveBrowserExecutable`/`launchBrowser`, `withPage` (fresh isolated context + failure
   screenshot + `pageerror` capture), `setActiveBrowser`/`runJourney`, `createReporter`.
@@ -61,8 +79,9 @@ Harness helpers (`helpers.ts`):
 - **Always tear down.** One idempotent `cleanup()` (wired to `process.on('exit' | 'SIGINT' |
   'SIGTERM' | 'uncaughtException' | 'unhandledRejection')`) kills the dev server's whole process tree
   and closes the browser on success, failure AND unexpected errors. Never leave `next dev` listening.
-- **Isolation.** A FRESH browser context (fresh cookies) per journey. Identity is the HttpOnly
-  `banking_session` cookie, so the refresh-recovery journey reuses the SAME context across reload.
+- **Isolation.** A FRESH browser context per journey isolates locale and developer-mode preferences.
+  Every context uses the configured single demo owner and its canonical database session;
+  cookies do not select different banking identities. The database is reset between journeys.
 - **RENDERED DOM is PRIMARY; DB/ledger is SECONDARY.** Money journeys keep their primary evidence on
   the DOM (assistant narration / plan badges) and add a real read-route cross-check.
 - Wait on real DOM conditions, never fixed sleeps; keep generous timeouts for Next dev cold compile.
@@ -108,31 +127,24 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   dev server (`startDevServer`).
 - `resetDemoDatabase()` runs BEFORE the dev server boots (no open connection ⇒ no Windows SQLite
   file-lock). It first ensures a GENERATED, USABLE Prisma Client, then (per attempt) provisions the
-  schema + seed through the SAME shared ORDERED LADDER as the Vitest setup
+  schema + seed through the shared provisioning helper also used by the Vitest setup
   (`../helpers/prisma-cli.ts#provisionSchemaLadder`), which DELETES `e2e.db` + its
-  `-wal`/`-shm`/`-journal` sidecars (missing files are fine) BEFORE EVERY rung and runs
-  `probeDatabaseUsable()` + the seed (`afterPush`) between every push and its dependents:
-  1. **Client bootstrap / self-heal** (`ensurePrismaClientGenerated`, once per attempt): runs
-     `prisma generate` when the generated artifacts
-     (`node_modules/.prisma/client/{schema.prisma,index.js,default.js}`) are absent OR the client does
-     not actually construct (a throwaway `require('@prisma/client'); new PrismaClient()` probe — the
-     bare-`pnpm install` postinstall stub throws `did not initialize yet`), so a
-     partially-provisioned or stale `node_modules` self-heals. Readiness is gated on the USABILITY probe
-     (`prismaClientUsable`); artifact presence is accepted as a non-authoritative confirming signal.
-  2. **Primary rung** (byte-for-byte unchanged): `prisma db push --skip-generate` → probe → seed.
-     `--force-reset` is deliberately NOT the primary path: on Windows it has been seen to leave the DB
-     file as a 0-byte image and fail `Error code 11: database disk image is malformed`.
-  3. **Generate-first fallback rung**: re-run `prisma generate` → `prisma db push --force-reset
-     --skip-generate` → probe → seed — a stale client or engine can make the push fail with an opaque
-     `Error: Schema engine error:`.
-  4. **ADDITIVE flag-less rung**: `prisma db push` with NO flags → probe → seed — the exact shape that
-     provably SUCCEEDS in a clean environment where the flag-bearing shapes die with
-     `Error: Schema engine error:`. Because the file is deleted before every rung, `--force-reset` is not
-     needed here.
-  Each rung runs ONLY after the previous FAILED; the delete-then-push ordering means the fallbacks can
-  only help.
+  `-wal`/`-shm`/`-journal` sidecars (missing files are fine) before the plain push:
+  1. **Client bootstrap / self-heal** (`ensurePrismaClientGenerated`, once per attempt): checks
+     `lib/db/generated/client.ts` and `internal/class.ts`. The generated inline schema must match the
+     current schema's significant tokens. A separate `tsx` process constructs the application
+     `createDatabaseClient('file::memory:')` factory and disconnects it, verifying the actual adapter
+     without touching persistent data. Missing, stale or unusable output triggers `prisma generate`.
+     The `prisma-client` generator's public facade is `lib/db/prisma.ts`; consumers do not import a
+     generated `node_modules/.prisma` client or use a bare constructor.
+  2. **Schema and data**: remove the isolated database and sidecars → `prisma db push` →
+     `probeDatabaseUsable()` → seed. Prisma 7 does not generate the client during `db push`.
+     The harness uses one plain-push rung; it does not request a redundant CLI reset.
+  CLI configuration comes from `prisma.config.ts`, including schema location, the normalized
+  datasource URL and the seed command. CLI and runtime share `lib/db/url.ts`; runtime clients use the
+  `@prisma/adapter-better-sqlite3` factory with exact `bigint` integers and Unix-millisecond dates.
 - **Self-diagnosing CLI steps.** `runCliStep`/`runCliStepCaptured` decide success by the **EXIT CODE**
-  (the deprecated `package.json#prisma` warning lines are harmless) and, on failure, preserve the
+  and, on failure, preserve the
   COMPLETE labelled stdout+stderr — the TAIL is ALWAYS preserved (an output over `CLI_OUTPUT_CAP` = 16 KB
   elides only the MIDDLE), so the schema engine's real reason (often the last stderr line) is never hidden
   by truncation — plus any spawn `error` (message + code). When EVERY ladder rung fails
@@ -153,6 +165,11 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   plus `prisma/*.db` / `prisma/*.db-journal`).
 
 ## Journeys (each asserts on RENDERED DOM; money journeys add a DB/ledger cross-check)
+- **natural-conversation-and-financial-boundary** starts an incomplete transfer draft, then asks about
+  funding, small talk and scheduled tasks. Each answer must be nonempty natural prose without recovery
+  warnings or model protocol JSON, and must create no authorization or plan. A later bare amount must
+  not resume the abandoned draft. Reload preserves the replies; a complete transfer request still
+  creates the expected confirmation, with balances, ledger, cards and schedules unchanged.
 - **a-transfer-confirm** (YELLOW transfer ≤¥1000): `给张伟转200元` → ConfirmationCard (`确认`/`取消`)
   → click `确认` → assistant text `转账处理结果：…`. SECONDARY: CHECKING balance drops by ¥200 AND a
   new `-200 DEBIT` ledger row to 张伟 appears (`GET /api/dashboard` + `GET /api/bills`).
@@ -173,16 +190,16 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   (HTTP 200 `data.ok=false`/`status=cancelled`, or a 4xx error envelope); if the card is gone, it
   proves that via the rendered DOM (button count 0) + `GET /api/actions` (no leaked non-terminal
   action). Either way balance / ledger / 娱乐 limit are UNCHANGED.
-- **e-refresh-action-recovery** — two legs, SAME context across reload (the HttpOnly cookie persists):
-  - leg 1 parks a **STATIC-YELLOW** `freeze_card` (`冻结我的信用卡`, so its tier does not depend on the
+- **e-refresh-action-recovery** — two legs, SAME context across reload (the fixed demo workspace persists):
+  - leg 1 parks a **STATIC-YELLOW** `set_card_limit` (its tier does not depend on the
     demo day's accumulated transfer total) → same-context reload → ConfirmationCard RESTORED from
     persisted server state (`GET /api/actions`).
   - leg 2 (fresh context) parks a RED transfer → reload → MfaCard RESTORED.
 - **f-wedge-refresh-recover** (the PLAIN refresh/navigation recovery surface — the recovery control is
-  reached with NO actionId in the URL): mints the identity cookie with a first GREEN chat turn, snapshots
+  reached with NO actionId in the URL): opens the fixed workspace with a first GREEN chat turn, snapshots
   balance+ledger, then SEEDS a committed-but-unrecorded standalone transfer straight into the isolated E2E
   DB (debit + DEBIT `Transaction` + committed `ExecutionReceipt` + `PendingAction pa_ewedge_1` at
-  `confirmed` with `resultJson=null`). A plain `page.goto('/actions')` must RENDER the row with a `恢复执行`
+  `confirmed` with `resultJson=null`). A plain `page.goto('/agent')` must RENDER the inline recovery card with a `恢复执行`
   button; clicking it settles the wedge FROM the committed receipt (never a second debit) and the journey
   asserts on the DOM-reachable read routes + direct DB facts: balance exactly one `−¥200`, exactly ONE new
   `−200 DEBIT`/张伟 ledger row, `PendingAction.status='executed'`, and a durable recovery
@@ -201,15 +218,15 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   then THREE consecutive wrong MFA codes (`000000`) on a RED transfer (after each, `role=status` shows
   `验证失败，已尝试 N 次`) trip it → security center `已熔断` + `失败 3 / 3 次` + a DB-cross-checked
   `CIRCUIT_BREAKER_TRIPPED` (severity `high`).
-  The `/security` breaker control's 6-digit code input starts EMPTY — the mock code `123456` is NEVER
-  prefilled or revealed (asserted `value === ''` AND the placeholder does not contain `123456`) — and its
-  unlock button is DISABLED while the input is empty, so a MISSING code cannot be submitted (the lock
-  stays). A WRONG code (`000000`) is REFUSED by the route (its message `解除熔断需要额外的安全验证…`
-  surfaces) and the lock PERSISTS across a plain reload; only the CORRECT `123456` clears the breaker
-  (`已解除，当前失败0/3次`) and records a `SECURITY_RESET` event (DOM + DB).
-  The code is TYPED (`fillBreakerCode`, after `waitForElementHydration`) BEFORE
-  `clickBreakerReset(page, name, code)` clicks — the empty disabled button would otherwise be an
-  actionability no-op.
+  In normal mode `/security` has no reset control. A direct reset request without developer mode
+  returns `403` and leaves the lock intact. After enabling developer mode, one code-free reset
+  button clears the failed-attempt count and records `SECURITY_RESET` (DOM + DB). The page has no
+  password or six-digit code field for this developer action. Payment/card MFA remains separate.
+- **multi-card-freeze-audit-history** verifies two independent RED authorizations, one card change
+  per accepted code, two successful audit rows, and one completed historical plan before later
+  conversation messages both before and after refresh.
+- **banking-pages** verifies contact creation, cancelled/confirmed deletion, investment products
+  and holdings, and the updated sidebar without a standalone pending-actions entry.
 
 ## Coverage notes
 - **Covers:** real-browser NL → card → human-decision flows; MFA success + wrong-code rejection;
@@ -241,10 +258,10 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   `shell: true`, which re-serialized args and produced an empty stdout pipe. It waits for BOTH
   `/api/health` AND `/agent` and retries ONCE on a fresh port; when every attempt fails it prints the
   captured dev-server log tail and the entry script FAILs every journey.
-- **Live PlanCard selection.** A plan turn renders the DAG snapshot TWICE — inline in the assistant
-  bubble (frozen; nothing rewrites `message.cards`) and as the live `stream.activePlan` card after the
-  messages. `planCard()` therefore selects the LAST match (`PLAN_CARD_XPATH … [last()]`), so
-  plan-control outcomes are read from the app-authoritative live card.
+- **PlanCard selection.** Each plan appears once in its original assistant message; progress and
+  authorization snapshots update that same card. `planCard()` selects the latest matching plan for
+  isolated journeys. The multi-card freeze helper additionally asserts a single completed plan
+  remains before unrelated later messages after refresh, with no stale pause control or footer copy.
 - **Live MFA card selection.** Like the PlanCard, a RED gated tool emits BOTH an `mfa_required` event
   (rendered as the LIVE decision card AFTER the whole message list) AND an inline `mfa` ChatCard in the
   assistant message. `ChatWindow` suppresses the inline duplicate only WHILE that action is active;
@@ -255,14 +272,10 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   single-card page `.last()` === `.first()`. Journey `h` (two RED flows in one page) passes
   `beforeMfaCount + 1` to the redeem leg's `waitForMfaCard`; `clickLastWhenEnabled` exists because the
   general `clickWhenEnabled` is `.first()`-scoped for `submitChat`/`clickConfirm`.
-- **Security-center breaker control (journey `j`).** `app/security/ResetBreakerButton.tsx` renders a
-  CONTROLLED 6-digit code input (`input[aria-label="6 位验证码"]`, `SELECTORS.breakerCodeInput`) that
-  starts EMPTY and never reveals the mock code, plus a button DISABLED while the input is empty
-  (`解除熔断限制` while locked, else `重置熔断计数`). `fillBreakerCode(page, code)` waits
-  `waitForElementHydration` on that input (its SSR node carries no React own-property, so a pre-hydration
-  `fill()` is silently reset) then `fill`s; `clickBreakerReset(page, name, code)` fills BEFORE clicking.
-  A `POST /api/security/reset` refusal while locked surfaces as `role=status`
-  `解除熔断需要额外的安全验证…` with the lock intact.
+- **Security-center breaker control (journey `j`).** `ResetBreakerButton` is rendered only in
+  developer mode and submits a code-free reset request. `POST /api/security/reset` checks the mode
+  preference and rejects normal-mode requests with `403`. The journey verifies hidden controls,
+  retained lock after rejection, developer enable/reset, and the durable reset event.
 - **Per-node timeline.** `planNodeRows()` scopes to `ol.space-y-3 > li` inside the live card (avoiding
   the SECOND copy of every node name in the card's 依赖关系 dependency list), reading the node name
   (`span.text-sm.font-medium.text-banking-deep`) + its status `span.rounded-full` badge.
@@ -270,10 +283,10 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
   (`张伟`); the merchant JSDoc mentions `'转账给'+name`, but the runtime value is the plain name —
   assertions use `.includes(RECIPIENT_NAME)`.
 - **Standalone-wedge seeding (journey `f`).** The recovery surface must be reachable by PLAIN
-  navigation, so the journey NEVER passes the actionId in the URL: it mints the cookie with a first
+  navigation, so the journey NEVER passes the actionId in the URL: it opens the fixed workspace with a first
   GREEN chat turn, seeds the committed-but-unrecorded rows directly into the isolated E2E DB
   (`seedStandaloneWedge`, ONE transaction, no wipe/re-seed), then does a plain
-  `page.goto('/actions')` and clicks the rendered `恢复执行` control.
+  `page.goto('/agent')` and clicks the rendered inline `恢复执行` control.
 
 ## Known Limitations
 - **Plan DAG has no observable "downstream node ran after resume".** The gated mock plan's `setlimit`
@@ -289,7 +302,12 @@ The run uses its OWN SQLite DB (`prisma/e2e.db`) and NEVER touches the shared `p
 A SECOND, independent real-browser harness that drives the REAL `next dev` app against the REAL
 DeepSeek API (`LLM_MODE=live`) instead of the scripted mock — same real Chrome + real route handlers,
 only the LLM is live.
-- Run: `pnpm exec tsx tests/e2e/live-acceptance.e2e.ts`; subset via `LIVE_SCENARIOS=1,3` (ids `1,2,2p,3,4,5,6,7`; selecting `2` also pulls `2p`).
+- Run: `pnpm exec tsx tests/e2e/live-acceptance.e2e.ts`; subset via `LIVE_SCENARIOS=1,3` (ids `0,1,2,2p,3,4,5,6,7,8,9,10,11`; selecting `2` also pulls `2p`).
+- Scenario `9` reuses the multi-card freeze helper with live DeepSeek: two independent MFA gates,
+  audit visibility and historical plan ordering across an unrelated message and refresh.
+- Scenario `10` checks page-only card creation/deletion and rejects those capabilities in live chat.
+- Scenario `11` verifies natural conversation, capability explanations, draft isolation and the later
+  financial confirmation boundary using the same assertions as the mock journey.
 - Own isolated DB `prisma/live-acceptance.db` (never `e2e.db`/`dev.db`/`test.db`); `configureLiveEnv()` sets `DATABASE_URL`.
 - Uses the Next.js environment loader before booting; it does not directly read or parse `.env.local`,
   and configuration values are never printed. Spawned processes inherit the configured environment.
@@ -313,7 +331,13 @@ only the LLM is live.
   green. Only scenario 7 has nudge/retry (`PARK_ATTEMPTS`).
 
 ## Routing Table
-- `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 10 journeys a–j → structured report → non-zero exit on FAIL)
+- `./acceptance.e2e.ts` → the single real-browser entry point (isolated DB → reset → boot → readiness → 23 registered journeys → structured report → non-zero exit on FAIL)
+- `./activity.e2e-helper.ts` → public business projection, developer-only audit HTML/RSC/API, preference persistence and browser isolation, disable navigation and mobile layout
+- `./chat-history.e2e-helper.ts` → latest twenty complete messages, older-page retry and scroll anchors, preserved drafts/preferences, new-message indicator, bounded refresh, browser sharing and reset fencing against delayed history responses
+- `./card-freeze.e2e-helper.ts` → two independently verified card freezes in ordinary business history, explicitly enabled developer audits, and completed-plan history ordering before/after refresh; reused by live scenario 9
+- `./banking-pages.e2e-helper.ts` → contact creation/deletion, investment product/holding displays and grouped navigation
+- `./card-management.e2e-helper.ts` → page-only card record changes, separate MFA, refresh recovery, repeat verification, preserved ledger/audit, mobile layout and Agent exclusion; reused by live scenario 10
+- `./conversation.e2e-helper.ts` → natural prose, draft isolation, signed input refusal, persistent recall and subscription analysis; reused by live scenarios 11 and 12
 - `./live-acceptance.e2e.ts` → REAL-browser + REAL-LLM (`LLM_MODE=live`) acceptance harness against DeepSeek; own isolated DB `prisma/live-acceptance.db`; `LIVE_SCENARIOS` subset; embeds the TASK-A persisted-tool-arg evidence dump (`persistedRecipientCalls`)
 - `./LIVE-ACCEPTANCE-REPORT.md` → current-state report of the live runs (a clean FULL run — `PASS 8 ｜ FAIL 0 ｜ SKIP 0` — with all 8 scenarios PASS live including the formerly-failing S2p raw-phone leg; plus the honest live-model narration-flake blocker)
 - `./helpers.ts` → shared harness (isolated E2E DB + reset, free port, dev-server boot/teardown, readiness poll, hydration gate, browser factory, `withPage`, DOM selectors/interactions, plan card + per-node timeline, read-model HTTP helpers, wedge fixtures + `seedStandaloneWedge`/direct-DB fact queries (`queryPendingActionStatus`/`queryExecutionAudit`), reporter, fail-fast navigation)

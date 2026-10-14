@@ -16,8 +16,8 @@ describe('exact financial presentation', () => {
   });
 
   it('renders an exact tooltip amount independently of the lossy chart coordinate', () => {
-    const markup = renderToStaticMarkup(createElement(ChartTooltip, { active: true, payload: [{
-      name: 'Spending', value: Number('92233720368547758.07'), payload: { amount: '92233720368547758.07' },
+    const markup = renderToStaticMarkup(createElement(ChartTooltip, { active: true, entries: [{
+      label: 'Spending', amount: '92233720368547758.07',
     }] }));
     expect(markup).toContain('92,233,720,368,547,758.07');
   });

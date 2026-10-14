@@ -1,59 +1,38 @@
-# components/charts — Recharts wrappers
+# Native SVG chart context
 
-## Intent
+## Boundaries
 
-Thin, responsive **Recharts** wrappers that visualise spend analytics. Each takes plain SDK DTO
-data (no fetching) and renders one chart. All are **Client Components** (Recharts needs the DOM).
+Static chart accessibility titles and empty-state labels use `useI18n()` with the product locale.
+Financial values and supplied category names remain authoritative DTO data; localization never
+converts an amount or changes category identity.
 
-## API Surface
+The public barrel exports SpendingPie, SpendingBar, SpendingTrend and MiniSparkline. Charts only
+render supplied SDK DTOs. They never fetch data or calculate business metrics. Native SVG viewBox
+geometry handles responsive sizing without a chart library. Bar and trend charts use the private
+useChartWidth hook to measure their container with ResizeObserver, with a window resize fallback.
+Their viewBox matches the measured width and supplied height, keeping plots full-width and text
+at a stable pixel size. Observers and fallback listeners disconnect on unmount.
 
-All named exports, re-exported from `./index.ts`. Shared wrapper chrome (responsive container,
-banking palette, tooltip styling, empty-data guard) lives in the private local `./chartTheme.tsx`.
+Category charts accept CategorySpend[], trends accept MonthlyTrendPoint[], and sparklines accept
+exact MoneyInput[] strings. Public props include data, height and className; sparklines also accept
+color. Each interactive leaf is a client component; the barrel remains neutral.
 
-```ts
-// SpendingPie.tsx — category share donut, fed by SpendingAnalysis.byCategory (CategorySpend[])
-export interface SpendingPieProps { data: CategorySpend[]; height?: number; className?: string; }
-export function SpendingPie(p: SpendingPieProps): JSX.Element;          // 'use client'
+## Invariants
 
-// SpendingBar.tsx — vertical bar of category totals (categories on X, amounts on Y)
-export interface SpendingBarProps { data: CategorySpend[]; height?: number; className?: string; }
-export function SpendingBar(p: SpendingBarProps): JSX.Element;          // 'use client'
+- Only geometry uses moneyToChartNumber. Tooltip, legend, SVG title and accessible labels retain
+  the original exact amounts through formatCNY. Never derive financial labels from coordinates.
+- chartTheme.tsx owns colors, scale, empty state and tooltip. Scale includes a zero baseline and
+  places negative and positive values on opposite sides.
+- Bar, trend and donut points support hover, focus and tap. Escape hides the tooltip. Each point
+  has an accessible name containing its full exact amount.
+- Share values come from the SDK. Only positive shares are drawn; legends retain original data.
+- Empty and all-zero series show a neutral placeholder. Single-point series never divide by zero.
+- Private ChartTooltip accepts exact string entries, without chart-library callback payloads.
 
-// SpendingTrend.tsx — monthly trend line, fed by SpendingAnalysis.monthlyTrend (MonthlyTrendPoint[])
-export interface SpendingTrendProps { data: MonthlyTrendPoint[]; height?: number; className?: string; }
-export function SpendingTrend(p: SpendingTrendProps): JSX.Element;      // 'use client'
+## Validation
 
-// MiniSparkline.tsx — bare sparkline for compact tiles (no axes/grid)
-export interface MiniSparklineProps { data: number[]; height?: number; color?: string; className?: string; }
-export function MiniSparkline(p: MiniSparklineProps): JSX.Element;      // 'use client'
-```
+tests/unit/planner/chart-presentation.test.ts checks maximum cents, single points, refunds and empty
+states. financial-display.test.ts checks exact tooltip values. The browser acceptance suite checks
+chart layout and keyboard tooltip interaction. SQLite test processes must run sequentially.
 
-Types `CategorySpend`, `MonthlyTrendPoint` are imported **type-only** from `@/banking-sdk`.
-
-## Constraints
-
-- **Client Components** — every file starts with `'use client'` (Recharts is browser-only).
-- **Props only** — no data fetching, no DB, no `banking-sdk` calls. Data is passed in.
-- Charts are **responsive** (wrap in Recharts `ResponsiveContainer`); empty data renders nothing/a
-  neutral placeholder, never throws.
-- Use only the Tailwind `banking` palette colours for series; money axes/tooltips use `lib/money.formatCNY`.
-- Reusable chart chrome lives in the private local helper `./chartTheme.tsx` (`BANKING_PALETTE`,
-  `SERIES_COLORS`/`seriesColor`, `ChartFrame` = ResponsiveContainer + empty-data placeholder,
-  `ChartTooltip`, `isChartEmpty`); it is NOT exported from `./index.ts`. Do not copy-paste it into
-  each chart file.
-- Named exports only; one chart per file.
-
-## Test Strategy
-
-- Not snapshot-tested (Recharts DOM output is brittle). Covered structurally: components render with
-  fixture `CategorySpend[]`/`MonthlyTrendPoint[]` without throwing (RTL smoke test under root `tests/`).
-- Data-shaping (e.g. percent maths) belongs in `banking-sdk`, not here — keep charts dumb.
-
-## Routing Table
-
-- `./SpendingPie.tsx` `./SpendingBar.tsx` `./SpendingTrend.tsx` `./MiniSparkline.tsx` → the chart wrappers
-- `./index.ts` → re-exports all charts (the 4 public charts only — `chartTheme.tsx` stays private)
-- `./chartTheme.tsx` → private shared chart chrome (palette, ResponsiveContainer wrapper, styled tooltip, empty guard)
-- `../chat/cards/` → `SpendingCard` composes `SpendingPie` + `SpendingTrend` (sibling — read-only)
-- `../../app/bills/` → the `/bills` page is the primary consumer: renders all four charts (`SpendingPie`, `SpendingBar`, `SpendingTrend`, `MiniSparkline`) from real `banking.transaction.analyzeSpending` output (sibling — read-only)
-- `../banking/` → no banking tile embeds a chart today (`MiniSparkline` is used by `app/bills`, not by tiles) (sibling — read-only)
+Human documentation: docs/cn/development.md and docs/cn/financial-values.md.

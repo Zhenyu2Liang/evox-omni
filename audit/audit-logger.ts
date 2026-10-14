@@ -25,7 +25,7 @@ import type { AuditEntry, AuditStatus } from '@/lib/contracts/audit';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import { insertAuditLog, findAuditLogs, aggregateAuditLogs } from '@/lib/db/repositories/auditLog';
 import { prisma } from '@/lib/db/client';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/errors';
 import { requestDigest } from '@/lib/ledger';
 
@@ -109,7 +109,7 @@ export async function recordAudit(
         try {
           const client = opts.client ?? prisma;
           const existing = await client.auditLog.findUnique({ where: { dedupeKey } });
-          if (existing && existing.sessionId === entry.sessionId && existing.toolName === entry.toolName &&
+          if (existing && existing.userId === (entry.userId ?? null) && existing.sessionId === entry.sessionId && existing.toolName === entry.toolName &&
               existing.status === entry.status && existing.riskLevel === entry.riskLevel &&
               existing.confirmed === entry.confirmed && existing.mfaRequired === entry.mfaRequired) {
             const previous = existing.toolResult === null ? undefined : JSON.parse(existing.toolResult);

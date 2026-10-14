@@ -15,11 +15,13 @@
  *    result — the exact shape that produces the 400 above.
  *  - the confirmation continuation (`run-turn.ts#resumeTurn`): `withRealToolResult` attributes the
  *    REAL outcome to the ORIGINAL tool call, REPLACING the turn-time (blocked) placeholder in place
- *    and dropping the trailing narration — never appending a second result for the same `toolCallId`
+ *    while retaining later dialogue — never appending a second result for the same `toolCallId`
  *    (which would land after the narration message and violate the adjacency rule).
  */
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { AssistantMessage, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
+import { runtimeRequestDigest } from './durable/serialization';
+import { AppError } from '@/lib/errors';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -45,9 +47,41 @@ function toolCallsOf(message: AgentMessage): ToolCall[] {
   return calls;
 }
 
+/** Provider IDs may repeat across turns, but one response must identify every call unambiguously. */
+export function validateToolCallIdentities(message: AssistantMessage): void {
+  const identities = new Set<string>();
+  for (const call of toolCallsOf(message)) {
+    if (typeof call.id !== 'string' || call.id.trim().length === 0 || identities.has(call.id)) {
+      throw new AppError('VALIDATION', 'Every tool call in one response must have a unique nonempty call ID.');
+    }
+    identities.add(call.id);
+  }
+}
+
 /** Does this assistant message declare a `toolCall` with `id`? */
 function hasToolCall(message: AgentMessage, id: string, name: string): boolean {
   return toolCallsOf(message).some((call) => call.id === id && call.name === name);
+}
+
+/** Provider IDs can repeat; a saved model response identifies the assistant that owns the call. */
+export function findToolCallOwner(messages: readonly AgentMessage[], id: string, name: string,
+  expectedOwner?: AssistantMessage | null): number {
+  if (expectedOwner === null) return -1;
+  const identity = (message: AssistantMessage) => runtimeRequestDigest('provider_assistant', {
+    timestamp: message.timestamp, api: message.api, provider: message.provider, model: message.model,
+    responseId: message.responseId ?? null, content: message.content,
+  });
+  const expected = expectedOwner ? identity(expectedOwner) : undefined;
+  let found = -1;
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (!isAssistantMessage(message) || !hasToolCall(message, id, name)) continue;
+    if (expected === undefined) return index;
+    if (identity(message) !== expected) continue;
+    if (found !== -1) return -1;
+    found = index;
+  }
+  return found;
 }
 
 /**
@@ -61,11 +95,11 @@ function hasToolCall(message: AgentMessage, id: string, name: string): boolean {
  */
 export function normalizeToolResultMessages(messages: readonly AgentMessage[]): AgentMessage[] {
   const out: AgentMessage[] = [];
-  let openCalls: Set<string> | null = null; // ids of the assistant message owning the current run
+  let openCalls: Map<string, string> | null = null; // ids and names of the owning assistant calls
   let seen: Set<string> = new Set(); // ids already answered inside the current run
   for (const message of messages) {
     if (isToolResultMessage(message)) {
-      const valid = openCalls !== null && openCalls.has(message.toolCallId) && !seen.has(message.toolCallId);
+      const valid = openCalls !== null && openCalls.get(message.toolCallId) === message.toolName && !seen.has(message.toolCallId);
       if (valid) {
         out.push(message);
         seen.add(message.toolCallId); // orphan / duplicate ⇒ dropped
@@ -73,44 +107,34 @@ export function normalizeToolResultMessages(messages: readonly AgentMessage[]): 
       continue;
     }
     out.push(message);
-    const declared = toolCallsOf(message).map((call) => call.id);
-    openCalls = declared.length > 0 ? new Set(declared) : null;
+    const declared = toolCallsOf(message);
+    openCalls = declared.length > 0 ? new Map(declared.map(call => [call.id, call.name])) : null;
     seen = new Set();
   }
   return out;
 }
 
 /**
- * Place the REAL tool result for `result.toolCallId` in the transcript so that `agent.continue()`
- * (which requires the last message to be a user/tool-result message) can narrate it:
+ * Replace the original outcome in place without rewinding the conversation:
  *  - find the assistant message declaring that `toolCall`, then REPLACE the (blocked) turn-time result
- *    inside that assistant message's contiguous result group and drop everything after the group (the
- *    turn-time narration) — so no second result for the same id is appended, no orphan is created, and
- *    the result becomes the LAST message;
- *  - when no such call exists (a degenerate/empty transcript that never occurs on the live gated
- *    path) simply append it.
+ *    inside that assistant message's contiguous result group and retain everything after the group;
+ *  - when no such call exists, keep the valid history without inventing an orphan result.
  * Sibling results of the same assistant turn (a parallel tool-call batch) are preserved.
  */
 export function withRealToolResult(
   messages: readonly AgentMessage[],
   result: ToolResultMessage,
+  owner?: AssistantMessage | null,
 ): AgentMessage[] {
   const base = normalizeToolResultMessages(messages);
-  // Providers (and the mock) may reuse ids across turns. Target the most recent
-  // matching call, never an earlier query/result with the same id.
-  let callIndex = -1;
-  for (let i = base.length - 1; i >= 0; i -= 1) {
-    if (hasToolCall(base[i], result.toolCallId, result.toolName)) {
-      callIndex = i;
-      break;
-    }
-  }
-  if (callIndex < 0) return [...base, result];
+  const callIndex = findToolCallOwner(base, result.toolCallId, result.toolName, owner);
+  if (callIndex < 0) return base;
 
   // The contiguous run of tool results answering that assistant message.
   const group: ToolResultMessage[] = [];
-  for (let i = callIndex + 1; i < base.length; i += 1) {
-    const message: AgentMessage | undefined = base[i];
+  let groupEnd = callIndex + 1;
+  for (; groupEnd < base.length; groupEnd += 1) {
+    const message: AgentMessage | undefined = base[groupEnd];
     if (message === undefined || !isToolResultMessage(message)) break;
     group.push(message);
   }
@@ -119,5 +143,5 @@ export function withRealToolResult(
   if (at >= 0) group[at] = result;
   else group.push(result);
 
-  return [...base.slice(0, callIndex + 1), ...group];
+  return [...base.slice(0, callIndex + 1), ...group, ...base.slice(groupEnd)];
 }

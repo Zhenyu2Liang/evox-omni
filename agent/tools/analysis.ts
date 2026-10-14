@@ -1,9 +1,8 @@
 /**
  * analysis — `analyze_spending`
  *
- * Spending analysis over a month window. TypeBox param schema; `execute` calls the Banking SDK and
- * THROWS `AppError` on failure. `runAnalyzeSpending(userId, args)` is the model-free path used by
- * `executeDirect`; it CATCHES and returns `ToolExecutionResult{ok:false,error}`.
+ * Spending analysis over a month window. The runner returns a typed SDK result; the factory
+ * uses the shared result adapter to expose complete public model data and Pi errors.
  *
  * Tier: 🟢 GREEN (read-only).
  * No permission/risk/MFA logic here. `userId` is SERVER-INJECTED; the model never supplies it.
@@ -13,15 +12,16 @@ import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
 import type { SpendingAnalysis } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
-import { AppError } from '@/lib/errors';
 import { absoluteMinor, centsToMoney, formatCNY, moneyToCents } from '@/lib/money';
 import { compareDecimal } from '@/lib/decimal';
 import type { ToolExecutionResult } from './index';
+import { toModelToolResult, toolFailure } from './result';
+import { validateSpendingMonth } from '@/banking-sdk/read-query';
 
 /** `analyze_spending` params — `YYYY-MM` window (SDK `SpendingQuery`); defaults to current month. */
 export const AnalyzeSpendingParams = Type.Object({
-  month: Type.Optional(Type.String({ description: '分析月份 YYYY-MM，默认本月' })),
-});
+  month: Type.Optional(Type.String({ pattern: '^\\d{4}-(0[1-9]|1[0-2])$', description: 'Spending month in YYYY-MM format. Defaults to the current banking month.' })),
+}, { additionalProperties: false });
 export type AnalyzeSpendingArgs = Static<typeof AnalyzeSpendingParams>;
 
 /** Factory: build the `analyze_spending` AgentTool bound to `userId` (🟢 GREEN). */
@@ -31,16 +31,7 @@ export function createAnalyzeSpendingTool(userId: string): AgentTool<typeof Anal
     label: '消费分析',
     description: '分析指定月份消费：总额、环比、分类占比、最大单笔与月度趋势。',
     parameters: AnalyzeSpendingParams,
-    execute: async (_toolCallId, params) => {
-      const result = await runAnalyzeSpending(userId, { month: params.month });
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'analyze_spending failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
-    },
+    execute: async (_toolCallId, params) => toModelToolResult(await runAnalyzeSpending(userId, { month: params.month })),
   };
 }
 
@@ -50,14 +41,14 @@ export async function runAnalyzeSpending(
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
   try {
-    const month = typeof args.month === 'string' && args.month.trim() !== '' ? args.month : undefined;
+    const month = validateSpendingMonth(args.month);
     const analysis = await banking.transaction.analyzeSpending(
       userId,
       month !== undefined ? { month } : {},
     );
     return { ok: true, data: analysis, summary: summarizeSpending(analysis) };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 

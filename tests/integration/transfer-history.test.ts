@@ -15,7 +15,8 @@
  */
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import * as actionRepo from '@/lib/db/repositories/pendingAction';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
@@ -133,7 +134,7 @@ async function transferWedge(s: string) {
 }
 
 it('REVIEW_TXN_CONTACT_RENAMED — a committed transfer is recovered from its committed evidence after the recipient contact is renamed', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const debitsBefore = await amountDebits();
   const id = await transferWedge(s);
@@ -185,7 +186,7 @@ it('REVIEW_TXN_CONTACT_RENAMED — a committed transfer is recovered from its co
 });
 
 it('REVIEW_TXN_CONTACT_DELETED — recovery survives deletion of the recipient contact (the committed evidence is looked up first)', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const debitsBefore = await amountDebits();
   const id = await transferWedge(s);
@@ -226,7 +227,7 @@ it('REVIEW_TXN_CONTACT_DELETED — recovery survives deletion of the recipient c
 });
 
 it('REVIEW_TXN_PLAN_CANCEL — a committed plan transfer fact is retained across a plan cancellation and never downgraded', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const debitsBefore = await amountDebits();
 

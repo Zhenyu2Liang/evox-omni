@@ -1,7 +1,9 @@
+'use client';
+
 /**
  * RecentTransactions — read-model tile: transaction list (money via ui/Money).
  *
- * Server-safe presentational component: no `'use client'`, no hooks, no fetching, no DB.
+ * Localized presentational component with no fetching or database access.
  * Renders a `TransactionView[]` through the generic `ui/Table`; empty input falls back to
  * an `ui/EmptyState`.
  */
@@ -13,6 +15,7 @@ import type { TableColumn } from '../ui/Table';
 import { EmptyState } from '../ui/EmptyState';
 import { formatDateTime } from '@/lib/date';
 import type { TransactionView } from '@/banking-sdk';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
 
 export interface RecentTransactionsProps {
   transactions: TransactionView[];
@@ -21,27 +24,27 @@ export interface RecentTransactionsProps {
   className?: string;
 }
 
-const COLUMNS: TableColumn<TransactionView>[] = [
-  { key: 'merchant', header: '商户', render: (row) => row.merchant },
-  { key: 'category', header: '分类', render: (row) => row.category },
-  { key: 'occurredAt', header: '时间', render: (row) => formatDateTime(row.occurredAt) },
-  {
-    key: 'amount',
-    header: '金额',
-    align: 'right',
-    render: (row) => <Money amount={row.amount} signed />,
-  },
-];
-
 export function RecentTransactions({ transactions, limit, title, className }: RecentTransactionsProps) {
+  const { t } = useI18n();
+  const columns: TableColumn<TransactionView>[] = [
+    { key: 'merchant', header: t('business.transactions.merchant'), render: (row) => row.merchant },
+    { key: 'category', header: t('business.transactions.category'), render: (row) => row.category },
+    { key: 'occurredAt', header: t('business.transactions.time'), render: (row) => formatDateTime(row.occurredAt) },
+    {
+      key: 'amount',
+      header: t('business.transactions.amount'),
+      align: 'right',
+      render: (row) => <Money amount={row.amount} signed />,
+    },
+  ];
   const rows = limit === undefined ? transactions : transactions.slice(0, Math.max(0, limit));
 
   return (
-    <Card title={title ?? '最近交易'} className={className}>
+    <Card title={title ?? t('business.transactions.title')} className={className}>
       {rows.length === 0 ? (
-        <EmptyState title="暂无交易" description="该时间段内没有可展示的交易记录。" />
+        <EmptyState title={t('business.transactions.empty')} description={t('business.transactions.emptyDescription')} />
       ) : (
-        <Table columns={COLUMNS} rows={rows} rowKey={(row) => row.id} />
+        <Table columns={columns} rows={rows} rowKey={(row) => row.id} />
       )}
     </Card>
   );

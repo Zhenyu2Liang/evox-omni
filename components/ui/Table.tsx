@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { LocaleText } from '@/lib/i18n/LocaleText';
 
 export interface TableColumn<T> {
   key: string;
@@ -51,7 +52,7 @@ export function Table<T>({ columns, rows, rowKey, empty, className }: TableProps
           {rows.length === 0 ? (
             <tr>
               <td colSpan={columns.length} className="px-4 py-8 text-center text-gray-500">
-                {empty ?? 'No data'}
+                {empty ?? <LocaleText messageKey="ui.noData" />}
               </td>
             </tr>
           ) : (

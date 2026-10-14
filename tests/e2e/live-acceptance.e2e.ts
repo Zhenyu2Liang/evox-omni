@@ -8,7 +8,7 @@
  * ------------------------------------------------------------------------------------------------
  * MODEL ID — PROVIDED CONFIG BY DEFAULT, OPT-IN FORCE OVERRIDE
  * ------------------------------------------------------------------------------------------------
- * Pi 1.1 registers `deepseek-flash` directly at https://api.deepseek.com.
+ * The installed Pi model catalog registers `deepseek-flash` at https://api.deepseek.com.
  * By default the harness uses the provided .env.local model id unchanged.
  * This exercises the native Models collection and the real DeepSeek adapter.
  *
@@ -19,7 +19,7 @@
  *
  * Environment loading uses the application's Next.js loader before any process is spawned.
  * The harness does not read or parse environment files directly and never displays their values.
- * * Run:  npx tsx tests/e2e/live-acceptance.e2e.ts
+ * Run: pnpm exec tsx tests/e2e/live-acceptance.e2e.ts
  * Subset: `LIVE_SCENARIOS=1,3` (comma-separated scenario ids) runs only those journeys.
  *
  * Output contract: one `PASS|FAIL|SKIP <scenario> — <evidence>` line per scenario; exit non-zero iff
@@ -38,13 +38,12 @@ import nextEnv from '@next/env';
 const { loadEnvConfig } = nextEnv;
 import path from 'node:path';
 import type { Browser, Page } from 'playwright-core';
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '../../lib/db/prisma';
 import {
   cliCommand,
   ensurePrismaClientGenerated,
   provisionSchemaLadder,
   resolveTsxBin,
-  runPrismaGenerate,
   runCliStep as runCliStepShared,
 } from '../helpers/prisma-cli';
 import { centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
@@ -63,7 +62,7 @@ import {
   fetchPendingActions,
   gotoAgent,
   launchBrowser,
-  readSessionCookie,
+  readDemoSessionId,
   resolveBrowserExecutable,
   sleep,
   submitChat,
@@ -78,6 +77,12 @@ import {
   type PendingActionView,
   type Reporter,
 } from './helpers';
+import { journeySharedDemo } from './shared-demo.e2e-helper';
+import { journeyToolLifecycle } from './tool-lifecycle.e2e-helper';
+import { journeyMultiCardFreeze } from './card-freeze.e2e-helper';
+import { journeyCardManagement } from './card-management.e2e-helper';
+import { journeyNaturalConversation, journeyDialogueRegressions, journeySubscriptionAdvice, journeyCompleteFraudDiscussion } from './conversation.e2e-helper';
+import { journeyLiveCompaction } from './compaction.e2e-helper';
 
 // --- isolated LIVE database ---------------------------------------------------------------------
 
@@ -100,11 +105,12 @@ function loadRuntimeEnvironment(): void {
 
 /** Point this process — provisioning CLIs + the spawned dev server — at the ISOLATED live DB. */function configureLiveEnv(): void {
   process.env['DATABASE_URL'] = LIVE_DB_URL;
+  process.env['DEMO_USER_ID'] = 'user_liming';
   process.env['LLM_MODE'] = 'live';
   process.env['LLM_PROVIDER'] = 'deepseek';
   // MODEL ID — PROVIDED CONFIG BY DEFAULT, OPT-IN FORCE OVERRIDE.
   // By default we do NOT set `LLM_MODEL`, so the spawned `next dev` loads the PROVIDED `.env.local`
-  // value (LLM_MODEL=deepseek-flash), now registered directly by Pi 1.1.
+  // value (LLM_MODEL=deepseek-flash), registered directly by the installed Pi catalog.
   // Set LIVE_FORCE_MODEL=<id> to force a different model id.
   const forced = process.env['LIVE_FORCE_MODEL']?.trim();
   if (forced) {
@@ -115,8 +121,8 @@ function loadRuntimeEnvironment(): void {
 /** Probe the freshly provisioned live DB (node child, so DATABASE_URL is applied before construction). */
 function probeLiveDatabaseUsable(): void {
   const script = `
-const { PrismaClient } = require('@prisma/client');
-const client = new PrismaClient();
+const { createDatabaseClient } = require('./lib/db/database.ts');
+const client = createDatabaseClient();
 const check = "SELECT name FROM sqlite_master WHERE type='table' AND name='User'";
 (async () => {
   try {
@@ -126,7 +132,7 @@ const check = "SELECT name FROM sqlite_master WHERE type='table' AND name='User'
   finally { await client.$disconnect().catch(() => {}); }
 })();
 `;
-  const probe = spawnSync(process.execPath, ['-e', script], {
+  const probe = spawnSync(process.execPath, ['--import', 'tsx', '-e', script], {
     cwd: REPO_ROOT,
     windowsHide: true,
     encoding: 'utf8',
@@ -152,12 +158,6 @@ function resetLiveDatabase(): void {
     dbFiles: LIVE_DB_FILES,
     env: { ...process.env, DATABASE_URL: LIVE_DB_URL },
     rungs: [
-      { label: 'db push --skip-generate', args: ['prisma', 'db', 'push', '--skip-generate'] },
-      {
-        label: 'prisma generate → db push --force-reset --skip-generate',
-        args: ['prisma', 'db', 'push', '--force-reset', '--skip-generate'],
-        before: () => runPrismaGenerate(REPO_ROOT, { ...process.env, DATABASE_URL: LIVE_DB_URL }),
-      },
       { label: 'db push', args: ['prisma', 'db', 'push'] },
     ],
     afterPush: () => {
@@ -171,8 +171,8 @@ function resetLiveDatabase(): void {
 
 /** Run `fn` on a throwaway PrismaClient bound to the isolated live DB. */
 async function withDb<T>(fn: (db: PrismaClient) => Promise<T>): Promise<T> {
-  const mod = (await import('@prisma/client')) as unknown as { PrismaClient: new () => PrismaClient };
-  const db = new mod.PrismaClient();
+  const { createDatabaseClient } = await import('../../lib/db/database');
+  const db = createDatabaseClient();
   try {
     return await fn(db);
   } finally {
@@ -202,9 +202,12 @@ function readCheckingDebits(): Promise<{ id: string; amountMinor: bigint; mercha
 }
 
 /** The persisted status + result of one `PendingAction`. */
-function readPendingAction(actionId: string): Promise<{ status: string; resultJson: string | null } | null> {
+function readPendingAction(actionId: string, sessionId?: string): Promise<{ status: string; resultJson: string | null } | null> {
   return withDb(async (db) => {
-    const row = await db.pendingAction.findUnique({ where: { id: actionId }, select: { status: true, resultJson: true } });
+    const row = await db.pendingAction.findUnique({
+      where: { id: actionId, ...(sessionId ? { sessionId } : {}) },
+      select: { status: true, resultJson: true },
+    });
     return row ?? null;
   });
 }
@@ -228,19 +231,18 @@ async function readSeedRecipientPhone(): Promise<string> {
 }
 
 /**
- * Read-only `GET /api/actions` cross-check (identity = the page's HttpOnly `banking_session` cookie).
- * Returns `undefined` when the page has no session cookie yet; a transport error is rethrown so the
- * cross-check can never silently pass on a malformed response.
+ * Read-only `GET /api/actions` cross-check using the configured shared demo identity.
+ * Verify the page exposes its server-owned session before querying; API access needs no cookie.
+ * Transport errors are rethrown so malformed responses cannot silently pass.
  */
 async function fetchParkedActions(page: Page, baseUrl: string): Promise<PendingActionView[] | undefined> {
-  const cookie = await readSessionCookie(page);
-  if (cookie === undefined) return undefined;
-  return fetchPendingActions(baseUrl, cookie);
+  await readDemoSessionId(page);
+  return fetchPendingActions(baseUrl);
 }
 
 /** One-line rendering of `GET /api/actions` evidence (never throws). */
 function describeActions(actions: PendingActionView[] | undefined): string {
-  if (actions === undefined) return '（无 cookie）';
+  if (actions === undefined) return '(No action snapshot)';
   if (actions.length === 0) return '[]';
   return actions
     .map((a) => `{id:${a.id},tool:${a.toolName},tier:${a.tier},status:${a.status},attention:${a.attention ?? '-'}}`)
@@ -372,9 +374,9 @@ async function bodyText(page: Page): Promise<string> {
   return page.locator('body').innerText().catch(() => '');
 }
 
-/** Read the LAST rendered confirmation card's `dt`/`dd` label→value map (empty when none). */
+/** Read fields from the actionable dock, excluding historical approval receipts. */
 async function readConfirmFields(page: Page): Promise<Record<string, string>> {
-  const dls = page.locator('dl');
+  const dls = page.locator('[data-approval-request="true"] dl');
   const count = await dls.count();
   for (let i = count - 1; i >= 0; i -= 1) {
     const dl = dls.nth(i);
@@ -392,14 +394,14 @@ async function readConfirmFields(page: Page): Promise<Record<string, string>> {
 
 /** Click the confirmation card's `取消` button. */
 async function clickCancel(page: Page, timeoutMs = 30_000): Promise<void> {
-  const button = page.getByRole('button', { name: '取消', exact: true });
+  const button = page.locator('[data-approval-request="true"]').getByRole('button', { name: '取消', exact: true });
   await waitFor(async () => ((await button.count()) > 0 ? true : false), { timeoutMs, description: '确认卡「取消」按钮' });
   await button.first().click();
 }
 
 /** The number of rendered `确认` buttons (0 once a card is settled / gone). */
 async function confirmButtonCount(page: Page): Promise<number> {
-  return page.getByRole('button', { name: '确认', exact: true }).count();
+  return page.locator('[data-approval-request="true"]').getByRole('button', { name: '确认', exact: true }).count();
 }
 
 /** The demo user's money state via the app's REAL read routes. */
@@ -470,14 +472,11 @@ function assertRecipient(fields: Record<string, string>, expectName: string): st
 async function noCardDiagnostics(page: Page, baseUrl: string): Promise<string> {
   const texts = await assistantTexts(page);
   const dom = await bodyText(page);
-  const cookie = await readSessionCookie(page);
-  let actions = '（未取得 cookie）';
-  if (cookie !== undefined) {
-    try {
-      actions = JSON.stringify(await fetchPendingActions(baseUrl, cookie));
-    } catch (e) {
-      actions = `读取失败：${errText(e)}`;
-    }
+  let actions: string;
+  try {
+    actions = JSON.stringify(await fetchPendingActions(baseUrl));
+  } catch (e) {
+    actions = `Action snapshot unavailable: ${errText(e)}`;
   }
   const last = (texts[texts.length - 1] ?? '').replace(/\s+/g, ' ').slice(-600);
   return `【诊断】助手消息数=${texts.length}；最后一条=「${last}」；/api/actions=${actions.slice(0, 600)}；页面文本尾部=「${dom.replace(/\s+/g, ' ').slice(-400)}」`;
@@ -555,14 +554,6 @@ const LARGE_AMOUNT = '5000.00';
  */
 const PARK_ATTEMPTS = 3;
 const PARK_POLL_MS = 60_000;
-/**
- * The `banking_session` cookie is minted by the `/api/chat` RESPONSE, and the route awaits the WHOLE
- * turn (`runTurn`) before sending that response (see `app/api/chat/route.ts`). With the LIVE model a
- * turn takes seconds, so reading cookies immediately after `submitChat` (which only clicks 发送) raced
- * the `Set-Cookie` and left `readSessionCookie` `undefined` → the park aborted before it began. The
- * park therefore WAITS (bounded) for the cookie the first turn mints, then polls the persisted state.
- */
-const PARK_COOKIE_WAIT_MS = 120_000;
 const PARK_NUDGES = ['确认，请发起转账', '请直接调用转账工具发起这笔转账'] as const;
 
 /** The parked `transfer_money` action from `GET /api/actions` (awaiting a human decision), or `undefined`. */
@@ -574,29 +565,7 @@ function findParkedTransfer(
   );
 }
 
-/**
- * Wait (bounded) for the `banking_session` cookie the first chat turn mints, then return it as a
- * `Cookie` header value. The cookie is only sent with the `/api/chat` RESPONSE, which the route emits
- * after the WHOLE turn has run, so a LIVE turn means the cookie arrives seconds after `submitChat`
- * returns — reading it immediately races the `Set-Cookie`. On timeout the assistant text +
- * `/api/actions` are appended for evidence (the wait itself is not weakened).
- */
-async function awaitSessionCookie(page: Page, baseUrl: string, timeoutMs = PARK_COOKIE_WAIT_MS): Promise<string> {
-  let cookie: string | undefined;
-  try {
-    await waitFor(
-      async () => {
-        cookie = await readSessionCookie(page);
-        return cookie !== undefined;
-      },
-      { timeoutMs, description: '`banking_session` cookie（由 /api/chat 响应下发）' },
-    );
-  } catch (e) {
-    throw new Error(`${errText(e)} ｜ ${await noCardDiagnostics(page, baseUrl)}`);
-  }
-  if (cookie === undefined) throw new Error('未取得 banking_session cookie');
-  return cookie;
-}// --- scenario 1: balance matches the DB ---------------------------------------------------------
+// --- scenario 1: balance matches the DB ---------------------------------------------------------
 
 async function scenarioBalance(ctx: Ctx): Promise<string> {
   return withPage(
@@ -780,9 +749,8 @@ async function scenarioCancelAndIdempotency(ctx: Ctx): Promise<string> {
       const before = await snapshot(ctx.baseUrl);
       await submitChat(page, MSG.transferByName);
       await awaitConfirmCard(page, ctx.baseUrl);
-      const cookie = await readSessionCookie(page);
-      if (!cookie) throw new Error('未取得 banking_session cookie');
-      const actions = await fetchPendingActions(ctx.baseUrl, cookie);
+      const sessionId = await readDemoSessionId(page);
+      const actions = await fetchPendingActions(ctx.baseUrl);
       const parked = actions.find((a) => a.toolName === 'transfer_money');
       if (!parked) throw new Error(`GET /api/actions 未返回 transfer_money 待处理项：${JSON.stringify(actions)}`);
       await captureLive(page, 's5-parked');
@@ -803,7 +771,7 @@ async function scenarioCancelAndIdempotency(ctx: Ctx): Promise<string> {
       // cancel-on-terminal: the SAME action is already cancelled → the server must reject gracefully.
       const cancelAgain = await fetch(`${ctx.baseUrl}/api/actions/${parked.id}/cancel`, {
         method: 'POST',
-        headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: '{}',
       });
       const cancelBody = (await cancelAgain.json()) as { ok?: boolean; data?: { ok?: boolean; status?: string } };
@@ -812,7 +780,7 @@ async function scenarioCancelAndIdempotency(ctx: Ctx): Promise<string> {
       // repeat-confirm on the TERMINAL action → rejected, and NO double deduction.
       const confirmAgain = await fetch(`${ctx.baseUrl}/api/actions/${parked.id}/confirm`, {
         method: 'POST',
-        headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json' },
         body: '{}',
       });
       const confirmBody = (await confirmAgain.json()) as { ok?: boolean; data?: { ok?: boolean; status?: string } };
@@ -825,7 +793,7 @@ async function scenarioCancelAndIdempotency(ctx: Ctx): Promise<string> {
       if (addedAfterConfirm.length > 0) {
         throw new Error(`重复确认后账本新增：${addedAfterConfirm.map((tx) => tx.id).join('、')}`);
       }
-      const dbRow = await readPendingAction(parked.id);
+      const dbRow = await readPendingAction(parked.id, sessionId);
       if (!dbRow) throw new Error(`PendingAction ${parked.id} 不存在`);
 
       return `「${MSG.transferByName}」→ 取消（DB 状态 ${dbRow.status}，卡片显示「已取消」、确认按钮数 0）→ 未扣款；对终态动作重复取消 ${cancelRejected ? '被拒' : '未被拒'}、重复确认 ${confirmRejected ? '被拒' : '未被拒'} → 余额 ${before.balance} 不变、账本无新增（幂等）`;
@@ -942,11 +910,10 @@ async function scenarioLargeTransferMfa(ctx: Ctx): Promise<string> {
 
 /**
  * Engineer "the SDK write commits, the model continuation fails": DETERMINISTICALLY park a YELLOW
- * `transfer_money` — WAIT for the first turn to mint the `banking_session` cookie (it is sent with the
- * `/api/chat` response, i.e. only after the whole LIVE turn has run), poll `GET /api/actions` for the
+ * `transfer_money` — read the canonical server-owned session from the page and poll `/api/actions` for the
  * parked row and, when the live model merely narrated without calling the tool, NUDGE it in the SAME
  * session (bounded attempts) — then reboot the SAME app on the SAME DB with `DEEPSEEK_API_KEY='invalid'`
- * so ONLY the continuation LLM call fails, then hit the confirm endpoint with the SAME session cookie.
+ * so ONLY the continuation LLM call fails, then hit the confirm endpoint under the shared demo identity.
  * The action must still settle `executed` with exactly ONE debit. (Read-only against app code.)
  */
 async function scenarioCommittedContinuationFailed(
@@ -962,16 +929,14 @@ async function scenarioCommittedContinuationFailed(
   let baseUrl = server.current.baseUrl;
 
   let actionId = '';
-  let cookie = '';
+  let sessionId = '';
   await withPage(
     browser,
     async (page) => {
       attachCollectors(page);
       await gotoAgent(page, baseUrl);
+      sessionId = await readDemoSessionId(page);
       await submitChat(page, MSG.transferByName);
-      // The turn mints the `banking_session` cookie on its RESPONSE; wait (bounded) for it instead of
-      // racing the Set-Cookie.
-      cookie = await awaitSessionCookie(page, baseUrl);
       // ROBUST / DETERMINISTIC PARK — the model is not trusted to CALL the gated tool on the first
       // turn (it often only narrates a question). Poll the persisted server state, and NUDGE in the
       // SAME session until a `transfer_money` action is actually parked (bounded attempts).
@@ -979,7 +944,7 @@ async function scenarioCommittedContinuationFailed(
       for (let attempt = 1; attempt <= PARK_ATTEMPTS && parked === undefined; attempt += 1) {
         try {
           parked = await waitFor(
-            async () => findParkedTransfer(await fetchPendingActions(baseUrl, cookie)) ?? false,
+            async () => findParkedTransfer(await fetchPendingActions(baseUrl)) ?? false,
             {
               timeoutMs: PARK_POLL_MS,
               description: `GET /api/actions 出现 pending/awaiting_mfa 的 transfer_money 待处理项（第 ${attempt}/${PARK_ATTEMPTS} 次）`,
@@ -1017,14 +982,14 @@ async function scenarioCommittedContinuationFailed(
 
   const res = await fetch(`${baseUrl}/api/actions/${actionId}/confirm`, {
     method: 'POST',
-    headers: { Cookie: cookie, 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json' },
     body: '{}',
   });
   const body = (await res.json()) as { ok?: boolean; data?: { ok?: boolean; status?: string; message?: string } };
   netLog.issues.push({ method: 'POST', url: `${baseUrl}/api/actions/${actionId}/confirm`, status: res.status, body: JSON.stringify(body).slice(0, 500) });
 
   const settled = await waitForTransferSettled(baseUrl, before, TRANSFER_AMOUNT);
-  const row = await readPendingAction(actionId);
+  const row = await readPendingAction(actionId, sessionId);
   const afterDb = await readCheckingBalance();
 
   // Restore the real key for any later work.
@@ -1043,7 +1008,45 @@ async function scenarioCommittedContinuationFailed(
 
 // --- scenario table ------------------------------------------------------------------------------
 
+/** Verify transport completion and exact text preservation using persisted wire events. */
+async function verifyProviderCompletionEvidence(): Promise<string> {
+  return withDb(async db => {
+    const requests = await db.modelRequest.findMany({ where: { status: 'completed' } });
+    if (!requests.length) throw new Error('No completed model request was recorded.');
+    const records = await db.agentRunEvent.findMany({ where: { eventType: { startsWith: 'provider_' } }, orderBy: { sequence: 'asc' } });
+    for (const request of requests) {
+      const evidence = records.map(record => ({ type: record.eventType, ...JSON.parse(record.payloadJson) }))
+        .filter(record => record.modelRequestId === request.id);
+      if (!evidence.some(record => record.type === 'provider_request_payload' && record.payload.stream === true) ||
+          !evidence.some(record => record.type === 'provider_response_headers' && record.payload.status === 200) ||
+          !evidence.some(record => record.type === 'provider_response_event' && record.payload.kind === 'transport_end' &&
+            record.payload.completed === true && record.payload.terminator === '[DONE]')) {
+        throw new Error(`Model request ${request.id} has no complete wire evidence.`);
+      }
+      const wireText = evidence.flatMap(record => record.type === 'provider_response_event' && Array.isArray(record.payload.choices)
+        ? record.payload.choices.flatMap((choice: { delta?: { content?: unknown } }) => typeof choice.delta?.content === 'string' ? [choice.delta.content] : []) : []).join('');
+      const result = JSON.parse(request.resultJson!);
+      const normalizedText = result.content.filter((block: { type: string }) => block.type === 'text')
+        .map((block: { text: string }) => block.text).join('');
+      if (wireText !== normalizedText) throw new Error(`Pi text differs from the provider response for ${request.id}.`);
+    }
+    return `Verified [DONE] and exact provider-to-Pi text equality for ${requests.length} model requests.`;
+  });
+}
+
 const SCENARIOS: readonly Scenario[] = [
+  { id: '15', name: '15-live-complete-fraud-choice-discussion', run: async ctx => {
+    const result = await journeyCompleteFraudDiscussion(ctx.browser, ctx.baseUrl);
+    return `${result} ${await verifyProviderCompletionEvidence()}`;
+  } },
+  { id: '14', name: '14-live-subscription-advice-confirmation-and-context', run: ctx => journeySubscriptionAdvice(ctx.browser, ctx.baseUrl) },
+  { id: '13', name: '13-live-context-compaction-and-retained-archive', run: ctx => journeyLiveCompaction(ctx.browser, ctx.baseUrl) },
+  { id: '12', name: '12-live-signed-amount-memory-and-subscription-analysis', run: ctx => journeyDialogueRegressions(ctx.browser, ctx.baseUrl) },
+  { id: '11', name: '11-live-natural-conversation-and-financial-boundary', run: ctx => journeyNaturalConversation(ctx.browser, ctx.baseUrl) },
+  { id: '10', name: '10-live-manual-card-management-and-agent-boundary', run: ctx => journeyCardManagement(ctx.browser, ctx.baseUrl) },
+  { id: '9', name: '9-live-multi-card-freeze-audit-history', run: ctx => journeyMultiCardFreeze(ctx.browser, ctx.baseUrl) },
+  { id: '8', name: '8-live-subscription-tool-lifecycle', run: ctx => journeyToolLifecycle(ctx.browser, ctx.baseUrl) },
+  { id: '0', name: '0-live-conversation-and-shared-demo', run: ctx => journeySharedDemo(ctx.browser, ctx.baseUrl) },
   { id: '1', name: '1-live-balance-matches-db', run: scenarioBalance },
   { id: '2', name: '2-live-transfer-recipient-by-name', run: scenarioTransferRecipientByName },
   { id: '2p', name: '2p-live-transfer-recipient-by-phone', run: scenarioTransferRecipientByPhone },
@@ -1133,6 +1136,12 @@ async function main(): Promise<void> {
 
   try {
     configureLiveEnv();
+    if (chosen.some(scenario => scenario.id === '13')) {
+      process.env.AGENT_COMPACTION_THRESHOLD_TOKENS = '16000';
+      process.env.AGENT_COMPACTION_KEEP_RECENT_TOKENS = '512';
+      process.env.AGENT_COMPACTION_SUMMARY_TOKENS = '2048';
+      console.log('The synthetic compaction journey uses a 16000-token threshold and retains complete recent turns.');
+    }
     console.log(`· 隔离 LIVE 数据库：${LIVE_DB_URL}（prisma/dev.db 与 prisma/test.db 不受影响）`);
     console.log('· 重置 LIVE 数据库 →（缺 Prisma Client 时先 prisma generate）→ db push 阶梯 → probe → tsx prisma/seed.ts');
     resetLiveDatabase();

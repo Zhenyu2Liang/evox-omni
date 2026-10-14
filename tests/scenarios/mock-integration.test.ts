@@ -144,7 +144,7 @@ describe('mock-model integration — the real production pipeline, OFFLINE', () 
 
   it('Test 2 — "给张伟转200元，备注AA" requires confirmation, then confirm() executes the real transfer', async () => {
     const { events } = await runTurn({ message: '给张伟转200元，备注AA' });
-    const turnTextValue = expectHealthyTurn('Test 2 (turn)', events);
+    expectHealthyTurn('Test 2 (turn)', events);
 
     const decision = gatedDecision(events);
     expect(decision?.kind, 'Test 2: expected a YELLOW confirmation_required decision').toBe(
@@ -157,8 +157,11 @@ describe('mock-model integration — the real production pipeline, OFFLINE', () 
     // The model's transfer call was BLOCKED by beforeToolCall — it never executed inline.
     const blocked = lastToolEnd(events, 'transfer_money');
     expect(blocked?.status).toBe('blocked');
-    // The narration told the user it is awaiting confirmation; it did NOT claim execution.
-    expect(turnTextValue).toContain('等待确认');
+    // Permission state belongs to the structured request; prose is not an authorization receipt.
+    const pending = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: decision.event.actionId } });
+    expect(pending.status).toBe('pending');
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: CHECKING.id } })).balanceMinor)
+      .toBe(moneyToCents(CHECKING.balance));
 
     const outcome = await confirmAction(decision.event.actionId);
     expect(outcome.ok).toBe(true);

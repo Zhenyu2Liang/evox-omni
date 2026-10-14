@@ -13,7 +13,7 @@
  * conversation; `serialize()` hands the current state back to `./session` for persistence.
  */
 import { Agent, runToolCall, type AgentEvent } from '@earendil-works/pi-agent-core';
-import type { AssistantMessage, ToolCall, ToolResultMessage } from '@earendil-works/pi-ai';
+import { getCurrentTools, toToolDeclaration, type AssistantMessage, type ToolCall, type ToolResultMessage } from '@earendil-works/pi-ai';
 import type {
   AfterToolCallContext,
   AfterToolCallResult,
@@ -30,20 +30,28 @@ import { createToolRegistry, type ToolRegistry } from './tools';
 import { executeGatedTool } from './confirmation';
 import { buildAutomaticWriteFence } from './execution-fence';
 import { resolveProvider } from './providers';
+import { withModelAudit } from './providers/model-audit';
 import type { ModelRuntime } from './providers/types';
 import { buildSystemPrompt } from './system-prompt';
-import { normalizeToolResultMessages } from './message-normalize';
+import { normalizeToolResultMessages, validateToolCallIdentities } from './message-normalize';
 import type { SessionSnapshot } from './session';
-import { requiresCompletePlan, COMPLETE_PLAN_NOTICE } from '@/lib/request-steps';
-import { isWriteTool } from '@/security/permission-engine';
+import { getToolPolicy, isWriteTool } from '@/security/permission-engine';
 import { preflightRequestedPlan } from './tools/planning';
+import { validateBankingParameters } from './tools/plan-parameters';
+import { modelToolError } from './tools/result';
 import { AppError } from '@/lib/errors';
 import type { ConversationIntent } from '@/lib/contracts/intent';
-import { intentRequestText } from './intent-context';
+import { advanceConversationIntent, requiresDeclaredPlan } from './intent-context';
+import { createTurnIntentTool, TURN_INTENT_TOOL } from './tools/turn-intent';
 import type { AgentRunJournal } from './durable';
 import { ledgerKeyForAction } from '@/lib/ledger';
 import { prisma } from '@/lib/db/client';
 import { newId } from '@/lib/ids';
+import { restoreConversationUserMemory } from './conversation-context';
+import { CONVERSATION_TOOL_REJECTION } from '@/lib/tool-feedback';
+import { createContextCompactor, type ContextCompactionState } from './context-compaction';
+import { estimateContextTokens } from './context-compaction/projection';
+import type { ReplyContext, ReplyRepairState } from './reply-repair';
 
 /**
  * The security gateway's runtime surface.
@@ -96,8 +104,12 @@ export interface BankingAgentOptions {
    * behavior (the config-resolved live/mock provider).
    */
   provider?: ModelRuntime;
-  conversationIntent?: () => ConversationIntent | undefined;
+  onTurnIntent?: (intent: ConversationIntent) => void;
   journal?: AgentRunJournal;
+  /** Server-bound advice context for an authorized read, never supplied by the browser. */
+  replyContext?: ReplyContext;
+  /** Durable model replay retains its recorded system context; new turns use current rules. */
+  preserveSystemMessages?: boolean;
 }
 export interface BankingAgentRuntime {
   agent: Agent;
@@ -108,8 +120,10 @@ export interface BankingAgentRuntime {
   planningRejections: ReadonlyMap<string, string>;
   /** Current pi AgentState + UI transcript, ready to persist. */
   serialize(): SessionSnapshot;
+  setReplyCorrection(active: boolean): void;
   /** Remove all stream listeners. */
   dispose(): void;
+  checkpointReplyRepair(state: ReplyRepairState): Promise<void>;
   executeCheckpointCall(call: ToolCall, assistant: AssistantMessage, emit: (event: AgentEvent) => Promise<void>): Promise<ToolResultMessage>;
 }
 /**
@@ -138,16 +152,37 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   const config = options.config ?? getConfig();
   const { sessionId, userId } = options;
   const planningRejections = new Map<string, string>();
+  let conversationalRejections = 0;
   const restored = options.snapshot?.agentState;
+  let turnIntent = options.snapshot?.intent;
+  let correctingReply = options.snapshot?.replyRepair?.phase === 'requested';
+  let currentUser = restored?.messages.findLast(message => message.role === 'user');
+
+  const readTurnIntent = (): ConversationIntent => {
+    const user = agent.state.messages.findLast(message => message.role === 'user');
+    if (!turnIntent || user !== currentUser) {
+      currentUser = user;
+      turnIntent = advanceConversationIntent(undefined, latestUserText(agent.state.messages));
+      if (options.snapshot) options.snapshot.intent = turnIntent;
+    }
+    return turnIntent;
+  };
+  const intentTool = createTurnIntentTool(readTurnIntent, async intent => {
+    turnIntent = intent;
+    if (options.snapshot) options.snapshot.intent = intent;
+    options.onTurnIntent?.(intent);
+    await options.journal?.checkpoint('turn_intent');
+  });
 
   /** Current user request, read lazily so it always reflects the live transcript (audit-only). */
-  const latestUserRequest = (): string => intentRequestText(options.conversationIntent?.(), latestUserText(agent.state.messages));
+  const latestUserRequest = (): string => latestUserText(agent.state.messages);
 
   // `userId` is SERVER-INJECTED here — never taken from tool args or model text. The planner's node
   // runner is the gateway-authorized execution path, so a gated plan node still parks for a human.
   const registry = createToolRegistry(userId, {
+    sessionId,
     automaticWriteFence: async () => {
-      const fence = await buildAutomaticWriteFence(sessionId);
+      const fence = await buildAutomaticWriteFence(sessionId, undefined, undefined, userId);
       return async client => { await options.journal?.assertLeaseOwned(client); await fence(client); };
     },
     operationIdentity: async callId => options.journal?.invocationForCall(callId)?.operationKey ?? newId('operation'),
@@ -162,7 +197,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
       },
       runtimeFence: client => options.journal?.assertLeaseOwned(client) ?? Promise.resolve(),
       userRequest: latestUserRequest,
-      conversationIntent: options.conversationIntent,
+      conversationIntent: readTurnIntent,
       runTool: (toolName, args, ctx) =>
         executeGatedTool({
           sessionId,
@@ -179,9 +214,28 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   });
 
   const { model, streamFn } = options.provider ?? resolveProvider(config);
+  const initialMessages = options.preserveSystemMessages ? restored?.messages ?? []
+    : restoreConversationUserMemory(restored?.messages ?? [], options.snapshot?.transcript ?? []).filter(message => message.role !== 'system');
+  let compactionState: ContextCompactionState | undefined = options.snapshot?.contextCompaction;
+  let replyRepair = options.preserveSystemMessages ? options.snapshot?.replyRepair : undefined;
+  const replyContext = options.replyContext ?? (options.preserveSystemMessages ? options.snapshot?.replyContext : undefined);
+  if (options.snapshot) options.snapshot.replyRepair = replyRepair;
+  if (options.snapshot) options.snapshot.replyContext = replyContext;
+  // Short turns may never compact. Persist projection metadata even when no summary callback runs.
+  if (options.snapshot) options.snapshot.contextCompaction = compactionState;
+  let preparedModelMessages: AgentMessage[] | undefined;
+  const compactor = createContextCompactor({ runtime: { model, streamFn }, settings: config.contextCompaction,
+    state: compactionState,
+    onState: state => { compactionState = state; if (options.snapshot) options.snapshot.contextCompaction = state; },
+    ...(options.journal ? { persist: {
+      event: (type: string, payload: unknown) => options.journal!.recordEvent(type, payload, 'internal'),
+      checkpoint: (stage: string) => options.journal!.checkpoint(stage),
+    } } : {}),
+  });
   const systemPrompt = buildSystemPrompt({
     userId,
     toolNames: registry.list().map((tool) => tool.name as ToolName),
+    turnIntentTool: true,
   });
 
   /**
@@ -195,13 +249,45 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   ): Promise<BeforeToolCallResult | undefined> => {
     const toolName = context.toolCall.name as ToolName;
     const args = (context.args ?? context.toolCall.arguments ?? {}) as Record<string, unknown>;
+    try { validateToolCallIdentities(context.assistantMessage); }
+    catch (error) {
+      if (!(error instanceof AppError)) throw error;
+      return { block: true, reason: modelToolError(error) };
+    }
+    if (context.toolCall.name === TURN_INTENT_TOOL) return undefined;
+    if (toolName !== 'submit_plan') {
+      try { validateBankingParameters(toolName, context.toolCall.arguments, context.toolCall.id); }
+      catch (error) {
+        if (!(error instanceof AppError)) throw error;
+        return { block: true, reason: modelToolError(error) };
+      }
+    }
+    const intent = readTurnIntent();
+
+    // A greeting or correction cannot revive an old financial operation from model memory.
+    // Automatic reads may clarify the user's objects. Gated reads, writes and workflows cannot
+    // create an authorization during an explanation, even with previously valid arguments.
+    const declaredOperation = intent.purpose === 'operation' &&
+      (toolName === 'submit_plan' || intent.steps.some(step => step.tool === toolName));
+    const automaticRead = !isWriteTool(toolName) && toolName !== 'submit_plan' && getToolPolicy(toolName).tier === 'GREEN';
+    const declaredRead = !isWriteTool(toolName) && toolName !== 'submit_plan' &&
+      ['advice', 'query', 'operation'].includes(intent.purpose);
+    if ((!automaticRead && correctingReply) || (!automaticRead && !declaredRead && !declaredOperation)) {
+      const rejection = CONVERSATION_TOOL_REJECTION;
+      planningRejections.set(context.toolCall.id, rejection);
+      conversationalRejections++;
+      // One correction may answer the original question after a rejected model call. A second
+      // rejected turn stops generation; neither attempt enters authorization or banking writes.
+      stopAfterDecision = conversationalRejections > 1;
+      return { block: true, reason: rejection };
+    }
 
     const request = latestUserRequest();
-    if (requiresCompletePlan(request)) {
+    if (requiresDeclaredPlan(intent)) {
       let rejection: string | undefined;
-      if (toolName !== 'submit_plan' && isWriteTool(toolName)) rejection = COMPLETE_PLAN_NOTICE;
+      if (toolName !== 'submit_plan' && isWriteTool(toolName)) rejection = 'Declare all requested operations in one workflow before proposing individual writes.';
       else if (toolName === 'submit_plan') {
-        try { await preflightRequestedPlan(userId, args, request); }
+        try { await preflightRequestedPlan(userId, args, request, intent); }
         catch (error) { if (!(error instanceof AppError) || error.code !== 'VALIDATION') throw error; rejection = error.message; }
       }
       if (rejection) {
@@ -246,7 +332,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   // to expose it; the server renderer supplies facts, while confirmation resumes the owning DAG.
   let stopAfterDecision = false;
   const finishTurn: FinishTurn = turn => {
-    const stop = stopAfterDecision || turn.toolResults.some(result => result.toolName === 'submit_plan');
+    const stop = stopAfterDecision || turn.toolResults.some(result => result.toolName === 'submit_plan' && !planningRejections.has(result.toolCallId));
     stopAfterDecision = false;
     return config.llmMode === 'live' && stop ? { action: 'end' } : undefined;
   };
@@ -256,17 +342,35 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
 
   const agent = new Agent({
     sessionId,
-    streamFn,
+    streamFn: options.journal ? withModelAudit(streamFn, options.journal) : streamFn,
     initialState: {
       systemPrompt,
       model,
-      tools: registry.list(),
-      messages: normalizeToolResultMessages(restored?.messages ?? []),
+      tools: [intentTool, ...registry.list()],
+      // Pi derives systemPrompt from transcript system messages and otherwise ignores a supplied
+      // replacement. Refresh that context for new turns, preserving user/assistant/tool history.
+      messages: initialMessages,
     },
     beforeToolCall,
     afterToolCall,
     finishTurn,
-    prepareRequest: request => options.journal?.prepareModelRequest(request),
+    prepareRequest: async (request, signal) => {
+      readTurnIntent();
+      const projection = normalizeToolResultMessages(request.context.messages);
+      const systems = projection.filter(message => message.role === 'system');
+      const declared = new Set(getCurrentTools(projection).map(tool => tool.name));
+      const missingTools = (request.context.tools ?? []).filter(tool => !declared.has(tool.name)).map(toToolDeclaration);
+      const overhead = missingTools.length || systems.length === 0 ? estimateContextTokens([{
+        role: 'system', timestamp: 0, content: systems.length ? '' : systemPrompt, toolsAdded: missingTools,
+      }]) : 0;
+      const messages = options.journal?.hasOriginalModelInput()
+        ? request.context.messages : await compactor.project(projection, signal, overhead);
+      const recorded = await options.journal?.prepareModelRequest({ ...request, context: { ...request.context, messages } });
+      preparedModelMessages = recorded?.context?.messages ?? messages;
+      // Pi's loop retains its full conversation. Only transformContext sees the request projection.
+      return undefined;
+    },
+    transformContext: async messages => preparedModelMessages ?? messages,
   });
 
   options.journal?.bindRuntime(runtimeSnapshot, config);
@@ -274,7 +378,8 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
   function runtimeSnapshot(): SessionSnapshot {
     return { sessionId, userId, agentState: agent.state, transcript: options.snapshot?.transcript ?? [],
       createdAt: options.snapshot?.createdAt ?? Date.now(), updatedAt: Date.now(), revision: options.snapshot?.revision ?? 0,
-      intent: options.snapshot?.intent };
+      intent: turnIntent, contextCompaction: compactionState,
+      historyGeneration: options.snapshot?.historyGeneration, historyStartedAt: options.snapshot?.historyStartedAt, replyRepair, replyContext };
   }
 
   return {
@@ -283,14 +388,22 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     userId,
     registry,
     planningRejections,
+    setReplyCorrection(active) { correctingReply = active; },
+    async checkpointReplyRepair(state) {
+      replyRepair = state;
+      if (options.snapshot) options.snapshot.replyRepair = state;
+      await options.journal?.checkpoint(`reply_repair_${state.phase}`);
+    },
     async executeCheckpointCall(call, assistant, emit) {
       await emit({ type: 'tool_execution_start', toolCallId: call.id, toolName: call.name, args: call.arguments });
-      const outcome = await runToolCall(call, { tools: registry.list(), assistantMessage: assistant,
-        context: { messages: agent.state.messages, tools: registry.list() }, beforeToolCall, afterToolCall,
+      const outcome = await runToolCall(call, { tools: agent.state.tools, assistantMessage: assistant,
+        context: { messages: agent.state.messages, tools: agent.state.tools }, beforeToolCall, afterToolCall,
         onUpdate: result => emit({ type: 'tool_execution_update', toolCallId: call.id, toolName: call.name, args: call.arguments, partialResult: result }) });
-      await emit({ type: 'tool_execution_end', toolCallId: call.id, toolName: call.name, result: outcome.result, isError: outcome.isError });
-      return { role: 'toolResult', toolCallId: call.id, toolName: call.name, content: outcome.result.content,
-        details: outcome.result.details, isError: outcome.isError, timestamp: Date.now() };
+      await emit({ type: 'tool_execution_end', toolCallId: call.id, toolName: call.name, result: outcome.result,
+        isError: outcome.isError, ...(outcome.durationMs === undefined ? {} : { durationMs: outcome.durationMs }) });
+      return { role: 'toolResult', toolCallId: call.id, toolName: call.name, content: outcome.result.content ?? [],
+        details: outcome.result.details, usage: outcome.result.usage, isError: outcome.isError,
+        ...(outcome.durationMs === undefined ? {} : { durationMs: outcome.durationMs }), timestamp: Date.now() };
     },
     serialize(): SessionSnapshot {
       const now = Date.now();
@@ -302,7 +415,12 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
         createdAt: options.snapshot?.createdAt ?? now,
         updatedAt: now,
         revision: options.snapshot?.revision ?? 0,
-        intent: options.snapshot?.intent,
+        intent: turnIntent,
+        contextCompaction: compactionState,
+        historyGeneration: options.snapshot?.historyGeneration,
+        historyStartedAt: options.snapshot?.historyStartedAt,
+        replyRepair,
+        replyContext,
       };
     },
     dispose(): void {

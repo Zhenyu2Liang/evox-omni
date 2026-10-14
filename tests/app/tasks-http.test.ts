@@ -41,6 +41,7 @@ import { POST as verifyPost } from '@/app/api/actions/[id]/verify/route';
 import { GET as tasksGet } from '@/app/api/tasks/route';
 import { GET as taskGet, POST as taskPost } from '@/app/api/tasks/[id]/route';
 import { executeGatedTool, getOrCreateSession, readPendingActionId } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import { MFA_CODE } from '@/lib/constants';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
@@ -134,9 +135,9 @@ function transferPlanNodes(amount: string): SeedNode[] {
   ];
 }
 
-/** Create + persist a fresh `AgentSession` for the demo user and return its id. */
+/** Load the canonical demo session used by HTTP callers. */
 async function newPersistedSessionId(): Promise<string> {
-  return (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  return (await getDemoSession(DEMO_USER_ID)).sessionId;
 }
 
 /** The gateway-authorized per-node runner (a gated node parks instead of executing). */
@@ -428,8 +429,11 @@ describe('[integration] GET /api/tasks/[id] + GET /api/tasks — refresh recover
     const chat = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
       message: '帮我计划一下查询余额',
     });
-    expect(chat.status).toBe(200);
+    expect(chat.status, JSON.stringify(chat.data)).toBe(200);
     const turn = payload(chat);
+    expect(await getTestPrisma().toolInvocation.count({
+      where: { run: { sessionId: turn.sessionId }, toolName: 'describe_turn' },
+    })).toBe(1);
 
     // The turn persisted exactly one durable plan for its session.
     const listRes = await getJson<Envelope<{ plans: TaskPlan[] }>>(tasksGet, tasksUrl(), {
@@ -473,35 +477,35 @@ describe('[integration] GET /api/tasks/[id] + GET /api/tasks — refresh recover
     expect(res.status).toBe(200);
     expect(payload(res).plans.map((plan) => plan.id)).toEqual([newer.id, older.id]);
 
-    // No session resolvable → an empty list (200, never an error).
+    // Another browser sees the same persisted demo plans without logging in.
     const emptyRes = await getJson<Envelope<{ plans: TaskPlan[] }>>(tasksGet, tasksUrl());
     expect(emptyRes.status).toBe(200);
-    expect(payload(emptyRes).plans).toEqual([]);
+    expect(payload(emptyRes).plans.map(plan => plan.id)).toEqual([newer.id, older.id]);
   });
 });
 
-describe('[integration] task endpoints — authorization (cookie-only identity)', () => {
-  it('POST /api/tasks/[id] without a session (no cookie) → 403 SECURITY_DENIED', async () => {
+describe('[integration] task endpoints — fixed demo identity and resource ownership', () => {
+  it('POST /api/tasks/[id] pauses the demo task without a cookie', async () => {
     const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
 
     const res = await postJson<Envelope<unknown>>(
       taskPost,
-      taskUrl(taskId), // no cookie → requireIdentity rejects BEFORE the body is parsed
+      taskUrl(taskId),
       { action: 'pause' },
       { ctx: idCtx(taskId) },
     );
 
-    expect(res.status).toBe(403);
-    expect(failure(res).code).toBe('SECURITY_DENIED');
-    // The rejected control changed nothing.
+    expect(res.status).toBe(200);
+    // No-login access still runs the real task control.
     const row = await getTestPrisma().agentTask.findUnique({ where: { id: taskId } });
-    expect(row!.status).toBe('waiting_confirmation');
+    expect(row!.status).toBe('paused');
   });
 
-  it('POST /api/tasks/[id] with a valid but FOREIGN session → 403 SECURITY_DENIED (ownership)', async () => {
+  it('POST /api/tasks/[id] cannot control a task outside the demo session', async () => {
     const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
-    // A REAL persisted session that does NOT own the task: identity passes, ownership fails.
-    const foreignSessionId = await newPersistedSessionId();
+    // A supplied cookie cannot adopt a foreign resource.
+    const foreignSessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    await getTestPrisma().agentTask.update({ where: { id: taskId }, data: { sessionId: foreignSessionId } });
 
     const res = await postJson<Envelope<unknown>>(
       taskPost,
@@ -542,20 +546,21 @@ describe('[integration] task endpoints — authorization (cookie-only identity)'
     expect(failure(res).code).toBe('NOT_FOUND');
   });
 
-  it('GET /api/tasks/[id] with no cookie → 403 SECURITY_DENIED (identity is cookie-only)', async () => {
+  it('GET /api/tasks/[id] restores the demo task without a cookie', async () => {
     const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
 
     const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(taskId), {
       ctx: idCtx(taskId),
     });
 
-    expect(res.status).toBe(403);
-    expect(failure(res).code).toBe('SECURITY_DENIED');
+    expect(res.status).toBe(200);
+    expect(payload(res).id).toBe(taskId);
   });
 
   it('GET /api/tasks/[id] for a task owned by a FOREIGN session → 403 SECURITY_DENIED', async () => {
     const { taskId } = await seedPlan('先查余额再给张伟转200元', transferPlanNodes('200'));
-    const foreignSessionId = await newPersistedSessionId();
+    const foreignSessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    await getTestPrisma().agentTask.update({ where: { id: taskId }, data: { sessionId: foreignSessionId } });
 
     const res = await getJson<Envelope<TaskPlan>>(taskGet, taskUrl(taskId), {
       ctx: idCtx(taskId),

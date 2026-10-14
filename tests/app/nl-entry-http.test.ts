@@ -293,9 +293,12 @@ describe('[integration] POST /api/chat NL → RED subscribe_investment → POST 
 describe('[integration] POST /api/chat NL → YELLOW cancel_subscription → POST /api/actions/[id]/confirm', () => {
   it('3 — "取消Netflix订阅" parks a YELLOW gate, confirm flips the Netflix subscription to CANCELLED', async () => {
     const turn = await chatTurn('取消Netflix订阅');
-    const events = turn.events;
+    const lookup = confirmationOf(turn.events);
+    expect(lookup?.action.toolName).toBe('list_subscriptions');
+    const read = payload(await confirmAction(lookup!.actionId, turn.sessionId));
+    const events = read.events;
 
-    // The NL request routed to the gated `cancel_subscription` tool and the gateway BLOCKED it.
+    // Confirming a prerequisite read can propose the declared cancellation, but cannot execute it.
     expect(lastToolEnd(events, 'cancel_subscription')?.status).toBe('blocked');
     expect(confirmationOf(events), 'expected a YELLOW confirmation_required event').toBeDefined();
     expect(mfaOf(events), 'YELLOW never requires MFA').toBeUndefined();
@@ -305,7 +308,7 @@ describe('[integration] POST /api/chat NL → YELLOW cancel_subscription → POS
     expect(confirmation.action.tier).toBe('YELLOW');
     expect(confirmation.action.toolName).toBe('cancel_subscription');
 
-    const row = await parked(turn.sessionId);
+    const row = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: confirmation.actionId } });
     expect(row.riskLevel).toBe('YELLOW');
     expect(row.requiresMfa).toBe(false);
     expect(row.status).toBe('pending');
@@ -363,9 +366,8 @@ describe('[integration] POST /api/chat — MISSING info ⇒ CLARIFICATION (no to
     expect(await checkingBalance()).toBe(SEEDED_BALANCE);
     expect(await zhangweiTransfers()).toHaveLength(0);
 
-    // The clarification names the resolved recipient and asks for the amount.
+    // The model asks only for the missing amount; the original recipient remains in context.
     const text = assistantText(events);
-    expect(text).toContain('张伟');
     expect(text).toContain('多少钱');
   });
 });

@@ -11,10 +11,9 @@
  * Design note: `banking-sdk` otherwise persists ONLY through `lib/db/repositories/*`, and that
  * remains the rule for every single-statement write. This file is the single, deliberate,
  * documented exception — it touches the Prisma client directly so several statements can share
- * one transaction. Keep it that way: no other SDK file may import `prisma` (or `@prisma/client`)
- * for writes.
+ * one transaction. Keep it that way: no other SDK file may import the database singleton for writes.
  */
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/db/prisma';
 import { prisma } from '../lib/db/client';
 import { bankingExecutionContext } from './execution-context';
 import { currentTransaction, withinTransaction } from '../lib/db/unit-of-work';

@@ -34,16 +34,16 @@
  *                          replay reuses an execution identity for a different request.
  *  - `INSUFFICIENT_FUNDS`— funding account balance < amount.
  */
-import type { Account, Contact, ExecutionReceipt, Transaction } from '@prisma/client';
+import type { Account, Contact, ExecutionReceipt, Transaction } from '@/lib/db/prisma';
 import { demoNow } from '../lib/clock';
 import { executionReceiptId, idempotentTransferTxId, requestDigest } from '@/lib/ledger';
 import { accounts, contacts, executionReceipts, transactions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
-import { maskAwarePhoneMatch } from '../lib/phone';
+import { maskAwarePhoneMatch, maskPhone } from '../lib/phone';
 import { safeParse, toJson } from '../lib/json';
 import { centsToMoney, moneyToCents, normalizeMoney, normalizeTransferAmount, type MoneyAmount } from '../lib/money';
 import { toContactView } from './contact';
-import { isUniqueViolation } from './idempotent';
+import { isUniqueViolation, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction } from './tx';
 import { bankingExecutionContext } from './execution-context';
 import type { TransferInput, TransferRecipient, TransferResult } from './types';
@@ -56,7 +56,7 @@ function toRecipient(contact: Contact): TransferRecipient {
   return {
     contactId: contact.id,
     name: contact.name,
-    phone: contact.phone,
+    phone: maskPhone(contact.phone),
     bank: contact.bank ?? undefined,
   };
 }
@@ -117,7 +117,7 @@ async function replayCommitted(userId: string, key: string, digest: string): Pro
 
 /** Read committed evidence only. This function never executes or retries a transfer. */
 export async function getCommittedTransfer(input: TransferInput): Promise<TransferResult | null> {
-  const key = input.idempotencyKey?.trim();
+  const key = normalizeIdempotencyKey(input.idempotencyKey);
   if (!key) return null;
   const digest = requestDigest({
     userId: input.userId, toolName: TRANSFER_TOOL,
@@ -212,10 +212,19 @@ async function resolveFundingAccount(userId: string, input: TransferInput): Prom
  * (no debit), and the committed fact is replayed ONLY after its request digest is verified.
  */
 export async function createTransfer(input: TransferInput): Promise<TransferResult> {
+  if (typeof input.userId !== 'string' || !input.userId.trim()) {
+    throw new AppError('SECURITY_DENIED', 'Transfer requires a trusted owner identity.');
+  }
+  for (const field of ['contactId', 'phone', 'name', 'sourceAccountId', 'remark'] as const) {
+    const value = input[field];
+    if (value !== undefined && (typeof value !== 'string' || field !== 'remark' && !value.trim())) {
+      throw new AppError('VALIDATION', 'Transfer selectors and remarks must be valid text.', { field });
+    }
+  }
   const amount = normalizeTransferAmount(input.amount);
   const amountMinor = moneyToCents(amount);
 
-  const key = input.idempotencyKey?.trim();
+  const key = normalizeIdempotencyKey(input.idempotencyKey);
   const txId = key ? idempotentTransferTxId(input.userId, key) : undefined;
   const digest = requestDigest({
     userId: input.userId,

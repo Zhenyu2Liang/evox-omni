@@ -26,12 +26,12 @@
 //   - `status`        on AgentTask/AgentTaskNode = "pending" | "running" | "done" | "failed" | "blocked"
 
 generator client {
-  provider = "prisma-client-js"
+  provider = "prisma-client"
+  output   = "../lib/db/generated"
 }
 
 datasource db {
   provider = "sqlite"
-  url      = env("DATABASE_URL")
 }
 
 model User {

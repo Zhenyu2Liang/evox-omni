@@ -19,14 +19,14 @@ describe('runtime event serialization', () => {
   });
 
   it('hashes original credentials and canonicalizes object ordering', () => {
-    expect(runtimeRequestDigest('change_password', { newPassword: 'first' })).not.toBe(runtimeRequestDigest('change_password', { newPassword: 'second' }));
+    expect(runtimeRequestDigest('unsupported_secret_tool', { newPassword: 'first' })).not.toBe(runtimeRequestDigest('unsupported_secret_tool', { newPassword: 'second' }));
     expect(runtimeRequestDigest('query', { a: '1', b: '2' })).toBe(runtimeRequestDigest('query', { b: '2', a: '1' }));
   });
 
   it('redacts credential-bearing text and fragmented password tool arguments', () => {
     const value = {
       message: 'newPassword=private-value', code: '123456',
-      event: { type: 'toolcall_delta', delta: 'private-value', partial: { content: [{ type: 'toolCall', name: 'change_password', arguments: { newPassword: 'private-value' }, partialJson: '{"newPassword":"private-value' }] } },
+      event: { type: 'toolcall_delta', delta: 'private-value', partial: { content: [{ type: 'toolCall', name: 'unsupported_secret_tool', arguments: { newPassword: 'private-value' }, partialJson: '{"newPassword":"private-value' }] } },
     };
     const stored = encodeRuntimeValue(value);
     expect(stored).not.toContain('private-value');

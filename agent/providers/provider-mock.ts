@@ -3,6 +3,7 @@ import type { Context } from '@earendil-works/pi-ai';
 import type { AppConfig } from '@/lib/config';
 import { respondWithGuidance } from './mock-responder';
 import type { ModelRuntime } from './types';
+import { mockCompactionReply } from './mock/compaction';
 
 /**
  * MOCK mode — builds a fully OFFLINE, DETERMINISTIC scripted model.
@@ -20,12 +21,13 @@ import type { ModelRuntime } from './types';
  * deltas are emitted on the microtask queue (no variable timers) — determinism holds.
  */
 export function createMockRuntime(_cfg: AppConfig): ModelRuntime {
-  const reg = fauxProvider();
+  // Models collections are isolated; a stable API identity lets a fresh process recover this demo model.
+  const reg = fauxProvider({ api: 'banking-demo-mock' });
   const models = createModels();
   models.setProvider(reg.provider);
-  const factory = (context: Context): ReturnType<typeof respondWithGuidance> => {
+  const factory = (context: Context, options?: { maxTokens?: number }): ReturnType<typeof respondWithGuidance> => {
     reg.appendResponses([factory]); // re-queue: one step consumed per model call
-    return respondWithGuidance(context);
+    return mockCompactionReply(context, options?.maxTokens) ?? respondWithGuidance(context);
   };
   reg.setResponses([factory]);
   return { model: reg.getModel(), streamFn: models.streamSimple.bind(models) };

@@ -20,12 +20,15 @@
  * deterministically from `(userId, key)` and a repeat replays the existing card instead of issuing a
  * second one (a plan node can be replayed after a resume/retry — see `./idempotent.ts`).
  */
-import type { Card as CardRow, CardLimit as CardLimitRow } from '@prisma/client';
+import type { Card as CardRow, CardLimit as CardLimitRow } from '@/lib/db/prisma';
 import { cards } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { centsToMoney, moneyToCents } from '../lib/money';
 import { idempotentCardId, isUniqueViolation, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction } from './tx';
+import type { AddDemoCardRequest } from '../lib/contracts/card-management';
+import { safeParse } from '../lib/json';
+import { SPENDING_CATEGORIES } from './categories';
 import type {
   ApplyVirtualCardInput,
   CardStatus,
@@ -77,16 +80,22 @@ async function transitionTo(
   next: CardStatus,
   allowedFrom: readonly CardStatus[],
 ): Promise<CardRow> {
-  const current = row.status as CardStatus;
-  if (current === next) return row;
-  if (!allowedFrom.includes(current)) {
-    throw new AppError('CONFLICT', `卡片当前状态 ${current} 不允许变更为 ${next}`, {
-      cardId: row.id,
-      from: current,
-      to: next,
-    });
-  }
-  return runInTransaction((tx) => tx.card.update({ where: { id: row.id, userId: row.userId, status: current }, data: { status: next } }));
+  return runInTransaction(async tx => {
+    const latest = await tx.card.findUnique({ where: { id: row.id, userId: row.userId } });
+    if (!latest) throw new AppError('NOT_FOUND', 'Card does not exist.');
+    const current = latest.status as CardStatus;
+    if (current === next) return latest;
+    if (!allowedFrom.includes(current)) {
+      throw new AppError('CONFLICT', 'The card state does not allow this transition.', { cardId: row.id, from: current, to: next });
+    }
+    const updated = await tx.card.updateMany({ where: { id: row.id, userId: row.userId, status: current }, data: { status: next } });
+    const committed = await tx.card.findUnique({ where: { id: row.id, userId: row.userId } });
+    if (!committed) throw new AppError('NOT_FOUND', 'Card does not exist.');
+    if (updated.count === 0 && committed.status !== next) {
+      throw new AppError('CONFLICT', 'The card state changed before the operation committed.', { cardId: row.id, status: committed.status });
+    }
+    return committed;
+  });
 }
 
 /** All cards owned by the user (with per-category limits). */
@@ -97,6 +106,66 @@ export async function getCards(userId: string): Promise<CardView[]> {
   });
 }
 
+/** Create a simulated record only; the dedicated manual command owns MFA, audit and replay. */
+export async function addDemoCard(userId: string, input: Omit<AddDemoCardRequest, 'requestId'>): Promise<CardView> {
+  if (!['DEBIT', 'CREDIT', 'VIRTUAL'].includes(input.type)) throw new AppError('VALIDATION', 'Invalid card type.');
+  const creditLimitMinor = input.creditLimit === undefined ? null : moneyToCents(input.creditLimit);
+  const monthlyLimitMinor = input.monthlyLimit === undefined ? null : moneyToCents(input.monthlyLimit);
+  if (input.type === 'CREDIT' && (creditLimitMinor === null || creditLimitMinor <= 0n)) throw new AppError('VALIDATION', 'A credit card requires a positive credit limit.');
+  if (input.type !== 'CREDIT' && creditLimitMinor !== null) throw new AppError('VALIDATION', 'Only credit cards accept a credit limit.');
+  if (monthlyLimitMinor !== null && monthlyLimitMinor < 0n) throw new AppError('VALIDATION', 'Monthly limit must be non-negative.');
+  return runInTransaction(async tx => {
+    const own = await tx.card.findMany({ where: { userId } });
+    const row = await tx.card.create({ data: { userId, type: input.type, network: 'UnionPay',
+      numberMasked: generateMaskedNumber(new Set(own.map(card => card.numberMasked))), status: 'ACTIVE',
+      creditLimitMinor, availableLimitMinor: creditLimitMinor, monthlyLimitMinor } });
+    return toCardView(row, []);
+  });
+}
+
+/** Read-only eligibility check, repeated inside the serialized deletion transaction. */
+export async function assertDemoCardDeletable(userId: string, cardId: string, ownActionId: string): Promise<CardView> {
+  return runInTransaction(async tx => {
+    const row = await requireCard(cardId, userId);
+    if (row.type === 'CREDIT' && (row.creditLimitMinor === null || row.availableLimitMinor === null || row.creditLimitMinor !== row.availableLimitMinor)) {
+      throw new AppError('CONFLICT', 'A card with outstanding or unknown credit obligations cannot be deleted.');
+    }
+    const referencesCard = (json: string | null): boolean => {
+      const visit = (value: unknown): boolean => {
+        if (typeof value === 'string') return value === cardId || value === row.numberMasked || value === row.numberMasked.slice(-4);
+        if (Array.isArray(value)) return value.some(visit);
+        if (value && typeof value === 'object') return Object.values(value).some(visit);
+        return false;
+      };
+      return visit(safeParse(json ?? '', null));
+    };
+    const actions = await tx.pendingAction.findMany({ where: { userId, id: { not: ownActionId },
+      status: { in: ['pending', 'awaiting_mfa', 'confirmed', 'locked', 'needs_reconciliation'] } } });
+    const invocations = await tx.toolInvocation.findMany({ where: { run: { userId },
+      status: { in: ['started', 'waiting_confirmation', 'waiting_verification', 'interrupted', 'needs_reconciliation'] } } });
+    const nodes = await tx.agentTaskNode.findMany({ where: { task: { userId, status: { notIn: ['completed', 'cancelled'] } },
+      status: { notIn: ['success', 'completed', 'cancelled', 'skipped'] } } });
+    const generating = await tx.agentRun.count({ where: { userId, status: { in: ['running', 'interrupted'] } } });
+    const runningPlans = await tx.agentTask.count({ where: { userId, status: { in: ['running', 'pending'] } } });
+    if (generating > 0 || runningPlans > 0 || actions.some(action => action.status === 'needs_reconciliation' || referencesCard(action.argsJson)) ||
+        invocations.some(invocation => invocation.status === 'needs_reconciliation' || referencesCard(invocation.argsJson)) ||
+        nodes.some(node => referencesCard(node.args))) {
+      throw new AppError('CONFLICT', 'Resolve pending or uncertain operations involving this card before deleting it.');
+    }
+    return loadCardView(row);
+  });
+}
+
+/** Delete a simulated card while preserving the ledger, immutable receipts and audit history. */
+export async function deleteDemoCard(userId: string, cardId: string, ownActionId: string): Promise<CardView> {
+  return runInTransaction(async tx => {
+    const view = await assertDemoCardDeletable(userId, cardId, ownActionId);
+    await tx.cardLimit.deleteMany({ where: { cardId } });
+    await tx.card.delete({ where: { id: cardId, userId } });
+    return view;
+  });
+}
+
 /** Set/replace the per-category spend limit on a card; returns the updated card. */
 export async function setCardLimit(input: SetCardLimitInput): Promise<CardView> {
   const row = await requireCard(input?.cardId, input?.userId);
@@ -104,6 +173,9 @@ export async function setCardLimit(input: SetCardLimitInput): Promise<CardView> 
   const category = typeof input?.category === 'string' ? input.category.trim() : '';
   if (category === '') {
     throw new AppError('VALIDATION', '缺少限额分类', { cardId: row.id, category: input?.category });
+  }
+  if (!(SPENDING_CATEGORIES as readonly string[]).includes(category)) {
+    throw new AppError('VALIDATION', 'Card limit category must be a supported spending category.');
   }
   const amountMinor = moneyToCents(input?.amount);
   if (amountMinor < 0n) {
@@ -116,12 +188,16 @@ export async function setCardLimit(input: SetCardLimitInput): Promise<CardView> 
 
   // Replace semantics: a card+category keeps exactly ONE limit row. The delete and the create run
   // in ONE transaction, so a failure can never leave the category without its limit.
-  await runInTransaction(async (tx) => {
+  return runInTransaction(async (tx) => {
+    const current = await tx.card.findUnique({ where: { id: row.id, userId: input.userId } });
+    if (!current) throw new AppError('NOT_FOUND', 'Card does not exist.');
+    if (current.status !== 'ACTIVE' && current.status !== 'FROZEN') {
+      throw new AppError('CONFLICT', 'Only active or frozen cards support category limit changes.', { cardId: row.id, status: current.status });
+    }
     await tx.cardLimit.deleteMany({ where: { card: { id: row.id, userId: input.userId }, category } });
     await tx.cardLimit.create({ data: { card: { connect: { id: row.id, userId: input.userId } }, category, amountMinor } });
+    return toCardView(current, await tx.cardLimit.findMany({ where: { cardId: row.id } }));
   });
-
-  return loadCardView(row);
 }
 
 /** Freeze a card (status → FROZEN); returns the updated card. */
@@ -149,6 +225,9 @@ export async function reportLostCard(
   input: ReportLostCardInput = {},
 ): Promise<CardView> {
   const row = await requireCard(cardId, userId);
+  if (input.reason !== undefined && typeof input.reason !== 'string') {
+    throw new AppError('VALIDATION', 'Loss reporting reason must be text.');
+  }
   const reason = typeof input?.reason === 'string' ? input.reason.trim() || undefined : undefined;
   if ((row.status as CardStatus) === 'LOST') {
     throw new AppError('CONFLICT', '该卡片已挂失，无需重复挂失', {
@@ -157,7 +236,11 @@ export async function reportLostCard(
       reason,
     });
   }
-  const updated = await runInTransaction((tx) => tx.card.update({ where: { id: row.id, userId, status: row.status }, data: { status: 'LOST' } }));
+  const updated = await runInTransaction(async tx => {
+    const result = await tx.card.updateMany({ where: { id: row.id, userId, status: row.status }, data: { status: 'LOST' } });
+    if (result.count !== 1) throw new AppError('CONFLICT', 'The card state changed before loss reporting committed.');
+    return tx.card.findUniqueOrThrow({ where: { id: row.id, userId } });
+  });
   return loadCardView(updated);
 }
 
@@ -183,6 +266,9 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
   if (cents !== undefined && cents < 0n) throw new AppError('VALIDATION', 'Monthly limit must be non-negative.');
   const monthlyLimitMinor = cents;
   const replay = (card: CardRow): CardRow => {
+    if (card.userId !== userId || card.type !== 'VIRTUAL') {
+      throw new AppError('CONFLICT', 'The execution identity does not belong to this virtual card issuance.');
+    }
     if (card.monthlyLimitMinor !== (monthlyLimitMinor ?? null)) {
       throw new AppError('CONFLICT', '同一幂等身份不能申请不同月限额的虚拟卡。');
     }

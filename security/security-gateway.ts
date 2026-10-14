@@ -15,9 +15,11 @@
  * performed by the agent layer via the Banking SDK, using the args the gateway validated.
  * Money-moving calls are therefore always triggered by a human decision, never by model text.
  */
-import type { PendingAction as PrismaPendingAction } from '@prisma/client';
+import type { PendingAction as PrismaPendingAction } from '@/lib/db/prisma';
 import type { RiskLevel } from '../lib/contracts/risk';
 import type { ToolName } from '../lib/contracts/tools';
+import { isManualCardCommand } from '../lib/contracts/card-management';
+import { catalogEntry } from '../lib/contracts/tool-catalog';
 import type {
   PendingAction,
   PendingActionStatus,
@@ -40,6 +42,7 @@ import {
   claimPendingAction,
   createPendingAction as repoCreatePending,
   getPendingAction,
+  getMfaChallenge,
   listPendingActionsByTask,
   setPendingActionStatus,
 } from '../lib/db/repositories/pendingAction';
@@ -60,9 +63,10 @@ import { canonicalCommandArgs } from '../lib/contracts/command';
 import { recordAuthorizationDecision } from './authorization-record';
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
+import { requestDigest } from '../lib/ledger';
+import { realNow } from '../lib/clock';
+import mfaMessages from './messages/mfa.zh-CN.json';
 import { resolveBankingArgs } from '../lib/banking-selectors';
-import { assertRequestedProducts } from '../lib/request-constraints';
-import { requiresCompletePlan, COMPLETE_PLAN_NOTICE } from '../lib/request-steps';
 import { withActionPolicy } from '../lib/action-summary';
 import { scheduledTime } from '../lib/scheduled-time';
 import { redactRequest, redactSecrets } from '../lib/sensitive';
@@ -307,6 +311,7 @@ export const TOOL_INTENT: Record<ToolName, string> = {
   get_balance: '查询余额',
   get_transactions: '查询交易流水',
   search_contact: '查询联系人',
+  search_conversation_history: 'Search conversation history',
   analyze_spending: '消费分析',
   detect_anomaly: '异常交易检测',
   get_cards: '查询银行卡',
@@ -321,16 +326,15 @@ export const TOOL_INTENT: Record<ToolName, string> = {
   transfer_money: '转账',
   set_card_limit: '调整信用卡额度',
   cancel_subscription: '取消订阅',
-  freeze_card: '冻结银行卡',
   apply_virtual_card: '申请虚拟卡',
   set_subscription_reminder: '设置订阅提醒',
   create_scheduled_task: '创建定时任务',
   // 🔴 RED
+  freeze_card: '冻结银行卡',
   subscribe_investment: '理财产品申购',
   redeem_investment: '理财产品赎回',
   report_lost_card: '挂失银行卡',
   unfreeze_card: '解冻银行卡',
-  change_password: '修改密码',
   // ⚪ META
   submit_plan: '规划任务',
 };
@@ -534,9 +538,8 @@ async function gatewayCreatePendingAction(
     userRequest: redactRequest(ctx.userRequest) };
   ctx.args = canonicalCommandArgs(ctx.args);
   if (ctx.toolName === 'create_scheduled_task') {
-    ctx.args = { ...ctx.args, runAt: scheduledTime(ctx.args, ctx.userRequest) };
+    ctx.args = { ...ctx.args, runAt: scheduledTime(ctx.args) };
   }
-  if (ctx.toolName === 'change_password') ctx.args = redactSecrets(ctx.args) as Record<string, unknown>;
   if (ctx.toolName === 'apply_virtual_card' && ctx.args.monthlyLimit !== undefined) {
     const cents = moneyToCents(ctx.args.monthlyLimit);
     if (cents < 0n) throw new AppError('VALIDATION', 'Monthly limits cannot be negative.');
@@ -730,17 +733,23 @@ async function authorizeWithMfa(
 ): Promise<AuthorizationResult> {
   const tier: RiskLevel = row.toolName === 'transfer_money' ? 'RED' : (row.riskLevel as RiskLevel);
 
-  // Ensure a challenge exists (RED actions get one up-front at park time; re-issue defensively).
-  if (!(await getChallenge(actionId))) await issueChallenge(actionId);
+  // Reuse the current challenge. A newly issued challenge needs a separate user submission.
+  const existingChallenge = await getMfaChallenge(actionId);
+  const commandDigest = requestDigest({ userId: row.userId, toolName: row.toolName,
+    args: canonicalCommandArgs(safeParse<Record<string, unknown>>(row.argsJson, {})) });
+  const renewed = Boolean(existingChallenge && (!existingChallenge.expiresAt ||
+    existingChallenge.expiresAt.getTime() <= realNow() || existingChallenge.commandDigest !== commandDigest));
+  const issued = !existingChallenge || renewed;
+  if (issued) await issueChallenge(actionId);
 
-  if (!opts.mfaCode) {
+  if (!opts.mfaCode || issued) {
     return {
       ok: false,
       status: 'awaiting_mfa',
       actionId,
       tier,
       requiresMfa: true,
-      message: MFA_CODE_PROMPT,
+      message: renewed ? mfaMessages.renewedChallenge : issued ? mfaMessages.newChallenge : MFA_CODE_PROMPT,
       action,
     };
   }
@@ -963,8 +972,9 @@ async function authorizeAction(
   actionId: string,
   opts: AuthorizeOptions,
 ): Promise<AuthorizationResult> {
-  const row = await getPendingAction(actionId);
+  let row = await getPendingAction(actionId);
   if (!row) throw new AppError('NOT_FOUND', `未找到待处理的操作: ${actionId}`);
+  if (isManualCardCommand(row.toolName) || catalogEntry(row.toolName)?.agentEnabled === false) throw new AppError('SECURITY_DENIED', 'Use the card management page to confirm this change.');
 
   // Ownership is REQUIRED (fail-closed): a missing/mismatching caller identity is refused.
   await assertOwnership(row, opts);
@@ -975,6 +985,18 @@ async function authorizeAction(
     throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
   }
 
+  // Recheck current static policy before granting a new execution. Persisted decisions may be
+  // stricter, but a stale or corrupt confirmation-only row cannot downgrade today's RED policy.
+  const policy = getToolPolicy(row.toolName as ToolName);
+  if (policy.static && policy.tier === 'RED' && (!row.requiresMfa || row.riskLevel !== 'RED')) {
+    const upgraded = await prisma.pendingAction.updateMany({
+      where: { id: row.id, userId: row.userId, sessionId: row.sessionId, status: { in: ['pending', 'awaiting_mfa'] } },
+      data: { riskLevel: 'RED', requiresMfa: true, status: 'awaiting_mfa' },
+    });
+    if (upgraded.count !== 1) throw new AppError('CONFLICT', 'The operation is no longer awaiting authorization.');
+    row = await getPendingAction(actionId);
+    if (!row) throw new AppError('NOT_FOUND', 'The operation no longer exists.');
+  }
   const action = toContractPendingAction(row);
   const effectiveRequiresMfa = row.requiresMfa || action.tier === 'RED';
   if (row.taskId && await prisma.manualReview.findFirst({ where: { taskId: row.taskId, status: 'open' } })) {
@@ -1035,6 +1057,7 @@ async function authorizeAction(
 async function cancelAction(actionId: string, opts: CancelOptions): Promise<PendingAction> {
   const row = await getPendingAction(actionId);
   if (!row) throw new AppError('NOT_FOUND', `未找到待处理的操作: ${actionId}`);
+  if (isManualCardCommand(row.toolName)) throw new AppError('SECURITY_DENIED', 'Use the card management page to cancel this change.');
 
   await assertOwnership(row, opts);
 
@@ -1071,11 +1094,6 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
   // yet, so only presence/non-emptiness can be asserted here.
   assertCallerIdentity(ctx);
 
-  // Trusted DAG context is injected by the executor, not accepted from model arguments.
-  if (!ctx.taskId && getToolPolicy(ctx.toolName).write && requiresCompletePlan(ctx.userRequest)) {
-    throw new AppError('VALIDATION', COMPLETE_PLAN_NOTICE);
-  }
-
   const evaluation = await gatewayEvaluate(ctx);
   const decision = gatewayDecide(evaluation);
   ctx = { ...ctx, authorizationDecisionId: await recordAuthorizationDecision(ctx, decision) };
@@ -1084,15 +1102,6 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
       ...evaluation, blocked: true, blockReason: reason, reasons: [...evaluation.reasons, reason],
     } });
   };
-
-  if (decision.kind !== 'deny') {
-    try { await assertRequestedProducts(ctx.toolName, ctx.args, ctx.userRequest); }
-    catch (error) {
-      if (!(error instanceof AppError) || error.code !== 'VALIDATION') throw error;
-      await recordDenial(error.message);
-      return { evaluation: { ...evaluation, blocked: true }, decision: { ...decision, kind: 'deny' }, blockReason: error.message };
-    }
-  }
 
   // GREEN — allow the tool to execute inline.
   if (!evaluation.blocked) return { evaluation, decision };

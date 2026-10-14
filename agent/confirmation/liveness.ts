@@ -9,6 +9,7 @@ import { leaseExpiryFor, leaseNowMs, releaseAction, retainAction } from '../conf
 import type { ConfirmOptions, ConfirmationOutcome } from './contracts';
 import { resolveTrustedIdentity } from './identity';
 import { conflictOutcome } from './outcomes';
+import { isManualCardCommand } from '@/lib/contracts/card-management';
 
 async function beginExecutionLease(actionId: string): Promise<{ owner?: string; blocked: boolean }> {
   const owner = newId('lease');
@@ -28,6 +29,8 @@ export async function withLiveConfirmation(
   opts?: ConfirmOptions,
 ): Promise<ConfirmationOutcome> {
   await resolveTrustedIdentity(actionId, opts);
+  const action = await getPendingAction(actionId);
+  if (action && isManualCardCommand(action.toolName)) throw new AppError('SECURITY_DENIED', 'Use the card management page to confirm this change.');
   retainAction(actionId);
   let leaseOwner: string | undefined;
   try {

@@ -1,4 +1,4 @@
-import type { User } from '@prisma/client';
+import type { User } from '@/lib/db/prisma';
 import { prisma, type DbClient } from '../client';
 
 export function getUser(id: string, client?: DbClient): Promise<User | null> {

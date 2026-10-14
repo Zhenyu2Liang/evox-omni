@@ -1,39 +1,18 @@
-/** Trusted user intent accumulated across clarification turns. */
-export interface IntentTurn {
-  revision: number;
-  text: string;
-  receivedAt: number;
-}
+/** A model interpretation is scoped to one user turn and never grants banking authorization. */
+export type TurnPurpose = 'undecided' | 'conversation' | 'advice' | 'query' | 'operation';
 
 export interface IntentStep {
   key: string;
   tool: string;
-  sourceText: string;
-  requestText: string;
-  amount?: string;
-  recipient?: string;
-  requiresClarification: boolean;
-}
-
-export interface IntentCondition {
-  metric: 'spending';
-  category?: string;
-  period: { kind: 'month'; relative?: 'current' | 'previous'; month?: string };
-  operator: '>' | '>=' | '<' | '<=';
-  threshold: string;
-  sourceText: string;
 }
 
 export interface ConversationIntent {
+  purpose: TurnPurpose;
+  allowProtocolExamples?: boolean;
+  workflow?: boolean;
   id: string;
   revision: number;
-  status: 'draft' | 'ready' | 'submitted';
   requestText: string;
   latestMessage: string;
-  turns: IntentTurn[];
   steps: IntentStep[];
-  conditions: IntentCondition[];
-  reference: { recipient?: string; amount?: string };
-  createdAt: number;
-  updatedAt: number;
 }

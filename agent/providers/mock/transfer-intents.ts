@@ -2,6 +2,7 @@ import type { AssistantMessage, Message, ToolResultMessage } from '@earendil-wor
 import { parseAmount } from './amount-parser';
 import { contentToText } from './conversation';
 import { plain, toolCall } from './replies';
+import { isConversationalRequest } from './conversation-policy';
 
 interface TransferIntent {
   recipient?: string;
@@ -34,7 +35,7 @@ export function parseTransfer(text: string): TransferIntent {
 export function handleTransfer(text: string, messages: Message[]): AssistantMessage {
   const intent = parseTransfer(text);
   if (intent.reuseRecipient) {
-    const prior = priorTransferRecipient(messages);
+    const prior = intent.explicitReuse ? priorTransferRecipient(messages) : null;
     if (!prior) return plain(intent.explicitReuse
       ? '我还没有记录到之前的收款人，请告诉我这次要转给谁、转多少钱。'
       : '请问要转给谁？请告诉我收款人和金额，例如“给张伟转200元”。');
@@ -78,7 +79,15 @@ function extractRecipient(text: string): string | undefined {
 }
 
 export function priorTransferRecipient(messages: Message[]): { contactId?: string; name?: string } | null {
+  let boundary = -1;
+  let latestUserSkipped = false;
   for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (message.role !== 'user') continue;
+    if (!latestUserSkipped) { latestUserSkipped = true; continue; }
+    if (isConversationalRequest(contentToText(message.content))) { boundary = index; break; }
+  }
+  for (let index = messages.length - 1; index > boundary; index--) {
     const message = messages[index];
     if (message.role !== 'assistant') continue;
     for (let blockIndex = message.content.length - 1; blockIndex >= 0; blockIndex--) {
@@ -90,7 +99,7 @@ export function priorTransferRecipient(messages: Message[]): { contactId?: strin
       if (contactId || name) return { contactId, name };
     }
   }
-  for (let index = messages.length - 1; index >= 0; index--) {
+  for (let index = messages.length - 1; index > boundary; index--) {
     const message = messages[index];
     if (message.role === 'toolResult' && message.toolName === 'search_contact') {
       const contacts = parseContacts(message);

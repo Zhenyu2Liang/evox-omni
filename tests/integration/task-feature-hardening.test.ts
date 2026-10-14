@@ -1,11 +1,11 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeGatedTool, getOrCreateSession, rollbackTask } from '@/agent';
-import { runTurn, loadSession } from '@/agent';
-import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai';
-import { runSubmitPlan } from '@/agent/tools/planning';
+import { getDemoSession } from '@/agent/session';
+import { runSubmitPlan, preflightRequestedPlan } from '@/agent/tools/planning';
 import { initialChatUIState, reduceAgentEvents } from '@/components/chat/useAgentStream';
 import { pausePlan } from '@/planner/lifecycle';
-import { assertRequestedProducts, enforceRequestedOrder, invalidRequestedComparison } from '@/lib/request-constraints';
+import { advanceConversationIntent, declareConversationIntent } from '@/agent/intent-context';
+import { SPENDING_CATEGORIES } from '@/lib/contracts/spending';
 import { auditStore } from '@/audit/audit-logger';
 import type { TaskNodeSpec, TaskPlan } from '@/lib/contracts/task';
 import { POST as taskPost, GET as taskGet } from '@/app/api/tasks/[id]/route';
@@ -32,7 +32,7 @@ async function confirmNode(sessionId: string, taskId: string, nodeId: string) {
   expect(next?.action?.toolName).toBe(nodeId === 'reminder' ? 'transfer_money' : 'set_card_limit');
 }
 async function partialPlan() {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const result = await runSubmitPlan(userId, { goal: 'partial plan', nodes: [
     node('budget', 'reserve_budget', { name: 'rollback-budget', amount: '99.99' }),
     node('reminder', 'create_scheduled_task', { name: 'rollback-reminder', kind: 'REMINDER', runAtLocal: '2026-11-20T09:00' }, ['budget']),
@@ -47,48 +47,20 @@ async function partialPlan() {
 }
 
 describe('trusted product selection', () => {
-  it('shows a server-authored clarification even when the model only lists products and uses ordinary prose', async () => {
-    const mock = fauxProvider(), models = createModels(); models.setProvider(mock.provider);
-    mock.setResponses([
-      fauxAssistantMessage([fauxToolCall('list_investments', {})], { stopReason: 'toolUse' }),
-      fauxAssistantMessage('Here are the available products.'),
-    ]);
-    const result = await runTurn({ message: '对比稳健理财A和进取理财B的风险，然后申购稳健理财A1000.13元' },
-      { provider: { model: mock.getModel(), streamFn: models.streamSimple.bind(models) } });
-    const final = result.events.filter(event => event.type === 'message_end').at(-1)!;
-    if (final.type !== 'message_end') throw new Error('missing final message');
-    expect(final.message.content).toContain('不会自动替换成其他产品');
-    expect(final.message.content).toContain('未找到你指定的理财产品');
-    expect((await loadSession(result.sessionId))?.transcript.at(-1)?.content).toBe(final.message.content);
+  it('rejects an unknown product ID before creating a workflow or authorization', async () => {
+    await expect(preflightRequestedPlan(userId, { nodes: [node('unknown', 'subscribe_investment', { productId: 'unknown-product', amount: '1000.13' })] }, 'Original request.')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(await getTestPrisma().agentTask.count()).toBe(0);
     expect(await getTestPrisma().pendingAction.count()).toBe(0);
   });
-  it('rejects an unknown comparison product and stops a follow-on purchase before authorization', async () => {
-    const sessionId = (await getOrCreateSession(userId)).sessionId;
-    const request = '对比稳健理财A和进取理财B的风险，然后申购稳健理财A 1000.13元';
-    const comparison = await executeGatedTool({ sessionId, userId, toolName: 'compare_investments',
-      args: { productIds: ['prod_wenjiana', 'prod_wenjib'] }, userRequest: request });
-    expect(comparison.ok).toBe(false);
-    expect(comparison.error).toContain('不会自动替换');
-    const purchase = await executeGatedTool({ sessionId, userId, toolName: 'subscribe_investment',
-      args: { productId: 'prod_wenjiana', amount: '1000.13' }, userRequest: request });
-    expect(purchase.ok).toBe(false);
-    expect(await getTestPrisma().pendingAction.count()).toBe(0);
-    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2358000n);
-  });
-  it('accepts exact quoted names/codes, rejects dropped or substituted known products', async () => {
-    await expect(assertRequestedProducts('compare_investments', { productIds: ['prod_wenjiana', 'prod_wenjib'] }, '对比“稳健理财A”和“稳健理财B”的风险')).resolves.toBeUndefined();
-    await expect(assertRequestedProducts('compare_investments', { productIds: ['prod_wenjiana', 'prod_wenjib'] }, '对比一下理财产品稳健理财A与稳健理财B')).resolves.toBeUndefined();
-    await expect(assertRequestedProducts('compare_investments', { productIds: ['prod_wenjiana'] }, '对比WJA001与WJB002')).rejects.toThrow('对象与本次请求不一致');
-    await expect(assertRequestedProducts('subscribe_investment', { productId: 'prod_wenjib' }, '申购稳健理财A 1000元')).rejects.toThrow('申购产品与本次请求不一致');
-    const products = await getTestPrisma().investmentProduct.findMany();
-    expect(invalidRequestedComparison('对比WJA001与WJB002', products)).toBe(false);
-    expect(invalidRequestedComparison('对比信用卡与借记卡，另申购稳健理财A', products)).toBe(false);
+  it('preserves explicit product IDs without deriving substitute IDs from raw text', async () => {
+    const nodes = [node('compare', 'compare_investments', { productIds: ['prod_wenjiana', 'prod_wenjib'] })];
+    expect(await preflightRequestedPlan(userId, { nodes }, 'Unrelated names, quoted examples and codes.')).toEqual(nodes);
   });
   it('preflights the whole plan before a leading automatic write', async () => {
     const sessionId = (await getOrCreateSession(userId)).sessionId;
     const result = await runSubmitPlan(userId, { goal: 'invented goal', nodes: [
       node('a', 'reserve_budget', { name: 'must-not-exist', amount: '3.33' }),
-      node('b', 'compare_investments', { productIds: ['prod_wenjiana', 'prod_wenjib'] }),
+      node('b', 'compare_investments', { productIds: ['prod_wenjiana', 'unknown-product'] }),
     ] }, { sessionId, runTool: runner(sessionId), userRequest: () => '先预留3.33元，再对比稳健理财A和进取理财B' });
     expect(result.ok).toBe(false);
     expect(await getTestPrisma().budget.count({ where: { name: 'must-not-exist' } })).toBe(0);
@@ -99,16 +71,17 @@ describe('trusted product selection', () => {
 describe('explicit order without false-condition propagation', () => {
   const request = '先预留99.99元出游预算，再查询2026年9月消费；若消费超过999999元就将信用卡娱乐限额设置为1500.25元；最后创建2026年11月20日09:00的出游提醒';
   const nodes: TaskNodeSpec[] = [
-    node('reminder', 'create_scheduled_task', { name: 'ordered-reminder', kind: 'REMINDER', runAtLocal: '2026-11-20T09:00' }),
-    node('limit', 'set_card_limit', { cardId: 'card_credit', category: '娱乐', amount: '1500.25' }, ['condition']),
-    { id: 'condition', name: 'condition', kind: 'condition', dependencies: ['spending'], condition: { path: 'spending.total', op: '>', value: '999999' } },
-    node('spending', 'analyze_spending', { month: '2026-09' }),
     node('budget', 'reserve_budget', { name: 'ordered-budget', amount: '99.99' }),
+    { ...node('spending', 'analyze_spending', { month: '2026-09' }), after: ['budget'] },
+    { id: 'condition', name: 'condition', kind: 'condition', dependencies: ['spending'], condition: { path: 'spending.total', op: '>', value: '999999' } },
+    node('limit', 'set_card_limit', { cardId: 'card_credit', category: SPENDING_CATEGORIES[3], amount: '1500.25' }, ['condition']),
+    { ...node('reminder', 'create_scheduled_task', { name: 'ordered-reminder', kind: 'REMINDER', runAtLocal: '2026-11-20T09:00' }), after: ['spending', 'condition', 'limit'] },
   ];
-  it('corrects shuffled root nodes, persists order edges, and still offers the final reminder when the condition is false', async () => {
-    const sessionId = (await getOrCreateSession(userId)).sessionId;
+  it('preserves explicit order edges and offers an independent reminder after a false condition', async () => {
+    const sessionId = (await getDemoSession(userId)).sessionId;
     const result = await runSubmitPlan(userId, { goal: 'model goal does not establish order', nodes },
-      { sessionId, runTool: runner(sessionId, request), userRequest: () => request });
+      { sessionId, runTool: runner(sessionId, request), userRequest: () => request,
+        conversationIntent: () => declareConversationIntent(advanceConversationIntent(undefined, request), 'operation', ['reserve_budget', 'set_card_limit', 'create_scheduled_task']) });
     expect(result.ok).toBe(true);
     const plan = result.data as TaskPlan;
     expect(plan.nodes.find(n => n.id === 'spending')?.after).toContain('budget');
@@ -118,25 +91,20 @@ describe('explicit order without false-condition propagation', () => {
     expect(plan.results.find(n => n.id === 'reminder')?.status).toBe('waiting_confirmation');
     expect(await getTestPrisma().pendingAction.count({ where: { toolName: 'set_card_limit' } })).toBe(0);
     const read = await getJson<{ data: TaskPlan }>((req) => taskGet(req, idCtx(plan.id)), taskUrl(plan.id), { sessionId });
+    expect(read.status).toBe(200);
     expect(read.data!.data.nodes).toEqual(plan.nodes);
     expect(read.data!.data.generation).toBe(plan.generation);
   });
-  it('recognizes unpunctuated order and fails closed for repeated ambiguous same-tool steps', () => {
-    expect(enforceRequestedOrder([node('b', 'get_balance'), node('t', 'transfer_money', { amount: '2' })], '先查询余额再转账2元')[1].after).toContain('b');
-    expect(enforceRequestedOrder([node('b', 'get_balance'), node('t', 'transfer_money', { amount: '2' })], '先查询余额，再给张伟转账2元')[1].after).toContain('b');
-    const aliases = new Map([['contact_zhangwei', ['张伟']], ['contact_lihua', ['李华']]]);
-    const bound = enforceRequestedOrder([
-      node('a', 'transfer_money', { amount: '2', contactId: 'contact_zhangwei' }),
-      node('b', 'transfer_money', { amount: '2', contactId: 'contact_lihua' }),
-    ], '先转账2元给张伟，再转账2元给李华', aliases);
-    expect(bound[1].after).toContain('a');
-    expect(() => enforceRequestedOrder([node('a', 'transfer_money', { amount: '2' }), node('b', 'transfer_money', { amount: '2' })], '先转账2元给张伟，再转账2元给李华')).toThrow('对应关系');
+  it('rejects an omitted declared write before creating task rows', async () => {
+    const declaration = declareConversationIntent(advanceConversationIntent(undefined, 'Original two-step request.'), 'operation', ['reserve_budget', 'transfer_money']);
+    await expect(preflightRequestedPlan(userId, { nodes: [node('budget', 'reserve_budget', { name: 'must-not-exist', amount: '2.00' })] }, declaration.requestText, declaration)).rejects.toMatchObject({ code: 'VALIDATION' });
+    expect(await getTestPrisma().agentTask.count()).toBe(0);
   });
 });
 
 describe('cancel snapshot and transactional compensation', () => {
   it('forwards the next RED decision with its own complete summary after a YELLOW confirmation', async () => {
-    const sessionId = (await getOrCreateSession(userId)).sessionId;
+    const sessionId = (await getDemoSession(userId)).sessionId;
     const result = await runSubmitPlan(userId, { goal: 'two transfers', nodes: [
       node('small', 'transfer_money', { name: '张伟', amount: '20' }),
       node('large', 'transfer_money', { name: '李华', amount: '1200.12' }, ['small']),
@@ -194,6 +162,7 @@ describe('cancel snapshot and transactional compensation', () => {
     expect((await control(sessionId, taskId, 'rollback')).status).toBe(409);
     await control(sessionId, taskId, 'cancel');
     const other = (await getOrCreateSession(userId)).sessionId;
+    await getTestPrisma().agentTask.update({ where: { id: taskId }, data: { sessionId: other } });
     expect((await control(other, taskId, 'rollback')).status).toBe(403);
     expect((await getTestPrisma().budget.findFirstOrThrow({ where: { name: 'rollback-budget' } })).status).toBe('RESERVED');
   });

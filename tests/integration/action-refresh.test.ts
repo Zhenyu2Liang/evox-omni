@@ -32,7 +32,8 @@
  */
 import { beforeEach, afterEach, afterAll, describe, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import type { ToolName } from '@/lib/contracts/tools';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
 import { securityGateway } from '@/security/security-gateway';
@@ -172,7 +173,7 @@ const checkingBalance = async () =>
 
 describe('[integration] state convergence across a refresh / restart', () => {
   it('an IN-FLIGHT confirm is surfaced as `processing` and a concurrent duplicate is refused without a second side effect', async () => {
-    const s = (await getOrCreateSession(userId)).sessionId;
+    const s = (await getDemoSession(userId)).sessionId;
     const p = getTestPrisma();
     const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '200.00' }, '给张伟转200元');
     expect(await debitCount('200.00')).toBe(0);
@@ -284,7 +285,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
   });
 
   it('an IN-FLIGHT MFA verify is surfaced as `processing` too (verify variant)', async () => {
-    const s = (await getOrCreateSession(userId)).sessionId;
+    const s = (await getDemoSession(userId)).sessionId;
     const p = getTestPrisma();
     // ¥5000 ⇒ RED ⇒ parked `awaiting_mfa`.
     const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '5000.00' }, '给张伟转5000元');
@@ -354,7 +355,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
   });
 
   it('a no-result wedge stays VISIBLE after a refresh AND after a module reload, and is recoverable from the refreshed entry', async () => {
-    const s = (await getOrCreateSession(userId)).sessionId;
+    const s = (await getDemoSession(userId)).sessionId;
     const p = getTestPrisma();
     const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '300.00' }, '给张伟转300元');
 
@@ -453,7 +454,7 @@ describe('[integration] state convergence across a refresh / restart', () => {
   });
 
   it('recovery does NOT downgrade a success and is idempotent on a repeat recovery + refresh', async () => {
-    const s = (await getOrCreateSession(userId)).sessionId;
+    const s = (await getDemoSession(userId)).sessionId;
     const p = getTestPrisma();
     const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '250.00' }, '给张伟转250元');
 

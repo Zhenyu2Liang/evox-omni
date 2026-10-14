@@ -1,11 +1,11 @@
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai';
 import type { AssistantMessage, JsonObject } from '@earendil-works/pi-ai';
 
-/** Stable calls keep the offline model deterministic; permission still belongs to the gateway. */
+/** Each proposed call gets a distinct provider identity; persisted calls retain it on replay. */
 export function toolCall(name: string, args: Record<string, unknown>): AssistantMessage {
   return fauxAssistantMessage([
     fauxText(actionText[name] ?? '好的，我来处理一下。'),
-    fauxToolCall(name, JSON.parse(JSON.stringify(args)) as JsonObject, { id: `call_${name}` }),
+    fauxToolCall(name, JSON.parse(JSON.stringify(args)) as JsonObject),
   ], { stopReason: 'toolUse' });
 }
 

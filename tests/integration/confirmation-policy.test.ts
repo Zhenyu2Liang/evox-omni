@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { executeGatedTool, getOrCreateSession } from '@/agent';
+import { executeGatedTool, getDemoSession } from '@/agent';
 import { banking } from '@/banking-sdk';
 import { auditStore } from '@/audit/audit-logger';
 import { recovery } from '@/security';
@@ -22,9 +22,9 @@ beforeEach(() => resetDatabase());
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 afterAll(() => disconnectTestPrisma());
 type Route = typeof confirmPost;
-function request(id: string, sessionId: string, body: object = {}) {
+function request(id: string, _sessionId: string, body: object = {}) {
   return new NextRequest(`http://localhost/api/actions/${id}`, { method: 'POST',
-    headers: { 'content-type': 'application/json', cookie: `banking_session=${sessionId}` }, body: JSON.stringify(body) });
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 }
 async function call(handler: Route, id: string, sessionId: string, body: object = {}) {
   const response = await handler(request(id, sessionId, body), { params: Promise.resolve({ id }) });
@@ -42,7 +42,7 @@ async function lock(sessionId: string) {
   expect((await getState(sessionId)).locked).toBe(true);
 }
 async function park(amount = '200') {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const action = await executeGatedTool({ userId, sessionId, toolName: 'transfer_money',
     args: { name: '张伟', amount }, userRequest: '确认边界回归' });
   expect(action.pendingActionId).toBeTruthy();
@@ -80,7 +80,7 @@ it.each(['200', '2000'])('a write-time breaker denial of %s stays recoverable an
   expect(await p.executionReceipt.count()).toBe(0);
   expect(await p.auditLog.count({ where: { dedupeKey: `exec:${action.id}` } })).toBe(0);
   expect((await call(recoverPost, action.id, action.sessionId)).http).toBe(423);
-  // A bare session cookie is REFUSED while the owner is locked: the unlock is GATED (code/cooldown),
+  // Entering the shared demo is not enough to unlock: verification or cooldown is required,
   // so the code-less route path throws CIRCUIT_OPEN and writes NO reset event.
   const refused = await resetPost(request('reset', action.sessionId));
   expect(refused.status).toBe(423);
@@ -98,7 +98,7 @@ it.each(['200', '2000'])('a write-time breaker denial of %s stays recoverable an
 });
 
 it('the same write fence protects a non-transfer card mutation after confirmation', async () => {
-  const p = getTestPrisma(); const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const p = getTestPrisma(); const sessionId = (await getDemoSession(userId)).sessionId;
   const action = await executeGatedTool({ userId, sessionId, toolName: 'set_card_limit',
     args: { cardId: 'card_credit', category: '娱乐', amount: '1500' }, userRequest: '限额确认' });
   const before = await p.cardLimit.findMany({ where: { cardId: 'card_credit' } });

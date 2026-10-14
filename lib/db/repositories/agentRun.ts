@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentRun, AgentRunEvent, ToolInvocation, ModelRequest, Prisma } from '@prisma/client';
+import type { AgentRun, AgentRunEvent, ToolInvocation, ModelRequest, Prisma } from '@/lib/db/prisma';
 import { prisma, type DbClient } from '../client';
 import { AppError } from '@/lib/errors';
 import { safeParse } from '@/lib/json';

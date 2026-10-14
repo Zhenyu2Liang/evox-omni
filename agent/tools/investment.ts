@@ -3,7 +3,7 @@
  * `subscribe_investment`, `redeem_investment`
  *
  * Investment product/holding reads and subscribe/redeem mutations. TypeBox param schemas;
- * `execute` calls the Banking SDK and THROWS `AppError` on failure. The `run<X>(userId, args)`
+ * `execute` returns native Pi success or failure content. The `run<X>(userId, args)`
  * runners are the model-free path used by `executeDirect`; they CATCH and return
  * `ToolExecutionResult{ok:false,error}`.
  *
@@ -19,7 +19,6 @@ import type {
   InvestResult,
   InvestmentComparison,
   InvestmentRiskLevel,
-  SubscribeInvestmentInput,
   ProductView,
 } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
@@ -27,12 +26,15 @@ import { addMoney, centsToMoney, formatCNY, moneyToCents, type MoneyInput } from
 import { addDecimal, formatDecimalCNY, rateRatioToPercent } from '@/lib/decimal';
 import type { ToolExecutionResult, ToolRunOptions } from './index';
 import { MoneyParameter } from './money-schema';
+import { toModelToolResult, toolFailure } from './result';
 
 /* ----------------------------------------------------------- list_investments */
 
 /** `list_investments` params (SDK `ProductQuery`). */
 export const ListInvestmentsParams = Type.Object({
-  riskLevel: Type.Optional(Type.String({ description: '风险等级过滤：R1 | R2 | R3 | R4 | R5' })),
+  riskLevel: Type.Optional(Type.Union([
+    Type.Literal('R1'), Type.Literal('R2'), Type.Literal('R3'), Type.Literal('R4'), Type.Literal('R5'),
+  ], { description: 'Investment risk filter from R1 through R5.' })),
 });
 export type ListInvestmentsArgs = Static<typeof ListInvestmentsParams>;
 
@@ -46,12 +48,7 @@ export function createListInvestmentsTool(
     description: '列出理财产品（代码、风险等级、预期年化、期限、起投金额），可按风险等级过滤。',
     parameters: ListInvestmentsParams,
     execute: async (_toolCallId, params) => {
-      const result = await runListInvestments(userId, params);
-      if (!result.ok) throw new AppError('TOOL_FAILED', result.error ?? 'list_investments failed');
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runListInvestments(userId, params));
     },
   };
 }
@@ -62,10 +59,9 @@ export async function runListInvestments(
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
   try {
-    const riskLevel =
-      typeof args.riskLevel === 'string' ? (args.riskLevel as InvestmentRiskLevel) : undefined;
+    const riskLevel = args.riskLevel as InvestmentRiskLevel | undefined;
     const products: ProductView[] = await banking.investment.listProducts(
-      riskLevel ? { riskLevel } : {},
+      riskLevel === undefined ? {} : { riskLevel },
     );
     if (products.length === 0) {
       return { ok: true, data: products, summary: '暂无符合条件的理财产品。' };
@@ -82,7 +78,7 @@ export async function runListInvestments(
       summary: `共 ${products.length} 只理财产品：${detail}。`,
     };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -90,7 +86,7 @@ export async function runListInvestments(
 
 /** `compare_investments` params — product ids to compare. */
 export const CompareInvestmentsParams = Type.Object({
-  productIds: Type.Array(Type.String(), { minItems: 1, description: '要比较的产品 id 列表' }),
+  productIds: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, description: 'Product IDs to compare.' }),
 });
 export type CompareInvestmentsArgs = Static<typeof CompareInvestmentsParams>;
 
@@ -104,14 +100,7 @@ export function createCompareInvestmentsTool(
     description: '对比多个理财产品，标出最高预期收益率与最低风险的产品。',
     parameters: CompareInvestmentsParams,
     execute: async (_toolCallId, params) => {
-      const result = await runCompareInvestments(userId, params);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'compare_investments failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runCompareInvestments(userId, params));
     },
   };
 }
@@ -123,11 +112,11 @@ export async function runCompareInvestments(
 ): Promise<ToolExecutionResult> {
   try {
     const productIds = args.productIds;
-    if (!Array.isArray(productIds) || productIds.length === 0) {
-      throw new AppError('VALIDATION', 'compare_investments 需要至少一个产品 id');
+    if (!Array.isArray(productIds) || productIds.length === 0 || productIds.some(id => typeof id !== 'string' || !id.trim())) {
+      throw new AppError('VALIDATION', 'Investment comparison requires non-empty product IDs.');
     }
     const comparison: InvestmentComparison = await banking.investment.compareInvestments(
-      productIds.map((id) => String(id)),
+      productIds,
     );
     const byId = new Map(comparison.products.map((p) => [p.id, p]));
     const top = comparison.highestRateId ? byId.get(comparison.highestRateId) : undefined;
@@ -137,7 +126,7 @@ export async function runCompareInvestments(
     if (low) parts.push(`最低风险：${low.name}（${low.riskLevel}）`);
     return { ok: true, data: comparison, summary: `${parts.join('；')}。` };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -156,15 +145,8 @@ export function createGetInvestmentHoldingsTool(
     label: '我的持仓',
     description: '列出当前用户的理财持仓（产品、本金、市值、收益、状态）。',
     parameters: GetInvestmentHoldingsParams,
-    execute: async () => {
-      const result = await runGetInvestmentHoldings(userId, {});
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'get_investment_holdings failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
+    execute: async (_toolCallId, params) => {
+      return toModelToolResult(await runGetInvestmentHoldings(userId, params as Record<string, unknown>));
     },
   };
 }
@@ -187,7 +169,7 @@ export async function runGetInvestmentHoldings(
       summary: `Holdings: ${holdings.length}; total principal: ${formatCNY(principal)}; total estimated return: ${formatDecimalCNY(profit)}.`,
     };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -195,7 +177,7 @@ export async function runGetInvestmentHoldings(
 
 /** `subscribe_investment` params (SDK `SubscribeInvestmentInput`; `userId` server-injected). */
 export const SubscribeInvestmentParams = Type.Object({
-  productId: Type.String({ description: '产品 id' }),
+  productId: Type.String({ minLength: 1, description: 'Investment product ID.' }),
   amount: MoneyParameter,
 });
 export type SubscribeInvestmentArgs = Static<typeof SubscribeInvestmentParams>;
@@ -210,14 +192,7 @@ export function createSubscribeInvestmentTool(
     description: '申购指定理财产品（高风险，需要短信验证码验证）。',
     parameters: SubscribeInvestmentParams,
     execute: async (_toolCallId, params) => {
-      const result = await runSubscribeInvestment(userId, params);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'subscribe_investment failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runSubscribeInvestment(userId, params));
     },
   };
 }
@@ -238,13 +213,9 @@ export async function runSubscribeInvestment(
       userId,
       productId,
       amount,
-      // At-most-once: the SERVER-INJECTED `opts.idempotencyKey` (the gated-`PendingAction` /
-      // plan-node path) is forwarded verbatim to the SDK's `idempotencyKey`, so a replay of the SAME
-      // action/node reuses its ledger effect instead of debiting twice. Absent ⇒ unchanged behavior.
-      // The SDK input type does not (yet) declare the field, so the object is cast minimally — this
-      // compiles whether or not the SDK adds `idempotencyKey` to `SubscribeInvestmentInput`.
+      // Replay uses the server-owned action or plan-node identity.
       idempotencyKey: opts?.idempotencyKey,
-    } as SubscribeInvestmentInput);
+    });
     const balance =
       result.newBalance != null ? `，账户余额 ${formatCNY(result.newBalance)}` : '';
     return {
@@ -253,7 +224,7 @@ export async function runSubscribeInvestment(
       summary: `已认购 ${formatCNY(result.amount)}，持仓号 ${result.holdingId}（产品 ${result.productId}）${balance}。`,
     };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -261,7 +232,7 @@ export async function runSubscribeInvestment(
 
 /** `redeem_investment` params (SDK `RedeemInvestmentInput`; `userId` server-injected). */
 export const RedeemInvestmentParams = Type.Object({
-  holdingId: Type.String({ description: '持仓 id' }),
+  holdingId: Type.String({ minLength: 1, description: 'Owned holding ID for full redemption.' }),
 });
 export type RedeemInvestmentArgs = Static<typeof RedeemInvestmentParams>;
 
@@ -275,14 +246,7 @@ export function createRedeemInvestmentTool(
     description: '全额赎回指定理财持仓（不支持部分赎回）；服务端展示到账金额，再经短信验证码验证。',
     parameters: RedeemInvestmentParams,
     execute: async (_toolCallId, params) => {
-      const result = await runRedeemInvestment(userId, params);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'redeem_investment failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runRedeemInvestment(userId, params));
     },
   };
 }
@@ -313,6 +277,6 @@ export async function runRedeemInvestment(
       summary: `已赎回持仓 ${result.holdingId}，到账 ${formatCNY(result.amount)}${balance}。`,
     };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }

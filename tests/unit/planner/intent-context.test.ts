@@ -1,56 +1,84 @@
 import { describe, expect, it } from 'vitest';
-import { advanceConversationIntent } from '@/agent/intent-context';
+import { advanceConversationIntent, declareConversationIntent, intentRequestText, requiresDeclaredPlan } from '@/agent/intent-context';
 
-const transfer = '\u7ed9\u5f20\u4f1f\u8f6c\u8d26';
-const secondTransfer = '\u7ed9\u738b\u82b3\u8f6c\u8d26';
-const currency = '\u5143';
-const then = '\uff0c\u7136\u540e';
-
-describe('conversation intent revisions', () => {
-  it('preserves a complete composite request when the user clarifies one missing amount', () => {
-    const first = advanceConversationIntent(undefined, `${transfer}${then}${secondTransfer}300${currency}`, { now: () => 100 });
-    expect(first.status).toBe('draft');
-    expect(first.steps).toHaveLength(2);
-    const clarified = advanceConversationIntent(first, `200${currency}`, { now: () => 200 });
-    expect(clarified.id).toBe(first.id);
-    expect(clarified.revision).toBe(2);
-    expect(clarified.status).toBe('ready');
-    expect(clarified.steps.map(step => step.amount)).toEqual(['200', '300']);
-    expect(clarified.turns).toHaveLength(2);
+describe('turn interpretation and original user context', () => {
+  it('preserves each latest message verbatim without resolving references or appending old requests', () => {
+    const first = advanceConversationIntent(undefined, 'Transfer -10 CNY to Alice.', { id: 'first' });
+    const declared = declareConversationIntent(first, 'operation', ['transfer_money']);
+    const text = 'Why did I say -10? Use the same amount as an example.';
+    const second = advanceConversationIntent(declared, text, { id: 'second' });
+    expect(second.id).toBe('second');
+    expect(second.requestText).toBe(text);
+    expect(second.latestMessage).toBe(text);
+    expect(intentRequestText(second)).toBe(text);
+    expect(second.purpose).toBe('undecided');
+    expect(second.steps).toEqual([]);
+    expect(first.requestText).toBe('Transfer -10 CNY to Alice.');
   });
 
-  it('resolves an explicit recipient and same-amount reference from trusted prior user intent', () => {
-    const first = advanceConversationIntent(undefined, `${transfer}200${currency}`);
-    const followup = '\u518d\u7ed9\u4ed6\u8f6c\u540c\u6837\u91d1\u989d';
-    const second = advanceConversationIntent(first, `${followup}${then}${secondTransfer}300${currency}`);
-    expect(second.id).not.toBe(first.id);
-    expect(second.status).toBe('ready');
-    expect(second.steps.map(step => [step.recipient, step.amount])).toEqual([
-      ['\u5f20\u4f1f', '200'], ['\u738b\u82b3', '300'],
-    ]);
+  it('does not rewrite short clarifications into a fabricated banking instruction', () => {
+    const previous = declareConversationIntent(advanceConversationIntent(undefined, 'Transfer to Alice.'), 'operation', ['transfer_money']);
+    const next = advanceConversationIntent(previous, '200 CNY');
+    expect(next.requestText).toBe('200 CNY');
+    expect(next.steps).toEqual([]);
+    expect(next.id).not.toBe(previous.id);
   });
 
-  it('does not guess which amount a clarification belongs to when two steps are incomplete', () => {
-    const first = advanceConversationIntent(undefined, `${transfer}${then}${secondTransfer}`);
-    const second = advanceConversationIntent(first, `200${currency}`);
-    expect(second.status).toBe('draft');
-    expect(second.requestText).toBe(first.requestText);
+  it('preserves declared operation repeats and order without manufacturing amounts or recipients', () => {
+    const initial = advanceConversationIntent(undefined, 'Original operation request.');
+    const declared = declareConversationIntent(initial, 'operation', ['reserve_budget', 'transfer_money', 'transfer_money']);
+    expect(declared.steps.map(step => step.tool)).toEqual(['reserve_budget', 'transfer_money', 'transfer_money']);
+    expect(declared.steps).toEqual([{ key: 'step-1', tool: 'reserve_budget' },
+      { key: 'step-2', tool: 'transfer_money' }, { key: 'step-3', tool: 'transfer_money' }]);
+    expect(declared.latestMessage).toBe(initial.latestMessage);
+    expect(requiresDeclaredPlan(declared)).toBe(true);
   });
 
-  it('binds an explicit recipient clarification without inventing a new business step', () => {
-    const first = advanceConversationIntent(undefined, `\u8f6c\u8d26\u0032\u0030\u0030${currency}`);
-    const second = advanceConversationIntent(first, '\u5f20\u4f1f');
-    expect(second.status).toBe('ready');
-    expect(second.id).toBe(first.id);
-    expect(second.steps).toHaveLength(1);
-    expect(second.steps[0].recipient).toBe('\u5f20\u4f1f');
-    expect(second.steps[0].amount).toBe('200');
+  it('permits relevant reads during advice but rejects a banking write declaration', () => {
+    const current = advanceConversationIntent(undefined, 'Help analyze subscriptions.');
+    expect(declareConversationIntent(current, 'advice', ['list_subscriptions']).purpose).toBe('advice');
+    expect(() => declareConversationIntent(current, 'advice', ['cancel_subscription'])).toThrow();
+    expect(() => declareConversationIntent(current, 'query', ['transfer_money'])).toThrow();
   });
 
-  it('drops a draft operation when the user explicitly abandons it', () => {
-    const first = advanceConversationIntent(undefined, transfer);
-    const second = advanceConversationIntent(first, '\u4e0d\u8f6c\u4e86\uff0c\u53d6\u6d88');
-    expect(second.id).not.toBe(first.id);
-    expect(second.steps).toHaveLength(0);
+  it.each(['unknown_tool', 'apply_virtual_card', 'submit_plan', 'constructor'])('rejects unavailable or non-banking capability %s', operation => {
+    expect(() => declareConversationIntent(advanceConversationIntent(undefined, 'Original request.'), 'operation', [operation])).toThrow();
+  });
+
+  it('allows a repeated identical declaration but prevents a mid-turn permission expansion', () => {
+    const current = advanceConversationIntent(undefined, 'Explain subscription pricing.');
+    const declared = declareConversationIntent(current, 'advice', ['list_subscriptions']);
+    expect(declareConversationIntent(declared, 'advice', ['list_subscriptions'])).toEqual(declared);
+    expect(() => declareConversationIntent(declared, 'operation', ['cancel_subscription'])).toThrow('cannot change');
+    expect(() => declareConversationIntent(declared, 'advice', ['get_balance'])).toThrow('cannot change');
+  });
+
+  it('treats workflow and protocol presentation as immutable scoped declaration fields', () => {
+    const current = advanceConversationIntent(undefined, 'Original request.');
+    expect(() => declareConversationIntent(current, 'advice', [], { workflow: true })).toThrow();
+    expect(() => declareConversationIntent(current, 'operation', [], { allowProtocolExamples: true })).toThrow();
+    const workflow = declareConversationIntent(current, 'operation', ['create_scheduled_task'], { workflow: true });
+    expect(requiresDeclaredPlan(workflow)).toBe(true);
+    expect(() => declareConversationIntent(workflow, 'operation', ['create_scheduled_task'])).toThrow('cannot change');
+    const explanation = declareConversationIntent(current, 'conversation', [], { allowProtocolExamples: true });
+    expect(() => declareConversationIntent(explanation, 'conversation', [])).toThrow('cannot change');
+  });
+
+  it('does not require a multi-step plan for a single ordinary operation', () => {
+    const single = declareConversationIntent(advanceConversationIntent(undefined, 'Transfer 10 CNY.'), 'operation', ['transfer_money']);
+    expect(requiresDeclaredPlan(single)).toBe(false);
+    expect(requiresDeclaredPlan(undefined)).toBe(false);
+  });
+
+  it('binds unknown write counts after prerequisite reads and locks the complete sequence', () => {
+    const preparation = declareConversationIntent(advanceConversationIntent(undefined, 'Cancel all active subscriptions.'),
+      'operation', ['list_subscriptions']);
+    const final = declareConversationIntent(preparation, 'operation', ['cancel_subscription', 'cancel_subscription'], { workflow: true });
+    expect(final.id).toBe(preparation.id);
+    expect(final.latestMessage).toBe('Cancel all active subscriptions.');
+    expect(requiresDeclaredPlan(final)).toBe(true);
+    expect(() => declareConversationIntent(final, 'operation', ['cancel_subscription'], { workflow: true })).toThrow('cannot change');
+    expect(() => declareConversationIntent(final, 'operation', ['list_subscriptions'])).toThrow('cannot change');
+    expect(() => declareConversationIntent(preparation, 'advice', ['list_subscriptions'])).toThrow('cannot change');
   });
 });

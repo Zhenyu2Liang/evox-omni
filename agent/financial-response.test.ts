@@ -17,7 +17,7 @@ function transfer(id: string, amount = '200.00', newBalance = '23380.00'): FactI
 describe('server-owned financial result presentation', () => {
   it('renders recipient/amount/outcome from the specific real operation', () => {
     const text = renderFinancialResponse([transfer('a')]);
-    expect(text).toBe('（系统校正）转账处理结果：第1笔操作实际执行成功；收款人 张伟；金额 ¥200.00；执行时账户余额 ¥23,380.00。');
+    expect(text).toBe('转账处理结果：第1笔操作实际执行成功；收款人 张伟；金额 ¥200.00；执行时账户余额 ¥23,380.00。');
     expect(text).not.toContain('李华');
     expect(text).not.toContain('30,000');
   });

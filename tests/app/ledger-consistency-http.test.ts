@@ -47,7 +47,6 @@ import {
   chatUrl,
   idCtx,
   postJson,
-  sessionIdFromResponse,
   type HttpResult,
 } from './harness';
 
@@ -119,10 +118,8 @@ async function startSession(message: string): Promise<ChatTurnResponse> {
   const res = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), { message });
   expect(res.status, `chat turn failed: ${JSON.stringify(res.data)}`).toBe(200);
   const data = payload(res);
-  expect(data.sessionId, 'the route must mint a session id').toBeTruthy();
-  expect(sessionIdFromResponse(res.res), 'the minted id must be set as the banking_session cookie').toBe(
-    data.sessionId,
-  );
+  expect(data.sessionId).toBe(`demo:${DEMO_USER_ID}`);
+  expect(res.headers.get('set-cookie')).toBeNull();
   return data;
 }
 
@@ -130,6 +127,7 @@ async function startSession(message: string): Promise<ChatTurnResponse> {
 function parked(sessionId: string) {
   return getTestPrisma().pendingAction.findFirstOrThrow({
     where: { sessionId, status: { in: ['pending', 'awaiting_mfa'] } },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   });
 }
 
@@ -324,6 +322,7 @@ describe('[integration] POST /api/actions — refused actions move NO money', ()
     const ownerRow = await parked(ownerTurn.sessionId);
     const foreignSessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
     expect(foreignSessionId).not.toBe(ownerTurn.sessionId);
+    await getTestPrisma().pendingAction.update({ where: { id: ownerRow.id }, data: { sessionId: foreignSessionId } });
 
     const ownerBefore = await snapshotLedger();
     const denied = await confirmAction(ownerRow.id, foreignSessionId);

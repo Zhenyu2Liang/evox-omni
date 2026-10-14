@@ -46,7 +46,8 @@ import { POST as cancelPost } from '@/app/api/actions/[id]/cancel/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
-import { executeGatedTool, getOrCreateSession, readPendingActionId } from '@/agent';
+import { executeGatedTool, readPendingActionId } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan, type PlanRunTool } from '@/agent/tools/planning';
 import type { PendingActionStatus } from '@/lib/contracts/security';
 import type { TaskPlan } from '@/lib/contracts/task';
@@ -219,7 +220,7 @@ afterAll(async () => {
 
 describe('[integration] plan cancel safety — WINDOW (a): the parked action exists but its node result is NOT yet persisted', () => {
   it('[integration] a plan cancel landing in that window revokes the never-node-linked action, fails a follow-up confirm closed, and moves NO money', async () => {
-    const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    const sessionId = (await getDemoSession(DEMO_USER_ID)).sessionId;
 
     // Start the real plan run (NOT awaited): its only node routes through the barrier.
     const barrier = parkingBarrier(sessionId);
@@ -417,7 +418,7 @@ function gatewayRunTool(sessionId: string, userRequest: string): PlanRunTool {
  * so the race below starts from a settled, fully-linked park.
  */
 async function seedParkedAction(): Promise<ParkedAction> {
-  const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  const sessionId = (await getDemoSession(DEMO_USER_ID)).sessionId;
   const result = await runSubmitPlan(
     DEMO_USER_ID,
     { goal: TRANSFER_REQUEST, nodes: [transferNode] },

@@ -22,9 +22,17 @@ Investment replay validates complete original results before resolving mutable p
 
 Budget and scheduled-intent creates use owner-scoped replay checks. Virtual cards use deterministic execution identities and verify monthly limits. Card transitions and subscriptions validate ownership and state. A budget is an accounting envelope rather than a funds hold.
 
+Execution keys are trusted server inputs. The Agent cannot select budget or schedule replay keys. SDK keys must be text; blank keys mean that no replay identity was supplied, including on transfers. Budget release and schedule cancellation require the owner ID and reject foreign resources before writing.
+
+Card category limits accept only supported spending categories and active or frozen cards. State changes use conditional writes; concurrent changes produce a domain conflict rather than a raw database failure. Cancelling a subscription disables its renewal reminder, and reminder changes require an active subscription.
+
+Scheduled payment and transfer payloads are validated before persistence and again at dispatch through `lib/contracts/scheduled-command.ts`. They require exactly one recipient selector and a positive decimal amount. Unknown command fields and credentials are rejected. Reminder payloads may contain only inert note text. Date epochs must represent valid integer instants; due intents may be stored, while Agent creation independently requires an explicit future time. The server derives `requiresConfirmation`: reminders are delivered automatically, while payments and transfers require authorization when dispatched. Callers cannot set this policy flag.
+
 ## Errors and reads
 
 Throw `AppError` with a domain code; agent runners convert business failures into typed tool outcomes. Never fabricate a success or current balance for an earlier write. Read models are DTO projections, preserve valuation precision and share a snapshot when combining cash with holdings.
+
+An investment comparison must name at least one product. Every requested product must exist; missing products fail the whole comparison rather than producing a partial success. Repeated IDs are compared once. Risk filters accept only R1 through R5.
 
 Business dates use the explicit UTC+08:00 demo clock; security and leases use real time. Financial number conversion is allowed only for chart geometry and cannot feed authorization or execution.
 

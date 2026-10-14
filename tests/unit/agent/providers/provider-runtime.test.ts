@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Agent } from '@earendil-works/pi-agent-core';
-import { fauxAssistantMessage, fauxToolCall, normalizeContext, type Message } from '@earendil-works/pi-ai';
+import { createModels, fauxAssistantMessage, fauxToolCall, normalizeContext, type Message, type Models } from '@earendil-works/pi-ai';
 import { createLiveRuntime } from '@/agent/providers/provider-live';
 import { createMockRuntime } from '@/agent/providers/provider-mock';
 import { withRealToolResult } from '@/agent/message-normalize';
 import type { AppConfig } from '@/lib/config';
+
+vi.mock('@earendil-works/pi-ai', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@earendil-works/pi-ai')>();
+  return { ...actual, createModels: vi.fn(actual.createModels) };
+});
 
 const live: AppConfig = {
   llmMode: 'live', llmProvider: 'deepseek', llmModel: 'deepseek-flash', demoUserId: 'user_liming',
@@ -24,6 +29,16 @@ function response(): Response {
 }
 
 describe('Pi 1.x explicit provider runtime', () => {
+  it('registers only the selected provider in the live collection', () => {
+    vi.stubEnv('DEEPSEEK_API_KEY', 'offline-deepseek-key');
+    createLiveRuntime(live);
+    const collection = vi.mocked(createModels).mock.results.at(-1)?.value as Models;
+    expect(collection.getProviders().map(provider => provider.id)).toEqual(['deepseek']);
+    expect(collection.getModel('deepseek', 'deepseek-flash')?.baseUrl).toBe('https://api.deepseek.com');
+    expect(collection.getProvider('google')).toBeUndefined();
+    expect(collection.getProvider('openai')).toBeUndefined();
+  });
+
   it('runs independent mock Agents without network or a global provider registration', async () => {
     const network = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('mock must stay offline'));
     // Each Agent gets its own stream collection, even though faux model ids match.

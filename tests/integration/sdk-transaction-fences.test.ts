@@ -6,7 +6,8 @@ import { toJson } from '@/lib/json';
 import { centsToMoney } from '@/lib/money';
 import type { ToolName } from '@/lib/contracts/tools';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as recoverPost } from '@/app/api/actions/[id]/recover/route';
 import * as actionRepo from '@/lib/db/repositories/pendingAction';
@@ -20,7 +21,7 @@ afterEach(() => vi.restoreAllMocks());
 afterAll(() => disconnectTestPrisma());
 
 const mutations: ToolName[] = ['transfer_money', 'reserve_budget', 'set_card_limit', 'freeze_card',
-  'unfreeze_card', 'report_lost_card', 'apply_virtual_card', 'cancel_subscription',
+  'unfreeze_card', 'report_lost_card', 'cancel_subscription',
   'set_subscription_reminder', 'create_scheduled_task', 'subscribe_investment', 'redeem_investment'];
 
 async function businessState() {
@@ -44,7 +45,7 @@ it.each(mutations)('%s reaches the trusted transaction fence and commits no busi
     transfer_money: { name: '张伟', amount: '200' }, reserve_budget: { name: '写入围栏预算', amount: '10' },
     set_card_limit: { cardId: 'card_credit', category: '娱乐', amount: '1500' },
     freeze_card: { cardId: 'card_credit' }, unfreeze_card: { cardId: 'card_credit' },
-    report_lost_card: { cardId: 'card_credit' }, apply_virtual_card: { label: '写入围栏虚拟卡' },
+    report_lost_card: { cardId: 'card_credit' },
     cancel_subscription: { subscriptionId: subscription.id },
     set_subscription_reminder: { subscriptionId: subscription.id, remind: !subscription.remind },
     create_scheduled_task: { name: '写入围栏任务', kind: 'REMINDER', runAt: Date.now() + 86400000 },
@@ -80,7 +81,7 @@ async function call(handler: Route, id: string, sessionId: string) {
   return { http: r.status, body: await r.json() };
 }
 async function parkTransfer() {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const parked = await executeGatedTool({ sessionId, userId, toolName: 'transfer_money', args: { name: '张伟', amount: '200' }, userRequest: '审计和历史恢复回归' });
   expect(parked.pendingActionId).toBeTruthy();
   return { sessionId, id: parked.pendingActionId! };
@@ -117,7 +118,7 @@ it('a receipt inconsistent with its ledger routes recovery to reconciliation wit
 it('strict audit dedupe never absorbs a different tool or business outcome under the same key', async () => {
   const entry: AuditEntry = { timestamp: Date.now(), sessionId: 'repair:audit-session', userRequest: '审计身份', toolName: 'transfer_money', riskLevel: 'YELLOW', confirmationRequired: true, confirmed: true, mfaRequired: false, status: 'success', toolResult: { ok: true, data: { transactionId: 'repair:tx', amount: '200.00' } } };
   await recordAudit(entry, { dedupeKey: 'repair:audit-identity', strict: true });
-  await expect(recordAudit({ ...entry, toolName: 'apply_virtual_card' }, { dedupeKey: 'repair:audit-identity', strict: true })).rejects.toMatchObject({ code: 'P2002' });
+  await expect(recordAudit({ ...entry, toolName: 'set_card_limit' }, { dedupeKey: 'repair:audit-identity', strict: true })).rejects.toMatchObject({ code: 'P2002' });
   await expect(recordAudit({ ...entry, status: 'failed', toolResult: { ok: false } }, { dedupeKey: 'repair:audit-identity', strict: true })).rejects.toMatchObject({ code: 'P2002' });
   expect(await getTestPrisma().auditLog.count({ where: { dedupeKey: 'repair:audit-identity' } })).toBe(1);
 });

@@ -1,4 +1,4 @@
-import type { Account } from '@prisma/client';
+import type { Account } from '@/lib/db/prisma';
 import { dbClient } from '../client';
 import { assertMinorUnits, moneyToCents, type MoneyInput } from '../../money';
 

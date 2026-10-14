@@ -28,8 +28,16 @@ Pi events are copied and persisted before transforms or effects. Only grounded U
 
 Business calendar boundaries use UTC+08:00. Security expiry, leases and operational scheduling use real time. The authenticator and banking rail are explicit simulators.
 
+The web demo has one server-configured user and a persistent `demo:${userId}` workspace, loaded on
+page opening and shared by all browsers. There is no login, authentication cookie, workspace
+selection, or old-session adoption. The language cookie stores only a presentation preference.
+Action/task ownership, confirmation/MFA, receipts and execution leases still apply. Generic internal
+sessions support runtime contracts and tests; they are not selectable web identities.
+
 ## Operation
 
 Use pnpm for dependency management and all project commands. Commit only `pnpm-lock.yaml`; do not introduce npm or Yarn lockfiles. Only the current schema and contracts are supported; do not add old-schema migrations, numeric financial input adapters, or old receipt/API fallback paths. `pnpm db:push` synchronizes the current schema; `pnpm db:reset` recreates simulated data. Temporary artifacts stay in the repository. Test processes share one SQLite database and must not overlap.
+
+File logs must be stored under `logs/`. Command output retained for reviews, tests, installs or builds must use that directory. Do not create `.log` files in the repository root. Keep ordinary terminal output visible unless a log capture is requested. Banking audit, event and receipt records remain in their existing database stores.
 
 Documentation entry point: `docs/cn/README.md`. Development procedures live in `docs/cn/development.md`; current design lives in `docs/cn/architecture.md` and its linked topic guides. Write developer documentation in Chinese using the STC rules in `docs/cn/CONTEXT.md` and terms in `docs/cn/terms.md`. Keep the root README focused on the project overview, quick start, common commands and documentation links. Historical results remain in Git history and do not define current contracts.

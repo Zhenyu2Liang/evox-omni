@@ -5,36 +5,38 @@
  *   `await security.circuitBreaker.getState(sessionId)` → authoritative lock + failure count
  *   `audit.getSecurityStatus(sessionId, { isLocked })` → `SecurityStatus` (`{ locked, recentEvents }`)
  *   `audit.listSecurityEvents({ sessionId })`     → `SecurityEvent[]`
- *   Session id: the `banking_session` cookie (`SESSION_COOKIE`).
+ *   Session id: the configured demo user's fixed workspace from `requireIdentity`.
  *
  * Composes (`@/components/security` — read-only sibling; the component library owns the API):
  *   `PermissionLegend`      → 🟢/🟡/🔴 permission-tier legend (driven by `RISK_LABEL`)
  *   `CircuitBreakerStatus`  → account breaker lock state (tripped / failures vs max attempts)
  *   `SecurityEventList`     → the recent verifications feed + the session security-event table
- *   `ResetBreakerButton`    → (client) GATED unlock of this account's breaker via `POST /api/security/reset`
+ *   `ResetBreakerButton`    → developer-only audited demo maintenance, without credential entry.
  *
  * Display only: every tier, lock and event here is produced by `@/audit` / `@/security`; this
  * page never decides permission. All props passed to the components are JSON-serializable
  * (epoch-ms timestamps, plain objects).
  */
-import { cookies } from 'next/headers';
 import { audit } from '@/audit';
 import type { SecurityStatus } from '@/audit';
 import { security } from '@/security';
 import type { SecurityEvent } from '@/lib/contracts/audit';
-import { MFA_MAX_ATTEMPTS, SESSION_COOKIE } from '@/lib/constants';
+import { MFA_MAX_ATTEMPTS } from '@/lib/constants';
+import { requireIdentity } from '@/app/api/_lib/session';
 import {
   CircuitBreakerStatus,
   PermissionLegend,
   SecurityEventList,
 } from '@/components/security';
 import { ResetBreakerButton } from './ResetBreakerButton';
+import { getServerI18n } from '@/lib/i18n/server';
 
-// Reads the request cookie + live Prisma data, so it must render per request.
+// Reads live security data and language preference; render on demand instead of at build.
 export const dynamic = 'force-dynamic';
 
 export default async function SecurityPage() {
-  const sessionId = (await cookies()).get(SESSION_COOKIE)?.value ?? '';
+  const { t } = await getServerI18n();
+  const { sessionId } = await requireIdentity();
 
   // Authoritative breaker state for this ACCOUNT (DB-backed, per-user; async read).
   const breaker = await security.circuitBreaker.getState(sessionId);
@@ -45,23 +47,23 @@ export default async function SecurityPage() {
   const events: SecurityEvent[] = await audit.listSecurityEvents({ sessionId });
 
   return (
-    <main className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
+    <main className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <header>
-        <h1 className="text-2xl font-semibold text-banking-deep">安全中心</h1>
+        <h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.security.title')}</h1>
         <p className="mt-1 text-sm text-banking-navy">
-          熔断{breaker.locked ? '已触发' : '未触发'} · 共 {events.length} 个安全事件
+          {t('pages.security.summary', { lock: t(breaker.locked ? 'pages.security.lockEnabled' : 'pages.security.lockInactive'), count: events.length })}
         </p>
       </header>
 
       {/* Permission tiers — 🟢 auto / 🟡 confirm / 🔴 MFA (labels from `lib/constants.RISK_LABEL`). */}
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-medium text-banking-deep">权限分级</h2>
+        <h2 className="text-lg font-medium text-banking-deep">{t('pages.security.permissionTiers')}</h2>
         <PermissionLegend />
       </section>
 
       {/* Circuit breaker — after repeated MFA failures, high-risk ops are locked for the account. */}
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-medium text-banking-deep">熔断状态</h2>
+        <h2 className="text-lg font-medium text-banking-deep">{t('pages.security.breakerStatus')}</h2>
         <CircuitBreakerStatus
           tripped={breaker.locked}
           failureCount={breaker.failures}
@@ -69,22 +71,22 @@ export default async function SecurityPage() {
         />
         {breaker.locked ? (
           <p className="text-sm text-banking-navy">
-            如已确认为误操作，可在此解除本账户的熔断限制（需输入 6 位验证码）。
+            {t('pages.security.unlockDescription')}
           </p>
         ) : null}
-        <ResetBreakerButton locked={breaker.locked} className="self-start" />
+        <ResetBreakerButton className="self-start" />
       </section>
 
       {/* Recent verifications — the latest MFA outcomes / blocked ops for this session. */}
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-medium text-banking-deep">最近验证记录</h2>
-        <SecurityEventList events={status.recentEvents} emptyText="暂无最近验证记录" />
+        <h2 className="text-lg font-medium text-banking-deep">{t('pages.security.recentVerifications')}</h2>
+        <SecurityEventList events={status.recentEvents} emptyText={t('pages.security.emptyVerifications')} />
       </section>
 
       {/* Security-event stream — injection attempts, MFA failures, breaker trips, blocked ops. */}
       <section className="flex flex-col gap-3">
-        <h2 className="text-lg font-medium text-banking-deep">安全事件</h2>
-        <SecurityEventList events={events} emptyText="暂无安全事件" />
+        <h2 className="text-lg font-medium text-banking-deep">{t('pages.security.events')}</h2>
+        <SecurityEventList events={events} emptyText={t('pages.security.emptyEvents')} />
       </section>
     </main>
   );

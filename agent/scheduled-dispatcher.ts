@@ -1,4 +1,4 @@
-import type { Prisma, ScheduledTask } from '@prisma/client';
+import type { Prisma, ScheduledTask } from '@/lib/db/prisma';
 import { prisma } from '@/lib/db/client';
 import { AppError } from '@/lib/errors';
 import { safeParse, toJson } from '@/lib/json';
@@ -9,7 +9,7 @@ import type { ScheduledTaskStatus, ScheduledTaskView } from '@/banking-sdk/types
 import { recordAudit } from '@/audit/audit-logger';
 import { executeGatedTool } from './confirmation';
 import { resumeTask } from './task-control';
-import { scheduledTransferArgs } from './scheduled-command';
+import { scheduledTransferArgs } from '@/lib/contracts/scheduled-command';
 
 export interface ScheduleIdentity { userId: string; sessionId: string; }
 export interface ScheduleTickOptions { now?: number; limit?: number; }

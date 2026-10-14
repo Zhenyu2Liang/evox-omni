@@ -315,10 +315,8 @@ describe('circuit-breaker - resetSession ATOMIC unlock + audit', () => {
     const sessionId = newSessionId();
     await tripBreaker(sessionId);
 
-    // The test datasource is pinned to `?connection_limit=1` (see tests/setup.ts), so Prisma queries
-    // and transactions are FIFO-serialized: BOTH gate reads observe the lock BEFORE EITHER unlock
-    // transaction runs. The first CAS applies; the second sees the cleared state and is a no-op —
-    // deterministic, no race.
+    // The native adapter has one connection and serializes transactions. The first CAS applies;
+    // the second sees the cleared state and is a no-op.
     const [a, b] = await Promise.all([
       resetSession(sessionId, { verificationCode: MFA_CODE }),
       resetSession(sessionId, { verificationCode: MFA_CODE }),

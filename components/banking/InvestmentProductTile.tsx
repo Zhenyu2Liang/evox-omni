@@ -1,7 +1,9 @@
+'use client';
+
 /**
  * InvestmentProductTile — read-model tile: a product / holding (risk level, expected rate, term, amount).
  *
- * Server-safe presentational component: no `'use client'`, no hooks, no data access — the
+ * Localized presentational component with no data access — the
  * `ProductView` / optional `HoldingView` DTOs arrive via props. Booked money uses `ui/Money`;
  * estimates use `ui/DecimalMoney`. Risk levels use `ui/Badge` independently of permission tiers.
  */
@@ -12,6 +14,8 @@ import { Card } from '../ui/Card';
 import { Money } from '../ui/Money';
 import { DecimalMoney } from '../ui/DecimalMoney';
 import { rateRatioToPercent } from '@/lib/decimal';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+import type { MessageKey } from '@/lib/i18n/shared';
 
 export interface InvestmentProductTileProps {
   product: ProductView;
@@ -28,13 +32,13 @@ const RISK_TONE: Record<ProductView['riskLevel'], NonNullable<BadgeProps['tone']
   R5: 'danger',
 };
 
-/** Risk level → descriptive Chinese label. */
-const RISK_LABEL: Record<ProductView['riskLevel'], string> = {
-  R1: '保守型',
-  R2: '稳健型',
-  R3: '平衡型',
-  R4: '进取型',
-  R5: '高风险',
+/** Risk level translation keys. */
+const RISK_LABEL: Record<ProductView['riskLevel'], MessageKey> = {
+  R1: 'business.investments.risk.R1',
+  R2: 'business.investments.risk.R2',
+  R3: 'business.investments.risk.R3',
+  R4: 'business.investments.risk.R4',
+  R5: 'business.investments.risk.R5',
 };
 
 /** Formats a dimensionless annual yield ratio as a percentage for display. */
@@ -43,6 +47,7 @@ function formatRate(rate: string): string {
 }
 
 export function InvestmentProductTile({ product, holding, className }: InvestmentProductTileProps) {
+  const { t } = useI18n();
   const cls = ['space-y-3', className].filter(Boolean).join(' ');
 
   return (
@@ -53,23 +58,23 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
           <div className="text-xs text-banking-navy/60">{product.code}</div>
         </div>
         <Badge tone={RISK_TONE[product.riskLevel]}>
-          {product.riskLevel} · {RISK_LABEL[product.riskLevel]}
+          {product.riskLevel} · {t(RISK_LABEL[product.riskLevel])}
         </Badge>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
         <div>
-          <div className="text-xs text-banking-navy/60">预期年化</div>
+          <div className="text-xs text-banking-navy/60">{t('business.investments.yield')}</div>
           <div className="text-sm font-semibold text-banking-success">
             {formatRate(product.annualYieldRate)}
           </div>
         </div>
         <div>
-          <div className="text-xs text-banking-navy/60">期限</div>
-          <div className="text-sm font-semibold text-banking-deep">{`${product.termDays} 天`}</div>
+          <div className="text-xs text-banking-navy/60">{t('business.investments.term')}</div>
+          <div className="text-sm font-semibold text-banking-deep">{t('business.investments.days', { count: product.termDays })}</div>
         </div>
         <div>
-          <div className="text-xs text-banking-navy/60">起购</div>
+          <div className="text-xs text-banking-navy/60">{t('business.investments.minimum')}</div>
           <div className="text-sm font-semibold text-banking-deep">
             <Money amount={product.minAmount} />
           </div>
@@ -82,16 +87,16 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
 
       {holding ? (
         <div className="space-y-1 border-t border-banking-light pt-2">
-          <div className="text-xs text-banking-navy/60">我的持仓</div>
+          <div className="text-xs text-banking-navy/60">{t('business.investments.holdings')}</div>
           <div className="flex items-center justify-between gap-3 text-sm">
-            <span className="text-banking-navy/60">持有金额</span>
+            <span className="text-banking-navy/60">{t('business.investments.principal')}</span>
             <span className="font-medium text-banking-deep">
               <Money amount={holding.amount} />
             </span>
           </div>
           {holding.marketValue !== undefined ? (
             <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="text-banking-navy/60">市值</span>
+              <span className="text-banking-navy/60">{t('business.investments.marketValue')}</span>
               <span className="font-medium text-banking-deep">
                 <DecimalMoney amount={holding.marketValue} />
               </span>
@@ -99,7 +104,7 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
           ) : null}
           {holding.profit !== undefined ? (
             <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="text-banking-navy/60">收益</span>
+              <span className="text-banking-navy/60">{t('business.investments.profit')}</span>
               <span className="font-medium text-banking-deep">
                 <DecimalMoney amount={holding.profit} signed />
               </span>

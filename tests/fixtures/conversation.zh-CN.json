@@ -1,0 +1,13 @@
+{
+  "negativeCorrection": "是-200元，不是200，你搞错",
+  "cardIncrease": "给我卡增加200元",
+  "greeting": "你好",
+  "confirmation": "确认",
+  "oldFallback": "（系统校正）本次对话中未记录到该操作的执行结果。请明确要办理的受支持业务。Demo 理财申购仅支持活期账户，赎回仅支持整笔全额，不支持部分赎回；卡片额度调整仅支持分类消费限额，不支持总授信额度调整。不要在聊天里输入真实密码。",
+  "draftTransfer": "给张伟转账",
+  "draftTransferWithoutRecipient": "转账200元",
+  "freshTransfer": "给张伟转账200.00元",
+  "recipient": "张伟",
+  "validAmount": "200元",
+  "negativeAmount": "-200元"
+}

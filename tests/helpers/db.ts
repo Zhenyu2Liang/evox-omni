@@ -11,7 +11,7 @@
  */
 import { createRequire } from 'node:module';
 import { afterAll, beforeEach } from 'vitest';
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient } from '@/lib/db/prisma';
 
 /** Shape of the resolved `@/lib/db/client` module (named + default export the same singleton). */
 interface PrismaClientModule {

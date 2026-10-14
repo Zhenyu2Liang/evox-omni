@@ -23,6 +23,7 @@
 | 模块职责与执行顺序 | [architecture.md](architecture.md) |
 | 事件、检查点、重试与恢复 | [agent-durability.md](agent-durability.md) |
 | 金融单位与结算 | [financial-values.md](financial-values.md) |
+| 对话卡片与调用详情 | [chat-presentation.md](chat-presentation.md) |
 | 权限、认证与审计 | [security.md](security.md) |
 | 人工接管与证据处理 | [manual-review.md](manual-review.md) |
 | 定时任务与提醒 | [scheduled-tasks.md](scheduled-tasks.md) |
@@ -67,5 +68,6 @@ node .agents/skills/stc/tools/cli.mjs check docs/cn/CONTEXT.md --profile for-ins
 ```
 
 临时文件必须保存在当前工作区。
+文件日志位置必须遵守[仓库日志规则](../../CONTEXT.md#operation)。
 删除旧文件前，必须将独有的有效事实写入专题。
 删除旧文件后，必须更新全部引用。

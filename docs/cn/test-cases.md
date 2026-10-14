@@ -4,6 +4,15 @@
 每次验收都记录模型来源和实际执行范围。
 测试数量以当次命令输出为准。
 
+双卡冻结验收检查独立认证、操作记录和历史计划位置。
+错误验证码不能冻结卡片，首张卡片验证不能授权后续卡片。
+浏览器分别检查刷新和后续对话，不以接口成功代替页面验证。
+联系人验收包含并发重复提交、所属用户隔离和审计回滚。
+安全中心验收检查开发者开关和无验证码的重置按钮。
+卡片页验收检查页面增删、独立验证和刷新恢复。
+Agent 增删请求只返回页面操作说明，不能生成执行步骤。
+人工核对验收先检查普通模式拒绝，再演示后台处理。
+
 运行环境见[开发指南](development.md)。
 恢复规则见[持久化与恢复](agent-durability.md)。
 业务限制见[当前限制](known-risks.md)。
@@ -29,9 +38,110 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 浏览器验收有独立入口，Vitest 不收集浏览器验收。
 
 生产构建单独执行 `pnpm build`。
-构建前先准备符合当前 schema 的数据库。
-预渲染页面会查询数据库。
+构建前先生成符合当前 schema 的 Prisma Client。
+页面按请求读取语言和业务数据，构建时不查询数据库。
 准备步骤见[开发指南](development.md)。
+
+## 语言切换验收
+
+浏览器验收包含中文默认值和中英文切换。
+即使浏览器首选英文，首次访问仍显示中文。
+桌面侧边栏和移动端顶部均可切换语言。
+刷新页面后保留选择，服务端业务页使用同一语言。
+切换过程中核对草稿、消息标识和交易记录。
+切换语言不得新增银行业务提交。
+用例见 [i18n.e2e-helper.ts](../../tests/e2e/i18n.e2e-helper.ts)。
+
+## 共享对话与展示验收
+
+不同浏览器直接进入同一演示用户和会话。
+问候、金额更正、模糊卡片需求和聊天确认需返回不同提示。
+后续余额查询仍需得到真实工具结果。
+这些对话不能因旧意图创建写操作或工作流。
+模型输入与模型结果检查点恢复也需遵守同一规则。
+
+用户文本按原文显示，助手正文使用 Markdown。
+工具卡片展示实际调用、状态和结果摘要。
+精确金额不能因格式渲染而改变。
+用例见 [shared-demo.e2e-helper.ts](../../tests/e2e/shared-demo.e2e-helper.ts)。
+真实模型验收可用 `LIVE_SCENARIOS=0` 选择这一组用例。
+
+订阅查询还需验证完整授权过程。
+确认后，原调用应显示完成，不再显示执行中。
+后续问候和余额查询不得闪出上一轮调用。
+刷新页面后，已完成状态仍需保留。
+用例见 [tool-lifecycle.e2e-helper.ts](../../tests/e2e/tool-lifecycle.e2e-helper.ts)。
+真实模型验收用 `LIVE_SCENARIOS=8` 选择这组用例。
+
+普通交流需独立验证，不能只测试工具是否执行。
+资金来源解释、闲聊和定时任务能力咨询应返回自然回答。
+这些问题不能生成授权、计划或继续旧转账草稿。
+刷新后保留原回答，后续明确转账仍需确认。
+用例见 [正常交流验收](../../tests/e2e/conversation.e2e-helper.ts)。
+离线验收用 `E2E_JOURNEYS=natural-conversation-and-financial-boundary`。
+真实模型验收用 `LIVE_SCENARIOS=11`。
+
+负数金额、历史回顾和继续分析使用同一个浏览器流程。
+输入 `转给张伟-10元` 后，不查询联系人或生成授权。
+后续追问和刷新后仍能回顾原句中的负号。
+订阅查询完成后，继续分析需保留价格、建议和自然文字。
+分析不取消订阅，也不生成新的确认入口。
+离线验收用 `E2E_JOURNEYS=signed-amount-memory-and-subscription-analysis`。
+真实模型验收用 `LIVE_SCENARIOS=12`。
+
+## 历史分页与上下文压缩验收
+
+聊天页首次只显示最近 20 条完整消息。
+加载旧页时，检查消息顺序、去重和阅读位置。
+单条长回复不能裁剪，输入草稿不能因分页丢失。
+新回复到达时，离开底部的读者可选择查看新消息。
+清空后，迟到的旧分页响应不能进入新对话。
+用例见 [历史分页验收](../../tests/e2e/chat-history.e2e-helper.ts)。
+离线验收用 `E2E_JOURNEYS=chat-history-pagination-and-scroll`。
+
+压缩验收分别检查原始归档和实际模型请求。
+原始负号、完整长消息和助手回复需继续保留。
+实际模型请求需使用摘要和近期完整轮次。
+摘要生成中断后，恢复原请求，不重复用户消息。
+普通模型请求中断后，重发原压缩视图。
+已经完成的摘要不能因新阈值而重新生成。
+确认旧操作时，后续聊天和工具结果需完整保留。
+重复工具调用标识按原模型请求归属更新。
+用例见 [压缩恢复测试](../../tests/integration/conversation-compaction.test.ts)。
+真实模型验收用 `LIVE_SCENARIOS=13`。
+该场景将隔离服务的压缩阈值设为 `16000` token。
+场景使用合成历史，检查真实摘要和负数金额回忆。
+说明见 [上下文压缩](context-compaction.md)。
+
+## 开发者模式验收
+
+开发者模式默认为停用。
+普通导航显示操作记录，隐藏运行记录和操作审计。
+刷新页面和“刷新对话”都保留已有消息。
+取消清空弹窗不能修改对话。
+确认清空后，所有浏览器读取新的对话上下文。
+账本和运行证据必须保留，待处理操作必须阻止清空。
+桌面和手机均需验证开关、确认弹窗和清空结果。
+用例见 [developer-mode.e2e-helper.ts](../../tests/e2e/developer-mode.e2e-helper.ts)。
+可用 `E2E_JOURNEYS=developer-mode-conversation-controls` 单独验收。
+
+## 操作记录与操作审计验收
+
+普通用户能查看业务名称、时间、状态和验证结果。
+普通页面与接口均不显示原工具名称、参数和结果。
+查询工具和任务计划事件不能挤掉分页内的业务记录。
+客户端身份参数不能选择其他用户或会话。
+结果不明时显示待核对，历史记录不提供执行按钮。
+
+停用开发者模式时，直接访问操作审计页不能读取技术数据。
+`GET /api/audit` 在解析筛选参数前返回 HTTP 403。
+启用模式后，页面显示原审计详情。
+停用模式后，导航和技术页面恢复普通模式。
+
+接口用例见 [activity-http.test.ts](../../tests/app/activity-http.test.ts)。
+投影用例见 [operation-history.test.ts](../../tests/unit/audit/operation-history.test.ts)。
+浏览器用例见 [activity.e2e-helper.ts](../../tests/e2e/activity.e2e-helper.ts)。
+可用 `E2E_JOURNEYS=operation-history-and-developer-audit` 单独验收。
 
 ## 数据隔离与执行顺序
 
@@ -71,7 +181,7 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 | `tests/unit/` | 金融值、银行事务、权限、计划和界面契约 |
 | `agent/**/*.test.ts` | 持久化运行、模型传输和可信金融回复 |
 | `tests/scenarios/` | 受控模型驱动的银行智能体场景 |
-| `tests/app/` | 实际路由处理器、Cookie 身份和操作控制 |
+| `tests/app/` | 实际路由处理器、固定演示身份和操作控制 |
 | `tests/integration/` | 跨模块执行、持久化、恢复和并发约束 |
 | `tests/deploy-db-push.test.ts` | 当前 schema 建库、显式重置和目录边界 |
 | `tests/e2e/` | 运行中应用的浏览器操作 |
@@ -194,10 +304,11 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 入口选择空闲端口，并启动实际 Next.js 开发服务。
 验收结束时关闭浏览器和服务进程树。
 
-当前离线入口注册以下 10 条流程。
+当前离线入口注册以下 11 条流程。
 
 | 流程标识 | 主要证据 |
 | --- | --- |
+| `workspace-http-and-mobile` | 首页、请求标识回退、输入法、手机导航和图表精确提示 |
 | `a-transfer-confirm` | 确认、余额变化和 1 笔新增扣款 |
 | `b-transfer-mfa` | 错码不扣款；正确码完成原操作 |
 | `c-plan-pause-resume` | 暂停、继续和已完成节点保留 |
@@ -213,6 +324,17 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 任何 `FAIL` 使入口返回非零退出码。
 `SKIP` 不使入口失败，也不算验收通过。
 入口见[离线浏览器验收](../../tests/e2e/acceptance.e2e.ts)。
+
+界面流程检查 390px 和 320px 手机宽度。
+流程模拟普通 HTTP 缺少 `randomUUID` 的环境。
+选择建议或确认输入法候选字时，不发送请求。
+发送余额查询后，流水没有变化。
+检查代码见[界面验收](../../tests/e2e/ui-shell.e2e-helper.ts)。
+
+测试入口检查实际解析到的 Prisma Client。
+生成客户端的 schema 必须与仓库当前 schema 一致。
+能够实例化但字段过时的客户端会重新生成。
+回归用例见[客户端生成检查](../../tests/unit/lib/prisma-client-generation.test.ts)。
 
 ## 真实模型验收
 

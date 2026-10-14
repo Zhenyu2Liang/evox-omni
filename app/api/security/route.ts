@@ -2,9 +2,8 @@
  * GET /api/security — security-center read model.
  *
  * Contract:
- *  - Session: resolved SERVER-SIDE from the `banking_session` cookie (`_lib/session#resolveIdentity`);
- *    a `?sessionId=` query param is IGNORED and never widens access. With no session the read model
- *    falls back to the empty session id `''` (nothing to report yet) — a normal 200, not an error.
+ *  - Session: the configured demo user's fixed workspace via `resolveIdentity`.
+ *    Cookies and query identifiers cannot select another workspace. No login is required.
  *  - Delegates to `@/audit`: `getSecurityStatus(sessionId, { isLocked })` +
  *    `listSecurityEvents({ sessionId })`; the authoritative lock state is supplied by the
  *    security node's circuit breaker (`@/security` → `circuitBreaker.isLocked`).
@@ -33,8 +32,7 @@ export interface SecurityData {
 
 export async function GET(req: NextRequest): Promise<Response> {
   try {
-    const identity = await resolveIdentity(req);
-    const sessionId = identity?.sessionId ?? '';
+    const { sessionId } = await resolveIdentity(req);
 
     const status = await audit.getSecurityStatus(sessionId, {
       isLocked: (sid) => security.circuitBreaker.isLocked(sid),

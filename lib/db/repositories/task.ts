@@ -1,7 +1,7 @@
-import { Prisma } from '@prisma/client';
-import type { AgentTask, AgentTaskNode } from '@prisma/client';
+import { Prisma, type AgentTask, type AgentTaskNode } from '@/lib/db/prisma';
 import { prisma, type DbClient } from '../client';
 import { toJson } from '../../json';
+import { AppError } from '../../errors';
 import type { TaskCondition, TaskPlanStatus } from '../../contracts/task';
 import { ensureStandaloneWorkflowRun, synchronizeStandaloneWorkflowRun } from './workflowRun';
 
@@ -309,7 +309,13 @@ export function updateTaskNode(
 
   const fenceToken = opts?.fenceToken;
   if (fenceToken === undefined) {
-    return prisma.agentTaskNode.update({ where: { taskId_nodeId: { taskId, nodeId } }, data });
+    return prisma.agentTaskNode.update({ where: { taskId_nodeId: { taskId, nodeId } }, data })
+      .catch(error => {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+          throw new AppError('NOT_FOUND', 'The task node does not exist.', { resource: 'AgentTaskNode', taskId, nodeId });
+        }
+        throw error;
+      });
   }
 
   return (async () => {

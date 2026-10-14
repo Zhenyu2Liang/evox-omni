@@ -86,6 +86,18 @@ describe('banking-sdk/transfer · happy path', () => {
 });
 
 describe('banking-sdk/transfer · recipient resolution', () => {
+  it('masks a raw contact phone in the immutable result and replays that original projection', async () => {
+    const database = getTestPrisma();
+    await database.contact.create({ data: { id: 'contact_raw_phone', userId: DEMO_USER_ID,
+      name: 'Raw phone recipient', phone: '13900001122', bank: 'Demo bank' } });
+    const input = { userId: DEMO_USER_ID, phone: '13900001122', amount: '200.00', idempotencyKey: 'masked-contact-receipt' };
+    const first = await transfer(input);
+    expect(first.recipient).toMatchObject({ contactId: 'contact_raw_phone', phone: '139****1122' });
+    expect(JSON.stringify(first)).not.toContain('13900001122');
+    await database.contact.update({ where: { id: 'contact_raw_phone' }, data: { phone: '13999992233' } });
+    expect(await transfer(input)).toEqual(first);
+    expect(await database.transaction.count({ where: { counterpartyId: 'contact_raw_phone' } })).toBe(1);
+  });
   it('resolves the recipient by contactId (张伟)', async () => {
     const result = await transfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: '200.00' });
 

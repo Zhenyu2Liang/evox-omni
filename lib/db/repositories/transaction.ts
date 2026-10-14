@@ -1,4 +1,4 @@
-import type { Prisma, Transaction } from '@prisma/client';
+import type { Prisma, Transaction } from '@/lib/db/prisma';
 import { dbClient } from '../client';
 import { absoluteMinor, moneyToCents, type MoneyInput } from '../../money';
 

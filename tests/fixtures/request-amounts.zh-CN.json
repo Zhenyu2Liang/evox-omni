@@ -1,0 +1,25 @@
+{
+  "invalidInstructions": [
+    "转给张伟-10元", "给张伟转-10元", "转账−10元", "转给张伟－10元",
+    "转给张伟¥-10", "转给张伟-￥10", "转给张伟￥−10", "转给张伟－¥10元",
+    "转给张伟-0.01元", "转给张伟-1万元", "转给张伟0元", "给张伟转0.00元",
+    "申购稳健理财A-100元", "预留-200元", "预留0元", "分类消费限额设置为-10元",
+    "transfer -10 yuan to Zhang Wei", "send Zhang Wei $-10", "reserve -10 CNY", "transfer 0 CNY to Zhang Wei"
+  ],
+  "invalidReplies": ["-10", "−10元", "－10", "-¥10", "￥-10", "0", "0.00元", "是-10元"],
+  "validInstructions": ["转给张伟10元", "转给张伟¥10", "转给张伟￥10", "转给张伟+10元", "给张伟转10.37元"],
+  "ordinaryExplanation": [
+    "为什么转给张伟-10元不行？", "假设我转给张伟-10元，会发生什么？", "-10元为什么不能转账？",
+    "账单里面-10元是什么意思？", "What if I transfer -10 yuan?", "Why can't I transfer -10 yuan?"
+  ],
+  "recallQuestions": [
+    "我刚才说了什么？", "刚才我说了什么？", "我刚才要求转给张伟多少钱？",
+    "我之前说转给张伟多少元？", "What amount did I just ask to transfer?", "Who did I ask to transfer to?"
+  ],
+  "newInstructions": ["按刚才金额转给张伟", "用刚才金额转账", "Please transfer using the amount I mentioned earlier"],
+  "validZeroLimits": ["把信用卡餐饮消费限额设置为0元", "分类消费限额调整到0", "Set my card category limit to 0"],
+  "resourceRequests": ["冻结尾号6688的卡", "转给手机号13800000000的联系人200元", "2026-10-14提醒我查询余额", "查看扣款-10元的交易"],
+  "draftTransfer": "给张伟转账",
+  "validTransfer": "给张伟转账200元",
+  "signedPlan": "转给张伟-10元，然后转给王芳200元"
+}

@@ -13,7 +13,9 @@ import { POST as recoverRun } from '@/app/api/runs/[id]/recover/route';
 import { createPendingAction } from '@/lib/db/repositories/pendingAction';
 import { settlePendingAction } from '@/agent/confirmation-recovery';
 import { cancelAction, getOrCreateSession, runTurn } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import * as executionFence from '@/agent/execution-fence';
+import { turnDeclaration } from '@/tests/helpers/scripted-provider';
 
 const userId = 'user_liming';
 beforeEach(resetDatabase);
@@ -21,8 +23,8 @@ afterEach(() => vi.restoreAllMocks());
 afterAll(disconnectTestPrisma);
 
 async function admit(requestId = 'request-1') {
-  const session = await getTestPrisma().agentSession.create({ data: { userId, stateJson: '{}' } });
-  const input = { sessionId: session.id, userId, requestId, request: { message: 'Read my balance' } };
+  const session = await getDemoSession(userId);
+  const input = { sessionId: session.sessionId, userId, requestId, request: { message: 'Read my balance' } };
   const admitted = await beginRun(input);
   if (!admitted.lease) throw new Error('Expected a new execution lease');
   return { input, run: admitted.run, lease: admitted.lease, journal: new AgentRunJournal(admitted.lease) };
@@ -35,6 +37,17 @@ async function expire(lease: AgentRunLease): Promise<void> {
 }
 
 describe('durable Agent runtime with real database records', () => {
+  it('denies reading or recovering a run outside the canonical demo session', async () => {
+    const foreign = await getOrCreateSession(userId);
+    const admitted = await beginRun({ sessionId: foreign.sessionId, userId, requestId: 'foreign-run', request: { message: 'Read my balance' } });
+    await new AgentRunJournal(admitted.lease!).finish('interrupted');
+    const context = { params: Promise.resolve({ id: admitted.run.id }) };
+    const headers = { cookie: `banking_session=${foreign.sessionId}` };
+    expect((await getRun(new NextRequest(`http://localhost/api/runs/${admitted.run.id}?sessionId=${foreign.sessionId}`, { headers }), context)).status).toBe(403);
+    expect((await recoverRun(new NextRequest(`http://localhost/api/runs/${admitted.run.id}/recover`, { method: 'POST', headers, body: '{}' }), context)).status).toBe(403);
+    expect((await getTestPrisma().agentRun.findUniqueOrThrow({ where: { id: admitted.run.id } })).status).toBe('interrupted');
+    expect(await getTestPrisma().toolInvocation.count()).toBe(0);
+  });
   it('deduplicates input without re-execution, conflicts on changed input, and releases a failed run', async () => {
     const { input, lease, journal } = await admit();
     expect((await beginRun(input)).lease).toBeUndefined();
@@ -209,7 +222,7 @@ describe('durable Agent runtime with real database records', () => {
     const original = journal.invocationForCall('call-read')!;
     await journal.finish('interrupted');
     const context = { params: Promise.resolve({ id: run.id }) };
-    expect((await getRun(new NextRequest(`http://localhost/api/runs/${run.id}`), context)).status).toBe(403);
+    expect((await getRun(new NextRequest(`http://localhost/api/runs/${run.id}`), context)).status).toBe(200);
     const response = await recoverRun(new NextRequest(`http://localhost/api/runs/${run.id}/recover`, {
       method: 'POST', headers: { cookie: `banking_session=${lease.sessionId}` }, body: '{}',
     }), context);
@@ -253,7 +266,8 @@ describe('durable Agent runtime with real database records', () => {
     const session = await getOrCreateSession(userId);
     const provider = fauxProvider(), models = createModels();
     models.setProvider(provider.provider);
-    provider.setResponses([fauxAssistantMessage([fauxToolCall('submit_plan', {
+    provider.setResponses([fauxAssistantMessage([...turnDeclaration({ purpose: 'operation',
+      operations: ['reserve_budget', 'reserve_budget'], workflow: true }).content, fauxToolCall('submit_plan', {
       goal: 'Create two budgets', nodes: [
         { id: 'first', name: 'Travel budget', kind: 'tool', tool: 'reserve_budget', args: { name: 'Expired run budget', amount: '10.00' }, dependencies: [] },
         { id: 'second', name: 'Tuition budget', kind: 'tool', tool: 'reserve_budget', args: { name: 'Dependent budget', amount: '20.00' }, dependencies: ['first'] },

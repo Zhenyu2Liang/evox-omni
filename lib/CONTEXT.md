@@ -24,7 +24,7 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
   is tolerated); `normalizeTransferAmount` additionally requires a positive amount and returns canonical CNY.
 - `constants.ts` — `DAILY_TRANSFER_LIMIT = 1000`, `MFA_CODE = '123456'`, `MFA_MAX_ATTEMPTS = 3`,
   `ANOMALY_AMOUNT_THRESHOLD = 5000`, `DEFAULT_DEMO_USER_ID = 'user_liming'`,
-  `SESSION_COOKIE = 'banking_session'`, `RISK_LABEL`, `DEMO_NOW` (pinned 2026-09-25 12:00 local).
+  `RISK_LABEL`, `DEMO_NOW` (pinned 2026-09-25 12:00 local). Web demo identity uses no cookie.
 - `config.ts` — `AppConfig` + `getConfig()`; reads env **at call time**
   (`LLM_MODE`/`LLM_PROVIDER`/`LLM_MODEL`/`DEMO_USER_ID`), so tests can toggle `LLM_MODE`.
 - `ids.ts` — `newId(prefix?)`: unique id string (`node:crypto` `randomUUID`), optional readable prefix
@@ -81,18 +81,20 @@ and — under `lib/db` — the **sole Prisma data-access layer**.
 
 - `contracts/**` is frozen: child nodes IMPORT these types, they must NOT redeclare or fork them.
   Adding a new shared type means adding it here (root-owned).
-- `db/repositories/**` is the **only** code that imports `prisma`/`@prisma/client`; every other module
-  persists exclusively through these repositories.
+- Database model types come from `@/lib/db/prisma`; import them with `import type` where possible.
+  Database access uses repositories and the explicit transaction/execution boundaries in `db/`,
+  `banking-sdk/tx.ts`, `security/`, and `agent/`. Do not construct database clients in consumers.
 - Repository reads return Prisma model rows; **JSON-text columns stay `string | null`** and are parsed
   by callers with `lib/json` (`safeParse`). Repository writes that take structured payloads serialize
   with `toJson`.
-- Money is `Float` CNY; use `lib/money` helpers, never raw float math.
+- Money uses integer minor units (`BigInt`); rates and quantities use decimal strings and `lib/decimal`.
+  Use `lib/money` conversions at boundaries and never raw floating-point arithmetic.
 - Date helpers must be pure and take an injectable `now` — no hidden `Date.now()` inside range helpers.
 - Any "now" in the running app goes through `lib/clock` (`demoNow()`), never raw `Date.now()`.
 - `index.ts` must not import `lib/db` (keeps the Prisma client out of client-side bundles).
 - Pure TypeScript; no side effects at module load, no network. Sole exception: `db/client.ts`
   constructs the Prisma singleton. `ledger.ts` stays pure (only `node:crypto`).
-- Files use relative imports between each other — no path aliases assumed.
+- Library files may use the `@/` path alias. Standalone scripts must use resolvable relative imports.
 - Keep files ≲ ~1000 lines; split by responsibility.
 
 ## Routing Table

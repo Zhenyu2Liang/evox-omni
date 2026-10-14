@@ -27,7 +27,8 @@
  */
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
 import { executionReceiptId, ledgerKeyForAction, nodeExecutionKey } from '@/lib/ledger';
@@ -119,7 +120,7 @@ const checkingBalance = async () =>
   centsToMoney((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor);
 
 it('a plan-linked transfer wedge recovers to the committed truth on resume: success node, executed action, one receipt, one debit', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
 
   // A single-node plan whose only node is a gated (YELLOW) ¥200 transfer → parked for confirmation.
@@ -202,7 +203,7 @@ it('a plan-linked transfer wedge recovers to the committed truth on resume: succ
 });
 
 it('a standalone transfer wedge recovers via the recover route from its committed receipt: executed, one receipt, one debit, surfaced no more', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
 
   const gated = await executeGatedTool({
@@ -264,22 +265,23 @@ it('a standalone transfer wedge recovers via the recover route from its committe
   expect(listed.ids).not.toContain(id); // `executed` is terminal & NOT surfaced
 });
 
-it('a standalone virtual-card wedge recovers its atomic receipt with exactly one card', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+it('a standalone card-limit wedge recovers its atomic receipt without overwriting a later limit', async () => {
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
-  const virtualWhere = { userId, type: 'VIRTUAL' as const };
+  const limitWhere = { cardId: 'card_credit', category: '\u5a31\u4e50' };
 
   const gated = await executeGatedTool({
     sessionId: s,
     userId,
-    toolName: 'apply_virtual_card',
-    args: { label: '旅行备用' },
-    userRequest: '申请一张虚拟卡',
+    toolName: 'set_card_limit',
+    args: { ...limitWhere, amount: '1500' },
+    userRequest: 'Set the card entertainment limit to 1500',
   });
   const id = gated.pendingActionId!;
   expect(id).toBeTruthy();
-  const virtualBefore = await p.card.count({ where: virtualWhere });
-  expect(virtualBefore).toBe(0);
+  const limitsBefore = await p.cardLimit.findMany({ where: limitWhere });
+  expect(limitsBefore).toHaveLength(1);
+  expect(limitsBefore[0].amountMinor).toBe(300000n);
   const txBefore = await p.transaction.count({ where: { userId } });
 
   const spy = wedgeResultTransaction();
@@ -287,29 +289,32 @@ it('a standalone virtual-card wedge recovers its atomic receipt with exactly one
   expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1); // the injection HIT the target
   spy.mockRestore();
 
-  // WEDGED, pre-recovery: the virtual card WAS issued EXACTLY ONCE, row `confirmed` with NO result.
+  // The card limit committed, but the separate action status transaction rolled back.
   const wedged = await p.pendingAction.findUniqueOrThrow({ where: { id } });
   expect(first.http).toBe(500);
   expect(wedged.status).toBe('confirmed');
   expect(wedged.resultJson).toBeNull();
-  expect(await p.card.count({ where: virtualWhere })).toBe(1);
+  expect((await p.cardLimit.findFirstOrThrow({ where: limitWhere })).amountMinor).toBe(150000n);
+  expect(await p.executionReceipt.count({ where: { userId, key: id } })).toBe(1);
+  // A later independent limit makes a forbidden historical re-execution observable.
+  await p.cardLimit.updateMany({ where: limitWhere, data: { amountMinor: 50000n } });
 
-  // The unified command receipt proves the original card was committed. Recovery never issues another.
+  // Recovery converges on the original receipt without applying the original limit again.
   const recovered = await recover(id, s);
   const stored = await p.pendingAction.findUniqueOrThrow({ where: { id } });
-  const virtualAfter = await p.card.count({ where: virtualWhere });
+  const limitsAfter = await p.cardLimit.findMany({ where: limitWhere });
   const listed = await listActions(s);
 
   console.log(
-    'REVIEW_COMMITTED_VIRTUAL_CARD_WEDGE',
+    'REVIEW_COMMITTED_CARD_LIMIT_WEDGE',
     JSON.stringify({
       firstHttp: first.http,
       recoverHttp: recovered.http,
       recoverOk: recovered.body.data?.ok,
       recoverStatus: recovered.body.data?.status,
       actionStatus: stored.status,
-      virtualBefore,
-      virtualAfter,
+      limitRowsBefore: limitsBefore.length,
+      limitRowsAfter: limitsAfter.length,
       txBefore,
       txAfter: await p.transaction.count({ where: { userId } }),
       balance: await checkingBalance(),
@@ -322,10 +327,19 @@ it('a standalone virtual-card wedge recovers its atomic receipt with exactly one
   expect(recovered.body.data?.ok).toBe(true);
   expect(recovered.body.data?.status).toBe('executed');
   expect(stored.status).toBe('executed');
-  expect(virtualAfter).toBe(1); // never re-run → no second virtual card
+  expect(limitsAfter).toHaveLength(1);
+  expect(limitsAfter[0].amountMinor).toBe(50000n);
+  const recordedCard = JSON.parse(stored.resultJson!).data;
+  expect(recordedCard.id).toBe(limitWhere.cardId);
+  expect(recordedCard.limits).toContainEqual({ category: limitWhere.category, amount: '1500.00' });
   expect(await p.transaction.count({ where: { userId } })).toBe(txBefore); // no ledger movement
   expect(await checkingBalance()).toBe(CHECKING_BALANCE);
   expect(await p.executionReceipt.count({ where: { userId, key: id } })).toBe(1);
   expect((await p.auditLog.findUniqueOrThrow({ where: { dedupeKey: `exec:${id}` } })).status).toBe('success');
   expect(listed.ids).not.toContain(id);
+  const repeated = await recover(id, s);
+  expect(repeated.http).toBe(200);
+  expect(repeated.body.data?.status).toBe('executed');
+  expect((await p.cardLimit.findFirstOrThrow({ where: limitWhere })).amountMinor).toBe(50000n);
+  expect(await p.executionReceipt.count({ where: { userId, key: id } })).toBe(1);
 });

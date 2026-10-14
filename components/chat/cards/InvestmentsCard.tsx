@@ -1,12 +1,15 @@
 'use client';
 
 import type { HoldingView, ProductView } from '@/banking-sdk';
-import { InvestmentProductTile } from '../../banking';
-import { Badge, Card, EmptyState, Money } from '../../ui';
+import { Badge, EmptyState, Money } from '../../ui';
+import type { BadgeProps } from '../../ui/Badge';
 import type { InvestmentsCardData } from './types';
 import { addMoney } from '@/lib/money';
-import { addDecimal } from '@/lib/decimal';
+import { addDecimal, rateRatioToPercent } from '@/lib/decimal';
 import { DecimalMoney } from '../../ui/DecimalMoney';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+import type { MessageKey } from '@/lib/i18n/shared';
+import { ResultCard, ResultMetric } from './ResultCard';
 
 export interface InvestmentsCardProps {
   data: InvestmentsCardData;
@@ -40,69 +43,102 @@ function buildEntries(data: InvestmentsCardData): TileEntry[] {
   return entries;
 }
 
-/**
- * Chat card: investment products, the user's holdings, and an optional product comparison. Products
- * and holdings are rendered by the `banking` read-model `InvestmentProductTile` (never re-implemented
- * here); the comparison highlights the highest-rate / lowest-risk products via `ui/Badge`.
- */
+const RISK_TONE: Record<ProductView['riskLevel'], NonNullable<BadgeProps['tone']>> = {
+  R1: 'success', R2: 'success', R3: 'warn', R4: 'danger', R5: 'danger',
+};
+const RISK_LABEL: Record<ProductView['riskLevel'], MessageKey> = {
+  R1: 'business.investments.risk.R1', R2: 'business.investments.risk.R2', R3: 'business.investments.risk.R3',
+  R4: 'business.investments.risk.R4', R5: 'business.investments.risk.R5',
+};
+
+/** Product facts and holding estimates remain distinct from booked settlement values. */
+function InvestmentResult({ product, holding }: { product: ProductView; holding?: HoldingView }) {
+  const { t } = useI18n();
+  return (
+    <div className="min-w-0 rounded-xl border border-banking-light bg-slate-50/60 p-3.5">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="break-words text-sm font-semibold text-banking-deep">{product.name}</div>
+          <div className="mt-0.5 text-xs text-banking-navy/60">{product.code}</div>
+        </div>
+        <Badge tone={RISK_TONE[product.riskLevel]}>{product.riskLevel} · {t(RISK_LABEL[product.riskLevel])}</Badge>
+      </div>
+      <dl className="mt-3 grid gap-2 sm:grid-cols-3">
+        <ResultMetric label={t('business.investments.yield')}><span className="text-banking-success">{rateRatioToPercent(product.annualYieldRate)}%</span></ResultMetric>
+        <ResultMetric label={t('business.investments.term')}>{t('business.investments.days', { count: product.termDays })}</ResultMetric>
+        <ResultMetric label={t('business.investments.minimum')}><Money amount={product.minAmount} /></ResultMetric>
+      </dl>
+      {product.description ? <p className="mt-3 text-xs leading-relaxed text-banking-navy/60">{product.description}</p> : null}
+      {holding ? (
+        <div className="mt-3 border-t border-banking-light pt-3">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-medium text-banking-navy">{t('business.investments.holdings')}</span>
+            <Badge tone={holding.status === 'HOLDING' ? 'info' : 'neutral'}>{t(holding.status === 'HOLDING' ? 'business.investments.holdingActive' : 'business.investments.holdingRedeemed')}</Badge>
+          </div>
+          <dl className="space-y-2 text-xs">
+            <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.principal')}</dt><dd className="font-semibold text-banking-deep"><Money amount={holding.amount} /></dd></div>
+            {holding.marketValue !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.marketValue')}</dt><dd className="font-medium text-banking-deep"><DecimalMoney amount={holding.marketValue} /></dd></div> : null}
+            {holding.profit !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.profit')}</dt><dd className="font-medium text-banking-deep"><DecimalMoney amount={holding.profit} signed /></dd></div> : null}
+          </dl>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function InvestmentsCard(p: InvestmentsCardProps) {
+  const { t } = useI18n();
   const entries = buildEntries(p.data);
   const comparison = p.data.comparison;
   const comparisonProducts = comparison?.products ?? [];
-  const holdings = p.data.holdings ?? [];
+  const holdings = (p.data.holdings ?? []).filter(holding => holding.status === 'HOLDING');
   const className = p.className ? `flex flex-col gap-3 ${p.className}` : 'flex flex-col gap-3';
 
   if (entries.length === 0 && comparisonProducts.length === 0) {
     return (
       <div className={className}>
-        <Card title="我的投资">
-          <EmptyState title="暂无投资" description="当前没有可展示的投资产品或持仓。" />
-        </Card>
+        <ResultCard title={t('cards.investment.title')} marker="↗">
+          <EmptyState title={t('cards.investment.empty.title')} description={t('cards.investment.empty.description')} />
+        </ResultCard>
       </div>
     );
   }
 
   const investedAmount = holdings.reduce((sum, holding) => addMoney(sum, holding.amount), '0.00');
-  const hasMarketValue = holdings.some((h) => h.marketValue !== undefined);
-  const totalMarketValue = holdings.reduce((sum, holding) => addDecimal(sum, holding.marketValue ?? holding.amount), '0');
-  const hasProfit = holdings.some((h) => h.profit !== undefined);
+  const hasMarketValue = holdings.length > 0 && holdings.every((holding) => holding.marketValue !== undefined);
+  const totalMarketValue = holdings.reduce((sum, holding) => addDecimal(sum, holding.marketValue ?? '0'), '0');
+  const hasProfit = holdings.length > 0 && holdings.every((holding) => holding.profit !== undefined);
   const totalProfit = holdings.reduce((sum, holding) => addDecimal(sum, holding.profit ?? '0'), '0');
 
   return (
     <div className={className}>
       {entries.length > 0 ? (
-        <Card title="我的投资">
+        <ResultCard title={t('cards.investment.title')} marker="↗">
           {holdings.length > 0 ? (
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm text-banking-navy">
-              <span>
-                持仓金额 <Money amount={investedAmount} />
-              </span>
+            <dl className="mb-3 grid gap-2 sm:grid-cols-3">
+              <ResultMetric label={t('cards.investment.amount')}><Money amount={investedAmount} /></ResultMetric>
               {hasMarketValue ? (
-                <span>
-                  持仓市值 <DecimalMoney amount={totalMarketValue} />
-                </span>
+                <ResultMetric label={t('cards.investment.marketValue')}><DecimalMoney amount={totalMarketValue} /></ResultMetric>
               ) : null}
               {hasProfit ? (
-                <span>
-                  累计收益 <DecimalMoney amount={totalProfit} signed />
-                </span>
+                <ResultMetric label={t('cards.investment.profit')}><DecimalMoney amount={totalProfit} signed /></ResultMetric>
               ) : null}
-            </div>
+            </dl>
           ) : null}
           <div className="flex flex-col gap-3">
             {entries.map((entry) => (
-              <InvestmentProductTile
+              <InvestmentResult
                 key={entry.key}
                 product={entry.product}
                 holding={entry.holding}
               />
             ))}
           </div>
-        </Card>
+        </ResultCard>
       ) : null}
 
       {comparisonProducts.length > 0 ? (
-        <Card title="产品对比">
+        <ResultCard title={t('cards.investment.compare')} marker="⇄">
           <div className="flex flex-col gap-3">
             {comparisonProducts.map((product) => {
               const isHighestRate = product.id === comparison?.highestRateId;
@@ -111,16 +147,16 @@ export function InvestmentsCard(p: InvestmentsCardProps) {
                 <div key={product.id} className="flex flex-col gap-1">
                   {isHighestRate || isLowestRisk ? (
                     <div className="flex items-center gap-2">
-                      {isHighestRate ? <Badge tone="success">最高收益</Badge> : null}
-                      {isLowestRisk ? <Badge tone="info">最低风险</Badge> : null}
+                      {isHighestRate ? <Badge tone="success">{t('cards.investment.highestYield')}</Badge> : null}
+                      {isLowestRisk ? <Badge tone="info">{t('cards.investment.lowestRisk')}</Badge> : null}
                     </div>
                   ) : null}
-                  <InvestmentProductTile product={product} />
+                  <InvestmentResult product={product} />
                 </div>
               );
             })}
           </div>
-        </Card>
+        </ResultCard>
       ) : null}
     </div>
   );

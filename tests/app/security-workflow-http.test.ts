@@ -22,8 +22,8 @@
  * code is verified. This is the regression: parking two individually-small transfers must NOT let
  * the pair bypass the ¥1000 RED/MFA threshold.
  *
- * Deterministic DB lifecycle: reset + seed before each test, disconnect after. A UNIQUE session id
- * per scenario (the DURABLE breaker is keyed PER OWNER — `user:<userId>`, else `session:<id>` — and
+ * Deterministic DB lifecycle: reset + seed before each test, disconnect after. HTTP uses the shared
+ * demo session (the DURABLE breaker is keyed PER OWNER — `user:<userId>`, else `session:<id>` — and
  * cleared by the per-test truncate); NO fake timers — the demo clock `DEMO_NOW` anchors the day-transfer window.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
@@ -35,7 +35,7 @@ import { POST as cancelPost } from '@/app/api/actions/[id]/cancel/route';
 import { POST as resetPost, type ResetData } from '@/app/api/security/reset/route';
 import { GET as taskGet, POST as taskPost } from '@/app/api/tasks/[id]/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
-import { executeGatedTool, getOrCreateSession, readPendingActionId } from '@/agent';
+import { executeGatedTool, getDemoSession, getOrCreateSession, readPendingActionId } from '@/agent';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import type { AgentStreamEvent, ChatTurnResponse } from '@/lib/contracts/agent';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
@@ -124,42 +124,39 @@ function mfaOf(events: readonly AgentStreamEvent[]): MfaEvent | undefined {
 /* -------------------------------------------------------------------------------- invokers */
 
 /**
- * Drive one JSON-mode chat turn against the real route. `sessionId` is reused for a CONTINUATION
- * turn (parking a second action in the same session) or minted fresh (a unique session per test —
- * the circuit breaker is keyed by it).
+ * Drive one JSON-mode chat turn under the shared server-owned demo conversation.
+ * An optional expected session is checked against the response, never sent as authentication.
  */
 async function chatTurn(message: string, sessionId?: string): Promise<ChatTurnResponse> {
   const res = await postJson<Envelope<ChatTurnResponse>>(
     chatPost,
     chatUrl({ stream: 0 }),
     { message },
-    sessionId === undefined ? {} : { sessionId },
   );
   expect(res.status).toBe(200);
-  return payload(res);
+  const turn = payload(res);
+  if (sessionId) expect(turn.sessionId).toBe(sessionId);
+  return turn;
 }
 
 /**
  * Invoke the REAL confirm route. The dynamic-route `ctx` MUST be passed explicitly (the harness
- * defaults it to `idCtx('')`) and identity travels as the `banking_session` COOKIE — identity is
- * cookie-only, so a `?sessionId=` query param would be IGNORED.
+ * defaults it to `idCtx('')`). The route uses the shared demo owner without browser credentials.
  */
-function confirmAction(id: string, sessionId?: string): Promise<HttpResult<Envelope<ActionResponse>>> {
+function confirmAction(id: string, _sessionId?: string): Promise<HttpResult<Envelope<ActionResponse>>> {
   return postJson<Envelope<ActionResponse>>(confirmPost, actionUrl(id, 'confirm'), {}, {
     ctx: idCtx(id),
-    sessionId,
   });
 }
 
-/** Invoke the REAL verify route with an MFA code (cookie-only identity, as above). */
+/** Invoke the REAL verify route with an MFA code under the shared demo owner. */
 function verifyAction(
   id: string,
   code: string,
-  sessionId?: string,
+  _sessionId?: string,
 ): Promise<HttpResult<Envelope<ActionResponse>>> {
   return postJson<Envelope<ActionResponse>>(verifyPost, actionUrl(id, 'verify'), { code }, {
     ctx: idCtx(id),
-    sessionId,
   });
 }
 
@@ -456,7 +453,7 @@ async function seedPlan(
   goal: string,
   nodes: SeedNode[],
 ): Promise<{ sessionId: string; taskId: string; plan: TaskPlan }> {
-  const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  const sessionId = (await getDemoSession(DEMO_USER_ID)).sessionId;
   const result = await runSubmitPlan(DEMO_USER_ID, { goal, nodes }, {
     sessionId,
     runTool: gatewayRunTool(sessionId, goal),
@@ -483,11 +480,10 @@ function nodeStatusOf(plan: TaskPlan, nodeId: string): TaskNodeStatus | undefine
   return plan.results.find((result) => result.id === nodeId)?.status;
 }
 
-/** `POST /api/tasks/[id] { action:'cancel' }` (identity is cookie-only). */
-function cancelTaskRequest(taskId: string, sessionId: string): Promise<HttpResult<Envelope<TaskPlan>>> {
+/** Cancel an owned demo task without browser credentials. */
+function cancelTaskRequest(taskId: string, _sessionId: string): Promise<HttpResult<Envelope<TaskPlan>>> {
   return postJson<Envelope<TaskPlan>>(taskPost, taskUrl(taskId), { action: 'cancel' }, {
     ctx: idCtx(taskId),
-    sessionId,
   });
 }
 
@@ -526,7 +522,7 @@ describe('[integration] POST /api/tasks/[id] cancel — revokes the plan parked 
     const { sessionId, taskId, parkedActionId } = await seedParkedTransferPlan();
     const dayTotalBefore = await security.risk.computeDailyTransferTotal(DEMO_USER_ID);
 
-    // --- CANCEL the plan through the REAL route (cookie-only identity).
+    // Cancel the plan through the real route under the configured demo identity.
     const cancelRes = await cancelTaskRequest(taskId, sessionId);
     expect(cancelRes.status).toBe(200);
     const cancelled = payload(cancelRes);
@@ -658,21 +654,20 @@ describe('[integration] POST /api/tasks/[id] cancel — an already-completed pla
 const MIDRUN_BUDGET_A = '预留预算A';
 const MIDRUN_BUDGET_B = '预留预算B';
 
-/** `POST /api/tasks/[id] { action:'pause'|'resume' }` (identity is cookie-only). */
+/** Pause or resume an owned demo task without browser credentials. */
 function taskControlRequest(
   taskId: string,
   action: 'pause' | 'resume',
-  sessionId: string,
+  _sessionId: string,
 ): Promise<HttpResult<Envelope<TaskPlan>>> {
   return postJson<Envelope<TaskPlan>>(taskPost, taskUrl(taskId), { action }, {
     ctx: idCtx(taskId),
-    sessionId,
   });
 }
 
 describe('[integration] POST /api/tasks/[id] pause — a MID-RUN pause stops the NEXT node', () => {
   it('6 — pausing WHILE node a runs halts node b (never executed); resume re-runs ONLY node b', async () => {
-    const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    const sessionId = (await getDemoSession(DEMO_USER_ID)).sessionId;
     const goal = '先预留预算A，再预留预算B';
 
     // The just-minted plan id (`runSubmitPlan` adopts the durable `AgentTask.id` as the plan id).
@@ -779,20 +774,12 @@ describe('[integration] POST /api/tasks/[id] pause — a MID-RUN pause stops the
 });
 
 /* ============================================================================================== *
- * SCENARIO 4 — IDENTITY stays COOKIE-ONLY on the routes `identity-http.test.ts` does not cover
+ * SCENARIO 4 — caller hints cannot select resources outside the shared demo conversation
  * ============================================================================================== *
- * `./identity-http.test.ts` already pins the missing / unknown / foreign-COOKIE failures and the
- * forged `?sessionId=`/`?userId=` query on CONFIRM. This scenario closes the remaining hole: on
- * `POST /api/actions/[id]/verify`, `…/cancel`, `POST /api/tasks/[id]` and
- * `POST /api/security/reset` a query param must NEVER authenticate and must NEVER widen a foreign
- * cookie to the owning session.
- *
- * Every route derives identity SOLELY from the trusted `banking_session` cookie
- * (`app/api/_lib/session#requireIdentity`); the query string is never consulted. The VICTIM is a
- * fresh persisted session that OWNS both a chat-parked YELLOW transfer and a durable gated task; a
- * FOREIGN cookie is a DIFFERENT valid session that owns neither. The regression: a forged
- * `?sessionId=<victim>` (with or without a cookie) must leave the victim's action `pending`, its
- * plan `waiting_confirmation` and its breaker LOCKED — never settle or unlock anything.
+ * HTTP identity comes from server configuration and the canonical demo conversation.
+ * Internal sessions still provide foreign resource fixtures. A forged session/user query or
+ * cookie cannot select those resources. The security reset route always targets the configured
+ * demo owner and still requires verification while its per-owner breaker is locked.
  * ============================================================================================== */
 
 /** The COUNTABLE GREEN probe of the victim task (one `Budget` row ⇒ the plan walked node v1). */
@@ -811,7 +798,7 @@ function appendQuery(path: string, query?: string): string {
   return query ? `${path}?${query}` : path;
 }
 
-/** `POST /api/actions/[id]/verify` — cookie-only identity + an optional forged query string. */
+/** Verify route with optional ignored cookie and query identity hints. */
 function verifyCall(id: string, opts: ForgeOpts = {}) {
   return postJson<Envelope<ActionResponse>>(
     verifyPost,
@@ -821,7 +808,7 @@ function verifyCall(id: string, opts: ForgeOpts = {}) {
   );
 }
 
-/** `POST /api/actions/[id]/cancel` — cookie-only identity + an optional forged query string. */
+/** Cancel route with optional ignored cookie and query identity hints. */
 function cancelCall(id: string, opts: ForgeOpts = {}) {
   return postJson<Envelope<ActionResponse>>(
     cancelPost,
@@ -831,7 +818,7 @@ function cancelCall(id: string, opts: ForgeOpts = {}) {
   );
 }
 
-/** `POST /api/tasks/[id]` execution control — cookie-only identity + an optional forged query. */
+/** Task control with optional ignored cookie and query identity hints. */
 function taskControlCall(
   id: string,
   action: 'pause' | 'resume' | 'cancel' | 'retry',
@@ -845,7 +832,7 @@ function taskControlCall(
   );
 }
 
-/** `POST /api/security/reset` (single-arg handler) — cookie-only identity + an optional forged query. */
+/** Security reset with optional ignored cookie and query identity hints. */
 function resetCall(opts: ForgeOpts = {}) {
   return postJson<Envelope<ResetData>>(resetPost, appendQuery('/api/security/reset', opts.query), {}, {
     sessionId: opts.sessionId,
@@ -876,7 +863,7 @@ function resetCallWithCode(code: string, opts: ForgeOpts = {}) {
 }
 
 /**
- * A fresh VICTIM session that OWNS both a chat-parked YELLOW transfer and a durable GATED task, plus
+ * A fresh internal VICTIM session that OWNS both a gated YELLOW transfer and a durable GATED task, plus
  * a FOREIGN valid session that owns neither. Both resources belong to the SAME victim session, so a
  * forged query (or cookie) that slipped past identity would be directly observable.
  */
@@ -888,9 +875,9 @@ async function seedVictim(): Promise<{
 }> {
   const victim = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
 
-  // 1) Park a YELLOW ¥200 transfer through the REAL chat route — the victim's ONLY parked action yet.
-  const turn = await chatTurn('给张伟转200元', victim);
-  expect(turn.sessionId, 'the chat turn must reuse the victim session').toBe(victim);
+  // Foreign fixtures use the real gateway directly because HTTP can only select the demo session.
+  await executeGatedTool({ sessionId: victim, userId: DEMO_USER_ID, toolName: 'transfer_money',
+    args: { contactId: ZHANGWEI.id, amount: '200.00' }, userRequest: 'Foreign transfer ownership fixture' });
   const action = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { sessionId: victim } });
   expect(action.toolName).toBe('transfer_money');
   expect(action.riskLevel).toBe('YELLOW');
@@ -937,27 +924,27 @@ async function expectVictimUntouched(before: {
   expect(audits.map((row) => row.toolName), 'a rejected identity attempt must write no audit').toEqual(['reserve_budget']);
 }
 
-describe('[integration] identity — a query param NEVER authenticates on verify/cancel/tasks/reset', () => {
-  it('7 — NO cookie + a forged ?sessionId=<victim>&userId=<victim> on verify/cancel/tasks/reset is 403 everywhere and leaves the victim untouched', async () => {
+describe('[integration] demo identity — browser hints never select foreign resources or bypass verification', () => {
+  it('7 — without cookies, forged session/user query hints cannot verify, cancel or control foreign resources', async () => {
     const before = await seedVictim();
-    // Both forged params carry the CORRECT owning session id (plus a victim-valued user id), yet NO
-    // cookie is sent — every write/auth route must still fail closed.
+    // These hints identify the foreign fixture, but the server still acts as the demo owner.
     const forged = `sessionId=${encodeURIComponent(before.victim)}&userId=${encodeURIComponent(before.victim)}`;
 
     expectDenied(await verifyCall(before.actionId, { query: forged }));
     expectDenied(await cancelCall(before.actionId, { query: forged }));
     expectDenied(await taskControlCall(before.taskId, 'pause', { query: forged }));
-    expectDenied(await resetCall({ query: forged }));
+    const reset = await resetCall({ query: forged });
+    expect(reset.status).toBe(200);
+    expect(payload(reset).sessionId).toBe((await getDemoSession(DEMO_USER_ID)).sessionId);
 
     await expectVictimUntouched(before);
   });
 
-  it('8 — a FOREIGN valid cookie + a forged ?sessionId=<victim> query is 403 on verify/cancel/tasks and leaves the victim untouched', async () => {
+  it('8 — valid foreign cookie and query hints cannot select foreign action or task ownership', async () => {
     const before = await seedVictim();
     const query = `sessionId=${encodeURIComponent(before.victim)}`;
 
-    // A real cookie authenticates the FOREIGN session, but ownership still rejects settling the
-    // victim's action / controlling its task — the forged query can never widen it.
+    // A valid persisted session in a cookie is still only an ignored browser hint.
     expectDenied(await verifyCall(before.actionId, { sessionId: before.foreign, query }));
     expectDenied(await cancelCall(before.actionId, { sessionId: before.foreign, query }));
     expectDenied(await taskControlCall(before.taskId, 'cancel', { sessionId: before.foreign, query }));
@@ -965,16 +952,16 @@ describe('[integration] identity — a query param NEVER authenticates on verify
     await expectVictimUntouched(before);
   });
 
-  it('9 — /api/security/reset: a forged ?sessionId=<victim> query never unlocks the VICTIM session', async () => {
+  it('9 — reset needs verified unlock for the shared demo owner despite cookie and query hints', async () => {
     // The victim owns a RED parked transfer, so its breaker CAN trip.
-    const victim = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    const victim = (await getDemoSession(DEMO_USER_ID)).sessionId;
     const turn = await chatTurn('给张伟转5000元', victim);
     expect(turn.sessionId).toBe(victim);
     const actionId = (
       await getTestPrisma().pendingAction.findFirstOrThrow({ where: { sessionId: victim } })
     ).id;
 
-    // Trip the VICTIM breaker through the REAL verify route with the victim's OWN cookie.
+    // Trip the shared demo owner's breaker through the real verify route.
     for (let attempt = 0; attempt < MFA_MAX_ATTEMPTS; attempt += 1) {
       const res = await verifyCall(actionId, { sessionId: victim, code: '000000' });
       expect(res.status).toBe(200);
@@ -986,15 +973,15 @@ describe('[integration] identity — a query param NEVER authenticates on verify
     const resetEventsFor = (sessionId: string) =>
       getTestPrisma().securityEvent.count({ where: { sessionId, kind: 'SECURITY_RESET' } });
 
-    // (a) NO cookie + a forged ?sessionId=<victim>: the forged query authenticates NOTHING (403) and
-    // the victim stays locked with no reset event.
+    // Missing cookies do not skip the shared owner's verified unlock gate.
     const forged = `sessionId=${encodeURIComponent(victim)}`;
-    expectDenied(await resetCall({ query: forged }));
+    const anonymousReset = await resetCall({ query: forged });
+    expect(anonymousReset.status).toBe(423);
+    expect(anonymousReset.data?.error?.code).toBe('CIRCUIT_OPEN');
     expect((await security.circuitBreaker.getState(victim)).locked).toBe(true);
     expect(await resetEventsFor(victim)).toBe(0);
 
-    // (b) A FOREIGN valid cookie + the same forged query: identity is cookie-only, so the route acts as
-    // the CALLER's own session — but that SAME user's breaker is LOCKED, so the gated unlock REFUSES.
+    // Foreign browser hints cannot redirect the reset to a different session.
     const foreign = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
     expect(foreign).not.toBe(victim);
     const foreignRes = await resetCall({ sessionId: foreign, query: forged });
@@ -1003,10 +990,7 @@ describe('[integration] identity — a query param NEVER authenticates on verify
     expect(foreignRes.data?.error?.code).toBe('CIRCUIT_OPEN');
     expect(await resetEventsFor(foreign)).toBe(0);
 
-    // (b') The VICTIM's OWN valid cookie + the same forged ?sessionId=<victim> query: identity is
-    // cookie-only, so the route acts as the locked account and the gated unlock still REFUSES
-    // (423 CIRCUIT_OPEN) — the forged query unlocked NOTHING. A lock clears ONLY through a verified
-    // security-center code, never via the caller-controlled query string.
+    // Matching browser hints cannot bypass the required security-center code either.
     const victimOwnReset = await resetCall({ sessionId: victim, query: forged });
     expect(victimOwnReset.status).toBe(423);
     expect(victimOwnReset.data?.ok).toBe(false);
@@ -1055,19 +1039,19 @@ describe('[integration] identity — a query param NEVER authenticates on verify
 /* ============================================================================================== *
  * SCENARIO 5 — the AUDITED UNLOCK GATE on the REAL `POST /api/security/reset` route (ISSUE 2)
  * ============================================================================================== *
- * An auditor flagged that a bare session cookie must NEVER clear a tripped breaker. This suite pins
- * the gate at the HTTP layer: the `banking_session` cookie authenticates the CALLER, but the unlock
+ * Entering the no-login demo must never clear a tripped breaker. This suite pins
+ * the gate at the HTTP layer: the configured demo owner is selected by the server, but the unlock
  * itself is decided in code by `security/circuit-breaker.ts#resetSession` — while the OWNER is
  * LOCKED it REQUIRES a correct mock `verificationCode` (`MFA_CODE`) OR an elapsed cooldown, else it
  * THROWS `AppError('CIRCUIT_OPEN')` → HTTP 423 and the lock is LEFT INTACT (no `SECURITY_RESET`
  * event). The route folds an ABSENT/empty body into `{}` (`_lib/http#parseOptionalBody`), so a
- * code-less POST is exactly what a bare cookie can send; when the owner is NOT locked no code is
+ * code-less POST needs no browser cookie; when the owner is NOT locked no code is
  * required. The breaker is PER USER, so clearing it releases ALL of the owner's sessions at once.
  * ============================================================================================== */
 
 /** Park a RED (MFA) transfer and trip the owner's breaker with `MFA_MAX_ATTEMPTS` WRONG codes. */
 async function lockOwner(): Promise<{ sessionId: string; actionId: string }> {
-  const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  const sessionId = (await getDemoSession(DEMO_USER_ID)).sessionId;
 
   // A ¥5000 transfer exceeds `DAILY_TRANSFER_LIMIT` ⇒ RED at park time, so it awaits the mock code.
   const turn = await chatTurn('给张伟转5000元', sessionId);
@@ -1076,7 +1060,7 @@ async function lockOwner(): Promise<{ sessionId: string; actionId: string }> {
   expect(action.toolName).toBe('transfer_money');
   expect(action.riskLevel, 'a ¥5000 transfer is RED at park time').toBe('RED');
 
-  // Trip the breaker through the REAL verify route with the OWNER's OWN cookie (3 consecutive
+  // Trip the breaker through the real verify route under the demo owner (3 consecutive
   // failures). The demo clock is FIXED, so the cooldown never elapses — a code is REQUIRED to clear.
   for (let attempt = 0; attempt < MFA_MAX_ATTEMPTS; attempt += 1) {
     const res = await verifyCall(action.id, { sessionId, code: '000000' });
@@ -1157,7 +1141,7 @@ describe('[integration] POST /api/security/reset — the AUDITED unlock gate (IS
 
   it('13 — while NOT locked, a body-less reset SUCCEEDS (the code is required only while locked)', async () => {
     // A fresh session on a freshly-seeded DB: no breaker state ⇒ nothing to unlock ⇒ no code needed.
-    const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    const sessionId = (await getDemoSession(DEMO_USER_ID)).sessionId;
     expect((await security.circuitBreaker.getState(sessionId)).locked).toBe(false);
 
     const res = await resetCallNoBody({ sessionId });

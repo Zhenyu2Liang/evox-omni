@@ -2,11 +2,11 @@
  * subscription — `list_subscriptions`, `cancel_subscription`, `set_subscription_reminder`
  *
  * Subscription reads and mutations. TypeBox param schemas; `execute` calls the Banking SDK and
- * THROWS `AppError` on failure. The `run<X>(userId, args)` runners are the model-free path used by
+ * returns native Pi success or failure content. The `run<X>(userId, args)` runners are the model-free path used by
  * `executeDirect`; they CATCH and return `ToolExecutionResult{ok:false,error}`.
  *
- * Tiers: `list_subscriptions` 🟢 GREEN; `cancel_subscription` / `set_subscription_reminder`
- * 🟡 YELLOW (require confirmation). Tier is decided by `security/`, NOT here. `userId` is
+ * Tiers: `list_subscriptions`, `cancel_subscription` and `set_subscription_reminder` are YELLOW.
+ * Confirmation is enforced by security, not by this capability module. `userId` is
  * SERVER-INJECTED; the model never supplies it.
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
@@ -14,9 +14,9 @@ import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
 import type { SubscriptionCycle } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
-import { AppError } from '@/lib/errors';
 import { formatCNY } from '@/lib/money';
 import type { ToolExecutionResult } from './index';
+import { toModelToolResult, toolFailure } from './result';
 
 /** Chinese labels for a subscription billing cycle (for user-facing summaries). */
 const CYCLE_LABELS: Record<SubscriptionCycle, string> = {
@@ -31,7 +31,7 @@ const CYCLE_LABELS: Record<SubscriptionCycle, string> = {
 export const ListSubscriptionsParams = Type.Object({});
 export type ListSubscriptionsArgs = Static<typeof ListSubscriptionsParams>;
 
-/** Build the `list_subscriptions` tool bound to `userId` (🟢 GREEN — auto-executes). */
+/** Build the `list_subscriptions` tool; the competition policy requires explicit confirmation. */
 export function createListSubscriptionsTool(
   userId: string,
 ): AgentTool<typeof ListSubscriptionsParams> {
@@ -41,14 +41,7 @@ export function createListSubscriptionsTool(
     description: '列出当前用户的自动续费订阅（金额、周期、下次扣费、状态）。',
     parameters: ListSubscriptionsParams,
     execute: async (_toolCallId, params) => {
-      const result = await runListSubscriptions(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '查询订阅失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '查询订阅成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runListSubscriptions(userId, params as Record<string, unknown>));
     },
   };
 }
@@ -74,7 +67,7 @@ export async function runListSubscriptions(
             .join('；')}`;
     return { ok: true, data: subs, summary };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -96,14 +89,7 @@ export function createCancelSubscriptionTool(
     description: '取消指定自动续费订阅（需要用户确认）。',
     parameters: CancelSubscriptionParams,
     execute: async (_toolCallId, params) => {
-      const result = await runCancelSubscription(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '取消订阅失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '取消订阅成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runCancelSubscription(userId, params));
     },
   };
 }
@@ -123,7 +109,7 @@ export async function runCancelSubscription(
       summary: `已取消订阅「${sub.name}」（原 ${formatCNY(sub.amount)}/${cycle}）`,
     };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -146,14 +132,7 @@ export function createSetSubscriptionReminderTool(
     description: '开启/关闭指定订阅的扣费提醒（需要用户确认）。',
     parameters: SetSubscriptionReminderParams,
     execute: async (_toolCallId, params) => {
-      const result = await runSetSubscriptionReminder(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '设置订阅提醒失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '设置订阅提醒成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runSetSubscriptionReminder(userId, params));
     },
   };
 }
@@ -177,6 +156,6 @@ export async function runSetSubscriptionReminder(
       summary: `已${action}订阅「${sub.name}」的扣费提醒`,
     };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }

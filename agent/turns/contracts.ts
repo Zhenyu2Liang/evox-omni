@@ -2,7 +2,7 @@ import type { AgentStreamEvent, ChatMessage } from '@/lib/contracts/agent';
 import type { AppConfig } from '@/lib/config';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { FactInput } from '../grounding-facts';
-import type { BankingGuidance, GuidanceField } from '../banking-guidance';
+import type { BankingGuidance } from '../banking-guidance';
 import type { ModelRuntime } from '../providers/types';
 import type { ToolExecutionResult } from '../tools';
 
@@ -30,12 +30,25 @@ export interface TurnBuffer {
   events: AgentStreamEvent[];
   assistants: ChatMessage[];
   current: ChatMessage | null;
+  /** Ordered tool entries are independent of the currently generated prose message. */
+  toolMessages: Map<string, ChatMessage>;
+  presentationId: string;
+  toolOwnerKey?: string;
+  /** Original submit-plan entry retained while an authorized workflow resumes. */
+  resumedPlanMessage?: ChatMessage;
   factResults: FactInput[];
+  /** Prior verified results support follow-up discussion without being new execution evidence. */
+  conversationFacts?: FactInput[];
   sourceAccounts: Map<string, string>;
   requestText?: string;
-  providedFields?: GuidanceField[];
   serverGuidance?: BankingGuidance;
   lastGuidance?: BankingGuidance;
+  conversational?: boolean;
+  /** Advice permits relevant query authorization, but never a mutation or workflow. */
+  advisory?: boolean;
+  allowProtocolExamples?: boolean;
+  replyPhase?: 'generating' | 'checking' | 'repairing';
+  repairingReply?: boolean;
   groundedIds: Set<string>;
 }
 

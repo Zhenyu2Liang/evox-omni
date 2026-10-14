@@ -15,6 +15,13 @@ Two pure, non-`'use client'` helper modules live here too: `./confirmationStatus
 status → badge mapping used by `ConfirmationCard`) and `./maskPhone.ts` (phone 脱敏 used by
 `TransferCard`).
 
+`BusinessResultCards.tsx` renders the typed `contacts`, `dashboard`, `scheduled`, and `receipt`
+variants. `agent/business-card-payloads.ts` validates exact amount strings and projects only public
+result fields before persistence. Receipts never derive amounts, product names, or execution success
+from model narration or tool arguments. Scheduled-task payloads, credential fields, account IDs,
+and other internal fields are absent from these cards. Budget reservations are explicitly budget
+envelopes rather than account holds; credential changes are explicitly simulations.
+
 ## API Surface
 
 Named exports, re-exported from `./index.ts`. `ChatCard`/`PendingActionSummary`/`PendingActionStatus`/
@@ -68,7 +75,7 @@ export function terminalStatusView(status: TerminalActionStatus, reason?: string
 export function maskPhone(phone?: string | null): string;
 ```
 
-### The 11 `ChatCard` renderers (all `'use client'`, named exports)
+### Business `ChatCard` renderers (client components, named exports)
 
 ```ts
 export interface BalanceCardProps { data: BalanceView; className?: string; }
@@ -94,13 +101,13 @@ export interface SpendingCardProps { data: SpendingAnalysis; className?: string;
 export function SpendingCard(p: SpendingCardProps): JSX.Element;      // composes ../../charts + top merchant
 
 export interface CardsCardProps { data: CardView[]; className?: string; }
-export function CardsCard(p: CardsCardProps): JSX.Element;            // renders ../../banking CardTile[]
+export function CardsCard(p: CardsCardProps): JSX.Element;            // compact chat-specific card grid
 
 export interface InvestmentsCardProps { data: InvestmentsCardData; className?: string; }
 export function InvestmentsCard(p: InvestmentsCardProps): JSX.Element; // products/holdings/comparison tiles
 
 export interface SubscriptionsCardProps { data: SubscriptionView[]; className?: string; }
-export function SubscriptionsCard(p: SubscriptionsCardProps): JSX.Element; // SubscriptionTile[]
+export function SubscriptionsCard(p: SubscriptionsCardProps): JSX.Element; // compact subscription result grid
 
 export interface AnomalyCardProps { data: AnomalyReport; onAcknowledge?: () => void;
   onViewDetail?: () => void; onFreeze?: () => void; className?: string; }
@@ -187,23 +194,31 @@ That section carries relationship text only — no status glyphs.
 | --- | --- | --- |
 | `balance` | `BalanceView` | `BalanceCard` |
 | `transfer` | `TransferResult` | `TransferCard` |
-| `confirmation` | `action: PendingActionSummary` | `ConfirmationCard` |
-| `mfa` | `actionId`, `hint` | `MfaCard` |
+| `confirmation` | `action: PendingActionSummary` | `ApprovalRecord` (read-only) |
+| `mfa` | `actionId`, `action`, `status` | `ApprovalRecord` (read-only) |
 | `spending` | `SpendingAnalysis` | `SpendingCard` |
 | `cards` | `CardView[]` | `CardsCard` |
 | `investments` | `InvestmentsCardData` | `InvestmentsCard` |
 | `subscriptions` | `SubscriptionView[]` | `SubscriptionsCard` |
+| `contacts` | `ContactCardView[]` | `ContactsCard` |
+| `dashboard` | `DashboardCardView` | `DashboardCard` |
+| `scheduled` | `ScheduledCardView[]` | `ScheduledCard` |
+| `receipt` | `BusinessReceipt` | `BusinessReceiptCard` |
 | `anomaly` | `AnomalyReport` | `AnomalyCard` |
 | `plan` | `plan: TaskPlan` | `PlanCard` |
 | `error` | `message: string` | `ErrorCard` |
 
 `CardRenderer` narrows the frozen `data: unknown` field to the concrete DTO above; the `./app` serialiser
 must populate `cards[].data` with exactly these shapes. It also threads the shared `CardActionHandlers`
-into the interactive cards (`onControl`/`busy` → `PlanCard`; `mfaAttempts` → `MfaCard.attempts`). The
-`confirmation` case passes `action={p.card.action}` only — `ConfirmationCard` reads the action's runtime
-`status`/`message` fields itself, so no `CardRenderer` change is needed. Note: the `plan` renderer here
-is NOT the live plan path — a `plan` card is promoted into `activePlan` and rendered ONCE by
-`../../chat/ChatWindow` (see `../CONTEXT.md` "Plan dedupe" and "Human-decision card").
+into interactive business cards (`onControl`/`busy` → `PlanCard`). Confirmation and MFA variants
+render read-only `ApprovalRecord` components. Their controls exist only in `ApprovalRequest` above
+the composer. `ActionDetails` shares immutable fields between the request and historical record.
+The `plan` renderer is the normal live and historical path: one
+card stays in its original assistant message, and subsequent `plan_update` events update that same
+card. Its controls bind the rendered plan ID through `onTaskControl(action, planId)`; they cannot
+act on a different, newer plan. Successful/cancelled plans remain historical records, and
+`ChatWindow` only falls back to a separate panel for an actionable plan absent from history
+(see `../CONTEXT.md` "Plan dedupe" and "Human-decision card").
 `ReconciliationCard` is intentionally NOT a variant of this union (it is not agent-emitted — it is a
 client-side restore surface; see the section above).
 
@@ -222,7 +237,7 @@ client-side restore surface; see the section above).
   `PlanCard`'s task-control footer likewise calls the injected `onControl` only. `AnomalyCard`'s
   `onAcknowledge`/`onViewDetail`/`onFreeze` are supplied by `ChatWindow` too and simply
   `stream.send(...)` an ordinary chat message (chat → agent → Security Gateway); 冻结银行卡 drives
-  `freeze_card` → YELLOW confirmation. The browser only calls fetch; the server re-validates + executes.
+  `freeze_card` → RED confirmation and strong verification. The browser only calls fetch; the server re-validates + executes.
 - **Terminal-status-aware `ConfirmationCard`**: a terminal status (the `status` prop, else the runtime
   `action.status`) hides 取消/确认 and shows a `ui/Badge` status pill; statuses and their tones come from
   `./confirmationStatus.ts` only — never hard-code a tier/status colour.
@@ -233,8 +248,9 @@ client-side restore surface; see the section above).
 - **`ReconciliationCard` is actionless and non-union.** It renders a terminal `needs_reconciliation`
   action with no confirm/cancel/MFA and is never dispatched by `CardRenderer`; `ChatWindow` renders it
   directly from `pendingReconciliations`.
-- **Money** via `Money`; **tiers** via `StatusBadge`; reuse `../../banking` tiles and `../../charts`
-  rather than re-implementing tiles/charts inside cards.
+- **Money** via `Money`/`DecimalMoney`; **tiers** via `StatusBadge`; use compact chat result grids and `../../charts`
+  with shared exact-number and chart primitives. Query cards use `ResultCard`; dedicated receipts
+  validate and project public fields before rendering. Normal grids do not show internal record IDs.
 - **No competing status→meta table**: node statuses are rendered only through the composed
   `../../banking/AgentTaskTimeline`; do not fork its mapping. `PlanCard`'s dependency section shows
   relationship text (node names), never status glyphs.

@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
@@ -19,7 +20,7 @@ async function task(id:string,action:string,s:string){const res=await taskPost(n
 // snapshot, the persisted plan must agree with the RETURNED takeover plan, and the zombie's own
 // return must not claim a successor success the DB does not have.
 it('an INITIAL submit executor publishes no stale node/plan progress and stays DB-consistent after losing its plan claim',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();const reached=deferred(),release=deferred();
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();const reached=deferred(),release=deferred();
  let planId='';let oldSuccessorCalls=0;let afterTakeover=false;
  const lateNodeUpdates:any[]=[];const latePlanSnapshots:any[]=[];
  const oldRun=runSubmitPlan(userId,{goal:'首次提交接管一致性',nodes:[{id:'first',name:'首次一致性第一预算',kind:'tool',tool:'reserve_budget',args:{name:'首次一致性第一预算',amount:'10'},dependencies:[]},{id:'second',name:'首次一致性第二预算',kind:'tool',tool:'reserve_budget',args:{name:'首次一致性第二预算',amount:'20'},dependencies:['first']}]},{sessionId:s,onNodeUpdate:node=>{if(afterTakeover)lateNodeUpdates.push(node);},onPlanUpdate:plan=>{if(afterTakeover)latePlanSnapshots.push(plan);},runTool:async(tool,args,ctx)=>{planId=ctx.taskId;const value=await runner(s)(tool,args,ctx);if(ctx.nodeId==='first'){reached.release();await release.promise;}else{oldSuccessorCalls++;}return value;}});

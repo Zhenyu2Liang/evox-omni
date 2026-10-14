@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import * as taskControl from '@/agent/task-control';
 import * as taskRepository from '@/lib/db/repositories/task';
@@ -15,19 +16,19 @@ async function task(id:string,action:string,s:string){const res=await taskPost(n
 async function confirm(id:string,s:string){const res=await confirmPost(new NextRequest(`http://localhost/api/actions/${id}/confirm`,{method:'POST',headers:{'Content-Type':'application/json',cookie:`banking_session=${s}`},body:'{}'}),{params:Promise.resolve({id})});const body=await res.json();expect(res.status).toBe(200);return body.data;}
 
 it('resume recovers an already-executed gated node after its plan callback fails',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
- const result=await runSubmitPlan(userId,{goal:'开卡后预留预算',nodes:[{id:'card',name:'开卡',kind:'tool',tool:'apply_virtual_card',args:{label:'恢复测试'},dependencies:[]},{id:'budget',name:'预算',kind:'tool',tool:'reserve_budget',args:{name:'恢复预算',amount:'10'},dependencies:['card']}]},{sessionId:s,runTool:runner(s)});
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
+ const result=await runSubmitPlan(userId,{goal:'Set a limit and reserve a budget',nodes:[{id:'limit',name:'Set card limit',kind:'tool',tool:'set_card_limit',args:{cardId:'card_credit',category:'\u5a31\u4e50',amount:'1500'},dependencies:[]},{id:'budget',name:'Reserve budget',kind:'tool',tool:'reserve_budget',args:{name:'Recovery budget',amount:'10'},dependencies:['limit']}]},{sessionId:s,runTool:runner(s)});
  const plan:any=result.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
  const spy=vi.spyOn(taskRepository,'updateTaskNode').mockRejectedValueOnce(new Error('review: simulated node-result persistence failure'));
  const response=await confirm(action.id,s);spy.mockRestore();
  const resumed=await task(plan.id,'resume',s);const repeated=await confirm(action.id,s);const resumedAgain=await task(plan.id,'resume',s);
- const cards=await p.card.count({where:{userId,type:'VIRTUAL'}});const budgets=await p.budget.count({where:{userId,name:'恢复预算'}});const stored=await p.pendingAction.findUnique({where:{id:action.id}});
- console.log('REVIEW_EXECUTED_NODE_RECOVERY',JSON.stringify({responseOk:response.ok,responseStatus:response.status,actionStatus:stored?.status,firstResume:resumed.status,repeatConfirmOk:repeated.ok,secondResume:resumedAgain.status,cards,budgets}));
- expect(response.ok).toBe(true);expect(cards).toBe(1);expect(resumedAgain.status).toBe('success');expect(budgets).toBe(1);
+ const limits=await p.cardLimit.findMany({where:{cardId:'card_credit',category:'\u5a31\u4e50'}});const budgets=await p.budget.count({where:{userId,name:'Recovery budget'}});const stored=await p.pendingAction.findUnique({where:{id:action.id}});
+ console.log('REVIEW_EXECUTED_NODE_RECOVERY',JSON.stringify({responseOk:response.ok,responseStatus:response.status,actionStatus:stored?.status,firstResume:resumed.status,repeatConfirmOk:repeated.ok,secondResume:resumedAgain.status,budgets}));
+ expect(response.ok).toBe(true);expect(limits).toHaveLength(1);expect(limits[0].amountMinor).toBe(150000n);expect(resumedAgain.status).toBe('success');expect(budgets).toBe(1);
 });
 
 it('resume can recover a persisted executor claim whose owner died long ago',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const result=await runSubmitPlan(userId,{goal:'暂停后预留预算',nodes:[{id:'read',name:'读余额',kind:'tool',tool:'get_balance',args:{},dependencies:[]},{id:'budget',name:'预算',kind:'tool',tool:'reserve_budget',args:{name:'崩溃恢复预算',amount:'10'},dependencies:['read']}]},{sessionId:s,runTool:async()=>{const row=(await p.agentTask.findFirst({where:{sessionId:s}}))!;await taskControl.pauseTask(s,row.id);return {ok:true,data:{balance:'23580.00'}};}});
  const plan:any=result.data;
  await p.agentTask.update({where:{id:plan.id},data:{executionToken:'dead-process-claim',executionClaimedAt:new Date('2000-01-01T00:00:00Z')}});

@@ -8,9 +8,9 @@ security visualisations. It is consumed by `./app` pages/routes and owns **no bu
 no persistence, no risk decisions** — it displays data it is given and calls the app's API routes
 for actions.
 
-Design language (from root `./CONTEXT.md`): modern digital-banking fintech — deep-blue + white +
+Design language: ink + teal + white +
 light-grey, rounded cards, soft shadows, charts, status badges, `¥` money, 🟢🟡🔴 for permission
-tiers. Tailwind palette lives in `tailwind.config.ts` (`bg-banking-deep`, `text-banking-navy`,
+tiers. Tailwind CSS 4 theme lives in `app/globals.css` under `@theme` (`bg-banking-deep`, `text-banking-navy`,
 `bg-banking-accent`, `bg-banking-success/warn/danger`, `bg-banking-light`; `rounded-xl`/`rounded-2xl`).
 
 Two hard rules that shape the whole subtree:
@@ -133,7 +133,7 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
   Import SDK DTOs **type-only** (`import type`). Never redeclare a contract or DTO type.
 - **Money** is always rendered via `ui/Money` → `lib/money.formatCNY`; never hand-format amounts.
 - **Tiers** are always rendered via `ui/StatusBadge` / `security/PermissionLegend`, driven by
-  `RiskLevel` (`'GREEN' | 'YELLOW' | 'RED'`) + `lib/constants.RISK_LABEL`. Never hard-code colours for a tier.
+  `RiskLevel` (`'GREEN' | 'YELLOW' | 'RED'`) + localized interface messages. Never hard-code colours for a tier.
 - **No MFA code is ever displayed.** `MfaCard` shows only the `hint`; the code is typed by the user.
 - **No chain-of-thought.** Only task steps, tool status and factual results are shown.
 - **One concern per file**, files ≲ ~1000 lines. Shared primitives live in `./ui` (lowest common ancestor).
@@ -167,14 +167,16 @@ plan/action state, and `security_event`/`error` into banners. No LLM chain-of-th
 - `./ui/` → Tailwind-styled primitives (Card, Button, Badge, StatusBadge, Money, Tabs, Dialog, Spinner, EmptyState, Table)
 - `./chat/` → chat surface: ChatWindow, MessageBubble, Composer, ToolEventList, StreamingText, useAgentStream hook, client action helpers, task-control (pause/resume/cancel/retry) + refresh restore (pending decision + `needs_reconciliation` list)
 - `./chat/cards/` → the `ChatCard` renderers + `CardRenderer` dispatcher + the non-union `ReconciliationCard` + card-data/action-handler types
-- `./charts/` → Recharts wrappers (SpendingPie, SpendingBar, SpendingTrend, MiniSparkline)
+- `./charts/` → native SVG charts (SpendingPie, SpendingBar, SpendingTrend, MiniSparkline)
 - `./banking/` → read-model tiles/banners (AssetSummaryCard, RecentTransactions, CardTile, SubscriptionTile, InvestmentProductTile, AnomalyBanner, AgentTaskTimeline)
 - `./security/` → security visualisations (PermissionLegend, SecurityEventList, CircuitBreakerStatus)
 - `./index.ts` → barrel facade for the whole component library
 - `../app/` → Next.js pages + API routes that consume these components (sibling — read-only, escalate writes to root)
 - `../lib/contracts/` → frozen shared types imported by the cards/chat (dependency — read-only)
 - `../banking-sdk/` → DTO view models rendered by tiles (dependency — read-only, type-only imports)
-- `../tailwind.config.ts` → banking colour palette + radii used by every component (dependency — read-only)
+- `../app/globals.css` → CSS-native banking colour palette and radii; `@source` scans app and components only
+- `../postcss.config.mjs` → Tailwind CSS 4 PostCSS integration, which handles imports and vendor prefixes
+- `../eslint.config.mjs` → ESLint 10 flat configuration using the Next.js 16 official plugin and supported React Hooks/TypeScript plugins
 
 ## Notes for Agents
 

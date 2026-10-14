@@ -7,12 +7,13 @@ export type BadgeTone = NonNullable<BadgeProps['tone']>;
  * The SETTLED (terminal) outcomes of a gated action — an outcome the server has already committed,
  * so a confirmation card must stop offering 取消/确认 and instead state the fact.
  */
-export type TerminalActionStatus = 'executed' | 'failed' | 'cancelled' | 'needs_reconciliation';
+export type TerminalActionStatus = 'executed' | 'failed' | 'cancelled' | 'locked' | 'needs_reconciliation';
 
 const TERMINAL_STATUSES: readonly TerminalActionStatus[] = [
   'executed',
   'failed',
   'cancelled',
+  'locked',
   'needs_reconciliation',
 ];
 
@@ -60,6 +61,8 @@ export function terminalStatusView(
     }
     case 'cancelled':
       return { tone: 'neutral', label: '已取消' };
+    case 'locked':
+      return { tone: 'danger', label: 'Locked' };
     case 'needs_reconciliation':
       return { tone: 'warn', label: '需人工核对', explanation: RECONCILIATION_EXPLANATION };
     default:

@@ -1,7 +1,8 @@
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { toJson } from '@/lib/json';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
 import { banking } from '@/banking-sdk';
@@ -41,7 +42,7 @@ async function wedgeSuccessRecovery(s:string){
 }
 
 it('SUCCESS-result recovery applies the side effect exactly once without re-invoking the tool',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;
+ const s=(await getDemoSession(userId)).sessionId;
  const {p,card,plan,action,first,faultCalls,afterFault,nodeAfterFault,limitAfterLater}=await wedgeSuccessRecovery(s);
  const resumed=await task(plan.id,'resume',s);
  const finalAction=await p.pendingAction.findUnique({where:{id:action.id}});const finalNode=await p.agentTaskNode.findFirst({where:{taskId:plan.id,nodeId:'limit'}});const amount=(await p.cardLimit.findFirst({where:{cardId:card.id,category:'娱乐'}}))?.amountMinor;
@@ -51,7 +52,7 @@ it('SUCCESS-result recovery applies the side effect exactly once without re-invo
 });
 
 it('FAILED-result finalization marks the action, node and plan failed and never executed',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();const card=(await p.card.findFirst({where:{userId,type:'CREDIT'}}))!;const args={cardId:card.id,category:'娱乐',amount:'1500'};
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();const card=(await p.card.findFirst({where:{userId,type:'CREDIT'}}))!;const args={cardId:card.id,category:'娱乐',amount:'1500'};
  const seeded=await runSubmitPlan(userId,{goal:'失败结果定案',nodes:[{id:'limit',name:'限额',kind:'tool',tool:'set_card_limit',args,dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=seeded.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
  const businessFailure=vi.spyOn(banking.card,'setCardLimit').mockRejectedValueOnce(new Error('Actual card write failed before any mutation'));
@@ -68,7 +69,7 @@ it('FAILED-result finalization marks the action, node and plan failed and never 
 });
 
 it('repeat recovery is idempotent — the side effect is applied exactly once',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;
+ const s=(await getDemoSession(userId)).sessionId;
  const {p,card,plan,action}=await wedgeSuccessRecovery(s);
  const first=await task(plan.id,'resume',s);const second=await task(plan.id,'resume',s);
  const finalAction=await p.pendingAction.findUnique({where:{id:action.id}});const finalNode=await p.agentTaskNode.findFirst({where:{taskId:plan.id,nodeId:'limit'}});const amount=(await p.cardLimit.findFirst({where:{cardId:card.id,category:'娱乐'}}))?.amountMinor;const parked=await p.pendingAction.count({where:{sessionId:s,nodeId:'limit'}});
@@ -77,7 +78,7 @@ it('repeat recovery is idempotent — the side effect is applied exactly once',a
 });
 
 it('concurrent recovery applies the side effect exactly once',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;
+ const s=(await getDemoSession(userId)).sessionId;
  const {p,card,plan,action}=await wedgeSuccessRecovery(s);
  const gate=deferred();const firstRun=task(plan.id,'resume',s);const secondRun=gate.promise.then(()=>task(plan.id,'resume',s));gate.release();
  const both=Promise.all([firstRun,secondRun]);await bounded(both);const [first,second]=await both;
@@ -87,7 +88,7 @@ it('concurrent recovery applies the side effect exactly once',async()=>{
 });
 
 it('recovery after a simulated process restart is driven purely from persisted server state',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;
+ const s=(await getDemoSession(userId)).sessionId;
  const {p,card,plan,action}=await wedgeSuccessRecovery(s);
  // Simulate the owning process having died: the parked node's in-memory link is gone and the plan
  // is left `running` with a not-yet-settled node.
@@ -102,17 +103,17 @@ it('recovery after a simulated process restart is driven purely from persisted s
  expect(freshAction?.status).toBe('confirmed');expect(freshPlan?.status).toBe('running');expect(resumed.status).toBe('success');expect(after?.status).toBe('executed');expect(node?.status).toBe('success');expect(amount).toBe(50000n);
 });
 
-it('a committed side effect with lost status recovers its receipt and never repeats the card issuance',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
- const seeded=await runSubmitPlan(userId,{goal:'结果事务回滚楔子',nodes:[{id:'card',name:'虚拟卡',kind:'tool',tool:'apply_virtual_card',args:{label:'回滚楔子探针'},dependencies:[]}]},{sessionId:s,runTool:runner(s)});
+it('a committed side effect with lost status recovers its receipt and never reapplies a historical limit',async()=>{
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
+ const seeded=await runSubmitPlan(userId,{goal:'Recover a rolled back status write',nodes:[{id:'limit',name:'Set card limit',kind:'tool',tool:'set_card_limit',args:{cardId:'card_credit',category:'\u5a31\u4e50',amount:'1500'},dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=seeded.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
  const spy=vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(new Error('review: result transaction write injection'));
  const first=await confirmRaw(action.id,s);const faultCalls=spy.mock.calls.length;spy.mockRestore();
- const afterFault=await p.pendingAction.findUnique({where:{id:action.id}});const cardsAfterFault=await p.card.count({where:{userId,type:'VIRTUAL'}});
- expect(faultCalls).toBeGreaterThanOrEqual(1);expect(afterFault?.status).toBe('confirmed');expect(afterFault?.resultJson).toBeNull();expect(cardsAfterFault).toBe(1);
+ const afterFault=await p.pendingAction.findUnique({where:{id:action.id}});const limitAfterFault=await p.cardLimit.findFirstOrThrow({where:{cardId:'card_credit',category:'\u5a31\u4e50'}});
+ expect(faultCalls).toBeGreaterThanOrEqual(1);expect(afterFault?.status).toBe('confirmed');expect(afterFault?.resultJson).toBeNull();expect(limitAfterFault.amountMinor).toBe(150000n);
+ await p.cardLimit.update({where:{id:limitAfterFault.id},data:{amountMinor:50000n}});
  const resumed=await task(plan.id,'resume',s);const resumedAgain=await task(plan.id,'resume',s);
- const node=await p.agentTaskNode.findFirst({where:{taskId:plan.id,nodeId:'card'}});const cards=await p.card.count({where:{userId,type:'VIRTUAL'}});
- console.log('REVIEW_RESULT_RECOVERY_TX_ROLLBACK_WEDGE',JSON.stringify({firstHttp:first.status,faultCalls,afterFault:afterFault?.status,resultAfterFault:afterFault?.resultJson,cardsAfterFault,resumed:resumed.status,resumedAgain:resumedAgain.status,nodeStatus:node?.status,nodeError:node?.error,cards}));
- expect(resumed.status).toBe('success');expect(resumedAgain.status).toBe('success');expect(node?.status).toBe('success');expect(node?.error).toBeNull();expect(cards).toBe(1);
- expect(await p.executionReceipt.count({where:{userId,key:`nxe:${plan.id}:card`}})).toBe(1);
+ const node=await p.agentTaskNode.findFirst({where:{taskId:plan.id,nodeId:'limit'}});const limits=await p.cardLimit.findMany({where:{cardId:'card_credit',category:'\u5a31\u4e50'}});
+ expect(first.status).toBe(500);expect(resumed.status).toBe('success');expect(resumedAgain.status).toBe('success');expect(node?.status).toBe('success');expect(node?.error).toBeNull();expect(limits).toHaveLength(1);expect(limits[0].amountMinor).toBe(50000n);
+ expect(await p.executionReceipt.count({where:{userId,key:`nxe:${plan.id}:limit`}})).toBe(1);
 });

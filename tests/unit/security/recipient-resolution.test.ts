@@ -8,7 +8,7 @@
  *
  * Rules under test (exactly ONE of `contactId|phone|name` may be supplied):
  *   - `contactId` → look up + owner-check (`not_found` otherwise);
- *   - `phone` → exact match, else a `contains` fallback (`not_found` when empty, `ambiguous` > 1);
+ *   - `phone` → complete normalized or masked identity (`not_found` when incomplete, `ambiguous` > 1);
  *   - `name` → exact name equality (`not_found` 0, `ambiguous` > 1);
  *   - 0 or > 1 identifiers → `invalid`.
  * On `resolved` the args are CANONICALIZED to `{...args, contactId}` (with `phone`/`name` DELETED) and
@@ -111,8 +111,8 @@ describe('security-gateway · transfer recipient resolution — resolved selecto
     expect('phone' in persisted).toBe(false);
   });
 
-  it('resolves a PARTIAL phone (contains fallback) → canonical contactId args + masked summary', async () => {
-    const action = await parkTransfer({ amount: '200.00', phone: '0002' });
+  it('resolves a complete phone → canonical contactId args + masked summary', async () => {
+    const action = await parkTransfer({ amount: '200.00', phone: '13900000002' });
 
     expect(action.status).toBe('pending');
     expect(action.tier).toBe('YELLOW');

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentRun } from '@prisma/client';
+import type { AgentRun } from '@/lib/db/prisma';
 import type { ResumeTurnInput } from '../turns/contracts';
 
 const storage = vi.hoisted(() => ({ action: vi.fn(), invocation: vi.fn(), model: vi.fn(), receipt: vi.fn() }));

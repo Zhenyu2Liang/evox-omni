@@ -9,9 +9,8 @@
  *   2. Forcing `LLM_MODE=mock` (the faux provider) so no suite ever touches the network.
  *   3. Guaranteeing a **generated, usable Prisma Client** on a clean checkout, pinning the
  *      **schema-engine log level** (`RUST_LOG=info`, see below), then provisioning the schema
- *      through an ORDERED LADDER of `prisma db push` shapes — the historical PRIMARY
- *      `db push --force-reset --skip-generate` first (byte-for-byte unchanged), then ADDITIVE,
- *      progressively simpler fallbacks that run only after a failure. The guard marker stores the
+ *      through an ordered ladder of supported Prisma 7 `db push` commands.
+ *      Fallbacks run only after a failure. The guard marker stores the
  *      **sha1 of `prisma/schema.prisma`** so parallel workers do not race AND a stale `test.db`
  *      (provisioned before a schema change) is automatically re-pushed instead of silently reused.
  *      Because the fast-path keeps `test.db` in WAL mode (which `--force-reset` cannot re-reset), the
@@ -31,11 +30,8 @@
  * `tests/helpers/fixtures.ts` / `tests/helpers/db.ts` in `beforeAll`/`beforeEach`
  * (`resetDatabase()`). This file guarantees an EMPTY, MIGRATED test DB plus the right env.
  *
- * WHY A BARE `npm install` ALONE IS NOT ENOUGH: `package.json` has no `postinstall` hook and
- * `prisma generate` is a separate script, so a clean checkout has ONLY the `@prisma/client`
- * POSTINSTALL STUB. Every DB-backed suite would then die at IMPORT time with the misleading
- * `@prisma/client did not initialize yet…`. `ensurePrismaClientGenerated()` (shared with the E2E
- * harness) self-bootstraps the client here before anything imports it.
+ * Generation is explicit: a clean checkout has no `lib/db/generated` output.
+ * `ensurePrismaClientGenerated()` creates and checks it before application imports run.
  *
  * FAIL-LOUD BY DESIGN: a provisioning/generate failure THROWS with the FULL captured CLI output
  * (never a `console.warn` that lets the run continue). Letting the run continue would surface the
@@ -79,7 +75,7 @@ const provisionMarker = path.join(prismaDir, '.test-db-provisioned');
 // ---------------------------------------------------------------------------
 
 // Absolute `file:` URL keeps the Prisma CLI (`prisma db push`) and the runtime client
-// (`new PrismaClient({ datasources: { db: { url } } })`) on the exact same file.
+// (`createDatabaseClient()`) on the exact same file.
 const testDbUrl = 'file:' + testDbPath.split(path.sep).join('/');
 process.env.DATABASE_URL = testDbUrl;
 process.env.LLM_MODE = 'mock';
@@ -135,10 +131,8 @@ function provisionTestDatabase(): void {
   //     is malformed"), and the fast-path pragmas in `tests/helpers/db.ts` keep `test.db` permanently
   //     in WAL mode — so the ladder deletes `test.db` + its -wal/-shm/-journal sidecars BEFORE EVERY
   //     rung, guaranteeing each push recreates the schema from scratch.
-  //       · Rung 1 (PRIMARY, byte-for-byte unchanged): `db push --force-reset --skip-generate`
-  //       · Rung 2: `db push --skip-generate` (no --force-reset — the file was just deleted)
-  //       · Rung 3: `db push` (NO flags — the shape that succeeds where the flagged shapes die with an
-  //         opaque `Error: Schema engine error:`)
+  // Prisma 7 never generates implicitly during db push; generation was checked above.
+  // A plain push creates the new isolated file after the harness removed all old files.
   //     Each rung runs ONLY after the previous one FAILED. If EVERY rung fails the ladder THROWS a
   //     single error with the FULL captured output of each rung + environment diagnostics — never a warn.
   provisionSchemaLadder({
@@ -147,11 +141,6 @@ function provisionTestDatabase(): void {
     dbFiles: ['test.db', 'test.db-wal', 'test.db-shm', 'test.db-journal'],
     env: process.env,
     rungs: [
-      {
-        label: 'db push --force-reset --skip-generate',
-        args: ['prisma', 'db', 'push', '--force-reset', '--skip-generate'],
-      },
-      { label: 'db push --skip-generate', args: ['prisma', 'db', 'push', '--skip-generate'] },
       { label: 'db push', args: ['prisma', 'db', 'push'] },
     ],
   });
@@ -160,10 +149,5 @@ function provisionTestDatabase(): void {
 
 provisionTestDatabase();
 
-// Runtime-only pool constraint (applied AFTER the CLI push above, which used the clean URL).
-// A single SQLite connection keeps the per-connection `PRAGMA synchronous=NORMAL` from
-// `tests/helpers/db.ts` authoritative for EVERY query, so no pooled connection falls back to
-// synchronous=FULL and stalls a write. The Prisma CLI ignores unknown query params; the runtime
-// client honours `connection_limit`.
-process.env.DATABASE_URL = testDbUrl + '?connection_limit=1';
+// The better-sqlite3 adapter uses one native connection; no connection_limit URL parameter exists.
 export { testDbUrl, testDbPath };

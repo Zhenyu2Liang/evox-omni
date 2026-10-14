@@ -83,7 +83,7 @@ export interface CardActionHandlers {
   onAcknowledge?: () => void; // anomaly: 这是本人交易
   onViewDetail?: () => void; // anomaly: 查看详情
   onFreeze?: (anomaly: AnomalyItem, cardId: string) => void;
-  onTaskControl?: (action: TaskControlAction) => void; // plan: pause/resume/cancel/retry
+  onTaskControl?: (action: TaskControlAction, planId?: string) => void; // Controls must identify their own plan.
   onRecover?: (actionId: string) => void; // out-of-band: POST /api/actions/:id/recover
   mfaAttempts?: number; // MFA: number of failed verification attempts so far
   busy?: boolean;

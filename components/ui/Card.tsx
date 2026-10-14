@@ -5,6 +5,8 @@ export interface CardProps {
   description?: ReactNode;
   footer?: ReactNode;
   padding?: 'none' | 'sm' | 'md' | 'lg';
+  /** Request surfaces keep header/footer visible while their details scroll. */
+  layout?: 'default' | 'request';
   className?: string;
   children: ReactNode;
 }
@@ -26,7 +28,7 @@ const PADDING: Record<NonNullable<CardProps['padding']>, string> = {
  * Rounded surface with a soft shadow, optional header (title/description) and footer.
  * Server-safe presentational component — no hooks, no state.
  */
-export function Card({ title, description, footer, padding = 'md', className, children }: CardProps) {
+export function Card({ title, description, footer, padding = 'md', layout = 'default', className, children }: CardProps) {
   const pad = PADDING[padding];
   const hasTitle = title !== undefined;
   const hasDescription = description !== undefined;
@@ -35,12 +37,13 @@ export function Card({ title, description, footer, padding = 'md', className, ch
   return (
     <div
       className={cn(
-        'rounded-2xl bg-white shadow-sm ring-1 ring-black/5 overflow-hidden',
+        'rounded-2xl bg-white shadow-xs ring-1 ring-black/5 overflow-hidden',
+        layout === 'request' && 'flex min-h-0 flex-1 flex-col',
         className,
       )}
     >
       {hasHeader ? (
-        <div className={cn('border-b border-banking-light', pad)}>
+        <div className={cn('border-b border-banking-light', layout === 'request' && 'shrink-0', pad)}>
           {hasTitle ? <div className="text-banking-navy font-semibold">{title}</div> : null}
           {hasDescription ? (
             <div className={cn('text-sm text-gray-500', hasTitle && 'mt-1')}>{description}</div>
@@ -48,10 +51,10 @@ export function Card({ title, description, footer, padding = 'md', className, ch
         </div>
       ) : null}
 
-      <div className={pad}>{children}</div>
+      <div className={cn(pad, layout === 'request' && 'min-h-0 overflow-y-auto overscroll-contain')}>{children}</div>
 
       {footer !== undefined ? (
-        <div className={cn('border-t border-banking-light bg-banking-light/40 text-sm text-gray-600', pad)}>
+        <div className={cn('border-t border-banking-light bg-banking-light/40 text-sm text-gray-600', layout === 'request' && 'shrink-0', pad)}>
           {footer}
         </div>
       ) : null}

@@ -29,7 +29,8 @@
  */
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan, type PlanRunTool } from '@/agent/tools/planning';
 import { pauseTask } from '@/agent/task-control';
 import { banking } from '@/banking-sdk';
@@ -146,7 +147,7 @@ async function pausedPlan(s: string, node: Record<string, unknown>): Promise<any
 // (a) TAKEOVER_AT_NODE_CLAIM — barrier inside the awaited `running` notification (pre-tool).
 // ---------------------------------------------------------------------------------------------
 it('REVIEW_TAKEOVER_AT_NODE_CLAIM: a takeover while blocked in the running notification launches zero tools and publishes no stale progress', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const reached = deferred();
   const release = deferred();
@@ -217,7 +218,7 @@ it('REVIEW_TAKEOVER_AT_NODE_CLAIM: a takeover while blocked in the running notif
 // (b) TAKEOVER_BEFORE_WRITE — barrier immediately before the tool write (past claim, inside runTool).
 // ---------------------------------------------------------------------------------------------
 it('REVIEW_TAKEOVER_BEFORE_WRITE: a takeover fences the pre-write zombie so no duplicate side effect is ever committed', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const reached = deferred();
   const release = deferred();
@@ -309,7 +310,7 @@ it('REVIEW_TAKEOVER_BEFORE_WRITE: a takeover fences the pre-write zombie so no d
 // (c) CANCEL_FIRST — barrier inside the real SDK write; takeover then cancel fences it (ZERO rows).
 // ---------------------------------------------------------------------------------------------
 it('REVIEW_CANCEL_FIRST: a taken-over then cancelled plan fences the blocked SDK write before any side effect', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const reached = deferred();
   const release = deferred();
@@ -384,7 +385,7 @@ it('REVIEW_CANCEL_FIRST: a taken-over then cancelled plan fences the blocked SDK
 // (d) BUSINESS_COMMITS_FIRST — barrier AFTER the write commits; a cancel must retain the fact.
 // ---------------------------------------------------------------------------------------------
 it('REVIEW_BUSINESS_COMMITS_FIRST: a cancel after the side effect committed retains the committed fact', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const reached = deferred();
   const release = deferred();
@@ -445,7 +446,7 @@ it('REVIEW_BUSINESS_COMMITS_FIRST: a cancel after the side effect committed reta
 // (e) PAUSE_THEN_CONFIRM — a paused plan must not advance when its parked node is confirmed.
 // ---------------------------------------------------------------------------------------------
 it('REVIEW_PAUSE_THEN_CONFIRM: confirming a parked node on a paused plan keeps the plan paused', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const submitted = await runSubmitPlan(
     userId,
@@ -496,7 +497,7 @@ it('REVIEW_PAUSE_THEN_CONFIRM: confirming a parked node on a paused plan keeps t
 // (f) CONCURRENT_TAKEOVER — two concurrent control calls yield EXACTLY ONE winner.
 // ---------------------------------------------------------------------------------------------
 it('REVIEW_CONCURRENT_TAKEOVER: two concurrent resumes of one stale claim yield exactly one executor', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const plan = await pausedPlan(s, { id: 'budget', name: '屏障f预算', kind: 'tool', tool: 'reserve_budget', args: { name: '屏障f预算', amount: '10' }, dependencies: ['read'] });
 

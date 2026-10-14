@@ -1,4 +1,4 @@
-import type { AgentRun, ToolInvocation } from '@prisma/client';
+import type { AgentRun, ToolInvocation } from '@/lib/db/prisma';
 import { AppError } from '@/lib/errors';
 import { safeParse, toJson } from '@/lib/json';
 import { prepareBankingCommand } from '@/lib/contracts/command';
@@ -8,6 +8,7 @@ import { catalogEntry } from '@/lib/contracts/tool-catalog';
 import { beginAgentRun, finalizeReceiptedAgentRun, getAgentRun, listRunInvocations, restoreInvocationFromReceipt, runPendingActionWhere, synchronizeRunActionInvocations, scheduleRunRecovery, settlePlanInvocation, stopObsoleteRun, parkRunRecovery } from '@/lib/db/repositories/agentRun';
 import { prisma } from '@/lib/db/client';
 import { createToolRegistry, TOOL_NAMES } from '@/agent/tools';
+import { toModelToolResult } from '@/agent/tools/result';
 import { isWriteTool } from '@/security/permission-engine';
 import { readCommandReceipt } from '@/agent/command-execution';
 import { AgentRunJournal } from './journal';
@@ -19,6 +20,9 @@ import type { TaskPlan } from '@/lib/contracts/task';
 import { runtimeRequestDigest } from './serialization';
 import { security } from '@/security';
 import { recoverStandaloneWorkflowRun } from './standalone-workflow';
+import { recoverTurnIntentControl } from './control-recovery';
+import { TURN_INTENT_TOOL } from '@/agent/tools/turn-intent';
+import { getConfig } from '@/lib/config';
 
 export interface RunIdentity { sessionId: string; userId: string; }
 export interface InvocationSummary {
@@ -164,7 +168,7 @@ export async function recoverOwnedRun(runId: string, identity: RunIdentity, invo
   const journal = new AgentRunJournal(admitted.lease, { receiptBackedTools: new Set(TOOL_NAMES.filter(isWriteTool)) });
   const stopHeartbeat = journal.startHeartbeat();
   try {
-    const registry = createToolRegistry(identity.userId);
+    const registry = createToolRegistry(identity.userId, { sessionId: identity.sessionId });
     for (const invocation of invocations.filter(item => (selected.includes(item) || planResumeIds.has(item.id)) && !outcomes.some(outcome => outcome.invocationId === item.id))) {
       if (invocation.origin === 'workflow') continue;
       if (invocation.toolName === 'submit_plan') {
@@ -193,6 +197,7 @@ export async function recoverOwnedRun(runId: string, identity: RunIdentity, invo
       const outcome = await recoverInvocation(admitted.lease, invocation.id, {
         readVerifiedReceipt: item => verifiedResponse(item, current),
         execute: async item => {
+          if (item.toolName === TURN_INTENT_TOOL) return recoverTurnIntentControl(item, current, journal, deps.config ?? getConfig());
           if (toolReplayPolicy(item.toolName).safety !== 'read_only' || catalogEntry(item.toolName)?.defaultTier !== 'GREEN') throw new AppError('SECURITY_DENIED', 'This tool requires its original authorization workflow');
           await journal.assertLeaseOwned(prisma);
           const args = safeParse<Record<string, unknown>>(item.argsJson, {});
@@ -200,8 +205,9 @@ export async function recoverOwnedRun(runId: string, identity: RunIdentity, invo
             toolName: item.toolName as ToolName, args, userRequest: safeParse<{ message?: string }>(current.requestJson, {}).message ?? '', invocationId: item.id });
           if (auth.evaluation.blocked || auth.action) throw new AppError('SECURITY_DENIED', 'The original read is no longer authorized for automatic recovery');
           const result = await registry.executeDirect(item.toolName as ToolName, args);
-          if (!result.ok) throw new AppError('TOOL_FAILED', 'The read operation failed during recovery');
-          return toJson(result);
+          if (!result.ok) throw new AppError(result.errorCode ?? 'TOOL_FAILED', result.error ?? 'The read operation failed during recovery');
+          // A fresh authorized query uses the same content projection as its normal Pi execution.
+          return toJson({ ...result, content: toModelToolResult(result).content });
         },
       });
       outcomes.push({ invocationId: outcome.invocationId, action: outcome.action, ...('reason' in outcome ? { reason: outcome.reason } : {}) });

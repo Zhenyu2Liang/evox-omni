@@ -1,8 +1,7 @@
 /**
  * Pure live model resolution tests, auto-discovered by the root Vitest config.
- * Pi 1.1 registers deepseek-flash directly; unknown model ids retain the
- * provider-local fallback with a warning. Custom endpoints must be explicit.
- * Run: npm run test -- tests/unit/agent/providers/provider-live.test.ts
+ * Pi 1.2 registers deepseek-flash directly; unknown model ids require an
+ * explicit compatible endpoint. Run with pnpm test.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Model } from '@earendil-works/pi-ai';
@@ -66,29 +65,36 @@ describe('resolveLiveModel — the real installed pi-ai registry', () => {
     expect(resolved.baseUrl).toBe('https://api.deepseek.com');
   });
 
-  it('never resolves a provider’s key onto a foreign host for ANY registered provider', () => {
+  it('refuses unknown model IDs for each registered provider without selecting another model', () => {
     for (const provider of ['deepseek', 'openai', 'anthropic', 'groq', 'xai']) {
       for (const modelId of ['definitely-not-a-real-model-id']) {
-        const { model: resolved } = resolveLiveModel(provider, modelId, { env: {} });
-        expect(resolved.provider).toBe(provider);
+        expect(() => resolveLiveModel(provider, modelId, { env: {} })).toThrow(AppError);
       }
     }
+  });
+
+  it('requires an explicit endpoint for providers outside the supported factory set', () => {
+    expect(() => resolveLiveModel('amazon-bedrock', 'unregistered', { env: {} })).toThrow(AppError);
+    const { model: resolved } = resolveLiveModel('local-model', 'chat', {
+      env: { LOCAL_MODEL_BASE_URL: 'https://local-model.test/v1' },
+    });
+    expect(resolved.provider).toBe('local-model');
+    expect(resolved.baseUrl).toBe('https://local-model.test/v1');
   });
 });
 
 describe('resolveLiveModel — known provider, unregistered model id', () => {
-  it('resolves the provider default (first registered) and warns requested vs used', () => {
+  it('fails instead of selecting the first registered model', () => {
     const registry = fakeRegistry({
       acme: [model('acme-default', 'acme', 'https://api.acme.test/v1'), model('acme-pro', 'acme', 'https://api.acme.test/v1')],
     });
 
-    const { model: resolved, warning } = resolveLiveModel('acme', 'acme-flash', { registry, env: {} });
-
-    expect(resolved.id).toBe('acme-default');
-    expect(resolved.baseUrl).toBe('https://api.acme.test/v1');
-    expect(warning).toContain('acme-flash');
-    expect(warning).toContain('acme-default');
-    expect(warning).toContain('https://api.acme.test/v1');
+    expect(() => resolveLiveModel('acme', 'acme-flash', { registry, env: {} })).toThrow('Model "acme-flash" is not registered');
+    const { model: resolved } = resolveLiveModel('acme', 'acme-flash', {
+      registry, env: { ACME_BASE_URL: 'https://configured.acme.test/v1' },
+    });
+    expect(resolved.id).toBe('acme-flash');
+    expect(resolved.baseUrl).toBe('https://configured.acme.test/v1');
   });
 
   it('fails loudly for a known provider that exposes no models', () => {
@@ -139,10 +145,11 @@ describe('resolveLiveModel — unknown provider (custom endpoint)', () => {
     expect((thrown as AppError).message).toContain('LLM_BASE_URL');
   });
 
-  it('uses the OpenAI host ONLY when the provider really is openai', () => {
+  it('requires an explicit endpoint even when a custom registry does not register openai', () => {
+    expect(() => resolveLiveModel('openai', 'gpt-fictional', { registry: fakeRegistry({}), env: {} })).toThrow(AppError);
     const { model: resolved } = resolveLiveModel('openai', 'gpt-fictional', {
       registry: fakeRegistry({}),
-      env: {},
+      env: { OPENAI_BASE_URL: 'https://api.openai.com/v1' },
     });
 
     expect(resolved.baseUrl).toBe('https://api.openai.com/v1');
@@ -150,7 +157,7 @@ describe('resolveLiveModel — unknown provider (custom endpoint)', () => {
   });
 });
 
-describe('createLiveModel — env-key presence check + warning', () => {
+describe('createLiveModel — env-key presence check and explicit model identity', () => {
   it('builds exactly deepseek-flash and never surfaces the API key', () => {
     vi.stubEnv('DEEPSEEK_API_KEY', 'not-a-real-key');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

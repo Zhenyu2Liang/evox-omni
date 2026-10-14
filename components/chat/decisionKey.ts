@@ -1,8 +1,8 @@
 /**
  * `decisionKey.ts` — a STABLE identity key for a `PendingActionSummary`.
  *
- * Two surfaces render the SAME gated decision: the inline `confirmation` `ChatCard` carried in
- * `messages` and the live `pendingAction` state. After settlement the chat layer stamps runtime-only
+ * Historical `confirmation` metadata and live `pendingAction` share a gated decision identity.
+ * After settlement the chat layer stamps runtime-only
  * fields (`status` / `message`) onto the card's `action` object, which changes `JSON.stringify(action)`
  * even though the DECISION is the same. This key ignores those runtime-only fields (as well as the
  * action id, which the summary does not carry) so duplicate suppression and settle-matching keep

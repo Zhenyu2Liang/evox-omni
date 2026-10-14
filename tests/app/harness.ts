@@ -14,13 +14,11 @@
  * in, so this module stays importable by every app-entry spec (chat / actions / tasks) and free of
  * load-order coupling. SSE frames follow `sseFrame()` in `@/app/api/_lib/http` (`data: <JSON>\n\n`).
  *
- * IDENTITY IS COOKIE-ONLY. The app derives the trusted caller identity from the HttpOnly
- * `banking_session` cookie (`app/api/_lib/session#resolveIdentity`); a `?sessionId=` query param is
- * IGNORED for every authorization decision. The invokers therefore carry identity as a `Cookie`
- * header (the `sessionId` / `cookie` option), NOT as a query param.
+ * The HTTP app always uses the configured demo user and canonical conversation. Cookie and query
+ * identity hints are ignored. Cookie-building options remain useful for adversarial requests that
+ * prove those hints cannot select another persisted resource owner.
  */
 import { NextRequest } from 'next/server';
-import { SESSION_COOKIE } from '@/lib/constants';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import type { IdRouteContext } from '@/app/api/_lib/types';
 
@@ -34,18 +32,16 @@ export const BASE_URL = 'http://localhost';
 export type RouteHandler = (req: NextRequest, ctx: IdRouteContext) => Response | Promise<Response>;
 
 /**
- * Per-request options: extra headers, the dynamic-route context, an origin override, and the
- * COOKIE-ONLY identity.
+ * Per-request transport options, including ignored browser identity hints for boundary tests.
  *
- * - `sessionId` — shorthand that emits `Cookie: banking_session=<id>`. Omitting it sends NO cookie
- *   (the route fails closed with `403 SECURITY_DENIED` on a write/auth route).
+ * - `sessionId` — shorthand that emits an ignored `Cookie: banking_session=<id>` hint.
  * - `cookie` — a raw `Cookie` header value; wins over `sessionId` when both are supplied.
  */
 export interface HttpOptions {
   headers?: Record<string, string>;
   ctx?: IdRouteContext;
   base?: string;
-  /** Trusted identity shorthand: emits `Cookie: <SESSION_COOKIE>=<id>`. */
+  /** Ignored browser identity hint used by adversarial tests. */
   sessionId?: string;
   /** Raw `Cookie` header value (takes precedence over `sessionId`). */
   cookie?: string;
@@ -64,26 +60,7 @@ export interface HttpResult<T = unknown> {
 
 /** Build the `Cookie` header value carrying the `banking_session` id. */
 export function sessionCookie(sessionId: string): string {
-  return `${SESSION_COOKIE}=${sessionId}`;
-}
-
-/**
- * Extract the `banking_session` id from a response's `Set-Cookie` header (undefined when absent).
- *
- * THE COOKIE-ONLY BOOTSTRAP RECIPE (see the module doc): `POST /api/chat` takes identity SOLELY from
- * the `banking_session` cookie — a body `sessionId` that DISAGREES with the cookie (INCLUDING "no
- * cookie present") is rejected with `409 CONFLICT` and sets NO cookie. So a spec MUST NOT bootstrap a
- * session by sending a body `sessionId`. Instead:
- *   1. send the FIRST turn with a body that OMITS `sessionId` and with NO cookie — the route MINTS the
- *      session, returns its id as `data.sessionId` (or `Set-Cookie`) AND sets the cookie;
- *   2. carry that id on EVERY later request as `Cookie: banking_session=<id>` (the `sessionId` opt).
- * A `?sessionId=`/`?userId=` query param NEVER authenticates.
- */
-export function sessionIdFromResponse(res: Response): string | undefined {
-  const setCookie = res.headers.get('set-cookie');
-  if (!setCookie) return undefined;
-  const match = setCookie.match(new RegExp(`${SESSION_COOKIE}=([^;]*)`));
-  return match?.[1];
+  return `banking_session=${sessionId}`;
 }
 
 /* ---------------------------------------------------------------------------- URL builders */
@@ -97,24 +74,24 @@ function withQuery(path: string, query: Record<string, string | undefined>): str
   return url.pathname + url.search;
 }
 
-/** `POST /api/chat` URL. `stream` picks the mode. Identity is carried in the body / cookie, not here. */
+/** `POST /api/chat` URL. `stream` picks the transport mode. */
 export function chatUrl(opts: { stream?: 0 | 1 } = {}): string {
   return withQuery('/api/chat', {
     stream: opts.stream === undefined ? undefined : String(opts.stream),
   });
 }
 
-/** `POST /api/actions/[id]/{confirm|verify|cancel|recover}` URL. Identity comes from the cookie. */
+/** `POST /api/actions/[id]/{confirm|verify|cancel|recover}` URL. */
 export function actionUrl(id: string, action: 'confirm' | 'verify' | 'cancel' | 'recover'): string {
   return `/api/actions/${encodeURIComponent(id)}/${action}`;
 }
 
-/** `/api/tasks/[id]` URL (`GET` reads, `POST` controls). Identity comes from the cookie. */
+/** `/api/tasks/[id]` URL (`GET` reads, `POST` controls). */
 export function taskUrl(id: string): string {
   return `/api/tasks/${encodeURIComponent(id)}`;
 }
 
-/** `GET /api/tasks` URL. Identity comes from the cookie. */
+/** `GET /api/tasks` URL. */
 export function tasksUrl(): string {
   return '/api/tasks';
 }
@@ -189,7 +166,7 @@ async function invoke<T>(
   init: RequestSpec,
   opts: HttpOptions,
 ): Promise<HttpResult<T>> {
-  // Cookie-only identity: fold the `sessionId` shorthand (or a raw `cookie`) into a `Cookie` header.
+  // Emit the requested browser hint; production identity resolution deliberately ignores it.
   const headers: Record<string, string> = { ...init.headers };
   const cookie = opts.cookie ?? (opts.sessionId !== undefined ? sessionCookie(opts.sessionId) : undefined);
   if (cookie !== undefined) headers.cookie = cookie;

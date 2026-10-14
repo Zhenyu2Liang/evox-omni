@@ -7,6 +7,8 @@ node_modules/
 
 # Next.js
 /.next/
+/.next-e2e/
+/.next-build/
 /out/
 next-env.d.ts
 .turbo/
@@ -64,3 +66,4 @@ pnpm-debug.log*
 
 # Prisma generated client (if generated into repo)
 /generated/prisma
+/lib/db/generated/

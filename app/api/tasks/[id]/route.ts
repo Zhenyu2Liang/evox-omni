@@ -3,9 +3,8 @@
  * POST /api/tasks/[id] — control a task plan's EXECUTION (`pause` | `resume` | `cancel` | `retry`).
  *
  * Contract:
- *  - IDENTITY (both verbs): the caller's session/user come from the TRUSTED `banking_session` cookie
- *    (`_lib/session#requireIdentity`); a missing cookie or unknown session → `403 SECURITY_DENIED`.
- *    A `?sessionId=` / `?userId=` query param is IGNORED and can never widen access.
+ *  - Identity (both verbs): the configured demo user and fixed workspace via `requireIdentity`.
+ *    Cookies and query identifiers cannot select another user or session. No login is required.
  *  - GET: reads the persisted plan through the sanctioned repository read path
  *    (`@/lib/db/repositories/task`) and maps it to the `AppTaskPlan` (a `TaskPlan` whose `results`
  *    ADDITIVELY carry each node's `pendingActionId`, so the UI can restore the confirm/MFA entry).
@@ -37,7 +36,7 @@ type TaskControlBody = z.infer<typeof taskControlSchema>;
 
 export async function GET(req: NextRequest, ctx: IdRouteContext): Promise<Response> {
   try {
-    // Trusted identity: cookie-only, server-validated. Missing cookie / unknown session → 403.
+    // Resolve the fixed demo workspace before checking persisted task ownership.
     const identity = await requireIdentity(req);
     const id = (await ctx.params).id;
 
@@ -58,7 +57,7 @@ export async function GET(req: NextRequest, ctx: IdRouteContext): Promise<Respon
 
 export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Response> {
   try {
-    // Trusted identity: cookie-only, server-validated. Missing cookie / unknown session → 403.
+    // Resolve the fixed demo workspace before checking persisted task ownership.
     const identity = await requireIdentity(req);
     const id = (await ctx.params).id;
     const body = await parseBody(taskControlSchema, req);

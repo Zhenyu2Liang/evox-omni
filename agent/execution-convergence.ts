@@ -55,6 +55,7 @@ export interface ConvergenceActionRow {
   intent: string | null;
   executionLeaseOwner: string | null;
   executionLeaseExpiresAt: Date | null;
+  mfa?: { status: string } | null;
 }
 
 /** The PERSISTED evidence the decision was based on (`none` = no usable proof). */
@@ -181,6 +182,7 @@ export function buildRecoveryAudit(
   return {
     timestamp: demoNow(),
     sessionId: action.sessionId,
+    userId: action.userId,
     userRequest: action.userRequest ?? '',
     intent: action.intent ?? undefined,
     toolName: action.toolName,
@@ -188,6 +190,10 @@ export function buildRecoveryAudit(
     confirmationRequired: true,
     confirmed: true,
     mfaRequired: action.requiresMfa === true,
+    mfaResult: action.requiresMfa ? action.mfa?.status === 'verified' ? 'success' : undefined : 'not_required',
+    toolArgs: safeParse<Record<string, unknown>>(action.argsJson, {}),
+    taskId: action.taskId ?? undefined,
+    nodeId: action.nodeId ?? undefined,
     toolResult: decision.result,
     status: decision.status === 'needs_reconciliation' ? 'blocked' : ok ? 'success' : 'failed',
     detail: decision.status === 'needs_reconciliation'

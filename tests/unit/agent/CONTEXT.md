@@ -22,9 +22,11 @@ Every spec keeps the in-process circuit breaker isolated with a UNIQUE persisted
   `PendingAction` so a LATER `confirmAction` returns `ok:false`/`cancelled` with NO money moved; a
   cancel-vs-confirm race yields AT MOST ONE effect; an already-executed node (+ its Transfer row)
   survives cancel (no fake rollback).
-- `run-turn-failure.test.ts` — the continuation-failure contract: a failing tool result / a
-  `continue()` rejection is never swallowed and never rephrased as a success.
-- `message-normalize.test.ts` — `@/agent/message-normalize#withRealToolResult`: on a REUSED tool-call id the earlier factual result is preserved and the parked `等待确认` placeholder is replaced by the REAL executed result.
+- `run-turn-failure.test.ts` — authorization outcomes use server rendering in every model mode;
+  model narration is never invoked, failures retain their actual status and delayed confirmation
+  preserves all intervening user/assistant dialogue.
+- `message-normalize.test.ts` — `withRealToolResult` replaces an original result in place, keeps
+  the full later history and parallel result groups, and never invents an orphan when no call exists.
 - `providers/provider-mock.test.ts` — pure, DB-free spec for `@/agent/providers/mock-responder`
   (`respond(context)`): fuzzy intent → tool call, two-call recipient resolution, multi-turn reuse,
   clarifications, honest failure narration, blocked gated calls (YELLOW/RED "not executed").
@@ -72,7 +74,7 @@ The repeated-confirm spec asserts the second call is `ok:false` and that the fun
 - `./confirmation.test.ts` → AuditLog rows for confirm/verify/cancel
 - `./task-control.test.ts` → submit_plan persistence + task-control ownership
 - `./task-cancel-revokes.test.ts` → cancel revokes parked action / cancel-vs-confirm race / executed work preserved
-- `./run-turn-failure.test.ts` → continuation-failure contract (`resumeTurn`, `confirmAction`)
+- `./run-turn-failure.test.ts` → server-authored authorization outcomes and delayed confirmation
 - `./message-normalize.test.ts` → `withRealToolResult` real-result attribution (reused call id)
 - `./providers/provider-mock.test.ts` → pure `mock-responder` behaviour (regex over the LLM text)
 - `./providers/provider-live.test.ts` → pure live-model resolution (registry/fallback/fail-loud)

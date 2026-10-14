@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import type { AgentRun, ToolInvocation } from '@prisma/client';
+import type { AgentRun, ToolInvocation } from '@/lib/db/prisma';
 import { AppError } from '@/lib/errors';
 
 const mocks = vi.hoisted(() => ({
@@ -12,10 +12,12 @@ const mocks = vi.hoisted(() => ({
   readCommandReceipt: vi.fn(), executeDirect: vi.fn(), recoverInvocation: vi.fn(), getSession: vi.fn(),
   pendingFindFirst: vi.fn(), pendingFindMany: vi.fn(),
   handleToolCall: vi.fn(),
+  getDemoSession: vi.fn(),
 }));
 vi.mock('@/lib/db/repositories/agentRun', () => mocks);
 vi.mock('@/lib/db/client', () => ({ prisma: { pendingAction: { findFirst: mocks.pendingFindFirst, findMany: mocks.pendingFindMany } } }));
 vi.mock('@/lib/db/repositories/session', () => ({ getSession: mocks.getSession }));
+vi.mock('@/agent/session', () => ({ getDemoSession: mocks.getDemoSession }));
 vi.mock('@/agent/command-execution', () => ({ readCommandReceipt: mocks.readCommandReceipt }));
 vi.mock('@/agent/tools', () => ({ TOOL_NAMES: ['get_balance', 'list_subscriptions', 'transfer_money', 'submit_plan'], createToolRegistry: () => ({ executeDirect: mocks.executeDirect }) }));
 vi.mock('./recovery', () => ({ recoverInvocation: mocks.recoverInvocation }));
@@ -37,6 +39,7 @@ beforeEach(() => {
   mocks.getAgentRun.mockResolvedValue(run());
   mocks.listRunInvocations.mockResolvedValue([invocation()]);
   mocks.getSession.mockImplementation(async (id: string) => ({ id, userId: owner.userId }));
+  mocks.getDemoSession.mockResolvedValue(owner);
   mocks.pendingFindFirst.mockResolvedValue(null);
   mocks.pendingFindMany.mockResolvedValue([]);
   mocks.handleToolCall.mockResolvedValue({ evaluation: { blocked: false } });
@@ -100,6 +103,10 @@ describe('owned runtime recovery service and HTTP boundary', () => {
     expect(response.outcomes).toEqual([{ invocationId: 'invocation-1', action: 'retried' }]);
     expect(mocks.beginAgentRun).toHaveBeenCalledWith(expect.objectContaining({ existingRunId: 'run-1', requestId: 'request-1', requestDigest: 'original-digest', recover: true }));
     expect(mocks.executeDirect).toHaveBeenCalledWith('get_balance', {});
+    expect(JSON.parse(record.resultJson!)).toMatchObject({
+      content: [{ type: 'text', text: 'Balance read' },
+        { type: 'text', text: '{"ok":true,"data":{"totalAvailable":"100.00"}}' }],
+    });
     expect(mocks.finishAgentRun).toHaveBeenCalledWith(expect.anything(), 'completed', undefined);
   });
 
@@ -137,10 +144,12 @@ describe('owned runtime recovery service and HTTP boundary', () => {
     expect(mocks.finishAgentRun).toHaveBeenCalledWith(expect.anything(), 'failed', 'SECURITY_DENIED');
   });
 
-  it('rejects missing cookies and foreign sessions on the HTTP routes', async () => {
+  it('restores demo run metadata without a cookie and cannot adopt a foreign run through browser hints', async () => {
     const context = { params: Promise.resolve({ id: 'run-1' }) };
     const missing = await GET(new NextRequest('http://localhost/api/runs/run-1'), context);
-    expect(missing.status).toBe(403);
+    expect(missing.status).toBe(200);
+    expect((await missing.json()).data.id).toBe('run-1');
+    mocks.getAgentRun.mockResolvedValue({ ...run(), sessionId: 'other-session' });
     const foreign = await POST(new NextRequest('http://localhost/api/runs/run-1/recover?sessionId=session-1', { method: 'POST', headers: { cookie: 'banking_session=other-session' }, body: '{}' }), context);
     expect(foreign.status).toBe(403);
     expect(mocks.beginAgentRun).not.toHaveBeenCalled();

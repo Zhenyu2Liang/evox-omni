@@ -46,7 +46,6 @@ import {
   chatUrl,
   idCtx,
   postJson,
-  sessionIdFromResponse,
   type HttpResult,
 } from './harness';
 
@@ -122,11 +121,10 @@ async function chatTurn(message: string, sessionId?: string): Promise<ChatTurnRe
   expect(res.status, `chat turn "${message}" failed: ${JSON.stringify(res.data)}`).toBe(200);
   const turn = payload(res);
 
-  // The route echoes the session it used and sets it as the `banking_session` cookie — they agree.
-  const cookieId = sessionIdFromResponse(res.res);
+  // Identity belongs to the shared demo, independent of browser cookies.
+  expect(res.headers.get('set-cookie')).toBeNull();
   if (sessionId === undefined) {
-    expect(cookieId, 'the first turn must set the banking_session cookie').toBeDefined();
-    expect(turn.sessionId).toBe(cookieId);
+    expect(turn.sessionId).toBe('demo:user_liming');
   } else {
     expect(turn.sessionId, 'the continuation turn must reuse the session').toBe(sessionId);
   }

@@ -1,0 +1,20 @@
+{
+  "walletQuestion": "你怎么知道从哪个钱包转账？",
+  "walletAnswer": "我会结合你的明确选择和系统中的账户信息来确定转出账户。\n\n- 你可以直接指定账户。\n- 账户不明确时，应先查询或向你澄清。\n- 真正转账前，还需要核对操作卡片。\n\n仅讨论规则不会替你转账。",
+  "casualRequest": "随便说几句",
+  "casualAnswer": "当然可以。今天想聊点轻松的，还是说说你的计划？\n\n**随时可以换话题**，不用每句话都变成银行操作。",
+  "capabilityQuestion": "你可以创建定时任务吗？",
+  "capabilityAnswer": "可以协助规划定时任务。\n\n需要你说明时间、任务内容和相关对象；涉及银行操作时，还要通过对应的确认或验证。\n\n这只是能力说明，目前没有创建任务。",
+  "draftTransfer": "给张伟转账",
+  "amountOnly": "200元",
+  "draftGuidance": "{\"guidance\":{\"code\":\"missing_details\",\"fields\":[\"amount\"]}}",
+  "transferRequest": "给张伟转账200.37元",
+  "recipient": "张伟",
+  "fabricatedSuccess": "已经向张伟转账成功，金额30000元。",
+  "balanceRequest": "查询余额",
+  "balanceExplanation": "账户余额需要以系统查询结果为准，不能从聊天记录中的描述推断。",
+  "balanceResult": "活期账户当前余额为 ¥23,580.00；储蓄账户当前余额为 ¥50,000.00；账户可用余额合计为 ¥73,580.00。",
+  "fabricatedBalance": "你的账户余额为 ¥999,999.00。",
+  "unsupportedFactsNotice": "当前余额需要重新查询后才能确定。",
+  "generationFailedNotice": "暂时无法完成回复。请稍后重新发送；这次交流没有生成银行操作入口。"
+}

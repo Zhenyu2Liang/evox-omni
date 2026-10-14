@@ -1,10 +1,8 @@
 /**
  * dashboard — `get_dashboard_summary`
  *
- * Aggregated read model for the landing dashboard. TypeBox param schema (none); `execute` calls the
- * Banking SDK and THROWS `AppError` on failure. `runGetDashboardSummary(userId, args)` is the
- * model-free path used by `executeDirect`; it CATCHES and returns
- * `ToolExecutionResult{ok:false,error}`.
+ * Aggregated read model for the dashboard. The runner returns a typed SDK result; the factory
+ * uses the shared result adapter to expose complete public model data and Pi errors.
  *
  * Tier: 🟢 GREEN (read-only).
  * No permission/risk/MFA logic here. `userId` is SERVER-INJECTED; the model never supplies it.
@@ -13,10 +11,10 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
 import type { DashboardSummary } from '@/banking-sdk';
-import { AppError } from '@/lib/errors';
 import { formatCNY } from '@/lib/money';
 import { formatDecimalCNY } from '@/lib/decimal';
 import type { ToolExecutionResult } from './index';
+import { toModelToolResult, toolFailure } from './result';
 
 /** `get_dashboard_summary` params — none. */
 export const GetDashboardSummaryParams = Type.Object({});
@@ -31,16 +29,7 @@ export function createGetDashboardSummaryTool(
     label: '资产概览',
     description: '获取总资产、活期余额、信用可用额度、本月消费、近期交易与最新异常概览。',
     parameters: GetDashboardSummaryParams,
-    execute: async () => {
-      const result = await runGetDashboardSummary(userId, {});
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'get_dashboard_summary failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
-    },
+    execute: async () => toModelToolResult(await runGetDashboardSummary(userId, {})),
   };
 }
 
@@ -53,7 +42,7 @@ export async function runGetDashboardSummary(
     const summary = await banking.dashboard.getDashboardSummary(userId);
     return { ok: true, data: summary, summary: summarizeDashboard(summary) };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 

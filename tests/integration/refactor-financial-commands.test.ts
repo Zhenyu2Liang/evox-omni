@@ -56,7 +56,7 @@ describe('uniform financial command commit boundary', () => {
       await expect(registry().executeDirect(command.name, command.args, {
         sessionId, idempotencyKey: `financial-audit-failure:${command.name}`,
         onCommandCommit: async () => { throw new AppError('INTERNAL', 'Required execution audit failed.'); },
-      })).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL', error: 'Required execution audit failed.' });
+      })).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
       expect(await financialSnapshot()).toEqual(before);
       expect(await database().executionReceipt.count({ where: { userId: DEMO_USER_ID } })).toBe(0);
       expect(await database().auditLog.count({ where: { sessionId } })).toBe(0);

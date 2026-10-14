@@ -39,10 +39,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 
 import {
   executeGatedTool,
-  getOrCreateSession,
   readPendingActionId,
   recordDecidedNodeFenced,
 } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan, type PlanRunTool } from '@/agent/tools/planning';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
@@ -97,9 +97,9 @@ function transferNode(id: string, amount: string, deps: string[] = []): SeedNode
   };
 }
 
-/** Create + persist a fresh `AgentSession` for the demo user and return its (unique) id. */
+/** Load the canonical demo session used by the HTTP entry. */
 async function sender(): Promise<string> {
-  return (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  return (await getDemoSession(DEMO_USER_ID)).sessionId;
 }
 
 /**

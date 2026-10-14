@@ -7,6 +7,7 @@ export interface RetryPolicyCapabilities {
 }
 
 export function toolReplayPolicy(toolName: string, capabilities: RetryPolicyCapabilities = {}): ToolReplayPolicy {
+  if (toolName === 'describe_turn') return { safety: 'read_only', maxAttempts: 3 };
   const entry = catalogEntry(toolName);
   if (entry?.replay.safety === 'read_only') return { safety: 'read_only', maxAttempts: entry.replay.maxAttempts };
   if (entry?.replay.requiresReceipt && capabilities.receiptBackedTools?.has(toolName)) {

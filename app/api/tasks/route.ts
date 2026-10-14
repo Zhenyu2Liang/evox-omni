@@ -4,9 +4,8 @@
  * Contract:
  *  - Query (validated with `limitQuerySchema`): `{ limit?: number }`. A `?sessionId=` query param is
  *    IGNORED (identity is never query-trusted).
- *  - Session: resolved SERVER-SIDE from the `banking_session` cookie (`_lib/session#resolveIdentity`).
- *    No cookie / unknown session yields `{ plans: [] }` (200, never an error — the chat page has no
- *    plans to restore until a session exists).
+ *  - Session: the configured demo user's fixed workspace, resolved by `resolveIdentity`.
+ *    Opening the page loads the same workspace across browsers; missing cookies do not alter it.
  *  - Reads persisted `AgentTask`/`AgentTaskNode` rows through the sanctioned repository read path
  *    (`@/lib/db/repositories/task`) and maps them to the frozen `TaskPlan` contract (`_lib/task-plans`).
  *    The `@/planner` facade exposes no plan-store reader (see `_lib/task-plans.ts`).
@@ -34,7 +33,6 @@ export async function GET(req: NextRequest): Promise<Response> {
   try {
     const query: TaskListQuery = parseQuery(taskListQuerySchema, req);
     const identity = await resolveIdentity(req);
-    if (!identity) return jsonResponse<TaskListData>({ plans: [] });
 
     const rows = await listTasksBySession(identity.sessionId);
     const plans: TaskPlan[] = [];

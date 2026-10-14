@@ -20,7 +20,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { POST as chatPost } from '@/app/api/chat/route';
 import type { AgentStreamEvent, ChatCard, ChatTurnResponse } from '@/lib/contracts/agent';
-import { MFA_CODE, SESSION_COOKIE } from '@/lib/constants';
+import { MFA_CODE } from '@/lib/constants';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, CONTACTS } from '@/tests/helpers/fixtures';
 import { chatUrl, postJson, postRaw, readSse, readSseFrames, type HttpResult } from './harness';
@@ -341,7 +341,7 @@ describe('[integration] POST /api/chat (real route handler, mock model) — GREE
 });
 
 describe('[integration] POST /api/chat — transport modes, cookie and errors', () => {
-  it('6 — streaming (`text/event-stream`) yields well-formed, done-terminated frames mirroring the JSON path; Accept: application/json yields JSON; Set-Cookie is set', async () => {
+  it('6 — streaming and JSON return matching presentation events without identity cookies', async () => {
     // Default mode (no `stream` param, non-JSON Accept) → SSE.
     const sse = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({}), {
       message: '查询我的余额',
@@ -358,8 +358,7 @@ describe('[integration] POST /api/chat — transport modes, cookie and errors', 
     }
     const sseEvents = frames.map((frame) => JSON.parse(frame) as AgentStreamEvent);
     expect(sseEvents[sseEvents.length - 1]).toEqual({ type: 'done' });
-    const cookie = sse.res.headers.get('set-cookie') ?? '';
-    expect(cookie).toContain(`${SESSION_COOKIE}=`);
+    expect(sse.res.headers.get('set-cookie')).toBeNull();
 
     // The SAME message over the JSON path, projected identically (the SSE frames mirror it).
     const json = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
@@ -369,8 +368,7 @@ describe('[integration] POST /api/chat — transport modes, cookie and errors', 
     expect(project(sseEvents)).toEqual(project(jsonTurn.events));
     // Same streamed text too (chunk boundaries differ, the concatenation must not).
     expect(streamedText(sseEvents)).toEqual(streamedText(jsonTurn.events));
-    const jsonCookie = json.res.headers.get('set-cookie') ?? '';
-    expect(jsonCookie).toContain(`${SESSION_COOKIE}=${jsonTurn.sessionId}`);
+    expect(json.res.headers.get('set-cookie')).toBeNull();
 
     // `Accept: application/json` with NO `stream` param also yields JSON.
     const acceptJson = await postJson<Envelope<ChatTurnResponse>>(

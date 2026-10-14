@@ -1,670 +1,173 @@
-/**
- * grounding-integration.test.ts — PIPELINE-level proof of the code-enforced fact grounding.
- *
- * The PURE decision (`agent/grounding.ts` + `agent/grounding-facts.ts`) is covered by
- * `./grounding.test.ts`. THIS file proves the SAME guarantee END-TO-END through the REAL
- * `runTurn` / `resumeTurn`: the Pi agent loop, the registered banking tools, the security gateway
- * `beforeToolCall`, the Banking SDK and the SQLite test DB are ALL production code — only the model
- * is scripted, injected through the additive `RunTurnDeps.provider` (`ModelRuntime`) seam. It NEVER
- * uses the test-only re-instantiation helper, so what it proves is exactly what ships.
- *
- * What it pins down (each case complements a pure spec — no duplication):
- *   1. NO ungrounded financial fact ever reaches the UI: `text_delta`s are BUFFERED until grounding,
- *      the deltas of a message concatenate to that message's `message_end.content`, and the terminal
- *      content is the server-authored correction — never the model's false success;
- *   2. the PERSISTED transcript carries exactly the grounded text (the grounded text is what a
- *      reload renders);
- *   3. `resumeTurn` grounds the CONFIRMATION continuation against the injected REAL tool result:
- *      a contradictory narration is replaced by the real amount/recipient, a correct one is left
- *      byte-identical — so the confirmation narration can never invent an outcome;
- *   4. an UNKNOWN outcome (`needsReconciliation`) may be asserted NEITHER as success NOR as failure /
- *      "funds unchanged" — the honest, queryable "待核对" state is the only allowed wording;
- *   5. a model-FORGED `（系统校正）` tag is not a skip key: the text is still verified and corrected;
- *   6. CONSERVATIVE non-firing: a consistent narration (a correct GREEN read) is left untouched;
- *   7. the legacy guards: a claimed-but-ungrounded transfer moves NO money, a wrong balance is
- *      corrected to server authority, and a PARKED gated call's honest "awaiting confirmation"
- *      narration is NOT rewritten (a parked call is not a successful write).
- *
- * Every case gets a fresh DB (`resetDatabase`) and a fresh session id — the circuit breaker and the
- * per-session `AgentState` are keyed by the session.
- */
+/** Provider prose, typed tool evidence and actual banking effects have separate authority. */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall } from '@earendil-works/pi-ai';
-import type { FauxResponseStep, JsonObject } from '@earendil-works/pi-ai';
-import { cancelAction, getOrCreateSession, loadSession, resumeTurn, runTurn } from '@/agent';
-import type { ModelRuntime, ToolExecutionResult } from '@/agent';
+import { fauxAssistantMessage, fauxToolCall, type JsonObject } from '@earendil-works/pi-ai';
+import { cancelAction, confirmAction, loadSession, resumeTurn, runTurn, verifyAction } from '@/agent';
 import type { AgentStreamEvent, ChatMessage } from '@/lib/contracts/agent';
-import { newId } from '@/lib/ids';
-import { addMoney } from '@/lib/money';
+import { scriptedProvider, type ScriptedTurnDeclaration } from '@/tests/helpers/scripted-provider';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 
-/* ------------------------------------------------------------------------------------- harness */
-
-/** The server tag marking a text the server already corrected (`agent/grounding.ts`). */
-const CORRECTION_TAG = '（系统校正）';
-
-/** The seeded 活期 balance and its authoritative available total (¥23,580 + ¥50,000 savings). */
-const CHECKING_BALANCE = '23580.00';
-const TOTAL_AVAILABLE = '73580.00';
-
-/** A false-completion narration: `get_balance` ran, but NO transfer result exists this turn. */
-const FALSE_SUCCESS = '转账已经成功完成，¥500 已转给张伟。';
-/** A narration stating a WRONG balance while the authoritative total is known. */
-const WRONG_BALANCE = '你的账户可用余额为 ¥999,999.99。';
-/** The CONSISTENT narration of the authoritative `get_balance` total. */
-const CORRECT_BALANCE = '你的账户可用余额合计为 ¥73,580.00。';
-const SERVER_BALANCE = '（系统校正）活期账户当前余额为 ¥23,580.00；储蓄账户当前余额为 ¥50,000.00；账户可用余额合计为 ¥73,580.00。';
-
-/**
- * The REAL `transfer_money` result the confirmation path injects on a resume (向 张伟 转账 ¥200.00,
- * balance after ¥23,380.00) — the authoritative facts the continuation must be grounded against.
- */
-const REAL_TRANSFER: ToolExecutionResult = {
-  ok: true,
-  summary: '已向 张伟 转账 ¥200.00。',
-  data: {
-    amount: '200.00',
-    newBalance: '23380.00',
-    sourceAccountId: 'acct_checking',
-    recipient: { name: '张伟', contactId: 'contact_zhangwei' },
-  },
+const config = { llmMode: 'live' as const, llmProvider: 'deepseek', llmModel: 'scripted', demoUserId: DEMO_USER_ID };
+const tool = (name: string, args: JsonObject) => fauxAssistantMessage([fauxToolCall(name, args)], { stopReason: 'toolUse' });
+const messages = (events: readonly AgentStreamEvent[]): ChatMessage[] => {
+  const map = new Map<string, ChatMessage>();
+  for (const event of events) if (event.type === 'message_end') map.set(event.message.id, event.message);
+  return [...map.values()];
 };
+const lastProse = (events: readonly AgentStreamEvent[]) => messages(events).filter(message => message.role === 'assistant').at(-1)?.content;
+const toolRows = (events: readonly AgentStreamEvent[]) => messages(events).filter(message => message.role === 'tool');
 
-/** The REAL result of a gated write whose outcome is UNKNOWN (needs manual reconciliation). */
-const REAL_UNKNOWN_TRANSFER: ToolExecutionResult = {
-  ok: false,
-  data: { needsReconciliation: true },
-};
-
-/**
- * Build a `ModelRuntime` backed by a SCRIPTED faux provider: `reg.setResponses(steps)` REPLACES the
- * queue and ONE step is consumed per model call. Mirrors `agent/providers/provider-mock.ts` — only
- * the model is fake, the whole pipeline stays real.
- */
-function scriptedRuntime(steps: FauxResponseStep[]): ModelRuntime {
-  const reg = fauxProvider();
-  const models = createModels();
-  models.setProvider(reg.provider);
-  reg.setResponses(steps);
-  return { model: reg.getModel(), streamFn: models.streamSimple.bind(models) };
+async function noFinancialEffects(beforeTransactions: number) {
+  const db = getTestPrisma();
+  expect(await db.transaction.count()).toBe(beforeTransactions);
+  expect(await db.executionReceipt.count()).toBe(0);
+  expect((await db.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2358000n);
 }
 
-/** A scripted step that PROPOSES a tool call (this is what makes the agent loop run the tool). */
-function toolStep(tool: string, args: Record<string, unknown>): FauxResponseStep {
-  return fauxAssistantMessage(
-    [fauxToolCall(tool, JSON.parse(JSON.stringify(args)) as JsonObject)],
-    { stopReason: 'toolUse' },
-  );
-}
-
-/** Every assistant `message_end` message this run produced (the tool-call step + the narration). */
-function assistantMessages(events: AgentStreamEvent[]): ChatMessage[] {
-  return events
-    .filter(
-      (event): event is Extract<AgentStreamEvent, { type: 'message_end' }> =>
-        event.type === 'message_end',
-    )
-    .map((event) => event.message);
-}
-
-/** The user-visible assistant text = the content of the LAST `message_end` event. */
-function finalAssistantText(events: AgentStreamEvent[]): string {
-  const messages = assistantMessages(events);
-  expect(messages.length).toBeGreaterThan(0);
-  return messages[messages.length - 1].content;
-}
-
-/** Every streamed `text_delta` payload, in order. */
-function deltas(events: AgentStreamEvent[]): string[] {
-  return events
-    .filter((event): event is Extract<AgentStreamEvent, { type: 'text_delta' }> => event.type === 'text_delta')
-    .map((event) => event.delta);
-}
-
-/** The concatenation of every streamed `text_delta` (what the UI accumulates into `streamingText`). */
-function streamedText(events: AgentStreamEvent[]): string {
-  return deltas(events).join('');
-}
-
-/**
- * Pair the streamed deltas with the `message_end` they belong to (each message's deltas are emitted
- * immediately before its `message_end`), so the spec can prove the UI's accumulated text EQUALS the
- * grounded `message_end.content` PER MESSAGE — i.e. no ungrounded text was ever streamed.
- */
-function deltaPairs(events: AgentStreamEvent[]): Array<{ delta: string; content: string }> {
-  const pairs: Array<{ delta: string; content: string }> = [];
-  let pending = '';
-  for (const event of events) {
-    if (event.type === 'text_delta') pending += event.delta;
-    else if (event.type === 'message_end') {
-      pairs.push({ delta: pending, content: event.message.content });
-      pending = '';
-    }
-  }
-  return pairs;
-}
-
-/** The run-failure stream events (a mis-scripted provider surfaces one — fail loud). */
-function errorMessages(events: AgentStreamEvent[]): string[] {
-  return events
-    .filter((event): event is Extract<AgentStreamEvent, { type: 'error' }> => event.type === 'error')
-    .map((event) => event.message);
-}
-
-/** The content of the LAST persisted assistant message (what a session reload renders). */
-async function persistedAssistantText(sessionId: string): Promise<string | undefined> {
-  const snapshot = await loadSession(sessionId);
-  expect(snapshot).not.toBeNull();
-  return snapshot!.transcript.filter((message) => message.role === 'assistant').at(-1)?.content;
-}
-
-/**
- * Run ONE turn whose YELLOW `transfer_money` (¥200 ≤ ¥1000) PARKS on a human decision, leaving a
- * REAL parked `PendingAction` + a REAL `toolCall` in the session transcript — the precondition for a
- * `resumeTurn` continuation (the confirm path would inject the REAL tool result here).
- */
-async function parkYellowTransfer(): Promise<{ sessionId: string; toolCallId?: string }> {
-  const runtime = scriptedRuntime([
-    toolStep('transfer_money', { name: '张伟', amount: '200.00' }),
-    fauxAssistantMessage('转账需要你的确认，请在确认卡片中完成操作。'),
+async function parkTransfer(amount: string) {
+  const script = scriptedProvider({ purpose: 'operation', operations: ['transfer_money'] }, [
+    tool('transfer_money', { contactId: 'contact_zhangwei', amount }),
+    fauxAssistantMessage('Review the operation card to continue.'),
   ]);
-  const res = await runTurn(
-    { sessionId: newId('sess'), message: '转 200 给张伟。' },
-    { provider: runtime },
-  );
-  expect(errorMessages(res.events)).toEqual([]);
-  expect(
-    res.events.filter(
-      (event) => event.type === 'confirmation_required' || event.type === 'mfa_required',
-    ).length,
-  ).toBeGreaterThan(0);
-  expect(await getTestPrisma().pendingAction.count()).toBe(1);
-  const started = res.events.find((event) => event.type === 'tool_start');
-  return {
-    sessionId: res.sessionId,
-    ...(started !== undefined && started.type === 'tool_start'
-      ? { toolCallId: started.toolEvent.toolCallId }
-      : {}),
-  };
+  const turn = await runTurn({ message: 'Transfer the explicitly selected amount to the saved contact.' }, { config, provider: script.provider });
+  const action = await getTestPrisma().pendingAction.findFirstOrThrow();
+  return { turn, action, script };
 }
 
-/** Resume a parked session with a REAL tool result and ONE scripted continuation narration. */
-function resumeWith(
-  sessionId: string,
-  toolResult: ToolExecutionResult,
-  narration: string,
-  toolCallId?: string,
-): ReturnType<typeof resumeTurn> {
-  const runtime = scriptedRuntime([fauxAssistantMessage(narration)]);
-  return resumeTurn(
-    {
-      sessionId,
-      toolResult,
-      toolName: 'transfer_money',
-      ...(toolCallId !== undefined ? { toolCallId } : {}),
-    },
-    { provider: runtime },
-  );
-}
+beforeEach(resetDatabase);
+afterAll(disconnectTestPrisma);
 
-beforeEach(async () => {
-  await resetDatabase();
-}, 30000);
-
-afterAll(async () => {
-  await disconnectTestPrisma();
-});
-
-/* ------------------------------------------------------------------------------------- cases */
-
-describe('grounding — no ungrounded financial fact reaches the UI (through the REAL runTurn)', () => {
-  it('1: buffers deltas until grounded and streams only the server-authored correction', async () => {
-    const prisma = getTestPrisma();
-    const txBefore = await prisma.transaction.count();
-
-    // A REAL green read, then a FALSE completion claim about a write that never happened.
-    const runtime = scriptedRuntime([toolStep('get_balance', {}), fauxAssistantMessage(FALSE_SUCCESS)]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '我的余额是多少？先转 500 给张伟。' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-    // The tool really ran (two assistant messages: the tool-call step + the narration).
-    expect(assistantMessages(res.events).length).toBe(2);
-
-    // (a) the false-success phrasing was NEVER streamed — deltas are buffered until grounding.
-    for (const delta of deltas(res.events)) expect(delta).not.toContain('转账已经成功完成');
-    // (b) per message, the concatenated deltas EQUAL that message's `message_end.content`.
-    const pairs = deltaPairs(res.events);
-    expect(pairs.length).toBe(assistantMessages(res.events).length);
-    for (const pair of pairs) expect(pair.delta).toBe(pair.content);
-    expect(streamedText(res.events)).toBe(finalAssistantText(res.events));
-
-    // (c) the terminal message IS the server-authored correction.
-    const text = finalAssistantText(res.events);
-    expect(text).toContain(CORRECTION_TAG);
-    expect(text).toBe(SERVER_BALANCE);
-    expect(text).not.toContain('转账已经成功完成');
-    expect(text).not.toContain('¥500');
-
-    // (d) no side effect: the claim is ungrounded, and nothing moved.
-    expect(await prisma.transaction.count()).toBe(txBefore);
-    expect(await prisma.executionReceipt.count()).toBe(0);
-    expect(await prisma.pendingAction.count()).toBe(0);
+describe('separate model prose and authoritative tool entries', () => {
+  it.each([
+    'Your balance is 999999.99 CNY.',
+    'The transfer has completed successfully.',
+    'An explanation may quote the phrase: the operation completed successfully.',
+  ])('preserves the full provider prose without converting it into financial evidence: %s', async prose => {
+    const before = await getTestPrisma().transaction.count();
+    const script = scriptedProvider({ purpose: 'query', operations: ['get_balance'] }, [tool('get_balance', {}), fauxAssistantMessage(prose)]);
+    const turn = await runTurn({ message: 'Read my account balances and explain them.' }, { config, provider: script.provider });
+    expect(lastProse(turn.events)).toBe(prose);
+    const rows = toolRows(turn.events);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].toolEvents).toMatchObject([{ toolName: 'get_balance', status: 'success' }]);
+    expect(rows[0].cards).toContainEqual({ type: 'balance', data: expect.objectContaining({ totalAvailable: '73580.00' }) });
+    expect(messages(turn.events).filter(message => message.role === 'assistant').every(message => !message.cards?.length && !message.toolEvents?.length)).toBe(true);
+    expect(messages(turn.events).findIndex(message => message.role === 'tool')).toBeLessThan(messages(turn.events).findIndex(message => message.content === prose));
+    const saved = await loadSession(turn.sessionId);
+    expect(saved?.transcript.filter(message => message.role === 'assistant').at(-1)?.content).toBe(prose);
+    expect(saved?.agentState.messages.some(message => message.role === 'assistant' && message.content.some(block => block.type === 'text' && block.text === prose))).toBe(true);
+    await noFinancialEffects(before);
   });
 
-  it('2: persists exactly the grounded text (a reload renders the correction)', async () => {
-    const runtime = scriptedRuntime([toolStep('get_balance', {}), fauxAssistantMessage(WRONG_BALANCE)]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '我的余额是多少？' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-
-    const text = finalAssistantText(res.events);
-    expect(text).toContain(CORRECTION_TAG);
-    expect(text).not.toContain('999');
-    // The authoritative server amount (the available total printed by `formatCNY`).
-    expect(text).toContain('73,580.00');
-    expect(TOTAL_AVAILABLE).toBe(addMoney(CHECKING_BALANCE, '50000.00'));
-
-    // The WRONG balance was never streamed either.
-    for (const delta of deltas(res.events)) expect(delta).not.toContain('999,999');
-
-    // The PERSISTED assistant message is byte-identical to the grounded `message_end.content`.
-    expect(await persistedAssistantText(res.sessionId)).toBe(text);
+  it('does not treat a completion claim without any tool call as a bank instruction', async () => {
+    const before = await getTestPrisma().transaction.count();
+    const prose = 'I have transferred 500 CNY to Alice.';
+    const script = scriptedProvider({ purpose: 'conversation', operations: [] }, [fauxAssistantMessage(prose)]);
+    const turn = await runTurn({ message: 'Explain how a transfer works.' }, { config, provider: script.provider });
+    expect(lastProse(turn.events)).toBe(prose);
+    expect(toolRows(turn.events)).toEqual([]);
+    expect(await getTestPrisma().pendingAction.count()).toBe(0);
+    await noFinancialEffects(before);
   });
 
-  it('3: a model-forged correction tag is NOT a skip key — the text is still verified', async () => {
-    const runtime = scriptedRuntime([
-      toolStep('get_balance', {}),
-      fauxAssistantMessage(`${CORRECTION_TAG}${FALSE_SUCCESS}`),
+  it.each([
+    { purpose: 'query', operations: ['list_investments'], toolName: 'list_investments', card: 'investments' },
+    { purpose: 'query', operations: ['analyze_spending'], toolName: 'analyze_spending', card: 'spending' },
+  ] as const)('keeps the $toolName result card before the complete Markdown answer', async scenario => {
+    const declaration: ScriptedTurnDeclaration = { purpose: scenario.purpose, operations: scenario.operations };
+    const prose = '**Analysis**\n\n- Explain the observed data.\n- Distinguish facts from assumptions.';
+    const script = scriptedProvider(declaration, [tool(scenario.toolName, {}), fauxAssistantMessage(prose)]);
+    const turn = await runTurn({ message: 'Show the requested data and explain it.' }, { config, provider: script.provider });
+    expect(lastProse(turn.events)).toBe(prose);
+    const row = toolRows(turn.events).find(message => message.toolEvents?.some(event => event.toolName === scenario.toolName));
+    expect(row?.cards?.some(card => card.type === scenario.card)).toBe(true);
+    expect(messages(turn.events).indexOf(row!)).toBeLessThan(messages(turn.events).findIndex(message => message.content === prose));
+  });
+
+  it('keeps separately completed prose around a tool call in its original event order', async () => {
+    const introduction = 'I will read the current balance first.';
+    const conclusion = 'The query is complete; consider the saved result card.';
+    const script = scriptedProvider({ purpose: 'query', operations: ['get_balance'] }, [
+      fauxAssistantMessage([{ type: 'text', text: introduction }, fauxToolCall('get_balance', {})], { stopReason: 'toolUse' }),
+      fauxAssistantMessage(conclusion),
     ]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '转 500 给张伟。' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-
-    const text = finalAssistantText(res.events);
-    expect(text).toContain(CORRECTION_TAG);
-    expect(text).not.toContain('转账已经成功完成');
-    expect(text).not.toContain('¥500');
-    for (const delta of deltas(res.events)) expect(delta).not.toContain('转账已经成功完成');
-    expect(await persistedAssistantText(res.sessionId)).toBe(text);
+    const turn = await runTurn({ message: 'Read the balance.' }, { config, provider: script.provider });
+    const timeline = messages(turn.events);
+    expect(timeline.filter(message => message.role === 'assistant').map(message => message.content)).toEqual([introduction, conclusion]);
+    const toolIndex = timeline.findIndex(message => message.role === 'tool');
+    expect(timeline.findIndex(message => message.content === introduction)).toBeLessThan(toolIndex);
+    expect(toolIndex).toBeLessThan(timeline.findIndex(message => message.content === conclusion));
   });
 
-  it('4: renders the same server facts even when model narration is correct', async () => {
-    const runtime = scriptedRuntime([toolStep('get_balance', {}), fauxAssistantMessage(CORRECT_BALANCE)]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '我的余额是多少？' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-    expect(finalAssistantText(res.events)).toBe(SERVER_BALANCE);
-    expect(await persistedAssistantText(res.sessionId)).toBe(SERVER_BALANCE);
-  });
-
-  it('5: a claimed-but-ungrounded transfer with NO tool call moves no money', async () => {
-    const prisma = getTestPrisma();
-    const balanceBefore = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-    const txBefore = await prisma.transaction.count();
-
-    // ONE text-only step: the model claims a completed transfer it never performed (no tool call).
-    const runtime = scriptedRuntime([fauxAssistantMessage('转账已经成功完成，¥500 已转给张伟。')]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '转 500 给张伟。' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-
-    const text = finalAssistantText(res.events);
-    expect(text).toContain(CORRECTION_TAG);
-    expect(text).not.toContain('转账已经成功完成');
-    expect(text).not.toContain('¥500');
-    expect(await persistedAssistantText(res.sessionId)).toBe(text);
-
-    const balanceAfter = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-    expect(balanceAfter.balanceMinor).toBe(2358000n);
-    expect(balanceAfter.balanceMinor).toBe(balanceBefore.balanceMinor);
-    expect(await prisma.transaction.count()).toBe(txBefore);
-    expect(await prisma.executionReceipt.count()).toBe(0);
-    expect(await prisma.pendingAction.count()).toBe(0);
-  });
-
-  it('6: does NOT rewrite an honest "awaiting confirmation" narration for a parked call', async () => {
-    const prisma = getTestPrisma();
-    const balanceBefore = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-
-    const runtime = scriptedRuntime([
-      toolStep('transfer_money', { name: '张伟', amount: '200.00' }),
-      fauxAssistantMessage('转账需要你的确认，请在确认卡片中完成操作。'),
+  it('rejects a write proposal during a query regardless of its accompanying success claim', async () => {
+    const before = await getTestPrisma().transaction.count();
+    const script = scriptedProvider({ purpose: 'query', operations: ['get_balance'] }, [
+      tool('transfer_money', { contactId: 'contact_zhangwei', amount: '500.00' }),
+      fauxAssistantMessage('The transfer has completed.'),
     ]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '转 200 给张伟。' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-
-    // A parked call is NOT a successful write: the honest narration is not rewritten.
-    const text = finalAssistantText(res.events);
-    expect(text).toBe('（系统校正）该操作尚未执行，等待确认，请本人核对操作卡片。');
-    expect(text).not.toContain('实际执行成功');
-
-    // The call parked — recorded, but NO money moved.
-    expect(await prisma.pendingAction.count()).toBe(1);
-    expect(await prisma.executionReceipt.count()).toBe(0);
-    const balanceAfter = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-    expect(balanceAfter.balanceMinor).toBe(balanceBefore.balanceMinor);
-    expect(balanceAfter.balanceMinor).toBe(2358000n);
-    // The demo user owns the parked action (server-injected identity, never model text).
-    expect((await prisma.pendingAction.findFirstOrThrow()).userId).toBe(DEMO_USER_ID);
+    const turn = await runTurn({ message: 'Read my balance.' }, { config, provider: script.provider });
+    expect(await getTestPrisma().pendingAction.count()).toBe(0);
+    expect(toolRows(turn.events).flatMap(message => message.toolEvents ?? [])).toContainEqual(expect.objectContaining({ toolName: 'transfer_money', status: 'blocked' }));
+    await noFinancialEffects(before);
   });
 });
 
-describe('grounding — the confirm continuation (resumeTurn) is grounded against the REAL result', () => {
-  it('7: replaces a continuation that contradicts the injected REAL transfer result', async () => {
-    const { sessionId, toolCallId } = await parkYellowTransfer();
-
-    const res = await resumeWith(sessionId, REAL_TRANSFER, '已成功向王芳转账 ¥9,999.00。', toolCallId);
-    expect(errorMessages(res.events)).toEqual([]);
-
-    const text = finalAssistantText(res.events);
-    expect(text).toContain(CORRECTION_TAG);
-    // The REAL structured outcome wins: recipient + amount come from the tool result, not the model.
-    expect(text).toContain('张伟');
-    expect(text).toContain('¥200.00');
-    expect(text).not.toContain('王芳');
-    expect(text).not.toContain('9,999');
-    for (const delta of deltas(res.events)) expect(delta).not.toContain('9,999');
-    // The resumed continuation is what got persisted.
-    expect(await persistedAssistantText(sessionId)).toBe(text);
+describe('authorization and write receipts remain server-owned', () => {
+  it.each([['200.00', 'pending'], ['2000.00', 'awaiting_mfa']] as const)('parks %s before any debit and records the authoritative %s state', async (amount, status) => {
+    const before = await getTestPrisma().transaction.count();
+    const { action, turn } = await parkTransfer(amount);
+    expect(action.status).toBe(status);
+    expect(turn.events.some(event => event.type === (status === 'pending' ? 'confirmation_required' : 'mfa_required'))).toBe(true);
+    expect(toolRows(turn.events).flatMap(message => message.toolEvents ?? [])).toContainEqual(expect.objectContaining({ toolName: 'transfer_money', status: 'blocked', actionId: action.id }));
+    await noFinancialEffects(before);
   });
 
-  it('8: leaves a continuation that MATCHES the injected REAL result byte-identical', async () => {
-    const { sessionId, toolCallId } = await parkYellowTransfer();
-
-    const correct = '已向张伟转账 ¥200.00，操作已完成。';
-    const res = await resumeWith(sessionId, REAL_TRANSFER, correct, toolCallId);
-    expect(errorMessages(res.events)).toEqual([]);
-
-    const expected = '（系统校正）转账处理结果：第1笔操作实际执行成功；收款人 张伟；金额 ¥200.00；执行时账户余额 ¥23,380.00。';
-    expect(finalAssistantText(res.events)).toBe(expected);
-    expect(streamedText(res.events)).toContain(expected);
-    expect(await persistedAssistantText(sessionId)).toBe(expected);
-  });
-});
-
-describe('grounding — an UNKNOWN outcome may be asserted neither as success nor as failure', () => {
-  it('9: rejects a success claim for a write whose outcome needs reconciliation', async () => {
-    const { sessionId, toolCallId } = await parkYellowTransfer();
-
-    const res = await resumeWith(sessionId, REAL_UNKNOWN_TRANSFER, '转账已成功完成。', toolCallId);
-    expect(errorMessages(res.events)).toEqual([]);
-
-    const text = finalAssistantText(res.events);
-    expect(text).toContain(CORRECTION_TAG);
-    expect(text).toContain('待核对');
-    expect(text).not.toContain('成功');
-    expect(await persistedAssistantText(sessionId)).toBe(text);
+  it('confirms the saved transfer exactly once and does not invoke a model to decide whether it succeeded', async () => {
+    const { action, turn, script } = await parkTransfer('200.00');
+    const callsBefore = script.calls();
+    const outcome = await confirmAction(action.id, { deps: { config, provider: script.provider } });
+    expect(outcome.ok).toBe(true);
+    expect(outcome.status).toBe('executed');
+    expect(script.calls()).toBe(callsBefore);
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2338000n);
+    expect(await getTestPrisma().executionReceipt.count()).toBe(1);
+    await confirmAction(action.id, { deps: { config, provider: script.provider } });
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2338000n);
+    expect(await getTestPrisma().transaction.count({ where: { channel: 'TRANSFER', amountMinor: -20000n } })).toBe(1);
+    const saved = await loadSession(turn.sessionId);
+    expect(saved?.agentState.messages.some(message => message.role === 'toolResult' && message.toolName === 'transfer_money')).toBe(true);
   });
 
-  it('10: rejects a failure / "funds unchanged" claim for the SAME unknown outcome', async () => {
-    const { sessionId, toolCallId } = await parkYellowTransfer();
-
-    const res = await resumeWith(sessionId, REAL_UNKNOWN_TRANSFER, '转账失败，资金未变。', toolCallId);
-    expect(errorMessages(res.events)).toEqual([]);
-
-    const text = finalAssistantText(res.events);
-    expect(text).toContain(CORRECTION_TAG);
-    expect(text).toContain('待核对');
-    expect(text).not.toContain('失败');
-    expect(text).not.toContain('资金未变');
-    expect(text).not.toContain('未发生');
+  it('keeps an unknown authorized outcome in the tool status without executing another transfer', async () => {
+    const before = await getTestPrisma().transaction.count();
+    const { turn } = await parkTransfer('200.00');
+    const row = toolRows(turn.events)[0];
+    const script = scriptedProvider({ purpose: 'conversation', operations: [] }, []);
+    const resumed = await resumeTurn({ sessionId: turn.sessionId, toolName: 'transfer_money', toolCallId: row.toolEvents![0].toolCallId,
+      toolResult: { ok: false, data: { needsReconciliation: true } } }, { config, provider: script.provider });
+    expect(script.calls()).toBe(0);
+    expect(toolRows(resumed.events).flatMap(message => message.toolEvents ?? [])).toContainEqual(expect.objectContaining({ status: 'needs_reconciliation' }));
+    await noFinancialEffects(before);
   });
-});
 
-describe('grounding — a message that ALSO carries a toolCall is grounded (the guard was removed)', () => {
-  it('11: grounds the text of a text+toolCall message instead of skipping it', async () => {
-    const prisma = getTestPrisma();
-    const txBefore = await prisma.transaction.count();
-
-    // ONE assistant message carries BOTH a false completion text AND a REAL `get_balance` call. A
-    // former `hasToolCallPart` guard SKIPPED grounding for such a message, so its raw false claim
-    // would have been streamed ungrounded; with the guard removed it is grounded like any other.
-    const runtime = scriptedRuntime([
-      fauxAssistantMessage([fauxText(FALSE_SUCCESS), fauxToolCall('get_balance', {})], {
-        stopReason: 'toolUse',
-      }),
-      fauxAssistantMessage(FALSE_SUCCESS),
-    ]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '我的余额是多少？另外转 500 给张伟。' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-
-    const messages = assistantMessages(res.events);
-    expect(messages.length).toBe(2);
-
-    // (a) the toolCall-carrying message WAS grounded: its own content is the server correction, and
-    // the false phrasing never survived in a message that also planned a call.
-    const toolCallMessage = messages[0];
-    expect(toolCallMessage.content).toBe(''); // Planning prose is never execution evidence.
-    expect(toolCallMessage.content).not.toContain('转账已经成功完成');
-    expect(toolCallMessage.content).not.toContain('¥500');
-
-    // (b) what was STREAMED for that message equals its grounded content — no ungrounded delta
-    // escaped for a toolCall-carrying message.
-    const pairs = deltaPairs(res.events);
-    expect(pairs.length).toBe(messages.length);
-    expect(pairs[0].delta).toBe(toolCallMessage.content);
-    for (const delta of deltas(res.events)) expect(delta).not.toContain('转账已经成功完成');
-
-    // (c) the streamed TERMINAL text is the server correction too.
-    const terminal = finalAssistantText(res.events);
-    expect(terminal).toContain(CORRECTION_TAG);
-    expect(terminal).not.toContain('转账已经成功完成');
-    expect(terminal).not.toContain('¥500');
-
-    // (d) grounding did NOT swallow the proposed call: the REAL `get_balance` read really ran.
-    const toolEnds = res.events.filter(
-      (event): event is Extract<AgentStreamEvent, { type: 'tool_end' }> =>
-        event.type === 'tool_end',
-    );
-    expect(
-      toolEnds.some(
-        (event) =>
-          event.toolEvent.toolName === 'get_balance' && event.toolEvent.status === 'success',
-      ),
-    ).toBe(true);
-
-    // (e) a claim about a transfer that never ran moves NO money.
-    expect(await prisma.transaction.count()).toBe(txBefore);
-    expect(await prisma.executionReceipt.count()).toBe(0);
-    expect(await prisma.pendingAction.count()).toBe(0);
+  it('failed strong-verification execution records a failure and cannot fabricate a debit', async () => {
+    const before = await getTestPrisma().transaction.count();
+    const { action, script } = await parkTransfer('30000.01');
+    const outcome = await verifyAction(action.id, '123456', { deps: { config, provider: script.provider } });
+    expect(outcome.ok).toBe(false);
+    expect(outcome.status).toBe('failed');
+    expect((await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: action.id } })).status).toBe('failed');
+    await noFinancialEffects(before);
   });
-});
 
-describe('grounding — buffered text, persisted transcript and a session RELOAD all agree', () => {
-  it('12: streamed deltas === terminal content === persisted transcript === reloaded transcript', async () => {
-    const runtime = scriptedRuntime([
-      toolStep('get_balance', {}),
-      fauxAssistantMessage(WRONG_BALANCE),
-    ]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '我的余额是多少？' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-
-    const streamed = streamedText(res.events);
-    const terminal = finalAssistantText(res.events);
-
-    // Per message, the accumulated deltas reconstruct that message's grounded content EXACTLY.
-    const pairs = deltaPairs(res.events);
-    expect(pairs.length).toBe(assistantMessages(res.events).length);
-    for (const pair of pairs) expect(pair.delta).toBe(pair.content);
-
-    // The four views agree byte-for-byte.
-    expect(streamed).toBe(terminal);
-    expect(await persistedAssistantText(res.sessionId)).toBe(terminal);
-
-    // A RELOAD — a fresh read through the session store (what a page refresh does) — renders the
-    // SAME grounded text.
-    const reloaded = await getOrCreateSession(DEMO_USER_ID, res.sessionId);
-    expect(reloaded.sessionId).toBe(res.sessionId);
-    const reloadedAssistants = reloaded.transcript.filter((message) => message.role === 'assistant');
-    expect(reloadedAssistants.at(-1)?.content).toBe(terminal);
-
-    // The correction is present, and the ungrounded WRONG balance was NEVER streamed nor persisted
-    // (in ANY reloaded message — no ungrounded fact ever reached the transcript).
-    expect(terminal).toContain(CORRECTION_TAG);
-    expect(terminal).toContain('73,580.00');
-    expect(streamed).not.toContain('999,999');
-    for (const message of reloadedAssistants) expect(message.content).not.toContain('999,999');
-  });
-});
-
-describe('grounding — investment flows are grounded by OPERATION identity', () => {
-  it('13: a GREEN investment read plus a false 申购 success claim is corrected', async () => {
-    const prisma = getTestPrisma();
-    const holdingBefore = await prisma.investmentHolding.count();
-
-    const runtime = scriptedRuntime([
-      toolStep('list_investments', {}),
-      fauxAssistantMessage('已成功申购理财产品 ¥5,000。'),
-    ]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '有哪些理财产品？顺便帮我申购 5000。' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-
-    // The GREEN read really ran...
-    const toolEnds = res.events.filter(
-      (event): event is Extract<AgentStreamEvent, { type: 'tool_end' }> =>
-        event.type === 'tool_end',
-    );
-    expect(
-      toolEnds.some(
-        (event) =>
-          event.toolEvent.toolName === 'list_investments' && event.toolEvent.status === 'success',
-      ),
-    ).toBe(true);
-
-    // ...but NO 申购 write happened this turn, so the success claim is corrected — never accepted.
-    const text = finalAssistantText(res.events);
-    expect(text).toContain(CORRECTION_TAG);
-    expect(text).toContain('理财产品（查询时结果）');
-    expect(text).not.toContain('理财申购处理结果');
-    expect(text).not.toContain('已成功申购');
-    for (const delta of deltas(res.events)) expect(delta).not.toContain('已成功申购');
-    expect(await persistedAssistantText(res.sessionId)).toBe(text);
-
-    // No investment side effect and no money moved (the claim is ungrounded).
-    expect(await prisma.investmentHolding.count()).toBe(holdingBefore);
-    expect(await prisma.pendingAction.count()).toBe(0);
-    expect(await prisma.executionReceipt.count()).toBe(0);
-  });
-});
-
-describe('grounding — the bill / spending-analysis flow is grounded too', () => {
-  it('14: a GREEN spending analysis plus an invented balance is corrected', async () => {
-    const runtime = scriptedRuntime([
-      toolStep('analyze_spending', {}),
-      fauxAssistantMessage('本月消费合计 ¥9,999.99，你的账户可用余额为 ¥888,888.88。'),
-    ]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '帮我分析一下这个月的消费。' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-
-    // The GREEN spending read really ran...
-    const toolEnds = res.events.filter(
-      (event): event is Extract<AgentStreamEvent, { type: 'tool_end' }> =>
-        event.type === 'tool_end',
-    );
-    expect(
-      toolEnds.some(
-        (event) =>
-          event.toolEvent.toolName === 'analyze_spending' && event.toolEvent.status === 'success',
-      ),
-    ).toBe(true);
-
-    // ...a spending analysis carries NO balance authority, so the invented balance is NOT verified —
-    // the server replaces it with the explicit "no trusted balance" correction, never the invention.
-    const text = finalAssistantText(res.events);
-    expect(text).toContain(CORRECTION_TAG);
-    expect(text).toContain('账单分析（查询时结果）');
-    expect(text).not.toContain('账户当前余额');
-    expect(text).not.toContain('888,888.88');
-    for (const delta of deltas(res.events)) expect(delta).not.toContain('888,888.88');
-    expect(await persistedAssistantText(res.sessionId)).toBe(text);
-  });
-});
-
-describe('grounding — a RED gated call (MFA) parks and its false completion claim is corrected', () => {
-  it('15: a ¥2000 transfer (> ¥1000 ⇒ RED) waits for MFA and moves no money', async () => {
-    const prisma = getTestPrisma();
-    const txBefore = await prisma.transaction.count();
-    const balanceBefore = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-
-    const runtime = scriptedRuntime([
-      toolStep('transfer_money', { name: '张伟', amount: '2000.00' }),
-      fauxAssistantMessage('转账已经成功完成，¥2,000 已转给张伟。'),
-    ]);
-    const res = await runTurn(
-      { sessionId: newId('sess'), message: '转 2000 给张伟。' },
-      { provider: runtime },
-    );
-    expect(errorMessages(res.events)).toEqual([]);
-
-    // A RED call requires STRONG verification — an MFA decision, not a plain confirmation.
-    expect(res.events.some((event) => event.type === 'mfa_required')).toBe(true);
-
-    // Parked for the human decision, but the false completion claim is corrected.
-    const text = finalAssistantText(res.events);
-    expect(text).toContain(CORRECTION_TAG);
-    expect(text).toBe('（系统校正）该操作尚未执行，等待验证码验证。');
-    expect(text).not.toContain('转账已经成功完成');
-    for (const delta of deltas(res.events)) expect(delta).not.toContain('转账已经成功完成');
-    expect(await persistedAssistantText(res.sessionId)).toBe(text);
-
-    // NOTHING moved: a parked RED call is NOT a successful write.
-    const parked = await prisma.pendingAction.findFirstOrThrow();
-    expect(parked.requiresMfa).toBe(true);
-    expect(await prisma.pendingAction.count()).toBe(1);
-    expect(await prisma.executionReceipt.count()).toBe(0);
-    expect(await prisma.transaction.count()).toBe(txBefore);
-    const balanceAfter = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-    expect(balanceAfter.balanceMinor).toBe(balanceBefore.balanceMinor);
-  });
-});
-
-describe('grounding — a cancelled gated action narrates nothing (nothing to ground)', () => {
-  it('16: a cancelled parked transfer produces NO continuation text and moves no money', async () => {
-    const prisma = getTestPrisma();
-    const txBefore = await prisma.transaction.count();
-    const balanceBefore = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-
-    const { sessionId } = await parkYellowTransfer();
-    const parked = await prisma.pendingAction.findFirstOrThrow();
-
-    const outcome = await cancelAction(parked.id, { sessionId });
+  it('cancels the pending transfer without a debit or model continuation', async () => {
+    const before = await getTestPrisma().transaction.count();
+    const { action, turn, script } = await parkTransfer('200.00');
+    const callsBefore = script.calls();
+    const outcome = await cancelAction(action.id, { sessionId: turn.sessionId });
     expect(outcome.ok).toBe(true);
     expect(outcome.status).toBe('cancelled');
-    // A cancel has NO continuation narration (there is no executed result to narrate) — so there is
-    // nothing for grounding to correct and no ungrounded claim can enter the transcript.
-    expect(outcome.events).toEqual([]);
-
-    // Nothing moved and the action is durably cancelled.
-    expect(await prisma.executionReceipt.count()).toBe(0);
-    expect(await prisma.transaction.count()).toBe(txBefore);
-    const balanceAfter = await prisma.account.findUniqueOrThrow({ where: { id: 'acct_checking' } });
-    expect(balanceAfter.balanceMinor).toBe(balanceBefore.balanceMinor);
-    expect((await prisma.pendingAction.findFirstOrThrow()).status).toBe('cancelled');
+    expect(script.calls()).toBe(callsBefore);
+    await noFinancialEffects(before);
   });
 });

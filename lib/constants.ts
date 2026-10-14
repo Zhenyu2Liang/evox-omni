@@ -33,9 +33,6 @@ export const DEFAULT_DEMO_USER_ID = 'user_liming';
  */
 export const DEMO_NOW = Date.parse('2026-09-25T12:00:00+08:00');
 
-/** Cookie name holding the demo agent session id. */
-export const SESSION_COOKIE = 'banking_session';
-
 /** Human-readable (and emoji) label for each permission tier. */
 export const RISK_LABEL: Record<RiskLevel, string> = {
   GREEN: '🟢 绿色',

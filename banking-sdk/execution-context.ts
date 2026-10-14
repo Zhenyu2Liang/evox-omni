@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/db/prisma';
 import type { ExecutionFenceCheck } from './fence';
 import type { TransferResult } from './types';
 

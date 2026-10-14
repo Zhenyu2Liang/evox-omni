@@ -19,11 +19,9 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
 import type { ToolName } from '@/lib/contracts/tools';
-import { TOOL_NAMES } from '@/lib/contracts/tool-catalog';
+import { AGENT_TOOL_NAMES as TOOL_NAMES } from '@/lib/contracts/tool-catalog';
 import type { ConversationIntent } from '@/lib/contracts/intent';
 import type {
-  TaskCondition,
-  TaskNodeKind,
   TaskNodeResult,
   TaskNodeSpec,
   TaskNodeStatus,
@@ -32,8 +30,9 @@ import type {
 } from '@/lib/contracts/task';
 import { dag, executor, type NodeExecutionContext, type PlanToolOutcome } from '@/planner';
 import { AppError } from '@/lib/errors';
-import { assertRequestedPlanProducts, enforceRequestedOrder, enforceRequestedSuccess, requestEntityAliases, resolveRequestedRedemptions } from '@/lib/request-constraints';
-import { assertCompleteRequestedPlan } from '@/lib/request-steps';
+import { resolveBankingArgs } from '@/lib/banking-selectors';
+import { listHoldings } from '@/lib/db/repositories/investment';
+import { resolveTransferRecipient, canonicalizeTransferArgs } from '@/security/recipient-resolution';
 import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import {
@@ -52,8 +51,10 @@ import {
 } from '../task-control';
 import type { ToolExecutionResult } from './index';
 import { compileRequestedPlan } from './plan-compiler';
+import { validatePlanParameters } from './plan-parameters';
 import { withWorkflowExecutionClaim } from '../workflows/execution-context';
 import { prisma } from '@/lib/db/client';
+import { toModelToolResult, toolFailure } from './result';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
 
 /**
@@ -129,27 +130,6 @@ export const SubmitPlanParams = Type.Object({
 });
 export type SubmitPlanArgs = Static<typeof SubmitPlanParams>;
 
-/** One model-proposed node as it arrives in `submit_plan` params. */
-type IncomingPlanNode = SubmitPlanArgs['nodes'][number];
-
-/**
- * Adapt a loose model-proposed node to the exact `TaskNodeSpec` field names/shape. `kind`, `args`
- * and `condition` arrive from the TypeBox schema as `string` / `{}` (the schema keeps them open so
- * the model can pass family-specific args); `dag.validatePlan` then rejects malformed nodes.
- */
-function toTaskNodeSpec(node: IncomingPlanNode): TaskNodeSpec {
-  return {
-    id: node.id,
-    name: node.name,
-    dependencies: node.dependencies,
-    ...(node.after ? { after: node.after } : {}),
-    kind: node.kind as TaskNodeKind,
-    tool: node.tool,
-    args: node.args as Record<string, unknown> | undefined,
-    condition: node.condition as TaskCondition | undefined,
-  };
-}
-
 /**
  * Compose a full `TaskPlan` snapshot from the in-scope plan + the node results accumulated so far,
  * so a `onPlanUpdate` sink can forward coherent DAG progress after EACH node change (the executor's
@@ -220,13 +200,7 @@ export function createSubmitPlanTool(
         deps,
         deps.invocationIdentity?.(_toolCallId),
       );
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'submit_plan failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '计划已执行' }],
-        details: result.data,
-      };
+      return toModelToolResult(result);
     },
   };
 }
@@ -241,14 +215,26 @@ export function createSubmitPlanTool(
 export async function preflightRequestedPlan(userId: string, args: Record<string, unknown>, request: string,
   intent?: ConversationIntent): Promise<TaskNodeSpec[]> {
   if (!Array.isArray(args.nodes)) throw new AppError('VALIDATION', '缺少计划节点（nodes）');
-  let nodes = (args.nodes as IncomingPlanNode[]).map(toTaskNodeSpec);
-  nodes = await resolveRequestedRedemptions(userId, nodes);
-  await assertRequestedPlanProducts(nodes, request);
-  const names = request ? await requestEntityAliases(userId) : undefined;
-  nodes = enforceRequestedOrder(nodes, request, names);
-  nodes = enforceRequestedSuccess(nodes, request, names);
-  assertCompleteRequestedPlan(nodes, request, names);
-  return compileRequestedPlan(nodes, new Set(KNOWN_TOOL_NAMES), request, intent);
+  const proposed = args.nodes as TaskNodeSpec[];
+  const nodes = compileRequestedPlan(proposed, new Set(KNOWN_TOOL_NAMES), request, intent);
+  nodes.forEach(validatePlanParameters);
+  const activeHoldings = nodes.some(node => node.tool === 'redeem_investment')
+    ? new Set((await listHoldings(userId, 'HOLDING')).map(row => row.id)) : undefined;
+  return Promise.all(nodes.map(async node => {
+    if (node.kind !== 'tool') return node;
+    let canonical = await resolveBankingArgs(userId, node.tool as ToolName, node.args ?? {});
+    if (node.tool === 'transfer_money') {
+      const recipient = await resolveTransferRecipient(userId, canonical);
+      if (recipient.status !== 'resolved') {
+        throw new AppError(recipient.status === 'not_found' ? 'NOT_FOUND' : 'VALIDATION', 'Select one exact owned transfer recipient.', { nodeId: node.id, resolution: recipient });
+      }
+      canonical = canonicalizeTransferArgs(canonical, recipient.contact.id);
+    }
+    if (node.tool === 'redeem_investment' && !activeHoldings?.has(String(canonical.holdingId))) {
+      throw new AppError('NOT_FOUND', 'The selected investment holding is no longer available.', { resource: 'InvestmentHolding', id: canonical.holdingId });
+    }
+    return { ...node, args: canonical };
+  }));
 }
 
 export async function runSubmitPlan(
@@ -263,22 +249,22 @@ export async function runSubmitPlan(
 
   const goal = typeof args.goal === 'string' ? args.goal : '';
   if (!goal) {
-    return { ok: false, error: '缺少任务目标（goal）' };
+    return toolFailure(new AppError('VALIDATION', 'A workflow goal is required.'));
   }
   if (!Array.isArray(args.nodes)) {
-    return { ok: false, error: '缺少计划节点（nodes）' };
+    return toolFailure(new AppError('VALIDATION', 'Workflow nodes are required.'));
   }
 
   let nodes: TaskNodeSpec[];
   try {
     const intent = deps.conversationIntent?.();
     nodes = await preflightRequestedPlan(userId, args, intent?.requestText ?? deps.userRequest?.() ?? '', intent);
-  } catch (error) { return { ok: false, error: AppError.from(error).message }; }
+  } catch (error) { return toolFailure(error); }
 
   const knownTools = new Set<string>(KNOWN_TOOL_NAMES);
   const validation = dag.validatePlan(nodes, knownTools);
   if (!validation.ok) {
-    return { ok: false, error: validation.error.message };
+    return toolFailure(validation.error);
   }
 
   // PLAN-ID ↔ AGENTTASK-ID: mint the DURABLE task row FIRST and adopt its id as the canonical plan
@@ -302,7 +288,7 @@ export async function runSubmitPlan(
     };
   } catch (e) {
     // A persistence failure is a real `submit_plan` failure — reported as a value, never swallowed.
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 
   // LIVE DAG progress: the executor notifies the changed node only, so accumulate node results and
@@ -446,5 +432,6 @@ export async function runSubmitPlan(
     data: result,
     summary,
     error: firstFailed?.error ?? (ok ? undefined : '计划执行失败'),
+    ...(ok ? {} : { errorCode: 'TOOL_FAILED' as const }),
   };
 }

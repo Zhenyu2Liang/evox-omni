@@ -1,7 +1,8 @@
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { toJson } from '@/lib/json';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
 import { securityGateway } from '@/security/security-gateway';
@@ -18,7 +19,7 @@ async function task(id:string,action:string,s:string){const res=await taskPost(n
 async function confirmRaw(id:string,s:string){const res=await confirmPost(new NextRequest(`http://localhost/api/actions/${id}/confirm`,{method:'POST',headers:{'Content-Type':'application/json',cookie:`banking_session=${s}`},body:'{}'}),{params:Promise.resolve({id})});return {status:res.status,body:await res.json()};}
 
 it('an INITIAL submit executor must stop all successor tool calls after losing its plan claim',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();const reached=deferred(),release=deferred();let planId='';let oldSuccessorCalls=0;let afterTakeover=false;const lateNodeStatuses:string[]=[];
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();const reached=deferred(),release=deferred();let planId='';let oldSuccessorCalls=0;let afterTakeover=false;const lateNodeStatuses:string[]=[];
  const oldRun=runSubmitPlan(userId,{goal:'首次提交后续节点接管',nodes:[{id:'first',name:'第一预算',kind:'tool',tool:'reserve_budget',args:{name:'首次接管第一预算',amount:'10'},dependencies:[]},{id:'second',name:'第二预算',kind:'tool',tool:'reserve_budget',args:{name:'首次接管第二预算',amount:'20'},dependencies:['first']}]},{sessionId:s,onNodeUpdate:node=>{if(afterTakeover)lateNodeStatuses.push(node.status);},runTool:async(tool,args,ctx)=>{planId=ctx.taskId;const value=await runner(s)(tool,args,ctx);if(ctx.nodeId==='first'){reached.release();await release.promise;}else{oldSuccessorCalls++;}return value;}});
  let takeover:any,oldResult:any;
  try{await bounded(reached.promise);await p.agentTask.update({where:{id:planId},data:{executionClaimedAt:new Date(Date.now()-660000)}});takeover=await task(planId,'resume',s);afterTakeover=true;}
@@ -29,7 +30,7 @@ it('an INITIAL submit executor must stop all successor tool calls after losing i
 });
 
 async function liveConfirmationProbe(duplicate:boolean){
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();const card=(await p.card.findFirst({where:{userId,type:'CREDIT'}}))!;
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();const card=(await p.card.findFirst({where:{userId,type:'CREDIT'}}))!;
  const seeded=await runSubmitPlan(userId,{goal:'并发确认活性标记',nodes:[{id:'limit',name:'限额',kind:'tool',tool:'set_card_limit',args:{cardId:card.id,category:'娱乐',amount:'1500'},dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=seeded.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;const reached=deferred(),release=deferred();
  const original=securityGateway.authorizeAction.bind(securityGateway);let held=false;
@@ -46,7 +47,7 @@ it('a rejected duplicate confirm must not clear the first still-live continuatio
 it('without a duplicate request the live confirmation is retained and finishes normally',()=>liveConfirmationProbe(false));
 
 it('a STANDALONE transferred action must recover or visibly enter reconciliation after result persistence failure',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const gated=await executeGatedTool({sessionId:s,userId,toolName:'transfer_money',args:{name:'张伟',amount:'200'},userRequest:'给张伟转200元'});
  const id=gated.pendingActionId!;expect(id).toBeTruthy();
  const spy=vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(new Error('review: standalone result transaction failed'));

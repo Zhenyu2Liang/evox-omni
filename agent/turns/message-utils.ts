@@ -33,7 +33,12 @@ export function toExecutionResult(details: unknown, summary: string): ToolExecut
 export function findRunFailure(messages: readonly AgentMessage[]): AssistantMessage | null {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index];
-    if (isAssistantMessage(message) && ['error', 'aborted'].includes(message.stopReason)) return message;
+    if (isAssistantMessage(message) && ['error', 'aborted', 'length'].includes(message.stopReason)) return message;
   }
   return null;
+}
+
+/** A token-limit stop is an incomplete generation even when the provider supplies no error text. */
+export function modelFailureMessage(message: AssistantMessage): string {
+  return message.errorMessage || (message.stopReason === 'length' ? 'Model response reached its output limit.' : 'Model request interrupted');
 }

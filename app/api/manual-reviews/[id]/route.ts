@@ -4,11 +4,13 @@ import { resolveManualReview } from '@/agent';
 import { errorResponse, jsonResponse, parseBody } from '../../_lib/http';
 import { requireIdentity } from '../../_lib/session';
 import type { IdRouteContext } from '../../_lib/types';
+import { requireDeveloperMode } from '../../_lib/developer';
 
 const schema = z.object({ resolution: z.enum(['stop', 'retry', 'resume']), notes: z.string().trim().min(5).max(2000) }).strict();
 
 export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Response> {
   try {
+    requireDeveloperMode(req);
     const identity = await requireIdentity(req);
     const { resolution, notes } = await parseBody(schema, req);
     return jsonResponse(await resolveManualReview(identity, (await ctx.params).id, resolution, notes));

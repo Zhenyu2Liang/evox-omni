@@ -26,7 +26,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { GET as actionsGet } from '@/app/api/actions/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as recoverPost } from '@/app/api/actions/[id]/recover/route';
-import { executeGatedTool, getOrCreateSession } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan, type PlanRunTool } from '@/agent/tools/planning';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
 import type { PendingActionStatus } from '@/lib/contracts/security';
@@ -92,9 +93,9 @@ const wedgeResultTransaction = () =>
     .spyOn(pendingActionRepo, 'setPendingActionStatus')
     .mockRejectedValueOnce(new Error('http-recovery: result+status transaction rolled back'));
 
-/** A freshly persisted session id for the demo user (the in-process breaker is keyed by sessionId). */
+/** Load the canonical demo session used by the HTTP entry. */
 async function newSessionId(): Promise<string> {
-  return (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  return (await getDemoSession(DEMO_USER_ID)).sessionId;
 }
 
 /** The gateway-authorized per-node runner — MUST forward the node identity (the plan LINK). */

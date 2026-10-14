@@ -17,7 +17,8 @@
  */
 import { afterAll, beforeEach, expect, it } from 'vitest';
 import { NextRequest } from 'next/server';
-import { executeGatedTool, getOrCreateSession } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as cancelPost } from '@/app/api/actions/[id]/cancel/route';
 import type { PendingActionStatus } from '@/lib/contracts/security';
@@ -53,7 +54,7 @@ async function call(handler: Route, id: string, sessionId: string, body: object 
 
 /** Park a standalone YELLOW `transfer_money` (¥200 ≤ ¥1000 and daily ≤ ¥1000) on a UNIQUE session. */
 async function parkTransfer(amount = AMOUNT) {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const action = await executeGatedTool({
     userId,
     sessionId,

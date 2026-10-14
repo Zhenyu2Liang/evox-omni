@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <title>Banking assistant</title>
+  <rect width="32" height="32" rx="9" fill="#142c36" />
+  <g transform="translate(4 4)" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 10h8m-8 4h5M8 3h8a4 4 0 0 1 4 4v9a4 4 0 0 1-4 4H9l-5 2V7a4 4 0 0 1 4-4Z" />
+  </g>
+</svg>

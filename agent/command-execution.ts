@@ -1,4 +1,4 @@
-import type { Prisma, ExecutionReceipt } from '@prisma/client';
+import type { Prisma, ExecutionReceipt } from '@/lib/db/prisma';
 import { dbClient, prisma } from '@/lib/db/client';
 import { withinTransaction } from '@/lib/db/unit-of-work';
 import { AppError } from '@/lib/errors';

@@ -35,11 +35,19 @@
  * The fence uses conditional identity-preserving writes to obtain SQLite's writer slot before
  * banking mutations. It never re-invokes a tool or swallows an authorization failure.
  */
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/db/prisma';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
 import { getTask, getTaskNode } from '@/lib/db/repositories/task';
 import { writePolicy } from '@/security';
+import { getSession } from '@/lib/db/repositories/session';
+import { getPendingAction } from '@/lib/db/repositories/pendingAction';
+import { canonicalCommandArgs } from '@/lib/contracts/command';
+import { requestDigest } from '@/lib/ledger';
+import { safeParse } from '@/lib/json';
+import { realNow } from '@/lib/clock';
+import { getToolPolicy } from '@/security/permission-engine';
+import type { ToolName } from '@/lib/contracts/tools';
 
 /** SDK runners return business errors as values; a policy denial must still reach the API as 423. */
 export function guardExecutionFence(fence: ExecutionFenceCheck | undefined): {
@@ -173,14 +181,16 @@ export async function buildAutomaticWriteFence(
   sessionId: string,
   taskId?: string,
   nodeId?: string,
+  expectedUserId?: string,
 ): Promise<ExecutionFenceCheck> {
   const planFence = await buildPlanNodeFence(taskId, nodeId);
+  const owner = expectedUserId ?? (await getSession(sessionId))?.userId;
   return async client => {
     await planFence?.(client);
     // Standalone calls have no plan CAS: obtain the SQLite writer slot before checking the
     // session policy, just as confirmed writes do. This is an identity-preserving write.
     await client.agentSession.updateMany({ where: { id: sessionId }, data: { id: sessionId } });
-    await writePolicy.assertSessionMayWrite(sessionId, client);
+    await writePolicy.assertSessionMayWrite(sessionId, client, owner);
   };
 }
 
@@ -201,8 +211,16 @@ export async function buildConfirmFence(
   taskId: string | null | undefined,
   nodeId: string | null | undefined,
   actionId?: string,
+  expected?: { userId: string; sessionId: string; toolName: string; args: Record<string, unknown>; requiresMfa?: boolean },
 ): Promise<ExecutionFenceCheck | undefined> {
   if (!isUsableId(taskId) && actionId === undefined) return undefined;
+  const original = actionId !== undefined ? await getPendingAction(actionId) : null;
+  if (actionId !== undefined && !original) throw new AppError('SECURITY_DENIED', 'The original authorization action no longer exists.');
+  const identity = expected ?? (original ? { userId: original.userId, sessionId: original.sessionId,
+    toolName: original.toolName, args: safeParse<Record<string, unknown>>(original.argsJson, {}),
+    requiresMfa: original.requiresMfa || original.riskLevel === 'RED' } : undefined);
+  const digest = identity ? requestDigest({ userId: identity.userId, toolName: identity.toolName,
+    args: canonicalCommandArgs(identity.args) }) : undefined;
   return async (client: Prisma.TransactionClient): Promise<void> => {
     let sessionId: string | undefined;
     if (actionId !== undefined) {
@@ -210,7 +228,22 @@ export async function buildConfirmFence(
         where: { id: actionId, status: 'confirmed' }, data: { status: 'confirmed' },
       });
       if (action.count !== 1) throw fenceConflict('操作已不再处于授权执行状态', { actionId });
-      sessionId = (await client.pendingAction.findUniqueOrThrow({ where: { id: actionId } })).sessionId;
+      const current = await client.pendingAction.findUniqueOrThrow({ where: { id: actionId } });
+      if (!identity || current.userId !== identity.userId || current.sessionId !== identity.sessionId || current.toolName !== identity.toolName ||
+          requestDigest({ userId: current.userId, toolName: current.toolName,
+            args: canonicalCommandArgs(safeParse<Record<string, unknown>>(current.argsJson, {})) }) !== digest) {
+        throw new AppError('SECURITY_DENIED', 'The authorized banking command identity changed before execution.');
+      }
+      sessionId = current.sessionId;
+      const policy = getToolPolicy(current.toolName as ToolName);
+      if (identity.requiresMfa || original?.requiresMfa || original?.riskLevel === 'RED' ||
+          current.requiresMfa || current.riskLevel === 'RED' || policy.static && policy.tier === 'RED') {
+        const challenge = await client.mfaChallenge.findUnique({ where: { actionId } });
+        if (!challenge || challenge.status !== 'verified' || challenge.consumedAt !== null || !challenge.expiresAt ||
+            challenge.expiresAt.getTime() <= realNow() || challenge.commandDigest !== digest) {
+          throw new AppError('MFA_FAILED', 'The original banking verification expired, was consumed or no longer matches this command.');
+        }
+      }
     }
     if (isUsableId(taskId)) {
       const plan = await client.agentTask.updateMany({
@@ -221,6 +254,6 @@ export async function buildConfirmFence(
     }
     // Shared by ordinary confirm, MFA verify and recovery; the SDK invokes this in its write tx.
     // Receipt-only reads bypass the SDK mutation transaction and remain available while locked.
-    if (sessionId !== undefined) await writePolicy.assertSessionMayWrite(sessionId, client);
+    if (sessionId !== undefined) await writePolicy.assertSessionMayWrite(sessionId, client, identity?.userId);
   };
 }

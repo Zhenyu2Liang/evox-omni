@@ -1,7 +1,8 @@
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { toJson } from '@/lib/json';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import * as taskControl from '@/agent/task-control';
 import * as taskRepository from '@/lib/db/repositories/task';
@@ -24,7 +25,7 @@ const expired=()=>new Date(Date.now()-660000);
 const pauseOnRead=(s:string)=>({runTool:async()=>{const row=(await getTestPrisma().agentTask.findFirst({where:{sessionId:s}}))!;await taskControl.pauseTask(s,row.id);return {ok:true,data:{balance:'23580.00'}};}});
 
 it('the initial submit executor cannot overwrite a takeover completed node',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();const reached=deferred(),release=deferred();let planId='';
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();const reached=deferred(),release=deferred();let planId='';
  const oldRun=runSubmitPlan(userId,{goal:'首次执行接管',nodes:[{id:'budget',name:'预算',kind:'tool',tool:'reserve_budget',args:{name:'执行完整性首次接管预算',amount:'10'},dependencies:[]}]},{sessionId:s,runTool:async(tool,args,ctx)=>{planId=ctx.taskId;await runner(s)(tool,args,ctx);reached.release();await release.promise;return {ok:false,error:'review: initial executor late failure'};}});
  let takeover:any;
  try{await bounded(reached.promise);await p.agentTask.update({where:{id:planId},data:{executionClaimedAt:expired()}});takeover=await task(planId,'resume',s);}
@@ -35,7 +36,7 @@ it('the initial submit executor cannot overwrite a takeover completed node',asyn
 });
 
 it('an obsolete resumed executor cannot persist a late success over the takeover node result',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const result=await runSubmitPlan(userId,{goal:'过期执行者晚成功',nodes:[{id:'read',name:'读余额',kind:'tool',tool:'get_balance',args:{},dependencies:[]},{id:'budget',name:'预算',kind:'tool',tool:'reserve_budget',args:{name:'执行完整性晚成功预算',amount:'10'},dependencies:['read']}]},{sessionId:s,...pauseOnRead(s)});
  const plan:any=result.data;const reached=deferred(),release=deferred();
  const oldRun=taskControl.resumeTask(s,plan.id,{runTool:async(tool,args,ctx)=>{await runner(s)(tool,args,ctx);reached.release();await release.promise;return {ok:true,data:{balance:'999.00'}};}});
@@ -49,7 +50,7 @@ it('an obsolete resumed executor cannot persist a late success over the takeover
 });
 
 it('an obsolete resumed executor cannot mark a takeover completed node failed',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const result=await runSubmitPlan(userId,{goal:'过期执行者晚失败',nodes:[{id:'read',name:'读余额',kind:'tool',tool:'get_balance',args:{},dependencies:[]},{id:'budget',name:'预算',kind:'tool',tool:'reserve_budget',args:{name:'执行完整性晚失败预算',amount:'10'},dependencies:['read']}]},{sessionId:s,...pauseOnRead(s)});
  const plan:any=result.data;const reached=deferred(),release=deferred();
  const oldRun=taskControl.resumeTask(s,plan.id,{runTool:async(tool,args,ctx)=>{await runner(s)(tool,args,ctx);reached.release();await release.promise;return {ok:false,error:'review: obsolete failure'};}});
@@ -62,7 +63,7 @@ it('an obsolete resumed executor cannot mark a takeover completed node failed',a
 });
 
 it('a stale node token cannot write a partial result after the takeover completed the node',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const result=await runSubmitPlan(userId,{goal:'过期节点令牌晚写入',nodes:[{id:'read',name:'读余额',kind:'tool',tool:'get_balance',args:{},dependencies:[]},{id:'budget',name:'预算',kind:'tool',tool:'reserve_budget',args:{name:'执行完整性部分写入预算',amount:'10'},dependencies:['read']}]},{sessionId:s,...pauseOnRead(s)});
  const plan:any=result.data;const reached=deferred(),release=deferred();let capturedOldToken:string|undefined;
  const oldRun=taskControl.resumeTask(s,plan.id,{runTool:async(tool,args,ctx)=>{await runner(s)(tool,args,ctx);reached.release();await release.promise;return {ok:true,data:{balance:'999.00'}};}});
@@ -77,7 +78,7 @@ it('a stale node token cannot write a partial result after the takeover complete
 });
 
 it('an obsolete resumed executor cannot skip a dependent already completed by the takeover',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const result=await runSubmitPlan(userId,{goal:'依赖跳过写入围栏',nodes:[{id:'read',name:'读取',kind:'tool',tool:'get_balance',args:{},dependencies:[]},{id:'budget',name:'预算',kind:'tool',tool:'reserve_budget',args:{name:'执行完整性依赖预算',amount:'10'},dependencies:['read']},{id:'tail',name:'收尾',kind:'note',dependencies:['budget']}]},{sessionId:s,...pauseOnRead(s)});
  const plan:any=result.data;const reached=deferred(),release=deferred();
  const oldRun=taskControl.resumeTask(s,plan.id,{runTool:async(tool,args,ctx)=>{await runner(s)(tool,args,ctx);reached.release();await release.promise;return {ok:false,error:'review: obsolete failure blocks dependency'};}});
@@ -91,7 +92,7 @@ it('an obsolete resumed executor cannot skip a dependent already completed by th
 });
 
 it('a stored successful result stays consistent when the separate terminal status write fails',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();const card=(await p.card.findFirst({where:{userId,type:'CREDIT'}}))!;
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();const card=(await p.card.findFirst({where:{userId,type:'CREDIT'}}))!;
  const result=await runSubmitPlan(userId,{goal:'结果与状态写入窗口',nodes:[{id:'limit',name:'限额',kind:'tool',tool:'set_card_limit',args:{cardId:card.id,category:'娱乐',amount:'1500'},dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=result.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
  const spy=vi.spyOn(securityGateway,'recordActionResult').mockRejectedValueOnce(new Error('review: terminal status persistence failed'));
@@ -107,17 +108,17 @@ it('a stored successful result stays consistent when the separate terminal statu
 });
 
 it('the result payload and the terminal status are written in one atomic transaction',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
- const result=await runSubmitPlan(userId,{goal:'原子结果与状态',nodes:[{id:'card',name:'开卡',kind:'tool',tool:'apply_virtual_card',args:{label:'原子测试'},dependencies:[]}]},{sessionId:s,runTool:runner(s)});
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
+ const result=await runSubmitPlan(userId,{goal:'Atomic result and status',nodes:[{id:'limit',name:'Set card limit',kind:'tool',tool:'set_card_limit',args:{cardId:'card_credit',category:'\u5a31\u4e50',amount:'1500'},dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=result.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
  const spy=vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(new Error('review: atomic status write failed'));
  const failed=await confirmRaw(action.id,s);spy.mockRestore();
  const after=(await p.pendingAction.findUnique({where:{id:action.id}}))!;
  const retry=await confirmRaw(action.id,s);
- const cards=await p.card.count({where:{userId,type:'VIRTUAL'}});
+ const limits=await p.cardLimit.findMany({where:{cardId:'card_credit',category:'\u5a31\u4e50'}});
  const hasResult=after.resultJson!==null&&after.resultJson!==undefined;const consistent=(after.status==='executed')===hasResult;
- console.log('REVIEW_ATOMIC_RESULT_STATUS',JSON.stringify({failureHttp:failed.status,failureOk:failed.body?.ok,actionStatus:after.status,hasResult,consistent,retryHttp:retry.status,retryOk:retry.body.data?.ok,cards}));
+ console.log('REVIEW_ATOMIC_RESULT_STATUS',JSON.stringify({failureHttp:failed.status,failureOk:failed.body?.ok,actionStatus:after.status,hasResult,consistent,retryHttp:retry.status,retryOk:retry.body.data?.ok}));
  expect(failed.status).toBeGreaterThanOrEqual(400);expect(failed.body?.ok).toBe(false);
  expect(hasResult).toBe(false);expect(after.status==='executed').toBe(false);expect(consistent).toBe(true);
- expect(retry.body.data?.ok).toBe(false);expect(cards).toBe(1);
+ expect(retry.body.data?.ok).toBe(false);expect(limits).toHaveLength(1);expect(limits[0].amountMinor).toBe(150000n);
 });

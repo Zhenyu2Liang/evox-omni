@@ -1,13 +1,12 @@
 /**
- * card — `get_cards`, `set_card_limit`, `freeze_card`, `unfreeze_card`, `report_lost_card`,
- * `apply_virtual_card`
+ * card — `get_cards`, `set_card_limit`, `freeze_card`, `unfreeze_card`, `report_lost_card`.
  *
- * Card reads and mutations. TypeBox param schemas; `execute` calls the Banking SDK and THROWS
- * `AppError` on failure. The `run<X>(userId, args)` runners are the model-free path used by
+ * Card reads and mutations. TypeBox param schemas; `execute` returns native Pi success or failure content.
+ * The `run<X>(userId, args)` runners are the model-free path used by
  * `executeDirect`; they CATCH and return `ToolExecutionResult{ok:false,error}`.
  *
- * Tiers: `get_cards` 🟢 GREEN; `set_card_limit` / `freeze_card` / `apply_virtual_card` 🟡 YELLOW
- * (require confirmation); `unfreeze_card` / `report_lost_card` 🔴 RED (require MFA).
+ * Tiers: `get_cards` GREEN; `set_card_limit` YELLOW (confirmation);
+ * `freeze_card` / `unfreeze_card` / `report_lost_card` RED (confirmation and MFA).
  * The tier is decided by `security/`, NOT here — this module only declares capability. `userId` is
  * SERVER-INJECTED; the model never supplies it.
  */
@@ -15,10 +14,11 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
 import type { CardStatus, CardType, CardView } from '@/banking-sdk';
-import { AppError } from '@/lib/errors';
 import { centsToMoney, formatCNY, moneyToCents } from '@/lib/money';
-import type { ToolExecutionResult, ToolRunOptions } from './index';
+import type { ToolExecutionResult } from './index';
 import { MoneyParameter } from './money-schema';
+import { toModelToolResult, toolFailure } from './result';
+import { SPENDING_CATEGORIES } from '@/lib/contracts/spending';
 
 /** Chinese labels for a card type (for user-facing summaries). */
 const CARD_TYPE_LABELS: Record<CardType, string> = {
@@ -56,14 +56,7 @@ export function createGetCardsTool(userId: string): AgentTool<typeof GetCardsPar
     description: '查询当前用户全部银行卡（借记卡/信用卡/虚拟卡）及状态、额度。',
     parameters: GetCardsParams,
     execute: async (_toolCallId, params) => {
-      const result = await runGetCards(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '查询卡片失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '查询卡片成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runGetCards(userId, params as Record<string, unknown>));
     },
   };
 }
@@ -81,16 +74,15 @@ export async function runGetCards(
         : `共 ${cards.length} 张卡片：${cards.map(describeCard).join('、')}`;
     return { ok: true, data: cards, summary };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
-
 /* -------------------------------------------------------------- set_card_limit */
 
 /** `set_card_limit` params (SDK `SetCardLimitInput` minus nothing — all fields come from the model). */
 export const SetCardLimitParams = Type.Object({
   cardId: Type.String({ description: '卡片 id' }),
-  category: Type.String({ description: '限额分类，如 娱乐/餐饮/购物/出行' }),
+  category: Type.Union(SPENDING_CATEGORIES.map(category => Type.Literal(category)), { description: 'Supported spending category.' }),
   amount: MoneyParameter,
 });
 export type SetCardLimitArgs = Static<typeof SetCardLimitParams>;
@@ -103,14 +95,7 @@ export function createSetCardLimitTool(userId: string): AgentTool<typeof SetCard
     description: '为指定卡片设置某消费分类的限额（需要用户确认）。',
     parameters: SetCardLimitParams,
     execute: async (_toolCallId, params) => {
-      const result = await runSetCardLimit(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '设置卡片限额失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '设置卡片限额成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runSetCardLimit(userId, params));
     },
   };
 }
@@ -136,7 +121,7 @@ export async function runSetCardLimit(
       summary: `已为卡片 ${card.numberMasked} 的「${input.category}」设置限额 ${formatCNY(amount)}`,
     };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -148,7 +133,7 @@ export const FreezeCardParams = Type.Object({
 });
 export type FreezeCardArgs = Static<typeof FreezeCardParams>;
 
-/** Build the `freeze_card` tool bound to `userId` (🟡 YELLOW — confirmation enforced by `security/`). */
+/** Build the `freeze_card` tool bound to `userId`; RED confirmation and MFA are enforced by security. */
 export function createFreezeCardTool(userId: string): AgentTool<typeof FreezeCardParams> {
   return {
     name: 'freeze_card',
@@ -156,14 +141,7 @@ export function createFreezeCardTool(userId: string): AgentTool<typeof FreezeCar
     description: '冻结指定卡片（需要用户确认）。',
     parameters: FreezeCardParams,
     execute: async (_toolCallId, params) => {
-      const result = await runFreezeCard(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '冻结卡片失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '冻结卡片成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runFreezeCard(userId, params));
     },
   };
 }
@@ -179,7 +157,7 @@ export async function runFreezeCard(
     const status = CARD_STATUS_LABELS[card.status] ?? card.status;
     return { ok: true, data: card, summary: `卡片 ${card.numberMasked} 已冻结（当前状态：${status}）` };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -199,14 +177,7 @@ export function createUnfreezeCardTool(userId: string): AgentTool<typeof Unfreez
     description: '解冻指定卡片（高风险，需要短信验证码验证）。',
     parameters: UnfreezeCardParams,
     execute: async (_toolCallId, params) => {
-      const result = await runUnfreezeCard(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '解冻卡片失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '解冻卡片成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runUnfreezeCard(userId, params));
     },
   };
 }
@@ -222,7 +193,7 @@ export async function runUnfreezeCard(
     const status = CARD_STATUS_LABELS[card.status] ?? card.status;
     return { ok: true, data: card, summary: `卡片 ${card.numberMasked} 已解冻（当前状态：${status}）` };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -243,14 +214,7 @@ export function createReportLostCardTool(userId: string): AgentTool<typeof Repor
     description: '对指定卡片进行挂失（高风险，需要短信验证码验证）。',
     parameters: ReportLostCardParams,
     execute: async (_toolCallId, params) => {
-      const result = await runReportLostCard(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '挂失卡片失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '挂失卡片成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runReportLostCard(userId, params));
     },
   };
 }
@@ -266,59 +230,6 @@ export async function runReportLostCard(
     const reason = input.reason ? `（原因：${input.reason}）` : '';
     return { ok: true, data: card, summary: `卡片 ${card.numberMasked} 已挂失${reason}` };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
-  }
-}
-
-/* ---------------------------------------------------------- apply_virtual_card */
-
-/** `apply_virtual_card` params (SDK `ApplyVirtualCardInput`; `userId` is server-injected). */
-export const ApplyVirtualCardParams = Type.Object({
-  monthlyLimit: Type.Optional(MoneyParameter),
-});
-export type ApplyVirtualCardArgs = Static<typeof ApplyVirtualCardParams>;
-
-/** Build the `apply_virtual_card` tool bound to `userId` (🟡 YELLOW — confirmation enforced by `security/`). */
-export function createApplyVirtualCardTool(userId: string): AgentTool<typeof ApplyVirtualCardParams> {
-  return {
-    name: 'apply_virtual_card',
-    label: '申请虚拟卡',
-    description: '为当前用户申请虚拟卡，可配置月限额（需要用户确认）；Demo 不提供刷卡支付。',
-    parameters: ApplyVirtualCardParams,
-    execute: async (_toolCallId, params) => {
-      const result = await runApplyVirtualCard(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '申请虚拟卡失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '申请虚拟卡成功' }],
-        details: result.data,
-      };
-    },
-  };
-}
-
-/** Model-free runner — forwards explicit limit configuration and execution identity to the SDK. */
-export async function runApplyVirtualCard(
-  userId: string,
-  args: Record<string, unknown>,
-  opts?: ToolRunOptions,
-): Promise<ToolExecutionResult> {
-  const { monthlyLimit } = args as unknown as ApplyVirtualCardArgs;
-  try {
-    const card = await banking.card.applyVirtualCard({
-      userId,
-      monthlyLimit: monthlyLimit === undefined ? undefined : centsToMoney(moneyToCents(monthlyLimit)),
-      idempotencyKey: opts?.idempotencyKey,
-    });
-    const status = CARD_STATUS_LABELS[card.status] ?? card.status;
-    const limit = card.monthlyLimit === undefined ? '未设置月限额' : `月限额 ${formatCNY(card.monthlyLimit)}`;
-    return {
-      ok: true,
-      data: card,
-      summary: `已开通虚拟卡 ${card.numberMasked}；${limit}（当前状态：${status}；Demo 无刷卡支付）`,
-    };
-  } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }

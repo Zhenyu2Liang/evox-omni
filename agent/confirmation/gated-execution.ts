@@ -11,6 +11,8 @@ import { settlePendingAction } from '../confirmation-recovery';
 import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from '../execution-convergence';
 import type { GatedToolOutcome } from './contracts';
 import { runWorkflowInvocation } from '../durable/workflow-invocations';
+import { catalogEntry } from '@/lib/contracts/tool-catalog';
+import { isManualCardCommand } from '@/lib/contracts/card-management';
 
 const gateway = security.gateway.securityGateway;
 const inFlightExecutions = new Map<string, Promise<GatedToolOutcome>>();
@@ -35,6 +37,7 @@ function recoverExecutedPlanAction(action: PendingActionRow): GatedToolOutcome {
 
 async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutcome> {
   try {
+    if (isManualCardCommand(ctx.toolName) || catalogEntry(ctx.toolName)?.agentEnabled === false) throw new AppError('SECURITY_DENIED', 'Card creation and deletion require the card management page.');
     if (ctx.taskId !== undefined && ctx.nodeId !== undefined) {
       const existing = await findRepresentedAction(ctx.taskId, ctx.nodeId);
       if (existing !== undefined) {
@@ -64,7 +67,7 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
       };
     }
     const registry = createToolRegistry(ctx.userId);
-    const policyFence = await buildAutomaticWriteFence(ctx.sessionId, ctx.taskId, ctx.nodeId);
+    const policyFence = await buildAutomaticWriteFence(ctx.sessionId, ctx.taskId, ctx.nodeId, ctx.userId);
     const result = await registry.executeDirect(ctx.toolName, ctx.args, {
       ...(ctx.taskId !== undefined && ctx.nodeId !== undefined
         ? { idempotencyKey: nodeExecutionKey(ctx.taskId, ctx.nodeId) } : {}),

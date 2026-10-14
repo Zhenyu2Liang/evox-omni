@@ -107,11 +107,17 @@ describe('banking-sdk/investment · compareInvestments', () => {
     expect(lowest?.riskLevel).toBe('R1');
   });
 
-  it('an empty id set → empty products, undefined pick ids', async () => {
-    const cmp = await banking.investment.compareInvestments([]);
-    expect(cmp.products).toEqual([]);
-    expect(cmp.highestRateId).toBeUndefined();
-    expect(cmp.lowestRiskId).toBeUndefined();
+  it('rejects an empty comparison instead of reporting successful missing products', async () => {
+    await expect(banking.investment.compareInvestments([])).rejects.toMatchObject({ code: 'VALIDATION' });
+  });
+
+  it('rejects a missing requested product instead of silently comparing the remainder', async () => {
+    await expect(banking.investment.compareInvestments([WENJIANA, 'missing-product'])).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('compares each requested product once', async () => {
+    const result = await banking.investment.compareInvestments([WENJIANA, WENJIANA]);
+    expect(result.products).toHaveLength(1);
   });
 });
 

@@ -2,7 +2,7 @@
  * task — `list_scheduled_tasks`, `create_scheduled_task`
  *
  * Scheduled-task reads and creation. TypeBox param schemas; `execute` calls the Banking SDK and
- * THROWS `AppError` on failure. The `run<X>(userId, args, opts?)` runners are the model-free path
+ * returns native Pi success or failure content. The `run<X>(userId, args, opts?)` runners are the model-free path
  * used by `executeDirect`; they CATCH and return `ToolExecutionResult{ok:false,error}`.
  *
  * Tiers: `list_scheduled_tasks` 🟢 GREEN; `create_scheduled_task` 🟡 YELLOW (requires confirmation).
@@ -17,8 +17,9 @@ import type {
   ScheduledTaskStatus,
 } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
-import { AppError } from '@/lib/errors';
+import { scheduledTime } from '@/lib/scheduled-time';
 import type { ToolExecutionResult, ToolRunOptions } from './index';
+import { toModelToolResult, toolFailure } from './result';
 
 /** Chinese labels for a scheduled-task kind (for user-facing summaries). */
 const KIND_LABELS: Record<ScheduledTaskKind, string> = {
@@ -53,14 +54,7 @@ export function createListScheduledTasksTool(
     description: '列出当前用户的定时/计划任务（提醒、缴费、转账）及其状态。',
     parameters: ListScheduledTasksParams,
     execute: async (_toolCallId, params) => {
-      const result = await runListScheduledTasks(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '查询定时任务失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '查询定时任务成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runListScheduledTasks(userId, params as Record<string, unknown>));
     },
   };
 }
@@ -84,7 +78,7 @@ export async function runListScheduledTasks(
             .join('；')}`;
     return { ok: true, data: tasks, summary };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -92,15 +86,11 @@ export async function runListScheduledTasks(
 
 /** `create_scheduled_task` params (SDK `CreateScheduledTaskInput` minus the server-injected `userId`). */
 export const CreateScheduledTaskParams = Type.Object({
-  name: Type.String({ description: '任务名称' }),
-  kind: Type.String({ description: '任务类型：REMINDER | PAYMENT | TRANSFER' }),
-  runAt: Type.Optional(Type.Number({ description: 'UTC epoch milliseconds; explicit user-requested dates are bound by the server.' })),
+  name: Type.String({ minLength: 1, description: 'Scheduled intent name.' }),
+  kind: Type.Union([Type.Literal('REMINDER'), Type.Literal('PAYMENT'), Type.Literal('TRANSFER')]),
+  runAt: Type.Optional(Type.Integer({ description: 'Explicit future UTC epoch milliseconds, supplied as an integer.' })),
   runAtLocal: Type.Optional(Type.String({ description: '北京时间，例如 2026-10-15T09:00。保留用户明确指定的年份、月份和时间。' })),
   payload: Type.Optional(Type.Object({}, { description: '任务载荷（JSON）' })),
-  requiresConfirmation: Type.Optional(Type.Boolean({ description: '执行前是否需要确认，默认 true' })),
-  idempotencyKey: Type.Optional(
-    Type.String({ description: '幂等键：同一键的重复调用复用原记录（通常由服务端注入）' }),
-  ),
 });
 export type CreateScheduledTaskArgs = Static<typeof CreateScheduledTaskParams>;
 
@@ -114,25 +104,16 @@ export function createCreateScheduledTaskTool(
     description: '创建一个定时/计划任务（提醒、缴费或转账，需要用户确认）。',
     parameters: CreateScheduledTaskParams,
     execute: async (_toolCallId, params) => {
-      const result = await runCreateScheduledTask(userId, params as Record<string, unknown>);
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? '创建定时任务失败');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '创建定时任务成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runCreateScheduledTask(userId, params));
     },
   };
 }
 
 /**
  * Model-free runner — `banking.task.createScheduledTask({ userId, name, kind, runAt, payload,
- * requiresConfirmation, idempotencyKey })`.
+ * idempotencyKey })`.
  *
- * At-most-once key: the SERVER-INJECTED `opts.idempotencyKey` (the gateway/plan-node path) wins; a
- * direct `args.idempotencyKey` is honoured otherwise. A replay of the SAME key reuses the row (the
- * SDK dedupes on it), so a repeated (plan, node) never double-creates a scheduled task.
+ * The trusted gateway or plan node supplies the execution identity. Model arguments never select it.
  */
 export async function runCreateScheduledTask(
   userId: string,
@@ -140,15 +121,14 @@ export async function runCreateScheduledTask(
   opts?: ToolRunOptions,
 ): Promise<ToolExecutionResult> {
   const input = args as unknown as CreateScheduledTaskArgs;
-  const idempotencyKey = opts?.idempotencyKey ?? input.idempotencyKey;
+  const idempotencyKey = opts?.idempotencyKey;
   try {
     const request: CreateScheduledTaskInput = {
       userId,
       name: input.name,
       kind: input.kind as ScheduledTaskKind,
-      runAt: input.runAt ?? Date.parse(`${input.runAtLocal}+08:00`),
+      runAt: scheduledTime(args),
       payload: input.payload as Record<string, unknown> | undefined,
-      requiresConfirmation: input.requiresConfirmation,
       idempotencyKey,
     };
     const task = await banking.task.createScheduledTask(request);
@@ -159,6 +139,6 @@ export async function runCreateScheduledTask(
       summary: `已创建${kind}任务「${task.name}」，执行时间 ${formatDateTime(task.runAt)}`,
     };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }

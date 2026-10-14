@@ -20,7 +20,7 @@ import type { ToolName } from '../lib/contracts/tools';
 import { evaluateTransferRisk } from './risk-engine';
 import { AppError } from '../lib/errors';
 import { normalizeTransferAmount } from '../lib/money';
-import { TOOL_CATALOG, TOOL_NAMES, isCatalogToolName } from '../lib/contracts/tool-catalog';
+import { TOOL_CATALOG, TOOL_NAMES, isCatalogToolName, catalogEntry } from '../lib/contracts/tool-catalog';
 
 export interface ToolPolicy {
   /** Static risk tier for the tool. `transfer_money` is dynamic (see `static: false`). */
@@ -97,6 +97,7 @@ export function evaluateTool(
   ctx: EvaluateToolContext,
 ): ToolEvaluation {
   const policy = getToolPolicy(toolName);
+  if (catalogEntry(toolName)?.agentEnabled === false) throw new AppError('SECURITY_DENIED', 'Card creation and deletion require the card management page.');
 
   // Dynamic tools (e.g. transfer_money): tier depends on the amount + day total.
   if (!policy.static) {

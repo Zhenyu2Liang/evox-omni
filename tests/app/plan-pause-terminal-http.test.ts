@@ -33,7 +33,8 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { GET as tasksGet } from '@/app/api/tasks/route';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
-import { executeGatedTool, getOrCreateSession, readPendingActionId } from '@/agent';
+import { executeGatedTool, readPendingActionId } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
@@ -106,9 +107,9 @@ async function nodeStatuses(taskId: string): Promise<string[]> {
 
 /* ----------------------------------------------------------------------------- plan seeding */
 
-/** Create + persist a fresh `AgentSession` for the demo user and return its id. */
+/** Load the canonical demo session used by the HTTP entry. */
 async function newPersistedSessionId(): Promise<string> {
-  return (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  return (await getDemoSession(DEMO_USER_ID)).sessionId;
 }
 
 /** The gateway-authorized per-node runner (a gated node parks instead of executing). */

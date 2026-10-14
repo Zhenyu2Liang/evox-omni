@@ -6,9 +6,8 @@
  * session.
  *
  * Contract:
- *  - IDENTITY: the session comes from the TRUSTED `banking_session` cookie
- *    (`_lib/session#requireIdentity`); a missing cookie or unknown session → `403 SECURITY_DENIED`.
- *    A `?sessionId=` query param is IGNORED — a caller can never read another session's actions.
+ *  - Identity comes from the configured demo user and fixed demo session via `requireIdentity`.
+ *    Cookies and query identifiers cannot select another session's actions. No login is required.
  *  - Reads the caller session's `PendingAction` rows via the sanctioned repository read path
  *    (`@/lib/db/repositories/pendingAction#listPendingActions`) and keeps only the SURFACED ones:
  *      • the two NON-TERMINAL statuses that await a human decision (`pending`, `awaiting_mfa`);
@@ -32,8 +31,9 @@
  * no side effect, no tool execution. Thin by design: `validate (zod) → delegate → serialize`.
  */
 import type { NextRequest } from 'next/server';
+import { isManualCardCommand } from '@/lib/contracts/card-management';
 import { withActionPolicy } from '@/lib/action-summary';
-import type { PendingAction as PendingActionRow } from '@prisma/client';
+import type { PendingAction as PendingActionRow } from '@/lib/db/prisma';
 import {
   listPendingActions,
 } from '@/lib/db/repositories/pendingAction';
@@ -121,7 +121,7 @@ function toContractPendingAction(row: PendingActionRow): PendingAction {
 
 export async function GET(req: NextRequest): Promise<Response> {
   try {
-    // Trusted identity: cookie-only, server-validated. Missing cookie / unknown session → 403.
+    // Resolve the server-configured demo workspace; request cookies cannot select its identity.
     const identity = await requireIdentity(req);
 
     // ONE clock sample for the whole page so every row is classified against the same instant.
@@ -130,6 +130,7 @@ export async function GET(req: NextRequest): Promise<Response> {
     const rows = await listPendingActions({ sessionId: identity.sessionId });
     const actions: SurfacedPendingAction[] = [];
     for (const row of rows) {
+      if (isManualCardCommand(row.toolName)) continue;
       const attention = attentionFor(row, nowMs);
       if (attention === undefined) continue;
       actions.push({ ...toContractPendingAction(row), attention });

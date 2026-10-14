@@ -1,8 +1,14 @@
 'use client';
 
 import type { PendingActionStatus, PendingActionSummary } from '@/lib/contracts/security';
-import { Badge, Button, Card, Money, StatusBadge } from '../../ui';
+import { Badge, Button, Card, StatusBadge } from '../../ui';
+import { ActionDetails } from './ActionDetails';
 import { asTerminalStatus, terminalStatusView } from './confirmationStatus';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+import { localizeActionTitle, localizeChatError } from '@/lib/i18n/display';
+import { publicToolError } from '@/lib/tool-feedback';
+import { useDeveloperMode } from '@/lib/developer-mode/DeveloperModeProvider';
+import { sanitizeToolArguments } from '@/lib/tool-diagnostics';
 
 export interface ConfirmationCardProps {
   action: PendingActionSummary;
@@ -13,7 +19,7 @@ export interface ConfirmationCardProps {
   error?: string;
   /**
    * The action's current status. When TERMINAL the card reports the settled fact instead of the
-   * (now meaningless) 取消/确认 controls. The chat layer may instead stamp a runtime `status` field
+   * obsolete cancel/confirm controls. The chat layer may instead stamp a runtime `status` field
    * onto `action` (the frozen `PendingActionSummary` has no such field) — this prop wins over it.
    */
   status?: PendingActionStatus;
@@ -35,7 +41,7 @@ type PendingActionSummaryWithRuntime = PendingActionSummary & {
 /**
  * YELLOW/RED confirmation surface for a gated banking action.
  *
- * This component NEVER executes money movement itself: [取消]/[确认] only call the handlers passed
+ * This component NEVER executes money movement itself: cancel/confirm only call the handlers passed
  * from the chat container, which POST to the `./app` action routes. The SERVER re-validates the
  * original args and executes the operation through the security gateway's authorized path — the
  * browser (and the model) can never trigger a transfer directly.
@@ -44,6 +50,8 @@ type PendingActionSummaryWithRuntime = PendingActionSummary & {
  * so a settled action can never still look actionable.
  */
 export function ConfirmationCard(p: ConfirmationCardProps) {
+  const { t } = useI18n();
+  const { enabled: developerMode } = useDeveloperMode();
   const { action, actionId, onConfirm, onCancel, busy, error, status, statusMessage, className } = p;
 
   const canCancel = Boolean(actionId && onCancel);
@@ -53,11 +61,11 @@ export function ConfirmationCard(p: ConfirmationCardProps) {
   const terminal = asTerminalStatus(status) ?? asTerminalStatus(withRuntime.status);
   const rawReason = statusMessage ?? withRuntime.message;
   const reason = typeof rawReason === 'string' ? rawReason : undefined;
-  const terminalView = terminal ? terminalStatusView(terminal, reason) : undefined;
+  const terminalView = terminal ? terminalStatusView(terminal, terminal === 'failed' ? publicToolError(reason, t) : undefined) : undefined;
 
   const footer = terminalView ? (
     <div className="flex items-center justify-end gap-2">
-      <Badge tone={terminalView.tone}>{terminalView.label}</Badge>
+      <Badge tone={terminalView.tone}>{terminal ? t(`cards.terminal.${terminal}`) : terminalView.label}</Badge>
     </div>
   ) : (
     <div className="flex items-center justify-end gap-2">
@@ -69,7 +77,7 @@ export function ConfirmationCard(p: ConfirmationCardProps) {
           if (actionId && onCancel) onCancel(actionId);
         }}
       >
-        取消
+        {t('cards.cancel')}
       </Button>
       <Button
         variant="primary"
@@ -80,49 +88,37 @@ export function ConfirmationCard(p: ConfirmationCardProps) {
           if (actionId && onConfirm) onConfirm(actionId);
         }}
       >
-        确认
+        {t('cards.confirm')}
       </Button>
     </div>
   );
 
   return (
     <Card
+      padding="sm"
+      layout="request"
       className={className}
       title={
         <span className="flex items-center gap-2">
-          <span>{action.title}</span>
-          <StatusBadge tier={action.tier} />
+          <span>{localizeActionTitle(action.title, t)}</span>
+          {!terminal ? <StatusBadge tier={action.tier} /> : null}
         </span>
       }
       footer={footer}
     >
-      <dl className="flex flex-col gap-2">
-        {action.fields.map((field, index) => (
-          <div
-            key={`${field.label}-${index}`}
-            className="flex items-center justify-between gap-4 text-sm"
-          >
-            <dt className="text-banking-navy/70">{field.label}</dt>
-            <dd className="text-right font-medium text-banking-navy">{field.value}</dd>
-          </div>
-        ))}
-        {typeof action.amount === 'string' && !action.fields.some(field => field.label === '金额') ? (
-          <div className="flex items-center justify-between gap-4 border-t border-banking-navy/10 pt-2 text-sm">
-            <dt className="text-banking-navy/70">金额</dt>
-            <dd className="font-semibold text-banking-deep">
-              <Money amount={action.amount} />
-            </dd>
-          </div>
-        ) : null}
-      </dl>
+      <ActionDetails action={action} />
 
       {terminalView?.explanation ? (
-        <p className="mt-3 text-sm text-banking-navy/70">{terminalView.explanation}</p>
+        <p className="mt-3 text-sm text-banking-navy/70">{terminal === 'needs_reconciliation' ? t('cards.terminal.reconciliationExplanation') : terminalView.explanation}</p>
       ) : null}
+      {developerMode && reason ? <details className="mt-3 text-xs text-banking-navy">
+        <summary>{t('chat.diagnostics.detail')}</summary>
+        <pre className="mt-1 whitespace-pre-wrap break-words">{String(sanitizeToolArguments(reason))}</pre>
+      </details> : null}
 
       {error ? (
         <div className="mt-3">
-          <Badge tone="danger">{error}</Badge>
+          <Badge tone="danger">{localizeChatError(error, t)}</Badge>
         </div>
       ) : null}
     </Card>

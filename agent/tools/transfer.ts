@@ -1,8 +1,8 @@
 /**
  * transfer — `transfer_money`
  *
- * Money movement. TypeBox param schema; `execute` calls the Banking SDK and THROWS
- * `AppError` on failure. `runTransferMoney(userId, args, opts?)` is the model-free path used by
+ * Money movement. TypeBox param schema; `execute` returns native Pi success or failure content.
+ * `runTransferMoney(userId, args, opts?)` is the model-free path used by
  * `executeDirect` (invoked ONLY after the gateway authorizes a confirmed action):
  * it CATCHES and returns `ToolExecutionResult{ok:false,error}`. `opts.idempotencyKey` (when given)
  * is forwarded to the SDK so a repeat confirm replays the same ledger row (at-most-once).
@@ -18,10 +18,10 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
 import type { TransferResult } from '@/banking-sdk';
-import { AppError } from '@/lib/errors';
 import { formatCNY, normalizeTransferAmount } from '@/lib/money';
 import type { ToolExecutionResult, ToolRunOptions } from './index';
 import { MoneyParameter } from './money-schema';
+import { toModelToolResult, toolFailure } from './result';
 
 /** `transfer_money` params (SDK `TransferInput` minus the server-injected `userId`). */
 export const TransferMoneyParams = Type.Object({
@@ -47,12 +47,7 @@ export function createTransferMoneyTool(userId: string): AgentTool<typeof Transf
     description: '向联系人转账（金额/日累计决定风险等级，超过阈值需要验证码）。',
     parameters: TransferMoneyParams,
     execute: async (_toolCallId, params) => {
-      const result = await runTransferMoney(userId, params);
-      if (!result.ok) throw new AppError('TOOL_FAILED', result.error ?? 'transfer_money failed');
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
+      return toModelToolResult(await runTransferMoney(userId, params));
     },
   };
 }
@@ -75,12 +70,12 @@ export async function runTransferMoney(
     const amount = normalizeTransferAmount(args.amount);
     const sdkInput = {
       userId,
-      contactId: typeof args.contactId === 'string' ? args.contactId : undefined,
-      phone: typeof args.phone === 'string' ? args.phone : undefined,
-      name: typeof args.name === 'string' ? args.name : undefined,
+      contactId: args.contactId as string | undefined,
+      phone: args.phone as string | undefined,
+      name: args.name as string | undefined,
       amount,
-      remark: typeof args.remark === 'string' ? args.remark : undefined,
-      sourceAccountId: typeof args.sourceAccountId === 'string' ? args.sourceAccountId : undefined,
+      remark: args.remark as string | undefined,
+      sourceAccountId: args.sourceAccountId as string | undefined,
       // At-most-once: absent ⇒ unchanged behavior; present ⇒ the ledger row id is deterministic.
       idempotencyKey: opts?.idempotencyKey,
     };
@@ -94,6 +89,6 @@ export async function runTransferMoney(
       summary: `已向 ${result.recipient.name} 转账 ${formatCNY(result.amount)}${balance}。`,
     };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }

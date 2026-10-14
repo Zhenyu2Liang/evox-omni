@@ -20,7 +20,7 @@ function cn(...parts: Array<string | false | null | undefined>): string {
 }
 
 const TAB_BASE_CLASSES =
-  '-mb-px border-b-2 border-transparent px-3 py-2 text-sm transition-colors focus:outline-none focus-visible:text-banking-navy disabled:cursor-not-allowed disabled:opacity-50';
+  '-mb-px border-b-2 border-transparent px-3 py-2 text-sm transition-colors focus:outline-hidden focus-visible:text-banking-navy disabled:cursor-not-allowed disabled:opacity-50';
 
 const TAB_ACTIVE_CLASSES = 'border-banking-accent font-semibold text-banking-navy';
 

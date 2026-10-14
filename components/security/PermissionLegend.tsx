@@ -1,5 +1,8 @@
+'use client';
+
 import type { RiskLevel } from '@/lib/contracts/risk';
-import { RISK_LABEL } from '@/lib/constants';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+import type { MessageKey } from '@/lib/i18n/shared';
 import { StatusBadge } from '../ui/StatusBadge';
 
 export interface PermissionLegendProps {
@@ -10,23 +13,24 @@ export interface PermissionLegendProps {
 const TIERS: readonly RiskLevel[] = ['GREEN', 'YELLOW', 'RED'];
 
 /** Short human description of what each tier means for the user. */
-const TIER_DESCRIPTION: Record<RiskLevel, string> = {
-  GREEN: '自动执行 — 低风险查询无需确认，立即返回结果。',
-  YELLOW: '需要用户确认 — 中风险操作需你点击确认后才会执行。',
-  RED: '需要 MFA 验证 — 高风险操作需输入验证码完成强验证。',
+const TIER_DESCRIPTION: Record<RiskLevel, MessageKey> = {
+  GREEN: 'security.permissions.greenDescription',
+  YELLOW: 'security.permissions.yellowDescription',
+  RED: 'security.permissions.redDescription',
 };
 
 export function PermissionLegend({ className }: PermissionLegendProps) {
+  const { t } = useI18n();
   return (
     <div
-      className={['space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm', className]
+      className={['space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs', className]
         .filter(Boolean)
         .join(' ')}
     >
       {TIERS.map((tier) => (
         <div key={tier} className="flex items-start gap-3">
-          <StatusBadge tier={tier} label={RISK_LABEL[tier]} />
-          <p className="text-sm leading-5 text-slate-600">{TIER_DESCRIPTION[tier]}</p>
+          <StatusBadge tier={tier} />
+          <p className="text-sm leading-5 text-slate-600">{t(TIER_DESCRIPTION[tier])}</p>
         </div>
       ))}
     </div>

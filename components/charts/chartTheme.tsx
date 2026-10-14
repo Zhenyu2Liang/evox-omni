@@ -1,8 +1,9 @@
 'use client';
 
-import type { ReactElement } from 'react';
-import { ResponsiveContainer } from 'recharts';
-import { formatCNY } from '@/lib/money';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type Ref } from 'react';
+import { formatCNY, moneyToChartNumber } from '@/lib/money';
+import { addDecimal, compareDecimal, divideDecimal, formatDecimalCNY } from '@/lib/decimal';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
 
 /**
  * Private shared chart chrome for the wrappers in `./charts`.
@@ -10,17 +11,17 @@ import { formatCNY } from '@/lib/money';
  * NOT part of the public barrel (`./index.ts`) — internal to this node only, so the four
  * chart files reuse one source of truth instead of copy-pasting palette/tooltip logic.
  *
- * The colour literals below mirror `tailwind.config.ts` (`banking.*`) and are the ONLY
+ * The colour literals below mirror the CSS theme in `app/globals.css` and are the ONLY
  * colours the charts are allowed to use.
  */
 export const BANKING_PALETTE = {
-  deep: '#0B1F3A',
-  navy: '#123A6B',
-  accent: '#2563EB',
+  deep: '#142C36',
+  navy: '#4B6370',
+  accent: '#087F8C',
   success: '#16A34A',
   warn: '#F59E0B',
   danger: '#DC2626',
-  light: '#F5F7FA',
+  light: '#F6F8F8',
 } as const;
 
 /** Ordered series colours, cycled to colour pie slices / multi-series charts. */
@@ -41,7 +42,85 @@ export function seriesColor(index: number): string {
 
 /** True when there is nothing meaningful to plot: no points, or every value is 0/NaN. */
 export function isChartEmpty(values: readonly number[]): boolean {
-  return values.length === 0 || values.every((v) => !v || Number.isNaN(v));
+  return values.length === 0 || values.every((value) => !Number.isFinite(value) || value === 0);
+}
+
+/** Shared numeric scaling is restricted to geometry; labels retain their original amounts. */
+export function chartScale(values: readonly number[], top: number, bottom: number) {
+  const finite = values.filter(Number.isFinite);
+  const minimum = Math.min(0, ...finite);
+  const maximum = Math.max(0, ...finite);
+  const span = maximum - minimum || 1;
+  return {
+    minimum,
+    maximum,
+    y: (value: number) => bottom - ((value - minimum) / span) * (bottom - top),
+  };
+}
+
+/** Axis labels use exact original amounts; midpoint geometry alone uses numeric coordinates. */
+export function chartTicks(amounts: readonly string[]): Array<{ value: number; label: string }> {
+  let minimum = '0.00';
+  let maximum = '0.00';
+  for (const amount of amounts) {
+    if (compareDecimal(amount, minimum) < 0) minimum = amount;
+    if (compareDecimal(amount, maximum) > 0) maximum = amount;
+  }
+  const minimumCoordinate = moneyToChartNumber(minimum);
+  const maximumCoordinate = moneyToChartNumber(maximum);
+  const midpoint = divideDecimal(addDecimal(minimum, maximum), '2');
+  return [
+    { value: minimumCoordinate, label: formatDecimalCNY(minimum) },
+    { value: (minimumCoordinate + maximumCoordinate) / 2, label: formatDecimalCNY(midpoint) },
+    { value: maximumCoordinate, label: formatDecimalCNY(maximum) },
+  ];
+}
+
+/** Match SVG coordinate units to CSS pixels so wide plots do not enlarge text. */
+export function useChartWidth() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(320);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const measure = () => {
+      const measured = Math.round(container.getBoundingClientRect().width);
+      if (measured > 0) setWidth(measured);
+    };
+    measure();
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(measure);
+      observer.observe(container);
+      return () => observer.disconnect();
+    }
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+
+  return { width, containerRef };
+}
+
+/** Hover, focus and tap share one exact financial tooltip. */
+export function useChartTooltip() {
+  const [tooltip, setTooltip] = useState<ChartTooltipProps>();
+  const clear = () => setTooltip(undefined);
+  return {
+    tooltip: tooltip ? <ChartTooltip {...tooltip} active /> : null,
+    point: (label: string, amount: string, color: string, suffix?: string) => ({
+      tabIndex: 0,
+      role: 'img' as const,
+      'aria-label': `${label}: ${formatCNY(amount)}${suffix ? ` · ${suffix}` : ''}`,
+      onMouseEnter: () => setTooltip({ label, entries: [{ amount, color, label: suffix }] }),
+      onMouseLeave: clear,
+      onFocus: () => setTooltip({ label, entries: [{ amount, color, label: suffix }] }),
+      onBlur: clear,
+      onClick: () => setTooltip({ label, entries: [{ amount, color, label: suffix }] }),
+      onKeyDown: (event: KeyboardEvent<SVGElement>) => {
+        if (event.key === 'Escape') clear();
+      },
+    }),
+  };
 }
 
 export interface ChartFrameProps {
@@ -50,79 +129,67 @@ export interface ChartFrameProps {
   /** When false, no chart is rendered — a neutral placeholder is shown instead. */
   active: boolean;
   className?: string;
-  children: ReactElement;
+  children: ReactNode;
+  tooltip?: ReactNode;
+  containerRef?: Ref<HTMLDivElement>;
 }
 
 /**
- * Shared chart shell: wraps a single Recharts chart in a responsive container of a fixed
- * height, or renders a neutral light-grey placeholder when there is nothing to plot.
+ * Shared chart shell; Cartesian charts measure its width to keep labels at a readable pixel size.
  */
 export function ChartFrame(p: ChartFrameProps) {
+  const { t } = useI18n();
   if (!p.active) {
     return (
       <div
+        ref={p.containerRef}
         className={p.className}
         style={{ width: '100%', height: p.height, background: BANKING_PALETTE.light }}
         role="img"
-        aria-label="暂无可展示的数据"
+        aria-label={t('chart.empty')}
       />
     );
   }
   return (
-    <div className={p.className} style={{ width: '100%', height: p.height }}>
-      <ResponsiveContainer width="100%" height={p.height}>
-        {p.children}
-      </ResponsiveContainer>
+    <div ref={p.containerRef} className={`relative min-w-0 ${p.className ?? ''}`} style={{ width: '100%', height: p.height }}>
+      {p.children}
+      {p.tooltip ? <div className="pointer-events-none absolute right-2 top-2 z-10 max-w-full">{p.tooltip}</div> : null}
     </div>
   );
 }
 
-/** One entry in a Recharts tooltip payload (`payload` keeps the original datum). */
-export interface ChartTooltipItem {
-  name?: string | number;
-  value?: number | string;
+/** Tooltip entries always contain the original exact decimal amount. */
+export interface ChartTooltipEntry {
+  amount: string;
+  label?: string;
   color?: string;
-  dataKey?: string | number;
-  /** Original datum (e.g. a `CategorySpend`) for composite labels. */
-  payload?: unknown;
 }
 
 export interface ChartTooltipProps {
   active?: boolean;
-  payload?: ChartTooltipItem[];
-  label?: string | number;
-  /**
-   * Formats one item's chart coordinate; the default prefers the original decimal amount.
-   * `item.payload` exposes the original datum for composite labels.
-   */
-  formatter?: (value: number, item: ChartTooltipItem) => string;
+  entries: ChartTooltipEntry[];
+  label?: string;
 }
 
 /** Shared styled tooltip content: banking colours, money formatted via `formatCNY`. */
 export function ChartTooltip(p: ChartTooltipProps) {
-  if (!p.active || !p.payload || p.payload.length === 0) return null;
+  if (!p.active || p.entries.length === 0) return null;
 
   return (
-    <div className="rounded-lg border border-banking-navy/10 bg-white px-3 py-2 shadow-md">
+    <div role="tooltip" className="rounded-lg border border-banking-navy/10 bg-white px-3 py-2 shadow-md">
       {p.label !== undefined && p.label !== null && p.label !== '' ? (
         <p className="mb-1 text-xs font-semibold text-banking-deep">{p.label}</p>
       ) : null}
       <ul className="space-y-0.5">
-        {p.payload.map((item, i) => {
-          const value = Number(item.value);
-          const safe = Number.isFinite(value) ? value : 0;
-          const original = item.payload && typeof item.payload === 'object' && 'amount' in item.payload
-            ? (item.payload as { amount?: unknown }).amount : undefined;
-          const text = p.formatter ? p.formatter(safe, item)
-            : formatCNY(typeof original === 'string' ? original : safe.toFixed(2));
+        {p.entries.map((item, i) => {
           return (
             <li key={i} className="flex items-center gap-2 text-xs text-banking-navy">
               <span
                 className="inline-block h-2 w-2 shrink-0 rounded-full"
                 style={{ background: item.color ?? BANKING_PALETTE.accent }}
               />
-              <span>{item.name}</span>
-              <span className="ml-auto pl-3 font-medium text-banking-deep">{text}</span>
+              <span>{item.label}</span>
+              <span className="ml-auto pl-3 font-medium text-banking-deep">{formatCNY(item.amount)}</span>
             </li>
           );
         })}

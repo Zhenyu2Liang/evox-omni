@@ -1,4 +1,4 @@
-import type { AgentTaskNode, PendingAction } from '@prisma/client';
+import type { AgentTaskNode, PendingAction } from '@/lib/db/prisma';
 import type { ManualHandoffStatus } from '@/lib/contracts/manual-review';
 
 export interface ReviewTaskState {

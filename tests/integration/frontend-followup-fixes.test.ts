@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { banking } from '@/banking-sdk';
-import { runApplyVirtualCard } from '@/agent/tools/card';
+import { addDemoCardSchema, proposeCardChange, verifyCardChange } from '@/security/manual-card-management';
+import CardChangeDialog from '@/app/cards/CardChangeDialog';
 import { runRedeemInvestment } from '@/agent/tools/investment';
-import { newSession, saveSession } from '@/agent/session';
+import { getDemoSession, newSession, saveSession } from '@/agent/session';
 import { resolveBankingArgs } from '@/lib/banking-selectors';
 import { securityGateway as gateway } from '@/security/security-gateway';
 import { verify } from '@/security/mfa';
@@ -14,6 +15,7 @@ import { MfaCard } from '@/components/chat/cards/MfaCard';
 import { getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import type { ToolName } from '@/lib/contracts/tools';
+import { DEFAULT_LOCALE, translate } from '@/lib/i18n/shared';
 
 beforeEach(resetDatabase);
 const db = getTestPrisma;
@@ -30,53 +32,57 @@ async function exhaust(actionId: string) {
   for (let attempt = 0; attempt < 3; attempt++) await verify(actionId, '000000');
 }
 
-describe('frontend follow-up: virtual card configuration', () => {
+describe('frontend follow-up: manually reviewed demo card configuration', () => {
   it('discloses and persists the confirmed monthly limit, including replay', async () => {
-    const { action } = await park('apply_virtual_card', { monthlyLimit: '2000.50' });
-    expect(action.summary.fields).toContainEqual({ label: '月限额', value: '¥2,000.50' });
-    const first = await runApplyVirtualCard(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
-    const second = await runApplyVirtualCard(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
-    expect(first.ok).toBe(true); expect(second.data).toEqual(first.data);
-    expect(first.summary).toContain('月限额 ¥2,000.50');
+    const identity = { userId: DEMO_USER_ID, sessionId: (await getDemoSession(DEMO_USER_ID)).sessionId };
+    const request = { requestId: '9c667789-b56b-463e-801a-81d3e65219bd', type: 'VIRTUAL' as const, monthlyLimit: '2000.50' };
+    const proposed = await proposeCardChange(identity, request);
+    expect(proposed.change).toMatchObject({ status: 'pending', requiresMfa: true, monthlyLimit: '2000.50' });
+    const html = renderToStaticMarkup(createElement(CardChangeDialog, { selection: { kind: 'change', change: proposed.change }, busy: false,
+      onClose() {}, onPrepareAdd() {}, onPrepareDelete() {}, onVerify() {}, onCancel() {} }));
+    expect(html).toContain(translate(DEFAULT_LOCALE, 'business.cards.monthlyLimit'));
+    expect(html).toContain('¥2,000.50');
+    const first = await verifyCardChange(identity, proposed.change.id, '123456');
+    const second = await verifyCardChange(identity, proposed.change.id, '123456');
+    expect(first.ok).toBe(true); expect(second.change.card).toEqual(first.change.card);
     const rows = await db().card.findMany({ where: { type: 'VIRTUAL' } });
     expect(rows).toHaveLength(1); expect(rows[0].monthlyLimitMinor).toBe(200050n);
-    await expect(banking.card.applyVirtualCard({ userId: DEMO_USER_ID, monthlyLimit: '9999.00', idempotencyKey: action.id }))
-      .rejects.toThrow('幂等');
+    await expect(proposeCardChange(identity, { ...request, monthlyLimit: '9999.00' })).rejects.toMatchObject({ code: 'CONFLICT' });
     expect((await db().card.findUniqueOrThrow({ where: { id: rows[0].id } })).monthlyLimitMinor).toBe(200050n);
   });
   it('creates a card without inventing a monthly limit when none was configured', async () => {
-    const { action } = await park('apply_virtual_card', {});
-    expect(action.summary.fields).toContainEqual({ label: '月限额', value: '未设置（本次仅开卡）' });
-    const result = await runApplyVirtualCard(DEMO_USER_ID, action.args);
-    expect(result.ok).toBe(true); expect(result.summary).toContain('未设置月限额');
-    expect(result.summary).not.toContain('2000.50');
+    const identity = { userId: DEMO_USER_ID, sessionId: (await getDemoSession(DEMO_USER_ID)).sessionId };
+    const proposed = await proposeCardChange(identity, { requestId: '05f2d3f5-f5a2-48aa-bd70-058fcf5cf4ea', type: 'VIRTUAL' });
+    expect(proposed.change.monthlyLimit).toBeUndefined();
+    const result = await verifyCardChange(identity, proposed.change.id, '123456');
+    expect(result.ok).toBe(true); expect(result.change.card?.monthlyLimit).toBeUndefined();
+    expect((await db().card.findFirstOrThrow({ where: { type: 'VIRTUAL' } })).monthlyLimitMinor).toBeNull();
   });
   it.each(['-1', '1.001', 'Infinity'])('rejects invalid limit %s before issuing a card', async monthlyLimit => {
-    await expect(park('apply_virtual_card', { monthlyLimit })).rejects.toThrow();
+    expect(() => addDemoCardSchema.parse({ requestId: 'ecc5986c-393f-43b8-9903-39fc5a39c0e5', type: 'VIRTUAL', monthlyLimit })).toThrow();
     await expect(banking.card.applyVirtualCard({ userId: DEMO_USER_ID, monthlyLimit })).rejects.toThrow();
     expect(await db().card.count({ where: { type: 'VIRTUAL' } })).toBe(0);
   });
 });
 
 describe('frontend follow-up: redemption scope and selectors', () => {
-  it('resolves the unique HOLDING name and code but not another owner', async () => {
-    for (const holdingId of ['稳健理财A', 'WJA001']) {
-      expect((await resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId })).holdingId).toBe('holding_wenjiana');
-    }
-    await expect(resolveBankingArgs('other-owner', 'redeem_investment', { holdingId: 'holding_wenjiana' })).rejects.toThrow('未找到');
+  it('resolves an exact owned holding ID and rejects product names or codes', async () => {
+    expect((await resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId: 'holding_wenjiana' })).holdingId).toBe('holding_wenjiana');
+    await expect(resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId: 'WJA001' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(resolveBankingArgs('other-owner', 'redeem_investment', { holdingId: 'holding_wenjiana' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
-  it('rejects ambiguous current names; a historical ID remains available for safe replay', async () => {
+  it('rejects product names in the holding ID field; historical IDs remain available for safe replay', async () => {
     await db().investmentHolding.create({ data: { userId: DEMO_USER_ID, productId: 'prod_wenjiana', principalAmountMinor: 100000n, status: 'HOLDING' } });
-    await expect(resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId: '稳健理财A' })).rejects.toThrow('不唯一');
+    await expect(resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId: '稳健理财A' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await db().investmentHolding.updateMany({ data: { status: 'REDEEMED' } });
-    await expect(resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId: '稳健理财A' })).rejects.toThrow('未找到');
+    await expect(resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId: '稳健理财A' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect((await resolveBankingArgs(DEMO_USER_ID, 'redeem_investment', { holdingId: 'holding_wenjiana' })).holdingId).toBe('holding_wenjiana');
   });
   it('shows full market-value redemption in the MFA card and credits that exact amount once', async () => {
-    const { action } = await park('redeem_investment', { holdingId: 'WJA001', expectedRedemptionAmount: '1.00' });
+    const { action } = await park('redeem_investment', { holdingId: 'holding_wenjiana', expectedRedemptionAmount: '1.00' });
     expect(action.args.expectedRedemptionAmount).toBe('5050.00'); // Supplied model value never wins.
     const html = renderToStaticMarkup(createElement(MfaCard, { actionId: action.id, action: action.summary }));
-    expect(html).toContain('全部赎回'); expect(html).toContain('Principal');
+    expect(html).toContain('全部赎回'); expect(html).toContain(translate(DEFAULT_LOCALE, 'chat.field.principal'));
     expect(html).toContain('¥5,000.00'); expect(html).toContain('¥5,050.00');
     const result = await runRedeemInvestment(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
     const replay = await runRedeemInvestment(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
@@ -138,9 +144,10 @@ describe('frontend follow-up: unlock resumes undecided MFA challenges', () => {
   it('renewal is owner-scoped and excludes settled or cancelled actions', async () => {
     const first = await park('report_lost_card', { cardId: 'card_debit' });
     const second = await park('unfreeze_card', { cardId: 'card_credit' });
-    const cancelled = await park('change_password', {});
+    const cancelled = await park('freeze_card', { cardId: 'card_credit' });
     await db().user.create({ data: { id: 'other', name: '其他用户', phone: '13999998888' } });
-    const foreign = await park('change_password', {}, 'other');
+    await db().card.create({ data: { id: 'other-card', userId: 'other', type: 'DEBIT', network: 'UnionPay', numberMasked: '****9900', status: 'ACTIVE' } });
+    const foreign = await park('freeze_card', { cardId: 'other-card' }, 'other');
     await db().mfaChallenge.updateMany({ data: { status: 'locked', attempts: 3 } });
     await db().pendingAction.update({ where: { id: cancelled.action.id }, data: { status: 'cancelled' } });
     await db().circuitBreakerState.create({ data: { key: `user:${DEMO_USER_ID}`, userId: DEMO_USER_ID, locked: true, failures: 3, lockedAt: new Date() } });
@@ -149,7 +156,7 @@ describe('frontend follow-up: unlock resumes undecided MFA challenges', () => {
     for (const id of [cancelled.action.id, foreign.action.id]) expect((await db().mfaChallenge.findUniqueOrThrow({ where: { actionId: id } })).status).toBe('locked');
   });
   it('an audit failure rolls back both account unlock and challenge renewal', async () => {
-    const { action, sessionId } = await park('change_password', {});
+    const { action, sessionId } = await park('freeze_card', { cardId: 'card_debit' });
     await exhaust(action.id);
     const spy = vi.spyOn(securityEventStore, 'insertSecurityEvent').mockRejectedValueOnce(new Error('reset audit failed'));
     try { await expect(resetSession(sessionId, { verificationCode: '123456' })).rejects.toThrow('reset audit failed'); }

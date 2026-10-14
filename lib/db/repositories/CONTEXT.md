@@ -13,7 +13,8 @@ interleave. Two further aggregates accept an optional `client` for the SAME atom
 
 ## API Surface
 
-Model return types come from `@prisma/client`. JSON-text columns are stored/parsed with `lib/json`.
+Model return types and the runtime `Prisma` namespace come from `@/lib/db/prisma`, which exposes the
+generated Prisma client in `lib/db/generated`. JSON-text columns are stored/parsed with `lib/json`.
 All functions below are implemented (real Prisma data access).
 The trailing optional `client?` parameter is documented for `pendingAction.ts` (every function)
 that accepts one.

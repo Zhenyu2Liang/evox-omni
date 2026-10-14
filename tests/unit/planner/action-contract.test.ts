@@ -1,6 +1,6 @@
 /** Current browser action contracts reject obsolete payloads without inventing controls. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { confirmAction, fetchPendingActions, fetchTaskPlan, sendChatTurn } from '@/components/chat/actions';
+import { confirmAction, fetchPendingActions, fetchTaskPlan, PENDING_ACTION_READ_TIMEOUT_MS, sendChatTurn } from '@/components/chat/actions';
 
 function action(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -18,7 +18,7 @@ function respond(body: unknown, status = 200): void {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(body, { status })));
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('current pending action response contract', () => {
   it('accepts the current envelope and preserves its complete summary', async () => {
@@ -28,7 +28,7 @@ describe('current pending action response contract', () => {
       id: row.id, status: row.status, tier: row.tier, requiresMfa: row.requiresMfa,
       attention: row.attention, summary: row.summary,
     }]);
-    expect(fetch).toHaveBeenCalledWith('/api/actions', { method: 'GET', headers: { Accept: 'application/json' } });
+    expect(fetch).toHaveBeenCalledWith('/api/actions', { method: 'GET', headers: { Accept: 'application/json' }, signal: expect.any(AbortSignal) });
   });
 
   it.each([
@@ -96,9 +96,78 @@ describe('current pending action response contract', () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Connection unavailable')));
     expect(await fetchPendingActions()).toEqual([]);
   });
+
+  it('bounds a fetch that never resolves even when the transport ignores abort', async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn<typeof fetch>(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal('fetch', fetcher);
+    let completed = false;
+    const response = fetchPendingActions().then(refs => { completed = true; return refs; });
+    await vi.advanceTimersByTimeAsync(PENDING_ACTION_READ_TIMEOUT_MS - 1);
+    expect(completed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await response).toEqual([]);
+    expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('bounds a response body that never finishes decoding JSON', async () => {
+    vi.useFakeTimers();
+    const response = { ok: true, json: () => new Promise<unknown>(() => undefined) } as Response;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+    const result = fetchPendingActions();
+    await vi.advanceTimersByTimeAsync(PENDING_ACTION_READ_TIMEOUT_MS);
+    expect(await result).toEqual([]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('cancels an obsolete restoration immediately and ignores its late successful rows', async () => {
+    vi.useFakeTimers();
+    let finish!: (response: Response) => void;
+    const fetcher = vi.fn<typeof fetch>(() => new Promise<Response>(resolve => { finish = resolve; }));
+    vi.stubGlobal('fetch', fetcher);
+    const abort = new AbortController();
+    const result = fetchPendingActions(undefined, abort.signal);
+    abort.abort();
+    expect(await result).toEqual([]);
+    expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    finish(Response.json({ ok: true, data: [action()] }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await result).toEqual([]);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not start a request for an already aborted restoration', async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    vi.stubGlobal('fetch', fetcher);
+    const abort = new AbortController(); abort.abort();
+    expect(await fetchPendingActions(undefined, abort.signal)).toEqual([]);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('cleans up its deadline after a successful restoration and allows the next StrictMode read', async () => {
+    vi.useFakeTimers();
+    const abort = new AbortController(); abort.abort();
+    const fetcher = vi.fn().mockResolvedValue(Response.json({ ok: true, data: [action()] }));
+    vi.stubGlobal('fetch', fetcher);
+    expect(await fetchPendingActions(undefined, abort.signal)).toEqual([]);
+    expect(await fetchPendingActions(undefined, new AbortController().signal)).toHaveLength(1);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });
 
 describe('current shared response envelope', () => {
+  it('settles a locked verification instead of leaving an active input', async () => {
+    respond({ ok: true, data: { ok: false, sessionId: 'session-1', actionId: 'action-1',
+      status: 'locked', tier: 'RED', requiresMfa: true, message: 'Verification locked', mfaResult: 'failed', events: [] } });
+    expect((await confirmAction('action-1')).events).toEqual([
+      { type: 'error', message: 'Verification locked' },
+      { type: 'action_settled', actionId: 'action-1', status: 'locked', message: 'Verification locked' },
+    ]);
+  });
   it('rejects a raw task plan rather than adapting it', async () => {
     respond({ id: 'plan-1', nodes: [], results: [] });
     expect(await fetchTaskPlan('plan-1')).toBeUndefined();
@@ -113,7 +182,7 @@ describe('current shared response envelope', () => {
 
   it('preserves the current server error envelope message', async () => {
     respond({ ok: false, error: { code: 'CONFLICT', message: 'Action already completed' } }, 409);
-    expect((await confirmAction('action-1')).events).toEqual([{ type: 'error', message: 'Action already completed' }]);
+    expect((await confirmAction('action-1')).events).toEqual([{ type: 'error', message: 'Action already completed', code: 'CONFLICT' }]);
   });
 
   it('preserves current MFA escalation from an action response', async () => {

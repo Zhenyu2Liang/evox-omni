@@ -32,6 +32,9 @@ import type { RiskLevel } from '@/lib/contracts/risk';
 import type { PendingActionStatus, PendingActionSummary } from '@/lib/contracts/security';
 import type { TaskPlan } from '@/lib/contracts/task';
 import { isCatalogToolName } from '@/lib/contracts/tool-catalog';
+import { createRequestId, RequestIdUnavailableError } from './request-id';
+import { isAgentStreamEvent, isTaskPlan } from './transport-validation';
+import type { ErrorCode } from '@/lib/errors';
 // Type-only: the card node owns `TaskControlAction` + `AttentionClass`; a type import is erased at
 // build time, so this never pulls the (client) card components into this module's runtime graph.
 import type { AttentionClass, TaskControlAction } from './cards';
@@ -44,6 +47,7 @@ export interface ChatEndpoints {
   recover: (actionId: string) => string; // default `/api/actions/${id}/recover`
   task: (id: string) => string; // default `/api/tasks/${id}` — read/control ONE persisted plan
   actions: string; // default '/api/actions' — list the session's non-terminal pending actions
+  history?: string; // default '/api/chat/history' — paginated display, independent of model memory
 }
 
 export const DEFAULT_ENDPOINTS: ChatEndpoints = {
@@ -54,6 +58,7 @@ export const DEFAULT_ENDPOINTS: ChatEndpoints = {
   recover: (actionId) => `/api/actions/${actionId}/recover`,
   task: (id) => `/api/tasks/${id}`,
   actions: '/api/actions',
+  history: '/api/chat/history',
 };
 
 /** Generic, user-facing failure text used when no safer message is available. */
@@ -70,6 +75,7 @@ const TERMINAL_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'executed',
   'failed',
   'cancelled',
+  'locked',
   'needs_reconciliation',
 ];
 
@@ -84,18 +90,16 @@ function asActionStatus(value: unknown): PendingActionStatus | undefined {
 }
 
 /**
- * Normalize ANY throwable into a SAFE, single-line user-facing message.
- * Never returns a raw stack trace.
+ * Preserve a known browser capability error without exposing arbitrary runtime details.
+ * Server-authored business errors are decoded separately from the current API envelope.
  */
 function safeMessage(e: unknown): string {
-  const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : '';
-  const firstLine = raw.split('\n')[0]?.trim();
-  return firstLine && firstLine.length > 0 ? firstLine : GENERIC_ERROR;
+  return e instanceof RequestIdUnavailableError ? e.message : GENERIC_ERROR;
 }
 
 /** Wrap a session id + safe message into a failed `ChatTurnResponse`. */
-function failure(sessionId: string, message: string): ChatTurnResponse {
-  return { sessionId, events: [{ type: 'error', message }] };
+function failure(sessionId: string, message: string, code?: ErrorCode): ChatTurnResponse {
+  return { sessionId, events: [{ type: 'error', message, ...(code ? { code } : {}) }] };
 }
 
 /** The `sessionId` of the first `session` event in a stream, if any. */
@@ -108,7 +112,7 @@ function firstSessionId(events: AgentStreamEvent[]): string | undefined {
 
 /**
  * Decode ONE SSE frame (`data: <JSON>`, possibly multi-line) into an event.
- * Returns `undefined` for malformed/ignored frames (defensive — never throws).
+ * Ignores non-data frames; malformed payloads become a safe format error.
  */
 function parseSseFrame(frame: string): AgentStreamEvent | undefined {
   const dataLines = frame
@@ -120,27 +124,43 @@ function parseSseFrame(frame: string): AgentStreamEvent | undefined {
   if (payload === '') return undefined;
   try {
     const parsed: unknown = JSON.parse(payload);
-    if (parsed && typeof parsed === 'object' && typeof (parsed as { type?: unknown }).type === 'string') {
-      return parsed as AgentStreamEvent;
-    }
-    return undefined;
+    return isAgentStreamEvent(parsed) ? parsed : { type: 'error', message: 'chat.error.invalidResponse' };
   } catch {
-    return undefined;
+    return { type: 'error', message: 'chat.error.invalidResponse' };
   }
 }
 
 /**
  * Read a `text/event-stream` body into an ordered `AgentStreamEvent[]`.
- * Frames are blank-line (`\n\n`) separated; parsing stops after the `done` event.
+ * SSE line endings may be LF, CRLF or CR, including across byte chunks. A done frame terminates
+ * transport only after every started assistant message has supplied its authoritative end.
  */
 async function readSseStream(body: ReadableStream<Uint8Array>, onEvent?: (event: AgentStreamEvent) => void): Promise<AgentStreamEvent[]> {
   const events: AgentStreamEvent[] = [];
   const reader = body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8', { fatal: true });
   let buffer = '';
   let finished = false;
+  let trailingCr = false;
+  const openMessages = new Set<string>();
+
+  const appendDecoded = (text: string) => {
+    if (!text) return;
+    if (trailingCr && text.startsWith('\n')) text = text.slice(1);
+    if (!text) { trailingCr = false; return; }
+    trailingCr = text.endsWith('\r');
+    buffer += text.replace(/\r\n|\r/g, '\n');
+  };
 
   const publish = (event: AgentStreamEvent) => {
+    if (event.type === 'message_start' && (event.message.role === 'assistant' || event.message.role === 'tool')) {
+      openMessages.add(event.message.id);
+    }
+    if (event.type === 'message_end') openMessages.delete(event.message.id);
+    if (event.type === 'done' && openMessages.size) {
+      const error: AgentStreamEvent = { type: 'error', message: 'The response stream ended before completion. Inspect the saved run before retrying.' };
+      events.push(error); onEvent?.(error);
+    }
     events.push(event);
     onEvent?.(event);
     if (event.type === 'done') finished = true;
@@ -149,7 +169,8 @@ async function readSseStream(body: ReadableStream<Uint8Array>, onEvent?: (event:
   try {
     while (!finished) {
       const { value, done } = await reader.read();
-      if (value) buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n');
+      if (value) appendDecoded(decoder.decode(value, { stream: true }));
+      if (done) appendDecoded(decoder.decode());
 
       let boundary = buffer.indexOf('\n\n');
       while (boundary !== -1) {
@@ -191,15 +212,17 @@ async function readSseStream(body: ReadableStream<Uint8Array>, onEvent?: (event:
  * Decode only the current app envelope `{ ok, data | error }`.
  * A raw payload or malformed envelope is a contract failure.
  */
-function unwrapEnvelope(json: unknown): { data?: unknown; errorMessage?: string } {
+function unwrapEnvelope(json: unknown): { data?: unknown; errorMessage?: string; errorCode?: ErrorCode } {
   if (json && typeof json === 'object') {
     const record = json as Record<string, unknown>;
     if (record.ok === false) {
       const error = record.error;
       if (!error || typeof error !== 'object' || Array.isArray(error)) return { errorMessage: GENERIC_ERROR };
       const detail = error as Record<string, unknown>;
-      return { errorMessage: typeof detail.code === 'string' && typeof detail.message === 'string' && detail.message.trim()
-        ? detail.message : GENERIC_ERROR };
+      const code = typeof detail.code === 'string' && ['VALIDATION', 'NOT_FOUND', 'INSUFFICIENT_FUNDS', 'LIMIT_EXCEEDED',
+        'SECURITY_DENIED', 'MFA_FAILED', 'CIRCUIT_OPEN', 'CONFLICT', 'TOOL_FAILED', 'INTERNAL'].includes(detail.code) ? detail.code as ErrorCode : undefined;
+      return { errorMessage: code && typeof detail.message === 'string' && detail.message.trim()
+        ? detail.message : GENERIC_ERROR, ...(code ? { errorCode: code } : {}) };
     }
     if (record.ok === true && Object.prototype.hasOwnProperty.call(record, 'data')) {
       return { data: record.data };
@@ -210,11 +233,7 @@ function unwrapEnvelope(json: unknown): { data?: unknown; errorMessage?: string 
 
 /** Narrow an unknown payload to a `TaskPlan` (id + nodes + results discriminator). */
 function asTaskPlan(value: unknown): TaskPlan | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const record = value as Record<string, unknown>;
-  return typeof record.id === 'string' && Array.isArray(record.nodes) && Array.isArray(record.results)
-    ? (value as TaskPlan)
-    : undefined;
+  return isTaskPlan(value) ? value : undefined;
 }
 
 /** Narrow the decoded current response payload to its session and events. */
@@ -222,7 +241,7 @@ function normalizeTurn(value: unknown): ChatTurnResponse | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return;
   const record = value as Record<string, unknown>;
   if (typeof record.sessionId !== 'string' || record.sessionId.trim() === '' ||
-      !Array.isArray(record.events) || !record.events.every(event => event && typeof event === 'object' && typeof event.type === 'string') ||
+      !Array.isArray(record.events) || !record.events.every(isAgentStreamEvent) ||
       (record.runId !== undefined && (typeof record.runId !== 'string' || record.runId.trim() === ''))) return;
   return {
     sessionId: record.sessionId,
@@ -232,15 +251,15 @@ function normalizeTurn(value: unknown): ChatTurnResponse | undefined {
 }
 
 /** Best-effort safe message from a non-OK response body. */
-async function errorMessageFromResponse(res: Response): Promise<string> {
+async function errorFromResponse(res: Response): Promise<{ message: string; code?: ErrorCode }> {
   try {
     const json: unknown = await res.json();
-    const { errorMessage } = unwrapEnvelope(json);
-    if (errorMessage) return errorMessage;
+    const { errorMessage, errorCode } = unwrapEnvelope(json);
+    if (errorMessage) return { message: errorMessage, ...(errorCode ? { code: errorCode } : {}) };
   } catch {
     /* fall through to the generic message */
   }
-  return `${GENERIC_ERROR}（${res.status}）`;
+  return { message: `${GENERIC_ERROR}（${res.status}）` };
 }
 
 /**
@@ -315,6 +334,9 @@ export interface PendingActionRef {
   /** How the chat surface must treat this row (see `AttentionClass`). */
   attention: AttentionClass;
 }
+
+/** Attention restoration is optional and must not block the composer indefinitely. */
+export const PENDING_ACTION_READ_TIMEOUT_MS = 5000;
 
 /** Accept only one of the current policy tiers. */
 function asRiskLevel(value: unknown): RiskLevel | undefined {
@@ -400,11 +422,24 @@ function toPendingActionRef(row: unknown): PendingActionRef | undefined {
  */
 export async function fetchPendingActions(
   endpoints: ChatEndpoints = DEFAULT_ENDPOINTS,
+  signal?: AbortSignal,
 ): Promise<PendingActionRef[]> {
-  try {
+  if (signal?.aborted) return [];
+  const abort = new AbortController();
+  const cancel = () => abort.abort();
+  let resolveCancelled!: (refs: PendingActionRef[]) => void;
+  const cancelled = new Promise<PendingActionRef[]>(resolve => { resolveCancelled = resolve; });
+  const onCancelled = () => resolveCancelled([]);
+  abort.signal.addEventListener('abort', onCancelled, { once: true });
+  signal?.addEventListener('abort', cancel, { once: true });
+  const timeout = setTimeout(cancel, PENDING_ACTION_READ_TIMEOUT_MS);
+  // Race the whole read, including JSON decoding. Some transports ignore cancellation, but a
+  // late response must still never keep a mount-time restoration promise pending forever.
+  const read = async (): Promise<PendingActionRef[]> => { try {
     const res = await fetch(endpoints.actions, {
       method: 'GET',
       headers: { Accept: 'application/json' },
+      signal: abort.signal,
     });
     if (!res.ok) return [];
 
@@ -422,6 +457,12 @@ export async function fetchPendingActions(
     return refs;
   } catch {
     return [];
+  } };
+  try { return await Promise.race([read(), cancelled]); }
+  finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', cancel);
+    abort.signal.removeEventListener('abort', onCancelled);
   }
 }
 
@@ -437,7 +478,7 @@ export function sendChatTurn(
   const fallbackSession = req.sessionId ?? '';
   return (async () => {
     try {
-      const requestId = req.requestId ?? crypto.randomUUID();
+      const requestId = req.requestId ?? createRequestId();
       const res = await fetch(endpoints.chat, {
         method: 'POST',
         headers: {
@@ -448,7 +489,8 @@ export function sendChatTurn(
       });
 
       if (!res.ok) {
-        return failure(fallbackSession, await errorMessageFromResponse(res));
+        const error = await errorFromResponse(res);
+        return failure(fallbackSession, error.message, error.code);
       }
 
       const contentType = res.headers.get('content-type') ?? '';
@@ -460,9 +502,9 @@ export function sendChatTurn(
       }
 
       const json: unknown = await res.json();
-      const { data, errorMessage } = unwrapEnvelope(json);
+      const { data, errorMessage, errorCode } = unwrapEnvelope(json);
       if (errorMessage) {
-        return failure(fallbackSession, errorMessage);
+        return failure(fallbackSession, errorMessage, errorCode);
       }
       const turn = normalizeTurn(data);
       if (!turn) return failure(fallbackSession, GENERIC_ERROR);
@@ -505,13 +547,14 @@ async function postAction(url: string, body: Record<string, unknown>): Promise<C
     });
 
     if (!res.ok) {
-      return failure('', await errorMessageFromResponse(res));
+      const error = await errorFromResponse(res);
+      return failure('', error.message, error.code);
     }
 
     const json: unknown = await res.json();
-    const { data, errorMessage } = unwrapEnvelope(json);
+    const { data, errorMessage, errorCode } = unwrapEnvelope(json);
     if (errorMessage) {
-      return failure('', errorMessage);
+      return failure('', errorMessage, errorCode);
     }
 
     if (!data || typeof data !== 'object' || Array.isArray(data)) return failure('', GENERIC_ERROR);
@@ -522,7 +565,7 @@ async function postAction(url: string, body: Record<string, unknown>): Promise<C
         typeof record.actionId !== 'string' || record.actionId.trim() === '' ||
         typeof record.ok !== 'boolean' || typeof record.requiresMfa !== 'boolean' ||
         typeof record.message !== 'string' || status === undefined || tier === undefined ||
-        !Array.isArray(record.events) || !record.events.every(event => event !== null && typeof event === 'object' && typeof event.type === 'string') ||
+        !Array.isArray(record.events) || !record.events.every(isAgentStreamEvent) ||
         (record.mfaResult !== undefined && record.mfaResult !== 'success' && record.mfaResult !== 'failed' && record.mfaResult !== 'not_required')) {
       return failure('', GENERIC_ERROR);
     }
@@ -557,10 +600,8 @@ async function postAction(url: string, body: Record<string, unknown>): Promise<C
       events.push({ type: 'error', message });
     }
 
-    // The typed settlement signal carries the server's terminal status. This means the
-    // action is done: the reducer stamps it onto the inline confirmation card so a settled card can
-    // never keep looking actionable.
-    if (TERMINAL_ACTION_STATUSES.includes(status)) {
+    // Accepted authorization dismisses the request while its historical record tracks execution.
+    if (status === 'confirmed' || TERMINAL_ACTION_STATUSES.includes(status)) {
       events.push({
         type: 'action_settled',
         actionId,

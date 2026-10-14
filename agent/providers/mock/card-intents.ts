@@ -1,6 +1,10 @@
-import type { AssistantMessage } from '@earendil-works/pi-ai';
+import type { AssistantMessage, Message } from '@earendil-works/pi-ai';
 import { parseAmount } from './amount-parser';
 import { plain, toolCall } from './replies';
+import { inferConversationGuidance } from './conversation-guidance';
+import { mockResourceRows } from './resource-resolution';
+import { findLastUserIndex } from './conversation';
+import messagesText from './messages.zh-CN.json';
 
 export const demoCreditCardId = 'card_credit';
 export const cardLimitCategories = ['娱乐', '餐饮', '购物', '出行', '生活', '居家', '教育', '医疗', '通讯', '其他'];
@@ -25,7 +29,30 @@ export function resolveCardId(text: string): string {
   return /借记卡|储蓄卡/.test(text) ? 'card_debit' : demoCreditCardId;
 }
 
+export function isBulkCardFreezeRequest(text: string): boolean {
+  if (/\u5982\u679c|\u4ec5\u5f53|\u53ea\u6709|\bif\b/i.test(text)) return false;
+  return /^(?:plan and )?freeze all my (?:bank )?cards[.!?]?$/i.test(text) ||
+    /\u51bb\u7ed3/.test(text) && /(?:\u5168\u90e8|\u6240\u6709|\u4e24\u5f20)/.test(text) && /\u5361/.test(text);
+}
+
+export function classifyCardFreezePlan(text: string, messages: Message[] = []): AssistantMessage | undefined {
+  if (!isBulkCardFreezeRequest(text)) return;
+  const cards = mockResourceRows('card', messages, findLastUserIndex(messages));
+  if (cards === undefined) return toolCall('get_cards', {});
+  if (cards.length === 0) return plain(messagesText.noCardsAvailable);
+  if (/\u4e24\u5f20/.test(text) && !/\u5168\u90e8|\u6240\u6709/.test(text) && cards.length !== 2) {
+    return plain(messagesText.resourceSelectionRequired);
+  }
+  return toolCall('submit_plan', { goal: text, nodes: cards.map((card, index) => ({
+    id: `freeze_${index + 1}`, name: `Freeze ${typeof card.type === 'string' ? card.type.toLowerCase() : 'bank'} card ${typeof card.numberMasked === 'string' ? card.numberMasked : index + 1}`,
+    dependencies: [], kind: 'tool', tool: 'freeze_card', args: { cardId: card.id },
+  })) });
+}
+
 export function classifyCardAction(text: string): AssistantMessage | undefined {
+  if (inferConversationGuidance(text) === 'card_management_required') {
+    return plain(JSON.stringify({ guidance: { code: 'card_management_required' } }));
+  }
   if (/(限额|额度)/.test(text) && adjustmentIntent.test(text)) {
     const amount = text.match(adjustmentAmount)?.[1] ?? parseAmount(text);
     if (amount == null) return plain('请问要把限额调整到多少？例如“把娱乐限额调整到1500”。');

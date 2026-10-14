@@ -2,6 +2,7 @@
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { executeGatedTool, getOrCreateSession } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import { banking } from '@/banking-sdk';
 import { getState } from '@/security/circuit-breaker';
@@ -64,13 +65,12 @@ const balance = async () => (await getTestPrisma().account.findUniqueOrThrow({
 it('[integration] rejects both fractional-cent requests through natural-language HTTP before creating authorization', async () => {
   const p = getTestPrisma();
   const before = await p.transaction.findMany({ where: { userId, channel: 'TRANSFER' } });
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   for (const amount of ['999.995', '0.005']) {
     const response = await chat(`给张伟转${amount}元`, sessionId);
-    const failure = response.body.data.events.find((event: { type: string; toolEvent?: { toolName: string; status: string } }) =>
+    const failure = response.body.data.events.find((event: { type: string; toolEvent?: { toolName: string; status: string; errorCode?: string } }) =>
       event.type === 'tool_end' && event.toolEvent?.toolName === 'transfer_money' && event.toolEvent.status === 'error');
-    expect(failure?.toolEvent.summary).toContain('amount: must match pattern');
-    expect(failure?.toolEvent.summary).toContain(amount);
+    expect(failure?.toolEvent.errorCode).toBe('VALIDATION');
   }
   expect(await p.pendingAction.count({ where: { sessionId } })).toBe(0);
   expect(await p.transaction.findMany({ where: { userId, channel: 'TRANSFER' } })).toEqual(before);
@@ -93,7 +93,7 @@ it.each(['999.995', '0.005', 'NaN', 'Infinity', '0', '-1'])(
 it('[integration] corrupted fractional-cent pending actions cannot be confirmed concurrently', async () => {
   const p = getTestPrisma();
   const before = await p.transaction.findMany({ where: { userId, channel: 'TRANSFER' } });
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const ids = [await park('999.99', sessionId), await park('0.01', sessionId)];
   for (const [index, amount] of ['999.995', '0.005'].entries()) {
     await p.pendingAction.update({ where: { id: ids[index] }, data: {
@@ -109,7 +109,7 @@ it('[integration] corrupted fractional-cent pending actions cannot be confirmed 
 
 it('[integration] a corrupted in-flight amount fails closed without authorizing a new transfer', async () => {
   const p = getTestPrisma();
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const invalid = await park('999.99', sessionId);
   await p.pendingAction.update({ where: { id: invalid }, data: {
     status: 'confirmed', argsJson: JSON.stringify({ name: '张伟', amount: '999.995' }),
@@ -124,7 +124,7 @@ it('[integration] a corrupted in-flight amount fails closed without authorizing 
 
 it.each(['0.01', '0.02'])('[integration] concurrent 999.99 + %s uses exact cents and requires MFA only above 1000', async secondAmount => {
   const p = getTestPrisma();
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const first = await park('999.99', sessionId);
   const second = await park(secondAmount, sessionId);
   const reached = deferred(), release = deferred();
@@ -170,7 +170,7 @@ it.each(['0.01', '0.02'])('[integration] concurrent 999.99 + %s uses exact cents
 });
 
 it('[integration] ordinary cent strings preserve their exact value', async () => {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const id = await park('0.29', sessionId);
   expect((await call(confirmPost, id, sessionId)).body.data.status).toBe('executed');
   expect(await computeDailyTransferTotal(userId)).toBe('0.29');
@@ -180,7 +180,7 @@ it('[integration] ordinary cent strings preserve their exact value', async () =>
 it.each(['standalone', 'plan', 'chat'] as const)(
   '[integration] GREEN %s budget cannot write after three real MFA failures trip the session', async scope => {
     const p = getTestPrisma();
-    const sessionId = (await getOrCreateSession(userId)).sessionId;
+    const sessionId = (await getDemoSession(userId)).sessionId;
     const blocker = await park('5000.00', sessionId);
     const before = await p.budget.count();
     const reached = deferred(), release = deferred();

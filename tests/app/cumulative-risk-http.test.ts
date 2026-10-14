@@ -40,7 +40,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as verifyPost } from '@/app/api/actions/[id]/verify/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
-import { getOrCreateSession } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { security } from '@/security';
 import { DAILY_TRANSFER_LIMIT, MFA_CODE } from '@/lib/constants';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
@@ -82,7 +82,7 @@ function payload<T>(res: HttpResult<Envelope<T>>): T {
 
 /** Create a real persisted `AgentSession` for the demo user (owns the parked actions). */
 async function ensureSession(): Promise<string> {
-  return (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  return (await getDemoSession(DEMO_USER_ID)).sessionId;
 }
 
 /**

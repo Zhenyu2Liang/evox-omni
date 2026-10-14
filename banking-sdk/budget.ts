@@ -11,7 +11,7 @@
  * un-audited. A REPLAY (the keyed row already exists, or the unique-conflict fallback re-read) writes
  * nothing and therefore audits nothing: no duplicate side effect, no duplicate audit.
  */
-import type { Budget } from '@prisma/client';
+import type { Budget } from '@/lib/db/prisma';
 import { budgets } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { centsToMoney, moneyToCents } from '../lib/money';
@@ -92,6 +92,19 @@ async function auditReservation(
  * The trusted invocation context provides the write fence inside the transaction.
  */
 export async function reserveBudget(input: ReserveBudgetInput): Promise<BudgetView> {
+  if (typeof input.userId !== 'string' || !input.userId.trim()) {
+    throw new AppError('SECURITY_DENIED', 'A budget requires a trusted owner identity.');
+  }
+  if (typeof input.name !== 'string' || !input.name.trim()) {
+    throw new AppError('VALIDATION', 'A budget name must be non-empty.');
+  }
+  if (input.purpose !== undefined && typeof input.purpose !== 'string') {
+    throw new AppError('VALIDATION', 'Budget purpose must be text.');
+  }
+  if (input.dueDate !== undefined && (!Number.isSafeInteger(input.dueDate) ||
+      !Number.isFinite(new Date(input.dueDate).getTime()))) {
+    throw new AppError('VALIDATION', 'Budget due date must be a valid integer epoch.');
+  }
   if (moneyToCents(input.amount) <= 0n) {
     throw new AppError('VALIDATION', '预算金额必须大于 0', { amount: input.amount });
   }
@@ -140,12 +153,16 @@ export async function listBudgets(userId: string): Promise<BudgetView[]> {
 }
 
 /** Release a reserved budget (status → RELEASED); returns the updated budget. */
-export async function releaseBudget(id: string): Promise<BudgetView> {
-  const existing = await budgets.getBudget(id);
-  if (existing === null) {
-    throw new AppError('NOT_FOUND', `预算不存在：${id}`, { id });
+export async function releaseBudget(id: string, userId: string): Promise<BudgetView> {
+  if (typeof userId !== 'string' || !userId.trim()) {
+    throw new AppError('SECURITY_DENIED', 'Budget release requires a trusted owner identity.');
   }
-
-  const row = await runInTransaction((tx) => tx.budget.update({ where: { id }, data: { status: 'RELEASED' } }));
+  const row = await runInTransaction(async tx => {
+    const existing = await tx.budget.findUnique({ where: { id } });
+    if (!existing || existing.userId !== userId) throw new AppError('NOT_FOUND', 'Budget does not exist.', { id });
+    if (existing.status === 'RELEASED') return existing;
+    if (existing.status !== 'RESERVED') throw new AppError('CONFLICT', 'Only a reserved budget can be released.');
+    return tx.budget.update({ where: { id, userId, status: 'RESERVED' }, data: { status: 'RELEASED' } });
+  });
   return toBudgetView(row);
 }

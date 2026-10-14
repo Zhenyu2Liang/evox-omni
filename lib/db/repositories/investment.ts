@@ -1,4 +1,4 @@
-import type { InvestmentProduct, InvestmentHolding } from '@prisma/client';
+import type { InvestmentProduct, InvestmentHolding } from '@/lib/db/prisma';
 import { dbClient } from '../client';
 import { moneyToCents, type MoneyInput } from '../../money';
 import { nonNegativeDecimal } from '../../decimal';

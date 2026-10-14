@@ -28,7 +28,7 @@
  * principal is kept out of booked consumption analysis and is never mislabeled
  * as 大额消费.
  */
-import type { InvestmentHolding, InvestmentProduct } from '@prisma/client';
+import type { InvestmentHolding, InvestmentProduct } from '@/lib/db/prisma';
 import { demoNow } from '../lib/clock';
 import { accounts, investments } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
@@ -68,6 +68,9 @@ function toProductView(row: InvestmentProduct): ProductView {
 
 /** Investment products, optionally filtered by risk level. */
 export async function listProducts(query: ProductQuery = {}): Promise<ProductView[]> {
+  if (query.riskLevel !== undefined && (typeof query.riskLevel !== 'string' || !Object.hasOwn(RISK_RANK, query.riskLevel))) {
+    throw new AppError('VALIDATION', 'Investment risk level must be R1 through R5.');
+  }
   const rows = query.riskLevel
     ? await investments.listProductsByRisk(query.riskLevel)
     : await investments.listProducts();
@@ -76,14 +79,16 @@ export async function listProducts(query: ProductQuery = {}): Promise<ProductVie
 
 /** Compare the products with the given ids (returns them plus best-rate / lowest-risk picks). */
 export async function compareInvestments(ids: string[]): Promise<InvestmentComparison> {
-  if (ids.length === 0) {
-    return { products: [], highestRateId: undefined, lowestRiskId: undefined };
+  if (!Array.isArray(ids) || ids.length === 0 || ids.some(id => typeof id !== 'string' || !id.trim())) {
+    throw new AppError('VALIDATION', 'Investment comparison requires non-empty product IDs.');
   }
-
-  const rows = await Promise.all(ids.map((id) => investments.getProduct(id)));
-  const products = rows
-    .filter((row): row is InvestmentProduct => row !== null)
-    .map(toProductView);
+  const uniqueIds = [...new Set(ids)];
+  const rows = await Promise.all(uniqueIds.map(async id => {
+    const product = await investments.getProduct(id);
+    if (!product) throw new AppError('NOT_FOUND', 'Investment product does not exist.', { productId: id });
+    return product;
+  }));
+  const products = rows.map(toProductView);
 
   let highest: ProductView | undefined;
   let lowest: ProductView | undefined;
@@ -158,6 +163,9 @@ function parseRedeemResult(holding: InvestmentHolding, expectedAmount?: string):
  * a second time or reconstructs a balance from current account state.
  */
 export async function subscribeInvestment(input: SubscribeInvestmentInput): Promise<InvestResult> {
+  if (typeof input.userId !== 'string' || !input.userId.trim()) {
+    throw new AppError('SECURITY_DENIED', 'Investment purchase requires a trusted owner identity.');
+  }
   const amountMinor = moneyToCents(input.amount);
   if (amountMinor <= 0n) throw new AppError('VALIDATION', 'Purchase amount must be positive.');
 
@@ -275,6 +283,9 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
  * subscribe dedup.
  */
 export async function redeemInvestment(input: RedeemInvestmentInput): Promise<InvestResult> {
+  if (typeof input.userId !== 'string' || !input.userId.trim()) {
+    throw new AppError('SECURITY_DENIED', 'Investment redemption requires a trusted owner identity.');
+  }
   const holding = await investments.getHolding(input.holdingId);
   if (holding === null || holding.userId !== input.userId) {
     throw new AppError('NOT_FOUND', `持仓不存在：${input.holdingId}`, {

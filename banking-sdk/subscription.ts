@@ -7,7 +7,7 @@
  *    `AppError('CONFLICT')` (illegal state transition);
  *  - `remind` must be a boolean → `AppError('VALIDATION')`.
  */
-import type { Subscription as SubscriptionRow } from '@prisma/client';
+import type { Subscription as SubscriptionRow } from '@/lib/db/prisma';
 import { subscriptions } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { centsToMoney } from '../lib/money';
@@ -51,7 +51,11 @@ export async function cancelSubscription(id: string, userId: string): Promise<Su
       status: row.status,
     });
   }
-  const updated = await runInTransaction((tx) => tx.subscription.update({ where: { id: row.id, userId, status: row.status }, data: { status: 'CANCELLED' } }));
+  const updated = await runInTransaction(async tx => {
+    const result = await tx.subscription.updateMany({ where: { id: row.id, userId, status: 'ACTIVE' }, data: { status: 'CANCELLED', remind: false } });
+    if (result.count !== 1) throw new AppError('CONFLICT', 'The subscription state changed before cancellation committed.');
+    return tx.subscription.findUniqueOrThrow({ where: { id: row.id, userId } });
+  });
   return toSubscriptionView(updated);
 }
 
@@ -65,6 +69,13 @@ export async function setSubscriptionReminder(
     throw new AppError('VALIDATION', '提醒开关必须是布尔值', { subscriptionId: id, remind });
   }
   const row = await requireSubscription(id, userId);
-  const updated = await runInTransaction((tx) => tx.subscription.update({ where: { id: row.id, userId }, data: { remind } }));
+  if (row.status !== 'ACTIVE') {
+    throw new AppError('CONFLICT', 'Renewal reminders require an active subscription.', { subscriptionId: row.id, status: row.status });
+  }
+  const updated = await runInTransaction(async tx => {
+    const result = await tx.subscription.updateMany({ where: { id: row.id, userId, status: 'ACTIVE' }, data: { remind } });
+    if (result.count !== 1) throw new AppError('CONFLICT', 'The subscription state changed before reminder update committed.');
+    return tx.subscription.findUniqueOrThrow({ where: { id: row.id, userId } });
+  });
   return toSubscriptionView(updated);
 }

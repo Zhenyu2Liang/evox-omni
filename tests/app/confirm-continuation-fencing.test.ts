@@ -37,7 +37,8 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { GET as taskGet, POST as taskPost } from '@/app/api/tasks/[id]/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
-import { executeGatedTool, getOrCreateSession, readPendingActionId } from '@/agent';
+import { executeGatedTool, readPendingActionId } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan, type PlanRunTool } from '@/agent/tools/planning';
 import type { TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
@@ -133,9 +134,9 @@ function transferNode(id: string, amount: string, deps: string[] = []): SeedNode
   };
 }
 
-/** Create + persist a fresh `AgentSession` for the demo user and return its id. */
+/** Load the canonical demo session used by the HTTP entry. */
 async function newPersistedSessionId(): Promise<string> {
-  return (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  return (await getDemoSession(DEMO_USER_ID)).sessionId;
 }
 
 /**

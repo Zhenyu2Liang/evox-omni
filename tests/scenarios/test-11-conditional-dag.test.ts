@@ -52,9 +52,7 @@ describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额�
     condition?: TaskCondition;
   }
 
-  /**
-   * The compiler binds this proposal to the trusted category, operator and threshold.
-   */
+  /** The model candidate explicitly declares its typed category, operator and threshold. */
   function conditionalDag(conditionValue: string): { goal: string; nodes: ProposedNode[] } {
     return {
       goal: '若本月娱乐消费超过2000则调整娱乐限额',
@@ -65,14 +63,14 @@ describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额�
           dependencies: [],
           kind: 'tool',
           tool: 'analyze_spending',
-          args: {},
+          args: { month: '2026-09' },
         },
         {
           id: 'cond',
           name: '判断娱乐消费>2000',
           dependencies: ['analyze'],
           kind: 'condition',
-          condition: { path: 'analyze.total', op: '>', value: conditionValue },
+          condition: { path: 'analyze.categoryTotals.\u5a31\u4e50', op: '>', value: conditionValue },
         },
         {
           id: 'setlimit',
@@ -102,7 +100,7 @@ describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额�
     });
     const res = await runTurn({
       sessionId,
-      message: '如果本月娱乐消费超过2000，就把娱乐限额调成1500',
+      message: `If this month's entertainment spending exceeds ${conditionValue} CNY, set the entertainment limit to 1500 CNY.`,
       agent,
     });
     return { sessionId, agent, res };
@@ -152,7 +150,7 @@ describe('Scenario 11 — 条件DAG: 若本月娱乐>2000则调整娱乐限额�
     expect(entertainment?.amount).toBe(centsToMoney(moneyToCents(MONTHLY_ENTERTAINMENT_SPEND)));
   });
 
-  it('compiles the user condition against category spending instead of total spending', async () => {
+  it('evaluates the declared category path and exact threshold without rewriting the candidate', async () => {
     const { res } = await submitConditionalPlan(CONDITION_THRESHOLD);
     const plan = requirePlan(res);
 

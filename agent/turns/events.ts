@@ -2,105 +2,169 @@ import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { ToolEventView } from '@/lib/contracts/agent';
 import { security } from '@/security';
 import { confirmationCard, errorCard, mfaCard } from '../card-emitter';
-import { filterMissingFields, parseBankingGuidance } from '../banking-guidance';
+import { parseBankingGuidance } from '../banking-guidance';
 import type { TurnBuffer } from './contracts';
-import { emitCard, emitToolCards, groundMessage, newAssistantMessage, upsertToolEvent } from './buffer';
+import { emitCard, emitToolCards, groundMessage, newAssistantMessage, upsertToolEvent, publishReplyProgress,
+  ensureToolMessage, publishToolMessage, toolResultStatus } from './buffer';
 import { findRunFailure, isAssistantMessage, isRecord, safeToString, textOfContent, textOfResult, toExecutionResult } from './message-utils';
 import { loadPendingSummary, MFA_HINT } from './authorization-view';
+import { sanitizeToolArguments } from '@/lib/tool-diagnostics';
+import { projectToolRejection } from '@/lib/tool-feedback';
+import { inspectReplyFormat } from '../reply-format';
+import { assistantPresentationId, providerPresentationKey } from '../tool-presentation-identity';
+import { parseModelToolError } from '../tools/result';
 
-async function handleToolEnd(buffer: TurnBuffer, event: Extract<AgentEvent, { type: 'tool_execution_end' }>, rejected: ReadonlyMap<string, string>): Promise<void> {
+async function handleToolEnd(buffer: TurnBuffer, event: Extract<AgentEvent, { type: 'tool_execution_end' }>, rejected: ReadonlyMap<string, string>, now: number): Promise<void> {
   const { toolCallId, toolName } = event;
+  const toolMessage = ensureToolMessage(buffer, toolCallId, toolName, now);
+  const owner = { messageId: toolMessage.id };
   if (rejected.has(toolCallId)) {
-    const view: ToolEventView = { toolCallId, toolName, status: 'blocked', summary: 'Full plan validation failed. Supply the objects and amounts for every step.' };
-    upsertToolEvent(buffer.current, view);
+    const view: ToolEventView = { toolCallId, toolName, ...owner, status: 'blocked', ...projectToolRejection(rejected.get(toolCallId)!) };
+    upsertToolEvent(toolMessage, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
     return;
   }
   if (!event.isError) {
     const summary = textOfResult(event.result);
     const result = toExecutionResult(isRecord(event.result) ? event.result.details : undefined, summary);
-    const view: ToolEventView = { toolCallId, toolName, status: 'success', ...(summary !== '' ? { summary } : {}) };
-    upsertToolEvent(buffer.current, view);
+    const view: ToolEventView = { toolCallId, toolName, ...owner, status: 'success', ...(summary !== '' ? { summary } : {}) };
+    upsertToolEvent(toolMessage, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
     buffer.factResults.push({ toolName, result, toolCallId, sourceAccountId: buffer.sourceAccounts.get(toolCallId) });
-    emitToolCards(buffer, toolName, result);
+    emitToolCards(buffer, toolName, result, toolMessage);
     return;
   }
-  const message = textOfResult(event.result) || 'Tool execution failed';
+  const rawMessage = textOfResult(event.result) || 'Tool execution failed';
+  const result = { ...toExecutionResult(isRecord(event.result) ? event.result.details : undefined, rawMessage),
+    ...parseModelToolError(rawMessage), ok: false };
+  const message = result.error ?? rawMessage;
+  if (toolResultStatus(result) === 'needs_reconciliation') {
+    const view: ToolEventView = { toolCallId, toolName, ...owner, status: 'needs_reconciliation' };
+    upsertToolEvent(toolMessage, view);
+    buffer.events.push({ type: 'tool_end', toolEvent: view });
+    buffer.factResults.push({ toolName, toolCallId, result, sourceAccountId: buffer.sourceAccounts.get(toolCallId) });
+    return;
+  }
   const parsed = security.gateway.securityGateway.parseBlockReason(message);
   const blocked = parsed !== null || message.startsWith(security.gateway.BLOCK_REASON_PREFIX);
   if (!blocked) {
-    const view: ToolEventView = { toolCallId, toolName, status: 'error', summary: message };
-    upsertToolEvent(buffer.current, view);
+    const view: ToolEventView = { toolCallId, toolName, ...owner, status: 'error', summary: message, errorCode: result.errorCode };
+    upsertToolEvent(toolMessage, view);
     buffer.events.push({ type: 'tool_end', toolEvent: view });
-    buffer.factResults.push({ toolName, result: { ok: false, error: message }, toolCallId, sourceAccountId: buffer.sourceAccounts.get(toolCallId) });
-    emitCard(buffer, errorCard(message));
+    buffer.factResults.push({ toolName, result: { ...result, error: message }, toolCallId, sourceAccountId: buffer.sourceAccounts.get(toolCallId) });
+    emitCard(buffer, errorCard(message, result.errorCode), toolMessage);
     return;
   }
-  const view: ToolEventView = { toolCallId, toolName, status: 'blocked' };
-  upsertToolEvent(buffer.current, view);
+  const view: ToolEventView = { toolCallId, toolName, ...owner, status: 'blocked', ...(parsed?.actionId ? { actionId: parsed.actionId } : {}) };
+  upsertToolEvent(toolMessage, view);
   buffer.events.push({ type: 'tool_end', toolEvent: view });
   if (parsed?.decisionKind === 'require_mfa') {
     const summary = await loadPendingSummary(parsed.actionId, toolName);
     buffer.events.push({ type: 'mfa_required', actionId: parsed.actionId, hint: MFA_HINT, action: summary });
-    emitCard(buffer, mfaCard(parsed.actionId, MFA_HINT, summary));
+    emitCard(buffer, mfaCard(parsed.actionId, MFA_HINT, summary), toolMessage);
     return;
   }
   if (parsed?.decisionKind === 'require_confirmation') {
     const summary = await loadPendingSummary(parsed.actionId, toolName);
     buffer.events.push({ type: 'confirmation_required', actionId: parsed.actionId, action: summary });
-    emitCard(buffer, confirmationCard(summary));
+    emitCard(buffer, confirmationCard(summary), toolMessage);
     return;
   }
   buffer.events.push({ type: 'security_event', kind: 'locked', message });
 }
 
 /** Map normal and recovered Pi events through the same grounded presentation adapter. */
-export function createEventHandler(buffer: TurnBuffer, now: () => number, rejected: ReadonlyMap<string, string> = new Map()): (event: AgentEvent) => Promise<void> {
+export function createEventHandler(buffer: TurnBuffer, now: () => number, rejected: ReadonlyMap<string, string> = new Map(),
+  modelRequestIdentity?: () => string | undefined): (event: AgentEvent) => Promise<void> {
   return async event => {
     try {
       switch (event.type) {
         case 'message_start': {
           if (!isAssistantMessage(event.message)) return;
           const assistant = newAssistantMessage(now());
+          const requestId = modelRequestIdentity?.();
+          const session = buffer.events.find(item => item.type === 'session');
+          if (requestId && session?.type === 'session' && session.runId) {
+            assistant.id = assistantPresentationId(session.runId, requestId);
+          }
+          buffer.toolMessages.clear();
+          buffer.sourceAccounts.clear();
+          buffer.toolOwnerKey = undefined;
           buffer.current = assistant;
           buffer.assistants.push(assistant);
           buffer.events.push({ type: 'message_start', message: { ...assistant } });
           return;
         }
-        case 'message_update': return;
+        case 'message_update': {
+          if (event.assistantMessageEvent.type === 'text_delta') {
+            // Raw tokens remain in the Pi journal; the public stream reports generation activity.
+            publishReplyProgress(buffer, buffer.repairingReply ? 'repairing' : 'generating');
+          }
+          return;
+        }
         case 'message_end': {
           if (!isAssistantMessage(event.message)) return;
+          if (event.message.stopReason === 'stop') publishReplyProgress(buffer, 'checking');
           const assistant = buffer.current ?? newAssistantMessage(now());
-          buffer.lastGuidance = event.message.stopReason === 'stop'
-            ? filterMissingFields(parseBankingGuidance(textOfContent(event.message.content)), buffer.providedFields ?? []) : undefined;
+          const rawProse = textOfContent(event.message.content);
+          const formatIssues = inspectReplyFormat(rawProse, { allowProtocolExamples: buffer.allowProtocolExamples });
+          buffer.lastGuidance = event.message.stopReason === 'stop' && !formatIssues.length
+            ? parseBankingGuidance(rawProse) : undefined;
           if (event.message.content.some(part => part.type === 'toolCall')) {
-            assistant.content = '';
-            buffer.groundedIds.add(assistant.id);
+            buffer.toolOwnerKey = modelRequestIdentity?.() ?? providerPresentationKey(event.message);
+            if (rawProse) groundMessage(buffer, assistant, undefined, rawProse);
+            else {
+              assistant.content = '';
+              buffer.groundedIds.add(assistant.id);
+              buffer.assistants = buffer.assistants.filter(message => message.id !== assistant.id);
+            }
           } else {
-            groundMessage(buffer, assistant, event.message.stopReason === 'stop' ? parseBankingGuidance(textOfContent(event.message.content)) : undefined);
+            const prose = event.message.stopReason === 'stop' ? textOfContent(event.message.content) : '';
+            groundMessage(buffer, assistant, parseBankingGuidance(prose), prose);
           }
-          event.message.content = [...event.message.content.filter(part => part.type !== 'text'), ...(assistant.content ? [{ type: 'text' as const, text: assistant.content }] : [])];
+          // Presentation owns its projection; Pi and the journal retain the original model output.
           if (assistant.content !== '') buffer.events.push({ type: 'text_delta', delta: assistant.content });
           buffer.events.push({ type: 'message_end', message: assistant });
           return;
         }
         case 'tool_execution_start': {
+          if (event.toolName === 'describe_turn') return;
           if (isRecord(event.args) && typeof event.args.sourceAccountId === 'string') buffer.sourceAccounts.set(event.toolCallId, event.args.sourceAccountId);
-          const view: ToolEventView = { toolCallId: event.toolCallId, toolName: event.toolName, status: 'started' };
-          upsertToolEvent(buffer.current, view);
+          const view: ToolEventView = { toolCallId: event.toolCallId, toolName: event.toolName, status: 'started',
+            debugArguments: sanitizeToolArguments(event.args) };
+          const message = ensureToolMessage(buffer, event.toolCallId, event.toolName, now());
+          view.messageId = message.id;
+          upsertToolEvent(message, view);
           buffer.events.push({ type: 'tool_start', toolEvent: view });
           return;
         }
         case 'tool_execution_update': {
-          const view: ToolEventView = { toolCallId: event.toolCallId, toolName: event.toolName, status: 'updated' };
-          upsertToolEvent(buffer.current, view);
+          if (event.toolName === 'describe_turn') return;
+          const message = ensureToolMessage(buffer, event.toolCallId, event.toolName, now());
+          const view: ToolEventView = { toolCallId: event.toolCallId, toolName: event.toolName, messageId: message.id, status: 'updated' };
+          upsertToolEvent(message, view);
           buffer.events.push({ type: 'tool_end', toolEvent: view });
           return;
         }
-        case 'tool_execution_end':
-          await handleToolEnd(buffer, event, rejected);
+        case 'tool_execution_end': {
+          if (event.toolName === 'describe_turn') return;
+          try { await handleToolEnd(buffer, event, rejected, now()); }
+          catch (error) {
+            const message = buffer.toolMessages.get(event.toolCallId);
+            const previous = message?.toolEvents?.[0];
+            if (previous && (previous.status === 'started' || previous.status === 'updated')) {
+              const failed: ToolEventView = { ...previous, status: 'error', debugDetail: safeToString(error) };
+              upsertToolEvent(message ?? null, failed);
+              buffer.events.push({ type: 'tool_end', toolEvent: failed });
+            }
+            throw error;
+          }
+          finally {
+            const message = buffer.toolMessages.get(event.toolCallId);
+            if (message) publishToolMessage(buffer, message);
+          }
           return;
+        }
         case 'agent_end': {
           const failure = findRunFailure(event.messages);
           if (failure?.errorMessage) buffer.events.push({ type: 'error', message: failure.errorMessage });

@@ -23,7 +23,8 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
-import { executeGatedTool, getOrCreateSession, readPendingActionId } from '@/agent';
+import { executeGatedTool, readPendingActionId } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan, type PlanRunTool } from '@/agent/tools/planning';
 import type { TaskNodeResult, TaskNodeStatus, TaskPlan } from '@/lib/contracts/task';
 import {
@@ -97,9 +98,9 @@ function transferNode(id: string, amount: string, deps: string[] = []): SeedNode
   return { id, name: `给${RECIPIENT_NAME}转账`, dependencies: deps, kind: 'tool', tool: 'transfer_money', args: { name: RECIPIENT_NAME, amount } };
 }
 
-/** Create + persist a fresh `AgentSession` for the demo user and return its (unique) id. */
+/** Load the canonical demo session used by the HTTP entry. */
 async function newPersistedSessionId(): Promise<string> {
-  return (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  return (await getDemoSession(DEMO_USER_ID)).sessionId;
 }
 
 /**

@@ -2,12 +2,12 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vites
 import { NextRequest } from 'next/server';
 import { banking } from '@/banking-sdk';
 import { withBankingExecution } from '@/banking-sdk/execution-context';
-import { cancelTask, confirmAction, getOrCreateSession, tickScheduledTasks, verifyAction } from '@/agent';
+import { cancelTask, confirmAction, getDemoSession, getOrCreateSession, tickScheduledTasks, verifyAction } from '@/agent';
 import { getScheduleInbox, synchronizeScheduledWorkflow } from '@/agent/scheduled-dispatcher';
 import { GET as inboxGet } from '@/app/api/schedules/route';
 import { POST as tickPost } from '@/app/api/schedules/tick/route';
 import { auditStore } from '@/audit/audit-logger';
-import { MFA_CODE, SESSION_COOKIE } from '@/lib/constants';
+import { MFA_CODE } from '@/lib/constants';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
 
@@ -22,10 +22,10 @@ afterEach(() => vi.restoreAllMocks());
 afterAll(disconnectTestPrisma);
 
 async function schedule(kind: 'REMINDER' | 'TRANSFER' | 'PAYMENT', payload: Record<string, unknown>) {
-  const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+  const { sessionId } = await getDemoSession(DEMO_USER_ID);
   const task = await withBankingExecution({ sessionId }, () => banking.task.createScheduledTask({
     userId: DEMO_USER_ID, name: 'Due scheduled operation', kind, runAt: NOW - 1,
-    payload, requiresConfirmation: false,
+    payload,
   }));
   return { task, identity: { sessionId, userId: DEMO_USER_ID } };
 }
@@ -71,10 +71,12 @@ describe('durable scheduled dispatch', () => {
     expect(result.dispatches.map(dispatch => dispatch.scheduledTaskId)).not.toContain(task.id);
     expect((await db().scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('SCHEDULED');
     const rejected = await tickPost(new NextRequest('http://localhost/api/schedules/tick', { method: 'POST',
-      headers: { 'content-type': 'application/json', cookie: `${SESSION_COOKIE}=${other}` }, body: JSON.stringify({ now: NOW }) }));
+      headers: { 'content-type': 'application/json', cookie: `banking_session=${other}` }, body: JSON.stringify({ now: NOW }) }));
     expect(rejected.status).toBe(400);
     expect(await db().pendingAction.count()).toBe(0);
-    expect((await inboxGet(new NextRequest('http://localhost/api/schedules'))).status).toBe(403);
+    const inbox = await inboxGet(new NextRequest('http://localhost/api/schedules'));
+    expect(inbox.status).toBe(200);
+    expect(JSON.stringify(await inbox.json())).toContain(task.id);
   });
 
   it('rolls back reminder delivery on audit failure and safely retries the same intent', async () => {
@@ -93,10 +95,10 @@ describe('durable scheduled dispatch', () => {
   });
 
   it('rejects unsupported executable payloads before creating a banking workflow', async () => {
-    const { task, identity } = await schedule('TRANSFER', { contactId: 'contact_zhangwei', amount: '200.00', toolName: 'change_password' });
-    const result = await tickScheduledTasks(identity, { now: NOW });
-    expect(result.dispatches.find(dispatch => dispatch.scheduledTaskId === task.id)?.status).toBe('FAILED');
-    expect(await db().agentTask.count({ where: { sessionId: identity.sessionId } })).toBe(0);
+    await expect(schedule('TRANSFER', { contactId: 'contact_zhangwei', amount: '200.00', toolName: 'unauthorized_tool' }))
+      .rejects.toMatchObject({ code: 'VALIDATION' });
+    expect(await db().scheduledTask.count()).toBe(0);
+    expect(await db().agentTask.count()).toBe(0);
     expect(await db().pendingAction.count()).toBe(0);
   });
 
@@ -116,7 +118,7 @@ describe('durable scheduled dispatch', () => {
     const { task, identity } = await schedule('TRANSFER', { contactId: 'contact_zhangwei', amount: '200.00' });
     const before = (await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor;
     const dispatched = (await tickScheduledTasks(identity, { now: NOW })).dispatches[0];
-    await expect(banking.task.cancelScheduledTask(task.id)).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(banking.task.cancelScheduledTask(task.id, DEMO_USER_ID)).rejects.toMatchObject({ code: 'CONFLICT' });
     expect((await db().scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('AWAITING_CONFIRMATION');
     expect((await db().pendingAction.findUniqueOrThrow({ where: { id: dispatched.pendingActionId } })).status).toBe('pending');
     expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(before);
@@ -130,8 +132,8 @@ describe('durable scheduled dispatch', () => {
 
   it('cancels an undispatched intent idempotently without producing authorization or reminders', async () => {
     const { task, identity } = await schedule('REMINDER', { note: 'Cancelled reminder' });
-    expect((await banking.task.cancelScheduledTask(task.id)).status).toBe('CANCELLED');
-    expect((await banking.task.cancelScheduledTask(task.id)).status).toBe('CANCELLED');
+    expect((await banking.task.cancelScheduledTask(task.id, DEMO_USER_ID)).status).toBe('CANCELLED');
+    expect((await banking.task.cancelScheduledTask(task.id, DEMO_USER_ID)).status).toBe('CANCELLED');
     await tickScheduledTasks(identity, { now: NOW });
     expect(await db().scheduledNotification.count()).toBe(0);
     expect(await db().pendingAction.count()).toBe(0);

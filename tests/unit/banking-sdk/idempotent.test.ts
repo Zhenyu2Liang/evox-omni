@@ -260,7 +260,7 @@ describe('banking-sdk · idempotent: createScheduledTask', () => {
     const input: CreateScheduledTaskInput = {
       userId: DEMO_USER_ID,
       name: '无键任务',
-      kind: 'PAYMENT',
+      kind: 'REMINDER',
       runAt: RUN_AT,
     };
 
@@ -275,7 +275,7 @@ describe('banking-sdk · idempotent: createScheduledTask', () => {
     const input: CreateScheduledTaskInput = {
       userId: DEMO_USER_ID,
       name: '空白键任务',
-      kind: 'TRANSFER',
+      kind: 'REMINDER',
       runAt: RUN_AT,
       idempotencyKey: '',
     };

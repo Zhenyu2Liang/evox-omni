@@ -1,0 +1,20 @@
+/** Deterministic script routing for the mock provider only. */
+export const REQUEST_COMMANDS: Readonly<Record<string, RegExp>> = {
+  reserve_budget: /\u9884\u7559|(?:\u5efa\u7acb|\u521b\u5efa|\u8bb0\u5f55|\u8bbe\u7f6e).*\u9884\u7b97/,
+  analyze_spending: /(?:\u67e5\u8be2|\u67e5\u770b|\u5206\u6790|\u67e5\u4e00\u4e0b|\u770b\u770b|\u770b\u4e0b).*(?:\u6d88\u8d39|\u8d26\u5355|\u652f\u51fa)/,
+  get_balance: /\u4f59\u989d/,
+  get_transactions: /\u6d41\u6c34|\u4ea4\u6613\u8bb0\u5f55/,
+  detect_anomaly: /\u5f02\u5e38/,
+  transfer_money: /\u8f6c\u8d26|\u8f6c\u7ed9|\u7ed9.{1,30}\u8f6c(?=\s*[+\-−－¥￥$\d\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e\u5343\u4e07])|\u8f6c(?=\s*[+\-−－¥￥$\d])/,
+  set_card_limit: /\u9650\u989d/,
+  freeze_card: /(?<!\u89e3)\u51bb\u7ed3/,
+  unfreeze_card: /\u89e3\u51bb/,
+  report_lost_card: /\u6302\u5931/,
+  cancel_subscription: /\u53d6\u6d88.*\u8ba2\u9605|\u8ba2\u9605.*\u53d6\u6d88/,
+  set_subscription_reminder: /\u8ba2\u9605.*\u63d0\u9192|\u7eed\u8d39\u63d0\u9192/,
+  create_scheduled_task: /\u521b\u5efa.*\u63d0\u9192|\u8bbe\u7f6e.*\u63d0\u9192|\u5b9a\u65f6|\u5b89\u6392|\u63d0\u9192\u6211/,
+  subscribe_investment: /\u7533\u8d2d|\u8ba4\u8d2d|\u8d2d\u4e70.*\u7406\u8d22/,
+  redeem_investment: /\u8d4e\u56de/,
+  compare_investments: /\u5bf9\u6bd4|\u6bd4\u8f83/,
+  apply_virtual_card: /\u865a\u62df\u5361/,
+};

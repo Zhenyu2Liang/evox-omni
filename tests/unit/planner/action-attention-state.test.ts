@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialChatUIState, reduceAgentEvents } from '@/components/chat/useAgentStream';
+import { acceptsChatResponse, initialChatUIState, reconcileInterruptedHistory, reduceAgentEvents, restoreActionAttention } from '@/components/chat/useAgentStream';
 import type { PendingActionSummary } from '@/lib/contracts/security';
 
 const summary: PendingActionSummary = {
@@ -8,7 +8,17 @@ const summary: PendingActionSummary = {
 };
 
 describe('action attention convergence', () => {
-  it.each(['executed', 'failed', 'cancelled'] as const)(
+  it('preserves the current decision and its inline card when restoration times out or fails', () => {
+    const card = { type: 'mfa' as const, actionId: 'action-1', action: summary };
+    const state = initialChatUIState({ pendingAction: { kind: 'mfa', actionId: 'action-1', summary },
+      messages: [{ id: 'owner', role: 'assistant', content: '', timestamp: 1, cards: [card] }],
+      pendingReconciliations: [{ actionId: 'uncertain', summary, attention: 'reconciliation' }] });
+    const restored = restoreActionAttention(state, [], 0, 0);
+    expect(restored.pendingAction).toBe(state.pendingAction);
+    expect(restored.messages[0].cards?.[0]).toBe(card);
+    expect(restored.pendingReconciliations).toBe(state.pendingReconciliations);
+  });
+  it.each(['executed', 'failed', 'cancelled', 'locked'] as const)(
     'removes a restored recovery control after the server settles the action as %s', status => {
       const state = initialChatUIState({ pendingReconciliations: [
         { actionId: 'action-1', summary, attention: 'recoverable' },
@@ -19,6 +29,65 @@ describe('action attention convergence', () => {
       expect(state.pendingReconciliations).toHaveLength(2);
     },
   );
+
+  it('does not restore a settled verification from a read issued before a request started', () => {
+    const initial = initialChatUIState({ pendingAction: { kind: 'mfa', actionId: 'action-1', summary } });
+    const settled = reduceAgentEvents(initial, [{ type: 'action_settled', actionId: 'action-1', status: 'executed' }]);
+    const refs = [{ id: 'action-1', status: 'awaiting_mfa' as const, tier: 'RED' as const, requiresMfa: true,
+      summary, attention: 'decision' as const }];
+    expect(restoreActionAttention(settled, refs, 0, 1)).toBe(settled);
+    expect(restoreActionAttention(settled, refs, 0, 1).pendingAction).toBeUndefined();
+  });
+
+  it('does not reopen an executed or locked action when stale authorization frames are replayed', () => {
+    for (const status of ['executed', 'locked'] as const) {
+      const state = initialChatUIState({ pendingAction: { kind: 'mfa', actionId: 'action-1', summary } });
+      const settled = reduceAgentEvents(state, [{ type: 'action_settled', actionId: 'action-1', status }]);
+      const replayed = reduceAgentEvents(settled, [
+        { type: 'confirmation_required', actionId: 'action-1', action: summary },
+        { type: 'mfa_required', actionId: 'action-1', action: { ...summary, requiresMfa: true, tier: 'RED' } },
+      ]);
+      expect(replayed.pendingAction).toBeUndefined();
+      expect(replayed.settledActions?.['action-1']).toBe(status);
+    }
+  });
+
+  it('ignores a stale restoration row when a loaded card already records a terminal status', () => {
+    const state = initialChatUIState({ messages: [{ id: 'owner', role: 'assistant', content: '', timestamp: 1,
+      cards: [{ type: 'mfa', actionId: 'action-1', status: 'locked' }] }] });
+    const refs = [{ id: 'action-1', status: 'awaiting_mfa' as const, tier: 'RED' as const, requiresMfa: true,
+      summary, attention: 'decision' as const }];
+    expect(restoreActionAttention(state, refs, 0, 0).pendingAction).toBeUndefined();
+  });
+
+  it('fences a task or verification response after clearing history or replacing a request', () => {
+    expect(acceptsChatResponse('old', 'new', 1, 1)).toBe(false);
+    expect(acceptsChatResponse('same', 'same', 1, 2)).toBe(false);
+    expect(acceptsChatResponse('same', 'same', 2, 2)).toBe(true);
+  });
+
+  it('restores a saved complete response after disconnect without duplicating the user or moving its plan', () => {
+    const state = initialChatUIState({ currentAssistantId: 'assistant', streamingText: 'Incomplete response',
+      history: { hasMore: true, nextCursor: 'older', revision: 1, historyGeneration: 'current' },
+      messages: [{ id: 'local-user', role: 'user', content: 'Analyze spending', timestamp: 10 },
+        { id: 'assistant', role: 'assistant', content: '', timestamp: 11 }] });
+    const full = 'Complete response. '.repeat(500);
+    const next = reconcileInterruptedHistory(state, { hasMore: false, revision: 2, historyGeneration: 'current', messages: [
+      { id: 'server-user', role: 'user', content: 'Analyze spending', timestamp: 10 },
+      { id: 'assistant', role: 'assistant', content: full, timestamp: 11 },
+    ] }, 10);
+    expect(next.messages.map(message => message.id)).toEqual(['local-user', 'assistant']);
+    expect(next.messages[1].content).toBe(full);
+    expect(next.streamingText).toBe('');
+    expect(next.history?.nextCursor).toBe('older');
+    expect(state.messages[1].content).toBe('');
+  });
+
+  it('does not synthesize a reply or accept a saved response from another conversation generation', () => {
+    const state = initialChatUIState({ streamingText: 'Partial response', history: { hasMore: false, revision: 1, historyGeneration: 'current' } });
+    expect(reconcileInterruptedHistory(state, { messages: [], hasMore: false, revision: 2, historyGeneration: 'old' }, 10)).toBe(state);
+    expect(reconcileInterruptedHistory(state, { messages: [], hasMore: false, revision: 2, historyGeneration: 'current' }, 10).messages).toEqual([]);
+  });
 
   it('changes a recoverable action into a manual reconciliation entry when its outcome becomes uncertain', () => {
     const state = initialChatUIState({ pendingReconciliations: [{ actionId: 'action-1', summary, attention: 'recoverable' }] });

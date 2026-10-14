@@ -1,6 +1,6 @@
 /** Demo password operations accept no credentials. Strip them before model, transcript and audit. */
 export function redactRequest(text: string): string {
-  if (/(?:密码\s*(?:是|为|[:：]|[a-z0-9])|(?:current|new|old)?password["']?\s*[:=])/i.test(text)) {
+  if (/(?:密码\s*(?:是|为|[:：]|[a-z0-9])|\b(?:current|new|old)?password["']?\s*[:=])/i.test(text)) {
     return '演示修改密码流程（凭证已脱敏；演示环境不接受或保存真实密码）。';
   }
   return text;

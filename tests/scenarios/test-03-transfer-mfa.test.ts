@@ -15,7 +15,7 @@
  * Fixtures: demo user 李明; contacts 张伟/王芳/妈妈/李华; 活期账户 ¥23,580.
  * Helpers: ../helpers (fauxAgent/scenario), ../helpers/db, ../helpers/fixtures.
  */
-import type { Transaction } from '@prisma/client';
+import type { Transaction } from '@/lib/db/prisma';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { security } from '@/security';

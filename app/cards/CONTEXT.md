@@ -2,43 +2,55 @@
 
 ## Intent
 
-The **cards screen**: the user's debit / credit / virtual cards with their limits and status —
-the surface for the money-adjacent card tools (`set_card_limit`, `freeze_card`, `unfreeze_card`,
-`report_lost_card`, `apply_virtual_card`) after the agent / confirmation flow.
+The cards screen displays the fixed demo user's debit, credit and virtual card records.
+The user adds or deletes simulated records directly on this page. The banking agent cannot
+create or delete cards. Existing supported card controls remain independently gated agent tools.
 
-This node is a **thin Server Component** — it fetches the card read model directly on the server
-(no HTTP hop) and composes the UI from `../components`.
+The server page fetches the initial read model. `CardManager` restores persisted manual proposals
+and refreshes card records over HTTP. `CardChangeDialog` handles proposal review, explicit
+confirmation, verification, cancellation and keyboard focus in a native modal.
 
 ## API Surface
 
 - **Page route**: `/cards` — `page.tsx`, default-exported Server Component.
 - **Read model** (server-only, via `@/banking-sdk`):
   - `banking.card.getCards(userId)` → `CardView[]`
-    (type 储蓄卡/信用卡/虚拟卡 · numberMasked · status · creditLimit / availableLimit · monthlyLimit ·
+    (type DEBIT / CREDIT / VIRTUAL · numberMasked · status · creditLimit / availableLimit · monthlyLimit ·
     per-category limits)
   - User id: `getConfig().demoUserId` (default `DEFAULT_DEMO_USER_ID`).
-- **Composes** (from `../components` — referenced by name only): `CardTile` (储蓄卡 / 信用卡 / 虚拟卡),
-  credit-limit display, status badges, and the freeze / unfreeze / set-limit actions.
+- `CardTile` renders status and exact limits; its optional footer holds a manual delete button.
+- `GET /api/cards` refreshes the read model.
+- `GET /api/cards/changes` restores unfinished manual proposals.
+- `POST /api/cards` proposes a new simulated card. `DELETE /api/cards/[id]` proposes deletion.
+- `POST /api/cards/changes/[id]/verify` confirms the immutable proposal and verifies a code.
+- `POST /api/cards/changes/[id]/cancel` cancels an unexecuted proposal.
 
 ## Constraints
 
-- **Server Component**; render chrome + `TODO: wire read model` comments — no UI logic.
-- **Mutating actions are never performed here** — permission/confirmation/MFA decisions live in
-  `../security` and are enforced through the agent's gated tools; the client calls the API instead.
-- Pass only **serializable** props to client components (no `Date` — epoch ms; money is CNY `number`).
+- Add and delete require RED verification, enforced server-side by `security/manual-card-management.ts`.
+- These are simulated record changes, not real card issuance or account closure. Accept no real PAN,
+  payment credentials or passwords. Card numbers are generated and masked server-side.
+- Keep pending manual proposals out of agent conversation recovery and tool execution.
+- Pass only serializable DTOs. Financial amounts are exact decimal strings; never convert money to `number`.
+- Preserve the proposal request ID on network retries. Verify and cancel use the persisted proposal ID.
+- Render only the latest refresh response. Busy operations block repeat mutations and modal closure.
+- Closing a modal preserves a persisted proposal; cancellation explicitly calls the cancellation API.
 - **Read via `@/banking-sdk` only** — never import Prisma directly.
-- **Never build** the composed components here; reference them from `../components` (read-only sibling).
-- Keep the file ≲ ~120 lines.
+- Never bypass server ownership, conflict checks, transaction fences, MFA or strict audit recording.
 
 ## Dependencies
 
 - `@/banking-sdk` (sibling — read-only): `banking.card.getCards`; DTOs `CardView`, `CardStatus`, `CardType`.
 - `@/lib/config` (sibling — read-only): `getConfig` (demo user resolution).
-- `../components` (sibling — read-only): the card tiles / badges / action controls the page composes.
-- `../api` (sibling — read-only): `GET /api/cards` used for client-side refresh.
+- `../components`: card tiles, exact money formatting, buttons and risk badges.
+- `lib/contracts/card-management.ts`: manual proposal DTOs.
+- `lib/i18n`: Chinese and English page messages.
+- `../api`: fixed-owner manual card management endpoints.
 
 ## Routing Table
 
-- `./page.tsx` → the `/cards` page (card tiles, limits, statuses, actions)
+- `./page.tsx` → initial fixed-user read model.
+- `./CardManager.tsx` → proposal persistence, HTTP operations and read-model refresh.
+- `./CardChangeDialog.tsx` → reviewed add/delete flow and MFA modal.
 - `../components/` → React component library the page composes (sibling — read-only, escalate writes to parent)
-- `../api/` → `GET /api/cards` refresh endpoint (sibling — read-only)
+- `../api/cards/` → manual proposal and read-model endpoints.

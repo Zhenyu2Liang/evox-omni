@@ -8,9 +8,9 @@
  *
  * `CircuitBreakerState` declares no relations, so its `truncateAll()` position in the test DB is free.
  */
-import type { CircuitBreakerState } from '@prisma/client';
+import type { CircuitBreakerState } from '@/lib/db/prisma';
 import { prisma, type DbClient } from '../client';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/db/prisma';
 
 /** A breaker state snapshot (independent of the Prisma row shape). */
 export interface BreakerSnapshot {

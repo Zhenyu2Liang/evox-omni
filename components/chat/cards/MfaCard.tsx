@@ -4,6 +4,12 @@ import { useState } from 'react';
 import { Badge, Button, Card } from '../../ui';
 import type { PendingActionSummary } from '@/lib/contracts/security';
 import { asTerminalStatus } from './confirmationStatus';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+import { localizeActionTitle, localizeChatError, localizeVerificationHint } from '@/lib/i18n/display';
+import { publicToolError } from '@/lib/tool-feedback';
+import { useDeveloperMode } from '@/lib/developer-mode/DeveloperModeProvider';
+import { sanitizeToolArguments } from '@/lib/tool-diagnostics';
+import { ActionDetails } from './ActionDetails';
 
 export interface MfaCardProps {
   actionId: string;
@@ -26,6 +32,8 @@ export interface MfaCardProps {
  * `@/lib/constants`, so the mock code can never leak into the UI).
  */
 export function MfaCard(p: MfaCardProps) {
+  const { t } = useI18n();
+  const { enabled: developerMode } = useDeveloperMode();
   const { actionId, hint, onSubmit, onCancel, busy, error, attempts, maxAttempts, className } = p;
   const [code, setCode] = useState('');
 
@@ -42,31 +50,35 @@ export function MfaCard(p: MfaCardProps) {
   const footer = (
     <div className="flex items-center justify-end gap-2">
       <Button variant="secondary" size="md" disabled={busy} onClick={() => onCancel?.(actionId)}>
-        取消
+        {t('cards.cancel')}
       </Button>
       <Button variant="primary" size="md" loading={busy} disabled={!canSubmit} onClick={submit}>
-        验证
+        {t('cards.verify')}
       </Button>
     </div>
   );
 
   return (
-    <Card className={className} title="身份验证" footer={readOnly ? undefined : footer}>
+    <Card layout="request" padding="sm" className={className} title={p.action ? localizeActionTitle(p.action.title, t) : t('cards.mfa.title')} footer={readOnly ? undefined : footer}>
       <div className="flex flex-col gap-3">
-        {p.action ? <dl className="space-y-2 text-sm">{p.action.fields.map((field, index) =>
-          <div key={`${field.label}-${index}`} className="flex justify-between gap-3"><dt>{field.label}</dt><dd>{field.value}</dd></div>)}</dl> : null}
-        {terminal ? <p role="status">{p.statusMessage ?? ({ executed: '已执行', failed: '执行失败', cancelled: '已取消', confirmed: '已确认', locked: '已锁定', needs_reconciliation: '待核对' }[terminal])}</p> : null}
-        {readOnly && !terminal ? <p role="status">{p.status === 'locked' ? '已锁定，请到安全中心处理。' : '处理中，请在待处理操作中核对。'}</p> : null}
+        {p.action ? <ActionDetails action={p.action} /> : null}
+        {terminal ? <p role="status">{t(`cards.terminal.${terminal}`)}</p> : null}
+        {terminal === 'failed' ? <p className="text-sm text-banking-danger">{publicToolError(p.statusMessage, t)}</p> : null}
+        {developerMode && p.statusMessage ? <details className="text-xs text-banking-navy">
+          <summary>{t('chat.diagnostics.detail')}</summary>
+          <pre className="mt-1 whitespace-pre-wrap break-words">{String(sanitizeToolArguments(p.statusMessage))}</pre>
+        </details> : null}
+        {readOnly && !terminal ? <p role="status">{t(p.status === 'locked' ? 'cards.mfa.locked' : 'cards.mfa.processing')}</p> : null}
         {!readOnly ? <p className="text-sm text-banking-navy/70">
-          {hint ?? '该操作属于高风险操作，请输入短信验证码完成验证。'}
+          {hint ? localizeVerificationHint(hint, t) : t('cards.mfa.hint')}
         </p> : null}
 
         {!readOnly ? <input
           type="text"
           inputMode="numeric"
           autoComplete="one-time-code"
-          aria-label="验证码"
-          placeholder="请输入验证码"
+          aria-label={t('cards.mfa.label')}
+          placeholder={t('cards.mfa.placeholder')}
           value={code}
           disabled={busy}
           onChange={(e) => setCode(e.target.value)}
@@ -76,17 +88,18 @@ export function MfaCard(p: MfaCardProps) {
               submit();
             }
           }}
-          className="w-full rounded-xl border border-banking-navy/20 bg-banking-light px-3 py-2 text-sm text-banking-navy outline-none transition focus:border-banking-accent disabled:opacity-60"
+          className="w-full rounded-xl border border-banking-navy/20 bg-banking-light px-3 py-2 text-sm text-banking-navy outline-hidden transition focus:border-banking-accent disabled:opacity-60"
         /> : null}
 
         {typeof attempts === 'number' && attempts > 0 ? (
           <p className="text-xs text-banking-warn" role="status">
-            验证失败，已尝试 {attempts} 次
-            {typeof maxAttempts === 'number' ? `（共 ${maxAttempts} 次）` : ''}
+            {typeof maxAttempts === 'number'
+              ? t('cards.mfa.failedAttemptsLimit', { attempts, maxAttempts })
+              : t('cards.mfa.failedAttempts', { attempts })}
           </p>
         ) : null}
 
-        {error ? <Badge tone="danger">{error}</Badge> : null}
+        {error ? <Badge tone="danger">{localizeChatError(error, t)}</Badge> : null}
       </div>
     </Card>
   );

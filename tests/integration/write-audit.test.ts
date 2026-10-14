@@ -12,6 +12,7 @@
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { executeGatedTool, getOrCreateSession } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { createToolRegistry } from '@/agent/tools';
 import { buildAutomaticWriteFence } from '@/agent/execution-fence';
 import { auditStore } from '@/audit/audit-logger';
@@ -161,7 +162,7 @@ it('[integration] a failing write audit rolls the business write back — no un-
 });
 
 it('[integration] the existing gated audit identity is unchanged (exec:<actionId>, never write:)', async () => {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
 
   const parked = await executeGatedTool({
     userId,

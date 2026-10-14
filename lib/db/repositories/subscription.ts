@@ -1,4 +1,4 @@
-import type { Subscription } from '@prisma/client';
+import type { Subscription } from '@/lib/db/prisma';
 import { dbClient } from '../client';
 import { moneyToCents, type MoneyInput } from '../../money';
 

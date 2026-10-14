@@ -1,0 +1,13 @@
+{
+  "multiTransferRequest": "两笔独立转账",
+  "historicalRequest": "历史升级操作",
+  "secondRecipient": "李华",
+  "recipientLabel": "收款人",
+  "riskLabel": "风险等级",
+  "amountLabel": "金额",
+  "transferTitle": "转账",
+  "redRisk": "🔴 红色",
+  "yellowRisk": "🟡 黄色",
+  "formattedAmount": "¥500.50",
+  "confirmLabel": "确认"
+}

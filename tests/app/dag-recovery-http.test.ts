@@ -34,6 +34,7 @@ import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { GET as actionsGet } from '@/app/api/actions/route';
 import { GET as taskGet, POST as taskPost } from '@/app/api/tasks/[id]/route';
 import { executeGatedTool, getOrCreateSession, readPendingActionId } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 
 import type { ChatTurnResponse } from '@/lib/contracts/agent';
@@ -122,9 +123,9 @@ interface SeedNode {
   args?: Record<string, unknown>;
 }
 
-/** Create + persist a fresh `AgentSession` for the demo user and return its id. */
+/** Load the canonical demo session used by the HTTP entry. */
 async function newPersistedSessionId(): Promise<string> {
-  return (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+  return (await getDemoSession(DEMO_USER_ID)).sessionId;
 }
 
 /** The gateway-authorized per-node runner (a gated node parks instead of executing). */
@@ -417,7 +418,7 @@ describe('[integration] GET /api/tasks/[id] + GET /api/actions — refresh resto
     expect(row!.status).toBe('pending');
   });
 
-  it('GET /api/actions returns the caller session non-terminal action only (foreign session sees none)', async () => {
+  it('GET /api/actions restores the shared demo actions regardless of browser cookies', async () => {
     // A real chat turn parks a YELLOW transfer → the session gets a durable pending action.
     const chat = await postJson<Envelope<ChatTurnResponse>>(chatPost, chatUrl({ stream: 0 }), {
       // COOKIE-ONLY bootstrap: omit sessionId (and send no cookie) so the route MINTS the session.
@@ -443,17 +444,17 @@ describe('[integration] GET /api/tasks/[id] + GET /api/actions — refresh resto
     const row = await getTestPrisma().pendingAction.findUnique({ where: { id: action.id } });
     expect(row!.status).toBe('pending');
 
-    // (b) A DIFFERENT (foreign) persisted session sees NOTHING of this session's actions.
-    const foreignSessionId = await newPersistedSessionId();
+    // Browser identity hints cannot select a different persisted conversation.
+    const foreignSessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
     const foreign = await getJson<Envelope<PendingAction[]>>(actionsGet, '/api/actions', {
       sessionId: foreignSessionId,
     });
     expect(foreign.status).toBe(200);
-    expect(payload(foreign)).toEqual([]);
+    expect(payload(foreign).map(item => item.id)).toContain(action.id);
 
-    // (c) Missing cookie → 403 SECURITY_DENIED (identity is cookie-only, never a query param).
+    // Opening another browser restores the same pending action without logging in.
     const anonymous = await getJson<Envelope<PendingAction[]>>(actionsGet, '/api/actions');
-    expect(anonymous.status).toBe(403);
-    expect(failure(anonymous).code).toBe('SECURITY_DENIED');
+    expect(anonymous.status).toBe(200);
+    expect(payload(anonymous).map(item => item.id)).toContain(action.id);
   });
 });

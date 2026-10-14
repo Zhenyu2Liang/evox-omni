@@ -37,14 +37,17 @@ export async function runDatabasePush(): Promise<number> {
   // Use the application's environment loader without displaying configuration values.
   loadEnvConfig(repoRoot, false, { info: () => undefined, error: () => { throw new Error('Environment configuration could not be loaded.'); } });
   const args = process.argv.slice(2);
+  const databaseUrl = process.env.DATABASE_URL ?? 'file:./dev.db';
   if (args.includes('--force-reset')) {
-    resetDemoDatabase(process.env.DATABASE_URL ?? 'file:./dev.db', repoRoot);
+    resetDemoDatabase(databaseUrl, repoRoot);
   }
-  const invocation = cliCommand(resolvePrismaBin(repoRoot), ['prisma', 'db', 'push', ...args]);
+  // The explicit reset above already removed the database. Push the new schema without resetting it again.
+  const prismaArgs = args.filter(argument => argument !== '--force-reset');
+  const invocation = cliCommand(resolvePrismaBin(repoRoot), ['prisma', 'db', 'push', ...prismaArgs]);
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: repoRoot,
     stdio: 'inherit',
-    env: prismaCliEnv(process.env),
+    env: prismaCliEnv({ ...process.env, DATABASE_URL: databaseUrl }),
   });
   if (result.error) {
     console.error(`[db:push] Could not start the Prisma CLI: ${result.error.message}`);

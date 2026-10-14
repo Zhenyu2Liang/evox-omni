@@ -1,4 +1,4 @@
-import type { Budget } from '@prisma/client';
+import type { Budget } from '@/lib/db/prisma';
 import { dbClient } from '../client';
 import { moneyToCents, type MoneyInput } from '../../money';
 

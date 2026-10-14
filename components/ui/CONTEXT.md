@@ -11,7 +11,7 @@ no sibling ever re-implements it. No business logic, no data fetching, no contra
 All names are named exports, re-exported from `./index.ts`.
 
 ```ts
-// Card.tsx  — rounded surface with soft shadow (rounded-2xl bg-white shadow-sm)
+// Card.tsx  — rounded surface with soft shadow (rounded-2xl bg-white shadow-xs)
 export interface CardProps { title?: ReactNode; description?: ReactNode; footer?: ReactNode;
   padding?: 'none' | 'sm' | 'md' | 'lg'; className?: string; children: ReactNode; }
 export function Card(p: CardProps): JSX.Element;                         // Server-safe
@@ -66,7 +66,8 @@ export function Table<T>(p: TableProps<T>): JSX.Element;                 // Serv
 
 - **Client vs Server**: only `Button`, `Tabs`, `Dialog` carry `'use client'` (they need interactivity).
   The rest are Server-safe presentational components (no hooks, no handlers) usable in both contexts.
-- **Colours** come only from the Tailwind `banking` palette (`tailwind.config.ts`); no ad-hoc hex.
+- **Colours** come only from the Tailwind CSS 4 `--color-banking-*` theme in `app/globals.css`; no ad-hoc hex.
+- Use current Tailwind utilities: `shadow-xs` for small surface shadows and `outline-hidden` when a transparent forced-colour focus outline is intended. Native modal dialogs specify `m-auto` to center under the current preflight reset.
 - **Tier colours** are owned by `StatusBadge` (via `RiskLevel` + `lib/constants.RISK_LABEL`) — do not
   re-implement tier colouring elsewhere.
 - **Money** must go through `Money` (`lib/money.formatCNY`); never `toFixed` amounts inline.

@@ -4,6 +4,7 @@ import { assistantTextBefore, findLastUserIndex, userTextBefore } from './conver
 import { resolveCardId, resolveLimitCategory } from './card-intents';
 import { extractProductName, resolveProductId } from './investment-intents';
 import { toolCall } from './replies';
+import { parseBankingGuidance } from '../../banking-guidance';
 
 /** An amount answer completes only this model's immediately preceding clarification. */
 export function classifyActionFollowUp(text: string, messages: Message[]): AssistantMessage | undefined {
@@ -13,10 +14,12 @@ export function classifyActionFollowUp(text: string, messages: Message[]): Assis
   const priorReply = assistantTextBefore(messages, userIndex);
   if (!priorReply) return undefined;
   const priorUser = userTextBefore(messages, userIndex);
-  if (priorReply.includes('要把限额调整到多少') && priorUser) {
+  const decision = parseBankingGuidance(priorReply);
+  const asksAmount = decision?.code === 'missing_details' && decision.fields?.includes('amount');
+  if ((priorReply.includes('要把限额调整到多少') || asksAmount && /\u9650\u989d/.test(priorUser ?? '')) && priorUser) {
     return toolCall('set_card_limit', { cardId: resolveCardId(priorUser), category: resolveLimitCategory(priorUser), amount });
   }
-  if ((/要申购.*多少钱/.test(priorReply) || (priorReply.includes('请补充金额') && /(申购|认购|购买)/.test(priorUser ?? ''))) && priorUser) {
+  if ((/要申购.*多少钱/.test(priorReply) || ((asksAmount || priorReply.includes('请补充金额')) && /(申购|认购|购买)/.test(priorUser ?? ''))) && priorUser) {
     const productName = extractProductName(priorUser);
     if (productName) return toolCall('subscribe_investment', { productId: resolveProductId(productName), amount });
   }

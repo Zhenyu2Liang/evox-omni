@@ -22,6 +22,7 @@ import net from 'node:net';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
 import { centsToMoney, formatCNY, moneyToCents } from '../../lib/money';
+import { DEVELOPER_MODE_COOKIE, DEVELOPER_MODE_ENABLED } from '../../lib/developer-mode/shared';
 import type { Browser, Locator, Page } from 'playwright-core';
 import {
   cliCommand,
@@ -31,7 +32,6 @@ import {
   provisionSchemaLadder,
   resolveRepoRoot,
   resolveTsxBin,
-  runPrismaGenerate,
   runCliStep as runCliStepShared,
   spawnErrorText,
 } from '../helpers/prisma-cli';
@@ -124,8 +124,8 @@ export const WEDGE_DEMO_NOW = new Date('2026-09-25T12:00:00+08:00');
  * Returns the seeded ids. A fresh `PrismaClient` is used and always disconnected.
  */
 export async function seedStandaloneWedge(params: { sessionId: string }): Promise<{ txId: string; receiptId: string }> {
-  const { PrismaClient } = await import('@prisma/client');
-  const prisma = new PrismaClient();
+  const { createDatabaseClient } = await import('../../lib/db/database');
+  const prisma = createDatabaseClient();
   const occurredAt = WEDGE_DEMO_NOW;
   try {
     await prisma.$transaction(async (tx) => {
@@ -219,8 +219,8 @@ export async function seedStandaloneWedge(params: { sessionId: string }): Promis
 export async function queryPendingActionStatus(
   actionId: string,
 ): Promise<{ status: string; resultJson: string | null } | null> {
-  const { PrismaClient } = await import('@prisma/client');
-  const prisma = new PrismaClient();
+  const { createDatabaseClient } = await import('../../lib/db/database');
+  const prisma = createDatabaseClient();
   try {
     const row = await prisma.pendingAction.findUnique({
       where: { id: actionId },
@@ -245,8 +245,8 @@ export interface ExecutionAuditRow {
 
 /** Read the newest `AuditLog` row for a `dedupeKey`, or `null` when none was written. */
 export async function queryExecutionAudit(dedupeKey: string): Promise<ExecutionAuditRow | null> {
-  const { PrismaClient } = await import('@prisma/client');
-  const prisma = new PrismaClient();
+  const { createDatabaseClient } = await import('../../lib/db/database');
+  const prisma = createDatabaseClient();
   try {
     const row = await prisma.auditLog.findFirst({
       where: { dedupeKey },
@@ -285,8 +285,8 @@ export interface SecurityEventRow {
 export async function querySecurityEvents(
   filter: { sessionId?: string; kind?: string } = {},
 ): Promise<SecurityEventRow[]> {
-  const { PrismaClient } = await import('@prisma/client');
-  const prisma = new PrismaClient();
+  const { createDatabaseClient } = await import('../../lib/db/database');
+  const prisma = createDatabaseClient();
   try {
     const rows = await prisma.securityEvent.findMany({
       where: {
@@ -539,6 +539,8 @@ export function startDevServer(port: number): DevServer {
     env: {
       ...process.env,
       NEXT_TELEMETRY_DISABLED: '1',
+      BANKING_NEXT_DIST_DIR: '.next-e2e',
+      DEMO_USER_ID: 'user_liming',
       // Isolate the app from the shared `prisma/dev.db` — see `useIsolatedDatabase`/`E2E_DB_URL`.
       DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL,
     },
@@ -556,21 +558,22 @@ export function startDevServer(port: number): DevServer {
   child.on('error', (e) => append(`[spawn error] ${e.message}\n`));
 
   let stopped = false;
+  // Boot can be interrupted before its caller receives a server handle. Own cleanup from spawn
+  // time so the detached server cannot outlive a failed or cancelled readiness check.
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    process.removeListener('exit', stop);
+    killProcessTree(pid);
+    try { child.unref(); } catch { /* non-fatal */ }
+  };
+  process.once('exit', stop);
   return {
     port,
     baseUrl: `http://localhost:${port}`,
     pid,
     output: () => log,
-    stop() {
-      if (stopped) return;
-      stopped = true;
-      killProcessTree(pid);
-      try {
-        child.unref();
-      } catch {
-        /* non-fatal */
-      }
-    },
+    stop,
   };
 }
 
@@ -601,7 +604,7 @@ async function probeAgentPage(baseUrl: string): Promise<string | undefined> {
     const res = await fetch(`${baseUrl}/agent`, { headers: { Accept: 'text/html' } });
     if (!res.ok) return `HTTP ${res.status}`;
     const html = await res.text();
-    return html.includes('描述你的需求') ? undefined : '/agent 未返回聊天输入框标记';
+    return html.includes('data-chat-composer="true"') ? undefined : 'The assistant page did not render its message composer';
   } catch (e) {
     return errText(e);
   }
@@ -747,15 +750,13 @@ function runCliStep(command: string, args: readonly string[]): string {
  *
  * WHY: `prisma db push` can occasionally report success (exit 0) while leaving a DB image that cannot
  * actually be opened (a truncated/zeroed file, a Windows file-lock, or a schema-engine hiccup). Without
- * this probe the breakage would only surface later inside the seed (or, worse, mid-journey) with a
- * misleading error. Failing HERE produces a precise "the DB is not usable after push" message, with the
- * FULL captured stdout+stderr (`diagnosticCliOutput`), and lets the recovery path run (regenerate the
- * client + hard clean + `--force-reset`).
+ * this probe the breakage would only surface later inside the seed or mid-journey.
+ * A failure here reports the unusable database with full captured stdout and stderr.
  */
 function probeDatabaseUsable(): void {
   const script = `
-const { PrismaClient } = require('@prisma/client');
-const client = new PrismaClient();
+const { createDatabaseClient } = require('./lib/db/database.ts');
+const client = createDatabaseClient();
 const check = "SELECT name FROM sqlite_master WHERE type='table' AND name='User'";
 (async () => {
   try {
@@ -772,7 +773,7 @@ const check = "SELECT name FROM sqlite_master WHERE type='table' AND name='User'
   }
 })();
 `;
-  const probe = spawnSync(process.execPath, ['-e', script], {
+  const probe = spawnSync(process.execPath, ['--import', 'tsx', '-e', script], {
     cwd: REPO_ROOT,
     windowsHide: true,
     encoding: 'utf8',
@@ -793,26 +794,35 @@ function seedIsolatedDatabase(): void {
   runCliStep(seed.command, seed.args);
 }
 
+/** Reset fixture rows between independent journeys, retaining the open database file. */
+export async function reseedDemoDatabase(): Promise<void> {
+  if (process.env.DATABASE_URL !== E2E_DB_URL) throw new Error('Reseeding requires the isolated acceptance database');
+  const { createDatabaseClient } = await import('../../lib/db/database');
+  const fixture = createDatabaseClient(E2E_DB_URL);
+  try {
+    await waitFor(async () => await fixture.agentSession.count({ where: { activeRunId: { not: null } } }) === 0,
+      { timeoutMs: 10_000, description: 'Completed browser journeys have released their run leases' });
+    await fixture.$transaction([
+      fixture.agentRunEvent.deleteMany(), fixture.toolInvocation.deleteMany(), fixture.modelRequest.deleteMany(),
+      fixture.agentRun.deleteMany(), fixture.authorizationDecision.deleteMany(), fixture.riskSignal.deleteMany(),
+      fixture.manualReview.deleteMany(), fixture.mfaChallenge.deleteMany(), fixture.pendingAction.deleteMany(),
+      fixture.executionReceipt.deleteMany(), fixture.agentTaskNode.deleteMany(), fixture.agentTask.deleteMany(),
+      fixture.auditLog.deleteMany(), fixture.securityEvent.deleteMany(), fixture.circuitBreakerState.deleteMany(),
+      fixture.agentSession.deleteMany(),
+    ]);
+  } finally { await fixture.$disconnect(); }
+  seedIsolatedDatabase();
+}
+
 /**
  * One reset attempt: ensure the Prisma Client is generated, then provision the schema + seed through
  * the shared ORDERED provisioning LADDER (`provisionSchemaLadder` in `../helpers/prisma-cli`), against
  * the ISOLATED E2E DB.
  *
  * Each rung runs ONLY after the previous one FAILED; `provisionSchemaLadder` deletes the isolated DB +
- * sidecars BEFORE EVERY rung (so `--force-reset` is not required on the later rungs) and
- * `probeDatabaseUsable()` runs between EVERY push and its seed. Rungs:
- *   · 1 (PRIMARY — unchanged)  delete → `db push --skip-generate` → probe → seed. `--force-reset` is
- *                              deliberately NOT the primary path: on Windows it has been seen to leave
- *                              the SQLite file as a 0-byte image and fail
- *                              `Error code 11: The database disk image is malformed`.
- *   · 2 (recovery — unchanged) `prisma generate` → delete → `db push --force-reset --skip-generate`
- *                              → probe → seed. AUTO-RECOVERY for a stale/partially provisioned client or
- *                              a transient schema-engine failure.
- *   · 3 (ADDITIVE, NEW)        delete → `db push` (NO flags) → probe → seed. This is the exact shape
- *                              that provably SUCCEEDS in a clean environment where the flag-bearing
- *                              shapes die with an opaque `Error: Schema engine error:`.
- * When EVERY rung fails the ladder THROWS a single error embedding the FULL captured output of each
- * rung + environment diagnostics (never a warn-and-continue). `prisma/dev.db` is never referenced.
+ * sidecars before pushing, so the CLI only creates a fresh file: delete → push → probe → seed.
+ * Generation is explicit and checked before provisioning. Any failure retains full CLI output
+ * and environment diagnostics. `prisma/dev.db` is never referenced.
  */
 function resetDemoDatabaseOnce(): void {
   ensurePrismaClientGenerated(REPO_ROOT);
@@ -822,17 +832,10 @@ function resetDemoDatabaseOnce(): void {
     dbFiles: E2E_DB_FILES,
     env: { ...process.env, DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL },
     rungs: [
-      { label: 'db push --skip-generate', args: ['prisma', 'db', 'push', '--skip-generate'] },
-      {
-        label: 'prisma generate → db push --force-reset --skip-generate',
-        args: ['prisma', 'db', 'push', '--force-reset', '--skip-generate'],
-        before: () => runPrismaGenerate(REPO_ROOT),
-      },
       { label: 'db push', args: ['prisma', 'db', 'push'] },
     ],
     afterPush: () => {
-      // Catch a silently-broken DB BEFORE the seed: a push can report success yet leave an image that
-      // cannot be opened. A probe/seed throw here is treated like a push failure, so the next rung runs.
+      // Check the new database before seeding; an unusable file fails provisioning.
       probeDatabaseUsable();
       seedIsolatedDatabase();
     },
@@ -853,13 +856,9 @@ function resetDemoDatabaseOnce(): void {
  *
  * HOW: ensure a GENERATED, USABLE Prisma Client (`ensurePrismaClientGenerated`; a bare `npm install`
  * checkout self-bootstraps via `prisma generate`). Then provision the schema + seed through the shared
- * ORDERED LADDER (`resetDemoDatabaseOnce` → `provisionSchemaLadder`): PRIMARY `prisma db push
- * --skip-generate` (delete → push → `probeDatabaseUsable` → seed), then — only AFTER a failure — the
- * generate-first `prisma db push --force-reset --skip-generate` recovery, then the ADDITIVE flag-less
- * `prisma db push` rung (the shape that succeeds where the flagged shapes die with an opaque
- * `Error: Schema engine error:`). Each rung is delete-then-push, so the fallbacks can only help.
- * `--force-reset` is deliberately NOT the primary path: on Windows it has been seen to leave the SQLite
- * file as a 0-byte image and fail `Error code 11: The database disk image is malformed`.
+ * Provisioning (`resetDemoDatabaseOnce` → `provisionSchemaLadder`) uses plain `prisma db push`
+ * after deleting the isolated file, followed by `probeDatabaseUsable` and seed.
+ * Prisma 7 requires separate client generation; no redundant CLI reset is needed.
  *
  * Every CLI step is given `DATABASE_URL` = `E2E_DB_URL` (see `runCliStep`), and any CLI failure throws
  * the FULL captured stdout+stderr (tail preserved — see `runCliStep`/`diagnosticCliOutput`); when EVERY
@@ -935,7 +934,7 @@ export async function captureScreenshot(page: Page, label: string): Promise<stri
     screenshotSeq += 1;
     const safe = label.replace(/[^\w.-]+/g, '_').slice(0, 60);
     const file = path.join(SCREENSHOTS_DIR, `${String(screenshotSeq).padStart(2, '0')}-${safe}.png`);
-    await page.screenshot({ path: file, fullPage: true });
+    await page.screenshot({ path: file, fullPage: true, timeout: 15000 });
     return file;
   } catch {
     return undefined;
@@ -977,11 +976,13 @@ export async function withPage<T>(
 /** DOM selectors verified against the real components. */
 export const SELECTORS = {
   /** `components/chat/Composer.tsx` — the one chat input. */
-  composer: 'textarea[placeholder="描述你的需求，例如：帮我看下这个月的消费"]',
+  composer: 'textarea[data-chat-composer="true"]',
   /** `components/chat/MessageBubble.tsx` — assistant bubble body text (`<p>` in the white bubble). */
-  assistantText: 'div.bg-white p.whitespace-pre-wrap',
-  /** `components/chat/cards/MfaCard.tsx` — the verification code input. */
-  mfaInput: 'input[aria-label="验证码"]',
+  assistantText: '[data-message-role="assistant"] [data-assistant-content="true"]',
+  /** The single actionable authorization surface, outside the transcript. */
+  approvalRequest: '[data-approval-request="true"]',
+  /** The dock's verification input; historical receipts never contain one. */
+  mfaInput: '[data-approval-request="true"] input[aria-label="验证码"]',
   /** `app/security/ResetBreakerButton.tsx` — the GATED unlock control's 6-digit code input. */
   breakerCodeInput: 'input[aria-label="6 位验证码"]',
 } as const;
@@ -1019,7 +1020,9 @@ export async function waitForElementHydration(
  * (resetting the fill) — landing the first turn deterministically instead of racing hydration.
  */
 export async function waitForComposerHydration(page: Page, timeoutMs = NAV_TIMEOUT_MS): Promise<void> {
-  await waitForElementHydration(page, SELECTORS.composer, timeoutMs);
+  await page.waitForFunction((selector: string) =>
+    document.querySelector(selector)?.getAttribute('data-chat-ready') === 'true', SELECTORS.composer,
+  { timeout: timeoutMs });
 }
 
 /** Navigate to the chat page and wait for the composer to render AND hydrate (fail-fast on SSR error). */
@@ -1070,11 +1073,7 @@ async function clickWhenEnabled(locator: Locator, description: string, timeoutMs
   await locator.first().click();
 }
 
-/**
- * Click the LAST match of `locator` once it exists and is enabled. The LIVE human-decision card is
- * always rendered LAST by `ChatWindow` (after the whole message list), so a page showing BOTH a
- * settled inline card and the live one has its actionable control LAST.
- */
+/** Click the latest enabled decision control in the chronological tool-message timeline. */
 async function clickLastWhenEnabled(locator: Locator, description: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<void> {
   await waitFor(
     async () => {
@@ -1098,7 +1097,10 @@ export async function submitChat(page: Page, text: string, timeoutMs = 60_000): 
     description: '聊天输入框可用（上一轮已完成）',
   });
   await composer.fill(text);
-  await clickWhenEnabled(page.getByRole('button', { name: '发送', exact: true }), '发送按钮', timeoutMs);
+  await Promise.all([
+    page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/chat', { timeout: timeoutMs }),
+    clickWhenEnabled(page.getByRole('button', { name: /^(Send|发送)$/ }), 'Send button', timeoutMs),
+  ]);
 }
 
 /** All rendered assistant message texts (from the assistant message bubbles). */
@@ -1120,9 +1122,9 @@ export async function waitForAssistantText(page: Page, needle: string, timeoutMs
   });
 }
 
-/** Wait for a YELLOW/RED confirmation card (its `确认` button) to be visible. */
+/** Wait for the dock's confirmation control, excluding read-only historical receipts. */
 export async function waitForConfirmCard(page: Page, timeoutMs = 90_000): Promise<void> {
-  const confirm = page.getByRole('button', { name: '确认', exact: true });
+  const confirm = page.locator(SELECTORS.approvalRequest).getByRole('button', { name: '确认', exact: true });
   await waitFor(async () => ((await confirm.count()) > 0 ? true : false), {
     timeoutMs,
     description: '确认卡片（「确认」按钮）',
@@ -1132,7 +1134,7 @@ export async function waitForConfirmCard(page: Page, timeoutMs = 90_000): Promis
 
 /** Click the confirmation card's `确认` button. */
 export async function clickConfirm(page: Page, timeoutMs = 30_000): Promise<void> {
-  await clickWhenEnabled(page.getByRole('button', { name: '确认', exact: true }), '确认按钮', timeoutMs);
+  await clickWhenEnabled(page.locator(SELECTORS.approvalRequest).getByRole('button', { name: '确认', exact: true }), '确认按钮', timeoutMs);
 }
 
 /** Is an MFA card (verification code input) currently rendered? */
@@ -1140,16 +1142,7 @@ export async function mfaCardPresent(page: Page): Promise<boolean> {
   return (await page.locator(SELECTORS.mfaInput).count()) > 0;
 }
 
-/**
- * Wait until at least `minCount` MFA cards (`身份验证` + code input) are rendered AND the LAST one is
- * visible.
- *
- * The actionable card is the LIVE decision card, which `ChatWindow` renders LAST (after the whole
- * message list); a SETTLED inline MFA card can linger in an earlier assistant message once its
- * action's duplicate-suppression ends, so a multi-card page has its actionable card LAST.
- * `minCount` (default 1) lets a caller wait for the count to REACH a value — needed when a stale
- * inline card is already present, so a naive `count > 0` wait would return immediately.
- */
+/** Wait for actionable MFA requests in the dock; receipts have no verification inputs. */
 export async function waitForMfaCard(page: Page, timeoutMs = 90_000, minCount = 1): Promise<void> {
   await waitFor(async () => ((await page.locator(SELECTORS.mfaInput).count()) >= minCount ? true : false), {
     timeoutMs,
@@ -1158,18 +1151,12 @@ export async function waitForMfaCard(page: Page, timeoutMs = 90_000, minCount = 
   await page.locator(SELECTORS.mfaInput).last().waitFor({ state: 'visible', timeout: timeoutMs });
 }
 
-/**
- * Fill the MFA code and click `验证` on the LAST-rendered card.
- *
- * The actionable card is the LIVE decision card, rendered LAST by `ChatWindow` (after the message
- * list); a SETTLED inline MFA card in an earlier message renders FIRST, so targeting `.last()` drives
- * the live card when both are present. On a single-card page `.last()` === `.first()`.
- */
+/** Fill the verification code and submit the matching actionable request. */
 export async function submitMfa(page: Page, code: string, timeoutMs = 45_000): Promise<void> {
   const input = page.locator(SELECTORS.mfaInput).last();
   await input.waitFor({ state: 'visible', timeout: timeoutMs });
   await input.fill(code);
-  await clickLastWhenEnabled(page.getByRole('button', { name: '验证', exact: true }), 'MFA 验证按钮', timeoutMs);
+  await clickLastWhenEnabled(page.locator(SELECTORS.approvalRequest).getByRole('button', { name: '验证', exact: true }), 'MFA 验证按钮', timeoutMs);
 }
 
 /**
@@ -1182,7 +1169,7 @@ export async function submitMfa(page: Page, code: string, timeoutMs = 45_000): P
 export async function waitForMfaSettled(page: Page, timeoutMs = 45_000): Promise<void> {
   await waitFor(
     async () => {
-      const button = page.getByRole('button', { name: '验证', exact: true }).first();
+      const button = page.locator(SELECTORS.approvalRequest).getByRole('button', { name: '验证', exact: true }).first();
       if ((await button.count()) === 0) return true;
       return (await button.isEnabled()) ? true : false;
     },
@@ -1195,7 +1182,7 @@ export async function waitForStatusText(page: Page, needle: string, timeoutMs = 
   await waitFor(
     async () => {
       const texts = await page.locator('[role="status"]').allInnerTexts();
-      return texts.some((text) => text.replace(/\s+/g, '').includes(needle)) ? true : false;
+      return texts.some((text) => text.replace(/\s+/g, '').includes(needle.replace(/\s+/g, ''))) ? true : false;
     },
     { timeoutMs, description: `role=status 文本包含「${needle}」` },
   );
@@ -1243,6 +1230,7 @@ export interface PendingActionView {
   toolName: string;
   status: string;
   tier: string;
+  requiresMfa: boolean;
   /** How `GET /api/actions` surfaces the row: `decision` | `processing` | `recoverable` | `reconciliation`. */
   attention?: string;
 }
@@ -1252,9 +1240,8 @@ export interface PendingActionView {
  * Throws a descriptive error on a non-2xx status, a non-JSON body, or a non-`ok` envelope — so a
  * DB/ledger assertion can never silently pass on a malformed response.
  */
-export async function getJson<T>(url: string, cookie?: string): Promise<T> {
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  if (cookie !== undefined) headers['Cookie'] = cookie;
+export async function getJson<T>(url: string, extraHeaders: Record<string, string> = {}): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json', ...extraHeaders };
   const res = await fetch(url, { headers });
   const text = await res.text();
   if (!res.ok) throw new Error(`GET ${url} → HTTP ${res.status}：${text.slice(0, 200)}`);
@@ -1269,6 +1256,11 @@ export async function getJson<T>(url: string, cookie?: string): Promise<T> {
     throw new Error(`GET ${url} 未返回 { ok:true } 信封：${text.slice(0, 200)}`);
   }
   return envelope['data'] as T;
+}
+
+/** Read technical evidence with an explicit preference without enabling the user's browser. */
+export function getDeveloperJson<T>(url: string): Promise<T> {
+  return getJson<T>(url, { Cookie: `${DEVELOPER_MODE_COOKIE}=${DEVELOPER_MODE_ENABLED}` });
 }
 
 /** `GET /api/dashboard` → the demo user's dashboard summary (no identity required). */
@@ -1287,9 +1279,9 @@ export async function fetchCards(baseUrl: string): Promise<CardView[]> {
   return data.cards;
 }
 
-/** `GET /api/actions` → the caller session's NON-TERMINAL actions (identity = the cookie). */
-export function fetchPendingActions(baseUrl: string, cookie: string): Promise<PendingActionView[]> {
-  return getJson<PendingActionView[]>(`${baseUrl}/api/actions`, cookie);
+/** `GET /api/actions` returns the shared demo workspace's pending actions. */
+export function fetchPendingActions(baseUrl: string): Promise<PendingActionView[]> {
+  return getJson<PendingActionView[]>(`${baseUrl}/api/actions`);
 }
 
 /** The `value` of one card's per-category limit, or `undefined` when the card/category is absent. */
@@ -1314,33 +1306,18 @@ export function diffLedger(before: readonly LedgerTransaction[], after: readonly
   };
 }
 
-/** The `banking_session` cookie as a `Cookie` header value, or `undefined` when it is not set yet. */
-export async function readSessionCookie(page: Page, name = 'banking_session'): Promise<string | undefined> {
-  const cookies = await page.context().cookies();
-  const found = cookies.find((cookie) => cookie.name === name);
-  return found ? `${found.name}=${found.value}` : undefined;
+/** The server-selected workspace identity is already present when the page opens. */
+export async function readDemoSessionId(page: Page): Promise<string> {
+  const sessionId = await page.locator('[data-demo-session-id]').getAttribute('data-demo-session-id');
+  if (!sessionId) throw new Error('The shared demo conversation is missing from the page');
+  return sessionId;
 }
 
 // --- plan card (task plan) ----------------------------------------------------------------------
 
-/**
- * XPath for the ACTIVE `PlanCard` root: the LAST-rendered ancestor `<div class="… rounded-2xl …">` of
- * the `依赖关系` heading (a `PlanCard`-only marker).
- *
- * A plan turn renders the DAG snapshot TWICE: once INLINE inside the assistant message bubble
- * (`MessageBubble` → `CardRenderer`), and once as the LIVE `stream.activePlan` card which
- * `ChatWindow` renders AFTER all messages. The inline card's `plan.status` is FROZEN at the value the
- * turn ended with (nothing rewrites `message.cards`), so pausing/cancelling a plan updates only the
- * LIVE card. Reading `[1]` (the stale inline card) made this harness observe 等待确认 forever. We
- * therefore select the LAST match — the live, app-authoritative plan view that reflects plan-control
- * outcomes. Falls back to the only card when just one is rendered.
- */
-const PLAN_CARD_XPATH =
-  'xpath=(//h4[normalize-space(string(.))="依赖关系"]/ancestor::div[contains(concat(" ", normalize-space(@class), " "), " rounded-2xl ")][1])[last()]';
-
-/** Locator for the rendered, LIVE `PlanCard` root (the app-authoritative plan view). */
+/** Locate the latest plan by its typed card marker inside its owning tool message. */
 export function planCard(page: Page): Locator {
-  return page.locator(PLAN_CARD_XPATH);
+  return page.locator('[data-message-role="tool"] [data-chat-card-type="plan"]').last();
 }
 
 /**

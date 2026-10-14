@@ -25,7 +25,8 @@
  */
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { executeGatedTool, getOrCreateSession } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { banking } from '@/banking-sdk';
 import type { TransferInput, TransferResult } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
@@ -137,7 +138,7 @@ it('REVIEW_RECEIPT_WRITE_ROLLBACK: a failed receipt write rolls the debit + ledg
 });
 
 it('REVIEW_SAME_IDENTITY_CONCURRENT_RECOVERY: two concurrent recoveries apply the side effect exactly once', async () => {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
 
   // --- Build a STANDALONE ¥200 wedge: the SDK side effect commits, the result+status write rolls back.

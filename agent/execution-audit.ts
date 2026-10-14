@@ -3,10 +3,10 @@ import { demoNow } from '@/lib/clock';
 import type { AuditEntry } from '@/lib/contracts/audit';
 import type { BankingExecutionContext } from '@/banking-sdk';
 import type { ToolExecutionResult } from './tools';
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/db/prisma';
 
-/** Compose the required execution audit into a transfer's own transaction, without SDK policy. */
-export function transferExecutionAudit(actionId: string, entry: Omit<AuditEntry, 'timestamp' | 'toolResult' | 'status'>) {
+/** Compose the required execution audit into the banking command's own transaction. */
+export function commandExecutionAudit(actionId: string, entry: Omit<AuditEntry, 'timestamp' | 'toolResult' | 'status' | 'userId'> & { userId: string }) {
   let auditFailure: unknown;
   const onTransferCommit: BankingExecutionContext['onTransferCommit'] = async (tx, data) => {
     try {

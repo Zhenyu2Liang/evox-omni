@@ -3,10 +3,11 @@
 import type { SpendingAnalysis } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
 import { compareDecimal } from '@/lib/decimal';
-import { Card } from '../../ui/Card';
 import { Money } from '../../ui/Money';
 import { EmptyState } from '../../ui/EmptyState';
 import { SpendingPie, SpendingTrend } from '../../charts';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+import { ResultCard, ResultMetric } from './ResultCard';
 
 export interface SpendingCardProps {
   data: SpendingAnalysis;
@@ -19,18 +20,19 @@ export interface SpendingCardProps {
  * Renders an `EmptyState` when the analysis carries nothing to display.
  */
 export function SpendingCard({ data, className }: SpendingCardProps) {
+  const { t } = useI18n();
   const hasCategories = data.byCategory.length > 0;
   const hasTrend = data.monthlyTrend.length > 0;
   const hasContent = hasCategories || hasTrend || data.topMerchant !== null || data.largest !== null;
 
   if (!hasContent) {
     return (
-      <Card className={className} padding="md">
+      <ResultCard className={className} title={t('cards.spending.title', { month: data.month })} marker="◔">
         <EmptyState
-          title="暂无消费数据"
-          description={`${data.month} 没有可分析的消费记录。`}
+          title={t('cards.spending.empty.title')}
+          description={t('cards.spending.empty.description', { month: data.month })}
         />
-      </Card>
+      </ResultCard>
     );
   }
 
@@ -40,26 +42,24 @@ export function SpendingCard({ data, className }: SpendingCardProps) {
   const momText = `${momUp ? '+' : ''}${data.momChangePct}%`;
 
   return (
-    <Card
+    <ResultCard
       className={className}
-      title={`${data.month} 消费分析`}
-      description={'\u5df2\u5165\u8d26\u6d88\u8d39\u5206\u7c7b\u4e0e\u8d8b\u52bf\uff08\u5305\u542b\u6807\u8bb0\u5f02\u5e38\u4ea4\u6613\uff0c\u4e0d\u542b\u6295\u8d44\u8d44\u91d1\u6d41\uff09'}
+      title={t('cards.spending.title', { month: data.month })}
+      description={t('cards.spending.description')}
+      marker="◔"
     >
       <div className="space-y-4">
-        <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
-          <div>
-            <div className="text-xs text-slate-500">{'\u5df2\u5165\u8d26\u6d88\u8d39'}</div>
+        <dl className="grid gap-2 sm:grid-cols-3">
+          <ResultMetric label={t('cards.spending.posted')}>
             <Money amount={data.total} className="text-2xl font-semibold text-banking-deep" />
-          </div>
-          <div>
-            <div className="text-xs text-slate-500">上月支出</div>
+          </ResultMetric>
+          <ResultMetric label={t('cards.spending.previous')}>
             <Money amount={data.prevTotal} className="text-base text-slate-600" />
-          </div>
-          <div>
-            <div className="text-xs text-slate-500">环比</div>
+          </ResultMetric>
+          <ResultMetric label={t('cards.spending.change')}>
             <span className={`text-base font-medium ${momClass}`}>{momText}</span>
-          </div>
-        </div>
+          </ResultMetric>
+        </dl>
 
         {(hasCategories || hasTrend) && (
           <div className="grid gap-4 md:grid-cols-2">
@@ -70,12 +70,12 @@ export function SpendingCard({ data, className }: SpendingCardProps) {
 
         {data.topMerchant && (
           <div className="rounded-xl bg-banking-light p-3">
-            <div className="text-xs text-slate-500">最高消费商户</div>
-            <div className="mt-1 flex items-center justify-between gap-3">
+            <div className="text-xs text-slate-500">{t('cards.spending.topMerchant')}</div>
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
               <span className="font-medium text-banking-navy">{data.topMerchant.merchant}</span>
-              <span className="flex items-center gap-2">
+              <span className="flex flex-wrap items-center gap-2">
                 <Money amount={data.topMerchant.amount} className="font-semibold text-banking-deep" />
-                <span className="text-xs text-slate-500">{data.topMerchant.count} 笔</span>
+                <span className="text-xs text-slate-500">{t('cards.transaction.count', { count: data.topMerchant.count })}</span>
               </span>
             </div>
           </div>
@@ -83,8 +83,8 @@ export function SpendingCard({ data, className }: SpendingCardProps) {
 
         {data.largest && (
           <div className="rounded-xl bg-banking-light p-3">
-            <div className="text-xs text-slate-500">最大单笔交易</div>
-            <div className="mt-1 flex items-center justify-between gap-3">
+            <div className="text-xs text-slate-500">{t('cards.spending.largest')}</div>
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
               <span className="font-medium text-banking-navy">{data.largest.merchant}</span>
               <Money amount={data.largest.amount} signed className="font-semibold text-banking-deep" />
             </div>
@@ -94,6 +94,6 @@ export function SpendingCard({ data, className }: SpendingCardProps) {
           </div>
         )}
       </div>
-    </Card>
+    </ResultCard>
   );
 }

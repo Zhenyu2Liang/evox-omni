@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { getManualReviewInbox, openManualReview } from '@/agent';
 import { errorResponse, jsonResponse, parseBody } from '../_lib/http';
 import { requireIdentity } from '../_lib/session';
+import { requireDeveloperMode } from '../_lib/developer';
 
 const schema = z.object({
   taskId: z.string().min(1).optional(), actionId: z.string().min(1).optional(),
@@ -10,12 +11,16 @@ const schema = z.object({
 }).strict().refine((v) => Boolean(v.taskId) !== Boolean(v.actionId), 'Specify exactly one target');
 
 export async function GET(req: NextRequest): Promise<Response> {
-  try { return jsonResponse(await getManualReviewInbox(await requireIdentity(req))); }
+  try {
+    requireDeveloperMode(req);
+    return jsonResponse(await getManualReviewInbox(await requireIdentity(req)));
+  }
   catch (error) { return errorResponse(error); }
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
   try {
+    requireDeveloperMode(req);
     const identity = await requireIdentity(req);
     const { reason, ...target } = await parseBody(schema, req);
     return jsonResponse(await openManualReview(identity, target, reason));

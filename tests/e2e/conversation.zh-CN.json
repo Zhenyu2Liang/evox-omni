@@ -1,0 +1,16 @@
+{
+  "draftTransfer": "给张伟转账",
+  "fundingQuestion": "你怎么知道从哪个钱包转账？",
+  "smallTalk": "随便说几句",
+  "scheduleQuestion": "你可以创建定时任务吗？",
+  "amountOnly": "200元",
+  "completeTransfer": "给张伟转200元",
+  "checkingAccount": "活期",
+  "defaultAccount": "默认",
+  "explicitAccount": "指定",
+  "scheduledTask": "定时",
+  "supportedAnswers": ["可以", "支持", "能够", "能创建", "能帮"],
+  "failurePhrases": ["未记录到该操作的执行结果", "模型未完成业务规划", "已停止自动重试", "系统校正"],
+  "abandonedDraftPhrases": ["当前这笔转账还缺", "刚才那笔", "请告诉我转账金额"],
+  "recipient": "张伟"
+}

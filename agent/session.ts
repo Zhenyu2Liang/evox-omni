@@ -9,6 +9,9 @@
  * consistent (see `getOrCreateSession`, the canonical create path).
  */
 import type { AgentState } from '@earendil-works/pi-agent-core';
+import { createHash, randomUUID } from 'node:crypto';
+import type { ContextCompactionState } from './context-compaction/types';
+import type { ReplyContext, ReplyRepairState } from './reply-repair';
 import type { ChatMessage } from '@/lib/contracts/agent';
 import { newId } from '@/lib/ids';
 import { safeParse, toJson } from '@/lib/json';
@@ -18,6 +21,7 @@ import type { AgentRunLease } from '@/lib/contracts/runtime';
 import { commitRunSession } from '@/lib/db/repositories/agentRun';
 import {
   createSession,
+  ensureDemoSession,
   getSession,
   updateSessionState,
 } from '@/lib/db/repositories/session';
@@ -30,7 +34,12 @@ export interface SessionSnapshot {
   createdAt: number;
   updatedAt: number;
   revision: number;
+  historyStartedAt?: number;
   intent?: ConversationIntent;
+  contextCompaction?: ContextCompactionState;
+  historyGeneration?: string;
+  replyRepair?: ReplyRepairState;
+  replyContext?: ReplyContext;
 }
 
 /** The JSON blob persisted under `stateJson` (everything needed to rebuild a `SessionSnapshot`). */
@@ -41,6 +50,11 @@ interface PersistedSession {
   createdAt?: number;
   updatedAt?: number;
   intent?: ConversationIntent;
+  historyStartedAt?: number;
+  contextCompaction?: ContextCompactionState;
+  historyGeneration?: string;
+  replyRepair?: ReplyRepairState;
+  replyContext?: ReplyContext;
 }
 
 /**
@@ -72,6 +86,11 @@ function serialize(snapshot: SessionSnapshot): string {
     createdAt: snapshot.createdAt,
     updatedAt: snapshot.updatedAt,
     intent: snapshot.intent,
+    historyStartedAt: snapshot.historyStartedAt,
+    historyGeneration: snapshot.historyGeneration,
+    contextCompaction: snapshot.contextCompaction,
+    replyRepair: snapshot.replyRepair,
+    replyContext: snapshot.replyContext,
   };
   return toJson(redactSecrets(persisted));
 }
@@ -87,6 +106,8 @@ export function newSession(userId: string): SessionSnapshot {
     createdAt: now,
     updatedAt: now,
     revision: 0,
+    historyStartedAt: now,
+    historyGeneration: randomUUID(),
   };
 }
 
@@ -104,8 +125,32 @@ export async function loadSession(sessionId: string): Promise<SessionSnapshot | 
     createdAt: persisted.createdAt ?? row.createdAt.getTime(),
     updatedAt: persisted.updatedAt ?? row.updatedAt.getTime(),
     revision: row.revision,
+    historyStartedAt: persisted.historyStartedAt ?? persisted.createdAt ?? row.createdAt.getTime(),
     intent: safeParse<ConversationIntent | undefined>(row.intentJson, persisted.intent),
+    contextCompaction: persisted.contextCompaction,
+    replyRepair: persisted.replyRepair,
+    replyContext: persisted.replyContext,
+    historyGeneration: persisted.historyGeneration ?? createHash('sha256')
+      .update(`${row.id}:${persisted.historyStartedAt ?? persisted.createdAt ?? row.createdAt.getTime()}`).digest('hex'),
   };
+}
+
+/** Clear developer conversation context while retaining the fixed identity and financial history. */
+export function clearedConversationState(snapshot: SessionSnapshot): string {
+  const fresh = newSession(snapshot.userId);
+  return serialize({ ...fresh, sessionId: snapshot.sessionId, createdAt: snapshot.createdAt,
+    revision: snapshot.revision + 1 });
+}
+
+/** Every Web client shares this server-selected demo conversation, without browser authentication. */
+export async function getDemoSession(userId: string): Promise<SessionSnapshot> {
+  const initial = newSession(userId);
+  initial.sessionId = `demo:${userId}`;
+  const row = await ensureDemoSession(initial.sessionId, { userId, stateJson: serialize(initial) });
+  if (row.userId !== userId) throw new Error('The demo conversation belongs to another user');
+  const snapshot = await loadSession(row.id);
+  if (!snapshot) throw new Error('The demo conversation is unavailable');
+  return snapshot;
 }
 
 /** Persist (upsert) a session snapshot. */

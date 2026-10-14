@@ -27,7 +27,7 @@
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { centsToMoney } from '@/lib/money';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { getDemoSession, executeGatedTool } from '@/agent';
 import type { ToolName } from '@/lib/contracts/tools';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
@@ -45,12 +45,12 @@ afterAll(() => disconnectTestPrisma());
 /** A real route handler's `POST` for `/…/[id]` (app-layer `IdRouteContext`). */
 type RoutePost = (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;
 
-/** POST a confirm through a specific (possibly freshly imported) route handler, with the cookie. */
-async function confirmWith(handler: RoutePost, id: string, sessionId: string) {
+/** Confirm under the server-owned demo session through a possibly freshly imported route. */
+async function confirmWith(handler: RoutePost, id: string, _sessionId: string) {
   const res = await handler(
     new NextRequest(`http://localhost/api/actions/${id}/confirm`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', cookie: `banking_session=${sessionId}` },
+      headers: { 'Content-Type': 'application/json' },
       body: '{}',
     }),
     { params: Promise.resolve({ id }) },
@@ -62,11 +62,9 @@ async function confirmWith(handler: RoutePost, id: string, sessionId: string) {
 const confirmRaw = (id: string, sessionId: string) => confirmWith(confirmPost, id, sessionId);
 
 /** `GET /api/actions` — the page-refresh path the UI uses to restore pending entries. */
-async function listActions(sessionId: string) {
+async function listActions(_sessionId: string) {
   const res = await actionsGet(
-    new NextRequest('http://localhost/api/actions', {
-      headers: { cookie: `banking_session=${sessionId}` },
-    }),
+    new NextRequest('http://localhost/api/actions'),
   );
   const body = await res.json();
   const actions: Array<{ id: string; status: string }> = body.data ?? [];
@@ -96,7 +94,7 @@ function wedgeResultTransaction() {
 }
 
 it('a STANDALONE transfer wedge is replayed idempotently to executed (side effect exactly once)', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const id = await parkStandalone(s, 'transfer_money', { name: '张伟', amount: '200' }, '给张伟转200元');
 
@@ -153,46 +151,47 @@ it('a STANDALONE transfer wedge is replayed idempotently to executed (side effec
   expect(listed.ids).not.toContain(id); // `executed` is terminal & NOT surfaced
 });
 
-it('a standalone virtual-card wedge recovers its original receipt without issuing another card', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+it('a standalone limit wedge recovers its original receipt without repeating a card mutation', async () => {
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
-  const id = await parkStandalone(s, 'apply_virtual_card', { label: '旅行备用' }, '申请一张虚拟卡');
+  const id = await parkStandalone(s, 'set_card_limit', { cardId: 'card_credit', category: '\u5a31\u4e50', amount: '1500' }, 'Set the card limit');
 
-  const virtualWhere = { userId, type: 'VIRTUAL' };
-  const virtualBefore = await p.card.count({ where: virtualWhere });
+  const limitWhere = { cardId: 'card_credit', category: '\u5a31\u4e50' };
+  const limitBefore = await p.cardLimit.findMany({ where: limitWhere });
   const txBefore = await p.transaction.count({ where: { userId } });
-  expect(virtualBefore).toBe(0);
+  expect(limitBefore).toHaveLength(1); expect(limitBefore[0].amountMinor).toBe(300000n);
 
   const spy = wedgeResultTransaction();
   const first = await confirmRaw(id, s);
   expect(spy.mock.calls.length).toBe(1); // the injection HIT the target
 
-  // WEDGED, pre-recovery: the virtual card WAS issued, the row is `confirmed` with NO result.
+  // The limit write committed while the separate action status transaction rolled back.
   const wedged = await p.pendingAction.findUnique({ where: { id } });
   expect(first.status).toBe(500);
   expect(wedged?.status).toBe('confirmed');
   expect(wedged?.resultJson).toBeNull();
-  expect(await p.card.count({ where: virtualWhere })).toBe(1); // side effect committed exactly once
+  expect((await p.cardLimit.findFirstOrThrow({ where: limitWhere })).amountMinor).toBe(150000n);
+  await p.cardLimit.updateMany({ where: limitWhere, data: { amountMinor: 50000n } });
 
-  // The command receipt is committed with the card; repeat confirmation only reconstructs that fact.
+  // Receipt replay must preserve a newer independent limit change.
   spy.mockRestore();
   const repeated = await confirmRaw(id, s);
   const stored = await p.pendingAction.findUnique({ where: { id } });
-  const virtualAfter = await p.card.count({ where: virtualWhere });
+  const limitAfter = await p.cardLimit.findMany({ where: limitWhere });
   const txAfter = await p.transaction.count({ where: { userId } });
   const balance = centsToMoney((await p.account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
   const listed = await listActions(s);
   const listedRow = listed.actions.find((a) => a.id === id);
 
   console.log(
-    'REVIEW_STANDALONE_VIRTUAL_CARD_RECONCILE',
+    'REVIEW_STANDALONE_CARD_MUTATION_RECONCILE',
     JSON.stringify({
       firstHttp: first.status,
       repeatedHttp: repeated.status,
       repeatedOk: repeated.body.data?.ok,
       actionStatus: stored?.status,
-      virtualBefore,
-      virtualAfter,
+      limitRowsBefore: limitBefore.length,
+      limitRowsAfter: limitAfter.length,
       txBefore,
       txAfter,
       balance,
@@ -205,7 +204,7 @@ it('a standalone virtual-card wedge recovers its original receipt without issuin
   expect(repeated.body.data?.ok).toBe(true);
   expect(repeated.body.data?.status).toBe('executed');
   expect(stored?.status).toBe('executed');
-  expect(virtualAfter).toBe(1); // the repeat must NOT issue a SECOND virtual card
+  expect(limitAfter).toHaveLength(1); expect(limitAfter[0].amountMinor).toBe(50000n);
   expect(txAfter).toBe(txBefore); // no ledger movement
   expect(balance).toBe(CHECKING_BALANCE);
   expect(await p.executionReceipt.count({ where: { userId, key: id } })).toBe(1);
@@ -213,26 +212,26 @@ it('a standalone virtual-card wedge recovers its original receipt without issuin
   expect(listedRow).toBeUndefined();
 });
 
-it('an orphaned virtual-card action without a receipt remains unknown and is never retried', async () => {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+it('an orphaned limit action without a receipt remains unknown and is never retried', async () => {
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const action = await pendingActionRepo.createPendingAction({
-    sessionId, userId, toolName: 'apply_virtual_card', args: { label: 'Unknown card issuance' },
+    sessionId, userId, toolName: 'set_card_limit', args: { cardId: 'card_credit', category: '\u5a31\u4e50', amount: '1500' },
     status: 'confirmed', tier: 'YELLOW', requiresMfa: false,
-    summary: { title: 'Unknown card issuance', toolName: 'apply_virtual_card', tier: 'YELLOW', requiresMfa: false, fields: [] },
+    summary: { title: 'Unknown card limit result', toolName: 'set_card_limit', tier: 'YELLOW', requiresMfa: false, fields: [] },
   });
   expect(await p.executionReceipt.count({ where: { userId, key: action.id } })).toBe(0);
   const recovered = await confirmRaw(action.id, sessionId);
   expect(recovered.status).toBe(200);
   expect(recovered.body.data).toMatchObject({ ok: false, status: 'needs_reconciliation' });
   expect((await p.pendingAction.findUniqueOrThrow({ where: { id: action.id } })).status).toBe('needs_reconciliation');
-  expect(await p.card.count({ where: { userId, type: 'VIRTUAL' } })).toBe(0);
+  expect((await p.cardLimit.findFirstOrThrow({ where: { cardId: 'card_credit', category: '\u5a31\u4e50' } })).amountMinor).toBe(300000n);
   expect((await listActions(sessionId)).ids).toContain(action.id);
   expect(await p.executionReceipt.count({ where: { userId, key: action.id } })).toBe(0);
 });
 
 it('a standalone limit-change receipt is recovered without re-applying its historical limit', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const limitWhere = { cardId: 'card_credit', category: '娱乐' };
   const id = await parkStandalone(
@@ -299,9 +298,9 @@ it('a standalone limit-change receipt is recovered without re-applying its histo
 });
 
 it('a SIMULATED PROCESS RESTART (fresh module graph, empty liveness registry) still recovers the standalone wedge', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
-  const id = await parkStandalone(s, 'apply_virtual_card', { label: '重启恢复' }, '申请虚拟卡');
+  const id = await parkStandalone(s, 'set_card_limit', { cardId: 'card_credit', category: '\u5a31\u4e50', amount: '1500' }, 'Restore a limit change after restart');
 
   const spy = wedgeResultTransaction();
   const first = await confirmRaw(id, s);
@@ -325,7 +324,7 @@ it('a SIMULATED PROCESS RESTART (fresh module graph, empty liveness registry) st
 
   // Assert the DB state via a query against the SAME SQLite file (the file is identical).
   const stored = await getTestPrisma().pendingAction.findUnique({ where: { id } });
-  const virtualCount = await getTestPrisma().card.count({ where: { userId, type: 'VIRTUAL' } });
+  const limits = await getTestPrisma().cardLimit.findMany({ where: { cardId: 'card_credit', category: '\u5a31\u4e50' } });
   const listed = await listActions(s);
 
   console.log(
@@ -335,7 +334,7 @@ it('a SIMULATED PROCESS RESTART (fresh module graph, empty liveness registry) st
       recoveredHttp: recovered.status,
       recoveredOk: recovered.body.data?.ok,
       actionStatus: stored?.status,
-      virtualCount,
+      limitRows: limits.length,
       visible: listed.ids.includes(id),
     }),
   );
@@ -343,16 +342,17 @@ it('a SIMULATED PROCESS RESTART (fresh module graph, empty liveness registry) st
   expect(recovered.status).toBe(200);
   expect(stored?.status).toBe('executed');
   expect(stored?.status).not.toBe('confirmed');
-  expect(virtualCount).toBe(1); // no duplicate card across the "restart"
+  expect(limits).toHaveLength(1); expect(limits[0].amountMinor).toBe(150000n);
+  expect(await getTestPrisma().executionReceipt.count({ where: { userId, key: id } })).toBe(1);
   expect(listed.ids).not.toContain(id);
 });
 
 it('repeat confirm + page refresh after recovery stay consistent (idempotent, no extra side effect)', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
-  const id = await parkStandalone(s, 'apply_virtual_card', { label: '刷新一致性' }, '申请虚拟卡');
+  const id = await parkStandalone(s, 'set_card_limit', { cardId: 'card_credit', category: '\u5a31\u4e50', amount: '1500' }, 'Confirm and refresh the same limit change');
 
-  const virtualWhere = { userId, type: 'VIRTUAL' };
+  const limitWhere = { cardId: 'card_credit', category: '\u5a31\u4e50' };
 
   const spy = wedgeResultTransaction();
   const first = await confirmRaw(id, s);
@@ -369,14 +369,14 @@ it('repeat confirm + page refresh after recovery stay consistent (idempotent, no
   expect(recovered.status).toBe(200);
   expect(recovered.body.data?.status).toBe('executed');
 
-  const virtualAfterRecovery = await p.card.count({ where: virtualWhere });
+  const limitsAfterRecovery = await p.cardLimit.findMany({ where: limitWhere });
   const balanceAfterRecovery = centsToMoney((await p.account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
   const txAfterRecovery = await p.transaction.count({ where: { userId } });
 
   // The SAME confirm AGAIN — idempotent: terminal status unchanged, no new side effect.
   const again = await confirmRaw(id, s);
   const stored = await p.pendingAction.findUnique({ where: { id } });
-  const virtualAfterAgain = await p.card.count({ where: virtualWhere });
+  const limitsAfterAgain = await p.cardLimit.findMany({ where: limitWhere });
   const balanceAfterAgain = centsToMoney((await p.account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
   const txAfterAgain = await p.transaction.count({ where: { userId } });
 
@@ -391,8 +391,8 @@ it('repeat confirm + page refresh after recovery stay consistent (idempotent, no
       againHttp: again.status,
       againStatus: again.body.data?.status,
       storedStatus: stored?.status,
-      virtualAfterRecovery,
-      virtualAfterAgain,
+      limitsAfterRecovery: limitsAfterRecovery.length,
+      limitsAfterAgain: limitsAfterAgain.length,
       txAfterRecovery,
       txAfterAgain,
       balanceAfterRecovery,
@@ -405,8 +405,9 @@ it('repeat confirm + page refresh after recovery stay consistent (idempotent, no
   expect(again.status).toBe(200);
   expect(stored?.status).toBe('executed');
   expect(stored?.status).toBe(recovered.body.data?.status); // unchanged terminal status
-  expect(virtualAfterAgain).toBe(virtualAfterRecovery); // no additional side effect
-  expect(virtualAfterAgain).toBe(1);
+  expect(limitsAfterAgain).toEqual(limitsAfterRecovery);
+  expect(limitsAfterAgain).toHaveLength(1); expect(limitsAfterAgain[0].amountMinor).toBe(150000n);
+  expect(await p.executionReceipt.count({ where: { userId, key: id } })).toBe(1);
   expect(txAfterAgain).toBe(txAfterRecovery);
   expect(balanceAfterAgain).toBe(balanceAfterRecovery);
   expect(balanceAfterAgain).toBe(CHECKING_BALANCE);
@@ -415,7 +416,7 @@ it('repeat confirm + page refresh after recovery stay consistent (idempotent, no
 });
 
 it('a STANDALONE transfer whose replay FAILS settles failed (never executed) and is not surfaced', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   // Park with a RESOLVABLE, seeded recipient: the gateway resolves the transfer recipient
   // SERVER-SIDE at park time (`security/security-gateway.ts#resolveTransferRecipient`), so an

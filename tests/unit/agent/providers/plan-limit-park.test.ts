@@ -6,20 +6,15 @@
  * It pins the mock model's GATED conditional plan, i.e. the otherwise UNREACHABLE plan-parking
  * path over the offline mock LLM:
  *   "如果这个月娱乐消费超过2000元，就把娱乐消费限额调整为1500元"
- *     → `submit_plan` DAG: `analyze`(analyze_spending, GREEN) → `check`(condition analyze.total > 2000)
+ *     → `submit_plan` DAG: analyze_spending → explicit entertainment category condition → setlimit
  *       → `setlimit`(set_card_limit, YELLOW ⇒ PARKS in `waiting_confirmation`).
  *
- * Part A is pure (`respond`); Part B drives the REAL production pipeline end-to-end offline
+ * Pure proposal checks live in mock-plan-proposals.test.ts. This file drives the production pipeline
  * (`runTurn` → `createBankingAgent` → mock model → tools → gateway → SDK → test SQLite, then
  * `confirmAction`) and asserts the exact stream frames + persisted statuses + the REAL card-limit
  * mutation. `console.log` dumps the frames so a sibling test node can mirror the HTTP-level stream.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai';
-import type { AssistantMessage, Message, UserMessage } from '@earendil-works/pi-ai';
-
-import { respond } from '@/agent/providers/mock-responder';
-import type { MockContext } from '@/agent/providers/mock-responder';
 import { confirmAction, runTurn } from '@/agent';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import type { TaskPlan } from '@/lib/contracts/task';
@@ -33,23 +28,6 @@ import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/help
 const TRIGGER = '如果这个月娱乐消费超过2000元，就把娱乐消费限额调整为1500元';
 
 /* ------------------------------------------------------------------------------- helpers */
-
-function userMessage(content: string): UserMessage {
-  return { role: 'user', content, timestamp: 0 } as UserMessage;
-}
-
-function ctx(messages: Message[]): MockContext {
-  return { messages };
-}
-
-function firstToolCall(
-  msg: AssistantMessage,
-): { id: string; name: string; args: Record<string, any> } | undefined {
-  for (const block of msg.content) {
-    if (block.type === 'toolCall') return { id: block.id, name: block.name, args: block.arguments };
-  }
-  return undefined;
-}
 
 type PlanUpdateEvent = Extract<AgentStreamEvent, { type: 'plan_update' }>;
 
@@ -104,53 +82,12 @@ afterAll(async () => {
   await disconnectTestPrisma();
 });
 
-/* ============================================================ Part A — pure responder */
-
-describe('mock-responder — conditional LIMIT-ADJUSTMENT plan (gated node)', () => {
-  it('emits a submit_plan DAG with analyze → check → setlimit(set_card_limit)', () => {
-    const call = firstToolCall(respond(ctx([userMessage(TRIGGER)])));
-    expect(call).toBeDefined();
-    expect(call!.name).toBe('submit_plan');
-
-    const { goal, nodes } = call!.args as { goal: string; nodes: any[] };
-    expect(goal).toBe(TRIGGER);
-    expect(nodes.map((n) => n.id)).toEqual(['analyze', 'check', 'setlimit']);
-
-    expect(nodes[0]).toMatchObject({
-      kind: 'tool',
-      tool: 'analyze_spending',
-      args: {},
-      dependencies: [],
-    });
-    expect(nodes[1]).toMatchObject({
-      kind: 'condition',
-      dependencies: ['analyze'],
-      condition: { path: 'analyze.total', op: '>', value: '2000' },
-    });
-    expect(nodes[2]).toMatchObject({
-      kind: 'tool',
-      tool: 'set_card_limit',
-      dependencies: ['check'],
-      args: { cardId: 'card_credit', category: '娱乐', amount: '1500' },
-    });
-  });
-
-  it('preserves the pure-GREEN conditional plan when no limit adjustment is asked', () => {
-    const call = firstToolCall(respond(ctx([userMessage('如果这个月消费超过2000元就提醒我')])));
-    expect(call!.name).toBe('submit_plan');
-    const { nodes } = call!.args as { nodes: any[] };
-    expect(nodes.map((n) => n.kind)).toEqual(['tool', 'condition', 'note']);
-    expect(nodes.some((n) => n.tool === 'set_card_limit')).toBe(false);
-  });
-});
-
 /* ============================================================ Part B — full pipeline E2E */
 
 describe('plan parking through the mock model (runTurn → confirmAction)', () => {
   it('parks the setlimit node, then confirm executes set_card_limit (card limit → ¥1500)', async () => {
     /* ---- 1. PARKING turn -------------------------------------------------------- */
     const { sessionId, events } = await runTurn({ message: TRIGGER });
-    // eslint-disable-next-line no-console
     console.log('PARKING FRAMES:\n' + JSON.stringify(describeFrames(events), null, 0));
 
     expect(events.filter((e) => e.type === 'error')).toHaveLength(0);
@@ -217,7 +154,6 @@ describe('plan parking through the mock model (runTurn → confirmAction)', () =
 
     /* ---- 3. POST-CONFIRM continuation ------------------------------------------- */
     const outcome = await confirmAction(actionId!);
-    // eslint-disable-next-line no-console
     console.log('CONFIRM FRAMES:\n' + JSON.stringify(describeFrames(outcome.events), null, 0));
 
     expect(outcome.ok).toBe(true);
@@ -253,9 +189,3 @@ describe('plan parking through the mock model (runTurn → confirmAction)', () =
     expect(after.amountMinor).toBe(150000n);
   });
 });
-
-/* Keep an unused-import guard so the faux helpers stay referenced (kept for parity with the
- * sibling provider-mock spec's builders). */
-void fauxAssistantMessage;
-void fauxText;
-void fauxToolCall;

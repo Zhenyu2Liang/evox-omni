@@ -5,12 +5,12 @@ import { requestDigest } from '../ledger';
 export interface BankingCommand {
   userId: string;
   operationKey: string;
-  toolName: ToolName;
+  toolName: ToolName | import('./card-management').ManualCardCommandName;
   args: Record<string, unknown>;
   digest: string;
 }
 
-const MONETARY_FIELDS = new Set(['amount', 'monthlyLimit', 'expectedRedemptionAmount']);
+const MONETARY_FIELDS = new Set(['amount', 'creditLimit', 'monthlyLimit', 'expectedRedemptionAmount']);
 
 /** Equivalent decimal inputs have one identity; presentation text never grants authority. */
 export function canonicalCommandArgs(args: Record<string, unknown>): Record<string, unknown> {

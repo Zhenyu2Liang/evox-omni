@@ -7,6 +7,10 @@ import { Badge } from '../../ui/Badge';
 import { Button } from '../../ui/Button';
 import { AgentTaskTimeline } from '../../banking';
 import type { TaskControlAction } from './types';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+import type { Translator } from '@/lib/i18n/shared';
+import { localizeToolLabel } from '@/lib/i18n/display';
+import { useDeveloperMode } from '@/lib/developer-mode/DeveloperModeProvider';
 
 export interface PlanCardProps {
   plan: TaskPlan;
@@ -14,16 +18,6 @@ export interface PlanCardProps {
   busy?: boolean;
   className?: string;
 }
-
-const PLAN_STATUS_LABEL: Record<TaskPlanStatus, string> = {
-  pending: '待执行',
-  running: '执行中',
-  paused: '已暂停',
-  waiting_confirmation: '等待确认',
-  success: '已完成',
-  failed: '已失败',
-  cancelled: '已取消',
-};
 
 const PLAN_STATUS_TONE: Record<TaskPlanStatus, 'neutral' | 'info' | 'success' | 'warn' | 'danger'> = {
   pending: 'neutral',
@@ -33,14 +27,6 @@ const PLAN_STATUS_TONE: Record<TaskPlanStatus, 'neutral' | 'info' | 'success' | 
   success: 'success',
   failed: 'danger',
   cancelled: 'neutral',
-};
-
-const CONTROL_LABEL: Record<TaskControlAction, string> = {
-  pause: '暂停',
-  resume: '继续',
-  cancel: '取消',
-  retry: '重试',
-  rollback: '回退预算和任务记录',
 };
 
 const CONTROL_VARIANT: Record<TaskControlAction, 'secondary' | 'danger'> = {
@@ -77,12 +63,15 @@ function controlActionsFor(status: TaskPlanStatus): TaskControlAction[] {
  * (falling back to the raw id when a dependency is not part of this plan), or an explicit
  * start-of-graph label when it has none. Relationship text only — no status glyphs here.
  */
-function dependencyLabel(node: TaskNodeSpec, nameById: Map<string, string>): string {
-  const ordered = (node.after ?? []).map(id => nameById.get(id) ?? id);
-  const suffix = ordered.length ? `顺序：等待 ${ordered.join('、')} 结束` : '';
-  if (node.dependencies.length === 0) return suffix || '起始节点（无依赖）';
-  const names = node.dependencies.map((id) => nameById.get(id) ?? id);
-  return `依赖于: ${names.join('、')}${suffix ? `；${suffix}` : ''}`;
+function dependencyLabel(node: TaskNodeSpec, nameById: Map<string, string>, t: Translator): string {
+  const ordered = (node.after ?? []).map(id => localizeToolLabel(nameById.get(id) ?? id, t));
+  if (node.dependencies.length === 0) {
+    return ordered.length ? t('cards.plan.dependency.after', { names: ordered.join(', ') }) : t('cards.plan.dependency.none');
+  }
+  const names = node.dependencies.map((id) => localizeToolLabel(nameById.get(id) ?? id, t));
+  return ordered.length
+    ? t('cards.plan.dependency.combined', { dependencies: names.join(', '), ordered: ordered.join(', ') })
+    : t('cards.plan.dependency.required', { names: names.join(', ') });
 }
 
 /**
@@ -95,6 +84,8 @@ function dependencyLabel(node: TaskNodeSpec, nameById: Map<string, string>): str
  * the timeline).
  */
 export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
+  const { t } = useI18n();
+  const { enabled: developerMode } = useDeveloperMode();
   const nameById = new Map<string, string>(plan.nodes.map((node) => [node.id, node.name]));
   const controls = controlActionsFor(plan.status);
   // Completed record-creation plans may also be cancelled before explicit compensation.
@@ -106,7 +97,7 @@ export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
   const footer =
     controls.length > 0 ? (
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {plan.status === 'failed' && <Link href="/manual" className="text-sm text-banking-accent underline">转人工处理</Link>}
+        {developerMode && plan.status === 'failed' && <Link href="/manual" className="text-sm text-banking-accent underline">{t('cards.manualReview')}</Link>}
         {controls.map((action) => (
           <Button
             key={action}
@@ -115,7 +106,7 @@ export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
             disabled={busy || !onControl}
             onClick={() => onControl?.(action)}
           >
-            {CONTROL_LABEL[action]}
+            {t(`cards.plan.control.${action}`)}
           </Button>
         ))}
       </div>
@@ -126,8 +117,8 @@ export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
       className={className}
       title={
         <span className="flex items-center gap-2">
-          任务计划
-          <Badge tone={PLAN_STATUS_TONE[plan.status]}>{PLAN_STATUS_LABEL[plan.status]}</Badge>
+          {t('cards.plan.title')}
+          <Badge tone={PLAN_STATUS_TONE[plan.status]}>{t(`cards.plan.status.${plan.status}`)}</Badge>
         </span>
       }
       description={plan.goal}
@@ -137,21 +128,21 @@ export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
         <AgentTaskTimeline plan={plan} results={plan.results} />
         {plan.status === 'cancelled' && plan.results.some(result => result.status === 'success' &&
           ['reserve_budget', 'create_scheduled_task'].includes(result.tool ?? '')) &&
-          <p className="text-sm text-gray-600">回退仅释放本计划的预算记录、取消本计划的定时任务记录；已入账交易、理财及卡片变更保留。</p>}
-        {plan.results.some(result => result.compensation) && <section aria-label="回退结果" className="space-y-2">
-          <h4 className="text-sm font-semibold">回退结果（原执行记录保留）</h4>
+          <p className="text-sm text-gray-600">{t('cards.plan.rollbackBoundary')}</p>}
+        {plan.results.some(result => result.compensation) && <section aria-label={t('cards.plan.rollbackLabel')} className="space-y-2">
+          <h4 className="text-sm font-semibold">{t('cards.plan.rollbackTitle')}</h4>
           {plan.results.filter(result => result.compensation).map(result => <p key={result.id} className="text-sm">
             {result.name}：{result.compensation!.message}
           </p>)}
         </section>}
 
         <section className="space-y-2">
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">依赖关系</h4>
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">{t('cards.plan.dependencies')}</h4>
           <ul className="space-y-1.5">
             {plan.nodes.map((node) => (
               <li key={node.id} className="flex flex-wrap items-baseline gap-x-2 text-sm">
-                <span className="font-medium text-banking-deep">{node.name}</span>
-                <span className="text-xs text-gray-500">{dependencyLabel(node, nameById)}</span>
+                <span className="font-medium text-banking-deep">{localizeToolLabel(node.name, t)}</span>
+                <span className="text-xs text-gray-500">{dependencyLabel(node, nameById, t)}</span>
               </li>
             ))}
           </ul>

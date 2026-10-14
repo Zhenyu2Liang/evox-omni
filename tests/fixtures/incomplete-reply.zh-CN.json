@@ -1,0 +1,7 @@
+{
+  "labelledChoiceQuestion": "就异常的这笔。请按 A 商家退款、B 怀疑盗刷、C 调整消费限额说明，供我选择。",
+  "anomalyQuery": "帮我看有没有异常消费",
+  "refundQuestion": "我想要退款可以吗",
+  "choice": "B",
+  "incomplete": "明白了 —— 你怀疑 9月20日那笔 Apple Store ¥6,999.00 不是本人消费。\n\n为"
+}

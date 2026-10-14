@@ -6,7 +6,7 @@ import { POST as resolvePost } from '@/app/api/manual-reviews/[id]/route';
 import { POST as controlPost } from '@/app/api/tasks/[id]/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import { POST as verifyPost } from '@/app/api/actions/[id]/verify/route';
-import { executeGatedTool, getOrCreateSession } from '@/agent';
+import { executeGatedTool, getDemoSession, getOrCreateSession } from '@/agent';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import { auditStore } from '@/audit/audit-logger';
 import { claimTaskExecution, claimTaskStatus } from '@/lib/db/repositories/task';
@@ -14,6 +14,7 @@ import { MFA_CODE } from '@/lib/constants';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
 import * as executionFences from '@/agent/execution-fence';
+import { DEVELOPER_MODE_COOKIE, DEVELOPER_MODE_ENABLED } from '@/lib/developer-mode/shared';
 
 type Handler = (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;
 const p = getTestPrisma;
@@ -21,17 +22,19 @@ beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
 afterAll(() => disconnectTestPrisma());
 
-async function call(handler: Handler, sessionId?: string, body?: object, id = 'unused') {
+async function call(handler: Handler, sessionId?: string, body?: object, id = 'unused', developerMode: string | null = DEVELOPER_MODE_ENABLED) {
+  const cookies = [sessionId ? `banking_session=${sessionId}` : '',
+    developerMode === null ? '' : `${DEVELOPER_MODE_COOKIE}=${developerMode}`].filter(Boolean).join('; ');
   const response = await handler(new NextRequest(`http://localhost/api/manual-reviews/${id}`, {
     method: body ? 'POST' : 'GET', headers: { 'content-type': 'application/json',
-      ...(sessionId ? { cookie: `banking_session=${sessionId}` } : {}) },
+      ...(cookies ? { cookie: cookies } : {}) },
     body: body ? JSON.stringify(body) : undefined,
   }), { params: Promise.resolve({ id }) });
   return { http: response.status, body: await response.json() };
 }
 
 async function failedPlan(amount = '200') {
-  const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+  const { sessionId } = await getDemoSession(DEMO_USER_ID);
   await runSubmitPlan(DEMO_USER_ID, { goal: '异常查询后转账', nodes: [
     { id: 'before', name: '查询卡片', kind: 'tool', tool: 'get_cards', args: {}, dependencies: [] },
     { id: 'read', name: '查询余额', kind: 'tool', tool: 'get_balance', args: {}, dependencies: ['before'] },
@@ -56,6 +59,32 @@ async function money() {
 }
 
 describe('[integration] manual handoff', () => {
+  it.each([null, '0', 'true'])('refuses manual routes without an explicit developer preference (%s)', async preference => {
+    const { sessionId, taskId } = await failedPlan();
+    const reviewsBefore = await p().manualReview.count();
+    const auditsBefore = await p().auditLog.count();
+    const inbox = await call(inboxGet, sessionId, undefined, 'unused', preference);
+    const opened = await call(openPost, sessionId, { taskId, reason: 'Check uncertain results' }, 'unused', preference);
+    const resolved = await call(resolvePost, sessionId, { resolution: 'stop', notes: 'Stop automatic execution' }, 'unused', preference);
+    for (const response of [inbox, opened, resolved]) {
+      expect(response.http).toBe(403);
+      expect(response.body).toMatchObject({ ok: false, error: { code: 'SECURITY_DENIED' } });
+      expect(response.body.data).toBeUndefined();
+    }
+    expect(await p().manualReview.count()).toBe(reviewsBefore);
+    expect(await p().auditLog.count()).toBe(auditsBefore);
+    expect((await p().agentTask.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('failed');
+  });
+
+  it('does not resolve an existing case after developer mode is disabled', async () => {
+    const { sessionId, taskId } = await failedPlan();
+    const review = await open(sessionId, { taskId });
+    const auditsBefore = await p().auditLog.count();
+    expect((await call(resolvePost, sessionId, { resolution: 'stop', notes: 'Stop after disabling developer mode' }, review.id, '0')).http).toBe(403);
+    expect((await p().manualReview.findUniqueOrThrow({ where: { id: review.id } })).status).toBe('open');
+    expect(await p().auditLog.count()).toBe(auditsBefore);
+  });
+
   it('persists an owned case and prevents direct/DB resume and retry while it is open', async () => {
     const { sessionId, taskId } = await failedPlan();
     const review = await open(sessionId, { taskId });
@@ -116,7 +145,7 @@ describe('[integration] manual handoff', () => {
   });
 
   it('unknown standalone results can be annotated/stopped but never declared successful or retried', async () => {
-    const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+    const { sessionId } = await getDemoSession(DEMO_USER_ID);
     const outcome = await executeGatedTool({ sessionId, userId: DEMO_USER_ID, toolName: 'freeze_card', args: { cardId: 'card_credit' }, userRequest: '冻结信用卡' });
     await p().pendingAction.update({ where: { id: outcome.pendingActionId! }, data: { status: 'needs_reconciliation', resultJson: null } });
     const review = await open(sessionId, { actionId: outcome.pendingActionId! });
@@ -141,7 +170,7 @@ describe('[integration] manual handoff', () => {
   });
 
   it('a real insufficient-funds transfer is reachable in the manual inbox and can be stopped without changing funds', async () => {
-    const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+    const { sessionId } = await getDemoSession(DEMO_USER_ID);
     const before = await money();
     const parked = await executeGatedTool({ sessionId, userId: DEMO_USER_ID, toolName: 'transfer_money',
       args: { name: '张伟', amount: '30000' }, userRequest: '给张伟转30000元' });
@@ -156,16 +185,20 @@ describe('[integration] manual handoff', () => {
     expect((await p().pendingAction.findUniqueOrThrow({ where: { id: parked.pendingActionId! } })).status).toBe('failed');
   });
 
-  it('requires cookie ownership and valid notes; operator identity cannot be supplied by the client', async () => {
+  it('uses shared demo ownership without login, ignores cookie identities and requires valid operator notes', async () => {
     const { sessionId, taskId } = await failedPlan();
     const other = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
     const target = { taskId, reason: '请求人工核对异常' };
-    expect((await call(openPost, undefined, target)).http).toBe(403);
-    expect((await call(openPost, other, target)).http).toBe(403);
+    expect((await call(openPost, undefined, target)).http).toBe(200);
+    expect((await call(openPost, other, target)).http).toBe(200);
     expect((await call(openPost, sessionId, { ...target, operatorName: '管理员' })).http).toBe(400);
     const review = await open(sessionId, { taskId });
-    expect((await call(inboxGet, other)).body.data.reviews).toEqual([]);
-    expect((await call(resolvePost, other, { resolution: 'stop', notes: '越权处理异常任务' }, review.id)).http).toBe(403);
+    expect((await call(inboxGet, other)).body.data.reviews.map((entry: { id: string }) => entry.id)).toContain(review.id);
+    await p().agentTask.update({ where: { id: taskId }, data: { sessionId: other } });
+    await p().manualReview.update({ where: { id: review.id }, data: { sessionId: other } });
+    expect((await call(resolvePost, other, { resolution: 'stop', notes: 'Reject non-demo workflow ownership' }, review.id)).http).toBe(403);
+    await p().agentTask.update({ where: { id: taskId }, data: { sessionId } });
+    await p().manualReview.update({ where: { id: review.id }, data: { sessionId } });
     expect((await call(resolvePost, sessionId, { resolution: 'stop', notes: ' ' }, review.id)).http).toBe(400);
     expect((await p().manualReview.findUniqueOrThrow({ where: { id: review.id } })).status).toBe('open');
   });
@@ -224,7 +257,7 @@ describe('[integration] manual handoff', () => {
   });
 
   it('releases a parked workflow with its original approval identity intact', async () => {
-    const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+    const { sessionId } = await getDemoSession(DEMO_USER_ID);
     const result = await runSubmitPlan(DEMO_USER_ID, { goal: 'Review before transfer', nodes: [
       { id: 'pay', name: 'Transfer', kind: 'tool', tool: 'transfer_money',
         args: { name: '\u5f20\u4f1f', amount: '200.00' }, dependencies: [] },
@@ -254,7 +287,7 @@ describe('[integration] manual handoff', () => {
   });
 
   it('lets an already-started automatic command finish and pauses before the next step', async () => {
-    const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+    const { sessionId } = await getDemoSession(DEMO_USER_ID);
     let entered!: () => void;
     const atFence = new Promise<void>(resolve => { entered = resolve; });
     let release!: () => void;
@@ -292,7 +325,7 @@ describe('[integration] manual handoff', () => {
   });
 
   it('retains an already-confirmed debit while an operator request blocks future authorization', async () => {
-    const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+    const { sessionId } = await getDemoSession(DEMO_USER_ID);
     await runSubmitPlan(DEMO_USER_ID, { goal: 'Retain confirmed debit', nodes: [
       { id: 'pay', name: 'Transfer', kind: 'tool', tool: 'transfer_money', dependencies: [],
         args: { name: '\u5f20\u4f1f', amount: '200.00' } },

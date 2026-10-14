@@ -8,7 +8,6 @@
 import { ANOMALY_AMOUNT_THRESHOLD } from '../lib/constants';
 import { demoNow } from '../lib/clock';
 import { businessCalendarParts, businessDate, monthRange, previousMonthRange } from '../lib/date';
-import { AppError } from '../lib/errors';
 import { absoluteMinor, centsToMoney, moneyToCents, percentageRatio } from '../lib/money';
 import { compareDecimal } from '../lib/decimal';
 import { transactions } from '../lib/db/repositories';
@@ -16,6 +15,7 @@ import { dbClient } from '../lib/db/client';
 import { getCards } from './card';
 import { INVESTMENT_FLOW_CATEGORY, SPENDING_CATEGORIES } from './categories';
 import { runInTransaction } from './tx';
+import { validateSpendingMonth, validateTransactionQuery } from './read-query';
 import type {
   AnomalyItem,
   AnomalyReport,
@@ -40,13 +40,12 @@ const TREND_MONTHS = 6;
 /** Fallback anomaly reason for rows whose `anomalyReason` is empty. */
 const DEFAULT_ANOMALY_REASON = `Large consumption above CNY ${ANOMALY_AMOUNT_THRESHOLD}.`;
 
-const MONTH_PATTERN = /^(\d{4})-(\d{2})$/;
-
 /** Transactions for the user, filtered by the query, most recent first. */
 export async function listTransactions(
   userId: string,
   query: TransactionQuery = {},
 ): Promise<TransactionView[]> {
+  query = validateTransactionQuery(query);
   const rows = await transactions.listTransactions({
     userId,
     ...(query.from !== undefined ? { from: new Date(query.from) } : {}),
@@ -62,7 +61,8 @@ export async function analyzeSpending(
   userId: string,
   query: SpendingQuery = {},
 ): Promise<SpendingAnalysis> {
-  const base = query.month !== undefined ? parseMonth(query.month) : new Date(demoNow());
+  const month = validateSpendingMonth(query.month);
+  const base = month !== undefined ? parseMonth(month) : new Date(demoNow());
   const { start, end } = monthRange(base);
   const prev = previousMonthRange(base);
   const calendar = businessCalendarParts(base);
@@ -211,15 +211,8 @@ function buildLargest(rows: TransactionRow[]): TransactionView | null {
 
 /** Parses a month label into its first banking-calendar instant. */
 function parseMonth(month: string): Date {
-  const match = MONTH_PATTERN.exec(month);
-  if (match === null) {
-    throw new AppError('VALIDATION', `Invalid month "${month}", expected "YYYY-MM".`);
-  }
-  const year = Number(match[1]);
-  const monthIndex = Number(match[2]) - 1;
-  if (monthIndex < 0 || monthIndex > 11) {
-    throw new AppError('VALIDATION', `Invalid month "${month}": month must be 01–12.`);
-  }
+  const year = Number(month.slice(0, 4));
+  const monthIndex = Number(month.slice(5)) - 1;
   return businessDate(year, monthIndex);
 }
 

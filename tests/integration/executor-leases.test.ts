@@ -22,7 +22,8 @@
  */
 import { beforeEach, afterAll, expect, it } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { pauseTask, resumeTask } from '@/agent/task-control';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
@@ -33,10 +34,10 @@ beforeEach(() => resetDatabase());
 afterAll(() => disconnectTestPrisma());
 
 async function session() {
-  return (await getOrCreateSession(userId)).sessionId;
+  return (await getDemoSession(userId)).sessionId;
 }
 
-/** Drive a REAL route handler with cookie identity; returns the HTTP status + the JSON body. */
+/** Drive a real route handler for the fixed demo identity; return status and JSON. */
 async function post(handler: any, id: string, body: unknown, s: string, path?: string) {
   const res = await handler(
     new NextRequest('http://localhost' + (path ?? `/api/tasks/${id}`), {

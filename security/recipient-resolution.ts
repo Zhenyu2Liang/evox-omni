@@ -7,25 +7,22 @@
  * persisted: the persisted + executed args are then CANONICALIZED to the resolved `contactId`
  * (`canonicalizeTransferArgs`), so the card and `banking-sdk/transfer.ts#resolveRecipient` AGREE.
  *
- * Resolution is TOLERANT of the value/slot the model supplies. A model that echoes whatever
- * `search_contact` returned may put a NAME into `contactId`, a MASKED phone into `contactId`, or a
- * DE-MASKED phone into `phone`; all of those still resolve. It accepts ONE OR MORE selectors and
- * matches EVERY supplied value against every one of the caller's contacts' identity facets
- * (`id`, `name`, MASK-AWARE phone). The union is:
+ * Each supplied selector matches only its declared field. IDs and names are exact; phone numbers
+ * have a complete normalized or masked shape. Every supplied field must match the same contact.
+ * Resolution considers only the caller's owned contacts. The candidate set is:
  *   - EXACTLY ONE distinct contact  → `resolved`;
  *   - ZERO                            → `not_found`;
- *   - MORE THAN ONE distinct contact → `ambiguous` (covers a 重名 AND contradictory selectors).
+ *   - MORE THAN ONE distinct contact → `ambiguous` (duplicate names or masked phones).
  * It is a pure function of the validated args and the caller's OWN contacts (owner isolation: only
  * the caller's contacts are ever considered, so a foreign/unknown id can never resolve or leak).
  * It NEVER throws — every outcome is reported so the caller can ask the user to clarify.
  */
-import type { Contact } from '@prisma/client';
+import type { Contact } from '@/lib/db/prisma';
 import { getAccount } from '../lib/db/repositories/account';
 import { listContacts } from '../lib/db/repositories/contact';
 import { maskAwarePhoneMatch, maskPhone } from '../lib/phone';
 
-// Re-exported so the established import surface (`./recipient-resolution`, and transitively
-// `./security-gateway`) keeps working for existing callers and tests unchanged.
+// The gateway and SDK share the same phone identity rules.
 export { maskAwarePhoneMatch, maskPhone };
 
 /** The recipient selector slots a `transfer_money` call may carry. */
@@ -53,18 +50,17 @@ function isPresent(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
 
-/** A contact matches a selector value iff its id, name or mask-aware phone matches. */
-function contactMatchesSelector(contact: Contact, value: string): boolean {
-  if (contact.id === value) return true;
-  if (contact.name === value) return true;
+/** A selector is matched only against its declared identity field. */
+function contactMatchesSelector(contact: Contact, kind: SelectorKind, value: string): boolean {
+  if (kind === 'contactId') return contact.id === value;
+  if (kind === 'name') return contact.name === value;
   return maskAwarePhoneMatch(value, contact.phone);
 }
 
 /**
  * Resolve the transfer recipient SERVER-SIDE at park time. Accepts ONE OR MORE of
- * `contactId` | `phone` | `name` (a completely absent recipient is `invalid`), loads the caller's
- * contacts ONCE, matches every supplied value against every contact's identity facets (`id`, `name`,
- * mask-aware `phone`), and unions the candidates (deduped by contact id). Never throws.
+ * `contactId` | `phone` | `name` (a completely absent recipient is `invalid`). Every supplied field
+ * must match its own identity facet on the same owned contact. Never throws.
  */
 export async function resolveTransferRecipient(
   userId: string,
@@ -82,15 +78,7 @@ export async function resolveTransferRecipient(
 
   // Owner isolation for free: only the caller's OWN contacts are ever considered.
   const contacts = await listContacts(userId);
-  const matched = new Map<string, Contact>();
-  for (const key of keys) {
-    const value = args[key] as string;
-    for (const contact of contacts) {
-      if (contactMatchesSelector(contact, value)) matched.set(contact.id, contact);
-    }
-  }
-
-  const candidates = [...matched.values()];
+  const candidates = contacts.filter(contact => keys.every(key => contactMatchesSelector(contact, key, args[key] as string)));
   if (candidates.length === 0) return { status: 'not_found', kind, supplied };
   if (candidates.length > 1) {
     return {

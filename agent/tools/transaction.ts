@@ -1,9 +1,8 @@
 /**
  * transaction — `get_transactions`, `detect_anomaly`
  *
- * Transaction reads and anomaly detection. TypeBox param schemas; `execute` calls the Banking SDK
- * and THROWS `AppError` on failure. The `run<X>(userId, args)` runners are the model-free path used
- * by `executeDirect`; they CATCH and return `ToolExecutionResult{ok:false,error}`.
+ * Transaction reads and anomaly detection. Runners return typed SDK results; factories use the
+ * shared result adapter to expose complete public model data and Pi errors.
  *
  * Tier: 🟢 GREEN (read-only).
  * No permission/risk/MFA logic here. `userId` is SERVER-INJECTED; the model never supplies it.
@@ -11,19 +10,20 @@
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
-import type { AnomalyReport, TransactionQuery, TransactionView } from '@/banking-sdk';
+import type { AnomalyReport, TransactionView } from '@/banking-sdk';
 import { formatDateTime } from '@/lib/date';
-import { AppError } from '@/lib/errors';
 import { addMoney, absoluteMinor, centsToMoney, formatCNY, moneyToCents } from '@/lib/money';
 import type { ToolExecutionResult } from './index';
+import { toModelToolResult, toolFailure } from './result';
+import { MAX_DATE_TIMESTAMP, MAX_TRANSACTION_READ_LIMIT, validateTransactionQuery } from '@/banking-sdk/read-query';
 
 /** `get_transactions` params — window/category/limit filter (SDK `TransactionQuery`). */
 export const GetTransactionsParams = Type.Object({
-  from: Type.Optional(Type.Number({ description: '起始时间（epoch ms，含）' })),
-  to: Type.Optional(Type.Number({ description: '结束时间（epoch ms，含）' })),
-  category: Type.Optional(Type.String({ description: '消费分类，如 餐饮/出行/购物/娱乐' })),
-  limit: Type.Optional(Type.Integer({ description: '最多返回条数（最近优先）' })),
-});
+  from: Type.Optional(Type.Integer({ minimum: -MAX_DATE_TIMESTAMP, maximum: MAX_DATE_TIMESTAMP, description: 'Start time in epoch milliseconds, inclusive.' })),
+  to: Type.Optional(Type.Integer({ minimum: -MAX_DATE_TIMESTAMP, maximum: MAX_DATE_TIMESTAMP, description: 'End time in epoch milliseconds, exclusive.' })),
+  category: Type.Optional(Type.String({ minLength: 1, maxLength: 80, description: 'An exact spending category.' })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_TRANSACTION_READ_LIMIT, description: 'Maximum returned rows, newest first. Defaults to 50. Totals describe only these returned rows.' })),
+}, { additionalProperties: false });
 export type GetTransactionsArgs = Static<typeof GetTransactionsParams>;
 
 /** Factory: build the `get_transactions` AgentTool bound to `userId` (🟢 GREEN). */
@@ -31,23 +31,9 @@ export function createGetTransactionsTool(userId: string): AgentTool<typeof GetT
   return {
     name: 'get_transactions',
     label: '查询交易',
-    description: '查询当前用户交易流水，可按时间范围、分类过滤并限制条数。',
+    description: 'Read owned transaction rows in a half-open time range [from, to), newest first. Returns at most 50 rows by default and 200 per call. Any totals cover returned rows only; use analyze_spending for complete monthly totals.',
     parameters: GetTransactionsParams,
-    execute: async (_toolCallId, params) => {
-      const result = await runGetTransactions(userId, {
-        from: params.from,
-        to: params.to,
-        category: params.category,
-        limit: params.limit,
-      });
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'get_transactions failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
-    },
+    execute: async (_toolCallId, params) => toModelToolResult(await runGetTransactions(userId, params)),
   };
 }
 
@@ -57,10 +43,11 @@ export async function runGetTransactions(
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
   try {
-    const rows = await banking.transaction.listTransactions(userId, toTransactionQuery(args));
+    const query = validateTransactionQuery(args);
+    const rows = await banking.transaction.listTransactions(userId, { ...query, limit: query.limit ?? 50 });
     return { ok: true, data: rows, summary: summarizeTransactions(rows) };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
@@ -73,18 +60,9 @@ export function createDetectAnomalyTool(userId: string): AgentTool<typeof Detect
   return {
     name: 'detect_anomaly',
     label: '异常检测',
-    description: '扫描近期交易，识别可疑/异常消费（如大额支出）并给出原因与严重级别。',
+    description: 'Screen owned transactions for deterministic anomaly flags and return reasons, severity, acknowledgement, and owned cards. Flags are screening observations, not proof of fraud. This read does not freeze cards or acknowledge transactions.',
     parameters: DetectAnomalyParams,
-    execute: async () => {
-      const result = await runDetectAnomaly(userId, {});
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'detect_anomaly failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
-    },
+    execute: async () => toModelToolResult(await runDetectAnomaly(userId, {})),
   };
 }
 
@@ -97,39 +75,15 @@ export async function runDetectAnomaly(
     const report = await banking.transaction.detectAnomaly(userId);
     return { ok: true, data: report, summary: summarizeAnomalies(report) };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 
 /* ------------------------------------------------------------------ helpers */
 
-/** Narrows a model-supplied filter value to a finite number (ignores anything else). */
-function pickNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
-}
-
-/** Narrows a model-supplied filter value to a non-empty string (ignores anything else). */
-function pickString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
-}
-
-/** Builds the SDK `TransactionQuery` from the (schema-validated) tool args; `userId` is never read. */
-function toTransactionQuery(args: Record<string, unknown>): TransactionQuery {
-  const query: TransactionQuery = {};
-  const from = pickNumber(args.from);
-  const to = pickNumber(args.to);
-  const category = pickString(args.category);
-  const limit = pickNumber(args.limit);
-  if (from !== undefined) query.from = from;
-  if (to !== undefined) query.to = to;
-  if (category !== undefined) query.category = category;
-  if (limit !== undefined) query.limit = limit;
-  return query;
-}
-
 /** Concise Chinese summary of a transaction list (the text the model narrates). */
 function summarizeTransactions(rows: TransactionView[]): string {
-  if (rows.length === 0) return '未找到符合条件的交易。';
+  if (rows.length === 0) return 'No transactions match the requested filters.';
   const income = rows.filter(row => moneyToCents(row.amount) > 0n)
     .reduce((sum, row) => addMoney(sum, row.amount), '0.00');
   const expense = rows
@@ -137,8 +91,9 @@ function summarizeTransactions(rows: TransactionView[]): string {
     .reduce((sum, row) => addMoney(sum, centsToMoney(absoluteMinor(moneyToCents(row.amount)))), '0.00');
   const latest = rows[0];
   return (
-    `共 ${rows.length} 笔交易：收入 ${formatCNY(income)}、支出 ${formatCNY(expense)}；` +
-    `最近一笔为 ${latest.merchant} ${formatCNY(latest.amount)}（${formatDateTime(latest.occurredAt)}）。`
+    `Returned ${rows.length} newest transactions: income ${formatCNY(income)}, expense ${formatCNY(expense)}. ` +
+    `These totals cover the returned rows only, not the entire requested period. ` +
+    `The latest transaction is ${latest.merchant} ${formatCNY(latest.amount)} (${formatDateTime(latest.occurredAt)}).`
   );
 }
 

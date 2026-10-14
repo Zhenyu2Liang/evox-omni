@@ -36,13 +36,11 @@ export function snapshotRuntimeValue(value: unknown, redactSecrets = true): unkn
         if (converted !== current) return copy(converted);
       }
       const record = current as Record<string, unknown>;
-      const credentialCall = record.type === 'toolCall' && record.name === 'change_password';
-      const credentialDelta = record.type === 'toolcall_delta' && typeof record.partial === 'object' && record.partial !== null &&
-        Array.isArray((record.partial as { content?: unknown }).content) &&
-        ((record.partial as { content: unknown[] }).content).some(block => typeof block === 'object' && block !== null && (block as { name?: unknown }).name === 'change_password');
+      const argumentFragment = record.type === 'toolCall';
+      const argumentDelta = record.type === 'toolcall_delta';
       return Object.fromEntries(Object.entries(current).sort(([left], [right]) => left.localeCompare(right))
         .filter(([, item]) => item !== undefined && typeof item !== 'function')
-        .map(([field, item]) => [field, redactSecrets && ((credentialCall && field === 'partialJson') || (credentialDelta && field === 'delta')) ? '[REDACTED]' : copy(item, field)]));
+        .map(([field, item]) => [field, redactSecrets && ((argumentFragment && field === 'partialJson') || (argumentDelta && field === 'delta')) ? '[REDACTED]' : copy(item, field)]));
     } finally {
       ancestors.delete(current);
     }

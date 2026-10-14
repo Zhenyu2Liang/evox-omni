@@ -1,7 +1,8 @@
 import { beforeEach, afterAll, afterEach, expect, it, vi } from 'vitest';
 import { toJson } from '@/lib/json';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool, confirmAction, verifyAction } from '@/agent';
+import { executeGatedTool, confirmAction, verifyAction } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import { security } from '@/security';
 import { securityGateway as gateway } from '@/security/security-gateway';
@@ -19,7 +20,7 @@ async function post(id:string,action:string,s:string){const res=await taskPost(n
 async function confirm(id:string,s:string,code?:string){const path=code?'verify':'confirm';const res=await (code?verifyPost:confirmPost)(new NextRequest(`http://localhost/api/actions/${id}/${path}`,{method:'POST',headers:{'Content-Type':'application/json',cookie:`banking_session=${s}`},body:JSON.stringify(code?{code}:{})}),{params:Promise.resolve({id})});const body=await res.json();expect(res.status).toBe(200);return body.data;}
 
 it('a plan transfer already ledgered but still confirmed is counted once',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;
+ const s=(await getDemoSession(userId)).sessionId;
  await runSubmitPlan(userId,{goal:'转600',nodes:[node('transfer_money',{name:'张伟',amount:'600'})]},{sessionId:s,runTool:runner(s)});
  const action=(await getTestPrisma().pendingAction.findFirst({where:{sessionId:s}}))!;
  const original=gateway.recordActionResult.bind(gateway);const reached=deferred(),release=deferred();
@@ -32,7 +33,7 @@ it('a plan transfer already ledgered but still confirmed is counted once',async(
 });
 
 it('resuming an investment node during post-effect persistence cannot debit twice',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;
+ const s=(await getDemoSession(userId)).sessionId;
  const result=await runSubmitPlan(userId,{goal:'买理财',nodes:[node('subscribe_investment',{productId:'prod_wenjiana',amount:'1000'})]},{sessionId:s,runTool:runner(s)});
  const plan:any=result.data;const firstAction=(await getTestPrisma().pendingAction.findFirst({where:{sessionId:s}}))!;
  const original=gateway.recordActionResult.bind(gateway);const reached=deferred(),release=deferred();
@@ -47,7 +48,7 @@ it('resuming an investment node during post-effect persistence cannot debit twic
 });
 
 it('a plan cancellation completed before authorization CAS prevents the debit',async()=>{
- const s=(await getOrCreateSession(userId)).sessionId;const p=getTestPrisma();
+ const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const beforeTool=deferred(),allowTool=deferred(),afterTool=deferred(),finishTool=deferred();let actionId='';
  const running=runSubmitPlan(userId,{goal:'转账取消竞争',nodes:[node('transfer_money',{name:'张伟',amount:'200'})]},{sessionId:s,runTool:async(tool,args,ctx)=>{beforeTool.release();await allowTool.promise;const result=await runner(s)(tool,args,ctx);actionId=result.pendingActionId!;afterTool.release();await finishTool.promise;return result;}});
  const afterBulk=deferred(),allowCancel=deferred(),beforeAuthorize=deferred(),allowAuthorize=deferred();

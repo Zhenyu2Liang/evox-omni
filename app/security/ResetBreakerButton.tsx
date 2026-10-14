@@ -1,128 +1,54 @@
 'use client';
 
-/**
- * ResetBreakerButton — clears the current ACCOUNT's circuit-breaker state (GATED unlock).
- *
- * Client Component (the only interactive part of the Security Center): it POSTs a mock 6-digit
- * verification code to `POST /api/security/reset`, which calls the AUDITED
- * `security.circuitBreaker.resetSession(sessionId, { actor, reason, verificationCode })` on the
- * server, then calls `router.refresh()` so the Server Component re-renders with the fresh breaker
- * state (failure count back to 0, unlocked).
- *
- * The breaker is GATED and PER-ACCOUNT: while the account is locked a correct mock code is
- * REQUIRED — the input starts EMPTY and the code is NEVER prefilled or revealed; the user must
- * actively type the 6-digit code. Without a correct code the unlock is REFUSED with HTTP
- * `423 CIRCUIT_OPEN`, and that refusal message is surfaced here verbatim.
- *
- * Label reflects the current state: "解除熔断限制" while locked, "重置熔断计数" otherwise.
- * All errors are surfaced as a SAFE user-facing message — raw internals (stack traces, Prisma
- * errors, the MFA code) must never reach the UI. No Prisma/server imports here: the browser
- * only talks to `/api/*`.
- */
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useDeveloperMode } from '@/lib/developer-mode/DeveloperModeProvider';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+import type { MessageKey, MessageParams } from '@/lib/i18n/shared';
 
-export interface ResetBreakerButtonProps {
-  /** Whether the account breaker is currently tripped (drives the label + colour). */
-  locked?: boolean;
-  className?: string;
-}
+type ResetStatus =
+  | { ok: boolean; key: MessageKey; params?: MessageParams }
+  | { ok: false; message: string };
 
-/** Success payload of `POST /api/security/reset` (mirrors the route's `ResetData`). */
-interface ResetData {
-  sessionId: string;
-  locked: boolean;
-  failures: number;
-  max: number;
-  message: string;
-}
-
-/** The frozen API envelope: `{ ok: true, data }` | `{ ok: false, error: { code, message } }`. */
-type ApiEnvelope<T> =
-  | { ok: true; data: T }
-  | { ok: false; error: { code: string; message: string } };
-
-/** Neutral empty-input hint; the correct mock code is never prefilled or shown. */
-const INPUT_PLACEHOLDER = '请输入 6 位验证码';
-
-export function ResetBreakerButton({ locked = false, className }: ResetBreakerButtonProps) {
+export function ResetBreakerButton({ className }: { className?: string }) {
+  const { enabled } = useDeveloperMode();
+  const { t } = useI18n();
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  const [code, setCode] = useState('');
-  const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const [status, setStatus] = useState<ResetStatus | null>(null);
 
   async function handleClick() {
-    // Strong verification must be an ACTIVE user action — never submit an empty code.
-    if (code.trim() === '') {
-      setStatus({ ok: false, message: '请输入 6 位验证码后再提交。' });
-      return;
-    }
     setBusy(true);
     setStatus(null);
     try {
-      const res = await fetch('/api/security/reset', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ verificationCode: code }),
-      });
-      const body = (await res.json()) as ApiEnvelope<ResetData>;
+      const response = await fetch('/api/developer/security/reset', { method: 'POST' });
+      const body = await response.json() as
+        | { ok: true; data: { failures: number; max: number } }
+        | { ok: false; error: { message: string } };
       if (body.ok) {
-        setStatus({
-          ok: true,
-          message: `已解除，当前失败 ${body.data.failures} / ${body.data.max} 次`,
-        });
+        setStatus({ ok: true, key: 'security.reset.success', params: { count: body.data.failures, max: body.data.max } });
         router.refresh();
       } else {
-        // Includes the `423 CIRCUIT_OPEN` refusal when the mock code is missing/wrong while locked.
-        setStatus({ ok: false, message: body.error.message || '重置失败，请稍后重试。' });
+        setStatus(body.error.message ? { ok: false, message: body.error.message } : { ok: false, key: 'security.reset.failed' });
       }
     } catch {
-      setStatus({ ok: false, message: '重置失败，请检查网络后重试。' });
+      setStatus({ ok: false, key: 'security.reset.networkError' });
     } finally {
       setBusy(false);
     }
   }
 
+  if (!enabled) return null;
   return (
     <div className={['flex flex-col items-start gap-2', className].filter(Boolean).join(' ')}>
-      <div className="flex items-center gap-2">
-        <label className="flex items-center gap-2 text-sm text-banking-navy">
-          <span>验证码</span>
-          <input
-            type="text"
-            inputMode="numeric"
-            autoComplete="one-time-code"
-            maxLength={6}
-            aria-label="6 位验证码"
-            placeholder={INPUT_PLACEHOLDER}
-            value={code}
-            disabled={busy}
-            onChange={(e) => setCode(e.target.value)}
-            className="w-24 rounded-xl border border-banking-navy/20 bg-banking-light px-3 py-2 text-center text-sm tracking-widest text-banking-navy outline-none transition focus:border-banking-accent disabled:opacity-60"
-          />
-        </label>
-        <button
-          type="button"
-          onClick={handleClick}
-          disabled={busy || code.trim() === ''}
-          className={[
-            'rounded-xl px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors',
-            'disabled:cursor-not-allowed disabled:opacity-60',
-            locked ? 'bg-banking-danger hover:bg-banking-danger/90' : 'bg-banking-accent hover:bg-banking-accent/90',
-          ].join(' ')}
-        >
-          {busy ? '处理中…' : locked ? '解除熔断限制' : '重置熔断计数'}
-        </button>
-      </div>
-      {status ? (
-        <p
-          role="status"
-          aria-live="polite"
-          className={`text-sm ${status.ok ? 'text-banking-success' : 'text-banking-danger'}`}
-        >
-          {status.message}
-        </p>
-      ) : null}
+      <p className="text-xs text-banking-navy/70">{t('security.reset.developerOnly')}</p>
+      <button type="button" data-developer-breaker-reset onClick={handleClick} disabled={busy}
+        className="rounded-xl bg-banking-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-banking-accent/90 disabled:cursor-not-allowed disabled:opacity-60">
+        {t(busy ? 'security.reset.busy' : 'security.reset.reset')}
+      </button>
+      {status ? <p role="status" aria-live="polite" className={`text-sm ${status.ok ? 'text-banking-success' : 'text-banking-danger'}`}>
+        {'key' in status ? t(status.key, status.params) : status.message}
+      </p> : null}
     </div>
   );
 }

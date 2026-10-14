@@ -1,18 +1,19 @@
 /**
  * tests/helpers/faux-agent.ts — build a REAL Pi Agent driven by a SCRIPTED model.
  *
- * Scenario tests exercise the full pipeline (Agent runtime → registered banking tools →
+ * Scenario tests exercise the lower-level pipeline (Pi loop → registered banking tools →
  * Security Gateway `beforeToolCall` → Banking SDK → audit) while keeping the MODEL
  * deterministic and offline, via `fauxProvider()` (from `@earendil-works/pi-ai`) and
  * `LLM_MODE=mock`. Only the model is scripted — the tools, the security chokepoint and the
- * DB are the production ones. This is what makes the 12 demo scenarios provable without a
- * network or an API key.
+ * DB are real. These scenarios verify tool registration, gateway decisions and SDK/audit effects
+ * without a network or an API key.
  *
- * The agent is built with the SAME wiring as `@/agent/banking-agent.ts` (constructor path:
- * `new Agent({ initialState, streamFn, beforeToolCall, afterToolCall, sessionId })`), differing ONLY in the
- * model (a scripted faux provider instead of the live/mock provider resolved from config).
+ * This helper constructs a raw Pi Agent with a direct gateway hook. It does not install the
+ * production banking-agent intent declaration guard, durable journal, context compaction or
+ * presentation adapter. Use scripted-provider.ts with production runTurn/createBankingAgent for
+ * acceptance of those runtime contracts.
  *
- * Key SDK facts this helper relies on (pi-agent-core 1.1.0):
+ * Key SDK facts this helper relies on (pi-agent-core 1.2.0):
  *   - `new Agent({ initialState, streamFn, beforeToolCall, afterToolCall, sessionId, ... })`.
  *   - `agent.prompt(input)` / `agent.continue()` settle when the turn ends.
  *   - `agent.subscribe(listener)` streams `AgentEvent`s.
@@ -53,7 +54,7 @@ export type FauxStep =
 export interface FauxAgentOptions {
   /** Ordered script replayed one step per model turn. */
   script: FauxStep[];
-  /** Registered banking tools; defaults to the `./agent` tool registry (all 26 tools incl. submit_plan). */
+  /** Registered banking tools; defaults to the current agent tool registry, including submit_plan. */
   tools?: AgentTool<any>[];
   /** System prompt; defaults to the `./agent` banking system prompt. */
   systemPrompt?: string;
@@ -78,8 +79,8 @@ function stepToFaux(step: FauxStep): FauxResponseStep {
 }
 
 /**
- * Construct a Pi `Agent` wired with the scripted model, the banking tools and the production
- * security `beforeToolCall`. Returns a ready-to-`prompt()` agent.
+ * Construct a raw Pi Agent with scripted responses, registered tools and a direct gateway hook.
+ * Returns a ready-to-prompt agent for lower-level gateway/SDK scenarios.
  */
 export function buildFauxAgent(options: FauxAgentOptions): Agent {
   const sessionId = options.sessionId ?? newId('sess');
@@ -115,7 +116,7 @@ export function buildFauxAgent(options: FauxAgentOptions): Agent {
 
   const gateway = security.gateway.securityGateway;
 
-  /** THE security chokepoint — identical to the production `beforeToolCall`. */
+  /** Direct gateway exercise; production runtime also checks the current structured declaration. */
   const beforeToolCall = async (
     context: BeforeToolCallContext,
   ): Promise<BeforeToolCallResult | undefined> => {

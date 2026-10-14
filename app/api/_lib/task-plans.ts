@@ -18,7 +18,7 @@
  *
  * `_lib` is a Next.js private folder (leading underscore) — it never becomes a route.
  */
-import type { AgentTask, AgentTaskNode } from '@prisma/client';
+import type { AgentTask, AgentTaskNode } from '@/lib/db/prisma';
 import { readPendingActionId } from '@/agent';
 import { safeParse } from '@/lib/json';
 import type {

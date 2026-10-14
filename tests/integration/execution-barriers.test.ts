@@ -18,7 +18,7 @@
  */
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { getDemoSession, executeGatedTool } from '@/agent';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
@@ -64,11 +64,11 @@ const runner =
     });
 
 /** Drive a real control action through the real route handler. */
-async function task(id: string, action: string, s: string) {
+async function task(id: string, action: string, _sessionId: string) {
   const res = await taskPost(
     new NextRequest(`http://localhost/api/tasks/${id}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', cookie: `banking_session=${s}` },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action }),
     }),
     { params: Promise.resolve({ id }) },
@@ -79,11 +79,11 @@ async function task(id: string, action: string, s: string) {
 }
 
 /** Confirm a pending action through the real route handler. */
-async function confirmRaw(id: string, s: string) {
+async function confirmRaw(id: string, _sessionId: string) {
   const res = await confirmPost(
     new NextRequest(`http://localhost/api/actions/${id}/confirm`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', cookie: `banking_session=${s}` },
+      headers: { 'Content-Type': 'application/json' },
       body: '{}',
     }),
     { params: Promise.resolve({ id }) },
@@ -103,7 +103,7 @@ async function forceStale(planId: string) {
 // BARRIER 1 — after the node CLAIM, BEFORE the tool starts (barrier in the `running` notification).
 // ---------------------------------------------------------------------------------------------
 it('a takeover at the pre-tool barrier stops the zombie before its successor tool and publishes no stale progress', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const reached = deferred();
   const release = deferred();
@@ -215,7 +215,7 @@ it('a takeover at the pre-tool barrier stops the zombie before its successor too
 // BARRIER 2 — during an async NOTIFICATION wait.
 // ---------------------------------------------------------------------------------------------
 it('a takeover during a blocked async notification leaves the zombie with ZERO tool calls and zero stale progress', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const reached = deferred();
   const release = deferred();
@@ -304,7 +304,7 @@ it('a takeover during a blocked async notification leaves the zombie with ZERO t
 // BARRIER 3 — immediately BEFORE the tool WRITE (the zombie is past its claim, inside `runTool`).
 // ---------------------------------------------------------------------------------------------
 it('a takeover between the node claim and the tool write fences the zombie write and keeps exactly one side effect', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const reached = deferred();
   const release = deferred();
@@ -424,7 +424,7 @@ it('a takeover between the node claim and the tool write fences the zombie write
 // BARRIER 4 — takeover ATTEMPT after a committed gated side effect (success + audit must survive).
 // ---------------------------------------------------------------------------------------------
 it('a takeover after a committed gated side effect preserves the success fact and never duplicates the side effect or its audit', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const card = await p.card.findFirstOrThrow({ where: { userId, type: 'CREDIT' } });
 

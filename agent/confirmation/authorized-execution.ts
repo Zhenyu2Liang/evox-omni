@@ -10,7 +10,7 @@ import { createToolRegistry, type ToolExecutionResult } from '../tools';
 import { buildConfirmFence, guardExecutionFence } from '../execution-fence';
 import { settlePendingAction } from '../confirmation-recovery';
 import { convergenceAuditKey, decideConvergence } from '../execution-convergence';
-import { transferExecutionAudit } from '../execution-audit';
+import { commandExecutionAudit } from '../execution-audit';
 import { resumeTurn } from '../run-turn';
 import type { ConfirmOptions, ConfirmationOutcome, TrustedIdentity } from './contracts';
 import { effectiveTier, emitAll } from './outcomes';
@@ -36,11 +36,14 @@ export async function executeAuthorizedAction(
   const idempotencyKey = ledgerKeyForAction({ id: actionId, taskId: link?.taskId, nodeId: link?.nodeId });
   let result: ToolExecutionResult;
   let sideEffectCommitted = false;
-  const guarded = guardExecutionFence(await buildConfirmFence(link?.taskId, link?.nodeId, actionId));
-  const executionAudit = transferExecutionAudit(actionId, {
-    sessionId: action.sessionId, userRequest: action.userRequest ?? '', intent: action.intent,
+  const guarded = guardExecutionFence(await buildConfirmFence(link?.taskId, link?.nodeId, actionId, {
+    userId: identity.userId, sessionId: identity.sessionId, toolName: action.toolName, args: action.args, requiresMfa,
+  }));
+  const executionAudit = commandExecutionAudit(actionId, {
+    sessionId: action.sessionId, userId: identity.userId, userRequest: action.userRequest ?? '', intent: action.intent,
     toolName: action.toolName, riskLevel: tier, confirmationRequired: true, confirmed: true,
     mfaRequired: requiresMfa, mfaResult: view.mfaResult,
+    toolArgs: action.args, taskId: link?.taskId ?? undefined, nodeId: link?.nodeId ?? undefined,
   });
   try {
     result = await registry.executeDirect(action.toolName, action.args, {
@@ -58,10 +61,11 @@ export async function executeAuthorizedAction(
   await settlePendingAction({
     actionId, status: decision.status, result,
     audit: {
-      timestamp: demoNow(), sessionId: action.sessionId, userRequest: action.userRequest ?? '',
+      timestamp: demoNow(), sessionId: action.sessionId, userId: identity.userId, userRequest: action.userRequest ?? '',
       intent: action.intent, toolName: action.toolName, riskLevel: tier,
       confirmationRequired: true, confirmed: true, mfaRequired: requiresMfa,
       mfaResult: view.mfaResult, toolResult: result,
+      toolArgs: action.args, taskId: link?.taskId ?? undefined, nodeId: link?.nodeId ?? undefined,
       status: decision.status === 'needs_reconciliation' ? 'blocked' : result.ok ? 'success' : 'failed',
     },
     dedupeKey: convergenceAuditKey(actionId, decision.status),

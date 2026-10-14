@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import type { TransferResult } from '@/banking-sdk';
 import { Badge, Card, Money } from '../../ui';
 import { maskPhone } from './maskPhone';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
 
 export interface TransferCardProps {
   data: TransferResult;
@@ -11,6 +12,7 @@ export interface TransferCardProps {
 }
 
 export function TransferCard({ data, className }: TransferCardProps) {
+  const { t } = useI18n();
   const { success, recipient, amount, newBalance, remark } = data;
 
   return (
@@ -18,20 +20,20 @@ export function TransferCard({ data, className }: TransferCardProps) {
       className={className}
       title={
         <span className="flex items-center gap-2">
-          {success ? '转账成功' : '转账失败'}
-          <Badge tone={success ? 'success' : 'danger'}>{success ? '成功' : '失败'}</Badge>
+          {t(success ? 'cards.transfer.success' : 'cards.transfer.failed')}
+          <Badge tone={success ? 'success' : 'danger'}>{t(success ? 'cards.success' : 'cards.failed')}</Badge>
         </span>
       }
     >
       <dl className="flex flex-col gap-2">
-        <Field label="收款人" value={recipient.name} />
-        <Field label="手机号" value={maskPhone(recipient.phone)} />
-        {recipient.bank ? <Field label="银行" value={recipient.bank} /> : null}
-        <Field label="金额" value={<Money amount={amount} />} />
+        <Field label={t('cards.recipient')} value={recipient.name} />
+        <Field label={t('cards.phone')} value={maskPhone(recipient.phone)} />
+        {recipient.bank ? <Field label={t('cards.bank')} value={recipient.bank} /> : null}
+        <Field label={t('cards.amount')} value={<Money amount={amount} />} />
         {newBalance !== undefined ? (
-          <Field label="转后余额" value={<Money amount={newBalance} />} />
+          <Field label={t('cards.balanceAfter')} value={<Money amount={newBalance} />} />
         ) : null}
-        {remark ? <Field label="备注" value={remark} /> : null}
+        {remark ? <Field label={t('cards.remark')} value={remark} /> : null}
       </dl>
     </Card>
   );

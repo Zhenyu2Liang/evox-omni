@@ -1,7 +1,9 @@
+'use client';
+
 /**
  * AnomalyBanner — read-model banner: suspicious-spend banner; optional action callbacks.
  *
- * Server-safe (no `'use client'`, no hooks): the action callbacks are supplied by an ancestor
+ * Localized presentational component: the action callbacks are supplied by an ancestor
  * Client Component and simply invoked here; a button is only rendered when its callback is given.
  */
 import type { AnomalyItem, AnomalySeverity } from '@/banking-sdk';
@@ -11,6 +13,8 @@ import type { BadgeProps } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { Money } from '../ui/Money';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+import type { MessageKey } from '@/lib/i18n/shared';
 
 export interface AnomalyBannerProps {
   anomaly: AnomalyItem;
@@ -21,10 +25,10 @@ export interface AnomalyBannerProps {
 }
 
 /** Severity → badge tone + human label (never a permission tier; that is `ui/StatusBadge`). */
-const SEVERITY_META: Record<AnomalySeverity, { tone: BadgeProps['tone']; label: string }> = {
-  low: { tone: 'warn', label: '低风险' },
-  medium: { tone: 'warn', label: '中风险' },
-  high: { tone: 'danger', label: '高风险' },
+const SEVERITY_META: Record<AnomalySeverity, { tone: BadgeProps['tone']; label: MessageKey }> = {
+  low: { tone: 'warn', label: 'business.anomalies.low' },
+  medium: { tone: 'warn', label: 'business.anomalies.medium' },
+  high: { tone: 'danger', label: 'business.anomalies.high' },
 };
 
 /** Left accent colour reflecting how severe the flagged spend is. */
@@ -35,18 +39,19 @@ const SEVERITY_ACCENT: Record<AnomalySeverity, string> = {
 };
 
 export function AnomalyBanner(props: AnomalyBannerProps) {
+  const { t } = useI18n();
   const { anomaly, onAcknowledge, onViewDetail, onFreeze, className } = props;
   const { transaction, reason, severity } = anomaly;
   const meta = SEVERITY_META[severity];
 
-  const rootCls = ['shadow-sm', SEVERITY_ACCENT[severity], className]
+  const rootCls = ['shadow-xs', SEVERITY_ACCENT[severity], className]
     .filter(Boolean)
     .join(' ');
 
   const title = (
     <span className="flex items-center gap-2">
-      <span>可疑消费提醒</span>
-      <Badge tone={meta.tone}>{meta.label}</Badge>
+      <span>{t('business.anomalies.title')}</span>
+      <Badge tone={meta.tone}>{t(meta.label)}</Badge>
     </span>
   );
 
@@ -62,17 +67,17 @@ export function AnomalyBanner(props: AnomalyBannerProps) {
         <div className="mt-4 flex flex-wrap gap-2">
           {onAcknowledge && (
             <Button variant="secondary" size="sm" onClick={onAcknowledge}>
-              我知道了
+              {t('business.anomalies.acknowledge')}
             </Button>
           )}
           {onViewDetail && (
             <Button variant="ghost" size="sm" onClick={onViewDetail}>
-              查看详情
+              {t('business.anomalies.details')}
             </Button>
           )}
           {onFreeze && (
             <Button variant="danger" size="sm" onClick={onFreeze}>
-              立即冻结卡片
+              {t('business.anomalies.freeze')}
             </Button>
           )}
         </div>

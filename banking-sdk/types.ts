@@ -63,10 +63,10 @@ export interface TransactionView {
 export interface TransactionQuery {
   /** Inclusive lower bound (epoch ms). */
   from?: number;
-  /** Inclusive upper bound (epoch ms). */
+  /** Exclusive upper bound (epoch ms); the range is [from, to). */
   to?: number;
   category?: string;
-  /** Max rows returned, most recent first. */
+  /** Max rows returned, most recent first; when provided, must be 1–200. */
   limit?: number;
 }
 
@@ -406,8 +406,6 @@ export interface CreateScheduledTaskInput {
   payload?: Record<string, unknown>;
   /** Epoch ms. */
   runAt: number;
-  /** Defaults to `true`. */
-  requiresConfirmation?: boolean;
   /**
    * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT create a
    * second scheduled task: the already-persisted task is replayed (same `id`) instead. The planner

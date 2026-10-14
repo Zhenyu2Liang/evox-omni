@@ -1,7 +1,9 @@
+'use client';
+
 /**
- * AssetSummaryCard — read-model tile: total assets / 活期余额 / 信用卡额度 / 本月消费.
+ * AssetSummaryCard — total assets, checking balance, available credit and monthly spending.
  *
- * Server-safe presentational component: no `'use client'`, no hooks, no fetching, no DB.
+ * Localized presentational component with no fetching or database access.
  * Renders booked amounts through Money and unrounded total assets through DecimalMoney.
  */
 import { Card } from '../ui/Card';
@@ -9,6 +11,7 @@ import { Money } from '../ui/Money';
 import { DecimalMoney } from '../ui/DecimalMoney';
 import type { DashboardSummary } from '@/banking-sdk';
 import type { MoneyAmount } from '@/lib/money';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
 
 export interface AssetSummaryCardProps {
   summary: DashboardSummary;
@@ -25,7 +28,7 @@ interface AssetStatProps {
 /** One labelled money stat (local, non-exported). */
 function AssetStat({ label, amount, className, estimated }: AssetStatProps) {
   const cls = [
-    'flex flex-col gap-1 rounded-xl bg-banking-light p-4 shadow-sm',
+    'flex flex-col gap-1 rounded-xl bg-banking-light p-4 shadow-xs',
     className,
   ]
     .filter(Boolean)
@@ -42,13 +45,14 @@ function AssetStat({ label, amount, className, estimated }: AssetStatProps) {
 }
 
 export function AssetSummaryCard({ summary, className }: AssetSummaryCardProps) {
+  const { t } = useI18n();
   return (
-    <Card title="资产概览" className={className}>
+    <Card title={t('business.assets.title')} className={className}>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <AssetStat label="Estimated total assets" amount={summary.totalAssets} estimated />
-        <AssetStat label="活期余额" amount={summary.checkingBalance} />
-        <AssetStat label="信用卡额度" amount={summary.creditAvailable} />
-        <AssetStat label={`\u5df2\u5165\u8d26\u6d88\u8d39\u00b7 ${summary.month}`} amount={summary.monthSpend} />
+        <AssetStat label={t('business.assets.total')} amount={summary.totalAssets} estimated />
+        <AssetStat label={t('business.assets.checking')} amount={summary.checkingBalance} />
+        <AssetStat label={t('business.assets.credit')} amount={summary.creditAvailable} />
+        <AssetStat label={t('business.assets.spend', { month: summary.month })} amount={summary.monthSpend} />
       </div>
     </Card>
   );

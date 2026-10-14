@@ -1,7 +1,7 @@
 /**
  * card-emitter.ts — the CONTRACT mapping a tool's raw result → `ChatCard`(s).
  * `toCards` is PURE and TOTAL: one case per banking tool family, mapping `ToolExecutionResult` to the
- * `ChatCard` union (balance/transfer/spending/cards/investments/subscriptions/anomaly/plan/error).
+ * `ChatCard` union, including public query results and validated business receipts.
  * Unrecognised tool or malformed result ⇒ a single `error` card. Cards are the ONLY way tool data
  * reaches the UI — model prose is never turned into a card.
  *
@@ -10,15 +10,18 @@
  *   balance → `BalanceView` · transfer → `TransferResult` · spending → `SpendingAnalysis`
  *   cards → `CardView[]` · investments → `{ products?; holdings?; comparison? }`
  *   subscriptions → `SubscriptionView[]` · anomaly → `AnomalyReport` · plan → `TaskPlan`
- * All DTOs come from `@/banking-sdk` (`banking-sdk/types.ts`).
+ * Dedicated business-result payloads are validated and projected by `business-card-payloads.ts`.
+ * No model prose or tool arguments are treated as financial result evidence.
  */
 import type { ChatCard } from '@/lib/contracts/agent';
 import type { ToolName } from '@/lib/contracts/tools';
 import type { PendingActionSummary } from '@/lib/contracts/security';
 import type { TaskPlan } from '@/lib/contracts/task';
 import type { ToolExecutionResult } from './tools';
+import { budgetPayload, contactPayload, dashboardPayload, investmentPayload, scheduledPayload } from './business-card-payloads';
 
-const DEFAULT_FAILURE_MESSAGE = '工具执行失败';
+const DEFAULT_FAILURE_MESSAGE = 'The banking operation failed.';
+const INVALID_RESULT_MESSAGE = 'The banking result could not be displayed. Refresh the saved records to check the outcome.';
 
 /** A non-null, non-array object. */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -39,9 +42,9 @@ function isEveryRecord(list: readonly unknown[]): boolean {
   return list.every(isRecord);
 }
 
-/** A single `error` card naming the tool whose payload could not be recognised. */
-function malformed(toolName: ToolName): ChatCard {
-  return errorCard(`工具 ${toolName} 返回了无法识别的数据`);
+/** Keep raw diagnostic names out of ordinary business result cards. */
+function malformed(_toolName: ToolName): ChatCard {
+  return errorCard(INVALID_RESULT_MESSAGE);
 }
 
 /* ------------------------------------------------------------------ shape guards */
@@ -71,11 +74,13 @@ function isTaskPlan(value: unknown): value is TaskPlan {
 
 /** Map a tool result to zero or more chat cards. PURE + total (unknown ⇒ [{type:'error'}]). */
 export function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCard[] {
+  // Historical quotations support prose and are never banking result cards.
+  if (toolName === 'search_conversation_history') return [];
   // A failed tool never yields a data card — its failure is surfaced as an error card.
   if (result.ok !== true) {
     const message =
       result.error !== undefined && result.error !== '' ? result.error : DEFAULT_FAILURE_MESSAGE;
-    return [errorCard(message)];
+    return [errorCard(message, result.errorCode)];
   }
 
   const data = result.data;
@@ -139,29 +144,39 @@ export function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCa
     case 'submit_plan':
       return isTaskPlan(data) ? [{ type: 'plan', plan: data }] : [malformed(toolName)];
 
-    // Known tools with NO dedicated variant in the frozen `ChatCard` union: emit no card. Their
-    // outcome is still conveyed by the assistant message + the `ToolEventView` timeline entry.
     case 'get_transactions':
       return Array.isArray(data) ? [{ type: 'transactions', data }] : [malformed(toolName)];
-    case 'search_contact':
-    case 'get_dashboard_summary':
+    case 'search_contact': {
+      const contacts = contactPayload(data);
+      return contacts === null ? [malformed(toolName)] : [{ type: 'contacts', data: contacts }];
+    }
+    case 'get_dashboard_summary': {
+      const dashboard = dashboardPayload(data);
+      return dashboard === null ? [malformed(toolName)] : [{ type: 'dashboard', data: dashboard }];
+    }
     case 'list_scheduled_tasks':
-    case 'create_scheduled_task':
-    case 'reserve_budget':
+    case 'create_scheduled_task': {
+      const tasks = scheduledPayload(data);
+      return tasks === null ? [malformed(toolName)] : [{ type: 'scheduled', data: tasks, created: toolName === 'create_scheduled_task' }];
+    }
+    case 'reserve_budget': {
+      const receipt = budgetPayload(data);
+      return receipt === null ? [malformed(toolName)] : [{ type: 'receipt', data: receipt }];
+    }
     case 'subscribe_investment':
-    case 'redeem_investment':
-    case 'change_password':
-      return [];
-
+    case 'redeem_investment': {
+      const receipt = investmentPayload(data, toolName === 'subscribe_investment' ? 'investmentPurchase' : 'investmentRedemption');
+      return receipt === null ? [malformed(toolName)] : [{ type: 'receipt', data: receipt }];
+    }
     // Runtime-unknown tool name (the `ToolName` union cannot reach here) — fail safe, never throw.
     default:
-      return [errorCard(`未知工具：${String(toolName)}`)];
+      return [errorCard(INVALID_RESULT_MESSAGE)];
   }
 }
 
 /** A standalone error card. PURE. */
-export function errorCard(message: string): ChatCard {
-  return { type: 'error', message };
+export function errorCard(message: string, code?: import('@/lib/errors').ErrorCode): ChatCard {
+  return { type: 'error', message, ...(code ? { code } : {}) };
 }
 
 /** A confirmation card from a pending-action summary. PURE. */

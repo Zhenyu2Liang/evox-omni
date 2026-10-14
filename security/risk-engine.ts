@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/db/prisma';
 import type { RiskLevel } from '../lib/contracts/risk';
 import { DAILY_TRANSFER_LIMIT } from '../lib/constants';
 import { demoNow } from '../lib/clock';

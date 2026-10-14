@@ -21,7 +21,8 @@
  */
 import { beforeEach, afterEach, afterAll, describe, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
 import { securityGateway } from '@/security/security-gateway';
@@ -108,7 +109,7 @@ const balance = async () => centsToMoney((await getTestPrisma().account.findFirs
 
 describe('[integration] live-confirmation REFERENCE-COUNT marker lifecycle', () => {
   it('(a) a rejected duplicate verify must not clear the first still-live continuation marker', async () => {
-    const s = (await getOrCreateSession(userId)).sessionId;
+    const s = (await getDemoSession(userId)).sessionId;
     const p = getTestPrisma();
     const { plan, action } = await seedRedTransferPlan(s);
     expect(action.status).toBe('awaiting_mfa');
@@ -186,7 +187,7 @@ describe('[integration] live-confirmation REFERENCE-COUNT marker lifecycle', () 
   });
 
   it('(b) an abnormal exit must release the liveness bookkeeping so a later recovery progresses', async () => {
-    const s = (await getOrCreateSession(userId)).sessionId;
+    const s = (await getDemoSession(userId)).sessionId;
     const p = getTestPrisma();
     const { plan, action } = await seedRedTransferPlan(s);
     expect(action.status).toBe('awaiting_mfa');
@@ -247,7 +248,7 @@ describe('[integration] live-confirmation REFERENCE-COUNT marker lifecycle', () 
   });
 
   it('(c) final PendingAction / node / plan / API-response states are all consistent', async () => {
-    const s = (await getOrCreateSession(userId)).sessionId;
+    const s = (await getDemoSession(userId)).sessionId;
     const p = getTestPrisma();
     const { plan, action } = await seedRedTransferPlan(s);
     const before = await debitCount();

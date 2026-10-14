@@ -1,5 +1,4 @@
-import type { ExecutionReceipt } from '@prisma/client';
-import { type Prisma } from '@prisma/client';
+import type { ExecutionReceipt, Prisma } from '@/lib/db/prisma';
 import { dbClient } from '../client';
 
 /**

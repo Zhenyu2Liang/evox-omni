@@ -5,20 +5,18 @@ import { resolveBreakerOwner } from './circuit-breaker';
 import type { SecurityEventKind } from '@/lib/contracts/audit';
 
 export type RiskSignalKind = 'suspicious_instruction' | 'unauthorized_resource_access' | 'repeated_business_failure';
-const SIGNAL_POLICY: Record<RiskSignalKind, { threshold: number; windowMs: number }> = {
-  suspicious_instruction: { threshold: 3, windowMs: 10 * 60_000 },
+const SIGNAL_POLICY: Record<Exclude<RiskSignalKind, 'suspicious_instruction'>, { threshold: number; windowMs: number }> = {
   unauthorized_resource_access: { threshold: 3, windowMs: 10 * 60_000 },
   repeated_business_failure: { threshold: 5, windowMs: 5 * 60_000 },
 };
 
-/** Signal, incident event, and a resulting lock commit together. */
+/** Heuristic observations are audit-only; actual resource and business failures can lock. */
 export async function recordRiskSignal(input: {
   sessionId: string; kind: RiskSignalKind; eventKind?: SecurityEventKind;
   message: string; detail?: unknown; dedupeKey?: string;
 }): Promise<void> {
   const owner = await resolveBreakerOwner(input.sessionId);
   const now = new Date(realNow());
-  const policy = SIGNAL_POLICY[input.kind];
   await prisma.$transaction(async client => {
     if (input.dedupeKey && await client.riskSignal.findUnique({ where: { dedupeKey: input.dedupeKey } })) return;
     await client.riskSignal.create({ data: { ownerKey: owner.key, sessionId: input.sessionId,
@@ -26,6 +24,9 @@ export async function recordRiskSignal(input: {
     await recordSecurityEvent({ sessionId: input.sessionId, userId: owner.userId,
       kind: input.eventKind ?? 'HIGH_RISK_BLOCKED', severity: 'medium', message: input.message,
       detail: { signal: input.kind, context: input.detail }, timestamp: now.getTime() }, { client, strict: true });
+    // A phrase or quoted attack example is not evidence of a failed authorization.
+    if (input.kind === 'suspicious_instruction') return;
+    const policy = SIGNAL_POLICY[input.kind];
     const count = await client.riskSignal.count({ where: { ownerKey: owner.key, kind: input.kind,
       createdAt: { gte: new Date(now.getTime() - policy.windowMs) } } });
     const prior = await client.circuitBreakerState.findUnique({ where: { key: owner.key } });

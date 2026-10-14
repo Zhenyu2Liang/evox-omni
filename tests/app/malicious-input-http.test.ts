@@ -325,41 +325,38 @@ describe('[integration] POST /api/actions/[id]/confirm — the executed args are
   });
 });
 
-describe('[integration] POST /api/actions/[id]/confirm — forged identity query params are rejected (identity is cookie-only)', () => {
-  it('(c) no cookie + ?sessionId=<valid>&userId=<demo> → 403; a FOREIGN valid cookie + ?sessionId=<owner> → 403; the true owner can still confirm', async () => {
+describe('[integration] POST /api/actions/[id]/confirm — browser identity hints are ignored', () => {
+  it('(c) changing query identity or cookie cannot change the demo owner or repeat a confirmed transfer', async () => {
     const turn = await chatTurn('给张伟转200元');
     const row = await parked(turn.sessionId);
     expect(row.status).toBe('pending');
 
-    // (1) NO cookie at all, but the query string carries the CORRECT owning session id + a user id.
-    // Identity is cookie-only, so `requireIdentity` fails closed — the action is never settled.
+    // The server uses its fixed demo identity regardless of query values.
     const forgedQuery = await confirmAction(row.id, undefined, {
       query: `?sessionId=${encodeURIComponent(turn.sessionId)}&userId=${encodeURIComponent(DEMO_USER_ID)}`,
     });
-    expect(forgedQuery.status).toBe(403);
-    expect(failure(forgedQuery).code).toBe('SECURITY_DENIED');
+    expect(forgedQuery.status).toBe(200);
+    expect(payload(forgedQuery).ok).toBe(true);
+    expect(payload(forgedQuery).status).toBe('executed');
 
-    // (2) A FOREIGN but VALID cookie (a real persisted session, same user) that tries to claim the
-    // action via `?sessionId=<owner>`: the query param is ignored and the OWNERSHIP guard rejects it.
+    // A different browser cookie still resolves the shared conversation and stored receipt.
     const foreignSessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
     expect(foreignSessionId).not.toBe(turn.sessionId);
     const foreignCookie = await confirmAction(row.id, foreignSessionId, {
       query: `?sessionId=${encodeURIComponent(turn.sessionId)}`,
     });
-    expect(foreignCookie.status).toBe(403);
-    expect(failure(foreignCookie).code).toBe('SECURITY_DENIED');
+    expect(foreignCookie.status).toBe(200);
 
-    // Neither forgery settled the action nor moved any money.
+    // Repeated confirmation applies the original transfer once.
     const untouched = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: row.id } });
-    expect(untouched.status).toBe('pending');
-    expect(await checkingBalance()).toBe(SEEDED_BALANCE);
-    expect(await transfersTo(ZHANGWEI.id)).toHaveLength(0);
-    expect(await getTestPrisma().auditLog.count({ where: { sessionId: turn.sessionId } })).toBe(0);
+    expect(untouched.status).toBe('executed');
+    expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, YELLOW_AMOUNT));
+    expect(await transfersTo(ZHANGWEI.id)).toHaveLength(1);
 
-    // POSITIVE CONTROL: the TRUE owner (its own cookie) can still confirm — exactly ¥200 → 张伟.
+    // A terminal confirmation reports its existing status without granting another execution.
     const legitimate = await confirmAction(row.id, turn.sessionId);
     expect(legitimate.status).toBe(200);
-    expect(payload(legitimate).ok).toBe(true);
+    expect(payload(legitimate).ok).toBe(false);
     expect(payload(legitimate).status).toBe('executed');
     expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, YELLOW_AMOUNT));
     expect(await transfersTo(ZHANGWEI.id)).toHaveLength(1);

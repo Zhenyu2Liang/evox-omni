@@ -1,4 +1,7 @@
+'use client';
+
 import { MFA_MAX_ATTEMPTS } from '@/lib/constants';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
 
 export interface CircuitBreakerStatusProps {
   tripped: boolean;
@@ -20,6 +23,7 @@ export function CircuitBreakerStatus({
   maxAttempts = MFA_MAX_ATTEMPTS,
   className,
 }: CircuitBreakerStatusProps) {
+  const { t } = useI18n();
   const safeMaxAttempts = maxAttempts > 0 ? maxAttempts : 0;
   const ratio = safeMaxAttempts > 0 ? clampRatio(failureCount / safeMaxAttempts) : 0;
 
@@ -34,7 +38,7 @@ export function CircuitBreakerStatus({
   return (
     <div
       className={[
-        'rounded-2xl border bg-white p-5 shadow-sm',
+        'rounded-2xl border bg-white p-5 shadow-xs',
         tripped ? 'border-banking-danger/40' : 'border-slate-200',
         className,
       ]
@@ -45,23 +49,21 @@ export function CircuitBreakerStatus({
         <div className="flex items-center gap-2">
           <span className={`inline-block h-2.5 w-2.5 rounded-full ${dotClass}`} aria-hidden />
           <span className={`text-sm font-semibold ${labelClass}`}>
-            {tripped ? '已熔断' : '正常'}
+            {t(tripped ? 'security.breaker.locked' : 'security.breaker.normal')}
           </span>
         </div>
-        <span className="text-xs text-slate-500">高风险操作熔断状态</span>
+        <span className="text-xs text-slate-500">{t('security.breaker.title')}</span>
       </div>
 
       <p className="mt-2 text-sm leading-5 text-slate-600">
-        {tripped
-          ? '连续验证失败次数已达上限，本会话内的高风险操作已被锁定。'
-          : '高风险操作保护已启用，连续验证失败达到上限后会自动熔断。'}
+        {t(tripped ? 'security.breaker.lockedDescription' : 'security.breaker.normalDescription')}
       </p>
 
       <div className="mt-4">
         <div className="flex items-center justify-between text-xs text-slate-500">
-          <span>连续失败次数</span>
+          <span>{t('security.breaker.failures')}</span>
           <span>
-            失败 {failureCount} / {safeMaxAttempts} 次
+            {t('security.breaker.failureCount', { count: failureCount, max: safeMaxAttempts })}
           </span>
         </div>
         <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-banking-light">

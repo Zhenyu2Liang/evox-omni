@@ -2,7 +2,7 @@
  * agent/tools — per-user registry of registered banking tools (node facade).
  *
  * `createToolRegistry(userId)` builds the COMPLETE capability set the model may call: exactly the
- * 26 names of the frozen `ToolName` union (`@/lib/contracts/tools`), each backed by a family module.
+ * enabled names from the `ToolName` catalog (`@/lib/contracts/tools`), each backed by a family module.
  * Tools are bound to `userId` by closure — `userId` is SERVER-INJECTED and the model NEVER supplies
  * it. There is deliberately NO bash/shell/write/edit/file/SQL/system/http tool: an injection asking
  * for one has no tool to call.
@@ -12,6 +12,7 @@
  * args persisted as a `PendingAction` until a human confirms (see parent `../CONTEXT.md`).
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
+import { Type } from '@earendil-works/pi-ai';
 import { AppError } from '@/lib/errors';
 import { resolveBankingArgs } from '@/lib/banking-selectors';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
@@ -22,8 +23,8 @@ import { prepareBankingCommand } from '@/lib/contracts/command';
 import { newId } from '@/lib/ids';
 import { isWriteTool } from '@/security/permission-engine';
 import type { ToolName } from '@/lib/contracts/tools';
-import { TOOL_NAMES } from '@/lib/contracts/tool-catalog';
-export { TOOL_NAMES } from '@/lib/contracts/tool-catalog';
+import { AGENT_TOOL_NAMES as TOOL_NAMES, catalogEntry } from '@/lib/contracts/tool-catalog';
+export { AGENT_TOOL_NAMES as TOOL_NAMES } from '@/lib/contracts/tool-catalog';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import { createGetBalanceTool, runGetBalance } from './account';
 import {
@@ -35,14 +36,13 @@ import {
 import { createAnalyzeSpendingTool, runAnalyzeSpending } from './analysis';
 import { createGetDashboardSummaryTool, runGetDashboardSummary } from './dashboard';
 import { createSearchContactTool, runSearchContact } from './contact';
+import { createSearchConversationHistoryTool, runSearchConversationHistory } from './conversation-history';
 import {
-  createApplyVirtualCardTool,
   createFreezeCardTool,
   createGetCardsTool,
   createReportLostCardTool,
   createSetCardLimitTool,
   createUnfreezeCardTool,
-  runApplyVirtualCard,
   runFreezeCard,
   runGetCards,
   runReportLostCard,
@@ -77,7 +77,10 @@ import {
   runCreateScheduledTask,
   runListScheduledTasks,
 } from './task';
-import { createChangePasswordTool, runChangePassword } from './security';
+import { modelToolError, toModelToolResult, toolFailure } from './result';
+import { validateBankingParameters, validateSchemaParameters } from './plan-parameters';
+import { moneyToCents } from '@/lib/money';
+import { isCatalogToolName } from '@/lib/contracts/tool-catalog';
 import {
   SubmitPlanParams,
   createSubmitPlanTool,
@@ -92,6 +95,7 @@ export interface ToolExecutionResult {
   summary?: string;
   error?: string;
   errorCode?: import('@/lib/errors').ErrorCode;
+  errorDetails?: { candidates: Array<{ id?: string; name: string; phone?: string; bank?: string }> };
   tier?: RiskLevel;
 }
 
@@ -103,7 +107,7 @@ export interface ToolExecutionResult {
  *    `(userId, key)` (via `@/lib/ledger#idempotentTransferTxId`), so a repeat replays the original
  *    row instead of double-debiting; and
  *  - the plan-node side-effect tools `reserve_budget` / `create_scheduled_task` /
- *    `subscribe_investment` / `redeem_investment` / `apply_virtual_card` — the plan-node and
+ *    `subscribe_investment` / `redeem_investment` — the plan-node and
  *    confirmation paths pass `@/lib/ledger#nodeExecutionKey(taskId, nodeId)`, so a replay of the
  *    SAME `(plan, node)` dedupes its side effect instead of creating a duplicate row.
  * Tool effects use the execution identity and trusted context supplied by their caller.
@@ -160,7 +164,7 @@ type ToolRunner = (
 
 /** The per-user tool registry exposed to the agent runtime. */
 export interface ToolRegistry {
-  /** Every registered tool, keyed by its exact `ToolName` (all 26). */
+  /** Every catalog entry, keyed by its exact `ToolName`; disabled entries are not exposed. */
   tools: Record<ToolName, AgentTool<any>>;
   list(): AgentTool<any>[];
   get(name: ToolName): AgentTool<any>;
@@ -177,6 +181,8 @@ export interface ToolRegistry {
 
 /** Injection the agent supplies so the `submit_plan` meta-tool can run its DAG through the gateway. */
 export interface CreateToolRegistryOptions {
+  /** Archive reads are bound to the same server-owned conversation as banking tools. */
+  sessionId?: string;
   /** Trusted write-boundary check for Pi's automatic execution path, supplied by its session owner. */
   automaticWriteFence?: () => Promise<ExecutionFenceCheck>;
   /** Trusted write-audit identity for Pi's automatic execution path, supplied by its session owner. */
@@ -187,7 +193,7 @@ export interface CreateToolRegistryOptions {
 }
 
 /** Error message surfaced when `submit_plan` is invoked without the injected deps. */
-const SUBMIT_PLAN_UNCONFIGURED = 'submit_plan 未配置（缺少 sessionId/runTool 注入）';
+const SUBMIT_PLAN_UNCONFIGURED = 'The workflow executor has not been configured.';
 
 /**
  * Placeholder `submit_plan` used when the agent did NOT supply `SubmitPlanDeps`. It keeps the
@@ -209,14 +215,15 @@ function createUnconfiguredSubmitPlanTool(): AgentTool<typeof SubmitPlanParams> 
 /**
  * Build the agent tools bound to `userId`.
  *
- *  - 25 SDK-backed tools come from the family modules' `create<Name>Tool(userId)` factories (each
- *    closers over the SERVER-INJECTED `userId`); `submit_plan` is built from the injected
- *    `opts.submitPlan` deps (or a failing placeholder when absent). `list()`/`get()` read the map.
+ *  - Enabled SDK-backed tools come from the family modules' `create<Name>Tool(userId)` factories
+ *    (each closes over the SERVER-INJECTED `userId`); `submit_plan` uses injected dependencies
+ *    or a failing placeholder. The disabled card-creation entry only denies calls and is never
+ *    returned by `list()`/`get()`.
  *  - `executeDirect(name, args, opts?)` dispatches to the matching family `run<X>(userId, args, opts)`
  *    runner, and to `planning.runSubmitPlan(userId, args, opts.submitPlan)` for `submit_plan`. The
  *    optional `opts.idempotencyKey` is threaded to every runner; the side-effecting tools consume it
  *    (`transfer_money`, `reserve_budget`, `create_scheduled_task`, `subscribe_investment`,
- *    `redeem_investment`, `apply_virtual_card`) — see `ToolRunOptions`.
+ *    `redeem_investment`) — see `ToolRunOptions`.
  *
  * Signature note: the frozen form `createToolRegistry(userId: string): ToolRegistry` is preserved —
  * `opts` is an ADDITIVE optional parameter, needed only because `submit_plan` requires an injected
@@ -234,6 +241,7 @@ export function createToolRegistry(
     get_balance: createGetBalanceTool(userId),
     get_transactions: createGetTransactionsTool(userId),
     search_contact: createSearchContactTool(userId),
+    search_conversation_history: createSearchConversationHistoryTool(userId, opts?.sessionId),
     analyze_spending: createAnalyzeSpendingTool(userId),
     detect_anomaly: createDetectAnomalyTool(userId),
     get_cards: createGetCardsTool(userId),
@@ -248,16 +256,17 @@ export function createToolRegistry(
     transfer_money: createTransferMoneyTool(userId),
     set_card_limit: createSetCardLimitTool(userId),
     cancel_subscription: createCancelSubscriptionTool(userId),
-    freeze_card: createFreezeCardTool(userId),
-    apply_virtual_card: createApplyVirtualCardTool(userId),
+    apply_virtual_card: { name: 'apply_virtual_card', label: 'Manual card management',
+      description: 'Unavailable to the agent. Use the Cards page.', parameters: Type.Object({}),
+      execute: async () => { throw new AppError('SECURITY_DENIED', 'Use the card management page.'); } },
     set_subscription_reminder: createSetSubscriptionReminderTool(userId),
     create_scheduled_task: createCreateScheduledTaskTool(userId),
     // 🔴 RED — require MFA (enforced by `security/`, not here)
+    freeze_card: createFreezeCardTool(userId),
     subscribe_investment: createSubscribeInvestmentTool(userId),
     redeem_investment: createRedeemInvestmentTool(userId),
     report_lost_card: createReportLostCardTool(userId),
     unfreeze_card: createUnfreezeCardTool(userId),
-    change_password: createChangePasswordTool(userId),
     // META — not risk-gated
     submit_plan: submitPlanDeps
       ? createSubmitPlanTool(userId, submitPlanDeps)
@@ -271,6 +280,7 @@ export function createToolRegistry(
     get_balance: runGetBalance,
     get_transactions: runGetTransactions,
     search_contact: runSearchContact,
+    search_conversation_history: (uid, args) => runSearchConversationHistory(uid, args, opts?.sessionId),
     analyze_spending: runAnalyzeSpending,
     detect_anomaly: runDetectAnomaly,
     get_cards: runGetCards,
@@ -285,17 +295,16 @@ export function createToolRegistry(
     set_card_limit: runSetCardLimit,
     cancel_subscription: runCancelSubscription,
     freeze_card: runFreezeCard,
-    apply_virtual_card: runApplyVirtualCard,
+    apply_virtual_card: async () => ({ ok: false, errorCode: 'SECURITY_DENIED', error: 'Use the card management page.' }),
     set_subscription_reminder: runSetSubscriptionReminder,
     create_scheduled_task: runCreateScheduledTask,
     subscribe_investment: runSubscribeInvestment,
     redeem_investment: runRedeemInvestment,
     report_lost_card: runReportLostCard,
     unfreeze_card: runUnfreezeCard,
-    change_password: runChangePassword,
     submit_plan: async (uid, args) => {
       if (!submitPlanDeps) {
-        return { ok: false, error: SUBMIT_PLAN_UNCONFIGURED };
+        return { ok: false, errorCode: 'INTERNAL', error: SUBMIT_PLAN_UNCONFIGURED };
       }
       return runSubmitPlan(uid, args, submitPlanDeps);
     },
@@ -307,6 +316,8 @@ export function createToolRegistry(
       return TOOL_NAMES.map((name) => tools[name]);
     },
     get(name: ToolName): AgentTool<any> {
+      if (!isCatalogToolName(name)) throw new AppError('SECURITY_DENIED', 'This banking capability is unavailable.');
+      if (catalogEntry(name)?.agentEnabled === false) throw new AppError('SECURITY_DENIED', 'Card creation and deletion require the card management page.');
       return tools[name];
     },
     async executeDirect(
@@ -314,9 +325,25 @@ export function createToolRegistry(
       args: Record<string, unknown>,
       opts?: ToolRunOptions,
     ): Promise<ToolExecutionResult> {
+      if (!isCatalogToolName(name)) return toolFailure(new AppError('SECURITY_DENIED', 'This banking capability is unavailable.'));
+      if (catalogEntry(name)?.agentEnabled === false) return { ok: false, errorCode: 'SECURITY_DENIED', error: 'Card creation and deletion require the card management page.' };
+      try {
+        if (!args || typeof args !== 'object' || Array.isArray(args)) throw new AppError('VALIDATION', 'Tool arguments must be an object.');
+        const parameters = { ...args };
+        // The redemption quote is minted by the gateway and bound to a saved authorization.
+        if (name === 'redeem_investment' && opts?.idempotencyKey &&
+          (opts.sessionId || opts.onCommandCommit) && parameters.expectedRedemptionAmount !== undefined) {
+          if (typeof parameters.expectedRedemptionAmount !== 'string' || moneyToCents(parameters.expectedRedemptionAmount) < 0n) {
+            throw new AppError('VALIDATION', 'The authorized redemption quote is invalid.');
+          }
+          delete parameters.expectedRedemptionAmount;
+        }
+        if (name === 'submit_plan') validateSchemaParameters(name, parameters, 'direct', SubmitPlanParams);
+        else validateBankingParameters(name, parameters, 'direct');
+      } catch (error) { return toolFailure(error); }
       if (name === 'compare_investments') {
         try { args = await resolveBankingArgs(userId, name, args); }
-        catch (error) { return { ok: false, error: AppError.from(error).message }; }
+        catch (error) { return toolFailure(error); }
       }
       const writeContext = writeAuditContext(name, userId, opts);
       let auditedInTransaction = false;
@@ -330,7 +357,10 @@ export function createToolRegistry(
             auditedInTransaction = true;
           } } : {}),
       };
-      if (!isWriteTool(name)) return withBankingExecution(context, () => runners[name](userId, args, opts));
+      if (!isWriteTool(name)) {
+        try { return await withBankingExecution(context, () => runners[name](userId, args, opts)); }
+        catch (error) { return toolFailure(error); }
+      }
       try {
         const command = prepareBankingCommand(userId, opts?.idempotencyKey ?? newId('operation'), name, args);
         return await executeBankingCommand(command, () => runners[name](userId, command.args, { ...opts, idempotencyKey: command.operationKey }), {
@@ -343,26 +373,35 @@ export function createToolRegistry(
         } : undefined),
         });
       } catch (error) {
-        const failure = AppError.from(error);
-        return { ok: false, error: failure.message, errorCode: failure.code };
+        return toolFailure(error);
       }
     },
   };
   // Runtime calls and human decisions use exactly the same command execution boundary.
   for (const name of TOOL_NAMES) {
-    if (name === 'submit_plan') continue;
     const definition = tools[name];
-    tools[name] = { ...definition, execute: async (callId, params) => {
+    const prepareArguments = (value: unknown) => {
+      try {
+        if (name === 'submit_plan') validateSchemaParameters(name, value as Record<string, unknown>, 'model', SubmitPlanParams);
+        else validateBankingParameters(name, value as Record<string, unknown>, 'model');
+      } catch (error) { throw new Error(modelToolError(error)); }
+      return value;
+    };
+    if (name === 'submit_plan') { tools[name] = { ...definition, prepareArguments }; continue; }
+    tools[name] = { ...definition, prepareArguments, execute: async (callId, params, signal) => {
+      if (signal?.aborted) return toModelToolResult(toolFailure(new AppError('CONFLICT', 'The tool call was cancelled before execution.')));
       const args = params as Record<string, unknown>;
       const identity = opts?.automaticWriteAudit?.();
+      const ownedFence = await opts?.automaticWriteFence?.();
       const result = await registry.executeDirect(name, args, {
         ...(isWriteTool(name) ? { idempotencyKey: await opts?.operationIdentity?.(callId, name, args) ?? newId('operation') } : {}),
-        ...(opts?.automaticWriteFence ? { fence: await opts.automaticWriteFence() } : {}),
+        fence: async client => {
+          if (signal?.aborted) throw new AppError('CONFLICT', 'The tool call was cancelled before committing.');
+          await ownedFence?.(client);
+        },
         ...identity,
       });
-      if (!result.ok) throw new AppError(result.errorCode ?? 'TOOL_FAILED', result.error ?? 'Banking tool failed.');
-      return { content: [{ type: 'text', text: result.summary ?? 'Operation completed.' },
-        { type: 'text', text: `Structured banking result: ${JSON.stringify(result.data)}` }], details: result.data };
+      return toModelToolResult(result);
     } };
   }
   return registry;

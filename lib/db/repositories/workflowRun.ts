@@ -1,4 +1,4 @@
-import type { AgentTask } from '@prisma/client';
+import type { AgentTask } from '@/lib/db/prisma';
 import type { DbClient } from '../client';
 import { AppError } from '@/lib/errors';
 

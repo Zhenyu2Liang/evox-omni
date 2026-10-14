@@ -9,11 +9,19 @@
 | 任务 | 文档 |
 | --- | --- |
 | 安装、配置模型或启动服务 | [开发指南](development.md) |
+| 核对依赖版本或升级开发工具 | [依赖版本与升级](development.md#依赖版本与升级) |
 | 查找模块职责和请求执行流程 | [架构设计](architecture.md) |
 | 修改事件日志、重试或崩溃恢复 | [持久化与恢复](agent-durability.md) |
+| 修改对话归档、Pi 官方压缩或原话搜索 | [上下文压缩](context-compaction.md) |
 | 修改金额、利率、估值或结算 | [金融数值与结算](financial-values.md) |
+| 修改业务卡片、工具进度或开发者详情 | [对话业务卡片](chat-presentation.md) |
+| 修改页面专属的卡片增删 | [卡片管理](card-management.md) |
+| 判断字符串匹配是否参与业务决策 | [字符串匹配审查](string-matching-review.md) |
+| 修改工具参数、报错或模型可见结果 | [银行工具契约](tool-contracts.md) |
+| 升级 Pi 或修改流、钩子和工具消息 | [Pi 接口适配](pi-integration.md) |
 | 修改权限、确认、认证或审计 | [安全设计](security.md) |
-| 处理暂停和结果不明的工作流 | [人工处理](manual-review.md) |
+| 区分普通操作记录与开发者操作审计 | [安全设计](security.md#操作记录与操作审计) |
+| 在开发者模式模拟后台核对 | [人工核对](manual-review.md) |
 | 修改到期提醒或定时转账 | [定时任务](scheduled-tasks.md) |
 | 运行测试或判断验收证据 | [测试指南](test-cases.md) |
 | 判断模拟能力和部署条件 | [当前限制](known-risks.md) |

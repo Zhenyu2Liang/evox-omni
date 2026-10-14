@@ -1,23 +1,30 @@
-import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { defineConfig, globalIgnores } from 'eslint/config';
+import nextPlugin from '@next/eslint-plugin-next';
+import reactHooks from 'eslint-plugin-react-hooks';
+import tseslint from 'typescript-eslint';
+import globals from 'globals';
 
-// Next 15's legacy resolution patch recognizes the bundled CommonJS entry point.
-const require = createRequire(import.meta.url);
-const { FlatCompat } = require('@eslint/eslintrc');
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const compat = new FlatCompat({
-  baseDirectory: __dirname,
-});
-
-const eslintConfig = [
+export default defineConfig([
+  tseslint.configs.base,
   {
-    ignores: ['.next/**', 'node_modules/**', 'dist/**', 'coverage/**', '.pnpm-store/**', '.npm-cache/**', 'test-results/**'],
+    files: ['**/*.{js,mjs,cjs,jsx,ts,tsx}'],
+    languageOptions: { globals: { ...globals.node, ...globals.browser } },
   },
-  ...compat.extends('next/core-web-vitals'),
-];
-
-export default eslintConfig;
+  {
+    files: ['app/**/*.{ts,tsx}', 'components/**/*.{ts,tsx}', 'lib/**/*.{ts,tsx}'],
+    plugins: { '@next/next': nextPlugin, 'react-hooks': reactHooks },
+    rules: {
+      ...nextPlugin.configs.recommended.rules,
+      ...nextPlugin.configs['core-web-vitals'].rules,
+      // This application does not opt into React Compiler. Enforce hook correctness without
+      // requiring compiler-specific ref/effect patterns during this dependency upgrade.
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
+    },
+  },
+  globalIgnores([
+    '.next*/**', 'next-env.d.ts', 'node_modules/**', 'dist/**', 'coverage/**',
+    '.pnpm-store/**', '.npm-cache/**', '.vitest/**', '.agents/**', '.codex/**',
+    'test-results/**', 'logs/**', 'output/**', 'lib/db/generated/**',
+  ]),
+]);

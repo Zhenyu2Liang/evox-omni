@@ -5,7 +5,7 @@ import type { ToolExecutionResult } from './tools';
 export const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   'transfer_money', 'reserve_budget', 'set_card_limit', 'cancel_subscription', 'freeze_card',
   'apply_virtual_card', 'set_subscription_reminder', 'create_scheduled_task', 'subscribe_investment',
-  'redeem_investment', 'report_lost_card', 'unfreeze_card', 'change_password',
+  'redeem_investment', 'report_lost_card', 'unfreeze_card',
 ]);
 
 export interface TrustedAccount {
@@ -60,8 +60,7 @@ function amount(value: unknown): MoneyAmount | undefined {
 function trustedWrite(entry: FactInput): TrustedWrite {
   const { toolName, result } = entry;
   const data = isRecord(result.data) ? result.data : {};
-  const unknown = data.outcome === 'unknown' || data.needsReconciliation === true || data.status === 'needs_reconciliation' ||
-    /人工核对|无法核实|待核对|needs reconciliation/i.test(`${result.error ?? ''} ${result.summary ?? ''}`);
+  const unknown = data.outcome === 'unknown' || data.needsReconciliation === true || data.status === 'needs_reconciliation';
   const recipient = isRecord(data.recipient) ? data.recipient : undefined;
   const identity = (key: 'toolCallId' | 'actionId' | 'taskId' | 'nodeId') => entry[key] ? { [key]: entry[key] } : {};
   return {

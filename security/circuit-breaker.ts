@@ -231,8 +231,32 @@ export async function resetSession(
     }
   }
 
-  const actorName = opts?.actor?.trim() ? opts.actor.trim() : DEFAULT_RESET_ACTOR;
-  const reason = opts?.reason?.trim() ? opts.reason.trim() : DEFAULT_RESET_REASON;
+  return commitAuditedReset(actor, { key, userId }, before, {
+    actor: opts?.actor?.trim() || DEFAULT_RESET_ACTOR,
+    reason: opts?.reason?.trim() || DEFAULT_RESET_REASON,
+    mode: 'verified',
+  });
+}
+
+/** Explicit demo maintenance; the HTTP entry point must require developer mode. */
+export async function resetDemoSession(actor: string): Promise<CircuitBreakerState> {
+  const owner = await resolveBreakerOwner(actor);
+  const before = await getBreakerState(owner.key);
+  return commitAuditedReset(actor, owner, before, {
+    actor: 'developer',
+    reason: 'Developer reset of the demo verification failure counter.',
+    mode: 'developer',
+  });
+}
+
+async function commitAuditedReset(
+  actor: string,
+  { key, userId }: BreakerOwner,
+  before: BreakerSnapshot | null,
+  reset: { actor: string; reason: string; mode: 'verified' | 'developer' },
+): Promise<CircuitBreakerState> {
+  const actorName = reset.actor;
+  const reason = reset.reason;
 
   // ATOMIC unlock + STRICT audit: the state clear and its SECURITY_RESET event commit in ONE
   // transaction. A strict audit failure rolls the clear back, so the lock state stays UNCHANGED and
@@ -265,6 +289,7 @@ export async function resetSession(
           reason,
           wasLocked: prior?.locked ?? false,
           previousFailures: prior?.failures ?? 0,
+          mode: reset.mode,
           renewedMfaChallenges,
           ...(prior?.lockedAt ? { priorLockedAt: prior.lockedAt.getTime() } : {}),
         },

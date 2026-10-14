@@ -1,10 +1,8 @@
 /**
  * contact — `search_contact`
  *
- * Contact lookup (also feeds transfer recipient resolution). TypeBox param schema; `execute` calls
- * the Banking SDK and THROWS `AppError` on failure. `runSearchContact(userId, args)` is the
- * model-free path used by `executeDirect`; it CATCHES and returns
- * `ToolExecutionResult{ok:false,error}`.
+ * Contact lookup returns recipient candidates. The runner returns a typed SDK result; the
+ * factory uses the shared result adapter to expose complete public model data and Pi errors.
  *
  * Tier: 🟢 GREEN (read-only).
  * No permission/risk/MFA logic here. `userId` is SERVER-INJECTED; the model never supplies it.
@@ -15,11 +13,12 @@ import { banking } from '@/banking-sdk';
 import type { ContactView } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
 import type { ToolExecutionResult } from './index';
+import { toModelToolResult, toolFailure } from './result';
 
 /** `search_contact` params — free-text name/phone query. */
 export const SearchContactParams = Type.Object({
-  query: Type.String({ description: '联系人姓名或手机号关键字' }),
-});
+  query: Type.String({ maxLength: 256, description: 'Contact name or phone fragment. An empty query lists all owned contacts. Search results are candidates, not consent to transfer.' }),
+}, { additionalProperties: false });
 export type SearchContactArgs = Static<typeof SearchContactParams>;
 
 /** Factory: build the `search_contact` AgentTool bound to `userId` (🟢 GREEN). */
@@ -27,18 +26,9 @@ export function createSearchContactTool(userId: string): AgentTool<typeof Search
   return {
     name: 'search_contact',
     label: '搜索联系人',
-    description: '按姓名或手机号模糊搜索当前用户的联系人（用于确定转账收款人）。',
+    description: 'Search owned contacts by name or phone fragment. Returned entries are masked recipient candidates, not executable transfer authorization. Choose and validate the exact owned contact identity before a transfer.',
     parameters: SearchContactParams,
-    execute: async (_toolCallId, params) => {
-      const result = await runSearchContact(userId, { query: params.query });
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'search_contact failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
-    },
+    execute: async (_toolCallId, params) => toModelToolResult(await runSearchContact(userId, { query: params.query })),
   };
 }
 
@@ -48,11 +38,12 @@ export async function runSearchContact(
   args: Record<string, unknown>,
 ): Promise<ToolExecutionResult> {
   try {
-    const query = typeof args.query === 'string' ? args.query : '';
+    if (typeof args.query !== 'string') throw new AppError('VALIDATION', 'Contact search requires an explicit text query.');
+    const query = args.query;
     const contacts = await banking.contact.searchContacts(userId, query);
     return { ok: true, data: contacts, summary: summarizeContacts(query, contacts) };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 

@@ -1,5 +1,4 @@
-import { Prisma } from '@prisma/client';
-import type { SecurityEvent } from '@prisma/client';
+import { Prisma, type SecurityEvent } from '@/lib/db/prisma';
 import { prisma, type DbClient } from '../client';
 import { toJson, safeParse } from '../../json';
 import type {

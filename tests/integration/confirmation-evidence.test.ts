@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { getDemoSession, executeGatedTool } from '@/agent';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import { banking } from '@/banking-sdk';
 import { auditStore } from '@/audit/audit-logger';
@@ -19,17 +19,17 @@ beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
 afterAll(() => disconnectTestPrisma());
 type Route = (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;
-async function action(handler: Route, id: string, s: string, verb: string) {
+async function action(handler: Route, id: string, _sessionId: string, verb: string) {
   const r = await handler(new NextRequest(`http://localhost/api/actions/${id}/${verb}`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie: `banking_session=${s}` }, body: '{}',
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
   }), { params: Promise.resolve({ id }) });
   return { http: r.status, body: await r.json() };
 }
 const confirm = (id: string, s: string) => action(confirmPost, id, s, 'confirm');
 const recover = (id: string, s: string) => action(recoverPost, id, s, 'recover');
-async function cancelTask(id: string, s: string) {
+async function cancelTask(id: string, _sessionId: string) {
   const r = await taskPost(new NextRequest(`http://localhost/api/tasks/${id}`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie: `banking_session=${s}` }, body: JSON.stringify({ action: 'cancel' }),
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'cancel' }),
   }), { params: Promise.resolve({ id }) });
   expect(r.status).toBe(200); return (await r.json()).data;
 }
@@ -44,7 +44,7 @@ async function bounded(p: Promise<unknown>) {
 const debits = () => getTestPrisma().transaction.count({ where: { userId, amountMinor: -20000n, counterpartyId: 'contact_zhangwei' } });
 
 it('a committed transfer followed by a status-return exception recovers from the original receipt', async () => {
-  const p = getTestPrisma(); const s = (await getOrCreateSession(userId)).sessionId;
+  const p = getTestPrisma(); const s = (await getDemoSession(userId)).sessionId;
   const parked = await executeGatedTool({ sessionId: s, userId, toolName: 'transfer_money', args: { name: '张伟', amount: '200' }, userRequest: '给张伟转200元' });
   const id = parked.pendingActionId!; expect(id).toBeTruthy();
   const original = securityGateway.recordActionResult.bind(securityGateway); let committed = 0;
@@ -62,7 +62,7 @@ it('a committed transfer followed by a status-return exception recovers from the
 });
 
 it('a posted transfer with a missing receipt requires manual reconciliation without another debit', async () => {
-  const p = getTestPrisma(); const s = (await getOrCreateSession(userId)).sessionId;
+  const p = getTestPrisma(); const s = (await getDemoSession(userId)).sessionId;
   const submitted = await runSubmitPlan(userId, { goal: '历史已入账计划恢复', nodes: [{ id: 'transfer', name: '转账', kind: 'tool', tool: 'transfer_money', args: { name: '张伟', amount: '200' }, dependencies: [] }] }, { sessionId: s, runTool: runner(s) });
   const plan: any = submitted.data; expect(plan.status).toBe('waiting_confirmation');
   const pending = await p.pendingAction.findFirstOrThrow({ where: { taskId: plan.id } });
@@ -100,7 +100,7 @@ it('a posted transfer with a missing receipt requires manual reconciliation with
 });
 
 it('cancellation completed before a blocked card-limit SDK write must prevent that write', async () => {
-  const p = getTestPrisma(); const s = (await getOrCreateSession(userId)).sessionId;
+  const p = getTestPrisma(); const s = (await getDemoSession(userId)).sessionId;
   const submitted = await runSubmitPlan(userId, { goal: '取消确认中的卡片调整', nodes: [{ id: 'limit', name: '调整限额', kind: 'tool', tool: 'set_card_limit', args: { cardId: 'card_credit', category: '娱乐', amount: '1500' }, dependencies: [] }] }, { sessionId: s, runTool: runner(s) });
   const plan: any = submitted.data; expect(plan.status).toBe('waiting_confirmation');
   const pending = await p.pendingAction.findFirstOrThrow({ where: { taskId: plan.id } });
@@ -124,7 +124,7 @@ it('cancellation completed before a blocked card-limit SDK write must prevent th
 });
 
 it('failure of required execution audit must roll back the debit and receipt as claimed in the report', async () => {
-  const p = getTestPrisma(); const s = (await getOrCreateSession(userId)).sessionId;
+  const p = getTestPrisma(); const s = (await getDemoSession(userId)).sessionId;
   const parked = await executeGatedTool({ sessionId: s, userId, toolName: 'transfer_money', args: { name: '张伟', amount: '200' }, userRequest: '审查资金与审计同事务' });
   const id = parked.pendingActionId!; expect(id).toBeTruthy();
   const original = auditStore.insertAuditLog; let injected = 0;

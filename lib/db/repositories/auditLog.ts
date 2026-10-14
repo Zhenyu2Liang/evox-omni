@@ -1,5 +1,4 @@
-import { Prisma } from '@prisma/client';
-import type { AuditLog } from '@prisma/client';
+import { Prisma, type AuditLog } from '@/lib/db/prisma';
 import { prisma } from '../client';
 import { toJson, safeParse } from '../../json';
 import { redactRequest, redactSecrets } from '../../sensitive';
@@ -26,6 +25,9 @@ export interface AuditLogInput {
 export interface AuditLogQuery {
   userId?: string;
   sessionId?: string;
+  toolName?: string;
+  riskLevel?: RiskLevel | string;
+  status?: AuditStatus | string;
   from?: Date;
   to?: Date;
   limit?: number;
@@ -150,6 +152,24 @@ export async function findAuditLogs(filter: AuditLogFindFilter = {}): Promise<Au
   return rows.map(toAuditEntry);
 }
 
+/** Restricted input for the public history projection; no request, arguments, or control ids. */
+export type OperationAuditRow = Pick<AuditLog,
+  'id' | 'timestamp' | 'toolName' | 'status' | 'mfaRequired' | 'mfaResult' | 'toolResult' | 'dedupeKey'>;
+
+/** Apply the business allowlist before pagination so technical events cannot crowd it out. */
+export function findOperationAuditLogs(
+  scope: { userId: string; sessionId: string; limit?: number },
+  toolNames: readonly string[],
+): Promise<OperationAuditRow[]> {
+  return prisma.auditLog.findMany({
+    where: { userId: scope.userId, sessionId: scope.sessionId, toolName: { in: [...toolNames] } },
+    select: { id: true, timestamp: true, toolName: true, status: true,
+      mfaRequired: true, mfaResult: true, toolResult: true, dedupeKey: true },
+    orderBy: [{ timestamp: 'desc' }, { id: 'desc' }],
+    take: scope.limit ?? DEFAULT_LIMIT,
+  });
+}
+
 /** Aggregate counts (`total` / `byRisk` / `byStatus`) over the whole audit log. */
 export async function aggregateAuditLogs(query: Omit<AuditLogQuery, 'limit'> = {}): Promise<AuditLogAggregate> {
   const rows = await prisma.auditLog.findMany({
@@ -171,6 +191,9 @@ function auditWhere(
   const where: Prisma.AuditLogWhereInput = {};
   if (query?.userId) where.userId = query.userId;
   if (query?.sessionId) where.sessionId = query.sessionId;
+  if (query?.toolName) where.toolName = query.toolName;
+  if (query?.riskLevel) where.riskLevel = query.riskLevel;
+  if (query?.status) where.status = query.status;
   if (query?.from || query?.to) {
     where.timestamp = {
       ...(query.from ? { gte: query.from } : {}),

@@ -1,5 +1,4 @@
-import type { PendingAction, MfaChallenge } from '@prisma/client';
-import { type Prisma } from '@prisma/client';
+import type { PendingAction, MfaChallenge, Prisma } from '@/lib/db/prisma';
 import { prisma } from '../client';
 import { toJson } from '../../json';
 import { AppError } from '../../errors';

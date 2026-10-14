@@ -16,7 +16,8 @@ flowchart TD
   HTTP --> Admission[接收运行并取得执行租约]
   Admission --> Pi[Pi Core 对话与工具循环]
   Pi --> Journal[保存原事件与工具调用身份]
-  Journal --> Gate[权限网关]
+  Journal --> Intent[声明本轮用途与操作]
+  Intent --> Gate[权限网关]
   Gate --> Direct[已授权工具]
   Gate --> Human[等待人工决定]
   Gate --> Compiler[计划编译器]
@@ -42,6 +43,7 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 | --- | --- | --- |
 | HTTP 与页面 | [app](../../app/)、[路由辅助模块](../../app/api/_lib/) | 会话身份、请求检查、状态映射和传输。 |
 | 前端运行展示 | [chat](../../components/chat/)、[runtime](../../components/runtime/) | 响应检查、流式卡片和执行控制。 |
+| 界面语言 | [i18n](../../lib/i18n/) | 中文默认值、双语文案和语言选择保存。 |
 | 对话轮次编排 | [run-turn.ts](../../agent/run-turn.ts)、[turn-runtime.ts](../../agent/turn-runtime.ts) | 输入生命周期、运行接收和 Pi 运行时。 |
 | 授权后续讲 | [authorization-resume.ts](../../agent/authorization-resume.ts) | 将已提交结果写回原调用，再继续对话。 |
 | Pi 运行时 | [banking-agent.ts](../../agent/banking-agent.ts) | 创建用户绑定的工具集合，安装执行钩子。 |
@@ -49,7 +51,7 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 | 运行持久化 | [durable](../../agent/durable/)、[agentRun 仓储](../../lib/db/repositories/agentRun.ts) | 事件顺序、调用身份、执行租约和恢复。 |
 | 工具契约 | [contracts](../../lib/contracts/)、[工具目录](../../lib/contracts/tool-catalog.ts) | 名称、效果、权限、重放规则和公开数据契约。 |
 | 工具适配器 | [tools](../../agent/tools/) | 参数 schema 和服务端用户绑定的执行器。 |
-| 意图与计划编译 | [intent-context.ts](../../agent/intent-context.ts)、[plan-compiler.ts](../../agent/tools/plan-compiler.ts) | 用户引用、金额绑定、条件和节点输出。 |
+| 轮次声明与计划编译 | [intent-context.ts](../../agent/intent-context.ts)、[turn-intent.ts](../../agent/tools/turn-intent.ts)、[plan-compiler.ts](../../agent/tools/plan-compiler.ts) | 本轮用途、写操作顺序、参数 schema 和节点输出。 |
 | 工作流执行 | [planner](../../planner/)、[workflows](../../agent/workflows/) | 图状态、节点认领、持久化、控制和续跑。 |
 | 授权与确认 | [security](../../security/)、[confirmation](../../agent/confirmation/) | 权限、身份、执行有效性和原计划续跑。 |
 | 脚本模型 | [mock-responder.ts](../../agent/providers/mock-responder.ts)、[mock](../../agent/providers/mock/) | 按意图分派、解析和结果说明。 |
@@ -62,20 +64,87 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 工具参数 schema 不授予执行权限。
 银行 SDK 接收服务端构造的可信执行上下文。
 
+## 数据库运行时
+
+Prisma `7.10.0` 使用 `prisma-client` 生成器。
+生成代码位于 `lib/db/generated`。
+业务代码从 [prisma.ts](../../lib/db/prisma.ts)导入类型和命名空间。
+生成代码不提交到 Git，部署前执行 `pnpm db:generate`。
+
+[prisma.config.ts](../../prisma.config.ts)声明 CLI 数据库地址和种子命令。
+CLI 与应用共用 [url.ts](../../lib/db/url.ts)解析地址。
+[database.ts](../../lib/db/database.ts)创建带驱动适配器的客户端。
+适配器使用 `@prisma/adapter-better-sqlite3`。
+原生驱动按精确整数读取 SQLite 的 `BigInt` 金额。
+利率和未结算估值仍按十进制文本保存。
+
+每个客户端使用独立的 SQLite 原生连接。
+普通查询与事务入口共用连接级队列。
+事务提交或回滚前，其他请求的普通查询等待。
+这能防止普通写入加入其他请求的事务。
+也能防止普通读取看到其他请求未提交的数据。
+队列代码见 [serialized-connection.ts](../../lib/db/serialized-connection.ts)。
+连接建立时启用外键检查和 WAL。
+WAL 是 SQLite 的预写日志模式。
+驱动等待、事务等待和事务执行上限均为 `10` 秒。
+日期按 Unix 毫秒保存。
+事务内的查询通过同一事务句柄执行。
+全局客户端不能替代已打开事务的句柄。
+该边界避免单连接等待自身持有的事务。
+
+生成、同步表结构和填充模拟数据分别执行。
+命令职责见[开发指南](development.md#数据库管理)。
+
+## 业务记录与技术审计
+
+普通用户通过 `/activity` 查看操作记录。
+开发者模式通过 `/audit` 查看操作审计。
+两类查询都使用服务端配置的用户和共享会话。
+
+业务投影在 [operation-history.ts](../../audit/operation-history.ts)。
+仓储先按业务操作名单筛选，再排序和分页。
+确认本人交易属于业务操作，查询和开发者维护事件不展示。
+`ActivityRecord` 只定义以下字段：
+
+- 事件标识和时间。
+- 业务类型。
+- 处理状态和身份验证状态。
+
+投影不返回工具参数、结果、原请求和执行控制标识。
+普通记录按事件展示，不推测不同事件属于同一笔交易。
+未知执行结果保留为待核对，失败事件保留为未完成。
+
+技术审计页面和接口在读取数据前检查开发者模式。
+模式 Cookie 用于演示偏好，不提供生产管理员认证。
+接口契约见 [activity.ts](../../lib/contracts/activity.ts)。
+
 ## 对话轮次
 
 每次对话先取得执行身份，再接收模型输出。
+完整归档与发送给模型的视图分别保存。
+Pi Coding Agent `1.2.0` 的公开 `compact()` 生成摘要。
+摘要提示词和历史序列化由官方 `compact()` 提供。
+银行适配层负责阈值、近期完整轮次和压缩检查点。
+Pi Core 的请求准备钩子先构造摘要视图。
+上下文转换钩子将同一视图发送给模型。
+模型请求日志保存该视图，检查点保留完整原始消息。
+摘要不授予执行权限，也不替代原话归档。
+需要原字或精确金额时，模型使用绿色归档查询工具。
+规则见[上下文压缩](context-compaction.md)。
 模型只接触当前用户的银行工具。
 
-1. [聊天路由](../../app/api/chat/route.ts)检查请求和 `banking_session` Cookie。
+1. [聊天路由](../../app/api/chat/route.ts)检查请求，加载固定演示身份和共享会话。
 2. 运行入口按所属会话接收请求，并取得执行租约。
 3. 运行时恢复会话，解析模型并构造用户绑定的工具集合。
 4. 事件记录器先于展示监听器订阅 Pi。
-5. 权限网关检查工具提议，再执行、等待授权或拒绝。
-6. 展示层按结构化证据生成结果卡片和说明。
-7. 会话保存时检查 revision，拒绝过时状态覆盖。
+5. 模型通过 `describe_turn` 声明本轮用途和操作。
+6. 运行时检查声明范围，权限网关检查授权要求。
+7. 展示层按结构化证据生成独立工具记录和卡片。
+8. 会话保存时检查 revision，拒绝过时状态覆盖。
 
 请求正文中的会话标识仅用于一致性检查。
+Web 入口使用固定演示用户和 `demo:${userId}` 会话。
+不同浏览器共享已保存对话，身份 Cookie 不参与选择。
 同一 `requestId` 和相同请求摘要复用原运行。
 同一标识配不同输入时，服务端拒绝请求。
 
@@ -83,20 +152,52 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 工具开始事件与服务端调用身份先提交，再检查或执行。
 对外展示事件先保存，再通过 SSE 或 JSON 返回。
 模型没有 Shell、SQL 或文件系统工具。
+绿色查询可以先确定操作对象和数量。
+需要确认的前置查询使用办理准备声明。
+确认读取后，可绑定原请求的完整写入序列。
+后续写入仍需单独授权，序列不能再改变。
+
+新用户消息开始一份新的轮次声明。
+声明包含用途、操作名称和顺序，可重复声明同一工具。
+用途分为交流、建议、查询和办理。
+声明只用于约束本轮提议，不能批准金融操作。
+已经保存的授权继续使用原操作身份。
+
+交流可使用绿色查询，不能创建需授权的操作。
+建议可申请查询授权，不能提交写操作。
+办理时，写工具必须属于本轮声明。
+声明了多个写操作时，必须先提交完整工作流。
+显式工作流标记也要求通过计划入口提交。
+同一轮中，声明不能改成另一个用途或操作序列。
+
+在线执行不从用户句子中提取金额或推断用途。
+模拟模型的自然语言脚本只保存在 `providers/mock/`。
+模型正文完整保留，金融事实由工具记录和回执说明。
 
 ## 模型适配
 
-项目使用 Pi 1.1.0 的官方包：
+项目使用 Pi `1.2.0` 的官方包：
 
 - `@earendil-works/pi-agent-core` 提供对话与工具循环。
 - `@earendil-works/pi-ai` 提供模型和服务商适配。
+- `@earendil-works/pi-coding-agent` 提供公开 `compact()`。
+
+银行运行时调用 SDK 的压缩公开函数。
+Coding Agent 的 `AgentSession.compact()` 属于上层编码会话。
+银行会话继续使用 Prisma，编码工具未加入银行注册表。
+SDK 的命令行、终端界面等传递依赖仍会安装。
+依赖代价见[上下文压缩](context-compaction.md)。
 
 依赖版本见 [package.json](../../package.json)。
 `resolveProvider()` 同时返回 `model` 和 `streamFn`。
 创建 Agent 时需要同时传入这 2 个值。
 `resolveModel()` 仅用于查看模型。
 
-在线模式使用 `builtinModels()` 和原生服务商适配器。
+在线模式只注册当前服务商的原生适配器。
+模型目录按项目支持的服务商显式声明。
+内置服务商包括 DeepSeek、OpenAI、Anthropic、Google、
+Groq、OpenRouter、xAI、Mistral 和 Cerebras。
+其他兼容服务商需要显式配置 API 地址。
 脚本模式为每个运行时创建独立 `fauxProvider()`。
 工具参数和结果在 Pi 边界转换为 JSON 数据。
 密钥由请求时的服务商鉴权读取，不写入模型快照。
@@ -104,8 +205,8 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 授权结果需要替换原工具调用对应的结果消息。
 独立动作按原调用标识与工具名匹配。
 工作流动作匹配外层 `submit_plan`。
-重用调用标识时，选择最新匹配调用。
-配对逻辑见[消息规范化](../../agent/message-normalize.ts)。
+调用标识重复时，按原授权、运行和模型请求确定所属调用。
+配对逻辑见[授权上下文](../../agent/authorization-context.ts)。
 
 ## 权限与人工决定
 
@@ -123,7 +224,7 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 
 需要人工授权时，网关保存 `PendingAction`。
 模型不能提供自己的批准结果。
-确认与验证码路由先检查 Cookie 所有权。
+确认与验证码路由先检查资源是否属于固定演示用户及共享会话。
 执行前再检查当前权限和执行所有权。
 多因子认证简称 MFA。
 
@@ -136,8 +237,14 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 编译器检查以下内容：
 
 - 工具名、依赖关系和节点输出引用。
-- 所属用户的对象与金额。
-- 日期、条件和输出类型。
+- 声明中的写操作数量和顺序。
+- 工具参数类型、所属用户的资源和金额范围。
+- 显式日期、条件路径和输出类型。
+
+模型提交明确的结构化参数和依赖关系。
+编译器不根据原句补写金额、对象或前置依赖。
+卡片、产品和持仓使用实际资源标识。
+条件使用明确的查询月份、比较符和阈值。
 
 [dag.ts](../../planner/dag.ts)定义有向无环图语义。
 [executor.ts](../../planner/executor.ts)推进节点状态。
@@ -160,7 +267,9 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 补偿是显式工作流操作。
 补偿不代表全部银行效果都能撤销。
 操作员说明也不能证明转账已提交。
-人工接手规则见[人工处理](manual-review.md)。
+人工接手规则见[人工核对](manual-review.md)。
+后台核对演示只在开发者模式提供。
+卡片增删使用独立页面流程，规则见[卡片管理](card-management.md)。
 
 ## 金融命令事务
 

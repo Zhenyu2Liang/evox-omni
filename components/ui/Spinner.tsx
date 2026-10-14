@@ -1,3 +1,7 @@
+'use client';
+
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+
 export interface SpinnerProps {
   size?: 'sm' | 'md' | 'lg';
   className?: string;
@@ -14,10 +18,11 @@ const SIZE_CLASS: Record<'sm' | 'md' | 'lg', string> = {
 };
 
 export function Spinner({ size = 'md', className }: SpinnerProps) {
+  const { t } = useI18n();
   return (
     <span
       role="status"
-      aria-label="loading"
+      aria-label={t('ui.loading')}
       className={cn(
         'inline-block animate-spin rounded-full border-2 border-banking-accent border-t-transparent',
         SIZE_CLASS[size],

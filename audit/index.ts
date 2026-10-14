@@ -7,9 +7,11 @@
  */
 import { recordAudit, listAudit, getAuditSummary } from './audit-logger';
 import { recordSecurityEvent, listSecurityEvents, getSecurityStatus } from './security-events';
+import { listOperationHistory } from './operation-history';
 
 export { recordAudit, listAudit, getAuditSummary };
 export { recordSecurityEvent, listSecurityEvents, getSecurityStatus };
+export { listOperationHistory };
 
 export type { AuditFilter, AuditSummary } from './audit-logger';
 export type {
@@ -28,4 +30,5 @@ export const audit = {
   recordSecurityEvent,
   listSecurityEvents,
   getSecurityStatus,
+  listOperationHistory,
 };

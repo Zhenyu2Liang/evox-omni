@@ -1,0 +1,13 @@
+{
+  "negativeTransfer": "转给张伟-10元",
+  "recallQuestion": "我刚才要求转给张伟多少钱？",
+  "recallAnswer": "你刚才说的是“转给张伟-10元”，金额是 -10 元。负数不能作为转账金额。",
+  "recallAfterReload": "我之前要求转给张伟多少钱？",
+  "subscriptionQuery": "查看我的订阅",
+  "analysisFollowUp": "你帮我分析一下",
+  "analysisAnswer": "按刚才的查询结果，每月订阅支出是 ¥315.30。\n\n**优先评估健身会员**：每月 ¥188.50，占了超过一半。如果最近很少去，可以考虑取消。\n\n视频服务和云盘服务也有重叠。先告诉我最近一个月的使用次数，再确定保留哪项。",
+  "quotedNegative": "你刚才说“转给张伟-10元”，没有让我转正数 10 元。",
+  "oldFallback": "这段回答包含尚未核实的账户数据或操作结果",
+  "missingAmount": "请补充金额",
+  "fitnessName": "健身会员"
+}

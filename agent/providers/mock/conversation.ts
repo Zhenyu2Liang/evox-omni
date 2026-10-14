@@ -16,10 +16,10 @@ export function findLastUserIndex(messages: Message[]): number {
   return -1;
 }
 
-export function lastToolResultAfter(messages: Message[], afterIndex: number): ToolResultMessage | undefined {
+export function lastToolResultAfter(messages: Message[], afterIndex: number, excludedTools: readonly string[] = []): ToolResultMessage | undefined {
   for (let index = messages.length - 1; index > afterIndex; index--) {
     const message = messages[index];
-    if (message.role === 'toolResult') return message;
+    if (message.role === 'toolResult' && !excludedTools.includes(message.toolName)) return message;
   }
   return undefined;
 }

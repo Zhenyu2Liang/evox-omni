@@ -4,12 +4,12 @@
  * Contract:
  *  - Query (validated with the private `auditQuerySchema`):
  *    `{ toolName?, riskLevel?: 'GREEN'|'YELLOW'|'RED', status?: AuditStatus, limit? }`.
- *  - Session SCOPE: resolved SERVER-SIDE from the `banking_session` cookie
- *    (`_lib/session#resolveIdentity`); a `?sessionId=` query param is IGNORED and never widens
- *    access. When there is no session the entries are not session-scoped (the demo audit dashboard
- *    shows the demo's simulated data).
+ *  - Scope: the configured demo user and fixed workspace via `requireIdentity`.
+ *    Developer mode is required before any filter parsing or audit read.
+ *    Cookies and query identifiers cannot select another workspace. Audit reads stay scoped
+ *    to this demo session; missing cookies never broaden the read scope.
  *  - Delegates to `@/audit`: `listAudit(filter)` (entries, newest-first) + `getAuditSummary()`
- *    (aggregate badges — global, not session-scoped).
+ *    (aggregate badges scoped to the same demo session).
  *  - Success: `200 { ok: true, data: { entries: AuditEntry[]; summary: AuditSummary } }`;
  *    an invalid query or a delegate failure maps to the shared error envelope
  *    (`400 VALIDATION` for a schema mismatch).
@@ -23,6 +23,7 @@ import type { AuditEntry } from '@/lib/contracts/audit';
 import { jsonResponse, errorResponse, parseQuery } from '../_lib/http';
 import { limitQuerySchema } from '../_lib/schemas';
 import { requireIdentity } from '../_lib/session';
+import { requireDeveloperMode } from '../_lib/developer';
 
 /**
  * Query schema for `GET /api/audit`.
@@ -59,8 +60,9 @@ export interface AuditData {
 
 export async function GET(req: NextRequest): Promise<Response> {
   try {
+    requireDeveloperMode(req);
     const query = parseQuery(auditQuerySchema, req);
-    // Trusted session scope (cookie-only); a `?sessionId=` query param is never authoritative.
+    // Fixed demo scope; request cookies and identity query parameters never select the workspace.
     const identity = await requireIdentity(req);
 
     const filter: AuditFilter = {

@@ -2,11 +2,8 @@
  * account — `get_balance`
  *
  * The registered banking tool the model may call for balance reads. Param schema is TypeBox
- * (`Type`/`Static` from `@earendil-works/pi-ai`); `execute` calls the Banking SDK and returns an
- * `AgentToolResult`, THROWING `AppError` (`@/lib/errors`) on failure. The plain
- * `runGetBalance(userId, args)` runner is the model-free path used by the registry's
- * `executeDirect` (the gateway-authorized execution path); it CATCHES and returns
- * `ToolExecutionResult{ok:false,error}` instead of throwing.
+ * (`Type`/`Static` from `@earendil-works/pi-ai`). The runner returns a typed SDK result;
+ * the factory uses the shared result adapter to expose complete public model data and Pi errors.
  *
  * Tier: 🟢 GREEN (read-only; auto-executes).
  * No permission/risk/MFA logic lives here — that is `security/`'s authority, enforced in the
@@ -17,9 +14,9 @@ import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
 import type { BalanceView } from '@/banking-sdk';
-import { AppError } from '@/lib/errors';
 import { formatCNY } from '@/lib/money';
 import type { ToolExecutionResult } from './index';
+import { toModelToolResult, toolFailure } from './result';
 
 /** `get_balance` params — none; the account set is resolved from the server-injected `userId`. */
 export const GetBalanceParams = Type.Object({});
@@ -32,16 +29,7 @@ export function createGetBalanceTool(userId: string): AgentTool<typeof GetBalanc
     label: '查询余额',
     description: '查询当前用户各账户余额（活期/储蓄）与可用总额。',
     parameters: GetBalanceParams,
-    execute: async () => {
-      const result = await runGetBalance(userId, {});
-      if (!result.ok) {
-        throw new AppError('TOOL_FAILED', result.error ?? 'get_balance failed');
-      }
-      return {
-        content: [{ type: 'text', text: result.summary ?? '操作成功' }],
-        details: result.data,
-      };
-    },
+    execute: async () => toModelToolResult(await runGetBalance(userId, {})),
   };
 }
 
@@ -54,7 +42,7 @@ export async function runGetBalance(
     const balance = await banking.account.getBalance(userId);
     return { ok: true, data: balance, summary: summarizeBalance(balance) };
   } catch (e) {
-    return { ok: false, error: AppError.from(e).message };
+    return toolFailure(e);
   }
 }
 

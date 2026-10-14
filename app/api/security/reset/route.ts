@@ -2,11 +2,8 @@
  * POST /api/security/reset — clears the CURRENT account's circuit-breaker state (GATED unlock).
  *
  * Contract:
- *  - IDENTITY: the session comes from the TRUSTED `banking_session` cookie
- *    (`_lib/session#requireIdentity`) and is checked FIRST (fail-closed) — a missing cookie or
- *    unknown session → `403 SECURITY_DENIED` (a body-less or bad-body request from an
- *    unauthenticated caller still gets the 403, never a 400). A `?sessionId=` query param is
- *    IGNORED — a caller can never unlock another account's breaker.
+ *  - Identity: the configured demo user and fixed session via `requireIdentity`.
+ *    No login is required; cookies and query identifiers cannot select another account's breaker.
  *  - Body (OPTIONAL): `{ verificationCode?: string }`. An absent/empty body is treated as `{}`.
  *  - Delegates to `@/security`: `circuitBreaker.resetSession(sessionId, { actor, reason,
  *    verificationCode })` — the AUDITED unlock: it clears the account's breaker state AND records a
@@ -15,7 +12,7 @@
  *  - GATE: the breaker is PER-ACCOUNT (shared across a user's sessions). While the account is LOCKED
  *    the unlock REQUIRES extra verification — a correct mock `verificationCode` (or an elapsed
  *    cooldown). Otherwise `resetSession` THROWS `AppError('CIRCUIT_OPEN')`, which propagates verbatim
- *    as HTTP `423` and the lock is LEFT INTACT: a bare session cookie can NEVER unlock.
+ *    as HTTP `423` and the lock is left intact: entering the demo does not grant an unlock.
  *  - Success: `200 { ok: true, data: ResetData }`; any throwable maps through the shared error
  *    envelope (`errorResponse`) — never a raw exception or the MFA code.
  *
@@ -53,8 +50,7 @@ export interface ResetData {
 
 export async function POST(req: NextRequest): Promise<Response> {
   try {
-    // Trusted identity FIRST, fail-closed: a missing cookie / unknown session → 403 (never a 400),
-    // so an unauthenticated caller posting `{}` or nothing still fails closed.
+    // Resolve the fixed demo account before applying the separate unlock-verification policy.
     const identity = await requireIdentity(req);
     const sessionId = identity.sessionId;
 

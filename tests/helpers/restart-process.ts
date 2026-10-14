@@ -8,19 +8,20 @@ import type { ModelRuntime } from '@/agent/providers/types';
 import { prisma } from '@/lib/db/client';
 import { listRecoverableAgentRuns } from '@/lib/db/repositories/agentRun';
 import { AgentRunJournal } from '@/agent/durable/journal';
+import { turnDeclaration } from './scripted-provider';
 
 const config: AppConfig = {
   llmMode: 'live', llmProvider: 'restart-test', llmModel: 'restart-model', demoUserId: 'user_liming',
 };
 const mode = process.argv[2];
 const scenario = process.argv[3];
-if (scenario === 'authorization_narration') config.llmMode = 'mock';
+if (scenario === 'authorization_result') config.llmMode = 'mock';
 const runId = process.argv[4];
 const sessionId = process.argv[5];
 let activeRunId = '';
 let activeSessionId = '';
 let modelCalls = 0;
-let narratingAuthorization = false;
+let renderingAuthorization = false;
 // A service has a listening socket; this child keeps an equivalent live host handle until killed.
 const hostHandle = mode === 'start' ? setInterval(() => undefined, 1000) : undefined;
 
@@ -36,6 +37,16 @@ AgentRunJournal.prototype.recordAgentEvent = function (event) {
   return recordAgentEvent.call(this, event);
 };
 
+const checkpoint = AgentRunJournal.prototype.checkpoint;
+AgentRunJournal.prototype.checkpoint = async function (stage) {
+  await checkpoint.call(this, stage);
+  if (mode === 'start' && scenario === 'authorization_result' && renderingAuthorization && stage === 'input') {
+    // The financial command already committed; result rendering/session persistence has not begun.
+    tell({ type: 'barrier', point: scenario, runId: this.lease.runId, sessionId: this.lease.sessionId });
+    await hold();
+  }
+};
+
 const faux = fauxProvider({ provider: 'restart-test', api: 'restart-test-api', models: [{ id: 'restart-model', name: 'Restart test model' }] });
 const models = createModels();
 models.setProvider(faux.provider);
@@ -49,10 +60,15 @@ function proposedTool() {
     ] }, { id: 'original-call' })
     : scenario === 'committed_write'
     ? fauxToolCall('reserve_budget', { name: 'Crash-safe budget', amount: '10.00' }, { id: 'original-call' })
-    : scenario === 'authorization' || scenario === 'authorization_narration'
+    : scenario === 'authorization' || scenario === 'authorization_result'
       ? fauxToolCall('transfer_money', { contactId: 'contact_zhangwei', amount: '200.00' }, { id: 'original-call' })
       : fauxToolCall('get_balance', {}, { id: 'original-call' });
-  return fauxAssistantMessage([call], { stopReason: 'toolUse' });
+  const writes = scenario === 'dag_progress' || scenario === 'committed_write' ? ['reserve_budget']
+    : scenario === 'authorization' || scenario === 'authorization_result' ? ['transfer_money'] : [];
+  const declaration = turnDeclaration({ purpose: writes.length ? 'operation' : 'query',
+    operations: [...writes, ...(scenario === 'dag_progress' || !writes.length ? ['get_balance'] : [])],
+    ...(scenario === 'dag_progress' ? { workflow: true } : {}) });
+  return fauxAssistantMessage([...declaration.content, call], { stopReason: 'toolUse' });
 }
 
 faux.appendResponses([context => {
@@ -68,7 +84,7 @@ const provider: ModelRuntime = {
   streamFn: (currentModel, context, options) => {
     modelCalls++;
     tell({ type: 'model_call', count: modelCalls });
-    if (mode === 'start' && (scenario === 'partial_model' || scenario === 'authorization_narration' && narratingAuthorization)) {
+    if (mode === 'start' && scenario === 'partial_model') {
       const stream = createAssistantMessageEventStream();
       const partial = { ...fauxAssistantMessage('Incomplete model output'), api: currentModel.api,
         provider: currentModel.provider, model: currentModel.id };
@@ -102,12 +118,13 @@ async function main(): Promise<void> {
   if (mode === 'start') {
     const message = scenario === 'dag_progress' ? 'Reserve a budget of 10.00 named Crash-safe workflow budget and then read my checking account balance.'
       : scenario === 'committed_write' ? 'Reserve a budget of 10.00 named Crash-safe budget.'
-      : scenario === 'authorization' || scenario === 'authorization_narration' ? 'Transfer 200.00 to contact_zhangwei.' : 'Read my checking account balance.';
+      : scenario === 'authorization' || scenario === 'authorization_result' ? 'Transfer 200.00 to contact_zhangwei.' : 'Read my checking account balance.';
     const result = await runTurn({ message, requestId: `restart:${scenario}` }, { config, provider, onEvent });
-    if (scenario === 'authorization_narration') {
+    if (scenario === 'authorization_result') {
       const decision = result.events.find(event => event.type === 'confirmation_required');
       if (decision?.type !== 'confirmation_required') throw new Error('The original transfer was not parked for confirmation.');
-      narratingAuthorization = true;
+      await runTurn({ sessionId: result.sessionId, message: 'Tell me a joke.', requestId: 'restart:authorization_result:conversation' }, { config, provider });
+      renderingAuthorization = true;
       await confirmAction(decision.actionId, { sessionId: result.sessionId, userId: config.demoUserId, deps: { config, provider, onEvent } });
     }
     tell({ type: 'unexpected_completion', runId: result.runId, modelCalls });

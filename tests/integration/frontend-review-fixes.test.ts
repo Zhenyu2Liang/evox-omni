@@ -5,7 +5,7 @@ import { scheduledTime } from '@/lib/scheduled-time';
 import { redactRequest } from '@/lib/sensitive';
 import { resetDatabase, getTestPrisma } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
-import { newSession, saveSession, loadSession } from '@/agent/session';
+import { newSession, saveSession, loadSession, getDemoSession } from '@/agent/session';
 import { securityGateway as gateway } from '@/security/security-gateway';
 import { banking } from '@/banking-sdk';
 import { assertConditionResolvable, validatePlan } from '@/planner/dag';
@@ -27,34 +27,34 @@ import { addDecimal, compareDecimal } from '@/lib/decimal';
 
 beforeEach(resetDatabase);
 describe('frontend review: production boundaries', () => {
-  it('resolves account names and owned card tails; rejects another owner', async () => {
-    expect((await resolveBankingArgs(DEMO_USER_ID, 'transfer_money', { sourceAccountId: '活期账户' })).sourceAccountId).toBe('acct_checking');
-    expect((await resolveBankingArgs(DEMO_USER_ID, 'freeze_card', { cardId: '6688' })).cardId).toBe('card_credit');
-    await expect(resolveBankingArgs('someone-else', 'freeze_card', { cardId: 'card_credit' })).rejects.toThrow('未找到');
+  it('resolves exact owned account and card IDs; rejects another owner', async () => {
+    expect((await resolveBankingArgs(DEMO_USER_ID, 'transfer_money', { sourceAccountId: 'acct_checking' })).sourceAccountId).toBe('acct_checking');
+    expect((await resolveBankingArgs(DEMO_USER_ID, 'freeze_card', { cardId: 'card_credit' })).cardId).toBe('card_credit');
+    await expect(resolveBankingArgs('someone-else', 'freeze_card', { cardId: 'card_credit' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
-  it('resolves product codes and subscription names, rejects empty/unknown comparisons', async () => {
-    expect((await resolveBankingArgs(DEMO_USER_ID, 'subscribe_investment', { productId: 'WJA001' })).productId).toBe('prod_wenjiana');
-    expect((await resolveBankingArgs(DEMO_USER_ID, 'set_subscription_reminder', { subscriptionId: 'Netflix' })).subscriptionId).toBe('sub_netflix');
-    await expect(resolveBankingArgs(DEMO_USER_ID, 'compare_investments', { productIds: ['unknown'] })).rejects.toThrow('未找到');
+  it('resolves exact product and subscription IDs, rejecting unknown comparisons', async () => {
+    expect((await resolveBankingArgs(DEMO_USER_ID, 'subscribe_investment', { productId: 'prod_wenjiana' })).productId).toBe('prod_wenjiana');
+    expect((await resolveBankingArgs(DEMO_USER_ID, 'set_subscription_reminder', { subscriptionId: 'sub_netflix' })).subscriptionId).toBe('sub_netflix');
+    await expect(resolveBankingArgs(DEMO_USER_ID, 'compare_investments', { productIds: ['unknown'] })).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
-  it('rejects ambiguous owned card selectors instead of taking the first', async () => {
+  it('rejects a card tail in the ID field even when several cards share the tail', async () => {
     await getTestPrisma().card.create({ data: { userId: DEMO_USER_ID, type: 'CREDIT', numberMasked: '****6688' } });
-    await expect(resolveBankingArgs(DEMO_USER_ID, 'freeze_card', { cardId: '6688' })).rejects.toThrow('不唯一');
+    await expect(resolveBankingArgs(DEMO_USER_ID, 'freeze_card', { cardId: '6688' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
   it('parks canonical args and displays the same named object before execution', async () => {
     const snapshot = newSession(DEMO_USER_ID); await saveSession(snapshot);
     const result = await gateway.handleToolCall({ sessionId: snapshot.sessionId, userId: DEMO_USER_ID,
-      toolName: 'freeze_card', args: { cardId: '6688' }, userRequest: '冻结尾号6688信用卡' });
+      toolName: 'freeze_card', args: { cardId: 'card_credit' }, userRequest: '冻结尾号6688信用卡' });
     expect(result.action?.args.cardId).toBe('card_credit');
     expect(result.action?.summary.fields.some(field => field.value.includes('6688'))).toBe(true);
     expect(result.action?.summary.actionId).toBe(result.action?.id);
     expect((await getTestPrisma().card.findUniqueOrThrow({ where: { id: 'card_credit' } })).status).toBe('ACTIVE');
   });
-  it('keeps explicit year and Beijing time even when the model supplies a wrong epoch', () => {
-    expect(scheduledTime({ runAt: Date.parse('2025-10-15T09:00:00Z') }, '2026年10月15日上午9点提醒电费')).toBe(Date.parse('2026-10-15T09:00:00+08:00'));
+  it('accepts explicit valid civil time and refuses absent or inconsistent time fields', () => {
+    expect(() => scheduledTime({ runAtLocal: '2026-10-15T09:00', runAt: Date.parse('2025-10-15T09:00:00Z') })).toThrow();
     expect(scheduledTime({ runAtLocal: '2026-10-15T09:00' })).toBe(Date.parse('2026-10-15T09:00:00+08:00'));
-    expect(scheduledTime({}, '2026年10月15日下午3点30分提醒电费')).toBe(Date.parse('2026-10-15T15:30:00+08:00'));
-    expect(() => scheduledTime({}, '2026年10月15日上午9点及2026年10月16日上午9点')).toThrow('exactly one requested execution time');
+    expect(scheduledTime({ runAtLocal: '2026-10-15T15:30' })).toBe(Date.parse('2026-10-15T15:30:00+08:00'));
+    expect(() => scheduledTime({})).toThrow('explicit');
     expect(() => scheduledTime({ runAtLocal: '2026-02-30T09:00' })).toThrow();
     expect(() => scheduledTime({ runAt: 100 })).toThrow();
   });
@@ -92,7 +92,7 @@ describe('frontend review: production boundaries', () => {
     expect(settled).toContain('已执行'); expect(settled).not.toContain('<input'); expect(settled).not.toContain('<button');
   });
   it('persists acknowledgement of exactly the selected owned transaction once, without changing money', async () => {
-    const snapshot = newSession(DEMO_USER_ID); await saveSession(snapshot);
+    const snapshot = await getDemoSession(DEMO_USER_ID);
     const item = (await banking.transaction.detectAnomaly(DEMO_USER_ID)).anomalies[0];
     const balance = await banking.account.getBalance(DEMO_USER_ID);
     const request = () => new NextRequest('http://localhost/api/transactions/ack', { method: 'POST', headers: { cookie: `banking_session=${snapshot.sessionId}` } });
@@ -100,7 +100,8 @@ describe('frontend review: production boundaries', () => {
     expect(await getTestPrisma().auditLog.count({ where: { toolName: 'acknowledge_transaction' } })).toBe(1);
     expect((await banking.transaction.detectAnomaly(DEMO_USER_ID)).anomalies.find(row => row.transaction.id === item.transaction.id)?.acknowledged).toBe(true);
     expect((await banking.account.getBalance(DEMO_USER_ID)).totalAvailable).toBe(balance.totalAvailable);
-    expect((await acknowledge(new NextRequest('http://localhost/ack', { method: 'POST' }), { params: Promise.resolve({ id: item.transaction.id }) })).status).toBe(403);
+    expect((await acknowledge(new NextRequest('http://localhost/ack', { method: 'POST' }), { params: Promise.resolve({ id: item.transaction.id }) })).status).toBe(200);
+    expect(await getTestPrisma().auditLog.count({ where: { toolName: 'acknowledge_transaction' } })).toBe(1);
   });
   it('redacts credentials before persistence and leaves normal password workflow requests usable', async () => {
     expect(redactRequest('当前密码: DontStoreMe123')).not.toContain('DontStoreMe123');

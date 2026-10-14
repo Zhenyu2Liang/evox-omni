@@ -1,4 +1,4 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from '@/lib/db/prisma';
 import { AppError } from '@/lib/errors';
 import { toJson } from '@/lib/json';
 import { idempotentTransferTxId, nodeExecutionKey } from '@/lib/ledger';

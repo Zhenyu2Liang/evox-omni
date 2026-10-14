@@ -9,13 +9,13 @@
  * `createScheduledTask` accepts an OPTIONAL `idempotencyKey`: a repeat with the SAME key replays the
  * already-persisted task instead of creating a second row (see `./idempotent.ts`).
  */
-import type { ScheduledTask } from '@prisma/client';
+import type { ScheduledTask } from '@/lib/db/prisma';
 import { scheduledTasks } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import { runInTransaction } from './tx';
 import { createIdempotent, normalizeIdempotencyKey } from './idempotent';
 import { safeParse, toJson } from '../lib/json';
-import { normalizeTransferAmount } from '../lib/money';
+import { validateScheduledPayload } from '../lib/contracts/scheduled-command';
 import { requestDigest } from '../lib/ledger';
 import { bankingExecutionContext } from './execution-context';
 import type {
@@ -58,6 +58,9 @@ function toScheduledTaskView(row: ScheduledTask): ScheduledTaskView {
 export async function createScheduledTask(
   input: CreateScheduledTaskInput,
 ): Promise<ScheduledTaskView> {
+  if (typeof input.userId !== 'string' || !input.userId.trim()) {
+    throw new AppError('SECURITY_DENIED', 'A scheduled intent requires a trusted owner identity.');
+  }
   if (typeof input.name !== 'string' || input.name.trim() === '') {
     throw new AppError('VALIDATION', '任务名称不能为空', { name: input.name });
   }
@@ -66,22 +69,23 @@ export async function createScheduledTask(
       kind: input.kind,
     });
   }
-  if (!Number.isFinite(input.runAt)) {
+  if (!Number.isSafeInteger(input.runAt) || !Number.isFinite(new Date(input.runAt).getTime())) {
     throw new AppError('VALIDATION', '任务执行时间无效', { runAt: input.runAt });
+  }
+  if (input.payload !== undefined && (typeof input.payload !== 'object' || input.payload === null || Array.isArray(input.payload))) {
+    throw new AppError('VALIDATION', 'A scheduled payload must be an object.');
   }
 
   const key = normalizeIdempotencyKey(input.idempotencyKey);
-  const payload = input.payload == null ? null : {
-    ...input.payload,
-    ...(input.payload.amount !== undefined ? { amount: normalizeTransferAmount(input.payload.amount) } : {}),
-  };
+  const payload = validateScheduledPayload(input.kind, input.payload) ?? null;
+  const requiresConfirmation = input.kind !== 'REMINDER';
   if (key !== undefined) {
     const replayed = await createIdempotent<ScheduledTask>({
       key,
       find: async (tx) => {
         const existing = await tx.scheduledTask.findUnique({ where: { idempotencyKey: key } });
         if (existing && (existing.userId !== input.userId || existing.name !== input.name || existing.kind !== input.kind ||
-          existing.runAt.getTime() !== input.runAt || existing.requiresConfirmation !== (input.requiresConfirmation ?? true) ||
+          existing.runAt.getTime() !== input.runAt || existing.requiresConfirmation !== requiresConfirmation ||
           requestDigest({ payload: safeParse<Record<string, unknown> | null>(existing.payload, null) }) !== requestDigest({ payload }))) {
           throw new AppError('CONFLICT', 'The execution identity belongs to a different scheduled intent.');
         }
@@ -96,7 +100,7 @@ export async function createScheduledTask(
             kind: input.kind,
             runAt: new Date(input.runAt),
             payload: payload === null ? null : toJson(payload),
-            requiresConfirmation: input.requiresConfirmation ?? true,
+            requiresConfirmation,
             status: 'SCHEDULED',
             idempotencyKey: replayKey,
           },
@@ -112,7 +116,7 @@ export async function createScheduledTask(
     kind: input.kind,
     runAt: new Date(input.runAt),
     payload: payload === null ? null : toJson(payload),
-    requiresConfirmation: input.requiresConfirmation ?? true,
+    requiresConfirmation,
   } }));
   return toScheduledTaskView(row);
 }
@@ -124,10 +128,15 @@ export async function listScheduledTasks(userId: string): Promise<ScheduledTaskV
 }
 
 /** Cancel an undispatched intent. A dispatched workflow must use its fenced plan cancellation route. */
-export async function cancelScheduledTask(id: string): Promise<ScheduledTaskView> {
+export async function cancelScheduledTask(id: string, userId: string): Promise<ScheduledTaskView> {
+  if (typeof userId !== 'string' || !userId.trim()) {
+    throw new AppError('SECURITY_DENIED', 'Scheduled cancellation requires a trusted owner identity.');
+  }
   const row = await runInTransaction(async tx => {
+    const owned = await tx.scheduledTask.findUnique({ where: { id } });
+    if (!owned || owned.userId !== userId) throw new AppError('NOT_FOUND', 'The scheduled intent does not exist.', { id });
     const cancelled = await tx.scheduledTask.updateMany({
-      where: { id, dispatchTaskId: null, status: 'SCHEDULED' }, data: { status: 'CANCELLED' },
+      where: { id, userId, dispatchTaskId: null, status: 'SCHEDULED' }, data: { status: 'CANCELLED' },
     });
     const current = await tx.scheduledTask.findUnique({ where: { id } });
     if (!current) throw new AppError('NOT_FOUND', 'The scheduled intent does not exist.', { id });

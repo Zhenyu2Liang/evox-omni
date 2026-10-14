@@ -14,3 +14,4 @@ export * from './ErrorCard';
 export * from './CardRenderer';
 export * from './confirmationStatus';
 export * from './maskPhone';
+export * from './BusinessResultCards';

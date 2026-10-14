@@ -1,4 +1,4 @@
-import type { ToolInvocation } from '@prisma/client';
+import type { ToolInvocation } from '@/lib/db/prisma';
 import type { AgentRunLease, RetryDecision, RuntimeEventPage, RuntimeEventChannel } from '@/lib/contracts/runtime';
 import { claimInvocationRetry, getAgentRunForUser, listPresentationEvents, listRecoverableAgentRuns, listRunInvocations, restoreInvocationFromReceipt, settleRecoveredInvocation, verifyAgentRunLease } from '@/lib/db/repositories/agentRun';
 import { AppError } from '@/lib/errors';

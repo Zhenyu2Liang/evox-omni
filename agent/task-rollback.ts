@@ -27,7 +27,7 @@ export async function rollbackTask(sessionId: string, taskId: string): Promise<T
       // Pure reads have no compensation. Other writes are explicitly retained, never replayed.
       const reversible = node.tool === 'reserve_budget' || node.tool === 'create_scheduled_task';
       const writes = ['transfer_money', 'subscribe_investment', 'redeem_investment', 'set_card_limit', 'freeze_card',
-        'unfreeze_card', 'report_lost_card', 'apply_virtual_card', 'cancel_subscription', 'set_subscription_reminder', 'change_password'];
+        'unfreeze_card', 'report_lost_card', 'apply_virtual_card', 'cancel_subscription', 'set_subscription_reminder'];
       if (!reversible && !writes.includes(node.tool ?? '')) continue;
       let receipt: TaskCompensation = { status: 'retained', message: '原操作已执行，保留原结果；本次回退不修改资金、理财或卡片变更。', completedAt: Date.now() };
       if (reversible) {

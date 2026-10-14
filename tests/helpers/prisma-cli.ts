@@ -1,37 +1,9 @@
 /**
- * `tests/helpers/prisma-cli.ts` — SHARED Prisma-CLI plumbing for test infrastructure.
- *
- * WHY THIS EXISTS: two independent entry points must provision an ISOLATED SQLite schema before
- * anything touches it —
- *
- *   - the Vitest global setup (`tests/setup.ts` → `prisma/test.db`, run by every `npm run test`), and
- *   - the real-browser acceptance harness (`tests/e2e/helpers.ts` → `prisma/e2e.db`, run by
- *     `npx tsx tests/e2e/acceptance.e2e.ts`).
- *
- * Both must therefore:
- *
- *   (a) guarantee a GENERATED, usable Prisma Client BEFORE any suite/seed imports `@prisma/client`.
- *       A bare `npm install` leaves ONLY the `@prisma/client` POSTINSTALL STUB on disk (`package.json`
- *       has no `postinstall` hook and `prisma generate` is a separate script), so `node_modules/.prisma/
- *       client` has no `schema.prisma` copy and `new PrismaClient()` throws
- *       `@prisma/client did not initialize yet. Please run "prisma generate" and try to import it again.`
- *       Every DB-backed suite then dies at IMPORT time with that misleading message — the real cause
- *       ("the clean checkout never generated the client") is nowhere in the failure.
- *
- *   (b) run their CLI steps (db push / seed) so a failure carries the FULL captured stdout+stderr. A
- *       bare `Error: Schema engine error:` must never hide the engine's real reason, and provisioning
- *       must NEVER silently warn-and-continue (a swallowed failure shows up later as the far more
- *       confusing `The table main.X does not exist in the current database.`).
- *
- *   (c) sanitize the child-process environment so the schema engine's log banner is never suppressed —
- *       an ambient `RUST_LOG≥warn` makes Prisma discard the engine's real error and report an EMPTY
- *       `Error: Schema engine error:`, which used to break cold-start `db push` entirely. See
- *       {@link SCHEMA_ENGINE_RUST_LOG} for the full mechanism.
- *
- * Extracting it here keeps the two call sites from drifting apart. It uses Node built-ins ONLY (no
- * `vitest`, no `@/` alias) so both the Vitest setup file and the tsx-run E2E harness can import it.
+ * Shared test infrastructure for current-schema Prisma clients and isolated SQLite databases.
+ * Both Vitest setup and browser acceptance check the actually resolved client before importing it.
+ * CLI failures retain diagnostics, and child processes inherit the schema-engine logging policy.
  */
-import { existsSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import {
@@ -45,10 +17,7 @@ import {
   type CliInvocation,
 } from '../../lib/prisma-cli-env';
 
-// The schema-engine log-level policy, the repo/binary resolution and `cliCommand` now live in the
-// shared, NON-TEST module `lib/prisma-cli-env.ts` (the deployment entrypoint `scripts/db-push.ts`
-// needs them too). They are RE-EXPORTED here so every existing importer of THIS module
-// (`tests/setup.ts`, `tests/e2e/helpers.ts`) keeps working with ZERO import changes.
+// Database scripts and test harnesses share the same CLI and environment policy.
 export {
   cliCommand,
   pinSchemaEngineLogging,
@@ -178,31 +147,75 @@ export function runCliStep(command: string, args: readonly string[], opts: RunCl
   return out;
 }
 
-/**
- * Absolute paths a SUCCESSFUL `prisma generate` writes into the generated Prisma Client
- * (`node_modules/.prisma/client`). The `@prisma/client` POSTINSTALL STUB that a bare `npm install`
- * leaves behind ships the runtime files but NOT the `schema.prisma` copy, so requiring ALL of them is
- * a reliable on-disk "the client is generated" signal.
- */
+/** The application imports this explicit generated output, never a node_modules client stub. */
 function prismaClientArtifactPaths(repoRoot: string): string[] {
-  const dir = path.join(repoRoot, 'node_modules', '.prisma', 'client');
-  return [path.join(dir, 'schema.prisma'), path.join(dir, 'index.js'), path.join(dir, 'default.js')];
-}
-
-/** Are the generated Prisma Client ARTIFACTS all present on disk? */
-export function prismaClientGenerated(repoRoot: string): boolean {
-  return prismaClientArtifactPaths(repoRoot).every((p) => existsSync(p));
+  const dir = path.join(repoRoot, 'lib', 'db', 'generated');
+  return [path.join(dir, 'internal', 'class.ts'), path.join(dir, 'client.ts')];
 }
 
 /**
- * Does the generated Prisma Client actually CONSTRUCT? A throwaway Node process requires
- * `@prisma/client` and instantiates `PrismaClient` (which never CONNECTS — construction only).
- * The postinstall stub throws `@prisma/client did not initialize yet…`, so this is the real
- * "usable, not a stub" probe — artifact presence alone cannot detect a partially-provisioned client.
+ * Preserve schema tokens and quoted strings while ignoring formatting and comments.
+ * Prisma also reorders model block attributes; their order does not change the generated client.
  */
+function schemaTokens(schema: string): string[] {
+  const tokens = schema.match(/"(?:\\.|[^"\\])*"|\/\/[^\r\n]*|\/\*[\s\S]*?\*\/|[A-Za-z_][A-Za-z_0-9]*|\d+(?:\.\d+)?|[^\s]/g) ?? [];
+  const significant = tokens.filter(token => !token.startsWith('//') && !token.startsWith('/*'));
+  const normalized: string[] = [];
+  let blockDepth = 0;
+  let blockAttributes: string[][] = [];
+
+  for (let index = 0; index < significant.length; index++) {
+    const token = significant[index];
+    if (blockDepth === 1 && token === '@' && significant[index + 1] === '@') {
+      const attribute = significant.slice(index, index + 3);
+      let next = index + 3;
+      if (significant[next] === '(') {
+        let argumentDepth = 0;
+        do {
+          const argumentToken = significant[next++];
+          attribute.push(argumentToken);
+          if (argumentToken === '(') argumentDepth++;
+          else if (argumentToken === ')') argumentDepth--;
+        } while (next < significant.length && argumentDepth > 0);
+      }
+      blockAttributes.push(attribute);
+      index = next - 1;
+      continue;
+    }
+    if (token === '{') blockDepth++;
+    else if (token === '}') {
+      if (blockDepth === 1) {
+        blockAttributes.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+        normalized.push(...blockAttributes.flat());
+        blockAttributes = [];
+      }
+      blockDepth--;
+    }
+    normalized.push(token);
+  }
+  return normalized;
+}
+
+/** The resolved generated artifacts must describe the current repository schema. */
+export function prismaClientGenerated(repoRoot: string): boolean {
+  try {
+    const artifacts = prismaClientArtifactPaths(repoRoot);
+    if (!artifacts.every(artifact => existsSync(artifact))) return false;
+    const inlineSchema = /"inlineSchema"\s*:\s*("(?:\\.|[^"\\])*")/.exec(readFileSync(artifacts[0], 'utf8'))?.[1];
+    if (!inlineSchema) return false;
+    const generatedSchema: string = JSON.parse(inlineSchema);
+    const currentSchema = readFileSync(path.join(repoRoot, 'prisma', 'schema.prisma'), 'utf8');
+    return JSON.stringify(schemaTokens(generatedSchema)) === JSON.stringify(schemaTokens(currentSchema));
+  } catch {
+    return false;
+  }
+}
+
+/** Verify schema freshness and construction in an isolated process without connecting to a database. */
 export function prismaClientUsable(repoRoot: string): boolean {
-  const script = "const {PrismaClient}=require('@prisma/client');new PrismaClient();";
-  const probe = spawnSync(process.execPath, ['-e', script], {
+  if (!prismaClientGenerated(repoRoot)) return false;
+  const script = "const {createDatabaseClient}=require('./lib/db/database.ts');const client=createDatabaseClient('file::memory:');void client.$disconnect();";
+  const probe = spawnSync(process.execPath, ['--import', 'tsx', '-e', script], {
     cwd: repoRoot,
     windowsHide: true,
     encoding: 'utf8',
@@ -210,44 +223,19 @@ export function prismaClientUsable(repoRoot: string): boolean {
   return probe.status === 0;
 }
 
-/** Run `prisma generate` — materialises the Client + its engine artifacts — via the shared CLI path. */
+/** Generate the TypeScript client without opening or modifying a database. */
 export function runPrismaGenerate(repoRoot: string, env?: NodeJS.ProcessEnv): void {
   const generate = cliCommand(resolvePrismaBin(repoRoot), ['prisma', 'generate']);
   runCliStep(generate.command, generate.args, { cwd: repoRoot, env });
 }
 
-/**
- * Ensure a GENERATED, usable Prisma Client exists before any DB step needs it.
- *
- * WHY: the repo-root `package.json` has NO `postinstall` hook and `prisma generate` is a SEPARATE
- * script (`db:generate`), so a clean `npm install`-only checkout leaves `node_modules/.prisma/client`
- * holding ONLY the `@prisma/client` stub, whose `PrismaClient` throws
- * `@prisma/client did not initialize yet. Please run "prisma generate" and try to import it again.`
- * The provisioning pushes below run with `--skip-generate` (they deliberately skip generation), so the
- * client (and the seed, which imports `@prisma/client`) would then be broken and every DB-backed suite
- * would fail as an infrastructure error — exactly the bug this guards against.
- *
- * AUTHORITATIVE GATE - the USABILITY probe (`prismaClientUsable`): it requires `@prisma/client` and
- * constructs a `PrismaClient` exactly the way the suites do, so it is true iff the client that will
- * ACTUALLY be required is usable. It is the ONLY reliable signal because Node resolves `@prisma/client`
- * by walking UP the directory tree: in a hoisted layout (a sparse/local `node_modules` whose real deps -
- * `@prisma/client`, `prisma` - live in a PARENT `node_modules`) `prisma generate` writes the client to
- * that PARENT path, so the fixed worktree-local artifact path checked by `prismaClientGenerated` stays
- * absent even though the client resolves and constructs fine. Gating on artifact presence alone would
- * therefore falsely force a generate and then THROW on a healthy worktree.
- *
- * `prismaClientGenerated` (worktree-local artifact presence) is kept only as a NON-authoritative proxy.
- * Post-generate we accept EITHER signal: a clean checkout (stub-only `node_modules`) has a false probe
- * until `generate` runs, and artifact presence then confirms success even if the probe is momentarily
- * flaky - a false-negative probe at most costs a harmless extra generate, never a false failure.
- * `generate` needs no live DB.
- */
+/** Generate only when the actual installed client is missing, stale or unusable; verify again afterward. */
 export function ensurePrismaClientGenerated(repoRoot: string, env?: NodeJS.ProcessEnv): void {
   if (prismaClientUsable(repoRoot)) return;
-  console.log('· 未检测到可用的 Prisma Client → 运行 prisma generate（清理环境自举步骤）');
+  console.log('The Prisma Client is missing, stale or unusable. Running prisma generate.');
   runPrismaGenerate(repoRoot, env);
-  if (prismaClientUsable(repoRoot) || prismaClientGenerated(repoRoot)) return;
-  throw new Error('prisma generate 完成后 Prisma Client 产物仍缺失（见上方完整 CLI 输出）');
+  if (prismaClientUsable(repoRoot)) return;
+  throw new Error('Prisma Client generation completed, but the resolved client is unusable or does not match the current schema.');
 }
 
 // ---------------------------------------------------------------------------
@@ -256,9 +244,9 @@ export function ensurePrismaClientGenerated(repoRoot: string, env?: NodeJS.Proce
 
 /** One rung of a provisioning ladder: a labelled `prisma db push` invocation shape. */
 export interface PushRung {
-  /** Human-readable label, e.g. `db push --force-reset --skip-generate` (used in diagnostics). */
+  /** Human-readable label, e.g. `db push --force-reset` (used in diagnostics). */
   label: string;
-  /** FULL CLI args INCLUDING the `prisma` program name, e.g. `['prisma','db','push','--skip-generate']`. */
+  /** FULL CLI args INCLUDING the `prisma` program name, e.g. `['prisma','db','push']`. */
   args: readonly string[];
   /** Optional pre-step run BEFORE this rung's push (e.g. `prisma generate`). A throw fails the rung. */
   before?: () => void;

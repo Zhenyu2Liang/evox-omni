@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { getDemoSession, getOrCreateSession, executeGatedTool,
+  confirmAction as confirmInternalAction, verifyAction as verifyInternalAction } from '@/agent';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import { createToolRegistry } from '@/agent/tools';
 import { banking } from '@/banking-sdk';
@@ -24,15 +25,15 @@ beforeEach(() => resetDatabase());
 afterEach(() => vi.restoreAllMocks());
 afterAll(() => disconnectTestPrisma());
 type Route = typeof confirmPost;
-async function call(handler: Route, id: string, sessionId: string, body: object = {}) {
+async function call(handler: Route, id: string, _sessionId: string, body: object = {}) {
   const response = await handler(new NextRequest(`http://localhost/api/actions/${id}`, {
-    method: 'POST', headers: { 'content-type': 'application/json', cookie: `banking_session=${sessionId}` }, body: JSON.stringify(body),
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   }), { params: Promise.resolve({ id }) });
   return { http: response.status, body: await response.json() };
 }
 const balance = async () => centsToMoney((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor);
 async function park(amount = '200') {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const action = await executeGatedTool({ userId, sessionId, toolName: 'transfer_money', args: { name: '张伟', amount }, userRequest: '恢复安全边界回归' });
   expect(action.pendingActionId).toBeTruthy();
   return { id: action.pendingActionId!, sessionId };
@@ -169,7 +170,7 @@ it.each(resourceTools)('%s refuses another user resource even with valid own con
   // deliberately planted legacy/corrupt row, retaining the original write-boundary assertions.
   expect(action.pendingActionId).toBeUndefined();
   expect(await state()).toBe(before);
-  const requiresMfa = ['unfreeze_card', 'report_lost_card'].includes(toolName);
+  const requiresMfa = ['freeze_card', 'unfreeze_card', 'report_lost_card'].includes(toolName);
   const row = await actionRepo.createPendingAction({ sessionId, userId: other.id, toolName,
     args: { cardId: 'card_credit', category: '娱乐', amount: '1500', subscriptionId: 'sub_netflix', remind: true, userId },
     tier: requiresMfa ? 'RED' : 'YELLOW', requiresMfa,
@@ -178,7 +179,15 @@ it.each(resourceTools)('%s refuses another user resource even with valid own con
   });
   if (requiresMfa) await mfa.issueChallenge(row.id);
   const response = await call(row.requiresMfa ? verifyPost : confirmPost, row.id, sessionId, row.requiresMfa ? { code: '123456' } : {});
-  expect(response.body.data.ok).toBe(false); expect(response.body.data.status).toBe('failed');
+  expect(response.http).toBe(403);
+  expect(response.body.error.code).toBe('SECURITY_DENIED');
+  // Internal execution independently enforces resource ownership after the HTTP boundary refuses it.
+  const identity = { sessionId, userId: other.id };
+  const internalResult = requiresMfa
+    ? await verifyInternalAction(row.id, '123456', identity)
+    : await confirmInternalAction(row.id, identity);
+  expect(internalResult.ok).toBe(false);
+  expect(internalResult.status).toBe('failed');
   expect(await state()).toBe(before);
 });
 
@@ -209,7 +218,7 @@ it('ownership is enforced again by the actual write when the resource owner chan
 });
 
 async function contradictoryPlan() {
-  const p = getTestPrisma(); const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const p = getTestPrisma(); const sessionId = (await getDemoSession(userId)).sessionId;
   const submitted = await runSubmitPlan(userId, { goal: '人工核对审计回归', nodes: [{ id: 'transfer', name: '转账', kind: 'tool', tool: 'transfer_money', args: { name: '张伟', amount: '200' }, dependencies: [] }] }, {
     sessionId, runTool: (toolName, args, ctx) => executeGatedTool({ userId, sessionId, toolName: toolName as ToolName, args, userRequest: '人工核对审计回归', taskId: ctx.taskId, nodeId: ctx.nodeId }),
   });

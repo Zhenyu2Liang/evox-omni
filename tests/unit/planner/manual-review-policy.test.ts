@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { reviewControlState, type ReviewTaskState } from '@/agent/manual-review-policy';
-import type { AgentTaskNode, PendingAction } from '@prisma/client';
+import type { AgentTaskNode, PendingAction } from '@/lib/db/prisma';
 
 const task = (status: string, executionToken: string | null = null): ReviewTaskState => ({ status, executionToken, nodes: [] });
 

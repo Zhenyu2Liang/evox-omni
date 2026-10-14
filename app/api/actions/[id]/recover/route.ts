@@ -10,9 +10,8 @@
  *
  * Contract:
  *  - Body: `{}` (the action id comes from the path via `IdRouteContext`).
- *  - IDENTITY: the caller's session/user come from the TRUSTED `banking_session` cookie
- *    (`_lib/session#requireIdentity`); a missing cookie or unknown session → `403 SECURITY_DENIED`.
- *    A `?sessionId=` / `?userId=` query param is IGNORED and can never widen access.
+ *  - Identity comes from the configured demo user and fixed session via `requireIdentity`.
+ *    No login is required; cookies and query identifiers cannot select another workspace.
  *  - Existence + ownership: evaluated in that order and only AFTER identity is established — an
  *    unknown action id is `404 NOT_FOUND`; an action owned by a DIFFERENT session/user is
  *    `403 SECURITY_DENIED`.
@@ -44,7 +43,7 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
   try {
     const id = (await ctx.params).id;
 
-    // Trusted identity: cookie-only, server-validated. Missing cookie / unknown session → 403.
+    // Resolve the fixed demo workspace before checking persisted action ownership.
     const identity = await requireIdentity(req);
     const { sessionId, userId } = identity;
 

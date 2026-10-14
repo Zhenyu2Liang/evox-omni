@@ -9,159 +9,154 @@
  * original args and executes. No chain-of-thought is rendered here — only messages, cards, plan
  * steps and tool status.
  *
- * Two surfaces are driven by hook STATE (not by inline cards):
- *  - the LIVE plan (`stream.activePlan`) rendered via `PlanCard`, so node statuses advance as
- *    `plan_update` events arrive;
- *  - the active human decision (`stream.pendingAction`) rendered via `ConfirmationCard` (YELLOW) or
- *    `MfaCard` (RED). When the agent ALSO emitted a matching inline `confirmation`/`mfa` card, that
- *    duplicate is suppressed so exactly ONE human-decision card is visible for the active action.
+ * Plans remain in their owning tool message and receive subsequent node updates in place.
+ * Only an actionable plan without a historical owner can use the fallback plan surface.
+ * The active decision lives in the composer dock. Historical authorization cards are read-only.
  *
- * `taskId` (optional) enables refresh recovery: the hook re-fetches that plan (or the last-seen plan
- * id remembered in `sessionStorage`) so a reloaded page restores the live plan.
+ * `taskId` (optional) enables refresh recovery of the server-selected actionable plan. Historical
+ * snapshots are supplied in the persisted transcript; browser storage never selects a plan.
  */
-import { useEffect, useRef } from 'react';
-import type { ChatCard, ChatMessage } from '@/lib/contracts/agent';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import type { ChatMessage } from '@/lib/contracts/agent';
 import type { ChatEndpoints } from './actions';
 import type { CardActionHandlers } from './cards';
-import type { PendingHumanDecision } from './useAgentStream';
 import { useAgentStream } from './useAgentStream';
-import { decisionKey } from './decisionKey';
-import { asTerminalStatus } from './cards/confirmationStatus';
-import { ConfirmationCard, MfaCard, PlanCard, ReconciliationCard } from './cards';
+import { PlanCard, ReconciliationCard } from './cards';
+import { ApprovalRequest } from './ApprovalRequest';
 import { MessageBubble } from './MessageBubble';
 import { StreamingText } from './StreamingText';
-import { ToolEventList } from './ToolEventList';
 import { Composer } from './Composer';
-import { EmptyState, Spinner } from '../ui';
+import { ChatWelcome } from './ChatWelcome';
+import { Spinner } from '../ui';
+import { useI18n } from '@/lib/i18n/LocaleProvider';
+import { publicToolError } from '@/lib/tool-feedback';
+import { sanitizeToolArguments } from '@/lib/tool-diagnostics';
+import { useDeveloperMode } from '@/lib/developer-mode/DeveloperModeProvider';
+import { historyPlan, isActionablePlan } from '@/lib/chat-plan-history';
+import type { ChatHistoryPage } from '@/lib/contracts/chat-history';
+import { captureHistoryAnchor, restoreHistoryAnchor, type ScrollAnchor } from './history';
+import type { ErrorCode } from '@/lib/errors';
 
 export interface ChatWindowProps {
   sessionId?: string;
   initialMessages?: ChatMessage[];
+  initialHistory?: ChatHistoryPage;
   endpoints?: ChatEndpoints;
-  /** Plan id to recover on mount (refresh recovery); defaults to the last-seen plan id. */
+  /** Server-selected actionable plan to recover on mount. */
   taskId?: string;
   className?: string;
 }
 
-/** Does an inline card already represent the SAME active decision as the pending action? */
-function isDuplicateDecisionCard(card: ChatCard, pending: PendingHumanDecision): boolean {
-  if (card.type === 'mfa') {
-    return card.actionId === pending.actionId;
-  }
-  if (card.type === 'confirmation') {
-    return card.action.actionId === pending.actionId ||
-      (pending.kind === 'confirmation' && decisionKey(card.action) === decisionKey(pending.summary));
-  }
-  return false;
-}
-
-/**
- * Drop the inline `confirmation`/`mfa` card that duplicates the active pending action (it is
- * rendered ONCE, from `stream.pendingAction`). A message left empty by the removal is dropped too,
- * so no empty bubble appears; unrelated/older decision cards are preserved.
- */
-function withoutDuplicateDecisionCard(
-  messages: ChatMessage[],
-  pending: PendingHumanDecision,
-): ChatMessage[] {
-  let changed = false;
-  const result: ChatMessage[] = [];
-  for (const message of messages) {
-    const cards = message.cards ?? [];
-    const kept = cards.filter((card) => !isDuplicateDecisionCard(card, pending));
-    if (kept.length === cards.length) {
-      result.push(message);
-      continue;
-    }
-    changed = true;
-    const emptied =
-      message.content.length === 0 && kept.length === 0 && (message.toolEvents?.length ?? 0) === 0;
-    if (!emptied) result.push({ ...message, cards: kept });
-  }
-  return changed ? result : messages;
-}
-
-interface PendingDecisionCardProps {
-  pending: PendingHumanDecision;
-  action: CardActionHandlers;
-  busy?: boolean;
-  error?: string;
-  /** Failed MFA attempts for the active decision (shown on the MFA card). */
-  attempts?: number;
-}
-
-/** The ONE active human-decision card: confirm/verify/cancel all POST to the `./app` routes. */
-function PendingDecisionCard({ pending, action, busy, error, attempts }: PendingDecisionCardProps) {
-  if (pending.kind === 'confirmation') {
-    const runtime = pending.summary as unknown as { status?: unknown; message?: unknown };
-    return (
-      <ConfirmationCard
-        action={pending.summary}
-        actionId={pending.actionId}
-        onConfirm={action.onConfirm}
-        onCancel={action.onCancel}
-        busy={busy}
-        error={error}
-        status={asTerminalStatus(runtime.status)}
-        statusMessage={typeof runtime.message === 'string' ? runtime.message : undefined}
-      />
-    );
-  }
-
-  const { actionId, hint } = pending;
-  return (
-    <MfaCard
-      actionId={actionId}
-      action={pending.summary}
-      hint={hint}
-      onSubmit={(code) => action.onVerify?.(actionId, code)}
-      onCancel={action.onCancel}
-      busy={busy}
-      error={error}
-      attempts={attempts}
-    />
-  );
+/** Unknown runtime failures remain developer diagnostics, while public business reasons survive. */
+export function ChatErrorFeedback({ message, code, showNotice = true }: { message?: string; code?: ErrorCode; showNotice?: boolean }) {
+  const { t } = useI18n();
+  const { enabled: developerMode } = useDeveloperMode();
+  if (!message) return null;
+  return <>
+    {showNotice ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-banking-danger">
+      {publicToolError(message, t, 'chat.error.request', code)}
+    </div> : null}
+    {developerMode ? <details data-chat-error-diagnostics="true" className="rounded-xl border border-slate-200 bg-white p-3 text-xs text-banking-navy">
+      <summary>{t('chat.diagnostics.detail')}</summary>
+      <pre className="mt-2 whitespace-pre-wrap break-words">{String(sanitizeToolArguments(message))}</pre>
+    </details> : null}
+  </>;
 }
 
 export function ChatWindow({
   sessionId,
   initialMessages,
+  initialHistory,
   endpoints,
   taskId,
   className,
 }: ChatWindowProps) {
-  const stream = useAgentStream({ sessionId, initialMessages, endpoints, taskId });
+  const { t } = useI18n();
+  const stream = useAgentStream({ sessionId, initialMessages, initialHistory, endpoints, taskId });
+  const localizedError = stream.error ? publicToolError(stream.error, t, 'chat.error.request', stream.errorCode) : undefined;
   const listRef = useRef<HTMLDivElement>(null);
+  const followLatestRef = useRef(true);
+  const anchorRef = useRef<ScrollAnchor | undefined>(undefined);
+  const loadingEarlierRef = useRef(false);
+  const [followingLatest, setFollowingLatest] = useState(true);
+  const [hasNewMessages, setHasNewMessages] = useState(false);
+  const previousLatestRef = useRef<string | undefined>(undefined);
+  const previousStreamingRef = useRef('');
+  const [draft, setDraft] = useState<{ content: string }>();
 
   const pending = stream.pendingAction;
-  const visibleMessages = pending
-    ? withoutDuplicateDecisionCard(stream.messages, pending)
-    : stream.messages;
+  const visibleMessages = stream.messages;
+  const detachedPlan = stream.activePlan && isActionablePlan(stream.activePlan) &&
+    !historyPlan(visibleMessages, stream.activePlan.id) ? stream.activePlan : undefined;
 
   const lastMessageId =
     visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1].id : undefined;
   // Only the newest reply may offer a planning retry. Starting any new turn retires old buttons.
   const retryRequest = visibleMessages.at(-1)?.role === 'assistant' ? visibleMessages.at(-1)?.retryRequest : undefined;
 
-  // Auto-scroll the list to the bottom as new content arrives.
-  useEffect(() => {
+  // Follow new content only while the reader is already near the end.
+  useLayoutEffect(() => {
+    followLatestRef.current = true; anchorRef.current = undefined;
+    setFollowingLatest(true); setHasNewMessages(false);
+  }, [initialHistory?.historyGeneration]);
+
+  useLayoutEffect(() => {
     const el = listRef.current;
-    if (el) {
+    if (el && anchorRef.current && !stream.loadingHistory) {
+      restoreHistoryAnchor(el, anchorRef.current);
+      anchorRef.current = undefined;
+      return;
+    }
+    const hasContent = visibleMessages.length > 0 || stream.streamingText.length > 0 || pending !== undefined ||
+      stream.activePlan !== undefined || stream.pendingReconciliations.length > 0;
+    if (el && followLatestRef.current && hasContent) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [lastMessageId, stream.streamingText, pending, stream.activePlan, stream.pendingReconciliations]);
+  }, [lastMessageId, visibleMessages.length, stream.messages, stream.streamingText, pending, stream.activePlan, stream.pendingReconciliations, stream.loadingHistory]);
+
+  useEffect(() => {
+    if (!followLatestRef.current && ((previousLatestRef.current !== undefined && previousLatestRef.current !== lastMessageId) ||
+        (stream.streamingText.length > 0 && stream.streamingText !== previousStreamingRef.current))) setHasNewMessages(true);
+    previousLatestRef.current = lastMessageId;
+    previousStreamingRef.current = stream.streamingText;
+  }, [lastMessageId, stream.streamingText]);
+
+  async function loadEarlier() {
+    if (loadingEarlierRef.current) return;
+    loadingEarlierRef.current = true;
+    const list = listRef.current;
+    anchorRef.current = list ? captureHistoryAnchor(list) : undefined;
+    followLatestRef.current = false;
+    setFollowingLatest(false);
+    try { if (!await stream.loadOlder()) anchorRef.current = undefined; }
+    finally { loadingEarlierRef.current = false; }
+  }
+
+  function showLatest() {
+    followLatestRef.current = true;
+    setFollowingLatest(true); setHasNewMessages(false);
+    if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
+  }
+
+  function send(text: string) {
+    followLatestRef.current = true;
+    setFollowingLatest(true); setHasNewMessages(false);
+    void stream.send(text);
+  }
 
   const action: CardActionHandlers = {
     actionId: pending?.actionId,
     onConfirm: (id) => void stream.confirm(id),
     onVerify: (id, code) => void stream.verify(id, code),
     onCancel: (id) => void stream.cancel(id),
-    onFreeze: (anomaly, cardId) => void stream.send(`交易 ${anomaly.transaction.id}（${anomaly.transaction.merchant}）触发安全提醒。我选择冻结卡片 ${cardId}，请生成确认卡。`),
-    onTaskControl: (a) => void stream.controlTask(a),
+    onFreeze: (anomaly, cardId) => void stream.send(t('chat.freezePrompt', {
+      transactionId: anomaly.transaction.id, merchant: anomaly.transaction.merchant, cardId,
+    })),
+    onTaskControl: (a, planId) => void stream.controlTask(a, planId),
     onRecover: (id) => void stream.recover(id),
     mfaAttempts: stream.mfaAttempts,
     busy: stream.busy,
-    error: stream.error,
+    error: localizedError,
   };
 
   const hasConversation = visibleMessages.length > 0 || stream.streamingText.length > 0;
@@ -172,38 +167,44 @@ export function ChatWindow({
     stream.pendingReconciliations.length === 0;
 
   return (
-    <div className={`flex h-full min-h-0 flex-col bg-banking-light ${className ?? ''}`.trim()}>
-      <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
-        {stream.error && !pending ? <p role="alert" className="text-banking-danger">{stream.error}</p> : null}
+    <div className={`flex min-h-0 min-w-0 flex-col bg-banking-light [container-type:size] ${className ?? ''}`.trim()}>
+      <div ref={listRef} onScroll={() => {
+        const list = listRef.current;
+        if (list) {
+          const latest = list.scrollHeight - list.scrollTop - list.clientHeight < 96;
+          followLatestRef.current = latest; setFollowingLatest(latest);
+          if (latest) setHasNewMessages(false);
+        }
+      }} data-chat-scroll="true" className="min-h-0 flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none] px-3 py-6 sm:px-8">
+        <div className="mx-auto w-full max-w-6xl space-y-6">
+        {stream.history?.hasMore && <div className="flex flex-col items-center gap-2" data-history-controls="true">
+          <button type="button" data-load-history="true" disabled={stream.loadingHistory || stream.historyError === 'chat.history.changed'}
+            onClick={() => void loadEarlier()} className="min-h-11 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-banking-navy disabled:opacity-50">
+            {t(stream.loadingHistory ? 'chat.history.loading' : stream.historyError === 'chat.history.failed' ? 'chat.history.retry' : 'chat.history.loadEarlier')}
+          </button>
+          {stream.historyError && <p role="alert" className="text-center text-sm text-banking-danger">{t(stream.historyError)}</p>}
+        </div>}
+        {stream.history && !stream.history.hasMore && visibleMessages.length > 0 && <p data-history-complete="true" className="text-center text-xs text-banking-navy/70">{t('chat.history.complete')}</p>}
+        <ChatErrorFeedback message={stream.error} code={stream.errorCode} showNotice={!pending} />
         {isEmpty && stream.restoring ? (
-          <div className="flex flex-col items-center justify-center gap-3 py-10">
+          <div role="status" className="flex flex-col items-center justify-center gap-3 py-16">
             <Spinner />
-            <p className="text-sm text-banking-navy/60">正在恢复会话状态…</p>
+            <p className="text-sm text-banking-navy">{t('chat.restoring')}</p>
           </div>
         ) : isEmpty ? (
-          <EmptyState
-            title="开始与 AI 银行助手对话"
-            description="用自然语言描述你的需求，例如「查一下我的余额」或「给张伟转账 200 元」。"
-          />
+          <ChatWelcome disabled={stream.busy || stream.restoring} onSelect={content => setDraft({ content })} />
         ) : (
           <>
             {visibleMessages.map((m) => (
               <MessageBubble key={m.id} message={m} action={action} />
             ))}
-            {stream.streamingText.length > 0 && (
-              <StreamingText text={stream.streamingText} active={stream.busy} />
+            {stream.busy && (
+              <div role="status" aria-label={t('chat.responding')} className="max-w-[min(88%,52rem)] rounded-2xl border border-slate-200/80 bg-white px-5 py-4 sm:ml-12">
+                <StreamingText text={stream.streamingText} active phase={stream.replyPhase} />
+              </div>
             )}
-            {stream.activePlan !== undefined && (
-              <PlanCard plan={stream.activePlan} onControl={action.onTaskControl} busy={stream.busy} />
-            )}
-            {pending !== undefined && (
-              <PendingDecisionCard
-                pending={pending}
-                action={action}
-                busy={stream.busy}
-                error={stream.error}
-                attempts={stream.mfaAttempts}
-              />
+            {detachedPlan !== undefined && (
+              <PlanCard plan={detachedPlan} onControl={a => action.onTaskControl?.(a, detachedPlan.id)} busy={stream.busy} />
             )}
             {stream.pendingReconciliations.map((r) => (
               <ReconciliationCard
@@ -213,26 +214,30 @@ export function ChatWindow({
                 attention={r.attention}
                 onRecover={action.onRecover}
                 busy={stream.busy}
-                error={stream.error}
+                error={localizedError}
               />
             ))}
           </>
         )}
+        </div>
       </div>
 
-      {stream.toolEvents.length > 0 && (
-        <div className="border-t border-banking-light bg-white/70 px-4 py-3">
-          <ToolEventList events={stream.toolEvents} />
-        </div>
-      )}
-
-      <div className="border-t border-banking-light bg-white p-3">
+      <div data-chat-composer-dock="true" className="shrink-0 border-t border-slate-200/60 bg-banking-light px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-8 sm:pt-4">
+        <div className="mx-auto w-full max-w-6xl">
+        {!followingLatest && !pending && <button type="button" data-chat-latest="true" onClick={showLatest}
+          className="mb-3 min-h-11 rounded-xl border border-banking-accent/30 bg-white px-4 py-2 text-sm font-medium text-banking-accent">
+          {t(hasNewMessages ? 'chat.history.newMessages' : 'chat.history.latest')}
+        </button>}
         {retryRequest && !pending && stream.pendingReconciliations.length === 0 && (
           <button type="button" disabled={stream.busy || stream.restoring}
-            className="mb-2 rounded-lg border border-banking-blue px-3 py-2 text-sm text-banking-blue disabled:opacity-50"
-            onClick={() => void stream.send(retryRequest)}>重试规划</button>
+            className="mb-3 rounded-xl border border-banking-accent/30 bg-white px-3 py-2 text-sm text-banking-accent disabled:opacity-50"
+            onClick={() => send(retryRequest)}>{t('chat.retryPlanning')}</button>
         )}
-        <Composer onSend={stream.send} busy={stream.busy} disabled={stream.busy} />
+        {pending && <ApprovalRequest key={pending.actionId} pending={pending} action={action} busy={stream.busy}
+          error={localizedError} attempts={stream.mfaAttempts} />}
+        <Composer onSend={send} draft={draft} busy={stream.busy} disabled={stream.restoring} className={pending ? '[&_textarea]:max-h-16' : undefined} />
+        {!pending && <p className="mt-2.5 text-center text-[11px] leading-4 text-banking-navy/80">{t('chat.composer.help')}</p>}
+        </div>
       </div>
     </div>
   );

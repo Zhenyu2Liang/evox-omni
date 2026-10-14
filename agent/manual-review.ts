@@ -1,5 +1,5 @@
 /** Minimal Demo handoff: durable operator decisions, never human-invented banking results. */
-import type { AgentTaskNode, ManualReview, PendingAction, Prisma } from '@prisma/client';
+import type { AgentTaskNode, ManualReview, PendingAction, Prisma } from '@/lib/db/prisma';
 import { recordAudit } from '@/audit/audit-logger';
 import { prisma } from '@/lib/db/client';
 import { demoNow } from '@/lib/clock';
@@ -30,7 +30,7 @@ async function operator(identity: Identity): Promise<string> {
   const session = await prisma.agentSession.findUnique({ where: { id: identity.sessionId } });
   if (!session || session.userId !== identity.userId) throw new AppError('SECURITY_DENIED', '会话身份无效。');
   const user = await prisma.user.findUniqueOrThrow({ where: { id: identity.userId } });
-  return `人工处理（Demo）·${user.name}`;
+  return user.name;
 }
 
 /** A failed write may be retried only with an explicit failed result and no committed evidence.

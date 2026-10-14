@@ -25,7 +25,8 @@
  */
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
 import { auditStore } from '@/audit/audit-logger';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
@@ -44,7 +45,7 @@ afterAll(() => disconnectTestPrisma());
 /** A real route handler's `POST` for `/…/[id]` (app-layer `IdRouteContext`). */
 type RoutePost = (req: NextRequest, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;
 
-/** POST `/api/actions/[id]/<verb>` with the trusted cookie identity. */
+/** POST `/api/actions/[id]/<verb>` for the fixed demo identity. */
 async function postAction(handler: RoutePost, id: string, sessionId: string, verb: string) {
   const res = await handler(
     new NextRequest(`http://localhost/api/actions/${id}/${verb}`, {
@@ -114,7 +115,7 @@ const checkingBalance = async () =>
   centsToMoney((await getTestPrisma().account.findFirstOrThrow({ where: { userId, type: 'CHECKING' } })).balanceMinor);
 
 it('a CRITICAL execution-audit insert failure rolls back the debit, ledger and receipt before recovery', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const id = await parkTransfer(s, '200.00');
   expect(await debitRows('200.00')).toBe(0);
@@ -172,7 +173,7 @@ it('a CRITICAL execution-audit insert failure rolls back the debit, ledger and r
 });
 
 it('repairs an audit-storage deletion from a current committed receipt without another debit', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const id = await parkTransfer(s, '200.00');
 
@@ -239,7 +240,7 @@ it('repairs an audit-storage deletion from a current committed receipt without a
 });
 
 it('a repeat recovery is idempotent — exactly ONE execution audit and ONE debit, never downgraded', async () => {
-  const s = (await getOrCreateSession(userId)).sessionId;
+  const s = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const id = await parkTransfer(s, '200.00');
 

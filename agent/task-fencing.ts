@@ -28,6 +28,7 @@ import type { TaskNodeResult, TaskNodeStatus, TaskPlanStatus } from '@/lib/contr
 import type { PlanToolOutcome } from '@/planner';
 import { demoNow } from '@/lib/clock';
 import { toJson } from '@/lib/json';
+import { AppError } from '@/lib/errors';
 import { prisma } from '@/lib/db/client';
 import { synchronizeStandaloneWorkflowRun } from '@/lib/db/repositories/workflowRun';
 import {
@@ -53,9 +54,11 @@ export function toNodeUpdate(node: TaskNodeResult): UpdateTaskNodeInput {
   };
 }
 
-/** `updateTaskNode` throws this exact plain `Error` when the `(taskId, nodeId)` row is missing. */
+/** Only a typed missing-node error can retire a stale persistence callback. */
 export function isMissingNodeError(error: unknown): boolean {
-  return error instanceof Error && error.message.startsWith('AgentTaskNode not found');
+  return error instanceof AppError && error.code === 'NOT_FOUND' &&
+    typeof error.detail === 'object' && error.detail !== null &&
+    'resource' in error.detail && error.detail.resource === 'AgentTaskNode';
 }
 
 /** A decided node result plus the two bookkeeping hints the planner contract carries alongside it. */

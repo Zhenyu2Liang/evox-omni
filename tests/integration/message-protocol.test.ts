@@ -40,6 +40,7 @@ import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import { MFA_CODE } from '@/lib/constants';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
+import authorizationFixtures from '../fixtures/authorization-resume.zh-CN.json';
 
 beforeEach(async () => {
   await resetDatabase();
@@ -204,14 +205,48 @@ describe('message-protocol — the persisted pi transcript stays provider-valid'
     const outcome = await confirmAction(decision.actionId);
     expect(outcome.ok).toBe(true);
     expect(outcome.status).toBe('executed');
-    expect(outcome.events).toContainEqual({ type: 'error', message: expect.stringContaining('original transfer_money tool call could not be located') });
-    expect(outcome.message).toContain('结果播报失败');
-    expect(await persistedMessages(snapshot.sessionId)).toEqual(earlierHistory);
+    expect(outcome.events.some(event => event.type === 'error')).toBe(false);
+    const restoredHistory = await persistedMessages(snapshot.sessionId);
+    expect(restoredHistory.slice(0, earlierHistory.length)).toEqual(earlierHistory);
+    expect(restoredHistory.at(-1)?.role).toBe('assistant');
+    expect(toolCallIdsNamed(restoredHistory, 'transfer_money')).toEqual([]);
+    expectValidTranscript(restoredHistory);
     expect(await getTestPrisma().transaction.count({ where: {
       userId: DEMO_USER_ID, direction: 'DEBIT', amountMinor: -20000n,
     } })).toBe(debitsBefore + 1);
     expect((await getTestPrisma().pendingAction.findUnique({ where: { id: decision.actionId } }))?.status)
       .toBe('executed');
+  });
+
+  it('preserves all conversation received between a parked transfer and its later confirmation', async () => {
+    const { sessionId } = await getOrCreateSession(DEMO_USER_ID);
+    const turn = await runTurn({ sessionId, message: authorizationFixtures.delayedTransfer });
+    const decision = parkedDecision(turn.events);
+    if (!decision) throw new Error('Expected the original transfer authorization.');
+    const parked = (await loadSession(sessionId))!;
+    const transferId = toolCallIdsNamed(parked.agentState.messages, 'transfer_money')[0];
+    await runTurn({ sessionId, message: 'Hello.' });
+    await runTurn({ sessionId, message: 'What can you help me with?' });
+    const before = (await loadSession(sessionId))!;
+    const originalDialogue = before.agentState.messages.filter(message => message.role === 'user' || message.role === 'assistant');
+    const originals = JSON.parse(JSON.stringify(originalDialogue));
+    const originalText = (message: { id: string; role: string; content: string; timestamp: number }) => ({
+      id: message.id, role: message.role, content: message.content, timestamp: message.timestamp,
+    });
+    const transcript = before.transcript.map(originalText);
+    const balance = await getTestPrisma().account.findFirstOrThrow({ where: { userId: DEMO_USER_ID, type: 'CHECKING' } });
+    const count = await getTestPrisma().transaction.count({ where: { userId: DEMO_USER_ID } });
+    const outcome = await confirmAction(decision.actionId);
+    expect(outcome.ok).toBe(true);
+    expect(outcome.status).toBe('executed');
+    expect(outcome.events.some(event => event.type === 'error')).toBe(false);
+    const after = (await loadSession(sessionId))!;
+    expect(after.agentState.messages.filter(message => message.role === 'user' || message.role === 'assistant').slice(0, originalDialogue.length)).toEqual(originals);
+    expect(after.transcript.slice(0, transcript.length).map(originalText)).toEqual(transcript);
+    const analysis = expectValidTranscript(after.agentState.messages);
+    expect(analysis.resultIds.filter(id => id === transferId)).toEqual([transferId]);
+    expect(await getTestPrisma().transaction.count({ where: { userId: DEMO_USER_ID } })).toBe(count + 1);
+    expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: balance.id } })).balanceMinor).toBe(balance.balanceMinor - 20000n);
   });
 
   it('a YELLOW park → confirm persists a transcript where every toolResult answers a preceding toolCall', async () => {

@@ -13,6 +13,7 @@ import type { PlanToolOutcome } from '@/planner';
 import { getSession } from '@/lib/db/repositories/session';
 import { AppError } from '@/lib/errors';
 import { prisma } from '@/lib/db/client';
+import { isManualCardCommand } from '@/lib/contracts/card-management';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { PendingActionStatus } from '@/lib/contracts/security';
@@ -65,7 +66,7 @@ export type { ConfirmedActionClass, ConfirmableActionRow } from './confirmation-
 export { toCards, errorCard, confirmationCard, mfaCard } from './card-emitter';
 export { buildSystemPrompt, HALLUCINATION_RULE } from './system-prompt';
 export type { SystemPromptContext } from './system-prompt';
-export { newSession, loadSession, saveSession, getOrCreateSession } from './session';
+export { newSession, loadSession, saveSession, getOrCreateSession, getDemoSession } from './session';
 export type { SessionSnapshot } from './session';
 export { createToolRegistry } from './tools';
 export type { ToolRegistry, ToolExecutionResult } from './tools';
@@ -169,6 +170,9 @@ export async function recoverAction(
   // Historical executions may already be terminal while their audit is missing. Repair only the
   // audit/result from verified evidence; never re-run the SDK or downgrade a successful action.
   const initial = await getPendingAction(actionId);
+  if (initial && isManualCardCommand(initial.toolName)) {
+    throw new AppError('SECURITY_DENIED', 'Card record changes are managed only from the cards page.');
+  }
   let repairedAudit = false;
   if (initial?.status === 'executed' && await prisma.auditLog.findUnique({ where: { dedupeKey: `exec:${actionId}` } }) === null) {
     const decision = await decideConvergence(initial);

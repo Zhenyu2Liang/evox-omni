@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Agent, AgentEvent, PrepareRequestContext, AgentRequestUpdate, AgentMessage } from '@earendil-works/pi-agent-core';
 import { toToolDeclaration } from '@earendil-works/pi-ai';
-import type { ToolInvocation } from '@prisma/client';
+import type { ToolInvocation } from '@/lib/db/prisma';
 import type { DbClient } from '@/lib/db/client';
 import type { AgentRunLease, AgentRunStatus, RuntimeEventChannel, ToolInvocationStatus } from '@/lib/contracts/runtime';
 import {
@@ -16,7 +16,8 @@ import { toolReplayPolicy, type RetryPolicyCapabilities } from './retry-policy';
 import type { SessionSnapshot } from '@/agent/session';
 import type { AppConfig } from '@/lib/config';
 import { encodeCheckpoint } from './checkpoint';
-import { transientModelFailure } from '@/agent/live-recovery';
+import { retryableModelFailure } from '@/agent/providers/model-failure';
+import { parseModelToolError } from '@/agent/tools/result';
 
 export interface BeginRunInput extends Omit<BeginAgentRunInput, 'requestDigest' | 'requestJson'> {
   request: unknown;
@@ -40,7 +41,8 @@ export class AgentRunJournal {
   private snapshot?: () => SessionSnapshot;
   private config?: AppConfig;
   private modelRequestId?: string;
-  private originalModelInput?: { messages: AgentMessage[]; tools: unknown[] };
+  private originalModelInput?: { messages: AgentMessage[]; tools: unknown[]; [key: string]: unknown };
+  private originalModelDigest?: string;
 
   constructor(lease: AgentRunLease, capabilities: RetryPolicyCapabilities = {}) {
     this.lease = lease;
@@ -52,13 +54,24 @@ export class AgentRunJournal {
     this.config = config;
   }
 
-  restoreModelRequestIdentity(id: string, inputJson?: string): void {
+  restoreModelRequestIdentity(id: string, inputJson?: string, requestDigest?: string): void {
     this.modelRequestId = id;
     if (inputJson) {
-      const input = JSON.parse(inputJson) as { messages?: AgentMessage[]; tools?: unknown[] };
+      const input = JSON.parse(inputJson) as { messages?: AgentMessage[]; tools?: unknown[]; [key: string]: unknown };
       if (!Array.isArray(input.messages) || !Array.isArray(input.tools)) throw new AppError('CONFLICT', 'The original model request context and tool definitions are required');
-      this.originalModelInput = { messages: input.messages, tools: input.tools };
+      this.originalModelInput = { ...input, messages: input.messages, tools: input.tools };
+      this.originalModelDigest = requestDigest;
     }
+  }
+
+  /** Original model input is immutable; compaction must not prepare a replacement on replay. */
+  hasOriginalModelInput(): boolean {
+    return this.originalModelInput !== undefined;
+  }
+
+  /** Presentation uses the prepared request identity, never a reused provider call ID alone. */
+  currentModelRequestIdentity(): string | undefined {
+    return this.modelRequestId;
   }
 
   checkpoint(stage: string): Promise<void> {
@@ -74,9 +87,10 @@ export class AgentRunJournal {
     if (original && runtimeRequestDigest('tool_declarations', original.tools) !== runtimeRequestDigest('tool_declarations', tools)) return Promise.reject(new AppError('CONFLICT', 'The original tool definitions are required for continuation'));
     const messages = original?.messages ?? request.context.messages;
     const snapshot = this.snapshot();
-    snapshot.agentState = { ...snapshot.agentState, messages, model: request.model };
-    const input = { messages, systemPrompt: snapshot.agentState.systemPrompt, model: request.model, tools };
-    const digest = runtimeRequestDigest('model_request', input);
+    // The request may be compacted, but its checkpoint must retain the complete archive.
+    snapshot.agentState = { ...snapshot.agentState, model: request.model };
+    const input = original ?? { messages, systemPrompt: snapshot.agentState.systemPrompt, model: request.model, tools, requestIntent: snapshot.intent };
+    const digest = original && this.originalModelDigest ? this.originalModelDigest : runtimeRequestDigest('model_request', input);
     const json = encodeRuntimeValue(input);
     const checkpoint = encodeCheckpoint(snapshot, this.config);
     this.modelRequestId = undefined;
@@ -84,6 +98,7 @@ export class AgentRunJournal {
       const attempt = await startModelRequest(this.lease, digest, json, checkpoint);
       this.modelRequestId = attempt.id;
       this.originalModelInput = undefined;
+      this.originalModelDigest = undefined;
       return original ? { context: { ...request.context, messages } } : undefined;
     });
   }
@@ -110,13 +125,19 @@ export class AgentRunJournal {
     return this.recordEvent(event.type, event, 'ui');
   }
 
+  /** Bind wire evidence to the exact prepared model request; never store authentication headers. */
+  recordModelProviderEvent(eventType: string, payload: unknown): Promise<void> {
+    if (!this.modelRequestId) return Promise.reject(new AppError('CONFLICT', 'Provider evidence requires a prepared model request'));
+    return this.recordEvent(eventType, { modelRequestId: this.modelRequestId, payload }, 'internal');
+  }
+
   recordAgentEvent(event: AgentEvent): Promise<void> {
     const snapshot = snapshotRuntimeValue(event) as AgentEvent;
     const recorded = { channel: 'raw' as const, eventType: event.type, payloadJson: JSON.stringify(snapshot) };
     if (event.type === 'message_end' && event.message.role === 'assistant' && this.modelRequestId && this.snapshot && this.config) {
       const requestId = this.modelRequestId;
       const failed = ['error', 'aborted', 'length'].includes(event.message.stopReason);
-      const errorCode = failed ? transientModelFailure(event.message.errorMessage ?? '') ? 'MODEL_TRANSIENT' : 'MODEL_PERMANENT' : undefined;
+      const errorCode = failed ? retryableModelFailure(event.message) ? 'MODEL_TRANSIENT' : 'MODEL_PERMANENT' : undefined;
       const checkpointJson = encodeCheckpoint(this.snapshot(), this.config);
       return this.enqueue(async () => {
         await appendRuntimeEvent(this.lease, recorded);
@@ -146,6 +167,9 @@ export class AgentRunJournal {
       const resultJson = encodeRuntimeValue({
         ok: !event.isError,
         data: event.result.details,
+        content: event.result.content ?? [],
+        usage: event.result.usage,
+        durationMs: event.durationMs,
         summary: (event.result.content ?? []).find((part: { type: string; text?: string }) => part.type === 'text')?.text,
         ...(errorCode ? { error: errorCode } : {}),
       });
@@ -220,12 +244,17 @@ export class AgentRunJournal {
 /** Error codes are read only from structured tool results, never from generated prose. */
 function structuredErrorCode(result: unknown): string {
   if (typeof result !== 'object' || result === null) return 'TOOL_FAILED';
-  const value = result as { errorCode?: unknown; details?: unknown };
+  const value = result as { errorCode?: unknown; details?: unknown; content?: unknown };
   if (typeof value.errorCode === 'string') return value.errorCode;
   if (typeof value.details === 'object' && value.details !== null) {
     const detail = value.details as { errorCode?: unknown; code?: unknown };
     if (typeof detail.errorCode === 'string') return detail.errorCode;
     if (typeof detail.code === 'string') return detail.code;
+  }
+  if (Array.isArray(value.content)) {
+    const text = value.content.flatMap(part => part && typeof part === 'object' && part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n');
+    const failure = parseModelToolError(text);
+    if (failure?.errorCode) return failure.errorCode;
   }
   return 'TOOL_FAILED';
 }

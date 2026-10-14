@@ -68,7 +68,6 @@ export const BANKING_TOOL_OUTPUTS: ToolOutputContracts = {
   redeem_investment: investmentResult,
   report_lost_card: card,
   unfreeze_card: card,
-  change_password: object({ success: boolean }),
 };
 
 export function outputFieldAt(contract: OutputFieldContract, path: readonly string[]): OutputFieldContract | undefined {

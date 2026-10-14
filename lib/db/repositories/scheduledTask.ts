@@ -1,4 +1,4 @@
-import type { ScheduledTask } from '@prisma/client';
+import type { ScheduledTask } from '@/lib/db/prisma';
 import { dbClient } from '../client';
 import { toJson } from '../../json';
 

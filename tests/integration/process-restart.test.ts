@@ -1,9 +1,10 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ToolInvocation } from '@prisma/client';
+import type { ToolInvocation } from '@/lib/db/prisma';
 import { getTestPrisma, useFreshDatabase } from '@/tests/helpers/db';
 import { confirmAction } from '@/agent';
+import { loadSession } from '@/agent/session';
 
 useFreshDatabase();
 const activeChildren = new Set<ChildProcess>();
@@ -95,17 +96,29 @@ async function resume(scenario: string, identity: { runId: string; sessionId: st
 }
 
 describe('real service process crash and fresh-process recovery', () => {
-  it('continues interrupted narration of an already authorized transfer without executing it again', async () => {
-    const identity = await crash('authorization_narration');
+  it('restores a committed authorization after process death before server result persistence without a model request or another transfer', async () => {
+    const identity = await crash('authorization_result');
     const source = await getTestPrisma().agentRun.findUniqueOrThrow({ where: { id: identity.runId } });
     expect(JSON.parse(source.requestJson).kind).toBe('authorization_result');
     const action = await getTestPrisma().pendingAction.findFirstOrThrow({ where: { sessionId: identity.sessionId } });
     expect(action.status).toBe('executed');
+    expect(source.checkpointStage).toBe('input');
+    expect(await getTestPrisma().modelRequest.count({ where: { runId: source.id } })).toBe(0);
+    const before = (await loadSession(identity.sessionId))!;
+    expect(before.transcript.some(message => message.role === 'user' && message.content === 'Tell me a joke.')).toBe(true);
     const balance = (await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor;
     expect(await getTestPrisma().executionReceipt.count()).toBe(1);
-    const recovered = await resume('authorization_narration', identity);
+    const recovered = await resume('authorization_result', identity);
     expect(recovered.response?.run.status).toBe('completed');
-    expect(recovered.modelCalls).toBeGreaterThan(0);
+    expect(recovered.modelCalls).toBe(0);
+    const after = (await loadSession(identity.sessionId))!;
+    const originalText = (message: { id: string; role: string; content: string; timestamp: number }) => ({
+      id: message.id, role: message.role, content: message.content, timestamp: message.timestamp,
+    });
+    expect(after.transcript.slice(0, before.transcript.length).map(originalText)).toEqual(before.transcript.map(originalText));
+    expect(after.agentState.messages.filter(message => message.role === 'user'))
+      .toEqual(before.agentState.messages.filter(message => message.role === 'user'));
+    expect(after.transcript.at(-1)?.role).toBe('assistant');
     expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(balance);
     expect(await getTestPrisma().executionReceipt.count()).toBe(1);
     expect(await getTestPrisma().auditLog.count({ where: { sessionId: identity.sessionId, toolName: 'transfer_money', status: 'success' } })).toBe(1);
@@ -118,7 +131,7 @@ describe('real service process crash and fresh-process recovery', () => {
     expect(await getTestPrisma().toolInvocation.count({ where: { runId: identity.runId } })).toBe(0);
     const recovered = await resume('model_result', identity);
     expect(recovered.response?.run.status).toBe('completed');
-    const calls = await getTestPrisma().toolInvocation.findMany({ where: { runId: identity.runId } });
+    const calls = await getTestPrisma().toolInvocation.findMany({ where: { runId: identity.runId, toolName: { not: 'describe_turn' } } });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ callId: 'original-call', modelRequestId: model.id, status: 'completed' });
   });
@@ -151,12 +164,12 @@ describe('real service process crash and fresh-process recovery', () => {
 
   it('keeps the original invocation identity when a read intent was saved before the process died', async () => {
     const identity = await crash('read_intent');
-    const original = await getTestPrisma().toolInvocation.findFirstOrThrow({ where: { runId: identity.runId } });
+    const original = await getTestPrisma().toolInvocation.findFirstOrThrow({ where: { runId: identity.runId, toolName: 'get_balance' } });
     expect(original.status).toBe('started');
     const recovered = await resume('read_intent', identity);
     expect(recovered.response?.run.status).toBe('completed');
     expect(recovered.modelCalls).toBeGreaterThan(0);
-    const calls = await getTestPrisma().toolInvocation.findMany({ where: { runId: identity.runId } });
+    const calls = await getTestPrisma().toolInvocation.findMany({ where: { runId: identity.runId, toolName: { not: 'describe_turn' } } });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ id: original.id, operationKey: original.operationKey, status: 'completed' });
     expect(await getTestPrisma().executionReceipt.count()).toBe(0);
@@ -164,7 +177,7 @@ describe('real service process crash and fresh-process recovery', () => {
 
   it('restores a committed automatic write and continues the model without a second budget or audit', async () => {
     const identity = await crash('committed_write');
-    const original = await getTestPrisma().toolInvocation.findFirstOrThrow({ where: { runId: identity.runId } });
+    const original = await getTestPrisma().toolInvocation.findFirstOrThrow({ where: { runId: identity.runId, toolName: 'reserve_budget' } });
     const receipt = await getTestPrisma().executionReceipt.findUniqueOrThrow({ where: {
       userId_key: { userId: 'user_liming', key: original.operationKey },
     } });
@@ -173,7 +186,7 @@ describe('real service process crash and fresh-process recovery', () => {
     expect(recovered.modelCalls).toBeGreaterThan(0);
     expect(await getTestPrisma().budget.count({ where: { name: 'Crash-safe budget' } })).toBe(1);
     expect(await getTestPrisma().auditLog.count({ where: { sessionId: identity.sessionId, toolName: 'reserve_budget', status: 'success' } })).toBe(1);
-    const calls: ToolInvocation[] = await getTestPrisma().toolInvocation.findMany({ where: { runId: identity.runId } });
+    const calls: ToolInvocation[] = await getTestPrisma().toolInvocation.findMany({ where: { runId: identity.runId, toolName: { not: 'describe_turn' } } });
     expect(calls).toHaveLength(1);
     expect(calls[0]).toMatchObject({ id: original.id, operationKey: original.operationKey, status: 'completed', resultJson: receipt.responseJson });
     expect((await getTestPrisma().executionReceipt.findUniqueOrThrow({ where: { id: receipt.id } })).responseJson).toBe(receipt.responseJson);

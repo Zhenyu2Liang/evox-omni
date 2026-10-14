@@ -1,4 +1,4 @@
-import type { AgentRun } from '@prisma/client';
+import type { AgentRun } from '@/lib/db/prisma';
 import type { ResumeTurnInput } from '../turns/contracts';
 import { prisma } from '@/lib/db/client';
 import { AppError } from '@/lib/errors';

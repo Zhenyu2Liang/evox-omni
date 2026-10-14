@@ -18,6 +18,7 @@ const GREEN_TOOLS: readonly ToolName[] = [
   'get_balance',
   'get_transactions',
   'search_contact',
+  'search_conversation_history',
   'analyze_spending',
   'detect_anomaly',
   'get_cards',
@@ -34,19 +35,17 @@ const YELLOW_TOOLS: readonly ToolName[] = [
   'list_subscriptions',
   'set_card_limit',
   'cancel_subscription',
-  'freeze_card',
-  'apply_virtual_card',
   'set_subscription_reminder',
   'create_scheduled_task',
 ];
 
 /** 🔴 RED — high risk; requires confirmation + strong verification (MFA). */
 const RED_TOOLS: readonly ToolName[] = [
+  'freeze_card',
   'subscribe_investment',
   'redeem_investment',
   'report_lost_card',
   'unfreeze_card',
-  'change_password',
 ];
 
 /** ⚙️ DYNAMIC — tier computed from amount + day total (risk-engine), not the table. */
@@ -54,14 +53,16 @@ const DYNAMIC_TOOLS: readonly ToolName[] = ['transfer_money'];
 
 /** Planner meta-tool — NOT risk-gated. */
 const META_TOOLS: readonly ToolName[] = ['submit_plan'];
+const MANUAL_ONLY_TOOLS: readonly ToolName[] = ['apply_virtual_card'];
 
-/** Every `ToolName` in the union (13 GREEN + dynamic + 6 YELLOW + 5 RED + meta = 26). */
+/** Every registered capability, including dynamic authorization and workflow submission. */
 const ALL_TOOLS: readonly ToolName[] = [
   ...GREEN_TOOLS,
   ...DYNAMIC_TOOLS,
   ...YELLOW_TOOLS,
   ...RED_TOOLS,
   ...META_TOOLS,
+  ...MANUAL_ONLY_TOOLS,
 ];
 
 /** Build an `EvaluateToolContext`; defaults are irrelevant to the tier except `dailyTransferTotal`. */
@@ -72,6 +73,10 @@ function makeCtx(
 }
 
 describe('permission-engine · TOOL_POLICY table', () => {
+  it('denies manual-only card creation before any agent authorization', () => {
+    expect(getToolPolicy('apply_virtual_card').tier).toBe('RED');
+    expect(() => evaluateTool('apply_virtual_card', {}, makeCtx())).toThrow('Card creation and deletion require the card management page.');
+  });
   it('has an entry for every ToolName in @/lib/contracts/tools (exhaustive: no missing, no extra keys)', () => {
     const keys = new Set(Object.keys(TOOL_POLICY));
     const expected = new Set<string>(ALL_TOOLS);
@@ -94,13 +99,13 @@ describe('permission-engine · TOOL_POLICY table', () => {
     }
   });
 
-  it('YELLOW tools (set_card_limit, cancel_subscription, freeze_card, apply_virtual_card, set_subscription_reminder, create_scheduled_task) have tier YELLOW, static true', () => {
+  it('YELLOW tools require confirmation without strong verification', () => {
     for (const tool of YELLOW_TOOLS) {
       expect(TOOL_POLICY[tool]).toMatchObject({ tier: 'YELLOW', static: true });
     }
   });
 
-  it('RED tools (subscribe_investment, redeem_investment, report_lost_card, unfreeze_card, change_password) have tier RED, static true', () => {
+  it('RED tools include every card status change and require strong verification', () => {
     for (const tool of RED_TOOLS) {
       expect(TOOL_POLICY[tool]).toMatchObject({ tier: 'RED', static: true });
     }
@@ -149,7 +154,7 @@ describe('permission-engine · evaluateTool · GREEN', () => {
     expect(result.reasons.length).toBeGreaterThan(0);
   });
 
-  it('all GREEN tools (get_transactions / search_contact / analyze_spending / detect_anomaly / get_cards / list_subscriptions / list_investments / compare_investments / get_investment_holdings / get_dashboard_summary / list_scheduled_tasks / reserve_budget) → no confirmation, no MFA', () => {
+  it('all GREEN tools execute without confirmation or MFA', () => {
     for (const tool of GREEN_TOOLS) {
       const result = evaluateTool(tool, {}, makeCtx());
       expect(result.tier).toBe('GREEN');
@@ -170,7 +175,7 @@ describe('permission-engine · evaluateTool · YELLOW', () => {
     });
   });
 
-  it('cancel_subscription / freeze_card / apply_virtual_card / set_subscription_reminder / create_scheduled_task → confirmation, no MFA', () => {
+  it('all YELLOW tools require confirmation without MFA', () => {
     for (const tool of YELLOW_TOOLS) {
       const result = evaluateTool(tool, {}, makeCtx());
       expect(result).toMatchObject({
@@ -192,7 +197,7 @@ describe('permission-engine · evaluateTool · RED', () => {
     });
   });
 
-  it('redeem_investment / report_lost_card / unfreeze_card / change_password → confirmation + MFA', () => {
+  it('all RED tools require confirmation and MFA', () => {
     for (const tool of RED_TOOLS) {
       const result = evaluateTool(tool, {}, makeCtx());
       expect(result).toMatchObject({
@@ -286,10 +291,20 @@ describe('permission-engine · LLM-immutability', () => {
   });
 
   it('ctx.sessionId / ctx.userId never influence the tier', () => {
-    for (const tool of ALL_TOOLS) {
+    for (const tool of ALL_TOOLS.filter(name => !MANUAL_ONLY_TOOLS.includes(name))) {
       const a = evaluateTool(tool, { amount: '500.00' }, makeCtx({ userId: 'u_a', sessionId: 's_a' }));
       const b = evaluateTool(tool, { amount: '500.00' }, makeCtx({ userId: 'u_b', sessionId: 's_b' }));
       expect(a).toEqual(b);
+    }
+  });
+
+  it('changing caller context never enables a manual-only operation', () => {
+    for (const tool of MANUAL_ONLY_TOOLS) {
+      for (const ctx of [makeCtx({ userId: 'u_a', sessionId: 's_a' }), makeCtx({ userId: 'u_b', sessionId: 's_b' })]) {
+        expect(() => evaluateTool(tool, { amount: '500.00', role: 'administrator' }, ctx)).toThrowError(
+          expect.objectContaining({ code: 'SECURITY_DENIED' }),
+        );
+      }
     }
   });
 
@@ -299,8 +314,8 @@ describe('permission-engine · LLM-immutability', () => {
     expect(redHugeAmount).toEqual(redNoAmount);
     expect(redHugeAmount.tier).toBe('RED');
 
-    const yellowHugeAmount = evaluateTool('freeze_card', { amount: '9999999.00' }, makeCtx());
-    expect(yellowHugeAmount.tier).toBe('YELLOW');
-    expect(yellowHugeAmount.requiresMfa).toBe(false);
+    const frozenCard = evaluateTool('freeze_card', { amount: '9999999.00' }, makeCtx());
+    expect(frozenCard.tier).toBe('RED');
+    expect(frozenCard.requiresMfa).toBe(true);
   });
 });

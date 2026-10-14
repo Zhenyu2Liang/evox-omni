@@ -1,16 +1,17 @@
 /**
- * tests/helpers/scenario.ts — drive a full agent session turn and collect its events.
+ * tests/helpers/scenario.ts — drive a lower-level gateway/tool scenario and collect its events.
  *
  * This is the harness the `tests/scenarios/*` specs use to prove the 12 demo scenarios
- * end-to-end. It wraps a `FauxAgent` (`./faux-agent`) and mirrors the real two-phase flow
+ * at the gateway/SDK boundary. It wraps a raw `FauxAgent` (`./faux-agent`) and drives a two-phase flow
  * of `POST /api/chat` + `POST /api/actions/:id/{confirm|verify|cancel}` WITHOUT going through
- * Next.js HTTP — it calls the same agent-runtime + security-gateway + SDK functions the routes
- * call, so the assertions target real behaviour, not a mock.
+ * Next.js HTTP. Banking tools, gateway decisions and SDK effects are real; production turn
+ * declarations, durable admission, context preparation and presentation are outside this harness.
  *
  * It is a TEST-ONLY re-instantiation of `@/agent/run-turn.ts`'s collection logic, driven against a
  * RAW scripted agent (from `./faux-agent`). It deliberately does NOT route through
  * `@/agent.runTurn`/`resumeTurn`: those require a persisted `AgentSession` row and rebuild the agent
- * with the UNSCRIPTED config model, which would break the scripted model.
+ * with persisted admission and presentation. Production-path tests inject scripted-provider.ts
+ * through RunTurnDeps.provider and verify those contracts separately.
  *
  * Two phases (see root CONTEXT.md):
  *   1. `runTurn()` — prompt the agent; GREEN tools execute inline, YELLOW/RED tools are BLOCKED

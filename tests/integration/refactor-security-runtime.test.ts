@@ -11,17 +11,18 @@ import { executeGatedTool } from '@/agent/confirmation';
 import { readRunPresentation } from '@/agent/durable';
 import { initialChatUIState, reduceAgentEvents } from '@/components/chat/useAgentStream';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
+import { turnDeclaration, type ScriptedTurnDeclaration } from '@/tests/helpers/scripted-provider';
 
 const userId = 'user_liming';
 beforeEach(resetDatabase);
 afterEach(() => vi.restoreAllMocks());
 afterAll(disconnectTestPrisma);
 
-function scriptedRuntime(steps: FauxResponseStep[]): ModelRuntime {
+function scriptedRuntime(declaration: ScriptedTurnDeclaration, steps: FauxResponseStep[]): ModelRuntime {
   const provider = fauxProvider();
   const models = createModels();
   models.setProvider(provider.provider);
-  provider.setResponses(steps);
+  provider.setResponses([turnDeclaration(declaration), ...steps]);
   return { model: provider.getModel(), streamFn: models.streamSimple.bind(models) };
 }
 
@@ -34,7 +35,7 @@ it('refuses a bank effect when its started event cannot become durable', async (
   const budgetsBefore = await getTestPrisma().budget.count();
   vi.spyOn(runRepository, 'startInvocationWithEvent').mockRejectedValue(new Error('Journal unavailable'));
   await expect(runTurn({ sessionId: session.sessionId, requestId: 'event-storage-failure', message: 'Create a budget of 0.17 CNY.' }, {
-    provider: scriptedRuntime([toolStep('reserve_budget', { name: 'Blocked budget', amount: '0.17' })]),
+    provider: scriptedRuntime({ purpose: 'operation', operations: ['reserve_budget'] }, [toolStep('reserve_budget', { name: 'Blocked budget', amount: '0.17' })]),
   })).rejects.toThrow('Journal unavailable');
   expect(await getTestPrisma().budget.count()).toBe(budgetsBefore);
   expect(await getTestPrisma().executionReceipt.count()).toBe(0);
@@ -43,16 +44,16 @@ it('refuses a bank effect when its started event cannot become durable', async (
   expect((await getTestPrisma().agentRun.findFirstOrThrow()).status).toBe('failed');
 });
 
-it('deduplicates repeated incident delivery and locks the shared account on the third distinct suspicious signal', async () => {
+it('deduplicates repeated incident delivery and locks the shared account on the third distinct unauthorized access', async () => {
   const first = await getOrCreateSession(userId);
   const second = await getOrCreateSession(userId);
   for (let index = 1; index <= 2; index++) await recordRiskSignal({ sessionId: first.sessionId,
-    kind: 'suspicious_instruction', dedupeKey: `signal-${index}`, message: 'A suspicious instruction was detected.' });
-  await recordRiskSignal({ sessionId: first.sessionId, kind: 'suspicious_instruction',
-    dedupeKey: 'signal-2', message: 'A suspicious instruction was detected.' });
+    kind: 'unauthorized_resource_access', dedupeKey: `signal-${index}`, message: 'An unauthorized resource access was rejected.' });
+  await recordRiskSignal({ sessionId: first.sessionId, kind: 'unauthorized_resource_access',
+    dedupeKey: 'signal-2', message: 'An unauthorized resource access was rejected.' });
   expect(await isLocked(second.sessionId)).toBe(false);
-  await recordRiskSignal({ sessionId: second.sessionId, kind: 'suspicious_instruction',
-    dedupeKey: 'signal-3', message: 'A suspicious instruction was detected.' });
+  await recordRiskSignal({ sessionId: second.sessionId, kind: 'unauthorized_resource_access',
+    dedupeKey: 'signal-3', message: 'An unauthorized resource access was rejected.' });
   expect(await isLocked(first.sessionId)).toBe(true);
   expect(await isLocked(second.sessionId)).toBe(true);
   expect(await getTestPrisma().riskSignal.count()).toBe(3);
@@ -73,12 +74,12 @@ it('expires strong verification on wall time and rejects a challenge when the bo
   expect(await getTestPrisma().executionReceipt.count()).toBe(0);
 });
 
-it('replays a transport request from its run journal and exposes only grounded presentation events', async () => {
+it('replays a transport request from its run journal and preserves separate prose and tool events', async () => {
   const session = await getOrCreateSession(userId);
   const request = { sessionId: session.sessionId, requestId: 'repeat-balance', message: 'Read my balance.' };
-  const runtime = scriptedRuntime([toolStep('get_balance', {}), fauxAssistantMessage('Balance read completed.')]);
+  const runtime = scriptedRuntime({ purpose: 'query', operations: ['get_balance'] }, [toolStep('get_balance', {}), fauxAssistantMessage('Balance read completed.')]);
   const original = await runTurn(request, { provider: runtime });
-  const repeated = await runTurn(request, { provider: scriptedRuntime([]) });
+  const repeated = await runTurn(request, { provider: scriptedRuntime({ purpose: 'query', operations: ['get_balance'] }, []) });
   expect(repeated.runId).toBe(original.runId);
   expect(repeated.events).toEqual(original.events);
   expect(await getTestPrisma().agentRun.count()).toBe(1);
@@ -89,18 +90,23 @@ it('replays a transport request from its run journal and exposes only grounded p
   expect(page.events.every(event => event.channel === 'ui')).toBe(true);
 });
 
-it('streams live tool progress into one message card and publishes only the final grounded narration', async () => {
+it('publishes an authoritative balance tool entry before the complete unmodified provider prose', async () => {
   const session = await getOrCreateSession(userId);
   const delivered: AgentStreamEvent[] = [];
   const turn = await runTurn({ sessionId: session.sessionId, requestId: 'live-presentation', message: 'Read my balance.' }, {
     config: { llmMode: 'live', llmProvider: 'deepseek', llmModel: 'scripted', demoUserId: userId },
-    provider: scriptedRuntime([toolStep('get_balance', {}), fauxAssistantMessage('The balance is 999999.99.')]),
+    provider: scriptedRuntime({ purpose: 'query', operations: ['get_balance'] }, [toolStep('get_balance', {}), fauxAssistantMessage('The balance is 999999.99.')]),
     onEvent(event) { delivered.push(event); },
   });
   expect(delivered).toEqual(turn.events);
-  expect(JSON.stringify(delivered)).not.toContain('999999.99');
+  expect(JSON.stringify(delivered)).toContain('999999.99');
   const state = reduceAgentEvents(initialChatUIState(), delivered);
   expect(state.messages.flatMap(message => message.cards ?? []).filter(card => card.type === 'balance')).toHaveLength(1);
   expect(delivered.findIndex(event => event.type === 'tool_start')).toBeLessThan(delivered.findIndex(event => event.type === 'card'));
-  expect(state.messages.some(message => message.content.includes('73,580.00'))).toBe(true);
+  const balance = state.messages.find(message => message.role === 'tool' && message.cards?.some(card => card.type === 'balance'));
+  expect(balance?.cards).toContainEqual({ type: 'balance', data: expect.objectContaining({ totalAvailable: '73580.00' }) });
+  const prose = state.messages.find(message => message.role === 'assistant' && message.content === 'The balance is 999999.99.');
+  expect(prose).toBeDefined();
+  expect(state.messages.indexOf(balance!)).toBeLessThan(state.messages.indexOf(prose!));
+  expect(await getTestPrisma().executionReceipt.count()).toBe(0);
 });

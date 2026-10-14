@@ -12,6 +12,7 @@
  * direct-Prisma boundary; this module never touches the Prisma client itself.
  */
 import { createHash } from 'node:crypto';
+import { AppError } from '@/lib/errors';
 
 import { runInTransaction, type Tx } from './tx';
 
@@ -24,6 +25,9 @@ export function isUniqueViolation(error: unknown): boolean {
 
 /** The trimmed replay key, or `undefined` when the caller supplied none (empty/whitespace = absent). */
 export function normalizeIdempotencyKey(key: string | undefined): string | undefined {
+  if (key !== undefined && typeof key !== 'string') {
+    throw new AppError('VALIDATION', 'Execution identity must be text.');
+  }
   const trimmed = key?.trim();
   return trimmed ? trimmed : undefined;
 }

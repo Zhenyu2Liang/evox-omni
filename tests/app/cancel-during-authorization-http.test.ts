@@ -34,7 +34,8 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { POST as cancelPost } from '@/app/api/actions/[id]/cancel/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
 import type { ActionResponse } from '@/app/api/_lib/types';
-import { executeGatedTool, getOrCreateSession } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan, type PlanRunTool } from '@/agent/tools/planning';
 import type { PendingActionStatus } from '@/lib/contracts/security';
 import { security } from '@/security';
@@ -210,7 +211,7 @@ afterAll(async () => {
 
 describe('[integration] cancel during authorization — the cancel WINS (lands, then a confirm arrives)', () => {
   it('(a) a cancel landing while the park is in flight revokes the action: a later confirm is refused as cancelled, moves NO money, the day total stays ¥0, and NO executable PendingAction survives', async () => {
-    const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    const sessionId = (await getDemoSession(DEMO_USER_ID)).sessionId;
 
     // Start the real plan run (NOT awaited): its only node routes through the barrier.
     const barrier = parkingBarrier(sessionId);
@@ -275,7 +276,7 @@ describe('[integration] cancel during authorization — the cancel WINS (lands, 
 
 describe('[integration] cancel during authorization — the CONFIRM WINS (lands, then a cancel arrives)', () => {
   it('(b) a confirm landing while the park is in flight executes ¥200 exactly once; a later cancel is refused and cannot roll the ledger/daily total back', async () => {
-    const sessionId = (await getOrCreateSession(DEMO_USER_ID)).sessionId;
+    const sessionId = (await getDemoSession(DEMO_USER_ID)).sessionId;
 
     const barrier = parkingBarrier(sessionId);
     const planRun = runSubmitPlan(

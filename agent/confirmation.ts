@@ -3,6 +3,7 @@ import type { PendingAction } from '@/lib/contracts/security';
 import { security } from '@/security';
 import { recordAudit } from '@/audit';
 import { demoNow } from '@/lib/clock';
+import { getPendingActionPlanLink } from '@/lib/db/repositories/pendingAction';
 import { AppError } from '@/lib/errors';
 import type { AuthorizationResult } from '@/security/security-gateway';
 import type { ConfirmOptions, ConfirmationOutcome } from './confirmation/contracts';
@@ -56,10 +57,12 @@ export async function cancelAction(actionId: string, opts?: ConfirmOptions): Pro
     if (error instanceof AppError && error.code === 'CONFLICT') return conflictOutcome(actionId, error);
     throw error;
   }
+  const link = await getPendingActionPlanLink(actionId);
   await recordAudit({
-    timestamp: demoNow(), sessionId: action.sessionId, userRequest: action.userRequest ?? '',
+    timestamp: demoNow(), sessionId: action.sessionId, userId: identity.userId, userRequest: action.userRequest ?? '',
     intent: action.intent, toolName: action.toolName, riskLevel: action.tier,
     confirmationRequired: true, confirmed: false, mfaRequired: action.requiresMfa, status: 'cancelled',
+    toolArgs: action.args, taskId: link?.taskId ?? undefined, nodeId: link?.nodeId ?? undefined,
   });
   return {
     ok: true, actionId, status: 'cancelled', tier: action.tier,

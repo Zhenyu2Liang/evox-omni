@@ -3,7 +3,10 @@ const BUSINESS_OFFSET_MS = 8 * 60 * 60 * 1000;
 
 /** Civil-time construction independent of the deployment host's time zone. */
 export function businessDate(year: number, month: number, day = 1, hour = 0, minute = 0): Date {
-  return new Date(Date.UTC(year, month, day, hour, minute) - BUSINESS_OFFSET_MS);
+  const civil = new Date(0);
+  civil.setUTCFullYear(year, month, day);
+  civil.setUTCHours(hour, minute, 0, 0);
+  return new Date(civil.getTime() - BUSINESS_OFFSET_MS);
 }
 
 /** Read civil calendar components in the fixed banking business time zone. */

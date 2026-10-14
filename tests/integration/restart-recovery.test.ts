@@ -26,7 +26,8 @@
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
-import { getOrCreateSession, executeGatedTool } from '@/agent';
+import { executeGatedTool } from '@/agent';
+import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import type { ToolName } from '@/lib/contracts/tools';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
@@ -151,7 +152,7 @@ async function clearLeaseIfAny(id: string): Promise<void> {
 }
 
 it('a standalone transfer wedge recovers from PERSISTED evidence after the in-process registry is cleared', async () => {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const id = await parkStandalone(sessionId, 'transfer_money', { name: '张伟', amount: '200.00' }, '给张伟转200元');
   expect(await debitCount('200.00')).toBe(0);
@@ -250,7 +251,7 @@ it('a standalone transfer wedge recovers from PERSISTED evidence after the in-pr
 });
 
 it('a plan-linked transfer wedge resumes and backfills its node from persisted evidence after a restart', async () => {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const submitted = await runSubmitPlan(
     userId,
@@ -342,7 +343,7 @@ it('a plan-linked transfer wedge resumes and backfills its node from persisted e
 });
 
 it('repeat recovery across a module reset is idempotent (no second debit, no second execution audit)', async () => {
-  const sessionId = (await getOrCreateSession(userId)).sessionId;
+  const sessionId = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
   const id = await parkStandalone(sessionId, 'transfer_money', { name: '张伟', amount: '200.00' }, '给张伟转200元');
 

@@ -19,6 +19,7 @@ import type { PendingActionStatus } from '@/lib/contracts/security';
 import type { AuditEntry } from '@/lib/contracts/audit';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import type { ToolName } from '@/lib/contracts/tools';
+import { isManualCardCommand } from '@/lib/contracts/card-management';
 import {
   claimPendingAction,
   getPendingAction,
@@ -36,7 +37,7 @@ import { createToolRegistry, type ToolExecutionResult } from './tools';
 import { recordAudit } from '@/audit';
 import { demoNow } from '@/lib/clock';
 import { committedExecutionResult } from './execution-evidence';
-import { transferExecutionAudit } from './execution-audit';
+import { commandExecutionAudit } from './execution-audit';
 import { buildConfirmFence, guardExecutionFence } from './execution-fence';
 import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
 import { recovery } from '@/security';
@@ -267,11 +268,17 @@ export async function settlePendingAction(input: SettlePendingActionInput): Prom
     if (input.audit !== undefined) {
       // The status write above holds the writer slot. Recovery must use the decision that is
       // persisted NOW, not an ownership snapshot taken before a competing MFA upgrade/commit.
-      const audit = typeof input.audit === 'function'
-        ? input.audit(await tx.pendingAction.findUniqueOrThrow({ where: { id: input.actionId }, include: { mfa: true } }))
-        : input.audit;
+      const current = await tx.pendingAction.findUniqueOrThrow({ where: { id: input.actionId }, include: { mfa: true } });
+      const audit = typeof input.audit === 'function' ? input.audit(current) : input.audit;
+      if (audit.sessionId !== current.sessionId || audit.userId !== undefined && audit.userId !== current.userId) {
+        throw new AppError('SECURITY_DENIED', 'The audit identity does not own this operation.');
+      }
       await recordAudit(
-        audit,
+        { ...audit, userId: current.userId,
+          taskId: current.taskId ?? undefined, nodeId: current.nodeId ?? undefined,
+          mfaResult: audit.mfaResult ?? (audit.mfaRequired
+            ? current.mfa?.status === 'verified' ? 'success' : undefined : 'not_required'),
+        },
         input.dedupeKey !== undefined
           ? { client: tx, dedupeKey: input.dedupeKey, strict: true }
           : { client: tx, strict: true },
@@ -342,6 +349,7 @@ export async function recoverStandaloneWedge(
   opts?: { selfHoldsLiveMarker?: boolean },
 ): Promise<StandaloneWedgeOutcome | undefined> {
   const row = await getPendingAction(actionId);
+  if (row && isManualCardCommand(row.toolName)) throw new AppError('SECURITY_DENIED', 'Use the card management page to resolve this change.');
   if (row === null || row.status !== 'confirmed') return undefined;
   // A persisted result means the atomic result+status write DID commit (or a prior recovery settled
   // it) — not a wedge; fall through to the plain conflict outcome.
@@ -480,11 +488,14 @@ async function replayStandaloneAction(
 
   let result: ToolExecutionResult;
   let sideEffectCommitted = false;
-  const guarded = guardExecutionFence(await buildConfirmFence(link?.taskId, link?.nodeId, actionId));
-  const executionAudit = transferExecutionAudit(actionId, {
-    sessionId: row.sessionId, userRequest: row.userRequest ?? '', intent: row.intent ?? undefined,
+  const guarded = guardExecutionFence(await buildConfirmFence(link?.taskId, link?.nodeId, actionId, {
+    userId: row.userId, sessionId: row.sessionId, toolName, args, requiresMfa,
+  }));
+  const executionAudit = commandExecutionAudit(actionId, {
+    sessionId: row.sessionId, userId: row.userId, userRequest: row.userRequest ?? '', intent: row.intent ?? undefined,
     toolName: row.toolName, riskLevel: tier, confirmationRequired: true, confirmed: true, mfaRequired: requiresMfa,
     mfaResult: authorization.mfaResult,
+    toolArgs: args, taskId: link?.taskId ?? undefined, nodeId: link?.nodeId ?? undefined,
   });
   try {
     result = await createToolRegistry(row.userId).executeDirect(toolName, args, {
@@ -539,6 +550,7 @@ async function landStandalone(
       return {
         timestamp: demoNow(),
         sessionId: row.sessionId,
+        userId: current.userId,
         userRequest: row.userRequest ?? '',
         intent: row.intent ?? undefined,
         toolName: row.toolName,
@@ -547,6 +559,9 @@ async function landStandalone(
         confirmed: true,
         mfaRequired: requiresMfa,
         mfaResult: requiresMfa ? current.mfa?.status === 'verified' ? 'success' : undefined : 'not_required',
+        toolArgs: safeParse<Record<string, unknown>>(current.argsJson, {}),
+        taskId: current.taskId ?? undefined,
+        nodeId: current.nodeId ?? undefined,
         toolResult: result,
         status: status === 'needs_reconciliation' ? 'blocked' : result.ok ? 'success' : 'failed',
         detail: status === 'needs_reconciliation' ? '恢复：执行结果需人工核对'

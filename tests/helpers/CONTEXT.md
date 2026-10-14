@@ -30,8 +30,11 @@ Import from the barrel (`../helpers`) or a specific module.
   - `seedDemoData(options?): Promise<void>` — insert the full dataset (call on a fresh DB).
   - `buildCurrentMonthSpend(now?)` / `buildPreviousMonthSpend(now?)` / `buildSubscriptions(now?)` / `buildHoldings(now?)` / `buildBudgets(now?)` / `buildScheduledTasks(now?)` — the date-relative rows (current/previous/next month), built from LOCAL components relative to `now` (default `demoNow()`).
 - `faux-agent.ts` — build a REAL Pi `Agent` with a SCRIPTED model:
-  - `buildFauxAgent(options): Agent` — faux provider + registed banking tools + production `beforeToolCall`.
+  - `buildFauxAgent(options): Agent` — raw Pi loop, real registered banking tools and direct gateway hook. It verifies the gateway/SDK boundary; production declaration guards, durable admission and presentation require scripted-provider.ts with runTurn/createBankingAgent.
   - script builders: `text`, `tool(name,args)`, `final`, `callThen(text,name,args)`; types `FauxStep`/`FauxToolCall`/`FauxAgentOptions`.
+- `scripted-provider.ts` — model-only responses for the production runTurn/createBankingAgent path:
+  - `scriptedProvider({ purpose, operations, workflow?, allowProtocolExamples? }, steps)` prepends a real describe_turn call. Call counts include this provider request; declarations do not grant authorization.
+  - `turnDeclaration(...)` constructs the same response for custom scripted queues. Negative tests that omit declarations use an explicit raw provider and assert the real runtime refuses gated calls.
 - `prisma-cli.ts` — Node-built-ins-only shared Prisma CLI/generate plumbing (NOT in the `index.ts`
   barrel; specs must not import it — only `../setup.ts` and `../e2e/helpers.ts` do):
   - `resolveRepoRoot`/`resolvePrismaBin`/`resolveTsxBin`/`cliCommand` — locate the repo + the

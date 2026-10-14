@@ -14,15 +14,15 @@ import type { CardActionHandlers, InvestmentsCardData } from './types';
 import { AnomalyCard } from './AnomalyCard';
 import { BalanceCard } from './BalanceCard';
 import { CardsCard } from './CardsCard';
-import { ConfirmationCard } from './ConfirmationCard';
+import { ApprovalRecord } from './ApprovalRecord';
 import { ErrorCard } from './ErrorCard';
 import { InvestmentsCard } from './InvestmentsCard';
-import { MfaCard } from './MfaCard';
 import { PlanCard } from './PlanCard';
 import { SpendingCard } from './SpendingCard';
 import { SubscriptionsCard } from './SubscriptionsCard';
 import { TransferCard } from './TransferCard';
 import { TransactionsCard } from './TransactionsCard';
+import { BusinessReceiptCard, ContactsCard, DashboardCard, ScheduledCard } from './BusinessResultCards';
 
 export interface CardRendererProps {
   card: ChatCard;
@@ -35,6 +35,10 @@ export interface CardRendererProps {
  * so adding or removing a `ChatCard` variant is a COMPILE ERROR here.
  */
 export function CardRenderer(p: CardRendererProps) {
+  return <div data-chat-card-type={p.card.type}>{renderCard(p)}</div>;
+}
+
+function renderCard(p: CardRendererProps) {
   switch (p.card.type) {
     case 'balance':
       return <BalanceCard data={p.card.data as BalanceView} className={p.className} />;
@@ -44,30 +48,23 @@ export function CardRenderer(p: CardRendererProps) {
       return <TransactionsCard data={p.card.data as TransactionView[]} />;
     case 'confirmation':
       return (
-        <ConfirmationCard
+        <ApprovalRecord
           action={p.card.action}
-          actionId={p.card.action.actionId ?? p.action?.actionId}
-          onConfirm={p.action?.onConfirm}
-          onCancel={p.action?.onCancel}
-          busy={p.action?.busy}
-          error={p.card.action.actionId === p.action?.actionId ? p.action?.error : undefined}
+          actionId={p.card.action.actionId}
+          status={(p.card.action as typeof p.card.action & { status?: unknown }).status}
+          message={(p.card.action as typeof p.card.action & { message?: string }).message}
           className={p.className}
         />
       );
     case 'mfa': {
-      const { actionId, hint } = p.card;
+      const { actionId } = p.card;
       return (
-        <MfaCard
+        <ApprovalRecord
           actionId={actionId}
           action={p.card.action}
           status={p.card.status}
-          statusMessage={p.card.message}
-          hint={hint}
-          onSubmit={(code: string) => p.action?.onVerify?.(actionId, code)}
-          onCancel={p.action?.onCancel}
-          busy={p.action?.busy}
-          error={actionId === p.action?.actionId ? p.action?.error : undefined}
-          attempts={actionId === p.action?.actionId ? p.action?.mfaAttempts : undefined}
+          message={p.card.message}
+          verification
           className={p.className}
         />
       );
@@ -80,6 +77,14 @@ export function CardRenderer(p: CardRendererProps) {
       return <InvestmentsCard data={p.card.data as InvestmentsCardData} className={p.className} />;
     case 'subscriptions':
       return <SubscriptionsCard data={p.card.data as SubscriptionView[]} className={p.className} />;
+    case 'contacts':
+      return <ContactsCard data={p.card.data} className={p.className} />;
+    case 'dashboard':
+      return <DashboardCard data={p.card.data} className={p.className} />;
+    case 'scheduled':
+      return <ScheduledCard data={p.card.data} created={p.card.created} className={p.className} />;
+    case 'receipt':
+      return <BusinessReceiptCard data={p.card.data} className={p.className} />;
     case 'anomaly':
       return (
         <AnomalyCard
@@ -90,17 +95,19 @@ export function CardRenderer(p: CardRendererProps) {
           className={p.className}
         />
       );
-    case 'plan':
+    case 'plan': {
+      const plan = p.card.plan;
       return (
         <PlanCard
-          plan={p.card.plan}
-          onControl={p.action?.onTaskControl}
+          plan={plan}
+          onControl={p.action?.onTaskControl ? action => p.action?.onTaskControl?.(action, plan.id) : undefined}
           busy={p.action?.busy}
           className={p.className}
         />
       );
+    }
     case 'error':
-      return <ErrorCard message={p.card.message} className={p.className} />;
+      return <ErrorCard message={p.card.message} code={p.card.code} className={p.className} />;
     default:
       return assertNever(p.card);
   }

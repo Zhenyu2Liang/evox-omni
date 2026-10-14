@@ -44,7 +44,7 @@ const NARRATION = '您的活期余额为 ¥23,580.00。';
 function runBalanceTurn(sessionId: string): Promise<ScenarioResult> {
   const agent = buildFauxAgent({
     sessionId,
-    script: [tool('get_balance', { accountId: CHECKING.id }), final(NARRATION)],
+    script: [tool('get_balance', {}), final(NARRATION)],
   });
   return runTurn({ sessionId, message: '查询我的余额', agent });
 }

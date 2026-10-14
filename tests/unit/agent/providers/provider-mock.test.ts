@@ -28,6 +28,8 @@
  * (contact_zhangwei 张伟, contact_wangfang 王芳, the duplicate 王芳 = contact_wangfang_2).
  */
 import { describe, expect, it } from 'vitest';
+import mockMessages from '@/agent/providers/mock/messages.zh-CN.json';
+import { createTranslator } from '@/lib/i18n/shared';
 import { fauxAssistantMessage, fauxText, fauxToolCall } from '@earendil-works/pi-ai';
 import type {
   AssistantMessage,
@@ -112,6 +114,18 @@ function textOf(msg: AssistantMessage): string {
 /* ============================================================ 1. fuzzy intent → tool call */
 
 describe('respond — fuzzy intent classification', () => {
+  it.each(['Plan and freeze all my bank cards', '\u5e2e\u6211\u8ba1\u5212\u51bb\u7ed3\u5168\u90e8\u94f6\u884c\u5361'])('plans both card freezes for %s before generic planning', text => {
+    const user = userMessage(text);
+    const lookup = respond(ctx([user]));
+    expect(firstToolCall(lookup)?.name).toBe('get_cards');
+    const call = firstToolCall(respond(ctx([user, lookup, toolResultMessage({ toolName: 'get_cards', toolCallId: 'call_get_cards',
+      text: 'Cards found', details: [{ id: 'actual-credit', type: 'CREDIT' }, { id: 'actual-debit', type: 'DEBIT' }] })])));
+    expect(call?.name).toBe('submit_plan');
+    expect(call?.args.nodes).toEqual([
+      expect.objectContaining({ tool: 'freeze_card', args: { cardId: 'actual-credit' } }),
+      expect.objectContaining({ tool: 'freeze_card', args: { cardId: 'actual-debit' } }),
+    ]);
+  });
   const cases: ReadonlyArray<[string, string, Record<string, unknown>]> = [
     ['我还有多少钱？', 'get_balance', {}],
     ['帮我看下这个月花了多少', 'analyze_spending', {}],
@@ -297,7 +311,7 @@ describe('respond — blocked gated call (awaiting human decision)', () => {
     { stopReason: 'toolUse' },
   );
 
-  it('YELLOW: reports it awaits the user confirmation and is NOT yet executed', () => {
+  it('YELLOW: acknowledges preparation without duplicating the approval request', () => {
     const blockedText = `${BLOCK_PREFIX}${JSON.stringify({
       actionId: 'pa_yellow',
       decisionKind: 'confirm_with_user',
@@ -306,14 +320,13 @@ describe('respond — blocked gated call (awaiting human decision)', () => {
       ctx([userMessage('给张伟转200元'), transferCall, blockedTransferResult(blockedText)]),
     );
     const text = textOf(msg);
-    expect(text).toMatch(/等待确认|需要你确认/);
-    expect(text).toContain('尚未执行');
+    expect(text).toBe(mockMessages.operationPrepared.replace('{operation}', createTranslator('zh-CN')('chat.tool.transfer_money')));
     // Never claims the money moved.
     expect(text).not.toMatch(/已成功|已完成|已执行|转账成功/);
     expect(toolCallsOf(msg)).toHaveLength(0);
   });
 
-  it('RED: reports it requires MFA verification and is NOT yet executed', () => {
+  it('RED: leaves verification instructions in the request panel and never executes another call', () => {
     const blockedText = `${BLOCK_PREFIX}${JSON.stringify({
       actionId: 'pa_red',
       decisionKind: 'require_mfa',
@@ -322,9 +335,7 @@ describe('respond — blocked gated call (awaiting human decision)', () => {
       ctx([userMessage('给张伟转5000元'), transferCall, blockedTransferResult(blockedText)]),
     );
     const text = textOf(msg);
-    expect(text).toContain('验证码');
-    expect(text).toMatch(/等待验证|安全验证/);
-    expect(text).toContain('尚未执行');
+    expect(text).toBe(mockMessages.operationPrepared.replace('{operation}', createTranslator('zh-CN')('chat.tool.transfer_money')));
     // Never claims the money moved.
     expect(text).not.toMatch(/已成功|已完成|已执行|转账成功/);
     expect(toolCallsOf(msg)).toHaveLength(0);

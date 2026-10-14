@@ -1,23 +1,23 @@
 /**
- * The UI's financial narrative is authored here, from tool results only. Model prose is not an
- * input: neither wording, punctuation nor a forged status can select a different operation.
+ * The UI's financial narrative is authored here, from tool results only. Normal conversation uses
+ * a separate presentation path. Model prose cannot select a financial operation or its result.
  * Tool summaries below are produced by the registered SDK runners, not by the model. The planning
  * tool is handled separately because its goal/node descriptions originate from model arguments.
  */
 import { formatCNY } from '@/lib/money';
 import { buildFinancialFacts, isRecord, SIDE_EFFECT_TOOLS, type FactInput, type TrustedWrite } from './grounding-facts';
 import { renderBankingGuidance, type BankingGuidance } from './banking-guidance';
+import conversationMessages from './messages/conversation.zh-CN.json';
 
-export const FINANCIAL_RESPONSE_TAG = '（系统校正）';
-export const UNVERIFIED_RESPONSE = `${FINANCIAL_RESPONSE_TAG}本次对话中未记录到该操作的执行结果。请补充操作类型、账户、收款人或金额，我会先核对系统数据。`;
-export const UNAVAILABLE_RESPONSE = `${FINANCIAL_RESPONSE_TAG}系统结果暂时无法展示，请查看操作记录或人工核对；当前执行结果待核对。`;
+export const UNVERIFIED_RESPONSE = conversationMessages.unverified;
+export const UNAVAILABLE_RESPONSE = conversationMessages.unavailable;
 
 const WRITE_LABELS: Readonly<Record<string, string>> = {
   transfer_money: '转账', reserve_budget: '预算预留', set_card_limit: '限额调整',
   freeze_card: '卡片冻结', unfreeze_card: '卡片解冻', report_lost_card: '卡片挂失',
   apply_virtual_card: '虚拟卡申请', cancel_subscription: '订阅取消',
   set_subscription_reminder: '订阅提醒', create_scheduled_task: '定时任务记录',
-  subscribe_investment: '理财申购', redeem_investment: '理财赎回', change_password: '密码修改',
+  subscribe_investment: '理财申购', redeem_investment: '理财赎回',
 };
 
 const READ_LABELS: Readonly<Record<string, string>> = {
@@ -61,7 +61,7 @@ export function renderFinancialResponse(
 ): string {
   const facts = buildFinancialFacts(entries);
   const sections: string[] = [];
-  if (options.locked) return `${FINANCIAL_RESPONSE_TAG}账户已安全锁定，请先在安全中心处理。`;
+  if (options.locked) return '账户已安全锁定，请先在安全中心处理。';
   if (facts.currentBalances.length > 0) {
     const lines = facts.currentBalances.map(account => account.balanceKnown === false
       ? `${account.name ?? account.type ?? '账户'}当前余额待核对`
@@ -104,12 +104,8 @@ export function renderFinancialResponse(
       ? `针对你的需求 ${JSON.stringify(options.requestText.slice(0, 200))}，` : '';
     sections.push(request + renderBankingGuidance(options.guidance));
   }
-  if (sections.length) return `${FINANCIAL_RESPONSE_TAG}${sections.join('\n')}`;
-  if (options.requestText) {
-    const request = JSON.stringify(options.requestText.slice(0, 200));
-    // An invalid/absent guidance payload does not establish WHICH field is missing. Do not
-    // manufacture a repeated question about details the user may already have supplied.
-    return `${FINANCIAL_RESPONSE_TAG}本次对话中未记录到该操作的执行结果。你的需求是 ${request}。请明确要办理的受支持业务，或先查询相关记录。Demo 理财申购仅支持活期账户，赎回仅支持整笔全额，不支持部分赎回；卡片额度调整仅支持分类消费限额，不支持总授信额度调整。不要在聊天里输入真实密码。`;
-  }
+  if (sections.length) return sections.join('\n');
+  // Missing/invalid guidance is not evidence of a specific missing field or capability boundary.
+  // Keep this fallback short, and never echo a guessed interpretation back into model history.
   return UNVERIFIED_RESPONSE;
 }

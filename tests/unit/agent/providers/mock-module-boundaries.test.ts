@@ -27,7 +27,7 @@ function moduleImports(file: string): string[] {
 }
 
 function familyFiles(directory: string): string[] {
-  return readdirSync(directory).filter(name => name.endsWith('.ts')).map(name => path.join(directory, name));
+  return readdirSync(directory).filter(name => name.endsWith('.ts') && !name.endsWith('.test.ts')).map(name => path.join(directory, name));
 }
 
 function assertAcyclic(files: string[]): void {
@@ -55,10 +55,27 @@ describe('Orchestration module boundaries', () => {
     for (const file of familyFiles(directory)) {
       for (const specifier of moduleImports(file)) {
         const allowed = specifier === '@earendil-works/pi-ai' ||
+          ['@/lib/money', '@/lib/clock', '@/lib/date', '@/lib/contracts/intent', '@/lib/contracts/spending', '@/lib/contracts/tool-catalog'].includes(specifier) ||
+          (specifier === '../../guidance-messages' && ['conversation-guidance.ts', 'classifier.ts'].includes(path.basename(file))) ||
+          (specifier.startsWith('../../messages/') && path.basename(file) === 'invalid-amount-response.ts') ||
+          (specifier === '../../banking-guidance' && path.basename(file) === 'action-follow-up.ts') ||
           (specifier.startsWith('./') && path.resolve(path.dirname(file), specifier).startsWith(`${directory}${path.sep}`));
         expect(allowed, `${path.basename(file)} imports ${specifier}`).toBe(true);
       }
     }
+  });
+
+  it('keeps the production guidance vocabulary free from natural-language request parsing', () => {
+    expect(moduleImports(path.join(projectRoot, 'agent/guidance-messages.ts'))).toEqual(['./messages/conversation.zh-CN.json']);
+    expect(moduleImports(path.join(projectRoot, 'agent/providers/mock/request-command-patterns.ts'))).toEqual([]);
+    expect(moduleImports(path.join(projectRoot, 'agent/providers/mock/request-steps.ts'))).toEqual(['./request-command-patterns']);
+  });
+
+  it('keeps conversational request selection free from persistence or provider dependencies', () => {
+    const policy = path.join(projectRoot, 'agent/providers/mock/conversation-policy.ts');
+    expect(moduleImports(policy)).toEqual(['./request-amounts', './advisory-policy']);
+    expect(moduleImports(path.join(projectRoot, 'agent/providers/mock/advisory-policy.ts'))).toEqual([]);
+    expect(moduleImports(path.join(projectRoot, 'agent/providers/mock/request-amounts.ts'))).toEqual([]);
   });
 
   it('keeps mock routing, parsers and narration acyclic', () => {

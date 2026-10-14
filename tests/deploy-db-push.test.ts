@@ -43,7 +43,7 @@ function fileStamp(filePath: string): string {
 }
 
 describe('scripts/db-push.ts — cold deploy under RUST_LOG=warn', () => {
-  it('recreates a WAL-mode demo database with the current schema after an explicit reset', () => {
+  it('recreates a WAL-mode demo database and seeds a fresh baseline without runtime history', () => {
     const dbName = `verify-reset-${process.pid}.db`;
     const dbPath = path.join(prismaDir, dbName);
     const sidecars = [dbName, `${dbName}-wal`, `${dbName}-shm`, `${dbName}-journal`];
@@ -55,7 +55,7 @@ describe('scripts/db-push.ts — cold deploy under RUST_LOG=warn', () => {
       initial.exec('PRAGMA journal_mode = WAL; CREATE TABLE "ResetFixture" ("id" TEXT PRIMARY KEY); INSERT INTO "ResetFixture" VALUES (\'simulated\');');
       expect(initial.prepare('PRAGMA journal_mode').get()?.journal_mode).toBe('wal');
       initial.close();
-      const invocation = cliCommand(resolveTsxBin(repoRoot), ['tsx', path.join('scripts', 'db-push.ts'), '--force-reset', '--skip-generate']);
+      const invocation = cliCommand(resolveTsxBin(repoRoot), ['tsx', path.join('scripts', 'db-push.ts'), '--force-reset']);
       const result = spawnSync(invocation.command, invocation.args, {
         cwd: repoRoot, encoding: 'utf8', env: { ...process.env, DATABASE_URL: `file:${dbPath}`, RUST_LOG: 'warn' },
       });
@@ -68,9 +68,28 @@ describe('scripts/db-push.ts — cold deploy under RUST_LOG=warn', () => {
         expect(current.prepare('PRAGMA table_info("InvestmentProduct")').all())
           .toContainEqual(expect.objectContaining({ name: 'annual_yield_rate', type: 'TEXT' }));
       } finally { current.close(); }
+
+      const seedInvocation = cliCommand(resolveTsxBin(repoRoot), ['tsx', path.join('prisma', 'seed.ts')]);
+      const seeded = spawnSync(seedInvocation.command, seedInvocation.args, {
+        cwd: repoRoot, encoding: 'utf8', env: { ...process.env, DATABASE_URL: `file:${dbPath}` },
+      });
+      expect(seeded.error).toBeUndefined();
+      expect(seeded.status, `${seeded.stdout ?? ''}${seeded.stderr ?? ''}`).toBe(0);
+      const baseline = new DatabaseSync(dbPath);
+      try {
+        expect(baseline.prepare('SELECT COUNT(*) AS count FROM "Account"').get()?.count).toBeGreaterThan(0);
+        expect(baseline.prepare('SELECT COUNT(*) AS count FROM "Transaction"').get()?.count).toBeGreaterThan(0);
+        for (const tableName of [
+          'AgentSession', 'AgentRun', 'ModelRequest', 'AgentRunEvent', 'ToolInvocation',
+          'AgentTask', 'AgentTaskNode', 'ManualReview', 'PendingAction', 'MfaChallenge',
+          'ExecutionReceipt', 'AuthorizationDecision', 'AuditLog', 'SecurityEvent', 'CircuitBreakerState',
+        ]) {
+          expect(baseline.prepare(`SELECT COUNT(*) AS count FROM "${tableName}"`).get()?.count, tableName).toBe(0);
+        }
+      } finally { baseline.close(); }
     } finally {
       expect(shared.map(fileStamp)).toEqual(before);
-      removeSqliteFiles(prismaDir, sidecars);
+      removeSqliteFiles(prismaDir, [...sidecars, `${dbName}.backup.db`]);
     }
   }, 120_000);
 

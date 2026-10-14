@@ -23,9 +23,23 @@
 import type { Browser, Page } from 'playwright-core';
 import { moneyToCents, subtractMoney } from '../../lib/money';
 import { journeyManualReview } from './manual-review.e2e-helper';
+import { journeyAssistantWorkspace } from './ui-shell.e2e-helper';
+import { journeyI18n } from './i18n.e2e-helper';
+import { journeyHydration } from './hydration.e2e-helper';
+import { journeySharedDemo } from './shared-demo.e2e-helper';
+import { journeyToolLifecycle } from './tool-lifecycle.e2e-helper';
+import { journeyDeveloperMode } from './developer-mode.e2e-helper';
+import { journeyMultiCardFreeze } from './card-freeze.e2e-helper';
+import { journeyBankingPages } from './banking-pages.e2e-helper';
+import { journeyCardManagement } from './card-management.e2e-helper';
+import { journeyNaturalConversation, journeyDialogueRegressions } from './conversation.e2e-helper';
+import { journeyOperationHistory } from './activity.e2e-helper';
+import { journeyChatHistory } from './chat-history.e2e-helper';
+import { createTranslator } from '../../lib/i18n/shared';
 import {
   NAV_TIMEOUT_MS,
   SELECTORS,
+  assistantTexts,
   bootDevServer,
   cardCategoryLimit,
   clickConfirm,
@@ -44,8 +58,9 @@ import {
   mfaCardPresent,
   nodeStatus,
   planControlPresent,
-  readSessionCookie,
+  readDemoSessionId,
   resetDemoDatabase,
+  reseedDemoDatabase,
   resolveBrowserExecutable,
   runJourney,
   setActiveBrowser,
@@ -80,12 +95,12 @@ const MSG = {
   /** YELLOW transfer (≤ ¥1000) → confirmation card. */
   transferYellow: '给张伟转200元',
   /**
-   * YELLOW, NON-transfer action → confirmation card. Its tier is STATIC (`freeze_card` = YELLOW,
+   * YELLOW, NON-transfer action → confirmation card. Its tier is STATIC (`set_card_limit` = YELLOW,
    * `security/permission-engine.ts`), so — unlike a transfer — it stays YELLOW regardless of the
    * demo day's accumulated transfer total, keeping journey e's confirmation-card recovery
    * deterministic across runs and journey ordering.
    */
-  freezeCard: '冻结我的信用卡',
+  cardLimit: '\u628a\u4fe1\u7528\u5361\u5a31\u4e50\u9650\u989d\u8c03\u6574\u52301500\u5143',
   /** RED transfer (> ¥1000) → MFA card (mock code `123456`). */
   transferRed: '给张伟转2000元',
   /**
@@ -229,6 +244,7 @@ async function journeyTransferMfa(browser: Browser, baseUrl: string): Promise<st
     async (page) => {
       await gotoAgent(page, baseUrl);
       const before = await snapshotMoneyState(baseUrl);
+      const previousReplies = (await assistantTexts(page)).length;
       await submitChat(page, MSG.transferRed);
       await waitForMfaCard(page);
       await submitMfa(page, '000000');
@@ -236,7 +252,7 @@ async function journeyTransferMfa(browser: Browser, baseUrl: string): Promise<st
       if (!(await mfaCardPresent(page))) {
         throw new Error('错误验证码后 MFA 卡片消失（应保留以允许重试）');
       }
-      if (await hasAssistantText(page, TRANSFER_OK_NARRATION)) {
+      if ((await assistantTexts(page)).slice(previousReplies).some(text => text.includes(TRANSFER_OK_NARRATION))) {
         throw new Error('错误验证码后出现转账成功叙述 —— 转账不应发生');
       }
       // SECONDARY: nothing moved — balance + ledger are IDENTICAL to the pre-attempt snapshot.
@@ -337,12 +353,11 @@ async function journeyPlanCancel(browser: Browser, baseUrl: string): Promise<str
     async (page) => {
       await gotoAgent(page, baseUrl);
       const before = await snapshotMoneyState(baseUrl);
+      const previousActions = new Set((await fetchPendingActions(baseUrl)).map(action => action.id));
       await submitChat(page, MSG.gatedPlan);
       await waitForPlanStatus(page, '等待确认');
 
-      // The parked action id(s), read through the caller's own session cookie (for the "card gone" proof).
-      const cookie = await readSessionCookie(page);
-      const parkedIds = cookie ? (await fetchPendingActions(baseUrl, cookie)).map((action) => action.id) : [];
+      const parkedIds = (await fetchPendingActions(baseUrl)).filter(action => !previousActions.has(action.id)).map(action => action.id);
 
       await clickPlanControl(page, '取消');
       await waitForPlanStatus(page, '已取消');
@@ -373,7 +388,7 @@ async function journeyPlanCancel(browser: Browser, baseUrl: string): Promise<str
             : `HTTP ${status} error.code=${body?.error?.code ?? '?'}`;
         confirmOutcome = `旧确认入口仍在 → 点击被拒绝（${detail}）`;
       } else {
-        const still = cookie ? await fetchPendingActions(baseUrl, cookie) : [];
+        const still = await fetchPendingActions(baseUrl);
         const leaked = still.filter((action) => parkedIds.includes(action.id));
         if (leaked.length > 0) {
           throw new Error(`确认卡片已移除，但挂起动作仍处于非终态：${leaked.map((action) => action.id).join('、')}`);
@@ -404,8 +419,7 @@ async function journeyPlanCancel(browser: Browser, baseUrl: string): Promise<str
  * (e) REFRESH → action-entry recovery, in the SAME context across reload (the HttpOnly
  * `banking_session` cookie persists, so the server state is reachable):
  *   leg 1: park a YELLOW action → reload → the ConfirmationCard(确认/取消) is RESTORED.
- *          Uses `freeze_card` (STATIC YELLOW) rather than a transfer, so the tier does not depend on
- *          the demo day's accumulated transfer total (see MSG.freezeCard).
+ *          Uses `set_card_limit` (STATIC YELLOW), independent of the day's transfer total.
  *   leg 2 (fresh context): park a RED transfer → reload → the MfaCard(身份验证) is RESTORED.
  */
 async function journeyRefreshRecovery(browser: Browser, baseUrl: string): Promise<string> {
@@ -413,12 +427,12 @@ async function journeyRefreshRecovery(browser: Browser, baseUrl: string): Promis
     browser,
     async (page) => {
       await gotoAgent(page, baseUrl);
-      await submitChat(page, MSG.freezeCard);
+      await submitChat(page, MSG.cardLimit);
       await waitForConfirmCard(page);
       await page.reload({ waitUntil: 'domcontentloaded' });
       await waitForComposer(page);
       await waitForConfirmCard(page);
-      return `YELLOW「${MSG.freezeCard}」挂起 → 同一 context reload → ConfirmationCard(确认/取消) 由 GET /api/actions 恢复`;
+      return `YELLOW ${MSG.cardLimit}: reload restores the inline confirmation from persisted actions`;
     },
     { label: 'e1-refresh-confirm' },
   );
@@ -444,7 +458,7 @@ async function journeyRefreshRecovery(browser: Browser, baseUrl: string): Promis
  * (f) WEDGE recovery reached ONLY via a PLAIN refresh/navigation — the refresh-reachable recovery
  * surface. A committed-but-unrecorded standalone transfer (`status='confirmed'`, `resultJson=null`,
  * with a committed `ExecutionReceipt`) is seeded straight into the isolated E2E DB; then a plain
- * `page.goto('/actions')` (the actionId is NEVER passed) must surface the row with a `恢复执行`
+ * `page.goto('/agent')` (the actionId is NEVER passed) must surface the row with a recovery
  * button. Clicking it settles the wedge FROM the committed receipt — one debit total, `executed`
  * status, a durable success audit — never a second debit.
  */
@@ -452,17 +466,10 @@ async function journeyWedgeRefreshRecover(browser: Browser, baseUrl: string): Pr
   return withPage(
     browser,
     async (page) => {
-      // (a) mint the identity cookie via the FIRST chat turn (identity is COOKIE-ONLY).
+      // (a) Open the shared demo conversation and submit a read-only turn.
       await gotoAgent(page, baseUrl);
       await submitChat(page, MSG.balance);
-      const cookie = await waitFor(
-        async () => {
-          const value = await readSessionCookie(page);
-          return value === undefined ? false : value;
-        },
-        { description: '银行会话 cookie（banking_session）', timeoutMs: NAV_TIMEOUT_MS },
-      );
-      const sessionId = cookie.slice(cookie.indexOf('=') + 1);
+      const sessionId = await readDemoSessionId(page);
 
       // (b) pre-state via the app's real read routes.
       const before = await snapshotMoneyState(baseUrl);
@@ -477,8 +484,8 @@ async function journeyWedgeRefreshRecover(browser: Browser, baseUrl: string): Pr
         { description: `Balance after the committed wedge: ${subtractMoney(before.balance, WEDGE_AMOUNT)}`, timeoutMs: 30_000 },
       );
 
-      // (d) PLAIN navigation to /actions — the actionId is NEVER passed to the browser.
-      await page.goto(`${baseUrl}/actions`, { waitUntil: 'domcontentloaded' });
+      // Plain conversation reload restores the recovery card without a separate approvals page.
+      await gotoAgent(page, baseUrl);
       const recoverButton = page.getByRole('button', { name: '恢复执行', exact: true });
       await recoverButton.first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
 
@@ -487,7 +494,7 @@ async function journeyWedgeRefreshRecover(browser: Browser, baseUrl: string): Pr
       const settled = await waitFor(
         async () => {
           const [actions, dashboard, ledger] = await Promise.all([
-            fetchPendingActions(baseUrl, cookie),
+            fetchPendingActions(baseUrl),
             fetchDashboardSummary(baseUrl),
             fetchLedger(baseUrl),
           ]);
@@ -523,7 +530,7 @@ async function journeyWedgeRefreshRecover(browser: Browser, baseUrl: string): Pr
         throw new Error(`恢复 AuditLog.sessionId 应为 ${sessionId}，实际 ${audit.sessionId}`);
       }
 
-      return `仅经“纯刷新/导航”可达的恢复面：种子 wedge(status=confirmed,resultJson=null,已提交凭证) → page.goto('/actions')（不传 actionId）→ 渲染「恢复执行」→ 点击 → 由已提交凭证结算（未再次扣款）；余额 ${before.balance} → ${settled.balance}（恰一次 −${WEDGE_AMOUNT}，账本恰新增 ${settled.addedDebits} 条 −${WEDGE_AMOUNT} DEBIT/${RECIPIENT_NAME}）；PendingAction.status=${persisted.status}；AuditLog(dedupeKey=${WEDGE_AUDIT_DEDUPE_KEY}) status=${audit.status}`;
+      return `Conversation reload restores recovery; committed receipt settles once, balance ${before.balance} -> ${settled.balance}, new debit count ${settled.addedDebits}, action ${persisted.status}, audit ${audit.status}`;
     },
     { label: 'f-wedge-refresh-recover' },
   );
@@ -592,6 +599,7 @@ async function journeyInvestmentFlow(browser: Browser, baseUrl: string): Promise
  * `anomalies` is exactly that one DEBIT row (no CREDIT anomaly — detection is DEBIT-only).
  */
 async function journeyAnomalyDetection(browser: Browser, baseUrl: string): Promise<string> {
+  const t = createTranslator('zh-CN');
   interface AnomalyPayload {
     anomalies: Array<{
       transaction: { id: string; merchant: string; amount: string; direction: 'DEBIT' | 'CREDIT' };
@@ -605,7 +613,7 @@ async function journeyAnomalyDetection(browser: Browser, baseUrl: string): Promi
       await submitChat(page, MSG.anomaly);
 
       await page
-        .getByText('异常交易提醒', { exact: false })
+        .getByText(t('cards.anomaly.title'), { exact: false })
         .first()
         .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
       if ((await page.getByText('Apple Store', { exact: true }).count()) === 0) {
@@ -614,8 +622,8 @@ async function journeyAnomalyDetection(browser: Browser, baseUrl: string): Promi
       if ((await page.getByText('-¥6,999.00', { exact: true }).count()) === 0) {
         throw new Error('AnomalyCard 未渲染金额「-¥6,999.00」');
       }
-      if ((await page.getByText('风险 低', { exact: false }).count()) === 0) {
-        throw new Error('AnomalyCard 未渲染「风险 低」徽标');
+      if ((await page.getByText(t('cards.anomaly.risk.low'), { exact: false }).count()) === 0) {
+        throw new Error('The anomaly card did not render the low-risk badge');
       }
       if ((await hasAssistantText(page, '未发现可疑交易')) !== false) {
         throw new Error('已检测到异常，但助手文本出现了「未发现可疑交易」');
@@ -644,7 +652,7 @@ async function journeyAnomalyDetection(browser: Browser, baseUrl: string): Promi
         },
       );
 
-      return `「${MSG.anomaly}」→ AnomalyCard 标题「异常交易提醒」/ 商户 Apple Store / -¥6,999.00 / 徽标「风险 低」；助手未出现「未发现可疑交易」；GET /api/bills anomalies=${settled.count} 条（Apple Store ${settled.amount}），无 CREDIT`;
+      return `${MSG.anomaly}: ${t('cards.anomaly.title')} / Apple Store / -¥6,999.00 / ${t('cards.anomaly.risk.low')}; ${settled.count} matching debit anomaly; no false clean result`;
     },
     { label: 'i-anomaly-detection' },
   );
@@ -654,83 +662,68 @@ async function journeyAnomalyDetection(browser: Browser, baseUrl: string): Promi
 const MOCK_MFA_CODE = '123456';
 
 /**
- * TYPE `code` into the `/security` breaker control's 6-digit code input AFTER React has HYDRATED it.
- *
- * The input is a CLIENT component's CONTROLLED field (`app/security/ResetBreakerButton.tsx`): its SSR
- * node exists BEFORE hydration but carries no React own-property, so a `fill()` at that instant is
- * silently reset when hydration re-renders the controlled value. This waits on the same real-DOM
- * hydration condition as `waitForComposerHydration`, keyed on the control's own 6-digit code input.
+ * Enable the explicit developer preference after the sidebar control has hydrated.
  */
-async function fillBreakerCode(page: Page, code: string): Promise<void> {
-  await waitForElementHydration(page, SELECTORS.breakerCodeInput);
-  const input = page.locator(SELECTORS.breakerCodeInput).first();
-  await input.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
-  await input.fill(code);
+async function enableDeveloperReset(page: Page): Promise<void> {
+  const toggle = page.locator('[data-developer-toggle]:visible');
+  await waitForElementHydration(page, '[data-developer-toggle]');
+  if (await toggle.getAttribute('aria-checked') !== 'true') await toggle.click();
+  await page.locator('[data-developer-breaker-reset]').waitFor({ state: 'visible' });
 }
 
 /**
- * TYPE the mock code into the `/security` breaker control and CLICK it, AFTER React has HYDRATED it.
- *
- * The controlled code input starts EMPTY — the mock code is NEVER prefilled or revealed — and the
- * unlock button is DISABLED while the input is empty, so the code MUST be typed before the click (a
- * click on the empty disabled button is a no-op / actionability timeout).
- *
- * The control (`app/security/ResetBreakerButton.tsx`) is a CLIENT component: its SSR HTML is visible
- * — and clickable "by shape" — BEFORE hydration, and a click at that instant is silently DROPPED
- * (no `POST /api/security/reset`), so no `role=status` message ever appears and the following
- * `waitForStatusText` times out. This waits on the same real-DOM hydration condition as
- * `waitForComposerHydration`, keyed on the control's own 6-digit code input.
+ * Click the single developer maintenance button after hydration; no banking code is submitted.
  */
-async function clickBreakerReset(page: Page, name: string | RegExp, code: string): Promise<void> {
-  const button = page.getByRole('button', typeof name === 'string' ? { name, exact: true } : { name });
-  await button.first().waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
-  await fillBreakerCode(page, code);
-  await button.first().click();
+async function clickBreakerReset(page: Page): Promise<void> {
+  const button = page.locator('[data-developer-breaker-reset]');
+  await waitForElementHydration(page, '[data-developer-breaker-reset]');
+  await button.click();
 }
 
 /**
  * (j) CIRCUIT-BREAKER lock (DURABLE, per-OWNER `user:user_liming`): reset the account breaker to a
  * known zero state, then submit THREE consecutive wrong MFA codes (`000000`) on a RED transfer — after
- * each, RENDERED `role=status` shows `验证失败，已尝试 N 次`. The third trips the breaker: the security
+ * the first two show the failed attempt count. The third closes the verification input and shows
+ * the terminal locked status. It trips the breaker: the security
  * center shows `已熔断` + `失败 3 / 3 次` + a `CIRCUIT_BREAKER_TRIPPED` row (severity `high`, DB-cross-
  * checked), and the lock PERSISTS across a plain reload.
  *
- * On the LOCKED security center the code input starts EMPTY — the mock code is NEVER prefilled or
- * revealed — and the unlock button is DISABLED while the input is empty, so a missing code cannot be
- * submitted; a WRONG code (`000000`) is REFUSED by the route (its refusal message surfaces) and the
- * lock stays; only the CORRECT `123456` (TYPED by the journey) unlocks it and records a
- * `SECURITY_RESET` event (DOM + DB).
+ * Normal mode hides and denies maintenance. Developer mode exposes a code-free reset button,
+ * which records SECURITY_RESET without executing the still-pending banking operation.
  */
 async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Promise<string> {
+  const t = createTranslator('zh-CN');
   return withPage(
     browser,
     async (page) => {
-      // (1) mint the identity cookie via the FIRST chat turn (identity is COOKIE-ONLY).
+      // (1) Open the shared demo conversation and submit a read-only turn.
       await gotoAgent(page, baseUrl);
       await submitChat(page, MSG.balance);
-      const cookie = await waitFor(
-        async () => {
-          const value = await readSessionCookie(page);
-          return value === undefined ? false : value;
-        },
-        { description: '银行会话 cookie（banking_session）', timeoutMs: NAV_TIMEOUT_MS },
-      );
-      const sessionId = cookie.slice(cookie.indexOf('=') + 1);
+      const sessionId = await readDemoSessionId(page);
 
-      // (2) reset the ACCOUNT breaker so the three failures below start from a known zero state. The
-      // code input starts EMPTY (never prefilled) and the button is DISABLED while empty, so the mock
-      // code is TYPED before the click.
+      // Reset the owner counter through the explicit developer maintenance surface.
       await page.goto(`${baseUrl}/security`, { waitUntil: 'domcontentloaded' });
-      await clickBreakerReset(page, /重置熔断计数|解除熔断限制/, MOCK_MFA_CODE);
-      await waitForStatusText(page, '已解除，当前失败0/3次');
+      if (await page.locator('[data-developer-breaker-reset]').count()) throw new Error('Normal mode exposes breaker maintenance');
+      const denied = await page.request.post(`${baseUrl}/api/developer/security/reset`);
+      if (denied.status() !== 403) throw new Error('Normal mode can invoke developer maintenance');
+      await enableDeveloperReset(page);
+      await clickBreakerReset(page);
+      await waitForStatusText(page, t('security.reset.success', { count: 0, max: 3 }));
 
       // (3) three consecutive WRONG MFA codes on a RED transfer → trip the per-owner breaker.
       await gotoAgent(page, baseUrl);
+      const beforeLock = await fetchDashboardSummary(baseUrl);
+      const beforeLedger = await fetchLedger(baseUrl);
       await submitChat(page, MSG.transferRed);
       await waitForMfaCard(page);
       for (const attempt of [1, 2, 3]) {
         await submitMfa(page, '000000');
-        await waitForStatusText(page, `验证失败，已尝试${attempt}次`);
+        await waitForStatusText(page, attempt === 3 ? t('cards.terminal.locked') : t('cards.mfa.failedAttempts', { attempts: attempt }));
+      }
+      if (await page.locator(SELECTORS.mfaInput).count()) throw new Error('Locked verification still exposes a code input');
+      if ((await fetchDashboardSummary(baseUrl)).checkingBalance !== beforeLock.checkingBalance ||
+          diffLedger(beforeLedger.transactions, (await fetchLedger(baseUrl)).transactions).added.length) {
+        throw new Error('Failed verification or a locked operation changed the financial ledger');
       }
 
       // (4) the lock is shown on the security center AND persisted.
@@ -741,8 +734,9 @@ async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Pro
         .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
       const body = (await page.locator('main').innerText()).replace(/\s+/g, '');
       if (!body.includes('失败3/3次')) throw new Error('安全中心未显示「失败 3 / 3 次」');
-      if (!body.includes('CIRCUIT_BREAKER_TRIPPED')) {
-        throw new Error('安全中心未渲染 CIRCUIT_BREAKER_TRIPPED 安全事件行');
+      const trippedRow = page.locator('[data-security-event-kind="CIRCUIT_BREAKER_TRIPPED"]');
+      if (!(await trippedRow.count()) || !(await trippedRow.first().innerText()).includes(t('security.events.kind.CIRCUIT_BREAKER_TRIPPED'))) {
+        throw new Error('The security center did not render the localized circuit-breaker event');
       }
       const tripped = (await querySecurityEvents({ sessionId })).find(
         (event) => event.kind === 'CIRCUIT_BREAKER_TRIPPED',
@@ -761,43 +755,12 @@ async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Pro
         .first()
         .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
 
-      // (6) LOCKED-state unlock guards (all on this security-center visit):
-      //   (a) the code input arrives EMPTY and its placeholder never reveals the mock code;
-      //   (b) with an EMPTY input the unlock button is DISABLED — a missing code cannot be submitted;
-      //   (c) a WRONG code is REFUSED (the route's message surfaces) and the lock stays.
-      await waitForElementHydration(page, SELECTORS.breakerCodeInput);
-      const codeInput = page.locator(SELECTORS.breakerCodeInput).first();
-      await codeInput.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
-      const initialCode = await codeInput.inputValue();
-      if (initialCode !== '') {
-        throw new Error(`锁定态验证码输入框应为空（不得预填），实际「${initialCode}」`);
-      }
-      const placeholder = (await codeInput.getAttribute('placeholder')) ?? '';
-      if (placeholder.includes(MOCK_MFA_CODE)) {
-        throw new Error(`验证码输入框 placeholder 泄露了验证码：「${placeholder}」`);
-      }
-
-      const unlockButton = page.getByRole('button', { name: '解除熔断限制', exact: true }).first();
-      await unlockButton.waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
-      if (!(await unlockButton.isDisabled())) {
-        throw new Error('验证码为空时「解除熔断限制」按钮应为禁用状态（缺失验证码不应可提交）');
-      }
-
-      await fillBreakerCode(page, '000000');
-      await unlockButton.click();
-      await waitForStatusText(page, '解除熔断需要额外的安全验证');
-      // The WRONG-code refusal must NOT unlock: the lock persists across a plain reload.
-      await page.reload({ waitUntil: 'domcontentloaded' });
+      // Developer maintenance is a single button; it must not require a banking credential.
+      if (await page.locator(SELECTORS.breakerCodeInput).count()) throw new Error('Developer reset still requests a verification code');
+      await clickBreakerReset(page);
+      await waitForStatusText(page, t('security.reset.success', { count: 0, max: 3 }));
       await page
-        .getByText('已熔断', { exact: true })
-        .first()
-        .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
-
-      // (7) GATED unlock with the CORRECT mock code → breaker cleared + audited.
-      await clickBreakerReset(page, '解除熔断限制', MOCK_MFA_CODE);
-      await waitForStatusText(page, '已解除，当前失败0/3次');
-      await page
-        .getByText('SECURITY_RESET', { exact: true })
+        .locator('[data-security-event-kind="SECURITY_RESET"]')
         .first()
         .waitFor({ state: 'visible', timeout: NAV_TIMEOUT_MS });
       const resets = await querySecurityEvents({});
@@ -805,7 +768,7 @@ async function journeyCircuitBreakerLock(browser: Browser, baseUrl: string): Pro
         throw new Error('SecurityEvent(SECURITY_RESET) 未持久化');
       }
 
-      return `会话 ${sessionId}：重置熔断计数 → 3 次错误验证码(000000) 逐次「验证失败，已尝试 1/2/3 次」→ 安全中心「已熔断」+「失败 3 / 3 次」+ CIRCUIT_BREAKER_TRIPPED(high) → reload 仍锁定；锁定态输入框为空且 placeholder 不含验证码、空输入时「解除熔断限制」按钮禁用、错误码(000000)被拒(锁定仍在)、正确码(123456) → 已解除(0/3) 且 SECURITY_RESET 已审计`;
+      return `Session ${sessionId}: normal mode hides and denies developer reset; three wrong payment codes lock the owner across reload; one developer button resets without credentials and records SECURITY_RESET`;
     },
     { label: 'j-circuit-breaker-lock' },
   );
@@ -817,6 +780,19 @@ interface Journey {
 }
 
 const JOURNEYS: readonly Journey[] = [
+  { name: 'chat-history-pagination-and-scroll', run: journeyChatHistory },
+  { name: 'signed-amount-memory-and-subscription-analysis', run: journeyDialogueRegressions },
+  { name: 'operation-history-and-developer-audit', run: journeyOperationHistory },
+  { name: 'natural-conversation-and-financial-boundary', run: journeyNaturalConversation },
+  { name: 'manual-card-management-and-agent-boundary', run: journeyCardManagement },
+  { name: 'contacts-and-investment-pages', run: journeyBankingPages },
+  { name: 'multi-card-freeze-audit-history', run: journeyMultiCardFreeze },
+  { name: 'developer-mode-conversation-controls', run: journeyDeveloperMode },
+  { name: 'subscription-tool-lifecycle', run: journeyToolLifecycle },
+  { name: 'shared-demo-dialogue-and-browsers', run: journeySharedDemo },
+  { name: 'hydration-external-root-attribute', run: journeyHydration },
+  { name: 'i18n-chinese-default-and-switching', run: journeyI18n },
+  { name: 'workspace-http-and-mobile', run: journeyAssistantWorkspace },
   { name: 'a-transfer-confirm', run: journeyTransferConfirm },
   { name: 'b-transfer-mfa', run: journeyTransferMfa },
   { name: 'c-plan-pause-resume', run: journeyPlanPauseResume },
@@ -832,7 +808,14 @@ const JOURNEYS: readonly Journey[] = [
 // --- entry point --------------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  // This harness is always offline; the separate live harness owns real provider testing.
+  process.env.LLM_MODE = 'mock';
+  process.env.LLM_PROVIDER = 'faux';
+  process.env.LLM_MODEL = 'faux';
   const reporter = createReporter();
+  const selected = process.env.E2E_JOURNEYS?.split(',').map(value => value.trim()).filter(Boolean);
+  const journeys = selected ? JOURNEYS.filter(journey => selected.includes(journey.name)) : JOURNEYS;
+  if (journeys.length === 0) throw new Error('No browser journeys match E2E_JOURNEYS');
   let browser: Browser | undefined;
   let devServer: DevServer | undefined;
   let cleanedUp = false;
@@ -882,7 +865,7 @@ async function main(): Promise<void> {
     const executablePath = resolveBrowserExecutable();
     if (executablePath === undefined) {
       // No real browser on this machine — SKIP honestly (never fake a pass, never fail the run).
-      for (const journey of JOURNEYS) {
+      for (const journey of journeys) {
         reporter.skip(journey.name, '未找到真实浏览器（Chrome/Edge）；可设置 E2E_BROWSER_PATH 覆盖');
       }
     } else {
@@ -895,20 +878,25 @@ async function main(): Promise<void> {
       // The money journeys are tiered from the FROZEN demo day's accumulated outgoing transfers
       // (`demoNow()` = 2026-09-25 12:00), so without a reset a second run would start with the prior
       // run's executed transfers already in the day and the YELLOW-transfer journey would go RED.
-      console.log('· 重置隔离 E2E 数据库 →（缺 Prisma Client 时先 prisma generate）→ 删除 e2e.db + 副本 → 按顺序尝试 db push 阶梯（主：--skip-generate；回退：generate + --force-reset；兜底：无参数）→ probe → tsx prisma/seed.ts（保证每次运行起始状态一致）');
+      console.log('Reset isolated E2E database: generate the client if needed, remove the file and sidecars, push the schema, probe, then seed.');
       resetDemoDatabase();
 
       // Robust boot: prefers the project-local Next CLI (no npx/shell shim), waits for BOTH
       // `/api/health` AND `/agent`, and retries once on a fresh port — see `bootDevServer`.
       devServer = await bootDevServer();
       const baseUrl = devServer.baseUrl;
+      const health = await getJson<{ llmMode: string }>(`${baseUrl}/api/health`);
+      if (health.llmMode !== 'mock') throw new Error('The offline acceptance server did not start in mock mode.');
       console.log(`· next dev (pid=${devServer.pid}) → ${baseUrl}（/api/health 与 /agent 均已就绪，LLM_MODE=mock）`);
 
       console.log(`· 真实浏览器：${executablePath}`);
       browser = await launchBrowser(executablePath);
       setActiveBrowser(browser);
 
-      for (const journey of JOURNEYS) {
+      for (const journey of journeys) {
+        // Fresh browser cookies no longer imply a fresh conversation in the shared demo.
+        // Reseed only this isolated fixture between independent scenarios, never a live workspace.
+        if (started > 0) await reseedDemoDatabase();
         await runJourney(reporter, journey.name, (active) => journey.run(active, baseUrl));
         started += 1;
       }
@@ -918,7 +906,7 @@ async function main(): Promise<void> {
     // reported is honestly FAILED with the concrete reason — no silent pass.
     const reason = `基础设施失败：${errText(error)}`;
     console.error(`· ${reason}`);
-    for (const journey of JOURNEYS.slice(started)) {
+    for (const journey of journeys.slice(started)) {
       reporter.fail(journey.name, reason);
     }
   } finally {

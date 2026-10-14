@@ -1,4 +1,4 @@
-import type { Prisma, ToolInvocation } from '@prisma/client';
+import type { Prisma, ToolInvocation } from '@/lib/db/prisma';
 import { prisma, type DbClient } from '@/lib/db/client';
 import { AppError } from '@/lib/errors';
 import { nodeExecutionKey } from '@/lib/ledger';
