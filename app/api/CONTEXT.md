@@ -67,6 +67,17 @@ safe message and continuation events. Confirmation and verification preserve the
 refresh its state and expose current MFA requirements without exposing the verification code.
 Terminal RED metadata cannot reopen a settled action. UI card state follows current action status.
 
+Decision routes derive `mfaResult` from the domain outcome: `success` when authorized, `failed` only
+while `status` is `awaiting_mfa`, otherwise `not_required`; `ConfirmationOutcome` carries no MFA field,
+so a code the gateway reports `failed` becomes `not_required` once `status` is `locked`.
+A wrong verification code is `200 { ok:true, data:{ ok:false, status:'awaiting_mfa', mfaResult:'failed' } }`.
+Exhausting the attempt limit locks only the MFA challenge and the session circuit breaker and returns
+`200` with `status:'locked'` and `mfaResult:'not_required'`; the `PendingAction` row keeps its prior
+status, so the lock is response-only and `GET /api/actions` keeps surfacing the row as a live decision.
+The two tracked counters live outside this layer: per-action `MfaChallenge.attempts`/`maxAttempts`
+against threshold `MFA_MAX_ATTEMPTS = 3`, and the authoritative owner-scoped `CircuitBreakerState`.
+`POST /api/{confirm,verify,cancel}` build `ActionResponse` inline; confirm hardcodes `mfaResult:'not_required'`.
+
 ## Implementation boundaries
 
 Keep route-local schemas private: Next.js route modules export HTTP handlers, supported route
