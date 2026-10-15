@@ -148,15 +148,9 @@ describe('banking-sdk/investment · partial redemption (portion of principal)', 
   // Pins the DOCUMENTED at-most-once contract for a PARTIAL redemption: `investment.ts`'s module
   // header ("a repeat with the SAME identity returns that original outcome and credits nothing") and
   // `types.ts` `RedeemInvestmentInput.idempotencyKey` ("a repeat of a PARTIAL redemption replays the
-  // stored partial outcome from redemptionHistory without crediting again").
-  //
-  // KNOWN SDK DEFECT — this case FAILS today, and that failure is the point: it documents a genuine
-  // regression in the SDK. `banking-sdk/investment.ts:590-604` gates the `redemptionHistory` identity
-  // lookup behind `current.status !== 'HOLDING'`, so a repeat of a PARTIAL redemption while the holding
-  // is STILL `HOLDING` is NOT replayed: it re-executes the portion and credits a SECOND time (observed:
-  // balance 2762000n, principal 100000n, two flow rows, two history records) instead of returning the
-  // original outcome (balance 2560000n, principal 300000n, one flow row, one history record). The
-  // assertion must NOT be weakened or marked expected-to-fail — the defect belongs in the SDK.
+  // stored partial outcome from redemptionHistory without crediting again"). The identity replay holds
+  // while the holding is STILL `HOLDING`: the repeat returns the original outcome instead of
+  // re-executing the portion and crediting a second time.
   it('Case B · replaying the SAME identity returns the original outcome and credits NOTHING', async () => {
     const first = await redeem({ redeemAmount: '2000.00', idempotencyKey: 'partial-1' });
     expect(first.newBalance).toBe('25600.00');
