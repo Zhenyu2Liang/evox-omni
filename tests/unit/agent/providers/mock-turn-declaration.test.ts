@@ -74,7 +74,7 @@ describe('offline model declarations through the real registered control tool', 
     complete(messages, lookup, [{ id: 'credit', type: 'CREDIT' }, { id: 'debit', type: 'DEBIT' }]);
     expect(call(respondWithGuidance({ messages, tools }))?.arguments.workflow).toBe(true);
     expect(call(respondWithGuidance({ messages: [user('Create a virtual card')], tools })))
-      .toMatchObject({ name: 'describe_turn', arguments: { purpose: 'conversation', operations: [] } });
+      .toMatchObject({ name: 'describe_turn', arguments: { purpose: 'operation', operations: ['apply_virtual_card'] } });
   });
 
   it('looks up actual card IDs before proposing a freeze, including IDs outside seed fixtures', () => {

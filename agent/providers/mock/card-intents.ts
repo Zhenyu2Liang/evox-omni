@@ -53,6 +53,11 @@ export function classifyCardAction(text: string): AssistantMessage | undefined {
   if (inferConversationGuidance(text) === 'card_management_required') {
     return plain(JSON.stringify({ guidance: { code: 'card_management_required' } }));
   }
+  // Virtual-card application is agent-available, so propose the capability instead of page-only guidance.
+  if (/虚拟卡/.test(text) && /(?:申请|开办|办理|开通|创建|添加|新增|申领)/.test(text) ||
+      /\bvirtual\s+card\b/i.test(text) && /\b(?:apply|create|add|issue|open|request|get)\b/i.test(text)) {
+    return toolCall('apply_virtual_card', {});
+  }
   if (/(限额|额度)/.test(text) && adjustmentIntent.test(text)) {
     const amount = text.match(adjustmentAmount)?.[1] ?? parseAmount(text);
     if (amount == null) return plain('请问要把限额调整到多少？例如“把娱乐限额调整到1500”。');
