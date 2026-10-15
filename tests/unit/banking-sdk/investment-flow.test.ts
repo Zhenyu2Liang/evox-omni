@@ -5,20 +5,22 @@
  * WHAT it pins down (all through the SDK barrel `@/banking-sdk` + the test SQLite):
  *   1. Ledger CONSISTENCY — a subscribe writes its account-flow row (`category =
  *      INVESTMENT_FLOW_CATEGORY`, DEBIT, `-amount`, merchant `认购<product>`, channel `APP`) in the
- *      SAME transaction as the funding-account debit + the new holding; a redeem writes the mirrored
- *      CREDIT row (`+marketValue`, merchant `赎回`) together with the credit + HOLDING→REDEEMED flip.
+ *      SAME transaction as the funding-account debit + the holding it CREATES or AGGREGATES into; a
+ *      redeem writes the mirrored CREDIT row (`+settled amount`, merchant `赎回`) with HOLDING→REDEEMED.
  *   2. CLASSIFICATION — a flow row is NOT consumption (never in `analyzeSpending`: 本月 stays
  *      ¥5,800, no `投资` category, never `largest`), is NOT income/大额消费 (`detect_anomaly` still
  *      reports ONLY the Apple Store row even when the flow magnitude exceeds the ¥5,000 threshold)
  *      and does NOT count toward the ¥1,000 daily-transfer limit (`channel: 'APP'`, so
  *      `computeDailyTransferTotal` is unmoved).
  *   3. AT-MOST-ONCE — a repeated call and two CONCURRENT calls with the SAME idempotency key debit/
- *      credit the account exactly once (one holding / one flow row each); a DISTINCT or absent key on
+ *      credit the account exactly once (one holding / one flow row each). A CREATING purchase keys the
+ *      holding; an AGGREGATING one records its key in `purchaseHistory`; a DISTINCT or absent key on
  *      an already-redeemed holding is `CONFLICT` (never a second credit, never a new flow row).
  *   4. ATOMICITY — a forced failure of the flow-row insert rolls the balance + holding back with it
  *      (nothing partial, error surfaced, typed `AppError` code intact).
  *
- * Fixtures: 活期 ¥23,580, the single holding `holding_wenjiana` (marketValue ¥5,050), 稳健理财A.
+ * Fixtures: 活期 ¥23,580, the single holding `holding_wenjiana` (principal ¥5,000, marketValue ¥5,050)
+ * on 稳健理财A — which is already HELD, so a subscribe to it AGGREGATES into that holding.
  */
 import { describe, expect, it } from 'vitest';
 import { banking } from '@/banking-sdk';
@@ -58,6 +60,19 @@ async function checkingBalance(): Promise<string> {
 
 function holdingCount(): Promise<number> {
   return db().investmentHolding.count({ where: { userId: DEMO_USER_ID } });
+}
+
+/** One aggregation record appended to a holding's `purchaseHistory` (the SDK's record shape). */
+interface PurchaseRecordView {
+  amount: string;
+  executionKey?: string;
+}
+
+/** The recorded purchases of a holding, oldest → newest (empty when none is recorded). */
+async function purchaseHistory(holdingId: string): Promise<PurchaseRecordView[]> {
+  const holding = await db().investmentHolding.findUnique({ where: { id: holdingId } });
+  if (holding === null || holding.purchaseHistory === null) return [];
+  return JSON.parse(holding.purchaseHistory) as PurchaseRecordView[];
 }
 
 /** EVERY ledger row of the user — proves no orphan `Transaction` row of any kind was written. */
@@ -118,9 +133,9 @@ describe('banking-sdk/investment · flow ledger row (consistency)', () => {
     expect(result.newBalance).toBe('18580.00');
     expect(await checkingBalance()).toBe('18580.00');
 
-    // The holding really landed…
+    // The ¥5,000 AGGREGATED into the seeded holding (principal ¥5,000 → ¥10,000)…
     const holding = await db().investmentHolding.findUnique({ where: { id: result.holdingId } });
-    expect(holding).toMatchObject({ productId: PRODUCT, principalAmountMinor: 500_000n, status: 'HOLDING' });
+    expect(holding).toMatchObject({ productId: PRODUCT, principalAmountMinor: 1_000_000n, status: 'HOLDING' });
 
     // …and so did exactly one ledger row mirroring the debit, in the investment-flow category.
     const flow = await flowRows();
@@ -166,17 +181,21 @@ describe('banking-sdk/investment · flow ledger row (classification)', () => {
     // Before any flow: the day's transfer total is 0 (the seeded ¥500 转账 is dated Sep 4, not today).
     expect(await computeDailyTransferTotal(DEMO_USER_ID)).toBe('0.00');
 
-    // A ¥6,000 subscribe (magnitude ABOVE the ¥5,000 anomaly threshold) and a ¥5,050 redeem.
+    // A ¥6,000 subscribe (magnitude ABOVE the ¥5,000 anomaly threshold) AGGREGATES into the seeded
+    // holding (principal ¥5,000 → ¥11,000, MV ¥5,050 → ¥11,050); the bare redeem then CLOSES it.
     const subscribed = await banking.investment.subscribeInvestment({
       userId: DEMO_USER_ID,
       productId: PRODUCT,
       amount: '6000.00',
     });
     expect(subscribed.newBalance).toBe('17580.00');
+    // The ¥6,000 AGGREGATED into the seeded holding: principal ¥5,000 → ¥11,000.
+    const aggregated = await db().investmentHolding.findUnique({ where: { id: SEEDED_HOLDING } });
+    expect(aggregated?.principalAmountMinor).toBe(1_100_000n);
     await redeem();
 
     const flow = await flowRows();
-    expect(flow.map((row) => row.amount).sort(compareDecimal)).toEqual(['-6000.00', HOLDING_MARKET_VALUE]);
+    expect(flow.map((row) => row.amount).sort(compareDecimal)).toEqual(['-6000.00', '11050.00']);
     expect(flow.every((row) => row.category === INVESTMENT_FLOW_CATEGORY)).toBe(true);
     // `channel: 'APP'` is what keeps the flow out of the ¥1,000 daily-TRANSFER window.
     expect(flow.every((row) => row.channel === 'APP')).toBe(true);
@@ -198,7 +217,7 @@ describe('banking-sdk/investment · flow ledger row (classification)', () => {
 });
 
 describe('banking-sdk/investment · at-most-once (idempotency)', () => {
-  it('a repeated subscribe with the SAME key replays the holding and debits ONCE', async () => {
+  it('a repeated subscribe with the SAME key replays the purchase and debits ONCE', async () => {
     const KEY = 'plan:task_subscribe:node_1';
 
     const first = await subscribe(KEY);
@@ -208,12 +227,19 @@ describe('banking-sdk/investment · at-most-once (idempotency)', () => {
     expect(replay).toEqual(first);
     // Debited exactly once: the balance is unchanged by the replay…
     expect(await checkingBalance()).toBe('18580.00');
-    // …exactly ONE holding carries the key, and exactly ONE flow row was written.
-    expect(await db().investmentHolding.count({ where: { idempotencyKey: KEY } })).toBe(1);
+    // …exactly ONE holding (the aggregation target), its principal grown:
+    const holding = await db().investmentHolding.findUnique({ where: { id: first.holdingId } });
+    expect(holding?.principalAmountMinor).toBe(1_000_000n);
+    // …and the AGGREGATING purchase is recorded in the holding's `purchaseHistory` under its key.
+    const history = await purchaseHistory(first.holdingId);
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ executionKey: KEY, amount: '5000.00' });
+    // …exactly ONE flow row was written.
+    expect(await db().investmentHolding.count({ where: { userId: DEMO_USER_ID, productId: PRODUCT, status: 'HOLDING' } })).toBe(1);
     expect(await flowRows()).toHaveLength(1);
   });
 
-  it('two CONCURRENT subscribes with the SAME key debit ONCE (one holding, one flow row)', async () => {
+  it('two CONCURRENT subscribes with the SAME key debit ONCE (one aggregation, one flow row)', async () => {
     const KEY = 'plan:task_subscribe_race:node_1';
 
     const values = fulfilledValues(
@@ -221,9 +247,15 @@ describe('banking-sdk/investment · at-most-once (idempotency)', () => {
     );
 
     expect(values[0].holdingId).toBe(values[1].holdingId);
+    expect(values[0].holdingId).toBe(SEEDED_HOLDING);
     expect(values.map((value: InvestResult) => value.amount)).toEqual(['5000.00', '5000.00']);
+    // The ONE committed aggregation is recorded exactly once under the shared key.
+    const history = await purchaseHistory(values[0].holdingId);
+    const matching = history.filter((record) => record.executionKey === KEY);
+    expect(matching).toHaveLength(1);
+    expect(matching[0].amount).toBe('5000.00');
     expect(await checkingBalance()).toBe('18580.00');
-    expect(await db().investmentHolding.count({ where: { idempotencyKey: KEY } })).toBe(1);
+    expect(await db().investmentHolding.count({ where: { userId: DEMO_USER_ID, productId: PRODUCT, status: 'HOLDING' } })).toBe(1);
     expect(await flowRows()).toHaveLength(1);
   });
 
