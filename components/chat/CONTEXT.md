@@ -48,6 +48,14 @@
 历史原文、金额与操作身份保持原值。
 组件不能从模型文字推导交易成功。
 
+## 已知问题
+
+服务端 MFA 锁定的挂起操作，其 `PendingAction` 行仍可能停留在 `awaiting_mfa`。
+挂载恢复（`GET /api/actions` → `restoreActionAttention`/`pickPendingAction`）只按 `awaiting_mfa` 重新弹出验证卡，无法识别该行已被锁定，故重载后可反复弹出。
+验证响应 `data.status === 'locked'` 会经合成 `action_settled` 关闭当前弹窗（`locked` 属终态）。
+若锁定以错误信封 `code: 'CIRCUIT_OPEN'` 返回，客户端只折叠出 `error` 事件，没有任何分支关闭验证卡。
+`GET /api/actions` 的 `toPendingActionRef` 明确丢弃 `locked` 行，故恢复读无法表达“已锁定”。
+
 卡片约束见 [cards/CONTEXT.md](cards/CONTEXT.md)。
 事件归属见 [agent/turns/CONTEXT.md](../../agent/turns/CONTEXT.md)。
 完整显示规则见
