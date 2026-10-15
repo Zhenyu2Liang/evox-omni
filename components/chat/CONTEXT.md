@@ -37,6 +37,10 @@
 `PlanCard` 的控制请求绑定具体计划标识。
 暂停与恢复采用服务端返回的持久化状态。
 
+终态失败时实时弹窗关闭且不再重开：`settleAction` 在终态或 `confirmed` 时清除 `pendingAction`，并把该 `actionId` 记入内存态 `settledActions`。
+`controlTask` 与 `restoreActionAttention` 均经 `visibleRefs` 过滤，跳过 `hasSettledAction` 为真的行（命中 `settledActions` 或存在终态内联卡片），`pickPendingAction` 不再为已终态动作重建弹窗，`needs_reconciliation` 行始终保留。
+`MfaCard` 依 `pending.status`/`pending.statusMessage` 渲染只读终态或失败文本（`cards.terminal.*`、`cards.mfa.failedAttemptsLimit`），`ApprovalRequest` 转发之，`ChatWindow` 传 `maxAttempts`（`MFA_MAX_ATTEMPTS`）。
+
 ### 验证响应校验与分支（`actions.ts#postAction`，约 541-617 行）
 
 `status` 须属 `ACTION_STATUSES`（`pending`/`awaiting_mfa`/`confirmed`/`executed`/`failed`/`cancelled`/`locked`/`needs_reconciliation`）。
@@ -52,20 +56,10 @@
 
 ## 已知问题
 
-锁定后（`MFA_MAX_ATTEMPTS=3`）服务端只把 MfaChallenge 标为 `locked`，
-`PendingAction` 行仍停留 `awaiting_mfa`，无任何代码持久化 `PendingAction.status='locked'`。
-故 `GET /api/actions` 持续把该行作为待决定返回（`toPendingActionRef` 丢弃 `locked` 行，见 `actions.ts` 385-410 行）。
-
-单次验证响应 `status:'locked'` 由 `postAction` 转为合成 `action_settled{status:'locked'}`，
-`settleAction` 据此关闭实时弹窗。
-环路来自重建路径：`settledActions` 仅存内存，刷新即丢失。
-`pickPendingAction`（603-618 行）与 `restoreActionAttention`（636-657 行）在每次挂载/刷新，
-以及 `controlTask`（986 行无条件覆盖 `pendingAction`）中，
-据仍为 `awaiting_mfa` 的行重建同 `actionId` 的 `kind:'mfa'` 决定。
-`mfa_required` 折叠（505-539 行）只被 `hasSettledAction` 拦截且从不移除卡片，
-同 `actionId` 的终态一旦未记录即可复现。
-`ApprovalRequest` 不向 `MfaCard` 传 `status`（29-32 行），实时弹窗无法进入 `locked` 只读态；
-`ChatWindow` 也不传 `maxAttempts`（236-237 行），客户端无尝试上限或强制关闭逻辑。
+整页刷新会丢失内存态：`settledActions` 与内联卡片上的终态标记都不持久化。
+若服务端仍把已锁定行当作 `awaiting_mfa` 返回（`toPendingActionRef` 丢弃 `locked` 行，但服务端仅把 `MfaChallenge` 置为 `locked`、未持久化 `PendingAction` 状态），
+刷新后客户端无从得知该行已锁定，仍会重建 `kind:'mfa'` 决定。
+该刷新情形由服务端侧修复覆盖；客户端在会话内已不再重开终态决定。
 
 ## 显示与诊断
 
