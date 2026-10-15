@@ -42,6 +42,7 @@
 达到上限 → `status: 'locked'`、`code: 'CIRCUIT_OPEN'`、消息「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」；
 已锁定后的再次提交走提前熔断分支 → `status: 'locked'`、消息「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」。
 锁定态返回值仍带 `requiresMfa: true`，但 HTTP 路由由 `status` 推导出的 `mfaResult` 变为 `not_required`，且不发出 `mfa_required` 流事件。
+真正的终态锁定会以「仅从 `pending`/`awaiting_mfa` 出发」的 CAS 把 `PendingAction.status` 落库为 `'locked'`；该行因此不再作为待决策项返回，也不再发出 `mfa_required`，MFA 弹窗不会重现；对已是 `'locked'` 的行再次授权幂等返回同一拒绝。
 `mfa.ts#verify` 返回 `Result` 而非抛错；抛 `CIRCUIT_OPEN` 的只有 `circuit-breaker.resetSession` 与 `execution-policy.assertSessionMayWrite`。
 成功验证码重置连续失败计数，但不解除已触发的熔断（「locked 优先」）；仅 `resetSession` 以验证码或 60 秒冷却解除。
 
@@ -59,11 +60,3 @@
 公开日志读取器不包含原始思维与凭据。
 资金结论由银行智能体根据 SDK 与收据事实渲染。
 见 `docs/cn/security.md` 与 `docs/cn/known-risks.md`。
-
-## 已知问题
-
-MFA 验证码连续错误达到上限时，`mfa.ts#verify` 只把 `MfaChallenge.status` 置为 `locked`，`PendingAction.status` 不会离开 `awaiting_mfa`。
-本层没有任何代码写入 `PendingAction.status = 'locked'`，`'locked'` 仅作为结果状态存在于契约中，从不落库。
-因此 `app/api/actions/route.ts` 仍把该操作当作待决策项返回，客户端 MFA 弹窗被反复恢复。
-`authorizeAction` 熔断分支返回 `{ok:false, status:'locked', code:'CIRCUIT_OPEN'}` 且不带 `mfaResult`；错误验证码分支返回 `mfaResult:'failed'`。
-修复归属 `./agent`（`confirmation.ts`、`confirmation/outcomes.ts#blockedOutcome`）与 `app/api/actions/[id]/verify/route.ts`；服务端没有事件通知客户端关闭 MFA 弹窗。
