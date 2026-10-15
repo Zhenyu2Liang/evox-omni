@@ -18,7 +18,8 @@ Server pages may use the identity helper; client components call HTTP routes ins
 - `schemas.ts`: shared `limitQuerySchema`; user/session identifiers are not query schema fields.
 - `types.ts`: `ApiEnvelope`, `ActionResponse`, `SurfacedPendingAction` and `IdRouteContext`.
   The latter receives a promised dynamic-route `params` object. Action attention is advisory;
-  it grants no permission or execution ownership.
+  it grants no permission or execution ownership. `ActionResponse.mfaResult` is one of
+`'success' | 'failed' | 'not_required'` and the decision routes always set it.
 - `agent-bridge.ts`: static delegation for action confirmation, verification, cancellation and
   recovery; task controls; owning-plan lookup and refreshed plan events. It forwards the fixed
   `{ userId, sessionId }` ownership context to agent contracts. It contains no banking mutations.
