@@ -28,9 +28,8 @@ describe('offline dialogue script and closed presentation vocabulary', () => {
     expect(parseBankingGuidance('{"guidance":{"code":"transfer_succeeded"}}')).toBeUndefined();
   });
 
-  it.each(['Create a virtual card', 'Add a new credit card', 'Issue a debit card', 'Remove my bank card',
-    'Delete my card', 'Apply for a virtual card', 'Close the credit card',
-    '\u7533\u8bf7\u4e00\u5f20\u865a\u62df\u5361', '\u6dfb\u52a0\u94f6\u884c\u5361'])
+  it.each(['Add a new credit card', 'Issue a debit card', 'Remove my bank card',
+    'Delete my card', 'Close the credit card', '\u6dfb\u52a0\u94f6\u884c\u5361'])
   ('uses page-only card-management guidance in the offline script: %s', request => {
     expect(inferConversationGuidance(request)).toBe('card_management_required');
     const response = classify(request, []);
@@ -39,6 +38,11 @@ describe('offline dialogue script and closed presentation vocabulary', () => {
     const cardResponse = classifyCardAction(request);
     expect(cardResponse?.content.some(block => block.type === 'toolCall')).toBe(false);
     expect(parseBankingGuidance(contentToText(cardResponse?.content ?? []))).toEqual({ code: 'card_management_required' });
+  });
+
+  it.each(['Create a virtual card', 'Apply for a virtual card', '\u7533\u8bf7\u4e00\u5f20\u865a\u62df\u5361'])
+  ('routes virtual-card application away from page-only card-management guidance: %s', request => {
+    expect(inferConversationGuidance(request)).not.toBe('card_management_required');
   });
 
   it.each(['Add 200 to my card', 'Freeze all my cards', 'Set the card category limit to 200', fixtures.cardIncrease])

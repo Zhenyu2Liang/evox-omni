@@ -7,6 +7,8 @@ const BUSINESS_OPERATIONS = {
   freeze_card: 'card_freeze',
   unfreeze_card: 'card_unfreeze',
   report_lost_card: 'card_lost',
+  replace_card: 'card_replace',
+  apply_virtual_card: 'card_apply',
   set_card_limit: 'card_limit',
   manual_add_card: 'card_add',
   manual_delete_card: 'card_delete',

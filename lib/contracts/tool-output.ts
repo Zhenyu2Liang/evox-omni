@@ -73,6 +73,7 @@ export const BANKING_TOOL_OUTPUTS: ToolOutputContracts = {
   subscribe_investment: investmentResult,
   redeem_investment: investmentResult,
   report_lost_card: card,
+  replace_card: card,
   unfreeze_card: card,
 };
 

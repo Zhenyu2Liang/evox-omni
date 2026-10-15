@@ -277,7 +277,7 @@
   "chat.tool.list_scheduled_tasks": "Scheduled tasks",
   "chat.tool.reserve_budget": "Reserve budget",
   "chat.tool.transfer_money": "Transfer",
-  "chat.tool.set_card_limit": "Set card limit",
+  "chat.tool.set_card_limit": "Set category limit",
   "chat.tool.cancel_subscription": "Cancel subscription",
   "chat.tool.freeze_card": "Freeze card",
   "chat.tool.apply_virtual_card": "Apply for virtual card",
@@ -286,6 +286,7 @@
   "chat.tool.subscribe_investment": "Purchase investment",
   "chat.tool.redeem_investment": "Redeem investment",
   "chat.tool.report_lost_card": "Report lost card",
+  "chat.tool.replace_card": "Replace card",
   "chat.tool.unfreeze_card": "Unfreeze card",
   "chat.tool.submit_plan": "Submit task plan",
   "chat.policy.get_balance": "Read deposit balances.",
@@ -311,6 +312,7 @@
   "chat.policy.subscribe_investment": "Purchase an investment product.",
   "chat.policy.redeem_investment": "Redeem an owned investment holding.",
   "chat.policy.report_lost_card": "Report an owned card lost.",
+  "chat.policy.replace_card": "Replace a lost card with a new card.",
   "chat.policy.unfreeze_card": "Unfreeze an owned card.",
   "chat.policy.submit_plan": "Compile and submit a banking workflow."
 }

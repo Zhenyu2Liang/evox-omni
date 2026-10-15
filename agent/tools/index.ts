@@ -12,7 +12,6 @@
  * args persisted as a `PendingAction` until a human confirms (see parent `../CONTEXT.md`).
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
-import { Type } from '@earendil-works/pi-ai';
 import { AppError } from '@/lib/errors';
 import { resolveBankingArgs } from '@/lib/banking-selectors';
 import type { ExecutionFenceCheck } from '@/banking-sdk';
@@ -38,13 +37,17 @@ import { createGetDashboardSummaryTool, runGetDashboardSummary } from './dashboa
 import { createSearchContactTool, runSearchContact } from './contact';
 import { createSearchConversationHistoryTool, runSearchConversationHistory } from './conversation-history';
 import {
+  createApplyVirtualCardTool,
   createFreezeCardTool,
   createGetCardsTool,
+  createReplaceCardTool,
   createReportLostCardTool,
   createSetCardLimitTool,
   createUnfreezeCardTool,
+  runApplyVirtualCard,
   runFreezeCard,
   runGetCards,
+  runReplaceCard,
   runReportLostCard,
   runSetCardLimit,
   runUnfreezeCard,
@@ -217,13 +220,13 @@ function createUnconfiguredSubmitPlanTool(): AgentTool<typeof SubmitPlanParams> 
  *
  *  - Enabled SDK-backed tools come from the family modules' `create<Name>Tool(userId)` factories
  *    (each closes over the SERVER-INJECTED `userId`); `submit_plan` uses injected dependencies
- *    or a failing placeholder. The disabled card-creation entry only denies calls and is never
- *    returned by `list()`/`get()`.
+ *    or a failing placeholder. Every entry is offered to the model — the risk tier (not the catalog)
+ *    decides whether a call is gated.
  *  - `executeDirect(name, args, opts?)` dispatches to the matching family `run<X>(userId, args, opts)`
  *    runner, and to `planning.runSubmitPlan(userId, args, opts.submitPlan)` for `submit_plan`. The
  *    optional `opts.idempotencyKey` is threaded to every runner; the side-effecting tools consume it
- *    (`transfer_money`, `reserve_budget`, `create_scheduled_task`, `subscribe_investment`,
- *    `redeem_investment`) — see `ToolRunOptions`.
+ *    (`transfer_money`, `apply_virtual_card`, `reserve_budget`, `create_scheduled_task`,
+ *    `subscribe_investment`, `redeem_investment`) — see `ToolRunOptions`.
  *
  * Signature note: the frozen form `createToolRegistry(userId: string): ToolRegistry` is preserved —
  * `opts` is an ADDITIVE optional parameter, needed only because `submit_plan` requires an injected
@@ -256,9 +259,7 @@ export function createToolRegistry(
     transfer_money: createTransferMoneyTool(userId),
     set_card_limit: createSetCardLimitTool(userId),
     cancel_subscription: createCancelSubscriptionTool(userId),
-    apply_virtual_card: { name: 'apply_virtual_card', label: 'Manual card management',
-      description: 'Unavailable to the agent. Use the Cards page.', parameters: Type.Object({}),
-      execute: async () => { throw new AppError('SECURITY_DENIED', 'Use the card management page.'); } },
+    apply_virtual_card: createApplyVirtualCardTool(userId),
     set_subscription_reminder: createSetSubscriptionReminderTool(userId),
     create_scheduled_task: createCreateScheduledTaskTool(userId),
     // 🔴 RED — require MFA (enforced by `security/`, not here)
@@ -267,6 +268,7 @@ export function createToolRegistry(
     redeem_investment: createRedeemInvestmentTool(userId),
     report_lost_card: createReportLostCardTool(userId),
     unfreeze_card: createUnfreezeCardTool(userId),
+    replace_card: createReplaceCardTool(userId),
     // META — not risk-gated
     submit_plan: submitPlanDeps
       ? createSubmitPlanTool(userId, submitPlanDeps)
@@ -295,13 +297,14 @@ export function createToolRegistry(
     set_card_limit: runSetCardLimit,
     cancel_subscription: runCancelSubscription,
     freeze_card: runFreezeCard,
-    apply_virtual_card: async () => ({ ok: false, errorCode: 'SECURITY_DENIED', error: 'Use the card management page.' }),
+    apply_virtual_card: runApplyVirtualCard,
     set_subscription_reminder: runSetSubscriptionReminder,
     create_scheduled_task: runCreateScheduledTask,
     subscribe_investment: runSubscribeInvestment,
     redeem_investment: runRedeemInvestment,
     report_lost_card: runReportLostCard,
     unfreeze_card: runUnfreezeCard,
+    replace_card: runReplaceCard,
     submit_plan: async (uid, args) => {
       if (!submitPlanDeps) {
         return { ok: false, errorCode: 'INTERNAL', error: SUBMIT_PLAN_UNCONFIGURED };

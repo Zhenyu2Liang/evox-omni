@@ -208,6 +208,8 @@ export interface CardView {
   creditLimit?: MoneyAmount;
   availableLimit?: MoneyAmount;
   monthlyLimit?: MoneyAmount;
+  /** Id of the replacement card issued for this (lost) card; historical reference only. */
+  replacedByCardId?: string;
   limits: CardLimitView[];
 }
 

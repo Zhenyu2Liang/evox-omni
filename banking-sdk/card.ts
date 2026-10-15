@@ -9,8 +9,15 @@
  *    → `AppError('VALIDATION')`;
  *  - a `LOST` card can neither be frozen nor unfrozen, and an already-`LOST` card cannot be
  *    reported lost again → `AppError('CONFLICT')`;
+ *  - only a currently-`LOST` card may be replaced, and replacement is idempotent: a card that
+ *    already points at a replacement returns that card instead of minting a second one
+ *    → otherwise `AppError('CONFLICT')`;
  *  - freezing an already-frozen (or unfreezing an already-active) card is idempotent: the current
  *    status is returned without a write.
+ *
+ * `freezeCard`/`unfreezeCard` are reversible (temporary lock), `reportLostCard` is terminal (the
+ * card stays `LOST` and can never be revived), and `replaceCard` links the lost card to a NEW card
+ * via `Card.replacedByCardId` (a historical reference, not a relation).
  *
  * `setCardLimit` replaces a card+category limit as a single all-or-nothing unit
  * (`runInTransaction`): the delete and the create commit together, so the card never ends up with
@@ -52,6 +59,7 @@ function toCardView(row: CardRow, limits: CardLimitRow[]): CardView {
     creditLimit: row.creditLimitMinor === null ? undefined : centsToMoney(row.creditLimitMinor),
     availableLimit: row.availableLimitMinor === null ? undefined : centsToMoney(row.availableLimitMinor),
     monthlyLimit: row.monthlyLimitMinor === null ? undefined : centsToMoney(row.monthlyLimitMinor),
+    replacedByCardId: row.replacedByCardId ?? undefined,
     limits: limits.map((limit) => ({ category: limit.category, amount: centsToMoney(limit.amountMinor) })),
   };
 }
@@ -242,6 +250,50 @@ export async function reportLostCard(
     return tx.card.findUniqueOrThrow({ where: { id: row.id, userId } });
   });
   return loadCardView(updated);
+}
+
+/**
+ * Replace a `LOST` card with a NEW card (same owner, same `type` and `network`).
+ * The replacement is a fresh row with a new masked number and carries the source's monthly limit
+ * (per-category limits are NOT copied). The source stays `LOST` and records the new card id in
+ * `replacedByCardId` — a historical reference, not a status change and not a relation.
+ *
+ * Idempotent: inside ONE transaction a source that already points at a replacement returns that
+ * existing card instead of issuing a second one (a plan node may be replayed after a resume).
+ */
+export async function replaceCard(cardId: string, userId: string): Promise<CardView> {
+  const source = await requireCard(cardId, userId);
+  if ((source.status as CardStatus) !== 'LOST') {
+    throw new AppError('CONFLICT', '只有已挂失的卡片可以补办，请先办理挂失。', { cardId: source.id, status: source.status });
+  }
+  return runInTransaction(async tx => {
+    const latest = await tx.card.findUnique({ where: { id: source.id, userId } });
+    if (!latest) throw new AppError('NOT_FOUND', 'Card does not exist.');
+    if ((latest.status as CardStatus) !== 'LOST') {
+      throw new AppError('CONFLICT', '只有已挂失的卡片可以补办，请先办理挂失。', { cardId: latest.id, status: latest.status });
+    }
+    if (latest.replacedByCardId) {
+      const existing = await tx.card.findUnique({ where: { id: latest.replacedByCardId, userId } });
+      if (!existing) {
+        throw new AppError('CONFLICT', '补卡记录不一致：原卡片关联的补办卡不存在。', {
+          cardId: latest.id,
+          replacedByCardId: latest.replacedByCardId,
+        });
+      }
+      return toCardView(existing, await tx.cardLimit.findMany({ where: { cardId: existing.id } }));
+    }
+    const own = await tx.card.findMany({ where: { userId } });
+    const created = await tx.card.create({ data: {
+      userId,
+      type: latest.type,
+      network: latest.network,
+      numberMasked: generateMaskedNumber(new Set(own.map(card => card.numberMasked))),
+      status: 'ACTIVE',
+      monthlyLimitMinor: latest.monthlyLimitMinor,
+    } });
+    await tx.card.update({ where: { id: latest.id, userId }, data: { replacedByCardId: created.id } });
+    return toCardView(created, []);
+  });
 }
 
 /**
