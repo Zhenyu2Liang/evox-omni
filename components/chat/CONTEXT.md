@@ -37,6 +37,19 @@
 `PlanCard` 的控制请求绑定具体计划标识。
 暂停与恢复采用服务端返回的持久化状态。
 
+## 已知问题
+
+熔断后（验证码连续错误达 `MFA_MAX_ATTEMPTS=3`）服务端把挑战标为 `locked`，
+但 `PendingAction` 行仍停留在 `awaiting_mfa`，`GET /api/actions` 继续返回它为待决定。
+实时验证响应 `status:'locked'` 由 `actions.ts` 转为 `action_settled{status:'locked'}`，
+`settleAction` 据此清除 `pendingAction` 并关闭弹窗——即单次响应本身会关闭。
+环路来自恢复/重建路径：`settledActions` 只在内存，刷新即丢失，
+`pickPendingAction` 与 `restoreActionAttention`（`useAgentStream.ts`）在每次挂载/刷新及
+`controlTask` 中据仍为 `awaiting_mfa` 的行重建同 `actionId` 的 `kind:'mfa'` 决定。
+`mfa_required` 折叠只被 `hasSettledAction` 拦截且从不移除卡片，
+故同 `actionId` 的终态一旦未记录，弹窗即可复现。
+`ApprovalRequest` 不向 `MfaCard` 传 `status`，实时弹窗因此不显示 `locked` 只读态。
+
 ## 显示与诊断
 
 普通模式展示业务名称、状态与结果。
