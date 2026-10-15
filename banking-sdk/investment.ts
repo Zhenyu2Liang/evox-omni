@@ -587,21 +587,25 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
     // Re-read the value at the write boundary: a stale pre-MFA quote cannot authorize a new amount.
     const current = await tx.investmentHolding.findUnique({ where: { id: holding.id } });
     if (!current || current.userId !== input.userId) throw new AppError('NOT_FOUND', 'Investment holding does not exist.');
+    const past = key !== undefined
+      ? parseHistory<RedemptionRecord>(current.redemptionHistory).find((record) => record.executionKey === key)
+      : undefined;
+
     if (current.status !== 'HOLDING') {
       // Already closed: only this identity's ORIGINAL outcome replays — a full close from
       // `redeemResult`, or an earlier PARTIAL redemption from `redemptionHistory`.
       if (key !== undefined && current.redeemExecutionKey === key && current.redeemResult !== null) {
         return parseRedeemResult(current, input.expectedRedemptionAmount);
       }
-      if (key !== undefined) {
-        const past = parseHistory<RedemptionRecord>(current.redemptionHistory).find((record) => record.executionKey === key);
-        if (past !== undefined) return redemptionResultFromRecord(current, past, input.expectedRedemptionAmount);
-      }
+      if (past !== undefined) return redemptionResultFromRecord(current, past, input.expectedRedemptionAmount);
       throw new AppError('CONFLICT', 'Investment holding has already been redeemed.', {
         holdingId: input.holdingId,
         status: current.status,
       });
     }
+
+    // Still HOLDING: replay a prior PARTIAL redemption with the SAME identity (no re-credit, no re-write).
+    if (past !== undefined) return redemptionResultFromRecord(current, past, input.expectedRedemptionAmount);
 
     const totalPrincipalMinor = current.principalAmountMinor;
     const redeemPrincipalMinor = requestedMinor ?? totalPrincipalMinor;

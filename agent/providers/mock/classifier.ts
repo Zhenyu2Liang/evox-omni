@@ -45,9 +45,6 @@ export function classify(text: string, messages: Message[]): AssistantMessage {
       || /(?:\u80fd\u505a\u4ec0\u4e48|\u6709\u54ea\u4e9b\u529f\u80fd|\u4ecb\u7ecd.*\u80fd\u529b)/.test(trimmed)) return plain(helpText);
     return plain(messagesText.conversation);
   }
-  if (/赎回/.test(trimmed) && /(部分|只赎回\s*\d|只想.*赎回\s*\d|剩下.*持有|不要全额赎回)/.test(trimmed)) {
-    return plain(JSON.stringify({ guidance: { code: 'partial_redemption_unsupported' } }));
-  }
   if (/(申购|认购|买)/.test(trimmed) && /储蓄账户/.test(trimmed)) {
     return plain(JSON.stringify({ guidance: { code: 'investment_funding_account_unsupported' } }));
   }

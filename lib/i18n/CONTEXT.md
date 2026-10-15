@@ -21,6 +21,14 @@
 | `business.investments.purchaseCount` | 共 {count} 笔 | {count} purchases | 申购笔数，模板含 `{count}` 占位符 |
 | `business.investments.addedToExisting` | 已加购 | Added to existing | 对已持有产品再次申购的标记 |
 
+## 显示映射（display-sources）
+
+`messages/display-sources.json` 将界面已知的静态元数据值映射到消息键，供展示层翻译。
+映射键必须与源值完全一致，值必须指向已存在的消息键（单元测试校验该不变量）。
+含动态内容的源值无法静态映射，展示层按原样保留、不翻译。
+例如部分赎回策略值 `部分赎回（本金 ¥…／共计 ¥…）` 内嵌金额，保持原样显示，不得添加正则或模式匹配。
+完全赎回策略值 `全部赎回该笔持仓` 映射到 `chat.value.fullRedemption`。
+
 ## 修改约束
 
 - 默认 `zh-CN`，即使浏览器偏好英文；仅 `en` 选择英文。
