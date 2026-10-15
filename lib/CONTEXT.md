@@ -27,11 +27,19 @@ JSON 金额使用十进制字符串。
 `moneyToCents` 校验小数位与有符号 64 位范围。
 比例、数量与未结算估值使用 `decimal.ts`。
 `moneyToChartNumber` 只用于图形坐标。
+命令金额字段（`contracts/command.ts` 的 `MONETARY_FIELDS`）在入参归一化时转为十进制字符串：`amount`、`creditLimit`、`monthlyLimit`、`expectedRedemptionAmount`、`redeemAmount`。
 
 `date.ts` 按北京时间构造和格式化日期。
 `demoNow()` 提供固定演示业务时间。
 安全冷却、执行租约和定时任务调度使用真实时间。
 日期范围通常为半开区间；以调用接口为准。
+
+## 投资输出契约与标签
+
+`contracts/tool-output.ts` 只声明可被数据引用寻址的字段路径，不强制字段存在，新增字段不破坏既有输出。
+`subscribe_investment`、`redeem_investment` 结果契约含可选部分赎回字段 `partial`、`redeemedPrincipal`、`remainingPrincipal`、`remainingMarketValue`、`remainingProfit` 与加购字段 `addedToExisting`、`lastPurchaseAt`。
+`get_investment_holdings` 条目含可选 `lastPurchaseAt` 与 `purchases`。
+对应界面标签为 `i18n/messages/business.*.json` 的 `business.investments.lastPurchase`、`purchases`、`purchaseCount`、`addedToExisting`。
 
 ## 修改约束
 

@@ -59,6 +59,7 @@ import { recordSecurityEvent } from '../audit';
 import { safeParse } from '../lib/json';
 import { formatCNY, moneyToCents, normalizeTransferAmount, centsToMoney, type MoneyAmount } from '../lib/money';
 import { valuationToMinor } from '../lib/decimal';
+import { settledRedemptionAmount } from '../banking-sdk/valuation';
 import { canonicalCommandArgs } from '../lib/contracts/command';
 import { recordAuthorizationDecision } from './authorization-record';
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
@@ -587,12 +588,32 @@ async function gatewayCreatePendingAction(
     const holding = await prisma.investmentHolding.findFirst({ where: { id: String(ctx.args.holdingId), userId: ctx.userId }, include: { product: true } });
     if (holding) summary.fields.unshift({ label: '持仓', value: `${holding.product.name}（${holding.id}）` });
     if (holding && ctx.toolName === 'redeem_investment') {
-      const amount = centsToMoney(holding.estimatedMarketValue === null
-        ? holding.principalAmountMinor : valuationToMinor(holding.estimatedMarketValue));
+      // The SERVER mints the redemption quote from the PARKED request: the requested PRINCIPAL portion
+      // (`redeemAmount`; absent ⇒ the whole holding) picks the SAME proportional valuation the SDK
+      // re-checks at execution, so the approved amount and the settled amount cannot diverge. An
+      // over-redeem request is refused HERE, before persisting, so no action is ever minted for it.
+      // The gateway only SNAPSHOTS the quote — it never mutates a balance.
+      const totalPrincipalMinor = holding.principalAmountMinor;
+      const requestedMinor = ctx.args.redeemAmount === undefined ? undefined : moneyToCents(ctx.args.redeemAmount);
+      if (requestedMinor !== undefined && requestedMinor > totalPrincipalMinor) {
+        throw new AppError('VALIDATION', '赎回本金金额不能超过持仓本金', {
+          redeemAmount: centsToMoney(requestedMinor),
+          totalPrincipal: centsToMoney(totalPrincipalMinor),
+        });
+      }
+      const redeemedPrincipalMinor = requestedMinor ?? totalPrincipalMinor;
+      const marketValue = holding.estimatedMarketValue === null
+        ? centsToMoney(totalPrincipalMinor) : holding.estimatedMarketValue;
+      // FULL mints the whole rounded valuation; PARTIAL mints the SAME proportional settlement the SDK
+      // re-checks at execution, so the confirmed quote and the settled amount cannot diverge.
+      const amount = redeemedPrincipalMinor === totalPrincipalMinor
+        ? centsToMoney(valuationToMinor(marketValue))
+        : settledRedemptionAmount(marketValue, totalPrincipalMinor, redeemedPrincipalMinor);
       ctx.args = { ...ctx.args, expectedRedemptionAmount: amount };
+      const partial = redeemedPrincipalMinor !== totalPrincipalMinor;
       summary.fields.push(
-        { label: '赎回范围', value: '全部赎回该笔持仓（不支持部分赎回）' },
-        { label: 'Principal', value: formatCNY(centsToMoney(holding.principalAmountMinor)) },
+        { label: '赎回范围', value: partial ? `部分赎回（本金 ${formatCNY(centsToMoney(redeemedPrincipalMinor))}／共计 ${formatCNY(centsToMoney(totalPrincipalMinor))}）` : '全部赎回该笔持仓' },
+        { label: 'Principal', value: formatCNY(centsToMoney(totalPrincipalMinor)) },
         { label: '赎回到账金额', value: formatCNY(amount) },
         { label: '金额变化', value: '金额变化时停止执行，需重新确认' },
       );

@@ -14,6 +14,7 @@ import { Card } from '../ui/Card';
 import { Money } from '../ui/Money';
 import { DecimalMoney } from '../ui/DecimalMoney';
 import { rateRatioToPercent } from '@/lib/decimal';
+import { formatDateTime } from '@/lib/date';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
 
@@ -49,6 +50,12 @@ function formatRate(rate: string): string {
 export function InvestmentProductTile({ product, holding, className }: InvestmentProductTileProps) {
   const { t } = useI18n();
   const cls = ['space-y-3', className].filter(Boolean).join(' ');
+  // Recorded purchases are aggregation purchases (oldest → newest); `lastPurchaseAt` is the most
+  // recent of them. `holding.amount` is the REMAINING booked principal after any partial
+  // redemption, so the principal / market value / profit rows below already show the remainder.
+  const purchases = holding?.purchases ?? [];
+  const lastPurchaseAt = holding?.lastPurchaseAt
+    ?? (purchases.length > 0 ? purchases[purchases.length - 1].at : undefined);
 
   return (
     <Card className={cls}>
@@ -108,6 +115,17 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
               <span className="font-medium text-banking-deep">
                 <DecimalMoney amount={holding.profit} signed />
               </span>
+            </div>
+          ) : null}
+          {lastPurchaseAt !== undefined ? (
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <span className="text-banking-navy/60">{t('business.investments.lastPurchase')}</span>
+              <span className="text-banking-deep">{formatDateTime(lastPurchaseAt)}</span>
+            </div>
+          ) : null}
+          {purchases.length > 0 ? (
+            <div className="text-xs text-banking-navy/60">
+              {t('business.investments.purchases')} · {t('business.investments.purchaseCount', { count: purchases.length })}
             </div>
           ) : null}
         </div>
