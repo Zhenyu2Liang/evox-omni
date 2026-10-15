@@ -33,6 +33,10 @@ developer view; this presentation change does not alter checkpoint identities or
 
 Every registered write enters `command-execution.ts`. Operation identity belongs to the server invocation, action or node. The command's mutation, strict audit, original response and invocation completion share one transaction. Receipts are replayed before mutable lookup; transfers additionally match their ledger. Unknown outcomes stop for reconciliation.
 
+## 投资写入能力
+
+`subscribe_investment` 与 `redeem_investment` 都是 RED 写入，经同一网关授权、逐次强验证与执行围栏，操作身份由服务器拥有的调用/动作/节点决定。对已持有产品的再次申购由 SDK 聚合进现有持仓（`InvestResult.addedToExisting = true`），不新建持仓。赎回本金金额是可选参数 `redeemAmount`（精确 CNY 十进制字符串）：省略或等于持仓本金表示全额赎回（持仓结清）；严格更小的正数表示部分赎回（持仓保留、本金减少，仅按同一估值规则结算该部分本金，剩余本金与市值留在持仓上）。金额绝不使用浮点，计算使用整数最小单位或十进制算术。系统提示与 `redeem_investment` 工具描述均已声明支持部分赎回。工具层细节见 `./tools/CONTEXT.md`。
+
 `confirmation.ts` is the public decision facade. `confirmation/identity.ts` resolves persisted ownership;
 `confirmation/liveness.ts` owns decision leases; `confirmation/outcomes.ts` projects refusals and convergence; `confirmation/authorized-execution.ts`
 lands authorized command evidence before narration. `confirmation/gated-execution.ts` is the workflow execution port,
