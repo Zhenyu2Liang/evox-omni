@@ -113,4 +113,40 @@ describe('action attention convergence', () => {
     expect(next.pendingAction?.actionId).toBe('other-action');
     expect(next.pendingReconciliations).toEqual([{ actionId: 'action-1', summary, attention: 'reconciliation' }]);
   });
+
+  it('dismisses the live MFA popup when a failed verification settles the same action as locked', () => {
+    const state = initialChatUIState({
+      pendingAction: { kind: 'mfa', actionId: 'action-1', summary: { ...summary, tier: 'RED', requiresMfa: true } },
+    });
+    // The server's 3-wrong-codes path emits an error (MFA failed) AND an action_settled locked for this id.
+    const next = reduceAgentEvents(state, [
+      { type: 'error', message: 'MFA failed: too many attempts', code: 'MFA_FAILED' },
+      { type: 'action_settled', actionId: 'action-1', status: 'locked' },
+    ]);
+    expect(next.pendingAction).toBeUndefined();
+    expect(next.settledActions?.['action-1']).toBe('locked');
+    expect(next.error).toBe('MFA failed: too many attempts');
+    expect(next.errorCode).toBe('MFA_FAILED');
+    // The fold is non-mutating: the input keeps its live decision and no settlement record.
+    expect(state.pendingAction).toBeDefined();
+    expect(state.settledActions).toBeUndefined();
+    expect(state.error).toBeUndefined();
+  });
+
+  it('never reopens a locked decision on a later attention refresh while still surfacing an unrelated live row', () => {
+    const settled = reduceAgentEvents(
+      initialChatUIState({ pendingAction: { kind: 'mfa', actionId: 'action-1', summary } }),
+      [{ type: 'action_settled', actionId: 'action-1', status: 'locked' }],
+    );
+    const staleRow = { id: 'action-1', status: 'awaiting_mfa' as const, tier: 'RED' as const, requiresMfa: true,
+      summary, attention: 'decision' as const };
+    // Same revision: only the settled-action guard keeps the popup closed (a revision-fenced read would
+    // return the state untouched for an unrelated reason).
+    expect(restoreActionAttention(settled, [staleRow], 0, 0).pendingAction).toBeUndefined();
+    // The guard is per-action: a DIFFERENT still-live row in the SAME refresh is still adopted.
+    const liveRow = { ...staleRow, id: 'other-action', summary: { ...summary, actionId: 'other-action' } };
+    expect(restoreActionAttention(settled, [staleRow, liveRow], 0, 0).pendingAction?.actionId).toBe('other-action');
+    // A read issued before a request started is fenced out entirely.
+    expect(restoreActionAttention(settled, [staleRow, liveRow], 0, 1)).toBe(settled);
+  });
 });
