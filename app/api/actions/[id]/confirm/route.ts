@@ -87,6 +87,9 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
       status: outcome.status,
       tier: outcome.tier,
       requiresMfa,
+      // Confirm NEVER submits a verification code, so no verification can FAIL here: a RED action
+      // reaching confirm is a PROMPT (`awaiting_mfa`) the client must still read as `not_required`
+      // to keep offering the code input, and a YELLOW confirmation never required MFA at all.
       mfaResult: 'not_required',
       message: outcome.message,
       events,

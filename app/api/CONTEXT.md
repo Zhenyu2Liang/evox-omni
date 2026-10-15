@@ -67,12 +67,13 @@ safe message and continuation events. Confirmation and verification preserve the
 refresh its state and expose current MFA requirements without exposing the verification code.
 Terminal RED metadata cannot reopen a settled action. UI card state follows current action status.
 
-Decision routes derive `mfaResult` from the domain outcome: `success` when authorized, `failed` only
-while `status` is `awaiting_mfa`, otherwise `not_required`; `ConfirmationOutcome` carries no MFA field,
-so a code the gateway reports `failed` becomes `not_required` once `status` is `locked`.
+Decision routes derive `mfaResult` from the domain outcome: `success` when authorized; `failed` for a
+FAILED verification (a wrong code, or an exhausted attempt limit / open circuit, i.e. `awaiting_mfa` or
+`locked`); otherwise `not_required`. `ConfirmationOutcome` carries no MFA field, so the verify route
+derives `mfaResult` from `status` locally; confirm never submits a code and stays `not_required`.
 A wrong verification code is `200 { ok:true, data:{ ok:false, status:'awaiting_mfa', mfaResult:'failed' } }`.
 Exhausting the attempt limit locks only the MFA challenge and the session circuit breaker and returns
-`200` with `status:'locked'` and `mfaResult:'not_required'`; the `PendingAction` row keeps its prior
+`200` with `status:'locked'` and `mfaResult:'failed'`; the `PendingAction` row keeps its prior
 status, so the lock is response-only and `GET /api/actions` keeps surfacing the row as a live decision.
 The two tracked counters live outside this layer: per-action `MfaChallenge.attempts`/`maxAttempts`
 against threshold `MFA_MAX_ATTEMPTS = 3`, and the authoritative owner-scoped `CircuitBreakerState`.
@@ -89,13 +90,10 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 
 - `POST /api/actions/[id]/verify` (`app/api/actions/[id]/verify/route.ts`) returns HTTP `200` for
   every domain outcome, including the circuit-breaker `status:'locked'` case: it always serializes
-  `jsonResponse<ActionResponse>(mapped)` (`:87`) and never throws `CIRCUIT_OPEN`, so the `423` status
+  `jsonResponse<ActionResponse>(mapped)` (`:91`) and never throws `CIRCUIT_OPEN`, so the `423` status
   named in the route comment (`:16`) and defined in `_lib/http.ts` is not reached from this route.
-- The same route derives `mfaResult` as `success` / (`awaiting_mfa` → `failed`) / else `not_required`
-  (`:69-73`), so a `status:'locked'` outcome reports `mfaResult:'not_required'` even though the
-  gateway returned `mfaResult:'failed'`.
 - The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
-  its own (`:84` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
+  its own (`:88` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
   all (client-only, `components/chat/actions.ts`); closing the MFA prompt is left to the client.
 
 Developer documentation lives in `docs/cn`; this context records AI-facing module boundaries.
