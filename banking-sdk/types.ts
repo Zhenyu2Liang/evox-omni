@@ -298,6 +298,28 @@ export interface HoldingView {
   /** Epoch ms. */
   boughtAt: number;
   status: HoldingStatus;
+  /** Epoch ms of the most recent purchase in this holding; absent when no purchase history is recorded. */
+  lastPurchaseAt?: number;
+  /** Purchases recorded on this holding, oldest → newest (absent when no history is recorded). */
+  purchases?: HoldingPurchase[];
+}
+
+/** One recorded subscription that added principal to a holding (oldest → newest in `HoldingView.purchases`). */
+export interface HoldingPurchase {
+  /** CNY amount added by this purchase. */
+  amount: MoneyAmount;
+  /** Epoch ms of this purchase. */
+  at: number;
+  /** Principal of the holding after this purchase was aggregated in (CNY). */
+  totalPrincipal: MoneyAmount;
+  /** Unrounded estimated market value after this purchase (CNY). */
+  marketValue: DecimalAmount;
+  /** Funding-account balance after this purchase (CNY). */
+  newBalance: MoneyAmount;
+  /** Server-resolved funding account. */
+  sourceAccountId: string;
+  /** Execution identity of this purchase, when the caller supplied one. */
+  executionKey?: string;
 }
 
 export interface SubscribeInvestmentInput {
@@ -308,8 +330,10 @@ export interface SubscribeInvestmentInput {
   /**
    * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT
    * double-debit: the full original result, including the original account balance, is replayed
-   * from the holding's transactionally persisted `subscribeResult`. The key is stored on
-   * `InvestmentHolding.idempotencyKey`; the planner passes `nodeExecutionKey(taskId, nodeId)`.
+   * from the transactionally persisted evidence (the holding's `subscribeResult` for the creating
+   * purchase, or the matching `purchaseHistory` record for one aggregated into an existing holding).
+   * The creating purchase stores the key on `InvestmentHolding.idempotencyKey`; an aggregation
+   * stores it in the appended `purchaseHistory` record. The planner passes `nodeExecutionKey(taskId, nodeId)`.
    * Absent → unchanged behavior.
    */
   idempotencyKey?: string;
@@ -318,14 +342,24 @@ export interface SubscribeInvestmentInput {
 export interface RedeemInvestmentInput {
   userId: string;
   holdingId: string;
-  /** Server-snapshotted full redemption amount shown before MFA; changes require a new decision. */
+  /**
+   * Optional PRINCIPAL amount to redeem (CNY decimal string), interpreted as a portion of the
+   * holding's booked principal. Absent, or equal to the held principal, redeems the whole holding
+   * (status `HOLDING` → `REDEEMED`, one final credit). A smaller positive amount redeems that
+   * portion: the settled value of the portion is credited, the principal decreases and the holding
+   * stays `HOLDING`. A larger, non-positive or malformed amount throws `VALIDATION`.
+   */
+  redeemAmount?: MoneyInput;
+  /** Server-snapshotted redemption amount shown before MFA; changes require a new decision. */
   expectedRedemptionAmount?: MoneyInput;
   /**
    * Optional idempotency key — the redemption's EXECUTION IDENTITY. A repeat with the SAME
    * key on an already-REDEEMED holding REPLAYS the original redemption and original balance;
-   * a DISTINCT (or absent) key on an already-REDEEMED holding always throws
-   * `CONFLICT` — never a false success. The identity and original result are persisted on the
-   * holding (`redeemExecutionKey` / `redeemResult`); the planner passes `nodeExecutionKey(taskId, nodeId)`.
+   * a repeat of a PARTIAL redemption replays the stored partial outcome from `redemptionHistory`
+   * without crediting again. A DISTINCT (or absent) key on an already-REDEEMED holding always
+   * throws `CONFLICT` — never a false success. The identity and original result are persisted on
+   * the holding (`redeemExecutionKey` / `redeemResult` / `redemptionHistory`); the planner passes
+   * `nodeExecutionKey(taskId, nodeId)`.
    */
   idempotencyKey?: string;
 }
@@ -345,6 +379,20 @@ export interface InvestResult {
   redemptionValuation?: DecimalAmount;
   /** Rounding rule applied once when a redemption is settled. */
   settlementRounding?: 'HALF_UP';
+  /** Present on a PARTIAL redemption: the holding stays `HOLDING` with a smaller principal. */
+  partial?: boolean;
+  /** Principal settled by this redemption (CNY); the redeemed portion, or the whole principal. */
+  redeemedPrincipal?: MoneyAmount;
+  /** Principal left in the holding after a PARTIAL redemption (CNY). */
+  remainingPrincipal?: MoneyAmount;
+  /** Unrounded estimated market value left after a PARTIAL redemption (CNY). */
+  remainingMarketValue?: DecimalAmount;
+  /** `remainingMarketValue - remainingPrincipal` after a PARTIAL redemption. */
+  remainingProfit?: DecimalAmount;
+  /** Present on a subscription: `true` when the amount was aggregated into an existing `HOLDING`. */
+  addedToExisting?: boolean;
+  /** Epoch ms of the purchase recorded by this subscription. */
+  lastPurchaseAt?: number;
 }
 
 /* -------------------------------------------------------------------- budget */
