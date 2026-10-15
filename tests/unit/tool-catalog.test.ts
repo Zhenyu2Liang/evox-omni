@@ -4,8 +4,8 @@ import { toolReplayPolicy } from '@/agent/durable/retry-policy';
 
 describe('central banking capability catalog', () => {
   it('contains one exhaustive inventory and rejects inherited object properties', () => {
-    expect(TOOL_NAMES).toHaveLength(26);
-    expect(new Set(TOOL_NAMES).size).toBe(26);
+    expect(TOOL_NAMES).toHaveLength(27);
+    expect(new Set(TOOL_NAMES).size).toBe(27);
     expect(TOOL_NAMES).toEqual(Object.keys(TOOL_CATALOG));
     expect(isCatalogToolName('__proto__')).toBe(false);
     expect(catalogEntry('unregistered_tool')).toBeUndefined();
