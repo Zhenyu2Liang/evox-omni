@@ -1,4 +1,0 @@
-HELLO_FROM_CMD  
-cb889a4 chore: remove stray scratch files
-3cb72c2 Merge commit '68c4f34488a20817b3da3bf53038612ad0c8989a'; commit 'a4256c715f775fddd42ed8e8ed77155266a166b7'; commit 'c0315463b238a730e16a20dc8e17760ca6965432'; commit '3165f7ca12968944ca9848726c59683a3af8e7cd'; commit '569407db358beb5517ffab3daa5d0eba6e774568' into evogit-agent-T2-A2
-569407d Update CONTEXT.md for ./agent
