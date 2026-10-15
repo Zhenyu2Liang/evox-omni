@@ -1,46 +1,41 @@
-# scripts — deployment entrypoints
+# 命令入口
 
-## Intent
+## 职责
 
-Small, tsx-run Node scripts that back the SUPPORTED `package.json` deployment commands. They exist so
-the documented deploy path runs with the right process environment rather than relying on the caller's
-shell — most importantly the Prisma **schema-engine log level**, whose ambient value silently changes
-Prisma's error reporting.
+脚本加载运行配置，调用项目模块并设置退出码。
+独立脚本使用相对路径导入。
 
-## API Surface
+| 脚本 | 命令与作用 |
+| --- | --- |
+| `db-push.ts` | `pnpm db:push` 同步当前结构 |
+| `agent-recovery.ts` | `pnpm agent:recover` 单次恢复，`pnpm agent:worker` 持续扫描 |
+| `scheduler.ts` | `pnpm scheduler:tick` 检查已到期任务 |
 
-- `db-push.ts` — backs `npm run db:push` (and `npm run db:reset`). Runs `prisma db push` through the
-  project-local Prisma CLI with `RUST_LOG=info` + `RUST_BACKTRACE=1` pinned for the schema-engine child
-  (shared pinning logic, in the non-test module `../lib/prisma-cli-env.ts#SCHEMA_ENGINE_RUST_LOG` /
-  `pinSchemaEngineLogging`). Resolves the local Prisma CLI (falling back to `npx` only when the local
-  binary is absent), forwards every extra CLI arg (`process.argv.slice(2)`), inherits stdio and exits
-  with the child's exit code. On a MISSING SQLite file it self-provisions the database — no manual DB
-  creation, no readiness marker, no skip flag.
+## 数据库命令
 
-## Commands
+`db-push.ts` 通过项目本地 Prisma 命令执行。
+命令环境复用 `lib/prisma-cli-env.ts`。
+配置加载使用 Next.js 环境加载器。
 
-- `npm run db:push` → `tsx scripts/db-push.ts` — create/apply the schema to `DATABASE_URL`.
-- `npm run db:reset` → `tsx scripts/db-push.ts --force-reset && tsx prisma/seed.ts` — wipe + reseed.
-- `npm run db:seed` → `tsx prisma/seed.ts` — seed the demo data.
+显式 `--force-reset` 会删除目标库及其旁文件。
+删除目标必须在当前工作区内。
+该命令不转换旧数据库格式。
 
-## Deployment ordering (REQUIRED)
+安装、生成客户端和数据库操作顺序见
+[development.md](../docs/cn/development.md)。
+当前数据库页面按请求读取数据。
+生产构建前不必对开发库播种。
+运行应用读取业务数据前，目标库仍需准备完成。
 
-`db push` → `db:seed` → `build`.
+## 恢复与调度
 
-`next build` PRERENDERS routes that query SQLite, so a READY, SEEDED database must exist BEFORE the
-build. Running `build` against a missing/empty dev DB fails during prerender. A from-scratch deploy is
-therefore:
+恢复命令支持 `--once`、`--interval-ms` 与 `--limit`。
+恢复策略由持久化身份、租约与回执决定。
+脚本参数不能替代业务授权。
 
-1. `npm install`
-2. `npm run db:push` (creates `prisma/dev.db` when absent) — add `npm run db:seed` for demo data
-3. `npm run build`
-4. `npm run start`
-
-## Constraints
-
-- Node built-ins only in these scripts (plus the shared `../lib/prisma-cli-env` helper); no `@/` alias,
-  no business logic. They are process-deployment glue, not app code.
-- NEVER spawn the Prisma CLI without the pinned schema-engine log level — an ambient `RUST_LOG` at/above
-  `warn` makes a cold `db push` fail with an opaque EMPTY `Error: Schema engine error:`.
-- Reuse `lib/prisma-cli-env.ts` (pinning policy + binary resolution); never re-implement or duplicate it.
-- Keep the `db push` → `db:seed` → `build` ordering in mind when adding a deployment command.
+调度命令单次检查任务，默认使用真实时间。
+`--now` 接受用于检查的 ISO 时间。
+脚本仅扫描已绑定会话的到期任务。
+启动 Web 服务不会自动循环执行该脚本。
+到期金融任务仍需确认和验证。
+详情见 [scheduled-tasks.md](../docs/cn/scheduled-tasks.md)。

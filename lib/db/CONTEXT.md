@@ -54,10 +54,10 @@ and aggregate repositories. Business permissions and risk rules belong to `secur
 
 ## Routing Table
 
-- `./lib/db/repositories` → aggregate queries, commands and durable runtime claims.
-- `./prisma/schema.prisma` → persisted schema and generator output.
-- `./prisma.config.ts` → Prisma CLI configuration.
-- `./tests/helpers/prisma-cli.ts` → generated-schema freshness and factory-construction probes.
+- [repositories/](repositories/CONTEXT.md) → aggregate queries, commands and durable runtime claims.
+- [schema.prisma](../../prisma/schema.prisma) → persisted schema and generator output.
+- [prisma.config.ts](../../prisma.config.ts) → Prisma CLI configuration.
+- [prisma-cli.ts](../../tests/helpers/prisma-cli.ts) → generated-schema freshness and factory-construction probes.
 
 ## Notes for Agents
 

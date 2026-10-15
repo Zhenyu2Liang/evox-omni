@@ -1,62 +1,33 @@
-# tests/unit/planner — DAG & executor unit specs
+# 计划、对话状态与展示测试
 
-## Intent
+## 范围
 
-Prove the DAG task planner's correctness independent of banking/LLM concerns: graph validation
-(duplicate ids, unknown tools, malformed nodes, bad deps, cycles), deterministic topological order,
-readiness computation, condition evaluation against a result scope, and the executor's node-state
-machine (including gated nodes parked in `waiting_confirmation` and skipped branches), plus the
-durable lifecycle controls over a persisted plan.
+本目录包含 DAG 执行器测试，也包含对话展示测试。
+名称不表示只验证计划模块。
 
-## API Surface
+| 测试组 | 关注点 |
+| --- | --- |
+| `dag`、`executor`、`lifecycle` | 图校验、执行顺序与控制 |
+| `executor-claim-scope`、`executor-execution-right` | 数据库认领与失去执行权 |
+| `intent-context`、`plan-compiler`、`plan-parameters` | 目的声明、参数与完整任务图 |
+| `chat-stream`、`chat-transport-validation` | 流状态与传输校验 |
+| `approval-record`、`action-attention-state` | 历史授权与待处理状态 |
+| `chat-plan-history`、`plan-history-page` | 计划的历史归属 |
+| `financial-display`、`chart-presentation` | 精确金额与图表显示 |
+| `context-compaction`、`conversation-context` | 历史压缩与上下文恢复 |
 
-Implemented specs (real assertions, no `it.todo`), targeting `@/planner` (`dag` / `executor` / `lifecycle`):
+表内名称对应同名测试文件，扩展名为 `.test.ts`。
+其余展示、诊断和条件边界以目录为准。
 
-- `dag.test.ts` (22 specs) — `validatePlan(nodes, knownTools)`, `topologicalOrder(nodes)`,
-  `getReadyNodes(nodes, results)`, `evaluateCondition(condition, scope)`, `buildPlan(input)`.
-  Pure; `now`/`id` injectable for determinism.
-- `executor.test.ts` (14 specs) — `runPlan(plan, deps, opts?)` with injected `PlanDeps`
-  (`runTool`/`onNodeUpdate`/`persist`); gated `runTool` outcome → node `waiting_confirmation`;
-  false condition → dependents `skipped`; node failure → `failed` (executor never throws);
-  `PlanControls` (pause/resume/cancel/retry); abort signal → `cancelled`.
-- `lifecycle.test.ts` — `planner/lifecycle.ts` durable controls (`pausePlan`/`cancelPlan`/`retryPlan`/
-  `resumePlan`) over a persisted plan: pause halts progression and yields a resumable `status:'paused'`
-  plan snapshot, cancel sweeps EVERY remaining
-  non-terminal node to `cancelled` (incl. a durable `{ kind:'cancel' }` polled after the first node of a
-  3-node `[a, b(dep a), c(dep b)]` chain settles → `a=success`, `b=c=cancelled`, `b`/`c` never invoked),
-  retry re-runs only the failed node, resume continues.
-- `executor-claim-scope.test.ts` (3 specs, DB-backed) — the NODE-execution de-dup SCOPE keyed by the
-  stable `(taskId,nodeId)` identity (NOT an in-process single-flight Map). Part A drives the CAS
-  (`claimNodeExecution`/`releaseNodeExecution` in `@/lib/db/repositories/task`) directly: exactly-once
-  claim, non-owner release no-op, owner release clears, cross-task independence. Part B runs two
-  SEPARATE `runPlan` invocations with SEPARATE `PlanDeps` over the same identity: while a still-live
-  run holds the claim the second run backs off with ZERO node side effects and no settlement write
-  (`persistPlan` only ever carries `status:'running'`); after release exactly one run executes the
-  node (stable `runTool` ctx → same `nodeExecutionKey`).
+## 验证约束
 
-- `executor-execution-right.test.ts` (4 specs, DB-backed) — plan-takeover execution-right barriers through the REAL `buildNodeClaimPorts` + `planExecutionClaimHeld` ports (from `@/agent/task-control`): claim a plan, rotate its token (takeover), then drive `runPlan` and assert the superseded ("zombie") run performs ZERO tool calls, ZERO node writes and publishes NO stale settlement (only the up-front `status:'running'` snapshot), while an already-run node's committed success fact survives.
+纯执行器通过注入接口控制时间与副作用。
+执行权测试使用真实数据库条件更新。
+展示测试包含服务端渲染与状态转换。
+它们不能代替浏览器点击和布局验证。
 
-## Constraints
+金额标签必须保留精确值。
+图表坐标不能成为金融计算的输入。
 
-- Side effects (tool calls, persistence, clock) are **injected** — most specs need no DB and no LLM;
-  `executor-claim-scope.test.ts` and `executor-execution-right.test.ts` ARE DB-backed (real `AgentTask`/`AgentTaskNode` rows for the CAS, via
-  `useFreshDatabase()` → `../../helpers/db`).
-- Deterministic order/timestamps: assert stable ordering by declaration order among equally-ready nodes.
-- `evaluateCondition` is total: a missing dot-path resolves to `false`.
-- `getReadyNodes` unlocks a dependent ONLY for terminal `success`/`skipped` deps
-  (`READY_DEP_STATUSES`); a `failed`/`cancelled` dep does NOT unlock its dependent.
-- Import frozen types from `@/lib/contracts/task`; never redeclare `TaskNodeSpec`/`TaskNodeResult`/`TaskPlan`.
-
-## Notes for Agents
-
-- Run: `npx vitest run tests/unit/planner --no-file-parallelism` (`dag`/`executor`/`lifecycle` are pure;
-  `executor-claim-scope.test.ts` and `executor-execution-right.test.ts` require the test SQLite).
-- All planner specs are green (no known-red cases).
-
-## Routing Table
-
-- `./dag.test.ts` → graph validation / ordering / conditions / buildPlan
-- `./executor.test.ts` → runPlan state machine + plan controls
-- `./lifecycle.test.ts` → durable persisted-plan lifecycle (pause/cancel/retry/resume)
-- `./executor-claim-scope.test.ts` → DB `(taskId,nodeId)` node-execution claim CAS + cross-run de-dup scope
-- `./executor-execution-right.test.ts` → plan-takeover execution-right barriers (real `buildNodeClaimPorts`/`planExecutionClaimHeld` ports; DB-backed)
+运行：`pnpm exec vitest run tests/unit/planner`。
+浏览器入口见 [../../e2e/CONTEXT.md](../../e2e/CONTEXT.md)。

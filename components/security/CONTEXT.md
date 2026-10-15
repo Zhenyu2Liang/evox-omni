@@ -1,50 +1,18 @@
-# components/security — Security & permission visualisations
+# 安全状态展示
 
-## Intent
+`PermissionLegend` 展示权限分级说明。
+`SecurityEventList` 展示服务端安全事件。
+`CircuitBreakerStatus` 展示锁定与失败次数。
 
-Presentational components that make the **code-enforced permission model visible**: the 🟢/🟡/🔴 tier
-legend, the security-event feed, and the circuit-breaker status. Display-only — the actual decisions
-are made in `./security` (server); these merely render their outcomes. Localized client leaves
-use `useI18n` for translated labels and locale formatting, without fetching or security logic.
+这些组件使用 `useI18n`，属于客户端叶子组件。
+数据来自属性，不在组件中查询或更新安全状态。
+解锁请求由 `app/security` 的操作组件负责。
 
-## API Surface
+安全事件的严重程度不等于业务权限等级。
+事件列表也不是完整的成功验证记录。
+不得根据颜色推断交易是否执行。
 
-All named exports, re-exported from `./index.ts`. `SecurityEvent` from `@/lib/contracts/audit`,
-`RiskLevel` from `@/lib/contracts/risk`.
-
-```ts
-// PermissionLegend.tsx — static explanation of the three tiers (🟢 auto / 🟡 confirm / 🔴 MFA)
-export interface PermissionLegendProps { className?: string; }
-export function PermissionLegend(p: PermissionLegendProps): JSX.Element;  // Localized client leaf
-
-// SecurityEventList.tsx — feed of SecurityEvent rows (kind, severity, message, time)
-export interface SecurityEventListProps { events: SecurityEvent[]; emptyText?: ReactNode;
-  className?: string; }
-export function SecurityEventList(p: SecurityEventListProps): JSX.Element; // Localized client leaf
-
-// CircuitBreakerStatus.tsx — breaker state (tripped / failure count vs max MFA attempts)
-export interface CircuitBreakerStatusProps { tripped: boolean; failureCount?: number;
-  maxAttempts?: number; className?: string; }
-export function CircuitBreakerStatus(p: CircuitBreakerStatusProps): JSX.Element; // Localized client leaf
-```
-
-## Constraints
-
-- **Display-only**: never computes a tier or decides permission; renders tiers/events it is given.
-- **Tier styling** comes from `ui/StatusBadge` / `lib/constants.RISK_LABEL`; severity colours from the
-  Tailwind `banking` palette (`danger`/`warn`/`success`). No hard-coded hex.
-- Localized Client Components use only `useI18n`. Read models arrive through serializable props;
-  no fetching, mutations, database access or security decisions belong here.
-- Named exports only; one concern per file.
-
-## Test Strategy
-
-- RTL render tests under the root `tests/` suite: `PermissionLegend` shows all three tiers;
-  `SecurityEventList` renders an empty state for `[]`; `CircuitBreakerStatus` reflects `tripped`.
-
-## Routing Table
-
-- `./PermissionLegend.tsx` `./SecurityEventList.tsx` `./CircuitBreakerStatus.tsx` → the visualisations above
-- `./index.ts` → re-exports all security components
-- `../../app/security/` → security-center page renders these (sibling — read-only)
-- `../../lib/contracts/audit.ts` → `SecurityEvent`/`SecurityEventKind` type source (dependency — read-only)
+权限和解锁规则见
+[security/CONTEXT.md](../../security/CONTEXT.md)。
+安全中心入口见
+[app/security/CONTEXT.md](../../app/security/CONTEXT.md)。

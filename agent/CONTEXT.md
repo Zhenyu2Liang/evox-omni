@@ -34,9 +34,9 @@ developer view; this presentation change does not alter checkpoint identities or
 Every registered write enters `command-execution.ts`. Operation identity belongs to the server invocation, action or node. The command's mutation, strict audit, original response and invocation completion share one transaction. Receipts are replayed before mutable lookup; transfers additionally match their ledger. Unknown outcomes stop for reconciliation.
 
 `confirmation.ts` is the public decision facade. `confirmation/identity.ts` resolves persisted ownership;
-`liveness.ts` owns decision leases; `outcomes.ts` projects refusals and convergence; `authorized-execution.ts`
-lands authorized command evidence before narration. `gated-execution.ts` is the workflow execution port,
-and `plan-continuation.ts` resumes downstream nodes without rewriting a committed business result.
+`confirmation/liveness.ts` owns decision leases; `confirmation/outcomes.ts` projects refusals and convergence; `confirmation/authorized-execution.ts`
+lands authorized command evidence before narration. `confirmation/gated-execution.ts` is the workflow execution port,
+and `confirmation/plan-continuation.ts` resumes downstream nodes without rewriting a committed business result.
 `confirmation-recovery.ts` lands action states and receipts without inventing effects. Workflow
 generation/token and session policy fences remain in the actual banking transaction. Manual handoff
 preserves current in-flight work and stops the next checkpoint. Scheduled dispatch reuses a persistent

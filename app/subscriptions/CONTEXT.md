@@ -1,44 +1,19 @@
-# subscriptions — Subscriptions Page (`/subscriptions`)
+# 订阅页面
 
-## Intent
+`page.tsx` 按请求读取有效订阅。
+数据来自 `banking.subscription.listSubscriptions`。
+页面展示订阅明细、年度费用估算与提醒数量。
 
-The **subscriptions screen**: the user's recurring subscriptions (name, fee, cycle, next charge),
-an annualised-cost summary, and the reminder-toggle / cancel surface for the
-`set_subscription_reminder` / `cancel_subscription` tools.
+年度费用按扣费周期换算。
+月度、季度、年度分别按 12、4、1 次计费。
+计算使用整数分，显示使用精确金额字符串。
+年度费用只是按当前记录估算。
 
-This node is a **thin Server Component** — it fetches the subscription read model directly on the
-server (no HTTP hop) and composes the UI from `../components`.
+取消订阅与修改提醒通过助手办理。
+这些操作采用工具目录中的确认策略。
+页面读取列表不会代替用户确认。
 
-## API Surface
-
-- **Page route**: `/subscriptions` — `page.tsx`, default-exported Server Component.
-- **Read model** (server-only, via `@/banking-sdk`):
-  - `banking.subscription.listSubscriptions(userId)` → `SubscriptionView[]`
-    (name · amount · cycle · nextChargeAt · status · remind)
-  - User id: `getConfig().demoUserId` (default `DEFAULT_DEMO_USER_ID`).
-- **Composes** (from `../components` — referenced by name only): subscription list (name / monthly
-  fee / next charge), annual-cost summary, and the reminder-toggle / cancel actions.
-
-## Constraints
-
-- **Server Component**; render chrome + `TODO: wire read model` comments — no UI logic.
-- **Mutating actions are never performed here** — tier policy (YELLOW confirm) lives in `../security`
-  and is enforced through the agent's gated tools; the client calls the API instead.
-- Pass only **serializable** props to client components (no `Date` — epoch ms; money is CNY `number`).
-- **Read via `@/banking-sdk` only** — never import Prisma directly.
-- **Never build** the composed components here; reference them from `../components` (read-only sibling).
-- Keep the file ≲ ~120 lines.
-
-## Dependencies
-
-- `@/banking-sdk` (sibling — read-only): `banking.subscription.listSubscriptions`; DTOs
-  `SubscriptionView`, `SubscriptionCycle`, `SubscriptionStatus`.
-- `@/lib/config` (sibling — read-only): `getConfig` (demo user resolution).
-- `../components` (sibling — read-only): the subscription list / summary / action controls.
-- `../api` (sibling — read-only): `GET /api/subscriptions` used for client-side refresh.
-
-## Routing Table
-
-- `./page.tsx` → the `/subscriptions` page (list, annual cost, actions)
-- `../components/` → React component library the page composes (sibling — read-only, escalate writes to parent)
-- `../api/` → `GET /api/subscriptions` refresh endpoint (sibling — read-only)
+订阅组件见
+[components/banking/CONTEXT.md](../../components/banking/CONTEXT.md)。
+权限定义见
+[agent/tools/CONTEXT.md](../../agent/tools/CONTEXT.md)。

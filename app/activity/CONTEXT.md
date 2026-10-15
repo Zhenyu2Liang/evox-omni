@@ -1,31 +1,19 @@
-# activity — Business operation history (`/activity`)
+# 操作记录页面
 
-## Purpose
+`page.tsx` 按请求读取所属演示工作区的业务记录。
+入口为 `audit.listOperationHistory({ userId, sessionId })`。
+`ActivityRecord` 只包含允许公开的业务字段。
+`ActivityHistory.tsx` 展示名称、时间、状态与验证结果。
 
-Ordinary users inspect the progress and outcome of banking operations here. This is read-only
-event history; older pending labels describe the state at that event's timestamp, not a current
-approval inbox. Confirmation and verification remain on each original operation card.
+这是事件历史，不是当前待确认列表。
+旧状态表示该事件发生时的状态。
+当前确认或验证在助手的授权面板处理。
 
-## Data
+本页面不展示原始工具参数、提示词与诊断。
+技术详情由开发者页面 `/audit` 提供。
+内部记录标识仅作 React 键，不作为可见内容。
 
-- Dynamic `page.tsx` resolves the fixed demo owner and session via `requireIdentity()`.
-- Read `listOperationHistory({ userId, sessionId })` from the audit facade.
-- `ActivityRecord` in `lib/contracts/activity.ts` contains an internal row key, timestamp, closed
-  operation type, status and verification outcome. It excludes tool names, arguments, results and prompts.
-- `/api/activity` provides the same public projection. Projection and grouping belong to the backend.
-- Own-transaction acknowledgement is a business action and appears as `transaction_acknowledgement`.
-  Exclude technical reads and developer maintenance, not this user confirmation event.
-
-## Presentation
-
-`ActivityHistory.tsx` renders operation names, status badges, business-zone timestamps and verification
-labels through the bilingual catalog. Records stack on narrow screens.
-The internal record ID is a React key only and never appears as a DOM attribute or visible text.
-Do not add direct confirmation controls, workflow retry links or raw audit fields here.
-Detailed execution diagnostics remain on the independently gated developer page `/audit`.
-
-## Verification
-
-- `tests/unit/lib/activity-presentation.test.ts`: unsafe properties do not render; the server page uses only the scoped projection.
-- `tests/e2e/activity.e2e-helper.ts`: public API shape, ordinary navigation, reload persistence and 320 px layout.
-- `tests/e2e/card-freeze.e2e-helper.ts`: both independently verified freezes appear as completed business operations.
+验证入口：
+- `tests/unit/lib/activity-presentation.test.ts`。
+- `tests/e2e/activity.e2e-helper.ts`。
+- `tests/e2e/card-freeze.e2e-helper.ts`。

@@ -1,107 +1,39 @@
-# tests/helpers — shared test utilities
+# 测试辅助模块
 
-## Intent
+## 模块选择
 
-Reusable utilities shared by every suite in `./tests`: test-DB lifecycle, the canonical demo
-fixtures, a scripted-model agent builder, and the turn/decision harness. Keeps specs focused on
-*what* to assert, not *how* to bootstrap.
+| 模块 | 用途 |
+| --- | --- |
+| `db.ts` | 连接、清空、重建夹具与断开测试库 |
+| `fixtures.ts` | 独立维护的测试数据 |
+| `faux-agent.ts` | 原始 Pi Agent 与脚本模型 |
+| `scenario.ts` | 网关和工具层的两阶段场景 |
+| `scripted-provider.ts` | 注入生产运行入口的模型响应 |
+| `prisma-cli.ts` | 客户端准备、隔离库清理与命令诊断 |
+| `restart-process.ts`、`standalone-restart-process.ts` | 独立进程恢复探针 |
+| `write-failure.ts` | 保留真实事务的写入失败注入 |
 
-These are **test infrastructure**. They contain no banking/security business logic — they wire up the
-real modules and drive them. `db.ts` and `fixtures.ts` are **implemented** (they really reset + seed the DB);
-`faux-agent.ts`/`scenario.ts` are **implemented** (they really build a scripted Pi `Agent` and drive real turns/decisions).
+## 入口与证据
 
-## API Surface
+`faux-agent` 和 `scenario` 验证网关、工具与 SDK。
+它们不经过生产的声明、运行准入与展示流程。
+辅助函数生成的结果说明不是模型稳定性证据。
 
-Import from the barrel (`../helpers`) or a specific module.
+验证生产入口时，使用 `scriptedProvider` 注入模型。
+它通过真实 `describe_turn` 声明当前目的与业务序列。
+声明不提供用户授权。
+未声明或声明不完整的拒绝测试需保留该输入条件。
 
-- `db.ts` — test-database lifecycle:
-  - `getTestPrisma(): PrismaClient` — the Prisma singleton bound to the test DB (`@/lib/db/client`).
-  - `ensureTestPragmas(): Promise<void>` — apply the fast SQLite PRAGMAs (`journal_mode=WAL`,
-    `synchronous=NORMAL`, `busy_timeout=10000`) ONCE per process (memoized). Called by both
-    `truncateAll()` and `seedDemoData()`, so it holds on every entry path.
-  - `truncateAll(): Promise<void>` — delete all rows in FK-safe order (children → parents).
-  - `resetDatabase(): Promise<void>` — `truncateAll()` + `fixtures.seedDemoData()`. `truncateAll()` also clears the DURABLE, owner-keyed `CircuitBreakerState` table, so a breaker lock never leaks between tests that reset.
-  - `useFreshDatabase(): void` — register Vitest hooks (`beforeEach` → `resetDatabase()`, `afterAll` → disconnect).
-  - `disconnectTestPrisma(): Promise<void>` — idempotent Prisma disconnect.
-- `fixtures.ts` — the canonical demo dataset (constants) + seeder:
-  - constants: `DEMO_USER_ID`/`DEMO_USER`, `CONTACTS` (张伟/王芳/妈妈/李华), `AMBIGUOUS_CONTACT`
-    (2nd 王芳), `ACCOUNTS` (活期 ¥23,580), `ANOMALY_TRANSACTION` + `ANOMALY_OCCURRED_AT`
-    (Apple Store ¥6,999 @ 2026-09-20 18:32), `MONTHLY_SPEND_TOTAL` (≈¥5,800), `PRODUCTS`/`CARDS`/`CARD_LIMITS`, types.
-  - `seedDemoData(options?): Promise<void>` — insert the full dataset (call on a fresh DB).
-  - `buildCurrentMonthSpend(now?)` / `buildPreviousMonthSpend(now?)` / `buildSubscriptions(now?)` / `buildHoldings(now?)` / `buildBudgets(now?)` / `buildScheduledTasks(now?)` — the date-relative rows (current/previous/next month), built from LOCAL components relative to `now` (default `demoNow()`).
-- `faux-agent.ts` — build a REAL Pi `Agent` with a SCRIPTED model:
-  - `buildFauxAgent(options): Agent` — raw Pi loop, real registered banking tools and direct gateway hook. It verifies the gateway/SDK boundary; production declaration guards, durable admission and presentation require scripted-provider.ts with runTurn/createBankingAgent.
-  - script builders: `text`, `tool(name,args)`, `final`, `callThen(text,name,args)`; types `FauxStep`/`FauxToolCall`/`FauxAgentOptions`.
-- `scripted-provider.ts` — model-only responses for the production runTurn/createBankingAgent path:
-  - `scriptedProvider({ purpose, operations, workflow?, allowProtocolExamples? }, steps)` prepends a real describe_turn call. Call counts include this provider request; declarations do not grant authorization.
-  - `turnDeclaration(...)` constructs the same response for custom scripted queues. Negative tests that omit declarations use an explicit raw provider and assert the real runtime refuses gated calls.
-- `prisma-cli.ts` — Node-built-ins-only shared Prisma CLI/generate plumbing (NOT in the `index.ts`
-  barrel; specs must not import it — only `../setup.ts` and `../e2e/helpers.ts` do):
-  - `resolveRepoRoot`/`resolvePrismaBin`/`resolveTsxBin`/`cliCommand` — locate the repo + the
-    project-local Prisma/tsx binaries and build a directly-launchable invocation.
-  - `runCliStepCaptured(command,args,opts): CliStepResult` — the NON-throwing spawn primitive.
-  - `runCliStep(command,args,opts): string` — fail-loud wrapper: success = EXIT CODE 0; on failure
-    throws the FULL captured stdout+stderr (`diagnosticCliOutput`) + spawn error.
-  - `diagnosticCliOutput` / `spawnErrorText` / `removeSqliteFiles` — render CLI output (tail preserved),
-    render a spawn failure, delete a SQLite file + sidecars (missing = fine).
-  - `provisionSchemaLadder(opts): void` — provision a SQLite schema through an ORDERED LADDER of
-    `prisma db push` invocation shapes (`PushRung`/`ProvisionSchemaOptions`): each rung runs ONLY after
-    the previous FAILED, the `dbFiles` (+ sidecars) are deleted via `removeSqliteFiles` before EVERY
-    rung, and `afterPush` (e.g. a usability probe + seed) is treated like part of the rung. On TOTAL
-    failure it THROWS one error embedding EVERY rung's FULL output + environment diagnostics
-    (`DATABASE_URL`, cwd, project-local Prisma CLI path, `prisma -v`, `@prisma/engines/schema-engine*`).
-  - `prismaClientUsable`/`prismaClientGenerated`, `runPrismaGenerate`, `ensurePrismaClientGenerated` —
-    the client self-bootstrap (readiness gate = the USABILITY probe, not artifact presence).
-- `scenario.ts` — drive a full session turn + human decision:
-  - `runTurn({sessionId,message,agent}): Promise<ScenarioResult>` — send a message, collect events.
-  - `confirmAction(agent,actionId)` / `verifyAction(agent,actionId,code)` / `cancelAction(agent,actionId)` — human decision + narration.
-    - Authorizes via `securityGateway.authorizeAction` / `cancelAction`, passing the action's real owner `{ userId: DEMO_USER_ID, sessionId: agent.sessionId ?? 'sess' }` (required; a missing/mismatched identity is refused with `SECURITY_DENIED`).
-    - The post-authorize audit row records the EFFECTIVE `auth.tier` / `auth.requiresMfa` (a YELLOW transfer can escalate to RED at execution time); the cancel audit row keeps the parked `action.tier` / `action.requiresMfa`.
-  - `newSessionId(prefix?)`, `collectEvents(agent)`, `toolEventsOf(res,name)`, `cardsOfType(res,type)`; types `ScenarioResult`.
+## 数据库与事务
 
-## Constraints
+`getTestPrisma` 延迟获取测试客户端。
+`resetDatabase` 清空记录后加载夹具。
+`useFreshDatabase` 注册测试生命周期。
+`ensureTestPragmas` 设置测试连接的 WAL 与等待参数。
+客户端连接机制见
+[lib/db/CONTEXT.md](../../lib/db/CONTEXT.md)。
+不得用旧连接池参数解释当前原生适配器行为。
 
-- **Only test infrastructure** — never re-implement security/permission/planner/SDK logic here; call
-  the real modules.
-- **Load-safe imports**: `db.ts`/`scenario.ts` must not construct Prisma (or import Prisma-constructing
-  modules like `@/lib/db/client`) at module load in a way that breaks pure unit collections — resolve
-  the client lazily inside functions.
-- Fixtures are DATA: keep identities/amounts/dates matching the root `CONTEXT.md` "Data Model" (they
-  are the acceptance bar). No logic.
-- Import frozen types from `@/lib/contracts/*` (`AgentStreamEvent`, `ChatCard`, `TaskPlan`,
-  `ToolEventView`, `PendingActionSummary`); never redeclare them.
-- Timestamps are epoch ms; money is CNY. Keep files ≲ ~1000 lines.
-
-## Fast test-DB path (why the suite is fast — do not remove)
-
-The test SQLite runs on a deliberately fast configuration; the whole `resetDatabase()` cycle is a few
-ms and the full suite finishes in well under a minute. If any of these is dropped, commits fall back
-to fsync and the suite balloons toward the 10-minute tool timeout:
-
-- `ensureTestPragmas()` in `db.ts` sets `journal_mode=WAL` + `synchronous=NORMAL` + `busy_timeout=10000`.
-  `journal_mode=WAL` is **persistent on the DB file**; `synchronous`/`busy_timeout` are **per-connection**.
-- `tests/setup.ts` pins the runtime `DATABASE_URL` to `?connection_limit=1`, so the pool has a SINGLE
-  connection and the per-connection pragmas above apply to EVERY query. Without it, Prisma opens extra
-  pooled connections that keep the default `synchronous=FULL`, and after the pool grows every write
-  stalls ~2s (the DB-backed specs run ~10× slower).
-- `PRAGMA foreign_keys` is enforced; truncate order stays FK-safe (children → parents).
-
-## Routing Table
-
-- `./db.ts` → test-DB lifecycle (reset / truncate / connect / fast pragmas)
-- `./fixtures.ts` → canonical demo dataset + seeder
-- `./faux-agent.ts` → scripted-model Agent builder
-- `./scenario.ts` → turn/decision harness + event collection
-- `./prisma-cli.ts` → shared Prisma CLI/generate plumbing + the ORDERED provisioning ladder (`provisionSchemaLadder`), used by `../setup.ts` and `../e2e/helpers.ts` only (NOT in the barrel)
-- `./index.ts` → barrel re-exports
-- `../setup.ts` → provisions the schema (via the shared ladder) + points `DATABASE_URL` at the test SQLite, incl. `?connection_limit=1` (sibling — this node)
-
-## Notes for Agents
-
-- Every DB-backed suite should start with `useFreshDatabase()` so each test runs against a known world.
-- `fauxProvider()` (from `@earendil-works/pi-ai`) supplies a per-test handle; register `handle.provider` in `createModels()` and pass its bound `streamSimple` as Agent `streamFn`. No global registration or unregister step. See the root
-  `CONTEXT.md` "Pi Agent Integration" for the Agent/tool/`beforeToolCall` SDK facts.
-- The circuit breaker is DURABLE (`CircuitBreakerState` table) and owner-keyed — NOT in-process and NOT keyed by the raw `sessionId`: `security/circuit-breaker.ts#resolveBreakerOwner` maps a known session/user to `user:<userId>`, else `session:<actor>`, so a real user's lock is shared by ALL of that user's sessions and survives a new SESSION / process restart.
-- For breaker isolation use a unique USER (or an actor id with no `AgentSession`/`User` row, resolving to `session:<actor>`) — a unique session id alone is NOT enough; `resetDatabase()` / `truncateAll()` clears the table for the normal DB-backed suites.
-- Need a fast/reliable suite? Keep the "Fast test-DB path" invariant intact — do NOT remove the
-  pragmas or the `connection_limit=1` URL, and do NOT weaken isolation to gain speed.
+Prisma 准备失败时必须保留完整命令诊断。
+失败注入必须保留真实事务的回滚行为。
+共享库的隔离和执行规则见 [../CONTEXT.md](../CONTEXT.md)。

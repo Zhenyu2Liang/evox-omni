@@ -55,7 +55,7 @@ banking tool. Current model replay and the raw event journal retain their own ev
 ## Verification
 
 Pure coverage: `tests/unit/planner/tool-timeline.test.ts`,
-`transcript-activity.test.ts`, and `tool-feedback.test.ts`. The timeline suite checks
+`tests/unit/planner/transcript-activity.test.ts`, and `tests/unit/planner/tool-feedback.test.ts`. The timeline suite checks
 same-name calls, reverse completion order, exact action ownership, stable recovered
 IDs, complete before/after prose, internal-tool isolation, presentation failure, and
 withholding unfinished candidates. Run with `VITEST_SKIP_DB_SETUP=1` to avoid database

@@ -1,46 +1,29 @@
-# bills — Bills / 账单 Page (`/bills`)
+# 账单页面
 
-## Intent
+## 数据与显示
 
-The **bills / spending screen**: a month-scoped view of the user's spending — category breakdown,
-month-over-month trend, the transaction ledger, and the flagged anomalies. It makes the demo's
-spend-analysis tools (`analyze_spending`, `detect_anomaly`) and the seeded Apple Store anomaly
-visible outside the chat.
+`page.tsx` 是按请求渲染的服务端页面。
+页面直接调用 `banking.transaction` 读取数据。
 
-This node is a **thin Server Component** — it fetches read models directly on the server (no HTTP
-hop) and composes the UI from `../components`.
+- `analyzeSpending` 提供月度消费与分类统计。
+- `listTransactions` 使用该月的半开时间范围。
+- `listAnomalies` 的结果按同一时间范围过滤。
 
-## API Surface
+月份来自异步 `searchParams` 的 `month`。
+有效格式为 `YYYY-MM`。
+缺失或格式无效时使用演示业务月份。
+页面已提供月份表单、分类图、趋势图与流水表。
 
-- **Page route**: `/bills` — `page.tsx`, default-exported Server Component.
-- **Read models** (server-only, via `@/banking-sdk`):
-  - `banking.transaction.analyzeSpending(userId, { month })` → `SpendingAnalysis`
-  - `banking.transaction.listTransactions(userId, { month })` → `TransactionView[]`
-  - `banking.transaction.listAnomalies(userId)` → `AnomalyItem[]`
-  - User id: `getConfig().demoUserId` (default `DEFAULT_DEMO_USER_ID`). The selected `month`
-    (`YYYY-MM`) is expected from the URL search param (TODO).
-- **Composes** (from `../components` — referenced by name only): `MonthPicker`, `CategoryPie`,
-  `MonthlyTrendChart` (Recharts), `TransactionsTable`, `AnomalyList`.
+图表使用 `components/charts` 的原生 SVG 组件。
+金额显示使用 `Money` 与 `formatCNY`。
+金额和比例计算使用精确金融工具。
+异常标记不改变已入账消费总额。
 
-## Constraints
+## 修改约束
 
-- **Server Component**; render chrome + `TODO: wire read model` comments — no UI logic.
-- Pass only **serializable** props to client components (no `Date` — epoch ms; money is CNY `number`).
-- **Read via `@/banking-sdk` only** — never import Prisma directly.
-- **Never build** the composed components here; reference them from `../components` (read-only sibling).
-- **Never redeclare** shared types; import them from `@/banking-sdk` / `../lib/contracts`.
-- Keep the file ≲ ~120 lines.
-
-## Dependencies
-
-- `@/banking-sdk` (sibling — read-only): `banking.transaction.*` read functions; DTOs
-  `SpendingAnalysis`, `TransactionView`, `AnomalyItem`.
-- `@/lib/config` (sibling — read-only): `getConfig` (demo user resolution).
-- `../components` (sibling — read-only): the charts / table / picker the page composes.
-- `../api` (sibling — read-only): `GET /api/bills` used for client-side refresh.
-
-## Routing Table
-
-- `./page.tsx` → the `/bills` page (spend analysis + ledger + anomalies)
-- `../components/` → React component library the page composes (sibling — read-only, escalate writes to parent)
-- `../api/` → `GET /api/bills` refresh endpoint (sibling — read-only)
+页面只读取业务数据。
+异常处理动作必须调用所属业务入口。
+日期与金额规则见
+[financial-values.md](../../docs/cn/financial-values.md)。
+图表约束见
+[components/charts/CONTEXT.md](../../components/charts/CONTEXT.md)。

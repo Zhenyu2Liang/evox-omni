@@ -1,117 +1,42 @@
-# audit — Audit Log & Security Events
+# 审计与业务记录
 
-## Intent
+## 职责与入口
 
-The **single persistence + query API** for the agent's accountability trail: every tool-call
-audit entry (`AuditEntry`) and every security event (`SecurityEvent`). It backs the 审计 (audit)
-step of the agent loop 理解 → 规划 → 执行 → 风控 → 验证 → 审计 and feeds the audit dashboard and
-security-center read models.
+本目录负责审计写入、查询与安全事件展示数据。
+权限判断由 `security/` 负责。
 
-This node is a **thin wrapper over Prisma-backed repositories** in `./lib/db/repositories`. It
-holds no business rules of its own — the Security Gateway decides *what* to log, this node
-decides *how it is stored and queried*.
+| 模块 | 职责 |
+| --- | --- |
+| `audit-logger.ts` | `recordAudit`、`listAudit` 与统计 |
+| `security-events.ts` | 安全事件写入、查询与状态读取 |
+| `operation-history.ts` | 普通用户可见的业务记录投影 |
+| `index.ts` | 公共导出 |
 
-## API Surface
+业务记录采用字段白名单。
+技术参数与原始执行诊断不进入普通记录。
+查询必须保留所有者与会话范围。
 
-Public entry point is the facade `./index.ts` (`export const audit = { ... }`), which also
-re-exports each function and its types.
+## 写入语义
 
-- `audit/audit-logger.ts`
-  - `recordAudit(entry: AuditEntry, opts?: RecordAuditOptions): Promise<AuditEntry>` — append one audit entry; JSON-serializes `toolResult`/`detail`. Best-effort by default (never rejects); with `opts.strict === true` a real persistence failure REJECTS so the caller's `prisma.$transaction` rolls back (only a verified same-`dedupeKey` duplicate is absorbed as an idempotent no-op).
-  - `listAudit(filter: AuditFilter): Promise<AuditEntry[]>` — query newest-first by optional filter.
-  - `getAuditSummary(): Promise<AuditSummary>` — `{ total, byRisk, byStatus }` counts for the dashboard.
-  - types: `AuditFilter` (`{ sessionId?, toolName?, riskLevel?, status?, limit? }`), `AuditSummary`, `RecordAuditOptions` (`{ client?: Prisma.TransactionClient; dedupeKey?: string; strict?: boolean }`).
-  - `auditStore` — repository bindings seam (testability; see Dependencies).
-- `audit/security-events.ts`
-  - `recordSecurityEvent(event: Omit<SecurityEvent,'id'|'timestamp'> & { timestamp? }, opts?: RecordSecurityEventOptions): Promise<SecurityEvent>` — append one event; `timestamp` defaults to `demoNow()` (the demo clock) unless the caller supplies one. Best-effort by default (never rejects); `opts.client` writes on the caller's already-open transaction and `opts.strict === true` makes a REAL persistence failure REJECT so the caller's `prisma.$transaction` rolls back.
-  - `listSecurityEvents(filter?: SecurityEventFilter): Promise<SecurityEvent[]>` — query newest-first.
-  - `getSecurityStatus(sessionId, options?): Promise<SecurityStatus>` — `{ locked, recentEvents }`.
-  - types: `SecurityEventFilter` (`{ sessionId?, kind?, limit? }`), `SecurityStatus`, `SecurityStatusOptions` (`{ isLocked?, recentLimit?, filter? }`), `BreakerLookup`, `RecordSecurityEventOptions` (`{ client?: DbClient; strict?: boolean }`).
-  - `securityEventStore` — repository bindings seam (testability; see Dependencies).
+审计和安全事件写入默认记录错误后返回。
+关键业务调用必须显式使用 `strict: true`。
+严格模式失败必须传给事务调用方。
 
-## Constraints
+`recordAudit` 可接收事务客户端与 `dedupeKey`。
+重复键只有在业务结果与身份匹配时才视为重放。
+冲突结果不能覆盖既有成功事实。
+安全事件写入没有同样的唯一键去重接口。
 
-- Execution and manual-review events are DISTINCT: agent convergence uses `exec:<actionId>` for
-  execution and `reconcile:<actionId>` for manual review. Never overwrite a committed success audit
-  or absorb a contradictory outcome as the same event. The manual-review audit and action state
-  land in one strict transaction; a failed audit leaves the prior state available for retry.
+业务写入、强制审计和回执的事务组合由执行层负责。
+规则见 [agent/CONTEXT.md](../agent/CONTEXT.md)。
 
-- **Transaction composition**: `recordAudit(entry, { client, dedupeKey, strict })` accepts a `Prisma.TransactionClient` (`client`) so an audit write CAN be folded into the caller's `prisma.$transaction`, and an optional unique `dedupeKey` makes a repeat write of the SAME execution identity idempotent. `recordSecurityEvent(event, { client, strict })` mirrors this: `client` is forwarded to `insertSecurityEvent` so the security-event row lands on the caller's already-open transaction (relying on the `../lib/db/repositories/securityEvent` signature `insertSecurityEvent(event, opts?: { client?: DbClient })`; the `securityEventStore` seam casts the imported function so this node compiles before AND after that lib change lands), and `strict: true` REJECTS on a real persistence failure so the caller's transaction rolls back its business writes (the "unlock + SECURITY_RESET audit land together" contract).
-- **Dependency direction**: `lib` ← `audit`. This node imports ONLY `lib/contracts/*`,
-  `lib/db/repositories/*`, `lib/db/client`, `lib/errors`, and `lib/clock`. It **MUST NOT** import
-  `security`, `agent`, `planner`, or `banking-sdk` — the Security Gateway depends on `audit` for
-  logging, so any reverse import creates a dependency cycle. (The P2002 unique-violation check in
-  `recordAudit` is therefore INLINED rather than imported from `banking-sdk`.)
-- **Never redeclare frozen types**: `AuditEntry`, `AuditStatus`, `SecurityEvent`,
-  `SecurityEventKind` come from `@/lib/contracts/audit` — import, never fork.
-- **Error strategy — best-effort by default, strict on request**: `recordAudit` / `recordSecurityEvent` are best-effort by DEFAULT and never throw into the request path — on persistence failure they `console.error` and resolve with the input entry/event. A caller may opt into STRICT mode (`{ strict: true }` on `recordAudit` OR `recordSecurityEvent`), in which case a real persistence failure REJECTS (the original error is propagated unchanged) so the caller's enclosing `prisma.$transaction` rolls back its business writes. `recordSecurityEvent` strict mode has NO dedupe absorption (a security-event insert has no unique key), so it always rethrows. For `recordAudit`, the ONLY failure strict mode absorbs is a VERIFIED duplicate of the SAME `dedupeKey` — a Prisma unique-constraint violation (P2002) AND a row with that exact key already present on the same client (`findUnique` back-read) — treated as an idempotent no-op. A missing `dedupeKey`, an absent back-read row, or a throwing back-read all rethrow the ORIGINAL insert error. Reads/query functions delegate to the store seam and wrap any non-`AppError` via `AppError.from(e)` (code `INTERNAL`) and rethrow — never silently swallowed.
-- **Audit entries must be complete**: every `recordAudit` call carries the required fields —
-  `timestamp, sessionId, userRequest, intent, toolName, riskLevel, confirmationRequired,
-  confirmed, mfaRequired, mfaResult, toolResult, status` (see `AuditEntry` in lib/contracts).
-- **Circuit-breaker authority stays in `security`**: `getSecurityStatus` prefers an injected
-  `isLocked` callback (the security node's breaker) and only falls back to deriving lock state
-  from the persisted event stream (newest `CIRCUIT_BREAKER_TRIPPED`/`SECURITY_RESET` decides;
-  scan window `LOCK_SCAN_LIMIT`). Do not re-implement breaker counters here.
-- Import via the `@/*` path alias (`@/lib/...`) — matches the project's `tsconfig`/`vitest` alias.
-- Keep files ≲ ~1000 lines; split by responsibility.
+## 安全状态
 
-## Dependencies
+`getSecurityStatus` 优先使用注入的锁定查询。
+缺少该查询时，使用近期事件推导状态。
+这不能代替熔断模块的持久化判断。
+安全事件未显式传时间时使用 `demoNow()`。
+锁定与冷却时间由安全调用方使用真实时钟。
 
-- `@/lib/contracts/audit` (frozen types), `@/lib/contracts/risk` (`RiskLevel`).
-- `@/lib/errors` (`AppError`), `@/lib/clock` (`demoNow` — write timestamps use the demo clock).
-- `@/lib/db/client` (`prisma` — the global singleton used as the default `client` for the strict-mode `dedupeKey` back-read).
-- `@/lib/db/repositories/auditLog` (owned by `./lib`) — surface used:
-  `insertAuditLog(entry: AuditEntry, opts?: { client?; dedupeKey? }): Promise<AuditEntry>`,
-  `findAuditLogs(filter: { sessionId?; toolName?; riskLevel?; status?; limit? }): Promise<AuditEntry[]>`,
-  `aggregateAuditLogs(): Promise<{ total; byRisk; byStatus }>`. JSON-serializes `toolResult`; `dedupeKey` maps to the unique `AuditLog.dedupeKey` column.
-- `@/lib/db/repositories/securityEvent` (owned by `./lib`) — surface used:
-  `insertSecurityEvent(event: SecurityEvent, opts?: { client?: DbClient }): Promise<SecurityEvent>` (the optional `client` param is a PARALLEL `./lib` change; the audit seam CASTS the imported function so this node compiles with either signature),
-  `findSecurityEvents(filter: { sessionId?; kind?; limit? }): Promise<SecurityEvent[]>`. JSON-serializes `detail`.
-- Repository params are structural (primitives / `lib/contracts` types) so `lib` never imports `audit`.
-- `./security` (circuit-breaker lock state) is a **runtime** dependency injected via
-  `SecurityStatusOptions.isLocked` — not a code import.
-
-## Routing Table
-
-- `./audit-logger.ts` → tool-call audit write + query + summary (`AuditEntry`)
-- `./security-events.ts` → security-event write + query + per-session status (`SecurityEvent`)
-- `./index.ts` → facade `audit` object + type re-exports (public entry point)
-- `../lib/contracts/audit.ts` → frozen `AuditEntry`/`AuditStatus`/`SecurityEvent`/`SecurityEventKind` (sibling — read-only, escalate writes to root)
-- `../lib/db/repositories/` → Prisma repositories this node delegates to (sibling — read-only, escalate writes to root)
-- `../security/` → circuit-breaker lock state consumer/source (sibling — read-only, escalate writes to root)
-- `../tests/` → security/audit unit tests + faux-LLM scenario integration tests (sibling — read-only, escalate writes to root)
-
-## Test Strategy
-
-- **Unit tests** (Vitest, no DB required): stub `auditStore` / `securityEventStore` (or the
-  repositories) to assert filtering, newest-first ordering, summary aggregation, `timestamp`
-  defaulting, and the never-throw-on-write contract (a throwing store still resolves).
-- `recordSecurityEvent` composition/strict behavior is exercised by stubbing `securityEventStore.insertSecurityEvent` to throw: `strict: true` rethrows the ORIGINAL error object, a falsy/omitted `strict` logs and resolves with the input event, and `{ client }` is forwarded through the seam unchanged.
-- Strict mode is exercised by stubbing `auditStore.insertAuditLog` to throw: `strict: true` rethrows
-  the ORIGINAL error, EXCEPT a P2002 unique violation whose `dedupeKey` row is found by the
-  back-read on the same client AND matches the session/tool/risk/decision/business result identity
-  (idempotent no-op). Transfer results compare the original transaction id, amount and counterparty;
-  narration and unavailable legacy balance/phone fields do not change business identity. A conflicting
-  duplicate, a `dedupeKey`-less failure or a non-P2002 failure rejects.
-- `getSecurityStatus` is tested with an injected `isLocked` callback (authoritative) and without
-  it (event-derived fallback).
-- Scenario coverage lives in the `../tests/` integration suite (faux provider) — audit assertions
-  verify the required fields landed for each gated execution and blocked/confirmed decision; the
-  `../tests/integration/committed-outcomes.test.ts` review spec drives the transactional settle path
-  that opts into `strict`.
-- No network and no live Prisma required for unit tests; use the test SQLite DB for reads.
-
-## Known Issues
-
-- **Audit idempotency is opt-in via `dedupeKey`; no outbox/retry**: `insertAuditLog` writes an optional unique `dedupeKey` (`AuditLog.dedupeKey @unique`) so a repeat write of the SAME execution identity is a P2002 duplicate; without a `dedupeKey` it always `create`s a NEW row. `insertSecurityEvent` has NO unique key / dedup at all. No outbox/retry mechanism exists — a swallowed best-effort write failure is never retried (a transactional caller opts into `strict` to force a rollback instead).
-- Every agent write, including GREEN budget writes, records a required audit in the business transaction. Pure reads retain invocation and authorization journals rather than fabricating write audits.
-- Execution, recovery and cancellation audit entries carry the server-resolved user owner. Read models filter by both user and session; a missing owner must never be compensated by widening the read scope.
-- `AuditEntry.toolArgs`, `taskId` and `nodeId` preserve validated arguments and workflow linkage. Credential fields are redacted before persistence and public projection.
-- On the cancel path `toolResult` and `mfaResult` are intentionally omitted (nothing executed / no MFA) and persisted null (see `cancelAction` in `../agent/confirmation.ts`).
-- `SecurityEventKind` values `HIGH_RISK_BLOCKED` and `ANOMALY_FLAGGED` have NO producer anywhere: the gateway's locked-session `deny` uses `HIGH_RISK_BLOCKED` only as an opaque block-reason TAG (it writes no `SecurityEvent`), and `detect_anomaly` (`banking-sdk/transaction.ts`) is READ-ONLY.
-- The other `SecurityEventKind`s ARE produced: `CIRCUIT_BREAKER_TRIPPED` and `SECURITY_RESET` (`../security/circuit-breaker.ts` `recordFailure`/`resetSession`), `LIMIT_EXCEEDED` (`../security/security-gateway.ts` transfer escalation at execution time), `MFA_FAILURE` (`../security/mfa.ts` `verify`), `INJECTION_ATTEMPT` (`../security/injection-guard.ts` `reportInjection`, called by `../agent/run-turn.ts`).
-- No dedicated unit tests for this node (`../tests/unit/` has `security/`, `planner/`, `banking-sdk/`, `agent/`, `lib/` but no `audit/`); coverage is indirect — the scenario suite (test-02/03/04/10) asserts toolName/riskLevel/status/confirmationRequired/confirmed/mfaRequired/mfaResult, `../tests/unit/agent/confirmation.test.ts` asserts the `userRequest`/`intent`/`timestamp === demoNow()` fields the confirm/verify/cancel paths write, and `../tests/integration/committed-outcomes.test.ts` covers the `strict` transactional settle path.
-
-## Notes for Agents
-
-- Do not add business/risk logic to this node — logging and querying only.
+审计测试见 `tests/integration/execution-audit.test.ts`、
+`tests/integration/write-audit.test.ts` 与 `tests/app`。
