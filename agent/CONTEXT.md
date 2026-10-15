@@ -2,6 +2,17 @@
 
 The agent layer assembles Pi Core, provider adapters, user context, workflow ports and server-authored presentation. It does not grant banking permission.
 
+## Routing Table
+
+- `./confirmation/`: confirm/verify/cancel decision facade internals, gateway outcome contracts, leases (incl. the `locked` MFA outcome behavior).
+- `./durable/`: Pi event journal, run leases, workflow/standalone continuation and recovery.
+- `./turns/`: turn contracts, event grounding/buffering, authorization views, bounded prompts.
+- `./tools/`: banking tool implementations and the tool registry.
+- `./providers/`: live + mock provider/model adapters.
+- `./workflows/`: workflow cancellation.
+- `./context-compaction/`: historical summaries and bounded model-request projection.
+- `./messages/`: presentation message catalogs.
+
 ## Public entry points
 
 `agent/index.ts` exposes turns, confirmation/verification/cancellation, task controls, manual handoff and scheduled dispatch. App routes use the server-configured demo user and persistent `demo:${userId}` workspace before calling it. The web demo has no login or authentication cookie. Generic internal sessions remain available for runtime tests and bank ownership contracts; they cannot be selected through the web API. Tests can inject a `ModelRuntime` through `RunTurnDeps.provider` while exercising the real runtime and bank.
