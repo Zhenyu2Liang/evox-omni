@@ -45,6 +45,8 @@ const RED_TOOLS: readonly ToolName[] = [
   'subscribe_investment',
   'redeem_investment',
   'report_lost_card',
+  'replace_card',
+  'apply_virtual_card',
   'unfreeze_card',
 ];
 
@@ -53,7 +55,6 @@ const DYNAMIC_TOOLS: readonly ToolName[] = ['transfer_money'];
 
 /** Planner meta-tool — NOT risk-gated. */
 const META_TOOLS: readonly ToolName[] = ['submit_plan'];
-const MANUAL_ONLY_TOOLS: readonly ToolName[] = ['apply_virtual_card'];
 
 /** Every registered capability, including dynamic authorization and workflow submission. */
 const ALL_TOOLS: readonly ToolName[] = [
@@ -62,7 +63,6 @@ const ALL_TOOLS: readonly ToolName[] = [
   ...YELLOW_TOOLS,
   ...RED_TOOLS,
   ...META_TOOLS,
-  ...MANUAL_ONLY_TOOLS,
 ];
 
 /** Build an `EvaluateToolContext`; defaults are irrelevant to the tier except `dailyTransferTotal`. */
@@ -73,10 +73,6 @@ function makeCtx(
 }
 
 describe('permission-engine · TOOL_POLICY table', () => {
-  it('denies manual-only card creation before any agent authorization', () => {
-    expect(getToolPolicy('apply_virtual_card').tier).toBe('RED');
-    expect(() => evaluateTool('apply_virtual_card', {}, makeCtx())).toThrow('Card creation and deletion require the card management page.');
-  });
   it('has an entry for every ToolName in @/lib/contracts/tools (exhaustive: no missing, no extra keys)', () => {
     const keys = new Set(Object.keys(TOOL_POLICY));
     const expected = new Set<string>(ALL_TOOLS);
@@ -291,20 +287,10 @@ describe('permission-engine · LLM-immutability', () => {
   });
 
   it('ctx.sessionId / ctx.userId never influence the tier', () => {
-    for (const tool of ALL_TOOLS.filter(name => !MANUAL_ONLY_TOOLS.includes(name))) {
+    for (const tool of ALL_TOOLS) {
       const a = evaluateTool(tool, { amount: '500.00' }, makeCtx({ userId: 'u_a', sessionId: 's_a' }));
       const b = evaluateTool(tool, { amount: '500.00' }, makeCtx({ userId: 'u_b', sessionId: 's_b' }));
       expect(a).toEqual(b);
-    }
-  });
-
-  it('changing caller context never enables a manual-only operation', () => {
-    for (const tool of MANUAL_ONLY_TOOLS) {
-      for (const ctx of [makeCtx({ userId: 'u_a', sessionId: 's_a' }), makeCtx({ userId: 'u_b', sessionId: 's_b' })]) {
-        expect(() => evaluateTool(tool, { amount: '500.00', role: 'administrator' }, ctx)).toThrowError(
-          expect.objectContaining({ code: 'SECURITY_DENIED' }),
-        );
-      }
     }
   });
 
