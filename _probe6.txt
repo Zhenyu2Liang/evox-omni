@@ -1,0 +1,14 @@
+---  
+tests\helpers\scenario.ts
+===LISTFIX==  
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\advisory-dialogue.zh-CN.json
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\advisory-policy.zh-CN.json
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\authorization-resume.zh-CN.json
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\conversation-policy.zh-CN.json
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\conversation.zh-CN.json
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\dialogue-regressions.zh-CN.json
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\dialogue-turns.zh-CN.json
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\incomplete-reply.zh-CN.json
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\mfa-escalation.zh-CN.json
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\request-amounts.zh-CN.json
+D:\projects\banking-agent\.genesis\workers\worker_T2_A32\tests\fixtures\retired-draft-dialogue.zh-CN.json
