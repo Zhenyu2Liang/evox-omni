@@ -42,9 +42,12 @@ it('resuming an investment node during post-effect persistence cannot debit twic
  try{await bounded(reached.promise);resumed=await post(plan.id,'resume',s);second=await getTestPrisma().pendingAction.findFirst({where:{sessionId:s,id:{not:firstAction.id}}});}
  finally{release.release();await first;}
  if(second)await confirm(second.id,s,'123456');
- const balance=await getTestPrisma().account.findFirst({where:{userId,type:'CHECKING'}});const purchases=await getTestPrisma().investmentHolding.count({where:{userId,principalAmountMinor:100000n}});
- console.log('REVIEW_INVESTMENT_REPLAY',toJson({secondAction:second?.id,resumeStatus:resumed.data?.status,balance:balance?.balanceMinor,purchases}));
- expect(balance?.balanceMinor).toBe(2258000n);expect(purchases).toBe(1);
+ const balance=await getTestPrisma().account.findFirst({where:{userId,type:'CHECKING'}});
+ // prod_wenjiana is ALREADY held by the seeded fixture (HOLDING principal 500000n), so the 100000n
+ // purchase AGGREGATES into that same row instead of creating a new one.
+ const holding=await getTestPrisma().investmentHolding.findFirst({where:{userId,productId:'prod_wenjiana',status:'HOLDING'}});const history=JSON.parse(holding?.purchaseHistory ?? '[]') as unknown[];
+ console.log('REVIEW_INVESTMENT_REPLAY',toJson({secondAction:second?.id,resumeStatus:resumed.data?.status,balance:balance?.balanceMinor,principal:holding?.principalAmountMinor,purchaseRecords:history.length}));
+ expect(balance?.balanceMinor).toBe(2258000n);expect(holding?.principalAmountMinor).toBe(600000n);expect(history).toHaveLength(1);// 500000n seeded + 100000n added EXACTLY once = 600000n; a second debit would make it 700000n with 2 records.
 });
 
 it('a plan cancellation completed before authorization CAS prevents the debit',async()=>{
