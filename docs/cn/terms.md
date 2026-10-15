@@ -31,6 +31,10 @@
 | 入账金额 | booked amount | 已提交账本的整数分金额 |
 | 估值 | valuation | 尚未舍入为入账金额的价值估计 |
 | 年化收益率 | `annualYieldRate` | 无量纲比例，展示时转换为百分数 |
+| 全额赎回 | full redemption | 赎回持仓全部本金，持仓状态由持有变为已赎回 |
+| 部分赎回 | partial redemption、`partial` | 赎回本金小于持仓本金，剩余本金继续持有 |
+| 剩余本金 | `remainingPrincipal` | 赎回本金小于持仓本金时，持仓剩余的本金 |
+| 追加申购 | `addedToExisting` | 对已持有产品再次申购，并入现有持仓 |
 | 银行业务工具库 | SDK、`banking-sdk/` | 执行所属用户的模拟银行业务 |
 | 有符号 64 位整数 | INT64 | 当前已入账金额的数据库存储范围 |
 | 绿色权限 | GREEN | 当前策略允许自动执行 |

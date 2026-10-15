@@ -72,7 +72,7 @@
 | `list_subscriptions` | 黄色查询，确认后返回生效订阅；查询确认不能代替取消确认。 |
 | `list_investments` | 风险等级只接受 `R1` 至 `R5`；未匹配产品返回空集合。 |
 | `compare_investments` | 产品集合不能为空；任一 ID 不存在则报错，不只比较剩余项。重复 ID 去重。 |
-| `get_investment_holdings` | 返回所属用户的持仓及估值；本金和未舍入估值分别提供。 |
+| `get_investment_holdings` | 返回所属用户的持仓及估值；本金和未舍入估值分别提供。持仓另含最近申购时间和购买记录。 |
 | `get_dashboard_summary` | 返回资产、消费和交易快照；信用卡可用额度不计入存款资产。 |
 | `list_scheduled_tasks` | 返回所属用户的任务状态和计划参数；内部派发诊断不进入模型数据。 |
 
@@ -92,8 +92,13 @@
 | `set_subscription_reminder` | 黄色；必须是布尔值，已取消的订阅不能修改提醒。 |
 | `reserve_budget` | 绿色；只创建记账预算，不冻结、扣减或转移账户资金。 |
 | `create_scheduled_task` | 黄色；创建前校验任务类型、时间和载荷。提醒载荷只含文本，付款载荷必须有唯一收款选择及正数金额。 |
-| `subscribe_investment` | 红色；检查产品、起投金额、付款账户及余额。 |
-| `redeem_investment` | 红色；绑定真实持仓和服务器报价，只支持整笔赎回。报价变化需要重新确认。 |
+| `subscribe_investment` | 红色；检查产品、起投金额、付款账户及余额。已持有该产品时，金额并入原持仓，本金和市值各增加本次金额。 |
+| `redeem_investment` | 红色；绑定真实持仓和服务器报价，支持全额或部分赎回。`redeemAmount` 为可选的赎回本金。缺省或等于持仓本金时全额赎回。小于持仓本金的正数金额按该本金比例结算，超过持仓本金报错。报价变化需要重新确认。 |
+
+投资申赎的公开结果包含操作后余额。
+赎回结果另含 `redemptionValuation` 和 `settlementRounding`。
+部分赎回返回 `partial`、`redeemedPrincipal` 和 `remainingPrincipal`。
+追加申购返回 `addedToExisting` 和本次申购时间 `lastPurchaseAt`。
 
 写入的幂等键只来自服务器执行选项。
 同一键必须匹配同一用户、工具和参数摘要。
