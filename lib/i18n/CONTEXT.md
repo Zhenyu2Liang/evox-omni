@@ -1,26 +1,39 @@
-# Interface localization
+# 界面本地化
 
-## Public API
+## 职责与入口
 
-- `shared.ts`: locale validation, typed message keys, complete-template interpolation.
-- `server.ts`: request-scoped `getServerI18n()` reads `banking_locale` through Next cookies.
-- `LocaleProvider.tsx`: client translation context, cookie persistence, server-component refresh.
-- `LocaleText.tsx`: a client leaf for server-safe primitives with render callbacks.
-- `messages/`: paired Chinese and English catalogs for app chrome, chat, business and pages.
+| 入口 | 职责 |
+| --- | --- |
+| `shared.ts` | 语言校验、消息键类型、模板插值 |
+| `server.ts` | 请求级 `getServerI18n()`，通过 Next cookies 读取 `banking_locale` |
+| `LocaleProvider.tsx` | 客户端翻译上下文、cookie 持久化、服务端组件刷新 |
+| `LocaleText.tsx` | 面向服务端安全原语的客户端叶子组件，支持渲染回调 |
+| `messages/` | 应用框架、对话、业务与页面文案的中英文对照目录 |
 
-## Rules
+## 投资标签
 
-- Default to `zh-CN`, including on browsers that prefer English. Only `en` selects English.
-- Keep identifiers, keys and comments in English. Chinese interface text belongs in locale JSON.
-- Translate full templates. Pass financial values as already formatted exact strings.
-- Do not convert money to binary numbers for interpolation or locale formatting.
-- Localize static interface metadata; preserve recorded user text, model replies and financial facts.
-- Language switching updates presentation only. Do not remount chat, resubmit operations or change authorization.
-- The preference cookie is not an identity cookie and grants no permission.
-- Keep server data access in server modules; localization does not justify client-side database imports.
-- Register both catalog entries together; unit tests enforce key and placeholder parity.
+`business.investments.*` 提供投资业务的中英文标签，语义如下：
 
-## Verification
+| 键 | zh-CN | en | 含义 |
+| --- | --- | --- | --- |
+| `business.investments.lastPurchase` | 最近申购 | Last purchase | 最近一次申购的时间或说明 |
+| `business.investments.purchases` | 申购记录 | Purchases | 申购记录区块标题 |
+| `business.investments.purchaseCount` | 共 {count} 笔 | {count} purchases | 申购笔数，模板含 `{count}` 占位符 |
+| `business.investments.addedToExisting` | 已加购 | Added to existing | 对已持有产品再次申购的标记 |
 
-`tests/unit/lib/i18n.test.ts` checks catalogs and interpolation. The real-browser acceptance
-journey checks defaults, persistence, client/server translation and conversation preservation.
+## 修改约束
+
+- 默认 `zh-CN`，即使浏览器偏好英文；仅 `en` 选择英文。
+- 标识符、键名与注释使用英文，中文界面文案放入语言 JSON。
+- 翻译完整模板；金融金额以已格式化的精确字符串传入。
+- 不得为插值或本地化格式将金额转换为二进制浮点数。
+- 仅本地化静态界面元数据；保留用户文本、模型回复与金融事实。
+- 切换语言只更新展示，不重挂载对话、不重提交操作、不改变授权。
+- 偏好 cookie 不是身份 cookie，不授予任何权限。
+- 服务端数据访问保留在服务端模块；本地化不构成客户端数据库导入的理由。
+- 中英文目录必须同时登记相同键与相同占位符，单元测试校验键与占位符一致性。
+
+## 验证
+
+`tests/unit/lib/i18n.test.ts` 校验语言目录与插值。真实浏览器验收流程校验默认语言、
+持久化、客户端/服务端翻译与对话保留。
