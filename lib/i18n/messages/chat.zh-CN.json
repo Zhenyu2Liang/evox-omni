@@ -254,7 +254,7 @@
   "chat.risk.GREEN": "🟢 绿色",
   "chat.risk.YELLOW": "🟡 黄色",
   "chat.risk.RED": "🔴 红色",
-  "chat.value.fullRedemption": "全部赎回该笔持仓，不支持部分赎回。",
+  "chat.value.fullRedemption": "全部赎回该笔持仓。",
   "chat.value.amountChange": "金额变化时停止执行，需重新确认。",
   "chat.value.noMonthlyLimit": "未设置（本次仅开卡）",
   "chat.value.cardDemoScope": "保存卡片及月限额配置。本演示不提供刷卡支付。",

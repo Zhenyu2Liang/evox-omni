@@ -254,7 +254,7 @@
   "chat.risk.GREEN": "🟢 Green",
   "chat.risk.YELLOW": "🟡 Yellow",
   "chat.risk.RED": "🔴 Red",
-  "chat.value.fullRedemption": "Redeem this entire holding; partial redemption is not supported.",
+  "chat.value.fullRedemption": "Redeem this entire holding.",
   "chat.value.amountChange": "Stop if the amount changes. Request a new approval.",
   "chat.value.noMonthlyLimit": "Not set (card issuance only)",
   "chat.value.cardDemoScope": "Save the card and monthly limit settings. The demo does not process card payments.",
