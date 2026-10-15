@@ -74,6 +74,24 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 定时支付与转账载荷在持久化前校验，并在派发时通过 `lib/contracts/scheduled-command.ts` 再次校验。载荷要求恰好一个收款人选择器与一个正的十进制金额，拒绝未知命令字段与凭据。提醒载荷只能包含惰性文本。日期纪元必须是合法的整数瞬时；到期意图可以被存储，而 Agent 创建独立要求显式的未来时间。服务端推导 `requiresConfirmation`：提醒自动投递，支付与转账在派发时需要授权。调用方不能设置该策略标志。
 
+## 挂失与补卡
+
+卡片丢失有两条独立流程。
+`freezeCard` 与 `unfreezeCard` 是可逆的临时锁卡。
+冻结的卡片可以恢复为 `ACTIVE`。
+`LOST` 卡片不能冻结或解冻。
+`reportLostCard` 把卡片置为终态 `LOST`，此后不能复活；重复挂失抛 `CONFLICT`。
+
+`replaceCard(cardId, userId)` 只为当前处于 `LOST` 的自有卡片补办新卡。
+补办在同一事务内创建新卡，并把新卡 id 写入原卡片的 `Card.replacedByCardId`。
+新卡沿用原卡片的 `type`、`network` 与月限额，不复制分类限额，并生成新的脱敏卡号。
+原卡片保持 `LOST`。
+补办是幂等的：原卡片已指向补办卡时返回该卡，不再签发第二张。
+关联的补办卡不存在时抛 `CONFLICT`。
+`replacedByCardId` 是历史引用，不是 Prisma 关系。
+
+`CardView.replacedByCardId` 是补办卡 id；没有补办时该字段缺省。
+
 ## 存储生命周期
 
 只支持当前 schema 与契约。`pnpm db:push` 同步 schema；`pnpm db:reset` 重建模拟数据。不要新增旧 schema 迁移、数字金额适配器、旧指纹接受或回执前的重放路径。当前回执、审计与重启恢复是运行时保证，而不是兼容特性。
