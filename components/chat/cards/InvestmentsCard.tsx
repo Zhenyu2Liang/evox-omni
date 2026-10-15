@@ -6,6 +6,7 @@ import type { BadgeProps } from '../../ui/Badge';
 import type { InvestmentsCardData } from './types';
 import { addMoney } from '@/lib/money';
 import { addDecimal, rateRatioToPercent } from '@/lib/decimal';
+import { formatDateTime } from '@/lib/date';
 import { DecimalMoney } from '../../ui/DecimalMoney';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
@@ -54,6 +55,12 @@ const RISK_LABEL: Record<ProductView['riskLevel'], MessageKey> = {
 /** Product facts and holding estimates remain distinct from booked settlement values. */
 function InvestmentResult({ product, holding }: { product: ProductView; holding?: HoldingView }) {
   const { t } = useI18n();
+  // Recorded purchases are aggregation purchases (oldest → newest): a non-empty list means the
+  // principal was topped up on an existing holding; `lastPurchaseAt` is the most recent of them.
+  const purchases = holding?.purchases ?? [];
+  const addedToExisting = purchases.length > 0;
+  const lastPurchaseAt = holding?.lastPurchaseAt
+    ?? (addedToExisting ? purchases[purchases.length - 1].at : undefined);
   return (
     <div className="min-w-0 rounded-xl border border-banking-light bg-slate-50/60 p-3.5">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -73,12 +80,17 @@ function InvestmentResult({ product, holding }: { product: ProductView; holding?
         <div className="mt-3 border-t border-banking-light pt-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-medium text-banking-navy">{t('business.investments.holdings')}</span>
-            <Badge tone={holding.status === 'HOLDING' ? 'info' : 'neutral'}>{t(holding.status === 'HOLDING' ? 'business.investments.holdingActive' : 'business.investments.holdingRedeemed')}</Badge>
+            <div className="flex flex-wrap items-center gap-2">
+              {addedToExisting ? <Badge tone="success">{t('business.investments.addedToExisting')}</Badge> : null}
+              <Badge tone={holding.status === 'HOLDING' ? 'info' : 'neutral'}>{t(holding.status === 'HOLDING' ? 'business.investments.holdingActive' : 'business.investments.holdingRedeemed')}</Badge>
+            </div>
           </div>
           <dl className="space-y-2 text-xs">
             <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.principal')}</dt><dd className="font-semibold text-banking-deep"><Money amount={holding.amount} /></dd></div>
             {holding.marketValue !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.marketValue')}</dt><dd className="font-medium text-banking-deep"><DecimalMoney amount={holding.marketValue} /></dd></div> : null}
             {holding.profit !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.profit')}</dt><dd className="font-medium text-banking-deep"><DecimalMoney amount={holding.profit} signed /></dd></div> : null}
+            {lastPurchaseAt !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.lastPurchase')}</dt><dd className="font-medium text-banking-deep">{formatDateTime(lastPurchaseAt)}</dd></div> : null}
+            {addedToExisting ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.purchases')}</dt><dd className="font-medium text-banking-deep">{t('business.investments.purchaseCount', { count: purchases.length })}</dd></div> : null}
           </dl>
         </div>
       ) : null}
