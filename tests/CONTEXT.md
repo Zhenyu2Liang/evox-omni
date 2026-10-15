@@ -52,8 +52,5 @@
 不得将历史通过数量写成当前验证结果。
 不得删除断言或跳过失败来宣称通过。
 
-`tests/unit/banking-sdk/investment-partial-redemption.test.ts` 的 Case B 当前失败，
-记录 banking-sdk 的真实缺陷（持仓仍为 `HOLDING` 时同身份部分赎回被再次入账）。
-修复前不得改写或跳过该用例。
 完整测试方法见
 [test-cases.md](../docs/cn/test-cases.md)。
