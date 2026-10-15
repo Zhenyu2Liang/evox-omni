@@ -19,6 +19,7 @@ SDK 写入仍必须满足可信执行上下文与事务约束。
 | `idempotent.test.ts` | 相同执行身份的去重 |
 | `subscription.test.ts` | 取消与提醒状态 |
 | `anomaly.test.ts` | 收支方向、投资分类与异常筛查 |
+| `card-replacement.test.ts` | 冻结/解冻可逆幂等、挂失终态与补办换卡不变量 |
 
 具体文件和断言以当前目录为准。
 金额使用十进制字符串与整数分。
