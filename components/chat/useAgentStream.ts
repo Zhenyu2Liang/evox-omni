@@ -66,8 +66,8 @@ export interface MfaActionSummary extends Omit<PendingActionSummary, 'toolName'>
  * `PendingAction` id that confirm/verify/cancel operate on.
  */
 export type PendingHumanDecision =
-  | { kind: 'confirmation'; summary: PendingActionSummary; actionId: string }
-  | { kind: 'mfa'; summary: MfaActionSummary; actionId: string; hint?: string };
+  | { kind: 'confirmation'; summary: PendingActionSummary; actionId: string; status?: string; statusMessage?: string }
+  | { kind: 'mfa'; summary: MfaActionSummary; actionId: string; hint?: string; status?: string; statusMessage?: string };
 
 /**
  * A restored OUT-OF-BAND action (never a live decision): a `confirmed` row still being processed or
@@ -413,6 +413,17 @@ function hasSettledAction(state: ChatUIState, actionId: string): boolean {
       asTerminalStatus((card.action as PendingActionSummary & { status?: string }).status) !== undefined));
 }
 
+/**
+ * Rows that may still (re)build a live decision. An action already recorded as settled — in
+ * `settledActions` or on a terminal inline card — must NEVER be re-adopted, so a stale server row
+ * that keeps reporting `awaiting_mfa` cannot reopen a dismissed popup. Out-of-band
+ * `needs_reconciliation` rows are always surfaced (they carry no confirm/MFA path) so the user still
+ * sees the uncertain outcome.
+ */
+function visibleRefs(state: ChatUIState, refs: PendingActionRef[]): PendingActionRef[] {
+  return refs.filter(ref => ref.status === 'needs_reconciliation' || !hasSettledAction(state, ref.id));
+}
+
 /** A later plan node can issue a decision without republishing its original tool message. */
 function attachPlanDecisionRecord(messages: ChatMessage[], actionId: string, record: ChatCard): ChatMessage[] {
   if (messages.some(message => message.cards?.some(card =>
@@ -611,10 +622,14 @@ function pickPendingAction(refs: PendingActionRef[]): PendingHumanDecision | und
     actionable.find(
       (ref) => ref.requiresMfa || ref.status === 'awaiting_mfa' || ref.tier === 'RED',
     ) ?? actionable[0];
+  // A decision built from a persisted row carries that row's own status/reason so a NON-live row can
+  // never render as a live input (a live `pending` / `awaiting_mfa` row still renders the input).
+  const statusMessage = (chosen.summary as PendingActionSummary & { message?: string }).message;
+  const decisionStatus = { status: chosen.status, ...(statusMessage !== undefined ? { statusMessage } : {}) };
   if (chosen.requiresMfa || chosen.status === 'awaiting_mfa' || chosen.tier === 'RED') {
-    return { kind: 'mfa', summary: restoredMfaSummary(chosen.summary), actionId: chosen.id };
+    return { kind: 'mfa', summary: restoredMfaSummary(chosen.summary), actionId: chosen.id, ...decisionStatus };
   }
-  return { kind: 'confirmation', summary: chosen.summary, actionId: chosen.id };
+  return { kind: 'confirmation', summary: chosen.summary, actionId: chosen.id, ...decisionStatus };
 }
 
 /**
@@ -635,13 +650,7 @@ function pickAttention(refs: PendingActionRef[]): PendingReconciliation[] {
 /** A restoration read cannot overwrite a decision changed after the read started. */
 export function restoreActionAttention(state: ChatUIState, refs: PendingActionRef[], readRevision: number, currentRevision: number): ChatUIState {
   if (readRevision !== currentRevision) return state;
-  const settled = new Set<string>();
-  for (const message of state.messages) for (const card of message.cards ?? []) {
-    if (card.type === 'mfa' && asTerminalStatus(card.status)) settled.add(card.actionId);
-    if (card.type === 'confirmation' && card.action.actionId &&
-        asTerminalStatus((card.action as PendingActionSummary & { status?: string }).status)) settled.add(card.action.actionId);
-  }
-  const relevant = refs.filter(ref => (!settled.has(ref.id) && !state.settledActions?.[ref.id]) || ref.status === 'needs_reconciliation');
+  const relevant = visibleRefs(state, refs);
   const decision = pickPendingAction(relevant);
   const reconciliations = pickAttention(relevant);
   const pendingAction = state.pendingAction ?? decision;
@@ -983,7 +992,8 @@ export function useAgentStream(o?: UseAgentStreamOptions): UseAgentStreamResult 
         if (plan.status === 'cancelled' && next.pendingAction && !refs.some(ref => ref.id === next.pendingAction!.actionId)) {
           next = settleAction(next, { type: 'action_settled', actionId: next.pendingAction.actionId, status: 'cancelled' });
         }
-        return { ...next, pendingAction: pickPendingAction(refs), pendingReconciliations: pickAttention(refs), busy: false, replyPhase: undefined };
+        const visible = visibleRefs(next, refs);
+        return { ...next, pendingAction: pickPendingAction(visible), pendingReconciliations: pickAttention(visible), busy: false, replyPhase: undefined };
       });
       } finally { if (acceptsResponse()) operationBusyRef.current = false; }
     },
