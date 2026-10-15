@@ -742,6 +742,42 @@ function planCancelledOutcome(
 }
 
 /**
+ * Persist a TERMINAL `'locked'` status on a `PendingAction` when the gateway returns a genuine
+ * circuit-breaker lock decision. Without this the row stays `pending`/`awaiting_mfa`, so
+ * `app/api/actions/route.ts#attentionFor` keeps surfacing it as a pending decision and the agent
+ * bridge re-emits `mfa_required` for the SAME actionId — the MFA popup reappears forever. A
+ * RACE-SAFE CAS (from an undecided state ONLY) means a concurrently-confirmed/terminal row is NEVER
+ * clobbered; a lost CAS is benign (the row already moved on). Local so BOTH lock branches share ONE
+ * persistence path. Returns the action consistent with the persisted state.
+ */
+async function persistLockedAction(actionId: string, action: PendingAction): Promise<PendingAction> {
+  await claimPendingAction({ actionId, from: ['pending', 'awaiting_mfa'], to: 'locked' });
+  return { ...action, status: 'locked' };
+}
+
+/**
+ * The terminal `locked` refusal returned by the circuit-breaker gate AND by a re-attempt on an
+ * already-`locked` row (idempotent: the row stays terminal and no verification is reopened). Shared
+ * so both the gate and the early re-attempt guard return the SAME shape.
+ */
+function lockedOutcome(
+  actionId: string,
+  action: PendingAction,
+  requiresMfa: boolean,
+): AuthorizationResult {
+  return {
+    ok: false,
+    status: 'locked',
+    actionId,
+    tier: action.tier,
+    requiresMfa,
+    code: 'CIRCUIT_OPEN',
+    message: '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。',
+    action,
+  };
+}
+
+/**
  * The strong-verification path (RED static tools, and a `transfer_money` already parked RED or
  * escalated): prompt for a code when none was supplied, else `mfa.verify` it, then claim the action
  * exactly-once. Returns the EFFECTIVE tier/`requiresMfa` on every branch.
@@ -802,7 +838,8 @@ async function authorizeWithMfa(
       message: locked
         ? '验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。'
         : `验证码错误，请重试。剩余尝试次数：${attemptsLeft}。`,
-      action,
+      // A GENUINE terminal lock is made DURABLE on the row; the transient `awaiting_mfa` path is NOT.
+      action: locked ? await persistLockedAction(actionId, action) : action,
     };
   }
 
@@ -1000,6 +1037,14 @@ async function authorizeAction(
   // Ownership is REQUIRED (fail-closed): a missing/mismatching caller identity is refused.
   await assertOwnership(row, opts);
 
+  // A TERMINAL `locked` action (the durable circuit-breaker lock) reports the SAME lock result
+  // idempotently — handled BEFORE the undecided guard so a re-attempt gets a clean `locked` refusal
+  // (never reopens verification: no new challenge, no consumed attempt, no re-prompt).
+  if (row.status === 'locked') {
+    const lockedAction = toContractPendingAction(row);
+    return lockedOutcome(actionId, lockedAction, row.requiresMfa || lockedAction.tier === 'RED');
+  }
+
   // Only undecided actions can request a code. A historical RED flag on a confirmed/terminal
   // action must not reopen verification, issue a new challenge or consume an MFA attempt.
   if (row.status !== 'pending' && row.status !== 'awaiting_mfa') {
@@ -1026,16 +1071,8 @@ async function authorizeAction(
 
   // Circuit breaker is a hard gate the LLM (and even a correct code) cannot bypass.
   if (await isLocked(row.sessionId)) {
-    return {
-      ok: false,
-      status: 'locked',
-      actionId,
-      tier: action.tier,
-      requiresMfa: effectiveRequiresMfa,
-      code: 'CIRCUIT_OPEN',
-      message: '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。',
-      action,
-    };
+    // Make the lock DURABLE on the row so it is no longer surfaced as an undecided action.
+    return lockedOutcome(actionId, await persistLockedAction(actionId, action), effectiveRequiresMfa);
   }
 
   // `transfer_money` is DYNAMIC: its tier is re-derived at EXECUTION time (see `authorizeTransfer`).
