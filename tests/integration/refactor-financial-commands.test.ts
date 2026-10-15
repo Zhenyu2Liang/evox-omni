@@ -45,7 +45,21 @@ describe('uniform financial command commit boundary', () => {
     expect((await database().cardLimit.findFirstOrThrow({ where: { cardId: 'card_credit', category } })).amountMinor).toBe(125_025n);
     expect((await database().subscription.findUniqueOrThrow({ where: { id: 'sub_netflix' } })).status).toBe('CANCELLED');
     expect((await database().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2_257_975n);
-    expect(await database().investmentHolding.count({ where: { userId: DEMO_USER_ID, principalAmountMinor: 100_025n } })).toBe(1);
+    // The seeded 稳健理财A holding is ALREADY `HOLDING`, so this purchase AGGREGATES into it (no new
+    // row): principal 5000.00 + 1000.25 = 6000.25, the row stays HOLDING, and the purchase is appended
+    // to `purchaseHistory`. The fixture seeds NO creating purchase, so the aggregation record is the
+    // only history element and carries this command's execution key.
+    const holdings = await database().investmentHolding.findMany({ where: { userId: DEMO_USER_ID, productId: 'prod_wenjiana' } });
+    expect(holdings).toHaveLength(1);
+    expect(holdings[0]).toMatchObject({ id: 'holding_wenjiana', status: 'HOLDING', principalAmountMinor: 600_025n });
+    const purchaseHistory = JSON.parse(holdings[0].purchaseHistory ?? '[]') as Array<Record<string, unknown>>;
+    expect(purchaseHistory).toHaveLength(1);
+    expect(purchaseHistory.at(-1)).toMatchObject({
+      amount: '1000.25',
+      totalPrincipal: '6000.25',
+      sourceAccountId: 'acct_checking',
+      executionKey: 'financial-commit:subscribe_investment',
+    });
     expect(await database().executionReceipt.count({ where: { userId: DEMO_USER_ID } })).toBe(3);
   });
 
