@@ -22,11 +22,12 @@ import {
   cardsOfType,
 } from '../helpers/scenario';
 import { useFreshDatabase, getTestPrisma } from '../helpers/db';
-import { PRODUCTS, ACCOUNTS, DEMO_USER_ID } from '../helpers/fixtures';
+import { PRODUCTS, ACCOUNTS, DEMO_USER_ID, buildHoldings } from '../helpers/fixtures';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 import { MFA_CODE } from '@/lib/constants';
 import { security } from '@/security';
 import { moneyToCents } from '@/lib/money';
+import { addDecimal } from '@/lib/decimal';
 
 /** 稳健理财A — the RED subscription target (R2, min ¥1,000). */
 const PRODUCT = PRODUCTS.find((product) => product.name === '稳健理财A') ?? PRODUCTS[0];
@@ -36,6 +37,24 @@ const CHECKING = ACCOUNTS.find((account) => account.id === 'acct_checking') ?? A
 /** The subscription amount from the demo prompt "买5000元稳健理财A". */
 const SUBSCRIBE_AMOUNT = '5000';
 const USER_MESSAGE = '买5000元稳健理财A';
+
+/**
+ * The seeded 稳健理财A holding (`buildHoldings`: ¥5,000 principal, unrounded MV 5050). Buying MORE of
+ * an already-held product AGGREGATES into this row instead of opening a second one.
+ */
+const SEEDED_HOLDINGS = buildHoldings();
+const SEED_HOLDING =
+  SEEDED_HOLDINGS.find((holding) => holding.productId === PRODUCT.id) ?? SEEDED_HOLDINGS[0];
+
+/** New principal after the buy-more: seeded principal + this purchase (¥5,000 → ¥10,000). */
+const EXPECTED_PRINCIPAL_MINOR =
+  moneyToCents(SEED_HOLDING.amount) + moneyToCents(SUBSCRIBE_AMOUNT);
+
+/**
+ * New unrounded market value: the SDK grows it by the newly purchased principal AT COST
+ * (`banking-sdk/investment.ts` → `addDecimal(oldMarketValue, amount)`), i.e. seeded 5050 + 5000 = 10050.
+ */
+const EXPECTED_MARKET_VALUE = addDecimal(SEED_HOLDING.marketValue, SUBSCRIBE_AMOUNT);
 
 /**
  * The scripted model turn: propose the RED `subscribe_investment` call, then narrate that
@@ -148,28 +167,43 @@ describe('Scenario 9 — 买5000元稳健理财A (RED MFA)', () => {
     expect(row?.status).toBe('awaiting_mfa');
   });
 
-  it('verifyAction(actionId, "123456") creates an InvestmentHolding of ¥5000 for 稳健理财A', async () => {
+  it('verifyAction(actionId, "123456") AGGREGATES the ¥5000 into the existing 稳健理财A holding', async () => {
     const { agent, res } = await driveTurn();
     const actionId = res.mfa?.actionId ?? '';
     expect(actionId).not.toBe('');
 
     const prisma = getTestPrisma();
     const before = await prisma.investmentHolding.findMany();
+    const seeded = before.find((holding) => holding.productId === PRODUCT.id);
+    expect(seeded).toBeDefined();
 
     const verifyRes = await verifyAction(agent, actionId, MFA_CODE);
     expect(verifyRes.error).toBeUndefined();
     // The continuation narrates the FACTUAL tool result (its summary), never invented prose.
     expect(verifyRes.text).toContain('已认购');
 
+    // Buy-more AGGREGATES into the existing row: NO new InvestmentHolding is created.
     const after = await prisma.investmentHolding.findMany();
-    expect(after).toHaveLength(before.length + 1);
+    expect(after).toHaveLength(before.length);
 
-    const created = after.find((holding) => !before.some((prev) => prev.id === holding.id));
-    expect(created?.productId).toBe(PRODUCT.id);
-    expect(created?.userId).toBe(DEMO_USER_ID);
-    expect(created?.principalAmountMinor).toBe(moneyToCents(SUBSCRIBE_AMOUNT));
-    expect(created?.estimatedMarketValue).toBe(String(SUBSCRIBE_AMOUNT));
-    expect(created?.status).toBe('HOLDING');
+    const aggregated = after.find((holding) => holding.productId === PRODUCT.id);
+    expect(aggregated?.id).toBe(seeded?.id);
+    expect(aggregated?.userId).toBe(DEMO_USER_ID);
+    expect(aggregated?.principalAmountMinor).toBe(EXPECTED_PRINCIPAL_MINOR);
+    expect(aggregated?.estimatedMarketValue).toBe(EXPECTED_MARKET_VALUE);
+    expect(aggregated?.status).toBe('HOLDING');
+
+    // The aggregation appended ONE purchase record — with its timestamp — to the history JSON text.
+    const historyBefore = JSON.parse(seeded?.purchaseHistory ?? '[]') as unknown[];
+    const history = JSON.parse(aggregated?.purchaseHistory ?? '[]') as Array<Record<string, unknown>>;
+    expect(history).toHaveLength(historyBefore.length + 1);
+    const appended = history[history.length - 1];
+    expect(appended).toMatchObject({
+      amount: '5000.00',
+      totalPrincipal: '10000.00',
+      marketValue: '10050',
+    });
+    expect(typeof appended?.at).toBe('number');
   });
 
   it('the funding account (活期) is debited by ¥5000', async () => {

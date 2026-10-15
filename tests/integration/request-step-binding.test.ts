@@ -72,7 +72,30 @@ describe('structured workflow preflight and execution', () => {
     expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2347975n);
     await decide(sessionId, second.id, '123456');
     expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2247962n);
-    expect(await db().investmentHolding.count({ where: { idempotencyKey: { startsWith: `nxe:${plan.id}:` } } })).toBe(2);
+    // Exactly-once for BOTH purchases, pinned under the aggregation contract: the 货币基金 purchase is a
+    // product the user does NOT hold, so it opens a NEW holding whose unique `idempotencyKey` column is
+    // the plan-node execution key. The 稳健理财A purchase is a product the user ALREADY holds, so it
+    // AGGREGATES into the seeded `holding_wenjiana` (its `idempotencyKey` column is left untouched) and
+    // records the same execution key on the appended `purchaseHistory` record instead — never a second
+    // row, never a second debit (the balance assertions above pin each debit to exactly once).
+    const keyed = await db().investmentHolding.findMany({
+      where: { userId, idempotencyKey: { startsWith: `nxe:${plan.id}:` } },
+    });
+    expect(keyed.map(holding => holding.productId)).toEqual(['prod_huobi']);
+    expect(keyed[0].principalAmountMinor).toBe(10025n);
+
+    const aggregated = await db().investmentHolding.findUniqueOrThrow({ where: { id: 'holding_wenjiana' } });
+    expect(aggregated.productId).toBe('prod_wenjiana');
+    expect(aggregated.principalAmountMinor).toBe(600013n); // 500000n seeded + 100013n aggregated
+    const history = JSON.parse(aggregated.purchaseHistory ?? '[]') as {
+      amount: string; totalPrincipal: string; executionKey?: string;
+    }[];
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ amount: '1000.13', totalPrincipal: '6000.13' });
+    expect(history[0].executionKey?.startsWith(`nxe:${plan.id}:`)).toBe(true);
+
+    // Two DISTINCT product holdings remain: the new 货币基金 row plus the aggregated 稳健理财A row.
+    expect(await db().investmentHolding.count({ where: { userId, status: 'HOLDING' } })).toBe(2);
     expect((await db().agentTask.findUniqueOrThrow({ where: { id: plan.id } })).status).toBe('success');
   });
 

@@ -95,7 +95,8 @@ describe('frontend follow-up: redemption scope and selectors', () => {
     await db().investmentHolding.update({ where: { id: 'holding_wenjiana' }, data: { estimatedMarketValue: '5060' } });
     const before = await db().transaction.count();
     const result = await runRedeemInvestment(DEMO_USER_ID, action.args, { idempotencyKey: action.id });
-    expect(result.ok).toBe(false); expect(result.error).toContain('requires a new confirmation');
+    expect(result.ok).toBe(false); expect(result.errorCode).toBe('CONFLICT');
+    expect(result.error).toContain('赎回金额已变化，需要重新确认。');
     expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2358000n);
     expect((await db().investmentHolding.findUniqueOrThrow({ where: { id: 'holding_wenjiana' } })).status).toBe('HOLDING');
     expect(await db().transaction.count()).toBe(before);
