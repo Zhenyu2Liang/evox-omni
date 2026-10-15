@@ -92,7 +92,8 @@ describe('display-only metadata localization', () => {
     const scopeValue = sourceFor(sources.policyValues, 'chat.value.fullRedemption');
     const demoLabel = sourceFor(sources.fields, 'chat.field.demoScope');
     const demoValue = sourceFor(sources.policyValues, 'chat.value.taskDemoScope');
-    expect(localizeActionFieldValue({ label: scopeLabel, value: scopeValue }, en)).toContain('partial redemption is not supported');
+    expect(localizeActionFieldValue({ label: scopeLabel, value: scopeValue }, en)).toBe(english['chat.value.fullRedemption']);
+    expect(localizeActionFieldValue({ label: scopeLabel, value: scopeValue }, zh)).toBe(chinese['chat.value.fullRedemption']);
     expect(localizeActionFieldValue({ label: demoLabel, value: demoValue }, en)).toContain('not guaranteed');
     expect(localizeActionFieldValue({ label: demoLabel, value: 'Custom limitation' }, zh)).toBe('Custom limitation');
   });
