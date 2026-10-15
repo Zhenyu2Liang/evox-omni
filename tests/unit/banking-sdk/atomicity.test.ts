@@ -32,8 +32,10 @@ const CHECKING_START = 2_358_000n;
 /** The single seeded HOLDING (marketValue ¥5,050) — the redeem target. */
 const SEEDED_HOLDING = 'holding_wenjiana';
 const HOLDING_MARKET_VALUE = 505_000n;
-/** 稳健理财A — minAmount ¥1,000. */
+/** 稳健理财A — minAmount ¥1,000; already HELD in the seed, so a purchase AGGREGATES into it. */
 const PRODUCT = 'prod_wenjiana';
+/** 货币基金 — minAmount ¥100; NOT held in the seed, so a purchase CREATES a holding. */
+const UNHELD_PRODUCT = 'prod_huobi';
 
 function db() {
   return getTestPrisma();
@@ -189,12 +191,19 @@ describe('banking-sdk · atomicity: ledger-write failure rolls back the debit', 
     expect(await allLedgerCount()).toBe(ledgerRowsBefore);
   });
 
-  it('subscribeInvestment: a failing holding insert rolls back the account debit', async () => {
+  /**
+   * subscribeInvestment writes the holding along TWO paths: a product the user does NOT hold is
+   * CREATED (`investmentHolding.create`), while a product already HELD is AGGREGATED into the
+   * existing row (`investmentHolding.updateMany`). Both must roll the account debit back when the
+   * holding write fails — neither path may leave a partial debit behind.
+   */
+  it('subscribeInvestment (CREATING path): a failing holding insert rolls back the account debit', async () => {
     const beforeHoldings = await holdingCount();
     const ledgerRowsBefore = await allLedgerCount();
     expect(await checkingBalance()).toBe(CHECKING_START);
 
-    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: PRODUCT, amount: '2000.00' };
+    // 货币基金 — NOT held by the user, so this purchase CREATES a new holding (min ¥100).
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: UNHELD_PRODUCT, amount: '2000.00' };
     const error = await capture(() =>
       withInjectedWriteFailure('investmentHolding', 'create', () =>
         banking.investment.subscribeInvestment(input),
@@ -206,6 +215,31 @@ describe('banking-sdk · atomicity: ledger-write failure rolls back the debit', 
 
     expect(await checkingBalance()).toBe(CHECKING_START);
     expect(await holdingCount()).toBe(beforeHoldings);
+    expect(await allLedgerCount()).toBe(ledgerRowsBefore);
+  });
+
+  it('subscribeInvestment (AGGREGATION path): a failing holding aggregate rolls back the account debit', async () => {
+    const beforeHoldings = await holdingCount();
+    const ledgerRowsBefore = await allLedgerCount();
+    expect(await checkingBalance()).toBe(CHECKING_START);
+
+    // 稳健理财A is already HELD, so this purchase AGGREGATES into the existing holding via
+    // `investmentHolding.updateMany` (see banking-sdk/investment.ts) — no second holding is created.
+    const input: SubscribeInvestmentInput = { userId: DEMO_USER_ID, productId: PRODUCT, amount: '2000.00' };
+    const error = await capture(() =>
+      withInjectedWriteFailure('investmentHolding', 'updateMany', () =>
+        banking.investment.subscribeInvestment(input),
+      ),
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/injected failure/);
+
+    expect(await checkingBalance()).toBe(CHECKING_START);
+    // Still exactly ONE holding, and the aggregate was rolled back — the seeded principal survives.
+    expect(await holdingCount()).toBe(beforeHoldings);
+    const holding = await db().investmentHolding.findUnique({ where: { id: SEEDED_HOLDING } });
+    expect(holding?.principalAmountMinor).toBe(500_000n);
     expect(await allLedgerCount()).toBe(ledgerRowsBefore);
   });
 });
