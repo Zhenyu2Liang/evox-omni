@@ -19,7 +19,8 @@ async function setEstimate(value: string): Promise<void> {
 
 describe('investment decimal precision', () => {
   it('replays the full original purchase result after the account balance changes', async () => {
-    const input = { userId: DEMO_USER_ID, productId: 'prod_wenjiana', amount: '1000.01', idempotencyKey: 'original-purchase' };
+    // prod_huobi is not held yet, so this exercises the creation path that persists `subscribeResult`.
+    const input = { userId: DEMO_USER_ID, productId: 'prod_huobi', amount: '1000.01', idempotencyKey: 'original-purchase' };
     const original = await banking.investment.subscribeInvestment(input);
     expect(original.newBalance).toBe('22579.99');
     await getTestPrisma().account.update({ where: { id: ACCOUNT_ID }, data: { balanceMinor: 123456n } });
@@ -31,7 +32,8 @@ describe('investment decimal precision', () => {
   });
 
   it.each([null, '{', '{}'])('rejects an incomplete original purchase result %s without another debit', async (subscribeResult) => {
-    const input = { userId: DEMO_USER_ID, productId: 'prod_wenjiana', amount: '1000.00', idempotencyKey: 'corrupt-purchase' };
+    // prod_huobi is not held yet, so the creation path persists a replayable `subscribeResult` to corrupt.
+    const input = { userId: DEMO_USER_ID, productId: 'prod_huobi', amount: '1000.00', idempotencyKey: 'corrupt-purchase' };
     const original = await banking.investment.subscribeInvestment(input);
     await getTestPrisma().investmentHolding.update({ where: { id: original.holdingId }, data: { subscribeResult } });
     await expect(banking.investment.subscribeInvestment(input)).rejects.toMatchObject({ code: 'CONFLICT' });
