@@ -466,7 +466,7 @@ describe('security-gateway · authorizeAction (needs test SQLite)', () => {
 
     // The correct code did NOT authorize the action.
     const row = await getTestPrisma().pendingAction.findUnique({ where: { id: action.id } });
-    expect(row?.status).toBe('awaiting_mfa');
+    expect(row?.status).toBe('locked');
   });
 });
 

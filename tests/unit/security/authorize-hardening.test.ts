@@ -248,7 +248,7 @@ describe('recordActionResult · true terminal status', () => {
 });
 
 describe('authorizeAction · circuit breaker stays the first hard gate', () => {
-  it("a locked session refuses a confirm with status 'locked' (row unchanged)", async () => {
+  it("a locked session refuses a confirm with status 'locked' (row moved to 'locked')", async () => {
     const sessionId = newSessionId();
     const action = await parkYellowTransfer(sessionId, '200.00');
 
@@ -260,6 +260,6 @@ describe('authorizeAction · circuit breaker stays the first hard gate', () => {
     expect(res.ok).toBe(false);
     expect(res.status).toBe('locked');
     expect(res.mfaResult).toBeUndefined();
-    expect(await statusOf(action.id)).toBe('pending');
+    expect(await statusOf(action.id)).toBe('locked');
   });
 });
