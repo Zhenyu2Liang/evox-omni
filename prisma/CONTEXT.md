@@ -8,6 +8,8 @@
 - 客户端生成到 `lib/db/generated`。
 
 模型覆盖账户、流水、联系人、卡片、订阅和理财。
+持仓记录附带购买与部分赎回历史的 JSON 文本列
+（`purchaseHistory`、`redemptionHistory`），记录结构由 `banking-sdk` 维护。
 任务、授权、审计、人工接管与定时通知也在此持久化。
 运行恢复使用 `AgentRun`、`ModelRequest`、
 `AgentRunEvent` 与 `ToolInvocation`。
