@@ -58,7 +58,15 @@ const NEW_ENT_LIMIT = '1500';
 const PRODUCT_ID = 'prod_wenjiana';
 /** The subscribe amount in the NL request. */
 const SUBSCRIBE_AMOUNT = '1000';
-/** The seeded holding count for 稳健理财A (fixtures buildHoldings ships exactly one). */
+/** The seeded holding's id (fixtures buildHoldings `holding_wenjiana`) — the row a buy-more grows. */
+const SEEDED_HOLDING_ID = 'holding_wenjiana';
+/** The seeded holding's principal (fixtures buildHoldings: ¥5,000.00) — the base a buy-more adds to. */
+const SEEDED_HOLDING_PRINCIPAL = '5000.00';
+/** After a ¥1,000 buy-more the principal is 5000 + 1000 = ¥6,000.00 (still one HOLDING row). */
+const EXPECTED_HOLDING_PRINCIPAL = '6000.00';
+/** The growth is valued at cost, unrounded: seeded MV 5050 + 1000 = 6050 (an exact, non-money value). */
+const EXPECTED_HOLDING_MARKET_VALUE = '6050';
+// Buying MORE of an already-held product AGGREGATES into that one HOLDING row, so the count NEVER grows.
 const SEEDED_HOLDINGS = 1;
 
 /** Seeded Netflix subscription — the subscription a YELLOW `cancel_subscription` cancels. */
@@ -72,6 +80,27 @@ interface Envelope<T> {
   ok: boolean;
   data?: T;
   error?: { code: string; message: string };
+}
+
+/**
+ * One purchaseHistory entry of an InvestmentHolding (shape owned by banking-sdk/investment.ts).
+ * Declared structurally (like Envelope) so the spec can read the aggregated purchase record without
+ * importing the SDK's internal types.
+ */
+interface PurchaseRecord {
+  /** CNY principal added by this purchase (1000.00). */
+  amount: string;
+  /** Epoch ms of the purchase. */
+  at: number;
+  /** Holding principal AFTER this purchase aggregated in (6000.00). */
+  totalPrincipal: string;
+  /** Unrounded holding market value AFTER this purchase (6050). */
+  marketValue: string;
+  /** Funding-account balance after this purchase. */
+  newBalance: string;
+  sourceAccountId: string;
+  /** At-most-once execution identity of this purchase. */
+  executionKey?: string;
 }
 
 /* -------------------------------------------------------------------------- envelope helpers */
@@ -176,7 +205,7 @@ function zhangweiTransfers() {
   return getTestPrisma().transaction.findMany({ where: { counterpartyId: ZHANGWEI.id } });
 }
 
-/** Holdings of 稳健理财A (seeded = 1; a RED subscribe creates a second one). */
+/** Holdings of the seeded product (seed ships exactly one; a buy-more AGGREGATES into it, never a new row). */
 function holdingsOfProduct() {
   return getTestPrisma().investmentHolding.findMany({ where: { productId: PRODUCT_ID } });
 }
@@ -244,7 +273,7 @@ describe('[integration] POST /api/chat NL → YELLOW set_card_limit → POST /ap
 });
 
 describe('[integration] POST /api/chat NL → RED subscribe_investment → POST /api/actions/[id]/verify', () => {
-  it('2 — "申购稳健理财A 1000元" parks a RED gate, verify(MFA_CODE) creates the holding and debits ¥1000', async () => {
+  it('2 — "申购稳健理财A 1000元" parks a RED gate, verify(MFA_CODE) aggregates into the seeded holding and debits ¥1000', async () => {
     const turn = await chatTurn('申购稳健理财A 1000元');
     const events = turn.events;
 
@@ -279,13 +308,32 @@ describe('[integration] POST /api/chat NL → RED subscribe_investment → POST 
     expect(data.mfaResult).toBe('success');
     expect(data.actionId).toBe(row.id);
 
-    // A NEW holding for 稳健理财A was created (1 → 2) and the checking account was debited by ¥1000.
+    // Buy-more AGGREGATES: the seeded HOLDING is grown in place - NO second row - and 1000 CNY is debited.
     const holdings = await holdingsOfProduct();
-    expect(holdings).toHaveLength(SEEDED_HOLDINGS + 1);
-    expect(
-      holdings.some((holding) => holding.principalAmountMinor === moneyToCents(SUBSCRIBE_AMOUNT) && holding.status === 'HOLDING'),
-      'expected the newly-created HOLDING to carry the requested amount',
-    ).toBe(true);
+    expect(holdings, 'a buy-more must NOT open a second holding row').toHaveLength(SEEDED_HOLDINGS);
+    const holding = holdings[0];
+    expect(holding.id).toBe(SEEDED_HOLDING_ID);
+    expect(holding.status).toBe('HOLDING');
+    // Principal base 5000.00 + the added 1000.00 = 6000.00 exactly (unrounded BigInt minor units).
+    expect(holding.principalAmountMinor).toBe(moneyToCents(SEEDED_HOLDING_PRINCIPAL) + moneyToCents(SUBSCRIBE_AMOUNT));
+    expect(holding.principalAmountMinor).toBe(moneyToCents(EXPECTED_HOLDING_PRINCIPAL));
+    // The added 1000 CNY is valued at cost: unrounded market value 5050 -> 6050 (an exact, non-money value).
+    expect(holding.estimatedMarketValue).toBe(EXPECTED_HOLDING_MARKET_VALUE);
+    // The purchase key lives INSIDE the history, never on the holding's unique idempotency column.
+    expect(holding.idempotencyKey).toBeNull();
+
+    // A purchase record - carrying its timestamp and at-most-once key - is APPENDED to purchaseHistory.
+    const history = JSON.parse(holding.purchaseHistory ?? '[]') as PurchaseRecord[];
+    expect(history, 'the buy-more appended exactly one purchase record').toHaveLength(1);
+    const purchase = history[history.length - 1];
+    expect(purchase.amount).toBe(normalizeMoney(SUBSCRIBE_AMOUNT));
+    expect(purchase.totalPrincipal).toBe(EXPECTED_HOLDING_PRINCIPAL);
+    expect(purchase.marketValue).toBe(EXPECTED_HOLDING_MARKET_VALUE);
+    expect(purchase.newBalance).toBe(subtractMoney(SEEDED_BALANCE, SUBSCRIBE_AMOUNT));
+    expect(purchase.at, 'the purchase record carries its timestamp (epoch ms)').toBeGreaterThan(0);
+    expect(purchase.executionKey, 'the at-most-once key travels inside the history record').toEqual(expect.any(String));
+
+    // The checking account was debited by exactly 1000 CNY (the same 100000 minor units).
     expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, SUBSCRIBE_AMOUNT));
   });
 });
