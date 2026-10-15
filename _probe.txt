@@ -1,0 +1,10 @@
+﻿D:\projects\banking-agent\.genesis\workers\worker_T2_A2\lib\i18n\messages\chat.en.json:240: "chat.field.redemptionScope": "Redemption scope",
+D:\projects\banking-agent\.genesis\workers\worker_T2_A2\lib\i18n\messages\chat.zh-CN.json:240: "chat.field.redemptionScope": "赎回范围",
+D:\projects\banking-agent\.genesis\workers\worker_T2_A2\lib\i18n\messages\chat.zh-CN.json:257: "chat.value.fullRedemption": "全部赎回该笔持仓，不支持部分赎回。",
+D:\projects\banking-agent\.genesis\workers\worker_T2_A2\lib\i18n\messages\display-sources.json:66: "赎回范围": "chat.field.redemptionScope",
+D:\projects\banking-agent\.genesis\workers\worker_T2_A2\lib\i18n\messages\display-sources.json:111: "全部赎回该笔持仓（不支持部分赎回）": "chat.value.fullRedemption",
+D:\projects\banking-agent\.genesis\workers\worker_T2_A2\lib\i18n\display.ts:33: if (['chat.field.redemptionScope', 'chat.field.amountChange', 'chat.field.monthlyLimit',
+D:\projects\banking-agent\.genesis\workers\worker_T2_A2\security\CONTEXT.md:23: 请求本金 `redeemAmount` 缺省或等于持仓本金时，按全部赎回报价。
+D:\projects\banking-agent\.genesis\workers\worker_T2_A2\security\security-gateway.ts:615: { label: '赎回范围', value: partial ? `部分赎回（本金 ${formatCNY(centsToMoney(redeemedPrincipalMinor))}／共计 ${formatCNY(centsToMoney(totalPrincipalMinor))}）` : '全部赎回该笔持仓' },
+D:\projects\banking-agent\.genesis\workers\worker_T2_A2\tests\integration\frontend-followup-fixes.test.ts:85: expect(html).toContain('全部赎回'); expect(html).toContain(translate(DEFAULT_LOCALE, 'chat.field.principal'));
+D:\projects\banking-agent\.genesis\workers\worker_T2_A2\tests\unit\lib\i18n-display.test.ts:91: const scopeLabel = sourceFor(sources.fields, 'chat.field.redemptionScope');
