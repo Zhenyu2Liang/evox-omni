@@ -232,7 +232,8 @@ export async function runSubscribeInvestment(
 
 /** `redeem_investment` params (SDK `RedeemInvestmentInput`; `userId` server-injected). */
 export const RedeemInvestmentParams = Type.Object({
-  holdingId: Type.String({ minLength: 1, description: 'Owned holding ID for full redemption.' }),
+  holdingId: Type.String({ minLength: 1, description: 'Owned holding ID for redemption.' }),
+  redeemAmount: Type.Optional(MoneyParameter),
 });
 export type RedeemInvestmentArgs = Static<typeof RedeemInvestmentParams>;
 
@@ -243,7 +244,7 @@ export function createRedeemInvestmentTool(
   return {
     name: 'redeem_investment',
     label: '赎回理财',
-    description: '全额赎回指定理财持仓（不支持部分赎回）；服务端展示到账金额，再经短信验证码验证。',
+    description: '赎回指定理财持仓；不填金额表示全额赎回，填写较小金额则按该本金部分赎回（部分赎回）；服务端展示到账金额，再经短信验证码验证。',
     parameters: RedeemInvestmentParams,
     execute: async (_toolCallId, params) => {
       return toModelToolResult(await runRedeemInvestment(userId, params));
@@ -251,7 +252,7 @@ export function createRedeemInvestmentTool(
   };
 }
 
-/** Model-free runner — `banking.investment.redeemInvestment({ userId, holdingId, idempotencyKey })`. */
+/** Model-free runner — `banking.investment.redeemInvestment({ userId, holdingId, redeemAmount, expectedRedemptionAmount, idempotencyKey })`. */
 export async function runRedeemInvestment(
   userId: string,
   args: Record<string, unknown>,
@@ -265,6 +266,8 @@ export async function runRedeemInvestment(
     const result: InvestResult = await banking.investment.redeemInvestment({
       userId,
       holdingId,
+      // Absent ⇒ FULL redemption of the whole holding; a smaller positive principal portion ⇒ PARTIAL.
+      redeemAmount: args.redeemAmount as MoneyInput | undefined,
       expectedRedemptionAmount: args.expectedRedemptionAmount as MoneyInput | undefined,
       // At-most-once: forwarded verbatim to the SDK's `idempotencyKey` (absent ⇒ unchanged behavior).
       idempotencyKey: opts?.idempotencyKey,
@@ -274,7 +277,9 @@ export async function runRedeemInvestment(
     return {
       ok: true,
       data: result,
-      summary: `已赎回持仓 ${result.holdingId}，到账 ${formatCNY(result.amount)}${balance}。`,
+      summary: result.partial
+        ? `已部分赎回持仓 ${result.holdingId}，赎回本金 ${formatCNY(result.redeemedPrincipal ?? result.amount)}，到账 ${formatCNY(result.amount)}${result.remainingPrincipal != null ? `，剩余本金 ${formatCNY(result.remainingPrincipal)}` : ''}${balance}。`
+        : `已赎回持仓 ${result.holdingId}，到账 ${formatCNY(result.amount)}${balance}。`,
     };
   } catch (e) {
     return toolFailure(e);

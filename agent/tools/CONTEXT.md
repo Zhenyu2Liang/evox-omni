@@ -57,6 +57,10 @@ is disabled for the agent and rejects agent calls; it is never offered to the mo
 `describe_turn` lives in `turn-intent.ts` and records model-declared conversational purpose.
 It is an internal control tool, not a banking capability or customer authorization.
 
+### `redeem_investment` 赎回本金参数（全额 / 部分）
+
+`redeemAmount` 是可选的本金部分（CNY 十进制字符串）：省略或等于持仓本金表示**全额赎回**（持仓结清、一次性到账）；填入严格小于本金的正数表示**部分赎回**（持仓保留、本金减少，仅按同一估值规则到账该部分的结算金额，剩余本金与市值留在持仓上）。它是普通金额参数——`plan-parameters.ts` 依据 TypeBox 模式校验字符串格式与显式类型后原样转发给 SDK，超额、非正或格式非法的取值由 SDK 以 `VALIDATION` 拒绝，参数层不重复判定金额域。成功摘要按 `InvestResult.partial` 与 `redeemedPrincipal` / `remainingPrincipal` 渲染全额或部分赎回措辞。
+
 ## Parameters and SDK errors
 
 Every family exports `<Name>Params`, `<Name>Args`, `create<Name>Tool`, and `run<Name>`.
