@@ -10,7 +10,7 @@ export interface BankingCommand {
   digest: string;
 }
 
-const MONETARY_FIELDS = new Set(['amount', 'creditLimit', 'monthlyLimit', 'expectedRedemptionAmount']);
+const MONETARY_FIELDS = new Set(['amount', 'creditLimit', 'monthlyLimit', 'expectedRedemptionAmount', 'redeemAmount']);
 
 /** Equivalent decimal inputs have one identity; presentation text never grants authority. */
 export function canonicalCommandArgs(args: Record<string, unknown>): Record<string, unknown> {
