@@ -36,6 +36,15 @@
 涉及资金变化时，同时核对页面、余额与流水。
 具体辅助模块使用 `*.e2e-helper.ts` 命名。
 
+## MFA 验证码与熔断覆盖
+
+`acceptance.e2e.ts` 的 `j-circuit-breaker-lock` 在同一会话内连续提交 3 次错误验证码（每次 `submitMfa('000000')`），
+断言 `cards.terminal.locked`（已锁定）且验证码输入框 `SELECTORS.mfaInput` 消失，
+随后切换到 `/security` 核对已熔断并在该页刷新验证持久化；三次尝试之间不刷新页面。
+`e2-refresh-mfa`（journey e）断言挂起但未锁定的红档转账刷新后 MFA 卡片恢复。
+`live-acceptance.e2e.ts` 的 S4 只提交一次错误码并断言卡片保留，正确码在独立页面执行；live 侧不校验尝试次数上限。
+当前没有用例在锁定后刷新 `/agent` 再断言弹窗保持消失。
+
 `helpers.ts` 提供服务启动、数据库准备与 DOM 操作。
 交互前等待水合完成。
 读取共享演示会话使用 `readDemoSessionId`。
