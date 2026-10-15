@@ -74,6 +74,19 @@ configuration and TypeScript types only. Dynamic route parameters are awaited pr
 Handlers use `_lib/agent-bridge` for action/task delegation and persisted ownership checks before
 execution. The fixed demo identity has no missing-cookie rejection branch.
 
+## Known issues
+
+- `POST /api/actions/[id]/verify` (`app/api/actions/[id]/verify/route.ts`) returns HTTP `200` for
+  every domain outcome, including the circuit-breaker `status:'locked'` case: it always serializes
+  `jsonResponse<ActionResponse>(mapped)` (`:87`) and never throws `CIRCUIT_OPEN`, so the `423` status
+  named in the route comment (`:16`) and defined in `_lib/http.ts` is not reached from this route.
+- The same route derives `mfaResult` as `success` / (`awaiting_mfa` → `failed`) / else `not_required`
+  (`:69-73`), so a `status:'locked'` outcome reports `mfaResult:'not_required'` even though the
+  gateway returned `mfaResult:'failed'`.
+- The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
+  its own (`:84` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
+  all (client-only, `components/chat/actions.ts`); closing the MFA prompt is left to the client.
+
 Developer documentation lives in `docs/cn`; this context records AI-facing module boundaries.
 HTTP fixtures use the configured demo workspace. Cookie/query forgery fixtures verify that browser
 parameters cannot change that workspace; internal foreign-resource fixtures verify that ownership
