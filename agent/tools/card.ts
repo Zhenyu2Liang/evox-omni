@@ -1,21 +1,27 @@
 /**
- * card — `get_cards`, `set_card_limit`, `freeze_card`, `unfreeze_card`, `report_lost_card`.
+ * card — `get_cards`, `set_card_limit`, `freeze_card`, `unfreeze_card`, `apply_virtual_card`,
+ * `report_lost_card`, `replace_card`.
  *
  * Card reads and mutations. TypeBox param schemas; `execute` returns native Pi success or failure content.
- * The `run<X>(userId, args)` runners are the model-free path used by
+ * The `run<X>(userId, args, opts?)` runners are the model-free path used by
  * `executeDirect`; they CATCH and return `ToolExecutionResult{ok:false,error}`.
  *
  * Tiers: `get_cards` GREEN; `set_card_limit` YELLOW (confirmation);
- * `freeze_card` / `unfreeze_card` / `report_lost_card` RED (confirmation and MFA).
+ * `freeze_card` / `unfreeze_card` / `apply_virtual_card` / `report_lost_card` / `replace_card` RED
+ * (confirmation and MFA).
  * The tier is decided by `security/`, NOT here — this module only declares capability. `userId` is
  * SERVER-INJECTED; the model never supplies it.
+ *
+ * Two loss flows are deliberately distinct: `freeze_card`/`unfreeze_card` are a REVERSIBLE temporary
+ * lock, while `report_lost_card` is TERMINAL (the card stays `LOST` and is never revived) —
+ * `replace_card` issues a new card for an already-lost card.
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
 import { banking } from '@/banking-sdk';
 import type { CardStatus, CardType, CardView } from '@/banking-sdk';
 import { centsToMoney, formatCNY, moneyToCents } from '@/lib/money';
-import type { ToolExecutionResult } from './index';
+import type { ToolExecutionResult, ToolRunOptions } from './index';
 import { MoneyParameter } from './money-schema';
 import { toModelToolResult, toolFailure } from './result';
 import { SPENDING_CATEGORIES } from '@/lib/contracts/spending';
@@ -91,8 +97,8 @@ export type SetCardLimitArgs = Static<typeof SetCardLimitParams>;
 export function createSetCardLimitTool(userId: string): AgentTool<typeof SetCardLimitParams> {
   return {
     name: 'set_card_limit',
-    label: '设置卡片限额',
-    description: '为指定卡片设置某消费分类的限额（需要用户确认）。',
+    label: '设置分类限额',
+    description: '为指定卡片设置某个消费分类的限额，不影响授信额度（需要用户确认）。',
     parameters: SetCardLimitParams,
     execute: async (_toolCallId, params) => {
       return toModelToolResult(await runSetCardLimit(userId, params));
@@ -118,7 +124,7 @@ export async function runSetCardLimit(
     return {
       ok: true,
       data: card,
-      summary: `已为卡片 ${card.numberMasked} 的「${input.category}」设置限额 ${formatCNY(amount)}`,
+      summary: `已为卡片 ${card.numberMasked} 的「${input.category}」设置分类消费限额 ${formatCNY(amount)}`,
     };
   } catch (e) {
     return toolFailure(e);
@@ -138,7 +144,7 @@ export function createFreezeCardTool(userId: string): AgentTool<typeof FreezeCar
   return {
     name: 'freeze_card',
     label: '冻结卡片',
-    description: '冻结指定卡片（需要用户确认）。',
+    description: '临时锁卡：冻结指定卡片，可随时解冻（需要用户确认）。',
     parameters: FreezeCardParams,
     execute: async (_toolCallId, params) => {
       return toModelToolResult(await runFreezeCard(userId, params));
@@ -174,7 +180,7 @@ export function createUnfreezeCardTool(userId: string): AgentTool<typeof Unfreez
   return {
     name: 'unfreeze_card',
     label: '解冻卡片',
-    description: '解冻指定卡片（高风险，需要短信验证码验证）。',
+    description: '解除临时锁卡：解冻指定卡片（高风险，需要短信验证码验证）。',
     parameters: UnfreezeCardParams,
     execute: async (_toolCallId, params) => {
       return toModelToolResult(await runUnfreezeCard(userId, params));
@@ -211,7 +217,7 @@ export function createReportLostCardTool(userId: string): AgentTool<typeof Repor
   return {
     name: 'report_lost_card',
     label: '挂失卡片',
-    description: '对指定卡片进行挂失（高风险，需要短信验证码验证）。',
+    description: '正式挂失：挂失指定卡片，挂失永久且不可恢复，如需继续用卡请补办新卡（高风险，需要短信验证码验证）。',
     parameters: ReportLostCardParams,
     execute: async (_toolCallId, params) => {
       return toModelToolResult(await runReportLostCard(userId, params));
@@ -229,6 +235,87 @@ export async function runReportLostCard(
     const card = await banking.card.reportLostCard(input.cardId, userId, { reason: input.reason });
     const reason = input.reason ? `（原因：${input.reason}）` : '';
     return { ok: true, data: card, summary: `卡片 ${card.numberMasked} 已挂失${reason}` };
+  } catch (e) {
+    return toolFailure(e);
+  }
+}
+
+/* --------------------------------------------------------- apply_virtual_card */
+
+/** `apply_virtual_card` params (SDK `ApplyVirtualCardInput` minus the server-owned `userId`). */
+export const ApplyVirtualCardParams = Type.Object({
+  monthlyLimit: Type.Optional(MoneyParameter),
+});
+export type ApplyVirtualCardArgs = Static<typeof ApplyVirtualCardParams>;
+
+/** Build the `apply_virtual_card` tool bound to `userId` (🔴 RED — MFA enforced by `security/`). */
+export function createApplyVirtualCardTool(userId: string): AgentTool<typeof ApplyVirtualCardParams> {
+  return {
+    name: 'apply_virtual_card',
+    label: '申请虚拟卡',
+    description: '申请一张虚拟卡，可选设置月限额（高风险，需要短信验证码验证）。',
+    parameters: ApplyVirtualCardParams,
+    execute: async (_toolCallId, params) => {
+      return toModelToolResult(await runApplyVirtualCard(userId, params));
+    },
+  };
+}
+
+/**
+ * Model-free runner — `banking.card.applyVirtualCard({ userId, monthlyLimit, idempotencyKey })`.
+ * `opts.idempotencyKey` is the at-most-once execution identity: a replay of the SAME key returns the
+ * original card instead of issuing a second one.
+ */
+export async function runApplyVirtualCard(
+  userId: string,
+  args: Record<string, unknown>,
+  opts?: ToolRunOptions,
+): Promise<ToolExecutionResult> {
+  const input = args as unknown as ApplyVirtualCardArgs;
+  try {
+    const card = await banking.card.applyVirtualCard({
+      userId,
+      monthlyLimit: input.monthlyLimit,
+      idempotencyKey: opts?.idempotencyKey,
+    });
+    const limit = card.monthlyLimit === undefined ? '未设置月限额' : `月限额 ${formatCNY(card.monthlyLimit)}`;
+    return { ok: true, data: card, summary: `虚拟卡 ${card.numberMasked} 已开通（${limit}）` };
+  } catch (e) {
+    return toolFailure(e);
+  }
+}
+
+/* ------------------------------------------------------------------ replace_card */
+
+/** `replace_card` params. */
+export const ReplaceCardParams = Type.Object({
+  cardId: Type.String({ description: '原卡片 id' }),
+});
+export type ReplaceCardArgs = Static<typeof ReplaceCardParams>;
+
+/** Build the `replace_card` tool bound to `userId` (🔴 RED — MFA enforced by `security/`). */
+export function createReplaceCardTool(userId: string): AgentTool<typeof ReplaceCardParams> {
+  return {
+    name: 'replace_card',
+    label: '补办卡片',
+    description: '为已挂失的卡片补办一张新卡，原卡片保持挂失状态（高风险，需要短信验证码验证）。',
+    parameters: ReplaceCardParams,
+    execute: async (_toolCallId, params) => {
+      return toModelToolResult(await runReplaceCard(userId, params));
+    },
+  };
+}
+
+/** Model-free runner — `banking.card.replaceCard(cardId, userId)`. */
+export async function runReplaceCard(
+  userId: string,
+  args: Record<string, unknown>,
+): Promise<ToolExecutionResult> {
+  const { cardId } = args as unknown as ReplaceCardArgs;
+  try {
+    const card = await banking.card.replaceCard(cardId, userId);
+    const status = CARD_STATUS_LABELS[card.status] ?? card.status;
+    return { ok: true, data: card, summary: `已为原挂失卡片补办新卡 ${card.numberMasked}（当前状态：${status}）` };
   } catch (e) {
     return toolFailure(e);
   }

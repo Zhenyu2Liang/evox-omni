@@ -277,7 +277,7 @@
   "chat.tool.list_scheduled_tasks": "定时任务",
   "chat.tool.reserve_budget": "预留预算",
   "chat.tool.transfer_money": "转账",
-  "chat.tool.set_card_limit": "设置卡片限额",
+  "chat.tool.set_card_limit": "设置分类限额",
   "chat.tool.cancel_subscription": "取消订阅",
   "chat.tool.freeze_card": "冻结卡片",
   "chat.tool.apply_virtual_card": "申请虚拟卡",
@@ -286,6 +286,7 @@
   "chat.tool.subscribe_investment": "申购理财",
   "chat.tool.redeem_investment": "赎回理财",
   "chat.tool.report_lost_card": "挂失卡片",
+  "chat.tool.replace_card": "补办卡片",
   "chat.tool.unfreeze_card": "解冻卡片",
   "chat.tool.submit_plan": "提交任务计划",
   "chat.policy.get_balance": "读取存款余额。",
@@ -311,6 +312,7 @@
   "chat.policy.subscribe_investment": "申购理财产品。",
   "chat.policy.redeem_investment": "赎回名下理财持仓。",
   "chat.policy.report_lost_card": "挂失名下卡片。",
+  "chat.policy.replace_card": "为已挂失卡片补办新卡。",
   "chat.policy.unfreeze_card": "解冻名下卡片。",
   "chat.policy.submit_plan": "编排并提交银行业务工作流。"
 }

@@ -10,7 +10,7 @@ const FIELD: Record<ResourceKind, string> = {
   card: 'cardId', product: 'productId', holding: 'holdingId', subscription: 'subscriptionId',
 };
 const TOOL_RESOURCE: Record<string, ResourceKind> = {
-  freeze_card: 'card', unfreeze_card: 'card', report_lost_card: 'card', set_card_limit: 'card',
+  freeze_card: 'card', unfreeze_card: 'card', report_lost_card: 'card', replace_card: 'card', set_card_limit: 'card',
   subscribe_investment: 'product', redeem_investment: 'holding',
   cancel_subscription: 'subscription', set_subscription_reminder: 'subscription',
 };

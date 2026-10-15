@@ -114,6 +114,8 @@ model Card {
   creditLimitMinor    BigInt? @map("credit_limit_minor")
   availableLimitMinor BigInt? @map("available_limit_minor")
   monthlyLimitMinor   BigInt? @map("monthly_limit_minor")
+  // id of the replacement card (no relation — historical reference only)
+  replacedByCardId    String? @map("replaced_by_card_id")
 
   user   User        @relation(fields: [userId], references: [id])
   limits CardLimit[]

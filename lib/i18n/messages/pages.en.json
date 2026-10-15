@@ -86,6 +86,8 @@
   "pages.activity.type.card_freeze": "Freeze card",
   "pages.activity.type.card_unfreeze": "Unfreeze card",
   "pages.activity.type.card_lost": "Report lost card",
+  "pages.activity.type.card_replace": "Replace card",
+  "pages.activity.type.card_apply": "Apply for a virtual card",
   "pages.activity.type.card_limit": "Change card limit",
   "pages.activity.type.card_add": "Add demo card",
   "pages.activity.type.card_delete": "Delete demo card",

@@ -12,8 +12,8 @@ function promptFor(toolNames: ToolName[]) {
 }
 
 describe('system prompt policy catalog alignment', () => {
-  it('does not advertise disabled manual-only issuance even when an incorrect caller supplies it', () => {
-    expect(toolLines(['apply_virtual_card'], promptFor(['apply_virtual_card']))).toEqual([]);
+  it('advertises agent-enabled virtual card issuance as a RED write', () => {
+    expect(toolLines(['apply_virtual_card'], promptFor(['apply_virtual_card']))).toEqual(['- apply_virtual_card: RED']);
   });
   it('shows card freezing as RED and subscription reads as YELLOW', () => {
     const prompt = promptFor(['freeze_card', 'list_subscriptions']);

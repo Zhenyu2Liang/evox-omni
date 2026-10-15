@@ -18,7 +18,7 @@ describe('public operation history projection', () => {
     expect(JSON.stringify(record)).not.toContain('secret');
   });
 
-  it.each(['get_balance', 'list_subscriptions', 'submit_plan', 'reset_security', 'apply_virtual_card', 'unknown_tool', '__proto__'])
+  it.each(['get_balance', 'list_subscriptions', 'submit_plan', 'reset_security', 'unknown_tool', '__proto__'])
   ('excludes diagnostic or unsupported operation %s', toolName => {
     expect(projectOperationHistory(event({ toolName }))).toBeUndefined();
   });

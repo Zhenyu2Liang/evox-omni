@@ -16,7 +16,7 @@ export async function resolveBankingArgs(userId: string, tool: ToolName, input: 
     const rows = await prisma.account.findMany({ where: { userId } });
     args.sourceAccountId = select(rows, args.sourceAccountId, 'Account').id;
   }
-  if (['freeze_card', 'unfreeze_card', 'report_lost_card', 'set_card_limit'].includes(tool)) {
+  if (['freeze_card', 'unfreeze_card', 'report_lost_card', 'replace_card', 'set_card_limit'].includes(tool)) {
     const rows = await prisma.card.findMany({ where: { userId } });
     args.cardId = select(rows, args.cardId, 'Card').id;
   }

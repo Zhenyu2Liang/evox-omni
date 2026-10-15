@@ -86,6 +86,8 @@
   "pages.activity.type.card_freeze": "冻结卡片",
   "pages.activity.type.card_unfreeze": "解冻卡片",
   "pages.activity.type.card_lost": "挂失卡片",
+  "pages.activity.type.card_replace": "补办卡片",
+  "pages.activity.type.card_apply": "申请虚拟卡",
   "pages.activity.type.card_limit": "调整卡片限额",
   "pages.activity.type.card_add": "添加演示卡片",
   "pages.activity.type.card_delete": "删除演示卡片",

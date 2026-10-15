@@ -60,7 +60,12 @@ export function CardTile({ card, className, footer }: CardTileProps) {
             {card.numberMasked}
           </div>
         </div>
-        <Badge tone={STATUS_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
+        <div className="flex items-center gap-2">
+          {card.replacedByCardId !== undefined ? (
+            <Badge tone="info">{t('business.cards.replaced')}</Badge>
+          ) : null}
+          <Badge tone={STATUS_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
+        </div>
       </div>
 
       {card.type === 'CREDIT' &&

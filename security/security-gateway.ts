@@ -325,17 +325,18 @@ export const TOOL_INTENT: Record<ToolName, string> = {
   reserve_budget: '预算预留',
   // 🟡 YELLOW
   transfer_money: '转账',
-  set_card_limit: '调整信用卡额度',
+  set_card_limit: '调整卡片分类消费限额',
   cancel_subscription: '取消订阅',
-  apply_virtual_card: '申请虚拟卡',
   set_subscription_reminder: '设置订阅提醒',
   create_scheduled_task: '创建定时任务',
   // 🔴 RED
   freeze_card: '冻结银行卡',
   subscribe_investment: '理财产品申购',
   redeem_investment: '理财产品赎回',
+  apply_virtual_card: '申请虚拟卡',
   report_lost_card: '挂失银行卡',
   unfreeze_card: '解冻银行卡',
+  replace_card: '补办银行卡',
   // ⚪ META
   submit_plan: '规划任务',
 };
@@ -620,15 +621,23 @@ async function gatewayCreatePendingAction(
     }
   }
   if (ctx.toolName === 'apply_virtual_card') {
-    summary.fields.push({ label: '月限额', value: ctx.args.monthlyLimit === undefined ? '未设置（本次仅开卡）' : formatCNY(String(ctx.args.monthlyLimit)) });
-    summary.fields.push({ label: '演示范围', value: '保存卡片及月限额配置；Demo 不提供刷卡支付' });
+    summary.fields.push(
+      { label: '卡片类型', value: '虚拟卡（VIRTUAL）' },
+      { label: '卡组织', value: '银联（UnionPay）' },
+      { label: '月限额', value: ctx.args.monthlyLimit === undefined ? '未设置（本次仅开卡）' : formatCNY(String(ctx.args.monthlyLimit)) },
+      { label: '分类限额', value: '不设置（本次仅开卡）' },
+      { label: '演示范围', value: '保存卡片及月限额配置；Demo 不提供刷卡支付' },
+    );
   }
   if (ctx.args.subscriptionId) {
     const subscription = await prisma.subscription.findFirst({ where: { id: String(ctx.args.subscriptionId), userId: ctx.userId } });
     if (subscription) summary.fields.unshift({ label: '订阅', value: subscription.name });
   }
   if (ctx.toolName === 'set_subscription_reminder') summary.fields.push({ label: '提醒设置', value: ctx.args.remind === true ? '开启' : '关闭' });
-  if (ctx.toolName === 'set_card_limit' && ctx.args.amount !== undefined) summary.fields.push({ label: '新限额', value: formatCNY(String(ctx.args.amount)) });
+  if (ctx.toolName === 'set_card_limit') {
+    summary.fields.push({ label: '限额类型', value: '分类消费限额（不影响授信额度）' });
+    if (ctx.args.amount !== undefined) summary.fields.push({ label: '新分类消费限额', value: formatCNY(String(ctx.args.amount)) });
+  }
   if (['subscribe_investment', 'redeem_investment'].includes(ctx.toolName)) {
     const account = await prisma.account.findFirst({ where: { userId: ctx.userId, type: 'CHECKING' } });
     summary.fields.push({ label: ctx.toolName === 'subscribe_investment' ? '付款账户' : '入账账户', value: account?.name ?? '账户待核对' });

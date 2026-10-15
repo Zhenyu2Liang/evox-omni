@@ -1,7 +1,7 @@
 import { REQUEST_COMMANDS } from './request-command-patterns';
 
 export type RequestedStep = { tool: string; span: string };
-const VERB = '(?:从|用|预留|查询|查看|查|看|分析|转|给|设置|调整|将|把|创建|安排|取消|申购|认购|赎回|冻结|解冻|挂失|比较|对比|申请|修改)';
+const VERB = '(?:从|用|预留|查询|查看|查|看|分析|转|给|设置|调整|将|把|创建|安排|取消|申购|认购|赎回|冻结|解冻|挂失|补办|补卡|比较|对比|申请|修改)';
 const NEGATION = '(?:不要|不必|不用|无需|不需要|不要求)';
 const SEPARATOR = new RegExp(`(?:[，,。；;\\n]+|(?:随后|然后|接着|再|最后|并且|以及|同时|和|但是|但|不过|而)(?=\\s*(?:${NEGATION}\\s*)?${VERB}))`, 'g');
 

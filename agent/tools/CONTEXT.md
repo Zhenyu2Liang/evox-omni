@@ -37,7 +37,7 @@ agent availability, and replay policy. Use `AGENT_TOOL_NAMES` for model-visible 
 | `search_conversation_history` | `conversation-history.ts` | GREEN historical read |
 | `get_cards` | `card.ts` | GREEN read |
 | `set_card_limit` | `card.ts` | YELLOW write |
-| `freeze_card`, `unfreeze_card`, `report_lost_card` | `card.ts` | RED write |
+| `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card` | `card.ts` | RED write |
 | `list_subscriptions` | `subscription.ts` | YELLOW read |
 | `cancel_subscription`, `set_subscription_reminder` | `subscription.ts` | YELLOW write |
 | `list_investments`, `compare_investments`, `get_investment_holdings` | `investment.ts` | GREEN read |
@@ -51,8 +51,10 @@ agent availability, and replay policy. Use `AGENT_TOOL_NAMES` for model-visible 
 GREEN runs automatically, YELLOW requires confirmation, and RED also requires strong verification.
 A budget envelope is bookkeeping; it does not debit or freeze account funds.
 Creating a scheduled intent does not preauthorize a future financial write.
-Card creation and deletion use the manual card-management page. The catalog entry `apply_virtual_card`
-is disabled for the agent and rejects agent calls; it is never offered to the model.
+Physical debit and credit card creation and deletion use the manual card-management page.
+Virtual card issuance is an agent capability (`apply_virtual_card`).
+`replace_card` replaces an owned `LOST` card and is idempotent: a source that already points at a
+replacement returns that card instead of issuing a second one.
 
 `describe_turn` lives in `turn-intent.ts` and records model-declared conversational purpose.
 It is an internal control tool, not a banking capability or customer authorization.

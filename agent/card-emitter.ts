@@ -104,6 +104,7 @@ export function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCa
     case 'freeze_card':
     case 'unfreeze_card':
     case 'report_lost_card':
+    case 'replace_card':
     case 'apply_virtual_card': {
       const cards = toDtoList(data);
       return cards !== null && isEveryRecord(cards)

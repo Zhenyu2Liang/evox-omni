@@ -10,6 +10,7 @@ export const REQUEST_COMMANDS: Readonly<Record<string, RegExp>> = {
   freeze_card: /(?<!\u89e3)\u51bb\u7ed3/,
   unfreeze_card: /\u89e3\u51bb/,
   report_lost_card: /\u6302\u5931/,
+  replace_card: /\u8865\u5361|\u8865\u529e/,
   cancel_subscription: /\u53d6\u6d88.*\u8ba2\u9605|\u8ba2\u9605.*\u53d6\u6d88/,
   set_subscription_reminder: /\u8ba2\u9605.*\u63d0\u9192|\u7eed\u8d39\u63d0\u9192/,
   create_scheduled_task: /\u521b\u5efa.*\u63d0\u9192|\u8bbe\u7f6e.*\u63d0\u9192|\u5b9a\u65f6|\u5b89\u6392|\u63d0\u9192\u6211/,

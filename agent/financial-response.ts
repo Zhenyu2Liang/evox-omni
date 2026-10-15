@@ -13,9 +13,9 @@ export const UNVERIFIED_RESPONSE = conversationMessages.unverified;
 export const UNAVAILABLE_RESPONSE = conversationMessages.unavailable;
 
 const WRITE_LABELS: Readonly<Record<string, string>> = {
-  transfer_money: '转账', reserve_budget: '预算预留', set_card_limit: '限额调整',
+  transfer_money: '转账', reserve_budget: '预算预留', set_card_limit: '分类消费限额调整',
   freeze_card: '卡片冻结', unfreeze_card: '卡片解冻', report_lost_card: '卡片挂失',
-  apply_virtual_card: '虚拟卡申请', cancel_subscription: '订阅取消',
+  replace_card: '卡片补办', apply_virtual_card: '虚拟卡申请', cancel_subscription: '订阅取消',
   set_subscription_reminder: '订阅提醒', create_scheduled_task: '定时任务记录',
   subscribe_investment: '理财申购', redeem_investment: '理财赎回',
 };

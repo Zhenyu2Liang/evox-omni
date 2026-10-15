@@ -19,21 +19,13 @@ SDK 写入仍必须满足可信执行上下文与事务约束。
 | `idempotent.test.ts` | 相同执行身份的去重 |
 | `subscription.test.ts` | 取消与提醒状态 |
 | `anomaly.test.ts` | 收支方向、投资分类与异常筛查 |
+| `card-replacement.test.ts` | 冻结/解冻可逆幂等、挂失终态与补办换卡不变量 |
 
 具体文件和断言以当前目录为准。
 金额使用十进制字符串与整数分。
 回执缺失或请求身份冲突不能伪造原结果。
 不支持从旧流水补造当前回执。
 已持有产品的加购为聚合写入，采购身份存于 `purchaseHistory`。
-
-## 已知缺陷
-
-`investment-partial-redemption.test.ts` 的 Case B（同一身份重复部分赎回）当前失败。
-原因：`banking-sdk/investment.ts:590-604` 的同身份回放查找嵌在
-`if (current.status !== 'HOLDING')` 分支内；
-持仓仍为 `HOLDING` 时，相同身份的重复部分赎回会落到写入路径并再次入账。
-这与 SDK 自身契约冲突（`investment.ts:558-564`、`types.ts:355-364`）。
-修复归属 banking-sdk；该用例不得弱化或跳过。
 
 ## 执行与数据
 
