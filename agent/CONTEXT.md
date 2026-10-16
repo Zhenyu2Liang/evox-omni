@@ -40,7 +40,7 @@ Authorized workflow progress remains the executor's responsibility, not another 
 `durable/continuation.ts` resumes model checkpoints and verifies original context and execution facts. `durable/standalone-workflow.ts` resumes independent graphs without a model. `recovery-worker.ts` supplies bounded discovery and lease-protected recovery. Model partials are journal evidence only; changing the model contract, losing ownership or encountering uncertain effects cannot silently create a replacement operation.
 
 `banking-agent.ts` installs the code-controlled gateway and supplies trusted user/session identities.
-`beforeToolCall` is the ONLY consumer of `requiresDeclaredPlan` (`intent-context.ts:43`): with a declared multi-write or `workflow` intent it blocks individual write calls and preflights `submit_plan` (`banking-agent.ts:286-298`), but nothing verifies at turn end that a declared write sequence actually emitted `submit_plan`, so a live model replying with prose and zero write tool calls creates no `PendingAction` and no confirmation panel.
+`beforeToolCall` is the ONLY consumer of `requiresDeclaredPlan` (`intent-context.ts:43`): with a declared multi-write or `workflow` intent it blocks individual write calls and preflights `submit_plan` (`banking-agent.ts:286-298`). At turn end `write-continuation.ts` reconciles a declared-but-unemitted write: `continueDeclaredWrites` issues exactly ONE bounded, restart-safe continuation (its `WriteContinuationState` budget is persisted before the provider call), and if no controlled call appears the server still publishes its authoritative `declared_unsubmitted` state (`renderFinancialResponse(buffer.factResults, { declared })`) instead of prose that could claim a panel. The declared-vs-emitted comparison reads `runtime.serialize().intent` and is live-only (`config.llmMode === 'live'`); a real gate is still produced only by a blocked gateway call.
 `intent-context.ts` starts a new undecided intent per user turn and stores the structured describe_turn
 declaration. `tools/plan-compiler.ts` validates declared write counts/order and explicit structured
 parameters, dates, conditions and output references before createTaskGraph persists the whole DAG.
@@ -136,12 +136,5 @@ using its saved purpose and original question. Every new write still needs gatew
 disable that automatic continuation. `authorization-context.ts` locates the
 original assistant through the owned action, invocation and model request, so reused provider call IDs
 cannot redirect an older committed result into a newer operation.
-
-## Known Issues
-
-- LIVE mode can fabricate a gate: the model replies "please confirm in the panel above / waiting for your confirmation" without calling a write or `submit_plan`, so no `PendingAction` exists and `turns/events.ts:61-72` never emits a `ConfirmationCard`/`MfaCard` (those come only from a real blocked gateway call).
-- The panel wording is seeded by `system-prompt.ts:37` (names the panel, asks the model not to repeat approval instructions); `HALLUCINATION_RULE` (`system-prompt.ts:12`) forbids claiming a gated tool already executed but says nothing about a fabricated pending gate.
-- No code detects a "model claimed a panel" claim: `reply-format.ts` `inspectReplyFormat` (:18) recognizes only protocol envelopes; `conversational-response.ts:4` preserves prose verbatim; `financial-response.ts` renders pending text only from server facts (`options.pending`, :99-100).
-- Hook points for the fix: after the first live response completes at `run-turn.ts:66` (or inside `runLivePrompt`, `turns/live-prompt.ts:92-107`), when the buffer has no `confirmation_required`/`mfa_required` event and no write result, issue one bounded continuation using the `repairConversationalReply` template (`turns/live-prompt.ts:25-77`; persisted `ReplyRepairState` + `runtime.agent.continue()` at :57). Durable recovery has the mirror no-op at `durable/continuation.ts:296-299`.
 
 Use the central tool catalog and financial string contracts. See `docs/cn/architecture.md`, `docs/cn/agent-durability.md` and `docs/cn/security.md` for current behavior and limits.

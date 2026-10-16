@@ -85,9 +85,6 @@ export async function continueDeclaredWrites(runtime: BankingAgentRuntime, buffe
   options: WriteContinuationOptions = {}): Promise<void> {
   const declared = pendingDeclaredWrites(runtime, buffer, options.config);
   if (!declared) return;
-  // A runtime without the durable budget capability (a test seam) never spends a continuation.
-  const checkpoint = runtime.checkpointWriteContinuation;
-  if (typeof checkpoint !== 'function') return;
   const last = runtime.agent.state.messages.findLast(isAssistantMessage);
   if (!isAssistantMessage(last) || last.stopReason !== 'stop') return;
   const digest = runtimeRequestDigest('write_candidate', snapshotRuntimeValue(last));
@@ -96,7 +93,7 @@ export async function continueDeclaredWrites(runtime: BankingAgentRuntime, buffe
     state = { version: 1, phase: 'requested', attempt: 1, sourceDigest: digest,
       instruction: writeContinuationInstruction(declared, now()), declaredTools: declared };
     // The budget and exact instruction become durable before another provider request.
-    await checkpoint.call(runtime, state);
+    await runtime.checkpointWriteContinuation(state);
   } else if (state.phase !== 'requested' || state.sourceDigest !== digest) {
     return; // The single continuation for this candidate is already spent.
   }
@@ -111,7 +108,7 @@ export async function continueDeclaredWrites(runtime: BankingAgentRuntime, buffe
   if (options.applyCorrection) runtime.setReplyCorrection(true);
   try { await runtime.agent.continue(); }
   finally { if (options.applyCorrection) runtime.setReplyCorrection(false); }
-  await checkpoint.call(runtime, { ...state, phase: 'completed' });
+  await runtime.checkpointWriteContinuation({ ...state, phase: 'completed' });
   if (hasWriteEvidence(buffer)) return;
   // Still no controlled write: publish the server's authoritative state (declared vs. executed)
   // rather than unverified prose that could claim a panel no operation record backs.
