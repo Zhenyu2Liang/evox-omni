@@ -46,7 +46,7 @@ import {
   resolveTsxBin,
   runCliStep as runCliStepShared,
 } from '../helpers/prisma-cli';
-import { centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
+import { addMoney, centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
 import {
   NAV_TIMEOUT_MS,
   REPO_ROOT,
