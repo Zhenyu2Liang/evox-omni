@@ -35,6 +35,7 @@ import {
   runCliStep as runCliStepShared,
   spawnErrorText,
 } from '../helpers/prisma-cli';
+import { findConfirmationPanelClaim } from './panel-claim.e2e-helper';
 
 // Pin the Prisma schema engine's log level to `info` BEFORE anything spawns a CLI (the provisioning
 // `db push`/seed AND the dev server): an ambient `RUST_LOG≥warn` suppresses the engine's INFO banner,
@@ -1277,6 +1278,50 @@ export function fetchLedger(baseUrl: string): Promise<LedgerView> {
 export async function fetchCards(baseUrl: string): Promise<CardView[]> {
   const data = await getJson<{ cards: CardView[] }>(`${baseUrl}/api/cards`);
   return data.cards;
+}
+
+/** Is a confirmation OR MFA card currently rendered in the dock? (Reuses the same selectors/card taps.) */
+async function confirmationSurfacePresent(page: Page): Promise<boolean> {
+  if (await mfaCardPresent(page)) return true;
+  return (await page.locator(SELECTORS.approvalRequest).getByRole('button', { name: '确认', exact: true }).count()) > 0;
+}
+
+/**
+ * FABRICATED confirmation-panel claim guard.
+ *
+ * The LIVE model sometimes replies with ONLY prose asserting a confirmation/MFA panel ALREADY exists
+ * ("请在上方的确认面板确认" / "等待你的确认" / "已在面板确认") while it actually called NO controlled
+ * tool — so the security gateway never parked a `PendingAction`, `GET /api/actions` stays empty and no
+ * confirmation/MFA card renders. This helper FAILS EXPLICITLY on that fabrication and DISTINGUISHES the
+ * two possible causes in the thrown error:
+ *   - `GET /api/actions` has NO `pending`/`awaiting_mfa` action → cause is MODEL BEHAVIOUR (the model
+ *     narrated a gate it never created);
+ *   - a matching action IS parked but the DOM shows no confirmation/MFA card → cause is UI/HARNESS.
+ *
+ * A plain clarifying question ("请确认是否…？") claims NEITHER a panel NOR an existing gate and never
+ * trips this guard (`panel-claim.e2e-helper.ts` matches panel-existence phrasing only) — those keep
+ * following the caller's nudge logic. Callers pass the CURRENT `/api/actions` snapshot so the check
+ * reuses the existing plumbing (`fetchPendingActions`) rather than inventing parallel state.
+ */
+export async function assertNoFabricatedConfirmationPanel(params: {
+  page: Page;
+  /** The assistant prose for the turn just completed (read via `assistantTexts`). */
+  prose: string;
+  /** The CURRENT `GET /api/actions` snapshot (read via `fetchPendingActions`). */
+  actions: readonly PendingActionView[];
+}): Promise<void> {
+  const { page, prose, actions } = params;
+  const claim = findConfirmationPanelClaim(prose);
+  if (claim === undefined) return;
+  // The claim is only a FABRICATION when NEITHER a pending action NOR a rendered card backs it.
+  if (await confirmationSurfacePresent(page)) return;
+  const head = `模型声称确认/MFA 面板已存在（命中「${claim}」），但页面没有确认/MFA 卡片`;
+  const parked = actions.filter((action) => action.status === 'pending' || action.status === 'awaiting_mfa');
+  if (parked.length === 0) {
+    throw new Error(`${head}；GET /api/actions 无 pending/awaiting_mfa 待处理项 → cause=模型未发起受控工具（模型行为）`);
+  }
+  const detail = parked.map((action) => `${action.id}/${action.toolName}/${action.status}`).join('、');
+  throw new Error(`${head}；GET /api/actions 已有待处理项（${detail}）→ cause=UI/测试原因（网关已停放动作但 DOM 未渲染确认/MFA 卡片）`);
 }
 
 /** `GET /api/actions` returns the shared demo workspace's pending actions. */
