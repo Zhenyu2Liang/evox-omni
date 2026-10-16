@@ -27,6 +27,7 @@ JSON 金额使用十进制字符串。
 `moneyToCents` 校验小数位与有符号 64 位范围。
 比例、数量与未结算估值使用 `decimal.ts`。
 `moneyToChartNumber` 只用于图形坐标。
+`formatDecimalCNY` 在展示边界把金额按 HALF_UP 舍入到两位小数，并保留符号与千分位。
 命令金额字段（`contracts/command.ts` 的 `MONETARY_FIELDS`）在入参归一化时转为十进制字符串：`amount`、`creditLimit`、`monthlyLimit`、`expectedRedemptionAmount`、`redeemAmount`。
 
 `date.ts` 按北京时间构造和格式化日期。

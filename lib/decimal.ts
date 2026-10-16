@@ -68,10 +68,10 @@ export function valuationToMinor(valuation: string): bigint {
   return assertMinorUnits(BigInt(value.times('100').toFixed(0, Decimal.ROUND_HALF_UP)));
 }
 
-/** Preserve valuation precision in presentation, with at least two currency decimal places. */
+/** Grouped CNY presentation of the exact decimal text, rounded HALF_UP to exactly two fraction digits. */
 export function formatDecimalCNY(input: string): string {
   const value = new FinancialDecimal(decimalText(input));
-  const [integer, fraction] = value.abs().toFixed(Math.max(2, value.decimalPlaces())).split('.');
+  const [integer, fraction] = value.abs().toFixed(2, Decimal.ROUND_HALF_UP).split('.');
   return `${value.isNegative() ? '-' : ''}¥${integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${fraction}`;
 }
 
