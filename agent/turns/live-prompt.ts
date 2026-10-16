@@ -80,7 +80,12 @@ export async function runLivePrompt(runtime: BankingAgentRuntime, buffer: TurnBu
   } catch (error) { failure = safeToString(error); }
   if (!failure) {
     // A declared-but-unemitted write gets exactly one bounded continuation before format repair.
-    await continueDeclaredWrites(runtime, buffer, now, { config, applyCorrection: true });
+    // The foreground must NOT bracket this continuation with reply correction: `beforeToolCall`
+    // rejects any write emitted while `correctingReply` is set, so the declared write (and any
+    // `submit_plan`) could never reach the security gateway and no real `PendingAction`/panel would
+    // be created. Only the format-repair path (`repairConversationalReply`) keeps its own correction
+    // bracket; a genuine format repair, not this continuation, may reject a write.
+    await continueDeclaredWrites(runtime, buffer, now, { config });
     await repairConversationalReply(runtime, buffer, now);
     const failed = findRunFailure(runtime.agent.state.messages.slice(-1));
     if (failed) failure = modelFailureMessage(failed);
