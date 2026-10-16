@@ -37,7 +37,7 @@ agent availability, and replay policy. Use `AGENT_TOOL_NAMES` for model-visible 
 | `search_conversation_history` | `conversation-history.ts` | GREEN historical read |
 | `get_cards` | `card.ts` | GREEN read |
 | `set_card_limit` | `card.ts` | YELLOW write |
-| `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card` | `card.ts` | RED write |
+| `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card`, `consume_virtual_card` | `card.ts` | RED write |
 | `list_subscriptions` | `subscription.ts` | YELLOW read |
 | `cancel_subscription`, `set_subscription_reminder` | `subscription.ts` | YELLOW write |
 | `list_investments`, `compare_investments`, `get_investment_holdings` | `investment.ts` | GREEN read |
