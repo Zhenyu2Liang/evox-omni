@@ -84,7 +84,7 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 `replaceCard(cardId, userId)` 只为当前处于 `LOST` 的自有卡片补办新卡。
 补办在同一事务内创建新卡，并把新卡 id 写入原卡片的 `Card.replacedByCardId`。
-新卡沿用原卡片的 `type`、`network` 与月限额，不复制分类限额，并生成新的脱敏卡号。
+新卡沿用原卡片的 `type`、`network` 与月限额，不复制分类限额，并生成新的脱敏卡号。信用卡补办原样继承原卡片的 `creditLimitMinor` 与 `availableLimitMinor`（不重新授信、不增减）；非信用卡保持为空。
 原卡片保持 `LOST`。
 补办是幂等的：原卡片已指向补办卡时返回该卡，不再签发第二张。
 关联的补办卡不存在时抛 `CONFLICT`。
