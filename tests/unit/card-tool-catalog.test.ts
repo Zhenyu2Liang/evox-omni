@@ -78,10 +78,11 @@ describe('card capability catalog — replace_card / apply_virtual_card / set_ca
     });
   });
 
-  it('catalogs exactly the six card writes plus the get_cards read', () => {
+  it('catalogs exactly the seven card writes plus the get_cards read', () => {
     const cardTools = TOOL_NAMES.filter((name: ToolName) => TOOL_CATALOG[name].category === 'card').sort();
     expect([...cardTools]).toEqual([
       'apply_virtual_card',
+      'consume_virtual_card',
       'freeze_card',
       'get_cards',
       'replace_card',
