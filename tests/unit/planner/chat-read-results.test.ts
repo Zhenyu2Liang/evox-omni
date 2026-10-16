@@ -61,12 +61,13 @@ describe('chat business result cards', () => {
         annualYieldRate: '0.032575', termDays: 30, minAmount: '100.00' },
     }));
     const markup = renderToStaticMarkup(createElement(InvestmentsCard, { data: { holdings } }));
-    expect(markup).toContain('1,000.00456789');
+    expect(markup).toContain('¥1,000.00');
     expect(markup).toContain('3.2575%');
     expect(markup).toContain(business['business.investments.holdingActive']);
     expect(markup).toContain(business['business.investments.holdingRedeemed']);
     expect(markup).not.toContain('2,000.00');
     expect(markup).not.toContain('2,000.00913578');
+    expect(markup).not.toContain('¥2,000.01');
   });
 
   it('does not turn partial estimates into an invented aggregate market value or profit', () => {
@@ -77,8 +78,9 @@ describe('chat business result cards', () => {
     }));
     const markup = renderToStaticMarkup(createElement(InvestmentsCard, { data: { holdings } }));
     expect(markup).toContain('2,000.00');
-    expect(markup).toContain('1,000.00456789');
+    expect(markup).toContain('¥1,000.00');
     expect(markup).not.toContain('2,000.00456789');
+    expect(markup).not.toContain('¥2,000.01');
     expect(markup).not.toContain(translate(DEFAULT_LOCALE, 'cards.investment.marketValue'));
     expect(markup).not.toContain(translate(DEFAULT_LOCALE, 'cards.investment.profit'));
   });
