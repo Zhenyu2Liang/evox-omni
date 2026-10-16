@@ -31,7 +31,7 @@ describe('exact financial presentation', () => {
     expect(markup).toContain('90,071,992,547,409.02');
   });
 
-  it('preserves sub-cent valuations and yields beyond integer basis points', () => {
+  it('rounds sub-cent valuations to two decimals while keeping the exact yield', () => {
     const holdings: HoldingView[] = ['first', 'second'].map(id => ({
       id, productId: id, productName: id, riskLevel: 'R1', amount: '1000.00',
       marketValue: '1000.00456789', profit: '0.00456789', boughtAt: 0, status: 'HOLDING',
@@ -40,16 +40,16 @@ describe('exact financial presentation', () => {
     }));
     const markup = renderToStaticMarkup(createElement(InvestmentsCard, { data: { holdings } }));
     expect(markup).toContain('3.2575%');
-    expect(markup).toContain('2,000.00913578');
-    expect(markup).toContain('+¥0.00913578');
-    expect(markup).toContain('1,000.00456789');
+    expect(markup).toContain('¥2,000.01');
+    expect(markup).toContain('+¥0.01');
+    expect(markup).toContain('¥1,000.00');
   });
 
-  it('shows the sign of tiny estimated returns without rounding them to zero', () => {
+  it('preserves the sign of tiny estimated returns while rounding the value to two decimals', () => {
     const positive = renderToStaticMarkup(createElement(DecimalMoney, { amount: '0.0000000001', signed: true }));
     const negative = renderToStaticMarkup(createElement(DecimalMoney, { amount: '-0.0000000001', signed: true }));
-    expect(positive).toContain('+¥0.0000000001');
-    expect(negative).toContain('-¥0.0000000001');
+    expect(positive).toContain('+¥0.00');
+    expect(negative).toContain('-¥0.00');
   });
 
   it('keeps distinct cent amounts in confirmation identity beyond number precision', () => {

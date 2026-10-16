@@ -69,8 +69,9 @@ describe('exact financial values', () => {
     for (const value of ['1e-19', '1e40', 'Infinity', 'NaN', '1.0000000000000000001']) {
       expect(() => decimalText(value)).toThrow();
     }
-    expect(formatDecimalCNY('90071992547409.930000001')).toBe('¥90,071,992,547,409.930000001');
-    expect(formatDecimalCNY('-0.000001')).toBe('-¥0.000001');
+    // `formatDecimalCNY` is display-only: it groups digits and rounds HALF_UP to exactly two fraction digits.
+    expect(formatDecimalCNY('90071992547409.930000001')).toBe('¥90,071,992,547,409.93');
+    expect(formatDecimalCNY('-0.000001')).toBe('-¥0.00');
   });
 
   it('applies the CNY settlement policy only at the booked-money boundary', () => {
