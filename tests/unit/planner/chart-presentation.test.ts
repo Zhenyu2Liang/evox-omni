@@ -5,7 +5,7 @@ import { MiniSparkline, SpendingBar, SpendingPie, SpendingTrend } from '@/compon
 import { chartScale, chartTicks } from '@/components/charts/chartTheme';
 
 describe('native financial charts', () => {
-  it('renders exact maximum axis cents and its fractional-cent midpoint', () => {
+  it('renders the exact maximum axis cents and a HALF_UP-rounded midpoint label', () => {
     const amount = '92233720368547758.07';
     const bar = renderToStaticMarkup(createElement(SpendingBar, {
       data: [{ category: 'Spending', amount, share: '100.00' }],
@@ -15,19 +15,20 @@ describe('native financial charts', () => {
     }));
     for (const markup of [bar, trend]) {
       expect(markup).toMatch(/<text[^>]*>¥92,233,720,368,547,758\.07<\/text>/);
-      expect(markup).toMatch(/<text[^>]*>¥46,116,860,184,273,879\.035<\/text>/);
+      expect(markup).toMatch(/<text[^>]*>¥46,116,860,184,273,879\.04<\/text>/);
+      expect(markup).not.toContain('46,116,860,184,273,879.035');
       expect(markup).not.toContain('92,233,720,368,547,758.08');
     }
   });
 
-  it('retains negative fractional cents in axis labels', () => {
-    expect(chartTicks(['-0.07']).map(tick => tick.label)).toEqual(['-¥0.07', '-¥0.035', '¥0.00']);
+  it('rounds negative fractional cents HALF_UP to two decimals in axis labels', () => {
+    expect(chartTicks(['-0.07']).map(tick => tick.label)).toEqual(['-¥0.07', '-¥0.04', '¥0.00']);
     expect(chartTicks(['-0.02', '0.01']).map(tick => tick.label))
-      .toEqual(['-¥0.02', '-¥0.005', '¥0.01']);
+      .toEqual(['-¥0.02', '-¥0.01', '¥0.01']);
     const markup = renderToStaticMarkup(createElement(SpendingTrend, {
       data: [{ month: '2026-10', amount: '-0.07' }],
     }));
-    expect(markup).toMatch(/<text[^>]*>-¥0\.035<\/text>/);
+    expect(markup).toMatch(/<text[^>]*>-¥0\.04<\/text>/);
   });
 
   it('retains exact cents in accessible labels and legends despite lossy coordinates', () => {
