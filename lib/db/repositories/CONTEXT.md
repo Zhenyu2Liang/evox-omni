@@ -34,7 +34,8 @@
 - 普通状态赋值不能代替条件认领。
 - JSON 文本列由调用方解析，结构化写入使用 `toJson`。
 
-`createTaskGraph` 在事务中保存完整任务图。
+`createTaskGraph` 在事务中保存完整任务图，本身不做计划校验（校验由调用层完成）。
+其幂等性依赖 `AgentTask @@unique([runId, parentInvocationId])` 与 `AgentTaskNode @@unique([taskId, nodeId])`；节点 `order` 取入参数组下标，`runId` 为空时创建独立运行。
 `claimTaskExecution` 与 `claimNodeExecution` 认领执行权。
 释放与节点写入必须匹配持有的令牌。
 
