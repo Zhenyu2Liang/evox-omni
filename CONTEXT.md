@@ -17,6 +17,7 @@ A competition simulator for natural-language banking with server-controlled perm
 - `agent/financial-response.ts`: financial claims from structured evidence.
 - `agent/manual-review.ts`: stop future work while preserving already-started command facts.
 - `agent/scheduled-dispatcher.ts`: delivered reminders and freshly gated due payment workflows.
+- `banking-sdk/card.ts`, `agent/tools/card.ts`, `app/api/cards/[id]/consume/`: a VIRTUAL card is a debit instrument bound to one owned CHECKING account; `consume_virtual_card` debits that account and writes a `CardConsumption` row in one transaction, guarded by the card's monthly limit and replayable by execution key.
 
 ## Routing Table
 
