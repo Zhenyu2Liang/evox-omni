@@ -60,3 +60,17 @@ same-name calls, reverse completion order, exact action ownership, stable recove
 IDs, complete before/after prose, internal-tool isolation, presentation failure, and
 withholding unfinished candidates. Run with `VITEST_SKIP_DB_SETUP=1` to avoid database
 generation and provisioning.
+
+## Notes for Agents — model-prose acceptance vs. execution evidence
+Presentation never verifies that a model's "waiting for confirmation / please confirm in the
+panel" prose is backed by a real decision. `groundMessage` (`buffer.ts:25`) accepts any
+format-valid prose; it only runs `inspectReplyFormat` and `parseBankingGuidance`, never a
+tool-evidence check. The only confirmation signals are the `confirmation_required` /
+`mfa_required` events and cards produced from an actual blocked gateway call in `handleToolEnd`
+(`events.ts:61-71`) and `flushParkedDecision` (`authorization-view.ts:36-51`).
+`buffer.factResults` (`events.ts:33,45,54`) accumulates executed-tool evidence.
+The lifecycle points where the model has finished its final assistant message are
+`runLivePrompt` (`live-prompt.ts:92-107`, after `runtime.agent.prompt`) and `performTurn`
+(`run-turn.ts:66-82`); `repairConversationalReply` (`live-prompt.ts:25-77`) is the existing
+template for a bounded `runtime.agent.continue()` nudge. `buffer.advisory` is established here
+(`buffer.ts:20`, `run-turn.ts:51`) but only consumed outside this node.
