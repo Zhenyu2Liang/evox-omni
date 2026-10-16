@@ -21,6 +21,18 @@
 | `business.investments.purchaseCount` | 共 {count} 笔 | {count} purchases | 申购笔数，模板含 `{count}` 占位符 |
 | `business.investments.addedToExisting` | 已加购 | Added to existing | 对已持有产品再次申购的标记 |
 
+## 卡片标签
+
+`business.cards.*` 提供卡片业务的中英文标签，语义如下：
+
+| 键 | zh-CN | en | 含义 |
+| --- | --- | --- | --- |
+| `business.cards.linkedAccount` | 关联账户 | Linked account | 卡片关联的账户名称或编号 |
+| `business.cards.accountAvailable` | 账户可用余额 | Account available balance | 关联账户当前可用余额 |
+| `business.cards.payableAmount` | 当前可支付金额 | Currently payable | 结合卡片额度与账户余额后当前可支付的金额 |
+
+`pages.cards.consume*` 提供卡片消费界面（模拟消费表单、消费结果提示与消费记录）的中英文标签。
+
 ## 显示映射（display-sources）
 
 `messages/display-sources.json` 将界面已知的静态元数据值映射到消息键，供展示层翻译。
