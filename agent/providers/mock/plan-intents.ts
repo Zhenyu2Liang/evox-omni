@@ -39,7 +39,7 @@ export function handlePlan(text: string): AssistantMessage {
     op: requested?.operator ?? '>' as const, value: requested?.threshold ?? threshold ?? '2000.00' };
   const nodes: PlanNode[] = [];
   if (limitAdjustment !== undefined) {
-    nodes.push({ id: 'analyze', name: 'Analyze spending', dependencies: [], kind: 'tool', tool: 'analyze_spending', args: analysisArgs });
+    nodes.push({ id: 'analyze', name: '查询消费情况', dependencies: [], kind: 'tool', tool: 'analyze_spending', args: analysisArgs });
     nodes.push({
       id: 'check', name: '判断是否超过阈值', dependencies: ['analyze'], kind: 'condition',
       condition,
@@ -49,7 +49,7 @@ export function handlePlan(text: string): AssistantMessage {
       tool: 'set_card_limit', args: { cardId: demoCreditCardId, category: limitAdjustment.category, amount: limitAdjustment.amount },
     });
   } else if (/(消费|花|支出)/.test(text)) {
-    nodes.push({ id: 'analyze', name: 'Analyze spending', dependencies: [], kind: 'tool', tool: 'analyze_spending', args: analysisArgs });
+    nodes.push({ id: 'analyze', name: '查询消费情况', dependencies: [], kind: 'tool', tool: 'analyze_spending', args: analysisArgs });
     if (threshold != null) {
       nodes.push({
         id: 'check', name: '判断是否超过阈值', dependencies: ['analyze'], kind: 'condition',
