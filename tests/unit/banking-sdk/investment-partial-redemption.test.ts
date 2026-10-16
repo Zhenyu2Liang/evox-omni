@@ -298,7 +298,7 @@ describe('banking-sdk/investment · partial redemption (portion of principal)', 
     expect((row?.estimatedMarketValue ?? '').split('.')[1]).toHaveLength(18);
 
     // The DISPLAY boundary rounds that SAME stored value to ¥3,030.01 — yet storage keeps full precision.
-    expect(formatDecimalCNY(result.remainingMarketValue)).toBe('¥3,030.01');
+    expect(formatDecimalCNY(result.remainingMarketValue ?? '')).toBe('¥3,030.01');
     expect(row?.estimatedMarketValue).not.toBe('3030.01');
 
     // Exactly ONE credit of the SINGLE HALF_UP settlement: 2358000 + 202001 = 2560001 minor.
