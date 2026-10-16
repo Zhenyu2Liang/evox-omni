@@ -25,9 +25,13 @@ The only card tool calls the mock can ever emit are the catalog card set: `get_c
 - `narration.ts`, `replies.ts`, `messages.zh-CN.json`, `sequence-messages.zh-CN.json`: server-authored reply text.
 - `amount-parser.ts`, `request-amounts.ts`, `request-conditions.ts`, `names.ts`, `history.ts`, `compaction.ts`, `invalid-amount-response.ts`, `conversation.ts`, `action-follow-up.ts`: pure helpers.
 
+## Notes
+
+- The `name` of every plan node emitted by `plan-intents.ts` is a user-facing Chinese display label rendered verbatim through `localizeToolLabel` (e.g. `查询消费情况`, `查询账户余额`, `判断是否超过阈值`, `发送提醒`, `汇总结果`, `执行计划`, `调整「…」消费限额`). These names must not be English literals: an unknown label matches neither `chat.tool.<name>` nor display-sources `tools`, so it passes through unchanged and renders without word spacing.
+
 ## Tests
 
-`conversation-guidance.test.ts` and `investment-intents.test.ts` cover the closed guidance vocabulary and partial redemption; root Vitest discovers them via `pnpm test`.
+`conversation-guidance.test.ts` and `investment-intents.test.ts` cover the closed guidance vocabulary and partial redemption; `plan-node-label.test.ts` asserts each `analyze_spending` plan node label localizes through the real `localizeToolLabel`. Root Vitest discovers them via `pnpm test`.
 
 ## See Also
 
