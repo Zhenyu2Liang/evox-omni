@@ -18,6 +18,12 @@ A competition simulator for natural-language banking with server-controlled perm
 - `agent/manual-review.ts`: stop future work while preserving already-started command facts.
 - `agent/scheduled-dispatcher.ts`: delivered reminders and freshly gated due payment workflows.
 
+## Routing Table
+
+- `tests/e2e/`: real-browser acceptance — `acceptance.e2e.ts` (mock model) and `live-acceptance.e2e.ts` (live model), plus `*.e2e-helper.ts` scenario modules.
+- `tests/unit/`, `tests/scenarios/`, `tests/integration/`, `tests/app/`: pure, scenario, SQLite-backed and HTTP coverage.
+- `tests/helpers/`, `tests/fixtures/`: shared scenario harness and seeded-fixture ids.
+
 ## Invariants
 
 Booked amounts are Prisma `BigInt` minor units with explicit `*Minor` names. Annual yield ratios and unrounded valuations use Decimal arithmetic and canonical SQLite TEXT storage. `principalAmountMinor` is booked cash; `estimatedMarketValue` is unrounded CNY. Settlement rounds HALF_UP once to cents and records the quote and policy in the immutable result. Public monetary inputs and outputs are strings; `annualYieldRate` is a ratio in storage and DTOs, converted to a percentage only for display. Calculations and conditions never use floating-point money. Chart coordinate conversion is presentation only. Flagged consumption remains in booked totals. A budget envelope does not lock withdrawable cash. See `docs/cn/financial-values.md`.

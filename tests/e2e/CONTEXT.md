@@ -33,6 +33,8 @@
 
 场景覆盖业务决定、刷新、恢复、人工接管与对话历史。
 还覆盖本地化、移动布局、卡片管理和开发者模式。
+还覆盖理财申购与赎回（离线入口 `h-investment-flow`）以及理财页面（`journeyBankingPages` 访问 `/investments`）。
+真实模型入口（`live-acceptance.e2e.ts`）当前未覆盖理财工具。
 涉及资金变化时，同时核对页面、余额与流水。
 具体辅助模块使用 `*.e2e-helper.ts` 命名。
 
