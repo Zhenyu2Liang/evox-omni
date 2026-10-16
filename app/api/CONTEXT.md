@@ -37,6 +37,8 @@ selectable browser identities.
 | `POST /api/security/reset` | Optional verification code; separately gated and audited unlock | Account circuit-breaker policy |
 | `GET /api/{dashboard,bills,cards,subscriptions}` | Simulated banking read models for the configured user | Banking SDK |
 | `/api/cards/{,[id]}` and `/api/cards/changes/[id]/{verify,cancel}` | Manual demo-card add/delete proposals plus MFA verify/cancel; returns `CardChangeResponse` | `security/manual-card-management` (see `../cards/CONTEXT.md`) |
+| `POST /api/cards/[id]/consume` | Owned virtual-card consumption: exact CNY `amount` string plus optional `category`/`merchant`/`occurredAt`/`executionKey`; returns `ConsumeCardResult` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
+| `GET /api/cards/[id]/consumptions` | Owned per-card consumption ledger, newest first; optional `limit`; returns `{ consumptions: CardConsumptionView[] }` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
 | `GET /api/contacts`, `POST /api/contacts` | Owned masked contacts; strict name/phone form with no client-selected owner | Contact SDK and atomic contact/audit command |
 | `DELETE /api/contacts/[id]` | Owned contact deletion with explicit `{ confirm: true }` decision | Contact SDK and atomic contact/audit command |
 | `/api/manual-reviews` and `/api/manual-reviews/[id]` | Owned manual-review requests and recorded resolutions | Agent manual-review contracts |
