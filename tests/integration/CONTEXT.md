@@ -34,3 +34,10 @@
 
 运行：`pnpm exec vitest run tests/integration`。
 共享数据库规则见 [../CONTEXT.md](../CONTEXT.md)。
+
+## 已知缺口
+
+- `live-*.test.ts` 中的 `live` 表示使用 live 模式配置，不代表调用真实模型；真实模型证据见 [../e2e/CONTEXT.md](../e2e/CONTEXT.md)。
+- 本目录所有“确认/面板”断言都以**真实工具调用并持久化 `PendingAction`** 为前提（见 `conversational-turns.test.ts`、`decision-guidance.test.ts`、`live-recovery.test.ts`）。
+- 无任何测试覆盖“模型仅在散文里声称已在面板确认／等待用户确认，却不发出任何工具调用、因而没有 `PendingAction`、也不显示面板”的情形。`conversational-turns.test.ts` 的 `fixtures.fabricatedSuccess`／`fabricatedBalance` 只断言这类散文被原样保留且不触发授权，不涉及面板/确认声称。
+- `panel`、`hallucinat`、`please confirm`、`waiting for your confirmation` 及中文 `面板`／`确认卡片`／`等待确认`／`请确认` 在本目录均无匹配。
