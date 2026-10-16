@@ -30,8 +30,11 @@ export async function getDashboardSummary(userId: string): Promise<DashboardSumm
     listHoldings(userId),
   ]);
 
+  // Only UNREPLACED credit counts. `replaceCard` leaves the `LOST` source card (with its
+  // `availableLimitMinor` intact) pointing at the NEW card that inherits that same limit, so summing
+  // every `CREDIT` row would report the same credit twice and inflate the total.
   const creditAvailable = cardRows
-    .filter((card) => card.type === 'CREDIT')
+    .filter((card) => card.type === 'CREDIT' && card.status !== 'LOST')
     .reduce((total, card) => total + (card.availableLimitMinor ?? 0n), 0n);
 
   return {

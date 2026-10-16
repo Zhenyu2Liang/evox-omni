@@ -68,11 +68,27 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 业务日期使用显式的 UTC+08:00 演示时钟；安全与租约使用真实时间。金融数字转换只允许用于图表几何，不能用于授权或执行。
 
+## 卡片：账户绑定与消费
+
+虚拟卡在创建时绑定一个结算活期账户：`Card.linkedAccountId` 是 `userId` 的 CHECKING 账户 id（历史引用，不是 Prisma 关系）。
+
+`resolveLinkedAccount(tx, userId, requestedId?)` 只接受自有活期账户：显式 id 缺失或不属于该用户抛 `SECURITY_DENIED`，类型不是 `CHECKING` 抛 `VALIDATION`；缺省时回退到该用户的活期账户，没有则抛 `VALIDATION`。
+
+`applyVirtualCard` 与 `addDemoCard`（仅 `type === 'VIRTUAL'`）在创建时绑定账户。`applyVirtualCard` 的幂等键重放还要求请求的绑定账户与月限额一致，否则抛 `CONFLICT`；确定性 id 与 P2002 并发重放保持不变。非虚拟卡不绑定账户。
+
+绑定的卡在 `CardView` 中额外暴露 `linkedAccountId`、`linkedAccountNumber`（账户脱敏号）、`accountAvailableBalance`（账户余额，十进制人民币）与 `payableAmount`。`payableAmount = monthlyLimitMinor 为空 ? accountAvailableBalance : min(accountAvailableBalance, max(0, monthlyLimitMinor − 当月已消费))`；当月已消费按 `demoMonthRange()` 的 UTC+08:00 业务月汇总该卡的 `CardConsumption.amountMinor`。未绑定的卡这些字段缺省，不伪造数值。
+
+`consumeCard(input)` 是本地模拟刷卡：在同一事务内校验卡（自有、已绑定、`ACTIVE`，否则 `NOT_FOUND` / `CONFLICT`）、重新校验结算账户（自有且 `CHECKING`）、按月限额校验（超过抛 `LIMIT_EXCEEDED`，限额 `0` 表示不可支付，为空表示仅受账户余额约束），用条件余额写扣减（`balanceMinor >= amount`，计数为 0 抛 `INSUFFICIENT_FUNDS`），写入 `channel='CARD'`、`direction='DEBIT'`、`amountMinor` 为负的流水行，并创建一条正的 `CardConsumption`。
+
+`executionKey` 是重放身份（`CardConsumption.executionKey` 唯一）。同键重放校验归属后返回持久化的 `resultJson` 原始快照，不重复扣款；卡或用户不一致抛 `CONFLICT`；并发同键唯一冲突在事务外重读已提交行并重放。缺少快照证据抛 `CONFLICT`，绝不重建成功。
+
+`listCardConsumptions(userId, query?)` 返回自有的消费记录（按 `occurredAt` 从新到旧，可用 `cardId` 过滤，默认 20 条、上限 200）。
+
+仪表盘 `getDashboardSummary` 的 `creditAvailable` 只汇总 `type === 'CREDIT'` 且 `status !== 'LOST'` 的卡：补办会保留 LOST 原卡的可用额度并让新卡继承同一额度，按 `LOST` 过滤避免重复计入。虚拟卡/借记卡与其绑定账户余额不计入信用可用额；资产总额仍按账户余额各计一次，不因虚拟卡重复。
+
 ## 卡片与定时载荷
 
 卡类别限额只接受支持的消费类别与可用或冻结的卡。状态变更使用条件写；并发变更产生领域冲突，而不是原始数据库错误。取消订阅会停用其续费提醒，提醒变更要求订阅处于可用状态。
-
-卡片只绑定 `userId`，不绑定任何账户：`Card` 模型没有账户外键，`applyVirtualCard`/`addDemoCard` 也不记录资金来源。SDK 目前没有任何刷卡消费/扣款能力：不存在为某张卡扣减账户余额或写入 `channel='CARD'` 流水的函数；`TransactionChannel` 里的 `'CARD'` 只是保留的枚举值。资金变动与流水只由转账/投资/订阅模块在 `runInTransaction` 内通过条件余额写（`tx.account.updateMany({ where: { balanceMinor: { gte } } })` 或按旧余额 CAS）加 `tx.transaction.create` 完成。
 
 定时支付与转账载荷在持久化前校验，并在派发时通过 `lib/contracts/scheduled-command.ts` 再次校验。载荷要求恰好一个收款人选择器与一个正的十进制金额，拒绝未知命令字段与凭据。提醒载荷只能包含惰性文本。日期纪元必须是合法的整数瞬时；到期意图可以被存储，而 Agent 创建独立要求显式的未来时间。服务端推导 `requiresConfirmation`：提醒自动投递，支付与转账在派发时需要授权。调用方不能设置该策略标志。
 
