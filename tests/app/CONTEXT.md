@@ -27,6 +27,9 @@ HTTP 200 不等于业务成功。
 
 覆盖对话、确认、验证、取消、恢复和任务控制。
 也覆盖业务记录、联系人、卡片、安全与开发者入口。
+卡片虚拟卡消费入口由 `card-consume-http.test.ts` 覆盖：
+`POST /api/cards/[id]/consume`（成功 200 与错误码→HTTP 状态映射）与
+`GET /api/cards/[id]/consumptions`（服务端用户范围内的消费记录，含 `?limit=` 校验）。
 开发者偏好与金融授权分别断言。
 
 解锁入口必须区分：
