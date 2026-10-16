@@ -16,7 +16,9 @@ import type { ConversationIntent } from '@/lib/contracts/intent';
 import { catalogEntry } from '@/lib/contracts/tool-catalog';
 import type { BankingAgentRuntime } from './banking-agent';
 import type { TurnBuffer } from './turns/contracts';
-import { isAssistantMessage } from './turns/message-utils';
+import { isAssistantMessage, textOfContent } from './turns/message-utils';
+import { inspectReplyFormat } from './reply-format';
+import { parseBankingGuidance } from './banking-guidance';
 import { publishReplyProgress } from './turns/buffer';
 import { publishServerReply, retireUnpublishedReply } from './turns/server-reply';
 import { renderFinancialResponse } from './financial-response';
@@ -87,6 +89,14 @@ export async function continueDeclaredWrites(runtime: BankingAgentRuntime, buffe
   if (!declared) return;
   const last = runtime.agent.state.messages.findLast(isAssistantMessage);
   if (!isAssistantMessage(last) || last.stopReason !== 'stop') return;
+  // A server-interpretable reply is handled by its established path, not re-prodded: a protocol
+  // envelope needing format repair is corrected by `repairConversationalReply`, and a valid guidance
+  // envelope is rendered server-side by `groundMessage`. Only ordinary prose (no format issue and no
+  // guidance) can be the fabricated-panel defect this continuation exists for. Skipping here keeps
+  // the one-shot continuation budget unspent for such a response.
+  const prose = textOfContent(last.content);
+  if (inspectReplyFormat(prose, { allowProtocolExamples: buffer.allowProtocolExamples }).length) return;
+  if (!buffer.allowProtocolExamples && parseBankingGuidance(prose)) return;
   const digest = runtimeRequestDigest('write_candidate', snapshotRuntimeValue(last));
   let state = runtime.serialize().writeContinuation;
   if (!state) {
