@@ -23,7 +23,7 @@ SDK 类型通过类型导入使用。
 | 行 | 键 | 中文 | 英文 | 值 |
 | --- | --- | --- | --- | --- |
 | 持有金额 | `business.investments.principal` | 持有金额 | Principal | `Money(holding.amount)`（预订本金） |
-| 市值 | `business.investments.marketValue` | 市值 | Market value | `DecimalMoney(holding.marketValue)`（未舍入） |
+| 市值 | `business.investments.marketValue` | 市值 | Market value | `DecimalMoney(holding.marketValue)`（显示按 HALF_UP 舍入到两位；存储估值不舍入） |
 | 收益 | `business.investments.profit` | 收益 | Return | `DecimalMoney(holding.profit) signed` |
 | 最近申购 | `business.investments.lastPurchase` | 最近申购 | Last purchase | `formatDateTime` |
 | 申购记录 | `business.investments.purchases` + `purchaseCount` | 申购记录 · 共 {count} 笔 | — | 计数 |
