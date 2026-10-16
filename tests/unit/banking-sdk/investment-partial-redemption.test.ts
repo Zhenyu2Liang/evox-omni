@@ -22,6 +22,7 @@ import { banking } from '@/banking-sdk';
 import type { InvestResult, TransactionView } from '@/banking-sdk';
 import { INVESTMENT_FLOW_CATEGORY } from '@/banking-sdk/categories';
 import { AppError } from '@/lib/errors';
+import { formatDecimalCNY } from '@/lib/decimal';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
 import { DEMO_USER_ID } from '../../helpers/fixtures';
 
@@ -260,5 +261,54 @@ describe('banking-sdk/investment · partial redemption (portion of principal)', 
     // …and credits nothing more: the balance and the flow ledger are unchanged.
     expect(await checkingBalanceMinor()).toBe(2_863_000n);
     expect(await flowRows()).toHaveLength(2);
+  });
+
+  // REGRESSION for the display change (commit 55369a5: `formatDecimalCNY` now rounds CNY to exactly
+  // TWO decimals HALF_UP). Presentation rounding must NOT leak into the UNDERLYING valuation or
+  // settlement: a partial redemption still stores the remainder at FULL unrounded precision and settles
+  // the redeemed share with ONE HALF_UP step at the cent boundary — exactly as before the display change.
+  it('Case G · a long-fraction quote settles ONCE at cents and keeps the remainder UNROUNDED', async () => {
+    // 2000 (principal) / 5000 = 0.4 of the ¥5,050.012500000000000005 valuation (18 fraction digits).
+    const estimate = '5050.012500000000000005';
+    await db().investmentHolding.update({
+      where: { id: SEEDED_HOLDING },
+      data: { estimatedMarketValue: estimate },
+    });
+
+    const result = await redeem({ redeemAmount: '2000.00', idempotencyKey: 'partial-precision' });
+
+    // Settlement: 0.4 × 5050.012500000000000005 = 2020.005000000000000002 → HALF_UP ONCE → ¥2,020.01.
+    expect(result.partial).toBe(true);
+    expect(result.redemptionValuation).toBe('2020.005000000000000002');
+    expect(result.amount).toBe('2020.01');
+    expect(result.settlementRounding).toBe('HALF_UP');
+    expect(result.redeemedPrincipal).toBe('2000.00');
+    expect(result.remainingPrincipal).toBe('3000.00');
+    // Remainder = 5050.012500000000000005 − 2020.005000000000000002 = 3030.007500000000000003.
+    expect(result.remainingMarketValue).toBe('3030.007500000000000003');
+    expect(result.newBalance).toBe('25600.01');
+
+    // The remainder is PERSISTED at FULL unrounded precision (18 fraction digits) — NOT the two-decimal
+    // display form and NOT the rounded cents; the row matches the result's own remaining valuation.
+    const row = await holdingRow();
+    expect(row?.status).toBe('HOLDING');
+    expect(row?.principalAmountMinor).toBe(300_000n);
+    expect(row?.estimatedMarketValue).toBe('3030.007500000000000003');
+    expect(row?.estimatedMarketValue).toBe(result.remainingMarketValue);
+    expect((row?.estimatedMarketValue ?? '').split('.')[1]).toHaveLength(18);
+
+    // The DISPLAY boundary rounds that SAME stored value to ¥3,030.01 — yet storage keeps full precision.
+    expect(formatDecimalCNY(result.remainingMarketValue)).toBe('¥3,030.01');
+    expect(row?.estimatedMarketValue).not.toBe('3030.01');
+
+    // Exactly ONE credit of the SINGLE HALF_UP settlement: 2358000 + 202001 = 2560001 minor.
+    expect(await checkingBalanceMinor()).toBe(2_560_001n);
+    const flow = await flowRows();
+    expect(flow).toHaveLength(1);
+    expect(flow[0]).toMatchObject({
+      amount: '2020.01',
+      direction: 'CREDIT',
+      category: INVESTMENT_FLOW_CATEGORY,
+    });
   });
 });
