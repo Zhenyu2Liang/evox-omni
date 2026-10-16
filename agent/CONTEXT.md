@@ -16,7 +16,7 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 ## Capability boundary: one card-spend write
 
 The agent exposes exactly ONE card-spend write — `consume_virtual_card` (RED) — which pays a positive exact-CNY amount from an owned account-bound virtual card by debiting its linked checking account. There is no other card-consumption / card-spend / card-purchase / card-payment / card-debit capability.
-The card tool family is read or card-record management only: `get_cards` (read), `set_card_limit` (per-category limit, no money movement), `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card` (see `tools/card.ts`, `card-emitter.ts:102`, `tools/index.ts`).
+The card tool family otherwise reads and manages card records: `get_cards` (read), `set_card_limit` (per-category limit, no money movement), `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card`, plus the card-spend `consume_virtual_card` (see `tools/card.ts`, `card-emitter.ts:102`, `tools/index.ts`).
 `analyze_spending`, `get_transactions` and `detect_anomaly` are GREEN reads over already-booked ledger rows; `detect_anomaly` never freezes a card.
 Card charges exist only as sealed ledger data — a transaction row with a `CARD` channel (see `system-prompt.ts:46`), which never identifies the owning debit/credit card from the deposit account type.
 The only money-moving writes are `transfer_money`, `reserve_budget`, `subscribe_investment` and `redeem_investment`; `create_scheduled_task` with kind `PAYMENT` dispatches through the transfer channel, not a card or merchant billing integration.
