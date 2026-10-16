@@ -7,7 +7,7 @@ import { GetBalanceParams } from './account';
 import { AnalyzeSpendingParams } from './analysis';
 import { ReserveBudgetParams } from './budget';
 import { GetCardsParams, SetCardLimitParams, FreezeCardParams, UnfreezeCardParams, ReportLostCardParams,
-  ApplyVirtualCardParams, ReplaceCardParams } from './card';
+  ApplyVirtualCardParams, ConsumeVirtualCardParams, ReplaceCardParams } from './card';
 import { SearchContactParams } from './contact';
 import { ConversationHistoryParams } from './conversation-history';
 import { GetDashboardSummaryParams } from './dashboard';
@@ -23,7 +23,7 @@ const parameters = {
   get_balance: GetBalanceParams, analyze_spending: AnalyzeSpendingParams, reserve_budget: ReserveBudgetParams,
   get_cards: GetCardsParams, set_card_limit: SetCardLimitParams, freeze_card: FreezeCardParams,
   unfreeze_card: UnfreezeCardParams, report_lost_card: ReportLostCardParams, search_contact: SearchContactParams,
-  apply_virtual_card: ApplyVirtualCardParams, replace_card: ReplaceCardParams,
+  apply_virtual_card: ApplyVirtualCardParams, consume_virtual_card: ConsumeVirtualCardParams, replace_card: ReplaceCardParams,
   search_conversation_history: ConversationHistoryParams, get_dashboard_summary: GetDashboardSummaryParams,
   list_investments: ListInvestmentsParams, compare_investments: CompareInvestmentsParams,
   get_investment_holdings: GetInvestmentHoldingsParams, subscribe_investment: SubscribeInvestmentParams,
