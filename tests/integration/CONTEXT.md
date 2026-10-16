@@ -43,6 +43,6 @@
 - 本目录所有“确认/面板”断言都以**真实工具调用并持久化 `PendingAction`** 为前提（见 `conversational-turns.test.ts`、`decision-guidance.test.ts`、`live-recovery.test.ts`）。
 - 无任何测试覆盖“模型仅在散文里声称已在面板确认／等待用户确认，却不发出任何工具调用、因而没有 `PendingAction`、也不显示面板”的情形。`conversational-turns.test.ts` 的 `fixtures.fabricatedSuccess`／`fabricatedBalance` 只断言这类散文被原样保留且不触发授权，不涉及面板/确认声称。
 - `panel`、`hallucinat`、`please confirm`、`waiting for your confirmation` 及中文 `面板`／`确认卡片`／`等待确认`／`请确认` 在本目录均无匹配。
-- `replace_card`/`report_lost_card`（RED 卡片补办链）尚无“原操作回执重放”回归。
+- `report_lost_card`（RED 挂失）尚无“原操作回执重放”回归；`replace-card-replay.test.ts` 只把它当作同一操作键下的“换了工具”冲突用例（`errorCode: 'CONFLICT'`，不进入写栅栏），并不校验其重放。
 - 通用回执重放入口为 `createToolRegistry(userId).executeDirect(tool, args, { sessionId, idempotencyKey })`，用同一 key 重发即原样返回（`refactor-financial-commands.test.ts:95`、`confirmed-write-authority.test.ts:136`）。
 - 夹具不播种 LOST 卡（`card_credit`/`card_debit` 均 `ACTIVE`，见 `../helpers/fixtures.ts:99`）；`replace_card` 需先 `report_lost_card` 或直接改库把源卡置 `LOST`。
