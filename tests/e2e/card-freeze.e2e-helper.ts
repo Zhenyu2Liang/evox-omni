@@ -7,9 +7,16 @@ import { approvalHistory, assertApprovalDock, assertApprovalDockFitsViewport, as
 import { SELECTORS, assistantTexts, captureScreenshot, fetchPendingActions, getJson, getDeveloperJson, gotoAgent,
   submitChat, submitMfa, waitFor, waitForComposerHydration, waitForMfaCard, withPage } from './helpers';
 
-interface CardSnapshot { cards: Array<{ id: string; status: string }> }
+interface CardSnapshot { cards: Array<{ id: string; type: string; numberMasked: string; status: string }> }
 
-/** Two independent authorization challenges, owner-scoped audit and historical plan placement. */
+/** The exact seeded card set the journey freezes: one ACTIVE CREDIT, DEBIT and VIRTUAL card. */
+const SEEDED_CARDS = [
+  { id: 'card_credit', type: 'CREDIT', numberMasked: '****6688' },
+  { id: 'card_debit', type: 'DEBIT', numberMasked: '****8821' },
+  { id: 'card_virtual', type: 'VIRTUAL', numberMasked: '****7788' },
+] as const;
+
+/** Three independent authorization challenges, owner-scoped audit and historical plan placement. */
 export async function journeyMultiCardFreeze(browser: Browser, baseUrl: string): Promise<string> {
   const t = createTranslator('zh-CN');
   return withPage(browser, async page => {
@@ -17,8 +24,16 @@ export async function journeyMultiCardFreeze(browser: Browser, baseUrl: string):
     page.on('pageerror', error => errors.push(error.message));
     await gotoAgent(page, baseUrl);
     const original = await getJson<CardSnapshot>(`${baseUrl}/api/cards`);
-    if (original.cards.length !== 2 || original.cards.some(card => card.status !== 'ACTIVE')) {
-      throw new Error('The isolated fixture must contain two active cards');
+    // Assert the fixture BY TYPE/ID, not a bare count: exactly the three seeded cards, each ACTIVE.
+    if (original.cards.length !== SEEDED_CARDS.length ||
+        original.cards.some(card => !SEEDED_CARDS.some(seeded => seeded.id === card.id))) {
+      throw new Error('The isolated fixture must contain exactly the three seeded cards');
+    }
+    for (const seeded of SEEDED_CARDS) {
+      const card = original.cards.find(row => row.id === seeded.id);
+      if (!card || card.type !== seeded.type || card.numberMasked !== seeded.numberMasked || card.status !== 'ACTIVE') {
+        throw new Error(`The isolated fixture is missing the active ${seeded.type} card ${seeded.numberMasked} (${seeded.id})`);
+      }
     }
     await submitChat(page, 'Plan and freeze all my bank cards');
     await waitForMfaCard(page);
@@ -61,14 +76,25 @@ export async function journeyMultiCardFreeze(browser: Browser, baseUrl: string):
     await assertApprovalDock(page, second.id, 'mfa');
     if (await page.locator(SELECTORS.mfaInput).inputValue() !== '') throw new Error('The second request inherited the first verification code');
     await submitMfa(page, '123456');
-    await waitFor(async () => (await getJson<CardSnapshot>(`${baseUrl}/api/cards`)).cards.every(card => card.status === 'FROZEN') &&
-      await page.locator(SELECTORS.composer).isEnabled(), { description: 'Both independently authorized freezes are complete' });
+    const third = await waitFor(async () => (await fetchPendingActions(baseUrl))
+      .find(action => action.id !== first.id && action.id !== second.id && action.toolName === 'freeze_card' && action.status === 'awaiting_mfa') || false,
+    { description: 'The third card requires its own independent verification challenge', timeoutMs: 90_000 });
+    if (third.tier !== 'RED') throw new Error('An earlier approval authorized the third card');
+    const partialTwo = await getJson<CardSnapshot>(`${baseUrl}/api/cards`);
+    if (partialTwo.cards.filter(card => card.status === 'FROZEN').length !== 2) throw new Error('The second authorization did not freeze exactly two cards');
+    await waitForMfaCard(page);
     await assertApprovalExecuted(page, second.id, 'awaiting_mfa');
+    await assertApprovalDock(page, third.id, 'mfa');
+    if (await page.locator(SELECTORS.mfaInput).inputValue() !== '') throw new Error('The third request inherited an earlier verification code');
+    await submitMfa(page, '123456');
+    await waitFor(async () => (await getJson<CardSnapshot>(`${baseUrl}/api/cards`)).cards.every(card => card.status === 'FROZEN') &&
+      await page.locator(SELECTORS.composer).isEnabled(), { description: 'All three independently authorized freezes are complete' });
+    await assertApprovalExecuted(page, third.id, 'awaiting_mfa');
     if (await page.locator(SELECTORS.approvalRequest).count()) throw new Error('Completed card freezes leave an actionable request in the dock');
     const history = await getJson<{ entries: ActivityRecord[] }>(`${baseUrl}/api/activity`);
     const completed = history.entries.filter(entry => entry.type === 'card_freeze' && entry.status === 'completed');
-    if (completed.length !== 2 || completed.some(entry => entry.verification !== 'passed')) {
-      throw new Error('Business history is missing either independently verified card freeze');
+    if (completed.length !== 3 || completed.some(entry => entry.verification !== 'passed')) {
+      throw new Error('Business history is missing one of the independently verified card freezes');
     }
     await page.goto(`${baseUrl}/activity`);
     await page.locator('[data-operation-history]').waitFor();
@@ -78,8 +104,8 @@ export async function journeyMultiCardFreeze(browser: Browser, baseUrl: string):
     }
     if (await page.locator('a[href="/audit"]:visible').count()) throw new Error('Normal navigation exposes technical audits');
     const audits = await getDeveloperJson<{ entries: AuditEntry[] }>(`${baseUrl}/api/audit?toolName=freeze_card&status=success`);
-    if (audits.entries.length !== 2 || audits.entries.some(entry => entry.riskLevel !== 'RED' || !entry.mfaRequired || !entry.userId)) {
-      throw new Error('The audit read model is missing either verified card freeze');
+    if (audits.entries.length !== 3 || audits.entries.some(entry => entry.riskLevel !== 'RED' || !entry.mfaRequired || !entry.userId)) {
+      throw new Error('The audit read model is missing one of the verified card freezes');
     }
     await gotoAgent(page, baseUrl);
     await waitForComposerHydration(page);
@@ -87,6 +113,7 @@ export async function journeyMultiCardFreeze(browser: Browser, baseUrl: string):
     await loadHistoryUntil(page, async () => await plans.count() > 0);
     await assertApprovalExecuted(page, first.id, 'awaiting_mfa');
     await assertApprovalExecuted(page, second.id, 'awaiting_mfa');
+    await assertApprovalExecuted(page, third.id, 'awaiting_mfa');
     if (await plans.count() !== 1) throw new Error('Refresh did not restore exactly one historical plan');
     const before = (await assistantTexts(page)).length;
     await submitChat(page, 'Hello');
@@ -107,6 +134,7 @@ export async function journeyMultiCardFreeze(browser: Browser, baseUrl: string):
     await loadHistoryUntil(page, async () => await plans.count() > 0);
     await assertApprovalExecuted(page, first.id, 'awaiting_mfa');
     await assertApprovalExecuted(page, second.id, 'awaiting_mfa');
+    await assertApprovalExecuted(page, third.id, 'awaiting_mfa');
     await assertReadOnlyApprovalHistory(page);
     if (await plans.count() !== 1 || await page.getByRole('button', { name: t('cards.plan.control.pause'), exact: true }).count()) {
       throw new Error('Reload resurrected completed workflow controls');
@@ -120,6 +148,6 @@ export async function journeyMultiCardFreeze(browser: Browser, baseUrl: string):
     if (!(await page.locator('main').innerText()).includes('freeze_card')) throw new Error('Developer audit cannot inspect completed freezes');
     await page.locator('[data-developer-toggle]:visible').click();
     await page.waitForURL('**/agent');
-    return 'Two cards require separate RED challenges in a mobile-safe dock outside the transcript; pending reload preserves the request without its code, wrong codes retain pending status, successful verification dismisses each request and preserves read-only approval transitions; completed plans keep their original message placement.';
+    return 'Three cards each require a separate RED challenge in a mobile-safe dock outside the transcript; pending reload preserves the request without its code, wrong codes retain pending status, successful verification dismisses each request and preserves read-only approval transitions; completed plans keep their original message placement.';
   }, { label: 'multi-card-freeze' });
 }
