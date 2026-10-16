@@ -41,13 +41,13 @@
 `pnpm typecheck` 检查类型。
 `pnpm exec tsx tests/e2e/acceptance.e2e.ts` 运行浏览器验收。
 
-## 确认/MFA 面板声明的覆盖
+## 面板声称的覆盖
 
-确认/MFA 面板只在安全网关从真实工具调用持久化 `PendingAction` 后出现。
-现有面板断言（`unit/agent`、`unit/planner`、`scenarios`、`integration`、`app`、`e2e`）多数以真实工具调用为前提。
+确认/MFA 面板只在安全网关从真实工具调用持久化 `PendingAction` 后出现；模型散文不创建面板。
+`unit/agent`（`write-continuation*.test.ts`、`system-prompt.test.ts`）与 `integration/write-continuation.test.ts` 覆盖「声明写操作却只用散文声称面板/等待确认、未发出工具调用」的场景：服务端做一次有界续接，仍无写入时以服务端叙述发布真实未提交状态，伪造声称绝不进入会话记录。
+同一覆盖断言「参数齐全→续接后真实发起（打开真实网关闸门）或被网关拦截」以及「信息不足→正常澄清，不消耗续接预算」。
 `e2e/panel-claim.e2e-helper.ts#findConfirmationPanelClaim` 纯文本判定助手散文是否声称确认/MFA 面板已存在，`unit/panel-claim.test.ts` 覆盖其正/负例；否定表述与普通追问不误判。
-`e2e/live-acceptance.e2e.ts#driveRedTool` 与场景 7 经 `helpers.ts#assertNoFabricatedConfirmationPanel` 在「散文声称面板 + `/api/actions` 无待处理项 + DOM 无卡片」时显式判定失败，错误区分 cause=模型未发起受控工具与 cause=UI/测试原因。
-故 live 模型虚假声称面板会按真实失败记录，不再只被催促绕过；业务源仍不检测或修复该类声称（`agent/reply-format.ts#inspectReplyFormat` 与 `agent/turns/live-prompt.ts#repairConversationalReply` 只做协议信封校正）。
+`e2e/live-acceptance.e2e.ts#driveRedTool` 与相关场景经 `helpers.ts#assertNoFabricatedConfirmationPanel` 在「散文声称面板 + `/api/actions` 无待处理项 + DOM 无卡片」时显式判定失败，错误区分 cause=模型未发起受控工具与 cause=UI/测试原因。
 `unit/planner/mock-amount-clarification.test.ts` 与 `app/nl-entry-http.test.ts` 覆盖「信息不足→澄清，不产生工具调用」，但澄清为结构化 `missing_details` 或纯文本追问，非“面板”声称。
 细节见各子目录 CONTEXT.md。
 

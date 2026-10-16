@@ -15,6 +15,7 @@ A competition simulator for natural-language banking with server-controlled perm
 - `banking-sdk/`: exact domain arithmetic and mutations through trusted execution context.
 - `lib/db/unit-of-work.ts`: nested repository calls share the current transaction.
 - `agent/financial-response.ts`: financial claims from structured evidence.
+- `agent/write-continuation.ts`: bounded, restart-safe continuation when a declared write produced no controlled tool call.
 - `agent/manual-review.ts`: stop future work while preserving already-started command facts.
 - `agent/scheduled-dispatcher.ts`: delivered reminders and freshly gated due payment workflows.
 
@@ -42,6 +43,8 @@ Operation keys are server-owned invocation/action/node identities. Receipts matc
 
 Pi events are copied and persisted before transforms or effects. Only grounded UI events are public. Transport request IDs deduplicate run admission; session revision guards prevent overwrite. Old lease holders cannot append or write after replacement. Recovery verifies original evidence and resumes bounded original model requests or persisted workflow graphs. Incomplete model outputs cannot execute tools. See `docs/cn/agent-durability.md`.
 
+A confirmation/MFA panel exists ONLY while a real `PendingAction` row does (`pending`/`awaiting_mfa`), created solely by a model tool call through `agent/banking-agent.ts` beforeToolCall → `security/security-gateway.ts` handleToolCall → gatewayCreatePendingAction. Model prose creates no panel. When a turn declares a banking write (`describe_turn`) but emits no controlled tool call, the runtime spends at most ONE bounded continuation (`agent/write-continuation.ts`) and, if the write still stays unsubmitted, the server — never the model — narrates the true unsubmitted state. See `agent/CONTEXT.md` and `tests/CONTEXT.md`.
+
 Business calendar boundaries use UTC+08:00. Security expiry, leases and operational scheduling use real time. The authenticator and banking rail are explicit simulators.
 
 The web demo has one server-configured user and a persistent `demo:${userId}` workspace, loaded on
@@ -57,7 +60,3 @@ Use pnpm for dependency management and all project commands. Commit only `pnpm-l
 File logs must be stored under `logs/`. Command output retained for reviews, tests, installs or builds must use that directory. Do not create `.log` files in the repository root. Keep ordinary terminal output visible unless a log capture is requested. Banking audit, event and receipt records remain in their existing database stores.
 
 Documentation entry point: `docs/cn/README.md`. Development procedures live in `docs/cn/development.md`; current design lives in `docs/cn/architecture.md` and its linked topic guides. Write developer documentation in Chinese using the STC rules in `docs/cn/CONTEXT.md` and terms in `docs/cn/terms.md`. Keep the root README focused on the project overview, quick start, common commands and documentation links. Historical results remain in Git history and do not define current contracts.
-
-## Known issue: fabricated confirmation-panel claim (LIVE mode)
-
-A confirmation/MFA panel exists ONLY while a real `PendingAction` row does (`pending`/`awaiting_mfa`), created solely by a model tool call through `agent/banking-agent.ts` beforeToolCall -> `security/security-gateway.ts` handleToolCall -> gatewayCreatePendingAction. A prose-only reply that says "confirm in the panel above" creates nothing, so no panel appears. No code detects or repairs this claim today: `agent/reply-format.ts` inspects only protocol envelopes, and the declared-write check in `agent/tools/plan-compiler.ts` runs only inside `submit_plan`. See `agent/CONTEXT.md` "Known Issues" for the diagnosis and hook points; `tests/CONTEXT.md` records the coverage gap.

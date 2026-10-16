@@ -16,8 +16,8 @@ Turn a live agent run into durable, replayable evidence — no banking effect is
 ## Continuation model (the "keep going" primitive)
 
 `continueInContext` inside `continueDurableRun` (`continuation.ts:198-202`) is the ONLY existing mechanism that re-asks the model to keep working: it pushes a `role: 'system'` message ("Continue the interrupted answer for this recorded run using the existing conversation and verified results. Do not repeat completed tool calls, restart an earlier request, or treat a historical request as new consent.") when the last message is an assistant, then awaits `runtime.agent.continue()`.
-Branch decision after restoring the latest completed model request (`continuation.ts:240-307`): `calls = assistant.content.filter(type==='toolCall')` (l.251); rejected dialogue call → `continueInContext`/server reply (l.293-295); **`calls.length === 0` (l.296-299) rebuilds the grounded presentation and issues NO further model request — the no-op dead end**; `submit_plan` present → server reply (l.300-301); otherwise `continueInContext` (l.302); `checkpointStage==='input'` → `runtime.agent.prompt(request.message!)` (l.306); else `continueInContext` (l.307).
-`continuation.ts:308` gates an extra provider generation on `config.llmMode === 'live'` before `repairConversationalReply(...)` — the existing precedent for a live-only extra request.
+Branch decision after restoring the latest completed model request (`continuation.ts:240-310`): `calls = assistant.content.filter(type==='toolCall')` (l.251); rejected dialogue call → `continueInContext`/server reply (l.294-296); `calls.length === 0` (l.297-301) rebuilds the grounded presentation and then awaits `continueDeclaredWrites(runtime, buffer, () => Date.now(), { config })` (the durable mirror of the live-prompt continuation); `submit_plan` present → server reply (l.302-303); otherwise `continueInContext` (l.304); `checkpointStage==='input'` → `runtime.agent.prompt(request.message!)` (l.308); else `continueInContext` (l.309).
+`continuation.ts:310` gates an extra provider generation on `config.llmMode === 'live'` before `repairConversationalReply(...)` — the existing precedent for a live-only extra request. `continueDeclaredWrites` applies the same live-only gate internally (`pendingDeclaredWrites` returns `undefined` unless `config?.llmMode === 'live'`).
 
 ## Bounds and budgets
 
@@ -35,13 +35,11 @@ Every generation must be a distinct `ModelRequest` row: `AgentRunJournal.prepare
 `runtimeRequestDigest(toolName, args)` (`serialization.ts:56`) = `sha256(JSON.stringify(snapshotRuntimeValue({toolName,args}, false)))`, tagged by domain: `agent_input`, `model_request`, `tool_declarations`, `node_result`, `reply_candidate`, `reply_instruction`, `authorized_context`, `authorized_outcome`, `workflow_result`, `tool_result`.
 `recordAgentEvent` on `message_end` computes failure from `['error','aborted','length']` and `retryableModelFailure` → `MODEL_TRANSIENT`/`MODEL_PERMANENT`, then `completeModelRequest(...)` (`journal.ts:137-145`). On `tool_execution_start` it creates the invocation with `modelRequestId: this.modelRequestId` and rejects overlapping `callId`s with `CONFLICT` (l.147-161).
 
-## Application points for a no-tool-call continuation
+## Bounded continuation for a declared-but-unemitted write
 
-Two owners of the model-request loop fence a "no tool call emitted, keep going" decision:
-1. Foreground first turn: `runTurn` → `withDurableTurn` → `performTurn` (`run-turn.ts:23/27/31`); `generationFailure = await runLivePrompt(...)` (`run-turn.ts:66`); empty/no-presentation handling at l.68-73; session commit l.83.
-2. `runLivePrompt` (`turns/live-prompt.ts:92`) wraps `runtime.agent.prompt(request)` (l.97) and then `repairConversationalReply` (l.102) — the template for a bounded extra generation (budget persisted before the provider call at l.43-46, phase transitions l.49/65-74).
-3. Durable/recovery continuation: `continueDurableRun`'s `calls.length === 0` branch (`continuation.ts:296-299`).
-`banking-agent.ts:334-338` `finishTurn` forces `{action:'end'}` when `config.llmMode === 'live'` and a `submit_plan` succeeded / `stopAfterDecision` — where "the turn already ended" is decided.
+`turns/live-prompt.ts` `runLivePrompt` (l.71) awaits `runtime.agent.prompt(request)` (l.77), then `continueDeclaredWrites(runtime, buffer, now, { config })` (l.88) and finally `repairConversationalReply` (l.89). The foreground deliberately does NOT set `applyCorrection` on this continuation: a reply-correction bracket makes `beforeToolCall` reject any write emitted during the continuation, so the declared write could never reach the security gateway and create the real gate. Only `repairConversationalReply` brackets its own format repair with correction (l.48-52). The durable mirror reuses the same helper: `continueDurableRun`'s `calls.length === 0` branch (`continuation.ts:297-301`) rebuilds the grounded presentation and awaits `continueDeclaredWrites(runtime, buffer, () => Date.now(), { config })`. Both run only when `config.llmMode === 'live'` (`../write-continuation.ts`).
+`../write-continuation.ts` `continueDeclaredWrites` spends at most ONE continuation per candidate: the persisted `WriteContinuationState` (`../reply-repair.ts`, `version: 1`, `phase: 'requested' | 'completed'`, `attempt: 1`, `sourceDigest`, `instruction`, `declaredTools`) is written BEFORE `runtime.agent.continue()`, so a restart reuses the recorded request instead of issuing a second one. If the continuation still yields no write evidence, the server publishes `renderFinancialResponse(buffer.factResults, { declared })` (`declared_unsubmitted`) instead of unverified model prose; a real confirmation/MFA card is still produced only by a blocked gateway call.
+`banking-agent.ts:336-339` `finishTurn` forces `{action:'end'}` when `config.llmMode === 'live'` and a `submit_plan` succeeded / `stopAfterDecision` — where "the turn already ended" is decided.
 
 ## Constraints
 
@@ -60,7 +58,3 @@ Delegated write evidence and gateway authorization live in `../confirmation/` an
 - Callers in the agent root: `../run-turn.ts`, `../turns/live-prompt.ts`, `../banking-agent.ts`, `../reply-repair.ts`.
 - Tests: `../../tests/unit/agent/durable-reply-repair.test.ts`, `durable-advice-context.test.ts`, `recovery-worker.test.ts`; `../../tests/integration/agent-durability.test.ts`, `process-restart.test.ts`, `standalone-workflow-restart.test.ts`, `live-recovery.test.ts`.
 - Docs: `../../docs/cn/agent-durability.md` (bounds/decision tables), `../../docs/cn/pi-integration.md` (Pi 1.2 contracts).
-
-## Known Issues
-
-`continuation.ts:296-299`: when the latest completed model request produced NO tool call, continuation only rebuilds the grounded presentation and never re-prompts. In live mode a model reply that merely says "please confirm in the panel above / waiting for your confirmation" therefore creates no server-side `PendingAction` and no panel, with no bounded follow-up generation to nudge the missing tool call. Mock mode covers this via `../providers/mock/action-follow-up.ts` (`classifyActionFollowUp`), so the gap is live-only.

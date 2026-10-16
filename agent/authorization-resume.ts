@@ -128,6 +128,7 @@ export async function performAuthorizationResume(input: ResumeTurnInput, deps: R
   snapshot.contextCompaction = serialized.contextCompaction;
   snapshot.replyRepair = serialized.replyRepair;
   snapshot.replyContext = serialized.replyContext;
+  snapshot.writeContinuation = serialized.writeContinuation;
   presentation.ground(buffer, buffer.current);
   buffer.events = readyPresentationEvents(buffer);
   snapshot.transcript.push(...buffer.assistants);

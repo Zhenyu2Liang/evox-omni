@@ -16,6 +16,7 @@ import { createEventHandler, createTurnBuffer, groundMessage, publishServerReply
 import { renderConversationalResponse } from '@/agent/conversational-response';
 import { collectConversationEvidence } from '@/agent/conversation-evidence';
 import { renderFinancialResponse } from '@/agent/financial-response';
+import { continueDeclaredWrites } from '@/agent/write-continuation';
 import { retryableModelFailure } from '@/agent/providers/model-failure';
 import { withRealToolResult } from '@/agent/message-normalize';
 import { decodeCheckpoint, encodeCheckpoint, hasRedactedCredentials } from './checkpoint';
@@ -297,6 +298,7 @@ export async function continueDurableRun(run: AgentRun, journal: AgentRunJournal
         // Generation already completed. Rebuild its grounded presentation without another request.
         await handler({ type: 'message_start', message: assistant });
         await handler({ type: 'message_end', message: assistant });
+        await continueDeclaredWrites(runtime, buffer, () => Date.now(), { config });
       } else if (calls.some(call => call.name === 'submit_plan')) {
         publishServerReply(runtime, buffer, () => Date.now(), renderFinancialResponse(buffer.factResults));
       } else await continueInContext();
@@ -320,6 +322,7 @@ export async function continueDurableRun(run: AgentRun, journal: AgentRunJournal
     snapshot.contextCompaction = serialized.contextCompaction;
     snapshot.replyRepair = serialized.replyRepair;
     snapshot.replyContext = serialized.replyContext;
+    snapshot.writeContinuation = serialized.writeContinuation;
     groundMessage(buffer, buffer.current);
     buffer.events = readyPresentationEvents(buffer);
     if (!authorization && !checkpoint.inputMessagePersisted) snapshot.transcript.push({ id: newId('msg'), role: 'user', content: request.message!, timestamp: Date.now() });

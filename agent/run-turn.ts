@@ -63,7 +63,7 @@ async function performTurn(req: ChatTurnRequest, deps: RunTurnDeps | undefined, 
   let generationFailure: string | undefined;
   try {
     await context.journal.checkpoint('input');
-    generationFailure = await runLivePrompt(runtime, buffer, req.message, now);
+    generationFailure = await runLivePrompt(runtime, buffer, req.message, now, config);
   } finally { await flushParkedDecision(buffer, relay); unsubscribe(); unsubscribeJournal(); runtime.dispose(); }
   const hasPresentation = buffer.assistants.some(message => message.role === 'tool' || message.content !== '');
   if (generationFailure !== undefined || !hasPresentation) {
@@ -77,6 +77,7 @@ async function performTurn(req: ChatTurnRequest, deps: RunTurnDeps | undefined, 
   snapshot.contextCompaction = serialized.contextCompaction;
   snapshot.replyRepair = serialized.replyRepair;
   snapshot.replyContext = serialized.replyContext;
+  snapshot.writeContinuation = serialized.writeContinuation;
   groundMessage(buffer, buffer.current);
   buffer.events = readyPresentationEvents(buffer);
   snapshot.transcript.push({ id: newId('msg'), role: 'user', content: req.message, timestamp: now() }, ...buffer.assistants);

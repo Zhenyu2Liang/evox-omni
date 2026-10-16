@@ -29,7 +29,8 @@ This node is presentation only: it implements no banking tools and no card tooli
 - The buffer does NOT store the declared `ConversationIntent` steps or a
   `planningRejections` map. `createTurnBuffer(requestText, intent)` (buffer.ts:17)
   keeps only `advisory` (purpose `advice`) and `allowProtocolExamples`; the declared
-  write step list never reaches this node, so no declared-vs-emitted comparison exists here.
+  write step list never reaches this node; the declared-vs-emitted comparison lives in
+  `../write-continuation.ts` (`declaredWriteTools`/`hasWriteEvidence`, reading `runtime.serialize().intent`).
 - Server-owned preflight refusals arrive as a separate
   `rejected: ReadonlyMap<toolCallId, reason>` argument to `createEventHandler`
   (events.ts:77), sourced from `BankingAgentRuntime.planningRejections`
@@ -76,16 +77,7 @@ IDs, complete before/after prose, internal-tool isolation, presentation failure,
 withholding unfinished candidates. Run with `VITEST_SKIP_DB_SETUP=1` to avoid database
 generation and provisioning.
 
-## Notes for Agents — model-prose acceptance vs. execution evidence
-Presentation never verifies that a model's "waiting for confirmation / please confirm in the
-panel" prose is backed by a real decision. `groundMessage` (`buffer.ts:25`) accepts any
-format-valid prose; it only runs `inspectReplyFormat` and `parseBankingGuidance`, never a
-tool-evidence check. The only confirmation signals are the `confirmation_required` /
-`mfa_required` events and cards produced from an actual blocked gateway call in `handleToolEnd`
-(`events.ts:61-71`) and `flushParkedDecision` (`authorization-view.ts:36-51`).
-`buffer.factResults` (`events.ts:33,45,54`) accumulates executed-tool evidence.
-The lifecycle points where the model has finished its final assistant message are
-`runLivePrompt` (`live-prompt.ts:92-107`, after `runtime.agent.prompt`) and `performTurn`
-(`run-turn.ts:66-82`); `repairConversationalReply` (`live-prompt.ts:25-77`) is the existing
-template for a bounded `runtime.agent.continue()` nudge. `buffer.advisory` is established here
-(`buffer.ts:20`, `run-turn.ts:51`) but only consumed outside this node.
+## Live-prompt flow and declared writes
+
+`turns/live-prompt.ts` `runLivePrompt` (l.71) awaits `runtime.agent.prompt(request)` (l.77), then `../write-continuation.ts` `continueDeclaredWrites` (l.83), then `repairConversationalReply` (l.84). `continueDeclaredWrites` runs only in live mode and only when a `describe_turn` intent declared a write-effect tool (`declaredWriteTools`) and the buffer shows no controlled write evidence (`hasWriteEvidence`); it spends exactly one persisted continuation and, if the write is still unsubmitted, the server publishes the authoritative `declared_unsubmitted` reply (`renderFinancialResponse(buffer.factResults, { declared })`). A real confirmation/MFA card is still produced only by a blocked gateway call (`events.ts:61-71`, `authorization-view.ts`); model prose never creates one.
+`turns/server-reply.ts` owns the two shared presentation primitives: `retireUnpublishedReply` (drop only an unpublished candidate's own events) and `publishServerReply` (append grounded server-authored prose without another provider call).
