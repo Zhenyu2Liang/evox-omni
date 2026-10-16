@@ -1,0 +1,16 @@
+Live environment configuration loaded without displaying values.
+== AI Banking Agent 真实浏览器 + 真实 DeepSeek 在线验收 (tests/e2e/live) ==
+Live run uses the configured model.
+· 隔离 LIVE 数据库：file:D:/projects/banking-agent/.genesis/workers/worker_T4_A107/prisma/live-acceptance.db（prisma/dev.db 与 prisma/test.db 不受影响）
+· 重置 LIVE 数据库 →（缺 Prisma Client 时先 prisma generate）→ db push 阶梯 → probe → tsx prisma/seed.ts
+Live provider configuration is applied; configuration values are not displayed.
+· next dev (pid=62764) → http://localhost:57178（/api/health 与 /agent 均已就绪）
+· /api/health={"ok":true,"data":{"status":"ok","time":1792150839844,"llmMode":"live"}}
+· 真实浏览器：C:\Program Files\Google\Chrome\Application\chrome.exe
+PASS lB-live-investment-partial-redemption — B1 实际发送：「追加申购稳健理财A 1000元」 → 「确认，请办理」 → MFA 123456 → DB principalAmountMinor=600000（¥6,000.00）；B2 实际发送：「我持有的稳健理财A部分赎回2000元本金」 → MFA 123456 → DB principalAmountMinor=400000（¥4,000.00）、estimatedMarketValue=4118.906666666666666667（全精度）；/investments 显示 持有金额=¥4,000.00、市值=¥4,118.91、收益=+¥118.91；账本新增 DEBIT -1000.00（cmvawci9u00my0of89kh8qpvh，认购稳健理财A/投资）与 CREDIT 2059.45（cmvawclg700ss0of8nqfl7q2w，赎回/投资）；活期余额 23580.00 → 24639.45
+· 累计网络 4xx/5xx：0，console error：0，pageerror：0
+· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：
+（无持久化的 transfer_money/search_contact 调用）
+· 【证据】种子库收款人 张伟 手机号=139****0002
+== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==
+EXITCODE=0
