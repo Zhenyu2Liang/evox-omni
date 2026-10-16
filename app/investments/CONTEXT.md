@@ -21,7 +21,7 @@
 | 语义 | i18n key | zh-CN 文案 | en 文案 | 渲染组件 | 行号 |
 | --- | --- | --- | --- | --- | --- |
 | 本金（剩余已入账本金） | `business.investments.principal` | 持有金额 | Principal | `<Money amount={holding.amount} />` | 99–102 |
-| 市值（未取整估值） | `business.investments.marketValue` | 市值 | Market value | `<DecimalMoney amount={holding.marketValue} />` | 106–109 |
+| 市值（展示按 HALF_UP 取整到两位，存储估值不取整） | `business.investments.marketValue` | 市值 | Market value | `<DecimalMoney amount={holding.marketValue} />` | 106–109 |
 | 收益（= 市值 − 本金，可负） | `business.investments.profit` | 收益 | Return | `<DecimalMoney amount={holding.profit} signed />` | 114–117 |
 
 - 注意：界面标签是「持有金额」，**不是**「本金」；「持仓」是区块标签 `business.investments.holdings`（tile 内小标题，第 97 行）。
