@@ -31,6 +31,7 @@ Authorized workflow progress remains the executor's responsibility, not another 
 `durable/continuation.ts` resumes model checkpoints and verifies original context and execution facts. `durable/standalone-workflow.ts` resumes independent graphs without a model. `recovery-worker.ts` supplies bounded discovery and lease-protected recovery. Model partials are journal evidence only; changing the model contract, losing ownership or encountering uncertain effects cannot silently create a replacement operation.
 
 `banking-agent.ts` installs the code-controlled gateway and supplies trusted user/session identities.
+`beforeToolCall` is the ONLY consumer of `requiresDeclaredPlan` (`intent-context.ts:43`): with a declared multi-write or `workflow` intent it blocks individual write calls and preflights `submit_plan` (`banking-agent.ts:286-298`), but nothing verifies at turn end that a declared write sequence actually emitted `submit_plan`, so a live model replying with prose and zero write tool calls creates no `PendingAction` and no confirmation panel.
 `intent-context.ts` starts a new undecided intent per user turn and stores the structured describe_turn
 declaration. `tools/plan-compiler.ts` validates declared write counts/order and explicit structured
 parameters, dates, conditions and output references before createTaskGraph persists the whole DAG.
