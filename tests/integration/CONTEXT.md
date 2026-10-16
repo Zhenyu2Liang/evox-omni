@@ -16,7 +16,7 @@
 | `message-protocol.test.ts` | Pi 工具调用与结果的协议配对 |
 | `write-audit.test.ts`、`execution-audit.test.ts` | 强制审计、去重与回滚 |
 | `transfer-receipts.test.ts`、`transfer-replay.test.ts` | 原始回执、请求冲突与资金一致性 |
-| `refactor-financial-commands.test.ts`、`confirmed-write-authority.test.ts` | 通用写入回执重放：原样返回、不进入写栅栏、不产生新流水 |
+| `refactor-financial-commands.test.ts`、`confirmed-write-authority.test.ts`、`replace-card-replay.test.ts` | 通用写入回执重放：原样返回、不进入写栅栏、不产生新流水（含 `replace_card` 补卡原操作重放） |
 | `write-idempotency.test.ts`、`execution-audit.test.ts` | 网关/确认路径去重与强制审计幂等 |
 | `workflow-invocations.test.ts` | 持久化子调用与任务图恢复 |
 | `process-restart.test.ts`、`standalone-workflow-restart.test.ts` | 真实进程中断与恢复 |
