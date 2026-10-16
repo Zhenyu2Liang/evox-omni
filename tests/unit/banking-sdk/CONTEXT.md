@@ -27,6 +27,13 @@ SDK 写入仍必须满足可信执行上下文与事务约束。
 不支持从旧流水补造当前回执。
 已持有产品的加购为聚合写入，采购身份存于 `purchaseHistory`。
 
+## 测试缺口
+
+`card-replacement.test.ts` 覆盖了补办前的拒绝路径（未挂失、非本人）——两者在写入前抛出，卡数不变。
+尚未覆盖事务写入失败回滚：补办卡 `card.create` 成功后、源卡 `card.update`（写 `replacedByCardId`）失败时，事务应回滚掉已创建的补办卡。
+失败注入见 [write-failure.ts](../../helpers/write-failure.ts) 的 `withInjectedWriteFailure`，当前仅 `atomicity.test.ts` 与 `investment-flow.test.ts` 使用。
+`replaceCard` 全仓库仅被 `card-replacement.test.ts` 引用，无集成测试补足该回滚路径。
+
 ## 执行与数据
 
 运行：`pnpm exec vitest run tests/unit/banking-sdk`。
