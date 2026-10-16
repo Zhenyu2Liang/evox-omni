@@ -8,6 +8,7 @@
 - 客户端生成到 `lib/db/generated`。
 
 模型覆盖账户、流水、联系人、卡片、订阅和理财。
+本地刷卡消费流水另存于 `CardConsumption`。
 持仓记录附带购买与部分赎回历史的 JSON 文本列
 （`purchaseHistory`、`redemptionHistory`），记录结构由 `banking-sdk` 维护。
 任务、授权、审计、人工接管与定时通知也在此持久化。
@@ -35,6 +36,9 @@
 `Card` 的 `creditLimitMinor`、`availableLimitMinor`、`monthlyLimitMinor` 均为可空 BigInt 分。
 分类限额存于 `CardLimit`（`category` + `amountMinor`）。
 `replacedByCardId` 仅作历史引用，没有外键关系。
+`linkedAccountId` 同为历史引用：记录该卡片扣款的用户活期账户 `id`，没有外键关系。
+`CardConsumption` 是本地模拟刷卡消费台账，一次成功消费一行；
+`executionKey` 为重放与幂等标识（可为空），`resultJson` 保存原始消费结果快照。
 `Card` 目前只通过 `userId` 归属用户，没有指向 `Account` 的外键关系。
 SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件头注释。
 
@@ -44,6 +48,8 @@ SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件�
 金额由 `minorUnits` 转成整数分。
 活期余额由期初余额加全部已入账流水核对。
 演示数据包含收支、小数交易、异常样例与多类业务记录。
+卡片夹具含 `card_credit`、`card_debit` 与虚拟卡 `card_virtual`；
+后者通过 `linkedAccountId` 绑定活期账户 `acct_checking`，月限额 ¥5,000.00。
 测试夹具位于 `tests/helpers/fixtures.ts`，独立维护。
 
 重复播种会替换演示用户的业务记录。

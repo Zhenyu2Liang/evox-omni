@@ -38,6 +38,7 @@ import { createSearchContactTool, runSearchContact } from './contact';
 import { createSearchConversationHistoryTool, runSearchConversationHistory } from './conversation-history';
 import {
   createApplyVirtualCardTool,
+  createConsumeVirtualCardTool,
   createFreezeCardTool,
   createGetCardsTool,
   createReplaceCardTool,
@@ -45,6 +46,7 @@ import {
   createSetCardLimitTool,
   createUnfreezeCardTool,
   runApplyVirtualCard,
+  runConsumeVirtualCard,
   runFreezeCard,
   runGetCards,
   runReplaceCard,
@@ -225,7 +227,7 @@ function createUnconfiguredSubmitPlanTool(): AgentTool<typeof SubmitPlanParams> 
  *  - `executeDirect(name, args, opts?)` dispatches to the matching family `run<X>(userId, args, opts)`
  *    runner, and to `planning.runSubmitPlan(userId, args, opts.submitPlan)` for `submit_plan`. The
  *    optional `opts.idempotencyKey` is threaded to every runner; the side-effecting tools consume it
- *    (`transfer_money`, `apply_virtual_card`, `reserve_budget`, `create_scheduled_task`,
+ *    (`transfer_money`, `apply_virtual_card`, `consume_virtual_card`, `reserve_budget`, `create_scheduled_task`,
  *    `subscribe_investment`, `redeem_investment`) — see `ToolRunOptions`.
  *
  * Signature note: the frozen form `createToolRegistry(userId: string): ToolRegistry` is preserved —
@@ -264,6 +266,7 @@ export function createToolRegistry(
     create_scheduled_task: createCreateScheduledTaskTool(userId),
     // 🔴 RED — require MFA (enforced by `security/`, not here)
     freeze_card: createFreezeCardTool(userId),
+    consume_virtual_card: createConsumeVirtualCardTool(userId),
     subscribe_investment: createSubscribeInvestmentTool(userId),
     redeem_investment: createRedeemInvestmentTool(userId),
     report_lost_card: createReportLostCardTool(userId),
@@ -297,6 +300,7 @@ export function createToolRegistry(
     set_card_limit: runSetCardLimit,
     cancel_subscription: runCancelSubscription,
     freeze_card: runFreezeCard,
+    consume_virtual_card: runConsumeVirtualCard,
     apply_virtual_card: runApplyVirtualCard,
     set_subscription_reminder: runSetSubscriptionReminder,
     create_scheduled_task: runCreateScheduledTask,

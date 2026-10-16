@@ -210,6 +210,17 @@ export interface CardView {
   monthlyLimit?: MoneyAmount;
   /** Id of the replacement card issued for this (lost) card; historical reference only. */
   replacedByCardId?: string;
+  /** Settlement CHECKING account id bound to this card (virtual cards); absent when unbound. */
+  linkedAccountId?: string;
+  /** Masked settlement-account number of the bound account, e.g. `****8821`; absent when unbound. */
+  linkedAccountNumber?: string;
+  /** Bound account's available balance (CNY); absent when the card is unbound. */
+  accountAvailableBalance?: MoneyAmount;
+  /**
+   * Amount currently payable by this card (CNY): the bound account balance, capped by the card's
+   * remaining monthly limit. A `null` monthly limit is unlimited (governed by the account balance).
+   */
+  payableAmount?: MoneyAmount;
   limits: CardLimitView[];
 }
 
@@ -231,12 +242,71 @@ export interface ApplyVirtualCardInput {
   /** Optional monthly limit configuration in CNY; never inferred from a free-text label. */
   monthlyLimit?: MoneyInput;
   /**
+   * Optional settlement CHECKING account id to bind. When supplied the server validates ownership
+   * and account type; when omitted the user's default CHECKING account is bound.
+   */
+  linkedAccountId?: string;
+  /**
    * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT issue a
    * second card: the card id is derived deterministically from (userId, key), and the existing
    * virtual card is replayed (same `id`) instead of creating another one. Absent → unchanged
    * behavior (every call issues a NEW card with a freshly generated masked number).
    */
   idempotencyKey?: string;
+}
+
+/* ------------------------------------------------------------- card spend */
+
+export interface ConsumeCardInput {
+  /** Trusted caller identity, injected by the server runner. */
+  userId: string;
+  cardId: string;
+  /** Positive CNY amount to spend, as decimal text. */
+  amount: MoneyInput;
+  /** One of the supported spending categories; defaults to `其他`. */
+  category?: string;
+  /** Merchant label shown in the ledger; defaults to a local-simulation label. */
+  merchant?: string;
+  /**
+   * Optional execution identity. When supplied, a repeated call with the SAME key replays the
+   * persisted consumption instead of charging again (the SDK persists the original result).
+   */
+  executionKey?: string;
+  /** Epoch ms of the spend; defaults to the demo clock. */
+  occurredAt?: number;
+}
+
+/** One successful local card consumption row (see `CardConsumption`). */
+export interface CardConsumptionView {
+  id: string;
+  cardId: string;
+  accountId: string;
+  /** Positive CNY magnitude of the spend. */
+  amount: MoneyAmount;
+  currency: string;
+  category: string;
+  merchant: string;
+  /** Epoch ms. */
+  occurredAt: number;
+  /** Replay identity, when one was supplied. */
+  executionKey?: string;
+  /** Epoch ms. */
+  createdAt: number;
+}
+
+export interface ConsumeCardResult {
+  consumption: CardConsumptionView;
+  /** Card view after the spend (its `payableAmount` already reflects the new consumption). */
+  card: CardView;
+  /** Bound account's available balance (CNY) after the debit. */
+  accountAvailableBalance: MoneyAmount;
+}
+
+export interface CardConsumptionQuery {
+  /** Restrict to a single card; omit for all of the user's cards. */
+  cardId?: string;
+  /** Max rows returned, newest first; defaults to 20 and is capped at 200. */
+  limit?: number;
 }
 
 /* -------------------------------------------------------------- subscription */

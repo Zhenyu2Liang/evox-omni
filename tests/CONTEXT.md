@@ -51,6 +51,10 @@
 `unit/planner/mock-amount-clarification.test.ts` 与 `app/nl-entry-http.test.ts` 覆盖「信息不足→澄清，不产生工具调用」，但澄清为结构化 `missing_details` 或纯文本追问，非“面板”声称。
 细节见各子目录 CONTEXT.md。
 
+演示种子当前含 3 张 ACTIVE 卡；下列 e2e 用例仍按 2 张卡断言，与当前种子不符（属并行工作流、对本节点只读，尚未修复）：
+`tests/e2e/card-freeze.e2e-helper.ts:20` 断言恰有 2 张 ACTIVE 卡；
+`tests/e2e/live-acceptance.e2e.ts:1163` 与 `:1204-1205` 断言补卡后卡总数为 3。
+
 ## 证据范围
 
 原始 Pi 场景与生产运行入口必须区分。

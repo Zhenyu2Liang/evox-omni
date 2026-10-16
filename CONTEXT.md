@@ -18,6 +18,7 @@ A competition simulator for natural-language banking with server-controlled perm
 - `agent/write-continuation.ts`: bounded, restart-safe continuation when a declared write produced no controlled tool call.
 - `agent/manual-review.ts`: stop future work while preserving already-started command facts.
 - `agent/scheduled-dispatcher.ts`: delivered reminders and freshly gated due payment workflows.
+- `banking-sdk/card.ts`, `agent/tools/card.ts`, `app/api/cards/[id]/consume/`: a VIRTUAL card is a debit instrument bound to one owned CHECKING account; `consume_virtual_card` debits that account and writes a `CardConsumption` row in one transaction, guarded by the card's monthly limit and replayable by execution key.
 
 ## Routing Table
 
@@ -36,6 +37,8 @@ A competition simulator for natural-language banking with server-controlled perm
 ## Invariants
 
 Booked amounts are Prisma `BigInt` minor units with explicit `*Minor` names. Annual yield ratios and unrounded valuations use Decimal arithmetic and canonical SQLite TEXT storage. `principalAmountMinor` is booked cash; `estimatedMarketValue` is unrounded CNY. Settlement rounds HALF_UP once to cents and records the quote and policy in the immutable result. Public monetary inputs and outputs are strings; `annualYieldRate` is a ratio in storage and DTOs, converted to a percentage only for display. Calculations and conditions never use floating-point money. Chart coordinate conversion is presentation only. Flagged consumption remains in booked totals. A budget envelope does not lock withdrawable cash. See `docs/cn/financial-values.md`.
+
+A VIRTUAL card is a debit instrument bound to one owned CHECKING account: it draws on that account's cash and its own monthly consumption limit, so its spendable amount is `min(account available cash, remaining monthly limit)` and its balance is account cash, never credit. Multiple virtual cards on one account share that single balance, which is counted once in total assets. A card replaced via loss/补办 is terminal (`LOST`) and must not be counted alongside its replacement — the credit-available total sums only `CREDIT` cards that are not `LOST`.
 
 Exceeding the MFA attempt limit is a terminal state: the gateway persists the command's `PendingAction` as `'locked'` (a CAS from `pending`/`awaiting_mfa`), so it stops surfacing as a pending decision and is never re-prompted; the client's popup dismisses and renders the locked failure. See `security/CONTEXT.md`.
 

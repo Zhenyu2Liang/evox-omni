@@ -38,6 +38,7 @@
     "Freeze an owned card after confirmation and strong verification.": "chat.policy.freeze_card",
     "Issue a virtual card.": "chat.policy.apply_virtual_card",
     "Issue a virtual card after confirmation and strong verification.": "chat.policy.apply_virtual_card",
+    "Spend from an owned virtual card against its linked checking account after confirmation and strong verification.": "chat.policy.consume_virtual_card",
     "Change a subscription reminder.": "chat.policy.set_subscription_reminder",
     "Create a scheduled intent.": "chat.policy.create_scheduled_task",
     "Purchase an investment product.": "chat.policy.subscribe_investment",
