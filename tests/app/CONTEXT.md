@@ -34,4 +34,12 @@ HTTP 200 不等于业务成功。
 - `/api/developer/security/reset` 使用开发者模式重置策略。
 
 执行命令：`pnpm exec vitest run tests/app`。
+## 覆盖与缺口
+
+面板、`confirmation_required`、`mfa_required` 断言只来自真实工具调用被网关拦截并持久化 `PendingAction`。
+`nl-entry-http.test.ts` 是唯一读取助手散文文本的用例（`assistantText`），仅覆盖“缺参数→澄清”。
+没有任何用例断言“散文声称需确认/等待确认，但未发出工具调用”的回合。
+关键词 `panel`、`prose`、`hallucinat` 在本目录无匹配。
+`waiting` 多指 `waiting_confirmation` 状态；`claim` 指 DB 执行 claim。
+
 数据库隔离与顺序执行见 [../CONTEXT.md](../CONTEXT.md)。
