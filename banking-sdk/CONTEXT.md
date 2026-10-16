@@ -72,6 +72,8 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 卡类别限额只接受支持的消费类别与可用或冻结的卡。状态变更使用条件写；并发变更产生领域冲突，而不是原始数据库错误。取消订阅会停用其续费提醒，提醒变更要求订阅处于可用状态。
 
+卡片只绑定 `userId`，不绑定任何账户：`Card` 模型没有账户外键，`applyVirtualCard`/`addDemoCard` 也不记录资金来源。SDK 目前没有任何刷卡消费/扣款能力：不存在为某张卡扣减账户余额或写入 `channel='CARD'` 流水的函数；`TransactionChannel` 里的 `'CARD'` 只是保留的枚举值。资金变动与流水只由转账/投资/订阅模块在 `runInTransaction` 内通过条件余额写（`tx.account.updateMany({ where: { balanceMinor: { gte } } })` 或按旧余额 CAS）加 `tx.transaction.create` 完成。
+
 定时支付与转账载荷在持久化前校验，并在派发时通过 `lib/contracts/scheduled-command.ts` 再次校验。载荷要求恰好一个收款人选择器与一个正的十进制金额，拒绝未知命令字段与凭据。提醒载荷只能包含惰性文本。日期纪元必须是合法的整数瞬时；到期意图可以被存储，而 Agent 创建独立要求显式的未来时间。服务端推导 `requiresConfirmation`：提醒自动投递，支付与转账在派发时需要授权。调用方不能设置该策略标志。
 
 ## 挂失与补卡
