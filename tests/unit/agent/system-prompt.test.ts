@@ -47,3 +47,25 @@ describe('system prompt policy catalog alignment', () => {
     expect(lines).toEqual(['- unknown_tool: unknown', '- constructor: unknown']);
   });
 });
+
+describe('system prompt forbids a fabricated confirmation/verification panel', () => {
+  it('ties a real gate to a parked controlled-write tool result and forbids claiming one without it', () => {
+    const prompt = promptFor(['transfer_money']);
+    // A panel exists only because the gateway parked a real tool call into a pending state.
+    expect(prompt).toContain('An approval or verification panel exists only after you actually called the controlled-write tool and the gateway parked it into that pending state');
+    expect(prompt).toContain('ordinary prose never creates or displays one');
+    expect(prompt).toContain('call the required tool now so the real gate is created');
+    // Claiming an initiated or awaited gate without such a tool result is explicitly forbidden.
+    expect(prompt).toContain('Do not claim to have initiated an operation, do not ask the user to confirm or approve "in the panel"');
+    expect(prompt).toContain('do not say you are waiting for confirmation or verification unless a real tool result returned that waiting state');
+    expect(HALLUCINATION_RULE).toContain('never claim that a confirmation or verification gate is pending, waiting or displayed unless a tool result actually returned that waiting state');
+  });
+
+  it('no longer presents the panel above the composer as an unconditional state', () => {
+    const prompt = promptFor(['transfer_money']);
+    // The old permissive sentence asserted the panel unconditionally — exactly what seeded the
+    // hallucination. It must now appear only as the consequence of a real gate.
+    expect(prompt).not.toContain('Do not claim completion or invent a receipt. The interface presents approval and verification in a separate request panel above the composer.');
+    expect(prompt).toContain('When a real gate exists, the interface presents approval and verification in a separate request panel above the composer');
+  });
+});
