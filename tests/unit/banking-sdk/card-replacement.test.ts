@@ -10,10 +10,13 @@
  *     copies NO per-category limits, sets `replacedByCardId` on the source, leaves the source `LOST`
  *     (not revivable), and is idempotent on a second call; a CREDIT replacement carries over the
  *     SAME already-approved credit limit AND current available limit (no re-approval, inventing
- *     nothing), while a non-credit replacement keeps none.
+ *     nothing), while a non-credit replacement keeps none;
+ *   - `replaceCard`'s `card.create` + `card.update` unit is ATOMIC: a failing source update rolls the
+ *     already-minted replacement row back (no orphan card, source stays LOST and unlinked).
  *
  * Fixtures: demo user 李明; `card_credit` (CREDIT, monthlyLimit ¥18,000, one 娱乐 分类 limit) and
- * `card_debit` (DEBIT, monthlyLimit null). Helpers: ../../helpers/db, ../../helpers/fixtures.
+ * `card_debit` (DEBIT, monthlyLimit null). Helpers: ../../helpers/db, ../../helpers/fixtures,
+ * ../../helpers/write-failure.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -22,6 +25,7 @@ import { AppError } from '@/lib/errors';
 import { centsToMoney, moneyToCents } from '@/lib/money';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
 import { DEMO_USER_ID } from '../../helpers/fixtures';
+import { withInjectedWriteFailure } from '../../helpers/write-failure';
 
 useFreshDatabase();
 
@@ -208,5 +212,32 @@ describe('banking-sdk · replaceCard mints a NEW linked card', () => {
     expect(second.creditLimit).toBe(first.creditLimit);
     expect(second.availableLimit).toBe(first.availableLimit);
     expect((await db().card.findUniqueOrThrow({ where: { id: CREDIT } })).replacedByCardId).toBe(first.id);
+  });
+
+  it('rolls back a partially-written replacement: a failing source update leaves no orphan card', async () => {
+    await banking.card.reportLostCard(CREDIT, DEMO_USER_ID, { reason: '遗失' });
+    const countBefore = await db().card.count();
+    const masksBefore = new Set((await db().card.findMany()).map((card) => card.numberMasked));
+
+    // `replaceCard` mints the replacement (`card.create`) THEN links it on the source (`card.update`)
+    // inside ONE transaction. Failing the SECOND write proves the already-created replacement row
+    // genuinely rolls back with it — the unit is all-or-nothing, never a partial mint.
+    const error = await capture(() =>
+      withInjectedWriteFailure('card', 'update', () => banking.card.replaceCard(CREDIT, DEMO_USER_ID)),
+    );
+
+    // Surfaced, never swallowed — and not a fabricated success.
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/injected failure/);
+
+    // The minted replacement was rolled back: the TOTAL card count is unchanged...
+    expect(await db().card.count()).toBe(countBefore);
+    // ...and no orphan replacement row survives (the pre-existing masked numbers, nothing new).
+    expect(new Set((await db().card.findMany()).map((card) => card.numberMasked))).toEqual(masksBefore);
+
+    // The source is untouched: still LOST and still unlinked from any replacement.
+    const source = await db().card.findUniqueOrThrow({ where: { id: CREDIT } });
+    expect(source.status).toBe('LOST');
+    expect(source.replacedByCardId).toBeNull();
   });
 });
