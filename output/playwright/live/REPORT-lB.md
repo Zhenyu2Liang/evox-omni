@@ -21,7 +21,7 @@
 
 每轮汇总行均为 `== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==`。三轮均为真实通过（PASS），无 FAIL、无 SKIP、无超时。
 （`lB-round*.png` 由每轮 harness 生成的 `output/playwright/live/01-lB-investments.png` 复制而来；因每轮进程内截图序号重置，
-原始文件名每轮相同，故必须重命名保存。文件时间戳与各轮结束时间一致。）
+原始文件名每轮相同，故必须重命名保存。三轮为**独立进程**：各自 `next dev` 的 pid 与端口均不同（R1 pid=64844/端口 50514、R2 pid=30008/端口 61247、R3 pid=62764/端口 57178），`/api/health` 的 `time` 亦不同，故为三次真实、顺序、独立的运行（不重叠）。三张 `lB-round*.png` 字节完全相同（MD5 `B26ACB953E3CFE65D50A1EE5BFC04485`），因 `/investments` 持仓卡片只渲染确定性的 持有金额/市值/收益（不显示交易 id 或时间戳），相同数据必然渲染出相同像素；三张副本在全部三轮结束后统一复制（mtime 均为 19:42:38），故 mtime 不用于区分轮次。）
 
 ## 逐轮 verbatim 证据行
 
