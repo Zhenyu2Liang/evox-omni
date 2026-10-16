@@ -11,6 +11,9 @@
 它们启动独立服务，准备隔离数据库并清理子进程。
 不得指向用户正在使用的数据库。
 凭据通过运行环境加载，不写入日志或测试报告。
+`live-acceptance.e2e.ts` 用 Next 的 `loadEnvConfig` 载入运行环境。
+live 数据库文件为 `prisma/live-acceptance.db`（含 `-wal`/`-shm`/`-journal` 侧车），先 `prisma db push` 再 probe 再 `tsx prisma/seed.ts`。
+`withDb` 通过 `lib/db/database.ts#createDatabaseClient` 打开一次性 Prisma 客户端做权威 DB 交叉核对（连接时设 `PRAGMA journal_mode = WAL`）。
 
 ## 运行
 
@@ -29,14 +32,28 @@
 必须检查 PASS、FAIL 与 SKIP，不能只看退出码。
 `E2E_SKIP_DB_RESET=1` 保留库，不保证场景起点一致。
 
-## 断言与辅助模块
+## live 场景与辅助模块
+
+`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB`。
+选择 `2` 会同时选中 `2p`。
+场景 `7`（`scenarioCommittedContinuationFailed`）不在 `SCENARIOS` 中，恒为最后阶段。
+场景契约为 `{ id, name, run(ctx): Promise<string>, skipReason? }`，`run` 返回一条证据串。
+新增场景：定义 `run`、加入 `SCENARIOS` 并使用唯一 `id`/`name`。
+`driveRedTool`（`live-acceptance.e2e.ts:523`）用有界自然中文轮次驱动 RED 工具并提交 MFA `123456`。
+`lA`（`scenarioCreditReplace`）经 `/agent` 挂失并补办信用卡，断言真实 `/cards` 页与 `GET /api/cards`，并验证二次补卡幂等。
+`lB`（`scenarioPartialRedeem`）经 `/agent` 追加申购再部分赎回理财，断言 `/investments`、账本与 `holding_wenjiana` 的 `principalAmountMinor`/`estimatedMarketValue`。
 
 场景覆盖业务决定、刷新、恢复、人工接管与对话历史。
 还覆盖本地化、移动布局、卡片管理和开发者模式。
 还覆盖理财申购与赎回（离线入口 `h-investment-flow`）以及理财页面（`journeyBankingPages` 访问 `/investments`）。
-真实模型入口（`live-acceptance.e2e.ts`）当前未覆盖理财工具。
 涉及资金变化时，同时核对页面、余额与流水。
 具体辅助模块使用 `*.e2e-helper.ts` 命名。
+
+`helpers.ts` 提供服务启动、数据库准备与 DOM 操作。
+交互前等待水合完成。
+读取共享演示会话使用 `readDemoSessionId`（读 `[data-demo-session-id]` 属性）。
+不得等待不存在的认证 Cookie。
+当前授权面板与历史授权记录必须分别定位。
 
 ## MFA 验证码与熔断覆盖
 
@@ -47,17 +64,20 @@
 `live-acceptance.e2e.ts` 的 S4 只提交一次错误码并断言卡片保留，正确码在独立页面执行；live 侧不校验尝试次数上限。
 当前没有用例在锁定后刷新 `/agent` 再断言弹窗保持消失。
 
-`helpers.ts` 提供服务启动、数据库准备与 DOM 操作。
-交互前等待水合完成。
-读取共享演示会话使用 `readDemoSessionId`。
-不得等待不存在的认证 Cookie。
-当前授权面板与历史授权记录必须分别定位。
+## 退出码与已知问题
 
-安全中心重置按钮调用开发者专用接口。
-该按钮没有验证码输入框。
-业务验证与公共解锁接口采用各自策略。
+正常结束时退出码由 `reporter.failures` 决定：`live-acceptance.e2e.ts:1560` 与 `acceptance.e2e.ts:925` 执行 `process.exitCode = failures > 0 ? 1 : 0`。
+但 `void main().catch(...)`（`live-acceptance.e2e.ts:1563`、`acceptance.e2e.ts:928`）以及 `uncaughtException`/`unhandledRejection` 处理器（`live-acceptance.e2e.ts:1453-1462`）都会强制退出码 1。
+因此“打印 PASS 后仍非零退出”的路径是：主流程在多条 PASS 之后仍抛出未捕获异常/未处理 rejection。
+live 入口最可疑的具体点是 `live-acceptance.e2e.ts:1556` 的 `console.log(await persistedRecipientCalls())`：它在 `try/finally`（`:1541` 已用 `cleanup()` 杀掉 dev server）之外、任何 try/catch 之外被 await，会打开一个新的 WAL Prisma 客户端读取刚被杀掉进程持有的同一 SQLite 文件；此处的 SQLite `disk I/O error`/WAL checkpoint 失败会拒绝 `main()` 并被 `:1563` 记为退出码 1（此时汇总行尚未打印）。
+`:1557` 的 `readSeedRecipientPhone()` 内部 catch，安全。
+`captureLive`（`live-acceptance.e2e.ts:363`）与 `captureScreenshot`（`helpers.ts:931`）整体 try/catch 包裹，截图写入本身不会外抛。
+live 的 `cleanup()`（`:1430`）不 await `browser.close()`（`:1441` 为 fire-and-forget）且 `process.on('exit', cleanup)`（`:1444`）无法等待异步关闭；mock 入口 `acceptance.e2e.ts` 的 `finally` 会 `await browser.close()`（`:913-920`），两者不对称。
 
-截图目录由 `SCREENSHOTS_DIR` 指定，当前为 `output/playwright`。
+## 截图与日志
+
+截图目录由 `SCREENSHOTS_DIR` 指定，当前为 `output/playwright`；live 截图写入其 `live/` 子目录（`live-acceptance.e2e.ts:359`）。
+`LIVE-ACCEPTANCE-REPORT.md` 提到的 `tests/e2e/screenshots/live/` 与当前写入路径不一致。
 文件日志统一放在仓库 `logs/`。
 
 ## 结果解释
