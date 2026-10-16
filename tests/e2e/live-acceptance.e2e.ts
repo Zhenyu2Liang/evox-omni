@@ -1141,7 +1141,7 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       const sentA1 = await driveRedTool(page, ctx.baseUrl, [
         '我的信用卡丢失了，请帮我正式挂失尾号6688的信用卡',
         '确认，请办理',
-        '确认挂失这张卡，请立即办理',
+        '界面上方没有出现确认面板，请重新发起这张卡的挂失',
         '请直接帮我办理挂失，我已经确认',
       ]);
       await awaitLiveCards(
@@ -1154,7 +1154,7 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       const sentA2 = await driveRedTool(page, ctx.baseUrl, [
         CARD_REPLACE_PROMPT,
         '确认，请为我补办',
-        '确认补办，请立即办理',
+        '界面上方没有出现确认面板，请重新发起补办',
         '请直接为我补办一张新卡，我已确认',
       ]);
       const replaced = await awaitLiveCards(
@@ -1210,7 +1210,7 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       const sentIdem = await driveRedTool(page, ctx.baseUrl, [
         CARD_REPLACE_PROMPT,
         '确认，请为我补办',
-        '确认补办，请立即办理',
+        '请再提交一次这张卡的补办申请，我要确认不会重复发卡',
       ]);
       await waitFor(
         async () => ((await page.locator(SELECTORS.mfaInput).count()) === 0 ? true : false),
@@ -1288,8 +1288,8 @@ async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
       const sentB1 = await driveRedTool(page, ctx.baseUrl, [
         '追加申购稳健理财A 1000元',
         '确认，请办理',
+        '界面上方没有出现确认面板，请重新发起这笔追加申购',
         '现在就用我的账户追加申购稳健理财A 1000元',
-        '请直接执行追加申购，我已确认',
       ]);
       await awaitHolding(
         (row) => row.principalAmountMinor === 600_000n,
@@ -1300,7 +1300,7 @@ async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
       const sentB2 = await driveRedTool(page, ctx.baseUrl, [
         '我持有的稳健理财A部分赎回2000元本金',
         '确认，请办理',
-        '请直接执行部分赎回，我已确认',
+        '界面上方没有出现确认面板，请重新发起这笔部分赎回',
       ]);
       const holding = await awaitHolding(
         (row) => row.principalAmountMinor === 400_000n && (row.estimatedMarketValue ?? '').startsWith('4118.90666'),
