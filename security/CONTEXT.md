@@ -19,6 +19,16 @@
 开放的人工接管阻断新的执行认领；已授权的在途命令仍可落地。
 `authorization-record.ts` 记录策略版本、命令指纹、原因与脱敏输入。
 
+## 待处理操作（PendingAction）的创建路径
+
+`PendingAction` 行只由两个创建点产生。
+主路径：模型的工具调用 → agent `beforeToolCall`（`agent/banking-agent.ts`）→ `securityGateway.handleToolCall`（`security-gateway.ts`）→ `gatewayCreatePendingAction` → 仓储 `createPendingAction`（`lib/db/repositories/pendingAction.ts#createPendingAction` → `client.pendingAction.create`）。
+纯文本回复不经过 `beforeToolCall`，因此不会创建任何 `PendingAction`，也不会出现确认/MFA 面板。
+`gatewayCreatePendingAction` 落库状态：`ev.requiresMfa ? 'awaiting_mfa' : 'pending'`；RED 同时铸造 MFA 挑战。
+它还可能返回 `{ kind: 'clarify' }`（转账收款人无法唯一解析，不落库）或 `{ kind: 'plan_cancelled' }`（所属计划已取消，不落库）。
+计划节点（`submit_plan` 之后）经 `agent/confirmation/gated-execution.ts` 以 `taskId`/`nodeId` 复用同一 `handleToolCall` 路径。
+独立路径：`manual-card-management.ts#proposeCardChange`（`POST /api/cards`）直接 `pendingAction.create`，工具名 `manual_add_card`/`manual_delete_card`，被 `app/api/actions/route.ts` 显式过滤，不出现在主确认面板。
+
 ## 赎回报价
 
 `gatewayCreatePendingAction` 在确认前用服务端决定铸造赎回报价。
