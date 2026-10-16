@@ -128,4 +128,11 @@ disable that automatic continuation. `authorization-context.ts` locates the
 original assistant through the owned action, invocation and model request, so reused provider call IDs
 cannot redirect an older committed result into a newer operation.
 
+## Known Issues
+
+- LIVE mode can fabricate a gate: the model replies "please confirm in the panel above / waiting for your confirmation" without calling a write or `submit_plan`, so no `PendingAction` exists and `turns/events.ts:61-72` never emits a `ConfirmationCard`/`MfaCard` (those come only from a real blocked gateway call).
+- The panel wording is seeded by `system-prompt.ts:37` (names the panel, asks the model not to repeat approval instructions); `HALLUCINATION_RULE` (`system-prompt.ts:12`) forbids claiming a gated tool already executed but says nothing about a fabricated pending gate.
+- No code detects a "model claimed a panel" claim: `reply-format.ts` `inspectReplyFormat` (:18) recognizes only protocol envelopes; `conversational-response.ts:4` preserves prose verbatim; `financial-response.ts` renders pending text only from server facts (`options.pending`, :99-100).
+- Hook points for the fix: after the first live response completes at `run-turn.ts:66` (or inside `runLivePrompt`, `turns/live-prompt.ts:92-107`), when the buffer has no `confirmation_required`/`mfa_required` event and no write result, issue one bounded continuation using the `repairConversationalReply` template (`turns/live-prompt.ts:25-77`; persisted `ReplyRepairState` + `runtime.agent.continue()` at :57). Durable recovery has the mirror no-op at `durable/continuation.ts:296-299`.
+
 Use the central tool catalog and financial string contracts. See `docs/cn/architecture.md`, `docs/cn/agent-durability.md` and `docs/cn/security.md` for current behavior and limits.
