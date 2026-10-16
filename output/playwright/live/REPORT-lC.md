@@ -58,6 +58,44 @@ Independent SQLite cross-check of `prisma/live-acceptance.db` (throwaway Prisma 
 
 ---
 
-## Rounds 2–3
+## Round 2 — **PASS** (exit code 0)
 
-(recorded below as they complete)
+Verbatim scenario line:
+
+```
+PASS lC-live-virtual-card-consumption — C1 实际发送：「我只是想确认一下我现有的那张虚拟卡（尾号7788）的状态，不需要新办卡，可以吗？」 → 「那我这张虚拟卡当前最多可以支付多少钱？」 → 仍恰 1 张 VIRTUAL 卡（card_virtual，未被重复开通）；C2 前端消费弹窗（绑定 card_virtual，月限额 ¥5,000.00、关联账户 ****8821、消费前当前可支付金额 ¥5,000.00）提交 ¥88.00（购物/虚拟卡消费验证）→ 消费成功；SQLite：新增 1 条 channel=CARD/DEBIT 流水 -8800（cmvaw7v4o00niv8f83vwzd64w）、1 条 CardConsumption amountMinor=8800（cmvaw7v4o00njv8f87fz93pmk）；活期余额 23580.00 → 23492.00（恰扣一次）；card_virtual.payableAmount 5000.00 → 4912.00 = min(可用余额 23492.00、剩余月限额 4912.00)；卡片「当前可支付金额」=¥4,912.00
+```
+
+Verbatim summary line:
+
+```
+== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==
+```
+
+Exit code: `0`. Clarifications / retries / timeouts / nudges: none.
+Run banner: `next dev (pid=14864) → http://localhost:52288`, `/api/health={"ok":true,...,"llmMode":"live"}`.
+Network 4xx/5xx: 0, console error: 0, pageerror: 0.
+
+Screenshots produced (fresh, then copied round-tagged):
+
+- `01-lC-consume-form.png` → `lC-round2-consume-form.png`
+- `02-lC-consume-success.png` → `lC-round2-consume-success.png`
+- `03-lC-card-tile.png` → `lC-round2-card-tile.png`
+
+Independent SQLite cross-check of `prisma/live-acceptance.db` (throwaway Prisma client):
+
+| Check | Observed |
+| --- | --- |
+| `acct_checking.balanceMinor` | `2349200` (CNY 23492.00) = 2,358,000 − 8,800 → reduced **exactly once** |
+| New `Transaction` channel=CARD / direction=DEBIT | exactly **1**: `cmvaw7v4o00niv8f83vwzd64w`, `amountMinor=-8800`, category `购物`, merchant `虚拟卡消费验证` |
+| `Transaction` merchant = 虚拟卡消费验证 | exactly **1** (no duplicate charge) |
+| `CardConsumption` for `card_virtual` | exactly **1**: `cmvaw7v4o00njv8f87fz93pmk`, cardId `card_virtual`, accountId `acct_checking`, `amountMinor=8800`, category `购物`, merchant `虚拟卡消费验证` |
+| `card_virtual` | ACTIVE / VIRTUAL, `monthlyLimitMinor=500000`, `linkedAccountId=acct_checking` |
+| `card_virtual.payableAmount` (API) | `4912.00` = min(available cash 23492.00, remaining limit 5000.00−88.00=4912.00) |
+| Card rows | exactly **3** (`card_credit` CREDIT ACTIVE, `card_debit` DEBIT ACTIVE, `card_virtual` VIRTUAL ACTIVE) → no duplicate virtual card |
+
+---
+
+## Round 3
+
+(recorded below when it completes)
