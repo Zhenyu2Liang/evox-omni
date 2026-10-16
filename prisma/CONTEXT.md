@@ -26,6 +26,18 @@
 结算与输出规则见
 [financial-values.md](../docs/cn/financial-values.md)。
 
+## 卡片与账户模型
+
+`Account.type` 取值为 `CHECKING`（活期）或 `SAVINGS`（储蓄），余额存于 `balanceMinor` BigInt 分。
+`Transaction` 通过 `accountId` 归属账户，含 `amountMinor`、`direction`（`DEBIT`/`CREDIT`）、
+`category`、`merchant`、`channel`、`occurredAt`、`isAnomaly` 等字段。
+`Card.type` 取值为 `DEBIT`、`CREDIT` 或 `VIRTUAL`，状态为 `ACTIVE`/`FROZEN`/`LOST`/`PENDING`。
+`Card` 的 `creditLimitMinor`、`availableLimitMinor`、`monthlyLimitMinor` 均为可空 BigInt 分。
+分类限额存于 `CardLimit`（`category` + `amountMinor`）。
+`replacedByCardId` 仅作历史引用，没有外键关系。
+`Card` 目前只通过 `userId` 归属用户，没有指向 `Account` 的外键关系。
+SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件头注释。
+
 ## 种子行为
 
 `seed.ts` 使用 `businessDate` 构造北京时间。
