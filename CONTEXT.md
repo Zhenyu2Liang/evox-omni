@@ -24,6 +24,14 @@ A competition simulator for natural-language banking with server-controlled perm
 - `tests/unit/`, `tests/scenarios/`, `tests/integration/`, `tests/app/`: pure, scenario, SQLite-backed and HTTP coverage.
 - `tests/helpers/`, `tests/fixtures/`: shared scenario harness and seeded-fixture ids.
 
+- `banking-sdk/`: exact domain arithmetic & mutations — `card.ts`, `account.ts`, `transaction.ts`, `transfer.ts`, `investment.ts`, `types.ts`, `index.ts`.
+- `agent/`: Pi runtime & banking tools — `tools/` (registry + family modules), `confirmation/`, `durable/`, `turns/`, `providers/`, `workflows/`.
+- `lib/`: shared contracts & data access — `contracts/tool-catalog.ts` (capability source of truth), `db/` + `db/repositories/`, `i18n/` message catalogs.
+- `app/`: Next.js pages (`cards/`, `overview/`, ...) & HTTP edge (`api/` routes).
+- `components/`: display components — `components/banking/` (`CardTile` etc.), `components/chat/cards/` (chat result cards).
+- `security/`: permissions, gateway, manual card management, verification, locks. `planner/`: DAG transitions & workflow ownership.
+- `prisma/`: schema & demo seed. `scripts/`: CLI command entry points. `docs/cn/`: developer documentation.
+
 ## Invariants
 
 Booked amounts are Prisma `BigInt` minor units with explicit `*Minor` names. Annual yield ratios and unrounded valuations use Decimal arithmetic and canonical SQLite TEXT storage. `principalAmountMinor` is booked cash; `estimatedMarketValue` is unrounded CNY. Settlement rounds HALF_UP once to cents and records the quote and policy in the immutable result. Public monetary inputs and outputs are strings; `annualYieldRate` is a ratio in storage and DTOs, converted to a percentage only for display. Calculations and conditions never use floating-point money. Chart coordinate conversion is presentation only. Flagged consumption remains in booked totals. A budget envelope does not lock withdrawable cash. See `docs/cn/financial-values.md`.

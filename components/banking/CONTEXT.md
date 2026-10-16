@@ -44,6 +44,28 @@ SDK 类型通过类型导入使用。
 `DecimalMoney`→`formatDecimalCNY`（`lib/decimal.ts`，HALF_UP 到两位）；二者输出形状一致（`[±]¥#,##0.00`）。
 `signed` 时正数前置 `+`。年化率经 `rateRatioToPercent`（比值×100）加 `%`，如 `3.2575%`。
 
+## 卡片渲染（CardTile）
+
+`CardTile` 由 `CardView` DTO 驱动（`banking-sdk`）：卡类型+网络、脱敏卡号 `numberMasked`、状态徽章与限额。
+类型/状态映射为 `MessageKey`（`@/lib/i18n/shared`）：
+
+| 字段 | 键 | 中文 | 英文 |
+| --- | --- | --- | --- |
+| 类型 DEBIT/CREDIT/VIRTUAL | `business.cards.debit`/`credit`/`virtual` | 借记卡/信用卡/虚拟卡 | Debit card/Credit card/Virtual card |
+| 状态 ACTIVE/FROZEN/LOST/PENDING | `business.cards.active`/`frozen`/`lost`/`pending` | 正常/已冻结/已挂失/待激活 | Active/Frozen/Reported lost/Pending activation |
+| 信用额度 | `business.cards.limit` | 信用额度 | Credit limit |
+| 可用额度 | `business.cards.available` | 可用额度 | Available credit |
+| 月限额 | `business.cards.monthlyLimit` | 月限额 | Monthly limit |
+| 分类限额 | `business.cards.categoryLimits` | 分类限额 | Category limits |
+| 已补卡 | `business.cards.replaced` | 已补卡 | Replaced |
+
+渲染分支：卡类型与状态始终显示（状态用 `Badge`，`STATUS_TONE`：ACTIVE→success、FROZEN→info、LOST→danger、PENDING→warn；非风控状态不用 `StatusBadge`）。
+信用额度/可用额度两行仅在 `card.type === 'CREDIT'` 且对应字段存在时渲染。
+月限额行在所有卡类型上，仅当 `card.monthlyLimit` 存在时渲染（`Money`→`formatCNY`）。
+分类限额块仅当 `card.limits.length > 0` 时渲染，每行标签是 `limit.category` 原始字符串（非 i18n），值为 `Money(limit.amount)`。
+`card.replacedByCardId !== undefined` 时插入 `business.cards.replaced` 徽章。
+限额字段（`creditLimit`/`availableLimit`/`monthlyLimit`/`limits[].amount`）是 `MoneyAmount`（CNY 十进制字符串），经 `Money`→`formatCNY` 展示。
+
 ## 修改约束
 
 - 本目录不请求数据或执行银行业务。

@@ -129,6 +129,7 @@ operations and optional workflow/example flags; it cannot bypass the production 
 Natural-language conversation, advice, guidance and request DSL parsers live only in mock/.
 Before resource writes, resource-resolution.ts queries real card/product/holding/subscription
 records and binds actual IDs; unknown or ambiguous selections cannot substitute another resource.
+The mock has no card-consumption/spend/payment intent: its only card tool calls are the catalog card set (get_cards, set_card_limit, freeze/unfreeze/report_lost/replace/apply_virtual_card). See `./mock/CONTEXT.md`.
 
 - respond(context) is pure: no database, banking SDK, filesystem, network,
   Date.now() or Math.random() may affect reply content. Tool-call ids are explicit.

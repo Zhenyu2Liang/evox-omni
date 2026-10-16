@@ -55,6 +55,9 @@ Physical debit and credit card creation and deletion use the manual card-managem
 Virtual card issuance is an agent capability (`apply_virtual_card`).
 `replace_card` replaces an owned `LOST` card and is idempotent: a source that already points at a
 replacement returns that card instead of issuing a second one.
+No card-consumption/spend/purchase/payment/debit capability exists in this directory.
+The card tool set is only read (`get_cards`), state change (`set_card_limit` configures a per-category limit and does not consume; plus freeze/lost/replace/virtual-card mutations).
+Spend-related keywords here appear only as read analysis of already-booked transactions (`analyze_spending`, `get_transactions`, `get_dashboard_summary`) or as `set_card_limit`'s limit category — never a card debit.
 
 `describe_turn` lives in `turn-intent.ts` and records model-declared conversational purpose.
 It is an internal control tool, not a banking capability or customer authorization.
