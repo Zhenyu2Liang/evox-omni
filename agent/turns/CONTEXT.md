@@ -23,6 +23,20 @@ buffer's advice and protocol-example preferences through the runtime callback.
 - `toolMessages` tracks active calls within the current model response. Starting a
   later assistant clears this active lookup, while ordered transcript entries remain.
 
+## Declared intent and preflight refusals
+
+- The buffer does NOT store the declared `ConversationIntent` steps or a
+  `planningRejections` map. `createTurnBuffer(requestText, intent)` (buffer.ts:17)
+  keeps only `advisory` (purpose `advice`) and `allowProtocolExamples`; the declared
+  write step list never reaches this node, so no declared-vs-emitted comparison exists here.
+- Server-owned preflight refusals arrive as a separate
+  `rejected: ReadonlyMap<toolCallId, reason>` argument to `createEventHandler`
+  (events.ts:77), sourced from `BankingAgentRuntime.planningRejections`
+  (banking-agent.ts:119,154) and passed at run-turn.ts:56.
+- `handleToolEnd` checks `rejected.has(toolCallId)` first (events.ts:21) and projects
+  the reason through `projectToolRejection` (lib/tool-feedback.ts:32) into a
+  `status: 'blocked'` `ToolEventView`.
+
 ## Events
 
 `events.ts` emits message start, tool start/update/end, owned cards, and a complete
