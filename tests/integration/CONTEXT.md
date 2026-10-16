@@ -19,6 +19,7 @@
 | `workflow-invocations.test.ts` | 持久化子调用与任务图恢复 |
 | `process-restart.test.ts`、`standalone-workflow-restart.test.ts` | 真实进程中断与恢复 |
 | `model-checkpoint-boundaries.test.ts` | 模型检查点、租约与提交条件 |
+| `write-continuation.test.ts` | 声明写操作未发出受控调用时的单次续办、面板真伪与持久化恢复 |
 
 其他测试覆盖预算、取消、接管、执行权和未知结果。
 具体场景以测试源码中的断言为准。
@@ -38,6 +39,6 @@
 ## 已知缺口
 
 - `live-*.test.ts` 中的 `live` 表示使用 live 模式配置，不代表调用真实模型；真实模型证据见 [../e2e/CONTEXT.md](../e2e/CONTEXT.md)。
-- 本目录所有“确认/面板”断言都以**真实工具调用并持久化 `PendingAction`** 为前提（见 `conversational-turns.test.ts`、`decision-guidance.test.ts`、`live-recovery.test.ts`）。
-- 无任何测试覆盖“模型仅在散文里声称已在面板确认／等待用户确认，却不发出任何工具调用、因而没有 `PendingAction`、也不显示面板”的情形。`conversational-turns.test.ts` 的 `fixtures.fabricatedSuccess`／`fabricatedBalance` 只断言这类散文被原样保留且不触发授权，不涉及面板/确认声称。
-- `panel`、`hallucinat`、`please confirm`、`waiting for your confirmation` 及中文 `面板`／`确认卡片`／`等待确认`／`请确认` 在本目录均无匹配。
+- 面板/确认断言分两类前提：`conversational-turns.test.ts`、`decision-guidance.test.ts`、`live-recovery.test.ts` 等要求真实工具调用并持久化 `PendingAction`；`write-continuation.test.ts` 覆盖模型仅在散文里声称已确认或等待确认、却不发出任何受控调用、因而不存在 `PendingAction` 也不显示面板的情形。
+- `write-continuation.test.ts` 的前台续办中，真实写调用被回复校正拒绝，不会打开面板；打开真实面板的写路径由 `live-complete-plan.test.ts` 等覆盖，其持久化写路径由该文件的 durable 用例覆盖。
+- 真实模型自身的散文化面板声称稳定性由 [../e2e/CONTEXT.md](../e2e/CONTEXT.md) 的 live 验收诊断，本目录不覆盖。
