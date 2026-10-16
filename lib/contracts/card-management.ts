@@ -6,6 +6,8 @@ export interface AddDemoCardRequest {
   type: CardType;
   creditLimit?: MoneyAmount;
   monthlyLimit?: MoneyAmount;
+  /** Settlement checking-account id of a VIRTUAL card; display only — the server validates ownership and account type. */
+  linkedAccountId?: string;
 }
 
 export interface CardChange {
@@ -16,6 +18,8 @@ export interface CardChange {
   type?: CardType;
   creditLimit?: MoneyAmount;
   monthlyLimit?: MoneyAmount;
+  /** Settlement checking-account id of a VIRTUAL card; display only — the server validates ownership and account type. */
+  linkedAccountId?: string;
   card?: CardView;
 }
 

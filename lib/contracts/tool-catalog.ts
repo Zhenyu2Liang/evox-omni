@@ -48,6 +48,7 @@ export const TOOL_CATALOG = {
   cancel_subscription: write('subscription', 'YELLOW', 'Cancel an active subscription.'),
   freeze_card: write('card', 'RED', 'Freeze an owned card after confirmation and strong verification.'),
   apply_virtual_card: write('card', 'RED', 'Issue a virtual card after confirmation and strong verification.'),
+  consume_virtual_card: write('card', 'RED', 'Spend from an owned virtual card against its linked checking account after confirmation and strong verification.'),
   set_subscription_reminder: write('subscription', 'YELLOW', 'Change a subscription reminder.'),
   create_scheduled_task: write('task', 'YELLOW', 'Create a scheduled intent.'),
   subscribe_investment: write('investment', 'RED', 'Purchase an investment product.'),
