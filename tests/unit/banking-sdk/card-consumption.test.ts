@@ -88,6 +88,18 @@ async function balanceOf(accountId = CHECKING): Promise<string> {
   return centsToMoney(row.balanceMinor);
 }
 
+/** The enriched `CardView` for one of the user's cards (the exact projection `getCards` returns). */
+async function viewOf(cardId: string): Promise<CardView> {
+  const view = (await banking.card.getCards(DEMO_USER_ID)).find((candidate) => candidate.id === cardId);
+  if (!view) throw new Error(`card ${cardId} not found`);
+  return view;
+}
+
+/** Every one of the user's card views, keyed by id. */
+async function cardMap(): Promise<Map<string, CardView>> {
+  return new Map((await banking.card.getCards(DEMO_USER_ID)).map((view) => [view.id, view]));
+}
+
 /** Create a second CHECKING account for the demo user (a distinct valid settlement target). */
 async function addSecondChecking(): Promise<string> {
   await db().account.create({ data: { id: 'acct_checking2', userId: DEMO_USER_ID, type: 'CHECKING', name: '活期账户二', number: '****0002', balanceMinor: moneyToCents('1000.00') } });
@@ -261,7 +273,7 @@ describe('banking-sdk · consumeCard happy path', () => {
     expect(await balanceOf()).toBe('23479.50');
 
     // A ledger row on the CARD channel: signed negative, DEBIT.
-    const ledger = await db().transaction.findFirstOrThrow({ where: { channel: 'CARD', userId: DEMO_USER_ID } });
+    const ledger = await db().transaction.findFirstOrThrow({ where: { channel: 'CARD', userId: DEMO_USER_ID, merchant: '测试商户' } });
     expect(ledger.accountId).toBe(CHECKING);
     expect(ledger.amountMinor).toBe(-10050n);
     expect(ledger.direction).toBe('DEBIT');
@@ -295,7 +307,7 @@ describe('banking-sdk · consumeCard monthly limit', () => {
     // 60.00 + 50.00 exceeds the ¥100 limit → the rejected spend moved nothing at all.
     expect(await balanceOf()).toBe(afterFirst);
     expect(await db().cardConsumption.count({ where: { cardId: card.id } })).toBe(1);
-    expect(await db().transaction.count({ where: { channel: 'CARD' } })).toBe(1);
+    expect(await db().transaction.count({ where: { channel: 'CARD', userId: DEMO_USER_ID, merchant: '本地模拟消费' } })).toBe(1);
   });
 
   it('treats a zero limit as "nothing is payable"', async () => {
@@ -342,7 +354,7 @@ describe('banking-sdk · consumeCard insufficient funds', () => {
 
     expect(await balanceOf()).toBe(before);
     expect(await db().cardConsumption.count({ where: { cardId: card.id } })).toBe(0);
-    expect(await db().transaction.count({ where: { channel: 'CARD' } })).toBe(0);
+    expect(await db().transaction.count({ where: { channel: 'CARD', userId: DEMO_USER_ID, merchant: '本地模拟消费' } })).toBe(0);
   });
 
   it('allows a spend of the whole balance but not one cent more', async () => {
@@ -439,7 +451,7 @@ describe('banking-sdk · consumeCard execution-key replay', () => {
     // Exactly one charge, one ledger row and one ledger identity.
     expect(await balanceOf()).toBe('23330.00');
     expect(await db().cardConsumption.count({ where: { cardId: card.id } })).toBe(1);
-    expect(await db().transaction.count({ where: { channel: 'CARD' } })).toBe(1);
+    expect(await db().transaction.count({ where: { channel: 'CARD', userId: DEMO_USER_ID, merchant: '本地模拟消费' } })).toBe(1);
   });
 
   it('replays the ORIGINAL snapshot even when the repeat asks for a different amount', async () => {
@@ -507,7 +519,7 @@ describe('banking-sdk · consumeCard atomicity', () => {
 
     expect(await balanceOf()).toBe(before);
     expect(await db().cardConsumption.count({ where: { cardId: card.id } })).toBe(0);
-    expect(await db().transaction.count({ where: { channel: 'CARD' } })).toBe(0);
+    expect(await db().transaction.count({ where: { channel: 'CARD', userId: DEMO_USER_ID, merchant: '本地模拟消费' } })).toBe(0);
   });
 });
 
@@ -569,5 +581,160 @@ describe('banking-sdk · listCardConsumptions', () => {
 
     // Default page size is 20 and is never exceeded.
     expect(await banking.card.listCardConsumptions(DEMO_USER_ID)).toEqual([]);
+  });
+});
+
+describe('banking-sdk · consumeCard concurrency', () => {
+  it('two racing spends against a balance funding only one — exactly one succeeds, the other is INSUFFICIENT_FUNDS with no extra debit', async () => {
+    await db().account.update({ where: { id: CHECKING }, data: { balanceMinor: moneyToCents('100.00') } });
+    const card = await issueVirtual();
+
+    const results = await Promise.allSettled([
+      banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '80.00' }),
+      banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '80.00' }),
+    ]);
+
+    const fulfilled = results.filter((result) => result.status === 'fulfilled');
+    const rejected = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toBeInstanceOf(AppError);
+    expect((rejected[0].reason as AppError).code).toBe('INSUFFICIENT_FUNDS');
+
+    // Exactly ONE ¥80 debit: 100 - 80 = 20 — never negative, never charged twice.
+    expect(await balanceOf()).toBe('20.00');
+    expect(await db().cardConsumption.count({ where: { cardId: card.id } })).toBe(1);
+    expect(await db().transaction.count({ where: { channel: 'CARD', userId: DEMO_USER_ID, merchant: '本地模拟消费' } })).toBe(1);
+  });
+
+  it('two racing spends against one monthly limit — exactly one succeeds, the other is LIMIT_EXCEEDED with no extra debit', async () => {
+    const card = await issueVirtual({ monthlyLimit: '100.00' });
+
+    const results = await Promise.allSettled([
+      banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '60.00' }),
+      banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '60.00' }),
+    ]);
+
+    const fulfilled = results.filter((result) => result.status === 'fulfilled');
+    const rejected = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toBeInstanceOf(AppError);
+    expect((rejected[0].reason as AppError).code).toBe('LIMIT_EXCEEDED');
+
+    // Exactly ONE ¥60 debit against the shared limit: 23580 - 60 = 23520.
+    expect(await balanceOf()).toBe('23520.00');
+    expect(await db().cardConsumption.count({ where: { cardId: card.id } })).toBe(1);
+    expect(await db().transaction.count({ where: { channel: 'CARD', userId: DEMO_USER_ID, merchant: '本地模拟消费' } })).toBe(1);
+  });
+
+  it('debits ONCE for a duplicate executionKey issued concurrently and both callers observe the SAME original result', async () => {
+    const card = await issueVirtual({ monthlyLimit: '5000.00' });
+    const request = { userId: DEMO_USER_ID, cardId: card.id, amount: '250.00', executionKey: 'race-key-1' };
+
+    const [first, second] = await Promise.all([
+      banking.card.consumeCard(request),
+      banking.card.consumeCard(request),
+    ]);
+
+    // The second caller replays the PERSISTED original snapshot — never a second charge.
+    expect(second.consumption.id).toBe(first.consumption.id);
+    expect(second.consumption.amount).toBe('250.00');
+    expect(second.accountAvailableBalance).toBe(first.accountAvailableBalance);
+    expect(second.accountAvailableBalance).toBe('23330.00');
+
+    expect(await balanceOf()).toBe('23330.00');
+    expect(await db().cardConsumption.count({ where: { cardId: card.id } })).toBe(1);
+    expect(await db().transaction.count({ where: { channel: 'CARD', userId: DEMO_USER_ID, merchant: '本地模拟消费' } })).toBe(1);
+  });
+});
+
+describe('banking-sdk · virtual cards sharing one settlement account', () => {
+  it('two virtual cards on the same account share ONE balance — a spend on one moves the other\'s payable amount', async () => {
+    const first = await issueVirtual();
+    const second = await issueVirtual();
+    expect(first.linkedAccountId).toBe(CHECKING);
+    expect(second.linkedAccountId).toBe(CHECKING);
+
+    const initial = await cardMap();
+    expect(initial.get(first.id)!.accountAvailableBalance).toBe('23580.00');
+    expect(initial.get(second.id)!.payableAmount).toBe('23580.00');
+
+    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: first.id, amount: '100.00' });
+
+    // The single debit shows on BOTH cards — the balance is never duplicated or double-counted.
+    expect(await balanceOf()).toBe('23480.00');
+    const after = await cardMap();
+    expect(after.get(first.id)!.payableAmount).toBe('23480.00');
+    expect(after.get(second.id)!.payableAmount).toBe('23480.00');
+    expect(after.get(second.id)!.accountAvailableBalance).toBe('23480.00');
+
+    const ledger = await db().transaction.findMany({ where: { channel: 'CARD', userId: DEMO_USER_ID, merchant: '本地模拟消费' } });
+    expect(ledger).toHaveLength(1);
+    expect(ledger[0].amountMinor).toBe(-10000n);
+    expect(ledger.reduce((sum, row) => sum + row.amountMinor, 0n)).toBe(-10000n);
+  });
+
+  it('each shared card tracks its own monthly spend while the balance stays common', async () => {
+    const first = await issueVirtual({ monthlyLimit: '5000.00' });
+    const second = await issueVirtual({ monthlyLimit: '5000.00' });
+
+    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: first.id, amount: '300.00' });
+    const result = await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: second.id, amount: '200.00' });
+
+    // ONE balance: 23580 - 300 - 200 = 23080. The second card's own limit is reduced by its ¥200.
+    expect(result.accountAvailableBalance).toBe('23080.00');
+    expect(result.card.payableAmount).toBe('4800.00');
+    expect(await balanceOf()).toBe('23080.00');
+
+    const other = await viewOf(first.id);
+    expect(other.accountAvailableBalance).toBe('23080.00');
+    expect(other.payableAmount).toBe('4700.00');
+  });
+});
+
+describe('banking-sdk · payableAmount syncs with the bound account', () => {
+  it('reflects a balance change made OUTSIDE consume and caps it by the remaining monthly limit', async () => {
+    const card = await issueVirtual({ monthlyLimit: '5000.00' });
+    expect((await viewOf(card.id)).payableAmount).toBe('5000.00'); // min(23580, 5000)
+
+    // Lower the bound balance directly — the card view must follow without a consume.
+    await db().account.update({ where: { id: CHECKING }, data: { balanceMinor: moneyToCents('1500.00') } });
+    const lowered = await viewOf(card.id);
+    expect(lowered.accountAvailableBalance).toBe('1500.00');
+    expect(lowered.payableAmount).toBe('1500.00'); // min(1500, 5000)
+
+    // Raise the balance ABOVE the monthly limit — payable is capped by the remaining limit.
+    await db().account.update({ where: { id: CHECKING }, data: { balanceMinor: moneyToCents('30000.00') } });
+    const raised = await viewOf(card.id);
+    expect(raised.accountAvailableBalance).toBe('30000.00');
+    expect(raised.payableAmount).toBe('5000.00'); // min(30000, 5000)
+  });
+
+  it('reflects a balance change made by an SDK transfer', async () => {
+    const card = await issueVirtual();
+    expect((await viewOf(card.id)).payableAmount).toBe('23580.00');
+
+    await banking.transfer.createTransfer({ userId: DEMO_USER_ID, contactId: 'contact_zhangwei', amount: '580.00' });
+
+    const view = await viewOf(card.id);
+    expect(view.accountAvailableBalance).toBe('23000.00');
+    expect(view.payableAmount).toBe('23000.00'); // no monthly limit → the whole balance
+  });
+
+  it('combines the shared balance with this card\'s remaining monthly limit (min)', async () => {
+    const card = await issueVirtual({ monthlyLimit: '5000.00' });
+    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '1000.00' });
+
+    // remaining limit ¥4,000 < balance ¥22,580 → payable is the limit.
+    expect((await viewOf(card.id)).payableAmount).toBe('4000.00');
+
+    // Drop the balance BELOW the remaining limit → payable becomes the balance.
+    await db().account.update({ where: { id: CHECKING }, data: { balanceMinor: moneyToCents('1500.00') } });
+    const view = await viewOf(card.id);
+    expect(view.accountAvailableBalance).toBe('1500.00');
+    expect(view.payableAmount).toBe('1500.00'); // min(1500, 4000)
   });
 });
