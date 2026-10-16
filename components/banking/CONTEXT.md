@@ -6,7 +6,7 @@
 | --- | --- |
 | `AssetSummaryCard` | 资产、余额、额度与消费摘要 |
 | `RecentTransactions` | 交易列表 |
-| `CardTile` | 脱敏卡号、状态与限额 |
+| `CardTile` | 脱敏卡号、状态、限额与关联账户 |
 | `SubscriptionTile` | 费用、周期与下次扣费 |
 | `InvestmentProductTile` | 产品及可选持仓 |
 | `AnomalyBanner` | 异常记录与调用方提供的动作 |
@@ -46,7 +46,7 @@ SDK 类型通过类型导入使用。
 
 ## 卡片渲染（CardTile）
 
-`CardTile` 由 `CardView` DTO 驱动（`banking-sdk`）：卡类型+网络、脱敏卡号 `numberMasked`、状态徽章与限额。
+`CardTile` 由 `CardView` DTO 驱动（`banking-sdk`）：卡类型+网络、脱敏卡号 `numberMasked`、状态徽章、限额与虚拟卡账户绑定信息。
 类型/状态映射为 `MessageKey`（`@/lib/i18n/shared`）：
 
 | 字段 | 键 | 中文 | 英文 |
@@ -57,6 +57,9 @@ SDK 类型通过类型导入使用。
 | 可用额度 | `business.cards.available` | 可用额度 | Available credit |
 | 月限额 | `business.cards.monthlyLimit` | 月限额 | Monthly limit |
 | 分类限额 | `business.cards.categoryLimits` | 分类限额 | Category limits |
+| 关联账户 | `business.cards.linkedAccount` | 关联账户 | Linked account |
+| 账户可用余额 | `business.cards.accountAvailable` | 账户可用余额 | Account available balance |
+| 当前可支付金额 | `business.cards.payableAmount` | 当前可支付金额 | Currently payable |
 | 已补卡 | `business.cards.replaced` | 已补卡 | Replaced |
 
 渲染分支：卡类型与状态始终显示（状态用 `Badge`，`STATUS_TONE`：ACTIVE→success、FROZEN→info、LOST→danger、PENDING→warn；非风控状态不用 `StatusBadge`）。
@@ -64,7 +67,22 @@ SDK 类型通过类型导入使用。
 月限额行在所有卡类型上，仅当 `card.monthlyLimit` 存在时渲染（`Money`→`formatCNY`）。
 分类限额块仅当 `card.limits.length > 0` 时渲染，每行标签是 `limit.category` 原始字符串（非 i18n），值为 `Money(limit.amount)`。
 `card.replacedByCardId !== undefined` 时插入 `business.cards.replaced` 徽章。
-限额字段（`creditLimit`/`availableLimit`/`monthlyLimit`/`limits[].amount`）是 `MoneyAmount`（CNY 十进制字符串），经 `Money`→`formatCNY` 展示。
+
+虚拟卡（`card.type === 'VIRTUAL'`）另渲染账户绑定信息，均按字段存在与否条件渲染，缺失即不渲染（不使用占位文本）：
+
+| 行 | 键 | 值 | 条件 |
+| --- | --- | --- | --- |
+| 关联账户 | `business.cards.linkedAccount` | `card.linkedAccountNumber`，缺失时回退 `card.linkedAccountId` | 两者至少一个存在 |
+| 账户可用余额 | `business.cards.accountAvailable` | `Money(card.accountAvailableBalance)` | 字段存在 |
+| 当前可支付金额 | `business.cards.payableAmount` | `Money(card.payableAmount)` | 字段存在 |
+
+关联账户值是纯文本（脱敏账户号或内部标识），不经 `Money`。
+账户可用余额是绑定结算账户的**可用现金**，不是授信额度：它只用 `business.cards.accountAvailable`，
+绝不用 `business.cards.available`（可用额度）；信用额度与可用额度标签仍仅限 `card.type === 'CREDIT'`。
+账户可用余额与当前可支付金额并列于两列 `<dl className="grid grid-cols-2 gap-3">`（`dt` `text-xs text-banking-navy/60`，`dd` `text-sm font-semibold text-banking-deep`）；
+关联账户为 flex 行（标签 `text-banking-navy/60`，值 `font-semibold text-banking-deep`）。
+月限额行仍是所有卡类型的月度消费限额，与账户绑定信息无关。
+限额字段（`creditLimit`/`availableLimit`/`monthlyLimit`/`limits[].amount`）与 `accountAvailableBalance`/`payableAmount` 都是 `MoneyAmount`（CNY 十进制字符串），经 `Money`→`formatCNY` 展示；`linkedAccountNumber`/`linkedAccountId` 是文本。
 
 ## 修改约束
 
