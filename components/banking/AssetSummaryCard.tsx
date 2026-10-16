@@ -4,7 +4,8 @@
  * AssetSummaryCard — total assets, checking balance, available credit and monthly spending.
  *
  * Localized presentational component with no fetching or database access.
- * Renders booked amounts through Money and unrounded total assets through DecimalMoney.
+ * Renders booked amounts through Money and total assets through DecimalMoney, which rounds
+ * HALF_UP to two fraction digits for display while storage keeps full precision.
  */
 import { Card } from '../ui/Card';
 import { Money } from '../ui/Money';
