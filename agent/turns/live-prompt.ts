@@ -1,25 +1,17 @@
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
+import type { AppConfig } from '@/lib/config';
 import type { BankingAgentRuntime } from '../banking-agent';
 import type { TurnBuffer } from './contracts';
 import { isAssistantMessage, findRunFailure, modelFailureMessage, safeToString, textOfContent } from './message-utils';
-import { newAssistantMessage, publishReplyProgress } from './buffer';
+import { publishReplyProgress } from './buffer';
+import { publishServerReply, retireUnpublishedReply } from './server-reply';
 import { inspectReplyFormat } from '../reply-format';
 import { runtimeRequestDigest, snapshotRuntimeValue } from '../durable/serialization';
 import type { ReplyRepairState } from '../reply-repair';
+import { continueDeclaredWrites } from '../write-continuation';
 import dialogueMessages from '../messages/dialogue.zh-CN.json';
 
-export function retireUnpublishedReply(buffer: TurnBuffer): void {
-  // Only an unpublished presentation is retired. The original provider response stays archived.
-  const current = buffer.current;
-  if (current?.role === 'assistant' && !current.cards?.length && !current.toolEvents?.length) {
-    buffer.events = buffer.events.filter(event => !(
-      (event.type === 'message_start' || event.type === 'message_end') && event.message.id === current.id
-    ));
-    buffer.assistants = buffer.assistants.filter(message => message.id !== current.id);
-    buffer.groundedIds.delete(current.id);
-    buffer.current = null;
-  }
-}
+export { publishServerReply, retireUnpublishedReply } from './server-reply';
 
 /** Correct an invalid conversational candidate once in the same context, retaining every raw response. */
 export async function repairConversationalReply(runtime: BankingAgentRuntime, buffer: TurnBuffer, now: () => number): Promise<void> {
@@ -76,20 +68,8 @@ export async function repairConversationalReply(runtime: BankingAgentRuntime, bu
   publishServerReply(runtime, buffer, now, fallback);
 }
 
-/** Server rendering appends memory but never emits another tool call or provider usage. */
-export function publishServerReply(runtime: BankingAgentRuntime, buffer: TurnBuffer, now: () => number, content: string, retryRequest?: string): void {
-  const message = { ...newAssistantMessage(now()), content, ...(retryRequest ? { retryRequest } : {}) };
-  buffer.current = message;
-  buffer.assistants.push(message);
-  buffer.groundedIds.add(message.id);
-  buffer.events.push({ type: 'message_start', message: { ...message } }, { type: 'text_delta', delta: content }, { type: 'message_end', message });
-  const model = runtime.agent.state.model;
-  runtime.agent.state.messages.push({ role: 'assistant', content: [{ type: 'text', text: content }], api: model.api,
-    provider: model.provider, model: model.id, timestamp: message.timestamp, stopReason: 'stop',
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } } });
-}
-
-export async function runLivePrompt(runtime: BankingAgentRuntime, buffer: TurnBuffer, request: string, now: () => number): Promise<string | undefined> {
+export async function runLivePrompt(runtime: BankingAgentRuntime, buffer: TurnBuffer, request: string, now: () => number,
+  config?: AppConfig): Promise<string | undefined> {
   let failure: string | undefined;
   const start = runtime.agent.state.messages.length;
   buffer.lastGuidance = undefined;
@@ -99,6 +79,8 @@ export async function runLivePrompt(runtime: BankingAgentRuntime, buffer: TurnBu
     if (failed) failure = modelFailureMessage(failed);
   } catch (error) { failure = safeToString(error); }
   if (!failure) {
+    // A declared-but-unemitted write gets exactly one bounded continuation before format repair.
+    await continueDeclaredWrites(runtime, buffer, now, { config, applyCorrection: true });
     await repairConversationalReply(runtime, buffer, now);
     const failed = findRunFailure(runtime.agent.state.messages.slice(-1));
     if (failed) failure = modelFailureMessage(failed);

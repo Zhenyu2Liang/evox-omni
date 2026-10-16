@@ -51,7 +51,7 @@ import { restoreConversationUserMemory } from './conversation-context';
 import { CONVERSATION_TOOL_REJECTION } from '@/lib/tool-feedback';
 import { createContextCompactor, type ContextCompactionState } from './context-compaction';
 import { estimateContextTokens } from './context-compaction/projection';
-import type { ReplyContext, ReplyRepairState } from './reply-repair';
+import type { ReplyContext, ReplyRepairState, WriteContinuationState } from './reply-repair';
 
 /**
  * The security gateway's runtime surface.
@@ -124,6 +124,7 @@ export interface BankingAgentRuntime {
   /** Remove all stream listeners. */
   dispose(): void;
   checkpointReplyRepair(state: ReplyRepairState): Promise<void>;
+  checkpointWriteContinuation(state: WriteContinuationState): Promise<void>;
   executeCheckpointCall(call: ToolCall, assistant: AssistantMessage, emit: (event: AgentEvent) => Promise<void>): Promise<ToolResultMessage>;
 }
 /**
@@ -218,8 +219,10 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     : restoreConversationUserMemory(restored?.messages ?? [], options.snapshot?.transcript ?? []).filter(message => message.role !== 'system');
   let compactionState: ContextCompactionState | undefined = options.snapshot?.contextCompaction;
   let replyRepair = options.preserveSystemMessages ? options.snapshot?.replyRepair : undefined;
+  let writeContinuation = options.preserveSystemMessages ? options.snapshot?.writeContinuation : undefined;
   const replyContext = options.replyContext ?? (options.preserveSystemMessages ? options.snapshot?.replyContext : undefined);
   if (options.snapshot) options.snapshot.replyRepair = replyRepair;
+  if (options.snapshot) options.snapshot.writeContinuation = writeContinuation;
   if (options.snapshot) options.snapshot.replyContext = replyContext;
   // Short turns may never compact. Persist projection metadata even when no summary callback runs.
   if (options.snapshot) options.snapshot.contextCompaction = compactionState;
@@ -379,7 +382,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     return { sessionId, userId, agentState: agent.state, transcript: options.snapshot?.transcript ?? [],
       createdAt: options.snapshot?.createdAt ?? Date.now(), updatedAt: Date.now(), revision: options.snapshot?.revision ?? 0,
       intent: turnIntent, contextCompaction: compactionState,
-      historyGeneration: options.snapshot?.historyGeneration, historyStartedAt: options.snapshot?.historyStartedAt, replyRepair, replyContext };
+      historyGeneration: options.snapshot?.historyGeneration, historyStartedAt: options.snapshot?.historyStartedAt, replyRepair, replyContext, writeContinuation };
   }
 
   return {
@@ -389,6 +392,11 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     registry,
     planningRejections,
     setReplyCorrection(active) { correctingReply = active; },
+    async checkpointWriteContinuation(state) {
+      writeContinuation = state;
+      if (options.snapshot) options.snapshot.writeContinuation = state;
+      await options.journal?.checkpoint(`write_continuation_${state.phase}`);
+    },
     async checkpointReplyRepair(state) {
       replyRepair = state;
       if (options.snapshot) options.snapshot.replyRepair = state;
@@ -420,6 +428,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
         historyGeneration: options.snapshot?.historyGeneration,
         historyStartedAt: options.snapshot?.historyStartedAt,
         replyRepair,
+        writeContinuation,
         replyContext,
       };
     },
