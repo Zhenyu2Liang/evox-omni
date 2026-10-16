@@ -10,6 +10,13 @@ The wrapper forwards every event until the provider terminal event. A source tha
 without a done/error event becomes an error with its partial response retained, so result()
 cannot hang after EOF. A provider stop reason does not prove that its prose is complete.
 
+This node owns NO prompt template. The model's system prompt is built by `../system-prompt.ts`
+(`buildSystemPrompt`, line 24) and handed to Pi through `banking-agent.ts`
+(`initialState.systemPrompt`); the only model-facing wording this node produces is the tool-call lead
+text in `mock/replies.ts` and the post-result narration in `mock/narration.ts`. The confirmation /
+approval / MFA / "request panel above the composer" instructions sent to the model live in
+`../system-prompt.ts` near line 37, not here.
+
 For openai-completions, completion-transport.ts wraps the official Pi fetch extension point. A
 successful SSE body requires the [DONE] transport terminator; finish_reason=stop followed by EOF
 remains a connection error. A complete tool_calls argument payload without the terminator is also

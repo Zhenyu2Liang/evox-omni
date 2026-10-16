@@ -124,6 +124,11 @@ Plan-node and confirmed-action identities remain stable on replay. SDK fences ru
 transaction and roll back the effect if execution rights have expired, moved, or been cancelled.
 Idempotency prevents duplicate effects; it does not grant permission.
 
+## Known issues
+
+Declared-write enforcement is REACTIVE and tool-call-gated: `compileRequestedPlan` only runs when `submit_plan` is actually invoked (`planning.ts:261` via `preflightRequestedPlan`), and `requiresDeclaredPlan` (`../intent-context.ts:43`) is called only from `beforeToolCall` (`../banking-agent.ts:286`) which fires on a stray individual write. A live model that narrates "confirm in the panel above" WITHOUT emitting any write tool call or `submit_plan` is never checked, so no `PendingAction`/panel is created. There is no end-of-turn reconciliation of "declared writes vs emitted write tools".
+`planning.ts:265` calls `dag.validatePlan(nodes, knownTools)` with only two args, so output-contract validation is skipped there; the output-contract check runs in `plan-compiler.ts:16` (`BANKING_TOOL_OUTPUTS`).
+
 ## Verification
 
 Use pure tests for schemas, typed error adapters, public data projection, and parameter boundaries.

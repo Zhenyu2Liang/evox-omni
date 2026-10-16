@@ -32,3 +32,14 @@ GREEN 只表示执行策略，不表示没有副作用。
 熔断隔离规则见 [../CONTEXT.md](../CONTEXT.md)。
 
 运行：`pnpm exec vitest run tests/scenarios`。
+
+## 确认与待决面板
+
+确认/MFA 面板只来自被网关拦截的真实工具调用。
+`test-02`（YELLOW）与 `test-03`/`test-09`/`test-13`/`test-14`（RED）核对 `PendingAction` 行、`confirmation_required`/`mfa_required` 事件与确认/MFA 卡片。
+`test-11`/`test-12` 核对被拦截的计划节点 parked 为 `waiting_confirmation` 并暴露 `pendingActionId`。
+`mock-integration.test.ts` 对真实离线模型核对 `pendingAction.status`。
+
+所有编号场景脚本都以一次工具调用开始，因此被断言的面板必然对应一条 `PendingAction`。
+没有场景覆盖“模型只用文字声称需要确认、却不发出工具调用”的情形；此时不会产生面板，故不存在正向对照测试。
+`test-04` 只证明注入文本不改变权限等级，不核对模型文字与实际工具调用/待决行是否一致。
