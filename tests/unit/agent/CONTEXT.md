@@ -11,13 +11,21 @@
 - `task-cancel-revokes.test.ts` 检查取消与已执行事实。
 - `message-normalize.test.ts` 检查工具结果组与后续历史。
 - `run-turn-failure.test.ts` 检查实际结果与失败续接。
-- `providers/` 检查离线响应与 live 适配配置。
+- `system-prompt.test.ts` 检查系统提示词与工具目录分级一致并保留幻象规则。
+- `read-tool-boundaries.test.ts` 检查读取工具参数校验与模型可见错误信封。
+- `durable-reply-repair.test.ts` 检查回复修复的持久续接、崩溃不重复修复与凭据脱敏。
+- `durable-advice-context.test.ts` 检查授权恢复时建议用途与来源请求一致性。
+- `recovery-worker.test.ts` 检查恢复主机批处理、关闭与参数校验。
+- `providers/` 检查离线响应、live 适配配置、流完成证据与模块边界。
 
 ## 证据与隔离
 
 确认、验证和任务控制用例使用真实模块与测试库。
 只检查模型适配配置不等于完成 live 请求验收。
 结果文字必须区分服务端结果与模型输出。
+`provider-live.test.ts` 仅覆盖模型解析/身份/密钥，不覆盖回复格式或面板语义。
+本目录没有用例断言 live 模型未发出工具调用却谎称「面板/待确认」；该场景只有 mock 侧
+（`providers/provider-mock.test.ts`，须先有真实停放调用）覆盖。
 
 熔断状态按所有者持久化，不是进程内会话计数。
 测试隔离规则见 [../../CONTEXT.md](../../CONTEXT.md)。
