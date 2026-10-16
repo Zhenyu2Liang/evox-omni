@@ -47,6 +47,7 @@ const RED_TOOLS: readonly ToolName[] = [
   'report_lost_card',
   'replace_card',
   'apply_virtual_card',
+  'consume_virtual_card',
   'unfreeze_card',
 ];
 
