@@ -254,7 +254,8 @@ export async function reportLostCard(
 
 /**
  * Replace a `LOST` card with a NEW card (same owner, same `type` and `network`).
- * The replacement is a fresh row with a new masked number and carries the source's monthly limit
+ * The replacement is a fresh row with a new masked number. It carries the source's monthly limit,
+ * and a CREDIT replacement also inherits the source's approved credit limit and current available limit
  * (per-category limits are NOT copied). The source stays `LOST` and records the new card id in
  * `replacedByCardId` — a historical reference, not a status change and not a relation.
  *
@@ -289,6 +290,10 @@ export async function replaceCard(cardId: string, userId: string): Promise<CardV
       network: latest.network,
       numberMasked: generateMaskedNumber(new Set(own.map(card => card.numberMasked))),
       status: 'ACTIVE',
+      // A replacement CREDIT card inherits the SAME approved credit limit and current available
+      // limit (no re-approval); non-credit cards keep none.
+      creditLimitMinor: latest.type === 'CREDIT' ? latest.creditLimitMinor : null,
+      availableLimitMinor: latest.type === 'CREDIT' ? latest.availableLimitMinor : null,
       monthlyLimitMinor: latest.monthlyLimitMinor,
     } });
     await tx.card.update({ where: { id: latest.id, userId }, data: { replacedByCardId: created.id } });
