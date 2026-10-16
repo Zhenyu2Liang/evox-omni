@@ -30,6 +30,11 @@ SDK 数据类型使用类型导入。
 部分赎回后的持仓按剩余本金（`holding.amount`）及估算市值与收益显示。
 已加购持仓显示最近申购时间（`lastPurchaseAt`）与申购记录数（`purchases`），
 投资产品卡与对话投资卡片以“已加购”标记加购。
+虚拟卡（`type === 'VIRTUAL'`）展示关联账户
+（`linkedAccountNumber`，缺省回退 `linkedAccountId`）、账户可用余额
+（`accountAvailableBalance`）与当前可支付金额（`payableAmount`）；字段缺失则不渲染。
+`accountAvailableBalance` 是关联活期账户的可用现金，不是授信额度；
+`信用额度`（`business.cards.limit`）与 `可用额度`（`business.cards.available`）标签仅用于 CREDIT 卡。
 图表只有坐标可转换为普通数值。
 本地化使用 `lib/i18n`，不改变金融值与资源身份。
 颜色与圆角使用 `app/globals.css` 中的主题。

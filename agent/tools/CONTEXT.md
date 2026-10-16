@@ -37,7 +37,7 @@ agent availability, and replay policy. Use `AGENT_TOOL_NAMES` for model-visible 
 | `search_conversation_history` | `conversation-history.ts` | GREEN historical read |
 | `get_cards` | `card.ts` | GREEN read |
 | `set_card_limit` | `card.ts` | YELLOW write |
-| `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card` | `card.ts` | RED write |
+| `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card`, `consume_virtual_card` | `card.ts` | RED write |
 | `list_subscriptions` | `subscription.ts` | YELLOW read |
 | `cancel_subscription`, `set_subscription_reminder` | `subscription.ts` | YELLOW write |
 | `list_investments`, `compare_investments`, `get_investment_holdings` | `investment.ts` | GREEN read |
@@ -55,9 +55,14 @@ Physical debit and credit card creation and deletion use the manual card-managem
 Virtual card issuance is an agent capability (`apply_virtual_card`).
 `replace_card` replaces an owned `LOST` card and is idempotent: a source that already points at a
 replacement returns that card instead of issuing a second one.
-No card-consumption/spend/purchase/payment/debit capability exists in this directory.
-The card tool set is only read (`get_cards`), state change (`set_card_limit` configures a per-category limit and does not consume; plus freeze/lost/replace/virtual-card mutations).
-Spend-related keywords here appear only as read analysis of already-booked transactions (`analyze_spending`, `get_transactions`, `get_dashboard_summary`) or as `set_card_limit`'s limit category — never a card debit.
+This directory exposes exactly ONE card-spend write, `consume_virtual_card` (RED): it spends an
+exact CNY amount from an owned ACCOUNT-BOUND virtual card by debiting that card's linked CHECKING
+settlement account through `banking.card.consumeCard` (atomic sufficient-funds debit plus a
+`channel='CARD'` ledger row and a `CardConsumption` row in ONE transaction, guarded by the card's
+monthly limit, replayable by execution key).
+Card reads and analysis (`get_cards`, `analyze_spending`, `get_transactions`,
+`get_dashboard_summary`) never debit. Physical debit and credit card creation and deletion remain
+manual-only on the card-management page.
 
 `describe_turn` lives in `turn-intent.ts` and records model-declared conversational purpose.
 It is an internal control tool, not a banking capability or customer authorization.

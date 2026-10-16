@@ -1,13 +1,14 @@
 /**
  * card — `get_cards`, `set_card_limit`, `freeze_card`, `unfreeze_card`, `apply_virtual_card`,
- * `report_lost_card`, `replace_card`.
+ * `consume_virtual_card`, `report_lost_card`, `replace_card`.
  *
  * Card reads and mutations. TypeBox param schemas; `execute` returns native Pi success or failure content.
  * The `run<X>(userId, args, opts?)` runners are the model-free path used by
  * `executeDirect`; they CATCH and return `ToolExecutionResult{ok:false,error}`.
  *
  * Tiers: `get_cards` GREEN; `set_card_limit` YELLOW (confirmation);
- * `freeze_card` / `unfreeze_card` / `apply_virtual_card` / `report_lost_card` / `replace_card` RED
+ * `freeze_card` / `unfreeze_card` / `apply_virtual_card` / `consume_virtual_card` / `report_lost_card` /
+ * `replace_card` RED
  * (confirmation and MFA).
  * The tier is decided by `security/`, NOT here — this module only declares capability. `userId` is
  * SERVER-INJECTED; the model never supplies it.
@@ -15,6 +16,13 @@
  * Two loss flows are deliberately distinct: `freeze_card`/`unfreeze_card` are a REVERSIBLE temporary
  * lock, while `report_lost_card` is TERMINAL (the card stays `LOST` and is never revived) —
  * `replace_card` issues a new card for an already-lost card.
+ *
+ * `consume_virtual_card` is the module's only card SPEND: it debits the exact CNY amount from an
+ * owned ACCOUNT-BOUND virtual card's linked CHECKING settlement account through
+ * `banking.card.consumeCard` (atomic sufficient-funds debit + `channel='CARD'` ledger row + a
+ * `CardConsumption` row in ONE transaction, guarded by the card's monthly limit). Amounts stay exact
+ * decimal strings / integer minor units, and a replayed execution key returns the persisted
+ * consumption instead of charging again.
  */
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 import { Type, type Static } from '@earendil-works/pi-ai';
@@ -280,6 +288,59 @@ export async function runApplyVirtualCard(
     });
     const limit = card.monthlyLimit === undefined ? '未设置月限额' : `月限额 ${formatCNY(card.monthlyLimit)}`;
     return { ok: true, data: card, summary: `虚拟卡 ${card.numberMasked} 已开通（${limit}）` };
+  } catch (e) {
+    return toolFailure(e);
+  }
+}
+
+/* ------------------------------------------------------ consume_virtual_card */
+
+/** `consume_virtual_card` params (SDK `ConsumeCardInput` minus the server-owned `userId`/`executionKey`). */
+export const ConsumeVirtualCardParams = Type.Object({
+  cardId: Type.String({ description: '要消费的虚拟卡 id' }),
+  amount: MoneyParameter,
+  category: Type.Optional(Type.String({ description: '消费类别：受支持的分类之一，缺省为「其他」；非法取值由 SDK 拒绝。' })),
+  merchant: Type.Optional(Type.String({ description: '商户名称；缺省为本地模拟消费标签。' })),
+  occurredAt: Type.Optional(Type.Integer({ description: '消费发生时间（epoch 毫秒）；缺省为当前业务时间。' })),
+});
+export type ConsumeVirtualCardArgs = Static<typeof ConsumeVirtualCardParams>;
+
+/** Build the `consume_virtual_card` tool bound to `userId` (🔴 RED — MFA enforced by `security/`). */
+export function createConsumeVirtualCardTool(userId: string): AgentTool<typeof ConsumeVirtualCardParams> {
+  return {
+    name: 'consume_virtual_card',
+    label: '虚拟卡消费',
+    description: '使用已持有的虚拟卡消费，从其绑定的活期结算账户扣款（高风险，需要短信验证码验证）。',
+    parameters: ConsumeVirtualCardParams,
+    execute: async (_toolCallId, params) => {
+      return toModelToolResult(await runConsumeVirtualCard(userId, params));
+    },
+  };
+}
+
+/**
+ * Model-free runner — `banking.card.consumeCard({ userId, cardId, amount, category, merchant, occurredAt, executionKey })`.
+ * `opts.idempotencyKey` is the at-most-once execution identity: a replay of the SAME key returns the
+ * persisted consumption snapshot instead of charging the linked account a second time.
+ */
+export async function runConsumeVirtualCard(
+  userId: string,
+  args: Record<string, unknown>,
+  opts?: ToolRunOptions,
+): Promise<ToolExecutionResult> {
+  const input = args as unknown as ConsumeVirtualCardArgs;
+  try {
+    const result = await banking.card.consumeCard({
+      userId,
+      cardId: input.cardId,
+      amount: input.amount,
+      category: input.category,
+      merchant: input.merchant,
+      occurredAt: input.occurredAt,
+      executionKey: opts?.idempotencyKey,
+    });
+    const summary = `虚拟卡 ${result.card.numberMasked} 已消费 ${formatCNY(result.consumption.amount)}（${result.consumption.merchant}），绑定账户可用余额 ${formatCNY(result.accountAvailableBalance)}`;
+    return { ok: true, data: result, summary };
   } catch (e) {
     return toolFailure(e);
   }

@@ -45,6 +45,9 @@ export function CardsCard(p: CardsCardProps) {
                   {card.type === 'CREDIT' && card.creditLimit !== undefined ? <ResultMetric label={t('business.cards.limit')}><Money amount={card.creditLimit} /></ResultMetric> : null}
                   {card.type === 'CREDIT' && card.availableLimit !== undefined ? <ResultMetric label={t('business.cards.available')}><Money amount={card.availableLimit} /></ResultMetric> : null}
                   {card.monthlyLimit !== undefined ? <ResultMetric label={t('business.cards.monthlyLimit')}><Money amount={card.monthlyLimit} /></ResultMetric> : null}
+                  {card.type === 'VIRTUAL' && (card.linkedAccountNumber ?? card.linkedAccountId) !== undefined ? <ResultMetric label={t('business.cards.linkedAccount')}>{card.linkedAccountNumber ?? card.linkedAccountId}</ResultMetric> : null}
+                  {card.type === 'VIRTUAL' && card.accountAvailableBalance !== undefined ? <ResultMetric label={t('business.cards.accountAvailable')}><Money amount={card.accountAvailableBalance} /></ResultMetric> : null}
+                  {card.type === 'VIRTUAL' && card.payableAmount !== undefined ? <ResultMetric label={t('business.cards.payableAmount')}><Money amount={card.payableAmount} /></ResultMetric> : null}
                 </dl>
                 {card.limits.length ? (
                   <div>
