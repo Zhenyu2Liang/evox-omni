@@ -13,7 +13,7 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 - `./context-compaction/`: historical summaries and bounded model-request projection.
 - `./messages/`: presentation message catalogs.
 
-## Capability boundary: no card consumption
+## Capability boundary: one card-spend write
 
 The agent layer has NO card-consumption / card-spend / card-purchase / card-payment / card-debit capability — no tool, helper, type, function or mock intent that pays with a bank card.
 The card tool family is read or card-record management only: `get_cards` (read), `set_card_limit` (per-category limit, no money movement), `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card` (see `tools/card.ts`, `card-emitter.ts:102`, `tools/index.ts`).
