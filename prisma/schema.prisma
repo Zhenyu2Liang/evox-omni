@@ -13,6 +13,7 @@
 //   - `channel`       on Transaction    = "APP" | "CARD" | "TRANSFER" | "SUBSCRIPTION"
 //   - `type`          on Card           = "DEBIT" | "CREDIT" | "VIRTUAL"
 //   - `status`        on Card           = "ACTIVE" | "FROZEN" | "LOST" | "PENDING"
+//   - `linkedAccountId` on Card         = id of the user's CHECKING account the card spends from (historical reference, no relation)
 //   - `status`        on Subscription   = "ACTIVE" | "CANCELLED"
 //   - `riskLevel`     on InvestmentProduct = "R1" | "R2" | "R3" | "R4" | "R5"
 //   - `status`        on InvestmentHolding = "HOLDING" | "REDEEMED"
@@ -116,6 +117,8 @@ model Card {
   monthlyLimitMinor   BigInt? @map("monthly_limit_minor")
   // id of the replacement card (no relation — historical reference only)
   replacedByCardId    String? @map("replaced_by_card_id")
+  // id of the user's CHECKING account this card spends from (no relation — historical reference only)
+  linkedAccountId     String? @map("linked_account_id")
 
   user   User        @relation(fields: [userId], references: [id])
   limits CardLimit[]
@@ -132,6 +135,28 @@ model CardLimit {
   card Card @relation(fields: [cardId], references: [id])
 
   @@index([cardId])
+}
+
+// Durable LOCAL simulated card-consumption ledger: ONE row per SUCCESSFUL local card spend.
+// `executionKey` is the replay/idempotency identity (NULL = no replay identity) and `resultJson`
+// snapshots the original consume result, so a replay reuses the stored result instead of charging again.
+model CardConsumption {
+  id           String   @id @default(cuid())
+  cardId       String
+  accountId    String
+  userId       String
+  amountMinor  BigInt   @map("amount_minor") // positive magnitude of the spend, CNY cents
+  currency     String   @default("CNY")
+  category     String
+  merchant     String
+  occurredAt   DateTime
+  executionKey String?  @unique            // replay/idempotency identity; NULL = no replay identity
+  resultJson   String?                      // JSON text of the original consume result snapshot (for replay)
+  createdAt    DateTime @default(now())
+
+  @@index([cardId, occurredAt])
+  @@index([userId, occurredAt])
+  @@index([accountId])
 }
 
 model Subscription {
