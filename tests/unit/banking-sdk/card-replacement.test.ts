@@ -8,7 +8,9 @@
  *   - `replaceCard` succeeds ONLY from `LOST`, rejects a foreign card, mints a NEW card with a fresh
  *     masked number owned by the SAME user and same type+network, carries `monthlyLimitMinor` over,
  *     copies NO per-category limits, sets `replacedByCardId` on the source, leaves the source `LOST`
- *     (not revivable), and is idempotent on a second call.
+ *     (not revivable), and is idempotent on a second call; a CREDIT replacement carries over the
+ *     SAME already-approved credit limit AND current available limit (no re-approval, inventing
+ *     nothing), while a non-credit replacement keeps none.
  *
  * Fixtures: demo user 李明; `card_credit` (CREDIT, monthlyLimit ¥18,000, one 娱乐 分类 limit) and
  * `card_debit` (DEBIT, monthlyLimit null). Helpers: ../../helpers/db, ../../helpers/fixtures.
@@ -17,7 +19,7 @@ import { describe, expect, it } from 'vitest';
 
 import { banking } from '@/banking-sdk';
 import { AppError } from '@/lib/errors';
-import { moneyToCents } from '@/lib/money';
+import { centsToMoney, moneyToCents } from '@/lib/money';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
 import { DEMO_USER_ID } from '../../helpers/fixtures';
 
@@ -82,6 +84,8 @@ describe('banking-sdk · report lost is terminal', () => {
 
 describe('banking-sdk · replaceCard eligibility', () => {
   it('rejects any card that is not LOST with a CONFLICT (ACTIVE and FROZEN alike)', async () => {
+    const countBefore = await db().card.count({ where: { userId: DEMO_USER_ID } });
+
     expectCode(await capture(() => banking.card.replaceCard(DEBIT, DEMO_USER_ID)), 'CONFLICT');
 
     await banking.card.freezeCard(DEBIT, DEMO_USER_ID);
@@ -89,13 +93,17 @@ describe('banking-sdk · replaceCard eligibility', () => {
 
     // No replacement was minted by a rejected call.
     expect((await db().card.findUniqueOrThrow({ where: { id: DEBIT } })).replacedByCardId).toBeNull();
+    expect(await db().card.count({ where: { userId: DEMO_USER_ID } })).toBe(countBefore);
   });
 
   it('rejects a card that the user does not own without minting a replacement', async () => {
     await banking.card.reportLostCard(DEBIT, DEMO_USER_ID);
+    const countBefore = await db().card.count({ where: { userId: DEMO_USER_ID } });
 
     expectCode(await capture(() => banking.card.replaceCard(DEBIT, FOREIGN_USER)), 'SECURITY_DENIED');
     expect((await db().card.findUniqueOrThrow({ where: { id: DEBIT } })).replacedByCardId).toBeNull();
+    // A rejected owner minted nothing for the real owner either.
+    expect(await db().card.count({ where: { userId: DEMO_USER_ID } })).toBe(countBefore);
   });
 });
 
@@ -106,6 +114,9 @@ describe('banking-sdk · replaceCard mints a NEW linked card', () => {
     );
     // The CREDIT source carries a seeded 娱乐 分类 limit — the replacement must NOT copy it.
     expect(await db().cardLimit.count({ where: { cardId: CREDIT } })).toBe(1);
+
+    // Snapshot the source's approved credit BEFORE the loss so the replacement is compared against it.
+    const before = await db().card.findUniqueOrThrow({ where: { id: CREDIT } });
 
     await banking.card.reportLostCard(CREDIT, DEMO_USER_ID, { reason: '遗失' });
     const replacement = await banking.card.replaceCard(CREDIT, DEMO_USER_ID);
@@ -137,11 +148,15 @@ describe('banking-sdk · replaceCard mints a NEW linked card', () => {
     expect(source.replacedByCardId).toBe(replacement.id);
     expectCode(await capture(() => banking.card.unfreezeCard(CREDIT, DEMO_USER_ID)), 'CONFLICT');
 
-    // A replacement never invents credit: the CREDIT-typed replacement holds no credit fields.
-    expect(replacement.creditLimit).toBeUndefined();
-    expect(replacement.availableLimit).toBeUndefined();
-    expect(row.creditLimitMinor).toBeNull();
-    expect(row.availableLimitMinor).toBeNull();
+    // A CREDIT replacement carries over the SAME already-approved credit — inventing nothing.
+    expect(before.creditLimitMinor).not.toBeNull();
+    expect(before.availableLimitMinor).not.toBeNull();
+    expect(row.creditLimitMinor).toBe(before.creditLimitMinor);
+    expect(row.availableLimitMinor).toBe(before.availableLimitMinor);
+    expect(replacement.creditLimit).toBe(centsToMoney(before.creditLimitMinor!));
+    expect(replacement.availableLimit).toBe(centsToMoney(before.availableLimitMinor!));
+    expect(replacement.creditLimit).toBe('18000.00');
+    expect(replacement.availableLimit).toBe('18000.00');
   });
 
   it('leaves the monthly limit absent when the source has none (DEBIT)', async () => {
@@ -151,6 +166,13 @@ describe('banking-sdk · replaceCard mints a NEW linked card', () => {
     expect(replacement.type).toBe('DEBIT');
     expect(replacement.monthlyLimit).toBeUndefined();
     expect((await db().card.findUniqueOrThrow({ where: { id: replacement.id } })).monthlyLimitMinor).toBeNull();
+
+    // A non-credit replacement holds NO credit either (unchanged DEBIT behavior).
+    expect(replacement.creditLimit).toBeUndefined();
+    expect(replacement.availableLimit).toBeUndefined();
+    const row = await db().card.findUniqueOrThrow({ where: { id: replacement.id } });
+    expect(row.creditLimitMinor).toBeNull();
+    expect(row.availableLimitMinor).toBeNull();
   });
 
   it('is idempotent: a second call returns the same replacement without minting a second card', async () => {
@@ -165,5 +187,26 @@ describe('banking-sdk · replaceCard mints a NEW linked card', () => {
     // No second mint: the card count is unchanged and the source still points at ONE replacement.
     expect(await db().card.count({ where: { userId: DEMO_USER_ID } })).toBe(countAfterFirst);
     expect((await db().card.findUniqueOrThrow({ where: { id: DEBIT } })).replacedByCardId).toBe(first.id);
+  });
+
+  it('is idempotent for CREDIT: the replayed replacement keeps the SAME carried-over credit', async () => {
+    await banking.card.reportLostCard(CREDIT, DEMO_USER_ID);
+    const first = await banking.card.replaceCard(CREDIT, DEMO_USER_ID);
+    const countAfterFirst = await db().card.count({ where: { userId: DEMO_USER_ID } });
+
+    const second = await banking.card.replaceCard(CREDIT, DEMO_USER_ID);
+
+    // Same replacement, no second mint.
+    expect(second.id).toBe(first.id);
+    expect(await db().card.count({ where: { userId: DEMO_USER_ID } })).toBe(countAfterFirst);
+
+    // The carried-over credit survives the replay unchanged.
+    expect(first.creditLimit).toBe('18000.00');
+    expect(first.availableLimit).toBe('18000.00');
+    expect(second.creditLimit).toBe('18000.00');
+    expect(second.availableLimit).toBe('18000.00');
+    expect(second.creditLimit).toBe(first.creditLimit);
+    expect(second.availableLimit).toBe(first.availableLimit);
+    expect((await db().card.findUniqueOrThrow({ where: { id: CREDIT } })).replacedByCardId).toBe(first.id);
   });
 });
