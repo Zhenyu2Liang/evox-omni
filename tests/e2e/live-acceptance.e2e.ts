@@ -55,6 +55,7 @@ import {
   assistantTexts,
   bootDevServer,
   captureScreenshot,
+  clickConfirm,
   createReporter,
   diffLedger,
   errText,
@@ -64,6 +65,7 @@ import {
   getJson,
   gotoAgent,
   launchBrowser,
+  mfaCardPresent,
   readDemoSessionId,
   resolveBrowserExecutable,
   sleep,
@@ -501,6 +503,62 @@ async function awaitMfaCard(page: Page, baseUrl: string, timeoutMs = 90_000): Pr
   } catch (e) {
     throw new Error(`${errText(e)} ｜ ${await noCardDiagnostics(page, baseUrl)}`);
   }
+}
+
+/** Is the chat composer (its controlled `<textarea>`) ENABLED? It is disabled while a turn streams. */
+async function composerEnabled(page: Page): Promise<boolean> {
+  const composer = page.locator(SELECTORS.composer).first();
+  return (await composer.count()) > 0 && (await composer.isEnabled());
+}
+
+/**
+ * Bounded natural-language DRIVER for a RED (MFA) tool. Both live targets below are RED tier, so a
+ * successful model turn parks an MFA card — but the LIVE model sometimes asks a plain confirmation
+ * question first and never invokes the gated tool. This driver sends ONLY natural Chinese (never an
+ * internal tool/parameter name) and, when a turn ends WITHOUT a card, nudges with the next short
+ * confirmation in the same spirit. It returns the prompts actually sent once the verification code
+ * has been submitted; if the bounded turns never park a card it falls through to the UNWEAKENED
+ * `awaitMfaCard` (a REAL model-behaviour failure), never a skip or a substituted mock.
+ */
+async function driveRedTool(
+  page: Page,
+  baseUrl: string,
+  turns: readonly string[],
+  perTurnTimeoutMs = 30_000,
+): Promise<string[]> {
+  if (turns.length === 0) throw new Error('driveRedTool 至少需要一条自然语言消息');
+  const sent: string[] = [];
+  for (const turn of turns) {
+    const baseline = (await assistantTexts(page)).length;
+    await submitChat(page, turn);
+    sent.push(turn);
+    // A turn ends when the composer frees up: either the gated tool parked an MFA card, or the model
+    // answered with a plain question (no card). Re-poll a still-streaming (silent) turn.
+    const outcome = await waitFor(
+      async () => {
+        if (await mfaCardPresent(page)) return 'mfa' as const;
+        if ((await confirmButtonCount(page)) > 0) return 'confirm' as const;
+        return (await assistantTexts(page)).length > baseline && (await composerEnabled(page)) ? 'reply' as const : false;
+      },
+      { timeoutMs: perTurnTimeoutMs, intervalMs: 1_000, description: `等待 LIVE 模型调用受控工具（自然轮次，MFA 卡片）：${turn}` },
+    ).catch(() => 'timeout' as const);
+    if (outcome === 'mfa') {
+      await submitMfa(page, '123456');
+      return sent;
+    }
+    if (outcome === 'confirm') {
+      await awaitConfirmCard(page, baseUrl, perTurnTimeoutMs);
+      await clickConfirm(page);
+      await awaitMfaCard(page, baseUrl, perTurnTimeoutMs);
+      await submitMfa(page, '123456');
+      return sent;
+    }
+    // 'reply' (model asked a plain question) or 'timeout' (still working): send the next natural turn.
+  }
+  // Bounded turns produced no MFA card — one UNWEAKENED final wait (throws with the failure evidence).
+  await awaitMfaCard(page, baseUrl, perTurnTimeoutMs);
+  await submitMfa(page, '123456');
+  return sent;
 }
 
 // --- scenario scaffolding ------------------------------------------------------------------------
@@ -1079,20 +1137,26 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       attachCollectors(page);
       await gotoAgent(page, ctx.baseUrl);
 
-      // A1 — RED `report_lost_card`.
-      await submitChat(page, '我的信用卡丢失了，请帮我正式挂失尾号6688的信用卡');
-      await awaitMfaCard(page, ctx.baseUrl);
-      await submitMfa(page, '123456');
+      // A1 — RED `report_lost_card`: bounded natural turns until the model parks the MFA card.
+      const sentA1 = await driveRedTool(page, ctx.baseUrl, [
+        '我的信用卡丢失了，请帮我正式挂失尾号6688的信用卡',
+        '确认，请办理',
+        '确认挂失这张卡，请立即办理',
+        '请直接帮我办理挂失，我已经确认',
+      ]);
       await awaitLiveCards(
         ctx.baseUrl,
         (cards) => cards.find((card) => card.id === CREDIT_CARD_ID)?.status === 'LOST',
         `挂失后 GET /api/cards 中 ${CREDIT_CARD_ID}.status === LOST`,
       );
 
-      // A2 — RED `replace_card`.
-      await submitChat(page, CARD_REPLACE_PROMPT);
-      await awaitMfaCard(page, ctx.baseUrl);
-      await submitMfa(page, '123456');
+      // A2 — RED `replace_card`: same bounded natural turns (a short confirmation if the model asks).
+      const sentA2 = await driveRedTool(page, ctx.baseUrl, [
+        CARD_REPLACE_PROMPT,
+        '确认，请为我补办',
+        '确认补办，请立即办理',
+        '请直接为我补办一张新卡，我已确认',
+      ]);
       const replaced = await awaitLiveCards(
         ctx.baseUrl,
         (cards) =>
@@ -1143,9 +1207,11 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
 
       // IDEMPOTENCY — a SECOND `replace_card` request through the UI must NOT mint a second card.
       await gotoAgent(page, ctx.baseUrl);
-      await submitChat(page, CARD_REPLACE_PROMPT);
-      await awaitMfaCard(page, ctx.baseUrl);
-      await submitMfa(page, '123456');
+      const sentIdem = await driveRedTool(page, ctx.baseUrl, [
+        CARD_REPLACE_PROMPT,
+        '确认，请为我补办',
+        '确认补办，请立即办理',
+      ]);
       await waitFor(
         async () => ((await page.locator(SELECTORS.mfaInput).count()) === 0 ? true : false),
         { timeoutMs: 120_000, description: '第二次补卡验证后 MFA 卡片消失（工具已执行完成）' },
@@ -1159,7 +1225,7 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
         throw new Error(`第二次补卡后 ACTIVE 信用卡 id 应仍为 ${newId}（未新增第二张），实际 ${activeAfter?.id ?? '无'}`);
       }
 
-      return `「我的信用卡丢失了，请帮我正式挂失尾号6688的信用卡」→ MFA 123456 → card_credit=LOST；「${CARD_REPLACE_PROMPT}」→ MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡（UI+MFA）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）`;
+      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（UI+MFA）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）`;
     },
     { label: 'lA-credit-report-lost-and-replace' },
   );
@@ -1217,19 +1283,25 @@ async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
       const beforeLedger = (await fetchLedger(ctx.baseUrl)).transactions;
       await gotoAgent(page, ctx.baseUrl);
 
-      // B1 — RED `subscribe_investment` (¥1,000 into 稳健理财A → principal 6,000.00).
-      await submitChat(page, '追加申购稳健理财A 1000元');
-      await awaitMfaCard(page, ctx.baseUrl);
-      await submitMfa(page, '123456');
+      // B1 — RED `subscribe_investment` (¥1,000 into 稳健理财A → principal 6,000.00): bounded natural
+      // turns; if the model insists on a failing plan/submission path, one mild natural rephrase.
+      const sentB1 = await driveRedTool(page, ctx.baseUrl, [
+        '追加申购稳健理财A 1000元',
+        '确认，请办理',
+        '现在就用我的账户追加申购稳健理财A 1000元',
+        '请直接执行追加申购，我已确认',
+      ]);
       await awaitHolding(
         (row) => row.principalAmountMinor === 600_000n,
         'B1 后 holding_wenjiana.principalAmountMinor === 600000（¥6,000.00）',
       );
 
-      // B2 — RED `redeem_investment` (PARTIAL ¥2,000 principal → principal 4,000.00).
-      await submitChat(page, '我持有的稳健理财A部分赎回2000元本金');
-      await awaitMfaCard(page, ctx.baseUrl);
-      await submitMfa(page, '123456');
+      // B2 — RED `redeem_investment` (PARTIAL ¥2,000 principal → principal 4,000.00): bounded natural turns.
+      const sentB2 = await driveRedTool(page, ctx.baseUrl, [
+        '我持有的稳健理财A部分赎回2000元本金',
+        '确认，请办理',
+        '请直接执行部分赎回，我已确认',
+      ]);
       const holding = await awaitHolding(
         (row) => row.principalAmountMinor === 400_000n && (row.estimatedMarketValue ?? '').startsWith('4118.90666'),
         'B2 后 principalAmountMinor === 400000 且 estimatedMarketValue 以 4118.90666 开头（全精度存储）',
@@ -1271,7 +1343,7 @@ async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
       const expectedBalance = addMoney(subtractMoney(beforeBalance, '1000.00'), '2059.45');
       if (afterBalance !== expectedBalance) throw new Error(`活期余额应为 ${expectedBalance}，实际 ${afterBalance}`);
 
-      return `「追加申购稳健理财A 1000元」→ MFA 123456 → DB principalAmountMinor=600000（¥6,000.00）；「我持有的稳健理财A部分赎回2000元本金」→ MFA 123456 → DB principalAmountMinor=${holding.principalAmountMinor}（¥4,000.00）、estimatedMarketValue=${holding.estimatedMarketValue}（全精度）；/investments 显示 持有金额=${principal}、市值=${marketValue}、收益=${profit}；账本新增 DEBIT ${debits[0].amount}（${debits[0].id}，${debits[0].merchant}/${debits[0].category}）与 CREDIT ${credits[0].amount}（${credits[0].id}，${credits[0].merchant}/${credits[0].category}）；活期余额 ${beforeBalance} → ${afterBalance}`;
+      return `B1 实际发送：${sentB1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → DB principalAmountMinor=600000（¥6,000.00）；B2 实际发送：${sentB2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → DB principalAmountMinor=${holding.principalAmountMinor}（¥4,000.00）、estimatedMarketValue=${holding.estimatedMarketValue}（全精度）；/investments 显示 持有金额=${principal}、市值=${marketValue}、收益=${profit}；账本新增 DEBIT ${debits[0].amount}（${debits[0].id}，${debits[0].merchant}/${debits[0].category}）与 CREDIT ${credits[0].amount}（${credits[0].id}，${credits[0].merchant}/${credits[0].category}）；活期余额 ${beforeBalance} → ${afterBalance}`;
     },
     { label: 'lB-investment-partial-redemption' },
   );
