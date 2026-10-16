@@ -13,6 +13,15 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 - `./context-compaction/`: historical summaries and bounded model-request projection.
 - `./messages/`: presentation message catalogs.
 
+## Capability boundary: no card consumption
+
+The agent layer has NO card-consumption / card-spend / card-purchase / card-payment / card-debit capability — no tool, helper, type, function or mock intent that pays with a bank card.
+The card tool family is read or card-record management only: `get_cards` (read), `set_card_limit` (per-category limit, no money movement), `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card` (see `tools/card.ts`, `card-emitter.ts:102`, `tools/index.ts`).
+`analyze_spending`, `get_transactions` and `detect_anomaly` are GREEN reads over already-booked ledger rows; `detect_anomaly` never freezes a card.
+Card charges exist only as sealed ledger data — a transaction row with a `CARD` channel (see `system-prompt.ts:46`), which never identifies the owning debit/credit card from the deposit account type.
+The only money-moving writes are `transfer_money`, `reserve_budget`, `subscribe_investment` and `redeem_investment`; `create_scheduled_task` with kind `PAYMENT` dispatches through the transfer channel, not a card or merchant billing integration.
+Physical debit/credit card issuance and deletion are manual-only on the Cards page and cannot enter an agent workflow (`system-prompt.ts:38`).
+
 ## Public entry points
 
 `agent/index.ts` exposes turns, confirmation/verification/cancellation, task controls, manual handoff and scheduled dispatch. App routes use the server-configured demo user and persistent `demo:${userId}` workspace before calling it. The web demo has no login or authentication cookie. Generic internal sessions remain available for runtime tests and bank ownership contracts; they cannot be selected through the web API. Tests can inject a `ModelRuntime` through `RunTurnDeps.provider` while exercising the real runtime and bank.
