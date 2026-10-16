@@ -1284,8 +1284,8 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       if (cards.filter((card) => card.type === 'DEBIT').length !== 1 || cards.filter((card) => card.type === 'VIRTUAL').length !== 1) {
         throw new Error(`应恰有 1 张 DEBIT 与 1 张 VIRTUAL 卡，实际 ${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
       }
-      if (cards.length !== 3) {
-        throw new Error(`卡片总数应为 3，实际 ${cards.length}：${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+      if (cards.length !== 4) {
+        throw new Error(`卡片总数应为 4（1 张 ACTIVE 补办卡 + 1 张 LOST 源卡 + 1 张 DEBIT + 1 张 VIRTUAL），实际 ${cards.length}：${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
       }
 
       // IDEMPOTENCY — a SECOND `replace_card` request through the UI must NOT mint a second card. The
@@ -1306,8 +1306,8 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       );
       const afterSecond = await fetchLiveCards(ctx.baseUrl);
       const activeAfter = uniqueActiveCreditCard(afterSecond);
-      if (afterSecond.length !== 3) {
-        throw new Error(`第二次补卡后卡片总数应仍为 3，实际 ${afterSecond.length}：${afterSecond.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+      if (afterSecond.length !== 4) {
+        throw new Error(`第二次补卡后卡片总数应仍为 4（未新增第二张补办卡），实际 ${afterSecond.length}：${afterSecond.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
       }
       if (activeAfter?.id !== newId) {
         throw new Error(`第二次补卡后 ACTIVE 信用卡 id 应仍为 ${newId}（未新增第二张），实际 ${activeAfter?.id ?? '无'}`);
