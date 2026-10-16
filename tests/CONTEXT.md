@@ -41,14 +41,13 @@
 `pnpm typecheck` 检查类型。
 `pnpm exec tsx tests/e2e/acceptance.e2e.ts` 运行浏览器验收。
 
-## 已知测试缺口
+## 面板声称的回归覆盖
 
-确认/MFA 面板只在安全网关从真实工具调用持久化 `PendingAction` 后出现。
-现有全部面板断言（`unit/agent`、`unit/planner`、`scenarios`、`integration`、`app`、`e2e`）都以真实工具调用为前提。
-没有测试覆盖「live 模型只用散文声称"请在上方面板确认"/"等待你的确认"，却不发出任何工具调用」的场景。
-`e2e/live-acceptance.e2e.ts` 只对该情形做诊断（`noCardDiagnostics`）与重试用催促，最终仍以超时失败，不断言模型散文为假。
-`agent/reply-format.ts` 的 `inspectReplyFormat` 与 `agent/turns/live-prompt.ts` 的 `repairConversationalReply` 只做结构性（协议信封）校正，不检查散文是否声称了确认。
-`unit/planner/mock-amount-clarification.test.ts` 与 `app/nl-entry-http.test.ts` 覆盖「信息不足→澄清，不产生工具调用」，但澄清为结构化 `missing_details` 或纯文本追问，非"面板"声称。
+确认/MFA 面板只在安全网关从真实工具调用持久化 `PendingAction` 后出现；模型散文不创建面板。
+`unit/agent`（`write-continuation*.test.ts`、`system-prompt.test.ts`）与 `integration/write-continuation.test.ts` 覆盖「声明写操作却只用散文声称面板/等待确认、未发出工具调用」的场景：服务端做一次有界续接，仍无写入时以服务端叙述发布真实未提交状态，伪造声称绝不进入会话记录。
+同一覆盖断言「参数齐全→续接后真实发起（打开真实网关闸门）或被网关拦截」以及「信息不足→正常澄清，不消耗续接预算」。
+`e2e/live-acceptance.e2e.ts` 只对该情形做诊断（`noCardDiagnostics`）与催促，不证明真实模型稳定性（`e2e/**` 由另一工作流负责）。
+`unit/planner/mock-amount-clarification.test.ts` 与 `app/nl-entry-http.test.ts` 覆盖「信息不足→澄清，不产生工具调用」。
 细节见各子目录 CONTEXT.md。
 
 ## 证据范围
