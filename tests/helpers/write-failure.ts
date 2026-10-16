@@ -9,8 +9,10 @@
  * with `Object.defineProperty`. Every NON-injected call is forwarded to the real `tx`, so only the
  * chosen `model.method` fails.
  *
- * Shared by the banking-sdk atomicity + investment-flow regression specs (pure test infra — it
- * contains no business logic and never touches the app code under test).
+ * Shared by the banking-sdk atomicity, investment-flow and card-replacement regression specs:
+ * `tests/unit/banking-sdk/atomicity.test.ts`, `investment-flow.test.ts` and
+ * `card-replacement.test.ts`. Pure test infra — it contains no business logic and never touches
+ * the app code under test.
  */
 import { getTestPrisma } from './db';
 
