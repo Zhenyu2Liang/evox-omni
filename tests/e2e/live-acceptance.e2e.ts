@@ -37,7 +37,7 @@ import nextEnv from '@next/env';
 
 const { loadEnvConfig } = nextEnv;
 import path from 'node:path';
-import type { Browser, Page } from 'playwright-core';
+import type { Browser, Locator, Page } from 'playwright-core';
 import type { PrismaClient } from '../../lib/db/prisma';
 import {
   cliCommand,
@@ -51,6 +51,7 @@ import {
   NAV_TIMEOUT_MS,
   REPO_ROOT,
   SCREENSHOTS_DIR,
+  SELECTORS,
   assistantTexts,
   bootDevServer,
   captureScreenshot,
@@ -60,6 +61,7 @@ import {
   fetchDashboardSummary,
   fetchLedger,
   fetchPendingActions,
+  getJson,
   gotoAgent,
   launchBrowser,
   readDemoSessionId,
@@ -69,6 +71,7 @@ import {
   submitMfa,
   waitFor,
   waitForConfirmCard,
+  waitForElementHydration,
   waitForMfaCard,
   waitForStatusText,
   withPage,
@@ -1006,6 +1009,274 @@ async function scenarioCommittedContinuationFailed(
   return `重启后在无效 key 下确认：HTTP ${res.status} ok=${body.ok} status=${body.data?.status}（statusOk=${statusOk}）；DB PendingAction.status=${row.status}，余额 ${before.balance}→${settled.balance}（DB=${afterDb}），-200 DEBIT 恰 1 条（${settled.txIds[0]}）；DB=${JSON.stringify(row.resultJson)?.slice(0, 80)}`;
 }
 
+// --- scenarios lA / lB: LIVE card replacement + partial investment redemption ---------------------
+
+const HOLDING_WENJIANA_ID = 'holding_wenjiana';
+const CARD_REPLACE_PROMPT = '请为我挂失的信用卡补办一张新卡';
+
+/** `GET /api/cards` row — the FULL `CardView` subset the new scenarios assert on (`fetchCards` is too narrow). */
+interface LiveCardRecord {
+  id: string;
+  type: string;
+  status: string;
+  numberMasked?: string;
+  creditLimit?: string;
+  availableLimit?: string;
+  replacedByCardId?: string;
+}
+
+/** The demo user's cards straight from the REAL read route (never the narrow `fetchCards` helper). */
+async function fetchLiveCards(baseUrl: string): Promise<LiveCardRecord[]> {
+  const data = await getJson<{ cards: LiveCardRecord[] }>(`${baseUrl}/api/cards`);
+  return data.cards;
+}
+
+/** The UNIQUE `CREDIT` + `ACTIVE` card, or `undefined` when there is none / more than one. */
+function uniqueActiveCreditCard(cards: readonly LiveCardRecord[]): LiveCardRecord | undefined {
+  const matches = cards.filter((card) => card.type === 'CREDIT' && card.status === 'ACTIVE');
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/** Poll the real `/api/cards` route until `predicate` holds (a business condition, never a fixed sleep). */
+function awaitLiveCards(
+  baseUrl: string,
+  predicate: (cards: LiveCardRecord[]) => boolean,
+  description: string,
+  timeoutMs = 180_000,
+): Promise<LiveCardRecord[]> {
+  return waitFor(
+    async () => {
+      const cards = await fetchLiveCards(baseUrl);
+      return predicate(cards) ? cards : false;
+    },
+    { timeoutMs, intervalMs: 1_000, description },
+  );
+}
+
+/** Read a rendered `CardTile`'s `<dt>/<dd>` rows (`信用额度` / `可用额度`). */
+async function readCardTileRows(page: Page, cardId: string): Promise<Record<string, string>> {
+  return page.locator(`[data-card-id="${cardId}"]`).first().evaluate((tile) => {
+    const rows: Record<string, string> = {};
+    for (const dt of Array.from(tile.querySelectorAll('dl dt'))) {
+      const label = (dt.textContent ?? '').replace(/\s+/g, '');
+      const dd = dt.nextElementSibling;
+      if (label && dd) rows[label] = (dd.textContent ?? '').trim();
+    }
+    return rows;
+  });
+}
+
+/**
+ * SCENARIO lA (LIVE-LLM, REAL BROWSER): report the demo credit card lost (RED `report_lost_card`) and
+ * replace it (RED `replace_card`) purely through the `/agent` chat + MFA, then verify the replacement
+ * on the REAL `/cards` page, `GET /api/cards` and SQLite — and prove `replace_card` is IDEMPOTENT for
+ * the SAME source card (a second UI request must NOT mint a second card).
+ */
+async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
+  return withPage(
+    ctx.browser,
+    async (page) => {
+      attachCollectors(page);
+      await gotoAgent(page, ctx.baseUrl);
+
+      // A1 — RED `report_lost_card`.
+      await submitChat(page, '我的信用卡丢失了，请帮我正式挂失尾号6688的信用卡');
+      await awaitMfaCard(page, ctx.baseUrl);
+      await submitMfa(page, '123456');
+      await awaitLiveCards(
+        ctx.baseUrl,
+        (cards) => cards.find((card) => card.id === CREDIT_CARD_ID)?.status === 'LOST',
+        `挂失后 GET /api/cards 中 ${CREDIT_CARD_ID}.status === LOST`,
+      );
+
+      // A2 — RED `replace_card`.
+      await submitChat(page, CARD_REPLACE_PROMPT);
+      await awaitMfaCard(page, ctx.baseUrl);
+      await submitMfa(page, '123456');
+      const replaced = await awaitLiveCards(
+        ctx.baseUrl,
+        (cards) =>
+          cards.length === 3 &&
+          cards.find((card) => card.id === CREDIT_CARD_ID)?.replacedByCardId !== undefined &&
+          uniqueActiveCreditCard(cards) !== undefined,
+        '补卡后：共 3 张卡、card_credit 已关联补办卡、恰有一张 ACTIVE 信用卡',
+      );
+      const activeCredit = uniqueActiveCreditCard(replaced);
+      if (activeCredit === undefined) throw new Error('补卡后未找到唯一的 ACTIVE 信用卡');
+      const newId = activeCredit.id;
+
+      // REAL PAGE — the replacement tile's limits/status and the source card's LOST + 已补卡 badges.
+      await page.goto(`${ctx.baseUrl}/cards`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+      await waitForElementHydration(page, '[data-card-add] button');
+      const newRows = await readCardTileRows(page, newId);
+      const newTileText = (await page.locator(`[data-card-id="${newId}"]`).first().innerText()).replace(/\s+/g, ' ');
+      const sourceTileText = (await page.locator(`[data-card-id="${CREDIT_CARD_ID}"]`).first().innerText()).replace(/\s+/g, ' ');
+      await captureLive(page, 'lA-cards');
+      if (newRows['信用额度'] !== '¥18,000.00' || newRows['可用额度'] !== '¥18,000.00') {
+        throw new Error(`补办信用卡 ${newId} 应显示 信用额度=可用额度=¥18,000.00，实际 ${JSON.stringify(newRows)}`);
+      }
+      if (!newTileText.includes('正常')) {
+        throw new Error(`补办信用卡 ${newId} 未显示「正常」状态：${newTileText.slice(0, 200)}`);
+      }
+      if (!sourceTileText.includes('已挂失') || !sourceTileText.includes('已补卡')) {
+        throw new Error(`${CREDIT_CARD_ID} 应同时显示「已挂失」与「已补卡」，实际：${sourceTileText.slice(0, 200)}`);
+      }
+
+      // AUTHORITATIVE cross-check via the raw `/api/cards` route (NOT the narrow `fetchCards` helper).
+      const cards = await fetchLiveCards(ctx.baseUrl);
+      const actives = cards.filter((card) => card.type === 'CREDIT' && card.status === 'ACTIVE');
+      if (actives.length !== 1) {
+        throw new Error(`应恰有 1 张 ACTIVE 信用卡，实际 ${actives.length}：${JSON.stringify(cards)}`);
+      }
+      const active = actives[0];
+      if (active.creditLimit !== '18000.00' || active.availableLimit !== '18000.00') {
+        throw new Error(`ACTIVE 信用卡额度应为 creditLimit=availableLimit=18000.00，实际 creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}`);
+      }
+      const source = cards.find((card) => card.id === CREDIT_CARD_ID);
+      if (source?.status !== 'LOST') throw new Error(`${CREDIT_CARD_ID} 应仍为 LOST，实际 ${source?.status}`);
+      if (source?.replacedByCardId !== active.id) {
+        throw new Error(`${CREDIT_CARD_ID}.replacedByCardId 应指向 ${active.id}，实际 ${source?.replacedByCardId}`);
+      }
+      if (cards.length !== 3) {
+        throw new Error(`卡片总数应为 3，实际 ${cards.length}：${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+      }
+
+      // IDEMPOTENCY — a SECOND `replace_card` request through the UI must NOT mint a second card.
+      await gotoAgent(page, ctx.baseUrl);
+      await submitChat(page, CARD_REPLACE_PROMPT);
+      await awaitMfaCard(page, ctx.baseUrl);
+      await submitMfa(page, '123456');
+      await waitFor(
+        async () => ((await page.locator(SELECTORS.mfaInput).count()) === 0 ? true : false),
+        { timeoutMs: 120_000, description: '第二次补卡验证后 MFA 卡片消失（工具已执行完成）' },
+      );
+      const afterSecond = await fetchLiveCards(ctx.baseUrl);
+      const activeAfter = uniqueActiveCreditCard(afterSecond);
+      if (afterSecond.length !== 3) {
+        throw new Error(`第二次补卡后卡片总数应仍为 3，实际 ${afterSecond.length}：${afterSecond.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+      }
+      if (activeAfter?.id !== newId) {
+        throw new Error(`第二次补卡后 ACTIVE 信用卡 id 应仍为 ${newId}（未新增第二张），实际 ${activeAfter?.id ?? '无'}`);
+      }
+
+      return `「我的信用卡丢失了，请帮我正式挂失尾号6688的信用卡」→ MFA 123456 → card_credit=LOST；「${CARD_REPLACE_PROMPT}」→ MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡（UI+MFA）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）`;
+    },
+    { label: 'lA-credit-report-lost-and-replace' },
+  );
+}
+
+/** The `holding_wenjiana` row subset the redemption scenario asserts on. */
+interface LiveHoldingRow {
+  principalAmountMinor: bigint;
+  estimatedMarketValue: string | null;
+}
+
+/** Poll SQLite for the `holding_wenjiana` row until `predicate` holds (a business condition). */
+function awaitHolding(
+  predicate: (row: LiveHoldingRow) => boolean,
+  description: string,
+  timeoutMs = 180_000,
+): Promise<LiveHoldingRow> {
+  return waitFor(
+    async () =>
+      withDb(async (db) => {
+        const row = await db.investmentHolding.findUnique({
+          where: { id: HOLDING_WENJIANA_ID },
+          select: { principalAmountMinor: true, estimatedMarketValue: true },
+        });
+        return row && predicate(row) ? row : false;
+      }),
+    { timeoutMs, intervalMs: 1_000, description },
+  );
+}
+
+/** Read one labelled `label → value` row (two adjacent spans) from a rendered investment tile. */
+async function readTileRow(tile: Locator, label: string): Promise<string> {
+  return tile.evaluate((el, wanted) => {
+    for (const span of Array.from(el.querySelectorAll('span'))) {
+      if ((span.textContent ?? '').trim() !== wanted) continue;
+      const cells = span.parentElement ? Array.from(span.parentElement.querySelectorAll('span')) : [];
+      if (cells.length >= 2) return (cells[1].textContent ?? '').trim();
+    }
+    return '';
+  }, label);
+}
+
+/**
+ * SCENARIO lB (LIVE-LLM, REAL BROWSER): subscribe an extra ¥1,000 into 稳健理财A (RED) and then
+ * PARTIALLY redeem ¥2,000 of principal (RED) through the `/agent` chat + MFA, then verify the EXACT
+ * remaining principal / market value / profit on the REAL `/investments` page, the ledger + balance
+ * and the full-precision valuation stored in SQLite.
+ */
+async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
+  return withPage(
+    ctx.browser,
+    async (page) => {
+      attachCollectors(page);
+      const beforeBalance = (await fetchDashboardSummary(ctx.baseUrl)).checkingBalance;
+      const beforeLedger = (await fetchLedger(ctx.baseUrl)).transactions;
+      await gotoAgent(page, ctx.baseUrl);
+
+      // B1 — RED `subscribe_investment` (¥1,000 into 稳健理财A → principal 6,000.00).
+      await submitChat(page, '追加申购稳健理财A 1000元');
+      await awaitMfaCard(page, ctx.baseUrl);
+      await submitMfa(page, '123456');
+      await awaitHolding(
+        (row) => row.principalAmountMinor === 600_000n,
+        'B1 后 holding_wenjiana.principalAmountMinor === 600000（¥6,000.00）',
+      );
+
+      // B2 — RED `redeem_investment` (PARTIAL ¥2,000 principal → principal 4,000.00).
+      await submitChat(page, '我持有的稳健理财A部分赎回2000元本金');
+      await awaitMfaCard(page, ctx.baseUrl);
+      await submitMfa(page, '123456');
+      const holding = await awaitHolding(
+        (row) => row.principalAmountMinor === 400_000n && (row.estimatedMarketValue ?? '').startsWith('4118.90666'),
+        'B2 后 principalAmountMinor === 400000 且 estimatedMarketValue 以 4118.90666 开头（全精度存储）',
+      );
+
+      // REAL PAGE — exact remaining principal / market value / profit rendered on `/investments`.
+      await page.goto(`${ctx.baseUrl}/investments`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+      await waitForElementHydration(page, '[data-investment-holdings]');
+      const tiles = page.locator('[data-investment-holdings] div.rounded-2xl').filter({ hasText: '稳健理财A' });
+      const tileCount = await tiles.count();
+      if (tileCount !== 1) throw new Error(`/investments 持仓区「稳健理财A」卡片应恰 1 张，实际 ${tileCount}`);
+      const principal = await readTileRow(tiles.first(), '持有金额');
+      const marketValue = await readTileRow(tiles.first(), '市值');
+      const profit = await readTileRow(tiles.first(), '收益');
+      await captureLive(page, 'lB-investments');
+      const shown: Record<string, string> = { 持有金额: principal, 市值: marketValue, 收益: profit };
+      for (const [label, value] of Object.entries(shown)) {
+        if (value === '') throw new Error(`/investments 未渲染「${label}」行`);
+        if (/\.\d{6,}/.test(value)) throw new Error(`「${label}」展示了未结算的过高精度：${value}`);
+        if (!/^[+-]?¥[\d,]+\.\d{2}$/.test(value)) throw new Error(`「${label}」显示值格式不正确：${value}`);
+      }
+      if (principal !== '¥4,000.00') throw new Error(`持有金额应为 ¥4,000.00，实际 ${principal}`);
+      if (marketValue !== '¥4,118.91') throw new Error(`市值应为 ¥4,118.91，实际 ${marketValue}`);
+      if (profit !== '+¥118.91') throw new Error(`收益应为 +¥118.91，实际 ${profit}`);
+
+      // LEDGER + BALANCE — one investment DEBIT (认购) and one investment CREDIT (赎回).
+      const afterBalance = (await fetchDashboardSummary(ctx.baseUrl)).checkingBalance;
+      const afterLedger = (await fetchLedger(ctx.baseUrl)).transactions;
+      const added = diffLedger(beforeLedger, afterLedger).added;
+      const describe = added.map((tx) => `${tx.id}:${tx.amount}:${tx.direction}:${tx.merchant}/${tx.category}`).join(' ');
+      const debits = added.filter(
+        (tx) => tx.direction === 'DEBIT' && moneyToCents(tx.amount) === -100_000n && tx.merchant === '认购稳健理财A' && tx.category === '投资',
+      );
+      const credits = added.filter(
+        (tx) => tx.direction === 'CREDIT' && moneyToCents(tx.amount) === 205_945n && tx.merchant === '赎回' && tx.category === '投资',
+      );
+      if (debits.length !== 1) throw new Error(`账本应新增 1 条 -1000.00 的投资 DEBIT（认购稳健理财A），实际 ${debits.length}：${describe}`);
+      if (credits.length !== 1) throw new Error(`账本应新增 1 条 +2059.45 的投资 CREDIT（赎回），实际 ${credits.length}：${describe}`);
+      const expectedBalance = addMoney(subtractMoney(beforeBalance, '1000.00'), '2059.45');
+      if (afterBalance !== expectedBalance) throw new Error(`活期余额应为 ${expectedBalance}，实际 ${afterBalance}`);
+
+      return `「追加申购稳健理财A 1000元」→ MFA 123456 → DB principalAmountMinor=600000（¥6,000.00）；「我持有的稳健理财A部分赎回2000元本金」→ MFA 123456 → DB principalAmountMinor=${holding.principalAmountMinor}（¥4,000.00）、estimatedMarketValue=${holding.estimatedMarketValue}（全精度）；/investments 显示 持有金额=${principal}、市值=${marketValue}、收益=${profit}；账本新增 DEBIT ${debits[0].amount}（${debits[0].id}，${debits[0].merchant}/${debits[0].category}）与 CREDIT ${credits[0].amount}（${credits[0].id}，${credits[0].merchant}/${credits[0].category}）；活期余额 ${beforeBalance} → ${afterBalance}`;
+    },
+    { label: 'lB-investment-partial-redemption' },
+  );
+}
+
 // --- scenario table ------------------------------------------------------------------------------
 
 /** Verify transport completion and exact text preservation using persisted wire events. */
@@ -1054,6 +1325,8 @@ const SCENARIOS: readonly Scenario[] = [
   { id: '5', name: '5-live-cancel-idempotent-terminal-ux', run: scenarioCancelAndIdempotency },
   { id: '6', name: '6-live-multiturn-and-continuations', run: scenarioMultiTurn },
   { id: '4', name: '4-live-large-transfer-mfa', run: scenarioLargeTransferMfa },
+  { id: 'lA', name: 'lA-live-credit-card-report-lost-and-replace', run: scenarioCreditReplace },
+  { id: 'lB', name: 'lB-live-investment-partial-redemption', run: scenarioPartialRedeem },
 ];
 
 /** `LIVE_SCENARIOS=1,3` (comma separated) runs only those scenario ids (plus scenario 7 if `7`). */
