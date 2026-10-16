@@ -334,6 +334,7 @@ export const TOOL_INTENT: Record<ToolName, string> = {
   subscribe_investment: '理财产品申购',
   redeem_investment: '理财产品赎回',
   apply_virtual_card: '申请虚拟卡',
+  consume_virtual_card: '虚拟卡消费',
   report_lost_card: '挂失银行卡',
   unfreeze_card: '解冻银行卡',
   replace_card: '补办银行卡',
