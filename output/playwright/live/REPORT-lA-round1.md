@@ -58,7 +58,7 @@ The failure is raised ONLY by the total-card-count assertion at tests/e2e/live-a
 
 ## Root cause of the FAIL (stale, internally-contradictory assertion)
 
-The seed now contains THREE cards (card_credit, card_debit, card_virtual); a real replace_card mints a NEW row (the source remains as a LOST row). The lA scenario itself requires the source row to still be present (source?.status !== 'LOST' check at :1265) AND a new replacement row (:1257-1256), so a successful replacement necessarily yields 4 rows - yet the scenario then asserts cards.length !== 3. The === 3 total was correct only for the older 2-card seed (card_credit + card_debit); once the virtual-card fixture (prisma/seed.ts, commit 1cf220d) was added, the count assertion became stale. The same stale count appears in the idempotency leg (:1309 afterSecond.length !== 3).
+The seed now contains THREE cards (card_credit, card_debit, card_virtual); a real replace_card mints a NEW row (the source remains as a LOST row). The lA scenario itself requires the source row to still be present (source?.status !== 'LOST' check at :1265) AND a new replacement row (:1222-1232, :1257-1259), so a successful replacement necessarily yields 4 rows - yet the scenario then asserts cards.length !== 3. The === 3 total was correct only for the older 2-card seed (card_credit + card_debit); once the virtual-card fixture (prisma/seed.ts, commit 1cf220d) was added, the count assertion became stale. The same stale count appears in the idempotency leg (:1309 afterSecond.length !== 3).
 
 This is a TEST-EXPECTATION defect, not a product defect: the product behaviour matches the documented invariant ("a replaced card is terminal (LOST) and must not be counted alongside its replacement") and the task's stated proof points.
 
@@ -77,3 +77,4 @@ Harness screenshots are written to output/playwright/live/; copied to round-spec
 - Dev server on port 65533: stopped (no listener remains).
 - Playwright browser: closed in the harness finally (no chrome process started at this round's start time).
 - No lingering node/chrome process from this round.
+
