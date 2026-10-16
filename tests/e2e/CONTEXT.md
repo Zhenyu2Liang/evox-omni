@@ -38,6 +38,14 @@
 涉及资金变化时，同时核对页面、余额与流水。
 具体辅助模块使用 `*.e2e-helper.ts` 命名。
 
+## LIVE 叙述与确认面板
+
+LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调用受控工具，因此不产生 `PendingAction`，无确认/MFA 卡片，`/api/actions` 为空。
+`live-acceptance.e2e.ts#driveRedTool` 在受限自然轮次内检测「无卡片」并发送下一条自然语言催促（如「界面上方没有出现确认面板，请重新发起…」）。
+场景 7 用 `PARK_ATTEMPTS`/`PARK_NUDGES` 轮询 `/api/actions` 并催促（见 `LIVE-ACCEPTANCE-REPORT.md` 的 Blockers）。
+`noCardDiagnostics` 在超时时区分「模型仅叙述未调用工具」与「UI/测试原因」，但等待与断言本身不弱化。
+当前没有用例在模型虚假声称「已在面板确认」而无工具调用时断言失败；该情形只被催促绕过或最终超时。
+
 ## MFA 验证码与熔断覆盖
 
 `acceptance.e2e.ts` 的 `j-circuit-breaker-lock` 在同一会话内连续提交 3 次错误验证码（每次 `submitMfa('000000')`），
