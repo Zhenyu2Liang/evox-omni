@@ -15,7 +15,7 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 
 ## Capability boundary: one card-spend write
 
-The agent layer has NO card-consumption / card-spend / card-purchase / card-payment / card-debit capability — no tool, helper, type, function or mock intent that pays with a bank card.
+The agent exposes exactly ONE card-spend write — `consume_virtual_card` (RED) — which pays a positive exact-CNY amount from an owned account-bound virtual card by debiting its linked checking account. There is no other card-consumption / card-spend / card-purchase / card-payment / card-debit capability.
 The card tool family is read or card-record management only: `get_cards` (read), `set_card_limit` (per-category limit, no money movement), `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card` (see `tools/card.ts`, `card-emitter.ts:102`, `tools/index.ts`).
 `analyze_spending`, `get_transactions` and `detect_anomaly` are GREEN reads over already-booked ledger rows; `detect_anomaly` never freezes a card.
 Card charges exist only as sealed ledger data — a transaction row with a `CARD` channel (see `system-prompt.ts:46`), which never identifies the owning debit/credit card from the deposit account type.
