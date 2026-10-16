@@ -40,5 +40,5 @@
 
 - `live-*.test.ts` 中的 `live` 表示使用 live 模式配置，不代表调用真实模型；真实模型证据见 [../e2e/CONTEXT.md](../e2e/CONTEXT.md)。
 - 面板/确认断言分两类前提：`conversational-turns.test.ts`、`decision-guidance.test.ts`、`live-recovery.test.ts` 等要求真实工具调用并持久化 `PendingAction`；`write-continuation.test.ts` 覆盖模型仅在散文里声称已确认或等待确认、却不发出任何受控调用、因而不存在 `PendingAction` 也不显示面板的情形。
-- `write-continuation.test.ts` 的前台续办中，真实写调用被回复校正拒绝，不会打开面板；打开真实面板的写路径由 `live-complete-plan.test.ts` 等覆盖，其持久化写路径由该文件的 durable 用例覆盖。
+- `write-continuation.test.ts` 中参数完整的声明写操作在有界续办里会真实抵达安全网关并打开真实面板（`PendingAction` + 等待中的工具调用），前台与 durable 路径要求一致；只有模型仅用散文声称面板、未发出受控调用时，服务端才发布真实未提交状态。伪造的面板文案绝不进入会话记录。
 - 真实模型自身的散文化面板声称稳定性由 [../e2e/CONTEXT.md](../e2e/CONTEXT.md) 的 live 验收诊断，本目录不覆盖。
