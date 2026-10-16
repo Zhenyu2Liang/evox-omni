@@ -34,6 +34,7 @@ HTTP 200 不等于业务成功。
 - `/api/developer/security/reset` 使用开发者模式重置策略。
 
 执行命令：`pnpm exec vitest run tests/app`。
+
 ## 覆盖与缺口
 
 面板、`confirmation_required`、`mfa_required` 断言只来自真实工具调用被网关拦截并持久化 `PendingAction`。
