@@ -6,6 +6,7 @@ This node projects original Pi events into an ordered public transcript. It does
 classify user intent from words, rewrite model archives, authorize a banking action,
 or derive execution evidence from prose. The typed turn declaration updates the
 buffer's advice and protocol-example preferences through the runtime callback.
+This node is presentation only: it implements no banking tools and no card tooling or card-consumption/spend/purchase/pay/debit capability (card and account tools live in `../tools/`).
 
 ## Ownership
 
