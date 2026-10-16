@@ -18,3 +18,20 @@ export interface ReplyRepairState {
   resultDigest?: string;
   fallbackText?: string;
 }
+
+/**
+ * One bounded continuation that prods a declared-but-unemitted write, per durable run. The
+ * declaration is model interpretation (`ConversationIntent`), never authorization; this budget only
+ * re-asks for the missing controlled tool call and never authorizes, confirms or bypasses the
+ * security gateway. The exact instruction is persisted BEFORE the provider request, so a process
+ * restart reuses the same recorded request instead of spending a second one.
+ */
+export interface WriteContinuationState {
+  version: 1;
+  phase: 'requested' | 'completed';
+  attempt: 1;
+  sourceDigest: string;
+  instruction: AgentMessage;
+  /** Declared write capabilities for the turn, recorded for evidence only. */
+  declaredTools: string[];
+}
