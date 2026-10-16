@@ -52,6 +52,7 @@ import {
   REPO_ROOT,
   SCREENSHOTS_DIR,
   SELECTORS,
+  assertNoFabricatedConfirmationPanel,
   assistantTexts,
   bootDevServer,
   captureScreenshot,
@@ -517,17 +518,35 @@ async function composerEnabled(page: Page): Promise<boolean> {
  * question first and never invokes the gated tool. This driver sends ONLY natural Chinese (never an
  * internal tool/parameter name) and, when a turn ends WITHOUT a card, nudges with the next short
  * confirmation in the same spirit. It returns the prompts actually sent once the verification code
- * has been submitted; if the bounded turns never park a card it falls through to the UNWEAKENED
- * `awaitMfaCard` (a REAL model-behaviour failure), never a skip or a substituted mock.
+ * has been submitted.
+ *
+ * A turn that ends with prose but NO card is checked for a FABRICATED confirmation-panel claim
+ * (`assertNoFabricatedConfirmationPanel`): a claim that a panel ALREADY exists while nothing is parked
+ * FAILS here instead of being nudged past. A plain clarifying question (no panel claim) keeps nudging.
+ *
+ * `requireCardAtEnd` (default `true`): when the bounded turns never park a card the driver falls
+ * through to the UNWEAKENED `awaitMfaCard` (a REAL model-behaviour failure), never a skip or a
+ * substituted mock. Pass `false` ONLY for a leg where an explicit model REFUSAL is acceptable (e.g.
+ * an idempotency re-request): it then settles the turn without requiring a second MFA/tool execution.
  */
 async function driveRedTool(
   page: Page,
   baseUrl: string,
   turns: readonly string[],
   perTurnTimeoutMs = 30_000,
+  requireCardAtEnd = true,
 ): Promise<string[]> {
   if (turns.length === 0) throw new Error('driveRedTool 至少需要一条自然语言消息');
   const sent: string[] = [];
+  /** Complete a parked card (confirm if needed, then MFA) so the turn settles. */
+  const settleCard = async (outcome: 'mfa' | 'confirm'): Promise<void> => {
+    if (outcome === 'confirm') {
+      await awaitConfirmCard(page, baseUrl, perTurnTimeoutMs);
+      await clickConfirm(page);
+    }
+    await awaitMfaCard(page, baseUrl, perTurnTimeoutMs);
+    await submitMfa(page, '123456');
+  };
   for (const turn of turns) {
     const baseline = (await assistantTexts(page)).length;
     await submitChat(page, turn);
@@ -542,18 +561,30 @@ async function driveRedTool(
       },
       { timeoutMs: perTurnTimeoutMs, intervalMs: 1_000, description: `等待 LIVE 模型调用受控工具（自然轮次，MFA 卡片）：${turn}` },
     ).catch(() => 'timeout' as const);
-    if (outcome === 'mfa') {
-      await submitMfa(page, '123456');
+    if (outcome === 'mfa' || outcome === 'confirm') {
+      await settleCard(outcome);
       return sent;
     }
-    if (outcome === 'confirm') {
-      await awaitConfirmCard(page, baseUrl, perTurnTimeoutMs);
-      await clickConfirm(page);
-      await awaitMfaCard(page, baseUrl, perTurnTimeoutMs);
-      await submitMfa(page, '123456');
-      return sent;
+    if (outcome === 'reply') {
+      // Prose with NO card: FAIL now if that prose fabricates a panel that does not exist; a plain
+      // clarifying question is not a claim and keeps the existing nudge flow.
+      const prose = (await assistantTexts(page)).slice(baseline).join('\n');
+      await assertNoFabricatedConfirmationPanel({ page, prose, actions: await fetchPendingActions(baseUrl) });
     }
     // 'reply' (model asked a plain question) or 'timeout' (still working): send the next natural turn.
+  }
+  if (!requireCardAtEnd) {
+    // Optional-card leg: settle the turn (a late card is still completed) but never REQUIRE one.
+    const finalOutcome = await waitFor(
+      async () => {
+        if (await mfaCardPresent(page)) return 'mfa' as const;
+        if ((await confirmButtonCount(page)) > 0) return 'confirm' as const;
+        return (await composerEnabled(page)) ? 'settled' as const : false;
+      },
+      { timeoutMs: perTurnTimeoutMs, intervalMs: 1_000, description: 'RED 工具自然轮次结算（本轮不要求二次 MFA）' },
+    ).catch(() => 'settled' as const);
+    if (finalOutcome === 'mfa' || finalOutcome === 'confirm') await settleCard(finalOutcome);
+    return sent;
   }
   // Bounded turns produced no MFA card — one UNWEAKENED final wait (throws with the failure evidence).
   await awaitMfaCard(page, baseUrl, perTurnTimeoutMs);
@@ -1003,9 +1034,13 @@ async function scenarioCommittedContinuationFailed(
       // SAME session until a `transfer_money` action is actually parked (bounded attempts).
       let parked: PendingActionView | undefined;
       for (let attempt = 1; attempt <= PARK_ATTEMPTS && parked === undefined; attempt += 1) {
+        let snapshot: PendingActionView[] = [];
         try {
           parked = await waitFor(
-            async () => findParkedTransfer(await fetchPendingActions(baseUrl)) ?? false,
+            async () => {
+              snapshot = await fetchPendingActions(baseUrl);
+              return findParkedTransfer(snapshot) ?? false;
+            },
             {
               timeoutMs: PARK_POLL_MS,
               description: `GET /api/actions 出现 pending/awaiting_mfa 的 transfer_money 待处理项（第 ${attempt}/${PARK_ATTEMPTS} 次）`,
@@ -1014,10 +1049,19 @@ async function scenarioCommittedContinuationFailed(
         } catch {
           parked = undefined; // a timeout is expected when the model only narrated — nudge and retry
         }
-        if (parked === undefined && attempt < PARK_ATTEMPTS) {
-          const nudge = PARK_NUDGES[Math.min(attempt - 1, PARK_NUDGES.length - 1)];
-          console.log(`· 场景7：第 ${attempt} 次未出现待确认转账（模型可能只叙述未调用工具），发送跟进消息「${nudge}」`);
-          await submitChat(page, nudge);
+        if (parked === undefined) {
+          // A prose-only claim that a confirmation panel ALREADY exists while nothing is parked is a
+          // FABRICATION: FAIL it here instead of nudging past it (distinguishes model vs UI cause).
+          await assertNoFabricatedConfirmationPanel({
+            page,
+            prose: (await assistantTexts(page)).join('\n'),
+            actions: snapshot,
+          });
+          if (attempt < PARK_ATTEMPTS) {
+            const nudge = PARK_NUDGES[Math.min(attempt - 1, PARK_NUDGES.length - 1)];
+            console.log(`· 场景7：第 ${attempt} 次未出现待确认转账（模型可能只叙述未调用工具），发送跟进消息「${nudge}」`);
+            await submitChat(page, nudge);
+          }
         }
       }
       if (parked === undefined) {
@@ -1128,7 +1172,13 @@ async function readCardTileRows(page: Page, cardId: string): Promise<Record<stri
  * SCENARIO lA (LIVE-LLM, REAL BROWSER): report the demo credit card lost (RED `report_lost_card`) and
  * replace it (RED `replace_card`) purely through the `/agent` chat + MFA, then verify the replacement
  * on the REAL `/cards` page, `GET /api/cards` and SQLite — and prove `replace_card` is IDEMPOTENT for
- * the SAME source card (a second UI request must NOT mint a second card).
+ * the SAME source card: a SECOND UI request must NOT mint a second card.
+ *
+ * Idempotency rule: a repeat request may REPLAY the original result, RETURN the existing result, or
+ * explicitly REFUSE the duplicate — all three are acceptable and a SECOND MFA / tool execution is NOT
+ * required. The leg is therefore judged ONLY by the authoritative `GET /api/cards` state (still 3
+ * cards, unchanged single ACTIVE credit card), never by waiting for a second MFA card to appear or
+ * disappear.
  */
 async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
   return withPage(
@@ -1205,16 +1255,21 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
         throw new Error(`卡片总数应为 3，实际 ${cards.length}：${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
       }
 
-      // IDEMPOTENCY — a SECOND `replace_card` request through the UI must NOT mint a second card.
+      // IDEMPOTENCY — a SECOND `replace_card` request through the UI must NOT mint a second card. The
+      // repeat request may replay the original result, return the existing result, or explicitly refuse
+      // the duplicate; a second MFA / tool execution is NOT required (`requireCardAtEnd = false`). The
+      // leg is judged solely by the authoritative `GET /api/cards` route state below.
       await gotoAgent(page, ctx.baseUrl);
-      const sentIdem = await driveRedTool(page, ctx.baseUrl, [
-        CARD_REPLACE_PROMPT,
-        '确认，请为我补办',
-        '请再提交一次这张卡的补办申请，我要确认不会重复发卡',
-      ]);
-      await waitFor(
-        async () => ((await page.locator(SELECTORS.mfaInput).count()) === 0 ? true : false),
-        { timeoutMs: 120_000, description: '第二次补卡验证后 MFA 卡片消失（工具已执行完成）' },
+      const sentIdem = await driveRedTool(
+        page,
+        ctx.baseUrl,
+        [
+          CARD_REPLACE_PROMPT,
+          '确认，请为我补办',
+          '请再提交一次这张卡的补办申请，我要确认不会重复发卡',
+        ],
+        undefined,
+        false,
       );
       const afterSecond = await fetchLiveCards(ctx.baseUrl);
       const activeAfter = uniqueActiveCreditCard(afterSecond);
@@ -1225,7 +1280,7 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
         throw new Error(`第二次补卡后 ACTIVE 信用卡 id 应仍为 ${newId}（未新增第二张），实际 ${activeAfter?.id ?? '无'}`);
       }
 
-      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（UI+MFA）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）`;
+      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（重复请求，允许重放/返回既有结果/显式拒绝，不要求二次 MFA/工具执行）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）`;
     },
     { label: 'lA-credit-report-lost-and-replace' },
   );
@@ -1427,7 +1482,9 @@ async function main(): Promise<void> {
   // 7's last server, which kept `prisma/live-acceptance.db` locked (next run: EPERM) and held an open
   // stdout pipe (hanging the PowerShell invocation).
   let server: ServerHandle | undefined;
-  const cleanup = () => {
+
+  /** Stop the CURRENT dev-server handle (scenario 7 may have reassigned `server.current`), best-effort. */
+  const stopActiveServer = (): void => {
     const active = server?.current ?? devServer;
     if (active) {
       try {
@@ -1437,6 +1494,30 @@ async function main(): Promise<void> {
       }
     }
     devServer = undefined;
+  };
+
+  /**
+   * Normal-path teardown, AWAITED in the `finally` below: stop the active server, then `await` the
+   * browser close so its exceptions are captured (the previous fire-and-forget close let the process
+   * exit while Chrome was still shutting down). Never throws — a close failure must not flip a PASS run.
+   */
+  const teardown = async (): Promise<void> => {
+    stopActiveServer();
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (error) {
+        console.warn(`· 关闭浏览器失败（不影响验收结论）：${errText(error)}`);
+      }
+    }
+  };
+
+  /**
+   * SYNCHRONOUS best-effort fallback for `process.on('exit')` and the signal handlers: `exit` cannot
+   * await an async close, so this stops the server and fires `browser.close()` WITHOUT awaiting.
+   */
+  const cleanup = (): void => {
+    stopActiveServer();
     if (browser) {
       void browser.close().catch(() => undefined);
     }
@@ -1533,29 +1614,39 @@ async function main(): Promise<void> {
         else process.env['DEEPSEEK_API_KEY'] = originalKey;
       }
     }
+
+    // Post-scenario diagnostics + the TASK-A evidence dump run HERE — INSIDE the `try`, BEFORE the
+    // `finally` tears the dev server down, so the isolated WAL database is still served. They are
+    // wrapped in their own try/catch so a diagnostic/evidence read can NEVER reject `main()` (which
+    // `void main().catch(...)` would turn into exit 1 AFTER the PASS lines printed). A read failure
+    // only warns; it never changes `process.exitCode`.
+    try {
+      // Scenario 6's global invariant: no provider "tool message must answer tool_calls" 400 anywhere.
+      const violation = findToolOrderViolation();
+      if (violation) {
+        console.error(`· 全程捕获到 tool/tool_calls 400：${violation.method} ${violation.url} — ${violation.body.slice(0, 400)}`);
+      }
+      console.log(`· 累计网络 4xx/5xx：${netLog.issues.length}，console error：${netLog.consoleErrors.length}，pageerror：${netLog.pageErrors.length}`);
+      for (const issue of netLog.issues.slice(0, 20)) {
+        console.log(`· [4xx/5xx] ${issue.method} ${issue.status} ${issue.url} — ${issue.body.slice(0, 200).replace(/\s+/g, ' ')}`);
+      }
+
+      // TASK-A EVIDENCE: the ACTUAL arg shape the LIVE model produced, recovered from the SAME DB the
+      // run used (`AgentSession.stateJson` → `agentState.messages`). Printed verbatim for every run.
+      console.log('· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：');
+      console.log(await persistedRecipientCalls());
+      console.log(`· 【证据】种子库收款人 ${RECIPIENT_NAME} 手机号=${await readSeedRecipientPhone()}`);
+    } catch (error) {
+      console.warn(`· 场景后诊断/证据收集失败（不影响验收结论，退出码不变）：${errText(error)}`);
+    }
   } catch (error) {
     console.error(`· 基础设施失败：${errText(error)}`);
     reporter.fail('infrastructure', errText(error));
   } finally {
-    cleanup();
+    await teardown();
   }
 
-  // Scenario 6's global invariant: no provider "tool message must answer tool_calls" 400 anywhere.
-  const violation = findToolOrderViolation();
-  if (violation) {
-    console.error(`· 全程捕获到 tool/tool_calls 400：${violation.method} ${violation.url} — ${violation.body.slice(0, 400)}`);
-  }
-  console.log(`· 累计网络 4xx/5xx：${netLog.issues.length}，console error：${netLog.consoleErrors.length}，pageerror：${netLog.pageErrors.length}`);
-  for (const issue of netLog.issues.slice(0, 20)) {
-    console.log(`· [4xx/5xx] ${issue.method} ${issue.status} ${issue.url} — ${issue.body.slice(0, 200).replace(/\s+/g, ' ')}`);
-  }
-
-  // TASK-A EVIDENCE: the ACTUAL arg shape the LIVE model produced, recovered from the SAME DB the run
-  // used (`AgentSession.stateJson` → `agentState.messages`). Printed verbatim for every run.
-  console.log('· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：');
-  console.log(await persistedRecipientCalls());
-  console.log(`· 【证据】种子库收款人 ${RECIPIENT_NAME} 手机号=${await readSeedRecipientPhone()}`);
-
+  // The summary and the exit code are ALWAYS reached on the normal path (teardown never throws).
   console.log(`== 汇总：PASS ${reporter.passes} ｜ FAIL ${reporter.failures} ｜ SKIP ${reporter.skips} ==`);
   process.exitCode = reporter.failures > 0 ? 1 : 0;
 }
