@@ -37,6 +37,7 @@
 
 `messages/display-sources.json` 将界面已知的静态元数据值映射到消息键，供展示层翻译。
 映射键必须与源值完全一致，值必须指向已存在的消息键（单元测试校验该不变量）。
+`titles` 必须覆盖 `lib/contracts/tool-catalog.ts` 中每个工具的 `description`，将其映射到对应的 `chat.policy.<toolName>` 消息键，由 `tests/unit/lib/i18n-display.test.ts` 校验。
 含动态内容的源值无法静态映射，展示层按原样保留、不翻译。
 例如部分赎回策略值 `部分赎回（本金 ¥…／共计 ¥…）` 内嵌金额，保持原样显示，不得添加正则或模式匹配。
 完全赎回策略值 `全部赎回该笔持仓` 映射到 `chat.value.fullRedemption`。
