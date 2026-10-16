@@ -2,7 +2,7 @@
 
 Real headless Chrome + real DeepSeek model, 3 independent process invocations (one OS process per round).
 
-- Overall commit SHA (this report + all three rounds' screenshots): `TO_BE_FILLED`
+- Overall commit SHA (this report + all three rounds' screenshots): `1dcd1a95979c55056964d98810ba8dd5921228d3`
 - Work branch: `evogit-agent-T4-A103`
 - Unresolved items: none (see "Unresolved" at the end).
 
