@@ -103,7 +103,7 @@ async function admittedDeclaredWriteRun(requestId: string, candidate: string) {
 beforeEach(resetDatabase);
 afterAll(disconnectTestPrisma);
 
-describe('a declared write with a fabricated panel claim never opens a gate', () => {
+describe('a declared write with a fabricated panel claim opens no fake gate', () => {
   it('re-asks exactly once, creates no authorization and publishes the true unsubmitted state', async () => {
     const panelClaim = '请在上方确认面板中完成这笔转账，操作已提交等待你确认。';
     const script = scriptedProvider({ purpose: 'operation', operations: ['transfer_money'] }, [
@@ -130,28 +130,35 @@ describe('a declared write with a fabricated panel claim never opens a gate', ()
       .toMatchObject({ phase: 'completed', attempt: 1, declaredTools: ['transfer_money'] });
   });
 
-  it('refuses a real write emitted during the corrective continuation instead of faking a panel', async () => {
+  it('lets a real, complete write open a genuine gateway gate on the foreground path', async () => {
     // Parameters ARE complete, so the model emits the genuine controlled call on the continuation.
     const panelClaim = '请在上方确认面板中完成这笔转账，操作已提交等待你确认。';
     const script = scriptedProvider({ purpose: 'operation', operations: ['transfer_money'] }, [
       fauxAssistantMessage(panelClaim),
       toolCall('transfer_money', { contactId: 'contact_zhangwei', amount: '200.37' }),
-      fauxAssistantMessage('本次未提交转账。'),
     ]);
     const turn = await runTurn({ message: TRANSFER_TO_ZHANGWEI }, { config, provider: script.provider });
     const db = getTestPrisma();
-    // declaration + claim + ONE continuation + the reply that follows the real (blocked) tool result.
-    expect(script.calls()).toBe(4);
-    // The corrective continuation is bracketed as a reply correction, so the gateway REFUSES the write
-    // (a real server record) rather than opening or faking an authorization.
-    expect(turn.events.filter(event => event.type === 'tool_end').map(event => event.toolEvent))
-      .toContainEqual(expect.objectContaining({ toolName: 'transfer_money', status: 'blocked' }));
-    expect(hasGate(turn)).toBe(false);
-    expect(await db.pendingAction.count()).toBe(0);
+    // declaration + claim + exactly ONE bounded continuation, whose real call parks the gate and ends the turn.
+    expect(script.calls()).toBe(3);
+    // The declared write reaches the gateway and parks a REAL gate — a `PendingAction` plus a waiting
+    // tool invocation, not prose.
+    expect(hasGate(turn)).toBe(true);
+    expect(await db.pendingAction.findMany({ select: { status: true, toolName: true } }))
+      .toEqual([{ status: 'pending', toolName: 'transfer_money' }]);
+    expect(await db.toolInvocation.findMany({ where: { toolName: 'transfer_money' }, select: { status: true, toolName: true } }))
+      .toEqual([{ status: 'waiting_confirmation', toolName: 'transfer_money' }]);
+    // Declaring the turn is itself a real tool call on the foreground path (the durable variant keeps
+    // the declaration inside the run checkpoint), so no other invocation exists.
+    expect(await db.toolInvocation.findMany({ select: { status: true, toolName: true }, orderBy: { toolName: 'asc' } }))
+      .toEqual([{ status: 'completed', toolName: 'describe_turn' },
+        { status: 'waiting_confirmation', toolName: 'transfer_money' }]);
+    // A parked gate moves no money until a human confirms it.
     expect(await checkingBalance()).toBe(SEEDED_CHECKING_BALANCE);
     expect(await db.transaction.count({ where: { counterpartyId: 'contact_zhangwei', amountMinor: -20037n } })).toBe(0);
-    // The refusal is narrated truthfully; the fabricated claim is never published as the outcome.
-    expect(finalContent(turn)).toBe(DECLARED_TRANSFER_UNSUBMITTED);
+    // The pre-gate candidate prose is what the turn streamed before the real gate; it never becomes
+    // recorded history, and the panel exists only because the parked `PendingAction` does.
+    expect(finalContent(turn)).toBe(panelClaim);
     expect((await transcriptOf(turn.sessionId)).some(message => message.content.includes('确认面板'))).toBe(false);
   });
 
