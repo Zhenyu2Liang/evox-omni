@@ -217,8 +217,9 @@ export interface CardView {
   /** Bound account's available balance (CNY); absent when the card is unbound. */
   accountAvailableBalance?: MoneyAmount;
   /**
-   * Amount currently payable by this card (CNY): the bound account balance, capped by the card's
-   * remaining monthly limit. A `null` monthly limit is unlimited (governed by the account balance).
+   * Amount currently payable by this card (CNY): the bound account balance, capped by the remaining
+   * monthly limit of the card FAMILY's business month — `demoNow()` for a read, the enforced instant
+   * inside `consumeCard`. A `null` monthly limit is unlimited (governed by the account balance).
    */
   payableAmount?: MoneyAmount;
   limits: CardLimitView[];
@@ -291,8 +292,9 @@ export interface ConsumeCardInput {
 export interface ConsumeCardOptions {
   /**
    * Test-only clock seam: the business instant (epoch ms, or a `Date`) this ONE consumption is
-   * booked at, which also selects the billing month it is attributed to. Omitted — the production
-   * path — means the project business clock (`demoNow()`). Never persisted, never read back.
+   * booked at, which also selects the billing month it is attributed to AND the month the returned
+   * card projection reports. Omitted — the production path — means the project business clock
+   * (`demoNow()`). Never persisted, never read back.
    */
   now?: number | Date;
 }
@@ -317,7 +319,7 @@ export interface CardConsumptionView {
 
 export interface ConsumeCardResult {
   consumption: CardConsumptionView;
-  /** Card view after the spend (its `payableAmount` already reflects the new consumption). */
+  /** Card view after the spend, in the same business month the limit was enforced (payable updated). */
   card: CardView;
   /** Bound account's available balance (CNY) after the debit. */
   accountAvailableBalance: MoneyAmount;

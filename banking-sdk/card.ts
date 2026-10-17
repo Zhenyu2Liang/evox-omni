@@ -34,18 +34,19 @@
  *
  * CONSUMPTION TIME IS SERVER-OWNED. `consumeCard` stamps the booking instant from the project
  * business clock (`demoNow()`, UTC+08:00 semantics) and derives the monthly-limit window from that
- * same instant, so a caller cannot back-date a spend out of the current billing month. The public
- * parameter set (`ConsumeCardInput`) therefore has no `occurredAt`; a runtime object that still
- * carries a DEFINED `occurredAt` is rejected with `AppError('VALIDATION')` before any write. The
- * only way to pin the clock is the separate, test-only `ConsumeCardOptions` second argument.
+ * same instant, so a caller cannot back-date a spend out of the current billing month and the card
+ * projection `consumeCard` returns reports the month it enforced. The public parameter set
+ * (`ConsumeCardInput`) therefore has no `occurredAt`; a runtime object that still carries a DEFINED
+ * `occurredAt` is rejected with `AppError('VALIDATION')` before any write. The only way to pin the
+ * clock is the separate, test-only `ConsumeCardOptions` second argument.
  *
  * MONTHLY SPEND IS FAMILY-CONTINUOUS. `Card.replacedByCardId` records a 补办 as a NEW card row and
  * the spend history is never rewritten, so the current month's spend of a replaced card belongs to
  * the whole replacement family (see `./card-family`). Both the enforced limit in `consumeCard` and
- * the derived `payableAmount` of the projection read that ONE family number, so the allowance the
- * user sees and the allowance the SDK enforces cannot diverge. A VIRTUAL replacement inherits and
- * RE-VALIDATES its predecessor's settlement account (a broken binding is restored only from that
- * explicit source link, never from a guessed default account).
+ * the derived `payableAmount` of the projection read that ONE family number at ONE instant, so the
+ * allowance the user sees and the allowance the SDK enforces cannot diverge. A VIRTUAL replacement
+ * inherits and RE-VALIDATES its predecessor's settlement account (a broken binding is restored only
+ * from that explicit source link, never from a guessed default account).
  */
 import type {
   Account as AccountRow,
@@ -128,26 +129,26 @@ function toCardView(row: CardRow, limits: CardLimitRow[], extras?: CardViewExtra
 }
 
 /**
- * Sum of `cardId`'s current business-month spend, attributed to its whole replacement FAMILY (CNY
- * minor units). Delegates to `./card-family` so the enforced limit and the displayed
- * `payableAmount` are literally the same number; `dbClient()` keeps it inside an ambient transaction.
+ * Sum of `cardId`'s spend in the business month of `now` (`demoNow()` when omitted), attributed to
+ * its whole replacement FAMILY (exact CNY minor units). Delegates to `./card-family` so the enforced
+ * limit and `payableAmount` are one number read at one instant, inside `dbClient()`'s transaction.
  */
-async function spentThisMonthMinor(cardId: string, userId: string): Promise<bigint> {
-  return cardFamilyMonthSpend(dbClient(), cardId, userId);
+async function spentThisMonthMinor(cardId: string, userId: string, now?: number | Date): Promise<bigint> {
+  return cardFamilyMonthSpend(dbClient(), cardId, userId, now);
 }
 
 /**
  * Map a card row onto a `CardView`, loading its per-category limits and — for an account-bound card
- * — the linked account's masked number, balance and current payable amount. This is the single
- * async enriched mapper every CardView-returning function uses. The spend it derives `payableAmount`
- * from is the FAMILY's, so a 补办 card immediately shows the remaining allowance of its predecessor.
+ * — the linked account's masked number, balance and `payableAmount` for the business month of `now`
+ * (`demoNow()` when omitted; `consumeCard` passes the instant it enforced with). The spend behind it
+ * is the FAMILY's, so a 补办 card immediately shows the remaining allowance of its predecessor.
  */
-async function loadCardView(row: CardRow): Promise<CardView> {
+async function loadCardView(row: CardRow, now?: number | Date): Promise<CardView> {
   const limits = await cards.listCardLimits(row.id);
   if (!row.linkedAccountId) return toCardView(row, limits);
   const account = await accounts.getAccount(row.linkedAccountId);
   if (!account) return toCardView(row, limits);
-  return toCardView(row, limits, { account, spentMinor: await spentThisMonthMinor(row.id, row.userId) });
+  return toCardView(row, limits, { account, spentMinor: await spentThisMonthMinor(row.id, row.userId, now) });
 }
 
 /** Map a persisted consumption row onto the frozen `CardConsumptionView` DTO. */
@@ -288,7 +289,8 @@ async function transitionTo(
 export async function getCards(userId: string): Promise<CardView[]> {
   return runInTransaction(async () => {
     const rows = await cards.listCards(userId);
-    return Promise.all(rows.map(loadCardView));
+    // Wrapped (not `rows.map(loadCardView)`) so `map`'s index cannot leak into the `now` seam.
+    return Promise.all(rows.map((row) => loadCardView(row)));
   });
 }
 
@@ -610,8 +612,8 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
 
 /**
  * Resolve the business instant ONE consumption is booked at, and therefore the UTC+08:00 billing
- * month its amount is counted against. Production (`options.now === undefined`) uses the project
- * demo clock; the seam is validated so a deterministic test can pin the instant and nothing else.
+ * month its amount is counted against and that its returned projection reports. Production uses the
+ * project demo clock; the seam is validated so a deterministic test can pin the instant, nothing else.
  */
 function consumeInstant(now?: number | Date): number {
   if (now === undefined) return demoNow();
@@ -637,8 +639,8 @@ function consumeInstant(now?: number | Date): number {
  * re-validate the card (owned, `ACTIVE`) and its settlement account (owned, `CHECKING`, recovered
  * from the explicit 补办 link when the binding is missing), enforce the card FAMILY's monthly limit,
  * debit the account with an atomic sufficient-funds write, write a `channel='CARD'` ledger row and a
- * `CardConsumption` row, and persist the original result snapshot for same-key replay.
- * `moneyToCents` keeps every amount an exact integer CNY minor unit.
+ * `CardConsumption` row, and persist the original result snapshot for same-key replay. Its `card`
+ * projection reads that same instant, so it reports the enforced month; amounts stay exact minor units.
  */
 export async function consumeCard(
   input: ConsumeCardInput,
@@ -673,7 +675,7 @@ export async function consumeCard(
     ? input.merchant.trim()
     : DEFAULT_CONSUME_MERCHANT;
 
-  // ONE server-owned instant for both the booking time and the billing month.
+  // ONE server-owned instant for the booking time, the billing month and the returned projection.
   const at = consumeInstant(options.now);
 
   const amount = centsToMoney(amountMinor);
@@ -763,7 +765,7 @@ export async function consumeCard(
       } });
 
       const updatedAccount = await tx.account.findUniqueOrThrow({ where: { id: account.id } });
-      const cardView = await loadCardView(await tx.card.findUniqueOrThrow({ where: { id: card.id } }));
+      const cardView = await loadCardView(await tx.card.findUniqueOrThrow({ where: { id: card.id } }), at);
       const snapshot: ConsumeCardResult = {
         consumption: toConsumptionView(created),
         card: cardView,

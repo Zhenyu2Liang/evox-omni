@@ -6,8 +6,8 @@
  * CardConsumption.cardId` stays exactly where it was booked), yet the monthly limit travels WITH the
  * plastic: the replacement continues the SAME billing month as the card it replaces. The current
  * month's spend therefore belongs to the whole replacement FAMILY, not to one row. The limit check in
- * `./card#consumeCard` and the derived `payableAmount` of the card projection both read the spend from
- * here, so the enforced number and the displayed number can never diverge.
+ * `./card#consumeCard` and the derived `payableAmount` of the card projection both read the spend here
+ * at the SAME business instant, so the enforced number and the displayed number cannot diverge.
  *
  * The walk is BOUNDED (`MAX_CARD_FAMILY`) with a visited/expanded set, so a corrupted
  * `replacedByCardId` cycle terminates instead of hanging, and only cards owned by the SAME user are
@@ -65,8 +65,8 @@ export async function cardFamilyIds(client: DbClient, cardId: string, userId: st
 
 /**
  * Current business-month card spend (CNY minor units, positive magnitude) attributed to the whole
- * replacement FAMILY of `cardId`, using the demo UTC+08:00 billing month of `now` (`demoNow()` when
- * omitted). `amountMinor` rows are summed exactly — no floating point anywhere.
+ * replacement FAMILY of `cardId`, in the demo UTC+08:00 billing month of `now` — the SAME instant a
+ * caller enforces and books with — or `demoNow()` when omitted. The rows are summed exactly, no floats.
  */
 export async function cardFamilyMonthSpend(
   client: DbClient,

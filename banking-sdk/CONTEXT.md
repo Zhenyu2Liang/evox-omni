@@ -82,9 +82,9 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 绑定的卡在 `CardView` 中额外暴露 `linkedAccountId`、`linkedAccountNumber`（账户脱敏号）、`accountAvailableBalance`（账户余额，十进制人民币）与 `payableAmount`。`payableAmount = monthlyLimitMinor 为空 ? accountAvailableBalance : min(accountAvailableBalance, max(0, monthlyLimitMinor − 当月已消费))`。未绑定的卡这些字段缺省，不伪造数值。
 
-当月已消费是补办家族口径。`banking-sdk/card-family.ts` 的 `cardFamilyMonthSpend(client, cardId, userId, now?)` 先由 `cardFamilyIds` 沿 `replacedByCardId` 双向遍历得到家族，再按 `demoMonthRange(now)` 的 UTC+08:00 业务月汇总 `CardConsumption.amountMinor`。遍历用访问集与 `MAX_CARD_FAMILY = 64` 上限，只纳入同一 `userId` 的卡片，因此多代补办算作一个家族，损坏的环会终止，跨用户指针不会扩大归集。限额强制与 `payableAmount` 读取同一个家族数字。
+当月已消费是补办家族口径。`banking-sdk/card-family.ts` 的 `cardFamilyMonthSpend(client, cardId, userId, now?)` 先由 `cardFamilyIds` 沿 `replacedByCardId` 双向遍历得到家族，再按 `demoMonthRange(now)` 的 UTC+08:00 业务月汇总 `CardConsumption.amountMinor`。遍历用访问集与 `MAX_CARD_FAMILY = 64` 上限，只纳入同一 `userId` 的卡片，因此多代补办算作一个家族，损坏的环会终止，跨用户指针不会扩大归集。限额强制与 `payableAmount` 读取同一个家族数字，并使用同一个业务时刻：普通读取取 `demoNow()`，`consumeCard` 取本次消费的服务端时刻。
 
-`consumeCard(input, options?)` 是本地模拟刷卡。消费时间由服务端拥有：入账时刻取 `demoNow()`，月限额窗口由同一时刻的 `demoMonthRange()` 推导，二者不可分离。`ConsumeCardInput` 没有 `occurredAt`；运行期对象上仍带已定义的 `occurredAt`（过去、未来、非整数、`null`、字符串等）时，在任何读写之前抛 `VALIDATION`，绝不静默忽略；`{ occurredAt: undefined }` 视为未提供。
+`consumeCard(input, options?)` 是本地模拟刷卡。消费时间由服务端拥有：入账时刻取 `demoNow()`，月限额窗口由同一时刻的 `demoMonthRange()` 推导，二者不可分离；返回快照 `card` 的 `payableAmount` 也按该时刻的家族月消费计算，因此与限额强制描述同一个业务月。`ConsumeCardInput` 没有 `occurredAt`；运行期对象上仍带已定义的 `occurredAt`（过去、未来、非整数、`null`、字符串等）时，在任何读写之前抛 `VALIDATION`，绝不静默忽略；`{ occurredAt: undefined }` 视为未提供。
 
 `ConsumeCardOptions.now` 是唯一时钟缝隙，仅供测试注入整数毫秒时间戳或 `Date`；非整数抛 `VALIDATION`。它是独立的第二个参数，不进入 HTTP 请求体或工具参数，也不提供任何历史补记功能。
 
