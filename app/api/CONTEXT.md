@@ -7,6 +7,14 @@ modules and serializes JSON or SSE. Banking mutations, permission decisions, fin
 run recovery and workflow transitions remain in their owning modules. Nothing below imports API
 route handlers. Shared transport support lives in the private `_lib` folder.
 
+## Routing Table
+
+- `./cards/` -> virtual-card HTTP surface: consume, consumptions, card list/add/delete and manual card changes (see `cards/CONTEXT.md`).
+- `./cards/[id]/` -> per-card routes `consume` and `consumptions` (see `cards/[id]/CONTEXT.md`).
+- `./_lib/` -> shared envelope, error mapping, session identity and agent bridge (see `_lib/CONTEXT.md`).
+- `../cards/` -> card page plus consume/change dialogs (sibling under `app` - read-only here; escalate writes to the `app` node).
+- `../../../components/banking/` -> card display components such as `CardTile` (outside `app` - read-only).
+
 ## Fixed demo identity
 
 `_lib/session.ts` derives the user from trusted server configuration and loads the persistent
@@ -37,7 +45,7 @@ selectable browser identities.
 | `POST /api/security/reset` | Optional verification code; separately gated and audited unlock | Account circuit-breaker policy |
 | `GET /api/{dashboard,bills,cards,subscriptions}` | Simulated banking read models for the configured user | Banking SDK |
 | `/api/cards/{,[id]}` and `/api/cards/changes/[id]/{verify,cancel}` | Manual demo-card add/delete proposals plus MFA verify/cancel; returns `CardChangeResponse` | `security/manual-card-management` (see `../cards/CONTEXT.md`) |
-| `POST /api/cards/[id]/consume` | Owned virtual-card consumption: exact CNY `amount` string plus optional `category`/`merchant`/`occurredAt`/`executionKey`; returns `ConsumeCardResult` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
+| `POST /api/cards/[id]/consume` | Owned virtual-card consumption: exact CNY `amount` string plus optional `category`/`merchant`/`executionKey`; booking time is server-owned, so a body containing `occurredAt` is refused with `400 VALIDATION`; returns `ConsumeCardResult` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
 | `GET /api/cards/[id]/consumptions` | Owned per-card consumption ledger, newest first; optional `limit`; returns `{ consumptions: CardConsumptionView[] }` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
 | `GET /api/contacts`, `POST /api/contacts` | Owned masked contacts; strict name/phone form with no client-selected owner | Contact SDK and atomic contact/audit command |
 | `DELETE /api/contacts/[id]` | Owned contact deletion with explicit `{ confirm: true }` decision | Contact SDK and atomic contact/audit command |
