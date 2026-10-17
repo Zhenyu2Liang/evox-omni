@@ -16,7 +16,10 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 ## Capability boundary: one card-spend write
 
 The agent exposes exactly ONE card-spend write — `consume_virtual_card` (RED) — which pays a positive exact-CNY amount from an owned account-bound virtual card by debiting its linked checking account. There is no other card-consumption / card-spend / card-purchase / card-payment / card-debit capability.
-The card tool family otherwise reads and manages card records: `get_cards` (read), `set_card_limit` (per-category limit, no money movement), `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card`, plus the card-spend `consume_virtual_card` (see `tools/card.ts`, `card-emitter.ts:102`, `tools/index.ts`).
+`consume_virtual_card` books at SERVER business time: its schema carries no date or time argument, and a model-supplied time field is rejected with a `VALIDATION` error carrying `消费入账时间由服务端决定`, writing no funds, no ledger row and no `CardConsumption` row.
+Its spendable amount is `min(account available cash, remaining monthly limit)`; a monthly limit of 0 blocks spending entirely, and a card with no monthly limit is bounded only by the linked account's cash.
+A repeated `executionKey` replays the persisted consumption instead of charging the linked account again.
+The card tool family otherwise reads and manages card records: `get_cards` (read), `set_card_limit` (per-category limit, no money movement), `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card`, plus the card-spend `consume_virtual_card` (see `tools/card.ts`, `card-emitter.ts`, `tools/index.ts`).
 `analyze_spending`, `get_transactions` and `detect_anomaly` are GREEN reads over already-booked ledger rows; `detect_anomaly` never freezes a card.
 A `CARD`-channel transaction row records a card charge but never identifies the owning debit/credit card from the deposit account type (see `system-prompt.ts:46`).
 The other money-moving writes are `transfer_money`, `reserve_budget`, `subscribe_investment` and `redeem_investment`; `create_scheduled_task` with kind `PAYMENT` dispatches through the transfer channel, not a card or merchant billing integration.
@@ -83,6 +86,8 @@ Durable run/model-request identities disambiguate reused provider call IDs, incl
 financial records or the immutable model/event archive. See `turns/CONTEXT.md` for event ownership.
 
 `grounding-facts.ts` projects exact structured account/write facts. `financial-response.ts` renders authoritative financial statements. Planning text, model-generated correction tags and prose are never execution evidence. Public APIs expose grounded events and safe metadata; raw thinking remains internal.
+
+Card results — the card reads, the card mutations and `consume_virtual_card` — render as a `cards` card built from the server-returned card projection (`card-emitter.ts`), which carries the linked account, its available balance, the monthly limit and the currently payable amount; model prose never fills a result card.
 
 The registered internal describe_turn tool declares purpose, ordered requested capabilities and
 optional workflow/example flags for one current user turn. Its result is interpretation, never
