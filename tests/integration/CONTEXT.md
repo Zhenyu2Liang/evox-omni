@@ -51,4 +51,6 @@
 - 真实模型自身的散文化面板声称稳定性由 [../e2e/CONTEXT.md](../e2e/CONTEXT.md) 的 live 验收诊断（`panel-claim.e2e-helper.ts`、`live-acceptance.e2e.ts#driveRedTool` 经 `helpers.ts#assertNoFabricatedConfirmationPanel`），本目录不覆盖真实模型稳定性。
 - `report_lost_card`（RED 挂失）尚无“原操作回执重放”回归；`replace-card-replay.test.ts` 只把它当作同一操作键下的“换了工具”冲突用例（`errorCode: 'CONFLICT'`，不进入写栅栏），并不校验其重放。
 - 通用回执重放入口为 `createToolRegistry(userId).executeDirect(tool, args, { sessionId, idempotencyKey })`，用同一 key 重发即原样返回（`refactor-financial-commands.test.ts:95`、`confirmed-write-authority.test.ts:136`）。
+- `../helpers/db.ts#truncateAll()` 早于无关系的 `CardConsumption` 表，不会清空它；消费类套件必须在 `beforeEach(resetDatabase)` 之后再 `beforeEach(async () => { await db().cardConsumption.deleteMany(); })`。
+- `standalone-workflow-restart.test.ts` 使用真实子进程与 15s／20s 屏障超时，在磁盘／CPU 高负载（如整目录同时运行）下会偶发「child did not reach barrier」；单独重跑可 9/9 通过，先确认是否只是超时。
 - 夹具不播种 LOST 卡（`card_credit`/`card_debit` 均 `ACTIVE`，见 `../helpers/fixtures.ts:99`）；`replace_card` 需先 `report_lost_card` 或直接改库把源卡置 `LOST`。
