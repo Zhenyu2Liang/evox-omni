@@ -38,7 +38,6 @@ import nextEnv from '@next/env';
 const { loadEnvConfig } = nextEnv;
 import path from 'node:path';
 import type { Browser, Locator, Page } from 'playwright-core';
-import type { PrismaClient } from '../../lib/db/prisma';
 import {
   cliCommand,
   ensurePrismaClientGenerated,
@@ -64,7 +63,6 @@ import {
   fetchDashboardSummary,
   fetchLedger,
   fetchPendingActions,
-  getJson,
   gotoAgent,
   launchBrowser,
   mfaCardPresent,
@@ -90,10 +88,10 @@ import { journeyMultiCardFreeze } from './card-freeze.e2e-helper';
 import { journeyCardManagement } from './card-management.e2e-helper';
 import { journeyNaturalConversation, journeyDialogueRegressions, journeySubscriptionAdvice, journeyCompleteFraudDiscussion } from './conversation.e2e-helper';
 import { journeyLiveCompaction } from './compaction.e2e-helper';
-// Virtual-card live scenarios (lD/lE) are built ON TOP of this shared helper module. The names that
-// this entry script ALSO defines locally (`LiveCardRecord`, `cardById`, `fetchLiveCards`,
-// `readCardTileRows`) are imported under a `*V2` alias so both definitions coexist until a later
-// consolidation task removes the local ones.
+// Virtual-card live scenarios (lD/lE) are built ON TOP of this shared helper module. Its read-model /
+// DB primitives (`LiveCardRecord`, `cardById`, `fetchLiveCards`, `readCardTileRows`, `readDialogRows`,
+// `withDb`) are the ONLY definitions in the repository: this entry script imports them instead of
+// keeping local copies, so lA / lB / lC and lD / lE share one implementation of each primitive.
 import {
   VC_CHECKING_ACCOUNT_ID,
   VC_FIRST_SPEND,
@@ -114,20 +112,22 @@ import {
   assertVirtualCardView,
   attemptConsumeExpectingRefusal,
   awaitRawCard,
+  cardById,
   consumeSuccessfully,
   expectedPayableMinor,
+  fetchLiveCards,
   gotoCards,
   liveModelId,
   openConsumeDialog,
   readCardSpendState,
+  readCardTileRows,
   readCardTileText,
+  readDialogRows,
   vcReplaceTurns,
   vcReportLostTurns,
+  withDb,
   writeScenarioEvidence,
-  cardById as cardByIdV2,
-  fetchLiveCards as fetchLiveCardsV2,
-  readCardTileRows as readCardTileRowsV2,
-  type LiveCardRecord as LiveCardRecordV2,
+  type LiveCardRecord,
   type RawCardRow,
 } from './live-virtual-card.e2e-helper';
 
@@ -217,17 +217,9 @@ function resetLiveDatabase(): void {
 }
 
 // --- authoritative DB cross-checks (throwaway PrismaClient) --------------------------------------
-
-/** Run `fn` on a throwaway PrismaClient bound to the isolated live DB. */
-async function withDb<T>(fn: (db: PrismaClient) => Promise<T>): Promise<T> {
-  const { createDatabaseClient } = await import('../../lib/db/database');
-  const db = createDatabaseClient();
-  try {
-    return await fn(db);
-  } finally {
-    await db.$disconnect().catch(() => undefined);
-  }
-}
+//
+// `withDb` itself is the shared definition exported by `./live-virtual-card.e2e-helper`; this section
+// only holds the live-specific readers built on top of it.
 
 /** The CHECKING account balance (authoritative, straight from SQLite). */
 function readCheckingBalance(): Promise<string> {
@@ -1159,33 +1151,6 @@ async function scenarioCommittedContinuationFailed(
 const HOLDING_WENJIANA_ID = 'holding_wenjiana';
 const CARD_REPLACE_PROMPT = '请为我挂失的信用卡补办一张新卡';
 
-/** `GET /api/cards` row — the FULL `CardView` subset the new scenarios assert on (`fetchCards` is too narrow). */
-interface LiveCardRecord {
-  id: string;
-  type: string;
-  status: string;
-  numberMasked?: string;
-  creditLimit?: string;
-  availableLimit?: string;
-  monthlyLimit?: string;
-  linkedAccountId?: string;
-  linkedAccountNumber?: string;
-  accountAvailableBalance?: string;
-  payableAmount?: string;
-  replacedByCardId?: string;
-}
-
-/** The demo user's cards straight from the REAL read route (never the narrow `fetchCards` helper). */
-/** One card by id, or `undefined` when the demo user does not hold it. */
-function cardById(cards: readonly LiveCardRecord[], cardId: string): LiveCardRecord | undefined {
-  return cards.find((card) => card.id === cardId);
-}
-
-async function fetchLiveCards(baseUrl: string): Promise<LiveCardRecord[]> {
-  const data = await getJson<{ cards: LiveCardRecord[] }>(`${baseUrl}/api/cards`);
-  return data.cards;
-}
-
 /** The UNIQUE `CREDIT` + `ACTIVE` card, or `undefined` when there is none / more than one. */
 function uniqueActiveCreditCard(cards: readonly LiveCardRecord[]): LiveCardRecord | undefined {
   const matches = cards.filter((card) => card.type === 'CREDIT' && card.status === 'ACTIVE');
@@ -1224,19 +1189,6 @@ function awaitLiveCards(
     },
     { timeoutMs, intervalMs: 1_000, description },
   );
-}
-
-/** Read a rendered `CardTile`'s `<dt>/<dd>` rows (`信用额度` / `可用额度`). */
-async function readCardTileRows(page: Page, cardId: string): Promise<Record<string, string>> {
-  return page.locator(`[data-card-id="${cardId}"]`).first().evaluate((tile) => {
-    const rows: Record<string, string> = {};
-    for (const dt of Array.from(tile.querySelectorAll('dl dt'))) {
-      const label = (dt.textContent ?? '').replace(/\s+/g, '');
-      const dd = dt.nextElementSibling;
-      if (label && dd) rows[label] = (dd.textContent ?? '').trim();
-    }
-    return rows;
-  });
 }
 
 /**
@@ -1563,21 +1515,6 @@ function readVirtualConsumeSnapshot(): Promise<VirtualConsumeSnapshot> {
   });
 }
 
-/** Read a rendered `<dl>`'s `dt → dd` label/value map (used for the consume dialog's summary rows). */
-async function readDialogRows(page: Page, selector: string): Promise<Record<string, string>> {
-  const list = page.locator(selector).first();
-  if ((await list.count()) === 0) return {};
-  return list.evaluate((el) => {
-    const rows: Record<string, string> = {};
-    for (const dt of Array.from(el.querySelectorAll('dt'))) {
-      const label = (dt.textContent ?? '').replace(/\s+/g, '');
-      const dd = dt.nextElementSibling;
-      if (label && dd) rows[label] = (dd.textContent ?? '').trim();
-    }
-    return rows;
-  });
-}
-
 /**
  * SCENARIO lC (LIVE-LLM, REAL BROWSER): confirm the SEEDED virtual card (`card_virtual` — a VIRTUAL debit
  * instrument bound to `acct_checking` with monthly limit ¥5,000.00) through a natural `/agent` request,
@@ -1830,7 +1767,7 @@ interface AppliedVirtualCardLeg {
  * `monthlyLimitMinor = 10000`, NO credit columns, and a card number no pre-existing card carries.
  */
 async function applyVirtualCardLeg(ctx: Ctx, page: Page): Promise<AppliedVirtualCardLeg> {
-  const existing = await fetchLiveCardsV2(ctx.baseUrl);
+  const existing = await fetchLiveCards(ctx.baseUrl);
   const applied = await applyVirtualCardViaAgent(
     page,
     ctx.baseUrl,
@@ -1864,11 +1801,11 @@ async function applyVirtualCardLeg(ctx: Ctx, page: Page): Promise<AppliedVirtual
 }
 
 /** Poll `GET /api/cards` until `cardId.payableAmount === expected`, then return the settled card list. */
-function awaitPayable(baseUrl: string, cardId: string, expected: string): Promise<LiveCardRecordV2[]> {
+function awaitPayable(baseUrl: string, cardId: string, expected: string): Promise<LiveCardRecord[]> {
   return waitFor(
     async () => {
-      const cards = await fetchLiveCardsV2(baseUrl);
-      return cardByIdV2(cards, cardId)?.payableAmount === expected ? cards : false;
+      const cards = await fetchLiveCards(baseUrl);
+      return cardById(cards, cardId)?.payableAmount === expected ? cards : false;
     },
     {
       timeoutMs: 180_000,
@@ -1904,7 +1841,7 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
 
       // PROJECTION + RENDERED TILE of the brand-new card: the ¥100 limit binds, not the checking cash.
       const cardsAfterApply = await awaitPayable(ctx.baseUrl, cardId, VC_MONTHLY_LIMIT);
-      assertVirtualCardView(cardByIdV2(cardsAfterApply, cardId), {
+      assertVirtualCardView(cardById(cardsAfterApply, cardId), {
         cardId,
         monthlyLimit: VC_MONTHLY_LIMIT,
         accountAvailableBalance: cashBefore,
@@ -1912,7 +1849,7 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
       });
       await gotoCards(page, ctx.baseUrl);
       await waitForElementHydration(page, `[data-card-id="${cardId}"]`);
-      const applyTileRows = await readCardTileRowsV2(page, cardId);
+      const applyTileRows = await readCardTileRows(page, cardId);
       const applyTileText = await readCardTileText(page, cardId);
       const applyShot = await captureLive(page, 'lD-new-virtual-card');
       assertVirtualCardTile(cardId, applyTileRows, applyTileText, {
@@ -1949,7 +1886,7 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
       }
       const cashAfterSpend = centsToMoney(afterSpend.balanceMinor);
       const cardsAfterSpend = await awaitPayable(ctx.baseUrl, cardId, payableAfterSpend);
-      assertVirtualCardView(cardByIdV2(cardsAfterSpend, cardId), {
+      assertVirtualCardView(cardById(cardsAfterSpend, cardId), {
         cardId,
         monthlyLimit: VC_MONTHLY_LIMIT,
         accountAvailableBalance: cashAfterSpend,
@@ -1957,7 +1894,7 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
       });
       await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
       await waitForElementHydration(page, `[data-card-id="${cardId}"]`);
-      const spendTileRows = await readCardTileRowsV2(page, cardId);
+      const spendTileRows = await readCardTileRows(page, cardId);
       const spendTileText = await readCardTileText(page, cardId);
       const spendShot = await captureLive(page, 'lD-after-spend');
       assertVirtualCardTile(cardId, spendTileRows, spendTileText, {
@@ -1980,7 +1917,7 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
       const afterRefusal = await readCardSpendState();
       assertNoSpend(afterSpend, afterRefusal, `lD 超限消费 ${VC_OVER_LIMIT_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝`);
       const cardsAfterRefusal = await awaitPayable(ctx.baseUrl, cardId, payableAfterSpend);
-      const payableAfterRefusal = cardByIdV2(cardsAfterRefusal, cardId)?.payableAmount;
+      const payableAfterRefusal = cardById(cardsAfterRefusal, cardId)?.payableAmount;
 
       const evidenceFile = writeScenarioEvidence('lD', {
         scenario: 'lD-live-virtual-card-apply-and-limit',
@@ -2059,7 +1996,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
       }
 
       // 补办 — natural turns + real MFA. Exactly ONE new ACTIVE VIRTUAL card, bound to the SAME account.
-      const idsBeforeReplace = new Set((await fetchLiveCardsV2(ctx.baseUrl)).map((card) => card.id));
+      const idsBeforeReplace = new Set((await fetchLiveCards(ctx.baseUrl)).map((card) => card.id));
       const sentReplace = await driveRedTool(page, ctx.baseUrl, vcReplaceTurns(leg.maskTail));
       const sourceAfterReplace = await awaitRawCard(
         sourceId,
@@ -2090,7 +2027,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
       }
       await waitFor(
         async () => {
-          const cards = await fetchLiveCardsV2(ctx.baseUrl);
+          const cards = await fetchLiveCards(ctx.baseUrl);
           const created = cards.filter((card) => !idsBeforeReplace.has(card.id));
           return created.length === 1 && created[0].id === replacementId
             && created[0].type === 'VIRTUAL' && created[0].status === 'ACTIVE'
@@ -2113,7 +2050,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         throw new Error(`补办卡的家庭剩余月限额应为 ${VC_MONTHLY_LIMIT} − ${VC_FIRST_SPEND} = 70.00，实际 ${familyPayable}（家庭已用 ${familySpentMinor}、账户可用余额 ${centsToMoney(afterLost.balanceMinor)}）`);
       }
       const cardsAfterReplace = await awaitPayable(ctx.baseUrl, replacementId, familyPayable);
-      const replacementView = cardByIdV2(cardsAfterReplace, replacementId);
+      const replacementView = cardById(cardsAfterReplace, replacementId);
       assertVirtualCardView(replacementView, {
         cardId: replacementId,
         monthlyLimit: VC_MONTHLY_LIMIT,
@@ -2125,7 +2062,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
       }
       await gotoCards(page, ctx.baseUrl);
       await waitForElementHydration(page, `[data-card-id="${replacementId}"]`);
-      const replaceTileRows = await readCardTileRowsV2(page, replacementId);
+      const replaceTileRows = await readCardTileRows(page, replacementId);
       const replaceTileText = await readCardTileText(page, replacementId);
       const replaceShot = await captureLive(page, 'lE-replacement-card');
       assertVirtualCardTile(replacementId, replaceTileRows, replaceTileText, {
@@ -2156,7 +2093,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         throw new Error(`家庭月限额用尽后 payableAmount 应为 0.00，实际 ${exhaustedPayable}（账户可用余额 ${centsToMoney(afterSecondSpend.balanceMinor)}）`);
       }
       const cardsExhausted = await awaitPayable(ctx.baseUrl, replacementId, exhaustedPayable);
-      assertVirtualCardView(cardByIdV2(cardsExhausted, replacementId), {
+      assertVirtualCardView(cardById(cardsExhausted, replacementId), {
         cardId: replacementId,
         monthlyLimit: VC_MONTHLY_LIMIT,
         accountAvailableBalance: centsToMoney(afterSecondSpend.balanceMinor),
@@ -2175,7 +2112,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
       const afterRefusal = await readCardSpendState();
       assertNoSpend(afterSecondSpend, afterRefusal, `lE 额度用尽后的 ${VC_TINY_SPEND} 消费（${VC_MERCHANT_REFUSED}）被拒绝`);
       const cardsAfterRefusal = await awaitPayable(ctx.baseUrl, replacementId, exhaustedPayable);
-      const payableAfterRefusal = cardByIdV2(cardsAfterRefusal, replacementId)?.payableAmount;
+      const payableAfterRefusal = cardById(cardsAfterRefusal, replacementId)?.payableAmount;
 
       const evidenceFile = writeScenarioEvidence('lE', {
         scenario: 'lE-live-virtual-card-replace-continuity',
