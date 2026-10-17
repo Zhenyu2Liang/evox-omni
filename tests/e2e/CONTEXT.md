@@ -130,7 +130,6 @@ live 入口的场景后诊断与 TASK-A 证据读取位于主 `try` 内、`clean
 harness 的截图文件名固定，下一轮会覆盖，因此每轮截图需复制到 `output/playwright/live/<场景>-head<产品树提交前7位>-round<N>/`。
 目录名带上被认证的产品树提交，不同提交的证据因此不会互相覆盖。
 每轮的结论文本证据写 `output/playwright/live/REPORT-<场景>-head<产品树提交>-round<N>.md`（含命令、退出码、汇总行、逐字提示词、工具调用与参数、`PendingAction`/`MfaChallenge` 行、DB 数字、截图路径）。
-每轮的结论文本证据写 `output/playwright/live/REPORT-<场景>-round<N>.md`（含命令、退出码、汇总行、逐字提示词、工具调用与参数、`PendingAction`/`MfaChallenge` 行、DB 数字、截图路径）。
 mock 与日期边界报告写 `output/playwright/REPORT-mock-suite.md`、`output/playwright/REPORT-date-tamper-boundary.md`。
 `output/playwright/` 与 `logs/` 都在 `.gitignore` 中：提交证据需 `git add -f` 指定具体文件，惯例只提交上述文本报告与选定的截图。
 原始 stdout、evidence JSON、DB dump 只放仓库 `logs/`，不提交；不得提交 `.env.local` 或任何 `*.db`。
@@ -139,6 +138,9 @@ mock 与日期边界报告写 `output/playwright/REPORT-mock-suite.md`、`output
 
 `LIVE-ACCEPTANCE-REPORT.md` 记录当前工作周期的逐轮结果（每场景每轮的 PASS/FAIL、提示词、DB 数字、截图路径与退出码）；历史结果留在 Git 历史。
 必须记录实际提交、模式、场景与本次运行结果。
+每套证据必须声明它认证的**产品树提交**，因为记录证据本身的提交会让 HEAD 前移：用 `git diff --stat <产品树提交> HEAD -- banking-sdk agent security planner lib app components prisma scripts` 为空来证明等价。
+产品代码改动后，旧提交上的证据不再认证 HEAD，必须在新产品树上重跑并声明新的被认证提交。
+某场景在某产品树上的通过只认证该产品树，不得外推到其它提交或其它场景。
 live 超时或未发起业务必须按实际失败记录。
 逐轮如实记录：不得跑绿一轮后抹去前次失败，也不得删除断言或跳过失败来宣称通过。
 模型非确定性（只作散文、不发受控工具）按模型行为记录，并给出与产品缺陷的区分证据；但「散文声称面板却无 `PendingAction`」属用户可见缺陷，不得归因于模型波动。
