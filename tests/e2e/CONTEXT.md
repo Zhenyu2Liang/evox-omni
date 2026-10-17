@@ -1,4 +1,4 @@
-# 真实浏览器验收
+﻿# 真实浏览器验收
 
 ## 入口与隔离
 
@@ -107,18 +107,3 @@ live 超时或未发起业务必须按实际失败记录。
 
 本地浏览器测试不证明集群并发或真实银行接入。
 测试命令也不会自动完成生产构建验收。
-
-## 已知失败断言（mock 入口 acceptance.e2e.ts）
-
-`c-plan-pause-resume`（`journeyPlanPauseResume`，`acceptance.e2e.ts:290`）与
-`j-circuit-breaker-lock`（`journeyCircuitBreakerLock`，`acceptance.e2e.ts:694`）在 mock 入口稳定失败，根因均在业务源，非测试侧：
-
-- 计划节点标签：`PLAN_NODE_ANALYZE = '查询消费情况'`（`acceptance.e2e.ts:131`，断言于 `:299` 的 `waitForNodeStatus`）无任何源产生。
-  mock 计划把 analyze 节点命名为英文字面量 `'Analyze spending'`（`agent/providers/mock/plan-intents.ts:42,52`）。
-  该名字经 `agent/tools/plan-compiler.ts` 原样落库为 `TaskNodeSpec.name`，由 `components/banking/AgentTaskTimeline.tsx:106` 经 `localizeToolLabel` 渲染（`helpers.ts:1445` 读该 `span`）。
-  `localizeToolLabel` 查 `chat.tool.Analyze spending` 无此键，回退 `lib/i18n/messages/display-sources.json#tools`（其键为中文，如 `"消费分析": "chat.tool.analyze_spending"`），故原样透出→渲染为 `Analyzespending`，断言 90s 超时。
-  正确修复需改 `agent/providers/mock/plan-intents.ts` 或补 i18n 映射（业务源）。
-- MFA 失败状态：`acceptance.e2e.ts:721` 等待 `cards.mfa.failedAttempts`（`lib/i18n/messages/chat.zh-CN.json:137` = `验证失败，已尝试 {attempts} 次。`）。
-  实际渲染的是 `cards.mfa.failedAttemptsLimit`（`chat.zh-CN.json:138` = `验证失败，已尝试 {attempts} 次，最多 {maxAttempts} 次。`）——
-  `components/chat/ChatWindow.tsx:238` 恒传 `maxAttempts={MFA_MAX_ATTEMPTS}`（`lib/constants.ts:10` = 3），使 `components/chat/cards/MfaCard.tsx:96-98` 永远走 limit 分支。
-  因 `waitForStatusText`（`helpers.ts:1182`，去空白后 `includes`）匹配 `...已尝试1次。` 而非 `...已尝试1次，最多3次。`，首个错误码即超时。`failedAttempts` 明文在 live dock 中从不渲染。
