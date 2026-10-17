@@ -60,6 +60,16 @@ exact CNY amount from an owned ACCOUNT-BOUND virtual card by debiting that card'
 settlement account through `banking.card.consumeCard` (atomic sufficient-funds debit plus a
 `channel='CARD'` ledger row and a `CardConsumption` row in ONE transaction, guarded by the card's
 monthly limit, replayable by execution key).
+Virtual-card consumption booking time is SERVER-OWNED: the tool schema carries no date/time argument,
+and `rejectClientSuppliedTime` (`card.ts`) refuses ANY caller-supplied time field (`occurredAt`,
+`occurredTime`, `occurred_at`, `bookedAt`, `bookingTime`, `timestamp`, `time`, `date`,
+`occurredDate`) with a `VALIDATION` error carrying 消费入账时间由服务端决定. That guard throws before
+`banking.card.consumeCard`, so a forged time writes nothing — no debit, no `channel='CARD'` ledger
+row, no `CardConsumption` row — and is never silently dropped. `plan-parameters.ts` runs the same
+guard for `consume_virtual_card` before the generic unexpected-key check, so a model-supplied date
+fails with that reason instead of `Unsupported parameters`. The success summary reports only the
+server-returned facts: consumption amount and merchant, the card's masked number, 关联账户,
+绑定账户可用余额, 月消费限额 (or `未设置月限额` when the card has none) and 当前可支付金额.
 Card reads and analysis (`get_cards`, `analyze_spending`, `get_transactions`,
 `get_dashboard_summary`) never debit. Physical debit and credit card creation and deletion remain
 manual-only on the card-management page.
