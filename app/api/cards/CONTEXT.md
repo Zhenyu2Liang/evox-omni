@@ -30,12 +30,12 @@ MFA 验证/取消。每个路由只做「校验入参 → 解析服务端身份 
 信封：成功 `{ ok: true, data }`；失败 `{ ok: false, error: { code, message } }`。
 HTTP 状态由 `_lib/http#errorResponse` 的冻结映射决定（`VALIDATION` → 400、`NOT_FOUND` → 404、
 `SECURITY_DENIED` → 403、`CONFLICT` → 409、`LIMIT_EXCEEDED`／`INSUFFICIENT_FUNDS` → 422、
-`CIRCUIT_OPEN` → 423）。领域拒绝仍是正常 HTTP `200` + `{ ok: true, data: { ok: false, … } }` 的
-形状只出现在手动卡片命令（`CardChangeResponse`）；SDK 消费拒绝走错误信封。
+`CIRCUIT_OPEN` → 423）。SDK 消费拒绝走错误信封；手动卡片命令的领域结果（如错误验证码）是正常
+HTTP 200 且 `CardChangeResponse.ok === false`。
 
 ## 服务端拥有记账时间
 
-消费的记账时间完全由服务端决定：`banking.card.consumeCard` 始终按业务时钟（`demoNow()`）入账，
+消费的记账时间完全由服务端决定：`banking.card.consumeCard` 按业务时钟（`demoNow()`）入账，
 月限额按服务端所处的业务月归属，因此不存在任何客户端时间参数，客户端也无法把某笔消费挪到别的
 月份以规避当月限额。
 
@@ -66,7 +66,8 @@ HTTP 状态由 `_lib/http#errorResponse` 的冻结映射决定（`VALIDATION` �
   文案会随 400 响应返回给客户端。
 - 手动卡片三个 schema（新增、删除、验证码）均为 `.strict()`，因此多余键（含任何时间字段）本身就会
   `VALIDATION` 失败——这是卡片变更端点不存在同类时间伪造口的原因，不要放宽为 `.passthrough()`。
-- `banking.card.consumeCard` 的输入类型不包含记账时间；服务端也不允许通过其他入口传入时间。
+- 路由传给 `banking.card.consumeCard` 的入参只有 `userId`、`cardId`、`amount`、`category`、`merchant`
+  与 `executionKey`：路由与 SDK 之间不传递任何时间字段，其他入口也不得提供记账时间。
 
 ## 测试策略
 
