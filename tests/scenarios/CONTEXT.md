@@ -4,6 +4,8 @@
 
 `test-01` 至 `test-12` 覆盖最初的演示场景。
 `test-13` 至 `test-15` 覆盖补办换卡、虚拟卡申请与类别限额约束。
+`test-16` 覆盖虚拟卡补办家族生命周期、限额语义与重放幂等。
+`test-17` 覆盖伪造消费入账时间在工具、计划与重放层被拒。
 包括余额、转账、账单、异常、限额、理财与条件计划。
 `mock-integration.test.ts` 使用应用的离线模型。
 
@@ -36,10 +38,30 @@ GREEN 只表示执行策略，不表示没有副作用。
 ## 确认与待决面板
 
 确认/MFA 面板只来自被网关拦截的真实工具调用。
-`test-02`（YELLOW）与 `test-03`/`test-09`/`test-13`/`test-14`（RED）核对 `PendingAction` 行、`confirmation_required`/`mfa_required` 事件与确认/MFA 卡片。
+`test-02`（YELLOW）与 `test-03`/`test-09`/`test-13`/`test-14`/`test-16`（RED）核对 `PendingAction` 行、`confirmation_required`/`mfa_required` 事件与确认/MFA 卡片。
 `test-11`/`test-12` 核对被拦截的计划节点 parked 为 `waiting_confirmation` 并暴露 `pendingActionId`。
 `mock-integration.test.ts` 对真实离线模型核对 `pendingAction.status`。
 
 所有编号场景脚本都以一次工具调用开始，因此被断言的面板必然对应一条 `PendingAction`。
 没有场景覆盖“模型只用文字声称需要确认、却不发出工具调用”的情形；此时不会产生面板，故不存在正向对照测试。
 `test-04` 只证明注入文本不改变权限等级，不核对模型文字与实际工具调用/待决行是否一致。
+
+## 虚拟卡家族与消费入账时间
+
+`test-16` 以一次会话走完「申请 → 消费到限额 → 挂失 → 补办 → 继续消费」的 MFA 闸门路径。
+补办卡与原卡共用同一结算账户与同一月限额，已入账的 `CardConsumption` 仍归原卡。
+限额跨家族连续：限额 100、补办前已花 30，则补办后仍可花 70，再花 71 被 `LIMIT_EXCEEDED` 拒绝且余额、流水、消费记录均不变。
+绑定账户现金不足时报 `INSUFFICIENT_FUNDS`，不产生部分扣款。
+月限额 0 拒绝任何消费；未设月限额时 `payableAmount` 等于账户可用现金。
+重放同一执行身份只扣一次；同一身份换卡消费为 `CONFLICT`。
+模型重新发起补办仍会再次进入 MFA 闸门，这是网关既定行为；幂等只对已授权的执行路径成立。
+
+`test-17` 证明任何调用方时间字段（`occurredAt`、`bookedAt`、`timestamp`、`time`、`date`）都以「消费入账时间由服务端决定」被拒。
+首拒层是工具注册表安装的 `prepareArguments` 参数校验，因此不会持久化 `PendingAction`、也不产生 `AuthorizationDecision`。
+已持久化动作与计划节点的重放同样被拒；不带时间字段的对照计划可正常提交。
+拒绝时不产生扣款、`channel='CARD'` 流水或 `CardConsumption` 记录。
+
+## 已知问题
+
+`tests/helpers/db.ts#truncateAll` 未清理 `prisma.cardConsumption`，同一 `executionKey` 的消费会在重复运行间残留。
+`test-16` 因此在 `beforeEach` 中自行清空该表；彻底修复应落在 `tests/helpers`。
