@@ -58,6 +58,7 @@ live 数据库文件为 `prisma/live-acceptance.db`（含 `-wal`/`-shm`/`-journa
 还覆盖理财申购与赎回（离线入口 `h-investment-flow`）以及理财页面（`journeyBankingPages` 访问 `/investments`）。
 涉及资金变化时，同时核对页面、余额与流水。
 具体辅助模块使用 `*.e2e-helper.ts` 命名。
+`LiveCardRecord`、`cardById`、`fetchLiveCards`、`readCardTileRows`、`readDialogRows`、`withDb` 只在 `live-virtual-card.e2e-helper.ts` 定义一次，`live-acceptance.e2e.ts` 直接导入复用：无本地副本、无 `V2` 别名、无例外。
 
 `helpers.ts` 提供服务启动、数据库准备与 DOM 操作。
 交互前等待水合完成。
