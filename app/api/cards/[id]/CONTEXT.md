@@ -16,8 +16,8 @@ spend another user's card. All shared plumbing comes from `_lib` (`http`, `sessi
 
 | Route | Handler | Contract |
 | --- | --- | --- |
-| `DELETE /api/cards/[id]` | `route.ts` | Manual demo-card deletion proposal (`security/manual-card-management#proposeCardChange`); MFA verify/cancel handled under `/api/cards/changes/[id]/{verify,cancel}` (sibling — read-only, escalate writes to parent). |
-| `POST /api/cards/[id]/consume` | `consume/route.ts` | Body `{ amount (exact CNY decimal string), category?, merchant?, occurredAt?, executionKey? }` → `{ ok:true, data: ConsumeCardResult }`. |
+| `DELETE /api/cards/[id]` | `route.ts` | Manual demo-card deletion proposal (`security/manual-card-management#proposeCardChange`); MFA verify/cancel live under `/api/cards/changes/[id]/{verify,cancel}` (see `../CONTEXT.md`). |
+| `POST /api/cards/[id]/consume` | `consume/route.ts` | Body `{ amount (exact CNY decimal string), category?, merchant?, executionKey? }` → `{ ok:true, data: ConsumeCardResult }`. Booking time is SERVER-OWNED: a body containing an `occurredAt` key is rejected with `400 VALIDATION` (never stripped), before any delegation. |
 | `GET /api/cards/[id]/consumptions` | `consumptions/route.ts` | Optional `?limit=` (1–500, shared `limitQuerySchema`) → `{ ok:true, data: { consumptions: CardConsumptionView[] } }`. |
 
 ## Routing Table
