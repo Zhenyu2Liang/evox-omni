@@ -21,7 +21,7 @@ SDK 写入仍必须满足可信执行上下文与事务约束。
 | `anomaly.test.ts` | 收支方向、投资分类与异常筛查 |
 | `card-replacement.test.ts` | 冻结/解冻可逆幂等、挂失终态与补办换卡不变量 |
 | `card-consumption.test.ts` | 账户绑定虚拟卡：绑定与幂等发卡、消费限额/余额护栏、卡状态与未绑定拒绝、并发不超支、多卡共享账户、付款额同步、执行身份重放与原子性 |
-| `card-consumption-time-authority.test.ts` | 消费时刻权威：伪造 `occurredAt`（过去/未来/小数/null/文本/Date/对象）逐项 `VALIDATION` 且账务与记录字节不变、显式 `undefined` 视为未提供、类型层无时间字段、限额恰好用尽与 0/`null` 限额、UTC+08:00 月界归属 |
+| `card-consumption-time-authority.test.ts` | 消费时刻权威：伪造 `occurredAt`（过去/未来/小数/null/文本/Date/对象）逐项 `VALIDATION` 且账务与记录字节不变、显式 `undefined` 视为未提供、类型层无时间字段、限额恰好用尽与 0/`null` 限额、UTC+08:00 月界归属（上月末尾的消费：结果快照报上月余额、新鲜读取仍报当月全额） |
 | `card-replacement-binding.test.ts` | 补办续权：虚拟卡补办继承并持久化结算账户、刷新后仍绑定、仅一次扣款、月限额跨 A→B→C 连续且历史流水不改写、重复补办不二次发行、坏绑定回滚、显式前驱修复与无前驱拒绝、CREDIT 额度继承且总览不重复 |
 | `dashboard.test.ts` | 总览信用卡可用额：补卡后不重复计数（旧 LOST 卡排除、仅真 CREDIT 计入） |
 
