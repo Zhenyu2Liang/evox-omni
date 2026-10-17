@@ -8,16 +8,21 @@ No product code was changed, no assertion was weakened, skipped or deleted, and
 
 | Item | Value |
 | --- | --- |
-| Commit SHA tested (`git rev-parse HEAD`) | `4a05bf4832d82c9540126ef6d5967aeeaceb2237` |
+| Commit SHA tested (`git rev-parse HEAD`) | `62392c0740673e2a79cf83ac0df5784e4780422a` |
 | Harness | `tests/e2e/acceptance.e2e.ts` |
 | Exact command | `pnpm exec tsx tests/e2e/acceptance.e2e.ts` |
 | Model mode | mock (`LLM_MODE=mock`, asserted by the harness through `GET /api/health` → `llmMode: "mock"`) |
 | Browser | real headless Chrome — `C:\Program Files\Google\Chrome\Application\chrome.exe` (`playwright-core`, no bundled download) |
 | Isolated DB | `prisma/e2e.db` (sidecars `-wal`/`-shm`); never `prisma/dev.db`, never `prisma/test.db` |
 | DB lifecycle | deleted + `prisma db push` + probe + `tsx prisma/seed.ts` before boot, then reseeded between journeys |
-| Dev server | real `next dev` on a dynamic free port — this run: `pid=64660 → http://localhost:51313` |
-| Full stdout/stderr | `logs/mock-suite.log` (gitignored) |
-| Exit code | **0** — and the summary line reports 0 failures, so exit code and PASS line agree |
+| Dev server | real `next dev` on a dynamic free port — this run: `pid=59860 → http://localhost:55155` |
+| Full stdout/stderr | `logs/mock-suite-head.log` (gitignored) |
+| Exit code | **0** — read from the entry's own process exit status (delayed-expansion `!ERRORLEVEL!` recorded `EXIT=0`), and the summary line reports 0 failures, so exit code and PASS line agree |
+
+This report certifies commit `62392c0740673e2a79cf83ac0df5784e4780422a`.
+`git diff 7a7a4d32a6a1622deb7647ab6142fb7991b76805 62392c0740673e2a79cf83ac0df5784e4780422a` touches only
+`output/playwright/live/` evidence files, so the product code and the `tests/e2e/**` assertions exercised here are the
+same as at `7a7a4d3`.
 
 ## Summary line (verbatim)
 
@@ -29,9 +34,9 @@ Head of the log (verbatim), showing the isolated-DB and server banner:
 
 ```
 == AI Banking Agent 真实浏览器端到端验收 (tests/e2e) ==
-· 隔离 E2E 数据库：file:<worktree>/prisma/e2e.db（prisma/dev.db 不受影响）
+· 隔离 E2E 数据库：file:D:/projects/banking-agent/.genesis/workers/worker_T5_A46/prisma/e2e.db（prisma/dev.db 不受影响）
 Reset isolated E2E database: generate the client if needed, remove the file and sidecars, push the schema, probe, then seed.
-· next dev (pid=64660) → http://localhost:51313（/api/health 与 /agent 均已就绪，LLM_MODE=mock）
+· next dev (pid=59860) → http://localhost:55155（/api/health 与 /agent 均已就绪，LLM_MODE=mock）
 · 真实浏览器：C:\Program Files\Google\Chrome\Application\chrome.exe
 ```
 
@@ -89,7 +94,7 @@ PASS manual-card-management-and-agent-boundary — Manual card addition/deletion
 PASS contacts-and-investment-pages — Separate approval navigation is removed; contact add/delete persists across reload and browsers with masked phones and audits; investment products show exact money, rates and risk without mobile overflow.
 PASS multi-card-freeze-audit-history — Three cards each require a separate RED challenge in a mobile-safe dock outside the transcript; pending reload preserves the request without its code, wrong codes retain pending status, successful verification dismisses each request and preserves read-only approval transitions; completed plans keep their original message placement.
 PASS developer-mode-conversation-controls — Normal chat survives refresh; developer tools are opt-in; clear requires confirmation, resets shared context, preserves ledger/run evidence, and works through the mobile modal.
-PASS subscription-tool-lifecycle — Subscription approval stays outside the transcript, fits mobile and survives pending reload; confirmation dismisses the dock and preserves previous/current states in a read-only receipt; results remain business cards and later turns never flash stale activity. Screenshot: <worktree>/output/playwright/19-subscription-tool-lifecycle.png
+PASS subscription-tool-lifecycle — Subscription approval stays outside the transcript, fits mobile and survives pending reload; confirmation dismisses the dock and preserves previous/current states in a read-only receipt; results remain business cards and later turns never flash stale activity. Screenshot: D:\projects\banking-agent\.genesis\workers\worker_T5_A46\output\playwright\19-subscription-tool-lifecycle.png
 PASS shared-demo-dialogue-and-browsers — Browsers share a server-selected conversation without login; greetings, negative corrections, ambiguous card changes and confirmation advance distinctly; a later balance query works and clarification never changes the ledger
 PASS hydration-external-root-attribute — Clean and externally modified root elements hydrate without console errors; language switching and drafts work; descendant mismatches still report diagnostics
 PASS i18n-chinese-default-and-switching — Chinese defaults despite an English browser preference; desktop and mobile switching translates server pages, persists across reloads, preserves drafts and message identities, and submits no additional banking operation

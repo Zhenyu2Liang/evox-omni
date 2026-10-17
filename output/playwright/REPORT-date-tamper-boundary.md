@@ -10,7 +10,7 @@ left untouched.
 
 | Item | Value |
 | --- | --- |
-| Commit SHA tested (`git rev-parse HEAD`) | `4a05bf4832d82c9540126ef6d5967aeeaceb2237` |
+| Commit SHA tested (`git rev-parse HEAD`) | `62392c0740673e2a79cf83ac0df5784e4780422a` |
 | Harness | `tests/e2e/date-tamper-boundary.e2e.ts` |
 | Exact command | `pnpm exec tsx tests/e2e/date-tamper-boundary.e2e.ts` |
 | Model mode | mock — and in practice **no model is involved at all** (`LLM_MODE=mock` for the booted app; `/api/health` → `llmMode=mock` verified) |
@@ -18,11 +18,15 @@ left untouched.
 | Isolated DB | `prisma/live-acceptance-date-tamper.db` (+ `-wal`/`-shm`/`-journal`, plus the harness's own `.backup.db`) |
 | DB files explicitly NOT used | `prisma/e2e.db` (mock browser suite), `prisma/test.db` (Vitest), `prisma/dev.db` (shared dev) — verified absent/untouched by this entry |
 | DB lifecycle | all files deleted → `prisma db push` → probe → `tsx prisma/seed.ts` on every run |
-| Dev server | real `next dev` on a free port (`.next-e2e` dist dir) — this run: `pid=41348 → http://localhost:61313`; port freed afterwards: `YES` |
+| Dev server | real `next dev` on a free port (`.next-e2e` dist dir) — this run: `pid=64616 → http://localhost:63400`; port freed afterwards: `YES` |
 | Business clock | `demoNow()` = `2026-09-25T04:00:00.000Z`, business month `2026-9`, window `[2026-08-31T16:00:00.000Z, 2026-09-30T16:00:00.000Z)` (UTC+08:00) |
-| Full stdout/stderr | `logs/date-tamper.log` (gitignored) |
+| Full stdout/stderr | `logs/date-tamper-head.log` (gitignored) |
 | Machine-readable evidence | `logs/date-tamper-evidence.json` (23,412 B, gitignored) |
-| Exit code | **0** — and the summary line reports `fail=0`, so exit code and verdicts agree |
+| Exit code | **0** — read from the entry's own process exit status (delayed-expansion `!ERRORLEVEL!` recorded `EXIT=0`), and the summary line reports `fail=0`, so exit code and verdicts agree |
+
+This report certifies commit `62392c0740673e2a79cf83ac0df5784e4780422a`.
+`git diff 7a7a4d32a6a1622deb7647ab6142fb7991b76805 62392c0740673e2a79cf83ac0df5784e4780422a` touches only
+`output/playwright/live/` evidence files, so the route contracts exercised here are the same as at `7a7a4d3`.
 
 ## Summary line (verbatim)
 
@@ -34,23 +38,32 @@ Head of the log (verbatim):
 
 ```
 === date-tamper-boundary.e2e.ts — RAW-HTTP BOUNDARY TEST (no browser, no model) ===
-repo        : <worktree>
-isolated db : <worktree>\prisma\live-acceptance-date-tamper.db
+repo        : D:\projects\banking-agent\.genesis\workers\worker_T5_A46
+isolated db : D:\projects\banking-agent\.genesis\workers\worker_T5_A46\prisma\live-acceptance-date-tamper.db
 dist dir    : .next-e2e
 business    : now=2026-09-25T04:00:00.000Z month=2026-9 window=[2026-08-31T16:00:00.000Z, 2026-09-30T16:00:00.000Z)
 · 准备隔离数据库（删除 → prisma db push → tsx prisma/seed.ts）…
 · 隔离数据库就绪
-· next dev 启动中：port=61313 pid=41348
-· 应用就绪：http://localhost:61313（llmMode=mock 已由 /api/health 校验）
+· next dev 启动中：port=63400 pid=64616
+· 应用就绪：http://localhost:63400（llmMode=mock 已由 /api/health 校验）
+```
+
+Tail of the log (verbatim):
+
+```
+port 63400 freed: YES
+evidence    : D:\projects\banking-agent\.genesis\workers\worker_T5_A46\logs\date-tamper-evidence.json
+SUMMARY cases=9 pass=8 fail=0 skip=1 → exit code 0（本入口为 RAW-HTTP 边界测试：不驱动浏览器、不调用模型、结论仅覆盖 HTTP 响应 + SQLite 行）
+EXIT=0
 ```
 
 ## Per-case verdicts (9 cases: 8 PASS, 0 FAIL, 1 SKIP)
 
 | Case id | Kind | Verdict | Assertion (verbatim, condensed from the case's `detail`) |
 | --- | --- | --- | --- |
-| `s0-virtual-card-100-limit` | SETUP | **PASS** | 虚拟卡经真实 `POST /api/cards` proposal + `POST /api/cards/changes/[id]/verify` (MFA) 建立：`type=VIRTUAL`、`status=ACTIVE`、`monthlyLimit=100.00`、`linkedAccountId=acct_checking`（HTTP 与 SQLite 一致） |
-| `c1-consume-normal` | CASE | **PASS** | 正常消费 `10.00`：余额 `23580.00 → 23570.00`（恰好 −10.00）、`CARD`/`DEBIT` 流水 +1、`CardConsumption` +1 |
-| `c2-prev-month-tamper` | CASE | **PASS** | 上月伪造时间 `2026-08-01T04:00:00.000Z`（业务月 2026-8）消费 `90.00` → `400` `VALIDATION`「Consumption time is server-owned: 'occurredAt' must not be sent」；余额仍 `23570.00`、无新流水、无新 `CardConsumption` |
+| `s0-virtual-card-100-limit` | SETUP | **PASS** | 虚拟卡 `cmvc0qkyk0002d0f8emp2bjns` 经真实 `POST /api/cards` proposal (`requestId=76cacf06-c349-4f20-b42b-d7e35a853940`, `cardchange_f127acaa5f34d04d8c6548cc8e23c02d`) + `POST /api/cards/changes/[id]/verify` (MFA `123456`) 建立：`type=VIRTUAL`、`status=ACTIVE`、`numberMasked=****3218`、`monthlyLimit=100.00`、`linkedAccountId=acct_checking`（HTTP 与 SQLite 一致） |
+| `c1-consume-normal` | CASE | **PASS** | 正常消费 `10.00`：余额 `23580.00 → 23570.00`（恰好 −10.00）、`CARD`/`DEBIT` 流水 +1、`CardConsumption` +1（服务端落账 `occurredAt=1790308800000`） |
+| `c2-prev-month-tamper` | CASE | **PASS** | 上月伪造时间 `2026-08-01T04:00:00.000Z`（业务月 2026-8）消费 `90.00` → `400` `VALIDATION`「Consumption time is server-owned: 'occurredAt' must not be sent」；余额仍 `23570.00`、无新流水、无新 `CardConsumption`、`forgedAmountRows=0` |
 | `c3-month-total-11` | CASE | **PASS** | 正常消费 `1.00`：本业务月该卡入账合计 = `11.00`（期望 `11.00`），`90.00` 从未进入任何月份的入账合计 |
 | `c4-future-tamper` | CASE | **PASS** | 未来时间 `2026-12-24T04:00:00.000Z` 消费 `90.00` → `400` `VALIDATION`（同上文案）；余额仍 `23569.00`、无新流水 |
 | `c5-malformed-tamper` | CASE | **PASS** | 畸形 `occurredAt="not-a-date"` 消费 `90.00` → `400` `VALIDATION`（同上文案）；零副作用 |
@@ -77,7 +90,8 @@ current business month books exactly `11.00`.
 
 Additional ledger cross-checks recorded for `c2`–`c6`: `forgedAmountRows = 0` in every before/after
 snapshot (no row carries the forged `90.00`), and `cardChannelDebitCount` moves only with the two real
-spends (`90 → 91 → 92`), so the refusals created no `channel=CARD`/`direction=DEBIT` ledger rows either.
+spends (`90 → 91 → 92`, month debit total `11778.07 → 11788.07 → 11789.07`), so the refusals created no
+`channel=CARD`/`direction=DEBIT` ledger rows either.
 
 The refusal is an up-front `VALIDATION` on the presence of the key — not a silent strip: the body is
 rejected before any booking, which is exactly why `occurredAt: null` and `"not-a-date"` are refused with
