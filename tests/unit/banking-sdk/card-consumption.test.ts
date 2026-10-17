@@ -12,6 +12,11 @@
  *   - `consumeCard` debits the bound account with an atomic sufficient-funds write and writes a
  *     `channel='CARD'` ledger row plus a positive `CardConsumption` row in ONE transaction, guarded by
  *     the card's monthly limit and its `ACTIVE` + bound state;
+ *   - the booking instant is SERVER-owned: it comes from the project business clock (`demoNow()`,
+ *     UTC+08:00 semantics) and the billing month the limit is counted against is derived from that
+ *     SAME instant. `ConsumeCardInput` therefore carries no `occurredAt`, and a runtime object that
+ *     still supplies a DEFINED one is rejected with `VALIDATION` before any read/write; the only seam
+ *     is the test-only `ConsumeCardOptions` second argument (`{ now }`);
  *   - an `executionKey` replays the PERSISTED original result (never a second charge) and is rejected
  *     when it is reused for another card/user or when the snapshot is missing;
  *   - `listCardConsumptions` is owner-scoped, newest-first, card-filterable and limit-capped;
@@ -30,7 +35,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { banking } from '@/banking-sdk';
-import type { ApplyVirtualCardInput, CardView, ConsumeCardResult } from '@/banking-sdk/types';
+import type { ApplyVirtualCardInput, CardView, ConsumeCardInput, ConsumeCardResult } from '@/banking-sdk/types';
 import { demoMonthRange, demoNow } from '@/lib/clock';
 import { AppError } from '@/lib/errors';
 import { centsToMoney, moneyToCents } from '@/lib/money';
@@ -75,6 +80,15 @@ async function capture(fn: () => Promise<unknown>): Promise<unknown> {
 function expectCode(error: unknown, code: string): void {
   expect(error).toBeInstanceOf(AppError);
   expect((error as AppError).code).toBe(code);
+}
+
+/**
+ * A request that still claims its own booking instant. `ConsumeCardInput` deliberately has no
+ * `occurredAt` (the instant is SERVER-owned), so a cast is the only way to express the stale shape an
+ * older caller / resumed plan node / HTTP body can still carry at RUNTIME — which is rejected.
+ */
+function claimingInstant(input: { userId: string; cardId: string; amount: string; occurredAt: unknown }): ConsumeCardInput {
+  return input as ConsumeCardInput;
 }
 
 /** Issue a VIRTUAL card for the demo user (optionally overriding the binding / monthly limit). */
@@ -244,14 +258,18 @@ describe('banking-sdk · consumeCard happy path', () => {
     const card = await issueVirtual({ monthlyLimit: '5000.00' });
     const occurredAt = demoNow();
 
-    const result: ConsumeCardResult = await banking.card.consumeCard({
-      userId: DEMO_USER_ID,
-      cardId: card.id,
-      amount: '100.50',
-      category: '餐饮',
-      merchant: '测试商户',
-      occurredAt,
-    });
+    // The booking instant is SERVER-owned: it is injected through the test-only `options.now` second
+    // argument, never through the public input set (a runtime `occurredAt` input is now `VALIDATION`).
+    const result: ConsumeCardResult = await banking.card.consumeCard(
+      {
+        userId: DEMO_USER_ID,
+        cardId: card.id,
+        amount: '100.50',
+        category: '餐饮',
+        merchant: '测试商户',
+      },
+      { now: occurredAt },
+    );
 
     // The returned view is exact canonical CNY text.
     expect(result.consumption.amount).toBe('100.50');
@@ -329,16 +347,46 @@ describe('banking-sdk · consumeCard monthly limit', () => {
     expect(result.accountAvailableBalance).toBe('11580.00');
   });
 
-  it('does not consume this month\'s limit for a spend in a previous business month', async () => {
+  it('books every spend in the current business month and cannot escape the current monthly limit', async () => {
     const card = await issueVirtual({ monthlyLimit: '5000.00' });
-    const previousMonth = demoMonthRange().start.getTime() - 1;
+    const monthStart = demoMonthRange().start.getTime();
 
-    const previous = await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '4900.00', occurredAt: previousMonth });
-    // The ¥4,900 spent LAST month must not shrink this month's remaining ¥5,000 allowance.
-    expect(previous.card.payableAmount).toBe('5000.00');
+    // (a) The caller no longer owns the booking instant, so a spend can never be back-dated out of the
+    // current billing month: the stale shape is refused with VALIDATION and nothing is charged.
+    const backdated = claimingInstant({ userId: DEMO_USER_ID, cardId: card.id, amount: '4900.00', occurredAt: monthStart - 1 });
+    expectCode(await capture(() => banking.card.consumeCard(backdated)), 'VALIDATION');
+    expect(await balanceOf()).toBe('23580.00');
+    expect(await db().cardConsumption.count({ where: { cardId: card.id } })).toBe(0);
 
-    const current = await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '100.00', occurredAt: demoNow() });
-    expect(current.card.payableAmount).toBe('4900.00');
+    // (b) Without any caller instant the spend is booked at the server's business clock (`demoNow()`),
+    // which sits inside the current UTC+08:00 billing month — so it DOES consume this month's limit.
+    const booked = await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '4900.00' });
+    expect(booked.consumption.occurredAt).toBe(demoNow());
+    expect(demoNow()).toBeGreaterThanOrEqual(monthStart);
+    expect(demoNow()).toBeLessThan(demoMonthRange().end.getTime());
+    // Balance ¥18,680 is still far above the remaining ¥100 → the limit is the binding constraint.
+    expect(booked.card.payableAmount).toBe('100.00');
+
+    const exhausted = await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '100.00' });
+    expect(exhausted.card.payableAmount).toBe('0.00');
+    expectCode(
+      await capture(() => banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '100.01' })),
+      'LIMIT_EXCEEDED',
+    );
+    expect(await db().cardConsumption.count({ where: { cardId: card.id } })).toBe(2);
+
+    // (c) A booking pinned by the server-side seam exactly at the month boundary lands in the NEW
+    // business month, so it counts against the current month's limit of that card (¥5,000 − ¥100).
+    const fresh = await issueVirtual({ monthlyLimit: '5000.00' });
+    const atBoundary = await banking.card.consumeCard(
+      { userId: DEMO_USER_ID, cardId: fresh.id, amount: '100.00' },
+      { now: demoMonthRange().start },
+    );
+    expect(atBoundary.consumption.occurredAt).toBe(monthStart);
+    expect(atBoundary.card.payableAmount).toBe('4900.00');
+
+    // 4,900 + 100 on the first card and 100 on the second — 23,580 − 5,100.
+    expect(await balanceOf()).toBe('18480.00');
   });
 });
 
@@ -420,7 +468,11 @@ describe('banking-sdk · consumeCard input validation', () => {
     // Money is exact: sub-cent precision is refused, never rounded.
     expectCode(await capture(() => banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '1.234' })), 'VALIDATION');
     expectCode(await capture(() => banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '1.00', category: '不存在的类别' })), 'VALIDATION');
-    expectCode(await capture(() => banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: card.id, amount: '1.00', occurredAt: 1.5 })), 'VALIDATION');
+    // A caller-supplied instant is refused by the server-owned-time guard (before any read/write).
+    expectCode(
+      await capture(() => banking.card.consumeCard(claimingInstant({ userId: DEMO_USER_ID, cardId: card.id, amount: '1.00', occurredAt: 1.5 }))),
+      'VALIDATION',
+    );
 
     expect(await db().cardConsumption.count()).toBe(0);
     expect(await balanceOf()).toBe('23580.00');
@@ -530,10 +582,12 @@ describe('banking-sdk · listCardConsumptions', () => {
     const second = await issueVirtual({ monthlyLimit: '5000.00' });
     const at = demoNow();
 
-    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: first.id, amount: '1.00', occurredAt: at - 3000 });
-    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: first.id, amount: '2.00', occurredAt: at - 2000 });
-    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: first.id, amount: '3.00', occurredAt: at - 1000 });
-    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: second.id, amount: '4.00', occurredAt: at - 500 });
+    // Distinct instants are injected through the test-only `options.now` seam (the input set has no
+    // `occurredAt`), so the newest-first ordering assertions stay meaningful.
+    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: first.id, amount: '1.00' }, { now: at - 3000 });
+    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: first.id, amount: '2.00' }, { now: at - 2000 });
+    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: first.id, amount: '3.00' }, { now: at - 1000 });
+    await banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: second.id, amount: '4.00' }, { now: at - 500 });
     return { firstId: first.id, secondId: second.id, at };
   }
 
