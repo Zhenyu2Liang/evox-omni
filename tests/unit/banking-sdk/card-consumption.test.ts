@@ -28,11 +28,11 @@
  * `card_credit` (CREDIT, ¥18,000 monthly limit) and `card_debit` (DEBIT, unbound). Neither seeded card
  * is account-bound, so these specs issue VIRTUAL cards through the SDK itself.
  *
- * NOTE: `CardConsumption` declares no relations, so the shared `truncateAll()` (written before this
- * ledger existed) does not clear it; the suite clears it in `beforeEach` so every test starts from a
- * genuinely empty spend history.
+ * NOTE: `useFreshDatabase()` resets through the shared `truncateAll()`, which clears EVERY model of
+ * the schema — including the relation-free `CardConsumption` ledger — so every test starts from
+ * a genuinely empty spend history without an extra hook.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { banking } from '@/banking-sdk';
 import type { ApplyVirtualCardInput, CardView, ConsumeCardInput, ConsumeCardResult } from '@/banking-sdk/types';
@@ -46,14 +46,6 @@ import { withInjectedWriteFailure } from '../../helpers/write-failure';
 useFreshDatabase();
 
 const db = () => getTestPrisma();
-
-/**
- * `truncateAll()` predates `CardConsumption` (a relation-free ledger), so it survives a reset.
- * Truncate it here — registered AFTER `useFreshDatabase()`'s hook, so it runs on the fresh world.
- */
-beforeEach(async () => {
-  await db().cardConsumption.deleteMany();
-});
 
 /** The user's default CHECKING account (¥23,580) — the fallback settlement account. */
 const CHECKING = 'acct_checking';

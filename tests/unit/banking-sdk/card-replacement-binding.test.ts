@@ -29,11 +29,11 @@
  * (SAVINGS ¥50,000 — never a valid settlement account); the seed ships no VIRTUAL card, so these
  * specs issue them through the SDK (`applyVirtualCard`) exactly like the production path.
  *
- * NOTE: `CardConsumption` declares no relations, so the shared `truncateAll()` does not clear it;
- * the suite clears it in a `beforeEach` registered AFTER `useFreshDatabase()`, so every spec starts
- * from a genuinely empty spend history.
+ * NOTE: `useFreshDatabase()` resets through the shared `truncateAll()`, which clears EVERY model of
+ * the schema — including the relation-free `CardConsumption` ledger — so every spec starts from
+ * a genuinely empty spend history without an extra hook.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { banking } from '@/banking-sdk';
 import type { ApplyVirtualCardInput, CardView } from '@/banking-sdk/types';
@@ -46,11 +46,6 @@ import { DEMO_USER_ID } from '../../helpers/fixtures';
 useFreshDatabase();
 
 const db = () => getTestPrisma();
-
-/** `truncateAll()` predates the relation-free `CardConsumption` ledger, so clear it explicitly. */
-beforeEach(async () => {
-  await db().cardConsumption.deleteMany();
-});
 
 /** The user's default CHECKING account (¥23,580) — the only valid settlement account in the seed. */
 const CHECKING = 'acct_checking';
