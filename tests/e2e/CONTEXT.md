@@ -1,4 +1,4 @@
-# 真实浏览器验收
+﻿# 真实浏览器验收
 
 ## 入口与隔离
 
@@ -39,12 +39,18 @@ live 数据库文件为 `prisma/live-acceptance.db`（含 `-wal`/`-shm`/`-journa
 场景 `7`（`scenarioCommittedContinuationFailed`）不在 `SCENARIOS` 中，恒为最后阶段。
 场景契约为 `{ id, name, run(ctx): Promise<string>, skipReason? }`，`run` 返回一条证据串。
 新增场景：定义 `run`、加入 `SCENARIOS` 并使用唯一 `id`/`name`。
-`driveRedTool`（`live-acceptance.e2e.ts:523`）用有界自然中文轮次驱动 RED 工具并提交 MFA `123456`。
+`driveRedTool`（`live-acceptance.e2e.ts:534`）用有界自然中文轮次驱动 RED 工具并提交 MFA `123456`。
 `lA`（`scenarioCreditReplace`）经 `/agent` 挂失并补办信用卡，断言真实 `/cards` 页与 `GET /api/cards`。
-`lA` 的二次补卡腿只用确定性 `GET /api/cards` 核对（仍恰 3 张、唯一 ACTIVE 信用卡 id 不变），允许模型重放、返回既有结果或明确拒绝，不要求再次生成 MFA。
+`lA` 的二次补卡腿只用确定性 `GET /api/cards` 核对（仍恰 4 张 = 1 张补办 ACTIVE 信用卡 + 1 张 LOST 源卡 + `card_debit` + `card_virtual`、唯一 ACTIVE 信用卡 id 不变），允许模型重放、返回既有结果或明确拒绝，不要求再次生成 MFA。
 `lB`（`scenarioPartialRedeem`）经 `/agent` 追加申购再部分赎回理财，断言 `/investments`、账本与 `holding_wenjiana` 的 `principalAmountMinor`/`estimatedMarketValue`。
 `lC`（`scenarioVirtualCardConsume`，id `lC-live-virtual-card-consumption`）经 `/agent` 确认既有虚拟卡 `card_virtual`，经 `/cards` 消费对话框在限额内消费；断言恰好一笔 `channel=CARD`/`direction=DEBIT` 的 `Transaction`（精确金额）、一条 `CardConsumption`、检查账户余额仅扣减一次、虚拟卡可支付金额更新为 `min(可用余额, 剩余月限额)`；并用 `helpers.ts#assertNoFabricatedConfirmationPanel` 守卫 RED 驱动腿，同时断言卡片总数不变（不重复生成虚拟卡）。
 种子含 3 张 ACTIVE 卡：`card_credit`（CREDIT）、`card_debit`（DEBIT）、`card_virtual`（VIRTUAL，绑定 `acct_checking`，月限额 `5000.00`，无信用额度）；`lA`/`lC` 与 mock 的 `multi-card-freeze-audit-history` 均据该集合按类型/状态断言。
+
+消费记账时间由服务端拥有：`app/cards/CardConsumeDialog.tsx` 只提交 `amount`/`category`/`merchant`，
+`banking-sdk/card.ts#consumeCard` 用 `demoNow()`（UTC+08:00 月窗口）落账，没有 `occurredAt` 入参。
+因此 `tests/e2e` 中没有任何调用向 `POST /api/cards/[id]/consume` 发送 `occurredAt`（带该响应体键会被 400 `VALIDATION` 拒绝且不移动资金），
+消费断言只核对渲染金额、余额、流水与 `CardConsumption`，从不断言客户端指定时间。
+`helpers.ts:176` 的 `occurredAt` 是 `seedStandaloneWedge` 内 `tx.executionReceipt.create` 的 `resultJson` 持久化字段（`f-wedge-refresh-recover` 夹具），不是请求体。
 
 场景覆盖业务决定、刷新、恢复、人工接管与对话历史。
 还覆盖本地化、移动布局、卡片管理和开发者模式。
@@ -101,18 +107,3 @@ live 超时或未发起业务必须按实际失败记录。
 
 本地浏览器测试不证明集群并发或真实银行接入。
 测试命令也不会自动完成生产构建验收。
-
-## 已知失败断言（mock 入口 acceptance.e2e.ts）
-
-`c-plan-pause-resume`（`journeyPlanPauseResume`，`acceptance.e2e.ts:290`）与
-`j-circuit-breaker-lock`（`journeyCircuitBreakerLock`，`acceptance.e2e.ts:694`）在 mock 入口稳定失败，根因均在业务源，非测试侧：
-
-- 计划节点标签：`PLAN_NODE_ANALYZE = '查询消费情况'`（`acceptance.e2e.ts:131`，断言于 `:299` 的 `waitForNodeStatus`）无任何源产生。
-  mock 计划把 analyze 节点命名为英文字面量 `'Analyze spending'`（`agent/providers/mock/plan-intents.ts:42,52`）。
-  该名字经 `agent/tools/plan-compiler.ts` 原样落库为 `TaskNodeSpec.name`，由 `components/banking/AgentTaskTimeline.tsx:106` 经 `localizeToolLabel` 渲染（`helpers.ts:1445` 读该 `span`）。
-  `localizeToolLabel` 查 `chat.tool.Analyze spending` 无此键，回退 `lib/i18n/messages/display-sources.json#tools`（其键为中文，如 `"消费分析": "chat.tool.analyze_spending"`），故原样透出→渲染为 `Analyzespending`，断言 90s 超时。
-  正确修复需改 `agent/providers/mock/plan-intents.ts` 或补 i18n 映射（业务源）。
-- MFA 失败状态：`acceptance.e2e.ts:721` 等待 `cards.mfa.failedAttempts`（`lib/i18n/messages/chat.zh-CN.json:137` = `验证失败，已尝试 {attempts} 次。`）。
-  实际渲染的是 `cards.mfa.failedAttemptsLimit`（`chat.zh-CN.json:138` = `验证失败，已尝试 {attempts} 次，最多 {maxAttempts} 次。`）——
-  `components/chat/ChatWindow.tsx:238` 恒传 `maxAttempts={MFA_MAX_ATTEMPTS}`（`lib/constants.ts:10` = 3），使 `components/chat/cards/MfaCard.tsx:96-98` 永远走 limit 分支。
-  因 `waitForStatusText`（`helpers.ts:1182`，去空白后 `includes`）匹配 `...已尝试1次。` 而非 `...已尝试1次，最多3次。`，首个错误码即超时。`failedAttempts` 明文在 live dock 中从不渲染。
