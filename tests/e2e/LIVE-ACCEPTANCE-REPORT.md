@@ -15,6 +15,8 @@ The runs below are the proof, at the current HEAD, that it is unchanged.
 
 | Evidence set | Certifies commit | Product tree | Verdict | Exit code |
 | --- | --- | --- | --- | --- |
+| `lD` round 3 (`REPORT-lD-head7a7a4d3-round3.md`) | `0c50e2f` | ≡ `7a7a4d3` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
+| `lE` round 3 (`REPORT-lE-head7a7a4d3-round3.md`) | `0c50e2f` | ≡ `7a7a4d3` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `lD` round 2 (`REPORT-lD-head7a7a4d3-round2.md`) | `fa36508` | ≡ `7a7a4d3` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `lE` round 2 (`REPORT-lE-head7a7a4d3-round2.md`) | `339c50b` | ≡ `7a7a4d3` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `date-tamper-boundary.e2e.ts` (`output/playwright/REPORT-date-tamper-boundary.md`) | `fa36508` | ≡ `7a7a4d3` | **PASS 8 / FAIL 0 / SKIP 1** | `0` |
@@ -22,14 +24,19 @@ The runs below are the proof, at the current HEAD, that it is unchanged.
 
 Every set above is certified against the same product tree.
 `git diff --stat 7a7a4d3 HEAD -- banking-sdk agent security planner lib app components prisma scripts` → empty output,
-so the four sets together certify the card-instant product tree regardless of which evidence-only commit was HEAD
+so every set above together certifies the card-instant product tree regardless of which evidence-only commit was HEAD
 when each ran (`git diff --name-only 7a7a4d3 HEAD` lists evidence reports and PNGs only).
 
 `lD` round 1 and `lE` round 1 are kept as separate rounds in this same product tree.
 Their printed summary line was `PASS 1 / FAIL 0 / SKIP 0` each, but their `EXIT=` line was produced by the
 `%ERRORLEVEL%` method below, which is proven not to carry a child's exit code — so round 1 does **not** certify
-an exit code. Round 2 re-ran the identical assertions in a fresh process with a proven capture, and is the round
-whose exit code counts. Nothing was deleted or weakened to reach a green round.
+an exit code. Rounds 2 and 3 re-ran the identical assertions, each in its own fresh process against a
+re-provisioned database and a proven capture; those are the rounds whose exit codes count.
+Nothing was deleted or weakened to reach a green round.
+
+**Certified rounds per flow at this product tree** — `lD`: 3 executed, 2 exit-certified (rounds 2 and 3);
+`lE`: 3 executed, 2 exit-certified (rounds 2 and 3). Each round is an independent process, browser and
+re-provisioned SQLite file, so the three rounds are independent of one another rather than replays.
 
 ## How "live" is proven
 
@@ -52,9 +59,9 @@ Two independent signals are required per run, and a printed `PASS` with a non-ze
   propagated with `exit !EC!`.
 
 The `cmd /c "…"` + separate `cmd /c "echo EXIT=%ERRORLEVEL%"` form is invalid: `%ERRORLEVEL%` expands at parse
-time, so it reports the value from before the program ran. Both round-2 reports carry control experiments proving
-the adopted method reports `7` for `process.exit(7)` (and `0` for `process.exit(0)`), and that the discarded method
-reports `0` for the same `exit 7` program.
+time, so it reports the value from before the program ran. Every round-2 and round-3 report carries control
+experiments proving the adopted method reports `7` for `process.exit(7)` (and `0` for `process.exit(0)`), and that
+the discarded method reports `0` for the same `exit 7` program.
 
 ## `lD` — virtual card apply + monthly-limit enforcement
 
@@ -101,6 +108,42 @@ Card id `cardidem_c9d4e2a18b5823d8e71913e140f25b13`, mask `****1418`.
 The `apply_virtual_card` receipt's `resultJson.card.payableAmount` is `"70.00"` — the enforced month's remainder,
 i.e. the snapshot resolves the month at the enforced instant.
 Payable is the server projection `min(account available cash, remaining monthly allowance)`, not a model-invented number.
+
+### `lD` round 3 (`0c50e2f`, product tree ≡ `7a7a4d3`)
+
+Fresh process, fresh `prisma/live-acceptance.db`, same real browser:
+
+```powershell
+$env:LIVE_SCENARIOS='lD'; cmd /v:on /c "pnpm exec tsx tests/e2e/live-acceptance.e2e.ts > logs\live-lD-head-round3.log 2>&1 & set EC=!ERRORLEVEL! & echo EXIT=!EC! >> logs\live-lD-head-round3.log & exit !EC!"; exit $LASTEXITCODE
+```
+
+Both signals: tool-reported process exit code `0`, log line `EXIT=0`.
+Summary `== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==`, wall clock `38.55 s`, port `55343`, dev-server pid `58284`.
+
+**Prompt actually sent** (turn 1; zero nudges, zero continuations): `请帮我新开一张虚拟卡，月消费限额设为100元`.
+The consume and over-limit legs are pure `/cards` dialog submissions — 0 model turns.
+
+**Raw `Card` row**: `cardidem_974723860f5e22adc06772726460e218`, `type=VIRTUAL`, `status=ACTIVE`,
+`network=UnionPay`, `numberMasked=****2003`, `monthlyLimitMinor=10000`, `linkedAccountId=acct_checking`,
+`creditLimitMinor=null`, `availableLimitMinor=null`, `replacedByCardId=null`.
+
+**Money movement**: checking balance `2358000` → `2355000`;
+`channel=CARD` / `direction=DEBIT` `Transaction` `cmvc1o8o200418sf8ixspw918` (−`3000`, merchant `虚拟卡开卡消费验证`) +
+`CardConsumption` `cmvc1o8o300428sf8cdofet99` (`3000`). Rendered tile rows:
+after apply `{"账户可用余额":"¥23,580.00","当前可支付金额":"¥100.00"}`, after spend
+`{"账户可用余额":"¥23,550.00","当前可支付金额":"¥70.00"}`; dialog summary
+`{"关联账户":"****8821","账户可用余额":"¥23,580.00","月限额":"¥100.00","当前可支付金额":"¥100.00"}`.
+Over-limit `80.00` → HTTP `422 LIMIT_EXCEEDED` `超过虚拟卡月限额。`, on-screen `超出本月消费限额`,
+payable stays `70.00`, zero balance / `Transaction` / `CardConsumption` movement.
+
+**Gate-row caveat for this round**: the isolated DB is reprovisioned by the next run, and `lE` round 3 ran
+afterwards against the same file, so `lD`'s own `PendingAction` / `MfaChallenge` / `ToolInvocation` rows are no
+longer dumpable. Nothing was invented to fill the gap: this round's panel facts rest on the scenario's enforced
+assertions plus its PASS evidence line (`MFA 123456 → 新虚拟卡 …`), with `lE`'s dumped rows as corroboration only.
+Rounds 1–2 own their dumped gate rows.
+
+**Screenshots** (`output/playwright/live/lD-head7a7a4d3-round3/`): `01-lD-new-virtual-card.png`,
+`02-lD-after-spend.png`, `03-lD-over-limit-refusal.png`.
 
 ## `lE` — 挂失 → 补办 → consume on the new card
 
@@ -152,6 +195,57 @@ three panels all backed by real rows.
 
 Both consumption rows carry `occurredAt=2026-09-25T04:00:00.000Z`; no request body sent an `occurredAt`.
 
+### `lE` round 3 (`0c50e2f`, product tree ≡ `7a7a4d3`)
+
+Separate process after `lD` round 3 (shared test DB must never overlap), same proven capture:
+
+```powershell
+$env:LIVE_SCENARIOS='lE'; cmd /v:on /c "pnpm exec tsx tests/e2e/live-acceptance.e2e.ts > logs\live-lE-head-round3.log 2>&1 & set EC=!ERRORLEVEL! & echo EXIT=!EC! >> logs\live-lE-head-round3.log & exit !EC!"; exit $LASTEXITCODE
+```
+
+Both signals: tool-reported process exit code `0`, `EXIT=0`; summary `== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==`,
+`49.08 s`, port `64156`, dev-server pid `43036`.
+
+**Prompts actually sent** (each leg resolved on turn 1, no nudge):
+
+```
+开卡 : 请帮我新开一张虚拟卡，月消费限额设为100元
+挂失 : 我刚才新办的那张虚拟卡（尾号4348，月限额100元）丢失了，请帮我正式挂失这张卡
+补办 : 请为我刚才挂失的虚拟卡（原卡尾号4348）补办一张新卡
+```
+
+Tail `4348` is the mask the harness had just created — no invented data.
+
+**Tool calls** (all `completed`, `attempt=1`, `origin=pi`): `describe_turn apply_virtual_card` →
+`apply_virtual_card {"monthlyLimit":"100"}` → `describe_turn report_lost_card` → `get_cards {}` →
+`report_lost_card {"cardId":"<source>","reason":"用户表示虚拟卡（尾号4348）丢失，申请正式挂失"}` →
+`describe_turn replace_card` → `replace_card {"cardId":"<source>"}`.
+
+**Panel reality** (`logs/live-round3-db.json`): three `PendingAction` rows, `riskLevel=RED`, `requiresMfa=true`,
+`status=executed`, `argsJson` normalized (`apply_virtual_card` → `{"monthlyLimit":"100.00"}`); three `MfaChallenge`
+rows, code `123456`, `attempts=0/3`, `status=verified` (`verifiedAt` `06:58:22.594Z`, `06:58:35.682Z`,
+`06:58:38.851Z`).
+
+**Raw `Card` cross-check**:
+
+- Source `cardidem_a0bf16b0dc3c770b43a656c69da38384` (`****4348`) → `LOST`,
+  `replacedByCardId=cmvc1pci500gl6kf8xwue5yfy`.
+- Replacement `cmvc1pci500gl6kf8xwue5yfy` (`****5448`) `VIRTUAL` / `ACTIVE`, `monthlyLimitMinor=10000`,
+  **`linkedAccountId=acct_checking` inherited** from the source, credit fields null.
+- Allowance continuity: `100.00` → `70.00` → **`70.00` after 补办** → `0.00` → `0.00` (refused `1.00`).
+- Pre-lost `30.00` spend: `Transaction` `cmvc1p2jh00456kf8rhwxniug` (−`3000`) + `CardConsumption`
+  `cmvc1p2ji00466kf8u4ze9cfs` (`3000`, `cardId`=source), balance `2358000` → `2355000`.
+- Post-补办 `70.00` spend on the new card, exactly once: `Transaction` `cmvc1pdn700h16kf8yu8422d2` (−`7000`) +
+  `CardConsumption` `cmvc1pdn800h26kf8biovrmpp` (`7000`, `cardId`=replacement), balance `2355000` → `2348000`.
+- Exactly **2** `CardConsumption` rows in total, distinct `executionKey`s (`63f9e331-…`, `747632fd-…`), both
+  `occurredAt=2026-09-25T04:00:00.000Z`; no request body carried `occurredAt`.
+- Refused `1.00` after exhaustion → `422 LIMIT_EXCEEDED` `超过虚拟卡月限额。`, zero
+  `Transaction` / `CardConsumption`, balance unchanged.
+- Available credit not doubled: the only non-`LOST` `CREDIT` row is `card_credit` (`1800000` = ¥18,000.00).
+
+**Screenshots** (`output/playwright/live/lE-head7a7a4d3-round3/`): `01-lE-replacement-card.png`,
+`02-lE-exhausted-refusal.png`.
+
 ## Date-tampering boundary — a separate entry from the browser flows
 
 `tests/e2e/date-tamper-boundary.e2e.ts` sends raw HTTP to the running app against **its own isolated DB
@@ -196,8 +290,11 @@ receipt exactly once; `h-investment-flow` `−1000.00` DEBIT / `+6178.36` CREDIT
   not from a dashboard API read.
 - **`lD` over-limit HTTP status** was read from the harness network log (`[4xx/5xx] POST 422 … LIMIT_EXCEEDED`)
   plus the on-screen `role="alert"` text; no independent raw-HTTP repro was made for the limit seam.
-- **Single round per scenario** — one independent process each for `lD` and `lE` at this tree.
-  A single green round does not prove long-run model stability.
+- **Model stability is still not proven** — `lD` and `lE` each ran 3 independent rounds here and all 3 passed, but
+  3 rounds bound non-determinism, they do not prove it absent over unlimited runs.
+- **`lD` round 3 gate rows are not dumpable** — the run's `PendingAction` / `MfaChallenge` / `ToolInvocation` rows
+  were destroyed by `lE` round 3 reprovisioning the same isolated DB. Rounds 1–2 own dumped rows; round 3's panel
+  evidence comes from the scenario assertions and its PASS line only.
 - **No production build** (`next build`), no cluster/concurrency, no real banking rail — local single-process demo only.
 - Other nodes' Vitest suites (`tests/unit`, `tests/scenarios`, `tests/app`, `tests/integration`) were not run by this node.
 
@@ -205,11 +302,13 @@ receipt exactly once; `h-investment-flow` `−1000.00` DEBIT / `+6178.36` CREDIT
 
 | Path | Content |
 | --- | --- |
+| `output/playwright/live/REPORT-lD-head7a7a4d3-round3.md` | lD round 3: commit certified, exit-code controls, prompt, tool calls, DB numbers, screenshots, gate-row caveat |
+| `output/playwright/live/REPORT-lE-head7a7a4d3-round3.md` | lE round 3: same shape, plus three panels and allowance continuity |
 | `output/playwright/live/REPORT-lD-head7a7a4d3-round2.md` | lD round 2: commit certified, exit-code controls, prompt, tool calls, gate rows, DB numbers, screenshots |
 | `output/playwright/live/REPORT-lE-head7a7a4d3-round2.md` | lE round 2: same, plus three panels and allowance continuity |
 | `output/playwright/live/REPORT-lD-head7a7a4d3-round1.md`, `…-lE-…-round1.md` | round-1 reports (printed PASS; exit signal not certifiable) |
-| `output/playwright/live/lD-head7a7a4d3-round{1,2}/*.png` | new virtual card, post-spend, over-limit refusal (3 per round) |
-| `output/playwright/live/lE-head7a7a4d3-round{1,2}/*.png` | replacement card with `当前可支付金额 ¥70.00`, exhausted-allowance refusal (2 per round) |
+| `output/playwright/live/lD-head7a7a4d3-round{1,2,3}/*.png` | new virtual card, post-spend, over-limit refusal (3 per round) |
+| `output/playwright/live/lE-head7a7a4d3-round{1,2,3}/*.png` | replacement card with `当前可支付金额 ¥70.00`, exhausted-allowance refusal (2 per round) |
 | `output/playwright/REPORT-mock-suite.md` | mock suite: 23 journeys, exit code, DB file |
 | `output/playwright/REPORT-date-tamper-boundary.md` | date-tamper: 9 cases, exact responses, DB file |
 | `output/playwright/live/REPORT-l{A,B,C}-*.md`, `REPORT-lA-lC-round{1,2}.md` | earlier-cycle per-scenario reports (their provenance is in Git history) |
