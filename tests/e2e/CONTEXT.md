@@ -39,7 +39,7 @@ live 数据库文件为 `prisma/live-acceptance.db`（含 `-wal`/`-shm`/`-journa
 场景 `7`（`scenarioCommittedContinuationFailed`）不在 `SCENARIOS` 中，恒为最后阶段。
 场景契约为 `{ id, name, run(ctx): Promise<string>, skipReason? }`，`run` 返回一条证据串。
 新增场景：定义 `run`、加入 `SCENARIOS` 并使用唯一 `id`/`name`。
-`driveRedTool`（`live-acceptance.e2e.ts:523`）用有界自然中文轮次驱动 RED 工具并提交 MFA `123456`。
+`driveRedTool`（`live-acceptance.e2e.ts:534`）用有界自然中文轮次驱动 RED 工具并提交 MFA `123456`。
 `lA`（`scenarioCreditReplace`）经 `/agent` 挂失并补办信用卡，断言真实 `/cards` 页与 `GET /api/cards`。
 `lA` 的二次补卡腿只用确定性 `GET /api/cards` 核对（仍恰 3 张、唯一 ACTIVE 信用卡 id 不变），允许模型重放、返回既有结果或明确拒绝，不要求再次生成 MFA。
 `lB`（`scenarioPartialRedeem`）经 `/agent` 追加申购再部分赎回理财，断言 `/investments`、账本与 `holding_wenjiana` 的 `principalAmountMinor`/`estimatedMarketValue`。
