@@ -21,20 +21,21 @@
  *   4. the monthly limit is enforced at EXACT minor-unit boundaries (reaching the limit, a `0.00`
  *      limit, and an omitted/`null` limit that is cash-bound only);
  *   5. billing-month attribution follows the pinned instant: a spend booked at the last instant of
- *      the PREVIOUS business month does not consume the new month's allowance, a spend at the FIRST
- *      instant of the new month does, and the default (no seam) spend lands inside `demoMonthRange()`.
+ *      the PREVIOUS business month does not consume the new month's allowance — its own result
+ *      snapshot reports that EARLIER month's remainder while a fresh read still sees the untouched
+ *      new month, a spend at the FIRST instant of the new month does consume it, and the default
+ *      (no seam) spend lands inside `demoMonthRange()`.
  *
  * All money is asserted as exact canonical CNY decimal strings / integer minor units — never floats.
  *
  * Fixtures: demo user 李明 (`acct_checking` CHECKING ¥23,580). The seeded cards are not account-bound,
  * so these specs issue VIRTUAL cards through the SDK itself (bound to `acct_checking`).
  *
- * NOTE: `CardConsumption` declares no relations, so the shared `truncateAll()` (written before this
- * ledger existed) does not clear it. Cleared here in `beforeEach`, registered AFTER
- * `useFreshDatabase()`'s hook so it runs on the freshly reset world — the same pattern
- * `card-consumption.test.ts` uses (both files may run in one process).
+ * NOTE: `useFreshDatabase()` resets through the shared `truncateAll()`, which clears EVERY model
+ * of the schema — including the relation-free `CardConsumption` ledger — so this suite needs
+ * no extra cleanup hook of its own.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { banking } from '@/banking-sdk';
 import type {
@@ -53,10 +54,6 @@ import { DEMO_USER_ID } from '../../helpers/fixtures';
 useFreshDatabase();
 
 const db = () => getTestPrisma();
-
-beforeEach(async () => {
-  await db().cardConsumption.deleteMany();
-});
 
 /** The user's default CHECKING account (¥23,580) — the virtual card's settlement account. */
 const CHECKING = 'acct_checking';
@@ -365,8 +362,11 @@ describe('banking-sdk · billing-month attribution follows the server instant', 
     expect(prior.consumption.occurredAt).toBe(previousMonthEnd);
     expect(prior.consumption.occurredAt).toBeLessThan(month.start.getTime());
     expect(prior.accountAvailableBalance).toBe('23280.00'); // 23580.00 − 300.00
-    // The FULL new-month allowance is still available: the ¥300 belongs to August.
-    expect(prior.card.payableAmount).toBe('1000.00');
+    // The result SNAPSHOT reports the allowance of the month the limit was enforced with — the
+    // August month of `options.now` — so it shows that month's remainder: 1000.00 − 300.00.
+    expect(prior.card.payableAmount).toBe('700.00');
+    // A FRESH read (no seam) is evaluated at `demoNow()`, i.e. September, which the ¥300 never
+    // touched: the FULL new-month allowance is still available.
     expect((await viewOf(card.id)).payableAmount).toBe('1000.00');
 
     // (2) First instant of the new month: counted in September, reducing the allowance.
