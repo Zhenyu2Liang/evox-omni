@@ -80,10 +80,18 @@ export function ensureTestPragmas(): Promise<void> {
 /**
  * Delete every row from every table in **FK-safe order** (children → parents) so the DB is
  * empty. Table order MUST respect relations (MfaChallenge→PendingAction, AgentTaskNode→AgentTask,
- * CardLimit→Card, Transaction→Account, InvestmentHolding→User+InvestmentProduct,
+ * CardLimit→Card, ScheduledNotification→ScheduledTask, ModelRequest/AgentRunEvent/ToolInvocation
+ * →AgentRun, Transaction→Account, InvestmentHolding→User+InvestmentProduct,
  * Card/Account/Subscription/Budget/ScheduledTask/Contact/AgentSession→User, AuditLog/SecurityEvent→User).
- * `ExecutionReceipt` and `CircuitBreakerState` declare no relations, so their position in the order
- * is free.
+ * `ExecutionReceipt`, `CircuitBreakerState`, `AuthorizationDecision`, `RiskSignal` and
+ * `CardConsumption` declare no relations, so their position in the order is free.
+ *
+ * COMPLETENESS IS MANDATORY: this list must name EVERY model of `prisma/schema.prisma`. A declared
+ * `onDelete: Cascade` is NOT a substitute — a table omitted here leaks into the NEXT test (and into
+ * the next RUN of the same file). `CardConsumption` is the cautionary case: relation-free, it kept
+ * per-user spend rows and its UNIQUE `executionKey` across resets, so a repeat run replayed against a
+ * previous run's card id and threw `CONFLICT`. `tests/helpers/db-truncate.test.ts` asserts
+ * model-by-model coverage of this function, so a newly added model cannot be forgotten again.
  * Does NOT re-seed.
  */
 export async function truncateAll(): Promise<void> {
@@ -91,6 +99,7 @@ export async function truncateAll(): Promise<void> {
   const prisma = getTestPrisma();
   await prisma.agentRunEvent.deleteMany();
   await prisma.toolInvocation.deleteMany();
+  await prisma.modelRequest.deleteMany();
   await prisma.agentRun.deleteMany();
   await prisma.authorizationDecision.deleteMany();
   await prisma.riskSignal.deleteMany();
@@ -101,12 +110,16 @@ export async function truncateAll(): Promise<void> {
   await prisma.agentTaskNode.deleteMany();
   await prisma.agentTask.deleteMany();
   await prisma.cardLimit.deleteMany();
+  // Relation-free spend ledger (indexes + a UNIQUE `executionKey` only): no FK forces its deletion,
+  // so it MUST be listed explicitly or rows and replay keys survive the reset.
+  await prisma.cardConsumption.deleteMany();
   await prisma.transaction.deleteMany();
   await prisma.investmentHolding.deleteMany();
   await prisma.card.deleteMany();
   await prisma.account.deleteMany();
   await prisma.subscription.deleteMany();
   await prisma.budget.deleteMany();
+  await prisma.scheduledNotification.deleteMany();
   await prisma.scheduledTask.deleteMany();
   await prisma.contact.deleteMany();
   await prisma.auditLog.deleteMany();
