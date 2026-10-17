@@ -1,20 +1,36 @@
 # 测试约定
 
-## 测试层次
+## 目录与范围
 
 | 目录 | 范围 |
 | --- | --- |
-| `unit/` | 策略、参数、金额、执行器与展示状态 |
-| `scenarios/` | 演示场景与离线模型场景 |
+| `unit/` | 策略、参数、金额、执行器与展示状态；安全、SDK 与执行权用例使用真实 SQLite |
+| `scenarios/` | 编号演示场景 `test-01`…`test-17` 与离线模型场景 |
 | `app/` | 进程内真实路由与 SSE 集成 |
 | `integration/` | 执行、授权、回执、审计与恢复 |
-| `helpers/` | 隔离数据库、夹具与模型脚本 |
-| `e2e/` | 独立的真实浏览器验收 |
+| `helpers/` | 隔离数据库、夹具、模型脚本与进程恢复探针 |
+| `e2e/` | 独立入口的真实浏览器验收与 HTTP 边界用例 |
+| `fixtures/` | 共享的 `*.zh-CN.json` 对话与策略剧本，无本地 CONTEXT.md |
 
-根 `vitest.config.ts` 收集 `tests/` 与 `agent/` 下的测试。
+本目录根部的 `setup.ts` 准备测试库，`deploy-db-push.test.ts` 覆盖 `scripts/db-push.ts` 的冷库自建。
+
+根 `vitest.config.ts` 收集 `tests/**/*.{test,spec}.ts` 与 `agent/**/*.{test,spec}.ts`。
+`.e2e.ts` 与 `.e2e-helper.ts` 不匹配该 include，`pnpm test` 不会运行它们。
+浏览器与边界入口一律用 `pnpm exec tsx <入口>` 单独运行。
 默认使用 mock 模式，不调用真实模型。
-浏览器入口不由 Vitest 收集。
-真实模型验收使用独立 live 入口。
+
+## 入口
+
+| 入口 | 内容 |
+| --- | --- |
+| `e2e/acceptance.e2e.ts` | mock 模型的真实浏览器验收，场景在 `JOURNEYS`，用 `E2E_JOURNEYS` 选择 |
+| `e2e/live-acceptance.e2e.ts` | 真实模型的真实浏览器验收，场景在 `SCENARIOS`，用 `LIVE_SCENARIOS` 选择 |
+| `e2e/date-tamper-boundary.e2e.ts` | 消费入账时间的纯 HTTP 边界用例，无模型、无浏览器 |
+
+`SCENARIOS` 的 id 为 `15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE`。
+`lA` 补办信用卡、`lB` 理财部分赎回、`lC`…`lE` 虚拟卡场景；选择 `2` 会同时选中 `2p`，场景 `7` 恒为最后阶段。
+`e2e/helpers.ts` 与 `*.e2e-helper.ts` 是入口共用的驱动与断言模块，自身不运行。
+入口细节见 [e2e/CONTEXT.md](e2e/CONTEXT.md)。
 
 ## 数据与执行
 
@@ -34,12 +50,23 @@
 需要隔离时重置夹具或创建独立用户。
 仅数据库无关测试可使用 `VITEST_SKIP_DB_SETUP=1`。
 
-## 常用命令
+## 编写测试的不变量
 
-`pnpm test` 运行全部 Vitest 测试。
-`pnpm exec vitest run tests/unit` 运行指定目录。
-`pnpm typecheck` 检查类型。
-`pnpm exec tsx tests/e2e/acceptance.e2e.ts` 运行浏览器验收。
+消费入账时间由服务端拥有：`POST /api/cards/[id]/consume` 与 `consume_virtual_card` 工具都不接受时间参数。
+请求体含 `occurredAt` 键返回 `400 VALIDATION`，工具参数含 `occurredAt` 等客户端时间字段则在调用 SDK 前抛出 `VALIDATION`。
+两种拒绝都不移动资金、不写流水与 `CardConsumption`。
+入账瞬间固定为 `demoNow()`（UTC+08:00 月窗口），断言只核对渲染金额、余额、流水与消费行。
+
+补办卡继承源卡的结算账户，缺失绑定只按显式前驱修复，绝不回退默认账户。
+补办卡与源卡共享同一连续月度额度（`banking-sdk/card-family.ts` 双向遍历 `replacedByCardId`），历史 `CardConsumption` 保持原卡归属不改写。
+
+卡片集合按 id/type/状态断言，不使用固定卡片总数。
+mock 夹具播种 `card_credit`/`card_debit`，演示种子（`prisma/seed.ts`）另有 `card_virtual`。
+`lA` 补办后为「补办 ACTIVE 信用卡 + LOST 源卡 + DEBIT + VIRTUAL」，由类型/状态推导而非硬编码。
+
+`tests/helpers/db.ts#truncateAll()` 清空 `prisma/schema.prisma` 的每一个 model（含无关系的 `CardConsumption`）。
+套件不得在 `useFreshDatabase()`/`resetDatabase()` 之后再自行逐表清理。
+新增 model 必须同时补进 `truncateAll`，否则 `helpers/db-truncate.test.ts` 失败。
 
 ## 面板声称的覆盖
 
@@ -51,9 +78,12 @@
 `unit/planner/mock-amount-clarification.test.ts` 与 `app/nl-entry-http.test.ts` 覆盖「信息不足→澄清，不产生工具调用」，但澄清为结构化 `missing_details` 或纯文本追问，非“面板”声称。
 细节见各子目录 CONTEXT.md。
 
-演示种子当前含 3 张 ACTIVE 卡；下列 e2e 用例仍按 2 张卡断言，与当前种子不符（属并行工作流、对本节点只读，尚未修复）：
-`tests/e2e/card-freeze.e2e-helper.ts:20` 断言恰有 2 张 ACTIVE 卡；
-`tests/e2e/live-acceptance.e2e.ts:1163` 与 `:1204-1205` 断言补卡后卡总数为 3。
+## 常用命令
+
+`pnpm test` 运行全部 Vitest 测试。
+`pnpm exec vitest run tests/unit` 运行指定目录。
+`pnpm typecheck` 检查类型。
+`pnpm exec tsx tests/e2e/acceptance.e2e.ts` 运行浏览器验收。
 
 ## 证据范围
 
