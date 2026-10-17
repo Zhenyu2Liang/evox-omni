@@ -31,6 +31,21 @@
  * account (`Card.linkedAccountId`), and `consumeCard` is the single SDK capability that spends from
  * a card — it debits that account with an atomic sufficient-funds write and writes a `channel='CARD'`
  * ledger row plus a `CardConsumption` row in ONE transaction, guarded by the card's monthly limit.
+ *
+ * CONSUMPTION TIME IS SERVER-OWNED. `consumeCard` stamps the booking instant from the project
+ * business clock (`demoNow()`, UTC+08:00 semantics) and derives the monthly-limit window from that
+ * same instant, so a caller cannot back-date a spend out of the current billing month. The public
+ * parameter set (`ConsumeCardInput`) therefore has no `occurredAt`; a runtime object that still
+ * carries a DEFINED `occurredAt` is rejected with `AppError('VALIDATION')` before any write. The
+ * only way to pin the clock is the separate, test-only `ConsumeCardOptions` second argument.
+ *
+ * MONTHLY SPEND IS FAMILY-CONTINUOUS. `Card.replacedByCardId` records a 补办 as a NEW card row and
+ * the spend history is never rewritten, so the current month's spend of a replaced card belongs to
+ * the whole replacement family (see `./card-family`). Both the enforced limit in `consumeCard` and
+ * the derived `payableAmount` of the projection read that ONE family number, so the allowance the
+ * user sees and the allowance the SDK enforces cannot diverge. A VIRTUAL replacement inherits and
+ * RE-VALIDATES its predecessor's settlement account (a broken binding is restored only from that
+ * explicit source link, never from a guessed default account).
  */
 import type {
   Account as AccountRow,
@@ -42,12 +57,13 @@ import { accounts, cards } from '../lib/db/repositories';
 import { dbClient } from '../lib/db/client';
 import { AppError } from '../lib/errors';
 import { centsToMoney, moneyToCents } from '../lib/money';
-import { demoMonthRange, demoNow } from '../lib/clock';
+import { demoNow } from '../lib/clock';
 import { idempotentCardId, isUniqueViolation, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction, type Tx } from './tx';
 import type { AddDemoCardRequest } from '../lib/contracts/card-management';
 import { safeParse, toJson } from '../lib/json';
 import { SPENDING_CATEGORIES } from './categories';
+import { cardFamilyMonthSpend } from './card-family';
 import type {
   ApplyVirtualCardInput,
   CardConsumptionQuery,
@@ -56,6 +72,7 @@ import type {
   CardType,
   CardView,
   ConsumeCardInput,
+  ConsumeCardOptions,
   ConsumeCardResult,
   ReportLostCardInput,
   SetCardLimitInput,
@@ -111,29 +128,26 @@ function toCardView(row: CardRow, limits: CardLimitRow[], extras?: CardViewExtra
 }
 
 /**
- * Sum of this card's `CardConsumption` rows within the current business month (CNY minor units).
- * Uses the demo (UTC+08:00) calendar so the monthly limit and the spend analysis agree.
+ * Sum of `cardId`'s current business-month spend, attributed to its whole replacement FAMILY (CNY
+ * minor units). Delegates to `./card-family` so the enforced limit and the displayed
+ * `payableAmount` are literally the same number; `dbClient()` keeps it inside an ambient transaction.
  */
-async function spentThisMonthMinor(cardId: string): Promise<bigint> {
-  const { start, end } = demoMonthRange();
-  const rows = await dbClient().cardConsumption.findMany({
-    where: { cardId, occurredAt: { gte: start, lt: end } },
-    select: { amountMinor: true },
-  });
-  return rows.reduce((total, row) => total + row.amountMinor, 0n);
+async function spentThisMonthMinor(cardId: string, userId: string): Promise<bigint> {
+  return cardFamilyMonthSpend(dbClient(), cardId, userId);
 }
 
 /**
  * Map a card row onto a `CardView`, loading its per-category limits and — for an account-bound card
  * — the linked account's masked number, balance and current payable amount. This is the single
- * async enriched mapper every CardView-returning function uses.
+ * async enriched mapper every CardView-returning function uses. The spend it derives `payableAmount`
+ * from is the FAMILY's, so a 补办 card immediately shows the remaining allowance of its predecessor.
  */
 async function loadCardView(row: CardRow): Promise<CardView> {
   const limits = await cards.listCardLimits(row.id);
   if (!row.linkedAccountId) return toCardView(row, limits);
   const account = await accounts.getAccount(row.linkedAccountId);
   if (!account) return toCardView(row, limits);
-  return toCardView(row, limits, { account, spentMinor: await spentThisMonthMinor(row.id) });
+  return toCardView(row, limits, { account, spentMinor: await spentThisMonthMinor(row.id, row.userId) });
 }
 
 /** Map a persisted consumption row onto the frozen `CardConsumptionView` DTO. */
@@ -173,6 +187,66 @@ async function resolveLinkedAccount(tx: Tx, userId: string, requestedId?: string
   if (!fallback) throw new AppError('VALIDATION', '没有可用于绑定虚拟卡的活期账户', { userId });
   return fallback;
 }
+
+/**
+ * Re-validate a RECORDED settlement binding inside the current transaction: the account row must
+ * exist, belong to `userId` and be a CHECKING account. `Card.linkedAccountId` is a historical
+ * reference (not a relation), so the account can drift out from under it — any drift is an explicit
+ * `CONFLICT` and is NEVER repaired by guessing another account.
+ */
+async function requireSettlementAccount(
+  tx: Tx,
+  userId: string,
+  cardId: string,
+  linkedAccountId: string,
+): Promise<AccountRow> {
+  const account = await tx.account.findFirst({ where: { id: linkedAccountId, userId } });
+  if (!account) {
+    throw new AppError('CONFLICT', '卡片绑定的结算账户不存在或不属于该用户。', { cardId, linkedAccountId });
+  }
+  if (account.type !== 'CHECKING') {
+    throw new AppError('CONFLICT', '卡片绑定的账户不是活期账户。', { cardId, accountId: account.id, type: account.type });
+  }
+  return account;
+}
+
+/**
+ * Settlement account `card` must spend from, repaired when its binding is MISSING.
+ *
+ * A recorded binding is re-validated by `requireSettlementAccount`. A `null` binding — a
+ * replacement card minted before the binding was inherited — is restored from the card's EXPLICIT
+ * predecessor (the row whose `replacedByCardId` is this card) and persisted, but only when that
+ * source records a valid, owned, CHECKING account. When there is no such explicit source link the
+ * function returns `null` and the caller rejects: no "user's default account" and no free-text
+ * inference, ever.
+ */
+async function resolveSettlementAccount(tx: Tx, card: CardRow): Promise<AccountRow | null> {
+  if (card.linkedAccountId !== null) {
+    return requireSettlementAccount(tx, card.userId, card.id, card.linkedAccountId);
+  }
+  const predecessor = await tx.card.findFirst({
+    where: { userId: card.userId, replacedByCardId: card.id, linkedAccountId: { not: null } },
+    orderBy: { id: 'asc' },
+    select: { linkedAccountId: true },
+  });
+  const inherited = predecessor?.linkedAccountId ?? null;
+  if (inherited === null) return null;
+
+  const account = await requireSettlementAccount(tx, card.userId, card.id, inherited);
+  const repaired = await tx.card.updateMany({
+    where: { id: card.id, userId: card.userId, linkedAccountId: null },
+    data: { linkedAccountId: account.id },
+  });
+  if (repaired.count === 0) {
+    // Another writer bound the card first: accept it ONLY when it resolves to the same account.
+    const current = await tx.card.findFirst({ where: { id: card.id, userId: card.userId }, select: { linkedAccountId: true } });
+    if (current?.linkedAccountId !== account.id) {
+      throw new AppError('CONFLICT', '卡片结算账户在恢复过程中被其他写入改变。', { cardId: card.id });
+    }
+  }
+  return account;
+}
+
 /** Resolve a card or throw `AppError('NOT_FOUND')`. */
 async function requireCard(cardId: string, userId: string): Promise<CardRow> {
   if (typeof userId !== 'string' || !userId.trim()) throw new AppError('SECURITY_DENIED', '缺少卡片操作用户身份。');
@@ -366,8 +440,17 @@ export async function reportLostCard(
  * (per-category limits are NOT copied). The source stays `LOST` and records the new card id in
  * `replacedByCardId` — a historical reference, not a status change and not a relation.
  *
+ * A VIRTUAL replacement also inherits the source's settlement account, RE-VALIDATED in the same
+ * transaction (the row must exist, belong to `userId` and be `CHECKING`), so the replacement can
+ * spend immediately and from the same cash. A source without a usable binding is a `CONFLICT` — a
+ * broken card is never minted. The monthly limit keeps running across the replacement: the
+ * current-month spend is the FAMILY's (see `./card-family`), so the new card inherits the remaining
+ * allowance, while the already-booked `CardConsumption` rows stay attributed to the card that
+ * incurred them.
+ *
  * Idempotent: inside ONE transaction a source that already points at a replacement returns that
- * existing card instead of issuing a second one (a plan node may be replayed after a resume).
+ * existing card instead of issuing a second one (a plan node may be replayed after a resume). An
+ * existing VIRTUAL replacement whose binding is missing is repaired from this same explicit link.
  */
 export async function replaceCard(cardId: string, userId: string): Promise<CardView> {
   const source = await requireCard(cardId, userId);
@@ -380,6 +463,15 @@ export async function replaceCard(cardId: string, userId: string): Promise<CardV
     if ((latest.status as CardStatus) !== 'LOST') {
       throw new AppError('CONFLICT', '只有已挂失的卡片可以补办，请先办理挂失。', { cardId: latest.id, status: latest.status });
     }
+    // A VIRTUAL card spends from its settlement account, so the binding must survive the 补办.
+    // Validated here (before the idempotent return) so a broken source can never mint a dead card.
+    let settlementAccountId: string | null = null;
+    if (latest.type === 'VIRTUAL') {
+      if (latest.linkedAccountId === null) {
+        throw new AppError('CONFLICT', '原虚拟卡未绑定结算账户，无法补办。', { cardId: latest.id });
+      }
+      settlementAccountId = (await requireSettlementAccount(tx, userId, latest.id, latest.linkedAccountId)).id;
+    }
     if (latest.replacedByCardId) {
       const existing = await tx.card.findUnique({ where: { id: latest.replacedByCardId, userId } });
       if (!existing) {
@@ -388,7 +480,12 @@ export async function replaceCard(cardId: string, userId: string): Promise<CardV
           replacedByCardId: latest.replacedByCardId,
         });
       }
-      return toCardView(existing, await tx.cardLimit.findMany({ where: { cardId: existing.id } }));
+      // A replacement minted before bindings were inherited: repair it from THIS explicit source
+      // link (never from a guess), so a replay returns a card that can actually spend.
+      if (settlementAccountId !== null && existing.type === 'VIRTUAL' && existing.linkedAccountId === null) {
+        await tx.card.update({ where: { id: existing.id }, data: { linkedAccountId: settlementAccountId } });
+      }
+      return loadCardView(await tx.card.findUniqueOrThrow({ where: { id: existing.id, userId } }));
     }
     const own = await tx.card.findMany({ where: { userId } });
     const created = await tx.card.create({ data: {
@@ -402,9 +499,11 @@ export async function replaceCard(cardId: string, userId: string): Promise<CardV
       creditLimitMinor: latest.type === 'CREDIT' ? latest.creditLimitMinor : null,
       availableLimitMinor: latest.type === 'CREDIT' ? latest.availableLimitMinor : null,
       monthlyLimitMinor: latest.monthlyLimitMinor,
+      // A VIRTUAL replacement keeps spending from the SAME settlement account; others keep none.
+      linkedAccountId: settlementAccountId,
     } });
     await tx.card.update({ where: { id: latest.id, userId }, data: { replacedByCardId: created.id } });
-    return toCardView(created, []);
+    return loadCardView(created);
   });
 }
 
@@ -510,15 +609,50 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
 }
 
 /**
- * Spend from an owned, account-bound virtual card.
+ * Resolve the business instant ONE consumption is booked at, and therefore the UTC+08:00 billing
+ * month its amount is counted against. Production (`options.now === undefined`) uses the project
+ * demo clock; the seam is validated so a deterministic test can pin the instant and nothing else.
+ */
+function consumeInstant(now?: number | Date): number {
+  if (now === undefined) return demoNow();
+  const at = demoNow(now);
+  if (typeof at !== 'number' || !Number.isInteger(at)) {
+    throw new AppError('VALIDATION', '测试时钟必须是整数毫秒时间戳或 Date。', { now: String(now) });
+  }
+  return at;
+}
+
+/**
+ * Spend from an owned, account-bound card.
+ *
+ * CONSUMPTION TIME IS SERVER-OWNED. The booking instant comes from the project business clock
+ * (`demoNow()`), and the monthly-limit window is derived from that SAME instant (`demoMonthRange`),
+ * so both the ledger row and the month it is attributed to are server decisions. `ConsumeCardInput`
+ * has no `occurredAt`; a runtime input object that still carries a DEFINED `occurredAt` (from a
+ * stale client, an HTTP body or a tool-argument object) is rejected with `VALIDATION` BEFORE any
+ * write — silently ignoring it would let a caller believe a spend was back-dated. The only clock
+ * override is the internal `options.now` seam, which no public caller passes.
  *
  * Inside ONE transaction: replay the persisted consumption when the execution identity matches; else
- * re-validate the card (owned, bound, `ACTIVE`) and its settlement account (owned, `CHECKING`),
- * enforce the card's monthly limit, debit the account with an atomic sufficient-funds write, write a
- * `channel='CARD'` ledger row and a `CardConsumption` row, and persist the original result snapshot
- * for same-key replay. `moneyToCents` keeps every amount an exact integer CNY minor unit.
+ * re-validate the card (owned, `ACTIVE`) and its settlement account (owned, `CHECKING`, recovered
+ * from the explicit 补办 link when the binding is missing), enforce the card FAMILY's monthly limit,
+ * debit the account with an atomic sufficient-funds write, write a `channel='CARD'` ledger row and a
+ * `CardConsumption` row, and persist the original result snapshot for same-key replay.
+ * `moneyToCents` keeps every amount an exact integer CNY minor unit.
  */
-export async function consumeCard(input: ConsumeCardInput): Promise<ConsumeCardResult> {
+export async function consumeCard(
+  input: ConsumeCardInput,
+  options: ConsumeCardOptions = {},
+): Promise<ConsumeCardResult> {
+  // Defence in depth, BEFORE any read or write: a caller-owned instant is not merely ignored.
+  const rawInput: unknown = input;
+  if (typeof rawInput === 'object' && rawInput !== null && 'occurredAt' in rawInput) {
+    const claimed = (rawInput as { occurredAt?: unknown }).occurredAt;
+    if (claimed !== undefined) {
+      throw new AppError('VALIDATION', '消费时间由服务端决定，不接受调用方传入的 occurredAt。', { occurredAt: String(claimed) });
+    }
+  }
+
   const userId = typeof input?.userId === 'string' ? input.userId : '';
   if (userId === '') throw new AppError('VALIDATION', '缺少用户 id', { userId: input?.userId });
 
@@ -539,10 +673,8 @@ export async function consumeCard(input: ConsumeCardInput): Promise<ConsumeCardR
     ? input.merchant.trim()
     : DEFAULT_CONSUME_MERCHANT;
 
-  const occurredAt = input?.occurredAt === undefined ? demoNow() : input.occurredAt;
-  if (typeof occurredAt !== 'number' || !Number.isInteger(occurredAt)) {
-    throw new AppError('VALIDATION', '消费时间必须是整数毫秒时间戳。', { occurredAt: input?.occurredAt });
-  }
+  // ONE server-owned instant for both the booking time and the billing month.
+  const at = consumeInstant(options.now);
 
   const amount = centsToMoney(amountMinor);
   const key = normalizeIdempotencyKey(input.executionKey);
@@ -568,30 +700,21 @@ export async function consumeCard(input: ConsumeCardInput): Promise<ConsumeCardR
 
       const card = await tx.card.findFirst({ where: { id: cardId, userId } });
       if (!card) throw new AppError('NOT_FOUND', `卡片不存在：${cardId}`, { cardId });
-      if (card.linkedAccountId === null) {
-        throw new AppError('CONFLICT', '该卡片未绑定结算账户，无法消费。', { cardId });
-      }
       if (card.status !== 'ACTIVE') {
         throw new AppError('CONFLICT', '卡片状态不允许消费。', { cardId, status: card.status });
       }
 
-      // Re-validate the persisted binding in-transaction (ownership + account type).
-      const account = await tx.account.findFirst({ where: { id: card.linkedAccountId, userId } });
+      // The settlement binding is re-validated in-transaction (ownership + account type) and, for a
+      // replacement card minted without one, restored from its explicit 补办 link and persisted.
+      const account = await resolveSettlementAccount(tx, card);
       if (!account) {
-        throw new AppError('CONFLICT', '卡片绑定的结算账户不存在或不属于该用户。', { cardId, linkedAccountId: card.linkedAccountId });
-      }
-      if (account.type !== 'CHECKING') {
-        throw new AppError('CONFLICT', '卡片绑定的账户不是活期账户。', { cardId, accountId: account.id, type: account.type });
+        throw new AppError('CONFLICT', '该卡片未绑定结算账户，无法消费。', { cardId });
       }
 
-      // Monthly limit: re-read the card's current month spend for the demo business month.
+      // Monthly limit: the current billing month's spend of the whole replacement FAMILY, read at
+      // the SAME server instant this spend is booked at.
       if (card.monthlyLimitMinor !== null) {
-        const { start, end } = demoMonthRange();
-        const spentRows = await tx.cardConsumption.findMany({
-          where: { cardId, occurredAt: { gte: start, lt: end } },
-          select: { amountMinor: true },
-        });
-        const spentMinor = spentRows.reduce((total, row) => total + row.amountMinor, 0n);
+        const spentMinor = await cardFamilyMonthSpend(tx, cardId, userId, at);
         if (spentMinor + amountMinor > card.monthlyLimitMinor) {
           throw new AppError('LIMIT_EXCEEDED', '超过虚拟卡月限额。', {
             cardId,
@@ -623,7 +746,7 @@ export async function consumeCard(input: ConsumeCardInput): Promise<ConsumeCardR
         category,
         merchant,
         channel: 'CARD',
-        occurredAt: new Date(occurredAt),
+        occurredAt: new Date(at),
         currency: 'CNY',
       } });
 
@@ -635,7 +758,7 @@ export async function consumeCard(input: ConsumeCardInput): Promise<ConsumeCardR
         currency: 'CNY',
         category,
         merchant,
-        occurredAt: new Date(occurredAt),
+        occurredAt: new Date(at),
         executionKey: key ?? null,
       } });
 
