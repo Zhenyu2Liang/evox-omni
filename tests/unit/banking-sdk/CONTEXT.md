@@ -36,7 +36,7 @@ SDK 写入仍必须满足可信执行上下文与事务约束。
 `consumeCard(input, options)` 的公开入参不含时间字段；记账时刻与 UTC+08:00 计费月都由服务端 `demoNow()` 决定。
 唯一时钟缝隙是第二参数 `options.now`（测试专用）。
 运行时入参携带已定义的 `occurredAt`（任意值）在任何读写前被拒为 `VALIDATION`；`{ occurredAt: undefined }` 等同于未提供。
-月限额按补办家族当月消费计算，`payableAmount` 与强制限额读同一个数字。
+月限额按补办家族当月消费计算，`payableAmount` 与强制限额读同一个数字；结果快照报「限额被强制时的那个时刻」所在月的余额（`options.now`），不带缝隙的重新读取按 `demoNow()` 所在月计算。
 `CardConsumption` 无关系声明，`truncateAll()` 不清除它；含绝对条数断言的套件需在 `useFreshDatabase()` 之后自行 `beforeEach` 清空。
 
 ## 执行与数据
