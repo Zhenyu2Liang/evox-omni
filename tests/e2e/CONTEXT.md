@@ -113,6 +113,12 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 正常结束时退出码由 `reporter.failures` 决定：入口在场景结束后打印汇总并执行 `process.exitCode = failures > 0 ? 1 : 0`。
 只有「场景断言 + 证据落盘 + 资源清理全部成功」的正常路径才 exit 0，退出码与真实通过/失败一致。
 因此每轮必须同时核对汇总行与退出码：打印 PASS 但退出码非 0 记为失败。
+
+退出码的**测量方法**本身必须可信，否则「exit 0」不构成证据。
+`cmd /c "…"` 之后再单独 `cmd /c "echo EXIT=%ERRORLEVEL%"` 是无效方法：`%ERRORLEVEL%` 在解析期展开，带的是程序运行之前的值，实测 `process.exit(7)` 仍打印 `EXIT=0`。
+可用方法是延迟展开并把子进程码传播为调用自身的退出码：`cmd /v:on /c "pnpm exec tsx <入口> > <log> 2>&1 & set EC=!ERRORLEVEL! & echo EXIT=!EC! >> <log> & exit !EC!"; exit $LASTEXITCODE`。
+它给出两个独立信号：工具报告的进程退出码与日志里的 `EXIT=` 行；缺 `; exit $LASTEXITCODE` 时工具报告的是 PowerShell 宿主码 `0`，所以两个信号都要取。
+采用前先用 `process.exit(7)` 与 `process.exit(0)` 对照程序证明该方法既报得出非零、也不会永远非零。
 入口在 `finally` 中 `await browser.close()`（捕获异常）。
 live 入口拆出可 await 的 `teardown()`（先停 `server.current ?? devServer`，再关浏览器），`process.on('exit')` 与信号处理器使用同步兜底 `cleanup()`。
 live 入口的场景后诊断与 TASK-A 证据读取位于主 `try` 内、`cleanup` 之前，并用 try/catch 包裹（仅告警、不改退出码），证据读取失败不会把通过的运行变成 exit 1。
