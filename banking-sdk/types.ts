@@ -257,6 +257,11 @@ export interface ApplyVirtualCardInput {
 
 /* ------------------------------------------------------------- card spend */
 
+/**
+ * Public parameter set of `consumeCard`. It carries NO consumption instant: the booking time and the
+ * UTC+08:00 billing month it is attributed to are SERVER-owned. A deterministic test seam exists
+ * ONLY through the separate `ConsumeCardOptions` argument, never through this object.
+ */
 export interface ConsumeCardInput {
   /** Trusted caller identity, injected by the server runner. */
   userId: string;
@@ -272,8 +277,24 @@ export interface ConsumeCardInput {
    * persisted consumption instead of charging again (the SDK persists the original result).
    */
   executionKey?: string;
-  /** Epoch ms of the spend; defaults to the demo clock. */
-  occurredAt?: number;
+}
+
+/**
+ * INTERNAL, TEST-ONLY second argument of `consumeCard` — deliberately NOT part of
+ * `ConsumeCardInput`.
+ *
+ * The booking instant of a card consumption decides BOTH the ledger time AND the UTC+08:00 billing
+ * month the monthly limit is counted against. On the public parameter set it would let a caller
+ * back-date a spend out of the current month and spend the same limit twice, so it lives in a
+ * separate argument that no HTTP body, tool-argument object or model output can reach.
+ */
+export interface ConsumeCardOptions {
+  /**
+   * Test-only clock seam: the business instant (epoch ms, or a `Date`) this ONE consumption is
+   * booked at, which also selects the billing month it is attributed to. Omitted — the production
+   * path — means the project business clock (`demoNow()`). Never persisted, never read back.
+   */
+  now?: number | Date;
 }
 
 /** One successful local card consumption row (see `CardConsumption`). */

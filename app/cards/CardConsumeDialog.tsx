@@ -10,7 +10,7 @@ import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
 
 interface Envelope<T> { ok: boolean; data?: T; error?: { code: string; message?: string } }
-interface Notice { key: MessageKey; error: boolean }
+interface Notice { key: MessageKey; error: boolean; detail?: string }
 
 const AMOUNT_PATTERN = /^\d+(?:\.\d{1,2})?$/;
 const inputClass = 'mt-1 w-full rounded-xl border border-banking-navy/20 bg-white px-3 py-2.5 text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
@@ -28,7 +28,9 @@ function failureKey(code: string | undefined): MessageKey {
  * consumption records, then charges the bound account through `POST /api/cards/[id]/consume`.
  *
  * A retry of the same spend attempt reuses its `executionKey`, so a lost response replays the same
- * persisted consumption instead of charging twice; a fresh (successful) spend gets a new key.
+ * persisted consumption instead of charging twice; a fresh (successful) spend gets a new key. The
+ * body carries no booking time: `occurredAt` is SERVER-owned (the server business clock), so a
+ * client can never choose which month a spend lands in, and a body naming it is refused.
  */
 export default function CardConsumeDialog({ card, onClose, onConsumed }: {
   card: CardView;
@@ -101,7 +103,11 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
       const envelope = await response.json() as Envelope<ConsumeCardResult>;
       if (!mounted.current) return;
       if (!response.ok || !envelope.ok || !envelope.data) {
-        setNotice({ key: failureKey(envelope.error?.code), error: true });
+        const code = envelope.error?.code;
+        const detail = envelope.error?.message;
+        // `VALIDATION` also covers a body naming a server-owned field (the booking time), so show
+        // the server's own reason instead of folding every refusal into a generic failure.
+        setNotice(code === 'VALIDATION' && detail ? { key: failureKey(code), error: true, detail } : { key: failureKey(code), error: true });
         return;
       }
       attempt.current = null;
@@ -155,7 +161,7 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
         {card.payableAmount !== undefined ? <div className="flex justify-between gap-3"><dt>{t('business.cards.payableAmount')}</dt><dd><Money amount={card.payableAmount} /></dd></div> : null}
       </dl> : null}
 
-      {validationFailed || notice ? <p role={validationFailed || notice?.error ? 'alert' : 'status'} className={`mt-3 rounded-xl border p-3 text-sm ${validationFailed || notice?.error ? 'border-banking-danger/20 bg-red-50 text-banking-danger' : 'border-banking-success/20 bg-green-50 text-banking-success'}`}>{validationFailed ? t('pages.cards.validation') : t(notice!.key)}</p> : null}
+      {validationFailed || notice ? <p role={validationFailed || notice?.error ? 'alert' : 'status'} className={`mt-3 rounded-xl border p-3 text-sm ${validationFailed || notice?.error ? 'border-banking-danger/20 bg-red-50 text-banking-danger' : 'border-banking-success/20 bg-green-50 text-banking-success'}`}>{validationFailed ? t('pages.cards.validation') : notice!.detail ?? t(notice!.key)}</p> : null}
 
       <section data-card-consumptions className="mt-4">
         <h3 className="font-semibold text-banking-deep">{t('pages.cards.consumptions')}</h3>

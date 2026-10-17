@@ -76,9 +76,19 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 `applyVirtualCard` 与 `addDemoCard`（仅 `type === 'VIRTUAL'`）在创建时绑定账户。`applyVirtualCard` 的幂等键重放还要求请求的绑定账户与月限额一致，否则抛 `CONFLICT`；确定性 id 与 P2002 并发重放保持不变。非虚拟卡不绑定账户。
 
-绑定的卡在 `CardView` 中额外暴露 `linkedAccountId`、`linkedAccountNumber`（账户脱敏号）、`accountAvailableBalance`（账户余额，十进制人民币）与 `payableAmount`。`payableAmount = monthlyLimitMinor 为空 ? accountAvailableBalance : min(accountAvailableBalance, max(0, monthlyLimitMinor − 当月已消费))`；当月已消费按 `demoMonthRange()` 的 UTC+08:00 业务月汇总该卡的 `CardConsumption.amountMinor`。未绑定的卡这些字段缺省，不伪造数值。
+`requireSettlementAccount(tx, userId, cardId, linkedAccountId)` 重新校验一条已记录的绑定：账户行必须存在且属于该用户，类型必须是 `CHECKING`，否则抛 `CONFLICT`。已记录的绑定不会被猜测替换。
 
-`consumeCard(input)` 是本地模拟刷卡：在同一事务内校验卡（自有、已绑定、`ACTIVE`，否则 `NOT_FOUND` / `CONFLICT`）、重新校验结算账户（自有且 `CHECKING`）、按月限额校验（超过抛 `LIMIT_EXCEEDED`，限额 `0` 表示不可支付，为空表示仅受账户余额约束），用条件余额写扣减（`balanceMinor >= amount`，计数为 0 抛 `INSUFFICIENT_FUNDS`），写入 `channel='CARD'`、`direction='DEBIT'`、`amountMinor` 为负的流水行，并创建一条正的 `CardConsumption`。
+`resolveSettlementAccount(tx, card)` 返回卡片必须使用的结算账户。绑定缺失时只从显式的补办来源恢复：`replacedByCardId` 等于本卡 id 且已记录绑定的自有卡片。恢复经同一校验后在本事务内写回 `Card.linkedAccountId`；没有显式来源时返回 `null`，由调用方拒绝。不从“用户默认账户”或任何文本推断绑定。
+
+绑定的卡在 `CardView` 中额外暴露 `linkedAccountId`、`linkedAccountNumber`（账户脱敏号）、`accountAvailableBalance`（账户余额，十进制人民币）与 `payableAmount`。`payableAmount = monthlyLimitMinor 为空 ? accountAvailableBalance : min(accountAvailableBalance, max(0, monthlyLimitMinor − 当月已消费))`。未绑定的卡这些字段缺省，不伪造数值。
+
+当月已消费是补办家族口径。`banking-sdk/card-family.ts` 的 `cardFamilyMonthSpend(client, cardId, userId, now?)` 先由 `cardFamilyIds` 沿 `replacedByCardId` 双向遍历得到家族，再按 `demoMonthRange(now)` 的 UTC+08:00 业务月汇总 `CardConsumption.amountMinor`。遍历用访问集与 `MAX_CARD_FAMILY = 64` 上限，只纳入同一 `userId` 的卡片，因此多代补办算作一个家族，损坏的环会终止，跨用户指针不会扩大归集。限额强制与 `payableAmount` 读取同一个家族数字。
+
+`consumeCard(input, options?)` 是本地模拟刷卡。消费时间由服务端拥有：入账时刻取 `demoNow()`，月限额窗口由同一时刻的 `demoMonthRange()` 推导，二者不可分离。`ConsumeCardInput` 没有 `occurredAt`；运行期对象上仍带已定义的 `occurredAt`（过去、未来、非整数、`null`、字符串等）时，在任何读写之前抛 `VALIDATION`，绝不静默忽略；`{ occurredAt: undefined }` 视为未提供。
+
+`ConsumeCardOptions.now` 是唯一时钟缝隙，仅供测试注入整数毫秒时间戳或 `Date`；非整数抛 `VALIDATION`。它是独立的第二个参数，不进入 HTTP 请求体或工具参数，也不提供任何历史补记功能。
+
+`consumeCard` 在同一事务内校验卡（自有、`ACTIVE`，否则 `NOT_FOUND` / `CONFLICT`）、重新校验或恢复结算账户（缺失抛 `CONFLICT`）、按家族当月月限额校验（超过抛 `LIMIT_EXCEEDED`，限额 `0` 表示不可支付，为空表示仅受账户余额约束），用条件余额写扣减（`balanceMinor >= amount`，计数为 0 抛 `INSUFFICIENT_FUNDS`），写入 `channel='CARD'`、`direction='DEBIT'`、`amountMinor` 为负的流水行与服务端时刻的 `occurredAt`，并创建一条正的 `CardConsumption`。
 
 `executionKey` 是重放身份（`CardConsumption.executionKey` 唯一）。同键重放校验归属后返回持久化的 `resultJson` 原始快照，不重复扣款；卡或用户不一致抛 `CONFLICT`；并发同键唯一冲突在事务外重读已提交行并重放。缺少快照证据抛 `CONFLICT`，绝不重建成功。
 
@@ -103,6 +113,10 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 `replaceCard(cardId, userId)` 只为当前处于 `LOST` 的自有卡片补办新卡。
 补办在同一事务内创建新卡，并把新卡 id 写入原卡片的 `Card.replacedByCardId`。
 新卡沿用原卡片的 `type`、`network` 与月限额，不复制分类限额，并生成新的脱敏卡号。信用卡补办原样继承原卡片的 `creditLimitMinor` 与 `availableLimitMinor`（不重新授信、不增减）；非信用卡保持为空。
+虚拟卡补办在原卡片的结算账户上重新校验并继承该绑定：账户行必须存在、属于该用户且为 `CHECKING`。
+原虚拟卡未绑定结算账户时抛 `CONFLICT`；记录绑定缺失、属于他人或非活期时同样抛 `CONFLICT`，绝不签发无法消费的卡。
+月限额跨补办连续：当月已消费按家族汇总，因此原卡本月已消费 30、月限额 100 时，新卡只能再消费 70。已记账的 `CardConsumption.cardId` 不改写，这是归集口径而不是历史重写。
+数据中已有的破损补办卡（`linkedAccountId` 为空）只在显式补办来源记录有效、自有、`CHECKING` 绑定时恢复，并在事务内写回；消费命中该卡时同样恢复并持久化。
 原卡片保持 `LOST`。
 补办是幂等的：原卡片已指向补办卡时返回该卡，不再签发第二张。
 关联的补办卡不存在时抛 `CONFLICT`。
@@ -112,4 +126,4 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 ## 存储生命周期
 
-只支持当前 schema 与契约。`pnpm db:push` 同步 schema；`pnpm db:reset` 重建模拟数据。不要新增旧 schema 迁移、数字金额适配器、旧指纹接受或回执前的重放路径。当前回执、审计与重启恢复是运行时保证，而不是兼容特性。
+只支持当前 schema 与契约。`pnpm db:push` 同步 schema；`pnpm db:reset` 重建模拟数据。不要新增旧 schema 迁移、数字金额适配器、旧指纹接受或回执前的重放路径。当前回执、审计与重启恢复是运行时保证，而不是兼容特性。服务端消费时间与补办家族归集不引入 schema 变更。
