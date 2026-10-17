@@ -47,6 +47,7 @@ import {
   runCliStep as runCliStepShared,
 } from '../helpers/prisma-cli';
 import { addMoney, centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
+import { DEMO_NOW } from '../../lib/constants';
 import {
   NAV_TIMEOUT_MS,
   REPO_ROOT,
@@ -1151,6 +1152,24 @@ function uniqueActiveCreditCard(cards: readonly LiveCardRecord[]): LiveCardRecor
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/**
+ * TOTAL available credit that may actually be SPENT: every `CREDIT` card that is NOT `LOST`.
+ * A 补办 card stays in the read model as `LOST` and KEEPS its recorded `availableLimit`, so the
+ * family's allowance must be counted exactly ONCE — through the replacement, never the source too.
+ */
+function nonLostCreditAvailableTotalMinor(cards: readonly LiveCardRecord[]): bigint {
+  return cards
+    .filter((card) => card.type === 'CREDIT' && card.status !== 'LOST' && card.availableLimit !== undefined)
+    .reduce((sum, card) => sum + moneyToCents(card.availableLimit as string), 0n);
+}
+
+/** The NAIVE total over ALL `CREDIT` cards INCLUDING `LOST` ones — recorded only to expose the trap. */
+function allCreditAvailableTotalMinor(cards: readonly LiveCardRecord[]): bigint {
+  return cards
+    .filter((card) => card.type === 'CREDIT' && card.availableLimit !== undefined)
+    .reduce((sum, card) => sum + moneyToCents(card.availableLimit as string), 0n);
+}
+
 /** Poll the real `/api/cards` route until `predicate` holds (a business condition, never a fixed sleep). */
 function awaitLiveCards(
   baseUrl: string,
@@ -1199,6 +1218,16 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       attachCollectors(page);
       await gotoAgent(page, ctx.baseUrl);
 
+      // BASELINE — the usable available credit BEFORE 挂失/补办, straight from the read route, so the
+      // post-补办 total can be compared against it (a 补办 must never ADD credit).
+      const cardsBeforeReplace = await fetchLiveCards(ctx.baseUrl);
+      const sourceBefore = cardById(cardsBeforeReplace, CREDIT_CARD_ID);
+      if (sourceBefore?.type !== 'CREDIT' || sourceBefore.status !== 'ACTIVE' || sourceBefore.availableLimit === undefined) {
+        throw new Error(`挂失前 ${CREDIT_CARD_ID} 应为带 availableLimit 的 ACTIVE CREDIT 卡，实际 ${JSON.stringify(sourceBefore)}`);
+      }
+      const totalAvailableBeforeMinor = nonLostCreditAvailableTotalMinor(cardsBeforeReplace);
+      const naiveAllCreditBeforeMinor = allCreditAvailableTotalMinor(cardsBeforeReplace);
+
       // A1 — RED `report_lost_card`: bounded natural turns until the model parks the MFA card.
       const sentA1 = await driveRedTool(page, ctx.baseUrl, [
         '我的信用卡丢失了，请帮我正式挂失尾号6688的信用卡',
@@ -1240,7 +1269,7 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       const newRows = await readCardTileRows(page, newId);
       const newTileText = (await page.locator(`[data-card-id="${newId}"]`).first().innerText()).replace(/\s+/g, ' ');
       const sourceTileText = (await page.locator(`[data-card-id="${CREDIT_CARD_ID}"]`).first().innerText()).replace(/\s+/g, ' ');
-      await captureLive(page, 'lA-cards');
+      const cardsShot = await captureLive(page, 'lA-cards');
       if (newRows['信用额度'] !== '¥18,000.00' || newRows['可用额度'] !== '¥18,000.00') {
         throw new Error(`补办信用卡 ${newId} 应显示 信用额度=可用额度=¥18,000.00，实际 ${JSON.stringify(newRows)}`);
       }
@@ -1288,6 +1317,18 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
         throw new Error(`卡片总数应为 4（1 张 ACTIVE 补办卡 + 1 张 LOST 源卡 + 1 张 DEBIT + 1 张 VIRTUAL），实际 ${cards.length}：${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
       }
 
+      // NO-DOUBLING — 补办 must not create credit: the replacement INHERITS the source's available
+      // limit and the `LOST` source stops counting toward usable credit, so the spendable total is
+      // unchanged. A total that DOUBLED here would let the demo user spend the same allowance twice.
+      const totalAvailableAfterMinor = nonLostCreditAvailableTotalMinor(cards);
+      const naiveAllCreditAfterMinor = allCreditAvailableTotalMinor(cards);
+      if (active.availableLimit !== sourceBefore.availableLimit) {
+        throw new Error(`补办卡可用额度应继承原卡 ${sourceBefore.availableLimit}（不得放大），实际 ${active.availableLimit}`);
+      }
+      if (totalAvailableAfterMinor !== totalAvailableBeforeMinor) {
+        throw new Error(`补办前后「非 LOST 信用卡可用额度合计」必须不变（额度不得算两次）：补办前 ${centsToMoney(totalAvailableBeforeMinor)} → 补办后 ${centsToMoney(totalAvailableAfterMinor)}（明细：${cards.filter((card) => card.type === 'CREDIT').map((card) => `${card.id}:${card.status}:可用=${card.availableLimit ?? '无'}`).join(' ')}）`);
+      }
+
       // IDEMPOTENCY — a SECOND `replace_card` request through the UI must NOT mint a second card. The
       // repeat request may replay the original result, return the existing result, or explicitly refuse
       // the duplicate; a second MFA / tool execution is NOT required (`requireCardAtEnd = false`). The
@@ -1313,7 +1354,13 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
         throw new Error(`第二次补卡后 ACTIVE 信用卡 id 应仍为 ${newId}（未新增第二张），实际 ${activeAfter?.id ?? '无'}`);
       }
 
-      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（重复请求，允许重放/返回既有结果/显式拒绝，不要求二次 MFA/工具执行）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）`;
+      // …and the repeat request must not release a SECOND allowance either.
+      const totalAvailableAfterIdemMinor = nonLostCreditAvailableTotalMinor(afterSecond);
+      if (totalAvailableAfterIdemMinor !== totalAvailableBeforeMinor) {
+        throw new Error(`重复补卡请求后「非 LOST 信用卡可用额度合计」仍须为 ${centsToMoney(totalAvailableBeforeMinor)}（不得重复发卡/放额度），实际 ${centsToMoney(totalAvailableAfterIdemMinor)}：${afterSecond.filter((card) => card.type === 'CREDIT').map((card) => `${card.id}:${card.status}:可用=${card.availableLimit ?? '无'}`).join(' ')}`);
+      }
+
+      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（重复请求，允许重放/返回既有结果/显式拒绝，不要求二次 MFA/工具执行）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）；可用信用额度（非 LOST 信用卡合计）：补办前 ${centsToMoney(totalAvailableBeforeMinor)}（${CREDIT_CARD_ID}:ACTIVE:可用=${sourceBefore.availableLimit}）→ 补办后 ${centsToMoney(totalAvailableAfterMinor)}（唯一 ACTIVE 补办卡 ${newId}:可用=${active.availableLimit}；${CREDIT_CARD_ID}:LOST:可用=${source?.availableLimit ?? '无'}，已排除）；把 LOST 源卡也计入的朴素合计 ${centsToMoney(naiveAllCreditBeforeMinor)} → ${centsToMoney(naiveAllCreditAfterMinor)}（重复计额度，已被断言排除）；重复补卡后合计=${centsToMoney(totalAvailableAfterIdemMinor)}；截图 ${cardsShot ?? '未落盘'}`;
     },
     { label: 'lA-credit-report-lost-and-replace' },
   );
@@ -1452,8 +1499,8 @@ const VIRTUAL_PAYABLE_PROMPT = '那我这张虚拟卡当前最多可以支付多
 
 /** The raw SQLite state scenario lC cross-checks (authoritative). */
 interface VirtualConsumeSnapshot {
-  cardDebits: { id: string; amountMinor: bigint; channel: string | null; direction: string; category: string; merchant: string }[];
-  consumptions: { id: string; cardId: string; accountId: string; amountMinor: bigint; category: string; merchant: string }[];
+  cardDebits: { id: string; amountMinor: bigint; channel: string | null; direction: string; category: string; merchant: string; occurredAt: Date }[];
+  consumptions: { id: string; cardId: string; accountId: string; amountMinor: bigint; category: string; merchant: string; occurredAt: Date }[];
   balanceMinor: bigint;
 }
 
@@ -1463,11 +1510,11 @@ function readVirtualConsumeSnapshot(): Promise<VirtualConsumeSnapshot> {
     const [cardDebits, consumptions, account] = await Promise.all([
       db.transaction.findMany({
         where: { accountId: DEMO_CHECKING_ID, channel: 'CARD', direction: 'DEBIT' },
-        select: { id: true, amountMinor: true, channel: true, direction: true, category: true, merchant: true },
+        select: { id: true, amountMinor: true, channel: true, direction: true, category: true, merchant: true, occurredAt: true },
       }),
       db.cardConsumption.findMany({
         where: { cardId: VIRTUAL_CARD_ID },
-        select: { id: true, cardId: true, accountId: true, amountMinor: true, category: true, merchant: true },
+        select: { id: true, cardId: true, accountId: true, amountMinor: true, category: true, merchant: true, occurredAt: true },
       }),
       db.account.findUnique({ where: { id: DEMO_CHECKING_ID }, select: { balanceMinor: true } }),
     ]);
@@ -1582,11 +1629,53 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
         throw new Error(`消费弹窗「当前可支付金额」应为 ${formatCNY(payableBefore)}，实际 ${summary['当前可支付金额']}（${JSON.stringify(summary)}）`);
       }
       const form = page.locator('[data-card-consume-form]').first();
+      // The dialog must offer NO time control at all: the booking instant is SERVER-owned.
+      const formFieldNames = await form.locator('input').evaluateAll((els) => els.map((el) => el.getAttribute('name') ?? ''));
+      if (formFieldNames.some((name) => /occurred|date|time/i.test(name))) {
+        throw new Error(`消费表单不得包含任何时间字段（记账时间由服务端拥有），实际 ${JSON.stringify(formFieldNames)}`);
+      }
+      for (const required of ['amount', 'category', 'merchant']) {
+        if (!formFieldNames.includes(required)) {
+          throw new Error(`消费表单缺少 ${required} 字段，实际 ${JSON.stringify(formFieldNames)}`);
+        }
+      }
       await form.locator('input[name="amount"]').fill(VIRTUAL_CONSUME_AMOUNT);
       await form.locator('input[name="category"]').fill(VIRTUAL_CONSUME_CATEGORY);
       await form.locator('input[name="merchant"]').fill(VIRTUAL_CONSUME_MERCHANT);
-      await captureLive(page, 'lC-consume-form');
+      const formShot = await captureLive(page, 'lC-consume-form');
+      // Capture the EXACT body the dialog sends: it must carry no booking time.
+      const consumeRequest = page.waitForRequest(
+        (req) => req.method() === 'POST' && req.url().includes(`/api/cards/${VIRTUAL_CARD_ID}/consume`),
+        { timeout: 60_000 },
+      );
       await form.getByRole('button', { name: '提交消费', exact: true }).click();
+      const sentBodyText = (await consumeRequest).postData() ?? '';
+      if (sentBodyText === '') throw new Error('消费请求没有请求体，无法核对是否提交了记账时间');
+      const sentBody = JSON.parse(sentBodyText) as Record<string, unknown>;
+      if ('occurredAt' in sentBody) {
+        throw new Error(`消费请求体不得携带 occurredAt（记账时间由服务端拥有），实际 ${sentBodyText}`);
+      }
+      // The dialog may also send its retry `executionKey` (an idempotency identity, NOT a time), so the
+      // property pinned here is precisely the one that matters: the body carries NO time-shaped key and
+      // nothing outside the four accepted fields.
+      const sentKeys = Object.keys(sentBody).sort().join(',');
+      const allowedKeys = new Set(['amount', 'category', 'merchant', 'executionKey']);
+      const unexpectedKeys = Object.keys(sentBody).filter((key) => !allowedKeys.has(key));
+      if (unexpectedKeys.length > 0) {
+        throw new Error(`消费请求体只允许 amount/category/merchant/executionKey，实际多出 ${unexpectedKeys.join(',')}（${sentBodyText}）`);
+      }
+      const timeShapedKeys = Object.keys(sentBody).filter((key) => /occurred|date|time/i.test(key));
+      if (timeShapedKeys.length > 0) {
+        throw new Error(`消费请求体不得携带任何时间字段（记账时间由服务端拥有），实际 ${timeShapedKeys.join(',')}（${sentBodyText}）`);
+      }
+      for (const required of ['amount', 'category', 'merchant']) {
+        if (!(required in sentBody)) {
+          throw new Error(`消费请求体缺少 ${required}，实际 ${sentBodyText}`);
+        }
+      }
+      if (sentBody['amount'] !== VIRTUAL_CONSUME_AMOUNT) {
+        throw new Error(`消费请求体 amount 应为 ${VIRTUAL_CONSUME_AMOUNT}，实际 ${String(sentBody['amount'])}`);
+      }
       await waitForStatusText(page, '消费成功', 60_000);
       // The dialog reloads this card's consumptions after a successful spend → exactly ONE new record.
       await waitFor(
@@ -1597,7 +1686,7 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       if (!recordText.includes(VIRTUAL_CONSUME_MERCHANT) || !recordText.includes(formatCNY(VIRTUAL_CONSUME_AMOUNT))) {
         throw new Error(`弹窗消费记录应包含「${VIRTUAL_CONSUME_MERCHANT}」与 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}，实际「${recordText}」`);
       }
-      await captureLive(page, 'lC-consume-success');
+      const successShot = await captureLive(page, 'lC-consume-success');
 
       // AUTHORITATIVE cross-check: exactly ONE new CARD DEBIT, ONE CardConsumption, ONE balance drop.
       const after = await readVirtualConsumeSnapshot();
@@ -1623,6 +1712,15 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
         || consumptionRow.amountMinor !== amountMinor || consumptionRow.category !== VIRTUAL_CONSUME_CATEGORY
         || consumptionRow.merchant !== VIRTUAL_CONSUME_MERCHANT) {
         throw new Error(`新增 CardConsumption 应为 cardId=${VIRTUAL_CARD_ID}、accountId=${DEMO_CHECKING_ID}、amountMinor=${amountMinor}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}），实际 ${describeConsumptions}`);
+      }
+      // SERVER-OWNED TIME — both rows carry the SAME server business instant (the pinned demo clock
+      // DEMO_NOW), never a client value: the dialog body captured above carried no time field at all.
+      const serverInstantMs = DEMO_NOW;
+      if (debitRow.occurredAt.getTime() !== serverInstantMs) {
+        throw new Error(`CARD 流水的 occurredAt 应为服务端业务时钟 ${new Date(serverInstantMs).toISOString()}，实际 ${debitRow.occurredAt.toISOString()}`);
+      }
+      if (consumptionRow.occurredAt.getTime() !== serverInstantMs) {
+        throw new Error(`CardConsumption 的 occurredAt 应为服务端业务时钟 ${new Date(serverInstantMs).toISOString()}，实际 ${consumptionRow.occurredAt.toISOString()}`);
       }
       if (after.balanceMinor !== before.balanceMinor - amountMinor) {
         throw new Error(`活期余额应减少恰 ${amountMinor}（${centsToMoney(before.balanceMinor)} → ${centsToMoney(before.balanceMinor - amountMinor)}），实际 ${centsToMoney(after.balanceMinor)}`);
@@ -1650,12 +1748,12 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
       await waitForElementHydration(page, `[data-card-id="${VIRTUAL_CARD_ID}"]`);
       const tileRows = await readCardTileRows(page, VIRTUAL_CARD_ID);
-      await captureLive(page, 'lC-card-tile');
+      const tileShot = await captureLive(page, 'lC-card-tile');
       if (tileRows['当前可支付金额'] !== formatCNY(centsToMoney(expectedPayableAfterMinor))) {
         throw new Error(`${VIRTUAL_CARD_ID} 卡片「当前可支付金额」应为 ${formatCNY(centsToMoney(expectedPayableAfterMinor))}，实际 ${tileRows['当前可支付金额']}（${JSON.stringify(tileRows)}）`);
       }
 
-      return `C1 实际发送：${sentC1.map((t) => `「${t}」`).join(' → ')} → 仍恰 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}，未被重复开通）；C2 前端消费弹窗（绑定 ${dialogCardId}，月限额 ${summary['月限额']}、关联账户 ${summary['关联账户']}、消费前当前可支付金额 ${summary['当前可支付金额']}）提交 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}）→ 消费成功；SQLite：新增 1 条 channel=CARD/DEBIT 流水 ${debitRow.amountMinor}（${debitRow.id}）、1 条 CardConsumption amountMinor=${consumptionRow.amountMinor}（${consumptionRow.id}）；活期余额 ${centsToMoney(before.balanceMinor)} → ${centsToMoney(after.balanceMinor)}（恰扣一次）；${VIRTUAL_CARD_ID}.payableAmount ${payableBefore} → ${virtualAfter?.payableAmount} = min(可用余额 ${virtualAfter?.accountAvailableBalance}、剩余月限额 ${centsToMoney(remainingAfterMinor)})；卡片「当前可支付金额」=${tileRows['当前可支付金额']}`;
+      return `C1 实际发送：${sentC1.map((t) => `「${t}」`).join(' → ')} → 仍恰 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}，未被重复开通）；C2 前端消费弹窗（绑定 ${dialogCardId}，月限额 ${summary['月限额']}、关联账户 ${summary['关联账户']}、消费前当前可支付金额 ${summary['当前可支付金额']}）提交 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}）→ 消费成功；SQLite：新增 1 条 channel=CARD/DEBIT 流水 ${debitRow.amountMinor}（${debitRow.id}）、1 条 CardConsumption amountMinor=${consumptionRow.amountMinor}（${consumptionRow.id}）；活期余额 ${centsToMoney(before.balanceMinor)} → ${centsToMoney(after.balanceMinor)}（恰扣一次）；${VIRTUAL_CARD_ID}.payableAmount ${payableBefore} → ${virtualAfter?.payableAmount} = min(可用余额 ${virtualAfter?.accountAvailableBalance}、剩余月限额 ${centsToMoney(remainingAfterMinor)})；卡片「当前可支付金额」=${tileRows['当前可支付金额']}；记账时间由服务端拥有：弹窗请求体逐字 ${sentBodyText}（键=${sentKeys}，无 occurredAt），落账 Transaction.occurredAt 与 CardConsumption.occurredAt 均为 ${debitRow.occurredAt.toISOString()}（= DEMO_NOW 服务端业务时钟 2026-09-25T12:00:00+08:00）；截图 ${formShot ?? '未落盘'} / ${successShot ?? '未落盘'} / ${tileShot ?? '未落盘'}`;
     },
     { label: 'lC-virtual-card-consumption' },
   );
