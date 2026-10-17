@@ -1594,14 +1594,14 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
         prose: (await assistantTexts(page)).slice(confirmBaseline).join('\n'),
         actions: await fetchPendingActions(ctx.baseUrl),
       });
-      // The informational request must NOT mint a second virtual card: still exactly 3 cards, one VIRTUAL.
+      // The informational request must NOT mint a second virtual card: the total card COUNT must stay at the BASELINE captured at scenario start (a preceding lA leg may legitimately add a replacement credit card); still one VIRTUAL.
       const afterConfirm = await fetchLiveCards(ctx.baseUrl);
       const virtuals = afterConfirm.filter((card) => card.type === 'VIRTUAL');
       if (virtuals.length !== 1 || virtuals[0].id !== VIRTUAL_CARD_ID) {
         throw new Error(`确认虚拟卡后应仍恰有 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}），实际 ${JSON.stringify(virtuals)}`);
       }
-      if (afterConfirm.length !== 3) {
-        throw new Error(`确认虚拟卡后卡片总数应仍为 3，实际 ${afterConfirm.length}：${afterConfirm.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+      if (afterConfirm.length !== baselineCards.length) {
+        throw new Error(`确认虚拟卡后卡片总数应保持不变（基线 ${baselineCards.length} 张），实际 ${afterConfirm.length}：${afterConfirm.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
       }
 
       // C2 — spend THROUGH THE REAL FRONT-END (CardManager 消费 button → CardConsumeDialog form).
