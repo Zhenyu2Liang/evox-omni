@@ -245,6 +245,7 @@ across a reload; `f-wedge-refresh-recover` settles the receipt exactly once; `h-
 | `output/playwright/REPORT-mock-suite.md` | mock suite: 23 journeys, exit code, DB file |
 | `output/playwright/REPORT-date-tamper-boundary.md` | date-tamper: 9 cases, exact responses, DB file |
 | `logs/` (gitignored) | raw per-run stdout, evidence JSON, DB dumps — never committed |
+| `tests/e2e/screenshots/live/*.png` | earlier-run artefacts for live scenarios `0`–`7` (not re-run this cycle; kept unchanged, their provenance is in Git history) |
 
 Per-round screenshots are copied into `lD-round<N>/` / `lE-round<N>/` / `lA-lC-round<N>/` because the
 harness's fixed screenshot names are overwritten by the next run.
