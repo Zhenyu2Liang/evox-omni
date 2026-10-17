@@ -5,6 +5,7 @@
 | 模块 | 用途 |
 | --- | --- |
 | `db.ts` | 连接、清空、重建夹具与断开测试库 |
+| `db-truncate.test.ts` | 逐 model 校验 `truncateAll` 的清空覆盖 |
 | `fixtures.ts` | 独立维护的测试数据 |
 | `faux-agent.ts` | 原始 Pi Agent 与脚本模型 |
 | `scenario.ts` | 网关和工具层的两阶段场景 |
@@ -33,6 +34,31 @@
 客户端连接机制见
 [lib/db/CONTEXT.md](../../lib/db/CONTEXT.md)。
 不得用旧连接池参数解释当前原生适配器行为。
+
+### 清空语义（`truncateAll`）
+
+`truncateAll` 删除 `prisma/schema.prisma` 中**每一个** model 的全部记录，
+顺序按外键子表→父表，且**不**重新播种；`resetDatabase` 在其后加载夹具。
+清空完成后整个库为空：任何 delegate 的 `count()` 都是 0。
+除夹具外没有“合法残留”，测试与相邻运行之间不共享业务记录。
+
+省略一张表就是缺陷，`onDelete: Cascade` 不能替代显式删除。
+无关系表（`ExecutionReceipt`、`CircuitBreakerState`、`AuthorizationDecision`、
+`RiskSignal`、`CardConsumption`）没有任何外键驱动删除，必须显式列出。
+`CardConsumption` 只带索引与唯一 `executionKey`：
+漏删会让消费行与重放身份跨 `resetDatabase` 存活，
+既污染卡家族当月消费，又让重复运行以旧卡 id 重放而报 `CONFLICT`。
+`ScheduledNotification` 与 `ModelRequest` 同属易漏项，已与其父表一并显式删除。
+
+`db-truncate.test.ts` 逐 model 校验覆盖率：
+每个 schema model 必须在 `db.ts` 中出现 `prisma.<delegate>.deleteMany(`；
+清空列表中不得出现不存在的 delegate；
+残留行在 `truncateAll` 后必须为 0；
+带唯一 `executionKey` 的消费行不得跨 `resetDatabase` 存活。
+新增 model 时必须同时补 `truncateAll`，否则该用例失败。
+
+因此各套件**不需要**在 `useFreshDatabase()`/`resetDatabase()` 之后再手工
+`cardConsumption.deleteMany()`，重复的清空钩子是多余的。
 
 Prisma 准备失败时必须保留完整命令诊断。
 失败注入必须保留真实事务的回滚行为。
