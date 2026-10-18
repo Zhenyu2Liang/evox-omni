@@ -45,6 +45,49 @@ export const PROMPT_MANUAL_ONLY_MARKER = /manual-only|manual only|must be handle
 export const PROMPT_NEW_CARD_SCOPE_MARKER = /brand-new|brand new|new physical|issuing a new|opening a new|creating a new|adding|additional|new debit|new credit|新建实体卡|新增实体卡|办理新卡|添加实体卡/i;
 /** Replacement vocabulary as it appears in the English prompt. */
 export const PROMPT_REPLACEMENT_MARKER = /replace|补办|replacement/i;
+/** Card noun as it appears in the English prompt (the catalogs use `CARD_TERM`). */
+export const PROMPT_CARD_MARKER = /card|卡/i;
+/** Card-acquisition verbs as they appear in the English prompt (issue / apply / create a card). */
+export const PROMPT_CARD_ACQUISITION_MARKER = /issu|creat|applic|发放|创建|申请/i;
+/** Card DELETION — the second, genuinely manual item of the page-only rule (`manual_delete_card`). */
+export const PROMPT_CARD_DELETION_MARKER = /delet|注销|删除/i;
+/**
+ * The manual-only set is CLOSED: the sentence says nothing beyond the named items is page-only, so it
+ * cannot be read as denying some other agent-owned card capability.
+ */
+export const PROMPT_MANUAL_ONLY_CLOSED_SET_MARKER = /no other (?:capability|operation|action|task) is (?:page-only|manual)|nothing else is (?:page-only|manual)|only these two|exactly two (?:things|operations|actions|items)|其余[^，。；]{0,10}(?:都|均)|其它能力(?:都|均)/i;
+/** Any mention of page-only / manual treatment — a claim that must never be made about `replace_card`. */
+export const PROMPT_PAGE_ONLY_TREATMENT_MARKER = /page-only|page only|page action|Cards page|manual-only|must be handled manually|卡片页面|人工/;
+/** An explicit DENIAL of that treatment, e.g. "never a page action" / "never describe it as page-only". */
+export const PROMPT_PAGE_ONLY_DENIAL_MARKER = /\b(?:never|not|nor|no longer)\b[^.;:]{0,60}(?:page-only|page only|page action|Cards page|manual-only|handled manually|卡片页面|人工)/i;
+
+/**
+ * Whether ONE prohibition sentence stays inside the real manual-only scope. Such a sentence is
+ * truthful only when it (a) scopes the rule to brand-new physical card records, or (b) closes the
+ * manual-only set ("no other capability is page-only"), or (c) explicitly carves out 补办/replacement.
+ */
+export function hasScopedManualOnlyCardRule(sentence: string): boolean {
+  return PROMPT_NEW_CARD_SCOPE_MARKER.test(sentence)
+    || PROMPT_MANUAL_ONLY_CLOSED_SET_MARKER.test(sentence)
+    || PROMPT_REPLACEMENT_MARKER.test(sentence);
+}
+
+/**
+ * Sentences that declare card work manual-only / impossible in an Agent workflow while the product
+ * really owns card capabilities (`replace_card` for an already-LOST card of any type,
+ * `apply_virtual_card`).
+ *
+ * Scope is judged PER SENTENCE: a neighbouring "offer replace_card" sentence never rescues an
+ * overbroad prohibition, which is exactly how a prompt ends up contradicting itself. The offending
+ * sentences are returned, so an empty array is the passing contract.
+ */
+export function overbroadManualOnlyCardProhibitions(text: string): string[] {
+  return splitSentences(text).filter(sentence => {
+    if (!PROMPT_MANUAL_ONLY_MARKER.test(sentence)) return false;
+    if (!PROMPT_CARD_MARKER.test(sentence) || !PROMPT_CARD_ACQUISITION_MARKER.test(sentence)) return false;
+    return !hasScopedManualOnlyCardRule(sentence);
+  });
+}
 
 /**
  * Clause boundary for negation scope. `、` is deliberately NOT a boundary: in

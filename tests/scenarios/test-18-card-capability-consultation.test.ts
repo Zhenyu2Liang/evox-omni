@@ -19,14 +19,19 @@
  *     the structured `missing_details` envelope (rendered by the server, not by the model) or ordinary
  *     prose asking which card — and still performs no work. A clarification is NOT a confirmation/MFA
  *     panel: no `PendingAction` exists, so no panel may be claimed.
- *  3. Capability GUIDANCE must not deny a capability the product really exposes. The rendered guidance
- *     and the runtime system prompt must not tell the model that creating/applying cards is impossible
- *     or that replacing a LOST card is manual-only. This is the EXPECTED PRE-FIX FAILURE in this
- *     worktree: `agent/messages/conversation.zh-CN.json#card_management_required` still says
- *     「AI 助手不能创建、申请或删除卡片」 and `agent/system-prompt.ts:38` still says
- *     「Issuing or deleting physical debit and credit cards remains manual-only on the Cards page and
- *     cannot be included in an Agent workflow.」 immediately before `offer replace_card to issue a new
- *     card for it. Those assertions are intentionally NOT weakened, skipped or softened.
+ *  3. Capability GUIDANCE must not deny a capability the product really exposes. The rendered
+ *     `card_management_required` guidance must not say the assistant cannot create or apply cards, and
+ *     the runtime system prompt must keep its manual-only rule limited to brand-new physical card
+ *     records plus card deletion, closed to everything else, with 补办 of an ALREADY LOST card of any
+ *     type (DEBIT 借记卡 / CREDIT 信用卡 / VIRTUAL 虚拟卡) as an ordinary `replace_card` agent
+ *     capability that is never page-only. The detector is the shared sentence-level predicate
+ *     `overbroadManualOnlyCardProhibitions` (`../unit/agent/capability-guidance-markers`), which flags
+ *     a card prohibition that names acquisition as a category instead of the scoped manual work; the
+ *     overbroad prohibition it rejects — 「Issuing or deleting physical debit and credit cards remains
+ *     manual-only on the Cards page and cannot be included in an Agent workflow.」 — plus its
+ *     contradictory 「Offer replace_card to issue a new card for it.」 follow-up are pinned as
+ *     must-flag examples in `../unit/agent/card-capability-guidance.test.ts`. These assertions are
+ *     never weakened, skipped or softened.
  *
  * Cross-references (not duplicated here):
  *  - `test-13-card-replace.test.ts` — DEBIT replacement through the gateway with the raw Pi harness.
@@ -52,6 +57,16 @@ import { AGENT_TOOL_NAMES } from '@/lib/contracts/tool-catalog';
 import { DEMO_USER_ID } from '../helpers/fixtures';
 import { getTestPrisma, useFreshDatabase } from '../helpers/db';
 import { scriptedProvider } from '../helpers/scripted-provider';
+import {
+  PROMPT_CARD_DELETION_MARKER,
+  PROMPT_MANUAL_ONLY_CLOSED_SET_MARKER,
+  PROMPT_MANUAL_ONLY_MARKER,
+  PROMPT_NEW_CARD_SCOPE_MARKER,
+  PROMPT_PAGE_ONLY_DENIAL_MARKER,
+  PROMPT_PAGE_ONLY_TREATMENT_MARKER,
+  overbroadManualOnlyCardProhibitions,
+  splitSentences,
+} from '../unit/agent/capability-guidance-markers';
 
 useFreshDatabase();
 
@@ -221,13 +236,16 @@ describe('Scenario 18 case 2 — 卡片歧义只产生澄清，不产生操作',
 });
 
 /**
- * Case 3 — the capability guidance and the runtime system prompt must not deny real capability.
+ * Case 3 — the capability guidance and the runtime system prompt state the real card contract.
  *
- * Labelled separately because it is the EXPECTED PRE-FIX FAILURE of this worktree: the assertions are
- * negative only (they never require specific replacement wording), they encode the CONTRACT, and they
- * fail today on the wording that is actually shipped.
+ * The assertions stay on that contract, never on one wording: a sentence that requires manual handling
+ * for card ACQUISITION as a category is overbroad, while the shipped rule is acceptable because it names
+ * only brand-new physical card records plus card deletion, states that the manual-only set is closed,
+ * and points 补办 of an ALREADY LOST card of any type at `replace_card`. The sentence-level detector
+ * (`overbroadManualOnlyCardProhibitions`) is pinned by flagged and acceptable examples in
+ * `../unit/agent/card-capability-guidance.test.ts`.
  */
-describe('Scenario 18 case 3 — 能力指引与系统提示不得否认真实能力 (EXPECTED PRE-FIX FAILURE)', () => {
+describe('Scenario 18 case 3 — 能力指引与系统提示不得否认真实能力', () => {
   /** Negations that would make the agent deny a capability the catalog really registers. */
   const DENIES_CARD_CREATION = /不能[^。]*(创建|申请)[^。]*卡/;
   const DENIES_CARD_REPLACEMENT_AS_MANUAL = /补办[^。]*(只能|需在)[^。]*(手动|卡片页面)/;
@@ -252,38 +270,63 @@ describe('Scenario 18 case 3 — 能力指引与系统提示不得否认真实�
     expect(await db().card.count({ where: { userId: DEMO_USER_ID } })).toBe(before.cards);
   });
 
-  it('the rendered system prompt does not contradict itself about 补办 of a lost card', () => {
-    // Mirror `agent/banking-agent.ts:238` — the production runtime builds the prompt from the registry
+  it('the rendered system prompt scopes manual-only work and keeps 补办 agent-reachable', () => {
+    // Mirror `agent/banking-agent.ts` — the production runtime builds the prompt from the registry
     // tool names with the turn-intent tool enabled.
     const prompt = buildSystemPrompt({
       userId: DEMO_USER_ID,
       toolNames: [...AGENT_TOOL_NAMES],
       turnIntentTool: true,
     });
+    const sentences = splitSentences(prompt);
 
-    // Precondition: the capability the guidance must not deny IS offered to the model.
+    // (i) Precondition: the capabilities the guidance must not deny ARE offered to the model.
     expect(prompt).toContain('- replace_card: RED');
     expect(prompt).toContain('- apply_virtual_card: RED');
 
-    // CONTRACT: a "manual-only / cannot be included in an Agent workflow" prohibition about physical
-    // cards must be SCOPED — it must carve out the agent-reachable lost-card replacement. Today the
-    // prohibition covers card issuance as a category and is immediately followed, in the same
-    // paragraph, by "offer replace_card to issue a new card for it": the prompt tells the model both
-    // that issuing a card is impossible and that it should issue one.
-    const sentences = prompt
-      .split(/(?<=[.。])\s+|\n+/)
-      .map(sentence => sentence.trim())
-      .filter(Boolean);
-    const prohibition = /manual[- ]only|cannot be included in an Agent workflow/i;
-    const cardWord = /card/i;
-    const issuanceVerb = /(issu|creat|applic|发放|创建|申请)/i;
-    const replacementCarveOut = /replac|补办|换卡/i;
-    const overbroad = sentences.filter(sentence =>
-      prohibition.test(sentence) && cardWord.test(sentence) && issuanceVerb.test(sentence) &&
-      !replacementCarveOut.test(sentence));
+    // (ii) CONTRACT: a "manual-only / cannot be included in an Agent workflow" prohibition about cards
+    // may forbid only the scoped manual work. Judged per sentence, so a neighbouring offer of
+    // `replace_card` cannot rescue an overbroad prohibition.
+    const overbroad = overbroadManualOnlyCardProhibitions(prompt);
     expect(
       overbroad,
-      `系统提示把卡片发放整体说成只能人工，却同时要求 offer replace_card：${overbroad.join(' | ')}`,
+      `系统提示把卡片发放整体说成只能人工（未限于新建实体卡、未声明人工集合封闭、也未排除补办）：${overbroad.join(' | ')}`,
+    ).toEqual([]);
+
+    // (ii, cont.) The rule itself names both manual items (brand-new physical card creation + card
+    // deletion) and states the page-only set is closed. Owned here rather than in
+    // `tests/unit/agent/system-prompt.test.ts`, which pins the brand-new scoping of physical sentences
+    // and the absence of replacement wording inside manual-only sentences.
+    const manualOnly = sentences.filter(sentence => PROMPT_MANUAL_ONLY_MARKER.test(sentence));
+    expect(manualOnly.length, '系统提示必须声明人工专属的卡片规则').toBeGreaterThan(0);
+    const closedRule = manualOnly.filter(sentence =>
+      PROMPT_NEW_CARD_SCOPE_MARKER.test(sentence)
+      && PROMPT_MANUAL_ONLY_CLOSED_SET_MARKER.test(sentence)
+      && PROMPT_CARD_DELETION_MARKER.test(sentence));
+    expect(
+      closedRule,
+      `卡片的人工专属规则必须限于「新建实体卡 + 注销卡片」并声明其余能力都不是页面专属：${manualOnly.join(' | ')}`,
+    ).not.toEqual([]);
+
+    // (iii) `replace_card` is described for an ALREADY LOST card of ANY type, and no sentence mentioning
+    // it treats replacement as page-only or manual work.
+    const replacement = sentences.filter(sentence => /replace_card/i.test(sentence));
+    expect(replacement.length, '系统提示必须把 replace_card 作为代理能力描述').toBeGreaterThan(0);
+    const lostOfAnyType = replacement.filter(sentence =>
+      /already lost/i.test(sentence)
+      && /debit|借记卡/i.test(sentence)
+      && /credit|信用卡/i.test(sentence)
+      && /virtual|虚拟卡/i.test(sentence));
+    expect(
+      lostOfAnyType,
+      `replace_card 必须覆盖任意类型的已挂失卡（借记卡/信用卡/虚拟卡）：${replacement.join(' | ')}`,
+    ).not.toEqual([]);
+    const pageOnlyClaims = replacement
+      .filter(sentence => PROMPT_PAGE_ONLY_TREATMENT_MARKER.test(sentence))
+      .filter(sentence => !PROMPT_PAGE_ONLY_DENIAL_MARKER.test(sentence));
+    expect(
+      pageOnlyClaims,
+      `replace_card 绝不能被说成页面专属或只能人工办理：${pageOnlyClaims.join(' | ')}`,
     ).toEqual([]);
 
     // CONTRACT: the prompt must not scope 补办 itself to manual work (Chinese wording, if it exists).
