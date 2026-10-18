@@ -15,6 +15,7 @@
 | `chat-plan-history`、`plan-history-page` | 计划的历史归属 |
 | `financial-display`、`chart-presentation` | 精确金额与图表显示 |
 | `context-compaction`、`conversation-context` | 历史压缩与上下文恢复 |
+| `scripted-provider` | 脚本化模型辅助模块自身 |
 
 表内名称对应同名测试文件，扩展名为 `.test.ts`。
 其余展示、诊断和条件边界以目录为准。
@@ -37,13 +38,18 @@
 `reply-format.test.ts` 与 `reply-repair.test.ts` 只验证协议信封。
 `inspectReplyFormat` 只识别 guidance、reasoning、assistant、tool envelope。
 普通散文一律放行，不检查语义含义。
-本目录没有断言"无工具调用的散文确认声明应被拒绝或纠正"。
-模型用散文声称"请在面板确认"却不发出工具调用时无测试覆盖，也无修复路径。
+「散文声称面板却无受控工具调用」的策略不在本目录。
+判定与纠正在 `agent/write-continuation.ts`，用例见 [../agent/CONTEXT.md](../agent/CONTEXT.md) 与 `tests/integration/write-continuation.test.ts`。
 服务端确认面板只在该工具调用持久化 `PendingAction` 后出现。
 会话策略测试只覆盖 mock 分类器，不覆盖真实模型散文。
 `conversation-evidence.test.ts` 只拒绝散文作为查询证据，不涉及确认声明。
 
 ## 相关但不在本目录
+
+`scripted-provider.test.ts` 只验证 `tests/helpers/scripted-provider.ts` 自身。
+声明先作为首个 `describe_turn` 调用流式返回，随后按脚本顺序返回，`calls()` 把声明计入。
+它不经过生产 `runTurn`、不建会话、不碰数据库。
+需要「脚本化模型 → 生产 `runTurn` → SQLite 断言」的骨架时用 `tests/integration/write-continuation.test.ts`。
 
 模型提案与逐轮声明测试位于 [../agent/providers/CONTEXT.md](../agent/providers/CONTEXT.md)。
 包含 `mock-plan-proposals.test.ts` 与 `mock-turn-declaration.test.ts`。
