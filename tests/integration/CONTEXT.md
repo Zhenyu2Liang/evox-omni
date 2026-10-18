@@ -25,7 +25,9 @@
 | `card-consume-transaction.test.ts` | 虚拟卡消费的事务原子性（注入失败后余额、`Transaction`、`CardConsumption` 三者全未变）、月限额与余额的并发栅栏、并发相同 `executionKey` 只扣一次 |
 | `card-replacement-transaction.test.ts` | 补办是一个事务（`card.update` 失败即回滚，不留半成品卡与 `replacedByCardId`）、源卡结算账户漂移（他人账户／储蓄账户／已删除）时拒绝补办且不落卡 |
 | `card-replacement-binding.test.ts` | 补办继承结算账户（原始行核对）、跨代月限额连续且历史 `CardConsumption` 不改写、缺绑定只按显式前驱修复、无前驱的缺绑定卡拒绝消费且绝不回退默认账户 |
-| `card-dashboard-assets.test.ts` | 补办家族的信用额度只计一次、虚拟卡/借记卡现金不计入信用且不重复计入总资产、种子基线 |
+| `card-replace-capability-contract.test.ts` | 经真实网关路径（`executeGatedTool` → `securityGateway#handleToolCall` → `verifyAction` → 执行器 → SDK）覆盖 `replace_card`：CREDIT／DEBIT／VIRTUAL 均停靠 `requiresMfa` 的 RED `PendingAction` 且验证前零副作用，验证后恰好新增一张卡、源卡仍 `LOST` 并持有 `replacedByCardId`；CREDIT 额度原样继承；VIRTUAL 结算账户继承且当月额度经卡族连续；非 `LOST` 源卡被 `CONFLICT` 拒绝且持久行不被改写（绝不先挂失）；重复补办指向同一张替换卡 |
+| `card-manual-only-management.test.ts` | 新建卡与删卡仍是人工页专属：`manual_add_card`／`manual_delete_card` 经注册表、`executeGatedTool`、`securityGateway#handleToolCall` 与决策端点均被拒绝，且不新增卡／`PendingAction`／`MfaChallenge`／`CardLimit`／`CardConsumption`／回执 |
+| `card-dashboard-assets.test.ts` | 补办家族的信用额度只计一次、虚拟卡/借记卡现金不计入信用且不重复计入总资产、种子基线；补办后 `apply_virtual_card` + `consume_virtual_card` 仍可用且余额/流水/消费行只动一次 |
 
 其他测试覆盖预算、取消、接管、执行权和未知结果。
 具体场景以测试源码中的断言为准。
