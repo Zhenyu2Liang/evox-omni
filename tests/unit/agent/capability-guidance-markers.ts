@@ -28,6 +28,9 @@ export const MANUAL_ONLY_MARKER = /需在|必须|仅|只/;
 /** Brand-new / added / deleted PHYSICAL card markers. `新卡` covers `新建新卡`-style wording. */
 export const PHYSICAL_NEW_CARD_MARKER = /实体卡|新卡|新增|添加|新建|办理新卡/;
 export const VIRTUAL_CARD_MARKER = /虚拟/;
+/** PHYSICAL card scope. Brand-new physical card records really are manual-only, so a denial that
+ * covers them and stops there is true; a denial that also covers virtual cards is not. */
+export const PHYSICAL_CARD_MARKER = /实体/;
 /** Acquisition verbs for a card (issue / apply / create). */
 export const CARD_ACQUISITION_MARKER = /申请|创建|新建|开卡/;
 /** 补办 / replacement of an already-lost card. `挂失` alone is excluded on purpose: reporting a
@@ -87,6 +90,15 @@ export function cardDenialClauses(text: string): CardDenialClause[] {
   return splitSentences(text)
     .filter(sentence => CARD_TERM.test(sentence) && DENIAL_MARKER.test(sentence))
     .flatMap(sentence => negationClauses(sentence).map(clause => ({ sentence, clause })));
+}
+
+/**
+ * Whether a denied clause is scoped to PHYSICAL cards only. Creating brand-new physical card
+ * records is truly manual-only (`manual_add_card`), so such a denial is a true statement; a denial
+ * that also reaches virtual cards is not.
+ */
+export function deniesPhysicalCardsOnly(clause: string): boolean {
+  return PHYSICAL_CARD_MARKER.test(clause) && !VIRTUAL_CARD_MARKER.test(clause);
 }
 
 export interface LocaleCatalog {
