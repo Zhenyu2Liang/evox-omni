@@ -27,7 +27,8 @@
 能力指引与系统提示不得否认真实能力：`replace_card` 与 `apply_virtual_card` 都是目录内的 RED 写工具。
 把手动专有操作（新建/删除卡片）指向卡片页面是允许的；声称助手不能创建/申请卡片、或把已挂失卡片的补办说成只能人工，则违反契约。
 正向可达：LOST 信用卡经 `replace_card` 进入 RED MFA，验证前不制卡；验证后恰好多一张 ACTIVE 信用卡，源卡保持 `LOST` 且 `replacedByCardId` 指向新卡。
-`test-18` 的指引/提示断言只做否定式判定，不要求任何特定新措辞，因此文案修正后即转绿。
+`test-18` case 3 用共享句子判定器 `../unit/agent/capability-guidance-markers.ts#overbroadManualOnlyCardProhibitions` 逐句检查系统提示：把卡片发放整体说成 manual-only 即为违规，而限于「新建实体卡 + 注销卡片」、声明页面专属集合封闭、或明确排除补办的句子都合规。
+同一用例还结构性核对人工专属规则的两项内容与封闭表述、`replace_card` 覆盖任意类型的已挂失卡，以及 `replace_card` 不被说成页面专属；断言绑定契约而不绑定某一句原文。
 断言卡片身份与增量（前后快照、指定 id），不断言整库卡片总数。
 
 ## 生产运行时事实（test-18 / test-19 依赖）
@@ -87,5 +88,4 @@ GREEN 只表示执行策略，不表示没有副作用。
 
 ## 已知问题
 
-`test-18` case 3 的两条断言当前失败，属产品文案缺陷而非测试缺陷：`card_management_required` 指引仍写「AI 助手不能创建、申请或删除卡片」，`agent/system-prompt.ts` 仍把实体卡发放整体说成 manual-only。
-对应契约由目录内的 `replace_card`/`apply_virtual_card` 保证，测试不得放宽或跳过这两条断言。
+`test-18` case 3 只覆盖 `agent/system-prompt.ts` 渲染出的英文提示句与 `card_management_required` 中文指引；其他语言的目录条目不在此判定。

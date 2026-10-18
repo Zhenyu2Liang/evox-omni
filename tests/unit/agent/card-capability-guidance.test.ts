@@ -13,6 +13,7 @@ import {
   cardManagementEntries,
   deniesPhysicalCardsOnly,
   loadLocaleCatalogs,
+  overbroadManualOnlyCardProhibitions,
   splitSentences,
   type LocaleCatalog,
 } from './capability-guidance-markers';
@@ -187,6 +188,62 @@ describe('card-lifecycle capability guidance', () => {
     it('keeps the manual-only marker distinct from the plain need marker', () => {
       expect(MANUAL_ONLY_MARKER.test('需要给卡片充值，还是调整消费限额？')).toBe(false);
       expect(MANUAL_ONLY_MARKER.test('添加或删除实体卡需在“卡片”页面操作。')).toBe(true);
+    });
+
+    /**
+     * The model-facing prompt is policed by sentence, so the vocabulary must catch an overbroad card
+     * prohibition and accept a rule that stays inside the real manual-only scope. `OVERBROAD` is the
+     * prohibition this contract rejects (card acquisition denied as a category); `SHIPPED_SCOPE` is the
+     * acceptable shape (brand-new physical card records + card deletion, closed to everything else).
+     */
+    describe('overbroad manual-only card prohibitions', () => {
+      const OVERBROAD =
+        'Issuing or deleting physical debit and credit cards remains manual-only on the Cards page and cannot be included in an Agent workflow.';
+      const OFFER_FOLLOW_UP = 'Offer replace_card to issue a new card for it.';
+      const SHIPPED_SCOPE =
+        'Manual-only, on the Cards page with its own page verification, means exactly two things: creating a brand-new physical debit or credit card, and deleting a card record; no other capability is page-only.';
+
+      it('flags the prohibition that names card issuance as a manual-only category', () => {
+        expect(overbroadManualOnlyCardProhibitions(OVERBROAD)).toEqual([OVERBROAD]);
+        expect(overbroadManualOnlyCardProhibitions('Issuing physical cards is manual-only on the Cards page and cannot be included in an Agent workflow.'))
+          .toEqual(['Issuing physical cards is manual-only on the Cards page and cannot be included in an Agent workflow.']);
+      });
+
+      it('does not let a follow-up that offers replace_card rescue the prohibition', () => {
+        // The pair is the contradiction itself: the prohibition denies card issuance as a category and the
+        // next sentence tells the model to issue one. Scope is judged per sentence, so the follow-up
+        // never rescues it.
+        expect(overbroadManualOnlyCardProhibitions(`${OVERBROAD} ${OFFER_FOLLOW_UP}`)).toEqual([OVERBROAD]);
+        expect(overbroadManualOnlyCardProhibitions(OFFER_FOLLOW_UP)).toEqual([]);
+      });
+
+      it('accepts the shipped rule scoped to brand-new physical records with a closed manual-only set', () => {
+        expect(overbroadManualOnlyCardProhibitions(SHIPPED_SCOPE)).toEqual([]);
+        // Either scoping element is enough on its own: brand-new records ...
+        expect(overbroadManualOnlyCardProhibitions(
+          'Creating a brand-new physical debit or credit card is manual-only on the Cards page.',
+        )).toEqual([]);
+        // ... and an explicitly closed manual-only set.
+        expect(overbroadManualOnlyCardProhibitions(
+          'Issuing a card record and deleting one are manual-only, and no other capability is page-only.',
+        )).toEqual([]);
+      });
+
+      it('accepts a rule that carves out 补办 of an already-lost card', () => {
+        const carveOut = 'Cards-page manual-only work does not create or replace cards: replace_card is an agent capability for a LOST card.';
+        expect(overbroadManualOnlyCardProhibitions(carveOut)).toEqual([]);
+        // The same sentence shape without the carve-out stays flagged, so the passage above is not a
+        // blanket exemption for sentences that merely mention cards.
+        expect(overbroadManualOnlyCardProhibitions(
+          'Cards-page manual-only work cannot be included in an Agent workflow for card creation.',
+        )).toEqual(['Cards-page manual-only work cannot be included in an Agent workflow for card creation.']);
+      });
+
+      it('leaves card sentences that state no manual-only rule alone', () => {
+        expect(overbroadManualOnlyCardProhibitions('虚拟卡申请需由助手确认并完成验证后办理。')).toEqual([]);
+        expect(overbroadManualOnlyCardProhibitions('Offer replace_card whenever the user asks to 补办 a LOST card.'))
+          .toEqual([]);
+      });
     });
   });
 });
