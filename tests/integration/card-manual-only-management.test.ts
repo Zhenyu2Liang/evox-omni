@@ -7,7 +7,7 @@
  * `agent/confirmation/gated-execution.ts`): `manual_add_card` and `manual_delete_card` are the two
  * `ManualCardCommandName`s. On the human page (`security/manual-card-management.ts`) each one owns its
  * own proposal, its own MFA challenge, its own strict audit row and its own execution receipt.
- * `manual_add_card` / `manual_delete_card` / `manual_delete_card` are NOT agent capabilities: the
+ * `manual_add_card` / `manual_delete_card` are NOT agent capabilities: the
  * runtime's tool/command path must REFUSE them, and a refused attempt must leave the database exactly
  * as it was — NO new `Card` row, NO `PendingAction`, NO `MfaChallenge`, NO `CardLimit`, NO
  * `CardConsumption` and NO `ExecutionReceipt`.
