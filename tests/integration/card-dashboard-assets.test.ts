@@ -33,7 +33,9 @@
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { banking } from '@/banking-sdk';
+import { getDemoSession } from '@/agent';
+import { createToolRegistry } from '@/agent/tools';
+import { banking, type CardView, type ConsumeCardResult } from '@/banking-sdk';
 import { addDecimal, subtractDecimal } from '@/lib/decimal';
 import { addMoney, centsToMoney, moneyToCents, subtractMoney } from '@/lib/money';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
@@ -61,15 +63,6 @@ const SEEDED_HOLDINGS_VALUE = '5050';
 const SEEDED_TOTAL_ASSETS = '78630';
 
 beforeEach(resetDatabase);
-/**
- * REQUIRED ORDERING GOTCHA: `tests/helpers/db.ts#truncateAll()` predates the relation-free
- * `CardConsumption` table (it declares no Prisma relation), so a reset does NOT clear it. Card ids and
- * the demo user are stable across resets, so a leftover consumption row would silently feed the card
- * FAMILY month spend of the NEXT test. Registered AFTER `resetDatabase`, it runs after the re-seed.
- */
-beforeEach(async () => {
-  await db().cardConsumption.deleteMany();
-});
 afterAll(disconnectTestPrisma);
 
 /** Cash + holdings valuation, recomputed independently of `getDashboardSummary`. */
@@ -288,6 +281,168 @@ describe('virtual/debit card cash is not credit and is counted once in total ass
   });
 });
 
+
+describe('a normal virtual-card issue and spend keeps working once 补办 exists', () => {
+  it('issues and spends a VIRTUAL card through the agent command path after a replacement family exists', async () => {
+    // A completed 挂失 → 补办 pair in the SAME workspace: the replacement family is already there, so
+    // every assertion below runs in the world 补办 creates.
+    const lost = await banking.card.reportLostCard(CREDIT, DEMO_USER_ID, { reason: '卡片遗失' });
+    expect(lost.status).toBe('LOST');
+    const replacement = await banking.card.replaceCard(CREDIT, DEMO_USER_ID);
+    expect(replacement).toMatchObject({ type: 'CREDIT', status: 'ACTIVE', availableLimit: SEEDED_CREDIT_AVAILABLE });
+
+    const before = await banking.dashboard.getDashboardSummary(DEMO_USER_ID);
+    expect(before.creditAvailable).toBe(SEEDED_CREDIT_AVAILABLE);
+    expect(before.checkingBalance).toBe(SEEDED_CHECKING);
+    expect(before.totalAssets).toBe(SEEDED_TOTAL_ASSETS);
+
+    // (1) Issue a VIRTUAL card through the SAME command path the runtime uses — issuing a VIRTUAL card
+    // stays possible while creating/deleting card RECORDS stays manual-only.
+    const { sessionId } = await getDemoSession(DEMO_USER_ID);
+    const registry = createToolRegistry(DEMO_USER_ID);
+    const applied = await registry.executeDirect('apply_virtual_card', { monthlyLimit: '2000.00' }, { sessionId });
+    expect(applied.ok).toBe(true);
+    expect(applied.error).toBeUndefined();
+    const virtual = applied.data as CardView;
+    expect(virtual).toMatchObject({
+      type: 'VIRTUAL',
+      status: 'ACTIVE',
+      // Bound to the seeded CHECKING settlement account: a DEBIT instrument, no new cash …
+      linkedAccountId: CHECKING,
+      monthlyLimit: '2000.00',
+      accountAvailableBalance: SEEDED_CHECKING,
+      // … whose spendable amount is min(account cash, remaining monthly limit).
+      payableAmount: '2000.00',
+    });
+    expect(virtual.availableLimit).toBeUndefined();
+    expect(virtual.creditLimit).toBeUndefined();
+    expect(await db().card.count({ where: { userId: DEMO_USER_ID, type: 'VIRTUAL' } })).toBe(1);
+
+    // Issuing the card changed no money and no credit.
+    const afterIssue = await banking.dashboard.getDashboardSummary(DEMO_USER_ID);
+    expect(afterIssue.creditAvailable).toBe(before.creditAvailable);
+    expect(afterIssue.checkingBalance).toBe(before.checkingBalance);
+    expect(afterIssue.totalAssets).toBe(before.totalAssets);
+
+    // (2) Spend ¥100.00 through that card on the same command path.
+    const SPEND = '100.00';
+    /** A unique merchant label, so the ledger row asserted below can only be this one spend. */
+    const MERCHANT = '补办后虚拟卡回归商户';
+    const consumedResult = await registry.executeDirect(
+      'consume_virtual_card',
+      { cardId: virtual.id, amount: SPEND, category: '购物', merchant: MERCHANT },
+      { sessionId },
+    );
+    expect(consumedResult.ok).toBe(true);
+    expect(consumedResult.error).toBeUndefined();
+    const consumed = consumedResult.data as ConsumeCardResult;
+    expect(consumed.consumption).toMatchObject({
+      cardId: virtual.id,
+      accountId: CHECKING,
+      amount: SPEND,
+      currency: 'CNY',
+    });
+    expect(consumed.accountAvailableBalance).toBe(subtractMoney(SEEDED_CHECKING, SPEND));
+    expect(consumed.accountAvailableBalance).toBe('23480.00');
+    expect(consumed.card.payableAmount).toBe(subtractMoney('2000.00', SPEND));
+
+    // (3) STORAGE TRUTH: exactly ONE ledger row (negative) and ONE consumption row (positive magnitude).
+    const ledgerRows = await db().transaction.findMany({
+      where: { accountId: CHECKING, channel: 'CARD', merchant: MERCHANT },
+    });
+    expect(ledgerRows).toHaveLength(1);
+    expect(ledgerRows[0]).toMatchObject({
+      userId: DEMO_USER_ID,
+      direction: 'DEBIT',
+      category: '购物',
+      amountMinor: -moneyToCents(SPEND),
+    });
+    const consumptionRows = await db().cardConsumption.findMany({
+      where: { userId: DEMO_USER_ID, cardId: virtual.id },
+    });
+    expect(consumptionRows).toHaveLength(1);
+    expect(consumptionRows[0]).toMatchObject({
+      accountId: CHECKING,
+      category: '购物',
+      merchant: MERCHANT,
+      amountMinor: moneyToCents(SPEND),
+    });
+    const rawChecking = await checkingMinor();
+    expect(rawChecking).toBe(moneyToCents('23480.00'));
+
+    // (4) The dashboard books that ONE spend once; the debit card never becomes credit.
+    const after = await banking.dashboard.getDashboardSummary(DEMO_USER_ID);
+    expect(after.creditAvailable).toBe(SEEDED_CREDIT_AVAILABLE);
+    expect(after.creditAvailable).toBe(before.creditAvailable);
+    expect(after.creditAvailable).toBe(replacement.availableLimit);
+    expect(after.checkingBalance).toBe(centsToMoney(rawChecking));
+    expect(after.checkingBalance).toBe('23480.00');
+    expect(after.totalAssets).toBe(subtractDecimal(before.totalAssets, SPEND));
+    expect(after.totalAssets).toBe('78530');
+    expect(after.totalAssets).not.toBe(subtractDecimal(before.totalAssets, '200.00'));
+
+    // The replacement family is still exactly one ACTIVE credit card plus its LOST source.
+    const creditViews = (await banking.card.getCards(DEMO_USER_ID)).filter((card) => card.type === 'CREDIT');
+    expect(creditViews.map((card) => card.status).sort()).toEqual(['ACTIVE', 'LOST']);
+    const { cash, holdingsValue } = await assetParts();
+    expect(cash).toBe('73480.00');
+    expect(after.totalAssets).toBe(addDecimal(holdingsValue, cash));
+  });
+});
+
+describe('credit available is unchanged by a CREDIT 补办 and counts the replacement once', () => {
+  it('keeps one approved limit across 挂失 → 补办 instead of doubling it', async () => {
+    /** A non-round limit so a doubled total is unmistakable: '13579.25' × 2 = '27158.50'. */
+    const FAMILY_LIMIT = '13579.25';
+    await db().card.update({
+      where: { id: CREDIT },
+      data: { availableLimitMinor: moneyToCents(FAMILY_LIMIT) },
+    });
+
+    const before = await banking.dashboard.getDashboardSummary(DEMO_USER_ID);
+    expect(before.creditAvailable).toBe(FAMILY_LIMIT);
+    expect(before.totalAssets).toBe(SEEDED_TOTAL_ASSETS);
+
+    // 挂失 alone is terminal: the source stops counting, so nothing contributes until the replacement
+    // exists. Card status is not an asset, so totalAssets does not move.
+    const lost = await banking.card.reportLostCard(CREDIT, DEMO_USER_ID, { reason: '卡片遗失' });
+    expect(lost.status).toBe('LOST');
+    expect(lost.availableLimit).toBe(FAMILY_LIMIT);
+    const afterLoss = await banking.dashboard.getDashboardSummary(DEMO_USER_ID);
+    expect(afterLoss.creditAvailable).toBe(centsToMoney(0n));
+    expect(afterLoss.creditAvailable).toBe('0.00');
+    expect(afterLoss.totalAssets).toBe(before.totalAssets);
+
+    // 补办 inherits the SAME limit, so the total returns to that ONE approved number …
+    const replacement = await banking.card.replaceCard(CREDIT, DEMO_USER_ID);
+    expect(replacement).toMatchObject({ type: 'CREDIT', status: 'ACTIVE', availableLimit: FAMILY_LIMIT });
+    const after = await banking.dashboard.getDashboardSummary(DEMO_USER_ID);
+    expect(after.creditAvailable).toBe(FAMILY_LIMIT);
+    expect(after.creditAvailable).toBe(replacement.availableLimit);
+    // … UNCHANGED by the 补办: 27,158.50 would mean the replacement family was summed twice.
+    expect(after.creditAvailable).toBe(before.creditAvailable);
+    expect(addMoney(FAMILY_LIMIT, FAMILY_LIMIT)).toBe('27158.50');
+    expect(after.creditAvailable).not.toBe(addMoney(FAMILY_LIMIT, FAMILY_LIMIT));
+
+    // Both family rows still CARRY the limit in storage; only the non-LOST one contributes.
+    const sourceRow = await db().card.findUniqueOrThrow({ where: { id: CREDIT } });
+    expect(sourceRow.status).toBe('LOST');
+    expect(sourceRow.replacedByCardId).toBe(replacement.id);
+    expect(sourceRow.availableLimitMinor).toBe(moneyToCents(FAMILY_LIMIT));
+    const contributing = (await banking.card.getCards(DEMO_USER_ID))
+      .filter((card) => card.type === 'CREDIT' && card.status !== 'LOST');
+    expect(contributing.map((card) => card.id)).toEqual([replacement.id]);
+    expect(
+      contributing.reduce((total, card) => addMoney(total, card.availableLimit ?? '0.00'), '0.00'),
+    ).toBe(after.creditAvailable);
+    expect(await db().card.count({ where: { userId: DEMO_USER_ID, type: 'CREDIT', status: { not: 'LOST' } } })).toBe(1);
+    expect(await db().card.count({ where: { userId: DEMO_USER_ID, type: 'CREDIT' } })).toBe(2);
+
+    // A card lifecycle event never enters total assets, and it moves no cash.
+    expect(after.totalAssets).toBe(before.totalAssets);
+    expect(after.checkingBalance).toBe(before.checkingBalance);
+  });
+});
 describe('seeded dashboard baseline is cash + holdings, never card rows', () => {
   it('equals the SDK-recomputed account balances plus holdings valuation', async () => {
     const summary = await banking.dashboard.getDashboardSummary(DEMO_USER_ID);

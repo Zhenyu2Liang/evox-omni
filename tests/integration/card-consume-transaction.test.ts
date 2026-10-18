@@ -24,11 +24,6 @@
  * `withInjectedWriteFailure` (`tests/helpers/write-failure.ts`), which proxies the client's
  * `$transaction` so exactly ONE `model.method` call throws INSIDE the real interactive transaction —
  * the earlier writes therefore genuinely roll back instead of the outcome being faked.
- *
- * GOTCHA (why the second `beforeEach` exists): `tests/helpers/db.ts#truncateAll()` predates the
- * relation-free `CardConsumption` table and does NOT delete from it, so rows survive `resetDatabase()`
- * and would distort row counts and `executionKey` uniqueness. They are cleared immediately AFTER it.
- *
  * CONCURRENCY SCOPE — what these bursts DO and DO NOT prove: every call is admitted at once
  * (`Promise.allSettled`), so all of them contend for the same card, the same monthly-limit read and
  * the same account row. The isolated test database is SQLite behind the `better-sqlite3` adapter,
@@ -67,9 +62,6 @@ const REPLAY_MERCHANT = '集成执行身份并发商户';
 const CATEGORY = '购物';
 
 beforeEach(resetDatabase);
-beforeEach(async () => {
-  await db().cardConsumption.deleteMany();
-});
 afterAll(disconnectTestPrisma);
 
 /** Issue a virtual card bound to the default settlement account (no seed ships one). */
@@ -143,7 +135,7 @@ describe('card consumption · one transaction, all-or-nothing', () => {
     const balanceBefore = await balanceMinorOf();
     const ledgerBefore = await cardLedgerCount(CHECKING);
     const consumptionBefore = await db().cardConsumption.count();
-    // A brand-new card (and the pre-test cleanup above) means there is nothing to confuse the trace.
+    // A brand-new card means there is nothing to confuse the trace.
     expect(await consumptionCount(card.id)).toBe(0);
 
     // ORDER MATTERS: inside the unit the atomic debit and the `channel='CARD'` ledger row are written

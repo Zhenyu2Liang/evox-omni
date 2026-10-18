@@ -33,10 +33,6 @@
  *
  * All money is asserted as exact canonical CNY decimal strings / integer minor units — never floats. The
  * masked card number is RANDOMLY generated, so no literal mask is ever asserted for a new card.
- *
- * NOTE: `CardConsumption` declares no relations, so the shared `truncateAll()` (written before that
- * ledger existed) does not clear it; this file clears it in `beforeEach`, registered AFTER
- * `resetDatabase` so every test starts from a genuinely empty spend history.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -65,10 +61,6 @@ const PREVIOUS_MONTH_INSTANT = demoMonthRange().start.getTime() - 1;
 const db = () => getTestPrisma();
 
 beforeEach(resetDatabase);
-/** Registered AFTER `resetDatabase` — see the header note about the relation-free ledger. */
-beforeEach(async () => {
-  await db().cardConsumption.deleteMany();
-});
 afterAll(disconnectTestPrisma);
 
 /** Issue a VIRTUAL card for the demo user (default binding = `acct_checking`). */
