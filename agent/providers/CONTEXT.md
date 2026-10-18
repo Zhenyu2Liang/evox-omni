@@ -136,7 +136,18 @@ operations and optional workflow/example flags; it cannot bypass the production 
 Natural-language conversation, advice, guidance and request DSL parsers live only in mock/.
 Before resource writes, resource-resolution.ts queries real card/product/holding/subscription
 records and binds actual IDs; unknown or ambiguous selections cannot substitute another resource.
-The mock has no card-consumption/spend/payment intent: its only card tool calls are the catalog card set (get_cards, set_card_limit, freeze/unfreeze/report_lost/replace/apply_virtual_card). See `./mock/CONTEXT.md`.
+The mock has no card-consumption/spend/payment intent: its only card tool calls are get_cards (read), set_card_limit, freeze_card and apply_virtual_card. report_lost_card, replace_card and unfreeze_card keep reply labels, REQUEST_COMMANDS entries and resource binding but no classifier emits them. See `./mock/CONTEXT.md`.
+
+## Card-management guidance (the "manual-only" reply)
+
+`inferConversationGuidance` (`mock/conversation-guidance.ts:29-31`) returns `card_management_required` when an issuance/removal verb (申请/添加/新增/删除/删掉/注销/开通/创建/办理, or create|add|issue|remove|delete|close|cancel|apply for) is paired with a card noun whose modifiers may be 银行/信用/借记/储蓄/实体.
+`mock/classifier.ts:24-26` short-circuits on that code and returns the closed template `agent/messages/conversation.zh-CN.json:7` ("添加或删除卡片需在“卡片”页面操作并完成验证。AI 助手不能创建、申请或删除卡片，也不会将这些操作加入任务计划。") without proposing a tool call; `mock/turn-declaration.ts:32-33` then declares the turn purpose `conversation`.
+虚拟 is deliberately outside the modifier list (`mock/conversation-guidance.ts:27-30` comment), so virtual-card application stays agent-available (`mock/card-intents.ts:57-60`).
+挂失/补办/lost/replace are NOT in that verb list: 挂失信用卡 falls through to `get_cards` (`mock/classifier.ts:76`), 补办一张新卡 is treated as conversation (补办 is absent from `WRITE_VERB`, `mock/conversation-policy.ts:3`), and a multi-step sequence containing either aborts with `missingDetails` (`mock/plan-intents.ts:104-106`). Because 办理 is a generic verb, 办理信用卡挂失 does match and yields the card-management reply.
+`mock/card-intents.ts:53-55` repeats the same code inside `classifyCardAction`; the full-text check in `classify` always precedes it, so only direct test callers reach that branch.
+The same envelope is accepted from a live model: `parseBankingGuidance` accepts `card_management_required` and `capabilities` (`../banking-guidance.ts:36`) and the server renders its own template (`../turns/buffer.ts:29-33`).
+This node adds no mitigation of its own: `provider-live.ts:206-223` returns the model plus `models.streamSimple` wrapped only by `withLiveRequestLimits` (deadline and one retry, `request-options.ts:7-45`), so no extra system instruction, temperature, capability preamble or tool filtering is sent and no card tool is dropped from the live declaration.
+`capabilities` is emitted at `mock/classifier.ts:55` only for non-conversational text; a plain 能做什么/有哪些功能 question is answered with `help` (`mock/classifier.ts:44-45`).
 
 - respond(context) is pure: no database, banking SDK, filesystem, network,
   Date.now() or Math.random() may affect reply content. Tool-call ids are explicit.
