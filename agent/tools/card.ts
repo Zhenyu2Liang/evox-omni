@@ -401,7 +401,9 @@ export function createReplaceCardTool(userId: string): AgentTool<typeof ReplaceC
   return {
     name: 'replace_card',
     label: '补办卡片',
-    description: '为已挂失的卡片补办一张新卡，原卡片保持挂失状态（高风险，需要短信验证码验证）。',
+    description: '为已挂失的卡片补办一张新卡，支持借记卡、信用卡和虚拟卡，原卡片保持挂失状态；'
+      + '新卡继承原卡的类型与卡组织，信用卡补办继承原信用额度与当前可用额度，'
+      + '虚拟卡补办保留原结算账户与当月剩余消费额度（高风险，需要短信验证码验证）。',
     parameters: ReplaceCardParams,
     execute: async (_toolCallId, params) => {
       return toModelToolResult(await runReplaceCard(userId, params));
