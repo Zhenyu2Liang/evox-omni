@@ -28,6 +28,7 @@ The `lF`/`lG` runs are the proof at the current HEAD's product tree.
 | `lG` round 4 (`REPORT-lG-head6a20dd93-round4.md`) | `573fe009` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `lG` round 7 (`REPORT-lG-headd1cccd00-round7.md`) | `573fe009` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `lG` round 8 (`REPORT-lG-headd1cccd00-round8.md`) | `573fe009` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
+| `lC` round 4 (`REPORT-lC-heade78796d5-round4.md`) | `4b03eec8` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `lD` round 3 (`REPORT-lD-head7a7a4d3-round3.md`) | `0c50e2f` | ≡ `7a7a4d3` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `lE` round 3 (`REPORT-lE-head7a7a4d3-round3.md`) | `0c50e2f` | ≡ `7a7a4d3` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `lD` round 2 (`REPORT-lD-head7a7a4d3-round2.md`) | `fa36508` | ≡ `7a7a4d3` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
@@ -35,11 +36,11 @@ The `lF`/`lG` runs are the proof at the current HEAD's product tree.
 | `date-tamper-boundary.e2e.ts` (`output/playwright/REPORT-date-tamper-boundary.md`) | `fa36508` | ≡ `7a7a4d3` | **PASS 8 / FAIL 0 / SKIP 1** | `0` |
 | Mock suite `acceptance.e2e.ts` (`output/playwright/REPORT-mock-suite.md`) | `fa36508` | ≡ `7a7a4d3` | **PASS 23 / FAIL 0 / SKIP 0** | `0` |
 
-The seven `lF`/`lG` rows certify the current HEAD's product tree:
+The seven `lF`/`lG` rows and the `lC` round-4 row certify the current HEAD's product tree:
 `git diff --stat d1cccd00 HEAD -- banking-sdk agent security planner lib app components prisma scripts` → empty output,
 and the same command is empty for every round head (`15de129f`, `89d82441`, `dedee51d`, `a65fd5e2`, `1c674005`,
-`acebc393`, `6a20dd93`, `3c5fe83e`, `d1cccd00`). One product tree therefore carries all seven certified rounds,
-regardless of which evidence-only commit was HEAD when each ran. Evidence commit for these reports: `573fe009`.
+`acebc393`, `6a20dd93`, `3c5fe83e`, `d1cccd00`, `e78796d5`). One product tree therefore carries all eight certified rounds,
+regardless of which evidence-only commit was HEAD when each ran. Evidence commits: `573fe009` for the `lF`/`lG` reports and `4b03eec8` for `lC` round 4. `lC` round 4 re-runs normal virtual-card consumption on this tree, so the retained `replace_card` fix is shown not to regress the plain consume path.
 
 The remaining rows certify `7a7a4d3`'s product tree:
 `git diff --stat 7a7a4d3 <each evidence commit> -- banking-sdk agent security planner lib app components prisma scripts`
@@ -61,6 +62,7 @@ re-provisioned SQLite file, so the three rounds are independent of one another r
 
 `lF`: 3 executed, 3 exit-certified (rounds 1, 2 and 3, each `0` on both signals).
 `lG`: 8 executed, 4 exit-certified (rounds 3, 4, 7 and 8, each `0` on both signals).
+`lC`: 4 executed, 1 exit-certified on this product tree (round 4, `0` on both signals); its earlier rounds predate the current tree.
 `lG` rounds 1, 2, 5 and 6 carry no certification: rounds 1 and 2 lost their stdout before it was captured
 (neither exit code, summary line nor DB number is preserved, and round 2 has no screenshots), and rounds 5 and 6
 ended in the harness rather than in a product or model assertion. No assertion was weakened, skipped or deleted to
