@@ -7,7 +7,9 @@ Pure, offline scripted decision layer that drives the mock provider. `respond` /
 ## No card-consumption capability
 
 The mock has NO card-consumption / card-spend / card-purchase / card-payment / card-debit intent, helper, type, function, tool or scenario anywhere in this directory.
-The only card tool calls the mock can ever emit are the catalog card set: `get_cards` (read), `set_card_limit`, `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card`.
+The only card tool calls the mock can ever emit are `get_cards` (read), `set_card_limit`, `freeze_card` and `apply_virtual_card`.
+`unfreeze_card`, `report_lost_card` and `replace_card` have reply labels (`replies.ts:32-33`, `narration.ts:55-56,69`), a `REQUEST_COMMANDS` entry (`request-command-patterns.ts:12-13`) and resource binding (`resource-resolution.ts:13`), but no classifier emits them: `classifyCardAction` ends at `freeze_card`, 补办/挂失 requests fall through to `get_cards` or `help` (`classifier.ts:76,85`), and a multi-step sequence containing them aborts with `missingDetails` (`plan-intents.ts:104-106`).
+`card_management_required` is produced only by `conversation-guidance.ts:29-31` (issuance/removal verb + card noun incl. 实体, excluding 虚拟); `classifier.ts:24-26` renders the closed page-only template before any tool proposal, and `card-intents.ts:53-55` repeats the same code on a path `classify` never reaches.
 `card-intents.ts` matches only virtual-card application, category-limit adjustment and freeze (incl. bulk-freeze plans); it contains no pay/consume/charge matcher.
 `analyze_spending` (classifier.ts:73), `detect_anomaly` (classifier.ts:71) and `get_transactions` (classifier.ts:72) are READ-only analysis of already-booked transactions, never a spend.
 `set_card_limit` is a WRITE that only configures a per-category limit; it does not deduct money.
