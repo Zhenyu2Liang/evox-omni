@@ -17,7 +17,7 @@
   用 `fs.readdirSync` 发现 `agent/messages/*.json` 全部语言目录（不硬编码文件名），
   按句断言 `card_management_required` 及同类卡片管理条目不得否认 `apply_virtual_card`（申请/创建/虚拟卡）与 `replace_card`（补办/换卡/替换已挂失卡），
   人工办理规则必须显式限定在全新/新增/删除的实体卡上（不得含 `虚拟`/`补办`），
-  有 `capabilities` 条目的目录还须提及 `补办`/`挂失`，
+  该用例只约束「不得否认」与「人工规则须限定范围」，不规定修复后的完整措辞，也不要求模板为 `补办` 做广告；能力正向说明由 `agent/system-prompt.ts` 承担，
   并用 `renderConversationGuidance('card_management_required')` 与目录原文等值校验，确保断言针对服务端真正渲染的字符串。
   `capability-guidance-markers.ts` 只做纯文本分类（分句、否定辖域、标记词表），不复刻产品逻辑，被上述两个测试共用。
 - `read-tool-boundaries.test.ts` 检查读取工具参数校验与模型可见错误信封。

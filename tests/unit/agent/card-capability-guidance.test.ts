@@ -33,6 +33,11 @@ import {
  * Manual-only operations are only `manual_add_card` (brand-new physical card record) and
  * `manual_delete_card` (`lib/contracts/card-management.ts#MANUAL_CARD_COMMAND_NAMES`); neither is
  * in the tool catalog.
+ *
+ * The contract polices ABSENCE of the false denials plus PRESENCE of the manual-only rule scoped to
+ * brand-new/deleted physical cards. It deliberately does not dictate the fix's full wording, and it
+ * does not require the templates to advertise 补办: the guidance vocabulary is closed and the
+ * model-facing statement of real capabilities lives in `agent/system-prompt.ts`.
  */
 
 const CATALOGS = loadLocaleCatalogs();
@@ -120,22 +125,7 @@ describe('card-lifecycle capability guidance', () => {
       expect(offenders, `${file} scopes replace_card to manual handling`).toEqual([]);
     });
 
-    // (c) Positive presence: guidance is not silent about 补办/挂失 when a capability template exists.
-    it('is not silent about replacing or reporting a lost card', () => {
-      const capabilities = catalog.entries.capabilities;
-      if (capabilities === undefined) return; // no capability template: (a)/(b) only.
-      const cardGuidance = [catalog.entries.card_management_required, capabilities]
-        .filter((text): text is string => typeof text === 'string')
-        .join('\n');
-      const mentionsLifecycle = LOST_CARD_MARKER.test(cardGuidance)
-        || CARD_REPLACEMENT_MARKER.test(cardGuidance);
-      expect(
-        mentionsLifecycle,
-        `${file} card guidance must mention 补办 or 挂失 so a lost card is not a dead end: "${cardGuidance}"`,
-      ).toBe(true);
-    });
-
-    // (d) Wiring: the assertions above target exactly the string the server renders.
+    // (c) Wiring: the assertions above target exactly the string the server renders.
     it('renders exactly the discovered card_management_required template', () => {
       const template = catalog.entries.card_management_required;
       if (template === undefined) return;
