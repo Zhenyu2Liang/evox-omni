@@ -51,14 +51,6 @@ const FOREIGN_CHECKING = 'acct_foreign_checking';
 const db = () => getTestPrisma();
 
 beforeEach(resetDatabase);
-/**
- * REQUIRED GOTCHA: `tests/helpers/db.ts#truncateAll()` predates the relation-free `CardConsumption`
- * table and never deletes from it, so a consumption row from an earlier test could survive
- * `resetDatabase()`. Registering this hook AFTER it clears that residue.
- */
-beforeEach(async () => {
-  await db().cardConsumption.deleteMany();
-});
 afterAll(disconnectTestPrisma);
 
 /** Cards owned by the demo user — the 2 seeded rows plus whatever this spec issued. */
