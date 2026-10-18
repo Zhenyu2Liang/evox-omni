@@ -24,7 +24,6 @@ import { spawnSync } from 'node:child_process';
 import type { Page } from 'playwright-core';
 import { centsToMoney, formatCNY, moneyToCents } from '../../lib/money';
 import {
-  NAV_TIMEOUT_MS,
   REPO_ROOT,
   SELECTORS,
   assertNoFabricatedConfirmationPanel,
@@ -235,7 +234,7 @@ export function assertCardChainMoneyUnchanged(
   if (before.checkingBalance !== after.checkingBalance) {
     throw new Error(`${label}：活期余额不得变化，实际 ${before.checkingBalance} → ${after.checkingBalance}`);
   }
-  const diff = diffLedger(before.ledger, after.ledger);
+  const diff = diffLedger(before.ledger.transactions, after.ledger.transactions);
   if (diff.added.length !== 0 || diff.removed.length !== 0) {
     throw new Error(`${label}：GET /api/bills 流水不得变化，实际新增 ${diff.added.length} 条、消失 ${diff.removed.length} 条`);
   }
@@ -920,13 +919,9 @@ export async function scenarioFullCardChain(params: CardChainParams): Promise<st
   if (cardById(cardsAfterVcReplace, vcReplacementId)?.payableAmount === VC_MONTHLY_LIMIT) {
     throw new Error(`lG：补办虚拟卡 payableAmount 不得重置为满额 ${VC_MONTHLY_LIMIT}`);
   }
-  const vcReplaceTileRows = await readCardTileRows(
-    page.goto(`${baseUrl}/cards`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }).then(async () => {
-      await waitForElementHydration(page, `[data-card-id="${vcReplacementId}"]`);
-      return page;
-    }),
-    vcReplacementId,
-  );
+  await gotoCards(page, baseUrl);
+  await waitForElementHydration(page, `[data-card-id="${vcReplacementId}"]`);
+  const vcReplaceTileRows = await readCardTileRows(page, vcReplacementId);
   const vcReplaceShot = await captureShot(page, 'lG-virtual-replacement');
 
   // ---- STEP 5: 补办卡上消费 70.00（成功，payable→0.00），再 1.00 必须被 422 LIMIT_EXCEEDED 拒绝 --------
@@ -1028,13 +1023,9 @@ export async function scenarioFullCardChain(params: CardChainParams): Promise<st
     throw new Error(`lG：应恰有 1 张 ACTIVE 信用卡且为补办卡 ${creditReplacementId}，实际 ${activeCredit?.id ?? '无'}：${describeCards(cardsAfterCreditReplace)}`);
   }
   assertCardChainMoneyUnchanged(moneyBeforeCreditReplace, await readCardChainMoneySnapshot(baseUrl), 'lG 补办信用卡');
-  const creditReplaceTileRows = await readCardTileRows(
-    await page.goto(`${baseUrl}/cards`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }).then(async () => {
-      await waitForElementHydration(page, `[data-card-id="${creditReplacementId}"]`);
-      return page;
-    }),
-    creditReplacementId,
-  );
+  await gotoCards(page, baseUrl);
+  await waitForElementHydration(page, `[data-card-id="${creditReplacementId}"]`);
+  const creditReplaceTileRows = await readCardTileRows(page, creditReplacementId);
   const creditReplaceShot = await captureShot(page, 'lG-credit-replacement');
   if (creditReplaceTileRows['可用额度'] !== formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))) {
     throw new Error(`lG：补办信用卡「可用额度」应渲染 ${formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))}，实际 ${creditReplaceTileRows['可用额度']}`);
@@ -1082,7 +1073,7 @@ export async function scenarioFullCardChain(params: CardChainParams): Promise<st
     throw new Error(`lG：整段链路只有两笔刷卡消费应影响活期余额（${centsToMoney(spendAtStart.balanceMinor)} − ${VC_FIRST_SPEND} − ${VC_SECOND_SPEND} = ${centsToMoney(expectedFinalBalanceMinor)}），实际 ${centsToMoney(spendFinal.balanceMinor)}`);
   }
   const moneyFinal = await readCardChainMoneySnapshot(baseUrl);
-  const ledgerDiff = diffLedger(moneyAtStart.ledger, moneyFinal.ledger);
+  const ledgerDiff = diffLedger(moneyAtStart.ledger.transactions, moneyFinal.ledger.transactions);
   if (ledgerDiff.removed.length !== 0) {
     throw new Error(`lG：GET /api/bills 不得丢失原有流水，实际消失 ${ledgerDiff.removed.length} 条`);
   }
