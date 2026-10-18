@@ -77,6 +77,18 @@ manual-only on the card-management page.
 
 `describe_turn` lives in `turn-intent.ts` and records model-declared conversational purpose.
 It is an internal control tool, not a banking capability or customer authorization.
+It has NO entry in `lib/contracts/tool-catalog.ts`, so it is absent from `TOOL_CATALOG`/`TOOL_NAMES`/`AGENT_TOOL_NAMES`
+and from `createToolRegistry` entirely (`tools`, `runners`, `list()`, `get()`, `executeDirect` never know it).
+Registration is separate: `agent/banking-agent.ts` builds it with `createTurnIntentTool(readTurnIntent, write)`
+and injects it FIRST into the Pi tool list (`tools: [intentTool, ...registry.list()]`), so the model sees it
+alongside the banking tools. `beforeToolCall` returns `undefined` for `TURN_INTENT_TOOL` before identity/
+parameter validation and before the security gateway, so it is never gated and never creates a `PendingAction`.
+Its schema is `{ purpose: 'conversation'|'advice'|'query'|'operation'; operations: string[]; allowProtocolExamples?: boolean; workflow?: boolean }`;
+`execute` delegates to `../intent-context.ts#declareConversationIntent` (VALIDATION/CONFLICT for unregistered or
+side-effecting operations, purpose changes and sequence changes) and returns `authorized: false`.
+Other literal `'describe_turn'` couplings: `agent/turns/events.ts` drops its start/update/end events from the UI
+stream, `agent/durable/retry-policy.ts` gives it `read_only`/3 attempts, and `agent/durable/control-recovery.ts`
+replays its recorded model call. The stored intent shape is `ConversationIntent` in `lib/contracts/intent.ts`.
 
 ### `redeem_investment` 赎回本金参数（全额 / 部分）
 
