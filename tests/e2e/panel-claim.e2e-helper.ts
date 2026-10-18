@@ -51,11 +51,22 @@ const NEGATION_CUE = /不(?:会|应|该|能|可|再)|没有|没|尚未|未|从�
  * How far before the matched phrase a negation cue may sit. Together with the punctuation barrier this
  * keeps the true claims matching: an earlier, unrelated negation separated by 「，」
  * (「如果没有问题，请在上方的确认面板确认」) stays outside the window and cannot swallow the claim.
+ *
+ * The window must also reach across a COORDINATED list, because one denial governs every member of it:
+ * 「不存在尚未发起、或仍在等待您确认的步骤」 negates 「等待您确认」 exactly as it negates 「尚未发起」.
+ * A 10-char window stopped short of the cue there and the guard failed a TRUTHFUL denial (LIVE scenario
+ * lG round 6). 24 chars still leaves a claim separated by 「，」 outside the window.
  */
-const NEGATION_LOOKBEHIND = 10;
+const NEGATION_LOOKBEHIND = 24;
 
-/** Punctuation always ends a negation window (a clause boundary ends the negation's scope). */
-const CLAUSE_BOUNDARY = /[，,。；;！!？?：:、\n\r]/;
+/**
+ * Punctuation always ends a negation window (a clause boundary ends the negation's scope).
+ *
+ * 「、」 is deliberately NOT a boundary: it enumerates coordinated phrases inside ONE clause, so
+ * 「不存在 A、或仍在 B」 keeps the negation in scope for B. Ending the scope at 「、」 is the other half
+ * of why that round-6 denial was misread as a claim.
+ */
+const CLAUSE_BOUNDARY = /[，,。；;！!？?：:\n\r]/;
 
 /** 「确认面板尚未出现」 — the negation follows the panel word; only real "appear" verbs count here. */
 const NEGATION_AFTER_CLAIM = /^(不会|没有|不存在|暂无|尚未|未|并无)(出现|显示|弹出|创建|生成|渲染|展示)/;
