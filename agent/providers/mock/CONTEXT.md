@@ -34,7 +34,7 @@ The only card tool calls the mock can ever emit are `get_cards` (read), `set_car
 
 ## Tests
 
-`conversation-guidance.test.ts` and `investment-intents.test.ts` cover the closed guidance vocabulary and partial redemption; `plan-node-label.test.ts` asserts each `analyze_spending` plan node label localizes through the real `localizeToolLabel`. Root Vitest discovers them via `pnpm test`.
+`conversation-guidance.test.ts` covers the closed guidance vocabulary, the dual-licensed guidance codes and reissue routing: page-only replies stay green for brand-new issuance/deletion (incl. the English list), virtual-card application is not page-only, and 补办/补卡/replace of an already-lost card (e.g. 请为刚挂失的尾号6688信用卡补办新卡。, 办理一张信用卡补办, Replace my lost credit card) is never `card_management_required`; `investment-intents.test.ts` covers partial redemption; `plan-node-label.test.ts` asserts each `analyze_spending` plan node label localizes through the real `localizeToolLabel`. Root Vitest discovers them via `pnpm test`.
 
 ## See Also
 
