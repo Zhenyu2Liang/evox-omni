@@ -10,7 +10,7 @@
 - `task-control.test.ts` 检查任务持久化和控制。
 - `task-cancel-revokes.test.ts` 检查取消与已执行事实。
 - `message-normalize.test.ts` 检查工具结果组与后续历史。
-- `run-turn-failure.test.ts` 检查实际结果与失败续接。
+- `run-turn-failure.test.ts` 用 `vi.mock('@/agent/banking-agent')` 替换 `createBankingAgent` 工厂（安全网关、工具注册表、SDK 与 SQLite 保持真实）检查实际结果与失败续接。
 - `system-prompt.test.ts` 检查系统提示词与工具目录分级一致并保留幻象规则，并断言确认/验证面板只在真实受控写工具结果停放后才存在、无该结果时禁止声称已发起或在等待确认。
 - `read-tool-boundaries.test.ts` 检查读取工具参数校验与模型可见错误信封。
 - `durable-reply-repair.test.ts` 检查回复修复的持久续接、崩溃不重复修复与凭据脱敏。
