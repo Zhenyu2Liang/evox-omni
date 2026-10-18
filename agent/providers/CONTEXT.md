@@ -53,7 +53,7 @@ ModelRuntime pair from resolveProvider(), not a model without a stream function.
   (`agent/banking-agent.ts:217`), fed from `RunTurnDeps.provider?: ModelRuntime`
   (`agent/turns/contracts.ts:12`) via `BankingAgentOptions.provider` (`agent/banking-agent.ts:106`).
   An injected runtime bypasses `resolveProvider`, so `LLM_MODE` no longer selects the model.
-- index.ts: resolveProvider(cfg?) creates the mode-specific runtime at call time.
+- index.ts: resolveProvider(cfg?) is the entry facade for runtime selection.
   resolveModel(cfg?) remains a model-only inspection facade; Agent constructors must
   use resolveProvider(). providerId(cfg?) returns a key-free log identifier.
 - provider-mock.ts: createMockRuntime(cfg) returns a local faux model and stream;
