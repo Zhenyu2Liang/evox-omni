@@ -19,6 +19,18 @@
 开放的人工接管阻断新的执行认领；已授权的在途命令仍可落地。
 `authorization-record.ts` 记录策略版本、命令指纹、原因与脱敏输入。
 
+## 卡片生命周期与 replace_card 前提
+
+`replace_card` 的前提只有两条：源卡属于当前用户，且状态为 `LOST`。
+`banking-sdk/card.ts#requireCard` 对不存在的卡片抛 `NOT_FOUND`、对他人卡片抛 `SECURITY_DENIED`；`#replaceCard` 对非 `LOST` 源卡抛 `CONFLICT`「只有已挂失的卡片可以补办，请先办理挂失。」。
+本层与 `agent/tools/card.ts` 都没有 CREDIT / DEBIT / VIRTUAL 的类型禁区；RED 档位只来自 `lib/contracts/tool-catalog.ts` 的目录项。
+唯一的类型分支在 SDK：VIRTUAL 补办必须重新校验并继承结算账户绑定，CREDIT 补办原样继承 `creditLimitMinor` 与 `availableLimitMinor`，因此代理可以补办挂失的信用卡。
+`gatewayCreatePendingAction` 在挂起时只把卡片类型与掩码写进确认摘要（`security-gateway.ts` 的 `summary.fields.unshift`），不做归属或类型裁决。
+手工路径只暴露两个工具名：`manual_add_card`（新增 DEBIT/CREDIT/VIRTUAL 记录）与 `manual_delete_card`（删除记录）；没有补办、冻结、解冻或限额操作。
+卡片页也没有补办入口，补办只能由代理发起（见 `docs/cn/card-management.md`）。
+`agentEnabled === false` 的拒绝分支存在于 `permission-engine.ts`、`agent/confirmation/gated-execution.ts`、`security-gateway.ts`（确认与取消）与 `agent/tools/index.ts`，但当前没有任何目录项设为 `false`；物理卡的创建/删除只能手工，是因为目录里不存在这类工具名，而不是被该开关拦住。
+模型对「实体卡只能手工办理」的措辞来自 `agent/system-prompt.ts:38`，服务端无此规则。
+
 ## 待处理操作（PendingAction）的创建路径
 
 `PendingAction` 行只由两个创建点产生。
