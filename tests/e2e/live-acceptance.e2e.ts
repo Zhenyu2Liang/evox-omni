@@ -1,12 +1,12 @@
-﻿/**
- * `tests/e2e/live-acceptance.e2e.ts` 鈥?REAL-BROWSER, **LIVE-LLM** acceptance harness.
+/**
+ * `tests/e2e/live-acceptance.e2e.ts` — REAL-BROWSER, **LIVE-LLM** acceptance harness.
  *
  * Unlike `acceptance.e2e.ts` (which scripts the model with `LLM_MODE=mock`), this harness boots the
  * REAL Next.js dev server against the REAL DeepSeek API (`LLM_MODE=live`, `LLM_PROVIDER=deepseek`)
  * and drives the REAL `/agent` UI through a REAL headless Chrome. Only the bank is simulated (SQLite).
  *
  * ------------------------------------------------------------------------------------------------
- * MODEL ID 鈥?PROVIDED CONFIG BY DEFAULT, OPT-IN FORCE OVERRIDE
+ * MODEL ID — PROVIDED CONFIG BY DEFAULT, OPT-IN FORCE OVERRIDE
  * ------------------------------------------------------------------------------------------------
  * The installed Pi model catalog registers `deepseek-flash` at https://api.deepseek.com.
  * By default the harness uses the provided .env.local model id unchanged.
@@ -22,7 +22,7 @@
  * Run: pnpm exec tsx tests/e2e/live-acceptance.e2e.ts
  * Subset: `LIVE_SCENARIOS=1,3` (comma-separated scenario ids) runs only those journeys.
  *
- * Output contract: one `PASS|FAIL|SKIP <scenario> 鈥?<evidence>` line per scenario; exit non-zero iff
+ * Output contract: one `PASS|FAIL|SKIP <scenario> — <evidence>` line per scenario; exit non-zero iff
  * any scenario FAILED. The whole dev-server process tree and the browser are always torn down.
  *
  * Isolation: provisions and uses its OWN SQLite DB (`prisma/live-acceptance.db`); the shared
@@ -137,11 +137,11 @@ import { scenarioCreditReplaceNewSession, scenarioFullCardChain } from './card-r
 // --- isolated LIVE database ---------------------------------------------------------------------
 
 const LIVE_DB_FILES = ['live-acceptance.db', 'live-acceptance.db-wal', 'live-acceptance.db-shm', 'live-acceptance.db-journal'] as const;
-/** Absolute `file:` URL (forward slashes 鈥?Prisma rejects a Windows backslash URL). */
+/** Absolute `file:` URL (forward slashes — Prisma rejects a Windows backslash URL). */
 const LIVE_DB_URL = `file:${path.join(REPO_ROOT, 'prisma', 'live-acceptance.db').split(path.sep).join('/')}`;
 
 const DEMO_CHECKING_ID = 'acct_checking';
-const RECIPIENT_NAME = '寮犱紵';
+const RECIPIENT_NAME = '张伟';
 const RECIPIENT_CONTACT_ID = 'contact_zhangwei';
 const CREDIT_CARD_ID = 'card_credit';
 const DEBIT_CARD_ID = 'card_debit';
@@ -155,12 +155,12 @@ function loadRuntimeEnvironment(): void {
   console.log('Live environment configuration loaded without displaying values.');
 }
 
-/** Point this process 鈥?provisioning CLIs + the spawned dev server 鈥?at the ISOLATED live DB. */function configureLiveEnv(): void {
+/** Point this process — provisioning CLIs + the spawned dev server — at the ISOLATED live DB. */function configureLiveEnv(): void {
   process.env['DATABASE_URL'] = LIVE_DB_URL;
   process.env['DEMO_USER_ID'] = 'user_liming';
   process.env['LLM_MODE'] = 'live';
   process.env['LLM_PROVIDER'] = 'deepseek';
-  // MODEL ID 鈥?PROVIDED CONFIG BY DEFAULT, OPT-IN FORCE OVERRIDE.
+  // MODEL ID — PROVIDED CONFIG BY DEFAULT, OPT-IN FORCE OVERRIDE.
   // By default we do NOT set `LLM_MODEL`, so the spawned `next dev` loads the PROVIDED `.env.local`
   // value (LLM_MODEL=deepseek-flash), registered directly by the installed Pi catalog.
   // Set LIVE_FORCE_MODEL=<id> to force a different model id.
@@ -179,7 +179,7 @@ const check = "SELECT name FROM sqlite_master WHERE type='table' AND name='User'
 (async () => {
   try {
     const rows = await client.$queryRawUnsafe(check);
-    if (!Array.isArray(rows) || rows.length === 0) { console.error('schema 鏈簲鐢細缂哄皯 User 琛?); process.exitCode = 3; }
+    if (!Array.isArray(rows) || rows.length === 0) { console.error('schema 未应用：缺少 User 表'); process.exitCode = 3; }
   } catch (e) { console.error((e && e.stack) || String(e)); process.exitCode = 2; }
   finally { await client.$disconnect().catch(() => {}); }
 })();
@@ -191,7 +191,7 @@ const check = "SELECT name FROM sqlite_master WHERE type='table' AND name='User'
     env: { ...process.env, DATABASE_URL: LIVE_DB_URL },
   });
   if (probe.status !== 0) {
-    throw new Error(`live DB 鎺㈡祴澶辫触锛堥€€鍑虹爜 ${probe.status ?? 'null'}锛夛細${(probe.stderr ?? '').slice(-800)}`);
+    throw new Error(`live DB 探测失败（退出码 ${probe.status ?? 'null'}）：${(probe.stderr ?? '').slice(-800)}`);
   }
 }
 
@@ -228,7 +228,7 @@ function resetLiveDatabase(): void {
 function readCheckingBalance(): Promise<string> {
   return withDb(async (db) => {
     const account = await db.account.findUnique({ where: { id: DEMO_CHECKING_ID } });
-    if (!account) throw new Error(`缂哄皯璐︽埛 ${DEMO_CHECKING_ID}`);
+    if (!account) throw new Error(`缺少账户 ${DEMO_CHECKING_ID}`);
     return centsToMoney(account.balanceMinor);
   });
 }
@@ -256,21 +256,21 @@ function readPendingAction(actionId: string, sessionId?: string): Promise<{ stat
   });
 }
 
-/** The seeded contact's phone (already masked in the seed) 鈥?used to phrase the by-phone prompt. */
+/** The seeded contact's phone (already masked in the seed) — used to phrase the by-phone prompt. */
 function readContactPhone(contactId: string): Promise<string> {
   return withDb(async (db) => {
     const contact = await db.contact.findUnique({ where: { id: contactId }, select: { phone: true } });
-    if (!contact) throw new Error(`缂哄皯鑱旂郴浜?${contactId}`);
+    if (!contact) throw new Error(`缺少联系人 ${contactId}`);
     return contact.phone;
   });
 }
 
-/** The seeded recipient phone straight from the DB (never throws 鈥?a failure is reported as text). */
+/** The seeded recipient phone straight from the DB (never throws — a failure is reported as text). */
 async function readSeedRecipientPhone(): Promise<string> {
   try {
     return await readContactPhone(RECIPIENT_CONTACT_ID);
   } catch (e) {
-    return `璇诲彇澶辫触锛?{errText(e)}`;
+    return `读取失败：${errText(e)}`;
   }
 }
 
@@ -313,7 +313,7 @@ async function persistedRecipientCalls(): Promise<string> {
         const raw = parsed.agentState?.messages;
         messages = Array.isArray(raw) ? raw : [];
       } catch {
-        lines.push(`session=${session.id} stateJson 瑙ｆ瀽澶辫触`);
+        lines.push(`session=${session.id} stateJson 解析失败`);
         continue;
       }
       messages.forEach((rawMessage, index) => {
@@ -327,7 +327,7 @@ async function persistedRecipientCalls(): Promise<string> {
             if (part['type'] !== 'toolCall') continue;
             const name = typeof part['name'] === 'string' ? part['name'] : '';
             if (name !== 'transfer_money' && name !== 'search_contact') continue;
-            lines.push(`session=${session.id} msg#${index} assistant鈫?toolCall ${name} args=${JSON.stringify(part['arguments'])}`);
+            lines.push(`session=${session.id} msg#${index} assistant→ toolCall ${name} args=${JSON.stringify(part['arguments'])}`);
           }
         } else if (role === 'toolResult') {
           const name = typeof message['toolName'] === 'string' ? message['toolName'] : '?';
@@ -340,7 +340,7 @@ async function persistedRecipientCalls(): Promise<string> {
         }
       });
     }
-    return lines.length > 0 ? lines.join('\n') : '锛堟棤鎸佷箙鍖栫殑 transfer_money/search_contact 璋冪敤锛?;
+    return lines.length > 0 ? lines.join('\n') : '（无持久化的 transfer_money/search_contact 调用）';
   });
 }
 
@@ -373,7 +373,7 @@ function attachCollectors(page: Page): void {
       .text()
       .then((text) => {
         netLog.issues.push({ method, url, status, body: text.slice(0, 800) });
-        console.log(`路 [net ${status}] ${method} ${url} 鈥?${text.slice(0, 300).replace(/\s+/g, ' ')}`);
+        console.log(`· [net ${status}] ${method} ${url} — ${text.slice(0, 300).replace(/\s+/g, ' ')}`);
       })
       .catch(() => netLog.issues.push({ method, url, status, body: '<unreadable>' }));
   });
@@ -381,11 +381,11 @@ function attachCollectors(page: Page): void {
     if (msg.type() !== 'error') return;
     const text = msg.text();
     netLog.consoleErrors.push(text);
-    console.log(`路 [console error] ${text.slice(0, 300)}`);
+    console.log(`· [console error] ${text.slice(0, 300)}`);
   });
   page.on('pageerror', (error) => {
     netLog.pageErrors.push(error.message);
-    console.log(`路 [pageerror] ${error.message.slice(0, 300)}`);
+    console.log(`· [pageerror] ${error.message.slice(0, 300)}`);
   });
 }
 
@@ -425,7 +425,7 @@ async function readConfirmFields(page: Page): Promise<Record<string, string>> {
   for (let i = count - 1; i >= 0; i -= 1) {
     const dl = dls.nth(i);
     const labels = (await dl.locator('dt').allInnerTexts()).map((l) => l.replace(/\s+/g, '').trim());
-    if (!labels.includes('鏀舵浜?)) continue;
+    if (!labels.includes('收款人')) continue;
     const values = (await dl.locator('dd').allInnerTexts()).map((v) => v.replace(/\s+/g, '').trim());
     const out: Record<string, string> = {};
     labels.forEach((label, index) => {
@@ -436,16 +436,16 @@ async function readConfirmFields(page: Page): Promise<Record<string, string>> {
   return {};
 }
 
-/** Click the confirmation card's `鍙栨秷` button. */
+/** Click the confirmation card's `取消` button. */
 async function clickCancel(page: Page, timeoutMs = 30_000): Promise<void> {
-  const button = page.locator('[data-approval-request="true"]').getByRole('button', { name: '鍙栨秷', exact: true });
-  await waitFor(async () => ((await button.count()) > 0 ? true : false), { timeoutMs, description: '纭鍗°€屽彇娑堛€嶆寜閽? });
+  const button = page.locator('[data-approval-request="true"]').getByRole('button', { name: '取消', exact: true });
+  await waitFor(async () => ((await button.count()) > 0 ? true : false), { timeoutMs, description: '确认卡「取消」按钮' });
   await button.first().click();
 }
 
-/** The number of rendered `纭` buttons (0 once a card is settled / gone). */
+/** The number of rendered `确认` buttons (0 once a card is settled / gone). */
 async function confirmButtonCount(page: Page): Promise<number> {
-  return page.locator('[data-approval-request="true"]').getByRole('button', { name: '纭', exact: true }).count();
+  return page.locator('[data-approval-request="true"]').getByRole('button', { name: '确认', exact: true }).count();
 }
 
 /** The demo user's money state via the app's REAL read routes. */
@@ -457,7 +457,7 @@ async function snapshot(baseUrl: string): Promise<{ balance: string; ledger: Led
 /**
  * Wait until a transfer DEBIT of exactly `amount` shows up in the DB + ledger and the balance drops by it.
  *
- * `occurrences` counts the RAW-SQLite debits of that amount that are NEW for THIS transfer 鈥?scoped by
+ * `occurrences` counts the RAW-SQLite debits of that amount that are NEW for THIS transfer — scoped by
  * the ids already present in `before.ledger`, because a `TransactionView.id` IS the `Transaction.id`
  * (`banking-sdk/transaction.ts#toTransactionView`). Without that scope an EARLIER scenario's legitimate
  * same-amount transfer would be miscounted as a double-charge (a cross-scenario artefact, never a real
@@ -496,12 +496,12 @@ async function waitForTransferSettled(
 
 /** Assert a confirmation card's recipient is the SERVER-RESOLVED real name with a MASKED phone. */
 function assertRecipient(fields: Record<string, string>, expectName: string): string {
-  const name = fields['鏀舵浜?] ?? '';
-  const phone = fields['鏀舵鎵嬫満鍙?] ?? '';
+  const name = fields['收款人'] ?? '';
+  const phone = fields['收款手机号'] ?? '';
   const joined = JSON.stringify(fields);
-  if (joined.includes('锛堟湭鎸囧畾锛?)) throw new Error(`纭鍗″嚭鐜般€岋紙鏈寚瀹氾級銆嶏細${joined}`);
-  if (name !== expectName) throw new Error(`纭鍗℃敹娆句汉搴斾负銆?{expectName}銆嶏紝瀹為檯銆?{name}銆嶏紙瀛楁锛?{joined}锛塦);
-  if (!/^\d{3}\*{4}\d{3,4}$/.test(phone)) throw new Error(`纭鍗℃敹娆炬墜鏈哄彿搴斾负鎺╃爜鍙风爜锛屽疄闄呫€?{phone}銆嶏紙瀛楁锛?{joined}锛塦);
+  if (joined.includes('（未指定）')) throw new Error(`确认卡出现「（未指定）」：${joined}`);
+  if (name !== expectName) throw new Error(`确认卡收款人应为「${expectName}」，实际「${name}」（字段：${joined}）`);
+  if (!/^\d{3}\*{4}\d{3,4}$/.test(phone)) throw new Error(`确认卡收款手机号应为掩码号码，实际「${phone}」（字段：${joined}）`);
   return `${name} / ${phone}`;
 }
 
@@ -511,7 +511,7 @@ function assertRecipient(fields: Record<string, string>, expectName: string): st
  * When a confirmation/MFA card never renders, capture the OBSERVABLE evidence that distinguishes a
  * MODEL-BEHAVIOUR cause (the model narrated/asked a question WITHOUT calling the gated tool, so the
  * gateway never parked a `PendingAction`) from a UI/HARNESS cause (the model DID ask the user to
- * confirm, but no card rendered). Appended to the thrown error 鈥?it never weakens the wait itself.
+ * confirm, but no card rendered). Appended to the thrown error — it never weakens the wait itself.
  */
 async function noCardDiagnostics(page: Page, baseUrl: string): Promise<string> {
   const texts = await assistantTexts(page);
@@ -523,7 +523,7 @@ async function noCardDiagnostics(page: Page, baseUrl: string): Promise<string> {
     actions = `Action snapshot unavailable: ${errText(e)}`;
   }
   const last = (texts[texts.length - 1] ?? '').replace(/\s+/g, ' ').slice(-600);
-  return `銆愯瘖鏂€戝姪鎵嬫秷鎭暟=${texts.length}锛涙渶鍚庝竴鏉?銆?{last}銆嶏紱/api/actions=${actions.slice(0, 600)}锛涢〉闈㈡枃鏈熬閮?銆?{dom.replace(/\s+/g, ' ').slice(-400)}銆峘;
+  return `【诊断】助手消息数=${texts.length}；最后一条=「${last}」；/api/actions=${actions.slice(0, 600)}；页面文本尾部=「${dom.replace(/\s+/g, ' ').slice(-400)}」`;
 }
 
 /** `waitForConfirmCard` with an evidence dump on timeout (the wait + assertion are unchanged). */
@@ -531,7 +531,7 @@ async function awaitConfirmCard(page: Page, baseUrl: string, timeoutMs = 90_000)
   try {
     await waitForConfirmCard(page, timeoutMs);
   } catch (e) {
-    throw new Error(`${errText(e)} 锝?${await noCardDiagnostics(page, baseUrl)}`);
+    throw new Error(`${errText(e)} ｜ ${await noCardDiagnostics(page, baseUrl)}`);
   }
 }
 
@@ -540,7 +540,7 @@ async function awaitMfaCard(page: Page, baseUrl: string, timeoutMs = 90_000): Pr
   try {
     await waitForMfaCard(page, timeoutMs);
   } catch (e) {
-    throw new Error(`${errText(e)} 锝?${await noCardDiagnostics(page, baseUrl)}`);
+    throw new Error(`${errText(e)} ｜ ${await noCardDiagnostics(page, baseUrl)}`);
   }
 }
 
@@ -552,7 +552,7 @@ async function composerEnabled(page: Page): Promise<boolean> {
 
 /**
  * Bounded natural-language DRIVER for a RED (MFA) tool. Both live targets below are RED tier, so a
- * successful model turn parks an MFA card 鈥?but the LIVE model sometimes asks a plain confirmation
+ * successful model turn parks an MFA card — but the LIVE model sometimes asks a plain confirmation
  * question first and never invokes the gated tool. This driver sends ONLY natural Chinese (never an
  * internal tool/parameter name) and, when a turn ends WITHOUT a card, nudges with the next short
  * confirmation in the same spirit. It returns the prompts actually sent once the verification code
@@ -574,7 +574,7 @@ async function driveRedTool(
   perTurnTimeoutMs = 30_000,
   requireCardAtEnd = true,
 ): Promise<string[]> {
-  if (turns.length === 0) throw new Error('driveRedTool 鑷冲皯闇€瑕佷竴鏉¤嚜鐒惰瑷€娑堟伅');
+  if (turns.length === 0) throw new Error('driveRedTool 至少需要一条自然语言消息');
   const sent: string[] = [];
   /** Complete a parked card (confirm if needed, then MFA) so the turn settles. */
   const settleCard = async (outcome: 'mfa' | 'confirm'): Promise<void> => {
@@ -597,7 +597,7 @@ async function driveRedTool(
         if ((await confirmButtonCount(page)) > 0) return 'confirm' as const;
         return (await assistantTexts(page)).length > baseline && (await composerEnabled(page)) ? 'reply' as const : false;
       },
-      { timeoutMs: perTurnTimeoutMs, intervalMs: 1_000, description: `绛夊緟 LIVE 妯″瀷璋冪敤鍙楁帶宸ュ叿锛堣嚜鐒惰疆娆★紝MFA 鍗＄墖锛夛細${turn}` },
+      { timeoutMs: perTurnTimeoutMs, intervalMs: 1_000, description: `等待 LIVE 模型调用受控工具（自然轮次，MFA 卡片）：${turn}` },
     ).catch(() => 'timeout' as const);
     if (outcome === 'mfa' || outcome === 'confirm') {
       await settleCard(outcome);
@@ -619,12 +619,12 @@ async function driveRedTool(
         if ((await confirmButtonCount(page)) > 0) return 'confirm' as const;
         return (await composerEnabled(page)) ? 'settled' as const : false;
       },
-      { timeoutMs: perTurnTimeoutMs, intervalMs: 1_000, description: 'RED 宸ュ叿鑷劧杞缁撶畻锛堟湰杞笉瑕佹眰浜屾 MFA锛? },
+      { timeoutMs: perTurnTimeoutMs, intervalMs: 1_000, description: 'RED 工具自然轮次结算（本轮不要求二次 MFA）' },
     ).catch(() => 'settled' as const);
     if (finalOutcome === 'mfa' || finalOutcome === 'confirm') await settleCard(finalOutcome);
     return sent;
   }
-  // Bounded turns produced no MFA card 鈥?one UNWEAKENED final wait (throws with the failure evidence).
+  // Bounded turns produced no MFA card — one UNWEAKENED final wait (throws with the failure evidence).
   await awaitMfaCard(page, baseUrl, perTurnTimeoutMs);
   await submitMfa(page, '123456');
   return sent;
@@ -646,7 +646,7 @@ interface Scenario {
   run(ctx: Ctx): Promise<string>;
   /**
    * Optional pre-flight guard. When it returns a reason the scenario is reported `SKIP` (NOT VERIFIED)
-   * with that concrete reason and `run` is never called 鈥?it never asserts a success the demo data
+   * with that concrete reason and `run` is never called — it never asserts a success the demo data
    * cannot produce.
    */
   skipReason?(): Promise<string | undefined> | string | undefined;
@@ -654,18 +654,18 @@ interface Scenario {
 
 // Prompts phrased against the real tool schemas / seed (see prisma/seed.ts + agent/system-prompt.ts).
 const MSG = {
-  balance: '鏌ヤ竴涓嬫垜鐨勪綑棰?,
-  transferByName: `缁?{RECIPIENT_NAME}杞?00鍏僠,
-  transferByPhone: (phone: string) => `缁?{phone}杞?00鍏僠,
-  transferDecimal: `缁?{RECIPIENT_NAME}杞?00.37鍏僠,
-  transferLarge: `缁?{RECIPIENT_NAME}杞?000鍏僠,
-  cardLimit: '鎴戠殑淇＄敤鍗￠搴︽槸澶氬皯',
+  balance: '查一下我的余额',
+  transferByName: `给${RECIPIENT_NAME}转200元`,
+  transferByPhone: (phone: string) => `给${phone}转200元`,
+  transferDecimal: `给${RECIPIENT_NAME}转200.37元`,
+  transferLarge: `给${RECIPIENT_NAME}转5000元`,
+  cardLimit: '我的信用卡额度是多少',
 } as const;
 
 /**
  * LIVE-experiment OVERRIDES for the two transfer prompts (default: the canonical `MSG` prompts).
  * Lets a diagnostic run pin a DIFFERENT identifier phrasing (`LIVE_S2_PROMPT` / `LIVE_S3_PROMPT`,
- * e.g. `缁欒仈绯讳汉寮犱紵杞?00鍏僠) WITHOUT editing the scenarios. Assertions and the default prompt are
+ * e.g. `给联系人张伟转200元`) WITHOUT editing the scenarios. Assertions and the default prompt are
  * unchanged; the values are read once at module load.
  */
 const PROMPT_S2 = process.env['LIVE_S2_PROMPT']?.trim() || MSG.transferByName;
@@ -677,14 +677,14 @@ const LARGE_AMOUNT = '5000.00';
 
 /**
  * Scenario 7 park-robustness knobs. The LIVE model SOMETIMES answers the transfer prompt with only
- * `search_contact` + a question ("璇风‘璁ゆ槸鍚﹀悜寮犱紵杞处 楼200.00锛?) WITHOUT calling `transfer_money`, so
+ * `search_contact` + a question ("请确认是否向张伟转账 ¥200.00？") WITHOUT calling `transfer_money`, so
  * the gateway never parks a `PendingAction`, `GET /api/actions` stays `[]` and the park times out.
  * The park therefore POLLS `/api/actions` and, when nothing is parked, NUDGES the model in the SAME
- * session and re-checks 鈥?bounded attempts, never a fabricated park.
+ * session and re-checks — bounded attempts, never a fabricated park.
  */
 const PARK_ATTEMPTS = 3;
 const PARK_POLL_MS = 60_000;
-const PARK_NUDGES = ['纭锛岃鍙戣捣杞处', '璇风洿鎺ヨ皟鐢ㄨ浆璐﹀伐鍏峰彂璧疯繖绗旇浆璐?] as const;
+const PARK_NUDGES = ['确认，请发起转账', '请直接调用转账工具发起这笔转账'] as const;
 
 /** The parked `transfer_money` action from `GET /api/actions` (awaiting a human decision), or `undefined`. */
 function findParkedTransfer(
@@ -706,25 +706,25 @@ async function scenarioBalance(ctx: Ctx): Promise<string> {
       const dbBalance = await readCheckingBalance();
       const apiBalance = (await fetchDashboardSummary(ctx.baseUrl)).checkingBalance;
       if (dbBalance !== apiBalance) {
-        throw new Error(`/api/dashboard 浣欓 ${apiBalance} 涓?SQLite Account.balance ${dbBalance} 涓嶄竴鑷碻);
+        throw new Error(`/api/dashboard 余额 ${apiBalance} 与 SQLite Account.balance ${dbBalance} 不一致`);
       }
       const expected = formatCNY(dbBalance);
       await submitChat(page, MSG.balance);
       await waitFor(async () => ((await bodyText(page)).includes(expected) ? true : false), {
         timeoutMs: 120_000,
-        description: `椤甸潰娓叉煋浣欓 ${expected}`,
+        description: `页面渲染余额 ${expected}`,
       });
       const texts = await assistantTexts(page);
       const narration = texts.find((t) => t.includes(expected)) ?? texts[texts.length - 1] ?? '';
       await captureLive(page, 's1-balance');
       const inNarration = narration.includes(expected);
-      return `銆?{MSG.balance}銆嶁啋 椤甸潰鍑虹幇 ${expected}锛汼QLite Account.balance=${dbBalance}锛?api/dashboard=${apiBalance}锛堜竴鑷达級锛涘姪鎵嬪彊杩?{inNarration ? '鍚? : '涓嶅惈'}璇ラ噾棰濓細${narration.slice(0, 120)}`;
+      return `「${MSG.balance}」→ 页面出现 ${expected}；SQLite Account.balance=${dbBalance}，/api/dashboard=${apiBalance}（一致）；助手叙述${inNarration ? '含' : '不含'}该金额：${narration.slice(0, 120)}`;
     },
     { label: 's1-balance' },
   );
 }
 
-// --- scenario 2: transfer by NAME / by PHONE 鈫?correct recipient, then CANCEL --------------------
+// --- scenario 2: transfer by NAME / by PHONE → correct recipient, then CANCEL --------------------
 
 /** By-NAME leg: a YELLOW transfer to a contact NAME must render a card with the SERVER-resolved recipient. */
 async function scenarioTransferRecipientByName(ctx: Ctx): Promise<string> {
@@ -741,7 +741,7 @@ async function scenarioTransferRecipientByName(ctx: Ctx): Promise<string> {
         await captureLive(page, 's2-no-card');
         const phone = await readSeedRecipientPhone();
         throw new Error(
-          `${errText(error)}锛涚瀛愬簱 ${RECIPIENT_NAME} 鎵嬫満鍙?${phone}锛涙寔涔呭寲宸ュ叿璋冪敤锛?{await persistedRecipientCalls()}`,
+          `${errText(error)}；种子库 ${RECIPIENT_NAME} 手机号=${phone}；持久化工具调用：${await persistedRecipientCalls()}`,
         );
       }
       const fields = await readConfirmFields(page);
@@ -749,21 +749,21 @@ async function scenarioTransferRecipientByName(ctx: Ctx): Promise<string> {
       // READ-ONLY cross-check: the parked YELLOW action must be visible on `GET /api/actions`.
       const parked = await fetchParkedActions(page, ctx.baseUrl);
       if (parked === undefined || !parked.some((a) => a.toolName === 'transfer_money')) {
-        throw new Error(`纭鍗″凡娓叉煋浣?GET /api/actions 鏈繑鍥?transfer_money 寰呭鐞嗘搷浣滐細${describeActions(parked)}`);
+        throw new Error(`确认卡已渲染但 GET /api/actions 未返回 transfer_money 待处理操作：${describeActions(parked)}`);
       }
       await captureLive(page, 's2-by-name');
       await clickCancel(page);
       const after = await snapshot(ctx.baseUrl);
-      if (after.balance !== before.balance) throw new Error(`鍙栨秷鍚庝綑棰濆彉鍖栵細${before.balance} 鈫?${after.balance}`);
+      if (after.balance !== before.balance) throw new Error(`取消后余额变化：${before.balance} → ${after.balance}`);
       const added = diffLedger(before.ledger.transactions, after.ledger.transactions).added;
-      if (added.length > 0) throw new Error(`鍙栨秷鍚庤处鏈柊澧烇細${added.map((tx) => tx.id).join('銆?)}`);
-      return `銆?{PROMPT_S2}銆嶁啋 纭鍗℃敹娆句汉=${resolved}锛堢湡瀹炲鍚?+ 鎺╃爜鎵嬫満鍙凤級锛汫ET /api/actions 鈫?${describeActions(parked)}锛涘彇娑?鈫?浣欓 ${before.balance} 鏈彉銆佽处鏈棤鏂板`;
+      if (added.length > 0) throw new Error(`取消后账本新增：${added.map((tx) => tx.id).join('、')}`);
+      return `「${PROMPT_S2}」→ 确认卡收款人=${resolved}（真实姓名 + 掩码手机号）；GET /api/actions → ${describeActions(parked)}；取消 → 余额 ${before.balance} 未变、账本无新增`;
     },
     { label: 's2-by-name' },
   );
 }
 
-/** The seeded contact's DE-MASKED phone (`139****0002` 鈫?`13900000002`) 鈥?the raw by-phone leg. */
+/** The seeded contact's DE-MASKED phone (`139****0002` → `13900000002`) — the raw by-phone leg. */
 const RAW_RECIPIENT_PHONE = '13900000002';
 
 /**
@@ -785,7 +785,7 @@ async function transferByPhoneLeg(ctx: Ctx, phone: string, label: string): Promi
         await captureLive(page, `${label}-no-card`);
         const seeded = await readSeedRecipientPhone();
         throw new Error(
-          `${errText(error)}锛涚瀛愬簱 ${RECIPIENT_NAME} 鎵嬫満鍙?${seeded}锛涙寔涔呭寲宸ュ叿璋冪敤锛?{await persistedRecipientCalls()}`,
+          `${errText(error)}；种子库 ${RECIPIENT_NAME} 手机号=${seeded}；持久化工具调用：${await persistedRecipientCalls()}`,
         );
       }
       const fields = await readConfirmFields(page);
@@ -793,15 +793,15 @@ async function transferByPhoneLeg(ctx: Ctx, phone: string, label: string): Promi
       // READ-ONLY cross-check: the parked YELLOW action must be visible on `GET /api/actions`.
       const parked = await fetchParkedActions(page, ctx.baseUrl);
       if (parked === undefined || !parked.some((a) => a.toolName === 'transfer_money')) {
-        throw new Error(`纭鍗″凡娓叉煋浣?GET /api/actions 鏈繑鍥?transfer_money 寰呭鐞嗘搷浣滐細${describeActions(parked)}`);
+        throw new Error(`确认卡已渲染但 GET /api/actions 未返回 transfer_money 待处理操作：${describeActions(parked)}`);
       }
       await captureLive(page, label);
       await clickCancel(page);
       const after = await snapshot(ctx.baseUrl);
-      if (after.balance !== before.balance) throw new Error(`鍙栨秷鍚庝綑棰濆彉鍖栵細${before.balance} 鈫?${after.balance}`);
+      if (after.balance !== before.balance) throw new Error(`取消后余额变化：${before.balance} → ${after.balance}`);
       const added = diffLedger(before.ledger.transactions, after.ledger.transactions).added;
-      if (added.length > 0) throw new Error(`鍙栨秷鍚庤处鏈柊澧烇細${added.map((tx) => tx.id).join('銆?)}`);
-      return `銆?{MSG.transferByPhone(phone)}銆嶁啋 纭鍗℃敹娆句汉=${resolved}锛汫ET /api/actions 鈫?${describeActions(parked)}锛涘彇娑?鈫?浣欓 ${before.balance} 鏈彉銆佽处鏈棤鏂板`;
+      if (added.length > 0) throw new Error(`取消后账本新增：${added.map((tx) => tx.id).join('、')}`);
+      return `「${MSG.transferByPhone(phone)}」→ 确认卡收款人=${resolved}；GET /api/actions → ${describeActions(parked)}；取消 → 余额 ${before.balance} 未变、账本无新增`;
     },
     { label },
   );
@@ -816,10 +816,10 @@ async function scenarioTransferRecipientByPhone(ctx: Ctx): Promise<string> {
   const maskedPhone = await readContactPhone(RECIPIENT_CONTACT_ID);
   const masked = await transferByPhoneLeg(ctx, maskedPhone, 's2-by-phone-masked');
   const raw = await transferByPhoneLeg(ctx, RAW_RECIPIENT_PHONE, 's2-by-phone-raw');
-  return `鎺╃爜鍙凤紙绉嶅瓙 ${maskedPhone}锛夛細${masked} 锝?鐪熷疄鍙凤紙${RAW_RECIPIENT_PHONE}锛夛細${raw}`;
+  return `掩码号（种子 ${maskedPhone}）：${masked} ｜ 真实号（${RAW_RECIPIENT_PHONE}）：${raw}`;
 }
 
-// --- scenario 3: decimal transfer 楼200.37 --------------------------------------------------------
+// --- scenario 3: decimal transfer ¥200.37 --------------------------------------------------------
 
 async function scenarioDecimalTransfer(ctx: Ctx): Promise<string> {
   return withPage(
@@ -836,39 +836,39 @@ async function scenarioDecimalTransfer(ctx: Ctx): Promise<string> {
         await captureLive(page, 's3-no-card');
         const phone = await readSeedRecipientPhone();
         throw new Error(
-          `${errText(error)}锛涚瀛愬簱 ${RECIPIENT_NAME} 鎵嬫満鍙?${phone}锛涙寔涔呭寲宸ュ叿璋冪敤锛?{await persistedRecipientCalls()}`,
+          `${errText(error)}；种子库 ${RECIPIENT_NAME} 手机号=${phone}；持久化工具调用：${await persistedRecipientCalls()}`,
         );
       }
       const fields = await readConfirmFields(page);
       if (!JSON.stringify(fields).includes('200.37')) {
-        throw new Error(`纭鍗￠噾棰濆簲涓?200.37锛屽疄闄呭瓧娈碉細${JSON.stringify(fields)}`);
+        throw new Error(`确认卡金额应为 200.37，实际字段：${JSON.stringify(fields)}`);
       }
       // BEFORE confirm: NOTHING has moved.
       const mid = await snapshot(ctx.baseUrl);
       const midDb = await readCheckingBalance();
       if (mid.balance !== before.balance || midDb !== beforeDb) {
-        throw new Error(`纭鍓嶄綑棰濆凡鍙樺寲锛欰PI ${before.balance}鈫?{mid.balance}锛孌B ${beforeDb}鈫?{midDb}`);
+        throw new Error(`确认前余额已变化：API ${before.balance}→${mid.balance}，DB ${beforeDb}→${midDb}`);
       }
       // READ-ONLY cross-check: the parked YELLOW action must be visible on `GET /api/actions` BEFORE confirm.
       const parked = await fetchParkedActions(page, ctx.baseUrl);
       if (parked === undefined || !parked.some((a) => a.toolName === 'transfer_money')) {
-        throw new Error(`纭鍗″凡娓叉煋浣?GET /api/actions 鏈繑鍥?transfer_money 寰呭鐞嗘搷浣滐細${describeActions(parked)}`);
+        throw new Error(`确认卡已渲染但 GET /api/actions 未返回 transfer_money 待处理操作：${describeActions(parked)}`);
       }
       await captureLive(page, 's3-decimal-preconfirm');
-      await page.getByRole('button', { name: '纭', exact: true }).first().click();
+      await page.getByRole('button', { name: '确认', exact: true }).first().click();
       const settled = await waitForTransferSettled(ctx.baseUrl, before, DECIMAL_AMOUNT);
       const afterDb = await readCheckingBalance();
       await captureLive(page, 's3-decimal-settled');
       if (settled.occurrences !== 1) {
-        throw new Error(`SQLite 涓?-200.37 鐨?DEBIT 琛屽簲涓?1 鏉★紝瀹為檯 ${settled.occurrences} 鏉);
+        throw new Error(`SQLite 中 -200.37 的 DEBIT 行应为 1 条，实际 ${settled.occurrences} 条`);
       }
-      return `銆?{PROMPT_S3}銆嶁啋 鍗＄墖閲戦 200.37锛汫ET /api/actions 鈫?${describeActions(parked)}锛涚‘璁ゅ墠浣欓鏈彉锛圓PI=${mid.balance}锛孌B=${midDb}锛夆啋 纭 鈫?API 浣欓 ${settled.balance}銆丼QLite Account.balance=${afterDb}锛岃处鏈柊澧?-200.37 DEBIT 涓€鏉★紙${settled.txIds[0]}锛夛紝鎵ｆ -200.37 鎭板ソ涓€娆;
+      return `「${PROMPT_S3}」→ 卡片金额 200.37；GET /api/actions → ${describeActions(parked)}；确认前余额未变（API=${mid.balance}，DB=${midDb}）→ 确认 → API 余额 ${settled.balance}、SQLite Account.balance=${afterDb}，账本新增 -200.37 DEBIT 一条（${settled.txIds[0]}），扣款 -200.37 恰好一次`;
     },
     { label: 's3-decimal' },
   );
 }
 
-// --- scenario 5: cancel 鈫?no deduction; repeat-confirm 鈫?idempotent; terminal UX ------------------
+// --- scenario 5: cancel → no deduction; repeat-confirm → idempotent; terminal UX ------------------
 
 async function scenarioCancelAndIdempotency(ctx: Ctx): Promise<string> {
   return withPage(
@@ -882,23 +882,23 @@ async function scenarioCancelAndIdempotency(ctx: Ctx): Promise<string> {
       const sessionId = await readDemoSessionId(page);
       const actions = await fetchPendingActions(ctx.baseUrl);
       const parked = actions.find((a) => a.toolName === 'transfer_money');
-      if (!parked) throw new Error(`GET /api/actions 鏈繑鍥?transfer_money 寰呭鐞嗛」锛?{JSON.stringify(actions)}`);
+      if (!parked) throw new Error(`GET /api/actions 未返回 transfer_money 待处理项：${JSON.stringify(actions)}`);
       await captureLive(page, 's5-parked');
       await clickCancel(page);
 
-      // terminal UX: the card no longer offers 纭 and shows 宸插彇娑?
+      // terminal UX: the card no longer offers 确认 and shows 已取消.
       await waitFor(async () => ((await confirmButtonCount(page)) === 0 ? true : false), {
         timeoutMs: 60_000,
-        description: '鍙栨秷鍚庣‘璁ゅ崱涓嶅啀鎻愪緵銆岀‘璁ゃ€嶆寜閽?,
+        description: '取消后确认卡不再提供「确认」按钮',
       });
       const dom = await bodyText(page);
-      if (!dom.includes('宸插彇娑?)) throw new Error('鍙栨秷鍚庣‘璁ゅ崱鏈覆鏌撱€屽凡鍙栨秷銆嶇粓鎬佸窘绔?);
+      if (!dom.includes('已取消')) throw new Error('取消后确认卡未渲染「已取消」终态徽章');
       const afterCancel = await snapshot(ctx.baseUrl);
-      if (afterCancel.balance !== before.balance) throw new Error(`鍙栨秷鍚庝綑棰濆彉鍖栵細${before.balance} 鈫?${afterCancel.balance}`);
+      if (afterCancel.balance !== before.balance) throw new Error(`取消后余额变化：${before.balance} → ${afterCancel.balance}`);
       const addedAfterCancel = diffLedger(before.ledger.transactions, afterCancel.ledger.transactions).added;
-      if (addedAfterCancel.length > 0) throw new Error(`鍙栨秷鍚庤处鏈柊澧烇細${addedAfterCancel.map((tx) => tx.id).join('銆?)}`);
+      if (addedAfterCancel.length > 0) throw new Error(`取消后账本新增：${addedAfterCancel.map((tx) => tx.id).join('、')}`);
 
-      // cancel-on-terminal: the SAME action is already cancelled 鈫?the server must reject gracefully.
+      // cancel-on-terminal: the SAME action is already cancelled → the server must reject gracefully.
       const cancelAgain = await fetch(`${ctx.baseUrl}/api/actions/${parked.id}/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -907,7 +907,7 @@ async function scenarioCancelAndIdempotency(ctx: Ctx): Promise<string> {
       const cancelBody = (await cancelAgain.json()) as { ok?: boolean; data?: { ok?: boolean; status?: string } };
       const cancelRejected = cancelBody.ok === false || cancelBody.data?.ok === false;
 
-      // repeat-confirm on the TERMINAL action 鈫?rejected, and NO double deduction.
+      // repeat-confirm on the TERMINAL action → rejected, and NO double deduction.
       const confirmAgain = await fetch(`${ctx.baseUrl}/api/actions/${parked.id}/confirm`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -917,16 +917,16 @@ async function scenarioCancelAndIdempotency(ctx: Ctx): Promise<string> {
       const confirmRejected = confirmBody.ok === false || confirmBody.data?.ok === false;
       const afterConfirm = await snapshot(ctx.baseUrl);
       if (afterConfirm.balance !== before.balance) {
-        throw new Error(`閲嶅纭鍚庝綑棰濆彉鍖栵細${before.balance} 鈫?${afterConfirm.balance}锛堜笉搴旀墸娆撅級`);
+        throw new Error(`重复确认后余额变化：${before.balance} → ${afterConfirm.balance}（不应扣款）`);
       }
       const addedAfterConfirm = diffLedger(before.ledger.transactions, afterConfirm.ledger.transactions).added;
       if (addedAfterConfirm.length > 0) {
-        throw new Error(`閲嶅纭鍚庤处鏈柊澧烇細${addedAfterConfirm.map((tx) => tx.id).join('銆?)}`);
+        throw new Error(`重复确认后账本新增：${addedAfterConfirm.map((tx) => tx.id).join('、')}`);
       }
       const dbRow = await readPendingAction(parked.id, sessionId);
-      if (!dbRow) throw new Error(`PendingAction ${parked.id} 涓嶅瓨鍦╜);
+      if (!dbRow) throw new Error(`PendingAction ${parked.id} 不存在`);
 
-      return `銆?{MSG.transferByName}銆嶁啋 鍙栨秷锛圖B 鐘舵€?${dbRow.status}锛屽崱鐗囨樉绀恒€屽凡鍙栨秷銆嶃€佺‘璁ゆ寜閽暟 0锛夆啋 鏈墸娆撅紱瀵圭粓鎬佸姩浣滈噸澶嶅彇娑?${cancelRejected ? '琚嫆' : '鏈鎷?}銆侀噸澶嶇‘璁?${confirmRejected ? '琚嫆' : '鏈鎷?} 鈫?浣欓 ${before.balance} 涓嶅彉銆佽处鏈棤鏂板锛堝箓绛夛級`;
+      return `「${MSG.transferByName}」→ 取消（DB 状态 ${dbRow.status}，卡片显示「已取消」、确认按钮数 0）→ 未扣款；对终态动作重复取消 ${cancelRejected ? '被拒' : '未被拒'}、重复确认 ${confirmRejected ? '被拒' : '未被拒'} → 余额 ${before.balance} 不变、账本无新增（幂等）`;
     },
     { label: 's5-cancel-idempotent' },
   );
@@ -942,20 +942,20 @@ async function scenarioMultiTurn(ctx: Ctx): Promise<string> {
       await gotoAgent(page, ctx.baseUrl);
       const before = await snapshot(ctx.baseUrl);
 
-      // turn 1 鈥?GREEN read
+      // turn 1 — GREEN read
       await submitChat(page, MSG.balance);
       await waitFor(async () => ((await assistantTexts(page)).length >= 1 ? true : false), {
         timeoutMs: 120_000,
-        description: '绗?1 杞姪鎵嬪洖澶?,
+        description: '第 1 轮助手回复',
       });
 
-      // turn 2 鈥?confirm a YELLOW transfer (post-confirm model continuation)
+      // turn 2 — confirm a YELLOW transfer (post-confirm model continuation)
       await submitChat(page, MSG.transferByName);
       await awaitConfirmCard(page, ctx.baseUrl);
-      await page.getByRole('button', { name: '纭', exact: true }).first().click();
+      await page.getByRole('button', { name: '确认', exact: true }).first().click();
       const afterYellow = await waitForTransferSettled(ctx.baseUrl, before, TRANSFER_AMOUNT);
 
-      // turn 3 鈥?MFA a RED transfer (post-MFA model continuation)
+      // turn 3 — MFA a RED transfer (post-MFA model continuation)
       await submitChat(page, MSG.transferLarge);
       await awaitMfaCard(page, ctx.baseUrl);
       await submitMfa(page, '123456');
@@ -965,25 +965,25 @@ async function scenarioMultiTurn(ctx: Ctx): Promise<string> {
         LARGE_AMOUNT,
       );
 
-      // turn 4 鈥?a follow-up read in the SAME session
+      // turn 4 — a follow-up read in the SAME session
       await submitChat(page, MSG.cardLimit);
       await waitFor(async () => ((await assistantTexts(page)).length >= 4 ? true : false), {
         timeoutMs: 120_000,
-        description: '绗?4 杞姪鎵嬪洖澶?,
+        description: '第 4 轮助手回复',
       });
       const texts = await assistantTexts(page);
       await captureLive(page, 's6-multiturn');
       const violation = findToolOrderViolation();
       if (violation) {
-        throw new Error(`鍑虹幇 tool/tool_calls 400锛?{violation.method} ${violation.url} 鈥?${violation.body.slice(0, 300)}`);
+        throw new Error(`出现 tool/tool_calls 400：${violation.method} ${violation.url} — ${violation.body.slice(0, 300)}`);
       }
-      return `鍚屼竴浼氳瘽 4 杞紙浣欓 鈫?杞处200纭 鈫?杞处5000楠岃瘉鐮?鈫?淇＄敤鍗￠搴︼級锛屽姪鎵嬫秷鎭?${texts.length} 鏉★紱纭鍚庝綑棰?${afterYellow.balance}銆侀獙璇佺爜鍚?${afterRed.balance}锛涘叏绋嬫棤 "tool message must answer tool_calls" 400锛堢疮璁＄綉缁?4xx/5xx锛?{netLog.issues.length}锛塦;
+      return `同一会话 4 轮（余额 → 转账200确认 → 转账5000验证码 → 信用卡额度），助手消息 ${texts.length} 条；确认后余额 ${afterYellow.balance}、验证码后 ${afterRed.balance}；全程无 "tool message must answer tool_calls" 400（累计网络 4xx/5xx：${netLog.issues.length}）`;
     },
     { label: 's6-multiturn' },
   );
 }
 
-// --- scenario 4: large transfer MFA (wrong code 鈫?nothing; correct code 鈫?exactly once) ----------
+// --- scenario 4: large transfer MFA (wrong code → nothing; correct code → exactly once) ----------
 
 async function scenarioLargeTransferMfa(ctx: Ctx): Promise<string> {
   const wrong = await withPage(
@@ -996,19 +996,19 @@ async function scenarioLargeTransferMfa(ctx: Ctx): Promise<string> {
       await submitChat(page, MSG.transferLarge);
       await awaitMfaCard(page, ctx.baseUrl);
       await submitMfa(page, '000000');
-      await waitForStatusText(page, '楠岃瘉澶辫触锛屽凡灏濊瘯1娆?);
-      if ((await page.locator('input[aria-label="楠岃瘉鐮?]').count()) === 0) {
-        throw new Error('閿欒楠岃瘉鐮佸悗 MFA 鍗＄墖娑堝け锛堝簲淇濈暀浠ュ厑璁搁噸璇曪級');
+      await waitForStatusText(page, '验证失败，已尝试1次');
+      if ((await page.locator('input[aria-label="验证码"]').count()) === 0) {
+        throw new Error('错误验证码后 MFA 卡片消失（应保留以允许重试）');
       }
       const after = await snapshot(ctx.baseUrl);
       const afterDb = await readCheckingBalance();
       if (after.balance !== before.balance || afterDb !== beforeDb) {
-        throw new Error(`閿欒楠岃瘉鐮佸悗浣欓鍙樺寲锛欰PI ${before.balance}鈫?{after.balance}锛孌B ${beforeDb}鈫?{afterDb}`);
+        throw new Error(`错误验证码后余额变化：API ${before.balance}→${after.balance}，DB ${beforeDb}→${afterDb}`);
       }
       const added = diffLedger(before.ledger.transactions, after.ledger.transactions).added;
-      if (added.length > 0) throw new Error(`閿欒楠岃瘉鐮佸悗璐︽湰鏂板锛?{added.map((tx) => tx.id).join('銆?)}`);
+      if (added.length > 0) throw new Error(`错误验证码后账本新增：${added.map((tx) => tx.id).join('、')}`);
       await captureLive(page, 's4-mfa-wrong');
-      return `閿欒鐮?000000 鈫?role=status銆岄獙璇佸け璐ワ紝宸插皾璇?1 娆°€嶏紝MFA 鍗＄墖淇濈暀锛涗綑棰濓紙API=${after.balance}锛孌B=${afterDb}锛変笌璐︽湰鍧囨湭鍙榒;
+      return `错误码 000000 → role=status「验证失败，已尝试 1 次」，MFA 卡片保留；余额（API=${after.balance}，DB=${afterDb}）与账本均未变`;
     },
     { label: 's4-mfa-wrong' },
   );
@@ -1025,24 +1025,24 @@ async function scenarioLargeTransferMfa(ctx: Ctx): Promise<string> {
       const settled = await waitForTransferSettled(ctx.baseUrl, before, LARGE_AMOUNT);
       await captureLive(page, 's4-mfa-ok');
       if (settled.occurrences !== 1) {
-        throw new Error(`SQLite 涓?-5000 鐨?DEBIT 琛屽簲涓?1 鏉★紝瀹為檯 ${settled.occurrences} 鏉);
+        throw new Error(`SQLite 中 -5000 的 DEBIT 行应为 1 条，实际 ${settled.occurrences} 条`);
       }
       const afterDb = await readCheckingBalance();
-      return `姝ｇ‘鐮?123456 鈫?浣欓 API=${settled.balance}銆丏B=${afterDb}锛堚垝5000 鎭板ソ涓€娆★級锛岃处鏈柊澧?-5000 DEBIT 涓€鏉★紙${settled.txIds[0]}锛塦;
+      return `正确码 123456 → 余额 API=${settled.balance}、DB=${afterDb}（−5000 恰好一次），账本新增 -5000 DEBIT 一条（${settled.txIds[0]}）`;
     },
     { label: 's4-mfa-ok' },
   );
 
-  return `閿欒鐮侊細${wrong} 锝?姝ｇ‘鐮侊細${ok}`;
+  return `错误码：${wrong} ｜ 正确码：${ok}`;
 }
 
 // --- scenario 7: SDK committed but the model continuation FAILS ----------------------------------
 
 /**
  * Engineer "the SDK write commits, the model continuation fails": DETERMINISTICALLY park a YELLOW
- * `transfer_money` 鈥?read the canonical server-owned session from the page and poll `/api/actions` for the
+ * `transfer_money` — read the canonical server-owned session from the page and poll `/api/actions` for the
  * parked row and, when the live model merely narrated without calling the tool, NUDGE it in the SAME
- * session (bounded attempts) 鈥?then reboot the SAME app on the SAME DB with `DEEPSEEK_API_KEY='invalid'`
+ * session (bounded attempts) — then reboot the SAME app on the SAME DB with `DEEPSEEK_API_KEY='invalid'`
  * so ONLY the continuation LLM call fails, then hit the confirm endpoint under the shared demo identity.
  * The action must still settle `executed` with exactly ONE debit. (Read-only against app code.)
  */
@@ -1054,7 +1054,7 @@ async function scenarioCommittedContinuationFailed(
   server.current.stop();
   await sleep(1500);
   configureLiveEnv();
-  resetLiveDatabase(); // zero the demo-day transfer total 鈫?the parked transfer is deterministically YELLOW
+  resetLiveDatabase(); // zero the demo-day transfer total → the parked transfer is deterministically YELLOW
   server.current = await bootDevServer({ timeoutMs: NAV_TIMEOUT_MS, attempts: 2 });
   let baseUrl = server.current.baseUrl;
 
@@ -1067,7 +1067,7 @@ async function scenarioCommittedContinuationFailed(
       await gotoAgent(page, baseUrl);
       sessionId = await readDemoSessionId(page);
       await submitChat(page, MSG.transferByName);
-      // ROBUST / DETERMINISTIC PARK 鈥?the model is not trusted to CALL the gated tool on the first
+      // ROBUST / DETERMINISTIC PARK — the model is not trusted to CALL the gated tool on the first
       // turn (it often only narrates a question). Poll the persisted server state, and NUDGE in the
       // SAME session until a `transfer_money` action is actually parked (bounded attempts).
       let parked: PendingActionView | undefined;
@@ -1081,11 +1081,11 @@ async function scenarioCommittedContinuationFailed(
             },
             {
               timeoutMs: PARK_POLL_MS,
-              description: `GET /api/actions 鍑虹幇 pending/awaiting_mfa 鐨?transfer_money 寰呭鐞嗛」锛堢 ${attempt}/${PARK_ATTEMPTS} 娆★級`,
+              description: `GET /api/actions 出现 pending/awaiting_mfa 的 transfer_money 待处理项（第 ${attempt}/${PARK_ATTEMPTS} 次）`,
             },
           );
         } catch {
-          parked = undefined; // a timeout is expected when the model only narrated 鈥?nudge and retry
+          parked = undefined; // a timeout is expected when the model only narrated — nudge and retry
         }
         if (parked === undefined) {
           // A prose-only claim that a confirmation panel ALREADY exists while nothing is parked is a
@@ -1097,7 +1097,7 @@ async function scenarioCommittedContinuationFailed(
           });
           if (attempt < PARK_ATTEMPTS) {
             const nudge = PARK_NUDGES[Math.min(attempt - 1, PARK_NUDGES.length - 1)];
-            console.log(`路 鍦烘櫙7锛氱 ${attempt} 娆℃湭鍑虹幇寰呯‘璁よ浆璐︼紙妯″瀷鍙兘鍙彊杩版湭璋冪敤宸ュ叿锛夛紝鍙戦€佽窡杩涙秷鎭€?{nudge}銆峘);
+            console.log(`· 场景7：第 ${attempt} 次未出现待确认转账（模型可能只叙述未调用工具），发送跟进消息「${nudge}」`);
             await submitChat(page, nudge);
           }
         }
@@ -1105,7 +1105,7 @@ async function scenarioCommittedContinuationFailed(
       if (parked === undefined) {
         await captureLive(page, 's7-no-park');
         throw new Error(
-          `鍦烘櫙7 鏈兘鍋滄斁 transfer_money 寰呭鐞嗛」锛堝凡灏濊瘯 ${PARK_ATTEMPTS} 娆★紝鍚?${PARK_ATTEMPTS - 1} 娆¤窡杩涙秷鎭級锝?${await noCardDiagnostics(page, baseUrl)}`,
+          `场景7 未能停放 transfer_money 待处理项（已尝试 ${PARK_ATTEMPTS} 次，含 ${PARK_ATTEMPTS - 1} 次跟进消息）｜ ${await noCardDiagnostics(page, baseUrl)}`,
         );
       }
       actionId = parked.id;
@@ -1116,7 +1116,7 @@ async function scenarioCommittedContinuationFailed(
   const before = await snapshot(baseUrl);
   const beforeDb = await readCheckingBalance();
 
-  // Reboot the SAME app on the SAME DB with an INVALID provider key 鈫?only the continuation fails.
+  // Reboot the SAME app on the SAME DB with an INVALID provider key → only the continuation fails.
   server.current.stop();
   await sleep(1500);
   process.env['DEEPSEEK_API_KEY'] = 'invalid';
@@ -1140,19 +1140,19 @@ async function scenarioCommittedContinuationFailed(
   else process.env['DEEPSEEK_API_KEY'] = originalKey;
 
   if (row?.status !== 'executed') {
-    throw new Error(`PendingAction.status 搴斾负 executed锛屽疄闄?${row?.status ?? 'null'}`);
+    throw new Error(`PendingAction.status 应为 executed，实际 ${row?.status ?? 'null'}`);
   }
   if (settled.occurrences !== 1) {
-    throw new Error(`SQLite 涓?-200 鐨?DEBIT 琛屽簲涓?1 鏉★紝瀹為檯 ${settled.occurrences} 鏉);
+    throw new Error(`SQLite 中 -200 的 DEBIT 行应为 1 条，实际 ${settled.occurrences} 条`);
   }
   const statusOk = body.ok === true && body.data?.ok === true && body.data?.status === 'executed';
-  return `閲嶅惎鍚庡湪鏃犳晥 key 涓嬬‘璁わ細HTTP ${res.status} ok=${body.ok} status=${body.data?.status}锛坰tatusOk=${statusOk}锛夛紱DB PendingAction.status=${row.status}锛屼綑棰?${before.balance}鈫?{settled.balance}锛圖B=${afterDb}锛夛紝-200 DEBIT 鎭?1 鏉★紙${settled.txIds[0]}锛夛紱DB=${JSON.stringify(row.resultJson)?.slice(0, 80)}`;
+  return `重启后在无效 key 下确认：HTTP ${res.status} ok=${body.ok} status=${body.data?.status}（statusOk=${statusOk}）；DB PendingAction.status=${row.status}，余额 ${before.balance}→${settled.balance}（DB=${afterDb}），-200 DEBIT 恰 1 条（${settled.txIds[0]}）；DB=${JSON.stringify(row.resultJson)?.slice(0, 80)}`;
 }
 
 // --- scenarios lA / lB: LIVE card replacement + partial investment redemption ---------------------
 
 const HOLDING_WENJIANA_ID = 'holding_wenjiana';
-const CARD_REPLACE_PROMPT = '璇蜂负鎴戞寕澶辩殑淇＄敤鍗¤ˉ鍔炰竴寮犳柊鍗?;
+const CARD_REPLACE_PROMPT = '请为我挂失的信用卡补办一张新卡';
 
 /** The UNIQUE `CREDIT` + `ACTIVE` card, or `undefined` when there is none / more than one. */
 function uniqueActiveCreditCard(cards: readonly LiveCardRecord[]): LiveCardRecord | undefined {
@@ -1162,8 +1162,8 @@ function uniqueActiveCreditCard(cards: readonly LiveCardRecord[]): LiveCardRecor
 
 /**
  * TOTAL available credit that may actually be SPENT: every `CREDIT` card that is NOT `LOST`.
- * A 琛ュ姙 card stays in the read model as `LOST` and KEEPS its recorded `availableLimit`, so the
- * family's allowance must be counted exactly ONCE 鈥?through the replacement, never the source too.
+ * A 补办 card stays in the read model as `LOST` and KEEPS its recorded `availableLimit`, so the
+ * family's allowance must be counted exactly ONCE — through the replacement, never the source too.
  */
 function nonLostCreditAvailableTotalMinor(cards: readonly LiveCardRecord[]): bigint {
   return cards
@@ -1171,7 +1171,7 @@ function nonLostCreditAvailableTotalMinor(cards: readonly LiveCardRecord[]): big
     .reduce((sum, card) => sum + moneyToCents(card.availableLimit as string), 0n);
 }
 
-/** The NAIVE total over ALL `CREDIT` cards INCLUDING `LOST` ones 鈥?recorded only to expose the trap. */
+/** The NAIVE total over ALL `CREDIT` cards INCLUDING `LOST` ones — recorded only to expose the trap. */
 function allCreditAvailableTotalMinor(cards: readonly LiveCardRecord[]): bigint {
   return cards
     .filter((card) => card.type === 'CREDIT' && card.availableLimit !== undefined)
@@ -1197,11 +1197,11 @@ function awaitLiveCards(
 /**
  * SCENARIO lA (LIVE-LLM, REAL BROWSER): report the demo credit card lost (RED `report_lost_card`) and
  * replace it (RED `replace_card`) purely through the `/agent` chat + MFA, then verify the replacement
- * on the REAL `/cards` page, `GET /api/cards` and SQLite 鈥?and prove `replace_card` is IDEMPOTENT for
+ * on the REAL `/cards` page, `GET /api/cards` and SQLite — and prove `replace_card` is IDEMPOTENT for
  * the SAME source card: a SECOND UI request must NOT mint a second card.
  *
  * Idempotency rule: a repeat request may REPLAY the original result, RETURN the existing result, or
- * explicitly REFUSE the duplicate 鈥?all three are acceptable and a SECOND MFA / tool execution is NOT
+ * explicitly REFUSE the duplicate — all three are acceptable and a SECOND MFA / tool execution is NOT
  * required. The leg is therefore judged ONLY by the authoritative `GET /api/cards` state (still 3
  * cards, unchanged single ACTIVE credit card), never by waiting for a second MFA card to appear or
  * disappear.
@@ -1213,35 +1213,35 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       attachCollectors(page);
       await gotoAgent(page, ctx.baseUrl);
 
-      // BASELINE 鈥?the usable available credit BEFORE 鎸傚け/琛ュ姙, straight from the read route, so the
-      // post-琛ュ姙 total can be compared against it (a 琛ュ姙 must never ADD credit).
+      // BASELINE — the usable available credit BEFORE 挂失/补办, straight from the read route, so the
+      // post-补办 total can be compared against it (a 补办 must never ADD credit).
       const cardsBeforeReplace = await fetchLiveCards(ctx.baseUrl);
       const sourceBefore = cardById(cardsBeforeReplace, CREDIT_CARD_ID);
       if (sourceBefore?.type !== 'CREDIT' || sourceBefore.status !== 'ACTIVE' || sourceBefore.availableLimit === undefined) {
-        throw new Error(`鎸傚け鍓?${CREDIT_CARD_ID} 搴斾负甯?availableLimit 鐨?ACTIVE CREDIT 鍗★紝瀹為檯 ${JSON.stringify(sourceBefore)}`);
+        throw new Error(`挂失前 ${CREDIT_CARD_ID} 应为带 availableLimit 的 ACTIVE CREDIT 卡，实际 ${JSON.stringify(sourceBefore)}`);
       }
       const totalAvailableBeforeMinor = nonLostCreditAvailableTotalMinor(cardsBeforeReplace);
       const naiveAllCreditBeforeMinor = allCreditAvailableTotalMinor(cardsBeforeReplace);
 
-      // A1 鈥?RED `report_lost_card`: bounded natural turns until the model parks the MFA card.
+      // A1 — RED `report_lost_card`: bounded natural turns until the model parks the MFA card.
       const sentA1 = await driveRedTool(page, ctx.baseUrl, [
-        '鎴戠殑淇＄敤鍗′涪澶变簡锛岃甯垜姝ｅ紡鎸傚け灏惧彿6688鐨勪俊鐢ㄥ崱',
-        '纭锛岃鍔炵悊',
-        '鐣岄潰涓婃柟娌℃湁鍑虹幇纭闈㈡澘锛岃閲嶆柊鍙戣捣杩欏紶鍗＄殑鎸傚け',
-        '璇风洿鎺ュ府鎴戝姙鐞嗘寕澶憋紝鎴戝凡缁忕‘璁?,
+        '我的信用卡丢失了，请帮我正式挂失尾号6688的信用卡',
+        '确认，请办理',
+        '界面上方没有出现确认面板，请重新发起这张卡的挂失',
+        '请直接帮我办理挂失，我已经确认',
       ]);
       await awaitLiveCards(
         ctx.baseUrl,
         (cards) => cards.find((card) => card.id === CREDIT_CARD_ID)?.status === 'LOST',
-        `鎸傚け鍚?GET /api/cards 涓?${CREDIT_CARD_ID}.status === LOST`,
+        `挂失后 GET /api/cards 中 ${CREDIT_CARD_ID}.status === LOST`,
       );
 
-      // A2 鈥?RED `replace_card`: same bounded natural turns (a short confirmation if the model asks).
+      // A2 — RED `replace_card`: same bounded natural turns (a short confirmation if the model asks).
       const sentA2 = await driveRedTool(page, ctx.baseUrl, [
         CARD_REPLACE_PROMPT,
-        '纭锛岃涓烘垜琛ュ姙',
-        '鐣岄潰涓婃柟娌℃湁鍑虹幇纭闈㈡澘锛岃閲嶆柊鍙戣捣琛ュ姙',
-        '璇风洿鎺ヤ负鎴戣ˉ鍔炰竴寮犳柊鍗★紝鎴戝凡纭',
+        '确认，请为我补办',
+        '界面上方没有出现确认面板，请重新发起补办',
+        '请直接为我补办一张新卡，我已确认',
       ]);
       const replaced = await awaitLiveCards(
         ctx.baseUrl,
@@ -1252,79 +1252,79 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
           cardById(cards, VIRTUAL_CARD_ID)?.status === 'ACTIVE' &&
           cards.find((card) => card.id === CREDIT_CARD_ID)?.replacedByCardId !== undefined &&
           uniqueActiveCreditCard(cards) !== undefined,
-        '琛ュ崱鍚庯細card_credit 宸插叧鑱旇ˉ鍔炲崱銆佹伆鏈変竴寮?ACTIVE 淇＄敤鍗★紝涓?DEBIT / VIRTUAL 婕旂ず鍗′粛涓?ACTIVE',
+        '补卡后：card_credit 已关联补办卡、恰有一张 ACTIVE 信用卡，且 DEBIT / VIRTUAL 演示卡仍为 ACTIVE',
       );
       const activeCredit = uniqueActiveCreditCard(replaced);
-      if (activeCredit === undefined) throw new Error('琛ュ崱鍚庢湭鎵惧埌鍞竴鐨?ACTIVE 淇＄敤鍗?);
+      if (activeCredit === undefined) throw new Error('补卡后未找到唯一的 ACTIVE 信用卡');
       const newId = activeCredit.id;
 
-      // REAL PAGE 鈥?the replacement tile's limits/status and the source card's LOST + 宸茶ˉ鍗?badges.
+      // REAL PAGE — the replacement tile's limits/status and the source card's LOST + 已补卡 badges.
       await page.goto(`${ctx.baseUrl}/cards`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
       await waitForElementHydration(page, '[data-card-add] button');
       const newRows = await readCardTileRows(page, newId);
       const newTileText = (await page.locator(`[data-card-id="${newId}"]`).first().innerText()).replace(/\s+/g, ' ');
       const sourceTileText = (await page.locator(`[data-card-id="${CREDIT_CARD_ID}"]`).first().innerText()).replace(/\s+/g, ' ');
       const cardsShot = await captureLive(page, 'lA-cards');
-      if (newRows['淇＄敤棰濆害'] !== '楼18,000.00' || newRows['鍙敤棰濆害'] !== '楼18,000.00') {
-        throw new Error(`琛ュ姙淇＄敤鍗?${newId} 搴旀樉绀?淇＄敤棰濆害=鍙敤棰濆害=楼18,000.00锛屽疄闄?${JSON.stringify(newRows)}`);
+      if (newRows['信用额度'] !== '¥18,000.00' || newRows['可用额度'] !== '¥18,000.00') {
+        throw new Error(`补办信用卡 ${newId} 应显示 信用额度=可用额度=¥18,000.00，实际 ${JSON.stringify(newRows)}`);
       }
-      if (!newTileText.includes('姝ｅ父')) {
-        throw new Error(`琛ュ姙淇＄敤鍗?${newId} 鏈樉绀恒€屾甯搞€嶇姸鎬侊細${newTileText.slice(0, 200)}`);
+      if (!newTileText.includes('正常')) {
+        throw new Error(`补办信用卡 ${newId} 未显示「正常」状态：${newTileText.slice(0, 200)}`);
       }
-      if (!sourceTileText.includes('宸叉寕澶?) || !sourceTileText.includes('宸茶ˉ鍗?)) {
-        throw new Error(`${CREDIT_CARD_ID} 搴斿悓鏃舵樉绀恒€屽凡鎸傚け銆嶄笌銆屽凡琛ュ崱銆嶏紝瀹為檯锛?{sourceTileText.slice(0, 200)}`);
+      if (!sourceTileText.includes('已挂失') || !sourceTileText.includes('已补卡')) {
+        throw new Error(`${CREDIT_CARD_ID} 应同时显示「已挂失」与「已补卡」，实际：${sourceTileText.slice(0, 200)}`);
       }
 
       // AUTHORITATIVE cross-check via the raw `/api/cards` route (NOT the narrow `fetchCards` helper).
       const cards = await fetchLiveCards(ctx.baseUrl);
       const actives = cards.filter((card) => card.type === 'CREDIT' && card.status === 'ACTIVE');
       if (actives.length !== 1) {
-        throw new Error(`搴旀伆鏈?1 寮?ACTIVE 淇＄敤鍗★紝瀹為檯 ${actives.length}锛?{JSON.stringify(cards)}`);
+        throw new Error(`应恰有 1 张 ACTIVE 信用卡，实际 ${actives.length}：${JSON.stringify(cards)}`);
       }
       const active = actives[0];
       if (active.creditLimit !== '18000.00' || active.availableLimit !== '18000.00') {
-        throw new Error(`ACTIVE 淇＄敤鍗￠搴﹀簲涓?creditLimit=availableLimit=18000.00锛屽疄闄?creditLimit=${active.creditLimit}銆乤vailableLimit=${active.availableLimit}`);
+        throw new Error(`ACTIVE 信用卡额度应为 creditLimit=availableLimit=18000.00，实际 creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}`);
       }
       const source = cardById(cards, CREDIT_CARD_ID);
-      if (source?.status !== 'LOST') throw new Error(`${CREDIT_CARD_ID} 搴斾粛涓?LOST锛屽疄闄?${source?.status}`);
+      if (source?.status !== 'LOST') throw new Error(`${CREDIT_CARD_ID} 应仍为 LOST，实际 ${source?.status}`);
       if (source?.replacedByCardId !== active.id) {
-        throw new Error(`${CREDIT_CARD_ID}.replacedByCardId 搴旀寚鍚?${active.id}锛屽疄闄?${source?.replacedByCardId}`);
+        throw new Error(`${CREDIT_CARD_ID}.replacedByCardId 应指向 ${active.id}，实际 ${source?.replacedByCardId}`);
       }
       // The replacement CREDIT card inherits the source's monthly limit; the OTHER two seeded cards are
-      // untouched and keep their EXACT type / status / limits 鈥?asserted by type/status, never by count alone.
+      // untouched and keep their EXACT type / status / limits — asserted by type/status, never by count alone.
       if (active.monthlyLimit !== '18000.00') {
-        throw new Error(`琛ュ姙淇＄敤鍗℃湀闄愰搴旂户鎵垮師鍗★紙18000.00锛夛紝瀹為檯 ${active.monthlyLimit}`);
+        throw new Error(`补办信用卡月限额应继承原卡（18000.00），实际 ${active.monthlyLimit}`);
       }
       const debitCard = cardById(cards, DEBIT_CARD_ID);
       if (debitCard?.type !== 'DEBIT' || debitCard.status !== 'ACTIVE' || debitCard.creditLimit !== undefined
         || debitCard.availableLimit !== undefined || debitCard.monthlyLimit !== undefined) {
-        throw new Error(`${DEBIT_CARD_ID} 搴斾负涓嶅甫浠讳綍棰濆害瀛楁鐨?ACTIVE DEBIT 鍗★紝瀹為檯 ${JSON.stringify(debitCard)}`);
+        throw new Error(`${DEBIT_CARD_ID} 应为不带任何额度字段的 ACTIVE DEBIT 卡，实际 ${JSON.stringify(debitCard)}`);
       }
       const virtualCard = cardById(cards, VIRTUAL_CARD_ID);
       if (virtualCard?.type !== 'VIRTUAL' || virtualCard.status !== 'ACTIVE'
         || virtualCard.monthlyLimit !== '5000.00' || virtualCard.linkedAccountId !== DEMO_CHECKING_ID) {
-        throw new Error(`${VIRTUAL_CARD_ID} 搴斾负缁戝畾 ${DEMO_CHECKING_ID}銆佹湀闄愰 5000.00 鐨?ACTIVE VIRTUAL 鍗★紝瀹為檯 ${JSON.stringify(virtualCard)}`);
+        throw new Error(`${VIRTUAL_CARD_ID} 应为绑定 ${DEMO_CHECKING_ID}、月限额 5000.00 的 ACTIVE VIRTUAL 卡，实际 ${JSON.stringify(virtualCard)}`);
       }
       if (cards.filter((card) => card.type === 'DEBIT').length !== 1 || cards.filter((card) => card.type === 'VIRTUAL').length !== 1) {
-        throw new Error(`搴旀伆鏈?1 寮?DEBIT 涓?1 寮?VIRTUAL 鍗★紝瀹為檯 ${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+        throw new Error(`应恰有 1 张 DEBIT 与 1 张 VIRTUAL 卡，实际 ${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
       }
       if (cards.length !== 4) {
-        throw new Error(`鍗＄墖鎬绘暟搴斾负 4锛? 寮?ACTIVE 琛ュ姙鍗?+ 1 寮?LOST 婧愬崱 + 1 寮?DEBIT + 1 寮?VIRTUAL锛夛紝瀹為檯 ${cards.length}锛?{cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+        throw new Error(`卡片总数应为 4（1 张 ACTIVE 补办卡 + 1 张 LOST 源卡 + 1 张 DEBIT + 1 张 VIRTUAL），实际 ${cards.length}：${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
       }
 
-      // NO-DOUBLING 鈥?琛ュ姙 must not create credit: the replacement INHERITS the source's available
+      // NO-DOUBLING — 补办 must not create credit: the replacement INHERITS the source's available
       // limit and the `LOST` source stops counting toward usable credit, so the spendable total is
       // unchanged. A total that DOUBLED here would let the demo user spend the same allowance twice.
       const totalAvailableAfterMinor = nonLostCreditAvailableTotalMinor(cards);
       const naiveAllCreditAfterMinor = allCreditAvailableTotalMinor(cards);
       if (active.availableLimit !== sourceBefore.availableLimit) {
-        throw new Error(`琛ュ姙鍗″彲鐢ㄩ搴﹀簲缁ф壙鍘熷崱 ${sourceBefore.availableLimit}锛堜笉寰楁斁澶э級锛屽疄闄?${active.availableLimit}`);
+        throw new Error(`补办卡可用额度应继承原卡 ${sourceBefore.availableLimit}（不得放大），实际 ${active.availableLimit}`);
       }
       if (totalAvailableAfterMinor !== totalAvailableBeforeMinor) {
-        throw new Error(`琛ュ姙鍓嶅悗銆岄潪 LOST 淇＄敤鍗″彲鐢ㄩ搴﹀悎璁°€嶅繀椤讳笉鍙橈紙棰濆害涓嶅緱绠椾袱娆★級锛氳ˉ鍔炲墠 ${centsToMoney(totalAvailableBeforeMinor)} 鈫?琛ュ姙鍚?${centsToMoney(totalAvailableAfterMinor)}锛堟槑缁嗭細${cards.filter((card) => card.type === 'CREDIT').map((card) => `${card.id}:${card.status}:鍙敤=${card.availableLimit ?? '鏃?}`).join(' ')}锛塦);
+        throw new Error(`补办前后「非 LOST 信用卡可用额度合计」必须不变（额度不得算两次）：补办前 ${centsToMoney(totalAvailableBeforeMinor)} → 补办后 ${centsToMoney(totalAvailableAfterMinor)}（明细：${cards.filter((card) => card.type === 'CREDIT').map((card) => `${card.id}:${card.status}:可用=${card.availableLimit ?? '无'}`).join(' ')}）`);
       }
 
-      // IDEMPOTENCY 鈥?a SECOND `replace_card` request through the UI must NOT mint a second card. The
+      // IDEMPOTENCY — a SECOND `replace_card` request through the UI must NOT mint a second card. The
       // repeat request may replay the original result, return the existing result, or explicitly refuse
       // the duplicate; a second MFA / tool execution is NOT required (`requireCardAtEnd = false`). The
       // leg is judged solely by the authoritative `GET /api/cards` route state below.
@@ -1334,8 +1334,8 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
         ctx.baseUrl,
         [
           CARD_REPLACE_PROMPT,
-          '纭锛岃涓烘垜琛ュ姙',
-          '璇峰啀鎻愪氦涓€娆¤繖寮犲崱鐨勮ˉ鍔炵敵璇凤紝鎴戣纭涓嶄細閲嶅鍙戝崱',
+          '确认，请为我补办',
+          '请再提交一次这张卡的补办申请，我要确认不会重复发卡',
         ],
         undefined,
         false,
@@ -1343,19 +1343,19 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       const afterSecond = await fetchLiveCards(ctx.baseUrl);
       const activeAfter = uniqueActiveCreditCard(afterSecond);
       if (afterSecond.length !== 4) {
-        throw new Error(`绗簩娆¤ˉ鍗″悗鍗＄墖鎬绘暟搴斾粛涓?4锛堟湭鏂板绗簩寮犺ˉ鍔炲崱锛夛紝瀹為檯 ${afterSecond.length}锛?{afterSecond.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+        throw new Error(`第二次补卡后卡片总数应仍为 4（未新增第二张补办卡），实际 ${afterSecond.length}：${afterSecond.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
       }
       if (activeAfter?.id !== newId) {
-        throw new Error(`绗簩娆¤ˉ鍗″悗 ACTIVE 淇＄敤鍗?id 搴斾粛涓?${newId}锛堟湭鏂板绗簩寮狅級锛屽疄闄?${activeAfter?.id ?? '鏃?}`);
+        throw new Error(`第二次补卡后 ACTIVE 信用卡 id 应仍为 ${newId}（未新增第二张），实际 ${activeAfter?.id ?? '无'}`);
       }
 
-      // 鈥nd the repeat request must not release a SECOND allowance either.
+      // …and the repeat request must not release a SECOND allowance either.
       const totalAvailableAfterIdemMinor = nonLostCreditAvailableTotalMinor(afterSecond);
       if (totalAvailableAfterIdemMinor !== totalAvailableBeforeMinor) {
-        throw new Error(`閲嶅琛ュ崱璇锋眰鍚庛€岄潪 LOST 淇＄敤鍗″彲鐢ㄩ搴﹀悎璁°€嶄粛椤讳负 ${centsToMoney(totalAvailableBeforeMinor)}锛堜笉寰楅噸澶嶅彂鍗?鏀鹃搴︼級锛屽疄闄?${centsToMoney(totalAvailableAfterIdemMinor)}锛?{afterSecond.filter((card) => card.type === 'CREDIT').map((card) => `${card.id}:${card.status}:鍙敤=${card.availableLimit ?? '鏃?}`).join(' ')}`);
+        throw new Error(`重复补卡请求后「非 LOST 信用卡可用额度合计」仍须为 ${centsToMoney(totalAvailableBeforeMinor)}（不得重复发卡/放额度），实际 ${centsToMoney(totalAvailableAfterIdemMinor)}：${afterSecond.filter((card) => card.type === 'CREDIT').map((card) => `${card.id}:${card.status}:可用=${card.availableLimit ?? '无'}`).join(' ')}`);
       }
 
-      return `A1 瀹為檯鍙戦€侊細${sentA1.map((t) => `銆?{t}銆峘).join(' 鈫?')} 鈫?MFA 123456 鈫?card_credit=LOST锛汚2 瀹為檯鍙戦€侊細${sentA2.map((t) => `銆?{t}銆峘).join(' 鈫?')} 鈫?MFA 123456 鈫?鏂板崱 ${newId}锛堜俊鐢ㄩ搴?${newRows['淇＄敤棰濆害']}銆佸彲鐢ㄩ搴?${newRows['鍙敤棰濆害']}锛岀姸鎬佸惈銆屾甯搞€嶏級锛?cards 涓?${CREDIT_CARD_ID} 鏄剧ず銆屽凡鎸傚け銆?銆屽凡琛ュ崱銆嶏紱GET /api/cards锛氬叡 ${cards.length} 寮犮€佸敮涓€ ACTIVE 淇＄敤鍗?id=${active.id}銆乧reditLimit=${active.creditLimit}銆乤vailableLimit=${active.availableLimit}銆乧ard_credit.status=${source?.status}銆乺eplacedByCardId=${source?.replacedByCardId}锛涘啀娆¤ˉ鍗″疄闄呭彂閫侊細${sentIdem.map((t) => `銆?{t}銆峘).join(' 鈫?')}锛堥噸澶嶈姹傦紝鍏佽閲嶆斁/杩斿洖鏃㈡湁缁撴灉/鏄惧紡鎷掔粷锛屼笉瑕佹眰浜屾 MFA/宸ュ叿鎵ц锛夊悗浠嶄负 ${afterSecond.length} 寮犮€丄CTIVE id=${activeAfter?.id ?? '鏃?}锛堟湭鏂板绗簩寮狅級锛涘彲鐢ㄤ俊鐢ㄩ搴︼紙闈?LOST 淇＄敤鍗″悎璁★級锛氳ˉ鍔炲墠 ${centsToMoney(totalAvailableBeforeMinor)}锛?{CREDIT_CARD_ID}:ACTIVE:鍙敤=${sourceBefore.availableLimit}锛夆啋 琛ュ姙鍚?${centsToMoney(totalAvailableAfterMinor)}锛堝敮涓€ ACTIVE 琛ュ姙鍗?${newId}:鍙敤=${active.availableLimit}锛?{CREDIT_CARD_ID}:LOST:鍙敤=${source?.availableLimit ?? '鏃?}锛屽凡鎺掗櫎锛夛紱鎶?LOST 婧愬崱涔熻鍏ョ殑鏈寸礌鍚堣 ${centsToMoney(naiveAllCreditBeforeMinor)} 鈫?${centsToMoney(naiveAllCreditAfterMinor)}锛堥噸澶嶈棰濆害锛屽凡琚柇瑷€鎺掗櫎锛夛紱閲嶅琛ュ崱鍚庡悎璁?${centsToMoney(totalAvailableAfterIdemMinor)}锛涙埅鍥?${cardsShot ?? '鏈惤鐩?}`;
+      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（重复请求，允许重放/返回既有结果/显式拒绝，不要求二次 MFA/工具执行）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）；可用信用额度（非 LOST 信用卡合计）：补办前 ${centsToMoney(totalAvailableBeforeMinor)}（${CREDIT_CARD_ID}:ACTIVE:可用=${sourceBefore.availableLimit}）→ 补办后 ${centsToMoney(totalAvailableAfterMinor)}（唯一 ACTIVE 补办卡 ${newId}:可用=${active.availableLimit}；${CREDIT_CARD_ID}:LOST:可用=${source?.availableLimit ?? '无'}，已排除）；把 LOST 源卡也计入的朴素合计 ${centsToMoney(naiveAllCreditBeforeMinor)} → ${centsToMoney(naiveAllCreditAfterMinor)}（重复计额度，已被断言排除）；重复补卡后合计=${centsToMoney(totalAvailableAfterIdemMinor)}；截图 ${cardsShot ?? '未落盘'}`;
     },
     { label: 'lA-credit-report-lost-and-replace' },
   );
@@ -1386,7 +1386,7 @@ function awaitHolding(
   );
 }
 
-/** Read one labelled `label 鈫?value` row (two adjacent spans) from a rendered investment tile. */
+/** Read one labelled `label → value` row (two adjacent spans) from a rendered investment tile. */
 async function readTileRow(tile: Locator, label: string): Promise<string> {
   return tile.evaluate((el, wanted) => {
     for (const span of Array.from(el.querySelectorAll('span'))) {
@@ -1399,8 +1399,8 @@ async function readTileRow(tile: Locator, label: string): Promise<string> {
 }
 
 /**
- * SCENARIO lB (LIVE-LLM, REAL BROWSER): subscribe an extra 楼1,000 into 绋冲仴鐞嗚储A (RED) and then
- * PARTIALLY redeem 楼2,000 of principal (RED) through the `/agent` chat + MFA, then verify the EXACT
+ * SCENARIO lB (LIVE-LLM, REAL BROWSER): subscribe an extra ¥1,000 into 稳健理财A (RED) and then
+ * PARTIALLY redeem ¥2,000 of principal (RED) through the `/agent` chat + MFA, then verify the EXACT
  * remaining principal / market value / profit on the REAL `/investments` page, the ledger + balance
  * and the full-precision valuation stored in SQLite.
  */
@@ -1413,67 +1413,67 @@ async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
       const beforeLedger = (await fetchLedger(ctx.baseUrl)).transactions;
       await gotoAgent(page, ctx.baseUrl);
 
-      // B1 鈥?RED `subscribe_investment` (楼1,000 into 绋冲仴鐞嗚储A 鈫?principal 6,000.00): bounded natural
+      // B1 — RED `subscribe_investment` (¥1,000 into 稳健理财A → principal 6,000.00): bounded natural
       // turns; if the model insists on a failing plan/submission path, one mild natural rephrase.
       const sentB1 = await driveRedTool(page, ctx.baseUrl, [
-        '杩藉姞鐢宠喘绋冲仴鐞嗚储A 1000鍏?,
-        '纭锛岃鍔炵悊',
-        '鐣岄潰涓婃柟娌℃湁鍑虹幇纭闈㈡澘锛岃閲嶆柊鍙戣捣杩欑瑪杩藉姞鐢宠喘',
-        '鐜板湪灏辩敤鎴戠殑璐︽埛杩藉姞鐢宠喘绋冲仴鐞嗚储A 1000鍏?,
+        '追加申购稳健理财A 1000元',
+        '确认，请办理',
+        '界面上方没有出现确认面板，请重新发起这笔追加申购',
+        '现在就用我的账户追加申购稳健理财A 1000元',
       ]);
       await awaitHolding(
         (row) => row.principalAmountMinor === 600_000n,
-        'B1 鍚?holding_wenjiana.principalAmountMinor === 600000锛埪?,000.00锛?,
+        'B1 后 holding_wenjiana.principalAmountMinor === 600000（¥6,000.00）',
       );
 
-      // B2 鈥?RED `redeem_investment` (PARTIAL 楼2,000 principal 鈫?principal 4,000.00): bounded natural turns.
+      // B2 — RED `redeem_investment` (PARTIAL ¥2,000 principal → principal 4,000.00): bounded natural turns.
       const sentB2 = await driveRedTool(page, ctx.baseUrl, [
-        '鎴戞寔鏈夌殑绋冲仴鐞嗚储A閮ㄥ垎璧庡洖2000鍏冩湰閲?,
-        '纭锛岃鍔炵悊',
-        '鐣岄潰涓婃柟娌℃湁鍑虹幇纭闈㈡澘锛岃閲嶆柊鍙戣捣杩欑瑪閮ㄥ垎璧庡洖',
+        '我持有的稳健理财A部分赎回2000元本金',
+        '确认，请办理',
+        '界面上方没有出现确认面板，请重新发起这笔部分赎回',
       ]);
       const holding = await awaitHolding(
         (row) => row.principalAmountMinor === 400_000n && (row.estimatedMarketValue ?? '').startsWith('4118.90666'),
-        'B2 鍚?principalAmountMinor === 400000 涓?estimatedMarketValue 浠?4118.90666 寮€澶达紙鍏ㄧ簿搴﹀瓨鍌級',
+        'B2 后 principalAmountMinor === 400000 且 estimatedMarketValue 以 4118.90666 开头（全精度存储）',
       );
 
-      // REAL PAGE 鈥?exact remaining principal / market value / profit rendered on `/investments`.
+      // REAL PAGE — exact remaining principal / market value / profit rendered on `/investments`.
       await page.goto(`${ctx.baseUrl}/investments`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
       await waitForElementHydration(page, '[data-investment-holdings]');
-      const tiles = page.locator('[data-investment-holdings] div.rounded-2xl').filter({ hasText: '绋冲仴鐞嗚储A' });
+      const tiles = page.locator('[data-investment-holdings] div.rounded-2xl').filter({ hasText: '稳健理财A' });
       const tileCount = await tiles.count();
-      if (tileCount !== 1) throw new Error(`/investments 鎸佷粨鍖恒€岀ǔ鍋ョ悊璐銆嶅崱鐗囧簲鎭?1 寮狅紝瀹為檯 ${tileCount}`);
-      const principal = await readTileRow(tiles.first(), '鎸佹湁閲戦');
-      const marketValue = await readTileRow(tiles.first(), '甯傚€?);
-      const profit = await readTileRow(tiles.first(), '鏀剁泭');
+      if (tileCount !== 1) throw new Error(`/investments 持仓区「稳健理财A」卡片应恰 1 张，实际 ${tileCount}`);
+      const principal = await readTileRow(tiles.first(), '持有金额');
+      const marketValue = await readTileRow(tiles.first(), '市值');
+      const profit = await readTileRow(tiles.first(), '收益');
       await captureLive(page, 'lB-investments');
-      const shown: Record<string, string> = { 鎸佹湁閲戦: principal, 甯傚€? marketValue, 鏀剁泭: profit };
+      const shown: Record<string, string> = { 持有金额: principal, 市值: marketValue, 收益: profit };
       for (const [label, value] of Object.entries(shown)) {
-        if (value === '') throw new Error(`/investments 鏈覆鏌撱€?{label}銆嶈`);
-        if (/\.\d{6,}/.test(value)) throw new Error(`銆?{label}銆嶅睍绀轰簡鏈粨绠楃殑杩囬珮绮惧害锛?{value}`);
-        if (!/^[+-]?楼[\d,]+\.\d{2}$/.test(value)) throw new Error(`銆?{label}銆嶆樉绀哄€兼牸寮忎笉姝ｇ‘锛?{value}`);
+        if (value === '') throw new Error(`/investments 未渲染「${label}」行`);
+        if (/\.\d{6,}/.test(value)) throw new Error(`「${label}」展示了未结算的过高精度：${value}`);
+        if (!/^[+-]?¥[\d,]+\.\d{2}$/.test(value)) throw new Error(`「${label}」显示值格式不正确：${value}`);
       }
-      if (principal !== '楼4,000.00') throw new Error(`鎸佹湁閲戦搴斾负 楼4,000.00锛屽疄闄?${principal}`);
-      if (marketValue !== '楼4,118.91') throw new Error(`甯傚€煎簲涓?楼4,118.91锛屽疄闄?${marketValue}`);
-      if (profit !== '+楼118.91') throw new Error(`鏀剁泭搴斾负 +楼118.91锛屽疄闄?${profit}`);
+      if (principal !== '¥4,000.00') throw new Error(`持有金额应为 ¥4,000.00，实际 ${principal}`);
+      if (marketValue !== '¥4,118.91') throw new Error(`市值应为 ¥4,118.91，实际 ${marketValue}`);
+      if (profit !== '+¥118.91') throw new Error(`收益应为 +¥118.91，实际 ${profit}`);
 
-      // LEDGER + BALANCE 鈥?one investment DEBIT (璁よ喘) and one investment CREDIT (璧庡洖).
+      // LEDGER + BALANCE — one investment DEBIT (认购) and one investment CREDIT (赎回).
       const afterBalance = (await fetchDashboardSummary(ctx.baseUrl)).checkingBalance;
       const afterLedger = (await fetchLedger(ctx.baseUrl)).transactions;
       const added = diffLedger(beforeLedger, afterLedger).added;
       const describe = added.map((tx) => `${tx.id}:${tx.amount}:${tx.direction}:${tx.merchant}/${tx.category}`).join(' ');
       const debits = added.filter(
-        (tx) => tx.direction === 'DEBIT' && moneyToCents(tx.amount) === -100_000n && tx.merchant === '璁よ喘绋冲仴鐞嗚储A' && tx.category === '鎶曡祫',
+        (tx) => tx.direction === 'DEBIT' && moneyToCents(tx.amount) === -100_000n && tx.merchant === '认购稳健理财A' && tx.category === '投资',
       );
       const credits = added.filter(
-        (tx) => tx.direction === 'CREDIT' && moneyToCents(tx.amount) === 205_945n && tx.merchant === '璧庡洖' && tx.category === '鎶曡祫',
+        (tx) => tx.direction === 'CREDIT' && moneyToCents(tx.amount) === 205_945n && tx.merchant === '赎回' && tx.category === '投资',
       );
-      if (debits.length !== 1) throw new Error(`璐︽湰搴旀柊澧?1 鏉?-1000.00 鐨勬姇璧?DEBIT锛堣璐ǔ鍋ョ悊璐锛夛紝瀹為檯 ${debits.length}锛?{describe}`);
-      if (credits.length !== 1) throw new Error(`璐︽湰搴旀柊澧?1 鏉?+2059.45 鐨勬姇璧?CREDIT锛堣祹鍥烇級锛屽疄闄?${credits.length}锛?{describe}`);
+      if (debits.length !== 1) throw new Error(`账本应新增 1 条 -1000.00 的投资 DEBIT（认购稳健理财A），实际 ${debits.length}：${describe}`);
+      if (credits.length !== 1) throw new Error(`账本应新增 1 条 +2059.45 的投资 CREDIT（赎回），实际 ${credits.length}：${describe}`);
       const expectedBalance = addMoney(subtractMoney(beforeBalance, '1000.00'), '2059.45');
-      if (afterBalance !== expectedBalance) throw new Error(`娲绘湡浣欓搴斾负 ${expectedBalance}锛屽疄闄?${afterBalance}`);
+      if (afterBalance !== expectedBalance) throw new Error(`活期余额应为 ${expectedBalance}，实际 ${afterBalance}`);
 
-      return `B1 瀹為檯鍙戦€侊細${sentB1.map((t) => `銆?{t}銆峘).join(' 鈫?')} 鈫?MFA 123456 鈫?DB principalAmountMinor=600000锛埪?,000.00锛夛紱B2 瀹為檯鍙戦€侊細${sentB2.map((t) => `銆?{t}銆峘).join(' 鈫?')} 鈫?MFA 123456 鈫?DB principalAmountMinor=${holding.principalAmountMinor}锛埪?,000.00锛夈€乪stimatedMarketValue=${holding.estimatedMarketValue}锛堝叏绮惧害锛夛紱/investments 鏄剧ず 鎸佹湁閲戦=${principal}銆佸競鍊?${marketValue}銆佹敹鐩?${profit}锛涜处鏈柊澧?DEBIT ${debits[0].amount}锛?{debits[0].id}锛?{debits[0].merchant}/${debits[0].category}锛変笌 CREDIT ${credits[0].amount}锛?{credits[0].id}锛?{credits[0].merchant}/${credits[0].category}锛夛紱娲绘湡浣欓 ${beforeBalance} 鈫?${afterBalance}`;
+      return `B1 实际发送：${sentB1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → DB principalAmountMinor=600000（¥6,000.00）；B2 实际发送：${sentB2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → DB principalAmountMinor=${holding.principalAmountMinor}（¥4,000.00）、estimatedMarketValue=${holding.estimatedMarketValue}（全精度）；/investments 显示 持有金额=${principal}、市值=${marketValue}、收益=${profit}；账本新增 DEBIT ${debits[0].amount}（${debits[0].id}，${debits[0].merchant}/${debits[0].category}）与 CREDIT ${credits[0].amount}（${credits[0].id}，${credits[0].merchant}/${credits[0].category}）；活期余额 ${beforeBalance} → ${afterBalance}`;
     },
     { label: 'lB-investment-partial-redemption' },
   );
@@ -1486,11 +1486,11 @@ async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
 
 /** UI-driven consumption for scenario lC (a unique merchant keeps the ledger row unambiguous). */
 const VIRTUAL_CONSUME_AMOUNT = '88.00';
-const VIRTUAL_CONSUME_CATEGORY = '璐墿';
-const VIRTUAL_CONSUME_MERCHANT = '铏氭嫙鍗℃秷璐归獙璇?;
-/** Natural (Chinese-only) turns asking the model to CONFIRM the EXISTING virtual card 鈥?never to mint one. */
-const VIRTUAL_CONFIRM_PROMPT = '鎴戝彧鏄兂纭涓€涓嬫垜鐜版湁鐨勯偅寮犺櫄鎷熷崱锛堝熬鍙?788锛夌殑鐘舵€侊紝涓嶉渶瑕佹柊鍔炲崱锛屽彲浠ュ悧锛?;
-const VIRTUAL_PAYABLE_PROMPT = '閭ｆ垜杩欏紶铏氭嫙鍗″綋鍓嶆渶澶氬彲浠ユ敮浠樺灏戦挶锛?;
+const VIRTUAL_CONSUME_CATEGORY = '购物';
+const VIRTUAL_CONSUME_MERCHANT = '虚拟卡消费验证';
+/** Natural (Chinese-only) turns asking the model to CONFIRM the EXISTING virtual card — never to mint one. */
+const VIRTUAL_CONFIRM_PROMPT = '我只是想确认一下我现有的那张虚拟卡（尾号7788）的状态，不需要新办卡，可以吗？';
+const VIRTUAL_PAYABLE_PROMPT = '那我这张虚拟卡当前最多可以支付多少钱？';
 
 /** The raw SQLite state scenario lC cross-checks (authoritative). */
 interface VirtualConsumeSnapshot {
@@ -1513,16 +1513,16 @@ function readVirtualConsumeSnapshot(): Promise<VirtualConsumeSnapshot> {
       }),
       db.account.findUnique({ where: { id: DEMO_CHECKING_ID }, select: { balanceMinor: true } }),
     ]);
-    if (!account) throw new Error(`缂哄皯璐︽埛 ${DEMO_CHECKING_ID}`);
+    if (!account) throw new Error(`缺少账户 ${DEMO_CHECKING_ID}`);
     return { cardDebits, consumptions, balanceMinor: account.balanceMinor };
   });
 }
 
 /**
- * SCENARIO lC (LIVE-LLM, REAL BROWSER): confirm the SEEDED virtual card (`card_virtual` 鈥?a VIRTUAL debit
- * instrument bound to `acct_checking` with monthly limit 楼5,000.00) through a natural `/agent` request,
- * then spend WITHIN limits through the REAL front-end consume dialog (`CardManager` 娑堣垂 button 鈫?
- * `CardConsumeDialog` form 鈫?`POST /api/cards/[id]/consume`).
+ * SCENARIO lC (LIVE-LLM, REAL BROWSER): confirm the SEEDED virtual card (`card_virtual` — a VIRTUAL debit
+ * instrument bound to `acct_checking` with monthly limit ¥5,000.00) through a natural `/agent` request,
+ * then spend WITHIN limits through the REAL front-end consume dialog (`CardManager` 消费 button →
+ * `CardConsumeDialog` form → `POST /api/cards/[id]/consume`).
  *
  * The spend is verified at the API + SQLite level: exactly ONE `channel='CARD'`/`direction='DEBIT'`
  * `Transaction` of the exact amount, exactly ONE `CardConsumption` row, the checking-account balance
@@ -1534,36 +1534,36 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
     ctx.browser,
     async (page) => {
       attachCollectors(page);
-      // Baseline FIRST 鈥?the seeded virtual card must be an ACTIVE VIRTUAL bound to the checking account,
+      // Baseline FIRST — the seeded virtual card must be an ACTIVE VIRTUAL bound to the checking account,
       // and the DB balance / CARD debits / consumptions are the authoritative start state.
       const baselineCards = await awaitLiveCards(
         ctx.baseUrl,
         (cards) => cardById(cards, VIRTUAL_CARD_ID)?.type === 'VIRTUAL' && cardById(cards, VIRTUAL_CARD_ID)?.status === 'ACTIVE',
-        `${VIRTUAL_CARD_ID} 搴斾负 ACTIVE 鐨?VIRTUAL 鍗,
+        `${VIRTUAL_CARD_ID} 应为 ACTIVE 的 VIRTUAL 卡`,
       );
       const virtualBefore = cardById(baselineCards, VIRTUAL_CARD_ID);
-      if (!virtualBefore) throw new Error(`GET /api/cards 缂哄皯 ${VIRTUAL_CARD_ID}`);
+      if (!virtualBefore) throw new Error(`GET /api/cards 缺少 ${VIRTUAL_CARD_ID}`);
       if (virtualBefore.linkedAccountId !== DEMO_CHECKING_ID) {
-        throw new Error(`${VIRTUAL_CARD_ID}.linkedAccountId 搴斾负 ${DEMO_CHECKING_ID}锛屽疄闄?${virtualBefore.linkedAccountId}`);
+        throw new Error(`${VIRTUAL_CARD_ID}.linkedAccountId 应为 ${DEMO_CHECKING_ID}，实际 ${virtualBefore.linkedAccountId}`);
       }
       const monthlyLimit = virtualBefore.monthlyLimit;
       const availableBefore = virtualBefore.accountAvailableBalance;
       const payableBefore = virtualBefore.payableAmount;
       if (monthlyLimit === undefined || availableBefore === undefined || payableBefore === undefined) {
-        throw new Error(`${VIRTUAL_CARD_ID} 搴旀毚闇?monthlyLimit/accountAvailableBalance/payableAmount锛屽疄闄?${JSON.stringify(virtualBefore)}`);
+        throw new Error(`${VIRTUAL_CARD_ID} 应暴露 monthlyLimit/accountAvailableBalance/payableAmount，实际 ${JSON.stringify(virtualBefore)}`);
       }
       const before = await readVirtualConsumeSnapshot();
       const limitMinor = moneyToCents(monthlyLimit);
       const amountMinor = moneyToCents(VIRTUAL_CONSUME_AMOUNT);
-      if (amountMinor <= 0n) throw new Error(`娑堣垂閲戦蹇呴』涓烘锛?{VIRTUAL_CONSUME_AMOUNT}`);
+      if (amountMinor <= 0n) throw new Error(`消费金额必须为正：${VIRTUAL_CONSUME_AMOUNT}`);
       const spentBeforeMinor = before.consumptions.reduce((sum, row) => sum + row.amountMinor, 0n);
       const remainingBeforeMinor = limitMinor > spentBeforeMinor ? limitMinor - spentBeforeMinor : 0n;
       const expectedPayableBeforeMinor = before.balanceMinor < remainingBeforeMinor ? before.balanceMinor : remainingBeforeMinor;
       if (moneyToCents(payableBefore) !== expectedPayableBeforeMinor) {
-        throw new Error(`${VIRTUAL_CARD_ID}.payableAmount 搴斾负 min(鍙敤浣欓 ${centsToMoney(before.balanceMinor)}, 鍓╀綑鏈堥檺棰?${centsToMoney(remainingBeforeMinor)}) = ${centsToMoney(expectedPayableBeforeMinor)}锛屽疄闄?${payableBefore}`);
+        throw new Error(`${VIRTUAL_CARD_ID}.payableAmount 应为 min(可用余额 ${centsToMoney(before.balanceMinor)}, 剩余月限额 ${centsToMoney(remainingBeforeMinor)}) = ${centsToMoney(expectedPayableBeforeMinor)}，实际 ${payableBefore}`);
       }
 
-      // C1 鈥?natural `/agent` request CONFIRMING the existing virtual card (never a create request). It is
+      // C1 — natural `/agent` request CONFIRMING the existing virtual card (never a create request). It is
       // driven through `driveRedTool`, which applies the `assertNoFabricatedConfirmationPanel` guard on
       // every prose-only turn; `requireCardAtEnd = false` because a plain status answer parks no card.
       await gotoAgent(page, ctx.baseUrl);
@@ -1578,45 +1578,45 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       const afterConfirm = await fetchLiveCards(ctx.baseUrl);
       const virtuals = afterConfirm.filter((card) => card.type === 'VIRTUAL');
       if (virtuals.length !== 1 || virtuals[0].id !== VIRTUAL_CARD_ID) {
-        throw new Error(`纭铏氭嫙鍗″悗搴斾粛鎭版湁 1 寮?VIRTUAL 鍗★紙${VIRTUAL_CARD_ID}锛夛紝瀹為檯 ${JSON.stringify(virtuals)}`);
+        throw new Error(`确认虚拟卡后应仍恰有 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}），实际 ${JSON.stringify(virtuals)}`);
       }
       if (afterConfirm.length !== baselineCards.length) {
-        throw new Error(`纭铏氭嫙鍗″悗鍗＄墖鎬绘暟搴斾繚鎸佷笉鍙橈紙鍩虹嚎 ${baselineCards.length} 寮狅級锛屽疄闄?${afterConfirm.length}锛?{afterConfirm.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+        throw new Error(`确认虚拟卡后卡片总数应保持不变（基线 ${baselineCards.length} 张），实际 ${afterConfirm.length}：${afterConfirm.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
       }
 
-      // C2 鈥?spend THROUGH THE REAL FRONT-END (CardManager 娑堣垂 button 鈫?CardConsumeDialog form).
+      // C2 — spend THROUGH THE REAL FRONT-END (CardManager 消费 button → CardConsumeDialog form).
       await page.goto(`${ctx.baseUrl}/cards`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
       await waitForElementHydration(page, `[data-card-id="${VIRTUAL_CARD_ID}"] [data-card-consume] button`);
       const consumeButton = page.locator(`[data-card-id="${VIRTUAL_CARD_ID}"] [data-card-consume] button`).first();
       await waitFor(async () => ((await consumeButton.isEnabled()) ? true : false), {
         timeoutMs: 60_000,
-        description: `${VIRTUAL_CARD_ID} 鐨勩€屾秷璐广€嶆寜閽彲鐢╜,
+        description: `${VIRTUAL_CARD_ID} 的「消费」按钮可用`,
       });
       await consumeButton.click();
       await waitForElementHydration(page, '[data-card-consume-form]');
       const dialogCardId = await page.locator('[data-card-consume-dialog]').first().getAttribute('data-card-consume-card-id');
       if (dialogCardId !== VIRTUAL_CARD_ID) {
-        throw new Error(`娑堣垂寮圭獥搴旂粦瀹?${VIRTUAL_CARD_ID}锛屽疄闄?data-card-consume-card-id=${dialogCardId}`);
+        throw new Error(`消费弹窗应绑定 ${VIRTUAL_CARD_ID}，实际 data-card-consume-card-id=${dialogCardId}`);
       }
       const summary = await readDialogRows(page, '[data-card-consume-summary]');
-      if (summary['鏈堥檺棰?] !== formatCNY(monthlyLimit)) {
-        throw new Error(`娑堣垂寮圭獥銆屾湀闄愰銆嶅簲涓?${formatCNY(monthlyLimit)}锛屽疄闄?${summary['鏈堥檺棰?]}锛?{JSON.stringify(summary)}锛塦);
+      if (summary['月限额'] !== formatCNY(monthlyLimit)) {
+        throw new Error(`消费弹窗「月限额」应为 ${formatCNY(monthlyLimit)}，实际 ${summary['月限额']}（${JSON.stringify(summary)}）`);
       }
-      if (summary['鍏宠仈璐︽埛'] !== '****8821') {
-        throw new Error(`娑堣垂寮圭獥銆屽叧鑱旇处鎴枫€嶅簲涓?****8821锛屽疄闄?${summary['鍏宠仈璐︽埛']}锛?{JSON.stringify(summary)}锛塦);
+      if (summary['关联账户'] !== '****8821') {
+        throw new Error(`消费弹窗「关联账户」应为 ****8821，实际 ${summary['关联账户']}（${JSON.stringify(summary)}）`);
       }
-      if (summary['褰撳墠鍙敮浠橀噾棰?] !== formatCNY(payableBefore)) {
-        throw new Error(`娑堣垂寮圭獥銆屽綋鍓嶅彲鏀粯閲戦銆嶅簲涓?${formatCNY(payableBefore)}锛屽疄闄?${summary['褰撳墠鍙敮浠橀噾棰?]}锛?{JSON.stringify(summary)}锛塦);
+      if (summary['当前可支付金额'] !== formatCNY(payableBefore)) {
+        throw new Error(`消费弹窗「当前可支付金额」应为 ${formatCNY(payableBefore)}，实际 ${summary['当前可支付金额']}（${JSON.stringify(summary)}）`);
       }
       const form = page.locator('[data-card-consume-form]').first();
       // The dialog must offer NO time control at all: the booking instant is SERVER-owned.
       const formFieldNames = await form.locator('input').evaluateAll((els) => els.map((el) => el.getAttribute('name') ?? ''));
       if (formFieldNames.some((name) => /occurred|date|time/i.test(name))) {
-        throw new Error(`娑堣垂琛ㄥ崟涓嶅緱鍖呭惈浠讳綍鏃堕棿瀛楁锛堣璐︽椂闂寸敱鏈嶅姟绔嫢鏈夛級锛屽疄闄?${JSON.stringify(formFieldNames)}`);
+        throw new Error(`消费表单不得包含任何时间字段（记账时间由服务端拥有），实际 ${JSON.stringify(formFieldNames)}`);
       }
       for (const required of ['amount', 'category', 'merchant']) {
         if (!formFieldNames.includes(required)) {
-          throw new Error(`娑堣垂琛ㄥ崟缂哄皯 ${required} 瀛楁锛屽疄闄?${JSON.stringify(formFieldNames)}`);
+          throw new Error(`消费表单缺少 ${required} 字段，实际 ${JSON.stringify(formFieldNames)}`);
         }
       }
       await form.locator('input[name="amount"]').fill(VIRTUAL_CONSUME_AMOUNT);
@@ -1628,12 +1628,12 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
         (req) => req.method() === 'POST' && req.url().includes(`/api/cards/${VIRTUAL_CARD_ID}/consume`),
         { timeout: 60_000 },
       );
-      await form.getByRole('button', { name: '鎻愪氦娑堣垂', exact: true }).click();
+      await form.getByRole('button', { name: '提交消费', exact: true }).click();
       const sentBodyText = (await consumeRequest).postData() ?? '';
-      if (sentBodyText === '') throw new Error('娑堣垂璇锋眰娌℃湁璇锋眰浣擄紝鏃犳硶鏍稿鏄惁鎻愪氦浜嗚璐︽椂闂?);
+      if (sentBodyText === '') throw new Error('消费请求没有请求体，无法核对是否提交了记账时间');
       const sentBody = JSON.parse(sentBodyText) as Record<string, unknown>;
       if ('occurredAt' in sentBody) {
-        throw new Error(`娑堣垂璇锋眰浣撲笉寰楁惡甯?occurredAt锛堣璐︽椂闂寸敱鏈嶅姟绔嫢鏈夛級锛屽疄闄?${sentBodyText}`);
+        throw new Error(`消费请求体不得携带 occurredAt（记账时间由服务端拥有），实际 ${sentBodyText}`);
       }
       // The dialog may also send its retry `executionKey` (an idempotency identity, NOT a time), so the
       // property pinned here is precisely the one that matters: the body carries NO time-shaped key and
@@ -1642,29 +1642,29 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       const allowedKeys = new Set(['amount', 'category', 'merchant', 'executionKey']);
       const unexpectedKeys = Object.keys(sentBody).filter((key) => !allowedKeys.has(key));
       if (unexpectedKeys.length > 0) {
-        throw new Error(`娑堣垂璇锋眰浣撳彧鍏佽 amount/category/merchant/executionKey锛屽疄闄呭鍑?${unexpectedKeys.join(',')}锛?{sentBodyText}锛塦);
+        throw new Error(`消费请求体只允许 amount/category/merchant/executionKey，实际多出 ${unexpectedKeys.join(',')}（${sentBodyText}）`);
       }
       const timeShapedKeys = Object.keys(sentBody).filter((key) => /occurred|date|time/i.test(key));
       if (timeShapedKeys.length > 0) {
-        throw new Error(`娑堣垂璇锋眰浣撲笉寰楁惡甯︿换浣曟椂闂村瓧娈碉紙璁拌处鏃堕棿鐢辨湇鍔＄鎷ユ湁锛夛紝瀹為檯 ${timeShapedKeys.join(',')}锛?{sentBodyText}锛塦);
+        throw new Error(`消费请求体不得携带任何时间字段（记账时间由服务端拥有），实际 ${timeShapedKeys.join(',')}（${sentBodyText}）`);
       }
       for (const required of ['amount', 'category', 'merchant']) {
         if (!(required in sentBody)) {
-          throw new Error(`娑堣垂璇锋眰浣撶己灏?${required}锛屽疄闄?${sentBodyText}`);
+          throw new Error(`消费请求体缺少 ${required}，实际 ${sentBodyText}`);
         }
       }
       if (sentBody['amount'] !== VIRTUAL_CONSUME_AMOUNT) {
-        throw new Error(`娑堣垂璇锋眰浣?amount 搴斾负 ${VIRTUAL_CONSUME_AMOUNT}锛屽疄闄?${String(sentBody['amount'])}`);
+        throw new Error(`消费请求体 amount 应为 ${VIRTUAL_CONSUME_AMOUNT}，实际 ${String(sentBody['amount'])}`);
       }
-      await waitForStatusText(page, '娑堣垂鎴愬姛', 60_000);
-      // The dialog reloads this card's consumptions after a successful spend 鈫?exactly ONE new record.
+      await waitForStatusText(page, '消费成功', 60_000);
+      // The dialog reloads this card's consumptions after a successful spend → exactly ONE new record.
       await waitFor(
         async () => ((await page.locator('[data-card-consumption]').count()) === before.consumptions.length + 1 ? true : false),
-        { timeoutMs: 60_000, description: '娑堣垂鎴愬姛鍚庡脊绐椼€屾秷璐硅褰曘€嶆柊澧?1 鏉? },
+        { timeoutMs: 60_000, description: '消费成功后弹窗「消费记录」新增 1 条' },
       );
       const recordText = (await page.locator('[data-card-consumption]').last().innerText()).replace(/\s+/g, ' ');
       if (!recordText.includes(VIRTUAL_CONSUME_MERCHANT) || !recordText.includes(formatCNY(VIRTUAL_CONSUME_AMOUNT))) {
-        throw new Error(`寮圭獥娑堣垂璁板綍搴斿寘鍚€?{VIRTUAL_CONSUME_MERCHANT}銆嶄笌 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}锛屽疄闄呫€?{recordText}銆峘);
+        throw new Error(`弹窗消费记录应包含「${VIRTUAL_CONSUME_MERCHANT}」与 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}，实际「${recordText}」`);
       }
       const successShot = await captureLive(page, 'lC-consume-success');
 
@@ -1675,40 +1675,40 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       const describeDebits = newDebits.map((row) => `${row.id}:${row.amountMinor}:${row.direction}:${row.channel}:${row.category}/${row.merchant}`).join(' ');
       const describeConsumptions = newConsumptions.map((row) => `${row.id}:${row.cardId}:${row.accountId}:${row.amountMinor}:${row.category}/${row.merchant}`).join(' ');
       if (after.cardDebits.length !== before.cardDebits.length + 1) {
-        throw new Error(`搴旀伆鏂板 1 鏉?channel=CARD 鐨?DEBIT 娴佹按锛屽疄闄呮柊澧?${after.cardDebits.length - before.cardDebits.length}锛?{describeDebits}`);
+        throw new Error(`应恰新增 1 条 channel=CARD 的 DEBIT 流水，实际新增 ${after.cardDebits.length - before.cardDebits.length}：${describeDebits}`);
       }
       const debitRow = newDebits[0];
-      if (!debitRow) throw new Error('鏂板 CARD 娴佹按涓虹┖');
+      if (!debitRow) throw new Error('新增 CARD 流水为空');
       if (debitRow.amountMinor !== -amountMinor || debitRow.direction !== 'DEBIT' || debitRow.channel !== 'CARD'
         || debitRow.category !== VIRTUAL_CONSUME_CATEGORY || debitRow.merchant !== VIRTUAL_CONSUME_MERCHANT) {
-        throw new Error(`鏂板 CARD 娴佹按搴斾负 -${amountMinor}锛?{VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}锛夛紝瀹為檯 ${describeDebits}`);
+        throw new Error(`新增 CARD 流水应为 -${amountMinor}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}），实际 ${describeDebits}`);
       }
       if (after.consumptions.length !== before.consumptions.length + 1) {
-        throw new Error(`搴旀伆鏂板 1 鏉?CardConsumption锛屽疄闄呮柊澧?${after.consumptions.length - before.consumptions.length}锛?{describeConsumptions}`);
+        throw new Error(`应恰新增 1 条 CardConsumption，实际新增 ${after.consumptions.length - before.consumptions.length}：${describeConsumptions}`);
       }
       const consumptionRow = newConsumptions[0];
-      if (!consumptionRow) throw new Error('鏂板 CardConsumption 涓虹┖');
+      if (!consumptionRow) throw new Error('新增 CardConsumption 为空');
       if (consumptionRow.cardId !== VIRTUAL_CARD_ID || consumptionRow.accountId !== DEMO_CHECKING_ID
         || consumptionRow.amountMinor !== amountMinor || consumptionRow.category !== VIRTUAL_CONSUME_CATEGORY
         || consumptionRow.merchant !== VIRTUAL_CONSUME_MERCHANT) {
-        throw new Error(`鏂板 CardConsumption 搴斾负 cardId=${VIRTUAL_CARD_ID}銆乤ccountId=${DEMO_CHECKING_ID}銆乤mountMinor=${amountMinor}锛?{VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}锛夛紝瀹為檯 ${describeConsumptions}`);
+        throw new Error(`新增 CardConsumption 应为 cardId=${VIRTUAL_CARD_ID}、accountId=${DEMO_CHECKING_ID}、amountMinor=${amountMinor}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}），实际 ${describeConsumptions}`);
       }
-      // SERVER-OWNED TIME 鈥?both rows carry the SAME server business instant (the pinned demo clock
+      // SERVER-OWNED TIME — both rows carry the SAME server business instant (the pinned demo clock
       // DEMO_NOW), never a client value: the dialog body captured above carried no time field at all.
       const serverInstantMs = DEMO_NOW;
       if (debitRow.occurredAt.getTime() !== serverInstantMs) {
-        throw new Error(`CARD 娴佹按鐨?occurredAt 搴斾负鏈嶅姟绔笟鍔℃椂閽?${new Date(serverInstantMs).toISOString()}锛屽疄闄?${debitRow.occurredAt.toISOString()}`);
+        throw new Error(`CARD 流水的 occurredAt 应为服务端业务时钟 ${new Date(serverInstantMs).toISOString()}，实际 ${debitRow.occurredAt.toISOString()}`);
       }
       if (consumptionRow.occurredAt.getTime() !== serverInstantMs) {
-        throw new Error(`CardConsumption 鐨?occurredAt 搴斾负鏈嶅姟绔笟鍔℃椂閽?${new Date(serverInstantMs).toISOString()}锛屽疄闄?${consumptionRow.occurredAt.toISOString()}`);
+        throw new Error(`CardConsumption 的 occurredAt 应为服务端业务时钟 ${new Date(serverInstantMs).toISOString()}，实际 ${consumptionRow.occurredAt.toISOString()}`);
       }
       if (after.balanceMinor !== before.balanceMinor - amountMinor) {
-        throw new Error(`娲绘湡浣欓搴斿噺灏戞伆 ${amountMinor}锛?{centsToMoney(before.balanceMinor)} 鈫?${centsToMoney(before.balanceMinor - amountMinor)}锛夛紝瀹為檯 ${centsToMoney(after.balanceMinor)}`);
+        throw new Error(`活期余额应减少恰 ${amountMinor}（${centsToMoney(before.balanceMinor)} → ${centsToMoney(before.balanceMinor - amountMinor)}），实际 ${centsToMoney(after.balanceMinor)}`);
       }
-      // EXACTLY ONCE 鈥?the ledger must carry no second, equal CARD debit for this spend.
+      // EXACTLY ONCE — the ledger must carry no second, equal CARD debit for this spend.
       const duplicates = after.cardDebits.filter((row) => row.amountMinor === -amountMinor && row.merchant === VIRTUAL_CONSUME_MERCHANT);
       if (duplicates.length !== 1) {
-        throw new Error(`鏈铏氭嫙鍗℃秷璐瑰簲鎭版湁 1 鏉℃祦姘达紙涓嶅緱閲嶅鎵ｆ锛夛紝瀹為檯 ${duplicates.length}锛?{duplicates.map((row) => row.id).join(',')}`);
+        throw new Error(`本次虚拟卡消费应恰有 1 条流水（不得重复扣款），实际 ${duplicates.length}：${duplicates.map((row) => row.id).join(',')}`);
       }
 
       // payableAmount is recomputed from the NEW cash + the remaining monthly limit.
@@ -1723,33 +1723,33 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       );
       const virtualAfter = cardById(afterCards, VIRTUAL_CARD_ID);
       if (virtualAfter?.accountAvailableBalance !== centsToMoney(availableAfterMinor)) {
-        throw new Error(`${VIRTUAL_CARD_ID}.accountAvailableBalance 搴斾负 ${centsToMoney(availableAfterMinor)}锛屽疄闄?${virtualAfter?.accountAvailableBalance}`);
+        throw new Error(`${VIRTUAL_CARD_ID}.accountAvailableBalance 应为 ${centsToMoney(availableAfterMinor)}，实际 ${virtualAfter?.accountAvailableBalance}`);
       }
       await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
       await waitForElementHydration(page, `[data-card-id="${VIRTUAL_CARD_ID}"]`);
       const tileRows = await readCardTileRows(page, VIRTUAL_CARD_ID);
       const tileShot = await captureLive(page, 'lC-card-tile');
-      if (tileRows['褰撳墠鍙敮浠橀噾棰?] !== formatCNY(centsToMoney(expectedPayableAfterMinor))) {
-        throw new Error(`${VIRTUAL_CARD_ID} 鍗＄墖銆屽綋鍓嶅彲鏀粯閲戦銆嶅簲涓?${formatCNY(centsToMoney(expectedPayableAfterMinor))}锛屽疄闄?${tileRows['褰撳墠鍙敮浠橀噾棰?]}锛?{JSON.stringify(tileRows)}锛塦);
+      if (tileRows['当前可支付金额'] !== formatCNY(centsToMoney(expectedPayableAfterMinor))) {
+        throw new Error(`${VIRTUAL_CARD_ID} 卡片「当前可支付金额」应为 ${formatCNY(centsToMoney(expectedPayableAfterMinor))}，实际 ${tileRows['当前可支付金额']}（${JSON.stringify(tileRows)}）`);
       }
 
-      return `C1 瀹為檯鍙戦€侊細${sentC1.map((t) => `銆?{t}銆峘).join(' 鈫?')} 鈫?浠嶆伆 1 寮?VIRTUAL 鍗★紙${VIRTUAL_CARD_ID}锛屾湭琚噸澶嶅紑閫氾級锛汣2 鍓嶇娑堣垂寮圭獥锛堢粦瀹?${dialogCardId}锛屾湀闄愰 ${summary['鏈堥檺棰?]}銆佸叧鑱旇处鎴?${summary['鍏宠仈璐︽埛']}銆佹秷璐瑰墠褰撳墠鍙敮浠橀噾棰?${summary['褰撳墠鍙敮浠橀噾棰?]}锛夋彁浜?${formatCNY(VIRTUAL_CONSUME_AMOUNT)}锛?{VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}锛夆啋 娑堣垂鎴愬姛锛汼QLite锛氭柊澧?1 鏉?channel=CARD/DEBIT 娴佹按 ${debitRow.amountMinor}锛?{debitRow.id}锛夈€? 鏉?CardConsumption amountMinor=${consumptionRow.amountMinor}锛?{consumptionRow.id}锛夛紱娲绘湡浣欓 ${centsToMoney(before.balanceMinor)} 鈫?${centsToMoney(after.balanceMinor)}锛堟伆鎵ｄ竴娆★級锛?{VIRTUAL_CARD_ID}.payableAmount ${payableBefore} 鈫?${virtualAfter?.payableAmount} = min(鍙敤浣欓 ${virtualAfter?.accountAvailableBalance}銆佸墿浣欐湀闄愰 ${centsToMoney(remainingAfterMinor)})锛涘崱鐗囥€屽綋鍓嶅彲鏀粯閲戦銆?${tileRows['褰撳墠鍙敮浠橀噾棰?]}锛涜璐︽椂闂寸敱鏈嶅姟绔嫢鏈夛細寮圭獥璇锋眰浣撻€愬瓧 ${sentBodyText}锛堥敭=${sentKeys}锛屾棤 occurredAt锛夛紝钀借处 Transaction.occurredAt 涓?CardConsumption.occurredAt 鍧囦负 ${debitRow.occurredAt.toISOString()}锛? DEMO_NOW 鏈嶅姟绔笟鍔℃椂閽?2026-09-25T12:00:00+08:00锛夛紱鎴浘 ${formShot ?? '鏈惤鐩?} / ${successShot ?? '鏈惤鐩?} / ${tileShot ?? '鏈惤鐩?}`;
+      return `C1 实际发送：${sentC1.map((t) => `「${t}」`).join(' → ')} → 仍恰 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}，未被重复开通）；C2 前端消费弹窗（绑定 ${dialogCardId}，月限额 ${summary['月限额']}、关联账户 ${summary['关联账户']}、消费前当前可支付金额 ${summary['当前可支付金额']}）提交 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}）→ 消费成功；SQLite：新增 1 条 channel=CARD/DEBIT 流水 ${debitRow.amountMinor}（${debitRow.id}）、1 条 CardConsumption amountMinor=${consumptionRow.amountMinor}（${consumptionRow.id}）；活期余额 ${centsToMoney(before.balanceMinor)} → ${centsToMoney(after.balanceMinor)}（恰扣一次）；${VIRTUAL_CARD_ID}.payableAmount ${payableBefore} → ${virtualAfter?.payableAmount} = min(可用余额 ${virtualAfter?.accountAvailableBalance}、剩余月限额 ${centsToMoney(remainingAfterMinor)})；卡片「当前可支付金额」=${tileRows['当前可支付金额']}；记账时间由服务端拥有：弹窗请求体逐字 ${sentBodyText}（键=${sentKeys}，无 occurredAt），落账 Transaction.occurredAt 与 CardConsumption.occurredAt 均为 ${debitRow.occurredAt.toISOString()}（= DEMO_NOW 服务端业务时钟 2026-09-25T12:00:00+08:00）；截图 ${formShot ?? '未落盘'} / ${successShot ?? '未落盘'} / ${tileShot ?? '未落盘'}`;
     },
     { label: 'lC-virtual-card-consumption' },
   );
 }
 
-// --- scenarios lD / lE: LIVE virtual-card apply/limit, and 鎸傚け鈫掕ˉ鍔?continuity ---------------------
+// --- scenarios lD / lE: LIVE virtual-card apply/limit, and 挂失→补办 continuity ---------------------
 //
 // Both scenarios are built ON TOP of `./live-virtual-card.e2e-helper`: that module owns the shared
 // apply/consume primitives, the raw-SQLite cross-checks and the payable maths. This file only
 // SEQUENCES them and owns the bounded RED-tool driver (`driveRedTool`, injected as `RedToolDriver`)
 // so the `assertNoFabricatedConfirmationPanel` guard stays in force on every prose-only turn.
 
-/** The mask tail (last 4 digits) the natural-language 鎸傚け/琛ュ姙 turns refer to. */
+/** The mask tail (last 4 digits) the natural-language 挂失/补办 turns refer to. */
 function vcMaskTail(numberMasked: string): string {
   const digits = numberMasked.replace(/\D+/g, '');
-  if (digits.length < 4) throw new Error(`鍗＄墖鎺╃爜銆?{numberMasked}銆嶄笉鍚彲鐢ㄧ殑灏惧彿 4 浣峘);
+  if (digits.length < 4) throw new Error(`卡片掩码「${numberMasked}」不含可用的尾号 4 位`);
   return digits.slice(-4);
 }
 
@@ -1763,9 +1763,9 @@ interface AppliedVirtualCardLeg {
 }
 
 /**
- * The SHARED opening act of lD + lE 鈥?ONE function, so the two scenarios cannot drift apart: open a NEW
- * virtual card with the stated 楼100.00 monthly limit through the REAL `/agent` chat (RED
- * `apply_virtual_card` 鈬?confirmation/MFA, completed by `driveRedTool` with the real code), then verify
+ * The SHARED opening act of lD + lE — ONE function, so the two scenarios cannot drift apart: open a NEW
+ * virtual card with the stated ¥100.00 monthly limit through the REAL `/agent` chat (RED
+ * `apply_virtual_card` ⇒ confirmation/MFA, completed by `driveRedTool` with the real code), then verify
  * the RAW SQLite `Card` row: a VIRTUAL/ACTIVE DEBIT instrument bound to the checking account with
  * `monthlyLimitMinor = 10000`, NO credit columns, and a card number no pre-existing card carries.
  */
@@ -1783,21 +1783,21 @@ async function applyVirtualCardLeg(ctx: Ctx, page: Page): Promise<AppliedVirtual
   const raw = await awaitRawCard(
     applied.cardId,
     (row) => row.type === 'VIRTUAL' && row.status === 'ACTIVE',
-    `RAW Card ${applied.cardId} 搴斾负 ACTIVE 鐨?VIRTUAL 鍗,
+    `RAW Card ${applied.cardId} 应为 ACTIVE 的 VIRTUAL 卡`,
   );
   const limitMinor = moneyToCents(VC_MONTHLY_LIMIT);
   if (raw.monthlyLimitMinor !== limitMinor) {
-    throw new Error(`RAW Card ${applied.cardId}.monthlyLimitMinor 搴斾负 ${limitMinor}锛?{VC_MONTHLY_LIMIT}锛夛紝瀹為檯 ${raw.monthlyLimitMinor}`);
+    throw new Error(`RAW Card ${applied.cardId}.monthlyLimitMinor 应为 ${limitMinor}（${VC_MONTHLY_LIMIT}），实际 ${raw.monthlyLimitMinor}`);
   }
   if (raw.linkedAccountId !== VC_CHECKING_ACCOUNT_ID) {
-    throw new Error(`RAW Card ${applied.cardId}.linkedAccountId 搴斾负 ${VC_CHECKING_ACCOUNT_ID}锛屽疄闄?${raw.linkedAccountId}`);
+    throw new Error(`RAW Card ${applied.cardId}.linkedAccountId 应为 ${VC_CHECKING_ACCOUNT_ID}，实际 ${raw.linkedAccountId}`);
   }
   if (raw.creditLimitMinor !== null || raw.availableLimitMinor !== null) {
-    throw new Error(`铏氭嫙鍗℃槸鍊熻宸ュ叿锛孯AW 琛屼笉寰楁湁淇＄敤棰濆害锛歝reditLimitMinor=${raw.creditLimitMinor}銆乤vailableLimitMinor=${raw.availableLimitMinor}`);
+    throw new Error(`虚拟卡是借记工具，RAW 行不得有信用额度：creditLimitMinor=${raw.creditLimitMinor}、availableLimitMinor=${raw.availableLimitMinor}`);
   }
   for (const card of existing) {
     if (card.numberMasked !== undefined && card.numberMasked === raw.numberMasked) {
-      throw new Error(`鏂拌櫄鎷熷崱鍗″彿 ${raw.numberMasked} 涓庢棦鏈夊崱鐗?${card.id}锛?{card.numberMasked}锛夌浉鍚宍);
+      throw new Error(`新虚拟卡卡号 ${raw.numberMasked} 与既有卡片 ${card.id}（${card.numberMasked}）相同`);
     }
   }
   return { cardId: applied.cardId, sent: applied.sent, raw, maskTail: vcMaskTail(raw.numberMasked) };
@@ -1813,15 +1813,15 @@ function awaitPayable(baseUrl: string, cardId: string, expected: string): Promis
     {
       timeoutMs: 180_000,
       intervalMs: 1_000,
-      description: `${cardId}.payableAmount === ${expected}锛坢in(璐︽埛鍙敤浣欓, 鍓╀綑鏈堥檺棰?锛塦,
+      description: `${cardId}.payableAmount === ${expected}（min(账户可用余额, 剩余月限额)）`,
     },
   );
 }
 
 /**
- * SCENARIO lD (LIVE-LLM, REAL BROWSER): open a NEW virtual card with a stated 楼100.00 monthly limit
+ * SCENARIO lD (LIVE-LLM, REAL BROWSER): open a NEW virtual card with a stated ¥100.00 monthly limit
  * through natural `/agent` turns + real MFA, prove the MONTHLY LIMIT (never the ~23k of checking cash)
- * is the binding constraint, spend 楼30.00 through the REAL card-page dialog, and prove an 楼80.00
+ * is the binding constraint, spend ¥30.00 through the REAL card-page dialog, and prove an ¥80.00
  * over-limit spend is refused with NOTHING moved.
  *
  * Every assertion is a BEFORE/AFTER DIFF: the live DB is not empty (the seed already carries cards and
@@ -1839,10 +1839,10 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
       const limitMinor = moneyToCents(VC_MONTHLY_LIMIT);
       const firstSpendMinor = moneyToCents(VC_FIRST_SPEND);
       if (expectedPayableMinor(limitMinor, 0n, before.balanceMinor) !== limitMinor) {
-        throw new Error(`娲绘湡浣欓 ${cashBefore} 涓嶉珮浜庢湀闄愰 ${VC_MONTHLY_LIMIT}锛屻€岄檺棰濈粦瀹氥€嶆柇瑷€灏嗕负绌篳);
+        throw new Error(`活期余额 ${cashBefore} 不高于月限额 ${VC_MONTHLY_LIMIT}，「限额绑定」断言将为空`);
       }
 
-      // PROJECTION + RENDERED TILE of the brand-new card: the 楼100 limit binds, not the checking cash.
+      // PROJECTION + RENDERED TILE of the brand-new card: the ¥100 limit binds, not the checking cash.
       const cardsAfterApply = await awaitPayable(ctx.baseUrl, cardId, VC_MONTHLY_LIMIT);
       assertVirtualCardView(cardById(cardsAfterApply, cardId), {
         cardId,
@@ -1863,11 +1863,11 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
 
       // WITHIN-LIMIT SPEND through the REAL consume dialog (`POST /api/cards/[id]/consume`).
       const summary = await openConsumeDialog(page, cardId);
-      if (summary['鏈堥檺棰?] !== formatCNY(VC_MONTHLY_LIMIT)) {
-        throw new Error(`娑堣垂寮圭獥銆屾湀闄愰銆嶅簲涓?${formatCNY(VC_MONTHLY_LIMIT)}锛屽疄闄?${summary['鏈堥檺棰?]}锛?{JSON.stringify(summary)}锛塦);
+      if (summary['月限额'] !== formatCNY(VC_MONTHLY_LIMIT)) {
+        throw new Error(`消费弹窗「月限额」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary['月限额']}（${JSON.stringify(summary)}）`);
       }
-      if (summary['褰撳墠鍙敮浠橀噾棰?] !== formatCNY(VC_MONTHLY_LIMIT)) {
-        throw new Error(`娑堣垂寮圭獥銆屽綋鍓嶅彲鏀粯閲戦銆嶅簲涓?${formatCNY(VC_MONTHLY_LIMIT)}锛屽疄闄?${summary['褰撳墠鍙敮浠橀噾棰?]}锛?{JSON.stringify(summary)}锛塦);
+      if (summary['当前可支付金额'] !== formatCNY(VC_MONTHLY_LIMIT)) {
+        throw new Error(`消费弹窗「当前可支付金额」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary['当前可支付金额']}（${JSON.stringify(summary)}）`);
       }
       const spend = await consumeSuccessfully(
         page,
@@ -1880,12 +1880,12 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
         amountMinor: firstSpendMinor,
         category: VC_SPEND_CATEGORY,
         merchant: VC_MERCHANT_APPLY,
-        label: `lD 闄愰鍐呮秷璐?${VC_FIRST_SPEND}`,
+        label: `lD 限额内消费 ${VC_FIRST_SPEND}`,
       });
       const payableAfterSpendMinor = expectedPayableMinor(limitMinor, firstSpendMinor, afterSpend.balanceMinor);
       const payableAfterSpend = centsToMoney(payableAfterSpendMinor);
       if (payableAfterSpend !== '70.00') {
-        throw new Error(`娑堣垂 ${VC_FIRST_SPEND} 鍚?payableAmount 搴斾负 100.00 鈭?30.00 = 70.00锛屽疄闄?${payableAfterSpend}锛堝彲鐢ㄤ綑棰?${centsToMoney(afterSpend.balanceMinor)}锛塦);
+        throw new Error(`消费 ${VC_FIRST_SPEND} 后 payableAmount 应为 100.00 − 30.00 = 70.00，实际 ${payableAfterSpend}（可用余额 ${centsToMoney(afterSpend.balanceMinor)}）`);
       }
       const cashAfterSpend = centsToMoney(afterSpend.balanceMinor);
       const cardsAfterSpend = await awaitPayable(ctx.baseUrl, cardId, payableAfterSpend);
@@ -1906,7 +1906,7 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
         payableAmount: payableAfterSpend,
       });
 
-      // OVER-LIMIT SPEND 鈥?the dialog must surface the localized refusal and NOTHING may move.
+      // OVER-LIMIT SPEND — the dialog must surface the localized refusal and NOTHING may move.
       await openConsumeDialog(page, cardId);
       const refusalText = await attemptConsumeExpectingRefusal(page, {
         amount: VC_OVER_LIMIT_SPEND,
@@ -1914,11 +1914,11 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
         merchant: VC_MERCHANT_REFUSED,
       });
       if (!refusalText.includes(VC_LIMIT_EXCEEDED_TEXT)) {
-        throw new Error(`瓒呴檺娑堣垂 ${VC_OVER_LIMIT_SPEND} 搴旀彁绀恒€?{VC_LIMIT_EXCEEDED_TEXT}銆嶏紝瀹為檯銆?{refusalText}銆峘);
+        throw new Error(`超限消费 ${VC_OVER_LIMIT_SPEND} 应提示「${VC_LIMIT_EXCEEDED_TEXT}」，实际「${refusalText}」`);
       }
       const refusalShot = await captureLive(page, 'lD-over-limit-refusal');
       const afterRefusal = await readCardSpendState();
-      assertNoSpend(afterSpend, afterRefusal, `lD 瓒呴檺娑堣垂 ${VC_OVER_LIMIT_SPEND}锛?{VC_MERCHANT_REFUSED}锛夎鎷掔粷`);
+      assertNoSpend(afterSpend, afterRefusal, `lD 超限消费 ${VC_OVER_LIMIT_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝`);
       const cardsAfterRefusal = await awaitPayable(ctx.baseUrl, cardId, payableAfterSpend);
       const payableAfterRefusal = cardById(cardsAfterRefusal, cardId)?.payableAmount;
 
@@ -1947,7 +1947,7 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
         screenshots: { applyShot, spendShot, refusalShot },
       });
 
-      return `lD 瀹為檯鍙戦€侊細${leg.sent.map((t) => `銆?{t}銆峘).join(' 鈫?')} 鈫?MFA 123456 鈫?鏂拌櫄鎷熷崱 ${cardId}锛圧AW锛歵ype=VIRTUAL銆乻tatus=ACTIVE銆乵onthlyLimitMinor=${leg.raw.monthlyLimitMinor}锛?{VC_MONTHLY_LIMIT}锛夈€乴inkedAccountId=${leg.raw.linkedAccountId}銆乧reditLimitMinor=${leg.raw.creditLimitMinor}銆乤vailableLimitMinor=${leg.raw.availableLimitMinor}銆佸崱鍙?${leg.raw.numberMasked} 涓庢棦鏈夊崱鐗囧潎涓嶅悓锛夛紱payableAmount=${VC_MONTHLY_LIMIT}锛堟湀闄愰缁戝畾锛岃处鎴峰彲鐢ㄤ綑棰?${cashBefore}锛夛紱/cards 娓叉煋 ${JSON.stringify(applyTileRows)}锛堟棤銆屼俊鐢ㄩ搴︺€?銆屽彲鐢ㄩ搴︺€嶏級锛涙秷璐?${VC_FIRST_SPEND}锛?{VC_SPEND_CATEGORY}/${VC_MERCHANT_APPLY}锛夆啋 ${spend.notice}锛氭柊澧?CARD/DEBIT 娴佹按 ${delta.debit.amountMinor}锛?{delta.debit.id}锛? 1 鏉?CardConsumption amountMinor=${delta.consumption.amountMinor}锛?{delta.consumption.id}锛夛紝娲绘湡浣欓 ${centsToMoney(delta.balanceBeforeMinor)} 鈫?${centsToMoney(delta.balanceAfterMinor)}锛堟伆鎵ｄ竴娆★級锛沺ayableAmount 鈫?${payableAfterSpend}锛屽埛鏂板悗鍗＄墖銆屽綋鍓嶅彲鏀粯閲戦銆?${spendTileRows['褰撳墠鍙敮浠橀噾棰?]}锛涜秴闄?${VC_OVER_LIMIT_SPEND}锛?{VC_MERCHANT_REFUSED}锛夎鎷掔粷锛氥€?{refusalText}銆嶏紝娴佹按/浣欓/CardConsumption 闆跺彉鍖栵紝payableAmount 浠?${payableAfterRefusal}锛涙埅鍥?${applyShot ?? '鏈惤鐩?} / ${spendShot ?? '鏈惤鐩?} / ${refusalShot ?? '鏈惤鐩?}锛涜瘉鎹?JSON ${evidenceFile ?? '鏈惤鐩?}`;
+      return `lD 实际发送：${leg.sent.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新虚拟卡 ${cardId}（RAW：type=VIRTUAL、status=ACTIVE、monthlyLimitMinor=${leg.raw.monthlyLimitMinor}（${VC_MONTHLY_LIMIT}）、linkedAccountId=${leg.raw.linkedAccountId}、creditLimitMinor=${leg.raw.creditLimitMinor}、availableLimitMinor=${leg.raw.availableLimitMinor}、卡号 ${leg.raw.numberMasked} 与既有卡片均不同）；payableAmount=${VC_MONTHLY_LIMIT}（月限额绑定，账户可用余额 ${cashBefore}）；/cards 渲染 ${JSON.stringify(applyTileRows)}（无「信用额度」/「可用额度」）；消费 ${VC_FIRST_SPEND}（${VC_SPEND_CATEGORY}/${VC_MERCHANT_APPLY}）→ ${spend.notice}：新增 CARD/DEBIT 流水 ${delta.debit.amountMinor}（${delta.debit.id}）+ 1 条 CardConsumption amountMinor=${delta.consumption.amountMinor}（${delta.consumption.id}），活期余额 ${centsToMoney(delta.balanceBeforeMinor)} → ${centsToMoney(delta.balanceAfterMinor)}（恰扣一次）；payableAmount → ${payableAfterSpend}，刷新后卡片「当前可支付金额」=${spendTileRows['当前可支付金额']}；超限 ${VC_OVER_LIMIT_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝：「${refusalText}」，流水/余额/CardConsumption 零变化，payableAmount 仍 ${payableAfterRefusal}；截图 ${applyShot ?? '未落盘'} / ${spendShot ?? '未落盘'} / ${refusalShot ?? '未落盘'}；证据 JSON ${evidenceFile ?? '未落盘'}`;
     },
     { label: 'lD-virtual-card-apply-and-limit' },
   );
@@ -1955,9 +1955,9 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
 
 /**
  * SCENARIO lE (LIVE-LLM, REAL BROWSER): open a virtual card (the SAME shared apply leg as lD), spend
- * 楼30.00, then 鎸傚け (lose) and 琛ュ姙 (replace) it purely through natural `/agent` turns + real MFA, and
+ * ¥30.00, then 挂失 (lose) and 补办 (replace) it purely through natural `/agent` turns + real MFA, and
  * prove FAMILY-CONTINUOUS allowance: the replacement inherits the monthly limit's already-spent part
- * (`payableAmount` = 70.00, NEVER a reset to 100.00), the linking account and 鈥?until it is exhausted 鈥?
+ * (`payableAmount` = 70.00, NEVER a reset to 100.00), the linking account and — until it is exhausted —
  * the family's remaining allowance.
  */
 async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
@@ -1970,7 +1970,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
       const limitMinor = moneyToCents(VC_MONTHLY_LIMIT);
       const before = await readCardSpendState();
 
-      // PRE-LOST SPEND 鈥?楼30 of the 楼100 monthly allowance through the REAL card-page dialog.
+      // PRE-LOST SPEND — ¥30 of the ¥100 monthly allowance through the REAL card-page dialog.
       await gotoCards(page, ctx.baseUrl);
       await waitForElementHydration(page, `[data-card-id="${sourceId}"]`);
       await openConsumeDialog(page, sourceId);
@@ -1985,48 +1985,48 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         amountMinor: moneyToCents(VC_FIRST_SPEND),
         category: VC_SPEND_CATEGORY,
         merchant: VC_MERCHANT_PRE_LOST,
-        label: `lE 鎸傚け鍓嶆秷璐?${VC_FIRST_SPEND}`,
+        label: `lE 挂失前消费 ${VC_FIRST_SPEND}`,
       });
 
-      // 鎸傚け 鈥?natural turns + real MFA. The source becomes terminal LOST and NO funds move.
+      // 挂失 — natural turns + real MFA. The source becomes terminal LOST and NO funds move.
       await gotoAgent(page, ctx.baseUrl);
       const sentLost = await driveRedTool(page, ctx.baseUrl, vcReportLostTurns(leg.maskTail));
-      const lostRaw = await awaitRawCard(sourceId, (row) => row.status === 'LOST', `RAW Card ${sourceId} 鎸傚け鍚?status='LOST'`);
+      const lostRaw = await awaitRawCard(sourceId, (row) => row.status === 'LOST', `RAW Card ${sourceId} 挂失后 status='LOST'`);
       const afterLost = await readCardSpendState();
-      assertNoSpend(afterSpend, afterLost, `lE 鎸傚け ${sourceId}`);
+      assertNoSpend(afterSpend, afterLost, `lE 挂失 ${sourceId}`);
       if (lostRaw.linkedAccountId !== VC_CHECKING_ACCOUNT_ID) {
-        throw new Error(`鎸傚け鍚?RAW Card ${sourceId}.linkedAccountId 搴斾负 ${VC_CHECKING_ACCOUNT_ID}锛屽疄闄?${lostRaw.linkedAccountId}`);
+        throw new Error(`挂失后 RAW Card ${sourceId}.linkedAccountId 应为 ${VC_CHECKING_ACCOUNT_ID}，实际 ${lostRaw.linkedAccountId}`);
       }
 
-      // 琛ュ姙 鈥?natural turns + real MFA. Exactly ONE new ACTIVE VIRTUAL card, bound to the SAME account.
+      // 补办 — natural turns + real MFA. Exactly ONE new ACTIVE VIRTUAL card, bound to the SAME account.
       const idsBeforeReplace = new Set((await fetchLiveCards(ctx.baseUrl)).map((card) => card.id));
       const sentReplace = await driveRedTool(page, ctx.baseUrl, vcReplaceTurns(leg.maskTail));
       const sourceAfterReplace = await awaitRawCard(
         sourceId,
         (row) => typeof row.replacedByCardId === 'string' && row.replacedByCardId !== '',
-        `RAW Card ${sourceId} 琛ュ姙鍚?replacedByCardId 鎸囧悜鏂板崱`,
+        `RAW Card ${sourceId} 补办后 replacedByCardId 指向新卡`,
       );
       const replacementId = sourceAfterReplace.replacedByCardId as string;
       const replacement = await awaitRawCard(
         replacementId,
         (row) => row.type === 'VIRTUAL' && row.status === 'ACTIVE',
-        `RAW Card ${replacementId} 搴斾负 ACTIVE 鐨?VIRTUAL 鍗,
+        `RAW Card ${replacementId} 应为 ACTIVE 的 VIRTUAL 卡`,
       );
       // THE INHERITANCE FIX: the replacement is bound to the SAME checking account as its source.
       if (replacement.linkedAccountId !== sourceAfterReplace.linkedAccountId) {
-        throw new Error(`琛ュ姙鍗?${replacementId}.linkedAccountId锛?{replacement.linkedAccountId}锛夊簲缁ф壙鍘熷崱 ${sourceId} 鐨?${sourceAfterReplace.linkedAccountId}`);
+        throw new Error(`补办卡 ${replacementId}.linkedAccountId（${replacement.linkedAccountId}）应继承原卡 ${sourceId} 的 ${sourceAfterReplace.linkedAccountId}`);
       }
       if (replacement.linkedAccountId !== VC_CHECKING_ACCOUNT_ID) {
-        throw new Error(`琛ュ姙鍗?${replacementId}.linkedAccountId 搴斾负 ${VC_CHECKING_ACCOUNT_ID}锛屽疄闄?${replacement.linkedAccountId}`);
+        throw new Error(`补办卡 ${replacementId}.linkedAccountId 应为 ${VC_CHECKING_ACCOUNT_ID}，实际 ${replacement.linkedAccountId}`);
       }
       if (replacement.numberMasked === sourceAfterReplace.numberMasked) {
-        throw new Error(`琛ュ姙鍗″崱鍙峰簲涓嶅悓浜庡師鍗★紝瀹為檯鍧囦负 ${replacement.numberMasked}`);
+        throw new Error(`补办卡卡号应不同于原卡，实际均为 ${replacement.numberMasked}`);
       }
       if (replacement.monthlyLimitMinor !== limitMinor) {
-        throw new Error(`琛ュ姙鍗?${replacementId}.monthlyLimitMinor 搴斾负 ${limitMinor}锛?{VC_MONTHLY_LIMIT}锛夛紝瀹為檯 ${replacement.monthlyLimitMinor}`);
+        throw new Error(`补办卡 ${replacementId}.monthlyLimitMinor 应为 ${limitMinor}（${VC_MONTHLY_LIMIT}），实际 ${replacement.monthlyLimitMinor}`);
       }
       if (replacement.creditLimitMinor !== null || replacement.availableLimitMinor !== null) {
-        throw new Error(`琛ュ姙铏氭嫙鍗℃槸鍊熻宸ュ叿锛孯AW 琛屼笉寰楁湁淇＄敤棰濆害锛歝reditLimitMinor=${replacement.creditLimitMinor}銆乤vailableLimitMinor=${replacement.availableLimitMinor}`);
+        throw new Error(`补办虚拟卡是借记工具，RAW 行不得有信用额度：creditLimitMinor=${replacement.creditLimitMinor}、availableLimitMinor=${replacement.availableLimitMinor}`);
       }
       await waitFor(
         async () => {
@@ -2040,17 +2040,17 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         {
           timeoutMs: 180_000,
           intervalMs: 1_000,
-          description: `琛ュ姙鍚?GET /api/cards 搴旀伆鏂板 1 寮?ACTIVE VIRTUAL 鍗★紙${replacementId}锛塦,
+          description: `补办后 GET /api/cards 应恰新增 1 张 ACTIVE VIRTUAL 卡（${replacementId}）`,
         },
       );
 
-      // FAMILY-CONTINUOUS ALLOWANCE 鈥?100.00 鈭?30.00 = 70.00 left for the card family, never 100.00.
+      // FAMILY-CONTINUOUS ALLOWANCE — 100.00 − 30.00 = 70.00 left for the card family, never 100.00.
       const familySpentMinor = afterLost.consumptions
         .filter((row) => row.cardId === sourceId || row.cardId === replacementId)
         .reduce((sum, row) => sum + row.amountMinor, 0n);
       const familyPayable = centsToMoney(expectedPayableMinor(limitMinor, familySpentMinor, afterLost.balanceMinor));
       if (familyPayable !== '70.00') {
-        throw new Error(`琛ュ姙鍗＄殑瀹跺涵鍓╀綑鏈堥檺棰濆簲涓?${VC_MONTHLY_LIMIT} 鈭?${VC_FIRST_SPEND} = 70.00锛屽疄闄?${familyPayable}锛堝搴凡鐢?${familySpentMinor}銆佽处鎴峰彲鐢ㄤ綑棰?${centsToMoney(afterLost.balanceMinor)}锛塦);
+        throw new Error(`补办卡的家庭剩余月限额应为 ${VC_MONTHLY_LIMIT} − ${VC_FIRST_SPEND} = 70.00，实际 ${familyPayable}（家庭已用 ${familySpentMinor}、账户可用余额 ${centsToMoney(afterLost.balanceMinor)}）`);
       }
       const cardsAfterReplace = await awaitPayable(ctx.baseUrl, replacementId, familyPayable);
       const replacementView = cardById(cardsAfterReplace, replacementId);
@@ -2061,7 +2061,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         payableAmount: '70.00',
       });
       if (replacementView?.payableAmount === VC_MONTHLY_LIMIT) {
-        throw new Error(`琛ュ姙鍗?${replacementId}.payableAmount 涓嶅緱閲嶇疆涓烘弧棰?${VC_MONTHLY_LIMIT}锛堟湀闄愰蹇呴』鍦ㄥ崱瀹舵棌鍐呰繛缁級`);
+        throw new Error(`补办卡 ${replacementId}.payableAmount 不得重置为满额 ${VC_MONTHLY_LIMIT}（月限额必须在卡家族内连续）`);
       }
       await gotoCards(page, ctx.baseUrl);
       await waitForElementHydration(page, `[data-card-id="${replacementId}"]`);
@@ -2087,13 +2087,13 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         amountMinor: moneyToCents(VC_SECOND_SPEND),
         category: VC_SPEND_CATEGORY,
         merchant: VC_MERCHANT_REPLACE,
-        label: `lE 琛ュ姙鍗℃秷璐?${VC_SECOND_SPEND}`,
+        label: `lE 补办卡消费 ${VC_SECOND_SPEND}`,
       });
       const exhaustedPayable = centsToMoney(
         expectedPayableMinor(limitMinor, familySpentMinor + moneyToCents(VC_SECOND_SPEND), afterSecondSpend.balanceMinor),
       );
       if (exhaustedPayable !== '0.00') {
-        throw new Error(`瀹跺涵鏈堥檺棰濈敤灏藉悗 payableAmount 搴斾负 0.00锛屽疄闄?${exhaustedPayable}锛堣处鎴峰彲鐢ㄤ綑棰?${centsToMoney(afterSecondSpend.balanceMinor)}锛塦);
+        throw new Error(`家庭月限额用尽后 payableAmount 应为 0.00，实际 ${exhaustedPayable}（账户可用余额 ${centsToMoney(afterSecondSpend.balanceMinor)}）`);
       }
       const cardsExhausted = await awaitPayable(ctx.baseUrl, replacementId, exhaustedPayable);
       assertVirtualCardView(cardById(cardsExhausted, replacementId), {
@@ -2102,18 +2102,18 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         accountAvailableBalance: centsToMoney(afterSecondSpend.balanceMinor),
         payableAmount: exhaustedPayable,
       });
-      // A 楼1.00 spend against the exhausted family allowance must be refused with NOTHING moved.
+      // A ¥1.00 spend against the exhausted family allowance must be refused with NOTHING moved.
       const refusalText = await attemptConsumeExpectingRefusal(page, {
         amount: VC_TINY_SPEND,
         category: VC_SPEND_CATEGORY,
         merchant: VC_MERCHANT_REFUSED,
       });
       if (!refusalText.includes(VC_LIMIT_EXCEEDED_TEXT)) {
-        throw new Error(`棰濆害鐢ㄥ敖鍚?${VC_TINY_SPEND} 娑堣垂搴旀彁绀恒€?{VC_LIMIT_EXCEEDED_TEXT}銆嶏紝瀹為檯銆?{refusalText}銆峘);
+        throw new Error(`额度用尽后 ${VC_TINY_SPEND} 消费应提示「${VC_LIMIT_EXCEEDED_TEXT}」，实际「${refusalText}」`);
       }
       const refusalShot = await captureLive(page, 'lE-exhausted-refusal');
       const afterRefusal = await readCardSpendState();
-      assertNoSpend(afterSecondSpend, afterRefusal, `lE 棰濆害鐢ㄥ敖鍚庣殑 ${VC_TINY_SPEND} 娑堣垂锛?{VC_MERCHANT_REFUSED}锛夎鎷掔粷`);
+      assertNoSpend(afterSecondSpend, afterRefusal, `lE 额度用尽后的 ${VC_TINY_SPEND} 消费（${VC_MERCHANT_REFUSED}）被拒绝`);
       const cardsAfterRefusal = await awaitPayable(ctx.baseUrl, replacementId, exhaustedPayable);
       const payableAfterRefusal = cardById(cardsAfterRefusal, replacementId)?.payableAmount;
 
@@ -2155,7 +2155,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         screenshots: { replaceShot, refusalShot },
       });
 
-      return `lE 瀹為檯鍙戦€侊紙寮€鍗★級锛?{leg.sent.map((t) => `銆?{t}銆峘).join(' 鈫?')} 鈫?MFA 123456 鈫?鏂拌櫄鎷熷崱 ${sourceId}锛坢onthlyLimitMinor=${leg.raw.monthlyLimitMinor}銆乴inkedAccountId=${leg.raw.linkedAccountId}锛夛紱鎸傚け鍓嶆秷璐?${VC_FIRST_SPEND}锛?{VC_SPEND_CATEGORY}/${VC_MERCHANT_PRE_LOST}锛? 鏂板 CARD/DEBIT 娴佹按 ${firstDelta.debit.amountMinor}锛?{firstDelta.debit.id}锛? 1 鏉?CardConsumption锛?{firstDelta.consumption.id}锛夛紝娲绘湡浣欓 ${centsToMoney(firstDelta.balanceBeforeMinor)} 鈫?${centsToMoney(firstDelta.balanceAfterMinor)}锛涙寕澶卞疄闄呭彂閫侊細${sentLost.map((t) => `銆?{t}銆峘).join(' 鈫?')} 鈫?MFA 123456 鈫?RAW status=${lostRaw.status}銆佽祫閲戦浂鍙樺寲锛涜ˉ鍔炲疄闄呭彂閫侊細${sentReplace.map((t) => `銆?{t}銆峘).join(' 鈫?')} 鈫?MFA 123456 鈫?${sourceId}.replacedByCardId=${replacementId}锛堟伆鏂板 1 寮?VIRTUAL/ACTIVE 鍗★級锛涜ˉ鍔炲崱 RAW锛歭inkedAccountId=${replacement.linkedAccountId}锛? 鍘熷崱 ${sourceAfterReplace.linkedAccountId}锛岀户鎵夸慨澶嶇敓鏁堬級銆乵onthlyLimitMinor=${replacement.monthlyLimitMinor}銆佸崱鍙?${replacement.numberMasked} 鈮?鍘熷崱 ${sourceAfterReplace.numberMasked}銆佹棤淇＄敤棰濆害锛涘搴湀闄愰杩炵画锛氬凡鐢?${familySpentMinor} 鈫?payableAmount=${replacementView?.payableAmount}锛?70.00锛屼笉鏄?100.00锛夛紝鍗＄墖娓叉煋 ${JSON.stringify(replaceTileRows)}锛涜ˉ鍔炲崱娑堣垂 ${VC_SECOND_SPEND}锛?{VC_SPEND_CATEGORY}/${VC_MERCHANT_REPLACE}锛? 鏂板 CARD/DEBIT 娴佹按 ${secondDelta.debit.amountMinor}锛?{secondDelta.debit.id}锛? 1 鏉?CardConsumption锛?{secondDelta.consumption.id}锛夛紝娲绘湡浣欓 ${centsToMoney(secondDelta.balanceBeforeMinor)} 鈫?${centsToMoney(secondDelta.balanceAfterMinor)}锛堟伆鎵ｄ竴娆★級鈫?payableAmount=${exhaustedPayable}锛涢搴︾敤灏藉悗 ${VC_TINY_SPEND}锛?{VC_MERCHANT_REFUSED}锛夎鎷掔粷锛氥€?{refusalText}銆嶏紝娴佹按/浣欓/CardConsumption 闆跺彉鍖栵紝payableAmount 浠?${payableAfterRefusal}锛涙埅鍥?${replaceShot ?? '鏈惤鐩?} / ${refusalShot ?? '鏈惤鐩?}锛涜瘉鎹?JSON ${evidenceFile ?? '鏈惤鐩?}`;
+      return `lE 实际发送（开卡）：${leg.sent.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新虚拟卡 ${sourceId}（monthlyLimitMinor=${leg.raw.monthlyLimitMinor}、linkedAccountId=${leg.raw.linkedAccountId}）；挂失前消费 ${VC_FIRST_SPEND}（${VC_SPEND_CATEGORY}/${VC_MERCHANT_PRE_LOST}）= 新增 CARD/DEBIT 流水 ${firstDelta.debit.amountMinor}（${firstDelta.debit.id}）+ 1 条 CardConsumption（${firstDelta.consumption.id}），活期余额 ${centsToMoney(firstDelta.balanceBeforeMinor)} → ${centsToMoney(firstDelta.balanceAfterMinor)}；挂失实际发送：${sentLost.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → RAW status=${lostRaw.status}、资金零变化；补办实际发送：${sentReplace.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → ${sourceId}.replacedByCardId=${replacementId}（恰新增 1 张 VIRTUAL/ACTIVE 卡）；补办卡 RAW：linkedAccountId=${replacement.linkedAccountId}（= 原卡 ${sourceAfterReplace.linkedAccountId}，继承修复生效）、monthlyLimitMinor=${replacement.monthlyLimitMinor}、卡号 ${replacement.numberMasked} ≠ 原卡 ${sourceAfterReplace.numberMasked}、无信用额度；家庭月限额连续：已用 ${familySpentMinor} → payableAmount=${replacementView?.payableAmount}（=70.00，不是 100.00），卡片渲染 ${JSON.stringify(replaceTileRows)}；补办卡消费 ${VC_SECOND_SPEND}（${VC_SPEND_CATEGORY}/${VC_MERCHANT_REPLACE}）= 新增 CARD/DEBIT 流水 ${secondDelta.debit.amountMinor}（${secondDelta.debit.id}）+ 1 条 CardConsumption（${secondDelta.consumption.id}），活期余额 ${centsToMoney(secondDelta.balanceBeforeMinor)} → ${centsToMoney(secondDelta.balanceAfterMinor)}（恰扣一次）→ payableAmount=${exhaustedPayable}；额度用尽后 ${VC_TINY_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝：「${refusalText}」，流水/余额/CardConsumption 零变化，payableAmount 仍 ${payableAfterRefusal}；截图 ${replaceShot ?? '未落盘'} / ${refusalShot ?? '未落盘'}；证据 JSON ${evidenceFile ?? '未落盘'}`;
     },
     { label: 'lE-virtual-card-replace-continuity' },
   );
@@ -2237,7 +2237,7 @@ async function main(): Promise<void> {
   let browser: Browser | undefined;
   let devServer: DevServer | undefined;
   // The ACTIVE server handle. Scenario 7 reboots the app by reassigning `server.current`, so teardown
-  // must always stop the CURRENT one 鈥?stopping only the initially booted `devServer` leaked scenario
+  // must always stop the CURRENT one — stopping only the initially booted `devServer` leaked scenario
   // 7's last server, which kept `prisma/live-acceptance.db` locked (next run: EPERM) and held an open
   // stdout pipe (hanging the PowerShell invocation).
   let server: ServerHandle | undefined;
@@ -2258,7 +2258,7 @@ async function main(): Promise<void> {
   /**
    * Normal-path teardown, AWAITED in the `finally` below: stop the active server, then `await` the
    * browser close so its exceptions are captured (the previous fire-and-forget close let the process
-   * exit while Chrome was still shutting down). Never throws 鈥?a close failure must not flip a PASS run.
+   * exit while Chrome was still shutting down). Never throws — a close failure must not flip a PASS run.
    */
   const teardown = async (): Promise<void> => {
     stopActiveServer();
@@ -2266,7 +2266,7 @@ async function main(): Promise<void> {
       try {
         await browser.close();
       } catch (error) {
-        console.warn(`路 鍏抽棴娴忚鍣ㄥけ璐ワ紙涓嶅奖鍝嶉獙鏀剁粨璁猴級锛?{errText(error)}`);
+        console.warn(`· 关闭浏览器失败（不影响验收结论）：${errText(error)}`);
       }
     }
   };
@@ -2291,17 +2291,17 @@ async function main(): Promise<void> {
     process.exit(143);
   });
   process.on('uncaughtException', (error) => {
-    console.error(`鏈崟鑾峰紓甯革細${errText(error)}`);
+    console.error(`未捕获异常：${errText(error)}`);
     cleanup();
     process.exit(1);
   });
   process.on('unhandledRejection', (error) => {
-    console.error(`鏈鐞嗙殑 rejection锛?{errText(error)}`);
+    console.error(`未处理的 rejection：${errText(error)}`);
     cleanup();
     process.exit(1);
   });
 
-  console.log('== AI Banking Agent 鐪熷疄娴忚鍣?+ 鐪熷疄 DeepSeek 鍦ㄧ嚎楠屾敹 (tests/e2e/live) ==');
+  console.log('== AI Banking Agent 真实浏览器 + 真实 DeepSeek 在线验收 (tests/e2e/live) ==');
   const forcedModel = process.env['LIVE_FORCE_MODEL']?.trim();
   console.log(
     forcedModel
@@ -2312,9 +2312,9 @@ async function main(): Promise<void> {
   const executablePath = resolveBrowserExecutable();
   if (executablePath === undefined) {
     for (const scenario of [...chosen, { name: '7-live-committed-continuation-failed' }]) {
-      reporter.skip(scenario.name, '鏈壘鍒扮湡瀹炴祻瑙堝櫒锛圕hrome/Edge锛夛紱鍙缃?E2E_BROWSER_PATH 瑕嗙洊');
+      reporter.skip(scenario.name, '未找到真实浏览器（Chrome/Edge）；可设置 E2E_BROWSER_PATH 覆盖');
     }
-    console.log(`== 姹囨€伙細PASS ${reporter.passes} 锝?FAIL ${reporter.failures} 锝?SKIP ${reporter.skips} ==`);
+    console.log(`== 汇总：PASS ${reporter.passes} ｜ FAIL ${reporter.failures} ｜ SKIP ${reporter.skips} ==`);
     process.exitCode = reporter.failures > 0 ? 1 : 0;
     return;
   }
@@ -2327,8 +2327,8 @@ async function main(): Promise<void> {
       process.env.AGENT_COMPACTION_SUMMARY_TOKENS = '2048';
       console.log('The synthetic compaction journey uses a 16000-token threshold and retains complete recent turns.');
     }
-    console.log(`路 闅旂 LIVE 鏁版嵁搴擄細${LIVE_DB_URL}锛坧risma/dev.db 涓?prisma/test.db 涓嶅彈褰卞搷锛塦);
-    console.log('路 閲嶇疆 LIVE 鏁版嵁搴?鈫掞紙缂?Prisma Client 鏃跺厛 prisma generate锛夆啋 db push 闃舵 鈫?probe 鈫?tsx prisma/seed.ts');
+    console.log(`· 隔离 LIVE 数据库：${LIVE_DB_URL}（prisma/dev.db 与 prisma/test.db 不受影响）`);
+    console.log('· 重置 LIVE 数据库 →（缺 Prisma Client 时先 prisma generate）→ db push 阶梯 → probe → tsx prisma/seed.ts');
     resetLiveDatabase();
 
     console.log(
@@ -2336,14 +2336,14 @@ async function main(): Promise<void> {
     );
     devServer = await bootDevServer({ timeoutMs: NAV_TIMEOUT_MS, attempts: 2 });
     const baseUrl = devServer.baseUrl;
-    console.log(`路 next dev (pid=${devServer.pid}) 鈫?${baseUrl}锛?api/health 涓?/agent 鍧囧凡灏辩华锛塦);
+    console.log(`· next dev (pid=${devServer.pid}) → ${baseUrl}（/api/health 与 /agent 均已就绪）`);
 
     // LIVE-mode confirmation: read the RESOLVED config the app actually serves (mock vs live) and,
     // when running scenario 1, observe a narration the scripted mock cannot produce.
     const health = (await (await fetch(`${baseUrl}/api/health`)).json()) as { ok?: boolean; data?: Record<string, unknown> };
-    console.log(`路 /api/health=${JSON.stringify(health).slice(0, 200)}`);
+    console.log(`· /api/health=${JSON.stringify(health).slice(0, 200)}`);
 
-    console.log(`路 鐪熷疄娴忚鍣細${executablePath}`);
+    console.log(`· 真实浏览器：${executablePath}`);
     browser = await launchBrowser(executablePath);
     const activeServer: ServerHandle = { current: devServer };
     server = activeServer;
@@ -2374,7 +2374,7 @@ async function main(): Promise<void> {
       }
     }
 
-    // Post-scenario diagnostics + the TASK-A evidence dump run HERE 鈥?INSIDE the `try`, BEFORE the
+    // Post-scenario diagnostics + the TASK-A evidence dump run HERE — INSIDE the `try`, BEFORE the
     // `finally` tears the dev server down, so the isolated WAL database is still served. They are
     // wrapped in their own try/catch so a diagnostic/evidence read can NEVER reject `main()` (which
     // `void main().catch(...)` would turn into exit 1 AFTER the PASS lines printed). A read failure
@@ -2383,35 +2383,35 @@ async function main(): Promise<void> {
       // Scenario 6's global invariant: no provider "tool message must answer tool_calls" 400 anywhere.
       const violation = findToolOrderViolation();
       if (violation) {
-        console.error(`路 鍏ㄧ▼鎹曡幏鍒?tool/tool_calls 400锛?{violation.method} ${violation.url} 鈥?${violation.body.slice(0, 400)}`);
+        console.error(`· 全程捕获到 tool/tool_calls 400：${violation.method} ${violation.url} — ${violation.body.slice(0, 400)}`);
       }
-      console.log(`路 绱缃戠粶 4xx/5xx锛?{netLog.issues.length}锛宑onsole error锛?{netLog.consoleErrors.length}锛宲ageerror锛?{netLog.pageErrors.length}`);
+      console.log(`· 累计网络 4xx/5xx：${netLog.issues.length}，console error：${netLog.consoleErrors.length}，pageerror：${netLog.pageErrors.length}`);
       for (const issue of netLog.issues.slice(0, 20)) {
-        console.log(`路 [4xx/5xx] ${issue.method} ${issue.status} ${issue.url} 鈥?${issue.body.slice(0, 200).replace(/\s+/g, ' ')}`);
+        console.log(`· [4xx/5xx] ${issue.method} ${issue.status} ${issue.url} — ${issue.body.slice(0, 200).replace(/\s+/g, ' ')}`);
       }
 
       // TASK-A EVIDENCE: the ACTUAL arg shape the LIVE model produced, recovered from the SAME DB the
-      // run used (`AgentSession.stateJson` 鈫?`agentState.messages`). Printed verbatim for every run.
-      console.log('路 銆愯瘉鎹€戞寔涔呭寲鐨?transfer_money / search_contact 宸ュ叿璋冪敤锛圓gentSession.stateJson锛屽弬鏁板璞￠€愬瓧锛夛細');
+      // run used (`AgentSession.stateJson` → `agentState.messages`). Printed verbatim for every run.
+      console.log('· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：');
       console.log(await persistedRecipientCalls());
-      console.log(`路 銆愯瘉鎹€戠瀛愬簱鏀舵浜?${RECIPIENT_NAME} 鎵嬫満鍙?${await readSeedRecipientPhone()}`);
+      console.log(`· 【证据】种子库收款人 ${RECIPIENT_NAME} 手机号=${await readSeedRecipientPhone()}`);
     } catch (error) {
-      console.warn(`路 鍦烘櫙鍚庤瘖鏂?璇佹嵁鏀堕泦澶辫触锛堜笉褰卞搷楠屾敹缁撹锛岄€€鍑虹爜涓嶅彉锛夛細${errText(error)}`);
+      console.warn(`· 场景后诊断/证据收集失败（不影响验收结论，退出码不变）：${errText(error)}`);
     }
   } catch (error) {
-    console.error(`路 鍩虹璁炬柦澶辫触锛?{errText(error)}`);
+    console.error(`· 基础设施失败：${errText(error)}`);
     reporter.fail('infrastructure', errText(error));
   } finally {
     await teardown();
   }
 
   // The summary and the exit code are ALWAYS reached on the normal path (teardown never throws).
-  console.log(`== 姹囨€伙細PASS ${reporter.passes} 锝?FAIL ${reporter.failures} 锝?SKIP ${reporter.skips} ==`);
+  console.log(`== 汇总：PASS ${reporter.passes} ｜ FAIL ${reporter.failures} ｜ SKIP ${reporter.skips} ==`);
   process.exitCode = reporter.failures > 0 ? 1 : 0;
 }
 
 void main().catch((error) => {
-  console.error(`鍏ュ彛鑴氭湰澶辫触锛?{errText(error)}`);
+  console.error(`入口脚本失败：${errText(error)}`);
   process.exitCode = 1;
 });
 
