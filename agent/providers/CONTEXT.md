@@ -41,7 +41,18 @@ ModelRuntime pair from resolveProvider(), not a model without a stream function.
 
 ## Public API
 
-- types.ts: ModelRuntime = { model: Model<any>; streamFn: StreamFn }.
+- types.ts is the ENTIRE type surface of this node: only `ModelRuntime` (`model`, `streamFn`).
+  Mock, live and test-injected streams share that one shape; there is no `ProviderConfig`,
+  `ModelDescriptor` or turn-method interface here.
+- Selection gates: `resolveProvider` branches on `resolved.llmMode === 'mock'` (`index.ts:16`),
+  `providerId` returns the literal `'mock'` for mock mode and otherwise
+  `` `${llmProvider}:${llmModel}` `` (`index.ts:30-34`), and `createMockRuntime(_cfg)` ignores its
+  config argument. `AppConfig.llmMode` is `'live' | 'mock'`; `getConfig()` yields `'mock'` unless
+  `process.env.LLM_MODE === 'live'` (`lib/config.ts:26`).
+- Injection seam: `const { model, streamFn } = options.provider ?? resolveProvider(config);`
+  (`agent/banking-agent.ts:217`), fed from `RunTurnDeps.provider?: ModelRuntime`
+  (`agent/turns/contracts.ts:12`) via `BankingAgentOptions.provider` (`agent/banking-agent.ts:106`).
+  An injected runtime bypasses `resolveProvider`, so `LLM_MODE` no longer selects the model.
 - index.ts: resolveProvider(cfg?) creates the mode-specific runtime at call time.
   resolveModel(cfg?) remains a model-only inspection facade; Agent constructors must
   use resolveProvider(). providerId(cfg?) returns a key-free log identifier.
