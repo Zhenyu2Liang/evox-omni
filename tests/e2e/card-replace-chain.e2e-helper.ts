@@ -1067,9 +1067,22 @@ export async function scenarioFullCardChain(params: CardChainParams): Promise<st
   if (activeAfterFinal?.id !== creditReplacementId) {
     throw new Error(`lG 第 8 轮：唯一 ACTIVE 信用卡 id 应仍为 ${creditReplacementId}，实际 ${activeAfterFinal?.id ?? '无'}：${describeCards(cardsAfterFinal)}`);
   }
+  // 虚拟卡家系按基线推导，不硬编码总数：演示种子本就含 VIRTUAL 卡（`card_virtual`），
+  // 本链路只在基线上新增「1 张 LOST 源卡 + 1 张补办卡」两行。
+  const vcBaselineIds = new Set(cardsAtStart.filter((card) => card.type === 'VIRTUAL').map((card) => card.id));
   const vcAfterFinal = cardsAfterFinal.filter((card) => card.type === 'VIRTUAL');
-  if (vcAfterFinal.length !== 2) {
-    throw new Error(`lG 第 8 轮：应恰有 2 张 VIRTUAL 行（1 LOST 源卡 + 1 补办卡），实际 ${vcAfterFinal.length}：${describeCards(cardsAfterFinal)}`);
+  const vcChainRows = vcAfterFinal.filter((card) => !vcBaselineIds.has(card.id));
+  const expectedVcCount = vcBaselineIds.size + 2;
+  if (vcAfterFinal.length !== expectedVcCount) {
+    throw new Error(`lG 第 8 轮：VIRTUAL 行应为基线 ${vcBaselineIds.size} 张 + 本链路新增 2 张（1 LOST 源卡 + 1 补办卡）= ${expectedVcCount}，实际 ${vcAfterFinal.length}：${describeCards(cardsAfterFinal)}`);
+  }
+  const vcSourceAfterFinal = vcChainRows.find((card) => card.id === applied.cardId);
+  if (vcSourceAfterFinal?.status !== 'LOST') {
+    throw new Error(`lG 第 8 轮：本链路源虚拟卡 ${applied.cardId} 应仍为 LOST，实际 ${vcSourceAfterFinal?.status ?? '缺失'}：${describeCards(cardsAfterFinal)}`);
+  }
+  const vcReplacementAfterFinal = vcChainRows.find((card) => card.id === vcReplacementId);
+  if (vcReplacementAfterFinal?.status !== 'ACTIVE') {
+    throw new Error(`lG 第 8 轮：本链路补办虚拟卡 ${vcReplacementId} 应仍为 ACTIVE，实际 ${vcReplacementAfterFinal?.status ?? '缺失'}：${describeCards(cardsAfterFinal)}`);
   }
 
   // ---- WHOLE-CHAIN INVARIANCE: only the TWO consumptions moved money --------------------------------
