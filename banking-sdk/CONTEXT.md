@@ -109,6 +109,7 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 冻结的卡片可以恢复为 `ACTIVE`。
 `LOST` 卡片不能冻结或解冻。
 `reportLostCard` 把卡片置为终态 `LOST`，此后不能复活；重复挂失抛 `CONFLICT`。
+`reportLostCard` 不做卡类别过滤：`DEBIT`/`CREDIT`/`VIRTUAL` 中任何非 `LOST` 状态（含 `ACTIVE`、`FROZEN`、`PENDING`）的自有卡片都可挂失；`reason` 已定义但不是文本抛 `VALIDATION`。
 
 `replaceCard(cardId, userId)` 只为当前处于 `LOST` 的自有卡片补办新卡。
 补办在同一事务内创建新卡，并把新卡 id 写入原卡片的 `Card.replacedByCardId`。
