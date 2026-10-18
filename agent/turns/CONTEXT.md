@@ -42,7 +42,7 @@ This node is presentation only: it implements no banking tools and no card tooli
 ## Events
 
 `events.ts` emits message start, tool start/update/end, owned cards, and a complete
-tool-message end snapshot. Tool completion republishes its own entry even when
+tool-message end snapshot. Its full signature is `createEventHandler(buffer: TurnBuffer, now: () => number, rejected: ReadonlyMap<string, string> = new Map(), modelRequestIdentity?: () => string | undefined): (event: AgentEvent) => Promise<void>` (events.ts:77-78); `../run-turn.ts:56-57` builds it with `runtime.planningRejections` and `() => context.journal.currentModelRequestIdentity?.()`, and feeds every Pi event through `runtime.agent.subscribe(...)`. Tool completion republishes its own entry even when
 presentation fails. Normal model text never accumulates tool cards or diagnostics.
 The internal `describe_turn` tool stays in the Pi journal but creates no public row,
 business card, or financial fact.
