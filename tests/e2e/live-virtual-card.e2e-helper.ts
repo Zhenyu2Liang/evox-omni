@@ -453,18 +453,20 @@ export interface AppliedVirtualCard {
  * `apply_virtual_card` tool in bounded natural turns (the driver completes the confirmation/MFA panel
  * with the real code), then wait for the authoritative `GET /api/cards` route to expose exactly ONE
  * new card and verify it is the ACTIVE VIRTUAL card the request asked for.
+ * `opts.turns` OVERRIDES the default `VC_APPLY_TURNS` list for scenarios whose first user prompt is a
+ * pinned verbatim sentence (lG replays an exact transcript); the caller owns the bounded turn list.
  */
 export async function applyVirtualCardViaAgent(
   page: Page,
   baseUrl: string,
   drive: RedToolDriver,
-  opts: { excludeCardIds: readonly string[]; monthlyLimit?: string },
+  opts: { excludeCardIds: readonly string[]; monthlyLimit?: string; turns?: readonly string[] },
 ): Promise<AppliedVirtualCard> {
   const limit = opts.monthlyLimit ?? VC_MONTHLY_LIMIT;
   const before = await fetchLiveCards(baseUrl);
   const known = new Set<string>([...opts.excludeCardIds, ...before.map((card) => card.id)]);
   await gotoAgent(page, baseUrl);
-  const sent = await drive(VC_APPLY_TURNS);
+  const sent = await drive(opts.turns ?? VC_APPLY_TURNS);
   const cards = await waitFor(
     async () => {
       const list = await fetchLiveCards(baseUrl);

@@ -767,6 +767,9 @@ export interface ChainTurnEvidence {
 async function sendFinalConfirmTurn(
   params: CardChainParams,
 ): Promise<{ prose: string; action?: PendingActionView; mfaCompleted: boolean; panelRendered: boolean }> {
+  // Re-enter /agent first: the previous front-end leg may have left the browser on /cards, where no
+  // chat composer exists, so `submitChat` would wait for `textarea[data-chat-composer="true"]` and time out.
+  await gotoAgent(params.page, params.baseUrl);
   const { page, baseUrl } = params;
   const ignoreActionIds = new Set((await fetchPendingActions(baseUrl)).map((action) => action.id));
   const baseline = (await assistantTexts(page)).length;
@@ -808,6 +811,9 @@ export async function scenarioFullCardChain(params: CardChainParams): Promise<st
   const proseBeforeApply = (await assistantTexts(page)).length;
   const applied = await applyVirtualCardViaAgent(page, baseUrl, drive, {
     excludeCardIds: seedIds,
+    // The pinned verbatim step-1 sentence (NOT the generic `VC_APPLY_TURNS` opener): lG replays an exact
+    // transcript, so the first turn must be the user's real wording; only the nudges are generic.
+    turns: withFirstTurn(LG_VC_APPLY_PROMPT, VC_APPLY_TURNS.slice(1)),
     monthlyLimit: VC_MONTHLY_LIMIT,
   });
   const applyProse = (await assistantTexts(page)).slice(proseBeforeApply);
