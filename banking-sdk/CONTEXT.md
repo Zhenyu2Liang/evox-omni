@@ -112,6 +112,8 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 `reportLostCard` 不做卡类别过滤：`DEBIT`/`CREDIT`/`VIRTUAL` 中任何非 `LOST` 状态（含 `ACTIVE`、`FROZEN`、`PENDING`）的自有卡片都可挂失；`reason` 已定义但不是文本抛 `VALIDATION`。
 
 `replaceCard(cardId, userId)` 只为当前处于 `LOST` 的自有卡片补办新卡。
+它没有输入对象，也不做卡类别过滤（`DEBIT`/`CREDIT`/`VIRTUAL` 一视同仁）。
+补办不改写原卡状态（原卡必须已经是 `LOST`，补办只写 `replacedByCardId`），新卡创建时状态为 `ACTIVE`。
 补办在同一事务内创建新卡，并把新卡 id 写入原卡片的 `Card.replacedByCardId`。
 新卡沿用原卡片的 `type`、`network` 与月限额，不复制分类限额，并生成新的脱敏卡号。信用卡补办原样继承原卡片的 `creditLimitMinor` 与 `availableLimitMinor`（不重新授信、不增减）；非信用卡保持为空。
 虚拟卡补办在原卡片的结算账户上重新校验并继承该绑定：账户行必须存在、属于该用户且为 `CHECKING`。
