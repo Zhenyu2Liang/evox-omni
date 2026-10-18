@@ -50,6 +50,17 @@ describe('offline dialogue script and closed presentation vocabulary', () => {
     expect(inferConversationGuidance(request)).not.toBe('card_management_required');
   });
 
+  it.each(['\u8bf7\u4e3a\u521a\u6302\u5931\u7684\u5c3e\u53f76688\u4fe1\u7528\u5361\u8865\u529e\u65b0\u5361\u3002',
+    '\u529e\u7406\u4e00\u5f20\u4fe1\u7528\u5361\u8865\u529e', '\u5e2e\u6211\u529e\u7406\u4fe1\u7528\u5361\u8865\u529e\u65b0\u5361',
+    'Replace my lost credit card', 'Reissue my lost debit card'])
+  ('routes an already-lost card reissue away from page-only card-management guidance: %s', request => {
+    expect(inferConversationGuidance(request)).not.toBe('card_management_required');
+    const response = classify(request, []);
+    expect(contentToText(response.content)).not.toBe(renderConversationGuidance('card_management_required'));
+    const cardResponse = classifyCardAction(request);
+    expect(parseBankingGuidance(contentToText(cardResponse?.content ?? []))).not.toEqual({ code: 'card_management_required' });
+  });
+
   it('routes partial-redemption wording to the supported redeem flow instead of the retired unsupported-guidance envelope', () => {
     const response = classify('\u90e8\u5206\u8d4e\u56de100\u5143', []);
     const call = response.content.find(part => part.type === 'toolCall');
