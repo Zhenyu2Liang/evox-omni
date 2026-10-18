@@ -37,10 +37,10 @@
  * account; the seed already holds `channel='CARD'` ledger rows and NO virtual card, so every ledger
  * and consumption assertion is a DELTA against a pre-spend snapshot of row ids. Helpers: ../helpers/*.
  *
- * Isolation note: the shared test reset does not truncate `CardConsumption` (no FK, UNIQUE
- * `executionKey`), so this file clears that table in `beforeEach` — see the comment there.
+ * Isolation: the shared test reset (`truncateAll` in ../helpers/db.ts) clears `CardConsumption` too,
+ * so a fixed `executionKey` replay cannot leak between tests.
  */
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { createToolRegistry } from '@/agent/tools';
 import { banking } from '@/banking-sdk';
@@ -200,19 +200,6 @@ function expectGated(res: ScenarioResult, toolName: string): string {
 }
 
 describe('Scenario 16 — 虚拟卡补办生命周期与限额语义 (RED MFA card family)', () => {
-  /*
-   * Per-test isolation for `CardConsumption`. `resetDatabase()` → `truncateAll()`
-   * (tests/helpers/db.ts) does NOT truncate `cardConsumption`, and the table declares no FK to
-   * Card/Account (only indexes + a UNIQUE `executionKey`), so rows written by a PREVIOUS run of this
-   * file survive the reset. They would then (a) pollute per-user/`userId`-wide aggregates and
-   * (b) make a fixed `executionKey` replay resolve against a FOREIGN card id ⇒ spurious CONFLICT.
-   * Clearing the table here restores the isolation the harness intends; the missing `truncateAll`
-   * entry is a test-infra defect reported to the owner of tests/helpers (not patched from this node).
-   */
-  beforeEach(async () => {
-    await prisma().cardConsumption.deleteMany();
-  });
-
   it('drives apply → consume → report lost → replace → continued allowance through the MFA gate', async () => {
     const sessionId = newSessionId();
     const startBalance = await balanceMinor();
