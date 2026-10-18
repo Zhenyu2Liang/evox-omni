@@ -51,10 +51,16 @@ agent availability, and replay policy. Use `AGENT_TOOL_NAMES` for model-visible 
 GREEN runs automatically, YELLOW requires confirmation, and RED also requires strong verification.
 A budget envelope is bookkeeping; it does not debit or freeze account funds.
 Creating a scheduled intent does not preauthorize a future financial write.
-Physical debit and credit card creation and deletion use the manual card-management page.
+Brand-new physical card creation and card deletion are manual-only on the Cards page and expose no
+agent capability; the Cards page has no 补办 action.
+`replace_card` is an ordinary agent capability for ANY owned `LOST` card — DEBIT, CREDIT or VIRTUAL.
+Its params are `{ cardId }` only, with no per-type gating: the replacement inherits the source type
+and network (a CREDIT replacement inherits `creditLimitMinor`/`availableLimitMinor`; a VIRTUAL
+replacement keeps its linked settlement account and the month-continuous family allowance), the
+source card stays `LOST` and records `replacedByCardId`, and a repeat call on the same source returns
+the same replacement instead of issuing a second one.
+The tool's model-visible `description` states this coverage explicitly.
 Virtual card issuance is an agent capability (`apply_virtual_card`).
-`replace_card` replaces an owned `LOST` card and is idempotent: a source that already points at a
-replacement returns that card instead of issuing a second one.
 This directory exposes exactly ONE card-spend write, `consume_virtual_card` (RED): it spends an
 exact CNY amount from an owned ACCOUNT-BOUND virtual card by debiting that card's linked CHECKING
 settlement account through `banking.card.consumeCard` (atomic sufficient-funds debit plus a
@@ -72,8 +78,7 @@ fails with that reason instead of `Unsupported parameters`. The success summary 
 server-returned facts: consumption amount and merchant, the card's masked number, 关联账户,
 绑定账户可用余额, 月消费限额 (or `未设置月限额` when the card has none) and 当前可支付金额.
 Card reads and analysis (`get_cards`, `analyze_spending`, `get_transactions`,
-`get_dashboard_summary`) never debit. Physical debit and credit card creation and deletion remain
-manual-only on the card-management page.
+`get_dashboard_summary`) never debit.
 
 `describe_turn` lives in `turn-intent.ts` and records model-declared conversational purpose.
 It is an internal control tool, not a banking capability or customer authorization.
@@ -142,7 +147,7 @@ Idempotency prevents duplicate effects; it does not grant permission.
 
 ## Known issues
 
-Declared-write enforcement stays REACTIVE and declaration-gated: `compileRequestedPlan` only runs when `submit_plan` is actually invoked (`planning.ts:261` via `preflightRequestedPlan`), and `requiresDeclaredPlan` (`../intent-context.ts:43`) is called only from `beforeToolCall` (`../banking-agent.ts:289`), which fires on a stray individual write. End-of-turn reconciliation exists only for a write the model DECLARED through `describe_turn` (`../write-continuation.ts:56-62`, live-only): a model that refuses in prose while declaring nothing — e.g. claiming a supported capability such as `replace_card` is manual-only — is never corrected, and no `PendingAction`/panel appears. `card.ts` applies NO card-type gating: `ReplaceCardParams` is `{ cardId }`, and `report_lost_card`/`replace_card` accept DEBIT, CREDIT and VIRTUAL alike (`banking-sdk/card.ts` `replaceCard`), so any per-type restriction in prompt or presentation text is not backed by the tool layer.
+Declared-write enforcement stays REACTIVE and declaration-gated: `compileRequestedPlan` only runs when `submit_plan` is actually invoked (`planning.ts:261` via `preflightRequestedPlan`), and `requiresDeclaredPlan` (`../intent-context.ts:43`) is called only from `beforeToolCall` (`../banking-agent.ts:289`), which fires on a stray individual write. End-of-turn reconciliation exists only for a write the model DECLARED through `describe_turn` (`../write-continuation.ts:56-62`, live-only): a model that refuses in prose while declaring nothing is never corrected, and no `PendingAction`/panel appears. `card.ts` applies NO card-type gating: `ReplaceCardParams` is `{ cardId }`, and `report_lost_card`/`replace_card` accept DEBIT, CREDIT and VIRTUAL alike (`banking-sdk/card.ts` `replaceCard`).
 `planning.ts:265` calls `dag.validatePlan(nodes, knownTools)` with only two args, so output-contract validation is skipped there; the output-contract check runs in `plan-compiler.ts:16` (`BANKING_TOOL_OUTPUTS`).
 
 ## Verification
