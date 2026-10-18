@@ -23,7 +23,9 @@ The card tool family otherwise reads and manages card records: `get_cards` (read
 `analyze_spending`, `get_transactions` and `detect_anomaly` are GREEN reads over already-booked ledger rows; `detect_anomaly` never freezes a card.
 A `CARD`-channel transaction row records a card charge but never identifies the owning debit/credit card from the deposit account type (see `system-prompt.ts:46`).
 The other money-moving writes are `transfer_money`, `reserve_budget`, `subscribe_investment` and `redeem_investment`; `create_scheduled_task` with kind `PAYMENT` dispatches through the transfer channel, not a card or merchant billing integration.
-Physical debit/credit card issuance and deletion are manual-only on the Cards page and cannot enter an agent workflow (`system-prompt.ts:38`).
+Physical card CREATION (a brand-new card) and DELETION are manual-only on the Cards page and cannot enter an agent workflow (`system-prompt.ts:38`). That rule does NOT extend to 补办: `replace_card` (RED, `tools/card.ts:393-425`) replaces an owned `LOST` card of ANY type (DEBIT/CREDIT/VIRTUAL, replacement inherits the source type/network) inside a normal agent turn, and the source card stays `LOST` — so "physical card operations are manual-only" is false for replacement.
+The only server-authored manual-only refusal text is the guidance vocabulary `card_management_required` / `capabilities` in `messages/conversation.zh-CN.json:7-8`, which still claims the assistant "不能创建、申请或删除卡片"; a live model may emit that envelope and the server renders it verbatim (`banking-guidance.ts:22-56`, `turns/buffer.ts:25-36`). Treat that template as presentation text, not capability truth.
+`write-continuation.ts` only rescues a DECLARED-but-unemitted write (`pendingDeclaredWrites`, live-only). A model that refuses without declaring the write is never corrected.
 
 ## Public entry points
 
