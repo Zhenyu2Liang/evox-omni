@@ -37,39 +37,41 @@ const WAITING_CLAIM_PATTERNS: readonly RegExp[] = [
 ];
 
 /**
+ * Every claim pattern as a stateful (global) copy, so EVERY occurrence inside a sentence is inspected
+ * instead of only the first one of each pattern.
+ */
+const CLAIM_PATTERNS: readonly RegExp[] = [...PANEL_CLAIM_PATTERNS, ...WAITING_CLAIM_PATTERNS].map(
+  (pattern) => new RegExp(pattern.source, 'g'),
+);
+
+/**
  * Negation cues that turn a panel MENTION into a (truthful) statement that NO panel exists.
  *
  * CONTRACT: this matcher recognises ONLY wording that ASSERTS a confirmation/MFA panel already exists.
- * Every negated or unrealised formulation asserts the OPPOSITE and must NEVER match — e.g.
+ * Every negated formulation asserts the OPPOSITE and must NEVER match — e.g.
  * 「界面上方没有出现确认面板」/「不会出现验证面板」/「不会显示确认面板」/「不会弹出确认面板」/
  * 「不会创建授权面板」/「没有确认面板」/「不存在核对面板」/「暂无授权面板」 — otherwise a truthful
- * narration would be failed as a fabrication.
+ * narration would be failed as a fabrication. 「不」 covers 不会/不应/不能/不可/不再, 「没」 covers 没有,
+ * 「未」 covers 尚未/从未; the full forms are listed anyway to mirror the wording the model produces.
  */
-const NEGATION_CUE = /不(?:会|应|该|能|可|再)|没有|没|尚未|未|从未|无法|无|不存在|暂无|并未|并不/;
+const NEGATION_CUE =
+  /不|不会|不应|不能|不可|不再|没有|没|尚未|未|从未|无法|无|不存在|不存|暂无|并无|并未|并不|并不是/;
 
 /**
- * How far before the matched phrase a negation cue may sit. Together with the punctuation barrier this
- * keeps the true claims matching: an earlier, unrelated negation separated by 「，」
- * (「如果没有问题，请在上方的确认面板确认」) stays outside the window and cannot swallow the claim.
+ * Clause separators. Negation is scoped to ONE clause: 「，」/`,` and the ASCII sentence punctuation
+ * 「!」「?」「;」 plus 「。」「！」「？」「；」 and line breaks end a clause.
  *
- * The window must also reach across a COORDINATED list, because one denial governs every member of it:
- * 「不存在尚未发起、或仍在等待您确认的步骤」 negates 「等待您确认」 exactly as it negates 「尚未发起」.
- * A 10-char window stopped short of the cue there and the guard failed a TRUTHFUL denial (LIVE scenario
- * lG round 6). 24 chars still leaves a claim separated by 「，」 outside the window.
+ * 「、」 is deliberately NOT a separator: it enumerates COORDINATED phrases inside one clause, so
+ * 「不存在 A、或仍在等待您确认的 B」 keeps the negation in scope for B.
  */
-const NEGATION_LOOKBEHIND = 24;
+const CLAUSE_SEPARATOR = /[，,。！？；!?;\n\r]/;
 
 /**
- * Punctuation always ends a negation window (a clause boundary ends the negation's scope).
- *
- * 「、」 is deliberately NOT a boundary: it enumerates coordinated phrases inside ONE clause, so
- * 「不存在 A、或仍在 B」 keeps the negation in scope for B. Ending the scope at 「、」 is the other half
- * of why that round-6 denial was misread as a claim.
+ * 「确认面板尚未出现」/「确认面板未显示」/「确认面板不会出现」 — an "appear"-verb negation sitting
+ * immediately after the mention equally denies that the panel exists.
  */
-const CLAUSE_BOUNDARY = /[，,。；;！!？?：:\n\r]/;
-
-/** 「确认面板尚未出现」 — the negation follows the panel word; only real "appear" verbs count here. */
-const NEGATION_AFTER_CLAIM = /^(不会|没有|不存在|暂无|尚未|未|并无)(出现|显示|弹出|创建|生成|渲染|展示)/;
+const APPEAR_NEGATION_AFTER =
+  /^\s*(?:不会|并没有|没有|不存在|暂无|尚未|未|并无)(?:出现|显示|弹出|创建|生成|渲染|展示|打开)/;
 
 /** Split prose into sentence-ish segments (the split chars are dropped). */
 function splitSentences(text: string): string[] {
@@ -79,32 +81,60 @@ function splitSentences(text: string): string[] {
     .filter((segment) => segment.length > 0);
 }
 
+/** Index of the LAST clause separator inside `text`, or -1. */
+function lastSeparatorIndex(text: string): number {
+  for (let index = text.length - 1; index >= 0; index -= 1) {
+    if (CLAUSE_SEPARATOR.test(text[index])) return index;
+  }
+  return -1;
+}
+
+/** Index of the FIRST clause separator inside `text`, or -1. */
+function firstSeparatorIndex(text: string): number {
+  for (let index = 0; index < text.length; index += 1) {
+    if (CLAUSE_SEPARATOR.test(text[index])) return index;
+  }
+  return -1;
+}
+
 /**
- * Is the match at `matchIndex` wrapped in a negation/unrealised formulation? Three bounded windows: the
- * clause text just BEFORE the phrase (punctuation ends it), the phrase itself (a position-style match
- * such as 「界面上方没有出现确认」 swallows the negation), and an "appear"-verb
- * negation directly AFTER it (「确认面板尚未出现」).
+ * The clause holding the match: from the separator before the matched phrase up to the separator after
+ * it, so the matched text itself and everything before/after it in the SAME clause are all in view.
+ */
+function clauseAround(sentence: string, matchIndex: number, matchLength: number): string {
+  const matchEnd = matchIndex + matchLength;
+  const clauseStart = lastSeparatorIndex(sentence.slice(0, matchIndex)) + 1;
+  const afterSeparator = firstSeparatorIndex(sentence.slice(matchEnd));
+  const clauseEnd = afterSeparator === -1 ? sentence.length : matchEnd + afterSeparator;
+  return sentence.slice(clauseStart, clauseEnd);
+}
+
+/**
+ * Is the match wrapped in a negation? A negation cue ANYWHERE in the match's own clause — before the
+ * phrase, inside the phrase (a position-style match such as 「界面上方没有出现确认」 swallows the cue),
+ * or after it — denies the panel, however far from the phrase the cue sits. An "appear"-verb negation
+ * immediately after the phrase (「确认面板尚未出现」) denies it as well.
  */
 function isNegatedClaim(sentence: string, matchIndex: number, matchText: string): boolean {
-  const lookbehind = sentence.slice(Math.max(0, matchIndex - NEGATION_LOOKBEHIND), matchIndex);
-  const clause = lookbehind.split(CLAUSE_BOUNDARY).pop() ?? '';
-  if (NEGATION_CUE.test(clause)) return true;
-  if (NEGATION_CUE.test(matchText)) return true;
-  return NEGATION_AFTER_CLAIM.test(sentence.slice(matchIndex + matchText.length));
+  if (NEGATION_CUE.test(clauseAround(sentence, matchIndex, matchText.length))) return true;
+  return APPEAR_NEGATION_AFTER.test(sentence.slice(matchIndex + matchText.length));
 }
 
 /**
  * Return the matched claim phrase when `prose` ASSERTS a confirmation/MFA panel already exists (or that
  * the model is waiting on such a confirmation), else `undefined`. A negated mention
- * ("界面上方没有出现确认面板" / "不会出现验证面板") is NOT a claim.
+ * ("界面上方没有出现确认面板" / "不会出现验证面板" / "确认面板尚未出现") is NOT a claim.
  */
 export function findConfirmationPanelClaim(prose: string): string | undefined {
   for (const sentence of splitSentences(prose)) {
-    for (const pattern of [...PANEL_CLAIM_PATTERNS, ...WAITING_CLAIM_PATTERNS]) {
-      const match = pattern.exec(sentence);
-      if (match === null) continue;
-      if (isNegatedClaim(sentence, match.index, match[0])) continue;
-      return match[0];
+    for (const pattern of CLAIM_PATTERNS) {
+      pattern.lastIndex = 0;
+      let match = pattern.exec(sentence);
+      while (match !== null) {
+        if (!isNegatedClaim(sentence, match.index, match[0])) return match[0];
+        if (match[0].length === 0) pattern.lastIndex += 1;
+        match = pattern.exec(sentence);
+      }
     }
   }
   return undefined;
