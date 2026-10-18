@@ -3,19 +3,40 @@
 ## 测试入口
 
 `test-01` 至 `test-12` 覆盖最初的演示场景。
+包括余额、转账、账单、异常、限额、理财与条件计划。
 `test-13` 至 `test-15` 覆盖补办换卡、虚拟卡申请与类别限额约束。
 `test-16` 覆盖虚拟卡补办家族生命周期、限额语义与重放幂等。
 `test-17` 覆盖伪造消费入账时间在工具、计划与重放层被拒。
-`test-18` 覆盖卡片能力的咨询、歧义澄清与能力指引契约：咨询不产生操作，歧义只产生澄清，指引与系统提示不得否认真实能力。
-`test-19` 覆盖 LOST 信用卡补办在生产运行时端到端可达（RED MFA 闸门，验证前不制卡）。
-包括余额、转账、账单、异常、限额、理财与条件计划。
+`test-18` 覆盖卡片能力的咨询、歧义澄清与能力指引契约。
+`test-19` 覆盖 LOST 信用卡补办在生产运行时端到端可达。
 `mock-integration.test.ts` 使用应用的离线模型。
 
-`test-01` 至 `test-17` 使用 `tests/helpers/faux-agent.ts`；`test-18`/`test-19` 走生产入口 `@/agent#runTurn` + `tests/helpers/scripted-provider`（`describe_turn` 声明、准入、`groundMessage` 渲染与写续接只在该路径存在，裸 Pi 夹具无法替代）。
-两阶段调用由 `tests/helpers/scenario.ts` 驱动。
+`test-01` 至 `test-17` 使用 `tests/helpers/faux-agent.ts`（裸 Pi Agent + 直连网关钩子）。
+`test-18`/`test-19` 走生产入口 `@/agent#runTurn` + `tests/helpers/scripted-provider`。
+`describe_turn` 声明、准入与租约、`groundMessage` 渲染、写续接只存在于生产入口，裸 Pi 夹具无法替代。
+两阶段调用由 `tests/helpers/scenario.ts` 驱动，只服务裸 Pi 夹具。
 它们证明网关、工具和 SDK 的业务边界。
 不能据此声明生产运行的全部流程均被覆盖。
 生产入口的声明、准入与展示另有集成测试。
+
+## 卡片能力契约（test-18 / test-19）
+
+咨询类提问（「补办怎么办理」「需要什么材料」）只产生解释或 `card_management_required` 指引：不产生 `PendingAction`、不新增卡片行、余额不变。
+目标歧义（多张卡时只说「帮我把卡补办一下」）只产生澄清：结构化 `missing_details`（`fields:['card']`）由服务端渲染为「请补充卡片类型或尾号，再继续处理；未创建操作授权。」，纯文本追问等价。
+两种澄清都不得产生动作，也不需要它们是「面板」。
+能力指引与系统提示不得否认真实能力：`replace_card` 与 `apply_virtual_card` 都是目录内的 RED 写工具。
+把手动专有操作（新建/删除卡片）指向卡片页面是允许的；声称助手不能创建/申请卡片、或把已挂失卡片的补办说成只能人工，则违反契约。
+正向可达：LOST 信用卡经 `replace_card` 进入 RED MFA，验证前不制卡；验证后恰好多一张 ACTIVE 信用卡，源卡保持 `LOST` 且 `replacedByCardId` 指向新卡。
+`test-18` 的指引/提示断言只做否定式判定，不要求任何特定新措辞，因此文案修正后即转绿。
+断言卡片身份与增量（前后快照、指定 id），不断言整库卡片总数。
+
+## 生产运行时事实（test-18 / test-19 依赖）
+
+RED 闸门结束本轮：`script.calls()` 为「声明 + 被拦截调用」，尾部叙述步不会被消费。
+被拦截的一轮不发布助手文本，末条 assistant `content` 为空串。
+验证后的 `PendingAction.status` 为 `executed`；`confirmed` 只是离开 `awaiting_mfa` 的中间态。
+写续接仅在 `config.llmMode === 'live'` 运行（`tests/setup.ts` 默认 `mock`），指引渲染不受该开关限制。
+`describe_turn` 不出现在 `tool_start`/`tool_end` 事件里，但有 `status='completed'` 的 `toolInvocation` 行。
 
 ## 断言方法
 
@@ -36,6 +57,7 @@ GREEN 只表示执行策略，不表示没有副作用。
 熔断隔离规则见 [../CONTEXT.md](../CONTEXT.md)。
 
 运行：`pnpm exec vitest run tests/scenarios`。
+共享 SQLite 必须单进程串行执行；shell 输出在本环境不稳定，用 `logs/` 下的 UTF-8 重定向再读文件。
 
 ## 确认与待决面板
 
@@ -44,8 +66,8 @@ GREEN 只表示执行策略，不表示没有副作用。
 `test-11`/`test-12` 核对被拦截的计划节点 parked 为 `waiting_confirmation` 并暴露 `pendingActionId`。
 `mock-integration.test.ts` 对真实离线模型核对 `pendingAction.status`。
 
-所有编号场景脚本都以一次工具调用开始，因此被断言的面板必然对应一条 `PendingAction`。
-没有场景覆盖“模型只用文字声称需要确认、却不发出工具调用”的情形；此时不会产生面板，故不存在正向对照测试。
+每个被断言的确认/MFA 面板都对应一条真实 `PendingAction`。
+`test-18` 的咨询与歧义轮没有工具调用，因此既无面板也无 `PendingAction`，构成「模型只用文字声称」情形的负向对照。
 `test-04` 只证明注入文本不改变权限等级，不核对模型文字与实际工具调用/待决行是否一致。
 
 ## 虚拟卡家族与消费入账时间
@@ -65,5 +87,5 @@ GREEN 只表示执行策略，不表示没有副作用。
 
 ## 已知问题
 
-`tests/helpers/db.ts#truncateAll` 未清理 `prisma.cardConsumption`，同一 `executionKey` 的消费会在重复运行间残留。
-`test-16` 因此在 `beforeEach` 中自行清空该表；彻底修复应落在 `tests/helpers`。
+`test-18` case 3 的两条断言当前失败，属产品文案缺陷而非测试缺陷：`card_management_required` 指引仍写「AI 助手不能创建、申请或删除卡片」，`agent/system-prompt.ts` 仍把实体卡发放整体说成 manual-only。
+对应契约由目录内的 `replace_card`/`apply_virtual_card` 保证，测试不得放宽或跳过这两条断言。
