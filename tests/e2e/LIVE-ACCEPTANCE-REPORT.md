@@ -1,4 +1,4 @@
-# LIVE acceptance — virtual-card acceptance at the card-instant product tree
+# LIVE acceptance — virtual-card, card-consumption and card-loss → replace evidence
 
 Real `LLM_MODE=live` model · real headless Chrome · real `next dev` · isolated DB per entry.
 No mock, no response interception, no SDK/HTTP call standing in for a frontend action.
@@ -8,13 +8,26 @@ History lives in Git (`git log -p -- tests/e2e/LIVE-ACCEPTANCE-REPORT.md`).
 
 ## What each evidence set certifies
 
-Card consumption's business month is now resolved at the same instant the monthly limit was enforced with
+Card consumption's business month is resolved at the same instant the monthly limit was enforced with
 (`banking-sdk/card.ts`, `banking-sdk/card-family.ts`; `getCards` no longer leaks `Array#map`'s index as that
-instant). Production still resolves that instant as `demoNow()`, so the observable behaviour must be unchanged.
-The runs below are the proof, at the current HEAD, that it is unchanged.
+instant). Production resolves that instant as `demoNow()`, so the observable behaviour must be unchanged.
+The `lD`/`lE` runs are the proof that it is unchanged at `7a7a4d3`'s product tree.
+
+`replace_card` is an agent capability for a `LOST` card of any type: the security gateway parks it as a real
+`PendingAction` with `riskLevel=RED` / `requiresMfa=true` **before any card row exists**, and it executes only
+after a real MFA submission. `manual_add_card` / `manual_delete_card` stay manual-only, and that restriction covers
+creating a brand-new physical card and deleting a card record — not replacing a card that is already `LOST`.
+The `lF`/`lG` runs are the proof at the current HEAD's product tree.
 
 | Evidence set | Certifies commit | Product tree | Verdict | Exit code |
 | --- | --- | --- | --- | --- |
+| `lF` round 1 (`REPORT-lF-head15de129f-round1.md`) | `573fe009` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
+| `lF` round 2 (`REPORT-lF-head89d82441-round2.md`) | `573fe009` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
+| `lF` round 3 (`REPORT-lF-headdedee51d-round3.md`) | `573fe009` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
+| `lG` round 3 (`REPORT-lG-headacebc393-round3.md`) | `573fe009` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
+| `lG` round 4 (`REPORT-lG-head6a20dd93-round4.md`) | `573fe009` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
+| `lG` round 7 (`REPORT-lG-headd1cccd00-round7.md`) | `573fe009` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
+| `lG` round 8 (`REPORT-lG-headd1cccd00-round8.md`) | `573fe009` | ≡ `d1cccd00` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `lD` round 3 (`REPORT-lD-head7a7a4d3-round3.md`) | `0c50e2f` | ≡ `7a7a4d3` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `lE` round 3 (`REPORT-lE-head7a7a4d3-round3.md`) | `0c50e2f` | ≡ `7a7a4d3` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
 | `lD` round 2 (`REPORT-lD-head7a7a4d3-round2.md`) | `fa36508` | ≡ `7a7a4d3` (empty product diff) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (both signals) |
@@ -22,10 +35,18 @@ The runs below are the proof, at the current HEAD, that it is unchanged.
 | `date-tamper-boundary.e2e.ts` (`output/playwright/REPORT-date-tamper-boundary.md`) | `fa36508` | ≡ `7a7a4d3` | **PASS 8 / FAIL 0 / SKIP 1** | `0` |
 | Mock suite `acceptance.e2e.ts` (`output/playwright/REPORT-mock-suite.md`) | `fa36508` | ≡ `7a7a4d3` | **PASS 23 / FAIL 0 / SKIP 0** | `0` |
 
-Every set above is certified against the same product tree.
-`git diff --stat 7a7a4d3 HEAD -- banking-sdk agent security planner lib app components prisma scripts` → empty output,
-so every set above together certifies the card-instant product tree regardless of which evidence-only commit was HEAD
-when each ran (`git diff --name-only 7a7a4d3 HEAD` lists evidence reports and PNGs only).
+The seven `lF`/`lG` rows certify the current HEAD's product tree:
+`git diff --stat d1cccd00 HEAD -- banking-sdk agent security planner lib app components prisma scripts` → empty output,
+and the same command is empty for every round head (`15de129f`, `89d82441`, `dedee51d`, `a65fd5e2`, `1c674005`,
+`acebc393`, `6a20dd93`, `3c5fe83e`, `d1cccd00`). One product tree therefore carries all seven certified rounds,
+regardless of which evidence-only commit was HEAD when each ran. Evidence commit for these reports: `573fe009`.
+
+The remaining rows certify `7a7a4d3`'s product tree:
+`git diff --stat 7a7a4d3 <each evidence commit> -- banking-sdk agent security planner lib app components prisma scripts`
+→ empty for `0c50e2f`, `fa36508` and `339c50b`. Product paths have changed between `7a7a4d3` and the current HEAD
+(`agent/tools/card.ts`, `agent/system-prompt.ts`, `agent/messages/conversation.zh-CN.json`,
+`agent/providers/mock/conversation-guidance.ts`), so those rows do not extend to the current HEAD; only a re-run on
+this tree would.
 
 `lD` round 1 and `lE` round 1 are kept as separate rounds in this same product tree.
 Their printed summary line was `PASS 1 / FAIL 0 / SKIP 0` each, but their `EXIT=` line was produced by the
@@ -37,6 +58,14 @@ Nothing was deleted or weakened to reach a green round.
 **Certified rounds per flow at this product tree** — `lD`: 3 executed, 2 exit-certified (rounds 2 and 3);
 `lE`: 3 executed, 2 exit-certified (rounds 2 and 3). Each round is an independent process, browser and
 re-provisioned SQLite file, so the three rounds are independent of one another rather than replays.
+
+`lF`: 3 executed, 3 exit-certified (rounds 1, 2 and 3, each `0` on both signals).
+`lG`: 8 executed, 4 exit-certified (rounds 3, 4, 7 and 8, each `0` on both signals).
+`lG` rounds 1, 2, 5 and 6 carry no certification: rounds 1 and 2 lost their stdout before it was captured
+(neither exit code, summary line nor DB number is preserved, and round 2 has no screenshots), and rounds 5 and 6
+ended in the harness rather than in a product or model assertion. No assertion was weakened, skipped or deleted to
+reach a green round. Full per-round table, FAIL causes and the turn-by-turn replay:
+`output/playwright/live/REPORT-lF-lG-acceptance-summary.md`.
 
 ## How "live" is proven
 
@@ -246,6 +275,91 @@ rows, code `123456`, `attempts=0/3`, `status=verified` (`verifiedAt` `06:58:22.5
 **Screenshots** (`output/playwright/live/lE-head7a7a4d3-round3/`): `01-lE-replacement-card.png`,
 `02-lE-exhausted-refusal.png`.
 
+## `lF` — credit 挂失 → 补办 in a new session
+
+Scenario id `lF` (`lF-live-credit-report-lost-and-replace-new-session`), selected with `$env:LIVE_SCENARIOS='lF'`.
+Two model legs, each resolving on its first turn — no nudge and no continuation budget spent:
+
+```
+挂失 : 我的尾号6688信用卡丢失了，请正式挂失，我确认不可撤销。
+补办 : 请为刚挂失的尾号6688信用卡补办新卡。
+```
+
+Both legs are RED: `report_lost_card {"cardId":"card_credit",…}` and `replace_card {"cardId":"card_credit"}` each
+persist a `PendingAction` (`riskLevel=RED`, `requiresMfa=true`) plus one `MfaChallenge` (`123456`, `attempts=0/3`,
+`verified`). While `replace_card` waits, `GET /api/cards` still reports `cardCount=3`, `sourceStatus=LOST`,
+`sourceReplacedByCardId=null`, `newlyCreatedCardIds=[]` — the park creates no card and changes no status; only the
+MFA submission produces the replacement.
+
+**Round 3 raw rows** (`REPORT-lF-headdedee51d-round3.md`): source `card_credit` stays `CREDIT`/`LOST`,
+`numberMasked=****6688`, `replacedByCardId=cmve0pkb700b2ugf8qcnl4km9`; the replacement
+`cmve0pkb700b2ugf8qcnl4km9` is `CREDIT`/`ACTIVE`, `numberMasked=****4485` (a new number),
+`creditLimitMinor`/`availableLimitMinor` = `1800000`/`1800000` inherited unchanged; card count `3 → 4`.
+Rounds 1 and 2 show the same shape with `****3613` (`cmve04n3r00b2v0f89am4wwf4`) and `****7720`
+(`cmve0n2z1009ufof84bgdlc5k`).
+
+**Available credit is counted once**: the non-`LOST` `CREDIT` available total is `18000.00` before and after the
+replacement; the naive total over all `CREDIT` rows including the `LOST` source is `36000.00` and is explicitly
+excluded as the bug signature. `/cards` renders it per tile — the replacement tile shows `信用额度 ¥18,000.00` /
+`可用额度 ¥18,000.00`, while the `LOST` source tile still renders `可用额度 ¥18,000.00` and is not summed.
+
+**No money moves**: dashboard `23580.00` → `23580.00`, `GET /api/bills` added `0` / removed `0`, `Transaction`
+rows `232` before and after, `CardConsumption` rows `0`.
+
+**Model identity** comes from persisted rows, not only from health:
+`AgentRunEvent(eventType='provider_request_payload')` → `payloadJson.payload.model` = `deepseek-flash` for every
+payload row (round 3: 6 rows, `unparsablePayloads=0`, `payloadsWithoutPayloadModel=0`; round 2: 5 rows).
+Round 1's extractor printed `model counts=[]` and carries no row evidence, so round 1's model identity rests on
+`/api/health` `llmMode:"live"` plus the harness header.
+
+## `lG` — full card-loss → replace chain in one session
+
+Scenario id `lG` (`lG-live-full-card-loss-replace-chain-single-session`), selected with `$env:LIVE_SCENARIOS='lG'`.
+One chat session drives six verbatim prompts (`MAX_TURNS_PER_LEG=6` natural turns per write leg), with the two
+front-end `/cards` consume legs interleaved at **0** model turns:
+
+```
+1 请新开一张月消费限额100元的虚拟卡，绑定我的活期账户。
+2 尾号<mask>的虚拟卡信息泄露，请正式挂失，我确认不可撤销。
+3 请为刚才正式挂失的尾号<mask>虚拟卡再补办一张新卡。
+4 尾号6688的信用卡丢失，请正式挂失，我接受不可撤销。
+5 请为刚挂失的尾号6688信用卡补办新卡。
+6 确认，请继续办理刚才这笔业务，发起真实的待确认操作，让我在面板里验证。
+```
+
+`<mask>` is the last four digits of the card prompt 1 actually created (round 7 `****1865`, round 8 `****3433`),
+derived at runtime — never an invented number.
+
+**Turn 5 is the capability proof**: it produces a real `replace_card {"cardId":"card_credit"}` and a RED MFA panel,
+and no assistant turn in rounds 3–8 answers it with 「补办实体信用卡和借记卡只能在「卡片」页面手动办理」.
+**Turn 6 is accepted in two shapes and never grows the card count**: round 7 answered prose-only (`describe_turn` +
+`get_cards`, `finalTurn.action === undefined`, `6 → 6`); round 8 re-emitted `replace_card`, parked a second
+`PendingAction`, rendered a real panel, and replayed the existing replacement instead of issuing a second card —
+the same `commandDigest 14fc01beedc9156bb968b4e743dc79231f75ee172248e4fa3b7429bd8338cb6d`, the same replacement
+card `cmve4oa9d00rc50f8njjc711f`, `cardCountBefore=6` / `cardCountAfter=6`, `mfaCompleted=true`.
+
+**Virtual leg** (rounds 7/8 shape): the new `VIRTUAL`/`ACTIVE` card inherits `linkedAccountId=acct_checking` and
+`monthlyLimitMinor=10000`, with `creditLimitMinor`/`availableLimitMinor` null. Source and replacement share one
+monthly allowance, so it never resets on 补办: payable `100.00` → `70.00` (after the `30.00` spend) → **`70.00`
+after the replacement** → `0.00` (after the `70.00` spend), and the following `1.00` is refused
+`422 LIMIT_EXCEEDED` `超过虚拟卡月限额。` with zero financial movement.
+
+**Credit leg**: source `card_credit` stays `CREDIT`/`LOST` with `replacedByCardId` pointing at the single new
+`CREDIT`/`ACTIVE` card (`****8718` / `cmve4i4c300o6b4f8cqjdvnrp` in round 7; `****0495` /
+`cmve4oa9d00rc50f8njjc711f` in round 8), which inherits `1800000`/`1800000`. The non-`LOST` `CREDIT` available
+total stays `18000.00`; the naive all-`CREDIT` `36000.00` is excluded as the bug signature.
+
+**Money moves only through consumptions**: `acct_checking.balanceMinor` `2358000` → `2355000` → `2348000`;
+exactly two new `channel=CARD` / `direction=DEBIT` `Transaction` rows (−`3000` 虚拟卡开卡消费验证, −`7000`
+虚拟卡补办续限验证) and exactly two `CardConsumption` rows — `3000` attributed to the **source** card and `7000`
+to the replacement, so historical attribution is never re-pointed. `GET /api/bills` added `2` / removed `0`.
+No request body carried `occurredAt`; both rows are server-stamped `2026-09-25T04:00:00.000Z` (`demoNow()`).
+A 补办 itself moves no money.
+
+Card counts are derived from the scenario's own start-of-run `GET /api/cards` baseline, never a hardcoded total:
+`3 → 4` (virtual source) `→ 4` (`LOST`) `→ 5` (virtual replacement) `→ 5` (credit `LOST`) `→ 6` (credit
+replacement) `→ 6` (final turn).
+
 ## Date-tampering boundary — a separate entry from the browser flows
 
 `tests/e2e/date-tamper-boundary.e2e.ts` sends raw HTTP to the running app against **its own isolated DB
@@ -280,8 +394,22 @@ receipt exactly once; `h-investment-flow` `−1000.00` DEBIT / `+6178.36` CREDIT
 
 ## NOT verified by these runs
 
-- **Live scenarios not re-run at this product tree**: `lA`, `lB`, `lC` and live ids `0`–`15`, `2p`, `7`.
-  Nothing here certifies them against the card-instant tree.
+- **Live scenarios with no certification at the current HEAD's product tree**: `lA`, `lB`, `lC`, `lD`, `lE`
+  (`lD`/`lE` certify `7a7a4d3`'s tree only) and live ids `0`–`15`, `2p`, `7`. `lF`/`lG` certify the current HEAD's
+  product tree; nothing here extends to a sibling scenario.
+- **`lG` rounds 1 and 2 are not preserved**: their exit code, summary line, duration, model-id rows and DB numbers
+  exist nowhere, and round 2 has no screenshots. Both reports are labelled post-hoc reconstructions and certify
+  nothing.
+- **`lG` rounds 5 and 6 carry no summary line and no `-evidence.json`** — the process ended inside the
+  `unhandledRejection` handler, so their business legs are corroborated by the post-run DB dump only.
+- **`lF`'s "dashboard API + page do not double count the old card" is asserted per non-`LOST` `CREDIT` tile** —
+  `app/cards/page.tsx` renders no page-level aggregate of available credit, so a page-level assertion has nothing to
+  attach to. Product gap, reported not fixed; the helper records it at
+  `tests/e2e/card-replace-chain.e2e-helper.ts:194-195`.
+- **`DEBIT` replacement is not exercised** by `lF`/`lG`; the "any type" claim rests on the type-neutral catalog entry
+  plus the executed `CREDIT` and `VIRTUAL` legs.
+- **The panel-claim negation rule is not proven by Vitest here** — its `tests/unit/panel-claim.test.ts` cases are
+  backed in this evidence only by an executed standalone 64-case table run through `pnpm exec tsx`.
 - **Model-facing date refusal** (`agent/tools/card.ts`, SKIP `x1`) — not reachable over HTTP; the boundary entry
   proves the route contract only.
 - **MFA wrong-code / circuit-breaker paths under the live model** — every live leg submitted only the correct code
@@ -290,8 +418,9 @@ receipt exactly once; `h-investment-flow` `−1000.00` DEBIT / `+6178.36` CREDIT
   not from a dashboard API read.
 - **`lD` over-limit HTTP status** was read from the harness network log (`[4xx/5xx] POST 422 … LIMIT_EXCEEDED`)
   plus the on-screen `role="alert"` text; no independent raw-HTTP repro was made for the limit seam.
-- **Model stability is still not proven** — `lD` and `lE` each ran 3 independent rounds here and all 3 passed, but
-  3 rounds bound non-determinism, they do not prove it absent over unlimited runs.
+- **Model stability is still not proven** — `lD`/`lE` ran 3 independent rounds each and `lF` 3, all passing, and
+  `lG`'s turn 6 came out prose-only in round 7 and as a replayed `replace_card` in round 8; a finite number of
+  rounds bounds non-determinism, it does not prove it absent over unlimited runs.
 - **`lD` round 3 gate rows are not dumpable** — the run's `PendingAction` / `MfaChallenge` / `ToolInvocation` rows
   were destroyed by `lE` round 3 reprovisioning the same isolated DB. Rounds 1–2 own dumped rows; round 3's panel
   evidence comes from the scenario assertions and its PASS line only.
@@ -302,6 +431,13 @@ receipt exactly once; `h-investment-flow` `−1000.00` DEBIT / `+6178.36` CREDIT
 
 | Path | Content |
 | --- | --- |
+| `output/playwright/live/REPORT-lF-lG-acceptance-summary.md` | consolidated `lF`/`lG` deliverable: all 11 rounds, FAIL causes, exact commands + exit-code calibration, turn-by-turn replay, DB verification, unresolved list, evidence map, cleanup |
+| `output/playwright/live/REPORT-lF-head{15de129f,89d82441,dedee51d}-round{1,2,3}.md` | `lF` rounds 1–3: certified head, dual exit signal, verbatim prompts, `PendingAction`/`MfaChallenge` rows, card table, per-tile credit check, ledger invariance |
+| `output/playwright/live/REPORT-lG-head{acebc393,6a20dd93,d1cccd00}-round{3,4,7,8}.md` | `lG` certified rounds: full six-prompt chain, tool calls, panels, virtual + credit card rows, allowance continuity, DB facts, cleanup snapshot |
+| `output/playwright/live/REPORT-lG-head{a65fd5e2,1c674005}-round{1,2}.md` | `lG` rounds 1–2, post-hoc reconstructions — no stdout, no exit code, no DB numbers (round 2 has no screenshots) |
+| `output/playwright/live/REPORT-lG-head{6a20dd93,3c5fe83e}-round{5,6}.md` | `lG` rounds 5–6: verbatim failure line plus `EXIT=1`; no summary line, no `-evidence.json` |
+| `output/playwright/live/lF-head*-round*/*.png` | `lF`: `/cards` after 挂失, `/cards` after 补办 (2 per round) |
+| `output/playwright/live/lG-head*-round{1,3,4,5,6,7,8}/*.png` | `lG`: virtual replacement, exhausted-allowance refusal, credit replacement (3 per round; round 2 has none) |
 | `output/playwright/live/REPORT-lD-head7a7a4d3-round3.md` | lD round 3: commit certified, exit-code controls, prompt, tool calls, DB numbers, screenshots, gate-row caveat |
 | `output/playwright/live/REPORT-lE-head7a7a4d3-round3.md` | lE round 3: same shape, plus three panels and allowance continuity |
 | `output/playwright/live/REPORT-lD-head7a7a4d3-round2.md` | lD round 2: commit certified, exit-code controls, prompt, tool calls, gate rows, DB numbers, screenshots |

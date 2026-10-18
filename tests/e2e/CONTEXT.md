@@ -25,7 +25,7 @@ live 数据库文件为 `prisma/live-acceptance.db`（含 `-wal`/`-shm`/`-journa
 
 `pnpm exec tsx tests/e2e/live-acceptance.e2e.ts`
 运行真实模型场景。
-`LIVE_SCENARIOS` 可指定场景标识列表（`lA`/`lB`/`lC`/`lD`/`lE` 等）。
+`LIVE_SCENARIOS` 可指定场景标识列表（`lA`/`lB`/`lC`/`lD`/`lE`/`lF`/`lG` 等）。
 `LIVE_FORCE_MODEL` 仅在显式配置时覆盖模型。
 live 场景必须每轮独立起进程、独立重置隔离库。
 
@@ -39,7 +39,8 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 
 ## live 场景与辅助模块
 
-`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE`。
+`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG`。
+`lF`/`lG` 是「卡片挂失 → 补办」链路场景，id `lF-live-credit-report-lost-and-replace-new-session` 与 `lG-live-full-card-loss-replace-chain-single-session`。
 选择 `2` 会同时选中 `2p`。
 场景 `7`（`scenarioCommittedContinuationFailed`）不在 `SCENARIOS` 中，恒为最后阶段。
 场景契约为 `{ id, name, run(ctx): Promise<string>, skipReason? }`，`run` 返回一条证据串。
@@ -54,8 +55,10 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 `lE`（`scenarioVirtualCardReplaceContinuity`，id `lE-live-virtual-card-replace-continuity`）自然语言挂失 → 补办（两腿均完成真实确认/MFA 面板）后在新卡上真实前端消费：断言源卡保持 `LOST` 且 `replacedByCardId` 指向新卡、恰一张新 `VIRTUAL`/`ACTIVE` 卡继承同一 `linkedAccountId`、新卡号、月限额连续不重置（可支付 `100.00` → `70.00` → 补办后仍 `70.00` → `0.00`），新卡消费恰好成功一次。
 `lD`/`lE` 共用 `applyVirtualCardLeg`（含 RAW `Card` 行断言）、`awaitPayable`、`vcMaskTail`。
 「不变」以场景开始时 `GET /api/cards` 的卡片数为基线：`lA` 会在同一进程内先新增补办信用卡，硬编码种子值会让 `lC` 在合并运行中失败。
-种子含 3 张 ACTIVE 卡：`card_credit`（CREDIT）、`card_debit`（DEBIT）、`card_virtual`（VIRTUAL，绑定 `acct_checking`，月限额 `5000.00`，无信用额度）；`lA`/`lC`/`lD`/`lE` 与 mock 的 `multi-card-freeze-audit-history` 均据该集合按类型/状态断言。
+种子含 3 张 ACTIVE 卡：`card_credit`（CREDIT）、`card_debit`（DEBIT）、`card_virtual`（VIRTUAL，绑定 `acct_checking`，月限额 `5000.00`，无信用额度）；`lA`/`lC`/`lD`/`lE`/`lF`/`lG` 与 mock 的 `multi-card-freeze-audit-history` 均据该集合按类型/状态断言。
 `live-virtual-card.e2e-helper.ts` 集中定义 live 虚拟卡助手：`VC_*` 常量（账户、月限额、各笔金额、商户、拒绝文案）、有界自然轮次 `VC_APPLY_TURNS`/`vcReportLostTurns`/`vcReplaceTurns`、DB 读取与断言（`readRawCard`、`readCardSpendState`、`assertSingleSpend`、`assertNoSpend`、`expectedPayableMinor`、`assertVirtualCardView`/`assertVirtualCardTile`）以及 `/cards` 对话框驱动（`consumeSuccessfully`、`attemptConsumeExpectingRefusal`）。
+`card-replace-chain.e2e-helper.ts` 集中定义挂失 → 补办链路：`lF` = 新会话内信用卡挂失 → 补办，`lG` = 单会话内虚拟卡开卡 → 消费 → 挂失 → 补办 → 信用卡挂失 → 补办，含逐字 6 轮失败链复演；并定义 `LF_*`/`LG_*` 常量、`MAX_TURNS_PER_LEG`、`certifiedHead`、`nonLostCreditAvailableTotalMinor`/`renderedCreditAvailableMinor` 与卡片基线断言。
+`/cards` 没有页面级可用额度汇总，因此可用信用额度按每张非 `LOST` CREDIT 卡（`creditLimitMinor`/`availableLimitMinor`）核对，朴素全 CREDIT 合计作为 bug 签名排除。
 `driveRedTool` 留在入口并以 `RedToolDriver` 注入，`assertNoFabricatedConfirmationPanel` 守卫因此保持单一实现。
 
 消费记账时间由服务端拥有：`app/cards/CardConsumeDialog.tsx` 只提交 `amount`/`category`/`merchant`，
@@ -107,7 +110,7 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 随后切换到 `/security` 核对已熔断并在该页刷新验证持久化；三次尝试之间不刷新页面。
 `e2-refresh-mfa`（journey e）断言挂起但未锁定的红档转账刷新后 MFA 卡片恢复。
 `live-acceptance.e2e.ts` 的 S4 只提交一次错误码并断言卡片保留，正确码在独立页面执行；live 侧不校验尝试次数上限。
-`lA`/`lD`/`lE` 的 live 腿只提交正确码 `123456`（`MfaChallenge.attempts=0`），live 不接受错误码、不触达尝试上限。
+`lA`/`lD`/`lE`/`lF`/`lG` 的 live 腿只提交正确码 `123456`（`MfaChallenge.attempts=0`），live 不接受错误码、不触达尝试上限。
 当前没有用例在锁定后刷新 `/agent` 再断言弹窗保持消失。
 
 ## 退出码与资源清理
