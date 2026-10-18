@@ -140,7 +140,7 @@ The mock has no card-consumption/spend/payment intent: its only card tool calls 
 
 ## Card-management guidance (the "manual-only" reply)
 
-`inferConversationGuidance` (`mock/conversation-guidance.ts:29-31`) returns `card_management_required` when an issuance/removal verb (申请/添加/新增/删除/删掉/注销/开通/创建/办理, or create|add|issue|remove|delete|close|cancel|apply for) is paired with a card noun whose modifiers may be 银行/信用/借记/储蓄/实体.
+`inferConversationGuidance` (`mock/conversation-guidance.ts:33-35`) returns `card_management_required` when an issuance/removal verb (申请/添加/新增/删除/删掉/注销/开通/创建/办理, or create|add|issue|remove|delete|close|cancel|apply for) is paired with a card noun whose modifiers may be 银行/信用/借记/储蓄/实体.
 `mock/classifier.ts:24-26` short-circuits on that code and returns the closed template `agent/messages/conversation.zh-CN.json:7` ("添加或删除卡片需在“卡片”页面操作并完成验证。AI 助手不能创建、申请或删除卡片，也不会将这些操作加入任务计划。") without proposing a tool call; `mock/turn-declaration.ts:32-33` then declares the turn purpose `conversation`.
 虚拟 is deliberately outside the modifier list (`mock/conversation-guidance.ts:27-28` comment), so virtual-card application stays agent-available (`mock/card-intents.ts:57-60`).
 挂失/补办/lost/replace are NOT in that verb list: 挂失信用卡 falls through to `get_cards` (`mock/classifier.ts:76`), 补办一张新卡 is treated as conversation (补办 is absent from `WRITE_VERB`, `mock/conversation-policy.ts:3`), and a multi-step sequence containing either aborts with `missingDetails` (`mock/plan-intents.ts:104-106`). Because 办理 is a generic verb, 办理信用卡挂失 does match and yields the card-management reply.
