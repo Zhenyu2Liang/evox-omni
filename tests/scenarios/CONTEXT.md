@@ -11,7 +11,7 @@
 包括余额、转账、账单、异常、限额、理财与条件计划。
 `mock-integration.test.ts` 使用应用的离线模型。
 
-编号场景使用 `tests/helpers/faux-agent.ts`。
+`test-01` 至 `test-17` 使用 `tests/helpers/faux-agent.ts`；`test-18`/`test-19` 走生产入口 `@/agent#runTurn` + `tests/helpers/scripted-provider`（`describe_turn` 声明、准入、`groundMessage` 渲染与写续接只在该路径存在，裸 Pi 夹具无法替代）。
 两阶段调用由 `tests/helpers/scenario.ts` 驱动。
 它们证明网关、工具和 SDK 的业务边界。
 不能据此声明生产运行的全部流程均被覆盖。
