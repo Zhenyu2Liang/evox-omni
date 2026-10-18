@@ -12,6 +12,8 @@
 - `message-normalize.test.ts` 检查工具结果组与后续历史。
 - `run-turn-failure.test.ts` 用 `vi.mock('@/agent/banking-agent')` 替换 `createBankingAgent` 工厂（安全网关、工具注册表、SDK 与 SQLite 保持真实）检查实际结果与失败续接。
 - `system-prompt.test.ts` 检查系统提示词与工具目录分级一致并保留幻象规则，并断言确认/验证面板只在真实受控写工具结果停放后才存在、无该结果时禁止声称已发起或在等待确认。
+  面板相关句子以 `prompt.toContain(<英文原句>)` 逐句断言，测试内重复了提示词原句，改动提示词措辞会直接破坏该用例。
+- 本目录没有用例让 `scriptedProvider` 走生产 `runTurn`：`run-turn-failure.test.ts` 替换运行时工厂，`write-continuation*.test.ts` 用假 `BankingAgentRuntime` 且不碰数据库。该骨架见 [../../integration/CONTEXT.md](../../integration/CONTEXT.md)。
 - `read-tool-boundaries.test.ts` 检查读取工具参数校验与模型可见错误信封。
 - `durable-reply-repair.test.ts` 检查回复修复的持久续接、崩溃不重复修复与凭据脱敏。
 - `durable-advice-context.test.ts` 检查授权恢复时建议用途与来源请求一致性。
