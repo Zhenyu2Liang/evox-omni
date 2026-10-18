@@ -25,6 +25,22 @@
 声明不提供用户授权。
 未声明或声明不完整的拒绝测试需保留该输入条件。
 
+### 脚本化模型驱动生产 `runTurn`
+
+`scriptedProvider(declaration, steps)` 返回 `{ provider, calls() }`；`provider` 即 `RunTurnDeps.provider`
+（`{ model, streamFn }`，类型见 `agent/providers/types.ts`），与网关、SQLite、执行器全部保持真实。
+首条响应固定是 `turnDeclaration(declaration)` 的 `describe_turn` 工具调用，`steps` 是**其后**的响应序列。
+一次模型调用消费一条响应，脚本全部消费时 `calls() === 1 + steps.length`。
+调用形如 `runTurn({ sessionId?, message }, { config, provider })`：首轮省略 `sessionId` 由 `getOrCreateSession` 建行，不要传 `requestId`。
+返回值只有 `{ sessionId, events }`：助手文本取 `events` 中最后一条 `message_end` 的 `message.content`，
+工具与闸门信号取 `tool_end`、`confirmation_required`、`mfa_required` 事件。
+`config.llmMode` 决定生产分支：声明写操作却未发出受控工具调用时的一次有界续接
+（`agent/write-continuation.ts#pendingDeclaredWrites`）只在 `llmMode === 'live'` 生效；
+`tests/setup.ts` 把 `LLM_MODE` 固定为 `mock`，需要续接的用例必须显式传 `llmMode: 'live'`。
+指引信封（`{"guidance":{"code":...}}`）的渲染不受 `llmMode` 限制，`groundMessage` 用服务端模板改写最终助手文本。
+最完整骨架见 `tests/integration/write-continuation.test.ts`（续接与 `declared_unsubmitted`）
+与 `tests/integration/decision-guidance.test.ts`（声明、指引信封、授权后续读）。
+
 ## 数据库与事务
 
 `getTestPrisma` 延迟获取测试客户端。
