@@ -92,6 +92,7 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调用受控工具，因此不产生 `PendingAction`，无确认/MFA 卡片，`/api/actions` 为空。
 `live-acceptance.e2e.ts#driveRedTool` 在受限自然轮次内检测「无卡片」并发送下一条自然语言催促。
 `panel-claim.e2e-helper.ts#findConfirmationPanelClaim` 是纯文本匹配，判定助手散文是否声称确认/MFA 面板已存在（`确认面板`/`验证面板`/`上方面板`/`已在面板`/`等待你的确认` 等，否定表述不算）。
+否定只在命中短语两侧的有界窗口内判定，标点即截断窗口：`不会出现`/`不会显示`/`不会弹出`/`不会创建`/`没有`/`不存在`/`暂无`/`尚未出现` 与「确认面板尚未出现」都不算声称，「如果没有问题，请在上方的确认面板确认」仍算。
 `helpers.ts#assertNoFabricatedConfirmationPanel` 在散文声称面板却 `/api/actions` 无待处理项且 DOM 无确认/MFA 卡片时显式判定失败，错误信息区分 cause=模型未发起受控工具（模型行为）与 cause=UI/测试原因（网关已停放动作但未渲染）。
 该守卫接入 `driveRedTool`（散文轮次）与场景 7 的 park 轮询。
 普通追问（模型仅问「是否确认…」而未声称已有面板）不触发守卫，仍按现有逻辑继续催促。
