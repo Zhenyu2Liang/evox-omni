@@ -27,7 +27,7 @@
 | `e2e/live-acceptance.e2e.ts` | 真实模型的真实浏览器验收，场景在 `SCENARIOS`，用 `LIVE_SCENARIOS` 选择 |
 | `e2e/date-tamper-boundary.e2e.ts` | 消费入账时间的纯 HTTP 边界用例，无模型、无浏览器 |
 
-`SCENARIOS` 的 id 为 `15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE`。
+`SCENARIOS` 的 id 为 `15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG`。
 `lA` 补办信用卡、`lB` 理财部分赎回、`lC`…`lE` 虚拟卡场景；选择 `2` 会同时选中 `2p`，场景 `7` 恒为最后阶段。
 `e2e/helpers.ts` 与 `*.e2e-helper.ts` 是入口共用的驱动与断言模块，自身不运行。
 入口细节见 [e2e/CONTEXT.md](e2e/CONTEXT.md)。
