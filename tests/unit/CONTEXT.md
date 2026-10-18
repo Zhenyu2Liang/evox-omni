@@ -11,6 +11,10 @@
 | [lib](lib/CONTEXT.md) | 身份键、数据工具与仓储原语 |
 
 目录名称不表示所有测试都无需数据库。
+
+本目录没有脚本化模型驱动生产 `runTurn` 的用例。
+`agent/run-turn-failure.test.ts` 替换 `createBankingAgent` 工厂，`write-continuation*.test.ts` 用假运行时且不碰数据库。
+需要「`scriptedProvider` → 生产 `runTurn` → SQLite 断言」骨架时用 `tests/integration/write-continuation.test.ts`，说明见 [../integration/CONTEXT.md](../integration/CONTEXT.md)。
 安全、SDK 与执行权测试中包含真实 SQLite 用例。
 模型适配测试可控制响应，但不得泄露凭据。
 
