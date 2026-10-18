@@ -31,6 +31,17 @@
 具体场景以测试源码中的断言为准。
 不得保留已删除测试的路径或旧修复轮次清单。
 
+## 脚本化驱动生产 runTurn
+
+前台套件从 `@/agent` 导入 `runTurn`（facade 再导出 `./run-turn`），只用 `scriptedProvider(declaration, steps)` 注入模型。
+`deps` 仅有 `config`/`now`/`provider`/`onEvent`（`agent/turns/contracts.ts`）。
+`config` 必须是字面量或 `{ ...getConfig(), llmMode: 'live' }`：声明未提交写的单次续办只在 `config.llmMode === 'live'` 时触发（`agent/write-continuation.ts#pendingDeclaredWrites`）。
+不传 `sessionId` 时由 `runTurn` 内 `getOrCreateSession(config.demoUserId, undefined)` 建库行，断言用响应里的 `turn.sessionId`，不写死 id。
+`scriptedProvider` 总会先发 `describe_turn`，所以 `script.calls()` 计数含该声明。
+续办候选必须 `stopReason: 'stop'` 的普通散文；格式修复型或合法 `guidance` 回复不消耗续办预算。
+服务端权威文案 `declared_unsubmitted`（`agent/messages/conversation.zh-CN.json`）用 `agent/financial-response.ts#WRITE_LABELS` 把工具名换成中文标签，测试直接写字面量。
+这些套件不需要 `vi.mock`：模型经 `deps.provider` 注入，网关、执行器、SQLite 都是生产实现。
+
 ## 断言约束
 
 - 声明与任务图来自结构化输入，不从原句正则补全。
