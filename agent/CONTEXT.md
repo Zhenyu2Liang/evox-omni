@@ -36,6 +36,9 @@ The only server-authored manual-only refusal text is the guidance vocabulary `ca
 `turn-runtime.ts` admits a stable request and owns its session run lease. The first awaited subscriber is `AgentRunJournal`. It snapshots and records every original Pi event, and creates the invocation with the tool-start event before preflight. Grounded UI events are immutable and persisted before SSE publication. JSON responses replay the same saved snapshots.
 
 `run-turn.ts` owns input orchestration; `authorization-resume.ts` injects an original authorized outcome. `turns/` separates contracts, buffers, event grounding, parked authorization views and bounded prompts. Internal presentation modules do not import entry points or recovery drivers.
+`turn-presentation.ts` is only a re-export facade over `turns/` (contracts, buffer, events, authorization-view, live-prompt); implementations live there.
+`RunTurnDeps` is `{ config?: AppConfig; now?: () => number; provider?: ModelRuntime; onEvent?: ... }` — every field optional; `provider` is the two-field `{ model, streamFn }` from `providers/types.ts` and overrides `resolveProvider(config)` (`banking-agent.ts:217`).
+`turns/live-prompt.ts` `runLivePrompt(runtime, buffer, request, now, config)` order: clear `lastGuidance` → `agent.prompt(request)` → `continueDeclaredWrites` → `repairConversationalReply`; it holds no `llmMode` check itself, so the only live gate on the declared-write continuation is `write-continuation.ts:57`. Guidance-envelope rendering (`turns/buffer.ts` `groundMessage`, in-place rewrite of the candidate's `content`) and foreground format repair are not mode-gated.
 
 Authorization result narration is server-authored in both mock and live modes. The original tool
 result is replaced inside its contiguous result group while preserving all later dialogue. A missing
