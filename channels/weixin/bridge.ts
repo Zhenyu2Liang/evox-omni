@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import type { WeixinMessage } from 'pi-weixinbot/src/types.ts';
 import type { BankingChannel } from './banking-client';
-import { renderAction, renderEvents } from './banking-client';
+import { BankingApiError, renderEvents } from './banking-client';
 import type { WeixinState } from './state';
+import { HELP, handleChannelCommand } from './commands';
+import { label } from './presentation';
 
 export interface WeixinSender {
   send(to: string, text: string, clientId: string, contextToken: string): Promise<void>;
 }
-const HELP = '可直接描述银行需求。写操作需先核对详情，再发送 /确认 操作编号；红色操作随后发送 /验证 操作编号 六位验证码。\n/待办 查看本通道待处理操作；/取消 操作编号；/帮助。\n聊天中只说“确认”不会授权执行。此通道仅支持文字和当前已绑定用户。';
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 
 /** 单绑定用户、串行处理。群聊、陌生人和机器人回声不进入模型。 */
@@ -31,7 +32,7 @@ export class WeixinBridge {
     if (!delivery) {
       let reply: string;
       try { reply = text ? await this.respond(text, `weixin:${key}`) : '目前仅支持文字消息，请输入银行需求。'; }
-      catch { reply = '银行请求结果暂时无法确认。请在网页核对操作记录，不要据此判断已成功或资金未变。'; }
+      catch (error) { reply = error instanceof BankingApiError ? error.message : '银行请求结果暂时无法确认。请在网页核对操作记录，不要据此判断已成功或资金未变。'; }
       // 验证码只存在于本次 HTTP 请求，不持久化消息正文。
       delivery = { replies: Array.from(reply.matchAll(/[\s\S]{1,1600}/gu), match => match[0]), sent: 0 };
       this.state.deliveries[key] = delivery;
@@ -50,23 +51,20 @@ export class WeixinBridge {
   }
 
   private async respond(text: string, requestId: string): Promise<string> {
-    if (text === '/帮助' || text === '/help') return HELP;
-    if (text === '/待办') {
-      const actions = (await this.bank.actions()).filter(action => this.state.offered[action.id]);
-      return actions.map(action => `${renderAction(action.id, action.summary)}\n状态：${action.status}`).join('\n\n') || '本通道没有待处理的操作。';
-    }
-    const command = /^\/(确认|验证|取消)\s+([A-Za-z0-9_-]{1,128})(?:\s+(\d{6}))?$/.exec(text);
+    const channelReply = await handleChannelCommand(text, this.bank, this.state);
+    if (channelReply !== undefined) return channelReply;
+    const command = /^\/(确认|验证|取消|恢复操作)\s+([A-Za-z0-9_-]{1,128})(?:\s+(\d{6}))?$/.exec(text);
     if (command) {
       const [, verb, id, code] = command;
       const offered = this.state.offered[id];
       if (!offered) return '该操作不是本通道提供的操作，请核对编号，或在网页处理。';
       if (verb === '验证' && (!code || !offered.confirmed)) return `请先发送 /确认 ${id}，再发送 /验证 ${id} 六位验证码。`;
       if (verb !== '验证' && code) return '确认和取消命令不接收验证码。';
-      const outcome = await this.bank.settle(id, verb === '确认' ? 'confirm' : verb === '验证' ? 'verify' : 'cancel', code);
+      const outcome = await this.bank.settle(id, verb === '确认' ? 'confirm' : verb === '验证' ? 'verify' : verb === '恢复操作' ? 'recover' : 'cancel', code);
       if (verb === '确认' && outcome.status === 'awaiting_mfa') offered.confirmed = true;
       const rendered = this.present(outcome.events);
       const next = outcome.status === 'awaiting_mfa' ? `\n继续验证：/验证 ${id} 六位验证码` : '';
-      return [`操作编号：${id}\n状态：${outcome.status}${next}`, outcome.message || '', rendered].filter(Boolean).join('\n\n');
+      return [`操作编号：${id}\n状态：${label(outcome.status)}${next}`, outcome.message || '', rendered].filter(Boolean).join('\n\n');
     }
     if (text.startsWith('/')) return `命令格式不正确。\n${HELP}`;
     if (text.length > 4000) return '消息过长，请将银行需求缩短至 4000 字以内。';
@@ -76,6 +74,7 @@ export class WeixinBridge {
   private present(events: Parameters<typeof renderEvents>[0]): string {
     const rendered = renderEvents(events);
     for (const id of rendered.actionIds) this.state.offered[id] ??= { confirmed: false };
+    for (const id of rendered.planIds) this.state.plans[id] = true;
     return rendered.text;
   }
 }

@@ -10,10 +10,11 @@ const stateSchema = z.object({
   version: z.literal(1), auth: authSchema.optional(), cursor: z.string(),
   deliveries: z.record(z.string(), z.object({ replies: z.array(z.string()), sent: z.number().int().nonnegative() })),
   offered: z.record(z.string(), z.object({ confirmed: z.boolean() })),
+  plans: z.record(z.string(), z.literal(true)).default({}),
 });
 export type WeixinState = z.infer<typeof stateSchema>;
 export type WeixinAuth = z.infer<typeof authSchema>;
-export const emptyState = (): WeixinState => ({ version: 1, cursor: '', deliveries: {}, offered: {} });
+export const emptyState = (): WeixinState => ({ version: 1, cursor: '', deliveries: {}, offered: {}, plans: {} });
 
 export class WeixinStore {
   constructor(readonly directory: string) {}

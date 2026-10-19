@@ -18,7 +18,12 @@ function fixture() {
   state.auth = { botId: 'bot', ownerId: 'owner', token: 'test-token', baseUrl: 'https://ilinkai.weixin.qq.com' };
   const bank = { chat: vi.fn<BankingChannel['chat']>().mockResolvedValue({ sessionId: 'demo:user', events: [gate] }),
     actions: vi.fn<BankingChannel['actions']>().mockResolvedValue([]),
-    settle: vi.fn<BankingChannel['settle']>().mockResolvedValue({ actionId: 'action_one', ok: false, status: 'awaiting_mfa', events: [] }) };
+    settle: vi.fn<BankingChannel['settle']>().mockResolvedValue({ actionId: 'action_one', ok: false, status: 'awaiting_mfa', events: [] }),
+    plans: vi.fn<BankingChannel['plans']>().mockResolvedValue([]),
+    plan: vi.fn<BankingChannel['plan']>(), controlPlan: vi.fn<BankingChannel['controlPlan']>(),
+    schedules: vi.fn<BankingChannel['schedules']>().mockResolvedValue({ tasks: [], notifications: [] }),
+    tickSchedules: vi.fn<BankingChannel['tickSchedules']>().mockResolvedValue({ evaluatedAt: 0, dispatches: [] }),
+  };
   const sender = { send: vi.fn().mockResolvedValue(undefined) };
   const save = vi.fn().mockResolvedValue(undefined);
   const bridge = new WeixinBridge(state, bank, sender, save);
@@ -83,7 +88,7 @@ describe('微信通道边界与授权', () => {
     f.state.offered.action_one.confirmed = true;
     f.bank.settle.mockResolvedValue({ actionId: 'action_one', ok: false, status: 'locked', message: '验证失败，操作已锁定。', events: [] });
     await f.bridge.handle(f.message('/验证 action_one 000000', 2));
-    expect(f.sender.send.mock.calls.at(-1)?.[1]).toContain('locked');
+    expect(f.sender.send.mock.calls.at(-1)?.[1]).toContain('已锁定');
     expect(f.sender.send.mock.calls.at(-1)?.[1]).not.toContain('状态：executed');
   });
   it('银行超时结果未知，不声称未扣款或成功', async () => {

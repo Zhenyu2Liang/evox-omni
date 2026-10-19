@@ -13,6 +13,7 @@ import { emptyState } from '../../channels/weixin/state';
 import { createDatabaseClient } from '../../lib/db/database';
 import { bootDevServer, launchBrowser, resolveBrowserExecutable, gotoAgent, captureScreenshot, type DevServer } from './helpers';
 import type { Browser } from 'playwright-core';
+import { runWeixinCapabilities } from './weixin-capabilities.e2e-helper';
 
 nextEnv.loadEnvConfig(process.cwd(), true, { info() {}, error() { throw new Error('Cannot load live environment'); } });
 process.env.LLM_MODE = 'live';
@@ -129,6 +130,9 @@ try {
     assert(await page.locator('[data-approval-request="true"]').count() === 0, 'Web still offers settled actions');
     await captureScreenshot(page, 'weixin-live-completed'); await page.close();
   });
+  if (process.env.WEIXIN_LIVE_EXTENDED === '1') {
+    report.capabilities = await runWeixinCapabilities({ db, bank, state, replies, receive, check });
+  }
   const requests = await db.modelRequest.findMany({ select: { id: true, status: true } });
   const events = await db.agentRunEvent.findMany({ where: { eventType: 'provider_response_headers' }, select: { payloadJson: true } });
   report.modelEvidence = { requests, actualHttp200: events.map(e => JSON.parse(e.payloadJson)).filter(e => e.payload?.status === 200).length };

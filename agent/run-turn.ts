@@ -5,6 +5,7 @@ import { AppError } from '@/lib/errors';
 import { newId } from '@/lib/ids';
 import { redactRequest } from '@/lib/sensitive';
 import { security } from '@/security';
+import { loadWorkflowContext } from './workflow-context';
 import { createBankingAgent } from './banking-agent';
 import { CONVERSATION_GENERATION_FAILED } from './conversational-response';
 import { collectConversationEvidence } from './conversation-evidence';
@@ -45,6 +46,7 @@ async function performTurn(req: ChatTurnRequest, deps: RunTurnDeps | undefined, 
   const relay: PlanRelay = {};
   const publishProgress = () => context.publish(readyPresentationEvents(buffer));
   const runtime = createBankingAgent({ sessionId: snapshot.sessionId, userId: snapshot.userId, snapshot, config,
+    workflowContext: await loadWorkflowContext(snapshot.userId, snapshot.sessionId),
     provider: deps?.provider, journal: context.journal,
     onTurnIntent: intent => {
       snapshot.intent = intent;

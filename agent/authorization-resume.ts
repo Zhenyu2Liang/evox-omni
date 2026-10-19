@@ -6,6 +6,7 @@ import { demoNow } from '@/lib/clock';
 import { getConfig } from '@/lib/config';
 import { toJson } from '@/lib/json';
 import { createBankingAgent, type BankingAgentRuntime } from './banking-agent';
+import { loadWorkflowContext } from './workflow-context';
 import { renderFinancialResponse } from './financial-response';
 import { withRealToolResult } from './message-normalize';
 import { saveSession, type SessionSnapshot } from './session';
@@ -72,6 +73,7 @@ export async function performAuthorizationResume(input: ResumeTurnInput, deps: R
   buffer.events.push({ type: 'session', sessionId: snapshot.sessionId, runId: context.journal.lease.runId });
   const relay: Relay = {};
   const runtime = createBankingAgent({ sessionId: snapshot.sessionId, userId: snapshot.userId, snapshot, config,
+    workflowContext: await loadWorkflowContext(snapshot.userId, snapshot.sessionId),
     provider: deps?.provider, journal: context.journal,
     ...(continuationText && original?.sourceModelRequestId && (original.originatingPurpose === 'advice' || original.originatingPurpose === 'query' || original.originatingPurpose === 'operation') ? { replyContext: {
       purpose: original.originatingPurpose, requestText: continuationText, sourceModelRequestId: original.sourceModelRequestId,

@@ -114,7 +114,7 @@ export const SubmitPlanParams = Type.Object({
     Type.Object({
       id: Type.String({ description: '节点唯一 id' }),
       name: Type.String({ description: '节点名称' }),
-      dependencies: Type.Array(Type.String(), { description: '依赖的节点 id 列表' }),
+      dependencies: Type.Array(Type.String(), { description: '必须成功的前置节点 id；“上一步成功后继续”仅用此字段，不增加金额条件' }),
       after: Type.Optional(Type.Array(Type.String(), { description: '仅等待结束的顺序依赖，不继承条件为 false 的分支跳过' })),
       kind: Type.String({ description: '节点类型：tool | condition | note' }),
       tool: Type.Optional(Type.String({ description: 'kind=tool 时调用的工具名' })),
@@ -122,8 +122,8 @@ export const SubmitPlanParams = Type.Object({
       condition: Type.Optional(Type.Object({
         path: Type.String({ description: '依赖节点输出路径，例如 n1.total（消费分析），n1.totalAvailable（余额查询）' }),
         op: Type.Union(['>', '>=', '<', '<=', '==', '!='].map(value => Type.Literal(value))),
-        value: Type.Union([Type.Number(), Type.String(), Type.Boolean()]),
-      }, { description: 'kind=condition 时必须使用 path/op/value，不使用 left/right/type' })),
+        value: Type.Union([Type.Number(), Type.String(), Type.Boolean()], { description: '金额/decimal 输出必须用十进制字符串（如 "0"、"1000.00"）；计数输出用 number，布尔输出用 boolean' }),
+      }, { description: '仅表达用户明确要求的业务条件；使用 path/op/value，不用条件节点测试步骤是否成功' })),
     }),
     { description: 'DAG 节点列表' },
   ),

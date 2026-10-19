@@ -21,6 +21,8 @@ There are no shell, file, SQL, arbitrary HTTP, or credential-change tools.
 | `plan-compiler.ts` | Validate declared scope, node structure, output references, and dependencies. |
 | Family modules | Export TypeBox schemas, factories, and model-free SDK runners. |
 
+Workflow parameter descriptions distinguish success dependencies from user-requested business conditions. Decimal/money condition thresholds use exact decimal strings, including zero; count thresholds use numbers. A zero spending result is still a successful query and must not create an invented positive-spend condition.
+
 `lib/contracts/tool-catalog.ts` is the source of capability names, effects, authorization defaults,
 agent availability, and replay policy. Use `AGENT_TOOL_NAMES` for model-visible capabilities and
 `TOOL_NAMES` for the complete catalog. Do not maintain a separate hard-coded capability count.

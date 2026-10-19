@@ -1,6 +1,11 @@
-import type { AgentStreamEvent, ChatTurnResponse } from '../../lib/contracts/agent';
-import type { PendingAction, PendingActionSummary } from '../../lib/contracts/security';
+import type { AgentStreamEvent, ChatTurnResponse, ToolEventView } from '../../lib/contracts/agent';
+import type { PendingActionSummary } from '../../lib/contracts/security';
 import { bankingBaseUrl } from './config';
+import type { TaskPlan } from '../../lib/contracts/task';
+import type { ScheduleInbox, ScheduleTickResult } from '../../lib/contracts/schedule';
+import { renderBusinessCard, renderPlan, type SurfacedAction } from './presentation';
+import { publicToolSummary } from '../../lib/tool-feedback';
+import { createTranslator } from '../../lib/i18n/shared';
 
 export interface ActionResult {
   actionId: string; ok: boolean; status: string; message?: string; requiresMfa?: boolean;
@@ -8,9 +13,16 @@ export interface ActionResult {
 }
 export interface BankingChannel {
   chat(message: string, requestId: string): Promise<ChatTurnResponse>;
-  actions(): Promise<PendingAction[]>;
-  settle(id: string, command: 'confirm' | 'verify' | 'cancel', code?: string): Promise<ActionResult>;
+  actions(): Promise<SurfacedAction[]>;
+  settle(id: string, command: 'confirm' | 'verify' | 'cancel' | 'recover', code?: string): Promise<ActionResult>;
+  plans(): Promise<TaskPlan[]>;
+  plan(id: string): Promise<TaskPlan>;
+  controlPlan(id: string, action: 'pause' | 'resume' | 'cancel' | 'retry' | 'rollback'): Promise<TaskPlan>;
+  schedules(): Promise<ScheduleInbox>;
+  tickSchedules(): Promise<ScheduleTickResult>;
 }
+
+export class BankingApiError extends Error {}
 
 /** 复用 Web 的身份、授权、熔断、回执和模型续接入口；通道没有 SDK 写入能力。 */
 export class BankingHttpClient implements BankingChannel {
@@ -22,6 +34,9 @@ export class BankingHttpClient implements BankingChannel {
       body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(180_000) });
     const result = await response.json() as { ok: boolean; data: T; error?: { code: string; message: string } };
     if (!response.ok || !result.ok) {
+      if (response.status < 500 && typeof result.error?.message === 'string' && /^[A-Z_]+$/.test(result.error.code)) {
+        throw new BankingApiError(`服务端提示（${result.error.code}）：${result.error.message.slice(0, 400)}\n请核对操作记录后处理。`);
+      }
       // 不回显请求、HTTP 原文或验证码；业务不明时不推断“资金未变”。
       throw new Error('银行服务暂未完成请求，请在网页核对操作记录后再处理。');
     }
@@ -31,10 +46,17 @@ export class BankingHttpClient implements BankingChannel {
   chat(message: string, requestId: string): Promise<ChatTurnResponse> {
     return this.request('/api/chat?stream=0', { message, requestId });
   }
-  actions(): Promise<PendingAction[]> { return this.request('/api/actions'); }
-  settle(id: string, command: 'confirm' | 'verify' | 'cancel', code?: string): Promise<ActionResult> {
+  actions(): Promise<SurfacedAction[]> { return this.request('/api/actions'); }
+  settle(id: string, command: 'confirm' | 'verify' | 'cancel' | 'recover', code?: string): Promise<ActionResult> {
     return this.request(`/api/actions/${encodeURIComponent(id)}/${command}`, command === 'verify' ? { code } : {});
   }
+  async plans(): Promise<TaskPlan[]> { return (await this.request<{ plans: TaskPlan[] }>('/api/tasks')).plans; }
+  plan(id: string): Promise<TaskPlan> { return this.request(`/api/tasks/${encodeURIComponent(id)}`); }
+  controlPlan(id: string, action: 'pause' | 'resume' | 'cancel' | 'retry' | 'rollback'): Promise<TaskPlan> {
+    return this.request(`/api/tasks/${encodeURIComponent(id)}`, { action });
+  }
+  schedules(): Promise<ScheduleInbox> { return this.request('/api/schedules'); }
+  tickSchedules(): Promise<ScheduleTickResult> { return this.request('/api/schedules/tick', {}); }
 }
 
 export function renderAction(id: string, summary: PendingActionSummary): string {
@@ -45,22 +67,58 @@ export function renderAction(id: string, summary: PendingActionSummary): string 
 }
 
 /** 只发送服务端已完成核验的 message_end，绝不转发原始流或工具参数。 */
-export function renderEvents(events: readonly AgentStreamEvent[]): { text: string; actionIds: string[] } {
+export function renderEvents(events: readonly AgentStreamEvent[]): { text: string; actionIds: string[]; planIds: string[] } {
   const messages = new Map<string, string>();
   const gates = new Map<string, string>();
   const notices: string[] = [];
+  const cards = new Map<string, string>();
+  const plans = new Map<string, TaskPlan>();
+  const settled = new Set<string>();
+  const feedback = new Map<string, string>();
+  const t = createTranslator('zh-CN');
+  const addFeedback = (event: ToolEventView) => {
+    const key = `${event.messageId || ''}:${event.toolCallId}`;
+    if (event.status === 'error' || event.status === 'needs_reconciliation' || (event.status === 'blocked' && !event.actionId)) {
+      const message = publicToolSummary(event, t);
+      if (message) feedback.set(key, message);
+    } else feedback.delete(key);
+  };
+  const addCard = (card: import('../../lib/contracts/agent').ChatCard) => {
+    if (card.type === 'confirmation' && card.action.actionId) {
+      gates.set(card.action.actionId, renderAction(card.action.actionId, card.action)); return;
+    }
+    if (card.type === 'mfa') {
+      if (card.action) gates.set(card.actionId, renderAction(card.actionId, card.action)); return;
+    }
+    if (card.type === 'plan') { addPlan(card.plan); return; }
+    // 查询类保留最新投影；回执按公开内容去重，避免 card + message_end 双发。
+    const key = ['receipt', 'transfer', 'scheduled', 'contacts'].includes(card.type) ? JSON.stringify(card) : card.type;
+    cards.set(key, renderBusinessCard(card));
+  };
+  const addPlan = (plan: TaskPlan) => {
+    const previous = plans.get(plan.id);
+    if (!previous || (plan.generation ?? 0) >= (previous.generation ?? 0)) plans.set(plan.id, plan);
+  };
   for (const event of events) {
     if (event.type === 'message_end' && event.message.role === 'assistant' && event.message.content.trim()) {
       messages.set(event.message.id, event.message.content);
     }
+    if (event.type === 'message_end') for (const card of event.message.cards || []) addCard(card);
+    if (event.type === 'message_end') for (const tool of event.message.toolEvents || []) addFeedback(tool);
+    if (event.type === 'tool_end') addFeedback(event.toolEvent);
     if (event.type === 'confirmation_required') gates.set(event.actionId, renderAction(event.actionId, event.action));
     if (event.type === 'mfa_required' && event.action) gates.set(event.actionId, renderAction(event.actionId, event.action));
-    if (event.type === 'card' && event.card.type === 'confirmation' && event.card.action.actionId) {
-      gates.set(event.card.action.actionId, renderAction(event.card.action.actionId, event.card.action));
+    if (event.type === 'card') addCard(event.card);
+    if (event.type === 'plan_update') addPlan(event.plan);
+    if (event.type === 'tool_end' && event.toolEvent.status === 'success' &&
+        ['transfer_money', 'subscribe_investment', 'redeem_investment', 'consume_virtual_card'].includes(event.toolEvent.toolName)) {
+      // 先查询再扣/入账时，旧资产快照不再冒充写操作后的当前余额。
+      cards.delete('balance'); cards.delete('dashboard');
     }
-    if (event.type === 'action_settled') gates.delete(event.actionId);
+    if (event.type === 'action_settled') settled.add(event.actionId);
     if (event.type === 'error') notices.push(event.message);
   }
-  return { text: [...messages.values(), ...gates.values(), ...notices].join('\n\n') ||
-    '本次请求已处理，请在网页查看业务详情；没有确认或验证的业务不会执行。', actionIds: [...gates.keys()] };
+  for (const id of settled) gates.delete(id);
+  return { text: [...messages.values(), ...cards.values(), ...[...plans.values()].map(renderPlan), ...gates.values(), ...new Set(feedback.values()), ...notices].filter(Boolean).join('\n\n') ||
+    '本次请求已处理，请在网页查看业务详情；没有确认或验证的业务不会执行。', actionIds: [...gates.keys()], planIds: [...plans.keys()] };
 }

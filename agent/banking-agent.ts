@@ -52,6 +52,7 @@ import { CONVERSATION_TOOL_REJECTION } from '@/lib/tool-feedback';
 import { createContextCompactor, type ContextCompactionState } from './context-compaction';
 import { estimateContextTokens } from './context-compaction/projection';
 import type { ReplyContext, ReplyRepairState, WriteContinuationState } from './reply-repair';
+import type { WorkflowStatusEvidence } from './workflow-context';
 
 /**
  * The security gateway's runtime surface.
@@ -110,6 +111,7 @@ export interface BankingAgentOptions {
   replyContext?: ReplyContext;
   /** Durable model replay retains its recorded system context; new turns use current rules. */
   preserveSystemMessages?: boolean;
+  workflowContext?: readonly WorkflowStatusEvidence[];
 }
 export interface BankingAgentRuntime {
   agent: Agent;
@@ -239,6 +241,7 @@ export function createBankingAgent(options: BankingAgentOptions): BankingAgentRu
     userId,
     toolNames: registry.list().map((tool) => tool.name as ToolName),
     turnIntentTool: true,
+    workflowContext: options.workflowContext,
   });
 
   /**

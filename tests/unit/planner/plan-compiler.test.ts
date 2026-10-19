@@ -13,6 +13,16 @@ const conditionPlan = (): TaskNodeSpec[] => [
 ];
 
 describe('structured plan compilation', () => {
+  it('uses success dependencies without inventing a positive-spending threshold', () => {
+    const nodes: TaskNodeSpec[] = [
+      { id: 'read', name: 'Read spending', kind: 'tool', tool: 'analyze_spending', args: { month: '2026-09' }, dependencies: [] },
+      { id: 'limit', name: 'Set limit', kind: 'tool', tool: 'set_card_limit', args: { cardId: 'card_debit', category: '购物', amount: '900.50' }, dependencies: ['read'] },
+      { id: 'budget', name: 'Register budget', kind: 'tool', tool: 'reserve_budget', args: { name: 'Budget', amount: '219.87' }, dependencies: ['limit'] },
+    ];
+    const compiled = compileRequestedPlan(nodes, tools, '每一步成功后再做下一步', intent(['set_card_limit', 'reserve_budget']));
+    expect(compiled).toEqual(nodes);
+    expect(compiled.every(node => node.kind !== 'condition')).toBe(true);
+  });
   it('preserves explicit month, condition and dependencies without reinterpreting the raw request', () => {
     const original = conditionPlan();
     const compiled = compileRequestedPlan(original, tools, 'Different user wording and numbers 2000 2026-09.', intent(['set_card_limit']));

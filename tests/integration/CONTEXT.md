@@ -19,6 +19,7 @@
 | `refactor-financial-commands.test.ts`、`confirmed-write-authority.test.ts`、`replace-card-replay.test.ts` | 通用写入回执重放：原样返回、不进入写栅栏、不产生新流水（含 `replace_card` 补卡原操作重放） |
 | `write-idempotency.test.ts`、`execution-audit.test.ts` | 网关/确认路径去重与强制审计幂等 |
 | `workflow-invocations.test.ts` | 持久化子调用与任务图恢复 |
+| `workflow-context.test.ts` | 新对话读取当前用户与会话的任务状态；取消、暂停覆盖历史等待快照，且不暴露参数或创建授权 |
 | `process-restart.test.ts`、`standalone-workflow-restart.test.ts` | 真实进程中断与恢复 |
 | `model-checkpoint-boundaries.test.ts` | 模型检查点、租约与提交条件 |
 | `write-continuation.test.ts` | 声明写操作未发出受控调用时的单次续办、面板真伪与持久化恢复 |
