@@ -36,6 +36,12 @@ export const banking = {
 /** Public DTOs / view models (see `./types`). */
 export * from './types';
 
+/**
+ * Exact, bounded proportional redemption valuation (see `./valuation`). Re-exported so the Security
+ * Gateway mints the SAME `expectedRedemptionAmount` the SDK settles.
+ */
+export { redemptionPortionValuation, remainingPortionMarketValue, settledRedemptionAmount } from './valuation';
+
 export type { ExecutionFenceCheck } from './fence';
 export { withBankingExecution } from './execution-context';
 export type { BankingExecutionContext } from './execution-context';

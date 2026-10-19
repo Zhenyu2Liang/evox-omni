@@ -208,6 +208,20 @@ export interface CardView {
   creditLimit?: MoneyAmount;
   availableLimit?: MoneyAmount;
   monthlyLimit?: MoneyAmount;
+  /** Id of the replacement card issued for this (lost) card; historical reference only. */
+  replacedByCardId?: string;
+  /** Settlement CHECKING account id bound to this card (virtual cards); absent when unbound. */
+  linkedAccountId?: string;
+  /** Masked settlement-account number of the bound account, e.g. `****8821`; absent when unbound. */
+  linkedAccountNumber?: string;
+  /** Bound account's available balance (CNY); absent when the card is unbound. */
+  accountAvailableBalance?: MoneyAmount;
+  /**
+   * Amount currently payable by this card (CNY): the bound account balance, capped by the remaining
+   * monthly limit of the card FAMILY's business month — `demoNow()` for a read, the enforced instant
+   * inside `consumeCard`. A `null` monthly limit is unlimited (governed by the account balance).
+   */
+  payableAmount?: MoneyAmount;
   limits: CardLimitView[];
 }
 
@@ -229,12 +243,93 @@ export interface ApplyVirtualCardInput {
   /** Optional monthly limit configuration in CNY; never inferred from a free-text label. */
   monthlyLimit?: MoneyInput;
   /**
+   * Optional settlement CHECKING account id to bind. When supplied the server validates ownership
+   * and account type; when omitted the user's default CHECKING account is bound.
+   */
+  linkedAccountId?: string;
+  /**
    * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT issue a
    * second card: the card id is derived deterministically from (userId, key), and the existing
    * virtual card is replayed (same `id`) instead of creating another one. Absent → unchanged
    * behavior (every call issues a NEW card with a freshly generated masked number).
    */
   idempotencyKey?: string;
+}
+
+/* ------------------------------------------------------------- card spend */
+
+/**
+ * Public parameter set of `consumeCard`. It carries NO consumption instant: the booking time and the
+ * UTC+08:00 billing month it is attributed to are SERVER-owned. A deterministic test seam exists
+ * ONLY through the separate `ConsumeCardOptions` argument, never through this object.
+ */
+export interface ConsumeCardInput {
+  /** Trusted caller identity, injected by the server runner. */
+  userId: string;
+  cardId: string;
+  /** Positive CNY amount to spend, as decimal text. */
+  amount: MoneyInput;
+  /** One of the supported spending categories; defaults to `其他`. */
+  category?: string;
+  /** Merchant label shown in the ledger; defaults to a local-simulation label. */
+  merchant?: string;
+  /**
+   * Optional execution identity. When supplied, a repeated call with the SAME key replays the
+   * persisted consumption instead of charging again (the SDK persists the original result).
+   */
+  executionKey?: string;
+}
+
+/**
+ * INTERNAL, TEST-ONLY second argument of `consumeCard` — deliberately NOT part of
+ * `ConsumeCardInput`.
+ *
+ * The booking instant of a card consumption decides BOTH the ledger time AND the UTC+08:00 billing
+ * month the monthly limit is counted against. On the public parameter set it would let a caller
+ * back-date a spend out of the current month and spend the same limit twice, so it lives in a
+ * separate argument that no HTTP body, tool-argument object or model output can reach.
+ */
+export interface ConsumeCardOptions {
+  /**
+   * Test-only clock seam: the business instant (epoch ms, or a `Date`) this ONE consumption is
+   * booked at, which also selects the billing month it is attributed to AND the month the returned
+   * card projection reports. Omitted — the production path — means the project business clock
+   * (`demoNow()`). Never persisted, never read back.
+   */
+  now?: number | Date;
+}
+
+/** One successful local card consumption row (see `CardConsumption`). */
+export interface CardConsumptionView {
+  id: string;
+  cardId: string;
+  accountId: string;
+  /** Positive CNY magnitude of the spend. */
+  amount: MoneyAmount;
+  currency: string;
+  category: string;
+  merchant: string;
+  /** Epoch ms. */
+  occurredAt: number;
+  /** Replay identity, when one was supplied. */
+  executionKey?: string;
+  /** Epoch ms. */
+  createdAt: number;
+}
+
+export interface ConsumeCardResult {
+  consumption: CardConsumptionView;
+  /** Card view after the spend, in the same business month the limit was enforced (payable updated). */
+  card: CardView;
+  /** Bound account's available balance (CNY) after the debit. */
+  accountAvailableBalance: MoneyAmount;
+}
+
+export interface CardConsumptionQuery {
+  /** Restrict to a single card; omit for all of the user's cards. */
+  cardId?: string;
+  /** Max rows returned, newest first; defaults to 20 and is capped at 200. */
+  limit?: number;
 }
 
 /* -------------------------------------------------------------- subscription */
@@ -298,6 +393,28 @@ export interface HoldingView {
   /** Epoch ms. */
   boughtAt: number;
   status: HoldingStatus;
+  /** Epoch ms of the most recent purchase in this holding; absent when no purchase history is recorded. */
+  lastPurchaseAt?: number;
+  /** Purchases recorded on this holding, oldest → newest (absent when no history is recorded). */
+  purchases?: HoldingPurchase[];
+}
+
+/** One recorded subscription that added principal to a holding (oldest → newest in `HoldingView.purchases`). */
+export interface HoldingPurchase {
+  /** CNY amount added by this purchase. */
+  amount: MoneyAmount;
+  /** Epoch ms of this purchase. */
+  at: number;
+  /** Principal of the holding after this purchase was aggregated in (CNY). */
+  totalPrincipal: MoneyAmount;
+  /** Unrounded estimated market value after this purchase (CNY). */
+  marketValue: DecimalAmount;
+  /** Funding-account balance after this purchase (CNY). */
+  newBalance: MoneyAmount;
+  /** Server-resolved funding account. */
+  sourceAccountId: string;
+  /** Execution identity of this purchase, when the caller supplied one. */
+  executionKey?: string;
 }
 
 export interface SubscribeInvestmentInput {
@@ -308,8 +425,10 @@ export interface SubscribeInvestmentInput {
   /**
    * Optional idempotency key. When supplied, a repeated call with the SAME key does NOT
    * double-debit: the full original result, including the original account balance, is replayed
-   * from the holding's transactionally persisted `subscribeResult`. The key is stored on
-   * `InvestmentHolding.idempotencyKey`; the planner passes `nodeExecutionKey(taskId, nodeId)`.
+   * from the transactionally persisted evidence (the holding's `subscribeResult` for the creating
+   * purchase, or the matching `purchaseHistory` record for one aggregated into an existing holding).
+   * The creating purchase stores the key on `InvestmentHolding.idempotencyKey`; an aggregation
+   * stores it in the appended `purchaseHistory` record. The planner passes `nodeExecutionKey(taskId, nodeId)`.
    * Absent → unchanged behavior.
    */
   idempotencyKey?: string;
@@ -318,14 +437,24 @@ export interface SubscribeInvestmentInput {
 export interface RedeemInvestmentInput {
   userId: string;
   holdingId: string;
-  /** Server-snapshotted full redemption amount shown before MFA; changes require a new decision. */
+  /**
+   * Optional PRINCIPAL amount to redeem (CNY decimal string), interpreted as a portion of the
+   * holding's booked principal. Absent, or equal to the held principal, redeems the whole holding
+   * (status `HOLDING` → `REDEEMED`, one final credit). A smaller positive amount redeems that
+   * portion: the settled value of the portion is credited, the principal decreases and the holding
+   * stays `HOLDING`. A larger, non-positive or malformed amount throws `VALIDATION`.
+   */
+  redeemAmount?: MoneyInput;
+  /** Server-snapshotted redemption amount shown before MFA; changes require a new decision. */
   expectedRedemptionAmount?: MoneyInput;
   /**
    * Optional idempotency key — the redemption's EXECUTION IDENTITY. A repeat with the SAME
    * key on an already-REDEEMED holding REPLAYS the original redemption and original balance;
-   * a DISTINCT (or absent) key on an already-REDEEMED holding always throws
-   * `CONFLICT` — never a false success. The identity and original result are persisted on the
-   * holding (`redeemExecutionKey` / `redeemResult`); the planner passes `nodeExecutionKey(taskId, nodeId)`.
+   * a repeat of a PARTIAL redemption replays the stored partial outcome from `redemptionHistory`
+   * without crediting again. A DISTINCT (or absent) key on an already-REDEEMED holding always
+   * throws `CONFLICT` — never a false success. The identity and original result are persisted on
+   * the holding (`redeemExecutionKey` / `redeemResult` / `redemptionHistory`); the planner passes
+   * `nodeExecutionKey(taskId, nodeId)`.
    */
   idempotencyKey?: string;
 }
@@ -345,6 +474,20 @@ export interface InvestResult {
   redemptionValuation?: DecimalAmount;
   /** Rounding rule applied once when a redemption is settled. */
   settlementRounding?: 'HALF_UP';
+  /** Present on a PARTIAL redemption: the holding stays `HOLDING` with a smaller principal. */
+  partial?: boolean;
+  /** Principal settled by this redemption (CNY); the redeemed portion, or the whole principal. */
+  redeemedPrincipal?: MoneyAmount;
+  /** Principal left in the holding after a PARTIAL redemption (CNY). */
+  remainingPrincipal?: MoneyAmount;
+  /** Unrounded estimated market value left after a PARTIAL redemption (CNY). */
+  remainingMarketValue?: DecimalAmount;
+  /** `remainingMarketValue - remainingPrincipal` after a PARTIAL redemption. */
+  remainingProfit?: DecimalAmount;
+  /** Present on a subscription: `true` when the amount was aggregated into an existing `HOLDING`. */
+  addedToExisting?: boolean;
+  /** Epoch ms of the purchase recorded by this subscription. */
+  lastPurchaseAt?: number;
 }
 
 /* -------------------------------------------------------------------- budget */

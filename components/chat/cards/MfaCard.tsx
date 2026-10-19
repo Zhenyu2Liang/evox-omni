@@ -93,7 +93,7 @@ export function MfaCard(p: MfaCardProps) {
 
         {typeof attempts === 'number' && attempts > 0 ? (
           <p className="text-xs text-banking-warn" role="status">
-            {typeof maxAttempts === 'number'
+            {typeof maxAttempts === 'number' && attempts >= maxAttempts
               ? t('cards.mfa.failedAttemptsLimit', { attempts, maxAttempts })
               : t('cards.mfa.failedAttempts', { attempts })}
           </p>

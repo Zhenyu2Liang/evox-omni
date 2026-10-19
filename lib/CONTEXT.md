@@ -20,6 +20,19 @@
 | `prisma-cli-env.ts` | Prisma 命令环境与可执行文件解析 |
 | `db/` | 客户端、事务上下文与仓储 |
 
+## 运行配置（`config.ts`）
+
+`getConfig()` 在每次调用时读取 `process.env`（不缓存、不在模块加载时求值），因此测试可以随时切换 `LLM_MODE`。
+`AppConfig.llmMode` 的类型是字面量联合 `'live' | 'mock'`。
+取值表达式为 `process.env.LLM_MODE === 'live' ? 'live' : 'mock'`：未设置或任何其他值（含大小写变体）都得到 `'mock'`，不存在 env 默认值兜底。
+`llmProvider` 回退默认 `'openai'`，`llmModel` 回退默认 `'gpt-4o-mini'`（`LLM_PROVIDER` / `LLM_MODEL`，仅 live 模式使用）。
+`demoUserId` 回退默认 `'user_liming'`（`DEMO_USER_ID`）。
+`contextCompaction` 四项来自 `AGENT_COMPACTION_*`；`tokenSetting` 只接受 `[128, 1000000]` 内的安全整数，否则为 `undefined`。
+`config.ts` 不读取 `LLM_REQUEST_TIMEOUT_MS`，也不含 provider base URL 或 API key 字段（凭据由运行环境提供）。
+`GET /api/health` 的 `llmMode` 直接取自 `getConfig().llmMode`，永不写死。
+测试环境三处都强制 `LLM_MODE=mock`：`vitest.config.ts` 的 `test.env`、`agent/vitest.agent.config.ts` 的 `test.env`、`tests/setup.ts`；`tests/e2e/acceptance.e2e.ts` 在入口设 `mock`/`faux`，`tests/e2e/live-acceptance.e2e.ts` 设 `live` 与 `deepseek`。
+`tests/unit` 下目前没有专门覆盖 `getConfig()` 的单元测试文件。
+
 ## 金融与时间约定
 
 已入账金额使用 `BigInt` 分，字段以 `Minor` 结尾。
@@ -27,11 +40,20 @@ JSON 金额使用十进制字符串。
 `moneyToCents` 校验小数位与有符号 64 位范围。
 比例、数量与未结算估值使用 `decimal.ts`。
 `moneyToChartNumber` 只用于图形坐标。
+`formatDecimalCNY` 在展示边界把金额按 HALF_UP 舍入到两位小数，并保留符号与千分位。
+命令金额字段（`contracts/command.ts` 的 `MONETARY_FIELDS`）在入参归一化时转为十进制字符串：`amount`、`creditLimit`、`monthlyLimit`、`expectedRedemptionAmount`、`redeemAmount`。
 
 `date.ts` 按北京时间构造和格式化日期。
 `demoNow()` 提供固定演示业务时间。
 安全冷却、执行租约和定时任务调度使用真实时间。
 日期范围通常为半开区间；以调用接口为准。
+
+## 投资输出契约与标签
+
+`contracts/tool-output.ts` 只声明可被数据引用寻址的字段路径，不强制字段存在，新增字段不破坏既有输出。
+`subscribe_investment`、`redeem_investment` 结果契约含可选部分赎回字段 `partial`、`redeemedPrincipal`、`remainingPrincipal`、`remainingMarketValue`、`remainingProfit` 与加购字段 `addedToExisting`、`lastPurchaseAt`。
+`get_investment_holdings` 条目含可选 `lastPurchaseAt` 与 `purchases`。
+对应界面标签为 `i18n/messages/business.*.json` 的 `business.investments.lastPurchase`、`purchases`、`purchaseCount`、`addedToExisting`。
 
 ## 修改约束
 

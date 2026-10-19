@@ -10,6 +10,13 @@ The wrapper forwards every event until the provider terminal event. A source tha
 without a done/error event becomes an error with its partial response retained, so result()
 cannot hang after EOF. A provider stop reason does not prove that its prose is complete.
 
+This node owns NO prompt template. The model's system prompt is built by `../system-prompt.ts`
+(`buildSystemPrompt`, line 24) and handed to Pi through `banking-agent.ts`
+(`initialState.systemPrompt`); the only model-facing wording this node produces is the tool-call lead
+text in `mock/replies.ts` and the post-result narration in `mock/narration.ts`. The confirmation /
+approval / MFA / "request panel above the composer" instructions sent to the model live in
+`../system-prompt.ts` near line 37, not here.
+
 For openai-completions, completion-transport.ts wraps the official Pi fetch extension point. A
 successful SSE body requires the [DONE] transport terminator; finish_reason=stop followed by EOF
 remains a connection error. A complete tool_calls argument payload without the terminator is also
@@ -34,8 +41,19 @@ ModelRuntime pair from resolveProvider(), not a model without a stream function.
 
 ## Public API
 
-- types.ts: ModelRuntime = { model: Model<any>; streamFn: StreamFn }.
-- index.ts: resolveProvider(cfg?) creates the mode-specific runtime at call time.
+- types.ts is the ENTIRE type surface of this node: only `ModelRuntime` (`model`, `streamFn`).
+  Mock, live and test-injected streams share that one shape; there is no `ProviderConfig`,
+  `ModelDescriptor` or turn-method interface here.
+- Selection gates: `resolveProvider` branches on `resolved.llmMode === 'mock'` (`index.ts:16`),
+  `providerId` returns the literal `'mock'` for mock mode and otherwise
+  `` `${llmProvider}:${llmModel}` `` (`index.ts:30-34`), and `createMockRuntime(_cfg)` ignores its
+  config argument. `AppConfig.llmMode` is `'live' | 'mock'`; `getConfig()` yields `'mock'` unless
+  `process.env.LLM_MODE === 'live'` (`lib/config.ts:26`).
+- Injection seam: `const { model, streamFn } = options.provider ?? resolveProvider(config);`
+  (`agent/banking-agent.ts:217`), fed from `RunTurnDeps.provider?: ModelRuntime`
+  (`agent/turns/contracts.ts:12`) via `BankingAgentOptions.provider` (`agent/banking-agent.ts:106`).
+  An injected runtime bypasses `resolveProvider`, so `LLM_MODE` no longer selects the model.
+- index.ts: resolveProvider(cfg?) is the entry facade for runtime selection.
   resolveModel(cfg?) remains a model-only inspection facade; Agent constructors must
   use resolveProvider(). providerId(cfg?) returns a key-free log identifier.
 - provider-mock.ts: createMockRuntime(cfg) returns a local faux model and stream;
@@ -129,6 +147,19 @@ operations and optional workflow/example flags; it cannot bypass the production 
 Natural-language conversation, advice, guidance and request DSL parsers live only in mock/.
 Before resource writes, resource-resolution.ts queries real card/product/holding/subscription
 records and binds actual IDs; unknown or ambiguous selections cannot substitute another resource.
+The mock has no card-consumption/spend/payment intent: its only card tool calls are get_cards (read), set_card_limit, freeze_card and apply_virtual_card. report_lost_card, replace_card and unfreeze_card keep reply labels, REQUEST_COMMANDS entries and resource binding but no classifier emits them. See `./mock/CONTEXT.md`.
+
+## Card-management guidance (the "manual-only" reply)
+
+`inferConversationGuidance` (`mock/conversation-guidance.ts:33-35`) returns `card_management_required` when an issuance/removal verb (申请/添加/新增/删除/删掉/注销/开通/创建/办理, or create|add|issue|remove|delete|close|cancel|apply for) is paired with a card noun whose modifiers may be 银行/信用/借记/储蓄/实体.
+`mock/classifier.ts:24-26` short-circuits on that code and returns the closed template `agent/messages/conversation.zh-CN.json:7` without proposing a tool call — page-only for 新建全新的实体借记卡或信用卡 and 注销卡片, while 已有卡片遗失后可在助手中办理补办 stays agent-available with confirmation and verification; `mock/turn-declaration.ts:32-33` then declares the turn purpose `conversation`.
+虚拟 is deliberately outside the modifier list (`mock/conversation-guidance.ts:27-28` comment), so virtual-card application stays agent-available (`mock/card-intents.ts:57-60`).
+挂失/补办/lost/replace are NOT in that verb list: 挂失信用卡 falls through to `get_cards` (`mock/classifier.ts:76`), 补办一张新卡 is treated as conversation (补办 is absent from `WRITE_VERB`, `mock/conversation-policy.ts:3`), and a multi-step sequence containing either aborts with `missingDetails` (`mock/plan-intents.ts:104-106`). Because 办理 is a generic verb, 办理信用卡挂失 does match and yields the card-management reply.
+`mock/conversation-guidance.ts:29-35` (`cardReissue`) excludes a reissue request from that branch entirely: a card word plus 补办/补卡/补发/补领, or replace/reissue/replacement card, never yields `card_management_required`. The reply then depends on the rest of the wording — 请为刚挂失的尾号6688信用卡补办新卡。 passes the conversational check (挂失 is a `WRITE_VERB`, `mock/conversation-policy.ts:3`) and reads the owned cards through `get_cards` (`mock/classifier.ts:76`), while 办理一张信用卡补办 is answered from the plain conversation branch (`mock/classifier.ts:46`); neither is the page-only template, because 补办 of an already-lost card is an agent capability.
+`mock/card-intents.ts:53-55` repeats the same code inside `classifyCardAction`; the full-text check in `classify` always precedes it, so only direct test callers reach that branch.
+The same envelope is accepted from a live model: `parseBankingGuidance` accepts `card_management_required` and `capabilities` (`../banking-guidance.ts:36`) and the server renders its own template (`../turns/buffer.ts:29-33`).
+This node adds no mitigation of its own: `provider-live.ts:206-223` returns the model plus `models.streamSimple` wrapped only by `withLiveRequestLimits` (deadline and one retry, `request-options.ts:7-45`), so no extra system instruction, temperature, capability preamble or tool filtering is sent and no card tool is dropped from the live declaration.
+`capabilities` is emitted at `mock/classifier.ts:55` only for non-conversational text; a plain 能做什么/有哪些功能 question is answered with `help` (`mock/classifier.ts:44-45`).
 
 - respond(context) is pure: no database, banking SDK, filesystem, network,
   Date.now() or Math.random() may affect reply content. Tool-call ids are explicit.

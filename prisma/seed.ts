@@ -60,6 +60,7 @@ const ACCT_CHECKING = 'acct_checking';
 const ACCT_SAVINGS = 'acct_savings';
 const CARD_CREDIT = 'card_credit';
 const CARD_DEBIT = 'card_debit';
+const CARD_VIRTUAL = 'card_virtual';
 
 // ---------------------------------------------------------------------------
 // Money fixture boundaries accept only exact integer cents; all arithmetic uses BigInt.
@@ -306,6 +307,18 @@ const CARDS = [
     creditLimitMinor: null,
     availableLimitMinor: null,
     monthlyLimitMinor: null,
+  },
+  {
+    id: CARD_VIRTUAL,
+    userId: USER_ID,
+    type: 'VIRTUAL',
+    network: 'UnionPay',
+    numberMasked: '****7788',
+    status: 'ACTIVE',
+    creditLimitMinor: null,
+    availableLimitMinor: null,
+    monthlyLimitMinor: 500_000n,
+    linkedAccountId: ACCT_CHECKING,
   },
 ];
 

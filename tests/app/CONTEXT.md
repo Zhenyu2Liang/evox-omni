@@ -29,9 +29,32 @@ HTTP 200 不等于业务成功。
 也覆盖业务记录、联系人、卡片、安全与开发者入口。
 开发者偏好与金融授权分别断言。
 
+## 卡片虚拟卡消费
+
+`card-consume-http.test.ts` 覆盖虚拟卡消费入口：
+`POST /api/cards/[id]/consume`（成功 200 与错误码→HTTP 状态映射）与
+`GET /api/cards/[id]/consumptions`（服务端用户范围内的消费记录，含 `?limit=` 校验）。
+
+消费入账时间由服务端决定：请求体没有时间参数，命中 `occurredAt` 键即返回 `400 VALIDATION`
+（伪造值表格、余额/流水/消费行前后一致、伪造时间不消耗 `executionKey`、月限额不可回溯绕过）。
+入账瞬间固定为 `demoNow()`，`CardConsumption.createdAt` 仅秒级精度，
+故排序与 `?limit=` 用例用 `seedConsumption` 直接写入不同 `occurredAt`；
+真实 POST→GET 链路另有用例覆盖。
+
+## 解锁入口
+
 解锁入口必须区分：
 - `/api/security/reset` 使用验证码或冷却策略。
 - `/api/developer/security/reset` 使用开发者模式重置策略。
 
 执行命令：`pnpm exec vitest run tests/app`。
+
+## 覆盖与缺口
+
+面板、`confirmation_required`、`mfa_required` 断言只来自真实工具调用被网关拦截并持久化 `PendingAction`。
+`nl-entry-http.test.ts` 是唯一读取助手散文文本的用例（`assistantText`），仅覆盖“缺参数→澄清”。
+没有任何用例断言“散文声称需确认/等待确认，但未发出工具调用”的回合。
+关键词 `panel`、`prose`、`hallucinat` 在本目录无匹配。
+`waiting` 多指 `waiting_confirmation` 状态；`claim` 指 DB 执行 claim。
+
 数据库隔离与顺序执行见 [../CONTEXT.md](../CONTEXT.md)。

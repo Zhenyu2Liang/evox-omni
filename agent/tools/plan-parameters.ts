@@ -6,7 +6,8 @@ import { moneyToCents } from '@/lib/money';
 import { GetBalanceParams } from './account';
 import { AnalyzeSpendingParams } from './analysis';
 import { ReserveBudgetParams } from './budget';
-import { GetCardsParams, SetCardLimitParams, FreezeCardParams, UnfreezeCardParams, ReportLostCardParams } from './card';
+import { GetCardsParams, SetCardLimitParams, FreezeCardParams, UnfreezeCardParams, ReportLostCardParams,
+  ApplyVirtualCardParams, ConsumeVirtualCardParams, ReplaceCardParams, rejectClientSuppliedTime } from './card';
 import { SearchContactParams } from './contact';
 import { ConversationHistoryParams } from './conversation-history';
 import { GetDashboardSummaryParams } from './dashboard';
@@ -22,6 +23,7 @@ const parameters = {
   get_balance: GetBalanceParams, analyze_spending: AnalyzeSpendingParams, reserve_budget: ReserveBudgetParams,
   get_cards: GetCardsParams, set_card_limit: SetCardLimitParams, freeze_card: FreezeCardParams,
   unfreeze_card: UnfreezeCardParams, report_lost_card: ReportLostCardParams, search_contact: SearchContactParams,
+  apply_virtual_card: ApplyVirtualCardParams, consume_virtual_card: ConsumeVirtualCardParams, replace_card: ReplaceCardParams,
   search_conversation_history: ConversationHistoryParams, get_dashboard_summary: GetDashboardSummaryParams,
   list_investments: ListInvestmentsParams, compare_investments: CompareInvestmentsParams,
   get_investment_holdings: GetInvestmentHoldingsParams, subscribe_investment: SubscribeInvestmentParams,
@@ -41,6 +43,8 @@ export function validatePlanParameters(node: TaskNodeSpec): void {
 /** Validate original model parameters before either direct or planned banking effects. */
 export function validateBankingParameters(name: string, args: Record<string, unknown>, callId: string): void {
   if (!Object.hasOwn(parameters, name)) throw new AppError('VALIDATION', 'The banking capability has no parameter schema.');
+  // 消费入账时间由服务端业务时钟决定：卡消费的时间字段在通用的未知参数校验之前按这一理由拒绝。
+  if (name === 'consume_virtual_card') rejectClientSuppliedTime(args, { callId });
   validateSchemaParameters(name, args, callId, parameters[name as keyof typeof parameters]);
   if (args.amount !== undefined) {
     if (typeof args.amount !== 'string') throw new AppError('VALIDATION', 'Monetary amounts must be exact decimal strings.');

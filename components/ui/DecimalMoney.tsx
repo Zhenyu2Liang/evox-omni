@@ -6,7 +6,11 @@ export interface DecimalMoneyProps {
   className?: string;
 }
 
-/** Render an unrounded valuation without applying booked-money precision rules. */
+/**
+ * Render the stored valuation as grouped CNY text for display only.
+ * `formatDecimalCNY` rounds HALF_UP to exactly two fraction digits, keeping the sign and
+ * thousands separators; the underlying valuation keeps its full precision.
+ */
 export function DecimalMoney({ amount, signed = false, className }: DecimalMoneyProps) {
   const text = formatDecimalCNY(amount);
   const showPlus = signed && compareDecimal(amount, '0') > 0;

@@ -9,8 +9,15 @@
  *    → `AppError('VALIDATION')`;
  *  - a `LOST` card can neither be frozen nor unfrozen, and an already-`LOST` card cannot be
  *    reported lost again → `AppError('CONFLICT')`;
+ *  - only a currently-`LOST` card may be replaced, and replacement is idempotent: a card that
+ *    already points at a replacement returns that card instead of minting a second one
+ *    → otherwise `AppError('CONFLICT')`;
  *  - freezing an already-frozen (or unfreezing an already-active) card is idempotent: the current
  *    status is returned without a write.
+ *
+ * `freezeCard`/`unfreezeCard` are reversible (temporary lock), `reportLostCard` is terminal (the
+ * card stays `LOST` and can never be revived), and `replaceCard` links the lost card to a NEW card
+ * via `Card.replacedByCardId` (a historical reference, not a relation).
  *
  * `setCardLimit` replaces a card+category limit as a single all-or-nothing unit
  * (`runInTransaction`): the delete and the create commit together, so the card never ends up with
@@ -19,21 +26,55 @@
  * `applyVirtualCard` accepts an OPTIONAL `idempotencyKey`: when supplied, the card id is derived
  * deterministically from `(userId, key)` and a repeat replays the existing card instead of issuing a
  * second one (a plan node can be replayed after a resume/retry — see `./idempotent.ts`).
+ *
+ * Virtual cards are ACCOUNT-BOUND: `applyVirtualCard`/`addDemoCard` bind a settlement CHECKING
+ * account (`Card.linkedAccountId`), and `consumeCard` is the single SDK capability that spends from
+ * a card — it debits that account with an atomic sufficient-funds write and writes a `channel='CARD'`
+ * ledger row plus a `CardConsumption` row in ONE transaction, guarded by the card's monthly limit.
+ *
+ * CONSUMPTION TIME IS SERVER-OWNED. `consumeCard` stamps the booking instant from the project
+ * business clock (`demoNow()`, UTC+08:00 semantics) and derives the monthly-limit window from that
+ * same instant, so a caller cannot back-date a spend out of the current billing month and the card
+ * projection `consumeCard` returns reports the month it enforced. The public parameter set
+ * (`ConsumeCardInput`) therefore has no `occurredAt`; a runtime object that still carries a DEFINED
+ * `occurredAt` is rejected with `AppError('VALIDATION')` before any write. The only way to pin the
+ * clock is the separate, test-only `ConsumeCardOptions` second argument.
+ *
+ * MONTHLY SPEND IS FAMILY-CONTINUOUS. `Card.replacedByCardId` records a 补办 as a NEW card row and
+ * the spend history is never rewritten, so the current month's spend of a replaced card belongs to
+ * the whole replacement family (see `./card-family`). Both the enforced limit in `consumeCard` and
+ * the derived `payableAmount` of the projection read that ONE family number at ONE instant, so the
+ * allowance the user sees and the allowance the SDK enforces cannot diverge. A VIRTUAL replacement
+ * inherits and RE-VALIDATES its predecessor's settlement account (a broken binding is restored only
+ * from that explicit source link, never from a guessed default account).
  */
-import type { Card as CardRow, CardLimit as CardLimitRow } from '@/lib/db/prisma';
-import { cards } from '../lib/db/repositories';
+import type {
+  Account as AccountRow,
+  Card as CardRow,
+  CardConsumption as CardConsumptionRow,
+  CardLimit as CardLimitRow,
+} from '@/lib/db/prisma';
+import { accounts, cards } from '../lib/db/repositories';
+import { dbClient } from '../lib/db/client';
 import { AppError } from '../lib/errors';
 import { centsToMoney, moneyToCents } from '../lib/money';
+import { demoNow } from '../lib/clock';
 import { idempotentCardId, isUniqueViolation, normalizeIdempotencyKey } from './idempotent';
-import { runInTransaction } from './tx';
+import { runInTransaction, type Tx } from './tx';
 import type { AddDemoCardRequest } from '../lib/contracts/card-management';
-import { safeParse } from '../lib/json';
+import { safeParse, toJson } from '../lib/json';
 import { SPENDING_CATEGORIES } from './categories';
+import { cardFamilyMonthSpend } from './card-family';
 import type {
   ApplyVirtualCardInput,
+  CardConsumptionQuery,
+  CardConsumptionView,
   CardStatus,
   CardType,
   CardView,
+  ConsumeCardInput,
+  ConsumeCardOptions,
+  ConsumeCardResult,
   ReportLostCardInput,
   SetCardLimitInput,
 } from './types';
@@ -41,9 +82,23 @@ import type {
 /** Network of a newly issued virtual card (demo sandbox). */
 const VIRTUAL_CARD_NETWORK = 'UnionPay';
 
+/** Merchant label used when a card consumption omits one (local simulation only). */
+const DEFAULT_CONSUME_MERCHANT = '本地模拟消费';
+
+/** Page size for card-consumption reads when no limit is supplied. */
+const DEFAULT_CONSUMPTION_LIMIT = 20;
+/** Hard cap on card-consumption reads. */
+const MAX_CONSUMPTION_LIMIT = 200;
+
+/** Extra, non-row data the enriched projection needs for an ACCOUNT-BOUND card. */
+interface CardViewExtras {
+  account: AccountRow;
+  spentMinor: bigint;
+}
+
 /** Map a Prisma card row + its category limits onto the frozen `CardView` DTO. */
-function toCardView(row: CardRow, limits: CardLimitRow[]): CardView {
-  return {
+function toCardView(row: CardRow, limits: CardLimitRow[], extras?: CardViewExtras): CardView {
+  const view: CardView = {
     id: row.id,
     type: row.type as CardType,
     network: row.network,
@@ -52,13 +107,145 @@ function toCardView(row: CardRow, limits: CardLimitRow[]): CardView {
     creditLimit: row.creditLimitMinor === null ? undefined : centsToMoney(row.creditLimitMinor),
     availableLimit: row.availableLimitMinor === null ? undefined : centsToMoney(row.availableLimitMinor),
     monthlyLimit: row.monthlyLimitMinor === null ? undefined : centsToMoney(row.monthlyLimitMinor),
+    replacedByCardId: row.replacedByCardId ?? undefined,
+    linkedAccountId: row.linkedAccountId ?? undefined,
     limits: limits.map((limit) => ({ category: limit.category, amount: centsToMoney(limit.amountMinor) })),
+  };
+  if (!row.linkedAccountId || !extras) return view;
+
+  const availableMinor = extras.account.balanceMinor;
+  // Remaining monthly allowance; a null monthly limit means unlimited (balance-governed only).
+  const remaining = row.monthlyLimitMinor === null
+    ? undefined
+    : (row.monthlyLimitMinor > extras.spentMinor ? row.monthlyLimitMinor - extras.spentMinor : 0n);
+  const payableMinor = remaining === undefined
+    ? availableMinor
+    : (availableMinor < remaining ? availableMinor : remaining);
+
+  view.linkedAccountNumber = extras.account.number;
+  view.accountAvailableBalance = centsToMoney(availableMinor);
+  view.payableAmount = centsToMoney(payableMinor);
+  return view;
+}
+
+/**
+ * Sum of `cardId`'s spend in the business month of `now` (`demoNow()` when omitted), attributed to
+ * its whole replacement FAMILY (exact CNY minor units). Delegates to `./card-family` so the enforced
+ * limit and `payableAmount` are one number read at one instant, inside `dbClient()`'s transaction.
+ */
+async function spentThisMonthMinor(cardId: string, userId: string, now?: number | Date): Promise<bigint> {
+  return cardFamilyMonthSpend(dbClient(), cardId, userId, now);
+}
+
+/**
+ * Map a card row onto a `CardView`, loading its per-category limits and — for an account-bound card
+ * — the linked account's masked number, balance and `payableAmount` for the business month of `now`
+ * (`demoNow()` when omitted; `consumeCard` passes the instant it enforced with). The spend behind it
+ * is the FAMILY's, so a 补办 card immediately shows the remaining allowance of its predecessor.
+ */
+async function loadCardView(row: CardRow, now?: number | Date): Promise<CardView> {
+  const limits = await cards.listCardLimits(row.id);
+  if (!row.linkedAccountId) return toCardView(row, limits);
+  const account = await accounts.getAccount(row.linkedAccountId);
+  if (!account) return toCardView(row, limits);
+  return toCardView(row, limits, { account, spentMinor: await spentThisMonthMinor(row.id, row.userId, now) });
+}
+
+/** Map a persisted consumption row onto the frozen `CardConsumptionView` DTO. */
+function toConsumptionView(row: CardConsumptionRow): CardConsumptionView {
+  return {
+    id: row.id,
+    cardId: row.cardId,
+    accountId: row.accountId,
+    amount: centsToMoney(row.amountMinor),
+    currency: row.currency,
+    category: row.category,
+    merchant: row.merchant,
+    occurredAt: row.occurredAt.getTime(),
+    executionKey: row.executionKey ?? undefined,
+    createdAt: row.createdAt.getTime(),
   };
 }
 
-/** Map a card row onto a `CardView`, loading its per-category limits. */
-async function loadCardView(row: CardRow): Promise<CardView> {
-  return toCardView(row, await cards.listCardLimits(row.id));
+/**
+ * Resolve the settlement account a card is (or must be) bound to.
+ * An explicit `requestedId` must name one of the user's CHECKING accounts; when omitted the user's
+ * default CHECKING account is used. Ownership and type are enforced here — never by the model.
+ */
+async function resolveLinkedAccount(tx: Tx, userId: string, requestedId?: string): Promise<AccountRow> {
+  const requested = typeof requestedId === 'string' ? requestedId.trim() : '';
+  if (requested !== '') {
+    const account = await tx.account.findUnique({ where: { id: requested } });
+    if (!account || account.userId !== userId) {
+      throw new AppError('SECURITY_DENIED', '绑定的结算账户不存在或不属于该用户。', { linkedAccountId: requestedId });
+    }
+    if (account.type !== 'CHECKING') {
+      throw new AppError('VALIDATION', '虚拟卡只能绑定活期账户。', { linkedAccountId: account.id, type: account.type });
+    }
+    return account;
+  }
+  const fallback = await tx.account.findFirst({ where: { userId, type: 'CHECKING' }, orderBy: { id: 'asc' } });
+  if (!fallback) throw new AppError('VALIDATION', '没有可用于绑定虚拟卡的活期账户', { userId });
+  return fallback;
+}
+
+/**
+ * Re-validate a RECORDED settlement binding inside the current transaction: the account row must
+ * exist, belong to `userId` and be a CHECKING account. `Card.linkedAccountId` is a historical
+ * reference (not a relation), so the account can drift out from under it — any drift is an explicit
+ * `CONFLICT` and is NEVER repaired by guessing another account.
+ */
+async function requireSettlementAccount(
+  tx: Tx,
+  userId: string,
+  cardId: string,
+  linkedAccountId: string,
+): Promise<AccountRow> {
+  const account = await tx.account.findFirst({ where: { id: linkedAccountId, userId } });
+  if (!account) {
+    throw new AppError('CONFLICT', '卡片绑定的结算账户不存在或不属于该用户。', { cardId, linkedAccountId });
+  }
+  if (account.type !== 'CHECKING') {
+    throw new AppError('CONFLICT', '卡片绑定的账户不是活期账户。', { cardId, accountId: account.id, type: account.type });
+  }
+  return account;
+}
+
+/**
+ * Settlement account `card` must spend from, repaired when its binding is MISSING.
+ *
+ * A recorded binding is re-validated by `requireSettlementAccount`. A `null` binding — a
+ * replacement card minted before the binding was inherited — is restored from the card's EXPLICIT
+ * predecessor (the row whose `replacedByCardId` is this card) and persisted, but only when that
+ * source records a valid, owned, CHECKING account. When there is no such explicit source link the
+ * function returns `null` and the caller rejects: no "user's default account" and no free-text
+ * inference, ever.
+ */
+async function resolveSettlementAccount(tx: Tx, card: CardRow): Promise<AccountRow | null> {
+  if (card.linkedAccountId !== null) {
+    return requireSettlementAccount(tx, card.userId, card.id, card.linkedAccountId);
+  }
+  const predecessor = await tx.card.findFirst({
+    where: { userId: card.userId, replacedByCardId: card.id, linkedAccountId: { not: null } },
+    orderBy: { id: 'asc' },
+    select: { linkedAccountId: true },
+  });
+  const inherited = predecessor?.linkedAccountId ?? null;
+  if (inherited === null) return null;
+
+  const account = await requireSettlementAccount(tx, card.userId, card.id, inherited);
+  const repaired = await tx.card.updateMany({
+    where: { id: card.id, userId: card.userId, linkedAccountId: null },
+    data: { linkedAccountId: account.id },
+  });
+  if (repaired.count === 0) {
+    // Another writer bound the card first: accept it ONLY when it resolves to the same account.
+    const current = await tx.card.findFirst({ where: { id: card.id, userId: card.userId }, select: { linkedAccountId: true } });
+    if (current?.linkedAccountId !== account.id) {
+      throw new AppError('CONFLICT', '卡片结算账户在恢复过程中被其他写入改变。', { cardId: card.id });
+    }
+  }
+  return account;
 }
 
 /** Resolve a card or throw `AppError('NOT_FOUND')`. */
@@ -102,7 +289,8 @@ async function transitionTo(
 export async function getCards(userId: string): Promise<CardView[]> {
   return runInTransaction(async () => {
     const rows = await cards.listCards(userId);
-    return Promise.all(rows.map(loadCardView));
+    // Wrapped (not `rows.map(loadCardView)`) so `map`'s index cannot leak into the `now` seam.
+    return Promise.all(rows.map((row) => loadCardView(row)));
   });
 }
 
@@ -115,11 +303,14 @@ export async function addDemoCard(userId: string, input: Omit<AddDemoCardRequest
   if (input.type !== 'CREDIT' && creditLimitMinor !== null) throw new AppError('VALIDATION', 'Only credit cards accept a credit limit.');
   if (monthlyLimitMinor !== null && monthlyLimitMinor < 0n) throw new AppError('VALIDATION', 'Monthly limit must be non-negative.');
   return runInTransaction(async tx => {
+    const linkedAccountId = input.type === 'VIRTUAL'
+      ? (await resolveLinkedAccount(tx, userId, input.linkedAccountId)).id
+      : null;
     const own = await tx.card.findMany({ where: { userId } });
     const row = await tx.card.create({ data: { userId, type: input.type, network: 'UnionPay',
       numberMasked: generateMaskedNumber(new Set(own.map(card => card.numberMasked))), status: 'ACTIVE',
-      creditLimitMinor, availableLimitMinor: creditLimitMinor, monthlyLimitMinor } });
-    return toCardView(row, []);
+      creditLimitMinor, availableLimitMinor: creditLimitMinor, monthlyLimitMinor, linkedAccountId } });
+    return loadCardView(row);
   });
 }
 
@@ -196,7 +387,7 @@ export async function setCardLimit(input: SetCardLimitInput): Promise<CardView> 
     }
     await tx.cardLimit.deleteMany({ where: { card: { id: row.id, userId: input.userId }, category } });
     await tx.cardLimit.create({ data: { card: { connect: { id: row.id, userId: input.userId } }, category, amountMinor } });
-    return toCardView(current, await tx.cardLimit.findMany({ where: { cardId: row.id } }));
+    return loadCardView(current);
   });
 }
 
@@ -245,15 +436,94 @@ export async function reportLostCard(
 }
 
 /**
- * Issue a new virtual card; returns the created card.
+ * Replace a `LOST` card with a NEW card (same owner, same `type` and `network`).
+ * The replacement is a fresh row with a new masked number. It carries the source's monthly limit,
+ * and a CREDIT replacement also inherits the source's approved credit limit and current available limit
+ * (per-category limits are NOT copied). The source stays `LOST` and records the new card id in
+ * `replacedByCardId` — a historical reference, not a status change and not a relation.
+ *
+ * A VIRTUAL replacement also inherits the source's settlement account, RE-VALIDATED in the same
+ * transaction (the row must exist, belong to `userId` and be `CHECKING`), so the replacement can
+ * spend immediately and from the same cash. A source without a usable binding is a `CONFLICT` — a
+ * broken card is never minted. The monthly limit keeps running across the replacement: the
+ * current-month spend is the FAMILY's (see `./card-family`), so the new card inherits the remaining
+ * allowance, while the already-booked `CardConsumption` rows stay attributed to the card that
+ * incurred them.
+ *
+ * Idempotent: inside ONE transaction a source that already points at a replacement returns that
+ * existing card instead of issuing a second one (a plan node may be replayed after a resume). An
+ * existing VIRTUAL replacement whose binding is missing is repaired from this same explicit link.
+ */
+export async function replaceCard(cardId: string, userId: string): Promise<CardView> {
+  const source = await requireCard(cardId, userId);
+  if ((source.status as CardStatus) !== 'LOST') {
+    throw new AppError('CONFLICT', '只有已挂失的卡片可以补办，请先办理挂失。', { cardId: source.id, status: source.status });
+  }
+  return runInTransaction(async tx => {
+    const latest = await tx.card.findUnique({ where: { id: source.id, userId } });
+    if (!latest) throw new AppError('NOT_FOUND', 'Card does not exist.');
+    if ((latest.status as CardStatus) !== 'LOST') {
+      throw new AppError('CONFLICT', '只有已挂失的卡片可以补办，请先办理挂失。', { cardId: latest.id, status: latest.status });
+    }
+    // A VIRTUAL card spends from its settlement account, so the binding must survive the 补办.
+    // Validated here (before the idempotent return) so a broken source can never mint a dead card.
+    let settlementAccountId: string | null = null;
+    if (latest.type === 'VIRTUAL') {
+      if (latest.linkedAccountId === null) {
+        throw new AppError('CONFLICT', '原虚拟卡未绑定结算账户，无法补办。', { cardId: latest.id });
+      }
+      settlementAccountId = (await requireSettlementAccount(tx, userId, latest.id, latest.linkedAccountId)).id;
+    }
+    if (latest.replacedByCardId) {
+      const existing = await tx.card.findUnique({ where: { id: latest.replacedByCardId, userId } });
+      if (!existing) {
+        throw new AppError('CONFLICT', '补卡记录不一致：原卡片关联的补办卡不存在。', {
+          cardId: latest.id,
+          replacedByCardId: latest.replacedByCardId,
+        });
+      }
+      // A replacement minted before bindings were inherited: repair it from THIS explicit source
+      // link (never from a guess), so a replay returns a card that can actually spend.
+      if (settlementAccountId !== null && existing.type === 'VIRTUAL' && existing.linkedAccountId === null) {
+        await tx.card.update({ where: { id: existing.id }, data: { linkedAccountId: settlementAccountId } });
+      }
+      return loadCardView(await tx.card.findUniqueOrThrow({ where: { id: existing.id, userId } }));
+    }
+    const own = await tx.card.findMany({ where: { userId } });
+    const created = await tx.card.create({ data: {
+      userId,
+      type: latest.type,
+      network: latest.network,
+      numberMasked: generateMaskedNumber(new Set(own.map(card => card.numberMasked))),
+      status: 'ACTIVE',
+      // A replacement CREDIT card inherits the SAME approved credit limit and current available
+      // limit (no re-approval); non-credit cards keep none.
+      creditLimitMinor: latest.type === 'CREDIT' ? latest.creditLimitMinor : null,
+      availableLimitMinor: latest.type === 'CREDIT' ? latest.availableLimitMinor : null,
+      monthlyLimitMinor: latest.monthlyLimitMinor,
+      // A VIRTUAL replacement keeps spending from the SAME settlement account; others keep none.
+      linkedAccountId: settlementAccountId,
+    } });
+    await tx.card.update({ where: { id: latest.id, userId }, data: { replacedByCardId: created.id } });
+    return loadCardView(created);
+  });
+}
+
+/**
+ * Issue a new virtual card bound to a settlement CHECKING account; returns the created card.
  * The masked number is generated as `****` + 4 digits, avoiding the user's existing masks.
- * `monthlyLimit` is an explicit cent-valid configuration saved at creation (no card-payment API).
+ * `monthlyLimit` is an explicit cent-valid configuration saved at creation.
+ *
+ * The settlement account is `input.linkedAccountId` (validated for ownership + CHECKING type) or,
+ * when omitted, the user's default CHECKING account — never inferred from a free-text label.
  *
  * Optional at-most-once semantics: when `input.idempotencyKey` is supplied, the card id is derived
  * deterministically from `(userId, key)` and reused as the primary key, so a repeat of the SAME key
- * finds and REPLAYS the original card (same `id`) instead of issuing a SECOND virtual card.
- * Concurrent same-key calls are safe too — the loser's insert violates the PK, its transaction rolls
- * back (no card written), then the winner's committed card is replayed. Absent → unchanged behavior.
+ * finds and REPLAYS the original card (same `id`) instead of issuing a SECOND virtual card. A replay
+ * is allowed ONLY when the requested monthly limit AND settlement account match the original card;
+ * otherwise it is an explicit `CONFLICT`. Concurrent same-key calls are safe too — the loser's insert
+ * violates the PK, its transaction rolls back (no card written), then the winner's committed card is
+ * replayed. Absent → unchanged behavior.
  */
 export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<CardView> {
   const userId = typeof input?.userId === 'string' ? input.userId : '';
@@ -265,41 +535,51 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
   const cents = input.monthlyLimit === undefined ? undefined : moneyToCents(input.monthlyLimit);
   if (cents !== undefined && cents < 0n) throw new AppError('VALIDATION', 'Monthly limit must be non-negative.');
   const monthlyLimitMinor = cents;
-  const replay = (card: CardRow): CardRow => {
+  const replay = (card: CardRow, requestedLinkedAccountId: string): CardRow => {
     if (card.userId !== userId || card.type !== 'VIRTUAL') {
       throw new AppError('CONFLICT', 'The execution identity does not belong to this virtual card issuance.');
     }
     if (card.monthlyLimitMinor !== (monthlyLimitMinor ?? null)) {
       throw new AppError('CONFLICT', '同一幂等身份不能申请不同月限额的虚拟卡。');
     }
+    if (card.linkedAccountId !== requestedLinkedAccountId) {
+      throw new AppError('CONFLICT', '同一幂等身份不能绑定不同的结算账户。', { linkedAccountId: requestedLinkedAccountId });
+    }
     return card;
   };
   if (key === undefined) {
-    const existing = await cards.listCards(userId);
-    const numberMasked = generateMaskedNumber(new Set(existing.map((card) => card.numberMasked)));
-
-    const row = await runInTransaction((tx) => tx.card.create({ data: {
-      userId,
-      type: 'VIRTUAL',
-      network: VIRTUAL_CARD_NETWORK,
-      numberMasked,
-      status: 'ACTIVE',
-      monthlyLimitMinor,
-    } }));
+    const row = await runInTransaction(async (tx) => {
+      const account = await resolveLinkedAccount(tx, userId, input.linkedAccountId);
+      const own = await tx.card.findMany({ where: { userId } });
+      return tx.card.create({ data: {
+        userId,
+        type: 'VIRTUAL',
+        network: VIRTUAL_CARD_NETWORK,
+        numberMasked: generateMaskedNumber(new Set(own.map((card) => card.numberMasked))),
+        status: 'ACTIVE',
+        monthlyLimitMinor,
+        linkedAccountId: account.id,
+      } });
+    });
 
     // A brand-new card carries no per-category limits.
-    return toCardView(row, []);
+    return loadCardView(row);
   }
 
   // Deterministic-id replay (the `Card` table has no idempotencyKey column): the create goes
   // through `runInTransaction` so the derive-find-create sequence is all-or-nothing, mirroring
   // `setCardLimit`'s in-transaction use of `tx.card*`.
   const cardId = idempotentCardId(userId, key);
+  let requestedLinkedAccountId: string | undefined;
   let row: CardRow;
   try {
     row = await runInTransaction(async (tx): Promise<CardRow> => {
+      // Resolve the requested settlement account FIRST so a replay can prove the SAME binding.
+      const account = await resolveLinkedAccount(tx, userId, input.linkedAccountId);
+      requestedLinkedAccountId = account.id;
+
       const replayed = await tx.card.findUnique({ where: { id: cardId } });
-      if (replayed) return replay(replayed);
+      if (replayed) return replay(replayed, account.id);
 
       const own = await tx.card.findMany({ where: { userId } });
       const numberMasked = generateMaskedNumber(new Set(own.map((card) => card.numberMasked)));
@@ -313,20 +593,226 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
           numberMasked,
           status: 'ACTIVE',
           monthlyLimitMinor,
+          linkedAccountId: account.id,
         },
       });
     });
   } catch (error) {
     // Concurrent same-key race: the other call committed the card first → our tx rolled back (no
-    // card written). Re-read the committed card and replay it.
-    if (isUniqueViolation(error)) {
+    // card written). Re-read the committed card and replay it (proving the same binding).
+    if (isUniqueViolation(error) && requestedLinkedAccountId !== undefined) {
       const committed = await cards.getCard(cardId);
-      if (committed) return loadCardView(replay(committed));
+      if (committed) return loadCardView(replay(committed, requestedLinkedAccountId));
     }
     throw error;
   }
 
   return loadCardView(row);
+}
+
+/**
+ * Resolve the business instant ONE consumption is booked at, and therefore the UTC+08:00 billing
+ * month its amount is counted against and that its returned projection reports. Production uses the
+ * project demo clock; the seam is validated so a deterministic test can pin the instant, nothing else.
+ */
+function consumeInstant(now?: number | Date): number {
+  if (now === undefined) return demoNow();
+  const at = demoNow(now);
+  if (typeof at !== 'number' || !Number.isInteger(at)) {
+    throw new AppError('VALIDATION', '测试时钟必须是整数毫秒时间戳或 Date。', { now: String(now) });
+  }
+  return at;
+}
+
+/**
+ * Spend from an owned, account-bound card.
+ *
+ * CONSUMPTION TIME IS SERVER-OWNED. The booking instant comes from the project business clock
+ * (`demoNow()`), and the monthly-limit window is derived from that SAME instant (`demoMonthRange`),
+ * so both the ledger row and the month it is attributed to are server decisions. `ConsumeCardInput`
+ * has no `occurredAt`; a runtime input object that still carries a DEFINED `occurredAt` (from a
+ * stale client, an HTTP body or a tool-argument object) is rejected with `VALIDATION` BEFORE any
+ * write — silently ignoring it would let a caller believe a spend was back-dated. The only clock
+ * override is the internal `options.now` seam, which no public caller passes.
+ *
+ * Inside ONE transaction: replay the persisted consumption when the execution identity matches; else
+ * re-validate the card (owned, `ACTIVE`) and its settlement account (owned, `CHECKING`, recovered
+ * from the explicit 补办 link when the binding is missing), enforce the card FAMILY's monthly limit,
+ * debit the account with an atomic sufficient-funds write, write a `channel='CARD'` ledger row and a
+ * `CardConsumption` row, and persist the original result snapshot for same-key replay. Its `card`
+ * projection reads that same instant, so it reports the enforced month; amounts stay exact minor units.
+ */
+export async function consumeCard(
+  input: ConsumeCardInput,
+  options: ConsumeCardOptions = {},
+): Promise<ConsumeCardResult> {
+  // Defence in depth, BEFORE any read or write: a caller-owned instant is not merely ignored.
+  const rawInput: unknown = input;
+  if (typeof rawInput === 'object' && rawInput !== null && 'occurredAt' in rawInput) {
+    const claimed = (rawInput as { occurredAt?: unknown }).occurredAt;
+    if (claimed !== undefined) {
+      throw new AppError('VALIDATION', '消费时间由服务端决定，不接受调用方传入的 occurredAt。', { occurredAt: String(claimed) });
+    }
+  }
+
+  const userId = typeof input?.userId === 'string' ? input.userId : '';
+  if (userId === '') throw new AppError('VALIDATION', '缺少用户 id', { userId: input?.userId });
+
+  const cardId = typeof input?.cardId === 'string' ? input.cardId : '';
+  if (cardId === '') throw new AppError('VALIDATION', '缺少卡片 id', { cardId: input?.cardId });
+
+  const amountMinor = moneyToCents(input?.amount);
+  if (amountMinor <= 0n) throw new AppError('VALIDATION', '消费金额必须大于零', { amount: input?.amount });
+
+  const category = typeof input?.category === 'string' && input.category.trim() !== ''
+    ? input.category.trim()
+    : '其他';
+  if (!(SPENDING_CATEGORIES as readonly string[]).includes(category)) {
+    throw new AppError('VALIDATION', '卡消费类别必须受支持。', { category: input?.category });
+  }
+
+  const merchant = typeof input?.merchant === 'string' && input.merchant.trim() !== ''
+    ? input.merchant.trim()
+    : DEFAULT_CONSUME_MERCHANT;
+
+  // ONE server-owned instant for the booking time, the billing month and the returned projection.
+  const at = consumeInstant(options.now);
+
+  const amount = centsToMoney(amountMinor);
+  const key = normalizeIdempotencyKey(input.executionKey);
+
+  /** Replay the ORIGINAL result from a persisted row, proving the same card + owner. */
+  const replay = (row: CardConsumptionRow): ConsumeCardResult => {
+    if (row.cardId !== cardId || row.userId !== userId) {
+      throw new AppError('CONFLICT', '该执行身份不属于本次卡消费。', { executionKey: key });
+    }
+    const snapshot = safeParse<ConsumeCardResult | null>(row.resultJson, null);
+    if (!snapshot) throw new AppError('CONFLICT', '卡消费结果快照缺失，无法重放。', { executionKey: key });
+    return snapshot;
+  };
+
+  try {
+    return await runInTransaction(async (tx): Promise<ConsumeCardResult> => {
+      if (key !== undefined) {
+        const existing = await tx.cardConsumption.findUnique({ where: { executionKey: key } });
+        // A committed row under this identity is a replay ONLY when it belongs to the SAME card/owner;
+        // its persisted snapshot is returned VERBATIM (no second charge).
+        if (existing) return replay(existing);
+      }
+
+      const card = await tx.card.findFirst({ where: { id: cardId, userId } });
+      if (!card) throw new AppError('NOT_FOUND', `卡片不存在：${cardId}`, { cardId });
+      if (card.status !== 'ACTIVE') {
+        throw new AppError('CONFLICT', '卡片状态不允许消费。', { cardId, status: card.status });
+      }
+
+      // The settlement binding is re-validated in-transaction (ownership + account type) and, for a
+      // replacement card minted without one, restored from its explicit 补办 link and persisted.
+      const account = await resolveSettlementAccount(tx, card);
+      if (!account) {
+        throw new AppError('CONFLICT', '该卡片未绑定结算账户，无法消费。', { cardId });
+      }
+
+      // Monthly limit: the current billing month's spend of the whole replacement FAMILY, read at
+      // the SAME server instant this spend is booked at.
+      if (card.monthlyLimitMinor !== null) {
+        const spentMinor = await cardFamilyMonthSpend(tx, cardId, userId, at);
+        if (spentMinor + amountMinor > card.monthlyLimitMinor) {
+          throw new AppError('LIMIT_EXCEEDED', '超过虚拟卡月限额。', {
+            cardId,
+            monthlyLimit: centsToMoney(card.monthlyLimitMinor),
+            spent: centsToMoney(spentMinor),
+            amount,
+          });
+        }
+      }
+
+      // Atomic sufficient-funds check + debit (never overdraft under concurrency).
+      const debited = await tx.account.updateMany({
+        where: { id: account.id, userId, balanceMinor: { gte: amountMinor } },
+        data: { balanceMinor: { decrement: amountMinor } },
+      });
+      if (debited.count === 0) {
+        const current = await tx.account.findUnique({ where: { id: account.id } });
+        throw new AppError('INSUFFICIENT_FUNDS', `余额不足：${centsToMoney(current?.balanceMinor ?? 0n)} < ${amount}`, {
+          balance: centsToMoney(current?.balanceMinor ?? 0n),
+          amount,
+        });
+      }
+
+      await tx.transaction.create({ data: {
+        accountId: account.id,
+        userId,
+        amountMinor: -amountMinor,
+        direction: 'DEBIT',
+        category,
+        merchant,
+        channel: 'CARD',
+        occurredAt: new Date(at),
+        currency: 'CNY',
+      } });
+
+      const created = await tx.cardConsumption.create({ data: {
+        cardId,
+        accountId: account.id,
+        userId,
+        amountMinor,
+        currency: 'CNY',
+        category,
+        merchant,
+        occurredAt: new Date(at),
+        executionKey: key ?? null,
+      } });
+
+      const updatedAccount = await tx.account.findUniqueOrThrow({ where: { id: account.id } });
+      const cardView = await loadCardView(await tx.card.findUniqueOrThrow({ where: { id: card.id } }), at);
+      const snapshot: ConsumeCardResult = {
+        consumption: toConsumptionView(created),
+        card: cardView,
+        accountAvailableBalance: centsToMoney(updatedAccount.balanceMinor),
+      };
+      // Persist the ORIGINAL result on the row so a same-key replay reproduces it exactly.
+      await tx.cardConsumption.update({ where: { id: created.id }, data: { resultJson: toJson(snapshot) } });
+      return snapshot;
+    });
+  } catch (error) {
+    // Concurrent same-key race: the other call committed the consumption first → our tx rolled back
+    // (the debit undone). Re-read the committed row and replay it, or rethrow.
+    if (key !== undefined && isUniqueViolation(error)) {
+      const committed = await runInTransaction((tx) => tx.cardConsumption.findUnique({ where: { executionKey: key } }));
+      if (committed) return replay(committed);
+    }
+    throw error;
+  }
+}
+
+/** Card consumptions owned by the user, newest first (optional card filter; default 20, max 200). */
+export async function listCardConsumptions(
+  userId: string,
+  query: CardConsumptionQuery = {},
+): Promise<CardConsumptionView[]> {
+  if (typeof userId !== 'string' || !userId.trim()) {
+    throw new AppError('SECURITY_DENIED', '缺少卡片消费查询用户身份。');
+  }
+
+  const rawCardId = query.cardId;
+  const cardId = typeof rawCardId === 'string' ? rawCardId.trim() : undefined;
+  if (rawCardId !== undefined && cardId === '') {
+    throw new AppError('VALIDATION', '卡片消费查询的 cardId 必须是非空文本。', { cardId: rawCardId });
+  }
+  const limit = query.limit === undefined ? DEFAULT_CONSUMPTION_LIMIT : query.limit;
+  if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
+    throw new AppError('VALIDATION', '卡片消费查询 limit 必须是正整数。', { limit: query.limit });
+  }
+
+  return runInTransaction(async (tx) => {
+    const rows = await tx.cardConsumption.findMany({
+      where: { userId, ...(cardId !== undefined ? { cardId } : {}) },
+      orderBy: [{ occurredAt: 'desc' }, { createdAt: 'desc' }],
+      take: Math.min(limit, MAX_CONSUMPTION_LIMIT),
+    });
+    return rows.map(toConsumptionView);
+  });
 }
 
 /**

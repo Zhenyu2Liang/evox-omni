@@ -5,7 +5,7 @@ import type { ToolExecutionResult } from './tools';
 export const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   'transfer_money', 'reserve_budget', 'set_card_limit', 'cancel_subscription', 'freeze_card',
   'apply_virtual_card', 'set_subscription_reminder', 'create_scheduled_task', 'subscribe_investment',
-  'redeem_investment', 'report_lost_card', 'unfreeze_card',
+  'redeem_investment', 'report_lost_card', 'replace_card', 'unfreeze_card',
 ]);
 
 export interface TrustedAccount {

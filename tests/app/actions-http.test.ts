@@ -487,6 +487,8 @@ describe('[integration] POST /api/actions — circuit breaker over HTTP', () => 
     expect(third.status).toBe(200);
     expect(payload(third).ok).toBe(false);
     expect(payload(third).status).toBe('locked');
+    // A locked verification is a FAILED verification: it must NOT read as `not_required`.
+    expect(payload(third).mfaResult).toBe('failed');
 
     // The trip was recorded as a high-severity SecurityEvent.
     const securityRows = await getTestPrisma().securityEvent.findMany({
@@ -502,11 +504,15 @@ describe('[integration] POST /api/actions — circuit breaker over HTTP', () => 
     expect(after.status).toBe(200);
     expect(payload(after).ok).toBe(false);
     expect(payload(after).status).toBe('locked');
+    // Even a CORRECT code cannot succeed once the breaker is open: the locked outcome stays `failed`.
+    expect(payload(after).mfaResult).toBe('failed');
 
     const afterConfirm = await confirmAction(row.id, turn.sessionId);
     expect(afterConfirm.status).toBe(200);
     expect(payload(afterConfirm).ok).toBe(false);
     expect(payload(afterConfirm).status).toBe('locked');
+    // Confirm never submits a code, so the locked row stays a PROMPT, not a failed verification.
+    expect(payload(afterConfirm).mfaResult).toBe('not_required');
 
     // Fail-closed: no money moved and no audit row was written.
     expect(await checkingBalance()).toBe(SEEDED_BALANCE);

@@ -65,6 +65,10 @@ function isSpendingAnalysis(value: unknown): boolean {
 function isAnomalyReport(value: unknown): boolean {
   return isRecord(value) && Array.isArray(value.anomalies);
 }
+/** Exact positive CNY text with two decimals (`12.00`); floats and rounded values are never evidence. */
+function isExactMoney(value: unknown): boolean {
+  return typeof value === 'string' && /^\d+\.\d{2}$/.test(value);
+}
 /** `TaskPlan` discriminator: a `goal` string and a `nodes` array. */
 function isTaskPlan(value: unknown): value is TaskPlan {
   return isRecord(value) && typeof value.goal === 'string' && Array.isArray(value.nodes);
@@ -104,10 +108,21 @@ export function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCa
     case 'freeze_card':
     case 'unfreeze_card':
     case 'report_lost_card':
+    case 'replace_card':
     case 'apply_virtual_card': {
       const cards = toDtoList(data);
       return cards !== null && isEveryRecord(cards)
         ? [{ type: 'cards', data: cards }]
+        : [malformed(toolName)];
+    }
+
+    // Card spend — `{ consumption, card, accountAvailableBalance }`: the enriched `CardView` is the
+    // visible server evidence, so one `cards` card (the existing union member) is its faithful mapping.
+    case 'consume_virtual_card': {
+      if (!isRecord(data)) return [malformed(toolName)];
+      const { consumption, card } = data;
+      return isRecord(consumption) && isExactMoney(consumption.amount) && isRecord(card)
+        ? [{ type: 'cards', data: [card] }]
         : [malformed(toolName)];
     }
 

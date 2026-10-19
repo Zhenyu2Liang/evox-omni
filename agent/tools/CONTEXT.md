@@ -37,7 +37,7 @@ agent availability, and replay policy. Use `AGENT_TOOL_NAMES` for model-visible 
 | `search_conversation_history` | `conversation-history.ts` | GREEN historical read |
 | `get_cards` | `card.ts` | GREEN read |
 | `set_card_limit` | `card.ts` | YELLOW write |
-| `freeze_card`, `unfreeze_card`, `report_lost_card` | `card.ts` | RED write |
+| `freeze_card`, `unfreeze_card`, `report_lost_card`, `replace_card`, `apply_virtual_card`, `consume_virtual_card` | `card.ts` | RED write |
 | `list_subscriptions` | `subscription.ts` | YELLOW read |
 | `cancel_subscription`, `set_subscription_reminder` | `subscription.ts` | YELLOW write |
 | `list_investments`, `compare_investments`, `get_investment_holdings` | `investment.ts` | GREEN read |
@@ -51,11 +51,57 @@ agent availability, and replay policy. Use `AGENT_TOOL_NAMES` for model-visible 
 GREEN runs automatically, YELLOW requires confirmation, and RED also requires strong verification.
 A budget envelope is bookkeeping; it does not debit or freeze account funds.
 Creating a scheduled intent does not preauthorize a future financial write.
-Card creation and deletion use the manual card-management page. The catalog entry `apply_virtual_card`
-is disabled for the agent and rejects agent calls; it is never offered to the model.
+Brand-new physical card creation and card deletion are manual-only on the Cards page and expose no
+agent capability; the Cards page has no 补办 action.
+`replace_card` is an ordinary agent capability for ANY owned `LOST` card — DEBIT, CREDIT or VIRTUAL.
+Its params are `{ cardId }` only, with no per-type gating: the replacement inherits the source type
+and network (a CREDIT replacement inherits `creditLimitMinor`/`availableLimitMinor`; a VIRTUAL
+replacement keeps its linked settlement account and the month-continuous family allowance), the
+source card stays `LOST` and records `replacedByCardId`, and a repeat call on the same source returns
+the same replacement instead of issuing a second one.
+The tool's model-visible `description` states this coverage explicitly.
+Virtual card issuance is an agent capability (`apply_virtual_card`).
+This directory exposes exactly ONE card-spend write, `consume_virtual_card` (RED): it spends an
+exact CNY amount from an owned ACCOUNT-BOUND virtual card by debiting that card's linked CHECKING
+settlement account through `banking.card.consumeCard` (atomic sufficient-funds debit plus a
+`channel='CARD'` ledger row and a `CardConsumption` row in ONE transaction, guarded by the card's
+monthly limit, replayable by execution key).
+Virtual-card consumption booking time is SERVER-OWNED: the business clock (UTC+08:00) fixes both the
+booking time and the monthly-limit window, so the tool schema carries no date/time argument,
+and `rejectClientSuppliedTime` (`card.ts`) refuses ANY caller-supplied time field (`occurredAt`,
+`occurredTime`, `occurred_at`, `bookedAt`, `bookingTime`, `timestamp`, `time`, `date`,
+`occurredDate`) with a `VALIDATION` error carrying 消费入账时间由服务端决定. That guard throws before
+`banking.card.consumeCard`, so a forged time writes nothing — no debit, no `channel='CARD'` ledger
+row, no `CardConsumption` row — and is never silently dropped. `plan-parameters.ts` runs the same
+guard for `consume_virtual_card` before the generic unexpected-key check, so a model-supplied date
+fails with that reason instead of `Unsupported parameters`. The success summary reports only the
+server-returned facts: consumption amount and merchant, the card's masked number, 关联账户,
+绑定账户可用余额, 月消费限额 (or `未设置月限额` when the card has none) and 当前可支付金额.
+Card reads and analysis (`get_cards`, `analyze_spending`, `get_transactions`,
+`get_dashboard_summary`) never debit.
 
 `describe_turn` lives in `turn-intent.ts` and records model-declared conversational purpose.
 It is an internal control tool, not a banking capability or customer authorization.
+It has NO entry in `lib/contracts/tool-catalog.ts`, so it is absent from `TOOL_CATALOG`/`TOOL_NAMES`/`AGENT_TOOL_NAMES`
+and from `createToolRegistry` entirely (`tools`, `runners`, `list()`, `get()`, `executeDirect` never know it).
+Registration is separate: `agent/banking-agent.ts` builds it with `createTurnIntentTool(readTurnIntent, write)`
+and injects it FIRST into the Pi tool list (`tools: [intentTool, ...registry.list()]`), so the model sees it
+alongside the banking tools. `beforeToolCall` returns `undefined` for `TURN_INTENT_TOOL` before identity/
+parameter validation and before the security gateway, so it is never gated and never creates a `PendingAction`.
+Its schema is `{ purpose: 'conversation'|'advice'|'query'|'operation'; operations: string[]; allowProtocolExamples?: boolean; workflow?: boolean }`;
+`execute` delegates to `../intent-context.ts#declareConversationIntent` (VALIDATION/CONFLICT for unregistered or
+side-effecting operations, purpose changes and sequence changes) and returns `authorized: false`.
+Other literal `'describe_turn'` couplings: `agent/turns/events.ts` drops its start/update/end events from the UI
+stream, `agent/durable/retry-policy.ts` gives it `read_only`/3 attempts, and `agent/durable/control-recovery.ts`
+replays its recorded model call. The stored intent shape is `ConversationIntent` in `lib/contracts/intent.ts`.
+
+### `redeem_investment` 赎回本金参数（全额 / 部分）
+
+`redeemAmount` 是可选的本金部分（CNY 十进制字符串）：省略或等于持仓本金表示**全额赎回**（持仓结清、一次性到账）；填入严格小于本金的正数表示**部分赎回**（持仓保留、本金减少，仅按同一估值规则到账该部分的结算金额，剩余本金与市值留在持仓上）。它是普通金额参数——`plan-parameters.ts` 依据 TypeBox 模式校验字符串格式与显式类型后原样转发给 SDK，超额、非正或格式非法的取值由 SDK 以 `VALIDATION` 拒绝，参数层不重复判定金额域。成功摘要按 `InvestResult.partial` 与 `redeemedPrincipal` / `remainingPrincipal` 渲染全额或部分赎回措辞。
+
+### `subscribe_investment` 申购聚合
+
+对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层无需改动——`subscribe_investment` 照常以 `{ productId, amount }` 转发给 `banking.investment.subscribeInvestment`；成功摘要仍按 `InvestResult.amount` 与可选 `newBalance` 渲染。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
 
 ## Parameters and SDK errors
 
@@ -110,6 +156,11 @@ or grant consent to resume a write. Archive searches require a trusted session a
 Plan-node and confirmed-action identities remain stable on replay. SDK fences run inside the write
 transaction and roll back the effect if execution rights have expired, moved, or been cancelled.
 Idempotency prevents duplicate effects; it does not grant permission.
+
+## Known issues
+
+Declared-write enforcement stays REACTIVE and declaration-gated: `compileRequestedPlan` only runs when `submit_plan` is actually invoked (`planning.ts:261` via `preflightRequestedPlan`), and `requiresDeclaredPlan` (`../intent-context.ts:43`) is called only from `beforeToolCall` (`../banking-agent.ts:289`), which fires on a stray individual write. End-of-turn reconciliation exists only for a write the model DECLARED through `describe_turn` (`../write-continuation.ts:56-62`, live-only): a model that refuses in prose while declaring nothing is never corrected, and no `PendingAction`/panel appears. `card.ts` applies NO card-type gating: `ReplaceCardParams` is `{ cardId }`, and `report_lost_card`/`replace_card` accept DEBIT, CREDIT and VIRTUAL alike (`banking-sdk/card.ts` `replaceCard`).
+`planning.ts:265` calls `dag.validatePlan(nodes, knownTools)` with only two args, so output-contract validation is skipped there; the output-contract check runs in `plan-compiler.ts:16` (`BANKING_TOOL_OUTPUTS`).
 
 ## Verification
 

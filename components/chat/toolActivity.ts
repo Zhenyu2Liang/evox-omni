@@ -17,7 +17,7 @@ const TOOL_CATEGORIES: Record<string, ToolActivityCategory> = {
   analyze_spending: 'query', detect_anomaly: 'query', get_dashboard_summary: 'query',
   list_subscriptions: 'query', transfer_money: 'payment',
   get_cards: 'card', set_card_limit: 'card', freeze_card: 'card', unfreeze_card: 'card',
-  report_lost_card: 'card', apply_virtual_card: 'card',
+  report_lost_card: 'card', replace_card: 'card', apply_virtual_card: 'card',
   list_investments: 'investment', compare_investments: 'investment',
   get_investment_holdings: 'investment', subscribe_investment: 'investment', redeem_investment: 'investment',
   reserve_budget: 'workflow', list_scheduled_tasks: 'workflow', create_scheduled_task: 'workflow',

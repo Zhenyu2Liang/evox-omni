@@ -13,9 +13,9 @@ export const UNVERIFIED_RESPONSE = conversationMessages.unverified;
 export const UNAVAILABLE_RESPONSE = conversationMessages.unavailable;
 
 const WRITE_LABELS: Readonly<Record<string, string>> = {
-  transfer_money: '转账', reserve_budget: '预算预留', set_card_limit: '限额调整',
+  transfer_money: '转账', reserve_budget: '预算预留', set_card_limit: '分类消费限额调整',
   freeze_card: '卡片冻结', unfreeze_card: '卡片解冻', report_lost_card: '卡片挂失',
-  apply_virtual_card: '虚拟卡申请', cancel_subscription: '订阅取消',
+  replace_card: '卡片补办', apply_virtual_card: '虚拟卡申请', cancel_subscription: '订阅取消',
   set_subscription_reminder: '订阅提醒', create_scheduled_task: '定时任务记录',
   subscribe_investment: '理财申购', redeem_investment: '理财赎回',
 };
@@ -52,6 +52,12 @@ export interface FinancialResponseOptions {
   requestText?: string;
   locked?: boolean;
   guidance?: BankingGuidance;
+  /**
+   * Declared-but-unsubmitted write capabilities for the current turn (model interpretation). When
+   * present with no executed write and no pending gate, the server states the true outcome instead
+   * of letting prose assert a confirmation panel that no `PendingAction` backs.
+   */
+  declared?: readonly string[];
 }
 
 /** Always renders the actual operations in result order; there is no prose-to-operation matching. */
@@ -98,8 +104,15 @@ export function renderFinancialResponse(
   }
   if (options.pending === 'mfa') sections.push('该操作尚未执行，等待验证码验证。');
   else if (options.pending === 'confirmation') sections.push('该操作尚未执行，等待确认，请本人核对操作卡片。');
+  // A declared operation with neither an executed write nor a real gate is reported from server
+  // evidence (the model declaration), so no unverified prose can assert a non-existent panel.
+  const declaredUnsubmitted = (options.declared?.length ?? 0) > 0 && facts.writes.length === 0 && !options.pending;
+  if (declaredUnsubmitted) {
+    const labels = options.declared!.map(tool => WRITE_LABELS[tool] ?? tool);
+    sections.push(conversationMessages.declared_unsubmitted.replace('{operations}', labels.join('、')));
+  }
   // Guidance is not execution evidence and cannot contradict an actual write or pending gate.
-  if (options.guidance && facts.writes.length === 0 && !options.pending) {
+  if (options.guidance && facts.writes.length === 0 && !options.pending && !declaredUnsubmitted) {
     const request = 'fields' in options.guidance && options.requestText
       ? `针对你的需求 ${JSON.stringify(options.requestText.slice(0, 200))}，` : '';
     sections.push(request + renderBankingGuidance(options.guidance));

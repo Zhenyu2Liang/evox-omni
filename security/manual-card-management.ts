@@ -22,7 +22,7 @@ interface Identity { userId: string; sessionId: string }
 
 const amount = z.string().regex(/^\d+(?:\.\d{1,2})?$/).transform(value => centsToMoney(moneyToCents(value)));
 export const addDemoCardSchema = z.object({ requestId: z.string().uuid(), type: z.enum(['DEBIT', 'CREDIT', 'VIRTUAL']),
-  creditLimit: amount.optional(), monthlyLimit: amount.optional() }).strict().superRefine((input, ctx) => {
+  creditLimit: amount.optional(), monthlyLimit: amount.optional(), linkedAccountId: z.string().min(1).optional() }).strict().superRefine((input, ctx) => {
   if ((input.type === 'CREDIT') !== (input.creditLimit !== undefined)) ctx.addIssue({ code: 'custom', message: 'Only credit cards require a credit limit.', path: ['creditLimit'] });
   if (input.creditLimit !== undefined && moneyToCents(input.creditLimit) <= 0n) ctx.addIssue({ code: 'custom', message: 'Credit limit must be positive.', path: ['creditLimit'] });
 });
@@ -52,6 +52,7 @@ function toChange(row: PendingAction): CardChange {
     ...(args.type ? { type: args.type as AddDemoCardRequest['type'] } : {}),
     ...(args.creditLimit ? { creditLimit: args.creditLimit as AddDemoCardRequest['creditLimit'] } : {}),
     ...(args.monthlyLimit ? { monthlyLimit: args.monthlyLimit as AddDemoCardRequest['monthlyLimit'] } : {}),
+    ...(args.linkedAccountId ? { linkedAccountId: args.linkedAccountId as string } : {}),
     ...(result.data ?? summary.card ? { card: result.data ?? summary.card } : {}) };
 }
 

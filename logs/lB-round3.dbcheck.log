@@ -1,0 +1,28 @@
+{
+  "holding": {
+    "id": "holding_wenjiana",
+    "principalAmountMinor": "400000",
+    "estimatedMarketValue": "4118.906666666666666667"
+  },
+  "account": {
+    "id": "acct_checking",
+    "balanceMinor": "2463945"
+  },
+  "investmentTxs": [
+    {
+      "id": "cmvawci9u00my0of89kh8qpvh",
+      "amountMinor": "-100000",
+      "direction": "DEBIT",
+      "merchant": "认购稳健理财A",
+      "category": "投资"
+    },
+    {
+      "id": "cmvawclg700ss0of8nqfl7q2w",
+      "amountMinor": "205945",
+      "direction": "CREDIT",
+      "merchant": "赎回",
+      "category": "投资"
+    }
+  ]
+}
+DBCHECK_EXITCODE=0

@@ -15,16 +15,38 @@ A competition simulator for natural-language banking with server-controlled perm
 - `banking-sdk/`: exact domain arithmetic and mutations through trusted execution context.
 - `lib/db/unit-of-work.ts`: nested repository calls share the current transaction.
 - `agent/financial-response.ts`: financial claims from structured evidence.
+- `agent/write-continuation.ts`: bounded, restart-safe continuation when a declared write produced no controlled tool call.
 - `agent/manual-review.ts`: stop future work while preserving already-started command facts.
 - `agent/scheduled-dispatcher.ts`: delivered reminders and freshly gated due payment workflows.
+- `banking-sdk/card.ts`, `agent/tools/card.ts`, `app/api/cards/[id]/consume/`: a VIRTUAL card is a debit instrument bound to one owned CHECKING account; `consume_virtual_card` debits that account and writes a `CardConsumption` row in one transaction, guarded by the card's monthly limit and replayable by execution key.
+
+## Routing Table
+
+- `tests/e2e/`: real-browser acceptance — `acceptance.e2e.ts` (mock model) and `live-acceptance.e2e.ts` (live model), plus `*.e2e-helper.ts` scenario modules.
+- `tests/unit/`, `tests/scenarios/`, `tests/integration/`, `tests/app/`: pure, scenario, SQLite-backed and HTTP coverage.
+- `tests/helpers/`, `tests/fixtures/`: shared scenario harness and seeded-fixture ids.
+
+- `banking-sdk/`: exact domain arithmetic & mutations — `card.ts`, `account.ts`, `transaction.ts`, `transfer.ts`, `investment.ts`, `types.ts`, `index.ts`.
+- `agent/`: Pi runtime & banking tools — `tools/` (registry + family modules), `confirmation/`, `durable/`, `turns/`, `providers/`, `workflows/`.
+- `lib/`: shared contracts & data access — `contracts/tool-catalog.ts` (capability source of truth), `db/` + `db/repositories/`, `i18n/` message catalogs.
+- `app/`: Next.js pages (`cards/`, `overview/`, ...) & HTTP edge (`api/` routes).
+- `components/`: display components — `components/banking/` (`CardTile` etc.), `components/chat/cards/` (chat result cards).
+- `security/`: permissions, gateway, manual card management, verification, locks. `planner/`: DAG transitions & workflow ownership.
+- `prisma/`: schema & demo seed. `scripts/`: CLI command entry points. `docs/cn/`: developer documentation.
 
 ## Invariants
 
 Booked amounts are Prisma `BigInt` minor units with explicit `*Minor` names. Annual yield ratios and unrounded valuations use Decimal arithmetic and canonical SQLite TEXT storage. `principalAmountMinor` is booked cash; `estimatedMarketValue` is unrounded CNY. Settlement rounds HALF_UP once to cents and records the quote and policy in the immutable result. Public monetary inputs and outputs are strings; `annualYieldRate` is a ratio in storage and DTOs, converted to a percentage only for display. Calculations and conditions never use floating-point money. Chart coordinate conversion is presentation only. Flagged consumption remains in booked totals. A budget envelope does not lock withdrawable cash. See `docs/cn/financial-values.md`.
 
+A VIRTUAL card is a debit instrument bound to one owned CHECKING account: it draws on that account's cash and its own monthly consumption limit, so its spendable amount is `min(account available cash, remaining monthly limit)` and its balance is account cash, never credit. Multiple virtual cards on one account share that single balance, which is counted once in total assets. A card replaced via loss/补办 is terminal (`LOST`) and must not be counted alongside its replacement — the credit-available total sums only `CREDIT` cards that are not `LOST`.
+
+Exceeding the MFA attempt limit is a terminal state: the gateway persists the command's `PendingAction` as `'locked'` (a CAS from `pending`/`awaiting_mfa`), so it stops surfacing as a pending decision and is never re-prompted; the client's popup dismisses and renders the locked failure. See `security/CONTEXT.md`.
+
 Operation keys are server-owned invocation/action/node identities. Receipts match owner, tool and normalized arguments and replay original responses before mutable lookup. Transfers additionally match their ledger. Missing evidence does not prove failure. New writes require current authorization and in-transaction ownership fences.
 
 Pi events are copied and persisted before transforms or effects. Only grounded UI events are public. Transport request IDs deduplicate run admission; session revision guards prevent overwrite. Old lease holders cannot append or write after replacement. Recovery verifies original evidence and resumes bounded original model requests or persisted workflow graphs. Incomplete model outputs cannot execute tools. See `docs/cn/agent-durability.md`.
+
+A confirmation/MFA panel exists ONLY while a real `PendingAction` row does (`pending`/`awaiting_mfa`), created solely by a model tool call through `agent/banking-agent.ts` beforeToolCall → `security/security-gateway.ts` handleToolCall → gatewayCreatePendingAction. Model prose creates no panel. When a turn declares a banking write (`describe_turn`) but emits no controlled tool call, the runtime spends at most ONE bounded continuation (`agent/write-continuation.ts`) and, if the write still stays unsubmitted, the server — never the model — narrates the true unsubmitted state. See `agent/CONTEXT.md` and `tests/CONTEXT.md`.
 
 Business calendar boundaries use UTC+08:00. Security expiry, leases and operational scheduling use real time. The authenticator and banking rail are explicit simulators.
 

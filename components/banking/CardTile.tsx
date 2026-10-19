@@ -1,7 +1,8 @@
 'use client';
 
 /**
- * CardTile — read-model tile: one bank card (masked number, status, limits, credit line).
+ * CardTile — read-model tile: one bank card (masked number, status, limits, credit line) and, for an
+ * account-bound virtual card, its linked settlement account.
  *
  * Localized presentational component with no data access — the
  * `CardView` DTO arrives via props. Money renders only through `ui/Money`; the (non-risk) card
@@ -48,6 +49,7 @@ const STATUS_TONE: Record<CardView['status'], NonNullable<BadgeProps['tone']>> =
 export function CardTile({ card, className, footer }: CardTileProps) {
   const { t } = useI18n();
   const cls = ['space-y-3', className].filter(Boolean).join(' ');
+  const isVirtual = card.type === 'VIRTUAL';
 
   return (
     <Card className={cls} footer={footer}>
@@ -60,7 +62,12 @@ export function CardTile({ card, className, footer }: CardTileProps) {
             {card.numberMasked}
           </div>
         </div>
-        <Badge tone={STATUS_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
+        <div className="flex items-center gap-2">
+          {card.replacedByCardId !== undefined ? (
+            <Badge tone="info">{t('business.cards.replaced')}</Badge>
+          ) : null}
+          <Badge tone={STATUS_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
+        </div>
       </div>
 
       {card.type === 'CREDIT' &&
@@ -79,6 +86,40 @@ export function CardTile({ card, className, footer }: CardTileProps) {
               <dt className="text-xs text-banking-navy/60">{t('business.cards.available')}</dt>
               <dd className="text-sm font-semibold text-banking-deep">
                 <Money amount={card.availableLimit} />
+              </dd>
+            </div>
+          ) : null}
+        </dl>
+      ) : null}
+
+      {isVirtual &&
+      (card.linkedAccountNumber !== undefined || card.linkedAccountId !== undefined) ? (
+        <div className="flex items-center justify-between gap-3 text-sm">
+          <span className="text-banking-navy/60">{t('business.cards.linkedAccount')}</span>
+          <span className="font-semibold text-banking-deep">
+            {card.linkedAccountNumber ?? card.linkedAccountId}
+          </span>
+        </div>
+      ) : null}
+
+      {isVirtual &&
+      (card.accountAvailableBalance !== undefined || card.payableAmount !== undefined) ? (
+        <dl className="grid grid-cols-2 gap-3">
+          {card.accountAvailableBalance !== undefined ? (
+            <div>
+              <dt className="text-xs text-banking-navy/60">
+                {t('business.cards.accountAvailable')}
+              </dt>
+              <dd className="text-sm font-semibold text-banking-deep">
+                <Money amount={card.accountAvailableBalance} />
+              </dd>
+            </div>
+          ) : null}
+          {card.payableAmount !== undefined ? (
+            <div>
+              <dt className="text-xs text-banking-navy/60">{t('business.cards.payableAmount')}</dt>
+              <dd className="text-sm font-semibold text-banking-deep">
+                <Money amount={card.payableAmount} />
               </dd>
             </div>
           ) : null}

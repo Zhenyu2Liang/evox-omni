@@ -1,1 +1,0 @@
-pwd=D:\projects\banking-agent\.genesis\workers\worker_T1_A1

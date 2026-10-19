@@ -24,9 +24,15 @@ export function inferConversationGuidance(request: string): ConversationGuidance
       requestedMoneyAmounts(text).some(amount => amount.negative || amount.zero);
     if (invalid || invalidEnglish || invalidReply) return 'invalid_amount';
   }
-  const englishCardManagement = /\b(?:create|add|issue|remove|delete|close|cancel|apply\s+for)\s+(?:(?:a|an|the|my|new|another|virtual|credit|debit|bank|payment)\s+)*cards?\b/i;
-  const chineseCardManagement = /(?:\u7533\u8bf7|\u6dfb\u52a0|\u65b0\u589e|\u5220\u9664|\u5220\u6389|\u6ce8\u9500|\u5f00\u901a|\u521b\u5efa|\u529e\u7406)(?:\u4e00\u5f20|\u4e24\u5f20|\u591a\u5f20|\d+\u5f20)?(?:\u65b0\u7684|\u6211\u7684|\u8fd9\u5f20|\u90a3\u5f20)?(?:\u94f6\u884c|\u4fe1\u7528|\u501f\u8bb0|\u50a8\u84c4|\u865a\u62df|\u5b9e\u4f53|\u65b0)*\u5361(?:\u7247)?/;
-  if (englishCardManagement.test(text) || chineseCardManagement.test(text)) return 'card_management_required';
+  // Brand-new physical card issuance and card deletion stay manual-only (page flow); virtual-card APPLICATION
+  // is agent-available, so `virtual`/虚拟 is deliberately excluded from the object list here.
+  // Reissuing an already-lost card (补办/补卡/补发, replace/reissue) is an Agent capability, so a
+  // reissue request never takes the manual-only branch even when a generic verb such as 办理 is used.
+  const cardReissue = /(?:\u5361)|\bcards?\b/i.test(text) &&
+    /(?:\u8865\u529e|\u8865\u5361|\u8865\u53d1|\u8865\u9886)|\bre(?:place|-?issue)\b|replacement\s+card/i.test(text);
+  const englishCardManagement = /\b(?:create|add|issue|remove|delete|close|cancel|apply\s+for)\s+(?:(?:a|an|the|my|new|another|credit|debit|bank|payment)\s+)*cards?\b/i;
+  const chineseCardManagement = /(?:\u7533\u8bf7|\u6dfb\u52a0|\u65b0\u589e|\u5220\u9664|\u5220\u6389|\u6ce8\u9500|\u5f00\u901a|\u521b\u5efa|\u529e\u7406)(?:\u4e00\u5f20|\u4e24\u5f20|\u591a\u5f20|\d+\u5f20)?(?:\u65b0\u7684|\u6211\u7684|\u8fd9\u5f20|\u90a3\u5f20)?(?:\u94f6\u884c|\u4fe1\u7528|\u501f\u8bb0|\u50a8\u84c4|\u5b9e\u4f53|\u65b0)*\u5361(?:\u7247)?/;
+  if (!cardReissue && (englishCardManagement.test(text) || chineseCardManagement.test(text))) return 'card_management_required';
   if (/(?:不是|搞错|说错|更正|纠正|弄错)/.test(text) && !/(?:转账|转给|申购|赎回|冻结|解冻|挂失|设置|调整)/.test(text)) return 'correction_received';
   if (/(?:卡|card)/i.test(text) && /(?:增加|加上|加点|加\d|充值|充\d|top\s*up|add)/i.test(text) && !/(?:消费限额|分类限额|category limit)/i.test(text)) return 'card_operation_ambiguous';
   return undefined;

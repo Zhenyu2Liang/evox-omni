@@ -1,7 +1,8 @@
 /** Public business history deliberately excludes execution diagnostics and approval controls. */
 export type ActivityType =
   | 'transfer' | 'card_freeze' | 'card_unfreeze' | 'card_lost' | 'card_limit'
-  | 'card_add' | 'card_delete' | 'subscription_cancel' | 'subscription_reminder'
+  | 'card_replace' | 'card_apply' | 'card_add' | 'card_delete'
+  | 'subscription_cancel' | 'subscription_reminder'
   | 'investment_purchase' | 'investment_redemption' | 'budget_reserve'
   | 'scheduled_task_create' | 'contact_add' | 'contact_delete'
   | 'transaction_acknowledgement';

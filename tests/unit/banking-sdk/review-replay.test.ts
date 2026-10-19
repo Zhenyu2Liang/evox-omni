@@ -7,7 +7,9 @@ import { DEMO_USER_ID } from '../../helpers/fixtures';
 
 useFreshDatabase();
 
-const purchase = { userId: DEMO_USER_ID, productId: 'prod_wenjiana', amount: '1000.00', idempotencyKey: 'review-purchase' };
+// Subscribes a product the user does not already hold, so the purchase creates its own holding
+// instead of aggregating into holding_wenjiana and leaving its execution key in purchaseHistory.
+const purchase = { userId: DEMO_USER_ID, productId: 'prod_huobi', amount: '1000.00', idempotencyKey: 'review-purchase' };
 const redemption = { userId: DEMO_USER_ID, holdingId: 'holding_wenjiana', expectedRedemptionAmount: '5050.00', idempotencyKey: 'review-redemption' };
 
 async function postedState() {

@@ -59,6 +59,7 @@ import { recordSecurityEvent } from '../audit';
 import { safeParse } from '../lib/json';
 import { formatCNY, moneyToCents, normalizeTransferAmount, centsToMoney, type MoneyAmount } from '../lib/money';
 import { valuationToMinor } from '../lib/decimal';
+import { settledRedemptionAmount } from '../banking-sdk/valuation';
 import { canonicalCommandArgs } from '../lib/contracts/command';
 import { recordAuthorizationDecision } from './authorization-record';
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
@@ -324,17 +325,19 @@ export const TOOL_INTENT: Record<ToolName, string> = {
   reserve_budget: '预算预留',
   // 🟡 YELLOW
   transfer_money: '转账',
-  set_card_limit: '调整信用卡额度',
+  set_card_limit: '调整卡片分类消费限额',
   cancel_subscription: '取消订阅',
-  apply_virtual_card: '申请虚拟卡',
   set_subscription_reminder: '设置订阅提醒',
   create_scheduled_task: '创建定时任务',
   // 🔴 RED
   freeze_card: '冻结银行卡',
   subscribe_investment: '理财产品申购',
   redeem_investment: '理财产品赎回',
+  apply_virtual_card: '申请虚拟卡',
+  consume_virtual_card: '虚拟卡消费',
   report_lost_card: '挂失银行卡',
   unfreeze_card: '解冻银行卡',
+  replace_card: '补办银行卡',
   // ⚪ META
   submit_plan: '规划任务',
 };
@@ -587,27 +590,55 @@ async function gatewayCreatePendingAction(
     const holding = await prisma.investmentHolding.findFirst({ where: { id: String(ctx.args.holdingId), userId: ctx.userId }, include: { product: true } });
     if (holding) summary.fields.unshift({ label: '持仓', value: `${holding.product.name}（${holding.id}）` });
     if (holding && ctx.toolName === 'redeem_investment') {
-      const amount = centsToMoney(holding.estimatedMarketValue === null
-        ? holding.principalAmountMinor : valuationToMinor(holding.estimatedMarketValue));
+      // The SERVER mints the redemption quote from the PARKED request: the requested PRINCIPAL portion
+      // (`redeemAmount`; absent ⇒ the whole holding) picks the SAME proportional valuation the SDK
+      // re-checks at execution, so the approved amount and the settled amount cannot diverge. An
+      // over-redeem request is refused HERE, before persisting, so no action is ever minted for it.
+      // The gateway only SNAPSHOTS the quote — it never mutates a balance.
+      const totalPrincipalMinor = holding.principalAmountMinor;
+      const requestedMinor = ctx.args.redeemAmount === undefined ? undefined : moneyToCents(ctx.args.redeemAmount);
+      if (requestedMinor !== undefined && requestedMinor > totalPrincipalMinor) {
+        throw new AppError('VALIDATION', '赎回本金金额不能超过持仓本金', {
+          redeemAmount: centsToMoney(requestedMinor),
+          totalPrincipal: centsToMoney(totalPrincipalMinor),
+        });
+      }
+      const redeemedPrincipalMinor = requestedMinor ?? totalPrincipalMinor;
+      const marketValue = holding.estimatedMarketValue === null
+        ? centsToMoney(totalPrincipalMinor) : holding.estimatedMarketValue;
+      // FULL mints the whole rounded valuation; PARTIAL mints the SAME proportional settlement the SDK
+      // re-checks at execution, so the confirmed quote and the settled amount cannot diverge.
+      const amount = redeemedPrincipalMinor === totalPrincipalMinor
+        ? centsToMoney(valuationToMinor(marketValue))
+        : settledRedemptionAmount(marketValue, totalPrincipalMinor, redeemedPrincipalMinor);
       ctx.args = { ...ctx.args, expectedRedemptionAmount: amount };
+      const partial = redeemedPrincipalMinor !== totalPrincipalMinor;
       summary.fields.push(
-        { label: '赎回范围', value: '全部赎回该笔持仓（不支持部分赎回）' },
-        { label: 'Principal', value: formatCNY(centsToMoney(holding.principalAmountMinor)) },
+        { label: '赎回范围', value: partial ? `部分赎回（本金 ${formatCNY(centsToMoney(redeemedPrincipalMinor))}／共计 ${formatCNY(centsToMoney(totalPrincipalMinor))}）` : '全部赎回该笔持仓' },
+        { label: 'Principal', value: formatCNY(centsToMoney(totalPrincipalMinor)) },
         { label: '赎回到账金额', value: formatCNY(amount) },
         { label: '金额变化', value: '金额变化时停止执行，需重新确认' },
       );
     }
   }
   if (ctx.toolName === 'apply_virtual_card') {
-    summary.fields.push({ label: '月限额', value: ctx.args.monthlyLimit === undefined ? '未设置（本次仅开卡）' : formatCNY(String(ctx.args.monthlyLimit)) });
-    summary.fields.push({ label: '演示范围', value: '保存卡片及月限额配置；Demo 不提供刷卡支付' });
+    summary.fields.push(
+      { label: '卡片类型', value: '虚拟卡（VIRTUAL）' },
+      { label: '卡组织', value: '银联（UnionPay）' },
+      { label: '月限额', value: ctx.args.monthlyLimit === undefined ? '未设置（本次仅开卡）' : formatCNY(String(ctx.args.monthlyLimit)) },
+      { label: '分类限额', value: '不设置（本次仅开卡）' },
+      { label: '演示范围', value: '保存卡片及月限额配置；Demo 不提供刷卡支付' },
+    );
   }
   if (ctx.args.subscriptionId) {
     const subscription = await prisma.subscription.findFirst({ where: { id: String(ctx.args.subscriptionId), userId: ctx.userId } });
     if (subscription) summary.fields.unshift({ label: '订阅', value: subscription.name });
   }
   if (ctx.toolName === 'set_subscription_reminder') summary.fields.push({ label: '提醒设置', value: ctx.args.remind === true ? '开启' : '关闭' });
-  if (ctx.toolName === 'set_card_limit' && ctx.args.amount !== undefined) summary.fields.push({ label: '新限额', value: formatCNY(String(ctx.args.amount)) });
+  if (ctx.toolName === 'set_card_limit') {
+    summary.fields.push({ label: '限额类型', value: '分类消费限额（不影响授信额度）' });
+    if (ctx.args.amount !== undefined) summary.fields.push({ label: '新分类消费限额', value: formatCNY(String(ctx.args.amount)) });
+  }
   if (['subscribe_investment', 'redeem_investment'].includes(ctx.toolName)) {
     const account = await prisma.account.findFirst({ where: { userId: ctx.userId, type: 'CHECKING' } });
     summary.fields.push({ label: ctx.toolName === 'subscribe_investment' ? '付款账户' : '入账账户', value: account?.name ?? '账户待核对' });
@@ -721,6 +752,42 @@ function planCancelledOutcome(
 }
 
 /**
+ * Persist a TERMINAL `'locked'` status on a `PendingAction` when the gateway returns a genuine
+ * circuit-breaker lock decision. Without this the row stays `pending`/`awaiting_mfa`, so
+ * `app/api/actions/route.ts#attentionFor` keeps surfacing it as a pending decision and the agent
+ * bridge re-emits `mfa_required` for the SAME actionId — the MFA popup reappears forever. A
+ * RACE-SAFE CAS (from an undecided state ONLY) means a concurrently-confirmed/terminal row is NEVER
+ * clobbered; a lost CAS is benign (the row already moved on). Local so BOTH lock branches share ONE
+ * persistence path. Returns the action consistent with the persisted state.
+ */
+async function persistLockedAction(actionId: string, action: PendingAction): Promise<PendingAction> {
+  await claimPendingAction({ actionId, from: ['pending', 'awaiting_mfa'], to: 'locked' });
+  return { ...action, status: 'locked' };
+}
+
+/**
+ * The terminal `locked` refusal returned by the circuit-breaker gate AND by a re-attempt on an
+ * already-`locked` row (idempotent: the row stays terminal and no verification is reopened). Shared
+ * so both the gate and the early re-attempt guard return the SAME shape.
+ */
+function lockedOutcome(
+  actionId: string,
+  action: PendingAction,
+  requiresMfa: boolean,
+): AuthorizationResult {
+  return {
+    ok: false,
+    status: 'locked',
+    actionId,
+    tier: action.tier,
+    requiresMfa,
+    code: 'CIRCUIT_OPEN',
+    message: '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。',
+    action,
+  };
+}
+
+/**
  * The strong-verification path (RED static tools, and a `transfer_money` already parked RED or
  * escalated): prompt for a code when none was supplied, else `mfa.verify` it, then claim the action
  * exactly-once. Returns the EFFECTIVE tier/`requiresMfa` on every branch.
@@ -781,7 +848,8 @@ async function authorizeWithMfa(
       message: locked
         ? '验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。'
         : `验证码错误，请重试。剩余尝试次数：${attemptsLeft}。`,
-      action,
+      // A GENUINE terminal lock is made DURABLE on the row; the transient `awaiting_mfa` path is NOT.
+      action: locked ? await persistLockedAction(actionId, action) : action,
     };
   }
 
@@ -979,6 +1047,14 @@ async function authorizeAction(
   // Ownership is REQUIRED (fail-closed): a missing/mismatching caller identity is refused.
   await assertOwnership(row, opts);
 
+  // A TERMINAL `locked` action (the durable circuit-breaker lock) reports the SAME lock result
+  // idempotently — handled BEFORE the undecided guard so a re-attempt gets a clean `locked` refusal
+  // (never reopens verification: no new challenge, no consumed attempt, no re-prompt).
+  if (row.status === 'locked') {
+    const lockedAction = toContractPendingAction(row);
+    return lockedOutcome(actionId, lockedAction, row.requiresMfa || lockedAction.tier === 'RED');
+  }
+
   // Only undecided actions can request a code. A historical RED flag on a confirmed/terminal
   // action must not reopen verification, issue a new challenge or consume an MFA attempt.
   if (row.status !== 'pending' && row.status !== 'awaiting_mfa') {
@@ -1005,16 +1081,8 @@ async function authorizeAction(
 
   // Circuit breaker is a hard gate the LLM (and even a correct code) cannot bypass.
   if (await isLocked(row.sessionId)) {
-    return {
-      ok: false,
-      status: 'locked',
-      actionId,
-      tier: action.tier,
-      requiresMfa: effectiveRequiresMfa,
-      code: 'CIRCUIT_OPEN',
-      message: '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。',
-      action,
-    };
+    // Make the lock DURABLE on the row so it is no longer surfaced as an undecided action.
+    return lockedOutcome(actionId, await persistLockedAction(actionId, action), effectiveRequiresMfa);
   }
 
   // `transfer_money` is DYNAMIC: its tier is re-derived at EXECUTION time (see `authorizeTransfer`).

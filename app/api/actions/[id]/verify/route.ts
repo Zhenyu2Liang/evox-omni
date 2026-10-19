@@ -66,9 +66,13 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
     // `PendingAction` row (the caller is already known to own it).
     const responseSessionId = row.sessionId;
 
+    // `mfaResult` reports the STRONG-VERIFICATION outcome: `success` only when the code was
+    // accepted; a FAILED verification is `failed`, i.e. a wrong code (`awaiting_mfa`) or exhausting
+    // the attempt limit / an open circuit (`locked`); anything else (the action never required
+    // MFA) stays `not_required`.
     const mfaResult = outcome.ok
       ? 'success'
-      : outcome.status === 'awaiting_mfa'
+      : outcome.status === 'awaiting_mfa' || outcome.status === 'locked'
         ? 'failed'
         : 'not_required';
 

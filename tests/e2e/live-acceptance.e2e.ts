@@ -37,8 +37,7 @@ import nextEnv from '@next/env';
 
 const { loadEnvConfig } = nextEnv;
 import path from 'node:path';
-import type { Browser, Page } from 'playwright-core';
-import type { PrismaClient } from '../../lib/db/prisma';
+import type { Browser, Locator, Page } from 'playwright-core';
 import {
   cliCommand,
   ensurePrismaClientGenerated,
@@ -46,14 +45,18 @@ import {
   resolveTsxBin,
   runCliStep as runCliStepShared,
 } from '../helpers/prisma-cli';
-import { centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
+import { addMoney, centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
+import { DEMO_NOW } from '../../lib/constants';
 import {
   NAV_TIMEOUT_MS,
   REPO_ROOT,
   SCREENSHOTS_DIR,
+  SELECTORS,
+  assertNoFabricatedConfirmationPanel,
   assistantTexts,
   bootDevServer,
   captureScreenshot,
+  clickConfirm,
   createReporter,
   diffLedger,
   errText,
@@ -62,6 +65,7 @@ import {
   fetchPendingActions,
   gotoAgent,
   launchBrowser,
+  mfaCardPresent,
   readDemoSessionId,
   resolveBrowserExecutable,
   sleep,
@@ -69,6 +73,7 @@ import {
   submitMfa,
   waitFor,
   waitForConfirmCard,
+  waitForElementHydration,
   waitForMfaCard,
   waitForStatusText,
   withPage,
@@ -83,6 +88,51 @@ import { journeyMultiCardFreeze } from './card-freeze.e2e-helper';
 import { journeyCardManagement } from './card-management.e2e-helper';
 import { journeyNaturalConversation, journeyDialogueRegressions, journeySubscriptionAdvice, journeyCompleteFraudDiscussion } from './conversation.e2e-helper';
 import { journeyLiveCompaction } from './compaction.e2e-helper';
+// Virtual-card live scenarios (lD/lE) are built ON TOP of this shared helper module. Its read-model /
+// DB primitives (`LiveCardRecord`, `cardById`, `fetchLiveCards`, `readCardTileRows`, `readDialogRows`,
+// `withDb`) are the ONLY definitions in the repository: this entry script imports them instead of
+// keeping local copies, so lA / lB / lC and lD / lE share one implementation of each primitive.
+import {
+  VC_CHECKING_ACCOUNT_ID,
+  VC_FIRST_SPEND,
+  VC_LIMIT_EXCEEDED_TEXT,
+  VC_MERCHANT_APPLY,
+  VC_MERCHANT_PRE_LOST,
+  VC_MERCHANT_REFUSED,
+  VC_MERCHANT_REPLACE,
+  VC_MONTHLY_LIMIT,
+  VC_OVER_LIMIT_SPEND,
+  VC_SECOND_SPEND,
+  VC_SPEND_CATEGORY,
+  VC_TINY_SPEND,
+  applyVirtualCardViaAgent,
+  assertNoSpend,
+  assertSingleSpend,
+  assertVirtualCardTile,
+  assertVirtualCardView,
+  attemptConsumeExpectingRefusal,
+  awaitRawCard,
+  cardById,
+  consumeSuccessfully,
+  expectedPayableMinor,
+  fetchLiveCards,
+  gotoCards,
+  liveModelId,
+  openConsumeDialog,
+  readCardSpendState,
+  readCardTileRows,
+  readCardTileText,
+  readDialogRows,
+  vcReplaceTurns,
+  vcReportLostTurns,
+  withDb,
+  writeScenarioEvidence,
+  type LiveCardRecord,
+  type RawCardRow,
+} from './live-virtual-card.e2e-helper';
+// Card-loss / replace chain scenarios (lF: fresh-session credit lost->replace; lG: ONE session full chain).
+// The scenario bodies live in this module; the entry only registers them.
+import { scenarioCreditReplaceNewSession, scenarioFullCardChain } from './card-replace-chain.e2e-helper';
 
 // --- isolated LIVE database ---------------------------------------------------------------------
 
@@ -94,6 +144,8 @@ const DEMO_CHECKING_ID = 'acct_checking';
 const RECIPIENT_NAME = '张伟';
 const RECIPIENT_CONTACT_ID = 'contact_zhangwei';
 const CREDIT_CARD_ID = 'card_credit';
+const DEBIT_CARD_ID = 'card_debit';
+const VIRTUAL_CARD_ID = 'card_virtual';
 
 /**
  * Apply the same environment precedence as Next.js without inspecting file contents or logging values.
@@ -168,17 +220,9 @@ function resetLiveDatabase(): void {
 }
 
 // --- authoritative DB cross-checks (throwaway PrismaClient) --------------------------------------
-
-/** Run `fn` on a throwaway PrismaClient bound to the isolated live DB. */
-async function withDb<T>(fn: (db: PrismaClient) => Promise<T>): Promise<T> {
-  const { createDatabaseClient } = await import('../../lib/db/database');
-  const db = createDatabaseClient();
-  try {
-    return await fn(db);
-  } finally {
-    await db.$disconnect().catch(() => undefined);
-  }
-}
+//
+// `withDb` itself is the shared definition exported by `./live-virtual-card.e2e-helper`; this section
+// only holds the live-specific readers built on top of it.
 
 /** The CHECKING account balance (authoritative, straight from SQLite). */
 function readCheckingBalance(): Promise<string> {
@@ -498,6 +542,92 @@ async function awaitMfaCard(page: Page, baseUrl: string, timeoutMs = 90_000): Pr
   } catch (e) {
     throw new Error(`${errText(e)} ｜ ${await noCardDiagnostics(page, baseUrl)}`);
   }
+}
+
+/** Is the chat composer (its controlled `<textarea>`) ENABLED? It is disabled while a turn streams. */
+async function composerEnabled(page: Page): Promise<boolean> {
+  const composer = page.locator(SELECTORS.composer).first();
+  return (await composer.count()) > 0 && (await composer.isEnabled());
+}
+
+/**
+ * Bounded natural-language DRIVER for a RED (MFA) tool. Both live targets below are RED tier, so a
+ * successful model turn parks an MFA card — but the LIVE model sometimes asks a plain confirmation
+ * question first and never invokes the gated tool. This driver sends ONLY natural Chinese (never an
+ * internal tool/parameter name) and, when a turn ends WITHOUT a card, nudges with the next short
+ * confirmation in the same spirit. It returns the prompts actually sent once the verification code
+ * has been submitted.
+ *
+ * A turn that ends with prose but NO card is checked for a FABRICATED confirmation-panel claim
+ * (`assertNoFabricatedConfirmationPanel`): a claim that a panel ALREADY exists while nothing is parked
+ * FAILS here instead of being nudged past. A plain clarifying question (no panel claim) keeps nudging.
+ *
+ * `requireCardAtEnd` (default `true`): when the bounded turns never park a card the driver falls
+ * through to the UNWEAKENED `awaitMfaCard` (a REAL model-behaviour failure), never a skip or a
+ * substituted mock. Pass `false` ONLY for a leg where an explicit model REFUSAL is acceptable (e.g.
+ * an idempotency re-request): it then settles the turn without requiring a second MFA/tool execution.
+ */
+async function driveRedTool(
+  page: Page,
+  baseUrl: string,
+  turns: readonly string[],
+  perTurnTimeoutMs = 30_000,
+  requireCardAtEnd = true,
+): Promise<string[]> {
+  if (turns.length === 0) throw new Error('driveRedTool 至少需要一条自然语言消息');
+  const sent: string[] = [];
+  /** Complete a parked card (confirm if needed, then MFA) so the turn settles. */
+  const settleCard = async (outcome: 'mfa' | 'confirm'): Promise<void> => {
+    if (outcome === 'confirm') {
+      await awaitConfirmCard(page, baseUrl, perTurnTimeoutMs);
+      await clickConfirm(page);
+    }
+    await awaitMfaCard(page, baseUrl, perTurnTimeoutMs);
+    await submitMfa(page, '123456');
+  };
+  for (const turn of turns) {
+    const baseline = (await assistantTexts(page)).length;
+    await submitChat(page, turn);
+    sent.push(turn);
+    // A turn ends when the composer frees up: either the gated tool parked an MFA card, or the model
+    // answered with a plain question (no card). Re-poll a still-streaming (silent) turn.
+    const outcome = await waitFor(
+      async () => {
+        if (await mfaCardPresent(page)) return 'mfa' as const;
+        if ((await confirmButtonCount(page)) > 0) return 'confirm' as const;
+        return (await assistantTexts(page)).length > baseline && (await composerEnabled(page)) ? 'reply' as const : false;
+      },
+      { timeoutMs: perTurnTimeoutMs, intervalMs: 1_000, description: `等待 LIVE 模型调用受控工具（自然轮次，MFA 卡片）：${turn}` },
+    ).catch(() => 'timeout' as const);
+    if (outcome === 'mfa' || outcome === 'confirm') {
+      await settleCard(outcome);
+      return sent;
+    }
+    if (outcome === 'reply') {
+      // Prose with NO card: FAIL now if that prose fabricates a panel that does not exist; a plain
+      // clarifying question is not a claim and keeps the existing nudge flow.
+      const prose = (await assistantTexts(page)).slice(baseline).join('\n');
+      await assertNoFabricatedConfirmationPanel({ page, prose, actions: await fetchPendingActions(baseUrl) });
+    }
+    // 'reply' (model asked a plain question) or 'timeout' (still working): send the next natural turn.
+  }
+  if (!requireCardAtEnd) {
+    // Optional-card leg: settle the turn (a late card is still completed) but never REQUIRE one.
+    const finalOutcome = await waitFor(
+      async () => {
+        if (await mfaCardPresent(page)) return 'mfa' as const;
+        if ((await confirmButtonCount(page)) > 0) return 'confirm' as const;
+        return (await composerEnabled(page)) ? 'settled' as const : false;
+      },
+      { timeoutMs: perTurnTimeoutMs, intervalMs: 1_000, description: 'RED 工具自然轮次结算（本轮不要求二次 MFA）' },
+    ).catch(() => 'settled' as const);
+    if (finalOutcome === 'mfa' || finalOutcome === 'confirm') await settleCard(finalOutcome);
+    return sent;
+  }
+  // Bounded turns produced no MFA card — one UNWEAKENED final wait (throws with the failure evidence).
+  await awaitMfaCard(page, baseUrl, perTurnTimeoutMs);
+  await submitMfa(page, '123456');
+  return sent;
 }
 
 // --- scenario scaffolding ------------------------------------------------------------------------
@@ -942,9 +1072,13 @@ async function scenarioCommittedContinuationFailed(
       // SAME session until a `transfer_money` action is actually parked (bounded attempts).
       let parked: PendingActionView | undefined;
       for (let attempt = 1; attempt <= PARK_ATTEMPTS && parked === undefined; attempt += 1) {
+        let snapshot: PendingActionView[] = [];
         try {
           parked = await waitFor(
-            async () => findParkedTransfer(await fetchPendingActions(baseUrl)) ?? false,
+            async () => {
+              snapshot = await fetchPendingActions(baseUrl);
+              return findParkedTransfer(snapshot) ?? false;
+            },
             {
               timeoutMs: PARK_POLL_MS,
               description: `GET /api/actions 出现 pending/awaiting_mfa 的 transfer_money 待处理项（第 ${attempt}/${PARK_ATTEMPTS} 次）`,
@@ -953,10 +1087,19 @@ async function scenarioCommittedContinuationFailed(
         } catch {
           parked = undefined; // a timeout is expected when the model only narrated — nudge and retry
         }
-        if (parked === undefined && attempt < PARK_ATTEMPTS) {
-          const nudge = PARK_NUDGES[Math.min(attempt - 1, PARK_NUDGES.length - 1)];
-          console.log(`· 场景7：第 ${attempt} 次未出现待确认转账（模型可能只叙述未调用工具），发送跟进消息「${nudge}」`);
-          await submitChat(page, nudge);
+        if (parked === undefined) {
+          // A prose-only claim that a confirmation panel ALREADY exists while nothing is parked is a
+          // FABRICATION: FAIL it here instead of nudging past it (distinguishes model vs UI cause).
+          await assertNoFabricatedConfirmationPanel({
+            page,
+            prose: (await assistantTexts(page)).join('\n'),
+            actions: snapshot,
+          });
+          if (attempt < PARK_ATTEMPTS) {
+            const nudge = PARK_NUDGES[Math.min(attempt - 1, PARK_NUDGES.length - 1)];
+            console.log(`· 场景7：第 ${attempt} 次未出现待确认转账（模型可能只叙述未调用工具），发送跟进消息「${nudge}」`);
+            await submitChat(page, nudge);
+          }
         }
       }
       if (parked === undefined) {
@@ -1006,9 +1149,1018 @@ async function scenarioCommittedContinuationFailed(
   return `重启后在无效 key 下确认：HTTP ${res.status} ok=${body.ok} status=${body.data?.status}（statusOk=${statusOk}）；DB PendingAction.status=${row.status}，余额 ${before.balance}→${settled.balance}（DB=${afterDb}），-200 DEBIT 恰 1 条（${settled.txIds[0]}）；DB=${JSON.stringify(row.resultJson)?.slice(0, 80)}`;
 }
 
+// --- scenarios lA / lB: LIVE card replacement + partial investment redemption ---------------------
+
+const HOLDING_WENJIANA_ID = 'holding_wenjiana';
+const CARD_REPLACE_PROMPT = '请为我挂失的信用卡补办一张新卡';
+
+/** The UNIQUE `CREDIT` + `ACTIVE` card, or `undefined` when there is none / more than one. */
+function uniqueActiveCreditCard(cards: readonly LiveCardRecord[]): LiveCardRecord | undefined {
+  const matches = cards.filter((card) => card.type === 'CREDIT' && card.status === 'ACTIVE');
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * TOTAL available credit that may actually be SPENT: every `CREDIT` card that is NOT `LOST`.
+ * A 补办 card stays in the read model as `LOST` and KEEPS its recorded `availableLimit`, so the
+ * family's allowance must be counted exactly ONCE — through the replacement, never the source too.
+ */
+function nonLostCreditAvailableTotalMinor(cards: readonly LiveCardRecord[]): bigint {
+  return cards
+    .filter((card) => card.type === 'CREDIT' && card.status !== 'LOST' && card.availableLimit !== undefined)
+    .reduce((sum, card) => sum + moneyToCents(card.availableLimit as string), 0n);
+}
+
+/** The NAIVE total over ALL `CREDIT` cards INCLUDING `LOST` ones — recorded only to expose the trap. */
+function allCreditAvailableTotalMinor(cards: readonly LiveCardRecord[]): bigint {
+  return cards
+    .filter((card) => card.type === 'CREDIT' && card.availableLimit !== undefined)
+    .reduce((sum, card) => sum + moneyToCents(card.availableLimit as string), 0n);
+}
+
+/** Poll the real `/api/cards` route until `predicate` holds (a business condition, never a fixed sleep). */
+function awaitLiveCards(
+  baseUrl: string,
+  predicate: (cards: LiveCardRecord[]) => boolean,
+  description: string,
+  timeoutMs = 180_000,
+): Promise<LiveCardRecord[]> {
+  return waitFor(
+    async () => {
+      const cards = await fetchLiveCards(baseUrl);
+      return predicate(cards) ? cards : false;
+    },
+    { timeoutMs, intervalMs: 1_000, description },
+  );
+}
+
+/**
+ * SCENARIO lA (LIVE-LLM, REAL BROWSER): report the demo credit card lost (RED `report_lost_card`) and
+ * replace it (RED `replace_card`) purely through the `/agent` chat + MFA, then verify the replacement
+ * on the REAL `/cards` page, `GET /api/cards` and SQLite — and prove `replace_card` is IDEMPOTENT for
+ * the SAME source card: a SECOND UI request must NOT mint a second card.
+ *
+ * Idempotency rule: a repeat request may REPLAY the original result, RETURN the existing result, or
+ * explicitly REFUSE the duplicate — all three are acceptable and a SECOND MFA / tool execution is NOT
+ * required. The leg is therefore judged ONLY by the authoritative `GET /api/cards` state (still 3
+ * cards, unchanged single ACTIVE credit card), never by waiting for a second MFA card to appear or
+ * disappear.
+ */
+async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
+  return withPage(
+    ctx.browser,
+    async (page) => {
+      attachCollectors(page);
+      await gotoAgent(page, ctx.baseUrl);
+
+      // BASELINE — the usable available credit BEFORE 挂失/补办, straight from the read route, so the
+      // post-补办 total can be compared against it (a 补办 must never ADD credit).
+      const cardsBeforeReplace = await fetchLiveCards(ctx.baseUrl);
+      const sourceBefore = cardById(cardsBeforeReplace, CREDIT_CARD_ID);
+      if (sourceBefore?.type !== 'CREDIT' || sourceBefore.status !== 'ACTIVE' || sourceBefore.availableLimit === undefined) {
+        throw new Error(`挂失前 ${CREDIT_CARD_ID} 应为带 availableLimit 的 ACTIVE CREDIT 卡，实际 ${JSON.stringify(sourceBefore)}`);
+      }
+      const totalAvailableBeforeMinor = nonLostCreditAvailableTotalMinor(cardsBeforeReplace);
+      const naiveAllCreditBeforeMinor = allCreditAvailableTotalMinor(cardsBeforeReplace);
+
+      // A1 — RED `report_lost_card`: bounded natural turns until the model parks the MFA card.
+      const sentA1 = await driveRedTool(page, ctx.baseUrl, [
+        '我的信用卡丢失了，请帮我正式挂失尾号6688的信用卡',
+        '确认，请办理',
+        '界面上方没有出现确认面板，请重新发起这张卡的挂失',
+        '请直接帮我办理挂失，我已经确认',
+      ]);
+      await awaitLiveCards(
+        ctx.baseUrl,
+        (cards) => cards.find((card) => card.id === CREDIT_CARD_ID)?.status === 'LOST',
+        `挂失后 GET /api/cards 中 ${CREDIT_CARD_ID}.status === LOST`,
+      );
+
+      // A2 — RED `replace_card`: same bounded natural turns (a short confirmation if the model asks).
+      const sentA2 = await driveRedTool(page, ctx.baseUrl, [
+        CARD_REPLACE_PROMPT,
+        '确认，请为我补办',
+        '界面上方没有出现确认面板，请重新发起补办',
+        '请直接为我补办一张新卡，我已确认',
+      ]);
+      const replaced = await awaitLiveCards(
+        ctx.baseUrl,
+        (cards) =>
+          cardById(cards, DEBIT_CARD_ID)?.type === 'DEBIT' &&
+          cardById(cards, DEBIT_CARD_ID)?.status === 'ACTIVE' &&
+          cardById(cards, VIRTUAL_CARD_ID)?.type === 'VIRTUAL' &&
+          cardById(cards, VIRTUAL_CARD_ID)?.status === 'ACTIVE' &&
+          cards.find((card) => card.id === CREDIT_CARD_ID)?.replacedByCardId !== undefined &&
+          uniqueActiveCreditCard(cards) !== undefined,
+        '补卡后：card_credit 已关联补办卡、恰有一张 ACTIVE 信用卡，且 DEBIT / VIRTUAL 演示卡仍为 ACTIVE',
+      );
+      const activeCredit = uniqueActiveCreditCard(replaced);
+      if (activeCredit === undefined) throw new Error('补卡后未找到唯一的 ACTIVE 信用卡');
+      const newId = activeCredit.id;
+
+      // REAL PAGE — the replacement tile's limits/status and the source card's LOST + 已补卡 badges.
+      await page.goto(`${ctx.baseUrl}/cards`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+      await waitForElementHydration(page, '[data-card-add] button');
+      const newRows = await readCardTileRows(page, newId);
+      const newTileText = (await page.locator(`[data-card-id="${newId}"]`).first().innerText()).replace(/\s+/g, ' ');
+      const sourceTileText = (await page.locator(`[data-card-id="${CREDIT_CARD_ID}"]`).first().innerText()).replace(/\s+/g, ' ');
+      const cardsShot = await captureLive(page, 'lA-cards');
+      if (newRows['信用额度'] !== '¥18,000.00' || newRows['可用额度'] !== '¥18,000.00') {
+        throw new Error(`补办信用卡 ${newId} 应显示 信用额度=可用额度=¥18,000.00，实际 ${JSON.stringify(newRows)}`);
+      }
+      if (!newTileText.includes('正常')) {
+        throw new Error(`补办信用卡 ${newId} 未显示「正常」状态：${newTileText.slice(0, 200)}`);
+      }
+      if (!sourceTileText.includes('已挂失') || !sourceTileText.includes('已补卡')) {
+        throw new Error(`${CREDIT_CARD_ID} 应同时显示「已挂失」与「已补卡」，实际：${sourceTileText.slice(0, 200)}`);
+      }
+
+      // AUTHORITATIVE cross-check via the raw `/api/cards` route (NOT the narrow `fetchCards` helper).
+      const cards = await fetchLiveCards(ctx.baseUrl);
+      const actives = cards.filter((card) => card.type === 'CREDIT' && card.status === 'ACTIVE');
+      if (actives.length !== 1) {
+        throw new Error(`应恰有 1 张 ACTIVE 信用卡，实际 ${actives.length}：${JSON.stringify(cards)}`);
+      }
+      const active = actives[0];
+      if (active.creditLimit !== '18000.00' || active.availableLimit !== '18000.00') {
+        throw new Error(`ACTIVE 信用卡额度应为 creditLimit=availableLimit=18000.00，实际 creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}`);
+      }
+      const source = cardById(cards, CREDIT_CARD_ID);
+      if (source?.status !== 'LOST') throw new Error(`${CREDIT_CARD_ID} 应仍为 LOST，实际 ${source?.status}`);
+      if (source?.replacedByCardId !== active.id) {
+        throw new Error(`${CREDIT_CARD_ID}.replacedByCardId 应指向 ${active.id}，实际 ${source?.replacedByCardId}`);
+      }
+      // The replacement CREDIT card inherits the source's monthly limit; the OTHER two seeded cards are
+      // untouched and keep their EXACT type / status / limits — asserted by type/status, never by count alone.
+      if (active.monthlyLimit !== '18000.00') {
+        throw new Error(`补办信用卡月限额应继承原卡（18000.00），实际 ${active.monthlyLimit}`);
+      }
+      const debitCard = cardById(cards, DEBIT_CARD_ID);
+      if (debitCard?.type !== 'DEBIT' || debitCard.status !== 'ACTIVE' || debitCard.creditLimit !== undefined
+        || debitCard.availableLimit !== undefined || debitCard.monthlyLimit !== undefined) {
+        throw new Error(`${DEBIT_CARD_ID} 应为不带任何额度字段的 ACTIVE DEBIT 卡，实际 ${JSON.stringify(debitCard)}`);
+      }
+      const virtualCard = cardById(cards, VIRTUAL_CARD_ID);
+      if (virtualCard?.type !== 'VIRTUAL' || virtualCard.status !== 'ACTIVE'
+        || virtualCard.monthlyLimit !== '5000.00' || virtualCard.linkedAccountId !== DEMO_CHECKING_ID) {
+        throw new Error(`${VIRTUAL_CARD_ID} 应为绑定 ${DEMO_CHECKING_ID}、月限额 5000.00 的 ACTIVE VIRTUAL 卡，实际 ${JSON.stringify(virtualCard)}`);
+      }
+      if (cards.filter((card) => card.type === 'DEBIT').length !== 1 || cards.filter((card) => card.type === 'VIRTUAL').length !== 1) {
+        throw new Error(`应恰有 1 张 DEBIT 与 1 张 VIRTUAL 卡，实际 ${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+      }
+      if (cards.length !== 4) {
+        throw new Error(`卡片总数应为 4（1 张 ACTIVE 补办卡 + 1 张 LOST 源卡 + 1 张 DEBIT + 1 张 VIRTUAL），实际 ${cards.length}：${cards.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+      }
+
+      // NO-DOUBLING — 补办 must not create credit: the replacement INHERITS the source's available
+      // limit and the `LOST` source stops counting toward usable credit, so the spendable total is
+      // unchanged. A total that DOUBLED here would let the demo user spend the same allowance twice.
+      const totalAvailableAfterMinor = nonLostCreditAvailableTotalMinor(cards);
+      const naiveAllCreditAfterMinor = allCreditAvailableTotalMinor(cards);
+      if (active.availableLimit !== sourceBefore.availableLimit) {
+        throw new Error(`补办卡可用额度应继承原卡 ${sourceBefore.availableLimit}（不得放大），实际 ${active.availableLimit}`);
+      }
+      if (totalAvailableAfterMinor !== totalAvailableBeforeMinor) {
+        throw new Error(`补办前后「非 LOST 信用卡可用额度合计」必须不变（额度不得算两次）：补办前 ${centsToMoney(totalAvailableBeforeMinor)} → 补办后 ${centsToMoney(totalAvailableAfterMinor)}（明细：${cards.filter((card) => card.type === 'CREDIT').map((card) => `${card.id}:${card.status}:可用=${card.availableLimit ?? '无'}`).join(' ')}）`);
+      }
+
+      // IDEMPOTENCY — a SECOND `replace_card` request through the UI must NOT mint a second card. The
+      // repeat request may replay the original result, return the existing result, or explicitly refuse
+      // the duplicate; a second MFA / tool execution is NOT required (`requireCardAtEnd = false`). The
+      // leg is judged solely by the authoritative `GET /api/cards` route state below.
+      await gotoAgent(page, ctx.baseUrl);
+      const sentIdem = await driveRedTool(
+        page,
+        ctx.baseUrl,
+        [
+          CARD_REPLACE_PROMPT,
+          '确认，请为我补办',
+          '请再提交一次这张卡的补办申请，我要确认不会重复发卡',
+        ],
+        undefined,
+        false,
+      );
+      const afterSecond = await fetchLiveCards(ctx.baseUrl);
+      const activeAfter = uniqueActiveCreditCard(afterSecond);
+      if (afterSecond.length !== 4) {
+        throw new Error(`第二次补卡后卡片总数应仍为 4（未新增第二张补办卡），实际 ${afterSecond.length}：${afterSecond.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+      }
+      if (activeAfter?.id !== newId) {
+        throw new Error(`第二次补卡后 ACTIVE 信用卡 id 应仍为 ${newId}（未新增第二张），实际 ${activeAfter?.id ?? '无'}`);
+      }
+
+      // …and the repeat request must not release a SECOND allowance either.
+      const totalAvailableAfterIdemMinor = nonLostCreditAvailableTotalMinor(afterSecond);
+      if (totalAvailableAfterIdemMinor !== totalAvailableBeforeMinor) {
+        throw new Error(`重复补卡请求后「非 LOST 信用卡可用额度合计」仍须为 ${centsToMoney(totalAvailableBeforeMinor)}（不得重复发卡/放额度），实际 ${centsToMoney(totalAvailableAfterIdemMinor)}：${afterSecond.filter((card) => card.type === 'CREDIT').map((card) => `${card.id}:${card.status}:可用=${card.availableLimit ?? '无'}`).join(' ')}`);
+      }
+
+      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（重复请求，允许重放/返回既有结果/显式拒绝，不要求二次 MFA/工具执行）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）；可用信用额度（非 LOST 信用卡合计）：补办前 ${centsToMoney(totalAvailableBeforeMinor)}（${CREDIT_CARD_ID}:ACTIVE:可用=${sourceBefore.availableLimit}）→ 补办后 ${centsToMoney(totalAvailableAfterMinor)}（唯一 ACTIVE 补办卡 ${newId}:可用=${active.availableLimit}；${CREDIT_CARD_ID}:LOST:可用=${source?.availableLimit ?? '无'}，已排除）；把 LOST 源卡也计入的朴素合计 ${centsToMoney(naiveAllCreditBeforeMinor)} → ${centsToMoney(naiveAllCreditAfterMinor)}（重复计额度，已被断言排除）；重复补卡后合计=${centsToMoney(totalAvailableAfterIdemMinor)}；截图 ${cardsShot ?? '未落盘'}`;
+    },
+    { label: 'lA-credit-report-lost-and-replace' },
+  );
+}
+
+/** The `holding_wenjiana` row subset the redemption scenario asserts on. */
+interface LiveHoldingRow {
+  principalAmountMinor: bigint;
+  estimatedMarketValue: string | null;
+}
+
+/** Poll SQLite for the `holding_wenjiana` row until `predicate` holds (a business condition). */
+function awaitHolding(
+  predicate: (row: LiveHoldingRow) => boolean,
+  description: string,
+  timeoutMs = 180_000,
+): Promise<LiveHoldingRow> {
+  return waitFor(
+    async () =>
+      withDb(async (db) => {
+        const row = await db.investmentHolding.findUnique({
+          where: { id: HOLDING_WENJIANA_ID },
+          select: { principalAmountMinor: true, estimatedMarketValue: true },
+        });
+        return row && predicate(row) ? row : false;
+      }),
+    { timeoutMs, intervalMs: 1_000, description },
+  );
+}
+
+/** Read one labelled `label → value` row (two adjacent spans) from a rendered investment tile. */
+async function readTileRow(tile: Locator, label: string): Promise<string> {
+  return tile.evaluate((el, wanted) => {
+    for (const span of Array.from(el.querySelectorAll('span'))) {
+      if ((span.textContent ?? '').trim() !== wanted) continue;
+      const cells = span.parentElement ? Array.from(span.parentElement.querySelectorAll('span')) : [];
+      if (cells.length >= 2) return (cells[1].textContent ?? '').trim();
+    }
+    return '';
+  }, label);
+}
+
+/**
+ * SCENARIO lB (LIVE-LLM, REAL BROWSER): subscribe an extra ¥1,000 into 稳健理财A (RED) and then
+ * PARTIALLY redeem ¥2,000 of principal (RED) through the `/agent` chat + MFA, then verify the EXACT
+ * remaining principal / market value / profit on the REAL `/investments` page, the ledger + balance
+ * and the full-precision valuation stored in SQLite.
+ */
+async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
+  return withPage(
+    ctx.browser,
+    async (page) => {
+      attachCollectors(page);
+      const beforeBalance = (await fetchDashboardSummary(ctx.baseUrl)).checkingBalance;
+      const beforeLedger = (await fetchLedger(ctx.baseUrl)).transactions;
+      await gotoAgent(page, ctx.baseUrl);
+
+      // B1 — RED `subscribe_investment` (¥1,000 into 稳健理财A → principal 6,000.00): bounded natural
+      // turns; if the model insists on a failing plan/submission path, one mild natural rephrase.
+      const sentB1 = await driveRedTool(page, ctx.baseUrl, [
+        '追加申购稳健理财A 1000元',
+        '确认，请办理',
+        '界面上方没有出现确认面板，请重新发起这笔追加申购',
+        '现在就用我的账户追加申购稳健理财A 1000元',
+      ]);
+      await awaitHolding(
+        (row) => row.principalAmountMinor === 600_000n,
+        'B1 后 holding_wenjiana.principalAmountMinor === 600000（¥6,000.00）',
+      );
+
+      // B2 — RED `redeem_investment` (PARTIAL ¥2,000 principal → principal 4,000.00): bounded natural turns.
+      const sentB2 = await driveRedTool(page, ctx.baseUrl, [
+        '我持有的稳健理财A部分赎回2000元本金',
+        '确认，请办理',
+        '界面上方没有出现确认面板，请重新发起这笔部分赎回',
+      ]);
+      const holding = await awaitHolding(
+        (row) => row.principalAmountMinor === 400_000n && (row.estimatedMarketValue ?? '').startsWith('4118.90666'),
+        'B2 后 principalAmountMinor === 400000 且 estimatedMarketValue 以 4118.90666 开头（全精度存储）',
+      );
+
+      // REAL PAGE — exact remaining principal / market value / profit rendered on `/investments`.
+      await page.goto(`${ctx.baseUrl}/investments`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+      await waitForElementHydration(page, '[data-investment-holdings]');
+      const tiles = page.locator('[data-investment-holdings] div.rounded-2xl').filter({ hasText: '稳健理财A' });
+      const tileCount = await tiles.count();
+      if (tileCount !== 1) throw new Error(`/investments 持仓区「稳健理财A」卡片应恰 1 张，实际 ${tileCount}`);
+      const principal = await readTileRow(tiles.first(), '持有金额');
+      const marketValue = await readTileRow(tiles.first(), '市值');
+      const profit = await readTileRow(tiles.first(), '收益');
+      await captureLive(page, 'lB-investments');
+      const shown: Record<string, string> = { 持有金额: principal, 市值: marketValue, 收益: profit };
+      for (const [label, value] of Object.entries(shown)) {
+        if (value === '') throw new Error(`/investments 未渲染「${label}」行`);
+        if (/\.\d{6,}/.test(value)) throw new Error(`「${label}」展示了未结算的过高精度：${value}`);
+        if (!/^[+-]?¥[\d,]+\.\d{2}$/.test(value)) throw new Error(`「${label}」显示值格式不正确：${value}`);
+      }
+      if (principal !== '¥4,000.00') throw new Error(`持有金额应为 ¥4,000.00，实际 ${principal}`);
+      if (marketValue !== '¥4,118.91') throw new Error(`市值应为 ¥4,118.91，实际 ${marketValue}`);
+      if (profit !== '+¥118.91') throw new Error(`收益应为 +¥118.91，实际 ${profit}`);
+
+      // LEDGER + BALANCE — one investment DEBIT (认购) and one investment CREDIT (赎回).
+      const afterBalance = (await fetchDashboardSummary(ctx.baseUrl)).checkingBalance;
+      const afterLedger = (await fetchLedger(ctx.baseUrl)).transactions;
+      const added = diffLedger(beforeLedger, afterLedger).added;
+      const describe = added.map((tx) => `${tx.id}:${tx.amount}:${tx.direction}:${tx.merchant}/${tx.category}`).join(' ');
+      const debits = added.filter(
+        (tx) => tx.direction === 'DEBIT' && moneyToCents(tx.amount) === -100_000n && tx.merchant === '认购稳健理财A' && tx.category === '投资',
+      );
+      const credits = added.filter(
+        (tx) => tx.direction === 'CREDIT' && moneyToCents(tx.amount) === 205_945n && tx.merchant === '赎回' && tx.category === '投资',
+      );
+      if (debits.length !== 1) throw new Error(`账本应新增 1 条 -1000.00 的投资 DEBIT（认购稳健理财A），实际 ${debits.length}：${describe}`);
+      if (credits.length !== 1) throw new Error(`账本应新增 1 条 +2059.45 的投资 CREDIT（赎回），实际 ${credits.length}：${describe}`);
+      const expectedBalance = addMoney(subtractMoney(beforeBalance, '1000.00'), '2059.45');
+      if (afterBalance !== expectedBalance) throw new Error(`活期余额应为 ${expectedBalance}，实际 ${afterBalance}`);
+
+      return `B1 实际发送：${sentB1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → DB principalAmountMinor=600000（¥6,000.00）；B2 实际发送：${sentB2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → DB principalAmountMinor=${holding.principalAmountMinor}（¥4,000.00）、estimatedMarketValue=${holding.estimatedMarketValue}（全精度）；/investments 显示 持有金额=${principal}、市值=${marketValue}、收益=${profit}；账本新增 DEBIT ${debits[0].amount}（${debits[0].id}，${debits[0].merchant}/${debits[0].category}）与 CREDIT ${credits[0].amount}（${credits[0].id}，${credits[0].merchant}/${credits[0].category}）；活期余额 ${beforeBalance} → ${afterBalance}`;
+    },
+    { label: 'lB-investment-partial-redemption' },
+  );
+}
+
 // --- scenario table ------------------------------------------------------------------------------
 
 /** Verify transport completion and exact text preservation using persisted wire events. */
+// --- scenario lC: LIVE virtual-card consumption --------------------------------------------------
+
+/** UI-driven consumption for scenario lC (a unique merchant keeps the ledger row unambiguous). */
+const VIRTUAL_CONSUME_AMOUNT = '88.00';
+const VIRTUAL_CONSUME_CATEGORY = '购物';
+const VIRTUAL_CONSUME_MERCHANT = '虚拟卡消费验证';
+/** Natural (Chinese-only) turns asking the model to CONFIRM the EXISTING virtual card — never to mint one. */
+const VIRTUAL_CONFIRM_PROMPT = '我只是想确认一下我现有的那张虚拟卡（尾号7788）的状态，不需要新办卡，可以吗？';
+const VIRTUAL_PAYABLE_PROMPT = '那我这张虚拟卡当前最多可以支付多少钱？';
+
+/** The raw SQLite state scenario lC cross-checks (authoritative). */
+interface VirtualConsumeSnapshot {
+  cardDebits: { id: string; amountMinor: bigint; channel: string | null; direction: string; category: string; merchant: string; occurredAt: Date }[];
+  consumptions: { id: string; cardId: string; accountId: string; amountMinor: bigint; category: string; merchant: string; occurredAt: Date }[];
+  balanceMinor: bigint;
+}
+
+/** Read the CARD-channel debits, the virtual card's consumption rows and the checking balance from SQLite. */
+function readVirtualConsumeSnapshot(): Promise<VirtualConsumeSnapshot> {
+  return withDb(async (db) => {
+    const [cardDebits, consumptions, account] = await Promise.all([
+      db.transaction.findMany({
+        where: { accountId: DEMO_CHECKING_ID, channel: 'CARD', direction: 'DEBIT' },
+        select: { id: true, amountMinor: true, channel: true, direction: true, category: true, merchant: true, occurredAt: true },
+      }),
+      db.cardConsumption.findMany({
+        where: { cardId: VIRTUAL_CARD_ID },
+        select: { id: true, cardId: true, accountId: true, amountMinor: true, category: true, merchant: true, occurredAt: true },
+      }),
+      db.account.findUnique({ where: { id: DEMO_CHECKING_ID }, select: { balanceMinor: true } }),
+    ]);
+    if (!account) throw new Error(`缺少账户 ${DEMO_CHECKING_ID}`);
+    return { cardDebits, consumptions, balanceMinor: account.balanceMinor };
+  });
+}
+
+/**
+ * SCENARIO lC (LIVE-LLM, REAL BROWSER): confirm the SEEDED virtual card (`card_virtual` — a VIRTUAL debit
+ * instrument bound to `acct_checking` with monthly limit ¥5,000.00) through a natural `/agent` request,
+ * then spend WITHIN limits through the REAL front-end consume dialog (`CardManager` 消费 button →
+ * `CardConsumeDialog` form → `POST /api/cards/[id]/consume`).
+ *
+ * The spend is verified at the API + SQLite level: exactly ONE `channel='CARD'`/`direction='DEBIT'`
+ * `Transaction` of the exact amount, exactly ONE `CardConsumption` row, the checking-account balance
+ * reduced EXACTLY ONCE, and `payableAmount` recomputed as `min(available cash, remaining monthly limit)`.
+ * The card is never duplicated (an informational request mints nothing).
+ */
+async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
+  return withPage(
+    ctx.browser,
+    async (page) => {
+      attachCollectors(page);
+      // Baseline FIRST — the seeded virtual card must be an ACTIVE VIRTUAL bound to the checking account,
+      // and the DB balance / CARD debits / consumptions are the authoritative start state.
+      const baselineCards = await awaitLiveCards(
+        ctx.baseUrl,
+        (cards) => cardById(cards, VIRTUAL_CARD_ID)?.type === 'VIRTUAL' && cardById(cards, VIRTUAL_CARD_ID)?.status === 'ACTIVE',
+        `${VIRTUAL_CARD_ID} 应为 ACTIVE 的 VIRTUAL 卡`,
+      );
+      const virtualBefore = cardById(baselineCards, VIRTUAL_CARD_ID);
+      if (!virtualBefore) throw new Error(`GET /api/cards 缺少 ${VIRTUAL_CARD_ID}`);
+      if (virtualBefore.linkedAccountId !== DEMO_CHECKING_ID) {
+        throw new Error(`${VIRTUAL_CARD_ID}.linkedAccountId 应为 ${DEMO_CHECKING_ID}，实际 ${virtualBefore.linkedAccountId}`);
+      }
+      const monthlyLimit = virtualBefore.monthlyLimit;
+      const availableBefore = virtualBefore.accountAvailableBalance;
+      const payableBefore = virtualBefore.payableAmount;
+      if (monthlyLimit === undefined || availableBefore === undefined || payableBefore === undefined) {
+        throw new Error(`${VIRTUAL_CARD_ID} 应暴露 monthlyLimit/accountAvailableBalance/payableAmount，实际 ${JSON.stringify(virtualBefore)}`);
+      }
+      const before = await readVirtualConsumeSnapshot();
+      const limitMinor = moneyToCents(monthlyLimit);
+      const amountMinor = moneyToCents(VIRTUAL_CONSUME_AMOUNT);
+      if (amountMinor <= 0n) throw new Error(`消费金额必须为正：${VIRTUAL_CONSUME_AMOUNT}`);
+      const spentBeforeMinor = before.consumptions.reduce((sum, row) => sum + row.amountMinor, 0n);
+      const remainingBeforeMinor = limitMinor > spentBeforeMinor ? limitMinor - spentBeforeMinor : 0n;
+      const expectedPayableBeforeMinor = before.balanceMinor < remainingBeforeMinor ? before.balanceMinor : remainingBeforeMinor;
+      if (moneyToCents(payableBefore) !== expectedPayableBeforeMinor) {
+        throw new Error(`${VIRTUAL_CARD_ID}.payableAmount 应为 min(可用余额 ${centsToMoney(before.balanceMinor)}, 剩余月限额 ${centsToMoney(remainingBeforeMinor)}) = ${centsToMoney(expectedPayableBeforeMinor)}，实际 ${payableBefore}`);
+      }
+
+      // C1 — natural `/agent` request CONFIRMING the existing virtual card (never a create request). It is
+      // driven through `driveRedTool`, which applies the `assertNoFabricatedConfirmationPanel` guard on
+      // every prose-only turn; `requireCardAtEnd = false` because a plain status answer parks no card.
+      await gotoAgent(page, ctx.baseUrl);
+      const confirmBaseline = (await assistantTexts(page)).length;
+      const sentC1 = await driveRedTool(page, ctx.baseUrl, [VIRTUAL_CONFIRM_PROMPT, VIRTUAL_PAYABLE_PROMPT], undefined, false);
+      await assertNoFabricatedConfirmationPanel({
+        page,
+        prose: (await assistantTexts(page)).slice(confirmBaseline).join('\n'),
+        actions: await fetchPendingActions(ctx.baseUrl),
+      });
+      // The informational request must NOT mint a second virtual card: the total card COUNT must stay at the BASELINE captured at scenario start (a preceding lA leg may legitimately add a replacement credit card); still one VIRTUAL.
+      const afterConfirm = await fetchLiveCards(ctx.baseUrl);
+      const virtuals = afterConfirm.filter((card) => card.type === 'VIRTUAL');
+      if (virtuals.length !== 1 || virtuals[0].id !== VIRTUAL_CARD_ID) {
+        throw new Error(`确认虚拟卡后应仍恰有 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}），实际 ${JSON.stringify(virtuals)}`);
+      }
+      if (afterConfirm.length !== baselineCards.length) {
+        throw new Error(`确认虚拟卡后卡片总数应保持不变（基线 ${baselineCards.length} 张），实际 ${afterConfirm.length}：${afterConfirm.map((card) => `${card.id}:${card.type}:${card.status}`).join(',')}`);
+      }
+
+      // C2 — spend THROUGH THE REAL FRONT-END (CardManager 消费 button → CardConsumeDialog form).
+      await page.goto(`${ctx.baseUrl}/cards`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+      await waitForElementHydration(page, `[data-card-id="${VIRTUAL_CARD_ID}"] [data-card-consume] button`);
+      const consumeButton = page.locator(`[data-card-id="${VIRTUAL_CARD_ID}"] [data-card-consume] button`).first();
+      await waitFor(async () => ((await consumeButton.isEnabled()) ? true : false), {
+        timeoutMs: 60_000,
+        description: `${VIRTUAL_CARD_ID} 的「消费」按钮可用`,
+      });
+      await consumeButton.click();
+      await waitForElementHydration(page, '[data-card-consume-form]');
+      const dialogCardId = await page.locator('[data-card-consume-dialog]').first().getAttribute('data-card-consume-card-id');
+      if (dialogCardId !== VIRTUAL_CARD_ID) {
+        throw new Error(`消费弹窗应绑定 ${VIRTUAL_CARD_ID}，实际 data-card-consume-card-id=${dialogCardId}`);
+      }
+      const summary = await readDialogRows(page, '[data-card-consume-summary]');
+      if (summary['月限额'] !== formatCNY(monthlyLimit)) {
+        throw new Error(`消费弹窗「月限额」应为 ${formatCNY(monthlyLimit)}，实际 ${summary['月限额']}（${JSON.stringify(summary)}）`);
+      }
+      if (summary['关联账户'] !== '****8821') {
+        throw new Error(`消费弹窗「关联账户」应为 ****8821，实际 ${summary['关联账户']}（${JSON.stringify(summary)}）`);
+      }
+      if (summary['当前可支付金额'] !== formatCNY(payableBefore)) {
+        throw new Error(`消费弹窗「当前可支付金额」应为 ${formatCNY(payableBefore)}，实际 ${summary['当前可支付金额']}（${JSON.stringify(summary)}）`);
+      }
+      const form = page.locator('[data-card-consume-form]').first();
+      // The dialog must offer NO time control at all: the booking instant is SERVER-owned.
+      const formFieldNames = await form.locator('input').evaluateAll((els) => els.map((el) => el.getAttribute('name') ?? ''));
+      if (formFieldNames.some((name) => /occurred|date|time/i.test(name))) {
+        throw new Error(`消费表单不得包含任何时间字段（记账时间由服务端拥有），实际 ${JSON.stringify(formFieldNames)}`);
+      }
+      for (const required of ['amount', 'category', 'merchant']) {
+        if (!formFieldNames.includes(required)) {
+          throw new Error(`消费表单缺少 ${required} 字段，实际 ${JSON.stringify(formFieldNames)}`);
+        }
+      }
+      await form.locator('input[name="amount"]').fill(VIRTUAL_CONSUME_AMOUNT);
+      await form.locator('input[name="category"]').fill(VIRTUAL_CONSUME_CATEGORY);
+      await form.locator('input[name="merchant"]').fill(VIRTUAL_CONSUME_MERCHANT);
+      const formShot = await captureLive(page, 'lC-consume-form');
+      // Capture the EXACT body the dialog sends: it must carry no booking time.
+      const consumeRequest = page.waitForRequest(
+        (req) => req.method() === 'POST' && req.url().includes(`/api/cards/${VIRTUAL_CARD_ID}/consume`),
+        { timeout: 60_000 },
+      );
+      await form.getByRole('button', { name: '提交消费', exact: true }).click();
+      const sentBodyText = (await consumeRequest).postData() ?? '';
+      if (sentBodyText === '') throw new Error('消费请求没有请求体，无法核对是否提交了记账时间');
+      const sentBody = JSON.parse(sentBodyText) as Record<string, unknown>;
+      if ('occurredAt' in sentBody) {
+        throw new Error(`消费请求体不得携带 occurredAt（记账时间由服务端拥有），实际 ${sentBodyText}`);
+      }
+      // The dialog may also send its retry `executionKey` (an idempotency identity, NOT a time), so the
+      // property pinned here is precisely the one that matters: the body carries NO time-shaped key and
+      // nothing outside the four accepted fields.
+      const sentKeys = Object.keys(sentBody).sort().join(',');
+      const allowedKeys = new Set(['amount', 'category', 'merchant', 'executionKey']);
+      const unexpectedKeys = Object.keys(sentBody).filter((key) => !allowedKeys.has(key));
+      if (unexpectedKeys.length > 0) {
+        throw new Error(`消费请求体只允许 amount/category/merchant/executionKey，实际多出 ${unexpectedKeys.join(',')}（${sentBodyText}）`);
+      }
+      const timeShapedKeys = Object.keys(sentBody).filter((key) => /occurred|date|time/i.test(key));
+      if (timeShapedKeys.length > 0) {
+        throw new Error(`消费请求体不得携带任何时间字段（记账时间由服务端拥有），实际 ${timeShapedKeys.join(',')}（${sentBodyText}）`);
+      }
+      for (const required of ['amount', 'category', 'merchant']) {
+        if (!(required in sentBody)) {
+          throw new Error(`消费请求体缺少 ${required}，实际 ${sentBodyText}`);
+        }
+      }
+      if (sentBody['amount'] !== VIRTUAL_CONSUME_AMOUNT) {
+        throw new Error(`消费请求体 amount 应为 ${VIRTUAL_CONSUME_AMOUNT}，实际 ${String(sentBody['amount'])}`);
+      }
+      await waitForStatusText(page, '消费成功', 60_000);
+      // The dialog reloads this card's consumptions after a successful spend → exactly ONE new record.
+      await waitFor(
+        async () => ((await page.locator('[data-card-consumption]').count()) === before.consumptions.length + 1 ? true : false),
+        { timeoutMs: 60_000, description: '消费成功后弹窗「消费记录」新增 1 条' },
+      );
+      const recordText = (await page.locator('[data-card-consumption]').last().innerText()).replace(/\s+/g, ' ');
+      if (!recordText.includes(VIRTUAL_CONSUME_MERCHANT) || !recordText.includes(formatCNY(VIRTUAL_CONSUME_AMOUNT))) {
+        throw new Error(`弹窗消费记录应包含「${VIRTUAL_CONSUME_MERCHANT}」与 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}，实际「${recordText}」`);
+      }
+      const successShot = await captureLive(page, 'lC-consume-success');
+
+      // AUTHORITATIVE cross-check: exactly ONE new CARD DEBIT, ONE CardConsumption, ONE balance drop.
+      const after = await readVirtualConsumeSnapshot();
+      const newDebits = after.cardDebits.filter((row) => !before.cardDebits.some((prev) => prev.id === row.id));
+      const newConsumptions = after.consumptions.filter((row) => !before.consumptions.some((prev) => prev.id === row.id));
+      const describeDebits = newDebits.map((row) => `${row.id}:${row.amountMinor}:${row.direction}:${row.channel}:${row.category}/${row.merchant}`).join(' ');
+      const describeConsumptions = newConsumptions.map((row) => `${row.id}:${row.cardId}:${row.accountId}:${row.amountMinor}:${row.category}/${row.merchant}`).join(' ');
+      if (after.cardDebits.length !== before.cardDebits.length + 1) {
+        throw new Error(`应恰新增 1 条 channel=CARD 的 DEBIT 流水，实际新增 ${after.cardDebits.length - before.cardDebits.length}：${describeDebits}`);
+      }
+      const debitRow = newDebits[0];
+      if (!debitRow) throw new Error('新增 CARD 流水为空');
+      if (debitRow.amountMinor !== -amountMinor || debitRow.direction !== 'DEBIT' || debitRow.channel !== 'CARD'
+        || debitRow.category !== VIRTUAL_CONSUME_CATEGORY || debitRow.merchant !== VIRTUAL_CONSUME_MERCHANT) {
+        throw new Error(`新增 CARD 流水应为 -${amountMinor}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}），实际 ${describeDebits}`);
+      }
+      if (after.consumptions.length !== before.consumptions.length + 1) {
+        throw new Error(`应恰新增 1 条 CardConsumption，实际新增 ${after.consumptions.length - before.consumptions.length}：${describeConsumptions}`);
+      }
+      const consumptionRow = newConsumptions[0];
+      if (!consumptionRow) throw new Error('新增 CardConsumption 为空');
+      if (consumptionRow.cardId !== VIRTUAL_CARD_ID || consumptionRow.accountId !== DEMO_CHECKING_ID
+        || consumptionRow.amountMinor !== amountMinor || consumptionRow.category !== VIRTUAL_CONSUME_CATEGORY
+        || consumptionRow.merchant !== VIRTUAL_CONSUME_MERCHANT) {
+        throw new Error(`新增 CardConsumption 应为 cardId=${VIRTUAL_CARD_ID}、accountId=${DEMO_CHECKING_ID}、amountMinor=${amountMinor}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}），实际 ${describeConsumptions}`);
+      }
+      // SERVER-OWNED TIME — both rows carry the SAME server business instant (the pinned demo clock
+      // DEMO_NOW), never a client value: the dialog body captured above carried no time field at all.
+      const serverInstantMs = DEMO_NOW;
+      if (debitRow.occurredAt.getTime() !== serverInstantMs) {
+        throw new Error(`CARD 流水的 occurredAt 应为服务端业务时钟 ${new Date(serverInstantMs).toISOString()}，实际 ${debitRow.occurredAt.toISOString()}`);
+      }
+      if (consumptionRow.occurredAt.getTime() !== serverInstantMs) {
+        throw new Error(`CardConsumption 的 occurredAt 应为服务端业务时钟 ${new Date(serverInstantMs).toISOString()}，实际 ${consumptionRow.occurredAt.toISOString()}`);
+      }
+      if (after.balanceMinor !== before.balanceMinor - amountMinor) {
+        throw new Error(`活期余额应减少恰 ${amountMinor}（${centsToMoney(before.balanceMinor)} → ${centsToMoney(before.balanceMinor - amountMinor)}），实际 ${centsToMoney(after.balanceMinor)}`);
+      }
+      // EXACTLY ONCE — the ledger must carry no second, equal CARD debit for this spend.
+      const duplicates = after.cardDebits.filter((row) => row.amountMinor === -amountMinor && row.merchant === VIRTUAL_CONSUME_MERCHANT);
+      if (duplicates.length !== 1) {
+        throw new Error(`本次虚拟卡消费应恰有 1 条流水（不得重复扣款），实际 ${duplicates.length}：${duplicates.map((row) => row.id).join(',')}`);
+      }
+
+      // payableAmount is recomputed from the NEW cash + the remaining monthly limit.
+      const spentAfterMinor = spentBeforeMinor + amountMinor;
+      const remainingAfterMinor = limitMinor > spentAfterMinor ? limitMinor - spentAfterMinor : 0n;
+      const availableAfterMinor = before.balanceMinor - amountMinor;
+      const expectedPayableAfterMinor = availableAfterMinor < remainingAfterMinor ? availableAfterMinor : remainingAfterMinor;
+      const afterCards = await awaitLiveCards(
+        ctx.baseUrl,
+        (cards) => cardById(cards, VIRTUAL_CARD_ID)?.payableAmount === centsToMoney(expectedPayableAfterMinor),
+        `${VIRTUAL_CARD_ID}.payableAmount === ${centsToMoney(expectedPayableAfterMinor)}`,
+      );
+      const virtualAfter = cardById(afterCards, VIRTUAL_CARD_ID);
+      if (virtualAfter?.accountAvailableBalance !== centsToMoney(availableAfterMinor)) {
+        throw new Error(`${VIRTUAL_CARD_ID}.accountAvailableBalance 应为 ${centsToMoney(availableAfterMinor)}，实际 ${virtualAfter?.accountAvailableBalance}`);
+      }
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+      await waitForElementHydration(page, `[data-card-id="${VIRTUAL_CARD_ID}"]`);
+      const tileRows = await readCardTileRows(page, VIRTUAL_CARD_ID);
+      const tileShot = await captureLive(page, 'lC-card-tile');
+      if (tileRows['当前可支付金额'] !== formatCNY(centsToMoney(expectedPayableAfterMinor))) {
+        throw new Error(`${VIRTUAL_CARD_ID} 卡片「当前可支付金额」应为 ${formatCNY(centsToMoney(expectedPayableAfterMinor))}，实际 ${tileRows['当前可支付金额']}（${JSON.stringify(tileRows)}）`);
+      }
+
+      return `C1 实际发送：${sentC1.map((t) => `「${t}」`).join(' → ')} → 仍恰 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}，未被重复开通）；C2 前端消费弹窗（绑定 ${dialogCardId}，月限额 ${summary['月限额']}、关联账户 ${summary['关联账户']}、消费前当前可支付金额 ${summary['当前可支付金额']}）提交 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}）→ 消费成功；SQLite：新增 1 条 channel=CARD/DEBIT 流水 ${debitRow.amountMinor}（${debitRow.id}）、1 条 CardConsumption amountMinor=${consumptionRow.amountMinor}（${consumptionRow.id}）；活期余额 ${centsToMoney(before.balanceMinor)} → ${centsToMoney(after.balanceMinor)}（恰扣一次）；${VIRTUAL_CARD_ID}.payableAmount ${payableBefore} → ${virtualAfter?.payableAmount} = min(可用余额 ${virtualAfter?.accountAvailableBalance}、剩余月限额 ${centsToMoney(remainingAfterMinor)})；卡片「当前可支付金额」=${tileRows['当前可支付金额']}；记账时间由服务端拥有：弹窗请求体逐字 ${sentBodyText}（键=${sentKeys}，无 occurredAt），落账 Transaction.occurredAt 与 CardConsumption.occurredAt 均为 ${debitRow.occurredAt.toISOString()}（= DEMO_NOW 服务端业务时钟 2026-09-25T12:00:00+08:00）；截图 ${formShot ?? '未落盘'} / ${successShot ?? '未落盘'} / ${tileShot ?? '未落盘'}`;
+    },
+    { label: 'lC-virtual-card-consumption' },
+  );
+}
+
+// --- scenarios lD / lE: LIVE virtual-card apply/limit, and 挂失→补办 continuity ---------------------
+//
+// Both scenarios are built ON TOP of `./live-virtual-card.e2e-helper`: that module owns the shared
+// apply/consume primitives, the raw-SQLite cross-checks and the payable maths. This file only
+// SEQUENCES them and owns the bounded RED-tool driver (`driveRedTool`, injected as `RedToolDriver`)
+// so the `assertNoFabricatedConfirmationPanel` guard stays in force on every prose-only turn.
+
+/** The mask tail (last 4 digits) the natural-language 挂失/补办 turns refer to. */
+function vcMaskTail(numberMasked: string): string {
+  const digits = numberMasked.replace(/\D+/g, '');
+  if (digits.length < 4) throw new Error(`卡片掩码「${numberMasked}」不含可用的尾号 4 位`);
+  return digits.slice(-4);
+}
+
+interface AppliedVirtualCardLeg {
+  cardId: string;
+  /** The prompts the RED driver actually sent. */
+  sent: string[];
+  /** The RAW SQLite `Card` row of the just-opened card. */
+  raw: RawCardRow;
+  maskTail: string;
+}
+
+/**
+ * The SHARED opening act of lD + lE — ONE function, so the two scenarios cannot drift apart: open a NEW
+ * virtual card with the stated ¥100.00 monthly limit through the REAL `/agent` chat (RED
+ * `apply_virtual_card` ⇒ confirmation/MFA, completed by `driveRedTool` with the real code), then verify
+ * the RAW SQLite `Card` row: a VIRTUAL/ACTIVE DEBIT instrument bound to the checking account with
+ * `monthlyLimitMinor = 10000`, NO credit columns, and a card number no pre-existing card carries.
+ */
+async function applyVirtualCardLeg(ctx: Ctx, page: Page): Promise<AppliedVirtualCardLeg> {
+  const existing = await fetchLiveCards(ctx.baseUrl);
+  const applied = await applyVirtualCardViaAgent(
+    page,
+    ctx.baseUrl,
+    (turns) => driveRedTool(page, ctx.baseUrl, turns),
+    {
+      excludeCardIds: [CREDIT_CARD_ID, DEBIT_CARD_ID, VIRTUAL_CARD_ID],
+      monthlyLimit: VC_MONTHLY_LIMIT,
+    },
+  );
+  const raw = await awaitRawCard(
+    applied.cardId,
+    (row) => row.type === 'VIRTUAL' && row.status === 'ACTIVE',
+    `RAW Card ${applied.cardId} 应为 ACTIVE 的 VIRTUAL 卡`,
+  );
+  const limitMinor = moneyToCents(VC_MONTHLY_LIMIT);
+  if (raw.monthlyLimitMinor !== limitMinor) {
+    throw new Error(`RAW Card ${applied.cardId}.monthlyLimitMinor 应为 ${limitMinor}（${VC_MONTHLY_LIMIT}），实际 ${raw.monthlyLimitMinor}`);
+  }
+  if (raw.linkedAccountId !== VC_CHECKING_ACCOUNT_ID) {
+    throw new Error(`RAW Card ${applied.cardId}.linkedAccountId 应为 ${VC_CHECKING_ACCOUNT_ID}，实际 ${raw.linkedAccountId}`);
+  }
+  if (raw.creditLimitMinor !== null || raw.availableLimitMinor !== null) {
+    throw new Error(`虚拟卡是借记工具，RAW 行不得有信用额度：creditLimitMinor=${raw.creditLimitMinor}、availableLimitMinor=${raw.availableLimitMinor}`);
+  }
+  for (const card of existing) {
+    if (card.numberMasked !== undefined && card.numberMasked === raw.numberMasked) {
+      throw new Error(`新虚拟卡卡号 ${raw.numberMasked} 与既有卡片 ${card.id}（${card.numberMasked}）相同`);
+    }
+  }
+  return { cardId: applied.cardId, sent: applied.sent, raw, maskTail: vcMaskTail(raw.numberMasked) };
+}
+
+/** Poll `GET /api/cards` until `cardId.payableAmount === expected`, then return the settled card list. */
+function awaitPayable(baseUrl: string, cardId: string, expected: string): Promise<LiveCardRecord[]> {
+  return waitFor(
+    async () => {
+      const cards = await fetchLiveCards(baseUrl);
+      return cardById(cards, cardId)?.payableAmount === expected ? cards : false;
+    },
+    {
+      timeoutMs: 180_000,
+      intervalMs: 1_000,
+      description: `${cardId}.payableAmount === ${expected}（min(账户可用余额, 剩余月限额)）`,
+    },
+  );
+}
+
+/**
+ * SCENARIO lD (LIVE-LLM, REAL BROWSER): open a NEW virtual card with a stated ¥100.00 monthly limit
+ * through natural `/agent` turns + real MFA, prove the MONTHLY LIMIT (never the ~23k of checking cash)
+ * is the binding constraint, spend ¥30.00 through the REAL card-page dialog, and prove an ¥80.00
+ * over-limit spend is refused with NOTHING moved.
+ *
+ * Every assertion is a BEFORE/AFTER DIFF: the live DB is not empty (the seed already carries cards and
+ * ledger rows), so "zero rows" would be a vacuous or wrong check.
+ */
+async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
+  return withPage(
+    ctx.browser,
+    async (page) => {
+      attachCollectors(page);
+      const before = await readCardSpendState();
+      const cashBefore = centsToMoney(before.balanceMinor);
+      const leg = await applyVirtualCardLeg(ctx, page);
+      const cardId = leg.cardId;
+      const limitMinor = moneyToCents(VC_MONTHLY_LIMIT);
+      const firstSpendMinor = moneyToCents(VC_FIRST_SPEND);
+      if (expectedPayableMinor(limitMinor, 0n, before.balanceMinor) !== limitMinor) {
+        throw new Error(`活期余额 ${cashBefore} 不高于月限额 ${VC_MONTHLY_LIMIT}，「限额绑定」断言将为空`);
+      }
+
+      // PROJECTION + RENDERED TILE of the brand-new card: the ¥100 limit binds, not the checking cash.
+      const cardsAfterApply = await awaitPayable(ctx.baseUrl, cardId, VC_MONTHLY_LIMIT);
+      assertVirtualCardView(cardById(cardsAfterApply, cardId), {
+        cardId,
+        monthlyLimit: VC_MONTHLY_LIMIT,
+        accountAvailableBalance: cashBefore,
+        payableAmount: VC_MONTHLY_LIMIT,
+      });
+      await gotoCards(page, ctx.baseUrl);
+      await waitForElementHydration(page, `[data-card-id="${cardId}"]`);
+      const applyTileRows = await readCardTileRows(page, cardId);
+      const applyTileText = await readCardTileText(page, cardId);
+      const applyShot = await captureLive(page, 'lD-new-virtual-card');
+      assertVirtualCardTile(cardId, applyTileRows, applyTileText, {
+        monthlyLimit: VC_MONTHLY_LIMIT,
+        accountAvailableBalance: cashBefore,
+        payableAmount: VC_MONTHLY_LIMIT,
+      });
+
+      // WITHIN-LIMIT SPEND through the REAL consume dialog (`POST /api/cards/[id]/consume`).
+      const summary = await openConsumeDialog(page, cardId);
+      if (summary['月限额'] !== formatCNY(VC_MONTHLY_LIMIT)) {
+        throw new Error(`消费弹窗「月限额」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary['月限额']}（${JSON.stringify(summary)}）`);
+      }
+      if (summary['当前可支付金额'] !== formatCNY(VC_MONTHLY_LIMIT)) {
+        throw new Error(`消费弹窗「当前可支付金额」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary['当前可支付金额']}（${JSON.stringify(summary)}）`);
+      }
+      const spend = await consumeSuccessfully(
+        page,
+        { amount: VC_FIRST_SPEND, category: VC_SPEND_CATEGORY, merchant: VC_MERCHANT_APPLY },
+        before.consumptions.filter((row) => row.cardId === cardId).length + 1,
+      );
+      const afterSpend = await readCardSpendState();
+      const delta = assertSingleSpend(before, afterSpend, {
+        cardId,
+        amountMinor: firstSpendMinor,
+        category: VC_SPEND_CATEGORY,
+        merchant: VC_MERCHANT_APPLY,
+        label: `lD 限额内消费 ${VC_FIRST_SPEND}`,
+      });
+      const payableAfterSpendMinor = expectedPayableMinor(limitMinor, firstSpendMinor, afterSpend.balanceMinor);
+      const payableAfterSpend = centsToMoney(payableAfterSpendMinor);
+      if (payableAfterSpend !== '70.00') {
+        throw new Error(`消费 ${VC_FIRST_SPEND} 后 payableAmount 应为 100.00 − 30.00 = 70.00，实际 ${payableAfterSpend}（可用余额 ${centsToMoney(afterSpend.balanceMinor)}）`);
+      }
+      const cashAfterSpend = centsToMoney(afterSpend.balanceMinor);
+      const cardsAfterSpend = await awaitPayable(ctx.baseUrl, cardId, payableAfterSpend);
+      assertVirtualCardView(cardById(cardsAfterSpend, cardId), {
+        cardId,
+        monthlyLimit: VC_MONTHLY_LIMIT,
+        accountAvailableBalance: cashAfterSpend,
+        payableAmount: payableAfterSpend,
+      });
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
+      await waitForElementHydration(page, `[data-card-id="${cardId}"]`);
+      const spendTileRows = await readCardTileRows(page, cardId);
+      const spendTileText = await readCardTileText(page, cardId);
+      const spendShot = await captureLive(page, 'lD-after-spend');
+      assertVirtualCardTile(cardId, spendTileRows, spendTileText, {
+        monthlyLimit: VC_MONTHLY_LIMIT,
+        accountAvailableBalance: cashAfterSpend,
+        payableAmount: payableAfterSpend,
+      });
+
+      // OVER-LIMIT SPEND — the dialog must surface the localized refusal and NOTHING may move.
+      await openConsumeDialog(page, cardId);
+      const refusalText = await attemptConsumeExpectingRefusal(page, {
+        amount: VC_OVER_LIMIT_SPEND,
+        category: VC_SPEND_CATEGORY,
+        merchant: VC_MERCHANT_REFUSED,
+      });
+      if (!refusalText.includes(VC_LIMIT_EXCEEDED_TEXT)) {
+        throw new Error(`超限消费 ${VC_OVER_LIMIT_SPEND} 应提示「${VC_LIMIT_EXCEEDED_TEXT}」，实际「${refusalText}」`);
+      }
+      const refusalShot = await captureLive(page, 'lD-over-limit-refusal');
+      const afterRefusal = await readCardSpendState();
+      assertNoSpend(afterSpend, afterRefusal, `lD 超限消费 ${VC_OVER_LIMIT_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝`);
+      const cardsAfterRefusal = await awaitPayable(ctx.baseUrl, cardId, payableAfterSpend);
+      const payableAfterRefusal = cardById(cardsAfterRefusal, cardId)?.payableAmount;
+
+      const evidenceFile = writeScenarioEvidence('lD', {
+        scenario: 'lD-live-virtual-card-apply-and-limit',
+        model: liveModelId(),
+        sentTurns: leg.sent,
+        cardId,
+        rawCard: leg.raw,
+        monthlyLimit: VC_MONTHLY_LIMIT,
+        cashBeforeMinor: before.balanceMinor,
+        dialogSummary: summary,
+        acceptedSpend: {
+          amount: VC_FIRST_SPEND,
+          category: VC_SPEND_CATEGORY,
+          merchant: VC_MERCHANT_APPLY,
+          notice: spend.notice,
+          debitId: delta.debit.id,
+          consumptionId: delta.consumption.id,
+          balanceBeforeMinor: delta.balanceBeforeMinor,
+          balanceAfterMinor: delta.balanceAfterMinor,
+        },
+        payable: { afterApply: VC_MONTHLY_LIMIT, afterSpend: payableAfterSpend, afterRefusal: payableAfterRefusal },
+        refusedSpend: { amount: VC_OVER_LIMIT_SPEND, merchant: VC_MERCHANT_REFUSED, text: refusalText },
+        tileRows: { afterApply: applyTileRows, afterSpend: spendTileRows },
+        screenshots: { applyShot, spendShot, refusalShot },
+      });
+
+      return `lD 实际发送：${leg.sent.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新虚拟卡 ${cardId}（RAW：type=VIRTUAL、status=ACTIVE、monthlyLimitMinor=${leg.raw.monthlyLimitMinor}（${VC_MONTHLY_LIMIT}）、linkedAccountId=${leg.raw.linkedAccountId}、creditLimitMinor=${leg.raw.creditLimitMinor}、availableLimitMinor=${leg.raw.availableLimitMinor}、卡号 ${leg.raw.numberMasked} 与既有卡片均不同）；payableAmount=${VC_MONTHLY_LIMIT}（月限额绑定，账户可用余额 ${cashBefore}）；/cards 渲染 ${JSON.stringify(applyTileRows)}（无「信用额度」/「可用额度」）；消费 ${VC_FIRST_SPEND}（${VC_SPEND_CATEGORY}/${VC_MERCHANT_APPLY}）→ ${spend.notice}：新增 CARD/DEBIT 流水 ${delta.debit.amountMinor}（${delta.debit.id}）+ 1 条 CardConsumption amountMinor=${delta.consumption.amountMinor}（${delta.consumption.id}），活期余额 ${centsToMoney(delta.balanceBeforeMinor)} → ${centsToMoney(delta.balanceAfterMinor)}（恰扣一次）；payableAmount → ${payableAfterSpend}，刷新后卡片「当前可支付金额」=${spendTileRows['当前可支付金额']}；超限 ${VC_OVER_LIMIT_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝：「${refusalText}」，流水/余额/CardConsumption 零变化，payableAmount 仍 ${payableAfterRefusal}；截图 ${applyShot ?? '未落盘'} / ${spendShot ?? '未落盘'} / ${refusalShot ?? '未落盘'}；证据 JSON ${evidenceFile ?? '未落盘'}`;
+    },
+    { label: 'lD-virtual-card-apply-and-limit' },
+  );
+}
+
+/**
+ * SCENARIO lE (LIVE-LLM, REAL BROWSER): open a virtual card (the SAME shared apply leg as lD), spend
+ * ¥30.00, then 挂失 (lose) and 补办 (replace) it purely through natural `/agent` turns + real MFA, and
+ * prove FAMILY-CONTINUOUS allowance: the replacement inherits the monthly limit's already-spent part
+ * (`payableAmount` = 70.00, NEVER a reset to 100.00), the linking account and — until it is exhausted —
+ * the family's remaining allowance.
+ */
+async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
+  return withPage(
+    ctx.browser,
+    async (page) => {
+      attachCollectors(page);
+      const leg = await applyVirtualCardLeg(ctx, page);
+      const sourceId = leg.cardId;
+      const limitMinor = moneyToCents(VC_MONTHLY_LIMIT);
+      const before = await readCardSpendState();
+
+      // PRE-LOST SPEND — ¥30 of the ¥100 monthly allowance through the REAL card-page dialog.
+      await gotoCards(page, ctx.baseUrl);
+      await waitForElementHydration(page, `[data-card-id="${sourceId}"]`);
+      await openConsumeDialog(page, sourceId);
+      await consumeSuccessfully(
+        page,
+        { amount: VC_FIRST_SPEND, category: VC_SPEND_CATEGORY, merchant: VC_MERCHANT_PRE_LOST },
+        before.consumptions.filter((row) => row.cardId === sourceId).length + 1,
+      );
+      const afterSpend = await readCardSpendState();
+      const firstDelta = assertSingleSpend(before, afterSpend, {
+        cardId: sourceId,
+        amountMinor: moneyToCents(VC_FIRST_SPEND),
+        category: VC_SPEND_CATEGORY,
+        merchant: VC_MERCHANT_PRE_LOST,
+        label: `lE 挂失前消费 ${VC_FIRST_SPEND}`,
+      });
+
+      // 挂失 — natural turns + real MFA. The source becomes terminal LOST and NO funds move.
+      await gotoAgent(page, ctx.baseUrl);
+      const sentLost = await driveRedTool(page, ctx.baseUrl, vcReportLostTurns(leg.maskTail));
+      const lostRaw = await awaitRawCard(sourceId, (row) => row.status === 'LOST', `RAW Card ${sourceId} 挂失后 status='LOST'`);
+      const afterLost = await readCardSpendState();
+      assertNoSpend(afterSpend, afterLost, `lE 挂失 ${sourceId}`);
+      if (lostRaw.linkedAccountId !== VC_CHECKING_ACCOUNT_ID) {
+        throw new Error(`挂失后 RAW Card ${sourceId}.linkedAccountId 应为 ${VC_CHECKING_ACCOUNT_ID}，实际 ${lostRaw.linkedAccountId}`);
+      }
+
+      // 补办 — natural turns + real MFA. Exactly ONE new ACTIVE VIRTUAL card, bound to the SAME account.
+      const idsBeforeReplace = new Set((await fetchLiveCards(ctx.baseUrl)).map((card) => card.id));
+      const sentReplace = await driveRedTool(page, ctx.baseUrl, vcReplaceTurns(leg.maskTail));
+      const sourceAfterReplace = await awaitRawCard(
+        sourceId,
+        (row) => typeof row.replacedByCardId === 'string' && row.replacedByCardId !== '',
+        `RAW Card ${sourceId} 补办后 replacedByCardId 指向新卡`,
+      );
+      const replacementId = sourceAfterReplace.replacedByCardId as string;
+      const replacement = await awaitRawCard(
+        replacementId,
+        (row) => row.type === 'VIRTUAL' && row.status === 'ACTIVE',
+        `RAW Card ${replacementId} 应为 ACTIVE 的 VIRTUAL 卡`,
+      );
+      // THE INHERITANCE FIX: the replacement is bound to the SAME checking account as its source.
+      if (replacement.linkedAccountId !== sourceAfterReplace.linkedAccountId) {
+        throw new Error(`补办卡 ${replacementId}.linkedAccountId（${replacement.linkedAccountId}）应继承原卡 ${sourceId} 的 ${sourceAfterReplace.linkedAccountId}`);
+      }
+      if (replacement.linkedAccountId !== VC_CHECKING_ACCOUNT_ID) {
+        throw new Error(`补办卡 ${replacementId}.linkedAccountId 应为 ${VC_CHECKING_ACCOUNT_ID}，实际 ${replacement.linkedAccountId}`);
+      }
+      if (replacement.numberMasked === sourceAfterReplace.numberMasked) {
+        throw new Error(`补办卡卡号应不同于原卡，实际均为 ${replacement.numberMasked}`);
+      }
+      if (replacement.monthlyLimitMinor !== limitMinor) {
+        throw new Error(`补办卡 ${replacementId}.monthlyLimitMinor 应为 ${limitMinor}（${VC_MONTHLY_LIMIT}），实际 ${replacement.monthlyLimitMinor}`);
+      }
+      if (replacement.creditLimitMinor !== null || replacement.availableLimitMinor !== null) {
+        throw new Error(`补办虚拟卡是借记工具，RAW 行不得有信用额度：creditLimitMinor=${replacement.creditLimitMinor}、availableLimitMinor=${replacement.availableLimitMinor}`);
+      }
+      await waitFor(
+        async () => {
+          const cards = await fetchLiveCards(ctx.baseUrl);
+          const created = cards.filter((card) => !idsBeforeReplace.has(card.id));
+          return created.length === 1 && created[0].id === replacementId
+            && created[0].type === 'VIRTUAL' && created[0].status === 'ACTIVE'
+            ? cards
+            : false;
+        },
+        {
+          timeoutMs: 180_000,
+          intervalMs: 1_000,
+          description: `补办后 GET /api/cards 应恰新增 1 张 ACTIVE VIRTUAL 卡（${replacementId}）`,
+        },
+      );
+
+      // FAMILY-CONTINUOUS ALLOWANCE — 100.00 − 30.00 = 70.00 left for the card family, never 100.00.
+      const familySpentMinor = afterLost.consumptions
+        .filter((row) => row.cardId === sourceId || row.cardId === replacementId)
+        .reduce((sum, row) => sum + row.amountMinor, 0n);
+      const familyPayable = centsToMoney(expectedPayableMinor(limitMinor, familySpentMinor, afterLost.balanceMinor));
+      if (familyPayable !== '70.00') {
+        throw new Error(`补办卡的家庭剩余月限额应为 ${VC_MONTHLY_LIMIT} − ${VC_FIRST_SPEND} = 70.00，实际 ${familyPayable}（家庭已用 ${familySpentMinor}、账户可用余额 ${centsToMoney(afterLost.balanceMinor)}）`);
+      }
+      const cardsAfterReplace = await awaitPayable(ctx.baseUrl, replacementId, familyPayable);
+      const replacementView = cardById(cardsAfterReplace, replacementId);
+      assertVirtualCardView(replacementView, {
+        cardId: replacementId,
+        monthlyLimit: VC_MONTHLY_LIMIT,
+        accountAvailableBalance: centsToMoney(afterLost.balanceMinor),
+        payableAmount: '70.00',
+      });
+      if (replacementView?.payableAmount === VC_MONTHLY_LIMIT) {
+        throw new Error(`补办卡 ${replacementId}.payableAmount 不得重置为满额 ${VC_MONTHLY_LIMIT}（月限额必须在卡家族内连续）`);
+      }
+      await gotoCards(page, ctx.baseUrl);
+      await waitForElementHydration(page, `[data-card-id="${replacementId}"]`);
+      const replaceTileRows = await readCardTileRows(page, replacementId);
+      const replaceTileText = await readCardTileText(page, replacementId);
+      const replaceShot = await captureLive(page, 'lE-replacement-card');
+      assertVirtualCardTile(replacementId, replaceTileRows, replaceTileText, {
+        monthlyLimit: VC_MONTHLY_LIMIT,
+        accountAvailableBalance: centsToMoney(afterLost.balanceMinor),
+        payableAmount: '70.00',
+      });
+
+      // EXHAUST the family allowance on the NEW card, once, exactly.
+      await openConsumeDialog(page, replacementId);
+      await consumeSuccessfully(
+        page,
+        { amount: VC_SECOND_SPEND, category: VC_SPEND_CATEGORY, merchant: VC_MERCHANT_REPLACE },
+        afterLost.consumptions.filter((row) => row.cardId === replacementId).length + 1,
+      );
+      const afterSecondSpend = await readCardSpendState();
+      const secondDelta = assertSingleSpend(afterLost, afterSecondSpend, {
+        cardId: replacementId,
+        amountMinor: moneyToCents(VC_SECOND_SPEND),
+        category: VC_SPEND_CATEGORY,
+        merchant: VC_MERCHANT_REPLACE,
+        label: `lE 补办卡消费 ${VC_SECOND_SPEND}`,
+      });
+      const exhaustedPayable = centsToMoney(
+        expectedPayableMinor(limitMinor, familySpentMinor + moneyToCents(VC_SECOND_SPEND), afterSecondSpend.balanceMinor),
+      );
+      if (exhaustedPayable !== '0.00') {
+        throw new Error(`家庭月限额用尽后 payableAmount 应为 0.00，实际 ${exhaustedPayable}（账户可用余额 ${centsToMoney(afterSecondSpend.balanceMinor)}）`);
+      }
+      const cardsExhausted = await awaitPayable(ctx.baseUrl, replacementId, exhaustedPayable);
+      assertVirtualCardView(cardById(cardsExhausted, replacementId), {
+        cardId: replacementId,
+        monthlyLimit: VC_MONTHLY_LIMIT,
+        accountAvailableBalance: centsToMoney(afterSecondSpend.balanceMinor),
+        payableAmount: exhaustedPayable,
+      });
+      // A ¥1.00 spend against the exhausted family allowance must be refused with NOTHING moved.
+      const refusalText = await attemptConsumeExpectingRefusal(page, {
+        amount: VC_TINY_SPEND,
+        category: VC_SPEND_CATEGORY,
+        merchant: VC_MERCHANT_REFUSED,
+      });
+      if (!refusalText.includes(VC_LIMIT_EXCEEDED_TEXT)) {
+        throw new Error(`额度用尽后 ${VC_TINY_SPEND} 消费应提示「${VC_LIMIT_EXCEEDED_TEXT}」，实际「${refusalText}」`);
+      }
+      const refusalShot = await captureLive(page, 'lE-exhausted-refusal');
+      const afterRefusal = await readCardSpendState();
+      assertNoSpend(afterSecondSpend, afterRefusal, `lE 额度用尽后的 ${VC_TINY_SPEND} 消费（${VC_MERCHANT_REFUSED}）被拒绝`);
+      const cardsAfterRefusal = await awaitPayable(ctx.baseUrl, replacementId, exhaustedPayable);
+      const payableAfterRefusal = cardById(cardsAfterRefusal, replacementId)?.payableAmount;
+
+      const evidenceFile = writeScenarioEvidence('lE', {
+        scenario: 'lE-live-virtual-card-replace-continuity',
+        model: liveModelId(),
+        applyTurns: leg.sent,
+        lostTurns: sentLost,
+        replaceTurns: sentReplace,
+        sourceCardId: sourceId,
+        sourceRawAfterLost: lostRaw,
+        sourceRawAfterReplace: sourceAfterReplace,
+        replacementRaw: replacement,
+        monthlyLimit: VC_MONTHLY_LIMIT,
+        preLostSpend: {
+          amount: VC_FIRST_SPEND,
+          category: VC_SPEND_CATEGORY,
+          merchant: VC_MERCHANT_PRE_LOST,
+          debitId: firstDelta.debit.id,
+          consumptionId: firstDelta.consumption.id,
+          balanceBeforeMinor: firstDelta.balanceBeforeMinor,
+          balanceAfterMinor: firstDelta.balanceAfterMinor,
+        },
+        familySpentMinor,
+        payableAfterReplace: replacementView?.payableAmount,
+        secondSpend: {
+          amount: VC_SECOND_SPEND,
+          category: VC_SPEND_CATEGORY,
+          merchant: VC_MERCHANT_REPLACE,
+          debitId: secondDelta.debit.id,
+          consumptionId: secondDelta.consumption.id,
+          balanceBeforeMinor: secondDelta.balanceBeforeMinor,
+          balanceAfterMinor: secondDelta.balanceAfterMinor,
+        },
+        payableAfterExhaustion: exhaustedPayable,
+        payableAfterRefusal,
+        refusedSpend: { amount: VC_TINY_SPEND, merchant: VC_MERCHANT_REFUSED, text: refusalText },
+        tileRows: replaceTileRows,
+        screenshots: { replaceShot, refusalShot },
+      });
+
+      return `lE 实际发送（开卡）：${leg.sent.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新虚拟卡 ${sourceId}（monthlyLimitMinor=${leg.raw.monthlyLimitMinor}、linkedAccountId=${leg.raw.linkedAccountId}）；挂失前消费 ${VC_FIRST_SPEND}（${VC_SPEND_CATEGORY}/${VC_MERCHANT_PRE_LOST}）= 新增 CARD/DEBIT 流水 ${firstDelta.debit.amountMinor}（${firstDelta.debit.id}）+ 1 条 CardConsumption（${firstDelta.consumption.id}），活期余额 ${centsToMoney(firstDelta.balanceBeforeMinor)} → ${centsToMoney(firstDelta.balanceAfterMinor)}；挂失实际发送：${sentLost.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → RAW status=${lostRaw.status}、资金零变化；补办实际发送：${sentReplace.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → ${sourceId}.replacedByCardId=${replacementId}（恰新增 1 张 VIRTUAL/ACTIVE 卡）；补办卡 RAW：linkedAccountId=${replacement.linkedAccountId}（= 原卡 ${sourceAfterReplace.linkedAccountId}，继承修复生效）、monthlyLimitMinor=${replacement.monthlyLimitMinor}、卡号 ${replacement.numberMasked} ≠ 原卡 ${sourceAfterReplace.numberMasked}、无信用额度；家庭月限额连续：已用 ${familySpentMinor} → payableAmount=${replacementView?.payableAmount}（=70.00，不是 100.00），卡片渲染 ${JSON.stringify(replaceTileRows)}；补办卡消费 ${VC_SECOND_SPEND}（${VC_SPEND_CATEGORY}/${VC_MERCHANT_REPLACE}）= 新增 CARD/DEBIT 流水 ${secondDelta.debit.amountMinor}（${secondDelta.debit.id}）+ 1 条 CardConsumption（${secondDelta.consumption.id}），活期余额 ${centsToMoney(secondDelta.balanceBeforeMinor)} → ${centsToMoney(secondDelta.balanceAfterMinor)}（恰扣一次）→ payableAmount=${exhaustedPayable}；额度用尽后 ${VC_TINY_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝：「${refusalText}」，流水/余额/CardConsumption 零变化，payableAmount 仍 ${payableAfterRefusal}；截图 ${replaceShot ?? '未落盘'} / ${refusalShot ?? '未落盘'}；证据 JSON ${evidenceFile ?? '未落盘'}`;
+    },
+    { label: 'lE-virtual-card-replace-continuity' },
+  );
+}
+
 async function verifyProviderCompletionEvidence(): Promise<string> {
   return withDb(async db => {
     const requests = await db.modelRequest.findMany({ where: { status: 'completed' } });
@@ -1054,6 +2206,13 @@ const SCENARIOS: readonly Scenario[] = [
   { id: '5', name: '5-live-cancel-idempotent-terminal-ux', run: scenarioCancelAndIdempotency },
   { id: '6', name: '6-live-multiturn-and-continuations', run: scenarioMultiTurn },
   { id: '4', name: '4-live-large-transfer-mfa', run: scenarioLargeTransferMfa },
+  { id: 'lA', name: 'lA-live-credit-card-report-lost-and-replace', run: scenarioCreditReplace },
+  { id: 'lB', name: 'lB-live-investment-partial-redemption', run: scenarioPartialRedeem },
+  { id: 'lC', name: 'lC-live-virtual-card-consumption', run: scenarioVirtualCardConsume },
+  { id: 'lD', name: 'lD-live-virtual-card-apply-and-limit', run: scenarioVirtualCardApplyAndLimit },
+  { id: 'lE', name: 'lE-live-virtual-card-replace-continuity', run: scenarioVirtualCardReplaceContinuity },
+  { id: 'lF', name: 'lF-live-credit-report-lost-and-replace-new-session', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioCreditReplaceNewSession({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive }); }, { label: 'lF-live-credit-report-lost-and-replace-new-session' }) },
+  { id: 'lG', name: 'lG-live-full-card-loss-replace-chain-single-session', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioFullCardChain({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive }); }, { label: 'lG-live-full-card-loss-replace-chain-single-session' }) },
 ];
 
 /** `LIVE_SCENARIOS=1,3` (comma separated) runs only those scenario ids (plus scenario 7 if `7`). */
@@ -1082,7 +2241,9 @@ async function main(): Promise<void> {
   // 7's last server, which kept `prisma/live-acceptance.db` locked (next run: EPERM) and held an open
   // stdout pipe (hanging the PowerShell invocation).
   let server: ServerHandle | undefined;
-  const cleanup = () => {
+
+  /** Stop the CURRENT dev-server handle (scenario 7 may have reassigned `server.current`), best-effort. */
+  const stopActiveServer = (): void => {
     const active = server?.current ?? devServer;
     if (active) {
       try {
@@ -1092,6 +2253,30 @@ async function main(): Promise<void> {
       }
     }
     devServer = undefined;
+  };
+
+  /**
+   * Normal-path teardown, AWAITED in the `finally` below: stop the active server, then `await` the
+   * browser close so its exceptions are captured (the previous fire-and-forget close let the process
+   * exit while Chrome was still shutting down). Never throws — a close failure must not flip a PASS run.
+   */
+  const teardown = async (): Promise<void> => {
+    stopActiveServer();
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (error) {
+        console.warn(`· 关闭浏览器失败（不影响验收结论）：${errText(error)}`);
+      }
+    }
+  };
+
+  /**
+   * SYNCHRONOUS best-effort fallback for `process.on('exit')` and the signal handlers: `exit` cannot
+   * await an async close, so this stops the server and fires `browser.close()` WITHOUT awaiting.
+   */
+  const cleanup = (): void => {
+    stopActiveServer();
     if (browser) {
       void browser.close().catch(() => undefined);
     }
@@ -1188,29 +2373,39 @@ async function main(): Promise<void> {
         else process.env['DEEPSEEK_API_KEY'] = originalKey;
       }
     }
+
+    // Post-scenario diagnostics + the TASK-A evidence dump run HERE — INSIDE the `try`, BEFORE the
+    // `finally` tears the dev server down, so the isolated WAL database is still served. They are
+    // wrapped in their own try/catch so a diagnostic/evidence read can NEVER reject `main()` (which
+    // `void main().catch(...)` would turn into exit 1 AFTER the PASS lines printed). A read failure
+    // only warns; it never changes `process.exitCode`.
+    try {
+      // Scenario 6's global invariant: no provider "tool message must answer tool_calls" 400 anywhere.
+      const violation = findToolOrderViolation();
+      if (violation) {
+        console.error(`· 全程捕获到 tool/tool_calls 400：${violation.method} ${violation.url} — ${violation.body.slice(0, 400)}`);
+      }
+      console.log(`· 累计网络 4xx/5xx：${netLog.issues.length}，console error：${netLog.consoleErrors.length}，pageerror：${netLog.pageErrors.length}`);
+      for (const issue of netLog.issues.slice(0, 20)) {
+        console.log(`· [4xx/5xx] ${issue.method} ${issue.status} ${issue.url} — ${issue.body.slice(0, 200).replace(/\s+/g, ' ')}`);
+      }
+
+      // TASK-A EVIDENCE: the ACTUAL arg shape the LIVE model produced, recovered from the SAME DB the
+      // run used (`AgentSession.stateJson` → `agentState.messages`). Printed verbatim for every run.
+      console.log('· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：');
+      console.log(await persistedRecipientCalls());
+      console.log(`· 【证据】种子库收款人 ${RECIPIENT_NAME} 手机号=${await readSeedRecipientPhone()}`);
+    } catch (error) {
+      console.warn(`· 场景后诊断/证据收集失败（不影响验收结论，退出码不变）：${errText(error)}`);
+    }
   } catch (error) {
     console.error(`· 基础设施失败：${errText(error)}`);
     reporter.fail('infrastructure', errText(error));
   } finally {
-    cleanup();
+    await teardown();
   }
 
-  // Scenario 6's global invariant: no provider "tool message must answer tool_calls" 400 anywhere.
-  const violation = findToolOrderViolation();
-  if (violation) {
-    console.error(`· 全程捕获到 tool/tool_calls 400：${violation.method} ${violation.url} — ${violation.body.slice(0, 400)}`);
-  }
-  console.log(`· 累计网络 4xx/5xx：${netLog.issues.length}，console error：${netLog.consoleErrors.length}，pageerror：${netLog.pageErrors.length}`);
-  for (const issue of netLog.issues.slice(0, 20)) {
-    console.log(`· [4xx/5xx] ${issue.method} ${issue.status} ${issue.url} — ${issue.body.slice(0, 200).replace(/\s+/g, ' ')}`);
-  }
-
-  // TASK-A EVIDENCE: the ACTUAL arg shape the LIVE model produced, recovered from the SAME DB the run
-  // used (`AgentSession.stateJson` → `agentState.messages`). Printed verbatim for every run.
-  console.log('· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：');
-  console.log(await persistedRecipientCalls());
-  console.log(`· 【证据】种子库收款人 ${RECIPIENT_NAME} 手机号=${await readSeedRecipientPhone()}`);
-
+  // The summary and the exit code are ALWAYS reached on the normal path (teardown never throws).
   console.log(`== 汇总：PASS ${reporter.passes} ｜ FAIL ${reporter.failures} ｜ SKIP ${reporter.skips} ==`);
   process.exitCode = reporter.failures > 0 ? 1 : 0;
 }

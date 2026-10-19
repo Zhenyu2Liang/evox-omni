@@ -7,6 +7,14 @@ modules and serializes JSON or SSE. Banking mutations, permission decisions, fin
 run recovery and workflow transitions remain in their owning modules. Nothing below imports API
 route handlers. Shared transport support lives in the private `_lib` folder.
 
+## Routing Table
+
+- `./cards/` -> virtual-card HTTP surface: consume, consumptions, card list/add/delete and manual card changes (see `cards/CONTEXT.md`).
+- `./cards/[id]/` -> per-card routes `consume` and `consumptions` (see `cards/[id]/CONTEXT.md`).
+- `./_lib/` -> shared envelope, error mapping, session identity and agent bridge (see `_lib/CONTEXT.md`).
+- `../cards/` -> card page plus consume/change dialogs (sibling under `app` - read-only here; escalate writes to the `app` node).
+- `../../../components/banking/` -> card display components such as `CardTile` (outside `app` - read-only).
+
 ## Fixed demo identity
 
 `_lib/session.ts` derives the user from trusted server configuration and loads the persistent
@@ -36,6 +44,9 @@ selectable browser identities.
 | `GET /api/security` | Security events, lock state and failure count | Audit and security read models |
 | `POST /api/security/reset` | Optional verification code; separately gated and audited unlock | Account circuit-breaker policy |
 | `GET /api/{dashboard,bills,cards,subscriptions}` | Simulated banking read models for the configured user | Banking SDK |
+| `/api/cards/{,[id]}` and `/api/cards/changes/[id]/{verify,cancel}` | Manual demo-card add/delete proposals plus MFA verify/cancel; returns `CardChangeResponse` | `security/manual-card-management` (see `../cards/CONTEXT.md`) |
+| `POST /api/cards/[id]/consume` | Owned virtual-card consumption: exact CNY `amount` string plus optional `category`/`merchant`/`executionKey`; booking time is server-owned, so a body containing `occurredAt` is refused with `400 VALIDATION`; returns `ConsumeCardResult` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
+| `GET /api/cards/[id]/consumptions` | Owned per-card consumption ledger, newest first; optional `limit`; returns `{ consumptions: CardConsumptionView[] }` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
 | `GET /api/contacts`, `POST /api/contacts` | Owned masked contacts; strict name/phone form with no client-selected owner | Contact SDK and atomic contact/audit command |
 | `DELETE /api/contacts/[id]` | Owned contact deletion with explicit `{ confirm: true }` decision | Contact SDK and atomic contact/audit command |
 | `/api/manual-reviews` and `/api/manual-reviews/[id]` | Owned manual-review requests and recorded resolutions | Agent manual-review contracts |
@@ -67,12 +78,34 @@ safe message and continuation events. Confirmation and verification preserve the
 refresh its state and expose current MFA requirements without exposing the verification code.
 Terminal RED metadata cannot reopen a settled action. UI card state follows current action status.
 
+Decision routes derive `mfaResult` from the domain outcome: `success` when authorized; `failed` for a
+FAILED verification (a wrong code, or an exhausted attempt limit / open circuit, i.e. `awaiting_mfa` or
+`locked`); otherwise `not_required`. `ConfirmationOutcome` carries no MFA field, so the verify route
+derives `mfaResult` from `status` locally; confirm never submits a code and stays `not_required`.
+A wrong verification code is `200 { ok:true, data:{ ok:false, status:'awaiting_mfa', mfaResult:'failed' } }`.
+Exhausting the attempt limit locks only the MFA challenge and the session circuit breaker and returns
+`200` with `status:'locked'` and `mfaResult:'failed'`; the `PendingAction` row keeps its prior
+status, so the lock is response-only and `GET /api/actions` keeps surfacing the row as a live decision.
+The two tracked counters live outside this layer: per-action `MfaChallenge.attempts`/`maxAttempts`
+against threshold `MFA_MAX_ATTEMPTS = 3`, and the authoritative owner-scoped `CircuitBreakerState`.
+`POST /api/{confirm,verify,cancel}` build `ActionResponse` inline; confirm hardcodes `mfaResult:'not_required'`.
+
 ## Implementation boundaries
 
 Keep route-local schemas private: Next.js route modules export HTTP handlers, supported route
 configuration and TypeScript types only. Dynamic route parameters are awaited promises.
 Handlers use `_lib/agent-bridge` for action/task delegation and persisted ownership checks before
 execution. The fixed demo identity has no missing-cookie rejection branch.
+
+## Known issues
+
+- `POST /api/actions/[id]/verify` (`app/api/actions/[id]/verify/route.ts`) returns HTTP `200` for
+  every domain outcome, including the circuit-breaker `status:'locked'` case: it always serializes
+  `jsonResponse<ActionResponse>(mapped)` (`:91`) and never throws `CIRCUIT_OPEN`, so the `423` status
+  named in the route comment (`:16`) and defined in `_lib/http.ts` is not reached from this route.
+- The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
+  its own (`:88` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
+  all (client-only, `components/chat/actions.ts`); closing the MFA prompt is left to the client.
 
 Developer documentation lives in `docs/cn`; this context records AI-facing module boundaries.
 HTTP fixtures use the configured demo workspace. Cookie/query forgery fixtures verify that browser

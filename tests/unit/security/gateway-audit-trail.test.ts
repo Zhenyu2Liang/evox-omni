@@ -53,7 +53,7 @@ describe('security-gateway · deriveIntent (pure, code-driven)', () => {
 
   it('derives the fixed Chinese label for a representative tool of each tier', () => {
     expect(deriveIntent('transfer_money')).toBe('转账');
-    expect(deriveIntent('set_card_limit')).toBe('调整信用卡额度');
+    expect(deriveIntent('set_card_limit')).toBe('调整卡片分类消费限额');
     expect(deriveIntent('subscribe_investment')).toBe('理财产品申购');
     expect(deriveIntent('get_balance')).toBe('查询余额');
   });
@@ -114,11 +114,11 @@ describe('security-gateway · pending-action audit trail (needs test SQLite)', (
     expect(auth.blockReason?.startsWith(BLOCK_REASON_PREFIX)).toBe(true);
     expect(auth.action).toBeDefined();
     expect(auth.action!.userRequest).toBe(userRequest);
-    expect(auth.action!.intent).toBe('调整信用卡额度');
+    expect(auth.action!.intent).toBe('调整卡片分类消费限额');
 
     const row = await getTestPrisma().pendingAction.findUnique({ where: { id: auth.action!.id } });
     expect(row!.userRequest).toBe(userRequest);
-    expect(row!.intent).toBe('调整信用卡额度');
+    expect(row!.intent).toBe('调整卡片分类消费限额');
   });
 
   it('an empty userRequest is preserved verbatim while the intent stays non-empty', async () => {

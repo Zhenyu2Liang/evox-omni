@@ -164,18 +164,22 @@ describe('manual-only demo card management', () => {
     expect((await getJson<{ data: unknown[] }>(actionsGet, '/api/actions')).data?.data).toEqual([]);
   });
 
-  it('blocks card issuance through the agent tool map, direct runner, gateway and submitted workflow', async () => {
+  it('offers agent-enabled virtual card issuance as a RED write that parks a pending action instead of denying it', async () => {
     const owner = await identity(); const registry = createToolRegistry(owner.userId);
-    expect(registry.list().map(tool => tool.name)).not.toContain('apply_virtual_card');
-    expect(() => registry.get('apply_virtual_card')).toThrow();
-    await expect(registry.tools.apply_virtual_card.execute('attempt', {})).rejects.toMatchObject({ code: 'SECURITY_DENIED' });
-    expect((await registry.executeDirect('apply_virtual_card', {})).errorCode).toBe('SECURITY_DENIED');
-    expect((await executeGatedTool({ ...owner, toolName: 'apply_virtual_card', args: {}, userRequest: 'Create a virtual card' })).errorCode).toBe('SECURITY_DENIED');
+    expect(registry.list().map(tool => tool.name)).toContain('apply_virtual_card');
+    expect(registry.get('apply_virtual_card').name).toBe('apply_virtual_card');
+
+    const gated = await executeGatedTool({ ...owner, toolName: 'apply_virtual_card', args: {}, userRequest: 'Create a virtual card' });
+    expect(gated.errorCode).toBeUndefined();
+    expect(gated.requiresConfirmation).toBe(true);
+    const parked = await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: gated.pendingActionId! }, include: { mfa: true } });
+    expect(parked).toMatchObject({ userId: DEMO_USER_ID, toolName: 'apply_virtual_card', riskLevel: 'RED', requiresMfa: true, status: 'awaiting_mfa' });
+    expect(parked.mfa).not.toBeNull();
     const plan = await runSubmitPlan(owner.userId, { goal: 'Create a virtual card', nodes: [{ id: 'issue', name: 'Issue card', kind: 'tool', tool: 'apply_virtual_card', args: {}, dependencies: [] }] },
       { sessionId: owner.sessionId, runTool: (toolName, args) => executeGatedTool({ ...owner, toolName, args, userRequest: 'Create a virtual card' }) });
-    expect(plan.ok).toBe(false);
+    expect(plan.ok).toBe(true);
     expect(await getTestPrisma().card.count({ where: { type: 'VIRTUAL' } })).toBe(0);
-    expect(await getTestPrisma().pendingAction.count({ where: { toolName: 'apply_virtual_card' } })).toBe(0);
+    expect(await getTestPrisma().pendingAction.count({ where: { toolName: 'apply_virtual_card', status: 'awaiting_mfa' } })).toBeGreaterThan(0);
   });
 
   it('validates exact decimal amounts, forbids body ownership and accepts DELETE proposals', async () => {

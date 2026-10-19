@@ -28,7 +28,10 @@ const product = object({ id: string, code: string, name: string, riskLevel: stri
   termDays: number, minAmount: decimal, description: string });
 const investmentResult = object({ success: boolean, holdingId: string, productId: string, amount: decimal,
   newBalance: decimal, sourceAccountId: string, occurredAt: number,
-  redemptionValuation: decimal, settlementRounding: string });
+  redemptionValuation: decimal, settlementRounding: string,
+  partial: boolean, redeemedPrincipal: decimal, remainingPrincipal: decimal,
+  remainingMarketValue: decimal, remainingProfit: decimal, addedToExisting: boolean,
+  lastPurchaseAt: number });
 const scheduledTask = object({ id: string, name: string, kind: string, runAt: number, status: string,
   requiresConfirmation: boolean, createdAt: number });
 
@@ -48,7 +51,10 @@ export const BANKING_TOOL_OUTPUTS: ToolOutputContracts = {
   list_investments: array(product),
   compare_investments: object({ products: array(product), highestRateId: string, lowestRiskId: string }),
   get_investment_holdings: array(object({ id: string, productId: string, productName: string, riskLevel: string,
-    amount: decimal, marketValue: decimal, profit: decimal, boughtAt: number, status: string, product })),
+    amount: decimal, marketValue: decimal, profit: decimal, boughtAt: number, status: string, product,
+    lastPurchaseAt: number,
+    purchases: array(object({ amount: decimal, at: number, totalPrincipal: decimal, marketValue: decimal,
+      newBalance: decimal, sourceAccountId: string, executionKey: string })) })),
   get_dashboard_summary: object({ totalAssets: decimal, checkingBalance: decimal, creditAvailable: decimal,
     monthSpend: decimal, month: string, recentTransactions: array(transaction),
     latestAnomaly: object({ transaction, reason: string, severity: string }), asOf: number }),
@@ -67,6 +73,7 @@ export const BANKING_TOOL_OUTPUTS: ToolOutputContracts = {
   subscribe_investment: investmentResult,
   redeem_investment: investmentResult,
   report_lost_card: card,
+  replace_card: card,
   unfreeze_card: card,
 };
 

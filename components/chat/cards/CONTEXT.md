@@ -12,6 +12,21 @@
 异常、计划和错误分别使用对应卡片。
 新增类型时，必须更新分派与展示测试。
 
+## 卡片结果卡（CardsCard）
+
+`CardsCard`（`ChatCard.type === 'cards'`，data 为 `CardView[]`）用标题键 `cards.bankCards.title`（卡片/Bank cards），空态用 `cards.bankCards.empty.title` / `cards.bankCards.empty.description`。
+每张卡复用 `business.cards.*` 键：类型 `business.cards.debit/credit/virtual`、状态 `business.cards.active/frozen/lost/pending`、额度 `business.cards.limit`（仅 CREDIT）/`business.cards.available`（仅 CREDIT）/`business.cards.monthlyLimit`（任意类型，字段存在即显示）/`business.cards.categoryLimits`；分类项标签同样是 `limit.category` 原始字符串。
+限额值经 `Money`→`formatCNY` 展示；与 `banking/CardTile` 使用同一套键与分支规则，但布局不同（`ResultCard` + `ResultMetric`）。
+
+虚拟卡（`card.type === 'VIRTUAL'`）按字段存在性追加指标。
+绑定账户用 `business.cards.linkedAccount`，值取 `linkedAccountNumber`，缺失时取 `linkedAccountId`。
+账户可用余额用 `business.cards.accountAvailable`，值取 `accountAvailableBalance`。
+当前可支付额用 `business.cards.payableAmount`，值取 `payableAmount`。
+`accountAvailableBalance` 是绑定 CHECKING 账户的可用现金（账户可用余额），
+不是授信额度，只能用 `business.cards.accountAvailable` 展示，不得使用 `business.cards.available`。
+授信额度标签 `business.cards.limit` / `business.cards.available` 仅限 `card.type === 'CREDIT'`。
+上述字段缺失时不渲染对应指标，不显示占位符或空值。
+
 ## 授权与状态
 
 `confirmation` 与 `mfa` 历史卡片使用 `ApprovalRecord`。

@@ -7,12 +7,13 @@ import type { PendingHumanDecision } from './useAgentStream';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 
 /** The sole actionable permission surface, outside the scrollable transcript. */
-export function ApprovalRequest({ pending, action, busy, error, attempts }: {
+export function ApprovalRequest({ pending, action, busy, error, attempts, maxAttempts }: {
   pending: PendingHumanDecision;
   action: CardActionHandlers;
   busy?: boolean;
   error?: string;
   attempts?: number;
+  maxAttempts?: number;
 }) {
   const { t } = useI18n();
   const panel = useRef<HTMLElement>(null);
@@ -29,6 +30,7 @@ export function ApprovalRequest({ pending, action, busy, error, attempts }: {
     {pending.kind === 'confirmation' ? <ConfirmationCard
       action={pending.summary} actionId={pending.actionId} onConfirm={action.onConfirm} onCancel={action.onCancel} busy={busy} error={error}
     /> : <MfaCard key={pending.actionId} actionId={pending.actionId} action={pending.summary} hint={pending.hint ?? pending.summary.mfaHint}
-      onSubmit={code => action.onVerify?.(pending.actionId, code)} onCancel={action.onCancel} busy={busy} error={error} attempts={attempts} />}
+      status={pending.status} statusMessage={pending.statusMessage}
+      onSubmit={code => action.onVerify?.(pending.actionId, code)} onCancel={action.onCancel} busy={busy} error={error} attempts={attempts} maxAttempts={maxAttempts} />}
   </section>;
 }

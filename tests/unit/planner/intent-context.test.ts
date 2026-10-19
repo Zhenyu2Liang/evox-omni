@@ -41,7 +41,7 @@ describe('turn interpretation and original user context', () => {
     expect(() => declareConversationIntent(current, 'query', ['transfer_money'])).toThrow();
   });
 
-  it.each(['unknown_tool', 'apply_virtual_card', 'submit_plan', 'constructor'])('rejects unavailable or non-banking capability %s', operation => {
+  it.each(['unknown_tool', 'submit_plan', 'constructor'])('rejects unavailable or non-banking capability %s', operation => {
     expect(() => declareConversationIntent(advanceConversationIntent(undefined, 'Original request.'), 'operation', [operation])).toThrow();
   });
 

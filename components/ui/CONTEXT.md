@@ -6,7 +6,7 @@
 具体属性以各组件的 TypeScript 接口为准。
 
 - `Money` 显示已入账金额。
-- `DecimalMoney` 显示未结算的十进制估值。
+- `DecimalMoney` 显示未结算的十进制估值：仅显示时按 HALF_UP 保留两位小数并保留符号与千分位，存储的估值保持全精度。
 - `StatusBadge` 显示权限等级。
 - `Dialog` 提供覆盖层、背景点击和 Escape 关闭。
 - `Tabs` 与 `Button` 接收调用方交互。

@@ -11,7 +11,7 @@
 import type { AgentState } from '@earendil-works/pi-agent-core';
 import { createHash, randomUUID } from 'node:crypto';
 import type { ContextCompactionState } from './context-compaction/types';
-import type { ReplyContext, ReplyRepairState } from './reply-repair';
+import type { ReplyContext, ReplyRepairState, WriteContinuationState } from './reply-repair';
 import type { ChatMessage } from '@/lib/contracts/agent';
 import { newId } from '@/lib/ids';
 import { safeParse, toJson } from '@/lib/json';
@@ -40,6 +40,7 @@ export interface SessionSnapshot {
   historyGeneration?: string;
   replyRepair?: ReplyRepairState;
   replyContext?: ReplyContext;
+  writeContinuation?: WriteContinuationState;
 }
 
 /** The JSON blob persisted under `stateJson` (everything needed to rebuild a `SessionSnapshot`). */
@@ -55,6 +56,7 @@ interface PersistedSession {
   historyGeneration?: string;
   replyRepair?: ReplyRepairState;
   replyContext?: ReplyContext;
+  writeContinuation?: WriteContinuationState;
 }
 
 /**
@@ -91,6 +93,7 @@ function serialize(snapshot: SessionSnapshot): string {
     contextCompaction: snapshot.contextCompaction,
     replyRepair: snapshot.replyRepair,
     replyContext: snapshot.replyContext,
+    writeContinuation: snapshot.writeContinuation,
   };
   return toJson(redactSecrets(persisted));
 }
@@ -130,6 +133,7 @@ export async function loadSession(sessionId: string): Promise<SessionSnapshot | 
     contextCompaction: persisted.contextCompaction,
     replyRepair: persisted.replyRepair,
     replyContext: persisted.replyContext,
+    writeContinuation: persisted.writeContinuation,
     historyGeneration: persisted.historyGeneration ?? createHash('sha256')
       .update(`${row.id}:${persisted.historyStartedAt ?? persisted.createdAt ?? row.createdAt.getTime()}`).digest('hex'),
   };

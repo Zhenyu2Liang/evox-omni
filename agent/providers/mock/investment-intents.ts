@@ -32,5 +32,7 @@ export function classifyInvestmentAction(text: string): AssistantMessage | undef
   }
   if (!/赎回/.test(text) && !(/取出/.test(text) && /(理财|基金|产品)/.test(text))) return undefined;
   const name = knownNameInText(text, holdingIds);
-  return toolCall('redeem_investment', { holdingId: name ? holdingIds[name] : 'holding_wenjiana' });
+  const resolveHolding = name ? holdingIds[name] : 'holding_wenjiana';
+  const redeemAmount = parseAmount(text);
+  return toolCall('redeem_investment', redeemAmount == null ? { holdingId: resolveHolding } : { holdingId: resolveHolding, redeemAmount });
 }
