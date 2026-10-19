@@ -10,6 +10,7 @@
 | `db-push.ts` | `pnpm db:push` 同步当前结构 |
 | `agent-recovery.ts` | `pnpm agent:recover` 单次恢复，`pnpm agent:worker` 持续扫描 |
 | `scheduler.ts` | `pnpm scheduler:tick` 检查已到期任务 |
+| `weixin.ts` | `pnpm weixin:login/start/status/logout` 管理微信通道 |
 
 ## 数据库命令
 

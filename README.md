@@ -19,6 +19,7 @@
 - 多步工作流的暂停、恢复、取消和人工接管。
 - 事件日志、执行回执和崩溃恢复。
 - 完整对话归档、历史分页和 Pi 官方上下文压缩。
+- 微信文字对话、显式操作确认与验证，复用银行安全网关。
 
 ## 首次运行
 
@@ -58,6 +59,8 @@ pnpm dev
 | `pnpm scheduler:tick` | 检查到期定时任务 |
 | `pnpm agent:recover` | 恢复一批中断运行 |
 | `pnpm agent:worker` | 启动常驻恢复服务 |
+| `pnpm weixin:login` / `pnpm weixin:start` | 扫码登录并启动微信通道 |
+| `pnpm weixin:status` / `pnpm weixin:logout` | 查看登录缓存或清除本地微信绑定 |
 
 ## 文档
 
@@ -67,6 +70,7 @@ pnpm dev
 - [架构设计](docs/cn/architecture.md)：模块职责和执行流程。
 - [持久化与恢复](docs/cn/agent-durability.md)：事件、重试和恢复。
 - [上下文压缩](docs/cn/context-compaction.md)：Pi 官方接口、归档和依赖代价。
+- [微信通道](docs/cn/weixin.md)：扫码、对话、确认命令和测试边界。
 - [金融数值与结算](docs/cn/financial-values.md)：单位、精度和结算。
 - [安全设计](docs/cn/security.md)与[当前限制](docs/cn/known-risks.md)：权限和模拟边界。
 

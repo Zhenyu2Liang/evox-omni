@@ -7,6 +7,7 @@
 | `acceptance.e2e.ts` | mock 模型，`prisma/e2e.db` |
 | `live-acceptance.e2e.ts` | live 模型，`prisma/live-acceptance.db` |
 | `date-tamper-boundary.e2e.ts` | 无模型无浏览器，纯 HTTP，`prisma/live-acceptance-date-tamper.db` |
+| `weixin-live.e2e.ts` | live 模型、Chrome、本地微信协议服务器，每轮新建 `prisma/weixin-live-<UUID>.db` |
 
 前两个入口通过 playwright-core 驱动真实浏览器。
 三个入口都启动独立服务、准备隔离数据库并清理子进程。

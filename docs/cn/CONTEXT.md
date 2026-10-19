@@ -27,6 +27,7 @@
 | 权限、认证与审计 | [security.md](security.md) |
 | 人工接管与证据处理 | [manual-review.md](manual-review.md) |
 | 定时任务与提醒 | [scheduled-tasks.md](scheduled-tasks.md) |
+| 微信登录、对话和确认命令 | [weixin.md](weixin.md) |
 | 测试方法与证据范围 | [test-cases.md](test-cases.md) |
 | 模拟能力与未验证条件 | [known-risks.md](known-risks.md) |
 

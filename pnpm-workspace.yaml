@@ -12,3 +12,16 @@ overrides:
   '@earendil-works/pi-codemode': 1.2.0
   '@earendil-works/pi-mcp': 1.2.0
   '@earendil-works/pi-tui': 1.2.0
+
+# 通道只使用 pi-weixinbot 的协议模块，不加载其旧版 Pi 扩展运行时。
+packageExtensions:
+  'pi-weixinbot@1.0.5':
+    peerDependenciesMeta:
+      '@mariozechner/pi-agent-core':
+        optional: true
+      '@mariozechner/pi-ai':
+        optional: true
+      '@mariozechner/pi-coding-agent':
+        optional: true
+patchedDependencies:
+  pi-weixinbot@1.0.5: patches/pi-weixinbot@1.0.5.patch

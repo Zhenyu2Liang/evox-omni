@@ -7,6 +7,7 @@ A competition simulator for natural-language banking with server-controlled perm
 ## Module boundaries
 
 - `lib/contracts/tool-catalog.ts`: tool names, effects, tiers and replay metadata.
+- `channels/weixin/`: pi-weixinbot protocol transport, QR-owner binding, durable reply outbox and explicit confirmation commands through the existing local banking HTTP API. See `docs/cn/weixin.md`.
 - `agent/durable/`: every observed Pi event, run lease, stable invocation, explicit retry/recovery.
 - `agent/intent-context.ts` and `agent/tools/plan-compiler.ts`: user-authored context and pre-persistence request/condition/output validation.
 - `planner/` and agent adapters: DAG transitions, persistent ownership and checkpoints.
