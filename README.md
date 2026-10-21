@@ -67,6 +67,7 @@ pnpm dev
 开发说明统一放在 [docs/cn](docs/cn/README.md)。
 
 - [开发指南](docs/cn/development.md)：安装、配置和运行。
+- [已实现功能说明](docs/cn/implemented-features.md)：业务能力、使用入口和竞赛场景覆盖。
 - [架构设计](docs/cn/architecture.md)：模块职责和执行流程。
 - [持久化与恢复](docs/cn/agent-durability.md)：事件、重试和恢复。
 - [上下文压缩](docs/cn/context-compaction.md)：Pi 官方接口、归档和依赖代价。

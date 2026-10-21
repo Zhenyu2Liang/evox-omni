@@ -18,6 +18,7 @@
 | 内容 | 文档 |
 | --- | --- |
 | 文档入口 | [README.md](README.md) |
+| 已实现业务、使用入口和竞赛场景覆盖 | [implemented-features.md](implemented-features.md) |
 | 名称与定义 | [terms.md](terms.md) |
 | 环境、命令、数据库操作 | [development.md](development.md) |
 | 模块职责与执行顺序 | [architecture.md](architecture.md) |
