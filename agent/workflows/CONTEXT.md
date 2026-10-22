@@ -29,4 +29,8 @@ A takeover clears only nonterminal child claims while still owning the parent.
 
 The `runTool` seam is supplied by callers (entry points/app routes) which pass the concrete banking tool dispatcher; this directory never defines tool names.
 Control-only paths use `UNUSED_RUN_TOOL`, which throws if a tool execution is attempted.
+Confirm-continuation (`resumeTaskForAction`) claims the PLAN slot with a fresh `taskclaim` token, clears nonterminal node claims, builds deps via `buildPlanDeps(..., { mode: 'executor', planToken })` and calls `lifecycle.resumePlan`; a LOST plan claim instead records the decided node via `recordDecidedNodeFenced` and never drives the walk.
+On that path `runTool` is `executeGatedTool` (`confirmation/plan-continuation.ts:21`), so a DOWNSTREAM node can re-park with `requiresConfirmation`/`pendingActionId`, while the decided node's own outcome is narrowed to `{ ok, data, summary, error }` (`plan-continuation.ts:19`) and can never re-park.
+`buildPlanDeps` receives the default no-op `onNodeUpdate`, so the confirmation walk emits no per-node events; the single `plan_update` is emitted from the reloaded `getTaskPlan` snapshot (the `resumePlan` return value is discarded).
+A `paused` plan is wired to `PAUSE_NOW_CONTROLS`; unlike `resumeTask`/`retryTask`, `resumeTaskForAction` does not call `assertNoOpenManualReview`.
 Card tools (`get_cards`, `set_card_limit`, `freeze_card`, etc.) are therefore not referenced in this layer.
