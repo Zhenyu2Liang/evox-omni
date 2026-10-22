@@ -525,7 +525,6 @@ const REDEMPTION_SNAPSHOT_FIELDS: ReadonlySet<string> = new Set([
   'expectedNetValue',
   'expectedNetValueDate',
   'expectedSettlementAmount',
-  'expectedRedemptionAmount',
 ]);
 
 /**

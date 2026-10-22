@@ -13,7 +13,7 @@ export interface BankingCommand {
 
 /** Booked money arguments: normalized to one canonical cent text before they can grant authority. */
 const MONETARY_FIELDS = new Set([
-  'amount', 'creditLimit', 'monthlyLimit', 'expectedRedemptionAmount', 'expectedSettlementAmount', 'redeemAmount',
+  'amount', 'creditLimit', 'monthlyLimit', 'expectedSettlementAmount',
 ]);
 
 /**

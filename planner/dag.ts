@@ -52,7 +52,7 @@ function redeemModeProblem(args: unknown): string | undefined {
     ? args as Record<string, unknown>
     : {};
   if (nodeArgs.redeemAmount !== undefined) {
-    return '使用已废止的 redeemAmount，赎回需要显式口径 mode（SHARES/AMOUNT/ALL）';
+    return '的赎回需要显式口径 mode（SHARES/AMOUNT/ALL）：按份额用 shares，按金额用 amount，全额赎回不接受份额或金额';
   }
   const mode = nodeArgs.mode;
   if (mode === undefined || mode === null || mode === '') {
