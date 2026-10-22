@@ -19,7 +19,7 @@
 借记卡和虚拟卡各绑定 1 个本人的活期账户，作为结算账户。
 月限额（`monthlyLimit`）限制该类卡的当月累计消费。
 月限额为空时，消费上限只受账户余额限制。
-当月累计消费按补办前的原卡合并计算。
+当月累计消费按补办前后各卡合并计算。
 消费在 1 个事务内扣减账户现金，并写入消费流水和消费记录。
 账户余额是本卡结算账户的现金，可用余额是本卡当前可消费的金额。
 
@@ -39,7 +39,7 @@
 
 服务端不猜测卡片从哪个账户扣款。
 账户不存在、属于其他用户或类型不是 `CHECKING` 时，均解析为不可用。
-说明：未绑定结算账户的卡片用一次性补绑定脚本补齐，见[数据升级与回滚](#数据升级与回滚)。
+说明：未绑定结算账户的卡片用补绑定脚本补齐，见[数据升级与回滚](#数据升级与回滚)。
 
 ## 卡片视图与余额展示
 
@@ -65,7 +65,7 @@
 - `payableAmount`：可用余额，界面文案用 `business.cards.usableBalance`。
 
 多张卡绑定同一账户时，共用这 1 份账户现金。
-每张卡的可用余额按该账户现金与自身月限额分别计算。
+每张卡按本卡的剩余月限额计算可用余额。
 
 ## 卡片状态与消费入口
 
@@ -98,7 +98,7 @@
 - [card-account-display.ts](../../components/banking/card-account-display.ts)提供 4 态判定函数。
 - [CardTile](../../components/banking/CardTile.tsx)和[CardsCard](../../components/chat/cards/CardsCard.tsx)按判定结果渲染金额。
 - [卡片页](../../app/cards/CardManager.tsx)按 `usable` 禁用消费按钮。
-- [消费对话框](../../app/cards/CardConsumeDialog.tsx)在 `MISSING` 或 `UNTRUSTED` 时阻止提交。
+- [消费对话框](../../app/cards/CardConsumeDialog.tsx)在 `usable` 为 `false`、`MISSING` 或 `UNTRUSTED` 时阻止提交。
 
 未关联账户显示 `business.cards.linkedAccountMissing`。
 账户不可用显示 `business.cards.linkedAccountUntrusted`。
@@ -168,14 +168,8 @@ Agent 注册虚拟卡申请与挂失卡补办，两者都是 RED 操作。
 
 ### 升级步骤
 
-1. 停止应用、恢复进程和其他数据库连接。
-2. 备份数据库。
-
-   ```sh
-   mkdir -p logs/db-backups
-   sqlite3 prisma/dev.db ".backup 'logs/db-backups/2026-01-01-120000-dev.db'"
-   ```
-
+1. 停止应用和恢复进程。
+2. 停止数据库连接，按[开发指南的备份步骤](development.md#备份默认数据库)创建数据库快照。
 3. 同步外键和索引。
 
    ```sh
@@ -198,7 +192,7 @@ Agent 注册虚拟卡申请与挂失卡补办，两者都是 RED 操作。
 
    清单保存在 `logs/card-account-binding/<时间戳>-applied.json`。
 
-警告：跳过备份会丢失已提交的卡片记录。备份前停止数据库连接。
+警告：跳过备份会丢失已提交的卡片记录。
 
 ### 回滚步骤
 
@@ -212,7 +206,7 @@ Agent 注册虚拟卡申请与挂失卡补办，两者都是 RED 操作。
    pnpm exec tsx scripts/card-account-binding.ts --rollback=logs/card-account-binding/<时间戳>-applied.json
    ```
 
-3. 需要恢复更早的数据时，用 `logs/db-backups/` 中的快照覆盖数据库。
+3. 需要恢复更早的数据时，用 `backups/` 中的快照覆盖数据库。
 
 回滚只还原仍持有脚本写入值的行，人工改过的行保持不变。
 
