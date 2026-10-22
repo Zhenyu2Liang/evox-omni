@@ -24,6 +24,7 @@
 | 模块职责与执行顺序 | [architecture.md](architecture.md) |
 | 事件、检查点、重试与恢复 | [agent-durability.md](agent-durability.md) |
 | 金融单位与结算 | [financial-values.md](financial-values.md) |
+| 理财净值、份额与收益口径 | [investments.md](investments.md) |
 | 对话卡片与调用详情 | [chat-presentation.md](chat-presentation.md) |
 | 权限、认证与审计 | [security.md](security.md) |
 | 人工接管与证据处理 | [manual-review.md](manual-review.md) |
