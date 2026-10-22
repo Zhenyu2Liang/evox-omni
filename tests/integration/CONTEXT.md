@@ -6,7 +6,7 @@
 模型响应和并发时序可由测试控制。
 文件名中的 live 不代表调用真实模型。
 本目录直接 import `@/app/api/.../route` 处理器并在进程内包裹 `new NextRequest` 调用（`taskPost`／`confirmPost`／`actionsGet` 等），不是只测领域函数。
-只有 `task-feature-hardening.test.ts:13` 借用 `@/tests/app/harness`（`idCtx`／`postJson`／`getJson`／`taskUrl`／`actionUrl`）。
+`../app/CONTEXT.md` 的 harness 在本目录的借用方只有 `task-feature-hardening.test.ts:13`（`idCtx`／`postJson`／`getJson`／`taskUrl`／`actionUrl`）与 `locked-action-recovery.test.ts:42`（只借 `getJson` 复读 `GET /api/actions`）。
 真实模型与浏览器证据见
 [../e2e/CONTEXT.md](../e2e/CONTEXT.md)。
 
@@ -25,6 +25,7 @@
 | `process-restart.test.ts`、`standalone-workflow-restart.test.ts` | 真实进程中断与恢复 |
 | `model-checkpoint-boundaries.test.ts` | 模型检查点、租约与提交条件 |
 | `write-continuation.test.ts` | 声明写操作未发出受控调用时的单次续办、面板真伪与持久化恢复 |
+| `locked-action-recovery.test.ts` | 终止锁定不可被恢复路径复活：`recoverOwnedRun`、`resumeTask`／`retryTask`、`recoverAction` 四条生产入口之后 `PendingAction` 仍 `locked`、`updatedAt` 毫秒不变、计划链接与 challenge 集合不变、不新建 `PendingAction`／审计／安全事件、不动资金流水、`GET /api/actions` 不再列出，且各路径自身文案不含内部标记 |
 | `card-consume-transaction.test.ts` | 虚拟卡消费的事务原子性（注入失败后余额、`Transaction`、`CardConsumption` 三者全未变）、月限额与余额的并发栅栏、并发相同 `executionKey` 只扣一次 |
 | `card-replacement-transaction.test.ts` | 补办是一个事务（`card.update` 失败即回滚，不留半成品卡与 `replacedByCardId`）、源卡结算账户漂移（他人账户／储蓄账户／已删除）时拒绝补办且不落卡 |
 | `card-replacement-binding.test.ts` | 补办继承结算账户（原始行核对）、跨代月限额连续且历史 `CardConsumption` 不改写、缺绑定只按显式前驱修复、无前驱的缺绑定卡拒绝消费且绝不回退默认账户 |
@@ -62,7 +63,7 @@
 
 | 入口 | 定义 | 本目录调用点 |
 | --- | --- | --- |
-| `recoverOwnedRun` | `agent/durable/service.ts:103` | `conversation-recovery.test.ts:62`、`conversation-compaction.test.ts:158/191`、`standalone-workflow-restart.test.ts:135`（断言 `CONFLICT`）、子进程驱动 `tests/helpers/restart-process.ts:132/139` |
+| `recoverOwnedRun` | `agent/durable/service.ts:103` | `conversation-recovery.test.ts:62`、`conversation-compaction.test.ts:158/191`、`standalone-workflow-restart.test.ts:135`（断言 `CONFLICT`）、`locked-action-recovery.test.ts:217`（锁定动作，断言 `AUTHORIZATION_REQUIRED`）、子进程驱动 `tests/helpers/restart-process.ts:132/139` |
 | `tickAgentRecovery` | `agent/recovery-worker.ts:44` | 只在子进程驱动内：`tests/helpers/restart-process.ts:136`、`tests/helpers/standalone-restart-process.ts:18` |
 | `recoverInvocation` | `agent/durable/recovery.ts:63` | `agent-durability.test.ts:106/142` |
 | `settlePendingAction` | `agent/confirmation-recovery.ts:251` | `agent-durability.test.ts:255/259` |
@@ -70,7 +71,8 @@
 | `listRecoverableAgentRuns` | `lib/db/repositories/agentRun.ts:281` | `model-checkpoint-boundaries.test.ts:95/96/98/109`、`standalone-workflow-restart.test.ts:146/150` |
 | `executeGatedTool` | `agent/confirmation/gated-execution.ts:88` | 造「停放」动作的唯一生产入口，见各 `parkStandalone`／`runner` 助手 |
 
-`agent/index.ts:164` 的服务端 `recoverAction` 没有被本目录用例直接调用（`confirmation-policy.test.ts:10` 的 `recoverAction` 来自 `@/components/chat/actions`，是客户端函数）。
+`agent/index.ts:164` 的服务端 `recoverAction` 由 `locked-action-recovery.test.ts:264` 从 `@/agent` 直接调用（计划分支在 `:205-258`）。
+`confirmation-policy.test.ts:10` 的 `recoverAction` 来自 `@/components/chat/actions`，是客户端函数，与服务端同名函数无关。
 `agent/confirmation-recovery.ts:347` 的 `recoverStandaloneWedge` 只被间接经过，`agent/authorization-resume.ts:52` 的 `performAuthorizationResume` 无直接覆盖，`recoverPendingAction` 这个名字全仓不存在。
 
 租约与执行占用一律用真实时钟直接写库强制过期，本目录没有 `vi.useFakeTimers`／`advanceTimersByTime`／`setSystemTime`。
@@ -80,13 +82,39 @@
 确认动作的租约用 `pendingAction.update({ executionLeaseExpiresAt: new Date(now - 1) })`（`confirmation-lease-contention.test.ts:76`）或把 owner 与过期时间置空（`restart-recovery.test.ts:143-152`）。
 没有用例写 `recoveryAttempts`／`maxRecoveryAttempts`／`activeRunId`：前两者只被断言（`model-checkpoint-boundaries.test.ts:54/106`），后者只被读（`agent-durability.test.ts:58/123/215/239`）。
 
-停放状态的三条造法：`executeGatedTool` 直接停放（`restart-recovery.test.ts:102-113`、`confirmation-lease-contention.test.ts:20-28`）；`runSubmitPlan` 的 `runTool` 转发 `ctx.taskId`／`ctx.nodeId` 到 `executeGatedTool` 停放（`takeover-controls.test.ts:68-79`、`confirmation-liveness.test.ts:59-60`）；直接 `pendingAction.create`（`conversation-recovery.test.ts:100-105`、`agent-durability.test.ts:156-160/184-188/202-206`、`standalone-recovery.test.ts:218-222` 造无回执的 `confirmed`）。
-`status: 'locked'` 不能直接写：只能经三次错误验证码的 MFA 阶梯产生（`money-budget.test.ts`、`frontend-followup-fixes.test.ts`）；公共阶梯与探针在 `tests/helpers/locked-action.ts`，但没有任何用例 import 它。
+停放状态的三条造法：`executeGatedTool` 直接停放（`restart-recovery.test.ts:102-113`、`confirmation-lease-contention.test.ts:20-28`）；`runSubmitPlan` 的 `runTool` 转发 `ctx.taskId`／`ctx.nodeId` 到 `executeGatedTool` 停放（`takeover-controls.test.ts:68-79`、`confirmation-liveness.test.ts:59-60`；共享版本为 `tests/helpers/locked-action.ts#parkRedTransferPlan`）；直接 `pendingAction.create`（`conversation-recovery.test.ts:100-105`、`agent-durability.test.ts:156-160/184-188/202-206`、`standalone-recovery.test.ts:218-222` 造无回执的 `confirmed`）。
+`status: 'locked'` 不能直接写：只能经三次错误验证码的 MFA 阶梯产生（`money-budget.test.ts`、`frontend-followup-fixes.test.ts`）；公共阶梯与探针在 `tests/helpers/locked-action.ts`，由 `locked-action-recovery.test.ts` 与 `../app/mfa-lock-refresh-unlock-http.test.ts` 共用，二者都不手写 SQL 造锁定。
+
+## 终止锁定不可被恢复路径复活
+
+`locked-action-recovery.test.ts` 在进程内用四条生产恢复入口证明：终态 `locked` 的 `PendingAction` 永不回到 `pending`／`awaiting_mfa`，也不为同一节点产生新的可决策行。
+
+保证它的当前生产事实：
+- `recoverOwnedRun`（`agent/durable/service.ts:103`）在运行仍 `waiting_confirmation`／`waiting_verification` 时走 `AUTHORIZATION_REQUIRED` 早退（`:159-162`），只回报 `The original confirmation or verification is still required.`，不重新驱动写；待决策动作的状态过滤不含 `locked`（`:216`），`synchronizeRunActionInvocations` 只回写 `['executed','cancelled','failed','needs_reconciliation']`（`lib/db/repositories/agentRun.ts:240-243`）。
+- `resumeTask`（`agent/workflows/controls.ts:26`）与 `retryTask`（`:44`）重新驱动尚非终态的 `waiting_verification` 节点（`planner/executor.ts:563-569` 只跳过 `TERMINAL` 集合内的节点，而该集合不含 `waiting_verification`，见 `:154-160`）：`executeGatedTool` → `securityGateway#handleToolCall` 对已锁定会话直接拒绝，且 `representedStatuses`（`agent/confirmation/gated-execution.ts:19-21`）不含 `locked`，`findRepresentedAction`（`:24-27`）因此认领不到锁定行。
+- `recoverAction`（`agent/index.ts:164`，计划分支 `:205-258`）对锁定 action 返回 `ok:false`，不重开决策。
+- `authorizeAction` 先对 `status === 'locked'` 短路为 `lockedOutcome(..., 'mfa_session_locked')`（`security/security-gateway.ts:1116-1119`），其后才是非 `pending`／`awaiting_mfa` 的 `CONFLICT` 守卫（`:1123-1125`）；因此 `security/mfa.ts#issueChallenge`（`:100-105`）虽不过滤动作状态，对锁定动作不可达，验证码永不重发。
+- `beginAgentRun`（`lib/db/repositories/agentRun.ts:51-54`）在 `agentSession.runLeaseExpiresAt` 未过期时拒绝第二次准入，真并发租约抢占无法由用例构造，用例改用崩溃边界作为等价保证。
+
+用例的驱动：
+- 前置统一来自 `tests/helpers/locked-action.ts`：`parkRedTransferPlan` 经生产 `submit_plan` runner 停一个 RED 转账节点，`lockAction` 走网关阶梯耗尽三次得到终态；`beforeEach(resetDatabase)` 因为熔断按所有者（`user:<userId>`）持久化。
+- durable 路径用生产 `beginRun`（`lib/db/repositories/agentRun.ts:35`）准入运行，以 `nxe:<taskId>:<nodeId>` 作唯一 `ToolInvocation` 的 `operationKey`，把运行真正挂到锁定动作的任务上（`runPendingActionWhere`，`:215`），再以 `AgentRunJournal.finish('waiting_verification')`（`:189`）留在崩溃边界，最后调 `recoverOwnedRun`：断言 `outcomes` 含 `{ action:'waiting', reason:'AUTHORIZATION_REQUIRED' }`、无 `retried`、运行仍 `waiting_verification`、租约已释放。
+- 计划路径对同一 `taskId` 先 `resumeTask` 再 `retryTask`，两者都断言节点输出里没有新的 `pendingActionId`（`readPendingActionId` 为 `undefined`）。
+- `tests/helpers/restart-process.ts` 刻意不用：它的 15s／20s 屏障在并发负载下易超时（见「已知缺口」），而进程内 `recoverOwnedRun` 走的是同一段恢复代码。
+
+`baselineLockedAction` 在锁定后立即取样，`assertStillLocked` 在每条路径后逐项复核：
+- `PendingAction.status === 'locked'` 且不在 `['pending','awaiting_mfa']` 内，`updatedAt` 毫秒相同，`taskId`／`nodeId`／`sessionId` 链接不变。
+- 该 action 的全部 `MfaChallenge` 仍为 `locked`，challenge 集合（id + status）与基线一致。
+- 按 `taskId` 取出的 `PendingAction` id 集合与基线完全相同，新行可被检出。
+- `AuditLog` 计数、`mfa_required` 与 `locked` 两类 `SecurityEvent` 计数均不变；`checkingBalance()`／`transactionsCount()`／`zhangweiTransfers()` 不变。
+- `GET /api/actions`（经 `tests/app/harness.ts#getJson` 调真实路由）返回 `200`、不列出该 action id、不出现 `locked` 状态项。
+- 各路径自身返回的消息与计划节点状态串，以及三条再驱动入口抛出的错误，都不含 `__SECURITY_BLOCK__`／`decisionKind`／`[object Object]`／`/\n\s+at\s/`。
 
 ## 终止锁定（locked）、block reason 与错误验证码的覆盖边界
 
-领域 `status: 'locked'` 只在本目录三处断言，全部在 `confirmation-policy.test.ts`：
+响应域 `status: 'locked'` 在本目录三处断言，全部在 `confirmation-policy.test.ts`：
 `it.each(['needs_reconciliation','failed','cancelled','locked'])`（L187）与 `'a locked RED decision retains its historical MFA requirement without requesting another code'`（L197，`:201` `toMatchObject({ ok:false, status:'locked', tier:'RED', requiresMfa:true })`、`:202` 无 `mfa_required`、`:203` 余额不变）。
+持久化 `PendingAction.status === 'locked'` 由 `locked-action-recovery.test.ts` 在每条恢复路径后断言，且明确不得为 `pending`／`awaiting_mfa`。
 `frontend-followup-fixes.test.ts` 断言的是持久化 `MfaChallenge.status === 'locked'`（L134、L156、L157、L166），不是响应域状态。
 `code: 'CIRCUIT_OPEN'` 只出现在 `confirmation-policy.test.ts`：L75/L87 断言 `/api/security/reset` 返回 `423`，L119/L135 仅把它当开锁前置，不断言该 code。
 
@@ -95,12 +123,12 @@
 进程内 `recordFailure` ×3 —— `confirmation-policy.test.ts` 的 `lock()`（L40-43）、`refactor-security-runtime.test.ts:47-61` 的第三次 `recordRiskSignal` 链路（`:60` 仅一条 `CIRCUIT_BREAKER_TRIPPED`）。
 
 唯一与锁定相关的用户可见文案断言是 `money-budget.test.ts:211` 的「熔断」子串。
-本目录没有 `chat.error.toolFailed`、`toolFailed`、`publicToolError` 或 `publicToolSummary` 的断言（这些只在 `tests/unit/planner/`）。`__SECURITY_BLOCK__` 与公开 `security_event` 帧只由 `security-deny-redaction.test.ts` 断言（其余用例都不涉及）。
+本目录没有 `chat.error.toolFailed`、`toolFailed`、`publicToolError` 或 `publicToolSummary` 的断言（这些只在 `tests/unit/planner/`）。`__SECURITY_BLOCK__` 在断言里只由 `security-deny-redaction.test.ts` 证明网关原始拒绝带标记，`locked-action-recovery.test.ts` 另以负例扫描恢复路径的文案。
 `security_event` 的注入帧形状只在 `tests/app/chat-http.test.ts:295-299` 与 `tests/app/malicious-input-http.test.ts:206-208` 断言（`kind: 'injection'`），且都不断言 `message`；本目录的 `security_event` 断言是 `security-deny-redaction.test.ts` 的 `kind:'locked'` 帧。
 
 被门禁拒绝的写入一般只断言 `toolEvent.status === 'blocked'`，不检查 block reason 文本：
 `conversational-turns.test.ts:116/127/159/170/323/340/449`、`decision-guidance.test.ts:60`、`conversation-recovery.test.ts:114/189`、`live-complete-plan.test.ts:36`、`confirmation-policy.test.ts` 无此类断言。
-唯一例外是 `security-deny-redaction.test.ts`：它先在网关返回值上确认 `blockReason` 以 `__SECURITY_BLOCK__` 开头且含 `decisionKind`/`CIRCUIT_OPEN`（证明确有内部载荷），再断言投影后的公开载荷不含任何标记。
+唯一检查网关拒绝载荷的是 `security-deny-redaction.test.ts`：它先在网关返回值上确认 `blockReason` 以 `__SECURITY_BLOCK__` 开头且含 `decisionKind`/`CIRCUIT_OPEN`（证明确有内部载荷），再断言投影后的公开载荷不含任何标记。
 
 该用例是本目录唯一把真实网关拒绝送到公开投影的入口：熔断由 `verifyAction`（`securityGateway#authorizeAction`，错误码 `000000` ×3）驱动，随后用 `helpers/faux-agent.ts` 的真实 Pi agent（`beforeToolCall` → `securityGateway#handleToolCall`）对同一会话再发一次 RED 写；Pi 的 `tool_execution_end` 直接交给生产投影器 `agent/turns/events.ts#createEventHandler` + `agent/turns/buffer.ts#createTurnBuffer`，不经 `helpers/scenario.ts`（其 `decideAndContinue` 在授权非 ok 时只返回 `{ text }`，无法承载拒绝帧）。
 
@@ -115,10 +143,12 @@
 本目录只有 `confirmation-policy.test.ts` 与 `frontend-followup-fixes.test.ts` 触及重置/解锁。
 安全中心路由不带验证码时恒 `423` + `CIRCUIT_OPEN`，且不写任何 `SECURITY_RESET`（`confirmation-policy.test.ts:85-88`）。
 带验证码的 `resetSession` 之后 `SECURITY_RESET` 恰好 1 行（`confirmation-policy.test.ts:91`、`frontend-followup-fixes.test.ts:142-143`，detail 含 `renewedMfaChallenges: 1`）。
-解锁会把该 action 的 `MfaChallenge` 续期为 `pending`/`attempts 0`，并把其 `PendingAction` 由 `locked` 改回 `awaiting_mfa`（`frontend-followup-fixes.test.ts:137-138`）——测试断言的是「重开该 action」，不是「保持 locked」。
+解锁只续期「仍待决策」动作的 challenge：`renewLockedMfaChallenges`（`lib/db/repositories/pendingAction.ts`，由 `commitAuditedReset` 调用）只匹配 `action.status === 'awaiting_mfa' && requiresMfa` 的 `locked` challenge，把它们改回 `pending`/`attempts 0`，从不改写 `PendingAction.status`；终态 `locked` 动作与其 challenge 解锁后仍 `locked`（`../app/mfa-lock-refresh-unlock-http.test.ts` 第 3 组）。`frontend-followup-fixes.test.ts:137-138` 的 action 因 `exhaust()` 直调 `security/mfa.ts#verify` 只锁 challenge，所以解锁前后都是 `awaiting_mfa`。
 续期按所有者与状态过滤：需决策的 challenge 变成 `pending`，`cancelled` 与其它用户的 challenge 保持 `locked`（`:156-157`）。
 审计写入失败时解锁与续期一并回滚，`isLocked` 仍为 `true`、challenge 保持 `locked`/`attempts 3`（`:166-167`）。
-没有任何用例断言「解锁后新请求产生新 `PendingAction` id」：解锁后仍复用同一个 actionId（`confirmation-policy.test.ts:92` 的 `recover`、`frontend-followup-fixes.test.ts:140-141` 的 `verify`）。
+解锁不会复活旧动作：解锁后同一业务意图的新请求铸造新的 `PendingAction` id（`retry.actionId !== red.actionId`、`retry.taskId !== red.taskId`），旧行仍 `locked`、旧 id 不在 `GET /api/actions` 列表内，响应自报 `lockedActionsReopened: false`，资金／流水／回执均未增加（`../app/mfa-lock-refresh-unlock-http.test.ts` 第 3 组）。
+旧 id 上的重复提交仍被拒：同一套件第 2 组断言 `verify`（正确码）与 `confirm` 各三次都返回 `200` + `ok:false` + `status:'locked'` + `failure.reason:'mfa_session_locked'`；本目录 `locked-action-recovery.test.ts` 断言服务端 `recoverAction` 对锁定 action 返回 `ok:false`。
+`confirmation-policy.test.ts:92` 的 `recover` 与 `frontend-followup-fixes.test.ts:140-141` 的 `verify` 都在原 id 上继续，针对的是 `confirmed`／`awaiting_mfa`（非锁定）动作。
 
 ## 断言约束
 
@@ -142,6 +172,9 @@
 - 通用回执重放入口为 `createToolRegistry(userId).executeDirect(tool, args, { sessionId, idempotencyKey })`，用同一 key 重发即原样返回（`refactor-financial-commands.test.ts:95`、`confirmed-write-authority.test.ts:136`）。
 - `../helpers/db.ts#truncateAll()` 已覆盖无关系的 `CardConsumption`；套件只需 `beforeEach(resetDatabase)`，不得再自行逐表清理。
 - `standalone-workflow-restart.test.ts` 使用真实子进程与 15s／20s 屏障超时，在磁盘／CPU 高负载（如整目录同时运行）下会偶发「child did not reach barrier」；单独重跑可 9/9 通过，先确认是否只是超时。
-- 本目录不断言锁定话术文案：无 `chat.error.securityLocked`／`publicToolError`／「验证码错误次数过多，本会话高风险操作已被锁定…」用例；`__SECURITY_BLOCK__` 只在 `security-deny-redaction.test.ts` 出现，用于证明网关返回的原始拒绝带有内部标记、而投影后的公开载荷不带。
+- 本目录不断言锁定话术文案：无 `chat.error.securityLocked`／`publicToolError`／「验证码错误次数过多，本会话高风险操作已被锁定…」用例；`__SECURITY_BLOCK__` 既用作「网关原始拒绝确实带标记」的证明，也用作恢复路径文案的负例标记，从不出现在任何上屏断言的正例里。
 - 本目录不断言 `MfaCard` 的 LOCKED 渲染：`frontend-review-fixes.test.ts` 只用默认（验证码输入）与 `status: 'executed'` 两种状态。
 - 夹具不播种 LOST 卡（`card_credit`/`card_debit` 均 `ACTIVE`，见 `../helpers/fixtures.ts:99`）；`replace_card` 需先 `report_lost_card` 或直接改库把源卡置 `LOST`。
+- 节点级内部标记仍有泄漏面：`resumeTask`／`retryTask` 重新驱动节点时，网关以 `__SECURITY_BLOCK__{"decisionKind":"deny",…}` 拒绝，`agent/confirmation/gated-execution.ts:66`（`error: auth.blockReason`）把它交给 `planner/node-outcome.ts:30`，后者把它作为节点 `error` 写进计划快照。终止锁不会被复活（`locked-action-recovery.test.ts` 已断言），但该字段仍携带内部信封且无用例覆盖——缺的是投影层用例。
+- `locked-action-recovery.test.ts` 只覆盖进程内恢复入口：`tickAgentRecovery` 与真实子进程重启（`../helpers/restart-process.ts`）没有锁定动作用例，原因是其屏障在高负载下易超时；真并发租约抢占被 `beginAgentRun` 拒绝，无法直接构造。
+- 锁定动作没有 HTTP `POST /api/actions/[id]/recover` 用例：本目录覆盖的是服务端 `recoverAction`（`agent/index.ts:164`），`../app/mfa-lock-refresh-unlock-http.test.ts` 覆盖的是 `verify`／`confirm` 与 `POST /api/security/reset`。
