@@ -92,6 +92,11 @@ against threshold `MFA_MAX_ATTEMPTS = 3`, and the authoritative owner-scoped `Ci
 An action receipt carries NO error code: `ActionResponse` (`_lib/types.ts:44-57`) exposes only `status`/`mfaResult`/`message`, and `agent/confirmation/outcomes.ts#blockedOutcome` drops the gateway's `CIRCUIT_OPEN` while emitting no events for a `locked` outcome (`:63-64`). So the lock is signalled purely by `status:'locked'` + `mfaResult:'failed'` + the gateway sentence.
 Contrast `POST /api/cards/changes/[id]/verify`, which lets `AppError('CIRCUIT_OPEN')` bubble out as a `423` failure envelope WITH `code` (`security/manual-card-management.ts:71,112`), so the cards page localizes by code; the action routes deliberately do not.
 
+`data.message` provenance per route: `verify`/`confirm` copy `ConfirmationOutcome.message` verbatim (the gateway sentence on a refusal; `操作已执行。`/`result.error`/`操作结果尚无法核实…` plus a `（结果播报失败：…）` suffix from `agent/confirmation/authorized-execution.ts:94-100`; `该操作所属的任务计划已取消…` from `cancelledPlanOutcome`; the `AppError.message` from `conflictOutcome`), `cancel` always `操作已取消。` (`agent/confirmation.ts:69`), `recover` the recovery outcome's own text.
+No action route localizes: the i18n fallbacks (`chat.error.toolFailed`, `chat.error.securityLocked`) exist only client-side via `lib/tool-feedback.ts`, so a non-browser caller (e.g. `channels/weixin/`) reading `data.message` gets the server's Chinese sentence, never 「操作未完成。请核对原操作卡片和账户记录。」.
+TWO distinct lock sentences reach `data.message` with the SAME `ok:false`/`status:'locked'`: the attempt-limit branch 「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」 (`security/security-gateway.ts:848-850`) and every later attempt on the already-persisted `locked` row via `lockedOutcome` 「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」 (`security/security-gateway.ts:773-788`, reached from the `row.status === 'locked'` guard at `:1053`).
+A `confirm` (no code) on a `locked` row also returns `status:'locked'`/`ok:false`, but with `mfaResult:'not_required'` and `requiresMfa:true` (RED tier), never `'failed'`.
+
 ## Implementation boundaries
 
 Keep route-local schemas private: Next.js route modules export HTTP handlers, supported route
@@ -115,7 +120,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
   e.g. `{"decisionKind":"deny"}`) therefore reaches the browser inside `security_event.message` and any
   tool-error text. `ActionResponse`/`AgentStreamEvent` carry no `code` for a locked verify
   (`status`/`mfaResult` are the only lock signals), so there is no app-layer scrubbing or error-code
-  mapping point.
+  mapping point. The same verbatim pass-through exists at `runs/[id]/events/route.ts:18` (`readRunPresentation` frames) and `../agent/history.ts:36-37` (persisted message cards re-emitted unchanged, so a stored `error` card keeps its text). `agent/turns/events.ts:49,73` puts the RAW marker into `security_event.message` and recognizes it only when the text STARTS WITH the prefix; `confirm`/`recover` forward `outcome.events` unchanged and `resumeTurn` (`agent/run-turn.ts:96`) installs the same handler, so a continuation that re-attempts a blocked tool can stream the marker too. The action routes' own `data.message` carries no marker: `AuthorizationResult.message` is always a human sentence and the prefixed payload lives only in `blockReason` / `GatedToolOutcome.error` (`agent/confirmation/gated-execution.ts:66`).
 - A `'locked'` verify outcome appends no `mfa_required`: `blockedOutcome`
   (`agent/confirmation/outcomes.ts`) emits it only for `pending`/`awaiting_mfa`, so the only possible
   appended event is `plan_update` (and `nextPlanDecision`, `agent/task-decision.ts`, skips rows outside
