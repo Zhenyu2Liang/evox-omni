@@ -17,6 +17,7 @@
 | `chat-history.ts`、`chat-plan-history.ts` | 历史分页与计划归属 |
 | `chat-cards.ts`、`action-summary.ts` | 业务卡片与授权摘要 |
 | `sensitive.ts`、`tool-diagnostics.ts` | 敏感字段过滤与诊断投影 |
+| `mask.ts` | 展示脱敏的唯一实现（手机号、账号、卡号） |
 | `prisma-cli-env.ts` | Prisma 命令环境与可执行文件解析 |
 | `db/` | 客户端、事务上下文与仓储 |
 
@@ -48,6 +49,14 @@ JSON 金额使用十进制字符串。
 安全冷却、执行租约和定时任务调度使用真实时间。
 日期范围通常为半开区间；以调用接口为准。
 
+## 展示脱敏（`mask.ts`）
+
+`lib/mask.ts` 是展示脱敏的唯一实现，零依赖，任何层都直接复用它。
+`maskPhone` 保留前 3 位与末 4 位：长度 ≤ 3 全掩码为 `****`，长度 4–7 为前 3 位加 `****`，长度 > 7 为前 3 位 + `****` + 末 4 位；`null` / `undefined` / 非字符串 / 空串返回空串，缺省值不会渲染成星号，且不做 trim。
+`maskAccountNumber` 与 `maskCardNumber` 共用同一内部算法，只保留末 4 位且输出长度与输入一致：长度 ≤ 4 原样返回，对已脱敏串（`****8821` → `****8821`）幂等，不校验是否纯数字、不 trim、不抛错。
+`lib/phone.ts` 只保留 `maskAwarePhoneMatch` 与 `searchPhoneMatch`，并以 `export { maskPhone } from './mask'` 保持既有导入路径兼容。
+`lib/tool-diagnostics.ts` 内的手机号打码属于诊断日志脱敏（正则门控、输出 `****` + 末 4 位），不是展示格式化，不复用 `mask.ts`。
+
 ## 投资输出契约与标签
 
 `contracts/tool-output.ts` 只声明可被数据引用寻址的字段路径，不强制字段存在，新增字段不破坏既有输出。
@@ -61,6 +70,7 @@ JSON 金额使用十进制字符串。
 - 金融单位规则见 [financial-values.md](../docs/cn/financial-values.md)。
 - 数据访问规则见 [db/CONTEXT.md](db/CONTEXT.md)。
 - `index.ts` 不得导出数据库客户端。
+- 新增展示脱敏一律使用 `lib/mask.ts`，不得在调用层重复实现。
 - 本目录不得依赖业务执行层或界面层。
 - 意图声明与计划校验入口见 [agent/CONTEXT.md](../agent/CONTEXT.md)。
 
