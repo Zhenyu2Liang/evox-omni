@@ -34,6 +34,20 @@
 `compensationReport` 描述已执行与已取消节点。
 它不执行资金补偿。
 
+## 恢复入口
+
+挂起节点（`waiting_confirmation`/`waiting_verification`）的恢复只有两个入口，都由调用层驱动：
+`lifecycle.resumePlan(plan, { nodeId, outcome }, deps, opts)` 先用 `settleToolNode` 记录人工决定，
+写节点行后再调用 `runPlan(snapshot, deps, opts)` 继续（`lifecycle.ts:322`、`:344`、`:366`）；
+`lifecycle.retryPlan(plan, deps, opts)` 把目标及其传递后继重置为 `pending`，再调用 `runPlan`（`lifecycle.ts:242`、`:295`）。
+不存在独立的拓扑续跑逻辑：恢复即"重放 `runPlan`"。
+`runPlan` 对已终态节点保留记录并跳过（`executor.ts:566`），新授权节点以 `success` 记录后其依赖因此解锁。
+`runPlan` 只在 `cancelled`、`success` 或未显式恢复的 `paused` 快照上原样返回（`executor.ts:280`、`:285`、`:288`），不写任何东西。
+`waiting_confirmation` 计划可直接被 `runPlan` 推进；未终态的挂起节点会再次认领并再次调用 `runTool`，幂等由调用层执行键/收据负责。
+`resumePlan` 对 `paused` 计划只记录决定、不推进后继，除非 `opts.explicitResume`（`lifecycle.ts:334`、`:359`）；
+重新挂起或失败的决定只返回快照（`lifecycle.ts:362`）。
+`settleToolNode` 是初始执行与决定后继续共用的结果映射（`node-outcome.ts:5`），未从 `index.ts` 导出。
+
 ## 执行权与持久化
 
 计划与节点认领必须使用调用层提供的数据库条件更新。
