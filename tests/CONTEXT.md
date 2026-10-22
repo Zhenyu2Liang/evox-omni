@@ -118,6 +118,27 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 已开熔断时模型无法解锁：`resetSession` 需验证码或冷却，见 `unit/security/circuit-breaker-reset.test.ts`。
 空 `blockedOutcome`/`conflictOutcome`/`withLiveConfirmation` 无测试直接引用；`executeGatedTool` 由 `helpers/faux-agent.ts`、`integration/refactor-security-runtime.test.ts` 从 `@/agent/confirmation` 引入，`confirmAction` 由 `integration/conversational-turns.test.ts` 引入。
 
+## 微信通道覆盖
+
+通道代码在 `channels/weixin/`（回复模板、`label()` 词表、命令正则、outbox 键以其 CONTEXT.md 为准），本目录只从外部断言，不复刻渲染逻辑。
+用例分散在 `unit/`、`integration/`、`e2e/` 三处，没有单独的子目录。
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `unit/weixin-presentation.test.ts` | `renderEvents`/`renderBusinessCard`/`renderAttention`：17 种 `ChatCard` 的金额与掩码（`it.each` 参数化）且不回显 `NEVER_DISPLAY`/完整手机号、card 与 `message_end.cards` 去重、`action_settled` 后旧 gate 不复活、写操作成功后不再输出旧余额、已取消订阅不提下次扣费、`plan_update` generation 防回退、`processing/recoverable/reconciliation` 不称「尚未执行」、畸形字段兜底「字段不完整」、`blocked` 工具事件只发公开提示（不回显 `chat.error.`/`debugDetail`）、五个计划控制动词与 `/待办`、`/检查到期` 的银行调用参数 |
+| `unit/weixin-channel.test.ts` | 非受信/不完整消息丢弃、`message_state` 省略与 uint64 编号、`text_delta` 不外发、同消息重投与重启去重（`requestId` 形如 `weixin:<64 hex>`）、发送失败保留 outbox 且 `client_id` 不变、未展示编号「不是本通道」、先 `/确认` 后 `/验证`（验证码不落 state）、`status:'locked'` 回执含「已锁定」且不伪造「状态：executed」、网络异常「暂时无法确认」、verify 路由与请求体、URL 白名单、`WeixinStore` save/load 与双 worker 互斥 |
+| `integration/weixin-protocol.test.ts` | 固定版本 `pi-weixinbot` 线协议：轮询 Bearer+游标+uint64 编号、发送固定收件人/上下文/幂等 `client_id`、`ret:-14` 不视为已发送 |
+| `e2e/weixin-live.e2e.ts`、`e2e/weixin-capabilities.e2e-helper.ts` | live 模型 + Chrome + 本地微信协议服务器（非手机实测，每轮新建 `prisma/weixin-live-<UUID>.db`）：陌生人隔离、余额查询回复含真实金额、转账确认前不动账且重复投递不重复扣款、RED 确认→错码 `000000` 不改卡→正码执行、`/取消` 与网页待办一致；`WEIXIN_LIVE_EXTENDED=1` 追加 `runWeixinCapabilities` 的工具矩阵与 `/任务` 控制流 |
+
+### 微信通道已知缺口
+
+- 无任何用例断言 `locked` 的完整微信回复：只断言含「已锁定」与不含「状态：executed」，未断言 `状态：已锁定` 行、未断言不回显 `继续验证`、也未断言服务端 `outcome.message`（如「验证码错误次数过多……安全中心」）原样透传。
+- `awaiting_mfa` 回复的 `状态：等待验证码` + `继续验证：/验证 …` 从未断言，只核对 `settle` 调用参数。
+- 微信入口无「第三次错误验证码→锁定」用例；`scenarios/test-10-circuit-breaker.test.ts` 走代理路径，不经通道。
+- 无 `/验证 <id>`（缺码）、`/取消 <id>` 回执、`/恢复操作 <id>` 的 bridge 分派、`命令格式不正确`、非文字/超长消息、`BankingApiError`（`服务端提示（CODE）：…`，含 `CIRCUIT_OPEN` 信封）的用例。
+- 无断言出站文本不含 `__SECURITY_BLOCK__`：`renderEvents` 忽略 `security_event` 仅由代码保证；`__SECURITY_BLOCK__` 在 `tests/` 内只出现在 `unit/agent/providers/provider-mock.test.ts`（mock responder 的 block 前缀，与通道无关）。
+- 无 `worker.ts` 的游标提交与 `-14` 重扫码、outbox 1600 字切块与 2000 条淘汰的用例。
+
 ## 常用命令
 
 `pnpm test` 运行全部 Vitest 测试。
