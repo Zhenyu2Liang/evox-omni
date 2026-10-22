@@ -13,6 +13,11 @@
 import type { MoneyAmount, MoneyInput } from '../lib/money';
 import type { DecimalAmount } from '../lib/decimal';
 
+/**
+ * Financial decimal INPUT (canonical decimal text) — the decimal counterpart of `MoneyInput`:
+ * net values, share counts and rates never arrive as JavaScript numbers.
+ */
+export type DecimalInput = DecimalAmount;
 /* ------------------------------------------------------------------ account */
 
 export type AccountType = 'CHECKING' | 'SAVINGS';
@@ -352,6 +357,12 @@ export interface SubscriptionView {
 
 export type InvestmentRiskLevel = 'R1' | 'R2' | 'R3' | 'R4' | 'R5';
 export type HoldingStatus = 'HOLDING' | 'REDEEMED';
+/**
+ * The explicit口径 a redemption must state (see `docs/cn/investments.md`, 「赎回口径」):
+ * `SHARES` — redeem a given share count; `AMOUNT` — redeem a CNY amount, converted to shares at the
+ * current net value; `ALL` — redeem every held share and close the holding. Mixing口径 is rejected.
+ */
+export type RedeemMode = 'SHARES' | 'AMOUNT' | 'ALL';
 
 export interface ProductView {
   id: string;
@@ -364,6 +375,10 @@ export interface ProductView {
   /** Minimum subscription amount (CNY). */
   minAmount: MoneyAmount;
   description?: string;
+  /** Latest SIMULATED net value per unit (4 fractional digits); absent when none is published. */
+  latestNetValuePerUnit?: DecimalAmount;
+  /** Business date (epoch ms) the published net value applies to; absent with no net value. */
+  latestNetValueDate?: number;
 }
 
 export interface ProductQuery {
@@ -384,12 +399,41 @@ export interface HoldingView {
   productId: string;
   productName: string;
   riskLevel: InvestmentRiskLevel;
-  /** Principal invested (CNY). */
+  /**
+   * REMAINING position cost (剩余持仓成本, CNY) — the field keeps its name and meaning: subscription
+   * amounts paid minus the cost consumed by redemptions. It is NOT a market value and NOT a
+   * redemption口径.
+   */
   amount: MoneyAmount;
-  /** Unrounded estimated market value (CNY), independent of settlement precision. */
+  /** Held share count (6 fractional digits); absent when the holding records no usable shares. */
+  shares?: DecimalAmount;
+  /** Published net value per unit this valuation used; absent when the product has no net value. */
+  latestNetValue?: DecimalAmount;
+  /** Business date (epoch ms) of `latestNetValue`; absent with no net value. */
+  latestNetValueDate?: number;
+  /** Unrounded market value (CNY) — `shares × latestNetValue`, exact, never settlement-rounded. */
   marketValue?: DecimalAmount;
-  /** `marketValue - amount`, when `marketValue` is known. */
+  /** Unrealized profit (CNY): `marketValue − amount`, when the position can be valued. */
   profit?: DecimalAmount;
+  /** `profit ÷ amount` as a dimensionless ratio (displayed as a percentage); absent at zero cost. */
+  profitRate?: DecimalAmount;
+  /**
+   * Realized profit already booked by this holding's redemptions (CNY, may be negative). The SDK
+   * always populates it; optional only so partial holding literals (the UI display tests) still
+   * compile while call sites migrate.
+   */
+  realizedProfit?: MoneyAmount;
+  /** `realizedProfit + profit` (CNY); absent when the position cannot be valued. */
+  cumulativeProfit?: DecimalAmount;
+  /**
+   * How `marketValue` was derived. `NET_VALUE` — shares × published net value;
+   * `MIGRATED_ESTIMATE` — shares derived from an old booked value (估算);
+   * `HISTORICAL_DATA_INSUFFICIENT` — no usable shares or no net value, so `marketValue` falls back
+   * to the remaining cost and no profit is reported (历史数据不足). The SDK always populates it;
+   * optional only so partial holding literals (the UI display tests) still compile while call sites
+   * migrate.
+   */
+  valueBasis?: 'NET_VALUE' | 'MIGRATED_ESTIMATE' | 'HISTORICAL_DATA_INSUFFICIENT';
   /** Epoch ms. */
   boughtAt: number;
   status: HoldingStatus;
@@ -397,24 +441,58 @@ export interface HoldingView {
   lastPurchaseAt?: number;
   /** Purchases recorded on this holding, oldest → newest (absent when no history is recorded). */
   purchases?: HoldingPurchase[];
+  /** Redemptions recorded on this holding, oldest → newest (absent when no history is recorded). */
+  redemptions?: HoldingRedemption[];
 }
 
-/** One recorded subscription that added principal to a holding (oldest → newest in `HoldingView.purchases`). */
+/** One recorded subscription that added cost and shares to a holding (oldest → newest in `HoldingView.purchases`). */
 export interface HoldingPurchase {
-  /** CNY amount added by this purchase. */
+  /** CNY amount paid by this purchase. */
   amount: MoneyAmount;
   /** Epoch ms of this purchase. */
   at: number;
-  /** Principal of the holding after this purchase was aggregated in (CNY). */
+  /** Remaining cost of the holding after this purchase was aggregated in (CNY). */
   totalPrincipal: MoneyAmount;
-  /** Unrounded estimated market value after this purchase (CNY). */
+  /** Unrounded market value of the holding after this purchase (CNY). */
   marketValue: DecimalAmount;
+  /** Shares bought by this purchase (`FLOOR(amount ÷ net value, 6 位小数)`); absent on old records. */
+  shares?: DecimalAmount;
+  /** Net value per unit this purchase was priced at; absent on old records. */
+  netValuePerUnit?: DecimalAmount;
+  /** Business date (epoch ms) of `netValuePerUnit`; absent on old records. */
+  netValueDate?: number;
+  /** Held shares after this purchase; absent on old records. */
+  totalShares?: DecimalAmount;
   /** Funding-account balance after this purchase (CNY). */
   newBalance: MoneyAmount;
   /** Server-resolved funding account. */
   sourceAccountId: string;
   /** Execution identity of this purchase, when the caller supplied one. */
   executionKey?: string;
+}
+
+/** One recorded partial redemption of a holding (oldest → newest in `HoldingView.redemptions`). */
+export interface HoldingRedemption {
+  /** Epoch ms of this redemption. */
+  at: number;
+  /** Which口径 this redemption stated. */
+  mode: RedeemMode;
+  /** Shares redeemed. */
+  shares: DecimalAmount;
+  /** Net value per unit this redemption settled at. */
+  netValuePerUnit: DecimalAmount;
+  /** Business date (epoch ms) of `netValuePerUnit`; absent when the product published none. */
+  netValueDate?: number;
+  /** CNY credited to the funding account (HALF_UP to cents, once). */
+  settledAmount: MoneyAmount;
+  /** Redemption fee charged (CNY); always `0.00` under the simulated fee rule. */
+  feeAmount: MoneyAmount;
+  /** The fee rule applied; always `SIMULATED_NONE`. */
+  feeRule: string;
+  /** Position cost consumed by this redemption (CNY) — the booked cost basis that is gone. */
+  cost: MoneyAmount;
+  /** `settledAmount − cost` booked as realized profit by this redemption (CNY, may be negative). */
+  realizedProfit: MoneyAmount;
 }
 
 export interface SubscribeInvestmentInput {
@@ -438,15 +516,38 @@ export interface RedeemInvestmentInput {
   userId: string;
   holdingId: string;
   /**
-   * Optional PRINCIPAL amount to redeem (CNY decimal string), interpreted as a portion of the
-   * holding's booked principal. Absent, or equal to the held principal, redeems the whole holding
-   * (status `HOLDING` → `REDEEMED`, one final credit). A smaller positive amount redeems that
-   * portion: the settled value of the portion is credited, the principal decreases and the holding
-   * stays `HOLDING`. A larger, non-positive or malformed amount throws `VALIDATION`.
+   * The redemption口径 — `SHARES` (redeem `shares`), `AMOUNT` (redeem `amount`, converted to shares at
+   * the current net value) or `ALL` (redeem every held share and close the holding).
+   *
+   * OPTIONAL only for source compatibility: the SDK validates it at RUNTIME before reading any
+   * mutable state, so a missing or unknown口径 throws `AppError('VALIDATION')` asking the user to
+   * confirm「份额」or「金额」. There is no default口径 — silently guessing is exactly what
+   * `docs/cn/investments.md` forbids.
+   */
+  mode?: RedeemMode;
+  /** Shares to redeem; required for `mode: 'SHARES'`, rejected for every other口径. */
+  shares?: DecimalInput;
+  /** CNY amount to redeem; required for `mode: 'AMOUNT'`, rejected for every other口径. */
+  amount?: MoneyInput;
+  /**
+   * @deprecated The old PRINCIPAL-based redemption口径, kept only so legacy callers still compile.
+   * Never honoured: any supplied value is REJECTED at runtime with the same clarification error as a
+   * missing `mode`, because「赎回本金」is not a redemption口径 any more.
    */
   redeemAmount?: MoneyInput;
-  /** Server-snapshotted redemption amount shown before MFA; changes require a new decision. */
+  /** Server-snapshotted amount to be credited (CNY) shown before MFA; a change requires a new decision. */
+  expectedSettlementAmount?: MoneyInput;
+  /**
+   * @deprecated Alias of `expectedSettlementAmount` — both always meant the amount credited. Still
+   * accepted, compared exactly like `expectedSettlementAmount`.
+   */
   expectedRedemptionAmount?: MoneyInput;
+  /** Server-snapshotted redemption share count shown before MFA. */
+  expectedShares?: DecimalInput;
+  /** Server-snapshotted net value per unit shown before MFA. */
+  expectedNetValue?: DecimalInput;
+  /** Server-snapshotted net value business date (epoch ms) shown before MFA. */
+  expectedNetValueDate?: number;
   /**
    * Optional idempotency key — the redemption's EXECUTION IDENTITY. A repeat with the SAME
    * key on an already-REDEEMED holding REPLAYS the original redemption and original balance;
@@ -463,6 +564,7 @@ export interface InvestResult {
   success: boolean;
   holdingId: string;
   productId: string;
+  /** CNY amount moved by this operation: paid by a subscription, credited by a redemption. */
   amount: MoneyAmount;
   /** Funding-account balance after the operation (CNY). */
   newBalance: MoneyAmount;
@@ -470,20 +572,42 @@ export interface InvestResult {
   sourceAccountId: string;
   /** Epoch ms. */
   occurredAt: number;
-  /** Exact CNY valuation used for redemption before rounding to booked minor units. */
+  /** Exact, unrounded CNY market value of the redeemed shares (before the single settlement rounding). */
   redemptionValuation?: DecimalAmount;
   /** Rounding rule applied once when a redemption is settled. */
   settlementRounding?: 'HALF_UP';
-  /** Present on a PARTIAL redemption: the holding stays `HOLDING` with a smaller principal. */
+  /** Present on a PARTIAL redemption: the holding stays `HOLDING` with fewer shares and less cost. */
   partial?: boolean;
-  /** Principal settled by this redemption (CNY); the redeemed portion, or the whole principal. */
+  /** Redemption口径 applied, when this result is a redemption. */
+  mode?: RedeemMode;
+  /** Shares redeemed (absent when an old-format redemption record is replayed). */
+  redeemedShares?: DecimalAmount;
+  /** Shares left in the holding after a redemption. */
+  remainingShares?: DecimalAmount;
+  /** Net value per unit a redemption settled at. */
+  netValuePerUnit?: DecimalAmount;
+  /** Business date (epoch ms) of `netValuePerUnit`. */
+  netValueDate?: number;
+  /** Redemption fee charged (CNY); always `0.00` under the simulated fee rule. */
+  feeAmount?: MoneyAmount;
+  /** The fee rule applied; always `SIMULATED_NONE`. */
+  feeRule?: string;
+  /** `amount − redeemedPrincipal` booked as realized profit by this redemption (CNY, may be negative). */
+  realizedProfit?: MoneyAmount;
+  /** REMAINING position cost (剩余持仓成本, CNY) left after a redemption. */
+  remainingCost?: MoneyAmount;
+  /** @deprecated Renamed: the COST consumed by this redemption (CNY), never a principal payout口径. */
   redeemedPrincipal?: MoneyAmount;
-  /** Principal left in the holding after a PARTIAL redemption (CNY). */
+  /** REMAINING position cost (剩余持仓成本, CNY) left after a PARTIAL redemption. */
   remainingPrincipal?: MoneyAmount;
-  /** Unrounded estimated market value left after a PARTIAL redemption (CNY). */
+  /** Unrounded market value left after a PARTIAL redemption (CNY). */
   remainingMarketValue?: DecimalAmount;
-  /** `remainingMarketValue - remainingPrincipal` after a PARTIAL redemption. */
+  /** `remainingMarketValue - remainingCost` after a PARTIAL redemption. */
   remainingProfit?: DecimalAmount;
+  /** Present on a subscription: the shares bought by this purchase. */
+  subscribedShares?: DecimalAmount;
+  /** Present on a subscription: the holding's total shares after this purchase. */
+  totalShares?: DecimalAmount;
   /** Present on a subscription: `true` when the amount was aggregated into an existing `HOLDING`. */
   addedToExisting?: boolean;
   /** Epoch ms of the purchase recorded by this subscription. */

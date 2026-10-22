@@ -37,6 +37,13 @@ export const banking = {
 export * from './types';
 
 /**
+ * 「净值 + 份额」 math (see `./net-value`): `NET_VALUE_DECIMALS`, `SHARE_DECIMALS`,
+ * `sharesFromAmount`, `marketValueFromShares`, `settlementFromShares`, `redeemedCostMinor`,
+ * `remainingSharesOf`, `floorToShares`, `profitRateOf` and the redemption fee rule. Pure functions
+ * with no I/O, re-exported so callers quote exactly what the SDK settles.
+ */
+export * from './net-value';
+/**
  * Exact, bounded proportional redemption valuation (see `./valuation`). Re-exported so the Security
  * Gateway mints the SAME `expectedRedemptionAmount` the SDK settles.
  */
