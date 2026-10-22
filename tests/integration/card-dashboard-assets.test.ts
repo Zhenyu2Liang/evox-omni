@@ -28,7 +28,7 @@
  *
  * Fixtures (`tests/helpers/fixtures.ts`): demo user 李明 — CHECKING `acct_checking` ¥23,580.00,
  * SAVINGS `acct_savings` ¥50,000.00, `card_credit` (CREDIT, available ¥18,000.00, mask `****6688`),
- * `card_debit` (DEBIT, unbound), holding 稳健理财A market value ¥5,050 (cost ¥5,000). No VIRTUAL and no
+ * `card_debit` (DEBIT, bound to `acct_checking`), holding 稳健理财A market value ¥5,050 (cost ¥5,000). No VIRTUAL and no
  * `LOST` card is seeded. Every amount is exact CNY minor units / decimal text — never floating point.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
@@ -49,7 +49,7 @@ const CHECKING = 'acct_checking';
 const SAVINGS = 'acct_savings';
 /** The seeded CREDIT card (¥18,000 available) — the 补办 source. */
 const CREDIT = 'card_credit';
-/** The seeded DEBIT card (no credit, no settlement account). */
+/** The seeded DEBIT card (no credit line; bound to `acct_checking` with no monthly limit). */
 const DEBIT = 'card_debit';
 
 /** Fresh seed: 活期 ¥23,580.00 + 储蓄 ¥50,000.00. */
@@ -262,15 +262,27 @@ describe('virtual/debit card cash is not credit and is counted once in total ass
   it('never turns a DEBIT card into credit or assets', async () => {
     const before = await banking.dashboard.getDashboardSummary(DEMO_USER_ID);
 
-    // An unbound DEBIT card adds a `Card` row and nothing else: no limit, no settlement balance.
+    // A DEBIT card is a debit instrument BOUND to the owner's settlement CHECKING account: it adds a
+    // `Card` row (no credit line at all) and spends from cash that already exists on that account.
     const debit = await banking.card.addDemoCard(DEMO_USER_ID, { type: 'DEBIT' });
-    expect(debit).toMatchObject({ type: 'DEBIT', status: 'ACTIVE' });
+    expect(debit).toMatchObject({ type: 'DEBIT', status: 'ACTIVE', usable: true });
     expect(debit.availableLimit).toBeUndefined();
     expect(debit.creditLimit).toBeUndefined();
-    expect(debit.linkedAccountId).toBeUndefined();
-    // No settlement account → no cash is attributed to this card anywhere in its projection.
-    expect(debit.accountAvailableBalance).toBeUndefined();
-    expect(debit.payableAmount).toBeUndefined();
+    expect(debit.linkedAccountId).toBe(CHECKING);
+    // The binding comes from the owner's SINGLE CHECKING account (never a guess, never SAVINGS) and is
+    // reported as LINKED with that account's own masked number and display name.
+    expect(debit.linkedAccountStatus).toBe('LINKED');
+    expect(debit.linkedAccountNumber).toBe('****8821');
+    expect(debit.linkedAccountName).toBe('活期账户');
+    // Its "balance" IS the bound account's cash, in the same canonical money text — not a second
+    // balance owned by the card, and never a credit line.
+    const rawChecking = await checkingMinor();
+    expect(debit.accountAvailableBalance).toBe(centsToMoney(rawChecking));
+    expect(debit.accountAvailableBalance).toBe(SEEDED_CHECKING);
+    expect(debit.accountAvailableBalance).toBe('23580.00');
+    // A DEBIT card carries no monthly limit, so the whole account balance is payable.
+    expect(debit.monthlyLimit).toBeUndefined();
+    expect(debit.payableAmount).toBe(debit.accountAvailableBalance);
 
     const after = await banking.dashboard.getDashboardSummary(DEMO_USER_ID);
     expect(after.creditAvailable).toBe(before.creditAvailable);

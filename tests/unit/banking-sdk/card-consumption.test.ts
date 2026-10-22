@@ -25,8 +25,10 @@
  * All money is asserted as exact canonical CNY decimal strings / integer minor units — never floats.
  *
  * Fixtures: demo user 李明 (`acct_checking` CHECKING ¥23,580 · `acct_savings` SAVINGS ¥50,000),
- * `card_credit` (CREDIT, ¥18,000 monthly limit) and `card_debit` (DEBIT, unbound). Neither seeded card
- * is account-bound, so these specs issue VIRTUAL cards through the SDK itself.
+ * `card_credit` (CREDIT, ¥18,000 monthly limit, never account-bound) and `card_debit` (DEBIT, bound to
+ * `acct_checking`, no monthly limit). These specs still issue VIRTUAL cards through the SDK itself
+ * where a fresh settlement binding is needed; an UNBOUND card is inserted directly, because the SDK
+ * no longer mints one (both DEBIT and VIRTUAL cards are bound at creation).
  *
  * NOTE: `useFreshDatabase()` resets through the shared `truncateAll()`, which clears EVERY model of
  * the schema — including the relation-free `CardConsumption` ledger — so every test starts from
@@ -52,6 +54,7 @@ const CHECKING = 'acct_checking';
 /** A SAVINGS account — never a valid virtual-card settlement account. */
 const SAVINGS = 'acct_savings';
 const CREDIT = 'card_credit';
+/** The seeded DEBIT card — bound to `acct_checking` by the fixture (an UNBOUND card only exists when inserted directly). */
 const DEBIT = 'card_debit';
 /** A user that owns none of the demo data — proves the ownership fence. */
 const FOREIGN_USER = 'user_intruder';
@@ -119,6 +122,32 @@ async function addForeignUser(): Promise<string> {
   return 'acct_foreign';
 }
 
+/**
+ * Insert a card row DIRECTLY (bypassing the SDK) to reproduce the one state the SDK no longer mints:
+ * an `ACTIVE` DEBIT/VIRTUAL card with NO settlement account. `Card.linkedAccountId` is a REAL foreign
+ * key, so `null` is the only way to express "unbound" — a nonexistent account id is rejected by SQLite.
+ */
+async function insertUnboundCard(data: {
+  id: string;
+  type: 'VIRTUAL' | 'DEBIT';
+  numberMasked: string;
+  monthlyLimitMinor?: bigint | null;
+}): Promise<void> {
+  await db().card.create({ data: {
+    id: data.id,
+    userId: DEMO_USER_ID,
+    type: data.type,
+    network: 'UnionPay',
+    numberMasked: data.numberMasked,
+    status: 'ACTIVE',
+    creditLimitMinor: null,
+    availableLimitMinor: null,
+    monthlyLimitMinor: data.monthlyLimitMinor ?? null,
+    replacedByCardId: null,
+    linkedAccountId: null,
+  } });
+}
+
 /** Create a user whose only account is a SAVINGS account. */
 async function addUserWithoutChecking(): Promise<void> {
   await db().user.create({ data: { id: NO_CHECKING_USER, name: '无活期用户', phone: '136****9998' } });
@@ -138,7 +167,7 @@ describe('banking-sdk · virtual card settlement-account binding', () => {
     expect(card.monthlyLimit).toBeUndefined();
     expect(card.payableAmount).toBe('23580.00');
 
-    // The binding is persisted (a historical reference column, not a relation).
+    // The binding is persisted in `Card.linkedAccountId` (a real FK column), not just projected.
     expect((await db().card.findUniqueOrThrow({ where: { id: card.id } })).linkedAccountId).toBe(CHECKING);
   });
 
@@ -178,17 +207,32 @@ describe('banking-sdk · virtual card settlement-account binding', () => {
     );
   });
 
-  it('binds VIRTUAL cards (and only them) through addDemoCard', async () => {
+  it('binds VIRTUAL and DEBIT cards (and never CREDIT) through addDemoCard', async () => {
     const virtual = await banking.card.addDemoCard(DEMO_USER_ID, { type: 'VIRTUAL', monthlyLimit: '2000.00' });
     expect(virtual.linkedAccountId).toBe(CHECKING);
+    expect(virtual.linkedAccountStatus).toBe('LINKED');
     expect(virtual.payableAmount).toBe('2000.00'); // limit ¥2,000 < balance ¥23,580
 
-    // A non-virtual card keeps no settlement account.
+    // A DEBIT card is ACCOUNT-BOUND too: it draws on the same CHECKING cash as a VIRTUAL card.
     const debit = await banking.card.addDemoCard(DEMO_USER_ID, { type: 'DEBIT' });
-    expect(debit.linkedAccountId).toBeUndefined();
-    expect(debit.linkedAccountNumber).toBeUndefined();
-    expect(debit.payableAmount).toBeUndefined();
-    expect((await db().card.findUniqueOrThrow({ where: { id: debit.id } })).linkedAccountId).toBeNull();
+    expect(debit.linkedAccountId).toBe(CHECKING);
+    expect(debit.linkedAccountStatus).toBe('LINKED');
+    expect(debit.linkedAccountNumber).toBe('****8821');
+    expect(debit.accountAvailableBalance).toBe('23580.00');
+    expect(debit.payableAmount).toBe('23580.00'); // no monthly limit → the whole balance
+    expect((await db().card.findUniqueOrThrow({ where: { id: debit.id } })).linkedAccountId).toBe(CHECKING);
+
+    // Both bound cards point at the SAME settlement account: one balance, shared.
+    expect(virtual.linkedAccountId).toBe(debit.linkedAccountId);
+    expect(virtual.accountAvailableBalance).toBe(debit.accountAvailableBalance);
+
+    // A CREDIT card draws on its credit line and is NEVER bound.
+    const credit = await banking.card.addDemoCard(DEMO_USER_ID, { type: 'CREDIT', creditLimit: '1000.00' });
+    expect(credit.linkedAccountStatus).toBe('NOT_APPLICABLE');
+    expect(credit.linkedAccountId).toBeUndefined();
+    expect(credit.accountAvailableBalance).toBeUndefined();
+    expect(credit.payableAmount).toBeUndefined();
+    expect((await db().card.findUniqueOrThrow({ where: { id: credit.id } })).linkedAccountId).toBeNull();
 
     // addDemoCard honours the same ownership / type fences as applyVirtualCard.
     expectCode(await capture(() => banking.card.addDemoCard(DEMO_USER_ID, { type: 'VIRTUAL', linkedAccountId: SAVINGS })), 'VALIDATION');
@@ -196,24 +240,50 @@ describe('banking-sdk · virtual card settlement-account binding', () => {
     expectCode(await capture(() => banking.card.addDemoCard(DEMO_USER_ID, { type: 'VIRTUAL', linkedAccountId: foreign })), 'SECURITY_DENIED');
   });
 
-  it('exposes no balance/payable values when the bound account no longer exists (never fabricated)', async () => {
+  it('reports a MISSING binding once the bound account is deleted (never fabricated values)', async () => {
     await addSecondChecking();
     const card = await issueVirtual({ linkedAccountId: 'acct_checking2', monthlyLimit: '100.00' });
     await db().account.delete({ where: { id: 'acct_checking2' } });
 
+    // `Card.linkedAccountId` is a REAL FK with Prisma's default SetNull, so deleting the account
+    // CLEARS the recorded reference — the binding becomes MISSING, not "untrusted but recorded".
+    expect((await db().card.findUniqueOrThrow({ where: { id: card.id } })).linkedAccountId).toBeNull();
+
     const reloaded = (await banking.card.getCards(DEMO_USER_ID)).find((view) => view.id === card.id)!;
-    expect(reloaded.linkedAccountId).toBe('acct_checking2');
+    expect(reloaded.linkedAccountStatus).toBe('MISSING');
+    expect(reloaded.linkedAccountId).toBeUndefined();
     expect(reloaded.linkedAccountNumber).toBeUndefined();
+    expect(reloaded.linkedAccountName).toBeUndefined();
     expect(reloaded.accountAvailableBalance).toBeUndefined();
     expect(reloaded.payableAmount).toBeUndefined();
+    // An absent balance is OMITTED, never serialized as a zero amount.
+    expect(reloaded.accountAvailableBalance).not.toBe('0.00');
+    expect(reloaded.payableAmount).not.toBe('0.00');
   });
 
-  it('returns no linked-account fields for the seeded unbound cards', async () => {
-    const unbound = (await banking.card.getCards(DEMO_USER_ID)).filter((view) => view.id === CREDIT || view.id === DEBIT);
-    expect(unbound).toHaveLength(2);
-    for (const view of unbound) {
+  it('projects the seeded DEBIT card as LINKED and only a truly unbound card as account-free', async () => {
+    // The seed binds `card_debit` to the paying CHECKING account, so it renders the full balance block.
+    const debit = (await cardMap()).get(DEBIT)!;
+    expect(debit.type).toBe('DEBIT');
+    expect(debit.linkedAccountStatus).toBe('LINKED');
+    expect(debit.linkedAccountId).toBe(CHECKING);
+    expect(debit.linkedAccountNumber).toBe('****8821');
+    expect(debit.linkedAccountName).toBe('活期账户');
+    expect(debit.accountAvailableBalance).toBe('23580.00');
+    expect(debit.payableAmount).toBe('23580.00');
+
+    // A CREDIT card never looks a settlement account up.
+    const credit = (await cardMap()).get(CREDIT)!;
+    expect(credit.linkedAccountStatus).toBe('NOT_APPLICABLE');
+
+    // A genuinely unbound card has to be inserted directly: the SDK binds every new DEBIT/VIRTUAL card.
+    await insertUnboundCard({ id: 'card_unbound_view', type: 'VIRTUAL', numberMasked: '****7701' });
+
+    for (const view of [credit, (await cardMap()).get('card_unbound_view')!]) {
+      expect(view.linkedAccountStatus).not.toBe('LINKED');
       expect(view.linkedAccountId).toBeUndefined();
       expect(view.linkedAccountNumber).toBeUndefined();
+      expect(view.linkedAccountName).toBeUndefined();
       expect(view.accountAvailableBalance).toBeUndefined();
       expect(view.payableAmount).toBeUndefined();
     }
@@ -424,9 +494,22 @@ describe('banking-sdk · consumeCard card-state fences', () => {
     expect(await db().cardConsumption.count()).toBe(0);
   });
 
-  it('rejects an unbound card with CONFLICT', async () => {
-    expectCode(await capture(() => banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: DEBIT, amount: '1.00' })), 'CONFLICT');
+  it('rejects a card with no settlement binding with CONFLICT', async () => {
+    // A genuinely unbound card exists only as a directly inserted row: nothing is recorded and there is
+    // no explicit 补办 predecessor to inherit from, so nothing may be guessed.
+    await insertUnboundCard({ id: 'card_unbound_consume', type: 'VIRTUAL', numberMasked: '****7702' });
+
+    const balanceBefore = await balanceOf();
+    const ledgerBefore = await db().transaction.count({ where: { channel: 'CARD', userId: DEMO_USER_ID } });
+
+    expectCode(await capture(() => banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: 'card_unbound_consume', amount: '1.00' })), 'CONFLICT');
+    // A CREDIT card never spends from a settlement account either.
     expectCode(await capture(() => banking.card.consumeCard({ userId: DEMO_USER_ID, cardId: CREDIT, amount: '1.00' })), 'CONFLICT');
+
+    // Neither rejection moved money, wrote a ledger row or booked a consumption.
+    expect(await balanceOf()).toBe(balanceBefore);
+    expect(await db().transaction.count({ where: { channel: 'CARD', userId: DEMO_USER_ID } })).toBe(ledgerBefore);
+    expect(await db().cardConsumption.count()).toBe(0);
   });
 
   it('rejects an unknown card id and another user\'s card with NOT_FOUND', async () => {
