@@ -43,7 +43,8 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 
 `authorizeAction` 在未决状态守卫**之前**对 `status==='locked'` 早退，返回幂等的 `lockedOutcome`（不新发挑战、不消费尝试、不重新提示）。
 熔断开启时 `authorizeAction` 先 `persistLockedAction` 再返回 `lockedOutcome`，使锁定对行持久化，待决策列表不会再出现该项。
-`mfa.ts#verify` 对 `status==='locked'` 的行返回 `{ ok: false, attemptsLeft: 0, locked: true }`，位置在熔断/挑战判定与任何写操作之前，故不消费尝试、不写挑战、不发事件、不动熔断。
+`mfa.ts#verify` 对 `status==='locked'` 的行返回 `{ ok: false, attemptsLeft: 0, locked: true }`，位置在熔断判定（`isLocked` / `challenge.status==='locked'`）与任何写操作之前，故不消费尝试、不写挑战、不发事件、不动熔断。
+挑战级的 `consumed`/`expired`/`command_changed` 判定更早（见下表），因此对 `locked` 行提交已失效挑战时 `verify` 先返回 `ChallengeInvalidError`；网关在 `cancelled` 认领落空后重读该行，仍回落为 `lockedOutcome(…, 'mfa_session_locked')` 的终态拒绝。
 `mfa.ts#issueChallenge` 对 `status==='locked'` 的行抛 `AppError('MFA_LOCKED', …)` 并携带 `SecurityFailure`，不铸码、不写库；对 `MfaChallenge.status==='locked'` 的既有挑战只回读视图，不重置为 `pending`。
 `cancelAction` 只从 `pending`/`awaiting_mfa` 认领，`locked` 行返回 `CONFLICT`。
 `recordActionResult` 经 `claimPendingAction({ from: RESULT_RECORDABLE_STATUSES })` 写入，该集合刻意不含 `locked`，迟到的 `executed`/`failed` 通知既不改写锁定行也不伪造执行证据。
