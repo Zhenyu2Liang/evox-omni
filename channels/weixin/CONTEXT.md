@@ -53,6 +53,8 @@
 `presentation.ts:106` 的 `case 'error'` 原样输出 `业务提示：{card.message}`，不经 `lib/tool-feedback` 映射（网页 `components/chat/cards/ErrorCard.tsx` 才做映射）；此类卡片只在非 block 分支产生（`agent/turns/events.ts:50-56`），因此不会携带 `__SECURITY_BLOCK__`，但 SDK 工具错误原文会直接出现在微信里。
 `renderBusinessCard` 用 try/catch 兜底为 `服务端结果字段不完整，请在网页核对；未据此推断业务成功或余额。`；列表渲染前 `Array.isArray` 校验；电话按 11 位掩码（`presentation.ts:29`）。
 `banking-client.ts:31-44` 不做运行时 schema 校验（网页侧才用 `components/chat/transport-validation.ts` 的 zod）：HTTP 错误或 `ok:false` 时，仅当 `status<500` 且 `error.code` 匹配 `^[A-Z_]+$` 才抛 `服务端提示（CODE）：{message 前 400 字}\n请核对操作记录后处理。`，否则抛 `银行服务暂未完成请求，请在网页核对操作记录后再处理。`；`bridge.ts:35` 把 `BankingApiError.message` 直接作为整条回复，其它异常与网络失败回 `银行请求结果暂时无法确认。请在网页核对操作记录，不要据此判断已成功或资金未变。`
+错码与锁定不经过该错误通道：动作路由始终回 HTTP 200 的 `{ok:true,data:{ok:false,status,message,…}}`，因此 `BankingApiError` 不会触发，通道只按 `outcome.status` 分支（`bridge.ts:64,66`）。
+`ActionResult`（`banking-client.ts:10-13`）只声明 `actionId/ok/status/message/requiresMfa/events`；服务端的 `sessionId`、`tier`、`mfaResult` 被丢弃且从不读取，`ok` 也不参与任何判断。
 验证码只出现在本次 verify 请求体（`banking-client.ts:51`），不写 state、不回显、不进模型。
 
 ## 持久化、去重与 outbox
