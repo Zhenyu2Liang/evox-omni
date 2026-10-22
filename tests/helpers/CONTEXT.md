@@ -90,7 +90,7 @@ worker 发 `worker_finished{result}`，`fatal{message}` 兜底；`start` 跑完�
 `ensureTestPragmas` 不在桶里（需直接 `from './db'`）；`fixtures` 整个星号再导出。
 
 HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/harness.ts`
-（`postJson`/`postRaw`/`getJson`/`readSse`/`readSseFrames`/`actionUrl`/`chatUrl`/`idCtx`）。
+（`tests/app/harness.ts`，201 行：`BASE_URL`、`RouteHandler`、`HttpOptions`、`HttpResult`、`sessionCookie`、`chatUrl`、`actionUrl`、`taskUrl`、`tasksUrl`、`idCtx`、`postJson`、`postRaw`、`getJson`、`readSseFrames`、`readSse`）。
 
 ## 熔断 owner 与会话身份
 
