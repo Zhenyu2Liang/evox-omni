@@ -99,6 +99,22 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 `mfa.ts#verify` 返回 `Result` 而非抛错；抛 `CIRCUIT_OPEN` 的只有 `circuit-breaker.resetSession` 与 `execution-policy.assertSessionMayWrite`。
 成功验证码重置连续失败计数，但不解除已触发的熔断（「locked 优先」）；仅 `resetSession` 以验证码或 60 秒冷却解除。
 
+## 熔断状态的写入、解除与挑战续期
+
+熔断状态存在 `CircuitBreakerState`（键 `user:<userId>`，无用户时为 `session:<actor>`）。
+写入：`circuit-breaker.ts#recordFailure`（`:163-186`）经仓储 `upsertFailure`，`didLock` 时发 `CIRCUIT_BREAKER_TRIPPED`；`incidents.ts#recordRiskSignal`（`:34-36`）在风险信号达阈值时 `circuitBreakerState.upsert { locked: true, lockedAt }`。
+`recordSuccess`（`:189-193`）只清连续失败计数，不解锁。
+解除：`commitAuditedReset`（`:252-302`）以 `expect { locked, lockedAt }` 做 CAS 调 `resetBreakerState`，丢 CAS 即良性空操作；`reset`（`:309-312`）是无门禁无审计的底层清除。
+解锁门禁在 `resetSession`（`:212-239`）：owner 为 locked 时必须 `verificationCode === MFA_CODE` 或 `now >= lockedAt + RESET_COOLDOWN_MS`，否则抛 `AppError('CIRCUIT_OPEN')`。
+
+`security/` 内没有任何路径把 `PendingAction.status` 从 `'locked'` 写回 `'pending'`/`'awaiting_mfa'`。
+两处续期都只写 `MfaChallenge`，从不写 `pendingAction`：
+`mfa.ts#issueChallenge`（`:90-117`）对已存在挑战先 `resetMfaAttempts`（仓储 `update where {actionId}` → `attempts: 0`，`:100`），再 `prisma.mfaChallenge.update where {actionId}`（`:101-105`）写 `status: 'pending'`、新 code、`expiresAt = now + 5min`、`verifiedAt: null`、`consumedAt: null`。
+该 `where` 只有 `actionId`、不过滤 `status`，所以单个挑战对象上「locked → pending」是可能的；但可达调用点都落在非 `'locked'` 行上（`authorizeAction` 在 `:1116-1119` 提前返回 `lockedOutcome`，`recovery-authorization` 的 writer claim 要求 `'confirmed'`），且 `issueChallenge` 不写 `pendingAction`，动作行仍是 `'locked'`。
+`circuit-breaker.ts#commitAuditedReset`（`:276`，仅 `prior.locked` 时）在解除熔断的审计事务内调 `lib/db/repositories/pendingAction.ts#renewLockedMfaChallenges`（`:362-378`）：`mfaChallenge.updateMany where { status: 'locked', action: { userId|sessionId, status: 'awaiting_mfa', requiresMfa: true } }` → `attempts: 0, status: 'pending', expiresAt: now + 5min, verifiedAt: null, consumedAt: null`。
+它按 `action.status: 'awaiting_mfa'` 过滤，因此已落库为 `'locked'` 的 `PendingAction` 不会被续期；取消/已执行的行同样被排除。
+`security/mfa.ts` 对 `pendingAction` 只有 `getPendingAction` 读：其写操作只有 `prisma.mfaChallenge.update`（`:101`、`:167`）与仓储 `createMfaChallenge` / `incrementMfaAttempts` / `updateMfaChallengeStatus` / `resetMfaAttempts`，全部落在 `MfaChallenge`。
+
 ## 确认/验证的返回契约（返回，不抛出）
 
 `authorizeAction` 对验证码错误、尝试耗尽、会话熔断一律**返回** `AuthorizationResult`（`ok: false`，`status` 为 `'awaiting_mfa'` 或 `'locked'`），不抛 `AppError`。
