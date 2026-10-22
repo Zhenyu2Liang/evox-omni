@@ -68,6 +68,7 @@
 | `lib/activity-presentation.test.ts` | 业务活动只渲染封闭业务字段，隐藏 id、`toolName`、`toolResult`、`userRequest`、`sessionId` | 纯 |
 
 同一锁定事实分三层钉住：网关（`mfa-failure-contract.test.ts`）、事件投影（`turn-security-event.test.ts`）、渲染（`locked-card-rendering.test.ts`、`weixin-lock-presentation.test.ts`、`unlock-panel-render.test.ts`）。
+`agent/providers/provider-mock.test.ts` 头部的「STAGING COPY / 临时 runner config」注释是迁移残留：文件已在最终位置，按普通用例运行，不需要任何临时配置。
 生产投影 `agent/turns/events.ts:92-96` 与测试侧 `tests/helpers/scenario.ts:304-308` 发出同一组 typed 字段，两者都不带 `message`。
 `turn-security-event.test.ts` 因此证明「真实网关 + 测试侧投影」，不是生产 `agent/turns/events.ts` 本身。
 传输层仍原样转发服务端文案：`planner/action-contract.test.ts:162-170` 用桩造 `message:'Verification locked'` 断言 `error` + `action_settled` 透传；渲染层不读该文本，两者不冲突。
