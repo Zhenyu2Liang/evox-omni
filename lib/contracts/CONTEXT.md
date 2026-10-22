@@ -72,7 +72,8 @@ interface ToolCatalogEntry {
 ## 安全与风险类型
 
 `risk.ts`：`RiskLevel = 'GREEN' | 'YELLOW' | 'RED'`；`PermissionTier` 为其别名；`TransferPolicy`。
-`security.ts`：`SecurityDecisionKind`、`SecurityEvaluation`、`PendingActionStatus`（含终态 `needs_reconciliation` 与 `locked`）、`PendingAction`、`SecurityDecision`。
+`security.ts`：`SecurityDecisionKind`（`'allow' | 'require_confirmation' | 'require_mfa' | 'deny'`，5 行）、`SecurityEvaluation`（7–17 行）、`PendingActionStatus`（19–35 行，含终态 `locked` 与 `needs_reconciliation`）、`PendingAction`（48–63 行）、`SecurityDecision`（65–71 行，`{kind, tier, evaluation, pendingActionId?, message}`）。
+安全网关的人类授权结果类型 `AuthorizationResult` 不在此目录：定义于 `security/security-gateway.ts:102`（`{ok, status, actionId, tier, requiresMfa, mfaResult?, code?: ErrorCode, message, action?}`）。
 `runtime.ts`：`ReplaySafety`、`ToolReplayPolicy`、`ToolInvocationStatus`、`RetryDecision`、`VerifiedInvocationReceipt`、`WORKFLOW_EXECUTION_LEASE_MS`。
 `agent.ts`：`ChatCard`、`ToolEventView`、`AgentStreamEvent`、`BusinessReceipt`。
 
