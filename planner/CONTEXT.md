@@ -29,8 +29,6 @@
 取消在检查点阻止后续工作。
 已完成业务不因取消而伪装回滚。
 
-`resumePlan` 记录挂起节点的决定后继续。
-`retryPlan` 重置可重试节点及其未成功的传递后继。
 `compensationReport` 描述已执行与已取消节点。
 它不执行资金补偿。
 
@@ -53,6 +51,18 @@
 计划与节点认领必须使用调用层提供的数据库条件更新。
 丢失执行权时，执行器停止工具调用与结果发布。
 快照写入前的状态检查不代替数据库原子校验。
+
+节点行只经 `deps.persistNode` 与 `deps.onNodeUpdate` 写入（`executor.ts:345`、`lifecycle.ts:344`）。
+完整计划快照只在开始与结束时各写一次，走 `persistPlanSnapshotGuarded`（`executor.ts:508`、`:693`）；
+`lifecycle` 用无守卫的 `persistPlanSnapshot`（`lifecycle.ts:227`、`:293`、`:355`）。
+认领经 `deps.claimNode`/`deps.releaseNode`（`executor.ts:455`、`:495`），所有权探针为 `deps.isRunOwner`（`executor.ts:312`）。
+控制命令在每次检查点经 `deps.controls.pollControls` 读取并清除（`executor.ts:416`）。
+丢失所有权时运行不调用工具、不写计划快照，返回 `status:'running'`（`executor.ts:465`、`:559`、`:641` → `:673`、`:687`）。
+节点认领失败（`executor.ts:456`）是零写入分支；所有权探针失败（`:465`）此前已写入过 `running` 节点行，且 `finally` 释放节点认领。
+
+本目录不读写 Prisma `PendingAction`：不导入 prisma 或仓储。
+`pendingActionId` 仅作不透明字符串在 `PlanToolOutcome`/`TaskNodeResult` 上透传（`node-outcome.ts:25`）。
+`actionId` → 计划/节点身份的解析在 `agent/workflows/action-continuation.ts`，不在本目录。
 
 执行接口由 `agent/` 接到仓储与安全网关。
 完整图的编译校验见 `agent/tools/plan-compiler.ts`。
