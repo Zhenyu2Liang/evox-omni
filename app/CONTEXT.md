@@ -49,7 +49,7 @@ Web 身份与接口表见 [api/CONTEXT.md](api/CONTEXT.md)。
 确认/MFA 面板、工具事件与失败文案（含 `chat.error.*` 键）全部在 `components/chat/` 渲染。
 `app/` 不筛选、不清洗 `AgentStreamEvent`：`api/chat/route.ts` 的 SSE 帧与 `api/actions/[id]/verify/route.ts` 的 `events` 都原样转发。
 排查聊天文案、`security_event` 或面板显隐时进入 `components/chat/`，不要在 `app/` 内继续搜索。
-`app/` 对 `PendingAction` 只读，读取点为 `agent/history.ts`、`agent/plan-history.ts`、`security/page.tsx`（经 `listPendingActions`）、`api/security/route.ts`、`api/_lib/task-pending-actions.ts`；写入（含 `status`）全部经 `@/agent`、`@/security` 与 `lib/db/repositories/pendingAction.ts` 完成。
+`app/` 对 `PendingAction` 只读，读取点为 `agent/history.ts`、`agent/plan-history.ts`、`security/page.tsx`（经 `listPendingActions`）、`api/actions/route.ts`（`listPendingActions({ sessionId })`，无状态参数，状态由 `attentionFor` 在内存判定）、`api/security/route.ts`、`api/_lib/task-pending-actions.ts`；写入（含 `status`）全部经 `@/agent`、`@/security` 与 `lib/db/repositories/pendingAction.ts` 完成。
 因此本层没有把 `locked` 行改回 `pending`/`awaiting_mfa` 的路径，锁定与否只看仓储与网关。
 
 ## 锁定终态（MFA 连续失败）
