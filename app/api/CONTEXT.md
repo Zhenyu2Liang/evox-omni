@@ -42,7 +42,8 @@ selectable browser identities.
 | `GET /api/activity` | Closed business history projection scoped to the fixed workspace | Operation history read model |
 | `GET /api/audit` | Developer preference required before validated filters; scoped technical entries and summary | Audit read models |
 | `GET /api/security` | Security events, lock state, failure count, a typed `lock` reason while the breaker is open and the session's terminal `lockedActions` | Audit and security read models |
-| `POST /api/security/reset` | Optional verification code; separately gated and audited unlock that reopens no `PendingAction` and executes nothing | Account circuit-breaker policy |
+| `POST /api/security/reset` | Optional body `{ verificationCode? }`; separately gated and audited unlock that reopens no `PendingAction` and executes nothing; success adds `lockedActionsReopened: false` | Account circuit-breaker policy |
+| `POST /api/developer/security/reset` | Developer-mode cookie gate, then the unaudited-code demo clear `resetDemoSession` (audit actor `developer`); returns the raw `CircuitBreakerState`, reopens no `PendingAction` | `_lib/developer.ts` + account circuit-breaker policy |
 | `GET /api/{dashboard,bills,cards,subscriptions}` | Simulated banking read models for the configured user | Banking SDK |
 | `/api/cards/{,[id]}` and `/api/cards/changes/[id]/{verify,cancel}` | Manual demo-card add/delete proposals plus MFA verify/cancel; returns `CardChangeResponse` | `security/manual-card-management` (see `../cards/CONTEXT.md`) |
 | `POST /api/cards/[id]/consume` | Owned virtual-card consumption: exact CNY `amount` string plus optional `category`/`merchant`/`executionKey`; booking time is server-owned, so a body containing `occurredAt` is refused with `400 VALIDATION`; returns `ConsumeCardResult` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
@@ -93,8 +94,8 @@ A refusal is TYPED, never message-parsed: `ActionResponse` (`_lib/types.ts:44-65
 Contrast `POST /api/cards/changes/[id]/verify`, which lets `AppError('CIRCUIT_OPEN')` bubble out as a `423` failure envelope WITH `code` (`security/manual-card-management.ts:71,112`), so the cards page localizes by code; the action routes deliberately do not.
 
 `data.message` provenance per route: `verify`/`confirm` copy `ConfirmationOutcome.message` verbatim (the gateway sentence on a refusal; `操作已执行。`/`result.error`/`操作结果尚无法核实…` plus a `（结果播报失败：…）` suffix from `agent/confirmation/authorized-execution.ts:94-100`; `该操作所属的任务计划已取消…` from `cancelledPlanOutcome`; the `AppError.message` from `conflictOutcome`), `cancel` `操作已取消。` (`agent/confirmation.ts:69`) except on a `locked` row, which is refused before delegation with the fixed `_lib/locked-action` sentence, `recover` the recovery outcome's own text (or the same fixed sentence on a `locked` row).
-No action route localizes: the i18n fallbacks (`chat.error.toolFailed`, `chat.error.securityLocked`) exist only client-side via `lib/tool-feedback.ts`, so a non-browser caller (e.g. `channels/weixin/`) reading `data.message` gets the server's Chinese sentence, never 「操作未完成。请核对原操作卡片和账户记录。」.
-TWO distinct lock sentences reach `data.message` with the SAME `ok:false`/`status:'locked'`: the attempt-limit branch 「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」 (`security/security-gateway.ts:848-850`) and every later attempt on the already-persisted `locked` row via `lockedOutcome` 「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」 (`security/security-gateway.ts:773-788`, reached from the `row.status === 'locked'` guard at `:1053`).
+No action route localizes: the i18n fallbacks (`chat.error.toolFailed`, `chat.error.securityLocked`) exist only client-side (`lib/public-text.ts#securityNotice`, `lib/tool-feedback.ts`), so a non-browser caller (e.g. `channels/weixin/`) reading `data.message` gets the server's Chinese sentence, never 「操作未完成。请核对原操作卡片和账户记录。」. No file under `app/api` imports `lib/public-text.ts` (`securityNotice`, `safePublicText`, `isInternalDiagnostic`) or `lib/tool-feedback.ts` (`publicToolError`): the edge forwards the typed `code`/`failure` plus the raw server sentence, so every refusal is rendered client-side.
+TWO distinct lock sentences reach `data.message` with the SAME `ok:false`/`status:'locked'`: the attempt-limit branch 「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」 (`security/security-gateway.ts` `authorizeWithMfa` attempt-exhausted branch) and every later attempt on the already-persisted `locked` row via `lockedOutcome` 「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」 (`security/security-gateway.ts` `lockedOutcome`, reached from the `row.status === 'locked'` guard at the top of `authorizeAction`). Those two refusals also differ INSIDE `failure`: the attempt-exhausted one carries `failure.code:'MFA_LOCKED'` with `reason:'mfa_attempts_exhausted'` and real `attemptsUsed`/`attemptsLeft`/`maxAttempts` while its top-level `code` is `CIRCUIT_OPEN`, whereas `lockedOutcome` carries `failure.code:'CIRCUIT_OPEN'` (`reason` `mfa_session_locked`/`circuit_open`) with a fixed `attemptsLeft:0`/`maxAttempts`, so a renderer must key on `reason` and never on one field alone.
 A `confirm` (no code) on a `locked` row also returns `status:'locked'`/`ok:false`, but with `mfaResult:'not_required'` and `requiresMfa:true` (RED tier), never `'failed'`.
 
 ## Terminal MFA lock
@@ -104,6 +105,16 @@ Refusal shape: every action decision route answers a `locked` row with a normal 
 Tasks: `GET /api/tasks` and `GET /api/tasks/[id]` additively annotate every node whose `pendingActionId` still resolves with `pendingActionStatus` — the action's CURRENT persisted status. `node.status` (`waiting_confirmation`/`waiting_verification`) and `node.pendingActionId` stay untouched, and a missing row omits the field rather than inventing a status.
 Security surface: `GET /api/security` reports `lock?: SecurityFailure` (`{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`, present only while the breaker is open) and `lockedActions: LockedActionSummary[]` (`actionId`/`toolName`/`tier`/`requiresMfa`/`updatedAt`, newest lock first) as factual records, never as actionable items.
 Unlock: `POST /api/security/reset` clears only the account circuit breaker (`security/circuit-breaker.ts#commitAuditedReset`, which writes the `SECURITY_RESET` audit and renews `MfaChallenge` rows only for actions still `awaiting_mfa`). It writes no `PendingAction` row, so a locked action keeps its status, never reappears as a decision and is never executed; the success payload states this additively via `lockedActionsReopened: false`. Replacing a locked write requires a NEW request through the normal authorization gate.
+
+App-layer details of that unlock surface:
+`lockedActionsReopened` is a compile-time constant (`security/reset/route.ts:52`, emitted at `:92`), NOT an observation — the reset route reads no `PendingAction` and never checks whether locked rows exist.
+The request schema is only `{ verificationCode?: string }`; `actor: 'user'` and the Chinese `RESET_REASON` (`:46`) are hardcoded, and an empty-string code is dropped by the `verificationCode ? … : {}` spread (`:84`) before reaching `circuitBreaker.resetSession`.
+No `now` is forwarded, so the cooldown gate uses the security node's real clock.
+An account locked without a code therefore throws `AppError('CIRCUIT_OPEN')` from the security node and `errorResponse` maps it to HTTP `423` (`_lib/http.ts:24`) with `{ ok:false, error:{ code:'CIRCUIT_OPEN', message } }`; the human sentence is the security node's, never localized here.
+Dev-mode is NOT required: the route uses `requireIdentity` only, and the developer-only variant is the separate `POST /api/developer/security/reset` (`_lib/developer.ts#requireDeveloperMode` reads the `banking_developer_mode` cookie).
+`GET /api/security` derives `lockedActions` from `listPendingActions({ sessionId, status: 'locked' })` (repository default page = 100 rows), skips `manual_add_card`/`manual_delete_card`, and re-sorts by `updatedAt` desc; `lock` is present only while the breaker is open and is the fixed `{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`.
+The `lock?: SecurityFailure` / `lockedActions` fields are additive and optional, so consumers that ignore them keep working.
+`confirm` and `verify` apply NO app-layer locked short-circuit (unlike `cancel`/`recover`): they delegate and then derive `mfaResult` from the returned `status`, forwarding whatever `code`/`failure` the agent/security path produced.
 
 ## Implementation boundaries
 
@@ -116,7 +127,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 
 - `POST /api/actions/[id]/verify` (`app/api/actions/[id]/verify/route.ts`) returns HTTP `200` for
   every domain outcome, including the circuit-breaker `status:'locked'` case: it always serializes
-  `jsonResponse<ActionResponse>(mapped)` (`:91`) and never throws `CIRCUIT_OPEN`, so the `423` status
+  `jsonResponse<ActionResponse>(mapped)` (`:94`) and never throws `CIRCUIT_OPEN`, so the `423` status
   named in the route comment (`:16`) and defined in `_lib/http.ts` is not reached from this route.
 - The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
   its own (`:88` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
@@ -124,7 +135,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - The edge never rewrites agent text: `verify/route.ts:79-91` copies `outcome.message` and
   `outcomeWithPlan.events` into `ActionResponse` unchanged (`ConfirmationOutcome.result` is dropped),
   and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:124`
-  `sseFrame`. A block reason built by `security/security-gateway.ts:78` (`__SECURITY_BLOCK__` + JSON,
+  `sseFrame`. A block reason built by `security/security-gateway.ts` `BLOCK_REASON_PREFIX` (`__SECURITY_BLOCK__` + JSON,
   e.g. `{"decisionKind":"deny"}`) therefore reaches the browser inside `security_event.message` and any
   tool-error text. The action routes' own lock refusal IS typed (`code`/`failure`), but stream frames
   stay verbatim, so there is no app-layer scrubbing or error-code
@@ -133,13 +144,14 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
   (`agent/confirmation/outcomes.ts`) emits it only for `pending`/`awaiting_mfa`, so the only possible
   appended event is `plan_update` (and `nextPlanDecision`, `agent/task-decision.ts`, skips rows outside
   `pending`/`awaiting_mfa`). The row itself is already persisted `'locked'` by `persistLockedAction`
-  (`security/security-gateway.ts:763`), so `attentionFor` (`actions/route.ts:79`) drops it from
+  (`security/security-gateway.ts` `persistLockedAction`), so `attentionFor` (`actions/route.ts:79`) drops it from
   `GET /api/actions`.
 - `app/` never writes `PendingAction.status`: every hit is a comparison or read (`app/agent/history.ts:26`,
   `app/agent/plan-history.ts:24`). No retry/recover/claim/liveness endpoint here can reopen a `'locked'`
   row; all status mutation lives in `@/agent`, `@/security` and `lib/db/repositories/pendingAction.ts`.
 - `POST /api/tasks/[id]` forwards control actions to `agent/workflows/controls.ts`, whose `RESUMABLE` set still includes `waiting_confirmation`, so `resume`/`retry` can restart a plan whose parked `PendingAction` is `locked`. This edge only REPORTS the lock (`pendingActionStatus`) and does not veto the control; the gate belongs in `agent/`.
 - `components/` and `channels/` do not yet read `pendingActionStatus`, `lock` or `lockedActions`; all three are additive and optional, so existing consumers keep working unchanged.
+- `DECISION_STATUSES` (`actions/route.ts:58`) is declared but never referenced: the surfacing filter is `attentionFor` (`:77-92`) alone, and `listPendingActions({ sessionId })` (`:130`) applies NO database status filter — it pages the session's newest 100 rows (`lib/db/repositories/pendingAction.ts:84,120-136`) and the route drops non-attention rows in memory.
 
 Developer documentation lives in `docs/cn`; this context records AI-facing module boundaries.
 HTTP fixtures use the configured demo workspace. Cookie/query forgery fixtures verify that browser

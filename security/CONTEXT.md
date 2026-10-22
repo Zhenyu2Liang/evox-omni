@@ -43,12 +43,12 @@
 
 ## 阻断原因标记与锁定的可见性
 
-`security-gateway.ts` 导出 `BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__'`（第 78 行）。
-`serializeBlockReason` 只用于已落库的 gated 调用：`${BLOCK_REASON_PREFIX}${JSON.stringify({ actionId, decisionKind })}`。
-`parseBlockReason` 要求前缀 + 非空 `actionId` + 合法 `decisionKind`（`allow`/`require_confirmation`/`require_mfa`/`deny`），任一不满足返回 `null`；两者都只经 `securityGateway` 对象暴露（`security.gateway.securityGateway.parseBlockReason`、`security.gateway.BLOCK_REASON_PREFIX`）。
-熔断拒绝（`handleToolCall` 的 `decision.kind === 'deny'`）返回 `__SECURITY_BLOCK__{"decisionKind":"deny"}`，不含 `actionId`，因此 `parseBlockReason` 返回 `null`，调用方只靠前缀判定为 blocked（`agent/turns/events.ts:48-49`），该载荷最终落为 `security_event kind:'locked'`，不重开 MFA。
+`security-gateway.ts:80` 导出 `BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__'`，全仓只有该文件拼接该前缀。
+`serializeBlockReason`（`:725-735`，由 `:1286` 调用）产出 `${PREFIX}${JSON.stringify({ actionId, decisionKind, failure? })}`；park 路径不传 `failure`，故已落库 gated 调用的载荷只有 `actionId` + `decisionKind`。
+`parseBlockReason`（`:762-782`）只强制前缀 + 合法 `decisionKind`；`actionId` 与 `failure` 都是可选的（`:778-781`），带与不带 `actionId` 的串都能解析出类型化结果；两者只经 `securityGateway` 对象暴露（`security.gateway.securityGateway.parseBlockReason`、`security.gateway.BLOCK_REASON_PREFIX`）。
+两条无 `actionId` 的 deny 载荷仍带 `failure`：锁定会话（`:1241-1247`，`{code:'CIRCUIT_OPEN',reason:'circuit_open'}`）与计划已取消（`:1272-1279`，`{code:'SECURITY_DENIED',reason:'denied'}`）。
 MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 的 `AuthorizationResult`，由 `/api/actions/[id]/verify` 以 200 `ActionResponse`（`mfaResult:'failed'`）交给客户端，不进入模型上下文。
-锁定会话中的新写入由 `execution-policy.ts#assertSessionMayWrite` 抛 `CIRCUIT_OPEN`，作为普通工具错误（无前缀）抵达模型。
+锁定会话中的新写入由 `execution-policy.ts#assertSessionMayWrite` 抛 `CIRCUIT_OPEN`（`:19-21`），作为普通工具错误（无前缀）抵达模型。
 
 ## 赎回报价
 
@@ -63,6 +63,7 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 本层只快照报价，不改变余额。
 
 `mfa.ts` 把 5 分钟墙钟挑战绑定到命令，保留有效尝试并记录消费。
+每次错码都写 `MFA_FAILURE`（severity `medium`，detail `actionId`/`decision:'reject_code'`/`result:'attempt_counted'|'session_locked'`/`attempts`/`maxAttempts`/`attemptsLeft`/`locked`，`mfa.ts:181-196`）。
 `step-up-authenticator.ts` 是明确的演示适配器，不发送短信。
 不支持的模式必须失败。
 真实短信供应商与已认证的员工或用户身份属于独立的生产工作。
@@ -71,30 +72,38 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 
 `MFA_MAX_ATTEMPTS`（`lib/constants.ts`）= 3，熔断在「第 3 次」失败即触发（`failures >= max`，非第 4 次）。
 `security-gateway.ts` 的 MFA 分支以领域结果返回状态（不抛出）：
-未达上限 → `status: 'awaiting_mfa'`、消息「验证码错误，请重试。剩余尝试次数：N。」；
-达到上限 → `status: 'locked'`、`code: 'CIRCUIT_OPEN'`、消息「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」；
-已锁定后的再次提交走提前熔断分支 → `status: 'locked'`、消息「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」。
+未达上限 → `status: 'awaiting_mfa'`、`code: 'MFA_FAILED'`、消息「验证码错误，请重试。剩余尝试次数：N。」；
+达到上限 → `status: 'locked'`、顶层 `code: 'CIRCUIT_OPEN'`、`failure.code: 'MFA_LOCKED'` + `reason: 'mfa_attempts_exhausted'` + `attemptsLeft: 0`，消息「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」，并用 CAS 落库 `locked`（`security-gateway.ts:895-915`）；
+已锁定后的再次提交走 `authorizeAction` 的两个门之一：行已 `locked` → `lockedOutcome(...,'mfa_session_locked')`（`:1116-1119`），熔断器仍开 → `persistLockedAction` + `lockedOutcome(...,'circuit_open')`（`:1146-1149`）；两者都不新建挑战、不消费尝试、`message` 同为「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」。
 锁定态返回值仍带 `requiresMfa: true`，但 HTTP 路由由 `status` 推导出的 `mfaResult` 变为 `failed`，且不发出 `mfa_required` 流事件。
 真正的终态锁定会以「仅从 `pending`/`awaiting_mfa` 出发」的 CAS 把 `PendingAction.status` 落库为 `'locked'`；该行因此不再作为待决策项返回，也不再发出 `mfa_required`，MFA 弹窗不会重现；对已是 `'locked'` 的行再次授权幂等返回同一拒绝。
 `mfa.ts#verify` 返回 `Result` 而非抛错；抛 `CIRCUIT_OPEN` 的只有 `circuit-breaker.resetSession` 与 `execution-policy.assertSessionMayWrite`。
-成功验证码重置连续失败计数，但不解除已触发的熔断（「locked 优先」）；仅 `resetSession` 以验证码或 60 秒冷却解除。
+成功验证码重置连续失败计数，但不解除已触发的熔断（「locked 优先」）；仅 `resetSession` 以验证码或 60 秒冷却（`RESET_COOLDOWN_MS` = 60_000）解除。
+第 3 次失败同时把 `MfaChallenge.status` 置 `'locked'`（`mfa.ts:198-200`）；此后再验证先命中「locked wins」分支（`mfa.ts:148-154`），返回 `ok:false, locked:true`，不消费尝试也不发事件。
+`resetSession` 在同一审计事务内调用 `renewLockedMfaChallenges`（`lib/db/repositories/pendingAction.ts:362-378`）：只把「所属行仍为 `awaiting_mfa` 且 `requiresMfa`」的 `locked` 挑战重置为 `pending`；它从不写 `PendingAction.status`，也不自动执行任何操作（`app/api/security/reset/route.ts` 完全不碰 `PendingAction`，`lockedActionsReopened` 是常量 `false`）。
+`MFA_LOCKED` 只作为 `failure.code` 与前端白名单出现，从不作为抛出的 `AppError` 码。
 
-## 阻断原因字符串（block reason）的两种形态
+## 结构化失败契约（SecurityFailure）
 
-`BLOCK_REASON_PREFIX`（`security-gateway.ts:78`）= `__SECURITY_BLOCK__`。
-全仓只有三处拼接该前缀，且都在 `security-gateway.ts`：
-`serializeBlockReason`（`:703-705`）产出 `__SECURITY_BLOCK__{"actionId":"...","decisionKind":"require_confirmation"|"require_mfa"}`，`actionId` 无条件存在（参数是必填的 `PendingAction`）。
-`handleToolCall` 的锁定会话 deny 分支（`:1178-1184`）产出 `__SECURITY_BLOCK__{"decisionKind":"deny"}`，**没有 `actionId`**。
-`handleToolCall` 的 `plan_cancelled` 分支（`:1209-1216`）产出同一条无 `actionId` 的 deny 串。
-`parseBlockReason`（`:708-729`）要求 `actionId` 是非空字符串（`:725`），因此上面两条无 `actionId` 的串解析结果为 `null`；消费方（如 `agent/turns/events.ts`）拿到 `null` 会走非阻断分支，而原始串本身是可直接泄漏给用户的内部标记。
-校验失败（`VALIDATION`，`:1189-1193`）与转账收款人不唯一（`clarify`，`:1198-1205`）这两种 deny 的 `blockReason` 是**纯中文消息**，不带前缀。
-无 `actionId` 的 deny 串本身是可直接展示的内部标记：`agent/confirmation/gated-execution.ts:66` 把它放进 `GatedToolOutcome.error`，`agent/turns/buffer.ts:118` 复制进 `ToolEventView.summary`（`ok:false` → `status:'error'`），前端 `lib/tool-feedback.ts#publicToolSummary` 的 `error` 分支认不出它，落到兜底 `chat.error.toolFailed`（「操作未完成。请核对原操作卡片和账户记录。」）。
-本层三句锁定拒绝语里只有 `:849` 被 `lib/tool-feedback.ts` 的 `PUBLIC_BUSINESS_ERRORS` 精确登记（→ `chat.error.securityLocked`）；`:424`（`gatewayDecide` deny）与 `:785`（`lockedOutcome`）未登记，因此同样渲染为 `chat.error.toolFailed` 兜底。
-MFA 三次错误路径（`authorizeWithMfa`，`:838-853`）返回的 `message` 只有中文提示（「验证码错误次数过多…」），不含前缀；该路径不产出 block reason 串。
+`SecurityFailure` 与 `SecurityFailureReason` 定义在 `lib/contracts/security.ts:21-28` / `:9-14`，本层在 `security-gateway.ts:30-31` 导入。
+`FAILURE_REASONS`（`:225-231`）与 `parseFailure`（`:738-759`）要求 `code` 非空、`reason` 属于五个字面量；未知 reason 丢弃整个 failure。
+`AuthorizationResult`（`:104-123`）的 `failure?: SecurityFailure`（`:118`）只由本文件的产出函数填充：成功分支（`:953-962`、`:1084-1093`、`:1172-1181`）不填 `code`/`failure`。
+仅索取验证码（`:868-878`）只返回 `status:'awaiting_mfa'` + `message`，不填 `failure`。
+验证器报错（过期/已消费/无挑战，`:880-894`）填 `{code:'MFA_FAILED', reason:'mfa_code_invalid', actionId}`，不带次数。
+计次失败（`:895-915`）另带 `attemptsUsed`/`attemptsLeft`/`maxAttempts`（`attemptsUsed = MFA_MAX_ATTEMPTS - attemptsLeft`）。
+锁定分支的 `failure.code` 是 `'MFA_LOCKED'`（`:906`）而同结果的顶层 `code` 是 `'CIRCUIT_OPEN'`（`:904`）——本层唯一一处分歧，`lib/public-text.ts#securityNotice` 先判 `MFA_LOCKED`（`:73`）再判 `CIRCUIT_OPEN`（`:79`）才渲染正确文案。
+`lockedOutcome`（`:827-844`）固定 `{code:'CIRCUIT_OPEN', reason, actionId, attemptsLeft:0, maxAttempts:MFA_MAX_ATTEMPTS}`（不填 `attemptsUsed`），`reason` 由调用点决定：已锁定行重试 `'mfa_session_locked'`（`:1118`）、熔断闸门 `'circuit_open'`（`:1148`）。
+`planCancelledOutcome`（`:791-806`）填 `{code:'SECURITY_DENIED', reason:'denied', actionId}`；转账执行期升级（`:1069-1081`）填 `{code:'LIMIT_EXCEEDED', reason:'denied', actionId}`（升级语义也用 `denied`）。
+`recovery-authorization.ts#authorizeRecoveryAction`（`:25`）是本层另一处 `AuthorizationResult` 产出点，其返回（`:79-84`）不填 `code` 与 `failure`。
+本目录没有一处读 `failure` 来决定文案：用户可见文案都是本文件内的硬编码中文字符串（`:446`、`:841`、`:803`、`:911-912`、`:1077` 等）；`failure` 由本层之外的调用方渲染（`app/api/actions/[id]/verify/route.ts:89-91` → `lib/public-text.ts#securityNotice`）。
+校验失败（`VALIDATION`，`:1252-1256`）与转账收款人不唯一（`clarify`，`:1261-1268`）的 `blockReason` 是纯中文消息，不带前缀、不带 `failure`。
+无 `actionId` 的 deny 串仍是可直接展示的内部标记：`agent/confirmation/gated-execution.ts:66` 放进 `GatedToolOutcome.error`、`agent/turns/buffer.ts:118` 复制进 `ToolEventView.summary`，`lib/tool-feedback.ts#publicToolSummary` 认不出就落到 `chat.error.toolFailed` 兜底。
+本层三句锁定拒绝语里只有 `:911` 被 `PUBLIC_BUSINESS_ERRORS` 精确登记（→ `chat.error.securityLocked`）；`:446`（`gatewayDecide` deny）与 `:841`（`lockedOutcome`）未登记，同样落到 `chat.error.toolFailed`。
 
 `injection-guard.ts` 检测可疑指令。
 `incidents.ts` 在一个事务中持久化去重信号、相关安全事件与账户级锁定。
 `circuit-breaker.ts` 应用验证失败锁定与已审计的冷却重置。
+`recordFailure`（`:163-186`）在事务内以 strict 写 `CIRCUIT_BREAKER_TRIPPED`（severity `high`，detail `failures`/`max`/`result:'session_locked'`），同一次熔断只发一次；`commitAuditedReset`（`:252-302`）以快照 CAS + strict 在同一 `prisma.$transaction` 内写 `SECURITY_RESET`（detail `actor`/`reason`/`wasLocked`/`previousFailures`/`mode`/`renewedMfaChallenges`/`priorLockedAt`），失去 CAS 则不写也不审计。
 锁定由该用户的各会话共享。
 
 `execution-policy.ts` 在真实事务客户端上检查写权限。
