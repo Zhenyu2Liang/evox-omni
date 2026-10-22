@@ -22,6 +22,11 @@ Server pages may use the identity helper; client components call HTTP routes ins
 `'success' | 'failed' | 'not_required'` and the decision routes always set it. A refusal is TYPED:
 the optional `code`, `failure: SecurityFailure` and that failure's `attemptsLeft`/`maxAttempts` are
 the lock/MFA signals, so a client never parses `message`.
+`SecurityFailure`/`SecurityFailureReason` are imported here only from `@/lib/contracts/security`;
+`AuthorizationResult` (declared in `security/security-gateway.ts`) is never imported by this folder —
+the decision routes receive an `@/agent` `ConfirmationOutcome` and copy its `code`/`failure` verbatim.
+Nothing in `_lib` imports `lib/public-text.ts` or `lib/tool-feedback.ts`; type-to-text rendering is
+client-side.
 - `agent-bridge.ts`: static delegation for action confirmation, verification, cancellation and
   recovery; task controls; owning-plan lookup and refreshed plan events. It forwards the fixed
   `{ userId, sessionId }` ownership context to agent contracts. It contains no banking mutations.
