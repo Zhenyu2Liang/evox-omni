@@ -33,6 +33,7 @@
 | `confirmation-policy.test.ts`、`recovery-authorization.test.ts` | 写时熔断与终态决策：`423`＋`CIRCUIT_OPEN`、`getState().locked`、已锁定会话仍凭原回执收敛且不新增扣款、`status: 'locked'` 的 RED 决策不再请求验证码 |
 | `money-budget.test.ts`、`frontend-followup-fixes.test.ts` | 三次错误验证码耗尽：会话熔断且 GREEN 写不落地（`JSON.stringify(outcome)` 含「熔断」）、`MfaChallenge` 落 `locked`、错误解锁码不能续期、审计失败回滚解锁与续期 |
 | `terminal-state-settle.test.ts`、`decision-guidance.test.ts`、`confirmation-evidence.test.ts` | 终态/阻塞：已终态动作的重复确认与取消是稳定 200 `ok:false`（`events` 为空）、未声明工具 `toolEvent.status === 'blocked'`、取消阻断栅栏后 SDK 写不落地 |
+| `weixin-protocol.test.ts` | 固定版本 `pi-weixinbot` 线协议（不是银行链路）：轮询带 Bearer 与游标、uint64 消息编号不丢精度、发送用固定收件人/上下文/幂等 `client_id`、`ret:-14` 业务拒绝不视为已发送 |
 
 其他测试覆盖预算、取消、接管、执行权和未知结果。
 具体场景以测试源码中的断言为准。
