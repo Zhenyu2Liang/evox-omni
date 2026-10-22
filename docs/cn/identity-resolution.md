@@ -92,7 +92,20 @@
 - 放错字段的尾号不会退化成按尾号查询，也不会命中其他卡片。
 - 多个候选返回 `ambiguous`，澄清消息按类型和脱敏尾号列出候选，例如 `借记卡 ****6688`。
 - 完整卡号只与 `numberFull` 精确比较，该列为空的卡片不能用 `cardNumber` 选择。
-- 未补全 `numberFull` 的卡片用 `cardId`、`cardType` 或 `cardTail` 选择。
+- `numberFull` 为空的历史行用 `cardId`、`cardType` 或 `cardTail` 选择。
+
+运行时新建的卡片都带服务端生成的完整卡号。
+以下 3 条建卡路径都会写入 `Card.numberFull`：
+
+- 虚拟卡申请：`applyVirtualCard`。
+- 补办换卡：`replaceCard`。
+- 页面添加卡片记录：`addDemoCard`。
+
+因此 `cardNumber` 对新建卡片同样可用。
+完整卡号是 16 位虚构数字：`6222` 加 8 个 `0` 加尾 4 位，形如 `6222000000001234`。
+尾 4 位在本人卡片内唯一，完整卡号随之唯一。
+`Card.numberMasked` 由同一完整卡号经[脱敏模块](../../lib/mask.ts)推导，形如 `****1234`，两者永远一致。
+完整卡号仍不进入任何对外输出，边界见[完整号码的存放与脱敏边界](#完整号码的存放与脱敏边界)。
 
 使用选择器的工具为以下 6 个写工具，集合见 `CARD_TARGET_TOOLS`：
 
