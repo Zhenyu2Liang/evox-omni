@@ -68,3 +68,6 @@
 ## Notes for Agents
 
 `POST /api/cards/[id]/consume` 拒绝任何携带 `occurredAt` 的请求体（400 `VALIDATION`）：入账时间归服务端所有，界面不发送该字段，也不要补充任何客户端时间。
+手动卡片验证是本目录唯一自带错误码的 MFA 面：`security/manual-card-management.ts` 熔断时抛 `AppError('CIRCUIT_OPEN')`，`_lib/http.ts` 映射为 HTTP 423 失败信封，`CardManager.tsx` 84-100 行据此把申请置为 `locked` 并显示 `pages.cards.locked`。
+同一处检查的 `'LOCKED'` 不在 `ErrorCode`（`lib/errors.ts:1`）里，服务端不可能返回，属不可达分支。
+助手侧 `POST /api/actions/[id]/verify` 是 200 `ok:false` + `status:'locked'`、信封无 `code`，故这套按码提示无法复用于操作卡片。
