@@ -150,11 +150,34 @@ export function UnlockPanel({
       {/*
         Static explanation, always visible: the unlock description states that high-risk operations
         stay locked after repeated failures, and `chat.error.actionLocked` carries the "lift it in the
-        security center and start the operation again" half. There is no dedicated catalog key for
-        "re-initiate and re-confirm, the original operation will not run by itself" yet.
+        security center and start the operation again" half.
       */}
       <p className="text-sm leading-5 text-banking-navy">{t('pages.security.unlockDescription')}</p>
       <p className="text-sm leading-5 text-banking-navy">{t('chat.error.actionLocked')}</p>
+
+      {/*
+        Unlock semantics, rendered from the four `security.reset.*` facts:
+          - `lockReason` — WHY the breaker tripped, with `{count}` / `{max}` interpolated from the
+            authoritative state. Rendered only while `locked`: a lock reason without a lock would be
+            a false fact.
+          - `lockedActionState` — an already-locked operation stays terminal across the unlock.
+          - `reinitiate` — the user must start the request again and confirm it again; the original
+            operation is never executed automatically. `data-unlock-reinitiate` is the browser suite's
+            anchor and carries the whole sentence, in BOTH breaker states.
+          - `recovery` — what the security center's reset actually clears (the breaker state and the
+            failure counter), and nothing more.
+      */}
+      {locked ? (
+        <p className="text-sm leading-5 text-banking-navy">
+          {t('security.reset.lockReason', { count: failures, max: maxAttempts })}
+        </p>
+      ) : null}
+      <p className="text-sm leading-5 text-banking-navy">{t('security.reset.lockedActionState')}</p>
+      <p data-unlock-reinitiate className="text-sm leading-5 text-banking-danger">
+        {t('security.reset.reinitiate')}
+      </p>
+      <p className="text-sm leading-5 text-banking-navy">{t('security.reset.recovery')}</p>
+
       {lockedActionCount > 0 ? (
         <p className="text-sm leading-5 text-banking-danger" data-unlock-impact={lockedActionCount}>
           {t('security.breaker.lockedDescription')}
