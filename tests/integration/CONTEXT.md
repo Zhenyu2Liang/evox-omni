@@ -187,4 +187,5 @@ wedge 用例只能注入生产确认路径真正调用的符号，否则 spy 永
 - 夹具不播种 LOST 卡（`card_credit`/`card_debit` 均 `ACTIVE`，见 `../helpers/fixtures.ts:99`）；`replace_card` 需先 `report_lost_card` 或直接改库把源卡置 `LOST`。
 - 节点级内部标记不进入计划节点输出：`agent/confirmation/gated-execution.ts:49-60` 的 `blockedOutcome` 只从结构化 `failure` 生成 `securityNotice` 目录句，否则经 `safePublicText`→`publicToolError` 回退到 `chat.error.operationNotStarted`，`auth.blockReason` 原文不再交给 `planner/node-outcome.ts`；且带 `taskId`／`nodeId` 的节点动作先经 `:66-84` 的 `findRepresentedAction` 早退（`:80-83` 为公开中文句），不触达网关。
 - `locked-action-recovery.test.ts` 只覆盖进程内恢复入口：`tickAgentRecovery` 与真实子进程重启（`../helpers/restart-process.ts`）没有锁定动作用例，原因是其屏障在高负载下易超时；真并发租约抢占被 `beginAgentRun` 拒绝，无法直接构造。
-- 锁定动作没有 HTTP `POST /api/actions/[id]/recover` 用例：本目录覆盖的是服务端 `recoverAction`（`agent/index.ts:164`），`../app/mfa-lock-refresh-unlock-http.test.ts` 覆盖的是 `verify`／`confirm` 与 `POST /api/security/reset`。
+- 锁定动作没有 HTTP `POST /api/actions/[id]/recover` 用例：本目录覆盖的是服务端 `recoverAction`（`agent/index.ts:168`），`../app/mfa-lock-refresh-unlock-http.test.ts` 覆盖的是 `verify`／`confirm` 与 `POST /api/security/reset`。
+- 两条再驱动入口的用例仍按「控制返回计划快照／`200`」的旧语义调用：`locked-action-recovery.test.ts:244/254` 与 `write-idempotency.test.ts:40-42` 期望控制调用正常返回，而生产已因 `assertParkedActionsNotTerminal` 在认领前抛出（`MFA_LOCKED`／`CONFLICT`，HTTP `409`）。
