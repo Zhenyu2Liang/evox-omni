@@ -123,7 +123,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
   all (client-only, `components/chat/actions.ts`); closing the MFA prompt is left to the client.
 - The edge never rewrites agent text: `verify/route.ts:79-94` copies `outcome.message` and
   `outcomeWithPlan.events` into `ActionResponse` unchanged (`ConfirmationOutcome.result` is dropped),
-  and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:124`
+  and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:125`
   `sseFrame`. A block reason built by `security/security-gateway.ts:80` (`__SECURITY_BLOCK__` + JSON,
   e.g. `{"decisionKind":"deny"}`) therefore reaches the browser inside `security_event.message` and any
   tool-error text. The action routes' own lock refusal IS typed (`code`/`failure`), but stream frames
