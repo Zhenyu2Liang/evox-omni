@@ -11,6 +11,9 @@ import { getJson, idCtx, postJson } from './harness';
 interface ContactBody { data: { contact: { id: string; name: string; phone: string } } }
 const input = { name: 'Ada Example', phone: '13812345678', bank: 'Demo Bank', remark: 'Project team' };
 
+/** An 11-digit complete mainland mobile number anywhere in a serialized payload. */
+const COMPLETE_PHONE_IN_TEXT = /\b1[3-9]\d{9}\b/;
+
 async function deleteContact(id: string, body: unknown = { confirm: true }) {
   return DELETE(new NextRequest(`http://localhost/api/contacts/${id}`, {
     method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -26,9 +29,14 @@ describe('Contact management HTTP boundary', () => {
     expect(saved.status).toBe(201);
     const contact = saved.data!.data.contact;
     expect(contact.phone).toBe('138****5678');
+    // The complete number is kept SERVER-SIDE only (it is what recipient identity matches on)...
+    expect((await getTestPrisma().contact.findUnique({ where: { id: contact.id } }))?.phoneFull).toBe(input.phone);
+    // ...and never reaches a response body.
+    expect(JSON.stringify(saved.data)).not.toMatch(COMPLETE_PHONE_IN_TEXT);
     expect(await banking.contact.searchContacts(DEMO_USER_ID, input.phone)).toEqual([expect.objectContaining({ id: contact.id, phone: '138****5678' })]);
     const list = await getJson<{ data: { contacts: unknown[] } }>(GET, '/api/contacts?userId=other');
     expect(list.data?.data.contacts).toContainEqual(expect.objectContaining({ id: contact.id }));
+    expect(JSON.stringify(list.data)).not.toMatch(COMPLETE_PHONE_IN_TEXT);
     expect((await deleteContact(contact.id)).status).toBe(200);
     const db = getTestPrisma();
     expect(await db.contact.findUnique({ where: { id: contact.id } })).toBeNull();
