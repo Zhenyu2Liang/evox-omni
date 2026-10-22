@@ -5,6 +5,7 @@ import { getPendingAction, listPendingActionsByTask } from '@/lib/db/repositorie
 import { AppError } from '@/lib/errors';
 import { safeParse } from '@/lib/json';
 import { nodeExecutionKey } from '@/lib/ledger';
+import { toPlanFailure } from '@/planner/failure';
 import { createToolRegistry } from '../tools';
 import { buildAutomaticWriteFence } from '../execution-fence';
 import { settlePendingAction } from '../confirmation-recovery';
@@ -15,13 +16,18 @@ import { catalogEntry } from '@/lib/contracts/tool-catalog';
 import { isManualCardCommand } from '@/lib/contracts/card-management';
 import { safePublicText, securityNotice } from '@/lib/public-text';
 import { createTranslator, DEFAULT_LOCALE } from '@/lib/i18n/shared';
-import { ALL_ACTION_STATUSES } from '../action-status';
+import { REPRESENTED_ACTION_STATUSES } from '../action-status';
 
 const gateway = security.gateway.securityGateway;
 const t = createTranslator(DEFAULT_LOCALE);
 const inFlightExecutions = new Map<string, Promise<GatedToolOutcome>>();
-/** Every status a persisted plan-node action may hold — the SHARED vocabulary, never a local literal. */
-const representedStatuses: readonly PendingActionStatus[] = ALL_ACTION_STATUSES;
+/**
+ * Statuses in which a stored row still REPRESENTS its node — the SHARED vocabulary, never a local
+ * literal. `failed` / `locked` / `cancelled` are absent: a settled refusal is NOT an authorization, so
+ * an explicit retry re-enters the gateway for a fresh decision and a fresh `PendingAction`, and a
+ * `locked` row is never re-activated.
+ */
+const representedStatuses: readonly PendingActionStatus[] = REPRESENTED_ACTION_STATUSES;
 type PendingActionRow = Awaited<ReturnType<typeof listPendingActionsByTask>>[number];
 
 async function findRepresentedAction(taskId: string, nodeId: string): Promise<PendingActionRow | undefined> {
@@ -29,30 +35,54 @@ async function findRepresentedAction(taskId: string, nodeId: string): Promise<Pe
   return rows.find(row => row.nodeId === nodeId);
 }
 
+/**
+ * The PERSISTED status of the row this node is bound to, whatever it is (`locked` included).
+ * Reads the gateway's own record of the row, else the newest stored row of the node — never the
+ * decision the gateway intended to ask for.
+ */
+async function persistedActionStatus(
+  ctx: GatewayContext, auth: ToolCallAuthorization,
+): Promise<PendingActionStatus | undefined> {
+  if (auth.action !== undefined) return auth.action.status;
+  if (ctx.taskId === undefined || ctx.nodeId === undefined) return undefined;
+  const rows = await listPendingActionsByTask(ctx.taskId);
+  const row = [...rows].reverse().find(candidate => candidate.nodeId === ctx.nodeId);
+  return row?.status;
+}
+
 /** Recover saved evidence without reapplying a completed side effect. */
 function recoverExecutedPlanAction(action: PendingActionRow): GatedToolOutcome {
   const stored = safeParse<Partial<GatedToolOutcome> | null>(action.resultJson, null);
   if (stored !== null && typeof stored.ok === 'boolean') {
-    return { ok: stored.ok, data: stored.data, summary: stored.summary, error: stored.error };
+    return {
+      ok: stored.ok, data: stored.data, summary: stored.summary, error: stored.error,
+      ...(stored.failure !== undefined ? { failure: toPlanFailure(stored.failure) } : {}),
+      ...(stored.actionStatus !== undefined ? { actionStatus: stored.actionStatus } : { actionStatus: action.status }),
+    };
   }
-  return { ok: false, error: '该节点此前已执行但未留存结果，需人工核对（不会重新执行）。' };
+  return { ok: false, error: '该节点此前已执行但未留存结果，需人工核对（不会重新执行）。', actionStatus: action.status };
 }
 
 /**
- * A gateway refusal as a TYPED outcome. uth.blockReason is the gateway's INTERNAL envelope
+ * A gateway refusal as a TYPED outcome. auth.blockReason is the gateway's INTERNAL envelope
  * (`__SECURITY_BLOCK__…`) or a model-facing diagnostic: it stays in the Pi tool result
- * (anking-agent.ts#beforeToolCall) and is NEVER rendered as user-visible text. Only the structured
+ * (banking-agent.ts#beforeToolCall) and is NEVER rendered as user-visible text. Only the structured
  * failure facts — or, when the gateway sent no structured failure, a closed-catalog sentence from
  * lib/public-text.ts — are published, so a raw payload, a JSON fragment or a status literal can
  * never reach a node error or a summary.
  */
-function blockedOutcome(auth: ToolCallAuthorization): GatedToolOutcome {
-  const failure = security.gateway.securityGateway.parseBlockReason(auth.blockReason ?? '')?.failure;
+function blockedOutcome(
+  auth: ToolCallAuthorization, actionStatus?: PendingActionStatus,
+): GatedToolOutcome {
+  const reported = security.gateway.securityGateway.parseBlockReason(auth.blockReason ?? '')?.failure;
+  const failure = toPlanFailure(reported);
   return {
     ok: false,
     requiresConfirmation: auth.action !== undefined,
     pendingActionId: auth.action?.id,
     errorCode: failure?.code,
+    ...(failure !== undefined ? { failure } : {}),
+    ...(actionStatus !== undefined ? { actionStatus } : {}),
     error: failure !== undefined
       ? securityNotice(failure, t)
       : safePublicText(auth.blockReason, t, 'chat.error.operationNotStarted'),
@@ -79,12 +109,13 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
         }
         return {
           ok: false, requiresConfirmation: true, pendingActionId: existing.id,
+          actionStatus: existing.status,
           error: '该计划节点已在等待人工确认，未重复受理。',
         };
       }
     }
     const auth = await gateway.handleToolCall(ctx);
-    if (auth.evaluation.blocked) return blockedOutcome(auth);
+    if (auth.evaluation.blocked) return blockedOutcome(auth, await persistedActionStatus(ctx, auth));
     const registry = createToolRegistry(ctx.userId);
     const policyFence = await buildAutomaticWriteFence(ctx.sessionId, ctx.taskId, ctx.nodeId, ctx.userId);
     const result = await registry.executeDirect(ctx.toolName, ctx.args, {
@@ -96,10 +127,18 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
       ...(ctx.taskId !== undefined ? { taskId: ctx.taskId } : {}),
       ...(ctx.nodeId !== undefined ? { nodeId: ctx.nodeId } : {}),
     });
-    return { ok: result.ok, data: result.data, summary: result.summary, error: result.error, errorCode: result.errorCode };
+    // A failed execution carries its typed code only: no reason is inferred from the message text.
+    const failure = result.ok
+      ? undefined
+      : toPlanFailure(result.errorCode !== undefined ? { code: result.errorCode } : undefined);
+    return {
+      ok: result.ok, data: result.data, summary: result.summary, error: result.error, errorCode: result.errorCode,
+      ...(failure !== undefined ? { failure } : {}),
+      ...(auth.action !== undefined ? { actionStatus: auth.action.status } : {}),
+    };
   } catch (error) {
     const failure = AppError.from(error);
-    return { ok: false, error: failure.message, errorCode: failure.code };
+    return { ok: false, error: failure.message, errorCode: failure.code, failure: toPlanFailure(failure) };
   }
 }
 

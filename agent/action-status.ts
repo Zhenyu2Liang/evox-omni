@@ -47,6 +47,21 @@ export const ALL_ACTION_STATUSES: readonly PendingActionStatus[] = [
   ...TERMINAL_ACTION_STATUSES,
 ];
 
+/**
+ * Statuses in which a stored `PendingAction` still REPRESENTS its plan node: a decision is still to be
+ * taken (`CLAIMABLE_ACTION_STATUSES`) or the recorded outcome stands for the node (`executed`,
+ * `needs_reconciliation` — recovered, never re-executed).
+ *
+ * `failed` / `locked` / `cancelled` are ABSENT by construction: a settled refusal or a dead operation
+ * is not an authorization, so an explicit user retry must mint a NEW `PendingAction`, and a locked row
+ * is never re-activated.
+ */
+export const REPRESENTED_ACTION_STATUSES: readonly PendingActionStatus[] = [
+  ...CLAIMABLE_ACTION_STATUSES,
+  'executed',
+  'needs_reconciliation',
+];
+
 /** Is the persisted status an OPEN, still-decidable operation status (`pending` / `awaiting_mfa`)? */
 export function isOpenActionStatus(status: string | null | undefined): boolean {
   return status !== null && status !== undefined
