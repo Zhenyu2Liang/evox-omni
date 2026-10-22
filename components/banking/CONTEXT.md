@@ -9,6 +9,7 @@
 | `CardTile` | 脱敏卡号、状态、限额与关联账户 |
 | `SubscriptionTile` | 费用、周期与下次扣费 |
 | `InvestmentProductTile` | 产品及可选持仓 |
+| `HoldingFacts` | 一个持仓的净值 + 份额事实，供 tile 与对话卡片共用 |
 | `AnomalyBanner` | 异常记录与调用方提供的动作 |
 | `AgentTaskTimeline` | 计划节点与执行状态 |
 
@@ -18,31 +19,84 @@ SDK 类型通过类型导入使用。
 
 ## 投资持仓渲染（e2e 定位）
 
-`InvestmentProductTile` 持有区块按条件渲染，标签取 `business.investments.*`：
+`InvestmentProductTile` 的持仓区块按条件渲染，标签取 `business.investments.*`：
 
-| 行 | 键 | 中文 | 英文 | 值 |
+| 区块 | 键 | 中文 | 英文 | 值 |
 | --- | --- | --- | --- | --- |
-| 持有金额 | `business.investments.principal` | 持有金额 | Principal | `Money(holding.amount)`（预订本金） |
-| 市值 | `business.investments.marketValue` | 市值 | Market value | `DecimalMoney(holding.marketValue)`（显示按 HALF_UP 舍入到两位；存储估值不舍入） |
-| 收益 | `business.investments.profit` | 收益 | Return | `DecimalMoney(holding.profit) signed` |
+| 小标题 | `business.investments.holdings` | 持仓 | Holdings | 右侧可带 `valueBasis` 徽标 |
+| 持有金额 | `business.investments.principal` | 持有金额 | Principal | `Money(holding.amount)`（剩余持仓成本） |
+| 净值 + 份额事实 | 见“净值 + 份额事实” | — | — | `<HoldingFacts holding={holding} layout="tile" />` |
 | 最近申购 | `business.investments.lastPurchase` | 最近申购 | Last purchase | `formatDateTime` |
 | 申购记录 | `business.investments.purchases` + `purchaseCount` | 申购记录 · 共 {count} 笔 | — | 计数 |
 
-持仓本金标签是“持有金额”，不是“本金”。
-“本金”只出现在申购/赎回确认卡字段（`chat.field.principal`，经 `lib/i18n/display.ts` 映射）。
-市值、收益、最近申购、申购记录行仅在对应 DTO 字段存在时渲染。
+持有金额行在持仓存在时始终渲染，值是剩余持仓成本。
+标签是“持有金额”，不是“本金”。
+“本金”只出现在申购、赎回确认卡字段（`chat.field.principal`，经 `lib/i18n/display.ts` 映射）。
+最近申购与申购记录行仅在对应 DTO 字段存在时渲染。
 
-对话结果卡 `chat/cards/InvestmentsCard` 用同类标签（`<dl>/<dt>/<dd>`），
+## 净值 + 份额事实（HoldingFacts）
+
+`HoldingFacts.tsx` 是持仓事实的唯一来源。
+`InvestmentProductTile` 与对话卡片 `chat/cards/InvestmentsCard` 都调用 `HoldingFacts`，两处显示的数值相同。
+事实只取自 `HoldingView` DTO，界面不重算。
+
+| 事实 | 键 | 中文 | 英文 | 值 |
+| --- | --- | --- | --- | --- |
+| 持仓份额 | `business.investments.shares` | 持仓份额 | Shares held | `formatDecimalFixed(shares, 6)` 加 `business.investments.units.shares`（份） |
+| 最新净值 | `business.investments.netValue` | 最新净值 | Latest net value | `formatDecimalFixed(latestNetValue, 4)` 加 `business.investments.units.netValue`（元/份） |
+| 净值日期 | `business.investments.netValueDate` | 净值日期 | Net value date | `formatBusinessDate`，输出 `YYYY-MM-DD`（北京时间） |
+| 持仓市值 | `business.investments.marketValue` | 市值 | Market value | `DecimalMoney(marketValue)`；估值缺省不取整，展示 HALF_UP 到两位 |
+| 剩余持仓成本 | `business.investments.remainingCost` | 剩余持仓成本 | Remaining cost | `Money(holding.amount)`，已入账人民币分 |
+| 持仓收益 | `business.investments.holdingProfit` | 持仓收益 | Holding return | `DecimalMoney(profit) signed`，为未实现收益 |
+| 持仓收益率 | `business.investments.holdingProfitRate` | 持仓收益率 | Holding return rate | `rateRatioToPercent(profitRate)` 加 `%` |
+| 累计收益 | `business.investments.cumulativeProfit` | 累计收益 | Cumulative return | `DecimalMoney(cumulativeProfit) signed` |
+| 已实现收益 | `business.investments.realizedProfit` | 已实现收益 | Realized return | `DecimalMoney(realizedProfit)`，不加正号 |
+
+收益口径见 [investments.md](../../docs/cn/investments.md)。
+
+缺失的事实渲染 `business.investments.insufficient`（历史数据不足），不渲染 0。
+`holding.amount` 始终存在，是唯一不缺省的金额事实。
+没有净值字段的旧持仓只渲染市值与收益两行，不显示份额、净值与成本行。
+`usesNetValueModel(holding)` 判定持仓是否按净值 + 份额计价：`valueBasis`、`shares`、`latestNetValue`、`cumulativeProfit` 有一个存在即为真。
+`valueBasisLabelKey(holding)` 返回徽标键，`NET_VALUE` 返回 `undefined`，即不显示徽标。
+
+## valueBasis 徽标
+
+徽标紧跟持仓小标题，位于其右侧：
+
+| `valueBasis` | 徽标键 | 文案 | 色调 |
+| --- | --- | --- | --- |
+| `NET_VALUE` | 无 | — | — |
+| `MIGRATED_ESTIMATE` | `business.investments.valueBasis.migrated` | 估算 | info |
+| `HISTORICAL_DATA_INSUFFICIENT` | `business.investments.valueBasis.insufficient` | 历史数据不足 | warn |
+
+## 布局变体
+
+`HoldingFacts` 的 `layout` 决定行结构，标签文本相同：
+
+- `tile`：`InvestmentProductTile` 使用。行是 `div.flex.items-center.justify-between.gap-3.text-sm`，标签与值是兄弟 `span`，分别用 `text-banking-navy/60` 与 `font-medium text-banking-deep`。
+- `card`：`InvestmentsCard` 使用。行是 `dt` 与 `dd` 的 flex 容器，分别用 `text-banking-navy/60` 与 `font-medium text-banking-deep`。
+
+e2e 行读取器按标签 `span` 的文本精确定位，再取同一父元素的第二个 `span`。
+标签文本相同，两处可按同一组标签断言。
+
+## 口径与免责声明
+
+持仓区块底部显示 `business.investments.profitScope` 与 `business.investments.disclaimer`。
+`profitScope` 只在持仓按净值 + 份额计价时出现。
+`disclaimer`（收益为模拟估算，不承诺保本）随持仓始终出现。
+
+对话结果卡 `chat/cards/InvestmentsCard` 用同类事实（`dt`/`dd`），
 并另用汇总键 `cards.investment.amount`（持仓金额）、`cards.investment.marketValue`（持仓市值）、`cards.investment.profit`（累计收益）。
 
 组件均无 `data-testid`；金额值 span 恒带 `tabular-nums`。
-`InvestmentProductTile` 标签 span `text-banking-navy/60`、值 span `text-banking-deep`，
-`InvestmentsCard` 标签 `dt` `text-banking-navy/60`、值 `dd` `font-medium text-banking-deep`。
 `/investments` 页面以 `data-investment-holdings`（含持仓）与 `data-investment-products`（仅产品）标记 `.map` 区块。
 
 金额格式：`Money`→`formatCNY`（`lib/money.ts`，`¥#,##0.00` 精确到分）；
 `DecimalMoney`→`formatDecimalCNY`（`lib/decimal.ts`，HALF_UP 到两位）；二者输出形状一致（`[±]¥#,##0.00`）。
 `signed` 时正数前置 `+`。年化率经 `rateRatioToPercent`（比值×100）加 `%`，如 `3.2575%`。
+份额与净值经 `formatDecimalFixed` 定长输出，6 位与 4 位小数，不经金额格式化。
+净值日期经 `formatBusinessDate` 按 UTC+08:00 输出 `YYYY-MM-DD`。
 
 ## 卡片渲染（CardTile）
 
@@ -68,7 +122,7 @@ SDK 类型通过类型导入使用。
 分类限额块仅当 `card.limits.length > 0` 时渲染，每行标签是 `limit.category` 原始字符串（非 i18n），值为 `Money(limit.amount)`。
 `card.replacedByCardId !== undefined` 时插入 `business.cards.replaced` 徽章。
 
-虚拟卡（`card.type === 'VIRTUAL'`）另渲染账户绑定信息，均按字段存在与否条件渲染，缺失即不渲染（不使用占位文本）：
+虚拟卡（`card.type === 'VIRTUAL'`）另渲染账户绑定信息，均按字段存在与否条件渲染，缺失即不渲染：
 
 | 行 | 键 | 值 | 条件 |
 | --- | --- | --- | --- |
@@ -77,7 +131,7 @@ SDK 类型通过类型导入使用。
 | 当前可支付金额 | `business.cards.payableAmount` | `Money(card.payableAmount)` | 字段存在 |
 
 关联账户值是纯文本（脱敏账户号或内部标识），不经 `Money`。
-账户可用余额是绑定结算账户的**可用现金**，不是授信额度：它只用 `business.cards.accountAvailable`，
+账户可用余额是绑定结算账户的**可用现金**，不是授信额度：账户可用余额只用 `business.cards.accountAvailable`，
 绝不用 `business.cards.available`（可用额度）；信用额度与可用额度标签仍仅限 `card.type === 'CREDIT'`。
 账户可用余额与当前可支付金额并列于两列 `<dl className="grid grid-cols-2 gap-3">`（`dt` `text-xs text-banking-navy/60`，`dd` `text-sm font-semibold text-banking-deep`）；
 关联账户为 flex 行（标签 `text-banking-navy/60`，值 `font-semibold text-banking-deep`）。
@@ -90,6 +144,7 @@ SDK 类型通过类型导入使用。
 - 交互回调由客户端调用方提供。
 - 金额必须沿用通用组件的单位约定。
 - 脱敏号码不得代替服务端资源标识。
+- 持仓事实只在 `HoldingFacts` 维护，其他组件不得另写一份。
 
 界面测试方法见
 [test-cases.md](../../docs/cn/test-cases.md)。

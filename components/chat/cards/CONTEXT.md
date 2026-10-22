@@ -27,6 +27,59 @@
 授信额度标签 `business.cards.limit` / `business.cards.available` 仅限 `card.type === 'CREDIT'`。
 上述字段缺失时不渲染对应指标，不显示占位符或空值。
 
+## 理财结果卡（InvestmentsCard）
+
+`InvestmentsCard`（`ChatCard.type === 'investments'`）用 `data.products` 与 `data.holdings` 组装条目：
+每个持仓配其完整产品元数据，未持有的产品追加在后。
+持仓缺少产品元数据时，`buildEntries` 抛出 `Investment holding product metadata is missing.`，不静默跳过。
+
+汇总行只统计 `status === 'HOLDING'` 的持仓：
+
+| 指标 | 键 | 值 | 渲染条件 |
+| --- | --- | --- | --- |
+| 持仓金额 | `cards.investment.amount` | 各 `holding.amount` 相加，`Money` | 有持仓 |
+| 持仓市值 | `cards.investment.marketValue` | 各 `marketValue` 相加，`DecimalMoney` | 每个持仓都有 `marketValue` |
+| 累计收益 | `cards.investment.profit` | 各 `profit` 相加，`DecimalMoney signed` | 每个持仓都有 `profit` |
+
+字段缺失时，对应汇总指标不渲染，不用 0 补齐。
+
+每个持仓条目从上到下渲染：
+
+- 徽标：追加申购时为 `business.investments.addedToExisting`（已加购）；`valueBasis` 徽标取 `business.investments.valueBasis.migrated`（估算）或 `business.investments.valueBasis.insufficient`（历史数据不足）；状态取 `business.investments.holdingActive`（持有中）或 `holdingRedeemed`（已赎回）。
+- 持有金额：`business.investments.principal`，值 `Money(holding.amount)`，即剩余持仓成本。每个持仓只渲染 1 次。
+- 净值 + 份额事实：`<HoldingFacts holding={holding} layout="card" />`，与 tile 共用同一份事实来源。
+- 最近申购：`business.investments.lastPurchase`，值 `formatDateTime`。
+- 申购记录：`business.investments.purchases` 加 `purchaseCount`，只在有申购记录时渲染。
+
+卡片级口径脚注是 `business.investments.profitScope` 与 `business.investments.disclaimer`。
+仅当所有持仓条目都按净值 + 份额计价（`usesNetValueModel`）时，脚注才出现在卡片底部。
+事实、徽标与布局变体的规则见
+[banking/CONTEXT.md](../../banking/CONTEXT.md)。
+
+## 调用详情（ActionDetails）
+
+`ActionDetails.tsx` 是确认面板与历史授权记录共用的字段渲染器。
+`ConfirmationCard`、`MfaCard` 与 `ApprovalRecord` 都调用 `ActionDetails`。
+
+字段行来自服务端快照 `PendingActionSummary.fields`。
+界面按快照原样显示，不重新报价、不重算金额。
+标签与已知策略值经 `lib/i18n/display.ts` 翻译，未知标签和自由文本原样保留。
+
+通用金额行 `cards.amount`（金额）仅在 `action.amount` 是字符串、且下面两条同时成立时渲染：
+`fields` 里没有映射到 `cards.amount` 的字段，也没有映射到 `chat.field.settlementAmount`（预计到账金额）的字段。
+赎回快照自带 `预计到账金额`，因此不再追加 `cards.amount` 行，同一个金额不会显示两次。
+
+赎回到账快照由 `isRedemptionNetValueSnapshot(fields)` 判定：字段同时含 `赎回份额` 与 `成交净值`。
+命中时在字段下方追加说明：
+
+| 说明 | 键 | 文案 | 渲染条件 |
+| --- | --- | --- | --- |
+| 计算公式 | `chat.value.settlementFormula` | 到账金额 = 赎回份额 × 成交净值 | 命中快照 |
+| 费用口径 | `chat.value.feeRuleSimulatedNone` | 模拟环境不收取赎回费，赎回费 ¥0.00 | 费用口径字段值含 `SIMULATED_NONE` |
+| 重新确认 | `chat.value.reconfirmOnChange` | 确认期间净值变化时需重新确认 | 命中快照 |
+
+赎回字段与策略值的映射登记在 `lib/i18n/messages/display-sources.json`。
+
 ## 授权与状态
 
 `confirmation` 与 `mfa` 历史卡片使用 `ApprovalRecord`。
@@ -36,7 +89,7 @@
 终态记录不能因保留 RED 元数据而重新要求验证。
 
 `ReconciliationCard` 展示结果待核对的操作。
-它由对话界面单独组合，不属于卡片联合类型。
+`ReconciliationCard` 由对话界面单独组合，不属于卡片联合类型。
 结果未知时不得显示已成功、已失败或资金未变。
 
 `PlanCard` 展示节点与计划控制。
