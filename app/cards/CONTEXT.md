@@ -13,6 +13,28 @@
 客户端刷新只走 `GET /api/cards` 与 `GET /api/cards/changes`，只采用最新请求序号的响应。
 消费弹窗打开时只单独请求 `GET /api/cards/[id]/consumptions`，不在整页重复请求消费记录。
 
+## 接口
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/cards` | 读取当前卡片 |
+| `GET /api/cards/changes` | 恢复未完成的手动申请 |
+| `POST /api/cards` | 提交新增申请 |
+| `DELETE /api/cards/[id]` | 提交删除申请 |
+| `POST /api/cards/changes/[id]/verify` | 确认原申请并验证 |
+| `POST /api/cards/changes/[id]/cancel` | 取消尚未执行的申请 |
+| `POST /api/cards/[id]/consume` | 提交模拟消费 |
+| `GET /api/cards/[id]/consumptions` | 读取单卡消费记录 |
+
+所有接口的请求用户由服务端注入，客户端不得发送 userId。
+
+## 命令边界
+
+卡片新增与删除是模拟记录管理，只在页面办理，助手不能调用。
+冻结、解冻、挂失、补卡与分类限额调整走独立工具策略。
+虚拟卡申请与挂失卡补办可由助手发起，与其他敏感操作一样需要确认和验证码。
+手动申请使用 security/manual-card-management.ts：服务端要求 RED 验证、所有权检查与强制审计。
+
 ## CardView 原样直传
 
 `CardView` 由服务端投影，页面层不挑字段、不补默认值。
@@ -29,6 +51,9 @@
 不可用原因块位于摘要之前并使用 `role="status"`：卡片不可用时按 FROZEN/LOST/其它给提示，关联缺失或不可信时给对应提示。
 卡片不可用只禁用提交（入口按钮、`fieldset disabled`、`submit` 守卫、提交按钮 `disabled`），余额与限额摘要照常展示。
 入账时间归服务端所有；请求体只含 `amount`、可选 `category`/`merchant` 与 `executionKey`，含 `occurredAt` 会被 400 `VALIDATION` 拒绝。
+消费请求由服务端注入 userId；表单不接收真实卡号、支付凭据或密码。
+消费失败按错误码映射提示：资金不足、超出月限额、卡片不可消费或通用失败；VALIDATION 拒绝时展示服务端返回的原因。
+忙碌状态阻止重复提交与关闭弹窗。
 
 ## 幂等
 
@@ -43,3 +68,5 @@
 e2e 场景在 `tests/e2e/live-virtual-card.e2e-helper.ts` 与 `tests/e2e/card-management.e2e-helper.ts`。
 本目录只读这些测试，不修改测试文件；e2e 断言 `p[role="alert"]`，故不可用原因块不得改用 `role="alert"`。
 金额展示规则见 [financial-values.md](../../docs/cn/financial-values.md)。
+测试钩子：data-card-consume（入口）、data-card-consume-dialog、data-card-consume-card-id、data-card-consume-summary、data-card-consume-form、data-card-consumptions、data-card-consumption（记录行）、data-card-id（单个卡片容器）。
+消费相关 e2e 断言以 data-card-* 钩子定位，改动这些属性名会破坏 tests/e2e 下的场景。
