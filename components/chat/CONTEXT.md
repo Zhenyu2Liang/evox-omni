@@ -77,6 +77,7 @@
 `publicToolSummary` 对 `success`/`started`/`updated`/`cancelled` 及带 `actionId` 的 `blocked` 回落到 `localizeChatError`，
 未知字符串原样返回（`lib/i18n/display.ts:5-8`），`ToolEventList.tsx:85` 直接渲染该值。
 `sanitizeToolArguments` 只处理凭证、手机号与推理字段，不清洗内部标记。
+传输校验只判断类型：`transport-validation.ts:21`（`summary`/`debugDetail`）、`:76`（错误卡 `message`）、`:100`（`security_event.message`）都接受任意字符串，内部串可穿过校验进入渲染。
 
 ## 已知问题
 
