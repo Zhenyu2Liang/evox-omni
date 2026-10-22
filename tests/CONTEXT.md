@@ -124,7 +124,7 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 `helpers/scenario.ts:304-308` 复刻生产的投影：只发 `kind/code/reason/actionId/attemptsLeft/maxAttempts`，从不发 `message`，与 `agent/turns/events.ts` 同形；场景用例继承的可观测面已由 `unit/agent/turn-security-event.test.ts:56-67` 断言。
 `components/chat/transport-validation.ts:101` 对 `security_event` 校验 `kind` 为 id 串，可选 typed `code`/`reason`。
 出站/渲染文本不含 `__SECURITY_BLOCK__` 有多处负例：`unit/agent/turn-security-event.test.ts:38`、`unit/lib/public-text.test.ts:41`、`unit/planner/locked-card-rendering.test.ts:35`+`:106`、`unit/security/unlock-panel-render.test.ts:125`、`unit/weixin-lock-presentation.test.ts:207-246`、`unit/security/mfa-failure-contract.test.ts:101-102`、`integration/security-deny-redaction.test.ts:48`。
-`components/chat/transport-validation.ts` 对该帧只校验任意 `kind`/`message` 字符串，拒绝矩阵中没有这一帧。
+`lib/tool-feedback.ts` 的 `PUBLIC_BUSINESS_ERRORS`/`PUBLIC_ERROR_CODES` 不是导出契约，测试只经 `publicToolError`/`publicToolSummary` 逐条命中，登记表无完整性断言。
 没有任何用例断言用户可见文本不含 `__SECURITY_BLOCK__`：该字面量在 `tests/` 内只出现在 `unit/agent/providers/provider-mock.test.ts`（mock responder 的 block 前缀）。
 `lib/tool-feedback.ts` 的 `PUBLIC_BUSINESS_ERRORS`/`PUBLIC_ERROR_CODES` 不是导出契约，测试只经 `publicToolError` 逐条命中，登记表无完整性断言；其中锁定句→`chat.error.securityLocked` 与 `PUBLIC_ERROR_CODES.CIRCUIT_OPEN` 两条无用例。
 已开熔断时模型无法解锁：`resetSession` 需验证码或冷却，见 `unit/security/circuit-breaker-reset.test.ts`。
