@@ -2,6 +2,8 @@
 const nextConfig = {
   // Keep acceptance and build artifacts separate from an active developer server.
   distDir: process.env.BANKING_NEXT_DIST_DIR ?? '.next',
+  // Local browser checks and the Weixin demo use both localhost and IPv4 loopback.
+  allowedDevOrigins: ['127.0.0.1'],
   devIndicators: false,
   // Database and Pi runtimes execute on Node.js. External packages preserve their native
   // module loading under Next.js 16's default Turbopack bundler.
