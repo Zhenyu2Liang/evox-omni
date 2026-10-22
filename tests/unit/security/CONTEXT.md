@@ -50,6 +50,16 @@
    该用例不断言第三次的 `result.code`（源码为 `'CIRCUIT_OPEN'`）与 `mfaResult`。
 2. 已锁动作的重复提交（`lockedOutcome(..., 'mfa_session_locked')`）：`mfa-failure-contract.test.ts` 用**正确**验证码重投，
    断言 `status:'locked'`、`code:'CIRCUIT_OPEN'`、`failure.reason:'mfa_session_locked'`、`attemptsLeft:0`，挑战条数与尝试数不变、无新交易。
+   这里的 `code` 是**顶层** code，`failure.code` 同样为 `'CIRCUIT_OPEN'`；`status`/`code`/`failure` 三层同时被钉住。
+   `mfa-failure-contract.test.ts`（`describe('security-gateway · MFA failure contract')`，64 行）的 it 与行锚点：
+   `the attempt limit is 3`（65-67）、
+   `reports each wrong code as a typed, retryable failure with the remaining attempts`（69-104，`first`/`second` 的 `status:'awaiting_mfa'` + `code:'MFA_FAILED'` + `failure` 六字段 1/2→2/1）、
+   `the third wrong code locks the action, the challenge, and reports the terminal reason`（106-131，`third` 只断言 `failure.code:'MFA_LOCKED'` + `reason:'mfa_attempts_exhausted'`，**不断言** `third.code`）、
+   `a correct code on the locked action stays locked: no new challenge, no attempt, no execution`（133-168）、
+   `audits three MFA_FAILURE records with renderable counts and exactly one breaker trip`（170-188）。
+   `retry`（145 行赋值）是**第 4 次**提交，用 `CORRECT_CODE = '123456'`：`submitCode(action.id, sessionId, CORRECT_CODE)`；
+   149 行 `expect(retry.code).toBe('CIRCUIT_OPEN')` 断顶层 code，151 行 `failure.code` 同为 `'CIRCUIT_OPEN'`，154-155 行钉 `failure.attemptsLeft:0` + `maxAttempts`。
+   与 HTTP 契约同形：第三次的顶层 code 是 `CIRCUIT_OPEN`，`MFA_LOCKED` 只出现在 `failure.code`（对照 `tests/app/mfa-lock-http-contract.test.ts:236-238`）。
 3. 熔断闸门（`lockedOutcome(..., 'circuit_open')`）：`gateway.test.ts`（`locked session (breaker tripped) → refused, status 'locked', even with the correct code`）与 `authorize-hardening.test.ts`（`a locked session refuses a confirm with status 'locked' (row moved to 'locked')`）
    先用 `circuitBreaker.recordFailure` 循环触发熔断，再提交 `MFA_CODE`，断言 `ok`/`status`/`mfaResult === undefined` 与持久化行状态；两条都**不**断言 `code`/`failure`。
 
