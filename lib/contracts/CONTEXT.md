@@ -53,7 +53,9 @@ interface ToolCatalogEntry {
 ## 命令归一化（`command.ts`）
 
 - `BankingCommand.toolName`（8 行）类型为 `ToolName | ManualCardCommandName` —— 手工卡片命令不属于目录工具。
-- `MONETARY_FIELDS`（13 行）：`amount`、`creditLimit`、`monthlyLimit`、`expectedRedemptionAmount`、`redeemAmount`。
+- `MONETARY_FIELDS`（13 行）：`amount`、`creditLimit`、`monthlyLimit`、`expectedSettlementAmount`。
+- `DECIMAL_FIELDS`（14 行）：`shares`、`expectedShares`、`expectedNetValue`，按十进制文本归一化。
+- `redeem_investment`（55 行）描述为按份额或按金额赎回自有持仓，口径字段是 `mode`；`redeemAmount` 与 `expectedRedemptionAmount` 不在字段集合内。
 - `canonicalCommandArgs`（16–22 行）去掉 `idempotencyKey`、递归归一化嵌套对象、把金额字段转十进制字符串。
 - `prepareBankingCommand`（24–28 行）用 `requestDigest({ version:1, userId, toolName, args })` 生成 digest。
 

@@ -21,11 +21,21 @@
 ## 金融字段
 
 已入账金额使用 `BigInt` 分。
-例如 `balanceMinor`、`amountMinor` 和 `principalAmountMinor`。
+例如 `balanceMinor`、`amountMinor` 和 `realizedProfitMinor`。
 比例与未结算估值使用十进制文本。
-例如 `annualYieldRate` 与 `estimatedMarketValue`。
+例如 `annualYieldRate`、`latestNetValuePerUnit`、`shares` 与 `estimatedMarketValue`。
 结算与输出规则见
 [financial-values.md](../docs/cn/financial-values.md)。
+
+## 投资持仓字段
+
+`InvestmentProduct.latestNetValuePerUnit` 是 4 位小数的净值文本，`latestNetValueDate` 是该净值的业务日期。
+`InvestmentHolding.shares` 是 6 位小数的持有份额文本。
+`principalAmountMinor` 是剩余成本基数，不是已记账现金。
+`estimatedMarketValue` 只是未取整快照，读取一律由 `shares × latestNetValuePerUnit` 派生。
+`realizedProfitMinor` 累计已实现收益，默认 `0`，可为负。
+`purchaseHistory` 与 `redemptionHistory` 按笔保存份额、净值、净值日期与结算金额。
+口径与取整规则见[理财产品](../docs/cn/investments.md)。
 
 ## 卡片与账户模型
 

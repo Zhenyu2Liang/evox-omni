@@ -33,9 +33,16 @@
 | 入账金额 | booked amount | 已提交账本的整数分金额 |
 | 估值 | valuation | 尚未舍入为入账金额的价值估计 |
 | 年化收益率 | `annualYieldRate` | 无量纲比例，展示时转换为百分数 |
-| 全额赎回 | full redemption | 赎回持仓全部本金，持仓状态由持有变为已赎回 |
-| 部分赎回 | partial redemption、`partial` | 赎回本金小于持仓本金，剩余本金继续持有 |
-| 剩余本金 | `remainingPrincipal` | 赎回本金小于持仓本金时，持仓剩余的本金 |
+| 净值 | `latestNetValuePerUnit` | 每份持仓的价格，规范十进制文本，保留 4 位小数 |
+| 份额 | `shares` | 持有份数，规范十进制文本，保留 6 位小数 |
+| 净值日期 | `latestNetValueDate` | 净值对应的业务日期，按 UTC+08:00 展示 |
+| 持仓市值 | `marketValue` | `份额 × 净值` 的未取整估值 |
+| 剩余持仓成本 | `principalAmountMinor` | 赎回后剩余的持仓成本，按份额比例扣减 |
+| 持仓收益 | unrealized profit | 未实现收益，等于持仓市值减剩余持仓成本 |
+| 已实现收益 | `realizedProfitMinor` | 每次赎回的到账金额与其消耗成本之差，可为负 |
+| 累计收益 | cumulative profit | 已实现收益与持仓收益之和 |
+| 全额赎回 | full redemption、`ALL` | 赎回全部份额并关闭持仓 |
+| 部分赎回 | partial redemption、`SHARES`、`AMOUNT` | 赎回部分份额，剩余份额与成本继续持有 |
 | 追加申购 | `addedToExisting` | 对已持有产品再次申购，并入现有持仓 |
 | 银行业务工具库 | SDK、`banking-sdk/` | 执行所属用户的模拟银行业务 |
 | 有符号 64 位整数 | INT64 | 当前已入账金额的数据库存储范围 |

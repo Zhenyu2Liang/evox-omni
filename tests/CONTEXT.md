@@ -78,6 +78,11 @@ mock 夹具播种 `card_credit`/`card_debit`，演示种子（`prisma/seed.ts`�
 `unit/planner/mock-amount-clarification.test.ts` 与 `app/nl-entry-http.test.ts` 覆盖「信息不足→澄清，不产生工具调用」，但澄清为结构化 `missing_details` 或纯文本追问，非“面板”声称。
 细节见各子目录 CONTEXT.md。
 
+## 投资净值与份额口径的覆盖
+
+`unit/banking-sdk/net-value-redemption.test.ts` 覆盖份额折算、按份额／金额／全额赎回的结算与成本守恒。
+`unit/security/redemption-stale-authorization.test.ts` 覆盖确认快照不一致时的 `CONFLICT`：本次零写入、`PendingAction` 为 `failed`，同身份重放返回原回执与原净值。
+
 ## 卡片生命周期能力契约的覆盖
 
 能力事实以 `lib/contracts/tool-catalog.ts` 与 `lib/contracts/card-management.ts` 为准：

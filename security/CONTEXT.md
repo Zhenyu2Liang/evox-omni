@@ -55,6 +55,9 @@
 快照字段为 `expectedShares`、`expectedNetValue`、`expectedNetValueDate`、`expectedSettlementAmount`。
 快照字段属于服务端报价，重复挂起时不计入请求身份（`requestArgs`）。
 快照字段同时进入命令指纹，口径或金额变化会作废旧授权。
+执行时快照与当前净值、份额或重算金额不一致即抛 `CONFLICT`（`净值或持仓已变化，请重新确认`）。
+该次执行零写入，`PendingAction` 置为 `failed`，用户必须重新确认。
+同身份重放不重新报价，返回原始回执与原净值。
 本层只快照报价，不改变余额。
 
 `mfa.ts` 把 5 分钟墙钟挑战绑定到命令，保留有效尝试并记录消费。

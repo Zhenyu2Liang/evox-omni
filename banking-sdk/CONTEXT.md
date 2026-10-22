@@ -6,41 +6,78 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 能力从 `banking-sdk/index.ts` 导入；DTO 位于 `types.ts`。金额输入与输出都是十进制字符串。仓储持久化使用 bigint 人民币分保存已记账金额，使用规范十进制 TEXT 保存收益率与估值。`MoneyInput` 只接受字符串。`normalizeMoney` 校验已记账精度；缺省值不等于零。
 
-当前产品收益率是 `annualYieldRate`，为无量纲比例。持仓本金是 `principalAmountMinor`；预估人民币市值是 `estimatedMarketValue`。公开持仓的 `amount` 是已记账本金，`marketValue` 与 `profit` 保留估值精度。百分比只在展示层转换。
+产品年化收益率是 `annualYieldRate`，为无量纲比例。投资持仓按净值与份额核算：`latestNetValuePerUnit` 是规范十进制净值，`shares` 是持有份额，`principalAmountMinor` 是剩余成本基数。公开持仓的 `amount` 是剩余持仓成本，`marketValue` 是未取整估值，`profit` 是未实现收益，`realizedProfit` 是已实现收益，`cumulativeProfit` 是累计收益。百分比只在展示层转换。
 
-单个持仓没有 SDK 内的收益累积：市值就是已存储的十进制值。认购按成本价计价（等于本次认购本金），因此时间基准是最近一次认购时刻，不额外计提增长。
+单个持仓没有 SDK 内的时间累积：净值只取产品发布的 `latestNetValuePerUnit`，SDK 不按时间推导增长。市值一律由 `shares × latestNetValuePerUnit` 派生；`estimatedMarketValue` 只是列上的快照，读取不使用它。持仓收益是未实现收益，等于市值减去剩余成本；追加申购金额不计入收益。
 
 十进制最多 40 位整数与 18 位小数。SDK 使用精确算术、拒绝非法值，只在文档化的结算边界取整。当前赎回策略是 HALF_UP 到人民币分；授权与执行使用同一换算。最终余额与流水仍是有符号 INT64 分。
+
+## 净值与份额换算
+
+`banking-sdk/net-value.ts` 是无读写的纯函数模块。
+常量是 `NET_VALUE_DECIMALS = 4`、`SHARE_DECIMALS = 6` 与 `REDEMPTION_FEE_RULE = 'SIMULATED_NONE'`。
+`floorToShares` 与 `sharesFromAmount` 用 FLOOR 折算 6 位小数份额，结果为零抛 `VALIDATION`（`折算份额为零`）。
+`marketValueFromShares` 返回未取整的精确乘积。
+`settlementFromShares` 只做一次 HALF_UP 结算到人民币分。
+`redeemedCostMinor` 按份额比例扣减成本并 HALF_UP 到分，已赎回成本与剩余成本之和恒等于原成本。
+`remainingSharesOf` 返回剩余份额，`profitRateOf` 返回 18 位小数比例，成本为零时返回 `undefined`。
+安全层铸造确认快照与执行结算都调用这些函数，确认金额与执行金额不会分叉。
+
+`holdingValuation` 是 `listHoldings`、仪表盘与赎回共用的唯一估值规则。
+份额或净值缺失时，市值回退为剩余成本、收益缺省，`valueBasis` 为 `HISTORICAL_DATA_INSUFFICIENT`。
 
 ## 认购：新建或聚合
 
 `subscribeInvestment` 先校验 `userId` 与正金额，再在同一个事务内判断该 (用户, 产品) 是否已有 `HOLDING`。
+产品没有净值时抛 `VALIDATION`（`该产品未发布净值，暂不可申购`）。
+本次所得份额是 `FLOOR(金额 ÷ 最新净值, 6 位小数)`。
 
-- 没有 `HOLDING`：扣减资金账户余额、创建持仓、写入投资流水 `Transaction`，把原始结果持久化到 `subscribeResult`，并在 `purchaseHistory` 记录本次（创建）认购。
-- 已有 `HOLDING`：把本次本金累加到 `principalAmountMinor`，把新增本金按成本价累加到未取整市值，保持 `HOLDING`，并向 `purchaseHistory` 追加一条认购记录。
+- 没有 `HOLDING`：扣减资金账户余额、创建持仓并写入 `shares` 与成本、写入投资流水 `Transaction`，把原始结果持久化到 `subscribeResult`，并在 `purchaseHistory` 记录本次（创建）认购。
+- 已有 `HOLDING`：把本次金额累加到 `principalAmountMinor`，把所得份额累加到 `shares`，保持 `HOLDING`，并向 `purchaseHistory` 追加一条认购记录。
 
-低于 `product.minAmountMinor` 抛 `VALIDATION`；资金不足抛 `INSUFFICIENT_FUNDS`。扣款使用条件写（`balance >= amount`），并发下不会透支。余额变动、持仓变动、流水行与结果持久化在同一事务内提交。
+低于 `product.minAmountMinor` 抛 `VALIDATION`；资金不足抛 `INSUFFICIENT_FUNDS`。
+扣款使用条件写（`balance >= amount`），并发下不会透支。
+余额变动、持仓变动、流水行与结果持久化在同一事务内提交。
 
-`purchaseHistory` 是 JSON 数组，元素形如 `{ at, amount, totalPrincipal, marketValue, newBalance, sourceAccountId, executionKey? }`。`at` 是本次认购的毫秒时间戳，`totalPrincipal` 与 `marketValue` 是聚合后的值，首个元素是创建持仓的那笔认购。
+`purchaseHistory` 是 JSON 数组，元素形如 `{ at, amount, totalPrincipal, marketValue, shares?, netValuePerUnit?, netValueDate?, totalShares?, newBalance, sourceAccountId, executionKey? }`。
+`at` 与 `netValueDate` 是毫秒时间戳，`marketValue`、`totalPrincipal` 与 `totalShares` 是本次认购后的持仓值，首个元素是创建持仓的那笔认购。
+缺少份额与净值字段的元素来自更早写入的记录，读取时不补造。
 
 `HoldingView` 暴露 `lastPurchaseAt` 与 `purchases`（从旧到新）；`InvestResult` 暴露 `addedToExisting` 与 `lastPurchaseAt`。
 
-## 赎回：全额与部分
+## 赎回：按份额、按金额或全额
 
-`redeemInvestment` 处理单个持仓；`redeemAmount` 是可选的、以本金计价的人民币金额。
+`redeemInvestment` 处理单个持仓，`mode` 是运行时必需的显式口径。
+缺少或未知的 `mode`、以及已退出的 `redeemAmount` 都在任何读取之前抛 `VALIDATION`（`赎回需要明确口径：请确认按「份额」还是按「金额」赎回`）。
 
-- 缺省，或等于持仓本金：全额赎回。`HOLDING` 原子地转为 `REDEEMED`，一次性入账全部已结算估值。
-- 小于持仓本金：部分赎回，保持 `HOLDING`。入账该本金部分对应的已结算估值，减少 `principalAmountMinor`，重算未取整的剩余市值，并向 `redemptionHistory` 追加一条部分赎回记录。
+- `SHARES`：按份额赎回，需给出正份额，不得超过持有份额。
+- `AMOUNT`：按金额赎回，份额是 `FLOOR(金额 ÷ 最新净值, 6 位小数)`；折算份额为零或金额超过当前市值都抛 `VALIDATION`（`赎回金额超过持仓市值，请改用全额赎回或按份额赎回`）。
+- `ALL`：赎回全部份额并关闭持仓，同时给出份额或金额抛 `VALIDATION`。
 
-超过持仓本金、非正数或格式非法的 `redeemAmount` 都抛 `VALIDATION`（`赎回本金金额不能超过持仓本金` / `赎回本金金额必须大于零`）；非正数在任何写入之前即被拒绝。
+混用口径一律拒绝，不会静默放大为全额赎回。
+产品没有净值时抛 `VALIDATION`（`该产品未发布净值，暂不可赎回`）；持仓没有记录份额时抛 `CONFLICT`（`该持仓尚未记录份额，暂不可赎回`）。
 
-按比例估值规则：设 `MV` 为当前 `estimatedMarketValue ?? centsToMoney(principalAmountMinor)`，`T` 为当前本金，`R` 为赎回本金。`portionValuation = MV × R / T` 用有理数做有界小数除法，最多保留 18 位小数（SDK 的小数存储上限），此后只做一次 HALF_UP 结算到人民币分。`remainingMarketValue = MV − portionValuation` 为精确相减，因此 `portionValuation + remainingMarketValue = MV`。`R === T` 时 `portionValuation` 就是 `MV`，全额与部分共用同一套估值与结算代码。
+到账金额是 `HALF_UP(赎回份额 × 成交净值, 人民币分)`，只取整一次。
+赎回费恒为 `0.00`，`feeRule` 恒为 `REDEMPTION_FEE_RULE`（`SIMULATED_NONE`）。
 
-`banking-sdk/valuation.ts` 导出这套比例估值的纯函数：`redemptionPortionValuation`、`settledRedemptionAmount`、`remainingPortionMarketValue`，并由 `investment.ts` 与 `index.ts` 再导出。安全层铸造确认快照时应调用同一函数，使确认金额与执行结算金额无法分叉。
+成本按份额比例扣减：`redeemedCostMinor` 用 `剩余成本 × 赎回份额 ÷ 总份额` 并 HALF_UP 到分，剩余成本等于原成本减去该值，两者相加恒等于原成本。
+已实现收益按 `到账金额 − 该次消耗成本` 累加到 `realizedProfitMinor`，可为负，此后不再重算。
 
-`redemptionHistory` 只记录部分赎回，是 JSON 数组，元素形如 `{ at, redeemedPrincipal, valuation, settledAmount, remainingPrincipal, remainingMarketValue, newBalance, sourceAccountId, executionKey? }`；`valuation` 是单次结算前的未取整估值。全额赎回沿用 `redeemExecutionKey` 与 `redeemResult` 保存原始结果。
+`ALL` 把 `HOLDING` 原子地转为 `REDEEMED`，把原始结果持久化到 `redeemExecutionKey` 与 `redeemResult`。
+`SHARES` 与 `AMOUNT` 保持 `HOLDING`，扣减 `shares` 与 `principalAmountMinor`，并向 `redemptionHistory` 追加一条记录。
 
-`expectedRedemptionAmount` 必须等于本次应入账的已结算金额：部分赎回按当前持仓与 `R` 重算 `portionValuation` 后再比较，不一致抛 `CONFLICT`。
+`redemptionHistory` 是 JSON 数组，元素形如 `{ at, redeemedShares, totalShares, netValue, netValueDate?, settledAmount, cost, remainingShares, remainingCost, remainingMarketValue, newBalance, sourceAccountId, executionKey? }`。
+`remainingCost` 同时以 `remainingPrincipal` 别名出现，供更早写入的记录复用。
+全额赎回的 `redeemResult` 中 `remainingPrincipal` 与 `remainingShares` 都是零。
+
+`HoldingView` 暴露 `shares`、`latestNetValue`、`latestNetValueDate`、`marketValue`、`profit`、`profitRate`、`realizedProfit`、`cumulativeProfit`、`valueBasis`、`purchases` 与 `redemptions`。
+
+## 确认快照与陈旧授权
+
+`redeemInvestment` 接受四个可选的确认快照字段：`expectedShares`、`expectedNetValue`、`expectedNetValueDate` 与 `expectedSettlementAmount`。
+执行时在写事务内重新读取产品净值与持仓份额，并重算到账金额。
+任一字段与当前事实不一致时抛 `CONFLICT`（`净值或持仓已变化，请重新确认`），本次零写入。
+按新净值静默成交永不允许；用户必须重新确认后才能执行。
 
 ## 幂等与并发
 
