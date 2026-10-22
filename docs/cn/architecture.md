@@ -53,8 +53,9 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 | 工具适配器 | [tools](../../agent/tools/) | 参数 schema 和服务端用户绑定的执行器。 |
 | 轮次声明与计划编译 | [intent-context.ts](../../agent/intent-context.ts)、[turn-intent.ts](../../agent/tools/turn-intent.ts)、[plan-compiler.ts](../../agent/tools/plan-compiler.ts) | 本轮用途、写操作顺序、参数 schema 和节点输出。 |
 | 工作流执行 | [planner](../../planner/)、[workflows](../../agent/workflows/) | 图状态、节点认领、持久化、控制和续跑。 |
+| 计划失败契约 | [failure.ts](../../planner/failure.ts)、[node-outcome.ts](../../planner/node-outcome.ts) | 结构化拒绝携带、封存判定和节点结果映射。 |
 | 授权与确认 | [security](../../security/)、[confirmation](../../agent/confirmation/) | 权限、身份、执行有效性和原计划续跑。 |
-| 安全失败与公开文案 | [security-gateway.ts](../../security/security-gateway.ts)、[public-text.ts](../../lib/public-text.ts)、[tool-feedback.ts](../../lib/tool-feedback.ts) | 结构化拒绝事实、锁定终态和对外文案收口。 |
+| 安全失败与公开文案 | [security-gateway.ts](../../security/security-gateway.ts)、[public-text.ts](../../lib/public-text.ts)、[tool-feedback.ts](../../lib/tool-feedback.ts)、[public-security-event.ts](../../app/api/_lib/public-security-event.ts)、[public-task-text.ts](../../app/schedules/public-task-text.ts) | 结构化拒绝事实、锁定终态和各类对外文案收口。 |
 | 脚本模型 | [mock-responder.ts](../../agent/providers/mock-responder.ts)、[mock](../../agent/providers/mock/) | 按意图分派、解析和结果说明。 |
 | 金融命令事务 | [command-execution.ts](../../agent/command-execution.ts) | 参数摘要、回执核验和原子提交。 |
 | 银行业务 | [banking-sdk](../../banking-sdk/) | 资源所有权、精确金额运算和模拟业务变更。 |
@@ -278,6 +279,87 @@ Groq、OpenRouter、xAI、Mistral 和 Cerebras。
 人工接手规则见[人工核对](manual-review.md)。
 后台核对演示只在开发者模式提供。
 卡片增删使用独立页面流程，规则见[卡片管理](card-management.md)。
+
+## 安全拒绝的传播
+
+拒绝事实按网关、工具结果、计划节点、运行时结算、HTTP 出口、页面呈现的顺序传递。
+每一步只传结构化字段，原始网关载荷不进入可渲染文本。
+网关的拒绝事实与锁定规则见[安全设计](security.md#多因子认证)。
+
+1. 网关判定拒绝并返回 `SecurityFailure` 的 `code`、`reason` 和次数。
+2. [gated-execution.ts](../../agent/confirmation/gated-execution.ts)的 `blockedOutcome` 只取 `parseBlockReason` 解析出的 `failure` 作为对外拒绝。
+3. [outcomes.ts](../../agent/confirmation/outcomes.ts)的 `publicRefusalMessage` 按三级顺序取文案：有 `failure` 时用 `securityNotice`，只有 `code` 时用 `publicToolError`，其余用 `safePublicText`。
+4. 计划节点把拒绝保存为 `PlanFailure`，并据此拒绝再次驱动该节点。
+5. 运行时把动作终态结算到工具调用，HTTP 出口按错误码返回状态码或领域结果。
+6. 页面与微信只渲染 [public-text.ts](../../lib/public-text.ts) 生成的公开文案。
+
+计划层的失败契约在 [failure.ts](../../planner/failure.ts)。
+`PlanFailure` 含 `code`、可选 `reason`、`actionId` 和次数。
+`toPlanFailure` 只复制已存在的类型化字段，`AppError` 只保留 `code`。
+`isLockedRefusal` 依据 `reason` 或 `code` 判定，不读取消息文本。
+
+节点结果用可选字段 `failure` 与 `actionStatus` 携带这两个事实。
+[node-outcome.ts](../../planner/node-outcome.ts)的 `settleToolNode` 原样携带这两个字段。
+同一次映射用 `publicFailureText` 投影 `summary` 和 `error`。
+内部诊断因此不会写入节点字段，业务正文按原样保留。
+缺少这两个字段的节点不视为封存。
+
+`SealReason` 取 `locked_refusal` 或 `action_not_open`。
+`sealReason` 先判锁定拒绝，再判 `actionStatus` 已不属于 `pending` 或 `awaiting_mfa`。
+[executor.ts](../../planner/executor.ts)的 `runToolNode` 在认领节点之前调用 `mayDriveNode`。
+被封存的节点走 `sealNode`，不调用工具，也不新建待决定动作。
+`sealNode` 只把节点收敛为 `failed`，已记录的拒绝事实保持不变。
+工具抛出的错误同样记录为 `failure` 和经投影的 `error`。
+
+`mayResetNode` 只按封存状态拒绝重置。
+[executor.ts](../../planner/executor.ts)的重试扫描与 [lifecycle.ts](../../planner/lifecycle.ts)的 `retryPlan` 都跳过封存节点。
+`resumePlan` 在 `mayDriveNode` 为假时原样返回计划，不记录过时决定。
+[parked-actions.ts](../../agent/workflows/parked-actions.ts)的 `assertParkedActionsNotTerminal` 在认领之前只读检查停等动作。
+该检查在动作已终态时抛出结构化 `AppError`。
+`locked` 返回 `MFA_LOCKED`，其他终态返回 `CONFLICT`。
+检查的诊断字段只写入 `detail`。
+
+[agentRun.ts](../../lib/db/repositories/agentRun.ts)的 `settleInvocationFromAction` 把 `locked` 结算为 `ToolInvocation.status='failed'` 和 `errorCode='MFA_LOCKED'`。
+`locked` 不结算为 `needs_reconciliation`，因为锁定是已知结果而非未知提交。
+`SETTLED_PENDING_ACTION_STATUSES` 含 `locked`，`RUN_BLOCKING_PENDING_ACTION_STATUSES` 不含 `locked`。
+先结算再判定运行终态，因此只含锁定动作的运行也结束为 `failed`。
+
+[app/api/_lib/http.ts](../../app/api/_lib/http.ts)的 `STATUS_BY_CODE` 统一映射错误码：
+
+| 错误码 | HTTP 状态 |
+| --- | --- |
+| `MFA_LOCKED`、`CIRCUIT_OPEN` | `423` |
+| `SECURITY_DENIED`、`MFA_FAILED` | `403` |
+| `CONFLICT` | `409` |
+| `VALIDATION` | `400` |
+| `NOT_FOUND` | `404` |
+| `INSUFFICIENT_FUNDS`、`LIMIT_EXCEEDED` | `422` |
+| `TOOL_FAILED` | `502` |
+| `INTERNAL` 与未知异常 | `500` |
+
+非 `AppError` 的异常只返回 `INTERNAL` 和通用消息。
+响应信封为 `{ ok: true, data }` 或 `{ ok: false, error }`。
+
+已锁定动作上的决定请求返回领域结果，不返回错误信封。
+[locked-action.ts](../../app/api/_lib/locked-action.ts)的 `lockedActionRefusal` 返回 `200` 且 `data.ok=false`。
+该拒绝携带 `code='CIRCUIT_OPEN'` 与 `failure.reason='mfa_session_locked'`。
+拒绝文案固定，不含验证码，也不推断剩余次数。
+`/api/actions` 的决定状态只含 `pending`、`awaiting_mfa` 和 `needs_reconciliation`。
+
+安全事件在出口处净化。
+[public-security-event.ts](../../app/api/_lib/public-security-event.ts)的 `publicSecurityEvent` 保留标识、时间、会话、类型与严重级别。
+空消息或内部诊断消息落为空字符串，键本身保留。
+`detail` 仅在为纯 JSON 且所有字符串叶子都非内部诊断时保留，否则整键省略。
+事件本身不会被过滤或丢弃。
+`/api/security` 的事件与状态内近期事件都经过该投影。
+
+任务读取接口附加动作的当前状态。
+[task-pending-actions.ts](../../app/api/_lib/task-pending-actions.ts)为带 `pendingActionId` 的节点补充只读字段 `pendingActionStatus`。
+该模块不写状态，动作行缺失时不补充字段。
+
+对话流、确认卡片与微信桥都调用 `securityNotice`，不自行拼接拒绝文本。
+[public-task-text.ts](../../app/schedules/public-task-text.ts)的 `publicScheduleText` 单独门控 `/schedules` 的服务端文本。
+该函数只用 `isInternalDiagnostic` 判定，不用 `safePublicText`，因此业务正文按原样显示。
 
 ## 金融命令事务
 
