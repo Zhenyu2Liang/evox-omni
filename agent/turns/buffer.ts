@@ -9,6 +9,7 @@ import type { ToolExecutionResult } from '../tools';
 import type { ResumeTurnInput, TurnBuffer } from './contracts';
 import { safeToString } from './message-utils';
 import { cardFingerprint } from '@/lib/chat-cards';
+import { isInternalDiagnostic } from '@/lib/public-text';
 import type { ConversationIntent } from '@/lib/contracts/intent';
 import { inspectReplyFormat } from '../reply-format';
 import { toolPresentationId } from '../tool-presentation-identity';
@@ -107,6 +108,17 @@ export function activePlanMessage(buffer: TurnBuffer): ChatMessage | undefined {
     ?? buffer.resumedPlanMessage;
 }
 
+/**
+ * The public summary of a SETTLED authorized call. An internal diagnostic (a `__SECURITY_BLOCK__…`
+ * refusal payload, a JSON fragment or a stack trace) never becomes public text: the row falls back
+ * to the catalog key, and the typed refusal reaches the user through its structured `security_event`.
+ */
+function settledSummary(result: ToolExecutionResult): { summary?: string } {
+  const text = result.summary || result.error;
+  if (!text) return {};
+  return { summary: isInternalDiagnostic(text) ? 'chat.error.toolFailed' : text };
+}
+
 /** Settle the original recorded call without assigning the result to an unrelated later message. */
 export function publishAuthorizedToolOutcome(buffer: TurnBuffer, transcript: ChatMessage[], input: ResumeTurnInput): void {
   if (!input.toolCallId || !input.toolName) return;
@@ -115,7 +127,7 @@ export function publishAuthorizedToolOutcome(buffer: TurnBuffer, transcript: Cha
   const view: ToolEventView = { toolCallId: input.toolCallId, toolName: input.toolName,
     status: toolResultStatus(input.toolResult),
     ...(input.actionId ? { actionId: input.actionId } : {}),
-    ...(input.toolResult.summary ? { summary: input.toolResult.summary } : input.toolResult.error ? { summary: input.toolResult.error } : {}),
+    ...settledSummary(input.toolResult),
   };
   for (let index = transcript.length - 1; index >= 0; index--) {
     const message = transcript[index];
