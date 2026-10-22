@@ -100,6 +100,13 @@ JSON success uses `{ ok: true, data }`; failure uses `{ ok: false, error: { code
 with `data.ok === false`; the envelope does not imply that money moved. Raw exceptions, stack traces,
 database errors, passwords and verification codes must not be exposed.
 
+Every handler is ONE blanket `try { … } catch (e) { return errorResponse(e); }` (`tasks/[id]/route.ts:66-67,91-92`, `tasks/route.ts:62-64`, `security/reset/route.ts:97-98`), so no route picks statuses itself.
+`_lib/http.ts:19-31` `STATUS_BY_CODE` is the only `AppError` → HTTP mapping: VALIDATION 400, NOT_FOUND 404, SECURITY_DENIED 403, MFA_FAILED 403, CIRCUIT_OPEN 423, MFA_LOCKED 423, INSUFFICIENT_FUNDS 422, LIMIT_EXCEEDED 422, CONFLICT 409, TOOL_FAILED 502, INTERNAL 500.
+`mapAppError` (`:50-54`) sends every non-`AppError` throw through `AppError.from` (`lib/errors.ts:24`) to `INTERNAL`, so an unknown error — and any code absent from the map (`?? 500`) — becomes `500` with the generic `Internal error` message; nothing bubbles to a framework 500.
+The PRE-checks throw too, not just the delegated domain call: `requireIdentity` (`_lib/session.ts:23-25`) upserts and re-reads the demo session via `getDemoSession` (`agent/session.ts:150-158`), which throws a plain `Error` (→ 500) when the row belongs to another user or cannot be re-read; `parseBody` (`_lib/http.ts:71-83`) throws `VALIDATION` on malformed JSON or a schema mismatch; `getTask` either returns `null` (routes turn it into `404`) or lets a driver error become a `500`.
+`POST /api/tasks/[id]` therefore answers a control refusal as an HTTP failure, never as `200 { ok:false }`: it delegates to `resolveTaskControl(action)(sessionId, id)` (`_lib/agent-bridge.ts:59-82`, static `@/agent` imports, `TOOL_FAILED` when an action has no implementation) and the agent node's `AppError`s surface as the mapped status (`NOT_FOUND`/`SECURITY_DENIED` from `agent/workflows/ownership.ts:9-12`, `CONFLICT` from `lib/db/repositories/manualReview.ts:6`, `MFA_LOCKED`/`CONFLICT` from `agent/workflows/parked-actions.ts:74-76`, `CONFLICT` from `agent/task-rollback.ts:18-20`).
+Its `TOOL_FAILED` fallback for a falsy plan (`tasks/[id]/route.ts:87-89`) is currently unreachable: every wired `@/agent` control returns a `TaskPlan`.
+
 Chat SSE emits one `data: <JSON>` frame per grounded `AgentStreamEvent` and exactly one final `done`.
 The route supplies an awaited `RunTurnDeps.onEvent` sink: runtime events are persisted before they
 are published. JSON mode returns the same ordered presentation events. Stable request IDs bind
