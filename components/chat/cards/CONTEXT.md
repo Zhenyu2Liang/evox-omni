@@ -33,7 +33,9 @@
 当前交互由父目录 `ApprovalRequest` 提供。
 `ConfirmationCard` 与 `MfaCard` 提供该交互的具体控件。
 `confirmationStatus.ts` 解释持久化操作状态。
-终态记录不能因保留 RED 元数据而重新要求验证。
+`MfaCard` 与 `ApprovalRecord` 都只在终态为 `failed` 时用 `publicToolError(statusMessage/message, t)` 渲染原因行；
+`locked` 只渲染状态徽标（`cards.terminal.locked` / `chat.approval.status.locked`），原文仅开发者模式可见。
+`publicToolError` 未传 `errorCode` 时回落到 `chat.error.toolFailed`；传入时按 `PUBLIC_ERROR_CODES`（如 `CIRCUIT_OPEN` → `chat.error.securityLocked`）。
 
 `ReconciliationCard` 展示结果待核对的操作。
 它由对话界面单独组合，不属于卡片联合类型。
