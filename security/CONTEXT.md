@@ -132,6 +132,15 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 `expectedRedemptionAmount` 属于服务端报价，重复挂起时沿用原报价。
 本层只快照报价，不改变余额。
 
+## 结果通知（recordActionResult）
+
+`security-gateway.ts#recordActionResult(actionId, 'executed'|'failed')` 只做一次 `claimPendingAction({ actionId, from: RESULT_RECORDABLE_STATUSES, to: status })`，即只写 `PendingAction.status`。
+它不写 `resultJson`、不写 `AuditLog`、不写 `AuthorizationDecision` 或 `SecurityEvent`；行不存在时抛 `NOT_FOUND`，落在不可覆盖状态（`locked`）时静默返回。
+真正的执行证据由 `agent/confirmation-recovery.ts#settlePendingAction` 落地（同一事务内 `claimPendingAction` 加 `resultJson`），本函数只是其后的尽力通知。
+它以方法形式挂在 `securityGateway` 对象字面量上（`security-gateway.ts#1366`），没有独立的命名导出，只能从对象上取用或以属性形式打桩。
+唯一生产调用方是 `agent/confirmation/authorized-execution.ts`：`:32` 在无法解析所属会话时提前上报 `'failed'`；`:76` 在副作用提交且结算落定之后上报，条件为 `landed && status ∈ {'executed','failed'}`，并被 try/catch 吞掉失败。
+该文件写的是 `gateway.recordActionResult(...)`，其中 `gateway = security.gateway.securityGateway` 在模块加载时绑定；属性在调用时才查，因此对**同一对象**上该属性的 `vi.spyOn` 会被命中，替换整个 `securityGateway` 对象则不会。
+
 ## 已知边界
 
 `lib/db/repositories/pendingAction.ts#setPendingActionStatus` 仍是无条件状态写入原语，本层与 `agent/` 都不再调用它（别名 `updatePendingActionStatus` 同样无人使用），只剩测试引用；状态写入一律走 `claimPendingAction`。
