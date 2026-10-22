@@ -13,6 +13,22 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 - `./context-compaction/`: historical summaries and bounded model-request projection.
 - `./messages/`: presentation message catalogs.
 
+## Root-level modules (flat files, no child owner)
+
+- `index.ts`: the ONLY public facade for `app/api/**` and `tests/`; it also defines `recoverAction` (standalone-wedge recovery entry point) and the `pauseTask`/`resumeTask`/`cancelTask`/`retryTask`/`getTaskPlan` wrappers, which inject `taskRunToolFor` → `executeGatedTool`.
+- `index.ts` is NOT a complete barrel: `tickAgentRecovery`/`runAgentRecoveryWorker` are importable only as `@/agent/recovery-worker` (tests/helpers do exactly that).
+- `confirmation.ts`: thin orchestrator — `confirmAction`/`verifyAction`/`cancelAction` (plus aliases `confirm`/`verify`/`cancel`) assert ownership, call the security gateway, then `executeAuthorizedAction`.
+- `confirmation-recovery.ts`: `settlePendingAction` is the ONE landing primitive (terminal status + `resultJson` + strict audit + invocation settlement in ONE `prisma.$transaction`, optional `from` CAS); also `recoverStandaloneWedge` (receipt-first standalone wedge), the ref-counted live registry (`retainAction`/`releaseAction`/`isActionLive`), the durable lease clock and `classifyConfirmedAction`.
+- `execution-fence.ts`: agent-side SDK write fences (`buildPlanNodeFence`, `buildAutomaticWriteFence`, `buildConfirmFence`, `guardExecutionFence`); they take SQLite's writer slot with conditional identity-preserving writes inside the SDK mutation transaction and never change an action's status (`:227` is a `confirmed`→`confirmed` CAS).
+- `manual-review.ts`: operator handoff — `openManualReview` (pauses a non-failed plan), `resolveManualReview` (retry/resume/stop), `getManualReviewInbox`; stop cancels parked actions and the plan.
+- `task-control.ts`: pure re-export facade over `./workflows` (claims, contracts, persistence, ports, ownership, controls, cancellation, action-continuation).
+- `task-decision.ts`: `nextPlanDecision(sessionId, taskId)` re-renders the next real `PendingAction`-backed plan decision event after a human continuation.
+- `task-fencing.ts`: fenced node writes (`recordDecidedNodeFenced`, `settlePlanFromNodes`) conditioned on the live node/plan claim token.
+- `task-rollback.ts`: `rollbackTask` compensation of a cancelled plan's budget/scheduled records only; every other write is retained with a receipt.
+- `recovery-worker.ts`: `tickAgentRecovery` / `runAgentRecoveryWorker` discover `listRecoverableAgentRuns` and dispatch each to `durable/service.recoverOwnedRun`; default batch 25 (1–100), default interval 5000 ms (250–60000).
+- `authorization-resume.ts`: `performAuthorizationResume` writes NO action state — it injects an already-committed outcome into the original provider call/group and saves the session.
+- Root-level `PendingAction.status` writers: `confirmation-recovery.ts:254-261` (CAS via `claimPendingAction`, else unconditional `setPendingActionStatus`), `execution-fence.ts:227` (`confirmed`→`confirmed` writer-slot CAS), `manual-review.ts:209` (`pending`/`awaiting_mfa`→`cancelled`), `cancellation-evidence.ts:49` (unconditional `needs_reconciliation` + result).
+
 ## Capability boundary: one card-spend write
 
 The agent exposes exactly ONE card-spend write — `consume_virtual_card` (RED) — which pays a positive exact-CNY amount from an owned account-bound virtual card by debiting its linked checking account. There is no other card-consumption / card-spend / card-purchase / card-payment / card-debit capability.
