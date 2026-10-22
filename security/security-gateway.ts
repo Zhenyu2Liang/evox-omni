@@ -38,7 +38,7 @@ import {
   evaluateTransferRisk,
 } from './risk-engine';
 import { isLocked } from './circuit-breaker';
-import { getChallenge, issueChallenge, verify } from './mfa';
+import { attemptState, challengeInvalidation, getChallenge, issueChallenge, verify } from './mfa';
 import {
   assertActionMayStart,
   claimPendingAction,
@@ -250,6 +250,21 @@ const PLAN_CANCELLED_MESSAGE = '操作所属的任务计划已取消，该操作
 /** Code-free confirmation messages. */
 const CONFIRM_OK_MESSAGE = '操作已确认，正在执行。';
 const VERIFY_OK_MESSAGE = '安全验证通过，操作已确认，正在执行。';
+
+/**
+ * Every circuit-breaker refusal (account-level lock, tripped by ANY operation of the account) shares
+ * this one sentence, so the copy never pretends a per-operation attempt limit was reached.
+ */
+const CIRCUIT_LOCK_MESSAGE = '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。';
+
+/** Shown ONLY when THIS operation's own attempt record is exhausted. */
+const ATTEMPTS_EXHAUSTED_MESSAGE = '验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。';
+
+/**
+ * Verbatim public copy (`lib/tool-feedback.ts#PUBLIC_BUSINESS_ERRORS` → `chat.error.verificationConsumed`)
+ * for a verification submitted against an ALREADY-CONSUMED challenge.
+ */
+const CONSUMED_CHALLENGE_MESSAGE = 'This verification challenge has already been consumed.';
 
 /**
  * Chinese labels for a PERSISTED `PendingAction` status. Those statuses are machine values
@@ -877,7 +892,7 @@ function lockedOutcome(
     requiresMfa,
     code: 'CIRCUIT_OPEN',
     failure: { code: 'CIRCUIT_OPEN', reason, actionId, attemptsLeft: 0, maxAttempts: MFA_MAX_ATTEMPTS },
-    message: '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。',
+    message: CIRCUIT_LOCK_MESSAGE,
     action,
   };
 }
@@ -919,45 +934,106 @@ async function authorizeWithMfa(
     };
   }
 
-  // `verify` can refuse at the CHALLENGE level (already consumed / expired / command digest changed /
-  // missing). `SecurityFailureReason` has NO dedicated member for those outcomes, so the closest honest
-  // reason — `mfa_code_invalid` — is reported here; `res.error.message` is a PUBLIC message already
-  // mapped to `chat.error.verificationConsumed` / `chat.error.verificationExpired`.
+  // `verify` can refuse at the CHALLENGE level. `mfa.challengeInvalidation` classifies WHY, so each
+  // outcome gets its own honest semantics instead of one retryable `mfa_code_invalid` view:
+  //   consumed          → the decision is SETTLED: CAS the row to terminal `cancelled`, never a retry.
+  //   expired / changed → a fresh challenge was just minted, so re-prompting is accurate.
+  //   anything else     → fail CLOSED: no prompt against a challenge the server cannot vouch for.
   const res = await verify(actionId, opts.mfaCode);
   if (!res.ok) {
-    return {
-      ok: false,
-      status: 'awaiting_mfa',
-      actionId,
-      tier,
-      requiresMfa: true,
-      mfaResult: 'failed',
-      code: 'MFA_FAILED',
-      failure: { code: 'MFA_FAILED', reason: 'mfa_code_invalid', actionId },
-      message: res.error.message,
-      action,
-    };
+    const invalidation = challengeInvalidation(res.error);
+    if (invalidation === 'consumed') {
+      const claimed = await claimPendingAction({ actionId, from: ['pending', 'awaiting_mfa'], to: 'cancelled' });
+      if (!claimed) {
+        // Lost the CAS: a concurrent decision settled the row first. NEVER execute here.
+        const current = await getPendingAction(actionId);
+        if (current?.status === 'locked') {
+          return lockedOutcome(actionId, toContractPendingAction(current), true, 'mfa_session_locked');
+        }
+        throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(current?.status ?? row.status)}」，无法重复确认。`);
+      }
+      return {
+        ok: false,
+        status: 'cancelled',
+        actionId,
+        tier,
+        requiresMfa: false,
+        mfaResult: 'failed',
+        code: 'CONFLICT',
+        failure: { code: 'CONFLICT', reason: 'denied', actionId },
+        message: CONSUMED_CHALLENGE_MESSAGE,
+        action: { ...action, status: 'cancelled' },
+      };
+    }
+    if (invalidation !== null) {
+      // `expired` / `command_changed`: a brand-new challenge was just issued, so asking for a code
+      // again is accurate. Deliberately carries NO `code`/`failure` — a PROMPT, not a refusal.
+      await issueChallenge(actionId);
+      return {
+        ok: false,
+        status: 'awaiting_mfa',
+        actionId,
+        tier,
+        requiresMfa: true,
+        message: mfaMessages.renewedChallenge,
+        action,
+      };
+    }
+    throw new AppError('CONFLICT', '验证状态异常，该操作无法继续确认；请重新发起该操作。',
+      { code: 'CONFLICT', reason: 'denied', actionId });
   }
   if (!res.value.ok) {
     const { attemptsLeft, locked } = res.value;
+    // The operation's OWN attempt record is the ONLY authority for "this operation ran out of
+    // attempts": `verify` reports `locked` for EVERY operation of a locked account, so an operation
+    // that never consumed its limit must be told the ACCOUNT breaker tripped (`circuit_open`) — a
+    // `mfa_attempts_exhausted` here would claim 0 (or negative) used attempts in its own words.
+    const own = await attemptState(actionId);
+    const attemptsUsed = own ? own.attempts : Math.max(0, MFA_MAX_ATTEMPTS - attemptsLeft);
+    const maxAttempts = own?.maxAttempts ?? MFA_MAX_ATTEMPTS;
+    const exhausted = own ? own.exhausted : attemptsLeft === 0;
+    if (!locked) {
+      return {
+        ok: false,
+        status: 'awaiting_mfa',
+        actionId,
+        tier,
+        requiresMfa: true,
+        mfaResult: 'failed',
+        code: 'MFA_FAILED',
+        failure: { code: 'MFA_FAILED', reason: 'mfa_code_invalid', actionId, attemptsUsed, attemptsLeft, maxAttempts },
+        message: `验证码错误，请重试。剩余尝试次数：${attemptsLeft}。`,
+        action,
+      };
+    }
+    if (exhausted) {
+      return {
+        ok: false,
+        status: 'locked',
+        actionId,
+        tier,
+        requiresMfa: true,
+        mfaResult: 'failed',
+        code: 'CIRCUIT_OPEN',
+        failure: { code: 'MFA_LOCKED', reason: 'mfa_attempts_exhausted', actionId, attemptsUsed, attemptsLeft, maxAttempts },
+        message: ATTEMPTS_EXHAUSTED_MESSAGE,
+        // A GENUINE terminal lock is made DURABLE on the row; the transient `awaiting_mfa` path is NOT.
+        action: await persistLockedAction(actionId, action),
+      };
+    }
+    // The account-level breaker was tripped by a DIFFERENT operation: report `circuit_open` (never a
+    // per-operation attempt limit) and make the lock durable so the row stops reading as undecided.
     return {
       ok: false,
-      status: locked ? 'locked' : 'awaiting_mfa',
+      status: 'locked',
       actionId,
       tier,
       requiresMfa: true,
       mfaResult: 'failed',
-      code: locked ? 'CIRCUIT_OPEN' : 'MFA_FAILED',
-      failure: locked
-        ? { code: 'MFA_LOCKED', reason: 'mfa_attempts_exhausted', actionId,
-          attemptsUsed: MFA_MAX_ATTEMPTS - attemptsLeft, attemptsLeft, maxAttempts: MFA_MAX_ATTEMPTS }
-        : { code: 'MFA_FAILED', reason: 'mfa_code_invalid', actionId,
-          attemptsUsed: MFA_MAX_ATTEMPTS - attemptsLeft, attemptsLeft, maxAttempts: MFA_MAX_ATTEMPTS },
-      message: locked
-        ? '验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。'
-        : `验证码错误，请重试。剩余尝试次数：${attemptsLeft}。`,
-      // A GENUINE terminal lock is made DURABLE on the row; the transient `awaiting_mfa` path is NOT.
-      action: locked ? await persistLockedAction(actionId, action) : action,
+      code: 'CIRCUIT_OPEN',
+      failure: { code: 'CIRCUIT_OPEN', reason: 'circuit_open', actionId, attemptsUsed, attemptsLeft, maxAttempts },
+      message: CIRCUIT_LOCK_MESSAGE,
+      action: await persistLockedAction(actionId, action),
     };
   }
 

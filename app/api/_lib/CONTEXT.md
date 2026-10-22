@@ -25,8 +25,6 @@ the lock/MFA signals, so a client never parses `message`.
 `SecurityFailure`/`SecurityFailureReason` are imported here only from `@/lib/contracts/security`;
 `AuthorizationResult` (declared in `security/security-gateway.ts`) is never imported by this folder —
 the decision routes receive an `@/agent` `ConfirmationOutcome` and copy its `code`/`failure` verbatim.
-Nothing in `_lib` imports `lib/public-text.ts` or `lib/tool-feedback.ts`; type-to-text rendering is
-client-side.
 - `agent-bridge.ts`: static delegation for action confirmation, verification, cancellation and
   recovery; task controls; owning-plan lookup and refreshed plan events. It forwards the fixed
   `{ userId, sessionId }` ownership context to agent contracts. It contains no banking mutations.
@@ -46,6 +44,16 @@ client-side.
   `pendingActionId` still resolves; one batched lookup per distinct id (never N+1). It never changes
   `node.status`, never strips `pendingActionId`, never writes and omits the field when the row is
   gone (missing evidence proves nothing).
+- `public-security-event.ts`: `publicSecurityEvent(event)` plus the `PublicSecurityEvent` /
+  `PublicSecurityStatus` types and the `isPublicDetailValue` predicate — the ONE public projection of
+  a persisted `SecurityEvent` for the browser-facing read models. Structured facts pass through
+  verbatim; a blank or internal-diagnostic `message` (`lib/public-text.ts#isInternalDiagnostic`)
+  becomes `''` while real audit prose survives byte-for-byte; a `detail` is kept only when it is a
+  plain JSON value whose every STRING leaf is diagnostic-free, otherwise the key is omitted entirely.
+  It is the ONLY module in `_lib` importing `lib/public-text.ts` (`isInternalDiagnostic`), because a
+  security-center read model must neutralize INTERNAL audit records before serializing them; no `_lib`
+  module imports `lib/tool-feedback.ts` and every other type-to-text rendering stays client-side.
+  Pure mapping: no I/O, no event filtering and no security decision.
 
 ## Identity and execution boundaries
 

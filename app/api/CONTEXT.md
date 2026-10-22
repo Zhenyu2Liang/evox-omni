@@ -11,7 +11,7 @@ route handlers. Shared transport support lives in the private `_lib` folder.
 
 - `./cards/` -> virtual-card HTTP surface: consume, consumptions, card list/add/delete and manual card changes (see `cards/CONTEXT.md`).
 - `./cards/[id]/` -> per-card routes `consume` and `consumptions` (see `cards/[id]/CONTEXT.md`).
-- `./_lib/` -> shared envelope, error mapping, session identity, agent bridge, the terminal-lock refusal (`locked-action.ts`) and the additive task-plan action-status projection (`task-pending-actions.ts`) (see `_lib/CONTEXT.md`).
+- `./_lib/` -> shared envelope, error mapping, session identity, agent bridge, the terminal-lock refusal (`locked-action.ts`), the additive task-plan action-status projection (`task-pending-actions.ts`) and the public security-event projection (`public-security-event.ts`) (see `_lib/CONTEXT.md`).
 - `../cards/` -> card page plus consume/change dialogs (sibling under `app` - read-only here; escalate writes to the `app` node).
 - `../../../components/banking/` -> card display components such as `CardTile` (outside `app` - read-only).
 
@@ -41,7 +41,7 @@ selectable browser identities.
 | `POST /api/tasks/[id]` | Pause, resume, cancel or retry an owned plan | Agent task controls |
 | `GET /api/activity` | Closed business history projection scoped to the fixed workspace | Operation history read model |
 | `GET /api/audit` | Developer preference required before validated filters; scoped technical entries and summary | Audit read models |
-| `GET /api/security` | Security events, lock state, failure count, a typed `lock` reason while the breaker is open and the session's terminal `lockedActions` | Audit and security read models |
+| `GET /api/security` | Public projection of the security events (`events` and `status.recentEvents`, see below), lock state, failure count, a typed `lock` reason while the breaker is open and the session's terminal `lockedActions` | Audit and security read models plus `_lib/public-security-event` |
 | `POST /api/security/reset` | Optional body `{ verificationCode? }`; separately gated and audited unlock that reopens no `PendingAction` and executes nothing; success adds `lockedActionsReopened: false` | Account circuit-breaker policy |
 | `POST /api/developer/security/reset` | Developer-mode cookie gate, then the unaudited-code demo clear `resetDemoSession` (audit actor `developer`); returns the raw `CircuitBreakerState`, reopens no `PendingAction` | `_lib/developer.ts` + account circuit-breaker policy |
 | `GET /api/{dashboard,bills,cards,subscriptions}` | Simulated banking read models for the configured user | Banking SDK |
@@ -60,6 +60,38 @@ Collection reads do not execute or recover banking operations. `GET /api/actions
 attention states and cannot acquire a lease or replay a write. Explicit action/run recovery delegates
 to receipt-first runtime recovery; missing evidence never establishes success or failure. Task
 controls preserve succeeded nodes and execute only work permitted by their current persisted state.
+
+## Public security-event projection
+
+`GET /api/security` serializes no raw `SecurityEvent`: both `events` and `status.recentEvents` are
+mapped through `_lib/public-security-event.ts#publicSecurityEvent`, because a persisted security
+event is an INTERNAL audit record whose text may carry the gateway's `__SECURITY_BLOCK__…` payload.
+`id`/`timestamp`/`sessionId`/`userId`/`kind`/`severity` are forwarded verbatim and `status.locked` is
+untouched, so the feed keeps every structured fact a client renders.
+`message` stays a required string: legitimate audit prose survives byte-for-byte, while a blank,
+whitespace-only or internal-diagnostic message (`lib/public-text.ts#isInternalDiagnostic`) becomes
+`''` — never a substitute sentence, so the client keeps owning its localized `kind` label.
+`detail` is kept only when it is a plain JSON value whose every STRING leaf is diagnostic-free;
+otherwise the key is omitted entirely (`'detail' in event === false`), so the breaker-trip evidence
+`{ failures, max, result }` survives while `{ note: '__SECURITY_BLOCK__…' }` does not.
+No event is dropped and no event count changes: the projection is pure, read-only and decides
+nothing, and the gateway marker therefore never leaves this edge through the security center.
+`app/security/page.tsx` reads the audit and security nodes directly instead of this route and applies
+its own equivalent text funnel, including to `status.recentEvents`.
+
+The rest of this node was swept for the same class of leak and needs no app-layer projection.
+`/api/schedules` and `/api/schedules/tick` are thin delegations, and `agent/scheduled-dispatcher.ts`
+already reduces a dispatch failure through `publicDispatchError`
+(`isInternalDiagnostic(message) ? DISPATCH_FAILURE_NOTICE : message`).
+`/api/audit` is a developer-mode-gated technical surface that returns the audit node's own entries and
+summary, so its contract stays unchanged.
+`/api/activity` returns the closed business history projection of `audit/operation-history.ts`, which
+is not built from security events.
+`_lib/http.ts#errorResponse`/`mapAppError` already reduce a non-`AppError` throw to a generic internal
+error, so a failure envelope carries no diagnostics.
+Chat SSE frames, `/api/runs/[id]/events` and `/api/chat/history` still forward `AgentStreamEvent`
+frames verbatim (see Known issues): `security_event.message` can carry the raw marker, clients render
+those events from typed fields, and scrubbing them belongs to `agent/` and `components/chat`.
 
 ## Transport contracts
 
@@ -94,7 +126,8 @@ A refusal is TYPED, never message-parsed: `ActionResponse` (`_lib/types.ts:44-65
 Contrast `POST /api/cards/changes/[id]/verify`, which lets `AppError('CIRCUIT_OPEN')` bubble out as a `423` failure envelope WITH `code` (`security/manual-card-management.ts:71,112`), so the cards page localizes by code; the action routes deliberately do not.
 
 `data.message` provenance per route: `verify`/`confirm` copy `ConfirmationOutcome.message` verbatim (the gateway sentence on a refusal; `操作已执行。`/`result.error`/`操作结果尚无法核实…` plus a `（结果播报失败：…）` suffix from `agent/confirmation/authorized-execution.ts:94-100`; `该操作所属的任务计划已取消…` from `cancelledPlanOutcome`; the `AppError.message` from `conflictOutcome`), `cancel` `操作已取消。` (`agent/confirmation.ts:69`) except on a `locked` row, which is refused before delegation with the fixed `_lib/locked-action` sentence, `recover` the recovery outcome's own text (or the same fixed sentence on a `locked` row).
-No action route localizes: the i18n fallbacks (`chat.error.toolFailed`, `chat.error.securityLocked`) exist only client-side (`lib/public-text.ts#securityNotice`, `lib/tool-feedback.ts`), so a non-browser caller (e.g. `channels/weixin/`) reading `data.message` gets the server's Chinese sentence, never 「操作未完成。请核对原操作卡片和账户记录。」. No file under `app/api` imports `lib/public-text.ts` (`securityNotice`, `safePublicText`, `isInternalDiagnostic`) or `lib/tool-feedback.ts` (`publicToolError`): the edge forwards the typed `code`/`failure` plus the raw server sentence, so every refusal is rendered client-side.
+No action route localizes: the i18n fallbacks (`chat.error.toolFailed`, `chat.error.securityLocked`) exist only client-side (`lib/public-text.ts#securityNotice`, `lib/tool-feedback.ts`), so a non-browser caller (e.g. `channels/weixin/`) reading `data.message` gets the server's Chinese sentence, never 「操作未完成。请核对原操作卡片和账户记录。」. No action route under `app/api` imports `lib/public-text.ts` (`securityNotice`, `safePublicText`) or `lib/tool-feedback.ts` (`publicToolError`): the edge forwards the typed `code`/`failure` plus the raw server sentence, so every refusal is rendered client-side.
+The only `lib/public-text.ts` consumer in this node is `_lib/public-security-event.ts` (`isInternalDiagnostic`), which neutralizes internal audit text in the `GET /api/security` public projection.
 TWO distinct lock sentences reach `data.message` with the SAME `ok:false`/`status:'locked'`: the attempt-limit branch 「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」 (`security/security-gateway.ts` `authorizeWithMfa` attempt-exhausted branch) and every later attempt on the already-persisted `locked` row via `lockedOutcome` 「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」 (`security/security-gateway.ts` `lockedOutcome`, reached from the `row.status === 'locked'` guard at the top of `authorizeAction`). Those two refusals also differ INSIDE `failure`: the attempt-exhausted one carries `failure.code:'MFA_LOCKED'` with `reason:'mfa_attempts_exhausted'` and real `attemptsUsed`/`attemptsLeft`/`maxAttempts` while its top-level `code` is `CIRCUIT_OPEN`, whereas `lockedOutcome` carries `failure.code:'CIRCUIT_OPEN'` (`reason` `mfa_session_locked`/`circuit_open`) with a fixed `attemptsLeft:0`/`maxAttempts`, so a renderer must key on `reason` and never on one field alone.
 A `confirm` (no code) on a `locked` row also returns `status:'locked'`/`ok:false`, but with `mfaResult:'not_required'` and `requiresMfa:true` (RED tier), never `'failed'`.
 

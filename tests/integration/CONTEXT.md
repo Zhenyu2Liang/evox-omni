@@ -63,10 +63,10 @@
 
 | 入口 | 定义 | 本目录调用点 |
 | --- | --- | --- |
-| `recoverOwnedRun` | `agent/durable/service.ts:103` | `conversation-recovery.test.ts:62`、`conversation-compaction.test.ts:158/191`、`standalone-workflow-restart.test.ts:135`（断言 `CONFLICT`）、`locked-action-recovery.test.ts:217`（锁定动作，断言 `AUTHORIZATION_REQUIRED`）、子进程驱动 `tests/helpers/restart-process.ts:132/139` |
+| `recoverOwnedRun` | `agent/durable/service.ts:104` | `conversation-recovery.test.ts:62`、`conversation-compaction.test.ts:158/191`、`standalone-workflow-restart.test.ts:135`（断言 `CONFLICT`）、`locked-action-recovery.test.ts:217`（锁定动作，断言 `AUTHORIZATION_REQUIRED`）、子进程驱动 `tests/helpers/restart-process.ts:132/139` |
 | `tickAgentRecovery` | `agent/recovery-worker.ts:44` | 只在子进程驱动内：`tests/helpers/restart-process.ts:136`、`tests/helpers/standalone-restart-process.ts:18` |
 | `recoverInvocation` | `agent/durable/recovery.ts:63` | `agent-durability.test.ts:106/142` |
-| `settlePendingAction` | `agent/confirmation-recovery.ts:251` | `agent-durability.test.ts:255/259` |
+| `settlePendingAction` | `agent/confirmation-recovery.ts:264` | `agent-durability.test.ts:255/259` |
 | `resumeOriginalRunTask` | `agent/durable/workflow-resumption.ts:15` | `workflow-invocations.test.ts:150/170/171` |
 | `listRecoverableAgentRuns` | `lib/db/repositories/agentRun.ts:281` | `model-checkpoint-boundaries.test.ts:95/96/98/109`、`standalone-workflow-restart.test.ts:146/150` |
 | `executeGatedTool` | `agent/confirmation/gated-execution.ts:88` | 造「停放」动作的唯一生产入口，见各 `parkStandalone`／`runner` 助手 |
@@ -90,16 +90,16 @@
 `locked-action-recovery.test.ts` 在进程内用四条生产恢复入口证明：终态 `locked` 的 `PendingAction` 永不回到 `pending`／`awaiting_mfa`，也不为同一节点产生新的可决策行。
 
 保证它的当前生产事实：
-- `recoverOwnedRun`（`agent/durable/service.ts:103`）在运行仍 `waiting_confirmation`／`waiting_verification` 时走 `AUTHORIZATION_REQUIRED` 早退（`:159-162`），只回报 `The original confirmation or verification is still required.`，不重新驱动写；待决策动作的状态过滤不含 `locked`（`:216`），`synchronizeRunActionInvocations` 只回写 `['executed','cancelled','failed','needs_reconciliation']`（`lib/db/repositories/agentRun.ts:240-243`）。
-- `resumeTask`（`agent/workflows/controls.ts:26`）与 `retryTask`（`:44`）重新驱动尚非终态的 `waiting_verification` 节点（`planner/executor.ts:563-569` 只跳过 `TERMINAL` 集合内的节点，而该集合不含 `waiting_verification`，见 `:154-160`）：`executeGatedTool` → `securityGateway#handleToolCall` 对已锁定会话直接拒绝，且 `representedStatuses`（`agent/confirmation/gated-execution.ts:19-21`）不含 `locked`，`findRepresentedAction`（`:24-27`）因此认领不到锁定行。
-- `recoverAction`（`agent/index.ts:164`，计划分支 `:205-258`）对锁定 action 返回 `ok:false`，不重开决策。
+- `recoverOwnedRun`（`agent/durable/service.ts:104`）在运行仍 `waiting_confirmation`／`waiting_verification` 时走 `AUTHORIZATION_REQUIRED` 早退（`:159-162`），只回报 `The original confirmation or verification is still required.`，不重新驱动写；待决策动作的状态过滤不含 `locked`（`:216`），`synchronizeRunActionInvocations` 只回写 `['executed','cancelled','failed','needs_reconciliation']`（`lib/db/repositories/agentRun.ts:240-243`）。
+- `resumeTask`（`agent/workflows/controls.ts:27`）与 `retryTask`（`:49`）在认领任何状态之前先经 `assertParkedActionsNotTerminal`（`:33`／`:54` → `agent/workflows/parked-actions.ts:63-69`）读计划停靠动作的当前状态：终态即抛出，`locked` 抛 `MFA_LOCKED` + `chat.error.actionLocked`、`needs_reconciliation` 抛 `CONFLICT` + `chat.error.unknownOutcome`、其余终态抛 `CONFLICT` + `chat.error.stateChanged`（`:74-76`），计划状态与节点都不被改写，节点也就不会再被驱动到网关。
+- `recoverAction`（`agent/index.ts:168`，计划分支 `:209-265`）对锁定 action 返回 `ok:false`，不重开决策：该分支调 `resumeTask` 后收到的 `MFA_LOCKED` 由 `:250-263` 转成公开文案。
 - `authorizeAction` 先对 `status === 'locked'` 短路为 `lockedOutcome(..., 'mfa_session_locked')`（`security/security-gateway.ts:1116-1119`），其后才是非 `pending`／`awaiting_mfa` 的 `CONFLICT` 守卫（`:1123-1125`）；因此 `security/mfa.ts#issueChallenge`（`:100-105`）虽不过滤动作状态，对锁定动作不可达，验证码永不重发。
 - `beginAgentRun`（`lib/db/repositories/agentRun.ts:51-54`）在 `agentSession.runLeaseExpiresAt` 未过期时拒绝第二次准入，真并发租约抢占无法由用例构造，用例改用崩溃边界作为等价保证。
 
 用例的驱动：
 - 前置统一来自 `tests/helpers/locked-action.ts`：`parkRedTransferPlan` 经生产 `submit_plan` runner 停一个 RED 转账节点，`lockAction` 走网关阶梯耗尽三次得到终态；`beforeEach(resetDatabase)` 因为熔断按所有者（`user:<userId>`）持久化。
 - durable 路径用生产 `beginRun`（`lib/db/repositories/agentRun.ts:35`）准入运行，以 `nxe:<taskId>:<nodeId>` 作唯一 `ToolInvocation` 的 `operationKey`，把运行真正挂到锁定动作的任务上（`runPendingActionWhere`，`:215`），再以 `AgentRunJournal.finish('waiting_verification')`（`:189`）留在崩溃边界，最后调 `recoverOwnedRun`：断言 `outcomes` 含 `{ action:'waiting', reason:'AUTHORIZATION_REQUIRED' }`、无 `retried`、运行仍 `waiting_verification`、租约已释放。
-- 计划路径对同一 `taskId` 先 `resumeTask` 再 `retryTask`，两者都断言节点输出里没有新的 `pendingActionId`（`readPendingActionId` 为 `undefined`）。
+- 计划路径对同一 `taskId` 调 `resumeTask` 与 `retryTask`：生产在认领前抛出，节点输出不会再写入新的 `pendingActionId`（`readPendingActionId` 为 `undefined`）。
 - `tests/helpers/restart-process.ts` 刻意不用：它的 15s／20s 屏障在并发负载下易超时（见「已知缺口」），而进程内 `recoverOwnedRun` 走的是同一段恢复代码。
 
 `baselineLockedAction` 在锁定后立即取样，`assertStillLocked` 在每条路径后逐项复核：
@@ -150,6 +150,16 @@
 旧 id 上的重复提交仍被拒：同一套件第 2 组断言 `verify`（正确码）与 `confirm` 各三次都返回 `200` + `ok:false` + `status:'locked'` + `failure.reason:'mfa_session_locked'`；本目录 `locked-action-recovery.test.ts` 断言服务端 `recoverAction` 对锁定 action 返回 `ok:false`。
 `confirmation-policy.test.ts:92` 的 `recover` 与 `frontend-followup-fixes.test.ts:140-141` 的 `verify` 都在原 id 上继续，针对的是 `confirmed`／`awaiting_mfa`（非锁定）动作。
 
+## wedge 故障注入的有效接缝
+
+wedge 用例只能注入生产确认路径真正调用的符号，否则 spy 永不触发，预期的 `500` 与「`confirmed` + `resultJson:null`」都不会出现。
+接缝一：`vi.spyOn(auditStore, 'insertAuditLog')`——`audit/audit-logger.ts:102` 由 `recordAudit` 调用，`settlePendingAction` 在事务内以 `strict:true` 调它（`agent/confirmation-recovery.ts:288-297`），按 `opts.dedupeKey` 定向抛错即回滚状态与结果（`confirmation-policy.test.ts:53`、`recovery-authorization.test.ts:43/256`、`write-audit.test.ts:143`、`execution-audit.test.ts:94`、`confirmation-evidence.test.ts:131`、`task-feature-hardening.test.ts:173`）。
+接缝二：`vi.spyOn(gateway, 'recordActionResult')`——`security/security-gateway.ts:1268`，由 `agent/confirmation/authorized-execution.ts:74-80` 在结算之后调用，只用于卡住或观察结算后的窗口，不产生 `confirmed` + `resultJson:null`（`write-idempotency.test.ts:26/40`）。
+接缝三：直接注入 `settlePendingAction`（`agent/confirmation-recovery.ts:264`）或 `claimPendingAction`（`lib/db/repositories/pendingAction.ts:254`）。
+`setPendingActionStatus`／`updatePendingActionStatus`（`lib/db/repositories/pendingAction.ts:181-194`）仍导出，但已无任何生产调用者（状态写入一律走 `claimPendingAction`）：在它们上装的 spy 永不触发，那个 `500` 与未落地结果的 wedge 都不再发生。
+仍装这种死 spy 的规格：`action-refresh.test.ts:113`、`committed-outcomes.test.ts:98`、`confirmation-continuation.test.ts:53`、`confirmation-evidence.test.ts:69`、`confirmation-liveness.test.ts:198`、`confirmation-policy.test.ts:146`、`execution-audit.test.ts:82`、`execution-integrity.test.ts:114`、`node-result-recovery.test.ts:35/59/110`、`recovery-authorization.test.ts:81/227`、`restart-recovery.test.ts:131`、`sdk-transaction-fences.test.ts:104`、`standalone-recovery.test.ts:92`、`transfer-history.test.ts:121/278`、`transfer-receipts.test.ts:158`。
+这些规格的注释也仍按旧接缝解释各自的 wedge：`action-refresh.test.ts:28`、`committed-outcomes.test.ts:24`、`confirmation-liveness.test.ts:20`、`node-result-recovery.test.ts:26`、`restart-recovery.test.ts:14`、`standalone-recovery.test.ts:24`、`transfer-receipts.test.ts:23`。
+
 ## 断言约束
 
 - 声明与任务图来自结构化输入，不从原句正则补全。
@@ -175,6 +185,11 @@
 - 本目录不断言锁定话术文案：无 `chat.error.securityLocked`／`publicToolError`／「验证码错误次数过多，本会话高风险操作已被锁定…」用例；`__SECURITY_BLOCK__` 既用作「网关原始拒绝确实带标记」的证明，也用作恢复路径文案的负例标记，从不出现在任何上屏断言的正例里。
 - 本目录不断言 `MfaCard` 的 LOCKED 渲染：`frontend-review-fixes.test.ts` 只用默认（验证码输入）与 `status: 'executed'` 两种状态。
 - 夹具不播种 LOST 卡（`card_credit`/`card_debit` 均 `ACTIVE`，见 `../helpers/fixtures.ts:99`）；`replace_card` 需先 `report_lost_card` 或直接改库把源卡置 `LOST`。
-- 节点级内部标记仍有泄漏面：`resumeTask`／`retryTask` 重新驱动节点时，网关以 `__SECURITY_BLOCK__{"decisionKind":"deny",…}` 拒绝，`agent/confirmation/gated-execution.ts:66`（`error: auth.blockReason`）把它交给 `planner/node-outcome.ts:30`，后者把它作为节点 `error` 写进计划快照。终止锁不会被复活（`locked-action-recovery.test.ts` 已断言），但该字段仍携带内部信封且无用例覆盖——缺的是投影层用例。
+- 节点级内部标记不进入计划节点输出：`agent/confirmation/gated-execution.ts:49-60` 的 `blockedOutcome` 只从结构化 `failure` 生成 `securityNotice` 目录句，否则经 `safePublicText`→`publicToolError` 回退到 `chat.error.operationNotStarted`，`auth.blockReason` 原文不再交给 `planner/node-outcome.ts`；且带 `taskId`／`nodeId` 的节点动作先经 `:66-84` 的 `findRepresentedAction` 早退（`:80-83` 为公开中文句），不触达网关。
 - `locked-action-recovery.test.ts` 只覆盖进程内恢复入口：`tickAgentRecovery` 与真实子进程重启（`../helpers/restart-process.ts`）没有锁定动作用例，原因是其屏障在高负载下易超时；真并发租约抢占被 `beginAgentRun` 拒绝，无法直接构造。
-- 锁定动作没有 HTTP `POST /api/actions/[id]/recover` 用例：本目录覆盖的是服务端 `recoverAction`（`agent/index.ts:164`），`../app/mfa-lock-refresh-unlock-http.test.ts` 覆盖的是 `verify`／`confirm` 与 `POST /api/security/reset`。
+- 锁定动作没有 HTTP `POST /api/actions/[id]/recover` 用例：本目录覆盖的是服务端 `recoverAction`（`agent/index.ts:168`），`../app/mfa-lock-refresh-unlock-http.test.ts` 覆盖的是 `verify`／`confirm` 与 `POST /api/security/reset`。
+- 两条再驱动入口的用例仍按「控制返回计划快照／`200`」的旧语义调用：`locked-action-recovery.test.ts:244/254` 与 `write-idempotency.test.ts:40-42` 期望控制调用正常返回，而生产已因 `assertParkedActionsNotTerminal` 在认领前抛出（`MFA_LOCKED`／`CONFLICT`，HTTP `409`）。
+- 绑定在本目录（见上文「wedge 故障注入的有效接缝」）的死 spy 导致一大类 wedge 用例失败：注入未命中的自检断言拿到 0，预期的 `500` 拿到 `200`，wedge 从未真正构造出来。
+- 本目录**没有**任何 `vi.mock(...)`（只用 `vi.spyOn` 打命名空间对象），也不 mock `@/lib/db/client`、不 spy `prisma.$transaction`、不 spy `tx.pendingAction.update`。
+- 唯一真正的 Prisma 事务级故障注入器是 `../helpers/write-failure.ts`（`injectWriteFailure`／`withInjectedWriteFailure`，用 Proxy 替换 `$transaction` 的 `tx`，因 `vi.spyOn` + `restoreAllMocks` 无法还原 Prisma 的 `$transaction`），只被 `tests/unit/banking-sdk/*` 使用，本目录未使用。`../helpers/db.ts#getTestPrisma` 经 `createRequire` 取 `lib/db/client.ts` 的 `globalThis.prisma` 单例，技术上可 spy 共享 client，但本目录没有这样做。
+- 本目录唯一 spy Prisma model 方法的是 `financial-node-concurrency.test.ts:62`（`vi.spyOn(p.pendingAction, 'updateMany')`，屏障用），其目标 `revokePendingActionsByTask` 仍是活代码（`agent/workflows/cancellation.ts:81,85`）。

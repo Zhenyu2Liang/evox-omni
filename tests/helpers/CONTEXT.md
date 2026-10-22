@@ -23,6 +23,17 @@
 它不含 `describe`/`it`，也只用于播种失败时给出诊断，不清库也不播种：每个用例仍须在 `beforeEach` 自行 `resetDatabase()`（熔断按 owner 持久化，残留锁定会串场）。
 错误验证码一律经 `securityGateway.authorizeAction` 提交，不得改用 `security/mfa.ts#verify`（只锁挑战、不落终端状态）。
 
+参数面是封闭的，没有「任选 status / attempts / expiresAt / userId / sessionId」的入口：
+`parkRedTransferPlan(goal?)`（`locked-action.ts:110`）金额固定 ¥5000（`:45`）→ `awaiting_mfa` + `RED` + `requiresMfa:true`（`:113-118`）；
+`parkConfirmOnlyTransfer(amount = '500'?)`（`:126`）→ `pending` + `requiresMfa:false`（`:129-133`）；
+两者都硬编码 `userId: DEMO_USER_ID`、接收人张伟、节点 id `n1`，`sessionId` 恒取 `demoSessionId()`（`:64-66`，即 `demo:user_liming`，同时是熔断 owner）。
+`status`/`attempts`/`expiresAt` 都无法指订：`locked` 只能由 `lockAction(actionId, sessionId)`（`:172`）真实跑完三次错码得到，`attempts` 只能由 `submitMfaCode`/`exhaustMfaAttempts`（`:143`/`:156`）阶梯推进。
+`locked-action.ts` **不创建** `MfaChallenge`：挑战由 park 路径的网关铸造（`security/security-gateway.ts:757-758`，`handleToolCall` → `gatewayCreatePendingAction` 尾部 `if (ev.requiresMfa) await issueChallenge(...)`），`mfaChallengesFor`（`:191`）只是只读探针。
+`expiresAt` 没有任何 helper：需要过期 challenge 的用例在规格内直接 `db.mfaChallenge.update({ where:{actionId}, data:{ expiresAt: new Date(Date.now()-1) } })`（例见 `tests/integration/confirmed-write-authority.test.ts:60`、`tests/integration/refactor-security-runtime.test.ts:68`），本目录不 mock `lib/clock`，无假时钟。
+`lockAction` 只断言锁定落库，不返回 `AuthorizationResult`；需要逐次阶梯断言时用 `exhaustMfaAttempts`。
+`locked-action.ts` 不在 `./index.ts` barrel 里（`index.ts:7-43` 只有 `db`/`fixtures`/`faux-agent`/`scenario`），必须按路径 import。
+唯一的使用骨架：`const sessionId = await demoSessionId(); const parked = await parkRedTransferPlan();`（`tests/app/mfa-lock-http-contract.test.ts:291-292`）。
+
 ## 入口与证据
 
 `faux-agent` 和 `scenario` 验证网关、工具与 SDK。

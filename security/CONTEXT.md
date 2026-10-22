@@ -43,7 +43,8 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 
 `authorizeAction` 在未决状态守卫**之前**对 `status==='locked'` 早退，返回幂等的 `lockedOutcome`（不新发挑战、不消费尝试、不重新提示）。
 熔断开启时 `authorizeAction` 先 `persistLockedAction` 再返回 `lockedOutcome`，使锁定对行持久化，待决策列表不会再出现该项。
-`mfa.ts#verify` 对 `status==='locked'` 的行返回 `{ ok: false, attemptsLeft: 0, locked: true }`，位置在熔断/挑战判定与任何写操作之前，故不消费尝试、不写挑战、不发事件、不动熔断。
+`mfa.ts#verify` 对 `status==='locked'` 的行返回 `{ ok: false, attemptsLeft: 0, locked: true }`，位置在熔断判定（`isLocked` / `challenge.status==='locked'`）与任何写操作之前，故不消费尝试、不写挑战、不发事件、不动熔断。
+挑战级的 `consumed`/`expired`/`command_changed` 判定更早（见下表），因此对 `locked` 行提交已失效挑战时 `verify` 先返回 `ChallengeInvalidError`；网关在 `cancelled` 认领落空后重读该行，仍回落为 `lockedOutcome(…, 'mfa_session_locked')` 的终态拒绝。
 `mfa.ts#issueChallenge` 对 `status==='locked'` 的行抛 `AppError('MFA_LOCKED', …)` 并携带 `SecurityFailure`，不铸码、不写库；对 `MfaChallenge.status==='locked'` 的既有挑战只回读视图，不重置为 `pending`。
 `cancelAction` 只从 `pending`/`awaiting_mfa` 认领，`locked` 行返回 `CONFLICT`。
 `recordActionResult` 经 `claimPendingAction({ from: RESULT_RECORDABLE_STATUSES })` 写入，该集合刻意不含 `locked`，迟到的 `executed`/`failed` 通知既不改写锁定行也不伪造执行证据。
@@ -57,6 +58,30 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 状态清除与 `SECURITY_RESET` 审计在同一事务内提交（`strict: true`），CAS 建立在读取时的快照上，因此并发解锁或更新的重新锁定让旧请求变成良性空操作且不产生重复事件。
 `SECURITY_RESET` 文案与 `detail` 一致表达上述语义；`detail` 含 `actor`/`reason`/`wasLocked`/`previousFailures`/`mode`/`renewedMfaChallenges`，曾经锁定过时另有 `priorLockedAt`。
 `recordFailure` 的审计粒度不变：每次 trip 恰好一条 `CIRCUIT_BREAKER_TRIPPED`（`severity:'high'`，`detail` 含 `failures`/`max`/`result`），锁定期间不再重复计数或重复发事件。
+
+## reason 的权威判定表（mfa.ts + security-gateway.ts）
+
+`mfa.attemptState(actionId)`（`MfaAttemptState { attempts, maxAttempts, exhausted }`）是「本操作是否用尽尝试」的唯一权威来源：`exhausted = attempts >= maxAttempts || challenge.status === 'locked'`，**只看该操作自己的挑战行**，不看账户熔断。
+`mfa.challengeInvalidation(error)` 是「挑战为何不可用」的唯一权威来源：服务端判别 `'consumed' | 'expired' | 'command_changed'`，`null` 表示不是挑战级拒绝。
+`verify` 的挑战级拒绝抛 `ChallengeInvalidError extends AppError`：`code` 仍为 `'MFA_FAILED'`、英文 message 逐字不变（`lib/tool-feedback.ts` 精确白名单），判别只经 `SecurityFailure` 与 `invalidation` 字段承载（`consumed` → `{code:'CONFLICT', reason:'denied'}`，`expired`/`command_changed` → `{code:'MFA_FAILED', reason:'denied'}`）。
+
+| 情况 | 顶层 `code` | `failure.code` | `failure.reason` | `status` | 行写入 |
+| --- | --- | --- | --- | --- | --- |
+| 验证码错误、未锁定 | `MFA_FAILED` | `MFA_FAILED` | `mfa_code_invalid` | `awaiting_mfa` | 无（`attemptsUsed`/`attemptsLeft`/`maxAttempts` 来自 `attemptState`） |
+| 本操作自己的尝试用尽 | `CIRCUIT_OPEN` | `MFA_LOCKED` | `mfa_attempts_exhausted` | `locked` | `persistLockedAction` |
+| 账户级熔断（由**其它**操作触发） | `CIRCUIT_OPEN` | `CIRCUIT_OPEN` | `circuit_open` | `locked` | `persistLockedAction` |
+| 重试已 `locked` 的操作 | `CIRCUIT_OPEN` | `CIRCUIT_OPEN` | `mfa_session_locked` | `locked` | 无（幂等，`lockedOutcome` 不带 `attemptsUsed`） |
+| 挑战已消费（`consumedAt`） | `CONFLICT` | `CONFLICT` | `denied` | `cancelled` | CAS `from:['pending','awaiting_mfa']` → `cancelled` |
+| 挑战过期 / 命令摘要变化 | 无 | 无 | 无 | `awaiting_mfa` | 先 `issueChallenge` 重签，提示态不带 `failure` |
+| 无法归类的挑战级拒绝 | 抛 `AppError('CONFLICT', …)` | — | — | — | 不写业务副作用（fail-closed） |
+
+`mfa_attempts_exhausted` 只描述**该操作自己**的尝试记录，账户熔断一律 `circuit_open`：因此 `attemptsUsed` 恒等于本操作已消费次数，绝不出现 0 或负数冒充「用尽」。
+判定表使用的 reason 全部是既有 `SecurityFailureReason` 成员，`FAILURE_REASONS` 白名单无需扩展。
+`consumedAt` 已写表示决定已结算：该行只能进入终态 `cancelled`（CAS 落空时重读，`locked` 走 `lockedOutcome(…, 'mfa_session_locked')`，否则抛 `AppError('CONFLICT', …)`），绝不执行、不消耗尝试、不重新签发验证码。
+`expired`/`command_changed` 是唯一允许出现「继续验证」语义的情形（服务端确实签发了全新挑战）。
+`locked` 终态与 `from` CAS 约束不变：`locked` 永不作为 `from` 来源，也永不写回 `pending`/`awaiting_mfa`/`confirmed`/`executed`/`failed`；解锁（`circuit-breaker.ts#resetSession`）只清熔断与失败计数，不复活任何 `locked` 操作。
+
+`security/` 下的回归测试与局部 vitest 配置：`security/vitest.security-contract.config.ts`（`root` 固定为仓库根、`include: ['security/**/*.test.ts']`）配合 `security/mfa-lock-reason-authority.test.ts`（A–E 五条，DB 支撑），运行 `pnpm exec vitest run --config security/vitest.security-contract.config.ts`。
 
 ## 结构化失败契约
 
@@ -89,6 +114,24 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 `step-up-authenticator.ts` 是明确的演示适配器，不发送短信。
 不支持的模式必须失败。
 真实短信供应商与已认证的员工或用户身份属于独立的生产工作。
+
+## MfaChallenge 行的创建点与 expiresAt
+
+本层唯一的 `MfaChallenge` 行创建点：`mfa.ts#issueChallenge` → `createMfaChallenge`（`mfa.ts:134-140`），`maxAttempts` 取 `MFA_MAX_ATTEMPTS`，`expiresAt` 取 `MFA_CHALLENGE_TTL_MS`。
+已存在挑战的续期走 `prisma.mfaChallenge.update`（`mfa.ts:126-130`），TTL 同源。
+`MFA_CHALLENGE_TTL_MS = 5 * 60_000`（`mfa.ts:34`）在本层仅被 `mfa.ts:128`、`mfa.ts:138` 引用，不从 `index.ts` 导出。
+`authorizeWithMfa` 不建行，只按 `expiresAt`/`commandDigest` 判断是否调用 `issueChallenge` 重签（`security-gateway.ts:899-905`）。
+`expiresAt` 的其余读取点均为过期判定：`mfa.ts:123`、`mfa.ts:166`、`security-gateway.ts:902-903`、`recovery-authorization.ts:61-62`、`manual-card-management.ts:193-194`。
+本层对挑战的其它写操作只改 `status`/`consumedAt`（`mfa.ts:202`、`mfa.ts:234`、`manual-card-management.ts:201`、`:222`），不触碰 `expiresAt`。
+`circuit-breaker.ts:298-300` 的解锁续期 `renewLockedMfaChallenges` 在仓储层，自带硬编码 5 分钟 TTL，不读 `MFA_CHALLENGE_TTL_MS`；仓储层 `createMfaChallenge` 的默认值同样硬编码，因此改常量不会自动传导。
+
+RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:758` 在 `PendingAction` 落库（`status='awaiting_mfa'`，`:716`）之后执行 `if (ev.requiresMfa) await issueChallenge(created.row.id)`。
+不建挑战的挂起分支：`clarify`（`:621-623`）、`plan_cancelled`（`:755`）、复用同一计划节点的既有行（`:638-639`，沿用原挑战）。
+首次提交验证码时挑战通常已存在且有效，`authorizeWithMfa` 只在 `expiresAt` 缺失/已过或 `commandDigest` 变化时才 `issueChallenge` 重签（`:902-905`）；因此当次提交不被 `verify`，而是返回 `awaiting_mfa` 的提示态（`:907-919`）。
+`manual-card-management.ts` 同样在 `proposeCardChange`（`:134`）与 `verifyCardChange`（`:162`）调用 `issueChallenge`，不自行写 `expiresAt`。
+本层不导出除 `issueChallenge` 之外的挑战创建入口：`mfa.ts` 仅导出 `MFA_CHALLENGE_TTL_MS`、`issueChallenge`、`verify`、`getChallenge`（视图类型另计）。
+`step-up-authenticator.ts#issue` 只返回演示验证码，不写库。
+`PendingAction` 无 `expiresAt` 列（只有执行租约 `executionLeaseExpiresAt`）；验证码有效期唯一来源是 `MfaChallenge.expiresAt`，测试构造过期即直接改该行。
 
 ## 手工卡片管理（manual-card-management.ts）
 
@@ -132,9 +175,18 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 `expectedRedemptionAmount` 属于服务端报价，重复挂起时沿用原报价。
 本层只快照报价，不改变余额。
 
+## 结果通知（recordActionResult）
+
+`security-gateway.ts#recordActionResult(actionId, 'executed'|'failed')` 只做一次 `claimPendingAction({ actionId, from: RESULT_RECORDABLE_STATUSES, to: status })`，即只写 `PendingAction.status`。
+它不写 `resultJson`、不写 `AuditLog`、不写 `AuthorizationDecision` 或 `SecurityEvent`；行不存在时抛 `NOT_FOUND`，落在不可覆盖状态（`locked`）时静默返回。
+真正的执行证据由 `agent/confirmation-recovery.ts#settlePendingAction` 落地（同一事务内 `claimPendingAction` 加 `resultJson`），本函数只是其后的尽力通知。
+它以方法形式挂在 `securityGateway` 对象字面量上（`security-gateway.ts#1366`），没有独立的命名导出，只能从对象上取用或以属性形式打桩。
+唯一生产调用方是 `agent/confirmation/authorized-execution.ts`：`:32` 在无法解析所属会话时提前上报 `'failed'`；`:76` 在副作用提交且结算落定之后上报，条件为 `landed && status ∈ {'executed','failed'}`，并被 try/catch 吞掉失败。
+该文件写的是 `gateway.recordActionResult(...)`，其中 `gateway = security.gateway.securityGateway` 在模块加载时绑定；属性在调用时才查，因此对**同一对象**上该属性的 `vi.spyOn` 会被命中，替换整个 `securityGateway` 对象则不会。
+
 ## 已知边界
 
-`lib/db/repositories/pendingAction.ts#setPendingActionStatus` 仍是无条件状态写入原语，本层已全部改用 `claimPendingAction`，其唯一调用方在 `agent/`。
+`lib/db/repositories/pendingAction.ts#setPendingActionStatus` 仍是无条件状态写入原语，本层与 `agent/` 都不再调用它（别名 `updatePendingActionStatus` 同样无人使用），只剩测试引用；状态写入一律走 `claimPendingAction`。
 `agent/` 中未传 `from` 的 `settlePendingAction` 结算路径当前不可达 `locked`（`confirmed` 无法变成 `locked`），属纵深防御缺口，需在该层加 CAS。
 带 `__SECURITY_BLOCK__` 前缀的 deny 载荷仍是模型可见文本，其最终文案取决于 `agent/` 与 `lib/tool-feedback.ts` 是否消费 `parseBlockReason` 的 `failure`；本层不再向用户文案内插内部字面量。
 `lockedOutcome` 的顶层 `code` 固定为 `CIRCUIT_OPEN`（`MFA` 尝试耗尽时 `failure.code` 为 `MFA_LOCKED`）；若改为按 `reason` 返回 `MFA_LOCKED`，需同步 `tests/unit/security/mfa-failure-contract.test.ts` 中 `retry.code` 与 `toMatchObject` 两处断言。
