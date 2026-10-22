@@ -113,7 +113,7 @@ planner 不让内部诊断文本进入任何可渲染字段。
 验证入口见 [tests/unit/planner/CONTEXT.md](../tests/unit/planner/CONTEXT.md)。
 ## 端口契约与异常边界
 
-`PlanDeps`（`executor.ts:78`）必填只有 `runTool` 与 `onNodeUpdate`（调用处无 `?.`、无 try，`executor.ts:358`）。
+`PlanDeps`（`executor.ts:78`）必填只有 `runTool` 与 `onNodeUpdate`；`onNodeUpdate` 调用处无 `?.`、无 try（`executor.ts:358`），其拒绝直接中止走查。
 可选端口：`claimNode`/`releaseNode`/`isRunOwner`/`persistPlan`/`persistNode`/`loadPlan`/`controls`，以及 `persistPlan` 的弃用别名 `persist`（`executor.ts:182`）。
 `persistPlan` 与 `persist` 都缺省时计划快照静默丢弃（`executor.ts:183`）。
 `claimNode` 缺省即完全不认领，`'owned'` 分支此时只能来自 `isRunOwner`。
