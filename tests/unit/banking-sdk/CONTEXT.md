@@ -20,9 +20,10 @@ SDK 写入仍必须满足可信执行上下文与事务约束。
 | `subscription.test.ts` | 取消与提醒状态 |
 | `anomaly.test.ts` | 收支方向、投资分类与异常筛查 |
 | `card-replacement.test.ts` | 冻结/解冻可逆幂等、挂失终态与补办换卡不变量 |
-| `card-consumption.test.ts` | 账户绑定虚拟卡：绑定与幂等发卡、消费限额/余额护栏、卡状态与未绑定拒绝、并发不超支、多卡共享账户、付款额同步、执行身份重放与原子性 |
+| `card-consumption.test.ts` | 账户绑定借记卡与虚拟卡：绑定与幂等发卡、消费限额/余额护栏、卡状态与未绑定拒绝、并发不超支、多卡共享账户、付款额同步、执行身份重放与原子性 |
 | `card-consumption-time-authority.test.ts` | 消费时刻权威：伪造 `occurredAt`（过去/未来/小数/null/文本/Date/对象）逐项 `VALIDATION` 且账务与记录字节不变、显式 `undefined` 视为未提供、类型层无时间字段、限额恰好用尽与 0/`null` 限额、UTC+08:00 月界归属（上月末尾的消费：结果快照报上月余额、新鲜读取仍报当月全额） |
 | `card-replacement-binding.test.ts` | 补办续权：虚拟卡补办继承并持久化结算账户、刷新后仍绑定、仅一次扣款、月限额跨 A→B→C 连续且历史流水不改写、重复补办不二次发行、坏绑定回滚、显式前驱修复与无前驱拒绝、CREDIT 额度继承且总览不重复 |
+| `card-linked-account.test.ts` | 卡展示的结算账户关联：`LINKED` 卡的账户名/掩码/账户余额/`payableAmount`（月限额压降）、`MISSING` 与 `UNTRUSTED`（他人账户、非 CHECKING 账户）不带任何余额字段、删除账户经 FK SetNull 读为 `MISSING`、FROZEN/LOST 仍展示真实非零余额、CREDIT 为 `NOT_APPLICABLE`、创建时的自动/显式绑定与拒绝 |
 | `dashboard.test.ts` | 总览信用卡可用额：补卡后不重复计数（旧 LOST 卡排除、仅真 CREDIT 计入） |
 
 具体文件和断言以当前目录为准。
@@ -30,6 +31,14 @@ SDK 写入仍必须满足可信执行上下文与事务约束。
 回执缺失或请求身份冲突不能伪造原结果。
 不支持从旧流水补造当前回执。
 已持有产品的加购为聚合写入，采购身份存于 `purchaseHistory`。
+
+## 展示用的结算账户关联
+
+`Card.linkedAccountId` 是真实外键（可空，Prisma 默认 `SetNull`），所以卡不可能记录不存在的账户 id：删除账户后该列被置空，读路径为 `MISSING`。
+`CardView.linkedAccountStatus` 为 `LINKED`/`MISSING`/`UNTRUSTED`/`NOT_APPLICABLE`。
+只有 `LINKED` 才写 `linkedAccountNumber`、`linkedAccountName`、`accountAvailableBalance`（账户余额）与 `payableAmount`（`min(账户余额, 补办家族当月剩余限额)`；无月限额时等于账户余额）。
+`MISSING`/`UNTRUSTED` 一个余额字段都没有，不得序列化成 `0.00`；`usable` 只看 status，FROZEN/LOST 仍展示真实余额。
+UNTRUSTED 由「账户存在但不属于持卡人」与「账户不是 CHECKING」覆盖。
 
 ## 卡消费的时间与限额权威
 
