@@ -69,6 +69,7 @@ import type {
 import { cards } from '../lib/db/repositories';
 import { dbClient } from '../lib/db/client';import { AppError } from '../lib/errors';
 import { centsToMoney, moneyToCents } from '../lib/money';
+import { maskCardNumber } from '../lib/mask';
 import { demoNow } from '../lib/clock';
 import { idempotentCardId, isUniqueViolation, normalizeIdempotencyKey } from './idempotent';
 import { runInTransaction, type Tx } from './tx';
@@ -92,6 +93,26 @@ import type {
 
 /** Network of a newly issued virtual card (demo sandbox). */
 const VIRTUAL_CARD_NETWORK = 'UnionPay';
+
+/**
+ * The FICTIONAL complete number every card this module MINTS also carries.
+ *
+ * A card row keeps two columns: `numberMasked` (the display value every projection emits) and the
+ * SERVER-ONLY `numberFull`, which lets `security/card-resolution.ts` match a user-typed COMPLETE card
+ * number by exact equality. The issued number is deliberately fictitious — `6222` followed by an
+ * all-`0000` middle block and the card's own unique four-digit tail (`6222 0000 0000 1234`) — so no
+ * real bank card number is ever minted or stored here. It is written ONLY for a NEW row (an existing
+ * row is never rewritten) and is NEVER projected, summarized or logged: `toCardView` reads
+ * `numberMasked` alone.
+ */
+const FICTIONAL_CARD_BIN = '6222';
+const FICTIONAL_CARD_NUMBER_LENGTH = 16;
+/**
+ * How many trailing digits of the complete number the display value is derived from. Card masks are
+ * eight characters wide (`****1234`) — the shape of every seeded row and of the transport contract —
+ * while `maskCardNumber` keeps its input's length, so the derived tail window matches that width.
+ */
+const CARD_MASK_SOURCE_LENGTH = 8;
 
 /** Merchant label used when a card consumption omits one (local simulation only). */
 const DEFAULT_CONSUME_MERCHANT = '本地模拟消费';
@@ -399,8 +420,10 @@ export async function addDemoCard(userId: string, input: Omit<AddDemoCardRequest
       ? null
       : (await resolveLinkedAccount(tx, userId, input.linkedAccountId)).id;
     const own = await tx.card.findMany({ where: { userId } });
+    // NEW row only: the fictional complete number and the mask derived from it.
+    const { numberFull, numberMasked } = generateCardIdentity(own);
     const row = await tx.card.create({ data: { userId, type: input.type, network: 'UnionPay',
-      numberMasked: generateMaskedNumber(new Set(own.map(card => card.numberMasked))), status: 'ACTIVE',
+      numberMasked, numberFull, status: 'ACTIVE',
       creditLimitMinor, availableLimitMinor: creditLimitMinor, monthlyLimitMinor, linkedAccountId } });
     return loadCardView(row);
   });
@@ -529,7 +552,8 @@ export async function reportLostCard(
 
 /**
  * Replace a `LOST` card with a NEW card (same owner, same `type` and `network`).
- * The replacement is a fresh row with a new masked number. It carries the source's monthly limit,
+ * The replacement is a fresh row with a new masked number (and the accompanying FICTIONAL complete
+ * number, `numberFull`). It carries the source's monthly limit,
  * and a CREDIT replacement also inherits the source's approved credit limit and current available limit
  * (per-category limits are NOT copied). The source stays `LOST` and records the new card id in
  * `replacedByCardId` — a historical reference, not a status change and not a relation.
@@ -590,11 +614,14 @@ export async function replaceCard(cardId: string, userId: string): Promise<CardV
       return loadCardView(await tx.card.findUniqueOrThrow({ where: { id: existing.id, userId } }));
     }
     const own = await tx.card.findMany({ where: { userId } });
+    // NEW row only: the fictional complete number and the mask derived from it.
+    const { numberFull, numberMasked } = generateCardIdentity(own);
     const created = await tx.card.create({ data: {
       userId,
       type: latest.type,
       network: latest.network,
-      numberMasked: generateMaskedNumber(new Set(own.map(card => card.numberMasked))),
+      numberMasked,
+      numberFull,
       status: 'ACTIVE',
       // A replacement CREDIT card inherits the SAME approved credit limit and current available
       // limit (no re-approval); non-credit cards keep none.
@@ -612,7 +639,9 @@ export async function replaceCard(cardId: string, userId: string): Promise<CardV
 
 /**
  * Issue a new virtual card bound to a settlement CHECKING account; returns the created card.
- * The masked number is generated as `****` + 4 digits, avoiding the user's existing masks.
+ * The masked number is generated as `****` + 4 digits, avoiding the user's existing masks, and is
+ * derived from the same FICTIONAL complete number the row records in `numberFull` (see
+ * `generateCardIdentity`); the masked value alone is ever projected.
  * `monthlyLimit` is an explicit cent-valid configuration saved at creation.
  *
  * The settlement account is `input.linkedAccountId` (validated for ownership + CHECKING type) or,
@@ -652,11 +681,14 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
     const row = await runInTransaction(async (tx) => {
       const account = await resolveLinkedAccount(tx, userId, input.linkedAccountId);
       const own = await tx.card.findMany({ where: { userId } });
+      // NEW row only: the fictional complete number and the mask derived from it.
+      const { numberFull, numberMasked } = generateCardIdentity(own);
       return tx.card.create({ data: {
         userId,
         type: 'VIRTUAL',
         network: VIRTUAL_CARD_NETWORK,
-        numberMasked: generateMaskedNumber(new Set(own.map((card) => card.numberMasked))),
+        numberMasked,
+        numberFull,
         status: 'ACTIVE',
         monthlyLimitMinor,
         linkedAccountId: account.id,
@@ -683,7 +715,8 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
       if (replayed) return replay(replayed, account.id);
 
       const own = await tx.card.findMany({ where: { userId } });
-      const numberMasked = generateMaskedNumber(new Set(own.map((card) => card.numberMasked)));
+      // NEW row only: the fictional complete number and the mask derived from it.
+      const { numberFull, numberMasked } = generateCardIdentity(own);
 
       return tx.card.create({
         data: {
@@ -692,6 +725,7 @@ export async function applyVirtualCard(input: ApplyVirtualCardInput): Promise<Ca
           type: 'VIRTUAL',
           network: VIRTUAL_CARD_NETWORK,
           numberMasked,
+          numberFull,
           status: 'ACTIVE',
           monthlyLimitMinor,
           linkedAccountId: account.id,
@@ -931,4 +965,33 @@ function generateMaskedNumber(existing: ReadonlySet<string>): string {
     if (!existing.has(masked)) return masked;
   }
   throw new AppError('INTERNAL', '无法生成唯一的虚拟卡卡号', { attempts: 20 });
+}
+
+/**
+ * The identity of a card about to be MINTED: a server-generated FICTIONAL complete number plus the
+ * masked display value DERIVED from that same number through `lib/mask.ts` (the masking algorithm is
+ * reused, never re-implemented here).
+ *
+ * The four-digit tail comes from `generateMaskedNumber`, so its contract is preserved: a new card's
+ * trailing four digits are unique among the owner's existing cards — including a tail that lives only
+ * in a legacy row's `numberFull` — and, because the complete number is `6222` + zeros + that tail,
+ * distinct tails are also distinct complete numbers. Two cards minted by this module can therefore
+ * never share a `cardNumber` or a `cardTail` selector, so the SDK itself never creates an ambiguity
+ * `security/card-resolution.ts` would have to refuse.
+ *
+ * Only NEW rows get this value; an existing row's display value is never rewritten.
+ */
+function generateCardIdentity(own: readonly CardRow[]): { numberFull: string; numberMasked: string } {
+  const taken = new Set<string>();
+  for (const card of own) {
+    taken.add(card.numberMasked);
+    // A row may record a complete number its display value does not show; its tail is taken too.
+    if (typeof card.numberFull === 'string' && card.numberFull !== '') {
+      taken.add(maskCardNumber(card.numberFull.slice(-CARD_MASK_SOURCE_LENGTH)));
+    }
+  }
+  const unique = generateMaskedNumber(taken);
+  const middle = '0'.repeat(FICTIONAL_CARD_NUMBER_LENGTH - FICTIONAL_CARD_BIN.length - 4);
+  const numberFull = `${FICTIONAL_CARD_BIN}${middle}${unique.slice(-4)}`;
+  return { numberFull, numberMasked: maskCardNumber(numberFull.slice(-CARD_MASK_SOURCE_LENGTH)) };
 }
