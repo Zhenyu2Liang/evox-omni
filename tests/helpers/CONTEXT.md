@@ -10,7 +10,7 @@
 | `faux-agent.ts` | 原始 Pi Agent 与脚本模型 |
 | `scenario.ts` | 网关和工具层的两阶段场景 |
 | `scripted-provider.ts` | 注入生产运行入口的模型响应 |
-| `prisma-cli.ts` | 客户端准备、隔离库清理与命令诊断 |
+| `prisma-cli.ts` | 客户端准备、隔离库清理与命令诊断（`cliCommand`/`prismaCliEnv`/`resolvePrismaBin`/`resolveRepoRoot`/`resolveTsxBin`/`SCHEMA_ENGINE_RUST_LOG`/`CliInvocation` 由 `lib/prisma-cli-env` 再导出，`prisma-cli.ts:21`–`:29`） |
 | `restart-process.ts`、`standalone-restart-process.ts` | 独立进程恢复探针 |
 | `write-failure.ts` | 保留真实事务的写入失败注入 |
 | `locked-action.ts` | 终止锁定用例的 RED/YELLOW 计划动作播种、网关验证码阶梯与只读探针 |
