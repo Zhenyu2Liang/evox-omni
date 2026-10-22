@@ -24,7 +24,7 @@ import {
   claimPendingAction,
   getPendingAction,
   getPendingActionPlanLink,
-  setPendingActionStatus,
+
   type PendingActionWithMfa,
 } from '@/lib/db/repositories/pendingAction';
 import { getExecutionReceipt } from '@/lib/db/repositories/executionReceipt';
@@ -40,6 +40,7 @@ import { committedExecutionResult } from './execution-evidence';
 import { commandExecutionAudit } from './execution-audit';
 import { buildConfirmFence, guardExecutionFence } from './execution-fence';
 import { buildRecoveryAudit, convergenceAuditKey, decideConvergence } from './execution-convergence';
+import { isLegalActionSourceStatus, isTerminalActionStatus } from './action-status';
 import { recovery } from '@/security';
 import { settleInvocationFromAction } from '@/lib/db/repositories/agentRun';
 
@@ -179,14 +180,6 @@ export interface ConfirmableActionRow {
   executionLeaseExpiresAt: Date | null;
 }
 
-/** Statuses that are TERMINAL — a row in one of them is settled and needs no recovery. */
-const TERMINAL_ACTION_STATUSES: ReadonlySet<string> = new Set<string>([
-  'executed',
-  'failed',
-  'cancelled',
-  'locked',
-  'needs_reconciliation',
-]);
 
 /** Is a NON-EXPIRED persisted lease present on the row at `nowMs`? */
 export function hasActiveLease(row: ConfirmableActionRow, nowMs: number): boolean {
@@ -211,7 +204,7 @@ export function hasActiveLease(row: ConfirmableActionRow, nowMs: number): boolea
  */
 export function classifyConfirmedAction(row: ConfirmableActionRow, nowMs: number): ConfirmedActionClass {
   if (hasPersistedResult(row.resultJson)) return 'settled';
-  if (TERMINAL_ACTION_STATUSES.has(row.status)) return 'settled';
+  if (isTerminalActionStatus(row.status)) return 'settled';
   if (row.status !== 'confirmed') return 'needs_reconciliation';
   if (hasActiveLease(row, nowMs)) return 'processing';
   if (isRecoverableStandaloneTool(row.toolName)) return 'recoverable';
@@ -229,12 +222,32 @@ export interface SettlePendingActionInput {
   status: PendingActionStatus;
   /** The persisted `ToolExecutionResult` — omit to leave `resultJson` untouched. */
   result?: ToolExecutionResult;
-  /** When given, land ONLY if the row currently holds one of these statuses (atomic CAS). */
-  from?: PendingActionStatus[];
+  /**
+   * REQUIRED. The statuses the row must CURRENTLY hold for the write to land (atomic CAS). Never
+   * empty, never `locked`, and never a jump OUT of a terminal status: an illegal source throws
+   * before the transaction opens, so nothing is written.
+   */
+  from: PendingActionStatus[];
   /** Audit entry, or a pure builder reading the current decision AFTER the transaction's write lock. */
   audit?: AuditEntry | ((current: PendingActionWithMfa) => AuditEntry);
   /** Idempotency key for the audit insert — a repeat settle never duplicates the audit row. */
   dedupeKey?: string;
+}
+
+/**
+ * Every status write must NAME a legal expected source (`agent/action-status.ts`). `locked` is never
+ * a source, so an exhausted-verification refusal can never be re-activated or downgraded, and an
+ * empty source list is refused rather than silently becoming an unconditional write.
+ */
+function assertSettleSources(input: SettlePendingActionInput): void {
+  const from = input.from;
+  if (!Array.isArray(from) || from.length === 0) {
+    throw new AppError('SECURITY_DENIED', 'A PendingAction status write requires at least one explicit source status.');
+  }
+  for (const source of from) {
+    if (isLegalActionSourceStatus(source, input.status)) continue;
+    throw new AppError('SECURITY_DENIED', `Refusing a PendingAction status write from "${source}" to "${input.status}": not a legal source status.`);
+  }
 }
 
 /**
@@ -249,16 +262,15 @@ export interface SettlePendingActionInput {
  * this transaction lands state and reconciles verified audit-storage faults without another debit.
  */
 export async function settlePendingAction(input: SettlePendingActionInput): Promise<boolean> {
+  // FAIL CLOSED before the transaction opens: a status write without a LEGAL expected source could
+  // resurrect a settled refusal (above all a `locked` row). Nothing is written on a refusal.
+  assertSettleSources(input);
   return prisma.$transaction(async (tx) => {
-    if (input.from !== undefined) {
-      const won = await claimPendingAction(
-        { actionId: input.actionId, from: input.from, to: input.status },
-        tx,
-      );
-      if (!won) return false;
-    } else {
-      await setPendingActionStatus(input.actionId, input.status, tx);
-    }
+    const won = await claimPendingAction(
+      { actionId: input.actionId, from: input.from, to: input.status },
+      tx,
+    );
+    if (!won) return false;
     if (input.result !== undefined) {
       await tx.pendingAction.update({
         where: { id: input.actionId },
@@ -436,8 +448,9 @@ async function settleFromCommittedReceipt(
   const settled = await landStandalone(actionId, row, tier, requiresMfa, result, 'executed');
   return {
     ...settled,
-    message:
-      '该操作此前已执行但结果未留存，已从其已提交的执行凭证中恢复成功（副作用仅发生一次，未重新执行）。',
+    message: settled.message !== ''
+      ? settled.message
+      : '该操作此前已执行但结果未留存，已从其已提交的执行凭证中恢复成功（副作用仅发生一次，未重新执行）。',
   };
 }
 
@@ -519,9 +532,11 @@ async function replayStandaloneAction(
   const settled = await landStandalone(actionId, row, tier, requiresMfa, result, status);
   return {
     ...settled,
-    message: result.ok
-      ? '已复核当前授权，按持久化操作身份完成恢复并确认执行成功（副作用仅发生一次）。'
-      : `恢复执行未成功：${result.error ?? '未知原因'}`,
+    message: settled.message !== ''
+      ? settled.message
+      : result.ok
+        ? '已复核当前授权，按持久化操作身份完成恢复并确认执行成功（副作用仅发生一次）。'
+        : `恢复执行未成功：${result.error ?? '未知原因'}`,
   };
 }
 
@@ -538,9 +553,10 @@ async function landStandalone(
   result: ToolExecutionResult,
   status: PendingActionStatus,
 ): Promise<StandaloneWedgeOutcome> {
-  await settlePendingAction({
+  const won = await settlePendingAction({
     actionId,
     status,
+    from: ['confirmed'],
     result,
     audit: current => {
       // Also covers CONFLICT/CIRCUIT_OPEN receipt fallbacks, which may carry a stale caller row.
@@ -571,7 +587,14 @@ async function landStandalone(
     dedupeKey: convergenceAuditKey(actionId, status),
   });
 
-  return { ok: result.ok, actionId, status, tier, requiresMfa, message: '', result, events: [] };
+  // A lost CAS means a concurrent settle already moved the row: report its CURRENT persisted status
+  // and claim NOTHING about this attempt (never a fabricated success, never another retry).
+  const persisted = won ? undefined : (await getPendingAction(actionId))?.status as PendingActionStatus | undefined;
+  return {
+    ok: result.ok, actionId, status: persisted ?? status, tier, requiresMfa,
+    message: persisted === undefined ? '' : '该操作已由并发的结算先行落定，本次恢复未写入任何结果。',
+    result, events: [],
+  };
 }
 
 /**

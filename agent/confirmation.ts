@@ -1,14 +1,19 @@
 /** Human decisions authorize persisted arguments; model prose never grants execution. */
-import type { PendingAction } from '@/lib/contracts/security';
+import type { PendingAction, PendingActionStatus } from '@/lib/contracts/security';
 import { security } from '@/security';
 import { recordAudit } from '@/audit';
 import { demoNow } from '@/lib/clock';
-import { getPendingActionPlanLink } from '@/lib/db/repositories/pendingAction';
+import { getPendingAction, getPendingActionPlanLink } from '@/lib/db/repositories/pendingAction';
 import { AppError } from '@/lib/errors';
 import type { AuthorizationResult } from '@/security/security-gateway';
 import type { ConfirmOptions, ConfirmationOutcome } from './confirmation/contracts';
 import { resolveTrustedIdentity } from './confirmation/identity';
-import { blockedOutcome, cancelledPlanOutcome, conflictOutcome } from './confirmation/outcomes';
+import {
+  blockedOutcome,
+  cancelledPlanOutcome,
+  conflictOutcome,
+  unappliedCancelOutcome,
+} from './confirmation/outcomes';
 import { withLiveConfirmation } from './confirmation/liveness';
 import { executeAuthorizedAction } from './confirmation/authorized-execution';
 
@@ -56,6 +61,18 @@ export async function cancelAction(actionId: string, opts?: ConfirmOptions): Pro
   catch (error) {
     if (error instanceof AppError && error.code === 'CONFLICT') return conflictOutcome(actionId, error);
     throw error;
+  }
+  // Success must be PROVEN against the persisted row: a cancel that never settled must not be
+  // reported as a successful cancellation and must not write a cancelled audit. The persisted
+  // status is carried as a typed field, never interpolated into the public message.
+  const settled = await getPendingAction(actionId);
+  if (settled === null || settled.status !== 'cancelled') {
+    return unappliedCancelOutcome(
+      actionId,
+      (settled?.status as PendingActionStatus | undefined) ?? action.status,
+      action.tier,
+      action.requiresMfa === true,
+    );
   }
   const link = await getPendingActionPlanLink(actionId);
   await recordAudit({

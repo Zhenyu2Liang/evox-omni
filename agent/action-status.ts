@@ -28,6 +28,25 @@ export const TERMINAL_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'needs_reconciliation',
 ];
 
+/**
+ * Statuses a `PendingAction` may be CLAIMED FROM into another status: the still-decidable open
+ * statuses plus `confirmed` (already authorized, executing). `locked` is absent by construction —
+ * a locked operation is a settled refusal and is NEVER a legal claim source.
+ */
+export const CLAIMABLE_ACTION_STATUSES: readonly PendingActionStatus[] = [
+  ...OPEN_ACTION_STATUSES,
+  'confirmed',
+];
+
+/**
+ * Every status a `PendingAction` can hold — the complete representation set (claimable + terminal).
+ * Derived from the two literals above so a status can never be representable in one place only.
+ */
+export const ALL_ACTION_STATUSES: readonly PendingActionStatus[] = [
+  ...CLAIMABLE_ACTION_STATUSES,
+  ...TERMINAL_ACTION_STATUSES,
+];
+
 /** Is the persisted status an OPEN, still-decidable operation status (`pending` / `awaiting_mfa`)? */
 export function isOpenActionStatus(status: string | null | undefined): boolean {
   return status !== null && status !== undefined
@@ -47,4 +66,28 @@ export function isTerminalActionStatus(status: string | null | undefined): boole
  */
 export function mayPromptForDecision(status: string | null | undefined): boolean {
   return isOpenActionStatus(status);
+}
+
+/** May a status write CLAIM the row from `status` (`OPEN_ACTION_STATUSES` + `confirmed`)? */
+export function isClaimableActionStatus(status: string | null | undefined): boolean {
+  return status !== null && status !== undefined
+    && (CLAIMABLE_ACTION_STATUSES as readonly string[]).includes(status);
+}
+
+/**
+ * Is `from` a LEGAL expected source status of a status write to `to`?
+ *
+ *  - every `CLAIMABLE_ACTION_STATUSES` member is legal;
+ *  - an IDEMPOTENT repair — re-writing the SAME terminal status to land a missing result/audit
+ *    without reactivating or downgrading the row — is legal;
+ *  - `locked` is NEVER a legal source in any direction, and no source may jump OUT of a terminal
+ *    status into a different one (that would resurrect a settled refusal).
+ */
+export function isLegalActionSourceStatus(
+  from: string | null | undefined,
+  to: string | null | undefined,
+): boolean {
+  if (isClaimableActionStatus(from)) return true;
+  if (from === null || from === undefined || from !== to) return false;
+  return isTerminalActionStatus(from) && from !== 'locked';
 }

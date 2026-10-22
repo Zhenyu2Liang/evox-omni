@@ -1,4 +1,5 @@
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
+import type { PendingActionStatus } from '@/lib/contracts/security';
 import type { AuthorizationResult } from '@/security/security-gateway';
 import { security } from '@/security';
 import { getSession } from '@/lib/db/repositories/session';
@@ -58,8 +59,8 @@ export async function executeAuthorizedAction(
   if (current === null) throw new AppError('NOT_FOUND', '执行操作不存在');
   const decision = await decideConvergence(current, { completion: result, sideEffectCommitted });
   result = decision.result ?? result;
-  await settlePendingAction({
-    actionId, status: decision.status, result,
+  const landed = await settlePendingAction({
+    actionId, status: decision.status, from: ['confirmed'], result,
     audit: {
       timestamp: demoNow(), sessionId: action.sessionId, userId: identity.userId, userRequest: action.userRequest ?? '',
       intent: action.intent, toolName: action.toolName, riskLevel: tier,
@@ -71,7 +72,7 @@ export async function executeAuthorizedAction(
     dedupeKey: convergenceAuditKey(actionId, decision.status),
   });
   try {
-    if (decision.status === 'executed' || decision.status === 'failed') {
+    if (landed && (decision.status === 'executed' || decision.status === 'failed')) {
       await gateway.recordActionResult(actionId, decision.status);
     }
   } catch {
@@ -91,11 +92,16 @@ export async function executeAuthorizedAction(
   const narrationError = events.find(
     (event): event is Extract<AgentStreamEvent, { type: 'error' }> => event.type === 'error',
   );
-  const businessMessage = decision.status === 'needs_reconciliation'
+  // A lost CAS means a concurrent settle already moved the row: report its CURRENT persisted status
+  // truthfully instead of the intended one (never a fabricated success, never another execution).
+  const persisted = landed ? undefined : (await getPendingAction(actionId))?.status as PendingActionStatus | undefined;
+  const settledStatus = persisted ?? decision.status;
+  const businessMessage = settledStatus === 'needs_reconciliation'
     ? '操作结果尚无法核实，已进入人工核对，请勿重复执行。'
+    : !landed ? '该操作的最终状态已由并发的结算先行落定，本次未重复写入结果。'
     : result.ok ? '操作已执行。' : (result.error ?? '操作执行失败。');
   return {
-    ok: result.ok, actionId, status: decision.status, tier, requiresMfa,
+    ok: result.ok, actionId, status: settledStatus, tier, requiresMfa,
     message: narrationError === undefined ? businessMessage
       : `${businessMessage}（结果播报失败：${narrationError.message}）`,
     result, events: [...planEvents, ...events],

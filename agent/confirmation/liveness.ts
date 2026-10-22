@@ -10,6 +10,7 @@ import type { ConfirmOptions, ConfirmationOutcome } from './contracts';
 import { resolveTrustedIdentity } from './identity';
 import { conflictOutcome } from './outcomes';
 import { isManualCardCommand } from '@/lib/contracts/card-management';
+import { isOpenActionStatus } from '../action-status';
 
 async function beginExecutionLease(actionId: string): Promise<{ owner?: string; blocked: boolean }> {
   const owner = newId('lease');
@@ -19,7 +20,7 @@ async function beginExecutionLease(actionId: string): Promise<{ owner?: string; 
   });
   if (claimed) return { owner, blocked: false };
   const row = await getPendingAction(actionId);
-  return { blocked: row?.status === 'pending' || row?.status === 'awaiting_mfa' };
+  return { blocked: isOpenActionStatus(row?.status) };
 }
 
 /** Own both liveness markers until the decision returns; cleanup releases only our lease. */
@@ -37,6 +38,7 @@ export async function withLiveConfirmation(
     const lease = await beginExecutionLease(actionId);
     leaseOwner = lease.owner;
     if (lease.blocked) {
+      // The lease holder never sees the caller's raw text: `conflictOutcome` funnels the refusal.
       return await conflictOutcome(actionId, new AppError('CONFLICT', 'Another continuation owns this decision.'));
     }
     return await run();

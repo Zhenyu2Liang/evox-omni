@@ -12,16 +12,28 @@ export interface ConfirmOptions {
   sessionId?: string;
 }
 
+/**
+ * The outcome of one human decision (`confirm` / MFA `verify` / `cancel`).
+ *
+ * Refusal contract: EVERY `!ok` outcome carries a typed `code` (plus the structured `failure` for a
+ * security refusal), so no caller ever parses text. `message` is always a public sentence — a
+ * server-authored business sentence or one rendered by the funnel (`lib/public-text.ts`) — and never
+ * contains an internal status literal (`locked`, `cancelled`, …), an action/session id, JSON, a
+ * stack trace or a `__SECURITY_BLOCK__` payload. `status` is the persisted decision state; anything
+ * but `pending`/`awaiting_mfa` is TERMINAL (`locked` in particular), so a terminal outcome is never
+ * re-prompted for a code, re-activated, resumed or executed.
+ */
 export interface ConfirmationOutcome {
   ok: boolean;
   actionId: string;
   status: PendingActionStatus;
   tier: RiskLevel;
   requiresMfa: boolean;
+  /** Funnel-rendered public sentence; never a raw gateway or security payload. */
   message: string;
   /** Typed refusal code, so a caller never parses the message. */
   code?: import('@/lib/errors').ErrorCode;
-  /** Structured refusal facts (code + reason + attempts). */
+  /** Structured refusal facts (code + reason + attempts); never rendered as a diagnostic. */
   failure?: import('@/lib/contracts/security').SecurityFailure;
   result?: ToolExecutionResult;
   events: AgentStreamEvent[];
