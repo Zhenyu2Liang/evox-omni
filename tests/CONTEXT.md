@@ -113,7 +113,8 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 `unit/planner/tool-diagnostics.test.ts` 是唯一渲染层锁定用例：`MfaCard`/`ConfirmationCard` 传 `status:'locked'` 断言 `cards.terminal.locked` 且无 `<input>`/`<button>`。
 `e2e/acceptance.e2e.ts` 的 `j-circuit-breaker-lock` 在真实浏览器连错三码，用未限定 `[role="status"]` 的子串匹配断言 `cards.terminal.locked`，并核 `/security` 的「已熔断」「失败 3 / 3 次」与 `CIRCUIT_BREAKER_TRIPPED` 行。
 
-本仓库没有任何用例断言锁定的人话文案，也没有 `chat.error.securityLocked` 的断言。
+锁定文案只有子串断言，且都不经 i18n：`scenarios/test-10-circuit-breaker.test.ts` 断言 `thirdAttempt.text` 含「锁定」、`auth.message` 含「熔断」；`integration/money-budget.test.ts` 断言执行栅栏的 `CIRCUIT_OPEN` 结果含「熔断」。
+完整锁定句与 `chat.error.securityLocked` 全仓无断言。
 `publicToolError` 仅由 `unit/planner/tool-feedback.test.ts` 以 `chat.error.toolFailed` 覆盖通用失败，不涉及锁定。
 已开熔断时模型无法解锁：`resetSession` 需验证码或冷却，见 `unit/security/circuit-breaker-reset.test.ts`。
 空 `blockedOutcome`/`conflictOutcome`/`withLiveConfirmation` 无测试直接引用；`executeGatedTool` 由 `helpers/faux-agent.ts`、`integration/refactor-security-runtime.test.ts` 从 `@/agent/confirmation` 引入，`confirmAction` 由 `integration/conversational-turns.test.ts` 引入。
