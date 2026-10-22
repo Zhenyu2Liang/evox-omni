@@ -57,6 +57,9 @@
 停靠决策检查必须先于第一次状态占用：拒绝时持久化计划状态原样保留（不翻 `running`、不走执行器、不重驱已结清节点、不取租约、不跑工具）。
 `assertParkedActionsNotTerminal` 遍历 `parkedActionIds(plan)`（去重、按节点顺序），对每个 id 读 `getPendingActionOwnership`；行缺失或不属终态时跳过，遇到终态立即抛结构化 `AppError`。
 拒绝映射：`locked` → code `MFA_LOCKED` + `chat.error.actionLocked`；`needs_reconciliation` → code `CONFLICT` + `chat.error.unknownOutcome`；其它终态（`executed`/`failed`/`cancelled`）→ code `CONFLICT` + `chat.error.stateChanged`。
+恢复/重试路径上第二个 `CONFLICT` 来源是人工核对闸：`assertNoOpenManualReview`（`lib/db/repositories/manualReview.ts:6`）在任务存在 `status = 'open'` 的 `ManualReview` 行时抛 `CONFLICT` + `任务已转人工处理，请先完成核对并记录处理结论。`；它同样先于任何状态占用，同样出网 409。
+并发打开的人工核对不会抛错而是让占用落空：`claimTaskStatus(…, 'running')`（`lib/db/repositories/task.ts:151`）与 `claimTaskExecution`（`lib/db/repositories/task.ts:201`）的 CAS 都带 `manualReviews: { none: { status: 'open' } }`，落空时控制返回当前计划快照（`controls.ts:34,36,55,57`）。
+恢复/重试不会返回 `undefined`：`getTaskPlan`（`ownership.ts:20`）声明 `Promise<TaskPlan>`，所有权缺失时抛 `NOT_FOUND`/`SECURITY_DENIED`。
 公开 `message` 永远是干净的业务句，`{ taskId, actionId, status }` 只进 `detail`，作为内部诊断。
 文案来自既有目录（`createTranslator(DEFAULT_LOCALE)`），本目录不新增 i18n 键。
 非 `INTERNAL` 的 code 按 `app/api/_lib/http.ts#mapAppError` 原样出网（`MFA_LOCKED` → 423，`CONFLICT` → 409），`detail` 永不进入响应体。
