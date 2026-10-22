@@ -49,7 +49,7 @@ describe('agent/turns/events · locked session security event', () => {
 
   it('publishes a structured security event instead of the internal block payload', async () => {
     const sessionId = newSessionId('locked');
-    const agent = buildFauxAgent({ sessionId, script: [{ kind: 'text', text: '开始' }] });
+    const agent = buildFauxAgent({ sessionId, script: [{ kind: 'tool', toolCall: { tool: RED_TOOL, args: RED_ARGS } }] });
 
     const result = await runTurn({ sessionId, message: '帮我转 5000 给张伟', agent });
 
@@ -83,7 +83,7 @@ describe('agent/turns/events · locked session security event', () => {
 
   it('keeps the public summary catalog-owned for the blocked view', async () => {
     const sessionId = newSessionId('locked');
-    const agent = buildFauxAgent({ sessionId, script: [{ kind: 'text', text: '开始' }] });
+    const agent = buildFauxAgent({ sessionId, script: [{ kind: 'tool', toolCall: { tool: RED_TOOL, args: RED_ARGS } }] });
 
     const result = await runTurn({ sessionId, message: '帮我转 5000 给张伟', agent });
 
