@@ -41,6 +41,21 @@
 计划节点（`submit_plan` 之后）经 `agent/confirmation/gated-execution.ts` 以 `taskId`/`nodeId` 复用同一 `handleToolCall` 路径。
 独立路径：`manual-card-management.ts#proposeCardChange`（`POST /api/cards`）直接 `pendingAction.create`，工具名 `manual_add_card`/`manual_delete_card`，被 `app/api/actions/route.ts` 显式过滤，不出现在主确认面板。`addDemoCardSchema` 另接受可选 `linkedAccountId`（VIRTUAL 卡的结算账户绑定），`toChange` 将其透传到 `CardChange`；该绑定的账户归属与类型由 SDK 在服务端校验。
 
+## PendingAction 状态写入点与 CAS 过滤
+
+创建：`security-gateway.ts#gatewayCreatePendingAction` 经 `repoCreatePending`（`:691-712`）写入 `status: ev.requiresMfa ? 'awaiting_mfa' : 'pending'`（`:677`），无 CAS，落库默认值在仓储 `createPendingAction` 的 `input.status ?? 'pending'`。
+`security-gateway.ts#persistLockedAction`（`:817-820`）`claimPendingAction({ from: ['pending','awaiting_mfa'], to: 'locked' })`，由 MFA 耗尽（`:914`）与会话熔断（`:1148`）两个分支共用。
+`authorizeWithMfa` 的确认事务（`:922-945`）：`claimPendingAction({ from: ['awaiting_mfa','pending'], to: 'confirmed', userId, sessionId })`；计划已取消则在同一 tx 内 `update where {id}` → `'cancelled'`（`:940`，只撤销本次 claim，不看状态）。
+`authorizeTransfer`（`:992-1038`）：`updateMany where {id, status in ['pending'], userId, sessionId}` → `'confirmed'`（`:994-1002`）；计划取消 → `'cancelled'`（`:1014`）；确认时升级 RED → `'awaiting_mfa'`（`:1029-1034`）。
+`authorizeAction` 静态 RED 重新加严（`:1131-1134`）：`updateMany where {id, userId, sessionId, status in ['pending','awaiting_mfa']}` → `riskLevel 'RED'` + `requiresMfa true` + `status 'awaiting_mfa'`，`count !== 1` 抛 `CONFLICT`。
+`authorizeAction` 静态 YELLOW 认领（`:1162-1168`）：`claimPendingAction({ from: ['pending'], to: 'confirmed', userId, sessionId })`。
+`cancelAction`（`:1197-1203`）：`claimPendingAction({ from: ['pending','awaiting_mfa'], to: 'cancelled', userId, sessionId })` —— 认领源不含 `'locked'`，已锁定行取消得到 `CONFLICT`。
+`recordActionResult`（`:1218-1220`）→ 仓储 `setPendingActionStatus`（= `updatePendingActionStatus`）`update where {id}` → `'executed' | 'failed'`，无 CAS（调用前已完成 exactly-once 认领）。
+`recovery-authorization.ts#authorizeRecoveryAction`：writer claim `updateMany where {id, userId, sessionId, status: 'confirmed'}` 写回同值 `'confirmed'` 只为取写锁（`:39-42`，`count !== 1` 抛 `CONFLICT`）；需 MFA 时 `update where {id}` → `'awaiting_mfa'` + RED（`:64-66`）。
+`manual-card-management.ts`：`proposeCardChange` `create` 写 `'awaiting_mfa'`（`:88-90`）；`verifyCardChange` 执行栅栏 `updateMany where {id, userId, sessionId, status: current.status, argsJson}` → `'confirmed'`（`:143-145`），`onCommit` `update where {id}` → `'executed'`（`:148`）；`cancelCardChange` `updateMany where {id, ...identity, status in ['pending','awaiting_mfa','locked']}` → `'cancelled'`（`:159`）。
+手工卡路径是唯一把 `'locked'` 当作可继续/可取消状态的地方（`:51`、`:100`、`:111`、`:138`、`:159`），但它自己从不落库 `'locked'`（`:102` 的 `'locked'` 只是会话熔断的展示映射），且 `:71`/`:112` 以 `isLocked` 抛 `CIRCUIT_OPEN`。
+本层从不写 `executionLeaseOwner` / `executionLeaseExpiresAt`；租约只由 `agent/confirmation/liveness.ts` 经仓储 `claimPendingActionLease` / `clearPendingActionLease` 维护。
+
 ## 阻断原因（block reason）标记与锁定的可见性
 
 `security-gateway.ts:80` 导出 `BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__'`；全仓只有 `security-gateway.ts` 内三处拼接它。
@@ -83,6 +98,22 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 真正的终态锁定会以「仅从 `pending`/`awaiting_mfa` 出发」的 CAS 把 `PendingAction.status` 落库为 `'locked'`；该行因此不再作为待决策项返回，也不再发出 `mfa_required`，MFA 弹窗不会重现；对已是 `'locked'` 的行再次授权幂等返回同一拒绝。
 `mfa.ts#verify` 返回 `Result` 而非抛错；抛 `CIRCUIT_OPEN` 的只有 `circuit-breaker.resetSession` 与 `execution-policy.assertSessionMayWrite`。
 成功验证码重置连续失败计数，但不解除已触发的熔断（「locked 优先」）；仅 `resetSession` 以验证码或 60 秒冷却解除。
+
+## 熔断状态的写入、解除与挑战续期
+
+熔断状态存在 `CircuitBreakerState`（键 `user:<userId>`，无用户时为 `session:<actor>`）。
+写入：`circuit-breaker.ts#recordFailure`（`:163-186`）经仓储 `upsertFailure`，`didLock` 时发 `CIRCUIT_BREAKER_TRIPPED`；`incidents.ts#recordRiskSignal`（`:34-36`）在风险信号达阈值时 `circuitBreakerState.upsert { locked: true, lockedAt }`。
+`recordSuccess`（`:189-193`）只清连续失败计数，不解锁。
+解除：`commitAuditedReset`（`:252-302`）以 `expect { locked, lockedAt }` 做 CAS 调 `resetBreakerState`，丢 CAS 即良性空操作；`reset`（`:309-312`）是无门禁无审计的底层清除。
+解锁门禁在 `resetSession`（`:212-239`）：owner 为 locked 时必须 `verificationCode === MFA_CODE` 或 `now >= lockedAt + RESET_COOLDOWN_MS`，否则抛 `AppError('CIRCUIT_OPEN')`。
+
+`security/` 内没有任何路径把 `PendingAction.status` 从 `'locked'` 写回 `'pending'`/`'awaiting_mfa'`。
+两处续期都只写 `MfaChallenge`，从不写 `pendingAction`：
+`mfa.ts#issueChallenge`（`:90-117`）对已存在挑战先 `resetMfaAttempts`（仓储 `update where {actionId}` → `attempts: 0`，`:100`），再 `prisma.mfaChallenge.update where {actionId}`（`:101-105`）写 `status: 'pending'`、新 code、`expiresAt = now + 5min`、`verifiedAt: null`、`consumedAt: null`。
+该 `where` 只有 `actionId`、不过滤 `status`，所以单个挑战对象上「locked → pending」是可能的；但可达调用点都落在非 `'locked'` 行上（`authorizeAction` 在 `:1116-1119` 提前返回 `lockedOutcome`，`recovery-authorization` 的 writer claim 要求 `'confirmed'`），且 `issueChallenge` 不写 `pendingAction`，动作行仍是 `'locked'`。
+`circuit-breaker.ts#commitAuditedReset`（`:276`，仅 `prior.locked` 时）在解除熔断的审计事务内调 `lib/db/repositories/pendingAction.ts#renewLockedMfaChallenges`（`:362-378`）：`mfaChallenge.updateMany where { status: 'locked', action: { userId|sessionId, status: 'awaiting_mfa', requiresMfa: true } }` → `attempts: 0, status: 'pending', expiresAt: now + 5min, verifiedAt: null, consumedAt: null`。
+它按 `action.status: 'awaiting_mfa'` 过滤，因此已落库为 `'locked'` 的 `PendingAction` 不会被续期；取消/已执行的行同样被排除。
+`security/mfa.ts` 对 `pendingAction` 只有 `getPendingAction` 读：其写操作只有 `prisma.mfaChallenge.update`（`:101`、`:167`）与仓储 `createMfaChallenge` / `incrementMfaAttempts` / `updateMfaChallengeStatus` / `resetMfaAttempts`，全部落在 `MfaChallenge`。
 
 ## 确认/验证的返回契约（返回，不抛出）
 
