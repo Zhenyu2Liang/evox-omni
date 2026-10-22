@@ -1,0 +1,25 @@
+﻿// AI Banking Agent 鈥?Prisma schema (SQLite)
+//
+// Demo sandbox: all banking data is simulated. SQLite has no native enum type, so every
+// enum-like field is stored as a `String` (the allowed values are documented per field).
+// Booked money uses signed BigInt minor units (CNY cents).
+// Rates and unrounded valuations use canonical decimal TEXT, avoiding SQLite REAL coercion.
+// Public JSON amounts are canonical decimal strings. JSON payloads use String columns.
+//
+// Field notes:
+//   - `balance` / `amount` are signed: negative = expense/outflow, positive = income/inflow.
+//   - `type`          on Account        = "CHECKING" | "SAVINGS"
+//   - `direction`     on Transaction    = "DEBIT" | "CREDIT"
+//   - `channel`       on Transaction    = "APP" | "CARD" | "TRANSFER" | "SUBSCRIPTION"
+//   - `type`          on Card           = "DEBIT" | "CREDIT" | "VIRTUAL"
+//   - `status`        on Card           = "ACTIVE" | "FROZEN" | "LOST" | "PENDING"
+//   - `linkedAccountId` on Card         = id of the user's CHECKING account the card spends from (historical reference, no relation)
+//   - `status`        on Subscription   = "ACTIVE" | "CANCELLED"
+//   - `riskLevel`     on InvestmentProduct = "R1" | "R2" | "R3" | "R4" | "R5"
+//   - `status`        on InvestmentHolding = "HOLDING" | "REDEEMED"
+//   - `status`        on Budget         = "RESERVED" | "USED" | "RELEASED"
+.env
+.env.example
+agent\vitest.agent.config.ts
+vitest.config.ts
+DONE
