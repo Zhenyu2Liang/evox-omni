@@ -54,6 +54,15 @@
 `{events: [], text: auth.message, ...}` 且不执行（`scenario.ts:508`）；决策失败因此没有事件，只有 `text`。
 时限用 `demoNow()`（`lib/clock.ts:14`，钉死 `DEMO_NOW`）只作事件时间戳，没有定时器与时钟推进。
 
+`confirmAction`/`verifyAction` 共用 `decideAndContinue`（`scenario.ts:514`）：
+网关授权 ok 时用 `registry.executeDirect` 执行**原始校验参数**（不重新过闸门，避免重复 `PendingAction`）、写审计、
+把真实结果作为 toolResult 追加进 `agent.state.messages`，再 `agent.continue()`；
+若 faux 脚本已耗尽，先补一条事实叙述（`narrationFor`，`scenario.ts:503`），否则续接会因空队列报错。
+所以脚本不必为决策后的叙述预留步骤。
+
+`./index.ts` 只再导出 `getTestPrisma`/`truncateAll`/`resetDatabase`/`useFreshDatabase`/`disconnectTestPrisma`，
+`ensureTestPragmas` 不在桶里（需直接 `from './db'`）；`fixtures` 整个星号再导出。
+
 HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/harness.ts`
 （`postJson`/`postRaw`/`getJson`/`readSse`/`readSseFrames`/`actionUrl`/`chatUrl`/`idCtx`）。
 
