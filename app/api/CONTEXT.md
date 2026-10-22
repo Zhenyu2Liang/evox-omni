@@ -11,7 +11,7 @@ route handlers. Shared transport support lives in the private `_lib` folder.
 
 - `./cards/` -> virtual-card HTTP surface: consume, consumptions, card list/add/delete and manual card changes (see `cards/CONTEXT.md`).
 - `./cards/[id]/` -> per-card routes `consume` and `consumptions` (see `cards/[id]/CONTEXT.md`).
-- `./_lib/` -> shared envelope, error mapping, session identity, agent bridge, the terminal-lock refusal (`locked-action.ts`) and the additive task-plan action-status projection (`task-pending-actions.ts`) (see `_lib/CONTEXT.md`).
+- `./_lib/` -> shared envelope, error mapping, session identity, agent bridge, the terminal-lock refusal (`locked-action.ts`), the additive task-plan action-status projection (`task-pending-actions.ts`) and the public security-event projection (`public-security-event.ts`) (see `_lib/CONTEXT.md`).
 - `../cards/` -> card page plus consume/change dialogs (sibling under `app` - read-only here; escalate writes to the `app` node).
 - `../../../components/banking/` -> card display components such as `CardTile` (outside `app` - read-only).
 
