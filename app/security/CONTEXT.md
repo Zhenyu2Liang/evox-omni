@@ -17,6 +17,10 @@ or executes a pending banking action. Audit failure leaves the lock intact.
 
 The separate verified reset domain API retains its verification/cooldown gate; it is not exposed
 as a normal page control. The model has no tool that can invoke either reset path.
+A reset never reopens an already-locked operation: the gateway persists `PendingAction.status = 'locked'`
+(`security/security-gateway.ts` `persistLockedAction`), and the unlock only renews challenges whose action
+is still `awaiting_mfa` (`lib/db/repositories/pendingAction.ts` `renewLockedMfaChallenges`, 362-378).
+The locked card therefore stays terminal and the user must start a new request.
 
 ## Dependencies
 
