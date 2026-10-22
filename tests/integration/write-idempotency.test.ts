@@ -50,8 +50,23 @@ it('a card limit node cannot create another action during the action-to-node per
 it('a distinct redemption action cannot report another credit for an already redeemed holding',async()=>{
  const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const call=()=>executeGatedTool({sessionId:s,userId,toolName:'redeem_investment',args:{holdingId:'holding_wenjiana',mode:'ALL'},userRequest:'赎回理财'});
+ /** Investment-flow CREDIT rows on the funding account: one redemption books exactly one. */
+ const redemptionCredits=()=>p.transaction.count({where:{userId,accountId:'acct_checking',category:'\u6295\u8d44',direction:'CREDIT'}});
+ const creditsBefore=await redemptionCredits();
  const a=await call();const first=await confirm(a.pendingActionId!,s,'123456');const firstBalance=(await p.account.findFirst({where:{userId,type:'CHECKING'}}))!.balanceMinor;
- const b=await call();const second=await confirm(b.pendingActionId!,s,'123456');const secondBalance=(await p.account.findFirst({where:{userId,type:'CHECKING'}}))!.balanceMinor;
- console.log('REVIEW_REDEEM_IDENTITY',toJson({firstAction:a.pendingActionId,secondAction:b.pendingActionId,firstOk:first.ok,secondOk:second.ok,secondStatus:second.status,secondResult:second.result,firstBalance,secondBalance}));
- expect(first.ok).toBe(true);expect(firstBalance).toBe(2863000n);expect(secondBalance).toBe(firstBalance);expect(second.ok).toBe(false);
+ const firstCredits=await redemptionCredits();
+ const b=await call();const secondBalance=(await p.account.findFirst({where:{userId,type:'CHECKING'}}))!.balanceMinor;
+ const holding=await p.investmentHolding.findUnique({where:{id:'holding_wenjiana'}});
+ const actions=await p.pendingAction.findMany({where:{sessionId:s},select:{id:true,status:true}});
+ console.log('REVIEW_REDEEM_IDENTITY',toJson({firstAction:a.pendingActionId,second:b,firstOk:first.ok,firstBalance,secondBalance,creditsBefore,firstCredits,shares:holding?.shares,status:holding?.status,actions}));
+ expect(first.ok).toBe(true);expect(firstBalance).toBe(2863000n);expect(firstCredits).toBe(creditsBefore+1);
+ // The second request is refused while PARKING the quote: the redeemed position records no shares,
+ // so it never mints a second actionable PendingAction and never even reaches an approval step.
+ expect(b.ok).toBe(false);expect(b.errorCode).toBe('CONFLICT');
+ expect(b.error).toContain('该持仓尚未记录份额，暂不可赎回');
+ expect(b.pendingActionId).toBeUndefined();
+ // Zero writes: no second credit, no balance move, one closed position, one action row in total.
+ expect(secondBalance).toBe(firstBalance);expect(await redemptionCredits()).toBe(firstCredits);
+ expect(holding?.shares).toBe('0');expect(holding?.status).toBe('REDEEMED');
+ expect(actions).toHaveLength(1);expect(actions[0].id).toBe(a.pendingActionId);expect(actions[0].status).toBe('executed');
 });
