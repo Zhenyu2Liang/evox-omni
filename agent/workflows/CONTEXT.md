@@ -72,6 +72,20 @@
 `listPendingActionsByTask(taskId, { statuses })`（`pendingAction.ts:144-156`）返回含 `status`/`nodeId` 的行；省略 `statuses` 会连终态行一起返回。
 `revokePendingActionsByTask(taskId, fromStatuses)`（`pendingAction.ts:169-179`）是盲目的 `updateMany`：传入终态会把终态改写（`locked` → `cancelled`），因此只允许传开放状态 —— 这就是 `REVOCABLE_ACTION_STATUSES`。
 
+## 控制面的异常面：无 catch，只有 finally
+
+`resumeTask`（`controls.ts:27-47`）与 `retryTask`（`controls.ts:49-69`）都是 `try { … } finally { … }`，**没有任何 catch**。
+`try` 里的语句分别是 `executor.runPlan(plan, buildPlanDeps(taskId, deps, undefined, { planToken: token }), { now: deps.now, explicitResume: true })` + `sweepCancelledPlan`（`:39-40`），以及 `lifecycle.retryPlan(...)` + `claimTaskStatus(taskId, ['running'], result.status)` + `sweepCancelledPlan`（`:60-63`）。
+`finally` 里是 `releaseTaskExecution(taskId, token)` + `settlePlanFromNodes(taskId)`（`:42-44`、`:65-66`），`finally` 自身也能拒绝，并且会**顶替**原始异常（先 `releaseTaskExecution`，后 `settlePlanFromNodes`）。
+因此任何拒绝都穿过本目录直达 `agent/index.ts` 的 `resumeTask`/`retryTask` 门面（`agent/index.ts:333-337`、`:347-351`，其间的 `synchronizeScheduledWorkflow` 同样未捕获），再由 `app/api/tasks/[id]/route.ts#POST` 的 `errorResponse` → `app/api/_lib/http.ts#mapAppError` 出网。
+
+`runPlan`/`retryPlan` 之前的每一个 await 都能拒绝，顺序即拒绝顺序：`loadOwnedTask`（`:28`/`:50` → `ownership.ts:9` `NOT_FOUND`、`:10`/`:12` `SECURITY_DENIED`）、`assertNoOpenManualReview`（`:29`/`:51`）、`assertParkedActionsNotTerminal`（`:33`/`:54` → `parked-actions.ts:74-76` 的 `MFA_LOCKED`/`CONFLICT`）、`claimTaskStatus`（`:34`/`:55`，以及 `:62`）、`claimTaskExecution`（`:36`/`:57`）、`clearStaleNodeClaims`（`:37`/`:58`，`claims.ts:22-27` 裸 Prisma `updateMany`）、`sweepCancelledPlan`（`cancellation.ts:69-76`；只有 `:72` 的 `SECURITY_DENIED` 抛出，单条撤销失败只汇总）、`settlePlanFromNodes`（`agent/task-fencing.ts:162-187`，含 `prisma.$transaction`）。
+planner 端口（计划/节点写、租约续期、`getTask` 读）在这些位置同样可拒绝，planner 不加 catch（见 `planner/CONTEXT.md`）。
+
+端口装配（`ports.ts:27-39`）：`runTool` 恒由调用方提供（必填，`contracts.ts:14`）；`onNodeUpdate` 在本目录两个控制入口里是默认空函数（`ports.ts:28`）；`isRunOwner` 仅在 `planToken` 存在时接线（`ports.ts:35`），`resumeTask`/`retryTask` 恒持有 token，所以恒接线；`persistPlan`/`persistNode`/`loadPlan` 恒由 `createTaskPersistence` 提供（`ports.ts:37`）；`controls` 恒为 `defaultPollControls`（`ports.ts:36`）。`pauseTask`/`cancelTask` 走 `mode: 'control'` + `UNUSED_RUN_TOOL`，无 `planToken`，所以没有 `isRunOwner`。
+
+`runTool` 端口自身不会把工具失败变成异常：`ports.ts:32-33` 只包一层 `withWorkflowExecutionClaim`（`execution-context.ts:13-15`，无 catch）后直调 `deps.runTool`；生产实现是 `agent/index.ts:308-325#taskRunToolFor` → `agent/confirmation/gated-execution.ts#executeGatedTool`，其一次性执行体整段在 `try/catch` 内折成 `{ ok: false, error, errorCode }`，且即便外层包装仍拒绝，`planner/executor.ts:504-509` 也会把端口拒绝折成 `failed` 节点。因此经 `runTool` 的拒绝到不了 HTTP；能到 HTTP 的是本目录自己那些未捕获的 await。
+
 ## 公开文案
 
 用户可见文本一律经 `lib/public-text.ts` 收口，禁止把内部状态字面量（例如 `locked`）、blockReason 载荷、JSON 片段或堆栈放进用户可见文本。
