@@ -126,7 +126,7 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 出站/渲染文本不含 `__SECURITY_BLOCK__` 有多处负例：`unit/agent/turn-security-event.test.ts:38`、`unit/lib/public-text.test.ts:41`、`unit/planner/locked-card-rendering.test.ts:35`+`:106`、`unit/security/unlock-panel-render.test.ts:125`、`unit/weixin-lock-presentation.test.ts:207-246`、`unit/security/mfa-failure-contract.test.ts:101-102`、`integration/security-deny-redaction.test.ts:48`。
 `lib/tool-feedback.ts` 的 `PUBLIC_BUSINESS_ERRORS`/`PUBLIC_ERROR_CODES` 不是导出契约，测试只经 `publicToolError`/`publicToolSummary` 逐条命中，登记表无完整性断言。
 内部诊断上屏边界的逐文件行锚点与纯度（10 个文件，含 `unit/agent/turn-security-event.test.ts`、`unit/lib/public-text.test.ts`、`unit/weixin-lock-presentation.test.ts`、`unit/security/unlock-panel-render.test.ts`）见 [unit/CONTEXT.md](unit/CONTEXT.md)。
-`lib/tool-feedback.ts` 的 `PUBLIC_BUSINESS_ERRORS`/`PUBLIC_ERROR_CODES` 不是导出契约，测试只经 `publicToolError` 逐条命中，登记表无完整性断言；其中锁定句→`chat.error.securityLocked` 与 `PUBLIC_ERROR_CODES.CIRCUIT_OPEN` 两条无用例。
+`__SECURITY_BLOCK__` 字面量本身只作为反面输入出现在 6 个测试文件（`unit/agent/providers/provider-mock.test.ts:47` 是 mock responder 的 block 前缀）。
 已开熔断时模型无法解锁：`resetSession` 需验证码或冷却，见 `unit/security/circuit-breaker-reset.test.ts`。
 空 `blockedOutcome`/`conflictOutcome`/`withLiveConfirmation` 无测试直接引用；`executeGatedTool` 由 `helpers/faux-agent.ts`、`integration/refactor-security-runtime.test.ts` 从 `@/agent/confirmation` 引入，`confirmAction` 由 `integration/conversational-turns.test.ts` 引入。
 
