@@ -41,6 +41,39 @@
 最完整骨架见 `tests/integration/write-continuation.test.ts`（续接与 `declared_unsubmitted`）
 与 `tests/integration/decision-guidance.test.ts`（声明、指引信封、授权后续读）。
 
+## scenario.ts 的导出面
+
+`scenario.ts` 只导出这些符号（没有 `chat`/`post`/`getActions`/`verify` 之类的方法对象，也没有可控假时钟）：
+`runTurn({sessionId, message, agent})` → `ScenarioResult`（`scenario.ts:403`）、
+`confirmAction(agent, actionId)`（`scenario.ts:558`）、`verifyAction(agent, actionId, code)`（`scenario.ts:563`）、
+`cancelAction(agent, actionId)`（`scenario.ts:572`）、`newSessionId(prefix)`（`scenario.ts:600`）、
+`collectEvents(agent)`（`scenario.ts:605`）、`toolEventsOf(res, toolName)`（`scenario.ts:612`）、
+`cardsOfType(res, type)`（`scenario.ts:616`），以及类型 `ScenarioResult`（`scenario.ts:56`）、`RunTurnInput`（`scenario.ts:76`）。
+`ScenarioResult` 字段：`sessionId`/`events`/`text`/`toolEvents`/`cards`，可选 `confirmation`/`mfa`/`plan`/`error`。
+决策面直接调 `security.gateway.securityGateway.authorizeAction`（`scenario.ts:495`），非 ok（`awaiting_mfa`/`locked`）时返回
+`{events: [], text: auth.message, ...}` 且不执行（`scenario.ts:508`）；决策失败因此没有事件，只有 `text`。
+时限用 `demoNow()`（`lib/clock.ts:14`，钉死 `DEMO_NOW`）只作事件时间戳，没有定时器与时钟推进。
+
+HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/harness.ts`
+（`postJson`/`postRaw`/`getJson`/`readSse`/`readSseFrames`/`actionUrl`/`chatUrl`/`idCtx`）。
+
+## 被阻断 / 锁定的结果如何表示
+
+网关 block reason 是 `__SECURITY_BLOCK__` + JSON（`security/security-gateway.ts:78`、`:704`）；
+熔断 deny 与计划已取消分支都是 `__SECURITY_BLOCK__{"decisionKind":"deny"}`，**没有 actionId**
+（`security/security-gateway.ts:1182`、`:1214`），因此 `parseBlockReason` 返回 `null`（`:708`），只能靠前缀判定。
+`scenario.ts:289`（镜像生产的 `agent/turns/events.ts:73`）把**原始** block reason 放进
+`security_event.message`（类型见 `lib/contracts/agent.ts:100`），且 blocked 的 `ToolEventView` **不带 `summary`**。
+所以 `security_event.message` 是传输载荷而非用户可见文案；用户可见文案只能经
+`lib/tool-feedback.ts` 的 `publicToolError`（默认回退 `chat.error.toolFailed`，`:11`/`:37`）与
+`publicToolSummary`（blocked 且无 actionId → `chat.error.operationNotStarted`，`:56`）投影，
+或 `components/chat/cards/MfaCard.tsx:66`（`publicToolError(statusMessage, t)`，未知消息即回退 `chat.error.toolFailed`）。
+`localizeChatError`（`lib/i18n/display.ts:7`）对未知字符串原样透传——渲染它就会泄漏原始载荷。
+
+三码锁定有两条可参照的既有路径：
+`tests/scenarios/test-10-circuit-breaker.test.ts:44`+`:61`（`buildFauxAgent` + `runTurn` + 三次 `verifyAction`，断 `attempts`/`securityEvent`/`text` 含「锁定」），
+`tests/app/mfa-terminal-lock-http.test.ts:273`（真实 verify 路由：`status:'locked'`、`mfaResult:'failed'`、行持久化、`GET /api/actions` 不再 surface）。
+
 ## 数据库与事务
 
 `getTestPrisma` 延迟获取测试客户端。
