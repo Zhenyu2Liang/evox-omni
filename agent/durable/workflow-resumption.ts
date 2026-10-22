@@ -59,9 +59,9 @@ export async function resumeOriginalRunTask(runId: string, parentInvocationId: s
   await onPlanUpdate?.(plan);
   const completed = plan.results.filter(node => node.status === 'success').length;
   const failure = plan.status === 'failed' ? plan.results.find(node => node.status === 'failed') : undefined;
-  // `gated-execution.ts` copies a gateway `auth.blockReason` (`__SECURITY_BLOCK__…`) into a node error, so a node's own
-  // text is not automatically public: an internal diagnostic becomes a catalog fallback classified by a TYPED code,
-  // while a business sentence stays verbatim. The summary carries no raw internal status literal.
+  // A node error is already public-safe — `gated-execution.ts` fills it from a catalog sentence or the typed
+  // failure — so a node's own text is not automatically public: an internal diagnostic becomes the catalog fallback
+  // classified by a TYPED code, while a business sentence stays verbatim. The summary carries no status literal.
   const internal = isInternalDiagnostic(failure?.error);
   return { ok: plan.status !== 'failed', data: plan,
     summary: `Workflow ${plan.id}: ${completed} of ${plan.results.length} steps completed.`,
