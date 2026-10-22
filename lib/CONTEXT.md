@@ -72,6 +72,19 @@ JSON 金额使用十进制字符串。
 `ToolEventView`（`contracts/agent.ts`）没有 `resultSummary` 字段：公开文本只来自 `summary` 与 `errorCode`，`debugDetail`/`debugArguments` 仅供开发者面板。
 `ChatCard {type:'error', message, code?}` 与 `AgentStreamEvent {type:'security_event', kind, message}` 的 `message` 同样是无目录约束的自由字符串。
 
+## 公开文本漏斗（`public-text.ts`）
+
+`isInternalDiagnostic(text)` 是唯一的内部诊断判定：含 `__SECURITY_BLOCK__` 标记（`public-text.ts:22` 重复声明该前缀，跨层不 import 以避免循环）、`undefined`/`null`/`[object Object]`、JSON 片段或栈帧即返回 `true`。
+`safePublicText(text, t, fallback)` 只做分流：缺失或内部诊断取 `t(fallback)`，否则委托 `publicToolError`。
+`securityNotice(failure, t)` 完全按 TYPED 字段判定，顺序为 `code==='MFA_LOCKED' || reason==='mfa_attempts_exhausted'` → `chat.error.actionLocked`；`reason==='mfa_code_invalid' || code==='MFA_FAILED'` → `chat.error.verificationRemaining {count: attemptsLeft ?? 0}`；`code==='CIRCUIT_OPEN' || reason==='circuit_open' || reason==='mfa_session_locked'` → `chat.error.securityLocked`；其余一律 `chat.error.securityDenied`。
+`SecurityNoticeInput` 的 `kind` 与 `maxAttempts` 只声明、从不读取（`kind` 仅由调用方用于分流），依赖它们产生新文案前必须先改 `securityNotice` 本体。
+`mfa_code_invalid`/`MFA_FAILED` 若未带 `attemptsLeft` 会渲染成「剩余 0 次」，因此调用方应始终转发 `attemptsLeft`。
+`public-text.ts` 与 `tool-feedback.ts` 互为 import，但只交换函数声明（求值期不调用），因此该循环是安全的。
+`securityNotice` 消费方：`app/security/UnlockPanel.tsx:122`（只传 `{code}`，且仅 `MFA_LOCKED`/`MFA_FAILED`/`CIRCUIT_OPEN` 三种码走此分支）、`components/chat/cards/MfaCard.tsx:77` 与 `components/chat/cards/ApprovalRecord.tsx:71`（常量 `{code:'MFA_LOCKED', reason:'mfa_attempts_exhausted'}`）、`components/chat/agent-stream-reducer.ts:500`（整条 `security_event`，任何 `kind` 都会渲染）、`channels/weixin/banking-client.ts:138`（唯一透传 `code`/`reason`/`attemptsLeft`/`maxAttempts` 的调用点，仅 `kind==='locked'`）、`channels/weixin/bridge.ts:87`（`outcome.failure ?? {code: outcome.code}`）与 `channels/weixin/bridge.ts:94`（`outcome.failure`，仅 `mfa_code_invalid`/`mfa_session_locked`）。
+`safePublicText` 消费方：`app/security/UnlockPanel.tsx:123`、`components/chat/MessageBubble.tsx:51`（历史恢复的 `system` 消息）、`channels/weixin/presentation.ts:35`（`channelText` 内，仅 `chat.` 前缀的文本进入漏斗）。
+结构化拒绝的上游装配：`security/security-gateway.ts:890`（`MFA_FAILED`/`mfa_code_invalid`，无 `attemptsLeft`）与 `:905-909`（`MFA_LOCKED`/`mfa_attempts_exhausted` 与 `mfa_code_invalid`，含 `attemptsUsed`/`attemptsLeft`/`maxAttempts`）；`security/security-gateway.ts:840`（`lockedOutcome`，`attemptsLeft: 0`）；`app/api/_lib/locked-action.ts:66`（`{code:'CIRCUIT_OPEN', reason:'mfa_session_locked'}`，无计数）；`app/api/actions/[id]/verify/route.ts:89-90`（把 `failure` 与 `attemptsLeft`/`maxAttempts` 摊到 `ActionResponse`）；`agent/turns/events.ts:92-96`（`security_event` 只带 TYPED 字段）。
+单元测试：`tests/unit/lib/public-text.test.ts`（覆盖诊断分类、`attemptsLeft` 渲染、四种锁定/拒绝文案）。
+
 ## 修改约束
 
 - 修改共享类型时，必须更新 `contracts/` 的原定义。
