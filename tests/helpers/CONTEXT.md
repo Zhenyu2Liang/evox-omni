@@ -53,7 +53,7 @@
 ## scenario.ts 的导出面
 
 `scenario.ts` 只导出这些符号（没有 `chat`/`post`/`getActions`/`verify` 之类的方法对象，也没有可控假时钟）：
-`runTurn({sessionId, message, agent})` → `ScenarioResult`（`scenario.ts:403`）、
+`runTurn({sessionId, message, agent})` → `ScenarioResult`（`scenario.ts:422`）、
 `confirmAction(agent, actionId)`（`scenario.ts:558`）、`verifyAction(agent, actionId, code)`（`scenario.ts:563`）、
 `cancelAction(agent, actionId)`（`scenario.ts:572`）、`newSessionId(prefix)`（`scenario.ts:600`）、
 `collectEvents(agent)`（`scenario.ts:605`）、`toolEventsOf(res, toolName)`（`scenario.ts:612`）、
