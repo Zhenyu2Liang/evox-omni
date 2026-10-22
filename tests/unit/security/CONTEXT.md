@@ -26,7 +26,10 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
 文件头「in-process breaker keyed by sessionId」的注释与实现不符：熔断状态是持久化、按所有者键的表（`security/circuit-breaker.ts:1-6`、`prisma/schema.prisma:465-479`）。
 本文件不用任何假时钟：`expiresAt` 从不出现，challenge 有效期恒为 `realNow() + MFA_CHALLENGE_TTL_MS`（`security/mfa.ts:34`、`:138`）。
 因此以下 `security/mfa.ts` 分支不被本文件触达，改动它们时不会有本文件报错保护：`locked` 动作的 `MFA_LOCKED` 拒绝（`:106-109`）、已执行/已取消的 `CONFLICT` 拒绝（`:112-115`）、challenge 过期或 `commandDigest` 不符时的重建分支（`:123-131`）、`consumedAt` 与摘要不符的拒绝（`:165-169`）、已 `verified` challenge 的短路（`:192-198`）。
-`tests/unit/security` 全目录不出现 `expiresAt`；过期路径的改写只出现在 `tests/integration/` 的 `confirmation-lease-contention.test.ts`、`confirmed-write-authority.test.ts`、`refactor-security-runtime.test.ts`。
+`tests/unit/security` 全目录不出现 `expiresAt`；`MfaChallenge.expiresAt` 的改写只出现在 `tests/integration/confirmed-write-authority.test.ts:60,97-99,112,144`（恒为 `new Date(Date.now() - 1)`，另两例改 `consumedAt`/`commandDigest`）与 `tests/integration/refactor-security-runtime.test.ts:68`。
+`confirmed-write-authority.test.ts:97-99` 的三态（`expired`/`consumed`/`changed_digest`）是在 `pauseAtWriteFence()` 屏障处改写，用来证明网关授权通过之后、扣款之前仍会复核 challenge。
+`tests/integration/confirmation-lease-contention.test.ts:76` 改的是 `PendingAction.executionLeaseExpiresAt`（执行租约），与验证码有效期无关，不要混为一谈。
+`tests/integration/frontend-followup-fixes.test.ts:152` 用 `mfaChallenge.updateMany({ status: 'locked', attempts: 3 })` 直造锁定行（非过期）。
 
 ## 安全中心解锁面板（`/security`）的渲染契约
 
