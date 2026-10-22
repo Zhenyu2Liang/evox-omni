@@ -285,7 +285,6 @@ export {
   toTaskPlan,
 } from './task-control';
 
-const t = createTranslator(DEFAULT_LOCALE);
 export type {
   TaskControlDeps,
   TaskControlOptions,
@@ -296,7 +295,6 @@ export type {
   TaskRunTool,
 } from './task-control';
 
-const t = createTranslator(DEFAULT_LOCALE);
 // The FENCED write primitives (`./task-fencing`), incl. the confirm-continuation's LOST-claim
 // decision recorder.
 export { isMissingNodeError, jsonNodeOutput, recordDecidedNodeFenced, toNodeUpdate } from './task-fencing';
