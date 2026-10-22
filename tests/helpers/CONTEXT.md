@@ -55,7 +55,7 @@
 `scenario.ts` 只导出这些符号（没有 `chat`/`post`/`getActions`/`verify` 之类的方法对象，也没有可控假时钟）：
 `runTurn({sessionId, message, agent})` → `ScenarioResult`（`scenario.ts:422`）、
 `confirmAction(agent, actionId)`（`scenario.ts:577`）、`verifyAction(agent, actionId, code)`（`scenario.ts:582`）、
-`cancelAction(agent, actionId)`（`scenario.ts:572`）、`newSessionId(prefix)`（`scenario.ts:600`）、
+`cancelAction(agent, actionId)`（`scenario.ts:591`）、`newSessionId(prefix = 'sess')`（`scenario.ts:619`）、
 `collectEvents(agent)`（`scenario.ts:605`）、`toolEventsOf(res, toolName)`（`scenario.ts:612`）、
 `cardsOfType(res, type)`（`scenario.ts:616`），以及类型 `ScenarioResult`（`scenario.ts:56`）、`RunTurnInput`（`scenario.ts:76`）。
 `ScenarioResult` 字段：`sessionId`/`events`/`text`/`toolEvents`/`cards`，可选 `confirmation`/`mfa`/`plan`/`error`。
