@@ -182,6 +182,12 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 `pnpm test` 运行全部 Vitest 测试。
 `pnpm exec vitest run tests/unit` 运行指定目录。
 `pnpm typecheck` 检查类型。
+它**必须**在 `pnpm db:generate` 之后运行：陈旧 Prisma Client 会让 `tests/` 报出伪造的 TS2305（`has no exported member 'PendingAction'` / `'Prisma'`），并非真实类型错误。
+
+合并后回归集（不含 live e2e、不含全量）：
+`pnpm exec vitest run tests/unit/security tests/unit/agent tests/unit/planner tests/unit/lib tests/unit/weixin-lock-presentation.test.ts tests/integration tests/app/mfa-lock-http-contract.test.ts tests/app/mfa-lock-refresh-unlock-http.test.ts tests/app/mfa-terminal-lock-http.test.ts tests/app/security-workflow-http.test.ts tests/app/actions-http.test.ts`
+该集合耗时约 16 分钟，需单独占用测试库。
+失败项归因分「死 spy 注入接缝」与「再驱动入口语义收窄」两类，见上文 wedge 小节与 [integration/CONTEXT.md](integration/CONTEXT.md)。
 `pnpm exec tsx tests/e2e/acceptance.e2e.ts` 运行浏览器验收。
 
 ## 证据范围
