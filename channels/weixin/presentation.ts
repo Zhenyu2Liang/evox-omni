@@ -4,9 +4,9 @@ import type { PendingAction } from '../../lib/contracts/security';
 import type { BalanceView, TransferResult, SpendingAnalysis, AnomalyReport, CardView,
   ProductView, HoldingView, SubscriptionView, TransactionView } from '../../banking-sdk/types';
 import type { ScheduleInbox } from '../../lib/contracts/schedule';
-import { formatCNY } from '../../lib/money';
-import { formatDecimalCNY, rateRatioToPercent } from '../../lib/decimal';
-import { formatDateTime } from '../../lib/date';
+import { CNY, formatCNY } from '../../lib/money';
+import { formatDecimalCNY, multiplyDecimal, rateRatioToPercent } from '../../lib/decimal';
+import { businessCalendarParts, formatDateTime } from '../../lib/date';
 
 const LABELS: Record<string, string> = {
   pending: '等待确认', awaiting_mfa: '等待验证码', confirmed: '已确认，正在处理', executed: '已执行', failed: '失败',
@@ -27,6 +27,54 @@ function rows<T>(items: T[], render: (item: T) => string): string {
     (items.length > LIMIT ? `\n仅展示前 ${LIMIT} 条，共 ${items.length} 条；可缩小查询范围。` : '');
 }
 const phone = (value: string) => /^\d{11}$/.test(value) ? `${value.slice(0, 3)}****${value.slice(-4)}` : value;
+
+/** A fact a legacy record does not carry: stated explicitly, never invented. */
+const HISTORY_INSUFFICIENT = '历史数据不足';
+const SIMULATED_PROFIT_NOTICE = '收益为模拟估算，不承诺保本。';
+/** Published net values display at their 4-decimal scale; canonical text drops trailing zeros. */
+const NET_VALUE_DECIMALS = 4;
+
+function netValueText(netValue: string): string {
+  const [integer, fraction = ''] = netValue.split('.');
+  return `${integer}.${fraction.padEnd(NET_VALUE_DECIMALS, '0')}`;
+}
+
+/** Business (UTC+08:00) date of a net value date — a date, not an instant. */
+function netValueDateText(ts: number): string {
+  const { year, month, day } = businessCalendarParts(ts);
+  return `${String(year).padStart(4, '0')}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+/** `最新净值 + 净值日期`, or the explicit 「历史数据不足」 marker when none is published. */
+function netValueLine(netValue: string | undefined, netValueDate: number | undefined): string {
+  if (netValue === undefined) return `最新净值 ${HISTORY_INSUFFICIENT}`;
+  const date = netValueDate === undefined ? '' : `（${netValueDateText(netValueDate)}）`;
+  return `最新净值 ${netValueText(netValue)} 元/份${date}`;
+}
+
+/** Display-only percentage of a dimensionless ratio: HALF_UP to two fractional digits. */
+function percentText(ratio: string): string {
+  return `${formatDecimalCNY(multiplyDecimal(ratio, '100')).replace(CNY, '')}%`;
+}
+
+/**
+ * 一笔持仓的公开事实：份额、最新净值与净值日期、持仓市值、剩余持仓成本、持仓收益、
+ * 持仓收益率、累计收益。数据不足以支撑的事实标注「历史数据不足」，绝不补一个数。
+ */
+function renderHolding(row: HoldingView): string {
+  const basis = row.valueBasis === 'MIGRATED_ESTIMATE' ? '（估算）'
+    : row.valueBasis === 'HISTORICAL_DATA_INSUFFICIENT' ? `（${HISTORY_INSUFFICIENT}）` : '';
+  return [
+    `${row.productName}：${label(row.status)}`,
+    `持仓份额 ${row.shares === undefined ? HISTORY_INSUFFICIENT : `${row.shares} 份`}`,
+    netValueLine(row.latestNetValue, row.latestNetValueDate),
+    `持仓市值 ${row.marketValue === undefined ? HISTORY_INSUFFICIENT : `${formatDecimalCNY(row.marketValue)}${basis}`}`,
+    `剩余持仓成本 ${formatCNY(row.amount)}`,
+    `持仓收益 ${row.profit === undefined ? HISTORY_INSUFFICIENT : formatDecimalCNY(row.profit)}`,
+    `持仓收益率 ${row.profitRate === undefined ? HISTORY_INSUFFICIENT : percentText(row.profitRate)}`,
+    `累计收益 ${row.cumulativeProfit === undefined ? HISTORY_INSUFFICIENT : formatDecimalCNY(row.cumulativeProfit)}`,
+  ].join('\n');
+}
 
 /** 不显示计划参数、节点原始 output 或调试信息。 */
 export function renderPlan(plan: TaskPlan): string {
@@ -87,7 +135,10 @@ function renderCard(card: ChatCard): string {
       const data = card.data as { products?: ProductView[]; holdings?: HoldingView[] };
       const parts: string[] = [];
       if (data.products) parts.push(`理财产品\n${rows(data.products, row => `${row.name}（${row.code}，${row.riskLevel}）\n预期年化 ${rateRatioToPercent(row.annualYieldRate)}%，期限 ${row.termDays} 天，起购 ${formatCNY(row.minAmount)}`) || '没有匹配产品。'}`);
-      if (data.holdings) parts.push(`理财持仓\n${rows(data.holdings, row => `${row.productName}：${label(row.status)}\n本金 ${formatCNY(row.amount)}；市值 ${row.marketValue === undefined ? '未提供' : formatDecimalCNY(row.marketValue)}；收益 ${row.profit === undefined ? '未提供' : formatDecimalCNY(row.profit)}`) || '没有持仓。'}`);
+      if (data.holdings) {
+        const holdings = rows(data.holdings, renderHolding);
+        parts.push(`理财持仓\n${holdings ? `${holdings}\n${SIMULATED_PROFIT_NOTICE}` : '没有持仓。'}`);
+      }
       return parts.join('\n\n') || '没有可展示的理财结果。';
     }
     case 'subscriptions': return `订阅与代扣\n${rows(card.data as SubscriptionView[], row =>

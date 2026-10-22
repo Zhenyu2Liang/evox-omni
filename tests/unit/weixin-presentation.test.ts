@@ -22,7 +22,7 @@ const cases: Array<[ChatCard, string]> = [
   [{ type: 'anomaly', data: { scanned: 10, anomalies: [{ transaction, reason: '异常消费' }] } }, '异常消费'],
   [{ type: 'cards', data: [{ id: 'v', type: 'VIRTUAL', numberMasked: '****7788', status: 'ACTIVE', linkedAccountNumber: '****8821', accountAvailableBalance: '23380.00', payableAmount: '87.66', monthlyLimit: '100.00', limits: [] }] }, '¥87.66'],
   [{ type: 'investments', data: { products: [product] } }, '3.25%'],
-  [{ type: 'investments', data: { holdings: [{ productName: '稳健理财A', status: 'HOLDING', amount: '4000.00', marketValue: '4118.906666666666666667', profit: '118.906666666666666667' }] } }, '¥4,118.91'],
+  [{ type: 'investments', data: { holdings: [{ productName: '稳健理财A', status: 'HOLDING', amount: '4000.00', shares: '4199.864825', latestNetValue: '1.0357', latestNetValueDate: time, marketValue: '4118.906666666666666667', profit: '118.906666666666666667', profitRate: '0.029726666666666667', cumulativeProfit: '118.906666666666666667', valueBasis: 'NET_VALUE' }] } }, '¥4,118.91'],
   [{ type: 'subscriptions', data: [{ name: 'Netflix', status: 'ACTIVE', amount: '68.00', cycle: 'MONTHLY', nextChargeAt: time, remind: true }] }, '已开启'],
   [{ type: 'contacts', data: [{ name: '张伟', phone: '13912340002' }] }, '139****0002'],
   [{ type: 'dashboard', data: { totalAssets: '80000.50', checkingBalance: '23580.00', creditAvailable: '18000.00', monthSpend: '1250.60', month: '2026-09', asOf: time } }, '¥18,000.00'],
@@ -81,6 +81,46 @@ describe('微信完整业务结果展示', () => {
     expect(result.text).not.toContain('本次请求已处理');
     expect(result.text).not.toContain('PRIVATE_');
     expect(result.text).not.toContain('chat.error.');
+  });
+});
+
+describe('微信持仓按「净值 + 份额」展示', () => {
+  const holding = { id: 'h1', productId: 'p', product, productName: '稳健理财A', riskLevel: 'R2', status: 'HOLDING', boughtAt: time,
+    amount: '5000.00', shares: '4999.864825', latestNetValue: '1.0357', latestNetValueDate: time,
+    marketValue: '5178.3599992525', profit: '178.3599992525', profitRate: '0.0356719998505',
+    realizedProfit: '0.00', cumulativeProfit: '178.3599992525', valueBasis: 'NET_VALUE' };
+  it('展示份额、最新净值与净值日期、市值、剩余成本、收益、收益率和累计收益', () => {
+    const text = renderBusinessCard({ type: 'investments', data: { holdings: [holding] } });
+    expect(text).toContain('稳健理财A：持有中');
+    expect(text).toContain('持仓份额 4999.864825 份');
+    expect(text).toContain('最新净值 1.0357 元/份（2026-09-25）');
+    expect(text).toContain('持仓市值 ¥5,178.36');
+    expect(text).toContain('剩余持仓成本 ¥5,000.00');
+    expect(text).toContain('持仓收益 ¥178.36');
+    expect(text).toContain('持仓收益率 3.57%');
+    expect(text).toContain('累计收益 ¥178.36');
+    expect(text).toContain('收益为模拟估算，不承诺保本');
+    expect(text).not.toContain('估算）');
+  });
+  it('派生估算的持仓标注估算', () => {
+    const text = renderBusinessCard({ type: 'investments', data: { holdings: [{ ...holding, valueBasis: 'MIGRATED_ESTIMATE' }] } });
+    expect(text).toContain('持仓市值 ¥5,178.36（估算）');
+  });
+  it('历史数据不足的持仓只展示已有事实，不伪造收益', () => {
+    const text = renderBusinessCard({ type: 'investments', data: { holdings: [{ ...holding, shares: undefined, latestNetValue: undefined,
+      latestNetValueDate: undefined, marketValue: '5000.00', profit: undefined, profitRate: undefined, cumulativeProfit: undefined,
+      valueBasis: 'HISTORICAL_DATA_INSUFFICIENT' }] } });
+    expect(text).toContain('持仓份额 历史数据不足');
+    expect(text).toContain('最新净值 历史数据不足');
+    expect(text).toContain('持仓市值 ¥5,000.00（历史数据不足）');
+    expect(text).toContain('剩余持仓成本 ¥5,000.00');
+    expect(text).toContain('持仓收益 历史数据不足');
+    expect(text).toContain('持仓收益率 历史数据不足');
+    expect(text).toContain('累计收益 历史数据不足');
+    expect(text).not.toContain('%');
+  });
+  it('没有持仓时不追加收益声明', () => {
+    expect(renderBusinessCard({ type: 'investments', data: { holdings: [] } })).toBe('理财持仓\n没有持仓。');
   });
 });
 
