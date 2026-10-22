@@ -150,6 +150,16 @@
 旧 id 上的重复提交仍被拒：同一套件第 2 组断言 `verify`（正确码）与 `confirm` 各三次都返回 `200` + `ok:false` + `status:'locked'` + `failure.reason:'mfa_session_locked'`；本目录 `locked-action-recovery.test.ts` 断言服务端 `recoverAction` 对锁定 action 返回 `ok:false`。
 `confirmation-policy.test.ts:92` 的 `recover` 与 `frontend-followup-fixes.test.ts:140-141` 的 `verify` 都在原 id 上继续，针对的是 `confirmed`／`awaiting_mfa`（非锁定）动作。
 
+## wedge 故障注入的有效接缝
+
+wedge 用例只能注入生产确认路径真正调用的符号，否则 spy 永不触发，预期的 `500` 与「`confirmed` + `resultJson:null`」都不会出现。
+接缝一：`vi.spyOn(auditStore, 'insertAuditLog')`——`audit/audit-logger.ts:102` 由 `recordAudit` 调用，`settlePendingAction` 在事务内以 `strict:true` 调它（`agent/confirmation-recovery.ts:288-297`），按 `opts.dedupeKey` 定向抛错即回滚状态与结果（`confirmation-policy.test.ts:53`、`recovery-authorization.test.ts:43/256`、`write-audit.test.ts:143`、`execution-audit.test.ts:94`、`confirmation-evidence.test.ts:131`、`task-feature-hardening.test.ts:173`）。
+接缝二：`vi.spyOn(gateway, 'recordActionResult')`——`security/security-gateway.ts:1268`，由 `agent/confirmation/authorized-execution.ts:74-80` 在结算之后调用，只用于卡住或观察结算后的窗口，不产生 `confirmed` + `resultJson:null`（`write-idempotency.test.ts:26/40`）。
+接缝三：直接注入 `settlePendingAction`（`agent/confirmation-recovery.ts:264`）或 `claimPendingAction`（`lib/db/repositories/pendingAction.ts:254`）。
+`setPendingActionStatus`／`updatePendingActionStatus`（`lib/db/repositories/pendingAction.ts:181-194`）仍导出，但已无任何生产调用者（状态写入一律走 `claimPendingAction`）：在它们上装的 spy 永不触发，那个 `500` 与未落地结果的 wedge 都不再发生。
+仍装这种死 spy 的规格：`action-refresh.test.ts:113`、`committed-outcomes.test.ts:98`、`confirmation-continuation.test.ts:53`、`confirmation-evidence.test.ts:69`、`confirmation-liveness.test.ts:198`、`confirmation-policy.test.ts:146`、`execution-audit.test.ts:82`、`execution-integrity.test.ts:114`、`node-result-recovery.test.ts:35/59/110`、`recovery-authorization.test.ts:81/227`、`restart-recovery.test.ts:131`、`sdk-transaction-fences.test.ts:104`、`standalone-recovery.test.ts:92`、`transfer-history.test.ts:121/278`、`transfer-receipts.test.ts:158`。
+这些规格的注释也仍按旧接缝解释各自的 wedge：`action-refresh.test.ts:28`、`committed-outcomes.test.ts:24`、`confirmation-liveness.test.ts:20`、`node-result-recovery.test.ts:26`、`restart-recovery.test.ts:14`、`standalone-recovery.test.ts:24`、`transfer-receipts.test.ts:23`。
+
 ## 断言约束
 
 - 声明与任务图来自结构化输入，不从原句正则补全。
