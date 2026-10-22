@@ -9,7 +9,8 @@ import type { ToolExecutionResult } from '../tools';
 import type { ResumeTurnInput, TurnBuffer } from './contracts';
 import { safeToString } from './message-utils';
 import { cardFingerprint } from '@/lib/chat-cards';
-import { isInternalDiagnostic } from '@/lib/public-text';
+import { createTranslator, DEFAULT_LOCALE, isMessageKey } from '@/lib/i18n/shared';
+import { isInternalDiagnostic, safePublicText } from '@/lib/public-text';
 import type { ConversationIntent } from '@/lib/contracts/intent';
 import { inspectReplyFormat } from '../reply-format';
 import { toolPresentationId } from '../tool-presentation-identity';
@@ -108,15 +109,21 @@ export function activePlanMessage(buffer: TurnBuffer): ChatMessage | undefined {
     ?? buffer.resumedPlanMessage;
 }
 
+/** The one translator of this node's server-authored public text. */
+const t = createTranslator(DEFAULT_LOCALE);
+
 /**
- * The public summary of a SETTLED authorized call. An internal diagnostic (a `__SECURITY_BLOCK__…`
- * refusal payload, a JSON fragment or a stack trace) never becomes public text: the row falls back
- * to the catalog key, and the typed refusal reaches the user through its structured `security_event`.
+ * The RENDERED public summary of a SETTLED authorized call. `toolEvent.summary` is user text, never
+ * a catalog key: a catalog key renders to its message text, an internal diagnostic (a
+ * `__SECURITY_BLOCK__` refusal payload, a bare JSON fragment or a stack trace) renders to the
+ * `chat.error.toolFailed` message, and genuine business text (e.g. `Six subscriptions found`,
+ * `Query complete.`) is preserved verbatim.
  */
 function settledSummary(result: ToolExecutionResult): { summary?: string } {
   const text = result.summary || result.error;
   if (!text) return {};
-  return { summary: isInternalDiagnostic(text) ? 'chat.error.toolFailed' : text };
+  if (isInternalDiagnostic(text)) return { summary: safePublicText(text, t, 'chat.error.toolFailed') };
+  return { summary: isMessageKey(text) ? t(text) : text };
 }
 
 /** Settle the original recorded call without assigning the result to an unrelated later message. */

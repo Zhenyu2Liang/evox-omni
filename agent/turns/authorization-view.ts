@@ -67,20 +67,29 @@ export function settledDecisionSignal(actionId: string, decision: ParkedDecision
 }
 
 /**
+ * How a decision-prompt attempt ended. A settled row is never re-presented: `signalled` means the
+ * typed lock notice for a terminal `locked` action was published instead, and `skipped` means the
+ * row is missing or settled to a non-locked terminal status, so nothing at all was published.
+ */
+export type DecisionPromptOutcome = 'prompted' | 'signalled' | 'skipped';
+
+/**
  * Publish a decision prompt (`mfa_required` / `confirmation_required` + its card) for `actionId`
- * ONLY while the persisted row is still open (`mayPromptForDecision`). A `locked` row — like every
- * other terminal status — is never re-presented as a decision: a locked verification must not be
+ * ONLY while the persisted row is still open (`mayPromptForDecision`). A `locked` row (like every
+ * other terminal status) is never re-presented as a decision: a locked verification must not be
  * re-activated, so the prompt is skipped and, for `locked`, the typed lock signal is published
- * instead. Returns `true` iff a prompt was published.
+ * instead. Returns `'prompted'` iff a prompt was published, `'signalled'` when only the typed lock
+ * notice was published, and `'skipped'` when nothing was published at all.
  */
 export async function publishPendingDecision(buffer: TurnBuffer, actionId: string, toolName: string,
-  prompt: 'mfa' | 'confirmation', owner: ChatMessage | null): Promise<boolean> {
+  prompt: 'mfa' | 'confirmation', owner: ChatMessage | null): Promise<DecisionPromptOutcome> {
   const decision = await loadParkedDecision(actionId, toolName);
-  if (!decision) return false;
+  if (!decision) return 'skipped';
   if (!mayPromptForDecision(decision.status)) {
     const signal = settledDecisionSignal(actionId, decision);
-    if (signal) buffer.events.push(signal);
-    return false;
+    if (!signal) return 'skipped';
+    buffer.events.push(signal);
+    return 'signalled';
   }
   const summary = decision.summary;
   if (prompt === 'mfa') {
@@ -90,7 +99,7 @@ export async function publishPendingDecision(buffer: TurnBuffer, actionId: strin
     buffer.events.push({ type: 'confirmation_required', actionId, action: summary });
     emitCard(buffer, confirmationCard(summary), owner);
   }
-  return true;
+  return 'prompted';
 }
 
 /** Relay the graph without deriving its permissions from node labels or model content. */
@@ -117,7 +126,7 @@ export async function flushParkedDecision(buffer: TurnBuffer, relay: PlanRelay):
     // Only the persisted row can say whether this operation is still decidable. The prompt kind
     // follows the row's effective policy: an escalated/RED or strong-verification action needs MFA.
     const prompt = decision && (decision.summary.tier === 'RED' || decision.summary.requiresMfa) ? 'mfa' : 'confirmation';
-    const published = await publishPendingDecision(buffer, actionId, toolName, prompt, owner);
-    if (published && owner) publishToolMessage(buffer, owner);
+    const outcome = await publishPendingDecision(buffer, actionId, toolName, prompt, owner);
+    if (outcome === 'prompted' && owner) publishToolMessage(buffer, owner);
   } catch (error) { buffer.events.push({ type: 'error', message: safeToString(error) }); }
 }

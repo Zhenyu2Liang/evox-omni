@@ -77,14 +77,14 @@ async function handleToolEnd(buffer: TurnBuffer, event: Extract<AgentEvent, { ty
   buffer.events.push({ type: 'tool_end', toolEvent: view });
   // A gated call is only actionable WITH its still-open pending action: the persisted row decides,
   // and a settled (`locked`/`executed`/`failed`/`cancelled`/`needs_reconciliation`) action is never
-  // re-presented as a decision. An action-less refusal ends at the structured signal below.
-  if (parsed?.actionId && parsed.decisionKind === 'require_mfa') {
-    await publishPendingDecision(buffer, parsed.actionId, toolName, 'mfa', toolMessage);
-    return;
-  }
-  if (parsed?.actionId && parsed.decisionKind === 'require_confirmation') {
-    await publishPendingDecision(buffer, parsed.actionId, toolName, 'confirmation', toolMessage);
-    return;
+  // re-presented as a decision. A published prompt and the typed lock notice of a `locked` action
+  // both own the outcome; a SKIPPED prompt (missing row, or settled to another terminal status) still
+  // must not leave the blocked call unexplained, so it falls through to the typed refusal below -
+  // without inventing a prompt, a pending card or any success.
+  if (parsed?.actionId && (parsed.decisionKind === 'require_mfa' || parsed.decisionKind === 'require_confirmation')) {
+    const outcome = await publishPendingDecision(buffer, parsed.actionId, toolName,
+      parsed.decisionKind === 'require_mfa' ? 'mfa' : 'confirmation', toolMessage);
+    if (outcome !== 'skipped') return;
   }
   // A locked refusal is published as STRUCTURED fields only — never the raw payload text.
   buffer.events.push({ type: 'security_event', kind: 'locked',
