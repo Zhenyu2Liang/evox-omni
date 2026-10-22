@@ -57,6 +57,23 @@
 `settleAction` 对匹配 `actionId` 的终态清除 `pendingAction`（`useAgentStream.ts` 402-404 行）。
 `pull` 的 `clearPending` 守卫要求 `!hasError`（863-873 行），故带 `error` 的响应不会清除决定，除非 `settleAction` 已清。
 
+## 错误文本与安全事件渲染
+
+`chat.error.toolFailed`（「操作未完成。请核对原操作卡片和账户记录。」）显式出现在 `cards/ErrorCard.tsx:24`（`ChatCard.type==='error'`）。
+`publicToolError` 的缺省回落就是该键（`lib/tool-feedback.ts:37`），故不传回落键的站点也会显示它：
+`cards/MfaCard.tsx:66`（`status==='failed'` 时的 `statusMessage`）、`cards/ApprovalRecord.tsx:60`（`current==='failed'`）、`cards/ConfirmationCard.tsx:64`（终态 `failed` 的 `reason`）、
+`ToolEventList.tsx:85` 经 `publicToolSummary`（`status==='error'` 分支）、`banking/AgentTaskTimeline.tsx:115`（失败计划节点）。
+`ChatWindow.tsx:58`/`77` 显式传 `chat.error.request`，不会落到该键。
+`status==='blocked'` 且无 `actionId` 时状态标签换成 `chat.activity.status.notExecuted`、摘要换成 `chat.error.operationNotStarted`（`ToolEventList.tsx:81-82`、`lib/tool-feedback.ts:56`）。
+`status==='error'` 且错误码未知或缺失（含 `TOOL_FAILED`/`INTERNAL`）时一律落到 `chat.error.toolFailed`。
+`ErrorCard` 的 `detail` 属性没有调用方传入——`CardRenderer.tsx:110` 只传 `message` 与 `code`。
+
+`security_event` 仅在 `useAgentStream.ts:552-564` 折叠：追加 `role:'system'` 消息，`content` 原样取 `event.message`（`kind` 未参与渲染）。
+`MessageBubble.tsx:67-73` 对 system 角色按普通文本直出，不经消息目录也不经 `sanitizeToolArguments`。
+`publicToolSummary` 对 `success`/`started`/`updated`/`cancelled` 及带 `actionId` 的 `blocked` 回落到 `localizeChatError`，
+未知字符串原样返回（`lib/i18n/display.ts:5-8`），`ToolEventList.tsx:85` 直接渲染该值。
+`sanitizeToolArguments` 只处理凭证、手机号与推理字段，不清洗内部标记。
+
 ## 已知问题
 
 整页刷新会丢失内存态：`settledActions` 与内联卡片上的终态标记都不持久化。
