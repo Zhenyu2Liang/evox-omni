@@ -91,6 +91,12 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 `security_event` 只出现在 `chat-http.test.ts`（`:55,158-159,291-299`，`project()` 于 `:125` 把事件映射为 `security_event:${kind}`）与 `malicious-input-http.test.ts`（`:206-208`），且只断言 `kind === 'injection'`；没有任何 `security_event.message` 或 block-reason 文本断言，也没有 `kind:'locked'` 的 `security_event` 断言。
 `'locked'` 作为 `PendingAction.status` 数据行只出现在 `developer-chat-http.test.ts:68` 的 `it.each`（reset 返回 409 且 revision 与 transcript 不变）。
 
+锁定的 verify/confirm 只断言「该 actionId 不再有 `mfa_required` 事件」（`mfa-terminal-lock-http.test.ts:287,299,335`）与「`auditLog` 会话计数为 0」（`:306,345`、`actions-http.test.ts:520`）；
+本目录没有「锁定调用不新增 `MfaChallenge` 行」「`pendingAction` 行数不增」「无新 `SecurityEvent`」的断言（`mfaChallenge` 在 `mfa-terminal-lock-http.test.ts`、`actions-http.test.ts` 内零匹配）。
+
+本目录没有任何「用户可见文本/事件 message 不含内部标记」的断言：`__SECURITY_BLOCK__` 在 `tests/app/*.ts` 零匹配（只出现在本文件）、`decisionKind` 零匹配、无堆栈/原始 JSON「不含」断言；`not.toContain` 只用于 MFA 码、隐私字段与「已不 surfaced 的 actionId」。
+内部标记的不含断言在 `tests/unit/`（`lib/public-text.test.ts`、`security/mfa-failure-contract.test.ts`、`agent/turn-security-event.test.ts`，见 `tests/unit/CONTEXT.md`）。
+
 ## 常用命令
 
 `pnpm exec vitest run tests/app`
