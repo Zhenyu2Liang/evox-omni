@@ -49,8 +49,17 @@ Web 身份与接口表见 [api/CONTEXT.md](api/CONTEXT.md)。
 确认/MFA 面板、工具事件与失败文案（含 `chat.error.*` 键）全部在 `components/chat/` 渲染。
 `app/` 不筛选、不清洗 `AgentStreamEvent`：`api/chat/route.ts` 的 SSE 帧与 `api/actions/[id]/verify/route.ts` 的 `events` 都原样转发。
 排查聊天文案、`security_event` 或面板显隐时进入 `components/chat/`，不要在 `app/` 内继续搜索。
-`app/` 对 `PendingAction` 只读：仅 `agent/history.ts` 与 `agent/plan-history.ts` 直接查询该表，写入（含 `status`）全部经 `@/agent`、`@/security` 与 `lib/db/repositories/pendingAction.ts` 完成。
+`app/` 对 `PendingAction` 只读，读取点为 `agent/history.ts`、`agent/plan-history.ts`、`security/page.tsx`（经 `listPendingActions`）、`api/security/route.ts`、`api/_lib/task-pending-actions.ts`；写入（含 `status`）全部经 `@/agent`、`@/security` 与 `lib/db/repositories/pendingAction.ts` 完成。
 因此本层没有把 `locked` 行改回 `pending`/`awaiting_mfa` 的路径，锁定与否只看仓储与网关。
+
+## 锁定终态（MFA 连续失败）
+
+`locked` 在本层是终态，刷新页面或恢复会话都不重新激活，也不提供验证码入口。
+`api/actions/route.ts` 只 surfacing `pending`/`awaiting_mfa`/`needs_reconciliation` 与未结算的 `confirmed`；`locked` 永不出现。
+`api/actions/[id]/verify|confirm|cancel|recover` 对 `locked` 行返回结构化失败（`CIRCUIT_OPEN` + `reason: 'mfa_session_locked'`），不写库、不执行、不重放。
+历史投影卡片的状态恒等于持久化行状态，只有开放态行才可能重建可提交面板。
+`/security` 展示锁定原因、已锁定操作与运行时解锁入口，并声明解锁后必须重新发起并重新确认，原操作不会自动执行。
+契约细节见 [api/CONTEXT.md](api/CONTEXT.md)、[security/CONTEXT.md](security/CONTEXT.md)、[agent/CONTEXT.md](agent/CONTEXT.md)。
 
 ## 修改约束
 
