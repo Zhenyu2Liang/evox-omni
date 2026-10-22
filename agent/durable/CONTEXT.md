@@ -44,7 +44,9 @@ Takeover contract: `beginAgentRun({ sessionId, userId, existingRunId, recover: t
 
 ## Persistence boundary
 
-This directory performs NO write to `pendingAction` or `mfaChallenge` — it only reads them (`continuation.ts:49`, `service.ts:86-90`, `service.ts:216`, `standalone-workflow.ts:79-80`, `standalone-workflow.ts:175-176`, `workflow-invocations.ts:36-37`/`:62-63`, `authorized-checkpoint.ts:17`).
+This directory writes `PendingAction.status` in exactly ONE place: `workflow-invocations.ts:46-50` reconciles a completed child invocation whose action terminal status was lost, calling `../confirmation-recovery.ts settlePendingAction({ actionId, status, result, from: ['confirmed'], audit, dedupeKey })` — a CAS from `'confirmed'` only, so it can never resurrect a `'locked'` row.
+Every other `pendingAction` touch here is a read (`continuation.ts:49`, `service.ts:86-90`, `service.ts:216`, `standalone-workflow.ts:79-80`, `standalone-workflow.ts:175-176`, `workflow-invocations.ts:36-37`/`:62-63`/`:81`, `authorized-checkpoint.ts:17`); no write to `mfaChallenge` exists.
+Plan-node re-dispatch reaches the gateway second-hand: `resumeOriginalRunTask` (`workflow-resumption.ts:33`/`:50-53`), `recoverStandaloneWorkflowRun` (`standalone-workflow.ts:165-168`) and `recoverOwnedRun` (`service.ts:204`) all run their node/read tools through `executeGatedTool` or `securityGateway.handleToolCall`, so a NEW parked or `'locked'` action can be created by the gateway during recovery even though this layer writes none itself.
 The status transitions live in `../confirmation/gated-execution.ts:49-53` (CAS `from: ['confirmed']`) and `../confirmation-recovery.ts settlePendingAction` (l.251: CAS only when `from` is supplied, otherwise the unconditional `setPendingActionStatus`), with the challenge written by `security/mfa.ts` and the gateway's own CAS (`security/security-gateway.ts:922-932`).
 `service.ts:159-161` returns early for a run already in `waiting_confirmation`/`waiting_verification` ("The original confirmation or verification is still required.") — recovery does not clear a live parking.
 
