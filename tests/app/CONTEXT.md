@@ -54,6 +54,16 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 - `/api/security/reset` 使用验证码或冷却策略；锁定中缺码或错码均为 423 `CIRCUIT_OPEN`，正确码 200 + `{locked:false,failures:0}`，每次成功恰好 1 条 `SECURITY_RESET`（`security-workflow-http.test.ts:1079-1154`）。
 - `/api/developer/security/reset` 使用开发者模式重置策略：非开发者模式恒 403，成功路径 200 且**不改写** `PendingAction.status`（`developer-security-http.test.ts:42` 行仍为 `awaiting_mfa`），审计写入失败时 500 且锁保持。
 
+`POST /api/security/reset` 的调用面固定为三处：`identity-http.test.ts:122`（`{}` → 200，无其他断言）、`security-workflow-http.test.ts:936`（it 7，`{}` + 伪造 query → 200 + `data.sessionId`）、同文件 it 9–13（见 423/200 形状）。
+响应字段断言只到 `data.sessionId`/`data.locked`/`data.failures`（`:1125-1127`、`:938`、`:1150-1151`）。
+
+解锁路径的断言缺口（本目录）：
+- `data.lockedActionsReopened`（`app/api/security/reset/route.ts:52` 恒 `false`）、`data.max` 与 `data.message` 全仓零断言。
+- 「已 `locked` 的 `PendingAction` 解锁后仍为 `locked`、从不写回 `pending`/`awaiting_mfa`」无断言：it 12 只断言 breaker 状态、恰好 1 条 `SECURITY_RESET` 与响应体，从不读 `pendingAction.status`。
+  `manual-card-management.test.ts:73-83` 走 `resetDemoSession`（开发者门面）且只断言 `listCardChanges` 投影——`security/manual-card-management.ts:98-103` 在 breaker 锁定期间把状态覆盖成 `locked`，解锁后回落到真实行状态——因此既不能证明也不能否证该终态性。
+- 「锁 + 解锁后新请求产生新 `PendingAction`（新 id，旧 locked id 不复用）」无断言；`mfa-terminal-lock-http.test.ts:315` 的 `not.toBe` 比较的是**锁之前**两个不同计划的 actionId。
+- it 9 的解锁成功路径调用的是 `security.circuitBreaker.resetSession`（`:1019`）而非 HTTP 路由；HTTP 成功路径只有 it 12/it 13。
+
 ## 卡片虚拟卡消费
 
 `card-consume-http.test.ts` 覆盖虚拟卡消费入口：
@@ -74,12 +84,30 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 关键词 `panel`、`prose`、`hallucinat` 在本目录无匹配。
 `waiting` 多指 `waiting_confirmation` 状态；`claim` 指 DB 执行 claim。
 
+终态锁定（`status:'locked'`）的响应字段无断言。
+`ActionResponse` 真实带 `code`、`attemptsLeft`、`maxAttempts`、`failure`（含 `failure.reason`），
+但 `mfa-terminal-lock-http.test.ts` 与 `actions-http.test.ts` 只断言 `status`/`mfaResult`/`ok`，从未断言这四个字段。
+`POST /api/actions/[id]/{cancel,recover}` 对 `locked` 行的早退守卫生效于 `app/api/_lib/locked-action.ts#lockedActionRefusal`（`code:'CIRCUIT_OPEN'`、`failure.reason:'mfa_session_locked'`、`events: []`），
+但没有任何用例取消或恢复过 `locked` 行；`cancel-safety-http.test.ts`、`cancel-during-authorization-http.test.ts` 的可执行状态集合都不含 `'locked'`。
+`GET /api/security` 在本目录没有任何用例；其真实形状为 `{status,events,circuitBreaker:{failures,max,locked},lock?,lockedActions}`，`lock` 仅在 breaker 已锁时出现。
+`GET /api/tasks`(`/[id]`) 的 `pendingActionStatus` 字段无断言（`tasks-http.test.ts` 只核对 `waiting_confirmation` 与 `pendingActionId`）。
+`chat-history-http.test.ts` 只断言 `mfa` 卡的 `executed` 状态，没有 `locked`，也没有 `confirmation` 卡的状态断言。
+锁定用例从不核对 `MfaChallenge` 行。
+`/security` 页面渲染只有 `tests/e2e/acceptance.e2e.ts#j-circuit-breaker-lock` 覆盖（`已熔断`、`失败 N / N 次`、`CIRCUIT_BREAKER_TRIPPED` 行、刷新后保持、开发者重置）；
+`UnlockPanel` 的运行时解锁流程与 `data-lock-reason`/`data-unlock-*`/`data-locked-actions` 标记、以及「内部标记/JSON/堆栈/演示验证码不进 DOM」都无用例。
+
 用户可见文案断言极少：`chat-http.test.ts:409` 的 `toContain('验证码')`（RED 回合提示存在且不泄露 `MFA_CODE`）、`manual-review-http.test.ts:277` 的 `toContain('manual review')`、`card-consume-http.test.ts` 的 `occurredAt` 校验错误文案。
 锁定的用户可见文案（`securityLocked`、`toolFailed`、「验证码错误次数过多」）在本目录零断言，也没有 `MfaCard`/`publicToolError` 渲染用例。
 
 `__SECURITY_BLOCK__`、`chat.error.toolFailed`、`publicToolError`、`publicToolSummary`、`securityLocked` 在 `*.ts` 内零匹配。
 `security_event` 只出现在 `chat-http.test.ts`（`:55,158-159,291-299`，`project()` 于 `:125` 把事件映射为 `security_event:${kind}`）与 `malicious-input-http.test.ts`（`:206-208`），且只断言 `kind === 'injection'`；没有任何 `security_event.message` 或 block-reason 文本断言，也没有 `kind:'locked'` 的 `security_event` 断言。
 `'locked'` 作为 `PendingAction.status` 数据行只出现在 `developer-chat-http.test.ts:68` 的 `it.each`（reset 返回 409 且 revision 与 transcript 不变）。
+
+锁定的 verify/confirm 只断言「该 actionId 不再有 `mfa_required` 事件」（`mfa-terminal-lock-http.test.ts:287,299,335`）与「`auditLog` 会话计数为 0」（`:306,345`、`actions-http.test.ts:520`）；
+本目录没有「锁定调用不新增 `MfaChallenge` 行」「`pendingAction` 行数不增」「无新 `SecurityEvent`」的断言（`mfaChallenge` 在 `mfa-terminal-lock-http.test.ts`、`actions-http.test.ts` 内零匹配）。
+
+本目录没有任何「用户可见文本/事件 message 不含内部标记」的断言：`__SECURITY_BLOCK__` 在 `tests/app/*.ts` 零匹配（只出现在本文件）、`decisionKind` 零匹配、无堆栈/原始 JSON「不含」断言；`not.toContain` 只用于 MFA 码、隐私字段与「已不 surfaced 的 actionId」。
+内部标记的不含断言在 `tests/unit/`（`lib/public-text.test.ts`、`security/mfa-failure-contract.test.ts`、`agent/turn-security-event.test.ts`，见 `tests/unit/CONTEXT.md`）。
 
 ## 常用命令
 

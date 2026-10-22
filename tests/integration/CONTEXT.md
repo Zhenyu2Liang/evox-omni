@@ -75,6 +75,16 @@
 `frontend-followup-fixes.test.ts:140` `{ ok:false, locked:false, attemptsLeft: 2 }` 是本目录唯一的 `attemptsLeft` 断言；`:166` `{ status:'locked', attempts: 3 }`。
 `confirmation-liveness.test.ts:285` 是本目录唯一的 `mfaResult` 断言（`'success'`）。
 
+## 解锁与重置（resetSession / POST /api/security/reset）的覆盖
+
+本目录只有 `confirmation-policy.test.ts` 与 `frontend-followup-fixes.test.ts` 触及重置/解锁。
+安全中心路由不带验证码时恒 `423` + `CIRCUIT_OPEN`，且不写任何 `SECURITY_RESET`（`confirmation-policy.test.ts:85-88`）。
+带验证码的 `resetSession` 之后 `SECURITY_RESET` 恰好 1 行（`confirmation-policy.test.ts:91`、`frontend-followup-fixes.test.ts:142-143`，detail 含 `renewedMfaChallenges: 1`）。
+解锁会把该 action 的 `MfaChallenge` 续期为 `pending`/`attempts 0`，并把其 `PendingAction` 由 `locked` 改回 `awaiting_mfa`（`frontend-followup-fixes.test.ts:137-138`）——测试断言的是「重开该 action」，不是「保持 locked」。
+续期按所有者与状态过滤：需决策的 challenge 变成 `pending`，`cancelled` 与其它用户的 challenge 保持 `locked`（`:156-157`）。
+审计写入失败时解锁与续期一并回滚，`isLocked` 仍为 `true`、challenge 保持 `locked`/`attempts 3`（`:166-167`）。
+没有任何用例断言「解锁后新请求产生新 `PendingAction` id」：解锁后仍复用同一个 actionId（`confirmation-policy.test.ts:92` 的 `recover`、`frontend-followup-fixes.test.ts:140-141` 的 `verify`）。
+
 ## 断言约束
 
 - 声明与任务图来自结构化输入，不从原句正则补全。

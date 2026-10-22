@@ -15,6 +15,9 @@
 根部两个 `weixin-*.test.ts` 不连库、不调模型：
 `weixin-presentation.test.ts` 断言卡片/事件渲染，`weixin-channel.test.ts` 断言 bridge 的受信边界、命令流、去重与 `locked` 对外文案。
 覆盖清单与缺口见 [../CONTEXT.md](../CONTEXT.md) 的「微信通道覆盖」。
+两个文件的假对象工厂可直接复用：`weixin-presentation.test.ts#setup()`（第 87 行）返回 `{ state: emptyState(), bank }`，`bank` 由 8 个 `vi.fn()` 字面量实现 `BankingChannel`，渲染函数直接吃手写 `ChatCard`/`AgentStreamEvent` 字面量；
+`weixin-channel.test.ts#fixture()`（第 16 行）另建 `WeixinBridge(state, bank, sender, save)` 与 `message(text, id)` 消息工厂，`sender` 只需 `send(to, text, clientId, contextToken)`，`save` 为空 `vi.fn()`，无 `WeixinStore` 替身（store 用例用真实临时目录）。
+回复断言惯用 `sender.send.mock.calls.at(-1)?.[1]` 取文本后 `toContain`/`not.toContain`。
 
 本目录没有脚本化模型驱动生产 `runTurn` 的用例。
 `agent/run-turn-failure.test.ts` 替换 `createBankingAgent` 工厂，`write-continuation*.test.ts` 用假运行时且不碰数据库。
@@ -41,6 +44,23 @@
 这些用例是纯文本断言：不连库、不调模型、不联网。
 它们证明服务端渲染的措辞与目录事实一致，不证明真实模型不再生成同类散文（那以 live 验收为准），也不覆盖网关授权与执行路径。
 测试夹具只做分句、否定辖域与标记词表分类，不复刻产品逻辑。
+
+## 内部诊断不外泄的覆盖
+
+`@/lib/public-text` 是唯一把内部诊断转成公开文本的漏斗，本目录按层覆盖：
+
+| 文件 | 覆盖 | 是否触达路由/锁定 |
+| --- | --- | --- |
+| `lib/public-text.test.ts` | `HOSTILE_INPUTS`（`__SECURITY_BLOCK__`+`decisionKind` JSON、裸 JSON、stack trace、`undefined`、`[object Object]`）在 zh-CN/en 下均判为内部诊断，`safePublicText`/`publicToolError` 回落到目录文案且正文不含 marker/`decisionKind`/`at foo`；`securityNotice` 用 typed 字段渲染 `MFA_LOCKED`/`CIRCUIT_OPEN` | 纯函数，无 DB、无 HTTP、不产生真实锁定 |
+| `security/mfa-failure-contract.test.ts` | 真实网关 `authorizeAction`：前两次错误码 `awaiting_mfa`+`attemptsLeft`，第三次 `status:'locked'`、`PendingAction`/`MfaChallenge` 落 `locked`；重试正确码仍 `CIRCUIT_OPEN` 且不新建挑战/不执行；`message` 与 `failure.reason` 断言不含 `__SECURITY_BLOCK__` | 走 `securityGateway`，非 HTTP；是唯一覆盖 `MFA_MAX_ATTEMPTS=3 → PendingAction 'locked'` 的用例 |
+| `agent/turn-security-event.test.ts` | `expectClean` 禁 marker、`"decisionKind"`、`[object Object]`、`\n  at `、`Error:`；作用于 `security_event`、blocked `ToolEventView`、`summary` 与 `publicToolSummary`；`errorParams` 只允许 `count/attemptsLeft/attemptsUsed/maxAttempts` | 熔断由 `recordFailure`×3 预置，不产生 `PendingAction` 行 |
+| `agent/providers/provider-mock.test.ts` | marker 只作为**输入**（`BLOCK_PREFIX` 拼接网关 block 载荷）喂给 `respond`；断言输出等于 mock 模板原文且从不声称已执行 | 纯函数，无 DB、无 HTTP |
+| `planner/tool-feedback.test.ts` | `ToolEventView.debugDetail` 可留内部纠错原文，但公开 `summary`/`publicToolSummary` 只出目录文案；普通模式渲染不含 guard 原文与 `internal-node-*`，developer 模式才含 `data-tool-diagnostics` | 无 DB、无 HTTP |
+| `planner/tool-diagnostics.test.ts` | `ErrorCard`/`AgentTaskTimeline`/`ConfirmationCard`/`MfaCard` 的私有 message/statusMessage 与原始 toolArgs、search 历史 JSON 只在 developer 模式出现；`sanitizeToolArguments` 剥离凭据/推理且保留金额 | 无 DB、无 HTTP |
+| `lib/activity-presentation.test.ts` | 业务活动只渲染封闭业务字段，隐藏 id、`toolName`、`toolResult`、`userRequest`、`sessionId` | 无 DB、无 HTTP |
+
+没有任何用例驱动 `POST /api/security/reset`（该路由见 `app/security-workflow-http.test.ts`）。
+marker 的行为断言只在中止/回显方向：输入侧由 `provider-mock.test.ts` 构造，输出侧由 `public-text.test.ts`、`mfa-failure-contract.test.ts`、`turn-security-event.test.ts` 断言不出现。
 
 ## 执行与修改
 
