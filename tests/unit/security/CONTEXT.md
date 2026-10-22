@@ -15,6 +15,19 @@
 `circuit-breaker*.test.ts` 直接调 `@/security/circuit-breaker`。
 安全事件落 `securityEvent` 表，不是 `auditLog`。
 
+## `mfa.test.ts` 的骨架与覆盖缺口
+
+`mfa.test.ts` 直测 `@/security/mfa` 的 `issueChallenge`/`verify`/`getChallenge`（不经网关），也是本目录唯一直接调 `issueChallenge` 的文件。
+setup 只在文件顶层：`vi.setConfig({ hookTimeout: 30_000 })`（`mfa.test.ts:26`，低于根配置的 60 秒）与 `useFreshDatabase()`（`:27`，为整文件注册 `beforeEach(resetDatabase)` + `afterAll(disconnect)`）。
+import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/index` barrel；文件内无 `vi.mock`、无 `vi.useFakeTimers`/`vi.setSystemTime`、无 `process.env`。
+`seedAction()`（`:35-52`）用仓库 `createPendingAction` 造前置动作：`toolName:'transfer_money'`、`tier:'RED'`、`requiresMfa:true`、`status:'awaiting_mfa'`、`userId:DEMO_USER_ID`（`user_liming`，由 `fixtures.seedDemoData` 的 `user.create` 建成）。
+不造 User/AgentSession/MfaChallenge 行：`MfaChallenge` 一律由被测的 `issueChallenge` 产生。
+每例 `newSessionId()` = `newId('sess_mfa')`（`:30-32`），没有对应 `AgentSession` 行（`PendingAction.sessionId` 无外键，`prisma/schema.prisma:418-448`），熔断所有者因此落到 `session:<该 id>` 兜底键（`security/circuit-breaker.ts:121-127`），而不是用户级 `user:user_liming`；隔离来自每例唯一 id 加 `truncateAll()` 清 `circuitBreakerState`。
+文件头「in-process breaker keyed by sessionId」的注释与实现不符：熔断状态是持久化、按所有者键的表（`security/circuit-breaker.ts:1-6`、`prisma/schema.prisma:465-479`）。
+本文件不用任何假时钟：`expiresAt` 从不出现，challenge 有效期恒为 `realNow() + MFA_CHALLENGE_TTL_MS`（`security/mfa.ts:34`、`:138`）。
+因此以下 `security/mfa.ts` 分支不被本文件触达，改动它们时不会有本文件报错保护：`locked` 动作的 `MFA_LOCKED` 拒绝（`:106-109`）、已执行/已取消的 `CONFLICT` 拒绝（`:112-115`）、challenge 过期或 `commandDigest` 不符时的重建分支（`:123-131`）、`consumedAt` 与摘要不符的拒绝（`:165-169`）、已 `verified` challenge 的短路（`:192-198`）。
+`tests/unit/security` 全目录不出现 `expiresAt`；过期路径的改写只出现在 `tests/integration/` 的 `confirmation-lease-contention.test.ts`、`confirmed-write-authority.test.ts`、`refactor-security-runtime.test.ts`。
+
 ## 安全中心解锁面板（`/security`）的渲染契约
 
 `app/security/page.tsx` 是 await `cookies()`/`requireIdentity()`/DB 的 async Server Component，Node 测试无法调用，**页面本身不在本目录测试**。
