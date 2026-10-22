@@ -69,6 +69,8 @@ HTTP 错误或 `ok:false` 时，仅当 `status<500` 且 `error.code` 匹配 `^[A
 `bridge.ts:37` 把 `BankingApiError.message` 直接作为整条回复，其它异常与网络失败回 `银行请求结果暂时无法确认。请在网页核对操作记录，不要据此判断已成功或资金未变。`。
 错码与锁定不经过该错误通道：动作路由始终回 HTTP 200 的 `{ok:true,data:{ok:false,status,code?,failure?,attemptsLeft?,maxAttempts?,message,…}}`，通道只按 `outcome.status` 与类型化失败字段分支。
 `ActionResult`（`banking-client.ts:11-19`）声明 `actionId/ok/status/message/requiresMfa/events` 与可选 `code/attemptsLeft/maxAttempts/failure`；服务端 `sessionId`、`tier`、`mfaResult` 被丢弃，`ok` 不参与判断。
+`SecurityFailure`（`lib/contracts/security.ts:21-28`）在本目录只以类型形式出现：`banking-client.ts:2` 导入、`banking-client.ts:18` 作为 `ActionResult.failure`；`failure.actionId`/`attemptsUsed` 从未被读取，`reason` 只用于挑拒绝文案（`bridge.ts:93`），`attemptsLeft`/`maxAttempts` 只经 `securityNotice` 影响文案。
+本目录不使用网关的 `AuthorizationResult`（`security/security-gateway.ts:104-123`）：通道自带 `ActionResult`，其 `code` 是 `string`、`failure` 可选，因此锁定分支用 `outcome.failure ?? { code: outcome.code }` 兜底（`bridge.ts:87`）。
 验证码只出现在本次 verify 请求体，不写 state、不回显、不进模型。
 
 ## 待办展示（commands.ts:18 / presentation.ts renderAttention）
