@@ -58,6 +58,30 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 `SECURITY_RESET` 文案与 `detail` 一致表达上述语义；`detail` 含 `actor`/`reason`/`wasLocked`/`previousFailures`/`mode`/`renewedMfaChallenges`，曾经锁定过时另有 `priorLockedAt`。
 `recordFailure` 的审计粒度不变：每次 trip 恰好一条 `CIRCUIT_BREAKER_TRIPPED`（`severity:'high'`，`detail` 含 `failures`/`max`/`result`），锁定期间不再重复计数或重复发事件。
 
+## reason 的权威判定表（mfa.ts + security-gateway.ts）
+
+`mfa.attemptState(actionId)`（`MfaAttemptState { attempts, maxAttempts, exhausted }`）是「本操作是否用尽尝试」的唯一权威来源：`exhausted = attempts >= maxAttempts || challenge.status === 'locked'`，**只看该操作自己的挑战行**，不看账户熔断。
+`mfa.challengeInvalidation(error)` 是「挑战为何不可用」的唯一权威来源：服务端判别 `'consumed' | 'expired' | 'command_changed'`，`null` 表示不是挑战级拒绝。
+`verify` 的挑战级拒绝抛 `ChallengeInvalidError extends AppError`：`code` 仍为 `'MFA_FAILED'`、英文 message 逐字不变（`lib/tool-feedback.ts` 精确白名单），判别只经 `SecurityFailure` 与 `invalidation` 字段承载（`consumed` → `{code:'CONFLICT', reason:'denied'}`，`expired`/`command_changed` → `{code:'MFA_FAILED', reason:'denied'}`）。
+
+| 情况 | 顶层 `code` | `failure.code` | `failure.reason` | `status` | 行写入 |
+| --- | --- | --- | --- | --- | --- |
+| 验证码错误、未锁定 | `MFA_FAILED` | `MFA_FAILED` | `mfa_code_invalid` | `awaiting_mfa` | 无（`attemptsUsed`/`attemptsLeft`/`maxAttempts` 来自 `attemptState`） |
+| 本操作自己的尝试用尽 | `CIRCUIT_OPEN` | `MFA_LOCKED` | `mfa_attempts_exhausted` | `locked` | `persistLockedAction` |
+| 账户级熔断（由**其它**操作触发） | `CIRCUIT_OPEN` | `CIRCUIT_OPEN` | `circuit_open` | `locked` | `persistLockedAction` |
+| 重试已 `locked` 的操作 | `CIRCUIT_OPEN` | `CIRCUIT_OPEN` | `mfa_session_locked` | `locked` | 无（幂等，`lockedOutcome` 不带 `attemptsUsed`） |
+| 挑战已消费（`consumedAt`） | `CONFLICT` | `CONFLICT` | `denied` | `cancelled` | CAS `from:['pending','awaiting_mfa']` → `cancelled` |
+| 挑战过期 / 命令摘要变化 | 无 | 无 | 无 | `awaiting_mfa` | 先 `issueChallenge` 重签，提示态不带 `failure` |
+| 无法归类的挑战级拒绝 | 抛 `AppError('CONFLICT', …)` | — | — | — | 不写业务副作用（fail-closed） |
+
+`mfa_attempts_exhausted` 只描述**该操作自己**的尝试记录，账户熔断一律 `circuit_open`：因此 `attemptsUsed` 恒等于本操作已消费次数，绝不出现 0 或负数冒充「用尽」。
+判定表使用的 reason 全部是既有 `SecurityFailureReason` 成员，`FAILURE_REASONS` 白名单无需扩展。
+`consumedAt` 已写表示决定已结算：该行只能进入终态 `cancelled`（CAS 落空时重读，`locked` 走 `lockedOutcome(…, 'mfa_session_locked')`，否则抛 `AppError('CONFLICT', …)`），绝不执行、不消耗尝试、不重新签发验证码。
+`expired`/`command_changed` 是唯一允许出现「继续验证」语义的情形（服务端确实签发了全新挑战）。
+`locked` 终态与 `from` CAS 约束不变：`locked` 永不作为 `from` 来源，也永不写回 `pending`/`awaiting_mfa`/`confirmed`/`executed`/`failed`；解锁（`circuit-breaker.ts#resetSession`）只清熔断与失败计数，不复活任何 `locked` 操作。
+
+`security/` 下的回归测试与局部 vitest 配置：`security/vitest.security-contract.config.ts`（`root` 固定为仓库根、`include: ['security/**/*.test.ts']`）配合 `security/mfa-lock-reason-authority.test.ts`（A–E 五条，DB 支撑），运行 `pnpm exec vitest run --config security/vitest.security-contract.config.ts`。
+
 ## 结构化失败契约
 
 `lib/contracts/security.ts` 的 `SecurityFailure { code; reason: 'mfa_code_invalid'|'mfa_attempts_exhausted'|'mfa_session_locked'|'circuit_open'|'denied'; actionId?; attemptsUsed?; attemptsLeft?; maxAttempts? }` 是拒绝的唯一机器可读形态；`lib/errors.ts` 的 `'MFA_LOCKED'` 是它的领域错误码。
