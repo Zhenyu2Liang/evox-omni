@@ -117,7 +117,8 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 锁定文案既有子串断言也有全等断言：`scenarios/test-10-circuit-breaker.test.ts` 断言 `thirdAttempt.text` 含「锁定」、`auth.message` 含「熔断」；`integration/money-budget.test.ts` 断言执行栅栏的 `CIRCUIT_OPEN` 结果含「熔断」。
 完整锁定句由 `unit/weixin-lock-presentation.test.ts:87-92` 的四段模板定义，并以 `:99`/`:112`/`:123`/`:157` 的 `toBe` 全等断言；单次错码的 `状态：等待验证码` + `继续验证：/验证 …` 见 `:134`，该入口只属 `awaiting_mfa` 见 `:144-152`。
 `chat.error.securityLocked` 由 `unit/lib/public-text.test.ts:79-87`（zh-CN/en 双语言）、`unit/planner/locked-card-rendering.test.ts:148-186`、`unit/weixin-lock-presentation.test.ts:112-183`、`unit/agent/turn-security-event.test.ts:98` 断言。
-完整锁定句与 `chat.error.securityLocked` 全仓无断言。
+`publicToolError` 由 `unit/planner/tool-feedback.test.ts`（通用失败 `chat.error.toolFailed`）与 `unit/lib/public-text.test.ts:33-60` 覆盖。
+`publicToolSummary` 被断言到目录锁定句，见 `unit/agent/turn-security-event.test.ts:92-98` 与 `unit/planner/locked-card-rendering.test.ts:176-180`。
 `publicToolError` 仅由 `unit/planner/tool-feedback.test.ts` 以 `chat.error.toolFailed` 覆盖通用失败，不涉及锁定。
 `security_event` 只在 `app/chat-http.test.ts`、`app/malicious-input-http.test.ts` 断言 `kind:'injection'`；`kind:'locked'` 与该帧的 `message` 内容没有任何用例，被拦下的工具事件也不带 `summary`。
 `helpers/scenario.ts` 复刻了生产的投影（block 原因 →`security_event{kind:'locked', message:原始原因}`），场景用例因此继承同一可观测面，但从未在该帧上断言。
