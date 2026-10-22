@@ -113,6 +113,8 @@ Web 演示使用服务端配置的单一用户和共享会话。
 确认和认证接口只处理当前待决策状态。终态操作不会重新获得执行权。
 修改金额或收款人前，必须取消原授权并重新发起请求。
 
+验证码挑战与权限网关的代码见 [mfa.ts](../../security/mfa.ts) 和 [security-gateway.ts](../../security/security-gateway.ts)。
+
 ### 验证失败的逐次结果
 
 失败次数上限为 3 次，第 3 次失败即锁定。
@@ -182,7 +184,7 @@ Web 演示使用服务端配置的单一用户和共享会话。
 
 结果不明时，任何文案都不得声称成功、失败或资金未变化。
 
-代码入口见 [认证挑战](../../security/mfa.ts) 和 [权限网关](../../security/security-gateway.ts)。
+锁定的存储与判定见 [待确认操作仓储](../../lib/db/repositories/pendingAction.ts) 和 [熔断器](../../security/circuit-breaker.ts)。
 
 ## 写入事务与提交校验
 
