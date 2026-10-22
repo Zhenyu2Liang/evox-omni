@@ -30,6 +30,10 @@
 | `card-manual-only-management.test.ts` | 新建卡与删卡仍是人工页专属：`manual_add_card`／`manual_delete_card` 经注册表、`executeGatedTool`、`securityGateway#handleToolCall` 与决策端点均被拒绝，且不新增卡／`PendingAction`／`MfaChallenge`／`CardLimit`／`CardConsumption`／回执 |
 | `card-dashboard-assets.test.ts` | 补办家族的信用额度只计一次、虚拟卡/借记卡现金不计入信用且不重复计入总资产、种子基线；补办后 `apply_virtual_card` + `consume_virtual_card` 仍可用且余额/流水/消费行只动一次 |
 
+| `confirmation-policy.test.ts`、`recovery-authorization.test.ts` | 写时熔断与终态决策：`423`＋`CIRCUIT_OPEN`、`getState().locked`、已锁定会话仍凭原回执收敛且不新增扣款、`status: 'locked'` 的 RED 决策不再请求验证码 |
+| `money-budget.test.ts`、`frontend-followup-fixes.test.ts` | 三次错误验证码耗尽：会话熔断且 GREEN 写不落地（`JSON.stringify(outcome)` 含「熔断」）、`MfaChallenge` 落 `locked`、错误解锁码不能续期、审计失败回滚解锁与续期 |
+| `terminal-state-settle.test.ts`、`decision-guidance.test.ts`、`confirmation-evidence.test.ts` | 终态/阻塞：已终态动作的重复确认与取消是稳定 200 `ok:false`（`events` 为空）、未声明工具 `toolEvent.status === 'blocked'`、取消阻断栅栏后 SDK 写不落地 |
+
 其他测试覆盖预算、取消、接管、执行权和未知结果。
 具体场景以测试源码中的断言为准。
 不得保留已删除测试的路径或旧修复轮次清单。
