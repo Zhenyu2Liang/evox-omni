@@ -77,7 +77,10 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 锁定态返回值仍带 `requiresMfa: true`，但 HTTP 路由由 `status` 推导出的 `mfaResult` 变为 `failed`，且不发出 `mfa_required` 流事件。
 真正的终态锁定会以「仅从 `pending`/`awaiting_mfa` 出发」的 CAS 把 `PendingAction.status` 落库为 `'locked'`；该行因此不再作为待决策项返回，也不再发出 `mfa_required`，MFA 弹窗不会重现；对已是 `'locked'` 的行再次授权幂等返回同一拒绝。
 `mfa.ts#verify` 返回 `Result` 而非抛错；抛 `CIRCUIT_OPEN` 的只有 `circuit-breaker.resetSession` 与 `execution-policy.assertSessionMayWrite`。
-成功验证码重置连续失败计数，但不解除已触发的熔断（「locked 优先」）；仅 `resetSession` 以验证码或 60 秒冷却解除。
+成功验证码重置连续失败计数，但不解除已触发的熔断（「locked 优先」）；仅 `resetSession` 以验证码或 60 秒冷却（`RESET_COOLDOWN_MS` = 60_000）解除。
+第 3 次失败同时把 `MfaChallenge.status` 置 `'locked'`（`mfa.ts:198-200`）；此后再验证先命中「locked wins」分支（`mfa.ts:148-154`），返回 `ok:false, locked:true`，不消费尝试也不发事件。
+`resetSession` 在同一审计事务内调用 `renewLockedMfaChallenges`（`lib/db/repositories/pendingAction.ts:362-378`）：只把「所属行仍为 `awaiting_mfa` 且 `requiresMfa`」的 `locked` 挑战重置为 `pending`；它从不写 `PendingAction.status`，也不自动执行任何操作（`app/api/security/reset/route.ts` 完全不碰 `PendingAction`，`lockedActionsReopened` 是常量 `false`）。
+`MFA_LOCKED` 只作为 `failure.code` 与前端白名单出现，从不作为抛出的 `AppError` 码。
 
 ## 结构化失败契约（SecurityFailure）
 
