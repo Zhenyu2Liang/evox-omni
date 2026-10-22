@@ -15,10 +15,19 @@
  *  - Existence + ownership: evaluated in that order and only AFTER identity is established — an
  *    unknown action id is `404 NOT_FOUND`; an action owned by a DIFFERENT session/user is
  *    `403 SECURITY_DENIED`.
- *  - Delegates to the agent runtime via `_lib/agent-bridge` `recoverOwned(id, { userId, sessionId })`
- *    (`@/agent`), which resolves the TRUSTED identity from PERSISTED state (a request-supplied
- *    assertion that mismatches FAILS CLOSED) and runs the receipt-first standalone recovery. The
- *    ORIGINAL validated args are what gets recovered/replayed — never model text.
+ *  - TERMINAL LOCK: exhausting the MFA attempt limit (or an already-open session circuit breaker)
+ *    persists the row as `'locked'`, which is TERMINAL. A locked action is NEVER recoverable — it can
+ *    never be executed, verifiable or cancelled again and must never be written back to
+ *    `pending`/`awaiting_mfa` — so it is answered BEFORE any delegation: a normal `200` DOMAIN refusal
+ *    (`data.ok === false`) carrying `status: 'locked'`, `mfaResult: 'not_required'`, the typed
+ *    `code: 'CIRCUIT_OPEN'` plus the structured `failure` (`reason: 'mfa_session_locked'`) and a fixed
+ *    safe sentence, with NO `recoverOwned` call, NO write and NO events.
+ *  - Every other status still delegates to the agent runtime via `_lib/agent-bridge`
+ *    `recoverOwned(id, { userId, sessionId })` (`@/agent`), which resolves the TRUSTED identity from
+ *    PERSISTED state (a request-supplied assertion that mismatches FAILS CLOSED) and runs the
+ *    receipt-first standalone recovery. The ORIGINAL validated args are what gets recovered/replayed —
+ *    never model text. A non-locked refusal forwards the outcome's typed `code`/`failure` (with its
+ *    `attemptsLeft`/`maxAttempts` when present), exactly like the confirm/verify routes.
  *  - The tool is NEVER re-invoked on a mere guess: a committed receipt is settled from directly; a
  *    proven-idempotent tool is replayed on its ledger key; any other wedge is transitioned to the
  *    queryable `needs_reconciliation` state. When there is genuinely nothing to recover the outcome
@@ -34,8 +43,10 @@ import type { NextRequest } from 'next/server';
 import { AppError } from '@/lib/errors';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
+import type { RiskLevel } from '@/lib/contracts/risk';
 import { recoverOwned } from '../../../_lib/agent-bridge';
 import { errorResponse, jsonResponse } from '../../../_lib/http';
+import { isLockedPendingActionRow, lockedActionRefusal } from '../../../_lib/locked-action';
 import { requireIdentity } from '../../../_lib/session';
 import type { ActionResponse, IdRouteContext } from '../../../_lib/types';
 
@@ -58,6 +69,26 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
       throw new AppError('SECURITY_DENIED', '无权恢复该操作。');
     }
 
+    // TERMINAL LOCK: a locked row is never handed to `recoverOwned` — nothing is replayed, nothing is
+    // written. The refusal is a normal DOMAIN outcome (`data.ok === false`).
+    if (isLockedPendingActionRow(row)) {
+      const refusal = lockedActionRefusal(id, row);
+      const locked: ActionResponse = {
+        actionId: id,
+        sessionId: row.sessionId,
+        ok: false,
+        status: 'locked',
+        tier: row.riskLevel as RiskLevel,
+        requiresMfa: row.requiresMfa || row.riskLevel === 'RED',
+        mfaResult: 'not_required',
+        code: refusal.code,
+        failure: refusal.failure,
+        message: refusal.message,
+        events: [],
+      };
+      return jsonResponse<ActionResponse>(locked);
+    }
+
     // The recovery itself is delegated to the agent runtime, which RE-resolves the trusted identity
     // from PERSISTED state (the row + its owning session) and fails closed on any mismatch.
     const outcome = await recoverOwned(id, { userId, sessionId });
@@ -75,6 +106,14 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
       requiresMfa: outcome.requiresMfa,
       mfaResult: 'not_required',
       message: outcome.message,
+      ...(outcome.code ? { code: outcome.code } : {}),
+      ...(outcome.failure
+        ? {
+            failure: outcome.failure,
+            attemptsLeft: outcome.failure.attemptsLeft,
+            maxAttempts: outcome.failure.maxAttempts,
+          }
+        : {}),
       events,
     };
 
