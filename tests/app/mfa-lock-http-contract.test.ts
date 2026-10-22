@@ -27,11 +27,12 @@
  * A terminal lock is ALWAYS HTTP 200. `423 CIRCUIT_OPEN` is thrown ONLY by `POST /api/security/reset`
  * and is deliberately NOT reachable from any route asserted here.
  *
- * KNOWN RED (group 4, ONE expectation): the required contract is that `GET /api/security#lock` names
- * the MFA attempt exhaustion (`reason:'mfa_attempts_exhausted'` + its counters) while the account is
- * frozen. Production returns the FIXED `{ code:'CIRCUIT_OPEN', reason:'circuit_open' }` constant
- * (`app/api/security/route.ts#LOCKED_FAILURE`) with no counters. That expectation is kept UNWEAKENED
- * and is the only failing assertion in this file; the production root cause is documented inline.
+ * WHERE THE ATTEMPT-EXHAUSTION EVIDENCE LIVES: the per-action exhaustion (`mfa_attempts_exhausted`
+ * plus the 3/0/3 counters) is the GATEWAY's terminal decision, so it is observable only in the third
+ * wrong-code `POST /api/actions/:id/verify` response — group 1 pins it there. `GET /api/security#lock`
+ * reports a DIFFERENT, ACCOUNT-scoped fact: the fixed `{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`
+ * constant (`app/api/security/route.ts:72-77`) that deliberately carries NO attempt counters. Group 4
+ * pins exactly that shape; `tests/app/mfa-lock-refresh-unlock-http.test.ts` (group 1) pins it too.
  */
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
@@ -247,6 +248,10 @@ interface LadderStep {
  * `mfa_code_invalid`, the action stays `awaiting_mfa`); only #3 trips the OWNER-scoped breaker and
  * persists the TERMINAL `locked` status (`CIRCUIT_OPEN` at the top level, `MFA_LOCKED` on the
  * failure, `mfa_attempts_exhausted` as the reason).
+ *
+ * THIS is the one place the per-action exhaustion triple (`mfa_attempts_exhausted` + 3 used / 0 left /
+ * 3 max) is observable: it is the gateway's terminal decision on the action. `GET /api/security#lock`
+ * reports the ACCOUNT-scoped breaker constant instead (group 4), which is why the two never conflict.
  */
 const LADDER: readonly LadderStep[] = [
   {
@@ -509,7 +514,7 @@ describe('cancel and recover on a locked action', () => {
 /* ================================================== 4. the security read model surfaces the lock */
 
 describe('GET /api/security while the owner breaker is open', () => {
-  it('[integration] the lock carries the attempt-exhaustion reason and its counters', async () => {
+  it('[integration] the lock is the account-scoped breaker constant and invents no attempt counters', async () => {
     const sessionId = await demoSessionId();
     const parked = await parkRedTransferPlan();
     await lockAction(parked.actionId, sessionId);
@@ -523,24 +528,23 @@ describe('GET /api/security while the owner breaker is open', () => {
       locked: true,
     });
 
+    // THE SHIPPED CONTRACT, pinned exactly: `lock` is the ACCOUNT-scoped breaker refusal — the one
+    // typed constant `app/api/security/route.ts:72-77`
+    // (`{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`) spread into the payload only while the breaker
+    // is locked. It carries NO attempt counters BY DESIGN: the breaker counts ACCOUNT-level failures,
+    // while the per-action exhaustion (`mfa_attempts_exhausted` with 3/0/3) belongs to that action's
+    // own `MfaChallenge` and to the gateway's terminal verify decision — pinned in the three-strike
+    // ladder block above (group 1). `tests/app/mfa-lock-refresh-unlock-http.test.ts` (group 1) pins
+    // the same shape. Do NOT "reconcile" this back into `reason:'mfa_attempts_exhausted'` + counters:
+    // that is the contradiction this block used to carry.
     // The structured lock reason, typed so the page never parses a message.
     expect(data.lock, 'a locked account MUST expose the structured lock reason').toBeDefined();
     expect(data.lock?.code, 'lock.code').toBe('CIRCUIT_OPEN');
-    // ⚠️ RED AT HEAD (reported, NOT weakened). The required contract is that the security read model
-    // reports WHY the account is frozen — the MFA attempt exhaustion — plus the counters behind it.
-    // Production instead returns the FIXED `LOCKED_FAILURE` constant
-    // (`app/api/security/route.ts:77`, `{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`, with an
-    // explicit doc comment saying it "deliberately carries no attempt counters" because the breaker
-    // is ACCOUNT-scoped while the per-action attempts live on that action's own row). Consequence:
-    // the three `lock.reason`/`lock.attempts*` expectations below fail against current production
-    // while `circuitBreaker`/`lock.code`/`lockedActions` all pass. The fix belongs in that route
-    // (project the per-action reason of the caller's `locked` rows), never in this assertion.
-    expect(data.lock?.reason, 'lock.reason names the MFA attempt exhaustion').toBe(
-      'mfa_attempts_exhausted',
-    );
-    expect(data.lock?.attemptsUsed, 'lock.attemptsUsed').toBe(MFA_MAX_ATTEMPTS);
-    expect(data.lock?.attemptsLeft, 'lock.attemptsLeft').toBe(0);
-    expect(data.lock?.maxAttempts, 'lock.maxAttempts').toBe(MFA_MAX_ATTEMPTS);
+    expect(data.lock?.reason, 'lock.reason is the ACCOUNT-scoped breaker reason').toBe('circuit_open');
+    // No counters are invented at this level — asserted as ABSENCE, the honest form of the claim.
+    expect('attemptsUsed' in data.lock!, 'lock.attemptsUsed must be ABSENT').toBe(false);
+    expect('attemptsLeft' in data.lock!, 'lock.attemptsLeft must be ABSENT').toBe(false);
+    expect('maxAttempts' in data.lock!, 'lock.maxAttempts must be ABSENT').toBe(false);
   });
 
   it('[integration] lockedActions lists exactly the one locked operation with its tool/tier/MFA facts', async () => {
