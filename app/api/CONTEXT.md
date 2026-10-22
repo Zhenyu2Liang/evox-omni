@@ -121,7 +121,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
   its own (`:88` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
   all (client-only, `components/chat/actions.ts`); closing the MFA prompt is left to the client.
-- The edge never rewrites agent text: `verify/route.ts:79-91` copies `outcome.message` and
+- The edge never rewrites agent text: `verify/route.ts:79-94` copies `outcome.message` and
   `outcomeWithPlan.events` into `ActionResponse` unchanged (`ConfirmationOutcome.result` is dropped),
   and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:124`
   `sseFrame`. A block reason built by `security/security-gateway.ts:80` (`__SECURITY_BLOCK__` + JSON,
