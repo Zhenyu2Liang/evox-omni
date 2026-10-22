@@ -10,7 +10,8 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 - `./turns/`: turn contracts, event grounding/buffering, authorization views, bounded prompts.
 - `./tools/`: banking tool implementations and the tool registry.
 - `./providers/`: live + mock provider/model adapters.
-- `./workflows/`: workflow control, the parked-action terminal guard (`parked-actions.ts`) and cancellation.
+- `./task-control.ts`: pure re-export facade over `./workflows/*` (`resumeTask`/`retryTask`/`pauseTask`/`cancelTask`, `getTaskPlan`, claims, persistence, `resumeTaskForAction`, `findTaskByPendingAction`); no logic of its own.
+- `./workflows/`: workflow control, the parked-action terminal guard (`parked-actions.ts`) and cancellation. Task-resume guards and claim-contention (200 vs 409/423) are documented there.
 - `./context-compaction/`: historical summaries and bounded model-request projection.
 - `./messages/`: presentation message catalogs.
 
