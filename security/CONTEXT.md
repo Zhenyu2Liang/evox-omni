@@ -70,6 +70,17 @@
 `mfa.ts#verify` 返回 `Result` 而非抛错；抛 `CIRCUIT_OPEN` 的只有 `circuit-breaker.resetSession` 与 `execution-policy.assertSessionMayWrite`。
 成功验证码重置连续失败计数，但不解除已触发的熔断（「locked 优先」）；仅 `resetSession` 以验证码或 60 秒冷却解除。
 
+## 阻断原因字符串（block reason）的两种形态
+
+`BLOCK_REASON_PREFIX`（`security-gateway.ts:78`）= `__SECURITY_BLOCK__`。
+全仓只有三处拼接该前缀，且都在 `security-gateway.ts`：
+`serializeBlockReason`（`:703-705`）产出 `__SECURITY_BLOCK__{"actionId":"...","decisionKind":"require_confirmation"|"require_mfa"}`，`actionId` 无条件存在（参数是必填的 `PendingAction`）。
+`handleToolCall` 的锁定会话 deny 分支（`:1178-1184`）产出 `__SECURITY_BLOCK__{"decisionKind":"deny"}`，**没有 `actionId`**。
+`handleToolCall` 的 `plan_cancelled` 分支（`:1209-1216`）产出同一条无 `actionId` 的 deny 串。
+`parseBlockReason`（`:708-729`）要求 `actionId` 是非空字符串（`:725`），因此上面两条无 `actionId` 的串解析结果为 `null`；消费方（如 `agent/turns/events.ts`）拿到 `null` 会走非阻断分支，而原始串本身是可直接泄漏给用户的内部标记。
+校验失败（`VALIDATION`，`:1189-1193`）与转账收款人不唯一（`clarify`，`:1198-1205`）这两种 deny 的 `blockReason` 是**纯中文消息**，不带前缀。
+MFA 三次错误路径（`authorizeWithMfa`，`:838-853`）返回的 `message` 只有中文提示（「验证码错误次数过多…」），不含前缀；该路径不产出 block reason 串。
+
 `injection-guard.ts` 检测可疑指令。
 `incidents.ts` 在一个事务中持久化去重信号、相关安全事件与账户级锁定。
 `circuit-breaker.ts` 应用验证失败锁定与已审计的冷却重置。

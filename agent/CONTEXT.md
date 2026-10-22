@@ -95,6 +95,11 @@ financial records or the immutable model/event archive. See `turns/CONTEXT.md` f
 
 `grounding-facts.ts` projects exact structured account/write facts. `financial-response.ts` renders authoritative financial statements. Planning text, model-generated correction tags and prose are never execution evidence. Public APIs expose grounded events and safe metadata; raw thinking remains internal.
 
+`turns/events.ts` `handleToolEnd` (`:37-74`) classifies an errored tool result: `needs_reconciliation` first, then a blocked call (`parseBlockReason` success or `BLOCK_REASON_PREFIX` prefix), then `status:'error'` carrying `summary` and `errorCode`.
+A blocked call publishes `status:'blocked'` with `actionId` only when `parseBlockReason` parsed it, then `mfa_required`/`confirmation_required` for those two kinds, and otherwise `security_event{kind:'locked', message:<raw block reason>}` verbatim — the browser prints that `message` as system text.
+`parseBlockReason` requires a non-empty `actionId`, so a `{"decisionKind":"deny"}` block reason is not parsed and takes that verbatim `security_event` path.
+`ConfirmationOutcome` has no error-code field, so a gateway `AuthorizationResult.code` never reaches the HTTP edge; `publishAuthorizedToolOutcome` (`turns/buffer.ts:115-119`) may set a public tool `summary` from `toolResult.error`, which `lib/tool-feedback.ts` renders through `publicToolError` with the `chat.error.toolFailed` fallback when both the text and the code are unrecognized.
+
 Card results — the card reads, the card mutations and `consume_virtual_card` — render as a `cards` card built from the server-returned card projection (`card-emitter.ts`), which carries the linked account, its available balance, the monthly limit and the currently payable amount; model prose never fills a result card.
 
 The registered internal describe_turn tool declares purpose, ordered requested capabilities and

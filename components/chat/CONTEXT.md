@@ -44,6 +44,10 @@
 `maxAttempts` 缺省时回落 `cards.mfa.failedAttempts`。
 `ApprovalRequest` 转发之，`ChatWindow` 传 `maxAttempts`（`MFA_MAX_ATTEMPTS`）。
 
+唯一活动面板由 `ChatWindow.tsx:237` 以 `key={pending.actionId}` 挂载 `ApprovalRequest`（`MfaCard` 亦以 `key={pending.actionId}`，`ApprovalRequest.tsx:32`），并写出 `data-approval-request`/`data-action-id`/`data-kind`。
+`pendingAction` 只由 `confirmation_required`/`mfa_required`（`useAgentStream.ts:502-550`）或挂起操作恢复（`651-666`）建立，关闭只来自 `settleAction` 的终态/`confirmed`（`402-404`）与 `pull` 的无错误清除规则（`880-882`）。
+`tool_start`/`tool_end` 的 `blocked` 只记录 `lastBlockedToolName`（`482-494`），既不关闭也不替换面板；无 `actionId` 时更不会创建新面板。
+
 ### 验证响应校验与分支（`actions.ts#postAction`，约 541-617 行）
 
 `status` 须属 `ACTION_STATUSES`（`pending`/`awaiting_mfa`/`confirmed`/`executed`/`failed`/`cancelled`/`locked`/`needs_reconciliation`）。
@@ -60,15 +64,32 @@
 ## 文本安全与本地化
 
 工具行文字只由 `ToolEventList` 的 `publicToolSummary` 生成（70、85 行）；原始 `summary`/`debugDetail` 只出现在开发者模式诊断块（71、86-98 行）。
-`error` 事件折叠为 `stream.error`/`stream.errorCode`（`useAgentStream.ts` 566-567 行）。
-`ChatWindow` 用 `publicToolError(stream.error, t, 'chat.error.request', stream.errorCode)` 渲染该错误（77 行），并把结果下发给 `ApprovalRequest` 与 `ReconciliationCard`（218、238 行）。
-`security_event` 把 `event.message` 原文追加为 `role:'system'` 消息（552-564 行），`MessageBubble` 原样渲染其 `content`（70-72 行）。
-该 `security_event` 路径不做本地化也不脱敏，服务端写入的任何文本（含内部标记）都会直接可见。
+`status==='blocked'` 且无 `actionId` 时状态标签换成 `chat.activity.status.notExecuted`、摘要换成 `chat.error.operationNotStarted`（`ToolEventList.tsx:81-82`、`lib/tool-feedback.ts:56`）。
+`status==='error'` 经 `publicToolError(event.summary, t, 'chat.error.toolFailed', event.errorCode)` 投影（`lib/tool-feedback.ts:57`）；错误码缺失或未知（含 `TOOL_FAILED`/`INTERNAL`）一律落到 `chat.error.toolFailed`。
+`publicToolSummary` 对 `success`/`started`/`updated`/`cancelled` 及带 `actionId` 的 `blocked` 回落到 `localizeChatError`，未知字符串原样返回（`lib/i18n/display.ts:5-8`），`ToolEventList.tsx:85` 直接渲染该值。
+`error` 事件折叠为 `stream.error`/`stream.errorCode`（`useAgentStream.ts` 566-567 行），经 `publicToolError(stream.error, t, 'chat.error.request', stream.errorCode)` 渲染（`ChatWindow.tsx:77`）后下发给 `ApprovalRequest` 与 `ReconciliationCard`（218、238 行）。
+
+### 缺省回落矩阵（`chat.error.toolFailed` vs `chat.error.request`）
+
+识别是逐字相等：只有 `message` 命中 `PUBLIC_BUSINESS_ERRORS`（`lib/tool-feedback.ts:15-26`）或 43 行验证码正则才给出专用文案；`display-sources.json` 的 `errors` 表不含锁定句，锁定句只由 `lib/tool-feedback.ts:25` 映射到 `chat.error.securityLocked`。
+`message` 缺失或空串直接走缺省回落（`lib/tool-feedback.ts:46`），故「没有 message」与「message 未登记」得到同一句通用文案。
+能渲染 `chat.error.toolFailed` 的站点只有 `cards/ErrorCard.tsx:24`（`ChatCard.type==='error'`）、`cards/MfaCard.tsx:66`（`status==='failed'` 的 `statusMessage`）、`cards/ApprovalRecord.tsx:60`（`current==='failed'`）、`cards/ConfirmationCard.tsx:64`（终态 `failed` 的 `reason`）、`ToolEventList.tsx:85`（`error` 分支）、`banking/AgentTaskTimeline.tsx:115`（失败计划节点）；`ChatWindow.tsx:58`/`77` 的回落键是 `chat.error.request`，顶部错误横幅永远不会显示该句。
 `MfaCard`（102 行）与 `ConfirmationCard`（121 行）的错误徽标使用 `localizeChatError`，未登记字符串原样显示。
-`settleAction` 会把同一 `actionId` 的工具行改写为 `status:'error'` 并用 `event.message` 覆盖 `summary`（371-376 行）。
-`action_settled` 不带 `code`（`lib/contracts/agent.ts` 99 行），故该文本只有与 `PUBLIC_BUSINESS_ERRORS` 完全一致时才被本地化。
-否则 `publicToolSummary` 落回 `chat.error.toolFailed`（`lib/tool-feedback.ts` 57 行）。
-`ErrorCard` 是组件内唯一显式传 `chat.error.toolFailed` 兜底的卡片（24 行）。
+`ErrorCard` 的 `detail` 属性没有调用方传入——`CardRenderer.tsx:110` 只传 `message` 与 `code`。
+
+## 安全事件渲染
+
+`security_event` 仅在 `useAgentStream.ts:552-564` 折叠：追加 `role:'system'` 消息，`content` 原样取 `event.message`（`kind` 未参与渲染）。
+`MessageBubble.tsx:67-73` 对 system 角色直出，不经消息目录也不经 `sanitizeToolArguments`。
+该路径不做本地化也不脱敏，服务端写入的任何文本（含 `__SECURITY_BLOCK__…` 内部标记）都会直接可见；components 内没有按该前缀过滤的逻辑，`sanitizeToolArguments` 只处理凭证、手机号与推理字段。
+传输校验只判断类型：`transport-validation.ts:21`（`summary`/`debugDetail`）、`:76`（错误卡 `message`）、`:100`（`security_event.message`）都接受任意字符串，内部串可穿过校验进入渲染。
+
+## 锁定（`status:'locked'`）后的可见状态
+
+`useAgentStream.ts:349-352` 把内联 `mfa` 卡打成 `{status: event.status, message: event.message}`（`event.message` 缺失时显式写 `undefined`），353-364 行同理打 `confirmation` 卡。
+`settleTools`（371-376 行）把同一 `actionId` 的工具行改成 `error` 并用 `event.message` 覆盖摘要。
+402-404 行清除同一 `actionId` 的 `pendingAction`，底部 `ApprovalRequest` 卸载；内联卡改由 `cards/ApprovalRecord.tsx:45/53` 显示 `chat.approval.status.locked`（「验证已锁定」），`cards.terminal.locked`（`MfaCard.tsx:65`）与 `cards.mfa.failedAttemptsLimit`（`MfaCard.tsx:96-98`）只在面板仍挂载时可见。
+`action_settled` 不带 `code`（`lib/contracts/agent.ts` 99 行），故 `event.message` 只有与 `PUBLIC_BUSINESS_ERRORS` 逐字一致时才被本地化；不是逐字锁定句（如内部标记）或为空时，被改写的工具行显示 `chat.error.toolFailed`。
 
 ## 已知问题
 
@@ -78,9 +99,8 @@
 `security_event` 原文上屏路径（552-564 行）没有本地化或脱敏测试覆盖。
 
 整页刷新会丢失内存态：`settledActions` 与内联卡片上的终态标记都不持久化。
-若服务端仍把已锁定行当作 `awaiting_mfa` 返回（`toPendingActionRef` 丢弃 `locked` 行，但服务端仅把 `MfaChallenge` 置为 `locked`、未持久化 `PendingAction` 状态），
-刷新后客户端无从得知该行已锁定，仍会重建 `kind:'mfa'` 决定。
-该刷新情形由服务端侧修复覆盖；客户端在会话内已不再重开终态决定。
+服务端把锁定 CAS 持久化为 `PendingAction.status='locked'`（`security/security-gateway.ts` `persistLockedAction`），`GET /api/actions` 因此不再返回该行，`toPendingActionRef`（`actions.ts` 385-399 行）也丢弃 `locked`，`pickPendingAction` 只接受 `pending`/`awaiting_mfa`（`useAgentStream.ts` 614-619 行）——刷新后底部弹窗不会重开。
+但历史页仍会返回该内联卡：`app/agent/history.ts` 38-46 行在行状态非 `awaiting_mfa` 时保留 `{type:'mfa', actionId, action, status: row.status}`，故 `status:'locked'` 的卡片随页面加载重新渲染为只读终态。
 
 ## 显示与诊断
 
