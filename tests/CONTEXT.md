@@ -105,7 +105,8 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 | --- | --- | --- |
 | 写操作的 `verify`/`confirm` 路由 | 恒 `200` + `data.ok:false` + `status:'locked'` | `app/mfa-terminal-lock-http.test.ts`、`app/actions-http.test.ts`（circuit breaker 块） |
 | `/api/security/reset` 解锁闸门 | `423` + `error.code:'CIRCUIT_OPEN'` | `app/security-workflow-http.test.ts`、`integration/confirmation-policy.test.ts` |
-| 网关/SDK 进程内 | 无 HTTP | `unit/security/gateway.test.ts`、`authorize-hardening.test.ts`、`circuit-breaker-*.test.ts`、`scenarios/test-10-circuit-breaker.test.ts` |
+| 网关/SDK 进程内 | 无 HTTP | `unit/security/gateway.test.ts`、`authorize-hardening.test.ts`、`circuit-breaker-*.test.ts`、`unit/security/mfa-failure-contract.test.ts`、`integration/security-deny-redaction.test.ts`、`unit/agent/turn-security-event.test.ts`、`scenarios/test-10-circuit-breaker.test.ts` |
+| 渲染/文案层 | 无 HTTP | `unit/planner/locked-card-rendering.test.ts`、`unit/weixin-lock-presentation.test.ts`、`unit/security/unlock-panel-render.test.ts`、`unit/lib/public-text.test.ts`、`unit/planner/tool-diagnostics.test.ts` |
 
 锁定事实一律按 `status`、`mfaResult`、`PendingAction` 行、`GET /api/actions` 是否再surface 与 `SecurityEvent` 行断言。
 写操作路由锁定路径上对 `events` 的断言只有负例（不再出现该 actionId 的 `mfa_required`），没有公开工具事件摘要断言。
