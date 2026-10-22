@@ -24,9 +24,9 @@
 | `model-checkpoint-boundaries.test.ts` | 模型检查点、租约与提交条件 |
 | `write-continuation.test.ts` | 声明写操作未发出受控调用时的单次续办、面板真伪与持久化恢复 |
 | `card-consume-transaction.test.ts` | 虚拟卡消费的事务原子性（注入失败后余额、`Transaction`、`CardConsumption` 三者全未变）、月限额与余额的并发栅栏、并发相同 `executionKey` 只扣一次 |
-| `card-replacement-transaction.test.ts` | 补办是一个事务（`card.update` 失败即回滚，不留半成品卡与 `replacedByCardId`）、源卡结算账户漂移（他人账户／储蓄账户／已删除）时拒绝补办且不落卡 |
+| `card-replacement-transaction.test.ts` | 补办是一个事务（`card.update` 失败即回滚，不留半成品卡与 `replacedByCardId`）；源卡结算账户漂移的三种可表示形态：他人活期账户／自有储蓄账户走 `CONFLICT`（不落卡、不改源卡、不把任何卡绑到默认活期账户，按「绑定该账户的卡 id 集合」前后比对）、结算账户被删除（`Card.linkedAccount` 真外键默认 `SetNull`）后 VIRTUAL 源 `CONFLICT` 而 DEBIT 源补出 `MISSING` 卡、源卡从未绑定（VIRTUAL `CONFLICT`）；无行账户 id 无法被记录，写入由外键拒绝 |
 | `card-replacement-binding.test.ts` | 补办继承结算账户（原始行核对）、跨代月限额连续且历史 `CardConsumption` 不改写、缺绑定只按显式前驱修复、无前驱的缺绑定卡拒绝消费且绝不回退默认账户 |
-| `card-replace-capability-contract.test.ts` | 经真实网关路径（`executeGatedTool` → `securityGateway#handleToolCall` → `verifyAction` → 执行器 → SDK）覆盖 `replace_card`：CREDIT／DEBIT／VIRTUAL 均停靠 `requiresMfa` 的 RED `PendingAction` 且验证前零副作用，验证后恰好新增一张卡、源卡仍 `LOST` 并持有 `replacedByCardId`；CREDIT 额度原样继承；VIRTUAL 结算账户继承且当月额度经卡族连续；非 `LOST` 源卡被 `CONFLICT` 拒绝且持久行不被改写（绝不先挂失）；重复补办指向同一张替换卡 |
+| `card-replace-capability-contract.test.ts` | 经真实网关路径（`executeGatedTool` → `securityGateway#handleToolCall` → `verifyAction` → 执行器 → SDK）覆盖 `replace_card`：CREDIT／DEBIT／VIRTUAL 均停靠 `requiresMfa` 的 RED `PendingAction` 且验证前零副作用，验证后恰好新增一张卡、源卡仍 `LOST` 并持有 `replacedByCardId`；CREDIT 额度原样继承且补办卡无任何结算账户字段；DEBIT／VIRTUAL 继承源卡结算账户（`LINKED` + 账户号/户名/`accountAvailableBalance`/`payableAmount`）；VIRTUAL 当月额度经卡族连续；非 `LOST` 源卡被 `CONFLICT` 拒绝且持久行不被改写（绝不先挂失）；重复补办指向同一张替换卡 |
 | `card-manual-only-management.test.ts` | 新建卡与删卡仍是人工页专属：`manual_add_card`／`manual_delete_card` 经注册表、`executeGatedTool`、`securityGateway#handleToolCall` 与决策端点均被拒绝，且不新增卡／`PendingAction`／`MfaChallenge`／`CardLimit`／`CardConsumption`／回执 |
 | `card-dashboard-assets.test.ts` | 补办家族的信用额度只计一次、虚拟卡/借记卡现金不计入信用且不重复计入总资产、种子基线；补办后 `apply_virtual_card` + `consume_virtual_card` 仍可用且余额/流水/消费行只动一次 |
 | `card-linked-account-projection.test.ts` | 借记卡/虚拟卡展示的是绑定活期账户的余额：他人账户或非活期账户（`UNTRUSTED`）与未绑定（`MISSING`）都只报状态、不出现任何余额/账户号/账户名字段且不能消费（`CONFLICT`，资金不动）；同一账户多张卡共享同一余额、单卡消费令两张卡同步下降且账户现金只计一次；转账／消费／投资申购三条路径共用同一个断言助手核对「卡视图余额 == 账户台余额」 |
@@ -68,4 +68,4 @@
 - 通用回执重放入口为 `createToolRegistry(userId).executeDirect(tool, args, { sessionId, idempotencyKey })`，用同一 key 重发即原样返回（`refactor-financial-commands.test.ts:95`、`confirmed-write-authority.test.ts:136`）。
 - `../helpers/db.ts#truncateAll()` 已覆盖无关系的 `CardConsumption`；套件只需 `beforeEach(resetDatabase)`，不得再自行逐表清理。
 - `standalone-workflow-restart.test.ts` 使用真实子进程与 15s／20s 屏障超时，在磁盘／CPU 高负载（如整目录同时运行）下会偶发「child did not reach barrier」；单独重跑可 9/9 通过，先确认是否只是超时。
-- 夹具不播种 LOST 卡（`card_credit`/`card_debit` 均 `ACTIVE`，见 `../helpers/fixtures.ts:99`）；`replace_card` 需先 `report_lost_card` 或直接改库把源卡置 `LOST`。
+- 夹具不播种 LOST 卡（`card_credit` 与 `card_debit` 均 `ACTIVE`，见 `../helpers/fixtures.ts#CARDS`）；种子 `card_debit` 绑定活期账户 `acct_checking`（`****8821`，¥23,580.00），`card_credit` 不绑定。`replace_card` 需先 `report_lost_card` 或直接改库把源卡置 `LOST`。`Card.linkedAccountId` 是真外键，漂移只能写「存在但不可信（他人账户／非活期）」的账户 id，删除账户走 `SetNull`；无行 id 写入会被外键拒绝。
