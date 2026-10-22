@@ -54,6 +54,7 @@ SSE 指服务端事件流，JSON 指结构化响应格式。
 | 轮次声明与计划编译 | [intent-context.ts](../../agent/intent-context.ts)、[turn-intent.ts](../../agent/tools/turn-intent.ts)、[plan-compiler.ts](../../agent/tools/plan-compiler.ts) | 本轮用途、写操作顺序、参数 schema 和节点输出。 |
 | 工作流执行 | [planner](../../planner/)、[workflows](../../agent/workflows/) | 图状态、节点认领、持久化、控制和续跑。 |
 | 授权与确认 | [security](../../security/)、[confirmation](../../agent/confirmation/) | 权限、身份、执行有效性和原计划续跑。 |
+| 安全失败与公开文案 | [security-gateway.ts](../../security/security-gateway.ts)、[public-text.ts](../../lib/public-text.ts)、[tool-feedback.ts](../../lib/tool-feedback.ts) | 结构化拒绝事实、锁定终态和对外文案收口。 |
 | 脚本模型 | [mock-responder.ts](../../agent/providers/mock-responder.ts)、[mock](../../agent/providers/mock/) | 按意图分派、解析和结果说明。 |
 | 金融命令事务 | [command-execution.ts](../../agent/command-execution.ts) | 参数摘要、回执核验和原子提交。 |
 | 银行业务 | [banking-sdk](../../banking-sdk/) | 资源所有权、精确金额运算和模拟业务变更。 |
@@ -227,6 +228,13 @@ Groq、OpenRouter、xAI、Mistral 和 Cerebras。
 确认与验证码路由先检查资源是否属于固定演示用户及共享会话。
 执行前再检查当前权限和执行所有权。
 多因子认证简称 MFA。
+
+拒绝事实用 `SecurityFailure` 的 `code`、`reason` 和次数表示。
+验证码失败达上限后，操作进入 `locked` 终态。
+`locked` 不再作为待决定项，也不允许恢复或重试。
+网关的 `blockReason` 是内部载荷，不进入对外文案。
+公开文案由 [public-text.ts](../../lib/public-text.ts) 和 [tool-feedback.ts](../../lib/tool-feedback.ts) 收口。
+锁定与失败规则见[安全设计](security.md#多因子认证)。
 
 权限失效、过期、取消和所有权丢失由服务端判定。
 规则与模拟认证边界见[安全设计](security.md)。

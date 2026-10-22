@@ -44,14 +44,14 @@
 ## scenario.ts 的导出面
 
 `scenario.ts` 只导出这些符号（没有 `chat`/`post`/`getActions`/`verify` 之类的方法对象，也没有可控假时钟）：
-`runTurn({sessionId, message, agent})` → `ScenarioResult`（`scenario.ts:403`）、
-`confirmAction(agent, actionId)`（`scenario.ts:558`）、`verifyAction(agent, actionId, code)`（`scenario.ts:563`）、
-`cancelAction(agent, actionId)`（`scenario.ts:572`）、`newSessionId(prefix)`（`scenario.ts:600`）、
-`collectEvents(agent)`（`scenario.ts:605`）、`toolEventsOf(res, toolName)`（`scenario.ts:612`）、
-`cardsOfType(res, type)`（`scenario.ts:616`），以及类型 `ScenarioResult`（`scenario.ts:56`）、`RunTurnInput`（`scenario.ts:76`）。
+`runTurn({sessionId, message, agent})` → `ScenarioResult`（`scenario.ts:422`）、
+`confirmAction(agent, actionId)`（`scenario.ts:577`）、`verifyAction(agent, actionId, code)`（`scenario.ts:582`）、
+`cancelAction(agent, actionId)`（`scenario.ts:591`）、`newSessionId(prefix)`（`scenario.ts:619`）、
+`collectEvents(agent)`（`scenario.ts:624`）、`toolEventsOf(res, toolName)`（`scenario.ts:631`）、
+`cardsOfType(res, type)`（`scenario.ts:635`），以及类型 `ScenarioResult`（`scenario.ts:57`）、`RunTurnInput`（`scenario.ts:77`）。
 `ScenarioResult` 字段：`sessionId`/`events`/`text`/`toolEvents`/`cards`，可选 `confirmation`/`mfa`/`plan`/`error`。
-决策面直接调 `security.gateway.securityGateway.authorizeAction`（`scenario.ts:495`），非 ok（`awaiting_mfa`/`locked`）时返回
-`{events: [], text: auth.message, ...}` 且不执行（`scenario.ts:508`）；决策失败因此没有事件，只有 `text`。
+决策面直接调 `security.gateway.securityGateway.authorizeAction`（`scenario.ts:522`），非 ok（`awaiting_mfa`/`locked`）时返回
+`{events: [], text: auth.message, ...}` 且不执行（`scenario.ts:528`）；决策失败因此没有事件，只有 `text`。
 时限用 `demoNow()`（`lib/clock.ts:14`，钉死 `DEMO_NOW`）只作事件时间戳，没有定时器与时钟推进。
 
 HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/harness.ts`
@@ -59,20 +59,30 @@ HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/har
 
 ## 被阻断 / 锁定的结果如何表示
 
-网关 block reason 是 `__SECURITY_BLOCK__` + JSON（`security/security-gateway.ts:78`、`:704`）；
-熔断 deny 与计划已取消分支都是 `__SECURITY_BLOCK__{"decisionKind":"deny"}`，**没有 actionId**
-（`security/security-gateway.ts:1182`、`:1214`），因此 `parseBlockReason` 返回 `null`（`:708`），只能靠前缀判定。
-`scenario.ts:289`（镜像生产的 `agent/turns/events.ts:73`）把**原始** block reason 放进
-`security_event.message`（类型见 `lib/contracts/agent.ts:100`），且 blocked 的 `ToolEventView` **不带 `summary`**。
-所以 `security_event.message` 是传输载荷而非用户可见文案；用户可见文案只能经
-`lib/tool-feedback.ts` 的 `publicToolError`（默认回退 `chat.error.toolFailed`，`:11`/`:37`）与
-`publicToolSummary`（blocked 且无 actionId → `chat.error.operationNotStarted`，`:56`）投影，
-或 `components/chat/cards/MfaCard.tsx:66`（`publicToolError(statusMessage, t)`，未知消息即回退 `chat.error.toolFailed`）。
-`localizeChatError`（`lib/i18n/display.ts:7`）对未知字符串原样透传——渲染它就会泄漏原始载荷。
+网关 block reason 是 `__SECURITY_BLOCK__` 前缀 + JSON（前缀定义 `security/security-gateway.ts:80`，序列化 `:725`）。
+熔断 deny（`:1245`，`code:'CIRCUIT_OPEN'`/`reason:'circuit_open'`）与计划已取消（`:1277`，`code:'SECURITY_DENIED'`/`reason:'denied'`）都是 `{decisionKind:'deny',failure:{…}}` 且**没有 actionId**，
+但前缀与 JSON 都合法：`parseBlockReason`（`:762`）对它们返回**非 null** 的 `{decisionKind:'deny',failure}`，只有前缀缺失、JSON 解析失败或 `decisionKind` 不在四种取值内才返回 `null`。
+所以 `scenario.ts:263` 的 `parsed !== null || message.startsWith(BLOCK_REASON_PREFIX)` 里，`deny` 走「解析成功但无 actionId」路径，前缀判定只兜住不可解析载荷。
+`SecurityFailure`（`lib/contracts/security.ts:21-28`）只有 `code`/`reason`/`actionId?`/`attemptsUsed?`/`attemptsLeft?`/`maxAttempts?`——**没有 `message`**。
+`scenario.ts:304-308`（与生产 `agent/turns/events.ts:92-96` 逐字段一致，类型见 `lib/contracts/agent.ts:102-111`）只发 `kind:'locked'` + `code`/`reason`/`actionId`/`attemptsLeft`/`maxAttempts`，**不发 `message`、不发原始载荷**，blocked 的 `ToolEventView` **不带 `summary`**。
+`kind` 恒为 `'locked'`（计划取消的 `SECURITY_DENIED` 也是 `locked`，靠 `code`/`reason` 区分）；`errorParams` 是同一失败的另一半投影：`scenario.ts:87-94#failureParams`（字段集与生产 `agent/turns/events.ts:19-26#errorParamsFrom` 相同）取 `attemptsLeft`/`attemptsUsed`/`maxAttempts`，`code` 单独映射为 `errorCode`（`scenario.ts:278`）。
+非 ok 授权的 `AuthorizationResult.message` 由 `scenario.ts:528` 直接放进 `ScenarioResult.text`（没有事件）；用户可见状态文案仍只能经
+`lib/tool-feedback.ts#publicToolSummary`（`:65-72`：blocked 且带 `errorCode` → `publicToolError(…, 'chat.error.operationNotStarted', errorCode, errorParams)`）与
+`publicToolError`（`:44`：精确业务文案 → `errorCode` 目录 → 回退 `chat.error.toolFailed`）投影，
+或 `components/chat/cards/MfaCard.tsx:76-79`（locked 走 `securityNotice(LOCKED_NOTICE, t)`；`publicToolError(p.statusMessage, t)` 只服务 `failed` 分支 `:75`）。
+`localizeChatError`（`lib/i18n/display.ts:11`）对未知字符串原样透传——渲染它就会泄漏原始载荷。
+无前缀的拒绝（歧义收款人 `clarify` `security/security-gateway.ts:1266`、pending 创建失败的 VALIDATION `:1255`）被 `scenario.ts:266-272` 当普通失败：`status:'error'` + 原始消息作 `summary` + `errorCard`，**不发 `security_event`**。
 
 三码锁定有两条可参照的既有路径：
 `tests/scenarios/test-10-circuit-breaker.test.ts:44`+`:61`（`buildFauxAgent` + `runTurn` + 三次 `verifyAction`，断 `attempts`/`securityEvent`/`text` 含「锁定」），
 `tests/app/mfa-terminal-lock-http.test.ts:273`（真实 verify 路由：`status:'locked'`、`mfaResult:'failed'`、行持久化、`GET /api/actions` 不再 surface）。
+
+### 本目录自带的中文文案（非 i18n key）
+
+`scenario.ts` 不做本地化，以下字面量直接进入 `ScenarioResult.text` 或卡片，断言它们即绑定本目录原文：
+`MFA_HINT`『请输入 6 位短信验证码。』（`:97`）、`TOOL_FAILURE_FALLBACK`『工具执行失败』（`:99`）、pending 摘要兜底标题『待处理操作』（`:215`）、
+工具结果『操作完成』（`:489`）、旁白『操作已完成。』（`:506`）、取消结果『操作已取消。』（`:610`）。
+本目录没有任何 `expect`：安全失败与锁定的文案断言都在 `tests/scenarios/`、`tests/app/`、`tests/unit/` 侧。
 
 ## 数据库与事务
 

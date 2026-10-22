@@ -113,7 +113,78 @@ Web 演示使用服务端配置的单一用户和共享会话。
 确认和认证接口只处理当前待决策状态。终态操作不会重新获得执行权。
 修改金额或收款人前，必须取消原授权并重新发起请求。
 
-代码入口见 [认证挑战](../../security/mfa.ts) 和 [权限网关](../../security/security-gateway.ts)。
+验证码挑战与权限网关的代码见 [mfa.ts](../../security/mfa.ts) 和 [security-gateway.ts](../../security/security-gateway.ts)。
+
+### 验证失败的逐次结果
+
+失败次数上限为 3 次，第 3 次失败即锁定。
+
+| 次序 | 顶层 `code` | `failure.code` | `failure.reason` | 剩余次数 | 操作状态 |
+| --- | --- | --- | --- | --- | --- |
+| 第 1、2 次 | `MFA_FAILED` | `MFA_FAILED` | `mfa_code_invalid` | 2、1 | `awaiting_mfa` |
+| 第 3 次 | `CIRCUIT_OPEN` | `MFA_LOCKED` | `mfa_attempts_exhausted` | 0 | `locked` |
+
+第 1、2 次失败返回的 `attemptsLeft` 依次为 2 和 1。
+第 3 次失败同时做 3 件事：
+
+- 把 `PendingAction` 从 `pending` 或 `awaiting_mfa` 写成 `locked`。
+- 把 `MfaChallenge` 写成 `locked`。
+- 触发本账户的熔断。
+
+第 3 次的顶层 `code` 是 `CIRCUIT_OPEN`。
+锁定原因由 `failure.code` 的 `MFA_LOCKED` 表示。
+调用方按 `failure` 字段渲染，不读顶层 `code` 推断原因。
+
+锁定后再提交确认或验证，返回 `code` 为 `CIRCUIT_OPEN` 的拒绝。
+这类拒绝的 `reason` 是 `mfa_session_locked`。
+拒绝不新建验证码挑战，不提供验证码入口。
+拒绝不消费尝试次数，也不执行业务变更。
+
+挑战已消费或已过期时返回 `MFA_FAILED`，且不带 `attemptsLeft`。
+会话已熔断但该操作尚未锁定时，`reason` 为 `circuit_open`。
+
+### 结构化安全失败
+
+拒绝事实由 `SecurityFailure` 携带，定义见 [安全契约](../../lib/contracts/security.ts)。
+
+| 字段 | 含义 |
+| --- | --- |
+| `code` | 公开错误码，含 `MFA_FAILED`、`MFA_LOCKED`、`CIRCUIT_OPEN`。 |
+| `reason` | `mfa_code_invalid`、`mfa_attempts_exhausted`、`mfa_session_locked`、`circuit_open`、`denied`。 |
+| `actionId` | 被拒绝的原操作。 |
+| `attemptsUsed`、`attemptsLeft`、`maxAttempts` | 已用次数、剩余次数和上限。 |
+
+错误类型和可渲染参数是服务端权威字段。
+调用方只按这些字段选择文案，不匹配文案内容。
+`AuthorizationResult.failure` 是网关交给运行时的结构化拒绝。
+
+`blockReason` 是内部载荷，由 `__SECURITY_BLOCK__` 前缀和结构化 JSON 组成。
+`blockReason` 只进入模型上下文和内部日志。
+`blockReason` 永远不得作为用户可见文案。
+
+### 锁定是终态
+
+`locked` 是终态，不再回到待决策状态。
+
+- `GET /api/actions` 不把 `locked` 列为待决定项。
+- `GET /api/tasks`、`GET /api/tasks/[id]` 按持久化状态返回 `pendingActionStatus`。
+- 运行时不再发送 `mfa_required`，页面不再渲染验证码面板。
+- 恢复、重试、取消、确认和验证对锁定操作返回结构化拒绝。
+- 执行租约只授予 `pending` 和 `awaiting_mfa` 状态。
+- 每次写 `PendingAction` 状态都带来源状态守卫，只接受这 2 种来源。
+
+### 失败与重置审计
+
+每次错码写一条 `MFA_FAILURE` 事件，严重级别为 medium。
+`detail` 含 `actionId`、`attempts`、`attemptsLeft`、`maxAttempts`、`decision`、`result` 和 `locked`。
+第 3 次失败的 `result` 为 `session_locked`。
+熔断首次触发写一条 `CIRCUIT_BREAKER_TRIPPED` 事件，重复触发不再写。
+熔断状态和该审计在同一事务提交，审计失败时状态回滚。
+解除限制写一条 `SECURITY_RESET` 事件，与状态变更在同一事务提交。
+
+结果不明时，任何文案都不得声称成功、失败或资金未变化。
+
+锁定的存储与判定见 [待确认操作仓储](../../lib/db/repositories/pendingAction.ts) 和 [熔断器](../../security/circuit-breaker.ts)。
 
 ## 写入事务与提交校验
 
@@ -176,11 +247,21 @@ Web 演示使用服务端配置的单一用户和共享会话。
 已提交事实的只读恢复不授予新的工具执行权。
 解锁规则见 [熔断器](../../security/circuit-breaker.ts)。
 
-安全中心仅在开发者模式显示“重置失败计数”。
-按钮无需验证码，由开发者接口检查模式偏好。
-重置和安全审计在同一事务提交。
+### 解除安全限制
+
+安全中心提供运行时解锁入口，接口为 `POST /api/security/reset`。
+账户处于锁定状态时，解锁需要 6 位验证码，或等待 60 秒冷却期结束。
+缺少有效验证时接口返回 HTTP 423，锁定状态保持不变。
+解锁只清除熔断状态和连续失败计数。
+解锁不把已锁定的操作写回 `pending` 或 `awaiting_mfa`。
+解锁不自动执行任何原操作，也不新建业务。
+成功响应的 `lockedActionsReopened` 恒为 `false`。
+用户必须重新发起并重新确认，才能办理同一笔业务。
+解锁只续期仍处于 `awaiting_mfa` 操作的已锁定挑战。
+原操作的身份、回执和审计保持不变。
+开发者模式另显示“重置失败计数”，由 `POST /api/developer/security/reset` 处理。
+该入口先检查模式偏好，重置同样写入审计。
 重置不会批准或执行待办银行操作。
-原有普通解锁接口仍要求验证或冷却期结束。
 开发者模式用于演示维护，不构成生产身份认证。
 
 ## 日志与结果展示
@@ -189,6 +270,25 @@ Web 演示使用服务端配置的单一用户和共享会话。
 对话接口返回对话展示事件。
 操作记录接口返回限定的业务字段。
 技术审计接口要求启用开发者模式。
+
+### 对外文案收口
+
+[公开文案](../../lib/public-text.ts)和[工具反馈](../../lib/tool-feedback.ts)是唯一出口。
+内部诊断转成用户可见文本时，只能经这 2 个模块。
+`isInternalDiagnostic` 识别 4 类内部诊断：
+
+- `__SECURITY_BLOCK__` 内部载荷。
+- 原始 JSON 片段。
+- 异常堆栈和错误头。
+- `undefined`、`null`、`[object Object]` 等空值文本。
+
+`safePublicText` 把命中的文本换成词条兜底。
+`publicToolError` 只放行词条、精确业务文案和 3 条闭合正则。
+`securityNotice` 只读 `code`、`reason` 和 `attemptsLeft` 3 个字段。
+
+网页对话和微信通道都经该出口渲染拒绝文案。
+内部标记、原始 JSON 和异常堆栈不得出现在任何用户可见文本。
+内部诊断只写入 `debugDetail`、开发者详情或 `logs/` 下的文件日志。
 
 金融结果说明由结构化结果生成。计划说明不能证明操作已执行。
 结果不明时，展示内容保留人工核对状态。
