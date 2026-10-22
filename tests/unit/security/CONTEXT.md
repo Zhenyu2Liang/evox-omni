@@ -92,6 +92,9 @@
 ## 本目录不覆盖（负向结论）
 
 - 唯一的网关层「三次错码」用例是 `mfa-failure-contract.test.ts`；`gateway.test.ts` 的网关错码用例仍只错一次。
+- 没有「解锁后需重新发起并重新确认，原操作不会自动执行」的断言：该句在消息目录中无对应 key
+  （见 `app/security/CONTEXT.md` 的文案缺口），`unlock-panel-render.test.ts` 只钉住现有的
+  `chat.error.actionLocked`（含「重新发起操作」）与 `pages.security.unlockDescription`。
 - 没有 `persistLockedAction` 的 CAS 负例：`claimPendingAction({ from: ['pending','awaiting_mfa'], to: 'locked' })` 只有正向断言，已终态行不被覆盖没有直接用例。
 - `__SECURITY_BLOCK__` 只在本目录一处作负例（`mfa-failure-contract.test.ts:101-102/124/157`，检查 `message` 与 `failure.reason`）；没有 `SecurityEvent.detail`/`message` 的 marker、`decisionKind`、栈或原始 JSON 断言。
 - 没有 turn 级 `security_event{kind:'locked', message}` 形状或内容断言（只断言 DB 级 `SecurityEvent` 行：`MFA_FAILURE`/`CIRCUIT_BREAKER_TRIPPED`/`SECURITY_RESET`/`INJECTION_ATTEMPT`）。
