@@ -70,17 +70,25 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 ## 卡片：账户绑定与消费
 
-虚拟卡在创建时绑定一个结算活期账户：`Card.linkedAccountId` 是 `userId` 的 CHECKING 账户 id（历史引用，不是 Prisma 关系）。
+借记卡（`DEBIT`）与虚拟卡（`VIRTUAL`）在创建时都绑定一个结算活期账户：`Card.linkedAccountId` 是 `userId` 的 CHECKING 账户 id（`Card.linkedAccount Account?` 是真实外键，但语义上仍是引用——账户漂移不会被自动改绑或猜补）；信用卡（`CREDIT`）按设计不绑定结算账户，额度只来自 `creditLimit`/`availableLimit`。
 
-`resolveLinkedAccount(tx, userId, requestedId?)` 只接受自有活期账户：显式 id 缺失或不属于该用户抛 `SECURITY_DENIED`，类型不是 `CHECKING` 抛 `VALIDATION`；缺省时回退到该用户的活期账户，没有则抛 `VALIDATION`。
+`resolveLinkedAccount(tx, userId, requestedId?)` 是 DEBIT/VIRTUAL 共用的绑定规则，显式优先、绝不猜测：显式 id 不存在或不属于该用户抛 `SECURITY_DENIED`，类型不是 `CHECKING` 抛 `VALIDATION`；省略时当且仅当该用户恰好有 1 个活期账户才采用它，0 个或多个都抛 `VALIDATION` 要求显式指定 `linkedAccountId`。没有「按 id 最小挑一个」的回退：选错账户就是替用户花钱。隐式推断只存在于一次性补数据脚本 `scripts/card-account-binding.ts`，SDK 永不猜。
 
-`applyVirtualCard` 与 `addDemoCard`（仅 `type === 'VIRTUAL'`）在创建时绑定账户。`applyVirtualCard` 的幂等键重放还要求请求的绑定账户与月限额一致，否则抛 `CONFLICT`；确定性 id 与 P2002 并发重放保持不变。非虚拟卡不绑定账户。
+`applyVirtualCard` 与 `addDemoCard`（`type !== 'CREDIT'`）在创建时绑定账户，走同一 `resolveLinkedAccount`。`applyVirtualCard` 的幂等键重放还要求请求的绑定账户与月限额一致，否则抛 `CONFLICT`；确定性 id 与 P2002 并发重放保持不变。信用卡不绑定账户。
 
-`requireSettlementAccount(tx, userId, cardId, linkedAccountId)` 重新校验一条已记录的绑定：账户行必须存在且属于该用户，类型必须是 `CHECKING`，否则抛 `CONFLICT`。已记录的绑定不会被猜测替换。
+`requireSettlementAccount(tx, userId, cardId, linkedAccountId)` 重新校验一条已记录的绑定：账户行必须存在且属于该用户，类型必须是 `CHECKING`，否则抛 `CONFLICT`（错误上下文标注 `linkedAccountStatus: 'UNTRUSTED'`）。已记录的绑定不会被猜测替换。
 
 `resolveSettlementAccount(tx, card)` 返回卡片必须使用的结算账户。绑定缺失时只从显式的补办来源恢复：`replacedByCardId` 等于本卡 id 且已记录绑定的自有卡片。恢复经同一校验后在本事务内写回 `Card.linkedAccountId`；没有显式来源时返回 `null`，由调用方拒绝。不从“用户默认账户”或任何文本推断绑定。
 
-绑定的卡在 `CardView` 中额外暴露 `linkedAccountId`、`linkedAccountNumber`（账户脱敏号）、`accountAvailableBalance`（账户余额，十进制人民币）与 `payableAmount`。`payableAmount = monthlyLimitMinor 为空 ? accountAvailableBalance : min(accountAvailableBalance, max(0, monthlyLimitMinor − 当月已消费))`。未绑定的卡这些字段缺省，不伪造数值。
+`CardView` 把「关联账户 + 账户余额 + 可用余额 + 卡片可用性」作为同一份投影暴露。`linkedAccountStatus` 是四态且总是存在：
+
+- `LINKED`：`linkedAccountId` 非空，且账户存在、`userId` 相同、`type === 'CHECKING'`。只有这一态填充 `linkedAccountNumber`（库里已脱敏的 `Account.number`）、`linkedAccountName`（如「活期账户」）、`accountAvailableBalance`（账户资金，十进制人民币）与 `payableAmount`。
+- `MISSING`：`linkedAccountId` 为空（无绑定），没有任何余额类字段——不填 `0`、不填 `null`。
+- `UNTRUSTED`：`linkedAccountId` 非空但账户已删除、属于他人或不是 `CHECKING`，同样没有任何余额类字段：绝不泄漏他人余额，绝不编造 `0`。
+- `NOT_APPLICABLE`：`CREDIT` 卡，按设计不解析结算账户，额度仍来自 `creditLimit`/`availableLimit`。
+
+`usable = (status === 'ACTIVE')`，`FROZEN`/`LOST`/`PENDING` 为 `false`；但卡片不可用不等于余额为零，`LINKED` 卡的余额字段照常填充。
+`accountAvailableBalance` 是账户资金，`payableAmount` 是该卡当前实际可支付额：`payableAmount = monthlyLimitMinor 为空 ? accountAvailableBalance : min(accountAvailableBalance, max(0, monthlyLimitMinor − 当月已消费))`。二者都只来自关联账户，卡片没有自己的独立余额；绑定同一账户的多张卡共享同一份现金。绑定解析在投影的同一读 client（同一 unit-of-work 事务）内一次完成，存在性、owner 与 `CHECKING` 类型一次校验，且只在 `LINKED` 时才去查家族月消费。`linkedAccountId` 只回显记录的引用，是否仍然可信看 `linkedAccountStatus`。
 
 当月已消费是补办家族口径。`banking-sdk/card-family.ts` 的 `cardFamilyMonthSpend(client, cardId, userId, now?)` 先由 `cardFamilyIds` 沿 `replacedByCardId` 双向遍历得到家族，再按 `demoMonthRange(now)` 的 UTC+08:00 业务月汇总 `CardConsumption.amountMinor`。遍历用访问集与 `MAX_CARD_FAMILY = 64` 上限，只纳入同一 `userId` 的卡片，因此多代补办算作一个家族，损坏的环会终止，跨用户指针不会扩大归集。限额强制与 `payableAmount` 读取同一个家族数字，并使用同一个业务时刻：普通读取取 `demoNow()`，`consumeCard` 取本次消费的服务端时刻。
 
@@ -88,13 +96,13 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 `ConsumeCardOptions.now` 是唯一时钟缝隙，仅供测试注入整数毫秒时间戳或 `Date`；非整数抛 `VALIDATION`。它是独立的第二个参数，不进入 HTTP 请求体或工具参数，也不提供任何历史补记功能。
 
-`consumeCard` 在同一事务内校验卡（自有、`ACTIVE`，否则 `NOT_FOUND` / `CONFLICT`）、重新校验或恢复结算账户（缺失抛 `CONFLICT`）、按家族当月月限额校验（超过抛 `LIMIT_EXCEEDED`，限额 `0` 表示不可支付，为空表示仅受账户余额约束），用条件余额写扣减（`balanceMinor >= amount`，计数为 0 抛 `INSUFFICIENT_FUNDS`），写入 `channel='CARD'`、`direction='DEBIT'`、`amountMinor` 为负的流水行与服务端时刻的 `occurredAt`，并创建一条正的 `CardConsumption`。
+`consumeCard` 在同一事务内校验卡（自有、`ACTIVE`，否则 `NOT_FOUND` / `CONFLICT`；`FROZEN`/`LOST`/`PENDING` 一律拒绝消费）、重新校验或恢复结算账户（`MISSING` 与 `UNTRUSTED` 都抛 `CONFLICT`，错误信息与上下文分别标注 `linkedAccountStatus`，绝不退化到「用户默认账户」）、按家族当月月限额校验（超过抛 `LIMIT_EXCEEDED`，限额 `0` 表示不可支付，为空表示仅受账户余额约束），用条件余额写扣减（`balanceMinor >= amount`，计数为 0 抛 `INSUFFICIENT_FUNDS`），写入 `channel='CARD'`、`direction='DEBIT'`、`amountMinor` 为负的流水行与服务端时刻的 `occurredAt`，并创建一条正的 `CardConsumption`。
 
 `executionKey` 是重放身份（`CardConsumption.executionKey` 唯一）。同键重放校验归属后返回持久化的 `resultJson` 原始快照，不重复扣款；卡或用户不一致抛 `CONFLICT`；并发同键唯一冲突在事务外重读已提交行并重放。缺少快照证据抛 `CONFLICT`，绝不重建成功。
 
 `listCardConsumptions(userId, query?)` 返回自有的消费记录（按 `occurredAt` 从新到旧，可用 `cardId` 过滤，默认 20 条、上限 200）。
 
-仪表盘 `getDashboardSummary` 的 `creditAvailable` 只汇总 `type === 'CREDIT'` 且 `status !== 'LOST'` 的卡：补办会保留 LOST 原卡的可用额度并让新卡继承同一额度，按 `LOST` 过滤避免重复计入。虚拟卡/借记卡与其绑定账户余额不计入信用可用额；资产总额仍按账户余额各计一次，不因虚拟卡重复。
+仪表盘 `getDashboardSummary` 的 `creditAvailable` 只汇总 `type === 'CREDIT'` 且 `status !== 'LOST'` 的卡：补办会保留 LOST 原卡的可用额度并让新卡继承同一额度，按 `LOST` 过滤避免重复计入。借记卡/虚拟卡与其绑定账户余额不计入信用可用额；资产总额仍按账户余额各计一次，不因卡片重复。
 
 ## 卡片与定时载荷
 
@@ -116,16 +124,17 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 原卡片不因补办改变状态（保持 `LOST`），新卡创建时状态为 `ACTIVE`。
 补办在同一事务内创建新卡，并把新卡 id 写入原卡片的 `Card.replacedByCardId`。
 新卡沿用原卡片的 `type`、`network` 与月限额，不复制分类限额，并生成新的脱敏卡号。信用卡补办原样继承原卡片的 `creditLimitMinor` 与 `availableLimitMinor`（不重新授信、不增减）；非信用卡保持为空。
-虚拟卡补办在原卡片的结算账户上重新校验并继承该绑定：账户行必须存在、属于该用户且为 `CHECKING`。
+`DEBIT` 与 `VIRTUAL` 卡补办都在原卡片的结算账户上重新校验并继承该绑定（同一 `requireSettlementAccount`）：账户行必须存在、属于该用户且为 `CHECKING`；`CREDIT` 不继承任何绑定。
 原虚拟卡未绑定结算账户时抛 `CONFLICT`；记录绑定缺失、属于他人或非活期时同样抛 `CONFLICT`，绝不签发无法消费的卡。
+原借记卡未绑定时不阻断补办：新卡照常签发并保持 `MISSING`（借记卡无绑定不是致命状态，卡本身就存在），记录绑定而不可信的借记卡按 `UNTRUSTED` 抛 `CONFLICT`。
 月限额跨补办连续：当月已消费按家族汇总，因此原卡本月已消费 30、月限额 100 时，新卡只能再消费 70。已记账的 `CardConsumption.cardId` 不改写，这是归集口径而不是历史重写。
-数据中已有的破损补办卡（`linkedAccountId` 为空）只在显式补办来源记录有效、自有、`CHECKING` 绑定时恢复，并在事务内写回；消费命中该卡时同样恢复并持久化。
+数据中已有的破损补办卡（非 `CREDIT` 且 `linkedAccountId` 为空）只在显式补办来源记录有效、自有、`CHECKING` 绑定时恢复，并在事务内写回：补办重放命中旧补办卡时同样修复，消费命中该卡时也恢复并持久化。
 原卡片保持 `LOST`；补办不迁移任何历史记账。
 补办是幂等的：原卡片已指向补办卡时返回该卡（即使该补办卡本身已 `LOST` 也原样返回），不再签发第二张。
 关联的补办卡不存在时抛 `CONFLICT`。
 `replacedByCardId` 是历史引用，不是 Prisma 关系。
 
-`CardView.replacedByCardId` 是补办卡 id；没有补办时该字段缺省。
+`CardView.replacedByCardId` 是补办卡 id；没有补办时该字段缺省。所有返回 `CardView` 的读取与写入路径（`getCards`、`addDemoCard`、`assertDemoCardDeletable`、`setCardLimit`、`freezeCard`、`unfreezeCard`、`reportLostCard`、`replaceCard`、`applyVirtualCard`、`consumeCard.card`）都经过同一 `loadCardView` 投影，因此 `FROZEN`/`LOST` 卡同样带完整绑定状态与余额。
 
 ## 存储生命周期
 
