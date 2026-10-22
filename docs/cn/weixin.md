@@ -63,9 +63,11 @@ pnpm weixin:start
 
 ### 验证失败与锁定回复
 
-通道只按服务端返回的结构化字段渲染回复，不匹配回复文本。
+回复只由服务端的权威字段生成：`status`、`code` 和 `failure`。
+第一段恒为状态块，写明操作编号和状态。
 
-第 1、2 次验证码错误，回复保留验证入口并给出剩余次数：
+第 1、2 次验证码错误时，操作仍为 `awaiting_mfa`。
+此时回复保留验证入口，并给出剩余次数：
 
 ```text
 操作编号：A-1001
@@ -75,7 +77,8 @@ pnpm weixin:start
 验证码错误。还可尝试 2 次。
 ```
 
-第 3 次错误后操作进入锁定终态，回复固定为 4 段：
+第 3 次错误后操作进入锁定终态。
+锁定回复固定为 4 段：
 
 ```text
 操作编号：A-1001
@@ -88,18 +91,63 @@ pnpm weixin:start
 解除方式：请在网页安全中心解除限制；解除后需要重新发起这笔操作，系统不会自动执行原操作。
 ```
 
-锁定回复不出现 `继续验证：/验证 …` 这一行。
-该行只在操作状态为 `awaiting_mfa` 时出现。
+这 4 段依次是状态块、锁定词条、入口撤销说明和解除方式。
+本轮还有事件或任务文本时，追加为第 5 段。
 
-锁定后再发送 `/确认`、`/验证`、`/取消` 或 `/恢复操作`，回复仍是同一锁定结构。
-此时原因段换成“安全验证已锁定。请在安全中心查看状态。”。
-账户已熔断但该操作尚未锁定时，原因段同样使用这一句。
+`继续验证：/验证 …` 只在状态为 `awaiting_mfa` 时出现。
+锁定回复不出现这一行，也不暗示可以再次提交验证码。
+
+次数耗尽时，顶层 `code` 仍是 `CIRCUIT_OPEN`。
+具体原因由 `failure.code` 的 `MFA_LOCKED` 和 `failure.reason` 的 `mfa_attempts_exhausted` 表示。
+`failure` 同时携带 `attemptsUsed`、`attemptsLeft` 和 `maxAttempts`。
+只有 `attemptsLeft` 进入剩余次数文案。
+字段含义见[安全设计](security.md#结构化安全失败)。
+
+对锁定操作发送 `/确认`、`/验证`、`/取消` 或 `/恢复操作`，服务端都返回锁定结构。
+此时 `code` 为 `CIRCUIT_OPEN`，`failure.reason` 为 `mfa_session_locked`。
+微信渲染“安全验证已锁定。请在安全中心查看状态。”，不出现验证码入口。
+账户已熔断、本操作尚未锁定时，服务端返回 `circuit_open` 并同时锁定该操作。
+微信同样渲染这一句提示。
+
 `/待办` 不再列出锁定操作。
 锁定操作不新建验证码挑战，也不执行业务。
 
+### 重试与重发
+
+操作仍在 `awaiting_mfa` 时重复发送 `/验证`，复用同一验证码挑战。
+剩余次数沿用原记录，不重置。
+挑战过期或操作参数变化时，服务端重新签发验证码并重置剩余次数。
+此时回复说明已重新生成验证。
+
+已锁定的操作重复投递或刷新消息，回复仍是锁定结构。
+锁定状态不会回到 `pending` 或 `awaiting_mfa`，也不重建验证码挑战。
+
+任务停在锁定操作上时，`/继续` 和 `/重试` 会被服务端拒绝。
+微信回复为 `MFA_LOCKED` 的公开拒绝文案，任务状态保持原样。
+被锁定的节点不会重新执行。
+
+### 验证码入口的撤销
+
+服务端的安全拒绝事件会撤销该操作的确认和验证入口。
+撤销后，后续回复不再出现该操作的确认或验证提示。
+已结算的操作同样不再展示确认或验证入口。
+撤销只影响微信侧的展示，不修改服务端状态。
+
+### 公开文案
+
+微信不自行拼接安全文案。
+全部拒绝和失败提示经 `channels/weixin/presentation.ts` 的 `channelText` 交给[公开文案](../../lib/public-text.ts)。
+`securityNotice` 只按服务端字段选择词条。
+`blockReason`、`__SECURITY_BLOCK__` 载荷、原始 JSON 和异常堆栈都不进入微信消息。
+判定规则见[安全设计](security.md#对外文案收口)。
+
+### 解除限制后的微信表现
+
+解锁入口和规则见[安全设计](security.md#解除安全限制)。
 解锁只清除账户熔断和失败计数，原操作保持锁定。
+成功响应中 `lockedActionsReopened` 恒为 `false`。
+解锁不为锁定操作补发验证码入口，也不续期其验证码挑战。
 解除限制后必须重新发起同一笔业务，并在网页或微信重新确认。
-解锁入口与规则见[安全设计](security.md#解除安全限制)。
 
 Web 与微信共用固定演示账户和对话。
 微信发起的操作可在网页查看和处理。
@@ -107,7 +155,6 @@ Web 与微信共用固定演示账户和对话。
 核对展示的详情后，才能使用微信命令确认。
 处理中或待核对记录不会被说成“尚未执行”，也不会展示重复确认入口。
 未知结果只提示核对，不声称已成功或资金未变。
-工具失败或计划被拒绝时，微信展示与网页相同的公开提示，不展示内部诊断。
 网页或微信控制任务后，下一轮对话会读取当前任务状态。
 历史消息中的等待状态不能代替当前已取消或已暂停状态。
 
@@ -190,15 +237,15 @@ pnpm weixin:logout
 ## 测试
 
 ```sh
-pnpm exec vitest run tests/unit/weixin-channel.test.ts tests/unit/weixin-presentation.test.ts tests/integration/weixin-protocol.test.ts
+pnpm exec vitest run tests/unit/weixin-channel.test.ts tests/unit/weixin-presentation.test.ts tests/unit/weixin-lock-presentation.test.ts tests/integration/weixin-protocol.test.ts
 pnpm exec tsx tests/e2e/weixin-live.e2e.ts
 ```
 
-第一条验证绑定、去重、显式授权、状态持久化和上游协议。
+第一条验证绑定、去重、显式授权、状态持久化、上游协议和锁定回复文案。
 第二条调用真实模型及银行服务，并用 Chrome 检查网页状态。
 该测试每次创建全新的隔离数据库，微信端使用本地协议服务器。
 因此第二条不能替代“手机发消息并收到回复”的真实微信验收。
-结果写入 `logs/weixin-live-acceptance.json`，失败时退出码非 0。
+结果写入 `logs/weixin-live-acceptance.json` 和 `logs/weixin-live-acceptance-<runId>.json`，失败时退出码非 0。
 
 设置 `WEIXIN_LIVE_EXTENDED=1` 后运行第二条命令，
 还会检查查询、理财、卡片、订阅、预算、定时分发和任务控制。
