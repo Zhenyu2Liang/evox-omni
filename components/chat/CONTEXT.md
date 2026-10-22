@@ -57,7 +57,25 @@
 `settleAction` 对匹配 `actionId` 的终态清除 `pendingAction`（`useAgentStream.ts` 402-404 行）。
 `pull` 的 `clearPending` 守卫要求 `!hasError`（863-873 行），故带 `error` 的响应不会清除决定，除非 `settleAction` 已清。
 
+## 文本安全与本地化
+
+工具行文字只由 `ToolEventList` 的 `publicToolSummary` 生成（70、85 行）；原始 `summary`/`debugDetail` 只出现在开发者模式诊断块（71、86-98 行）。
+`error` 事件折叠为 `stream.error`/`stream.errorCode`（`useAgentStream.ts` 566-567 行）。
+`ChatWindow` 用 `publicToolError(stream.error, t, 'chat.error.request', stream.errorCode)` 渲染该错误（77 行），并把结果下发给 `ApprovalRequest` 与 `ReconciliationCard`（218、238 行）。
+`security_event` 把 `event.message` 原文追加为 `role:'system'` 消息（552-564 行），`MessageBubble` 原样渲染其 `content`（70-72 行）。
+该 `security_event` 路径不做本地化也不脱敏，服务端写入的任何文本（含内部标记）都会直接可见。
+`MfaCard`（102 行）与 `ConfirmationCard`（121 行）的错误徽标使用 `localizeChatError`，未登记字符串原样显示。
+`settleAction` 会把同一 `actionId` 的工具行改写为 `status:'error'` 并用 `event.message` 覆盖 `summary`（371-376 行）。
+`action_settled` 不带 `code`（`lib/contracts/agent.ts` 99 行），故该文本只有与 `PUBLIC_BUSINESS_ERRORS` 完全一致时才被本地化。
+否则 `publicToolSummary` 落回 `chat.error.toolFailed`（`lib/tool-feedback.ts` 57 行）。
+`ErrorCard` 是组件内唯一显式传 `chat.error.toolFailed` 兜底的卡片（24 行）。
+
 ## 已知问题
+
+锁定与失败都会关闭弹窗（`useAgentStream.ts` 402-404 行），但卡片原因只在 `failed` 时渲染（见 `cards/CONTEXT.md`）。
+`locked` 场景因此只剩工具行兜底文案：被改写为 `status:'error'` 的工具行携带非登记文本时显示 `chat.error.toolFailed`。
+`ActionResponse` 不携带 `code`（`app/api/actions/[id]/verify/route.ts` 79-89 行），故 `CIRCUIT_OPEN → chat.error.securityLocked`（`lib/tool-feedback.ts` 10 行）无法从操作回执触发。
+`security_event` 原文上屏路径（552-564 行）没有本地化或脱敏测试覆盖。
 
 整页刷新会丢失内存态：`settledActions` 与内联卡片上的终态标记都不持久化。
 若服务端仍把已锁定行当作 `awaiting_mfa` 返回（`toPendingActionRef` 丢弃 `locked` 行，但服务端仅把 `MfaChallenge` 置为 `locked`、未持久化 `PendingAction` 状态），
