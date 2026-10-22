@@ -50,8 +50,13 @@ it('a STANDALONE transferred action must recover or visibly enter reconciliation
  const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const gated=await executeGatedTool({sessionId:s,userId,toolName:'transfer_money',args:{name:'张伟',amount:'200'},userRequest:'给张伟转200元'});
  const id=gated.pendingActionId!;expect(id).toBeTruthy();
- const spy=vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(new Error('review: standalone result transaction failed'));
- const first=await confirmRaw(id,s);spy.mockRestore();const repeated=await confirmRaw(id,s);
+ // REAL fault injection at the settlement write funnel: the TERMINAL compare-and-set inside
+ // `settlePendingAction`'s transaction rejects, so the result+status write rolls back after the
+ // transfer already committed. The filter keeps the gateway's authorization CAS untouched.
+ const claim=pendingActionRepo.claimPendingAction;let injected=0;
+ const spy=vi.spyOn(pendingActionRepo,'claimPendingAction').mockImplementation(async(input,client)=>{if(input.to==='executed'){injected++;throw new Error('review: standalone result transaction failed');}return claim(input,client);});
+ const first=await confirmRaw(id,s);spy.mockRestore();expect(injected).toBe(1);
+ const repeated=await confirmRaw(id,s);
  const listedResponse=await actionsGet(new NextRequest('http://localhost/api/actions',{headers:{cookie:`banking_session=${s}`}}));const listed=await listedResponse.json();
  const stored=await p.pendingAction.findUnique({where:{id}});const balance=(await p.account.findFirst({where:{userId,type:'CHECKING'}}))?.balanceMinor;const debitCount=await p.transaction.count({where:{userId,amountMinor:-20000n,counterpartyId:'contact_zhangwei'}});
  console.log('REVIEW_STANDALONE_RESULT_GAP',toJson({firstHttp:first.status,repeatedOk:repeated.body.data?.ok,actionStatus:stored?.status,taskId:stored?.taskId,result:stored?.resultJson,visibleActions:listed.data?.length,balance,debitCount}));
