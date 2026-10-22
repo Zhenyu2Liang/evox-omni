@@ -133,7 +133,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
   (`agent/confirmation/outcomes.ts`) emits it only for `pending`/`awaiting_mfa`, so the only possible
   appended event is `plan_update` (and `nextPlanDecision`, `agent/task-decision.ts`, skips rows outside
   `pending`/`awaiting_mfa`). The row itself is already persisted `'locked'` by `persistLockedAction`
-  (`security/security-gateway.ts:763`), so `attentionFor` (`actions/route.ts:79`) drops it from
+  (`security/security-gateway.ts` `persistLockedAction`), so `attentionFor` (`actions/route.ts:79`) drops it from
   `GET /api/actions`.
 - `app/` never writes `PendingAction.status`: every hit is a comparison or read (`app/agent/history.ts:26`,
   `app/agent/plan-history.ts:24`). No retry/recover/claim/liveness endpoint here can reopen a `'locked'`
