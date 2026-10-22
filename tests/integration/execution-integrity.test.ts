@@ -107,17 +107,38 @@ it('a stored successful result stays consistent when the separate terminal statu
  expect(amount).toBe(150000n);expect(rows).toBe(1);expect(resumed.status).toBe('success');expect(repeated.status).toBe(200);expect(repeated.body.data?.ok).toBe(false);
 });
 
+/**
+ * The REAL fault injection for the atomic result+status guarantee: `settlePendingAction` lands the
+ * terminal status through `claimPendingAction({ actionId, from, to }, tx)` INSIDE its
+ * `prisma.$transaction`, so throwing there rolls the status + `resultJson` + strict audit back as
+ * ONE unit while the already-committed SDK side effect survives. The fault is filtered to THIS
+ * action's `confirmed → executed` transition because `claimPendingAction` is ALSO the gateway
+ * authorization CAS (`to: 'confirmed'`) and `recordActionResult`'s late CAS over
+ * `RESULT_RECORDABLE_STATUSES`; every other call delegates to the original writer.
+ * (`setPendingActionStatus`/`updatePendingActionStatus` have no production caller, so a spy there
+ * never fires.)
+ */
+function failSettleStatusWriteOnce(actionId:string){
+ const realClaim=pendingActionRepo.claimPendingAction;let fired=0;
+ const spy=vi.spyOn(pendingActionRepo,'claimPendingAction').mockImplementation(async(input,client)=>{
+  if(input.actionId===actionId&&input.to==='executed'&&input.from.includes('confirmed')&&fired===0){fired+=1;throw new Error('review: atomic status write failed');}
+  return realClaim(input,client);
+ });
+ return {spy,fired:()=>fired,restore:()=>spy.mockRestore()};
+}
+
 it('the result payload and the terminal status are written in one atomic transaction',async()=>{
  const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const result=await runSubmitPlan(userId,{goal:'Atomic result and status',nodes:[{id:'limit',name:'Set card limit',kind:'tool',tool:'set_card_limit',args:{cardId:'card_credit',category:'\u5a31\u4e50',amount:'1500'},dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=result.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
- const spy=vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(new Error('review: atomic status write failed'));
- const failed=await confirmRaw(action.id,s);spy.mockRestore();
+ const fault=failSettleStatusWriteOnce(action.id);
+ const failed=await confirmRaw(action.id,s);const fired=fault.fired();fault.restore();
  const after=(await p.pendingAction.findUnique({where:{id:action.id}}))!;
  const retry=await confirmRaw(action.id,s);
  const limits=await p.cardLimit.findMany({where:{cardId:'card_credit',category:'\u5a31\u4e50'}});
  const hasResult=after.resultJson!==null&&after.resultJson!==undefined;const consistent=(after.status==='executed')===hasResult;
  console.log('REVIEW_ATOMIC_RESULT_STATUS',JSON.stringify({failureHttp:failed.status,failureOk:failed.body?.ok,actionStatus:after.status,hasResult,consistent,retryHttp:retry.status,retryOk:retry.body.data?.ok}));
+ expect(fired).toBe(1); // the injection HIT the settle transaction
  expect(failed.status).toBeGreaterThanOrEqual(400);expect(failed.body?.ok).toBe(false);
  expect(hasResult).toBe(false);expect(after.status==='executed').toBe(false);expect(consistent).toBe(true);
  expect(retry.body.data?.ok).toBe(false);expect(limits).toHaveLength(1);expect(limits[0].amountMinor).toBe(150000n);
