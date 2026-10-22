@@ -67,7 +67,7 @@ Every registered write enters `command-execution.ts`. Operation identity belongs
 
 ## 投资写入能力
 
-`subscribe_investment` 与 `redeem_investment` 都是 RED 写入，经同一网关授权、逐次强验证与执行围栏，操作身份由服务器拥有的调用/动作/节点决定。对已持有产品的再次申购由 SDK 聚合进现有持仓（`InvestResult.addedToExisting = true`），不新建持仓。赎回本金金额是可选参数 `redeemAmount`（精确 CNY 十进制字符串）：省略或等于持仓本金表示全额赎回（持仓结清）；严格更小的正数表示部分赎回（持仓保留、本金减少，仅按同一估值规则结算该部分本金，剩余本金与市值留在持仓上）。金额绝不使用浮点，计算使用整数最小单位或十进制算术。系统提示与 `redeem_investment` 工具描述均已声明支持部分赎回。工具层细节见 `./tools/CONTEXT.md`。
+`subscribe_investment` 与 `redeem_investment` 都是 RED 写入，经同一网关授权、逐次强验证与执行围栏，操作身份由服务器拥有的调用/动作/节点决定。对已持有产品的再次申购由 SDK 聚合进现有持仓（`InvestResult.addedToExisting = true`），不新建持仓。赎回必须带显式口径 `mode`：`SHARES` 配 6 位小数的 `shares`，`AMOUNT` 配精确 CNY 金额 `amount`（按当前净值折算份额，折算为零或超过市值都拒绝），`ALL` 两者都不带并关闭持仓；赎回不再有本金口径，`redeemAmount` 一律拒绝。确认快照（`expectedShares`/`expectedNetValue`/`expectedSettlementAmount`）在写事务内与最新净值、持仓份额比对，任一变化都拒绝旧授权。金额绝不使用浮点，计算使用整数最小单位或十进制算术。`system-prompt.ts` 要求：用户只给一个数字时先澄清「按金额赎回」还是「按份额赎回」，不得当成本金、不得承诺赎回额外收益；确认与结果必须给出赎回份额、成交净值、预计到账金额与费用口径；收益为模拟估算、不承诺保本。`providers/mock/investment-intents.ts` 对「…份」发 `SHARES`、对带货币单位的数字发 `AMOUNT`、对无数字的整笔赎回发 `ALL`，只有裸数字时反问口径而非提交工具调用。工具层细节见 `./tools/CONTEXT.md`。
 
 `confirmation.ts` is the public decision facade. `confirmation/identity.ts` resolves persisted ownership;
 `confirmation/liveness.ts` owns decision leases; `confirmation/outcomes.ts` projects refusals and convergence; `confirmation/authorized-execution.ts`

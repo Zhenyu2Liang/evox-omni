@@ -193,14 +193,22 @@ describe('banking-sdk/investment · redeemInvestment', () => {
   it('flips a holding HOLDING → REDEEMED and credits the funding account', async () => {
     expect(CHECKING_START).toBe('23580.00');
 
-    const input: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING };
+    // 口径 is mandatory: redeem every held share instead of guessing a principal portion.
+    const input: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING, mode: 'ALL' };
     const result: InvestResult = await banking.investment.redeemInvestment(input);
 
     expect(result.success).toBe(true);
     expect(result.holdingId).toBe(SEEDED_HOLDING);
     expect(result.productId).toBe(WENJIANA);
-    // Credited by marketValue (5050), not principal (5000).
+    // Credited by the redeemed SHARES × net value (5050 × 1 = 5050), never by the principal (5000).
     expect(result.amount).toBe('5050.00');
+    expect(result.redeemedShares).toBe('5050');
+    expect(result.netValuePerUnit).toBe('1');
+    expect(result.remainingShares).toBe('0');
+    // Realized profit is the settled cash minus the cost those shares consumed — redeeming never
+    // mints profit of its own (5050 − 5000 = 50, exactly the seeded unrealized gain).
+    expect(result.realizedProfit).toBe('50.00');
+    expect(result.redeemedPrincipal).toBe('5000.00');
     expect(result.newBalance).toBe('28630.00');
     expect(Number.isFinite(result.occurredAt)).toBe(true);
 
@@ -214,10 +222,10 @@ describe('banking-sdk/investment · redeemInvestment', () => {
   });
 
   it("redeeming an unknown / already-redeemed holding → throws AppError('NOT_FOUND' | 'CONFLICT')", async () => {
-    const unknown: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: 'holding_does_not_exist' };
+    const unknown: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: 'holding_does_not_exist', mode: 'ALL' };
     await expectAppErrorCode(banking.investment.redeemInvestment(unknown), 'NOT_FOUND');
 
-    const seeded: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING };
+    const seeded: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING, mode: 'ALL' };
     await banking.investment.redeemInvestment(seeded); // first redeem succeeds
     const again = banking.investment.redeemInvestment(seeded); // second → CONFLICT
     const error = await expectAppErrorCode(again, 'CONFLICT');
@@ -231,7 +239,7 @@ describe('banking-sdk/investment · listHoldings', () => {
     expect(initial).toHaveLength(1);
     expect(initial[0]?.id).toBe(SEEDED_HOLDING);
 
-    await banking.investment.redeemInvestment({ userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING });
+    await banking.investment.redeemInvestment({ userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING, mode: 'ALL' });
 
     const after = await banking.investment.listHoldings(DEMO_USER_ID);
     expect(after).toHaveLength(0);

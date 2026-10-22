@@ -98,6 +98,8 @@ function redeem(idempotencyKey?: string) {
   return banking.investment.redeemInvestment({
     userId: DEMO_USER_ID,
     holdingId: SEEDED_HOLDING,
+    // Explicit口径: redeem every held share and close the holding (never guessed by the SDK).
+    mode: 'ALL',
     ...(idempotencyKey !== undefined ? { idempotencyKey } : {}),
   });
 }

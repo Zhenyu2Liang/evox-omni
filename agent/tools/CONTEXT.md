@@ -16,6 +16,7 @@ There are no shell, file, SQL, arbitrary HTTP, or credential-change tools.
 |---|---|
 | `index.ts` | Build owner-bound definitions; validate and dispatch `executeDirect`; apply trusted write context. |
 | `plan-parameters.ts` | Validate original direct-call and workflow parameters without implicit coercion. |
+| `money-schema.ts`, `decimal-schema.ts` | Exact parameter text: CNY money (2dp), investment shares (6dp) and net value per unit (4dp) canonical decimal schemas. |
 | `result.ts` | Convert typed results into native Pi success or `isError: true`; project public model data. |
 | `planning.ts` | Persist and execute a validated workflow through injected gateway and claim ports. |
 | `plan-compiler.ts` | Validate declared scope, node structure, output references, and dependencies. |
@@ -97,13 +98,23 @@ Other literal `'describe_turn'` couplings: `agent/turns/events.ts` drops its sta
 stream, `agent/durable/retry-policy.ts` gives it `read_only`/3 attempts, and `agent/durable/control-recovery.ts`
 replays its recorded model call. The stored intent shape is `ConversationIntent` in `lib/contracts/intent.ts`.
 
-### `redeem_investment` 赎回本金参数（全额 / 部分）
+### `redeem_investment` 赎回口径（`mode`：SHARES / AMOUNT / ALL）
 
-`redeemAmount` 是可选的本金部分（CNY 十进制字符串）：省略或等于持仓本金表示**全额赎回**（持仓结清、一次性到账）；填入严格小于本金的正数表示**部分赎回**（持仓保留、本金减少，仅按同一估值规则到账该部分的结算金额，剩余本金与市值留在持仓上）。它是普通金额参数——`plan-parameters.ts` 依据 TypeBox 模式校验字符串格式与显式类型后原样转发给 SDK，超额、非正或格式非法的取值由 SDK 以 `VALIDATION` 拒绝，参数层不重复判定金额域。成功摘要按 `InvestResult.partial` 与 `redeemedPrincipal` / `remainingPrincipal` 渲染全额或部分赎回措辞。
+`RedeemInvestmentParams` = `{ holdingId, mode, shares?, amount?, expectedShares?, expectedNetValue?, expectedNetValueDate?, expectedSettlementAmount? }`。`mode` **必填**，取值 `SHARES | AMOUNT | ALL`，没有默认口径：`SHARES` 必须给 `shares`、`AMOUNT` 必须给 `amount`（由 SDK 按最新净值折算份额）、`ALL` 全部赎回且不接受份额或金额。口径的判定点在工具层 `investment.ts#redemptionRequest()`，先于任何 SDK 调用：口径缺失或未知、混用（`SHARES`+`amount`、`AMOUNT`+`shares`、`ALL`+任一）都返回 `VALIDATION`，口径缺失时话术固定为 `赎回需要明确口径：请确认按「份额」还是按「金额」赎回`。因此「赎回 2000」这类只给金额、未说明口径的请求必须回到澄清，绝不会被读成本金并在其上再额外支付收益。
+
+`redeemAmount`（旧「赎回本金」口径）及其别名 `expectedRedemptionAmount` **不是**参数：`plan-parameters.ts` 把它们当未知参数拒绝，`redemptionRequest()` 另以同一澄清话术（detail `PRINCIPAL_MODE_RETIRED`）在 SDK 之前拒绝。`InvestResult.redeemedPrincipal` / `remainingPrincipal` 仍作为只读结果回退字段参与摘要渲染，它们不是请求参数。
+
+`shares` / `expectedShares` 与 `expectedNetValue` 使用 `decimal-schema.ts` 的 `SharesParameter`（≤6 位小数）与 `NetValueParameter`（≤4 位小数）：无符号纯十进制文本，拒绝负号、指数、货币符号和 JS number，多余小数位被拒（模式层给 `The call contains invalid tool parameters`，`canonical*` 给 `份额/净值最多允许 N 位小数`）。写库前一律经 `canonicalShareCount` / `canonicalNetValue`（内部 `decimalText()`）规范化，因为 SDK 的 `recordedShares()` / `productNetValue()` 要求 `nonNegativeDecimal(raw) === raw`：`'5050.000000'` → `'5050'`、`'0.9880'` → `'0.988'`。`amount` / `expectedSettlementAmount` 走 `money-schema.ts` 后规范成两位小数。
+
+`expectedShares` / `expectedNetValue` / `expectedNetValueDate`（净值业务日，UTC epoch 毫秒整数）/ `expectedSettlementAmount` 是 `security/security-gateway.ts#redemptionSnapshot` 铸造的授权快照，由 `approvedSnapshot()` 规范化后原样转发，使 SDK 能在写事务内比对陈旧授权。执行身份不由模型提供：`runRedeemInvestment` 只把 `opts.idempotencyKey` 转发为 `idempotencyKey`，schema 里没有 `executionKey`。
+
+`redemptionSummary()` 只用服务端返回值渲染：赎回口径、赎回份额、成交净值（含 UTC+08:00 净值日期）、预计到账、费用口径（`SIMULATED_NONE` → `模拟环境不收取赎回费，赎回费 ¥0.00`）、剩余份额（0 时标注「持仓已结清」）、剩余成本、已实现收益、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`；缺失字段写「历史数据不足」，本地不用浮点重算任何金额。
+
+`get_investment_holdings` 的每条持仓渲染七项事实：持仓份额、最新净值与净值日期、持仓市值、剩余持仓成本、持仓收益、持仓收益率、累计收益。市值、收益、收益率取自 SDK（市值恒为 `shares × latestNetValue`，收益率只是把 SDK 的无量纲比率乘 100 的展示换算），记录无法支撑的项显式输出「历史数据不足」而不伪造数字；`valueBasis: 'MIGRATED_ESTIMATE'` 追加「（估算）」。
 
 ### `subscribe_investment` 申购聚合
 
-对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层无需改动——`subscribe_investment` 照常以 `{ productId, amount }` 转发给 `banking.investment.subscribeInvestment`；成功摘要仍按 `InvestResult.amount` 与可选 `newBalance` 渲染。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
+对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓份额与本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层以 `{ productId, amount }`（金额规范成两位小数）转发给 `banking.investment.subscribeInvestment`，并把 `opts.idempotencyKey` 转发为执行身份。申购结果本身不带成交净值，`runSubscribeInvestment` 因此以一次只读的 `banking.investment.listHoldings()` 回读该持仓最近一笔 `purchases[].netValuePerUnit` / `netValueDate` 作为**展示**用成交净值；这次回读失败或被重放的旧记录没有该字段时，摘要写「历史数据不足」，绝不把已成交的申购判为失败或凭空补一个净值。摘要字段为已认购金额、持仓号、`申购份额`、`成交净值`（含净值日期）、`持仓总份额`、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
 
 ## Parameters and SDK errors
 

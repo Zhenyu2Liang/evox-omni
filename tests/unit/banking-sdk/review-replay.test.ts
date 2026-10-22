@@ -10,7 +10,9 @@ useFreshDatabase();
 // Subscribes a product the user does not already hold, so the purchase creates its own holding
 // instead of aggregating into holding_wenjiana and leaving its execution key in purchaseHistory.
 const purchase = { userId: DEMO_USER_ID, productId: 'prod_huobi', amount: '1000.00', idempotencyKey: 'review-purchase' };
-const redemption = { userId: DEMO_USER_ID, holdingId: 'holding_wenjiana', expectedRedemptionAmount: '5050.00', idempotencyKey: 'review-redemption' };
+// The redemption states its口径 explicitly (`ALL`: every held share) and the server-snapshotted
+// settlement of those shares × net value — never a principal portion.
+const redemption = { userId: DEMO_USER_ID, holdingId: 'holding_wenjiana', mode: 'ALL' as const, expectedSettlementAmount: '5050.00', idempotencyKey: 'review-redemption' };
 
 async function postedState() {
   const client = getTestPrisma();
@@ -67,7 +69,7 @@ describe('reviewed SDK replay boundaries', () => {
 
   it('rejects a changed approved redemption amount under a committed key', async () => {
     await banking.investment.redeemInvestment(redemption);
-    await expect(banking.investment.redeemInvestment({ ...redemption, expectedRedemptionAmount: '5051.00' }))
+    await expect(banking.investment.redeemInvestment({ ...redemption, expectedSettlementAmount: '5051.00' }))
       .rejects.toMatchObject({ code: 'CONFLICT' });
     expect(await postedState()).toEqual({ balance: 2863000n, flows: 1 });
   });
