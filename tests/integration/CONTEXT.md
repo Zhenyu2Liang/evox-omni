@@ -71,4 +71,6 @@
 - 通用回执重放入口为 `createToolRegistry(userId).executeDirect(tool, args, { sessionId, idempotencyKey })`，用同一 key 重发即原样返回（`refactor-financial-commands.test.ts:95`、`confirmed-write-authority.test.ts:136`）。
 - `../helpers/db.ts#truncateAll()` 已覆盖无关系的 `CardConsumption`；套件只需 `beforeEach(resetDatabase)`，不得再自行逐表清理。
 - `standalone-workflow-restart.test.ts` 使用真实子进程与 15s／20s 屏障超时，在磁盘／CPU 高负载（如整目录同时运行）下会偶发「child did not reach barrier」；单独重跑可 9/9 通过，先确认是否只是超时。
+- 本目录不断言锁定话术文案：无 `chat.error.securityLocked`／`publicToolError`／「验证码错误次数过多，本会话高风险操作已被锁定…」用例；也不断言 `__SECURITY_BLOCK__` 标记。
+- 本目录不断言 `MfaCard` 的 LOCKED 渲染：`frontend-review-fixes.test.ts` 只用默认（验证码输入）与 `status: 'executed'` 两种状态。
 - 夹具不播种 LOST 卡（`card_credit`/`card_debit` 均 `ACTIVE`，见 `../helpers/fixtures.ts:99`）；`replace_card` 需先 `report_lost_card` 或直接改库把源卡置 `LOST`。
