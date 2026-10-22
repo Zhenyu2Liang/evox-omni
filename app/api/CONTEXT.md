@@ -106,6 +106,12 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
   its own (`:88` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
   all (client-only, `components/chat/actions.ts`); closing the MFA prompt is left to the client.
+- On a `'locked'` verify outcome `events` is `plan_update` only: `blockedOutcome`
+  (`agent/confirmation/outcomes.ts`) emits `mfa_required` only for `pending`/`awaiting_mfa`, and the
+  decision `withPlanUpdate` (`_lib/agent-bridge.ts:170`) appends is `undefined` because
+  `nextPlanDecision` (`agent/task-decision.ts`) ignores rows not in `pending`/`awaiting_mfa`. The
+  locked row keeps its prior status, so `attentionFor` (`actions/route.ts:79`) still classes it
+  `decision`.
 
 Developer documentation lives in `docs/cn`; this context records AI-facing module boundaries.
 HTTP fixtures use the configured demo workspace. Cookie/query forgery fixtures verify that browser

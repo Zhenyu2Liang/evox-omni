@@ -39,6 +39,15 @@ This node is presentation only: it implements no banking tools and no card tooli
   the reason through `projectToolRejection` (lib/tool-feedback.ts:32) into a
   `status: 'blocked'` `ToolEventView`.
 
+## Tool outcome projection (statuses, summary, diagnostics)
+
+- `toolResultStatus(result)` (buffer.ts:71-80) returns ONLY `'success' | 'error' | 'needs_reconciliation'` (the latter when `data.outcome === 'unknown'`, `data.needsReconciliation === true` or `data.status === 'needs_reconciliation'`); otherwise `result.ok ? 'success' : 'error'`. It never yields `'blocked'`/`'cancelled'`/`'started'`, so an authorization resume can never publish a blocked/locked tool status.
+- `publishAuthorizedToolOutcome` (buffer.ts:111-134) builds `{ toolCallId, toolName, status: toolResultStatus(input.toolResult), actionId?, summary? }` where the summary is chosen as `input.toolResult.summary ? { summary } : input.toolResult.error ? { summary: error } : {}` (buffer.ts:118). It NEVER puts `errorCode` on the view, never invents a marker string, and never sets `debugDetail`. `errorCode` on `ToolEventView` is set only by the in-turn error branch (events.ts:51). Tool business cards are emitted only when `input.toolResult.ok` (buffer.ts:130).
+- In-turn `tool_execution_end` (events.ts:17-74): rejected → `status:'blocked'` + `projectToolRejection` (`summary` = a `chat.error.*` message key, `debugDetail` = the raw server reason); needs-reconciliation → `status:'needs_reconciliation'` with no summary; ordinary error → `status:'error'` with `summary` = parsed model error text, `errorCode`, plus an `errorCard`; prefixed security block (`security.gateway.parseBlockReason` non-null or `message.startsWith(security.gateway.BLOCK_REASON_PREFIX)`) → `status:'blocked'` with NO summary, then `require_mfa`/`require_confirmation` cards, else a public `security_event` (see next bullet).
+- `ToolEventView.debugDetail` has exactly two sources in this node: `events.ts:22` (spread of `projectToolRejection`, i.e. the raw preflight refusal) and `events.ts:156` (`safeToString(error)` when presentation itself throws). Both are developer-only (`lib/contracts/agent.ts:53-54`).
+- A block reason starting with `security.gateway.BLOCK_REASON_PREFIX` (`__SECURITY_BLOCK__`, security/security-gateway.ts:78) that does not parse to a known `{actionId, decisionKind}` lands in `events.ts:73` `buffer.events.push({ type: 'security_event', kind: 'locked', message })` — i.e. the RAW prefixed marker string is the public `security_event.message`, which `components/chat/useAgentStream.ts:552-563` appends verbatim as a `role: 'system'` transcript message. Public tool summary therefore stays empty for a denied/locked turn; the marker reaches the transcript only through `security_event`.
+- This node emits NO `action_settled` (nor any other settlement signal); the event type (`lib/contracts/agent.ts:99`) has no server-side producer at all — the client synthesizes it in `components/chat/actions.ts:603-611` from the HTTP action response.
+
 ## Events
 
 `events.ts` emits message start, tool start/update/end, owned cards, and a complete
