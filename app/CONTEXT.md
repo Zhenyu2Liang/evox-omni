@@ -43,6 +43,13 @@ Web 身份与接口表见 [api/CONTEXT.md](api/CONTEXT.md)。
 构建需要已生成的 Prisma 客户端。
 构建前不必重置或播种开发库。
 
+## 对话渲染边界
+
+`/agent` 页面只把服务端快照传给 `components/chat/ChatWindow`。
+确认/MFA 面板、工具事件与失败文案（含 `chat.error.*` 键）全部在 `components/chat/` 渲染。
+`app/` 不筛选、不清洗 `AgentStreamEvent`：`api/chat/route.ts` 的 SSE 帧与 `api/actions/[id]/verify/route.ts` 的 `events` 都原样转发。
+排查聊天文案、`security_event` 或面板显隐时进入 `components/chat/`，不要在 `app/` 内继续搜索。
+
 ## 修改约束
 
 - 客户端不得导入数据库客户端或业务执行模块。
