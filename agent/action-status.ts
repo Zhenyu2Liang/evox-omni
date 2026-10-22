@@ -62,6 +62,16 @@ export const REPRESENTED_ACTION_STATUSES: readonly PendingActionStatus[] = [
   'needs_reconciliation',
 ];
 
+/**
+ * Narrow a PERSISTED status (a database column, a stored JSON field, an IPC boundary value) to the
+ * shared vocabulary. An unknown value yields `undefined` — callers must treat a status outside this
+ * vocabulary as "no typed status", never as an authorization.
+ */
+export function asPendingActionStatus(status: string | null | undefined): PendingActionStatus | undefined {
+  if (status === null || status === undefined) return undefined;
+  return (ALL_ACTION_STATUSES as readonly string[]).includes(status) ? status as PendingActionStatus : undefined;
+}
+
 /** Is the persisted status an OPEN, still-decidable operation status (`pending` / `awaiting_mfa`)? */
 export function isOpenActionStatus(status: string | null | undefined): boolean {
   return status !== null && status !== undefined

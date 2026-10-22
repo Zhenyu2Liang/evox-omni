@@ -16,7 +16,7 @@ import { catalogEntry } from '@/lib/contracts/tool-catalog';
 import { isManualCardCommand } from '@/lib/contracts/card-management';
 import { safePublicText, securityNotice } from '@/lib/public-text';
 import { createTranslator, DEFAULT_LOCALE } from '@/lib/i18n/shared';
-import { REPRESENTED_ACTION_STATUSES } from '../action-status';
+import { asPendingActionStatus, REPRESENTED_ACTION_STATUSES } from '../action-status';
 
 const gateway = security.gateway.securityGateway;
 const t = createTranslator(DEFAULT_LOCALE);
@@ -29,6 +29,21 @@ const inFlightExecutions = new Map<string, Promise<GatedToolOutcome>>();
  */
 const representedStatuses: readonly PendingActionStatus[] = REPRESENTED_ACTION_STATUSES;
 type PendingActionRow = Awaited<ReturnType<typeof listPendingActionsByTask>>[number];
+
+/**
+ * `{ actionStatus }` for the first candidate that is part of the shared status vocabulary, else `{}`.
+ * A persisted column or a stored JSON field is an untyped string: it may only become typed metadata
+ * once it is KNOWN to be a status this runtime understands.
+ */
+function actionStatusField(
+  ...candidates: (string | null | undefined)[]
+): { actionStatus?: PendingActionStatus } {
+  for (const candidate of candidates) {
+    const status = asPendingActionStatus(candidate);
+    if (status !== undefined) return { actionStatus: status };
+  }
+  return {};
+}
 
 async function findRepresentedAction(taskId: string, nodeId: string): Promise<PendingActionRow | undefined> {
   const rows = await listPendingActionsByTask(taskId, { statuses: [...representedStatuses] });
@@ -47,7 +62,7 @@ async function persistedActionStatus(
   if (ctx.taskId === undefined || ctx.nodeId === undefined) return undefined;
   const rows = await listPendingActionsByTask(ctx.taskId);
   const row = [...rows].reverse().find(candidate => candidate.nodeId === ctx.nodeId);
-  return row?.status;
+  return asPendingActionStatus(row?.status);
 }
 
 /** Recover saved evidence without reapplying a completed side effect. */
@@ -57,10 +72,10 @@ function recoverExecutedPlanAction(action: PendingActionRow): GatedToolOutcome {
     return {
       ok: stored.ok, data: stored.data, summary: stored.summary, error: stored.error,
       ...(stored.failure !== undefined ? { failure: toPlanFailure(stored.failure) } : {}),
-      ...(stored.actionStatus !== undefined ? { actionStatus: stored.actionStatus } : { actionStatus: action.status }),
+      ...actionStatusField(stored.actionStatus, action.status),
     };
   }
-  return { ok: false, error: '该节点此前已执行但未留存结果，需人工核对（不会重新执行）。', actionStatus: action.status };
+  return { ok: false, error: '该节点此前已执行但未留存结果，需人工核对（不会重新执行）。', ...actionStatusField(action.status) };
 }
 
 /**
@@ -109,7 +124,7 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
         }
         return {
           ok: false, requiresConfirmation: true, pendingActionId: existing.id,
-          actionStatus: existing.status,
+          ...actionStatusField(existing.status),
           error: '该计划节点已在等待人工确认，未重复受理。',
         };
       }
