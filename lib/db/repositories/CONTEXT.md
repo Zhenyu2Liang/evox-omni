@@ -64,6 +64,19 @@
 `claimPendingActionLease`（`:205`）与 `clearPendingActionLease`（`:230`）只写租约列，不改状态。
 `assertActionMayStart`（`pendingAction.ts:275`）不改状态：它先对 `id` 发一条空写 `updateMany({ where: { id: actionId }, data: { id: actionId } })` 取得 SQLite 行锁，再读 `taskId`，存在 `manualReview status='open'` 时抛 `CONFLICT`。
 
+## MFA challenge 仓储原语（`pendingAction.ts`）
+
+`createMfaChallenge`（`pendingAction.ts:314`，入参 `CreateMfaChallengeInput` `:49-55`）是本目录唯一的建行函数：必填 `actionId`、`code`，可选 `maxAttempts`、`expiresAt`、`commandDigest`。
+落库兜底：`maxAttempts: input.maxAttempts ?? 3`（`:322`）、`expiresAt: input.expiresAt ?? new Date(Date.now() + 5 * 60_000)`（`:323`）；`commandDigest` 原样透传（可不传，落到模型可空列）；`attempts` 与 `status` 从不写，由 schema 默认 `0` / `'pending'`（`prisma/schema.prisma:455`/`:457`）。
+默认 `expiresAt` 在函数内部设置，硬编码 5 分钟字面量，不 import `security/`（本文件不依赖业务安全层），因此 `security/mfa.ts:34` 的 `MFA_CHALLENGE_TTL_MS` 与本文件是两份独立字面量，改常量不传导到默认值。
+默认 TTL 用 `Date.now()`，安全层用 `realNow()`（`lib/clock.ts`），两者是不同时钟入口。
+`getMfaChallenge`（`:329`）是 `findUnique({ where: { actionId } })`：按 `actionId`（schema `@unique`，`schema.prisma:452`）查，至多一条，无状态过滤。
+`incrementMfaAttempts`（`:336`）单条 `update` + `attempts: { increment: 1 }`：自增是原子的，但没有状态/代次条件（不是 CAS），返回更新后的整行。
+`updateMfaChallengeStatus`（`:346`）与 `resetMfaAttempts`（`:354`）都是无条件 `update({ where: { actionId } })`，只写目标列，不改 `expiresAt`；`status` 取值为自由字符串，仓储不校验。
+`renewLockedMfaChallenges`（`:362`）是唯一的续期/复活语句：单个 `updateMany`，过滤 `status: 'locked'` 且关联 `action` 满足（有 `userId` 时按 `userId`，否则按 `sessionId`）＋ `status: 'awaiting_mfa'` ＋ `requiresMfa: true`；写入 `attempts: 0`、`status: 'pending'`、`expiresAt: new Date(Date.now() + 5 * 60_000)`、`verifiedAt: null`、`consumedAt: null`，返回匹配行数 `count`。
+该续期不改 `PendingAction.status`、不重签 `code`、不校验 `commandDigest`；它要求显式传入 `client`（无默认单例），只在账号解锁事务内调用（调用点 `security/circuit-breaker.ts:298-300`，仅 `prior?.locked` 为真时）。
+本文件内没有任何 `prisma.mfaChallenge.*` 直接调用，全部走 `client.mfaChallenge.*`：`:318` create、`:333` findUnique、`:340`/`:351`/`:358` update、`:366` updateMany。
+
 ## Agent 运行租约与恢复（`agentRun.ts`）
 
 - 默认租约时长 `DEFAULT_LEASE_MS = 120_000`（`agentRun.ts:10`）。
