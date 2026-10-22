@@ -159,6 +159,9 @@ Unlock: `POST /api/security/reset` clears only the account circuit breaker (`sec
 
 Keep route-local schemas private: Next.js route modules export HTTP handlers, supported route
 configuration and TypeScript types only. Dynamic route parameters are awaited promises.
+Handlers stay importable: tests call them in-process (190 import sites across `tests/app/` and
+`tests/integration/`), passing the id route context as `{ params: Promise.resolve({ id }) }`
+(`tests/app/harness.ts:101`, shape `_lib/types.ts:91-93`).
 Handlers use `_lib/agent-bridge` for action/task delegation and persisted ownership checks before
 execution. The fixed demo identity has no missing-cookie rejection branch.
 
