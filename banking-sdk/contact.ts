@@ -6,7 +6,8 @@ import { contacts } from '../lib/db/repositories';
 import { AppError } from '../lib/errors';
 import type { ContactView } from './types';
 import { z } from 'zod';
-import { maskAwarePhoneMatch, maskPhone } from '../lib/phone';
+import { contactPhoneFacets } from '../lib/db/repositories/contact';
+import { maskPhone, phoneIdentityMatches } from '../lib/phone';
 import { runInTransaction } from './tx';
 
 const contactText = z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f]*$/);
@@ -60,7 +61,10 @@ export async function addContact(userId: string, input: ContactInput): Promise<C
   return runInTransaction(async () => {
     if (!await contacts.lockContactOwner(userId)) throw new AppError('NOT_FOUND', 'Contact owner does not exist.');
     const existing = await contacts.listContacts(userId);
-    if (existing.some(contact => maskAwarePhoneMatch(parsed.data.phone, contact.phone))) {
+    // IDENTITY, not mask matching: a saved recipient is the same person only when the complete
+    // number is stored (`phoneFull`, or a legacy row that kept the full number in `phone`). A
+    // history row that kept only a mask is never treated as the same number.
+    if (existing.some(contact => phoneIdentityMatches(parsed.data.phone, contactPhoneFacets(contact)))) {
       throw new AppError('CONFLICT', 'A contact with this mobile number already exists.');
     }
     try {

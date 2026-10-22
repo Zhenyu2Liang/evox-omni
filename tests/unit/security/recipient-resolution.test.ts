@@ -8,7 +8,10 @@
  *
  * Rules under test (exactly ONE of `contactId|phone|name` may be supplied):
  *   - `contactId` → look up + owner-check (`not_found` otherwise);
- *   - `phone` → complete normalized or masked identity (`not_found` when incomplete, `ambiguous` > 1);
+ *   - `phone` → IDENTITY first (`phoneIdentityMatches`: a complete number must equal the stored
+ *     complete number, middle four digits included) and, only for a MASKED selector, a CANDIDATE
+ *     narrowing (`phoneCandidateMatches`) that may resolve a UNIQUE candidate but never claims number
+ *     equality (`ambiguous` > 1, `not_found` 0 — a complete number never downgrades to the mask);
  *   - `name` → exact name equality (`not_found` 0, `ambiguous` > 1);
  *   - 0 or > 1 identifiers → `invalid`.
  * On `resolved` the args are CANONICALIZED to `{...args, contactId}` (with `phone`/`name` DELETED) and
@@ -246,6 +249,65 @@ describe('security-gateway · transfer recipient resolution — unresolvable sel
     // Candidates are phone-MASKED (never a raw number on the clarify message).
     expect(res.blockReason).toContain('****');
     expect(res.blockReason?.startsWith(BLOCK_REASON_PREFIX)).toBe(false);
+    expect(await getTestPrisma().pendingAction.count()).toBe(before);
+  });
+});
+
+/* ------------------------------------- (c) phone IDENTITY vs mask CANDIDATE */
+
+describe('security-gateway · transfer recipient resolution — phone identity', () => {
+  /**
+   * A contact that shares 张伟's VISIBLE ends (139…0002) but differs in the middle four digits. Created
+   * here in Prisma because `tests/helpers/fixtures.ts` is shared with other suites.
+   */
+  async function addCollidingContact(id: string, name: string, phoneFull: string): Promise<void> {
+    await getTestPrisma().contact.create({
+      data: { id, userId: DEMO_USER_ID, name, phone: maskPhone(phoneFull), phoneFull, bank: '招商银行' },
+    });
+  }
+
+  it('binds the complete number of the colliding contact (13911110002), not 张伟', async () => {
+    await addCollidingContact('contact_collide_a', '张伟同事', '13911110002');
+
+    const action = await parkTransfer({ amount: '200.00', phone: '13911110002' });
+
+    // Middle digits participate, so the complete number is unique even though the visible ends collide.
+    expect(fieldValue(action, '收款人')).toBe('张伟同事');
+    expect(fieldValue(action, '收款手机号')).toBe(maskPhone('13911110002'));
+    expect(action.args.contactId).toBe('contact_collide_a');
+    expect(JSON.stringify(action.summary)).not.toMatch(/\b1[3-9]\d{9}\b/);
+  });
+
+  it('never resolves a complete number that only shares the visible ends (13922220002)', async () => {
+    await addCollidingContact('contact_collide_a', '张伟同事', '13911110002');
+    const before = await getTestPrisma().pendingAction.count();
+
+    const res = await securityGateway.handleToolCall(
+      ctxFor('transfer_money', { amount: '200.00', phone: '13922220002' }),
+    );
+
+    // "Looks like 张伟" is not "is 张伟": a complete number is never downgraded to a mask candidate.
+    expect(res.decision.kind).toBe('deny');
+    expect(res.action).toBeUndefined();
+    expect(res.blockReason).toContain('未能找到');
+    expect(await getTestPrisma().pendingAction.count()).toBe(before);
+  });
+
+  it('AMBIGUOUS masked phone → masked clarify DENY, no complete number in the text', async () => {
+    await addCollidingContact('contact_collide_a', '张伟同事', '13911110002');
+    const before = await getTestPrisma().pendingAction.count();
+
+    const res = await securityGateway.handleToolCall(
+      ctxFor('transfer_money', { amount: '200.00', phone: maskPhone('13900000002') }),
+    );
+
+    expect(res.decision.kind).toBe('deny');
+    expect(res.action).toBeUndefined();
+    expect(res.blockReason).toContain('匹配到多个联系人');
+    expect(res.blockReason).toContain('张伟');
+    expect(res.blockReason).toContain('139****0002');
+    // Every candidate is masked: the stored complete numbers never reach the clarify text.
+    expect(res.blockReason).not.toMatch(/\b1[3-9]\d{9}\b/);
     expect(await getTestPrisma().pendingAction.count()).toBe(before);
   });
 });
