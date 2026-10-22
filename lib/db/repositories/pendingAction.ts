@@ -4,6 +4,7 @@ import { toJson } from '../../json';
 import { AppError } from '../../errors';
 import type { RiskLevel } from '../../contracts/risk';
 import type { PendingActionSummary, PendingActionStatus } from '../../contracts/security';
+import { OPEN_PENDING_ACTION_STATUSES } from '../../contracts/security';
 
 /**
  * Repository for the `PendingAction` aggregate (+ its `MfaChallenge`).
@@ -210,7 +211,7 @@ export async function claimPendingActionLease(
   const result = await client.pendingAction.updateMany({
     where: {
       id: actionId,
-      status: { in: ['pending', 'awaiting_mfa'] },
+      status: { in: [...OPEN_PENDING_ACTION_STATUSES] },
       OR: [
         { executionLeaseOwner: null },
         { executionLeaseExpiresAt: { lte: lease.now } },

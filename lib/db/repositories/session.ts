@@ -2,6 +2,7 @@ import type { AgentSession } from '@/lib/db/prisma';
 import { prisma, type DbClient } from '../client';
 import { AppError } from '../../errors';
 import { MANUAL_CARD_COMMAND_NAMES } from '../../contracts/card-management';
+import { RUN_BLOCKING_PENDING_ACTION_STATUSES } from '../../contracts/security';
 
 export interface CreateSessionInput {
   userId: string;
@@ -86,7 +87,10 @@ export async function resetConversation(input: { sessionId: string; userId: stri
       status: { in: ['started', 'interrupted', 'needs_reconciliation'] } }, select: { id: true } });
     const action = await client.pendingAction.findFirst({ where: { ...scope,
       toolName: { notIn: [...MANUAL_CARD_COMMAND_NAMES] },
-      status: { in: ['pending', 'awaiting_mfa', 'confirmed', 'locked', 'needs_reconciliation'] } }, select: { id: true } });
+      // A reset is blocked by every decision that still needs the user: an open prompt, an
+      // authorized command in flight, a locked refusal (the user must unlock the security center)
+      // and an outcome only a human can settle.
+      status: { in: [...RUN_BLOCKING_PENDING_ACTION_STATUSES, 'locked'] } }, select: { id: true } });
     const task = await client.agentTask.findFirst({ where: { ...scope,
       OR: [{ status: { in: ['pending', 'running', 'paused', 'waiting_confirmation'] } }, { executionToken: { not: null } }] }, select: { id: true } });
     const review = await client.manualReview.findFirst({ where: { ...scope, status: 'open' }, select: { id: true } });
