@@ -116,7 +116,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 
 - `POST /api/actions/[id]/verify` (`app/api/actions/[id]/verify/route.ts`) returns HTTP `200` for
   every domain outcome, including the circuit-breaker `status:'locked'` case: it always serializes
-  `jsonResponse<ActionResponse>(mapped)` (`:91`) and never throws `CIRCUIT_OPEN`, so the `423` status
+  `jsonResponse<ActionResponse>(mapped)` (`:94`) and never throws `CIRCUIT_OPEN`, so the `423` status
   named in the route comment (`:16`) and defined in `_lib/http.ts` is not reached from this route.
 - The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
   its own (`:88` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
