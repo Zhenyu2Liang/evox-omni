@@ -44,7 +44,9 @@
 关联不依赖节点输出中的临时字段。
 `claimPendingAction`（`pendingAction.ts:254`）是唯一的待处理操作状态 CAS：单条 `updateMany`，条件为 `id` + `status IN from`，可选 `userId`/`sessionId`；`to === 'confirmed'` 时先经过 `assertActionMayStart`（人工接管栅栏，`manualReview status='open'` 抛 `CONFLICT`）。`from`/`to` 取值由调用方给定，函数本身不限制。
 `PendingAction.status` 是 Prisma 无枚举的 `String @default("pending")`（`prisma/schema.prisma:426`），合法取值由 `contracts/security.ts` 的 `PendingActionStatus` 约束（含 `locked`、`needs_reconciliation`）。
-本目录没有写入 `status:'locked'` 的语句；`renewLockedMfaChallenges`（`pendingAction.ts:362`）只重置 `MfaChallenge.status='locked'`，其 where 条件要求 `action.status='awaiting_mfa'`。
+本目录没有写入 `status:'locked'` 的语句；`renewLockedMfaChallenges`（`pendingAction.ts:362`）只重置 `MfaChallenge.status='locked'`，其 where 条件要求 `action.status='awaiting_mfa'`，且只写 `MfaChallenge`，从不改 `PendingAction.status`。
+能写入 `PendingAction.status` 的语句只有四处：`createPendingAction`（`:86`，`status: input.status ?? 'pending'`，`:99`，仅新建行）、`claimPendingAction`（`:254`，CAS）、`updatePendingActionStatus`/`setPendingActionStatus`（`:181`/`:194`，无条件 `update`，可把 `locked` 改成任意值，包括 `pending`/`awaiting_mfa`）、`revokePendingActionsByTask`（`:169`，只写 `cancelled`）。
+`claimPendingActionLease`（`:205`）与 `clearPendingActionLease`（`:230`）只写租约列，不改状态。
 
 回执必须校验所有者、工具与输入摘要。
 资金变化、审计和回执的事务边界见
