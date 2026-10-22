@@ -11,7 +11,7 @@
 
 ## 终止锁定（locked）结果的覆盖边界
 
-网关有两条独立的 `status: 'locked'` 分支，本目录只覆盖第一条：
+网关有三条独立的 `status: 'locked'` 出口（`security/security-gateway.ts`），本目录三条都有用例：
 
 1. `lockedOutcome()`（`security/security-gateway.ts`）：会话已锁 → 即便提交正确验证码也拒绝。
    `gateway.test.ts`（`locked session (breaker tripped) → refused, status 'locked', even with the correct code`）与
