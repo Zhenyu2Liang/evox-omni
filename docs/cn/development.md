@@ -535,6 +535,69 @@ SQLite 备份命令会包含已提交的预写日志（WAL）数据。
 修改金额字段前，先读[金融数值](financial-values.md)。
 字段名称、单位和精度也约束种子数据及测试数据。
 
+### 数据库备份与净值份额升级
+
+理财持仓按“净值 + 份额”记账后，旧库需要补齐 `shares`。
+以下步骤按顺序执行，顺序不能交换。
+
+先备份数据库：
+
+```sh
+node scripts/db-backup.mjs
+```
+
+脚本把快照写到 `logs/db-backups/<时间戳>-dev.db`，并打印目标路径。
+时间戳格式为 `yyyyMMdd-HHmmss`。
+快照使用 SQLite 在线备份生成，包含已提交的预写日志数据。
+目录不存在时自动创建，命令可以重复执行。
+源数据库不存在时，脚本报错并以非 0 状态退出。
+
+再同步表结构：
+
+```sh
+pnpm db:push
+```
+
+同步新增净值和份额字段，不派生份额。
+`db push` 不生成客户端，代码改动后仍需执行 `pnpm db:generate`。
+
+旧持仓按最新净值派生份额：
+
+```sh
+node scripts/investment-share-backfill.mjs
+```
+
+默认是只读试运行，打印每个持仓的派生结果与汇总。
+核对结果后写入：
+
+```sh
+node scripts/investment-share-backfill.mjs --apply
+```
+
+派生口径为 `shares = FLOOR(市值 ÷ 净值, 6 位小数)`，市值取持仓的 `estimatedMarketValue`。
+`estimatedMarketValue` 为空时，市值回退为剩余成本。
+写入时同时把 `estimatedMarketValue` 设为 `shares × 净值` 的精确乘积，市值与份额保持自洽。
+单笔经济价值漂移必须小于 `0.01 元`；任一笔超出时，脚本不写入并以非 0 状态退出。
+
+产品没有净值时不伪造份额。
+这类持仓保持原样，汇总中计为 `历史数据不足`。
+
+脚本只处理 `status = 'HOLDING'` 且 `shares` 为空的持仓。
+`REDEEMED` 持仓和已有份额的持仓不被修改。
+重复执行不会再次派生，已迁移数量为 `0`。
+汇总包含已迁移数量、跳过数量和总经济价值漂移。
+
+需要回滚时，先停止所有数据库连接，再用快照覆盖 `prisma/dev.db`：
+
+```sh
+rm -f prisma/dev.db-wal prisma/dev.db-shm
+cp logs/db-backups/<时间戳>-dev.db prisma/dev.db
+pnpm db:generate
+```
+
+覆盖前删除 `prisma/dev.db-wal` 和 `prisma/dev.db-shm`，避免重放旧预写日志。
+恢复后按需执行 `pnpm db:seed` 或直接启动应用。
+
 ## 页面入口
 
 | 路径 | 用途 |
