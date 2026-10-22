@@ -66,7 +66,7 @@
 | `recoverOwnedRun` | `agent/durable/service.ts:104` | `conversation-recovery.test.ts:62`、`conversation-compaction.test.ts:158/191`、`standalone-workflow-restart.test.ts:135`（断言 `CONFLICT`）、`locked-action-recovery.test.ts:217`（锁定动作，断言 `AUTHORIZATION_REQUIRED`）、子进程驱动 `tests/helpers/restart-process.ts:132/139` |
 | `tickAgentRecovery` | `agent/recovery-worker.ts:44` | 只在子进程驱动内：`tests/helpers/restart-process.ts:136`、`tests/helpers/standalone-restart-process.ts:18` |
 | `recoverInvocation` | `agent/durable/recovery.ts:63` | `agent-durability.test.ts:106/142` |
-| `settlePendingAction` | `agent/confirmation-recovery.ts:251` | `agent-durability.test.ts:255/259` |
+| `settlePendingAction` | `agent/confirmation-recovery.ts:264` | `agent-durability.test.ts:255/259` |
 | `resumeOriginalRunTask` | `agent/durable/workflow-resumption.ts:15` | `workflow-invocations.test.ts:150/170/171` |
 | `listRecoverableAgentRuns` | `lib/db/repositories/agentRun.ts:281` | `model-checkpoint-boundaries.test.ts:95/96/98/109`、`standalone-workflow-restart.test.ts:146/150` |
 | `executeGatedTool` | `agent/confirmation/gated-execution.ts:88` | 造「停放」动作的唯一生产入口，见各 `parkStandalone`／`runner` 助手 |
