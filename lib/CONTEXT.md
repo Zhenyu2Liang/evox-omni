@@ -61,7 +61,7 @@ JSON 金额使用十进制字符串。
 ## 公开错误文本投影（`tool-feedback.ts`）
 
 公开文本只能来自消息目录，内部诊断只进 `debugDetail` 与开发者面板。
-`publicToolError(message, t, fallback = 'chat.error.toolFailed', errorCode?)` 的判定顺序：`PUBLIC_BUSINESS_ERRORS` 精确 SDK 消息 → 三条固定正则（余额不足、低于起购、验证码剩余次数）→ `PUBLIC_ERROR_CODES[errorCode]` → 无 `message` 取 `fallback` → `CONVERSATION_TOOL_REJECTION` → `chat.error.` 前缀且 `isMessageKey` 命中 → `localizeChatError` 命中（`display-sources.json` 的 `errors`）→ 否则 `fallback`。
+`publicToolError(message, t, fallback = 'chat.error.toolFailed', errorCode?, params?)` 的判定顺序：`PUBLIC_BUSINESS_ERRORS` 精确 SDK 消息 → 三条固定正则（余额不足、低于起购、验证码剩余次数）→ `PUBLIC_ERROR_CODES[errorCode]` → 无 `message` 取 `fallback` → `CONVERSATION_TOOL_REJECTION` → `chat.error.` 前缀且 `isMessageKey` 命中 → `localizeChatError` 命中（`display-sources.json` 的 `errors`）→ 否则 `fallback`；`params` 只透传给最终选中的目录键。
 `PUBLIC_ERROR_CODES` 是 `Record<ErrorCode, MessageKey>`，覆盖全部 10 个 `ErrorCode`；`TOOL_FAILED` 与 `INTERNAL` 都映射到 `chat.error.toolFailed`，`CIRCUIT_OPEN` 映射 `chat.error.securityLocked`，`MFA_FAILED` 映射 `chat.error.verificationFailed`。
 未识别的 `errorCode`（任意不在 `ErrorCode` 联合内的字符串）与未识别 `message` 一律落到 `chat.error.toolFailed`。
 `PUBLIC_BUSINESS_ERRORS`（15–26 行）只有 10 条精确字符串；其中唯一的安全网关句子是 `security/security-gateway.ts:849`「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」→ `chat.error.securityLocked`（`chat.zh-CN.json:220`）。
