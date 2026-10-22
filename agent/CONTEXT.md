@@ -34,6 +34,15 @@ The server-authored manual-only reply is the guidance vocabulary `card_managemen
 
 `agent/index.ts` exposes turns, confirmation/verification/cancellation, task controls, manual handoff and scheduled dispatch. App routes use the server-configured demo user and persistent `demo:${userId}` workspace before calling it. The web demo has no login or authentication cookie. Generic internal sessions remain available for runtime tests and bank ownership contracts; they cannot be selected through the web API. Tests can inject a `ModelRuntime` through `RunTurnDeps.provider` while exercising the real runtime and bank.
 
+## Task control surface (`POST /api/tasks/[id]`)
+
+Definitions: `pauseTask` (`index.ts:328`), `resumeTask` (`:333`), `cancelTask` (`:340`) and `retryTask` (`:347`) are thin `(sessionId: string, taskId: string): Promise<TaskPlan>` wrappers over `./task-control`; `rollbackTask` is defined in `task-rollback.ts:10` and re-exported at `index.ts:7`.
+`./task-control.ts` only re-exports: the implementations are `workflows/controls.ts:19` (`pauseTask`), `:27` (`resumeTask`), `:49` (`retryTask`) and `workflows/cancellation.ts:78` (`cancelTask`); `resumeTask`/`retryTask` additionally need a `deps: TaskControlDeps` (`workflows/contracts.ts:14`), which the facade supplies as `taskRunToolFor` (`index.ts:308`).
+None of the five ever resolves `undefined`: every lost-claim or early path returns a snapshot (`controls.ts:34,36,46,55,57,68`, `cancellation.ts:80,94`, `task-rollback.ts:65`). `app/api/_lib/agent-bridge.ts:44-47` types its `TaskControlFn` as `Promise<TaskPlan | undefined>`, which is wider than the implementations, so `route.ts:87-89`'s `TOOL_FAILED` "no plan" branch is unreachable for these five.
+`resumeTask`/`retryTask` throw, in order: `NOT_FOUND`/`SECURITY_DENIED` (`workflows/ownership.ts:9,10,12`), `CONFLICT` for an open manual review (`lib/db/repositories/manualReview.ts:6`), `MFA_LOCKED`/`CONFLICT` for a terminal parked action (`workflows/parked-actions.ts:74,75,76`), plus `VALIDATION` cycle detection inside the planner (`planner/dag.ts:248`); HTTP 409 is therefore reachable for `{ action: 'resume' }`.
+`runTool` failures are absorbed by the planner (`planner/executor.ts:504-509`) into a failed node, so `taskRunToolFor`'s `SECURITY_DENIED` (`index.ts:313`) and any gateway refusal never reach the HTTP status mapping.
+A control that already succeeded can still fail afterwards: `synchronizeScheduledWorkflow` (`index.ts:335,342,349`) throws `SECURITY_DENIED` at `scheduled-dispatcher.ts:95`.
+
 ## Execution contracts
 
 `turn-runtime.ts` admits a stable request and owns its session run lease. The first awaited subscriber is `AgentRunJournal`. It snapshots and records every original Pi event, and creates the invocation with the tool-start event before preflight. Grounded UI events are immutable and persisted before SSE publication. JSON responses replay the same saved snapshots.
