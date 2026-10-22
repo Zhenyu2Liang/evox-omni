@@ -35,6 +35,9 @@ The server-authored manual-only reply is the guidance vocabulary `card_managemen
 
 `agent/index.ts` exposes turns, confirmation/verification/cancellation, task controls, manual handoff and scheduled dispatch. App routes use the server-configured demo user and persistent `demo:${userId}` workspace before calling it. The web demo has no login or authentication cookie. Generic internal sessions remain available for runtime tests and bank ownership contracts; they cannot be selected through the web API. Tests can inject a `ModelRuntime` through `RunTurnDeps.provider` while exercising the real runtime and bank.
 
+Task controls: `index.ts:333-337` `resumeTask`, `:347-351` `retryTask`, `:328-330` `pauseTask`, `:340-344` `cancelTask` are the ONLY entries the HTTP control endpoint reaches (`app/api/_lib/agent-bridge.ts` `CONTROL_FNS`). Each resolves a per-session `runTool` (`taskRunToolFor`, `:308-325`) and resume/retry/cancel additionally `await synchronizeScheduledWorkflow(taskId)` AFTER the plan settles, with no `try`/`catch`, so a dispatcher-identity mismatch surfaces from the control call (`scheduled-dispatcher.ts:95` → `SECURITY_DENIED`). `recoverAction` (`:168-276`) instead converts an internal `resumeTask` rejection into `{ ok:false, ... }` (`:229-249`), so it never surfaces a 409.
+`resumeOwningPlan`/`resumeTaskForAction` (confirmation continuation) and `authorization-resume.ts` are gateway/durable-path only — not reachable from the task-control endpoint.
+
 ## Execution contracts
 
 `turn-runtime.ts` admits a stable request and owns its session run lease. The first awaited subscriber is `AgentRunJournal`. It snapshots and records every original Pi event, and creates the invocation with the tool-start event before preflight. Grounded UI events are immutable and persisted before SSE publication. JSON responses replay the same saved snapshots.
