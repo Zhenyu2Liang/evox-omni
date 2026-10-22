@@ -59,7 +59,7 @@ HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/har
 
 ## 被阻断 / 锁定的结果如何表示
 
-网关 block reason 是 `__SECURITY_BLOCK__` + JSON（`security/security-gateway.ts:78`、`:704`）；
+网关 block reason 是 `__SECURITY_BLOCK__` 前缀 + JSON（前缀定义 `security/security-gateway.ts:80`，序列化 `:725`）。
 熔断 deny 与计划已取消分支都是 `__SECURITY_BLOCK__{"decisionKind":"deny"}`，**没有 actionId**
 （`security/security-gateway.ts:1182`、`:1214`），因此 `parseBlockReason` 返回 `null`（`:708`），只能靠前缀判定。
 `scenario.ts:289`（镜像生产的 `agent/turns/events.ts:73`）把**原始** block reason 放进
