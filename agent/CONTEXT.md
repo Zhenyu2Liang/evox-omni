@@ -4,12 +4,13 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 
 ## Routing Table
 
+- `./action-status.ts`: the single `PendingAction` status vocabulary — `OPEN_ACTION_STATUSES` (`pending`/`awaiting_mfa`), `TERMINAL_ACTION_STATUSES` (`executed`/`failed`/`cancelled`/`locked`/`needs_reconciliation`), `CLAIMABLE_ACTION_STATUSES`, `ALL_ACTION_STATUSES` and the `isOpenActionStatus`/`isTerminalActionStatus`/`mayPromptForDecision`/`isClaimableActionStatus`/`isLegalActionSourceStatus` predicates; no agent path compares status literals locally.
 - `./confirmation/`: confirm/verify/cancel decision facade internals, gateway outcome contracts, leases (incl. the `locked` MFA outcome behavior).
 - `./durable/`: Pi event journal, run leases, workflow/standalone continuation and recovery.
 - `./turns/`: turn contracts, event grounding/buffering, authorization views, bounded prompts.
 - `./tools/`: banking tool implementations and the tool registry.
 - `./providers/`: live + mock provider/model adapters.
-- `./workflows/`: workflow cancellation.
+- `./workflows/`: workflow control, the parked-action terminal guard (`parked-actions.ts`) and cancellation.
 - `./context-compaction/`: historical summaries and bounded model-request projection.
 - `./messages/`: presentation message catalogs.
 
@@ -78,21 +79,35 @@ generation/token and session policy fences remain in the actual banking transact
 preserves current in-flight work and stops the next checkpoint. Scheduled dispatch reuses a persistent
 workflow and current approval.
 
+`confirmation-recovery.ts` `settlePendingAction` takes a REQUIRED `from` and refuses an empty or illegal source (`SECURITY_DENIED`) before the transaction opens, so every `PendingAction` status write names its expected source status and `locked` is never a source.
+
 ## Blocked, denied and locked outcomes
 
+`action-status.ts` is the single `PendingAction` status vocabulary: `OPEN_ACTION_STATUSES` (`pending`/`awaiting_mfa`) is the only set a decision may still be taken on, `TERMINAL_ACTION_STATUSES` is `executed`/`failed`/`cancelled`/`locked`/`needs_reconciliation`, and `mayPromptForDecision`, `isOpenActionStatus`, `isTerminalActionStatus`, `isClaimableActionStatus` and `isLegalActionSourceStatus` replace every local status-literal comparison.
+`locked` is TERMINAL: an exhausted-verification or open-circuit refusal is never re-presented as a pending entry, never re-prompted for a verification code, never resumed or retried, and never executed.
+The security-centre unlock only clears MFA challenge rows, so after an unlock the user must start a new operation and confirm it again; no old operation is re-activated.
 `banking-agent.ts` `beforeToolCall` is the only place a gateway block becomes a Pi tool result: it returns `{ block: true, reason: auth.blockReason ?? auth.decision.message }` and sets `stopAfterDecision`, so in live mode `finishTurn` ends the turn with no narration turn and no controlled execution.
-The opaque payload is minted only in `security/security-gateway.ts`: `serializeBlockReason` (payload carries `actionId` + `decisionKind`) and the two actionId-less deny payloads for a locked session and a cancelled plan.
-`turns/events.ts` classifies one error result: `parseBlockReason` first, then a plain `startsWith(BLOCK_REASON_PREFIX)` test. Only an `actionId`-bearing payload reaches `mfa_required`/`confirmation_required`; every other blocked result falls through to `security_event{kind:'locked'}` whose `message` is the untouched reason string, and `kind` is hard-coded `'locked'` even for a plain deny.
-Known issue: `security_event.message` is persisted on the `ui` channel by `turn-runtime.ts` `publish` and replayed as the JSON/SSE response, and the web client renders it verbatim as a system bubble, so an internal block payload becomes user-visible text.
-That bubble appears in the live stream and the response body only: `transcript-activity.ts` re-projects just `message_start`/`message_end` run events, so a page reload drops it while the payload stays in the run-event store.
-No test under `agent/` or `tests/` feeds a real bare `__SECURITY_BLOCK__{"decisionKind":"deny"}` payload through this classification; the closest coverage is `chat.error.toolFailed` fallback assertions in `tests/unit/planner/tool-feedback.test.ts` and the mock-provider block prefix in `tests/unit/agent/providers/provider-mock.test.ts`.
-`agent/` contains no 未完成/请核对/原操作卡片 copy; that sentence is `chat.error.toolFailed` in `lib/i18n/messages/chat.zh-CN.json`, the documented fallback of `lib/tool-feedback.ts` `publicToolError`/`publicToolSummary` for any string outside the closed catalog.
-`publicToolError` maps by exact string only, so a gateway sentence absent from `PUBLIC_BUSINESS_ERRORS` (the session-lock refusal) renders as that same generic fallback while the attempt-limit sentence is mapped to `chat.error.securityLocked`.
-`financial-response.ts` `renderFinancialResponse` supports a `locked` narration, but no caller in `agent/`, `app/` or `channels/` passes `locked: true`, so a locked outcome has no server-authored narration.
-`confirmation.ts` returns on `!auth.ok` before `executeAuthorizedAction`, so a locked or denied human decision produces no `ToolExecutionResult`, no tool event, no factual result and no `action_settled` (that event has no server producer at all).
-`confirmation/gated-execution.ts` puts `auth.blockReason` into `GatedToolOutcome.error` with no `errorCode`, and `confirmation/plan-continuation.ts` forwards it into the plan resume, so a denied workflow node persists the raw payload.
-`durable/continuation.ts` `restoreWaitingCheckpoint` re-synthesises the same envelope shape for a parked invocation (always with `actionId`) into a public `tool_execution_end`; `durable/journal.ts` stores the whole tool content as `resultJson.content`/`summary`, and `transcript-activity.ts` re-projects a stored `summary` onto the historical tool row when its status is not `blocked`.
-`providers/mock/narration.ts` detects the literal `__SECURITY_BLOCK__` (not the exported prefix) and answers with fixed templates; it never echoes the payload, but its branch order prefers the MFA/验证码 template when the same string also contains 锁定/熔断.
+That reason string stays model-facing; it is never copied into a public field.
+The opaque payload is minted only in `security/security-gateway.ts`: `serializeBlockReason` (payload carries `actionId`, `decisionKind` and the typed `failure`) and the actionId-less deny payloads for a locked session and a cancelled plan.
+`turns/events.ts` `handleToolEnd` classifies one error result: `needs_reconciliation` first, then `parseBlockReason` and a plain `startsWith(BLOCK_REASON_PREFIX)` test, then a typed `status:'error'` carrying `summary` + `errorCode`.
+A blocked call's public `ToolEventView` carries typed facts only — `actionId`, `errorCode` from `parseBlockReason(...).failure.code`, and the renderable `attemptsLeft`/`attemptsUsed`/`maxAttempts` params.
+A decision prompt is published only through `turns/authorization-view.ts` `publishPendingDecision`, which re-reads the persisted row: `mayPromptForDecision(status)` gates `mfa_required`/`confirmation_required` and its card, a `locked` row publishes the structured `security_event` from `settledDecisionSignal` (`kind:'locked'` + `code:'MFA_LOCKED'|'CIRCUIT_OPEN'` + `reason`, **no `message`**), and any other terminal status or a missing row publishes nothing.
+`publishPendingDecision` returns `'prompted' | 'signalled' | 'skipped'`; `flushParkedDecision` clears the relayed parked id first and delegates to the same gate, so a plan cannot re-open a verification entry for a settled action.
+`turns/events.ts` publishes a locked refusal as structured fields only (`code`/`reason`/`actionId`/`attemptsLeft`/`maxAttempts`), never the raw payload as `message`; `parseBlockReason` requires a non-empty `actionId`, so a bare `{"decisionKind":"deny"}` payload reaches this path with no typed code and still no raw text.
+`lib/public-text.ts` (`safePublicText`/`securityNotice`/`isInternalDiagnostic`) is the only funnel for user-visible refusal text, and every user-visible sentence comes from the `lib/i18n` catalog; internal status literals, action/session ids, payloads, JSON and stack traces never reach it.
+`lib/tool-feedback.ts` `publicToolError` maps by exact string or code, so an unmapped gateway sentence renders through the `chat.error.toolFailed` fallback instead of leaking.
+`confirmation/gated-execution.ts` `blockedOutcome(auth)` takes `errorCode` from the parsed `failure` and `error` from `securityNotice`/`safePublicText`, and `representedStatuses` is `ALL_ACTION_STATUSES`, so a settled action for the same `(taskId,nodeId)` is reused instead of minting a new one; `confirmation/plan-continuation.ts` sanitises the same error through `publicPlanError`.
+`workflows/parked-actions.ts` `assertParkedActionsNotTerminal(plan)` runs inside `resumeTask`/`retryTask` BEFORE any status claim or lease: a parked node whose persisted action is terminal is refused with a typed `AppError` (`locked` → `MFA_LOCKED`/`chat.error.actionLocked`, `needs_reconciliation` → `CONFLICT`/`chat.error.unknownOutcome`, another terminal → `CONFLICT`/`chat.error.stateChanged`), writing nothing and replaying nothing.
+`confirmation.ts` `cancelAction` re-reads the persisted row and reports success only when it is actually `cancelled` (`unappliedCancelOutcome` otherwise); refusal sentences come from `publicRefusalMessage`/`failureReasonFor` and never interpolate a raw status literal.
+`ConfirmationOutcome` carries a typed `code` and, for security refusals, the structured `failure`, so no caller has to parse `message`.
+`confirmation-recovery.ts` `settlePendingAction` requires an explicit `from`, validates it with `assertSettleSources` before the transaction opens (empty or illegal source → `AppError('SECURITY_DENIED')`, nothing written) and CASes through `claimPendingAction`, so no path can write a `locked` row back to another status and `locked` is never a source.
+`durable/journal.ts` stores a public-safe `summary` and keeps the internal text in `internalSummary`; `durable/continuation.ts` restores the model-facing content from `internalSummary` and re-synthesises a block envelope only while the persisted row is still open.
+`transcript-activity.ts` re-projects a recorded `summary` only through `publicRecordedSummary`, and projects a recorded action as `blocked` only while it is still open.
+Known boundaries: `financial-response.ts` `renderFinancialResponse` supports a `locked` narration but no caller in `agent/`, `app/` or `channels/` passes `locked: true`.
+`confirmation.ts` returns on `!auth.ok` before `executeAuthorizedAction`, so a locked or denied human decision produces no `ToolExecutionResult`, no tool event and no factual result (`action_settled` has no server producer at all).
+`agent/` contains no 未完成/请核对/原操作卡片 copy; that sentence is the `chat.error.toolFailed` fallback of `lib/i18n/messages/chat.zh-CN.json`.
+No test under `agent/` or `tests/` feeds a bare `__SECURITY_BLOCK__{"decisionKind":"deny"}` payload through this classification.
+`providers/mock/narration.ts` detects the literal `__SECURITY_BLOCK__` (not the exported prefix) and answers with fixed templates; its branch order prefers the MFA/验证码 template when the same string also contains 锁定/熔断.
 
 ## Presentation
 
@@ -111,10 +126,10 @@ financial records or the immutable model/event archive. See `turns/CONTEXT.md` f
 
 `grounding-facts.ts` projects exact structured account/write facts. `financial-response.ts` renders authoritative financial statements. Planning text, model-generated correction tags and prose are never execution evidence. Public APIs expose grounded events and safe metadata; raw thinking remains internal.
 
-`turns/events.ts` `handleToolEnd` (`:37-74`) classifies an errored tool result: `needs_reconciliation` first, then a blocked call (`parseBlockReason` success or `BLOCK_REASON_PREFIX` prefix), then `status:'error'` carrying `summary` and `errorCode`.
-A blocked call publishes `status:'blocked'` with `actionId` only when `parseBlockReason` parsed it, then `mfa_required`/`confirmation_required` for those two kinds, and otherwise `security_event{kind:'locked', message:<raw block reason>}` verbatim — the browser prints that `message` as system text.
-`parseBlockReason` requires a non-empty `actionId`, so a `{"decisionKind":"deny"}` block reason is not parsed and takes that verbatim `security_event` path.
-`ConfirmationOutcome` has no error-code field, so a gateway `AuthorizationResult.code` never reaches the HTTP edge; `publishAuthorizedToolOutcome` (`turns/buffer.ts:115-119`) may set a public tool `summary` from `toolResult.error`, which `lib/tool-feedback.ts` renders through `publicToolError` with the `chat.error.toolFailed` fallback when both the text and the code are unrecognized.
+`turns/events.ts` `handleToolEnd` classifies an errored tool result: `needs_reconciliation` first, then `parseBlockReason` and a plain `startsWith(BLOCK_REASON_PREFIX)` test, then a typed `status:'error'` carrying `summary` and `errorCode`.
+A blocked call publishes `status:'blocked'` with typed `actionId`/`errorCode`/params only; the prompt itself comes from `publishPendingDecision` under the persisted-status gate, and when no prompt is published the call ends in the structured `security_event{kind:'locked'}` rather than prose or a raw payload.
+`parseBlockReason` requires a non-empty `actionId`, so a `{"decisionKind":"deny"}` block reason is not parsed and takes the structured `security_event` path with no typed code.
+`ConfirmationOutcome` carries a typed `code` and the structured `failure` for security refusals; `publishAuthorizedToolOutcome` (`turns/buffer.ts`) may still set a public tool `summary` from `toolResult.error`, which `lib/tool-feedback.ts` renders through `publicToolError`.
 
 Card results — the card reads, the card mutations and `consume_virtual_card` — render as a `cards` card built from the server-returned card projection (`card-emitter.ts`), which carries the linked account, its available balance, the monthly limit and the currently payable amount; model prose never fills a result card.
 
