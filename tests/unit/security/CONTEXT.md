@@ -97,7 +97,7 @@
 - `mfa-audit.test.ts:83-91`：`MFA_FAILURE.detail` `toEqual` 恰好 7 键；`circuit-breaker-audit.test.ts:86-90`：熔断 `detail` `toEqual` 恰好 3 键。
 - `gateway.test.ts:173`：四条决策的 `kind` 序列 `['allow','require_confirmation','require_mfa','deny']`。
 - `execution-policy.test.ts:7`：`vi.mock('@/security/circuit-breaker', () => ({ isLocked: ports.locked }))` 只暴露 `isLocked`，`security/execution-policy.ts` 新增任何该模块导入都会失败。
-- `gateway.test.ts:280`、`circuit-breaker-audit.test.ts:177`：锁定态 `blockReason` 必须是字面量 `'HIGH_RISK_BLOCKED'`。
+- `gateway.test.ts:281`、`circuit-breaker-audit.test.ts:177`：锁定态 `blockReason` 必须是字面量 `'HIGH_RISK_BLOCKED'`。
 
 ## 本目录不覆盖（负向结论）
 
