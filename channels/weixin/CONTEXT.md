@@ -40,6 +40,20 @@
 `label()` 词表（`presentation.ts:13-23`）：`pending`=等待确认、`awaiting_mfa`=等待验证码、`executed`=已执行、`cancelled`=已取消、`locked`=已锁定、`failed`=失败、`needs_reconciliation`=结果待人工核对。
 `/确认` 得到 `awaiting_mfa` 后仅置 `state.offered[id].confirmed = true`（`bridge.ts:66`）；`offered` 条目从不删除或失效，已执行/已锁定/已取消的编号仍可继续发送并被服务端按幂等或冲突处理。
 
+## 锁定文案的服务端来源（settleReply 第 2 段）
+
+锁定回复第 2 段只由 `outcome.failure.code/reason` 决定（`securityNotice`），来源不同则文案不同：
+本次提交的第 3 次错码，`security/security-gateway.ts:906` 返回 `failure{code:'MFA_LOCKED',reason:'mfa_attempts_exhausted'}` → `chat.error.actionLocked`。
+会话熔断已被其它操作触发后再 `/验证`，`security/mfa.ts:148` 仍回 `locked:true`，同样落到 `MFA_LOCKED/mfa_attempts_exhausted` → 仍是 `chat.error.actionLocked`（即使本操作从未错码）。
+行已持久化为 `locked` 后再 `/确认`、`/验证`、`/取消`、`/恢复操作`，由 `security/security-gateway.ts:1118` 或 `app/api/_lib/locked-action.ts:64-68` 回 `code:'CIRCUIT_OPEN', reason:'mfa_session_locked'` → `chat.error.securityLocked`。
+会话已熔断而该行尚未锁定，`security/security-gateway.ts:1148` 回 `reason:'circuit_open'` → 也 `chat.error.securityLocked`。
+`outcome.failure` 缺失时退回 `{code: outcome.code}`，两者都缺失则 `chat.error.securityDenied`（`bridge.ts:87`）。
+`locked` 走 200 域结果；`app/api/_lib/http.ts:19-31` 的 423 只对应执行期抛出的 `CIRCUIT_OPEN`，此时微信收到的是 `服务端提示（CIRCUIT_OPEN）：…` 而非锁定结构。
+`/待办` 不再列出 `locked` 行（`app/api/actions/route.ts:79`），但 `state.offered` 条目仍在，编号仍可发送并触发上述锁定回复。
+挑战已消费或已过期（`security/mfa.ts:139-143`）走 `reason:'mfa_code_invalid'` 且无 `attemptsLeft`，文案为「验证码错误。还可尝试 0 次。」并仍附 `继续验证：`。
+settle 结果不含 `security_event`；聊天轮次中模型写调用被拒绝才由 `agent/turns/events.ts:92` 产出 `kind:'locked'`，网页侧另由 `components/chat/actions.ts:649-657` 合成。
+计划节点的锁定回复还会追加 `withPlanUpdate` 产生的 plan 文本（第五段）。
+
 ## 文本收口（presentation.ts + lib/public-text.ts）
 
 `channelText(message, t, fallback)`（`presentation.ts:33`）是本目录唯一的清洗入口：`isInternalDiagnostic(message)` 为真回 fallback 词条，`chat.` 前缀键经 `safePublicText` 本地化，其余业务原文原样透传。
