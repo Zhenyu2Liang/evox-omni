@@ -62,6 +62,8 @@
 `awaiting_mfa` 且 `requiresMfa` 且 `tier==='RED'` 且未执行且 `mfaResult!=='failed'` 时合成 `mfa_required`（不追加错误）。
 可重试的错误验证码落到追加 `error` 的支路，且不合成 `security_event`，避免同一拒绝重复上屏。
 `securityFacts(record)` 读取 `ActionResponse` 的 `code`/`attemptsLeft`/`maxAttempts`/`failure`：非法值丢弃，非法组合不让整份响应失败，且不保留任何自由文本。
+字段优先级：`code` 顶层优先、缺失才回落 `failure.code`；`reason` 只从 `failure.reason` 取且在 `SECURITY_FAILURE_REASONS` 白名单内才接受；`attemptsLeft`/`maxAttempts` 顶层优先、回落嵌套。
+客户端用局部 `SecurityFacts`（`code?: string`）而非 `SecurityFailure` 契约：`SecurityFailure.actionId` 与 `attemptsUsed` 在本目录从不读取，动作身份一律取响应顶层 `actionId`。
 终态为 `locked`/`failed` 且存在结构化事实时，用它们合成一条 `security_event`（`kind`、`code`、`reason`、`actionId`、`attemptsLeft`、`maxAttempts`，不含 `message`）；`record.events` 已带同 `actionId` 且同 `kind` 或同 `code` 的事件时不重复合成。
 终态状态（`TERMINAL_ACTION_STATUSES`，含 `locked`）追加 `action_settled`（`{actionId, status, message?}`；该契约不带 `code`/`reason`/`attemptsLeft`）。
 `settleAction` 对匹配 `actionId` 的终态清除 `pendingAction`。
