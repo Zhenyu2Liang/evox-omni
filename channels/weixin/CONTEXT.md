@@ -49,6 +49,8 @@
 `renderEvents`（`banking-client.ts:70-124`）只读取 `message_end` 的 assistant 正文、公开 card、plan、gate 与 `publicToolSummary`；`text_delta`、`tool_start`、`args`、`debugDetail`、`debugArguments`、`mfaHint` 一律不进入文本。
 工具失败文本统一经 `lib/tool-feedback.ts publicToolSummary` 映射成 i18n 键（`chat.error.*` 不会外泄）；`plan.results[].output` 只在 `commands.ts:28` 取 `pendingActionId`，不渲染。
 `security_event`（含 `kind:'locked'` 与原始 `__SECURITY_BLOCK__…`）在通道内被忽略，不产生任何文本；`action_settled.message` 也被忽略，只用其 `actionId` 撤销 gate。
+`deny` 类拦截由此变成 `ToolEventView{status:'blocked'}` 且无 `actionId`、无 `summary`（`agent/turns/events.ts:58`），`publicToolSummary` 走 fallback 键 `chat.error.operationNotStarted` → 「操作未发起。请核对需求和原操作卡片。」，故 deny 既不静默也不外泄标记。
+`presentation.ts:106` 的 `case 'error'` 原样输出 `业务提示：{card.message}`，不经 `lib/tool-feedback` 映射（网页 `components/chat/cards/ErrorCard.tsx` 才做映射）；此类卡片只在非 block 分支产生（`agent/turns/events.ts:50-56`），因此不会携带 `__SECURITY_BLOCK__`，但 SDK 工具错误原文会直接出现在微信里。
 `renderBusinessCard` 用 try/catch 兜底为 `服务端结果字段不完整，请在网页核对；未据此推断业务成功或余额。`；列表渲染前 `Array.isArray` 校验；电话按 11 位掩码（`presentation.ts:29`）。
 `banking-client.ts:31-44` 不做运行时 schema 校验（网页侧才用 `components/chat/transport-validation.ts` 的 zod）：HTTP 错误或 `ok:false` 时，仅当 `status<500` 且 `error.code` 匹配 `^[A-Z_]+$` 才抛 `服务端提示（CODE）：{message 前 400 字}\n请核对操作记录后处理。`，否则抛 `银行服务暂未完成请求，请在网页核对操作记录后再处理。`；`bridge.ts:35` 把 `BankingApiError.message` 直接作为整条回复，其它异常与网络失败回 `银行请求结果暂时无法确认。请在网页核对操作记录，不要据此判断已成功或资金未变。`
 验证码只出现在本次 verify 请求体（`banking-client.ts:51`），不写 state、不回显、不进模型。
