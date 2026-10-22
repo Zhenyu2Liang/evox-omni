@@ -124,7 +124,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - The edge never rewrites agent text: `verify/route.ts:79-91` copies `outcome.message` and
   `outcomeWithPlan.events` into `ActionResponse` unchanged (`ConfirmationOutcome.result` is dropped),
   and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:124`
-  `sseFrame`. A block reason built by `security/security-gateway.ts:78` (`__SECURITY_BLOCK__` + JSON,
+  `sseFrame`. A block reason built by `security/security-gateway.ts:80` (`__SECURITY_BLOCK__` + JSON,
   e.g. `{"decisionKind":"deny"}`) therefore reaches the browser inside `security_event.message` and any
   tool-error text. The action routes' own lock refusal IS typed (`code`/`failure`), but stream frames
   stay verbatim, so there is no app-layer scrubbing or error-code
