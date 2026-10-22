@@ -65,6 +65,16 @@ developer view; this presentation change does not alter checkpoint identities or
 
 Every registered write enters `command-execution.ts`. Operation identity belongs to the server invocation, action or node. The command's mutation, strict audit, original response and invocation completion share one transaction. Receipts are replayed before mutable lookup; transfers additionally match their ledger. Unknown outcomes stop for reconciliation.
 
+## Plan parking and resume wiring
+
+A gated node parks as `waiting_confirmation`/`waiting_verification` and the plan as `waiting_confirmation`; no `agent/` path re-runs that node's tool.
+`PlanDeps` is built in exactly two agent places: `workflows/ports.ts:27` `buildPlanDeps(planId, deps, onNodeUpdate?, options)` (resume/retry/decision paths) and inline in `tools/planning.ts:357-384` for the initial `submit_plan` run (`runSubmitPlan`, own `claimToken`, `createTaskPersistence` at `:380`).
+Ports: `runTool` is the caller-supplied `TaskRunTool` (always `executeGatedTool`, e.g. `index.ts:300` `taskRunToolFor`, `confirmation/plan-continuation.ts:21`), wrapped in `withWorkflowExecutionClaim`; `claimNode`/`releaseNode`/`isRunOwner` come from `workflows/claims.ts:43/:61/:29`; `controls` from `defaultPollControls` (`ports.ts:16`); `persistPlan`/`persistNode`/`loadPlan` from `createTaskPersistence` (`persistence.ts:38/:48/:70`); `onNodeUpdate` defaults to a no-op (`ports.ts:28`).
+Plan drivers: `tools/planning.ts:357` `executor.runPlan` (initial run), `workflows/controls.ts:34` `executor.runPlan` (`resumeTask`), `controls.ts:52` `lifecycle.retryPlan` (`retryTask`), `workflows/action-continuation.ts:41` `lifecycle.resumePlan` (`resumeTaskForAction`); `scheduled-dispatcher.ts:106` resumes only `pending`/`running` workflows.
+The human-decision continuation is `confirmation.ts:41/45` → `confirmation/authorized-execution.ts:22` (`:49` executes the ACTION's own tool, `:61` `settlePendingAction`, `:80` `resumeOwningPlan`) → `confirmation/plan-continuation.ts:13` → `resumeTaskForAction` (`action-continuation.ts:24`). When the plan claim cannot be taken only the decided node is recorded (`task-fencing.ts:217` `recordDecidedNodeFenced`) and `settlePlanFromNodes` (`:162`) settles the plan status.
+The plan-linked wedge recovery entry point `index.ts:164` `recoverAction` uses `findTaskByPendingAction` (`:223`) + `resumeTask` (`:226`) instead, and `executeGatedTool`'s already-represented-action short circuit (`confirmation/gated-execution.ts:41-60`) lands the persisted result.
+`actionId` → plan/node resolves through the PendingAction row itself (`getPendingActionPlanLink` inside `findTaskByPendingAction`, `action-continuation.ts:14`); `node.output.pendingActionId` is a presentation echo only (`workflows/contracts.ts:6` `readPendingActionId`, consumed by `task-decision.ts:19` and `turns/authorization-view.ts:29`).
+
 ## 投资写入能力
 
 `subscribe_investment` 与 `redeem_investment` 都是 RED 写入，经同一网关授权、逐次强验证与执行围栏，操作身份由服务器拥有的调用/动作/节点决定。对已持有产品的再次申购由 SDK 聚合进现有持仓（`InvestResult.addedToExisting = true`），不新建持仓。赎回本金金额是可选参数 `redeemAmount`（精确 CNY 十进制字符串）：省略或等于持仓本金表示全额赎回（持仓结清）；严格更小的正数表示部分赎回（持仓保留、本金减少，仅按同一估值规则结算该部分本金，剩余本金与市值留在持仓上）。金额绝不使用浮点，计算使用整数最小单位或十进制算术。系统提示与 `redeem_investment` 工具描述均已声明支持部分赎回。工具层细节见 `./tools/CONTEXT.md`。
