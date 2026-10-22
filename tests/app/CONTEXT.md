@@ -115,6 +115,64 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 本目录没有任何「用户可见文本/事件 message 不含内部标记」的断言：`__SECURITY_BLOCK__` 在 `tests/app/*.ts` 零匹配（只出现在本文件）、`decisionKind` 零匹配、无堆栈/原始 JSON「不含」断言；`not.toContain` 只用于 MFA 码、隐私字段与「已不 surfaced 的 actionId」。
 内部标记的不含断言在 `tests/unit/`（`lib/public-text.test.ts`、`security/mfa-failure-contract.test.ts`、`agent/turn-security-event.test.ts`，见 `tests/unit/CONTEXT.md`）。
 
+## 规格文件清单
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `actions-http.test.ts` | 决策路由真值：GREEN 不停放、YELLOW confirm 与重复 confirm、RED verify、错码 `200`/`awaiting_mfa`、资金不足诚实失败、cancel、所有权 403/404、MFA 码不泄露、3 次错码锁定 |
+| `actions-recovery-http.test.ts` | `/api/actions` 发现面 + `POST /api/actions/[id]/recover`：独立楔子 `recoverable`→`executed`（副作用一次）、计划节点楔子由 recover 恢复计划到 `success` |
+| `activity-http.test.ts` | `GET /api/activity` 域时间线、`GET /api/audit` 原始审计拒绝、技术流量过滤、交易确认只出现一次 |
+| `cancel-safety-http.test.ts` | 计划取消两个窗口：取消落在停放中（未链接节点的动作被撤销）与同一停放动作上 cancel/confirm 竞争只结算一次 |
+| `cancel-during-authorization-http.test.ts` | 授权期间 cancel：cancel 先到则后续 confirm 被拒；confirm 先到则 cancel 被拒且账本/日累计不回滚 |
+| `card-consume-http.test.ts` | 虚拟卡消费 `POST /api/cards/[id]/consume` 与 `GET …/consumptions`，服务端入账时间与 `occurredAt` 拒绝矩阵 |
+| `card-freeze-audit-http.test.ts` | 卡片状态动作的独立验证、持久化档位降级重判、执行审计失败回滚、`recover` 落到 `needs_reconciliation`、审计归属过滤 |
+| `chat-http.test.ts` | `POST /api/chat` 真值：GREEN 读、YELLOW/RED 停放、注入事件、分析与异常读、SSE 与 JSON 投影一致、传输失败 `400`、MFA 码保密 |
+| `chat-history-http.test.ts` | `GET /api/chat-history` 分页锚点、所有者/会话隔离、清空会话拒绝、授权卡状态刷新（直插 `pendingAction`） |
+| `concurrent-execution-http.test.ts` | 会合点并发：控制请求落在副作用之后/结果持久化之前、confirm 续行与 `resume`/`retry` 竞争，副作用的 `Budget` 行恰好一条 |
+| `confirm-continuation-fencing.test.ts` | confirm 续行丢失计划执行 claim（活动所有者）：不改写 owner 行、不推进计划、仍用 fence 记录已决策节点，owner 释放后计划可完成 |
+| `confirm-continuation-no-owner-fencing.test.ts` | 无所有者 CAS 分支：记录已决策节点并结算计划；写窗口内被接管则跳过写入 |
+| `contacts-http.test.ts` | `POST /api/contacts` 保存/掩码视图/双审计、重复与畸形拒绝、删除决策、并行去重、审计失败回滚 |
+| `cumulative-risk-http.test.ts` | 日累计风险：in-flight 转账只计一次、两个并发 ¥600 中一个升级 RED、¥1000 与 ¥1000.01 边界 |
+| `dag-recovery-http.test.ts` | `POST /api/tasks/[id]` pause→resume（不重跑成功节点）、cancel 终态、retry 只重跑失败节点、`GET /api/tasks/[id]` 与 `GET /api/actions` 刷新恢复 |
+| `developer-chat-http.test.ts` | `POST /api/developer/chat` 重置会话上下文：模式与确认门、非终态动作/运行/计划/租约/人工复核全部保留、revision 冲突 |
+| `developer-security-http.test.ts` | `POST /api/developer/security/reset`：非开发模式 403、成功路径不改 `PendingAction.status`、审计失败保持锁定 |
+| `identity-http.test.ts` | 单用户演示身份：唯一会话、无登录恢复动作与计划、MFA 仍需验证、伪造 cookie/query 不能选中他主资源 |
+| `ledger-consistency-http.test.ts` | 已确认转账的余额/流水一致、被拒动作不动钱、诚实失败、多次确认累计 |
+| `malicious-input-http.test.ts` | 提示注入后转账仍被闸门拦截、已停放参数不被请求体/查询串覆盖、身份提示被忽略 |
+| `manual-card-management.test.ts` | 人工专属发卡/删卡：独立挑战、重放、所有者锁定与开发者重置、删除债务/未决操作拒绝、通用决策路由拒绝人工提案 |
+| `manual-review-http.test.ts` | 人工复核：接管闸门与模式、开案时禁止 resume/retry、保留已确认扣款、运营者 stop/resume、并发只产生一个活动案 |
+| `mfa-escalation-http.test.ts` | confirm 时 YELLOW→RED 升级（日累计）、verify 完成升级转账、升级后错码正常 `200` |
+| `mfa-escalation-upgrade-http.test.ts` | 执行时档位升级：第二个 ¥600 confirm 升级为 RED/`awaiting_mfa` 并发 `mfa_required`，verify 后审计与升级决策一致 |
+| `mfa-terminal-lock-http.test.ts` | MFA 次数耗尽的终态锁定：`status:'locked'` 持久化、从 `GET /api/actions` 去曝光、不再发 `mfa_required`、后续（含正确码）仍拒绝 |
+| `nl-entry-http.test.ts` | 自然语言入口→`set_card_limit`/`subscribe_investment`/`cancel_subscription` 停放与决策、缺参只澄清不调工具 |
+| `plan-linkage-http.test.ts` | 停放动作的计划/节点链接（`taskId`/`nodeId`）、`resume` 复用同一动作、同参不同计划不合并 |
+| `plan-parking-http.test.ts` | `submit_plan` 条件 DAG 在闸门节点停放：SSE 走 analyze→check→setlimit、只发 YELLOW、confirm 恢复计划 |
+| `plan-pause-terminal-http.test.ts` | 暂停计划里确认已停放节点只结算节点不推进计划、取消/完成计划后 resume/retry/pause 是 no-op |
+| `scheduled-dispatch-http.test.ts` | 定时派发：提醒只投递一次、到期支付重新过闸、拒绝客户端时钟、审计失败回滚、停放审批不饿死提醒 |
+| `security-workflow-http.test.ts` | 两笔 ¥600 的 confirm 升级、错码、计划取消/已完成终态、运行中 pause 停住下一节点、伪造身份不能验证/取消/控制、`/api/security/reset` 423/200 解锁闸门 |
+| `session-takeover-http.test.ts` | 共享会话 HTTP 入口：无/未知/外来 cookie 落到同一持久会话、外来 body 断言被拒、`requestId` 去重 |
+| `task-resume-retry-http.test.ts` | 两个重叠 `resume`/`retry` 请求：未完成节点只执行一次、持久状态与读模型一致 |
+| `tasks-http.test.ts` | `POST /api/tasks/[id]` pause/cancel/retry、confirm/verify 恢复停放计划、`GET /api/tasks`(`/[id]`) 刷新恢复与所有权 |
+
+## 停放、锁定与并发窗口的构造手法
+
+`PendingAction` 在本目录全部由生产路径产生（决策本身从不被 mock），共有五种构造法：
+1. `POST /api/chat` 停放回合（mock 模型驱动），如 `actions-http.test.ts:199`、`security-workflow-http.test.ts:207`。
+2. `executeGatedTool`（独立动作，无计划链接），如 `actions-recovery-http.test.ts:152`、`card-freeze-audit-http.test.ts:98`、`manual-card-management.test.ts:172`。
+3. `runSubmitPlan` + 转发 `ctx.taskId`/`ctx.nodeId` 的 `runTool`（计划链接），如 `mfa-terminal-lock-http.test.ts:193-207`、`task-resume-retry-http.test.ts:149`、`dag-recovery-http.test.ts:156`。
+4. `security` 网关门面 `gateway.handleToolCall`，仅 `cumulative-risk-http.test.ts:93-104`。
+5. 直接 `prisma.pendingAction.create`，只用于历史/投影类用例：`chat-history-http.test.ts:102`、`developer-chat-http.test.ts:73`、`developer-security-http.test.ts:34`、`manual-review-http.test.ts:164`。
+
+锁定一律用 `MFA_MAX_ATTEMPTS` 次错码循环构造：`mfa-terminal-lock-http.test.ts:260`（非终态循环）与 `:319`（触发 owner 熔断）、`actions-http.test.ts:477-486`、`security-workflow-http.test.ts:965`、`:1065`。
+断言面固定为 `data.status`/`data.mfaResult`、`pendingAction.status`、`GET /api/actions` 是否再 surface、`auditLog` 计数，以及「该 actionId 不再有 `mfa_required` 事件」。
+
+并发窗口一律用有界会合点（`makeBarrier`，超时 `BARRIER_TIMEOUT_MS = 3000`）而不是时钟：`task-resume-retry-http.test.ts:200-215`、`concurrent-execution-http.test.ts:286-300`、`cancel-safety-http.test.ts:343-357`、`scheduled-dispatch-http.test.ts:149-154`、`manual-review-http.test.ts:293-313`。
+
+计划执行 claim 的「活动所有者」直接写持久化字段伪造，不靠计时：把 `agentTask.executionClaimedAt` 写成当前时刻让续行的 `claimTaskExecution(..., { staleBefore })` 匹配 0 行（`confirm-continuation-fencing.test.ts:273-278`，随后断言 owner 行未被改写 `:295`），再清空 `executionToken`/`executionClaimedAt` 让同一计划恢复（`:333`）；无所有者分支见 `confirm-continuation-no-owner-fencing.test.ts:195-197`、接管写入 `:264-268`；`manual-review-http.test.ts:243` 用同样方式伪造活动执行者。`tasks-http.test.ts:467-471` 只伪造 `createdAt` 用于排序。
+
+本目录没有 `leaseExpiresAt` 或 `maxRecoveryAttempts` 用例，也没有 `vi.useFakeTimers`：经 HTTP 入口的租约过期与恢复次数上限完全未覆盖。
+唯一注入时钟的是调度器 `tickScheduledTasks(identity, { now: NOW })`（`scheduled-dispatch-http.test.ts:37` 起），以及 `developer-chat-http.test.ts:109` 直接写 `agentSession.activeRunId` 表示活动租约。
+
 ## 常用命令
 
 `pnpm exec vitest run tests/app`
