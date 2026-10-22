@@ -74,8 +74,6 @@ Raw tool payloads stay in the stored `content`/`internalSummary` evidence for th
 ## Known Issues
 
 `lib/db/repositories/agentRun.ts` `synchronizeRunActionInvocations`/`finalizeReceiptedAgentRun` still enumerate settled statuses inline without `locked`, so a locked row never settles its `ToolInvocation` (it stays `waiting_verification`) and a run whose only remaining row is locked can be finalized without reconciliation. This layer compensates (`closedActions` prevents the decision prompt) but those lists belong to `TERMINAL_ACTION_STATUSES` in `lib/`.
-`../transcript-activity.ts` re-projects `PendingAction.resultJson.summary` without an `isInternalDiagnostic` guard — a second public-projection path outside this node.
-`../confirmation/gated-execution.ts` puts `auth.blockReason` into `GatedToolOutcome.error` with no `errorCode`, and `../turns/events.ts` publishes a non-actionId deny payload's raw text as a `security_event` `message`.
 
 ## Routing Table
 
