@@ -30,6 +30,18 @@ Guards on that re-dispatch: `findRepresentedAction` over `['pending','awaiting_m
 `workflow-invocations.ts:82` derives the child invocation status: `waiting_verification` when the parked action requires MFA, else `waiting_confirmation`, else `completed`/`failed`.
 The confirmation-decision path that resumes a parked node from `actionId` (`lifecycle.resumePlan`) lives outside this node in `../workflows/action-continuation.ts:24` (`resumeTaskForAction`, l.41).
 
+## Recovery / lease entry points (test-callable)
+
+The barrel is incomplete: `recoverOwnedRun`, `recoverStandaloneWorkflowRun`, `resumeOriginalRunTask`, `runWorkflowInvocation`, `recoverTurnIntentControl` and `verifiedAuthorizationInput` are imported by module path (e.g. `@/agent/durable/service`), never from `./index`.
+Lease acquisition lives outside this directory: every recovery path calls `beginAgentRun(...)` (`../../lib/db/repositories/agentRun.ts:35`); `beginRun(input: BeginRunInput): Promise<BegunAgentRun>` (`journal.ts:26`) is the thin wrapper.
+Takeover contract: `beginAgentRun({ sessionId, userId, existingRunId, recover: true, requestId?, requestDigest?, requestJson?, expectedRevision? })` retires a stale `activeRunId`, increments `recoveryAttempts`, CASes the session lease and returns `lease === undefined` while another live run owns the session.
+`recoverOwnedRun(runId: string, identity: RunIdentity, invocationId?: string, deps: ContinuationDependencies = {}): Promise<RunRecoveryResponse>` (`service.ts:103`) — the crash/restart-resume entry; it acquires the lease itself (`:164-166`) and throws `CONFLICT` 'This agent run is already owned by a live execution' (`:167`) when the takeover loses.
+`recoverStandaloneWorkflowRun(run: AgentRun, onEvent?, invocationId?): Promise<StandaloneWorkflowRecovery>` (`standalone-workflow.ts:125`) — lease at `:158-160`, `CONFLICT` 'Standalone recovery was already claimed' at `:160`.
+`recoverInvocation(lease: AgentRunLease, invocationId: string, port: InvocationRecoveryPort, capabilities: RetryPolicyCapabilities = {}): Promise<InvocationRecoveryOutcome>` (`recovery.ts:63`) requires a lease it does NOT acquire (`verifyAgentRunLease` `:64`) and never authorizes or replays a write.
+`wakeRecoverableRuns(wake: (runId: string) => Promise<void>, limit = 100): Promise<number>` (`recovery.ts:43`) is discovery only (no lease, no state change); `inspectRunRecovery(runId, userId, capabilities = {})` (`recovery.ts:14`) and `readRunPresentation(runId, userId, afterSequence = 0, limit = 100)` (`recovery.ts:30`) are read-only.
+`continueDurableRun(run, journal, invocations, deps = {})` (`continuation.ts:111`) and `restoreWaitingCheckpoint(run, journal, invocations, deps = {})` (`continuation.ts:36`) require an already-held lease via the `journal`; `ContinuationDependencies = { config?: AppConfig; provider?: ModelRuntime; onEvent? }` (`:104-108`).
+`resumeOriginalRunTask(runId, parentInvocationId, runtimeFence, onPlanUpdate?)` (`workflow-resumption.ts:15`) and `runWorkflowInvocation(context, execute)` (`workflow-invocations.ts:22`) are the graph-resume primitives; `recoverTurnIntentControl(invocation, run, journal, config)` (`control-recovery.ts:15`) replays a `describe_turn` read; `verifiedAuthorizationInput(run, input)` (`authorized-checkpoint.ts:14`) gates an authorization-result resume.
+
 ## Persistence boundary
 
 This directory performs NO write to `pendingAction` or `mfaChallenge` — it only reads them (`continuation.ts:49`, `service.ts:86-90`, `service.ts:216`, `standalone-workflow.ts:79-80`, `standalone-workflow.ts:175-176`, `workflow-invocations.ts:36-37`/`:62-63`, `authorized-checkpoint.ts:17`).
