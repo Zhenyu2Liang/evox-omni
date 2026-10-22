@@ -114,7 +114,7 @@ replays its recorded model call. The stored intent shape is `ConversationIntent`
 
 ### `subscribe_investment` 申购聚合
 
-对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层无需改动——`subscribe_investment` 照常以 `{ productId, amount }` 转发给 `banking.investment.subscribeInvestment`；成功摘要仍按 `InvestResult.amount` 与可选 `newBalance` 渲染。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
+对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓份额与本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层以 `{ productId, amount }`（金额规范成两位小数）转发给 `banking.investment.subscribeInvestment`，并把 `opts.idempotencyKey` 转发为执行身份。申购结果本身不带成交净值，`runSubscribeInvestment` 因此以一次只读的 `banking.investment.listHoldings()` 回读该持仓最近一笔 `purchases[].netValuePerUnit` / `netValueDate` 作为**展示**用成交净值；这次回读失败或被重放的旧记录没有该字段时，摘要写「历史数据不足」，绝不把已成交的申购判为失败或凭空补一个净值。摘要字段为已认购金额、持仓号、`申购份额`、`成交净值`（含净值日期）、`持仓总份额`、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
 
 ## Parameters and SDK errors
 
