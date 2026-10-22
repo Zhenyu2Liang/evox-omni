@@ -19,6 +19,23 @@ Turn a live agent run into durable, replayable evidence — no banking effect is
 Branch decision after restoring the latest completed model request (`continuation.ts:240-310`): `calls = assistant.content.filter(type==='toolCall')` (l.251); rejected dialogue call → `continueInContext`/server reply (l.294-296); `calls.length === 0` (l.297-301) rebuilds the grounded presentation and then awaits `continueDeclaredWrites(runtime, buffer, () => Date.now(), { config })` (the durable mirror of the live-prompt continuation); `submit_plan` present → server reply (l.302-303); otherwise `continueInContext` (l.304); `checkpointStage==='input'` → `runtime.agent.prompt(request.message!)` (l.308); else `continueInContext` (l.309).
 `continuation.ts:310` gates an extra provider generation on `config.llmMode === 'live'` before `repairConversationalReply(...)` — the existing precedent for a live-only extra request. `continueDeclaredWrites` applies the same live-only gate internally (`pendingDeclaredWrites` returns `undefined` unless `config?.llmMode === 'live'`).
 
+## Graph resume from a recovered run
+
+This directory never walks a plan itself: there is NO `executor.runPlan`, `lifecycle.resumePlan`, `lifecycle.retryPlan`, `resumeTaskForAction`, `retryTask` or `buildPlanDeps` call anywhere under `agent/durable/`. Exactly two plan resumes exist, both through `resumeTask` from `../task-control` (`../workflows/controls.ts:26`), i.e. `executor.runPlan(..., { explicitResume: true })` in the workflows node.
+`workflow-resumption.ts` `resumeOriginalRunTask(runId, parentInvocationId, runtimeFence, onPlanUpdate?)` (l.15-16) resumes the graph behind a PI `submit_plan` invocation; its `runTool` is `executeGatedTool` (l.50-53), not `buildPlanDeps`.
+`standalone-workflow.ts` `recoverStandaloneWorkflowRun` resumes the `workflow_only` graph the same way (l.165-168); before that it refuses anything but `pending`/`running` (l.104, l.144) — a `waiting_confirmation`/`paused`/`failed` standalone task is never resumed here, it returns "The saved workflow remains at its original human or terminal control decision."
+`resumeOriginalRunTask` skips the resume for `paused`/`cancelled`/`success` and only reads the plan (l.47-48); `waiting_confirmation` is deliberately NOT in that bypass list, so a parked PI plan IS re-walked.
+Because resume re-enters `resumeTask`, a parked node's tool IS dispatched again through `executeGatedTool` → `runWorkflowInvocation` → `registry.executeDirect`; it is never a pre-decided result handed to the executor.
+Guards on that re-dispatch: `findRepresentedAction` over `['pending','awaiting_mfa','confirmed','executed','needs_reconciliation']` returns the stored outcome or re-pending instead of a second charge (`../confirmation/gated-execution.ts:19-27`, `:41-60`), `idempotencyKey: nodeExecutionKey(taskId, nodeId)` (`:72-73`), and `runWorkflowInvocation`'s completed-invocation replay with receipt digest verification (`workflow-invocations.ts:32-52`).
+`workflow-invocations.ts:82` derives the child invocation status: `waiting_verification` when the parked action requires MFA, else `waiting_confirmation`, else `completed`/`failed`.
+The confirmation-decision path that resumes a parked node from `actionId` (`lifecycle.resumePlan`) lives outside this node in `../workflows/action-continuation.ts:24` (`resumeTaskForAction`, l.41).
+
+## Persistence boundary
+
+This directory performs NO write to `pendingAction` or `mfaChallenge` — it only reads them (`continuation.ts:49`, `service.ts:86-90`, `service.ts:216`, `standalone-workflow.ts:79-80`, `standalone-workflow.ts:175-176`, `workflow-invocations.ts:36-37`/`:62-63`, `authorized-checkpoint.ts:17`).
+The status transitions live in `../confirmation/gated-execution.ts:49-53` (CAS `from: ['confirmed']`) and `../confirmation-recovery.ts settlePendingAction` (l.251: CAS only when `from` is supplied, otherwise the unconditional `setPendingActionStatus`), with the challenge written by `security/mfa.ts` and the gateway's own CAS (`security/security-gateway.ts:922-932`).
+`service.ts:159-161` returns early for a run already in `waiting_confirmation`/`waiting_verification` ("The original confirmation or verification is still required.") — recovery does not clear a live parking.
+
 ## Bounds and budgets
 
 All bounds are enforced by persisted DB counters, not by in-memory loop constants. There is no `MAX_`/`bounded`/`rounds`/`nudge`/`followup`/`re-prompt` identifier anywhere in this directory.
