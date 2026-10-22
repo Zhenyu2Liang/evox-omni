@@ -100,7 +100,7 @@ export async function restoreWaitingCheckpoint(run: AgentRun, journal: AgentRunJ
       if (runtimeRequestDigest(call.name, safeParse(invocation.argsJson, null)) !== runtimeRequestDigest(call.name, call.arguments)) {
         throw new AppError('CONFLICT', 'The waiting checkpoint call arguments do not match their recorded presentation.');
       }
-      const result = safeParse<{ data?: JsonValue; summary?: string }>(invocation.resultJson, {});
+      const result = safeParse<{ data?: JsonValue; summary?: string; internalSummary?: string }>(invocation.resultJson, {});
       const isWaiting = invocation.status !== 'completed';
       const action = isWaiting ? actionsByInvocation.get(invocation.id) : undefined;
       if (isWaiting && (!action || action.toolName !== call.name)) throw new AppError('CONFLICT', 'The waiting call has no original owned authorization.');
@@ -116,7 +116,7 @@ export async function restoreWaitingCheckpoint(run: AgentRun, journal: AgentRunJ
       // The Pi-internal result keeps the model/classifier-facing text (nothing was executed, so
       // `isError` stays true); only the public presentation below is closed.
       const message: ToolResultMessage = { role: 'toolResult', toolCallId: call.id, toolName: call.name,
-        content: [{ type: 'text', text: result.summary ?? summary }], details: result.data, isError: isWaiting,
+        content: [{ type: 'text', text: result.summary ?? result.internalSummary ?? summary }], details: result.data, isError: isWaiting,
         timestamp: invocation.finishedAt?.getTime() ?? Date.now() };
       snapshot.agentState.messages = withRealToolResult(snapshot.agentState.messages, message, source);
       await handler({ type: 'tool_execution_start', toolCallId: call.id, toolName: call.name, args: call.arguments });
