@@ -7,7 +7,7 @@
 拥有 planner 的持久化工作流控制：暂停、恢复、重试、取消，人工决策后的续跑，节点/计划执行租约与带提交校验的持久化。
 模块与具体工具无关：所有工具都经泛型 `TaskRunTool(toolName, args, context)` 透传，本目录不出现任何具体银行工具名。
 本目录不存在刷卡/消费/支付/扣款能力、辅助函数、类型或场景。
-`parked-actions.ts` 拥有「计划停靠的待确认操作已经结清」的唯一守卫：停靠节点把 `{ pendingActionId }` 存在 `AgentTaskNode.output` 里（没有独立列），计划快照本身无法区分开放决策与已结清操作，因此守卫在任何控制重新激活计划之前读取持久化的 `PendingAction.status`。
+`parked-actions.ts` 拥有「计划停靠的待确认操作已经结清」的唯一守卫：停靠节点把 `{ pendingActionId }` 存在 `AgentTaskNode.output` 里（没有独立列），计划快照本身无法区分开放决策与已结清操作，因此守卫先于任何控制重新激活计划读取持久化的 `PendingAction.status`。
 
 ## API Surface
 
@@ -49,19 +49,19 @@
 共享词表把这条规则写死：`isLegalActionSourceStatus` 对 `locked` 恒为 false（任何方向都不合法），`isClaimableActionStatus` 不含 `locked`，`mayPromptForDecision` 只对开放状态返回 true。
 工作流执行端口也不会为同一节点再铸新动作：`agent/confirmation/gated-execution.ts` `findRepresentedAction` 按 `ALL_ACTION_STATUSES` 查同一 `(taskId, nodeId)` 的既有操作，`executed`/`needs_reconciliation` 直接复用留痕结果，其余任何状态（含 `locked`）返回 `requiresConfirmation` 与该 `pendingActionId` 而不调用网关。
 安全中心解锁只重置 MFA 挑战行（`lib/db/repositories/pendingAction.ts` `renewLockedMfaChallenges` 只匹配 `action.status = 'awaiting_mfa'`），不写操作状态，所以 `locked` 动作仍然是终态。
-解锁之后旧操作不会自动执行：用户重新发起请求并重新确认，得到的是一个新操作。
+解锁后旧操作不会自动执行：用户重新发起请求并重新确认，得到的是一个新操作。
 
 ## 拒绝契约：结构化、只读、不回显
 
 `resumeTask` 与 `retryTask` 的执行顺序是 `loadOwnedTask` → `assertNoOpenManualReview` → `toTaskPlan` → `assertParkedActionsNotTerminal(plan)` → `claimTaskStatus` → `claimTaskExecution`；行只映射一次。
-停靠决策检查必须在第一次状态占用之前：拒绝时持久化计划状态原样保留（不翻 `running`、不走执行器、不重驱已结清节点、不取租约、不跑工具）。
+停靠决策检查必须先于第一次状态占用：拒绝时持久化计划状态原样保留（不翻 `running`、不走执行器、不重驱已结清节点、不取租约、不跑工具）。
 `assertParkedActionsNotTerminal` 遍历 `parkedActionIds(plan)`（去重、按节点顺序），对每个 id 读 `getPendingActionOwnership`；行缺失或不属终态时跳过，遇到终态立即抛结构化 `AppError`。
 拒绝映射：`locked` → code `MFA_LOCKED` + `chat.error.actionLocked`；`needs_reconciliation` → code `CONFLICT` + `chat.error.unknownOutcome`；其它终态（`executed`/`failed`/`cancelled`）→ code `CONFLICT` + `chat.error.stateChanged`。
 公开 `message` 永远是干净的业务句，`{ taskId, actionId, status }` 只进 `detail`，作为内部诊断。
 文案来自既有目录（`createTranslator(DEFAULT_LOCALE)`），本目录不新增 i18n 键。
 非 `INTERNAL` 的 code 按 `app/api/_lib/http.ts#mapAppError` 原样出网（`MFA_LOCKED` → 423，`CONFLICT` → 409），`detail` 永不进入响应体。
 守卫是只读的：不写状态、不占用、不执行、不重放、不创建任何授权。
-拒绝发生在 `agent/index.ts` 的 `synchronizeScheduledWorkflow` 之前，因此被拒绝的控制不会拿过期计划去重新同步定时工作流。
+拒绝先于 `agent/index.ts` 的 `synchronizeScheduledWorkflow` 发生，因此被拒绝的控制不会拿过期计划去重新同步定时工作流。
 
 ## 定位停靠节点：复用既有读取
 
@@ -86,7 +86,7 @@
 执行器模式的写入一律通过计划/节点 token 提交校验证明所有权；只有显式的 `control` 模式意图可以在没有租约时写入。
 取消与取消后的撤销不可分割：撤销停靠的开放操作与状态变更一起提交，已提交的资金保持结清。
 接管只清除非终态的子节点占用，同时持有父级。
-守卫必须保持 READ-ONLY，并且必须留在第一次状态占用之前；两者任一条被破坏，已结清决策就会被重新驱动。
+守卫必须保持 READ-ONLY，并且必须先于第一次状态占用；两者任一条被破坏，已结清决策就会被重新驱动。
 
 只对停靠节点设闸：没有停靠节点的计划（普通 `pending`/`success` DAG）不受影响，`pause` → `resume` 控制流照常。
 有意保持的边界：
