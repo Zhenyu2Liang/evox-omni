@@ -80,6 +80,30 @@ GREEN 只表示执行策略，不表示没有副作用。
 `../helpers/scenario.ts#handleToolExecutionEnd` 会把 `deny` 阻塞理由发布为 `security_event{kind:'locked'}`，但本目录没有用例断言该事件。
 `MfaCard`/`publicToolError` 的 LOCKED 渲染不属于本目录覆盖范围。
 
+### 锁定路径的可观测面与逐条断言位置
+
+`ScenarioResult` 只有 `text`/`events`/`toolEvents`/`cards`，没有 `status`/`mfaResult`/`code`；
+`../helpers/scenario.ts#decideAndContinue` 在 `auth.ok===false` 时返回 `{events:[], cards:[], text: auth.message}`，
+所以「错码仍有剩余次数」「第三次错码刚锁定」「已锁定后再试」三者只能靠 `text` 字符串区分。
+
+| 断言 | 位置 |
+| --- | --- |
+| 第 1 次错码文案含「验证码错误」 | `test-10-circuit-breaker.test.ts:93` |
+| 第 3 次错码文案含「锁定」 | `test-10-circuit-breaker.test.ts:111`（本目录唯一的锁定人话断言） |
+| `MfaChallenge.status='locked'` 且 `attempts`/`maxAttempts` 为 3 | `test-10-circuit-breaker.test.ts:105-107` |
+| 熔断状态 `locked`/`failures`/`lockedAt` | `test-10-circuit-breaker.test.ts:123-127` |
+| `CIRCUIT_BREAKER_TRIPPED` severity `high`、message 含「锁定」，`MFA_FAILURE` 恰 3 条 | `test-10-circuit-breaker.test.ts:140-151` |
+| `authorizeAction` 返回 `ok:false`/`status:'locked'`/`message` 含「熔断」 | `test-10-circuit-breaker.test.ts:172-174` |
+| 锁定后 `handleToolCall` 返回 `evaluation.blocked` + `decision.kind='deny'` + 无 `action` + 不新增 `PendingAction` | `test-10-circuit-breaker.test.ts:185-188` |
+| 无码确认/验证的文案含「验证码」 | `test-03-transfer-mfa.test.ts:142`、`test-09-investment-mfa.test.ts:157` |
+| 工具错误卡片文本（时间守卫拒绝理由） | `test-17-consumption-time-guard.test.ts:206-210`、`:241-242`、`:324-327` |
+
+本目录没有任何断言涉及 `PendingAction.status='locked'`、`code:'CIRCUIT_OPEN'`、`security_event`（`kind` 或 `message`）、
+`__SECURITY_BLOCK__` 原文、`chat.error.toolFailed`、`chat.error.securityLocked`；`it.each` 仅 `test-17:227` 一处。
+`mock-integration.test.ts:98-105#expectHealthyTurn` 是唯一的「每轮无 `error` 事件且 assistant 文本非空」全局守卫，
+只查非空与无错误，因此错误文案被换成通用兜底、或原始阻塞载荷出现在文本里，都不会被发现。
+渲染层人话与 `__SECURITY_BLOCK__` 泄漏由 `../unit/planner/tool-feedback.test.ts` 与 `../e2e` 覆盖，不在此目录。
+
 ## 虚拟卡家族与消费入账时间
 
 `test-16` 以一次会话走完「申请 → 消费到限额 → 挂失 → 补办 → 继续消费」的 MFA 闸门路径。

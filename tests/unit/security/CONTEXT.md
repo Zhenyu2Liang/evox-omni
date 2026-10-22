@@ -35,6 +35,31 @@
 `tool-diagnostics.test.ts` 渲染 `MfaCard`/`ConfirmationCard` 的 `locked` 状态（`cards.terminal.locked`）、
 `action-contract.test.ts` 与 `action-attention-state.test.ts` 处理 `action_settled` `locked` 与 `MFA_FAILED` 事件。
 
+## 文案改写时必须核对的断言形状
+
+锁定拒绝的 `message` 在本目录只有负例/长度断言，改写文案安全：
+`gateway.test.ts:179/388/442/465`、`authorize-hardening.test.ts:201`、`authorize-concurrency.test.ts:191`、`transfer-limits-concurrency.test.ts:191/289` 均为 `not.toContain(MFA_CODE)`；
+`circuit-breaker-audit.test.ts:84-85`、`circuit-breaker-reset.test.ts:117-118` 只断言 `SecurityEvent.message` 非空。
+
+改写文案、删除 `__SECURITY_BLOCK__` 原文透传或调整工具错误映射时，下列**精确形状**断言会失败，必须同时核对：
+
+- `gateway.test.ts:190` 与 `:538-541`/`:554-557`：`serializeBlockReason`/`parseBlockReason` 的往返对象 `toEqual` 恰好 `{ actionId, decisionKind }` 两键，收窄/加键都会失败。
+- `gateway.test.ts:202-234`：`parseBlockReason` 对无前缀 JSON、缺/空 `actionId`、缺/非法 `decisionKind` 一律 `toBeNull()`；把 deny 载荷改成可解析（返回部分对象）会打破这些用例。
+- `gateway.test.ts:464`、`authorize-hardening.test.ts:262`：熔断分支的 `mfaResult` 必须 `toBeUndefined()`；在 `lockedOutcome` 上补 `'failed'` 会失败。
+- `mfa.test.ts:174-178`/`:227-231`、`mfa-audit.test.ts:131-135`：`verify()` 返回值 `toEqual` 恰好 `{ ok, attemptsLeft, locked }` 三键。
+- `mfa-audit.test.ts:83-91`：`MFA_FAILURE.detail` `toEqual` 恰好 7 键；`circuit-breaker-audit.test.ts:86-90`：熔断 `detail` `toEqual` 恰好 3 键。
+- `gateway.test.ts:173`：四条决策的 `kind` 序列 `['allow','require_confirmation','require_mfa','deny']`。
+- `execution-policy.test.ts:7`：`vi.mock('@/security/circuit-breaker', () => ({ isLocked: ports.locked }))` 只暴露 `isLocked`，`security/execution-policy.ts` 新增任何该模块导入都会失败。
+- `gateway.test.ts:280`、`circuit-breaker-audit.test.ts:177`：锁定态 `blockReason` 必须是字面量 `'HIGH_RISK_BLOCKED'`。
+
+## 本目录不覆盖（负向结论）
+
+- 没有任何断言检查 `__SECURITY_BLOCK__` 字面量（全目录 0 处）；也没有 turn 级 `security_event{kind:'locked', message}` 形状或内容断言（只断言 DB 级 `SecurityEvent` 行：`MFA_FAILURE`/`CIRCUIT_BREAKER_TRIPPED`/`SECURITY_RESET`/`INJECTION_ATTEMPT`）。
+- 没有断言 `decisionKind === 'deny'` 之外的 deny 载荷文本，也没有断言 deny 载荷不含 `actionId`。
+- 没有 `mfa_required` 事件断言，也没有「锁定后不再 surface」的 `GET /api/actions` 断言（那在 `../../app`）。
+- 不调用 `publicToolError`/`publicToolSummary`，不断言 `chat.error.toolFailed` 或 `chat.error.securityLocked`；工具错误映射的唯一覆盖在 `../planner/tool-feedback.test.ts`。
+- 没有网关连续三次错码用例：唯一网关错码用例 `gateway.test.ts:418` 只错一次，`authorizeWithMfa` 的锁定分支未被覆盖。
+
 ## 关键边界
 
 - 小额转账仍需确认。

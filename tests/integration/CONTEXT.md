@@ -50,6 +50,31 @@
 服务端权威文案 `declared_unsubmitted`（`agent/messages/conversation.zh-CN.json`）用 `agent/financial-response.ts#WRITE_LABELS` 把工具名换成中文标签，测试直接写字面量。
 这些套件不需要 `vi.mock`：模型经 `deps.provider` 注入，网关、执行器、SQLite 都是生产实现。
 
+## 终止锁定（locked）、block reason 与错误验证码的覆盖边界
+
+领域 `status: 'locked'` 只在本目录三处断言，全部在 `confirmation-policy.test.ts`：
+`it.each(['needs_reconciliation','failed','cancelled','locked'])`（L187）与 `'a locked RED decision retains its historical MFA requirement without requesting another code'`（L197，`:201` `toMatchObject({ ok:false, status:'locked', tier:'RED', requiresMfa:true })`、`:202` 无 `mfa_required`、`:203` 余额不变）。
+`frontend-followup-fixes.test.ts` 断言的是持久化 `MfaChallenge.status === 'locked'`（L134、L156、L157、L166），不是响应域状态。
+`code: 'CIRCUIT_OPEN'` 只出现在 `confirmation-policy.test.ts`：L75/L87 断言 `/api/security/reset` 返回 `423`，L119/L135 仅把它当开锁前置，不断言该 code。
+
+锁定由两条路径驱动：
+真实三次错误验证码 —— `money-budget.test.ts:206` 三次 `verifyPost` `{ code: '000000' }`（L207 `getState().locked`、L211 `JSON.stringify(outcome)` 含「熔断」）；`frontend-followup-fixes.test.ts` 的 `exhaust()`（L31-33）。
+进程内 `recordFailure` ×3 —— `confirmation-policy.test.ts` 的 `lock()`（L40-43）、`refactor-security-runtime.test.ts:47-61` 的第三次 `recordRiskSignal` 链路（`:60` 仅一条 `CIRCUIT_BREAKER_TRIPPED`）。
+
+唯一与锁定相关的用户可见文案断言是 `money-budget.test.ts:211` 的「熔断」子串。
+本目录没有任何 `chat.error.toolFailed`、`toolFailed`、`publicToolError`、`publicToolSummary`、`__SECURITY_BLOCK__` 或 `security_event` 的断言（这些只在 `tests/unit/planner/`、`tests/unit/security/` 与 `tests/app/`）。
+`security_event` 的形状只在 `tests/app/chat-http.test.ts:295-299` 与 `tests/app/malicious-input-http.test.ts:206-208` 断言（`kind: 'injection'`），且都不断言 `message`。
+
+被门禁拒绝的写入断言为 `toolEvent.status === 'blocked'`，不检查 block reason 文本：
+`conversational-turns.test.ts:116/127/159/170/323/340/449`、`decision-guidance.test.ts:60`、`conversation-recovery.test.ts:114/189`、`live-complete-plan.test.ts:36`、`confirmation-policy.test.ts` 无此类断言。
+`tests/helpers/scenario.ts:288-289` 在 `deny` 或未知 block reason 时把原始 payload 作为 `security_event{kind:'locked'}.message` 发出（与 `agent/turns/events.ts:73` 同构），但本目录没有用例经该 helper 驱动网关，故该映射在此无覆盖。
+
+错误验证码的断言（均不改动资金）：
+`confirmation-policy.test.ts:174-176` 客户端把 `message: '验证码错误'` 透传为 `error` 事件；`decision-guidance.test.ts:216-217`（`ok === false` + 余额不变）；`recovery-authorization.test.ts:101-102`；
+`confirmed-write-authority.test.ts:80` `attempts === 1`、`:84` 重新 `confirm` 后 challenge 行完全不变、`:102` `assertNoCommit(..., /verification expired, was consumed or no longer matches this command/)` 依赖该英文原文；
+`frontend-followup-fixes.test.ts:140` `{ ok:false, locked:false, attemptsLeft: 2 }` 是本目录唯一的 `attemptsLeft` 断言；`:166` `{ status:'locked', attempts: 3 }`。
+`confirmation-liveness.test.ts:285` 是本目录唯一的 `mfaResult` 断言（`'success'`）。
+
 ## 断言约束
 
 - 声明与任务图来自结构化输入，不从原句正则补全。
