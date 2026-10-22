@@ -307,6 +307,7 @@ const CARDS = [
     creditLimitMinor: null,
     availableLimitMinor: null,
     monthlyLimitMinor: null,
+    linkedAccountId: ACCT_CHECKING,
   },
   {
     id: CARD_VIRTUAL,
