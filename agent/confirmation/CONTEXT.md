@@ -45,3 +45,42 @@ Two distinct lock messages exist in `@/security/security-gateway`: the session-c
 - `components/chat/cards/MfaCard.tsx:65-71` renders the reason line only for `terminal === 'failed'`; a `locked` card shows `cards.terminal.locked` 「已锁定」 and exposes the raw message in developer mode only.
 
 At the HTTP edge (`app/api/actions/[id]/verify/route.ts`) a locked verification reports `status: 'locked'`, `requiresMfa: true` (because `tier === 'RED'`) and `mfaResult: 'failed'` — the ternary maps both `'awaiting_mfa'` and `'locked'` to `'failed'`, so a terminal lock is reported as a failed verification.
+
+## Resuming a parked plan node after a human decision
+
+Chain (all inside this directory):
+`../confirmation.ts:21-39` `authorizeAndExecute(actionId, opts?, mfaCode?)` → `gateway.authorizeAction` → `blockedOutcome` when `!auth.ok` → `executeAuthorizedAction` (`authorized-execution.ts:22`).
+`executeAuthorizedAction` lands the decided side effect, then resumes the plan, then narrates:
+`buildConfirmFence(link?.taskId, link?.nodeId, actionId, {…})` (`:39`) → `registry.executeDirect(action.toolName, action.args, { idempotencyKey, fence, … })` (`:49-53`) → `decideConvergence(current, { completion, sideEffectCommitted })` (`:59`) → `settlePendingAction({ actionId, status, result, audit, dedupeKey })` (`:61-72`) → `gateway.recordActionResult` (`:75`) → `resumeOwningPlan(action, result, identity.userId, opts)` (`:80`) → `resumeTurn({ … toolName: link?.taskId ? 'submit_plan' : action.toolName, … })` (`:81-89`).
+`plan-continuation.ts:13-37` `resumeOwningPlan(action: PendingAction, result: ToolExecutionResult, userId: string, opts?: ConfirmOptions): Promise<AgentStreamEvent[]>` — `resumeTaskForAction(action.sessionId, action.id, { ok: result.ok, data: result.data, summary: result.summary, error: result.error }, { runTool: … })` (`:17-26`), `synchronizeScheduledWorkflow(resumed.plan.id)` (`:28`), one `plan_update` event (`:29`). Returns `[]` when `resumed === undefined` (a standalone action has no plan link); any failure becomes an `error` event 「任务计划恢复失败：…」 (`:33`) and never throws.
+
+Only two plan-resume call sites exist in this directory: `resumeTaskForAction` at `plan-continuation.ts:17` and `findTaskByPendingAction` at `outcomes.ts:25` (the cancelled-plan guard). No `lifecycle.resumePlan` / `executor.runPlan` / `lifecycle.retryPlan` / `resumeTask` / `retryTask` is called here — the chain continues in `../workflows/action-continuation.ts:24-48` (claim → `lifecycle.resumePlan(toTaskPlan(row), { nodeId: located.nodeId, outcome }, planDeps, { now })` at `:41` → `sweepCancelledPlan` → `releaseTaskExecution` + `settlePlanFromNodes`), with `recordDecidedNodeFenced` (`../task-fencing.ts:217`) recording the single decided node when the plan claim is held elsewhere.
+
+The parked node's own tool is NOT re-invoked by the planner: `planner/lifecycle.ts:322-367` `resumePlan` applies the given outcome through `settleToolNode` (`:340`), persists that node (`:344-345`), and only then calls `runPlan` (`:366`) so dependents run; a re-park returns the snapshot early (`:362`).
+A resumed-walk outcome carries `{ ok, data, summary, error }` only — `plan-continuation.ts:19` drops `requiresConfirmation`/`pendingActionId`, so a DOWNSTREAM node that gets gated during the continuation settles `failed` (`planner/node-outcome.ts:30`) with the raw block reason as `error` and never re-parks in `waiting_confirmation`.
+
+## actionId ↔ plan/node matching
+
+The authoritative link is the `PendingAction` row's OWN `taskId`/`nodeId` columns (persisted at creation, `security/security-gateway.ts:704-707`), read by `getPendingActionPlanLink(actionId)` (`lib/db/repositories/pendingAction.ts:304-312`, `select: { id, taskId, nodeId }`). `TaskNodeOutput.pendingActionId` / `readPendingActionId` (`agent/workflows/contracts.ts:4-10`) is the node-side echo, not the lookup key.
+Resolvers: `findTaskByPendingAction(sessionId, actionId): Promise<{ taskId: string; nodeId: string } | undefined>` (`../workflows/action-continuation.ts:14-21`, also re-checking `task.sessionId === sessionId`); the reverse direction is `findRepresentedAction(taskId, nodeId)` (`gated-execution.ts:24-27`, `listPendingActionsByTask` + `rows.find(row => row.nodeId === nodeId)`).
+Nothing in this directory takes an `actionId` and a `nodeId` as a pair; the only such function is `buildConfirmFence(taskId, nodeId, actionId, expected)` (`../execution-fence.ts:210-215`), called with `link?.taskId, link?.nodeId, actionId` (`authorized-execution.ts:39`, `confirmation-recovery.ts:491`), and `ledgerKeyForAction({ id, taskId, nodeId })` (`lib/ledger.ts:63-73`).
+
+## PendingAction writes reachable from here
+
+| site | method | where | data | kind |
+|---|---|---|---|---|
+| `liveness.ts:17` → repo `:210-221` `claimPendingActionLease` | `updateMany` | `{ id, status: { in: ['pending','awaiting_mfa'] }, OR: [{ executionLeaseOwner: null }, { executionLeaseExpiresAt: { lte: now } }] }` | lease owner + expiry | CAS on status+lease, no status change |
+| `liveness.ts:45` → repo `:235-238` `clearPendingActionLease` | `updateMany` | `{ id, ...(owner ? { executionLeaseOwner: owner } : {}) }` | lease → `null` | CAS on owner |
+| `gated-execution.ts:49`, `authorized-execution.ts:61` → `confirmation-recovery.ts:251` `settlePendingAction` | `$transaction` (`:252`) wrapping `claimPendingAction` (`:254-257`) or `setPendingActionStatus` (`:260`) + `resultJson` update (`:263-266`) | CAS: `{ id, status: { in: from }, userId?, sessionId? }` (`repo:262-270`); unconditional `{ id }` | `status`, `resultJson` | CAS when `from` given, else unconditional (`repo:186`); both inside one tx |
+| `authorized-execution.ts:75` / `confirmation-recovery.ts:59`-style `gateway.recordActionResult` → `security-gateway.ts:1218-1220` → repo `:186` | `update` | `{ id }` | `status` | UNCONDITIONAL |
+| `security-gateway.ts:1162-1168` YELLOW claim | `updateMany` (own tx when `to === 'confirmed'`, `repo:258-260`) | `{ id, status: { in: ['pending'] }, userId, sessionId }` | `status: 'confirmed'` | CAS |
+| `security-gateway.ts:1131-1134` policy upgrade | `updateMany` | `{ id, userId, sessionId, status: { in: ['pending','awaiting_mfa'] } }` | `riskLevel:'RED', requiresMfa:true, status:'awaiting_mfa'` | CAS |
+| `security-gateway.ts:817-820` `persistLockedAction` (called `:1148`, `:914`) | `updateMany` via `claimPendingAction` | `{ id, status: { in: ['pending','awaiting_mfa'] } }` | `status: 'locked'` | CAS |
+| `security-gateway.ts:922-932` verified-MFA claim | `updateMany` inside `prisma.$transaction` | `{ id, status: { in: ['awaiting_mfa','pending'] }, userId, sessionId }` | `status: 'confirmed'` | CAS |
+| `security-gateway.ts:940` plan-cancelled reverse | `update` inside the same tx | `{ id: row.id }` | `status: 'cancelled'` | UNCONDITIONAL |
+| `security-gateway.ts:993-1002` transfer claim | `updateMany` inside `prisma.$transaction` (`:992`) | `{ id, status: { in: ['pending'] }, userId, sessionId }` | `status: 'confirmed'` | CAS |
+| `security-gateway.ts:1014` transfer plan-cancelled reverse | `update` inside the same tx | `{ id: row.id }` | `status: 'cancelled'` | UNCONDITIONAL |
+| `security-gateway.ts:1029-1034` transfer escalation | `update` inside the same tx | `{ id: row.id }` | `status:'awaiting_mfa', riskLevel:'RED', requiresMfa:true, summaryJson:…` | UNCONDITIONAL |
+| `security-gateway.ts:1197-1203` `cancelAction` | `updateMany` via `claimPendingAction` | `{ id, status: { in: ['pending','awaiting_mfa'] }, userId, sessionId }` | `status: 'cancelled'` | CAS |
+
+`security-gateway.ts:993` also calls `assertActionMayStart` (`repo:275-281`), an identity-preserving `updateMany({ where: { id: actionId }, data: { id: actionId } })` taken purely for SQLite's writer slot. Not reachable from here: `revokePendingActionsByTask` (bulk plan cancel, `repo:169-179`).
