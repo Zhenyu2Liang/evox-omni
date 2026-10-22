@@ -183,6 +183,10 @@ model InvestmentProduct {
   termDays     Int
   minAmountMinor BigInt @map("min_amount_minor")
   description  String?
+  // Latest SIMULATED net value per unit: canonical decimal TEXT, at most 4 fractional digits (e.g. "1.0234"). NULL when no net value is published.
+  latestNetValuePerUnit String?   @map("latest_net_value_per_unit")
+  // Business date (UTC+08:00) the published net value applies to.
+  latestNetValueDate    DateTime? @map("latest_net_value_date")
 
   holdings InvestmentHolding[]
 }
@@ -191,8 +195,12 @@ model InvestmentHolding {
   id          String   @id @default(cuid())
   userId      String
   productId   String
-  principalAmountMinor BigInt @map("principal_amount_minor")
+  principalAmountMinor BigInt @map("principal_amount_minor") // REMAINING cost basis (remaining principal) after partial redemptions.
   estimatedMarketValue String? @map("estimated_market_value") // Exact CNY valuation, before settlement rounding.
+  // Current held SHARES: canonical decimal TEXT, at most 6 fractional digits (e.g. "1960.784314"). NULL for a legacy holding whose shares have not been derived yet.
+  shares              String?
+  // REALIZED profit already booked by redemptions, CNY cents (may be negative). Cumulative profit = realized + unrealized.
+  realizedProfitMinor BigInt  @default(0) @map("realized_profit_minor")
   subscribeResult String? // Original SDK purchase outcome, persisted in the purchase transaction.
   boughtAt    DateTime @default(now())
   status      String   @default("HOLDING") // "HOLDING" | "REDEEMED"
