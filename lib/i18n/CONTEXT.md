@@ -42,6 +42,19 @@
 例如部分赎回策略值 `部分赎回（本金 ¥…／共计 ¥…）` 内嵌金额，保持原样显示，不得添加正则或模式匹配。
 完全赎回策略值 `全部赎回该笔持仓` 映射到 `chat.value.fullRedemption`。
 
+## 翻译查找与插值（`shared.ts`）
+
+目录装载：`shared.ts:1-8` 只静态 import 本目录 `messages/` 下的 8 个 JSON（`app`/`chat`/`business`/`pages` × `zh-CN`/`en`）。
+`agent/messages/*.json`（服务端叙述模板）与 `security/messages/mfa.zh-CN.json` 是彼此独立的候选文案目录，本目录从不读取，它们的键也不在本目录词表内。
+合并方式：`english`（`shared.ts:15`）是四份 en 目录的对象展开；`messages`（`:19-22`）按 locale 展开四份目录——键是扁平字符串、没有命名空间，重名时后展开的 `pages` 覆盖前者。
+`MessageKey`（`:16`）= `keyof typeof english`，即键集合以**英文目录**为权威；`isMessageKey`（`:25-27`）也只在 `english` 上 `Object.hasOwn`。
+`resolveLocale`（`:30-32`）：只有 `'en'` 得到 en，其余任何值（含 `undefined`、大小写变体）都回退 `DEFAULT_LOCALE`（`:12` = `'zh-CN'`）；这是唯一的回退层，`server.ts:8` 与 `LocaleProvider.tsx:37` 都经它。
+插值（`translate`，`:35-39`）：单花括号 `{name}`，正则 `/\{([A-Za-z][A-Za-z0-9_]*)\}/g`。
+占位符名首字符必须是字母，后续只能是字母/数字/下划线；`{{name}}` 不匹配（双括号内首字符是 `{`），会原样输出，因此目录里必须写 `{count}` 而非 `{{count}}`。
+`params` 中没有该名时占位符原样保留（`:37` 返回 `placeholder`）；`params` 值经 `String()` 转换，金额必须以已格式化字符串传入。
+缺失键：`translate` 直接做 `messages[locale][key].replace(...)`，键不存在时抛 `TypeError`（对 `undefined` 调 `replace`），**没有**键级回退、不返回键名、不返回空串；`Record<MessageKey, string>` 的类型只是假设，运行期不校验。
+因此新增键必须同时写进 en 与 zh-CN 目录（否则类型或运行期失败），中英文键顺序在四份文件中保持一致便于对照。
+
 ## 修改约束
 
 - 默认 `zh-CN`，即使浏览器偏好英文；仅 `en` 选择英文。
