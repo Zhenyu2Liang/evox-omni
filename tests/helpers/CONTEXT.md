@@ -10,7 +10,7 @@
 | `faux-agent.ts` | 原始 Pi Agent 与脚本模型 |
 | `scenario.ts` | 网关和工具层的两阶段场景 |
 | `scripted-provider.ts` | 注入生产运行入口的模型响应 |
-| `prisma-cli.ts` | 客户端准备、隔离库清理与命令诊断 |
+| `prisma-cli.ts` | 客户端准备、隔离库清理与命令诊断（`cliCommand`/`prismaCliEnv`/`resolvePrismaBin`/`resolveRepoRoot`/`resolveTsxBin`/`SCHEMA_ENGINE_RUST_LOG`/`CliInvocation` 由 `lib/prisma-cli-env` 再导出，`prisma-cli.ts:21`–`:29`） |
 | `restart-process.ts`、`standalone-restart-process.ts` | 独立进程恢复探针 |
 | `write-failure.ts` | 保留真实事务的写入失败注入 |
 | `locked-action.ts` | 终止锁定用例的 RED/YELLOW 计划动作播种、网关验证码阶梯与只读探针 |
@@ -28,6 +28,7 @@
 `faux-agent` 和 `scenario` 验证网关、工具与 SDK。
 它们不经过生产的声明、运行准入与展示流程。
 辅助函数生成的结果说明不是模型稳定性证据。
+`buildFauxAgent` 的 `FauxAgentOptions.registerModel`（`faux-agent.ts:64`）是无人读取的死选项：构造函数总是注册 faux provider。
 
 验证生产入口时，使用 `scriptedProvider` 注入模型。
 它通过真实 `describe_turn` 声明当前目的与业务序列。
@@ -53,14 +54,15 @@
 ## scenario.ts 的导出面
 
 `scenario.ts` 只导出这些符号（没有 `chat`/`post`/`getActions`/`verify` 之类的方法对象，也没有可控假时钟）：
-`runTurn({sessionId, message, agent})` → `ScenarioResult`（`scenario.ts:403`）、
-`confirmAction(agent, actionId)`（`scenario.ts:558`）、`verifyAction(agent, actionId, code)`（`scenario.ts:563`）、
-`cancelAction(agent, actionId)`（`scenario.ts:572`）、`newSessionId(prefix)`（`scenario.ts:600`）、
-`collectEvents(agent)`（`scenario.ts:605`）、`toolEventsOf(res, toolName)`（`scenario.ts:612`）、
-`cardsOfType(res, type)`（`scenario.ts:616`），以及类型 `ScenarioResult`（`scenario.ts:56`）、`RunTurnInput`（`scenario.ts:76`）。
+`runTurn({sessionId, message, agent})` → `ScenarioResult`（`scenario.ts:422`）、
+`confirmAction(agent, actionId)`（`scenario.ts:577`）、`verifyAction(agent, actionId, code)`（`scenario.ts:582`）、
+`cancelAction(agent, actionId)`（`scenario.ts:591`）、`newSessionId(prefix = 'sess')`（`scenario.ts:619`）、
+`collectEvents(agent)`（`scenario.ts:624`）、`toolEventsOf(res, toolName)`（`scenario.ts:631`）、
+`cardsOfType(res, type)`（`scenario.ts:635`），以及类型 `ScenarioResult`（`scenario.ts:57`）、`RunTurnInput`（`scenario.ts:77`）。
 `ScenarioResult` 字段：`sessionId`/`events`/`text`/`toolEvents`/`cards`，可选 `confirmation`/`mfa`/`plan`/`error`。
-决策面直接调 `security.gateway.securityGateway.authorizeAction`（`scenario.ts:495`），非 ok（`awaiting_mfa`/`locked`）时返回
-`{events: [], text: auth.message, ...}` 且不执行（`scenario.ts:508`）；决策失败因此没有事件，只有 `text`。
+决策面直接调 `security.gateway.securityGateway.authorizeAction`（`scenario.ts:522`/`:523`），非 ok（`awaiting_mfa`/`locked`）时返回
+`{events: [], text: auth.message, ...}` 且不执行（`scenario.ts:528`）；决策失败因此没有事件，只有 `text`。
+`runTurn` 强制 `agent.sessionId === input.sessionId`，否则抛 `AppError('SECURITY_DENIED')`（`scenario.ts:424`）。
 时限用 `demoNow()`（`lib/clock.ts:14`，钉死 `DEMO_NOW`）只作事件时间戳，没有定时器与时钟推进。
 
 `confirmAction`/`verifyAction` 共用 `decideAndContinue`（`scenario.ts:514`）：
@@ -69,11 +71,26 @@
 若 faux 脚本已耗尽，先补一条事实叙述（`narrationFor`，`scenario.ts:503`），否则续接会因空队列报错。
 所以脚本不必为决策后的叙述预留步骤。
 
+### 独立进程恢复探针（restart-process / standalone-restart-process）
+
+两者都是 `fork` 入口（被 fork 的脚本，不是 Vitest 用例），父进程传 `execArgv: ['--import','tsx']` 与 `LLM_MODE=mock`，子进程靠 IPC `process.send` 报告进度。
+`tests/integration/process-restart.test.ts:11`/`:24` fork `restart-process.ts`，argv 为 `[mode, scenario, runId, sessionId]`（`process.argv[2..5]`）；
+`tests/integration/standalone-workflow-restart.test.ts:22` fork `standalone-restart-process.ts`，argv 只有 `[mode, scenario]`。
+`restart-process.ts` 的 mode：`start`（`runTurn` 跑到崩溃屏障）、`recover`（`recoverOwnedRun(runId, {userId, sessionId})`）、`worker`（`tickAgentRecovery({ports:{discover:listRecoverableAgentRuns, recover}})`），其它值抛 `Unsupported restart test process mode.`（`:144`）。
+scenario：`model_result`（在 `tool_execution_start` 拦住）、`read_intent`（`tool_start`）、`committed_write`（成功 `tool_end`）、`authorization`（`confirmation_required`）、`dag_progress`（budget 节点成功而 read 未成功）、`authorization_result`（`llmMode` 降为 `mock`，先跑一轮闲聊再在 `checkpoint('input')` 拦住 `confirmAction`）、`partial_model`（`streamFn` 只推 `start`/`text_delta` 后拦住）。
+`start` 拦住时发 `barrier{point, runId, sessionId}` 并永久挂起（`hold()`；另有 1s `setInterval` 冒充在线句柄）；每次模型调用先发 `model_call{count}`。
+`recover` 发 `recovered{response, modelCalls}`，`worker` 发 `worker_finished{result, modelCalls, message?}`，`start` 未被拦住而走完则发 `unexpected_completion{runId, modelCalls}`，顶层 catch 发 `fatal{message}` 并置 `process.exitCode = 1`。
+生产入口：`runTurn`/`confirmAction`（`@/agent`，`:2`）、`recoverOwnedRun`（`@/agent/durable/service`，`:3`）、`tickAgentRecovery`（`@/agent/recovery-worker`，`:4`）、`listRecoverableAgentRuns`（`@/lib/db/repositories/agentRun`，`:9`）、`AgentRunJournal`（`@/agent/durable/journal`，`:10`；`:31`/`:40` 猴补 `recordAgentEvent`/`checkpoint` 制造屏障）、`prisma`（`@/lib/db/client`，`:8`）。
+`standalone-restart-process.ts` 的 mode：`start`（`getOrCreateSession` + `createTaskGraph` + `resumeTask`），其它值一律按 worker 走 `tickAgentRecovery()`（不传 ports，用真实默认端口）；scenario 只有 `graph`（建图后立即 `barrier`）与 `authorization`（单 `transfer` 节点）。
+worker 发 `worker_finished{result}`，`fatal{message}` 兜底；`start` 跑完仍未到屏障则抛 `The standalone workflow did not reach its requested crash barrier`（`:40`）。
+生产入口：`getOrCreateSession`（`@/agent/session`，`:1`）、`resumeTask`（`@/agent/task-control`，`:2`）、`executeGatedTool`（`@/agent/confirmation/gated-execution`，`:3`）、`tickAgentRecovery`（`@/agent/recovery-worker`，`:4`）、`createTaskGraph`（`@/lib/db/repositories/task`，`:5`）、`prisma`（`@/lib/db/client`，`:6`）。
+崩溃由父进程 `SIGKILL` 后改写租约制造过期，脚本本身不碰租约。
+
 `./index.ts` 只再导出 `getTestPrisma`/`truncateAll`/`resetDatabase`/`useFreshDatabase`/`disconnectTestPrisma`，
 `ensureTestPragmas` 不在桶里（需直接 `from './db'`）；`fixtures` 整个星号再导出。
 
 HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/harness.ts`
-（`postJson`/`postRaw`/`getJson`/`readSse`/`readSseFrames`/`actionUrl`/`chatUrl`/`idCtx`）。
+（`tests/app/harness.ts`，201 行：`BASE_URL`、`RouteHandler`、`HttpOptions`、`HttpResult`、`sessionCookie`、`chatUrl`、`actionUrl`、`taskUrl`、`tasksUrl`、`idCtx`、`postJson`、`postRaw`、`getJson`、`readSseFrames`、`readSse`）。
 
 ## 熔断 owner 与会话身份
 
@@ -89,9 +106,9 @@ HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/har
 网关 block reason 是 `__SECURITY_BLOCK__` + JSON（`security/security-gateway.ts:78`、`:704`）；
 熔断 deny 与计划已取消分支都是 `__SECURITY_BLOCK__{"decisionKind":"deny"}`，**没有 actionId**
 （`security/security-gateway.ts:1182`、`:1214`），因此 `parseBlockReason` 返回 `null`（`:708`），只能靠前缀判定。
-`scenario.ts:289`（镜像生产的 `agent/turns/events.ts:73`）把**原始** block reason 放进
-`security_event.message`（类型见 `lib/contracts/agent.ts:100`），且 blocked 的 `ToolEventView` **不带 `summary`**。
-所以 `security_event.message` 是传输载荷而非用户可见文案；用户可见文案只能经
+`scenario.ts:304`（镜像生产的 `agent/turns/events.ts:92`）把 block reason 解析成**结构化**字段发布：
+`security_event{kind:'locked'}` + 可选 `code`/`reason`/`actionId`/`attemptsLeft`/`maxAttempts`，**不带** `message`（`lib/contracts/agent.ts:102`–`:110`），且 blocked 的 `ToolEventView` **不带 `summary`**。
+原始 block reason 因此到不了用户（`tests/unit/agent/turn-security-event.test.ts:66` 断言 `event.message` 为 `undefined`）；用户可见文案只能经
 `lib/tool-feedback.ts` 的 `publicToolError`（默认回退 `chat.error.toolFailed`，`:11`/`:37`）与
 `publicToolSummary`（blocked 且无 actionId → `chat.error.operationNotStarted`，`:56`）投影，
 或 `components/chat/cards/MfaCard.tsx:66`（`publicToolError(statusMessage, t)`，未知消息即回退 `chat.error.toolFailed`）。
@@ -110,6 +127,9 @@ HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/har
 客户端连接机制见
 [lib/db/CONTEXT.md](../../lib/db/CONTEXT.md)。
 不得用旧连接池参数解释当前原生适配器行为。
+
+本目录没有时钟注入、租约过期或恢复次数上限的助手：唯一的 `now` 注入点是 `fixtures.ts` 的 `Options.now`（`fixtures.ts:255`）与全部 `build*(now: Date = demoNow())` 构建器。
+运行/租约过期与恢复计数由 spec 内联改写数据库列（`tests/integration/agent-durability.test.ts:35`–`:36`/`:295`–`:296`、`model-checkpoint-boundaries.test.ts:27`–`:28`/`:54`、`process-restart.test.ts:86`–`:87`、`standalone-workflow-restart.test.ts:74`），`maxRecoveryAttempts` 无任何测试引用。
 
 ### 清空语义（`truncateAll`）
 
