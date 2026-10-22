@@ -168,6 +168,15 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 阶梯一律走 `securityGateway#authorizeAction`；**绝不**直接调 `security/mfa.ts#verify`——它只锁 challenge，不落 `PendingAction` 终态，正是这些规格要防的弹窗复活路径。
 逐文件的恢复/租约驱动方式见 [integration/CONTEXT.md](integration/CONTEXT.md)、[app/CONTEXT.md](app/CONTEXT.md)、[unit/CONTEXT.md](unit/CONTEXT.md)。
 
+## wedge 故障注入的接缝
+
+「副作用已提交、结果+状态落定事务回滚」的 wedge 只能注入生产确认路径实际调用的符号。
+生产落定走 `agent/confirmation-recovery.ts#settlePendingAction`（由 `agent/confirmation/authorized-execution.ts:62-73` 调用），内部是 `claimPendingAction` 的 CAS 加 `tx.pendingAction.update({ resultJson })`，同一事务里还 strict 写执行审计（`audit/audit-logger.ts:102` 的 `auditStore.insertAuditLog`）。
+`lib/db/repositories/pendingAction.ts:181-194` 仍导出 `updatePendingActionStatus` 与其别名 `setPendingActionStatus`，但没有任何生产模块调用它们，`vi.spyOn` 到这两个符号永远不会命中：期望的 `500` 与 `confirmed` + `resultJson:null` 都不会出现，随后按 `spy.mock.calls.length`、`http === 500`、余额/流水计数断言失败。
+可用的注入点是审计写入 `auditStore.insertAuditLog`（`settlePendingAction` 事务内）、`settlePendingAction` 本身或 `claimPendingAction`。
+`security/security-gateway.ts:1268` 的 `recordActionResult` 仍在 `authorized-execution.ts:74-80` 被调用，但它在落定之后，只用于观察时序窗口，不能制造 wedge。
+仍装死 spy 的 integration 用例清单见 [integration/CONTEXT.md](integration/CONTEXT.md)；`app/actions-recovery-http.test.ts:20`/`:32` 装的是同一个死 spy，本目录的 wedge 用例改注入点时必须一并改。
+
 ## 常用命令
 
 `pnpm test` 运行全部 Vitest 测试。
