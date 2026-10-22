@@ -46,6 +46,13 @@ client-side.
   `pendingActionId` still resolves; one batched lookup per distinct id (never N+1). It never changes
   `node.status`, never strips `pendingActionId`, never writes and omits the field when the row is
   gone (missing evidence proves nothing).
+- `public-security-event.ts`: `publicSecurityEvent(event)` plus the `PublicSecurityEvent` /
+  `PublicSecurityStatus` types and the `isPublicDetailValue` predicate — the ONE public projection of
+  a persisted `SecurityEvent` for the browser-facing read models. Structured facts pass through
+  verbatim; a blank or internal-diagnostic `message` (`lib/public-text.ts#isInternalDiagnostic`)
+  becomes `''` while real audit prose survives byte-for-byte; a `detail` is kept only when it is a
+  plain JSON value whose every STRING leaf is diagnostic-free, otherwise the key is omitted entirely.
+  Pure mapping: no I/O, no event filtering and no security decision.
 
 ## Identity and execution boundaries
 
