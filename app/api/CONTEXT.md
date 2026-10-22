@@ -42,7 +42,8 @@ selectable browser identities.
 | `GET /api/activity` | Closed business history projection scoped to the fixed workspace | Operation history read model |
 | `GET /api/audit` | Developer preference required before validated filters; scoped technical entries and summary | Audit read models |
 | `GET /api/security` | Security events, lock state, failure count, a typed `lock` reason while the breaker is open and the session's terminal `lockedActions` | Audit and security read models |
-| `POST /api/security/reset` | Optional verification code; separately gated and audited unlock that reopens no `PendingAction` and executes nothing | Account circuit-breaker policy |
+| `POST /api/security/reset` | Optional body `{ verificationCode? }`; separately gated and audited unlock that reopens no `PendingAction` and executes nothing; success adds `lockedActionsReopened: false` | Account circuit-breaker policy |
+| `POST /api/developer/security/reset` | Developer-mode cookie gate, then the unaudited-code demo clear `resetDemoSession` (audit actor `developer`); returns the raw `CircuitBreakerState`, reopens no `PendingAction` | `_lib/developer.ts` + account circuit-breaker policy |
 | `GET /api/{dashboard,bills,cards,subscriptions}` | Simulated banking read models for the configured user | Banking SDK |
 | `/api/cards/{,[id]}` and `/api/cards/changes/[id]/{verify,cancel}` | Manual demo-card add/delete proposals plus MFA verify/cancel; returns `CardChangeResponse` | `security/manual-card-management` (see `../cards/CONTEXT.md`) |
 | `POST /api/cards/[id]/consume` | Owned virtual-card consumption: exact CNY `amount` string plus optional `category`/`merchant`/`executionKey`; booking time is server-owned, so a body containing `occurredAt` is refused with `400 VALIDATION`; returns `ConsumeCardResult` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
