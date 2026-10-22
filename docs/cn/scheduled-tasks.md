@@ -56,7 +56,7 @@
 
 付款参数只接受明确收款人和合法金额。
 任意工具名、执行代码和验证码在创建工作流前拒绝。
-命令编译见 [定时付款参数](../../agent/scheduled-command.ts)。
+创建与分发前都调用 [scheduled-command.ts](../../lib/contracts/scheduled-command.ts) 校验这些字段。
 
 ## 时钟与会话
 

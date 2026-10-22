@@ -115,7 +115,7 @@ Web 演示使用服务端配置的单一用户和共享会话。
 
 验证码挑战与权限网关的代码见 [mfa.ts](../../security/mfa.ts) 和 [security-gateway.ts](../../security/security-gateway.ts)。
 
-### 兜底文案的由来
+### 结构化安全失败
 
 网页和微信可能只显示“操作未完成”一类兜底文案。
 拒绝事实只写在结构化字段里。
@@ -179,7 +179,7 @@ Web 演示使用服务端配置的单一用户和共享会话。
 | --- | --- | --- |
 | `consumed` | `code` 与 `failure.code` 均为 `CONFLICT`，`reason` 为 `denied`。 | 写成 `cancelled`。 |
 | `expired`、`command_changed` | 返回 `awaiting_mfa` 提示态，不带 `code` 和 `failure`。 | 保持 `awaiting_mfa`。 |
-| 无法归类 | 网关抛出 `AppError('CONFLICT')`，接口返回 HTTP 409。 | 不变。 |
+| 无法归类 | 网关抛出 `AppError('CONFLICT')`，确认路径把它转成 `code` 为 `CONFLICT` 的领域结果，响应是 HTTP 200 加 `{ok:false, code:'CONFLICT'}`；只有抛出逃出确认路径时才映射为 HTTP 409。 | 不变。 |
 
 已消费的挑战是已结算的拒绝，不是可重试的错误。
 网关把操作从 `pending` 或 `awaiting_mfa` 写成 `cancelled`，不重发挑战。
@@ -191,7 +191,7 @@ Web 演示使用服务端配置的单一用户和共享会话。
 这类结果不带 `code` 和 `failure`，因为此时只是要求用户继续验证。
 本次提交的旧验证码不用于验证新挑战。
 
-无法归类时，网关按失败关闭处理，不提供验证入口。
+无法归类时，网关按失败关闭处理，不写操作行，不提供入口，也不新建挑战。
 这类结果只说明操作无法继续确认，需要重新发起。
 
 ### 拒绝字段的传递路径
@@ -218,13 +218,21 @@ Web 演示使用服务端配置的单一用户和共享会话。
 | --- | --- |
 | 同一操作重试 | 验证未通过时保持 `awaiting_mfa`，第 3 次失败写成 `locked`。 |
 | 刷新页面 | `GET /api/actions` 不列 `locked`，页面不渲染验证码面板。 |
-| 恢复计划 | 计划层封存节点，只读恢复读取原结果，不改变终态。 |
+| 恢复计划 | [lifecycle.ts](../../planner/lifecycle.ts) 的 `resumePlan` 读取原结果，不写行，不改变终态。 |
+
+只读恢复指 `resumePlan`，节点能否驱动由 [executor.ts](../../planner/executor.ts) 的 `mayDriveNode` 判定。
+裸 `runPlan` 重放同一计划时，封存的非终态节点由该文件的 `sealNode` 收敛为 `failed`，不再驱动。
 
 `GET /api/tasks`、`GET /api/tasks/[id]` 按持久化状态返回 `pendingActionStatus`。
 锁定操作的决策不再发布 `mfa_required` 事件。
 恢复、重试、取消、确认和验证对锁定操作返回结构化拒绝。
 执行租约只授予 `pending` 和 `awaiting_mfa` 状态。
-每次写 `PendingAction` 状态都带来源状态守卫，只接受这 2 种来源。
+每次写 `PendingAction` 状态都带来源状态守卫，`from` 是必填的来源集合。
+合法来源是 [action-status.ts](../../agent/action-status.ts) 的 `CLAIMABLE_ACTION_STATUSES`，即 `pending`、`awaiting_mfa` 和 `confirmed`。
+把同一终态重写为自身的幂等补写也合法，判定见该文件的 `isLegalActionSourceStatus`。
+`locked` 永远不是合法来源，终态也不能改成另一个终态。
+来源守卫落空时 [claimPendingAction](../../lib/db/repositories/pendingAction.ts) 不写行并返回 `false`。
+调用方按重新读取的当前行状态处理这次落空。
 
 计划层用 [planner/failure.ts](../../planner/failure.ts) 的 `sealReason` 判定封存原因。
 锁定拒绝记为 `locked_refusal`，操作已离开开启状态记为 `action_not_open`。
@@ -244,7 +252,9 @@ Web 演示使用服务端配置的单一用户和共享会话。
 
 `MFA_FAILURE` 的 `detail` 含 `actionId`、`attempts`、`attemptsLeft`、`maxAttempts`、`decision`、`result` 和 `locked`。
 第 3 次失败的 `result` 为 `session_locked`。
-熔断状态和该审计在同一事务提交，审计失败时状态回滚。
+`CIRCUIT_BREAKER_TRIPPED` 与熔断状态在同一事务提交，审计失败时状态回滚。
+`SECURITY_RESET` 与熔断清除在同一事务提交，审计失败时解锁回滚。
+`MFA_FAILURE` 单独写入，不与 `PendingAction` 状态变更同一事务。
 `POST /api/security/reset` 成功后，响应字段 `lockedActionsReopened` 恒为 `false`。
 解锁不把已锁定的操作写回 `pending` 或 `awaiting_mfa`。
 解锁门禁与冷却规则见[解除安全限制](#解除安全限制)。

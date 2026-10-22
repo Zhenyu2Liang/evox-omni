@@ -289,7 +289,7 @@ Groq、OpenRouter、xAI、Mistral 和 Cerebras。
 1. 网关判定拒绝并返回 `SecurityFailure` 的 `code`、`reason` 和次数。
 2. [gated-execution.ts](../../agent/confirmation/gated-execution.ts)的 `blockedOutcome` 只取 `parseBlockReason` 解析出的 `failure` 作为对外拒绝。
 3. [outcomes.ts](../../agent/confirmation/outcomes.ts)的 `publicRefusalMessage` 按三级顺序取文案：有 `failure` 时用 `securityNotice`，只有 `code` 时用 `publicToolError`，其余用 `safePublicText`。
-4. 计划节点把拒绝保存为 `PlanFailure`，并据此拒绝再次驱动该节点。
+4. 计划节点在进程内快照里携带 `PlanFailure` 与 `actionStatus`，并据此拒绝再次驱动该节点。
 5. 运行时把动作终态结算到工具调用，HTTP 出口按错误码返回状态码或领域结果。
 6. 页面与微信只渲染 [public-text.ts](../../lib/public-text.ts) 生成的公开文案。
 
@@ -303,6 +303,9 @@ Groq、OpenRouter、xAI、Mistral 和 Cerebras。
 同一次映射用 `publicFailureText` 投影 `summary` 和 `error`。
 内部诊断因此不会写入节点字段，业务正文按原样保留。
 缺少这两个字段的节点不视为封存。
+这两个字段不落库，节点行只存 `status`、`output`、`error` 与起止时间。
+写入映射见 [task-fencing.ts](../../agent/task-fencing.ts) 的 `toNodeUpdate`，读回映射见 [persistence.ts](../../agent/workflows/persistence.ts) 的 `toTaskPlan`。
+封存证据随进程结束失效，进程重启后的驱动由执行回执与幂等约束把关。
 
 `SealReason` 取 `locked_refusal` 或 `action_not_open`。
 `sealReason` 先判锁定拒绝，再判 `actionStatus` 已不属于 `pending` 或 `awaiting_mfa`。
