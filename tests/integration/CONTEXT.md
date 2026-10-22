@@ -99,7 +99,7 @@
 用例的驱动：
 - 前置统一来自 `tests/helpers/locked-action.ts`：`parkRedTransferPlan` 经生产 `submit_plan` runner 停一个 RED 转账节点，`lockAction` 走网关阶梯耗尽三次得到终态；`beforeEach(resetDatabase)` 因为熔断按所有者（`user:<userId>`）持久化。
 - durable 路径用生产 `beginRun`（`lib/db/repositories/agentRun.ts:35`）准入运行，以 `nxe:<taskId>:<nodeId>` 作唯一 `ToolInvocation` 的 `operationKey`，把运行真正挂到锁定动作的任务上（`runPendingActionWhere`，`:215`），再以 `AgentRunJournal.finish('waiting_verification')`（`:189`）留在崩溃边界，最后调 `recoverOwnedRun`：断言 `outcomes` 含 `{ action:'waiting', reason:'AUTHORIZATION_REQUIRED' }`、无 `retried`、运行仍 `waiting_verification`、租约已释放。
-- 计划路径对同一 `taskId` 先 `resumeTask` 再 `retryTask`，两者都断言节点输出里没有新的 `pendingActionId`（`readPendingActionId` 为 `undefined`）。
+- 计划路径对同一 `taskId` 调 `resumeTask` 与 `retryTask`：生产在认领前抛出，节点输出不会再写入新的 `pendingActionId`（`readPendingActionId` 为 `undefined`）。
 - `tests/helpers/restart-process.ts` 刻意不用：它的 15s／20s 屏障在并发负载下易超时（见「已知缺口」），而进程内 `recoverOwnedRun` 走的是同一段恢复代码。
 
 `baselineLockedAction` 在锁定后立即取样，`assertStillLocked` 在每条路径后逐项复核：
