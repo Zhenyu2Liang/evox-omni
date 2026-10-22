@@ -179,7 +179,7 @@ Web 演示使用服务端配置的单一用户和共享会话。
 | --- | --- | --- |
 | `consumed` | `code` 与 `failure.code` 均为 `CONFLICT`，`reason` 为 `denied`。 | 写成 `cancelled`。 |
 | `expired`、`command_changed` | 返回 `awaiting_mfa` 提示态，不带 `code` 和 `failure`。 | 保持 `awaiting_mfa`。 |
-| 无法归类 | 网关抛出 `AppError('CONFLICT')`，确认路径把它转成 `code` 为 `CONFLICT` 的领域结果，响应是 HTTP 200 加 `{ok:false, code:'CONFLICT'}`；只有抛出逃出确认路径时才映射为 HTTP 409。 | 不变。 |
+| 无法归类 | 网关抛出 `AppError('CONFLICT')`，确认路径把这次抛出转成 `code` 为 `CONFLICT` 的领域结果，响应是 HTTP 200 加 `{ok:false, code:'CONFLICT'}`；只有抛出逃出确认路径时才映射为 HTTP 409。 | 不变。 |
 
 已消费的挑战是已结算的拒绝，不是可重试的错误。
 网关把操作从 `pending` 或 `awaiting_mfa` 写成 `cancelled`，不重发挑战。
