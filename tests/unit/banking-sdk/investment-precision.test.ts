@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { banking } from '@/banking-sdk';
 import { investments } from '@/lib/db/repositories';
 import { INVESTMENT_FLOW_CATEGORY } from '@/banking-sdk/categories';
+import { decimalText } from '@/lib/decimal';
 import { getTestPrisma, useFreshDatabase } from '../../helpers/db';
 import { DEMO_USER_ID } from '../../helpers/fixtures';
 
@@ -9,11 +10,24 @@ useFreshDatabase();
 
 const HOLDING_ID = 'holding_wenjiana';
 const ACCOUNT_ID = 'acct_checking';
+const PRODUCT_ID = 'prod_wenjiana';
 
-async function setEstimate(value: string): Promise<void> {
+/**
+ * A position is SHARES × NET VALUE, so a sub-cent quote can only be seeded through one of those two
+ * columns: `estimatedMarketValue` no longer prices a holding. Both setters write the RAW column the
+ * SDK reads, canonicalized (`decimalText`) because the SDK rejects trailing-zero text as 净值/份额缺失.
+ */
+async function setShares(shares: string): Promise<void> {
   await getTestPrisma().investmentHolding.update({
     where: { id: HOLDING_ID },
-    data: { estimatedMarketValue: value },
+    data: { shares: decimalText(shares) },
+  });
+}
+
+async function setNetValue(netValue: string): Promise<void> {
+  await getTestPrisma().investmentProduct.update({
+    where: { id: PRODUCT_ID },
+    data: { latestNetValuePerUnit: decimalText(netValue) },
   });
 }
 
@@ -76,34 +90,60 @@ describe('investment decimal precision', () => {
       amount: '1000.01',
       marketValue: '1000.019876543210123456',
     });
+    // Cost stays booked in exact cents and the historical estimate snapshot is stored untouched …
     expect(created.principalAmountMinor).toBe(100001n);
     expect(created.estimatedMarketValue).toBe('1000.019876543210123456');
+
+    // … but it no longer PRICES the position: a row without recorded shares is 历史数据不足 and
+    // reports its cost, never the stale estimate.
+    const unrecorded = (await banking.investment.listHoldings(DEMO_USER_ID))
+      .find((holding) => holding.id === created.id);
+    expect(unrecorded).toMatchObject({
+      amount: '1000.01',
+      marketValue: '1000.01',
+      valueBasis: 'HISTORICAL_DATA_INSUFFICIENT',
+    });
+    expect(unrecorded?.profit).toBeUndefined();
+
+    // Once shares are recorded the unrounded valuation is `shares × net value` at full precision (six
+    // fractional digits here), never a cent-rounded figure, and profit is the exact difference.
+    await getTestPrisma().investmentHolding.update({ where: { id: created.id }, data: { shares: '1000.019876' } });
     const view = (await banking.investment.listHoldings(DEMO_USER_ID))
       .find((holding) => holding.id === created.id);
     expect(view).toMatchObject({
       amount: '1000.01',
-      marketValue: '1000.019876543210123456',
-      profit: '0.009876543210123456',
+      shares: '1000.019876',
+      latestNetValue: '1',
+      marketValue: '1000.019876',
+      profit: '0.009876',
+      valueBasis: 'NET_VALUE',
     });
   });
 
   it.each([
-    ['5050.004999999999999999', '5050.00', 505000n],
+    ['5050.004999', '5050.00', 505000n],
     ['5050.005', '5050.01', 505001n],
-    ['5050.005000000000000001', '5050.01', 505001n],
-  ])('rounds %s once at redemption settlement', async (estimate, settled, creditMinor) => {
-    await setEstimate(estimate);
+    ['5050.005001', '5050.01', 505001n],
+  ])('rounds a %s share valuation once at redemption settlement', async (shares, settled, creditMinor) => {
+    // prod_wenjiana prices at 1, so the UNROUNDED valuation equals the share count: the three cases
+    // straddle the half-cent boundary and must be rounded HALF_UP exactly ONCE, at settlement.
+    await setShares(shares);
     const result = await banking.investment.redeemInvestment({
       userId: DEMO_USER_ID,
       holdingId: HOLDING_ID,
-      expectedRedemptionAmount: settled,
+      mode: 'ALL',
+      expectedSettlementAmount: settled,
       idempotencyKey: 'precision-settlement',
     });
     expect(result.amount).toBe(settled);
-    expect(result.redemptionValuation).toBe(estimate);
+    expect(result.redemptionValuation).toBe(shares);
     expect(result.settlementRounding).toBe('HALF_UP');
+    expect(result.redeemedShares).toBe(shares);
+    expect(result.netValuePerUnit).toBe('1');
     const stored = await getTestPrisma().investmentHolding.findUniqueOrThrow({ where: { id: HOLDING_ID } });
-    expect(stored.estimatedMarketValue).toBe(estimate);
+    expect(stored.status).toBe('REDEEMED');
+    expect(stored.shares).toBe('0');
+    expect(stored.estimatedMarketValue).toBe('0');
     const ledger = await getTestPrisma().transaction.findFirstOrThrow({
       where: { userId: DEMO_USER_ID, category: INVESTMENT_FLOW_CATEGORY },
     });
@@ -113,14 +153,16 @@ describe('investment decimal precision', () => {
   });
 
   it('preserves a quote above the JavaScript safe integer range through settlement', async () => {
-    await setEstimate('900719925474099.005');
+    // 900719925474099.005 CNY is 90,071,992,547,409,901 cents — far beyond Number.MAX_SAFE_INTEGER.
+    await setShares('900719925474099.005');
     const holding = (await banking.investment.listHoldings(DEMO_USER_ID))[0];
     expect(holding.marketValue).toBe('900719925474099.005');
     expect(holding.profit).toBe('900719925469099.005');
     const result = await banking.investment.redeemInvestment({
       userId: DEMO_USER_ID,
       holdingId: HOLDING_ID,
-      expectedRedemptionAmount: '900719925474099.01',
+      mode: 'ALL',
+      expectedSettlementAmount: '900719925474099.01',
     });
     expect(result.amount).toBe('900719925474099.01');
     const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: ACCOUNT_ID } });
@@ -128,16 +170,19 @@ describe('investment decimal precision', () => {
   });
 
   it('replays the original settlement after the stored estimate changes', async () => {
-    await setEstimate('5050.005');
+    await setShares('5050.005');
     const input = {
       userId: DEMO_USER_ID,
       holdingId: HOLDING_ID,
-      expectedRedemptionAmount: '5050.01',
+      mode: 'ALL' as const,
+      expectedSettlementAmount: '5050.01',
       idempotencyKey: 'precision-original-receipt',
     };
     const original = await banking.investment.redeemInvestment(input);
-    await setEstimate('9999.999999');
+    // A net value published AFTER the redemption must not re-price the committed settlement.
+    await setNetValue('2.0000');
     expect(await banking.investment.redeemInvestment(input)).toEqual(original);
+    expect(original.netValuePerUnit).toBe('1');
     const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: ACCOUNT_ID } });
     expect(account.balanceMinor).toBe(2863001n);
     expect(await getTestPrisma().transaction.count({
@@ -146,24 +191,36 @@ describe('investment decimal precision', () => {
   });
 
   it('requires new authorization when a changed estimate changes the settled amount', async () => {
-    await setEstimate('5050.005');
+    // Unrounded valuation 5050.005 settles at 5050.01, so an approval of 5050.00 is stale.
+    await setShares('5050.005');
     await expect(banking.investment.redeemInvestment({
       userId: DEMO_USER_ID,
       holdingId: HOLDING_ID,
-      expectedRedemptionAmount: '5050.00',
-    })).rejects.toMatchObject({ code: 'CONFLICT' });
+      mode: 'ALL',
+      expectedSettlementAmount: '5050.00',
+    })).rejects.toMatchObject({
+      code: 'CONFLICT',
+      detail: { holdingId: HOLDING_ID, field: 'expectedSettlementAmount' },
+    });
     const holding = await getTestPrisma().investmentHolding.findUniqueOrThrow({ where: { id: HOLDING_ID } });
     expect(holding.status).toBe('HOLDING');
+    expect(holding.shares).toBe('5050.005');
     const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: ACCOUNT_ID } });
     expect(account.balanceMinor).toBe(2358000n);
+    expect(await getTestPrisma().transaction.count({
+      where: { userId: DEMO_USER_ID, category: INVESTMENT_FLOW_CATEGORY },
+    })).toBe(0);
   });
 
-  it.each(['0', '0.0049'])('settles a total-loss quote %s without inventing cash', async (estimate) => {
-    await setEstimate(estimate);
-    const input = { userId: DEMO_USER_ID, holdingId: HOLDING_ID, idempotencyKey: 'precision-total-loss' };
+  it.each(['0.0001', '0.0049'])('settles a total-loss quote %s without inventing cash', async (netValue) => {
+    // One share priced below half a cent: the valuation rounds to 0.00, so no cash is minted — and a
+    // replay returns the same zero settlement instead of crediting a second time.
+    await setShares('1');
+    await setNetValue(netValue);
+    const input = { userId: DEMO_USER_ID, holdingId: HOLDING_ID, mode: 'ALL' as const, idempotencyKey: 'precision-total-loss' };
     const original = await banking.investment.redeemInvestment(input);
     expect(original.amount).toBe('0.00');
-    expect(original.redemptionValuation).toBe(estimate);
+    expect(original.redemptionValuation).toBe(netValue);
     expect(await banking.investment.redeemInvestment(input)).toEqual(original);
     const holding = await getTestPrisma().investmentHolding.findUniqueOrThrow({ where: { id: HOLDING_ID } });
     expect(holding.status).toBe('REDEEMED');
@@ -176,14 +233,20 @@ describe('investment decimal precision', () => {
     expect(ledger[0].amountMinor).toBe(0n);
   });
 
-  it.each(['-1.001', 'invalid'])('rejects an invalid settlement quote %s without any financial write', async (estimate) => {
-    await setEstimate(estimate);
+  it.each(['-1.001', 'invalid'])('rejects an invalid settlement quote %s without any financial write', async (netValue) => {
+    // The quote is the product's published net value; a corrupt one prices nothing at all.
+    await getTestPrisma().investmentProduct.update({
+      where: { id: PRODUCT_ID },
+      data: { latestNetValuePerUnit: netValue },
+    });
     await expect(banking.investment.redeemInvestment({
       userId: DEMO_USER_ID,
       holdingId: HOLDING_ID,
-    })).rejects.toBeDefined();
+      mode: 'ALL',
+    })).rejects.toMatchObject({ code: 'VALIDATION' });
     const holding = await getTestPrisma().investmentHolding.findUniqueOrThrow({ where: { id: HOLDING_ID } });
     expect(holding.status).toBe('HOLDING');
+    expect(holding.shares).toBe('5050');
     const account = await getTestPrisma().account.findUniqueOrThrow({ where: { id: ACCOUNT_ID } });
     expect(account.balanceMinor).toBe(2358000n);
     expect(await getTestPrisma().transaction.count({

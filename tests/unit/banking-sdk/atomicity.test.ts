@@ -117,7 +117,9 @@ describe('banking-sdk · atomicity: concurrent double-redeem', () => {
   it('two racing redeems of one holding — exactly one credits the account, the other is CONFLICT', async () => {
     const before = await checkingBalance();
 
-    const input: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING };
+    // `mode: 'ALL'` is the explicit口径 (the SDK never guesses one); the seeded holding's every
+    // share (5050 × net value 1) is what the winner settles, the loser must not settle again.
+    const input: RedeemInvestmentInput = { userId: DEMO_USER_ID, holdingId: SEEDED_HOLDING, mode: 'ALL' };
     const results = await Promise.allSettled([
       banking.investment.redeemInvestment(input),
       banking.investment.redeemInvestment(input),
