@@ -19,7 +19,7 @@ Human decisions (`confirm` / MFA `verify` / `cancel`) authorize the PERSISTED `P
 
 `PendingActionStatus` (`@/lib/contracts/security`) = `'pending' | 'awaiting_mfa' | 'confirmed' | 'executed' | 'failed' | 'cancelled' | 'locked' | 'needs_reconciliation'`.
 
-The gateway's `AuthorizationResult` (`@/security/security-gateway`) additionally carries optional `mfaResult: 'success' | 'failed' | 'not_required'` and `code?: ErrorCode`; those are NOT part of `ConfirmationOutcome`.
+The gateway's `AuthorizationResult` (`@/security/security-gateway`) additionally carries optional `mfaResult: 'success' | 'failed' | 'not_required'`; `mfaResult` stays gateway-only, while `code` and `failure` are copied into `ConfirmationOutcome` (`outcomes.ts:73-74`).
 
 ## Constraints
 
