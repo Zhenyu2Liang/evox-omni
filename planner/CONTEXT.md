@@ -110,6 +110,16 @@ planner 不让内部诊断文本进入任何可渲染字段。
 完整图的编译校验见 `agent/tools/plan-compiler.ts`。
 不得在本目录从用户原句重新推导业务参数。
 
+## 错误传播面
+
+本目录只抛 `AppError('VALIDATION')`（`dag.ts:248`、`dag.ts:426`、`executor.ts:628`）与 `AppError('NOT_FOUND')`（`lifecycle.ts:335`）；没有任何 `AppError('CONFLICT', …)`。
+`runPlan`（`executor.ts:271`）唯一会传播出去的自身抛错是 `topologicalOrder` 的环检测（`dag.ts:248`，经 `executor.ts:302` 调用，无 try 包裹）：`plan dependency graph contains a cycle (N of M nodes ordered)`。
+条件节点缺表达式（`executor.ts:628`）与 `assertConditionResolvable`（`dag.ts:426`）都在 `executor.ts:627-638` 的 try/catch 内，收敛成 `failed` 节点（经 `publicFailureText`/`toPlanFailure` 投影），不外抛。
+`retryPlan`（`lifecycle.ts:244`）自身无 throw；它末尾调用 `runPlan`（`lifecycle.ts:300`），抛错面同上。
+`deps.runTool` 的拒绝在 `executor.ts:504-509` 被 `AppError.from` 转成 `{ok:false, error, failure}`，再经 `settleToolNode`（`executor.ts:516`）记为 failed 节点，不传播。
+其余注入端口的抛错不被捕获，直接从入口穿透：`persistNode`/`onNodeUpdate`（`executor.ts:355-360`）、`claimNode`（`:486`）、`releaseNode`（`:527`，`finally` 内，会覆盖原始异常）、`isRunOwner`（`:322-323`）、`controls.pollControls`（`:426`）、`loadPlan`/`persistPlan`（`:229`、`:232`）。`runPlan` 顶层 `try`（`:546`）只有 `finally` 摘除 abort 监听，没有 catch。
+`lifecycle` 没有 `finish` 导出（只有 `pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`/`compensationReport`）；`executor.persistPlanSnapshot`（`executor.ts:181`）与 `persistPlanSnapshotGuarded`（`:222`）自身不抛，只透传注入端口的异常。
+
 验证入口见 [tests/unit/planner/CONTEXT.md](../tests/unit/planner/CONTEXT.md)。
 ## 本目录单元测试
 
