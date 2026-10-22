@@ -45,6 +45,15 @@
 该外键由 `db push` 引入，是兼容式变更（列名未变、可回滚），不要把 `linkedAccountId` 回退成无关系的裸字符串。
 SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件头注释。
 
+## 完整号码列
+
+`Contact.phoneFull` 与 `Card.numberFull` 保存完整的虚构手机号与卡号，仅供服务端精确匹配。
+两列都可空，未补全的行为空值，缺失数字无法从脱敏列恢复。
+`Contact.phone` 与 `Card.numberMasked` 只存脱敏值，是唯一对外展示来源。
+两列不得出现在日志、工具结果、接口响应或错误消息中。
+演示数据与夹具使用虚构号段：手机号中间四位为 `0000`，卡号为 `6222` 加全 `0` 加原尾 4 位。
+补全命令见 [scripts/CONTEXT.md](../scripts/CONTEXT.md)。
+
 ## 种子行为
 
 `seed.ts` 使用 `businessDate` 构造北京时间。
