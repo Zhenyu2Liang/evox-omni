@@ -19,7 +19,7 @@
 
 ## 执行与控制
 
-`runPlan` 按拓扑顺序执行可运行节点。
+`runPlan` 按 `topologicalOrder` 顺序执行可运行节点。
 已成功节点保留结果，不因恢复重复执行。
 待确认或待验证节点会挂起计划。
 节点失败不会成为后续成功条件的证据。
@@ -29,7 +29,15 @@
 取消在检查点阻止后续工作。
 已完成业务不因取消而伪装回滚。
 
-`resumePlan` 记录挂起节点的决定后继续。
+`resumePlan` 先用 `settleToolNode` 结算被决定节点，写节点行与快照后才继续，
+后继交给 `runPlan` 重新走拓扑序。
+决定为 `ok` 记 `success`；`requiresConfirmation` 或带 `pendingActionId` 则重新挂起并直接返回，
+RED 节点记 `waiting_verification`，其余记 `waiting_confirmation`。
+计划挂起态只有 `waiting_confirmation`，`waiting_verification` 同样记为它。
+`resumePlan` 不检查被决定节点是否已终结，
+重写保护来自持久层“终结态不写终结态”的条件更新。
+`resumePlan` 用 `persistPlanSnapshot`，`runPlan` 用 `persistPlanSnapshotGuarded`。
+`summary` 没有节点列，仅在无 `data` 时并入 `output`。
 `retryPlan` 重置可重试节点及其未成功的传递后继。
 `compensationReport` 描述已执行与已取消节点。
 它不执行资金补偿。
@@ -39,6 +47,7 @@
 计划与节点认领必须使用调用层提供的数据库条件更新。
 丢失执行权时，执行器停止工具调用与结果发布。
 快照写入前的状态检查不代替数据库原子校验。
+条件更新匹配 0 行不抛错，因此丢失写入后调用层无法直接感知。
 
 执行接口由 `agent/` 接到仓储与安全网关。
 完整图的编译校验见 `agent/tools/plan-compiler.ts`。
