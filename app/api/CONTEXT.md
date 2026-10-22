@@ -83,12 +83,12 @@ FAILED verification (a wrong code, or an exhausted attempt limit / open circuit,
 `locked`); otherwise `not_required`. `ConfirmationOutcome` carries no MFA field, so the verify route
 derives `mfaResult` from `status` locally; confirm never submits a code and stays `not_required`.
 A wrong verification code is `200 { ok:true, data:{ ok:false, status:'awaiting_mfa', mfaResult:'failed' } }`.
-Exhausting the attempt limit locks only the MFA challenge and the session circuit breaker and returns
-`200` with `status:'locked'` and `mfaResult:'failed'`; the `PendingAction` row keeps its prior
-status, so the lock is response-only and `GET /api/actions` keeps surfacing the row as a live decision.
+Exhausting the attempt limit locks the MFA challenge and the session circuit breaker and returns
+`200` with `status:'locked'` and `mfaResult:'failed'`; the gateway also persists `PendingAction.status = 'locked'` (a CAS from the prior
+status), so the row is terminal and `GET /api/actions` stops surfacing it (`attentionFor` maps `locked` to `undefined`).
 The two tracked counters live outside this layer: per-action `MfaChallenge.attempts`/`maxAttempts`
 against threshold `MFA_MAX_ATTEMPTS = 3`, and the authoritative owner-scoped `CircuitBreakerState`.
-`POST /api/{confirm,verify,cancel}` build `ActionResponse` inline; confirm hardcodes `mfaResult:'not_required'`.
+`POST /api/{confirm,verify,cancel}` build `ActionResponse` inline; confirm hardcodes `mfaResult:'not_required'`. `_lib/agent-bridge.ts:163-175` (`withPlanUpdate`) drops any `mfa_required`/`confirmation_required` event whose `actionId` equals the refreshed `nextPlanDecision` action id and appends that decision last, so the persisted plan owns the re-prompt.
 
 ## Implementation boundaries
 
@@ -106,6 +106,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
   its own (`:88` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
   all (client-only, `components/chat/actions.ts`); closing the MFA prompt is left to the client.
+- The edge never rewrites agent text: `verify/route.ts:79-91` copies `outcome.message` and `outcomeWithPlan.events` into `ActionResponse` unchanged (`ConfirmationOutcome.result` is dropped), and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:124 sseFrame`. A block reason built by `security/security-gateway.ts:78` (`__SECURITY_BLOCK__` + JSON, e.g. `{"decisionKind":"deny"}`) therefore reaches the browser inside `security_event.message` and any tool-error text. `ActionResponse`/`AgentStreamEvent` carry no `code` for a locked verify (`status`/`mfaResult` are the only lock signals), so there is no app-layer scrubbing or error-code mapping point.
 
 Developer documentation lives in `docs/cn`; this context records AI-facing module boundaries.
 HTTP fixtures use the configured demo workspace. Cookie/query forgery fixtures verify that browser
