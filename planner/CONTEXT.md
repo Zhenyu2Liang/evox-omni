@@ -110,5 +110,10 @@ planner 不让内部诊断文本进入任何可渲染字段。
 完整图的编译校验见 `agent/tools/plan-compiler.ts`。
 不得在本目录从用户原句重新推导业务参数。
 
-验证入口见
-[tests/unit/planner/CONTEXT.md](../tests/unit/planner/CONTEXT.md)。
+验证入口见 [tests/unit/planner/CONTEXT.md](../tests/unit/planner/CONTEXT.md)。
+## 本目录单元测试
+
+`plan-failure-contract.test.ts`（7 用例）与 `plan-drive-guard.test.ts`（8 用例）是纯注入式单元测试，共用 `plan-test-harness.ts` 的 `PlanDeps` 桩：无 DB、无网络、无需 Prisma 生成。
+两者都用 `toEqual` 精确断言 `PlanNodeResult`，覆盖结构化拒绝的字段保真与内部诊断不外泄，以及已锁定/已终态动作不被重新驱动（`sealReason`/`mayDriveNode`/`mayResetNode` 的四条路径，含 `actionStatus:'pending'` 仍可驱动的正例）。
+运行方式：`pnpm exec vitest run --config planner/vitest.config.ts`；该配置复用根 `@` 别名、`environment:'node'`、`globals:true`、`include:['planner/**/*.test.ts']`，不设 `setupFiles`。
+规范位置是 `tests/unit/planner/`：根 `vitest.config.ts` 的 `include` 需由有权限的节点补上 `planner/**/*.{test,spec}.ts`（或迁移后的 `tests/unit/planner/**`），再迁走本目录的测试与配置。
