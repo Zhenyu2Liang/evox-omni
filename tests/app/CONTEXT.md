@@ -74,6 +74,18 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 关键词 `panel`、`prose`、`hallucinat` 在本目录无匹配。
 `waiting` 多指 `waiting_confirmation` 状态；`claim` 指 DB 执行 claim。
 
+终态锁定（`status:'locked'`）的响应字段无断言。
+`ActionResponse` 真实带 `code`、`attemptsLeft`、`maxAttempts`、`failure`（含 `failure.reason`），
+但 `mfa-terminal-lock-http.test.ts` 与 `actions-http.test.ts` 只断言 `status`/`mfaResult`/`ok`，从未断言这四个字段。
+`POST /api/actions/[id]/{cancel,recover}` 对 `locked` 行的早退守卫生效于 `app/api/_lib/locked-action.ts#lockedActionRefusal`（`code:'CIRCUIT_OPEN'`、`failure.reason:'mfa_session_locked'`、`events: []`），
+但没有任何用例取消或恢复过 `locked` 行；`cancel-safety-http.test.ts`、`cancel-during-authorization-http.test.ts` 的可执行状态集合都不含 `'locked'`。
+`GET /api/security` 在本目录没有任何用例；其真实形状为 `{status,events,circuitBreaker:{failures,max,locked},lock?,lockedActions}`，`lock` 仅在 breaker 已锁时出现。
+`GET /api/tasks`(`/[id]`) 的 `pendingActionStatus` 字段无断言（`tasks-http.test.ts` 只核对 `waiting_confirmation` 与 `pendingActionId`）。
+`chat-history-http.test.ts` 只断言 `mfa` 卡的 `executed` 状态，没有 `locked`，也没有 `confirmation` 卡的状态断言。
+锁定用例从不核对 `MfaChallenge` 行。
+`/security` 页面渲染只有 `tests/e2e/acceptance.e2e.ts#j-circuit-breaker-lock` 覆盖（`已熔断`、`失败 N / N 次`、`CIRCUIT_BREAKER_TRIPPED` 行、刷新后保持、开发者重置）；
+`UnlockPanel` 的运行时解锁流程与 `data-lock-reason`/`data-unlock-*`/`data-locked-actions` 标记、以及「内部标记/JSON/堆栈/演示验证码不进 DOM」都无用例。
+
 用户可见文案断言极少：`chat-http.test.ts:409` 的 `toContain('验证码')`（RED 回合提示存在且不泄露 `MFA_CODE`）、`manual-review-http.test.ts:277` 的 `toContain('manual review')`、`card-consume-http.test.ts` 的 `occurredAt` 校验错误文案。
 锁定的用户可见文案（`securityLocked`、`toolFailed`、「验证码错误次数过多」）在本目录零断言，也没有 `MfaCard`/`publicToolError` 渲染用例。
 
