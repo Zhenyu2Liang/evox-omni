@@ -57,4 +57,9 @@ HTTP 200 不等于业务成功。
 关键词 `panel`、`prose`、`hallucinat` 在本目录无匹配。
 `waiting` 多指 `waiting_confirmation` 状态；`claim` 指 DB 执行 claim。
 
+锁定（`status:'locked'`）在本目录是 200 域结果：`/api/actions/[id]/{confirm,verify}` 从不返回 423；
+`423 CIRCUIT_OPEN` 只来自 `/api/security/reset`（`security-workflow-http.test.ts`）与 `manual-card-management.test.ts` 的代码层 `rejects.toMatchObject`。
+本目录不核对锁定的用户可见文案：`securityLocked`、`toolFailed`、「验证码错误次数过多」、「安全中心」、「技能」均无匹配，也没有 `MfaCard`/`publicToolError` 渲染断言；锁定只按 `status`、`mfaResult` 与 DB 行断言。
+全目录只有三处断言 `message` 文本：`manual-review-http.test.ts`（`'manual review'`）与 `card-consume-http.test.ts`（`occurredAt` 校验错误）。
+
 数据库隔离与顺序执行见 [../CONTEXT.md](../CONTEXT.md)。

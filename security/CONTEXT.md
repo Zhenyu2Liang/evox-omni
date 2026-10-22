@@ -41,6 +41,15 @@
 计划节点（`submit_plan` 之后）经 `agent/confirmation/gated-execution.ts` 以 `taskId`/`nodeId` 复用同一 `handleToolCall` 路径。
 独立路径：`manual-card-management.ts#proposeCardChange`（`POST /api/cards`）直接 `pendingAction.create`，工具名 `manual_add_card`/`manual_delete_card`，被 `app/api/actions/route.ts` 显式过滤，不出现在主确认面板。`addDemoCardSchema` 另接受可选 `linkedAccountId`（VIRTUAL 卡的结算账户绑定），`toChange` 将其透传到 `CardChange`；该绑定的账户归属与类型由 SDK 在服务端校验。
 
+## 阻断原因标记与锁定的可见性
+
+`security-gateway.ts` 导出 `BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__'`（第 78 行）。
+`serializeBlockReason` 只用于已落库的 gated 调用：`${BLOCK_REASON_PREFIX}${JSON.stringify({ actionId, decisionKind })}`。
+`parseBlockReason` 要求前缀 + 非空 `actionId` + 合法 `decisionKind`（`allow`/`require_confirmation`/`require_mfa`/`deny`），任一不满足返回 `null`；两者都只经 `securityGateway` 对象暴露（`security.gateway.securityGateway.parseBlockReason`、`security.gateway.BLOCK_REASON_PREFIX`）。
+熔断拒绝（`handleToolCall` 的 `decision.kind === 'deny'`）返回 `__SECURITY_BLOCK__{"decisionKind":"deny"}`，不含 `actionId`，因此 `parseBlockReason` 返回 `null`，调用方只靠前缀判定为 blocked（`agent/turns/events.ts:48-49`），该载荷最终落为 `security_event kind:'locked'`，不重开 MFA。
+MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 的 `AuthorizationResult`，由 `/api/actions/[id]/verify` 以 200 `ActionResponse`（`mfaResult:'failed'`）交给客户端，不进入模型上下文。
+锁定会话中的新写入由 `execution-policy.ts#assertSessionMayWrite` 抛 `CIRCUIT_OPEN`，作为普通工具错误（无前缀）抵达模型。
+
 ## 赎回报价
 
 `gatewayCreatePendingAction` 在确认前用服务端决定铸造赎回报价。

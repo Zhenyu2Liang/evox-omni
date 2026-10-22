@@ -32,8 +32,10 @@
 `confirmation` 与 `mfa` 历史卡片使用 `ApprovalRecord`。
 当前交互由父目录 `ApprovalRequest` 提供。
 `ConfirmationCard` 与 `MfaCard` 提供该交互的具体控件。
-`confirmationStatus.ts` 解释持久化操作状态。
-终态记录不能因保留 RED 元数据而重新要求验证。
+`confirmationStatus.ts` 解释持久化操作状态，终态记录不因保留 RED 元数据而重新要求验证。
+`MfaCard` 与 `ApprovalRecord` 都只在终态为 `failed` 时用 `publicToolError(statusMessage/message, t)` 渲染原因行；
+`locked` 只渲染状态徽标（`cards.terminal.locked` / `chat.approval.status.locked`），原文仅开发者模式可见。
+`publicToolError` 未传 `errorCode` 时回落到 `chat.error.toolFailed`；传入时按 `PUBLIC_ERROR_CODES`（如 `CIRCUIT_OPEN` → `chat.error.securityLocked`）。
 
 终态原因只在 `failed` 时渲染：`ApprovalRecord`（60 行）、`ConfirmationCard`（64 行）、`MfaCard`（66 行）。
 `locked` 属终态（`confirmationStatus.ts` 12-18 行），只渲染 `chat.approval.status.locked` / `cards.terminal.locked` 徽标，服务端 `message` 不显示。

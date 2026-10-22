@@ -59,7 +59,7 @@
 错误码（`mfaResult==='failed'`，或非决定态且 `ok===false`）落到追加 `error` 的支路（598-601 行）。
 终态状态（`TERMINAL_ACTION_STATUSES`，含 `locked`）合成 `action_settled`（604-611 行）；
 `settleAction` 对匹配 `actionId` 的终态清除 `pendingAction`（`useAgentStream.ts` 402-404 行）。
-`pull` 的 `clearPending` 守卫要求 `!hasError`（863-873 行），故带 `error` 的响应不会清除决定，除非 `settleAction` 已清。
+`pull` 的 `clearPending` 守卫要求 `!hasError`（880-882 行），故带 `error` 的响应不会清除决定，除非 `settleAction` 已清。
 
 ## 文本安全与本地化
 
@@ -99,8 +99,20 @@
 `security_event` 原文上屏路径（552-564 行）没有本地化或脱敏测试覆盖。
 
 整页刷新会丢失内存态：`settledActions` 与内联卡片上的终态标记都不持久化。
-服务端把锁定 CAS 持久化为 `PendingAction.status='locked'`（`security/security-gateway.ts` `persistLockedAction`），`GET /api/actions` 因此不再返回该行，`toPendingActionRef`（`actions.ts` 385-399 行）也丢弃 `locked`，`pickPendingAction` 只接受 `pending`/`awaiting_mfa`（`useAgentStream.ts` 614-619 行）——刷新后底部弹窗不会重开。
+服务端把锁定 CAS 持久化为 `PendingAction.status='locked'`（`security/security-gateway.ts` 763-766 行 `persistLockedAction`），`GET /api/actions` 因此不再返回该行，`toPendingActionRef`（`actions.ts` 385-399 行）也丢弃 `locked`，`pickPendingAction` 只接受 `pending`/`awaiting_mfa`（`useAgentStream.ts` 614-619 行）——刷新后底部弹窗不会重开，会话内已终态的决定也不再重开（`hasSettledAction` / `visibleRefs`）。
 但历史页仍会返回该内联卡：`app/agent/history.ts` 38-46 行在行状态非 `awaiting_mfa` 时保留 `{type:'mfa', actionId, action, status: row.status}`，故 `status:'locked'` 的卡片随页面加载重新渲染为只读终态。
+
+## MFA 锁定结果的渲染链路
+
+服务端 verify 达上限返回 `ok:false, status:'locked', requiresMfa:true, mfaResult:'failed', code:'CIRCUIT_OPEN'`，`message` 为「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」（`security/security-gateway.ts` 848-850）。
+`postAction` 只校验 `ACTION_STATUSES` 与 `mfaResult`；`record.code` 不读取，追加的 `error` 事件不带 `code`（`actions.ts` 562-601）。
+`locked` 不是决定态：过滤该 `actionId` 的 `mfa_required`，追加原文 `error.message`，再追加 `action_settled{status:'locked', message}`（584-611）。
+`settleAction` 把 `status`/`message` 写到同 `actionId` 的内联 `mfa` 卡片、记入 `settledActions`，并清除匹配的 `pendingAction`（`useAgentStream.ts` 349-352、381-404），实时弹窗因此关闭。
+实时 `pendingAction` 不带 `statusMessage`：`status`/`statusMessage` 只由 `pickPendingAction` 取自恢复行的 `summary.message`（627-628），而 `PendingActionSummary` 无 `message` 字段。
+`error`/`action_settled` 的原文进入 `state.error`，`ChatWindow` 用 `publicToolError(message, t, 'chat.error.request', code)` 渲染；锁定原文命中 `PUBLIC_BUSINESS_ERRORS`，得到 `chat.error.securityLocked`（`lib/tool-feedback.ts` 25）。
+`__SECURITY_BLOCK__{...}` 前缀（`security/security-gateway.ts` 78）客户端不解析：`status:'blocked'` 且无 `actionId` 回落 `chat.error.operationNotStarted`，其他未知字符串回落 `chat.error.toolFailed`（`lib/tool-feedback.ts` 37-51）。
+`mfa_required` 传输事件没有 `status`/`message` 字段（`transport-validation.ts` 98），锁文案只能经 `action_settled` 或 `mfa` 卡片的 `status`/`message` 到达界面。
+终态文案：内联 `ApprovalRecord` 用 `chat.approval.status.locked`（验证已锁定），`MfaCard` 用 `cards.terminal.locked`（已锁定）。
 
 ## 显示与诊断
 

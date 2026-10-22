@@ -108,7 +108,23 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
   its own (`:88` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
   all (client-only, `components/chat/actions.ts`); closing the MFA prompt is left to the client.
-- The edge never rewrites agent text: `verify/route.ts:79-91` copies `outcome.message` and `outcomeWithPlan.events` into `ActionResponse` unchanged (`ConfirmationOutcome.result` is dropped), and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:124 sseFrame`. A block reason built by `security/security-gateway.ts:78` (`__SECURITY_BLOCK__` + JSON, e.g. `{"decisionKind":"deny"}`) therefore reaches the browser inside `security_event.message` and any tool-error text. `ActionResponse`/`AgentStreamEvent` carry no `code` for a locked verify (`status`/`mfaResult` are the only lock signals), so there is no app-layer scrubbing or error-code mapping point.
+- The edge never rewrites agent text: `verify/route.ts:79-91` copies `outcome.message` and
+  `outcomeWithPlan.events` into `ActionResponse` unchanged (`ConfirmationOutcome.result` is dropped),
+  and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:124`
+  `sseFrame`. A block reason built by `security/security-gateway.ts:78` (`__SECURITY_BLOCK__` + JSON,
+  e.g. `{"decisionKind":"deny"}`) therefore reaches the browser inside `security_event.message` and any
+  tool-error text. `ActionResponse`/`AgentStreamEvent` carry no `code` for a locked verify
+  (`status`/`mfaResult` are the only lock signals), so there is no app-layer scrubbing or error-code
+  mapping point.
+- A `'locked'` verify outcome appends no `mfa_required`: `blockedOutcome`
+  (`agent/confirmation/outcomes.ts`) emits it only for `pending`/`awaiting_mfa`, so the only possible
+  appended event is `plan_update` (and `nextPlanDecision`, `agent/task-decision.ts`, skips rows outside
+  `pending`/`awaiting_mfa`). The row itself is already persisted `'locked'` by `persistLockedAction`
+  (`security/security-gateway.ts:763`), so `attentionFor` (`actions/route.ts:79`) drops it from
+  `GET /api/actions`.
+- `app/` never writes `PendingAction.status`: every hit is a comparison or read (`app/agent/history.ts:26`,
+  `app/agent/plan-history.ts:24`). No retry/recover/claim/liveness endpoint here can reopen a `'locked'`
+  row; all status mutation lives in `@/agent`, `@/security` and `lib/db/repositories/pendingAction.ts`.
 
 Developer documentation lives in `docs/cn`; this context records AI-facing module boundaries.
 HTTP fixtures use the configured demo workspace. Cookie/query forgery fixtures verify that browser
