@@ -93,6 +93,8 @@ export interface CardFixture {
   creditLimit: string | null;
   availableLimit: string | null;
   monthlyLimit: string | null;
+  /** Settlement CHECKING account id recorded on this card (DEBIT/VIRTUAL); CREDIT cards are never bound. */
+  linkedAccountId?: string | null;
 }
 
 /** Credit card (¥18,000 limit) + a debit card. `card_credit` carries the 娱乐 card limit. */
@@ -118,6 +120,7 @@ export const CARDS: readonly CardFixture[] = [
     creditLimit: null,
     availableLimit: null,
     monthlyLimit: null,
+    linkedAccountId: 'acct_checking',
   },
 ];
 
