@@ -1,9 +1,11 @@
 'use client';
 
+import Link from 'next/link';
 import type { PendingActionStatus, PendingActionSummary } from '@/lib/contracts/security';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import { localizeActionTitle } from '@/lib/i18n/display';
 import { publicToolError } from '@/lib/tool-feedback';
+import { securityNotice } from '@/lib/public-text';
 import { useDeveloperMode } from '@/lib/developer-mode/DeveloperModeProvider';
 import { sanitizeToolArguments } from '@/lib/tool-diagnostics';
 import { Badge } from '../../ui';
@@ -20,6 +22,13 @@ const STATUS_KEYS: Record<PendingActionStatus, MessageKey> = {
   locked: 'chat.approval.status.locked',
   needs_reconciliation: 'chat.approval.status.needs_reconciliation',
 };
+
+/**
+ * The typed facts of a LOCKED verification — the same derivation `MfaCard` uses, so the restored
+ * history record explains the lock exactly like the live card does. The reason comes from the STATUS
+ * through `lib/public-text`; the raw `message` stays developer-only.
+ */
+const LOCKED_NOTICE = { code: 'MFA_LOCKED', reason: 'mfa_attempts_exhausted' } as const;
 
 export interface ApprovalRecordProps {
   action?: Omit<PendingActionSummary, 'toolName'>;
@@ -58,6 +67,11 @@ export function ApprovalRecord({ action, actionId, verification = false, status,
       <div className="mt-3"><ActionDetails action={action} /></div>
     </details> : null}
     {current === 'failed' ? <p className="px-4 pb-3 text-sm text-banking-danger">{publicToolError(message, t)}</p> : null}
+    {current === 'locked' ? <div className="flex flex-col items-start gap-1 px-4 pb-3" data-approval-locked="true">
+      <p className="text-sm text-banking-danger">{securityNotice(LOCKED_NOTICE, t)}</p>
+      <p className="text-xs text-banking-navy/70">{t('pages.security.unlockDescription')}</p>
+      <Link href="/security" className="text-sm text-banking-accent underline">{t('pages.security.title')}</Link>
+    </div> : null}
     {current === 'needs_reconciliation' ? <p className="px-4 pb-3 text-sm text-banking-navy">{t('cards.terminal.reconciliationExplanation')}</p> : null}
     {developerMode && message ? <details className="px-4 pb-3 text-xs text-banking-navy">
       <summary>{t('chat.diagnostics.detail')}</summary>

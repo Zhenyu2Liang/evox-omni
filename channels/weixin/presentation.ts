@@ -7,6 +7,8 @@ import type { ScheduleInbox } from '../../lib/contracts/schedule';
 import { formatCNY } from '../../lib/money';
 import { formatDecimalCNY, rateRatioToPercent } from '../../lib/decimal';
 import { formatDateTime } from '../../lib/date';
+import { isInternalDiagnostic, safePublicText } from '../../lib/public-text';
+import { createTranslator, type MessageKey, type Translator } from '../../lib/i18n/shared';
 
 const LABELS: Record<string, string> = {
   pending: '等待确认', awaiting_mfa: '等待验证码', confirmed: '已确认，正在处理', executed: '已执行', failed: '失败',
@@ -19,7 +21,19 @@ const LABELS: Record<string, string> = {
   MONTHLY: '月', QUARTERLY: '季度', YEARLY: '年', REMINDER: '提醒', PAYMENT: '付款', TRANSFER: '转账',
   RESERVED: '已登记', USED: '已使用', RELEASED: '已释放',
 };
-export const label = (value: string): string => LABELS[value] || value;
+/** Enum-shaped server tokens pass through untranslated; anything else is not a status. */
+const STATUS_TOKEN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+export const label = (value: string): string => LABELS[value] ??
+  (typeof value === 'string' && STATUS_TOKEN.test(value) && !isInternalDiagnostic(value) ? value : '未知状态');
+/**
+ * Thin channel wrapper over `lib/public-text`: internal diagnostics (block payloads, raw JSON, stack
+ * frames, `undefined`) become the catalog fallback, unresolved `chat.*` keys are localized, and an
+ * ordinary business sentence passes through unchanged. Never clean strings locally.
+ */
+export function channelText(message: string | undefined, t: Translator, fallback: MessageKey): string {
+  if (!message || isInternalDiagnostic(message)) return t(fallback);
+  return message.startsWith('chat.') ? safePublicText(message, t, fallback) : message;
+}
 const LIMIT = 20;
 function rows<T>(items: T[], render: (item: T) => string): string {
   if (!Array.isArray(items)) throw new Error('Invalid public list');
@@ -103,7 +117,7 @@ function renderCard(card: ChatCard): string {
         `结算金额：${formatCNY(data.amount)}`, `账户余额：${formatCNY(data.newBalance)}`, `时间：${formatDateTime(data.occurredAt)}`].join('\n');
     }
     case 'plan': return renderPlan(card.plan);
-    case 'error': return `业务提示：${card.message}`;
+    case 'error': return `业务提示：${channelText(card.message, createTranslator('zh-CN'), 'chat.error.toolFailed')}`;
     case 'confirmation': case 'mfa': return ''; // 授权入口由 renderEvents 集中处理。
     default: { const exhaustive: never = card; return exhaustive; }
   }
