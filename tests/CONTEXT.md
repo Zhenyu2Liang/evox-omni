@@ -171,11 +171,12 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 ## wedge 故障注入的接缝
 
 「副作用已提交、结果+状态落定事务回滚」的 wedge 只能注入生产确认路径实际调用的符号。
-生产落定走 `agent/confirmation-recovery.ts#settlePendingAction`（由 `agent/confirmation/authorized-execution.ts:62-73` 调用），内部是 `claimPendingAction` 的 CAS 加 `tx.pendingAction.update({ resultJson })`，同一事务里还 strict 写执行审计（`audit/audit-logger.ts:102` 的 `auditStore.insertAuditLog`）。
-`lib/db/repositories/pendingAction.ts:181-194` 仍导出 `updatePendingActionStatus` 与其别名 `setPendingActionStatus`，但没有任何生产模块调用它们，`vi.spyOn` 到这两个符号永远不会命中：期望的 `500` 与 `confirmed` + `resultJson:null` 都不会出现，随后按 `spy.mock.calls.length`、`http === 500`、余额/流水计数断言失败。
-可用的注入点是审计写入 `auditStore.insertAuditLog`（`settlePendingAction` 事务内）、`settlePendingAction` 本身或 `claimPendingAction`。
-`security/security-gateway.ts:1268` 的 `recordActionResult` 仍在 `authorized-execution.ts:74-80` 被调用，但它在落定之后，只用于观察时序窗口，不能制造 wedge。
-仍装死 spy 的 integration 用例清单见 [integration/CONTEXT.md](integration/CONTEXT.md)；`app/actions-recovery-http.test.ts:20`/`:32` 装的是同一个死 spy，本目录的 wedge 用例改注入点时必须一并改。
+生产落定走 `agent/confirmation-recovery.ts#settlePendingAction`（由 `agent/confirmation/authorized-execution.ts:62-73` 调用），事务内顺序为 `claimPendingAction` 的 CAS → `tx.pendingAction.update({ resultJson })`（无 repository 包装，不可 spy）→ strict 执行审计（`audit/audit-logger.ts:102` 的 `auditStore.insertAuditLog`）。
+`claimPendingAction` 是多点调用（授权 CAS、`locked`、`cancelled`、`recordActionResult` 都走它）：注入必须按 `actionId` + `from` 含 `'confirmed'` + `to` 非 `confirmed` + 一次性 flag 过滤，否则打偏到授权阶段，wedge 变假。
+`lib/db/repositories/pendingAction.ts:181-194` 仍导出 `updatePendingActionStatus` 与其别名 `setPendingActionStatus`，但没有任何生产模块调用它们：`vi.spyOn` 到这两个符号永不命中，期望的 `500` 与 `confirmed` + `resultJson:null` 都不会出现。
+因此规则固定为：注入点必须选在真实写入漏斗上（`claimPendingAction`、`auditStore.insertAuditLog`、`settlePendingAction`）。
+`security/security-gateway.ts:1268` 的 `recordActionResult` 在落定之后调用，只用于观察时序窗口，不能制造 wedge。
+逐文件注入点与 `fired()` 自检见 [integration/CONTEXT.md](integration/CONTEXT.md)。
 
 ## 常用命令
 
