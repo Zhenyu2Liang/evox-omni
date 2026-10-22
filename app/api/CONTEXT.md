@@ -61,6 +61,38 @@ attention states and cannot acquire a lease or replay a write. Explicit action/r
 to receipt-first runtime recovery; missing evidence never establishes success or failure. Task
 controls preserve succeeded nodes and execute only work permitted by their current persisted state.
 
+## Public security-event projection
+
+`GET /api/security` serializes no raw `SecurityEvent`: both `events` and `status.recentEvents` are
+mapped through `_lib/public-security-event.ts#publicSecurityEvent`, because a persisted security
+event is an INTERNAL audit record whose text may carry the gateway's `__SECURITY_BLOCK__…` payload.
+`id`/`timestamp`/`sessionId`/`userId`/`kind`/`severity` are forwarded verbatim and `status.locked` is
+untouched, so the feed keeps every structured fact a client renders.
+`message` stays a required string: legitimate audit prose survives byte-for-byte, while a blank,
+whitespace-only or internal-diagnostic message (`lib/public-text.ts#isInternalDiagnostic`) becomes
+`''` — never a substitute sentence, so the client keeps owning its localized `kind` label.
+`detail` is kept only when it is a plain JSON value whose every STRING leaf is diagnostic-free;
+otherwise the key is omitted entirely (`'detail' in event === false`), so the breaker-trip evidence
+`{ failures, max, result }` survives while `{ note: '__SECURITY_BLOCK__…' }` does not.
+No event is dropped and no event count changes: the projection is pure, read-only and decides
+nothing, and the gateway marker therefore never leaves this edge through the security center.
+`app/security/page.tsx` reads the audit and security nodes directly instead of this route and applies
+its own equivalent text funnel, including to `status.recentEvents`.
+
+The rest of this node was swept for the same class of leak and needs no app-layer projection.
+`/api/schedules` and `/api/schedules/tick` are thin delegations, and `agent/scheduled-dispatcher.ts`
+already reduces a dispatch failure through `publicDispatchError`
+(`isInternalDiagnostic(message) ? DISPATCH_FAILURE_NOTICE : message`).
+`/api/audit` is a developer-mode-gated technical surface that returns the audit node's own entries and
+summary, so its contract stays unchanged.
+`/api/activity` returns the closed business history projection of `audit/operation-history.ts`, which
+is not built from security events.
+`_lib/http.ts#errorResponse`/`mapAppError` already reduce a non-`AppError` throw to a generic internal
+error, so a failure envelope carries no diagnostics.
+Chat SSE frames, `/api/runs/[id]/events` and `/api/chat/history` still forward `AgentStreamEvent`
+frames verbatim (see Known issues): `security_event.message` can carry the raw marker, clients render
+those events from typed fields, and scrubbing them belongs to `agent/` and `components/chat`.
+
 ## Transport contracts
 
 JSON success uses `{ ok: true, data }`; failure uses `{ ok: false, error: { code, message } }`.
