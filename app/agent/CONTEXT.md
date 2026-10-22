@@ -7,6 +7,8 @@
 Web 身份规则见 [../api/CONTEXT.md](../api/CONTEXT.md)。
 
 `history.ts` 提供历史分页读取。
+它按持久化 `PendingAction.status` 还原内联卡片（38-46 行）：`awaiting_mfa` 才重发 `{type:'mfa', actionId, action}`，其他状态（含终态 `locked`）写回 `status: row.status`；`plan-approvals.ts` 31-33 行同样用 `row.status` 重建 `mfa`/`confirmation` 卡片。
+因此已锁定操作刷新后仍显示为只读终态卡片，但不会重开弹窗（`GET /api/actions` 不返回 `locked` 行）。
 页面向 `ChatWindow` 传入最新历史页和旧页游标。
 `historyGeneration` 区分当前历史代次。
 当前可恢复任务也通过服务端读取。
