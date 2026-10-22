@@ -92,7 +92,7 @@ HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/har
 （`security/security-gateway.ts:1182`、`:1214`），因此 `parseBlockReason` 返回 `null`（`:708`），只能靠前缀判定。
 `scenario.ts:304`（镜像生产的 `agent/turns/events.ts:92`）把 block reason 解析成**结构化**字段发布：
 `security_event{kind:'locked'}` + 可选 `code`/`reason`/`actionId`/`attemptsLeft`/`maxAttempts`，**不带** `message`（`lib/contracts/agent.ts:102`–`:110`），且 blocked 的 `ToolEventView` **不带 `summary`**。
-所以 `security_event.message` 是传输载荷而非用户可见文案；用户可见文案只能经
+原始 block reason 因此到不了用户（`tests/unit/agent/turn-security-event.test.ts:66` 断言 `event.message` 为 `undefined`）；用户可见文案只能经
 `lib/tool-feedback.ts` 的 `publicToolError`（默认回退 `chat.error.toolFailed`，`:11`/`:37`）与
 `publicToolSummary`（blocked 且无 actionId → `chat.error.operationNotStarted`，`:56`）投影，
 或 `components/chat/cards/MfaCard.tsx:66`（`publicToolError(statusMessage, t)`，未知消息即回退 `chat.error.toolFailed`）。
