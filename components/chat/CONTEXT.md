@@ -61,16 +61,19 @@
 
 `awaiting_mfa` 且 `requiresMfa` 且 `tier==='RED'` 且未执行且 `mfaResult!=='failed'` 时合成 `mfa_required`（不追加错误）。
 可重试的错误验证码落到追加 `error` 的支路，且不合成 `security_event`，避免同一拒绝重复上屏。
-`securityFacts(record)` 读取 `ActionResponse` 的 `code`/`attemptsLeft`/`maxAttempts`/`failure`：非法值丢弃，非法组合不让整份响应失败，且不保留任何自由文本。
-终态为 `locked`/`failed` 且存在结构化事实时，用它们合成一条 `security_event`（`kind`、`code`、`reason`、`actionId`、`attemptsLeft`、`maxAttempts`，不含 `message`）；`record.events` 已带同 `actionId` 且同 `kind` 或同 `code` 的事件时不重复合成。
+`securityFacts(record)` 读取 `ActionResponse` 顶层 `code`/`attemptsLeft`/`maxAttempts`（优先）以及嵌套 `failure.code`/`failure.reason`/`failure.attemptsLeft`/`failure.maxAttempts`：`reason` 只取自 `failure` 且须属 `SECURITY_FAILURE_REASONS`，`code` 接受任意非空字符串（无枚举白名单），计数须为非负整数；非法值逐项丢弃，非法组合不让整份响应失败，且不保留任何自由文本。
+`status` 为 `locked`/`failed` 且 `code` 或 `reason` 存在时，用这些事实合成一条 `security_event`（`{type:'security_event', kind, actionId, ...securityFacts(record)}`，`kind` 取 `status === 'locked' ? 'locked' : 'denied'`，不带 `message`）；`record.events` 已带同 `actionId` 且同 `kind` 或同 `code` 的事件时不重复合成。
+只有 `attemptsLeft`/`maxAttempts` 而无 `code`/`reason` 时不合成 `security_event`，该拒绝只留 `error` 事件。
 终态状态（`TERMINAL_ACTION_STATUSES`，含 `locked`）追加 `action_settled`（`{actionId, status, message?}`；该契约不带 `code`/`reason`/`attemptsLeft`）。
 `settleAction` 对匹配 `actionId` 的终态清除 `pendingAction`。
 `pull` 的 `clearPending` 守卫要求 `!hasError`，故带 `error` 的响应不会清除决定，除非 `settleAction` 已清。
 
 ## 文本安全与本地化
 
-`lib/public-text.ts` 是安全/拒绝类文本的唯一收口点：`isInternalDiagnostic`、`safePublicText`、`securityNotice`。
-`securityNotice(eventOrFacts, t)` 依服务端权威 `code`/`reason` 映射：锁定与次数耗尽 → `chat.error.actionLocked`；可重试且带 `attemptsLeft` → `chat.error.verificationRemaining {count}`；`circuit_open`/`mfa_session_locked` → `chat.error.securityLocked`；其余（含未登记事件）→ `chat.error.securityDenied`；返回值恒为非空文本。
+安全与拒绝类文本的唯一收口点是 `lib/public-text.ts`（`isInternalDiagnostic`、`safePublicText`、`securityNotice`）。
+`securityNotice(eventOrFacts, t)` 依服务端权威 `code`/`reason` 映射：锁定与次数耗尽 → `chat.error.actionLocked`；可重试且带 `attemptsLeft` → `chat.error.verificationRemaining {count}`；`circuit_open`/`mfa_session_locked` → `chat.error.securityLocked`；其余（含未登记事件、无 `code`/`reason` 者）→ `chat.error.securityDenied`；返回值恒为非空文本。
+`securityNotice` 只读 `code`/`reason`/`attemptsLeft` 三个字段；输入类型声明的 `kind`/`maxAttempts` 从不被读取，传 `kind` 对渲染无影响。
+缺 `attemptsLeft` 的 `MFA_FAILED`/`mfa_code_invalid` 按 `count = 0` 渲染，即「剩余 0 次」。
 工具行文字只由 `publicToolSummary(event, t)` 生成，其错误分支经 `publicToolError(event.summary, t, 'chat.error.toolFailed', event.errorCode, event.errorParams)`（`lib/tool-feedback.ts`）；原始 `summary`/`debugDetail` 只出现在开发者模式诊断块。
 `PUBLIC_ERROR_CODES` 已含 `MFA_LOCKED → chat.error.actionLocked`、`CIRCUIT_OPEN → chat.error.securityLocked`、`MFA_FAILED → chat.error.verificationFailed`；内部标记、原始 JSON 与堆栈在登记表匹配之前被拦下。
 `status==='blocked'` 且无 `actionId` 时状态标签换成 `chat.activity.status.notExecuted`、摘要换成 `chat.error.operationNotStarted`。
@@ -87,8 +90,13 @@
 
 ## 安全事件渲染
 
-`security_event` 只在 `agent-stream-reducer.ts` 的 `applyEvent` 折叠：追加一条 `role:'system'` 消息，`content` 取 `securityNotice(event, t)`（`lib/public-text.ts`）。
-事件的 `message` 字段**不被读取**：`lib/contracts/agent.ts` 中它是可选的，锁定/拒绝类事件不再携带原文（`kind` 同样不参与渲染）。
+`security_event` 只在 `agent-stream-reducer.ts` 的 `applyEvent`（`case 'security_event'`）折叠：追加一条 `role:'system'` 消息，`content` 取 `securityNotice(event, t)`（`lib/public-text.ts`）。
+折叠不按 `kind` 过滤：`locked`/`denied`/`injection` 三种 kind 都会被渲染。
+事件的 `message` 与 `kind` 都不参与正文生成：`lib/contracts/agent.ts` 中 `message` 可选，锁定/拒绝类事件不再携带原文。
+仓库内发射点是 `agent/turns/events.ts`（`kind:'locked'`，附 `code`/`reason`/`attemptsLeft`/`maxAttempts`）、`agent/run-turn.ts`（`kind:'injection'`，只带 `message`）与 `actions.ts#postAction`（客户端合成 `kind:'locked'|'denied'`）。
+故注入扫描事件没有 `code`/`reason`，落到 `securityNotice` 的缺省分支，最终渲染为可见的 `chat.error.securityDenied` 气泡。
+`channels/weixin/banking-client.ts` 只渲染 `kind==='locked'`、其余 kind 仅留审计，因此两端对 `injection` 的可见性不同。
+`content` 上的 `|| t('chat.error.securityDenied')` 兜底不可达：`securityNotice` 恒返回非空目录文案。
 `MessageBubble` 的 system 分支用 `isInternalDiagnostic(message.content)` 判定：被判定为内部诊断的历史文本改由 `safePublicText(content, t, 'chat.error.securityDenied')` 输出；其余 system 文本已是 reducer 用目录文案生成的正文。
 两个收口点都在 `lib/public-text.ts` 内，组件与 reducer 都不做字符串清洗；内部标记 `__SECURITY_BLOCK__…`、原始 JSON 与堆栈因此无法进入可见文本。
 `transport-validation.ts` 按白名单校验：`security_event` 要求 `kind` 非空串，`code`/`reason`/`actionId` 可选字符串，`attemptsLeft`/`maxAttempts` 可选非负整数，`message` 可选；`toolEvent` 接受可选 `errorCode`（枚举含 `MFA_LOCKED`）与可选 `errorParams`（值 string 或 number）。
