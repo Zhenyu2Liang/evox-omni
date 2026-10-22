@@ -89,7 +89,7 @@
 
 改写文案、删除 `__SECURITY_BLOCK__` 原文透传或调整工具错误映射时，下列**精确形状**断言会失败，必须同时核对：
 
-- `gateway.test.ts:190` 与 `:538-541`/`:554-557`：`serializeBlockReason`/`parseBlockReason` 的往返对象 `toEqual` 恰好 `{ actionId, decisionKind }` 两键，收窄/加键都会失败。
+- `gateway.test.ts:190` 与 `:539-542`/`:555-558`：`serializeBlockReason`/`parseBlockReason` 的往返对象 `toEqual` 恰好 `{ actionId, decisionKind }` 两键，收窄/加键都会失败。
 - `gateway.test.ts:202-234`：`parseBlockReason` 对无前缀 JSON、缺/空 `actionId`、缺/非法 `decisionKind` 一律 `toBeNull()`；把 deny 载荷改成可解析（返回部分对象）会打破这些用例。
 - `gateway.test.ts:464`、`authorize-hardening.test.ts:262`：熔断分支的 `mfaResult` 必须 `toBeUndefined()`；在 `lockedOutcome` 上补 `'failed'` 会失败。
 - `mfa-failure-contract.test.ts:77-84/90-97/116-123/150-156`：`failure` 用 `toMatchObject` 钉住 `code`/`reason`/`actionId`/`attemptsUsed`/`attemptsLeft`/`maxAttempts`，改这些字段名或取值会失败。
