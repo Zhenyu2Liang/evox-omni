@@ -67,7 +67,10 @@ notices 与 feedback 在拼接前 `new Set` 去重（`banking-client.ts:148`）�
 `banking-client.ts` 不做运行时 schema 校验（网页侧才用 `components/chat/transport-validation.ts` 的 zod）。
 HTTP 错误或 `ok:false` 时，仅当 `status<500` 且 `error.code` 匹配 `^[A-Z_]+$` 才抛 `服务端提示（CODE）：{message 前 400 字}\n请核对操作记录后处理。`，否则抛 `银行服务暂未完成请求，请在网页核对操作记录后再处理。`。
 `bridge.ts:37` 把 `BankingApiError.message` 直接作为整条回复，其它异常与网络失败回 `银行请求结果暂时无法确认。请在网页核对操作记录，不要据此判断已成功或资金未变。`。
-错码与锁定不经过该错误通道：动作路由始终回 HTTP 200 的 `{ok:true,data:{ok:false,status,code?,failure?,attemptsLeft?,maxAttempts?,message,…}}`，通道只按 `outcome.status` 与类型化失败字段分支。
+动作路由的业务结算结果不走该错误通道：始终回 HTTP 200 的 `{ok:true,data:{ok:false,status,code?,failure?,attemptsLeft?,maxAttempts?,message,…}}`，通道只按 `outcome.status` 与类型化失败字段分支。
+但路由抛出的 `AppError` 走错误信封 `{ok:false,error:{code,message}}`：`app/api/_lib/http.ts` 映射 `CIRCUIT_OPEN`/`MFA_LOCKED`→423、`SECURITY_DENIED`/`MFA_FAILED`→403、`NOT_FOUND`→404、`CONFLICT`→409、`TOOL_FAILED`→502、`INTERNAL`→500，且 `INTERNAL` 的 message 被替换为 `Internal error`。
+因此「锁定」有两套互不相同的上屏文案：200 `status:'locked'` 走 `settleReply` 的四段说明；423 `CIRCUIT_OPEN`/`MFA_LOCKED` 走 `服务端提示（CODE）：…\n请核对操作记录后处理。`，不含「已锁定」「不再提供验证码入口」等句子，也不经 `securityNotice`。502/500 只落到通用 `银行服务暂未完成请求…`。
+`BankingApiError.message` 是本目录唯一不经 `channelText`/`isInternalDiagnostic` 过滤的上屏文本（`bridge.ts:37` 整条作为回复），安全性完全依赖服务端 `AppError` 消息本身已脱敏。
 `ActionResult`（`banking-client.ts:11-19`）声明 `actionId/ok/status/message/requiresMfa/events` 与可选 `code/attemptsLeft/maxAttempts/failure`；服务端 `sessionId`、`tier`、`mfaResult` 被丢弃，`ok` 不参与判断。
 验证码只出现在本次 verify 请求体，不写 state、不回显、不进模型。
 
