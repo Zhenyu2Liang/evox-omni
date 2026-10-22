@@ -6,6 +6,7 @@ import { safeParse } from '@/lib/json';
 import { catalogEntry } from '@/lib/contracts/tool-catalog';
 import type { AgentRunLease, AgentRunStatus, RuntimeEventChannel, ToolInvocationStatus, ToolReplayPolicy } from '@/lib/contracts/runtime';
 import { WORKFLOW_EXECUTION_LEASE_MS } from '@/lib/contracts/runtime';
+import { RUN_BLOCKING_PENDING_ACTION_STATUSES, SETTLED_PENDING_ACTION_STATUSES } from '@/lib/contracts/security';
 
 const DEFAULT_LEASE_MS = 120_000;
 
@@ -231,17 +232,26 @@ export function runPendingActionWhere(sessionId: string, userId: string, invocat
   ] };
 }
 
+/**
+ * Settle every invocation whose linked `PendingAction` already carries a SETTLED decision —
+ * including the terminal `locked` refusal — inside the caller's transaction. Actions still under
+ * decision (`pending` / `awaiting_mfa` / `confirmed`) are left alone: they keep the run open.
+ */
+async function settleRunActionInvocations(runId: string, sessionId: string, userId: string, client: Prisma.TransactionClient): Promise<void> {
+  const invocations = await client.toolInvocation.findMany({ where: { runId }, select: { id: true } });
+  const actions = await client.pendingAction.findMany({ where: {
+    sessionId, userId, invocationId: { in: invocations.map(invocation => invocation.id) },
+    status: { in: [...SETTLED_PENDING_ACTION_STATUSES] },
+  }, select: { id: true } });
+  for (const action of actions) await settleInvocationFromAction(action.id, client);
+}
+
 /** Synchronize persisted action decisions without authorizing or executing another operation. */
 export async function synchronizeRunActionInvocations(runId: string, sessionId: string, userId: string): Promise<void> {
   await prisma.$transaction(async tx => {
     const run = await tx.agentRun.findUnique({ where: { id: runId } });
     if (!run || run.sessionId !== sessionId || run.userId !== userId) throw new AppError('SECURITY_DENIED', 'Run recovery identity is not valid');
-    const invocations = await tx.toolInvocation.findMany({ where: { runId }, select: { id: true } });
-    const actions = await tx.pendingAction.findMany({ where: {
-      sessionId, userId, invocationId: { in: invocations.map(invocation => invocation.id) },
-      status: { in: ['executed', 'cancelled', 'failed', 'needs_reconciliation'] },
-    }, select: { id: true } });
-    for (const action of actions) await settleInvocationFromAction(action.id, tx);
+    await settleRunActionInvocations(runId, sessionId, userId, tx);
   });
 }
 
@@ -252,10 +262,14 @@ export async function finalizeReceiptedAgentRun(runId: string, sessionId: string
     if (!run || run.sessionId !== sessionId || run.userId !== userId) throw new AppError('SECURITY_DENIED', 'Run recovery identity is not valid');
     if (run.status === 'running' || run.status === 'completed' || run.checkpointStage === 'workflow_only') return;
     if (run.checkpointJson && run.checkpointStage !== 'session_committed') return;
+    // A settled decision - a `locked` refusal in particular - is a stored fact: record it on the
+    // invocation BEFORE judging whether every invocation reached a terminal status, otherwise a run
+    // whose only remaining decision is locked can never be finalized.
+    await settleRunActionInvocations(runId, sessionId, userId, tx);
     const invocations = await tx.toolInvocation.findMany({ where: { runId } });
     if (invocations.length === 0 || invocations.some(invocation => !['completed', 'cancelled', 'failed'].includes(invocation.status))) return;
     if (invocations.some(invocation => invocation.status === 'completed' && invocation.resultJson === null)) return;
-    const outstanding = await tx.pendingAction.count({ where: { ...runPendingActionWhere(sessionId, userId, invocations), status: { in: ['pending', 'awaiting_mfa', 'confirmed', 'needs_reconciliation'] } } });
+    const outstanding = await tx.pendingAction.count({ where: { ...runPendingActionWhere(sessionId, userId, invocations), status: { in: [...RUN_BLOCKING_PENDING_ACTION_STATUSES] } } });
     if (outstanding !== 0) return;
     const failed = invocations.find(invocation => invocation.status === 'failed');
     const cancelled = invocations.some(invocation => invocation.status === 'cancelled');
@@ -448,7 +462,7 @@ export async function settleRecoveredInvocation(lease: AgentRunLease, invocation
   });
 }
 
-/** Settle approved read results or terminal decisions in the action's existing transaction. */
+/** Settle approved read results or terminal decisions in the action transaction; a locked refusal is a settled failed / MFA_LOCKED outcome. */
 export async function settleInvocationFromAction(actionId: string, client: Prisma.TransactionClient): Promise<void> {
   const action = await client.pendingAction.findUnique({ where: { id: actionId } });
   if (!action?.invocationId) return;
@@ -456,6 +470,7 @@ export async function settleInvocationFromAction(actionId: string, client: Prism
   if (!invocation || invocation.status === 'completed') return;
   if (invocation.run.sessionId !== action.sessionId || invocation.run.userId !== action.userId || invocation.toolName !== action.toolName) throw new AppError('CONFLICT', 'Action and invocation identities do not match');
   let status: ToolInvocationStatus | undefined;
+  let errorCode: string | null = null;
   let resultJson: string | undefined;
   if (action.status === 'executed' && catalogEntry(action.toolName)?.effect === 'read') {
     const result = safeParse<{ ok?: boolean } | null>(action.resultJson, null);
@@ -463,13 +478,16 @@ export async function settleInvocationFromAction(actionId: string, client: Prism
     status = 'completed';
     resultJson = action.resultJson;
   } else if (action.status === 'cancelled') status = 'cancelled';
-  else if (action.status === 'failed') status = 'failed';
-  else if (action.status === 'needs_reconciliation') status = 'needs_reconciliation';
+  else if (action.status === 'failed') { status = 'failed'; errorCode = 'TOOL_FAILED'; }
+  // A locked action is a SETTLED refusal, not an unknown outcome: its invocation ends failed with
+  // MFA_LOCKED - never needs_reconciliation, which means the side effect may HAVE committed.
+  else if (action.status === 'locked') { status = 'failed'; errorCode = 'MFA_LOCKED'; }
+  else if (action.status === 'needs_reconciliation') { status = 'needs_reconciliation'; errorCode = 'COMMIT_STATE_UNKNOWN'; }
   if (!status) return;
   if (invocation.status === status && (resultJson === undefined || invocation.resultJson === resultJson)) return;
   const updated = await client.toolInvocation.updateMany({ where: { id: invocation.id, status: { not: 'completed' } }, data: {
     status, ...(resultJson ? { resultJson } : {}), finishedAt: status === 'needs_reconciliation' ? null : new Date(),
-    errorCode: status === 'failed' ? 'TOOL_FAILED' : status === 'needs_reconciliation' ? 'COMMIT_STATE_UNKNOWN' : null,
+    errorCode,
   } });
-  if (updated.count === 1) await appendInTransaction(invocation.runId, { channel: 'internal', eventType: 'invocation_settled_from_action', payloadJson: JSON.stringify({ invocationId: invocation.id, actionId, status }) }, client);
+  if (updated.count === 1) await appendInTransaction(invocation.runId, { channel: 'internal', eventType: 'invocation_settled_from_action', payloadJson: JSON.stringify({ invocationId: invocation.id, actionId, status, errorCode }) }, client);
 }

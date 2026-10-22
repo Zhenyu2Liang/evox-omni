@@ -1,4 +1,4 @@
-﻿/**
+/**
  * agentRun.locked-settlement.test.ts — DB-backed unit spec for the `locked` TERMINAL
  * `PendingAction` status settling its linked `ToolInvocation`.
  *
@@ -192,6 +192,7 @@ describe('a locked PendingAction settles its linked ToolInvocation', () => {
     await seedLinkedAction(session.id, invocationId, 'locked');
     const openAction = await seedLinkedAction(session.id, answeredId, 'pending');
     await finishAgentRun(lease, 'interrupted');
+    const interrupted = await getTestPrisma().agentRun.findUniqueOrThrow({ where: { id: run.id } });
 
     await finalizeReceiptedAgentRun(run.id, session.id, DEMO_USER_ID);
 
@@ -202,8 +203,10 @@ describe('a locked PendingAction settles its linked ToolInvocation', () => {
     // ... but the run itself stays open: one decision is still pending.
     const stillOpen = await getTestPrisma().agentRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(stillOpen.status).toBe('interrupted');
-    expect(stillOpen.finishedAt).toBeNull();
+    expect(stillOpen.finishedAt?.getTime()).toBe(interrupted.finishedAt?.getTime());
     expect((await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: openAction.id } })).status).toBe('pending');
+    // Nothing was reconciled: the finalizer wrote no run_reconciled event for this run.
+    expect(await getTestPrisma().agentRunEvent.count({ where: { runId: run.id, eventType: 'run_reconciled' } })).toBe(0);
   });
 
   it('keeps `locked` out of the OPEN vocabulary and inside the settled/terminal one', () => {
