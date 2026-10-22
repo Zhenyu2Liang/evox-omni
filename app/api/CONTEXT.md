@@ -182,7 +182,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - `app/` never writes `PendingAction.status`: every hit is a comparison or read (`app/agent/history.ts:26`,
   `app/agent/plan-history.ts:24`). No retry/recover/claim/liveness endpoint here can reopen a `'locked'`
   row; all status mutation lives in `@/agent`, `@/security` and `lib/db/repositories/pendingAction.ts`.
-- `POST /api/tasks/[id]` forwards control actions to `agent/workflows/controls.ts`, whose `RESUMABLE` set still includes `waiting_confirmation`, so `resume`/`retry` can restart a plan whose parked `PendingAction` is `locked`. This edge only REPORTS the lock (`pendingActionStatus`) and does not veto the control; the gate belongs in `agent/`.
+- `POST /api/tasks/[id]` REPORTS a parked lock only on reads (`pendingActionStatus`); the VETO lives in `agent/`, where `resumeTask`/`retryTask` call `assertParkedActionsNotTerminal` (`agent/workflows/parked-actions.ts`) BEFORE any status claim and throw `MFA_LOCKED` for a `locked` row (other settled statuses: `CONFLICT`), so this edge answers `423`/`409` instead of executing. `pause`/`cancel`/`rollback` never consult parked actions.
 - `components/` and `channels/` do not yet read `pendingActionStatus`, `lock` or `lockedActions`; all three are additive and optional, so existing consumers keep working unchanged.
 - `DECISION_STATUSES` (`actions/route.ts:58`) is declared but never referenced: the surfacing filter is `attentionFor` (`:77-92`) alone, and `listPendingActions({ sessionId })` (`:130`) applies NO database status filter — it pages the session's newest 100 rows (`lib/db/repositories/pendingAction.ts:84,120-136`) and the route drops non-attention rows in memory.
 
