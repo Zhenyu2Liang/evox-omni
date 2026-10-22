@@ -21,7 +21,7 @@
  * Real app-entry layer: the REAL Next.js route handlers, the REAL confirmation continuation, the REAL
  * Banking SDK and the REAL isolated test SQLite (`prisma/test.db`) run in-process; only the MODEL is
  * absent (no LLM in this path). The ONLY mock is REAL fault injection
- * (`vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(...)`) that makes the
+ * (`vi.spyOn(pendingActionRepo,'claimPendingAction')` failing ONLY the settlement CAS) that makes the
  * result+status transaction genuinely roll back — every assertion re-reads persisted DB state.
  */
 import { beforeEach, afterEach, afterAll, it, expect, vi } from 'vitest';
@@ -88,9 +88,25 @@ async function parkStandalone(
 
 /** The REAL fault injection: make the NEXT result+status transaction genuinely roll back. */
 function wedgeResultTransaction() {
-  return vi
-    .spyOn(pendingActionRepo, 'setPendingActionStatus')
-    .mockRejectedValueOnce(new Error('review: standalone result transaction failed'));
+  // Settlement persists the decision state through `claimPendingAction` INSIDE the same
+  // `prisma.$transaction` that writes `resultJson` and the execution audit, so failing that one
+  // CAS rolls the whole transaction back and leaves the row `confirmed` with `resultJson: null`
+  // AFTER the SDK side effect committed — the real wedge. The authorization CAS also goes through
+  // `claimPendingAction`, so filter by argument: only the settlement transition
+  // (`from: ['confirmed']` -> a terminal status) is failed, and only on its first call.
+  const original = pendingActionRepo.claimPendingAction;
+  let hits = 0;
+  const spy = vi
+    .spyOn(pendingActionRepo, 'claimPendingAction')
+    .mockImplementation(async (input, client) => {
+      const isSettlement = input.to !== 'confirmed' && input.from.includes('confirmed');
+      if (isSettlement && hits === 0) {
+        hits += 1;
+        throw new Error(review: standalone result transaction failed);
+      }
+      return client === undefined ? original(input) : original(input, client);
+    });
+  return { spy, hits: () => hits, restore: () => spy.mockRestore() };
 }
 
 it('a STANDALONE transfer wedge is replayed idempotently to executed (side effect exactly once)', async () => {
@@ -101,9 +117,9 @@ it('a STANDALONE transfer wedge is replayed idempotently to executed (side effec
   const debitWhere = { userId, amountMinor: -20000n, counterpartyId: 'contact_zhangwei' };
   expect(await p.transaction.count({ where: debitWhere })).toBe(0);
 
-  const spy = wedgeResultTransaction();
+  const wedge = wedgeResultTransaction();
   const first = await confirmRaw(id, s);
-  expect(spy.mock.calls.length).toBe(1); // the injection HIT the target
+  expect(wedge.hits()).toBe(1); // the injection HIT the settlement transition
 
   // WEDGED, pre-recovery: side effect COMMITTED, row left `confirmed` with NO persisted result.
   const wedged = await p.pendingAction.findUnique({ where: { id } });
@@ -122,7 +138,7 @@ it('a STANDALONE transfer wedge is replayed idempotently to executed (side effec
   expect(listedWhileWedged.ids).toContain(id);
 
   // REPEAT confirm → proven-idempotent replay on the SAME ledger key → terminal `executed`.
-  spy.mockRestore();
+  wedge.restore();
   const repeated = await confirmRaw(id, s);
   const stored = await p.pendingAction.findUnique({ where: { id } });
   const listed = await listActions(s);
@@ -161,9 +177,9 @@ it('a standalone limit wedge recovers its original receipt without repeating a c
   const txBefore = await p.transaction.count({ where: { userId } });
   expect(limitBefore).toHaveLength(1); expect(limitBefore[0].amountMinor).toBe(300000n);
 
-  const spy = wedgeResultTransaction();
+  const wedge = wedgeResultTransaction();
   const first = await confirmRaw(id, s);
-  expect(spy.mock.calls.length).toBe(1); // the injection HIT the target
+  expect(wedge.hits()).toBe(1); // the injection HIT the settlement transition
 
   // The limit write committed while the separate action status transaction rolled back.
   const wedged = await p.pendingAction.findUnique({ where: { id } });
@@ -174,7 +190,7 @@ it('a standalone limit wedge recovers its original receipt without repeating a c
   await p.cardLimit.updateMany({ where: limitWhere, data: { amountMinor: 50000n } });
 
   // Receipt replay must preserve a newer independent limit change.
-  spy.mockRestore();
+  wedge.restore();
   const repeated = await confirmRaw(id, s);
   const stored = await p.pendingAction.findUnique({ where: { id } });
   const limitAfter = await p.cardLimit.findMany({ where: limitWhere });
@@ -246,10 +262,10 @@ it('a standalone limit-change receipt is recovered without re-applying its histo
   expect(seeded.length).toBe(1);
   expect(seeded[0].amountMinor).toBe(300000n);
 
-  const spy = wedgeResultTransaction();
+  const wedge = wedgeResultTransaction();
   const first = await confirmRaw(id, s);
-  expect(spy.mock.calls.length).toBe(1); // the injection HIT the target
-  spy.mockRestore();
+  expect(wedge.hits()).toBe(1); // the injection HIT the settlement transition
+  wedge.restore();
 
   // WEDGED, pre-recovery: the limit WAS applied EXACTLY ONCE (one row, exactly the requested ¥1500).
   const wedged = await p.pendingAction.findUnique({ where: { id } });
@@ -302,10 +318,10 @@ it('a SIMULATED PROCESS RESTART (fresh module graph, empty liveness registry) st
   const p = getTestPrisma();
   const id = await parkStandalone(s, 'set_card_limit', { cardId: 'card_credit', category: '\u5a31\u4e50', amount: '1500' }, 'Restore a limit change after restart');
 
-  const spy = wedgeResultTransaction();
+  const wedge = wedgeResultTransaction();
   const first = await confirmRaw(id, s);
-  expect(spy.mock.calls.length).toBe(1); // the injection HIT the target
-  spy.mockRestore();
+  expect(wedge.hits()).toBe(1); // the injection HIT the settlement transition
+  wedge.restore();
 
   const wedged = await p.pendingAction.findUnique({ where: { id } });
   expect(first.status).toBe(500);
@@ -354,10 +370,10 @@ it('repeat confirm + page refresh after recovery stay consistent (idempotent, no
 
   const limitWhere = { cardId: 'card_credit', category: '\u5a31\u4e50' };
 
-  const spy = wedgeResultTransaction();
+  const wedge = wedgeResultTransaction();
   const first = await confirmRaw(id, s);
-  expect(spy.mock.calls.length).toBe(1); // the injection HIT the target
-  spy.mockRestore();
+  expect(wedge.hits()).toBe(1); // the injection HIT the settlement transition
+  wedge.restore();
 
   const wedged = await p.pendingAction.findUnique({ where: { id } });
   expect(first.status).toBe(500);
@@ -432,10 +448,10 @@ it('a STANDALONE transfer whose replay FAILS settles failed (never executed) and
 
   const txBefore = await p.transaction.count({ where: { userId } });
 
-  const spy = wedgeResultTransaction();
+  const wedge = wedgeResultTransaction();
   const first = await confirmRaw(id, s);
-  expect(spy.mock.calls.length).toBe(1); // the injection HIT the target
-  spy.mockRestore();
+  expect(wedge.hits()).toBe(1); // the injection HIT the settlement transition
+  wedge.restore();
 
   const wedged = await p.pendingAction.findUnique({ where: { id } });
   expect(first.status).toBe(500);

@@ -11,7 +11,7 @@
  *
  * This spec SIMULATES that restart: it builds a GENUINE wedge (the SDK side effect COMMITS but its
  * result+status transaction ROLLS BACK — fault injected at
- * `pendingActionRepo.setPendingActionStatus`, so the row is left `confirmed` + `resultJson=null`),
+ * `pendingActionRepo.claimPendingAction` (filtered to the settlement transition), so the row is left `confirmed` + `resultJson=null`),
  * then CLEARS the module graph with `vi.resetModules()` and drives recovery through FRESHLY IMPORTED
  * route handlers. It PROVES the fresh registry is EMPTY (`liveCount===0`) while an artificially
  * retained marker on the OLD graph is NON-empty — so a recovery that still relied on in-process
@@ -127,9 +127,25 @@ const runner = (sessionId: string) =>
 
 /** The REAL fault injection: make the NEXT result+status transaction genuinely roll back. */
 function wedgeResultTransaction() {
-  return vi
-    .spyOn(pendingActionRepo, 'setPendingActionStatus')
-    .mockRejectedValueOnce(new Error('review: restart-independence result transaction failed'));
+  // Settlement persists the decision state through `claimPendingAction` INSIDE the same
+  // `prisma.$transaction` that writes `resultJson` and the execution audit, so failing that one
+  // CAS rolls the whole transaction back and leaves the row `confirmed` with `resultJson: null`
+  // AFTER the SDK side effect committed — the real wedge. The authorization CAS also goes through
+  // `claimPendingAction`, so filter by argument: only the settlement transition
+  // (`from: ['confirmed']` -> a terminal status) is failed, and only on its first call.
+  const original = pendingActionRepo.claimPendingAction;
+  let hits = 0;
+  const spy = vi
+    .spyOn(pendingActionRepo, 'claimPendingAction')
+    .mockImplementation(async (input, client) => {
+      const isSettlement = input.to !== 'confirmed' && input.from.includes('confirmed');
+      if (isSettlement && hits === 0) {
+        hits += 1;
+        throw new Error(review: restart-independence result transaction failed);
+      }
+      return client === undefined ? original(input) : original(input, client);
+    });
+  return { spy, hits: () => hits, restore: () => spy.mockRestore() };
 }
 
 const debitCount = (amount: string) =>
@@ -157,10 +173,10 @@ it('a standalone transfer wedge recovers from PERSISTED evidence after the in-pr
   const id = await parkStandalone(sessionId, 'transfer_money', { name: '张伟', amount: '200.00' }, '给张伟转200元');
   expect(await debitCount('200.00')).toBe(0);
 
-  const spy = wedgeResultTransaction();
+  const wedge = wedgeResultTransaction();
   const first = await confirmWith(confirmPost, id, sessionId);
-  const injectionCalls = spy.mock.calls.length;
-  spy.mockRestore();
+  const injectionCalls = wedge.hits();
+  wedge.restore();
   expect(injectionCalls).toBeGreaterThanOrEqual(1); // the injection FIRED (the target was hit)
 
   // WEDGE: the atomic result+status transaction rolled back, so the row carries NO result…
@@ -278,10 +294,10 @@ it('a plan-linked transfer wedge resumes and backfills its node from persisted e
   expect(pending.nodeId).toBe('transfer');
   const receiptKey = `nxe:${plan.id}:transfer`;
 
-  const spy = wedgeResultTransaction();
+  const wedge = wedgeResultTransaction();
   const first = await confirmWith(confirmPost, pending.id, sessionId);
-  const injectionCalls = spy.mock.calls.length;
-  spy.mockRestore();
+  const injectionCalls = wedge.hits();
+  wedge.restore();
   expect(injectionCalls).toBeGreaterThanOrEqual(1); // the injection FIRED (the target was hit)
 
   const wedged = await p.pendingAction.findUniqueOrThrow({ where: { id: pending.id } });
@@ -347,10 +363,10 @@ it('repeat recovery across a module reset is idempotent (no second debit, no sec
   const p = getTestPrisma();
   const id = await parkStandalone(sessionId, 'transfer_money', { name: '张伟', amount: '200.00' }, '给张伟转200元');
 
-  const spy = wedgeResultTransaction();
+  const wedge = wedgeResultTransaction();
   const first = await confirmWith(confirmPost, id, sessionId);
-  expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1); // the injection FIRED (the target was hit)
-  spy.mockRestore();
+  expect(wedge.hits()).toBeGreaterThanOrEqual(1); // the injection FIRED (the target was hit)
+  wedge.restore();
 
   const wedged = await p.pendingAction.findUniqueOrThrow({ where: { id } });
   expect(first.status).toBe(500);
