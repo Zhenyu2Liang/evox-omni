@@ -121,14 +121,14 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - The verify route emits no `action_settled`/`mfa_required`/`confirmation_required` stream events of
   its own (`:88` only forwards `outcomeWithPlan.events`). `action_settled` has no server producer at
   all (client-only, `components/chat/actions.ts`); closing the MFA prompt is left to the client.
-- The edge never rewrites agent text: `verify/route.ts:79-91` copies `outcome.message` and
+- The edge never rewrites agent text: `verify/route.ts:79-94` copies `outcome.message` and
   `outcomeWithPlan.events` into `ActionResponse` unchanged (`ConfirmationOutcome.result` is dropped),
-  and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:124`
-  `sseFrame`. A block reason built by `security/security-gateway.ts:78` (`__SECURITY_BLOCK__` + JSON,
-  e.g. `{"decisionKind":"deny"}`) therefore reaches the browser inside `security_event.message` and any
-  tool-error text. The action routes' own lock refusal IS typed (`code`/`failure`), but stream frames
-  stay verbatim, so there is no app-layer scrubbing or error-code
-  mapping point for them. The same verbatim pass-through exists at `runs/[id]/events/route.ts:18` (`readRunPresentation` frames) and `../agent/history.ts:36-37` (persisted message cards re-emitted unchanged, so a stored `error` card keeps its text). `agent/turns/events.ts:49,73` puts the RAW marker into `security_event.message` and recognizes it only when the text STARTS WITH the prefix; `confirm`/`recover` forward `outcome.events` unchanged and `resumeTurn` (`agent/run-turn.ts:96`) installs the same handler, so a continuation that re-attempts a blocked tool can stream the marker too. The action routes' own `data.message` carries no marker: `AuthorizationResult.message` is always a human sentence and the prefixed payload lives only in `blockReason` / `GatedToolOutcome.error` (`agent/confirmation/gated-execution.ts:66`).
+  and `chat/route.ts:83` writes every `AgentStreamEvent` as a verbatim SSE frame via `_lib/http.ts:125`
+  `sseFrame`, so no app-layer code inspects or rewrites those frames. The `__SECURITY_BLOCK__` prefix is built only by `security/security-gateway.ts:80` (`BLOCK_REASON_PREFIX`),
+  and no route emits that marker: the payload is consumed upstream in `agent/turns/events.ts:59-96`, which recognizes it only when the tool result text STARTS WITH the prefix and then publishes typed facts — a `blocked` `tool_end` view plus a `security_event` carrying `kind`/`code`/`reason`/`actionId`/`attemptsLeft`/`maxAttempts` and no `message`. Residual raw-text paths live in `agent/`: a NON-recognized tool error (`:64-68`) and a Pi run failure (`:193`).
+  The action routes' own lock refusal is typed (`code`/`failure`).
+  Their continuation events are forwarded unchanged, so there is no app-layer scrubbing or error-code
+  mapping point for streamed frames. The same verbatim pass-through exists at `runs/[id]/events/route.ts:18` (`readRunPresentation` frames) and `../agent/history.ts:60-69` (stored cards are re-projected only for pending-action/ack state, so a stored `error` card keeps its text). `confirm`/`recover` forward `outcome.events` unchanged, so any leftover raw text in a continuation comes from a non-recognized tool error or a Pi run failure, never from a block marker. `AuthorizationResult.message` — the source of every action route's `data.message` — is always a human sentence and the prefixed payload lives only in `blockReason` / `GatedToolOutcome.error` (`agent/confirmation/gated-execution.ts:66`).
 - A `'locked'` verify outcome appends no `mfa_required`: `blockedOutcome`
   (`agent/confirmation/outcomes.ts`) emits it only for `pending`/`awaiting_mfa`, so the only possible
   appended event is `plan_update` (and `nextPlanDecision`, `agent/task-decision.ts`, skips rows outside
