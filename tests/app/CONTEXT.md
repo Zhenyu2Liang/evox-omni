@@ -62,4 +62,12 @@ HTTP 200 不等于业务成功。
 本目录不核对锁定的用户可见文案：`securityLocked`、`toolFailed`、「验证码错误次数过多」、「安全中心」、「技能」均无匹配，也没有 `MfaCard`/`publicToolError` 渲染断言；锁定只按 `status`、`mfaResult` 与 DB 行断言。
 全目录只有三处断言 `message` 文本：`manual-review-http.test.ts`（`'manual review'`）与 `card-consume-http.test.ts`（`occurredAt` 校验错误）。
 
+`manual-card-management.test.ts` 是唯一在服务层（不经 HTTP 路由）断言终止锁定的文件：
+`locked:true`、`listCardChanges` 全部 `status:'locked'`、下一次验证 `rejects.toMatchObject({ code: 'CIRCUIT_OPEN' })`、`resetDemoSession` 解锁后回到 `pending`。
+该路径的 `'locked'` 由持久熔断 `isLocked(sessionId)` 推导，用例不断言 `PendingAction.status='locked'` 行，也不读 `SecurityEvent`。
+
+`security_event` 只出现在 `chat-http.test.ts` 与 `malicious-input-http.test.ts`，且只断言 `kind`（`'injection'`）。
+本目录 `__SECURITY_BLOCK__` 零匹配，也从不检查 deny/locked 的 `security_event.message` 或 block reason 文本。
+`publicToolError`/`publicToolSummary`/`chat.error.*` 在本目录零匹配。
+
 数据库隔离与顺序执行见 [../CONTEXT.md](../CONTEXT.md)。
