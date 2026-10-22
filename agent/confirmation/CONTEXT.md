@@ -62,7 +62,7 @@ When wrong MFA codes trip the session circuit breaker (`security/mfa.ts` `verify
 `blockedOutcome` still emits `events: []` (a `locked` row is not an open decision), i.e. no `mfa_required` and no `action_settled`.
 Because the row is now terminal, it is no longer surfaced as a pending decision and `nextPlanDecision`/`withPlanUpdate` do NOT re-emit `mfa_required` for it — the MFA popup does not reappear.
 A re-attempt on the row returns the SAME idempotent `lockedOutcome` (no new challenge, no consumed attempt, no re-prompt), because `authorizeAction` short-circuits a `'locked'` row before the undecided guard.
-`cancelAction` on such a row is refused by the HTTP edge as a terminal lock domain outcome; the facade never reports it as cancelled.
+The gateway's cancel CAS (`['pending', 'awaiting_mfa']` → `'cancelled'`) can never match a locked row, so `cancelAction` on one is refused: the thrown `AppError('CONFLICT', …)` is funnelled by `conflictOutcome`, and `unappliedCancelOutcome` covers the residual case. The facade never claims a cancellation for it.
 No `ToolExecutionResult` is ever built for a lock: `authorizeAndExecute` returns `blockedOutcome` and SKIPS `executeAuthorizedAction`, so there is no `result`, and `performAuthorizationResume` is not called.
 The lock reaches the UI as `status: 'locked'`, the typed `code`/`failure`, and the funnel-rendered `message` on the HTTP `ActionResponse`.
 
