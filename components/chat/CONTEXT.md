@@ -62,7 +62,7 @@
 整页刷新会丢失内存态：`settledActions` 与内联卡片上的终态标记都不持久化。
 `toPendingActionRef` 丢弃 `locked` 行（`actions.ts` 392-399），恢复列表读到锁定行时不会再生成决定。
 刷新后不重建已锁定的决定弹窗。
-该刷新情形由服务端侧修复覆盖；客户端在会话内已不再重开终态决定。
+会话内已终态的决定不再重开（`hasSettledAction` / `visibleRefs`）。
 
 ## 显示与诊断
 
