@@ -41,16 +41,19 @@ export interface ContactFixture {
   id: string;
   name: string;
   phone: string;
+  /** 完整虚构测试手机号（0000 号段），仅供服务端精确匹配，任何对外投影都不得输出。 */
+  phoneFull: string;
   bank: string;
   remark?: string;
 }
 
+// 虚构测试数据：0000 号段，非真实手机号/卡号
 /** The four demo contacts. `zhangwei` / `wangfang` are the transfer recipients in Tests 2 & 3. */
 export const CONTACTS: readonly ContactFixture[] = [
-  { id: 'contact_zhangwei', name: '张伟', phone: '139****0002', bank: '招商银行' },
-  { id: 'contact_wangfang', name: '王芳', phone: '137****0003', bank: '工商银行' },
-  { id: 'contact_mama', name: '妈妈', phone: '136****0004', bank: '建设银行', remark: '家人' },
-  { id: 'contact_lihua', name: '李华', phone: '135****0005', bank: '农业银行' },
+  { id: 'contact_zhangwei', name: '张伟', phone: '139****0002', phoneFull: '13900000002', bank: '招商银行' },
+  { id: 'contact_wangfang', name: '王芳', phone: '137****0003', phoneFull: '13700000003', bank: '工商银行' },
+  { id: 'contact_mama', name: '妈妈', phone: '136****0004', phoneFull: '13600000004', bank: '建设银行', remark: '家人' },
+  { id: 'contact_lihua', name: '李华', phone: '135****0005', phoneFull: '13500000005', bank: '农业银行' },
 ];
 
 /**
@@ -62,6 +65,7 @@ export const AMBIGUOUS_CONTACT: ContactFixture = {
   id: 'contact_wangfang_2',
   name: '王芳',
   phone: '133****9999',
+  phoneFull: '13300009999',
   bank: '中国银行',
 };
 
@@ -89,6 +93,8 @@ export interface CardFixture {
   type: 'DEBIT' | 'CREDIT' | 'VIRTUAL';
   network: string;
   numberMasked: string;
+  /** 完整虚构卡号（0000 号段），仅供服务端精确匹配，任何对外投影都不得输出。 */
+  numberFull: string;
   status: 'ACTIVE' | 'FROZEN' | 'LOST' | 'PENDING';
   creditLimit: string | null;
   availableLimit: string | null;
@@ -97,6 +103,7 @@ export interface CardFixture {
   linkedAccountId?: string | null;
 }
 
+// 虚构测试数据：0000 号段，非真实手机号/卡号
 /** Credit card (¥18,000 limit) + a debit card. `card_credit` carries the 娱乐 card limit. */
 export const CARDS: readonly CardFixture[] = [
   {
@@ -105,6 +112,7 @@ export const CARDS: readonly CardFixture[] = [
     type: 'CREDIT',
     network: 'UnionPay',
     numberMasked: '****6688',
+    numberFull: '6222000000006688',
     status: 'ACTIVE',
     creditLimit: '18000.00',
     availableLimit: '18000.00',
@@ -116,6 +124,7 @@ export const CARDS: readonly CardFixture[] = [
     type: 'DEBIT',
     network: 'UnionPay',
     numberMasked: '****8821',
+    numberFull: '6222000000008821',
     status: 'ACTIVE',
     creditLimit: null,
     availableLimit: null,
@@ -451,6 +460,7 @@ export async function seedDemoData(options: Options = {}): Promise<void> {
       userId: DEMO_USER_ID,
       name: c.name,
       phone: c.phone,
+      phoneFull: c.phoneFull,
       bank: c.bank,
       remark: c.remark ?? null,
     })),

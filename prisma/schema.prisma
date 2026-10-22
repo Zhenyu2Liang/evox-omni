@@ -98,6 +98,9 @@ model Contact {
   userId String
   name   String
   phone  String
+  // Full fictional test mobile number (11 digits) FOR SERVER-SIDE EXACT MATCHING ONLY: never
+  // project, log or return it in a tool result. Historical rows stay NULL (not derivable from phone).
+  phoneFull String?
   bank   String?
   remark String?
 
@@ -112,6 +115,9 @@ model Card {
   type           String // "DEBIT" | "CREDIT" | "VIRTUAL"
   network        String   @default("UnionPay")
   numberMasked   String
+  // Full fictional card number (digits only) FOR SERVER-SIDE EXACT MATCHING ONLY: never project,
+  // log or return it in a tool result. Historical rows stay NULL (not derivable from numberMasked).
+  numberFull     String?
   status         String   @default("ACTIVE") // "ACTIVE" | "FROZEN" | "LOST" | "PENDING"
   creditLimitMinor    BigInt? @map("credit_limit_minor")
   availableLimitMinor BigInt? @map("available_limit_minor")
