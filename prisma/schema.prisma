@@ -198,7 +198,11 @@ model InvestmentHolding {
   principalAmountMinor BigInt @map("principal_amount_minor") // REMAINING cost basis (remaining principal) after partial redemptions.
   estimatedMarketValue String? @map("estimated_market_value") // Exact CNY valuation, before settlement rounding.
   // Current held SHARES: canonical decimal TEXT, at most 6 fractional digits (e.g. "1960.784314"). NULL for a legacy holding whose shares have not been derived yet.
-  shares              String?
+  shares              String? // see `sharesEstimated` below when this value was derived, not recorded
+  // TRUE when `shares` was DERIVED from this holding's old booked value by
+  // `scripts/investment-share-backfill.mjs` instead of being recorded by a real subscription, so the
+  // valuation is presented as 估算 (`valueBasis: 'MIGRATED_ESTIMATE'`), never as an exact one.
+  sharesEstimated Boolean @default(false) @map("shares_estimated")
   // REALIZED profit already booked by redemptions, CNY cents (may be negative). Cumulative profit = realized + unrealized.
   realizedProfitMinor BigInt  @default(0) @map("realized_profit_minor")
   subscribeResult String? // Original SDK purchase outcome, persisted in the purchase transaction.

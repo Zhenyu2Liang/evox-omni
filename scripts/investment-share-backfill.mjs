@@ -5,6 +5,9 @@
  *   shares = FLOOR(market value ÷ net value, 6 fractional digits)
  *   a product that publishes no net value is NEVER fabricated — the holding stays untouched and is
  *   reported as 历史数据不足
+ * A derived share count is an ESTIMATE, not a purchase record: every row the run writes is flagged
+ * `shares_estimated = 1`, so the read side reports `valueBasis: 'MIGRATED_ESTIMATE'` and the UI shows
+ * 「（估算）」 instead of passing the derivation off as an exact net-value position.
  *
  * The market value is the holding's stored `estimatedMarketValue`, falling back to the remaining cost
  * basis (`principalAmountMinor / 100`) when the stored snapshot is NULL. With `--apply` the stored
@@ -33,11 +36,16 @@ const MINOR_PER_UNIT = 100n;
 /** Repository root, resolved from this script so the command works from any working directory. */
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 
+/**
+ * The legacy snapshot. `shares_estimated` is read here so a database that lacks the current column is
+ * reported by this SELECT (with the actionable `pnpm db:push` hint) instead of by the guarded write.
+ */
 const HOLDING_QUERY = `
   SELECT h.id                     AS holdingId,
          h.principal_amount_minor AS principalAmountMinor,
          h.estimated_market_value AS estimatedMarketValue,
          h.shares                 AS shares,
+         h.shares_estimated       AS sharesEstimated,
          h.status                 AS status,
          p.code                   AS productCode,
          p.latest_net_value_per_unit AS latestNetValuePerUnit
@@ -50,7 +58,7 @@ const HOLDING_QUERY = `
 /** The guarded write: still legacy, still open, still not yet derived — so the run is idempotent. */
 const UPDATE_QUERY = `
   UPDATE "InvestmentHolding"
-     SET shares = ?, estimated_market_value = ?
+     SET shares = ?, estimated_market_value = ?, shares_estimated = 1
    WHERE id = ? AND status = 'HOLDING' AND shares IS NULL
 `;
 
@@ -260,6 +268,15 @@ async function runBackfill() {
 
     const totalDrift = derived.reduce((total, plan) => addScaled(total, plan.drift), { coefficient: 0n, scale: 0 });
     console.log(`[backfill] migrated: ${apply ? written : derived.length}${apply ? '' : ' (dry run)'}`);
+    if (derived.length > 0) {
+      // A derived share count is an estimate: say so in BOTH modes, so an operator never mistakes the
+      // rewrite for a recovered purchase record.
+      console.log(
+        apply
+          ? '[backfill] derived shares are flagged as estimated (shares_estimated = 1) and displayed as 估算'
+          : '[backfill] derived shares will be flagged as estimated (shares_estimated = 1) — displayed as 估算, never as an exact net-value position',
+      );
+    }
     if (apply && written !== derived.length) {
       console.log(`[backfill] concurrent changes skipped: ${derived.length - written}`);
     }

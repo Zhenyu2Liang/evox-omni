@@ -31,6 +31,8 @@
 
 `InvestmentProduct.latestNetValuePerUnit` 是 4 位小数的净值文本，`latestNetValueDate` 是该净值的业务日期。
 `InvestmentHolding.shares` 是 6 位小数的持有份额文本。
+`sharesEstimated` 是布尔标记，默认 `false`：为真表示 `shares` 由回填脚本按历史账面价值派生，不是原始申购记录。
+`sharesEstimated` 只由 `scripts/investment-share-backfill.mjs --apply` 置为真，读取据此把 `valueBasis` 报为 `MIGRATED_ESTIMATE`（估算）。
 `principalAmountMinor` 是剩余成本基数，不是已记账现金。
 `estimatedMarketValue` 只是未取整快照，读取一律由 `shares × latestNetValuePerUnit` 派生。
 `realizedProfitMinor` 累计已实现收益，默认 `0`，可为负。

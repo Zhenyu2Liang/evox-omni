@@ -174,7 +174,9 @@ export interface HoldingValuation {
  * Derive a holding's market value from its SHARES and the product's published net value — never from
  * the stored `estimatedMarketValue` snapshot, which can be stale. A holding whose shares were never
  * recorded, or whose product publishes no net value, reports its remaining COST and no profit
- * (历史数据不足) instead of inventing data.
+ * (历史数据不足) instead of inventing data. Shares DERIVED from an old booked value are flagged
+ * `sharesEstimated`, so the same `shares × net value` valuation is reported as `MIGRATED_ESTIMATE`
+ * (估算) — an estimate is never presented as an exact net-value position.
  */
 export function holdingValuation(row: HoldingRow): HoldingValuation {
   const cost = centsToMoney(row.principalAmountMinor);
@@ -193,7 +195,7 @@ export function holdingValuation(row: HoldingRow): HoldingValuation {
     marketValue,
     profit,
     profitRate: profitRateOf(profit, cost),
-    valueBasis: 'NET_VALUE',
+    valueBasis: row.sharesEstimated ? 'MIGRATED_ESTIMATE' : 'NET_VALUE',
   };
 }
 

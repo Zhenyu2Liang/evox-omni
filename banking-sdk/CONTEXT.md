@@ -24,7 +24,11 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 安全层铸造确认快照与执行结算都调用这些函数，确认金额与执行金额不会分叉。
 
 `holdingValuation` 是 `listHoldings`、仪表盘与赎回共用的唯一估值规则。
-份额或净值缺失时，市值回退为剩余成本、收益缺省，`valueBasis` 为 `HISTORICAL_DATA_INSUFFICIENT`。
+`valueBasis` 有三个取值，各自由明确条件产出：
+
+- `NET_VALUE`：`shares` 可用且产品发布了净值，份额来自真实申购记录（`sharesEstimated` 为假）。
+- `MIGRATED_ESTIMATE`：`shares` 可用、净值可用，但 `sharesEstimated` 为真——份额由 `scripts/investment-share-backfill.mjs` 按历史账面价值派生，只能算作估算；市值与收益的计算口径与 `NET_VALUE` 完全相同，只是标注不同。
+- `HISTORICAL_DATA_INSUFFICIENT`：`shares` 缺失或不合法，或产品没有净值。此时市值回退为剩余成本、收益缺省；`sharesEstimated` 为真也不会凭空估值。
 
 ## 认购：新建或聚合
 

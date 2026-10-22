@@ -153,7 +153,10 @@
 口径是 `shares = FLOOR(市值 ÷ 净值, 6 位小数)`，单笔经济价值漂移必须小于 `0.01 元`。
 产品没有净值时不伪造数据。
 这类持仓的市值回退为剩余成本，并标注“历史数据不足”。
-由旧数据派生的持仓标注“估算”。
+由旧数据派生的持仓在 `sharesEstimated` 上标记为估算。
+读取时 `valueBasis` 为 `MIGRATED_ESTIMATE`，页面、卡片与微信输出标注“估算”，市值仍按 `shares × 净值` 派生。
+标记只由回填脚本写入；原始申购、聚合申购与演示种子持仓保持默认假值，`valueBasis` 为 `NET_VALUE`。
+已回填的持仓不会被脚本重复改写。
 
 `estimatedMarketValue` 只是快照。
 读取一律由 `shares × latestNetValuePerUnit` 派生。
@@ -163,9 +166,9 @@
 1. 运行 `node scripts/db-backup.mjs`，快照写入 `logs/db-backups/`。
 2. 执行 `pnpm db:push` 同步净值和份额字段。
 3. 运行 `node scripts/investment-share-backfill.mjs` 试运行并核对结果。
-4. 加 `--apply` 写入份额。
+4. 加 `--apply` 写入份额，同时把该持仓标记为估算。
 
-脚本默认只读，只处理 `HOLDING` 且没有份额的持仓。
+脚本默认只读，只处理 `HOLDING` 且没有份额的持仓，试运行会说明派生份额将被标记为估算。
 任一笔漂移达到 `0.01 元` 时，脚本不写入并以非 0 状态退出。
 
 需要回滚时，先停止所有数据库连接。
