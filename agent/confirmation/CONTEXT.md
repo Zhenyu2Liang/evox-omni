@@ -15,7 +15,7 @@ Human decisions (`confirm` / MFA `verify` / `cancel`) authorize the PERSISTED `P
 
 ## Contracts
 
-`ConfirmationOutcome = { ok: boolean; actionId: string; status: PendingActionStatus; tier: RiskLevel; requiresMfa: boolean; message: string; result?: ToolExecutionResult; events: AgentStreamEvent[] }`.
+`ConfirmationOutcome = { ok: boolean; actionId: string; status: PendingActionStatus; tier: RiskLevel; requiresMfa: boolean; message: string; code?: ErrorCode; failure?: SecurityFailure; result?: ToolExecutionResult; events: AgentStreamEvent[] }` (`contracts.ts:15-28`) — the typed refusal code and the structured failure ARE part of the outcome, so a caller never parses `message`.
 
 `PendingActionStatus` (`@/lib/contracts/security`) = `'pending' | 'awaiting_mfa' | 'confirmed' | 'executed' | 'failed' | 'cancelled' | 'locked' | 'needs_reconciliation'`.
 
