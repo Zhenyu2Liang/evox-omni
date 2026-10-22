@@ -79,6 +79,25 @@
 `sanitizeToolArguments` 只处理凭证、手机号与推理字段，不清洗内部标记。
 传输校验只判断类型：`transport-validation.ts:21`（`summary`/`debugDetail`）、`:76`（错误卡 `message`）、`:100`（`security_event.message`）都接受任意字符串，内部串可穿过校验进入渲染。
 
+### 缺省回落矩阵（`chat.error.toolFailed` vs `chat.error.request`）
+
+识别是逐字相等：只有 `message` 命中 `PUBLIC_BUSINESS_ERRORS`（`lib/tool-feedback.ts:15-26`）或 43 行验证码正则才给出专用文案；`display-sources.json` 的 `errors` 表不含锁定句，锁定句只由 `lib/tool-feedback.ts:25` 映射到 `chat.error.securityLocked`。
+`message` 缺失或空串直接走缺省回落（`lib/tool-feedback.ts:46`），故「没有 message」与「message 未登记」得到同一句通用文案。
+能渲染 `chat.error.toolFailed` 的站点只有 `cards/ErrorCard.tsx:24`、`cards/MfaCard.tsx:66`、`cards/ApprovalRecord.tsx:60`、`ToolEventList.tsx:85`（经 `lib/tool-feedback.ts:57` 的 `error` 分支）；`ChatWindow.tsx:58`/`77` 的回落键是 `chat.error.request`，顶部错误横幅永远不会显示该句。
+
+### 锁定（`status:'locked'`）后的可见状态
+
+`useAgentStream.ts:349-352` 把内联 `mfa` 卡打成 `{status: event.status, message: event.message}`（`event.message` 缺失时显式写 `undefined`），353-364 行同理打 `confirmation` 卡。
+`settleTools`（371-376 行）把同一 `actionId` 的工具行改成 `error` 并用 `event.message` 覆盖摘要，因此锁定句在工具行与内联卡上也走 `chat.error.securityLocked`。
+402-404 行清除同一 `actionId` 的 `pendingAction`，底部 `ApprovalRequest` 卸载；内联卡改由 `cards/ApprovalRecord.tsx:45/53` 显示 `chat.approval.status.locked`（「验证已锁定」）。
+`cards.terminal.locked`（`MfaCard.tsx:65`）与 `cards.mfa.failedAttemptsLimit`（`MfaCard.tsx:96-98`）只在面板仍挂载时可见；锁定后 `verify()` 的自增分支（`useAgentStream.ts:935-940`）不再命中。
+因此「锁定后仍显示通用失败文案」意味着到达上述四处之一的字符串不是逐字锁定句（如 `__SECURITY_BLOCK__…` 之类内部标记）或为空，且该处 `status` 为 `failed`/`error`。
+
+### 内部标记泄漏路径
+
+`security_event` 折叠（`useAgentStream.ts:552-564`）不看 `kind`，`MessageBubble.tsx:70-72` 对 system 角色直出 `content`；工具行 `summary` 经 `ToolEventList.tsx:85` 原样显示未登记字符串。
+components 内没有任何按 `__SECURITY_BLOCK__` 之类前缀过滤的逻辑，`sanitizeToolArguments` 也不处理它。
+
 ## 已知问题
 
 整页刷新会丢失内存态：`settledActions` 与内联卡片上的终态标记都不持久化。
