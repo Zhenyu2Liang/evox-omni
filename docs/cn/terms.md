@@ -38,6 +38,13 @@
 | 剩余本金 | `remainingPrincipal` | 赎回本金小于持仓本金时，持仓剩余的本金 |
 | 追加申购 | `addedToExisting` | 对已持有产品再次申购，并入现有持仓 |
 | 银行业务工具库 | SDK、`banking-sdk/` | 执行所属用户的模拟银行业务 |
+| 借记卡 | `DEBIT` | 绑定本人活期账户、消费扣减账户现金的银行卡 |
+| 信用卡 | `CREDIT` | 使用授信额度、不绑定结算账户的银行卡 |
+| 虚拟卡 | `VIRTUAL` | 由卡片页或智能体申请、绑定本人活期账户的虚拟借记卡 |
+| 结算账户 | settlement account、`Card.linkedAccountId` | 借记卡与虚拟卡消费所扣减的本人活期账户 |
+| 关联状态 | `linkedAccountStatus` | 卡片与结算账户的关联结果：`LINKED`、`MISSING`、`UNTRUSTED`、`NOT_APPLICABLE` |
+| 账户余额 | `accountAvailableBalance` | 结算账户的可用现金 |
+| 可用余额 | `payableAmount` | 本卡当前可消费金额，取账户余额与剩余月限额的较小值 |
 | 有符号 64 位整数 | INT64 | 当前已入账金额的数据库存储范围 |
 | 绿色权限 | GREEN | 当前策略允许自动执行 |
 | 黄色权限 | YELLOW | 执行前需要用户确认 |
