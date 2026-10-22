@@ -60,6 +60,56 @@ attention states and cannot acquire a lease or replay a write. Explicit action/r
 to receipt-first runtime recovery; missing evidence never establishes success or failure. Task
 controls preserve succeeded nodes and execute only work permitted by their current persisted state.
 
+## PendingAction read map
+
+Status filtering is a REPOSITORY concern, not a per-route one: `listPendingActions(query)`
+(`lib/db/repositories/pendingAction.ts:120-136`) accepts a SINGLE exact `status` string
+(`...(query.status ? { status: query.status } : {})`), orders `createdAt: 'desc'` and applies
+`take: query.limit ?? DEFAULT_LIMIT` with `DEFAULT_LIMIT = 100` (`:84`). The only `status: { in: [...] }`
+listing is the plan-scoped `listPendingActionsByTask` (`:144`). Every call site in `app/`:
+
+- `actions/route.ts:130` — `listPendingActions({ sessionId: identity.sessionId })`: NO `status`, NO
+  `limit`, so the read is the session's newest 100 rows and `attentionFor` (`:77-92`) narrows them in
+  memory to `pending`/`awaiting_mfa`/`needs_reconciliation` plus an UNSETTLED `confirmed`
+  (`processing`/`recoverable`/`reconciliation`). `locked`, `executed`, `failed`, `cancelled` and a
+  settled `confirmed` are dropped in memory. There is no `?status=`/`?limit=` override.
+- `security/route.ts:88` — `listPendingActions({ sessionId, status: 'locked' })` (exact single status,
+  repo default page size), then re-sorted by `updatedAt` desc.
+- `security/page.tsx:159-163` — `listPendingActions({ sessionId, status: 'locked', limit: LOCKED_ACTION_LIMIT })`
+  (`:60` = 20).
+- `_lib/task-pending-actions.ts:70` — `getPendingAction(id)` per distinct id (`Promise.all`), the
+  read-only source of each node's `pendingActionStatus`.
+- `agent/history.ts:56` and `agent/plan-history.ts:24` — raw `prisma.pendingAction.findMany` scoped by
+  `sessionId` + `userId` (plus `taskId: { in: [...] }` in plans), no status filter, no `take`.
+- No route under `app/api/` writes `PendingAction.status`; mutation stays in `@/agent`, `@/security`
+  and `lib/db/repositories/pendingAction.ts`. `actions/route.ts:58` declares `DECISION_STATUSES` but
+  it is UNUSED — the effective filter is `attentionFor`, so there is no SQL status filter to widen.
+
+Page-cap gotcha: because `GET /api/actions` pages by the repository default and filters AFTER the
+fetch, a session holding more than 100 newer non-surfaced rows (`executed`/`cancelled`/`locked`/settled
+`confirmed`) can hide an older real decision from this read model. `/api/security` and `/security`
+avoid it with the `'locked'` status filter.
+
+## Recovery and resume entry points
+
+- `actions/[id]/recover/route.ts:53` → `recoverOwned(id, { userId, sessionId })`
+  (`_lib/agent-bridge.ts:127`) → `@/agent` `recoverAction`; a `locked` row short-circuits at `:74`
+  through `_lib/locked-action.ts` with no delegation and no write.
+- `actions/[id]/confirm|verify|cancel/route.ts:39|36|38` → `confirmOwned`/`verifyOwned`/`cancelOwned`
+  (`_lib/agent-bridge.ts:95|103|112`), each preceded by `getPendingAction(id)` (`404`/`403`) and
+  followed by `withPlanUpdate` (`_lib/agent-bridge.ts:163`).
+- `tasks/[id]/route.ts:71` POST → `resolveTaskControl(body.action)(sessionId, id)`
+  (`_lib/agent-bridge.ts:73`; map `:59-65` = `pauseTask`/`resumeTask`/`cancelTask`/`retryTask`/
+  `rollbackTask`), signature `(sessionId: string, taskId: string) => Promise<TaskPlan | undefined>`.
+- `runs/[id]/recover/route.ts:11` → `recoverOwnedRun(runId, identity, invocationId?)` from
+  `@/agent/durable/service`; cannot authorize writes.
+- `schedules/tick/route.ts:7` → `tickScheduledTasks(identity)`.
+- `manual-reviews/[id]/route.ts:11` → `resolveManualReview(identity, id, 'stop'|'retry'|'resume', notes)`
+  (developer mode required).
+- `security/reset/route.ts:69` → `security.circuitBreaker.resetSession` and
+  `developer/security/reset/route.ts:8` → `resetDemoSession`. Neither writes a `PendingAction` row;
+  the unlock only renews the MFA challenges of still-`awaiting_mfa` actions.
+
 ## Transport contracts
 
 JSON success uses `{ ok: true, data }`; failure uses `{ ok: false, error: { code, message } }`.
@@ -109,6 +159,9 @@ Unlock: `POST /api/security/reset` clears only the account circuit breaker (`sec
 
 Keep route-local schemas private: Next.js route modules export HTTP handlers, supported route
 configuration and TypeScript types only. Dynamic route parameters are awaited promises.
+Handlers stay importable: tests call them in-process (190 import sites across `tests/app/` and
+`tests/integration/`), passing the id route context as `{ params: Promise.resolve({ id }) }`
+(`tests/app/harness.ts:101`, shape `_lib/types.ts:91-93`).
 Handlers use `_lib/agent-bridge` for action/task delegation and persisted ownership checks before
 execution. The fixed demo identity has no missing-cookie rejection branch.
 
