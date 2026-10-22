@@ -8,41 +8,17 @@
  * from their TYPED fields (`code` / `reason` / `attemptsLeft`), never from string matching.
  *
  * `safePublicText` delegates the allow-listed rendering to `publicToolError` and `publicToolError`
- * imports the diagnostic predicate from here. That single, function-declaration-only cycle is safe
- * (nothing is called at module-evaluation time) and keeps ONE predicate for both entry points.
+ * imports the diagnostic predicate from `./internal-text`. `./errors` uses the same predicate to
+ * derive `AppError.publicMessage` at construction time. Every dependency here is acyclic: the pure
+ * predicate lives in its own module precisely so `./errors` never has to import this funnel.
  */
 import type { MessageKey, Translator } from './i18n/shared';
+import { AppError } from './errors';
+import { isInternalDiagnostic, publicSafeMessage } from './internal-text';
 import { publicToolError } from './tool-feedback';
 
-/**
- * The marker the security gateway wraps around a serialized refusal payload. Duplicated (not
- * imported) on purpose: `security/security-gateway.ts` already imports from `lib/`, so importing it
- * back would create a cross-layer cycle.
- */
-const BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__';
-
-/** Rendered forms of a missing value — never a business fact. */
-const NULLISH_TEXT = new Set(['undefined', 'null', '[object Object]']);
-
-/** A raw JSON fragment (an object start or a serialized property) — never user-facing text. */
-const JSON_FRAGMENT = /\{\s*"|":/;
-
-/** A stack-trace frame or an exception header (`Error:` / `TypeError:` / `RangeError:`). */
-const DIAGNOSTIC_TRACE = /\n\s+at\s|[A-Za-z]*Error:/;
-
-/**
- * Is this text an internal diagnostic (never user-facing)? Pure, text-shape based — deliberately
- * NOT a business-text allow-list: ordinary business messages (e.g. `Insufficient funds: …`,
- * `Transfer amount must be positive.`) stay renderable.
- */
-export function isInternalDiagnostic(text: string | undefined): boolean {
-  if (typeof text !== 'string') return false;
-  const trimmed = text.trim();
-  if (trimmed === '') return false;
-  if (text.includes(BLOCK_REASON_PREFIX)) return true;
-  if (NULLISH_TEXT.has(trimmed)) return true;
-  return JSON_FRAGMENT.test(text) || DIAGNOSTIC_TRACE.test(text);
-}
+/** Re-exported so callers keep importing the predicate from the funnel they already use. */
+export { isInternalDiagnostic };
 
 /**
  * Safe public text: a catalog fallback for a missing/internal-diagnostic message, else the
@@ -53,8 +29,20 @@ export function safePublicText(text: string | undefined, t: Translator, fallback
   return publicToolError(text, t, fallback);
 }
 
+/**
+ * Render an error (typically an `AppError`) without ever exposing its internal message: the
+ * pre-sanitised `publicMessage` goes through the SAME funnel, and the server-owned `code` supplies
+ * the catalog rendering when the text itself is not allow-listed. An internal diagnostic has no
+ * public message at all, so it renders as the catalog fallback.
+ */
+export function publicErrorMessage(error: unknown, t: Translator, fallback: MessageKey = 'chat.error.toolFailed'): string {
+  if (error instanceof AppError) return publicToolError(error.publicMessage, t, fallback, error.code);
+  const text = publicSafeMessage(error instanceof Error ? error.message : typeof error === 'string' ? error : undefined);
+  return publicToolError(text, t, fallback);
+}
+
 /** The typed facts of a security refusal that may be rendered to the user. */
-interface SecurityNoticeInput {
+export interface SecurityNoticeInput {
   code?: string;
   reason?: string;
   kind?: string;
@@ -63,22 +51,38 @@ interface SecurityNoticeInput {
 }
 
 /**
- * Render a structured security refusal from its TYPED fields (never from message text):
+ * The catalog key of a structured security refusal, decided from its TYPED fields only (never from
+ * message text):
  *  - an exhausted / locked verification → `chat.error.actionLocked`;
- *  - a retryable wrong code → `chat.error.verificationRemaining` with the remaining attempts;
+ *  - a retryable wrong code → `chat.error.verificationRemaining` (see `securityNoticeParams`);
  *  - a session lock or an open circuit → `chat.error.securityLocked`;
  *  - any other refusal → `chat.error.securityDenied`.
+ *
+ * Exported so every layer (gateway, HTTP edge, channel, UI) shares ONE mapping instead of
+ * re-deriving it from strings.
  */
-export function securityNotice(failure: SecurityNoticeInput | undefined, t: Translator): string {
+export function securityNoticeKey(failure: SecurityNoticeInput | undefined): MessageKey {
   if (failure && (failure.code === 'MFA_LOCKED' || failure.reason === 'mfa_attempts_exhausted')) {
-    return t('chat.error.actionLocked');
+    return 'chat.error.actionLocked';
   }
   if (failure && (failure.reason === 'mfa_code_invalid' || failure.code === 'MFA_FAILED')) {
-    return t('chat.error.verificationRemaining', { count: failure.attemptsLeft ?? 0 });
+    return 'chat.error.verificationRemaining';
   }
   if (failure && (failure.code === 'CIRCUIT_OPEN' || failure.reason === 'circuit_open'
     || failure.reason === 'mfa_session_locked')) {
-    return t('chat.error.securityLocked');
+    return 'chat.error.securityLocked';
   }
-  return t('chat.error.securityDenied');
+  return 'chat.error.securityDenied';
+}
+
+/** The typed interpolation facts that belong to `securityNoticeKey(failure)` — `attemptsLeft` only. */
+export function securityNoticeParams(failure: SecurityNoticeInput | undefined): Record<string, number> | undefined {
+  if (securityNoticeKey(failure) !== 'chat.error.verificationRemaining') return undefined;
+  return { count: failure?.attemptsLeft ?? 0 };
+}
+
+/** Render a structured security refusal through the typed mapping above. */
+export function securityNotice(failure: SecurityNoticeInput | undefined, t: Translator): string {
+  const params = securityNoticeParams(failure);
+  return params ? t(securityNoticeKey(failure), params) : t(securityNoticeKey(failure));
 }
