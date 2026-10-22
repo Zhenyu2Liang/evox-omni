@@ -146,7 +146,7 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 ### 微信通道的锁定覆盖与剩余缺口
 
 - 锁定终态的四段全文由 `unit/weixin-lock-presentation.test.ts:87-92` 定义并以 `toBe` 全等断言：`状态：已锁定` 行、无 `继续验证：`/`/验证`、不回显服务端 `outcome.message`，见 `:99`/`:112`/`:123`/`:157`；`unit/weixin-channel.test.ts:91-92` 的弱断言仍并存。
-- `awaiting_mfa` 回复的 `状态：等待验证码` + `继续验证：/验证 …` 从未断言，只核对 `settle` 调用参数。
+- `awaiting_mfa` 的 `状态：等待验证码` + `继续验证：/验证 <id> 六位验证码` + 剩余次数由 `unit/weixin-lock-presentation.test.ts:134` 全等断言，入口只属 `awaiting_mfa` 见 `:144-152`。
 - 微信入口无「第三次错误验证码→锁定」用例；`scenarios/test-10-circuit-breaker.test.ts` 走代理路径，不经通道。
 - 无 `/验证 <id>`（缺码）、`/取消 <id>` 回执、`/恢复操作 <id>` 的 bridge 分派、`命令格式不正确`、非文字/超长消息、`BankingApiError`（`服务端提示（CODE）：…`，含 `CIRCUIT_OPEN` 信封）的用例。
 - 无断言出站文本不含 `__SECURITY_BLOCK__`：`renderEvents` 忽略 `security_event` 仅由代码保证；`__SECURITY_BLOCK__` 在 `tests/` 内只出现在 `unit/agent/providers/provider-mock.test.ts`（mock responder 的 block 前缀，与通道无关）。
