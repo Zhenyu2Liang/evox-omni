@@ -39,7 +39,7 @@
 - [转账执行](../../banking-sdk/transfer.ts)的 `resolveRecipient` 复用同一规则。
 - [新增联系人](../../banking-sdk/contact.ts)用身份判定拒绝重复手机号。
 - [联系人查询](../../lib/db/repositories/contact.ts)的 `searchContacts` 只用候选筛选。
-- [号码语义](../../lib/phone.ts)是身份判定与候选筛选的唯一实现。
+- [号码语义](../../lib/phone.ts)是身份判定与候选筛选的唯一来源。
 
 ## 跨用户隔离
 
@@ -107,7 +107,7 @@
 `apply_virtual_card` 创建新卡，不接受选择器。
 
 选择器参数定义在[卡片工具](../../agent/tools/card.ts)的 `cardSelectorFields`。
-解析实现见[卡片选择器解析](../../security/card-resolution.ts)。
+解析代码见[卡片选择器解析](../../security/card-resolution.ts)。
 
 ## 虚构测试数据号段
 
@@ -140,15 +140,15 @@
 - 错误消息与会话事件。
 - 澄清消息：文本里的 12 至 19 位数字先经 `maskCardReferences` 脱敏。
 
-脱敏实现集中在[脱敏模块](../../lib/mask.ts)，提供 `maskPhone`、`maskAccountNumber` 和 `maskCardNumber`。
-各层不得自行实现脱敏或复制实现。
+脱敏代码集中在[脱敏模块](../../lib/mask.ts)，提供 `maskPhone`、`maskAccountNumber` 和 `maskCardNumber`。
+各层不得自行编写脱敏代码，也不得复制这段代码。
 
 说明：已脱敏的展示值无法还原完整号码，中间四位与前置位永不写入展示列。
 
 ## 数据升级与回滚
 
 升级只新增 2 个可空列，已有数据继续可读。
-未补全的行保持空值，相关联系人与卡片改用脱敏尾号或 id 选择。
+未补全的行保持空值，这类联系人与卡片改用脱敏尾号或 id 选择。
 
 ### 升级步骤
 
@@ -192,7 +192,8 @@
 [补全脚本](../../scripts/number-backfill.ts)按以下规则处理数据：
 
 - 只扫描 `phoneFull` 或 `numberFull` 为空的行。
-- 唯一允许的补全是从展示列复制：展示列本身已是完整号码时，复制进完整号码列，并把展示列规范化为脱敏形态。
+- 唯一允许的补全是从展示列复制。
+  展示列已是完整号码时，复制进完整号码列，并把展示列规范化为脱敏形态。
 - 脱敏展示值永不还原，缺失数字不会被猜测或推算。
 - 写入使用比较并交换：完整号码列仍为空，且展示列未被改动。
 - 用户新增的带值记录不在扫描范围内，脚本不会覆盖这些记录。
@@ -230,7 +231,7 @@
 ## 代码入口
 
 - [号码语义](../../lib/phone.ts)：身份判定、候选筛选与片段搜索。
-- [脱敏模块](../../lib/mask.ts)：手机号、账号和卡号的唯一脱敏实现。
+- [脱敏模块](../../lib/mask.ts)：手机号、账号和卡号的唯一脱敏来源。
 - [收款人解析](../../security/recipient-resolution.ts)：解析转账收款人并规范化 `contactId`。
 - [卡片选择器解析](../../security/card-resolution.ts)：解析卡片选择器并规范化 `cardId`。
 - [权限网关](../../security/security-gateway.ts)：park 阶段调用解析器，返回澄清或规范化参数。
