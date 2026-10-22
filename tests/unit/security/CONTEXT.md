@@ -83,7 +83,7 @@
 ## 文案改写时必须核对的断言形状
 
 锁定拒绝的 `message` 在本目录只有负例断言，改写文案安全：
-`gateway.test.ts:179/388/442/466`、`authorize-hardening.test.ts:201`、`authorize-concurrency.test.ts:191`、`transfer-limits-concurrency.test.ts:191/289` 均为 `not.toContain(MFA_CODE)`；
+`gateway.test.ts:179/389/443/466`、`authorize-hardening.test.ts:201`、`authorize-concurrency.test.ts:191`、`transfer-limits-concurrency.test.ts:191/289` 均为 `not.toContain(MFA_CODE)`；
 `mfa-failure-contract.test.ts:101-102/124/157` 为 `not.toContain('__SECURITY_BLOCK__')`；
 `circuit-breaker-audit.test.ts:84-85`、`circuit-breaker-reset.test.ts:117-118` 只断言 `SecurityEvent.message` 非空。
 
