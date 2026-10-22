@@ -44,6 +44,16 @@
 会话策略测试只覆盖 mock 分类器，不覆盖真实模型散文。
 `conversation-evidence.test.ts` 只拒绝散文作为查询证据，不涉及确认声明。
 
+## 锁定结果的展示覆盖
+
+`tool-diagnostics.test.ts` 的 `renders locked verification and confirmation cards without actionable buttons`（L60）是本目录唯一的渲染层锁定用例，
+只断言 `cards.terminal.locked`、无 `<input>`、无 `<button>`。
+`chat.error.actionLocked` 与 `chat.error.securityLocked` 在本目录没有任何断言；
+`MfaCard` 锁定分支里的 `pages.security.unlockDescription`/`pages.security.title` 与 `/验证` 按钮缺失也无断言。
+工具行摘要的锁定文案同样无用例：`tool-feedback.test.ts` 只覆盖 `chat.error.toolFailed`。
+`action_settled{status:'locked'}` 让工具行带上 `errorCode='MFA_LOCKED'` 的 reducer 行为没有用例。
+`securityNotice` 的键级覆盖在 [../lib/CONTEXT.md](../lib/CONTEXT.md) 的 `public-text.test.ts`，不经过任何卡片渲染。
+
 ## 相关但不在本目录
 
 `scripted-provider.test.ts` 只验证 `tests/helpers/scripted-provider.ts` 自身。
