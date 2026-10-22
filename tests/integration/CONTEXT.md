@@ -189,3 +189,7 @@ wedge 用例只能注入生产确认路径真正调用的符号，否则 spy 永
 - `locked-action-recovery.test.ts` 只覆盖进程内恢复入口：`tickAgentRecovery` 与真实子进程重启（`../helpers/restart-process.ts`）没有锁定动作用例，原因是其屏障在高负载下易超时；真并发租约抢占被 `beginAgentRun` 拒绝，无法直接构造。
 - 锁定动作没有 HTTP `POST /api/actions/[id]/recover` 用例：本目录覆盖的是服务端 `recoverAction`（`agent/index.ts:168`），`../app/mfa-lock-refresh-unlock-http.test.ts` 覆盖的是 `verify`／`confirm` 与 `POST /api/security/reset`。
 - 两条再驱动入口的用例仍按「控制返回计划快照／`200`」的旧语义调用：`locked-action-recovery.test.ts:244/254` 与 `write-idempotency.test.ts:40-42` 期望控制调用正常返回，而生产已因 `assertParkedActionsNotTerminal` 在认领前抛出（`MFA_LOCKED`／`CONFLICT`，HTTP `409`）。
+- 绑定在本目录（见上文「wedge 故障注入的有效接缝」）的死 spy 导致一大类 wedge 用例失败：注入未命中的自检断言拿到 0，预期的 `500` 拿到 `200`，wedge 从未真正构造出来。
+- 本目录**没有**任何 `vi.mock(...)`（只用 `vi.spyOn` 打命名空间对象），也不 mock `@/lib/db/client`、不 spy `prisma.$transaction`、不 spy `tx.pendingAction.update`。
+- 唯一真正的 Prisma 事务级故障注入器是 `../helpers/write-failure.ts`（`injectWriteFailure`／`withInjectedWriteFailure`，用 Proxy 替换 `$transaction` 的 `tx`，因 `vi.spyOn` + `restoreAllMocks` 无法还原 Prisma 的 `$transaction`），只被 `tests/unit/banking-sdk/*` 使用，本目录未使用。`../helpers/db.ts#getTestPrisma` 经 `createRequire` 取 `lib/db/client.ts` 的 `globalThis.prisma` 单例，技术上可 spy 共享 client，但本目录没有这样做。
+- 本目录唯一 spy Prisma model 方法的是 `financial-node-concurrency.test.ts:62`（`vi.spyOn(p.pendingAction, 'updateMany')`，屏障用），其目标 `revokePendingActionsByTask` 仍是活代码（`agent/workflows/cancellation.ts:81,85`）。
