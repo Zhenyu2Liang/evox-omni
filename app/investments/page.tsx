@@ -21,7 +21,11 @@ export default async function InvestmentsPage() {
         </div>
         <Link href="/agent" className="rounded-xl bg-banking-accent px-4 py-2 text-sm font-medium text-white">{t('pages.investments.manage')}</Link>
       </header>
-      <p className="rounded-2xl border border-banking-accent/15 bg-white p-4 text-sm text-banking-navy">{t('pages.investments.description')}</p>
+      <div className="space-y-2 rounded-2xl border border-banking-accent/15 bg-white p-4 text-sm text-banking-navy">
+        <p>{t('pages.investments.description')}</p>
+        <p className="text-xs text-banking-navy/60">{t('business.investments.profitScope')}</p>
+        <p className="text-xs text-banking-navy/60">{t('business.investments.disclaimer')}</p>
+      </div>
       <section className="space-y-4" data-investment-products>
         <h2 className="text-lg font-semibold text-banking-deep">{t('pages.investments.products')}</h2>
         {products.length === 0 ? <EmptyState title={t('pages.investments.emptyProducts')} description={t('pages.investments.emptyDescription')} /> : (

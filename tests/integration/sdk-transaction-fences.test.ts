@@ -50,7 +50,7 @@ it.each(mutations)('%s reaches the trusted transaction fence and commits no busi
     set_subscription_reminder: { subscriptionId: subscription.id, remind: !subscription.remind },
     create_scheduled_task: { name: '写入围栏任务', kind: 'REMINDER', runAt: Date.now() + 86400000 },
     subscribe_investment: { productId: product.id, amount: centsToMoney(product.minAmountMinor) },
-    redeem_investment: { holdingId: holding.id },
+    redeem_investment: { holdingId: holding.id, mode: 'ALL' },
   };
   const before = await businessState(); let fences = 0;
   const result = await createToolRegistry(userId).executeDirect(tool, args[tool]!, {

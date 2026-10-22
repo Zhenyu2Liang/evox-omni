@@ -6,17 +6,19 @@
  * Localized presentational component with no data access — the
  * `ProductView` / optional `HoldingView` DTOs arrive via props. Booked money uses `ui/Money`;
  * estimates use `ui/DecimalMoney`. Risk levels use `ui/Badge` independently of permission tiers.
+ * The holding block shows the 净值 + 份额 facts through `HoldingFacts`, so the tile and the chat card
+ * report exactly the same SDK-derived values.
  */
 import type { HoldingView, ProductView } from '@/banking-sdk';
 import { Badge } from '../ui/Badge';
 import type { BadgeProps } from '../ui/Badge';
 import { Card } from '../ui/Card';
 import { Money } from '../ui/Money';
-import { DecimalMoney } from '../ui/DecimalMoney';
 import { rateRatioToPercent } from '@/lib/decimal';
 import { formatDateTime } from '@/lib/date';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
+import { HoldingFacts, usesNetValueModel, valueBasisLabelKey } from './HoldingFacts';
 
 export interface InvestmentProductTileProps {
   product: ProductView;
@@ -51,11 +53,12 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
   const { t } = useI18n();
   const cls = ['space-y-3', className].filter(Boolean).join(' ');
   // Recorded purchases are aggregation purchases (oldest → newest); `lastPurchaseAt` is the most
-  // recent of them. `holding.amount` is the REMAINING booked principal after any partial
-  // redemption, so the principal / market value / profit rows below already show the remainder.
+  // recent of them. `holding.amount` is the REMAINING booked cost after any partial redemption, and
+  // the 净值 + 份额 facts below are rendered from the SDK's derived values (never recomputed here).
   const purchases = holding?.purchases ?? [];
   const lastPurchaseAt = holding?.lastPurchaseAt
     ?? (purchases.length > 0 ? purchases[purchases.length - 1].at : undefined);
+  const basisKey = holding === undefined ? undefined : valueBasisLabelKey(holding);
 
   return (
     <Card className={cls}>
@@ -94,29 +97,21 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
 
       {holding ? (
         <div className="space-y-1 border-t border-banking-light pt-2">
-          <div className="text-xs text-banking-navy/60">{t('business.investments.holdings')}</div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-banking-navy/60">{t('business.investments.holdings')}</span>
+            {basisKey !== undefined ? (
+              <Badge tone={holding.valueBasis === 'HISTORICAL_DATA_INSUFFICIENT' ? 'warn' : 'info'}>
+                {t(basisKey)}
+              </Badge>
+            ) : null}
+          </div>
           <div className="flex items-center justify-between gap-3 text-sm">
             <span className="text-banking-navy/60">{t('business.investments.principal')}</span>
             <span className="font-medium text-banking-deep">
               <Money amount={holding.amount} />
             </span>
           </div>
-          {holding.marketValue !== undefined ? (
-            <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="text-banking-navy/60">{t('business.investments.marketValue')}</span>
-              <span className="font-medium text-banking-deep">
-                <DecimalMoney amount={holding.marketValue} />
-              </span>
-            </div>
-          ) : null}
-          {holding.profit !== undefined ? (
-            <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="text-banking-navy/60">{t('business.investments.profit')}</span>
-              <span className="font-medium text-banking-deep">
-                <DecimalMoney amount={holding.profit} signed />
-              </span>
-            </div>
-          ) : null}
+          <HoldingFacts holding={holding} layout="tile" />
           {lastPurchaseAt !== undefined ? (
             <div className="flex items-center justify-between gap-3 text-sm">
               <span className="text-banking-navy/60">{t('business.investments.lastPurchase')}</span>
@@ -128,6 +123,10 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
               {t('business.investments.purchases')} · {t('business.investments.purchaseCount', { count: purchases.length })}
             </div>
           ) : null}
+          <p className="text-xs leading-relaxed text-banking-navy/60">
+            {usesNetValueModel(holding) ? `${t('business.investments.profitScope')} ` : null}
+            {t('business.investments.disclaimer')}
+          </p>
         </div>
       ) : null}
     </Card>

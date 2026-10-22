@@ -10,6 +10,7 @@ import { formatDateTime } from '@/lib/date';
 import { DecimalMoney } from '../../ui/DecimalMoney';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
+import { HoldingFacts, usesNetValueModel, valueBasisLabelKey } from '../../banking/HoldingFacts';
 import { ResultCard, ResultMetric } from './ResultCard';
 
 export interface InvestmentsCardProps {
@@ -56,11 +57,12 @@ const RISK_LABEL: Record<ProductView['riskLevel'], MessageKey> = {
 function InvestmentResult({ product, holding }: { product: ProductView; holding?: HoldingView }) {
   const { t } = useI18n();
   // Recorded purchases are aggregation purchases (oldest → newest): a non-empty list means the
-  // principal was topped up on an existing holding; `lastPurchaseAt` is the most recent of them.
+  // cost was topped up on an existing holding; `lastPurchaseAt` is the most recent of them.
   const purchases = holding?.purchases ?? [];
   const addedToExisting = purchases.length > 0;
   const lastPurchaseAt = holding?.lastPurchaseAt
     ?? (addedToExisting ? purchases[purchases.length - 1].at : undefined);
+  const basisKey = holding === undefined ? undefined : valueBasisLabelKey(holding);
   return (
     <div className="min-w-0 rounded-xl border border-banking-light bg-slate-50/60 p-3.5">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -82,13 +84,15 @@ function InvestmentResult({ product, holding }: { product: ProductView; holding?
             <span className="text-xs font-medium text-banking-navy">{t('business.investments.holdings')}</span>
             <div className="flex flex-wrap items-center gap-2">
               {addedToExisting ? <Badge tone="success">{t('business.investments.addedToExisting')}</Badge> : null}
+              {basisKey !== undefined ? (
+                <Badge tone={holding.valueBasis === 'HISTORICAL_DATA_INSUFFICIENT' ? 'warn' : 'info'}>{t(basisKey)}</Badge>
+              ) : null}
               <Badge tone={holding.status === 'HOLDING' ? 'info' : 'neutral'}>{t(holding.status === 'HOLDING' ? 'business.investments.holdingActive' : 'business.investments.holdingRedeemed')}</Badge>
             </div>
           </div>
           <dl className="space-y-2 text-xs">
             <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.principal')}</dt><dd className="font-semibold text-banking-deep"><Money amount={holding.amount} /></dd></div>
-            {holding.marketValue !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.marketValue')}</dt><dd className="font-medium text-banking-deep"><DecimalMoney amount={holding.marketValue} /></dd></div> : null}
-            {holding.profit !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.profit')}</dt><dd className="font-medium text-banking-deep"><DecimalMoney amount={holding.profit} signed /></dd></div> : null}
+            <HoldingFacts holding={holding} layout="card" />
             {lastPurchaseAt !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.lastPurchase')}</dt><dd className="font-medium text-banking-deep">{formatDateTime(lastPurchaseAt)}</dd></div> : null}
             {addedToExisting ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.purchases')}</dt><dd className="font-medium text-banking-deep">{t('business.investments.purchaseCount', { count: purchases.length })}</dd></div> : null}
           </dl>
@@ -121,6 +125,9 @@ export function InvestmentsCard(p: InvestmentsCardProps) {
   const totalMarketValue = holdings.reduce((sum, holding) => addDecimal(sum, holding.marketValue ?? '0'), '0');
   const hasProfit = holdings.length > 0 && holdings.every((holding) => holding.profit !== undefined);
   const totalProfit = holdings.reduce((sum, holding) => addDecimal(sum, holding.profit ?? '0'), '0');
+  // The return definitions only describe a holding the SDK actually valued by shares × net value.
+  const heldEntries = entries.filter((entry): entry is TileEntry & { holding: HoldingView } => entry.holding !== undefined);
+  const showReturnDefinitions = heldEntries.length > 0 && heldEntries.every(entry => usesNetValueModel(entry.holding));
 
   return (
     <div className={className}>
@@ -146,6 +153,11 @@ export function InvestmentsCard(p: InvestmentsCardProps) {
               />
             ))}
           </div>
+          {showReturnDefinitions ? (
+            <p className="mt-3 text-xs leading-relaxed text-banking-navy/60">
+              {t('business.investments.profitScope')} {t('business.investments.disclaimer')}
+            </p>
+          ) : null}
         </ResultCard>
       ) : null}
 

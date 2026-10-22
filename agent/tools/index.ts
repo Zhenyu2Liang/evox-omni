@@ -84,7 +84,6 @@ import {
 } from './task';
 import { modelToolError, toModelToolResult, toolFailure } from './result';
 import { validateBankingParameters, validateSchemaParameters } from './plan-parameters';
-import { moneyToCents } from '@/lib/money';
 import { isCatalogToolName } from '@/lib/contracts/tool-catalog';
 import {
   SubmitPlanParams,
@@ -337,14 +336,6 @@ export function createToolRegistry(
       try {
         if (!args || typeof args !== 'object' || Array.isArray(args)) throw new AppError('VALIDATION', 'Tool arguments must be an object.');
         const parameters = { ...args };
-        // The redemption quote is minted by the gateway and bound to a saved authorization.
-        if (name === 'redeem_investment' && opts?.idempotencyKey &&
-          (opts.sessionId || opts.onCommandCommit) && parameters.expectedRedemptionAmount !== undefined) {
-          if (typeof parameters.expectedRedemptionAmount !== 'string' || moneyToCents(parameters.expectedRedemptionAmount) < 0n) {
-            throw new AppError('VALIDATION', 'The authorized redemption quote is invalid.');
-          }
-          delete parameters.expectedRedemptionAmount;
-        }
         if (name === 'submit_plan') validateSchemaParameters(name, parameters, 'direct', SubmitPlanParams);
         else validateBankingParameters(name, parameters, 'direct');
       } catch (error) { return toolFailure(error); }

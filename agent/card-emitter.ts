@@ -8,7 +8,9 @@
  * Payload shapes follow the binding consumer, `components/chat/cards/CardRenderer.tsx` +
  * the card components' props (the frozen `ChatCard.data` is `unknown`, so the renderer is the contract):
  *   balance → `BalanceView` · transfer → `TransferResult` · spending → `SpendingAnalysis`
- *   cards → `CardView[]` · investments → `{ products?; holdings?; comparison? }`
+ *   cards → `CardView[]` · investments → `{ products?; holdings?; comparison? }` (each holding carries
+ *   the SDK's own 净值 + 份额 facts verbatim — `shares`, `latestNetValue`, `latestNetValueDate`,
+ *   `marketValue`, `profit`, `profitRate`, `realizedProfit`, `cumulativeProfit`, `valueBasis`)
  *   subscriptions → `SubscriptionView[]` · anomaly → `AnomalyReport` · plan → `TaskPlan`
  * Dedicated business-result payloads are validated and projected by `business-card-payloads.ts`.
  * No model prose or tool arguments are treated as financial result evidence.

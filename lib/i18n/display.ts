@@ -31,7 +31,8 @@ export function localizeActionFieldValue(field: { label: string; value: string }
   if (labelKey === 'chat.field.risk') return lookup(sources.riskValues, field.value, t);
   if (labelKey === 'chat.field.operation') return localizeActionTitle(field.value, t);
   if (['chat.field.redemptionScope', 'chat.field.amountChange', 'chat.field.monthlyLimit',
-    'chat.field.demoScope', 'chat.field.reminder'].includes(labelKey)) {
+    'chat.field.demoScope', 'chat.field.reminder', 'chat.field.redemptionMode',
+    'chat.field.netValueDate'].includes(labelKey)) {
     return lookup(sources.policyValues, field.value, t);
   }
   return field.value;
@@ -39,6 +40,23 @@ export function localizeActionFieldValue(field: { label: string; value: string }
 
 export function isActionAmountField(label: string): boolean {
   return sources.fields[label as keyof typeof sources.fields] === 'cards.amount';
+}
+
+/** True when the field already carries the redemption settlement amount, so no generic amount row is added. */
+export function isActionSettlementAmountField(label: string): boolean {
+  return sources.fields[label as keyof typeof sources.fields] === 'chat.field.settlementAmount';
+}
+
+/** True when the fields carry the server-minted redemption snapshot (shares × execution net value). */
+export function isRedemptionNetValueSnapshot(fields: ReadonlyArray<{ label: string }>): boolean {
+  const keys = new Set(fields.map(field => sources.fields[field.label as keyof typeof sources.fields]));
+  return keys.has('chat.field.redemptionShares') && keys.has('chat.field.netValue');
+}
+
+/** A `SIMULATED_NONE` fee snapshot is always accompanied by an explicit no-fee statement. */
+export function isSimulatedNoneFeeField(field: { label: string; value: string }): boolean {
+  return sources.fields[field.label as keyof typeof sources.fields] === 'chat.field.feeRule'
+    && field.value.includes('SIMULATED_NONE');
 }
 
 export function localizeVerificationHint(hint: string, t: Translator): string {
