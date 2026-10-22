@@ -10,7 +10,9 @@
  * minted until the human supplies the code, and a successful MFA issues a NEW linked card while the
  * source stays LOST.
  *
- * Fixtures: demo user 李明; `card_debit` (DEBIT, UnionPay, ACTIVE). Helpers: ../helpers/*.
+ * Fixtures: demo user 李明; `card_debit` (DEBIT, UnionPay, ACTIVE, settlement account `acct_checking`).
+ * The replacement INHERITS that settlement account, so the 补办 card spends from the same 活期 account.
+ * Helpers: ../helpers/*.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -33,6 +35,14 @@ useFreshDatabase();
 /** The DEBIT card the scenario replaces (must first become LOST). */
 const CARD = 'card_debit';
 const USER_REQUEST = '我的借记卡丢了，帮我补办一张新卡';
+/**
+ * The settlement CHECKING account the seeded DEBIT card spends from (see `CARDS` in
+ * ../helpers/fixtures): 活期账户 ****8821, ¥23,580.00. A DEBIT card owns no balance of its own — this
+ * account's cash is what it pays with, and 补办 must keep spending from the SAME account.
+ */
+const SETTLEMENT = 'acct_checking';
+const SETTLEMENT_MASKED = '****8821';
+const SETTLEMENT_BALANCE = '23580.00';
 
 /** Seed the LOST precondition through the real SDK (replacement is only allowed from LOST). */
 async function markLost(): Promise<void> {
@@ -111,6 +121,8 @@ describe('Scenario 13 — 补办挂失卡片 (RED MFA replace_card)', () => {
     const source = await getTestPrisma().card.findUniqueOrThrow({ where: { id: CARD } });
     expect(source.status).toBe('LOST');
     expect(source.replacedByCardId).not.toBeNull();
+    // A DEBIT card is ACCOUNT-BOUND: the seeded one records the 活期 checking account.
+    expect(source.linkedAccountId).toBe(SETTLEMENT);
 
     // The replacement is a fresh ACTIVE card: same owner, same type + network, fresh masked number.
     const replacement = await getTestPrisma().card.findUniqueOrThrow({ where: { id: source.replacedByCardId! } });
@@ -120,6 +132,20 @@ describe('Scenario 13 — 补办挂失卡片 (RED MFA replace_card)', () => {
     expect(replacement.status).toBe('ACTIVE');
     expect(replacement.numberMasked).toMatch(/^\*{4}\d{4}$/);
     expect(replacement.numberMasked).not.toBe(source.numberMasked);
+    // 补办 INHERITS the settlement account and never guesses one: the new card spends from the SAME
+    // 活期 account (an unbound replacement would project as MISSING and be unable to pay at all).
+    expect(replacement.linkedAccountId).toBe(SETTLEMENT);
+
+    // The projection resolves that binding: LINKED with the ACCOUNT's masked number and cash. A DEBIT
+    // card owns no balance of its own and sets no monthly limit here, so all the account cash is payable.
+    const view = (await banking.card.getCards(DEMO_USER_ID)).find((entry) => entry.id === replacement.id);
+    expect(view).toBeDefined();
+    expect(view!.linkedAccountId).toBe(SETTLEMENT);
+    expect(view!.linkedAccountStatus).toBe('LINKED');
+    expect(view!.linkedAccountNumber).toBe(SETTLEMENT_MASKED);
+    expect(view!.accountAvailableBalance).toBe(SETTLEMENT_BALANCE);
+    expect(view!.payableAmount).toBe(SETTLEMENT_BALANCE);
+    expect(view!.usable).toBe(true);
 
     expect(
       (await getTestPrisma().pendingAction.findUniqueOrThrow({ where: { id: res.mfa!.actionId } })).status,

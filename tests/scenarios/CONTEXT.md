@@ -71,6 +71,30 @@ GREEN 只表示执行策略，不表示没有副作用。
 `test-18` 的咨询与歧义轮没有工具调用，因此既无面板也无 `PendingAction`，构成「模型只用文字声称」情形的负向对照。
 `test-04` 只证明注入文本不改变权限等级，不核对模型文字与实际工具调用/待决行是否一致。
 
+## 卡片与结算账户
+
+DEBIT 与 VIRTUAL 卡是结算账户借记工具，创建即绑定一个本人 CHECKING 账户。
+绑定由 `banking-sdk/card.ts#resolveLinkedAccount` 完成：显式 id 必须属本人（否则 `SECURITY_DENIED`）且为 CHECKING（否则 `VALIDATION`）。
+省略 id 时只在用户恰好一个 CHECKING 账户时自动绑定；0 个或多个都报 `VALIDATION`，从不回退默认账户。
+`replace_card` 让 DEBIT / VIRTUAL 的补办卡继承源卡结算账户，并重新校验该账户。
+VIRTUAL 源卡无绑定报 `CONFLICT`；无绑定的 DEBIT 源卡补办成功，补办卡仍无绑定。
+CREDIT 卡永不绑定：`addDemoCard` 与 `replaceCard` 都不为 CREDIT 写 `linkedAccountId`。
+`Card.linkedAccountId` 是真实外键，删除账户后该列为 `null`；「记录一个不存在的账户 id」在存储层不可表示。
+因此 `UNTRUSTED` 的真实来源是他人账户或非 CHECKING 账户，`MISSING` 的真实来源是空绑定。
+
+`CardView.linkedAccountStatus` 是必填全量状态：`LINKED`、`MISSING`、`UNTRUSTED`、`NOT_APPLICABLE`。
+`LINKED` 表示记录的账户存在、属本人且为 CHECKING；`MISSING` 表示卡上没有记录账户。
+`UNTRUSTED` 表示记录的 id 解析不到本人 CHECKING 账户；`NOT_APPLICABLE` 恒为 CREDIT。
+`linkedAccountNumber`、`linkedAccountName`、`accountAvailableBalance`、`payableAmount` 只在 `LINKED` 时出现。
+MISSING 与 UNTRUSTED 不报任何余额字段，绝不以 `0.00` 冒充空账户。
+`accountAvailableBalance` 是账户余额，不是卡片自有余额；同一账户的多张卡共享同一数额。
+`payableAmount = min(账户余额, 家庭本月剩余限额)`；月限额为空表示不限，等于账户余额。
+`usable` 只表示 `status === 'ACTIVE'`；`FROZEN` 与 `LOST` 仍保留完整余额字段。
+
+`test-13`、`test-14`、`test-16` 断言该投影：`LINKED`、账户尾号 `****8821`、`accountAvailableBalance` 等于账户余额。
+`test-19` 断言 CREDIT 恒 `NOT_APPLICABLE` 且余额字段为 `undefined`，补办卡与源卡都不绑定结算账户。
+夹具 `card_debit` 已绑定 `acct_checking`（活期账户，余额 `23580.00`）；`card_credit` 不绑定。
+
 ## 虚拟卡家族与消费入账时间
 
 `test-16` 以一次会话走完「申请 → 消费到限额 → 挂失 → 补办 → 继续消费」的 MFA 闸门路径。

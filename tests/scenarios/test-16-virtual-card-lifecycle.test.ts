@@ -79,6 +79,7 @@ interface CardViewData {
   monthlyLimit?: string;
   replacedByCardId?: string;
   linkedAccountId?: string;
+  linkedAccountStatus: 'LINKED' | 'MISSING' | 'UNTRUSTED' | 'NOT_APPLICABLE';
   linkedAccountNumber?: string;
   accountAvailableBalance?: string;
   payableAmount?: string;
@@ -449,6 +450,7 @@ describe('Scenario 16 — 虚拟卡补办生命周期与限额语义 (RED MFA ca
     expect((second.data as CardViewData).status).toBe('ACTIVE');
     expect((second.data as CardViewData).type).toBe('VIRTUAL');
     expect((second.data as CardViewData).linkedAccountId).toBe(ACCOUNT);
+    expect((second.data as CardViewData).linkedAccountStatus).toBe('LINKED');
     expect((second.data as CardViewData).monthlyLimit).toBe(LIMIT_100);
 
     expect(await userCardCount()).toBe(cardsAfterReplace);
@@ -529,6 +531,11 @@ describe('Scenario 16 — 虚拟卡补办生命周期与限额语义 (RED MFA ca
     const view = (await banking.card.getCards(DEMO_USER_ID)).find((entry) => entry.id === virtual.id);
     expect(view).toBeDefined();
     expect(view!.monthlyLimit).toBe('0.00');
+    // The 0.00 below is legitimate ONLY because the binding RESOLVED: a MISSING/UNTRUSTED card reports
+    // no balance field at all, so the LINKED status is what separates "zero allowance" from "no account".
+    expect(view!.linkedAccountStatus).toBe('LINKED');
+    expect(view!.linkedAccountNumber).toBe('****8821');
+    expect(moneyToCents(view!.accountAvailableBalance!)).toBe(await balanceMinor());
     expect(moneyToCents(view!.payableAmount!)).toBe(0n);
 
     const balanceBefore = await balanceMinor();
@@ -571,6 +578,7 @@ describe('Scenario 16 — 虚拟卡补办生命周期与限额语义 (RED MFA ca
     const view = (await banking.card.getCards(DEMO_USER_ID)).find((entry) => entry.id === virtual.id);
     expect(view).toBeDefined();
     expect(view!.monthlyLimit).toBeUndefined();
+    expect(view!.linkedAccountStatus).toBe('LINKED');
     expect(moneyToCents(view!.payableAmount!)).toBe(cashBefore);
     expect(moneyToCents(view!.accountAvailableBalance!)).toBe(cashBefore);
 

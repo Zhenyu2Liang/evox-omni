@@ -184,6 +184,31 @@ describe('Scenario 19 — 补办信用卡 (生产运行时 RED MFA replace_card)
     expect(replacement.status).toBe('ACTIVE');
     expect(replacement.numberMasked).toMatch(/^\*{4}\d{4}$/);
     expect(replacement.numberMasked).not.toBe(source.numberMasked);
+    // A CREDIT card draws on its credit line, never on settlement cash, and a replacement changes
+    // nothing about that even though a DEBIT/VIRTUAL replacement now INHERITS the settlement account
+    // of its source: the stored reference stays empty on BOTH cards, so no checking account is
+    // silently converted into a credit card's cash.
+    expect(source.linkedAccountId).toBeNull();
+    expect(replacement.linkedAccountId).toBeNull();
+
+    // The projection is total: a CREDIT card is NOT_APPLICABLE and carries NO balance field at all
+    // (never 0.00, which would claim an EMPTY settlement account instead of none), while usable
+    // follows the status alone: the ACTIVE replacement can spend, the LOST source cannot.
+    const views = await banking.card.getCards(DEMO_USER_ID);
+    const replacementView = views.find(view => view.id === replacement.id);
+    expect(replacementView).toBeDefined();
+    expect(replacementView!.linkedAccountStatus).toBe('NOT_APPLICABLE');
+    expect(replacementView!.usable).toBe(true);
+    expect(replacementView!.linkedAccountNumber).toBeUndefined();
+    expect(replacementView!.accountAvailableBalance).toBeUndefined();
+    expect(replacementView!.payableAmount).toBeUndefined();
+    const sourceView = views.find(view => view.id === CARD);
+    expect(sourceView).toBeDefined();
+    expect(sourceView!.linkedAccountStatus).toBe('NOT_APPLICABLE');
+    expect(sourceView!.usable).toBe(false);
+    expect(sourceView!.accountAvailableBalance).toBeUndefined();
+    expect(sourceView!.payableAmount).toBeUndefined();
+
     // Replacement issues a card; it never moves cash.
     expect(await balanceMinor()).toBe(beforeBalance);
 
