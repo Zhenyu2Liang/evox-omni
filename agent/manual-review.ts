@@ -10,6 +10,7 @@ import type { ToolName } from '@/lib/contracts/tools';
 import { getToolPolicy } from '@/security/permission-engine';
 import { committedExecutionResult } from './execution-evidence';
 import { reviewControlState, type ReviewControlState } from './manual-review-policy';
+import { CLAIMABLE_ACTION_STATUSES, OPEN_ACTION_STATUSES, isClaimableActionStatus } from './action-status';
 
 type Identity = { sessionId: string; userId: string };
 type Target = { taskId?: string; actionId?: string };
@@ -37,7 +38,7 @@ async function operator(identity: Identity): Promise<string> {
  * Unknown results, live/parked approvals and automatic writes without such proof fail closed. */
 async function mayRetry(task: Task | null, actions: PendingAction[]): Promise<boolean> {
   if (!task || task.status !== 'failed' || task.executionToken !== null) return false;
-  if (actions.some((a) => ['pending', 'awaiting_mfa', 'confirmed', 'needs_reconciliation'].includes(a.status))) return false;
+  if (actions.some((a) => isClaimableActionStatus(a.status) || a.status === 'needs_reconciliation')) return false;
   const failed = task.nodes.filter((node) => node.status === 'failed');
   if (failed.length === 0 || task.nodes.some((node) => node.status === 'running')) return false;
   for (const node of failed) {
@@ -103,7 +104,7 @@ export async function getManualReviewInbox(identity: Identity): Promise<ManualRe
       || active.has(`task:${task.id}`)) continue;
     const taskActions = actions.filter(action => action.taskId === task.id);
     if (task.status === 'failed' && (task.executionToken !== null
-      || taskActions.some(action => ['pending', 'awaiting_mfa', 'confirmed'].includes(action.status)))) continue;
+      || taskActions.some(action => isClaimableActionStatus(action.status)))) continue;
     candidates.push({ taskId: task.id, title: task.goal,
       error: task.status === 'failed' ? task.nodes.filter(node => node.status === 'failed').map(node => node.error ?? `${node.name} failed`).join('; ')
         : 'Request operator control at the next safe workflow checkpoint.',
@@ -143,7 +144,7 @@ export async function openManualReview(identity: Identity, target: Target, reaso
         throw new AppError('CONFLICT', 'A terminal workflow cannot be handed to an operator.');
       }
       if (task.status === 'failed') {
-        const activeActions = await tx.pendingAction.count({ where: { taskId: task.id, status: { in: ['pending', 'awaiting_mfa', 'confirmed'] } } });
+        const activeActions = await tx.pendingAction.count({ where: { taskId: task.id, status: { in: [...CLAIMABLE_ACTION_STATUSES] } } });
         if (task.executionToken !== null || activeActions) {
           throw new AppError('CONFLICT', 'The failed workflow still has unresolved execution or authorization.');
         }
@@ -206,7 +207,7 @@ export async function resolveManualReview(identity: Identity, id: string, resolu
           || !['failed', 'cancelled', 'paused', 'waiting_confirmation', 'pending'].includes(current.status)) {
           throw new AppError('CONFLICT', 'Wait until the current command reaches a safe checkpoint.');
         }
-        await tx.pendingAction.updateMany({ where: { taskId: prior.taskId, status: { in: ['pending', 'awaiting_mfa'] } }, data: { status: 'cancelled' } });
+        await tx.pendingAction.updateMany({ where: { taskId: prior.taskId, status: { in: [...OPEN_ACTION_STATUSES] } }, data: { status: 'cancelled' } });
         await tx.agentTask.update({ where: { id: prior.taskId }, data: { status: 'cancelled', generation: { increment: 1 } } });
         await tx.agentTaskNode.updateMany({ where: { taskId: prior.taskId, status: { in: ['pending', 'running', 'waiting_confirmation', 'waiting_verification'] } }, data: { status: 'cancelled', endedAt: new Date(demoNow()) } });
         await tx.scheduledTask.updateMany({ where: { dispatchTaskId: prior.taskId, ...identity,

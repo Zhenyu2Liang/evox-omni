@@ -8,6 +8,7 @@ import { toTaskPlan } from './persistence';
 import { getTaskPlan, loadOwnedTask } from './ownership';
 import { buildPlanDeps, UNUSED_RUN_TOOL } from './ports';
 import { sweepCancelledPlan } from './cancellation';
+import { assertParkedActionsNotTerminal } from './parked-actions';
 import type { TaskControlDeps, TaskControlOptions } from './contracts';
 import { settlePlanFromNodes } from '../task-fencing';
 
@@ -26,12 +27,16 @@ export async function pauseTask(sessionId: string, taskId: string, options: Task
 export async function resumeTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan> {
   const row = await loadOwnedTask(sessionId, taskId);
   await assertNoOpenManualReview(taskId);
+  const plan = toTaskPlan(row);
+  // A settled (above all `locked`) parked decision must never be re-activated: refuse BEFORE any
+  // status is claimed, so the persisted plan status stays exactly as it was.
+  await assertParkedActionsNotTerminal(plan);
   if (!(await claimTaskStatus(taskId, RESUMABLE, 'running'))) return getTaskPlan(sessionId, taskId);
   const token = newId('taskclaim');
   if (!(await claimTaskExecution(taskId, token, { staleBefore: staleExecutionClaimBefore() }))) return getTaskPlan(sessionId, taskId);
   await clearStaleNodeClaims(taskId, token);
   try {
-    await executor.runPlan(toTaskPlan(row), buildPlanDeps(taskId, deps, undefined, { planToken: token }), { now: deps.now, explicitResume: true });
+    await executor.runPlan(plan, buildPlanDeps(taskId, deps, undefined, { planToken: token }), { now: deps.now, explicitResume: true });
     await sweepCancelledPlan(sessionId, taskId);
   } finally {
     await releaseTaskExecution(taskId, token);
@@ -44,12 +49,15 @@ export async function resumeTask(sessionId: string, taskId: string, deps: TaskCo
 export async function retryTask(sessionId: string, taskId: string, deps: TaskControlDeps): Promise<TaskPlan> {
   const row = await loadOwnedTask(sessionId, taskId);
   await assertNoOpenManualReview(taskId);
+  const plan = toTaskPlan(row);
+  // Same terminal fence as `resumeTask`: a settled parked decision is never retried into life.
+  await assertParkedActionsNotTerminal(plan);
   if (!(await claimTaskStatus(taskId, RETRYABLE, 'running'))) return getTaskPlan(sessionId, taskId);
   const token = newId('taskclaim');
   if (!(await claimTaskExecution(taskId, token, { staleBefore: staleExecutionClaimBefore() }))) return getTaskPlan(sessionId, taskId);
   await clearStaleNodeClaims(taskId, token);
   try {
-    const result = await lifecycle.retryPlan(toTaskPlan(row), buildPlanDeps(taskId, deps, undefined, { planToken: token, explicitRetry: true }), { now: deps.now });
+    const result = await lifecycle.retryPlan(plan, buildPlanDeps(taskId, deps, undefined, { planToken: token, explicitRetry: true }), { now: deps.now });
     // No-op retries do not leave an admitted plan falsely marked as running.
     await claimTaskStatus(taskId, ['running'], result.status);
     await sweepCancelledPlan(sessionId, taskId);

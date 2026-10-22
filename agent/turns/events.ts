@@ -2,13 +2,13 @@ import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { ToolEventView } from '@/lib/contracts/agent';
 import type { SecurityFailure } from '@/lib/contracts/security';
 import { security } from '@/security';
-import { confirmationCard, errorCard, mfaCard } from '../card-emitter';
+import { errorCard } from '../card-emitter';
 import { parseBankingGuidance } from '../banking-guidance';
 import type { TurnBuffer } from './contracts';
 import { emitCard, emitToolCards, groundMessage, newAssistantMessage, upsertToolEvent, publishReplyProgress,
   ensureToolMessage, publishToolMessage, toolResultStatus } from './buffer';
 import { findRunFailure, isAssistantMessage, isRecord, safeToString, textOfContent, textOfResult, toExecutionResult } from './message-utils';
-import { loadPendingSummary, MFA_HINT } from './authorization-view';
+import { publishPendingDecision } from './authorization-view';
 import { sanitizeToolArguments } from '@/lib/tool-diagnostics';
 import { projectToolRejection } from '@/lib/tool-feedback';
 import { inspectReplyFormat } from '../reply-format';
@@ -75,18 +75,16 @@ async function handleToolEnd(buffer: TurnBuffer, event: Extract<AgentEvent, { ty
     ...errorParamsFrom(parsed?.failure) };
   upsertToolEvent(toolMessage, view);
   buffer.events.push({ type: 'tool_end', toolEvent: view });
-  // A gated call is only actionable WITH its pending action; an action-less refusal ends below.
-  if (parsed?.actionId && parsed.decisionKind === 'require_mfa') {
-    const summary = await loadPendingSummary(parsed.actionId, toolName);
-    buffer.events.push({ type: 'mfa_required', actionId: parsed.actionId, hint: MFA_HINT, action: summary });
-    emitCard(buffer, mfaCard(parsed.actionId, MFA_HINT, summary), toolMessage);
-    return;
-  }
-  if (parsed?.actionId && parsed.decisionKind === 'require_confirmation') {
-    const summary = await loadPendingSummary(parsed.actionId, toolName);
-    buffer.events.push({ type: 'confirmation_required', actionId: parsed.actionId, action: summary });
-    emitCard(buffer, confirmationCard(summary), toolMessage);
-    return;
+  // A gated call is only actionable WITH its still-open pending action: the persisted row decides,
+  // and a settled (`locked`/`executed`/`failed`/`cancelled`/`needs_reconciliation`) action is never
+  // re-presented as a decision. A published prompt and the typed lock notice of a `locked` action
+  // both own the outcome; a SKIPPED prompt (missing row, or settled to another terminal status) still
+  // must not leave the blocked call unexplained, so it falls through to the typed refusal below -
+  // without inventing a prompt, a pending card or any success.
+  if (parsed?.actionId && (parsed.decisionKind === 'require_mfa' || parsed.decisionKind === 'require_confirmation')) {
+    const outcome = await publishPendingDecision(buffer, parsed.actionId, toolName,
+      parsed.decisionKind === 'require_mfa' ? 'mfa' : 'confirmation', toolMessage);
+    if (outcome !== 'skipped') return;
   }
   // A locked refusal is published as STRUCTURED fields only — never the raw payload text.
   buffer.events.push({ type: 'security_event', kind: 'locked',

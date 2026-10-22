@@ -22,6 +22,7 @@ import { synchronizeScheduledWorkflow } from '../scheduled-dispatcher';
 import { AgentRunJournal } from './journal';
 import { runtimeRequestDigest } from './serialization';
 import type { InvocationRecoveryOutcome } from './recovery';
+import { isOpenActionStatus, OPEN_ACTION_STATUSES } from '../action-status';
 
 export interface StandaloneWorkflowRecovery {
   message: string;
@@ -173,14 +174,20 @@ export async function recoverStandaloneWorkflowRun(run: AgentRun, onEvent?: (eve
     invocations = await listRunInvocations(run.id);
     outcomes = await verifyGraphEvidence(run, await loadSource(run), invocations);
     const pending = await prisma.pendingAction.findMany({ where: { taskId: task.id, sessionId: run.sessionId,
-      userId: run.userId, status: { in: ['pending', 'awaiting_mfa', 'confirmed', 'needs_reconciliation'] } }, select: { status: true } });
-    const status: Exclude<AgentRunStatus, 'running'> = plan.status === 'success' && pending.length === 0 ? 'completed'
-      : pending.some(action => action.status === 'awaiting_mfa') || plan.results.some(node => node.status === 'waiting_verification') ? 'waiting_verification'
-        : pending.some(action => action.status === 'pending') || plan.status === 'waiting_confirmation' ? 'waiting_confirmation'
-          : plan.status === 'failed' || plan.status === 'cancelled' ? 'failed' : 'interrupted';
+      userId: run.userId, status: { in: [...OPEN_ACTION_STATUSES, 'confirmed', 'needs_reconciliation', 'locked'] } }, select: { status: true } });
+    // The same shared vocabulary as the Pi path: only an OPEN action is still a decision. A `locked` (or otherwise
+    // closed) row is settled, so the graph stops for reconciliation instead of re-presenting an approval.
+    const openActions = pending.filter(action => isOpenActionStatus(action.status));
+    const closedActions = pending.filter(action => !isOpenActionStatus(action.status));
+    const status: Exclude<AgentRunStatus, 'running'> = closedActions.length !== 0 ? 'interrupted'
+      : plan.status === 'success' && pending.length === 0 ? 'completed'
+        : openActions.some(action => action.status === 'awaiting_mfa') || plan.results.some(node => node.status === 'waiting_verification') ? 'waiting_verification'
+          : openActions.some(action => action.status === 'pending') || plan.status === 'waiting_confirmation' ? 'waiting_confirmation'
+            : plan.status === 'failed' || plan.status === 'cancelled' ? 'failed' : 'interrupted';
     await journal.finish(status, status === 'failed' ? 'WORKFLOW_FAILED' : undefined);
     if (status === 'interrupted') await parkRunRecovery(run.id, 'WORKFLOW_REQUIRES_ATTENTION');
-    for (const item of invocations.filter(item => item.status.startsWith('waiting_'))) {
+    // A closed action is never reported back as an outstanding authorization request.
+    if (status.startsWith('waiting_')) for (const item of invocations.filter(item => item.status.startsWith('waiting_'))) {
       outcomes.push({ invocationId: item.id, action: 'waiting', reason: 'AUTHORIZATION_REQUIRED' });
     }
     return { outcomes, message: status === 'completed' ? 'The original workflow resumed from its saved graph.'

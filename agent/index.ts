@@ -15,6 +15,8 @@ import { AppError } from '@/lib/errors';
 import { prisma } from '@/lib/db/client';
 import { isManualCardCommand } from '@/lib/contracts/card-management';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
+import { createTranslator, DEFAULT_LOCALE } from '@/lib/i18n/shared';
+import { safePublicText } from '@/lib/public-text';
 import type { RiskLevel } from '@/lib/contracts/risk';
 import type { PendingActionStatus } from '@/lib/contracts/security';
 import {
@@ -45,6 +47,8 @@ import {
   type TaskPersistence,
   type TaskRunTool,
 } from './task-control';
+
+const t = createTranslator(DEFAULT_LOCALE);
 
 export { createBankingAgent } from './banking-agent';
 export type { BankingAgentOptions, BankingAgentRuntime, BeforeToolCallHook, AfterToolCallHook } from './banking-agent';
@@ -244,7 +248,9 @@ export async function recoverAction(
           events,
         };
       } catch (error) {
-        const reason = error instanceof AppError ? error.message : '请稍后重试。';
+        // This outcome's message is user-visible: publish a closed-catalog sentence and keep the
+        // AppError text (which may be an internal diagnostic) out of it.
+        const reason = safePublicText(error instanceof AppError ? error.message : undefined, t, 'chat.error.toolFailed');
         return {
           ok: false,
           actionId,
@@ -278,6 +284,7 @@ export {
   resumeTaskForAction,
   toTaskPlan,
 } from './task-control';
+
 export type {
   TaskControlDeps,
   TaskControlOptions,
@@ -287,6 +294,7 @@ export type {
   TaskPersistenceOptions,
   TaskRunTool,
 } from './task-control';
+
 // The FENCED write primitives (`./task-fencing`), incl. the confirm-continuation's LOST-claim
 // decision recorder.
 export { isMissingNodeError, jsonNodeOutput, recordDecidedNodeFenced, toNodeUpdate } from './task-fencing';

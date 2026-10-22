@@ -1,5 +1,5 @@
 import type { PendingActionStatus } from '@/lib/contracts/security';
-import type { GatewayContext } from '@/security/security-gateway';
+import type { GatewayContext, ToolCallAuthorization } from '@/security/security-gateway';
 import { security } from '@/security';
 import { getPendingAction, listPendingActionsByTask } from '@/lib/db/repositories/pendingAction';
 import { AppError } from '@/lib/errors';
@@ -13,12 +13,15 @@ import type { GatedToolOutcome } from './contracts';
 import { runWorkflowInvocation } from '../durable/workflow-invocations';
 import { catalogEntry } from '@/lib/contracts/tool-catalog';
 import { isManualCardCommand } from '@/lib/contracts/card-management';
+import { safePublicText, securityNotice } from '@/lib/public-text';
+import { createTranslator, DEFAULT_LOCALE } from '@/lib/i18n/shared';
+import { ALL_ACTION_STATUSES } from '../action-status';
 
 const gateway = security.gateway.securityGateway;
+const t = createTranslator(DEFAULT_LOCALE);
 const inFlightExecutions = new Map<string, Promise<GatedToolOutcome>>();
-const representedStatuses: readonly PendingActionStatus[] = [
-  'pending', 'awaiting_mfa', 'confirmed', 'executed', 'needs_reconciliation',
-];
+/** Every status a persisted plan-node action may hold — the SHARED vocabulary, never a local literal. */
+const representedStatuses: readonly PendingActionStatus[] = ALL_ACTION_STATUSES;
 type PendingActionRow = Awaited<ReturnType<typeof listPendingActionsByTask>>[number];
 
 async function findRepresentedAction(taskId: string, nodeId: string): Promise<PendingActionRow | undefined> {
@@ -33,6 +36,27 @@ function recoverExecutedPlanAction(action: PendingActionRow): GatedToolOutcome {
     return { ok: stored.ok, data: stored.data, summary: stored.summary, error: stored.error };
   }
   return { ok: false, error: '该节点此前已执行但未留存结果，需人工核对（不会重新执行）。' };
+}
+
+/**
+ * A gateway refusal as a TYPED outcome. uth.blockReason is the gateway's INTERNAL envelope
+ * (`__SECURITY_BLOCK__…`) or a model-facing diagnostic: it stays in the Pi tool result
+ * (anking-agent.ts#beforeToolCall) and is NEVER rendered as user-visible text. Only the structured
+ * failure facts — or, when the gateway sent no structured failure, a closed-catalog sentence from
+ * lib/public-text.ts — are published, so a raw payload, a JSON fragment or a status literal can
+ * never reach a node error or a summary.
+ */
+function blockedOutcome(auth: ToolCallAuthorization): GatedToolOutcome {
+  const failure = security.gateway.securityGateway.parseBlockReason(auth.blockReason ?? '')?.failure;
+  return {
+    ok: false,
+    requiresConfirmation: auth.action !== undefined,
+    pendingActionId: auth.action?.id,
+    errorCode: failure?.code,
+    error: failure !== undefined
+      ? securityNotice(failure, t)
+      : safePublicText(auth.blockReason, t, 'chat.error.operationNotStarted'),
+  };
 }
 
 async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutcome> {
@@ -60,12 +84,7 @@ async function executeGatedToolOnce(ctx: GatewayContext): Promise<GatedToolOutco
       }
     }
     const auth = await gateway.handleToolCall(ctx);
-    if (auth.evaluation.blocked) {
-      return {
-        ok: false, requiresConfirmation: auth.action !== undefined,
-        pendingActionId: auth.action?.id, error: auth.blockReason ?? auth.decision.message,
-      };
-    }
+    if (auth.evaluation.blocked) return blockedOutcome(auth);
     const registry = createToolRegistry(ctx.userId);
     const policyFence = await buildAutomaticWriteFence(ctx.sessionId, ctx.taskId, ctx.nodeId, ctx.userId);
     const result = await registry.executeDirect(ctx.toolName, ctx.args, {

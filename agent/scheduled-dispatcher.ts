@@ -10,6 +10,8 @@ import { recordAudit } from '@/audit/audit-logger';
 import { executeGatedTool } from './confirmation';
 import { resumeTask } from './task-control';
 import { scheduledTransferArgs } from '@/lib/contracts/scheduled-command';
+import { CLAIMABLE_ACTION_STATUSES } from './action-status';
+import { isInternalDiagnostic } from '@/lib/public-text';
 
 export interface ScheduleIdentity { userId: string; sessionId: string; }
 export interface ScheduleTickOptions { now?: number; limit?: number; }
@@ -17,6 +19,15 @@ export type { ScheduleInbox } from '@/lib/contracts/schedule';
 
 // Human decisions do not consume dispatch capacity or block later due intents.
 const ACTIVE_DISPATCH_STATUSES = ['SCHEDULED', 'DISPATCHING'];
+
+/** `dispatchError` is displayed on the schedules page, so an internal diagnostic (a raw
+ * payload, a JSON fragment, a stack trace) must never become visible text; a hand-authored
+ * failure reason is kept verbatim. */
+const DISPATCH_FAILURE_NOTICE = 'The scheduled task could not be dispatched; inspect its workflow before retrying.';
+function publicDispatchError(message: string | null | undefined): string | undefined {
+  if (!message) return undefined;
+  return isInternalDiagnostic(message) ? DISPATCH_FAILURE_NOTICE : message;
+}
 
 async function assertIdentity(identity: ScheduleIdentity): Promise<void> {
   const session = await prisma.agentSession.findUnique({ where: { id: identity.sessionId } });
@@ -111,11 +122,11 @@ async function dispatchWorkflow(row: ScheduledTask, identity: ScheduleIdentity):
   }
   const current = await prisma.scheduledTask.findUniqueOrThrow({ where: { id: row.id } });
   const action = current.dispatchTaskId ? await prisma.pendingAction.findFirst({
-    where: { taskId: current.dispatchTaskId, status: { in: ['pending', 'awaiting_mfa', 'confirmed'] } }, orderBy: { createdAt: 'desc' },
+    where: { taskId: current.dispatchTaskId, status: { in: [...CLAIMABLE_ACTION_STATUSES] } }, orderBy: { createdAt: 'desc' },
   }) : null;
   const notification = await prisma.scheduledNotification.findUnique({ where: { scheduledTaskId: row.id } });
   return { scheduledTaskId: row.id, status: current.status as ScheduledTaskStatus, workflowId: current.dispatchTaskId ?? undefined,
-    pendingActionId: action?.id, notificationId: notification?.id, error: current.dispatchError ?? undefined };
+    pendingActionId: action?.id, notificationId: notification?.id, error: publicDispatchError(current.dispatchError) };
 }
 
 /** Run one bounded scheduler pass. Production uses real wall time; tests and CLI can inject a demo time. */
@@ -137,11 +148,11 @@ export async function tickScheduledTasks(identity: ScheduleIdentity, options: Sc
       // A failed preflight has not created a workflow or moved money. An in-flight workflow retains its facts.
       const permanentFailure = ['VALIDATION', 'SECURITY_DENIED', 'NOT_FOUND'].includes(issue.code);
       await prisma.scheduledTask.updateMany({ where: { id: row.id, ...ownedScope(identity), status: 'SCHEDULED' },
-        data: { ...(permanentFailure ? { status: 'FAILED' } : {}), dispatchError: issue.message } });
+        data: { ...(permanentFailure ? { status: 'FAILED' } : {}), dispatchError: publicDispatchError(issue.message) } });
       const current = await prisma.scheduledTask.findFirst({ where: { id: row.id, ...ownedScope(identity) } });
       // A competing session may have bound the intent. Never expose its workflow or state.
       dispatches.push({ scheduledTaskId: row.id, status: (current?.status ?? row.status) as ScheduledTaskStatus,
-        workflowId: current?.dispatchTaskId ?? undefined, error: issue.message });
+        workflowId: current?.dispatchTaskId ?? undefined, error: publicDispatchError(issue.message) });
     }
   }
   return { evaluatedAt: now, dispatches };
@@ -157,6 +168,6 @@ export async function getScheduleInbox(identity: ScheduleIdentity): Promise<Sche
     payload: safeParse<Record<string, unknown> | undefined>(row.payload, undefined), runAt: row.runAt.getTime(),
     status: row.status as ScheduledTaskView['status'], requiresConfirmation: row.requiresConfirmation,
     createdAt: row.createdAt.getTime(), dispatchTaskId: row.dispatchTaskId ?? undefined,
-    deliveredAt: row.deliveredAt?.getTime(), dispatchError: row.dispatchError ?? undefined })),
+    deliveredAt: row.deliveredAt?.getTime(), dispatchError: publicDispatchError(row.dispatchError) })),
   notifications: notifications.map(notificationView) };
 }
