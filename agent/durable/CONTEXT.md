@@ -9,7 +9,7 @@ Turn a live agent run into durable, replayable evidence — no banking effect is
 ## API Surface
 
 `index.ts` (barrel) re-exports exactly: `AgentRunJournal`, `beginRun`, `type BeginRunInput`; `decideInvocationRetry`, `toolReplayPolicy`, `type RetryPolicyCapabilities`, `type RetryState`; `encodeRuntimeValue`, `runtimeRequestDigest`, `snapshotRuntimeValue`; `inspectRunRecovery`, `readRunPresentation`, `recoverInvocation`, `wakeRecoverableRuns`, `type InvocationRecovery`, `type InvocationRecoveryPort`, `type InvocationRecoveryOutcome`.
-`continuation.ts` exports `restoreWaitingCheckpoint` (l.35) and `continueDurableRun` (l.110) plus `ContinuationDependencies` (l.103); NOT re-exported from the barrel — imported directly by `service.ts`, `recovery-worker.ts` and tests.
+`continuation.ts` exports `restoreWaitingCheckpoint` (l.36) and `continueDurableRun` (l.111) plus `ContinuationDependencies` (l.104); NOT re-exported from the barrel — imported directly by `service.ts`, `recovery-worker.ts` and tests.
 `service.ts` exports `recoverOwnedRun` (l.103) and `getOwnedRunSummary`; NOT re-exported. `standalone-workflow.ts` exports `recoverStandaloneWorkflowRun` (l.125). `journal.ts` exports `AgentRunJournal` (l.32) and `beginRun` (l.26).
 `retry-policy.ts` exports `toolReplayPolicy` (l.9), `decideInvocationRetry` (l.35) and the `PERMANENT_ERRORS`/`TRANSIENT_ERRORS` sets. `serialization.ts` exports `snapshotRuntimeValue` (l.7), `encodeRuntimeValue` (l.51), `runtimeRequestDigest` (l.56). `checkpoint.ts` exports `RunCheckpoint`, `encodeCheckpoint`, `decodeCheckpoint`, `hasRedactedCredentials`.
 
