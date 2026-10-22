@@ -28,6 +28,7 @@
 `faux-agent` 和 `scenario` 验证网关、工具与 SDK。
 它们不经过生产的声明、运行准入与展示流程。
 辅助函数生成的结果说明不是模型稳定性证据。
+`buildFauxAgent` 的 `FauxAgentOptions.registerModel`（`faux-agent.ts:64`）是无人读取的死选项：构造函数总是注册 faux provider。
 
 验证生产入口时，使用 `scriptedProvider` 注入模型。
 它通过真实 `describe_turn` 声明当前目的与业务序列。
