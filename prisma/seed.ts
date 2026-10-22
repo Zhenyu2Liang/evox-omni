@@ -351,17 +351,26 @@ const SUBSCRIPTIONS = [
 ];
 
 const PRODUCTS = [
-  { id: 'prod_wenjiana', code: 'WJA001', name: '稳健理财A', riskLevel: 'R2', annualYieldRate: '0.0325', termDays: 90, minAmountMinor: 100_000n, description: '低风险稳健型' },
-  { id: 'prod_wenjib', code: 'WJB002', name: '稳健理财B', riskLevel: 'R2', annualYieldRate: '0.036', termDays: 180, minAmountMinor: 500_000n, description: '低风险稳健型' },
-  { id: 'prod_jinrong', code: 'JR003', name: '进取混合C', riskLevel: 'R3', annualYieldRate: '0.051', termDays: 365, minAmountMinor: 1_000_000n, description: '中风险混合型' },
-  { id: 'prod_huobi', code: 'MMF001', name: '货币基金', riskLevel: 'R1', annualYieldRate: '0.021', termDays: 30, minAmountMinor: 10_000n, description: '现金管理型' },
+  { id: 'prod_wenjiana', code: 'WJA001', name: '稳健理财A', riskLevel: 'R2', annualYieldRate: '0.0325', termDays: 90, minAmountMinor: 100_000n, description: '低风险稳健型', latestNetValuePerUnit: '1.0357', latestNetValueDate: sep(25) },
+  { id: 'prod_wenjib', code: 'WJB002', name: '稳健理财B', riskLevel: 'R2', annualYieldRate: '0.036', termDays: 180, minAmountMinor: 500_000n, description: '低风险稳健型', latestNetValuePerUnit: '0.9880', latestNetValueDate: sep(25) },
+  { id: 'prod_jinrong', code: 'JR003', name: '进取混合C', riskLevel: 'R3', annualYieldRate: '0.051', termDays: 365, minAmountMinor: 1_000_000n, description: '中风险混合型', latestNetValuePerUnit: '1.1769', latestNetValueDate: sep(25) },
+  { id: 'prod_huobi', code: 'MMF001', name: '货币基金', riskLevel: 'R1', annualYieldRate: '0.021', termDays: 30, minAmountMinor: 10_000n, description: '现金管理型', latestNetValuePerUnit: '1.0000', latestNetValueDate: sep(25) },
 ];
 
-/** Holding: ¥5,000.00 principal at ¥5,178.36 market value → ¥178.36 unrealised profit (> 0). */
+/**
+ * Holdings book 「净值 + 份额」: `shares × product.latestNetValuePerUnit` IS `estimatedMarketValue`
+ * (the exact, unrounded product). `shares` is FLOOR(市值 ÷ 净值, 6 位小数), so the estimate drifts by
+ * less than ¥0.0001 from the previous fixture valuation. `principalAmountMinor` is the REMAINING cost
+ * (¥5,000.00 / ¥8,000.50 / ¥10,000.00 — unchanged), therefore:
+ *   稳健理财A 4999.864825 × 1.0357 = 5178.3599992525 → +¥178.36  (above cost)
+ *   货币基金  8032.760000 × 1.0000 = 8032.76          → +¥32.26  (above cost, R1 flat)
+ *   稳健理财B 10000.000000 × 0.9880 = 9880.00         → −¥120.00 (below cost)
+ * `realizedProfitMinor` keeps its schema default 0: no seeded holding has ever been redeemed.
+ */
 const HOLDINGS = [
-  { id: 'holding_wenjiana', userId: USER_ID, productId: 'prod_wenjiana', principalAmountMinor: 500_000n, estimatedMarketValue: '5178.36', boughtAt: aug(10, 10, 0), status: 'HOLDING' },
-  { id: 'holding_huobi', userId: USER_ID, productId: 'prod_huobi', principalAmountMinor: 800_050n, estimatedMarketValue: '8032.76', boughtAt: aug(18, 10, 30), status: 'HOLDING' },
-  { id: 'holding_wenjib', userId: USER_ID, productId: 'prod_wenjib', principalAmountMinor: 1_000_000n, estimatedMarketValue: '10128.95', boughtAt: aug(2, 14, 0), status: 'HOLDING' },
+  { id: 'holding_wenjiana', userId: USER_ID, productId: 'prod_wenjiana', principalAmountMinor: 500_000n, shares: '4999.864825', estimatedMarketValue: '5178.3599992525', boughtAt: aug(10, 10, 0), status: 'HOLDING' },
+  { id: 'holding_huobi', userId: USER_ID, productId: 'prod_huobi', principalAmountMinor: 800_050n, shares: '8032.760000', estimatedMarketValue: '8032.76', boughtAt: aug(18, 10, 30), status: 'HOLDING' },
+  { id: 'holding_wenjib', userId: USER_ID, productId: 'prod_wenjib', principalAmountMinor: 1_000_000n, shares: '10000.000000', estimatedMarketValue: '9880.00', boughtAt: aug(2, 14, 0), status: 'HOLDING' },
 ];
 
 const BUDGETS = [
