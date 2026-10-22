@@ -70,6 +70,21 @@
 若 faux 脚本已耗尽，先补一条事实叙述（`narrationFor`，`scenario.ts:503`），否则续接会因空队列报错。
 所以脚本不必为决策后的叙述预留步骤。
 
+### 独立进程恢复探针（restart-process / standalone-restart-process）
+
+两者都是 `fork` 入口（被 fork 的脚本，不是 Vitest 用例），父进程传 `execArgv: ['--import','tsx']` 与 `LLM_MODE=mock`，子进程靠 IPC `process.send` 报告进度。
+`tests/integration/process-restart.test.ts:11`/`:24` fork `restart-process.ts`，argv 为 `[mode, scenario, runId, sessionId]`（`process.argv[2..5]`）；
+`tests/integration/standalone-workflow-restart.test.ts:22` fork `standalone-restart-process.ts`，argv 只有 `[mode, scenario]`。
+`restart-process.ts` 的 mode：`start`（`runTurn` 跑到崩溃屏障）、`recover`（`recoverOwnedRun(runId, {userId, sessionId})`）、`worker`（`tickAgentRecovery({ports:{discover:listRecoverableAgentRuns, recover}})`），其它值抛 `Unsupported restart test process mode.`（`:144`）。
+scenario：`model_result`（在 `tool_execution_start` 拦住）、`read_intent`（`tool_start`）、`committed_write`（成功 `tool_end`）、`authorization`（`confirmation_required`）、`dag_progress`（budget 节点成功而 read 未成功）、`authorization_result`（`llmMode` 降为 `mock`，先跑一轮闲聊再在 `checkpoint('input')` 拦住 `confirmAction`）、`partial_model`（`streamFn` 只推 `start`/`text_delta` 后拦住）。
+`start` 拦住时发 `barrier{point, runId, sessionId}` 并永久挂起（`hold()`；另有 1s `setInterval` 冒充在线句柄）；每次模型调用先发 `model_call{count}`。
+`recover` 发 `recovered{response, modelCalls}`，`worker` 发 `worker_finished{result, modelCalls, message?}`，`start` 未被拦住而走完则发 `unexpected_completion{runId, modelCalls}`，顶层 catch 发 `fatal{message}` 并置 `process.exitCode = 1`。
+生产入口：`runTurn`/`confirmAction`（`@/agent`，`:2`）、`recoverOwnedRun`（`@/agent/durable/service`，`:3`）、`tickAgentRecovery`（`@/agent/recovery-worker`，`:4`）、`listRecoverableAgentRuns`（`@/lib/db/repositories/agentRun`，`:9`）、`AgentRunJournal`（`@/agent/durable/journal`，`:10`；`:31`/`:40` 猴补 `recordAgentEvent`/`checkpoint` 制造屏障）、`prisma`（`@/lib/db/client`，`:8`）。
+`standalone-restart-process.ts` 的 mode：`start`（`getOrCreateSession` + `createTaskGraph` + `resumeTask`），其它值一律按 worker 走 `tickAgentRecovery()`（不传 ports，用真实默认端口）；scenario 只有 `graph`（建图后立即 `barrier`）与 `authorization`（单 `transfer` 节点）。
+worker 发 `worker_finished{result}`，`fatal{message}` 兜底；`start` 跑完仍未到屏障则抛 `The standalone workflow did not reach its requested crash barrier`（`:40`）。
+生产入口：`getOrCreateSession`（`@/agent/session`，`:1`）、`resumeTask`（`@/agent/task-control`，`:2`）、`executeGatedTool`（`@/agent/confirmation/gated-execution`，`:3`）、`tickAgentRecovery`（`@/agent/recovery-worker`，`:4`）、`createTaskGraph`（`@/lib/db/repositories/task`，`:5`）、`prisma`（`@/lib/db/client`，`:6`）。
+崩溃由父进程 `SIGKILL` 后改写租约制造过期，脚本本身不碰租约。
+
 `./index.ts` 只再导出 `getTestPrisma`/`truncateAll`/`resetDatabase`/`useFreshDatabase`/`disconnectTestPrisma`，
 `ensureTestPragmas` 不在桶里（需直接 `from './db'`）；`fixtures` 整个星号再导出。
 
