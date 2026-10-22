@@ -41,6 +41,21 @@
 计划节点（`submit_plan` 之后）经 `agent/confirmation/gated-execution.ts` 以 `taskId`/`nodeId` 复用同一 `handleToolCall` 路径。
 独立路径：`manual-card-management.ts#proposeCardChange`（`POST /api/cards`）直接 `pendingAction.create`，工具名 `manual_add_card`/`manual_delete_card`，被 `app/api/actions/route.ts` 显式过滤，不出现在主确认面板。`addDemoCardSchema` 另接受可选 `linkedAccountId`（VIRTUAL 卡的结算账户绑定），`toChange` 将其透传到 `CardChange`；该绑定的账户归属与类型由 SDK 在服务端校验。
 
+## PendingAction 状态写入点与 CAS 过滤
+
+创建：`security-gateway.ts#gatewayCreatePendingAction` 经 `repoCreatePending`（`:691-712`）写入 `status: ev.requiresMfa ? 'awaiting_mfa' : 'pending'`（`:677`），无 CAS，落库默认值在仓储 `createPendingAction` 的 `input.status ?? 'pending'`。
+`security-gateway.ts#persistLockedAction`（`:817-820`）`claimPendingAction({ from: ['pending','awaiting_mfa'], to: 'locked' })`，由 MFA 耗尽（`:914`）与会话熔断（`:1148`）两个分支共用。
+`authorizeWithMfa` 的确认事务（`:922-945`）：`claimPendingAction({ from: ['awaiting_mfa','pending'], to: 'confirmed', userId, sessionId })`；计划已取消则在同一 tx 内 `update where {id}` → `'cancelled'`（`:940`，只撤销本次 claim，不看状态）。
+`authorizeTransfer`（`:992-1038`）：`updateMany where {id, status in ['pending'], userId, sessionId}` → `'confirmed'`（`:994-1002`）；计划取消 → `'cancelled'`（`:1014`）；确认时升级 RED → `'awaiting_mfa'`（`:1029-1034`）。
+`authorizeAction` 静态 RED 重新加严（`:1131-1134`）：`updateMany where {id, userId, sessionId, status in ['pending','awaiting_mfa']}` → `riskLevel 'RED'` + `requiresMfa true` + `status 'awaiting_mfa'`，`count !== 1` 抛 `CONFLICT`。
+`authorizeAction` 静态 YELLOW 认领（`:1162-1168`）：`claimPendingAction({ from: ['pending'], to: 'confirmed', userId, sessionId })`。
+`cancelAction`（`:1197-1203`）：`claimPendingAction({ from: ['pending','awaiting_mfa'], to: 'cancelled', userId, sessionId })` —— 认领源不含 `'locked'`，已锁定行取消得到 `CONFLICT`。
+`recordActionResult`（`:1218-1220`）→ 仓储 `setPendingActionStatus`（= `updatePendingActionStatus`）`update where {id}` → `'executed' | 'failed'`，无 CAS（调用前已完成 exactly-once 认领）。
+`recovery-authorization.ts#authorizeRecoveryAction`：writer claim `updateMany where {id, userId, sessionId, status: 'confirmed'}` 写回同值 `'confirmed'` 只为取写锁（`:39-42`，`count !== 1` 抛 `CONFLICT`）；需 MFA 时 `update where {id}` → `'awaiting_mfa'` + RED（`:64-66`）。
+`manual-card-management.ts`：`proposeCardChange` `create` 写 `'awaiting_mfa'`（`:88-90`）；`verifyCardChange` 执行栅栏 `updateMany where {id, userId, sessionId, status: current.status, argsJson}` → `'confirmed'`（`:143-145`），`onCommit` `update where {id}` → `'executed'`（`:148`）；`cancelCardChange` `updateMany where {id, ...identity, status in ['pending','awaiting_mfa','locked']}` → `'cancelled'`（`:159`）。
+手工卡路径是唯一把 `'locked'` 当作可继续/可取消状态的地方（`:51`、`:100`、`:111`、`:138`、`:159`），但它自己从不落库 `'locked'`（`:102` 的 `'locked'` 只是会话熔断的展示映射），且 `:71`/`:112` 以 `isLocked` 抛 `CIRCUIT_OPEN`。
+本层从不写 `executionLeaseOwner` / `executionLeaseExpiresAt`；租约只由 `agent/confirmation/liveness.ts` 经仓储 `claimPendingActionLease` / `clearPendingActionLease` 维护。
+
 ## 阻断原因（block reason）标记与锁定的可见性
 
 `security-gateway.ts:80` 导出 `BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__'`；全仓只有 `security-gateway.ts` 内三处拼接它。
