@@ -127,6 +127,9 @@ HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/har
 [lib/db/CONTEXT.md](../../lib/db/CONTEXT.md)。
 不得用旧连接池参数解释当前原生适配器行为。
 
+本目录没有时钟注入、租约过期或恢复次数上限的助手：唯一的 `now` 注入点是 `fixtures.ts` 的 `Options.now`（`fixtures.ts:255`）与全部 `build*(now: Date = demoNow())` 构建器。
+运行/租约过期与恢复计数由 spec 内联改写数据库列（`tests/integration/agent-durability.test.ts:35`–`:36`/`:295`–`:296`、`model-checkpoint-boundaries.test.ts:27`–`:28`/`:54`、`process-restart.test.ts:86`–`:87`、`standalone-workflow-restart.test.ts:74`），`maxRecoveryAttempts` 无任何测试引用。
+
 ### 清空语义（`truncateAll`）
 
 `truncateAll` 删除 `prisma/schema.prisma` 中**每一个** model 的全部记录，
