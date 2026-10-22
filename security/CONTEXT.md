@@ -43,14 +43,18 @@
 
 ## 赎回报价
 
-`gatewayCreatePendingAction` 在确认前用服务端决定铸造赎回报价。
-请求本金 `redeemAmount` 缺省或等于持仓本金时，按全部赎回报价。
-`redeemAmount` 小于持仓本金时，按部分赎回报价。
-`redeemAmount` 大于持仓本金时抛出 `VALIDATION`，并在落库前拒绝。
-两类赎回复用 SDK 的 `settledRedemptionAmount` 与 `valuationToMinor`。
-报价与结算同源，金额不会分歧。
-`redeemAmount` 属于请求身份，重复挂起时参与去重。
-`expectedRedemptionAmount` 属于服务端报价，重复挂起时沿用原报价。
+`gatewayCreatePendingAction` 在挂起时用服务端决定铸造赎回报价。
+赎回口径必须显式给出：`mode` 取 `SHARES`、`AMOUNT` 或 `ALL`，没有默认口径。
+缺少口径、沿用已废止的 `redeemAmount`、或口径与参数混用时抛 `VALIDATION`，并在落库前拒绝。
+`SHARES` 用请求份额，`AMOUNT` 用 SDK 的 `sharesFromAmount` 折算份额，`ALL` 用持仓全部份额。
+到账金额用 SDK 的 `settlementFromShares` 结算，与 `banking-sdk/investment.ts` 同源，报价与结算不会分歧。
+金额口径超过持仓市值时同样拒绝，并提示改用全额或按份额赎回。
+持仓未记录份额时抛 `CONFLICT`，产品未发布净值时抛 `VALIDATION`，两者都不铸造报价。
+确认摘要固定展示赎回口径、赎回份额、成交净值、净值日期、预计到账金额与费用口径。
+摘要金额是预计到账金额，不是本金；费用口径为 `feeAmount: '0.00'` 与 `feeRule: 'SIMULATED_NONE'`。
+快照字段为 `expectedShares`、`expectedNetValue`、`expectedNetValueDate`、`expectedSettlementAmount`。
+快照字段属于服务端报价，重复挂起时不计入请求身份（`requestArgs`）。
+快照字段同时进入命令指纹，口径或金额变化会作废旧授权。
 本层只快照报价，不改变余额。
 
 `mfa.ts` 把 5 分钟墙钟挑战绑定到命令，保留有效尝试并记录消费。
