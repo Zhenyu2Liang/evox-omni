@@ -106,7 +106,7 @@
 
 ## 已知问题
 
-`ActionResponse` 装备 `code`/`attemptsLeft`/`maxAttempts`/`failure`，而 `action_settled` 契约不带这些字段；结构化拒绝事实只能由 `postAction` 合成的一条 `security_event` 传递。不经 `postAction` 的路径（直接读历史）只能由状态推导原因。
+`ActionResponse` 携带 `code`/`attemptsLeft`/`maxAttempts`/`failure`，而 `action_settled` 契约不带这些字段；结构化拒绝事实只能由 `postAction` 合成的一条 `security_event` 传递。不经 `postAction` 的路径（直接读历史）只能由状态推导原因。
 无结构化事实的 `failed` 终态行仍落到 `chat.error.toolFailed`；可重试的错误验证码不合成 `security_event`，其提示只有一条 `error` 事件。
 `security_event` 的本地化依赖 `reduceAgentEvents` 的 `t`；两参调用使用默认语言（`zh-CN`）translator，非默认语言下两参路径产出中文正文。
 整页刷新会丢失内存态：`settledActions` 与内联卡片上的终态标记都不持久化。
