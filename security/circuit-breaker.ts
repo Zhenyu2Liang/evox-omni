@@ -41,7 +41,13 @@
  *   - A correct MFA code submitted WHILE locked is rejected and does NOT unlock: `mfa.verify`
  *     checks the lock FIRST ("locked wins") and fails regardless of the submitted code.
  *   - Unlock clears ALL breaker state for the owner — `failures` back to 0, `locked` false,
- *     `lockedAt` cleared — so a subsequent trip counts from scratch.
+ *     `lockedAt` cleared — so a subsequent trip counts from scratch. That is ALL it clears: the
+ *     owner is merely re-allowed to act again.
+ *   - Unlock neither diminishes the audit trail (the `CIRCUIT_BREAKER_TRIPPED` history and the
+ *     unlocking `SECURITY_RESET` both stay) NOR restores an already locked operation: a
+ *     `PendingAction` parked at status `'locked'` STAYS locked — it is not re-queued and it is never
+ *     auto-executed. To obtain such an operation the user must start it AGAIN and confirm it AGAIN;
+ *     unlocking gives back the ABILITY to act, never the finished act.
  *   - Unlock does NOT itself re-authorize an action. Undecided actions need confirm/MFA; a
  *     result-less confirmed transfer must pass recovery authorization again. Terminal/manual
  *     outcomes are not made executable by unlocking.
@@ -202,9 +208,15 @@ export async function recordSuccess(actor: string): Promise<CircuitBreakerState>
  * lock is LEFT INTACT: a bare session cookie can never unlock. When the owner is NOT locked there is
  * nothing to unlock, so the benign counter clear proceeds without a code.
  *
- * Unlock clears ALL breaker state (failures → 0, locked → false, lockedAt cleared) so the failure
+ * Unlock clears the BREAKER state (failures → 0, locked → false, lockedAt cleared) so the failure
  * counter restarts from scratch. It also renews exhausted challenges of still-awaiting MFA actions
  * for this owner inside the same audited transaction; it does NOT itself grant execution.
+ *
+ * IMPORTANT — unlocking restores NO operation. It only re-allows the owner to act again; it never
+ * diminishes the audit (both the `CIRCUIT_BREAKER_TRIPPED` history and this `SECURITY_RESET` stay)
+ * and it never revives a `PendingAction` already parked at status `'locked'`: that action stays
+ * terminal-locked, is not re-queued and is never auto-executed. The user must start the operation
+ * again and confirm it again after the unlock.
  *
  * The emitted event detail is a COMPLETE audit record: `actor`, `reason`, `wasLocked`,
  * `previousFailures` and, when it was set, `priorLockedAt`.
@@ -249,6 +261,14 @@ export async function resetDemoSession(actor: string): Promise<CircuitBreakerSta
   });
 }
 
+/**
+ * Commit the audited unlock: clear the owner's breaker state and write its `SECURITY_RESET`
+ * `SecurityEvent` in ONE transaction. The event message states precisely what happened — the
+ * breaker is cleared and the consecutive-failure count reset, while any `PendingAction` already
+ * parked at `'locked'` stays locked and must be re-initiated and re-confirmed by the user; unlocking
+ * restores no operation. The `detail` payload carries the full attribution (`actor`, `reason`,
+ * `wasLocked`, `previousFailures`, `mode`, `renewedMfaChallenges`, `priorLockedAt`).
+ */
 async function commitAuditedReset(
   actor: string,
   { key, userId }: BreakerOwner,
@@ -270,8 +290,11 @@ async function commitAuditedReset(
     const result = await resetBreakerState(key, { client: tx, expect });
     if (!result.applied) return; // lost CAS — newer state preserved, no write, no audit
     const prior = result.before;
-    // A legitimate unlock renews exhausted challenges for this owner's still-undecided actions.
-    // Terminal/cancelled actions remain terminal; verification is still required before any write.
+    // A legitimate unlock renews exhausted MFA CHALLENGES for this owner's still-undecided
+    // (`awaiting_mfa`) actions — it never touches an action already parked at `'locked'`, which stays
+    // terminal-locked, and it never re-queues or auto-executes anything. Terminal/cancelled actions
+    // remain terminal; verification is still required before any write, and a locked action must be
+    // re-initiated and re-confirmed by the user.
     const renewedMfaChallenges = prior?.locked
       ? await renewLockedMfaChallenges({ userId, sessionId: actor }, tx)
       : 0;
@@ -282,8 +305,8 @@ async function commitAuditedReset(
         kind: 'SECURITY_RESET',
         severity: 'medium',
         message: prior?.locked
-          ? `账户安全熔断已由「${actorName}」解除，所有操作已恢复。原因：${reason}`
-          : `已清除该账户的安全限制状态。原因：${reason}`,
+          ? `账户安全熔断已由「${actorName}」解除，失败的验证计数已清零；已锁定的待处理操作仍保持锁定、不会自动恢复，如需办理请重新发起并重新确认。原因：${reason}`
+          : `已清除该账户的安全限制状态与失败的验证计数，未恢复任何待处理操作。原因：${reason}`,
         detail: {
           actor: actorName,
           reason,
