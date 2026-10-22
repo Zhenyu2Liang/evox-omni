@@ -5,7 +5,8 @@ import type { CardView } from '@/banking-sdk';
 
 const trigger = '\u5982\u679c\u8fd9\u4e2a\u6708\u5a31\u4e50\u6d88\u8d39\u8d85\u8fc72000\u5143\uff0c\u5c31\u628a\u5a31\u4e50\u6d88\u8d39\u9650\u989d\u8c03\u6574\u4e3a1500\u5143';
 const cards: CardView[] = [{ id: 'card_credit', type: 'CREDIT', network: 'VISA', numberMasked: '****6688', status: 'ACTIVE',
-  creditLimit: '30000.00', availableLimit: '28500.00', monthlyLimit: '5000.00', limits: [] }];
+  creditLimit: '30000.00', availableLimit: '28500.00', monthlyLimit: '5000.00', linkedAccountStatus: 'NOT_APPLICABLE',
+  usable: true, limits: [] }];
 const user = (content: string): Message => ({ role: 'user', content, timestamp: 0 });
 
 describe('mock explicit conditional workflow proposals', () => {
