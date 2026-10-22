@@ -79,7 +79,15 @@ generation/token and session policy fences remain in the actual banking transact
 preserves current in-flight work and stops the next checkpoint. Scheduled dispatch reuses a persistent
 workflow and current approval.
 
-`confirmation-recovery.ts` `settlePendingAction` takes a REQUIRED `from` and refuses an empty or illegal source (`SECURITY_DENIED`) before the transaction opens, so every `PendingAction` status write names its expected source status and `locked` is never a source.
+`confirmation-recovery.ts` `settlePendingAction` requires an explicit `from` and refuses an empty or illegal source with `SECURITY_DENIED` BEFORE the transaction opens (see the next section).
+
+## PendingAction persistence: one funnel, no repository setter
+
+`confirmation-recovery.ts:264` `settlePendingAction` is the ONLY production writer of a `PendingAction` terminal status TOGETHER WITH its `resultJson`, in one `prisma.$transaction` (`:268`): `claimPendingAction({actionId, from, to}, tx)` CAS (`:269-272`; a lost race returns `false` and writes nothing, `:273`), an inline `tx.pendingAction.update({where:{id}, data:{resultJson: toJson(result)}})` (`:275-279`, only when `result !== undefined`), an optional strict `recordAudit` (`:280-297`) and `settleInvocationFromAction` (`:299`). It returns the `boolean` "landed" flag and never throws on a concurrent settle.
+`assertSettleSources` (`:242-251`) requires a non-empty `from` and refuses an illegal source with `AppError('SECURITY_DENIED')` BEFORE the transaction opens; every caller passes an explicit source (`from: ['confirmed']` at `confirmation/authorized-execution.ts:63`, `confirmation/gated-execution.ts:75`, `confirmation-recovery.ts:556` and `:615`).
+`lib/db/repositories/pendingAction.ts:181-194` still exports `updatePendingActionStatus` and its alias `setPendingActionStatus`, but NO production module in `agent/`, `app/`, `security/`, `lib/`, `planner/` or `channels/` calls either one: status+result persistence no longer passes through a repository function, so a fault-injection spy on that symbol observes zero calls (tests do this — see `tests/CONTEXT.md`).
+The post-execution status notification is `security/security-gateway.ts:1268` `recordActionResult`, a CAS over `RESULT_RECORDABLE_STATUSES` (`:284`) instead of an unconditional set, so a `locked` row keeps its lock; `confirmation/authorized-execution.ts:74-80` calls it only when `landed` is true and the status is `executed`/`failed`, and swallows its error because the settlement transaction is authoritative.
+`command-execution.ts` writes no `PendingAction` status (it owns the `ToolCommand` receipt, `:94`); `manual-review.ts:210` only cancels the still-open actions of a superseded plan; `workflows/parked-actions.ts` is strictly read-only.
 
 ## Blocked, denied and locked outcomes
 
