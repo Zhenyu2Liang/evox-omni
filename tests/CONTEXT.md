@@ -143,7 +143,7 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 | `integration/weixin-protocol.test.ts` | 固定版本 `pi-weixinbot` 线协议：轮询 Bearer+游标+uint64 编号、发送固定收件人/上下文/幂等 `client_id`、`ret:-14` 不视为已发送 |
 | `e2e/weixin-live.e2e.ts`、`e2e/weixin-capabilities.e2e-helper.ts` | live 模型 + Chrome + 本地微信协议服务器（非手机实测，每轮新建 `prisma/weixin-live-<UUID>.db`）：陌生人隔离、余额查询回复含真实金额、转账确认前不动账且重复投递不重复扣款、RED 确认→错码 `000000` 不改卡→正码执行、`/取消` 与网页待办一致；`WEIXIN_LIVE_EXTENDED=1` 追加 `runWeixinCapabilities` 的工具矩阵与 `/任务` 控制流 |
 
-### 微信通道已知缺口
+### 微信通道的锁定覆盖与剩余缺口
 
 - 无任何用例断言 `locked` 的完整微信回复：只断言含「已锁定」与不含「状态：executed」，未断言 `状态：已锁定` 行、未断言不回显 `继续验证`、也未断言服务端 `outcome.message`（如「验证码错误次数过多……安全中心」）原样透传。
 - `awaiting_mfa` 回复的 `状态：等待验证码` + `继续验证：/验证 …` 从未断言，只核对 `settle` 调用参数。
