@@ -35,6 +35,13 @@
 `confirmationStatus.ts` 解释持久化操作状态。
 终态记录不能因保留 RED 元数据而重新要求验证。
 
+终态原因只在 `failed` 时渲染：`ApprovalRecord`（60 行）、`ConfirmationCard`（64 行）、`MfaCard`（66 行）。
+`locked` 属终态（`confirmationStatus.ts` 12-18 行），只渲染 `chat.approval.status.locked` / `cards.terminal.locked` 徽标，服务端 `message` 不显示。
+`terminalStatusView('locked')` 的 `label` 是未翻译的 `'Locked'`（64-65 行），而终态角标实际取 `cards.terminal.*`（`ConfirmationCard` 68 行），该 `label` 只剩未使用分支。
+`MfaCard` 的 `readOnly` 由 `asTerminalStatus(status)` 或非 `pending`/`awaiting_mfa` 推导（41-42 行），`locked` 因此同时是只读且终态。
+卡片错误徽标（`MfaCard` 102 行、`ConfirmationCard` 121 行）使用 `localizeChatError`，未登记字符串原样显示，不回落错误文案登记表。
+`ErrorCard` 用 `publicToolError(message, t, 'chat.error.toolFailed', code)` 渲染文本（24 行），原始 `message`/`detail` 仅限开发者模式诊断（25-28 行）。
+
 `ReconciliationCard` 展示结果待核对的操作。
 它由对话界面单独组合，不属于卡片联合类型。
 结果未知时不得显示已成功、已失败或资金未变。
