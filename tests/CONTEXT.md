@@ -111,7 +111,7 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 锁定事实一律按 `status`、`mfaResult`、`PendingAction` 行、`GET /api/actions` 是否再surface 与 `SecurityEvent` 行断言。
 写操作路由锁定路径上对 `events` 的断言只有负例（不再出现该 actionId 的 `mfa_required`），没有公开工具事件摘要断言。
 `unit/planner/action-contract.test.ts`、`action-attention-state.test.ts` 用桩造的 `message`（如 `'Verification locked'`）断言客户端把服务端锁定消息透传成 `error` + `action_settled`。
-`unit/planner/tool-diagnostics.test.ts` 是唯一渲染层锁定用例：`MfaCard`/`ConfirmationCard` 传 `status:'locked'` 断言 `cards.terminal.locked` 且无 `<input>`/`<button>`。
+渲染层锁定不再是单点用例：`unit/planner/tool-diagnostics.test.ts` 仍唯一断言 `ConfirmationCard` 出 `cards.terminal.locked` 且无 `<button>`；`unit/planner/locked-card-rendering.test.ts:85-107` 断言 `MfaCard` 的 `data-mfa-locked`、目录锁因句、`href="/security"`、无 `<input>`/`<button>`/`123456`/`继续验证：`，`awaiting_mfa` 保留输入面见 `:109-118`，`ApprovalRecord` 见 `:120-132`，`security_event` 折叠见 `:134-155`；`unit/security/unlock-panel-render.test.ts:67-157` 覆盖 `/security` 解锁面板（`data-unlock-*`、真实目录值、单一验证码输入、无内部诊断）。
 `e2e/acceptance.e2e.ts` 的 `j-circuit-breaker-lock` 在真实浏览器连错三码，用未限定 `[role="status"]` 的子串匹配断言 `cards.terminal.locked`，并核 `/security` 的「已熔断」「失败 3 / 3 次」与 `CIRCUIT_BREAKER_TRIPPED` 行。
 
 锁定文案只有子串断言，且都不经 i18n：`scenarios/test-10-circuit-breaker.test.ts` 断言 `thirdAttempt.text` 含「锁定」、`auth.message` 含「熔断」；`integration/money-budget.test.ts` 断言执行栅栏的 `CIRCUIT_OPEN` 结果含「熔断」。
