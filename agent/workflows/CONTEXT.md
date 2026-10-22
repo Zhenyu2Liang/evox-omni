@@ -102,6 +102,9 @@
 `runTool` 接缝由调用方（入口点/路由）提供，它们传入具体的银行工具调度器；本目录从不定义工具名。
 纯控制路径使用 `UNUSED_RUN_TOOL`，一旦尝试执行工具就抛错。
 租约语义在 `claims.ts`；卡与 `PendingAction` 的状态策略属于 `../action-status.ts`，不在本目录。
+`claimTaskStatus` 不在 `claims.ts`：它是 `lib/db/repositories/task.ts:140` 的计划状态 CAS；`claims.ts` 只导出节点/计划执行认领、陈旧判定与 `buildNodeClaimPorts`。
+`resumeTask`/`retryTask` 里可能抛 `AppError` 的只有三处：`loadOwnedTask`（`NOT_FOUND` / `SECURITY_DENIED`）、`assertNoOpenManualReview`（`CONFLICT`，`lib/db/repositories/manualReview.ts:6`，文案是手写中文业务句而非目录键）、`assertParkedActionsNotTerminal`（`MFA_LOCKED` / `CONFLICT`）；成功路径上 `agent/index.ts:333-351` 随后还会调 `synchronizeScheduledWorkflow`（可抛 `SECURITY_DENIED`，`agent/scheduled-dispatcher.ts:95`）。
+`claimTaskStatus` / `claimTaskExecution` / `claimNode` / `planExecutionClaimHeld` 只返回布尔、从不抛错：CAS 落败（`running` 的 CAS 还额外要求计划无开放人工核对，`lib/db/repositories/task.ts:151`）时控制直接 `getTaskPlan` 返回快照，HTTP 仍是 200；planner 的条件更新同样匹配 0 行不抛错（`planner/CONTEXT.md:94`），节点失败从不冒泡（`planner/executor.ts:506-509`）。
 恢复/重试的可达路径：用户触发的 `POST /api/tasks/[id]`（经 `agent/index.ts` 的 `resumeTask`/`retryTask`）、`agent/durable/workflow-resumption.ts`（`resumeOriginalRunTask` 对非 `paused`/`cancelled`/`success` 的计划调用 `resumeTask`）、独立图谱驱动，以及 `agent/confirmation/plan-continuation.ts` 的 `resumeOwningPlan`（走 `resumeTaskForAction`，不由守卫拦下，只接受网关已授权的结局）。
 读取路径 `GET /api/tasks/[id]` 附加暴露每个停靠节点的 `pendingActionStatus`（只读、不写状态），客户端据此区分开放决策与 `locked`。
 
