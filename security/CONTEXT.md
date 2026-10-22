@@ -73,7 +73,7 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 `security-gateway.ts` 的 MFA 分支以领域结果返回状态（不抛出）：
 未达上限 → `status: 'awaiting_mfa'`、`code: 'MFA_FAILED'`、消息「验证码错误，请重试。剩余尝试次数：N。」；
 达到上限 → `status: 'locked'`、顶层 `code: 'CIRCUIT_OPEN'`、`failure.code: 'MFA_LOCKED'` + `reason: 'mfa_attempts_exhausted'` + `attemptsLeft: 0`，消息「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」，并用 CAS 落库 `locked`（`security-gateway.ts:895-915`）；
-已锁定后的再次提交走提前熔断分支 → `status: 'locked'`、消息「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」。
+已锁定后的再次提交走 `authorizeAction` 的两个门之一：行已 `locked` → `lockedOutcome(...,'mfa_session_locked')`（`:1116-1119`），熔断器仍开 → `persistLockedAction` + `lockedOutcome(...,'circuit_open')`（`:1146-1149`）；两者都不新建挑战、不消费尝试、`message` 同为「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」。
 锁定态返回值仍带 `requiresMfa: true`，但 HTTP 路由由 `status` 推导出的 `mfaResult` 变为 `failed`，且不发出 `mfa_required` 流事件。
 真正的终态锁定会以「仅从 `pending`/`awaiting_mfa` 出发」的 CAS 把 `PendingAction.status` 落库为 `'locked'`；该行因此不再作为待决策项返回，也不再发出 `mfa_required`，MFA 弹窗不会重现；对已是 `'locked'` 的行再次授权幂等返回同一拒绝。
 `mfa.ts#verify` 返回 `Result` 而非抛错；抛 `CIRCUIT_OPEN` 的只有 `circuit-breaker.resetSession` 与 `execution-policy.assertSessionMayWrite`。
