@@ -55,7 +55,7 @@
 错误码（`mfaResult==='failed'`，或非决定态且 `ok===false`）落到追加 `error` 的支路（598-601 行）。
 终态状态（`TERMINAL_ACTION_STATUSES`，含 `locked`）合成 `action_settled`（604-611 行）；
 `settleAction` 对匹配 `actionId` 的终态清除 `pendingAction`（`useAgentStream.ts` 402-404 行）。
-`pull` 的 `clearPending` 守卫要求 `!hasError`（863-873 行），故带 `error` 的响应不会清除决定，除非 `settleAction` 已清。
+`pull` 的 `clearPending` 守卫要求 `!hasError`（880-882 行），故带 `error` 的响应不会清除决定，除非 `settleAction` 已清。
 
 ## 已知问题
 
