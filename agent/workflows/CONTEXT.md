@@ -86,6 +86,15 @@ planner 端口（计划/节点写、租约续期、`getTask` 读）在这些位�
 
 `runTool` 端口自身不会把工具失败变成异常：`ports.ts:32-33` 只包一层 `withWorkflowExecutionClaim`（`execution-context.ts:13-15`，无 catch）后直调 `deps.runTool`；生产实现是 `agent/index.ts:308-325#taskRunToolFor` → `agent/confirmation/gated-execution.ts#executeGatedTool`，其一次性执行体整段在 `try/catch` 内折成 `{ ok: false, error, errorCode }`，且即便外层包装仍拒绝，`planner/executor.ts:504-509` 也会把端口拒绝折成 `failed` 节点。因此经 `runTool` 的拒绝到不了 HTTP；能到 HTTP 的是本目录自己那些未捕获的 await。
 
+## 占用竞争与前置守卫：什么抛错、什么只返回快照
+
+`assertNoOpenManualReview`（`lib/db/repositories/manualReview.ts:4-7`）读 `prisma.manualReview.findFirst({ taskId, status: 'open' })`，命中即抛 `AppError('CONFLICT')`（→ HTTP 409）。它定义在 `lib/`，`agent/` 内只有本目录 `controls.ts:29`（resume）与 `:51`（retry）调用它，位置在 `assertParkedActionsNotTerminal` 之前。
+`openManualReview`（`../manual-review.ts:153`）会把非 `failed` 的计划改成 `paused` 并留下 `status: 'open'` 的记录，所以「人工接管中的计划」恢复时会先被这个守卫拦下。
+占用竞争不是异常：`claimTaskStatus`（`lib/db/repositories/task.ts:140-157`）与 `claimTaskExecution`（`:179-185`）都是返回 `boolean` 的 CAS，输掉的一方 `return getTaskPlan(...)`（`controls.ts:34`、`:36`、`:55`、`:57`），HTTP 仍是 200 + 计划快照，绝不抛错。
+两条占用语句自身都带 `manualReviews: { none: { status: 'open' } }`（`task.ts:151`、`:201`），所以即使去掉前置守卫，开放人工核对也只会让占用失败（200 快照）；正是 `assertNoOpenManualReview` 把它变成 409。
+`planExecutionClaimHeld`（`claims.ts:29-32`）同样只返回布尔：`isRunOwner`（`ports.ts:35`）在占用被接管时让执行器停止并返回快照。
+`resumeTaskForAction` 在找不到计划或任务行不存在时返回 `undefined`（`action-continuation.ts:27-29`），在计划已 `cancelled` 时直接返回快照（`:30`），也不抛。
+
 ## 公开文案
 
 用户可见文本一律经 `lib/public-text.ts` 收口，禁止把内部状态字面量（例如 `locked`）、blockReason 载荷、JSON 片段或堆栈放进用户可见文本。
