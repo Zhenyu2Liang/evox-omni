@@ -12,7 +12,21 @@ Server pages may use the identity helper; client components call HTTP routes ins
   `requireIdentity(req?)` return the configured user and fixed `demo:${userId}` workspace through
   `getDemoSession`. The request parameter does not select identity. There is no login or
   authentication cookie. Generic internal sessions cannot be selected through this interface.
-- `http.ts`: JSON envelopes, `AppError` status mapping, Zod body/query parsing, optional body
+- `http.ts`: JSON envelopes (`ok`/`fail`), `AppError` → status mapping, Zod body/query parsing,
+  optional body parsing and SSE helpers.
+  Success is `{ ok: true, data }`, failure is `{ ok: false, error: { code, message } }` (`types.ts`
+  `ApiSuccess`/`ApiFailure`); SSE frames are `data: <JSON>\n\n` (`sseFrame`).
+  `STATUS_BY_CODE` (`http.ts:19-31`) is exhaustive over the CLOSED `ErrorCode` union of
+  `lib/errors.ts:3`: `VALIDATION` 400, `NOT_FOUND` 404, `SECURITY_DENIED` 403, `MFA_FAILED` 403,
+  `CIRCUIT_OPEN` 423, `MFA_LOCKED` 423, `INSUFFICIENT_FUNDS` 422, `LIMIT_EXCEEDED` 422, `CONFLICT`
+  409, `TOOL_FAILED` 502, `INTERNAL` 500. No other code exists — there is no `UNAUTHORIZED`,
+  `RATE_LIMITED` or `MFA_REQUIRED`: identity is the fixed demo workspace and an MFA requirement is a
+  DOMAIN outcome (`requiresMfa` / `failure`), never a status code.
+  `?? 500` (`http.ts:53`) is a belt-and-braces fallback that the exhaustive record makes unreachable;
+  the real 500 path for a non-`AppError` throw is `AppError.from` (`lib/errors.ts:24`) rewriting it to
+  `INTERNAL`, whose message `mapAppError` (`http.ts:52`) then replaces with the literal
+  `Internal error` — so no exception text, stack, Prisma detail or MFA code reaches a response body.
+  Malformed JSON body/query → `VALIDATION`; `parseOptionalBody` treats an absent or empty body as `{}`.
   parsing and SSE helpers. Unknown exceptions use a generic internal error without exposing
   credentials, stack traces or database internals.
 - `schemas.ts`: shared `limitQuerySchema`; user/session identifiers are not query schema fields.
