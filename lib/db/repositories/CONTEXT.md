@@ -39,6 +39,21 @@
 `claimTaskExecution` 与 `claimNodeExecution` 认领执行权。
 释放与节点写入必须匹配持有的令牌。
 
+## 计划节点的读取与写入原语
+
+节点行只由 `createTaskGraph`（`task.ts:55`）的嵌套 create 建立；`createTaskNode`（`task.ts:235`）当前无调用方。
+`updateTaskNode`（重载 `task.ts:284`/`:289`/`:295`）是唯一的节点结果写入原语：
+无令牌时 `update`，`where: { taskId_nodeId: { taskId, nodeId } }`，Prisma `P2025` 转 `NOT_FOUND`；
+传 `opts.fenceToken` 时单条 `updateMany`，`where: { taskId, nodeId, executionToken: fenceToken }`，匹配 0 行返回 `null`（执行权已丢失，不是"节点不存在"）。
+它只写 `status`、`output`（`toJson` 文本）、`error`（原样字符串）、`startedAt`、`endedAt`；`UpdateTaskNodeInput` 没有 `name`/`tool`/`summary`。
+`AgentTaskNode` 无 `summary` 列，`TaskNodeResult` 也无 `summary` 字段：执行器的 summary 只能通过 `output`（如 `{ summary }`）落库。
+`updateTaskNodeStatus`（`task.ts:333`）是无条件 `update`（`where: { taskId_nodeId: ... }`, `data: { status }`），当前无调用方。
+`updateTaskStatus`（`task.ts:112`）同样是无条件赋值；`AgentTask` 的条件状态迁移统一走 `claimTaskStatus`（`task.ts:140`，单条 CAS）。
+`error` 与 `output` 没有长度上限或截断：SQLite TEXT 原样保存，仓储层不做校验。
+本目录没有"整份计划快照 + 全部节点"的整体回写函数：`createTaskGraph` 只 create，快照写入端口（`persistPlan`/`persistNode`/`loadPlan`）在 `agent/workflows/persistence.ts`。
+读回形状由 `agent/workflows/persistence.ts:12 toTaskPlan` 与 `app/api/_lib/task-plans.ts:92 toTaskPlan` 提供，两者都用 `safeParse` 解码 JSON 文本列。
+释放与节点写入必须匹配持有的令牌。
+
 `PendingAction.taskId/nodeId` 在创建时保存计划关联。
 `revokePendingActionsByTask` 撤销指定状态的关联操作。
 关联不依赖节点输出中的临时字段。
