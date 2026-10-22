@@ -1,14 +1,27 @@
 'use client';
 
+/**
+ * `ResetBreakerButton` — the developer-only breaker maintenance entry of the Security Center.
+ *
+ * Distinct from `UnlockPanel`'s runtime unlock: this is a demo maintenance shortcut with no
+ * credential (`POST /api/developer/security/reset`), visible only while developer mode is on. The
+ * outer wrapper carries `data-developer-breaker-reset-panel` so browser assertions can scope
+ * themselves to this widget ("there is no developer reset here") without relying on structure.
+ *
+ * Rendering funnel: a failure message never reaches the DOM verbatim — it goes through
+ * `safePublicText`, which drops internal diagnostics (`__SECURITY_BLOCK__` payloads, raw JSON, stack
+ * traces) and falls back to the catalog key when the message is absent.
+ */
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useDeveloperMode } from '@/lib/developer-mode/DeveloperModeProvider';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
+import { safePublicText } from '@/lib/public-text';
 import type { MessageKey, MessageParams } from '@/lib/i18n/shared';
 
 type ResetStatus =
-  | { ok: boolean; key: MessageKey; params?: MessageParams }
-  | { ok: false; message: string };
+  | { ok: boolean; kind: 'key'; key: MessageKey; params?: MessageParams }
+  | { ok: false; kind: 'text'; text: string };
 
 export function ResetBreakerButton({ className }: { className?: string }) {
   const { enabled } = useDeveloperMode();
@@ -24,15 +37,17 @@ export function ResetBreakerButton({ className }: { className?: string }) {
       const response = await fetch('/api/developer/security/reset', { method: 'POST' });
       const body = await response.json() as
         | { ok: true; data: { failures: number; max: number } }
-        | { ok: false; error: { message: string } };
+        | { ok: false; error?: { message?: string } };
       if (body.ok) {
-        setStatus({ ok: true, key: 'security.reset.success', params: { count: body.data.failures, max: body.data.max } });
+        setStatus({ ok: true, kind: 'key', key: 'security.reset.success', params: { count: body.data.failures, max: body.data.max } });
         router.refresh();
       } else {
-        setStatus(body.error.message ? { ok: false, message: body.error.message } : { ok: false, key: 'security.reset.failed' });
+        // Server prose is never printed as-is: `safePublicText` falls back to the catalog key when the
+        // message is missing, empty or an internal diagnostic.
+        setStatus({ ok: false, kind: 'text', text: safePublicText(body.error?.message, t, 'security.reset.failed') });
       }
     } catch {
-      setStatus({ ok: false, key: 'security.reset.networkError' });
+      setStatus({ ok: false, kind: 'key', key: 'security.reset.networkError' });
     } finally {
       setBusy(false);
     }
@@ -40,14 +55,14 @@ export function ResetBreakerButton({ className }: { className?: string }) {
 
   if (!enabled) return null;
   return (
-    <div className={['flex flex-col items-start gap-2', className].filter(Boolean).join(' ')}>
+    <div data-developer-breaker-reset-panel className={['flex flex-col items-start gap-2', className].filter(Boolean).join(' ')}>
       <p className="text-xs text-banking-navy/70">{t('security.reset.developerOnly')}</p>
       <button type="button" data-developer-breaker-reset onClick={handleClick} disabled={busy}
         className="rounded-xl bg-banking-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-banking-accent/90 disabled:cursor-not-allowed disabled:opacity-60">
         {t(busy ? 'security.reset.busy' : 'security.reset.reset')}
       </button>
       {status ? <p role="status" aria-live="polite" className={`text-sm ${status.ok ? 'text-banking-success' : 'text-banking-danger'}`}>
-        {'key' in status ? t(status.key, status.params) : status.message}
+        {status.kind === 'key' ? t(status.key, status.params) : status.text}
       </p> : null}
     </div>
   );
