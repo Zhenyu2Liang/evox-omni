@@ -128,7 +128,12 @@ planner 不让内部诊断文本进入任何可渲染字段。
 开头与结算的快照写入（`executor.ts:540`/`:734`）都不在 try 内。
 `releaseNode` 在 `finally` 内，其拒绝会顶替本次节点的结果或原异常。
 `runPlan` 不自行校验图：`topologicalOrder`（`executor.ts:302`）对有环快照抛 `VALIDATION`，是该函数唯一的非端口抛出点。
-`lifecycle` 全无 catch；`resumePlan` 的 `AppError('NOT_FOUND')`（`lifecycle.ts:335`）是本目录唯一的显式抛出。
+`runTool` 的拒绝一律转为 `ok:false` 节点结果，无任何按错误码 rethrow：`AppError.from` 后经 `toPlanFailure` 只保 `code`（`failure.ts:71`），故 `CONFLICT`/`SECURITY_DENIED`/`CIRCUIT_OPEN` 只作为节点 `failure.code` 落盘，不会逃出走查。
+`runPlan` 不会抛 `CONFLICT`：本目录无任何 `CONFLICT` 抛出点，`CONFLICT` 只以节点 `failure.code` 出现。
+节点写入顺序：认领后先写 `running` 行，再调 `runTool`（`executor.ts:491`、`:505`），之后写结算行（`:517`）；`requiresConfirmation`/`pendingActionId` 结果为挂起时置计划 `waiting_confirmation` 并 `return 'parked'`（`:518-521`），走查 break（`:674-677`）后照常写结算快照，不抛错。
+全程 `await`：走查内无 fire-and-forget 节点 promise，唯一未 await 的是 `opts.onControls?.(controls)`（`executor.ts:532`，返回类型 `void`）。
+`lifecycle` 全无 catch；`resumePlan` 的 `AppError('NOT_FOUND')`（`lifecycle.ts:335`）是 lifecycle 里唯一的显式抛出。
+本目录全部显式抛出只有三处：`dag.ts:248`（有环，经 `executor.ts:302` 逃出 `runPlan`）、`dag.ts:426`（条件输出缺失/不可比，被 `executor.ts:632` 捕获）、`executor.ts:628`（条件无表达式，同处捕获）。
 `retryPlan` 对 `cancelled` 计划、无目标、无任何可重置节点三种情况原样返回同一 plan（`lifecycle.ts:249`/`:261`/`:291`），从不因终态/已锁定节点抛错。
 `PlanToolOutcome.ok === false` 只让节点 `failed`（或在 `requiresConfirmation`/`pendingActionId` 存在时挂起，`node-outcome.ts:36-52`），不抛错也不直接改计划状态；计划成败在结算处按「全部 success/skipped」判定（`executor.ts:720-724`）。
 
