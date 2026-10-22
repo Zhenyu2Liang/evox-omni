@@ -64,7 +64,7 @@ describe('offline dialogue script and closed presentation vocabulary', () => {
   it('routes partial-redemption wording to the supported redeem flow instead of the retired unsupported-guidance envelope', () => {
     const response = classify('\u90e8\u5206\u8d4e\u56de100\u5143', []);
     const call = response.content.find(part => part.type === 'toolCall');
-    expect(call).toMatchObject({ name: 'redeem_investment', arguments: { holdingId: 'holding_wenjiana', redeemAmount: '100' } });
+    expect(call).toMatchObject({ name: 'redeem_investment', arguments: { holdingId: 'holding_wenjiana', mode: 'AMOUNT', amount: '100.00' } });
     expect(parseBankingGuidance(contentToText(response.content))).toBeUndefined();
   });
 });
