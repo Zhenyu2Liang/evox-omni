@@ -60,7 +60,8 @@
 `cardsOfType(res, type)`（`scenario.ts:635`），以及类型 `ScenarioResult`（`scenario.ts:57`）、`RunTurnInput`（`scenario.ts:77`）。
 `ScenarioResult` 字段：`sessionId`/`events`/`text`/`toolEvents`/`cards`，可选 `confirmation`/`mfa`/`plan`/`error`。
 决策面直接调 `security.gateway.securityGateway.authorizeAction`（`scenario.ts:522`/`:523`），非 ok（`awaiting_mfa`/`locked`）时返回
-`{events: [], text: auth.message, ...}` 且不执行（`scenario.ts:508`）；决策失败因此没有事件，只有 `text`。
+`{events: [], text: auth.message, ...}` 且不执行（`scenario.ts:528`）；决策失败因此没有事件，只有 `text`。
+`runTurn` 强制 `agent.sessionId === input.sessionId`，否则抛 `AppError('SECURITY_DENIED')`（`scenario.ts:424`）。
 时限用 `demoNow()`（`lib/clock.ts:14`，钉死 `DEMO_NOW`）只作事件时间戳，没有定时器与时钟推进。
 
 `confirmAction`/`verifyAction` 共用 `decideAndContinue`（`scenario.ts:514`）：
