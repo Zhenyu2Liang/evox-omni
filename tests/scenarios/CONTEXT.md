@@ -76,6 +76,19 @@ GREEN 只表示执行策略，不表示没有副作用。
 `test-10-circuit-breaker.test.ts` 是本目录唯一覆盖「MFA 次数耗尽 → 熔断锁定」的场景（`test-03`/`test-09`/`test-13`/`test-14`/`test-16`/`test-19` 只走 `blocked` + `awaiting_mfa`，同名 `locked` 匹配多来自 `blocked`/`unlocked` 子串）。
 它只断言服务端事实：`MfaChallenge.status='locked'` 且 `attempts===maxAttempts===3`、`CircuitBreakerState.locked`/`failures`/`lockedAt`、`CIRCUIT_BREAKER_TRIPPED`（severity `high`）恰 1 条、`MFA_FAILURE` 恰 3 条、`authorizeAction` 返回 `ok:false`/`status:'locked'`、后续 RED 工具调用 `evaluation.blocked` + `decision.kind='deny'` 且不再建 `PendingAction`、余额与持仓不变。
 人类可见文案只按片段断言：`text` 含「验证码错误」与「锁定」，`auth.message` 含「熔断」。
+
+### 锁定文案与网关分支的对应（`security/security-gateway.ts`）
+
+第三条错码的 `text` 是 `authorizeWithMfa` 的 MFA_LOCKED 句子（`:911`「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」），本目录只断言其中的「锁定」。
+锁定后带正确码再授权的 `message` 来自 `lockedOutcome`（`:841`「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」），本目录只断言「熔断」子串。
+该次 `authorizeAction` 在 `row.status === 'locked'` 短路处返回（`:1116-1119`），因此 `authorizeAction` 的熔断闸门分支（`:1146-1148`，`isLocked` → `persistLockedAction`）在本目录从未被执行。
+新工具调用被拒的文案来自 `gatewayDecide` 的 `HIGH_RISK_BLOCKED` 分支（`:446`，同时含「熔断」「锁定」），`test-10` 只断言 `evaluation.blocked`/`decision.kind='deny'`/无 `action`，不读该文案。
+
+### 熔断所有者与隔离
+
+`runTurn` 会 upsert 归属 `DEMO_USER_ID` 的 `AgentSession`（`../helpers/scenario.ts:429`），`resolveBreakerOwner` 优先取会话用户（`security/circuit-breaker.ts:115-121`），所以本目录所有场景共用 `user:user_liming` 一条熔断状态。
+隔离只来自 `useFreshDatabase()` 在每个用例前清库；`newSessionId()` 不隔离熔断，`test-10` 头注释的「session 级隔离」说法已过时。
+本目录不读 `AuditLog`（全目录无 `auditLog` 断言），也不经 HTTP（`GET /api/actions` 在此不可达，`test-19` 的 `api/actions` 只出现在注释里）。
 本目录与 `../helpers` 都不匹配 `chat.error.securityLocked`/`chat.error.toolFailed`、完整锁定语（「验证码错误次数过多……安全中心……」）、`__SECURITY_BLOCK__`、`CIRCUIT_OPEN` 或 HTTP 423；那些只出现在 `../app` 的 HTTP 用例与 `../integration`、`../e2e` 目录。
 `../helpers/scenario.ts#handleToolExecutionEnd` 会把 `deny` 阻塞理由发布为 `security_event{kind:'locked'}`，但本目录没有用例断言该事件。
 `MfaCard`/`publicToolError` 的 LOCKED 渲染不属于本目录覆盖范围。
