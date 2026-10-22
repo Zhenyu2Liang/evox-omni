@@ -46,6 +46,8 @@ import {
   runCliStep as runCliStepShared,
 } from '../helpers/prisma-cli';
 import { addMoney, centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
+import { addDecimal, compareDecimal, formatDecimalCNY, formatDecimalFixed, subtractDecimal } from '../../lib/decimal';
+import { marketValueFromShares, redeemedCostMinor, settlementFromShares } from '../../banking-sdk/net-value';
 import { DEMO_NOW } from '../../lib/constants';
 import {
   NAV_TIMEOUT_MS,
@@ -1365,6 +1367,18 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
 interface LiveHoldingRow {
   principalAmountMinor: bigint;
   estimatedMarketValue: string | null;
+  shares: string | null;
+  status: string;
+}
+
+/** One read of the position in 「净值 + 份额」 terms: shares, remaining cost, market value, net value. */
+interface LiveHoldingSnapshot {
+  shares: string;
+  costMinor: bigint;
+  marketValue: string;
+  status: string;
+  realizedProfitMinor: bigint;
+  netValue: string;
 }
 
 /** Poll SQLite for the `holding_wenjiana` row until `predicate` holds (a business condition). */
@@ -1378,12 +1392,38 @@ function awaitHolding(
       withDb(async (db) => {
         const row = await db.investmentHolding.findUnique({
           where: { id: HOLDING_WENJIANA_ID },
-          select: { principalAmountMinor: true, estimatedMarketValue: true },
+          select: { principalAmountMinor: true, estimatedMarketValue: true, shares: true, status: true },
         });
         return row && predicate(row) ? row : false;
       }),
     { timeoutMs, intervalMs: 1_000, description },
   );
+}
+
+/**
+ * Read the position in 「净值 + 份额」 terms straight from SQLite. Every expected figure of the
+ * scenario is derived HERE, so the assertions state the contract (到账 = 赎回份额 × 成交净值 rounded
+ * HALF_UP once, the consumed cost is proportional to the redeemed shares, and 收益 = 到账 − 成本)
+ * instead of a hard-coded principal plus a fixed yield.
+ */
+async function readHoldingSnapshot(): Promise<LiveHoldingSnapshot> {
+  return withDb(async (db) => {
+    const holding = await db.investmentHolding.findUniqueOrThrow({ where: { id: HOLDING_WENJIANA_ID } });
+    const product = await db.investmentProduct.findUniqueOrThrow({ where: { id: holding.productId } });
+    const netValue = product.latestNetValuePerUnit;
+    if (netValue === null) throw new Error('稳健理财A 未发布净值，无法按「净值 + 份额」核对赎回');
+    if (holding.shares === null || holding.estimatedMarketValue === null) {
+      throw new Error('稳健理财A 持仓缺少份额或市值，无法按「净值 + 份额」核对');
+    }
+    return {
+      shares: holding.shares,
+      costMinor: holding.principalAmountMinor,
+      marketValue: holding.estimatedMarketValue,
+      status: holding.status,
+      realizedProfitMinor: holding.realizedProfitMinor,
+      netValue,
+    };
+  });
 }
 
 /** Read one labelled `label → value` row (two adjacent spans) from a rendered investment tile. */
@@ -1398,66 +1438,146 @@ async function readTileRow(tile: Locator, label: string): Promise<string> {
   }, label);
 }
 
+/** Parse a rendered `[+-]?¥1,234.56` cell back to SIGNED cents (presentation → comparable figure). */
+function renderedMinor(text: string): bigint {
+  const negative = text.startsWith('-');
+  const minor = moneyToCents(text.replace(/[+\-¥,]/g, ''));
+  return negative ? -minor : minor;
+}
+
+/** A signed decimal valuation rendered the way `DecimalMoney` renders it (`+` only when positive). */
+function signedDecimalCNY(amount: string): string {
+  return (compareDecimal(amount, '0') > 0 ? '+' : '') + formatDecimalCNY(amount);
+}
+
 /**
  * SCENARIO lB (LIVE-LLM, REAL BROWSER): subscribe an extra ¥1,000 into 稳健理财A (RED) and then
- * PARTIALLY redeem ¥2,000 of principal (RED) through the `/agent` chat + MFA, then verify the EXACT
- * remaining principal / market value / profit on the REAL `/investments` page, the ledger + balance
- * and the full-precision valuation stored in SQLite.
+ * PARTIALLY redeem BY AMOUNT (¥2,000 — the口径 must be explicit, a bare number only earns a
+ * clarification) through the `/agent` chat + MFA, then verify the resulting 「净值 + 份额」 position
+ * (remaining shares / remaining cost / market value / realized profit) on the REAL `/investments`
+ * page, the ledger + balance and the full-precision valuation stored in SQLite.
  */
 async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
   return withPage(
     ctx.browser,
     async (page) => {
       attachCollectors(page);
+      const beforeHolding = await readHoldingSnapshot();
       const beforeBalance = (await fetchDashboardSummary(ctx.baseUrl)).checkingBalance;
       const beforeLedger = (await fetchLedger(ctx.baseUrl)).transactions;
       await gotoAgent(page, ctx.baseUrl);
 
-      // B1 — RED `subscribe_investment` (¥1,000 into 稳健理财A → principal 6,000.00): bounded natural
-      // turns; if the model insists on a failing plan/submission path, one mild natural rephrase.
+      // B1 — RED `subscribe_investment` (¥1,000 into 稳健理财A): the cost basis grows by exactly
+      // ¥1,000.00 AND the share count grows. Bounded natural turns; if the model insists on a failing
+      // plan/submission path, one mild natural rephrase.
       const sentB1 = await driveRedTool(page, ctx.baseUrl, [
         '追加申购稳健理财A 1000元',
         '确认，请办理',
         '界面上方没有出现确认面板，请重新发起这笔追加申购',
         '现在就用我的账户追加申购稳健理财A 1000元',
       ]);
+      const costAfterSubscribeMinor = beforeHolding.costMinor + 100_000n;
       await awaitHolding(
-        (row) => row.principalAmountMinor === 600_000n,
-        'B1 后 holding_wenjiana.principalAmountMinor === 600000（¥6,000.00）',
+        (row) => row.principalAmountMinor === costAfterSubscribeMinor,
+        `B1 后 holding_wenjiana 剩余持仓成本 ${centsToMoney(costAfterSubscribeMinor)}（申购前 + ¥1,000.00）`,
       );
+      const subscribed = await readHoldingSnapshot();
+      if (subscribed.shares === beforeHolding.shares) {
+        throw new Error(`追加申购后持仓份额应增加，实际仍为 ${subscribed.shares}（净值 ${subscribed.netValue}）`);
+      }
+      const subscribedMarketValue = marketValueFromShares(subscribed.shares, subscribed.netValue);
+      if (subscribed.marketValue !== subscribedMarketValue) {
+        throw new Error(`追加申购后市值应为「份额 × 净值」= ${subscribedMarketValue}，实际 ${subscribed.marketValue}`);
+      }
 
-      // B2 — RED `redeem_investment` (PARTIAL ¥2,000 principal → principal 4,000.00): bounded natural turns.
+      // B2 — RED `redeem_investment` BY AMOUNT (¥2,000, explicit 口径 in the prompt): bounded natural turns.
       const sentB2 = await driveRedTool(page, ctx.baseUrl, [
-        '我持有的稳健理财A部分赎回2000元本金',
+        '我持有的稳健理财A按金额部分赎回2000元，保留剩余持仓',
         '确认，请办理',
         '界面上方没有出现确认面板，请重新发起这笔部分赎回',
       ]);
-      const holding = await awaitHolding(
-        (row) => row.principalAmountMinor === 400_000n && (row.estimatedMarketValue ?? '').startsWith('4118.90666'),
-        'B2 后 principalAmountMinor === 400000 且 estimatedMarketValue 以 4118.90666 开头（全精度存储）',
+      await awaitHolding(
+        (row) => row.status === 'HOLDING'
+          && row.shares !== null
+          && row.shares !== subscribed.shares
+          && row.principalAmountMinor < subscribed.costMinor,
+        'B2 后持仓仍为 HOLDING 且份额与剩余成本都下降（部分赎回，未清仓）',
       );
+      const redeemed = await readHoldingSnapshot();
 
-      // REAL PAGE — exact remaining principal / market value / profit rendered on `/investments`.
+      // 「份额 × 净值」 accounting: 到账 = HALF_UP(赎回份额 × 成交净值) to cents, the consumed cost is
+      // proportional to the redeemed shares, and the difference is the realized profit.
+      const redeemedShares = subtractDecimal(subscribed.shares, redeemed.shares);
+      if (compareDecimal(redeemedShares, '0') <= 0) {
+        throw new Error(`部分赎回后份额应减少，实际 ${subscribed.shares} → ${redeemed.shares}`);
+      }
+      const expectedSettlement = settlementFromShares(redeemedShares, redeemed.netValue);
+      const expectedSettlementMinor = moneyToCents(expectedSettlement);
+      const consumedCostMinor = redeemedCostMinor(subscribed.costMinor, redeemedShares, subscribed.shares);
+      if (consumedCostMinor <= 0n || redeemed.costMinor <= 0n) {
+        throw new Error(`部分赎回后扣减成本与剩余成本都应大于零：扣减 ${centsToMoney(consumedCostMinor)}、剩余 ${centsToMoney(redeemed.costMinor)}`);
+      }
+      if (consumedCostMinor + redeemed.costMinor !== subscribed.costMinor) {
+        throw new Error(`扣减成本 ${centsToMoney(consumedCostMinor)} + 剩余成本 ${centsToMoney(redeemed.costMinor)} 应等于赎回前成本 ${centsToMoney(subscribed.costMinor)}`);
+      }
+      const redeemedMarketValue = marketValueFromShares(redeemed.shares, redeemed.netValue);
+      if (redeemed.marketValue !== redeemedMarketValue) {
+        throw new Error(`部分赎回后市值应为「剩余份额 × 净值」= ${redeemedMarketValue}，实际 ${redeemed.marketValue}`);
+      }
+      const realizedDelta = redeemed.realizedProfitMinor - subscribed.realizedProfitMinor;
+      if (realizedDelta !== expectedSettlementMinor - consumedCostMinor) {
+        throw new Error(`本次已实现收益应为 到账 ${expectedSettlement} − 扣减成本 ${centsToMoney(consumedCostMinor)} = ${centsToMoney(expectedSettlementMinor - consumedCostMinor)}，实际 ${centsToMoney(realizedDelta)}`);
+      }
+
+      // REAL PAGE — the 净值 + 份额 facts rendered on `/investments` agree with SQLite.
       await page.goto(`${ctx.baseUrl}/investments`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
       await waitForElementHydration(page, '[data-investment-holdings]');
       const tiles = page.locator('[data-investment-holdings] div.rounded-2xl').filter({ hasText: '稳健理财A' });
       const tileCount = await tiles.count();
       if (tileCount !== 1) throw new Error(`/investments 持仓区「稳健理财A」卡片应恰 1 张，实际 ${tileCount}`);
-      const principal = await readTileRow(tiles.first(), '持有金额');
-      const marketValue = await readTileRow(tiles.first(), '市值');
-      const profit = await readTileRow(tiles.first(), '收益');
-      await captureLive(page, 'lB-investments');
-      const shown: Record<string, string> = { 持有金额: principal, 市值: marketValue, 收益: profit };
-      for (const [label, value] of Object.entries(shown)) {
-        if (value === '') throw new Error(`/investments 未渲染「${label}」行`);
-        if (/\.\d{6,}/.test(value)) throw new Error(`「${label}」展示了未结算的过高精度：${value}`);
-        if (!/^[+-]?¥[\d,]+\.\d{2}$/.test(value)) throw new Error(`「${label}」显示值格式不正确：${value}`);
+      const labels = ['持有金额', '剩余持仓成本', '持仓份额', '最新净值', '市值', '持仓收益', '累计收益', '已实现收益'];
+      const shown: Record<string, string> = {};
+      for (const label of labels) {
+        const value = await readTileRow(tiles.first(), label);
+        if (value === '') throw new Error(`/investments 未渲染「${label}」行（净值 + 份额口径的持仓卡应展示该行）`);
+        shown[label] = value;
       }
-      if (principal !== '¥4,000.00') throw new Error(`持有金额应为 ¥4,000.00，实际 ${principal}`);
-      if (marketValue !== '¥4,118.91') throw new Error(`市值应为 ¥4,118.91，实际 ${marketValue}`);
-      if (profit !== '+¥118.91') throw new Error(`收益应为 +¥118.91，实际 ${profit}`);
+      await captureLive(page, 'lB-investments');
+      for (const label of ['持有金额', '剩余持仓成本', '市值', '持仓收益', '累计收益', '已实现收益']) {
+        if (/\.\d{3,}/.test(shown[label])) throw new Error(`「${label}」展示了未结算的过高精度：${shown[label]}`);
+        if (!/^[+-]?¥[\d,]+\.\d{2}$/.test(shown[label])) throw new Error(`「${label}」显示值格式不正确：${shown[label]}`);
+      }
+      // 剩余持仓成本 (and the booked 持有金额 that mirrors it) is money, not a share of the old principal.
+      const expectedCost = formatCNY(centsToMoney(redeemed.costMinor));
+      if (shown['持有金额'] !== expectedCost) throw new Error(`持有金额应为 ${expectedCost}（剩余持仓成本），实际 ${shown['持有金额']}`);
+      if (shown['剩余持仓成本'] !== expectedCost) throw new Error(`剩余持仓成本应为 ${expectedCost}，实际 ${shown['剩余持仓成本']}`);
+      const expectedShares = `${formatDecimalFixed(redeemed.shares, 6)} 份`;
+      if (shown['持仓份额'] !== expectedShares) throw new Error(`持仓份额应为 ${expectedShares}，实际 ${shown['持仓份额']}`);
+      const expectedNetValue = `${formatDecimalFixed(redeemed.netValue, 4)} 元/份`;
+      if (shown['最新净值'] !== expectedNetValue) throw new Error(`最新净值应为 ${expectedNetValue}，实际 ${shown['最新净值']}`);
+      const expectedMarketValue = formatDecimalCNY(redeemed.marketValue);
+      if (shown['市值'] !== expectedMarketValue) throw new Error(`市值应为 ${expectedMarketValue}（剩余份额 × 最新净值），实际 ${shown['市值']}`);
+      const unrealized = subtractDecimal(redeemed.marketValue, centsToMoney(redeemed.costMinor));
+      if (shown['持仓收益'] !== signedDecimalCNY(unrealized)) {
+        throw new Error(`持仓收益应为 ${signedDecimalCNY(unrealized)}（市值 − 剩余持仓成本），实际 ${shown['持仓收益']}`);
+      }
+      const realizedShown = centsToMoney(redeemed.realizedProfitMinor);
+      if (shown['已实现收益'] !== formatDecimalCNY(realizedShown)) {
+        throw new Error(`已实现收益应为 ${formatDecimalCNY(realizedShown)}，实际 ${shown['已实现收益']}`);
+      }
+      const cumulative = addDecimal(realizedShown, unrealized);
+      if (shown['累计收益'] !== signedDecimalCNY(cumulative)) {
+        throw new Error(`累计收益应为 ${signedDecimalCNY(cumulative)}（已实现收益 + 持仓收益），实际 ${shown['累计收益']}`);
+      }
+      // Cross-field consistency: 持仓收益 = 市值 − 持有金额 and 累计收益 = 已实现收益 + 持仓收益.
+      if (renderedMinor(shown['持仓收益']) !== renderedMinor(shown['市值']) - renderedMinor(shown['持有金额'])) {
+        throw new Error(`持仓收益与「市值 − 持有金额」不自洽：${shown['持仓收益']} vs ${shown['市值']} − ${shown['持有金额']}`);
+      }
+      if (renderedMinor(shown['累计收益']) !== renderedMinor(shown['已实现收益']) + renderedMinor(shown['持仓收益'])) {
+        throw new Error(`累计收益与「已实现收益 + 持仓收益」不自洽：${shown['累计收益']} vs ${shown['已实现收益']} + ${shown['持仓收益']}`);
+      }
 
-      // LEDGER + BALANCE — one investment DEBIT (认购) and one investment CREDIT (赎回).
+      // LEDGER + BALANCE — one investment DEBIT (认购) and one investment CREDIT (赎回到账).
       const afterBalance = (await fetchDashboardSummary(ctx.baseUrl)).checkingBalance;
       const afterLedger = (await fetchLedger(ctx.baseUrl)).transactions;
       const added = diffLedger(beforeLedger, afterLedger).added;
@@ -1466,14 +1586,19 @@ async function scenarioPartialRedeem(ctx: Ctx): Promise<string> {
         (tx) => tx.direction === 'DEBIT' && moneyToCents(tx.amount) === -100_000n && tx.merchant === '认购稳健理财A' && tx.category === '投资',
       );
       const credits = added.filter(
-        (tx) => tx.direction === 'CREDIT' && moneyToCents(tx.amount) === 205_945n && tx.merchant === '赎回' && tx.category === '投资',
+        (tx) => tx.direction === 'CREDIT'
+          && moneyToCents(tx.amount) === expectedSettlementMinor
+          && tx.merchant === '赎回'
+          && tx.category === '投资',
       );
       if (debits.length !== 1) throw new Error(`账本应新增 1 条 -1000.00 的投资 DEBIT（认购稳健理财A），实际 ${debits.length}：${describe}`);
-      if (credits.length !== 1) throw new Error(`账本应新增 1 条 +2059.45 的投资 CREDIT（赎回），实际 ${credits.length}：${describe}`);
-      const expectedBalance = addMoney(subtractMoney(beforeBalance, '1000.00'), '2059.45');
+      if (credits.length !== 1) {
+        throw new Error(`账本应新增 1 条 ${expectedSettlement} 的投资 CREDIT（赎回份额 ${redeemedShares} × 成交净值 ${redeemed.netValue}，HALF_UP 到分，费用口径 SIMULATED_NONE），实际 ${credits.length}：${describe}`);
+      }
+      const expectedBalance = addMoney(subtractMoney(beforeBalance, '1000.00'), expectedSettlement);
       if (afterBalance !== expectedBalance) throw new Error(`活期余额应为 ${expectedBalance}，实际 ${afterBalance}`);
 
-      return `B1 实际发送：${sentB1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → DB principalAmountMinor=600000（¥6,000.00）；B2 实际发送：${sentB2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → DB principalAmountMinor=${holding.principalAmountMinor}（¥4,000.00）、estimatedMarketValue=${holding.estimatedMarketValue}（全精度）；/investments 显示 持有金额=${principal}、市值=${marketValue}、收益=${profit}；账本新增 DEBIT ${debits[0].amount}（${debits[0].id}，${debits[0].merchant}/${debits[0].category}）与 CREDIT ${credits[0].amount}（${credits[0].id}，${credits[0].merchant}/${credits[0].category}）；活期余额 ${beforeBalance} → ${afterBalance}`;
+      return `口径=按金额部分赎回（¥2,000.00，费用口径 SIMULATED_NONE）；B1 实际发送：${sentB1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 剩余持仓成本 ${centsToMoney(subscribed.costMinor)}、持仓份额 ${subscribed.shares}（最新净值 ${subscribed.netValue}）、市值 ${subscribed.marketValue}（全精度）；B2 实际发送：${sentB2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 赎回份额 ${redeemedShares} × 成交净值 ${redeemed.netValue} = 预计到账 ${expectedSettlement}；剩余份额 ${redeemed.shares}、剩余成本 ${centsToMoney(redeemed.costMinor)}（本次扣减 ${centsToMoney(consumedCostMinor)}）、市值 ${redeemed.marketValue}（全精度）、本次已实现收益 ${centsToMoney(realizedDelta)}；/investments 显示 ${labels.map((label) => `${label}=${shown[label]}`).join('、')}；账本新增 DEBIT ${debits[0].amount}（${debits[0].id}，${debits[0].merchant}/${debits[0].category}）与 CREDIT ${credits[0].amount}（${credits[0].id}，${credits[0].merchant}/${credits[0].category}）；活期余额 ${beforeBalance} → ${afterBalance}`;
     },
     { label: 'lB-investment-partial-redemption' },
   );

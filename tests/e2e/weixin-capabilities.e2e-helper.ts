@@ -2,6 +2,9 @@ import type { createDatabaseClient } from '../../lib/db/database';
 import type { BankingChannel } from '../../channels/weixin/banking-client';
 import type { WeixinState } from '../../channels/weixin/state';
 import { TOOL_NAMES } from '../../lib/contracts/tool-catalog';
+import { compareDecimal, subtractDecimal } from '../../lib/decimal';
+import { moneyToCents } from '../../lib/money';
+import { marketValueFromShares, redeemedCostMinor, settlementFromShares } from '../../banking-sdk/net-value';
 
 interface Context {
   db: ReturnType<typeof createDatabaseClient>; bank: BankingChannel; state: WeixinState; replies: string[];
@@ -67,15 +70,46 @@ export async function runWeixinCapabilities(ctx: Context): Promise<{ observed: s
     assert((await db.card.findUniqueOrThrow({ where: { id: 'card_debit' } })).status === 'ACTIVE', 'Card not unfrozen');
     assert((await db.card.findUniqueOrThrow({ where: { id: 'card_credit' } })).creditLimitMinor === credit.creditLimitMinor, 'Changed credit line');
   });
-  await check('微信申购合并持仓与部分赎回', async () => {
-    const before = await db.investmentHolding.findUniqueOrThrow({ where: { id: 'holding_wenjiana' } });
+  await check('微信申购合并持仓与部分赎回（净值 + 份额口径）', async () => {
+    // Every expected figure is derived from SQLite in 「份 / 元每份」 terms: 到账 = 赎回份额 × 成交净值
+    // (HALF_UP 到分), the consumed cost is proportional to the redeemed shares, and 收益 = 到账 − 成本.
+    const readPosition = async () => {
+      const holding = await db.investmentHolding.findUniqueOrThrow({ where: { id: 'holding_wenjiana' } });
+      const product = await db.investmentProduct.findUniqueOrThrow({ where: { id: holding.productId } });
+      const netValue = product.latestNetValuePerUnit;
+      if (netValue === null) throw new Error('稳健理财A 未发布净值，无法按「净值 + 份额」核对赎回');
+      if (holding.shares === null || holding.estimatedMarketValue === null) throw new Error('稳健理财A 持仓缺少份额或市值');
+      return {
+        shares: holding.shares, costMinor: holding.principalAmountMinor,
+        marketValue: holding.estimatedMarketValue, status: holding.status, netValue,
+      };
+    };
+    const before = await readPosition();
     await authorize('从活期账户申购1000元稳健理财A。', 'subscribe_investment');
-    assert((await db.investmentHolding.findUniqueOrThrow({ where: { id: before.id } })).principalAmountMinor === before.principalAmountMinor + 100000n, 'Purchase not aggregated');
+    const subscribed = await readPosition();
+    if (subscribed.costMinor !== before.costMinor + 100000n) throw new Error(`申购未并入持仓成本：${before.costMinor} → ${subscribed.costMinor}`);
+    if (subscribed.shares === before.shares) throw new Error(`申购未增加持仓份额，仍为 ${subscribed.shares}`);
+    const subscribedMarketValue = marketValueFromShares(subscribed.shares, subscribed.netValue);
+    if (subscribed.marketValue !== subscribedMarketValue) throw new Error(`申购后市值应为「份额 × 净值」= ${subscribedMarketValue}，实际 ${subscribed.marketValue}`);
+
     const cashBefore = (await db.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor;
-    await authorize('从稳健理财A持仓中部分赎回1000元本金，保留剩余持仓。', 'redeem_investment');
-    const holding = await db.investmentHolding.findUniqueOrThrow({ where: { id: before.id } });
-    assert(holding.principalAmountMinor === before.principalAmountMinor && holding.status === 'HOLDING', 'Partial redemption closed or mis-sized holding');
-    assert((await db.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor > cashBefore, 'Redemption did not credit checking');
+    await authorize('从稳健理财A持仓中部分赎回1000元，保留剩余持仓。', 'redeem_investment');
+    const holding = await readPosition();
+    if (holding.status !== 'HOLDING') throw new Error(`部分赎回不应清仓，实际状态 ${holding.status}`);
+    const redeemedShares = subtractDecimal(subscribed.shares, holding.shares);
+    if (compareDecimal(redeemedShares, '0') <= 0) throw new Error(`部分赎回未减少持仓份额：${subscribed.shares} → ${holding.shares}`);
+    const settledMinor = moneyToCents(settlementFromShares(redeemedShares, holding.netValue));
+    const consumedCostMinor = redeemedCostMinor(subscribed.costMinor, redeemedShares, subscribed.shares);
+    if (consumedCostMinor <= 0n || holding.costMinor <= 0n) throw new Error('部分赎回后扣减成本与剩余成本都应大于零');
+    if (consumedCostMinor + holding.costMinor !== subscribed.costMinor) {
+      throw new Error(`扣减成本 ${consumedCostMinor} + 剩余成本 ${holding.costMinor} 应等于赎回前成本 ${subscribed.costMinor}`);
+    }
+    const remainingMarketValue = marketValueFromShares(holding.shares, holding.netValue);
+    if (holding.marketValue !== remainingMarketValue) {
+      throw new Error(`部分赎回后市值应为「剩余份额 × 净值」= ${remainingMarketValue}，实际 ${holding.marketValue}`);
+    }
+    const credited = (await db.account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor - cashBefore;
+    if (credited !== settledMinor) throw new Error(`活期入账 ${credited} 应等于赎回份额 ${redeemedShares} × 成交净值 ${holding.netValue}（HALF_UP 到分）= ${settledMinor}`);
   });
   await check('微信虚拟卡申请、消费与补办额度连续', async () => {
     const known = new Set((await db.card.findMany()).map(row => row.id));
