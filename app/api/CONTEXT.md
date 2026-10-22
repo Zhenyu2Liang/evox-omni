@@ -41,7 +41,7 @@ selectable browser identities.
 | `POST /api/tasks/[id]` | Pause, resume, cancel or retry an owned plan | Agent task controls |
 | `GET /api/activity` | Closed business history projection scoped to the fixed workspace | Operation history read model |
 | `GET /api/audit` | Developer preference required before validated filters; scoped technical entries and summary | Audit read models |
-| `GET /api/security` | Security events, lock state, failure count, a typed `lock` reason while the breaker is open and the session's terminal `lockedActions` | Audit and security read models |
+| `GET /api/security` | Public projection of the security events (`events` and `status.recentEvents`, see below), lock state, failure count, a typed `lock` reason while the breaker is open and the session's terminal `lockedActions` | Audit and security read models plus `_lib/public-security-event` |
 | `POST /api/security/reset` | Optional body `{ verificationCode? }`; separately gated and audited unlock that reopens no `PendingAction` and executes nothing; success adds `lockedActionsReopened: false` | Account circuit-breaker policy |
 | `POST /api/developer/security/reset` | Developer-mode cookie gate, then the unaudited-code demo clear `resetDemoSession` (audit actor `developer`); returns the raw `CircuitBreakerState`, reopens no `PendingAction` | `_lib/developer.ts` + account circuit-breaker policy |
 | `GET /api/{dashboard,bills,cards,subscriptions}` | Simulated banking read models for the configured user | Banking SDK |
