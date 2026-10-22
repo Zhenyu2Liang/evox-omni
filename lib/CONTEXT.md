@@ -18,6 +18,7 @@
 | `chat-cards.ts`、`action-summary.ts` | 业务卡片与授权摘要 |
 | `sensitive.ts`、`tool-diagnostics.ts` | 敏感字段过滤与诊断投影 |
 | `tool-feedback.ts` | 拒绝/失败结果的公开文本投影（唯一出口） |
+| `public-text.ts` | 内部诊断判定（`isInternalDiagnostic`）与结构化安全拒绝渲染（`securityNotice`） |
 | `errors.ts` | `ErrorCode`、`AppError` 与 `Result` |
 | `prisma-cli-env.ts` | Prisma 命令环境与可执行文件解析 |
 | `db/` | 客户端、事务上下文与仓储 |
