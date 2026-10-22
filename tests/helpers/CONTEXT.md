@@ -13,6 +13,15 @@
 | `prisma-cli.ts` | 客户端准备、隔离库清理与命令诊断 |
 | `restart-process.ts`、`standalone-restart-process.ts` | 独立进程恢复探针 |
 | `write-failure.ts` | 保留真实事务的写入失败注入 |
+| `locked-action.ts` | 终止锁定用例的 RED/YELLOW 计划动作播种、网关验证码阶梯与只读探针 |
+
+### locked-action.ts
+
+`locked-action.ts` 为「MFA 三码锁定」的终止锁定用例提供共享基础设施：经生产 `submit_plan` 播种到计划节点的 RED（¥5000，`awaiting_mfa`）与 YELLOW（¥500 及以下，`pending`、`requiresMfa:false`）待处理动作，
+经网关 `authorizeAction` 驱动的错误验证码阶梯（第 1/2 次非终止、第 3 次 `status:'locked'` 并落库），
+以及 `pendingActionRow`/`mfaChallengesFor`/`checkingBalance`/`zhangweiTransfers`/`auditLogCount`/`securityEventsOfKind`/`transactionsCount` 等只读探针。
+它不含 `describe`/`it`，也只用于播种失败时给出诊断，不清库也不播种：每个用例仍须在 `beforeEach` 自行 `resetDatabase()`（熔断按 owner 持久化，残留锁定会串场）。
+错误验证码一律经 `securityGateway.authorizeAction` 提交，不得改用 `security/mfa.ts#verify`（只锁挑战、不落终端状态）。
 
 ## 入口与证据
 
