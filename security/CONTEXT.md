@@ -43,7 +43,7 @@
 
 ## 阻断原因标记与锁定的可见性
 
-`security-gateway.ts` 导出 `BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__'`（第 78 行）。
+`security-gateway.ts:80` 导出 `BLOCK_REASON_PREFIX = '__SECURITY_BLOCK__'`。
 `serializeBlockReason` 只用于已落库的 gated 调用：`${BLOCK_REASON_PREFIX}${JSON.stringify({ actionId, decisionKind })}`。
 `parseBlockReason` 要求前缀 + 非空 `actionId` + 合法 `decisionKind`（`allow`/`require_confirmation`/`require_mfa`/`deny`），任一不满足返回 `null`；两者都只经 `securityGateway` 对象暴露（`security.gateway.securityGateway.parseBlockReason`、`security.gateway.BLOCK_REASON_PREFIX`）。
 熔断拒绝（`handleToolCall` 的 `decision.kind === 'deny'`）返回 `__SECURITY_BLOCK__{"decisionKind":"deny"}`，不含 `actionId`，因此 `parseBlockReason` 返回 `null`，调用方只靠前缀判定为 blocked（`agent/turns/events.ts:48-49`），该载荷最终落为 `security_event kind:'locked'`，不重开 MFA。
