@@ -120,7 +120,7 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
   e.g. `{"decisionKind":"deny"}`) therefore reaches the browser inside `security_event.message` and any
   tool-error text. `ActionResponse`/`AgentStreamEvent` carry no `code` for a locked verify
   (`status`/`mfaResult` are the only lock signals), so there is no app-layer scrubbing or error-code
-  mapping point.
+  mapping point. The same verbatim pass-through exists at `runs/[id]/events/route.ts:18` (`readRunPresentation` frames) and `../agent/history.ts:36-37` (persisted message cards re-emitted unchanged, so a stored `error` card keeps its text). `agent/turns/events.ts:49,73` puts the RAW marker into `security_event.message` and recognizes it only when the text STARTS WITH the prefix; `confirm`/`recover` forward `outcome.events` unchanged and `resumeTurn` (`agent/run-turn.ts:96`) installs the same handler, so a continuation that re-attempts a blocked tool can stream the marker too. The action routes' own `data.message` carries no marker: `AuthorizationResult.message` is always a human sentence and the prefixed payload lives only in `blockReason` / `GatedToolOutcome.error` (`agent/confirmation/gated-execution.ts:66`).
 - A `'locked'` verify outcome appends no `mfa_required`: `blockedOutcome`
   (`agent/confirmation/outcomes.ts`) emits it only for `pending`/`awaiting_mfa`, so the only possible
   appended event is `plan_update` (and `nextPlanDecision`, `agent/task-decision.ts`, skips rows outside
