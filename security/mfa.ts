@@ -59,6 +59,67 @@ export interface MfaVerifyResult {
   locked: boolean;
 }
 
+/**
+ * Why a PERSISTED challenge can no longer verify a submitted code. A SERVER-authoritative
+ * classification: callers branch on it instead of inferring intent from message text.
+ *  - `consumed`        — the challenge was already used, so the decision is SETTLED (not retryable).
+ *  - `expired`         — the 5-minute wall-clock window closed; a fresh challenge may be issued.
+ *  - `command_changed` — the operation's command digest no longer matches the challenge.
+ */
+export type ChallengeInvalidation = 'consumed' | 'expired' | 'command_changed';
+
+/** Verbatim public copy — exact members of `lib/tool-feedback.ts#PUBLIC_BUSINESS_ERRORS`. */
+const CONSUMED_MESSAGE = 'This verification challenge has already been consumed.';
+const STALE_MESSAGE = 'The verification challenge expired or the operation changed. Request a new challenge.';
+
+/**
+ * A challenge-level refusal that also carries WHY it is invalid, so the gateway can settle a
+ * consumed challenge terminally and re-issue an expired/changed one instead of reporting both as a
+ * retryable wrong code.
+ *
+ * `code` stays `'MFA_FAILED'` and the message stays verbatim (`lib/tool-feedback.ts` white-lists
+ * these two strings), so existing callers are unaffected. The machine-readable distinction lives in
+ * the `SecurityFailure` carried as the error `detail` plus the `invalidation` field: a consumed
+ * challenge is an undeserved `CONFLICT`/`denied`, a stale one a `MFA_FAILED`/`denied` refusal.
+ */
+export class ChallengeInvalidError extends AppError {
+  readonly invalidation: ChallengeInvalidation;
+  constructor(invalidation: ChallengeInvalidation, actionId: string) {
+    const failure: SecurityFailure = invalidation === 'consumed'
+      ? { code: 'CONFLICT', reason: 'denied', actionId }
+      : { code: 'MFA_FAILED', reason: 'denied', actionId };
+    super('MFA_FAILED', invalidation === 'consumed' ? CONSUMED_MESSAGE : STALE_MESSAGE, failure);
+    this.invalidation = invalidation;
+  }
+}
+
+/** The invalidation carried by `error`, or `null` when it is not a challenge-level refusal. */
+export function challengeInvalidation(error: unknown): ChallengeInvalidation | null {
+  return error instanceof ChallengeInvalidError ? error.invalidation : null;
+}
+
+/**
+ * What THIS operation has recorded about its OWN verification attempts. `exhausted` is derived from
+ * the challenge row alone — never from the account-level breaker, which `verify` reports as
+ * `locked` for every operation of a locked account.
+ */
+export interface MfaAttemptState {
+  attempts: number;
+  maxAttempts: number;
+  exhausted: boolean;
+}
+
+/** The per-operation attempt record, or `null` when the operation has no challenge row. */
+export async function attemptState(actionId: string): Promise<MfaAttemptState | null> {
+  const challenge = await getMfaChallenge(actionId);
+  if (!challenge) return null;
+  return {
+    attempts: challenge.attempts,
+    maxAttempts: challenge.maxAttempts,
+    exhausted: challenge.attempts >= challenge.maxAttempts || challenge.status === 'locked',
+  };
+}
+
 /** Generic, code-free delivery hint shown to the user. */
 const DELIVERY_HINT = 'Enter the 6-digit demo verification code. No SMS is sent.';
 
@@ -162,10 +223,14 @@ export async function verify(actionId: string, code: string): Promise<Result<Mfa
     return err(new AppError('NOT_FOUND', `未找到待处理操作: ${actionId}`));
   }
   const sessionId = action.sessionId;
-  if (challenge.consumedAt) return err(new AppError('MFA_FAILED', 'This verification challenge has already been consumed.'));
-  if (!challenge.expiresAt || challenge.expiresAt.getTime() <= realNow() ||
-      (challenge.commandDigest !== null && challenge.commandDigest !== challengeDigest(action))) {
-    return err(new AppError('MFA_FAILED', 'The verification challenge expired or the operation changed. Request a new challenge.'));
+  // A consumed challenge is SETTLED, not a retry: the typed error lets the gateway move the
+  // operation to a terminal state instead of asking for a code nobody can satisfy.
+  if (challenge.consumedAt) return err(new ChallengeInvalidError('consumed', actionId));
+  if (!challenge.expiresAt || challenge.expiresAt.getTime() <= realNow()) {
+    return err(new ChallengeInvalidError('expired', actionId));
+  }
+  if (challenge.commandDigest !== null && challenge.commandDigest !== challengeDigest(action)) {
+    return err(new ChallengeInvalidError('command_changed', actionId));
   }
 
   // LOCKED action wins and is TERMINAL: once the MFA attempt limit locked the operation, no code —
