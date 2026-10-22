@@ -46,12 +46,16 @@
 
 ## 锁定结果的展示覆盖
 
-`tool-diagnostics.test.ts` 的 `renders locked verification and confirmation cards without actionable buttons`（L60）是本目录唯一的渲染层锁定用例，
-只断言 `cards.terminal.locked`、无 `<input>`、无 `<button>`。
-`chat.error.actionLocked` 与 `chat.error.securityLocked` 在本目录没有任何断言；
-`MfaCard` 锁定分支里的 `pages.security.unlockDescription`/`pages.security.title` 与 `/验证` 按钮缺失也无断言。
-工具行摘要的锁定文案同样无用例：`tool-feedback.test.ts` 只覆盖 `chat.error.toolFailed`。
-`action_settled{status:'locked'}` 让工具行带上 `errorCode='MFA_LOCKED'` 的 reducer 行为没有用例。
+渲染层锁定用例分两个文件，覆盖面不重叠：
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `tool-diagnostics.test.ts`（`renders locked verification and confirmation cards without actionable buttons`，L60） | 只断言 `cards.terminal.locked`、无 `<input>`、无 `<button>` |
+| `locked-card-rendering.test.ts` | 锁定原因句与结构块：`MfaCard`/`ApprovalRecord` 的 `chat.error.actionLocked`、`data-mfa-locked`、`data-approval-locked`、`data-status="locked"`、`chat.approval.status.locked`、`href="/security"` 与 `pages.security.title`/`unlockDescription`；`status:'awaiting_mfa'` 对照仍有 `<input>`（验证码入口只在该尝试额度未耗尽时存在）；`security_event` 只按 typed `code`/`reason` 折叠成 `chat.error.actionLocked`/`chat.error.securityLocked`/`chat.error.securityDenied`；`settleAction{status:'locked'}` 清空 `pendingAction`、写 `settledActions[id]='locked'`、行内卡片转 `locked`，工具行摘要为 `chat.error.actionLocked`（`errorCode` 缺失时默认 `MFA_LOCKED`）或 `chat.error.securityLocked`，绝不为 `chat.error.toolFailed`；`MessageBubble` 把内部诊断转成 `chat.error.securityDenied` 且不吞掉普通系统消息 |
+
+`chat.error.actionLocked` 原文含否定短语「无法继续验证或执行」，因此「锁定卡不得提供继续验证入口」按 `/验证` 与 `继续验证：` 判定，并额外断言该短语只出现在原因句内。
+`chat.error.securityLocked` 只在该文件里经 `errorCode:'CIRCUIT_OPEN'` 的工具行与 `security_event` 命中。
+工具行摘要的锁定文案同样只在 `locked-card-rendering.test.ts` 经 `publicToolSummary` 覆盖；`tool-feedback.test.ts` 只覆盖 `chat.error.toolFailed`。
 `securityNotice` 的键级覆盖在 [../lib/CONTEXT.md](../lib/CONTEXT.md) 的 `public-text.test.ts`，不经过任何卡片渲染。
 
 ## 相关但不在本目录
