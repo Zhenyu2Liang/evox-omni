@@ -32,6 +32,7 @@ import type {
   ToolEventView,
 } from '@/lib/contracts/agent';
 import type { RiskLevel } from '@/lib/contracts/risk';
+import type { SecurityFailure } from '@/lib/contracts/security';
 import type { ToolName } from '@/lib/contracts/tools';
 import { newId } from '@/lib/ids';
 import { AppError } from '@/lib/errors';
@@ -82,6 +83,15 @@ export interface RunTurnInput {
 
 const gateway = security.gateway.securityGateway;
 const BLOCK_REASON_PREFIX = security.gateway.BLOCK_REASON_PREFIX;
+/** The TYPED facts a refusal carries, projected into the catalog placeholders that render them. */
+function failureParams(failure: SecurityFailure | undefined): Pick<ToolEventView, 'errorParams'> {
+  if (!failure) return {};
+  const params: Record<string, string | number> = {};
+  if (typeof failure.attemptsLeft === 'number') params.attemptsLeft = failure.attemptsLeft;
+  if (typeof failure.attemptsUsed === 'number') params.attemptsUsed = failure.attemptsUsed;
+  if (typeof failure.maxAttempts === 'number') params.maxAttempts = failure.maxAttempts;
+  return Object.keys(params).length > 0 ? { errorParams: params } : {};
+}
 
 /** MFA prompt hint surfaced to the UI (never contains the code). */
 const MFA_HINT = '请输入 6 位短信验证码。';
@@ -261,19 +271,23 @@ async function handleToolExecutionEnd(
     return;
   }
 
-  // GATED — the gateway blocked the call and (for YELLOW/RED) persisted a PendingAction.
-  const blockView: ToolEventView = { toolCallId, toolName, status: 'blocked' };
+  // GATED — the gateway blocked the call and (for YELLOW/RED) persisted a PendingAction. The view
+  // carries ONLY typed facts (`actionId` / `errorCode` / renderable params), never the raw payload.
+  const blockView: ToolEventView = { toolCallId, toolName, status: 'blocked',
+    ...(parsed?.actionId ? { actionId: parsed.actionId } : {}),
+    ...(parsed?.failure ? { errorCode: parsed.failure.code } : {}),
+    ...failureParams(parsed?.failure) };
   upsertToolEvent(buffer, blockView);
   buffer.events.push({ type: 'tool_end', toolEvent: blockView });
 
-  if (parsed !== null && parsed.decisionKind === 'require_mfa') {
+  if (parsed?.actionId && parsed.decisionKind === 'require_mfa') {
     buffer.mfa = { actionId: parsed.actionId, hint: MFA_HINT };
     buffer.events.push({ type: 'mfa_required', actionId: parsed.actionId, hint: MFA_HINT });
     emitCard(buffer, mfaCard(parsed.actionId, MFA_HINT));
     return;
   }
 
-  if (parsed !== null && parsed.decisionKind === 'require_confirmation') {
+  if (parsed?.actionId && parsed.decisionKind === 'require_confirmation') {
     const summary = await loadPendingSummary(parsed.actionId, toolName);
     buffer.confirmation = { actionId: parsed.actionId, action: summary };
     buffer.events.push({
@@ -285,8 +299,13 @@ async function handleToolExecutionEnd(
     return;
   }
 
-  // `deny` (circuit breaker) or an unrecognised block reason — nothing to confirm.
-  buffer.events.push({ type: 'security_event', kind: 'locked', message });
+  // `deny` (circuit breaker) or an unrecognised block reason — nothing to confirm. The refusal is
+  // published as STRUCTURED fields only, never the raw payload text.
+  buffer.events.push({ type: 'security_event', kind: 'locked',
+    ...(parsed?.failure ? { code: parsed.failure.code, reason: parsed.failure.reason } : {}),
+    ...(parsed?.actionId ? { actionId: parsed.actionId } : {}),
+    ...(typeof parsed?.failure?.attemptsLeft === 'number' ? { attemptsLeft: parsed.failure.attemptsLeft } : {}),
+    ...(typeof parsed?.failure?.maxAttempts === 'number' ? { maxAttempts: parsed.failure.maxAttempts } : {}) });
 }
 
 /** The last assistant message that failed the run (pi reports LLM errors via `agent_end`). */

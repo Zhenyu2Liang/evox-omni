@@ -11,6 +11,7 @@ const NEXT_ACTION: Record<ErrorCode, string> = {
   SECURITY_DENIED: 'Explain that the operation is unavailable. Do not bypass the permission boundary.',
   MFA_FAILED: 'Use the existing verification interface. Never request verification credentials in chat.',
   CIRCUIT_OPEN: 'Ask the user to resolve the lock in the security interface.',
+  MFA_LOCKED: 'Stop. The operation is locked after too many incorrect codes; ask the user to resolve the lock in the security interface and start a new operation.',
   CONFLICT: 'Read the current resource or recorded operation status before proposing a new operation.',
   TOOL_FAILED: 'Check the recorded outcome before proposing another write. Do not report success.',
   INTERNAL: 'The outcome has not been verified. Check saved operation records before retrying a write.',

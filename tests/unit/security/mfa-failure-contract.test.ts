@@ -13,10 +13,10 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
-import { getMfaChallenge, issueChallenge } from '@/security/mfa';
+import { issueChallenge } from '@/security/mfa';
 import { securityGateway } from '@/security/security-gateway';
 import { MFA_MAX_ATTEMPTS } from '@/lib/constants';
-import { createPendingAction } from '@/lib/db/repositories/pendingAction';
+import { createPendingAction, getMfaChallenge } from '@/lib/db/repositories/pendingAction';
 import { newId } from '@/lib/ids';
 import { getTestPrisma, useFreshDatabase } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';

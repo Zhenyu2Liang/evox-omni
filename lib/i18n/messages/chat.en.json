@@ -223,6 +223,7 @@
   "chat.error.positivePurchase": "The purchase amount must be greater than CNY 0. Enter a new amount.",
   "chat.error.limitCategoryRequired": "The spending category is missing. Specify the category whose limit should change.",
   "chat.error.nonNegativeLimit": "The limit must be at least CNY 0. Enter a new amount.",
+  "chat.error.actionLocked": "This operation is locked and can no longer be verified or executed. Reason: the verification code was entered incorrectly too many times. Lift the restriction in the security center and start the operation again.",
   "chat.error.alreadyLost": "The card is already reported lost. No repeat report is needed.",
   "chat.error.resultUnavailable": "The banking result could not be displayed. Refresh the records and check the outcome.",
   "chat.display.pendingOperation": "Pending operation",

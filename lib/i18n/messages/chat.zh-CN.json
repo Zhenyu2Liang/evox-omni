@@ -223,6 +223,7 @@
   "chat.error.positivePurchase": "申购金额必须大于 0 元。请重新输入金额。",
   "chat.error.limitCategoryRequired": "缺少限额分类。请说明要调整的消费分类。",
   "chat.error.nonNegativeLimit": "限额必须不小于 0 元。请重新输入金额。",
+  "chat.error.actionLocked": "该操作已锁定，无法继续验证或执行。原因：验证码错误次数已达上限。请在安全中心解除限制后重新发起操作。",
   "chat.error.alreadyLost": "卡片已挂失，无需重复挂失。",
   "chat.error.resultUnavailable": "业务结果未能显示。请刷新记录并核对处理状态。",
   "chat.display.pendingOperation": "待确认操作",

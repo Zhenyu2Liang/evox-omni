@@ -19,6 +19,10 @@ export interface ConfirmationOutcome {
   tier: RiskLevel;
   requiresMfa: boolean;
   message: string;
+  /** Typed refusal code, so a caller never parses the message. */
+  code?: import('@/lib/errors').ErrorCode;
+  /** Structured refusal facts (code + reason + attempts). */
+  failure?: import('@/lib/contracts/security').SecurityFailure;
   result?: ToolExecutionResult;
   events: AgentStreamEvent[];
 }

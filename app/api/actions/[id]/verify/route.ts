@@ -85,7 +85,10 @@ export async function POST(req: NextRequest, ctx: IdRouteContext): Promise<Respo
       requiresMfa: outcome.status === 'awaiting_mfa' || outcome.tier === 'RED',
       mfaResult,
       message: outcome.message,
-      events: outcomeWithPlan.events,
+      ...(outcome.code ? { code: outcome.code } : {}),
+      ...(outcome.failure
+        ? { failure: outcome.failure, attemptsLeft: outcome.failure.attemptsLeft, maxAttempts: outcome.failure.maxAttempts }
+        : {}),      events: outcomeWithPlan.events,
     };
 
     return jsonResponse<ActionResponse>(mapped);

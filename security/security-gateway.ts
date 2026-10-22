@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Security Gateway — THE chokepoint of the code-enforced safety model.
  *
  * Every banking tool call proposed by the model passes through here. The gateway:
@@ -27,6 +27,8 @@ import type {
   SecurityDecision,
   SecurityDecisionKind,
   SecurityEvaluation,
+  SecurityFailure,
+  SecurityFailureReason,
 } from '../lib/contracts/security';
 import { evaluateTool, getToolPolicy } from './permission-engine';
 import type { ToolEvaluation } from './permission-engine';
@@ -62,7 +64,7 @@ import { valuationToMinor } from '../lib/decimal';
 import { settledRedemptionAmount } from '../banking-sdk/valuation';
 import { canonicalCommandArgs } from '../lib/contracts/command';
 import { recordAuthorizationDecision } from './authorization-record';
-import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
+import { DAILY_TRANSFER_LIMIT, MFA_MAX_ATTEMPTS, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
 import { requestDigest } from '../lib/ledger';
 import { realNow } from '../lib/clock';
@@ -112,6 +114,8 @@ export interface AuthorizationResult {
   mfaResult?: 'success' | 'failed' | 'not_required';
   /** Typed failure code (present iff `ok === false` for a domain refusal). */
   code?: ErrorCode;
+  /** Structured refusal facts (code + reason + attempts); never rendered as raw diagnostic text. */
+  failure?: SecurityFailure;
   /** Safe, user-facing message (never leaks the MFA code). */
   message: string;
   /** The updated pending action, when available. */
@@ -141,6 +145,16 @@ export interface ToolCallAuthorization {
   /** Opaque string to return as the runtime block reason; present iff `evaluation.blocked`. */
   blockReason?: string;
 }
+/**
+ * The TYPED contents of a serialized block reason. ctionId is optional: a deny refusal (a
+ * tripped circuit breaker, a cancelled owning plan) has no pending action at all. ailure carries
+ * the structured refusal facts so no caller ever has to parse text.
+ */
+interface ParsedBlockReason {
+  actionId?: string;
+  decisionKind: SecurityDecisionKind;
+  failure?: SecurityFailure;
+}
 
 /**
  * Convenience orchestrator for the agent layer's `beforeToolCall` hook:
@@ -158,7 +172,7 @@ export interface SecurityGateway {
   /** Serialize the opaque block reason the runtime returns to the model. */
   serializeBlockReason(decision: SecurityDecision, action: PendingAction): string;
   /** Parse a block reason produced by `serializeBlockReason`; `null` if not a block reason. */
-  parseBlockReason(reason: string): { actionId: string; decisionKind: SecurityDecisionKind } | null;
+  parseBlockReason(reason: string): ParsedBlockReason | null;
   /**
    * Authorize a pending action after a human decision. Ownership is REQUIRED (a missing/mismatching
    * `userId` / `sessionId` is refused with `AppError('SECURITY_DENIED')`). This is the ONLY entry
@@ -206,6 +220,14 @@ const DECISION_KINDS: readonly SecurityDecisionKind[] = [
   'require_confirmation',
   'require_mfa',
   'deny',
+];
+/** Allowed failure reasons — used to validate a PARSED block reason (unknown ⇒ dropped). */
+const FAILURE_REASONS: readonly SecurityFailureReason[] = [
+  'mfa_code_invalid',
+  'mfa_attempts_exhausted',
+  'mfa_session_locked',
+  'circuit_open',
+  'denied',
 ];
 
 /**
@@ -699,15 +721,45 @@ async function gatewayCreatePendingAction(
   return { kind: 'created', action: toContractPendingAction(created.row) };
 }
 
-/** Serialize the opaque block reason the runtime returns to the model. */
-function serializeBlockReason(decision: SecurityDecision, action: PendingAction): string {
-  return `${BLOCK_REASON_PREFIX}${JSON.stringify({ actionId: action.id, decisionKind: decision.kind })}`;
+/** Serialize the opaque block reason the runtime returns to the model (prefix + typed payload). */
+function serializeBlockReason(
+  decision: SecurityDecision,
+  action: PendingAction,
+  failure?: SecurityFailure,
+): string {
+  return `${BLOCK_REASON_PREFIX}${JSON.stringify({
+    actionId: action.id,
+    decisionKind: decision.kind,
+    ...(failure ? { failure } : {}),
+  })}`;
+}
+
+/** Keep only the TYPED facts of a serialized failure; an unknown reason drops the whole failure. */
+function parseFailure(value: unknown): SecurityFailure | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const code = record.code;
+  const reason = record.reason;
+  if (typeof code !== 'string' || code.length === 0) return undefined;
+  if (typeof reason !== 'string' || !(FAILURE_REASONS as readonly string[]).includes(reason)) return undefined;
+  const count = (key: string): number | undefined =>
+    typeof record[key] === 'number' && Number.isFinite(record[key] as number) ? (record[key] as number) : undefined;
+  const actionId = typeof record.actionId === 'string' && record.actionId.length > 0 ? record.actionId : undefined;
+  const attemptsUsed = count('attemptsUsed');
+  const attemptsLeft = count('attemptsLeft');
+  const maxAttempts = count('maxAttempts');
+  return {
+    code: code as ErrorCode,
+    reason: reason as SecurityFailureReason,
+    ...(actionId ? { actionId } : {}),
+    ...(attemptsUsed !== undefined ? { attemptsUsed } : {}),
+    ...(attemptsLeft !== undefined ? { attemptsLeft } : {}),
+    ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+  };
 }
 
 /** Parse a block reason produced by `serializeBlockReason`; `null` if not a block reason. */
-function parseBlockReason(
-  reason: string,
-): { actionId: string; decisionKind: SecurityDecisionKind } | null {
+function parseBlockReason(reason: string): ParsedBlockReason | null {
   if (typeof reason !== 'string' || !reason.startsWith(BLOCK_REASON_PREFIX)) return null;
 
   let parsed: unknown;
@@ -719,13 +771,14 @@ function parseBlockReason(
   if (parsed === null || typeof parsed !== 'object') return null;
 
   const record = parsed as Record<string, unknown>;
-  const actionId = record.actionId;
   const decisionKind = record.decisionKind;
-
-  if (typeof actionId !== 'string' || actionId.length === 0) return null;
   if (!isDecisionKind(decisionKind)) return null;
 
-  return { actionId, decisionKind };
+  // `actionId` is OPTIONAL: a `deny` refusal (tripped breaker, cancelled plan) has no action at all.
+  const actionId = typeof record.actionId === 'string' && record.actionId.length > 0 ? record.actionId : undefined;
+  const failure = parseFailure(record.failure);
+
+  return { ...(actionId ? { actionId } : {}), decisionKind, ...(failure ? { failure } : {}) };
 }
 
 /**
@@ -746,6 +799,7 @@ function planCancelledOutcome(
     tier: action.tier,
     requiresMfa: false,
     code: 'SECURITY_DENIED',
+    failure: { code: 'SECURITY_DENIED', reason: 'denied', actionId: row.id },
     message: PLAN_CANCELLED_MESSAGE,
     action: { ...action, status: 'cancelled' },
   };
@@ -774,6 +828,7 @@ function lockedOutcome(
   actionId: string,
   action: PendingAction,
   requiresMfa: boolean,
+  reason: SecurityFailureReason,
 ): AuthorizationResult {
   return {
     ok: false,
@@ -782,6 +837,7 @@ function lockedOutcome(
     tier: action.tier,
     requiresMfa,
     code: 'CIRCUIT_OPEN',
+    failure: { code: 'CIRCUIT_OPEN', reason, actionId, attemptsLeft: 0, maxAttempts: MFA_MAX_ATTEMPTS },
     message: '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。',
     action,
   };
@@ -831,6 +887,7 @@ async function authorizeWithMfa(
       requiresMfa: true,
       mfaResult: 'failed',
       code: 'MFA_FAILED',
+      failure: { code: 'MFA_FAILED', reason: 'mfa_code_invalid', actionId },
       message: res.error.message,
       action,
     };
@@ -845,6 +902,11 @@ async function authorizeWithMfa(
       requiresMfa: true,
       mfaResult: 'failed',
       code: locked ? 'CIRCUIT_OPEN' : 'MFA_FAILED',
+      failure: locked
+        ? { code: 'MFA_LOCKED', reason: 'mfa_attempts_exhausted', actionId,
+          attemptsUsed: MFA_MAX_ATTEMPTS - attemptsLeft, attemptsLeft, maxAttempts: MFA_MAX_ATTEMPTS }
+        : { code: 'MFA_FAILED', reason: 'mfa_code_invalid', actionId,
+          attemptsUsed: MFA_MAX_ATTEMPTS - attemptsLeft, attemptsLeft, maxAttempts: MFA_MAX_ATTEMPTS },
       message: locked
         ? '验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。'
         : `验证码错误，请重试。剩余尝试次数：${attemptsLeft}。`,
@@ -1011,6 +1073,7 @@ async function authorizeTransfer(
       tier: 'RED',
       requiresMfa: true,
       code: 'LIMIT_EXCEEDED',
+      failure: { code: 'LIMIT_EXCEEDED', reason: 'denied', actionId: row.id },
       message: TRANSFER_ESCALATED_MESSAGE,
       action: { ...action, tier: 'RED', requiresMfa: true, status: 'awaiting_mfa',
         summary: withActionPolicy(action.summary, { actionId: row.id, tier: 'RED', requiresMfa: true }),
@@ -1052,7 +1115,7 @@ async function authorizeAction(
   // (never reopens verification: no new challenge, no consumed attempt, no re-prompt).
   if (row.status === 'locked') {
     const lockedAction = toContractPendingAction(row);
-    return lockedOutcome(actionId, lockedAction, row.requiresMfa || lockedAction.tier === 'RED');
+    return lockedOutcome(actionId, lockedAction, row.requiresMfa || lockedAction.tier === 'RED', 'mfa_session_locked');
   }
 
   // Only undecided actions can request a code. A historical RED flag on a confirmed/terminal
@@ -1082,7 +1145,7 @@ async function authorizeAction(
   // Circuit breaker is a hard gate the LLM (and even a correct code) cannot bypass.
   if (await isLocked(row.sessionId)) {
     // Make the lock DURABLE on the row so it is no longer surfaced as an undecided action.
-    return lockedOutcome(actionId, await persistLockedAction(actionId, action), effectiveRequiresMfa);
+    return lockedOutcome(actionId, await persistLockedAction(actionId, action), effectiveRequiresMfa, 'circuit_open');
   }
 
   // `transfer_money` is DYNAMIC: its tier is re-derived at EXECUTION time (see `authorizeTransfer`).
@@ -1179,7 +1242,7 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
     return {
       evaluation,
       decision,
-      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny' })}`,
+      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny', failure: { code: 'CIRCUIT_OPEN', reason: 'circuit_open' } })}`,
     };
   }
 
@@ -1211,7 +1274,7 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
     return {
       evaluation,
       decision: { ...decision, kind: 'deny' },
-      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny' })}`,
+      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny', failure: { code: 'SECURITY_DENIED', reason: 'denied' } })}`,
     };
   }
 

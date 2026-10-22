@@ -1,5 +1,6 @@
 import type { AgentEvent } from '@earendil-works/pi-agent-core';
 import type { ToolEventView } from '@/lib/contracts/agent';
+import type { SecurityFailure } from '@/lib/contracts/security';
 import { security } from '@/security';
 import { confirmationCard, errorCard, mfaCard } from '../card-emitter';
 import { parseBankingGuidance } from '../banking-guidance';
@@ -13,6 +14,16 @@ import { projectToolRejection } from '@/lib/tool-feedback';
 import { inspectReplyFormat } from '../reply-format';
 import { assistantPresentationId, providerPresentationKey } from '../tool-presentation-identity';
 import { parseModelToolError } from '../tools/result';
+
+/** The TYPED facts a refusal carries, projected into the catalog placeholders that render them. */
+function errorParamsFrom(failure: SecurityFailure | undefined): { errorParams?: Record<string, string | number> } {
+  if (!failure) return {};
+  const params: Record<string, string | number> = {};
+  if (typeof failure.attemptsLeft === 'number') params.attemptsLeft = failure.attemptsLeft;
+  if (typeof failure.attemptsUsed === 'number') params.attemptsUsed = failure.attemptsUsed;
+  if (typeof failure.maxAttempts === 'number') params.maxAttempts = failure.maxAttempts;
+  return Object.keys(params).length > 0 ? { errorParams: params } : {};
+}
 
 async function handleToolEnd(buffer: TurnBuffer, event: Extract<AgentEvent, { type: 'tool_execution_end' }>, rejected: ReadonlyMap<string, string>, now: number): Promise<void> {
   const { toolCallId, toolName } = event;
@@ -46,7 +57,9 @@ async function handleToolEnd(buffer: TurnBuffer, event: Extract<AgentEvent, { ty
     return;
   }
   const parsed = security.gateway.securityGateway.parseBlockReason(message);
-  const blocked = parsed !== null || message.startsWith(security.gateway.BLOCK_REASON_PREFIX);
+  // `BLOCK_REASON_PREFIX` is undefined under a partial `@/security` mock — stay robust, never throw.
+  const prefix: unknown = security.gateway.BLOCK_REASON_PREFIX;
+  const blocked = parsed !== null || (typeof prefix === 'string' && message.startsWith(prefix));
   if (!blocked) {
     const view: ToolEventView = { toolCallId, toolName, ...owner, status: 'error', summary: message, errorCode: result.errorCode };
     upsertToolEvent(toolMessage, view);
@@ -55,22 +68,32 @@ async function handleToolEnd(buffer: TurnBuffer, event: Extract<AgentEvent, { ty
     emitCard(buffer, errorCard(message, result.errorCode), toolMessage);
     return;
   }
-  const view: ToolEventView = { toolCallId, toolName, ...owner, status: 'blocked', ...(parsed?.actionId ? { actionId: parsed.actionId } : {}) };
+  // The blocked view carries ONLY typed facts (`actionId` / `errorCode` / renderable params).
+  const view: ToolEventView = { toolCallId, toolName, ...owner, status: 'blocked',
+    ...(parsed?.actionId ? { actionId: parsed.actionId } : {}),
+    ...(parsed?.failure ? { errorCode: parsed.failure.code } : {}),
+    ...errorParamsFrom(parsed?.failure) };
   upsertToolEvent(toolMessage, view);
   buffer.events.push({ type: 'tool_end', toolEvent: view });
-  if (parsed?.decisionKind === 'require_mfa') {
+  // A gated call is only actionable WITH its pending action; an action-less refusal ends below.
+  if (parsed?.actionId && parsed.decisionKind === 'require_mfa') {
     const summary = await loadPendingSummary(parsed.actionId, toolName);
     buffer.events.push({ type: 'mfa_required', actionId: parsed.actionId, hint: MFA_HINT, action: summary });
     emitCard(buffer, mfaCard(parsed.actionId, MFA_HINT, summary), toolMessage);
     return;
   }
-  if (parsed?.decisionKind === 'require_confirmation') {
+  if (parsed?.actionId && parsed.decisionKind === 'require_confirmation') {
     const summary = await loadPendingSummary(parsed.actionId, toolName);
     buffer.events.push({ type: 'confirmation_required', actionId: parsed.actionId, action: summary });
     emitCard(buffer, confirmationCard(summary), toolMessage);
     return;
   }
-  buffer.events.push({ type: 'security_event', kind: 'locked', message });
+  // A locked refusal is published as STRUCTURED fields only — never the raw payload text.
+  buffer.events.push({ type: 'security_event', kind: 'locked',
+    ...(parsed?.failure ? { code: parsed.failure.code, reason: parsed.failure.reason } : {}),
+    ...(parsed?.actionId ? { actionId: parsed.actionId } : {}),
+    ...(typeof parsed?.failure?.attemptsLeft === 'number' ? { attemptsLeft: parsed.failure.attemptsLeft } : {}),
+    ...(typeof parsed?.failure?.maxAttempts === 'number' ? { maxAttempts: parsed.failure.maxAttempts } : {}) });
 }
 
 /** Map normal and recovered Pi events through the same grounded presentation adapter. */

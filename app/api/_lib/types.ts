@@ -9,7 +9,7 @@
  */
 import type { ErrorCode } from '@/lib/errors';
 import type { RiskLevel } from '@/lib/contracts/risk';
-import type { PendingAction, PendingActionStatus } from '@/lib/contracts/security';
+import type { PendingAction, PendingActionStatus, SecurityFailure } from '@/lib/contracts/security';
 import type { AgentStreamEvent } from '@/lib/contracts/agent';
 
 /** Success envelope returned by every route: `{ ok: true, data }`. */
@@ -50,6 +50,14 @@ export interface ActionResponse {
   tier: RiskLevel;
   requiresMfa: boolean;
   mfaResult?: 'success' | 'failed' | 'not_required';
+  /** Typed refusal code, so the client never has to parse the message. */
+  code?: string;
+  /** Remaining verification attempts (present after a wrong code). */
+  attemptsLeft?: number;
+  /** The verification attempt limit (present after a wrong code). */
+  maxAttempts?: number;
+  /** The complete structured refusal, when the outcome is a security refusal. */
+  failure?: SecurityFailure;
   /** Safe, user-facing text. Never contains the MFA code. */
   message: string;
   /** Continuation events to append to the chat stream. */

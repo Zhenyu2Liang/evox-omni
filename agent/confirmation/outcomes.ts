@@ -70,6 +70,8 @@ export function blockedOutcome(
     tier: effectiveTier(view),
     requiresMfa: view.requiresMfa,
     message: view.message,
+    ...(view.code ? { code: view.code } : {}),
+    ...(view.failure ? { failure: view.failure } : {}),
     events,
   };
 }

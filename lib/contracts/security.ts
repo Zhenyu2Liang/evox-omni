@@ -1,8 +1,31 @@
+import type { ErrorCode } from '../errors';
 import type { RiskLevel } from './risk';
 import type { ToolName } from './tools';
 import type { MoneyAmount } from '../money';
 
 export type SecurityDecisionKind = 'allow' | 'require_confirmation' | 'require_mfa' | 'deny';
+
+/** Why a security-governed operation was refused — TYPED, never inferred from message text. */
+export type SecurityFailureReason =
+  | 'mfa_code_invalid'
+  | 'mfa_attempts_exhausted'
+  | 'mfa_session_locked'
+  | 'circuit_open'
+  | 'denied';
+
+/**
+ * The structured failure every refusal carries: the public-facing error code, the machine-readable
+ * reason and the facts a caller needs to render the refusal (which action, how many attempts are
+ * left). It never carries the raw gateway payload.
+ */
+export interface SecurityFailure {
+  code: ErrorCode;
+  reason: SecurityFailureReason;
+  actionId?: string;
+  attemptsUsed?: number;
+  attemptsLeft?: number;
+  maxAttempts?: number;
+}
 
 export interface SecurityEvaluation {
   toolName: ToolName;
