@@ -20,6 +20,10 @@
 | 提交校验 | fence | 提交时检查执行者仍持有所有权 |
 | 执行键 | operation key | 用于识别和去重业务操作的服务端键 |
 | 输入摘要 | request digest | 规范输入的摘要，用于识别参数变化 |
+| 身份判定 | identity、`phoneIdentityMatches` | 用完整号码逐字符相等确定唯一对象，可以绑定执行对象 |
+| 候选筛选 | candidate、`phoneCandidateMatches` | 用脱敏号码或数字片段收窄候选，不绑定执行对象 |
+| 身份解析 | resolution | 服务端在 park 阶段把选择器解析为唯一资源 id |
+| 完整号码 | `Contact.phoneFull`、`Card.numberFull` | 仅供服务端精确匹配的虚构完整手机号或卡号 |
 | 执行回执 | `ExecutionReceipt` | 已提交业务的完整原结果 |
 | 重放 | replay | 读取并返回已保存的原结果 |
 | 重试 | retry | 重新执行同一调用，并增加尝试次数 |

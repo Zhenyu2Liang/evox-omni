@@ -117,6 +117,26 @@ UNTRUSTED 的可构造来源只有「他人账户」与「非 CHECKING 账户」
 | `integration/card-replacement-transaction.test.ts`、`card-replace-capability-contract.test.ts` | 补办继承结算账户；漂移只可能是「存在但不可信」或删除后 `SetNull`；写入无行 id 被外键拒绝 |
 | `scenarios/test-13/14/16/19` | 借记卡补办、虚拟卡申请与重放、家族限额、CREDIT 补办的绑定与 `NOT_APPLICABLE` 投影 |
 
+## 号码与卡片身份解析的覆盖
+
+身份判定与候选筛选必须分开断言：身份用例只接受完整号码，候选用例必须同时断言「候选不唯一即不执行」。
+解析用例必须断言三件事：参数被规范化为唯一 id、澄清时不写 `PendingAction`、对外文本不含完整号码。
+涉及完整号码的用例读取 `Contact.phoneFull` 与 `Card.numberFull`，断言对象只到脱敏值。
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `unit/lib/phone-identity.test.ts` | 形状判定、`phoneIdentityMatches` 只认相等完整号码（中间四位参与比较）、候选筛选的可见端与片段、只保留脱敏值的历史行、`maskAwarePhoneMatch` 与 `searchPhoneMatch` 不得互换、号码层只回答布尔值 |
+| `unit/security/phone-identity.test.ts` | 收款人身份判定对片段、脱敏值与位数错误的拒绝；搜索片段仍可用于候选 |
+| `unit/security/recipient-identity.test.ts` | 每个选择器只匹配自己的字段，跨字段别名与片段被拒；多字段必须指向同一联系人；掩码冲突报 `ambiguous` 且候选全部脱敏 |
+| `unit/security/recipient-phone-identity.test.ts` | 完整号码精确解析、可见端相同而中间四位不同的号码不解析、只保留脱敏值的历史行不可识别、脱敏值仅作唯一候选、完整号码不降级为候选、他人的 id 与号码不解析且不回显 |
+| `unit/security/recipient-resolution.test.ts` | 网关 park：姓名、完整号码与 `contactId` 均规范化为 `contactId` 并生成脱敏摘要；无法解析时返回澄清，不落库 |
+| `unit/lib/contact.search.test.ts` | `searchContacts` 用完整号码或脱敏号码收窄候选；掩码冲突返回全部候选；返回行不含完整号码 |
+| `unit/scripts/number-backfill.test.ts` | 复制完整值并以 `lib/mask` 规范化展示列、重复执行幂等、脱敏值报 `unrecoverable-masked`、已有完整值的行不被改写、回滚只清空仍持有写入值的行、报告只含脱敏值、CLI 参数严格 |
+| `scenarios/test-17-consumption-time-guard.test.ts` | `consume_virtual_card` 的参数键集合含 `cardId`、`cardType`、`cardTail` 与 `cardNumber` |
+
+当前没有专门覆盖 `security/card-resolution.ts` 的单元测试文件。
+卡片选择器的解析结果可以经网关用例间接核对，选择器语法见 [identity-resolution.md](../docs/cn/identity-resolution.md)。
+
 ## 常用命令
 
 `pnpm test` 运行全部 Vitest 测试。

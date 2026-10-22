@@ -12,6 +12,7 @@
 | `scheduler.ts` | `pnpm scheduler:tick` 检查已到期任务 |
 | `weixin.ts` | `pnpm weixin:login/start/status/logout` 管理微信通道 |
 | `card-account-binding.ts` | 为 `linkedAccountId` 为空的借记类卡片补绑结算活期账户，支持 `--dry-run` 与 `--rollback=<文件>` |
+| `number-backfill.ts` | 补全 `Contact.phoneFull` 与 `Card.numberFull`，支持 `--dry-run` 与 `--rollback=<文件>` |
 
 ## 数据库命令
 
@@ -63,3 +64,17 @@
 `--rollback=<文件>` 只还原当前值仍等于脚本写入值的行，不覆盖之后的人工改动。
 参数错误、回滚文件非法与数据库不可用都以非 0 退出码结束。
 汇总只输出库中已脱敏的 `Account.number`，不输出完整账号、卡号或配置值。
+
+## 完整号码补全
+
+`number-backfill.ts` 只补全完整号码列为空的联系人与卡片。
+唯一允许的补全是复制：展示列本身是完整号码时，复制进完整号码列，并把展示列规范化为脱敏值。
+脱敏展示值永不还原，缺失数字不猜测。
+写入使用 CAS：完整号码列仍为空，且展示列未被改动。
+不经 `package.json` 调用：`pnpm tsx scripts/number-backfill.ts`。
+`--dry-run` 只打印计划，不写库，也不生成回滚文件。
+真跑把变更清单写到 `logs/number-backfill/<时间戳>-applied.json`。
+`--rollback=<文件>` 只清空仍持有脚本写入值的行，不覆盖之后的人工改动。
+`--dry-run` 不能与 `--rollback` 同时使用。
+跳过原因有 `unrecoverable-masked`、`unrecognized-format`、`already-complete` 与 `display-changed`，逐条报告。
+报告只输出已脱敏的展示值，不输出完整号码。

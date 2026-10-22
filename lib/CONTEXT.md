@@ -56,6 +56,9 @@ JSON 金额使用十进制字符串。
 `maskAccountNumber` 与 `maskCardNumber` 共用同一内部算法，只保留末 4 位且输出长度与输入一致：长度 ≤ 4 原样返回，对已脱敏串（`****8821` → `****8821`）幂等，不校验是否纯数字、不 trim、不抛错。
 `lib/phone.ts` 区分两类问题并分别导出：身份判定 `phoneIdentityMatches` 只允许两个完整号码逐字符相等（中间四位参与比较），脱敏或不完整输入永不为身份；候选筛选 `phoneCandidateMatches` 只缩小候选集，脱敏输入可凭前 3 位加末 4 位成为候选，数字片段按去星号后的子串匹配，调用方必须再要求候选唯一。`maskAwarePhoneMatch` 为严格身份判定的兼容名，`searchPhoneMatch` 为候选筛选的兼容名，二者不可互相替代；`isCompletePhone` / `isMaskedPhone` 判定形状，`export { maskPhone } from './mask'` 保持既有导入路径兼容。
 `lib/tool-diagnostics.ts` 内的手机号打码属于诊断日志脱敏（正则门控、输出 `****` + 末 4 位），不是展示格式化，不复用 `mask.ts`。
+完整号码只存在于服务端字段 `Contact.phoneFull` 与 `Card.numberFull`，供 `security/recipient-resolution.ts` 与 `security/card-resolution.ts` 精确匹配。
+展示列 `Contact.phone` 与 `Card.numberMasked` 只存脱敏值，投影、日志、工具结果、接口响应与错误消息都只输出脱敏值。
+身份判定只用完整号码严格相等，脱敏值仅作候选筛选，规则见 [identity-resolution.md](../docs/cn/identity-resolution.md)。
 
 ## 投资输出契约与标签
 
