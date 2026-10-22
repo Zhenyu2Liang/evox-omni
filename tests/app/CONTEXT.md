@@ -15,6 +15,12 @@
 `harness.ts` 导出：`BASE_URL`（`:26`）、`sessionCookie(sessionId)`（`:62`）、`chatUrl({stream})`（`:78`）、`actionUrl(id, verb)`（`:85`，verb = `confirm|verify|cancel|recover`）、`taskUrl`/`tasksUrl`（`:90`/`:95`）、`idCtx(id)`（`:100`）、`postJson`（`:107`）、`postRaw`（`:126`）、`getJson`（`:145`）、`readSseFrames`（`:185`）、`readSse`（`:197`）。
 每个用例文件自建局部的 `payload(res)`、`chatTurn`、`verifyAction`、`checkingBalance` 等薄封装，未抽到 `harness.ts`。
 
+`harness.ts` 不 import 任何路由模块：每个用例自行 import 路由的 `GET`/`POST` 并把 handler 传给 invoker（如 `mfa-terminal-lock-http.test.ts:28-29`、`actions-http.test.ts:27-30`）。
+`invoke`（`harness.ts:163-180`）用 `new NextRequest((opts.base ?? BASE_URL) + path, { ...init, headers })`（`:174`）构造真实请求，再 `await handler(req, opts.ctx ?? idCtx(''))`（`:175`）直接调用，不启动 Next 服务器、不经过 `fetch`。
+响应只有 `content-type` 含 `application/json` 时才 `await res.json()`（`:178`），SSE body 保持未消费交给 `readSse`。
+`/…/[id]` 路由必须显式传 `ctx: idCtx(id)`，默认值是 `idCtx('')`。
+其余导出类型：`RouteHandler`（`:32`）、`HttpOptions`（`:40`，`sessionId`/`cookie` 只是被服务端忽略的身份提示）、`HttpResult`（`:51`，含 `status`/`ok`/`data`/`headers`/`res`）。
+
 ## 身份与断言
 
 Web 路由固定使用配置的演示用户与会话。
