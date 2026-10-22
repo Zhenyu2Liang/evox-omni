@@ -152,6 +152,14 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 - 出站文本不含 `__SECURITY_BLOCK__` 由 `unit/weixin-lock-presentation.test.ts:200-248` 覆盖；`renderEvents` 对 `kind:'locked'` 渲染 `securityNotice` 并撤销 gate（`channels/weixin/banking-client.ts:135-142`），非 locked 的 kind 才静默。
 - 无 `worker.ts` 的游标提交与 `-14` 重扫码、outbox 1600 字切块与 2000 条淘汰的用例。
 
+## 驱动路由与恢复入口
+
+进程内调用 `app/api/*` 路由处理器用 `tests/app/harness.ts`（`invoke:163-180` 构造真实 `NextRequest` 后直接调用导入的处理器），`tests/app` 之外的借用方只有 `integration/request-step-binding.test.ts:10` 与 `integration/task-feature-hardening.test.ts:13`。
+`tests/helpers/` 没有租约/时钟/`maxRecoveryAttempts` 辅助：规格内联改写 `agentRun.leaseExpiresAt`、`agentSession.runLeaseExpiresAt`、`agentTask.executionClaimedAt`，取值用哨兵日期 `new Date('2000-01-01T00:00:00Z')`/`new Date(1)` 或真实时钟 `Date.now() - 660000`。
+崩溃-重启端到端只有两条真实子进程入口：`helpers/restart-process.ts`（argv `mode scenario runId sessionId`，`recover` 模式调 `recoverOwnedRun`、`worker` 模式调 `tickAgentRecovery`）与 `helpers/standalone-restart-process.ts`（argv `mode scenario`，`start` 走 `createTaskGraph`+`resumeTask`，其余走 `tickAgentRecovery()`）。
+`tests/helpers/locked-action.ts` 提供停泊动作与 MFA 阶梯（`parkRedTransferPlan`/`parkConfirmOnlyTransfer`/`exhaustMfaAttempts`/`lockAction`），当前无任何规格引用。
+逐文件的恢复/租约驱动方式见 [integration/CONTEXT.md](integration/CONTEXT.md)、[app/CONTEXT.md](app/CONTEXT.md)、[unit/CONTEXT.md](unit/CONTEXT.md)。
+
 ## 常用命令
 
 `pnpm test` 运行全部 Vitest 测试。
