@@ -89,6 +89,8 @@ status), so the row is terminal and `GET /api/actions` stops surfacing it (`atte
 The two tracked counters live outside this layer: per-action `MfaChallenge.attempts`/`maxAttempts`
 against threshold `MFA_MAX_ATTEMPTS = 3`, and the authoritative owner-scoped `CircuitBreakerState`.
 `POST /api/{confirm,verify,cancel}` build `ActionResponse` inline; confirm hardcodes `mfaResult:'not_required'`. `_lib/agent-bridge.ts:163-175` (`withPlanUpdate`) drops any `mfa_required`/`confirmation_required` event whose `actionId` equals the refreshed `nextPlanDecision` action id and appends that decision last, so the persisted plan owns the re-prompt.
+An action receipt carries NO error code: `ActionResponse` (`_lib/types.ts:44-57`) exposes only `status`/`mfaResult`/`message`, and `agent/confirmation/outcomes.ts#blockedOutcome` drops the gateway's `CIRCUIT_OPEN` while emitting no events for a `locked` outcome (`:63-64`). So the lock is signalled purely by `status:'locked'` + `mfaResult:'failed'` + the gateway sentence.
+Contrast `POST /api/cards/changes/[id]/verify`, which lets `AppError('CIRCUIT_OPEN')` bubble out as a `423` failure envelope WITH `code` (`security/manual-card-management.ts:71,112`), so the cards page localizes by code; the action routes deliberately do not.
 
 ## Implementation boundaries
 
