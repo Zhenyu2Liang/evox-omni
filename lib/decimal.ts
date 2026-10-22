@@ -75,6 +75,15 @@ export function formatDecimalCNY(input: string): string {
   return `${value.isNegative() ? '-' : ''}¥${integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${fraction}`;
 }
 
+/**
+ * Presentation text of an exact decimal with exactly `digits` fraction digits (no currency symbol).
+ * Display only: 份额 (6 位) and 净值 (4 位) are stored at that precision, so padding never invents a
+ * digit — the value itself is never re-computed here.
+ */
+export function formatDecimalFixed(input: string, digits: number): DecimalAmount {
+  return new FinancialDecimal(decimalText(input)).toFixed(digits, Decimal.ROUND_HALF_UP);
+}
+
 interface DecimalParts { coefficient: bigint; scale: number; }
 
 function parseDecimal(input: string | number | bigint): DecimalParts {
