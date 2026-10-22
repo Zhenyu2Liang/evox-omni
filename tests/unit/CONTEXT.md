@@ -65,6 +65,31 @@
 没有任何用例驱动 `POST /api/security/reset`（该路由见 `app/security-workflow-http.test.ts`）。
 marker 的行为断言只在中止/回显方向：输入侧由 `provider-mock.test.ts` 构造，输出侧由 `public-text.test.ts`、`mfa-failure-contract.test.ts`、`turn-security-event.test.ts` 断言不出现。
 
+## 恢复、租约与任务控制的覆盖
+
+本目录没有任何用例改写 `AgentRun.leaseExpiresAt`、`AgentSession.runLeaseExpiresAt`、`recoveryAttempts`、`nextRecoveryAt`，也没有 `vi.useFakeTimers`（唯一持有者 `planner/action-contract.test.ts`）。
+租约过期与进程重启的真实时间取值改写位于 `../integration/`（`agent-durability.test.ts`、`model-checkpoint-boundaries.test.ts`、`confirmation-lease-contention.test.ts`、`process-restart.test.ts`）。
+
+| 文件 | 覆盖 | 数据库 |
+| --- | --- | --- |
+| `agent/recovery-worker.test.ts` | 恢复宿主 worker 的 tick、停机、忙租约 `CONFLICT`、终态冲突、异常脱敏、批大小与 CLI 参数 | 纯：`vi.mock('@/agent/durable/service')`、`vi.mock('@/lib/db/repositories/agentRun')`，注入 `{ discover, recover, inspect? }` ports |
+| `agent/durable-reply-repair.test.ts` | 已完成的纠错回复崩溃后按持久化阶段重放、不再耗模型请求、记为 `phase:'fallback'` | 纯：mock `@/lib/db/client` + 假 `BankingAgentRuntime` + `encodeCheckpoint` |
+| `agent/durable-advice-context.test.ts` | 可信建议在某次授权恢复后仍生效；换用户消息后复活即 `CONFLICT` | 纯（同上骨架） |
+| `agent/write-continuation-durable.test.ts` | 持久化续接的 `calls.length === 0` 分支与前台上限一致 | 纯（同上骨架） |
+| `agent/write-continuation.test.ts` | `declaredWriteTools`/`hasWriteEvidence`/`pendingDeclaredWrites` 与一次性续接预算 | 纯 |
+| `agent/task-control.test.ts` | `submit_plan` 持久化、`getTaskPlan`/`pauseTask`/`resumeTask`/`cancelTask`/`retryTask` 所有权，以及 `pending` 任务的 pause→resume→cancel | 真实 SQLite（`resetDatabase`） |
+| `agent/task-cancel-revokes.test.ts` | 取消撤销已停靠 `PendingAction`、取消/确认竞态至多一次副作用、取消不伪造回滚 | 真实 SQLite（`resetDatabase`） |
+| `planner/executor-execution-right.test.ts` | `AgentTask.executionToken` 被接管后，四个异步栅栏拒绝旧持有者 | 真实 SQLite（`useFreshDatabase`） |
+| `planner/executor-claim-scope.test.ts` | 节点执行按 `(taskId, nodeId)` 的数据库 CAS 去重，非进程内 Map | 真实 SQLite（`useFreshDatabase`） |
+| `planner/lifecycle.test.ts` | 计划 pause、cancel+补偿、retry、门控节点 resume | 纯（内存 ports） |
+| `planner/task-node-error-contract.test.ts` | `updateTaskNode` 的 `P2025` → `NOT_FOUND` + `detail` | 纯（mock prisma client） |
+| `lib/pendingAction.claim.test.ts` | `claimPendingAction` 恰好一次 `pending → confirmed`、作用域与状态更新 | 真实 SQLite（`resetDatabase`） |
+
+计划级接管用 `executor-execution-right.test.ts` 的 `takeover()` 旋转 `executionToken`；它不是 agent-run 租约接管。
+`planner/lifecycle.test.ts#resumePlan(plan, { nodeId, outcome }, deps, { now })` 是唯一的纯门控节点 resume 用例，不触库。
+`@/agent/task-control` 层面（注入 `runTool` 的 `resumeTask`/`retryTask`）对 `waiting_confirmation` 任务没有直接用例：`agent/task-control.test.ts` 的 resume 针对 `pending` 任务，`agent/task-cancel-revokes.test.ts` 只经 `confirmAction` → `resumeTaskForAction` 间接恢复停靠节点。
+`agent/**/*.test.ts` 另有 20 个同置套件（含 `durable/service`、`durable/recovery`、`durable/retry-policy`、`durable/control-recovery`），由根 `vitest.config.ts` 的 `agent/**` include 收集，不在本目录。
+
 ## 执行与修改
 
 运行：`pnpm exec vitest run tests/unit`。
