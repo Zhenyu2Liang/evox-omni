@@ -106,6 +106,16 @@ Tasks: `GET /api/tasks` and `GET /api/tasks/[id]` additively annotate every node
 Security surface: `GET /api/security` reports `lock?: SecurityFailure` (`{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`, present only while the breaker is open) and `lockedActions: LockedActionSummary[]` (`actionId`/`toolName`/`tier`/`requiresMfa`/`updatedAt`, newest lock first) as factual records, never as actionable items.
 Unlock: `POST /api/security/reset` clears only the account circuit breaker (`security/circuit-breaker.ts#commitAuditedReset`, which writes the `SECURITY_RESET` audit and renews `MfaChallenge` rows only for actions still `awaiting_mfa`). It writes no `PendingAction` row, so a locked action keeps its status, never reappears as a decision and is never executed; the success payload states this additively via `lockedActionsReopened: false`. Replacing a locked write requires a NEW request through the normal authorization gate.
 
+App-layer details of that unlock surface:
+`lockedActionsReopened` is a compile-time constant (`security/reset/route.ts:52`, emitted at `:92`), NOT an observation — the reset route reads no `PendingAction` and never checks whether locked rows exist.
+The request schema is only `{ verificationCode?: string }`; `actor: 'user'` and the Chinese `RESET_REASON` (`:46`) are hardcoded, and an empty-string code is dropped by the `verificationCode ? … : {}` spread (`:84`) before reaching `circuitBreaker.resetSession`.
+No `now` is forwarded, so the cooldown gate uses the security node's real clock.
+An account locked without a code therefore throws `AppError('CIRCUIT_OPEN')` from the security node and `errorResponse` maps it to HTTP `423` (`_lib/http.ts:24`) with `{ ok:false, error:{ code:'CIRCUIT_OPEN', message } }`; the human sentence is the security node's, never localized here.
+Dev-mode is NOT required: the route uses `requireIdentity` only, and the developer-only variant is the separate `POST /api/developer/security/reset` (`_lib/developer.ts#requireDeveloperMode` reads the `banking_developer_mode` cookie).
+`GET /api/security` derives `lockedActions` from `listPendingActions({ sessionId, status: 'locked' })` (repository default page = 100 rows), skips `manual_add_card`/`manual_delete_card`, and re-sorts by `updatedAt` desc; `lock` is present only while the breaker is open and is the fixed `{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`.
+The `lock?: SecurityFailure` / `lockedActions` fields are additive and optional, so consumers that ignore them keep working.
+`confirm` and `verify` apply NO app-layer locked short-circuit (unlike `cancel`/`recover`): they delegate and then derive `mfaResult` from the returned `status`, forwarding whatever `code`/`failure` the agent/security path produced.
+
 ## Implementation boundaries
 
 Keep route-local schemas private: Next.js route modules export HTTP handlers, supported route
