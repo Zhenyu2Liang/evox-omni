@@ -55,6 +55,12 @@ and aggregate repositories. Business permissions and risk rules belong to `secur
 ## Routing Table
 
 - [repositories/](repositories/CONTEXT.md) → aggregate queries, commands and durable runtime claims.
+- [../contracts/task.ts](../contracts/task.ts) → `TaskNodeResult` / `TaskNodeSpec` / `TaskPlan` transport types
+  (a result carries `id`, `name`, `status`, `tool`, `output`, `error`, `startedAt`, `endedAt`,
+  `compensation`; there is no `summary` field and no `summary` column).
+- [../../agent/workflows/persistence.ts](../../agent/workflows/persistence.ts) → the planner
+  persistence ports (`persistPlan` / `persistNode` / `loadPlan`) that write `AgentTask` +
+  `AgentTaskNode` rows over these repositories, plus the `toTaskPlan` read-back mapping.
 - [schema.prisma](../../prisma/schema.prisma) → persisted schema and generator output.
 - [prisma.config.ts](../../prisma.config.ts) → Prisma CLI configuration.
 - [prisma-cli.ts](../../tests/helpers/prisma-cli.ts) → generated-schema freshness and factory-construction probes.
