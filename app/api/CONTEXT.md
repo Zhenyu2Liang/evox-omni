@@ -38,7 +38,7 @@ selectable browser identities.
 | `GET /api/actions` | Read surfaced decisions, processing/recoverable operations and reconciliation entries | Pending action repository and agent classification |
 | `POST /api/actions/[id]/{confirm,verify,cancel,recover}` | Owned action decision/recovery; verification receives a code; a `locked` row is refused without any write | Agent decision/authorization/recovery contracts and `_lib/locked-action` |
 | `GET /api/tasks`, `GET /api/tasks/[id]` | Persisted plans and node state, including pending action identifiers and each parked action's current status (`pendingActionStatus`) | Task repository, pure `_lib/task-plans` mapping and `_lib/task-pending-actions` |
-| `POST /api/tasks/[id]` | Pause, resume, cancel or retry an owned plan | Agent task controls |
+| `POST /api/tasks/[id]` | Body `{ action }` — `pause`/`resume`/`cancel`/`retry`/`rollback` of an owned plan; refusals are HTTP error envelopes (`423` `MFA_LOCKED`, `409` `CONFLICT`, `403`, `404`, `400`), never a `200 { ok:false }` | Agent task controls |
 | `GET /api/activity` | Closed business history projection scoped to the fixed workspace | Operation history read model |
 | `GET /api/audit` | Developer preference required before validated filters; scoped technical entries and summary | Audit read models |
 | `GET /api/security` | Public projection of the security events (`events` and `status.recentEvents`, see below), lock state, failure count, a typed `lock` reason while the breaker is open and the session's terminal `lockedActions` | Audit and security read models plus `_lib/public-security-event` |
