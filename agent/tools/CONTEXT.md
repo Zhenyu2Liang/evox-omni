@@ -105,6 +105,31 @@ replays its recorded model call. The stored intent shape is `ConversationIntent`
 
 对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层无需改动——`subscribe_investment` 照常以 `{ productId, amount }` 转发给 `banking.investment.subscribeInvestment`；成功摘要仍按 `InvestResult.amount` 与可选 `newBalance` 渲染。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
 
+## `planning.ts` entry points
+
+| Export | Line | Kind / signature |
+|---|---|---|
+| `SUBMIT_PLAN_TOOL_NAME = 'submit_plan' as const satisfies ToolName` | `:105` | name constant |
+| `SubmitPlanParams` / `SubmitPlanArgs` | `:111` / `:131` | TypeBox `{ goal, nodes[] }` |
+| `createSubmitPlanTool(userId: string, deps: SubmitPlanDeps): AgentTool<typeof SubmitPlanParams>` | `:185` | factory for the `submit_plan` TOOL |
+| `preflightRequestedPlan(userId: string, args: Record<string, unknown>, request: string, intent?: ConversationIntent): Promise<TaskNodeSpec[]>` | `:215` | plain library function (throws, no `ToolExecutionResult`): `compileRequestedPlan` + `validatePlanParameters` + selector/recipient/holding canonicalization |
+| `runSubmitPlan(userId: string, args: Record<string, unknown>, deps: SubmitPlanDeps, source?: { runId: string; parentInvocationId: string }): Promise<ToolExecutionResult>` | `:240` | plain library function = the model-free runner behind `executeDirect('submit_plan')` and the `execute` of the tool |
+| `type PlanRunTool` / `interface SubmitPlanDeps` | `:68` / `:75` | injected ports: `sessionId`, gateway-routed `runTool`, `runtimeFence`, `invocationIdentity`, `userRequest`, `conversationIntent`, `onNodeUpdate`, `onPlanUpdate`, `signal`, `now` |
+
+`submit_plan` is the only planner-family model-visible capability and is META (`effect: 'workflow'`): it is not risk-gated itself, every money-moving node is gated through `deps.runTool`.
+`runSubmitPlan` order: preflight (`:261`) → `dag.validatePlan(nodes, knownTools)` with TWO args (`:265`) → mint the durable rows inside `prisma.$transaction` (`:281-283` `deps.runtimeFence` + `createTaskGraph`, ids adopted at `:286-288` so `plan.id === AgentTask.id`) → claim the plan's executor slot `claimTaskExecutionWithGeneration` (`:329`; a lost claim returns `{ ok:false, error:'计划已在执行中' }` and runs nothing) → `clearStaleNodeClaims` (`:344`) → `buildNodeClaimPorts` (`:353`) → `executor.runPlan` (`:357-386`) with `isRunOwner`, `controls: defaultPollControls(plan.id)`, `claimNode`/`releaseNode` and `createTaskPersistence` → `sweepCancelledPlan` (`:393`) → `releaseTaskExecution` in `finally` (`:395`).
+A `'running'` result after `runPlan` means the claim was taken over; the durable status/generation is re-read (`:404-412`) and this run's own node results are kept.
+
+## Registry (`index.ts`)
+
+`createToolRegistry(userId: string, opts?: CreateToolRegistryOptions): ToolRegistry` (`:237`) is the ONLY entry point — there is no module-level `TOOLS`/`toolCatalog` export.
+`CreateToolRegistryOptions` = `{ sessionId?, automaticWriteFence?, automaticWriteAudit?, operationIdentity?, submitPlan? }` (`:188-198`).
+`ToolRegistry` (`:171-185`) = `{ tools: Record<ToolName, AgentTool<any>>; list(): AgentTool<any>[]; get(name: ToolName): AgentTool<any>; executeDirect(name: ToolName, args: Record<string, unknown>, opts?: ToolRunOptions): Promise<ToolExecutionResult> }`.
+`list()` maps the re-exported `AGENT_TOOL_NAMES` (`:26`) onto `tools`; `get(name)` THROWS `AppError('SECURITY_DENIED')` for a non-catalog name and for `catalogEntry(name).agentEnabled === false`, while `executeDirect` returns that same refusal as a value (`:325-336`).
+`executeDirect` validates params first (`:348-349`), and for a write tool wraps the runner in `prepareBankingCommand` + `executeBankingCommand` (`:372-381`) so receipts/audit share the transaction.
+`submit_plan` is special in three places: dispatched through `runners.submit_plan` (`:312-317`, returns `{ ok:false, errorCode:'INTERNAL' }` without `opts.submitPlan`), `get('submit_plan')` without `opts.submitPlan` returns the throwing placeholder `createUnconfiguredSubmitPlanTool()` (`:208-218`), and the `:388-413` loop adds `prepareArguments` but does NOT replace its `execute` (`:397`) — its own `execute` calls `runSubmitPlan` directly.
+So a test that wants the real plan path must build the registry with `{ submitPlan: { sessionId, runTool } }` and then call `registry.executeDirect('submit_plan', args)`.
+
 ## Parameters and SDK errors
 
 Every family exports `<Name>Params`, `<Name>Args`, `create<Name>Tool`, and `run<Name>`.
@@ -158,6 +183,15 @@ or grant consent to resume a write. Archive searches require a trusted session a
 Plan-node and confirmed-action identities remain stable on replay. SDK fences run inside the write
 transaction and roll back the effect if execution rights have expired, moved, or been cancelled.
 Idempotency prevents duplicate effects; it does not grant permission.
+
+## What this directory does NOT own
+
+`agent/tools/` writes NO Prisma `PendingAction`, `AgentTask` or `AgentTaskNode` row directly: the only `prisma` import is `planning.ts:56`, used for `prisma.$transaction` (`:280`) around `createTaskGraph` plus the injected `runtimeFence`. Every other row write goes through injected ports (`claimTaskExecutionWithGeneration`, `releaseTaskExecution`, `clearStaleNodeClaims`, `buildNodeClaimPorts`, `createTaskPersistence`, `sweepCancelledPlan`).
+There is NO task-control tool in this directory and none in `lib/contracts/tool-catalog.ts`: no `cancel_task`, `pause_task`, `resume_task`, `retry_task`, no tool taking a `taskId`/`nodeId`/`actionId`.
+Plan control and post-parked-node resumption live outside, as plain library functions callable directly from a test:
+- `agent/workflows/controls.ts` `pauseTask` (`:18`), `resumeTask` (`:26`), `retryTask` (`:44`) and `agent/workflows/cancellation.ts` `sweepCancelledPlan` (`:47`), `cancelTask` (`:56`), surfaced by `agent/index.ts` and `POST /api/tasks/[id]`;
+- `agent/workflows/action-continuation.ts:24` `resumeTaskForAction` → `planner/lifecycle.ts:322` `resumePlan` → `planner/executor.ts:261` `runPlan`. There is NO separate topological continuation: resume == replay `runPlan`, so `submit_plan` is the only fresh-plan driver in this directory.
+A cancelled plan's parked actions are revoked only through `sweepCancelledPlan` → `security` gateway `cancelAction` (never a direct status write here).
 
 ## Known issues
 
