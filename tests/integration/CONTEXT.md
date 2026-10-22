@@ -53,6 +53,36 @@
 服务端权威文案 `declared_unsubmitted`（`agent/messages/conversation.zh-CN.json`）用 `agent/financial-response.ts#WRITE_LABELS` 把工具名换成中文标签，测试直接写字面量。
 这些套件不需要 `vi.mock`：模型经 `deps.provider` 注入，网关、执行器、SQLite 都是生产实现。
 
+## 恢复与租约用例的驱动方式
+
+「进程内重启」与真实进程重启是两套：`vi.resetModules()` + 重新 `await import(...)` 伪造模块图重启（`restart-recovery.test.ts:184/296/363/370`、`standalone-recovery.test.ts:318`）；
+真实子进程 SIGKILL 重启见 `process-restart.test.ts`（驱动 `tests/helpers/restart-process.ts`，`crash` 在 `:72-89`）与 `standalone-workflow-restart.test.ts`（驱动 `tests/helpers/standalone-restart-process.ts`，`crash` 在 `:67-76`）。
+
+恢复入口的实际使用面：
+
+| 入口 | 定义 | 本目录调用点 |
+| --- | --- | --- |
+| `recoverOwnedRun` | `agent/durable/service.ts:103` | `conversation-recovery.test.ts:62`、`conversation-compaction.test.ts:158/191`、`standalone-workflow-restart.test.ts:135`（断言 `CONFLICT`）、子进程驱动 `tests/helpers/restart-process.ts:132/139` |
+| `tickAgentRecovery` | `agent/recovery-worker.ts:44` | 只在子进程驱动内：`tests/helpers/restart-process.ts:136`、`tests/helpers/standalone-restart-process.ts:18` |
+| `recoverInvocation` | `agent/durable/recovery.ts:63` | `agent-durability.test.ts:106/142` |
+| `settlePendingAction` | `agent/confirmation-recovery.ts:251` | `agent-durability.test.ts:255/259` |
+| `resumeOriginalRunTask` | `agent/durable/workflow-resumption.ts:15` | `workflow-invocations.test.ts:150/170/171` |
+| `listRecoverableAgentRuns` | `lib/db/repositories/agentRun.ts:281` | `model-checkpoint-boundaries.test.ts:95/96/98/109`、`standalone-workflow-restart.test.ts:146/150` |
+| `executeGatedTool` | `agent/confirmation/gated-execution.ts:88` | 造「停放」动作的唯一生产入口，见各 `parkStandalone`／`runner` 助手 |
+
+`agent/index.ts:164` 的服务端 `recoverAction` 没有被本目录用例直接调用（`confirmation-policy.test.ts:10` 的 `recoverAction` 来自 `@/components/chat/actions`，是客户端函数）。
+`agent/confirmation-recovery.ts:347` 的 `recoverStandaloneWedge` 只被间接经过，`agent/authorization-resume.ts:52` 的 `performAuthorizationResume` 无直接覆盖，`recoverPendingAction` 这个名字全仓不存在。
+
+租约与执行占用一律用真实时钟直接写库强制过期，本目录没有 `vi.useFakeTimers`／`advanceTimersByTime`／`setSystemTime`。
+计划执行占用写 `AgentTask.executionClaimedAt = new Date(Date.now() - 660000)`（超 `EXECUTION_CLAIM_TTL_MS = 600000` 60 秒：`executor-leases.test.ts:134`、`takeover-controls.test.ts:113/350`、`obsolete-executor.test.ts:130/184/237`、`initial-executor-fencing.test.ts:32`、`execution-integrity.test.ts:31-86`、`execution-barriers.test.ts:98`）。
+节点占用用 `agentTaskNode.updateMany({ where: { taskId, status: 'running' }, data: { executionClaimedAt } })`（`obsolete-executor.test.ts:131/238`）。
+运行租约用哨兵过去时间：`agentRun.leaseExpiresAt` + `agentSession.runLeaseExpiresAt` 置 `new Date('2000-01-01T00:00:00Z')`（`process-restart.test.ts:86-87`、`node-recovery.test.ts:34`、`standalone-workflow-restart.test.ts:74`）或 `new Date(1)`（`model-checkpoint-boundaries.test.ts:27-28`），随后 `beginAgentRun({ existingRunId, recover: true })` 重新准入。
+确认动作的租约用 `pendingAction.update({ executionLeaseExpiresAt: new Date(now - 1) })`（`confirmation-lease-contention.test.ts:76`）或把 owner 与过期时间置空（`restart-recovery.test.ts:143-152`）。
+没有用例写 `recoveryAttempts`／`maxRecoveryAttempts`／`activeRunId`：前两者只被断言（`model-checkpoint-boundaries.test.ts:54/106`），后者只被读（`agent-durability.test.ts:58/123/215/239`）。
+
+停放状态的三条造法：`executeGatedTool` 直接停放（`restart-recovery.test.ts:102-113`、`confirmation-lease-contention.test.ts:20-28`）；`runSubmitPlan` 的 `runTool` 转发 `ctx.taskId`／`ctx.nodeId` 到 `executeGatedTool` 停放（`takeover-controls.test.ts:68-79`、`confirmation-liveness.test.ts:59-60`）；直接 `pendingAction.create`（`conversation-recovery.test.ts:100-105`、`agent-durability.test.ts:156-160/184-188/202-206`、`standalone-recovery.test.ts:218-222` 造无回执的 `confirmed`）。
+`status: 'locked'` 不能直接写：只能经三次错误验证码的 MFA 阶梯产生（`money-budget.test.ts`、`frontend-followup-fixes.test.ts`）；公共阶梯与探针在 `tests/helpers/locked-action.ts`，但没有任何用例 import 它。
+
 ## 终止锁定（locked）、block reason 与错误验证码的覆盖边界
 
 领域 `status: 'locked'` 只在本目录三处断言，全部在 `confirmation-policy.test.ts`：
