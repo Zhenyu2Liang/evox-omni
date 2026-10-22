@@ -126,10 +126,6 @@ financial records or the immutable model/event archive. See `turns/CONTEXT.md` f
 
 `grounding-facts.ts` projects exact structured account/write facts. `financial-response.ts` renders authoritative financial statements. Planning text, model-generated correction tags and prose are never execution evidence. Public APIs expose grounded events and safe metadata; raw thinking remains internal.
 
-`turns/events.ts` `handleToolEnd` classifies an errored tool result: `needs_reconciliation` first, then `parseBlockReason` and a plain `startsWith(BLOCK_REASON_PREFIX)` test, then a typed `status:'error'` carrying `summary` and `errorCode`.
-A blocked call publishes `status:'blocked'` with typed `actionId`/`errorCode`/params only; the prompt itself comes from `publishPendingDecision` under the persisted-status gate, and when no prompt is published the call ends in the structured `security_event{kind:'locked'}` rather than prose or a raw payload.
-`parseBlockReason` requires a non-empty `actionId`, so a `{"decisionKind":"deny"}` block reason is not parsed and takes the structured `security_event` path with no typed code.
-`ConfirmationOutcome` carries a typed `code` and the structured `failure` for security refusals; `publishAuthorizedToolOutcome` (`turns/buffer.ts`) may still set a public tool `summary` from `toolResult.error`, which `lib/tool-feedback.ts` renders through `publicToolError`.
 
 Card results — the card reads, the card mutations and `consume_virtual_card` — render as a `cards` card built from the server-returned card projection (`card-emitter.ts`), which carries the linked account, its available balance, the monthly limit and the currently payable amount; model prose never fills a result card.
 
