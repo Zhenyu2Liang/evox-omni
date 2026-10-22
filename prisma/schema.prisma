@@ -13,7 +13,7 @@
 //   - `channel`       on Transaction    = "APP" | "CARD" | "TRANSFER" | "SUBSCRIPTION"
 //   - `type`          on Card           = "DEBIT" | "CREDIT" | "VIRTUAL"
 //   - `status`        on Card           = "ACTIVE" | "FROZEN" | "LOST" | "PENDING"
-//   - `linkedAccountId` on Card         = id of the user's CHECKING account the card spends from (historical reference, no relation)
+//   - `linkedAccountId` on Card         = id of the user's CHECKING account the card spends from (real FK: Card.linkedAccount ↔ Account.cards)
 //   - `status`        on Subscription   = "ACTIVE" | "CANCELLED"
 //   - `riskLevel`     on InvestmentProduct = "R1" | "R2" | "R3" | "R4" | "R5"
 //   - `status`        on InvestmentHolding = "HOLDING" | "REDEEMED"
@@ -65,6 +65,7 @@ model Account {
 
   user         User          @relation(fields: [userId], references: [id])
   transactions Transaction[]
+  cards        Card[] // cards spending from / displaying this account
 
   @@index([userId])
 }
@@ -117,13 +118,15 @@ model Card {
   monthlyLimitMinor   BigInt? @map("monthly_limit_minor")
   // id of the replacement card (no relation — historical reference only)
   replacedByCardId    String? @map("replaced_by_card_id")
-  // id of the user's CHECKING account this card spends from (no relation — historical reference only)
+  // id of the user's CHECKING account this card spends from (real FK: linkedAccount <-> Account.cards)
   linkedAccountId     String? @map("linked_account_id")
 
-  user   User        @relation(fields: [userId], references: [id])
-  limits CardLimit[]
+  user          User        @relation(fields: [userId], references: [id])
+  linkedAccount Account?    @relation(fields: [linkedAccountId], references: [id])
+  limits        CardLimit[]
 
   @@index([userId])
+  @@index([linkedAccountId])
 }
 
 model CardLimit {

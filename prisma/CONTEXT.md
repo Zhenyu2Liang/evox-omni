@@ -36,10 +36,13 @@
 `Card` 的 `creditLimitMinor`、`availableLimitMinor`、`monthlyLimitMinor` 均为可空 BigInt 分。
 分类限额存于 `CardLimit`（`category` + `amountMinor`）。
 `replacedByCardId` 仅作历史引用，没有外键关系。
-`linkedAccountId` 同为历史引用：记录该卡片扣款的用户活期账户 `id`，没有外键关系。
+`Card.linkedAccountId` 是真实外键，指向该卡消费/展示所依据的结算活期账户（`Account.type = CHECKING`）。
+关系为 `Card.linkedAccount`（`Account?`）与反向 `Account.cards`（`Card[]`），并带 `@@index([linkedAccountId])`。
+信用卡可不绑定（为空），借记卡与虚拟卡绑定活期账户。
 `CardConsumption` 是本地模拟刷卡消费台账，一次成功消费一行；
 `executionKey` 为重放与幂等标识（可为空），`resultJson` 保存原始消费结果快照。
-`Card` 目前只通过 `userId` 归属用户，没有指向 `Account` 的外键关系。
+`Card` 通过 `userId` 归属用户，并经 `linkedAccountId` 外键关联到结算活期账户（列名 `linked_account_id` 未变）。
+该外键由 `db push` 引入，是兼容式变更（列名未变、可回滚），不要把 `linkedAccountId` 回退成无关系的裸字符串。
 SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件头注释。
 
 ## 种子行为
@@ -49,7 +52,7 @@ SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件�
 活期余额由期初余额加全部已入账流水核对。
 演示数据包含收支、小数交易、异常样例与多类业务记录。
 卡片夹具含 `card_credit`、`card_debit` 与虚拟卡 `card_virtual`；
-后者通过 `linkedAccountId` 绑定活期账户 `acct_checking`，月限额 ¥5,000.00。
+借记卡 `card_debit` 与虚拟卡 `card_virtual` 均通过 `linkedAccountId` 绑定活期账户 `acct_checking`，虚拟卡月限额 ¥5,000.00。
 测试夹具位于 `tests/helpers/fixtures.ts`，独立维护。
 
 重复播种会替换演示用户的业务记录。
