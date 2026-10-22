@@ -102,7 +102,7 @@ function wedgeResultTransaction() {
       const isSettlement = input.to !== 'confirmed' && input.from.includes('confirmed');
       if (isSettlement && hits === 0) {
         hits += 1;
-        throw new Error(review: standalone result transaction failed);
+        throw new Error('review: standalone result transaction failed');
       }
       return client === undefined ? original(input) : original(input, client);
     });
