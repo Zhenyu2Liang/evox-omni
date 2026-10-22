@@ -63,7 +63,7 @@
 
 | 入口 | 定义 | 本目录调用点 |
 | --- | --- | --- |
-| `recoverOwnedRun` | `agent/durable/service.ts:103` | `conversation-recovery.test.ts:62`、`conversation-compaction.test.ts:158/191`、`standalone-workflow-restart.test.ts:135`（断言 `CONFLICT`）、`locked-action-recovery.test.ts:217`（锁定动作，断言 `AUTHORIZATION_REQUIRED`）、子进程驱动 `tests/helpers/restart-process.ts:132/139` |
+| `recoverOwnedRun` | `agent/durable/service.ts:104` | `conversation-recovery.test.ts:62`、`conversation-compaction.test.ts:158/191`、`standalone-workflow-restart.test.ts:135`（断言 `CONFLICT`）、`locked-action-recovery.test.ts:217`（锁定动作，断言 `AUTHORIZATION_REQUIRED`）、子进程驱动 `tests/helpers/restart-process.ts:132/139` |
 | `tickAgentRecovery` | `agent/recovery-worker.ts:44` | 只在子进程驱动内：`tests/helpers/restart-process.ts:136`、`tests/helpers/standalone-restart-process.ts:18` |
 | `recoverInvocation` | `agent/durable/recovery.ts:63` | `agent-durability.test.ts:106/142` |
 | `settlePendingAction` | `agent/confirmation-recovery.ts:251` | `agent-durability.test.ts:255/259` |
