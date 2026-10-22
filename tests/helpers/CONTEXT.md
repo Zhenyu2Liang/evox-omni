@@ -57,6 +57,15 @@
 HTTP 路由层不在本目录：进程内真实路由客户端是 `tests/app/harness.ts`
 （`postJson`/`postRaw`/`getJson`/`readSse`/`readSseFrames`/`actionUrl`/`chatUrl`/`idCtx`）。
 
+## 熔断 owner 与会话身份
+
+`runTurn` 会把 `sessionId` upsert 成 `DEMO_USER_ID` 的 `AgentSession` 行（`scenario.ts:429`），
+因此 `security/circuit-breaker.ts#resolveBreakerOwner` 解析出的是 `user:user_liming`——
+所有 scenario 测试**共享同一个熔断 owner**。
+`newSessionId()` 不隔离熔断，`scenario.ts:615` 关于「in-process keyed by sessionId」的注释是过时说法。
+隔离只靠 `useFreshDatabase()` 清 `CircuitBreakerState`；同理，`getState(sessionId)`/`isLocked(sessionId)` 读的是那个 owner 的行，
+不是 `session:<id>`。真正按 `session:<actor>` 计键的只有既无 `AgentSession` 又无 `User` 行的裸 actor。
+
 ## 被阻断 / 锁定的结果如何表示
 
 网关 block reason 是 `__SECURITY_BLOCK__` + JSON（`security/security-gateway.ts:78`、`:704`）；
