@@ -15,6 +15,7 @@ A competition simulator for natural-language banking with server-controlled perm
 - `agent/command-execution.ts`: mutation, mandatory audit, original receipt and invocation completion in one transaction.
 - `banking-sdk/`: exact domain arithmetic and mutations through trusted execution context.
 - `lib/db/unit-of-work.ts`: nested repository calls share the current transaction.
+- `lib/phone.ts`, `security/recipient-resolution.ts`, `security/card-resolution.ts`: identity matches only complete numbers or exact owned ids, masked values are candidate filters only, and full numbers live solely in `Contact.phoneFull`/`Card.numberFull`. See `docs/cn/identity-resolution.md`.
 - `agent/financial-response.ts`: financial claims from structured evidence.
 - `agent/write-continuation.ts`: bounded, restart-safe continuation when a declared write produced no controlled tool call.
 - `agent/manual-review.ts`: stop future work while preserving already-started command facts.
