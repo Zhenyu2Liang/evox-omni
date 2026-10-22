@@ -93,7 +93,7 @@ JSON 金额使用十进制字符串。
 
 ## 公开文本漏斗（`public-text.ts`）
 
-`isInternalDiagnostic(text)` 是唯一的内部诊断判定：含 `__SECURITY_BLOCK__` 标记（`public-text.ts:22` 重复声明该前缀，跨层不 import 以避免循环）、`undefined`/`null`/`[object Object]`、JSON 片段或栈帧即返回 `true`。
+`isInternalDiagnostic(text: string | undefined)`（`public-text.ts:38-45`）是唯一的内部诊断判定：非字符串或 `trim()` 后为空 → `false`；命中任一条件 → `true`：`text` 含 `__SECURITY_BLOCK__`（`:42`，常量 `:22`，跨层不 import 以避免循环）、`trim` 后精确等于 `undefined`/`null`/`[object Object]`（`:25`/`:43`）、匹配 `/\{\s*"|":/`（原始 JSON 片段，`:28`）、匹配栈帧或异常头正则 `/\n\s+at\s|[A-Za-z]*Error:/`（`:31`）；它刻意不是业务文案白名单，`Insufficient funds: …` 一类正常业务消息仍判为可渲染；本文件只导出这三个函数（`SecurityNoticeInput` 未导出），且不经 `lib/index.ts` 再导出。
 `safePublicText(text, t, fallback)` 只做分流：缺失或内部诊断取 `t(fallback)`，否则委托 `publicToolError`。
 `securityNotice(failure, t)` 完全按 TYPED 字段判定，顺序为 `code==='MFA_LOCKED' || reason==='mfa_attempts_exhausted'` → `chat.error.actionLocked`；`reason==='mfa_code_invalid' || code==='MFA_FAILED'` → `chat.error.verificationRemaining {count: attemptsLeft ?? 0}`；`code==='CIRCUIT_OPEN' || reason==='circuit_open' || reason==='mfa_session_locked'` → `chat.error.securityLocked`；其余一律 `chat.error.securityDenied`。
 `SecurityNoticeInput` 的 `kind` 与 `maxAttempts` 只声明、从不读取（`kind` 仅由调用方用于分流），依赖它们产生新文案前必须先改 `securityNotice` 本体。
