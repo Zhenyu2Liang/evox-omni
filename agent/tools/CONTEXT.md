@@ -16,6 +16,7 @@ There are no shell, file, SQL, arbitrary HTTP, or credential-change tools.
 |---|---|
 | `index.ts` | Build owner-bound definitions; validate and dispatch `executeDirect`; apply trusted write context. |
 | `plan-parameters.ts` | Validate original direct-call and workflow parameters without implicit coercion. |
+| `money-schema.ts`, `decimal-schema.ts` | Exact parameter text: CNY money (2dp), investment shares (6dp) and net value per unit (4dp) canonical decimal schemas. |
 | `result.ts` | Convert typed results into native Pi success or `isError: true`; project public model data. |
 | `planning.ts` | Persist and execute a validated workflow through injected gateway and claim ports. |
 | `plan-compiler.ts` | Validate declared scope, node structure, output references, and dependencies. |
