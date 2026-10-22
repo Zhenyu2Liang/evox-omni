@@ -184,6 +184,15 @@ Plan-node and confirmed-action identities remain stable on replay. SDK fences ru
 transaction and roll back the effect if execution rights have expired, moved, or been cancelled.
 Idempotency prevents duplicate effects; it does not grant permission.
 
+## What this directory does NOT own
+
+`agent/tools/` writes NO Prisma `PendingAction`, `AgentTask` or `AgentTaskNode` row directly: the only `prisma` import is `planning.ts:56`, used for `prisma.$transaction` (`:280`) around `createTaskGraph` plus the injected `runtimeFence`. Every other row write goes through injected ports (`claimTaskExecutionWithGeneration`, `releaseTaskExecution`, `clearStaleNodeClaims`, `buildNodeClaimPorts`, `createTaskPersistence`, `sweepCancelledPlan`).
+There is NO task-control tool in this directory and none in `lib/contracts/tool-catalog.ts`: no `cancel_task`, `pause_task`, `resume_task`, `retry_task`, no tool taking a `taskId`/`nodeId`/`actionId`.
+Plan control and post-parked-node resumption live outside, as plain library functions callable directly from a test:
+- `agent/workflows/controls.ts` `pauseTask` (`:18`), `resumeTask` (`:26`), `retryTask` (`:44`) and `agent/workflows/cancellation.ts` `sweepCancelledPlan` (`:47`), `cancelTask` (`:56`), surfaced by `agent/index.ts` and `POST /api/tasks/[id]`;
+- `agent/workflows/action-continuation.ts:24` `resumeTaskForAction` → `planner/lifecycle.ts:322` `resumePlan` → `planner/executor.ts:261` `runPlan`. There is NO separate topological continuation: resume == replay `runPlan`, so `submit_plan` is the only fresh-plan driver in this directory.
+A cancelled plan's parked actions are revoked only through `sweepCancelledPlan` → `security` gateway `cancelAction` (never a direct status write here).
+
 ## Known issues
 
 Declared-write enforcement stays REACTIVE and declaration-gated: `compileRequestedPlan` only runs when `submit_plan` is actually invoked (`planning.ts:261` via `preflightRequestedPlan`), and `requiresDeclaredPlan` (`../intent-context.ts:43`) is called only from `beforeToolCall` (`../banking-agent.ts:289`), which fires on a stray individual write. End-of-turn reconciliation exists only for a write the model DECLARED through `describe_turn` (`../write-continuation.ts:56-62`, live-only): a model that refuses in prose while declaring nothing is never corrected, and no `PendingAction`/panel appears. `card.ts` applies NO card-type gating: `ReplaceCardParams` is `{ cardId }`, and `report_lost_card`/`replace_card` accept DEBIT, CREDIT and VIRTUAL alike (`banking-sdk/card.ts` `replaceCard`).
