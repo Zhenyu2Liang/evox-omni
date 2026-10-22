@@ -42,7 +42,8 @@ selectable browser identities.
 | `GET /api/activity` | Closed business history projection scoped to the fixed workspace | Operation history read model |
 | `GET /api/audit` | Developer preference required before validated filters; scoped technical entries and summary | Audit read models |
 | `GET /api/security` | Security events, lock state, failure count, a typed `lock` reason while the breaker is open and the session's terminal `lockedActions` | Audit and security read models |
-| `POST /api/security/reset` | Optional verification code; separately gated and audited unlock that reopens no `PendingAction` and executes nothing | Account circuit-breaker policy |
+| `POST /api/security/reset` | Optional body `{ verificationCode? }`; separately gated and audited unlock that reopens no `PendingAction` and executes nothing; success adds `lockedActionsReopened: false` | Account circuit-breaker policy |
+| `POST /api/developer/security/reset` | Developer-mode cookie gate, then the unaudited-code demo clear `resetDemoSession` (audit actor `developer`); returns the raw `CircuitBreakerState`, reopens no `PendingAction` | `_lib/developer.ts` + account circuit-breaker policy |
 | `GET /api/{dashboard,bills,cards,subscriptions}` | Simulated banking read models for the configured user | Banking SDK |
 | `/api/cards/{,[id]}` and `/api/cards/changes/[id]/{verify,cancel}` | Manual demo-card add/delete proposals plus MFA verify/cancel; returns `CardChangeResponse` | `security/manual-card-management` (see `../cards/CONTEXT.md`) |
 | `POST /api/cards/[id]/consume` | Owned virtual-card consumption: exact CNY `amount` string plus optional `category`/`merchant`/`executionKey`; booking time is server-owned, so a body containing `occurredAt` is refused with `400 VALIDATION`; returns `ConsumeCardResult` | Banking SDK card-consumption capability (see `cards/[id]/CONTEXT.md`) |
@@ -104,6 +105,16 @@ Refusal shape: every action decision route answers a `locked` row with a normal 
 Tasks: `GET /api/tasks` and `GET /api/tasks/[id]` additively annotate every node whose `pendingActionId` still resolves with `pendingActionStatus` — the action's CURRENT persisted status. `node.status` (`waiting_confirmation`/`waiting_verification`) and `node.pendingActionId` stay untouched, and a missing row omits the field rather than inventing a status.
 Security surface: `GET /api/security` reports `lock?: SecurityFailure` (`{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`, present only while the breaker is open) and `lockedActions: LockedActionSummary[]` (`actionId`/`toolName`/`tier`/`requiresMfa`/`updatedAt`, newest lock first) as factual records, never as actionable items.
 Unlock: `POST /api/security/reset` clears only the account circuit breaker (`security/circuit-breaker.ts#commitAuditedReset`, which writes the `SECURITY_RESET` audit and renews `MfaChallenge` rows only for actions still `awaiting_mfa`). It writes no `PendingAction` row, so a locked action keeps its status, never reappears as a decision and is never executed; the success payload states this additively via `lockedActionsReopened: false`. Replacing a locked write requires a NEW request through the normal authorization gate.
+
+App-layer details of that unlock surface:
+`lockedActionsReopened` is a compile-time constant (`security/reset/route.ts:52`, emitted at `:92`), NOT an observation — the reset route reads no `PendingAction` and never checks whether locked rows exist.
+The request schema is only `{ verificationCode?: string }`; `actor: 'user'` and the Chinese `RESET_REASON` (`:46`) are hardcoded, and an empty-string code is dropped by the `verificationCode ? … : {}` spread (`:84`) before reaching `circuitBreaker.resetSession`.
+No `now` is forwarded, so the cooldown gate uses the security node's real clock.
+An account locked without a code therefore throws `AppError('CIRCUIT_OPEN')` from the security node and `errorResponse` maps it to HTTP `423` (`_lib/http.ts:24`) with `{ ok:false, error:{ code:'CIRCUIT_OPEN', message } }`; the human sentence is the security node's, never localized here.
+Dev-mode is NOT required: the route uses `requireIdentity` only, and the developer-only variant is the separate `POST /api/developer/security/reset` (`_lib/developer.ts#requireDeveloperMode` reads the `banking_developer_mode` cookie).
+`GET /api/security` derives `lockedActions` from `listPendingActions({ sessionId, status: 'locked' })` (repository default page = 100 rows), skips `manual_add_card`/`manual_delete_card`, and re-sorts by `updatedAt` desc; `lock` is present only while the breaker is open and is the fixed `{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`.
+The `lock?: SecurityFailure` / `lockedActions` fields are additive and optional, so consumers that ignore them keep working.
+`confirm` and `verify` apply NO app-layer locked short-circuit (unlike `cancel`/`recover`): they delegate and then derive `mfaResult` from the returned `status`, forwarding whatever `code`/`failure` the agent/security path produced.
 
 ## Implementation boundaries
 
