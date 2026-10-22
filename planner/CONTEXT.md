@@ -110,7 +110,43 @@ planner 不让内部诊断文本进入任何可渲染字段。
 完整图的编译校验见 `agent/tools/plan-compiler.ts`。
 不得在本目录从用户原句重新推导业务参数。
 
+## 错误传播面
+
+本目录只抛 `AppError('VALIDATION')`（`dag.ts:248`、`dag.ts:426`、`executor.ts:628`）与 `AppError('NOT_FOUND')`（`lifecycle.ts:335`）；没有任何 `AppError('CONFLICT', …)`。
+`runPlan`（`executor.ts:271`）唯一会传播出去的自身抛错是 `topologicalOrder` 的环检测（`dag.ts:248`，经 `executor.ts:302` 调用，无 try 包裹）：`plan dependency graph contains a cycle (N of M nodes ordered)`。
+条件节点缺表达式（`executor.ts:628`）与 `assertConditionResolvable`（`dag.ts:426`）都在 `executor.ts:627-638` 的 try/catch 内，收敛成 `failed` 节点（经 `publicFailureText`/`toPlanFailure` 投影），不外抛。
+`retryPlan`（`lifecycle.ts:244`）自身无 throw；它末尾调用 `runPlan`（`lifecycle.ts:300`），抛错面同上。
+`deps.runTool` 的拒绝在 `executor.ts:504-509` 被 `AppError.from` 转成 `{ok:false, error, failure}`，再经 `settleToolNode`（`executor.ts:516`）记为 failed 节点，不传播。
+其余注入端口的抛错不被捕获，直接从入口穿透：`persistNode`/`onNodeUpdate`（`executor.ts:355-360`）、`claimNode`（`:486`）、`releaseNode`（`:527`，`finally` 内，会覆盖原始异常）、`isRunOwner`（`:322-323`）、`controls.pollControls`（`:426`）、`loadPlan`/`persistPlan`（`:229`、`:232`）。`runPlan` 顶层 `try`（`:546`）只有 `finally` 摘除 abort 监听，没有 catch。
+`lifecycle` 没有 `finish` 导出（只有 `pausePlan`/`cancelPlan`/`retryPlan`/`resumePlan`/`compensationReport`）；`executor.persistPlanSnapshot`（`executor.ts:181`）与 `persistPlanSnapshotGuarded`（`:222`）自身不抛，只透传注入端口的异常。
+
 验证入口见 [tests/unit/planner/CONTEXT.md](../tests/unit/planner/CONTEXT.md)。
+## 端口契约与异常边界
+
+`PlanDeps`（`executor.ts:78`）必填只有 `runTool` 与 `onNodeUpdate`；`onNodeUpdate` 调用处无 `?.`、无 try（`executor.ts:358`），其拒绝直接中止走查。
+可选端口：`claimNode`/`releaseNode`/`isRunOwner`/`persistPlan`/`persistNode`/`loadPlan`/`controls`，以及 `persistPlan` 的弃用别名 `persist`（`executor.ts:182`）。
+`persistPlan` 与 `persist` 都缺省时计划快照静默丢弃（`executor.ts:183`）。
+`claimNode` 缺省即完全不认领，`'owned'` 分支此时只能来自 `isRunOwner`。
+`isRunOwner` 缺省时 `ownerLost()` 恒 `false`（`executor.ts:322`），无所有权复检。
+`loadPlan` 缺省时 `persistPlanSnapshotGuarded` 不读库、无 pinned 状态守卫，等同 `persistPlanSnapshot`（`executor.ts:227`）；快照一律信任内存中的 plan，`lifecycle` 路径调用的无守卫版本即使有 `loadPlan` 也不读库（`lifecycle.ts:229`/`:298`/`:363`）。
+`controls` 缺省时 `pollDurableControls` 立即返回（`executor.ts:425`）。
+`claimNode` 在 `runToolNode` 的 try 之外（`executor.ts:486`），节点认领释放只在 `finally`（`executor.ts:523-528`）。
+计划级执行权（`executionToken`）不归本目录：planner 只认领节点，丢失计划权只经 `isRunOwner` → `'running'` 回退感知。
+
+`runPlan` 只有两处 catch：`runTool` 拒绝被转成 `ok:false` 的节点结果（`executor.ts:506-509`），条件求值/`assertConditionResolvable` 失败被记为 `failed` 节点（`executor.ts:627-635`）。
+主走查为 `try/finally`（`executor.ts:546`/`:695`）且无 catch：任何端口拒绝（`persistNode`/`onNodeUpdate`/`claimNode`/`releaseNode`/`isRunOwner`/`controls.pollControls`）或 `loadPlan`/`persistPlan` 拒绝都以异常中止走查，跳过结算快照写入与 cancel/park/`claimLost` 收敛。
+开头与结算的快照写入（`executor.ts:540`/`:734`）都不在 try 内。
+`releaseNode` 在 `finally` 内，其拒绝会顶替本次节点的结果或原异常。
+`runPlan` 不自行校验图：`topologicalOrder`（`executor.ts:302`）对有环快照抛 `VALIDATION`，是该函数唯一的非端口抛出点。
+`runTool` 的拒绝一律转为 `ok:false` 节点结果，无任何按错误码 rethrow：`AppError.from` 后经 `toPlanFailure` 只保 `code`（`failure.ts:71`），故 `CONFLICT`/`SECURITY_DENIED`/`CIRCUIT_OPEN` 只作为节点 `failure.code` 落盘，不会逃出走查。
+`runPlan` 不会抛 `CONFLICT`：本目录无任何 `CONFLICT` 抛出点，`CONFLICT` 只以节点 `failure.code` 出现。
+节点写入顺序：认领后先写 `running` 行，再调 `runTool`（`executor.ts:491`、`:505`），之后写结算行（`:517`）；`requiresConfirmation`/`pendingActionId` 结果为挂起时置计划 `waiting_confirmation` 并 `return 'parked'`（`:518-521`），走查 break（`:674-677`）后照常写结算快照，不抛错。
+全程 `await`：走查内无 fire-and-forget 节点 promise，唯一未 await 的是 `opts.onControls?.(controls)`（`executor.ts:532`，返回类型 `void`）。
+`lifecycle` 全无 catch；`resumePlan` 的 `AppError('NOT_FOUND')`（`lifecycle.ts:335`）是 lifecycle 里唯一的显式抛出。
+本目录全部显式抛出只有三处：`dag.ts:248`（有环，经 `executor.ts:302` 逃出 `runPlan`）、`dag.ts:426`（条件输出缺失/不可比，被 `executor.ts:632` 捕获）、`executor.ts:628`（条件无表达式，同处捕获）。
+`retryPlan` 对 `cancelled` 计划、无目标、无任何可重置节点三种情况原样返回同一 plan（`lifecycle.ts:249`/`:261`/`:291`），从不因终态/已锁定节点抛错。
+`PlanToolOutcome.ok === false` 只让节点 `failed`（或在 `requiresConfirmation`/`pendingActionId` 存在时挂起，`node-outcome.ts:36-52`），不抛错也不直接改计划状态；计划成败在结算处按「全部 success/skipped」判定（`executor.ts:720-724`）。
+
 ## 本目录单元测试
 
 `plan-failure-contract.test.ts`（7 用例）与 `plan-drive-guard.test.ts`（8 用例）是纯注入式单元测试，共用 `plan-test-harness.ts` 的 `PlanDeps` 桩：无 DB、无网络、无需 Prisma 生成。

@@ -184,6 +184,13 @@ Plan-node and confirmed-action identities remain stable on replay. SDK fences ru
 transaction and roll back the effect if execution rights have expired, moved, or been cancelled.
 Idempotency prevents duplicate effects; it does not grant permission.
 
+## The per-node `runTool` port: declared here, implemented OUTSIDE
+
+`PlanRunTool` (`planning.ts:68-72`) and the executor's `TaskRunTool` (`agent/workflows/contracts.ts:12`) are the same signature `(toolName, args, {taskId, nodeId}) => Promise<PlanToolOutcome>`; the planner's `PlanToolOutcome` is `planner/executor.ts:37-51`.
+`planning.ts` only DECLARES it (`SubmitPlanDeps.runTool`, `:86`) and forwards it inside the claim context (`planning.ts:360-361`). All other plan drivers do the same (`agent/workflows/ports.ts:32-33`, `agent/workflows/action-continuation.ts:42-45`, `agent/confirmation/plan-continuation.ts:42-45`, `agent/scheduled-dispatcher.ts:117-119`).
+The production implementation is NOT in this directory: `agent/index.ts:308-325` `taskRunToolFor(sessionId)` resolves the owner from the SESSION row (throwing `SECURITY_DENIED` at `:313` when it cannot) and delegates to `agent/confirmation/gated-execution.ts:107-121` `executeGatedTool` → `:62-104` `executeGatedToolOnce`.
+That adapter returns `GatedToolOutcome` (`agent/confirmation/contracts.ts:43-51`), which has NO `failure` and NO `actionStatus` field — only `error` + `errorCode`. So on this path a node's typed `PlanFailure` is produced solely by the planner's own catch (`planner/executor.ts:504-509` `toPlanFailure`), never by the tool layer, and `settleToolNode` (`planner/node-outcome.ts:14-53`) drops `errorCode` entirely: a refused node persists `status:'failed'` + `error` text only (or `waiting_confirmation`/`waiting_verification` + `{pendingActionId}` when the gateway parked it).
+
 ## What this directory does NOT own
 
 `agent/tools/` writes NO Prisma `PendingAction`, `AgentTask` or `AgentTaskNode` row directly: the only `prisma` import is `planning.ts:56`, used for `prisma.$transaction` (`:280`) around `createTaskGraph` plus the injected `runtimeFence`. Every other row write goes through injected ports (`claimTaskExecutionWithGeneration`, `releaseTaskExecution`, `clearStaleNodeClaims`, `buildNodeClaimPorts`, `createTaskPersistence`, `sweepCancelledPlan`).

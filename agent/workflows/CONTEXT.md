@@ -57,6 +57,9 @@
 停靠决策检查必须先于第一次状态占用：拒绝时持久化计划状态原样保留（不翻 `running`、不走执行器、不重驱已结清节点、不取租约、不跑工具）。
 `assertParkedActionsNotTerminal` 遍历 `parkedActionIds(plan)`（去重、按节点顺序），对每个 id 读 `getPendingActionOwnership`；行缺失或不属终态时跳过，遇到终态立即抛结构化 `AppError`。
 拒绝映射：`locked` → code `MFA_LOCKED` + `chat.error.actionLocked`；`needs_reconciliation` → code `CONFLICT` + `chat.error.unknownOutcome`；其它终态（`executed`/`failed`/`cancelled`）→ code `CONFLICT` + `chat.error.stateChanged`。
+恢复/重试路径上第二个 `CONFLICT` 来源是人工核对闸：`assertNoOpenManualReview`（`lib/db/repositories/manualReview.ts:6`）在任务存在 `status = 'open'` 的 `ManualReview` 行时抛 `CONFLICT` + `任务已转人工处理，请先完成核对并记录处理结论。`；它同样先于任何状态占用，同样出网 409。
+并发打开的人工核对不会抛错而是让占用落空：`claimTaskStatus(…, 'running')`（`lib/db/repositories/task.ts:151`）与 `claimTaskExecution`（`lib/db/repositories/task.ts:201`）的 CAS 都带 `manualReviews: { none: { status: 'open' } }`，落空时控制返回当前计划快照（`controls.ts:34,36,55,57`）。
+恢复/重试不会返回 `undefined`：`getTaskPlan`（`ownership.ts:20`）声明 `Promise<TaskPlan>`，所有权缺失时抛 `NOT_FOUND`/`SECURITY_DENIED`。
 公开 `message` 永远是干净的业务句，`{ taskId, actionId, status }` 只进 `detail`，作为内部诊断。
 文案来自既有目录（`createTranslator(DEFAULT_LOCALE)`），本目录不新增 i18n 键。
 非 `INTERNAL` 的 code 按 `app/api/_lib/http.ts#mapAppError` 原样出网（`MFA_LOCKED` → 423，`CONFLICT` → 409），`detail` 永不进入响应体。
@@ -66,11 +69,36 @@
 ## 定位停靠节点：复用既有读取
 
 `parkedActionIds` 用 `readPendingActionId`（`./contracts` 里唯一的 `{ pendingActionId }` 读取器，`agent/turns/authorization-view.ts` 用的也是它）读节点输出，不要另写解析。
+它遍历 `plan.results`（`plan.nodes` 是 `TaskNodeSpec`，没有 `status`/`output`），只收 `waiting_confirmation`/`waiting_verification` 节点，用 `Set` 去重并保持仓储 `orderBy: { order: 'asc' }` 的节点顺序（`lib/db/repositories/task.ts:96`）。
+`output` 不是白名单投影：`toTaskPlan`（`persistence.ts:24`）以 `safeParse(node.output, undefined)` 原样透传 JSON 列，所以只要 `{ pendingActionId }` 由 `jsonNodeOutput`（`../task-fencing.ts:42-44`）或 `planner/node-outcome.ts:41` 写进行，守卫就必然能读到。
 `findTaskByPendingAction` 经 `getPendingActionPlanLink`（`lib/db/repositories/pendingAction.ts:304-312`，投影为 `{ id, taskId, nodeId }`）解析，不返回 `status`，所以 `locked`/`executed` 的 actionId 仍能解析到它的计划。
 `resumeTaskForAction` 只读任务行（`status === 'cancelled'` 时提前返回），不读操作行；它没有停靠决策守卫，只在网关授权成功后被调用 —— `agent/confirmation.ts` 在 `!auth.ok` 时先行返回，所以 `locked` 走不到这里。
 仓储读取：`getPendingAction(id)`（`pendingAction.ts:110-118`）返回含 `status` 的完整行；`getPendingActionOwnership`（`pendingAction.ts:288-296`）返回 `{ id, userId, sessionId, status }`，即守卫使用的投影。
 `listPendingActionsByTask(taskId, { statuses })`（`pendingAction.ts:144-156`）返回含 `status`/`nodeId` 的行；省略 `statuses` 会连终态行一起返回。
 `revokePendingActionsByTask(taskId, fromStatuses)`（`pendingAction.ts:169-179`）是盲目的 `updateMany`：传入终态会把终态改写（`locked` → `cancelled`），因此只允许传开放状态 —— 这就是 `REVOCABLE_ACTION_STATUSES`。
+
+## 控制面的异常面：无 catch，只有 finally
+
+`resumeTask`（`controls.ts:27-47`）与 `retryTask`（`controls.ts:49-69`）都是 `try { … } finally { … }`，**没有任何 catch**。
+`try` 里的语句分别是 `executor.runPlan(plan, buildPlanDeps(taskId, deps, undefined, { planToken: token }), { now: deps.now, explicitResume: true })` + `sweepCancelledPlan`（`:39-40`），以及 `lifecycle.retryPlan(...)` + `claimTaskStatus(taskId, ['running'], result.status)` + `sweepCancelledPlan`（`:60-63`）。
+`finally` 里是 `releaseTaskExecution(taskId, token)` + `settlePlanFromNodes(taskId)`（`:42-44`、`:65-66`），`finally` 自身也能拒绝，并且会**顶替**原始异常（先 `releaseTaskExecution`，后 `settlePlanFromNodes`）。
+因此任何拒绝都穿过本目录直达 `agent/index.ts` 的 `resumeTask`/`retryTask` 门面（`agent/index.ts:333-337`、`:347-351`，其间的 `synchronizeScheduledWorkflow` 同样未捕获），再由 `app/api/tasks/[id]/route.ts#POST` 的 `errorResponse` → `app/api/_lib/http.ts#mapAppError` 出网。
+
+`runPlan`/`retryPlan` 之前的每一个 await 都能拒绝，顺序即拒绝顺序：`loadOwnedTask`（`:28`/`:50` → `ownership.ts:9` `NOT_FOUND`、`:10`/`:12` `SECURITY_DENIED`）、`assertNoOpenManualReview`（`:29`/`:51`）、`assertParkedActionsNotTerminal`（`:33`/`:54` → `parked-actions.ts:74-76` 的 `MFA_LOCKED`/`CONFLICT`）、`claimTaskStatus`（`:34`/`:55`，以及 `:62`）、`claimTaskExecution`（`:36`/`:57`）、`clearStaleNodeClaims`（`:37`/`:58`，`claims.ts:22-27` 裸 Prisma `updateMany`）、`sweepCancelledPlan`（`cancellation.ts:69-76`；只有 `:72` 的 `SECURITY_DENIED` 抛出，单条撤销失败只汇总）、`settlePlanFromNodes`（`agent/task-fencing.ts:162-187`，含 `prisma.$transaction`）。
+planner 端口（计划/节点写、租约续期、`getTask` 读）在这些位置同样可拒绝，planner 不加 catch（见 `planner/CONTEXT.md`）。
+
+端口装配（`ports.ts:27-39`）：`runTool` 恒由调用方提供（必填，`contracts.ts:14`）；`onNodeUpdate` 在本目录两个控制入口里是默认空函数（`ports.ts:28`）；`isRunOwner` 仅在 `planToken` 存在时接线（`ports.ts:35`），`resumeTask`/`retryTask` 恒持有 token，所以恒接线；`persistPlan`/`persistNode`/`loadPlan` 恒由 `createTaskPersistence` 提供（`ports.ts:37`）；`controls` 恒为 `defaultPollControls`（`ports.ts:36`）。`pauseTask`/`cancelTask` 走 `mode: 'control'` + `UNUSED_RUN_TOOL`，无 `planToken`，所以没有 `isRunOwner`。
+
+`runTool` 端口自身不会把工具失败变成异常：`ports.ts:32-33` 只包一层 `withWorkflowExecutionClaim`（`execution-context.ts:13-15`，无 catch）后直调 `deps.runTool`；生产实现是 `agent/index.ts:308-325#taskRunToolFor` → `agent/confirmation/gated-execution.ts#executeGatedTool`，其一次性执行体整段在 `try/catch` 内折成 `{ ok: false, error, errorCode }`，且即便外层包装仍拒绝，`planner/executor.ts:504-509` 也会把端口拒绝折成 `failed` 节点。因此经 `runTool` 的拒绝到不了 HTTP；能到 HTTP 的是本目录自己那些未捕获的 await。
+
+## 占用竞争与前置守卫：什么抛错、什么只返回快照
+
+`assertNoOpenManualReview`（`lib/db/repositories/manualReview.ts:4-7`）读 `prisma.manualReview.findFirst({ taskId, status: 'open' })`，命中即抛 `AppError('CONFLICT')`（→ HTTP 409）。它定义在 `lib/`，`agent/` 内只有本目录 `controls.ts:29`（resume）与 `:51`（retry）调用它，位置在 `assertParkedActionsNotTerminal` 之前。
+`openManualReview`（`../manual-review.ts:153`）会把非 `failed` 的计划改成 `paused` 并留下 `status: 'open'` 的记录，所以「人工接管中的计划」恢复时会先被这个守卫拦下。
+占用竞争不是异常：`claimTaskStatus`（`lib/db/repositories/task.ts:140-157`）与 `claimTaskExecution`（`:179-185`）都是返回 `boolean` 的 CAS，输掉的一方 `return getTaskPlan(...)`（`controls.ts:34`、`:36`、`:55`、`:57`），HTTP 仍是 200 + 计划快照，绝不抛错。
+两条占用语句自身都带 `manualReviews: { none: { status: 'open' } }`（`task.ts:151`、`:201`），所以即使去掉前置守卫，开放人工核对也只会让占用失败（200 快照）；正是 `assertNoOpenManualReview` 把它变成 409。
+`planExecutionClaimHeld`（`claims.ts:29-32`）同样只返回布尔：`isRunOwner`（`ports.ts:35`）在占用被接管时让执行器停止并返回快照。
+`resumeTaskForAction` 在找不到计划或任务行不存在时返回 `undefined`（`action-continuation.ts:27-29`），在计划已 `cancelled` 时直接返回快照（`:30`），也不抛。
 
 ## 公开文案
 
@@ -100,6 +128,9 @@
 `runTool` 接缝由调用方（入口点/路由）提供，它们传入具体的银行工具调度器；本目录从不定义工具名。
 纯控制路径使用 `UNUSED_RUN_TOOL`，一旦尝试执行工具就抛错。
 租约语义在 `claims.ts`；卡与 `PendingAction` 的状态策略属于 `../action-status.ts`，不在本目录。
+`claimTaskStatus` 不在 `claims.ts`：它是 `lib/db/repositories/task.ts:140` 的计划状态 CAS；`claims.ts` 只导出节点/计划执行认领、陈旧判定与 `buildNodeClaimPorts`。
+`resumeTask`/`retryTask` 里可能抛 `AppError` 的只有三处：`loadOwnedTask`（`NOT_FOUND` / `SECURITY_DENIED`）、`assertNoOpenManualReview`（`CONFLICT`，`lib/db/repositories/manualReview.ts:6`，文案是手写中文业务句而非目录键）、`assertParkedActionsNotTerminal`（`MFA_LOCKED` / `CONFLICT`）；成功路径上 `agent/index.ts:333-351` 随后还会调 `synchronizeScheduledWorkflow`（可抛 `SECURITY_DENIED`，`agent/scheduled-dispatcher.ts:95`）。
+`claimTaskStatus` / `claimTaskExecution` / `claimNode` / `planExecutionClaimHeld` 只返回布尔、从不抛错：CAS 落败（`running` 的 CAS 还额外要求计划无开放人工核对，`lib/db/repositories/task.ts:151`）时控制直接 `getTaskPlan` 返回快照，HTTP 仍是 200；planner 的条件更新同样匹配 0 行不抛错（`planner/CONTEXT.md:94`），节点失败从不冒泡（`planner/executor.ts:506-509`）。
 恢复/重试的可达路径：用户触发的 `POST /api/tasks/[id]`（经 `agent/index.ts` 的 `resumeTask`/`retryTask`）、`agent/durable/workflow-resumption.ts`（`resumeOriginalRunTask` 对非 `paused`/`cancelled`/`success` 的计划调用 `resumeTask`）、独立图谱驱动，以及 `agent/confirmation/plan-continuation.ts` 的 `resumeOwningPlan`（走 `resumeTaskForAction`，不由守卫拦下，只接受网关已授权的结局）。
 读取路径 `GET /api/tasks/[id]` 附加暴露每个停靠节点的 `pendingActionStatus`（只读、不写状态），客户端据此区分开放决策与 `locked`。
 

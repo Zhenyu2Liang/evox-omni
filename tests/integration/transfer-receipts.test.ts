@@ -20,7 +20,7 @@
  *
  * Real app-entry layer: the REAL route handlers, the REAL confirmation/recovery continuation, the REAL
  * Banking SDK and the REAL test SQLite run in-process; the ONLY mocks are REAL fault injections
- * (`vi.spyOn(...).mockRejectedValueOnce`) that are asserted to have HIT before any outcome is checked.
+ * (`claimPendingAction` on the settlement CAS, `putExecutionReceipt`) that are asserted to have HIT.
  * Every assertion re-reads persisted DB state.
  */
 import { afterAll, afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -104,6 +104,31 @@ async function recover(id: string, sessionId: string) {
   return { http: res.status, body: await res.json() };
 }
 
+/**
+ * The REAL fault injection of the wedge: make the SETTLEMENT `prisma.$transaction` roll back, so the
+ * SDK side effect (debit + ledger row + receipt) has already committed while the action is left
+ * `confirmed` with `resultJson === null`. `agent/confirmation-recovery.ts#settlePendingAction` lands
+ * the terminal status through `claimPendingAction({ actionId, from: ['confirmed'], to: <decision> })`
+ * INSIDE that transaction, so throwing from exactly that CAS rolls the status + result + strict audit
+ * writes back as ONE unit.
+ *
+ * Only that CAS matches the filter: the gateway's authorization CAS is `to: 'confirmed'` and the
+ * post-settlement `recordActionResult` uses `from: RESULT_RECORDABLE_STATUSES`, so the debit/receipt
+ * transaction and the authorization CAS always reach the real writer.
+ */
+function wedgeLandedResultTransaction() {
+  const realClaim = pendingActionRepo.claimPendingAction;
+  let fired = 0;
+  const spy = vi.spyOn(pendingActionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+    if (input.to === 'executed' && input.from.includes('confirmed')) {
+      fired += 1;
+      throw new Error('review: settlement transaction unavailable after debit');
+    }
+    return realClaim(input, client);
+  });
+  return { spy, fired: () => fired, restore: () => spy.mockRestore() };
+}
+
 it('REVIEW_RECEIPT_WRITE_ROLLBACK: a failed receipt write rolls the debit + ledger row back atomically', async () => {
   const key = 'review-rollback-1';
 
@@ -141,7 +166,7 @@ it('REVIEW_SAME_IDENTITY_CONCURRENT_RECOVERY: two concurrent recoveries apply th
   const sessionId = (await getDemoSession(userId)).sessionId;
   const p = getTestPrisma();
 
-  // --- Build a STANDALONE ¥200 wedge: the SDK side effect commits, the result+status write rolls back.
+  // --- Build a STANDALONE ¥200 wedge: the SDK side effect commits, the settlement transaction rolls back.
   const gate = await executeGatedTool({
     sessionId,
     userId,
@@ -154,12 +179,10 @@ it('REVIEW_SAME_IDENTITY_CONCURRENT_RECOVERY: two concurrent recoveries apply th
   const id = gate.pendingActionId;
   expect(id).toBeTruthy();
 
-  const wedgeSpy = vi
-    .spyOn(pendingActionRepo, 'setPendingActionStatus')
-    .mockRejectedValueOnce(new Error('review: result write failed after debit'));
+  const fault = wedgeLandedResultTransaction();
   const wedged = await confirm(id!, sessionId);
-  expect(wedgeSpy).toHaveBeenCalledTimes(1); // the injection HIT the result+status transaction
-  wedgeSpy.mockRestore();
+  expect(fault.fired()).toBe(1); // the injection HIT the settlement transaction
+  fault.restore();
 
   const wedgedRow = await p.pendingAction.findUniqueOrThrow({ where: { id: id! } });
   expect(wedged.http).toBe(500);

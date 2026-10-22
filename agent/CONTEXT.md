@@ -10,7 +10,8 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 - `./turns/`: turn contracts, event grounding/buffering, authorization views, bounded prompts.
 - `./tools/`: banking tool implementations and the tool registry.
 - `./providers/`: live + mock provider/model adapters.
-- `./workflows/`: workflow control, the parked-action terminal guard (`parked-actions.ts`) and cancellation.
+- `./task-control.ts`: pure re-export facade over `./workflows/*` (`resumeTask`/`retryTask`/`pauseTask`/`cancelTask`, `getTaskPlan`, claims, persistence, `resumeTaskForAction`, `findTaskByPendingAction`); no logic of its own.
+- `./workflows/`: workflow control, the parked-action terminal guard (`parked-actions.ts`) and cancellation. Task-resume guards and claim-contention (200 vs 409/423) are documented there.
 - `./context-compaction/`: historical summaries and bounded model-request projection.
 - `./messages/`: presentation message catalogs.
 
@@ -33,6 +34,17 @@ The server-authored manual-only reply is the guidance vocabulary `card_managemen
 ## Public entry points
 
 `agent/index.ts` exposes turns, confirmation/verification/cancellation, task controls, manual handoff and scheduled dispatch. App routes use the server-configured demo user and persistent `demo:${userId}` workspace before calling it. The web demo has no login or authentication cookie. Generic internal sessions remain available for runtime tests and bank ownership contracts; they cannot be selected through the web API. Tests can inject a `ModelRuntime` through `RunTurnDeps.provider` while exercising the real runtime and bank.
+
+## Task control surface (`POST /api/tasks/[id]`)
+
+`index.ts:333-337` (`resumeTask`), `:347-351` (`retryTask`), `:328-330` (`pauseTask`) and `:340-344` (`cancelTask`) are the ONLY task-control entries the HTTP control endpoint reaches (`app/api/_lib/agent-bridge.ts` `CONTROL_FNS`); `rollbackTask` is defined in `task-rollback.ts:10` and re-exported at `index.ts:7`.
+They are thin `(sessionId: string, taskId: string): Promise<TaskPlan>` wrappers over `./task-control`, which only re-exports: the implementations are `workflows/controls.ts:19` (`pauseTask`), `:27` (`resumeTask`), `:49` (`retryTask`) and `workflows/cancellation.ts:78` (`cancelTask`); `resumeTask`/`retryTask` additionally need a `deps: TaskControlDeps` (`workflows/contracts.ts:14`), which the facade supplies as `taskRunToolFor` (`index.ts:308-325`).
+Resume/retry/cancel `await synchronizeScheduledWorkflow(taskId)` AFTER the plan settles, with no `try`/`catch`, so a dispatcher-identity mismatch surfaces from the control call (`scheduled-dispatcher.ts:95` → `SECURITY_DENIED`).
+None of the five ever resolves `undefined`: every lost-claim or early path returns a snapshot (`controls.ts:34,36,46,55,57,68`, `cancellation.ts:80,94`, `task-rollback.ts:65`). `app/api/_lib/agent-bridge.ts:44-47` types its `TaskControlFn` as `Promise<TaskPlan | undefined>`, which is wider than the implementations, so `route.ts:87-89`'s `TOOL_FAILED` "no plan" branch is unreachable for these five.
+`resumeTask`/`retryTask` throw, in order: `NOT_FOUND`/`SECURITY_DENIED` (`workflows/ownership.ts:9,10,12`), `CONFLICT` for an open manual review (`lib/db/repositories/manualReview.ts:6`), `MFA_LOCKED`/`CONFLICT` for a terminal parked action (`workflows/parked-actions.ts:74,75,76`), plus `VALIDATION` cycle detection inside the planner (`planner/dag.ts:248`); HTTP 409 is therefore reachable for `{ action: 'resume' }`.
+`runTool` failures are absorbed by the planner (`planner/executor.ts:504-509`) into a failed node, so `taskRunToolFor`'s `SECURITY_DENIED` (`index.ts:313`) and any gateway refusal never reach the HTTP status mapping.
+`recoverAction` (`:168-276`) is not a control entry: it converts an internal `resumeTask` rejection into `{ ok:false, ... }` (`:229-249`), so it never surfaces a 409.
+`resumeOwningPlan`/`resumeTaskForAction` (confirmation continuation) and `authorization-resume.ts` are gateway/durable-path only — not reachable from the task-control endpoint.
 
 ## Execution contracts
 

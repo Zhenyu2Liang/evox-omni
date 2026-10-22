@@ -38,7 +38,7 @@ selectable browser identities.
 | `GET /api/actions` | Read surfaced decisions, processing/recoverable operations and reconciliation entries | Pending action repository and agent classification |
 | `POST /api/actions/[id]/{confirm,verify,cancel,recover}` | Owned action decision/recovery; verification receives a code; a `locked` row is refused without any write | Agent decision/authorization/recovery contracts and `_lib/locked-action` |
 | `GET /api/tasks`, `GET /api/tasks/[id]` | Persisted plans and node state, including pending action identifiers and each parked action's current status (`pendingActionStatus`) | Task repository, pure `_lib/task-plans` mapping and `_lib/task-pending-actions` |
-| `POST /api/tasks/[id]` | Pause, resume, cancel or retry an owned plan | Agent task controls |
+| `POST /api/tasks/[id]` | Body `{ action }` — `pause`/`resume`/`cancel`/`retry`/`rollback` of an owned plan; refusals are HTTP error envelopes (`423` `MFA_LOCKED`, `409` `CONFLICT`, `403`, `404`, `400`), never a `200 { ok:false }` | Agent task controls |
 | `GET /api/activity` | Closed business history projection scoped to the fixed workspace | Operation history read model |
 | `GET /api/audit` | Developer preference required before validated filters; scoped technical entries and summary | Audit read models |
 | `GET /api/security` | Public projection of the security events (`events` and `status.recentEvents`, see below), lock state, failure count, a typed `lock` reason while the breaker is open and the session's terminal `lockedActions` | Audit and security read models plus `_lib/public-security-event` |
@@ -99,6 +99,13 @@ JSON success uses `{ ok: true, data }`; failure uses `{ ok: false, error: { code
 `_lib/http.ts` owns the status map. Domain refusal or wrong MFA can be a normal HTTP 200 response
 with `data.ok === false`; the envelope does not imply that money moved. Raw exceptions, stack traces,
 database errors, passwords and verification codes must not be exposed.
+
+Every handler is ONE blanket `try { … } catch (e) { return errorResponse(e); }` (`tasks/[id]/route.ts:66-67,91-92`, `tasks/route.ts:62-64`, `security/reset/route.ts:97-98`), so no route picks statuses itself.
+`_lib/http.ts:19-31` `STATUS_BY_CODE` is the only `AppError` → HTTP mapping: VALIDATION 400, NOT_FOUND 404, SECURITY_DENIED 403, MFA_FAILED 403, CIRCUIT_OPEN 423, MFA_LOCKED 423, INSUFFICIENT_FUNDS 422, LIMIT_EXCEEDED 422, CONFLICT 409, TOOL_FAILED 502, INTERNAL 500.
+`mapAppError` (`:50-54`) sends every non-`AppError` throw through `AppError.from` (`lib/errors.ts:24`) to `INTERNAL`, so an unknown error — and any code absent from the map (`?? 500`) — becomes `500` with the generic `Internal error` message; nothing bubbles to a framework 500.
+The PRE-checks throw too, not just the delegated domain call: `requireIdentity` (`_lib/session.ts:23-25`) upserts and re-reads the demo session via `getDemoSession` (`agent/session.ts:150-158`), which throws a plain `Error` (→ 500) when the row belongs to another user or cannot be re-read; `parseBody` (`_lib/http.ts:71-83`) throws `VALIDATION` on malformed JSON or a schema mismatch; `getTask` either returns `null` (routes turn it into `404`) or lets a driver error become a `500`.
+`POST /api/tasks/[id]` therefore answers a control refusal as an HTTP failure, never as `200 { ok:false }`: it delegates to `resolveTaskControl(action)(sessionId, id)` (`_lib/agent-bridge.ts:59-82`, static `@/agent` imports, `TOOL_FAILED` when an action has no implementation) and the agent node's `AppError`s surface as the mapped status (`NOT_FOUND`/`SECURITY_DENIED` from `agent/workflows/ownership.ts:9-12`, `CONFLICT` from `lib/db/repositories/manualReview.ts:6`, `MFA_LOCKED`/`CONFLICT` from `agent/workflows/parked-actions.ts:74-76`, `CONFLICT` from `agent/task-rollback.ts:18-20`).
+Its `TOOL_FAILED` fallback for a falsy plan (`tasks/[id]/route.ts:87-89`) is currently unreachable: every wired `@/agent` control returns a `TaskPlan`.
 
 Chat SSE emits one `data: <JSON>` frame per grounded `AgentStreamEvent` and exactly one final `done`.
 The route supplies an awaited `RunTurnDeps.onEvent` sink: runtime events are persisted before they
@@ -182,9 +189,23 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - `app/` never writes `PendingAction.status`: every hit is a comparison or read (`app/agent/history.ts:26`,
   `app/agent/plan-history.ts:24`). No retry/recover/claim/liveness endpoint here can reopen a `'locked'`
   row; all status mutation lives in `@/agent`, `@/security` and `lib/db/repositories/pendingAction.ts`.
-- `POST /api/tasks/[id]` forwards control actions to `agent/workflows/controls.ts`, whose `RESUMABLE` set still includes `waiting_confirmation`, so `resume`/`retry` can restart a plan whose parked `PendingAction` is `locked`. This edge only REPORTS the lock (`pendingActionStatus`) and does not veto the control; the gate belongs in `agent/`.
+- `POST /api/tasks/[id]` forwards control actions to `agent/workflows/controls.ts`, whose `RESUMABLE` set still includes `waiting_confirmation` (`:16`); the VETO of a settled parked decision lives in `agent/`, where `resume`/`retry` call `assertParkedActionsNotTerminal` (`controls.ts:33,54` → `agent/workflows/parked-actions.ts:63-77`) BEFORE any status claim, throwing `MFA_LOCKED` for a `locked` row and `CONFLICT` for `needs_reconciliation` or any other terminal status. This edge maps those to `423`/`409` and only REPORTS a parked lock on reads (`pendingActionStatus`); it holds no veto of its own. `pause`/`cancel`/`rollback` never consult parked actions.
 - `components/` and `channels/` do not yet read `pendingActionStatus`, `lock` or `lockedActions`; all three are additive and optional, so existing consumers keep working unchanged.
 - `DECISION_STATUSES` (`actions/route.ts:58`) is declared but never referenced: the surfacing filter is `attentionFor` (`:77-92`) alone, and `listPendingActions({ sessionId })` (`:130`) applies NO database status filter — it pages the session's newest 100 rows (`lib/db/repositories/pendingAction.ts:84,120-136`) and the route drops non-attention rows in memory.
+
+## Task-control error surface (`POST /api/tasks/[id]`)
+
+`tasks/[id]/route.ts#POST` (`:71-94`) wraps its whole body in one `try` and answers its single `catch` with `errorResponse(e)` (`:91-93`); it never throws out of the handler.
+The envelope is therefore owned entirely by `_lib/http.ts#mapAppError` (`:50-54`), whose body is literally `fail({ code, message })` = `{ ok: false, error: { code, message } }` (`:39-41`) — no top-level `code`/`message`, no `data`, no `detail`.
+`AppError.detail` and `AppError.publicMessage` never reach the body; `mapAppError` reads only `code` and `message`.
+`INTERNAL` is the only rewritten pair: the message becomes the fixed `'Internal error'` (`:52`), so a bare `Error`/non-`AppError` throw (`lib/errors.ts:24`, `AppError.from`) cannot leak exception or Prisma text; its code is kept as `INTERNAL` (nothing is remapped to another code).
+The status map lives ONLY here (`http.ts:19-31`, a frozen `Record<ErrorCode, number>`, `?? 500` fallback); `lib/errors.ts` carries no `status` field and no mapping.
+Relevant entries: `VALIDATION 400`, `NOT_FOUND 404`, `SECURITY_DENIED`/`MFA_FAILED 403`, `CONFLICT 409`, `CIRCUIT_OPEN`/`MFA_LOCKED 423`, `INSUFFICIENT_FUNDS`/`LIMIT_EXCEEDED 422`, `TOOL_FAILED 502`, `INTERNAL 500`.
+No `409` literal and no `CONFLICT` throw exists under `app/api` outside the chat routes (`chat/route.ts:71`, `chat/history/route.ts:26`, `developer/chat/reset/route.ts:18`), and `_lib/session.ts` has no workspace-mismatch branch (identity is derived from config, never asserted), so a `409` for `{ action: 'resume' }` can only originate downstream as an `AppError('CONFLICT')` thrown by the agent layer and mapped here.
+`route.ts:87-89`'s `TOOL_FAILED` `任务控制未返回计划。` is unreachable in practice: every `@/agent` control fn declares `Promise<TaskPlan>` and never resolves `undefined`, so `TaskControlFn`'s `| undefined` (`agent-bridge.ts:44-47`) is a type-level widening only.
+`resolveTaskControl` (`agent-bridge.ts:73-82`) is a plain `CONTROL_FNS` (`:59-65`) record lookup; its `TOOL_FAILED` guard can only fire for an action absent from that map, which the zod enum (`route.ts:44-46`) excludes.
+`taskControlSchema` accepts FIVE actions (`pause`/`resume`/`cancel`/`retry`/`rollback`) although the file header comment names four.
+Success returns the control fn's plan snapshot as `200 { ok: true, data: TaskPlan }` (`route.ts:90`) with no re-read; a thrown error yields the failure envelope instead, never a partial plan.
 
 Developer documentation lives in `docs/cn`; this context records AI-facing module boundaries.
 HTTP fixtures use the configured demo workspace. Cookie/query forgery fixtures verify that browser
