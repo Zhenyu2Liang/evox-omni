@@ -1,5 +1,7 @@
 import type { TaskPlan, TaskPlanStatus } from '@/lib/contracts/task';
+import type { PlanDeps, PlanNodeResult } from '@/planner';
 import { executor, lifecycle } from '@/planner';
+import { demoNow } from '@/lib/clock';
 import { newId } from '@/lib/ids';
 import { claimTaskExecution, claimTaskStatus, releaseTaskExecution } from '@/lib/db/repositories/task';
 import { assertNoOpenManualReview } from '@/lib/db/repositories/manualReview';
@@ -8,13 +10,58 @@ import { toTaskPlan } from './persistence';
 import { getTaskPlan, loadOwnedTask } from './ownership';
 import { buildPlanDeps, UNUSED_RUN_TOOL } from './ports';
 import { sweepCancelledPlan } from './cancellation';
-import { assertParkedActionsNotTerminal } from './parked-actions';
+import { assertParkedActionsNotTerminal, sealedParkedNodes, type SealedParkedNode } from './parked-actions';
 import type { TaskControlDeps, TaskControlOptions } from './contracts';
 import { settlePlanFromNodes } from '../task-fencing';
 
 const PAUSABLE: TaskPlanStatus[] = ['pending', 'running', 'paused', 'waiting_confirmation'];
 const RESUMABLE: TaskPlanStatus[] = ['running', 'paused', 'waiting_confirmation', 'pending', 'failed'];
 const RETRYABLE: TaskPlanStatus[] = ['pending', 'paused', 'waiting_confirmation', 'failed'];
+
+/**
+ * A sealed node's recorded output WITHOUT the now-dead `pendingActionId`: nothing else is dropped, and
+ * an output that carried nothing else becomes absent, so the node can never be re-read as parked.
+ */
+function withoutPendingActionId(output: unknown): Record<string, unknown> | undefined {
+  if (output === null || typeof output !== 'object' || Array.isArray(output)) return undefined;
+  const rest: Record<string, unknown> = { ...(output as Record<string, unknown>) };
+  delete rest.pendingActionId;
+  return Object.keys(rest).length === 0 ? undefined : rest;
+}
+
+/**
+ * SEAL every node whose parked decision is already settled: record it `failed` with catalog text and
+ * drop the dead `pendingActionId`, so the executor sees a TERMINAL node (no tool call, no new pending
+ * action, no verification entry) while the plan's remaining nodes keep advancing.
+ *
+ * The write goes through the EXISTING node-persistence port of the same leased plan run, so it is
+ * fenced by this run's execution token and cannot clobber a terminally settled row.
+ */
+async function sealSettledNodes(
+  plan: TaskPlan,
+  sealed: readonly SealedParkedNode[],
+  deps: TaskControlDeps,
+  persistNode: PlanDeps['persistNode'],
+): Promise<TaskPlan> {
+  const byNode = new Map(sealed.map(entry => [entry.nodeId, entry]));
+  const endedAt = (deps.now ?? demoNow)();
+  const results: PlanNodeResult[] = plan.results.map(result => {
+    const seal = byNode.get(result.id);
+    if (seal === undefined) return result;
+    return {
+      ...result,
+      status: 'failed',
+      output: withoutPendingActionId(result.output),
+      error: seal.error,
+      endedAt,
+    };
+  });
+  for (const result of results) {
+    if (!byNode.has(result.id)) continue;
+    await persistNode?.(plan.id, result);
+  }
+  return { ...plan, results };
+}
 
 export async function pauseTask(sessionId: string, taskId: string, options: TaskControlOptions = {}): Promise<TaskPlan> {
   const row = await loadOwnedTask(sessionId, taskId);
@@ -28,15 +75,19 @@ export async function resumeTask(sessionId: string, taskId: string, deps: TaskCo
   const row = await loadOwnedTask(sessionId, taskId);
   await assertNoOpenManualReview(taskId);
   const plan = toTaskPlan(row);
-  // A settled (above all `locked`) parked decision must never be re-activated: refuse BEFORE any
-  // status is claimed, so the persisted plan status stays exactly as it was.
-  await assertParkedActionsNotTerminal(plan);
+  // A settled (above all `locked`) parked decision is SEALED, never resurrected. The lookup is the
+  // read-only query from `./parked-actions`, taken BEFORE any claim; the node is then recorded terminal
+  // instead of being driven again. A plan whose every node is sealed simply returns with nothing left
+  // to advance — that is a normal return, not a refusal.
+  const sealed = await sealedParkedNodes(plan);
   if (!(await claimTaskStatus(taskId, RESUMABLE, 'running'))) return getTaskPlan(sessionId, taskId);
   const token = newId('taskclaim');
   if (!(await claimTaskExecution(taskId, token, { staleBefore: staleExecutionClaimBefore() }))) return getTaskPlan(sessionId, taskId);
   await clearStaleNodeClaims(taskId, token);
+  const planDeps = buildPlanDeps(taskId, deps, undefined, { planToken: token });
   try {
-    await executor.runPlan(plan, buildPlanDeps(taskId, deps, undefined, { planToken: token }), { now: deps.now, explicitResume: true });
+    const resumable = sealed.length === 0 ? plan : await sealSettledNodes(plan, sealed, deps, planDeps.persistNode);
+    await executor.runPlan(resumable, planDeps, { now: deps.now, explicitResume: true });
     await sweepCancelledPlan(sessionId, taskId);
   } finally {
     await releaseTaskExecution(taskId, token);
@@ -50,7 +101,8 @@ export async function retryTask(sessionId: string, taskId: string, deps: TaskCon
   const row = await loadOwnedTask(sessionId, taskId);
   await assertNoOpenManualReview(taskId);
   const plan = toTaskPlan(row);
-  // Same terminal fence as `resumeTask`: a settled parked decision is never retried into life.
+  // An explicit retry keeps the STRUCTURED refusal: a settled parked decision must never be reset to
+  // `pending` and re-driven, so it is refused BEFORE any status or lease is claimed.
   await assertParkedActionsNotTerminal(plan);
   if (!(await claimTaskStatus(taskId, RETRYABLE, 'running'))) return getTaskPlan(sessionId, taskId);
   const token = newId('taskclaim');

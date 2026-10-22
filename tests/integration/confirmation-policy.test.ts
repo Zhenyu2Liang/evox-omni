@@ -143,9 +143,18 @@ it.each(['CONFLICT', 'CIRCUIT_OPEN'] as const)('a stale recovery uses the commit
 
 it('recovery still rejects a duplicate audit with a different business result', async () => {
   const p = getTestPrisma(); const action = await park('2000');
-  const fault = vi.spyOn(actionRepo, 'setPendingActionStatus').mockRejectedValueOnce(new Error('landing unavailable'));
+  // REAL fault injection at the settlement write funnel: the TERMINAL compare-and-set inside
+  // `settlePendingAction`'s `prisma.$transaction` rejects, so the status+result+audit write rolls back
+  // while the already-committed debit, its `exec:` audit and the execution receipt remain. The
+  // parameter filter matters: the same CAS also gates the gateway's `pending`→`confirmed`
+  // authorization, which must still run (an unfiltered fault would strike BEFORE the side effect).
+  const claim = actionRepo.claimPendingAction; let injected = 0;
+  const fault = vi.spyOn(actionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+    if (input.to === 'executed') { injected++; throw new Error('landing unavailable'); }
+    return claim(input, client);
+  });
   expect((await call(verifyPost, action.id, action.sessionId, { code: '123456' })).http).toBe(500);
-  fault.mockRestore();
+  expect(injected).toBe(1); fault.mockRestore();
   const audit = await p.auditLog.findUniqueOrThrow({ where: { dedupeKey: `exec:${action.id}` } });
   const wrong = JSON.parse(audit.toolResult!); wrong.data.amount = 999;
   await p.auditLog.update({ where: { id: audit.id }, data: { toolResult: JSON.stringify(wrong) } });

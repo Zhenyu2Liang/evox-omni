@@ -48,6 +48,13 @@ export interface GatedToolOutcome {
   errorCode?: import('@/lib/errors').ErrorCode;
   requiresConfirmation?: boolean;
   pendingActionId?: string;
+  /**
+   * Structured refusal facts, normalized by `planner/failure.ts#toPlanFailure` from the gateway's own
+   * `SecurityFailure` — code plus the reason/attempts it ACTUALLY reported (never invented from text).
+   */
+  failure?: import('@/planner/failure').PlanFailure;
+  /** PERSISTED status of the `PendingAction` behind this outcome; absent when the node has none. */
+  actionStatus?: PendingActionStatus;
 }
 
 export interface TrustedIdentity {

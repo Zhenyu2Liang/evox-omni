@@ -76,11 +76,36 @@ async function parkTransfer(sessionId: string, amount: string): Promise<string> 
   return id!;
 }
 
-/** The REAL fault injection: the NEXT result+status transaction genuinely rolls back. */
-function wedgeResultTransaction() {
-  return vi
-    .spyOn(pendingActionRepo, 'setPendingActionStatus')
-    .mockRejectedValueOnce(new Error('review: result transaction failed'));
+/**
+ * The REAL fault injection: the result+status transaction genuinely rolls back.
+ *
+ * The ONE terminal write of the settle funnel (`agent/confirmation/authorized-execution.ts` →
+ * `agent/confirmation-recovery.ts#settlePendingAction`) is the CAS
+ * `claimPendingAction({ actionId, from, to }, tx)` issued INSIDE that `prisma.$transaction`:
+ * throwing there aborts the transaction, so the persisted result, the terminal status and the
+ * strict execution audit roll back as ONE unit while the already-committed SDK side effect (plus
+ * the execution audit written by the transfer's own commit) survive.
+ *
+ * `claimPendingAction` is ALSO the gateway authorization CAS (`pending|awaiting_mfa → confirmed`)
+ * and `recordActionResult`'s late CAS over `RESULT_RECORDABLE_STATUSES`, so the fault is filtered
+ * to THIS action's `confirmed → executed` settlement transition and fires ONCE; every other call
+ * delegates to the saved original writer.
+ *
+ * NOTE: `updatePendingActionStatus` / `setPendingActionStatus` are still exported by
+ * `lib/db/repositories/pendingAction.ts`, but NO production module calls them — a spy installed
+ * there never fires and never wedges the settle.
+ */
+function wedgeResultTransaction(actionId: string) {
+  const realClaim = pendingActionRepo.claimPendingAction;
+  let fired = 0;
+  const spy = vi.spyOn(pendingActionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+    if (input.actionId === actionId && input.to === 'executed' && input.from.includes('confirmed') && fired === 0) {
+      fired += 1;
+      throw new Error('review: result transaction failed');
+    }
+    return realClaim(input, client);
+  });
+  return { spy, fired: () => fired, restore: () => spy.mockRestore() };
 }
 
 /**
@@ -177,12 +202,13 @@ it('repairs an audit-storage deletion from a current committed receipt without a
   const p = getTestPrisma();
   const id = await parkTransfer(s, '200.00');
 
-  // Build the committed WEDGE: the SDK side effect commits, but the result+status transaction
-  // genuinely rolls back — so NO execution audit row is ever written for this action.
-  const wedge = wedgeResultTransaction();
+  // Build the committed WEDGE: the SDK side effect (debit, ledger, receipt and the transfer's own
+  // execution audit) commits, but the result+status settle transaction genuinely rolls back — the
+  // row is left `confirmed` with `resultJson === null`.
+  const wedge = wedgeResultTransaction(id);
   const first = await confirm(id, s);
-  expect(wedge.mock.calls.length).toBe(1); // the injection HIT the result transaction
-  wedge.mockRestore();
+  expect(wedge.fired()).toBe(1); // the injection HIT the settle transaction
+  wedge.restore();
 
   const wedged = await p.pendingAction.findUniqueOrThrow({ where: { id } });
   expect(first.status).toBe(500);
@@ -244,10 +270,11 @@ it('a repeat recovery is idempotent — exactly ONE execution audit and ONE debi
   const p = getTestPrisma();
   const id = await parkTransfer(s, '200.00');
 
-  const wedge = wedgeResultTransaction();
+  const wedge = wedgeResultTransaction(id);
   const first = await confirm(id, s);
-  expect(wedge.mock.calls.length).toBe(1); // the injection HIT the target
-  wedge.mockRestore();
+  expect(wedge.fired()).toBe(1); // the injection HIT the settle transaction
+  wedge.restore();
+  expect(first.status).toBe(500); // the settle was the faulted transaction
 
   // Recovery #1 — the legitimate settlement of the wedge.
   const rec1 = await recover(id, s);
