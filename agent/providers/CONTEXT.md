@@ -137,6 +137,17 @@ points remain tests/e2e/acceptance.e2e.ts (mock) and live-acceptance.e2e.ts (rea
 requires local credentials). Both use isolated databases. Historical live reports
 refer to their recorded baseline, not automatically to the current Pi version.
 
+## Blocked-outcome narration (gateway block marker)
+
+`mock/narration.ts:12` (`raw.includes('__SECURITY_BLOCK__')`) is the ONLY occurrence of that literal in `agent/providers/`.
+The marker is a DETECTION guard there, never emitted: `agent/providers/` contains no `BLOCK_REASON_PREFIX` and no `decisionKind` literal, and never imports the constant (defined in `security/security-gateway.ts:78`).
+`narrate` reads only the FIRST content part (`contentToText(result.content.slice(0, 1))`, `mock/narration.ts:11`). All three blocked branches return canned text and never interpolate `raw`, so a marker-carrying result can never reach assistant prose; the `raw`-interpolating branches (`:31` isError, `:33` success lead) are unreachable once the marker is present.
+Branch order after `blocked`: (1) `/require_mfa|验证码|\bMFA\b|等待验证|需进行安全验证/i` → `messages.operationPrepared` = `已准备好{operation}。`; (2) `/deny|熔断|锁定/i` → `当前会话已触发安全熔断，高风险操作已被锁定（${label} 未执行）。请前往安全中心解除限制后再试。`; (3) otherwise `已准备好{operation}。`
+The gateway's deny payload is exactly `__SECURITY_BLOCK__{"decisionKind":"deny"}` (`security/security-gateway.ts:1182` for a locked session, `:1214` for a cancelled owning plan), so the deny path matches branch 2 ONLY through the word `deny` inside the JSON payload and narrates the 熔断/锁定 text. Changing that payload's wording would silently re-route mock narration to branch 3.
+The marker reaches `narrate` as the Pi tool result reason (`agent/banking-agent.ts:324`: `{ block: true, reason: auth.blockReason ?? auth.decision.message }`), i.e. it IS model-facing text in both mock and live mode; masking happens only in this mock narration and nowhere else in this node.
+`narrateConversationHistory` (`mock/history.ts:20-27`) quotes only matches whose `role === 'user'`, so it cannot re-quote a tool-result marker.
+`toolLabels` (`mock/narration.ts:65-76`) and `narrationLeads` (`:36-63`) have no `consume_virtual_card` entry, so a blocked card spend falls back to the raw English tool name in `{operation}` (branch 1/3) or to `操作已完成：` (success lead).
+
 ## Mock intent and safety constraints
 
 The mock provider reads current tool declarations through Pi getCurrentTools(messages), including
