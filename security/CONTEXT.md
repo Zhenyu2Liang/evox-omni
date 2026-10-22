@@ -88,6 +88,8 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 `handleToolCall` 的 `plan_cancelled` 分支（`:1209-1216`）产出同一条无 `actionId` 的 deny 串。
 `parseBlockReason`（`:708-729`）要求 `actionId` 是非空字符串（`:725`），因此上面两条无 `actionId` 的串解析结果为 `null`；消费方（如 `agent/turns/events.ts`）拿到 `null` 会走非阻断分支，而原始串本身是可直接泄漏给用户的内部标记。
 校验失败（`VALIDATION`，`:1189-1193`）与转账收款人不唯一（`clarify`，`:1198-1205`）这两种 deny 的 `blockReason` 是**纯中文消息**，不带前缀。
+无 `actionId` 的 deny 串本身是可直接展示的内部标记：`agent/confirmation/gated-execution.ts:66` 把它放进 `GatedToolOutcome.error`，`agent/turns/buffer.ts:118` 复制进 `ToolEventView.summary`（`ok:false` → `status:'error'`），前端 `lib/tool-feedback.ts#publicToolSummary` 的 `error` 分支认不出它，落到兜底 `chat.error.toolFailed`（「操作未完成。请核对原操作卡片和账户记录。」）。
+本层三句锁定拒绝语里只有 `:849` 被 `lib/tool-feedback.ts` 的 `PUBLIC_BUSINESS_ERRORS` 精确登记（→ `chat.error.securityLocked`）；`:424`（`gatewayDecide` deny）与 `:785`（`lockedOutcome`）未登记，因此同样渲染为 `chat.error.toolFailed` 兜底。
 MFA 三次错误路径（`authorizeWithMfa`，`:838-853`）返回的 `message` 只有中文提示（「验证码错误次数过多…」），不含前缀；该路径不产出 block reason 串。
 
 `injection-guard.ts` 检测可疑指令。
