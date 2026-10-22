@@ -99,7 +99,7 @@ mock 夹具播种 `card_credit`/`card_debit`，演示种子（`prisma/seed.ts`�
 
 ## 终止锁定（locked）结果的覆盖边界
 
-MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按两套入口分别覆盖：
+MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按入口分别覆盖：
 
 | 入口 | HTTP | 断言位置 |
 | --- | --- | --- |
