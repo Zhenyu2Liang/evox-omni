@@ -57,7 +57,7 @@
 `confirmAction(agent, actionId)`（`scenario.ts:577`）、`verifyAction(agent, actionId, code)`（`scenario.ts:582`）、
 `cancelAction(agent, actionId)`（`scenario.ts:591`）、`newSessionId(prefix = 'sess')`（`scenario.ts:619`）、
 `collectEvents(agent)`（`scenario.ts:624`）、`toolEventsOf(res, toolName)`（`scenario.ts:631`）、
-`cardsOfType(res, type)`（`scenario.ts:616`），以及类型 `ScenarioResult`（`scenario.ts:56`）、`RunTurnInput`（`scenario.ts:76`）。
+`cardsOfType(res, type)`（`scenario.ts:635`），以及类型 `ScenarioResult`（`scenario.ts:57`）、`RunTurnInput`（`scenario.ts:77`）。
 `ScenarioResult` 字段：`sessionId`/`events`/`text`/`toolEvents`/`cards`，可选 `confirmation`/`mfa`/`plan`/`error`。
 决策面直接调 `security.gateway.securityGateway.authorizeAction`（`scenario.ts:495`），非 ok（`awaiting_mfa`/`locked`）时返回
 `{events: [], text: auth.message, ...}` 且不执行（`scenario.ts:508`）；决策失败因此没有事件，只有 `text`。
