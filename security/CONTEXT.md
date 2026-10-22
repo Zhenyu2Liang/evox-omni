@@ -100,6 +100,14 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 本层对挑战的其它写操作只改 `status`/`consumedAt`（`mfa.ts:202`、`mfa.ts:234`、`manual-card-management.ts:201`、`:222`），不触碰 `expiresAt`。
 `circuit-breaker.ts:298-300` 的解锁续期 `renewLockedMfaChallenges` 在仓储层，自带硬编码 5 分钟 TTL，不读 `MFA_CHALLENGE_TTL_MS`；仓储层 `createMfaChallenge` 的默认值同样硬编码，因此改常量不会自动传导。
 
+RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:758` 在 `PendingAction` 落库（`status='awaiting_mfa'`，`:716`）之后执行 `if (ev.requiresMfa) await issueChallenge(created.row.id)`。
+不建挑战的挂起分支：`clarify`（`:621-623`）、`plan_cancelled`（`:755`）、复用同一计划节点的既有行（`:638-639`，沿用原挑战）。
+首次提交验证码时挑战通常已存在且有效，`authorizeWithMfa` 只在 `expiresAt` 缺失/已过或 `commandDigest` 变化时才 `issueChallenge` 重签（`:902-905`）；因此当次提交不被 `verify`，而是返回 `awaiting_mfa` 的提示态（`:907-919`）。
+`manual-card-management.ts` 同样在 `proposeCardChange`（`:134`）与 `verifyCardChange`（`:162`）调用 `issueChallenge`，不自行写 `expiresAt`。
+本层不导出除 `issueChallenge` 之外的挑战创建入口：`mfa.ts` 仅导出 `MFA_CHALLENGE_TTL_MS`、`issueChallenge`、`verify`、`getChallenge`（视图类型另计）。
+`step-up-authenticator.ts#issue` 只返回演示验证码，不写库。
+`PendingAction` 无 `expiresAt` 列（只有执行租约 `executionLeaseExpiresAt`）；验证码有效期唯一来源是 `MfaChallenge.expiresAt`，测试构造过期即直接改该行。
+
 ## 手工卡片管理（manual-card-management.ts）
 
 `locked` 一律终态拒绝：`verifyCardChange` 与 `cancelCardChange` 先调 `assertNotTerminallyLocked`，在读取收据、签发挑战、消费尝试或写库之前抛出带 `SecurityFailure` 的 `MFA_LOCKED`。
