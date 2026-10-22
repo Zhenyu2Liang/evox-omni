@@ -12,12 +12,15 @@
 
 目录名称不表示所有测试都无需数据库。
 
-根部两个 `weixin-*.test.ts` 不连库、不调模型：
-`weixin-presentation.test.ts` 断言卡片/事件渲染，`weixin-channel.test.ts` 断言 bridge 的受信边界、命令流、去重与 `locked` 对外文案。
+根部三个 `weixin-*.test.ts` 不连库、不调模型：
+`weixin-presentation.test.ts` 断言卡片/事件渲染，`weixin-channel.test.ts` 断言 bridge 的受信边界、命令流、去重与 `locked` 对外文案；
+`weixin-lock-presentation.test.ts` 专测「终止锁定」的上屏边界：`locked` 结果的四段全文（次数用完 / 熔断 / 解锁后仍锁 / 缺 `code`+`failure` 兜底）、`继续验证：/验证 <id>` 只属 `awaiting_mfa`、`security_event{kind:'locked'}` 撤销 gate 且不可复活、其他 `kind` 静默、`emptyNotice:false`、内部诊断不外泄、`label()` 未知值兜底、锁定卡去重。
 覆盖清单与缺口见 [../CONTEXT.md](../CONTEXT.md) 的「微信通道覆盖」。
-两个文件的假对象工厂可直接复用：`weixin-presentation.test.ts#setup()`（第 87 行）返回 `{ state: emptyState(), bank }`，`bank` 由 8 个 `vi.fn()` 字面量实现 `BankingChannel`，渲染函数直接吃手写 `ChatCard`/`AgentStreamEvent` 字面量；
+三个文件的假对象工厂可直接复用：`weixin-presentation.test.ts#setup()`（第 87 行）返回 `{ state: emptyState(), bank }`，`bank` 由 8 个 `vi.fn()` 字面量实现 `BankingChannel`，渲染函数直接吃手写 `ChatCard`/`AgentStreamEvent` 字面量；
 `weixin-channel.test.ts#fixture()`（第 16 行）另建 `WeixinBridge(state, bank, sender, save)` 与 `message(text, id)` 消息工厂，`sender` 只需 `send(to, text, clientId, contextToken)`，`save` 为空 `vi.fn()`，无 `WeixinStore` 替身（store 用例用真实临时目录）。
-回复断言惯用 `sender.send.mock.calls.at(-1)?.[1]` 取文本后 `toContain`/`not.toContain`。
+`weixin-lock-presentation.test.ts#fakeChannel(outcome)` 把同一个 `ActionResult` 塞进 `settle`，配 `message(text, id)`、`lastReply(sender)` 与 `lockedText(reason)` 模板；
+参数化用例按 `outcome` 各建一个 channel，避免投递去重干扰。
+回复断言惯用 `sender.send.mock.calls.at(-1)?.[1]` 取文本后 `toContain`/`not.toContain`；锁定终态整句则用 `toBe` 与四段模板全等比较。
 
 本目录没有脚本化模型驱动生产 `runTurn` 的用例。
 `agent/run-turn-failure.test.ts` 替换 `createBankingAgent` 工厂，`write-continuation*.test.ts` 用假运行时且不碰数据库。
