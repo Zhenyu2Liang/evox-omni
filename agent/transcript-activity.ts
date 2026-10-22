@@ -11,6 +11,8 @@ import { cardFingerprint } from '@/lib/chat-cards';
 import { MANUAL_CARD_COMMAND_NAMES } from '@/lib/contracts/card-management';
 import { toolPresentationId } from './tool-presentation-identity';
 import { normalizePresentationMessages } from './transcript-presentation';
+import { isInternalDiagnostic } from '@/lib/public-text';
+import { isOpenActionStatus } from './action-status';
 
 type InvocationEvidence = Pick<ToolInvocation, 'id' | 'runId' | 'callId' | 'toolName' | 'status' | 'resultJson'> & {
   argsJson?: string; modelRequestId?: string | null;
@@ -18,6 +20,17 @@ type InvocationEvidence = Pick<ToolInvocation, 'id' | 'runId' | 'callId' | 'tool
 type ActionEvidence = Pick<PendingAction, 'id' | 'invocationId' | 'toolName' | 'status' | 'resultJson'>;
 
 interface ResultSummary { summary?: string; }
+
+/**
+ * A recorded `resultJson.summary` is re-projected as PUBLIC historical text. `durable/journal.ts`
+ * funnels the write side; this projection reads the same column a SECOND time, so a raw
+ * `__SECURITY_BLOCK__` payload, a JSON fragment or a stack trace must never become visible
+ * history. A business summary stays verbatim.
+ */
+function publicRecordedSummary(summary: string | undefined): string | undefined {
+  if (typeof summary !== 'string' || isInternalDiagnostic(summary)) return undefined;
+  return summary;
+}
 
 /** Resolve presentation from recorded execution identity, never from a matching tool name alone. */
 export function projectTranscriptActivity(messages: readonly ChatMessage[], messageRuns: ReadonlyMap<string, string>,
@@ -59,8 +72,11 @@ export function projectTranscriptActivity(messages: readonly ChatMessage[], mess
     if (action && action.toolName === event.toolName) {
       const status: ToolEventView['status'] = action.status === 'executed' ? 'success'
         : action.status === 'cancelled' ? 'cancelled' : action.status === 'needs_reconciliation' ? 'needs_reconciliation'
-          : action.status === 'failed' ? 'error' : action.status === 'confirmed' ? 'updated' : 'blocked';
-      const summary = safeParse<ResultSummary>(action.resultJson, {}).summary;
+          : action.status === 'failed' ? 'error' : action.status === 'confirmed' ? 'updated'
+            // Only an OPEN row may be re-presented as an awaiting-authorization decision; a
+            // `locked` row is TERMINAL (`agent/action-status.ts`) and settled without executing.
+          : isOpenActionStatus(action.status) ? 'blocked' : 'cancelled';
+      const summary = publicRecordedSummary(safeParse<ResultSummary>(action.resultJson, {}).summary);
       return { ...event, actionId: action.id, status, summary };
     }
     if (!invocation || invocation.toolName !== event.toolName) return event;
@@ -68,7 +84,8 @@ export function projectTranscriptActivity(messages: readonly ChatMessage[], mess
       : ['waiting_confirmation', 'waiting_verification'].includes(invocation.status) ? 'blocked'
         : ['failed', 'interrupted'].includes(invocation.status) ? 'error' : invocation.status === 'cancelled' ? 'cancelled'
           : invocation.status === 'needs_reconciliation' ? 'needs_reconciliation' : event.status;
-    const summary = status === 'blocked' ? undefined : safeParse<ResultSummary>(invocation.resultJson, {}).summary;
+    const summary = status === 'blocked' ? undefined
+      : publicRecordedSummary(safeParse<ResultSummary>(invocation.resultJson, {}).summary);
     return { ...event, status, summary };
     });
     return { ...message, cards, toolEvents };

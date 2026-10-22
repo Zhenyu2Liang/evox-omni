@@ -1,4 +1,5 @@
 import { getTaskPlan, readPendingActionId } from './task-control';
+import { isOpenActionStatus } from './action-status';
 import { getPendingAction } from '@/lib/db/repositories/pendingAction';
 import { getSession } from '@/lib/db/repositories/session';
 import { safeParse } from '@/lib/json';
@@ -20,7 +21,7 @@ export async function nextPlanDecision(sessionId: string, taskId: string): Promi
     if (!id) continue;
     const row = await getPendingAction(id);
     if (!row || row.taskId !== taskId || row.nodeId !== node.id || row.sessionId !== sessionId ||
-        row.userId !== session.userId || !['pending', 'awaiting_mfa'].includes(row.status)) continue;
+        row.userId !== session.userId || !isOpenActionStatus(row.status)) continue;
     const stored = safeParse<PendingActionSummary | undefined>(row.summaryJson, undefined);
     if (!stored || !Array.isArray(stored.fields) || stored.toolName !== row.toolName) {
       throw new AppError('INTERNAL', '无法恢复下一步操作详情，请刷新后核对。');
