@@ -121,6 +121,9 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 `waiting` 多指 `waiting_confirmation` 状态；`claim` 指 DB 执行 claim。
 
 终态锁定的响应字段由 `mfa-lock-http-contract.test.ts` 逐字段固定：`code`、`failure.code`、`failure.reason`，以及 `attemptsUsed`/`attemptsLeft`/`maxAttempts` 的存在与缺席（按路线分别断言）。
+锁值的真值只在两处逐字段断言：第 3 次错码 = 顶层 `code:'CIRCUIT_OPEN'` + `failure.code:'MFA_LOCKED'` + `failure.reason:'mfa_attempts_exhausted'` + 3/0/3（`mfa-lock-http-contract.test.ts:277-286` 的 `LADDER` 与 `:304-326`，`mfa-lock-refresh-unlock-http.test.ts:467-471`）。
+`MFA_LOCKED` 从不作顶层 `code`：`LadderStep.code` 只允许 `'MFA_FAILED' | 'CIRCUIT_OPEN'`（`mfa-lock-http-contract.test.ts:236`），顶层锁信号一律是 `CIRCUIT_OPEN`。
+锁后 verify 的 `failure` 装配很精确——既有 `attemptsLeft:0`、又**没有** `attemptsUsed` 键、且顶层同时带 `attemptsLeft:0`/`maxAttempts`：`mfa-lock-refresh-unlock-http.test.ts:488-490` 与 `mfa-lock-http-contract.test.ts:404-407` 必须同时成立；改网关/路由的 failure 形状要同时满足这两处，顶层计数的「缺失」只对 `cancel`/`recover` 守卫断言（`mfa-lock-http-contract.test.ts:477-480`）。
 `mfa-terminal-lock-http.test.ts` 与 `actions-http.test.ts` 仍只断言 `status`/`mfaResult`/`ok`。
 `POST /api/actions/[id]/{cancel,recover}` 对 `locked` 行的早退守卫生效于 `app/api/_lib/locked-action.ts#lockedActionRefusal`（`code:'CIRCUIT_OPEN'`、`failure.reason:'mfa_session_locked'`、`events: []`、固定文案），由 `mfa-lock-http-contract.test.ts` 的 `cancel`/`recover` 组覆盖；`cancel-safety-http.test.ts`、`cancel-during-authorization-http.test.ts` 的可执行状态集合仍不含 `'locked'`。
 `GET /api/security` 的读模型由 `mfa-lock-http-contract.test.ts` 的 4 个用例与 `mfa-lock-refresh-unlock-http.test.ts` 的刷新组固定，形状见「锁定读模型与解锁的形状」。

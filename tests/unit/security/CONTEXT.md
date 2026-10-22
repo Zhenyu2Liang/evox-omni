@@ -66,6 +66,16 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
    该用例不断言第三次的 `result.code`（源码为 `'CIRCUIT_OPEN'`）与 `mfaResult`。
 2. 已锁动作的重复提交（`lockedOutcome(..., 'mfa_session_locked')`）：`mfa-failure-contract.test.ts` 用**正确**验证码重投，
    断言 `status:'locked'`、`code:'CIRCUIT_OPEN'`、`failure.reason:'mfa_session_locked'`、`attemptsLeft:0`，挑战条数与尝试数不变、无新交易。
+   这里的 `code` 是**顶层** code，`failure.code` 同样为 `'CIRCUIT_OPEN'`；`status`/`code`/`failure` 三层同时被钉住。
+   `mfa-failure-contract.test.ts`（`describe('security-gateway · MFA failure contract')`，64 行）的 it 与行锚点：
+   `the attempt limit is 3`（65-67）、
+   `reports each wrong code as a typed, retryable failure with the remaining attempts`（69-104，`first`/`second` 的 `status:'awaiting_mfa'` + `code:'MFA_FAILED'` + `failure` 六字段 1/2→2/1）、
+   `the third wrong code locks the action, the challenge, and reports the terminal reason`（106-131，`third` 只断言 `failure.code:'MFA_LOCKED'` + `reason:'mfa_attempts_exhausted'`，**不断言** `third.code`）、
+   `a correct code on the locked action stays locked: no new challenge, no attempt, no execution`（133-168）、
+   `audits three MFA_FAILURE records with renderable counts and exactly one breaker trip`（170-188）。
+   `retry`（145 行赋值）是**第 4 次**提交，用 `CORRECT_CODE = '123456'`：`submitCode(action.id, sessionId, CORRECT_CODE)`；
+   149 行 `expect(retry.code).toBe('CIRCUIT_OPEN')` 断顶层 code，151 行 `failure.code` 同为 `'CIRCUIT_OPEN'`，154-155 行钉 `failure.attemptsLeft:0` + `maxAttempts`。
+   与 HTTP 契约同形：第三次的顶层 code 是 `CIRCUIT_OPEN`，`MFA_LOCKED` 只出现在 `failure.code`（对照 `tests/app/mfa-lock-http-contract.test.ts:236-238`）。
 3. 熔断闸门（`lockedOutcome(..., 'circuit_open')`）：`gateway.test.ts`（`locked session (breaker tripped) → refused, status 'locked', even with the correct code`）与 `authorize-hardening.test.ts`（`a locked session refuses a confirm with status 'locked' (row moved to 'locked')`）
    先用 `circuitBreaker.recordFailure` 循环触发熔断，再提交 `MFA_CODE`，断言 `ok`/`status`/`mfaResult === undefined` 与持久化行状态；两条都**不**断言 `code`/`failure`。
 
@@ -76,6 +86,8 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
 持久化 `PendingAction.status === 'locked'`、`MfaChallenge.status === 'locked'`、
 `MfaVerifyResult.locked`、`blockReason === 'HIGH_RISK_BLOCKED'`。
 `failure` 一律用 `toMatchObject`，字段多/少都不会被发现。
+`'MFA_LOCKED'` 与 `'mfa_attempts_exhausted'` 在本目录只同时出现在 `mfa-failure-contract.test.ts:116-123`（`toMatchObject`，无 `toBe` 全等断言可钉住该组合）；
+作为**顶层** `code` 的 `'CIRCUIT_OPEN'` 只在 `mfa-failure-contract.test.ts:149`（`retry.code`）断言，`gateway.test.ts:452-471`、`authorize-hardening.test.ts:251-264`、`authorize-concurrency.test.ts` 的锁定用例都不断言 `code`/`failure`。
 中文锁定文案与 i18n 键（`chat.error.securityLocked`）在本目录无断言。
 
 拒绝类断言使用 `AppError` 的 `code`：`CIRCUIT_OPEN`（熔断 / 解锁被拒）与 `SECURITY_DENIED`（所有权不符）。
@@ -89,21 +101,21 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
 ## 文案改写时必须核对的断言形状
 
 锁定拒绝的 `message` 在本目录只有负例断言，改写文案安全：
-`gateway.test.ts:179/388/442/466`、`authorize-hardening.test.ts:201`、`authorize-concurrency.test.ts:191`、`transfer-limits-concurrency.test.ts:191/289` 均为 `not.toContain(MFA_CODE)`；
+`gateway.test.ts:179/389/443/466`、`authorize-hardening.test.ts:201`、`authorize-concurrency.test.ts:191`、`transfer-limits-concurrency.test.ts:191/289` 均为 `not.toContain(MFA_CODE)`；
 `mfa-failure-contract.test.ts:101-102/124/157` 为 `not.toContain('__SECURITY_BLOCK__')`；
 `circuit-breaker-audit.test.ts:84-85`、`circuit-breaker-reset.test.ts:117-118` 只断言 `SecurityEvent.message` 非空。
 
 改写文案、删除 `__SECURITY_BLOCK__` 原文透传或调整工具错误映射时，下列**精确形状**断言会失败，必须同时核对：
 
-- `gateway.test.ts:190` 与 `:538-541`/`:554-557`：`serializeBlockReason`/`parseBlockReason` 的往返对象 `toEqual` 恰好 `{ actionId, decisionKind }` 两键，收窄/加键都会失败。
+- `gateway.test.ts:190` 与 `:539-542`/`:555-558`：`serializeBlockReason`/`parseBlockReason` 的往返对象 `toEqual` 恰好 `{ actionId, decisionKind }` 两键，收窄/加键都会失败。
 - `gateway.test.ts:202-234`：`parseBlockReason` 对无前缀 JSON、缺/空 `actionId`、缺/非法 `decisionKind` 一律 `toBeNull()`；把 deny 载荷改成可解析（返回部分对象）会打破这些用例。
-- `gateway.test.ts:464`、`authorize-hardening.test.ts:262`：熔断分支的 `mfaResult` 必须 `toBeUndefined()`；在 `lockedOutcome` 上补 `'failed'` 会失败。
+- `gateway.test.ts:465`、`authorize-hardening.test.ts:262`：熔断分支的 `mfaResult` 必须 `toBeUndefined()`；在 `lockedOutcome` 上补 `'failed'` 会失败。
 - `mfa-failure-contract.test.ts:77-84/90-97/116-123/150-156`：`failure` 用 `toMatchObject` 钉住 `code`/`reason`/`actionId`/`attemptsUsed`/`attemptsLeft`/`maxAttempts`，改这些字段名或取值会失败。
 - `mfa.test.ts:174-178`/`:227-231`、`mfa-audit.test.ts:131-135`：`verify()` 返回值 `toEqual` 恰好 `{ ok, attemptsLeft, locked }` 三键。
 - `mfa-audit.test.ts:83-91`：`MFA_FAILURE.detail` `toEqual` 恰好 7 键；`circuit-breaker-audit.test.ts:86-90`：熔断 `detail` `toEqual` 恰好 3 键。
 - `gateway.test.ts:173`：四条决策的 `kind` 序列 `['allow','require_confirmation','require_mfa','deny']`。
 - `execution-policy.test.ts:7`：`vi.mock('@/security/circuit-breaker', () => ({ isLocked: ports.locked }))` 只暴露 `isLocked`，`security/execution-policy.ts` 新增任何该模块导入都会失败。
-- `gateway.test.ts:280`、`circuit-breaker-audit.test.ts:177`：锁定态 `blockReason` 必须是字面量 `'HIGH_RISK_BLOCKED'`。
+- `gateway.test.ts:281`、`circuit-breaker-audit.test.ts:177`：锁定态 `blockReason` 必须是字面量 `'HIGH_RISK_BLOCKED'`。
 
 ## 本目录不覆盖（负向结论）
 
