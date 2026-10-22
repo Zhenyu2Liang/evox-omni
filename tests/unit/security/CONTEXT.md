@@ -15,6 +15,31 @@
 `circuit-breaker*.test.ts` 直接调 `@/security/circuit-breaker`。
 安全事件落 `securityEvent` 表，不是 `auditLog`。
 
+## 安全中心解锁面板（`/security`）的渲染契约
+
+`app/security/page.tsx` 是 await `cookies()`/`requireIdentity()`/DB 的 async Server Component，Node 测试无法调用，**页面本身不在本目录测试**。
+`unlock-panel-render.test.ts` 直测页面无条件渲染的 `app/security/UnlockPanel.tsx`（`createElement` + `renderToStaticMarkup`，
+`vi.mock('next/navigation')` 提供 `useRouter`，`LocaleProvider` 固定 `zh-CN`，期望值取 `createTranslator('zh-CN')` 与 `*.zh-CN.json` 真值）：
+
+- 锁定态（`locked:true, failures:3, maxAttempts:3, lockedActionCount:1`）：根节点 `data-unlock-panel` 与 `data-unlock-locked="true"`、
+  `data-unlock-failures="3"`、`data-unlock-max-attempts="3"`、`data-unlock-locked-actions="1"`，
+  以及影响块 `data-unlock-impact="1"`（`security.breaker.lockedDescription` + `pages.activity.status.locked` + 计数）。
+- 文案：`security.breaker.lockedDescription`、`chat.error.actionLocked`、`pages.security.unlockDescription` 按目录真值断言；
+  `chat.error.actionLocked` 的「请在安全中心解除限制后重新发起操作」一并断言，钉住解锁语义的「重新发起」半边。
+- 输入：恰好一个 `<input>`，`aria-label` 等于 `security.reset.codeLabel`（`6 位验证码`），
+  并断言 `name="verificationCode"`、`inputMode="numeric"`、`autoComplete="one-time-code"`、`maxLength="6"`；
+  提交按钮 `type="submit"` 文案为 `security.reset.unlock`，常驻结果区为 `role="status"` + `data-unlock-status="idle"`。
+- 不外泄：渲染串不含 `__SECURITY_BLOCK__`、`{"decisionKind"`、栈帧（`/\n\s+at\s/` 与 `at foo.ts:1`）、`Error:`、`<script`、
+  `undefined`、`[object Object]`，也不含 `lib/constants.ts#MFA_CODE` 的明文（`123456`）。
+- 未锁定态（`locked:false, failures:0, maxAttempts:3, lockedActionCount:0`）：面板照常渲染
+  （`data-unlock-locked="false"`、无 `data-unlock-impact`、同一 `aria-label` 验证码输入仍在），
+  因此浏览器套件的「没有开发者验证码输入」类断言必须限定作用域而非断言整页。
+- `data-unlock-panel` 与验证码输入的 `aria-label` 值就是 e2e 依赖的页面级不变量，改名须同步 `tests/e2e/`。
+- 该用例只证明服务端渲染的属性、文案与输入形态，不证明点击、请求或解锁结果——`POST /api/security/reset` 的行为仍不在本目录（见 `../../app`）。
+- 文案缺口：要求的「解锁后需重新发起并重新确认，原操作不会自动执行」在消息目录中没有对应 key
+  （`app/security/CONTEXT.md`「已知边界 · 文案缺口」记录同一事实），面板只用 `pages.security.unlockDescription` +
+  `chat.error.actionLocked` 组合表达；补齐专用 key 前该句无法断言。
+
 ## 终止锁定（locked）结果的覆盖边界
 
 网关有三条独立的 `status: 'locked'` 出口（`security/security-gateway.ts`），本目录三条都有用例：
