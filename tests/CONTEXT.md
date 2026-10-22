@@ -97,6 +97,27 @@ mock 夹具播种 `card_credit`/`card_debit`，演示种子（`prisma/seed.ts`�
 话术断言绑定产品原文：`test-18` 与 `unit/agent/card-capability-guidance.test.ts` 读取目录与提示词的真实渲染结果，
 因此改动 `agent/messages/*.json` 的卡片管理条目或 `agent/system-prompt.ts` 的 `manual-only` 语句时必须同时核对这两处。
 
+## 终止锁定（locked）结果的覆盖边界
+
+MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按两套入口分别覆盖：
+
+| 入口 | HTTP | 断言位置 |
+| --- | --- | --- |
+| 写操作的 `verify`/`confirm` 路由 | 恒 `200` + `data.ok:false` + `status:'locked'` | `app/mfa-terminal-lock-http.test.ts`、`app/actions-http.test.ts`（circuit breaker 块） |
+| `/api/security/reset` 解锁闸门 | `423` + `error.code:'CIRCUIT_OPEN'` | `app/security-workflow-http.test.ts`、`integration/confirmation-policy.test.ts` |
+| 网关/SDK 进程内 | 无 HTTP | `unit/security/gateway.test.ts`、`authorize-hardening.test.ts`、`circuit-breaker-*.test.ts`、`scenarios/test-10-circuit-breaker.test.ts` |
+
+锁定事实一律按 `status`、`mfaResult`、`PendingAction` 行、`GET /api/actions` 是否再surface 与 `SecurityEvent` 行断言。
+写操作路由锁定路径上对 `events` 的断言只有负例（不再出现该 actionId 的 `mfa_required`），没有公开工具事件摘要断言。
+`unit/planner/action-contract.test.ts`、`action-attention-state.test.ts` 用桩造的 `message`（如 `'Verification locked'`）断言客户端把服务端锁定消息透传成 `error` + `action_settled`。
+`unit/planner/tool-diagnostics.test.ts` 是唯一渲染层锁定用例：`MfaCard`/`ConfirmationCard` 传 `status:'locked'` 断言 `cards.terminal.locked` 且无 `<input>`/`<button>`。
+`e2e/acceptance.e2e.ts` 的 `j-circuit-breaker-lock` 在真实浏览器连错三码，用未限定 `[role="status"]` 的子串匹配断言 `cards.terminal.locked`，并核 `/security` 的「已熔断」「失败 3 / 3 次」与 `CIRCUIT_BREAKER_TRIPPED` 行。
+
+本仓库没有任何用例断言锁定的人话文案，也没有 `chat.error.securityLocked` 的断言。
+`publicToolError` 仅由 `unit/planner/tool-feedback.test.ts` 以 `chat.error.toolFailed` 覆盖通用失败，不涉及锁定。
+已开熔断时模型无法解锁：`resetSession` 需验证码或冷却，见 `unit/security/circuit-breaker-reset.test.ts`。
+空 `blockedOutcome`/`conflictOutcome`/`withLiveConfirmation` 无测试直接引用；`executeGatedTool` 由 `helpers/faux-agent.ts`、`integration/refactor-security-runtime.test.ts` 从 `@/agent/confirmation` 引入，`confirmAction` 由 `integration/conversational-turns.test.ts` 引入。
+
 ## 常用命令
 
 `pnpm test` 运行全部 Vitest 测试。
