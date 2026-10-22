@@ -65,12 +65,31 @@ JSON 金额使用十进制字符串。
 `PUBLIC_ERROR_CODES` 是 `Record<ErrorCode, MessageKey>`，覆盖全部 11 个 `ErrorCode`；`TOOL_FAILED` 与 `INTERNAL` 都映射到 `chat.error.toolFailed`，`CIRCUIT_OPEN` 映射 `chat.error.securityLocked`，`MFA_FAILED` 映射 `chat.error.verificationFailed`，`MFA_LOCKED` 映射 `chat.error.actionLocked`，`SECURITY_DENIED` 映射 `chat.error.securityDenied`。
 未识别的 `errorCode`（任意不在 `ErrorCode` 联合内的字符串）与未识别 `message` 一律落到 `chat.error.toolFailed`。
 `PUBLIC_BUSINESS_ERRORS`（17–28 行）只有 10 条精确字符串；其中唯一的安全网关句子是 `security/security-gateway.ts:911`「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」→ `chat.error.securityLocked`（`chat.zh-CN.json:220`）。
+该表的中文条目以 `\uXXXX` 转义写入（`tool-feedback.ts` 20–23、27 行），实际文案为「账户余额不足，无法完成认购」「缺少限额分类」「限额必须是不小于 0 的金额」「该卡片已挂失，无需重复挂失」「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」；三条内联正则分别产出 `chat.error.insufficientFunds`（`{balance, amount}`）、`chat.error.purchaseMinimum`（`{amount}`）、`chat.error.verificationRemaining`（`{count}`）。
 同文件另两句网关拒绝语未登记，因此映射到 fallback `chat.error.toolFailed`（`chat.zh-CN.json:208`「操作未完成。请核对原操作卡片和账户记录。」）：`security-gateway.ts:446`（`gatewayDecide` 的 deny）「当前会话已触发安全熔断，高风险操作已被锁定。请前往安全中心解除限制后再试。」与 `security-gateway.ts:841`（`lockedOutcome`）「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」。
 `PUBLIC_ERROR_CODES` 只在调用方显式传入 `errorCode` 时生效；网关的 `AuthorizationResult.code`（定义在 `security/security-gateway.ts:104`，不在本目录）不会自动出现在 `ToolEventView.errorCode` 上。
 `publicToolSummary(event, t)` 按状态分流：`search_conversation_history` + `success` → `chat.activity.historyRead`；`blocked` 且带 `errorCode` → `publicToolError(summary, t, 'chat.error.operationNotStarted', errorCode, errorParams)`；`blocked` 且无 `actionId` → `publicToolError(summary, t, 'chat.error.operationNotStarted')`（该分支不传 `errorCode`）；`error` → `publicToolError(summary, t, 'chat.error.toolFailed', errorCode, errorParams)`；`needs_reconciliation` → `chat.error.unknownOutcome`；其余状态（`started`/`success`/`updated`/`cancelled` 及带 `actionId` 的 `blocked`）走 `localizeChatError`，未命中时**原样返回 `event.summary`**。
 因此本目录不剥离任何内部摘要标记（如 `__SECURITY_BLOCK__{...}`）：这类字符串走 `error` 分支时被替换为 `chat.error.toolFailed`，走其它状态分支时会被当作合法文本透出，去重/剥离责任在写入事件的一侧。
 `ToolEventView`（`contracts/agent.ts`）没有 `resultSummary` 字段：公开文本只来自 `summary` 与 `errorCode`，`debugDetail`/`debugArguments` 仅供开发者面板。
 `ChatCard {type:'error', message, code?}` 与 `AgentStreamEvent {type:'security_event', kind, message}` 的 `message` 同样是无目录约束的自由字符串。
+
+## 错误类型（`errors.ts`）
+
+`ErrorCode`（`errors.ts:1`）为 11 个字面量联合：`VALIDATION`、`NOT_FOUND`、`INSUFFICIENT_FUNDS`、`LIMIT_EXCEEDED`、`SECURITY_DENIED`、`MFA_FAILED`、`MFA_LOCKED`、`CIRCUIT_OPEN`、`CONFLICT`、`TOOL_FAILED`、`INTERNAL`。
+`AppError`（`errors.ts:3-8`）只有 `readonly code: ErrorCode`、继承的 `message`、`readonly detail?: unknown`；没有结构化 `failure` 字段，也没有 `toJSON` 或自定义序列化，故 `JSON.stringify` 只出现自有可枚举属性 `code`/`detail`。
+`AppError.from(e)` 收敛任意值：已是 `AppError` 原样返回；`Error` 包成 `INTERNAL` 并保留原对象为 `detail`；其余 `String(e)`。
+`Result<T> = { ok: true; value: T } | { ok: false; error: AppError }`（`errors.ts:10`），`ok`/`err` 是纯构造器（`errors.ts:11-12`）。
+结构化安全失败不复用 `AppError`：它走 `contracts/security.ts` 的 `SecurityFailure` 与 `AuthorizationResult.failure`。
+
+## 结构化安全失败契约（`contracts/security.ts`）
+
+`SecurityFailureReason`（`contracts/security.ts:9-14`）= `mfa_code_invalid` | `mfa_attempts_exhausted` | `mfa_session_locked` | `circuit_open` | `denied`。
+`SecurityFailure`（`contracts/security.ts:21-28`）= 必填 `code: ErrorCode`、必填 `reason: SecurityFailureReason`，可选 `actionId`、`attemptsUsed`、`attemptsLeft`、`maxAttempts`；**不含**用户文案，渲染由 `public-text.ts#securityNotice` 负责。
+`PendingActionStatus`（`contracts/security.ts:42-58`）含终态 `locked`（MFA 次数耗尽或熔断的 CAS 目标）与 `needs_reconciliation`（终态，需人工核对）。
+`AuthorizationResult` 不在本目录：定义在 `security/security-gateway.ts:104-123`，字段 `ok`、`status: PendingActionStatus`、`actionId`、`tier`、`requiresMfa`、`mfaResult?`、`code?: ErrorCode`、`failure?: SecurityFailure`、`message`、`action?`；由 `authorizeAction`（`security-gateway.ts:1102`）与 `security/recovery-authorization.ts` 产出。
+网关只写不读 `failure` 的字段，逐字段读取仅发生在其 `__SECURITY_BLOCK__` 载荷解析处。
+`SecurityFailure` 的消费点只用字段、不做文案匹配：`agent/turns/events.ts` 用 `failure.code` → `errorCode`、`attemptsLeft`/`attemptsUsed`/`maxAttempts` → `errorParams`，并在 `security_event` 上只带 `code`/`reason`/`actionId`/`attemptsLeft`/`maxAttempts`（不带 `message`）；`agent/confirmation/contracts.ts` 与 `app/api/_lib/types.ts` 只透传可选 `failure`；`app/api/_lib/locked-action.ts`（`code`/`reason`/`actionId`）与 `app/api/security/route.ts`（只 `code`+`reason`）自行构造；`channels/weixin/banking-client.ts` 只声明不读，由 `bridge.ts` 交给 `securityNotice`；`components/chat/actions.ts` 用局部子集（`code?: string`，无 `actionId`/`attemptsUsed`）；`tests/helpers/scenario.ts` 复现与生产相同的投影。
+`lib/db/repositories/pendingAction.ts` 不对状态做枚举校验：写入 API 多声明为 `string`（`CreatePendingActionInput.status?`、`updatePendingActionStatus`），只有 `claimPendingAction` 的 `from`/`to` 用 `PendingActionStatus`；`locked` 因此是合法 CAS 目标，也是 `renewLockedMfaChallenges` 里 `MfaChallenge.status === 'locked'` 的过滤值；`needs_reconciliation` 在该文件不出现，只能经通用 `setPendingActionStatus` 写入，无专门处理。
 
 ## 公开文本漏斗（`public-text.ts`）
 
