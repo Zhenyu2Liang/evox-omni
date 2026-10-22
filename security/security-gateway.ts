@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Security Gateway — THE chokepoint of the code-enforced safety model.
  *
  * Every banking tool call proposed by the model passes through here. The gateway:
@@ -58,8 +58,17 @@ import { prisma } from '../lib/db/client';
 import { recordSecurityEvent } from '../audit';
 import { safeParse } from '../lib/json';
 import { formatCNY, moneyToCents, normalizeTransferAmount, centsToMoney, type MoneyAmount } from '../lib/money';
-import { valuationToMinor } from '../lib/decimal';
-import { settledRedemptionAmount } from '../banking-sdk/valuation';
+import { valuationToMinor, compareDecimal, nonNegativeDecimal, type DecimalAmount } from '../lib/decimal';
+import {
+  NET_VALUE_DECIMALS,
+  REDEMPTION_FEE_RULE,
+  SHARE_DECIMALS,
+  floorToShares,
+  marketValueFromShares,
+  settlementFromShares,
+  sharesFromAmount,
+} from '../banking-sdk/net-value';
+import type { RedeemMode } from '../banking-sdk/types';
 import { canonicalCommandArgs } from '../lib/contracts/command';
 import { recordAuthorizationDecision } from './authorization-record';
 import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
@@ -71,7 +80,7 @@ import { resolveBankingArgs } from '../lib/banking-selectors';
 import { withActionPolicy } from '../lib/action-summary';
 import { scheduledTime } from '../lib/scheduled-time';
 import { redactRequest, redactSecrets } from '../lib/sensitive';
-import { formatDateTime } from '../lib/date';
+import { businessCalendarParts, formatDateTime } from '../lib/date';
 import type { ErrorCode } from '../lib/errors';
 
 /** Prefix wrapped around the serialized block reason so `parseBlockReason` is exact. */
@@ -500,11 +509,213 @@ async function findReusableAction(
   );
 }
 
-/** The redemption quote belongs to the original server decision, not the model's request identity. */
+/** The clarification the contract demands when a redemption states no口径 — there is no default. */
+const REDEEM_CLARIFY_MESSAGE = '赎回需要明确口径：请确认按「份额」还是按「金额」赎回';
+
+/** 口径 labels for the confirmation card. */
+const REDEMPTION_MODE_LABEL: Record<RedeemMode, string> = {
+  SHARES: '按份额赎回',
+  AMOUNT: '按金额赎回',
+  ALL: '全部赎回',
+};
+
+/** Server-minted snapshot fields: they belong to the original decision, not to the request identity. */
+const REDEMPTION_SNAPSHOT_FIELDS: ReadonlySet<string> = new Set([
+  'expectedShares',
+  'expectedNetValue',
+  'expectedNetValueDate',
+  'expectedSettlementAmount',
+  'expectedRedemptionAmount',
+]);
+
+/**
+ * The redemption口径 a request states (`docs/cn/investments.md`). A missing/unknown口径 — or the
+ * retired principal-based `redeemAmount` — is a CLARIFICATION, never a guess: silently defaulting is
+ * exactly what the contract forbids.
+ */
+function redemptionMode(args: Record<string, unknown>): RedeemMode {
+  if (args.redeemAmount !== undefined) {
+    throw new AppError('VALIDATION', REDEEM_CLARIFY_MESSAGE, {
+      redeemAmount: args.redeemAmount,
+      reason: 'PRINCIPAL_MODE_RETIRED',
+    });
+  }
+  const mode = args.mode;
+  if (mode !== 'SHARES' && mode !== 'AMOUNT' && mode !== 'ALL') {
+    throw new AppError('VALIDATION', REDEEM_CLARIFY_MESSAGE, { mode: typeof mode === 'string' ? mode : null });
+  }
+  return mode;
+}
+
+/** Reject a mixed口径: each mode owns exactly one input field and `ALL` owns none. */
+function assertRedeemForm(mode: RedeemMode, args: Record<string, unknown>): void {
+  const mixed = mode === 'SHARES'
+    ? args.amount !== undefined
+    : mode === 'AMOUNT'
+      ? args.shares !== undefined
+      : args.shares !== undefined || args.amount !== undefined;
+  if (mixed) {
+    throw new AppError('VALIDATION', '赎回口径不可混用：按份额与按金额只能二选一，全额赎回不接受份额或金额', {
+      mode,
+      shares: args.shares ?? null,
+      amount: args.amount ?? null,
+    });
+  }
+}
+
+/** A requested share count: positive decimal text, at most 6 fractional digits, within the holding. */
+function requestedRedemptionShares(raw: unknown, heldShares: DecimalAmount): DecimalAmount {
+  if (raw === undefined) throw new AppError('VALIDATION', '按份额赎回需要给出赎回份额');
+  if (typeof raw !== 'string') throw new AppError('VALIDATION', '赎回份额必须以十进制文本给出', { shares: raw });
+  const shares = nonNegativeDecimal(raw);
+  if (compareDecimal(shares, '0') <= 0) throw new AppError('VALIDATION', '赎回份额必须大于零', { shares });
+  if (floorToShares(shares) !== shares) {
+    throw new AppError('VALIDATION', `赎回份额最多允许 ${SHARE_DECIMALS} 位小数`, { shares });
+  }
+  if (compareDecimal(shares, heldShares) > 0) {
+    throw new AppError('VALIDATION', '赎回份额不能超过持有份额', { redeemedShares: shares, totalShares: heldShares });
+  }
+  return shares;
+}
+
+/** A requested amount口径: positive CNY, never above the position's current market value. */
+function requestedRedemptionAmount(raw: unknown, heldShares: DecimalAmount, netValue: DecimalAmount): MoneyAmount {
+  if (raw === undefined) throw new AppError('VALIDATION', '按金额赎回需要给出赎回金额');
+  if (typeof raw !== 'string') throw new AppError('VALIDATION', '赎回金额必须以十进制文本给出', { amount: raw });
+  const requestedMinor = moneyToCents(raw);
+  if (requestedMinor <= 0n) throw new AppError('VALIDATION', '赎回金额必须大于零', { amount: centsToMoney(requestedMinor) });
+  // The SDK rejects an amount above the market value instead of silently widening it to a full
+  // redemption; the quote applies the SAME bound with the SAME market value helper.
+  const marketValueMinor = valuationToMinor(marketValueFromShares(heldShares, netValue));
+  if (requestedMinor > marketValueMinor) {
+    throw new AppError('VALIDATION', '赎回金额超过持仓市值，请改用全额赎回或按份额赎回', {
+      amount: centsToMoney(requestedMinor),
+      marketValue: centsToMoney(marketValueMinor),
+    });
+  }
+  return centsToMoney(requestedMinor);
+}
+
+/** The product's published net value; absent/corrupt/non-positive counts as "not published". */
+function publishedNetValue(product: { latestNetValuePerUnit: string | null }): DecimalAmount | undefined {
+  const raw = product.latestNetValuePerUnit;
+  if (raw === null) return undefined;
+  try {
+    const netValue = nonNegativeDecimal(raw);
+    return compareDecimal(netValue, '0') > 0 ? netValue : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The holding's recorded shares; absent/corrupt/non-positive counts as "not recorded" (never guessed). */
+function recordedHoldingShares(raw: string | null): DecimalAmount | undefined {
+  if (raw === null) return undefined;
+  try {
+    const shares = nonNegativeDecimal(raw);
+    return compareDecimal(shares, '0') > 0 ? shares : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** The 「净值 + 份额」 quote the confirmation snapshot persists — computed only by SDK helpers. */
+interface RedemptionQuote {
+  mode: RedeemMode;
+  /** Shares this redemption actually redeems under the stated口径. */
+  shares: DecimalAmount;
+  /** Net value per unit they are priced at. */
+  netValue: DecimalAmount;
+  /** Business date (epoch ms) of `netValue`; absent when the product published none. */
+  netValueDate?: number;
+  /** Amount credited, HALF_UP to cents exactly once (the SDK's own settlement helper). */
+  settlementAmount: MoneyAmount;
+  /** Fee charged (always `0.00` under the simulated rule). */
+  feeAmount: MoneyAmount;
+  /** `SIMULATED_NONE` — the fee口径 the SDK books, quoted so the card states the same rule. */
+  feeRule: string;
+}
+
+/**
+ * Mint the server's redemption quote from the OWNED holding and its product.
+ *
+ * The arithmetic is NEVER re-implemented in the security layer: `sharesFromAmount` and
+ * `settlementFromShares` are the very helpers `banking-sdk/investment.ts` settles with, so the
+ * approved quote and the settled amount cannot diverge. A holding with no recorded shares or a
+ * product with no published net value refuses to quote at all — no fabricated settlement is ever
+ * shown, and the SDK would refuse the same redemption at execution.
+ */
+function quoteRedemption(
+  holding: {
+    id: string;
+    productId: string;
+    shares: string | null;
+    product: { latestNetValuePerUnit: string | null; latestNetValueDate: Date | null };
+  },
+  args: Record<string, unknown>,
+): RedemptionQuote {
+  const mode = redemptionMode(args);
+  assertRedeemForm(mode, args);
+
+  const netValue = publishedNetValue(holding.product);
+  if (netValue === undefined) {
+    throw new AppError('VALIDATION', '该产品未发布净值，暂不可赎回', { productId: holding.productId });
+  }
+  const heldShares = recordedHoldingShares(holding.shares);
+  if (heldShares === undefined) {
+    throw new AppError('CONFLICT', '该持仓尚未记录份额，暂不可赎回', { holdingId: holding.id });
+  }
+
+  const shares = mode === 'ALL'
+    ? heldShares
+    : mode === 'SHARES'
+      ? requestedRedemptionShares(args.shares, heldShares)
+      : sharesFromAmount(requestedRedemptionAmount(args.amount, heldShares, netValue), netValue);
+  if (compareDecimal(shares, heldShares) > 0) {
+    throw new AppError('VALIDATION', '赎回份额不能超过持有份额', { redeemedShares: shares, totalShares: heldShares });
+  }
+
+  const netValueDate = holding.product.latestNetValueDate?.getTime();
+  return {
+    mode,
+    shares,
+    netValue,
+    ...(netValueDate !== undefined ? { netValueDate } : {}),
+    settlementAmount: settlementFromShares(shares, netValue),
+    feeAmount: '0.00',
+    feeRule: REDEMPTION_FEE_RULE,
+  };
+}
+
+/** The server snapshot merged into the parked args (and therefore into the command digest). */
+function redemptionSnapshot(quote: RedemptionQuote): Record<string, unknown> {
+  return {
+    expectedShares: quote.shares,
+    expectedNetValue: quote.netValue,
+    ...(quote.netValueDate !== undefined ? { expectedNetValueDate: quote.netValueDate } : {}),
+    expectedSettlementAmount: quote.settlementAmount,
+  };
+}
+
+/** Business date text (UTC+08:00) of a net value date — a date, not an instant. */
+function businessDateText(ts: number): string {
+  const parts = businessCalendarParts(ts);
+  return `${String(parts.year).padStart(4, '0')}-${String(parts.month + 1).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
+}
+
+/** Net values are quoted to 4 fractional digits; canonical decimal text drops trailing zeros. */
+function formatNetValue(netValue: DecimalAmount): string {
+  const [integer, fraction = ''] = netValue.split('.');
+  return `${integer}.${fraction.padEnd(NET_VALUE_DECIMALS, '0')}`;
+}
+
+/**
+ * The redemption snapshot belongs to the original server decision, not the model's request identity:
+ * every server-minted `expected*` field is excluded so a re-park of the same node matches its action.
+ */
 function requestArgs(tool: ToolName, args: Record<string, unknown>): Record<string, unknown> {
   if (tool !== 'redeem_investment') return args;
-  const { expectedRedemptionAmount: _quote, ...request } = args;
-  return request;
+  return Object.fromEntries(Object.entries(args).filter(([key]) => !REDEMPTION_SNAPSHOT_FIELDS.has(key)));
 }
 
 /**
@@ -590,34 +801,24 @@ async function gatewayCreatePendingAction(
     const holding = await prisma.investmentHolding.findFirst({ where: { id: String(ctx.args.holdingId), userId: ctx.userId }, include: { product: true } });
     if (holding) summary.fields.unshift({ label: '持仓', value: `${holding.product.name}（${holding.id}）` });
     if (holding && ctx.toolName === 'redeem_investment') {
-      // The SERVER mints the redemption quote from the PARKED request: the requested PRINCIPAL portion
-      // (`redeemAmount`; absent ⇒ the whole holding) picks the SAME proportional valuation the SDK
-      // re-checks at execution, so the approved amount and the settled amount cannot diverge. An
-      // over-redeem request is refused HERE, before persisting, so no action is ever minted for it.
+      // The SERVER mints the 「净值 + 份额」 quote from the PARKED request: the stated口径 decides the
+      // shares redeemed, and the SAME SDK helpers (`sharesFromAmount` / `settlementFromShares`) settle
+      // them, so the approved amount and the settled amount cannot diverge. A request that cannot be
+      // quoted (no口径, retired principal field, no recorded shares, no published net value, over-size,
+      // mixed口径) is refused HERE, before persisting, so no action is ever minted for it.
       // The gateway only SNAPSHOTS the quote — it never mutates a balance.
-      const totalPrincipalMinor = holding.principalAmountMinor;
-      const requestedMinor = ctx.args.redeemAmount === undefined ? undefined : moneyToCents(ctx.args.redeemAmount);
-      if (requestedMinor !== undefined && requestedMinor > totalPrincipalMinor) {
-        throw new AppError('VALIDATION', '赎回本金金额不能超过持仓本金', {
-          redeemAmount: centsToMoney(requestedMinor),
-          totalPrincipal: centsToMoney(totalPrincipalMinor),
-        });
-      }
-      const redeemedPrincipalMinor = requestedMinor ?? totalPrincipalMinor;
-      const marketValue = holding.estimatedMarketValue === null
-        ? centsToMoney(totalPrincipalMinor) : holding.estimatedMarketValue;
-      // FULL mints the whole rounded valuation; PARTIAL mints the SAME proportional settlement the SDK
-      // re-checks at execution, so the confirmed quote and the settled amount cannot diverge.
-      const amount = redeemedPrincipalMinor === totalPrincipalMinor
-        ? centsToMoney(valuationToMinor(marketValue))
-        : settledRedemptionAmount(marketValue, totalPrincipalMinor, redeemedPrincipalMinor);
-      ctx.args = { ...ctx.args, expectedRedemptionAmount: amount };
-      const partial = redeemedPrincipalMinor !== totalPrincipalMinor;
+      const quote = quoteRedemption(holding, ctx.args);
+      ctx.args = { ...ctx.args, ...redemptionSnapshot(quote) };
+      // The money this action moves is the settlement credited, never a principal figure.
+      summary.amount = quote.settlementAmount;
       summary.fields.push(
-        { label: '赎回范围', value: partial ? `部分赎回（本金 ${formatCNY(centsToMoney(redeemedPrincipalMinor))}／共计 ${formatCNY(centsToMoney(totalPrincipalMinor))}）` : '全部赎回该笔持仓' },
-        { label: 'Principal', value: formatCNY(centsToMoney(totalPrincipalMinor)) },
-        { label: '赎回到账金额', value: formatCNY(amount) },
-        { label: '金额变化', value: '金额变化时停止执行，需重新确认' },
+        { label: '赎回口径', value: REDEMPTION_MODE_LABEL[quote.mode] },
+        { label: '赎回份额', value: quote.shares },
+        { label: '成交净值', value: formatNetValue(quote.netValue) },
+        { label: '净值日期', value: quote.netValueDate === undefined ? '未公布' : businessDateText(quote.netValueDate) },
+        { label: '预计到账金额', value: formatCNY(quote.settlementAmount) },
+        { label: '费用口径', value: `赎回费 ${formatCNY(quote.feeAmount)}（${quote.feeRule}：模拟规则免收）` },
+        { label: '金额变化', value: '净值、份额或到账金额变化时停止执行，需重新确认' },
       );
     }
   }
