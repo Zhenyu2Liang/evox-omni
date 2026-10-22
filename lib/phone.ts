@@ -15,9 +15,5 @@ export function searchPhoneMatch(query: string, stored: string): boolean {
   return /^\d{1,11}$/.test(digits) && stored.replace(/\*/g, '').includes(digits);
 }
 
-/** Preserve the public phone prefix and suffix; short values remain masked. */
-export function maskPhone(phone: string): string {
-  const value = typeof phone === 'string' ? phone : '';
-  if (value.length <= 7) return value.length <= 3 ? '****' : value.slice(0, 3) + '****';
-  return value.slice(0, 3) + '****' + value.slice(-4);
-}
+/** Display masking lives in `lib/mask.ts`; re-exported so existing `lib/phone` imports keep working. */
+export { maskPhone } from './mask';
