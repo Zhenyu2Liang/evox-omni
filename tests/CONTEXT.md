@@ -108,6 +108,9 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 | 网关/SDK 进程内 | 无 HTTP | `unit/security/gateway.test.ts`、`authorize-hardening.test.ts`、`circuit-breaker-*.test.ts`、`unit/security/mfa-failure-contract.test.ts`、`integration/security-deny-redaction.test.ts`、`unit/agent/turn-security-event.test.ts`、`scenarios/test-10-circuit-breaker.test.ts` |
 | 渲染/文案层 | 无 HTTP | `unit/planner/locked-card-rendering.test.ts`、`unit/weixin-lock-presentation.test.ts`、`unit/security/unlock-panel-render.test.ts`、`unit/lib/public-text.test.ts`、`unit/planner/tool-diagnostics.test.ts` |
 
+`GET /api/security` 的 `lock` 是账户级常量 `{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`（`app/api/security/route.ts:72-77`）：只报告熔断原因，且刻意不带 attempts 计数（熔断按账户计，attempts 属该动作自己的 challenge）。per-action 的 `mfa_attempts_exhausted` 只出现在第 3 次错码的写操作响应里；两处分别由 `app/mfa-lock-http-contract.test.ts` 的读模型组与逐次阶梯组固定，不要把它们互相“对齐”。
+解锁审计写的是 `SecurityEvent`（`SECURITY_RESET`，`security/circuit-breaker.ts#commitAuditedReset`），不是 `AuditLog`：`app/mfa-lock-refresh-unlock-http.test.ts` 断言 `SECURITY_RESET` 增量恰 1 且 `AuditLog` 增量为 0。
+`SecurityEventKind`（`lib/contracts/audit.ts`）没有 `mfa_required` 成员，所以“锁定后不新增 `mfa_required` 事件”是空断言；真正的保证是会话 `SecurityEvent` 总数冻结，见 `app/mfa-lock-http-contract.test.ts`。
 锁定事实一律按 `status`、`mfaResult`、`PendingAction` 行、`GET /api/actions` 是否再surface 与 `SecurityEvent` 行断言。
 写操作路由（都在 `tests/app`）锁定路径上对 `events` 的断言只有负例（不再出现该 actionId 的 `mfa_required`）；公开摘要断言在 agent turn 路径，见 `unit/agent/turn-security-event.test.ts:92-98`。
 `unit/planner/action-contract.test.ts`、`action-attention-state.test.ts` 用桩造的 `message`（如 `'Verification locked'`）断言客户端把服务端锁定消息透传成 `error` + `action_settled`。
