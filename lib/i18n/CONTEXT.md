@@ -50,7 +50,8 @@
 `MessageKey`（`:16`）= `keyof typeof english`，即键集合以**英文目录**为权威；`isMessageKey`（`:25-27`）也只在 `english` 上 `Object.hasOwn`。
 `resolveLocale`（`:30-32`）：只有 `'en'` 得到 en，其余任何值（含 `undefined`、大小写变体）都回退 `DEFAULT_LOCALE`（`:12` = `'zh-CN'`）；这是唯一的回退层，`server.ts:8` 与 `LocaleProvider.tsx:37` 都经它。
 插值（`translate`，`:35-39`）：单花括号 `{name}`，正则 `/\{([A-Za-z][A-Za-z0-9_]*)\}/g`。
-占位符名首字符必须是字母，后续只能是字母/数字/下划线；`{{name}}` 不匹配（双括号内首字符是 `{`），会原样输出，因此目录里必须写 `{count}` 而非 `{{count}}`。
+占位符名首字符必须是字母，后续只能是字母/数字/下划线。
+`{{name}}` 的匹配从第二个 `{` 开始，只替换内层，结果残留一双花括号（`{值}`），因此目录里必须写 `{count}` 而非 `{{count}}`。
 `params` 中没有该名时占位符原样保留（`:37` 返回 `placeholder`）；`params` 值经 `String()` 转换，金额必须以已格式化字符串传入。
 缺失键：`translate` 直接做 `messages[locale][key].replace(...)`，键不存在时抛 `TypeError`（对 `undefined` 调 `replace`），**没有**键级回退、不返回键名、不返回空串；`Record<MessageKey, string>` 的类型只是假设，运行期不校验。
 因此新增键必须同时写进 en 与 zh-CN 目录（否则类型或运行期失败），中英文键顺序在四份文件中保持一致便于对照。
