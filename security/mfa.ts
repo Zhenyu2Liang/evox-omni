@@ -12,6 +12,7 @@
  */
 import { AppError, ok, err } from '../lib/errors';
 import type { Result } from '../lib/errors';
+import type { SecurityFailure } from '../lib/contracts/security';
 import { MFA_MAX_ATTEMPTS } from '../lib/constants';
 import {
   getPendingAction,
@@ -86,6 +87,9 @@ function toView(ch: ChallengeRow): MfaChallengeView {
  * Issue (or re-issue) a challenge for `actionId`. Stores `MFA_CODE` server-side and
  * returns a code-free `MfaChallengeView`.
  * Errors (e.g. unknown action) surface as a thrown `AppError`.
+ *
+ * A TERMINAL `locked` action (MFA attempts exhausted) and already settled actions
+ * (`executed`/`cancelled`) are refused with a typed `AppError` — see the guards below.
  */
 export async function issueChallenge(actionId: string): Promise<MfaChallengeView> {
   const action = await getPendingAction(actionId);
@@ -93,8 +97,29 @@ export async function issueChallenge(actionId: string): Promise<MfaChallengeView
     throw new AppError('NOT_FOUND', `未找到待处理操作: ${actionId}`);
   }
 
+  // `locked` is TERMINAL and wins over everything: no challenge is issued, refreshed or reset and
+  // nothing is written. Minting a code here would hand out fresh attempts against an operation the
+  // MFA attempt limit already killed — an account unlock (`circuit-breaker.ts#resetSession`) clears
+  // the breaker and the failure counter but never revives the operation, so a re-issued code plus a
+  // later successful `verify` would be the only thing standing between `locked` and execution.
+  // The refusal is typed data (`SecurityFailure`), never free text the caller has to parse.
+  if (action.status === 'locked') {
+    const failure: SecurityFailure = { code: 'MFA_LOCKED', reason: 'mfa_session_locked', actionId };
+    throw new AppError('MFA_LOCKED', '该操作已因验证码错误次数过多被安全锁定，无法重新签发验证码；请重新发起新的操作。', failure);
+  }
+
+  // A settled operation can never be verified again, so no code is minted for it either.
+  if (action.status === 'executed' || action.status === 'cancelled') {
+    const failure: SecurityFailure = { code: 'CONFLICT', reason: 'denied', actionId };
+    throw new AppError('CONFLICT', '该操作已执行或已取消，无法再签发验证码。', failure);
+  }
+
   const existing = await getMfaChallenge(actionId);
   if (existing) {
+    // A `locked` challenge is retired for good: resetting it to `pending` would replenish the attempt
+    // counter even before (or without) the action row itself being locked. It may only be renewed by
+    // `renewLockedMfaChallenges` (constrained to `awaiting_mfa` actions) or by a NEW operation.
+    if (existing.status === 'locked') return toView(existing);
     if (existing.expiresAt && existing.expiresAt.getTime() > realNow() &&
         existing.commandDigest === challengeDigest(action)) return toView(existing);
     await resetMfaAttempts(actionId);
@@ -121,7 +146,8 @@ export async function issueChallenge(actionId: string): Promise<MfaChallengeView
  *  - correct code → mark verified, `recordSuccess` the breaker → `ok({ ok: true, ... })`.
  *  - wrong code   → increment attempts, `recordFailure` the breaker, emit `MFA_FAILURE`
  *                   → `ok({ ok: false, attemptsLeft, locked })`.
- *  - locked       → `ok({ ok: false, locked: true })` regardless of the code (checked FIRST).
+ *  - locked       → `ok({ ok: false, locked: true })` regardless of the code (checked FIRST: a
+ *                   terminally `locked` action, a locked session or a locked challenge).
  *  - no challenge → `err(AppError('NOT_FOUND' | 'CONFLICT'))`.
  * Never swallows errors.
  */
@@ -140,6 +166,15 @@ export async function verify(actionId: string, code: string): Promise<Result<Mfa
   if (!challenge.expiresAt || challenge.expiresAt.getTime() <= realNow() ||
       (challenge.commandDigest !== null && challenge.commandDigest !== challengeDigest(action))) {
     return err(new AppError('MFA_FAILED', 'The verification challenge expired or the operation changed. Request a new challenge.'));
+  }
+
+  // LOCKED action wins and is TERMINAL: once the MFA attempt limit locked the operation, no code —
+  // not even the correct one — may verify it again. An account unlock clears the breaker and the
+  // failure counter only; it never revives the action, so a successful verification here would be
+  // the single remaining path from `locked` to execution. Nothing is written, no attempt is
+  // consumed, no `MFA_FAILURE` event is emitted and the breaker is left untouched.
+  if (action.status === 'locked') {
+    return ok({ ok: false, attemptsLeft: 0, locked: true });
   }
 
   // LOCKED wins: a locked session or a locked challenge fails verification regardless of the
