@@ -102,6 +102,7 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 `injection-guard.ts` 检测可疑指令。
 `incidents.ts` 在一个事务中持久化去重信号、相关安全事件与账户级锁定。
 `circuit-breaker.ts` 应用验证失败锁定与已审计的冷却重置。
+`recordFailure`（`:163-186`）在事务内以 strict 写 `CIRCUIT_BREAKER_TRIPPED`（severity `high`，detail `failures`/`max`/`result:'session_locked'`），同一次熔断只发一次；`commitAuditedReset`（`:252-302`）以快照 CAS + strict 在同一 `prisma.$transaction` 内写 `SECURITY_RESET`（detail `actor`/`reason`/`wasLocked`/`previousFailures`/`mode`/`renewedMfaChallenges`/`priorLockedAt`），失去 CAS 则不写也不审计。
 锁定由该用户的各会话共享。
 
 `execution-policy.ts` 在真实事务客户端上检查写权限。
