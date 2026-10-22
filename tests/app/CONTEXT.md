@@ -57,6 +57,13 @@ HTTP 200 不等于业务成功。
 关键词 `panel`、`prose`、`hallucinat` 在本目录无匹配。
 `waiting` 多指 `waiting_confirmation` 状态；`claim` 指 DB 执行 claim。
 
+MFA 验证码与锁定事实的分布：
+`malicious-input-http.test.ts` 的 `(a)` 是本目录唯一驱动错误验证码的用例，提交 `'000000'`（`MFA_CODE='123456'`）且只验证一次，断言 `mfaResult:'failed'` + `status:'awaiting_mfa'`，不触达三次锁定的终态；同用例的裸 `confirm` 断言 `requiresMfa:true` 重新提示。
+`PendingAction.status='locked'` 只作为 `developer-chat-http.test.ts` 的 `it.each` 数据行出现，断言 `POST /api/developer/chat/reset` 返回 409 且会话 revision 与 transcript 不变。
+`chat-http.test.ts` 测试 8 是本目录唯一的 MFA 提示文案断言（`toContain('验证码')`）与 `MFA_CODE` 不外泄断言。
+`security_event` 断言只有 `kind:'injection'`（`chat-http.test.ts`、`malicious-input-http.test.ts`），没有 `kind:'locked'`，也没有 `message` 内容断言。
+`__SECURITY_BLOCK__`、`chat.error.toolFailed`、`publicToolError`、`publicToolSummary`、`CIRCUIT_OPEN`、`/api/security/reset`、`GET /api/actions` 在 `cancel-safety-http.test.ts`、`malicious-input-http.test.ts`、`chat-http.test.ts`、`developer-chat-http.test.ts` 中均无匹配。
+
 锁定（`status:'locked'`）在本目录是 200 域结果：`/api/actions/[id]/{confirm,verify}` 从不返回 423；
 `423 CIRCUIT_OPEN` 只来自 `/api/security/reset`（`security-workflow-http.test.ts`）与 `manual-card-management.test.ts` 的代码层 `rejects.toMatchObject`。
 本目录不核对锁定的用户可见文案：`securityLocked`、`toolFailed`、「验证码错误次数过多」、「安全中心」、「技能」均无匹配，也没有 `MfaCard`/`publicToolError` 渲染断言；锁定只按 `status`、`mfaResult` 与 DB 行断言。
