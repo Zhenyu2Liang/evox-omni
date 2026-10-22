@@ -30,8 +30,9 @@
  * it differs from the source, and that nothing else changed).
  *
  * Fixtures: demo user 李明, `acct_checking` CHECKING ¥23,580.00 (mask `****8821`), `card_credit` (CREDIT,
- * mask `****6688`, credit limit ¥18,000.00) and `card_debit` (DEBIT), both seeded `ACTIVE`. NO `LOST` card
- * and NO VIRTUAL card is seeded, so every source here is put into its precondition through the REAL SDK
+ * mask `****6688`, credit limit ¥18,000.00) and `card_debit` (DEBIT, mask `****8821`, bound to
+ * `acct_checking` as its settlement account), both seeded `ACTIVE`. NO `LOST` card and NO VIRTUAL card
+ * is seeded, so every source here is put into its precondition through the REAL SDK
  * (`banking.card.reportLostCard` / `banking.card.applyVirtualCard`) rather than by rewriting rows.
  */
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -183,14 +184,46 @@ describe('1. RED 补办 is reachable through the real gateway for every card typ
       const replacementView = outcome.result?.data as CardView;
       expect(replacementView.id).toBe(replacement.id);
 
-      // Same owner, type, network and monthly limit; ACTIVE, freshly masked, and a VIRTUAL replacement
-      // keeps the settlement binding it inherits from its predecessor (no other type carries one).
+      // Same owner, type, network and monthly limit; ACTIVE, freshly masked. A DEBIT/VIRTUAL
+      // replacement INHERITS the settlement binding its predecessor recorded (a CREDIT card has none
+      // to inherit, so it stays unbound and `NOT_APPLICABLE`).
       expect(replacement).toMatchObject({
         type: sourceBefore.type,
         status: 'ACTIVE',
         replacedByCardId: null,
-        linkedAccountId: sourceBefore.type === 'VIRTUAL' ? sourceBefore.linkedAccountId : null,
+        linkedAccountId: sourceBefore.linkedAccountId,
       });
+      // The carried-over binding is the SOURCE's own settlement account, never a re-guessed default:
+      // the projection reports that account's cash (a card owns no balance of its own).
+      const settlement = sourceBefore.linkedAccountId === null
+        ? null
+        : await db().account.findUniqueOrThrow({ where: { id: sourceBefore.linkedAccountId } });
+      if (settlement === null) {
+        // CREDIT: never bound, so the projection carries NO settlement field at all.
+        expect(sourceBefore.type).toBe('CREDIT');
+        expect(replacementView.linkedAccountStatus).toBe('NOT_APPLICABLE');
+        expect(replacementView.linkedAccountId).toBeUndefined();
+        expect(replacementView).not.toHaveProperty('linkedAccountNumber');
+        expect(replacementView).not.toHaveProperty('linkedAccountName');
+        expect(replacementView).not.toHaveProperty('accountAvailableBalance');
+        expect(replacementView).not.toHaveProperty('payableAmount');
+        expect(replacementView.usable).toBe(true);
+      } else {
+        expect(replacementView).toMatchObject({
+          linkedAccountStatus: 'LINKED',
+          linkedAccountNumber: settlement.number,
+          linkedAccountName: settlement.name,
+          accountAvailableBalance: centsToMoney(settlement.balanceMinor),
+          usable: true,
+        });
+        // `payableAmount` = min(account cash, remaining monthly allowance); a null monthly limit is
+        // governed by the account cash alone. This scenario books no spend, so the allowance is full.
+        const expectedPayableMinor = replacement.monthlyLimitMinor === null
+          || settlement.balanceMinor < replacement.monthlyLimitMinor
+          ? settlement.balanceMinor
+          : replacement.monthlyLimitMinor;
+        expect(replacementView.payableAmount).toBe(centsToMoney(expectedPayableMinor));
+      }
       expect(replacement.monthlyLimitMinor).toBe(sourceBefore.monthlyLimitMinor);
       expect(await db().card.findUniqueOrThrow({ where: { id: replacement.id } })).toMatchObject({
         userId: DEMO_USER_ID,
