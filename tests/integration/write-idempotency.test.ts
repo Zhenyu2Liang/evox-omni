@@ -49,7 +49,7 @@ it('a card limit node cannot create another action during the action-to-node per
 
 it('a distinct redemption action cannot report another credit for an already redeemed holding',async()=>{
  const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
- const call=()=>executeGatedTool({sessionId:s,userId,toolName:'redeem_investment',args:{holdingId:'holding_wenjiana'},userRequest:'赎回理财'});
+ const call=()=>executeGatedTool({sessionId:s,userId,toolName:'redeem_investment',args:{holdingId:'holding_wenjiana',mode:'ALL'},userRequest:'赎回理财'});
  const a=await call();const first=await confirm(a.pendingActionId!,s,'123456');const firstBalance=(await p.account.findFirst({where:{userId,type:'CHECKING'}}))!.balanceMinor;
  const b=await call();const second=await confirm(b.pendingActionId!,s,'123456');const secondBalance=(await p.account.findFirst({where:{userId,type:'CHECKING'}}))!.balanceMinor;
  console.log('REVIEW_REDEEM_IDENTITY',toJson({firstAction:a.pendingActionId,secondAction:b.pendingActionId,firstOk:first.ok,secondOk:second.ok,secondStatus:second.status,secondResult:second.result,firstBalance,secondBalance}));

@@ -38,7 +38,7 @@ it('resume can recover a persisted executor claim whose owner died long ago',asy
 });
 
 it('redemption same-key concurrency replays the exact result and distinct keys are refused',async()=>{
- const p=getTestPrisma();const input={userId,holdingId:'holding_wenjiana',idempotencyKey:'review-same-key'};
+ const p=getTestPrisma();const input={userId,holdingId:'holding_wenjiana',mode:'ALL' as const,idempotencyKey:'review-same-key'};
  const results=await Promise.all([redeemInvestment(input),redeemInvestment(input)]);expect(results[1]).toEqual(results[0]);
  await expect(redeemInvestment({...input,idempotencyKey:'review-different-key'})).rejects.toMatchObject({code:'CONFLICT'});
  expect((await p.account.findFirst({where:{userId,type:'CHECKING'}}))!.balanceMinor).toBe(2863000n);
