@@ -119,7 +119,8 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 `chat.error.securityLocked` 由 `unit/lib/public-text.test.ts:79-87`（zh-CN/en 双语言）、`unit/planner/locked-card-rendering.test.ts:148-186`、`unit/weixin-lock-presentation.test.ts:112-183`、`unit/agent/turn-security-event.test.ts:98` 断言。
 `publicToolError` 由 `unit/planner/tool-feedback.test.ts`（通用失败 `chat.error.toolFailed`）与 `unit/lib/public-text.test.ts:33-60` 覆盖。
 `publicToolSummary` 被断言到目录锁定句，见 `unit/agent/turn-security-event.test.ts:92-98` 与 `unit/planner/locked-card-rendering.test.ts:176-180`。
-`publicToolError` 仅由 `unit/planner/tool-feedback.test.ts` 以 `chat.error.toolFailed` 覆盖通用失败，不涉及锁定。
+`security_event` 的 `kind:'injection'` 由 `app/chat-http.test.ts`、`app/malicious-input-http.test.ts` 断言；`kind:'locked'` 由 `integration/security-deny-redaction.test.ts:132`、`unit/agent/turn-security-event.test.ts:56-67`（`code`/`reason` 为 typed、`message` 必须 `undefined`）、`unit/weixin-lock-presentation.test.ts:170-210` 断言。
+被拦下的工具事件带目录句 `summary`，断言在 `unit/agent/turn-security-event.test.ts:77-98` 与 `unit/planner/locked-card-rendering.test.ts:157-194`。
 `security_event` 只在 `app/chat-http.test.ts`、`app/malicious-input-http.test.ts` 断言 `kind:'injection'`；`kind:'locked'` 与该帧的 `message` 内容没有任何用例，被拦下的工具事件也不带 `summary`。
 `helpers/scenario.ts` 复刻了生产的投影（block 原因 →`security_event{kind:'locked', message:原始原因}`），场景用例因此继承同一可观测面，但从未在该帧上断言。
 `components/chat/transport-validation.ts` 对该帧只校验任意 `kind`/`message` 字符串，拒绝矩阵中没有这一帧。
