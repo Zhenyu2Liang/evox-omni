@@ -157,7 +157,9 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 进程内调用 `app/api/*` 路由处理器用 `tests/app/harness.ts`（`invoke:163-180` 构造真实 `NextRequest` 后直接调用导入的处理器），`tests/app` 之外的借用方只有 `integration/request-step-binding.test.ts:10` 与 `integration/task-feature-hardening.test.ts:13`。
 `tests/helpers/` 没有租约/时钟/`maxRecoveryAttempts` 辅助：规格内联改写 `agentRun.leaseExpiresAt`、`agentSession.runLeaseExpiresAt`、`agentTask.executionClaimedAt`，取值用哨兵日期 `new Date('2000-01-01T00:00:00Z')`/`new Date(1)` 或真实时钟 `Date.now() - 660000`。
 崩溃-重启端到端只有两条真实子进程入口：`helpers/restart-process.ts`（argv `mode scenario runId sessionId`，`recover` 模式调 `recoverOwnedRun`、`worker` 模式调 `tickAgentRecovery`）与 `helpers/standalone-restart-process.ts`（argv `mode scenario`，`start` 走 `createTaskGraph`+`resumeTask`，其余走 `tickAgentRecovery()`）。
-`tests/helpers/locked-action.ts` 提供停泊动作与 MFA 阶梯（`parkRedTransferPlan`/`parkConfirmOnlyTransfer`/`exhaustMfaAttempts`/`lockAction`），当前无任何规格引用。
+`tests/helpers/locked-action.ts` 提供停泊动作与 MFA 阶梯（`parkRedTransferPlan`/`parkConfirmOnlyTransfer`/`submitMfaCode`/`exhaustMfaAttempts`/`lockAction`）与只读探针（`pendingActionRow`/`mfaChallengesFor`/`checkingBalance`/`zhangweiTransfers`/`auditLogCount`/`securityEventsOfKind`/`transactionsCount`），被 `app/mfa-lock-http-contract.test.ts`、`app/mfa-lock-refresh-unlock-http.test.ts`、`integration/locked-action-recovery.test.ts` 共用。
+它从不 reset 也不 seed 数据库：熔断按所有者持久化，规格仍须自持 `beforeEach(resetDatabase)`。
+阶梯一律走 `securityGateway#authorizeAction`；**绝不**直接调 `security/mfa.ts#verify`——它只锁 challenge，不落 `PendingAction` 终态，正是这些规格要防的弹窗复活路径。
 逐文件的恢复/租约驱动方式见 [integration/CONTEXT.md](integration/CONTEXT.md)、[app/CONTEXT.md](app/CONTEXT.md)、[unit/CONTEXT.md](unit/CONTEXT.md)。
 
 ## 常用命令
