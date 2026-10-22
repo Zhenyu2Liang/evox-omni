@@ -70,6 +70,8 @@
 持久化 `PendingAction.status === 'locked'`、`MfaChallenge.status === 'locked'`、
 `MfaVerifyResult.locked`、`blockReason === 'HIGH_RISK_BLOCKED'`。
 `failure` 一律用 `toMatchObject`，字段多/少都不会被发现。
+`'MFA_LOCKED'` 与 `'mfa_attempts_exhausted'` 在本目录只同时出现在 `mfa-failure-contract.test.ts:116-123`（`toMatchObject`，无 `toBe` 全等断言可钉住该组合）；
+作为**顶层** `code` 的 `'CIRCUIT_OPEN'` 只在 `mfa-failure-contract.test.ts:149`（`retry.code`）断言，`gateway.test.ts:452-471`、`authorize-hardening.test.ts:251-264`、`authorize-concurrency.test.ts` 的锁定用例都不断言 `code`/`failure`。
 中文锁定文案与 i18n 键（`chat.error.securityLocked`）在本目录无断言。
 
 拒绝类断言使用 `AppError` 的 `code`：`CIRCUIT_OPEN`（熔断 / 解锁被拒）与 `SECURITY_DENIED`（所有权不符）。
