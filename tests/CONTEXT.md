@@ -149,7 +149,7 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 - `awaiting_mfa` 的 `状态：等待验证码` + `继续验证：/验证 <id> 六位验证码` + 剩余次数由 `unit/weixin-lock-presentation.test.ts:134` 全等断言，入口只属 `awaiting_mfa` 见 `:144-152`。
 - 微信入口无「连错三次验证码→锁定」的端到端用例：三次锁定只在网关层由 `unit/security/mfa-failure-contract.test.ts` 与 `integration/security-deny-redaction.test.ts:184` 覆盖，通道侧把结果桩喂给 `settle` 只断言文案（`unit/weixin-lock-presentation.test.ts:95-98`）。
 - 无 `/验证 <id>`（缺码）、`/取消 <id>` 回执、`/恢复操作 <id>` 的 bridge 分派、`命令格式不正确`、非文字/超长消息、`BankingApiError`（`服务端提示（CODE）：…`，含 `CIRCUIT_OPEN` 信封）的用例。
-- 无断言出站文本不含 `__SECURITY_BLOCK__`：`renderEvents` 忽略 `security_event` 仅由代码保证；`__SECURITY_BLOCK__` 在 `tests/` 内只出现在 `unit/agent/providers/provider-mock.test.ts`（mock responder 的 block 前缀，与通道无关）。
+- 出站文本不含 `__SECURITY_BLOCK__` 由 `unit/weixin-lock-presentation.test.ts:200-248` 覆盖；`renderEvents` 对 `kind:'locked'` 渲染 `securityNotice` 并撤销 gate（`channels/weixin/banking-client.ts:135-142`），非 locked 的 kind 才静默。
 - 无 `worker.ts` 的游标提交与 `-14` 重扫码、outbox 1600 字切块与 2000 条淘汰的用例。
 
 ## 常用命令
