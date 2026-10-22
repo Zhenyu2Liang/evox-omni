@@ -134,7 +134,7 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 
 ## 已知边界
 
-`lib/db/repositories/pendingAction.ts#setPendingActionStatus` 仍是无条件状态写入原语，本层已全部改用 `claimPendingAction`，其唯一调用方在 `agent/`。
+`lib/db/repositories/pendingAction.ts#setPendingActionStatus` 仍是无条件状态写入原语，本层与 `agent/` 都不再调用它（别名 `updatePendingActionStatus` 同样无人使用），只剩测试引用；状态写入一律走 `claimPendingAction`。
 `agent/` 中未传 `from` 的 `settlePendingAction` 结算路径当前不可达 `locked`（`confirmed` 无法变成 `locked`），属纵深防御缺口，需在该层加 CAS。
 带 `__SECURITY_BLOCK__` 前缀的 deny 载荷仍是模型可见文本，其最终文案取决于 `agent/` 与 `lib/tool-feedback.ts` 是否消费 `parseBlockReason` 的 `failure`；本层不再向用户文案内插内部字面量。
 `lockedOutcome` 的顶层 `code` 固定为 `CIRCUIT_OPEN`（`MFA` 尝试耗尽时 `failure.code` 为 `MFA_LOCKED`）；若改为按 `reason` 返回 `MFA_LOCKED`，需同步 `tests/unit/security/mfa-failure-contract.test.ts` 中 `retry.code` 与 `toMatchObject` 两处断言。
