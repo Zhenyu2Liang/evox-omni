@@ -7,6 +7,14 @@
  *  - Delegates to `@/audit`: `getSecurityStatus(sessionId, { isLocked })` +
  *    `listSecurityEvents({ sessionId })`; the authoritative lock state is supplied by the
  *    security node's circuit breaker (`@/security` → `circuitBreaker.isLocked`).
+ *  - PUBLIC PROJECTION: a persisted `SecurityEvent` is an INTERNAL audit record, so BOTH event
+ *    surfaces — `events` and `status.recentEvents`, which carries the same rows — are mapped through
+ *    `_lib/public-security-event.ts#publicSecurityEvent` before serialization. Structured facts
+ *    (`id`/`timestamp`/`sessionId`/`userId`/`kind`/`severity`) pass through verbatim, legitimate
+ *    audit prose survives byte-for-byte, a blank/internal-diagnostic `message` becomes `''` and a
+ *    `detail` that is not JSON-safe or carries an internal diagnostic at any string leaf is dropped
+ *    entirely. The gateway's `__SECURITY_BLOCK__…` marker therefore never leaves this edge —
+ *    `tests/app/security-http-redaction.test.ts` pins the contract.
  *  - The breaker is DB-backed and PER-ACCOUNT, so its reads are async: `circuitBreaker.getState`
  *    and `circuitBreaker.isLocked` both return a `Promise` and MUST be awaited.
  *  - Success: `200 { ok: true, data: { status; events; circuitBreaker; lock?; lockedActions } }`,
@@ -30,15 +38,19 @@
  * acquires no lease.
  */
 import type { NextRequest } from 'next/server';
-import { audit, type SecurityStatus } from '@/audit';
+import { audit } from '@/audit';
 import { security } from '@/security';
 import { isManualCardCommand } from '@/lib/contracts/card-management';
 import type { RiskLevel } from '@/lib/contracts/risk';
-import type { SecurityEvent } from '@/lib/contracts/audit';
 import type { SecurityFailure } from '@/lib/contracts/security';
 import { listPendingActions } from '@/lib/db/repositories/pendingAction';
 import { jsonResponse, errorResponse } from '../_lib/http';
 import { resolveIdentity } from '../_lib/session';
+import {
+  publicSecurityEvent,
+  type PublicSecurityEvent,
+  type PublicSecurityStatus,
+} from '../_lib/public-security-event';
 
 /** One TERMINAL, locked operation of the caller session (read-only fact, never actionable here). */
 export interface LockedActionSummary {
@@ -52,8 +64,10 @@ export interface LockedActionSummary {
 
 /** Success payload shape for `GET /api/security`. */
 export interface SecurityData {
-  status: SecurityStatus;
-  events: SecurityEvent[];
+  /** `locked` is forwarded verbatim; `recentEvents` carries the PUBLIC projection of each row. */
+  status: PublicSecurityStatus;
+  /** The PUBLIC projection of every persisted event, newest first — no event is filtered out. */
+  events: PublicSecurityEvent[];
   /** Raw circuit-breaker counters for the account (failure count vs trip threshold). */
   circuitBreaker: { failures: number; max: number; locked: boolean };
   /**
@@ -115,8 +129,9 @@ export async function GET(req: NextRequest): Promise<Response> {
     const lockedActions = await readLockedActions(sessionId);
 
     const data: SecurityData = {
-      status,
-      events,
+      // `locked` stays verbatim; the SAME rows must not leak through `recentEvents` either.
+      status: { ...status, recentEvents: status.recentEvents.map(publicSecurityEvent) },
+      events: events.map(publicSecurityEvent),
       circuitBreaker: {
         failures: breaker.failures,
         max: breaker.max,
