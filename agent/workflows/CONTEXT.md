@@ -66,6 +66,8 @@
 ## 定位停靠节点：复用既有读取
 
 `parkedActionIds` 用 `readPendingActionId`（`./contracts` 里唯一的 `{ pendingActionId }` 读取器，`agent/turns/authorization-view.ts` 用的也是它）读节点输出，不要另写解析。
+它遍历 `plan.results`（`plan.nodes` 是 `TaskNodeSpec`，没有 `status`/`output`），只收 `waiting_confirmation`/`waiting_verification` 节点，用 `Set` 去重并保持仓储 `orderBy: { order: 'asc' }` 的节点顺序（`lib/db/repositories/task.ts:96`）。
+`output` 不是白名单投影：`toTaskPlan`（`persistence.ts:24`）以 `safeParse(node.output, undefined)` 原样透传 JSON 列，所以只要 `{ pendingActionId }` 由 `jsonNodeOutput`（`../task-fencing.ts:42-44`）或 `planner/node-outcome.ts:41` 写进行，守卫就必然能读到。
 `findTaskByPendingAction` 经 `getPendingActionPlanLink`（`lib/db/repositories/pendingAction.ts:304-312`，投影为 `{ id, taskId, nodeId }`）解析，不返回 `status`，所以 `locked`/`executed` 的 actionId 仍能解析到它的计划。
 `resumeTaskForAction` 只读任务行（`status === 'cancelled'` 时提前返回），不读操作行；它没有停靠决策守卫，只在网关授权成功后被调用 —— `agent/confirmation.ts` 在 `!auth.ok` 时先行返回，所以 `locked` 走不到这里。
 仓储读取：`getPendingAction(id)`（`pendingAction.ts:110-118`）返回含 `status` 的完整行；`getPendingActionOwnership`（`pendingAction.ts:288-296`）返回 `{ id, userId, sessionId, status }`，即守卫使用的投影。
