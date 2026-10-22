@@ -63,6 +63,7 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 本层只快照报价，不改变余额。
 
 `mfa.ts` 把 5 分钟墙钟挑战绑定到命令，保留有效尝试并记录消费。
+每次错码都写 `MFA_FAILURE`（severity `medium`，detail `actionId`/`decision:'reject_code'`/`result:'attempt_counted'|'session_locked'`/`attempts`/`maxAttempts`/`attemptsLeft`/`locked`，`mfa.ts:181-196`）。
 `step-up-authenticator.ts` 是明确的演示适配器，不发送短信。
 不支持的模式必须失败。
 真实短信供应商与已认证的员工或用户身份属于独立的生产工作。
