@@ -60,7 +60,7 @@
 ## 已知问题
 
 整页刷新会丢失内存态：`settledActions` 与内联卡片上的终态标记都不持久化。
-若服务端仍把已锁定行当作 `awaiting_mfa` 返回（`toPendingActionRef` 丢弃 `locked` 行，但服务端仅把 `MfaChallenge` 置为 `locked`、未持久化 `PendingAction` 状态），
+`toPendingActionRef` 丢弃 `locked` 行（`actions.ts` 392-399），恢复列表读到锁定行时不会再生成决定。
 刷新后客户端无从得知该行已锁定，仍会重建 `kind:'mfa'` 决定。
 该刷新情形由服务端侧修复覆盖；客户端在会话内已不再重开终态决定。
 
