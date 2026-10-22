@@ -98,6 +98,13 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 `mfa.verify` 自身以 `err(AppError(...))` 表示挑战已消费/过期/命令变更/不存在，`authorizeWithMfa`（`:881-894`）把它折成 `status:'awaiting_mfa'`、`code:'MFA_FAILED'`、`failure:{ code:'MFA_FAILED', reason:'mfa_code_invalid', actionId }`（无尝试计数），`message` 沿用 SDK 的英文字符串。
 全仓没有任何 `throw new AppError('MFA_LOCKED', …)`：`MFA_LOCKED` 只作为 `failure.code` 出现（`:906`），所以 `http.ts` 的 `MFA_LOCKED → 423` 映射不可达。
 
+四条授权结果的 `message` 都是 `security-gateway.ts` 内的内联字面量，一律不含 `BLOCK_REASON_PREFIX` 等内部分隔标记：
+可重试的错误码（`:912`）是模板串 `` `验证码错误，请重试。剩余尝试次数：${attemptsLeft}。` ``（`attemptsLeft` 为 0–2 的裸数字，没有「还可尝试」等措辞）；
+尝试耗尽（`:911`）与 `lockedOutcome`（`:841`）是常量；
+`security/messages/mfa.zh-CN.json` 只有 `renewedChallenge`/`newChallenge` 两个键，仅服务于 `authorizeWithMfa` 的挑战重发/新建提示（`:868-877`）；`MFA_CODE_PROMPT`（`:242`）是「请输入 6 位短信验证码以完成安全验证。」。
+`gatewayDecide` 的熔断 deny 消息（`:446`「当前会话已触发安全熔断，高风险操作已被锁定。请前往安全中心解除限制后再试。」）与 `lockedOutcome`（`:841`「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」）措辞不同，且都不含 `actionId`。
+`lockedOutcome` 的两个调用点是已锁行重试（`:1118`，`mfa_session_locked`）与会话熔断（`:1148`，`circuit_open`），共享 `:841` 的同一句 message。
+
 ## 锁定拒绝语的可展示性
 
 本层三句锁定拒绝语分别位于 `gatewayDecide`（`:446`，熔断 deny）、`lockedOutcome`（`:841`）与 `authorizeWithMfa`（`:911`，尝试耗尽）。
