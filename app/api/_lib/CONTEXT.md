@@ -25,7 +25,10 @@ the lock/MFA signals, so a client never parses `message`.
 `SecurityFailure`/`SecurityFailureReason` are imported here only from `@/lib/contracts/security`;
 `AuthorizationResult` (declared in `security/security-gateway.ts`) is never imported by this folder —
 the decision routes receive an `@/agent` `ConfirmationOutcome` and copy its `code`/`failure` verbatim.
-Nothing in `_lib` imports `lib/public-text.ts` or `lib/tool-feedback.ts`; type-to-text rendering is
+`public-security-event.ts` is the ONLY module in `_lib` that imports `lib/public-text.ts`
+(`isInternalDiagnostic`), because a security-center read model must neutralize INTERNAL audit records
+before serializing them. No `_lib` module imports `lib/tool-feedback.ts`, and every other
+type-to-text rendering stays
 client-side.
 - `agent-bridge.ts`: static delegation for action confirmation, verification, cancellation and
   recovery; task controls; owning-plan lookup and refreshed plan events. It forwards the fixed
