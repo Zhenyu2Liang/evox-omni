@@ -3,21 +3,43 @@ import { lifecycle } from '@/planner';
 import { security } from '@/security';
 import { recordSecurityEvent } from '@/audit';
 import { AppError, type ErrorCode } from '@/lib/errors';
+import { createTranslator, DEFAULT_LOCALE } from '@/lib/i18n/shared';
+import { isInternalDiagnostic } from '@/lib/public-text';
 import { demoNow } from '@/lib/clock';
 import { prisma } from '@/lib/db/client';
 import { getTask, type AgentTaskWithNodes } from '@/lib/db/repositories/task';
 import { listPendingActionsByTask, revokePendingActionsByTask } from '@/lib/db/repositories/pendingAction';
 import { restoreCommittedCancellationNodes } from '../cancellation-evidence';
+import { OPEN_ACTION_STATUSES } from '../action-status';
 import { loadOwnedTaskWithOwner, getTaskPlan } from './ownership';
 import { toTaskPlan } from './persistence';
 import { buildPlanDeps, UNUSED_RUN_TOOL } from './ports';
 import type { TaskControlOptions } from './contracts';
 
 const ALREADY_SETTLED_CODES: ReadonlySet<ErrorCode> = new Set(['CONFLICT', 'NOT_FOUND']);
+const t = createTranslator(DEFAULT_LOCALE);
+
+/** The cancellable statuses: the SHARED open-action vocabulary, never a local literal list. */
+const REVOCABLE_ACTION_STATUSES: string[] = [...OPEN_ACTION_STATUSES];
+
 export interface RevokeSummary {
   revoked: string[];
   alreadySettled: string[];
-  failed: { actionId: string; message: string }[];
+  /** A revocation that failed; `message` is public-safe (see `revokeFailureText`), `code` is typed. */
+  failed: { actionId: string; code: ErrorCode; message: string }[];
+}
+
+/**
+ * The only text of a failed revocation that may leave this process.
+ *
+ * `RevokeSummary.failed` is written into a `SecurityEvent`'s `detail` (see `recordRevokeFailure`) and
+ * `GET /api/security` serves audit records verbatim, so a gateway payload (`__SECURITY_BLOCK__…`), a
+ * raw JSON fragment, a stack trace or a `null`-ish placeholder must never be copied here. Business
+ * sentences (e.g. an ownership refusal) stay verbatim for audit fidelity; the typed `code` carries
+ * the machine-readable classification.
+ */
+function revokeFailureText(failure: AppError): string {
+  return isInternalDiagnostic(failure.message) ? t('chat.error.toolFailed') : failure.message;
 }
 
 async function revokeParkedActions(userId: string, sessionId: string, row: AgentTaskWithNodes): Promise<RevokeSummary> {
@@ -29,7 +51,7 @@ async function revokeParkedActions(userId: string, sessionId: string, row: Agent
     } catch (error) {
       const failure = AppError.from(error);
       if (ALREADY_SETTLED_CODES.has(failure.code)) summary.alreadySettled.push(action.id);
-      else summary.failed.push({ actionId: action.id, message: failure.message });
+      else summary.failed.push({ actionId: action.id, code: failure.code, message: revokeFailureText(failure) });
     }
   }
   return summary;
@@ -56,11 +78,11 @@ export async function sweepCancelledPlan(sessionId: string, taskId: string): Pro
 export async function cancelTask(sessionId: string, taskId: string, options: TaskControlOptions = {}): Promise<TaskPlan> {
   const { row, userId } = await loadOwnedTaskWithOwner(sessionId, taskId);
   if (row.status === 'cancelled') return toTaskPlan(row);
-  const bulkRevoked = await revokePendingActionsByTask(taskId, ['pending', 'awaiting_mfa']);
+  const bulkRevoked = await revokePendingActionsByTask(taskId, REVOCABLE_ACTION_STATUSES);
   const revoke = await revokeParkedActions(userId, row.sessionId, row);
   // Revocation and cancellation are committed together; money already committed remains settled.
   const settledRevoked = await prisma.$transaction(async tx => {
-    const revoked = await revokePendingActionsByTask(taskId, ['pending', 'awaiting_mfa'], tx);
+    const revoked = await revokePendingActionsByTask(taskId, REVOCABLE_ACTION_STATUSES, tx);
     await tx.agentTask.update({ where: { id: taskId }, data: { status: 'cancelled' } });
     await restoreCommittedCancellationNodes(tx, taskId, userId, (options.now ?? demoNow)());
     return revoked;
