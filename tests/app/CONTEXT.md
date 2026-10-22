@@ -54,6 +54,16 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 - `/api/security/reset` 使用验证码或冷却策略；锁定中缺码或错码均为 423 `CIRCUIT_OPEN`，正确码 200 + `{locked:false,failures:0}`，每次成功恰好 1 条 `SECURITY_RESET`（`security-workflow-http.test.ts:1079-1154`）。
 - `/api/developer/security/reset` 使用开发者模式重置策略：非开发者模式恒 403，成功路径 200 且**不改写** `PendingAction.status`（`developer-security-http.test.ts:42` 行仍为 `awaiting_mfa`），审计写入失败时 500 且锁保持。
 
+`POST /api/security/reset` 的调用面固定为三处：`identity-http.test.ts:122`（`{}` → 200，无其他断言）、`security-workflow-http.test.ts:936`（it 7，`{}` + 伪造 query → 200 + `data.sessionId`）、同文件 it 9–13（见 423/200 形状）。
+响应字段断言只到 `data.sessionId`/`data.locked`/`data.failures`（`:1125-1127`、`:938`、`:1150-1151`）。
+
+解锁路径的断言缺口（本目录）：
+- `data.lockedActionsReopened`（`app/api/security/reset/route.ts:52` 恒 `false`）、`data.max` 与 `data.message` 全仓零断言。
+- 「已 `locked` 的 `PendingAction` 解锁后仍为 `locked`、从不写回 `pending`/`awaiting_mfa`」无断言：it 12 只断言 breaker 状态、恰好 1 条 `SECURITY_RESET` 与响应体，从不读 `pendingAction.status`。
+  `manual-card-management.test.ts:73-83` 走 `resetDemoSession`（开发者门面）且只断言 `listCardChanges` 投影——`security/manual-card-management.ts:98-103` 在 breaker 锁定期间把状态覆盖成 `locked`，解锁后回落到真实行状态——因此既不能证明也不能否证该终态性。
+- 「锁 + 解锁后新请求产生新 `PendingAction`（新 id，旧 locked id 不复用）」无断言；`mfa-terminal-lock-http.test.ts:315` 的 `not.toBe` 比较的是**锁之前**两个不同计划的 actionId。
+- it 9 的解锁成功路径调用的是 `security.circuitBreaker.resetSession`（`:1019`）而非 HTTP 路由；HTTP 成功路径只有 it 12/it 13。
+
 ## 卡片虚拟卡消费
 
 `card-consume-http.test.ts` 覆盖虚拟卡消费入口：
