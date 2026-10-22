@@ -44,6 +44,10 @@
 `maxAttempts` 缺省时回落 `cards.mfa.failedAttempts`。
 `ApprovalRequest` 转发之，`ChatWindow` 传 `maxAttempts`（`MFA_MAX_ATTEMPTS`）。
 
+唯一活动面板由 `ChatWindow.tsx:237` 以 `key={pending.actionId}` 挂载 `ApprovalRequest`（`MfaCard` 亦以 `key={pending.actionId}`，`ApprovalRequest.tsx:32`），并写出 `data-approval-request`/`data-action-id`/`data-kind`。
+`pendingAction` 只由 `confirmation_required`/`mfa_required`（`useAgentStream.ts:502-550`）或挂起操作恢复（`651-666`）建立，关闭只来自 `settleAction` 的终态/`confirmed`（`402-404`）与 `pull` 的无错误清除规则（`880-882`）。
+`tool_start`/`tool_end` 的 `blocked` 只记录 `lastBlockedToolName`（`482-494`），既不关闭也不替换面板；无 `actionId` 时更不会创建新面板。
+
 ### 验证响应校验与分支（`actions.ts#postAction`，约 541-617 行）
 
 `status` 须属 `ACTION_STATUSES`（`pending`/`awaiting_mfa`/`confirmed`/`executed`/`failed`/`cancelled`/`locked`/`needs_reconciliation`）。
