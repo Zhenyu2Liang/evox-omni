@@ -203,9 +203,31 @@ export function assertCreditTileLabels(rows: Record<string, string>, label: stri
  * `DEBIT` card is a debit instrument drawing on that account's cash, so `信用额度` / `可用额度` on it
  * would be a credit line invented on top of cash. Those rows carry the REAL amounts even while the card
  * is unusable (`usable === false`, e.g. `LOST`) — unusable is not empty.
+ *
+ * `MISSING` / `UNTRUSTED` — ONLY the notice (`未关联账户` / `账户暂不可用`) and NO money row at all,
+ * never a placeholder `0.00`.
  */
-export function assertLinkedAccountTileLabels(rows: Record<string, string>, label: string): void {
+export function assertLinkedAccountTileLabels(
+  rows: Record<string, string>,
+  label: string,
+  status: 'LINKED' | 'MISSING' | 'UNTRUSTED' = 'LINKED',
+  tileText?: string,
+): void {
   assertNoRetiredCardLabels(rows, label);
+  if (status !== 'LINKED') {
+    const notice = status === 'MISSING' ? CARD_LABEL.linkedAccountMissing : CARD_LABEL.linkedAccountUntrusted;
+    for (const moneyRow of [CARD_LABEL.accountBalance, CARD_LABEL.usableBalance]) {
+      if (rows[moneyRow] !== undefined) {
+        throw new Error(
+          `${label}：linkedAccountStatus=${status} 时不得渲染「${moneyRow}」行（该状态没有金额，绝不以 0.00 冒充），实际渲染行 ${JSON.stringify(rows)}`,
+        );
+      }
+    }
+    if (tileText !== undefined && !tileText.includes(notice)) {
+      throw new Error(`${label}：linkedAccountStatus=${status} 时应渲染提示「${notice}」：${tileText.slice(0, 240)}`);
+    }
+    return;
+  }
   if (rows[CARD_LABEL.accountBalance] === undefined || rows[CARD_LABEL.usableBalance] === undefined) {
     throw new Error(
       `${label}：绑定账户的非信用卡必须渲染「${CARD_LABEL.accountBalance}」与「${CARD_LABEL.usableBalance}」两行，实际渲染行 ${JSON.stringify(rows)}`,

@@ -103,7 +103,7 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 
 `readCardTileRows` / `readDialogRows` 把 DOM 里渲染出的标签当作 `Record<renderedLabel, renderedValue>` 的键，所以调用点写成 `rows[CARD_LABEL.accountBalance]`。
 硬编码字面量的真实故障不是「取到旧值」，而是目录改名后比较两侧同时变成 `undefined` 而静默空通过；因此每处金额比较前都先断言该标签行确实存在。
-`card-replace-chain.e2e-helper.ts` 集中提供三个标签契约断言：`assertNoRetiredCardLabels`（任何卡片行都不得含废弃标签）、`assertCreditTileLabels`（CREDIT 必须有 `信用额度` + `可用额度`，且不得有 `账户余额`/`可用余额`）、`assertLinkedAccountTileLabels`（绑定账户的非信用卡必须有 `账户余额` + `可用余额`，且不得有信用额度行）。
+`card-replace-chain.e2e-helper.ts` 集中提供三个标签契约断言：`assertNoRetiredCardLabels`（任何卡片行都不得含废弃标签）、`assertCreditTileLabels`（CREDIT 必须有 `信用额度` + `可用额度`，且不得有 `账户余额`/`可用余额`）、`assertLinkedAccountTileLabels`（按 `linkedAccountStatus` 断言：`LINKED` 必须有 `账户余额` + `可用余额`，`MISSING`/`UNTRUSTED` 必须一行金额都不渲染且只出现提示文案；两者都不得有信用额度行）。
 
 `linkedAccountStatus` 四态决定金额行：`LINKED` 渲染账户名 + 脱敏账号 + `账户余额` + `可用余额`；`MISSING`/`UNTRUSTED` 只渲染提示文案（`未关联账户`/`账户暂不可用`），**完全不渲染任何金额行**，绝不以 `0.00` 冒充；`FROZEN`/`LOST`（`usable === false`）追加提示但照常渲染真实且非零的余额——「不可用 ≠ 余额为零」；CREDIT 恒为 `NOT_APPLICABLE`。
 `LiveCardRecord` 与 `helpers.ts#CardView` 是 `GET /api/cards` 的读模型子集：服务端契约（`banking-sdk/types.ts#CardView`）中 `linkedAccountStatus` 与 `usable` 必填，`accountAvailableBalance`/`payableAmount` 仅在 `LINKED` 出现；测试侧只按 JSON 读取使用，从不构造 `CardView` 字面量。
