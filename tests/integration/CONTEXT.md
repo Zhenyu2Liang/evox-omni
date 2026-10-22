@@ -92,7 +92,7 @@
 保证它的当前生产事实：
 - `recoverOwnedRun`（`agent/durable/service.ts:104`）在运行仍 `waiting_confirmation`／`waiting_verification` 时走 `AUTHORIZATION_REQUIRED` 早退（`:159-162`），只回报 `The original confirmation or verification is still required.`，不重新驱动写；待决策动作的状态过滤不含 `locked`（`:216`），`synchronizeRunActionInvocations` 只回写 `['executed','cancelled','failed','needs_reconciliation']`（`lib/db/repositories/agentRun.ts:240-243`）。
 - `resumeTask`（`agent/workflows/controls.ts:27`）与 `retryTask`（`:49`）在认领任何状态之前先经 `assertParkedActionsNotTerminal`（`:33`／`:54` → `agent/workflows/parked-actions.ts:63-69`）读计划停靠动作的当前状态：终态即抛出，`locked` 抛 `MFA_LOCKED` + `chat.error.actionLocked`、`needs_reconciliation` 抛 `CONFLICT` + `chat.error.unknownOutcome`、其余终态抛 `CONFLICT` + `chat.error.stateChanged`（`:74-76`），计划状态与节点都不被改写，节点也就不会再被驱动到网关。
-- `recoverAction`（`agent/index.ts:164`，计划分支 `:205-258`）对锁定 action 返回 `ok:false`，不重开决策。
+- `recoverAction`（`agent/index.ts:168`，计划分支 `:209-265`）对锁定 action 返回 `ok:false`，不重开决策：该分支调 `resumeTask` 后收到的 `MFA_LOCKED` 由 `:250-263` 转成公开文案。
 - `authorizeAction` 先对 `status === 'locked'` 短路为 `lockedOutcome(..., 'mfa_session_locked')`（`security/security-gateway.ts:1116-1119`），其后才是非 `pending`／`awaiting_mfa` 的 `CONFLICT` 守卫（`:1123-1125`）；因此 `security/mfa.ts#issueChallenge`（`:100-105`）虽不过滤动作状态，对锁定动作不可达，验证码永不重发。
 - `beginAgentRun`（`lib/db/repositories/agentRun.ts:51-54`）在 `agentSession.runLeaseExpiresAt` 未过期时拒绝第二次准入，真并发租约抢占无法由用例构造，用例改用崩溃边界作为等价保证。
 
