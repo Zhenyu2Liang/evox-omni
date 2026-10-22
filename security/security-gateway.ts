@@ -46,7 +46,6 @@ import {
   getPendingAction,
   getMfaChallenge,
   listPendingActionsByTask,
-  setPendingActionStatus,
 } from '../lib/db/repositories/pendingAction';
 import { getSession } from '../lib/db/repositories/session';
 import {
@@ -251,6 +250,46 @@ const PLAN_CANCELLED_MESSAGE = '操作所属的任务计划已取消，该操作
 /** Code-free confirmation messages. */
 const CONFIRM_OK_MESSAGE = '操作已确认，正在执行。';
 const VERIFY_OK_MESSAGE = '安全验证通过，操作已确认，正在执行。';
+
+/**
+ * Chinese labels for a PERSISTED `PendingAction` status. Those statuses are machine values
+ * (`locked`, `awaiting_mfa`, `cancelled`, …) and MUST NOT be rendered as copy: a refusal that has to
+ * name the CURRENT state names it through this map. An unknown/future value degrades to a neutral
+ * phrase instead of leaking the raw token.
+ */
+const PENDING_ACTION_STATUS_LABEL: Record<PendingActionStatus, string> = {
+  pending: '待确认',
+  awaiting_mfa: '待安全验证',
+  confirmed: '已确认',
+  executed: '已执行',
+  failed: '已失败',
+  cancelled: '已取消',
+  locked: '已锁定',
+  needs_reconciliation: '待人工核对',
+};
+
+/** User-facing label for a persisted action status (never the raw internal status token). */
+function statusLabel(status: string): string {
+  return (PENDING_ACTION_STATUS_LABEL as Record<string, string>)[status] ?? '状态已变更';
+}
+
+/**
+ * Statuses a LATE result notification may overwrite. `locked` is deliberately ABSENT: the
+ * circuit-breaker lock is TERMINAL, so a result notification arriving after it (a stale
+ * continuation, a retried settlement) must never relabel that row `executed` / `failed` and thereby
+ * fabricate execution evidence for an operation that was never authorized to run. The authoritative
+ * evidence of an execution is the settlement transaction (status + result + audit), never this
+ * notification.
+ */
+const RESULT_RECORDABLE_STATUSES: PendingActionStatus[] = [
+  'pending',
+  'awaiting_mfa',
+  'confirmed',
+  'executed',
+  'failed',
+  'cancelled',
+  'needs_reconciliation',
+];
 
 /** Safe fallback summary used when the persisted `summaryJson` cannot be parsed. */
 const FALLBACK_SUMMARY: PendingActionSummary = {
@@ -866,6 +905,9 @@ async function authorizeWithMfa(
   if (issued) await issueChallenge(actionId);
 
   if (!opts.mfaCode || issued) {
+    // NOT a refusal: a code is still REQUIRED (or a fresh challenge was just issued), so the caller is
+    // being asked to submit one. It therefore carries NO `code`/`failure` — `awaiting_mfa` is a PROMPT
+    // state, and reporting a normal step of the flow as a failure would misrepresent it.
     return {
       ok: false,
       status: 'awaiting_mfa',
@@ -877,6 +919,10 @@ async function authorizeWithMfa(
     };
   }
 
+  // `verify` can refuse at the CHALLENGE level (already consumed / expired / command digest changed /
+  // missing). `SecurityFailureReason` has NO dedicated member for those outcomes, so the closest honest
+  // reason — `mfa_code_invalid` — is reported here; `res.error.message` is a PUBLIC message already
+  // mapped to `chat.error.verificationConsumed` / `chat.error.verificationExpired`.
   const res = await verify(actionId, opts.mfaCode);
   if (!res.ok) {
     return {
@@ -945,7 +991,7 @@ async function authorizeWithMfa(
   });
 
   if (claimOutcome.kind === 'conflict') {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
   if (claimOutcome.kind === 'plan_cancelled') {
     return planCancelledOutcome(row, action);
@@ -1038,7 +1084,7 @@ async function authorizeTransfer(
   });
 
   if (outcome.kind === 'conflict') {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
 
   if (outcome.kind === 'plan_cancelled') {
@@ -1121,7 +1167,7 @@ async function authorizeAction(
   // Only undecided actions can request a code. A historical RED flag on a confirmed/terminal
   // action must not reopen verification, issue a new challenge or consume an MFA attempt.
   if (row.status !== 'pending' && row.status !== 'awaiting_mfa') {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
 
   // Recheck current static policy before granting a new execution. Persisted decisions may be
@@ -1167,7 +1213,7 @@ async function authorizeAction(
     sessionId: row.sessionId,
   });
   if (!claimed) {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
   return {
     ok: true,
@@ -1202,7 +1248,7 @@ async function cancelAction(actionId: string, opts: CancelOptions): Promise<Pend
     sessionId: row.sessionId,
   });
   if (!claimed) {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法取消。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法取消。`);
   }
 
   const updated = await getPendingAction(actionId);
@@ -1211,12 +1257,21 @@ async function cancelAction(actionId: string, opts: CancelOptions): Promise<Pend
 
 /**
  * Persist the TRUE terminal status of an action AFTER the caller has executed it (or failed), so a
- * subsequent confirm/cancel is correctly rejected as CONFLICT. Recorded VERBATIM and unconditionally
- * — the exactly-once claim happened at confirm time, and this never consults the owning plan, so an
- * action whose money already moved stays `'executed'` even if its plan is cancelled afterwards.
+ * subsequent confirm/cancel is correctly rejected as CONFLICT. The write is a STATUS CAS over
+ * `RESULT_RECORDABLE_STATUSES`, never a blind overwrite: the exactly-once claim already happened at
+ * confirm time, and this never consults the owning plan, so an action whose money already moved stays
+ * `'executed'` even if its plan is cancelled afterwards. A TERMINAL `'locked'` row therefore KEEPS
+ * its lock — a late/stale notification can neither un-lock it nor relabel it `'executed'` (which
+ * would fabricate execution evidence for an operation that was never authorized to run). The
+ * settlement row and audit written by the caller remain the authoritative evidence.
  */
 async function recordActionResult(actionId: string, status: 'executed' | 'failed'): Promise<void> {
-  await setPendingActionStatus(actionId, status);
+  const claimed = await claimPendingAction({ actionId, from: RESULT_RECORDABLE_STATUSES, to: status });
+  if (claimed) return;
+  if ((await getPendingAction(actionId)) === null) {
+    throw new AppError('NOT_FOUND', `未找到待处理的操作: ${actionId}`);
+  }
+  // The row sits in a status a result notification may NOT overwrite (`'locked'`): keep it as it is.
 }
 
 /** End-to-end helper used by `beforeToolCall`. */
