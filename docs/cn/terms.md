@@ -27,6 +27,11 @@
 | 人工核对 | reconciliation | 结果不能证明时，由人工核对证据 |
 | 待确认操作 | `PendingAction` | 等待用户确认或认证的原操作 |
 | 多因子认证 | MFA | 高风险操作的强化身份认证机制 |
+| 验证码挑战 | `MfaChallenge` | 绑定原操作和命令摘要的一次验证记录 |
+| 结构化安全失败 | `SecurityFailure` | 拒绝时由服务端给出的类型化字段，调用方据此渲染文案 |
+| 锁定 | `locked` | 验证码失败达上限后，操作与账户的终态 |
+| 安全熔断 | circuit breaker | 连续失败达上限后按账户实施的限制 |
+| 对外文案收口 | `lib/public-text.ts`、`lib/tool-feedback.ts` | 内部诊断转成用户可见文本的唯一出口 |
 | 工作流 | workflow | 由节点及依赖组成的业务执行过程 |
 | 有向无环图 | DAG | 没有循环依赖的任务图 |
 | 预算额度 | budget envelope | 记账预算，不冻结可提现资金 |
