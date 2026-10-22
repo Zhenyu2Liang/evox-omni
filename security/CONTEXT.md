@@ -71,7 +71,7 @@ MFA 超限锁定不走上述路径：`authorizeAction` 返回 `status:'locked'` 
 
 `MFA_MAX_ATTEMPTS`（`lib/constants.ts`）= 3，熔断在「第 3 次」失败即触发（`failures >= max`，非第 4 次）。
 `security-gateway.ts` 的 MFA 分支以领域结果返回状态（不抛出）：
-未达上限 → `status: 'awaiting_mfa'`、消息「验证码错误，请重试。剩余尝试次数：N。」；
+未达上限 → `status: 'awaiting_mfa'`、`code: 'MFA_FAILED'`、消息「验证码错误，请重试。剩余尝试次数：N。」；
 达到上限 → `status: 'locked'`、`code: 'CIRCUIT_OPEN'`、消息「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」；
 已锁定后的再次提交走提前熔断分支 → `status: 'locked'`、消息「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」。
 锁定态返回值仍带 `requiresMfa: true`，但 HTTP 路由由 `status` 推导出的 `mfaResult` 变为 `failed`，且不发出 `mfa_required` 流事件。
