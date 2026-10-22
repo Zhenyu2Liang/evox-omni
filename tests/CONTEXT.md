@@ -104,7 +104,9 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 | 入口 | HTTP | 断言位置 |
 | --- | --- | --- |
 | 写操作的 `verify`/`confirm` 路由 | 恒 `200` + `data.ok:false` + `status:'locked'` | `app/mfa-terminal-lock-http.test.ts`、`app/actions-http.test.ts`（circuit breaker 块）、`app/mfa-lock-http-contract.test.ts`（逐次 `code`/`failure.code`/`failure.reason`/`attemptsUsed`/`attemptsLeft`/`maxAttempts`，锁定后重试落到 `mfa_session_locked`）、`app/mfa-lock-refresh-unlock-http.test.ts`（锁定后重复 verify/confirm 惰性） |
-| `/api/security/reset` 解锁闸门 | `423` + `error.code:'CIRCUIT_OPEN'` | `app/security-workflow-http.test.ts`、`integration/confirmation-policy.test.ts` |
+| 锁定行的 `cancel`/`recover` 路由 | 恒 `200` + `ok:false` + `status:'locked'` + `code:'CIRCUIT_OPEN'` + `failure.reason:'mfa_session_locked'` + `events:[]` | `app/mfa-lock-http-contract.test.ts`（行 `status`/`updatedAt` 不变、无新审计、无流水、无回执） |
+| 读模型刷新 | 无写 | `app/mfa-lock-http-contract.test.ts`（`GET /api/security` 的 `lock`/`lockedActions`）、`app/mfa-lock-refresh-unlock-http.test.ts`（`/api/actions`、`/api/security`、`/api/tasks`、`/api/tasks/[id]`、`/api/chat/history` 两次读一致；`pendingActionStatus:'locked'`；`mfa` 与 `confirmation` 卡片均 `status:'locked'`） |
+| `/api/security/reset` 解锁闸门 | 错码 `423` + `error.code:'CIRCUIT_OPEN'`；正确码 `200` | `app/security-workflow-http.test.ts`、`integration/confirmation-policy.test.ts`；`lockedActionsReopened:false`、旧行仍 `locked`、重新发起产生新 actionId 见 `app/mfa-lock-refresh-unlock-http.test.ts` |
 | 网关/SDK 进程内 | 无 HTTP | `unit/security/gateway.test.ts`、`authorize-hardening.test.ts`、`circuit-breaker-*.test.ts`、`unit/security/mfa-failure-contract.test.ts`、`integration/security-deny-redaction.test.ts`、`unit/agent/turn-security-event.test.ts`、`scenarios/test-10-circuit-breaker.test.ts` |
 | 渲染/文案层 | 无 HTTP | `unit/planner/locked-card-rendering.test.ts`、`unit/weixin-lock-presentation.test.ts`、`unit/security/unlock-panel-render.test.ts`、`unit/lib/public-text.test.ts`、`unit/planner/tool-diagnostics.test.ts` |
 
