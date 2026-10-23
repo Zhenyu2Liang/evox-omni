@@ -67,6 +67,9 @@ developer view; this presentation change does not alter checkpoint identities or
 
 Every registered write enters `command-execution.ts`. Operation identity belongs to the server invocation, action or node. The command's mutation, strict audit, original response and invocation completion share one transaction. Receipts are replayed before mutable lookup; transfers additionally match their ledger. Unknown outcomes stop for reconciliation.
 
+Every SDK write-boundary hook — `execution-fence.ts` (`guardExecutionFence`, `buildPlanNodeFence`, `buildAutomaticWriteFence`, `buildConfirmFence`), `write-audit.ts#buildWriteCommitAudit`, `execution-audit.ts#onTransferCommit`/`onCommandCommit` and the `tools/index.ts:353-371` `onWriteCommit`/`onCommit` wrappers — receives the OPEN `Prisma.TransactionClient` and threads it into every statement, including `recordAudit(..., { client: tx })` and `writePolicy.assertSessionMayWrite(..., client)`; no hook body reaches a global-`prisma` repository default, since its capture reads (`getPendingAction`, `getSession`, `getTask`/`getTaskNode`) all run before the transaction opens.
+Single-connection queueing during one turn therefore comes from the planner claim reads (`workflows/claims.ts`, `tools/planning.ts` `planExecutionClaimHeld`) and the heartbeat's own transaction, not from the write hooks.
+
 ### Synchronous park path (`beforeToolCall` → `handleToolCall`)
 
 `banking-agent.ts:253-327` reaches `gateway.handleToolCall` (`:306`) after only synchronous work (`validateToolCallIdentities`, `validateBankingParameters`, `readTurnIntent`, `latestUserRequest`); the single pre-park DB step is `preflightRequestedPlan` (`:296`, declared-plan `submit_plan` only — `tools/planning.ts:215-238` resolves args, recipients and holdings).
