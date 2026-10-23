@@ -83,6 +83,24 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 `unit/banking-sdk/net-value-redemption.test.ts` 覆盖份额折算、按份额／金额／全额赎回的结算与成本守恒。
 `unit/security/redemption-stale-authorization.test.ts` 覆盖确认快照不一致时的 `CONFLICT`：本次零写入、`PendingAction` 为 `failed`，同身份重放返回原回执与原净值。
 
+### 亏损持仓 / 负收益率的覆盖
+
+负收益率是有符号展示，唯一渲染入口是 `components/banking/HoldingFacts.tsx:89-91`（`signedRateToPercent`），
+对话卡片 `components/chat/cards/InvestmentsCard.tsx:95` 与 `/investments` 的 `InvestmentProductTile` 都用它。
+`unit/planner/decimal-format.test.ts:44-96` 是唯一直接渲染 `HoldingFacts` 的用例：`holdingView()` 造「成本 4000.00、市值 3950.80、profit/cumulativeProfit 均 `-49.20`」的亏损持仓，
+`profitRate: '-0.0123'` 断言 `-1.23%` 且渲染不抛错（`:77`/`:78`），`'-0.029726666666666667'` 断言全精度 `-2.9726666666666667%`（`:87`），`tile` 布局同样为负（`:88`），同持仓金额事实为 `-¥49.20`（`:90`）。
+层级分工：比例层由 `unit/financial-values.test.ts:64-84` 固定（`signedRateToPercent` 不钳位、不取绝对值，`'-0.0123'` → `'-1.23'`；`rateRatioToPercent('-0.032575')` 抛 `VALIDATION`；正比例两者等值见 `:76`），
+SDK 层由 `unit/banking-sdk/net-value.test.ts:155`/`:159` 固定 `profitRateOf('-23.45','1000.00') === '-0.02345'`。
+缺口：`HoldingFacts` 的标签文案（`business.investments.holdingProfitRate`「持仓收益率」）只有 e2e 断言（`e2e/live-investment.e2e-helper.ts:91`、`:681`、`:699-701`），unit 层只断言百分比文本。
+缺口：`unit/weixin-presentation.test.ts:88-121` 的持仓夹具收益率为正（`0.0356719998505`）或缺失，微信通道负收益率无用例（其渲染是 `channels/weixin/presentation.ts:70-71` 的 `formatDecimalCNY(ratio×100)`，与 `signedRateToPercent` 是两套实现）。
+缺口：`e2e/live-investment.e2e-helper.ts:424-433` 的 `/investments` 行清单不含「持仓收益率」，B0 的负收益率断言只校验**对话卡**（`:699-701`），且正则 `^[+-]?\d+(\.\d+)?%$` 同样接受正值。
+缺口：`chat-read-results.test.ts:55-86`、`financial-display.test.ts:25-46`、`investment-purchase-display.test.ts:43-59` 的 `HoldingView` 或为旧口径（无 shares/netValue/profitRate）或 profit 为正，`InvestmentsCard` 汇总行 `cards.investment.profit` 没有负值用例。
+
+夹具口径：`helpers/fixtures.ts:427-431` 的测试库只有 `holding_wenjiana` 一条持仓（5050.000000 份 × 净值 1.0000 = 5050.00，成本 5000.00，盈利 +50），测试夹具中不存在亏损持仓。
+演示种子 `prisma/seed.ts:377-381` 含亏损持仓 `holding_wenjib`：10000.000000 份 × 0.9880 = 9880.00，成本 10000.00 → −¥120.00，`profitRateOf` 得 `-0.012`，渲染为 `-1.2%`；
+`holding_wenjiana` 4999.864825 × 1.0357 = 5178.36（+¥178.36）、`holding_huobi` 8032.760000 × 1.0000 = 8032.76（+¥32.26）为正。
+因此 `lB` 只对盈利的 `holding_wenjiana` 断负号格式，真实浏览器的亏损渲染仅由演示种子的 `/investments` 顺带产生，没有任何断言读取它。
+
 ## 卡片生命周期能力契约的覆盖
 
 能力事实以 `lib/contracts/tool-catalog.ts` 与 `lib/contracts/card-management.ts` 为准：
