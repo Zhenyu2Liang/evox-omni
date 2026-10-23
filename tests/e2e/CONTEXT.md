@@ -140,6 +140,16 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 `live-acceptance.e2e.ts` 的 S4 只提交一次错误码并断言卡片保留，正确码在独立页面执行；live 侧不校验尝试次数上限。
 `lA`/`lD`/`lE`/`lF`/`lG` 的 live 腿只提交正确码 `123456`（`MfaChallenge.attempts=0`），live 不接受错误码、不触达尝试上限。
 当前没有用例在锁定后刷新 `/agent` 再断言弹窗保持消失。
+`driveRedTool`（`live-acceptance.e2e.ts:575-636`）是入口文件唯一的 RED 驱动，在 `:591`/`:634` 硬编码正确码 `123456`，所以错误码/锁定链路必须在它之外另写驱动，或先给它加码/次数参数。
+它的类型 `RedToolDriver` 定义在 `live-virtual-card.e2e-helper.ts:471`，入口以 `(turns) => driveRedTool(page, ctx.baseUrl, turns)` 注入 `applyVirtualCardViaAgent`（`:1902-1910`）与 `lF`/`lG`（`:2342`/`:2343`）。
+live 入口文件没有 `data-testid`/`getByTestId`：DOM 断言只靠 `data-*` 选择器（`data-approval-request`、`data-card-id`、`data-card-consume*`、`data-investment-holdings`）与 `getByRole` 的中文可及名（`确认`/`取消`/`验证`/`提交消费`）。
+`helpers.ts#waitForMfaSettled` 在 live 入口未被引入：它在 `验证` 按钮计数为 0 时即返回 true，无法区分「锁定」与「验证成功」，锁定断言不能用它。
+
+MFA／锁定的 DOM 驱动接缝全部在 `helpers.ts`，入口不复刻：
+`SELECTORS.mfaInput` = `[data-approval-request="true"] input[aria-label="验证码"]`（只匹配动作停靠区，历史回执不带输入框）。
+`waitForMfaCard(page, timeoutMs, minCount)` 等 `count >= minCount` 再等 `.last()` 可见；`submitMfa` 填 `.last()` 输入框并点 `[data-approval-request="true"]` 内的 `验证` 按钮；`mfaCardPresent` 只数输入框数量，锁定后归零即「卡片关闭」。
+`waitForStatusText` 对全页 `[role="status"]` 去空白后做**子串**匹配，因此断言串可省略空格与句末标点（断言 `验证失败，已尝试1次`，目录原值为 `验证失败，已尝试 {attempts} 次。`）。
+目录原值：`cards.terminal.locked` = `已锁定`、`cards.mfa.locked` = `已锁定，请到安全中心处理。`、`cards.mfa.failedAttempts` = `验证失败，已尝试 {attempts} 次。`、`security.breaker.locked` = `已熔断`、`security.breaker.failureCount` = `失败 {count} / {max} 次`、`security.reset.success` = `已解除限制，当前失败 {count} / {max} 次。`。
 
 ## MFA 面板的断言锚点（产品侧契约）
 
@@ -219,6 +229,8 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 普通模式必须先断言两条负例：按钮计数为 0，且同一 POST 返回 403（`app/api/_lib/developer.ts#requireDeveloperMode`）。
 运行期解锁是另一条路径：`POST /api/security/reset` 在锁定时无正确码返回 423 `CIRCUIT_OPEN` 且锁保持不变，成功返回 `lockedActionsReopened:false`（`app/api/security/reset/route.ts:52`/`:87-95`）；`tests/e2e` 只用开发者按钮，从未调用该路由。
 解锁永不把 `'locked'` 行写回 `pending`/`awaiting_mfa`，断言锁定持久性不应期待它被解除。
+`PendingAction` 状态的 DB 接缝：live 入口用本地 `readPendingAction`（`live-acceptance.e2e.ts:254-262`，`withDb` + `pendingAction.findUnique({ where: { id, sessionId } })`）；mock 入口用 `helpers.ts#queryPendingActionStatus`（`:220-234`，只按 `id`，走 `createDatabaseClient()` 的当前 `DATABASE_URL`）。
+`scenarioLargeTransferMfa` 的单次错码腿在 `live-acceptance.e2e.ts:1005` 用裸字面量 `input[aria-label="验证码"]` 计数（未走 `SELECTORS.mfaInput`）；两者当前等价，改选择器时两处都要看。
 
 ## 退出码与资源清理
 

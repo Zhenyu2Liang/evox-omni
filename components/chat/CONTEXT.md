@@ -52,6 +52,13 @@
 `pendingAction` 只由 `confirmation_required`/`mfa_required` 或挂起操作恢复建立，关闭只来自 `settleAction` 的终态/`confirmed` 与 `pull` 的无错误清除规则。
 `tool_start`/`tool_end` 的 `blocked` 只记录 `lastBlockedToolName`，既不关闭也不替换面板；无 `actionId` 时更不会创建新面板。
 
+### 验证面板的 DOM 钩子
+
+仓库不用 `data-testid`，只认语义 `data-*`、`role`/`aria-label` 与本地化可访问名。
+验证码输入框无 `data-*`，唯一钩子是 `aria-label={t('cards.mfa.label')}`（zh-CN「验证码」），故为 `[data-approval-request="true"] input[aria-label="验证码"]`。
+锁定后存活的表面是 `cards/ApprovalRecord`（底部 `ApprovalRequest` 随 `pendingAction` 清除而卸载），其专用钩子为 `data-approval-locked="true"`，`MfaCard` 的 `data-mfa-locked="true"` 相应不可观测。
+`data-status`/`data-approval-stage`/`data-stage-status` 给出不依赖文案的状态断言；文案上「已锁定」（`cards.terminal.locked`）是「验证已锁定」（`chat.approval.status.locked`）的子串，包含式断言无法区分两者。
+
 ### 验证响应校验与分支（`actions.ts#postAction`）
 
 `status` 须属 `ACTION_STATUSES`（`pending`/`awaiting_mfa`/`confirmed`/`executed`/`failed`/`cancelled`/`locked`/`needs_reconciliation`）。

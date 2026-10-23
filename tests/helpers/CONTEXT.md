@@ -34,6 +34,24 @@
 `locked-action.ts` 不在 `./index.ts` barrel 里（`index.ts:7-43` 只有 `db`/`fixtures`/`faux-agent`/`scenario`），必须按路径 import。
 唯一的使用骨架：`const sessionId = await demoSessionId(); const parked = await parkRedTransferPlan();`（`tests/app/mfa-lock-http-contract.test.ts:291-292`）。
 
+### prisma-cli.ts（schema 供给阶梯）
+
+`prisma-cli.ts` 是 Vitest 全局 setup、`tests/e2e/*` 与 `scripts/db-push.ts` 共用的 CLI 策略层，只依赖 node 内置模块，**不 import `vitest`**，因此可被纯 `tsx` 入口直接复用。
+它从 `../../lib/prisma-cli-env` 原样再导出 `cliCommand`/`pinSchemaEngineLogging`/`resolvePrismaBin`/`resolveRepoRoot`/`resolveTsxBin`/`SCHEMA_ENGINE_RUST_LOG` 及类型 `CliInvocation`（`prisma-cli.ts:21-29`）；这些符号的定义与 `RUST_LOG=info` 机制在 `lib/prisma-cli-env.ts`，不在本目录。
+`tests/e2e/helpers.ts:35` 以 `runCliStep as runCliStepShared` 引入 `runCliStep`——`runCliStepShared` 是该文件里的**本地别名**，不是本目录的导出。
+
+- `provisionSchemaLadder(opts: ProvisionSchemaOptions)`（`:311`）是隔离库供给的唯一入口：rungs 按顺序**只在上一 rung 失败后**才尝试；每个 rung 先用 `removeSqliteFiles(opts.dbDir, opts.dbFiles)` 删掉 DB 文件与 `-wal`/`-shm`/`-journal` 边车，再跑 `db push`，所以后续 rung 不需要 `--force-reset`；`rung.before` 抛错即该 rung 失败；push 成功但 `afterPush` 抛错同样按失败处理并推进到下一 rung（绝不 warn-and-continue）；全部失败时抛一条聚合错误，内含每个 rung 的完整 stdout+stderr（`diagnosticCliOutput` 保头保尾）、`DATABASE_URL`/`RUST_LOG` 环境、`prisma -v`、`@prisma/engines` 产物与目标 DB 文件存在性，掩码空 `Schema engine error:` 另有 `MASKED_ENGINE_ERROR_HINT`。`rungs` 为空直接抛错。
+- `ProvisionSchemaOptions` 字段：`repoRoot`、`dbDir`、`dbFiles`（相对 `dbDir`，含边车）、`rungs: readonly PushRung[]`、`env?`、`afterPush?: (rung) => void`；`PushRung` 为 `{ label, args（含 `prisma` 程序名）, before? }`（`:246-271`）。
+- `runCliStepCaptured(command, args, opts): CliStepResult`（`:107`）不抛错、回原始 stdout/stderr/退出码/`error`；`runCliStep(command, args, opts): string`（`:137`）按退出码判定成败，失败抛含完整输出的错误。
+- `ensurePrismaClientGenerated(repoRoot, env?)`（`:233`）仅在解析出的 client 缺失/陈旧/不可用（`prismaClientUsable`，`:215`，含一次子进程构造探针）时跑 `prisma generate`，之后复验否则抛错。
+- `diagnosticCliOutput(stdout, stderr): string`（`:69`）标注两路输出、超 16000 字才省中间且保头保尾；`spawnErrorText(error): string`（`:53`）渲染 spawn 失败（含 `code=`）；`isMaskedSchemaEngineError(stdout, stderr): boolean`（`:362`）识别空 `Schema engine error:`。
+
+### 纯 tsx 入口的可引入面
+
+`db.ts:13` import `{ afterAll, beforeEach } from 'vitest'`，而 `fixtures.ts:20`、`scenario.ts:52-54`、`faux-agent.ts:40`、`locked-action.ts:27-28` 都经它间接依赖该 import，
+所以这条链**只能**在 Vitest 进程内使用，`.e2e.ts` 之类的纯 `tsx` 入口不得引入 `tests/helpers/db.ts`（`tests/e2e` 一律自建 `createDatabaseClient` 并自行 `$disconnect`）。
+可被纯 `tsx` 复用而不触 vitest 的只有：`prisma-cli.ts`、`scripted-provider.ts`（仅 `@earendil-works/pi-ai` + `@/` 类型）、以及两个 fork 探针 `restart-process.ts`/`standalone-restart-process.ts`（生产 `@/agent` 入口，无 vitest）。
+
 ## 入口与证据
 
 `faux-agent` 和 `scenario` 验证网关、工具与 SDK。

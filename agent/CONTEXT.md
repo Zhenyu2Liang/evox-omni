@@ -13,6 +13,7 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 - `./workflows/`: workflow control, the parked-decision seal/refusal projections (`parked-actions.ts`) and cancellation.
 - `./context-compaction/`: historical summaries and bounded model-request projection.
 - `./messages/`: presentation message catalogs.
+- `./session.ts`: `SessionSnapshot` persistence (`stateJson` = `agentState` + `transcript` + reply/compaction state; plus `intentJson`, `revision` column) through `lib/db/repositories/session`. `getDemoSession(userId)` is the single server-configured web workspace: it seeds `newSession`, sets `sessionId = demo:${userId}`, calls `ensureDemoSession` (a Prisma `upsert` on that explicit primary key with `update: {}` — it never resets state or leases) and returns `loadSession(row.id)`, so the same `userId` always resolves to the same `sessionId`, including across restarts; a row owned by another user throws `The demo conversation belongs to another user`. `saveSession`/`getOrCreateSession` instead ADOPT the repository-minted cuid (a `newId('sess')` is provisional), and a save carrying an `AgentRunLease` goes through `commitRunSession` with the revision fence.
 
 ## Capability boundary: one card-spend write
 
