@@ -44,13 +44,15 @@ Decimal 最多支持 40 位整数和 18 位小数。
 口径见 [卡片管理](card-management.md)。
 
 live 验收的结论只对已运行场景成立。
-[LIVE-ACCEPTANCE-REPORT.md](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md) 记录 14 条证据行，覆盖 live 场景 `lC`–`lG` 与两个产品树 `d1cccd00`、`7a7a4d3`。
-14 条证据行包含 `lF` 3 轮、`lG` 4 轮、`lC` 1 轮、`lD` 2 轮、`lE` 2 轮，另加日期边界入口与 mock 套件。
-其中 8 轮认证当前产品树，带双信号退出码。
-`lA`、`lB`、`lH`、`lI`、`lJ` 与 live id `0`–`15`、`2p`、`7` 没有证据行。
+[LIVE-ACCEPTANCE-REPORT.md](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md) 记录 22 条证据行。
+`lC`–`lG` 的既有轮次认证 `d1cccd00` 与 `7a7a4d3` 两个产品树。
+`lB`、`lH`、`lI`、`lJ` 的认证轮次覆盖 `3ba488a`（round 1）与 `d26b2636`（round 2 终轮）两个产品树。
+22 条证据行包含 `lF` 3 轮、`lG` 4 轮、`lC` 1 轮、`lD` 2 轮、`lE` 2 轮、`lB`／`lH`／`lI`／`lJ` 各 2 轮，另加日期边界入口与 mock 套件。
+其中 8 轮认证当前产品树，带双信号退出码；`lB`、`lH`、`lI`、`lJ` 另有 8 条行，每轮只有 `EXITCODE=0` 一个退出信号。
+`lA` 与 live id `0`–`15`、`2p`、`7` 没有证据行；`lB`、`lH`、`lI`、`lJ` 的证据只覆盖 `3ba488a` 与 `d26b2636` 两个产品树上的有限轮次，不含 `d26b2636` 之后的产品改动。
 报告列出的未验证内容见 [NOT verified by these runs](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md#not-verified-by-these-runs)。
 这批内容包括生产构建、集群并发、真实银行接口与其他节点的 Vitest。
-另有 `DEBIT` 卡补办、live 模型下的错码与熔断路径以及模型稳定性。
+另有 `DEBIT` 卡补办、`cards.mfa.failedAttemptsLimit` 文案在 live 路径下不可达、开发者重置熔断只有 mock 套件覆盖以及模型稳定性。
 `lG` 的 rounds 1、2、5、6 缺退出码认证。
 
 ## 业务结果的含义
