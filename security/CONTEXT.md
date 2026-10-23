@@ -176,6 +176,23 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:758` �
 `Contact.phoneFull` 与 `Card.numberFull` 不离开存储层。
 规则见 `docs/cn/identity-resolution.md`。
 
+### 精确答案：手机号、近似号码、尾号与 cardId
+
+完整手机号只与 `Contact.phoneFull` 逐字相等才算身份（`lib/phone.ts#phoneIdentityMatches`，`COMPLETE_PHONE = /^1[3-9]\d{9}$/`）：前 3 位与后 4 位相同、中间 4 位不同的近似号码得到 0 个身份匹配。
+近似号码**不是** `ambiguous` 也不抛错：候选收窄只对 `isMaskedPhone` 为真的选择器执行（`recipient-resolution.ts:126`，`MASKED_PHONE = /^1[3-9]\d\*{4}\d{4}$/`），因此完整号的近似值直接返回 `{ status: 'not_found', kind: 'phone', supplied }`。
+`ambiguous` 只在同一字段值命中多于一个联系人时出现，并列脱敏候选 `{ name, phone }`。
+`cardTail` 接受 `6688`、`尾号6688`、`****6688`、`...6688`（`toCardTail` 去掉非数字后必须恰好 4 位），匹配 `Card.numberMasked` 末 4 位或 `numberFull` 末 4 位。
+`cardNumber` 必须是不含空格/连字符的 12-19 位数字，且与 `Card.numberFull` 全等；`numberFull` 为 NULL 的行永不命中。
+同一尾号命中多张卡 ⇒ `ambiguous` 加脱敏候选 `{ id, type, numberMasked }`。
+澄清路径不落库：`handleToolCall` 把 `{ kind: 'clarify' }` 变成 `decision.kind: 'deny'` 与**纯文本** `blockReason`（不带 `__SECURITY_BLOCK__` 前缀），既不创建 `PendingAction` 也不铸 MFA 挑战。
+
+### 确认摘要里可断言的号码字段
+
+`buildPendingActionSummary`（`security-gateway.ts:1693-1745`）对 `transfer_money` 依次产出 `收款人`（姓名）、`收款手机号`（`maskPhone(recipient.phone)`，如 `139****0002`）、`Amount`（标签逐字是英文 `Amount`，**不是**「金额」）、`账户`、`风险等级`。
+卡片工具由 `gatewayCreatePendingAction` 追加一条 `卡片` 字段，值为 `${cardTypeLabel(card.type)} ${card.numberMasked}`（如「信用卡 ****6688」，`security-gateway.ts:901-904`）。
+非转账分支用 `操作`、`金额`（仅金额存在时）与 `风险等级`。
+`security/messages/` 只有 `mfa.zh-CN.json`；澄清与摘要文案都是 TS 字面量，不在文案资源里。
+
 ## 赎回报价
 
 `gatewayCreatePendingAction` 在挂起时用服务端决定铸造赎回报价。
