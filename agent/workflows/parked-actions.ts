@@ -14,6 +14,11 @@
  *    the node is recorded terminal (never driven, never surfaced as a pending decision), while the
  *    rest of the plan keeps advancing. A plan whose every node is sealed simply has nothing left to
  *    advance — that is a normal return, not an exception.
+ *    A seal PROJECTS the settled decision onto the node's terminal status (see `sealProjection`): an
+ *    operation the server really `executed` is a COMPLETED node carrying no failure text at all,
+ *    while a refusal (`locked`), an unknown outcome and every other settled status stay a `failed`
+ *    node with its catalog sentence. Claiming a business-state change for an operation that did land
+ *    would be a contradiction no refresh could ever clear.
  *  - `assertParkedActionsNotTerminal` is the RETRY fence: an explicit retry must stay a STRUCTURED
  *    refusal (`AppError` with catalog text), because a retry of a settled decision would otherwise
  *    reset the node and re-drive the very operation that is terminally locked.
@@ -58,6 +63,9 @@ export function parkedActionIds(plan: TaskPlan): string[] {
   return [...ids];
 }
 
+/** The TERMINAL node status a sealed parked decision is recorded with. */
+export type SealedNodeStatus = Extract<TaskNodeStatus, 'success' | 'failed'>;
+
 /** One parked node whose decision is already settled, and therefore must stay sealed. */
 export interface SealedParkedNode {
   nodeId: string;
@@ -66,8 +74,13 @@ export interface SealedParkedNode {
   actionStatus: PendingActionStatus;
   /** Why the node must not be driven again — the plan layer's own seal reason. */
   reason: SealReason;
-  /** Catalog sentence a sealed node records as its public `error`. */
-  error: string;
+  /**
+   * The TERMINAL node status this seal records. `success` only for an operation the server really
+   * `executed`; every settled refusal or unknown outcome stays `failed`.
+   */
+  nodeStatus: SealedNodeStatus;
+  /** Catalog sentence a REFUSED seal records as its public `error`; absent for a completed one. */
+  error?: string;
 }
 
 /**
@@ -88,7 +101,7 @@ export async function sealedParkedNodes(plan: TaskPlan): Promise<SealedParkedNod
     const actionStatus = action.status as PendingActionStatus;
     const reason = sealReason({ ...node, actionStatus });
     if (reason === undefined) continue;
-    sealed.push({ nodeId: node.id, actionId, actionStatus, reason, error: publicSentence(actionStatus) });
+    sealed.push({ nodeId: node.id, actionId, actionStatus, reason, ...sealProjection(reason, actionStatus) });
   }
   return sealed;
 }
@@ -103,6 +116,31 @@ export async function assertParkedActionsNotTerminal(plan: TaskPlan): Promise<vo
   const [sealed] = await sealedParkedNodes(plan);
   if (sealed === undefined) return;
   throw refusal(plan.id, sealed.actionId, sealed.actionStatus);
+}
+
+/**
+ * Project ONE settled decision onto its plan node — the single derivation of `nodeStatus`/`error`.
+ *
+ * The seal REASON and the PERSISTED action status decide together:
+ *  - a recorded LOCKED refusal stays a `failed` node with `chat.error.actionLocked` (a settled refusal
+ *    is never reported as completed, and never as a plain state change either);
+ *  - an `executed` action under `action_not_open` is a COMPLETED node with NO sentence — the write
+ *    really landed, so no failure text may be recorded;
+ *  - an unknown outcome (`needs_reconciliation`) and every other settled status stay `failed` with
+ *    their own catalog sentence, never claiming success, failure of the business effect or an
+ *    unchanged balance.
+ *
+ * The plan's own terminal status is NOT derived here: the control path records `nodeStatus` on the
+ * node row and the existing plan settlement (`planner` executor / `task-fencing`) derives it from the
+ * node statuses.
+ */
+function sealProjection(
+  reason: SealReason,
+  actionStatus: PendingActionStatus,
+): Pick<SealedParkedNode, 'nodeStatus' | 'error'> {
+  if (reason === 'locked_refusal') return { nodeStatus: 'failed', error: t('chat.error.actionLocked') };
+  if (actionStatus === 'executed') return { nodeStatus: 'success' };
+  return { nodeStatus: 'failed', error: publicSentence(actionStatus) };
 }
 
 /** The catalog sentence a settled status is reported with — the ONLY public wording. */

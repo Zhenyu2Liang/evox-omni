@@ -14,8 +14,8 @@
 
 - `contracts.ts`：`TaskNodeOutput`、`readPendingActionId`、`TaskRunTool`、`TaskControlDeps`、`TaskControlOptions`、`TaskPersistence`、`TaskPersistenceOptions`、`TaskPersistenceMode`。
 - `ports.ts`：`buildPlanDeps`、`defaultPollControls`、`UNUSED_RUN_TOOL`、`PAUSE_NOW_CONTROLS`。
-- `controls.ts`：`pauseTask`、`resumeTask`、`retryTask`，状态门控见 `PAUSABLE`、`RESUMABLE`、`RETRYABLE`。
-- `parked-actions.ts`：`parkedActionIds(plan)`、`SealedParkedNode`（`nodeId`/`actionId`/`actionStatus`/`reason`/`error`）、`sealedParkedNodes(plan)`（只读封存查询）、`assertParkedActionsNotTerminal(plan)`（`retryTask` 的结构化拒绝）；`PARKED_NODE_STATUSES`（`waiting_confirmation`、`waiting_verification`）是模块内常量，不导出。
+- `controls.ts`：`pauseTask`、`resumeTask`、`retryTask`，状态门控见 `PAUSABLE`、`RESUMABLE`、`RETRYABLE`；模块内 `sealSettledNodes` 只把封存投影（`nodeStatus`/`error`）写进节点行，不做任何 reason/status 判定。
+- `parked-actions.ts`：`parkedActionIds(plan)`、`SealedParkedNode`（`nodeId`/`actionId`/`actionStatus`/`reason`/`nodeStatus`/可选 `error`）、`SealedNodeStatus`（`success` | `failed`）、`sealedParkedNodes(plan)`（只读封存查询）、`assertParkedActionsNotTerminal(plan)`（`retryTask` 的结构化拒绝）；模块内 `sealProjection` 是「已结清决策 → 节点终态投影」的**唯一**推导；`PARKED_NODE_STATUSES`（`waiting_confirmation`、`waiting_verification`）是模块内常量，不导出。
 - `cancellation.ts`：`cancelTask`、`sweepCancelledPlan`、`RevokeSummary`、`REVOCABLE_ACTION_STATUSES`。
 - `action-continuation.ts`：`findTaskByPendingAction`、`resumeTaskForAction`。
 - `ownership.ts`：`loadOwnedTask`、`loadOwnedTaskWithOwner`、`getTaskPlan`。
@@ -58,12 +58,22 @@
 `resumeTask` 其后是 `sealedParkedNodes(plan)`（只读，先于任何占用）→ `claimTaskStatus(taskId, RESUMABLE, 'running')` → `claimTaskExecution` → `clearStaleNodeClaims` → `buildPlanDeps(taskId, deps, undefined, { planToken })` → `sealSettledNodes(...)`（经该 `planToken` 围栏的 `planDeps.persistNode` 写节点）→ `executor.runPlan(resumable, planDeps, { explicitResume: true })` → `sweepCancelledPlan`；`finally` 释放租约并 `settlePlanFromNodes`。
 `retryTask` 其后是 `assertParkedActionsNotTerminal(plan)`（先于任何状态/租约占用）→ 同一占用序列 → `lifecycle.retryPlan` → `sweepCancelledPlan`；`finally` 同上。
 
-封存语义（`controls.ts` `sealSettledNodes`）：被封存节点记为 `status: 'failed'`，`output` 去掉 `pendingActionId`（去掉后为空则整段 `output` 变 `undefined`，节点再也不可能被读成停靠），`error` 是目录句，`endedAt` 取 `deps.now ?? demoNow`；每个封存节点调用一次 `persistNode`，改写后的计划才交给 `executor.runPlan`。
+封存语义（`controls.ts` `sealSettledNodes`）：只消费封存投影——节点行 `status` 取 `SealedParkedNode.nodeStatus`，`error` 取 `SealedParkedNode.error`（`success` 投影没有 `error`，节点行因此不带任何失败文案），`output` 去掉 `pendingActionId`（去掉后为空则整段 `output` 变 `undefined`，节点再也不可能被读成停靠），`endedAt` 取 `deps.now ?? demoNow`；每个封存节点调用一次 `persistNode`，改写后的计划才交给 `executor.runPlan`。
+节点终态由「封存原因 + 持久化动作状态」唯一决定（`parked-actions.ts` `sealProjection` 是唯一推导，`controls.ts` 里没有 reason/status 字面量判断）：
+
+| `reason` | `actionStatus` | 节点终态 | 计划终态 |
+|---|---|---|---|
+| `action_not_open` | `executed` | `success`，无任何 `error` 文案，仍剥掉 `pendingActionId` | 其余节点都 `success`/`skipped` 时 → `success` |
+| `action_not_open` | `needs_reconciliation` | `failed` + `chat.error.unknownOutcome`（绝不声称成功、绝不声称失败、绝不声称资金未变） | `failed` |
+| `action_not_open` | `failed` / `cancelled` | `failed` + `chat.error.stateChanged` | `failed` |
+| `locked_refusal` | `locked`（等） | `failed` + `chat.error.actionLocked` | `failed`；锁定动作永不复活、永不重弹验证码入口、永不自动执行 |
+
+计划终态不在本目录手写：节点行写成 `success` 后，`planner/executor.ts` 的 `allSettled` 与 `agent/task-fencing.ts#settlePlanFromNodes` 自然得出 `success`。
 被封存节点因此是终态，执行器直接跳过它：不驱动工具、不铸新操作、不弹验证码、不 surface 决策入口；计划其余可推进节点照常推进。
 计划所有节点都已终态时，`resumeTask` 与任何正常恢复一样返回计划快照，只是「无可推进工作」——不是异常。
 封存判定与拒绝映射共用同一份理由来源：`sealedParkedNodes` 用 `@/planner#sealReason`（`SealReason` = `locked_refusal` | `action_not_open`）决定节点是否必须封存，所以执行器与控制路径对「已结清」的定义一致。
 
-拒绝映射（仅 `retryTask`）：`locked` → code `MFA_LOCKED` + `chat.error.actionLocked`；`needs_reconciliation` → code `CONFLICT` + `chat.error.unknownOutcome`；其它终态（`executed`/`failed`/`cancelled`）→ code `CONFLICT` + `chat.error.stateChanged`。同一批目录句也是封存节点记录的 `error`。
+拒绝映射（仅 `retryTask`）：`locked` → code `MFA_LOCKED` + `chat.error.actionLocked`；`needs_reconciliation` → code `CONFLICT` + `chat.error.unknownOutcome`；其它终态（`executed`/`failed`/`cancelled`）→ code `CONFLICT` + `chat.error.stateChanged`。同一批目录句也是拒绝型封存节点记录的 `error`；`executed` 的封存节点没有文案，但**重试仍然被结构化拒绝**（`executed` 是终态，不得被重置节点后二次执行）。
 `assertParkedActionsNotTerminal` 取 `sealedParkedNodes(plan)` 的第一条并抛出对应的 `AppError`；公开 `message` 永远是干净的业务句，`{ taskId, actionId, status }` 只进 `detail`，作为内部诊断。
 文案来自既有目录（`createTranslator(DEFAULT_LOCALE)`），本目录不新增 i18n 键。
 非 `INTERNAL` 的 code 按 `app/api/_lib/http.ts#mapAppError` 原样出网（`MFA_LOCKED` → 423，`CONFLICT` → 409），`detail` 永不进入响应体。
@@ -82,7 +92,7 @@
 
 ## 公开文案
 
-用户可见文本一律经 `lib/public-text.ts` 收口，禁止把内部状态字面量（例如 `locked`）、blockReason 载荷、JSON 片段或堆栈放进用户可见文本；封存节点的 `error` 与重试拒绝的 `message` 都来自目录句。
+用户可见文本一律经 `lib/public-text.ts` 收口，禁止把内部状态字面量（例如 `locked`）、blockReason 载荷、JSON 片段或堆栈放进用户可见文本；拒绝型封存节点的 `error` 与重试拒绝的 `message` 都来自目录句，`executed` 的封存节点则不产生任何文案。
 `RevokeSummary.failed[].message` 只在是普通业务句时保留 `AppError.from(error).message`；`revokeFailureText`（`cancellation.ts:41`）用 `isInternalDiagnostic` 把内部诊断（`__SECURITY_BLOCK__` 前缀、JSON 片段、堆栈、`undefined`/`null` 占位）替换为 `chat.error.toolFailed`，机器可读分类由类型化 `code` 承担（`cancellation.ts:54`）。
 这条约束是必需的：该摘要被写进 `recordSecurityEvent` 的 `detail`（`cancellation.ts:61-65`），而 `GET /api/security` 原样返回审计记录，审计文本在本产品中对浏览器可见。
 `UNUSED_RUN_TOOL` 的 `INTERNAL` 文案（`ports.ts:10-12`）被 `app/api/_lib/http.ts#mapAppError` 掩码（它只重写 `INTERNAL`，其它 code 的文案原样出网）。
@@ -114,7 +124,7 @@
 
 ## Test Strategy
 
-`parked-actions.test.ts` 是同目录的纯单元用例（仓储、任务仓储、租约与 `buildPlanDeps` 被打桩，不碰数据库、不碰银行工具），共 10 个用例。
-它固定住：`parkedActionIds` 只收集停靠节点的 action id 且去重；`sealedParkedNodes` 的每个状态分支（`pending`/`awaiting_mfa`/`null`/`confirmed` 不封存，`locked`/`needs_reconciliation`/`executed`/`failed`/`cancelled` 封存且带 `sealReason` 与目录句）；`resumeTask` 对已结清节点**封存并成功返回**（返回计划 id 不变、节点 `failed`、`readPendingActionId` 为 `undefined`、`persistNode` 只收到该节点且 `error` 是具体目录句、`runTool` 零调用、`PendingAction` 行未被写）；`retryTask` 在 `claimTaskStatus`/`claimTaskExecution` 之前抛结构化 `MFA_LOCKED`、不跑工具；开放状态照常占用；以及三个目录键在默认语言下均可解析。
-`resume-seal.test.ts` 是同目录的真实 SQLite 用例（`useFreshDatabase()`，真实 `AgentTask`/`AgentTaskNode`/`PendingAction`/`SecurityEvent`/审计行，只有工具端口与 `buildPlanDeps` 打桩），共 5 个用例：含 `locked` 动作的计划 `resumeTask` 成功返回、节点被封存（`failed`、无 `pendingActionId`）、`runTool` 零调用、操作行仍全部 `locked`（无新 `pending`/`awaiting_mfa`）、`SecurityEvent` 与审计计数不增且该行 `updatedAt` 不变；双节点计划中被锁节点封存、另一节点照常推进（`runTool` 只对后者调用）；全部终态时正常返回且没有可推进结果；`retryTask` 对 `locked` 抛 `{ code: 'MFA_LOCKED' }`、对 `needs_reconciliation` 抛 `{ code: 'CONFLICT' }`，均不跑工具、不写新行；抛出的 `message` 与返回计划的 `JSON.stringify` 都不含 `__SECURITY_BLOCK__`/`decisionKind`/`[object Object]`/堆栈帧。
+`parked-actions.test.ts` 是同目录的纯单元用例（仓储、任务仓储、租约与 `buildPlanDeps` 被打桩，不碰数据库、不碰银行工具），共 11 个用例。
+它固定住：`parkedActionIds` 只收集停靠节点的 action id 且去重；`sealedParkedNodes` 的每个状态分支（`pending`/`awaiting_mfa`/`null`/`confirmed` 不封存，`locked`/`needs_reconciliation`/`executed`/`failed`/`cancelled` 封存且带 `sealReason`，并按「原因 + 动作状态」投影出 `nodeStatus` 与目录句——`executed` 投影为 `success` 且**没有** `error`）；`resumeTask` 对已结清节点**封存并成功返回**：`locked` 节点记为 `failed`（`readPendingActionId` 为 `undefined`、`persistNode` 只收到该节点且 `error` 是 `chat.error.actionLocked`、`runTool` 零调用、`PendingAction` 行未被写），`executed` 节点记为 `success` 且无 `error`、计划 `success`；`retryTask` 在 `claimTaskStatus`/`claimTaskExecution` 之前抛结构化 `MFA_LOCKED`、不跑工具，对 `executed` 仍抛 `CONFLICT`；开放状态照常占用；以及三个目录键在默认语言下均可解析。
+`resume-seal.test.ts` 是同目录的真实 SQLite 用例（`useFreshDatabase()`，真实 `AgentTask`/`AgentTaskNode`/`PendingAction`/`SecurityEvent`/审计行，只有工具端口与 `buildPlanDeps` 打桩），共 8 个用例：含 `locked` 动作的计划 `resumeTask` 成功返回、节点被封存（`failed` + `chat.error.actionLocked`、无 `pendingActionId`、计划 `failed`）、`runTool` 零调用、操作行仍全部 `locked`（无新 `pending`/`awaiting_mfa`）、`SecurityEvent` 与审计计数不增且该行 `updatedAt` 不变；`executed` 动作的计划 `resumeTask` 把节点封存为 `success`（无 `error`、无 `pendingActionId`）、计划 `success`、`runTool` 零调用、操作行 `executed` 且 `updatedAt` 不变；`needs_reconciliation` 动作为 `failed` + `chat.error.unknownOutcome`、计划 `failed`；双节点计划中被锁节点封存、另一节点照常推进（`runTool` 只对后者调用）；全部终态时正常返回且没有可推进结果；`retryTask` 对 `locked` 抛 `{ code: 'MFA_LOCKED' }`、对 `needs_reconciliation` 与 `executed` 抛 `{ code: 'CONFLICT' }`，均不跑工具、不写新行；抛出的 `message` 与返回计划的 `JSON.stringify` 都不含 `__SECURITY_BLOCK__`/`decisionKind`/`[object Object]`/堆栈帧。
 取消撤销与并发竞争由本目录之外的 `tests/unit/agent/task-cancel-revokes.test.ts` 与 `tests/integration/cancellation-result-race.test.ts` 覆盖。
