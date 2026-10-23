@@ -1,35 +1,37 @@
 # 字符串匹配审查
 
 业务语义由银行智能体理解，执行条件由结构化数据校验。
-正则表达式保留用于协议、字段格式、脱敏和搜索。
+正则表达式只用于协议、字段格式、脱敏和搜索。
 词语匹配不能改写用户需求或证明金融操作结果。
 
 ## 当前规则
 
-生产执行流程已移除自然语言词表分类。
-旧词表只保留在 `agent/providers/mock/`。
+生产执行流程不按自然语言词表区分用途。
+自然语言词表只存在于 `agent/providers/mock/`，用于离线脚本回复。
 在线模型通过 `describe_turn` 声明本轮用途。
-声明与工具调用一同写入事件日志。
+声明作为工具调用写入事件日志，但不显示为聊天工具卡。
 
 声明包含以下结构化信息：
 
-- 用途：交流、建议、查询或操作。
+- 用途：`conversation`、`advice`、`query` 或 `operation`。
 - 本轮能力名称、重复次数和顺序。
-- 是否需要工作流。
-- 是否要求展示开发协议示例。
+- 是否需要工作流（`workflow`）。
+- 是否要求展示开发协议示例（`allowProtocolExamples`）。
 
 本轮用途不能中途改变。
+服务端拒绝同一轮内改写用途或已绑定的写入序列。
 操作准备阶段可先声明前置查询。
 查询确定对象和数量后，再绑定完整写入序列。
 序列一旦包含写入，就不能扩大或替换。
 每条新用户消息重新声明用途。
 原始消息和历史上下文始终由 Pi 保存。
-旧的指代、条件、草稿和澄清字段已从在线意图契约删除。
-当前声明只保留用途、能力、调用身份和原始文字。
+在线意图契约只含用途、能力序列、调用身份和原文字。
+契约另含 `workflow`、`allowProtocolExamples` 2 个呈现开关。
+契约不含指代、条件、草稿或澄清字段。
 
 工具参数和任务图独立校验。
 计划提交前检查所有节点的公开参数契约。
-类型转换、未知字段和非法金额会被拒绝。
+类型转换、未知字段和非法金额由校验拒绝。
 工具执行还需所属用户校验、确认及多因子认证。
 
 工作流检查声明中的写入次数和顺序。
@@ -42,16 +44,18 @@
 用户句子中的日期不覆盖已声明参数。
 
 模型失败使用供应商和传输的结构化证据。
-`401`、`403` 等认证失败不自动重试。
+`400`、`401`、`403` 等非暂时性状态码不自动重试。
 `408`、`429` 和服务器失败可以重试。
 网络失败、读取超时和缺少终止帧可以重试。
 调用方取消请求时，不自动重试。
 重试还须核对运行状态，防止重复执行金融写入。
 错误文字仅供诊断，不能改变重试决策。
 
-## 审查范围
+## 适用范围
 
-本次审查覆盖以下目录：
+以下目录包含字符串匹配，按用途分 3 类。
+协议与字段格式、脱敏与搜索、闭合枚举。
+业务语义不属于这 3 类，判定依据见下节。
 
 - `agent/`：模型输入、回复展示、工具编排和恢复。
 - `security/`：权限、认证、身份绑定和风险记录。
@@ -59,39 +63,23 @@
 - `app/`、`components/`：接口和页面状态。
 - `banking-sdk/`、`planner/`、`audit/`：业务执行、任务图和审计。
 
-原始搜索清单记录 378 处匹配调用。
-清单包括正则、字符串包含判断和枚举成员判断。
-审查另查了正则定义、字符串分割和替换调用。
-同一模块的匹配按用途归组，处置如下。
+## 业务语义的判定来源
 
-## 业务语义匹配
+以下语义只由结构化字段确定。
+词语匹配不能替代其中任何一项。
 
-这些规则不能作为业务执行的输入来源。
-结构化用途声明只能约束候选工具调用。
-实际写入仍需权限校验、用户确认和多因子认证。
-
-| 原模块或函数 | 原用途与问题 | 处置原则 |
+| 语义 | 判定依据 | 代码位置 |
 | --- | --- | --- |
-| `conversation-policy.ts` | 按词语区分闲聊、解释、查询和写入。否定、引语和多轮指代会改变含义。 | 删除生产词表分类；保留原始对话。 |
-| `advisory-policy.ts` | 按建议词和操作词决定能否提出写入。 | 使用结构化用途声明；声明不能代替确认。 |
-| `conversation-guidance.ts` | 问候、纠正、金额和卡片词语触发固定答复。 | 由模型回答当前问题；能力限制由工具目录表达。 |
-| `intent-context.ts` | 替换收款人和金额指代，拼接澄清。未识别消息可能沿用旧请求。 | 删除需求字符串改写；模型读取完整上下文。 |
-| `request-command-patterns.ts` | 用中文动词表选择工具。 | 工具名来自合法调用，不能来自动词扫描。 |
-| `request-steps.ts` | 分割自然语言步骤，删除限定语，推断计划覆盖。 | 校验结构化节点、参数和依赖。 |
-| `request-amounts.ts` | 从整句提取数字，猜金额单位和位置。 | 金额由明确参数提供，再按金融格式校验。 |
-| `request-conditions.ts` | 从中文比较句生成金额阈值和月份。 | 使用结构化条件、月份及 Decimal 阈值。 |
-| `request-purchases.ts` | 通过词语位置猜产品和购买金额。 | 工具参数使用目录中的真实产品 ID。 |
-| `request-constraints.ts` | 重解释产品对比、操作顺序和成功后依赖。 | 校验任务图；不得根据词语改写任务图。 |
-| `plan-compiler.ts` | 用上述解析结果覆盖模型的条件和时间。 | 编译合法任务图；时间来自明确字段。 |
-| `scheduled-time.ts` 的自然语言扫描 | 中文日期句覆盖已声明时间。 | 删除句子扫描；保留日期字段校验。 |
-| `run-turn.ts` 的产品词语扫描 | 词语决定是否查询目录及提示选择错误。 | 按实际工具调用查询和校验目录。 |
-| `banking-guidance.ts` 的 `providedRequestFields` | 用数字与产品名字猜哪些字段已提供。 | 缺失字段以结构化候选参数为准。 |
-| `invalid-amount-response.ts` | 重新扫描原句生成金额错误提示。 | 由参数校验错误产生提示。 |
-| `turns/buffer.ts` 的中文金额及转账词语判断 | 词语改变回复分支和澄清提示。 | 回复保留模型正文；操作状态独立展示。 |
-| `conversational-response.ts` | 扫描余额、成功声明、旧草稿和开发字段。 | 删除正文语义否决；以执行证据展示状态。 |
-| `reply-format.ts` 的请求词语豁免 | 通过技术关键词决定是否接受协议样式正文。 | 按结构化消息类型处理工具和正文。 |
-| `live-recovery.ts` 的请求词语判断 | 猜测业务尚未规划，并自动重试。 | 是否重试依据模型失败及执行状态。 |
-| 原 `live-recovery.ts` 的错误文本判断 | 通过 `401`、`timeout` 等文字决定重试。 | 已删除；`model-failure.ts` 使用传输证据。 |
+| 本轮用途与能力序列 | `describe_turn` 的结构化声明 | `agent/tools/turn-intent.ts` |
+| 声明能否改写 | 服务端按用途和写入序列拒绝改写 | `agent/intent-context.ts` |
+| 计划步骤、条件与时间 | 任务图节点、条件字段和明确时间字段 | `agent/tools/plan-compiler.ts` |
+| 工具参数 | 公开参数 schema；未知字段和类型转换被拒绝 | `agent/tools/plan-parameters.ts` |
+| 收款人与卡片 | 完整号码或精确的自有 ID | `security/recipient-resolution.ts`、`lib/banking-selectors.ts` |
+| 执行结果 | `outcome`、`needsReconciliation` 和 `status` | `agent/grounding-facts.ts` |
+| 重试决策 | 供应商状态码和传输结构 | `agent/providers/model-failure.ts` |
+| 错误分类 | `AppError.code` 与资源类型 | `agent/task-fencing.ts`、`lib/db/repositories/task.ts` |
+| 疑似注入 | 只写去重审计，不改变权限和熔断 | `security/injection-guard.ts`、`security/incidents.ts` |
+| 执行键 | 服务端生成的 action、task、node 或调用标识 | `agent/financial-operation-key.ts` |
 
 需要步骤顺序、条件和操作对象时，确认卡展示任务图。
 用户确认的是明确对象、金额、时间及操作内容。
@@ -102,19 +90,18 @@
 执行身份只使用所属用户的真实资源字段。
 搜索文字用于返回候选，不能直接证明选中身份。
 
-| 位置 | 审查结论 | 当前处置 |
+| 位置 | 匹配限制 | 当前规则 |
 | --- | --- | --- |
-| `phone.ts` 的双向子串匹配 | 任意数字片段不能确定收款手机号。 | 删除执行匹配中的子串判断。 |
-| `phone.ts` 的可变长度通配 | 中间任意位数会接受不规范号码。 | 只接受 11 位号码或固定脱敏形状。 |
-| `searchPhoneMatch` | 查询需要返回匹配候选。 | 单独保留数字片段搜索。 |
-| `recipient-resolution.ts` 的跨字段匹配 | 姓名不能当成 `contactId`。 | 每个字段只匹配自己的含义。 |
-| `recipient-resolution.ts` 的候选并集 | 互相矛盾的字段可能留下可执行候选。 | 所有已提供字段必须匹配同一联系人。 |
-| `banking-selectors.ts` 的别名转换 | 卡片尾号、产品代码不能当成资源 ID。 | `*Id` 字段只绑定精确 ID，区分大小写。 |
-| `grounding-facts.ts` 的结果文字扫描 | 提到“待核对”不证明结果不明。 | 只认 `outcome`、`needsReconciliation` 和 `status`。 |
-| `task-fencing.ts` 的错误前缀 | 错误措辞变化会错误中止或继续恢复。 | 使用 `AppError.code` 和资源类型。 |
-| `repositories/task.ts` 的缺失节点错误 | Prisma 已提供缺失记录错误码。 | 将 `P2025` 映射为类型化 `NOT_FOUND`。 |
-| `injection-guard.ts` 的攻击词语扫描 | 引用攻击句或正常请求也可能命中。 | 保留审计观察，不能决定权限。 |
-| `incidents.ts` 的疑似注入计数 | 3 次词语命中曾触发真实账户锁定。 | 删除此类观察的锁定路径，保留去重日志。 |
+| `lib/phone.ts` 的身份判定 | 数字片段和掩码不能确定收款手机号。 | `phoneIdentityMatches` 只接受完整 11 位号码逐字符相等。 |
+| `lib/phone.ts` 的候选筛选 | 片段和固定脱敏形状只能收窄候选。 | `phoneCandidateMatches` 和 `searchPhoneMatch` 只返回候选。 |
+| `security/recipient-resolution.ts` 的跨字段匹配 | 姓名不能当成 `contactId`。 | 每个字段只匹配自己的含义。 |
+| `security/recipient-resolution.ts` 的候选并集 | 互相矛盾的字段可能留下可执行候选。 | 所有已提供字段必须命中同一联系人。 |
+| `lib/banking-selectors.ts` 的别名转换 | 卡片尾号、产品代码不能当成资源 ID。 | `*Id` 字段只绑定精确 ID，区分大小写。 |
+| `agent/grounding-facts.ts` 的结果文字扫描 | 提到“待核对”不证明结果不明。 | 只认 `outcome`、`needsReconciliation` 和 `status`。 |
+| `agent/task-fencing.ts` 的错误前缀 | 错误措辞变化会错误中止或继续恢复。 | 使用 `AppError.code` 和资源类型。 |
+| `lib/db/repositories/task.ts` 的缺失节点错误 | Prisma 已提供缺失记录错误码。 | 将 `P2025` 映射为类型化 `NOT_FOUND`。 |
+| `security/injection-guard.ts` 的攻击词语扫描 | 引用攻击句或正常请求也可能命中。 | 只写审计观察，不能决定权限。 |
+| `security/incidents.ts` 的疑似注入计数 | 词语命中不证明真实越权。 | 只写去重记录，不累计信号、不锁定账户。 |
 
 真实越权访问和业务失败仍可触发熔断。
 金融结果仍由执行回执、账本及结构化状态确定。
@@ -131,12 +118,17 @@
 | `components/chat/actions.ts` | SSE 帧边界、内容类型和错误码白名单 | 传输协议及事件契约。 |
 | `providers/model-audit.ts` | 响应头名称白名单 | 限制保存的响应元数据。 |
 | `providers/provider-live.ts` | 环境变量名称字符归一化、供应商枚举 | 配置名称转换。 |
-| `money.ts`、`decimal.ts` | 金额、精度、指数格式和千分位 | 金融字段解析；计算使用 BigInt 或 Decimal。 |
+| `agent/tools/money-schema.ts`、`agent/tools/decimal-schema.ts` | 无符号金额语法、小数位上限和规范化文本 | 参数格式校验。 |
+| `money.ts`、`decimal.ts` | 精度、指数格式和千分位 | 金融字段解析；计算使用 BigInt 或 Decimal。 |
 | `business-card-payloads.ts` | 金额、月份和业务状态格式 | 工具结果卡片的数据契约。 |
 | `banking-sdk/transaction.ts`、`app/bills/page.tsx` | 月份字段 | 检查 `YYYY-MM`。 |
 | `scheduled-time.ts` 的日期字段 | 本地时间格式及合法日期 | 明确时间字段转换。 |
 | `MfaCard.tsx`、`CardChangeDialog.tsx` | 6 位验证码和金额格式 | 表单格式校验，服务端继续认证。 |
 | `ContactManager.tsx` | 规范手机号格式 | 联系人表单字段校验。 |
+| `lib/mask.ts` | 手机号、账号和卡号的展示脱敏 | 只做展示；不校验位数，也不判定身份。 |
+| `agent/tools/result.ts` | 内部字段名集合、11 位号码形状 | 剥离服务端身份字段并脱敏手机号。 |
+| `agent/banking-guidance.ts` | 单键 `guidance` 封套、封闭字段词表 | 只渲染服务端模板；自由正文被丢弃。 |
+| `lib/internal-text.ts` | `__SECURITY_BLOCK__`、JSON 片段和堆栈的形状 | 判定内部诊断，不判断业务语义。 |
 | `chat-history.ts` | 游标字符和长度 | 分页协议校验。 |
 | `contracts/tool-output.ts` | 数组路径的数字段 | 输出路径类型校验。 |
 | `context-compaction/batches.ts` | UTF-16 代理对边界 | 拆分摘要输入时保持字符完整。 |
@@ -151,6 +143,7 @@
 | `history-request.ts` | 查询参数分隔符 | URL 拼接。 |
 | `repositories/contact.ts`、`conversation-history-search.ts` | 查询文字包含匹配 | 返回搜索候选，不能绑定执行身份。 |
 
+理财净值、份额和收益的解析与结算口径见[理财产品：净值与份额](investments.md)。
 固定错误模板宜改成错误码、显示键和插值参数。
 现有匹配只翻译已知模板，未知诊断使用普通提示。
 文案变动不会影响操作结果或重试权限。
@@ -210,6 +203,3 @@
 - 错误和成功状态由结构化字段确定。
 - 疑似注入观察重复出现时不锁定账户。
 - 已登记写入在模型失败或重启后不重复执行。
-
-原始清单只用于发现代码位置。
-代码处置以以上模块用途和执行边界为准。
