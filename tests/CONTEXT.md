@@ -230,6 +230,35 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 - `app/actions-recovery-http.test.ts:301-302` 断言 wedge 恢复后 `plan.status`/`node.status` 为 `success`，实测当前为 `failed`（同用例 `:292` 的 `ok:true` 通过）。期望值权威：`recoverAction`（`agent/index.ts:209-227`）先把计划关联行结清为 `executed`，再 `resumeTask`；`resumeTask`（`agent/workflows/controls.ts:82-89`）经 `sealedParkedNodes` + `sealSettledNodes` 把已结清动作的停靠节点写为 `failed`（`agent/workflows/parked-actions.ts:80-94`、`planner/failure.ts:111-116` 的 `action_not_open`、`planner/executor.ts:481`/`:665`），计划随之为 `failed`；`agent/index.ts:234-235` 仍把「计划 failed + 动作 executed」判为成功。不得把断言改成 `failed`，也不得把「计划 failed」固化成生产契约。
 - `app/manual-review-http.test.ts:277` 断言确认被人工复核守卫拦下时 `blocked.body.data.message` 含 `manual review`，实测该串不存在：人工复核事实在对外文案收口时被压成通用 `CONFLICT` 文案（`security/security-gateway.ts:1263-1265` 抛 `AppError('CONFLICT', …)` → `agent/confirmation/outcomes.ts:119` `publicRefusalMessage(..., { code }, 'chat.error.stateChanged')` → `lib/tool-feedback.ts:12`/`:59-61` → `chat.error.stateChanged`「业务状态已变化。请刷新并核对原操作卡片。」）。该断言代表期望行为，不得按现有实现改断言；`:275` 的 `ok:false`、`:276` 的 `status:'pending'`（`PendingAction` 行未走 CAS）与 `:278` 的金额不变断言仍通过。
 
+## 组件渲染测试（React SSR，无 DOM 环境）
+
+仓库没有 DOM 环境的组件测试：`@testing-library/react`、`jsdom`、`happy-dom`、`react-test-renderer` 都不在 `package.json`／`node_modules` 里，根 `vitest.config.ts:12` 固定 `environment: 'node'`。
+组件回归一律用 `react-dom/server#renderToStaticMarkup` 渲染真实组件成静态 markup，再对字符串 `toContain`/`not.toContain`；`oxc.jsx.runtime: 'automatic'`（`vitest.config.ts:5`）只负责 JSX 转换。
+`include` 只收 `tests|agent|security|planner` 下的 `*.{test,spec}.ts`，不收 `.tsx`，所以渲染用例写在 `.ts` 里并用 `createElement(...)` 构造元素。
+`@` 别名在测试里可用（`tsconfig.json:21-25` 与 `vitest.config.ts:6-10` 两处都指向仓库根）；`'use client'` 模块可直接导入渲染，指令只是字符串字面量。
+`useEffect` 不执行，故依赖 `document`/`cookie` 的副作用不会触发（`LocaleProvider` 的 `document.documentElement.lang` 即属此类）。
+i18n 不需要 Provider：`lib/i18n/LocaleProvider.tsx:15` 的默认上下文是 zh-CN；需要显式语言或开发者开关时用 `createElement(LocaleProvider, { initialLocale: 'zh-CN', children })` 包裹（`developer-reset-panel-hook.test.ts:30-40`）。
+引用 `next/navigation` 的组件必须 `vi.mock('next/navigation', ...)`（`business-result-cards.test.ts:13`、`unlock-panel-render.test.ts`、`unlock-panel-notice.test.ts`）。
+`tests/helpers/` 没有任何 i18n 或渲染辅助，模板是各用例自写的 `render()` 薄封装。
+
+现有渲染用例分布（`react-dom/server` 命中 26 个文件）：
+
+| 文件 | 渲染对象 |
+| --- | --- |
+| `unit/planner/decimal-format.test.ts` | `components/ui/DecimalMoney` 与 `components/banking/HoldingFacts`（唯一一处，含 `card`/`tile` 两种 layout） |
+| `unit/planner/investment-purchase-display.test.ts` | `components/banking/InvestmentProductTile`、`components/chat/cards/InvestmentsCard` |
+| `unit/planner/business-result-cards.test.ts`、`chat-presentation.test.ts`、`locked-card-rendering.test.ts`、`tool-diagnostics.test.ts`、`tool-feedback.test.ts`、`approval-record.test.ts`、`transcript-activity.test.ts`、`chart-presentation.test.ts`、`financial-display.test.ts`、`composer-readiness.test.ts`、`chat-read-results.test.ts`、`chat-plan-controls.test.ts`、`chat-history-ui.test.ts`、`manual-review-presentation.test.ts`、`tool-event-lifecycle.test.ts`、`reply-format*` 之外的展示用例 | 聊天卡、审批/MFA 卡、工具时间线、图表 |
+| `unit/security/unlock-panel-render.test.ts`、`unlock-panel-notice.test.ts` | `app/security/UnlockPanel` |
+| `unit/security/developer-reset-panel-hook.test.ts` | `app/security/ResetBreakerButton`（`DeveloperModeProvider` + `LocaleProvider`） |
+| `unit/lib/activity-presentation.test.ts` | 活动投影展示 |
+| `integration/frontend-followup-fixes.test.ts`、`frontend-review-fixes.test.ts`、`decision-guidance.test.ts`、`live-retry-ui.test.ts` | 聊天结果卡与前端修复的渲染形态 |
+
+缺口：`components/banking/CardTile`、`AssetSummaryCard`、`RecentTransactions`、`SubscriptionTile`、`components/banking/card-account-display.ts`、`components/chat/cards/CardsCard.tsx` 都没有任何渲染用例。
+`CardTile` 的事实只在浏览器侧断言（`e2e/card-labels.e2e-helper.ts#CARD_LABEL`、`readCardTileRows`、`card-replace-chain.e2e-helper.ts`）。
+`CardTile` 不 import `next/navigation`、只用 `useI18n` 默认上下文，因此新增渲染用例只需 `createElement` + `renderToStaticMarkup`。
+
+单文件/单目录执行已文档化：`docs/cn/test-cases.md:23-34` 的常用命令给出 `pnpm test tests/unit` 与 `pnpm test agent/durable tests/integration/process-restart.test.ts`（`pnpm test` = `vitest run`），等价的显式形式是 `pnpm exec vitest run <path>`。
+
 ## 货币文案的断言锚点
 
 `formatCNY`（`lib/money.ts`）与 `formatDecimalCNY`（`lib/decimal.ts`）的权威全等字面量只在
