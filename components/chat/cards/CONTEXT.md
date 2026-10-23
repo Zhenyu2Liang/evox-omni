@@ -69,6 +69,9 @@
 事实、徽标与布局变体的规则见
 [banking/CONTEXT.md](../../banking/CONTEXT.md)。
 
+`InvestmentsCard` 与 `HoldingFacts` 都不渲染费用：卡片只读 `amount`/`marketValue`/`profit`/`purchases`/`lastPurchaseAt`/`status`/`valueBasis`，
+`HoldingView.redemptions`（每条含 `feeAmount`/`feeRule`）从不被读取，持仓区块不出现申购费或赎回费。
+
 ## 业务回执（BusinessReceiptCard）
 
 `BusinessReceiptCard`（`ChatCard.type === 'receipt'`）按 `data.kind` 分两支：`budget` 取 `name`/`amount`/`status`/`purpose`/`dueDate`；
