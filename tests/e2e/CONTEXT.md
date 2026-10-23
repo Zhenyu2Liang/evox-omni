@@ -335,7 +335,10 @@ FROZEN/LOST 的 `LINKED` 卡照常渲染真实 `账户余额` + `可用余额`�
 
 `LIVE-ACCEPTANCE-REPORT.md` 记录当前工作周期的逐轮结果（每场景每轮的 PASS/FAIL、提示词、DB 数字、截图路径与退出码）；历史结果留在 Git 历史。
 必须记录实际提交、模式、场景与本次运行结果。
-每套证据必须声明它认证的**产品树提交**，因为记录证据本身的提交会让 HEAD 前移：用 `git diff --stat <产品树提交> HEAD -- banking-sdk agent security planner lib app components prisma scripts` 为空来证明等价。
+每套证据必须声明它认证的**产品树提交**，因为记录证据本身的提交会让 HEAD 前移。
+等价性一律在仓库根用排除文档的 pathspec 魔法形式测量：`git --no-pager diff --stat <产品树提交> HEAD -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts` 输出为空，即证明该提交与 HEAD 的产品树相同（例：`88d38550` 对 `cab32956` 为空）。
+不带 `:(exclude)**/*.md` 的同一命令不构成等价性证明：这些产品路径下本身就住着 `CONTEXT.md`，任何只动文档的合并都会让它非空（`88d38550` 对 `cab32956` 列出 22 个文件，全部是 `*/CONTEXT.md`）。
+排除文档后仍有差异时必须逐文件点名，并声明该证据「不外推到 HEAD」：旧提交上的通过只认证旧提交的产品树（例：`d26b2636` 对 HEAD 是 2 个文件，`agent/tools/card.ts` 与 `agent/tools/consume-virtual-card.test.ts`）。
 产品代码改动后，旧提交上的证据不再认证 HEAD，必须在新产品树上重跑并声明新的被认证提交。
 某场景在某产品树上的通过只认证该产品树，不得外推到其它提交或其它场景。
 live 超时或未发起业务必须按实际失败记录。
