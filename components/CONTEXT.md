@@ -62,6 +62,10 @@ SDK 数据类型使用类型导入。
 - 新增卡片类型时，必须更新 `CardRenderer` 的穷举分派。
 - 卡片不得持有独立余额；账户余额不得用授信口径的键或文案展示。
 - 关联账户判定只走 `banking/card-account-display.ts`，不在组件内复制四态逻辑或脱敏逻辑。
+- 授权交互只有一处：底部停靠的 `chat/ApprovalRequest`（`data-approval-request` → `ConfirmationCard`/`MfaCard`）；
+  对话内的 `mfa` 与 `confirmation` 卡片一律由 `chat/cards/ApprovalRecord` 只读渲染，不出现输入框或提交按钮。
+- 锁定（`status:'locked'`）实时块写 `data-mfa-locked`（`MfaCard`），历史回执写 `data-approval-locked`（`ApprovalRecord`），
+  两者文案同源（`securityNotice({code:'MFA_LOCKED',reason:'mfa_attempts_exhausted'})`），属性不可混用。
 
 对话显示规则见
 [chat-presentation.md](../docs/cn/chat-presentation.md)。
