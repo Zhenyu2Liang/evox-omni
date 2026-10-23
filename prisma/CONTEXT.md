@@ -27,6 +27,15 @@
 结算与输出规则见
 [financial-values.md](../docs/cn/financial-values.md)。
 
+## 没有手续费字段
+
+`schema.prisma` 全文没有任何手续费/管理费/申购费/赎回费/佣金/税列：没有 `fee`、`feeMinor`、`managementFee`、`feeRule`、`feeAmount`、`charge`、`commission`、`tax` 列，也没有这类 `@map` 名。
+理财申购与赎回的结算金额只由份额、净值与一次性 HALF_UP 取整决定，不扣减费用。
+易被误认为费用列的三处近似项：
+`Subscription.amountMinor` 与 `Subscription.nextChargeAt`（第 171–179 行）是订阅扣款金额与下次扣款日，不是手续费；
+`InvestmentProduct.latestNetValuePerUnit` / `latestNetValueDate`（第 196、198 行）是单位净值（net value 即净值），与"净额扣费"无关。
+`seed.ts` 注释里的 "fees"（第 130、173、350 行）指订阅月费，不是费用列。
+
 ## 投资持仓字段
 
 `InvestmentProduct.latestNetValuePerUnit` 是 4 位小数的净值文本，`latestNetValueDate` 是该净值的业务日期。

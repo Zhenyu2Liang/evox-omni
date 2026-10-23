@@ -52,6 +52,14 @@
 `pendingAction` 只由 `confirmation_required`/`mfa_required` 或挂起操作恢复建立，关闭只来自 `settleAction` 的终态/`confirmed` 与 `pull` 的无错误清除规则。
 `tool_start`/`tool_end` 的 `blocked` 只记录 `lastBlockedToolName`，既不关闭也不替换面板；无 `actionId` 时更不会创建新面板。
 
+### 授权摘要字段（`PendingActionSummary.fields`）的透传
+
+`PendingActionSummary`（`lib/contracts/security.ts`）没有专用费用/手续费/汇率等字段：`amount` 是受控金额，任何附加标注（费用口径、费率、来源说明）只能作为 `fields: Array<{label, value}>` 的一条通用条目传输。
+本目录不做字段白名单：`transport-validation.ts` 只要求 `{label: string, value: string}`，`actions.ts#extractSummary` 同样只校验 label/value 为非空字符串，不限制取值。
+`agent-stream-reducer.ts` 的 `confirmation_required` 直接 `summary: event.action`；`mfa_required` 与刷新恢复经 `lib/action-summary.ts#withActionPolicy`，它只改写 label 恰为 `'风险等级'` 的那一条，其余条目原样保留。
+`ApprovalRequest` 把 `pending.summary` 原样作为 `action` 传给 `ConfirmationCard`/`MfaCard`，不增删或过滤字段；因此服务端下发的任意 `{label:'费用口径', value:…}` 会一路到达卡片渲染。
+`decisionKey.ts` 把 `fields` 全量编入决策身份键，故服务端改变某条字段值即改变该决策的身份（影响去重与结算匹配），新增字段同理。
+
 ### 验证面板的 DOM 钩子
 
 仓库不用 `data-testid`，只认语义 `data-*`、`role`/`aria-label` 与本地化可访问名。

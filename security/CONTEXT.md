@@ -193,6 +193,9 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 `buildPendingActionSummary`（`security-gateway.ts:1693-1745`）对 `transfer_money` 依次产出 `收款人`（姓名）、`收款手机号`（`maskPhone(recipient.phone)`，如 `139****0002`）、`Amount`（标签逐字是英文 `Amount`，**不是**「金额」）、`账户`、`风险等级`。
 卡片工具由 `gatewayCreatePendingAction` 追加一条 `卡片` 字段，值为 `${cardTypeLabel(card.type)} ${card.numberMasked}`（如「信用卡 ****6688」，`security-gateway.ts:901-904`）。
 非转账分支用 `操作`、`金额`（仅金额存在时）与 `风险等级`。
+`金额` 行只来自 `args.amount`（`resolveAmount`，`:339-342`）：赎回的 SHARES/ALL 口径没有该行，AMOUNT 口径下它显示请求金额，而 `summary.amount` 随后被改写成预计到账金额（`:922`）。
+两个投资写操作由 `gatewayCreatePendingAction` 把身份行 `unshift` 到 `操作` 之前：赎回以 `持仓`（值 `${product.name}（${holding.id}）`，`:909-911`）开头，申购以 `产品`（值 `${product.name}（${product.code}）`，`:905-907`）开头。
+两者随后都追加 `入账账户`（赎回）/`付款账户`（申购），值为该用户 CHECKING 账户名，缺失时为「账户待核对」（`:952-955`）。
 `security/messages/` 只有 `mfa.zh-CN.json`；澄清与摘要文案都是 TS 字面量，不在文案资源里。
 
 ## 赎回报价
@@ -204,8 +207,13 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 到账金额用 SDK 的 `settlementFromShares` 结算，与 `banking-sdk/investment.ts` 同源，报价与结算不会分歧。
 金额口径超过持仓市值时同样拒绝，并提示改用全额或按份额赎回。
 持仓未记录份额时抛 `CONFLICT`，产品未发布净值时抛 `VALIDATION`，两者都不铸造报价。
-确认摘要固定展示赎回口径、赎回份额、成交净值、净值日期、预计到账金额与费用口径。
-摘要金额是预计到账金额，不是本金；费用口径为 `feeAmount: '0.00'` 与 `feeRule: 'SIMULATED_NONE'`。
+确认摘要按序追加 7 行（`security-gateway.ts:923-931`）：`赎回口径`、`赎回份额`、`成交净值`、`净值日期`、`预计到账金额`、`费用口径`、`金额变化`；`持仓` 行在此之前已 `unshift` 到首位（`:911`）。
+`RedemptionQuote`（`security-gateway.ts:705-719`）带 `feeAmount` 与 `feeRule` 两个纯展示字段：`feeAmount` 是字面量 `'0.00'`（`:767`），`feeRule` 取自 SDK 常量 `REDEMPTION_FEE_RULE`（`banking-sdk/net-value.ts:37`，即 `SIMULATED_NONE`）（`:768`）。
+费用在本层不参与任何计算：到账金额直接取 `settlementFromShares(shares, netValue)`（`:766`），没有 `settlement − fee` 之类扣减，也不回读执行结果的费用字段。
+`费用口径` 行是字面量模板（`:929`）`赎回费 ${formatCNY(feeAmount)}（${feeRule}：模拟规则免收）`，因此 UI 显示「费用口径 / `赎回费 ¥0.00（SIMULATED_NONE：模拟规则免收）`」；`formatCNY` 带 `¥` 与千分位（`lib/money.ts:79-84`）。
+费用字段不进 `redemptionSnapshot`（`:773-780`），故不属于请求身份、不进命令指纹，执行时也不校验，也不落库为执行证据。
+`PendingActionSummary`（`lib/contracts/security.ts:115-124`）没有费用字段，费用只以 `fields` 里的一行文本出现。
+摘要金额（`summary.amount`，`:922`）是预计到账金额，不是本金。
 快照字段为 `expectedShares`、`expectedNetValue`、`expectedNetValueDate`、`expectedSettlementAmount`。
 快照字段属于服务端报价，重复挂起时不计入请求身份（`requestArgs`）。
 快照字段同时进入命令指纹，口径或金额变化会作废旧授权。

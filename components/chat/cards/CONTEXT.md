@@ -69,6 +69,16 @@
 事实、徽标与布局变体的规则见
 [banking/CONTEXT.md](../../banking/CONTEXT.md)。
 
+`InvestmentsCard` 与 `HoldingFacts` 都不渲染费用：卡片只读 `amount`/`marketValue`/`profit`/`purchases`/`lastPurchaseAt`/`status`/`valueBasis`，
+`HoldingView.redemptions`（每条含 `feeAmount`/`feeRule`）从不被读取，持仓区块不出现申购费或赎回费。
+
+## 业务回执（BusinessReceiptCard）
+
+`BusinessReceiptCard`（`ChatCard.type === 'receipt'`）按 `data.kind` 分两支：`budget` 取 `name`/`amount`/`status`/`purpose`/`dueDate`；
+`investmentPurchase`/`investmentRedemption` 取 `amount`（`Money`）、`success` 徽标、`newBalance`（`cards.balanceAfter`）、`occurredAt`，
+以及可选的 `redemptionValuation`（`business.receipt.valuation`，`DecimalMoney`）与 `settlementRounding`（`business.receipt.rounding`，有值即渲染 `business.receipt.halfUp`）。
+回执契约 `BusinessReceipt` 没有费用字段，因此回执卡片不展示手续费、赎回费或费用口径。
+
 ## 调用详情（ActionDetails）
 
 `ActionDetails.tsx` 是确认面板与历史授权记录共用的字段渲染器。
@@ -77,6 +87,8 @@
 字段行来自服务端快照 `PendingActionSummary.fields`。
 界面按快照原样显示，不重新报价、不重算金额。
 标签与已知策略值经 `lib/i18n/display.ts` 翻译，未知标签和自由文本原样保留。
+`fields.map()` 逐条渲染，没有标签白名单、数量上限或裁剪：任何 `{label, value}` 都会上屏。
+`费用口径` 已登记（`chat.field.feeRule`），其值不经重写，含 `SIMULATED_NONE` 时同样以原文可见。
 
 通用金额行 `cards.amount`（金额）仅在 `action.amount` 是字符串、且下面两条同时成立时渲染：
 `fields` 里没有映射到 `cards.amount` 的字段，也没有映射到 `chat.field.settlementAmount`（预计到账金额）的字段。
@@ -91,6 +103,9 @@
 | 费用口径 | `chat.value.feeRuleSimulatedNone` | 模拟环境不收取赎回费，赎回费 ¥0.00 | 费用口径字段值含 `SIMULATED_NONE` |
 | 重新确认 | `chat.value.reconfirmOnChange` | 确认期间净值变化时需重新确认 | 命中快照 |
 
+`费用口径` 行本身照常作为普通字段行渲染：`localizeActionFieldValue` 没有 `chat.field.feeRule` 分支，值按服务端原文显示（如「赎回费 ¥0.00（SIMULATED_NONE：模拟规则免收）」）；免收句子是额外追加，不是替换。
+费用判定只读值字符串：`isSimulatedNoneFeeField` 要求标签映射为 `chat.field.feeRule` 且 `field.value.includes('SIMULATED_NONE')`，没有结构化费用字段。
+值不含 `SIMULATED_NONE` 时只显示原文，不打印免收句子，也不做任何清洗。
 赎回字段与策略值的映射登记在 `lib/i18n/messages/display-sources.json`。
 
 ## 授权与状态

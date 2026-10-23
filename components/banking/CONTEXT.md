@@ -40,6 +40,8 @@ SDK 类型通过类型导入使用。
 `HoldingFacts.tsx` 是持仓事实的唯一来源。
 `InvestmentProductTile` 与对话卡片 `chat/cards/InvestmentsCard` 都调用 `HoldingFacts`，两处显示的数值相同。
 事实只取自 `HoldingView` DTO，界面不重算。
+事实不含费用：`HoldingFacts` 不读 `HoldingView.purchases`/`redemptions`，
+`HoldingRedemption.feeAmount`/`feeRule` 在组件层无处渲染（tile 与对话卡片都不显示申购费或赎回费）。
 
 | 事实 | 键 | 中文 | 英文 | 值 |
 | --- | --- | --- | --- | --- |
