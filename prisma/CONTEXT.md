@@ -96,7 +96,7 @@ SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件�
 而 `security/security-gateway.ts` 会写入 `locked`，注释落后于实际取值。
 `MfaChallenge`（第 471 行起，**不叫** `VerificationChallenge`）：`actionId String @unique`（外键 `action PendingAction`，`onDelete: Cascade`）、明文 `code`、`attempts`（默认 0）、
 `maxAttempts`（默认 3）、`status`（默认 `"pending"`，取值见文件头第 26 行）、可空 `expiresAt`、可空 `commandDigest`、
-`verifiedAt` 与 `consumedAt`。
+可空 `verifiedAt` 与 `consumedAt`；无 `locked` 列，无 `updatedAt`。
 `CircuitBreakerState`（第 470 行起）以所有者键 `key` 为主键，
 `failures` 默认 0、`locked` 默认 false、`lockedAt` 可空，无冷却时长列。
 没有 `Incident` 与 `AuthorizationRecord` 模型；
