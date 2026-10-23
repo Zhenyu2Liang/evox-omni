@@ -108,6 +108,12 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 `linkedAccountStatus` 四态决定金额行：`LINKED` 渲染账户名 + 脱敏账号 + `账户余额` + `可用余额`；`MISSING`/`UNTRUSTED` 只渲染提示文案（`未关联账户`/`账户暂不可用`），**完全不渲染任何金额行**，绝不以 `0.00` 冒充；`FROZEN`/`LOST`（`usable === false`）追加提示但照常渲染真实且非零的余额——「不可用 ≠ 余额为零」；CREDIT 恒为 `NOT_APPLICABLE`。
 `LiveCardRecord` 与 `helpers.ts#CardView` 是 `GET /api/cards` 的读模型子集：服务端契约（`banking-sdk/types.ts#CardView`）中 `linkedAccountStatus` 与 `usable` 必填，`accountAvailableBalance`/`payableAmount` 仅在 `LINKED` 出现；测试侧只按 JSON 读取使用，从不构造 `CardView` 字面量。
 
+### 卡片渲染覆盖的已知缺口
+
+卡片 tile 只在 `[data-card-id="<id>"]` 上定位，且一律 `.first()`；没有 `aria-label`、标题层级或掩码卡号选择器。
+状态徽标文本未进标签契约：`live-acceptance.e2e.ts` lA 直接硬编码「正常」「已挂失」「已补卡」子串，改 `CardTile` 文案不会被任何目录读取捕获。
+`assertLinkedAccountTileLabels` 的 `MISSING`/`UNTRUSTED` 分支与 `tileText` 参数在任何入口都未被调用（只在默认 `LINKED` 路径上用到），因此浏览器层没有 `未关联账户`/`账户暂不可用`、`卡片不可用`、`卡片已冻结` 的渲染断言；这两种绑定态只在服务端投影用例（`tests/unit`、`tests/integration`、`tests/app`）里覆盖。
+
 ## 消费入账时间边界（独立于前端流程）
 
 `date-tamper-boundary.e2e.ts` 对运行中的应用发真实 HTTP 请求，自带隔离库 `prisma/live-acceptance-date-tamper.db`（≠ `e2e.db`/`test.db`/`dev.db`），不驱动 UI、不经过模型。
