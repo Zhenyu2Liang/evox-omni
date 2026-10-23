@@ -12,6 +12,9 @@
  *   the SDK's own 净值 + 份额 facts verbatim — `shares`, `latestNetValue`, `latestNetValueDate`,
  *   `marketValue`, `profit`, `profitRate`, `realizedProfit`, `cumulativeProfit`, `valueBasis`)
  *   subscriptions → `SubscriptionView[]` · anomaly → `AnomalyReport` · plan → `TaskPlan`
+ * An investment WRITE projects its validated receipt AND, when the write re-read its positions after
+ * committing, an `investments` card carrying those CURRENT holdings — so a completed subscription or
+ * redemption never leaves a pre-write holding snapshot as the newest position card.
  * Dedicated business-result payloads are validated and projected by `business-card-payloads.ts`.
  * No model prose or tool arguments are treated as financial result evidence.
  */
@@ -76,6 +79,18 @@ function isTaskPlan(value: unknown): value is TaskPlan {
   return isRecord(value) && typeof value.goal === 'string' && Array.isArray(value.nodes);
 }
 
+/**
+ * The `HoldingView[]` an investment write re-read after committing (`agent/tools/investment.ts`
+ * `withHoldings`). `null` means the result carries no usable snapshot — the write is still committed,
+ * so the caller projects only its receipt instead of inventing a position list.
+ */
+function writtenHoldings(data: unknown): unknown[] | null {
+  if (!isRecord(data)) return null;
+  const holdings = data.holdings;
+  if (!Array.isArray(holdings) || !isEveryRecord(holdings)) return null;
+  return holdings;
+}
+
 /* ------------------------------------------------------------------------- toCards */
 
 /** Map a tool result to zero or more chat cards. PURE + total (unknown ⇒ [{type:'error'}]). */
@@ -138,7 +153,8 @@ export function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCa
         : [malformed(toolName)];
     }
 
-    // Investment family — `InvestmentsCardData` fills exactly one field per read.
+    // Investment family — `InvestmentsCardData` fills exactly one field per read. The write cases at
+    // the end of this switch project the receipt PLUS the positions the write just re-read.
     case 'list_investments': {
       const products = toDtoList(data);
       return products !== null && isEveryRecord(products)
@@ -183,7 +199,15 @@ export function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCa
     case 'subscribe_investment':
     case 'redeem_investment': {
       const receipt = investmentPayload(data, toolName === 'subscribe_investment' ? 'investmentPurchase' : 'investmentRedemption');
-      return receipt === null ? [malformed(toolName)] : [{ type: 'receipt', data: receipt }];
+      if (receipt === null) return [malformed(toolName)];
+      // The receipt is the authoritative outcome of the committed write; the positions it re-read
+      // follow it as the SAME `investments` payload `get_investment_holdings` produces, so the newest
+      // position card is the post-write state (an empty list renders the honest "no holdings" state).
+      // A missing snapshot projects the receipt alone: the write already happened, so it can never add
+      // an error card and never invents a holding list.
+      const holdings = writtenHoldings(data);
+      return holdings === null ? [{ type: 'receipt', data: receipt }]
+        : [{ type: 'receipt', data: receipt }, { type: 'investments', data: { holdings } }];
     }
     // Runtime-unknown tool name (the `ToolName` union cannot reach here) — fail safe, never throw.
     default:
