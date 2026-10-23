@@ -142,6 +142,9 @@ import { scenarioCreditReplaceNewSession, scenarioFullCardChain } from './card-r
 // The scenario body lives in this module; the entry only registers it.
 import { scenarioMfaAttemptLimitLock } from './live-mfa-lock.e2e-helper';
 import { scenarioDebitCardLinkedAccount } from './live-debit-card.e2e-helper';
+// lI: identity-resolution-by-number (exact phone match, near-miss refusal, tail-only card resolution,
+// tail-never-as-cardId and masking). The scenario body lives in its own helper; the entry only registers it.
+import { scenarioIdentityResolution } from './live-identity.e2e-helper';
 
 // --- isolated LIVE database ---------------------------------------------------------------------
 
@@ -2347,6 +2350,7 @@ const SCENARIOS: readonly Scenario[] = [
   { id: 'lG', name: 'lG-live-full-card-loss-replace-chain-single-session', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioFullCardChain({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive }); }, { label: 'lG-live-full-card-loss-replace-chain-single-session' }) },
   { id: 'lH', name: 'lH-live-mfa-attempt-limit-lock-terminal', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioMfaAttemptLimitLock({ page, baseUrl: ctx.baseUrl, captureShot: captureLive }); }, { label: 'lH-live-mfa-attempt-limit-lock-terminal' }) },
   { id: 'lJ', name: 'lJ-live-debit-card-linked-account-balance', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioDebitCardLinkedAccount({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive }); }, { label: 'lJ-live-debit-card-linked-account-balance' }) },
+  { id: 'lI', name: 'lI-live-identity-resolution-by-number', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioIdentityResolution({ page, baseUrl: ctx.baseUrl, captureShot: captureLive }); }, { label: 'lI-live-identity-resolution-by-number' }) },
 ];
 
 /** `LIVE_SCENARIOS=1,3` (comma separated) runs only those scenario ids (plus scenario 7 if `7`). */
