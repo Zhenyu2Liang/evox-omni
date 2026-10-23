@@ -50,6 +50,8 @@ const TRANSFER_AMOUNT = '200.00';
 const CARD_CATEGORY = '餐饮';
 const CARD_LIMIT_AMOUNT = '1000.00';
 const MASKED_PHONE = /^\d{3}\*{4}\d{3,4}$/;
+/** Same shape but UNANCHORED — for scanning a whole tool-result sentence for a masked candidate row. */
+const MASKED_PHONE_IN_TEXT = /\d{3}\*{4}\d{3,4}/;
 
 export interface ScenarioIdentityInput {
   page: Page;
@@ -234,6 +236,37 @@ async function readSessionToolEvidence(): Promise<SessionEvidence> {
     }
     return { calls, results, allStateText };
   });
+}
+
+/**
+ * Every STRING value the model itself placed in a tool ARGUMENT (length >= 6, so a full phone/card
+ * number qualifies). A tool result may legitimately QUOTE such a value back: `search_contact`'s
+ * summary reads 「找到 N 位匹配“<query>”的联系人：…」, which echoes the caller's own `query` — a value
+ * that came from the CALLER (and from the user's own message), never from `Contact.phoneFull`
+ * (`banking-sdk/contact` returns masked rows only). Masking assertions therefore have to ignore these
+ * caller-supplied echoes and keep failing on any full number the SERVER introduced.
+ */
+function collectArgStrings(calls: ToolCallObs[]): string[] {
+  const found: string[] = [];
+  const walk = (node: unknown): void => {
+    if (typeof node === 'string') {
+      if (node.trim().length >= 6) found.push(node);
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (typeof node === 'object' && node !== null) {
+      for (const value of Object.values(node as Record<string, unknown>)) walk(value);
+    }
+  };
+  for (const call of calls) walk(call.args);
+  // Longest first so a longer caller string is blanked before a shorter one that it contains.
+  // Card-number-shaped values are NEVER exempted: if the model itself ever forwards a full card
+  // number, that leak must still fail the assertion below (only phone-shaped caller echoes are blanked).
+  const exempt = found.filter((value) => !/\d{12,}/.test(value));
+  return [...new Set(exempt)].sort((a, b) => b.length - a.length);
 }
 
 /** Recursively collect every value under the key `wanted` (case-insensitive) from a parsed JSON tree. */
@@ -536,11 +569,30 @@ export async function scenarioIdentityResolution(input: ScenarioIdentityInput): 
       throw new Error(`cardId 必须来自 get_cards 的确切 id，实际 ${String(rawCardId)}`);
     }
   }
-  if (finalEvidence.results.some((r) => r.text.includes(seed.cardNumberFull))) {
-    throw new Error(`工具结果泄漏完整卡号 ${seed.cardNumberFull}（脱敏契约被破坏）`);
+  // MASKING on tool RESULTS: a tool result may legitimately ECHO a value the CALLER itself supplied
+  // (`search_contact` quotes its own `query` in its summary). That echo is not a masking breach: the
+  // value came from the caller (and from the user own message), never from `Contact.phoneFull`
+  // (`banking-sdk/contact` returns masked rows only). Blank the caller-supplied strings first, then
+  // require the full number to be ABSENT - so an owned `phoneFull`, or a number the server resolved
+  // by itself, still fails.
+  const callerStrings = collectArgStrings(finalEvidence.calls);
+  const withoutCallerEcho = (text: string): string =>
+    callerStrings.reduce((out, value) => out.split(value).join('<<CALLER_ARG>>'), text);
+
+  const cardLeak = finalEvidence.results.filter((r) => withoutCallerEcho(r.text).includes(seed.cardNumberFull));
+  if (cardLeak.length > 0) {
+    throw new Error(`工具结果泄漏完整卡号 ${seed.cardNumberFull}（脱敏契约被破坏）` + ' :: ' + cardLeak[0].name + ' / ' + cardLeak[0].text.slice(0, 200));
   }
-  if (finalEvidence.results.some((r) => r.text.includes(seed.phoneFull))) {
-    throw new Error(`工具结果泄漏完整手机号 ${seed.phoneFull}（脱敏契约被破坏）`);
+  const phoneLeak = finalEvidence.results.filter((r) => withoutCallerEcho(r.text).includes(seed.phoneFull));
+  if (phoneLeak.length > 0) {
+    throw new Error(`工具结果泄漏完整手机号 ${seed.phoneFull}（脱敏契约被破坏）` + ' :: ' + phoneLeak[0].name + ' / ' + phoneLeak[0].text.slice(0, 200));
+  }
+  // An echo of the caller own number must still ship the MASKED candidates the tool resolved: that is
+  // what proves the result ROWS stay masked (`Contact.phone`, never `phoneFull`).
+  for (const echoed of finalEvidence.results.filter((r) => r.text.includes(seed.phoneFull))) {
+    if (!MASKED_PHONE_IN_TEXT.test(echoed.text)) {
+      throw new Error('echoed full phone without a masked candidate row: ' + echoed.name + ' / ' + echoed.text.slice(0, 200));
+    }
   }
   if (finalEvidence.allStateText.includes(seed.cardNumberFull)) {
     throw new Error(`持久化状态（stateJson 投影）泄漏完整卡号 ${seed.cardNumberFull}`);
