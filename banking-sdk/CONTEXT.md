@@ -143,7 +143,8 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 
 `listCardConsumptions(userId, query?)` 返回自有的消费记录（按 `occurredAt` 从新到旧，可用 `cardId` 过滤，默认 20 条、上限 200）。
 
-仪表盘 `getDashboardSummary` 的 `creditAvailable` 只汇总 `type === 'CREDIT'` 且 `status !== 'LOST'` 的卡：补办会保留 LOST 原卡的可用额度并让新卡继承同一额度，按 `LOST` 过滤避免重复计入。借记卡/虚拟卡与其绑定账户余额不计入信用可用额；资产总额仍按账户余额各计一次，不因卡片重复。
+仪表盘 `getDashboardSummary`（`dashboard.ts`）的 `creditAvailable` 只汇总 `type === 'CREDIT'` 且 `status !== 'LOST'` 的卡：补办会保留 LOST 原卡的可用额度并让新卡继承同一额度，按 `LOST` 过滤避免重复计入。
+累加的字段是 `CardView.availableLimit`（仓储行上的 `availableLimitMinor`，缺省按 `0n`），不经 `creditLimit`；DTO 定义在 `types.ts#DashboardSummary`（`totalAssets` 是现金加持仓 `holdingMarketValue`，不取整）。借记卡/虚拟卡与其绑定账户余额不计入信用可用额；资产总额仍按账户余额各计一次，不因卡片重复。
 
 ## 卡片与定时载荷
 
