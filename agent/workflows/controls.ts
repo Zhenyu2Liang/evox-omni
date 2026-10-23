@@ -30,9 +30,11 @@ function withoutPendingActionId(output: unknown): Record<string, unknown> | unde
 }
 
 /**
- * SEAL every node whose parked decision is already settled: record it `failed` with catalog text and
- * drop the dead `pendingActionId`, so the executor sees a TERMINAL node (no tool call, no new pending
- * action, no verification entry) while the plan's remaining nodes keep advancing.
+ * SEAL every node whose parked decision is already settled: record the terminal status the seal
+ * PROJECTS (`SealedParkedNode.nodeStatus` — a completed node for an operation the server really
+ * executed, a failed one with its catalog sentence otherwise), drop the dead `pendingActionId`, so the
+ * executor sees a TERMINAL node (no tool call, no new pending action, no verification entry) while the
+ * plan's remaining nodes keep advancing.
  *
  * The write goes through the EXISTING node-persistence port of the same leased plan run, so it is
  * fenced by this run's execution token and cannot clobber a terminally settled row.
@@ -50,7 +52,7 @@ async function sealSettledNodes(
     if (seal === undefined) return result;
     return {
       ...result,
-      status: 'failed',
+      status: seal.nodeStatus,
       output: withoutPendingActionId(result.output),
       error: seal.error,
       endedAt,
@@ -76,9 +78,10 @@ export async function resumeTask(sessionId: string, taskId: string, deps: TaskCo
   await assertNoOpenManualReview(taskId);
   const plan = toTaskPlan(row);
   // A settled (above all `locked`) parked decision is SEALED, never resurrected. The lookup is the
-  // read-only query from `./parked-actions`, taken BEFORE any claim; the node is then recorded terminal
-  // instead of being driven again. A plan whose every node is sealed simply returns with nothing left
-  // to advance — that is a normal return, not a refusal.
+  // read-only query from `./parked-actions`, taken BEFORE any claim; the node is then recorded with the
+  // status that decision projects (a completed node for an executed operation, a failed one for a
+  // refusal) instead of being driven again. A plan whose every node is sealed simply returns with
+  // nothing left to advance — that is a normal return, not a refusal.
   const sealed = await sealedParkedNodes(plan);
   if (!(await claimTaskStatus(taskId, RESUMABLE, 'running'))) return getTaskPlan(sessionId, taskId);
   const token = newId('taskclaim');
