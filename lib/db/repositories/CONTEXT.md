@@ -83,6 +83,14 @@
 `getSession`（`session.ts:26`）、`getUser`（`user.ts:5`）、`getBreakerState`（`circuitBreaker.ts:49`）各 1 条 findUnique，都接受可选 client 以改走已有事务。
 `upsertFailure`（`circuitBreaker.ts:68`）未传 client 时自开 `prisma.$transaction`（`:92`），事务内 `findUnique` + `upsert` 共 2 条；传 client 时同样 2 条但复用调用方事务。
 本目录的 `$transaction` 调用都不传选项对象：`maxWait: 10000` / `timeout: 10000` 来自 `../database.ts:25` 的 `transactionOptions`，没有逐调用覆盖；本目录也没有 P2034/P1008 重试循环。
+chat 同步路径上的运行仓储往返次数（`appendInTransaction`（`agentRun.ts:111`）= 2 条：`agentRun.update` 递增 `nextSequence` + `agentRunEvent.create`；`assertAgentRunLease`（`:82`）固定 2 条 `findUnique`；每个自开的 `$transaction` 另加 BEGIN/COMMIT 两次往返，且整段持有单连接互斥锁）：
+`beginAgentRun`（`:36`）新建路径 6 条 → 8 次往返（会话 `findUnique`、按 `sessionId_requestId` 的 `agentRun.findUnique`、`agentRun.create`、会话租约 CAS `updateMany`、`appendInTransaction` 2 条）；复用路径 +2（`markInterruptedInvocations` 的 2 条 `updateMany`，仅当 `existing` 存在）；接管过期旧运行的最坏路径 11 条 → 13 次往返（多出 `agentRun.updateMany` 置 `interrupted` + 2 条 `markInterruptedInvocations`）；`requestId` 与 `existingRunId` 都缺失时少 1 条读。
+`appendRuntimeEvent`（`:117`）4 条 → 6 次往返；`commitRunSession`（`:354`）5 条 → 7 次往返（2 条 assert + 会话 `updateMany` CAS + `modelRequest.findFirst` + `agentRun.update`，**不**追加事件）。
+`startInvocationWithEvent`（`:139`）5 条、`finishInvocationWithEvent`（`:161`）5–6 条、`updateInvocationAuthorization`（`:180`）3 条、`finishAgentRun`（`:190`）7–10 条，各自再 +2 次 BEGIN/COMMIT。
+`settleRunActionInvocations`（`:240`）是唯一的按行循环：`for (const action of actions) await settleInvocationFromAction(action.id, client)`（`:246`），每轮 2–3 条语句且全部在调用方同一事务内，因此 k 个已结算关联动作 = 2 + 3k 条往返，并让该事务与互斥锁持有时间随 k 线性增长。
+本目录没有任何等待型租约：租约与 CAS 冲突一律 fail-fast（`beginAgentRun:66-70` 的 `claimed.count !== 1` 抛 `CONFLICT`、`claimPendingAction:263-272` 返回 `false`），没有 `while` / `for(;;)` / 重试计数 / 轮询 `leaseExpiresAt` 的循环；`scheduleRunRecovery:397` 的 `new Date(Date.now() + 1000 * 2 ** run.recoveryAttempts)` 与 `finishAgentRun:200` 的 `Date.now() + 2000` 只是写入 `nextRecoveryAt` 供 `listRecoverableAgentRuns:304` 比较，从不 `sleep`。
+`claimPendingAction`（`pendingAction.ts:255`）在 `to === 'confirmed'` 且 `client === prisma` 时自开 `prisma.$transaction`（`:260`）：它既不读 `unit-of-work.ts#currentTransaction()`，默认参数也是单例，因此在已有 ALS 事务内部不传 `client` 调用它会试图在单连接上再开一个事务（第二个 `startTransaction` 排在互斥锁队尾），这是调用方必须避免的组合。
+`session.ts` 无 `loadSession`：读取入口是 `getSession`（`:26`，1 条 `findUnique`）；`ensureDemoSession`（`:30`）是 `update: {}` 的单条 upsert；`updateSessionState`（`:45`）先一条带可选 `revision` 条件的 `updateMany`，`count !== 1` 立即抛 `CONFLICT`（`:54`），随后用另一次不在同一事务里的 `findUniqueOrThrow`（`:55`）回读——回读可能已看到更高 revision，且两语句之间不持事务。
 
 ## MFA challenge 仓储原语（`pendingAction.ts`）
 

@@ -153,6 +153,18 @@ are published. JSON mode returns the same ordered presentation events. Stable re
 transport retries to their original run, without selecting identity or granting authorization.
 Raw model thinking and original provider events stay in the internal journal.
 
+### Chat mode selection and edge timing
+
+`chat/route.ts#wantsStream` (`:57-61`) picks the mode from the query and the `Accept` header, and `application/json` WINS: `if (stream === '0') return false; return !accept.includes('application/json')`.
+`?stream=1` therefore does NOT force streaming when `Accept` also lists `application/json` — which is exactly what the shipped browser client sends (`components/chat/actions.ts:528` `Accept: 'text/event-stream, application/json'`, `endpoints.chat = '/api/chat'` with no query at `:54`).
+The demo's real `POST /api/chat` therefore takes the JSON branch (`route.ts:74-77`) and answers one `200 { ok:true, data:{ sessionId, events } }` body after the whole turn; SSE requires an `Accept` header WITHOUT `application/json`.
+The SSE branch (`:78-100`) builds a `ReadableStream` whose async `start` enqueues `sseFrame(event)` per event and calls `controller.close()` immediately once `runTurn` settles (`:95`), gated by the `connected` flag flipped by `cancel()` (`:97`).
+No timer exists anywhere under `app/`: `setTimeout`/`setInterval`/`new Promise`/`Promise.race`/`for await`/`while (` = 0 occurrences, and no route declares `maxDuration`, `dynamic`, `runtime`, `revalidate` or an `AbortSignal`/retry/attempt loop — nothing ticks while a turn waits, and no SSE `: keep-alive` comment frame exists repo-wide.
+The only buffering hints are `_lib/http.ts:119-123` `SSE_HEADERS`: `Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: no-cache, no-transform`, `Connection: keep-alive`; there is no `X-Accel-Buffering`, and `next.config.mjs` sets no headers or timeout.
+Before `runTurn` the handler awaits exactly TWO DB round-trips inside one identity call: `requireIdentity` (`_lib/session.ts:23-25`) → `getDemoSession` (`agent/session.ts:150-158`) → `ensureDemoSession` upsert (`lib/db/repositories/session.ts:30-36`) then `loadSession`/`getSession` select; `parseBody` adds only the body read and `parseQuery` is sync — no seed check and no demo-user bootstrap beyond that first-time upsert (`update: {}`).
+No per-session queue or mutex exists at the edge, so N concurrent browsers share the one `demo:${userId}` workspace without serialization in `app/`.
+`GET /api/actions`, `GET /api/chat/history` and `GET /api/runs/[id]/events` are single JSON responses — `runs/[id]/events` is a paged read (`after`/`limit`), NOT an SSE stream — and no client component under `app/` polls; the chat client's only read bounds are one-shot 5000 ms cancels in `components/chat/`.
+
 `ActionResponse` carries the action ID, persisted session ID, effective tier/status, domain outcome,
 safe message and continuation events. Confirmation and verification preserve the owning plan link,
 refresh its state and expose current MFA requirements without exposing the verification code.
