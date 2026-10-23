@@ -14,14 +14,14 @@
  *   - the panel exists in the UNLOCKED state too, so any e2e "no developer code input" assertion
  *     must scope itself to the developer-only reset area instead of the whole page.
  *
- * COPY GAP (production change required before it can be pinned — not asserted here):
- *   the sentence 「解锁后需重新发起并重新确认，原操作不会自动执行」 has NO catalog key yet. It is a
- *   documented gap: `app/security/CONTEXT.md`「已知边界 · 文案缺口」and the panel's own comment
- *   (`UnlockPanel.tsx`, the paragraph above `pages.security.unlockDescription`). The same fact is
- *   currently carried by two real renderings, asserted below: `pages.security.unlockDescription`
- *   (high-risk operations stay locked) and `chat.error.actionLocked` (「该操作已锁定……
- *   请在安全中心解除限制后重新发起操作」— the re-initiate half). Only the 「原操作不会自动执行」
- *   half has no rendering at all in the panel.
+ * UNLOCK SEMANTICS NOTICE (prose pinned by `./unlock-panel-notice.test.ts`, not here):
+ *   the panel renders all four `security.reset.*` facts straight from
+ *   `lib/i18n/messages/business.zh-CN.json`: `lockReason` (interpolated from the authoritative
+ *   breaker state), `lockedActionState`, `reinitiate` (「解锁后需重新发起并重新确认，原操作不会自动执行。」)
+ *   and `recovery`. The re-initiate sentence sits in the `<p>` carrying `data-unlock-reinitiate`, in
+ *   BOTH breaker states — pinned by `./unlock-panel-notice.test.ts`; THIS spec owns the panel
+ *   attributes (`data-unlock-panel` / `-locked` / `-failures` / `-max-attempts` / `-locked-actions` /
+ *   `-impact` / `-status`), the single code-input shape and the no-internal-diagnostic boundary.
  */
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';

@@ -61,23 +61,25 @@
 | `agent/turn-security-event.test.ts` | 真实 `securityGateway.handleToolCall`（`tests/helpers/faux-agent.ts:125`）：`security_event` 恰好一条、`kind:'locked'`、typed `code`/`reason`、`message` 为 `undefined`（50-82）；`publicToolSummary` = `chat.error.securityLocked`（84-99） | 真实 SQLite（`useFreshDatabase`），不调真实模型 |
 | `agent/providers/provider-mock.test.ts` | marker 只作输入 `BLOCK_PREFIX`（47、315、330）；被拦的 YELLOW/RED 回 `operationPrepared` 且从不声称已执行（314-342） | 纯：无 DB、无 HTTP |
 | `planner/locked-card-rendering.test.ts` | `MfaCard` locked：`data-mfa-locked` + `chat.error.actionLocked` + `cards.terminal.locked` + `pages.security.unlockDescription` + `href="/security"`，无 `<input>`/`<button>`/`/验证`/`继续验证`（85-107）；`awaiting_mfa` 保留入口（109-118）；`ApprovalRecord` locked（120-132）；`security_event` 敌意 `message` 折叠为 typed 通知（134-155）；`settleAction` 缺码默认 `MFA_LOCKED`、已有 code 优先，`publicToolSummary` 与 `ToolEventList` 同源（157-194）；`MessageBubble` 敌意 system 文本回落 `chat.error.securityDenied`（196-210） | 纯：`renderToStaticMarkup`，无 DB、无 HTTP |
-| `security/unlock-panel-render.test.ts` | `app/security/UnlockPanel.tsx` 的 `data-unlock-*`（135-139）、`data-unlock-impact`（159）、`lockedDescription`/`actionLocked`/`unlockDescription` 与「重新发起操作」半边（84-98）、唯一 `aria-label={t('security.reset.codeLabel')}` 输入 + 提交 + `role="status"`（100-119）、无 marker/无 `MFA_CODE`（121-138）、解锁态仍渲染面板（140-157） | 纯：`vi.mock('next/navigation')`，无 DB、无 HTTP |
+| `security/unlock-panel-render.test.ts` | `app/security/UnlockPanel.tsx` 的 `data-unlock-*`（135-139）、`data-unlock-impact`（182）、`lockedDescription`/`actionLocked`/`unlockDescription` 与「重新发起操作」半边（84-98）、唯一 `aria-label={t('security.reset.codeLabel')}` 输入 + 提交 + `role="status"`（100-119）、无 marker/无 `MFA_CODE`（121-138）、解锁态仍渲染面板（140-157）；只切断面形态，解锁语义正文归 `unlock-panel-notice.test.ts` | 纯：`vi.mock('next/navigation')`，无 DB、无 HTTP |
+| `security/unlock-panel-notice.test.ts` | `security.reset.*` 四段解锁语义：`lockReason` 按权威失败次数插值且 `{count}`/`{max}` 无残留、`lockedActionState`、`reinitiate` 的整句字面量 `REINITIATE`、`recovery`（60-73、85-96）；解锁态仍出 `reinitiate`/`recovery`/`lockedActionState` 且无锁定原因（128-138）；`data-unlock-reinitiate` 挂在承载整句的 `<p>` 上、两种熔断状态都在（75-83、98-126）；无 marker/无 `MFA_CODE`（140-156） | 纯：`vi.mock('next/navigation')`，无 DB、无 HTTP |
+| `security/developer-reset-panel-hook.test.ts` | `app/security/ResetBreakerButton.tsx` 在开发者模式下渲染 `data-developer-breaker-reset-panel`，包裹按钮钩子 `data-developer-breaker-reset` 与 `security.reset.developerOnly` 文案（43-57）；非开发者模式整块渲染空串（59-65） | 纯：真实 `DeveloperModeProvider` + `LocaleProvider`，无 DB、无 HTTP |
 | `weixin-lock-presentation.test.ts` | 四段锁定全文与 `lockedText(reason)` 全等（95-127、154-162）、`awaiting_mfa` 的唯一续接入口与剩余次数（129-152）、`security_event{kind:'locked'}` 撤销 gate 且不可复活（170-184）、其他 kind 静默（186-191）、`emptyNotice:false`（193-198）、敌意 payload 不上屏（200-210、214-249）、`label()` 兜底（251-265）、锁定卡去重（268-288） | 纯：假 `BankingChannel` + `emptyState()` |
 | `planner/tool-feedback.test.ts` | `debugDetail` 可留内部纠错原文，公开 `summary`/`publicToolSummary` 只出目录文案；guard 原文与 `internal-node-*` 只在 developer 模式出现 | 纯 |
 | `planner/tool-diagnostics.test.ts` | locked `MfaCard`/`ConfirmationCard` 出 `cards.terminal.locked` 且无按钮（60-70）；私有 `statusMessage` 只在 developer 模式出现（72-86） | 纯 |
 | `lib/activity-presentation.test.ts` | 业务活动只渲染封闭业务字段，隐藏 id、`toolName`、`toolResult`、`userRequest`、`sessionId` | 纯 |
 
-同一锁定事实分三层钉住：网关（`mfa-failure-contract.test.ts`）、事件投影（`turn-security-event.test.ts`）、渲染（`locked-card-rendering.test.ts`、`weixin-lock-presentation.test.ts`、`unlock-panel-render.test.ts`）。
+同一锁定事实分三层钉住：网关（`mfa-failure-contract.test.ts`）、事件投影（`turn-security-event.test.ts`）、渲染（`locked-card-rendering.test.ts`、`weixin-lock-presentation.test.ts`、`unlock-panel-render.test.ts`、`unlock-panel-notice.test.ts`）。
 `agent/providers/provider-mock.test.ts` 头部的「STAGING COPY / 临时 runner config」注释是迁移残留：文件已在最终位置，按普通用例运行，不需要任何临时配置。
 生产投影 `agent/turns/events.ts:92-96` 与测试侧 `tests/helpers/scenario.ts:304-308` 发出同一组 typed 字段，两者都不带 `message`。
 `turn-security-event.test.ts` 因此证明「真实网关 + 测试侧投影」，不是生产 `agent/turns/events.ts` 本身。
 传输层仍原样转发服务端文案：`planner/action-contract.test.ts:162-170` 用桩造 `message:'Verification locked'` 断言 `error` + `action_settled` 透传；渲染层不读该文本，两者不冲突。
 `planner/action-attention-state.test.ts:117-134` 断言同一 actionId 的 `error` + `action_settled{locked}` 关闭 MFA 弹窗并保留 `error`/`errorCode`。
 
-文案缺口：解锁语义「解锁后需重新发起并重新确认，原操作不会自动执行」没有目录键（记录在 `app/security/CONTEXT.md`「文案缺口」）。
-`security/unlock-panel-render.test.ts:17-24` 显式声明该句不外断言，只钉住两处真实渲染的替代句：`pages.security.unlockDescription` 与 `chat.error.actionLocked` 的「重新发起操作」半边。
-本目录没有任何用例驱动 `POST /api/security/reset`（路由见 `app/security-workflow-http.test.ts`）；`unlock-panel-render.test.ts` 只做静态渲染。
-解锁面板在两种熔断状态下都渲染常驻 `role="status"` live region（`unlock-panel-render.test.ts:117`），因此在 `/security` 上做页面级 `[role="status"]` 扫描会连带面板文本（对照 `tests/e2e/helpers.ts:1197`）。
+文案全在目录里：解锁语义四段 `security.reset.lockReason`（`{count}`/`{max}` 插值）、`security.reset.lockedActionState`、`security.reset.reinitiate`（整句「解锁后需重新发起并重新确认，原操作不会自动执行。」）、`security.reset.recovery`，真值以 `lib/i18n/messages/business.zh-CN.json` 为准。
+`security/unlock-panel-notice.test.ts:60-73` 按目录真值逐条断言这四段，并用字面量 `REINITIATE` 夹住 `reinitiate` 的整句（`:70`、`:82`、`:132`）；`data-unlock-reinitiate` 挂在承载该整句的 `<p>` 上、两种熔断状态都存在（`:75-83`、`:98-126`）。
+`unlock-panel-render.test.ts` 只切断面形态：`data-unlock-*`、单一验证码输入、`role="status"`、不外泄内部诊断；`pages.security.unlockDescription` 与 `chat.error.actionLocked` 的「重新发起操作」半边仍由它断言（`:84-98`）。本目录没有任何用例驱动 `POST /api/security/reset`（路由见 `app/security-workflow-http.test.ts`）：两个解锁面板用例都只做静态渲染。
+解锁面板在两种熔断状态下都渲染常驻 `role="status"` live region（`unlock-panel-render.test.ts:117` ↔ `app/security/UnlockPanel.tsx:213`），因此在 `/security` 上做页面级 `[role="status"]` 扫描会连带面板文本（对照 `tests/e2e/helpers.ts:1197`）。
 
 ## 恢复、租约与任务控制的覆盖
 
