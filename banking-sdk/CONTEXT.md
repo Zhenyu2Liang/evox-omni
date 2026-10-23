@@ -41,15 +41,23 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 混用口径一律拒绝，不会静默放大为全额赎回。
 产品没有净值时抛 `VALIDATION`（`该产品未发布净值，暂不可赎回`）；持仓没有记录份额时抛 `CONFLICT`（`该持仓尚未记录份额，暂不可赎回`）。
 到账金额是 `HALF_UP(赎回份额 × 成交净值, 人民币分)`，只取整一次。
-赎回费恒为 `0.00`，`feeRule` 恒为 `REDEMPTION_FEE_RULE`（`SIMULATED_NONE`）。
+赎回费只作为结果字段存在、从不参与金额计算，见下面「赎回费」一节。
 成本按份额比例扣减：`redeemedCostMinor` 用 `剩余成本 × 赎回份额 ÷ 总份额` 并 HALF_UP 到分，剩余成本等于原成本减去该值，两者相加恒等于原成本。
 已实现收益按 `到账金额 − 该次消耗成本` 累加到 `realizedProfitMinor`，可为负，此后不再重算。
 `ALL` 把 `HOLDING` 原子地转为 `REDEEMED`，把原始结果持久化到 `redeemExecutionKey` 与 `redeemResult`。
 `SHARES` 与 `AMOUNT` 保持 `HOLDING`，扣减 `shares` 与 `principalAmountMinor`，并向 `redemptionHistory` 追加一条记录。
-`redemptionHistory` 是 JSON 数组，元素形如 `{ at, redeemedShares, totalShares, netValue, netValueDate?, settledAmount, cost, remainingShares, remainingCost, remainingMarketValue, newBalance, sourceAccountId, executionKey? }`。
+`redemptionHistory` 是 JSON 数组，元素形如 `{ at, mode, shares, netValuePerUnit, netValueDate?, settledAmount, feeAmount, feeRule, cost, realizedProfit, remainingShares, remainingCost, remainingMarketValue, newBalance, sourceAccountId, executionKey? }`。
 `remainingCost` 同时以 `remainingPrincipal` 别名出现，供更早写入的记录复用。
 全额赎回的 `redeemResult` 中 `remainingPrincipal` 与 `remainingShares` 都是零。
 `HoldingView` 暴露 `shares`、`latestNetValue`、`latestNetValueDate`、`marketValue`、`profit`、`profitRate`、`realizedProfit`、`cumulativeProfit`、`valueBasis`、`purchases` 与 `redemptions`。
+## 赎回费
+赎回费只是契约占位字段，不影响任何金额。
+`feeAmount` 的唯一来源是 `investment.ts` 中 `redeemInvestment` 的字面量 `'0.00'`（`const feeAmount = '0.00';`）；`feeRule` 的唯一来源是 `net-value.ts#REDEMPTION_FEE_RULE`（值 `'SIMULATED_NONE'`，注释说明模拟免收、契约只保留字段），该常量随 `index.ts` 的 `export * from './net-value'` 一起导出。
+到账金额由 `settlementFromShares` 派生，从不扣减费用：全额关闭与部分赎回都把完整的 `settledMinor` 记入账户余额与流水，已实现收益是「到账金额 − 消耗成本」，与费用无关。
+`feeAmount` 与 `feeRule` 只出现在两处公开投影：`InvestResult`（可选字段）与 `HoldingRedemption`（必填字段，经 `redemptionViews` 从 `redemptionHistory` 投影）。
+重放同样依赖记录里的费用字段：`redemptionResultFromRecord` 用 `requireNonNegativeMoney(record.feeAmount)` 与 `requireText(record.feeRule)` 校验，`parseRedeemResult` 原样回放 `redeemResult` 载荷；旧的「本金份额」记录没有费用字段，重放时不补造。
+`subscribeInvestment` 的结果、`purchaseHistory` 记录与 `purchaseResultFromRecord` 都没有费用字段。
+`HoldingView`、`TransactionView`、`DashboardSummary`、回执与审计详情都不投影费用；投资写入不调用审计回调，赎回流水只有 `settledMinor` 金额、商户文本「赎回」与类别 `投资`。
 ## 确认快照与陈旧授权
 `redeemInvestment` 接受四个可选的确认快照字段：`expectedShares`、`expectedNetValue`、`expectedNetValueDate` 与 `expectedSettlementAmount`。
 执行时在写事务内重新读取产品净值与持仓份额，并重算到账金额。
