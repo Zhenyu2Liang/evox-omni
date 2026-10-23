@@ -143,7 +143,9 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 
 ## MFA 面板的断言锚点（产品侧契约）
 
-断言按产品渲染的属性取值，锚点在 `components/chat/ApprovalRequest.tsx`、`components/chat/cards/MfaCard.tsx`、`components/chat/cards/ApprovalRecord.tsx`：
+`MfaCard` 只由停泊区 `components/chat/ApprovalRequest.tsx:32-34` 挂载；transcript 的 `mfa` 卡由 `components/chat/cards/CardRenderer.tsx:59-70` 交给 `ApprovalRecord` 渲染，两者是不同组件。
+
+断言按产品渲染的属性取值：停泊区锚点在 `components/chat/ApprovalRequest.tsx`、`components/chat/cards/MfaCard.tsx`，只读回执锚点在 `components/chat/cards/ApprovalRecord.tsx`。
 
 - 活动面板根 `[data-approval-request="true"]`（`data-action-id`/`data-kind`，`aria-label` 为 `chat.approval.verification`/`chat.approval.confirmation`）= `SELECTORS.approvalRequest`。
 - 验证码输入 `input[aria-label="验证码"]`（`cards.mfa.label`）；`SELECTORS.mfaInput` 已限定在面板内，历史回执不含输入框。
