@@ -91,7 +91,10 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 `lib/contracts/security.ts` 的 `SecurityFailure { code; reason: 'mfa_code_invalid'|'mfa_attempts_exhausted'|'mfa_session_locked'|'circuit_open'|'denied'; actionId?; attemptsUsed?; attemptsLeft?; maxAttempts? }` 是拒绝的唯一机器可读形态；`lib/errors.ts` 的 `'MFA_LOCKED'` 是它的领域错误码。
 网关每个拒绝点都填 `failure`：`lockedOutcome`（`reason` 区分 `circuit_open`/`mfa_session_locked`，`attemptsLeft` 恒为 `0`）、`authorizeWithMfa` 的 `mfa_code_invalid` 与 `mfa_attempts_exhausted`（后者 `code` 为 `MFA_LOCKED`，`attemptsUsed`/`attemptsLeft`/`maxAttempts` 完整）、`planCancelledOutcome`、`authorizeTransfer` 的 `LIMIT_EXCEEDED` 升级分支。
 `authorizeWithMfa` 的「尚未提交验证码／需要输入」分支是流程提示态而非拒绝，不带 `failure`。
-`mfa.verify` 的挑战已消费/已过期/摘要变化在 `SecurityFailureReason` 中没有成员，网关回退到 `mfa_code_invalid`，用户文案取 `res.error.message` 并经 `lib/tool-feedback.ts` 的公开文案表渲染。
+`mfa.verify` 的挑战级拒绝在 `SecurityFailureReason` 中没有专门成员，`ChallengeInvalidError` 借既有成员承载（`consumed` → `{code:'CONFLICT', reason:'denied'}`，`expired`/`command_changed` → `{code:'MFA_FAILED', reason:'denied'}`），判别只看 `invalidation`；网关按它分流，**不**把三者塌缩成 `mfa_code_invalid`，也不渲染 `res.error.message`：
+`consumed` 表示决定已结算——CAS `from:['pending','awaiting_mfa']` → `cancelled`，返回 `status:'cancelled'`、顶层 `code:'CONFLICT'`、`failure {code:'CONFLICT', reason:'denied', actionId}`、`message: CONSUMED_CHALLENGE_MESSAGE`（逐字命中 `lib/tool-feedback.ts#PUBLIC_BUSINESS_ERRORS` → `chat.error.verificationConsumed`，`security-gateway.ts:1179-1201`）；认领落空时重读该行，`locked` 走 `lockedOutcome(…, 'mfa_session_locked')`，否则抛 `CONFLICT`（`:1181-1188`）。
+`expired`/`command_changed` 先 `issueChallenge` 重签，再返回不带 `code`/`failure` 的 `awaiting_mfa` 提示态，文案取 `security/messages/mfa.zh-CN.json#renewedChallenge`（`:1202-1215`）。
+无法归类者抛 `AppError('CONFLICT', …)` 并带 `{code:'CONFLICT', reason:'denied'}`，不写业务副作用（fail-closed，`:1216-1217`）。
 `manual-card-management.ts` 的终态锁定拒绝抛 `AppError('MFA_LOCKED', …)` + `{ code:'MFA_LOCKED', reason:'mfa_session_locked', actionId }`，熔断拒绝抛 `AppError('CIRCUIT_OPEN', …)` + `{ code:'CIRCUIT_OPEN', reason:'circuit_open', actionId }`。
 用户可见文案不内插内部状态字面量：`PENDING_ACTION_STATUS_LABEL` 覆盖全部 `PendingActionStatus` 的中文标签，`statusLabel` 对未知值降级为「状态已变更」。
 
@@ -110,7 +113,7 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 已锁定后的再次提交走提前熔断分支或 `status==='locked'` 早退，返回 `failure.reason: 'mfa_session_locked'`。
 锁定态返回值仍带 `requiresMfa: true`，但 HTTP 路由由 `status` 推导出的 `mfaResult` 变为 `failed`，且不发出 `mfa_required` 流事件。
 真正的终态锁定以「仅从 `pending`/`awaiting_mfa` 出发」的 CAS 把 `PendingAction.status` 落库为 `'locked'`；该行因此不再作为待决策项返回，也不再发出 `mfa_required`，MFA 弹窗不会重现；对已是 `'locked'` 的行再次授权幂等返回同一拒绝。
-`mfa.ts#verify` 返回 `Result` 而非抛错；抛 `CIRCUIT_OPEN` 的只有 `circuit-breaker.resetSession` 与 `execution-policy.assertSessionMayWrite`。
+`mfa.ts#verify` 返回 `Result` 而非抛错；抛 `CIRCUIT_OPEN` 的只有 `circuit-breaker.resetSession`、`execution-policy.assertSessionMayWrite` 与 `manual-card-management.ts#breakerLockedError`（熔断开启时在签发挑战与验证之前拒绝，`manual-card-management.ts:60-63`、`:161`）。
 成功验证码重置连续失败计数，但不解除已触发的熔断（「locked 优先」）；仅 `resetSession` 以验证码或冷却解除。
 `issueChallenge` 只对未决行签发，并对已结算的 `executed`/`cancelled` 行返回 `CONFLICT`；`confirmed`/`failed`/`needs_reconciliation` 仍可签发（恢复授权与回滚重验路径依赖）。
 `mfa.ts` 把 5 分钟墙钟挑战绑定到命令（`commandDigest`），保留有效尝试并记录消费。
