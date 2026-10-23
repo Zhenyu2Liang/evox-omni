@@ -76,7 +76,7 @@
 ## MFA challenge 仓储原语（`pendingAction.ts`）
 
 `createMfaChallenge`（`pendingAction.ts:315-328`，入参 `CreateMfaChallengeInput` `:50-56`）是本目录唯一的建行函数：必填 `actionId`、`code`，可选 `maxAttempts`、`expiresAt`、`commandDigest`。
-落库兜底：`maxAttempts: input.maxAttempts ?? 3`（`:322`）、`expiresAt: input.expiresAt ?? new Date(Date.now() + 5 * 60_000)`（`:323`）；`commandDigest` 原样透传（可不传，落到模型可空列）；`attempts` 与 `status` 从不写，由 schema 默认 `0` / `'pending'`（`prisma/schema.prisma:455`/`:457`）。
+落库兜底：`maxAttempts: input.maxAttempts ?? 3`（`:323`）、`expiresAt: input.expiresAt ?? new Date(Date.now() + 5 * 60_000)`（`:324`）；`commandDigest` 原样透传（可不传，落到模型可空列）；`attempts` 与 `status` 从不写，由 schema 默认 `0` / `'pending'`（`prisma/schema.prisma:476`/`:478`，`maxAttempts` 默认 `3` 在 `:477`）。
 默认 `expiresAt` 在函数内部设置，硬编码 5 分钟字面量，不 import `security/`（本文件不依赖业务安全层），因此 `security/mfa.ts:34` 的 `MFA_CHALLENGE_TTL_MS` 与本文件是两份独立字面量，改常量不传导到默认值。
 默认 TTL 用 `Date.now()`，安全层用 `realNow()`（`lib/clock.ts`），两者是不同时钟入口。
 `getMfaChallenge`（`:329`）是 `findUnique({ where: { actionId } })`：按 `actionId`（schema `@unique`，`schema.prisma:452`）查，至多一条，无状态过滤。
