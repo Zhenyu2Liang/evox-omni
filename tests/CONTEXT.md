@@ -14,7 +14,7 @@
 
 本目录根部的 `setup.ts` 准备测试库，`deploy-db-push.test.ts` 覆盖 `scripts/db-push.ts` 的冷库自建。
 
-根 `vitest.config.ts` 收集 `tests/**/*.{test,spec}.ts` 与 `agent/**/*.{test,spec}.ts`。
+根 `vitest.config.ts` 收集 `tests/**`、`agent/**`、`security/**`、`planner/**` 下的 `*.{test,spec}.ts`。
 `.e2e.ts` 与 `.e2e-helper.ts` 不匹配该 include，`pnpm test` 不会运行它们。
 浏览器与边界入口一律用 `pnpm exec tsx <入口>` 单独运行。
 默认使用 mock 模式，不调用真实模型。
@@ -27,8 +27,8 @@
 | `e2e/live-acceptance.e2e.ts` | 真实模型的真实浏览器验收，场景在 `SCENARIOS`，用 `LIVE_SCENARIOS` 选择 |
 | `e2e/date-tamper-boundary.e2e.ts` | 消费入账时间的纯 HTTP 边界用例，无模型、无浏览器 |
 
-`SCENARIOS` 的 id 为 `15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG`。
-`lA` 补办信用卡、`lB` 理财部分赎回、`lC`…`lE` 虚拟卡场景、`lF`/`lG` 挂失→补办链路场景（`lF` 新会话、`lG` 单会话完整链路）；选择 `2` 会同时选中 `2p`，场景 `7` 恒为最后阶段。
+`SCENARIOS` 的 id 为 `15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG,lH,lJ,lI`。
+`lA` 补办信用卡、`lB` 理财部分赎回、`lC`…`lE` 虚拟卡场景、`lF`/`lG` 挂失→补办链路场景（`lF` 新会话、`lG` 单会话完整链路）、`lH` 连错三次验证码→终态锁定、`lI` 号码与尾号身份解析、`lJ` 借记卡/虚拟卡只展示绑定活期账户的现金；选择 `2` 会同时选中 `2p`，场景 `7` 恒为最后阶段。
 `e2e/helpers.ts` 与 `*.e2e-helper.ts` 是入口共用的驱动与断言模块，自身不运行。
 入口细节见 [e2e/CONTEXT.md](e2e/CONTEXT.md)。
 
@@ -60,9 +60,9 @@
 补办卡继承源卡的结算账户，缺失绑定只按显式前驱修复，绝不回退默认账户。
 补办卡与源卡共享同一连续月度额度（`banking-sdk/card-family.ts` 双向遍历 `replacedByCardId`），历史 `CardConsumption` 保持原卡归属不改写。
 
-卡片集合按 id/type/状态断言，不使用固定卡片总数。
+卡片集合按 id/type/状态断言，不只数总数：`lF`/`lG` 的补办后预期按「基线 + 1」推导（`e2e/card-replace-chain.e2e-helper.ts:749`、`:1115`），`lA` 在类型/状态之外仍固定断言补办后共 4 张（`e2e/live-acceptance.e2e.ts:1323-1325`）。
 mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `acct_checking`（`linkedAccountId: 'acct_checking'`），演示种子（`prisma/seed.ts`）另有绑定同一账户的 `card_virtual`。
-`lA` 补办后为「补办 ACTIVE 信用卡 + LOST 源卡 + DEBIT + VIRTUAL」，由类型/状态推导而非硬编码。
+`lA` 补办后为「补办 ACTIVE 信用卡 + LOST 源卡 + DEBIT + VIRTUAL」；`lC` 与 `lF` 的验证前基线要求卡片总数不变（`e2e/live-acceptance.e2e.ts:1477`、`e2e/card-replace-chain.e2e-helper.ts:531`）。
 
 `tests/helpers/db.ts#truncateAll()` 清空 `prisma/schema.prisma` 的每一个 model（含无关系的 `CardConsumption`）。
 套件不得在 `useFreshDatabase()`/`resetDatabase()` 之后再自行逐表清理。
@@ -232,7 +232,6 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 ## 与当前生产契约不一致的既有断言（已知缺口）
 
 - `app/actions-recovery-http.test.ts:301-302` 断言 wedge 恢复后 `plan.status`/`node.status` 为 `success`，实测当前为 `failed`（同用例 `:292` 的 `ok:true` 通过）。期望值权威：`recoverAction`（`agent/index.ts:209-227`）先把计划关联行结清为 `executed`，再 `resumeTask`；`resumeTask`（`agent/workflows/controls.ts:82-89`）经 `sealedParkedNodes` + `sealSettledNodes` 把已结清动作的停靠节点写为 `failed`（`agent/workflows/parked-actions.ts:80-94`、`planner/failure.ts:111-116` 的 `action_not_open`、`planner/executor.ts:481`/`:665`），计划随之为 `failed`；`agent/index.ts:234-235` 仍把「计划 failed + 动作 executed」判为成功。不得把断言改成 `failed`，也不得把「计划 failed」固化成生产契约。
-- `app/manual-review-http.test.ts:277` 断言确认被人工复核守卫拦下时 `blocked.body.data.message` 含 `manual review`，实测该串不存在：人工复核事实在对外文案收口时被压成通用 `CONFLICT` 文案（`security/security-gateway.ts:1263-1265` 抛 `AppError('CONFLICT', …)` → `agent/confirmation/outcomes.ts:119` `publicRefusalMessage(..., { code }, 'chat.error.stateChanged')` → `lib/tool-feedback.ts:12`/`:59-61` → `chat.error.stateChanged`「业务状态已变化。请刷新并核对原操作卡片。」）。该断言代表期望行为，不得按现有实现改断言；`:275` 的 `ok:false`、`:276` 的 `status:'pending'`（`PendingAction` 行未走 CAS）与 `:278` 的金额不变断言仍通过。
 
 ## 货币文案的断言锚点
 
@@ -269,7 +268,7 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 批 A `pnpm exec vitest run tests/app tests/unit`；批 B `pnpm exec vitest run tests/integration tests/scenarios`。
 两批各自独占测试库，批间不重叠；`vitest` 的 `fileParallelism:false` 不足以免除「不并行起两个 vitest 进程」。
 节点本地三文件：`pnpm exec vitest run security/mfa-lock-reason-authority.test.ts planner/plan-failure-contract.test.ts planner/plan-drive-guard.test.ts`（根 `vitest.config.ts` 已收集 `security/**`、`planner/**`）。
-当前预期失败只有上文「已知缺口」两条：`app/actions-recovery-http.test.ts:301-302` 与 `app/manual-review-http.test.ts:277`，其余全绿。
+当前预期失败只有上文「已知缺口」一条：`app/actions-recovery-http.test.ts:301-302`，其余全绿。
 失败项归因写在「已知缺口」各条内；注入接缝与再驱动入口规则见上文 wedge 小节与 [integration/CONTEXT.md](integration/CONTEXT.md)。
 `pnpm exec tsx tests/e2e/acceptance.e2e.ts` 运行浏览器验收。
 
