@@ -513,30 +513,110 @@ async function driveYellowTransfer(
 
 // --- real-model proof ------------------------------------------------------------------------------
 
+/**
+ * The `AgentRunEvent.eventType` whose `payload` IS one raw upstream SSE chunk (real completion id,
+ * `model`, `system_fingerprint` inside). Written by `agent/providers/model-audit.ts#withModelAudit`.
+ */
+const PROVIDER_RESPONSE_EVENT = 'provider_response_event';
+
+/**
+ * What persisted rows can PROVE about the real model call of this run.
+ *
+ * The upstream (`deepseek-flash`) sends NO `x-request-id`: its `provider_response_headers` payload is only
+ * `{ headers: { 'content-type': … }, status: 200 }` (`responseHeaderNames` here is the evidence). The
+ * genuine upstream identifier is the completion `id` on every chunk persisted as
+ * `provider_response_event` — the same wire record `tests/e2e/live-acceptance.e2e.ts#verifyProviderCompletionEvidence`
+ * already trusts — joined to a COMPLETED `ModelRequest` through the journal envelope's `modelRequestId`.
+ */
 interface ModelEvidence {
   completedRequests: number;
+  /** Distinct upstream completion ids. (`requestIds` is the historical key name; there is no HTTP request id.) */
   requestIds: string[];
   model: string;
+  /** The `AgentRunEvent.eventType` the ids were read from. */
+  upstreamEventType: string;
+  /** Completed `ModelRequest` rows owning at least one upstream id (the join key is `payload.modelRequestId`). */
+  completedRequestsWithUpstreamId: number;
+  /** `payload.model` the upstream itself reported per chunk. */
+  upstreamModel?: string;
+  /** `payload.system_fingerprint` the upstream itself reported per chunk. */
+  systemFingerprint?: string;
+  /** Header names the upstream actually returned — the proof there is no request-id header. */
+  responseHeaderNames: string[];
+  responseStatuses: number[];
+  /** One completed `ModelRequest.id`, so the report can quote the row the ids were joined to. */
+  sampleModelRequestId?: string;
+}
+
+/** One `AgentRunEvent.payloadJson` as the journal envelope `{ modelRequestId, payload }`. */
+function parseProviderEnvelope(payloadJson: string): { modelRequestId?: string; payload: Record<string, unknown> } {
+  const parsed = JSON.parse(payloadJson) as { modelRequestId?: unknown; payload?: unknown };
+  return {
+    modelRequestId: typeof parsed?.modelRequestId === 'string' ? parsed.modelRequestId : undefined,
+    payload: parsed?.payload && typeof parsed.payload === 'object' ? (parsed.payload as Record<string, unknown>) : {},
+  };
 }
 
 /**
  * Server-side proof that the REAL model served this scenario: completed `ModelRequest` rows plus the
- * upstream `x-request-id` headers recorded on the SAME run's `provider_response_headers` wire events.
+ * real upstream completion ids carried by that run's `provider_response_event` wire records.
+ *
+ * The envelope shape is `{ modelRequestId, payload }` (`agent/durable/journal.ts#recordModelProviderEvent`),
+ * so the join key is the envelope's `modelRequestId` — never a regex over the raw JSON text (the upstream
+ * returns no `x-request-id` header at all, so such a regex can never match).
  */
 async function readModelEvidence(model: string): Promise<ModelEvidence> {
   return withDb(async (db) => {
-    const requests = await db.modelRequest.findMany({ where: { status: 'completed' }, select: { id: true } });
-    const headers = await db.agentRunEvent.findMany({
-      where: { eventType: 'provider_response_headers' },
-      orderBy: { sequence: 'asc' },
-      select: { payloadJson: true },
+    const requests = await db.modelRequest.findMany({
+      where: { status: 'completed' },
+      orderBy: [{ runId: 'asc' }, { ordinal: 'asc' }],
+      select: { id: true },
     });
+    const completed = new Set(requests.map((request) => request.id));
+    const records = await db.agentRunEvent.findMany({
+      where: { eventType: { startsWith: 'provider_' } },
+      orderBy: { sequence: 'asc' },
+      select: { eventType: true, payloadJson: true },
+    });
+
     const requestIds: string[] = [];
-    for (const row of headers) {
-      const match = /x-request-id"?\s*:\s*"?([^",}\s]+)/i.exec(row.payloadJson);
-      if (match && match[1] && !requestIds.includes(match[1])) requestIds.push(match[1]);
+    const owners = new Set<string>();
+    const responseHeaderNames = new Set<string>();
+    const responseStatuses = new Set<number>();
+    let upstreamModel: string | undefined;
+    let systemFingerprint: string | undefined;
+    for (const record of records) {
+      const { modelRequestId, payload } = parseProviderEnvelope(record.payloadJson);
+      if (!modelRequestId || !completed.has(modelRequestId)) continue;
+      if (record.eventType === PROVIDER_RESPONSE_EVENT) {
+        const upstreamId = typeof payload['id'] === 'string' ? payload['id'] : undefined;
+        if (upstreamId) {
+          owners.add(modelRequestId);
+          if (!requestIds.includes(upstreamId)) requestIds.push(upstreamId);
+        }
+        if (typeof payload['model'] === 'string') upstreamModel ??= payload['model'];
+        if (typeof payload['system_fingerprint'] === 'string') systemFingerprint ??= payload['system_fingerprint'];
+      } else if (record.eventType === 'provider_response_headers') {
+        const headers = payload['headers'];
+        if (headers && typeof headers === 'object') {
+          for (const name of Object.keys(headers)) responseHeaderNames.add(name.toLowerCase());
+        }
+        if (typeof payload['status'] === 'number') responseStatuses.add(payload['status']);
+      }
     }
-    return { completedRequests: requests.length, requestIds, model };
+
+    return {
+      completedRequests: requests.length,
+      requestIds,
+      model,
+      upstreamEventType: PROVIDER_RESPONSE_EVENT,
+      completedRequestsWithUpstreamId: owners.size,
+      upstreamModel,
+      systemFingerprint,
+      responseHeaderNames: [...responseHeaderNames],
+      responseStatuses: [...responseStatuses].sort((a, b) => a - b),
+      sampleModelRequestId: requests[0]?.id,
+    };
   });
 }
 
@@ -925,9 +1005,15 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
   const shotLost = await captureShot(page, 'lJ-lost-virtual-card');
 
   // ---- P6: evidence -----------------------------------------------------------------------------
+  // Non-vacuous proof that the REAL model served this run, read from persisted rows only: completed
+  // `ModelRequest` rows, and the real upstream completion ids on `provider_response_event` wire records
+  // joined to them by the journal envelope's `modelRequestId`. NOT an `x-request-id` regex: this upstream
+  // sends no such header (`responseHeaderNames` reports what it really sent).
   const modelEvidence = await readModelEvidence(model);
   if (modelEvidence.completedRequests === 0) fail('没有任何 completed 的 ModelRequest（模型并未真正参与本次运行）');
-  if (modelEvidence.requestIds.length === 0) fail('没有任何带 x-request-id 的 provider_response_headers 证据（无法证明真模型调用）');
+  if (modelEvidence.requestIds.length === 0) {
+    fail(`没有任何 completed 的 ModelRequest 关联到上游 completion id（证据源：AgentRunEvent.eventType='${modelEvidence.upstreamEventType}' 的 payload.id；该请求数=${modelEvidence.completedRequests}，上游实际返回的响应头=${JSON.stringify(modelEvidence.responseHeaderNames)}，其中没有 x-request-id）`);
+  }
   const evidenceFile = writeScenarioEvidence('lJ', {
     scenario: 'lJ-live-debit-card-linked-account-balance',
     model,
@@ -967,7 +1053,7 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
     screenshots: { shotBaseline, shotSecondCard, shotTransferCards, shotOverview, shotFrozen, shotLost },
   });
 
-  return `lJ 模型 ${model}（/api/health llmMode=${health.llmMode}，completed ModelRequest ${modelEvidence.completedRequests} 条，x-request-id 示例 ${modelEvidence.requestIds[0]}）｜`
+  return `lJ 模型 ${model}（/api/health llmMode=${health.llmMode}，completed ModelRequest ${modelEvidence.completedRequests} 条，其中 ${modelEvidence.completedRequestsWithUpstreamId} 条关联到上游 completion id；示例 ${modelEvidence.requestIds[0]} 取自 ${modelEvidence.upstreamEventType} 的 payload.id，上游自报 model=${modelEvidence.upstreamModel ?? '（未记录）'}、system_fingerprint=${modelEvidence.systemFingerprint ?? '（未记录）'}、响应头仅 ${JSON.stringify(modelEvidence.responseHeaderNames)}/${JSON.stringify(modelEvidence.responseStatuses)}）｜`
     + `基线：SQLite Card.linkedAccountId(${DEBIT_CARD_ID})=${debitRaw.linkedAccountId} → Account ${account.name}/${account.number} ${cash}；`
     + `GET /api/cards ${DEBIT_CARD_ID} linkedAccountStatus=LINKED name=${account.name} number=${account.number} accountAvailableBalance=${cash} payableAmount=${cash} usable=true（无信用额度字段、无卡片自有余额）；`
     + `/cards DOM 行「${CARD_LABEL.linkedAccount}」=「${account.name} · ${account.number}」「${CARD_LABEL.accountBalance}」=${debitRows0[CARD_LABEL.accountBalance]}「${CARD_LABEL.usableBalance}」=${debitRows0[CARD_LABEL.usableBalance]} 状态=「${t('business.cards.active')}」；`
