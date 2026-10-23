@@ -16,6 +16,8 @@
 | `runtime/` | 运行记录与事件展示 |
 
 `index.ts` 和子目录索引保持中性导出。
+`index.ts` 覆盖 `ui`/`chat`/`chat/cards`/`charts`/`banking`/`security`，不含 `runtime`。
+`banking/index.ts` 未导出 `HoldingFacts`，由 `InvestmentProductTile` 与 `chat/cards/InvestmentsCard` 按路径直接导入。
 交互或本地化组件在叶子模块声明客户端边界。
 是否使用客户端组件，以模块指令和 Hook 为准。
 
