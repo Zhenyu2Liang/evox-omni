@@ -122,6 +122,20 @@
 服务端把锁定 CAS 持久化为 `PendingAction.status='locked'`（`security/security-gateway.ts` 的 `persistLockedAction`），`GET /api/actions` 因此不再返回该行，`toPendingActionRef` 也丢弃 `locked`，`pickPendingAction` 只接受 `pending`/`awaiting_mfa`——刷新后底部弹窗不会重开，会话内已终态的决定也不再重开（`hasSettledAction`/`visibleRefs`）。
 历史页仍会返回该内联卡：`app/agent/history.ts` 在行状态非 `awaiting_mfa` 时保留 `{type:'mfa', actionId, action, status: row.status}`，故 `status:'locked'` 的卡片随页面加载重新渲染为只读终态，文案与实时卡片一致。
 
+`cards.mfa.locked`（“已锁定，请到安全中心处理。”）不可达：`locked` 属 `TERMINAL_STATUSES`，`MfaCard` 先走 `terminal === 'locked'` 分支；`readOnly && !terminal` 那行只在状态既非终态又非 `pending`/`awaiting_mfa`（如 `confirmed`）时落到 `cards.mfa.processing`。
+`cards.mfa.failedAttemptsLimit` 在实时锁定流程中不可达：第 3 次错误验证码的响应 `status:'locked'` 让 `settleAction` 清除 `pendingAction`，底部 `MfaCard` 卸载，`useAgentStream` 的 `verify` 计数条件（`pendingAction` 仍是同一 mfa 决策）不再成立，`mfaAttempts` 停在上一次的数值。
+连续错误验证码的三段可见变化：前两次保留底部面板（顶部 `role="alert"` 因 `showNotice={!pending}` 不渲染），第三次面板整体消失，`chat.error.actionLocked` 改由 system 气泡、工具行 `errorCode:'MFA_LOCKED'` 与可能的只读内联卡承载。
+
+## 测试定位（DOM 标记）
+
+端到端测试只依赖以下标记与目录文案，不依赖样式类名。
+- 唯一活动面板：`section[data-approval-request="true"][data-action-id][data-kind="mfa"|"confirmation"]`，`aria-label` 与标题取 `chat.approval.verification` / `chat.approval.confirmation`。
+- MFA 输入框：`input[type="text"][inputmode="numeric"][autocomplete="one-time-code"]`，`aria-label` = `cards.mfa.label`，`placeholder` = `cards.mfa.placeholder`；提交按钮文案 `cards.verify`，取消 `cards.cancel`，YELLOW 确认 `cards.confirm`（`ui/Button` 不输出任何 `data-*`）。
+- 实时锁定区块：`[data-mfa-locked="true"]`（`MfaCard`），只在活动面板仍渲染已锁定的 mfa 决策时存在。
+- 只读授权记录：`section[data-approval-history="true"][data-action-id][data-status]`，内含 `[data-approval-stage="previous"|"current"][data-stage-status]`；`status="locked"` 时另有 `[data-approval-locked="true"]`。
+- 安全拒绝气泡：`[data-message-role="system"] [data-message-content="true"]`；工具行 `li[data-tool-call-id][data-tool-status]`；卡片容器 `[data-chat-card-type]`。
+- 输入区：`textarea[data-chat-composer="true"][data-chat-ready]`，发送按钮文案 `chat.composer.send`；消息滚动容器 `[data-chat-scroll="true"]`，底部停靠区 `[data-chat-composer-dock="true"]`。
+
 ## 显示与诊断
 
 普通模式展示业务名称、状态与结果。
