@@ -209,6 +209,10 @@ FROZEN/LOST 的 `LINKED` 卡照常渲染真实 `账户余额` + `可用余额`�
 `completeConfirmationPanel(page, label, code='123456')`：无 MFA 卡时先 `clickConfirm(page, 90_000)`，再 `waitForMfaCard(page, 120_000)`，最后 `submitMfa(page, code, 60_000)`。
 `openConsumeDialog` 对 `usable === false` 的卡必然超时（按钮 `disabled`），不得用于冻结/挂失卡。
 
+`/cards` 的全部页脚按钮（`data-card-add`/`data-card-refresh`/`data-card-consume`/`data-card-delete`）在 `CardManager` 首帧客户端刷新完成前被同一个 `disabled = busy || refreshing || !loaded`（`app/cards/CardManager.tsx:181`）整体禁用；`gotoCards` 只等水合，因此该帧读到的按钮状态描述的是刷新而非卡片，判定按钮状态前必须等到 `[data-card-add] button` 解除 `disabled`。
+逐卡的 `data-card-consume` 在该三元组之外只追加 `!card.usable`（`CardManager.tsx:191`，`usable = status === 'ACTIVE'`），因此**消费入口与卡类型无关**：任何 ACTIVE 卡（DEBIT/CREDIT/VIRTUAL）都渲染可用的消费入口，非 ACTIVE 才不可用；不要假设「只有虚拟卡能消费」。
+`live-debit-card.e2e-helper.ts#assertConsumeEntry` 就是这个模式（先 settle 再读，`consumeButtonEnabled` 在按钮未渲染时直接失败），同一张卡要求「启用 → 停用」翻转才算非空断言。
+
 新场景注册：加入 `live-acceptance.e2e.ts` 的 `const SCENARIOS`（现止于 `lG`），`run` 用 `withPage(ctx.browser, …, { label })` 包裹并注入 `drive: (turns) => driveRedTool(page, ctx.baseUrl, turns)`、`captureShot: captureLive`。
 `LIVE_SCENARIOS` 过滤 id；选 `2` 连带 `2p`；场景 `7` 不在数组内且恒最后运行。
 `E2E_BROWSER_PATH` 在 `helpers.ts#resolveBrowserExecutable` 中优先命中（路径存在即用），否则回退常见 Chrome/Edge 路径。
