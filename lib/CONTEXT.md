@@ -91,6 +91,19 @@ JSON 金额使用十进制字符串。
 `compareDecimal(left, right)`（`decimal.ts:122-129`）返回 `-1 | 0 | 1`，按对齐后的整数系数比较，接受 `string | number | bigint`，`number` 会拒绝超出分精度的值（`decimal.ts:105`）。
 比例展示换算有两个出口（`decimal.ts`）：`rateRatioToPercent(ratio)`（`:76-78`）仅供天然非负的比例（产品预期年化），内部先过 `nonNegativeDecimal` 闸门；`signedRateToPercent(ratio)`（`:71-73`）是同一「比值×100」的**有符号**版本，供持仓收益率这类可负的展示值使用——它是展示换算，绝不允许用 `Math.abs`、截断为 0、吞异常或浮点运算替代。
 `DecimalAmount = string`（`decimal.ts:6`）；`FinancialDecimal` 精度 120 位、默认 `ROUND_HALF_UP`（`decimal.ts:9`）。
+
+## 十进制算术、符号与非负门禁（`decimal.ts:16-129`）
+
+`decimalText`（`:16-33`）是所有入口的规范化闸门：只接受字符串（非字符串抛 `VALIDATION`），长度 ≤128、整数位 ≤40、小数位 ≤18、指数 |e| ≤ 148，越界一律 `VALIDATION`。
+它的输出用 `toFixed()` 规范化，因此**尾随零被丢弃**（`'000.03257500'` → `'0.032575'`），且负零折叠为 `'0'`（`'-0.000'` → `'0'`）；这就是「`'1.50'` 与 `'1.5'` 是同一身份」的来源。
+`nonNegativeDecimal`（`:36-40`）是「簿记金额/份额/净值」的非负门禁：负值**抛 `AppError('VALIDATION', 'Financial value must be nonnegative.')`**（`:38`），既不取绝对值也不夹到 0；用法恒为 `nonNegativeDecimal(raw) === raw`（SDK 读取时据此判定「份额/净值缺失」）。
+`addDecimal` / `subtractDecimal` / `multiplyDecimal`（`:42-52`）全程有符号且精确，结果再经 `decimalText` 规范化，所以**尾随零丢失**：`subtractDecimal('1.00','1.50')` → `'-0.5'`（不是 `'-0.50'`），`multiplyDecimal('-0.0123','100')` → `'-1.23'`。
+`divideDecimal`（`:55-59`）除数为 0 抛 `VALIDATION`，非终止小数（`'1'/'3'`）同样抛错，不做静默舍入。
+`valuationToMinor(valuation)`（`:81-84`）是唯一的人民币结算换算：先过 `nonNegativeDecimal`（负值抛 `VALIDATION`，`:82`）→ `times('100').toFixed(0, ROUND_HALF_UP)` **只取整一次** → `assertMinorUnits` 校验有符号 64 位范围（`money.ts:31-36`）。故 `'0.004999999999999999'` → `0n`、`'0.005'` → `1n`、`'92233720368547758.074'` → `MAX_MINOR_UNITS`、`'92233720368547758.075'` 与任何负值都抛错。
+`signedRateToPercent(ratio: string): DecimalAmount`（`:71-73`）只是 `multiplyDecimal(ratio, '100')`：不过门禁、不取绝对值、不夹 0、不额外舍入，返回**无 `%`、无固定小数位**的规范文本（`'-0.029726666666666667'` → `'-2.9726666666666667'`，`'0'` → `'0'`）。
+`rateRatioToPercent(ratio: string): DecimalAmount`（`:76-78`）= `signedRateToPercent(nonNegativeDecimal(ratio))`：负比例在 `:77`（门禁本体 `:38`）抛 `VALIDATION`；非负输入与 `signedRateToPercent` 逐字符相同。只用于天然非负的产品年化比率，持仓收益率一律走 `signedRateToPercent`。
+其他非负/正整数门禁都**不在比率路径**上：`contracts/command.ts:31`（`shares`/`expectedShares`/`expectedNetValue` 参数身份）、`db/repositories/investment.ts:33,62`、`banking-sdk/valuation.ts:73`、`banking-sdk/investment.ts:347,374,390` 的 `requireNonNegativeMoney`/`optionalNonNegativeMoney`/严格正校验、`security/security-gateway.ts:652,686`、`agent/tools/decimal-schema.ts` 的 `canonicalShareCount`/`canonicalNetValue`；`money.ts` 侧对应的是 `normalizeTransferAmount`（`:50-54`，金额必须 > 0）与 `assertMinorUnits`（`:31-36`，仅范围）。
+`centsToMoney(minor)`（`money.ts:39-43`）**保留符号**且恒为「整数 + `.` + 两位」：`-12345n` → `'-123.45'`、`-1250n` → `'-12.50'`（`percentageRatio` 依赖该形状）、`0n` → `'0.00'`；不分组、无 `¥`。故 `HoldingView.profit`/`cumulativeProfit`/`realizedProfit` 的负值即此文本（`banking-sdk/investment.ts:1301,1313,1316`），`HoldingView.amount`（`:1308`）来自受非负门禁约束的 `principalAmountMinor`。
 断言锚点见 `tests/CONTEXT.md`。
 
 `lib/mask.ts` 是展示脱敏的唯一实现，零依赖，任何层都直接复用它。
