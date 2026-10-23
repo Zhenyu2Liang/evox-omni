@@ -194,4 +194,12 @@ disable that automatic continuation. `authorization-context.ts` locates the
 original assistant through the owned action, invocation and model request, so reused provider call IDs
 cannot redirect an older committed result into a newer operation.
 
+## Known Issues
+
+- `confirmation-recovery.ts:548-598` `landStandalone` reports `tier`/`requiresMfa` from the CALLER's snapshot (`:385-386`, read at `:363`), not from the committed decision: the audit builder at `:564-565` re-derives both from the in-transaction row, but it only runs after a WON CAS (`:273` returns `false` first), so the CONFLICT/CIRCUIT_OPEN receipt fallback of a stale standalone recovery answers `tier:'YELLOW'`/`requiresMfa:false` while its audit row is `RED`/`mfaRequired:true`.
+- `index.ts#recoverAction` (`:209-249`) settles a PLAN-LINKED wedge `executed` BEFORE `resumeTask`, and `workflows/controls.ts:82-89` then SEALS the still-parked node `failed` (`parked-actions.ts:108-113` → sentence `chat.error.stateChanged`) instead of letting the executor backfill it via `confirmation/gated-execution.ts:69-79` `recoverExecutedPlanAction`, so a recovered plan-node wedge settles the plan `failed`.
+- `planner/failure.ts:111` `sealReason` treats EVERY non-open `actionStatus` as `action_not_open`, including `executed`/`needs_reconciliation` — the two statuses `action-status.ts:59-63` `REPRESENTED_ACTION_STATUSES` says still represent their node.
+- `confirmation/outcomes.ts:119` funnels a gateway CONFLICT sentence through `lib/tool-feedback.ts#publicToolError`, where `PUBLIC_ERROR_CODES.CONFLICT` → `chat.error.stateChanged` wins unless the exact sentence is in `PUBLIC_BUSINESS_ERRORS`; the manual-review refusal thrown at `security/security-gateway.ts:1264` is not, so a confirm/verify while a manual review is open renders `chat.error.stateChanged` instead of that sentence.
+- `confirmation/gated-execution.ts:154-157` attaches `failure: toPlanFailure(error)` (i.e. `{code}`) to EVERY thrown gated refusal, so a refused `manual_add_card`/`manual_delete_card` call carries `failure` in addition to `errorCode`/`error` (`GatedToolOutcome.failure` is a documented contract field).
+
 Use the central tool catalog and financial string contracts. See `docs/cn/architecture.md`, `docs/cn/agent-durability.md` and `docs/cn/security.md` for current behavior and limits.
