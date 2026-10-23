@@ -17,7 +17,8 @@ The `lD`/`lE` runs are the proof that it is unchanged at `7a7a4d3`'s product tre
 `PendingAction` with `riskLevel=RED` / `requiresMfa=true` **before any card row exists**, and it executes only
 after a real MFA submission. `manual_add_card` / `manual_delete_card` stay manual-only, and that restriction covers
 creating a brand-new physical card and deleting a card record — not replacing a card that is already `LOST`.
-The `lF`/`lG` runs are the proof at the current HEAD's product tree.
+The `lF`/`lG` runs are the proof at `d1cccd00`'s product tree. They do not extend to the current HEAD — the
+non-document delta between the two trees is enumerated below.
 
 | Evidence set | Certifies commit | Product tree | Verdict | Exit code |
 | --- | --- | --- | --- | --- |
@@ -44,18 +45,36 @@ The `lF`/`lG` runs are the proof at the current HEAD's product tree.
 | `lJ` round 1 (`live/lJ-head3ba488a-round1-merged/`) | `3ba488a` | ≡ `3ba488a` (same 3-file delta to HEAD) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (`EXITCODE=0`; tool-reported code not archived with the set) |
 | `lJ` round 2 (`live/lJ-headd26b263-round2-final/`) | `d26b2636` | ≡ `d26b2636` (same 2-file delta to HEAD) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (`EXITCODE=0`; tool-reported code not archived with the set) |
 
-The seven `lF`/`lG` rows and the `lC` round-4 row certify the current HEAD's product tree:
-`git diff --stat d1cccd00 HEAD -- banking-sdk agent security planner lib app components prisma scripts` → empty output,
-and the same command is empty for every round head (`15de129f`, `89d82441`, `dedee51d`, `a65fd5e2`, `1c674005`,
+The seven `lF`/`lG` rows and the `lC` round-4 row certify `d1cccd00`'s product tree:
+`git --no-pager diff --stat d1cccd00 <round head> -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts`
+→ empty output for every round head (`15de129f`, `89d82441`, `dedee51d`, `a65fd5e2`, `1c674005`,
 `acebc393`, `6a20dd93`, `3c5fe83e`, `d1cccd00`, `e78796d5`). One product tree therefore carries all eight certified rounds,
 regardless of which evidence-only commit was HEAD when each ran. Evidence commits: `573fe009` for the `lF`/`lG` reports and `4b03eec8` for `lC` round 4. `lC` round 4 re-runs normal virtual-card consumption on this tree, so the retained `replace_card` fix is shown not to regress the plain consume path.
 
+Equivalence is measured at the repository root with the `:(exclude)**/*.md` pathspec because `CONTEXT.md` lives under
+those very paths: without the exclusion the command is non-empty after any documentation-only merge (for `88d38550`
+→ `cab32956` it lists 22 files, all `*/CONTEXT.md`), so it cannot prove equivalence.
+
+Those eight rounds do **not** extend to the current HEAD. Measured now at the repository root,
+`git --no-pager diff --stat d1cccd00 HEAD -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts`
+→ **143 files changed, 11240 insertions(+), 1703 deletions(-)**. `d1cccd00` predates the net-value/share investment
+model entirely (`banking-sdk/net-value.ts` is absent from its tree). Headline paths of that delta:
+`banking-sdk/net-value.ts`, `banking-sdk/investment.ts` (+971 lines), `security/card-resolution.ts`,
+`security/recipient-resolution.ts`, `lib/phone.ts`, `lib/mask.ts`, `lib/internal-text.ts`, `lib/public-text.ts`,
+`lib/tool-feedback.ts`, `components/banking/HoldingFacts.tsx`, `components/banking/card-account-display.ts`,
+`agent/system-prompt.ts`, `agent/tools/card.ts`, `agent/tools/decimal-schema.ts`, `agent/action-status.ts`,
+`agent/workflows/parked-actions.ts`, `planner/failure.ts`, `app/security/UnlockPanel.tsx`, `prisma/schema.prisma`,
+`prisma/seed.ts`, `scripts/number-backfill.ts`, `scripts/card-account-binding.ts`,
+`scripts/investment-share-backfill.mjs`. These rows therefore certify `d1cccd00` and nothing later; only a re-run on the
+current tree would extend them.
+
 The remaining rows certify `7a7a4d3`'s product tree:
-`git diff --stat 7a7a4d3 <each evidence commit> -- banking-sdk agent security planner lib app components prisma scripts`
-→ empty for `0c50e2f`, `fa36508` and `339c50b`. Product paths have changed between `7a7a4d3` and the current HEAD
-(`agent/tools/card.ts`, `agent/system-prompt.ts`, `agent/messages/conversation.zh-CN.json`,
-`agent/providers/mock/conversation-guidance.ts`), so those rows do not extend to the current HEAD; only a re-run on
-this tree would.
+`git --no-pager diff --stat 7a7a4d3 <each evidence commit> -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts`
+→ empty for `0c50e2f`, `fa36508` and `339c50b`. Product paths have changed between `7a7a4d3` and the current HEAD:
+`git --no-pager diff --stat 7a7a4d3 HEAD -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts`
+→ **145 files changed, 11262 insertions(+), 1708 deletions(-)** — the `d1cccd00` set plus
+`agent/messages/conversation.zh-CN.json` and `agent/providers/mock/conversation-guidance.ts` — so those rows do not
+extend to the current HEAD; only a re-run on this tree would.
 
 `lD` round 1 and `lE` round 1 are kept as separate rounds in this same product tree.
 Their printed summary line was `PASS 1 / FAIL 0 / SKIP 0` each, but their `EXIT=` line was produced by the
@@ -81,8 +100,9 @@ reach a green round. Full per-round table, FAIL causes and the turn-by-turn repl
 
 The eight `lB`/`lH`/`lI`/`lJ` rows certify two product trees, one per round label; each row's own directory under
 `output/playwright/live/` is the complete evidence set (`*.png` + `*-evidence.json` + `*-run-log.txt`).
-Equivalence measured now with
-`git diff --stat <commit> HEAD -- banking-sdk agent security planner lib app components prisma scripts`:
+Equivalence measured now at the repository root with
+`git --no-pager diff --stat <commit> HEAD -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts`
+(the exclusion matters: `CONTEXT.md` files live under those paths):
 
 - `3ba488a` → HEAD: 3 files — `agent/tools/card.ts` (2 lines), `lib/tool-feedback.ts` (7 lines),
   `agent/tools/consume-virtual-card.test.ts` (test only).
@@ -428,12 +448,57 @@ Notable coverage: `b-transfer-mfa` wrong code → `验证失败，已尝试 1 �
 `j-circuit-breaker-lock` three wrong codes lock the owner across a reload; `f-wedge-refresh-recover` settles the
 receipt exactly once; `h-investment-flow` `−1000.00` DEBIT / `+6178.36` CREDIT.
 
+## The four defects: root cause, fix, data upgrade and recovery
+
+Each row names the section that holds its live evidence; no number is restated here, every one of them is read from the
+archived artifacts of that section.
+
+| Defect | Root cause | Fix | Data upgrade and recovery | Live evidence |
+| --- | --- | --- | --- | --- |
+| ① Investment holdings by net value and shares | Holdings were accounted as a cost/gain snapshot, so a negative return ratio reached the non-negative ratio gate (`components/banking/HoldingFacts.tsx` → `lib/decimal.ts#rateRatioToPercent`), which throws `Financial value must be nonnegative.` and unmounts the whole client tree; the chat investment card also projected the pre-write holdings because `agent/card-emitter.ts` had no `subscribe_investment`/`redeem_investment` case | `marketValue = shares × latestNetValuePerUnit`, 4 dp net value and 6 dp shares, the non-negative gate kept for booked amounts only, signed ratios rendered through `lib/decimal.ts#signedRateToPercent`; an investment write re-reads the position post-commit; a redemption states an explicit `SHARES`/`AMOUNT`/`ALL` mode | `node scripts/db-backup.mjs` first, then `node scripts/investment-share-backfill.mjs` (dry run) and `--apply`, which derives `shares = FLOOR(market value ÷ net value, 6 dp)` for legacy holdings, flags every row it writes `shares_estimated = 1`, never fabricates a share count for a product that publishes no net value (reported as `历史数据不足`), and rewrites the stored `estimatedMarketValue` to the exact `shares × net value`; `pnpm db:push` synchronizes the schema and `pnpm db:reset` rebuilds the demo data | the `lB` section |
+| ② A retryable wrong MFA code rendered as a transport failure, plus internal markers on screen | `lib/tool-feedback.ts#publicToolError` keyed on a closed set of sentences that did not accept the server's `验证码错误。还可尝试 N 次。`, so an `mfa_code_invalid`/`MFA_FAILED` result degraded to the fallback `chat.error.request` (`请求失败，请检查网络后稍后重试。`); internal sentinels (`__SECURITY_BLOCK__` payloads, JSON fragments, stack frames) could reach public text | `publicToolError` maps the typed sentence (and the legacy `验证码错误，请重试。剩余尝试次数：N。`) to `chat.error.verificationRemaining`; `lib/internal-text.ts#isInternalDiagnostic` is the single predicate and `lib/public-text.ts` the single funnel, whose `securityNotice` carries the only `?? 0` default for remaining attempts | none — presentation and containment only, no schema or data change | the `lH` section |
+| ③ Complete test numbers versus number and card-tail resolution | Identity was resolved from masked or tail values while the stored columns held only a mask, so a near-miss number sharing a visible prefix could identify the wrong payee or card, and a complete number had no authoritative column | `Contact.phoneFull` / `Card.numberFull` hold the complete fictional number and are the only identity (`security/recipient-resolution.ts`, `security/card-resolution.ts`, `lib/phone.ts`, `lib/mask.ts`); masks and tails only narrow candidates; every outward projection stays masked; `cardId`/`cardTail`/`cardNumber`/`cardType` are canonicalized to one owned id | `node scripts/number-backfill.ts` fills `phoneFull` / `numberFull` only for rows where the column is still `null`, by COPYING a display column that is itself a complete value and then masking that display column through `lib/mask.ts`; it never derives a number, reports `unrecoverable-masked` for a mask, is idempotent, and its rollback clears only rows that still hold the value it wrote | the `lI` section |
+| ④ A debit or virtual card did not show the balance it spends from | A DEBIT/VIRTUAL card carried no reference to the account it draws on, so `/cards` could project neither that account's cash nor the card's spendable amount | `Card.linkedAccountId` is a real foreign key to `Account.id`; `CardView.linkedAccountStatus` (`LINKED`/`MISSING`/`UNTRUSTED`/`NOT_APPLICABLE`) plus `usable` decide the projection; `accountAvailableBalance` is the settlement account's cash and `payableAmount = min(account cash, remaining monthly limit)`; `MISSING`/`UNTRUSTED` omit every balance field instead of reporting zero | `node scripts/card-account-binding.ts` binds legacy account-funded cards (`linkedAccountId IS NULL`, CREDIT cards skipped) to an owned CHECKING account and never guesses when the choice is ambiguous; `pnpm db:push` adds the foreign key | the `lJ` section |
+
+Every step above is repeatable: each backfill scans only rows still in its un-migrated state, and `logs/db-backups/`
+holds the pre-change snapshot a rollback restores (`node scripts/db-backup.mjs` reads through the WAL, so committed rows
+are not lost the way a plain file copy would lose them).
+
+## Gate results and the commits they belong to
+
+| Gate | Result | Exit code |
+| --- | --- | --- |
+| `pnpm test` (whole suite) | 3126 / 3126 passing | `0` |
+| `pnpm typecheck` | 0 errors | `0` |
+| lint | 0 findings | `0` |
+| `next build` | success | `0` |
+| `acceptance.e2e.ts` (mock, 23 journeys) | `PASS 23 / FAIL 0 / SKIP 0` | `0` |
+| `date-tamper-boundary.e2e.ts` | `cases=9 pass=8 fail=0 skip=1` | `0` |
+| every certified live round in the table at the top | `PASS 1 / FAIL 0 / SKIP 0` | `0` |
+
+The whole-suite, typecheck, lint and build results belong to the final-verification commit `88d38550`.
+The browser entries were run on the product trees named in their own rows, not on `88d38550`; the equivalence sections
+above are what connect them, and none of them is claimed beyond its own tree.
+Head when this was written: `cab32956` (merge of the report branch with the final-verification branch), branch
+`evogit-agent-T7-A1092`, whose only difference from `88d38550` is documentation.
+Nothing was pushed to a remote: no branch of this task was published and no remote-tracking ref was updated.
+No API key is recorded here: `.env.local` is described by existence only and is never read, printed or committed, and no
+run log, evidence JSON or screenshot carries a credential value.
+
+## Real WeChat: still 待验证
+
+`channels/weixin/` is exercised by the `tests/unit/weixin-*.test.ts` suites, `tests/integration/weixin-protocol.test.ts`
+and the protocol-level `tests/e2e/weixin-live.e2e.ts`, which drives a local protocol server rather than a phone.
+Sending and receiving on a real WeChat account needs the user to scan a QR code and bind the bot, so that path stays
+**待验证**: no rendering, protocol or capability test stands in for it, and no round in this report proves it.
+
 ## NOT verified by these runs
 
 - **Live scenarios with no certification at any product tree**: `lA`, `lC`, `lD`, `lE` (`lD`/`lE` certify
-  `7a7a4d3`'s tree only, `lC` certifies `d1cccd00`) and live ids `0`–`15`, `2p`, `7`. `lF`/`lG` certify the current
-  HEAD's product tree; `lB`/`lH`/`lI`/`lJ` certify `3ba488a` and `d26b2636` and not the two files that differ
-  between `d26b2636` and HEAD. Nothing here extends to a sibling scenario.
+  `7a7a4d3`'s tree only, `lC` certifies `d1cccd00`) and live ids `0`–`15`, `2p`, `7`. `lF`/`lG` certify
+  `d1cccd00`'s product tree only — the non-document delta to HEAD is 143 files, enumerated above; `lB`/`lH`/`lI`/`lJ`
+  certify `3ba488a` and `d26b2636` and not the two files that differ between `d26b2636` and HEAD. Nothing here
+  extends to a sibling scenario.
 - **`lG` rounds 1 and 2 are not preserved**: their exit code, summary line, duration, model-id rows and DB numbers
   exist nowhere, and round 2 has no screenshots. Both reports are labelled post-hoc reconstructions and certify
   nothing.
@@ -503,8 +568,12 @@ receipt exactly once; `h-investment-flow` `−1000.00` DEBIT / `+6178.36` CREDIT
 - **`lJ` covers `usable === false` only as `/cards` tiles** — a `FROZEN` debit card and a `LOST` virtual card keep their
   real balance with a disabled consume entry. No round renders a `MISSING` or `UNTRUSTED` binding on `/cards`; those two
   states are asserted only by the server-side projection suites.
-- **Rounds that aborted for environment reasons** (disk exhaustion) left no artifact under `output/playwright/live/`, so
-  nothing in this file certifies or reconstructs them.
+- **Rounds that aborted for environment reasons** — the disk-exhaustion failure `磁盘空间不足 (os error 112)` — left no
+  artifact under `output/playwright/live/`, so nothing in this file certifies or reconstructs them. Before this note the
+  text appeared in no preserved round artifact and nowhere in this document's history
+  (`git --no-pager log --all --oneline -S"os error 112" -- tests/e2e/LIVE-ACCEPTANCE-REPORT.md` is empty), so this bullet
+  records the fact of the abort, not a recovered round; the preserved failure rounds remain the `lG`/`lB`/`lH` ones
+  enumerated above.
 - **Model stability is still not proven** for these flows either: `lB`'s bare-number clarification came out as a
   two-part question in round 1 and a three-part one in round 2, and `lI`'s selector choice differed between rounds; a
   finite number of rounds bounds non-determinism, it does not prove it absent.
