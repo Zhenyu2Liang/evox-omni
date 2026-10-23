@@ -73,6 +73,17 @@
 两个租约写入函数只写租约列，不改状态；`clearPendingActionLease`（`:231`）在给定 `opts.owner` 时按持有者条件清除。
 `assertActionMayStart`（`pendingAction.ts:276`）不改状态：它先对 `id` 发一条空写 `updateMany({ where: { id: actionId }, data: { id: actionId } })` 取得 SQLite 行锁，再读 `taskId`，存在 `manualReview status='open'` 时抛 `CONFLICT`。
 
+## 每次调用的数据库往返次数
+
+一条 Prisma 语句记一次往返；`prisma.$transaction` 另加 BEGIN 与 COMMIT，且整段持有连接互斥锁（见 [../CONTEXT.md](../CONTEXT.md)）。
+`createPendingAction`（`pendingAction.ts:91`）1 条 create；`getPendingAction`（`:115`）2 条（`findUnique` + `include: { mfa: true }`：仓库未启用 `relationJoins`，走默认 `query` 关系加载策略，关联查询是独立的一次 SELECT）；`listPendingActionsByTask`（`:150`）1 条 findMany。
+`getMfaChallenge`（`:334`）、`createMfaChallenge`（`:319`）、`incrementMfaAttempts`（`:341`）、`updateMfaChallengeStatus`（`:352`）、`resetMfaAttempts`（`:359`）各 1 条，无事务、无二次读。
+`assertActionMayStart`（`:276`）最多 3 条：空写 `updateMany`（先取 SQLite 行锁）、`findUnique` 读 `taskId`、仅 `taskId` 非空时再 `manualReview.findFirst`；`client` 必传（无缺省单例）。
+`claimPendingAction`（`:255`）：`to !== 'confirmed'` 时 1 条 updateMany（自动提交）；`to === 'confirmed'` 且 `client === prisma` 时自开 `prisma.$transaction`（`:260`）→ BEGIN + 上述 2–3 条 + CAS updateMany + COMMIT，合计 5–6 次往返；显式传 client 时不开新事务，复用调用方事务里的 3–4 条。
+`getSession`（`session.ts:26`）、`getUser`（`user.ts:5`）、`getBreakerState`（`circuitBreaker.ts:49`）各 1 条 findUnique，都接受可选 client 以改走已有事务。
+`upsertFailure`（`circuitBreaker.ts:68`）未传 client 时自开 `prisma.$transaction`（`:92`），事务内 `findUnique` + `upsert` 共 2 条；传 client 时同样 2 条但复用调用方事务。
+本目录的 `$transaction` 调用都不传选项对象：`maxWait: 10000` / `timeout: 10000` 来自 `../database.ts:25` 的 `transactionOptions`，没有逐调用覆盖；本目录也没有 P2034/P1008 重试循环。
+
 ## MFA challenge 仓储原语（`pendingAction.ts`）
 
 `createMfaChallenge`（`pendingAction.ts:315-328`，入参 `CreateMfaChallengeInput` `:50-56`）是本目录唯一的建行函数：必填 `actionId`、`code`，可选 `maxAttempts`、`expiresAt`、`commandDigest`。
