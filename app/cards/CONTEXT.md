@@ -66,7 +66,7 @@
 
 本目录不内联任何中文字面量：三段组件都只调用 `useI18n().t(键)`，键由 `lib/i18n/shared.ts` 合并后才是完整表。
 断言文本必须从目录文件读取，不在页面里抄：`pages.cards.*` 在 `lib/i18n/messages/pages.zh-CN.json`（第 30-74 行）、`business.cards.*` 在 `business.zh-CN.json`（第 47-69 行）、`cards.mfa.label` 在 `chat.zh-CN.json`（第 135 行）。
-默认语言是 `zh-CN`（`lib/i18n/shared.ts#DEFAULT_LOCALE`），语言 Cookie 只切换展示，不改变键到文本的映射来源。
+默认语言是 `zh-CN`（`lib/i18n/shared.ts:12`），语言 Cookie 只切换展示，不改变键到文本的映射来源。
 
 ### 页面骨架（`CardManager.tsx`）
 
