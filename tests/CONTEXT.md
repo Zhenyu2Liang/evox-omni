@@ -217,8 +217,11 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 
 ## 时间预算与环境放大
 
-`tests/app/security-workflow-http.test.ts` 顶部 `CHAT_DRIVEN_TEST_TIMEOUT_MS = 60_000` 是 body 驱动真实 `POST /api/chat` 的用例（it 1–3、9–12）的显式预算；其余用例沿用根 `vitest.config.ts` 的 `testTimeout: 20000`。带预算的用例清单与实测见 [app/CONTEXT.md](app/CONTEXT.md)。
-新写驱动 chat 的用例必须同样套用该常量：成本由串行语句数决定，与断言条数无关。
+显式超时预算的唯一来源是 `tests/helpers/timeouts.ts`：`CHAT_DRIVEN_TEST_TIMEOUT_MS = 60_000` 用于 body 驱动真实 `POST /api/chat` 的 mock 模型 turn，`COLD_DB_PROVISION_TEST_TIMEOUT_MS = 120_000` 用于体内 `spawnSync` 真实 CLI（`scripts/db-push.ts` 冷库自建、`prisma/seed.ts`）的用例。
+两者都以 `it(...)` 的第三个参数套用；其余用例沿用根 `vitest.config.ts` 的 `testTimeout: 20000`，该文件 root-owned，`tests/` 侧不能修改。
+两条路径都没有内部 deadline，因此 `testTimeout` 是唯一边界：chat turn 的墙钟由串行语句条数决定（与断言条数无关），冷库自建由 `tsx` 启动与 Prisma schema-engine 的磁盘/CPU 延迟决定。
+已套用：`tests/app/security-workflow-http.test.ts` 的 it 1–3、9–12（清单见 [app/CONTEXT.md](app/CONTEXT.md)），`tests/deploy-db-push.test.ts` 的两个 spawn 用例（不 spawn 的 `refuses to reset …` 沿用全局预算）。
+新写这两类用例必须套用同一常量，不得写裸数字字面量，也不得在 spec 内另起局部常量。
 
 通用判据：经 HTTP 入口的用例墙钟 ≈ 串行语句条数 × 单语句延迟。
 一次 chat turn 实测约 1.4s、落库约 101 行 `agentRunEvent`；每个 Pi 事件各开一个交互式事务（`agent/durable/journal.ts:120-123` → `lib/db/repositories/agentRun.ts:118-122`），全部串行排在同一条 native SQLite 连接上（`lib/db/serialized-connection.ts`）。
@@ -227,6 +230,8 @@ mock 路径没有内部 deadline：`agent/durable/journal.ts:223-228` 的 20 000
 同一用例（`security-workflow-http.test.ts` it 2）实测：单独 1919ms、完整 `pnpm test` 1622ms、`tests/app`+`tests/integration` 111 文件批次 2639ms，都在 20 000ms 内。
 宿主争用下同一文件单跑可达 7081/6710/2397ms（约 3.7–4.4 倍），并出现过 `Test timed out in 20000ms`（实际 24316ms），而当时整套只慢 1.29×。
 因此这类超时首先是环境放大信号：不得据此断言业务缺陷，也不得为此放宽或删除断言。
+
+`tests/deploy-db-push.test.ts` 干净机器实测：recreate+seed 27309ms（首次，冷 Prisma 引擎）/18442ms、缺失库自建 17145ms/16954ms（最慢一次分别为全局预算的 137% 与 86%），纯校验用例 1ms；`COLD_DB_PROVISION_TEST_TIMEOUT_MS = 120_000` 相对最慢一次留约 4 倍余量。
 
 已排除的成因（不必重新调查）：无第二个进程写同一 `prisma/test.db`、无锁竞争与 >1s 的可复现停顿、DB 与 WAL 规模正常、`tests/setup.ts` 的 schema 哈希标记匹配因而跑批中途不重建库、子进程只有四处 spawn 点且都在各自用例内 `await` + `kill`（`deploy-db-push` 用自己的库）。
 事件持久化当前是每事件一事务，把 ~101 次串行事务压到个位数才能从根上消除 I/O 争用放大；这属于产品代码，测试侧只能抬高预算下限。

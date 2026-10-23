@@ -237,10 +237,10 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 
 ## 驱动 chat turn 的用例的超时预算
 
-`CHAT_DRIVEN_TEST_TIMEOUT_MS = 60_000`（本文件顶部常量区）是 body 会驱动真实 `POST /api/chat` 的用例的显式预算，作为 `it(...)` 的第三个参数传入。
+`CHAT_DRIVEN_TEST_TIMEOUT_MS = 60_000` 由 `tests/helpers/timeouts.ts` 导出并由本 spec 引入，是所有 body 会驱动真实 `POST /api/chat` 的用例的显式预算，作为 `it(...)` 的第三个参数传入。
 带该预算的用例：it 1、it 2、it 3（经 `parkTwoTransfers()` 调两次 `chatTurn()`）与 it 9、it 10、it 11、it 12（it 9 直接调 `chatTurn()`，it 10–12 经 `lockOwner()` 调一次）。
 不驱动 chat 的 it 4–8、it 13（`runSubmitPlan`/`executeGatedTool`/纯路由）沿用全局 `testTimeout: 20000`。
-新写驱动 chat 的用例时必须同样套用该常量：其成本由串行语句数决定，与断言数量无关。
+新写驱动 chat 的用例必须套用同一常量：其成本由串行语句数决定，与断言数量无关；常量取值依据与「冷库自建」那类用例的对应常量同处一个模块。
 
 依据：一次 chat turn 约 1.4s、落库约 101 行 `agentRunEvent`；每个 Pi 事件各开一个交互式事务（`agent/durable/journal.ts:120-123` → `lib/db/repositories/agentRun.ts:118-122`），全部串行排在同一条 native SQLite 连接上（`lib/db/serialized-connection.ts`）。
 `parkTwoTransfers()` 调两次 `chatTurn()`，故 it 1–3 的 body ≈ 200 次串行交互式事务。

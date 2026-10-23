@@ -44,6 +44,7 @@ import { listTasksBySession } from '@/lib/db/repositories/task';
 import { security } from '@/security';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { ACCOUNTS, CONTACTS, DEMO_USER_ID } from '@/tests/helpers/fixtures';
+import { CHAT_DRIVEN_TEST_TIMEOUT_MS } from '@/tests/helpers/timeouts';
 import {
   actionUrl,
   chatUrl,
@@ -70,15 +71,11 @@ const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 /** Both parked transfers use the same amount: ¥600 each ≤ ¥1000, ¥600 + ¥600 > ¥1000. */
 const TRANSFER_AMOUNT = '600';
 
-/**
- * Explicit budget for the tests that drive real `POST /api/chat` turns.
- * One chat turn costs ~1.4s and ~101 sequential interactive SQLite transactions
- * (one transaction per Pi event), and the body has no internal deadline, so its wall
- * time scales with per-statement latency. Measured: 1.9s standalone, 2.6s inside a
- * 111-file batch; a 12x latency spike on a shared host produced `timed out in 20000ms`.
- * Rationale and the full measurement set live in `tests/app/CONTEXT.md`.
+/*
+ * Explicit budget for the tests that drive real `POST /api/chat` turns: the body has no internal
+ * deadline, so its wall time scales with per-statement latency. The constants, the measurements
+ * behind them and the "new chat-driven specs must pass it" rule live in `tests/helpers/timeouts.ts`.
  */
-const CHAT_DRIVEN_TEST_TIMEOUT_MS = 60_000;
 
 /**
  * The route's JSON envelope — the app-layer transport shape (NOT a frozen `@/lib/contracts` type).
