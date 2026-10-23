@@ -173,6 +173,7 @@ DOM 定位只能靠文本 + 调用方 wrapper：`/cards` 页的 `[data-card-list
 8. 分类限额 `div.space-y-1.border-t.border-banking-light.pt-2` + `ul > li`（标签是 `limit.category` 原文）。
 
 `CardTile` 只用 `business.cards.accountBalance` / `usableBalance` 表意账户余额与可用余额；
+目录内 `business.cards.accountAvailable` / `payableAmount` / `balanceFromAccount` 三个键在 `CardTile` 中未被引用。
 断言注意：账户名与脱敏账号被合成**一个** `span` 文本（`accountName · accountNumber`），无法分别定位，只能按完整字符串（如 `活期账户 · ****8821`）或不含换行的 `hasText` 子串匹配；种子数据中 `acct_checking.number === card_debit.numberMasked === '****8821'`，只用 `****8821` 无法区分卡号与账号。不可用提示（`cardFrozenNotice`/`cardLostNotice`/`cardUnavailable`）是 `Badge` 里的 `span`，`MISSING`/`UNTRUSTED` 提示才是 `<p>`。
 
 `AssetSummaryCard.tsx:55` 用 `business.assets.credit`（信用卡可用额度 / Available credit）显示 `summary.creditAvailable`，
