@@ -86,7 +86,7 @@ JSON 金额使用十进制字符串。
 `formatDecimalCNY(input: string)`（`decimal.ts:87-91`）：先 `decimalText` 校验，再 `toFixed(2, ROUND_HALF_UP)` 一次性舍入，然后分组。
 输出 = 负号（`value.isNegative()`，符号取自原值）+ `¥` + 三位分组整数 + `.` + 两位小数。
 关键差异：`formatDecimalCNY` 会舍入并保留「负零」符号，`'-0.000001'` → `-¥0.00`；`formatCNY` 永不产出 `-¥0.00`。
-`formatDecimalFixed(input, digits)`（`decimal.ts:83-85`）输出无货币符号、无分组，固定 `digits` 位（份额 6 位、净值 4 位）。
+`formatDecimalFixed(input, digits)`（`decimal.ts:98-100`）输出无货币符号、无分组，固定 `digits` 位（份额 6 位、净值 4 位）。
 显式 `+` 前缀由组件加，不是格式化器产出：`components/ui/Money.tsx:16` 与 `components/ui/DecimalMoney.tsx:16` 仅在 `signed` 且严格为正时前置 `'+'`。
 `compareDecimal(left, right)`（`decimal.ts:107-114`）返回 `-1 | 0 | 1`，按对齐后的整数系数比较，接受 `string | number | bigint`，`number` 会拒绝超出分精度的值（`decimal.ts:90`）。
 `DecimalAmount = string`（`decimal.ts:6`）；`FinancialDecimal` 精度 120 位、默认 `ROUND_HALF_UP`（`decimal.ts:9`）。
