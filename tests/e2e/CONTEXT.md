@@ -141,6 +141,31 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 `lA`/`lD`/`lE`/`lF`/`lG` 的 live 腿只提交正确码 `123456`（`MfaChallenge.attempts=0`），live 不接受错误码、不触达尝试上限。
 当前没有用例在锁定后刷新 `/agent` 再断言弹窗保持消失。
 
+## MFA 面板的断言锚点（产品侧契约）
+
+断言按产品渲染的属性取值，锚点在 `components/chat/ApprovalRequest.tsx`、`components/chat/cards/MfaCard.tsx`、`components/chat/cards/ApprovalRecord.tsx`：
+
+- 活动面板根 `[data-approval-request="true"]`（`data-action-id`/`data-kind`，`aria-label` 为 `chat.approval.verification`/`chat.approval.confirmation`）= `SELECTORS.approvalRequest`。
+- 验证码输入 `input[aria-label="验证码"]`（`cards.mfa.label`）；`SELECTORS.mfaInput` 已限定在面板内，历史回执不含输入框。
+- 按钮用 `getByRole('button', { name: '验证'|'确认'|'取消', exact: true })`；`验证` 仅在 `/^\d{6}$/` 且非 busy/readOnly 时可点。
+- 尝试次数行是 `role="status"`，文案 `cards.mfa.failedAttempts`（`{attempts}`）或达上限时 `cards.mfa.failedAttemptsLimit`。
+- 锁定只读区块 `[data-mfa-locked="true"]`（含 `chat.error.actionLocked` + `pages.security.unlockDescription` + `/security` 链接）；历史回执用 `[data-approval-history]` 的 `data-status`、`[data-approval-locked="true"]`、`data-approval-stage`/`data-stage-status`。
+
+`[data-mfa-locked]`、`[data-approval-locked]`、`data-status="locked"` 在本目录**没有任何断言**：锁定事实只由 `waitForStatusText(..., t('cards.terminal.locked'))`（全页 `[role="status"]` 去空白子串）与 `SELECTORS.mfaInput` 计数为 0 表达。更强的断言应先加在上面的专用属性上。
+
+## zh-CN 文案取值约定
+
+`createTranslator`（`lib/i18n/shared.ts:41`）是约定：`t('cards.terminal.locked')`、`t('cards.mfa.failedAttempts', { attempts })`、`t('security.reset.success', { count, max })`。
+`conversation.zh-CN.json` **不是**期望 UI 文案：它是对话剧本的用户提示词（`draftTransfer`/`completeTransfer`/`amountOnly`…）与断言用正负例子串（`supportedAnswers`/`failurePhrases`/`abandonedDraftPhrases`），只被 `conversation.e2e-helper.ts` 引用；mock 模型回复由 `agent/providers/mock-responder.ts` 决定。
+遗留硬编码（不要模仿）：`acceptance.e2e.ts:251` 与 `live-acceptance.e2e.ts:1004` 的 `'验证失败，已尝试1次'`；`live-acceptance.e2e.ts:1005` 的裸 `input[aria-label="验证码"]`；`helpers.ts:1140/1150/1172/1185` 的 `'确认'`/`'验证'`。
+
+## 锁定终态：尝试次数与面板消失
+
+`MFA_MAX_ATTEMPTS = 3`（`lib/constants.ts:10`），由 `ChatWindow.tsx:238` 传入 `MfaCard`。
+第 1、2 次错误码服务端回 `awaiting_mfa`：面板与输入框保留，显示 `验证失败，已尝试 N 次。`（`useAgentStream.ts:355-360` 只在「同一 mfa 决策且 `error` 存在」时自增 `mfaAttempts`）。
+第 3 次服务端把 `PendingAction` CAS 为 `locked`，`settleAction` 置终态并清空 `pendingAction`（`agent-stream-reducer.ts:319-342`），**整个弹层消失**，会话内只留只读历史卡；`pickPendingAction` 只恢复 `pending`/`awaiting_mfa`（`:557-559`），刷新不会重开面板。
+`j-circuit-breaker-lock` 因此断言三次后 `SELECTORS.mfaInput` 不存在、余额与流水零变化、`/security` 的 `已熔断` + `失败 3 / 3 次` + `CIRCUIT_BREAKER_TRIPPED`（`severity` `high`，DB 交叉核对）。
+
 锁定终态的断言范围（`j` 的实际覆盖）：`waitForStatusText(page, t('cards.terminal.locked'))` 是对全页 `[role="status"]` 做去空白**子串**匹配，
 不绑定 `MfaCard` 容器，也未断言 `cards.mfa.locked`（「已锁定，请到安全中心处理。」）这一只读历史变体。
 本目录没有任何 `'locked'` 字符串字面量断言：`data-status` 只核对 `executed`（`approval-ux.e2e-helper.ts#assertApprovalExecuted`）与 `awaiting_mfa`（`card-freeze.e2e-helper.ts`），
