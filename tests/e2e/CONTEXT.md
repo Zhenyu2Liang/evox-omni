@@ -200,6 +200,17 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 比 `waitForStatusText` 更精确的锁定锚点：`queryPendingActionStatus(actionId).status === 'locked'`、`fetchPendingActions(baseUrl)` 不再包含该 id、`page.locator('[data-approval-history][data-status="locked"] [data-approval-locked="true"]')` 存在、`page.locator('[data-approval-request="true"] button').count() === 0`。
 服务端锁定事实另有 `GET /api/security` 的 `circuitBreaker{failures,max,locked}`、`lock`（`{code:'CIRCUIT_OPEN',reason:'circuit_open'}`）与 `lockedActions[].actionId`（`app/api/security/route.ts:56-84`）；`/security` 页面侧是 `[data-unlock-panel][data-unlock-locked="true"][data-unlock-failures="3"][data-unlock-locked-actions="N"]`（`app/security/UnlockPanel.tsx:134-139`）。
 
+## 停泊区错码提示的已知缺口
+
+一次错码时停泊区徽章显示的是通用兜底句「请求失败，请检查网络后稍后重试。」（`chat.error.request`），不是剩余次数，这是当前实现的事实而非测试笔误。
+链路：`components/chat/cards/MfaCard.tsx:116` 的徽章渲染 `localizeChatError(error, t)`，`error` 由 `components/chat/ChatWindow.tsx:237-238` 的 `error={localizedError}` 传入，而 `ChatWindow.tsx:77` 的 `localizedError = publicToolError(stream.error, t, 'chat.error.request', stream.errorCode)`。
+`stream.error` 是服务端 `data.message`「验证码错误。还可尝试 N 次。」（`lib/public-text.ts:67-73` 把 `mfa_code_invalid`/`MFA_FAILED` 映射到 `chat.error.verificationRemaining`），由 `components/chat/actions.ts:640-643` 包成不带 `code` 的 `{type:'error', message}` 推进事件流。
+因此 `components/chat/agent-stream-reducer.ts:507` 写入的 `errorCode` 是 `undefined`，`lib/tool-feedback.ts:50-68` 走不到 `PUBLIC_ERROR_CODES` 的 `MFA_FAILED → chat.error.verificationFailed` 映射。
+文本本身也匹配不上：`PUBLIC_BUSINESS_ERRORS`（`lib/tool-feedback.ts:18-34`）只登记旧网关句，`:57` 的闭集正则只认「验证码错误，请重试。剩余尝试次数：N。」，`lib/i18n/messages/display-sources.json#errors` 没有该字面量，于是落到 `:63`/`:67` 的 `t('chat.error.request')` 兜底。
+测试后果：不要在停泊区断言「验证码错误。还可尝试 N 次。」或任何剩余次数文案；该句只存在于响应体与 `tests/unit`、`tests/app` 的断言里。
+错码的确定性断言是停泊区计数行 `p[role="status"]`「验证失败，已尝试 N 次。」（`cards.mfa.failedAttempts`，`MfaCard.tsx:108-114`），第 3 次因停泊区卸载而不可达。
+`role="alert"` 横幅在停泊期间被抑制（`components/chat/ChatWindow.tsx:189` 的 `showNotice={!pending}`），错码同样不产生横幅断言点。
+
 ## 熔断复位的可重复性
 
 熔断按 OWNER（`user:user_liming`）持久化，同一用户的新会话不复位，所以重复运行必须显式复位。
