@@ -131,6 +131,18 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 `lD`/`lE` 的每一条业务腿都用有界轮次（`VC_APPLY_TURNS` 等）：模型若只作散文，下一轮催促仍不产工具，最终按失败记录，绝不补写面板。
 场景 7 用 `PARK_ATTEMPTS`/`PARK_NUDGES` 轮询 `/api/actions` 并催促（见 `LIVE-ACCEPTANCE-REPORT.md` 的 Blockers）。
 
+## 号码 / 尾号 / 脱敏断言的现状
+
+种子掩码是唯一真值来源：`card_credit` `****6688`、`card_debit` `****8821`、`card_virtual` `****7788`（`card-freeze.e2e-helper.ts:13-17` 的 `SEEDED_CARDS`、`card-replace-chain.e2e-helper.ts:108`），联系人 `contact_zhangwei` 的 `Contact.phone` 已是掩码 `139****0002`。
+live 入口只读 `contact.phone`（`live-acceptance.e2e.ts:265-271`），从不读 `phoneFull`；真实号码以常量 `RAW_RECIPIENT_PHONE = '13900000002'`（`:772`）出现。
+手机号掩码只在确认卡 `收款手机号` 字段被断言，判定为正则 `/^\d{3}\*{4}\d{3,4}$/`（`live-acceptance.e2e.ts:503-511`）；字段读取走 `readConfirmFields`（`:427-442`，只取最后一个含 `收款人` 的 `[data-approval-request="true"] dl`）。
+卡片号掩码只经读模型断言：`GET /api/cards` 的 `LiveCardRecord.numberMasked`（`live-virtual-card.e2e-helper.ts:109-127`）与 SQLite `Card.numberMasked`；`helpers.ts#CardView`（`:1244-1252`）不含 `numberMasked`，`RAW_CARD_FIELDS`（`live-virtual-card.e2e-helper.ts:200`）不选 `numberFull`。
+需要完整卡号或 `Card.numberFull` 的新场景必须自行扩展 select，不要假设现成读取器带该字段。
+`/cards` 上被断言的号码掩码是账户号 `****8821`（消费弹窗 `CARD_LABEL.linkedAccount` 行，`live-acceptance.e2e.ts:1733-1734`），不是卡号。
+mock 入口只有两处脱敏断言：`banking-pages.e2e-helper.ts:23` 的联系人页文本 `138****5678` 与 `card-freeze.e2e-helper.ts:34-36` 的三张种子卡 `numberMasked`（读 `/api/cards`，非页面）。
+既有「按尾号/号码定位对象」的用例只有两类：`2p`（转账按手机号，掩码形与真实形各一条腿）与 `lA`/`lC`/`lD`/`lE`/`lF`/`lG`（按尾号挂失/补办/消费）。
+尚无「查询类解析结果」（如 `search_contact` 命中后回复里的脱敏号码、卡片查询返回的卡号掩码）在 live 入口的 DOM 断言形态；`weixin-capabilities.e2e-helper.ts:40` 的 `135****0005` 是微信通道的同类断言，可作写法参考。
+
 ## MFA 验证码与熔断覆盖
 
 `acceptance.e2e.ts` 的 `j-circuit-breaker-lock` 在同一会话内连续提交 3 次错误验证码（每次 `submitMfa('000000')`），
