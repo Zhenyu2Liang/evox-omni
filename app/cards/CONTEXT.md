@@ -69,6 +69,8 @@ e2e 场景在 `tests/e2e/live-virtual-card.e2e-helper.ts` 与 `tests/e2e/card-ma
 本目录只读这些测试，不修改测试文件；e2e 断言 `p[role="alert"]`，故不可用原因块不得改用 `role="alert"`。
 金额展示规则见 [financial-values.md](../../docs/cn/financial-values.md)。
 测试钩子：data-card-consume（入口）、data-card-consume-dialog、data-card-consume-card-id、data-card-consume-summary、data-card-consume-form、data-card-consumptions、data-card-consumption（记录行）、data-card-id（单个卡片容器）。
+卡片变更钩子：data-card-change-dialog（含 data-card-change-id / data-card-change-status）、data-card-add-form、data-card-verification-form（`CardChangeDialog.tsx:99` 的验证表单，内含 `input[name="confirmed"]` 复选框与 `input[name="code"]`），以及列表侧 data-card-pending-changes / data-card-pending-change-id。
+验证表单的验证码输入没有 `aria-label`、没有 `placeholder`，可见标签与无障碍名都来自外层 `<label>` 包裹的 `t('cards.mfa.label')`；`cards.mfa.label` 是本目录唯一的 `cards.mfa.*` 键，不渲染 `MfaCard`。
 消费相关 e2e 断言以 data-card-* 钩子定位，改动这些属性名会破坏 tests/e2e 下的场景。
 `POST /api/cards/[id]/consume` 拒绝任何携带 `occurredAt` 的请求体（400 `VALIDATION`）：入账时间归服务端所有，界面不发送该字段，也不要补充任何客户端时间。
 手动卡片验证是本目录唯一自带错误码的 MFA 面：`security/manual-card-management.ts` 熔断时抛 `AppError('CIRCUIT_OPEN')`，`_lib/http.ts` 映射为 HTTP 423 失败信封，`CardManager.tsx` 84-100 行据此把申请置为 `locked` 并显示 `pages.cards.locked`。
