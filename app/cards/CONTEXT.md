@@ -68,6 +68,25 @@
 断言文本必须从目录文件读取，不在页面里抄：`pages.cards.*` 在 `lib/i18n/messages/pages.zh-CN.json`（第 30-74 行）、`business.cards.*` 在 `business.zh-CN.json`（第 47-69 行）、`cards.mfa.label` 在 `chat.zh-CN.json`（第 135 行）。
 默认语言是 `zh-CN`（`lib/i18n/shared.ts:12`），语言 Cookie 只切换展示，不改变键到文本的映射来源。
 
+### 首屏与水合（断言稳定性）
+
+`page.tsx` 是服务端组件并 `export const dynamic = 'force-dynamic'`（`page.tsx:6`），首次 HTML 就带完整卡片网格，无 `loading.tsx`、无骨架屏。
+`CardManager` 以服务端 `initialCards` 初始化 `cards`，随后 `useEffect` 立即并发请求 `GET /api/cards` 与 `GET /api/cards/changes` 覆盖列表；初始 `refreshing = true`、`loaded = false`，故首帧所有按钮是真 `disabled`。
+`GET /api/cards/changes` 决定待办 `section[data-card-pending-changes]` 是否出现，服务端不预渲染待办。
+断言前必须等 `span[data-card-add] button`、`span[data-card-refresh] button` 变为可用，否则读到的是水合前的禁用态。
+卡片顺序由服务端投影决定（`lib/db/repositories/card.ts` 按 `id asc`），种子数据顺序为信用卡、借记卡、虚拟卡。
+`/cards` 没有自己的 `metadata`，`<title>` 来自 `app/layout.tsx:10-11` 的 `app.brand`（`银行 AI 助手`）；侧栏与移动端标题用 `app.cards`（`卡片`）。
+语言链为 `app/layout.tsx:25` `getServerI18n()` → `LocaleProvider initialLocale` → 组件 `useI18n().t`；`resolveLocale` 只认 Cookie `banking_locale`（`lib/i18n/shared.ts:13`）的 `'en'`，其余一律 `zh-CN`，`Accept-Language` 与 `localStorage` 不参与。
+
+### 非目录文本（不在 i18n 表里的可见文本）
+
+卡片行的 `{类型} · {network}`（`components/banking/CardTile.tsx:82-84`）里 `network` 是 DTO 原始值，种子为 `UnionPay`（`prisma/seed.ts:295,307,320`）。
+卡号是 `card.numberMasked` 原样输出（`CardTile.tsx:85-87`），种子为 `****6688` / `****8821` / `****7788`（`prisma/seed.ts:296,308,321`），4 星 4 位、无空格。
+金额一律 `Money` → `formatCNY`（`lib/money.ts:79-84`）：`¥` + 千分位 + 两位小数，与语言无关，例如 `¥18,000.00`。
+关联账户行是数据拼接 `{linkedAccountName} · {linkedAccountNumber}`（`CardTile.tsx:76,126`），种子为 `活期账户 · ****8821`。
+分类限额的分类名是 `limit.category` 原值（`CardTile.tsx:174`），种子为 `餐饮` / `娱乐` / `购物` / `出行`。
+上述文本随数据库变化，整句匹配只对固定种子数据成立。
+
 ### 页面骨架（`CardManager.tsx`）
 
 | 键 | 元素 | ARIA role | 钩子 | 出现条件 |
