@@ -112,7 +112,7 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 - `integration/`、`app/`、`scenarios/` 完全没有 `profit`/`profitRate`/`cumulativeProfit`/`realizedProfit` 断言，负值口径只落在 `unit/`。
 - 没有 `HoldingView.cumulativeProfit` / `HoldingView.realizedProfit` 为负的断言：负已实现收益只在 `InvestResult` 层（`unit/banking-sdk/net-value-redemption.test.ts:394`/`:400`）。
 - `amount` 为 0 时 `HoldingView.profitRate` 为 `undefined` 只有函数级覆盖（`unit/banking-sdk/net-value.test.ts:160-161`）；`banking-sdk/investment.ts:197` 无条件赋值该键，`'profitRate' in view` 恒为真，不可断言键缺失。
-- 工具结果层无覆盖：`get_investment_holdings` 在 `tests/` 内只有 4 处引用（`e2e/live-investment.e2e-helper.ts:633` 注释、`e2e/weixin-capabilities.e2e-helper.ts:44` 工具名矩阵、`unit/agent/providers/mock-turn-declaration.test.ts:155` 声明矩阵、`unit/security/permission-engine.test.ts:27` 只读白名单），没有一条断言工具 `summary` 出现负百分比或 `data[].profitRate` 保留负号；`agent/tools/investment.ts#percentText` 在 `tests/` 内零引用。
+- 工具结果层的负值断言不在 `tests/` 而在 `agent/tools/redeem-investment.test.ts:375-399`（mock `listHoldings` 返回 `profit: '-60'` / `profitRate: '-0.012'` / `cumulativeProfit: '-60'`，断言摘要含 `持仓收益 -¥60.00`、`持仓收益率 -1.20%`、`累计收益 -¥60.00`）；`tests/` 内 `get_investment_holdings` 只有 4 处引用（`e2e/live-investment.e2e-helper.ts:633` 注释、`e2e/weixin-capabilities.e2e-helper.ts:44` 工具名矩阵、`unit/agent/providers/mock-turn-declaration.test.ts:155` 声明矩阵、`unit/security/permission-engine.test.ts:27` 只读白名单），没有一条经真实工具路径断言负百分比。
 - 「负收益率曾导致整页崩白」的回归注释只有三处：`unit/planner/decimal-format.test.ts:75-76`、`unit/financial-values.test.ts:65-66`、`e2e/live-investment.e2e-helper.ts:16`+`:671-672`。
 
 ## 卡片生命周期能力契约的覆盖
