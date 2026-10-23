@@ -170,7 +170,7 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 
 ## 锁定终态：尝试次数与面板消失
 
-`MFA_MAX_ATTEMPTS = 3`（`lib/constants.ts:10`），由 `ChatWindow.tsx:238` 传入 `MfaCard`。
+`MFA_MAX_ATTEMPTS = 3`（`lib/constants.ts:10`），由 `ChatWindow.tsx:237-238` 经 `ApprovalRequest` 传给 `MfaCard`。
 第 1、2 次错误码服务端回 `awaiting_mfa`：面板与输入框保留，显示 `验证失败，已尝试 N 次。`（`useAgentStream.ts:355-360` 只在「同一 mfa 决策且 `error` 存在」时自增 `mfaAttempts`）。
 第 3 次服务端把 `PendingAction` CAS 为 `locked`，`settleAction` 置终态并清空 `pendingAction`（`agent-stream-reducer.ts:319-342`），**整个弹层消失**，会话内只留只读历史卡；`pickPendingAction` 只恢复 `pending`/`awaiting_mfa`（`:557-559`），刷新不会重开面板。
 `j-circuit-breaker-lock` 因此断言三次后 `SELECTORS.mfaInput` 不存在、余额与流水零变化、`/security` 的 `已熔断` + `失败 3 / 3 次` + `CIRCUIT_BREAKER_TRIPPED`（`severity` `high`，DB 交叉核对）。
