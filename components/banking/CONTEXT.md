@@ -152,6 +152,33 @@ e2e 行读取器按标签 `span` 的文本精确定位，再取同一父元素�
 关联账户为 flex 行（标签 `text-banking-navy/60`，值 `font-semibold text-banking-deep`）；提示文案为 `<p className="text-sm text-banking-navy/60">`。
 限额字段（`creditLimit`/`availableLimit`/`monthlyLimit`/`limits[].amount`）与 `accountAvailableBalance`/`payableAmount` 都是 `MoneyAmount`（CNY 十进制字符串），经 `Money`→`formatCNY` 展示；`linkedAccountNumber`/`linkedAccountId`/`linkedAccountName` 是文本。
 
+## CardTile DOM 结构（浏览器断言用）
+
+`CardTile`（`CardTile.tsx`）内部顺序固定，`/cards` 的网格与消费对话框中的同一卡都复用它：
+
+| 区块 | 元素与行号 | 内容 |
+| --- | --- | --- |
+| 头部左 | `div` :82-87 | `{t(类型键)} · {card.network}`（同一 `div` 内含字面 ` · ` 与网络名，整段不是纯标签文本）+ `numberMasked` |
+| 头部右 | `div` :89-94 | 「已补卡」`Badge`（:91，仅 `replacedByCardId !== undefined`）+ 状态 `Badge`（:93） |
+| 不可用徽章 | `Badge` :98 | 仅 `usable === false`，文案取 `cardUnavailableNoticeKey` |
+| 信用额度 | `dl.grid-cols-2` :103-120 | `<dt>` 标签 + `<dd><Money/></dd>`，仅 `CREDIT` 卡 |
+| 关联账户行 | `div.flex` :124-127 | `<span>` 标签 + `<span>{name · 脱敏账号}</span>` |
+| 账户金额 | `dl.grid-cols-2` :132-149 | `<dt>` 标签 + `<dd><Money/></dd>`，仅 `LINKED` |
+| 关联账户提示 | `<p>` :152-154 | 「未关联账户」/「账户暂不可用」 |
+| 月限额 | `div.flex` :156-163 | `<span>` 标签 + `<span><Money/></span>` |
+| 分类限额 | `div` :165-182 | 标题 `div` + `ul>li`（`limit.category` 原始串 + `Money`，非 i18n） |
+
+标签与金额永远在不同元素（`<dt>`/`<span>` 标签，`<dd>`/`<span>` 值）。
+`Money` 只渲染一个 `span.tabular-nums`，不含标签文本。
+卡标题不是 heading：类型行是普通 `div`，`CardTile` 不提供 `h*`。
+`CardTile` 自身不带任何 `data-*`、`id`、`role`、`aria-*`；测试定位靠父级 `[data-card-id]`/`[data-card-list]`。
+`Card` 外层是 `div` + 可选 footer `div`（`ui/Card.tsx`）。
+
+`business.cards.accountAvailable`（账户可用余额）与 `business.cards.payableAmount`（当前可支付金额）在目录中存在但无任何组件渲染；
+本卡的「账户余额」= `CardView.accountAvailableBalance`，「可用余额」= `CardView.payableAmount`。
+`business.cards.balanceFromAccount` 同样无用例。
+标签值经 `useI18n().t` 原样返回（`t(key)` 只替换 `{占位符}`，这些键都没有占位符），不做大小写或标点加工。
+
 ## 关联账户展示（card-account-display.ts）
 
 `card-account-display.ts` 是纯函数模块：无 React、无 Hook、不请求数据、不引入 i18n 运行时
