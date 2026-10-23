@@ -144,6 +144,7 @@ describe('manual card creation is refused on the agent/command path', () => {
       ok: false,
       errorCode: 'SECURITY_DENIED',
       error: 'Card creation and deletion require the card management page.',
+      failure: { code: 'SECURITY_DENIED' },
     });
     expect(gated.pendingActionId).toBeUndefined();
     expect(gated.requiresConfirmation).toBeUndefined();

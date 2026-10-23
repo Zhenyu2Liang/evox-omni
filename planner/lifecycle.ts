@@ -19,6 +19,8 @@
  * explicitly lifts the pause (`explicitResume`).
  */
 import type { TaskNodeResult, TaskNodeStatus, TaskPlan, TaskPlanStatus } from '@/lib/contracts/task';
+import type { PlanNodeResult } from './failure';
+import { mayDriveNode, mayResetNode } from './failure';
 import { AppError } from '@/lib/errors';
 import { demoNow } from '@/lib/clock';
 import { transitiveDependents } from './dag';
@@ -84,7 +86,7 @@ export interface CompensationReport {
 /** Build a full `TaskPlan` snapshot from a working results map (declaration order). */
 function snapshotWith(
   plan: TaskPlan,
-  results: Map<string, TaskNodeResult>,
+  results: Map<string, PlanNodeResult>,
   status: TaskPlanStatus,
   updatedAt: number,
 ): TaskPlan {
@@ -125,7 +127,7 @@ function snapshotWith(
 export function pausePlan(plan: TaskPlan, opts: PausePlanOptions = {}): TaskPlan {
   if (plan.status === 'cancelled') return plan;
   const now = opts.now ?? (() => demoNow());
-  const results = new Map<string, TaskNodeResult>();
+  const results = new Map<string, PlanNodeResult>();
   for (const r of plan.results) results.set(r.id, { ...r });
   return snapshotWith(plan, results, 'paused', now());
 }
@@ -193,7 +195,7 @@ export async function cancelPlan(
   const now = opts.now ?? (() => demoNow());
   const reason = opts.reason ?? 'cancelled by user';
 
-  const results = new Map<string, TaskNodeResult>();
+  const results = new Map<string, PlanNodeResult>();
   for (const r of plan.results) results.set(r.id, { ...r });
 
   const executedNodes = plan.nodes
@@ -247,7 +249,7 @@ export async function retryPlan(
   if (plan.status === 'cancelled') return plan;
   const now = opts.now ?? (() => demoNow());
 
-  const results = new Map<string, TaskNodeResult>();
+  const results = new Map<string, PlanNodeResult>();
   for (const r of plan.results) results.set(r.id, { ...r });
   const nodesById = new Map(plan.nodes.map((n) => [n.id, n]));
 
@@ -264,7 +266,7 @@ export async function retryPlan(
     for (const dependent of transitiveDependents(plan.nodes, id)) resetIds.add(dependent);
   }
 
-  const reset: TaskNodeResult[] = [];
+  const reset: PlanNodeResult[] = [];
   for (const id of resetIds) {
     const node = nodesById.get(id);
     if (!node) continue;
@@ -273,6 +275,9 @@ export async function retryPlan(
     const resettable =
       status === undefined || status === 'pending' || status === 'failed' || status === 'skipped';
     if (!resettable) continue;
+    // A sealed refusal (locked / no-longer-open action) is settled: never overwrite its recorded
+    // failure with a fresh pending row — that would re-drive the action.
+    if (!mayResetNode(results.get(id))) continue;
     const pending: TaskNodeResult = {
       id,
       name: node.name,
@@ -333,9 +338,12 @@ export async function resumePlan(
   // NOT advanced past it (nothing runs until an explicit resume).
   const stillPaused = plan.status === 'paused' && opts.explicitResume !== true;
   const outcome = resume.outcome;
-  const results = new Map<string, TaskNodeResult>();
+  const results = new Map<string, PlanNodeResult>();
   for (const r of plan.results) results.set(r.id, { ...r });
   const previous = results.get(node.id);
+  // A locked / already-settled action is a settled refusal: record no stale decision, write no
+  // row and advance nothing — the plan snapshot is returned exactly as it arrived.
+  if (!mayDriveNode(previous)) return plan;
 
   const updated = settleToolNode(node, outcome, previous?.startedAt ?? now(), now());
   const status = updated.status;

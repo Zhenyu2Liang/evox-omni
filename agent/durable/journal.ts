@@ -18,6 +18,7 @@ import type { AppConfig } from '@/lib/config';
 import { encodeCheckpoint } from './checkpoint';
 import { retryableModelFailure } from '@/agent/providers/model-failure';
 import { parseModelToolError } from '@/agent/tools/result';
+import { isInternalDiagnostic } from '@/lib/public-text';
 
 export interface BeginRunInput extends Omit<BeginAgentRunInput, 'requestDigest' | 'requestJson'> {
   request: unknown;
@@ -164,13 +165,21 @@ export class AgentRunJournal {
       const callId = event.toolCallId;
       const status: ToolInvocationStatus = event.isError ? 'failed' : 'completed';
       const errorCode = event.isError ? structuredErrorCode(event.result) : undefined;
+      // `summary` is re-projected onto the historical tool row once the invocation settles
+      // (`agent/transcript-activity.ts`), so it is PUBLIC text. A refusal payload, a JSON fragment or a
+      // stack trace therefore never becomes a public summary: the original `content` keeps the
+      // model/classifier-facing text and the raw diagnostic is stored out of band.
+      const summaryText = (event.result.content ?? [])
+        .find((part: { type: string; text?: string }) => part.type === 'text')?.text;
+      const publicSummary = isInternalDiagnostic(summaryText) ? undefined : summaryText;
       const resultJson = encodeRuntimeValue({
         ok: !event.isError,
         data: event.result.details,
         content: event.result.content ?? [],
         usage: event.result.usage,
         durationMs: event.durationMs,
-        summary: (event.result.content ?? []).find((part: { type: string; text?: string }) => part.type === 'text')?.text,
+        summary: publicSummary,
+        ...(publicSummary === undefined && summaryText ? { internalSummary: summaryText } : {}),
         ...(errorCode ? { error: errorCode } : {}),
       });
       return this.enqueue(async () => {

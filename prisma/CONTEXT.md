@@ -83,6 +83,30 @@ SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件�
 该备份会覆盖，复制失败不会阻止播种。
 不得把这次文件复制视为运行中数据库的一致性备份保证。
 
+## 安全状态表
+
+没有 Prisma 原生枚举，也没有 `migrations/` 目录；
+所有状态都是 `String` + 注释约定，SQLite 层无 CHECK 约束，
+因此新状态值无需改库，但必须同步 `schema.prisma` 文件头注释。
+`PendingAction`（`schema.prisma` 第 418 行起）只有
+`status`、`summaryJson`、`resultJson`、`executionLeaseOwner`、
+`executionLeaseExpiresAt`；**没有** 锁定原因、错误代码、
+尝试次数或过期时间字段。
+文件头第 25 行列出的 `status` 取值不含 `locked`，
+而 `security/security-gateway.ts` 会写入 `locked`，注释落后于实际取值。
+`MfaChallenge`（第 450 行起）存明文 `code`、`attempts`（默认 0）、
+`maxAttempts`（默认 3）、可空 `expiresAt`、`commandDigest`、
+`verifiedAt` 与 `consumedAt`。
+`CircuitBreakerState`（第 470 行起）以所有者键 `key` 为主键，
+`failures` 默认 0、`locked` 默认 false、`lockedAt` 可空，无冷却时长列。
+没有 `Incident` 与 `AuthorizationRecord` 模型；
+对应职责由 `SecurityEvent`（`kind`/`severity`/`detail`）、
+`AuthorizationDecision`（`reasonsJson`/`riskInputsJson`）与
+`ManualReview`（`reason`/`resolution`）承担。
+带错误码或原因的列集中在 `AgentRun`、`ModelRequest`、`ToolInvocation`
+（`errorCode`）、`AgentTaskNode.error`、`AuditLog.detail`/`mfaResult`、
+`ScheduledTask.dispatchError`。
+
 ## 修改与运行
 
 1. 修改结构后，运行 `pnpm db:generate`。

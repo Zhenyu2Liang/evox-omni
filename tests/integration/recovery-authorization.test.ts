@@ -78,9 +78,16 @@ it('recovery rechecks a breaker that trips after recovery authorization but befo
 
 it('a locked session can reconstruct a committed result without creating another debit', async () => {
   const p = getTestPrisma(); const action = await park();
-  const fault = vi.spyOn(actionRepo, 'setPendingActionStatus').mockRejectedValueOnce(new Error('repair: status unavailable'));
+  // REAL fault injection at the settlement write funnel: the TERMINAL compare-and-set inside
+  // `settlePendingAction`'s transaction rejects, so the result+status write rolls back AFTER the
+  // debit committed. The parameter filter keeps the gateway's authorization CAS untouched.
+  const claim = actionRepo.claimPendingAction; let injects = 0;
+  const fault = vi.spyOn(actionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+    if (input.to === 'executed') { injects++; throw new Error('repair: status unavailable'); }
+    return claim(input, client);
+  });
   expect((await call(confirmPost, action.id, action.sessionId)).http).toBe(500);
-  expect(fault).toHaveBeenCalledTimes(1); fault.mockRestore(); expect(await balance()).toBe('23380.00');
+  expect(injects).toBe(1); fault.mockRestore(); expect(await balance()).toBe('23380.00');
   for (let i = 0; i < 3; i++) await recordFailure(action.sessionId);
   const recovered = await call(recoverPost, action.id, action.sessionId);
   expect(recovered.body.data).toMatchObject({ ok: true, status: 'executed' });
@@ -224,8 +231,15 @@ async function contradictoryPlan() {
   });
   const plan = submitted.data as { id: string };
   const action = await p.pendingAction.findFirstOrThrow({ where: { taskId: plan.id } });
-  const fault = vi.spyOn(actionRepo, 'setPendingActionStatus').mockRejectedValueOnce(new Error('repair: status unavailable'));
-  expect((await call(confirmPost, action.id, sessionId)).http).toBe(500); expect(fault).toHaveBeenCalledTimes(1); fault.mockRestore();
+  // REAL fault injection at the settlement write funnel: the TERMINAL compare-and-set inside
+  // `settlePendingAction`'s transaction rejects, so the plan-node action stays `confirmed` with a
+  // committed debit + receipt. The filter keeps the gateway's authorization CAS untouched.
+  const claim = actionRepo.claimPendingAction; let injects = 0;
+  const fault = vi.spyOn(actionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+    if (input.to === 'executed') { injects++; throw new Error('repair: status unavailable'); }
+    return claim(input, client);
+  });
+  expect((await call(confirmPost, action.id, sessionId)).http).toBe(500); expect(injects).toBe(1); fault.mockRestore();
   const audit = await p.auditLog.findUniqueOrThrow({ where: { dedupeKey: `exec:${action.id}` } });
   const receipt = await p.executionReceipt.findFirstOrThrow({ where: { key: `nxe:${plan.id}:transfer` } });
   await p.executionReceipt.update({ where: { id: receipt.id }, data: {

@@ -1,14 +1,21 @@
 import type { AgentStreamEvent, ChatTurnResponse, ToolEventView } from '../../lib/contracts/agent';
-import type { PendingActionSummary } from '../../lib/contracts/security';
+import type { PendingActionSummary, SecurityFailure } from '../../lib/contracts/security';
 import { bankingBaseUrl } from './config';
 import type { TaskPlan } from '../../lib/contracts/task';
 import type { ScheduleInbox, ScheduleTickResult } from '../../lib/contracts/schedule';
-import { renderBusinessCard, renderPlan, type SurfacedAction } from './presentation';
+import { renderBusinessCard, channelText, renderPlan, type SurfacedAction } from './presentation';
 import { publicToolSummary } from '../../lib/tool-feedback';
+import { securityNotice } from '../../lib/public-text';
 import { createTranslator } from '../../lib/i18n/shared';
 
 export interface ActionResult {
   actionId: string; ok: boolean; status: string; message?: string; requiresMfa?: boolean;
+  /** Server-owned refusal type (`MFA_FAILED`/`MFA_LOCKED`/`CIRCUIT_OPEN`/...); never inferred from text. */
+  code?: string;
+  attemptsLeft?: number;
+  maxAttempts?: number;
+  /** The complete structured refusal, when the outcome is a security refusal. */
+  failure?: SecurityFailure;
   events: AgentStreamEvent[];
 }
 export interface BankingChannel {
@@ -66,14 +73,23 @@ export function renderAction(id: string, summary: PendingActionSummary): string 
     `取消：/取消 ${id}`].join('\n');
 }
 
+export interface RenderEventOptions {
+  /**
+   * Append the "本次请求已处理…" sentence when no event produced any text. A chat turn always says
+   * something; a settle reply already carries its own authoritative status block.
+   */
+  emptyNotice?: boolean;
+}
+
 /** 只发送服务端已完成核验的 message_end，绝不转发原始流或工具参数。 */
-export function renderEvents(events: readonly AgentStreamEvent[]): { text: string; actionIds: string[]; planIds: string[] } {
+export function renderEvents(events: readonly AgentStreamEvent[], options: RenderEventOptions = {}): { text: string; actionIds: string[]; planIds: string[] } {
   const messages = new Map<string, string>();
   const gates = new Map<string, string>();
   const notices: string[] = [];
   const cards = new Map<string, string>();
   const plans = new Map<string, TaskPlan>();
   const settled = new Set<string>();
+  const locked = new Set<string>();
   const feedback = new Map<string, string>();
   const t = createTranslator('zh-CN');
   const addFeedback = (event: ToolEventView) => {
@@ -116,9 +132,20 @@ export function renderEvents(events: readonly AgentStreamEvent[]): { text: strin
       cards.delete('balance'); cards.delete('dashboard');
     }
     if (event.type === 'action_settled') settled.add(event.actionId);
-    if (event.type === 'error') notices.push(event.message);
+    if (event.type === 'security_event' && event.kind === 'locked') {
+      // A security refusal is published from its TYPED fields only — never the raw payload text.
+      // Non-`locked` kinds (injection-scan notes) stay audit-only and render nothing.
+      notices.push(securityNotice({ code: event.code, reason: event.reason,
+        attemptsLeft: event.attemptsLeft, maxAttempts: event.maxAttempts }, t));
+      // A refused action can never offer a verification entry again.
+      if (event.actionId) locked.add(event.actionId);
+    }
+    if (event.type === 'error') notices.push(channelText(event.message, t, 'chat.error.toolFailed'));
   }
   for (const id of settled) gates.delete(id);
-  return { text: [...messages.values(), ...cards.values(), ...[...plans.values()].map(renderPlan), ...gates.values(), ...new Set(feedback.values()), ...notices].filter(Boolean).join('\n\n') ||
-    '本次请求已处理，请在网页查看业务详情；没有确认或验证的业务不会执行。', actionIds: [...gates.keys()], planIds: [...plans.keys()] };
+  for (const id of locked) gates.delete(id);
+  const body = [...messages.values(), ...cards.values(), ...[...plans.values()].map(renderPlan), ...gates.values(),
+    ...new Set([...feedback.values(), ...notices])].filter(Boolean).join('\n\n');
+  const text = body || (options.emptyNotice === false ? '' : '本次请求已处理，请在网页查看业务详情；没有确认或验证的业务不会执行。');
+  return { text, actionIds: [...gates.keys()], planIds: [...plans.keys()] };
 }

@@ -16,8 +16,9 @@
  *
  * Only the frozen reference `tests/integration/confirmation-continuation.test.ts` covers the YELLOW confirm case;
  * this spec uses the RED / MFA `verify` path. REAL route handlers + REAL isolated `prisma/test.db`.
- * Mocks are used ONLY as barriers (`authorizeAction` spy) or REAL fault injection
- * (`setPendingActionStatus` throw) — never to fabricate a return value.
+ * Mocks are used ONLY as barriers (`authorizeAction` spy) or REAL fault injection at the
+ * settlement write funnel (`claimPendingAction`'s terminal CAS throw) — never to fabricate a
+ * return value.
  */
 import { beforeEach, afterEach, afterAll, describe, it, expect, vi } from 'vitest';
 import { NextRequest } from 'next/server';
@@ -193,11 +194,18 @@ describe('[integration] live-confirmation REFERENCE-COUNT marker lifecycle', () 
     expect(action.status).toBe('awaiting_mfa');
     const before = await debitCount();
 
-    // REAL fault injection: make the atomic result+status transaction REJECT, so the continuation
-    // exits abnormally (the side effect commits; the result+status write rolls back).
-    const spy = vi.spyOn(pendingActionRepo, 'setPendingActionStatus').mockRejectedValueOnce(new Error('review: result transaction failed'));
+    // REAL fault injection at the settlement write funnel: the TERMINAL compare-and-set inside
+    // `settlePendingAction`'s transaction REJECTS, so the continuation exits abnormally (the side
+    // effect commits; the status+result+audit write rolls back). The parameter filter is required —
+    // the same CAS also gates the gateway's `pending`→`confirmed` authorization, which must run
+    // first (an unfiltered fault would strike BEFORE the debit ever happens).
+    const claim = pendingActionRepo.claimPendingAction; let injections = 0;
+    const spy = vi.spyOn(pendingActionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+      if (input.to === 'executed') { injections++; throw new Error('review: result transaction failed'); }
+      return claim(input, client);
+    });
     const failedVerify = await verifyRaw(action.id, s, '123456');
-    const injectionCalls = spy.mock.calls.length;
+    const injectionCalls = injections;
     spy.mockRestore();
 
     // The injection actually HIT the real path (abnormal exit ⇒ 500).

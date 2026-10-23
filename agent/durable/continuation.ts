@@ -31,6 +31,38 @@ import { readAuthorizationToolContext } from '../authorization-context';
 import { catalogEntry } from '@/lib/contracts/tool-catalog';
 import { providerPresentationKey, toolPresentationId } from '../tool-presentation-identity';
 import { security } from '@/security';
+import { mayPromptForDecision } from '@/agent/action-status';
+import { safePublicText } from '@/lib/public-text';
+import { createTranslator, DEFAULT_LOCALE } from '@/lib/i18n/shared';
+
+/** The typed facts of a TERMINAL parked decision — never a status literal rendered as user text. */
+function settledDecisionFacts(status: string): { code: string; reason: string } {
+  switch (status) {
+    case 'locked': return { code: 'MFA_LOCKED', reason: 'mfa_attempts_exhausted' };
+    case 'executed': return { code: 'DECISION_SETTLED', reason: 'decision_executed' };
+    case 'failed': return { code: 'DECISION_FAILED', reason: 'decision_failed' };
+    case 'cancelled': return { code: 'DECISION_CANCELLED', reason: 'decision_cancelled' };
+    case 'needs_reconciliation': return { code: 'NEEDS_RECONCILIATION', reason: 'outcome_unknown' };
+    default: return { code: 'DECISION_SETTLED', reason: 'decision_settled' };
+  }
+}
+
+/**
+ * The public projection of a parked call whose persisted `PendingAction` is TERMINAL. `locked` is a
+ * settled refusal (exhausted verification / open circuit) and every other terminal status means the
+ * operation already moved on, so neither the raw `__SECURITY_BLOCK__…` payload nor the status literal
+ * may become user-visible text: the historical tool row keeps its place with catalog text and one
+ * typed `security_event` (the shape `agent/turns/events.ts` publishes: typed fields, no message).
+ */
+function settledParkedProjection(actionId: string, status: string, storedSummary: string | undefined):
+  { text: string; signal: Extract<AgentStreamEvent, { type: 'security_event' }> } {
+  const t = createTranslator(DEFAULT_LOCALE);
+  const fallback = status === 'locked' ? 'chat.error.actionLocked' : 'chat.error.stateChanged';
+  return {
+    text: safePublicText(storedSummary, t, fallback),
+    signal: { type: 'security_event', kind: 'locked', actionId, ...settledDecisionFacts(status) },
+  };
+}
 
 /** A parked authorization needs its original provider call in the saved session after a crash. */
 export async function restoreWaitingCheckpoint(run: AgentRun, journal: AgentRunJournal,
@@ -68,20 +100,30 @@ export async function restoreWaitingCheckpoint(run: AgentRun, journal: AgentRunJ
       if (runtimeRequestDigest(call.name, safeParse(invocation.argsJson, null)) !== runtimeRequestDigest(call.name, call.arguments)) {
         throw new AppError('CONFLICT', 'The waiting checkpoint call arguments do not match their recorded presentation.');
       }
-      const result = safeParse<{ data?: JsonValue; summary?: string }>(invocation.resultJson, {});
+      const result = safeParse<{ data?: JsonValue; summary?: string; internalSummary?: string }>(invocation.resultJson, {});
       const isWaiting = invocation.status !== 'completed';
       const action = isWaiting ? actionsByInvocation.get(invocation.id) : undefined;
       if (isWaiting && (!action || action.toolName !== call.name)) throw new AppError('CONFLICT', 'The waiting call has no original owned authorization.');
-      const summary = isWaiting ? `${security.gateway.BLOCK_REASON_PREFIX}${JSON.stringify({ actionId: action!.id,
+      // The PERSISTED row alone decides whether this call is still decidable: a settled
+      // (`locked`/`executed`/`failed`/`cancelled`/`needs_reconciliation`) action is never
+      // re-synthesized into a decision prompt and never exposes its raw refusal payload.
+      const settled = isWaiting && !mayPromptForDecision(action!.status)
+        ? settledParkedProjection(action!.id, action!.status, result.summary) : undefined;
+      const summary = isWaiting ? settled ? settled.text
+        : `${security.gateway.BLOCK_REASON_PREFIX}${JSON.stringify({ actionId: action!.id,
         decisionKind: action!.requiresMfa || action!.riskLevel === 'RED' || action!.status === 'awaiting_mfa' ? 'require_mfa' : 'require_confirmation' })}`
         : result.summary ?? '';
+      // The Pi-internal result keeps the model/classifier-facing text (nothing was executed, so
+      // `isError` stays true); only the public presentation below is closed.
       const message: ToolResultMessage = { role: 'toolResult', toolCallId: call.id, toolName: call.name,
-        content: [{ type: 'text', text: result.summary ?? summary }], details: result.data, isError: isWaiting,
+        content: [{ type: 'text', text: result.summary ?? result.internalSummary ?? summary }], details: result.data, isError: isWaiting,
         timestamp: invocation.finishedAt?.getTime() ?? Date.now() };
       snapshot.agentState.messages = withRealToolResult(snapshot.agentState.messages, message, source);
       await handler({ type: 'tool_execution_start', toolCallId: call.id, toolName: call.name, args: call.arguments });
       await handler({ type: 'tool_execution_end', toolCallId: call.id, toolName: call.name,
         result: { content: [{ type: 'text', text: summary }], details: result.data }, isError: isWaiting });
+      // A settled refusal keeps its historical row (above) and reports its typed facts, never text.
+      if (settled) buffer.events.push(settled.signal);
     }
   }
   const recovered = new Set(buffer.assistants.filter(message => message.role === 'tool').map(message => message.id));

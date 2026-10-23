@@ -48,6 +48,8 @@ export interface ToolEventView {
   label?: string;
   summary?: string;
   errorCode?: import('@/lib/errors').ErrorCode;
+  /** Typed facts a catalog message may need to render this refusal (e.g. remaining attempts). */
+  errorParams?: Record<string, string | number>;
   /** Server-sanitized diagnostics; rendered only when the developer preference is enabled. */
   debugArguments?: unknown;
   /** Model-facing correction or execution diagnostics; never rendered as public error text. */
@@ -97,7 +99,16 @@ export type AgentStreamEvent =
   | { type: 'confirmation_required'; action: PendingActionSummary; actionId: string }
   | { type: 'mfa_required'; actionId: string; hint?: string; action?: PendingActionSummary }
   | { type: 'action_settled'; actionId: string; status: PendingActionStatus; message?: string }
-  | { type: 'security_event'; kind: string; message: string }
+  | {
+      type: 'security_event';
+      kind: string;
+      code?: string;
+      reason?: string;
+      actionId?: string;
+      attemptsLeft?: number;
+      maxAttempts?: number;
+      message?: string;
+    }
   | { type: 'message_end'; message: ChatMessage }
   | { type: 'error'; message: string; code?: import('../errors').ErrorCode }
   | { type: 'done' };

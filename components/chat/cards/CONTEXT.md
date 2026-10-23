@@ -98,8 +98,21 @@
 `confirmation` 与 `mfa` 历史卡片使用 `ApprovalRecord`。
 当前交互由父目录 `ApprovalRequest` 提供。
 `ConfirmationCard` 与 `MfaCard` 提供该交互的具体控件。
-`confirmationStatus.ts` 解释持久化操作状态。
-终态记录不能因保留 RED 元数据而重新要求验证。
+`confirmationStatus.ts` 解释持久化操作状态，终态记录不因保留 RED 元数据而重新要求验证。
+
+`failed` 终态的原因由 `publicToolError(statusMessage/message, t)` 渲染；未传 `errorCode` 时回落 `chat.error.toolFailed`，传入时按 `PUBLIC_ERROR_CODES`（如 `CIRCUIT_OPEN` → `chat.error.securityLocked`）。
+
+`locked` 是终态且不依赖服务端原文：`MfaCard` 与 `ApprovalRecord` 用同一组结构化事实渲染三段——
+原因 `securityNotice({code:'MFA_LOCKED', reason:'mfa_attempts_exhausted'}, t)` → `chat.error.actionLocked`
+（该句已包含「无法继续验证或执行」与「请在安全中心解除限制后重新发起操作」）；
+状态 `cards.terminal.locked`（`MfaCard`）/ `chat.approval.status.locked`（`ApprovalRecord` 徽标与「当前」阶段行）；
+解锁入口 `<Link href="/security">`（标签 `pages.security.title`，支持句 `pages.security.unlockDescription`）。
+原因由状态推导；`statusMessage`/`message` 只出现在开发者模式诊断块，不做可见正文。
+锁定态不渲染验证码输入、提交或重试入口：`MfaCard` 的 `readOnly` 由 `asTerminalStatus(status)` 或非 `pending`/`awaiting_mfa` 推导，`locked` 同时是只读且终态，输入框与 `footer` 均不渲染；`ApprovalRecord` 只渲染文本与安全中心链接。
+非 MFA 的 `confirmation` 卡被结算为 `locked` 时（`ConfirmationCard`）只渲染 `cards.terminal.locked` 角标、不解释原因——MFA 次数耗尽只产生 `mfa` 卡片。
+`terminalStatusView('locked')` 的 `label` 是未翻译的 `'Locked'`，而终态角标实际取 `cards.terminal.*` / `chat.approval.status.locked`，该 `label` 落在不可达分支。
+卡片错误徽标（`MfaCard`、`ConfirmationCard`）使用 `localizeChatError`，未登记字符串原样显示，不回落错误文案登记表。
+`ErrorCard` 用 `publicToolError(message, t, 'chat.error.toolFailed', code)` 渲染文本，原始 `message`/`detail` 仅限开发者模式诊断。
 
 `ReconciliationCard` 展示结果待核对的操作。
 `ReconciliationCard` 由对话界面单独组合，不属于卡片联合类型。
@@ -117,6 +130,7 @@
 卡片上的卡号 `numberMasked` 与关联账号 `linkedAccountNumber` 已由服务端脱敏，
 不得再自行拼接掩码。
 资源标识和执行身份不能由显示名称替代。
+安全与拒绝类文案只经 `lib/public-text.ts`（`securityNotice`/`safePublicText`）或 `lib/tool-feedback.ts`（`publicToolError`/`publicToolSummary`）取得，组件内不做字符串清洗。
 
 规则与映射见
 [chat-presentation.md](../../../docs/cn/chat-presentation.md)。

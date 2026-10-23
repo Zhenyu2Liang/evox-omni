@@ -10,6 +10,10 @@ import { runSubmitPlan } from '../tools/planning';
 import { safeParse } from '@/lib/json';
 import type { ConversationIntent } from '@/lib/contracts/intent';
 import { hasRedactedCredentials } from './checkpoint';
+import { createTranslator, DEFAULT_LOCALE } from '@/lib/i18n/shared';
+import { isInternalDiagnostic } from '@/lib/public-text';
+
+const t = createTranslator(DEFAULT_LOCALE);
 
 /** Resume the original graph only after the recovery owner proves its newly acquired run lease. */
 export async function resumeOriginalRunTask(runId: string, parentInvocationId: string,
@@ -53,7 +57,14 @@ export async function resumeOriginalRunTask(runId: string, parentInvocationId: s
     }) });
   }
   await onPlanUpdate?.(plan);
+  const completed = plan.results.filter(node => node.status === 'success').length;
+  const failure = plan.status === 'failed' ? plan.results.find(node => node.status === 'failed') : undefined;
+  // A node error is already public-safe — `gated-execution.ts` fills it from a catalog sentence or the typed
+  // failure — so a node's own text is not automatically public: an internal diagnostic becomes the catalog fallback
+  // classified by a TYPED code, while a business sentence stays verbatim. The summary carries no status literal.
+  const internal = isInternalDiagnostic(failure?.error);
   return { ok: plan.status !== 'failed', data: plan,
-    summary: `Workflow ${plan.id}: ${plan.status}; ${plan.results.filter(node => node.status === 'success').length} nodes completed.`,
-    ...(plan.status === 'failed' ? { error: plan.results.find(node => node.status === 'failed')?.error ?? 'Workflow execution failed' } : {}) };
+    summary: `Workflow ${plan.id}: ${completed} of ${plan.results.length} steps completed.`,
+    ...(plan.status === 'failed' ? { error: internal ? t('chat.error.toolFailed') : failure?.error ?? 'Workflow execution failed',
+      ...(internal ? { errorCode: 'TOOL_FAILED' as const } : {}) } : {}) };
 }

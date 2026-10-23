@@ -13,6 +13,7 @@ import { CardRenderer } from './cards';
 import { ToolEventList } from './ToolEventList';
 import { AssistantMarkdown } from './AssistantMarkdown';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
+import { isInternalDiagnostic, safePublicText } from '@/lib/public-text';
 
 export interface MessageBubbleProps {
   message: ChatMessage;
@@ -42,6 +43,13 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
   const toolEvents = message.toolEvents ?? [];
   const isBusinessEntry = message.role === 'tool' || message.role === 'system';
   const hasBody = message.content.length > 0 || isBusinessEntry && (cards.length > 0 || toolEvents.length > 0);
+  // A `system` notice is a security refusal. The live text is already the typed catalog rendering
+  // produced by `./agent-stream-reducer` (through `securityNotice`); a refusal restored from saved
+  // history can still be the raw internal payload, so anything the public-text funnel classifies as
+  // an internal diagnostic is replaced by the generic public notice (never cleaned by hand here).
+  const systemText = message.role === 'system' && isInternalDiagnostic(message.content)
+    ? safePublicText(message.content, t, 'chat.error.securityDenied')
+    : message.content;
   if (!hasBody) return null;
 
   if (message.role === 'tool') return (
@@ -68,7 +76,7 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
               <AssistantMarkdown text={message.content} />
             ) : (
               <p data-message-content="true" className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                {message.content}
+                {systemText}
               </p>
             ))}
             {isBusinessEntry && cards.map((card, i) => (

@@ -17,9 +17,9 @@
  *
  * Real app-entry layer: the REAL Next.js route handlers, the REAL confirmation continuation, the REAL
  * Banking SDK and the REAL isolated test SQLite run in-process; the only "fault" is REAL injection
- * (`vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(...)`) that makes the
- * result+status transaction genuinely roll back after the SDK side effect committed. Every assertion
- * re-reads persisted DB state.
+ * (`vi.spyOn(pendingActionRepo,'claimPendingAction')`, filtered to THIS action's settlement CAS) that
+ * makes the terminal-status/result/strict-audit `prisma.$transaction` genuinely roll back after the
+ * SDK side effect committed. Every assertion re-reads persisted DB state.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -30,6 +30,8 @@ import { executeGatedTool } from '@/agent';
 import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan, type PlanRunTool } from '@/agent/tools/planning';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
+import type { ClaimPendingActionInput } from '@/lib/db/repositories/pendingAction';
+import type { Prisma } from '@/lib/db/prisma';
 import type { PendingActionStatus } from '@/lib/contracts/security';
 import { getTestPrisma, resetDatabase, disconnectTestPrisma } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
@@ -87,11 +89,33 @@ async function listActions(sessionId: string): Promise<{ status: number; rows: S
   return { status: res.status, rows: res.data.data ?? [] };
 }
 
-/** The REAL fault injection: make the NEXT result+status transaction genuinely roll back. */
-const wedgeResultTransaction = () =>
-  vi
-    .spyOn(pendingActionRepo, 'setPendingActionStatus')
-    .mockRejectedValueOnce(new Error('http-recovery: result+status transaction rolled back'));
+/**
+ * The REAL fault injection: make the SETTLEMENT `prisma.$transaction` genuinely roll back.
+ *
+ * `agent/confirmation-recovery.ts#settlePendingAction` lands the terminal status through
+ * `claimPendingAction({ actionId, from: ['confirmed'], to }, tx)` INSIDE the same transaction that
+ * writes `resultJson` and the strict execution audit, so throwing there rolls status + result + audit
+ * back as ONE unit and leaves the row `confirmed` with `resultJson: null` AFTER the SDK side effect
+ * committed — the real wedge. `claimPendingAction` is ALSO the gateway's authorization CAS
+ * (`pending|awaiting_mfa → confirmed`) and `recordActionResult`'s late CAS over
+ * `RESULT_RECORDABLE_STATUSES`, so the fault is filtered to THIS action's `confirmed → non-confirmed`
+ * transition and fires ONCE; every other call delegates to the saved real writer. A bare
+ * `mockRejectedValueOnce` would land on the authorization CAS instead — no side effect, a fake wedge.
+ */
+function wedgeResultTransaction(actionId: string) {
+  const real = pendingActionRepo.claimPendingAction;
+  let fired = 0;
+  const spy = vi
+    .spyOn(pendingActionRepo, 'claimPendingAction')
+    .mockImplementation(async (input: ClaimPendingActionInput, client?: Prisma.TransactionClient) => {
+      if (input.actionId === actionId && input.to !== 'confirmed' && input.from.includes('confirmed') && fired === 0) {
+        fired += 1;
+        throw new Error('http-recovery: result+status transaction rolled back');
+      }
+      return client === undefined ? real(input) : real(input, client);
+    });
+  return { spy, fired: () => fired, restore: () => spy.mockRestore() };
+}
 
 /** Load the canonical demo session used by the HTTP entry. */
 async function newSessionId(): Promise<string> {
@@ -162,10 +186,11 @@ describe('standalone /actions recovery surface', () => {
     expect(actionId).toBeTruthy();
 
     // Confirm, but fault the atomic result+status write: the SDK side effect COMMITS, the row wedges.
-    const spy = wedgeResultTransaction();
+    const fault = wedgeResultTransaction(actionId);
     const first = await confirmWith(actionId, sessionId);
-    expect(spy.mock.calls.length).toBe(1);
-    spy.mockRestore();
+    expect(fault.fired()).toBe(1); // the injection HIT the settlement transition
+    fault.restore();
+    expect(first.status).toBe(500);
 
     const wedged = await actionRow(actionId);
     expect(wedged.status).toBe('confirmed');
@@ -234,10 +259,11 @@ describe('standalone /actions recovery surface', () => {
 
     // Confirm, but fault the atomic result+status write → the plan-node action wedges.
     const businessWrite = vi.spyOn(banking.card, 'setCardLimit');
-    const spy = wedgeResultTransaction();
-    await confirmWith(action.id, sessionId);
-    expect(spy.mock.calls.length).toBe(1);
-    spy.mockRestore();
+    const fault = wedgeResultTransaction(action.id);
+    const first = await confirmWith(action.id, sessionId);
+    expect(fault.fired()).toBe(1); // the injection HIT the settlement transition
+    fault.restore();
+    expect(first.status).toBe(500);
 
     const wedged = await actionRow(action.id);
     expect(wedged.status).toBe('confirmed');

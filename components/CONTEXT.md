@@ -45,6 +45,13 @@ SDK 数据类型使用类型导入。
 
 图表只有坐标可转换为普通数值。
 本地化使用 `lib/i18n`，不改变金融值与资源身份。
+安全与拒绝类文案只经 `lib/public-text.ts`（`securityNotice`/`safePublicText`）
+或 `lib/tool-feedback.ts`（`publicToolError`/`publicToolSummary`）取得；
+组件内不做字符串清洗，内部诊断串（安全标记、原始 JSON、堆栈）不进入可见文本。
+服务端自由文本（如 `SecurityEvent.message`）渲染前先用 `isInternalDiagnostic` 判定，
+判定为内部诊断时改显示结构化字段对应的目录文案（安全事件按 `event.kind`）。
+锁定终态卡片只展示锁定原因、当前状态与安全中心入口，
+不渲染验证码输入、提交或重试控件。
 颜色与圆角使用 `app/globals.css` 中的主题。
 
 ## 修改约束

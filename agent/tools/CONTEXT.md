@@ -142,6 +142,31 @@ replays its recorded model call. The stored intent shape is `ConversationIntent`
 
 对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓份额与本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层以 `{ productId, amount }`（金额规范成两位小数）转发给 `banking.investment.subscribeInvestment`，并把 `opts.idempotencyKey` 转发为执行身份。申购结果本身不带成交净值，`runSubscribeInvestment` 因此以一次只读的 `banking.investment.listHoldings()` 回读该持仓最近一笔 `purchases[].netValuePerUnit` / `netValueDate` 作为**展示**用成交净值；这次回读失败或被重放的旧记录没有该字段时，摘要写「历史数据不足」，绝不把已成交的申购判为失败或凭空补一个净值。摘要字段为已认购金额、持仓号、`申购份额`、`成交净值`（含净值日期）、`持仓总份额`、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
 
+## `planning.ts` entry points
+
+| Export | Line | Kind / signature |
+|---|---|---|
+| `SUBMIT_PLAN_TOOL_NAME = 'submit_plan' as const satisfies ToolName` | `:105` | name constant |
+| `SubmitPlanParams` / `SubmitPlanArgs` | `:111` / `:131` | TypeBox `{ goal, nodes[] }` |
+| `createSubmitPlanTool(userId: string, deps: SubmitPlanDeps): AgentTool<typeof SubmitPlanParams>` | `:185` | factory for the `submit_plan` TOOL |
+| `preflightRequestedPlan(userId: string, args: Record<string, unknown>, request: string, intent?: ConversationIntent): Promise<TaskNodeSpec[]>` | `:215` | plain library function (throws, no `ToolExecutionResult`): `compileRequestedPlan` + `validatePlanParameters` + selector/recipient/holding canonicalization |
+| `runSubmitPlan(userId: string, args: Record<string, unknown>, deps: SubmitPlanDeps, source?: { runId: string; parentInvocationId: string }): Promise<ToolExecutionResult>` | `:240` | plain library function = the model-free runner behind `executeDirect('submit_plan')` and the `execute` of the tool |
+| `type PlanRunTool` / `interface SubmitPlanDeps` | `:68` / `:75` | injected ports: `sessionId`, gateway-routed `runTool`, `runtimeFence`, `invocationIdentity`, `userRequest`, `conversationIntent`, `onNodeUpdate`, `onPlanUpdate`, `signal`, `now` |
+
+`submit_plan` is the only planner-family model-visible capability and is META (`effect: 'workflow'`): it is not risk-gated itself, every money-moving node is gated through `deps.runTool`.
+`runSubmitPlan` order: preflight (`:261`) → `dag.validatePlan(nodes, knownTools)` with TWO args (`:265`) → mint the durable rows inside `prisma.$transaction` (`:281-283` `deps.runtimeFence` + `createTaskGraph`, ids adopted at `:286-288` so `plan.id === AgentTask.id`) → claim the plan's executor slot `claimTaskExecutionWithGeneration` (`:329`; a lost claim returns `{ ok:false, error:'计划已在执行中' }` and runs nothing) → `clearStaleNodeClaims` (`:344`) → `buildNodeClaimPorts` (`:353`) → `executor.runPlan` (`:357-386`) with `isRunOwner`, `controls: defaultPollControls(plan.id)`, `claimNode`/`releaseNode` and `createTaskPersistence` → `sweepCancelledPlan` (`:393`) → `releaseTaskExecution` in `finally` (`:395`).
+A `'running'` result after `runPlan` means the claim was taken over; the durable status/generation is re-read (`:404-412`) and this run's own node results are kept.
+
+## Registry (`index.ts`)
+
+`createToolRegistry(userId: string, opts?: CreateToolRegistryOptions): ToolRegistry` (`:237`) is the ONLY entry point — there is no module-level `TOOLS`/`toolCatalog` export.
+`CreateToolRegistryOptions` = `{ sessionId?, automaticWriteFence?, automaticWriteAudit?, operationIdentity?, submitPlan? }` (`:188-198`).
+`ToolRegistry` (`:171-185`) = `{ tools: Record<ToolName, AgentTool<any>>; list(): AgentTool<any>[]; get(name: ToolName): AgentTool<any>; executeDirect(name: ToolName, args: Record<string, unknown>, opts?: ToolRunOptions): Promise<ToolExecutionResult> }`.
+`list()` maps the re-exported `AGENT_TOOL_NAMES` (`:26`) onto `tools`; `get(name)` THROWS `AppError('SECURITY_DENIED')` for a non-catalog name and for `catalogEntry(name).agentEnabled === false`, while `executeDirect` returns that same refusal as a value (`:325-336`).
+`executeDirect` validates params first (`:348-349`), and for a write tool wraps the runner in `prepareBankingCommand` + `executeBankingCommand` (`:372-381`) so receipts/audit share the transaction.
+`submit_plan` is special in three places: dispatched through `runners.submit_plan` (`:312-317`, returns `{ ok:false, errorCode:'INTERNAL' }` without `opts.submitPlan`), `get('submit_plan')` without `opts.submitPlan` returns the throwing placeholder `createUnconfiguredSubmitPlanTool()` (`:208-218`), and the `:388-413` loop adds `prepareArguments` but does NOT replace its `execute` (`:397`) — its own `execute` calls `runSubmitPlan` directly.
+So a test that wants the real plan path must build the registry with `{ submitPlan: { sessionId, runTool } }` and then call `registry.executeDirect('submit_plan', args)`.
+
 ## Parameters and SDK errors
 
 Every family exports `<Name>Params`, `<Name>Args`, `create<Name>Tool`, and `run<Name>`.
@@ -195,6 +220,22 @@ or grant consent to resume a write. Archive searches require a trusted session a
 Plan-node and confirmed-action identities remain stable on replay. SDK fences run inside the write
 transaction and roll back the effect if execution rights have expired, moved, or been cancelled.
 Idempotency prevents duplicate effects; it does not grant permission.
+
+## The per-node `runTool` port: declared here, implemented OUTSIDE
+
+`PlanRunTool` (`planning.ts:68-72`) and the executor's `TaskRunTool` (`agent/workflows/contracts.ts:12`) are the same signature `(toolName, args, {taskId, nodeId}) => Promise<PlanToolOutcome>`; the planner's `PlanToolOutcome` is `planner/executor.ts:37-51`.
+`planning.ts` only DECLARES it (`SubmitPlanDeps.runTool`, `:86`) and forwards it inside the claim context (`planning.ts:360-361`). All other plan drivers do the same (`agent/workflows/ports.ts:32-33`, `agent/workflows/action-continuation.ts:42-45`, `agent/confirmation/plan-continuation.ts:42-45`, `agent/scheduled-dispatcher.ts:117-119`).
+The production implementation is NOT in this directory: `agent/index.ts:308-325` `taskRunToolFor(sessionId)` resolves the owner from the SESSION row (throwing `SECURITY_DENIED` at `:313` when it cannot) and delegates to `agent/confirmation/gated-execution.ts:107-121` `executeGatedTool` → `:62-104` `executeGatedToolOnce`.
+That adapter returns `GatedToolOutcome` (`agent/confirmation/contracts.ts:43-51`), which has NO `failure` and NO `actionStatus` field — only `error` + `errorCode`. So on this path a node's typed `PlanFailure` is produced solely by the planner's own catch (`planner/executor.ts:504-509` `toPlanFailure`), never by the tool layer, and `settleToolNode` (`planner/node-outcome.ts:14-53`) drops `errorCode` entirely: a refused node persists `status:'failed'` + `error` text only (or `waiting_confirmation`/`waiting_verification` + `{pendingActionId}` when the gateway parked it).
+
+## What this directory does NOT own
+
+`agent/tools/` writes NO Prisma `PendingAction`, `AgentTask` or `AgentTaskNode` row directly: the only `prisma` import is `planning.ts:56`, used for `prisma.$transaction` (`:280`) around `createTaskGraph` plus the injected `runtimeFence`. Every other row write goes through injected ports (`claimTaskExecutionWithGeneration`, `releaseTaskExecution`, `clearStaleNodeClaims`, `buildNodeClaimPorts`, `createTaskPersistence`, `sweepCancelledPlan`).
+There is NO task-control tool in this directory and none in `lib/contracts/tool-catalog.ts`: no `cancel_task`, `pause_task`, `resume_task`, `retry_task`, no tool taking a `taskId`/`nodeId`/`actionId`.
+Plan control and post-parked-node resumption live outside, as plain library functions callable directly from a test:
+- `agent/workflows/controls.ts` `pauseTask` (`:18`), `resumeTask` (`:26`), `retryTask` (`:44`) and `agent/workflows/cancellation.ts` `sweepCancelledPlan` (`:47`), `cancelTask` (`:56`), surfaced by `agent/index.ts` and `POST /api/tasks/[id]`;
+- `agent/workflows/action-continuation.ts:24` `resumeTaskForAction` → `planner/lifecycle.ts:322` `resumePlan` → `planner/executor.ts:261` `runPlan`. There is NO separate topological continuation: resume == replay `runPlan`, so `submit_plan` is the only fresh-plan driver in this directory.
+A cancelled plan's parked actions are revoked only through `sweepCancelledPlan` → `security` gateway `cancelAction` (never a direct status write here).
 
 ## Known issues
 

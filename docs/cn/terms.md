@@ -31,6 +31,15 @@
 | 人工核对 | reconciliation | 结果不能证明时，由人工核对证据 |
 | 待确认操作 | `PendingAction` | 等待用户确认或认证的原操作 |
 | 多因子认证 | MFA | 高风险操作的强化身份认证机制 |
+| 验证码挑战 | `MfaChallenge` | 绑定原操作和命令摘要的一次验证记录 |
+| 挑战已消费 | `consumed` | 挑战已被一次判断用掉的形态；再验证按终态拒绝处理，不重发挑战 |
+| 挑战已过期 | `expired`、`command_changed` | 挑战超出有效期或命令已变化的形态；网关据此重签挑战 |
+| 拒绝原因判定 | `mfa.attemptState`、`mfa.challengeInvalidation` | 本操作是否用尽尝试、挑战为何不可用的唯一来源 |
+| 结构化安全失败 | `SecurityFailure` | 拒绝时由服务端给出的类型化字段，调用方据此渲染文案 |
+| 锁定 | `locked` | 验证码失败达上限后操作进入的终态；账户解锁不改变该状态 |
+| 安全熔断 | circuit breaker | 连续失败达上限后按账户实施的限制 |
+| 封存 | seal、`sealReason` | 计划层把节点判为不可继续驱动的处理，原因是锁定拒绝或操作已离开开启状态 |
+| 对外文案收口 | `lib/public-text.ts`、`lib/tool-feedback.ts` | 内部诊断转成用户可见文本的唯一出口 |
 | 工作流 | workflow | 由节点及依赖组成的业务执行过程 |
 | 有向无环图 | DAG | 没有循环依赖的任务图 |
 | 预算额度 | budget envelope | 记账预算，不冻结可提现资金 |

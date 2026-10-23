@@ -27,6 +27,8 @@ import type {
   SecurityDecision,
   SecurityDecisionKind,
   SecurityEvaluation,
+  SecurityFailure,
+  SecurityFailureReason,
 } from '../lib/contracts/security';
 import { evaluateTool, getToolPolicy } from './permission-engine';
 import type { ToolEvaluation } from './permission-engine';
@@ -36,7 +38,7 @@ import {
   evaluateTransferRisk,
 } from './risk-engine';
 import { isLocked } from './circuit-breaker';
-import { getChallenge, issueChallenge, verify } from './mfa';
+import { attemptState, challengeInvalidation, getChallenge, issueChallenge, verify } from './mfa';
 import {
   assertActionMayStart,
   claimPendingAction,
@@ -44,7 +46,6 @@ import {
   getPendingAction,
   getMfaChallenge,
   listPendingActionsByTask,
-  setPendingActionStatus,
 } from '../lib/db/repositories/pendingAction';
 import { getSession } from '../lib/db/repositories/session';
 import {
@@ -71,7 +72,7 @@ import {
 import type { RedeemMode } from '../banking-sdk/types';
 import { canonicalCommandArgs } from '../lib/contracts/command';
 import { recordAuthorizationDecision } from './authorization-record';
-import { DAILY_TRANSFER_LIMIT, RISK_LABEL } from '../lib/constants';
+import { DAILY_TRANSFER_LIMIT, MFA_MAX_ATTEMPTS, RISK_LABEL } from '../lib/constants';
 import { AppError } from '../lib/errors';
 import { requestDigest } from '../lib/ledger';
 import { realNow } from '../lib/clock';
@@ -127,6 +128,8 @@ export interface AuthorizationResult {
   mfaResult?: 'success' | 'failed' | 'not_required';
   /** Typed failure code (present iff `ok === false` for a domain refusal). */
   code?: ErrorCode;
+  /** Structured refusal facts (code + reason + attempts); never rendered as raw diagnostic text. */
+  failure?: SecurityFailure;
   /** Safe, user-facing message (never leaks the MFA code). */
   message: string;
   /** The updated pending action, when available. */
@@ -156,6 +159,16 @@ export interface ToolCallAuthorization {
   /** Opaque string to return as the runtime block reason; present iff `evaluation.blocked`. */
   blockReason?: string;
 }
+/**
+ * The TYPED contents of a serialized block reason. ctionId is optional: a deny refusal (a
+ * tripped circuit breaker, a cancelled owning plan) has no pending action at all. ailure carries
+ * the structured refusal facts so no caller ever has to parse text.
+ */
+interface ParsedBlockReason {
+  actionId?: string;
+  decisionKind: SecurityDecisionKind;
+  failure?: SecurityFailure;
+}
 
 /**
  * Convenience orchestrator for the agent layer's `beforeToolCall` hook:
@@ -173,7 +186,7 @@ export interface SecurityGateway {
   /** Serialize the opaque block reason the runtime returns to the model. */
   serializeBlockReason(decision: SecurityDecision, action: PendingAction): string;
   /** Parse a block reason produced by `serializeBlockReason`; `null` if not a block reason. */
-  parseBlockReason(reason: string): { actionId: string; decisionKind: SecurityDecisionKind } | null;
+  parseBlockReason(reason: string): ParsedBlockReason | null;
   /**
    * Authorize a pending action after a human decision. Ownership is REQUIRED (a missing/mismatching
    * `userId` / `sessionId` is refused with `AppError('SECURITY_DENIED')`). This is the ONLY entry
@@ -222,6 +235,15 @@ const DECISION_KINDS: readonly SecurityDecisionKind[] = [
   'require_mfa',
   'deny',
 ];
+/** Allowed failure reasons — used to validate a PARSED block reason (unknown ⇒ dropped). */
+const FAILURE_REASONS: readonly SecurityFailureReason[] = [
+  'mfa_code_invalid',
+  'mfa_attempts_exhausted',
+  'mfa_session_locked',
+  'circuit_open',
+  'manual_review_hold',
+  'denied',
+];
 
 /**
  * Shown when a parked YELLOW `transfer_money` escalates to RED at EXECUTION time (its fresh
@@ -244,6 +266,61 @@ const PLAN_CANCELLED_MESSAGE = '操作所属的任务计划已取消，该操作
 /** Code-free confirmation messages. */
 const CONFIRM_OK_MESSAGE = '操作已确认，正在执行。';
 const VERIFY_OK_MESSAGE = '安全验证通过，操作已确认，正在执行。';
+
+/**
+ * Every circuit-breaker refusal (account-level lock, tripped by ANY operation of the account) shares
+ * this one sentence, so the copy never pretends a per-operation attempt limit was reached.
+ */
+const CIRCUIT_LOCK_MESSAGE = '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。';
+
+/** Shown ONLY when THIS operation's own attempt record is exhausted. */
+const ATTEMPTS_EXHAUSTED_MESSAGE = '验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。';
+
+/**
+ * Verbatim public copy (`lib/tool-feedback.ts#PUBLIC_BUSINESS_ERRORS` → `chat.error.verificationConsumed`)
+ * for a verification submitted against an ALREADY-CONSUMED challenge.
+ */
+const CONSUMED_CHALLENGE_MESSAGE = 'This verification challenge has already been consumed.';
+
+/**
+ * Chinese labels for a PERSISTED `PendingAction` status. Those statuses are machine values
+ * (`locked`, `awaiting_mfa`, `cancelled`, …) and MUST NOT be rendered as copy: a refusal that has to
+ * name the CURRENT state names it through this map. An unknown/future value degrades to a neutral
+ * phrase instead of leaking the raw token.
+ */
+const PENDING_ACTION_STATUS_LABEL: Record<PendingActionStatus, string> = {
+  pending: '待确认',
+  awaiting_mfa: '待安全验证',
+  confirmed: '已确认',
+  executed: '已执行',
+  failed: '已失败',
+  cancelled: '已取消',
+  locked: '已锁定',
+  needs_reconciliation: '待人工核对',
+};
+
+/** User-facing label for a persisted action status (never the raw internal status token). */
+function statusLabel(status: string): string {
+  return (PENDING_ACTION_STATUS_LABEL as Record<string, string>)[status] ?? '状态已变更';
+}
+
+/**
+ * Statuses a LATE result notification may overwrite. `locked` is deliberately ABSENT: the
+ * circuit-breaker lock is TERMINAL, so a result notification arriving after it (a stale
+ * continuation, a retried settlement) must never relabel that row `executed` / `failed` and thereby
+ * fabricate execution evidence for an operation that was never authorized to run. The authoritative
+ * evidence of an execution is the settlement transaction (status + result + audit), never this
+ * notification.
+ */
+const RESULT_RECORDABLE_STATUSES: PendingActionStatus[] = [
+  'pending',
+  'awaiting_mfa',
+  'confirmed',
+  'executed',
+  'failed',
+  'cancelled',
+  'needs_reconciliation',
+];
 
 /** Safe fallback summary used when the persisted `summaryJson` cannot be parsed. */
 const FALLBACK_SUMMARY: PendingActionSummary = {
@@ -932,15 +1009,45 @@ async function gatewayCreatePendingAction(
   return { kind: 'created', action: toContractPendingAction(created.row) };
 }
 
-/** Serialize the opaque block reason the runtime returns to the model. */
-function serializeBlockReason(decision: SecurityDecision, action: PendingAction): string {
-  return `${BLOCK_REASON_PREFIX}${JSON.stringify({ actionId: action.id, decisionKind: decision.kind })}`;
+/** Serialize the opaque block reason the runtime returns to the model (prefix + typed payload). */
+function serializeBlockReason(
+  decision: SecurityDecision,
+  action: PendingAction,
+  failure?: SecurityFailure,
+): string {
+  return `${BLOCK_REASON_PREFIX}${JSON.stringify({
+    actionId: action.id,
+    decisionKind: decision.kind,
+    ...(failure ? { failure } : {}),
+  })}`;
+}
+
+/** Keep only the TYPED facts of a serialized failure; an unknown reason drops the whole failure. */
+function parseFailure(value: unknown): SecurityFailure | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  const code = record.code;
+  const reason = record.reason;
+  if (typeof code !== 'string' || code.length === 0) return undefined;
+  if (typeof reason !== 'string' || !(FAILURE_REASONS as readonly string[]).includes(reason)) return undefined;
+  const count = (key: string): number | undefined =>
+    typeof record[key] === 'number' && Number.isFinite(record[key] as number) ? (record[key] as number) : undefined;
+  const actionId = typeof record.actionId === 'string' && record.actionId.length > 0 ? record.actionId : undefined;
+  const attemptsUsed = count('attemptsUsed');
+  const attemptsLeft = count('attemptsLeft');
+  const maxAttempts = count('maxAttempts');
+  return {
+    code: code as ErrorCode,
+    reason: reason as SecurityFailureReason,
+    ...(actionId ? { actionId } : {}),
+    ...(attemptsUsed !== undefined ? { attemptsUsed } : {}),
+    ...(attemptsLeft !== undefined ? { attemptsLeft } : {}),
+    ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+  };
 }
 
 /** Parse a block reason produced by `serializeBlockReason`; `null` if not a block reason. */
-function parseBlockReason(
-  reason: string,
-): { actionId: string; decisionKind: SecurityDecisionKind } | null {
+function parseBlockReason(reason: string): ParsedBlockReason | null {
   if (typeof reason !== 'string' || !reason.startsWith(BLOCK_REASON_PREFIX)) return null;
 
   let parsed: unknown;
@@ -952,13 +1059,14 @@ function parseBlockReason(
   if (parsed === null || typeof parsed !== 'object') return null;
 
   const record = parsed as Record<string, unknown>;
-  const actionId = record.actionId;
   const decisionKind = record.decisionKind;
-
-  if (typeof actionId !== 'string' || actionId.length === 0) return null;
   if (!isDecisionKind(decisionKind)) return null;
 
-  return { actionId, decisionKind };
+  // `actionId` is OPTIONAL: a `deny` refusal (tripped breaker, cancelled plan) has no action at all.
+  const actionId = typeof record.actionId === 'string' && record.actionId.length > 0 ? record.actionId : undefined;
+  const failure = parseFailure(record.failure);
+
+  return { ...(actionId ? { actionId } : {}), decisionKind, ...(failure ? { failure } : {}) };
 }
 
 /**
@@ -979,6 +1087,7 @@ function planCancelledOutcome(
     tier: action.tier,
     requiresMfa: false,
     code: 'SECURITY_DENIED',
+    failure: { code: 'SECURITY_DENIED', reason: 'denied', actionId: row.id },
     message: PLAN_CANCELLED_MESSAGE,
     action: { ...action, status: 'cancelled' },
   };
@@ -1007,6 +1116,7 @@ function lockedOutcome(
   actionId: string,
   action: PendingAction,
   requiresMfa: boolean,
+  reason: SecurityFailureReason,
 ): AuthorizationResult {
   return {
     ok: false,
@@ -1015,7 +1125,8 @@ function lockedOutcome(
     tier: action.tier,
     requiresMfa,
     code: 'CIRCUIT_OPEN',
-    message: '当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。',
+    failure: { code: 'CIRCUIT_OPEN', reason, actionId, attemptsLeft: 0, maxAttempts: MFA_MAX_ATTEMPTS },
+    message: CIRCUIT_LOCK_MESSAGE,
     action,
   };
 }
@@ -1043,6 +1154,9 @@ async function authorizeWithMfa(
   if (issued) await issueChallenge(actionId);
 
   if (!opts.mfaCode || issued) {
+    // NOT a refusal: a code is still REQUIRED (or a fresh challenge was just issued), so the caller is
+    // being asked to submit one. It therefore carries NO `code`/`failure` — `awaiting_mfa` is a PROMPT
+    // state, and reporting a normal step of the flow as a failure would misrepresent it.
     return {
       ok: false,
       status: 'awaiting_mfa',
@@ -1054,35 +1168,106 @@ async function authorizeWithMfa(
     };
   }
 
+  // `verify` can refuse at the CHALLENGE level. `mfa.challengeInvalidation` classifies WHY, so each
+  // outcome gets its own honest semantics instead of one retryable `mfa_code_invalid` view:
+  //   consumed          → the decision is SETTLED: CAS the row to terminal `cancelled`, never a retry.
+  //   expired / changed → a fresh challenge was just minted, so re-prompting is accurate.
+  //   anything else     → fail CLOSED: no prompt against a challenge the server cannot vouch for.
   const res = await verify(actionId, opts.mfaCode);
   if (!res.ok) {
-    return {
-      ok: false,
-      status: 'awaiting_mfa',
-      actionId,
-      tier,
-      requiresMfa: true,
-      mfaResult: 'failed',
-      code: 'MFA_FAILED',
-      message: res.error.message,
-      action,
-    };
+    const invalidation = challengeInvalidation(res.error);
+    if (invalidation === 'consumed') {
+      const claimed = await claimPendingAction({ actionId, from: ['pending', 'awaiting_mfa'], to: 'cancelled' });
+      if (!claimed) {
+        // Lost the CAS: a concurrent decision settled the row first. NEVER execute here.
+        const current = await getPendingAction(actionId);
+        if (current?.status === 'locked') {
+          return lockedOutcome(actionId, toContractPendingAction(current), true, 'mfa_session_locked');
+        }
+        throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(current?.status ?? row.status)}」，无法重复确认。`);
+      }
+      return {
+        ok: false,
+        status: 'cancelled',
+        actionId,
+        tier,
+        requiresMfa: false,
+        mfaResult: 'failed',
+        code: 'CONFLICT',
+        failure: { code: 'CONFLICT', reason: 'denied', actionId },
+        message: CONSUMED_CHALLENGE_MESSAGE,
+        action: { ...action, status: 'cancelled' },
+      };
+    }
+    if (invalidation !== null) {
+      // `expired` / `command_changed`: a brand-new challenge was just issued, so asking for a code
+      // again is accurate. Deliberately carries NO `code`/`failure` — a PROMPT, not a refusal.
+      await issueChallenge(actionId);
+      return {
+        ok: false,
+        status: 'awaiting_mfa',
+        actionId,
+        tier,
+        requiresMfa: true,
+        message: mfaMessages.renewedChallenge,
+        action,
+      };
+    }
+    throw new AppError('CONFLICT', '验证状态异常，该操作无法继续确认；请重新发起该操作。',
+      { code: 'CONFLICT', reason: 'denied', actionId });
   }
   if (!res.value.ok) {
     const { attemptsLeft, locked } = res.value;
+    // The operation's OWN attempt record is the ONLY authority for "this operation ran out of
+    // attempts": `verify` reports `locked` for EVERY operation of a locked account, so an operation
+    // that never consumed its limit must be told the ACCOUNT breaker tripped (`circuit_open`) — a
+    // `mfa_attempts_exhausted` here would claim 0 (or negative) used attempts in its own words.
+    const own = await attemptState(actionId);
+    const attemptsUsed = own ? own.attempts : Math.max(0, MFA_MAX_ATTEMPTS - attemptsLeft);
+    const maxAttempts = own?.maxAttempts ?? MFA_MAX_ATTEMPTS;
+    const exhausted = own ? own.exhausted : attemptsLeft === 0;
+    if (!locked) {
+      return {
+        ok: false,
+        status: 'awaiting_mfa',
+        actionId,
+        tier,
+        requiresMfa: true,
+        mfaResult: 'failed',
+        code: 'MFA_FAILED',
+        failure: { code: 'MFA_FAILED', reason: 'mfa_code_invalid', actionId, attemptsUsed, attemptsLeft, maxAttempts },
+        message: `验证码错误，请重试。剩余尝试次数：${attemptsLeft}。`,
+        action,
+      };
+    }
+    if (exhausted) {
+      return {
+        ok: false,
+        status: 'locked',
+        actionId,
+        tier,
+        requiresMfa: true,
+        mfaResult: 'failed',
+        code: 'CIRCUIT_OPEN',
+        failure: { code: 'MFA_LOCKED', reason: 'mfa_attempts_exhausted', actionId, attemptsUsed, attemptsLeft, maxAttempts },
+        message: ATTEMPTS_EXHAUSTED_MESSAGE,
+        // A GENUINE terminal lock is made DURABLE on the row; the transient `awaiting_mfa` path is NOT.
+        action: await persistLockedAction(actionId, action),
+      };
+    }
+    // The account-level breaker was tripped by a DIFFERENT operation: report `circuit_open` (never a
+    // per-operation attempt limit) and make the lock durable so the row stops reading as undecided.
     return {
       ok: false,
-      status: locked ? 'locked' : 'awaiting_mfa',
+      status: 'locked',
       actionId,
       tier,
       requiresMfa: true,
       mfaResult: 'failed',
-      code: locked ? 'CIRCUIT_OPEN' : 'MFA_FAILED',
-      message: locked
-        ? '验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。'
-        : `验证码错误，请重试。剩余尝试次数：${attemptsLeft}。`,
-      // A GENUINE terminal lock is made DURABLE on the row; the transient `awaiting_mfa` path is NOT.
-      action: locked ? await persistLockedAction(actionId, action) : action,
+      code: 'CIRCUIT_OPEN',
+      failure: { code: 'CIRCUIT_OPEN', reason: 'circuit_open', actionId, attemptsUsed, attemptsLeft, maxAttempts },
+      message: CIRCUIT_LOCK_MESSAGE,
+      action: await persistLockedAction(actionId, action),
     };
   }
 
@@ -1116,7 +1301,7 @@ async function authorizeWithMfa(
   });
 
   if (claimOutcome.kind === 'conflict') {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
   if (claimOutcome.kind === 'plan_cancelled') {
     return planCancelledOutcome(row, action);
@@ -1209,7 +1394,7 @@ async function authorizeTransfer(
   });
 
   if (outcome.kind === 'conflict') {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
 
   if (outcome.kind === 'plan_cancelled') {
@@ -1244,6 +1429,7 @@ async function authorizeTransfer(
       tier: 'RED',
       requiresMfa: true,
       code: 'LIMIT_EXCEEDED',
+      failure: { code: 'LIMIT_EXCEEDED', reason: 'denied', actionId: row.id },
       message: TRANSFER_ESCALATED_MESSAGE,
       action: { ...action, tier: 'RED', requiresMfa: true, status: 'awaiting_mfa',
         summary: withActionPolicy(action.summary, { actionId: row.id, tier: 'RED', requiresMfa: true }),
@@ -1285,13 +1471,13 @@ async function authorizeAction(
   // (never reopens verification: no new challenge, no consumed attempt, no re-prompt).
   if (row.status === 'locked') {
     const lockedAction = toContractPendingAction(row);
-    return lockedOutcome(actionId, lockedAction, row.requiresMfa || lockedAction.tier === 'RED');
+    return lockedOutcome(actionId, lockedAction, row.requiresMfa || lockedAction.tier === 'RED', 'mfa_session_locked');
   }
 
   // Only undecided actions can request a code. A historical RED flag on a confirmed/terminal
   // action must not reopen verification, issue a new challenge or consume an MFA attempt.
   if (row.status !== 'pending' && row.status !== 'awaiting_mfa') {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
 
   // Recheck current static policy before granting a new execution. Persisted decisions may be
@@ -1309,13 +1495,15 @@ async function authorizeAction(
   const action = toContractPendingAction(row);
   const effectiveRequiresMfa = row.requiresMfa || action.tier === 'RED';
   if (row.taskId && await prisma.manualReview.findFirst({ where: { taskId: row.taskId, status: 'open' } })) {
-    throw new AppError('CONFLICT', 'This workflow is under manual review; a new command cannot start.');
+    // A neutral internal sentence: the public copy is decided from the TYPED code by
+    // `lib/public-text.ts` (`chat.error.manualReviewHold`), never from this text.
+    throw new AppError('MANUAL_REVIEW_HOLD', 'This workflow is under manual review; a new command cannot start.');
   }
 
   // Circuit breaker is a hard gate the LLM (and even a correct code) cannot bypass.
   if (await isLocked(row.sessionId)) {
     // Make the lock DURABLE on the row so it is no longer surfaced as an undecided action.
-    return lockedOutcome(actionId, await persistLockedAction(actionId, action), effectiveRequiresMfa);
+    return lockedOutcome(actionId, await persistLockedAction(actionId, action), effectiveRequiresMfa, 'circuit_open');
   }
 
   // `transfer_money` is DYNAMIC: its tier is re-derived at EXECUTION time (see `authorizeTransfer`).
@@ -1337,7 +1525,7 @@ async function authorizeAction(
     sessionId: row.sessionId,
   });
   if (!claimed) {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法重复确认。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法重复确认。`);
   }
   return {
     ok: true,
@@ -1372,7 +1560,7 @@ async function cancelAction(actionId: string, opts: CancelOptions): Promise<Pend
     sessionId: row.sessionId,
   });
   if (!claimed) {
-    throw new AppError('CONFLICT', `操作当前状态为「${row.status}」，无法取消。`);
+    throw new AppError('CONFLICT', `操作当前状态为「${statusLabel(row.status)}」，无法取消。`);
   }
 
   const updated = await getPendingAction(actionId);
@@ -1381,12 +1569,21 @@ async function cancelAction(actionId: string, opts: CancelOptions): Promise<Pend
 
 /**
  * Persist the TRUE terminal status of an action AFTER the caller has executed it (or failed), so a
- * subsequent confirm/cancel is correctly rejected as CONFLICT. Recorded VERBATIM and unconditionally
- * — the exactly-once claim happened at confirm time, and this never consults the owning plan, so an
- * action whose money already moved stays `'executed'` even if its plan is cancelled afterwards.
+ * subsequent confirm/cancel is correctly rejected as CONFLICT. The write is a STATUS CAS over
+ * `RESULT_RECORDABLE_STATUSES`, never a blind overwrite: the exactly-once claim already happened at
+ * confirm time, and this never consults the owning plan, so an action whose money already moved stays
+ * `'executed'` even if its plan is cancelled afterwards. A TERMINAL `'locked'` row therefore KEEPS
+ * its lock — a late/stale notification can neither un-lock it nor relabel it `'executed'` (which
+ * would fabricate execution evidence for an operation that was never authorized to run). The
+ * settlement row and audit written by the caller remain the authoritative evidence.
  */
 async function recordActionResult(actionId: string, status: 'executed' | 'failed'): Promise<void> {
-  await setPendingActionStatus(actionId, status);
+  const claimed = await claimPendingAction({ actionId, from: RESULT_RECORDABLE_STATUSES, to: status });
+  if (claimed) return;
+  if ((await getPendingAction(actionId)) === null) {
+    throw new AppError('NOT_FOUND', `未找到待处理的操作: ${actionId}`);
+  }
+  // The row sits in a status a result notification may NOT overwrite (`'locked'`): keep it as it is.
 }
 
 /** End-to-end helper used by `beforeToolCall`. */
@@ -1412,7 +1609,7 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
     return {
       evaluation,
       decision,
-      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny' })}`,
+      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny', failure: { code: 'CIRCUIT_OPEN', reason: 'circuit_open' } })}`,
     };
   }
 
@@ -1444,7 +1641,7 @@ async function handleToolCall(ctx: GatewayContext): Promise<ToolCallAuthorizatio
     return {
       evaluation,
       decision: { ...decision, kind: 'deny' },
-      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny' })}`,
+      blockReason: `${BLOCK_REASON_PREFIX}${JSON.stringify({ decisionKind: 'deny', failure: { code: 'SECURITY_DENIED', reason: 'denied' } })}`,
     };
   }
 

@@ -19,12 +19,41 @@ Server pages may use the identity helper; client components call HTTP routes ins
 - `types.ts`: `ApiEnvelope`, `ActionResponse`, `SurfacedPendingAction` and `IdRouteContext`.
   The latter receives a promised dynamic-route `params` object. Action attention is advisory;
   it grants no permission or execution ownership. `ActionResponse.mfaResult` is one of
-`'success' | 'failed' | 'not_required'` and the decision routes always set it.
+`'success' | 'failed' | 'not_required'` and the decision routes always set it. A refusal is TYPED:
+the optional `code`, `failure: SecurityFailure` and that failure's `attemptsLeft`/`maxAttempts` are
+the lock/MFA signals, so a client never parses `message`.
+`SecurityFailure`/`SecurityFailureReason` are imported here only from `@/lib/contracts/security`;
+`AuthorizationResult` (declared in `security/security-gateway.ts`) is never imported by this folder —
+the decision routes receive an `@/agent` `ConfirmationOutcome` and copy its `code`/`failure` verbatim.
 - `agent-bridge.ts`: static delegation for action confirmation, verification, cancellation and
   recovery; task controls; owning-plan lookup and refreshed plan events. It forwards the fixed
   `{ userId, sessionId }` ownership context to agent contracts. It contains no banking mutations.
 - `task-plans.ts`: pure persisted-row mapping to `AppTaskPlan`, including each node's pending
   action identifier parsed from output. Financial values retain canonical string representations.
+- `locked-action.ts`: `isLockedPendingActionRow(row)` and `lockedActionRefusal(actionId, row)` — the
+  ONE terminal-lock guard for the action decision routes. A `locked` `PendingAction` is never
+  executable, verifiable, cancellable or recoverable: `cancel`/`recover` answer it BEFORE any
+  delegation with `events: []`, no write and no domain call. The refusal is a normal `200`
+  `data.ok === false` domain outcome carrying `status:'locked'`, `code:'CIRCUIT_OPEN'`,
+  `failure.reason:'mfa_session_locked'` and a fixed safe sentence that never interpolates the raw
+  status token, contains no verification code and fabricates no attempt counters (this layer may not
+  import `security/` internals nor hardcode the limit).
+- `task-pending-actions.ts`: `loadPendingActionStatuses` / `annotatePendingActionStatuses` /
+  `withPendingActionStatuses(ForPlans)` and the `TaskNodeWithDecisionState` /
+  `TaskPlanWithDecisionState` types. Strictly additive `pendingActionStatus` on every node whose
+  `pendingActionId` still resolves; one batched lookup per distinct id (never N+1). It never changes
+  `node.status`, never strips `pendingActionId`, never writes and omits the field when the row is
+  gone (missing evidence proves nothing).
+- `public-security-event.ts`: `publicSecurityEvent(event)` plus the `PublicSecurityEvent` /
+  `PublicSecurityStatus` types and the `isPublicDetailValue` predicate — the ONE public projection of
+  a persisted `SecurityEvent` for the browser-facing read models. Structured facts pass through
+  verbatim; a blank or internal-diagnostic `message` (`lib/public-text.ts#isInternalDiagnostic`)
+  becomes `''` while real audit prose survives byte-for-byte; a `detail` is kept only when it is a
+  plain JSON value whose every STRING leaf is diagnostic-free, otherwise the key is omitted entirely.
+  It is the ONLY module in `_lib` importing `lib/public-text.ts` (`isInternalDiagnostic`), because a
+  security-center read model must neutralize INTERNAL audit records before serializing them; no `_lib`
+  module imports `lib/tool-feedback.ts` and every other type-to-text rendering stays client-side.
+  Pure mapping: no I/O, no event filtering and no security decision.
 
 ## Identity and execution boundaries
 

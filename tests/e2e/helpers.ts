@@ -984,8 +984,20 @@ export const SELECTORS = {
   approvalRequest: '[data-approval-request="true"]',
   /** The dock's verification input; historical receipts never contain one. */
   mfaInput: '[data-approval-request="true"] input[aria-label="验证码"]',
-  /** `app/security/ResetBreakerButton.tsx` — the GATED unlock control's 6-digit code input. */
-  breakerCodeInput: 'input[aria-label="6 位验证码"]',
+  /** `app/security/ResetBreakerButton.tsx` — the DEVELOPER-ONLY maintenance button (no credential). */
+  developerResetButton: 'button[data-developer-breaker-reset]',
+  /**
+   * The developer maintenance SURFACE: the `ResetBreakerButton` root `<div>` wrapping the
+   * `developerOnly` label, the `[data-developer-breaker-reset]` button and its status line
+   * (`app/security/ResetBreakerButton.tsx` return value). A code-input check scoped HERE keeps the
+   * "developer reset needs no banking credential" fact on the developer control — the always-rendered
+   * runtime unlock panel owns the only code entry on `/security`, in BOTH normal and developer mode.
+   */
+  developerResetCodeInput: 'div:has(> button[data-developer-breaker-reset]) input[aria-label="6 位验证码"]',
+  /** `app/security/UnlockPanel.tsx` (`data-unlock-panel`) — the runtime unlock surface, always rendered. */
+  unlockPanel: '[data-unlock-panel]',
+  /** The unlock panel's own 6-digit entry (`security.reset.codeLabel`, zh-CN default locale). */
+  unlockCodeInput: '[data-unlock-panel] input[aria-label="6 位验证码"]',
 } as const;
 
 /**

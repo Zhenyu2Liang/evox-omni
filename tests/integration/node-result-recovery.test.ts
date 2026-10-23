@@ -5,6 +5,8 @@ import { executeGatedTool } from '@/agent';
 import { getDemoSession } from '@/agent/session';
 import { runSubmitPlan } from '@/agent/tools/planning';
 import * as pendingActionRepo from '@/lib/db/repositories/pendingAction';
+import type { ClaimPendingActionInput } from '@/lib/db/repositories/pendingAction';
+import type { Prisma } from '@/lib/db/prisma';
 import { banking } from '@/banking-sdk';
 import { POST as taskPost } from '@/app/api/tasks/[id]/route';
 import { POST as confirmPost } from '@/app/api/actions/[id]/confirm/route';
@@ -18,22 +20,42 @@ async function task(id:string,action:string,s:string){const res=await taskPost(n
 async function confirmRaw(id:string,s:string){const res=await confirmPost(new NextRequest(`http://localhost/api/actions/${id}/confirm`,{method:'POST',headers:{'Content-Type':'application/json',cookie:`banking_session=${s}`},body:'{}'}),{params:Promise.resolve({id})});return {status:res.status,body:await res.json()};}
 
 /**
+ * The REAL fault injection — the settle transaction genuinely rolls back.
+ *
+ * `agent/confirmation-recovery.ts#settlePendingAction` performs its terminal status CAS INSIDE a
+ * `prisma.$transaction` (`claimPendingAction({ actionId, from, to }, tx)`); throwing there aborts
+ * that transaction, so the persisted result, the terminal status and the execution audit all roll
+ * back while the already-committed SDK side effect survives. `claimPendingAction` is ALSO the
+ * authorization CAS (`pending|awaiting_mfa → confirmed`) and `recordActionResult`'s late CAS over
+ * `RESULT_RECORDABLE_STATUSES`, so the injection is filtered to THIS action's
+ * `confirmed → terminal` transition; every other call delegates to the saved original.
+ */
+function failSettleStatusWriteOnce(actionId:string){
+ const original=pendingActionRepo.claimPendingAction;let fired=0;
+ const spy=vi.spyOn(pendingActionRepo,'claimPendingAction').mockImplementation(async(input:ClaimPendingActionInput,client?:Prisma.TransactionClient)=>{
+  if(input.actionId===actionId&&input.from.includes('confirmed')&&fired===0){fired+=1;throw new Error('review: result transaction write injection');}
+  return client===undefined?original(input):original(input,client);
+ });
+ return {spy,fired:()=>fired,calls:()=>spy.mock.calls.length};
+}
+
+/**
  * Reproduce the "side effect posted, result transaction rolled back" wedge on a PLAN-NODE gated
  * action, then leave a PERSISTED success `resultJson` on the still-`confirmed` action — the exact
  * state a recovery pass must resolve WITHOUT re-invoking the tool.
  *
  * Steps: park a `set_card_limit` ¥1500 node (YELLOW) → fault the confirm's atomic
- * `resultJson`+status transaction (via `setPendingActionStatus`) so the SDK side effect is committed
- * exactly once while the action stays `confirmed` with `resultJson=null` → independently tighten the
- * SAME category limit to ¥500 through a standalone action (so a re-invocation of ¥1500 would be
- * observable) → persist the node's true executed result.
+ * `resultJson`+status transaction ({@link failSettleStatusWriteOnce}) so the SDK side effect is
+ * committed exactly once while the action stays `confirmed` with `resultJson=null` → independently
+ * tighten the SAME category limit to ¥500 through a standalone action (so a re-invocation of ¥1500
+ * would be observable) → persist the node's true executed result.
  */
 async function wedgeSuccessRecovery(s:string){
  const p=getTestPrisma();const card=(await p.card.findFirst({where:{userId,type:'CREDIT'}}))!;const args={cardId:card.id,category:'娱乐',amount:'1500'};
  const seeded=await runSubmitPlan(userId,{goal:'成功结果恢复',nodes:[{id:'limit',name:'限额',kind:'tool',tool:'set_card_limit',args,dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=seeded.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
- const spy=vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(new Error('review: result transaction write injection'));
- const first=await confirmRaw(action.id,s);const faultCalls=spy.mock.calls.length;spy.mockRestore();
+ const fault=failSettleStatusWriteOnce(action.id);
+ const first=await confirmRaw(action.id,s);const faultCalls=fault.fired();fault.spy.mockRestore();expect(first.status).toBe(500);
  const afterFault=await p.pendingAction.findUnique({where:{id:action.id}});const nodeAfterFault=await p.agentTaskNode.findFirst({where:{taskId:plan.id,nodeId:'limit'}});
  const later=await executeGatedTool({sessionId:s,userId,toolName:'set_card_limit',args:{...args,amount:'500'},userRequest:'后续独立收紧'});await confirmRaw(later.pendingActionId!,s);
  const limitAfterLater=(await p.cardLimit.findFirst({where:{cardId:card.id,category:'娱乐'}}))?.amountMinor;
@@ -56,8 +78,8 @@ it('FAILED-result finalization marks the action, node and plan failed and never 
  const seeded=await runSubmitPlan(userId,{goal:'失败结果定案',nodes:[{id:'limit',name:'限额',kind:'tool',tool:'set_card_limit',args,dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=seeded.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
  const businessFailure=vi.spyOn(banking.card,'setCardLimit').mockRejectedValueOnce(new Error('Actual card write failed before any mutation'));
- const spy=vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(new Error('review: result transaction write injection'));
- const first=await confirmRaw(action.id,s);const faultCalls=spy.mock.calls.length;spy.mockRestore();
+ const fault=failSettleStatusWriteOnce(action.id);
+ const first=await confirmRaw(action.id,s);const faultCalls=fault.fired();fault.spy.mockRestore();expect(first.status).toBe(500);
  expect(businessFailure).toHaveBeenCalledTimes(1);businessFailure.mockRestore();
  expect(await p.executionReceipt.count({where:{userId,key:`nxe:${plan.id}:limit`}})).toBe(0);
  expect((await p.cardLimit.findFirstOrThrow({where:{cardId:card.id,category:'娱乐'}})).amountMinor).toBe(300000n);
@@ -107,8 +129,8 @@ it('a committed side effect with lost status recovers its receipt and never reap
  const s=(await getDemoSession(userId)).sessionId;const p=getTestPrisma();
  const seeded=await runSubmitPlan(userId,{goal:'Recover a rolled back status write',nodes:[{id:'limit',name:'Set card limit',kind:'tool',tool:'set_card_limit',args:{cardId:'card_credit',category:'\u5a31\u4e50',amount:'1500'},dependencies:[]}]},{sessionId:s,runTool:runner(s)});
  const plan:any=seeded.data;const action=(await p.pendingAction.findFirst({where:{sessionId:s}}))!;
- const spy=vi.spyOn(pendingActionRepo,'setPendingActionStatus').mockRejectedValueOnce(new Error('review: result transaction write injection'));
- const first=await confirmRaw(action.id,s);const faultCalls=spy.mock.calls.length;spy.mockRestore();
+ const fault=failSettleStatusWriteOnce(action.id);
+ const first=await confirmRaw(action.id,s);const faultCalls=fault.fired();fault.spy.mockRestore();expect(first.status).toBe(500);
  const afterFault=await p.pendingAction.findUnique({where:{id:action.id}});const limitAfterFault=await p.cardLimit.findFirstOrThrow({where:{cardId:'card_credit',category:'\u5a31\u4e50'}});
  expect(faultCalls).toBeGreaterThanOrEqual(1);expect(afterFault?.status).toBe('confirmed');expect(afterFault?.resultJson).toBeNull();expect(limitAfterFault.amountMinor).toBe(150000n);
  await p.cardLimit.update({where:{id:limitAfterFault.id},data:{amountMinor:50000n}});

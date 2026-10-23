@@ -66,8 +66,16 @@ it('a posted transfer with a missing receipt requires manual reconciliation with
   const submitted = await runSubmitPlan(userId, { goal: '历史已入账计划恢复', nodes: [{ id: 'transfer', name: '转账', kind: 'tool', tool: 'transfer_money', args: { name: '张伟', amount: '200' }, dependencies: [] }] }, { sessionId: s, runTool: runner(s) });
   const plan: any = submitted.data; expect(plan.status).toBe('waiting_confirmation');
   const pending = await p.pendingAction.findFirstOrThrow({ where: { taskId: plan.id } });
-  const spy = vi.spyOn(actionRepo, 'setPendingActionStatus').mockRejectedValueOnce(new Error('review: result landing unavailable'));
-  const first = await confirm(pending.id, s); expect(spy).toHaveBeenCalledTimes(1); spy.mockRestore();
+  // REAL fault injection at the settlement write funnel: the TERMINAL compare-and-set inside
+  // `settlePendingAction`'s transaction rejects, so the status+result+audit write rolls back while
+  // the committed debit, its execution receipt and the `exec:` audit stay durable. The parameter
+  // filter is required — an unfiltered fault would also strike the gateway's authorization CAS.
+  const claim = actionRepo.claimPendingAction; let injects = 0;
+  const spy = vi.spyOn(actionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+    if (input.to === 'executed') { injects++; throw new Error('review: result landing unavailable'); }
+    return claim(input, client);
+  });
+  const first = await confirm(pending.id, s); expect(injects).toBe(1); spy.mockRestore();
   expect(first.http).toBe(500); expect(await debits()).toBe(1);
   const wedge = await p.pendingAction.findUniqueOrThrow({ where: { id: pending.id } });
   expect(wedge.status).toBe('confirmed'); expect(wedge.resultJson).toBeNull();

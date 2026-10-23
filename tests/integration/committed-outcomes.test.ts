@@ -21,7 +21,7 @@
  * Real app-entry layer: REAL Next.js route handlers, the REAL confirmation continuation, the REAL
  * planner executor, the REAL Banking SDK and the REAL isolated test SQLite (`prisma/test.db`) run
  * in-process; no model/LLM is on this path. The ONLY mock is REAL fault injection
- * (`vi.spyOn(pendingActionRepo, 'setPendingActionStatus').mockRejectedValueOnce(...)`) that makes the
+ * (`pendingActionRepo.claimPendingAction`, the settlement CAS inside `settlePendingAction`) that makes the
  * result+status transaction genuinely roll back — every assertion re-reads persisted DB state and
  * asserts the injection actually FIRED before trusting the wedge.
  */
@@ -90,13 +90,25 @@ async function listActions(sessionId: string) {
 }
 
 /**
- * The REAL fault injection: make the NEXT result+status transaction genuinely roll back, so the SDK
- * side effect has already committed while the row is left `confirmed` with `resultJson === null`.
+ * The REAL fault injection: make the SETTLEMENT prisma.$transaction genuinely roll back, so the SDK
+ * side effect has already committed while the row is left confirmed with resultJson === null.
+ * settlePendingAction lands the terminal status through claimPendingAction, filtered here to the
+ * settlement CAS (to: executed, from includes confirmed) INSIDE that transaction, so throwing there
+ * rolls the status + result + strict audit writes back as ONE unit. Every other claim is delegated to
+ * the real writer: the gateway authorization CAS is to: confirmed and the post-settlement
+ * recordActionResult uses RESULT_RECORDABLE_STATUSES, so neither can steal the fault.
  */
-function wedgeResultTransaction() {
-  return vi
-    .spyOn(pendingActionRepo, 'setPendingActionStatus')
-    .mockRejectedValueOnce(new Error('review: result landing failed'));
+function wedgeLandedResultTransaction() {
+  const realClaim = pendingActionRepo.claimPendingAction;
+  let fired = 0;
+  const spy = vi.spyOn(pendingActionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+    if (input.to === 'executed' && input.from.includes('confirmed')) {
+      fired += 1;
+      throw new Error('review: settlement result landing failed');
+    }
+    return realClaim(input, client);
+  });
+  return { spy, fired: () => fired, restore: () => spy.mockRestore() };
 }
 
 /** A plan-node `runTool` that routes every node through the gateway-authorized execution path. */
@@ -152,10 +164,10 @@ it('a plan-linked transfer wedge recovers to the committed truth on resume: succ
   expect(await debitCount('200.00')).toBe(0);
 
   // CONFIRM with the result-landing fault: the ¥200 SDK side effect COMMITS, the transaction rolls back.
-  const spy = wedgeResultTransaction();
+  const fault = wedgeLandedResultTransaction();
   const first = await confirm(pending.id, s);
-  expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1); // the injection HIT the target
-  spy.mockRestore();
+  expect(fault.fired()).toBe(1); // the injection HIT the settlement CAS
+  fault.restore();
 
   // WEDGED, pre-recovery: side effect committed EXACTLY ONCE, row left `confirmed` with NO result.
   const wedged = await p.pendingAction.findUniqueOrThrow({ where: { id: pending.id } });
@@ -217,10 +229,10 @@ it('a standalone transfer wedge recovers via the recover route from its committe
   expect(id).toBeTruthy();
   expect(await debitCount('250.00')).toBe(0);
 
-  const spy = wedgeResultTransaction();
+  const fault = wedgeLandedResultTransaction();
   const first = await confirm(id, s);
-  expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1); // the injection HIT the target
-  spy.mockRestore();
+  expect(fault.fired()).toBe(1); // the injection HIT the settlement CAS
+  fault.restore();
 
   // WEDGED, pre-recovery: side effect committed EXACTLY ONCE, row `confirmed` with NO result.
   const wedged = await p.pendingAction.findUniqueOrThrow({ where: { id } });
@@ -284,10 +296,10 @@ it('a standalone card-limit wedge recovers its atomic receipt without overwritin
   expect(limitsBefore[0].amountMinor).toBe(300000n);
   const txBefore = await p.transaction.count({ where: { userId } });
 
-  const spy = wedgeResultTransaction();
+  const fault = wedgeLandedResultTransaction();
   const first = await confirm(id, s);
-  expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1); // the injection HIT the target
-  spy.mockRestore();
+  expect(fault.fired()).toBe(1); // the injection HIT the settlement CAS
+  fault.restore();
 
   // The card limit committed, but the separate action status transaction rolled back.
   const wedged = await p.pendingAction.findUniqueOrThrow({ where: { id } });

@@ -87,6 +87,28 @@ async function parkTransfer() {
   return { sessionId, id: parked.pendingActionId! };
 }
 
+/**
+ * The REAL fault injection: make the SETTLEMENT `prisma.$transaction` genuinely roll back, so the SDK
+ * side effect has already committed while the row is left `confirmed` with `resultJson === null`.
+ * `agent/confirmation-recovery.ts#settlePendingAction` lands the terminal status through
+ * `claimPendingAction({ actionId, from: ['confirmed'], to: <decision status> }, tx)` INSIDE that
+ * transaction, so throwing from exactly that CAS rolls the status + result + audit writes back as ONE
+ * unit. Every other claim is delegated to the real writer — the gateway's authorization CAS
+ * (`pending → confirmed`) and its post-settlement result notification never trip the fault.
+ */
+function wedgeLandedResultTransaction() {
+  const realClaim = actionRepo.claimPendingAction;
+  let fired = 0;
+  const spy = vi.spyOn(actionRepo, 'claimPendingAction').mockImplementation(async (input, client) => {
+    if (input.to === 'executed' && input.from.includes('confirmed')) {
+      fired += 1;
+      throw new Error('repair: settlement transaction unavailable');
+    }
+    return realClaim(input, client);
+  });
+  return { spy, fired: () => fired, restore: () => spy.mockRestore() };
+}
+
 it('an already executed historical action with missing audit is repaired exactly once without another debit', async () => {
   const p = getTestPrisma(); const { sessionId, id } = await parkTransfer();
   const first = await call(confirmPost, id, sessionId); expect(first.body.data.ok).toBe(true);
@@ -101,8 +123,8 @@ it('an already executed historical action with missing audit is repaired exactly
 
 it('a receipt inconsistent with its ledger routes recovery to reconciliation without re-execution', async () => {
   const p = getTestPrisma(); const { sessionId, id } = await parkTransfer();
-  const fault = vi.spyOn(actionRepo, 'setPendingActionStatus').mockRejectedValueOnce(new Error('repair: status unavailable'));
-  const first = await call(confirmPost, id, sessionId); expect(first.http).toBe(500); expect(fault).toHaveBeenCalledTimes(1); fault.mockRestore();
+  const fault = wedgeLandedResultTransaction();
+  const first = await call(confirmPost, id, sessionId); expect(first.http).toBe(500); expect(fault.fired()).toBe(1); fault.restore();
   const receipt = await p.executionReceipt.findFirstOrThrow({ where: { userId, key: id } });
   await p.executionReceipt.update({ where: { id: receipt.id }, data: {
     resultJson: JSON.stringify({ ...JSON.parse(receipt.resultJson), amount: '999.00' }),

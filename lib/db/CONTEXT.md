@@ -46,6 +46,9 @@ and aggregate repositories. Business permissions and risk rules belong to `secur
 - Booked money uses signed `BigInt` minor units. Rates, quantities and unrounded valuations use
   canonical decimal strings. Never coerce financial values through floating-point arithmetic.
 - Enum-like fields are schema `String` fields; application contracts define allowed values.
+  `PendingAction` status filters use the lists in `../contracts/security.ts`
+  (`OPEN_` / `TERMINAL_` / `SETTLED_` / `RUN_BLOCKING_PENDING_ACTION_STATUSES`); never compare status
+  literals locally.
 - Keep database modules server-only. Type-only imports may reference generated types, but client UI
   code must not import the Prisma constructor, singleton or adapter.
 - Do not issue import-time, fire-and-forget SQLite configuration queries. Connection configuration
@@ -55,6 +58,12 @@ and aggregate repositories. Business permissions and risk rules belong to `secur
 ## Routing Table
 
 - [repositories/](repositories/CONTEXT.md) → aggregate queries, commands and durable runtime claims.
+- [../contracts/task.ts](../contracts/task.ts) → `TaskNodeResult` / `TaskNodeSpec` / `TaskPlan` transport types
+  (a result carries `id`, `name`, `status`, `tool`, `output`, `error`, `startedAt`, `endedAt`,
+  `compensation`; there is no `summary` field and no `summary` column).
+- [../../agent/workflows/persistence.ts](../../agent/workflows/persistence.ts) → the planner
+  persistence ports (`persistPlan` / `persistNode` / `loadPlan`) that write `AgentTask` +
+  `AgentTaskNode` rows over these repositories, plus the `toTaskPlan` read-back mapping.
 - [schema.prisma](../../prisma/schema.prisma) → persisted schema and generator output.
 - [prisma.config.ts](../../prisma.config.ts) → Prisma CLI configuration.
 - [prisma-cli.ts](../../tests/helpers/prisma-cli.ts) → generated-schema freshness and factory-construction probes.

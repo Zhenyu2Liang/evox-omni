@@ -1,10 +1,12 @@
 import { createHash } from 'node:crypto';
 import type { WeixinMessage } from 'pi-weixinbot/src/types.ts';
-import type { BankingChannel } from './banking-client';
+import type { ActionResult, BankingChannel } from './banking-client';
 import { BankingApiError, renderEvents } from './banking-client';
 import type { WeixinState } from './state';
 import { HELP, handleChannelCommand } from './commands';
-import { label } from './presentation';
+import { securityNotice } from '../../lib/public-text';
+import { createTranslator } from '../../lib/i18n/shared';
+import { channelText, label } from './presentation';
 
 export interface WeixinSender {
   send(to: string, text: string, clientId: string, contextToken: string): Promise<void>;
@@ -62,13 +64,37 @@ export class WeixinBridge {
       if (verb !== '验证' && code) return '确认和取消命令不接收验证码。';
       const outcome = await this.bank.settle(id, verb === '确认' ? 'confirm' : verb === '验证' ? 'verify' : verb === '恢复操作' ? 'recover' : 'cancel', code);
       if (verb === '确认' && outcome.status === 'awaiting_mfa') offered.confirmed = true;
-      const rendered = this.present(outcome.events);
-      const next = outcome.status === 'awaiting_mfa' ? `\n继续验证：/验证 ${id} 六位验证码` : '';
-      return [`操作编号：${id}\n状态：${label(outcome.status)}${next}`, outcome.message || '', rendered].filter(Boolean).join('\n\n');
+      return this.settleReply(id, outcome);
     }
     if (text.startsWith('/')) return `命令格式不正确。\n${HELP}`;
     if (text.length > 4000) return '消息过长，请将银行需求缩短至 4000 字以内。';
     return this.present((await this.bank.chat(text, requestId)).events);
+  }
+
+  /**
+   * Compose a settle reply from the server's AUTHORITATIVE status and typed refusal. A terminal
+   * `locked` outcome must state the reason, that no verification entry is offered any more, and how
+   * to lift the restriction — and must never hint that another code can be submitted.
+   */
+  private settleReply(id: string, outcome: ActionResult): string {
+    const t = createTranslator('zh-CN');
+    // A settle reply carries its own status block; the chat-only "本次请求已处理…" filler would
+    // contradict a lock, so it is suppressed here.
+    const rendered = renderEvents(outcome.events, { emptyNotice: false }).text;
+    const status = `操作编号：${id}\n状态：${label(outcome.status)}`;
+    if (outcome.status === 'locked') {
+      return [status,
+        securityNotice(outcome.failure ?? { code: outcome.code }, t),
+        '当前状态：该操作已锁定，不再提供验证码入口，也不会执行。',
+        '解除方式：请在网页安全中心解除限制；解除后需要重新发起这笔操作，系统不会自动执行原操作。',
+        rendered].filter(Boolean).join('\n\n');
+    }
+    const pending = outcome.status === 'awaiting_mfa';
+    const refusal = outcome.failure?.reason === 'mfa_code_invalid' || outcome.failure?.reason === 'mfa_session_locked'
+      ? securityNotice(outcome.failure, t) : undefined;
+    return [status + (pending ? `\n继续验证：/验证 ${id} 六位验证码` : ''),
+      refusal ?? channelText(outcome.message, t, 'chat.error.toolFailed'),
+      rendered].filter(Boolean).join('\n\n');
   }
 
   private present(events: Parameters<typeof renderEvents>[0]): string {
