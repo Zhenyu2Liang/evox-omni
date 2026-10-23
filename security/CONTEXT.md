@@ -207,6 +207,7 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 确认摘要固定展示赎回口径、赎回份额、成交净值、净值日期、预计到账金额与费用口径。
 摘要金额是预计到账金额，不是本金；费用口径为 `feeAmount: '0.00'` 与 `feeRule: 'SIMULATED_NONE'`。
 快照字段为 `expectedShares`、`expectedNetValue`、`expectedNetValueDate`、`expectedSettlementAmount`。
+`费用口径` 只是**展示**字段：`quoteRedemption` 返回的 `feeAmount`（恒 `'0.00'`）/`feeRule`（`REDEMPTION_FEE_RULE`）不进 `redemptionSnapshot`、不在 `REDEMPTION_SNAPSHOT_FIELDS` 里，因此不参与命令指纹、不落库为执行证据、执行时也不校验；本层唯一的费用相关代码就是这段展示文案。
 快照字段属于服务端报价，重复挂起时不计入请求身份（`requestArgs`）。
 快照字段同时进入命令指纹，口径或金额变化会作废旧授权。
 执行时快照与当前净值、份额或重算金额不一致即抛 `CONFLICT`（`净值或持仓已变化，请重新确认`）。
