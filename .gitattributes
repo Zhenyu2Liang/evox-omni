@@ -1,0 +1,3 @@
+# pnpm patches must be checked out with LF on every platform; a CRLF checkout
+# changes the patch context and makes `pnpm install` fail with ERR_PNPM_INVALID_PATCH.
+*.patch text eol=lf

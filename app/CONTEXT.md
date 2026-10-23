@@ -48,6 +48,9 @@ Web 身份与接口表见 [api/CONTEXT.md](api/CONTEXT.md)。
 `/agent` 页面只把服务端快照传给 `components/chat/ChatWindow`。
 确认/MFA 面板、工具事件与失败文案（含 `chat.error.*` 键）全部在 `components/chat/` 渲染。
 `app/` 不筛选、不清洗 `AgentStreamEvent`：`api/chat/route.ts` 的 SSE 帧与 `api/actions/[id]/verify/route.ts` 的 `events` 都原样转发。
+本层没有任何计时器、心跳帧、`maxDuration`/`runtime`/`dynamic` 段配置或重试/超时包装：`app/` 内 `setTimeout`/`setInterval`/`new Promise` 均为 0 处，`POST /api/chat` 的墙钟时间全部来自下游轮次，等待期间没有任何计时逻辑。
+浏览器客户端实际落在 JSON 分支：`wantsStream` 在 `Accept` 含 `application/json` 时返回 false，而 `components/chat/actions.ts` 同时声明 `text/event-stream` 与 `application/json`，因此演示中的一轮对话是一个 `{ ok, data }` 响应体，SSE 只服务仅接受 `text/event-stream` 的调用方。
+详见 [api/CONTEXT.md](api/CONTEXT.md) 的 “Chat mode selection and edge timing”。
 排查聊天文案、`security_event` 或面板显隐时进入 `components/chat/`，不要在 `app/` 内继续搜索。
 `app/` 对 `PendingAction` 只读，读取点为 `agent/history.ts`、`agent/plan-history.ts`、`security/page.tsx`（经 `listPendingActions`）、`api/actions/route.ts`（`listPendingActions({ sessionId })`，无状态参数，状态由 `attentionFor` 在内存判定）、`api/security/route.ts`、`api/_lib/task-pending-actions.ts`；写入（含 `status`）全部经 `@/agent`、`@/security` 与 `lib/db/repositories/pendingAction.ts` 完成。
 因此本层没有把 `locked` 行改回 `pending`/`awaiting_mfa` 的路径，锁定与否只看仓储与网关。

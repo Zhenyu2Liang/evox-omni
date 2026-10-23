@@ -14,7 +14,9 @@
 | `restart-process.ts`、`standalone-restart-process.ts` | 独立进程恢复探针 |
 | `write-failure.ts` | 保留真实事务的写入失败注入 |
 | `locked-action.ts` | 终止锁定用例的 RED/YELLOW 计划动作播种、网关验证码阶梯与只读探针 |
+| `timeouts.ts` | 显式 `it(...)` 超时预算的唯一来源：`CHAT_DRIVEN_TEST_TIMEOUT_MS`（真实 `POST /api/chat` turn）与 `COLD_DB_PROVISION_TEST_TIMEOUT_MS`（体内 spawn 冷库自建 CLI） |
 
+`timeouts.ts` 只有常量与文档注释，不含业务逻辑；取值依据、实测与「新用例必须套用」规则写在模块注释与 [../CONTEXT.md](../CONTEXT.md) 的「时间预算与环境放大」。
 ### fixtures.ts 的账户与卡片标识
 标识全是固定字符串常量（无工厂、无随机后缀），可直接在断言中写死：
 `ACCOUNTS`（`fixtures.ts:82-85`）只有 `acct_checking`（活期账户、`number: '****8821'`、`balance: '23580.00'`）与 `acct_savings`（储蓄账户、`****3309`、`50000.00`）；

@@ -83,7 +83,10 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 部分赎回的恰好一次由乐观条件写保证：持仓更新以旧本金与 `HOLDING` 状态为条件，先做受保护的持仓写入，成功后才入账。计数为 0 时重新读取，并按同一执行身份从 `redemptionHistory` 或已关闭的 `redeemResult` 重放，否则抛 `CONFLICT`。聚合认购与部分赎回都以计数为 0 表示竞态，抛 `CONFLICT` 让事务（含扣款）整体回滚，因此不会出现重复扣款。
 已关闭持仓上的其他或缺失身份仍然抛 `CONFLICT`。同键重放先前的部分赎回时，即使其后已发生全额关闭，也从 `redemptionHistory` 重放。
 ## 事务与执行上下文
-`runInTransaction` 通过 unit-of-work 上下文与已有事务组合。受信的 `BankingExecutionContext` 提供执行栅栏与审计回调，这些检查在写事务内运行。工具输入上没有 Symbol 属性或第二个栅栏载体。
+`tx.ts#runInTransaction` 是 SDK 内唯一的 `prisma.$transaction` 调用（`tx.ts:33`），且不传选项，因此沿用 `lib/db/database.ts:25` 的 `maxWait: 10000` / `timeout: 10000`。
+重入契约：`tx.ts:31` 读 `lib/db/unit-of-work.ts#currentTransaction()`；命中时 `tx.ts:32` 直接在已有事务上执行 `fn(current)`——不开第二个事务，也不重跑 `context.fence`；未命中才开事务，并在 `tx.ts:37` 用 `withinTransaction(tx, …)` 把 `Prisma.TransactionClient`（不是 `prisma` 单例）写入 AsyncLocalStorage。嵌套调用因此共享外层事务与同一提交点。
+事务体调用的仓储全部默认 `dbClient()`（`lib/db/client.ts:30-32` = `currentTransaction() ?? prisma`），自动加入当前事务：`accounts.*`、`cards.*`、`investments.*`、`contacts.*`、`transactions.*`、`budgets.*`、`subscriptions.*`、`scheduledTasks.*`、`executionReceipts.*`，以及 `dbClient()` 直接模型访问（`transaction.ts:113`、`card.ts:149`、`card.ts:213`）。SDK 不调用默认走全局 `prisma` 的仓储（`agentRun`/`task`/`session`/`workflowInvocation`/`auditLog` 写入/`securityEvent`/`user`/`manualReview`/`pendingAction`/`circuitBreaker`），所以 SDK 事务体不会在单连接互斥锁上自锁。
+受信的 `BankingExecutionContext` 提供执行栅栏与审计回调（`fence`、`onWriteCommit`、`onTransferCommit`），它们在写事务内被 await 且都收到同一个 `tx`（`tx.ts:36`、`budget.ts:70`、`transfer.ts:342`）。工具输入上没有 Symbol 属性或第二个栅栏载体。
 转账在原子事务内扣减自有活期账户、创建流水行并持久化原始回执。重放先校验当前请求摘要、回执与流水，再查询可变联系人。缺失证据是冲突，绝不重建成功。并发同键唯一冲突只重放已校验的已提交证据。
 账本与定时意图的创建使用按所有者限定的重放校验。虚拟卡使用确定性执行身份并校验月度限额。卡状态转换与订阅校验归属与状态。预算是记账信封而不是资金冻结。
 ## 错误与读取

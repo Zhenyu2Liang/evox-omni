@@ -76,6 +76,7 @@ SDK 数据类型使用类型导入。
 - 用户操作通过 API 获得服务端结果。
 - 历史授权记录不得重复提供执行按钮。
 - 新增卡片类型时，必须更新 `CardRenderer` 的穷举分派。
+- 组件不做轮询或自动重试：无 `setInterval`、无 `EventSource`、无定时重发；请求只在用户动作或挂载恢复时发起，一次性上限用 `setTimeout` 中止（现有两处均为 5000ms，见 `chat/CONTEXT.md`「客户端请求与计时器」）。
 - 卡片不得持有独立余额；账户余额不得用授信口径的键或文案展示。
 - 关联账户判定只走 `banking/card-account-display.ts`，不在组件内复制四态逻辑或脱敏逻辑。
 - 授权交互只有一处：底部停靠的 `chat/ApprovalRequest`（`data-approval-request` → `ConfirmationCard`/`MfaCard`）；
