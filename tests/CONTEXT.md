@@ -113,6 +113,7 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 `MISSING`/`UNTRUSTED` 不得带任何余额字段，也绝不以 `0.00` 冒充。
 `FROZEN`/`LOST` 保留真实余额而 `usable === false`；`CREDIT` 恒 `NOT_APPLICABLE`。
 UNTRUSTED 的可构造来源只有「他人账户」与「非 CHECKING 账户」；「账户不存在」在真外键下不可表示（删除账户走 `SetNull` → `MISSING`）。
+`MISSING`/`UNTRUSTED` 只由直接写库构造（`db().card.create/update` 写 `linkedAccountId: null`、造他人或非 CHECKING 账户、删除已绑定账户触发 `SetNull`）；演示种子（`prisma/seed.ts`）与任何 API 路径都不产生这两种状态，因此相关覆盖是合成夹具而非可复现的用户流程。
 单账户多卡共享同一份余额，一张卡的消费同步反映到同账户的其它卡，资产汇总额只计该账户一次。
 
 | 文件 | 覆盖 |
