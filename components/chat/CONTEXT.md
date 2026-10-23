@@ -96,7 +96,10 @@ MFA 输入框（`MfaCard.tsx:90-106`）没有 `maxLength`、`name` 与任何 `da
 
 `status === 'locked'` 的 verify 响应会带 `security_event`（`code`/`reason` 由 `securityFacts` 从顶层或 `failure` 取，`actions.ts:650-658`）与终态 `action_settled`（`actions.ts:661-668`）。
 `settleAction` 对终态清除同 `actionId` 的 `pendingAction`（`agent-stream-reducer.ts:319-343`），二者在同一批事件里折叠，故 `MfaCard` 的 `data-mfa-locked` / `cards.terminal.locked` 分支在实时流程中不会上屏——实时可见证据是「dock 整体消失」加一条 `role:'system'` 气泡（`securityNotice` → `chat.error.actionLocked`）。
-`data-approval-locked` 只在历史/刷新后的只读 `ApprovalRecord` 上出现（`data-status="locked"`）：`app/agent/decision-record.ts#verificationCard` 保留 `status`，`CardRenderer` 把 `mfa`/`confirmation` 都交给 `ApprovalRecord`。
+`data-approval-locked` 只出现在只读 `ApprovalRecord` 上（`data-status="locked"`），来源两处：
+实时转录里的内联 `mfa`/`confirmation` 卡（若存在）由 `settleAction` 在同一批事件里打上 `status:'locked'`（`agent-stream-reducer.ts:278-281`），因此**当内联卡存在时它会在实时流程中上屏**；
+内联卡是否在实时流程里存在取决于 `mfa_required` 的 `attachPlanDecisionRecord`——只有当某条消息的 `plan` 卡里有节点 `output.pendingActionId === actionId` 时才会附加（`agent-stream-reducer.ts:366-375`），不经过计划的直接工具调用没有内联卡。
+刷新/历史路径由 `app/agent/decision-record.ts#verificationCard` 保留 `status` 重建该内联卡，`CardRenderer` 把 `mfa`/`confirmation` 都交给 `ApprovalRecord`，故刷新后一定出现。
 
 ## 文本安全与本地化
 
