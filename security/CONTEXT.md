@@ -193,6 +193,9 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 `buildPendingActionSummary`（`security-gateway.ts:1693-1745`）对 `transfer_money` 依次产出 `收款人`（姓名）、`收款手机号`（`maskPhone(recipient.phone)`，如 `139****0002`）、`Amount`（标签逐字是英文 `Amount`，**不是**「金额」）、`账户`、`风险等级`。
 卡片工具由 `gatewayCreatePendingAction` 追加一条 `卡片` 字段，值为 `${cardTypeLabel(card.type)} ${card.numberMasked}`（如「信用卡 ****6688」，`security-gateway.ts:901-904`）。
 非转账分支用 `操作`、`金额`（仅金额存在时）与 `风险等级`。
+`金额` 行只来自 `args.amount`（`resolveAmount`，`:339-342`）：赎回的 SHARES/ALL 口径没有该行，AMOUNT 口径下它显示请求金额，而 `summary.amount` 随后被改写成预计到账金额（`:922`）。
+两个投资写操作由 `gatewayCreatePendingAction` 把身份行 `unshift` 到 `操作` 之前：赎回以 `持仓`（值 `${product.name}（${holding.id}）`，`:909-911`）开头，申购以 `产品`（值 `${product.name}（${product.code}）`，`:905-907`）开头。
+两者随后都追加 `入账账户`（赎回）/`付款账户`（申购），值为该用户 CHECKING 账户名，缺失时为「账户待核对」（`:952-955`）。
 `security/messages/` 只有 `mfa.zh-CN.json`；澄清与摘要文案都是 TS 字面量，不在文案资源里。
 
 ## 赎回报价
