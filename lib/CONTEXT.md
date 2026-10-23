@@ -50,7 +50,8 @@ JSON 金额使用十进制字符串。
 命令金额字段（`contracts/command.ts` 的 `MONETARY_FIELDS`）在入参归一化时转为十进制字符串：`amount`、`creditLimit`、`monthlyLimit`、`expectedRedemptionAmount`、`redeemAmount`。
 
 `date.ts` 按北京时间构造和格式化日期。
-`demoNow()` 提供固定演示业务时间。
+`demoNow()` 提供固定演示业务时间：`DEMO_NOW = Date.parse('2026-09-25T12:00:00+08:00')`（`constants.ts:34`），`override` 仅供测试注入；`realNow()` 是真实墙钟。
+`date.ts` 用固定偏移 `BUSINESS_OFFSET_MS = 8h`（`BUSINESS_TIME_ZONE = 'Asia/Shanghai'`）读写民用时间，因此本月/上月窗口是 UTC+08:00 的 `[月初 00:00, 下月初 00:00)` 半开区间，与宿主部署时区无关。
 安全冷却、执行租约和定时任务调度使用真实时间。
 日期范围通常为半开区间；以调用接口为准。
 
