@@ -33,6 +33,13 @@
 
 成本按份额比例扣减且守恒：已赎回成本与剩余成本之和恒等于原成本。
 
+读取估值只由 `banking-sdk/investment.ts#holdingValuation` 按 `份额 × 最新净值` 推导，不做取整。
+持仓列表、持仓卡片、产品瓦片、微信输出与资产总额共用这一处推导。
+`estimatedMarketValue` 是写入时留下的列快照，读取时不参与估值。
+
+没有可用份额，或产品未发布净值时，市值回退为剩余持仓成本。
+此时不给出持仓收益、持仓收益率与累计收益。
+
 赎回费按模拟规则免除。
 `feeAmount` 恒为 `0.00`，`feeRule` 恒为 `SIMULATED_NONE`。
 契约保留费用字段，确认卡必须展示费用口径。
@@ -54,6 +61,8 @@
 - 已实现收益按每次赎回累加：`到账金额 − 该次赎回消耗的成本`，可为负。
 - 累计收益是 `已实现收益 + 持仓收益`。
 - **追加申购金额永不计入收益**：申购只增加成本与份额。
+
+持仓收益与持仓收益率是带符号的数值：亏损持仓为负值。展示时经 `lib/decimal.ts#signedRateToPercent` 换算为百分数，不取整，也不截断负号。非负闸门只作用于已记账金额与非负的 `annualYieldRate`。
 
 页面与卡片必须标注“收益为模拟估算，不承诺保本”。
 
@@ -85,11 +94,11 @@
 
 ### 三层强制
 
-口径强制在工具、网关与计划三层独立执行，任一层都不依赖提示词：
+口径与入参格式在工具、网关与计划三层独立执行，任一层都不依赖提示词：
 
 | 层 | 位置 | 行为 |
 | --- | --- | --- |
-| 工具 | `agent/tools/investment.ts` | `mode` 是必填枚举 `SHARES`／`AMOUNT`／`ALL` |
+| 工具 | `agent/tools/investment.ts#redemptionRequest` | `mode` 是必填枚举 `SHARES`／`AMOUNT`／`ALL`，混用与退役字段在此拒绝 |
 | 工具 | `agent/tools/decimal-schema.ts` | `canonicalShareCount` 与 `canonicalNetValue` 只接受无符号规范十进制文本 |
 | 网关 | `security/security-gateway.ts` | `redemptionMode` 与 `assertRedeemForm` 重新校验口径，铸造快照 |
 | 计划 | `planner/dag.ts` | `redeemModeProblem` 拒绝缺少、未知或混用口径的赎回节点 |
@@ -112,10 +121,10 @@
 - 当前净值或净值日期与快照不一致。
 - 按当前数据重算的到账金额与 `expectedSettlementAmount` 不一致。
 
-拒绝后该 `PendingAction` 置为 `failed`，授权不再可执行，且零写入。
+拒绝发生在任何写入之前，工具以 `CONFLICT` 失败，零写入。
 余额、份额与流水都不发生变化。
 系统不得按新净值静默成交。
-用户必须重新发起确认，由服务端铸造新快照后才可执行。
+该授权已确认且不能重试，用户必须重新发起赎回，由服务端铸造新快照后才可执行。
 
 ## 幂等与并发
 
@@ -139,6 +148,11 @@
 持仓卡片必须给出收益口径说明与“收益为模拟估算，不承诺保本”免责声明。
 份额保留 6 位小数，净值保留 4 位小数，净值日期按 UTC+08:00 展示。
 
+投资写入完成后，对话投资卡片展示提交后重读的持仓投影。
+`agent/tools/investment.ts#withHoldings` 在提交后调用 `listHoldings` 重读当前持仓。
+`agent/card-emitter.ts` 据此先返回回执，再追加同一份投资持仓卡片。
+重读不可用时只返回回执；已提交的写入不回滚，也不补造空的持仓列表。
+
 赎回确认卡由 `components/chat/cards/ActionDetails.tsx` 渲染。
 卡上展示快照字段与结算公式“到账金额 = 赎回份额 × 成交净值”。
 费用口径为 `SIMULATED_NONE` 时，另附“模拟环境不收取赎回费，赎回费 ¥0.00。”
@@ -154,7 +168,7 @@
 旧持仓没有份额时由最新净值派生。
 口径是 `shares = FLOOR(市值 ÷ 净值, 6 位小数)`，单笔经济价值漂移必须小于 `0.01 元`。
 产品没有净值时不伪造数据。
-这类持仓的市值回退为剩余成本，并标注“历史数据不足”。
+读取时按上面的回退规则输出剩余成本，并标注“历史数据不足”。
 由旧数据派生的持仓在 `sharesEstimated` 上标记为估算。
 读取时 `valueBasis` 为 `MIGRATED_ESTIMATE`，页面、卡片与微信输出标注“估算”，市值仍按 `shares × 净值` 派生。
 标记只由回填脚本写入；原始申购、聚合申购与演示种子持仓保持默认假值，`valueBasis` 为 `NET_VALUE`。
