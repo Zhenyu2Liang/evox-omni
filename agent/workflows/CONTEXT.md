@@ -7,6 +7,7 @@
 拥有 planner 的持久化工作流控制：暂停、恢复、重试、取消，人工决策后的续跑，节点/计划执行租约与带提交校验的持久化。
 模块与具体工具无关：所有工具都经泛型 `TaskRunTool(toolName, args, context)` 透传，本目录不出现任何具体银行工具名。
 本目录不存在刷卡/消费/支付/扣款能力、辅助函数、类型或场景。
+本目录也不解析、不计算、不展示任何金额或费用（手续费/管理费/赎回费/费用口径）：没有费用字段、费用类型、费用文案或金额算术，工具参数一律作为不透明 `Record<string, unknown>` 透传。
 `parked-actions.ts` 拥有「计划停靠的待确认操作已经结清」的唯一判定：停靠节点把 `{ pendingActionId }` 存在 `AgentTaskNode.output` 里（没有独立列），计划快照本身无法区分开放决策与已结清操作，因此本目录先于任何控制占用计划读取持久化的 `PendingAction.status`。
 同一判定有两种消费方式：`resumeTask` 用只读查询 `sealedParkedNodes` 把这些节点**封存**（记录为终态、不再驱动、不再 surface，其余节点照常推进），`retryTask` 用 `assertParkedActionsNotTerminal` **结构化拒绝**（重试会重置节点并重新驱动那个已终态的操作）。
 
