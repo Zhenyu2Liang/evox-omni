@@ -25,6 +25,7 @@ import {
   assertNoFabricatedConfirmationPanel,
   assistantTexts,
   clickConfirm,
+  errText,
   fetchPendingActions,
   getJson,
   submitChat,
@@ -372,6 +373,52 @@ function assertCreditTile(cardId: string, rows: Record<string, string>, tileText
   }
 }
 
+/**
+ * Wait until `/cards` finished its first CLIENT refresh.
+ *
+ * `CardManager` starts at `refreshing = true` / `loaded = false` and disables EVERY footer button
+ * while `disabled = busy || refreshing || !loaded` (`app/cards/CardManager.tsx:181`, applied verbatim
+ * to the `data-card-add` button and to each tile's `data-card-consume` / `data-card-delete`). The
+ * tile ROWS are already correct in that frame (server-rendered `CardTile`s), so a button state read
+ * straight after `gotoCards` — which only waits for HYDRATION — describes the refresh, not the card.
+ * `[data-card-add]` is enabled exactly when all three flags are false, so waiting on it is the honest
+ * "page settled" condition and it is INDEPENDENT of the card whose consume entry is being judged.
+ */
+async function waitForCardsSettled(page: Page): Promise<void> {
+  const addButton = page.locator('[data-card-add] button').first();
+  try {
+    await waitFor(async () => ((await addButton.isEnabled()) ? true : false), {
+      timeoutMs: 60_000,
+      intervalMs: 500,
+      description: '`/cards` 首帧刷新完成（`data-card-add` 解除 disabled：busy/refreshing/!loaded 三者皆假）',
+    });
+  } catch (error) {
+    const alert = page.locator('main > p[role="alert"]').first();
+    const alertText = (await alert.count()) > 0 ? excerpt(await alert.innerText()) : '（无页面通知）';
+    fail(`/cards 首屏刷新始终未完成（页脚按钮保持全局 disabled），无法判定单卡消费入口：${errText(error)}；页面通知=「${alertText}」`);
+  }
+}
+
+/**
+ * Assert ONE card's rendered 消费 entry state, read only AFTER `/cards` settled.
+ *
+ * The product's rule is type-agnostic: the entry is enabled iff the page is settled AND `card.usable`
+ * (`usable = status === 'ACTIVE'`), so the SAME card must flip enabled → disabled when it stops being
+ * ACTIVE. Reading the state before the refresh settles would make the assertion vacuous (everything
+ * is disabled then), which is why the settle wait is part of this helper rather than the call site.
+ */
+async function assertConsumeEntry(
+  page: Page,
+  cardId: string,
+  expected: 'enabled' | 'disabled',
+  why: string,
+): Promise<void> {
+  await waitForCardsSettled(page);
+  const enabled = await consumeButtonEnabled(page, cardId);
+  if (enabled === (expected === 'enabled')) return;
+  fail(`${cardId} 的「消费」按钮应为${expected === 'enabled' ? '可用' : '不可用'}（${why}），实际${enabled ? '可用' : '不可用'}`);
+}
+
 /** `[data-card-id]`-scoped consume button state (a frozen/lost card must not be spendable from the page). */
 async function consumeButtonEnabled(page: Page, cardId: string): Promise<boolean> {
   const button = page.locator(`[data-card-id="${cardId}"] [data-card-consume] button`).first();
@@ -413,6 +460,8 @@ async function driveYellowTransfer(
   nudges: readonly string[],
 ): Promise<string[]> {
   const sent: string[] = [];
+  /** Why the LAST wait ended early: `waitFor` reports both the timeout and the last predicate error. */
+  let lastWaitError: unknown;
   for (const turn of [prompt, ...nudges]) {
     const baseline = (await assistantTexts(page)).length;
     await submitChat(page, turn);
@@ -423,7 +472,12 @@ async function driveYellowTransfer(
         return (await assistantTexts(page)).length > baseline && (await composerEnabled(page)) ? 'reply' as const : false;
       },
       { timeoutMs: 90_000, intervalMs: 1_000, description: `等待 LIVE 模型为 YELLOW 转账停车确认卡：${turn}` },
-    ).catch(() => 'timeout' as const);
+    ).catch((error: unknown) => {
+      // Keep the REASON: the final failure below must distinguish "the model never parked a card"
+      // (plain `等待超时…`) from "the predicate itself threw" (`（最后错误：…）` inside it).
+      lastWaitError = error;
+      return 'timeout' as const;
+    });
     if (outcome === 'confirm') {
       await waitForConfirmCard(page, 60_000);
       await clickConfirm(page);
@@ -435,7 +489,7 @@ async function driveYellowTransfer(
     }
   }
   const last = (await assistantTexts(page)).slice(-1)[0] ?? '';
-  fail(`有界 ${sent.length} 轮自然语言后未出现转账确认卡（模型未调用 transfer_money）：最后一条=「${excerpt(last)}」`);
+  fail(`有界 ${sent.length} 轮自然语言后未出现转账确认卡（模型未调用 transfer_money）：最后一条=「${excerpt(last)}」；最后一次等待=${errText(lastWaitError ?? '（无等待错误：每轮都等到了确认卡或回复）')}`);
 }
 
 // --- real-model proof ------------------------------------------------------------------------------
@@ -558,7 +612,10 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
   if (!debitText0.includes(`${account.name} · ${account.number}`)) {
     fail(`${DEBIT_CARD_ID} 的「${CARD_LABEL.linkedAccount}」应显示「${account.name} · ${account.number}」：${excerpt(debitText0)}`);
   }
-  if (!(await consumeButtonEnabled(page, DEBIT_CARD_ID))) fail(`${DEBIT_CARD_ID} 为 ACTIVE，页面「消费」按钮却不可用`);
+  // The 消费 entry belongs to the card the product actually lets spend from the page: an ACTIVE
+  // (`usable`) VIRTUAL card. Like every footer button it is disabled until `/cards` settles, so the
+  // state is read through `assertConsumeEntry`, never from the pre-refresh frame.
+  await assertConsumeEntry(page, VIRTUAL_CARD_ID, 'enabled', 'ACTIVE（usable=true）的虚拟卡必须能打开消费表单，消费入口在此卡上真实存在');
 
   const virtualRows0 = await readCardTileRows(page, VIRTUAL_CARD_ID);
   const virtualText0 = await readCardTileText(page, VIRTUAL_CARD_ID);
@@ -748,7 +805,10 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
     statusText: t('business.cards.frozen'),
     unusableNotice: t('business.cards.cardFrozenNotice'),
   });
-  if (await consumeButtonEnabled(page, DEBIT_CARD_ID)) fail(`已冻结的 ${DEBIT_CARD_ID} 页面「消费」按钮仍可用`);
+  // A FROZEN card keeps its real balance visible but is `usable = false`, so the page must withhold
+  // the spend entry — asserted only after `/cards` settled, otherwise "disabled" would just be the
+  // pre-refresh frame and the assertion would pass without proving anything.
+  await assertConsumeEntry(page, DEBIT_CARD_ID, 'disabled', 'FROZEN 卡 usable=false：真实余额仍可见，但页面不得提供消费入口');
   const virtualRows3 = await readCardTileRows(page, VIRTUAL_CARD_ID);
   const virtualText3 = await readCardTileText(page, VIRTUAL_CARD_ID);
   assertAccountTile(VIRTUAL_CARD_ID, virtualRows3, virtualText3, {
@@ -756,7 +816,9 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
     payableAmount: virtualPayableAfter,
     statusText: t('business.cards.active'),
   });
-  if (!(await consumeButtonEnabled(page, VIRTUAL_CARD_ID))) fail(`未冻结的 ${VIRTUAL_CARD_ID} 「消费」按钮却不可用（冻结必须只影响单卡）`);
+  // Freezing one card must not touch any other: this is the SAME VIRTUAL card that was enabled in P1,
+  // so it must still be enabled here (the frozen DEBIT card above is the only one that lost its entry).
+  await assertConsumeEntry(page, VIRTUAL_CARD_ID, 'enabled', '未被冻结的 ACTIVE 虚拟卡仍须可消费：冻结只影响那一张卡');
   const shotFrozen = await captureShot(page, 'lJ-frozen-card');
 
   // ---- P5: report the seed VIRTUAL card lost — balance visible, card explicitly unusable --------
@@ -799,7 +861,9 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
     statusText: t('business.cards.lost'),
     unusableNotice: t('business.cards.cardLostNotice'),
   });
-  if (await consumeButtonEnabled(page, VIRTUAL_CARD_ID)) fail(`已挂失的 ${VIRTUAL_CARD_ID} 页面「消费」按钮仍可用`);
+  // The non-vacuous FLIP: this exact card was asserted `enabled` in P1 and P4; reporting it LOST makes
+  // `usable` false, so the very same rendered control must now be disabled (balance still visible).
+  await assertConsumeEntry(page, VIRTUAL_CARD_ID, 'disabled', 'LOST 卡 usable=false：此前 P1/P4 可用的消费入口在挂失后必须关闭');
   const dashboard4 = await readDashboard(baseUrl);
   if (dashboard4.checkingBalance !== cash2) fail(`挂失后 /api/dashboard.checkingBalance 应为 ${cash2}，实际 ${dashboard4.checkingBalance}`);
   const creditFromCards4 = creditAvailableFromCards(cards4);
