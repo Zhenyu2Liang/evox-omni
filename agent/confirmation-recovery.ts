@@ -330,6 +330,22 @@ function hasPersistedResult(resultJson: string | null): boolean {
   return parsed !== null && typeof parsed.ok === 'boolean';
 }
 
+/**
+ * The DECISION a persisted `PendingAction` row actually carries — the ONLY source of truth for a
+ * recovery outcome. A RED row always requires a strong-verification step, so the MFA requirement is
+ * read from the durable row instead of a caller's pre-authorization snapshot (a competing MFA upgrade
+ * can make that snapshot stale before the settle), and a row requiring MFA is always reported `RED`.
+ * Every recovery landing branch uses it, so a WON compare-and-set and a LOST one (a concurrent settle
+ * already moved the row) report the same decision.
+ */
+export function persistedDecision(row: { riskLevel: string; requiresMfa: boolean }): {
+  tier: RiskLevel;
+  requiresMfa: boolean;
+} {
+  const requiresMfa = row.requiresMfa === true || row.riskLevel === 'RED';
+  return { tier: requiresMfa ? 'RED' : row.riskLevel as RiskLevel, requiresMfa };
+}
+
 /** A plan link is USABLE only when BOTH `taskId` and `nodeId` are non-null and non-empty. */
 function isPlanLinked(link: { taskId: string | null; nodeId: string | null } | null): boolean {
   if (link === null) return false;
@@ -382,8 +398,7 @@ export async function recoverStandaloneWedge(
   // semantics. ONLY standalone wedges are handled here.
   if (isPlanLinked(link)) return undefined;
 
-  const tier = (row.riskLevel as RiskLevel | undefined) ?? 'YELLOW';
-  const requiresMfa = row.requiresMfa === true;
+  const { tier, requiresMfa } = persistedDecision(row);
 
   // COMMITTED-FACT FIRST: an `ExecutionReceipt` for this execution identity proves the side effect
   // ALREADY committed — settle `executed` FROM it, WITHOUT re-running the tool. (A LEGACY
@@ -395,7 +410,7 @@ export async function recoverStandaloneWedge(
   if (isRecoverableStandaloneTool(row.toolName)) {
     return replayStandaloneAction(actionId, row, link, tier, requiresMfa);
   }
-  return reconcileStandaloneAction(actionId, tier, requiresMfa);
+  return reconcileStandaloneAction(actionId);
 }
 
 /** The row shape the standalone recovery paths consume (a structural slice of `PendingAction`). */
@@ -442,7 +457,7 @@ async function settleFromCommittedReceipt(
     result = await committedExecutionResult({ ...row, id: actionId, taskId: link?.taskId ?? null, nodeId: link?.nodeId ?? null });
   } catch (error) {
     if (!(error instanceof AppError) || error.code !== 'CONFLICT') throw error;
-    return reconcileStandaloneAction(actionId, tier, requiresMfa);
+    return reconcileStandaloneAction(actionId);
   }
   if (result === undefined) return undefined;
   const settled = await landStandalone(actionId, row, tier, requiresMfa, result, 'executed');
@@ -553,6 +568,9 @@ async function landStandalone(
   result: ToolExecutionResult,
   status: PendingActionStatus,
 ): Promise<StandaloneWedgeOutcome> {
+  // The decision a recovery lands ALWAYS comes from the persisted row, re-derived inside the settling
+  // transaction; the caller's snapshot is only the fallback when no row can be read back at all.
+  let decision = { tier, requiresMfa };
   const won = await settlePendingAction({
     actionId,
     status,
@@ -561,8 +579,7 @@ async function landStandalone(
     audit: current => {
       // Also covers CONFLICT/CIRCUIT_OPEN receipt fallbacks, which may carry a stale caller row.
       // Strict duplicate audit validation remains unchanged: differing facts still fail closed.
-      requiresMfa = current.requiresMfa || current.riskLevel === 'RED';
-      tier = requiresMfa ? 'RED' : current.riskLevel as RiskLevel;
+      decision = persistedDecision(current);
       return {
         timestamp: demoNow(),
         sessionId: row.sessionId,
@@ -570,11 +587,11 @@ async function landStandalone(
         userRequest: row.userRequest ?? '',
         intent: row.intent ?? undefined,
         toolName: row.toolName,
-        riskLevel: tier,
+        riskLevel: decision.tier,
         confirmationRequired: true,
         confirmed: true,
-        mfaRequired: requiresMfa,
-        mfaResult: requiresMfa ? current.mfa?.status === 'verified' ? 'success' : undefined : 'not_required',
+        mfaRequired: decision.requiresMfa,
+        mfaResult: decision.requiresMfa ? current.mfa?.status === 'verified' ? 'success' : undefined : 'not_required',
         toolArgs: safeParse<Record<string, unknown>>(current.argsJson, {}),
         taskId: current.taskId ?? undefined,
         nodeId: current.nodeId ?? undefined,
@@ -588,12 +605,19 @@ async function landStandalone(
   });
 
   // A lost CAS means a concurrent settle already moved the row: report its CURRENT persisted status
-  // and claim NOTHING about this attempt (never a fabricated success, never another retry).
-  const persisted = won ? undefined : (await getPendingAction(actionId))?.status as PendingActionStatus | undefined;
+  // AND its persisted decision, and claim NOTHING about this attempt (never a fabricated success,
+  // never another retry, never a downgraded tier/MFA requirement).
+  const latest = won ? null : await getPendingAction(actionId);
+  const settled = latest !== null ? persistedDecision(latest) : decision;
   return {
-    ok: result.ok, actionId, status: persisted ?? status, tier, requiresMfa,
-    message: persisted === undefined ? '' : '该操作已由并发的结算先行落定，本次恢复未写入任何结果。',
-    result, events: [],
+    ok: result.ok,
+    actionId,
+    status: (latest?.status as PendingActionStatus | undefined) ?? status,
+    tier: settled.tier,
+    requiresMfa: settled.requiresMfa,
+    message: won || latest === null ? '' : '该操作已由并发的结算先行落定，本次恢复未写入任何结果。',
+    result,
+    events: [],
   };
 }
 
@@ -606,11 +630,10 @@ async function landStandalone(
  */
 async function reconcileStandaloneAction(
   actionId: string,
-  tier: RiskLevel,
-  requiresMfa: boolean,
 ): Promise<StandaloneWedgeOutcome> {
   const row = await getPendingAction(actionId);
   if (row === null) throw new AppError('NOT_FOUND', '待核对操作不存在。');
+  const decision = persistedDecision(row);
   const result: ToolExecutionResult = { ok: false, error: '执行证据不足或矛盾，需人工核对（不会重新执行）。' };
   const won = await settlePendingAction({
     actionId,
@@ -621,15 +644,15 @@ async function reconcileStandaloneAction(
     dedupeKey: convergenceAuditKey(actionId, 'needs_reconciliation'),
   });
   // A lost CAS means a concurrent settle already moved the row: report its CURRENT persisted status
-  // truthfully (never a fabricated one).
-  const current = won ? 'needs_reconciliation' : (await getPendingAction(actionId))?.status;
-  const status = (current as PendingActionStatus | undefined) ?? 'needs_reconciliation';
+  // and decision truthfully (never a fabricated or downgraded one).
+  const latest = won ? null : await getPendingAction(actionId);
+  const settled = latest !== null ? persistedDecision(latest) : decision;
   return {
     ok: false,
     actionId,
-    status,
-    tier,
-    requiresMfa,
+    status: (latest?.status as PendingActionStatus | undefined) ?? 'needs_reconciliation',
+    tier: settled.tier,
+    requiresMfa: settled.requiresMfa,
     message:
       '该操作可能已执行但结果未能留存，且其副作用无法安全重放；已标记为「待人工核对」，请到人工核对列表中处理（不会自动重试）。',
     events: [],

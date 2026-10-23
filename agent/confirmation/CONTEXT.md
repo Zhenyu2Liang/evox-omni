@@ -73,7 +73,8 @@ plain 冲突分支（网关抛 `AppError('CONFLICT', …)`，其文案内插原�
 `assertSettleSources(input)` 在事务开始前校验：空 `from` 或非法来源状态一律抛 `AppError('SECURITY_DENIED', …)`，未写入任何行。
 `locked` 永远不是合法来源状态（由 `isLegalActionSourceStatus` 保证），因此耗尽验证的拒绝绝不会被重新激活或降级。
 所有调用方都显式给出 `from`：`authorized-execution.ts` / `gated-execution.ts` / `durable/workflow-invocations.ts` / `landStandalone` / `reconcileStandaloneAction` 与 `index.ts` 计划链接楔子分支用 `['confirmed']`；`agent/index.ts` 的幂等审计修复用 `['executed']`。
-CAS 落败时回读持久化状态如实报告，不重试、不重放、不伪造成功。
+CAS 落败时回读持久化行如实报告，不重试、不重放、不伪造成功。
+恢复结果的 tier/requiresMfa 一律由 `../confirmation-recovery.ts` 的 `persistedDecision(row)` 从持久化行推导（`requiresMfa = row.requiresMfa || row.riskLevel === 'RED'`，`tier = requiresMfa ? 'RED' : row.riskLevel`），`landStandalone` 的获胜 CAS 与落败 CAS 分支、`reconcileStandaloneAction` 共用同一推导，因此陈旧快照不会把已提交的 RED/需强验证决定降级为 `YELLOW`/`requiresMfa:false`。
 `lib/db/repositories/pendingAction.ts` 仍导出 `updatePendingActionStatus` 及其别名 `setPendingActionStatus`，但生产代码中零调用：状态+结果的持久化已不再经过任何 repository setter（事务内直接 `claimPendingAction` + `tx.pendingAction.update({ resultJson })`），因此针对该符号的故障注入间谍观察不到任何调用。
 `authorized-execution.ts` 仅在 `landed === true` 且状态为 `executed`/`failed` 时调用 `gateway.recordActionResult`（其本身就是对 `RESULT_RECORDABLE_STATUSES` 的 CAS，锁定的行保持锁定），异常被吞掉，结算事务仍是权威证据。
 `gated-execution.ts` 中已处于 `confirmed` 的计划节点只结算一次；CAS 落败返回 `{ ok:false, requiresConfirmation:true, pendingActionId, error:'该计划节点已在等待人工确认，未重复受理。' }`，绝不重复执行、绝不谎报成功。
