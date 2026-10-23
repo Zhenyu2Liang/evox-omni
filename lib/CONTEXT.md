@@ -75,7 +75,7 @@ JSON 金额使用十进制字符串。
 
 公开文本只能来自消息目录，内部诊断只进 `debugDetail` 与开发者面板。
 `publicToolError(message, t, fallback = 'chat.error.toolFailed', errorCode?, params?)` 的判定顺序：`PUBLIC_BUSINESS_ERRORS` 精确 SDK 消息 → 三条固定正则（余额不足、低于起购、验证码剩余次数）→ `PUBLIC_ERROR_CODES[errorCode]` → 无 `message` 取 `fallback` → `CONVERSATION_TOOL_REJECTION` → `chat.error.` 前缀且 `isMessageKey` 命中 → `localizeChatError` 命中（`display-sources.json` 的 `errors`）→ 否则 `fallback`；`params` 只透传给最终选中的目录键。
-`PUBLIC_ERROR_CODES` 是 `Record<ErrorCode, MessageKey>`，覆盖全部 11 个 `ErrorCode`；`TOOL_FAILED` 与 `INTERNAL` 都映射到 `chat.error.toolFailed`，`CIRCUIT_OPEN` 映射 `chat.error.securityLocked`，`MFA_FAILED` 映射 `chat.error.verificationFailed`，`MFA_LOCKED` 映射 `chat.error.actionLocked`，`SECURITY_DENIED` 映射 `chat.error.securityDenied`。
+`PUBLIC_ERROR_CODES` 是 `Record<ErrorCode, MessageKey>`，覆盖全部 12 个 `ErrorCode`；`TOOL_FAILED` 与 `INTERNAL` 都映射到 `chat.error.toolFailed`，`CIRCUIT_OPEN` 映射 `chat.error.securityLocked`，`MFA_FAILED` 映射 `chat.error.verificationFailed`，`MFA_LOCKED` 映射 `chat.error.actionLocked`，`MANUAL_REVIEW_HOLD` 映射 `chat.error.manualReviewHold`，`SECURITY_DENIED` 映射 `chat.error.securityDenied`。
 未识别的 `errorCode`（任意不在 `ErrorCode` 联合内的字符串）与未识别 `message` 一律落到 `chat.error.toolFailed`。
 `PUBLIC_BUSINESS_ERRORS`（`tool-feedback.ts:17-33`）共有 12 条精确字符串，其中三条来自安全网关：`authorizeWithMfa`（`security/security-gateway.ts:957`）的验证码耗尽句「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」→ `chat.error.actionLocked`；`lockedOutcome()`（`:880`）的「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」→ `chat.error.actionLocked`；`gatewayDecide` 的 `HIGH_RISK_BLOCKED` 拒绝（`:485`）「当前会话已触发安全熔断，高风险操作已被锁定。请前往安全中心解除限制后再试。」→ `chat.error.securityLocked`。
 这三条是 COMPATIBILITY ONLY：只服务已按文本持久化的历史拒绝与未传 typed 字段的调用方；权威路径是 `publicSecurityError` 按结构化字段渲染（见下）。
