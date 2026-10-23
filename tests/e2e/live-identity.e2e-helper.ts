@@ -266,15 +266,15 @@ interface ModelProof {
 
 /** `/api/health` must report `live` (fail fast before any turn if the harness booted a mock server). */
 async function assertHealthLive(baseUrl: string): Promise<void> {
-  const health = await getJson<{ ok: boolean; data: { llmMode: string } }>(`${baseUrl}/api/health`);
-  const llmMode = health?.data?.llmMode ?? '(missing)';
+  const health = await getJson<{ llmMode: string }>(`${baseUrl}/api/health`);
+  const llmMode = health?.llmMode ?? '(missing)';
   if (llmMode !== 'live') throw new Error(`/api/health.data.llmMode 应为 live（真模型），实际「${llmMode}」`);
 }
 
 /** `/api/health` says `live`, plus server-side `ModelRequest` evidence that the provider was really hit. */
 async function proveLiveModel(baseUrl: string, priorRequestIds: Set<string>): Promise<ModelProof> {
-  const health = await getJson<{ ok: boolean; data: { llmMode: string } }>(`${baseUrl}/api/health`);
-  const llmMode = health?.data?.llmMode ?? '(missing)';
+  const health = await getJson<{ llmMode: string }>(`${baseUrl}/api/health`);
+  const llmMode = health?.llmMode ?? '(missing)';
   if (llmMode !== 'live') throw new Error(`/api/health.data.llmMode 应为 live（真模型），实际「${llmMode}」`);
 
   const rows = await withDb(async (db) =>
