@@ -143,7 +143,8 @@
 达到上限时 `settleAction` 已清除 `pendingAction`，故 `cards.mfa.failedAttemptsLimit` 实际不可达。
 ## 测试钩子与断言文本
 
-本目录的卡片自身不输出 `data-*`（无 `data-testid`）；唯一稳定的卡片类型钩子是 `CardRenderer` 外层的 `data-chat-card-type={card.type}`（值为 `cards`/`dashboard`/`investments` 等）。
+本目录没有 `data-testid`；卡片类型钩子是 `CardRenderer` 外层的 `data-chat-card-type={card.type}`（值为 `cards`/`dashboard`/`investments` 等）。
+卡片内部唯一自带的 `data-*` 是 `InvestmentsCard` 的条目容器 `[data-investment-card="true"]`（`InvestmentsCard.tsx:67`，持有中时另带 `data-investment-holding-id`），故投资卡条目也可不经 `data-chat-card-type` 直接定位。
 按可见文本断言限额或关联账户区块时，必须先用 `[data-chat-card-type="..."]` 限定卡片类型作用域。
 `ResultMetric` 只渲染 `<dt>{label}</dt><dd>{value}</dd>`；金额经 `ui/Money` → `formatCNY` 输出 `¥1,234.00`（`¥` 前缀 + 千分位 + 两位小数）。
 专用钩子只存在于授权类卡片：`ApprovalRecord` 的 `data-approval-history`/`data-action-id`/`data-status`/`data-approval-stage`（`previous`|`current`）/`data-stage-status`/`data-approval-locked`，`MfaCard` 的 `data-mfa-locked`，`ErrorCard` 开发者模式诊断块的 `data-error-diagnostics`。
