@@ -7,32 +7,20 @@
  * through the WAL and writes ONE self-contained file, which is exactly what a rollback needs to
  * restore.
  *
- * Destination: `logs/db-backups/<yyyyMMdd-HHmmss>-<source file name>`.
+ * Destination: `logs/db-backups/<timestamp>-<uuid>-<source file name>`.
  * The directory is created when missing and the command is repeatable.
  * Run with `node scripts/db-backup.mjs`.
  */
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, rmSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
+import { resolveDatabaseFile } from './database-file.mjs';
 
 /** Repository root, resolved from this script so the command works from any working directory. */
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 /** Snapshots are operational artifacts, so they live under the repository's log directory. */
 const BACKUP_DIRECTORY = path.join(REPO_ROOT, 'logs', 'db-backups');
-
-/**
- * Resolve the SQLite file the application uses, matching `lib/db/url.ts`: a relative `file:` path is
- * anchored at `prisma/`, and `DATABASE_URL` defaults to `file:./dev.db` → `prisma/dev.db`.
- * The environment file is never read here; only an explicitly exported variable is honored.
- */
-function resolveDatabaseFile() {
-  const url = process.env.DATABASE_URL ?? 'file:./dev.db';
-  if (!url.startsWith('file:')) throw new Error('The banking demo requires a SQLite file URL in DATABASE_URL.');
-  const filename = url.slice('file:'.length).split('?')[0];
-  if (!filename) throw new Error('The SQLite database file name must not be empty.');
-  if (filename === ':memory:') throw new Error('An in-memory database cannot be backed up.');
-  return path.isAbsolute(filename) ? filename : path.resolve(REPO_ROOT, 'prisma', filename);
-}
 
 /** `yyyyMMdd-HHmmss` in local time, so consecutive snapshots sort chronologically. */
 function timestamp(date) {
@@ -58,17 +46,23 @@ async function runBackup() {
   }
 
   mkdirSync(BACKUP_DIRECTORY, { recursive: true });
-  const destination = path.join(BACKUP_DIRECTORY, `${timestamp(new Date())}-${path.basename(source)}`);
-  // The destination is fully owned by this command: drop a same-second snapshot and its sidecars so
-  // the backup starts from an empty file instead of inheriting stale pages.
-  for (const suffix of ['', '-wal', '-shm', '-journal']) rmSync(destination + suffix, { force: true });
+  const destination = path.join(BACKUP_DIRECTORY, `${timestamp(new Date())}-${randomUUID()}-${path.basename(source)}`);
+  // Exclusive reservation plus a random suffix prevents simultaneous backups from replacing one another.
+  closeSync(openSync(destination, 'wx'));
 
-  const database = new DatabaseSync(source);
+  const database = new DatabaseSync(source, { readOnly: true });
   try {
     await backup(database, destination);
+  } catch (error) {
+    rmSync(destination, { force: true });
+    throw error;
   } finally {
     database.close();
   }
+  writeFileSync(destination + '.json', JSON.stringify({
+    source, snapshot: destination, createdAt: new Date().toISOString(),
+    restore: 'Stop all database users. Restore this snapshot to source after preserving/removing its WAL and SHM sidecars. Restore the matching code/schema version too.',
+  }, null, 2), { flag: 'wx' });
 
   console.log(`[db:backup] Snapshot written: ${display(destination)}`);
   console.log(`[db:backup] Source: ${display(source)}`);

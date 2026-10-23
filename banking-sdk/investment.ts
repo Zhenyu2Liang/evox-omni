@@ -173,7 +173,8 @@ export interface HoldingValuation {
 /**
  * Derive a holding's market value from its SHARES and the product's published net value — never from
  * the stored `estimatedMarketValue` snapshot, which can be stale. A holding whose shares were never
- * recorded, or whose product publishes no net value, reports its remaining COST and no profit
+ * recorded, or whose product publishes no net value, preserves a valid HISTORICAL snapshot (or COST
+ * if none exists) and reports no profit
  * (历史数据不足) instead of inventing data. Shares DERIVED from an old booked value are flagged
  * `sharesEstimated`, so the same `shares × net value` valuation is reported as `MIGRATED_ESTIMATE`
  * (估算) — an estimate is never presented as an exact net-value position.
@@ -183,6 +184,14 @@ export function holdingValuation(row: HoldingRow): HoldingValuation {
   const shares = recordedShares(row.shares);
   const netValue = productNetValue(row.product);
   if (shares === undefined || netValue === undefined) {
+    // Preserve the last recorded estimate until explicit reference inputs and shares are supplied.
+    // This is historical evidence, not a current NAV or a recoverable transaction history.
+    if (row.estimatedMarketValue !== null) {
+      try {
+        const snapshot = nonNegativeDecimal(row.estimatedMarketValue);
+        return { marketValue: snapshot, valueBasis: 'HISTORICAL_SNAPSHOT' };
+      } catch { /* A corrupt snapshot cannot be presented as a financial fact. */ }
+    }
     return { marketValue: cost, valueBasis: 'HISTORICAL_DATA_INSUFFICIENT' };
   }
   const marketValue = marketValueFromShares(shares, netValue);
@@ -796,8 +805,9 @@ export async function subscribeInvestment(input: SubscribeInvestmentInput): Prom
       executionKey: replayKey,
     };
     const aggregated = await tx.investmentHolding.updateMany({
-      where: { id: existing.id, userId: input.userId, status: 'HOLDING', principalAmountMinor: oldPrincipalMinor },
+      where: { id: existing.id, userId: input.userId, status: 'HOLDING', principalAmountMinor: oldPrincipalMinor, positionVersion: existing.positionVersion },
       data: {
+        positionVersion: { increment: 1 },
         principalAmountMinor: newPrincipalMinor,
         shares: totalShares,
         estimatedMarketValue: newMarketValue,
@@ -989,12 +999,16 @@ function resolveTargetShares(
  */
 function assertConfirmedSnapshot(
   input: RedeemInvestmentInput,
-  actual: { settledMinor: bigint; shares: DecimalAmount; netValue: DecimalAmount; netValueDate: number | undefined },
+  actual: { settledMinor: bigint; shares: DecimalAmount; netValue: DecimalAmount; netValueDate: number | undefined; positionVersion: number },
 ): void {
   const stale = (field: string): never => {
     throw new AppError('CONFLICT', '净值或持仓已变化，请重新确认', { holdingId: input.holdingId, field });
   };
   const expectedSettlement = input.expectedSettlementAmount ?? input.expectedRedemptionAmount;
+  if (input.expectedPositionVersion !== undefined &&
+    (!Number.isSafeInteger(input.expectedPositionVersion) || input.expectedPositionVersion !== actual.positionVersion)) {
+    stale('expectedPositionVersion');
+  }
   if (expectedSettlement !== undefined && moneyToCents(expectedSettlement) !== actual.settledMinor) {
     stale('expectedSettlementAmount');
   }
@@ -1103,7 +1117,7 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
     const redemptionValuation = marketValueFromShares(targetShares, netValue);
 
     // Stale authorization is rejected here, inside the write transaction, before any write.
-    assertConfirmedSnapshot(input, { settledMinor, shares: targetShares, netValue, netValueDate });
+    assertConfirmedSnapshot(input, { settledMinor, shares: targetShares, netValue, netValueDate, positionVersion: current.positionVersion });
 
     const account = await accounts.getCheckingAccount(input.userId);
     if (account === null) throw new AppError('NOT_FOUND', 'Checking account does not exist.', { userId: input.userId });
@@ -1113,8 +1127,9 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
     // so exactly one of two concurrent redemptions closes the holding and is credited.
     if (remainingShares === '0') {
       const closed = await tx.investmentHolding.updateMany({
-        where: { id: holding.id, userId: input.userId, status: 'HOLDING', shares: current.shares },
+        where: { id: holding.id, userId: input.userId, status: 'HOLDING', shares: current.shares, positionVersion: current.positionVersion },
         data: {
+          positionVersion: { increment: 1 },
           status: 'REDEEMED',
           shares: '0',
           principalAmountMinor: 0n,
@@ -1220,8 +1235,9 @@ export async function redeemInvestment(input: RedeemInvestmentInput): Promise<In
       executionKey: key,
     };
     const applied = await tx.investmentHolding.updateMany({
-      where: { id: holding.id, userId: input.userId, status: 'HOLDING', shares: current.shares },
+      where: { id: holding.id, userId: input.userId, status: 'HOLDING', shares: current.shares, positionVersion: current.positionVersion },
       data: {
+        positionVersion: { increment: 1 },
         principalAmountMinor: remainingCostMinor,
         shares: remainingShares,
         estimatedMarketValue: remainingMarketValue,

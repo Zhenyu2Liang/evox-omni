@@ -35,9 +35,12 @@
 
 读取估值只由 `banking-sdk/investment.ts#holdingValuation` 按 `份额 × 最新净值` 推导，不做取整。
 持仓列表、持仓卡片、产品瓦片、微信输出与资产总额共用这一处推导。
-`estimatedMarketValue` 是写入时留下的列快照，读取时不参与估值。
+`estimatedMarketValue` 是写入时留下的列快照。
+份额与净值齐全时，该快照不参与估值。
 
-没有可用份额，或产品未发布净值时，市值回退为剩余持仓成本。
+没有可用份额或产品未发布净值时，保留有效的历史账面估值。
+页面标注“历史账面估值，待核对”。
+历史估值也缺失时，才回退为成本，并标注“历史数据不足”。
 此时不给出持仓收益、持仓收益率与累计收益。
 
 赎回费按模拟规则免除。
@@ -110,9 +113,13 @@
 
 ## 确认与执行一致
 
-确认快照包含四个字段。
-分别是 `expectedShares`、`expectedNetValue`、`expectedNetValueDate` 与 `expectedSettlementAmount`。
+确认快照包含 5 个字段。
+分别是 `expectedPositionVersion`、`expectedShares`、`expectedNetValue`、`expectedNetValueDate` 与 `expectedSettlementAmount`。
 快照由网关调用 `banking-sdk/net-value.ts` 的同一套函数铸造，与执行结算不会分叉。
+`expectedPositionVersion` 对应整笔持仓的版本。
+追加申购、部分赎回与全部赎回都会递增 `positionVersion`。
+执行时版本不一致即拒绝，避免漏过持仓变化。
+升级前缺少版本的待执行授权必须重新发起并确认。
 
 执行时在写事务内重新读取产品最新净值与持仓份额。
 任一情况发生即拒绝旧授权，抛出 `CONFLICT`（`净值或持仓已变化，请重新确认`）：
@@ -168,27 +175,34 @@
 旧持仓没有份额时由最新净值派生。
 口径是 `shares = FLOOR(市值 ÷ 净值, 6 位小数)`，单笔经济价值漂移必须小于 `0.01 元`。
 产品没有净值时不伪造数据。
-读取时按上面的回退规则输出剩余成本，并标注“历史数据不足”。
+读取时保留有效历史估值并标注“待核对”。
+缺失的份额、净值与收益仍显示“历史数据不足”。
 由旧数据派生的持仓在 `sharesEstimated` 上标记为估算。
 读取时 `valueBasis` 为 `MIGRATED_ESTIMATE`，页面、卡片与微信输出标注“估算”，市值仍按 `shares × 净值` 派生。
 标记只由回填脚本写入；原始申购、聚合申购与演示种子持仓保持默认假值，`valueBasis` 为 `NET_VALUE`。
 已回填的持仓不会被脚本重复改写。
 
 `estimatedMarketValue` 只是快照。
-读取一律由 `shares × latestNetValuePerUnit` 派生。
+份额与净值齐全时，由 `shares × latestNetValuePerUnit` 派生。
+历史快照不能作为申购或赎回的成交依据。
 
 升级按顺序执行：
 
 1. 运行 `node scripts/db-backup.mjs`，快照写入 `logs/db-backups/`。
 2. 执行 `pnpm db:push` 同步净值和份额字段。
-3. 运行 `node scripts/investment-share-backfill.mjs` 试运行并核对结果。
-4. 加 `--apply` 写入份额，同时把该持仓标记为估算。
+3. 按[升级步骤](development.md#数据库备份与净值份额升级)核对并补齐缺失的模拟净值。
+4. 运行 `node scripts/investment-share-backfill.mjs` 试运行并核对结果。
+5. 加 `--apply` 写入份额，同时把该持仓标记为估算。
 
 脚本默认只读，只处理 `HOLDING` 且没有份额的持仓，试运行会说明派生份额将被标记为估算。
 任一笔漂移达到 `0.01 元` 时，脚本不写入并以非 0 状态退出。
+即使漂移小于 `0.01 元`，分位舍入结果也必须保持不变。
+存在无法派生的持仓时退出码为 `2`，不得据此宣布升级完成。
+回填使用原成本、历史估值和净值作并发检查。
+任一记录变化时，本批写入整批回滚。
 
 需要回滚时，先停止所有数据库连接。
-删除 `prisma/dev.db-wal` 与 `prisma/dev.db-shm`，再用备份快照覆盖 `prisma/dev.db`。
-最后执行 `pnpm db:generate`。
+核对快照旁 `.json` 记录的源库，处理该目标的 WAL 与 SHM 旁文件。
+用快照覆盖对应数据库，再恢复匹配的代码版本并生成客户端。
 完整命令与备份目录格式见
 [development.md](development.md#数据库备份与净值份额升级)。

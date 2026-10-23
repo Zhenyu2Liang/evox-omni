@@ -260,7 +260,7 @@ ESLint、Vitest 和 Playwright 用于代码检查与验收。
 | 依赖 | 固定版本 |
 | --- | --- |
 | Pi Core、Pi AI、Pi Coding Agent | `1.2.0` |
-| Next.js、环境加载器及 Next.js ESLint 插件 | `16.4.0` |
+| Next.js、环境加载器及 Next.js ESLint 插件 | `16.4.3` |
 | React、React DOM | `19.3.0` |
 | Prisma CLI、运行时及 SQLite 适配器 | `7.10.0` |
 | TypeScript 编译器 | `7.0.2` |
@@ -524,19 +524,22 @@ DATABASE_URL=file:./dev.db pnpm dev
 node scripts/db-backup.mjs
 ```
 
-脚本把快照写入 `logs/db-backups/<yyyyMMdd-HHmmss>-<源数据库文件名>`。
-时间戳格式为 `yyyyMMdd-HHmmss`，后缀是源数据库文件名，例如 `logs/db-backups/20250130-093015-dev.db`。
+脚本把快照写入 `logs/db-backups/`。
+文件名包含时间、随机标识和源数据库文件名。
 执行后，脚本打印快照路径和源库路径。
 快照目录不存在时自动创建，命令可以重复执行。
-同一秒生成的同名快照先被删除，再重新生成。
+同一秒生成的快照各自保留，不覆盖旧快照。
 源库不存在时，脚本提示先执行 `pnpm db:push`，并以非 0 状态退出。
 快照保存在 `logs/` 下，已被 `.gitignore` 忽略，不提交。
-脚本只用 `node:sqlite`，不需要 `node_modules`。
+快照使用 `node:sqlite`，配置加载依赖已安装的 `@next/env`。
+同名 `.json` 文件记录源库、快照路径与恢复说明。
 
 脚本使用 SQLite 在线备份，快照包含已提交的预写日志（WAL）数据。
 只复制主数据库文件可能遗漏 WAL 中的提交。
 
-备份脚本只读取进程环境中显式导出的 `DATABASE_URL`，不读取 `.env.local`。
+备份与份额回填共用 `scripts/database-file.mjs`。
+配置加载与 Prisma 命令一致，会读取 `.env.local`。
+显式导出的 `DATABASE_URL` 优先，不打印凭据。
 未设置时，脚本使用 `file:./dev.db`，即 `prisma/dev.db`。
 备份自定义库时，先导出与启动应用相同的地址：
 
@@ -584,6 +587,22 @@ pnpm db:push
 同步新增净值和份额字段，不派生份额。
 `db push` 不生成客户端，代码改动后仍需执行 `pnpm db:generate`。
 
+产品净值或完整号码缺失时，先准备显式的模拟数据清单。
+示例位于 `scripts/fixtures/demo-reference.example.json`。
+该文件提供虚构的演示值，不是从脱敏号码恢复的数据。
+复制示例到 `logs/`，逐条核对记录、归属与预期展示值。
+未知或已变更的记录不得直接套用示例。
+
+```sh
+pnpm exec tsx scripts/demo-reference-backfill.ts --plan=logs/reference.json --dry-run
+pnpm exec tsx scripts/demo-reference-backfill.ts --plan=logs/reference.json --apply
+```
+
+默认只预演，`--apply` 才写入。
+清单只补空值，不覆盖已有净值或完整号码。
+归属、名称、产品代码或展示值不匹配时整批回滚。
+未列入清单的用户记录保持原值，账户余额与流水不变。
+
 旧持仓按最新净值派生份额：
 
 ```sh
@@ -595,6 +614,8 @@ node scripts/investment-share-backfill.mjs
 逐行的 `outcome` 为 `derived`、`derived (cost basis)` 或 `skipped: <原因>`。
 `derived (cost basis)` 表示 `estimatedMarketValue` 为空，市值回退为剩余持仓成本。
 跳过原因只有 2 种：`no-net-value` 表示产品无净值或无匹配产品，`net-value-not-positive` 表示净值为 0。
+存在跳过行时退出码为 `2`，表示升级尚未完成。
+退出码 `0` 表示本次没有未解决行，`1` 表示执行失败。
 表格之后打印汇总行，例如：
 
 ```text
@@ -635,9 +656,10 @@ node scripts/investment-share-backfill.mjs --apply
 需要回滚时，按以下步骤恢复：
 
 1. 停止所有数据库连接。
-2. 删除 `prisma/dev.db-wal` 与 `prisma/dev.db-shm`。
-3. 用快照覆盖 `prisma/dev.db`。
-4. 执行 `pnpm db:generate`。
+2. 核对快照旁 `.json` 中的 `source`，确认恢复目标。
+3. 保存或删除该目标的 `-wal` 与 `-shm` 旁文件。
+4. 用快照覆盖目标数据库。
+5. 恢复匹配的代码版本并执行 `pnpm db:generate`。
 
 删除 `-wal` 与 `-shm` 的原因：避免重放旧预写日志。
 POSIX shell 与 PowerShell 两种写法等价，只执行其一。

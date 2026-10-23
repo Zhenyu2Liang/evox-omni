@@ -46,6 +46,7 @@ export function usesNetValueModel(holding: HoldingView): boolean {
 /** `valueBasis` → its label; `NET_VALUE` is the normal basis and carries no extra badge. */
 export function valueBasisLabelKey(holding: HoldingView): MessageKey | undefined {
   if (holding.valueBasis === 'MIGRATED_ESTIMATE') return 'business.investments.valueBasis.migrated';
+  if (holding.valueBasis === 'HISTORICAL_SNAPSHOT') return 'business.investments.valueBasis.snapshot';
   if (holding.valueBasis === 'HISTORICAL_DATA_INSUFFICIENT') return 'business.investments.valueBasis.insufficient';
   return undefined;
 }

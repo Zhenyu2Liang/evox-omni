@@ -219,7 +219,8 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 费用字段不进 `redemptionSnapshot`（`:773-780`），故不属于请求身份、不进命令指纹，执行时也不校验，也不落库为执行证据。
 `PendingActionSummary`（`lib/contracts/security.ts:115-124`）没有费用字段，费用只以 `fields` 里的一行文本出现。
 摘要金额（`summary.amount`，`:922`）是预计到账金额，不是本金。
-快照字段为 `expectedShares`、`expectedNetValue`、`expectedNetValueDate`、`expectedSettlementAmount`。
+快照字段为 `expectedPositionVersion`、`expectedShares`、`expectedNetValue`、`expectedNetValueDate`、`expectedSettlementAmount`。
+持仓变动递增 `positionVersion`。整笔持仓版本变化时，部分赎回也拒绝旧授权。
 快照字段属于服务端报价，重复挂起时不计入请求身份（`requestArgs`）。
 快照字段同时进入命令指纹，口径或金额变化会作废旧授权。
 执行时快照与当前净值、份额或重算金额不一致即抛 `CONFLICT`（`净值或持仓已变化，请重新确认`）。

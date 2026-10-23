@@ -18,6 +18,9 @@
 `.e2e.ts` 与 `.e2e-helper.ts` 不匹配该 include，`pnpm test` 不会运行它们。
 浏览器与边界入口一律用 `pnpm exec tsx <入口>` 单独运行。
 默认使用 mock 模式，不调用真实模型。
+`unit/security/redemption-position-version.test.ts` 覆盖持仓变化后拒绝旧赎回授权。
+`unit/scripts/database-maintenance.test.ts` 覆盖配置读取、备份不覆盖与份额回填。
+`unit/scripts/demo-reference-backfill.test.ts` 覆盖显式补齐、归属隔离与历史估值保留。
 
 ## 入口
 

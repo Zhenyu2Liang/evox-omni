@@ -77,23 +77,29 @@ describe('holding value basis for backfilled (estimated) shares', () => {
     expect(view.profit).toBe('50');
   });
 
-  it('reports HISTORICAL_DATA_INSUFFICIENT when shares are missing, flagged or not', async () => {
+  it('preserves the historical snapshot when shares are missing, flagged or not', async () => {
     const prisma = getTestPrisma();
     await prisma.investmentHolding.update({ where: { id: HOLDING_ID }, data: { shares: null } });
     expect(await holdingView()).toMatchObject({
       amount: '5000.00',
-      marketValue: '5000.00',
-      valueBasis: 'HISTORICAL_DATA_INSUFFICIENT',
+      marketValue: '5050',
+      valueBasis: 'HISTORICAL_SNAPSHOT',
     });
 
     // The flag alone can never value a position: no shares means no estimate is invented.
     await prisma.investmentHolding.update({ where: { id: HOLDING_ID }, data: { sharesEstimated: true } });
     const flagged = await holdingView();
     expect(flagged).toMatchObject({
-      marketValue: '5000.00',
-      valueBasis: 'HISTORICAL_DATA_INSUFFICIENT',
+      marketValue: '5050',
+      valueBasis: 'HISTORICAL_SNAPSHOT',
     });
     expect(flagged.shares).toBeUndefined();
     expect(flagged.profit).toBeUndefined();
+  });
+
+  it('uses cost only when neither shares nor a valid historical estimate is available', async () => {
+    const prisma = getTestPrisma();
+    await prisma.investmentHolding.update({ where: { id: HOLDING_ID }, data: { shares: null, estimatedMarketValue: null } });
+    expect(await holdingView()).toMatchObject({ marketValue: '5000.00', valueBasis: 'HISTORICAL_DATA_INSUFFICIENT' });
   });
 });

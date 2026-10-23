@@ -468,12 +468,13 @@ export interface HoldingView {
   /**
    * How `marketValue` was derived. `NET_VALUE` — shares × published net value;
    * `MIGRATED_ESTIMATE` — shares derived from an old booked value (估算);
-   * `HISTORICAL_DATA_INSUFFICIENT` — no usable shares or no net value, so `marketValue` falls back
+   * `HISTORICAL_SNAPSHOT` — a valid historical estimate is preserved pending explicit inputs;
+   * `HISTORICAL_DATA_INSUFFICIENT` — no usable shares, net value or historical estimate, so `marketValue` falls back
    * to the remaining cost and no profit is reported (历史数据不足). The SDK always populates it;
    * optional only so partial holding literals (the UI display tests) still compile while call sites
    * migrate.
    */
-  valueBasis?: 'NET_VALUE' | 'MIGRATED_ESTIMATE' | 'HISTORICAL_DATA_INSUFFICIENT';
+  valueBasis?: 'NET_VALUE' | 'MIGRATED_ESTIMATE' | 'HISTORICAL_SNAPSHOT' | 'HISTORICAL_DATA_INSUFFICIENT';
   /** Epoch ms. */
   boughtAt: number;
   status: HoldingStatus;
@@ -584,6 +585,8 @@ export interface RedeemInvestmentInput {
   expectedRedemptionAmount?: MoneyInput;
   /** Server-snapshotted redemption share count shown before MFA. */
   expectedShares?: DecimalInput;
+  /** Version of the entire position at approval, not just the redeemed portion. */
+  expectedPositionVersion?: number;
   /** Server-snapshotted net value per unit shown before MFA. */
   expectedNetValue?: DecimalInput;
   /** Server-snapshotted net value business date (epoch ms) shown before MFA. */

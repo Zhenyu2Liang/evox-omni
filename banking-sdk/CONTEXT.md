@@ -3,12 +3,12 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 ## 公开契约
 能力从 `banking-sdk/index.ts` 导入；DTO 位于 `types.ts`。金额输入与输出都是十进制字符串。仓储持久化使用 bigint 人民币分保存已记账金额，使用规范十进制 TEXT 保存收益率与估值。`MoneyInput` 只接受字符串。`normalizeMoney` 校验已记账精度；缺省值不等于零。
 产品年化收益率是 `annualYieldRate`，为无量纲比例，且恒不为负：创建时 `lib/db/repositories/investment.ts#createProduct` 与投影时 `investment.ts#toProductView` 都经 `nonNegativeDecimal` 上闸，负数会抛 `VALIDATION` 而不是被渲染。因此展示层的 `lib/decimal.ts#rateRatioToPercent`（自带非负门）只适用于产品年化，绝不适用于持仓收益率。投资持仓按净值与份额核算：`latestNetValuePerUnit` 是规范十进制净值，`shares` 是持有份额，`principalAmountMinor` 是剩余成本基数。公开持仓的 `amount` 是剩余持仓成本，`marketValue` 是未取整估值，`profit` 是未实现收益，`realizedProfit` 是已实现收益，`cumulativeProfit` 是累计收益。百分比只在展示层转换。
-单个持仓没有 SDK 内的时间累积：净值只取产品发布的 `latestNetValuePerUnit`，SDK 不按时间推导增长。市值一律由 `shares × latestNetValuePerUnit` 派生；`estimatedMarketValue` 只是列上的快照，读取不使用它。持仓收益是未实现收益，等于市值减去剩余成本；追加申购金额不计入收益。
+单个持仓没有 SDK 内的时间累积：净值只取产品发布的 `latestNetValuePerUnit`，SDK 不按时间推导增长。份额与净值齐全时，市值由 `shares × latestNetValuePerUnit` 派生。数据不足时保留有效历史估值并标注待核对；没有历史估值才回退成本。持仓收益是未实现收益，等于市值减去剩余成本；追加申购金额不计入收益。
 十进制最多 40 位整数与 18 位小数。SDK 使用精确算术、拒绝非法值，只在文档化的结算边界取整。当前赎回策略是 HALF_UP 到人民币分；授权与执行使用同一换算。最终余额与流水仍是有符号 INT64 分。
 ## 符号性与非负门禁
 `ProductView.annualYieldRate` 唯一产自 `investment.ts#toProductView`（`annualYieldRate: nonNegativeDecimal(row.annualYieldRate)`，`investment.ts:219`），`listProducts`、`compareInvestments`、`listHoldings.product` 都复用它；负值不是以负数渲染，而是在读取时抛 `VALIDATION`（`Financial value must be nonnegative.`），所以展示层 `lib/decimal.ts#rateRatioToPercent` 的同一门禁不会在渲染期触发。
 有符号字段：`profit`（`marketValue − cost`）、`profitRate`（`profit ÷ cost`）、`realizedProfit`（`centsToMoney(realizedProfitMinor)`）、`cumulativeProfit`（`realizedProfit + profit`）。
-非负字段：`shares` 与 `latestNetValue`（`nonNegativeDecimal` 且必须大于零，否则视为缺失）、`marketValue`（份额×净值的精确乘积，或历史不足时回退剩余成本）、`amount`（剩余成本）。
+非负字段：`shares` 与 `latestNetValue`（`nonNegativeDecimal` 且必须大于零，否则视为缺失）、`marketValue`（份额×净值的精确乘积，或有效历史估值，无历史估值时回退剩余成本）、`amount`（剩余成本）。
 计算点全在 `investment.ts#holdingValuation`（181-200）：`marketValue = marketValueFromShares(shares, netValue)`（188）、`profit = subtractDecimal(marketValue, cost)`（189）、`profitRate = profitRateOf(profit, cost)`（197）。
 `net-value.ts#profitRateOf`（235-242）是唯一比率换算：`parseFixed`（58-77）保留符号、`halfUpDivide`（122-129）HALF_UP 到 18 位小数、`fixedToDecimal`（106-113）还原负号；成本为零返回 `undefined`（238），因此 `amount === 0` 的持仓没有 `profitRate`。
 亏损持仓的负 `profitRate` 是预期状态：`holding_wenjib` 成本 10000.00、净值 0.9880、份额 10000.000000 → 收益 −120.00、收益率 −0.012。
@@ -82,7 +82,7 @@ SDK 中没有手续费、管理费、申购费或托管费概念，也没有费�
 `subscribeInvestment` 的结果、`purchaseHistory` 记录与 `purchaseResultFromRecord` 都没有费用字段。
 `HoldingView`、`TransactionView`、`DashboardSummary`、回执与审计详情都不投影费用；投资写入不调用审计回调，赎回流水只有 `settledMinor` 金额、商户文本「赎回」与类别 `投资`。
 ## 确认快照与陈旧授权
-`redeemInvestment` 接受四个可选的确认快照字段：`expectedShares`、`expectedNetValue`、`expectedNetValueDate` 与 `expectedSettlementAmount`。
+`redeemInvestment` 接受 5 个可选的确认快照字段：`expectedPositionVersion`、`expectedShares`、`expectedNetValue`、`expectedNetValueDate` 与 `expectedSettlementAmount`。
 执行时在写事务内重新读取产品净值与持仓份额，并重算到账金额。
 任一字段与当前事实不一致时抛 `CONFLICT`（`净值或持仓已变化，请重新确认`），本次零写入。
 按新净值静默成交永不允许；用户必须重新确认后才能执行。

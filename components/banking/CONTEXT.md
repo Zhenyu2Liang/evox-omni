@@ -82,6 +82,7 @@ SDK 类型通过类型导入使用。
 | `NET_VALUE` | 无 | — | — |
 | `MIGRATED_ESTIMATE` | `business.investments.valueBasis.migrated` | 估算 | info |
 | `HISTORICAL_DATA_INSUFFICIENT` | `business.investments.valueBasis.insufficient` | 历史数据不足 | warn |
+| `HISTORICAL_SNAPSHOT` | `business.investments.valueBasis.snapshot` | 历史账面估值，待核对 | info |
 
 ## 布局变体
 

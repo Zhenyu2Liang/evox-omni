@@ -13,12 +13,16 @@
 | `weixin.ts` | `pnpm weixin:login/start/status/logout` 管理微信通道 |
 | `card-account-binding.ts` | 为 `linkedAccountId` 为空的借记类卡片补绑结算活期账户，支持 `--dry-run` 与 `--rollback=<文件>` |
 | `number-backfill.ts` | 补全 `Contact.phoneFull` 与 `Card.numberFull`，支持 `--dry-run` 与 `--rollback=<文件>` |
+| `demo-reference-backfill.ts` | 按显式模拟清单补齐空净值与完整号码；默认预演，`--apply` 写入 |
+| `database-file.mjs` | 备份与份额回填共用的环境加载、SQLite 文件解析 |
+| `db-backup.mjs` | 在线快照与恢复说明；随机文件名、独占创建，不覆盖已有备份 |
 
 ## 数据库命令
 
 `db-push.ts` 通过项目本地 Prisma 命令执行。
 命令环境复用 `lib/prisma-cli-env.ts`。
 配置加载使用 Next.js 环境加载器。
+备份与份额回填也读取 `.env.local`，显式 `DATABASE_URL` 优先。
 
 显式 `--force-reset` 会删除目标库及其旁文件。
 删除目标必须在当前工作区内。
@@ -66,6 +70,12 @@
 汇总只输出库中已脱敏的 `Account.number`，不输出完整账号、卡号或配置值。
 
 ## 完整号码补全
+
+`demo-reference-backfill.ts` 接受 `--plan=<JSON>`。
+清单按归属、名称、代码与展示值校验，不从脱敏值推算数字。
+已有完整号码或净值与清单冲突时，整批拒绝。
+默认预演，`--apply` 才写入；未列出的记录保持原值。
+`investment-share-backfill.mjs` 有未解决行时退出码为 `2`。
 
 `number-backfill.ts` 只补全完整号码列为空的联系人与卡片。
 唯一允许的补全是复制：展示列本身是完整号码时，复制进完整号码列，并把展示列规范化为脱敏值。

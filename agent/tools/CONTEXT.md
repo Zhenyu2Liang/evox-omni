@@ -139,7 +139,7 @@ replays its recorded model call. The stored intent shape is `ConversationIntent`
 
 `shares` / `expectedShares` 与 `expectedNetValue` 使用 `decimal-schema.ts` 的 `SharesParameter`（≤6 位小数）与 `NetValueParameter`（≤4 位小数）：无符号纯十进制文本，拒绝负号、指数、货币符号和 JS number，多余小数位被拒（模式层给 `The call contains invalid tool parameters`，`canonical*` 给 `份额/净值最多允许 N 位小数`）。写库前一律经 `canonicalShareCount` / `canonicalNetValue`（内部 `decimalText()`）规范化，因为 SDK 的 `recordedShares()` / `productNetValue()` 要求 `nonNegativeDecimal(raw) === raw`：`'5050.000000'` → `'5050'`、`'0.9880'` → `'0.988'`。`amount` / `expectedSettlementAmount` 走 `money-schema.ts` 后规范成两位小数。
 
-`expectedShares` / `expectedNetValue` / `expectedNetValueDate`（净值业务日，UTC epoch 毫秒整数）/ `expectedSettlementAmount` 是 `security/security-gateway.ts#redemptionSnapshot` 铸造的授权快照，由 `approvedSnapshot()` 规范化后原样转发，使 SDK 能在写事务内比对陈旧授权。执行身份不由模型提供：`runRedeemInvestment` 只把 `opts.idempotencyKey` 转发为 `idempotencyKey`，schema 里没有 `executionKey`。
+`expectedPositionVersion`（整笔持仓版本）/ `expectedShares` / `expectedNetValue` / `expectedNetValueDate`（净值业务日，UTC epoch 毫秒整数）/ `expectedSettlementAmount` 是 `security/security-gateway.ts#redemptionSnapshot` 铸造的授权快照，由 `approvedSnapshot()` 规范化后原样转发，使 SDK 能在写事务内比对陈旧授权。执行身份不由模型提供：`runRedeemInvestment` 只把 `opts.idempotencyKey` 转发为 `idempotencyKey`，schema 里没有 `executionKey`。
 
 `redemptionSummary()` 只用服务端返回值渲染：赎回口径、赎回份额、成交净值（含 UTC+08:00 净值日期）、预计到账、费用口径（`SIMULATED_NONE` → `模拟环境不收取赎回费，赎回费 ¥0.00`）、剩余份额（0 时标注「持仓已结清」）、剩余成本、已实现收益、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`；缺失字段写「历史数据不足」，本地不用浮点重算任何金额。
 

@@ -604,6 +604,7 @@ const REDEMPTION_MODE_LABEL: Record<RedeemMode, string> = {
 
 /** Server-minted snapshot fields: they belong to the original decision, not to the request identity. */
 const REDEMPTION_SNAPSHOT_FIELDS: ReadonlySet<string> = new Set([
+  'expectedPositionVersion',
   'expectedShares',
   'expectedNetValue',
   'expectedNetValueDate',
@@ -703,6 +704,7 @@ function recordedHoldingShares(raw: string | null): DecimalAmount | undefined {
 
 /** The 「净值 + 份额」 quote the confirmation snapshot persists — computed only by SDK helpers. */
 interface RedemptionQuote {
+  positionVersion: number;
   mode: RedeemMode;
   /** Shares this redemption actually redeems under the stated口径. */
   shares: DecimalAmount;
@@ -730,6 +732,7 @@ interface RedemptionQuote {
 function quoteRedemption(
   holding: {
     id: string;
+    positionVersion: number;
     productId: string;
     shares: string | null;
     product: { latestNetValuePerUnit: string | null; latestNetValueDate: Date | null };
@@ -761,6 +764,7 @@ function quoteRedemption(
   return {
     mode,
     shares,
+    positionVersion: holding.positionVersion,
     netValue,
     ...(netValueDate !== undefined ? { netValueDate } : {}),
     settlementAmount: settlementFromShares(shares, netValue),
@@ -772,6 +776,7 @@ function quoteRedemption(
 /** The server snapshot merged into the parked args (and therefore into the command digest). */
 function redemptionSnapshot(quote: RedemptionQuote): Record<string, unknown> {
   return {
+    expectedPositionVersion: quote.positionVersion,
     expectedShares: quote.shares,
     expectedNetValue: quote.netValue,
     ...(quote.netValueDate !== undefined ? { expectedNetValueDate: quote.netValueDate } : {}),

@@ -58,7 +58,7 @@
 
 每个持仓条目从上到下渲染：
 
-- 徽标：追加申购时为 `business.investments.addedToExisting`（已加购）；`valueBasis` 徽标取 `business.investments.valueBasis.migrated`（估算）或 `business.investments.valueBasis.insufficient`（历史数据不足）；状态取 `business.investments.holdingActive`（持有中）或 `holdingRedeemed`（已赎回）。
+- 徽标：追加申购时为 `business.investments.addedToExisting`（已加购）；`valueBasis` 徽标取 `business.investments.valueBasis.migrated`（估算）或 `business.investments.valueBasis.insufficient`（历史数据不足），或 `business.investments.valueBasis.snapshot`（历史账面估值，待核对）；状态取 `business.investments.holdingActive`（持有中）或 `holdingRedeemed`（已赎回）。
 - 持有金额：`business.investments.principal`，值 `Money(holding.amount)`，即剩余持仓成本。每个持仓只渲染 1 次。
 - 净值 + 份额事实：`<HoldingFacts holding={holding} layout="card" />`，与 tile 共用同一份事实来源。
 - 最近申购：`business.investments.lastPurchase`，值 `formatDateTime`。

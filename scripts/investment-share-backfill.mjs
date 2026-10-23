@@ -27,6 +27,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { resolveDatabaseFile } from './database-file.mjs';
 
 /** Share precision from the investment contract: at most 6 fractional digits. */
 const SHARE_FRACTION_DIGITS = 6;
@@ -46,6 +47,7 @@ const HOLDING_QUERY = `
          h.estimated_market_value AS estimatedMarketValue,
          h.shares                 AS shares,
          h.shares_estimated       AS sharesEstimated,
+         h.position_version       AS positionVersion,
          h.status                 AS status,
          p.code                   AS productCode,
          p.latest_net_value_per_unit AS latestNetValuePerUnit
@@ -58,23 +60,11 @@ const HOLDING_QUERY = `
 /** The guarded write: still legacy, still open, still not yet derived — so the run is idempotent. */
 const UPDATE_QUERY = `
   UPDATE "InvestmentHolding"
-     SET shares = ?, estimated_market_value = ?, shares_estimated = 1
+     SET shares = ?, estimated_market_value = ?, shares_estimated = 1, position_version = position_version + 1
    WHERE id = ? AND status = 'HOLDING' AND shares IS NULL
+     AND principal_amount_minor = ? AND estimated_market_value IS ? AND position_version = ?
+     AND EXISTS (SELECT 1 FROM "InvestmentProduct" p WHERE p.id = productId AND p.latest_net_value_per_unit = ?)
 `;
-
-/**
- * Resolve the SQLite file the application uses, matching `lib/db/url.ts`: a relative `file:` path is
- * anchored at `prisma/`, and `DATABASE_URL` defaults to `file:./dev.db` → `prisma/dev.db`.
- * The environment file is never read here; only an explicitly exported variable is honored.
- */
-function resolveDatabaseFile() {
-  const url = process.env.DATABASE_URL ?? 'file:./dev.db';
-  if (!url.startsWith('file:')) throw new Error('The banking demo requires a SQLite file URL in DATABASE_URL.');
-  const filename = url.slice('file:'.length).split('?')[0];
-  if (!filename) throw new Error('The SQLite database file name must not be empty.');
-  if (filename === ':memory:') throw new Error('The share backfill requires a persistent SQLite file.');
-  return path.isAbsolute(filename) ? filename : path.resolve(REPO_ROOT, 'prisma', filename);
-}
 
 /** Print a repository-relative path so the output stays stable across machines. */
 function display(file) {
@@ -139,6 +129,13 @@ function exceedsDriftBound(drift) {
   return drift.coefficient * MINOR_PER_UNIT >= 10n ** BigInt(drift.scale);
 }
 
+/** A sub-cent drift must not move a displayed/settled cent across a HALF_UP boundary. */
+function roundedMinor(value) {
+  const parsed = parseDecimalText(value, 'market value');
+  const denominator = 10n ** BigInt(parsed.scale);
+  return (parsed.coefficient * MINOR_PER_UNIT * 2n + denominator) / (denominator * 2n);
+}
+
 /** Print an aligned table; the numeric columns are right-aligned so their decimals line up. */
 function renderTable(headers, rows, rightAligned) {
   const widths = headers.map((header, index) =>
@@ -159,6 +156,9 @@ function planHolding(row) {
   const oldMarketValueText = row.estimatedMarketValue ?? fallbackText;
   const base = {
     holdingId: row.holdingId,
+    originalCost: row.principalAmountMinor,
+    originalSnapshot: row.estimatedMarketValue,
+    originalVersion: row.positionVersion,
     productCode: row.productCode ?? '(missing product)',
     oldMarketValueText,
     usedFallback: row.estimatedMarketValue === null,
@@ -239,11 +239,12 @@ async function runBackfill() {
     const skipped = plans.filter(plan => plan.outcome === 'skipped');
 
     // Refuse the whole run when the derivation would move the economics of any holding.
-    const violations = derived.filter(plan => exceedsDriftBound(plan.drift));
+    const violations = derived.filter(plan => exceedsDriftBound(plan.drift)
+      || roundedMinor(plan.oldMarketValueText) !== roundedMinor(plan.newMarketValueText));
     if (violations.length > 0) {
       for (const plan of violations) {
         console.error(
-          `[backfill] Drift exceeds 0.01 CNY for ${plan.holdingId}: ${formatScaled(plan.drift.coefficient, plan.drift.scale)}`,
+          `[backfill] Value drift or cent-rounding boundary changed for ${plan.holdingId}: ${formatScaled(plan.drift.coefficient, plan.drift.scale)}`,
         );
       }
       console.error('[backfill] Nothing was written. Recheck the stored market value and the product net value.');
@@ -256,8 +257,10 @@ async function runBackfill() {
       database.exec('BEGIN IMMEDIATE');
       try {
         for (const plan of derived) {
-          const result = update.run(plan.sharesText, plan.newMarketValueText, plan.holdingId);
-          written += Number(result.changes);
+          const result = update.run(plan.sharesText, plan.newMarketValueText, plan.holdingId,
+            plan.originalCost, plan.originalSnapshot, plan.originalVersion, plan.netValueText);
+          if (Number(result.changes) !== 1) throw new Error(`Position or net value changed: ${plan.holdingId}. Nothing was applied.`);
+          written++;
         }
         database.exec('COMMIT');
       } catch (error) {
@@ -286,7 +289,8 @@ async function runBackfill() {
     }
     console.log(`[backfill] total economic-value drift: ${formatScaled(totalDrift.coefficient, totalDrift.scale)} CNY`);
     if (!apply) console.log('[backfill] Re-run with --apply to persist the derived shares.');
-    return 0;
+    // An incomplete upgrade is not a successful migration; the CLI names every unresolved row.
+    return skipped.length > 0 ? 2 : 0;
   } finally {
     database.close();
   }

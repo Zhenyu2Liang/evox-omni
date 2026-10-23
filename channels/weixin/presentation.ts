@@ -77,6 +77,7 @@ function percentText(ratio: string): string {
  */
 function renderHolding(row: HoldingView): string {
   const basis = row.valueBasis === 'MIGRATED_ESTIMATE' ? '（估算）'
+    : row.valueBasis === 'HISTORICAL_SNAPSHOT' ? '（历史账面估值，待核对）'
     : row.valueBasis === 'HISTORICAL_DATA_INSUFFICIENT' ? `（${HISTORY_INSUFFICIENT}）` : '';
   return [
     `${row.productName}：${label(row.status)}`,

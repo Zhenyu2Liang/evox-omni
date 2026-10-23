@@ -102,6 +102,7 @@
   "business.investments.cumulativeProfit": "累计收益",
   "business.investments.realizedProfit": "已实现收益",
   "business.investments.valueBasis.migrated": "估算",
+  "business.investments.valueBasis.snapshot": "历史账面估值，待核对",
   "business.investments.valueBasis.insufficient": "历史数据不足",
   "business.investments.insufficient": "历史数据不足",
   "business.investments.units.shares": "份",

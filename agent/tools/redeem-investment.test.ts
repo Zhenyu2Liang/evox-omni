@@ -181,7 +181,7 @@ describe('redeem_investment — required 赎回口径', () => {
     expect(createRedeemInvestmentTool('owner').name).toBe('redeem_investment');
 
     expect(Object.keys(RedeemInvestmentParams.properties).sort()).toEqual([
-      'amount', 'expectedNetValue', 'expectedNetValueDate', 'expectedSettlementAmount', 'expectedShares',
+      'amount', 'expectedNetValue', 'expectedNetValueDate', 'expectedPositionVersion', 'expectedSettlementAmount', 'expectedShares',
       'holdingId', 'mode', 'shares',
     ]);
     const required = (RedeemInvestmentParams as { required?: string[] }).required ?? [];

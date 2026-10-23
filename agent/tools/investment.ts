@@ -377,6 +377,7 @@ export const RedeemInvestmentParams = Type.Object({
   shares: Type.Optional(SharesParameter),
   amount: Type.Optional(MoneyParameter),
   expectedShares: Type.Optional(SharesParameter),
+  expectedPositionVersion: Type.Optional(Type.Integer({ minimum: 0, description: 'Server-owned position version at approval.' })),
   expectedNetValue: Type.Optional(NetValueParameter),
   expectedNetValueDate: Type.Optional(Type.Integer({
     description: 'Server-snapshotted net value business date (epoch ms) of the approved quote.',
@@ -469,17 +470,25 @@ function redemptionRequest(args: Record<string, unknown>): RedemptionRequest {
  * canonicalized here because the SDK compares it against freshly read values.
  */
 function approvedSnapshot(args: Record<string, unknown>): {
+  expectedPositionVersion?: number;
   expectedShares?: string;
   expectedNetValue?: string;
   expectedNetValueDate?: number;
   expectedSettlementAmount?: string;
 } {
   const snapshot: {
+    expectedPositionVersion?: number;
     expectedShares?: string;
     expectedNetValue?: string;
     expectedNetValueDate?: number;
     expectedSettlementAmount?: string;
   } = {};
+  if (args.expectedPositionVersion !== undefined) {
+    if (typeof args.expectedPositionVersion !== 'number' || !Number.isSafeInteger(args.expectedPositionVersion) || args.expectedPositionVersion < 0) {
+      throw new AppError('VALIDATION', '持仓版本必须是非负整数');
+    }
+    snapshot.expectedPositionVersion = args.expectedPositionVersion;
+  }
   if (args.expectedShares !== undefined) snapshot.expectedShares = canonicalShareCount(args.expectedShares);
   if (args.expectedNetValue !== undefined) snapshot.expectedNetValue = canonicalNetValue(args.expectedNetValue);
   if (args.expectedNetValueDate !== undefined) {
@@ -543,6 +552,10 @@ export async function runRedeemInvestment(
       throw new AppError('VALIDATION', 'redeem_investment 需要 holdingId');
     }
     const request = redemptionRequest(args);
+    // Old parked decisions have no position version and cannot authorize a new execution.
+    if (opts?.fence && args.expectedPositionVersion === undefined) {
+      throw new AppError('CONFLICT', '持仓授权缺少版本，请重新发起并确认赎回');
+    }
     const result: InvestResult = await banking.investment.redeemInvestment({
       userId,
       holdingId,

@@ -94,14 +94,13 @@ describe('investment decimal precision', () => {
     expect(created.principalAmountMinor).toBe(100001n);
     expect(created.estimatedMarketValue).toBe('1000.019876543210123456');
 
-    // … but it no longer PRICES the position: a row without recorded shares is 历史数据不足 and
-    // reports its cost, never the stale estimate.
+    // A row without shares preserves the estimate as historical evidence, not a tradable NAV.
     const unrecorded = (await banking.investment.listHoldings(DEMO_USER_ID))
       .find((holding) => holding.id === created.id);
     expect(unrecorded).toMatchObject({
       amount: '1000.01',
-      marketValue: '1000.01',
-      valueBasis: 'HISTORICAL_DATA_INSUFFICIENT',
+      marketValue: '1000.019876543210123456',
+      valueBasis: 'HISTORICAL_SNAPSHOT',
     });
     expect(unrecorded?.profit).toBeUndefined();
 

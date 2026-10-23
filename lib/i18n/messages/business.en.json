@@ -102,6 +102,7 @@
   "business.investments.cumulativeProfit": "Cumulative return",
   "business.investments.realizedProfit": "Realized return",
   "business.investments.valueBasis.migrated": "Estimated",
+  "business.investments.valueBasis.snapshot": "Historical estimate; reconciliation required",
   "business.investments.valueBasis.insufficient": "Insufficient history",
   "business.investments.insufficient": "Insufficient history",
   "business.investments.units.shares": "shares",

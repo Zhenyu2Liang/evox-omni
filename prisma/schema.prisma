@@ -212,6 +212,8 @@ model InvestmentHolding {
   // `scripts/investment-share-backfill.mjs` instead of being recorded by a real subscription, so the
   // valuation is presented as 估算 (`valueBasis: 'MIGRATED_ESTIMATE'`), never as an exact one.
   sharesEstimated Boolean @default(false) @map("shares_estimated")
+  // Incremented by every economic position change; gates partial as well as full redemptions.
+  positionVersion Int @default(0) @map("position_version")
   // REALIZED profit already booked by redemptions, CNY cents (may be negative). Cumulative profit = realized + unrealized.
   realizedProfitMinor BigInt  @default(0) @map("realized_profit_minor")
   subscribeResult String? // Original SDK purchase outcome, persisted in the purchase transaction.
