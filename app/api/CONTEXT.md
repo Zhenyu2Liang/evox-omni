@@ -144,7 +144,7 @@ Every handler is ONE blanket `try { … } catch (e) { return errorResponse(e); }
 `_lib/http.ts:19-31` `STATUS_BY_CODE` is the only `AppError` → HTTP mapping: VALIDATION 400, NOT_FOUND 404, SECURITY_DENIED 403, MFA_FAILED 403, CIRCUIT_OPEN 423, MFA_LOCKED 423, INSUFFICIENT_FUNDS 422, LIMIT_EXCEEDED 422, CONFLICT 409, TOOL_FAILED 502, INTERNAL 500.
 `mapAppError` (`:50-54`) sends every non-`AppError` throw through `AppError.from` (`lib/errors.ts:24`) to `INTERNAL`, so an unknown error — and any code absent from the map (`?? 500`) — becomes `500` with the generic `Internal error` message; nothing bubbles to a framework 500.
 The PRE-checks throw too, not just the delegated domain call: `requireIdentity` (`_lib/session.ts:23-25`) upserts and re-reads the demo session via `getDemoSession` (`agent/session.ts:150-158`), which throws a plain `Error` (→ 500) when the row belongs to another user or cannot be re-read; `parseBody` (`_lib/http.ts:71-83`) throws `VALIDATION` on malformed JSON or a schema mismatch; `getTask` either returns `null` (routes turn it into `404`) or lets a driver error become a `500`.
-`POST /api/tasks/[id]` therefore answers a control refusal as an HTTP failure, never as `200 { ok:false }`: it delegates to `resolveTaskControl(action)(sessionId, id)` (`_lib/agent-bridge.ts:59-82`, static `@/agent` imports, `TOOL_FAILED` when an action has no implementation) and the agent node's `AppError`s surface as the mapped status (`NOT_FOUND`/`SECURITY_DENIED` from `agent/workflows/ownership.ts:9-12`, `CONFLICT` from `lib/db/repositories/manualReview.ts:6`, `MFA_LOCKED`/`CONFLICT` from `agent/workflows/parked-actions.ts:74-76`, `CONFLICT` from `agent/task-rollback.ts:18-20`).
+`POST /api/tasks/[id]` therefore answers a control refusal as an HTTP failure, never as `200 { ok:false }`: it delegates to `resolveTaskControl(action)(sessionId, id)` (`_lib/agent-bridge.ts:59-82`, static `@/agent` imports, `TOOL_FAILED` when an action has no implementation) and the agent node's `AppError`s surface as the mapped status (`NOT_FOUND`/`SECURITY_DENIED` from `agent/workflows/ownership.ts:9-12`, `CONFLICT` from `lib/db/repositories/manualReview.ts:6`, `MFA_LOCKED`/`CONFLICT` from `agent/workflows/parked-actions.ts#refusal`, `CONFLICT` from `agent/task-rollback.ts:18-20`).
 Its `TOOL_FAILED` fallback for a falsy plan (`tasks/[id]/route.ts:87-89`) is currently unreachable: every wired `@/agent` control returns a `TaskPlan`.
 
 Chat SSE emits one `data: <JSON>` frame per grounded `AgentStreamEvent` and exactly one final `done`.
@@ -252,7 +252,16 @@ execution. The fixed demo identity has no missing-cookie rejection branch.
 - `app/` never writes `PendingAction.status`: every hit is a comparison or read (`app/agent/history.ts:26`,
   `app/agent/plan-history.ts:24`). No retry/recover/claim/liveness endpoint here can reopen a `'locked'`
   row; all status mutation lives in `@/agent`, `@/security` and `lib/db/repositories/pendingAction.ts`.
-- `POST /api/tasks/[id]` forwards control actions to `agent/workflows/controls.ts`, whose `RESUMABLE` set still includes `waiting_confirmation` (`:16`); the VETO of a settled parked decision lives in `agent/`, where `resume`/`retry` call `assertParkedActionsNotTerminal` (`controls.ts:33,54` → `agent/workflows/parked-actions.ts:63-77`) BEFORE any status claim, throwing `MFA_LOCKED` for a `locked` row and `CONFLICT` for `needs_reconciliation` or any other terminal status. This edge maps those to `423`/`409` and only REPORTS a parked lock on reads (`pendingActionStatus`); it holds no veto of its own. `pause`/`cancel`/`rollback` never consult parked actions.
+- `POST /api/tasks/[id]` forwards control actions to `agent/workflows/controls.ts`, whose `RESUMABLE` set
+  still includes `waiting_confirmation` (`agent/workflows/controls.ts#RESUMABLE`); the VETO of a settled
+  parked decision lives in `agent/`, where `agent/workflows/controls.ts#retryTask` calls
+  `agent/workflows/parked-actions.ts#assertParkedActionsNotTerminal` BEFORE any status or lease claim,
+  throwing `MFA_LOCKED` for a `locked` row and `CONFLICT` for `needs_reconciliation` or any other terminal
+  status (`agent/workflows/parked-actions.ts#refusal`); `agent/workflows/controls.ts#resumeTask` does not
+  veto — it SEALS every settled parked node through `agent/workflows/parked-actions.ts#sealedParkedNodes`
+  and keeps the rest of the plan advancing. This edge maps those `AppError`s to `423`/`409` and only
+  REPORTS a parked lock on reads (`pendingActionStatus`); it holds no veto of its own.
+  `pause`/`cancel`/`rollback` never consult parked actions.
 - `components/` and `channels/` do not yet read `pendingActionStatus`, `lock` or `lockedActions`; all three are additive and optional, so existing consumers keep working unchanged.
 - `DECISION_STATUSES` (`actions/route.ts:58`) is declared but never referenced: the surfacing filter is `attentionFor` (`:77-92`) alone, and `listPendingActions({ sessionId })` (`:130`) applies NO database status filter — it pages the session's newest 100 rows (`lib/db/repositories/pendingAction.ts:84,120-136`) and the route drops non-attention rows in memory.
 
