@@ -32,6 +32,7 @@
 取值表达式为 `process.env.LLM_MODE === 'live' ? 'live' : 'mock'`：未设置或任何其他值（含大小写变体）都得到 `'mock'`，不存在 env 默认值兜底。
 `llmProvider` 回退默认 `'openai'`，`llmModel` 回退默认 `'gpt-4o-mini'`（`LLM_PROVIDER` / `LLM_MODEL`，仅 live 模式使用）。
 `demoUserId` 回退默认 `'user_liming'`（`DEMO_USER_ID`）。
+唯一 Web 身份由调用方组合解析：`app/api/_lib/session.ts#resolveUserId` 取 `getConfig().demoUserId || DEFAULT_DEMO_USER_ID`（`constants.ts:23` = `'user_liming'`，种子用户 id），会话 id 为 `demo:${userId}`（`agent/session.ts#getDemoSession` → `db/repositories/session.ts#ensureDemoSession` 幂等 upsert，`update: {}` 不重置状态）。
 `contextCompaction` 四项来自 `AGENT_COMPACTION_*`；`tokenSetting` 只接受 `[128, 1000000]` 内的安全整数，否则为 `undefined`。
 `config.ts` 不读取 `LLM_REQUEST_TIMEOUT_MS`，也不含 provider base URL 或 API key 字段（凭据由运行环境提供）。
 `GET /api/health` 的 `llmMode` 直接取自 `getConfig().llmMode`，永不写死。
