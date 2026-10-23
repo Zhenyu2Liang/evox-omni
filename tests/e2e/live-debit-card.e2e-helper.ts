@@ -789,9 +789,29 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
   }
   const shotTransferCards = await captureShot(page, 'lJ-transfer-cards');
   await page.goto(`${baseUrl}/overview`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS });
-  const overviewText = (await page.locator('main').first().innerText()).replace(/\s+/g, ' ');
-  if (!overviewText.includes(formatCNY(cash2))) {
-    fail(`/overview 未渲染业务后活期余额 ${formatCNY(cash2)}：${excerpt(overviewText)}`);
+  // `/overview` paints its dashboard numbers AFTER `domcontentloaded`, so reading `main` once right here
+  // races the render (a harness flake, not a product defect). Poll `main` until it carries the EXACT
+  // post-transfer cash and keep the LAST read for diagnostics. A momentarily absent `main` is a real
+  // navigation state — keep polling; an amount that never renders still ends in the timeout FAIL below,
+  // and the assertion stays exact: `formatCNY(cash2)` must be present verbatim in the final read.
+  let overviewText = '';
+  try {
+    overviewText = await waitFor(
+      async () => {
+        const main = page.locator('main').first();
+        if ((await main.count()) === 0) return false;
+        const text = (await main.innerText()).replace(/\s+/g, ' ');
+        overviewText = text;
+        return text.includes(formatCNY(cash2)) ? text : false;
+      },
+      {
+        timeoutMs: 60_000,
+        intervalMs: 500,
+        description: `/overview 渲染业务后活期余额 ${formatCNY(cash2)}（数字在 domcontentloaded 之后才绘制）`,
+      },
+    );
+  } catch (error) {
+    fail(`/overview 未渲染业务后活期余额 ${formatCNY(cash2)}：${errText(error)}；最后一次渲染=${excerpt(overviewText)}`);
   }
   const shotOverview = await captureShot(page, 'lJ-transfer-overview');
 
@@ -941,6 +961,7 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
       debitTileFrozen: excerpt(frozenText, 400),
       virtualTileLost: excerpt(lostText, 400),
       creditTile: excerpt(creditText0, 400),
+      overview: excerpt(overviewText, 400),
     },
     sentTurns: { transfer: sentTransfer, freeze: sentFreeze, lost: sentLost, secondVirtualCard: applied.sent },
     screenshots: { shotBaseline, shotSecondCard, shotTransferCards, shotOverview, shotFrozen, shotLost },
