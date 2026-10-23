@@ -51,6 +51,9 @@ Web 身份与接口表见 [api/CONTEXT.md](api/CONTEXT.md)。
 排查聊天文案、`security_event` 或面板显隐时进入 `components/chat/`，不要在 `app/` 内继续搜索。
 `app/` 对 `PendingAction` 只读，读取点为 `agent/history.ts`、`agent/plan-history.ts`、`security/page.tsx`（经 `listPendingActions`）、`api/actions/route.ts`（`listPendingActions({ sessionId })`，无状态参数，状态由 `attentionFor` 在内存判定）、`api/security/route.ts`、`api/_lib/task-pending-actions.ts`；写入（含 `status`）全部经 `@/agent`、`@/security` 与 `lib/db/repositories/pendingAction.ts` 完成。
 因此本层没有把 `locked` 行改回 `pending`/`awaiting_mfa` 的路径，锁定与否只看仓储与网关。
+本层不渲染 `components/chat/` 的任何卡片或文案键：`app/` 内不出现 `MfaCard`，也不出现 `cards.mfa.title|locked|hint|placeholder|processing|failedAttempts|failedAttemptsLimit`、`cards.terminal.locked` 与 `chat.approval.status.locked`；这些全部只在 `components/chat/` 渲染。
+`app/` 内只有两处验证码输入：`security/UnlockPanel.tsx`（`name="verificationCode"` + `aria-label` = `security.reset.codeLabel`）与 `cards/CardChangeDialog.tsx`（`input[name="code"]`，无 `aria-label`、无 `placeholder`，标签为 `cards.mfa.label`）。
+DOM 钩子约定：`app/` 内没有任何 `data-testid`，全仓用语义化 `data-*` 钩子与 `role`/`aria-*` 定位（见 [investments/CONTEXT.md](investments/CONTEXT.md)、[cards/CONTEXT.md](cards/CONTEXT.md)、[security/CONTEXT.md](security/CONTEXT.md)）；改名会破坏 `tests/e2e/`。
 
 ## 锁定终态（MFA 连续失败）
 
