@@ -90,7 +90,7 @@ mock 夹具播种 `card_credit`/`card_debit`，演示种子（`prisma/seed.ts`�
 | `unit/agent/card-capability-guidance.test.ts` + `unit/agent/capability-guidance-markers.ts` | 遍历 `agent/messages/*.json` 全部语言目录，按句断言卡片管理指引不得否认 `apply_virtual_card`/`replace_card`，人工规则限定在新建/删除实体卡；`overbroadManualOnlyCardProhibitions` 的必判违规例（`Issuing or deleting physical debit and credit cards remains manual-only … cannot be included in an Agent workflow.` 及其 `Offer replace_card …` 后续句）与合规例 |
 | `unit/agent/system-prompt.test.ts`（`system prompt card capability scope`） | 系统提示词的 `manual-only` 语句不得套用到已挂失卡的补办，实体卡人工规则限于新建 |
 | `integration/card-replace-capability-contract.test.ts` | 真实网关路径下三种卡类型的 RED + MFA 可达性、验证前无副作用、验证后仅一张新卡与类型继承；非 `LOST` 源卡的 CONFLICT 且不改状态；重复请求落到同一张补办卡并可重放 |
-| `integration/card-manual-only-management.test.ts` | `manual_add_card`/`manual_delete_card` 在代理路径上仍被拒绝，用户侧副作用快照不变 |
+| `integration/card-manual-only-management.test.ts` | `manual_add_card`/`manual_delete_card` 在代理路径上仍被拒绝：`executeGatedTool` 的拒绝结果由精确 `toEqual` 固定为 `{ok:false,errorCode,error,failure:{code:'SECURITY_DENIED'}}`，用户侧副作用快照不变 |
 | `scenarios/test-18-card-capability-consultation.test.ts` | 补办咨询与歧义目标只澄清、不产生动作；指引信封不创建 `PendingAction`；话术不得否认真实能力；生产提示的人工专属规则限于「新建实体卡 + 注销卡片」并声明集合封闭，`replace_card` 覆盖任意类型已挂失卡且从不说成页面专属 |
 | `scenarios/test-19-card-replace-credit-runtime.test.ts` | 生产运行时下已挂失信用卡的补办走 RED MFA，验证后仅一张补办卡、源卡仍 `LOST` |
 
@@ -180,9 +180,8 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 
 ## 与当前生产契约不一致的既有断言（已知缺口）
 
-- `app/actions-recovery-http.test.ts:301-302` 断言 wedge 恢复后 `plan.status`/`node.status` 为 `success`。当前契约相反：`recoverAction`（`agent/index.ts:209-227`）先把计划关联行结清为 `executed`，再 `resumeTask`；`resumeTask`（`agent/workflows/controls.ts:82-90`）经 `sealedParkedNodes` + `sealSettledNodes` 把已结清动作的停靠节点直接封存为 `failed`（`agent/workflows/parked-actions.ts:80-94`、`planner/failure.ts:111-116` 的 `action_not_open`、`planner/executor.ts:481`/`:665`），计划随之为 `failed`；`agent/index.ts:234-235` 仍把「计划 failed + 动作 executed」判为成功，所以 `ok:true`。冻结不要按老断言改生产，也不要删断言。
-- `app/manual-review-http.test.ts:277` 断言确认被人工复核守卫拦下时 `message` 含 `manual review`。当前拒绝文案由目录收口：`security/security-gateway.ts:1263-1265` 抛 `AppError('CONFLICT', …)` → `agent/confirmation/outcomes.ts:119` `publicRefusalMessage(..., { code }, 'chat.error.stateChanged')` → `lib/tool-feedback.ts:12`/`:59-61` → `chat.error.stateChanged`（「业务状态已变化。请刷新并核对原操作卡片。」）。守卫句不再上屏，`PendingAction` 行保持 `pending`（未走 CAS）。
-- `integration/card-manual-only-management.test.ts:143` 用 `toEqual` 精确断言 `executeGatedTool` 的拒绝结果只有 `{ok,errorCode,error}`；`agent/confirmation/gated-execution.ts:154-157` 的 catch 分支现在恒附 `failure: toPlanFailure(...)`（`GatedToolOutcome.failure`），因此该处必然多出 `failure` 字段。拒绝语义与零副作用不变（`:159` 的 `sideEffects` 仍相等），`:183` 因用 `toMatchObject` 不受影响。
+- `app/actions-recovery-http.test.ts:301-302` 断言 wedge 恢复后 `plan.status`/`node.status` 为 `success`，实测当前为 `failed`（同用例 `:292` 的 `ok:true` 通过）。期望值权威：`recoverAction`（`agent/index.ts:209-227`）先把计划关联行结清为 `executed`，再 `resumeTask`；`resumeTask`（`agent/workflows/controls.ts:82-89`）经 `sealedParkedNodes` + `sealSettledNodes` 把已结清动作的停靠节点写为 `failed`（`agent/workflows/parked-actions.ts:80-94`、`planner/failure.ts:111-116` 的 `action_not_open`、`planner/executor.ts:481`/`:665`），计划随之为 `failed`；`agent/index.ts:234-235` 仍把「计划 failed + 动作 executed」判为成功。不得把断言改成 `failed`，也不得把「计划 failed」固化成生产契约。
+- `app/manual-review-http.test.ts:277` 断言确认被人工复核守卫拦下时 `blocked.body.data.message` 含 `manual review`，实测该串不存在：人工复核事实在对外文案收口时被压成通用 `CONFLICT` 文案（`security/security-gateway.ts:1263-1265` 抛 `AppError('CONFLICT', …)` → `agent/confirmation/outcomes.ts:119` `publicRefusalMessage(..., { code }, 'chat.error.stateChanged')` → `lib/tool-feedback.ts:12`/`:59-61` → `chat.error.stateChanged`「业务状态已变化。请刷新并核对原操作卡片。」）。该断言代表期望行为，不得按现有实现改断言；`:275` 的 `ok:false`、`:276` 的 `status:'pending'`（`PendingAction` 行未走 CAS）与 `:278` 的金额不变断言仍通过。
 
 ## 常用命令
 
@@ -198,8 +197,8 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 批 A `pnpm exec vitest run tests/app tests/unit`；批 B `pnpm exec vitest run tests/integration tests/scenarios`。
 两批各自独占测试库，批间不重叠；`vitest` 的 `fileParallelism:false` 不足以免除「不并行起两个 vitest 进程」。
 节点本地三文件：`pnpm exec vitest run security/mfa-lock-reason-authority.test.ts planner/plan-failure-contract.test.ts planner/plan-drive-guard.test.ts`（根 `vitest.config.ts` 已收集 `security/**`、`planner/**`）。
-当前预期失败只有上文「已知缺口」三条加 `integration/confirmation-policy.test.ts` 的两条 `a stale recovery uses the committed RED decision in the {CONFLICT,CIRCUIT_OPEN} receipt fallback`（后者是真实缺陷，见 [agent/CONTEXT.md](../agent/CONTEXT.md) 的 Known Issues），其余全绿。
-失败项归因分「死 spy 注入接缝」与「再驱动入口语义收窄」两类，见上文 wedge 小节与 [integration/CONTEXT.md](integration/CONTEXT.md)。
+当前预期失败只有上文「已知缺口」两条：`app/actions-recovery-http.test.ts:301-302` 与 `app/manual-review-http.test.ts:277`，其余全绿。
+失败项归因写在「已知缺口」各条内；注入接缝与再驱动入口规则见上文 wedge 小节与 [integration/CONTEXT.md](integration/CONTEXT.md)。
 `pnpm exec tsx tests/e2e/acceptance.e2e.ts` 运行浏览器验收。
 
 ## 证据范围
