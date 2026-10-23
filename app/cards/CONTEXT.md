@@ -62,13 +62,94 @@
 验证与取消使用持久化申请标识；关闭弹窗不等于取消已保存申请。
 手动申请不混入助手的待确认操作恢复。
 
+## 文案与测试钩子
+
+本目录不内联任何中文字面量：三段组件都只调用 `useI18n().t(键)`，键由 `lib/i18n/shared.ts` 合并后才是完整表。
+断言文本必须从目录文件读取，不在页面里抄：`pages.cards.*` 在 `lib/i18n/messages/pages.zh-CN.json`（第 30-74 行）、`business.cards.*` 在 `business.zh-CN.json`（第 47-69 行）、`cards.mfa.label` 在 `chat.zh-CN.json`（第 135 行）。
+默认语言是 `zh-CN`（`lib/i18n/shared.ts#DEFAULT_LOCALE`），语言 Cookie 只切换展示，不改变键到文本的映射来源。
+
+### 页面骨架（`CardManager.tsx`）
+
+| 键 | 元素 | ARIA role | 钩子 | 出现条件 |
+| --- | --- | --- | --- | --- |
+| `pages.cards.title` | `h1` | 无（默认 heading） | 无 | 恒显示 |
+| `pages.cards.summary` | `h1` 同级 `p` | 无 | 无 | 恒显示，插值 `{count}` = `cards.length` |
+| `pages.cards.refresh` | `Button`（secondary） | `button` | 外层 `span[data-card-refresh]` | 恒显示 |
+| `pages.cards.add` | `Button` | `button` | 外层 `span[data-card-add]` | 恒显示 |
+| `pages.cards.demoDescription` | 独立 `p`（`bg-banking-light` 块） | 无 | 无 | 恒显示 |
+| `pages.cards.refreshFailed` | 通知 `p` | `alert` | 无 | 刷新两个接口任一失败 |
+| `pages.cards.validation` / `conflict` / `locked` / `failed` | 通知 `p` | `alert` | 无 | 按响应 `error.code` 映射，`failed` 为兜底 |
+| `pages.cards.verificationFailed` | 通知 `p` | `alert` | 无 | 验证被拒，插值 `{attempts}` = `attemptsLeft ?? 0` |
+| `business.cards.cardFrozenNotice` / `cardLostNotice` / `cardUnavailable` | 通知 `p` | `alert` | 无 | 点开 `usable === false` 卡片的“消费”入口时按 `status` 取一 |
+| `pages.cards.added` / `deleted` / `cancelled` | 通知 `p` | `status` | 无 | 变更执行或取消成功 |
+| `pages.cards.pending` | `h2` | 无 | 容器 `section[data-card-pending-changes]` | 仅 `changes.length > 0` |
+| `pages.cards.reviewAdd` / `reviewDelete` | 行内文本节点 | 无 | `li[data-card-pending-change-id={changeId}]` | 同上，按 `change.kind` 取一 |
+| `pages.cards.locked` | 行内 `p`（`text-banking-danger`） | 无 | 同上 `li` 内 | 该变更 `status === 'locked'` |
+| `pages.cards.resume` | `Button`（secondary） | `button` | 同上 `li` 内 | 同上，每行一个 |
+| `pages.cards.consume` | `Button`（secondary, sm） | `button` | `span[data-card-consume]` | 每卡一个；`!card.usable` 时 disabled |
+| `pages.cards.delete` | `Button`（ghost, sm） | `button` | `span[data-card-delete]` | 同上；该卡已有删除申请时 disabled |
+| `pages.cards.emptyTitle` | `EmptyState` 的 `div.font-semibold` | 无（`components/ui/EmptyState.tsx` 不加 role） | 无 | 仅 `cards.length === 0` |
+| `pages.cards.emptyDescription` | `EmptyState` 的 `p` | 无 | 无 | 同上 |
+
+页面骨架顺序固定为 `header`（标题、摘要、刷新、添加）→ 演示说明 `p` → 通知 `p` → 待办 `section` → 卡片网格 `section`。
+卡片网格是 `section[data-card-list]`，每张卡一个 `div[data-card-id={cardId}]`，内含 `CardTile` 与本行的两个按钮。
+
+### 变更弹窗（`CardChangeDialog.tsx`）
+
+根元素是 `dialog[data-card-change-dialog]`，带 `data-card-change-id`、`data-card-change-status` 与 `aria-labelledby="card-change-title"`；`data-card-change-id`/`-status` 只在复核既有变更时存在。
+
+| 键 | 元素 | ARIA role | 钩子 / 位置 |
+| --- | --- | --- | --- |
+| `pages.cards.add` / `reviewAdd` / `reviewDelete` | `h2#card-change-title` | 无 | 按 `selection.kind` 与 `change.kind` 取一 |
+| `pages.cards.close` | `Button`（ghost, sm） | `button` | 标题右侧 |
+| `pages.cards.addDescription` / `deleteDescription` | `p` | 无 | 标题下方 |
+| `pages.cards.validation` | 错误 `p` | `alert` | 本地金额校验失败时优先于 `props.error` |
+| 页面通知原文（`props.error`） | 同一个错误 `p` | `alert` | 请求失败时页面通知键的插值文本被注入此处 |
+| `pages.cards.type` / `creditLimit` / `monthlyLimit` | 三个 `label` | 无 | `form[data-card-add-form]` 内；`creditLimit` 仅 CREDIT |
+| `pages.cards.review` | 提交按钮 / 删除确认按钮 | `button` | 添加表单内一处，删除复核一处 |
+| `pages.cards.confirmDetails` | checkbox 的 `label` | 无 | `form[data-card-verification-form]` 内 |
+| `cards.mfa.label` | 验证码输入 `label` | 无 | 同上 |
+| `pages.cards.verificationHint` | `p`（`text-xs`） | 无 | 同上 fieldset 末尾 |
+| `pages.cards.cancelChange` | `Button`（secondary） | `button` | 验证表单按钮区左侧 |
+| `pages.cards.verify` | `Button`（type=submit） | `button` | 验证表单按钮区右侧 |
+| `pages.cards.locked` | `p`（`text-banking-danger`） | `status` | 复核时 `change.status === 'locked'` |
+| `business.cards.limit` / `business.cards.monthlyLimit` | 复核 `dl` 的 `dt` | 无 | 仅对应限额存在时 |
+
+### 消费弹窗（`CardConsumeDialog.tsx`）
+
+根元素是 `dialog[data-card-consume-dialog]`，带 `data-card-consume-card-id` 与 `aria-labelledby="card-consume-title"`。
+
+| 键 | 元素 | ARIA role | 钩子 / 位置 |
+| --- | --- | --- | --- |
+| `pages.cards.consumeTitle` | `h2#card-consume-title` | 无 | 标题 |
+| `pages.cards.close` | `Button`（ghost, sm） | `button` | 标题右侧 |
+| `business.cards.cardFrozenNotice` / `cardLostNotice` / `cardUnavailable` / `linkedAccountMissing` / `linkedAccountUntrusted` | 不可用原因块内每键一个 `p` | 容器 `status` | 位于摘要之前；状态在前、关联状态在后 |
+| `business.cards.linkedAccount` / `accountBalance` / `usableBalance` / `monthlyLimit` | 摘要 `dl` 的 `dt` | 无 | `dl[data-card-consume-summary]`，只在字段存在时出现 |
+| `pages.cards.validation` | 通知 `p` | `alert` | 本地金额校验失败 |
+| `pages.cards.consumeSuccess` | 通知 `p` | `status` | 提交成功 |
+| `pages.cards.consumeInsufficient` / `consumeLimitExceeded` / `consumeUnavailable` / `consumeFailed` | 通知 `p` | `alert` | 按错误码映射，`consumeFailed` 为兜底（含记录加载失败） |
+| 服务端原因原文 | 通知 `p` | `alert` | `VALIDATION` 且信封带 `error.message` 时取代目录文本（`occurredAt` 被拒即此路径） |
+| `pages.cards.consumptions` | `h3` | 无 | `section[data-card-consumptions]` |
+| `pages.cards.consumptionsEmpty` | `p` | 无 | `p[data-card-consumptions-empty]`，记录为空且已加载 |
+| `pages.cards.consumeAmount` / `consumeCategory` / `consumeMerchant` | 三个 `label` | 无 | `form[data-card-consume-form]` 内 |
+| `pages.cards.consumeSubmit` | 提交按钮 | `button` | 表单底部，`blocked` 时 disabled |
+
+记录行是 `li[data-card-consumption={recordId}]`，商户与分类是数据字段而非文案键。
+
+### 断言要点
+
+`role` 与 `data-*` 钩子是稳定契约；中文字面量属于目录文件，断言应读取目录文本或整句匹配，不要在测试里另抄一份。
+含插值的键（`pages.cards.summary`、`pages.cards.verificationFailed`）必须按插值后的整句匹配。
+`/cards` 上 `p[role="alert"]` 可能同时命中页面通知与弹窗错误段且文本相同，断言时用 `dialog p[role="alert"]` 或 `main > p[role="alert"]` 区分。
+成功提示一律是 `role="status"`，`p[role="alert"]` 只覆盖失败与本地校验失败；不可用原因块虽用 `role="status"` 也不得改成 `alert`。
+
 ## 测试
 
 相关 HTTP 测试在 `tests/app/card-consume-http.test.ts`、`tests/app/manual-card-management.test.ts` 与 `tests/app/card-freeze-audit-http.test.ts`。
 e2e 场景在 `tests/e2e/live-virtual-card.e2e-helper.ts` 与 `tests/e2e/card-management.e2e-helper.ts`。
 本目录只读这些测试，不修改测试文件；e2e 断言 `p[role="alert"]`，故不可用原因块不得改用 `role="alert"`。
 金额展示规则见 [financial-values.md](../../docs/cn/financial-values.md)。
-测试钩子：data-card-consume（入口）、data-card-consume-dialog、data-card-consume-card-id、data-card-consume-summary、data-card-consume-form、data-card-consumptions、data-card-consumption（记录行）、data-card-id（单个卡片容器）。
+每个钩子与文案键的对应关系见上文「文案与测试钩子」三张表，本节不再重复列举。
 消费相关 e2e 断言以 data-card-* 钩子定位，改动这些属性名会破坏 tests/e2e 下的场景。
 `POST /api/cards/[id]/consume` 拒绝任何携带 `occurredAt` 的请求体（400 `VALIDATION`）：入账时间归服务端所有，界面不发送该字段，也不要补充任何客户端时间。
 手动卡片验证是本目录唯一自带错误码的 MFA 面：`security/manual-card-management.ts` 熔断时抛 `AppError('CIRCUIT_OPEN')`，`_lib/http.ts` 映射为 HTTP 423 失败信封，`CardManager.tsx` 84-100 行据此把申请置为 `locked` 并显示 `pages.cards.locked`。
