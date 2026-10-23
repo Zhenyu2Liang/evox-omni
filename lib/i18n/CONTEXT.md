@@ -85,6 +85,26 @@
 | `business.cards.cardLostNotice` | 卡片已挂失，暂不可用于消费（余额仍可查看） | Card reported lost — not usable for spending; the balance is still viewable | 挂失状态下的说明句：不可消费但余额仍可查看 |
 | `business.cards.balanceFromAccount` | 余额来自关联账户 | Balance from the linked account | 说明余额来源是关联账户 |
 
+卡片类型、状态与额度标签（`messages/business.{zh-CN,en}.json` 同一行号段 47–58，中英文键顺序一致）：
+
+| 键 | zh-CN | en | 含义 |
+| --- | --- | --- | --- |
+| `business.cards.debit` | 借记卡 | Debit card | 借记卡类型 |
+| `business.cards.credit` | 信用卡 | Credit card | 信用卡类型 |
+| `business.cards.virtual` | 虚拟卡 | Virtual card | 虚拟卡类型 |
+| `business.cards.active` | 正常 | Active | 状态：正常 |
+| `business.cards.frozen` | 已冻结 | Frozen | 状态：冻结 |
+| `business.cards.lost` | 已挂失 | Reported lost | 状态：挂失（终态） |
+| `business.cards.pending` | 待激活 | Pending activation | 状态：待激活 |
+| `business.cards.limit` | 信用额度 | Credit limit | 信用卡额度行标签 |
+| `business.cards.available` | 可用额度 | Available credit | 信用卡可用额度行标签 |
+| `business.cards.monthlyLimit` | 月限额 | Monthly limit | 卡片月消费限额 |
+| `business.cards.categoryLimits` | 分类限额 | Category limits | 分类限额区块 |
+| `business.cards.replaced` | 已补卡 | Replaced | 已补卡标记 |
+
+这些卡片键全部**不含占位符**，`t(key)` 返回值即目录原文；en 的 `cardFrozenNotice` / `cardLostNotice` 使用 U+2014 em dash（`Card frozen — not usable…`），断言时不要写成连字符。
+`lib/i18n/messages/pages.*.json` 不含任何 `business.cards.*` 键，`shared.ts:15`/`:21` 的展开覆盖不会改变这些值；`pages.cards.*` 是 `/cards` 页面自身的表单、消费与空态文案。
+
 关联账户名称复用既有 `business.cards.linkedAccount`，关联账户可用余额说明可复用 `business.cards.accountAvailable`；`business.cards.usableBalance` 是更通用的可用余额标签。
 取值相同的键不重复新增，例如不设 `business.cards.linkedAccountName`。
 
