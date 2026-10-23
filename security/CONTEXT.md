@@ -204,6 +204,17 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:758` �
 唯一生产调用方是 `agent/confirmation/authorized-execution.ts`：`:32` 在无法解析所属会话时提前上报 `'failed'`；`:76` 在副作用提交且结算落定之后上报，条件为 `landed && status ∈ {'executed','failed'}`，并被 try/catch 吞掉失败。
 该文件写的是 `gateway.recordActionResult(...)`，其中 `gateway = security.gateway.securityGateway` 在模块加载时绑定；属性在调用时才查，因此对**同一对象**上该属性的 `vi.spyOn` 会被命中，替换整个 `securityGateway` 对象则不会。
 
+## 逐次错误验证码的响应事实（文案口径与计数）
+
+`MFA_MAX_ATTEMPTS = 3`（`lib/constants.ts:10`）；熔断在 `failures >= max` 的当次触发（`lib/db/repositories/circuitBreaker.ts:78`），因此**第 3 次**错误即锁定，不是第 4 次。
+第 1/2 次错误走 `security-gateway.ts:1230-1242`：`status:'awaiting_mfa'`、`code:'MFA_FAILED'`、`mfaResult:'failed'`、`failure {code:'MFA_FAILED', reason:'mfa_code_invalid', actionId, attemptsUsed:1|2, attemptsLeft:2|1, maxAttempts:3}`，`message` 由 `:1239` 内插为「验证码错误，请重试。剩余尝试次数：2|1。」，不写任何行。
+第 3 次错误：`attemptState` 的 `exhausted`（`mfa.ts:119`）为真，走 `security-gateway.ts:1243-1256`：`status:'locked'`、`code:'CIRCUIT_OPEN'`、`mfaResult:'failed'`、`failure {code:'MFA_LOCKED', reason:'mfa_attempts_exhausted', actionId, attemptsUsed:3, attemptsLeft:0, maxAttempts:3}`、`message: ATTEMPTS_EXHAUSTED_MESSAGE`（`:277`），并经 `persistLockedAction`（`:1105-1108`）CAS 落库 `locked`。
+文案常量：`ATTEMPTS_EXHAUSTED_MESSAGE`（`:277`）与 `lib/tool-feedback.ts:28` 的 `PUBLIC_BUSINESS_ERRORS` 键逐字相同 → `chat.error.actionLocked`；`lib/public-text.ts:68-69` 也从 `failure.code === 'MFA_LOCKED'` / `reason === 'mfa_attempts_exhausted'` 得出同一键。两条独立路径一致，故锁定文案稳定为 `chat.error.actionLocked`。
+顶层 `code` 不能单独用于选文案：锁定响应的顶层 `code` 是 `CIRCUIT_OPEN`，按 `lib/tool-feedback.ts:12` 会得到 `chat.error.securityLocked`，与该响应自带的 `failure`/`message` 口径相反。渲染方必须优先用 `failure`。
+`lockedOutcome`（`:1115-1132`）不带 `mfaResult`，其 `message` 是 `CIRCUIT_LOCK_MESSAGE`（`:274`，「操作已被拒绝」版）→ `chat.error.actionLocked`（`lib/tool-feedback.ts:32`）；`security-gateway.ts:516` 的「高风险操作已被锁定」熔断文案才映射 `chat.error.securityLocked`（`:33`）。
+`AuthorizationResult`（`:118-137`）没有 `events` 字段：`events` 由 HTTP/agent 层合成（`app/api/actions/[id]/verify/route.ts:91`），`mfaResult` 在该路由由 `status` 推导（`:73-77`）。
+每次错误另写一条 `MFA_FAILURE`（`severity:'medium'`）事件（`mfa.ts:281-296`）；锁定当次再由 `recordFailure` 写一条 `CIRCUIT_BREAKER_TRIPPED`（`severity:'high'`，`detail.result:'session_locked'`，`circuit-breaker.ts:179-188`），owner 键为 `user:<userId>`（`:121-127`）。
+
 ## 已知边界
 
 `lib/db/repositories/pendingAction.ts#setPendingActionStatus` 仍是无条件状态写入原语，本层与 `agent/` 都不再调用它（别名 `updatePendingActionStatus` 同样无人使用），只剩测试引用；状态写入一律走 `claimPendingAction`。
