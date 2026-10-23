@@ -1,3 +1,0 @@
-﻿FAIL lB-live-investment-partial-redemption 鈥?B1 涔嬪悗鑱婂ぉ閲屾渶鏂版姇璧勫崱鐨勬寔浠撲唤棰濆簲涓?5965.395384 浠斤紙鍐欏悗閲嶈鐨?DB 鍊硷級锛屽疄闄?4999.864825 浠?路 绱缃戠粶 4xx/5xx锛?锛宑onsole error锛?锛宲ageerror锛?
-== 姹囨€伙細PASS 0 锝?FAIL 1 锝?SKIP 0 ==
-EXITCODE=1   
