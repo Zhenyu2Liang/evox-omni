@@ -129,7 +129,7 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 - `NOT_APPLICABLE`：`CREDIT` 卡，按设计不解析结算账户，额度仍来自 `creditLimit`/`availableLimit`。
 
 `usable = (status === 'ACTIVE')`，`FROZEN`/`LOST`/`PENDING` 为 `false`；但卡片不可用不等于余额为零，`LINKED` 卡的余额字段照常填充。
-`accountAvailableBalance` 是账户资金，`payableAmount` 是该卡当前实际可支付额：`payableAmount = monthlyLimitMinor 为空 ? accountAvailableBalance : min(accountAvailableBalance, max(0, monthlyLimitMinor − 当月已消费))`。二者都只来自关联账户，卡片没有自己的独立余额；绑定同一账户的多张卡共享同一份现金。绑定解析在投影的同一读 client（同一 unit-of-work 事务）内一次完成，存在性、owner 与 `CHECKING` 类型一次校验，且只在 `LINKED` 时才去查家族月消费。`linkedAccountId` 只回显记录的引用，是否仍然可信看 `linkedAccountStatus`。
+`accountAvailableBalance` 是账户资金，`payableAmount` 是该卡当前实际可支付额：`payableAmount = monthlyLimitMinor 为空 ? accountAvailableBalance : min(accountAvailableBalance, max(0, monthlyLimitMinor − 当月已消费))`。二者都只来自关联账户，卡片没有自己的独立余额；绑定同一账户的多张卡共享同一份现金。绑定解析在投影的同一读 client（同一 unit-of-work 事务）内一次完成，存在性、owner 与 `CHECKING` 类型一次校验，且只在 `LINKED` 时才去查家族月消费。`linkedAccountId` 只回显记录的引用，是否仍然可信看 `linkedAccountStatus`。`linkedAccountNumber` 由 `toCardView` 直接回显存储列 `Account.number`，投影层不做二次脱敏：`Account` 没有任何完整号码列（不像 `Card.numberFull`），该列本身即为脱敏值（如 `****8821`），账户身份只认 `Account.id`；这与 `banking-sdk/account.ts#toAccountView` 在读边界重新拼 `****${number.slice(-4)}` 的做法不同。卡号则始终由 `maskCardNumber`（`lib/mask.ts`）经 `generateCardIdentity` 从虚构完整号派生。
 
 当月已消费是补办家族口径。`banking-sdk/card-family.ts` 的 `cardFamilyMonthSpend(client, cardId, userId, now?)` 先由 `cardFamilyIds` 沿 `replacedByCardId` 双向遍历得到家族，再按 `demoMonthRange(now)` 的 UTC+08:00 业务月汇总 `CardConsumption.amountMinor`。遍历用访问集与 `MAX_CARD_FAMILY = 64` 上限，只纳入同一 `userId` 的卡片，因此多代补办算作一个家族，损坏的环会终止，跨用户指针不会扩大归集。限额强制与 `payableAmount` 读取同一个家族数字，并使用同一个业务时刻：普通读取取 `demoNow()`，`consumeCard` 取本次消费的服务端时刻。
 
