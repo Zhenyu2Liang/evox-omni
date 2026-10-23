@@ -77,6 +77,16 @@ DOM 钩子约定：`app/` 内没有任何 `data-testid`，全仓用语义化 `da
 因此对外 JSON 与 DOM 永不出现 `__SECURITY_BLOCK__`、`decisionKind`、原始 JSON 片段、异常堆栈与 `undefined`。
 SSE 帧（`api/chat`、`api/runs/[id]/events`、`api/chat/history`）仍原样转发 `AgentStreamEvent`，其文本收口由 `components/chat/` 渲染层承担（见 [api/CONTEXT.md](api/CONTEXT.md)）。
 
+## 金额与收益率换算边界
+
+本层几乎不做算术，`lib/decimal` 的百分比函数（`signedRateToPercent`/`rateRatioToPercent`/`nonNegativeDecimal`）在 `app/` 内**零调用**，排查换算问题不要在本层继续搜索。
+
+- `subscriptions/page.tsx`：唯一金额运算点——`annualCost`/`totalAnnualCost` 用 `moneyToCents` + `centsToMoney` + `addMoney` 以 BigInt 分年化合计（`BILLINGS_PER_YEAR`）；`/app` 内 `addMoney` 只出现在此文件。
+- `bills/page.tsx:81`：`compareDecimal(analysis.momChangePct, '0') > 0 ? '+' : ''` 只决定符号前缀，`momChangePct` 原样拼接，不取绝对值、不 `Number()`。
+- `app/` 全目录无 `Math.abs`、`Number(`、`parseFloat`、`parseInt`、`toFixed`。
+- 持仓收益率 `HoldingView.profitRate` 可为负，渲染在 `components/banking/HoldingFacts.tsx:91`（`signedRateToPercent`）；`rateRatioToPercent` 内含非负闸门、负值抛 `AppError('VALIDATION')`，只用于产品年化 `annualYieldRate`。
+- `addDecimal` 在 `app/` 内只出现在 `api/dashboard/CONTEXT.md` 的引文里；`/api/dashboard` 原样透传 SDK 的十进制字符串，不在边界上取整。
+
 ## 修改约束
 
 - 客户端不得导入数据库客户端或业务执行模块。
