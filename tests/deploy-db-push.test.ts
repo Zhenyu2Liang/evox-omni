@@ -26,6 +26,7 @@ import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { cliCommand, removeSqliteFiles, resolveRepoRoot, resolveTsxBin } from './helpers/prisma-cli';
+import { COLD_DB_PROVISION_TEST_TIMEOUT_MS } from './helpers/timeouts';
 import { resetDemoDatabase } from '@/scripts/db-push';
 
 const repoRoot = resolveRepoRoot();
@@ -91,7 +92,7 @@ describe('scripts/db-push.ts — cold deploy under RUST_LOG=warn', () => {
       expect(shared.map(fileStamp)).toEqual(before);
       removeSqliteFiles(prismaDir, [...sidecars, `${dbName}.backup.db`]);
     }
-  }, 120_000);
+  }, COLD_DB_PROVISION_TEST_TIMEOUT_MS);
 
   it('refuses to reset an out-of-workspace or non-file database', () => {
     expect(() => resetDemoDatabase('file:../../outside.db', repoRoot)).toThrow('inside the current workspace');
@@ -134,6 +135,6 @@ describe('scripts/db-push.ts — cold deploy under RUST_LOG=warn', () => {
       }
       expect(existsSync(dbPath), '隔离库应在用例结束时被清理').toBe(false);
     },
-    120_000,
+    COLD_DB_PROVISION_TEST_TIMEOUT_MS,
   );
 });

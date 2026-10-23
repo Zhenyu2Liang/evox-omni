@@ -2,9 +2,23 @@
 SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行写入。权限层级、人工确认、MFA 与熔断决策属于安全层。SDK 从不执行模型生成的代码、SQL 或 shell 命令。
 ## 公开契约
 能力从 `banking-sdk/index.ts` 导入；DTO 位于 `types.ts`。金额输入与输出都是十进制字符串。仓储持久化使用 bigint 人民币分保存已记账金额，使用规范十进制 TEXT 保存收益率与估值。`MoneyInput` 只接受字符串。`normalizeMoney` 校验已记账精度；缺省值不等于零。
-产品年化收益率是 `annualYieldRate`，为无量纲比例。投资持仓按净值与份额核算：`latestNetValuePerUnit` 是规范十进制净值，`shares` 是持有份额，`principalAmountMinor` 是剩余成本基数。公开持仓的 `amount` 是剩余持仓成本，`marketValue` 是未取整估值，`profit` 是未实现收益，`realizedProfit` 是已实现收益，`cumulativeProfit` 是累计收益。百分比只在展示层转换。
+产品年化收益率是 `annualYieldRate`，为无量纲比例，且恒不为负：创建时 `lib/db/repositories/investment.ts#createProduct` 与投影时 `investment.ts#toProductView` 都经 `nonNegativeDecimal` 上闸，负数会抛 `VALIDATION` 而不是被渲染。因此展示层的 `lib/decimal.ts#rateRatioToPercent`（自带非负门）只适用于产品年化，绝不适用于持仓收益率。投资持仓按净值与份额核算：`latestNetValuePerUnit` 是规范十进制净值，`shares` 是持有份额，`principalAmountMinor` 是剩余成本基数。公开持仓的 `amount` 是剩余持仓成本，`marketValue` 是未取整估值，`profit` 是未实现收益，`realizedProfit` 是已实现收益，`cumulativeProfit` 是累计收益。百分比只在展示层转换。
 单个持仓没有 SDK 内的时间累积：净值只取产品发布的 `latestNetValuePerUnit`，SDK 不按时间推导增长。市值一律由 `shares × latestNetValuePerUnit` 派生；`estimatedMarketValue` 只是列上的快照，读取不使用它。持仓收益是未实现收益，等于市值减去剩余成本；追加申购金额不计入收益。
 十进制最多 40 位整数与 18 位小数。SDK 使用精确算术、拒绝非法值，只在文档化的结算边界取整。当前赎回策略是 HALF_UP 到人民币分；授权与执行使用同一换算。最终余额与流水仍是有符号 INT64 分。
+## 符号性与非负门禁
+`ProductView.annualYieldRate` 唯一产自 `investment.ts#toProductView`（`annualYieldRate: nonNegativeDecimal(row.annualYieldRate)`，`investment.ts:219`），`listProducts`、`compareInvestments`、`listHoldings.product` 都复用它；负值不是以负数渲染，而是在读取时抛 `VALIDATION`（`Financial value must be nonnegative.`），所以展示层 `lib/decimal.ts#rateRatioToPercent` 的同一门禁不会在渲染期触发。
+有符号字段：`profit`（`marketValue − cost`）、`profitRate`（`profit ÷ cost`）、`realizedProfit`（`centsToMoney(realizedProfitMinor)`）、`cumulativeProfit`（`realizedProfit + profit`）。
+非负字段：`shares` 与 `latestNetValue`（`nonNegativeDecimal` 且必须大于零，否则视为缺失）、`marketValue`（份额×净值的精确乘积，或历史不足时回退剩余成本）、`amount`（剩余成本）。
+计算点全在 `investment.ts#holdingValuation`（181-200）：`marketValue = marketValueFromShares(shares, netValue)`（188）、`profit = subtractDecimal(marketValue, cost)`（189）、`profitRate = profitRateOf(profit, cost)`（197）。
+`net-value.ts#profitRateOf`（235-242）是唯一比率换算：`parseFixed`（58-77）保留符号、`halfUpDivide`（122-129）HALF_UP 到 18 位小数、`fixedToDecimal`（106-113）还原负号；成本为零返回 `undefined`（238），因此 `amount === 0` 的持仓没有 `profitRate`。
+亏损持仓的负 `profitRate` 是预期状态：`holding_wenjib` 成本 10000.00、净值 0.9880、份额 10000.000000 → 收益 −120.00、收益率 −0.012。
+把 `profit`/`profitRate`/`realizedProfit`/`cumulativeProfit` 送入 `nonNegativeDecimal`、`rateRatioToPercent` 或 `valuationToMinor` 都会在亏损持仓上抛 `VALIDATION`（`lib/decimal.ts:36-40`、`:76-78`、`:81-84`）。
+`nonNegativeDecimal` 只用于真实非负量：净值 `investment.ts:124`、份额 `investment.ts:145`、产品年化 `investment.ts:219`、历史记录十进制字段 `investment.ts:364`、赎回估值 `investment.ts:542`、请求份额 `investment.ts:926`、确认快照 `investment.ts:1001`/`1004`、`valuation.ts:73`；仓储写入门禁在 `lib/db/repositories/investment.ts#createProduct`（年化）与 `createHolding`（市值），`prisma/seed.ts` 的 `createMany` 绕过该门禁。
+`addDecimal`/`subtractDecimal` 保留符号：`investment.ts:1316` 的 `cumulativeProfit`、`investment.ts:782` 份额累加（正数）、`dashboard.ts:44` 市值累加（非负）。
+`listHoldings`（`investment.ts:1295-1325`）映射：`realizedProfit` 1301、`marketValue` 1312、`profit` 1313、`profitRate` 1314、`cumulativeProfit` 1316；`HISTORICAL_DATA_INSUFFICIENT`（186）时 `profit`/`profitRate`/`cumulativeProfit` 三键整体缺省。
+`redeemInvestment` 的已实现收益同样有符号：`realizedProfitMinor = settledMinor − redeemedCost`（1101，`assertMinorUnits` 只查 INT64 范围），落库 1122/1228，返回 1165/1214，重放 1282；`remainingProfit`（1287）与记录里的 `realizedProfit`（`requireMoney`）都不设非负门禁，`parseRedeemResult`（531-551）只校验结算金额与估值、不看其符号。
+百分比换算只属于展示层：浏览器 `components/banking/HoldingFacts.tsx:91` 用 `signedRateToPercent`，聊天摘要 `agent/tools/investment.ts:77-80` 用 `multiplyDecimal(ratio,'100')`；本目录没有 `signedRateToPercent`/`rateRatioToPercent` 调用，`listHoldings` 原样投影 `profitRate`。
+测试锚点：`tests/unit/banking-sdk/net-value.test.ts:153-161`（比率符号与零成本返回 `undefined`）、`tests/unit/banking-sdk/net-value-redemption.test.ts:379-386`/`:394-400`（负 `profit` 与负 `realizedProfit`）。
 ## 净值与份额换算
 `banking-sdk/net-value.ts` 是无读写的纯函数模块。
 常量是 `NET_VALUE_DECIMALS = 4`、`SHARE_DECIMALS = 6` 与 `REDEMPTION_FEE_RULE = 'SIMULATED_NONE'`。
@@ -13,12 +27,20 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 `settlementFromShares` 只做一次 HALF_UP 结算到人民币分。
 `redeemedCostMinor` 按份额比例扣减成本并 HALF_UP 到分，已赎回成本与剩余成本之和恒等于原成本。
 `remainingSharesOf` 返回剩余份额，`profitRateOf` 返回 18 位小数比例，成本为零时返回 `undefined`。
+`profitRateOf` 保留收益符号：亏损持仓的 `HoldingView.profitRate` 是负数，这是预期状态而不是故障；展示层必须走 `lib/decimal.ts#signedRateToPercent`（仅 `multiplyDecimal`），用 `rateRatioToPercent` 会在渲染期抛 `Financial value must be nonnegative.`。
 安全层铸造确认快照与执行结算都调用这些函数，确认金额与执行金额不会分叉。
 `holdingValuation` 是 `listHoldings`、仪表盘与赎回共用的唯一估值规则。
 `valueBasis` 有三个取值，各自由明确条件产出：
 - `NET_VALUE`：`shares` 可用且产品发布了净值，份额来自真实申购记录（`sharesEstimated` 为假）。
 - `MIGRATED_ESTIMATE`：`shares` 可用、净值可用，但 `sharesEstimated` 为真——份额由 `scripts/investment-share-backfill.mjs` 按历史账面价值派生，只能算作估算；市值与收益的计算口径与 `NET_VALUE` 完全相同，只是标注不同。
 - `HISTORICAL_DATA_INSUFFICIENT`：`shares` 缺失或不合法，或产品没有净值。此时市值回退为剩余成本、收益缺省；`sharesEstimated` 为真也不会凭空估值。
+## 十进制符号规则（本目录）
+`addDecimal`/`subtractDecimal` 保留符号，专门用于可为负的累加与差；`nonNegativeDecimal`（`lib/decimal.ts`，负数抛 `VALIDATION`）只是「真实非负量」的闸门。
+`addDecimal` 调用点：`investment.ts:1316` `cumulativeProfit = addDecimal(realizedProfit, profit)`（已实现 + 未实现收益两者都可为负）、`investment.ts:782` 份额累加（正数）、`dashboard.ts:44` 持仓市值累加（恒非负）。
+`nonNegativeDecimal` 调用点：净值 `investment.ts:124`、份额 `investment.ts:145`、产品年化比例 `investment.ts:219`、历史记录十进制字段 `investment.ts:364`、赎回估值 `investment.ts:542`、请求份额 `investment.ts:926`、确认快照 `investment.ts:1001`/`1004`、比例估值入参 `valuation.ts:73`。
+`HoldingView.profitRate` 由 `net-value.ts#profitRateOf(profit, cost)` 推导（`investment.ts:197`），`profit = marketValue − 剩余成本` 可为负，因此 `profitRate` 是带符号比例（种子 `holding_wenjib`：成本 10000、净值 0.9880、份额 10000 → 收益 −120、收益率 −0.012）。
+本目录绝不把 `profitRate`、`profit`、`realizedProfit`、`cumulativeProfit` 送入 `nonNegativeDecimal`，也不在本目录换算百分比：`listHoldings` 原样投影 `profitRate`（`investment.ts:1314`）。
+本目录没有任何 `signedRateToPercent`/`rateRatioToPercent` 调用；带符号比例的百分比换算只发生在展示层 `components/banking/HoldingFacts.tsx`（`signedRateToPercent`），年化比例用 `rateRatioToPercent`。
 ## 认购：新建或聚合
 `subscribeInvestment` 先校验 `userId` 与正金额，再在同一个事务内判断该 (用户, 产品) 是否已有 `HOLDING`。
 产品没有净值时抛 `VALIDATION`（`该产品未发布净值，暂不可申购`）。
@@ -70,7 +92,10 @@ SDK 中没有手续费、管理费、申购费或托管费概念，也没有费�
 部分赎回的恰好一次由乐观条件写保证：持仓更新以旧本金与 `HOLDING` 状态为条件，先做受保护的持仓写入，成功后才入账。计数为 0 时重新读取，并按同一执行身份从 `redemptionHistory` 或已关闭的 `redeemResult` 重放，否则抛 `CONFLICT`。聚合认购与部分赎回都以计数为 0 表示竞态，抛 `CONFLICT` 让事务（含扣款）整体回滚，因此不会出现重复扣款。
 已关闭持仓上的其他或缺失身份仍然抛 `CONFLICT`。同键重放先前的部分赎回时，即使其后已发生全额关闭，也从 `redemptionHistory` 重放。
 ## 事务与执行上下文
-`runInTransaction` 通过 unit-of-work 上下文与已有事务组合。受信的 `BankingExecutionContext` 提供执行栅栏与审计回调，这些检查在写事务内运行。工具输入上没有 Symbol 属性或第二个栅栏载体。
+`tx.ts#runInTransaction` 是 SDK 内唯一的 `prisma.$transaction` 调用（`tx.ts:33`），且不传选项，因此沿用 `lib/db/database.ts:25` 的 `maxWait: 10000` / `timeout: 10000`。
+重入契约：`tx.ts:31` 读 `lib/db/unit-of-work.ts#currentTransaction()`；命中时 `tx.ts:32` 直接在已有事务上执行 `fn(current)`——不开第二个事务，也不重跑 `context.fence`；未命中才开事务，并在 `tx.ts:37` 用 `withinTransaction(tx, …)` 把 `Prisma.TransactionClient`（不是 `prisma` 单例）写入 AsyncLocalStorage。嵌套调用因此共享外层事务与同一提交点。
+事务体调用的仓储全部默认 `dbClient()`（`lib/db/client.ts:30-32` = `currentTransaction() ?? prisma`），自动加入当前事务：`accounts.*`、`cards.*`、`investments.*`、`contacts.*`、`transactions.*`、`budgets.*`、`subscriptions.*`、`scheduledTasks.*`、`executionReceipts.*`，以及 `dbClient()` 直接模型访问（`transaction.ts:113`、`card.ts:149`、`card.ts:213`）。SDK 不调用默认走全局 `prisma` 的仓储（`agentRun`/`task`/`session`/`workflowInvocation`/`auditLog` 写入/`securityEvent`/`user`/`manualReview`/`pendingAction`/`circuitBreaker`），所以 SDK 事务体不会在单连接互斥锁上自锁。
+受信的 `BankingExecutionContext` 提供执行栅栏与审计回调（`fence`、`onWriteCommit`、`onTransferCommit`），它们在写事务内被 await 且都收到同一个 `tx`（`tx.ts:36`、`budget.ts:70`、`transfer.ts:342`）。工具输入上没有 Symbol 属性或第二个栅栏载体。
 转账在原子事务内扣减自有活期账户、创建流水行并持久化原始回执。重放先校验当前请求摘要、回执与流水，再查询可变联系人。缺失证据是冲突，绝不重建成功。并发同键唯一冲突只重放已校验的已提交证据。
 账本与定时意图的创建使用按所有者限定的重放校验。虚拟卡使用确定性执行身份并校验月度限额。卡状态转换与订阅校验归属与状态。预算是记账信封而不是资金冻结。
 ## 错误与读取
@@ -135,5 +160,16 @@ SDK 中没有手续费、管理费、申购费或托管费概念，也没有费�
 `Card.numberFull` 只在制卡时由 `generateCardIdentity` 生成并写入（`addDemoCard`、`replaceCard`、`applyVirtualCard` 的两个分支），仅用于去重与服务端精确匹配（`security/card-resolution.ts`），绝不进入任何投影、日志或工具结果；`banking-sdk/card.ts` 内的 `maskCardNumber` 调用只有 `generateCardIdentity` 的两行（990、996），投影不脱敏。
 `Contact.phoneFull` 由 `lib/db/repositories/contact.ts#createContact` 写入，SDK 只通过 `lib/phone.ts#phoneIdentityMatches` 做精确匹配，不投影。
 `ScheduledTaskView.payload`（`types.ts:697`）原样回显已持久化载荷（`task.ts#toScheduledTaskView`）；定时支付/转账载荷里的收款人选择器可能是调用方自己提交过的完整手机号——这是回显调用方输入，不是投影存储的第三方号码。
+## 收益字段的符号（有符号量，禁止非负门禁）
+`profit`、`profitRate`、`realizedProfit`、`cumulativeProfit` 是有符号量，亏损持仓必须原样输出负文本；`marketValue`、`amount`（剩余成本）、`shares`、净值恒为非负。
+计算点全在 `investment.ts#holdingValuation`（181-200）：`marketValue` 由 `marketValueFromShares`（188，非负乘积），`profit` 由 `subtractDecimal(marketValue, cost)`（189，可为负），`profitRate` 由 `profitRateOf(profit, cost)`（197）。
+`net-value.ts#profitRateOf`（235-242）是唯一比率换算：符号经 `parseFixed`（58-77）保留、`halfUpDivide`（122-129）按 HALF_UP 取 18 位、`fixedToDecimal`（106-113）还原负号；成本为零时返回 `undefined`（238），因此 `amount === 0` 的持仓没有 `profitRate`。
+`listHoldings`（investment.ts:1295-1325）的映射：`marketValue` 1312、`profit` 1313、`profitRate` 1314、`realizedProfit` 1301（`centsToMoney(row.realizedProfitMinor)`，`lib/money.ts:39-43` 保留负号）、`cumulativeProfit` 1316（`addDecimal(realizedProfit, valuation.profit)`）；`HISTORICAL_DATA_INSUFFICIENT`（`holdingValuation` 186）时 `profit`/`profitRate`/`cumulativeProfit` 三键整体缺省。
+`redeemInvestment` 的已实现收益同样有符号：`realizedProfitMinor = settledMinor − redeemedCost`（1101，`assertMinorUnits` 只查 INT64 范围），落库 1122/1228，返回 1165/1214、重放 1282；`remainingProfit` 1287 与记录里 `realizedProfit`（1214，`requireMoney` 518/608）都不设非负门禁。亏损赎回不抛错，`parseRedeemResult`（531-551）只校验结算金额与估值，不看 `realizedProfit` 符号。
+非负门禁只属于 reader 保护与金额：`productNetValue`（124）、`recordedShares`（145）、`annualYieldRate`（219）、历史记录里的 `marketValue`/份额/净值（`requireDecimal` 364）、`valuation.ts:73`/`valuationToMinor`（`lib/decimal.ts:81-84`）。
+因此把 `profit` 系列送进 `nonNegativeDecimal`/`rateRatioToPercent`/`valuationToMinor` 都会在亏损持仓上抛 `VALIDATION`（`lib/decimal.ts:36-39`、`:76-78`）。
+百分比换算属于展示层，不在 SDK：浏览器侧 `components/banking/HoldingFacts.tsx:91` 用 `signedRateToPercent`，聊天摘要 `agent/tools/investment.ts:77-80` 用 `multiplyDecimal(ratio,'100')`；SDK 自身不把 `profitRate` 转百分比。
+测试锚点：`tests/unit/banking-sdk/net-value.test.ts:153-161`（比率符号与零成本）、`tests/unit/banking-sdk/net-value-redemption.test.ts:379-386`/`:394-400`（负 `profit` 与负 `realizedProfit`）。
+
 ## 存储生命周期
 只支持当前 schema 与契约。`pnpm db:push` 同步 schema；`pnpm db:reset` 重建模拟数据。不要新增旧 schema 迁移、数字金额适配器、旧指纹接受或回执前的重放路径。当前回执、审计与重启恢复是运行时保证，而不是兼容特性。服务端消费时间与补办家族归集不引入 schema 变更。

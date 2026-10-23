@@ -153,6 +153,18 @@ are published. JSON mode returns the same ordered presentation events. Stable re
 transport retries to their original run, without selecting identity or granting authorization.
 Raw model thinking and original provider events stay in the internal journal.
 
+### Chat mode selection and edge timing
+
+`chat/route.ts#wantsStream` (`:57-61`) picks the mode from the query and the `Accept` header, and `application/json` WINS: `if (stream === '0') return false; return !accept.includes('application/json')`.
+`?stream=1` therefore does NOT force streaming when `Accept` also lists `application/json` — which is exactly what the shipped browser client sends (`components/chat/actions.ts:528` `Accept: 'text/event-stream, application/json'`, `endpoints.chat = '/api/chat'` with no query at `:54`).
+The demo's real `POST /api/chat` therefore takes the JSON branch (`route.ts:74-77`) and answers one `200 { ok:true, data:{ sessionId, events } }` body after the whole turn; SSE requires an `Accept` header WITHOUT `application/json`.
+The SSE branch (`:78-100`) builds a `ReadableStream` whose async `start` enqueues `sseFrame(event)` per event and calls `controller.close()` immediately once `runTurn` settles (`:95`), gated by the `connected` flag flipped by `cancel()` (`:97`).
+No timer exists anywhere under `app/`: `setTimeout`/`setInterval`/`new Promise`/`Promise.race`/`for await`/`while (` = 0 occurrences, and no route declares `maxDuration`, `dynamic`, `runtime`, `revalidate` or an `AbortSignal`/retry/attempt loop — nothing ticks while a turn waits, and no SSE `: keep-alive` comment frame exists repo-wide.
+The only buffering hints are `_lib/http.ts:119-123` `SSE_HEADERS`: `Content-Type: text/event-stream; charset=utf-8`, `Cache-Control: no-cache, no-transform`, `Connection: keep-alive`; there is no `X-Accel-Buffering`, and `next.config.mjs` sets no headers or timeout.
+Before `runTurn` the handler awaits exactly TWO DB round-trips inside one identity call: `requireIdentity` (`_lib/session.ts:23-25`) → `getDemoSession` (`agent/session.ts:150-158`) → `ensureDemoSession` upsert (`lib/db/repositories/session.ts:30-36`) then `loadSession`/`getSession` select; `parseBody` adds only the body read and `parseQuery` is sync — no seed check and no demo-user bootstrap beyond that first-time upsert (`update: {}`).
+No per-session queue or mutex exists at the edge, so N concurrent browsers share the one `demo:${userId}` workspace without serialization in `app/`.
+`GET /api/actions`, `GET /api/chat/history` and `GET /api/runs/[id]/events` are single JSON responses — `runs/[id]/events` is a paged read (`after`/`limit`), NOT an SSE stream — and no client component under `app/` polls; the chat client's only read bounds are one-shot 5000 ms cancels in `components/chat/`.
+
 `ActionResponse` carries the action ID, persisted session ID, effective tier/status, domain outcome,
 safe message and continuation events. Confirmation and verification preserve the owning plan link,
 refresh its state and expose current MFA requirements without exposing the verification code.
@@ -195,6 +207,17 @@ Dev-mode is NOT required: the route uses `requireIdentity` only, and the develop
 `GET /api/security` derives `lockedActions` from `listPendingActions({ sessionId, status: 'locked' })` (repository default page = 100 rows), skips `manual_add_card`/`manual_delete_card`, and re-sorts by `updatedAt` desc; `lock` is present only while the breaker is open and is the fixed `{ code:'CIRCUIT_OPEN', reason:'circuit_open' }`.
 The `lock?: SecurityFailure` / `lockedActions` fields are additive and optional, so consumers that ignore them keep working.
 `confirm` and `verify` apply NO app-layer locked short-circuit (unlike `cancel`/`recover`): they delegate and then derive `mfaResult` from the returned `status`, forwarding whatever `code`/`failure` the agent/security path produced.
+
+## Request-path wait surface (no timers in this node)
+
+- `app/api` contains NO `setTimeout`/`setInterval`/`sleep`/`delay`/`await new Promise`/`AbortSignal.timeout`, no retry/backoff/poll loop, no `maxWait`/`timeout` transaction option, no `$queryRaw` PRAGMA and no lease/deadline check.
+- No route exports `maxDuration`/`dynamic`/`revalidate` and `next.config.mjs` sets no global cap, so these routes' response time is decided entirely downstream.
+- `POST /api/chat`: the SSE response cannot close before `runTurn` resolves (`chat/route.ts:82`, `controller.close()` at `:95`); JSON mode awaits the same call (`:75`).
+- `request.signal` is never wired: a client disconnect does not cancel a running turn.
+- `POST /api/actions/[id]/{confirm,verify}` await, in order: `requireIdentity` → `getPendingAction` → `locateOwningPlan` → `confirmOwned`/`verifyOwned` (which itself awaits `resumeOwningPlan`, a full DAG walk, then `resumeTurn` — `agent/confirmation/authorized-execution.ts:81-82`) → `withPlanUpdate` (`getTaskPlan` + `nextPlanDecision`, one `getPendingAction` per parked node, `agent/task-decision.ts:22`).
+- All three routes first write: `requireIdentity` → `getDemoSession` (`agent/session.ts:150-157`) = one `agentSession.upsert` (`update: {}`) plus one `findUnique` (`lib/db/repositories/session.ts:30-36`).
+- Bounds living outside this node, quoted only for estimation: model call deadline `30_000` ms with clamp `[1000,120000]` plus `maxRetries: 1` / `maxRetryDelayMs: 1500` (`agent/providers/request-options.ts:8-14,44`); Prisma `transactionOptions: { maxWait: 10000, timeout: 10000 }` (`lib/db/database.ts:25`), bank writes overriding `{ maxWait: 10000, timeout: 20000 }` (`agent/command-execution.ts:103`); one native SQLite connection behind a deadline-free FIFO mutex (`lib/db/serialized-connection.ts:9-16`); run heartbeat `setInterval(20_000).unref()` (`agent/durable/journal.ts:223-228`).
+- No turn-level wall-clock or step cap exists, so these three routes have no upper bound of their own.
 
 ## Implementation boundaries
 

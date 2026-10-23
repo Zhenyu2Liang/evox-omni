@@ -39,6 +39,20 @@
 `claimTaskExecution` 与 `claimNodeExecution` 认领执行权。
 释放与节点写入必须匹配持有的令牌。
 
+## 串行连接、事务与等待成本
+
+整个 `lib/db/` 只有一条原生 SQLite 连接，`lib/db/serialized-connection.ts` 的 `ConnectionMutex` 是一条 FIFO promise 链：`acquire()` 里 `await previous` **没有任何超时**，`startTransaction` 在拿到锁之前一直挂着。因此本目录的等待上限由「锁何时释放」决定；`maxWait`/`timeout` 是否会打断互斥锁的排队**未经验证，不要假设它们能**。适配器与 Prisma 选项写死在 `lib/db/database.ts`：`new BankingSqliteAdapter({ url, timeout: 10000 })`（better-sqlite3 busy timeout）与 `transactionOptions: { maxWait: 10000, timeout: 10000 }`。
+本目录**没有任何** `$transaction` 传 `maxWait`/`timeout`/`isolationLevel`：全部只传回调，全部走默认 10 s / 10 s。
+数据库「周期入口」不统一：`account.ts`/`transaction.ts`/`card.ts`/`budget.ts`/`subscription.ts`/`investment.ts`/`scheduledTask.ts`/`contact.ts` 与 `executionReceipt.ts` 的默认参数走 `dbClient()`（即 `lib/db/unit-of-work.ts` 的 `currentTransaction()`，能加入当前事务），而 `agentRun.ts`/`task.ts`/`session.ts`/`workflowInvocation.ts`/`workflowRun.ts`/`auditLog.ts`/`securityEvent.ts`/`user.ts` 直连全局 `prisma`，`pendingAction.ts` 与 `circuitBreaker.ts` 的默认参数是 `prisma` 而非 `dbClient()`：在 `withinTransaction` 作用域内不显式传 client 就不会加入该事务，会去排队等同一把互斥锁。
+`executionReceipt.ts:8-10` 的文档注释说默认参数是 `prisma`，实际是 `dbClient()`（`:32`/`:44`）：以代码为准，不要信那段注释。
+
+`$transaction` 分布（全部无选项）：`agentRun.ts` 19 处 —— `:39` `beginAgentRun`、`:93` `renewAgentRunLease`、`:118` `appendRuntimeEvent`、`:140` `startInvocationWithEvent`、`:162` `finishInvocationWithEvent`、`:181` `updateInvocationAuthorization`、`:191` `finishAgentRun`、`:251` `synchronizeRunActionInvocations`、`:260` `finalizeReceiptedAgentRun`、`:313` `saveRunCheckpoint`、`:322` `startModelRequest`、`:341` `completeModelRequest`、`:355` `commitRunSession`、`:381` `settlePlanInvocation`、`:392` `scheduleRunRecovery`、`:407` `stopObsoleteRun`、`:429` `restoreInvocationFromReceipt`（仅 `if (!client)`）、`:445` `claimInvocationRetry`、`:456` `settleRecoveredInvocation`；`workflowInvocation.ts` 3 处 —— `:34`/`:93`/`:109`；`circuitBreaker.ts` 2 处 —— `:92` `return client ? apply(client) : prisma.$transaction(apply)`、`:162` `return opts?.client ? run(opts.client) : prisma.$transaction(run)`；`task.ts` 2 处 —— `:226` `releaseTaskExecution` 用全局 `prisma.$transaction`，`:90` `createTaskGraph` 是 `return '$transaction' in client ? client.$transaction(persist) : persist(client)`；`session.ts` `:78`；`pendingAction.ts` `:260`；`workflowRun.ts` `:43` 同为 `'$transaction' in client ? client.$transaction(synchronize) : synchronize(client)`。
+`'$transaction' in client` 是鸭子类型判别：全局 `PrismaClient` 命中 → 新开交互事务（排队等互斥锁），`Prisma.TransactionClient` 句柄（Prisma 从 `TransactionClient` 上去掉了 `$transaction`）→ 内联沿用调用方事务；因此同一个函数有两条代价不同的路径。
+
+单函数内多次串行 await（不在事务中时每次都要排一次互斥锁）：`agentRun.ts:295 listRecoverableAgentRuns` 2 次（`agentTask.findMany` → `agentRun.findMany`，非原子）；`agentRun.ts:285 listPresentationEvents` 2 次；`agentRun.ts:82 assertAgentRunLease` 2 次读取，且被每个写事务各调用一次；`agentRun.ts:240 settleRunActionInvocations` 2 次 + 每个已结算动作 5 次（`settleInvocationFromAction` 的 2 读 + 1 写 + 事件 update+create）；`agentRun.ts:259 finalizeReceiptedAgentRun` 约 5 + 5N；`agentRun.ts:36 beginAgentRun` 8–11 条同事务语句；`workflowInvocation.ts:33 beginWorkflowInvocation` 10–14 条同事务语句（另加 `runtimeFence` 自身）；`task.ts:192 claimTaskExecutionWithGeneration` 2 次（`updateMany` → `findUnique`，非原子）；`task.ts:321 updateTaskNode`（带 `fenceToken`）2 次非原子；`session.ts:45 updateSessionState` 2 次非原子（CAS 后 `findUniqueOrThrow`）；`account.ts:52 incrementBalance` 2 次非原子（靠 `where: { id, balanceMinor: row.balanceMinor }` 做值栅栏）；`pendingAction.ts:276 assertActionMayStart` 3 条；`circuitBreaker.ts:68`/`:140` 各 2 条（`findUnique` + `upsert`，未传 client 时自己包一个事务）。
+
+显式「空写抢锁」语句（只为取得 SQLite 写者，不做业务变更，锁持有到事务结束）：`pendingAction.ts:277 await client.pendingAction.updateMany({ where: { id: actionId }, data: { id: actionId } });`、`contact.ts:28 const locked = await dbClient().user.updateMany({ where: { id: userId }, data: { id: userId } });`（`lockContactOwner`）、`workflowInvocation.ts:37 await tx.agentTask.updateMany({ where: { id: input.taskId }, data: { generation: { increment: 0 } } });`。
+
 ## 计划节点的读取与写入原语
 
 节点行只由 `createTaskGraph`（`task.ts:55`）的嵌套 create 建立；`createTaskNode`（`task.ts:235`）当前无调用方。
@@ -73,6 +87,25 @@
 两个租约写入函数只写租约列，不改状态；`clearPendingActionLease`（`:231`）在给定 `opts.owner` 时按持有者条件清除。
 `assertActionMayStart`（`pendingAction.ts:276`）不改状态：它先对 `id` 发一条空写 `updateMany({ where: { id: actionId }, data: { id: actionId } })` 取得 SQLite 行锁，再读 `taskId`，存在 `manualReview status='open'` 时抛 `CONFLICT`。
 
+## 每次调用的数据库往返次数
+
+一条 Prisma 语句记一次往返；`prisma.$transaction` 另加 BEGIN 与 COMMIT，且整段持有连接互斥锁（见 [../CONTEXT.md](../CONTEXT.md)）。
+`createPendingAction`（`pendingAction.ts:91`）1 条 create；`getPendingAction`（`:115`）2 条（`findUnique` + `include: { mfa: true }`：仓库未启用 `relationJoins`，走默认 `query` 关系加载策略，关联查询是独立的一次 SELECT）；`listPendingActionsByTask`（`:150`）1 条 findMany。
+`getMfaChallenge`（`:334`）、`createMfaChallenge`（`:319`）、`incrementMfaAttempts`（`:341`）、`updateMfaChallengeStatus`（`:352`）、`resetMfaAttempts`（`:359`）各 1 条，无事务、无二次读。
+`assertActionMayStart`（`:276`）最多 3 条：空写 `updateMany`（先取 SQLite 行锁）、`findUnique` 读 `taskId`、仅 `taskId` 非空时再 `manualReview.findFirst`；`client` 必传（无缺省单例）。
+`claimPendingAction`（`:255`）：`to !== 'confirmed'` 时 1 条 updateMany（自动提交）；`to === 'confirmed'` 且 `client === prisma` 时自开 `prisma.$transaction`（`:260`）→ BEGIN + 上述 2–3 条 + CAS updateMany + COMMIT，合计 5–6 次往返；显式传 client 时不开新事务，复用调用方事务里的 3–4 条。
+`getSession`（`session.ts:26`）、`getUser`（`user.ts:5`）、`getBreakerState`（`circuitBreaker.ts:49`）各 1 条 findUnique，都接受可选 client 以改走已有事务。
+`upsertFailure`（`circuitBreaker.ts:68`）未传 client 时自开 `prisma.$transaction`（`:92`），事务内 `findUnique` + `upsert` 共 2 条；传 client 时同样 2 条但复用调用方事务。
+本目录的 `$transaction` 调用都不传选项对象：`maxWait: 10000` / `timeout: 10000` 来自 `../database.ts:25` 的 `transactionOptions`，没有逐调用覆盖；本目录也没有 P2034/P1008 重试循环。
+chat 同步路径上的运行仓储往返次数（`appendInTransaction`（`agentRun.ts:111`）= 2 条：`agentRun.update` 递增 `nextSequence` + `agentRunEvent.create`；`assertAgentRunLease`（`:82`）固定 2 条 `findUnique`；每个自开的 `$transaction` 另加 BEGIN/COMMIT 两次往返，且整段持有单连接互斥锁）：
+`beginAgentRun`（`:36`）新建路径 6 条 → 8 次往返（会话 `findUnique`、按 `sessionId_requestId` 的 `agentRun.findUnique`、`agentRun.create`、会话租约 CAS `updateMany`、`appendInTransaction` 2 条）；复用路径 +2（`markInterruptedInvocations` 的 2 条 `updateMany`，仅当 `existing` 存在）；接管过期旧运行的最坏路径 11 条 → 13 次往返（多出 `agentRun.updateMany` 置 `interrupted` + 2 条 `markInterruptedInvocations`）；`requestId` 与 `existingRunId` 都缺失时少 1 条读。
+`appendRuntimeEvent`（`:117`）4 条 → 6 次往返；`commitRunSession`（`:354`）5 条 → 7 次往返（2 条 assert + 会话 `updateMany` CAS + `modelRequest.findFirst` + `agentRun.update`，**不**追加事件）。
+`startInvocationWithEvent`（`:139`）5 条、`finishInvocationWithEvent`（`:161`）5–6 条、`updateInvocationAuthorization`（`:180`）3 条、`finishAgentRun`（`:190`）7–10 条，各自再 +2 次 BEGIN/COMMIT。
+`settleRunActionInvocations`（`:240`）是唯一的按行循环：`for (const action of actions) await settleInvocationFromAction(action.id, client)`（`:246`），每轮 2–3 条语句且全部在调用方同一事务内，因此 k 个已结算关联动作 = 2 + 3k 条往返，并让该事务与互斥锁持有时间随 k 线性增长。
+本目录没有任何等待型租约：租约与 CAS 冲突一律 fail-fast（`beginAgentRun:66-70` 的 `claimed.count !== 1` 抛 `CONFLICT`、`claimPendingAction:263-272` 返回 `false`），没有 `while` / `for(;;)` / 重试计数 / 轮询 `leaseExpiresAt` 的循环；`scheduleRunRecovery:397` 的 `new Date(Date.now() + 1000 * 2 ** run.recoveryAttempts)` 与 `finishAgentRun:200` 的 `Date.now() + 2000` 只是写入 `nextRecoveryAt` 供 `listRecoverableAgentRuns:304` 比较，从不 `sleep`。
+`claimPendingAction`（`pendingAction.ts:255`）在 `to === 'confirmed'` 且 `client === prisma` 时自开 `prisma.$transaction`（`:260`）：它既不读 `unit-of-work.ts#currentTransaction()`，默认参数也是单例，因此在已有 ALS 事务内部不传 `client` 调用它会试图在单连接上再开一个事务（第二个 `startTransaction` 排在互斥锁队尾），这是调用方必须避免的组合。
+`session.ts` 无 `loadSession`：读取入口是 `getSession`（`:26`，1 条 `findUnique`）；`ensureDemoSession`（`:30`）是 `update: {}` 的单条 upsert；`updateSessionState`（`:45`）先一条带可选 `revision` 条件的 `updateMany`，`count !== 1` 立即抛 `CONFLICT`（`:54`），随后用另一次不在同一事务里的 `findUniqueOrThrow`（`:55`）回读——回读可能已看到更高 revision，且两语句之间不持事务。
+
 ## MFA challenge 仓储原语（`pendingAction.ts`）
 
 `createMfaChallenge`（`pendingAction.ts:315-328`，入参 `CreateMfaChallengeInput` `:50-56`）是本目录唯一的建行函数：必填 `actionId`、`code`，可选 `maxAttempts`、`expiresAt`、`commandDigest`。
@@ -85,6 +118,18 @@
 `renewLockedMfaChallenges`（`:363-379`）是唯一的续期/复活语句：单个 `updateMany`，过滤 `status: 'locked'` 且关联 `action` 满足（有 `userId` 时按 `userId`，否则按 `sessionId`）＋ `status: 'awaiting_mfa'` ＋ `requiresMfa: true`；写入 `attempts: 0`、`status: 'pending'`、`expiresAt: new Date(Date.now() + 5 * 60_000)`、`verifiedAt: null`、`consumedAt: null`，返回匹配行数 `count`。
 该续期不改 `PendingAction.status`、不重签 `code`、不校验 `commandDigest`；它要求显式传入 `client`（无默认单例），只在账号解锁事务内调用（调用点 `security/circuit-breaker.ts:298-300`，仅 `prior?.locked` 为真时）；其 where 要求父 action 仍为 `awaiting_mfa`，因此已被 CAS 成 `locked` 的 `PendingAction` 不会被它复活。
 本文件内没有任何 `prisma.mfaChallenge.*` 直接调用，全部走 `client.mfaChallenge.*`：`:319` create、`:334` findUnique、`:341`/`:352`/`:359` update、`:367` updateMany。
+
+## 重试、退避与租约常量（本目录内）
+
+本目录**没有任何进程内重试、`sleep`、`setTimeout`、`setInterval`、抖动、轮询或 `waitFor*`/`awaitUntil`/看门狗**：这些标识符在这些文件里一次都不出现。唯一的循环是 `agentRun.ts:246 for (const action of actions) await settleInvocationFromAction(action.id, client);`（串行结算，无上限常量、无延迟）与 `auditLog.ts:181`/`transaction.ts:80` 的纯内存 `for (const row of rows)`。
+重试是**持久化**的（外部 worker 读时间戳再次进入），不是本目录里循环：`agentRun.ts:329 if (previous.attempt >= previous.maxAttempts) throw new AppError('CONFLICT', 'Model request retry limit reached');`、`agentRun.ts:447` CAS `attempt: expectedAttempt` + `maxAttempts: { gt: expectedAttempt }` + `status: { in: ['interrupted', 'failed'] }`、`workflowInvocation.ts:96 where: { id, attempt: claim.invocation.attempt, status: claim.invocation.status }`。
+退避字面量：`agentRun.ts:200 nextRecoveryAt: new Date(Date.now() + 2000)`（`finishAgentRun` 把 `MODEL_TRANSIENT` 失败降级为 `interrupted` 的固定 2 s）；`agentRun.ts:397 nextRecoveryAt: retryable ? new Date(Date.now() + 1000 * 2 ** run.recoveryAttempts) : null`（`scheduleRunRecovery` 的指数退避：底数 1000 ms、倍数 2^`recoveryAttempts`，**无上限、无抖动**）；到期判定在 `agentRun.ts:304 { OR: [{ nextRecoveryAt: null }, { nextRecoveryAt: { lte: now } }] }`，`now` 默认 `new Date()`。
+租约/到期常量：`agentRun.ts:11 const DEFAULT_LEASE_MS = 120_000;`（`beginAgentRun` 可被 `input.leaseMs` 覆盖，`renewAgentRunLease` 默认用它）；`agentRun.ts:8` 导入的 `WORKFLOW_EXECUTION_LEASE_MS` 值为 `600_000`（`lib/contracts/runtime.ts:2`），用于 `agentRun.ts:299 executionClaimedAt: { lt: new Date(now.getTime() - WORKFLOW_EXECUTION_LEASE_MS) }`。
+租约到期的写入用 `agentRun.ts:61 new Date(now.getTime() + leaseMs)` 与 `:95 new Date(Date.now() + leaseMs)`（即 `Date.now()`/入参 `now`，不经过 `lib/clock.ts`）；到期读取是 `agentRun.ts:85-86 (!allowExpired && run.leaseExpiresAt <= now)` 与 `(!allowExpired && session.runLeaseExpiresAt <= now)`，`allowExpired = true` 只在 `finishAgentRun`（`:192`）出现；占用判定是 `agentRun.ts:52 session.runLeaseExpiresAt > now`。
+`pendingAction.ts:206 claimPendingActionLease` 自身不含 TTL：`expiresAt` 与 `now` 都由调用方传入，过期条件是 `executionLeaseExpiresAt: { lte: lease.now }`（注释指向 agent 层的 `EXECUTION_LEASE_TTL_MS`）；`clearPendingActionLease`（`:231`）无条件清空两列。`task.ts:179 claimTaskExecution` 与 `:353 claimNodeExecution` 的 `opts.staleBefore` 同样由调用方给定，本目录无默认陈旧窗口。
+`circuitBreaker.ts` 只持久化 `lockedAt`，不含冷却时长（`RESET_COOLDOWN_MS` 在 `lib/constants.ts`，由 `security/circuit-breaker.ts` 施加）。
+分页/扫描上限常量：`pendingAction.ts:85`、`auditLog.ts:53`、`securityEvent.ts:33` 的 `DEFAULT_LIMIT = 100`；`agentRun.ts:287 take: Math.min(Math.max(limit, 1), 501)`；`agentRun.ts:295 listRecoverableAgentRuns(now = new Date(), limit = 100)`。
+错误码嗅探只有一处：`task.ts:314 error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025'` → `NOT_FOUND`。本目录**没有**任何 `SQLITE_BUSY` / `database is locked` / `P2034` / `Transaction already closed` 的字符串匹配或 catch-重试；`executionReceipt.ts:38` 的注释说明 `P2002` 故意不在此处捕获（由调用方识别为「已commit 的同 key 胜者」并重放）。
 
 ## Agent 运行租约与恢复（`agentRun.ts`）
 

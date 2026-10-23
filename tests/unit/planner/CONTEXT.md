@@ -64,6 +64,9 @@
 `formatCNY`（`lib/money.ts`）与 `formatDecimalCNY`（`lib/decimal.ts`）的精确输出字面量只钉在两处：
 `../financial-values.test.ts` 直调两个格式化器（`¥184,467,440,737,095,516.14`、`¥90,071,992,547,409.93`、`-¥0.20`、`-¥0.00`），
 `decimal-format.test.ts` 经真实 `DecimalMoney` 组件渲染 markup（含 `1.005 → ¥1.01`、`2.675 → ¥2.68`、`0.999999999999999999 → ¥1.00`、`+¥118.91`、`-¥118.91`）。
+
+同一文件也是仓库唯一渲染 `components/banking/HoldingFacts` 的用例（`describe('HoldingFacts signed 持仓收益率 rendering')`，`card`/`tile` 两种 layout，含 `profitRate` 缺失时不出 `%`）。
+它不包 `LocaleProvider`（`LocaleProvider` 的默认上下文是 zh-CN），也不需要 `vi.mock('next/navigation')`；需要显式语言的用例见 `investment-purchase-display.test.ts` 的 `renderZh()`。
 `financial-display.test.ts`、`chart-presentation.test.ts`、`chat-read-results.test.ts` 另钉 `+¥0.00`/`-¥0.00`、`¥46,116,860,184,273,879.04` 轴标签与 `-¥0.07`。
 已知缺口：本目录与 `../financial-values.test.ts` 都没有 `formatCNY('0.00')` 的零值用例，也没有把 bigint 分为参数传进 `formatCNY` 的用例（唯一输入是大数经 `addMoney` 得到的元字符串）；零值只经 `DecimalMoney` 覆盖。
 `business-result-cards.test.ts`、`investment-purchase-display.test.ts`、`security/gateway.test.ts` 用 `toContain(formatCNY(...))` 断言，期望值随实现计算，不构成字面量。

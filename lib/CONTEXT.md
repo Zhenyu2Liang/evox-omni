@@ -14,6 +14,7 @@
 | `date.ts`、`clock.ts` | 业务日历与时钟 |
 | `config.ts`、`constants.ts` | 运行配置与演示常量 |
 | `ledger.ts` | 执行身份、流水身份与输入摘要 |
+| `banking-selectors.ts` | `resolveBankingArgs`：把模型给的资源 id 绑到当前用户拥有的行 |
 | `chat-history.ts`、`chat-plan-history.ts` | 历史分页与计划归属 |
 | `chat-cards.ts`、`action-summary.ts` | 业务卡片与授权摘要 |
 | `sensitive.ts`、`tool-diagnostics.ts` | 敏感字段过滤与诊断投影 |
@@ -89,7 +90,28 @@ JSON 金额使用十进制字符串。
 `compareDecimal(left, right)`（`decimal.ts:122-129`）返回 `-1 | 0 | 1`，按对齐后的整数系数比较，接受 `string | number | bigint`，`number` 会拒绝超出分精度的值（`decimal.ts:105`）。
 比例展示换算有两个出口（`decimal.ts`）：`rateRatioToPercent(ratio)`（`:76-78`）仅供天然非负的比例（产品预期年化），内部先过 `nonNegativeDecimal` 闸门；`signedRateToPercent(ratio)`（`:71-73`）是同一「比值×100」的**有符号**版本，供持仓收益率这类可负的展示值使用——它是展示换算，绝不允许用 `Math.abs`、截断为 0、吞异常或浮点运算替代。
 `DecimalAmount = string`（`decimal.ts:6`）；`FinancialDecimal` 精度 120 位、默认 `ROUND_HALF_UP`（`decimal.ts:9`）。
+
+## 十进制算术、符号与非负门禁（`decimal.ts:16-129`）
+
+`decimalText`（`:16-33`）是所有入口的规范化闸门：只接受字符串（非字符串抛 `VALIDATION`），长度 ≤128、整数位 ≤40、小数位 ≤18、指数 |e| ≤ 148，越界一律 `VALIDATION`。
+它的输出用 `toFixed()` 规范化，因此**尾随零被丢弃**（`'000.03257500'` → `'0.032575'`），且负零折叠为 `'0'`（`'-0.000'` → `'0'`）；这就是「`'1.50'` 与 `'1.5'` 是同一身份」的来源。
+`nonNegativeDecimal`（`:36-40`）是「簿记金额/份额/净值」的非负门禁：负值**抛 `AppError('VALIDATION', 'Financial value must be nonnegative.')`**（`:38`），既不取绝对值也不夹到 0；用法恒为 `nonNegativeDecimal(raw) === raw`（SDK 读取时据此判定「份额/净值缺失」）。
+`addDecimal` / `subtractDecimal` / `multiplyDecimal`（`:42-52`）全程有符号且精确，结果再经 `decimalText` 规范化，所以**尾随零丢失**：`subtractDecimal('1.00','1.50')` → `'-0.5'`（不是 `'-0.50'`），`multiplyDecimal('-0.0123','100')` → `'-1.23'`。
+`divideDecimal`（`:55-59`）除数为 0 抛 `VALIDATION`，非终止小数（`'1'/'3'`）同样抛错，不做静默舍入。
+`valuationToMinor(valuation)`（`:81-84`）是唯一的人民币结算换算：先过 `nonNegativeDecimal`（负值抛 `VALIDATION`，`:82`）→ `times('100').toFixed(0, ROUND_HALF_UP)` **只取整一次** → `assertMinorUnits` 校验有符号 64 位范围（`money.ts:31-36`）。故 `'0.004999999999999999'` → `0n`、`'0.005'` → `1n`、`'92233720368547758.074'` → `MAX_MINOR_UNITS`、`'92233720368547758.075'` 与任何负值都抛错。
+`signedRateToPercent(ratio: string): DecimalAmount`（`:71-73`）只是 `multiplyDecimal(ratio, '100')`：不过门禁、不取绝对值、不夹 0、不额外舍入，返回**无 `%`、无固定小数位**的规范文本（`'-0.029726666666666667'` → `'-2.9726666666666667'`，`'0'` → `'0'`）。
+`rateRatioToPercent(ratio: string): DecimalAmount`（`:76-78`）= `signedRateToPercent(nonNegativeDecimal(ratio))`：负比例在 `:77`（门禁本体 `:38`）抛 `VALIDATION`；非负输入与 `signedRateToPercent` 逐字符相同。只用于天然非负的产品年化比率，持仓收益率一律走 `signedRateToPercent`。
+两个出口对非法输入都不兜底，异常消息全部来自 `decimalText`：非字符串 `Financial decimals must be decimal text.`（`:17`）、非法文本（`:20`）、指数越界（`:26`）、位数越界（`:30`），`code` 均为 `VALIDATION`；在渲染期抛出会崩掉整棵客户端树，因此调用方必须先保证字段类型与符号。
+其他非负/正整数门禁都**不在比率路径**上：`contracts/command.ts:31`（`shares`/`expectedShares`/`expectedNetValue` 参数身份）、`db/repositories/investment.ts:33,62`、`banking-sdk/valuation.ts:73`、`banking-sdk/investment.ts:347,374,390` 的 `requireNonNegativeMoney`/`optionalNonNegativeMoney`/严格正校验、`security/security-gateway.ts:652,686`、`agent/tools/decimal-schema.ts` 的 `canonicalShareCount`/`canonicalNetValue`；`money.ts` 侧对应的是 `normalizeTransferAmount`（`:50-54`，金额必须 > 0）与 `assertMinorUnits`（`:31-36`，仅范围）。
+`centsToMoney(minor)`（`money.ts:39-43`）**保留符号**且恒为「整数 + `.` + 两位」：`-12345n` → `'-123.45'`、`-1250n` → `'-12.50'`（`percentageRatio` 依赖该形状）、`0n` → `'0.00'`；不分组、无 `¥`。故 `HoldingView.profit`/`cumulativeProfit`/`realizedProfit` 的负值即此文本（`banking-sdk/investment.ts:1301,1313,1316`），`HoldingView.amount`（`:1308`）来自受非负门禁约束的 `principalAmountMinor`。
 断言锚点见 `tests/CONTEXT.md`。
+两个百分数出口的实际调用方：`rateRatioToPercent` ← `channels/weixin/presentation.ts:151`、`components/banking/InvestmentProductTile.tsx:49`、`components/chat/cards/InvestmentsCard.tsx:76`（只用于产品 `annualYieldRate`，负值直接抛 `VALIDATION`）；`signedRateToPercent` ← `components/banking/HoldingFacts.tsx:91`（唯一消费点，渲染 `HoldingView.profitRate`）。
+`channels/weixin/presentation.ts:70-72` 的本地 `percentText` 不走这两个出口：`multiplyDecimal(ratio,'100')` + `formatDecimalCNY`，不过非负门禁、容忍负号，但 HALF_UP 到 2 位小数，因此同一 `profitRate` 在微信显示 `3.26%`、在网页显示 `3.2575%`。
+`money.ts#addMoney`（`:56-58`）只把两个 `parseExactMinor` 结果相加，不调用 `assertMinorUnits`，结果无 INT64 范围校验；需要范围保证的路径必须先过 `moneyToCents` 或 `assertMinorUnits`。
+本目录没有 `money.ts#addDecimal`：带符号的十进制加法是 `decimal.ts#addDecimal`（`:42-44`），`money.ts` 只有分单位（最多两位小数）的 `addMoney`。
+`addMoney` / `addDecimal` 都是有符号纯加法，不取绝对值、不夹 0、无任何非负门禁：`addMoney` 经 `parseExactMinor`（`money.ts:18-23`）接受前导 `-`（`agent/grounding-facts.ts:121` 靠它累加可为负的余额增量），`addDecimal` 经 `decimalText` 的 `[+-]?` 接受负值（`agent/tools/investment.ts:239`、`banking-sdk/investment.ts:1316` 用它累加可为负的收益）。
+`addMoney` 的入参先被 `money.ts#decimalText`（`:11-16`）剥掉 `¥`/`￥`/`,`/空白，只接受 ≤2 位小数的十进制文本，否则以 `AppError('VALIDATION')` 报 `'Money input must be decimal text.'`（`:12`）或 `'Money must have at most two decimal places.'`（`:20`）；结果由 `centsToMoney` 固定两位小数并保留符号（`addMoney('-0.5','0')` → `'-0.50'`）。
+`addDecimal` 的结果再经 `decimalText` 规范化，故尾随零丢失（`addDecimal('0.10','0.20')` → `'0.3'`），小数位 >18 或整数位 >40 抛 `VALIDATION`（`decimal.ts:29-31`）。
 
 ## 展示脱敏与身份判定（`mask.ts` / `phone.ts`）
 
@@ -205,6 +227,11 @@ JSON 金额使用十进制字符串。
 - 金融单位规则见 [financial-values.md](../docs/cn/financial-values.md)。
 - 数据访问规则见 [db/CONTEXT.md](db/CONTEXT.md)。
 - `index.ts` 不得导出数据库客户端。
+- 本目录（含 `db/` 与 `db/repositories/*`）的生产代码没有任何 `$disconnect`、`$queryRaw`、`$executeRaw`、`$queryRawUnsafe`：断连与原始 SQL 只出现在 `tests/` 与 `scripts/`，请求路径上的每条语句都是 Prisma 客户端调用。
+- 本目录所有 `$transaction` 只传回调、不传 `transactionOptions`，统一继承 `db/database.ts` 的 `maxWait: 10000` / `timeout: 10000`；放宽到 `timeout: 20000` 的调用点全部在本目录之外（`agent/command-execution.ts:103`、`agent/scheduled-dispatcher.ts:86`）。
+- 串行连接互斥队列（`db/serialized-connection.ts`）是无界 FIFO 且无等待超时，因此本目录每个 `$transaction` 都必须 awaited：当前没有 fire-and-forget、也没有保存 promise 后条件 await 的写法，新增事务不得引入这两种形态。
+- `banking-selectors.ts#resolveBankingArgs(userId, toolName, args)` 每个工具名最多一次 owner 范围读：`transfer_money`（带 `sourceAccountId`）读账户、`freeze_card`/`unfreeze_card`/`report_lost_card`/`replace_card`/`set_card_limit` 读卡片、`cancel_subscription`/`set_subscription_reminder` 读订阅、`subscribe_investment`/`compare_investments` 读产品（全表无 owner 过滤）、`redeem_investment` 读持仓（`include: { product: true }`）；`apply_virtual_card`、`create_scheduled_task` 等未列入分支的工具 **0 次查询**，只返回入参浅拷贝。
+- `resolveBankingArgs` 的选择逻辑是同一次读结果上的内存 `filter`/`some`/`map` 精确 id 匹配（`select()` 命中恰好一行否则 `NOT_FOUND`），没有重读、重试、定时器或并发；它直接 import 模块级 `prisma` 单例而不是 `dbClient()`，因此**不会**加入调用方已开启的事务。
 - 新增展示脱敏一律使用 `lib/mask.ts`，不得在调用层重复实现。
 - 本目录不得依赖业务执行层或界面层。
 - 意图声明与计划校验入口见 [agent/CONTEXT.md](../agent/CONTEXT.md)。

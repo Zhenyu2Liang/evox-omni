@@ -100,6 +100,13 @@ the server summary and a JSON projection with resource IDs and exact financial s
 Failures set native `isError: true` and return a typed safe error envelope. The durable
 journal saves all content parts so recovery preserves the same model-facing evidence.
 
+## Mock-mode latency profile (no timers, no request limits)
+
+`createMockRuntime` returns `{ model: reg.getModel(), streamFn: models.streamSimple.bind(models) }` (`provider-mock.ts:33`) — the RAW collection stream. `withLiveRequestLimits` has exactly ONE call site, `provider-live.ts:222`, so in `LLM_MODE=mock` there is no `AbortSignal.timeout` deadline, no `LLM_REQUEST_TIMEOUT_MS`, and no `maxRetries: 1`/`maxRetryDelayMs: 1500` transport retry: a mock turn can neither time out nor retry.
+`agent/providers/` contains no `setTimeout`, `setInterval`, `setImmediate`, `sleep`, `delay`, `queueMicrotask`, `backoff` or `new Promise` — the only `AbortSignal.timeout` in `agent/` is `request-options.ts:13`, and the only `tokensPerSecond` in the whole repository is the doc comment at `provider-mock.ts:20`; `fauxProvider({ api: 'banking-demo-mock' })` (`:25`) configures no token rate, so nothing in this node paces, throttles or sleeps.
+Every mock model call is one synchronous evaluation of `respond()` (`mock-responder.ts:23`) or `mockCompactionReply()` (`mock/compaction.ts:4`) plus Pi's own loop work; the queued factory re-queues itself before answering (`provider-mock.ts:29`), so calls never run dry and never wait on a queue.
+`withModelAudit` DOES wrap the mock `streamFn` when a journal exists (`banking-agent.ts:351`) and awaits `journal.recordModelProviderEvent` inside `onPayload`/`onResponse`/`onProviderStreamEvent` (`model-audit.ts:19-33`) — one serialized SQLite insert per hook event. Whether Pi's faux provider invokes those hooks and how many stream events it emits is NOT verifiable in this repository (`node_modules` is absent in worker worktrees); the unit spec `tests/unit/agent/providers/model-audit.test.ts` exercises `withModelAudit` only with a hand-written stream. Context-compaction calls bypass the audit wrapper and pass `{ enabled: false, maxRetries: 0, baseDelayMs: 0 }` (`agent/context-compaction/official.ts:61`).
+
 ## Live model and host policy
 
 1. Exact model id registered for the provider: use it unchanged.

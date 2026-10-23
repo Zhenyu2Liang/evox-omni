@@ -173,6 +173,25 @@ MFA 输入框（`MfaCard.tsx:90-106`）没有 `maxLength`、`name` 与任何 `da
 `cards.mfa.failedAttemptsLimit` 在实时锁定流程中不可达：第 3 次错误验证码的响应 `status:'locked'` 让 `settleAction` 清除 `pendingAction`，底部 `MfaCard` 卸载，`useAgentStream` 的 `verify` 计数条件（`pendingAction` 仍是同一 mfa 决策）不再成立，`mfaAttempts` 停在上一次的数值。
 连续错误验证码的三段可见变化：前两次保留底部面板（顶部 `role="alert"` 因 `showNotice={!pending}` 不渲染），第三次面板整体消失，`chat.error.actionLocked` 改由 system 气泡、工具行 `errorCode:'MFA_LOCKED'` 与可能的只读内联卡承载。
 
+## 客户端请求与计时器
+
+本目录没有轮询：无 `setInterval`、无 `requestAnimationFrame`、无 `EventSource` 或 SSE 重连、无 fetch 重试/退避循环。
+唯一的 `setTimeout` 是两处一次性中止上限，不重发请求：
+`history-request.ts` 的 `setTimeout(cancel, 5000)`（`requestLatestHistory`），
+`actions.ts` 的 `setTimeout(cancel, PENDING_ACTION_READ_TIMEOUT_MS)`（`PENDING_ACTION_READ_TIMEOUT_MS = 5000`，挂载恢复 `GET /api/actions`）。
+两处都将「取消」竞态成空结果（`kind:'failed'` / `[]`），不会产生第二个请求。
+
+一次对话回合的请求顺序：`POST /api/chat`（`sendChatTurn`：`Accept: text/event-stream` + `readSseStream` 逐帧折叠）→
+仅当流被判定中断（`done` 前缺 `message_end` 或读取抛错）才追加一次 `GET /api/chat/history`（`requestLatestHistory`，上限 5000ms）。
+挂载时（服务端已传入 `initialHistory`，客户端不重复拉历史）：`GET /api/actions`（`fetchPendingActions`），有 `taskId` 时另加 `GET /api/tasks/:id`（`fetchTaskPlan`）。
+`controlTask` 先 `POST /api/tasks/:id` 再 `GET /api/actions`，共两次。
+`confirm`/`verify`/`cancel`/`recover` 各是一次 `POST /api/actions/:id/*`。
+分页 `GET /api/chat/history?cursor=…` 只在用户点击「加载更早」时发起。
+
+`POST /api/chat` 与操作类 POST 没有客户端超时，也没有 `AbortController`（`pull` 里传的是 `new AbortController().signal`，永不中止）；
+`AbortController` 只用于历史分页与挂载恢复读取，且卸载时只中止这两类读取，不中止正在进行的回合。
+`POST /api/schedules/tick` 不由任何组件调用（只由 `app/schedules/page.tsx` 的「检查到期」按钮触发）。
+
 ## 测试定位（DOM 标记）
 
 端到端测试只依赖以下标记与目录文案，不依赖样式类名。

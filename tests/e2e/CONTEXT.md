@@ -44,7 +44,7 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 
 ## live 场景与辅助模块
 
-`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG,lH,lJ,lI`。
+`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG,lH,lJ,lI`（数组顺序，`lJ` 在 `lI` 之前）。
 `lF`/`lG` 是「卡片挂失 → 补办」链路场景，id `lF-live-credit-report-lost-and-replace-new-session` 与 `lG-live-full-card-loss-replace-chain-single-session`。
 `lH` 是「MFA 尝试上限 → 终态锁定」场景，id `lH-live-mfa-attempt-limit-lock-terminal`，body 在 `live-mfa-lock.e2e-helper.ts` 的 `scenarioMfaAttemptLimitLock`（注入 `{ page, baseUrl, captureShot }`），链路为 🔴 转账停泊 → 三次错码 `000000` → 锁定 → 刷新 `/agent` → `/security`。
 `lI` 是「号码与尾号身份解析」场景，id `lI-live-identity-resolution-by-number`，body 在 `live-identity.e2e-helper.ts`：腿 1 精确手机号转账确认卡（取消后金额不变）、腿 2 近号 `13911110002` 被拒不产生 `PendingAction`、腿 3 尾号 `6688` 定位卡、腿 4 脱敏渲染。四条腿都只读 `Contact.phone`/`Card.numberMasked` 形态，完整号码仅作为用户气泡与工具参数出现。

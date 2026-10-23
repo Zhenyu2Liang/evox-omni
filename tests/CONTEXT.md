@@ -86,6 +86,41 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 单进程内两次事务由 `lib/db/serialized-connection.ts` 的单连接 FIFO 串行化，失败方随后在「已平仓」或旧 `shares` 的条件写处被拒；该用例只覆盖进程内竞态，不覆盖跨进程写者。
 `integration/node-recovery.test.ts` 覆盖同一 `idempotencyKey` 的并发重放返回同一结果、不同 key 的重复赎回被拒（后者是串行调用，不构成竞态）。
 
+## 亏损持仓（负收益 / 负收益率）的覆盖
+
+收益率是有符号展示：唯一渲染入口 `components/banking/HoldingFacts.tsx:89-91` 走 `signedRateToPercent(profitRate)`，对话卡 `components/chat/cards/InvestmentsCard.tsx:95` 与 `/investments` 的 `InvestmentProductTile` 复用同一入口。
+`profit`/`cumulativeProfit` 走 `DecimalMoney(..., signed)`，`realizedProfit`/`marketValue`/`amount` 不带 `signed`；组件不随盈亏切换颜色 class（统一 `text-banking-deep`）。
+比例层分工由 `unit/financial-values.test.ts:64-84` 固定：`signedRateToPercent` 保留符号与全部精度（`'-0.0123'`→`'-1.23'`，`:74`），正值与 `rateRatioToPercent` 结果全等（`:76`），而比率非负门禁 `nonNegativeDecimal`/`rateRatioToPercent('-0.032575')` 抛 `{code:'VALIDATION'}`（`:79`/`:83`）。
+因此 `profitRate` 绝不可走 `rateRatioToPercent`：那会让亏损持仓在渲染期抛错、卸载整棵客户端树。
+
+| 文件:行 | 断言 |
+| --- | --- |
+| `unit/planner/decimal-format.test.ts:44-96` | 唯一直接渲染 `HoldingFacts` 的用例：亏损持仓（4199.864825 份 × 净值 0.9407 → 市值 3950.80，`profit`/`cumulativeProfit` 均 `'-49.20'`）；`profitRate: '-0.0123'` 不抛错且渲染 `-1.23%`（`:77-78`），全精度 `-2.9726666666666667%`（`:87`），`tile` 布局同为负（`:88`），`-¥49.20`（`:90`），缺 `profitRate` 时不出 `%`（`:93-94`），正/零收益率仍为 `3.2575%`/`0%`（`:81-84`） |
+| `unit/planner/decimal-format.test.ts:37-41` | `DecimalMoney({signed:true})` 只在严格为正时前置 `+`：`'+¥118.91'` vs `'-¥118.91'` |
+| `unit/planner/financial-display.test.ts:48-53` | 极小负收益 `-0.0000000001` 经 `DecimalMoney(signed)` 渲染 `'-¥0.00'`：符号不被舍入吃掉 |
+| `unit/financial-values.test.ts:96-97` | `formatDecimalCNY('-0.000001')` 为 `'-¥0.00'` |
+| `unit/banking-sdk/net-value.test.ts:153-161` | `profitRateOf` 产出带符号比率（`'-23.45'/1000.00`→`'-0.02345'`，`'-1.00'/3.00`→`'-0.333333333333333333'`），零成本返回 `undefined` |
+| `unit/banking-sdk/net-value-redemption.test.ts:366-403` | 净值下跌仓位的负值口径：`profit` `'-0.000000928'`/`'-192.3076932'`、`realizedProfit` `'-192.31'`、`realizedProfitMinor` `-19_231n`（只断 SDK 数值） |
+| `unit/banking-sdk/net-value.test.ts:164-191`、`unit/banking-sdk/investment.test.ts:110-112`/`:124-129` | 负净值/负份额/负金额/负成本的 `VALIDATION` 拒绝 |
+| `e2e/live-investment.e2e-helper.ts:695-706` | B0 聊天卡：持仓收益与 `signedDecimalCNY(市值 − 剩余持仓成本)` 全等（`signedDecimalCNY` 见 `:229-231`，只对正值加 `+`），`持仓收益率` 匹配 `/^[+-]?\d+(\.\d+)?%$/`（失败文案写明「负收益率必须正常显示」），并断言本步零 pageerror |
+| `e2e/live-investment.e2e-helper.ts:441-473` | `/investments` 页逐行全等：金额 `/^[+-]?¥[\d,]+\.\d{2}$/` 允许负号且拒绝未结算高精度，持仓收益/累计收益按带符号 CNY 全等，已实现收益按不带符号 `formatDecimalCNY` 全等，并按「市值 − 持有金额」「已实现 + 持仓」双向自洽 |
+
+已覆盖的层级：符号换算（`lib/decimal`）、SDK 数值（`banking-sdk/net-value.ts`）、组件两种布局（`HoldingFacts` 的 `card`/`tile`）、工具摘要（`agent/tools/redeem-investment.test.ts:375-399`：mock `listHoldings` 返回 `profit: '-60'`/`profitRate: '-0.012'`/`cumulativeProfit: '-60'`，断言 `持仓收益 -¥60.00`、`持仓收益率 -1.20%`、`累计收益 -¥60.00`）。
+
+已知缺口：
+
+- 夹具无亏损持仓：`helpers/fixtures.ts:427-431` 只有 `holding_wenjiana`（5050.000000 份 × 1.0000 = 5050.00，成本 5000.00，+50）；亏损持仓只在演示种子 `prisma/seed.ts:377-381` 的 `holding_wenjib`（10000.000000 份 × 0.9880 = 9880.00，成本 10000.00 → −¥120.00，收益率 −1.2%）。
+- 真实浏览器的亏损渲染只由演示种子的 `/investments` 顺带产生，没有任何断言读取它：`assertInvestmentsPage` 的行清单不含「持仓收益率」（`e2e/live-investment.e2e-helper.ts:424-433`），且 `lB` 步骤持仓是盈利的 `holding_wenjiana`，带符号正则同样接受正值。
+- `holdingProfitRate` 文案（`business.investments.holdingProfitRate`）只有 e2e 断言（`e2e/live-investment.e2e-helper.ts:90-91`、`:681`、`:699-700`），unit 层只断言百分比文本。
+- 微信通道是另一套渲染（`channels/weixin/presentation.ts` 的 `percentText`，`multiplyDecimal` 后 HALF_UP 到 2 位），`unit/weixin-presentation.test.ts:25`/`:87-104`/`:111` 只有非负或缺失收益率，无亏损用例。
+- 没有负 `HoldingView.cumulativeProfit`/`realizedProfit` 断言：负已实现收益只落在 `InvestResult` 层（`unit/banking-sdk/net-value-redemption.test.ts:394`/`:400`）。
+- `tests/` 内 `get_investment_holdings` 只有 4 处引用（`e2e/live-investment.e2e-helper.ts:633` 注释、`e2e/weixin-capabilities.e2e-helper.ts:44` 工具名矩阵、`unit/agent/providers/mock-turn-declaration.test.ts:155` 声明矩阵、`unit/security/permission-engine.test.ts:27` 只读白名单），没有一条经真实工具路径断言负百分比。
+- 没有组件级用例把负 `annualYieldRate` 喂给 `InvestmentProductTile`/`InvestmentsCard`；`rateRatioToPercent` 的负值行为只在 `unit/financial-values.test.ts:83` 以抛错覆盖，负净值/负 `marketValue` 的仓储拒绝在 `unit/banking-sdk/investment-precision.test.ts:257-274`（`rejects.toBeDefined()`，不校验错误码）。
+- `amount` 为 0 时 `profitRate` 缺省只有函数级覆盖（`unit/banking-sdk/net-value.test.ts:160-161`）。
+- `InvestmentsCard` 的渲染覆盖只有 4 个文件（`unit/planner/investment-purchase-display.test.ts`（`HOLDING` 夹具 `:43`、`describe('InvestmentsCard')` `:119`）、`unit/planner/financial-display.test.ts:25-46`、`unit/planner/chat-read-results.test.ts:55-86`、`integration/frontend-review-fixes.test.ts:75-85`），其夹具或为旧口径（无 `valueBasis`/`shares`/`latestNetValue`/`profitRate`，只出市值与收益两行）或 `profit` 为正，覆盖不到收益率行与汇总行负值。
+- `tests/` 内没有 `app/api` 直出 holdings 卡的测试；`agent/card-emitter.ts` 的 holdings 投影只经 `unit/agent/providers/mock-turn-declaration.test.ts:152-159` 间接覆盖。
+- `integration/`、`app/`、`scenarios/` 完全没有 `profit`/`profitRate`/`cumulativeProfit`/`realizedProfit` 断言，负值口径只落在 `unit/`。
+
 ## 卡片生命周期能力契约的覆盖
 
 能力事实以 `lib/contracts/tool-catalog.ts` 与 `lib/contracts/card-management.ts` 为准：
@@ -219,6 +254,39 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 阶梯一律走 `securityGateway#authorizeAction`；**绝不**直接调 `security/mfa.ts#verify`——它只锁 challenge，不落 `PendingAction` 终态，正是这些规格要防的弹窗复活路径。
 逐文件的恢复/租约驱动方式见 [integration/CONTEXT.md](integration/CONTEXT.md)、[app/CONTEXT.md](app/CONTEXT.md)、[unit/CONTEXT.md](unit/CONTEXT.md)。
 
+## 时间预算与环境放大
+
+显式超时预算的唯一来源是 `tests/helpers/timeouts.ts`：`CHAT_DRIVEN_TEST_TIMEOUT_MS = 60_000` 用于 body 驱动真实 `POST /api/chat` 的 mock 模型 turn，`COLD_DB_PROVISION_TEST_TIMEOUT_MS = 120_000` 用于体内 `spawnSync` 真实 CLI（`scripts/db-push.ts` 冷库自建、`prisma/seed.ts`）的用例。
+两者都以 `it(...)` 的第三个参数套用；其余用例沿用根 `vitest.config.ts` 的 `testTimeout: 20000`，该文件 root-owned，`tests/` 侧不能修改。
+两条路径都没有内部 deadline，因此 `testTimeout` 是唯一边界：chat turn 的墙钟由串行语句条数决定（与断言条数无关），冷库自建由 `tsx` 启动与 Prisma schema-engine 的磁盘/CPU 延迟决定。
+已套用：`tests/app/security-workflow-http.test.ts` 的 it 1–3、9–12（清单见 [app/CONTEXT.md](app/CONTEXT.md)），`tests/deploy-db-push.test.ts` 的两个 spawn 用例（不 spawn 的 `refuses to reset …` 沿用全局预算）。
+新写这两类用例必须套用同一常量，不得写裸数字字面量，也不得在 spec 内另起局部常量。
+
+通用判据：经 HTTP 入口的用例墙钟 ≈ 串行语句条数 × 单语句延迟。
+一次 chat turn 实测约 1.4s、落库约 101 行 `agentRunEvent`；每个 Pi 事件各开一个交互式事务（`agent/durable/journal.ts:120-123` → `lib/db/repositories/agentRun.ts:118-122`），全部串行排在同一条 native SQLite 连接上（`lib/db/serialized-connection.ts`）。
+mock 路径没有内部 deadline：`agent/durable/journal.ts:223-228` 的 20 000ms 心跳已 `.unref()`，live 专属的 `AbortSignal.timeout` 不生效，因此 `testTimeout` 是这类用例的唯一边界。
+
+同一用例（`security-workflow-http.test.ts` it 2）实测：单独 1919ms、完整 `pnpm test` 1622ms、`tests/app`+`tests/integration` 111 文件批次 2639ms，都在 20 000ms 内。
+宿主争用下同一文件单跑可达 7081/6710/2397ms（约 3.7–4.4 倍），并出现过 `Test timed out in 20000ms`（实际 24316ms），而当时整套只慢 1.29×。
+因此这类超时首先是环境放大信号：不得据此断言业务缺陷，也不得为此放宽或删除断言。
+
+`tests/deploy-db-push.test.ts` 干净机器实测：recreate+seed 27309ms（首次，冷 Prisma 引擎）/18442ms、缺失库自建 17145ms/16954ms（最慢一次分别为全局预算的 137% 与 86%），纯校验用例 1ms；`COLD_DB_PROVISION_TEST_TIMEOUT_MS = 120_000` 相对最慢一次留约 4 倍余量。
+
+已排除的成因（不必重新调查）：无第二个进程写同一 `prisma/test.db`、无锁竞争与 >1s 的可复现停顿、DB 与 WAL 规模正常、`tests/setup.ts` 的 schema 哈希标记匹配因而跑批中途不重建库、子进程只有四处 spawn 点且都在各自用例内 `await` + `kill`（`deploy-db-push` 用自己的库）。
+事件持久化当前是每事件一事务，把 ~101 次串行事务压到个位数才能从根上消除 I/O 争用放大；这属于产品代码，测试侧只能抬高预算下限。
+
+## 串行化与时间预算（stall 归因）
+
+全进程只有一条 native SQLite 连接（`lib/db/client.ts:25-27`），所有语句与交互事务经 `lib/db/serialized-connection.ts` 的 FIFO `ConnectionMutex`（`:9-21`）排队；`startTransaction`（`:35-56`）在 `commit`/`rollback`/抛错时才释放（`:49-50`、`:52-55`），因此**一个被 `await` 的 `$transaction` 会在其整个生命周期内独占该锁**。`acquire()` 的 `await previous` 没有超时也没有取消：若存在未 await 的事务（fire-and-forget），后续每条语句都会无声挂死。`lib/` 当前没有任何 fire-and-forget 事务；`tests/integration/database-adapter-isolation.test.ts:67-111` 固定了 `maxWait`/`timeout` 到期后锁确实被释放（`P2028` 在 `maxWait` 阶段就产生，`callbackEntered === false`）。
+
+`$transaction` 一律继承 `lib/db/database.ts:25` 的 `{ maxWait: 10000, timeout: 10000 }`（例外：`agent/command-execution.ts:103`、`agent/scheduled-dispatcher.ts:86` 用 `timeout: 20000`）。测试进程内的挂钟成本 = 语句数 × 单语句延迟，没有内部截止时间：mock 模型（`agent/providers/provider-mock.ts:33` 无 `tokensPerSecond`）不产生任何 timer，`agent/durable/journal.ts:223-228` 的 20 000 ms 心跳在 20 s 内 0 次触发，`withLiveRequestLimits` 只在 live 模式生效。一次 chat turn 里每个 Pi 事件与每个流事件各开一个 `$transaction`（`lib/db/repositories/agentRun.ts:118`、`:140`、`:162`、`:181`、`:191`、`:313`、`:322`、`:341`、`:355`），故 `tests/app` 的「2 次 chat + 2 次 confirm + 1 次 verify」是数千条串行语句；单语句延迟放大 10 倍即从约 2 s 涨到超过 20 s 的 `testTimeout`。mock 模式没有请求级 deadline，所以超时是唯一边界。
+
+PRAGMA 分层：`lib/db/database.ts:12` 每次 `connect()` 只设 `foreign_keys`/`journal_mode=WAL`；`synchronous=NORMAL` 与 `busy_timeout=10000` 是**连接级**且**只**由 `tests/helpers/db.ts:65-78#ensureTestPragmas()` 经 `truncateAll()`（`:98`）施加，即每个进程的第一次 `resetDatabase()` 才生效。因此任何不调 `truncateAll` 而同用 `prisma/test.db` 的执行者（`tests/helpers/restart-process.ts`、`tests/helpers/standalone-restart-process.ts` 的 fork 子进程，`tests/deploy-db-push.test.ts` 的自建文件）跑在默认 `synchronous=FULL`、无 `busy_timeout` 上；`journal_mode=WAL` 写在文件里会被继承，`synchronous`/`busy_timeout` 不会。
+
+`tests/setup.ts:123` 在**每个测试文件进程**执行 `ensurePrismaClientGenerated`（`tests/helpers/prisma-cli.ts:233-239`），其 `prismaClientUsable`（`:215-224`）会 `spawnSync(process.execPath, ['--import','tsx','-e', …])`——一次约 1-2 s 的阻塞子进程，位于 `setupFiles`，不计入 `testTimeout`。`tests/deploy-db-push.test.ts:59-75` 另有两个 `spawnSync`（`db-push.ts`、`seed.ts`）。
+
+子进程清单（排除 `tests/e2e/**`）只有四处 `node:child_process`：`tests/integration/process-restart.test.ts:24-28`（`fork` `restart-process.ts`）、`tests/integration/standalone-workflow-restart.test.ts:22-26`（`fork` `standalone-restart-process.ts`）、`tests/deploy-db-push.test.ts:59-75`（`spawnSync`）、`tests/helpers/prisma-cli.ts:112-120,218-222,409-414`（`spawnSync`）。两个 `fork` 消费者都 `await` 子进程 `exit` 并在 `afterEach` 对其 `SIGKILL`（`process-restart.test.ts:64-70,82-94`、`standalone-workflow-restart.test.ts:60-65`），等待上限各 15 000 ms；`tests/helpers/restart-process.ts` 自身不 spawn，只用 `setInterval`（`:26`）+ `new Promise(() => undefined)`（`:29`）把自己的 `start` 场景永久停住。没有任何子进程能越过其所在文件的最后一个测试继续写 `prisma/test.db`。
+
 ## wedge 故障注入的接缝
 
 「副作用已提交、结果+状态落定事务回滚」的 wedge 只能注入生产确认路径实际调用的符号。
@@ -232,6 +300,35 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 ## 与当前生产契约不一致的既有断言（已知缺口）
 
 - `app/actions-recovery-http.test.ts:301-302` 断言 wedge 恢复后 `plan.status`/`node.status` 为 `success`，实测当前为 `failed`（同用例 `:292` 的 `ok:true` 通过）。期望值权威：`recoverAction`（`agent/index.ts:209-227`）先把计划关联行结清为 `executed`，再 `resumeTask`；`resumeTask`（`agent/workflows/controls.ts:82-89`）经 `sealedParkedNodes` + `sealSettledNodes` 把已结清动作的停靠节点写为 `failed`（`agent/workflows/parked-actions.ts:80-94`、`planner/failure.ts:111-116` 的 `action_not_open`、`planner/executor.ts:481`/`:665`），计划随之为 `failed`；`agent/index.ts:234-235` 仍把「计划 failed + 动作 executed」判为成功。不得把断言改成 `failed`，也不得把「计划 failed」固化成生产契约。
+
+## 组件渲染测试（React SSR，无 DOM 环境）
+
+仓库没有 DOM 环境的组件测试：`@testing-library/react`、`jsdom`、`happy-dom`、`react-test-renderer` 都不在 `package.json`／`node_modules` 里，根 `vitest.config.ts:12` 固定 `environment: 'node'`。
+组件回归一律用 `react-dom/server#renderToStaticMarkup` 渲染真实组件成静态 markup，再对字符串 `toContain`/`not.toContain`；`oxc.jsx.runtime: 'automatic'`（`vitest.config.ts:5`）只负责 JSX 转换。
+`include` 只收 `tests|agent|security|planner` 下的 `*.{test,spec}.ts`，不收 `.tsx`，所以渲染用例写在 `.ts` 里并用 `createElement(...)` 构造元素。
+`@` 别名在测试里可用（`tsconfig.json:21-25` 与 `vitest.config.ts:6-10` 两处都指向仓库根）；`'use client'` 模块可直接导入渲染，指令只是字符串字面量。
+`useEffect` 不执行，故依赖 `document`/`cookie` 的副作用不会触发（`LocaleProvider` 的 `document.documentElement.lang` 即属此类）。
+i18n 不需要 Provider：`lib/i18n/LocaleProvider.tsx:15` 的默认上下文是 zh-CN；需要显式语言或开发者开关时用 `createElement(LocaleProvider, { initialLocale: 'zh-CN', children })` 包裹（`developer-reset-panel-hook.test.ts:30-40`）。
+引用 `next/navigation` 的组件必须 `vi.mock('next/navigation', ...)`（`business-result-cards.test.ts:13`、`unlock-panel-render.test.ts`、`unlock-panel-notice.test.ts`）。
+`tests/helpers/` 没有任何 i18n 或渲染辅助，模板是各用例自写的 `render()` 薄封装。
+
+现有渲染用例分布（`react-dom/server` 命中 26 个文件）：
+
+| 文件 | 渲染对象 |
+| --- | --- |
+| `unit/planner/decimal-format.test.ts` | `components/ui/DecimalMoney` 与 `components/banking/HoldingFacts`（唯一一处，含 `card`/`tile` 两种 layout） |
+| `unit/planner/investment-purchase-display.test.ts` | `components/banking/InvestmentProductTile`、`components/chat/cards/InvestmentsCard` |
+| `unit/planner/business-result-cards.test.ts`、`chat-presentation.test.ts`、`locked-card-rendering.test.ts`、`tool-diagnostics.test.ts`、`tool-feedback.test.ts`、`approval-record.test.ts`、`transcript-activity.test.ts`、`chart-presentation.test.ts`、`financial-display.test.ts`、`composer-readiness.test.ts`、`chat-read-results.test.ts`、`chat-plan-controls.test.ts`、`chat-history-ui.test.ts`、`manual-review-presentation.test.ts`、`tool-event-lifecycle.test.ts` | 聊天卡、审批/MFA 卡、工具时间线、图表 |
+| `unit/security/unlock-panel-render.test.ts`、`unlock-panel-notice.test.ts` | `app/security/UnlockPanel` |
+| `unit/security/developer-reset-panel-hook.test.ts` | `app/security/ResetBreakerButton`（`DeveloperModeProvider` + `LocaleProvider`） |
+| `unit/lib/activity-presentation.test.ts` | 活动投影展示 |
+| `integration/frontend-followup-fixes.test.ts`、`frontend-review-fixes.test.ts`、`decision-guidance.test.ts`、`live-retry-ui.test.ts` | 聊天结果卡与前端修复的渲染形态 |
+
+缺口：`components/banking/CardTile`、`AssetSummaryCard`、`RecentTransactions`、`SubscriptionTile`、`components/banking/card-account-display.ts`、`components/chat/cards/CardsCard.tsx` 都没有任何渲染用例。
+`CardTile` 的事实只在浏览器侧断言（`e2e/card-labels.e2e-helper.ts#CARD_LABEL`、`readCardTileRows`、`card-replace-chain.e2e-helper.ts`）。
+`CardTile` 不 import `next/navigation`、只用 `useI18n` 默认上下文，因此新增渲染用例只需 `createElement` + `renderToStaticMarkup`。
+
+单文件/单目录执行已文档化：`docs/cn/test-cases.md:23-34` 的常用命令给出 `pnpm test tests/unit` 与 `pnpm test agent/durable tests/integration/process-restart.test.ts`（`pnpm test` = `vitest run`），等价的显式形式是 `pnpm exec vitest run <path>`。
 
 ## 货币文案的断言锚点
 

@@ -145,6 +145,8 @@ replays its recorded model call. The stored intent shape is `ConversationIntent`
 
 `get_investment_holdings` 的每条持仓渲染七项事实：持仓份额、最新净值与净值日期、持仓市值、剩余持仓成本、持仓收益、持仓收益率、累计收益。市值、收益、收益率取自 SDK（市值恒为 `shares × latestNetValue`，收益率只是把 SDK 的无量纲比率乘 100 的展示换算），记录无法支撑的项显式输出「历史数据不足」而不伪造数字；`valueBasis: 'MIGRATED_ESTIMATE'` 追加「（估算）」。
 
+持仓收益是**有符号**的展示值，`investment.ts` 只做格式化、绝不做非负门禁：`holding.profit` / `holding.cumulativeProfit` 走 `formatDecimalCNY`（`:222`、`:224`，亏损渲染 `-¥60.00`），`holding.profitRate` 走 `percentText()`（`:77-80` = `multiplyDecimal(ratio,'100')` + `formatDecimalCNY` 去掉 `¥` 再加 `%`，HALF_UP 两位，亏损渲染 `-1.20%`），`InvestResult.realizedProfit` 走 `formatCNY`（`:523`，同样保留符号）。这里绝不调用 `nonNegativeDecimal` / `rateRatioToPercent` / `valuationToMinor`（它们对负文本抛 `VALIDATION`），也没有 `Math.abs`、clamp 或把负值过滤成 0：`agent/` 全目录只有 `decimal-schema.ts:12` 的注释提到 `nonNegativeDecimal`（SDK 存储契约），`rateRatioToPercent` 只用于产品 `annualYieldRate`（`:123`、`:176`），`signedRateToPercent` / `valuationToMinor` 在 `agent/` 无调用。摘要里「合计持仓收益」是 `addDecimal` 累加、缺失值按 `'0'` 计入（`:239`），累加同样保留符号。这些字段在模型可见的 `data` 中原样透传（`result.ts#modelBankingData` 只脱敏手机号与执行身份字段），没有任何裁剪。行为由 `redeem-investment.test.ts:375-399` 固定（`持仓收益 -¥60.00`、`持仓收益率 -1.20%`、`累计收益 -¥60.00`）。浏览器侧另有一个展示出口 `components/banking/HoldingFacts.tsx:91`（`signedRateToPercent`，不额外舍入），因此同一比率在聊天摘要里是两位小数、在持仓卡里是全精度——两者都是 `×100` 的有符号展示换算，都不在财务链路上。
+
 ### `subscribe_investment` 申购聚合
 
 对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓份额与本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层以 `{ productId, amount }`（金额规范成两位小数）转发给 `banking.investment.subscribeInvestment`，并把 `opts.idempotencyKey` 转发为执行身份。申购结果本身不带成交净值，`runSubscribeInvestment` 因此以一次只读的 `banking.investment.listHoldings()` 回读该持仓最近一笔 `purchases[].netValuePerUnit` / `netValueDate` 作为**展示**用成交净值；这次回读失败或被重放的旧记录没有该字段时，摘要写「历史数据不足」，绝不把已成交的申购判为失败或凭空补一个净值。摘要字段为已认购金额、持仓号、`申购份额`、`成交净值`（含净值日期）、`持仓总份额`、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
@@ -185,6 +187,16 @@ A `'running'` result after `runPlan` means the claim was taken over; the durable
 `executeDirect` validates params first (`:348-349`), and for a write tool wraps the runner in `prepareBankingCommand` + `executeBankingCommand` (`:372-381`) so receipts/audit share the transaction.
 `submit_plan` is special in three places: dispatched through `runners.submit_plan` (`:312-317`, returns `{ ok:false, errorCode:'INTERNAL' }` without `opts.submitPlan`), `get('submit_plan')` without `opts.submitPlan` returns the throwing placeholder `createUnconfiguredSubmitPlanTool()` (`:208-218`), and the `:388-413` loop adds `prepareArguments` but does NOT replace its `execute` (`:397`) — its own `execute` calls `runSubmitPlan` directly.
 So a test that wants the real plan path must build the registry with `{ submitPlan: { sessionId, runTool } }` and then call `registry.executeDirect('submit_plan', args)`.
+
+## Pre-park latency contract
+
+No file in this directory schedules a wall-clock wait: zero `setTimeout`/`setInterval`/`new Promise`/sleep/delay/`AbortSignal.timeout`, zero timeout/TTL constants and zero retry/backoff or `while`/`for(;;)` loops.
+`planning.ts:96` declares `signal?: AbortSignal` only to forward `{ signal: deps.signal, now: deps.now }` into `executor.runPlan` (`:385`); it constructs no deadline.
+`createToolRegistry` (`index.ts:236-406`) awaits nothing at construction (two literal factory maps + one `for (const name of TOOL_NAMES)` rewrite). Its awaits (`:393` `automaticWriteFence`, `:395` `operationIdentity`) are per call.
+`validateBankingParameters`/`validateSchemaParameters` (`plan-parameters.ts:44-80`), `compileRequestedPlan` (`plan-compiler.ts:10-34`) and the `planner/dag.ts` checks are synchronous CPU only.
+`preflightRequestedPlan` (`planning.ts:215-238`) executes NO tool and opens no transaction: it compiles, validates parameters, then does at most one unbounded `listHoldings` read (only when a node uses `redeem_investment`) plus one `resolveBankingArgs` read per tool node INSIDE a `Promise.all`. N declared steps therefore cost O(1) sequential DB round trips (1 for a plain multi-write plan, 2 with a redemption, +1 `listContacts` for a transfer), never N.
+Every read on that path is unbounded (`lib/banking-selectors.ts:16,20,24,28,37`, `lib/db/repositories/investment.ts:41-47`, `lib/db/repositories/contact.ts:19-24` — no `take`); the bounded read is `get_transactions` (`transaction.ts:47` `limit: query.limit ?? 50`, schema max `MAX_TRANSACTION_READ_LIMIT = 200`).
+Unbounded GREEN reads are NOT on the pre-park path because they are model-driven tool executions: `analyze_spending` scans a 6-month window (`banking-sdk/transaction.ts:38` `TREND_MONTHS = 6`, `:72`) and `detect_anomaly` scans the whole history plus an unfiltered-by-take `auditLog.findMany` (`:102`, `:113`).
 
 ## Parameters and SDK errors
 

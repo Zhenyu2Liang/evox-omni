@@ -39,6 +39,14 @@ SDK 数据类型使用类型导入。
 部分赎回后的持仓按剩余本金（`holding.amount`）、派生市值与未实现收益显示。
 已加购持仓显示最近申购时间（`lastPurchaseAt`）与申购记录数（`purchases`），
 投资产品卡与对话投资卡片以“已加购”标记加购。
+收益率与收益的符号处理只有一条路径：带符号的 `HoldingView.profitRate` 走 `signedRateToPercent`（`lib/decimal.ts:71-73`，见 `banking/HoldingFacts.tsx:91`），
+只有非负的 `ProductView.annualYieldRate` 才走 `rateRatioToPercent`（`lib/decimal.ts:76-78`）。
+收益类字段可为负（亏损持仓）：`profit` / `realizedProfit` / `cumulativeProfit` 只经 `DecimalMoney` → `formatDecimalCNY`（`lib/decimal.ts:86-91`，内部 `decimalText` 保留负号）。
+非负门禁只用于产品年化收益率与入账金额/估值：`rateRatioToPercent`、`nonNegativeDecimal`（`lib/decimal.ts:36-40`）、`valuationToMinor`（`lib/decimal.ts:81-84`）在负值上抛 `AppError('VALIDATION')`，在 render 期调用会崩掉整棵客户端树；绝不把 `profitRate` 或收益字段交给它们。
+组件内 `rateRatioToPercent` 仅两处调用，入参都是 `product.annualYieldRate`（业务上非负）：`banking/InvestmentProductTile.tsx:48-50`（`formatRate`，用于 :79）与 `chat/cards/InvestmentsCard.tsx:76`。
+`DecimalMoney` 的 `signed` 只添加正号（`ui/DecimalMoney.tsx:16-19`），负号由 `formatDecimalCNY` 给出。
+累计金额用 `addDecimal`/`addMoney`，二者都接受带符号文本（`chat/cards/InvestmentsCard.tsx:123-127`）。
+展示层不得用 `Math.abs`、`Number()`、截断或自行补号绕开非负门禁；组件内没有一处把带符号值送入非负门禁。
 
 卡片结算账户区块只由 `CardView.linkedAccountStatus` 决定，
 归约只走 `banking/card-account-display.ts` 的纯函数，
@@ -82,6 +90,7 @@ SDK 数据类型使用类型导入。
 - 用户操作通过 API 获得服务端结果。
 - 历史授权记录不得重复提供执行按钮。
 - 新增卡片类型时，必须更新 `CardRenderer` 的穷举分派。
+- 组件不做轮询或自动重试：无 `setInterval`、无 `EventSource`、无定时重发；请求只在用户动作或挂载恢复时发起，一次性上限用 `setTimeout` 中止（现有两处均为 5000ms，见 `chat/CONTEXT.md`「客户端请求与计时器」）。
 - 卡片不得持有独立余额；账户余额不得用授信口径的键或文案展示。
 - 关联账户判定只走 `banking/card-account-display.ts`，不在组件内复制四态逻辑或脱敏逻辑。
 - 授权交互只有一处：底部停靠的 `chat/ApprovalRequest`（`data-approval-request` → `ConfirmationCard`/`MfaCard`）；

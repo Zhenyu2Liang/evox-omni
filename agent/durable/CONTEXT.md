@@ -28,6 +28,16 @@ All bounds are enforced by persisted DB counters, not by in-memory loop constant
 Recovery worker: `batchLimit` 1..100 default 25 (`recovery-worker.ts:36-41`), interval default 5000 ms clamped 250..60000 (l.90-93); `wakeRecoverableRuns` clamps limit to 1..100 (`recovery.ts:44`); `readRunPresentation` clamps limit to 1..500 (`recovery.ts:31`).
 Run lease `DEFAULT_LEASE_MS = 120_000` (`agentRun.ts:10`); standalone workflow execution lease `WORKFLOW_EXECUTION_LEASE_MS = 600_000` (`lib/contracts/runtime.ts`).
 
+## Timing: what actually waits
+
+`journal.ts:223-230` `startHeartbeat(intervalMs = 20_000)` is the ONLY timer in this directory: `setInterval`, `unref?.()`-ed, started on the synchronous turn path by `../turn-runtime.ts:44` (`journal.startHeartbeat()`) and by `service.ts:170`/`standalone-workflow.ts:163` on the recovery path, stopped in `finally`/`finish`.
+There is no `setTimeout`, `await new Promise`, sleep, delay or `AbortSignal.timeout` anywhere in `./`; every wait here is a DB round-trip.
+A heartbeat renewal renews a 120 000 ms lease once per tick (`renewAgentRunLease`), but it is queued through `enqueue` (`journal.ts:107-117`) — the SAME serialized `tail` as event writes — so renewal latency equals the depth of queued writes ahead of it, not the 20 s tick.
+`enqueue` is fail-fast: `this.tail = result.then(() => undefined)` keeps a rejected promise and the next `enqueue` chains onto it, so ONE failed write (lease CAS or SQLite contention) rejects every later write in that journal without executing it; there is no retry, and `finish()` then reports `EVENT_PERSISTENCE_FAILED`.
+Every `appendRuntimeEvent`/`startInvocationWithEvent`/`finishInvocationWithEvent`/`saveRunCheckpoint`/`startModelRequest`/`completeModelRequest` is its own `prisma.$transaction` that re-runs `assertAgentRunLease` (2 `findUnique`) first, i.e. 4-6 statements per journal write, and the turn path performs one such write per Pi event, one per `tool_result` checkpoint and one per published presentation event.
+`readRunPresentation` pages at most 500 events (`recovery.ts:31`), and `../turn-runtime.ts:16-25` drains all pages with `for (;;)` before the HTTP response is returned, so a long run costs one extra page query per 500 presentation events on the synchronous path.
+`recoverInvocation` (`recovery.ts:65`) re-reads the run's FULL invocation list per invocation, so `service.ts:118`/`:173` recovery loops are O(N²) query round-trips (recovery HTTP path, not the chat path).
+
 ## Identity and digests
 
 Every generation must be a distinct `ModelRequest` row: `AgentRunJournal.prepareModelRequest` (`journal.ts:84`) builds `input = original ?? {messages, systemPrompt, model, tools, requestIntent}`, computes `digest = original&&originalModelDigest ? originalModelDigest : runtimeRequestDigest('model_request', input)`, clears `this.modelRequestId`, then awaits `startModelRequest(lease, digest, json, checkpoint)` and stores `this.modelRequestId = attempt.id`.
