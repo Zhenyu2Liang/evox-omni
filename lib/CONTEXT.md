@@ -86,7 +86,9 @@ JSON 金额使用十进制字符串。
 `publicToolSummary(event, t)` 按状态分流：`search_conversation_history` + `success` → `chat.activity.historyRead`；`blocked` 且带 `errorCode` → `publicToolError(summary, t, 'chat.error.operationNotStarted', errorCode, errorParams)`；`blocked` 且无 `actionId` → `publicToolError(summary, t, 'chat.error.operationNotStarted')`（该分支不传 `errorCode`）；`error` → `publicToolError(summary, t, 'chat.error.toolFailed', errorCode, errorParams)`；`needs_reconciliation` → `chat.error.unknownOutcome`；其余状态（`started`/`success`/`updated`/`cancelled` 及带 `actionId` 的 `blocked`）走 `localizeChatError`，未命中时**原样返回 `event.summary`**。
 因此本目录不剥离任何内部摘要标记（如 `__SECURITY_BLOCK__{...}`）：这类字符串走 `error` 分支时被替换为 `chat.error.toolFailed`，走其它状态分支时会被当作合法文本透出，去重/剥离责任在写入事件的一侧。
 `ToolEventView`（`contracts/agent.ts`）没有 `resultSummary` 字段：公开文本只来自 `summary` 与 `errorCode`，`debugDetail`/`debugArguments` 仅供开发者面板。
-`ChatCard {type:'error', message, code?}` 与 `AgentStreamEvent {type:'security_event', kind, message}` 的 `message` 同样是无目录约束的自由字符串。
+`ChatCard {type:'error', message, code?}` 与 `AgentStreamEvent` 的 `{type:'security_event', kind, code?, reason?, actionId?, attemptsLeft?, maxAttempts?, message?}` 的 `message` 同样是无目录约束的自由字符串。
+`AgentStreamEvent` 的 `{type:'mfa_required', actionId, hint?, action?}` 只带 `actionId` 与可选 `hint`/`PendingActionSummary`；`hint` 是服务端自由文本，渲染前必须过 `localizeVerificationHint`（未命中时原样透出）。
+`ChatCard {type:'mfa'}` 另带 `actionId`、`hint?`、`action?`、`status?: string`、`message?`——`status` 是 `string` 而非 `PendingActionStatus`，因此 `'locked'` 等值出现在卡片上时需要调用方自行比对。
 
 ## 错误类型（`errors.ts`）
 
