@@ -46,17 +46,17 @@ non-document delta between the two trees is enumerated below.
 | `lJ` round 2 (`live/lJ-headd26b263-round2-final/`) | `d26b2636` | ≡ `d26b2636` (same 2-file delta to HEAD) | **PASS 1 / FAIL 0 / SKIP 0** | `0` (`EXITCODE=0`; tool-reported code not archived with the set) |
 
 The seven `lF`/`lG` rows and the `lC` round-4 row certify `d1cccd00`'s product tree:
-`git --no-pager diff --stat d1cccd00 <round head> -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts`
+`git --no-pager diff --stat d1cccd00 <round head> -- ':(exclude)*.md' banking-sdk agent security planner lib app components prisma scripts`
 → empty output for every round head (`15de129f`, `89d82441`, `dedee51d`, `a65fd5e2`, `1c674005`,
 `acebc393`, `6a20dd93`, `3c5fe83e`, `d1cccd00`, `e78796d5`). One product tree therefore carries all eight certified rounds,
 regardless of which evidence-only commit was HEAD when each ran. Evidence commits: `573fe009` for the `lF`/`lG` reports and `4b03eec8` for `lC` round 4. `lC` round 4 re-runs normal virtual-card consumption on this tree, so the retained `replace_card` fix is shown not to regress the plain consume path.
 
-Equivalence is measured at the repository root with the `:(exclude)**/*.md` pathspec because `CONTEXT.md` lives under
+Equivalence is measured at the repository root with the `:(exclude)*.md` pathspec because `CONTEXT.md` lives under
 those very paths: without the exclusion the command is non-empty after any documentation-only merge (for `88d38550`
-→ `cab32956` it lists 22 files, all `*/CONTEXT.md`), so it cannot prove equivalence.
+→ `cab32956` it lists 22 files, all `*/CONTEXT.md`), so it cannot prove equivalence. The single `*` covers a repository-root `.md` as well as one any number of levels deep, whereas `**/*.md` matches only paths that carry at least one directory and so leaves the root `CONTEXT.md` in the list (`88d38550` → HEAD: 24 files with it, 23 without; `d26b2636` → HEAD: 86 with it, 85 without).
 
 Those eight rounds do **not** extend to the current HEAD. Measured now at the repository root,
-`git --no-pager diff --stat d1cccd00 HEAD -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts`
+`git --no-pager diff --stat d1cccd00 HEAD -- ':(exclude)*.md' banking-sdk agent security planner lib app components prisma scripts`
 → **143 files changed, 11240 insertions(+), 1703 deletions(-)**. `d1cccd00` predates the net-value/share investment
 model entirely (`banking-sdk/net-value.ts` is absent from its tree). Headline paths of that delta:
 `banking-sdk/net-value.ts`, `banking-sdk/investment.ts` (+971 lines), `security/card-resolution.ts`,
@@ -69,9 +69,9 @@ model entirely (`banking-sdk/net-value.ts` is absent from its tree). Headline pa
 current tree would extend them.
 
 The remaining rows certify `7a7a4d3`'s product tree:
-`git --no-pager diff --stat 7a7a4d3 <each evidence commit> -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts`
+`git --no-pager diff --stat 7a7a4d3 <each evidence commit> -- ':(exclude)*.md' banking-sdk agent security planner lib app components prisma scripts`
 → empty for `0c50e2f`, `fa36508` and `339c50b`. Product paths have changed between `7a7a4d3` and the current HEAD:
-`git --no-pager diff --stat 7a7a4d3 HEAD -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts`
+`git --no-pager diff --stat 7a7a4d3 HEAD -- ':(exclude)*.md' banking-sdk agent security planner lib app components prisma scripts`
 → **145 files changed, 11262 insertions(+), 1708 deletions(-)** — the `d1cccd00` set plus
 `agent/messages/conversation.zh-CN.json` and `agent/providers/mock/conversation-guidance.ts` — so those rows do not
 extend to the current HEAD; only a re-run on this tree would.
@@ -101,7 +101,7 @@ reach a green round. Full per-round table, FAIL causes and the turn-by-turn repl
 The eight `lB`/`lH`/`lI`/`lJ` rows certify two product trees, one per round label; each row's own directory under
 `output/playwright/live/` is the complete evidence set (`*.png` + `*-evidence.json` + `*-run-log.txt`).
 Equivalence measured now at the repository root with
-`git --no-pager diff --stat <commit> HEAD -- ':(exclude)**/*.md' banking-sdk agent security planner lib app components prisma scripts`
+`git --no-pager diff --stat <commit> HEAD -- ':(exclude)*.md' banking-sdk agent security planner lib app components prisma scripts`
 (the exclusion matters: `CONTEXT.md` files live under those paths):
 
 - `3ba488a` → HEAD: 3 files — `agent/tools/card.ts` (2 lines), `lib/tool-feedback.ts` (7 lines),
