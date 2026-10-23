@@ -64,6 +64,10 @@
 - 最近申购：`business.investments.lastPurchase`，值 `formatDateTime`。
 - 申购记录：`business.investments.purchases` 加 `purchaseCount`，只在有申购记录时渲染。
 
+收益与收益率为可负值：汇总 `cards.investment.profit` 用 `DecimalMoney signed`（`InvestmentsCard.tsx:143`），正数带 `+`、负数带 `-¥`，不随符号换色、不取绝对值、不按 0 截断。
+亏损持仓的 `profitRate` 不在本文件换算：`banking/HoldingFacts.tsx:89-91` 用 `signedRateToPercent` 输出 `${…}%`（正数不加 `+`、无着色）。
+本文件唯一的 `rateRatioToPercent`（`InvestmentsCard.tsx:76`）只服务 `ProductView.annualYieldRate`；`HoldingView.profitRate` 等可负值绝不可送进它——`lib/decimal.ts:76-78` 内含 `nonNegativeDecimal`，负比例抛 `AppError('VALIDATION')`，渲染期抛错会崩掉整棵客户端树。
+汇总指标 `hasMarketValue`/`hasProfit`（`InvestmentsCard.tsx:124`、`:126`）要求每个 `HOLDING` 持仓都有该字段，缺一项即整项不渲染，不用 0 补齐。
 卡片级口径脚注是 `business.investments.profitScope` 与 `business.investments.disclaimer`。
 仅当所有持仓条目都按净值 + 份额计价（`usesNetValueModel`）时，脚注才出现在卡片底部。
 事实、徽标与布局变体的规则见
