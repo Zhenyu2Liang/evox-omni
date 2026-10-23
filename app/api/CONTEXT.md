@@ -196,6 +196,17 @@ Dev-mode is NOT required: the route uses `requireIdentity` only, and the develop
 The `lock?: SecurityFailure` / `lockedActions` fields are additive and optional, so consumers that ignore them keep working.
 `confirm` and `verify` apply NO app-layer locked short-circuit (unlike `cancel`/`recover`): they delegate and then derive `mfaResult` from the returned `status`, forwarding whatever `code`/`failure` the agent/security path produced.
 
+## Request-path wait surface (no timers in this node)
+
+- `app/api` contains NO `setTimeout`/`setInterval`/`sleep`/`delay`/`await new Promise`/`AbortSignal.timeout`, no retry/backoff/poll loop, no `maxWait`/`timeout` transaction option, no `$queryRaw` PRAGMA and no lease/deadline check.
+- No route exports `maxDuration`/`dynamic`/`revalidate` and `next.config.mjs` sets no global cap, so these routes' response time is decided entirely downstream.
+- `POST /api/chat`: the SSE response cannot close before `runTurn` resolves (`chat/route.ts:82`, `controller.close()` at `:95`); JSON mode awaits the same call (`:75`).
+- `request.signal` is never wired: a client disconnect does not cancel a running turn.
+- `POST /api/actions/[id]/{confirm,verify}` await, in order: `requireIdentity` → `getPendingAction` → `locateOwningPlan` → `confirmOwned`/`verifyOwned` (which itself awaits `resumeOwningPlan`, a full DAG walk, then `resumeTurn` — `agent/confirmation/authorized-execution.ts:81-82`) → `withPlanUpdate` (`getTaskPlan` + `nextPlanDecision`, one `getPendingAction` per parked node, `agent/task-decision.ts:22`).
+- All three routes first write: `requireIdentity` → `getDemoSession` (`agent/session.ts:150-157`) = one `agentSession.upsert` (`update: {}`) plus one `findUnique` (`lib/db/repositories/session.ts:30-36`).
+- Bounds living outside this node, quoted only for estimation: model call deadline `30_000` ms with clamp `[1000,120000]` plus `maxRetries: 1` / `maxRetryDelayMs: 1500` (`agent/providers/request-options.ts:8-14,44`); Prisma `transactionOptions: { maxWait: 10000, timeout: 10000 }` (`lib/db/database.ts:25`), bank writes overriding `{ maxWait: 10000, timeout: 20000 }` (`agent/command-execution.ts:103`); one native SQLite connection behind a deadline-free FIFO mutex (`lib/db/serialized-connection.ts:9-16`); run heartbeat `setInterval(20_000).unref()` (`agent/durable/journal.ts:223-228`).
+- No turn-level wall-clock or step cap exists, so these three routes have no upper bound of their own.
+
 ## Implementation boundaries
 
 Keep route-local schemas private: Next.js route modules export HTTP handlers, supported route
