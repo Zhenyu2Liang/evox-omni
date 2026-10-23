@@ -28,7 +28,7 @@
 | 持仓市值（未取整估值） | `business.investments.marketValue` | 市值 | `<DecimalMoney amount={holding.marketValue} />` |
 | 剩余持仓成本 | `business.investments.remainingCost` | 剩余持仓成本 | `<Money amount={holding.amount} />` |
 | 持仓收益（未实现） | `business.investments.holdingProfit` | 持仓收益 | `<DecimalMoney amount={holding.profit} signed />` |
-| 持仓收益率 | `business.investments.holdingProfitRate` | 持仓收益率 | `rateRatioToPercent` 加 `%` |
+| 持仓收益率 | `business.investments.holdingProfitRate` | 持仓收益率 | `signedRateToPercent` 加 `%` |
 | 累计收益 | `business.investments.cumulativeProfit` | 累计收益 | `<DecimalMoney amount={holding.cumulativeProfit} signed />` |
 | 已实现收益 | `business.investments.realizedProfit` | 已实现收益 | `<DecimalMoney amount={holding.realizedProfit} />` |
 
