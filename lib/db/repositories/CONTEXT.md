@@ -56,6 +56,8 @@
 
 `PendingAction.taskId/nodeId` 在创建时保存计划关联。
 `revokePendingActionsByTask` 撤销指定状态的关联操作。
+待处理操作的批量读取只有两条路径，且默认都不按状态过滤：`listPendingActions`（`pendingAction.ts:121-137`，可选 `sessionId`、`status`（单值等值，不是 `in` 列表）、`limit`，缺省 `DEFAULT_LIMIT = 100`（`:85`），`orderBy: { createdAt: 'desc' }`）与 `listPendingActionsByTask`（`:145-157`，按 `taskId`，可选 `statuses` 用 `in`，`createdAt: 'asc'`，无 `take`）。
+因此 `listPendingActions({ sessionId })` 会把 `locked`/`executed` 等终态行一并返回：把 `locked` 排除出「待决策」列表是调用方的责任（`app/api/actions/route.ts#attentionFor` 让 `locked` 走兜底 `return undefined`），不要把它下沉成仓储默认行为。
 关联不依赖节点输出中的临时字段。
 `claimPendingAction`（`pendingAction.ts:255`）是唯一的待处理操作状态 CAS：单条 `updateMany`，条件为 `id` + `status IN from`，可选 `userId`/`sessionId`；`to === 'confirmed'` 时先经过 `assertActionMayStart`（人工接管栅栏，`manualReview status='open'` 抛 `CONFLICT`）。`from`/`to` 取值由调用方给定，函数本身不限制。
 `claimPendingActionLease`（`pendingAction.ts:206`）的租约 CAS 前置条件用 `OPEN_PENDING_ACTION_STATUSES`：`locked` 及任何终态都拿不到执行租约。
