@@ -1,0 +1,126 @@
+{
+  "round": "3",
+  "database": "prisma/live-acceptance.db",
+  "holding": {
+    "id": "holding_wenjiana",
+    "shares": "3934.334266",
+    "principalAmountMinor": "395716",
+    "realizedProfitMinor": "6073",
+    "estimatedMarketValue": "4074.7899992962",
+    "status": "HOLDING"
+  },
+  "account": {
+    "id": "acct_checking",
+    "balanceMinor": "2468357"
+  },
+  "product": {
+    "id": "prod_wenjiana",
+    "name": "稳健理财A",
+    "latestNetValuePerUnit": "1.0357",
+    "latestNetValueDate": "2026-09-24T16:00:00.000Z",
+    "annualYieldRate": "0.0325"
+  },
+  "investmentTransactions": [
+    {
+      "id": "cmvkgzuh700uj6kf83dhjuimm",
+      "amountMinor": "-100000",
+      "direction": "DEBIT",
+      "merchant": "认购稳健理财A",
+      "createdAt": "2026-10-23T04:28:52.363Z"
+    },
+    {
+      "id": "cmvkh00a4011c6kf8xposyobi",
+      "amountMinor": "200000",
+      "direction": "CREDIT",
+      "merchant": "赎回",
+      "createdAt": "2026-10-23T04:28:59.884Z"
+    },
+    {
+      "id": "cmvkh059c01816kf8hg6hxjg3",
+      "amountMinor": "10357",
+      "direction": "CREDIT",
+      "merchant": "赎回",
+      "createdAt": "2026-10-23T04:29:06.336Z"
+    }
+  ],
+  "transactionCountTotal": 235,
+  "auditLogs": [
+    {
+      "id": "cmvkgzuhb00uk6kf8d6901yd9",
+      "toolName": "subscribe_investment",
+      "status": "success",
+      "detail": null
+    },
+    {
+      "id": "cmvkh00a8011d6kf8xk0dpyqx",
+      "toolName": "redeem_investment",
+      "status": "success",
+      "detail": null
+    },
+    {
+      "id": "cmvkh059f01826kf86he9u41z",
+      "toolName": "redeem_investment",
+      "status": "success",
+      "detail": null
+    }
+  ],
+  "receipts": [
+    {
+      "key": "cmvkgzq4a00u56kf8qx2r8h68",
+      "toolName": "subscribe_investment",
+      "responseLength": 2695,
+      "hasHoldings": true,
+      "sharesMentions": [
+        "\"shares\":\"8032.76\"",
+        "\"shares\":\"5965.395384\"",
+        "\"shares\":\"965.530559\"",
+        "\"shares\":\"10000\""
+      ]
+    },
+    {
+      "key": "cmvkgzz82010y6kf8god2xpsy",
+      "toolName": "redeem_investment",
+      "responseLength": 3339,
+      "hasHoldings": true,
+      "sharesMentions": [
+        "\"shares\":\"8032.76\"",
+        "\"shares\":\"4034.334266\"",
+        "\"shares\":\"965.530559\"",
+        "\"shares\":\"1931.061118\"",
+        "\"shares\":\"10000\""
+      ]
+    },
+    {
+      "key": "cmvkh04g8017n6kf8fopzk4ya",
+      "toolName": "redeem_investment",
+      "responseLength": 3527,
+      "hasHoldings": true,
+      "sharesMentions": [
+        "\"shares\":\"8032.76\"",
+        "\"shares\":\"3934.334266\"",
+        "\"shares\":\"965.530559\"",
+        "\"shares\":\"1931.061118\"",
+        "\"shares\":\"100\"",
+        "\"shares\":\"10000\""
+      ]
+    }
+  ],
+  "pendingActions": [
+    {
+      "id": "cmvkgzq4a00u56kf8qx2r8h68",
+      "toolName": "subscribe_investment",
+      "status": "executed"
+    },
+    {
+      "id": "cmvkgzz82010y6kf8god2xpsy",
+      "toolName": "redeem_investment",
+      "status": "executed"
+    },
+    {
+      "id": "cmvkh04g8017n6kf8fopzk4ya",
+      "toolName": "redeem_investment",
+      "status": "executed"
+    }
+  ]
+}
+DBCHECK_EXITCODE=0

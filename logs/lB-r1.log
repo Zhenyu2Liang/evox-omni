@@ -1,0 +1,17 @@
+Live environment configuration loaded without displaying values.
+== AI Banking Agent 真实浏览器 + 真实 DeepSeek 在线验收 (tests/e2e/live) ==
+Live run uses the configured model.
+· 隔离 LIVE 数据库：file:D:/projects/banking-agent/.genesis/workers/worker_T7_A846/prisma/live-acceptance.db（prisma/dev.db 与 prisma/test.db 不受影响）
+· 重置 LIVE 数据库 →（缺 Prisma Client 时先 prisma generate）→ db push 阶梯 → probe → tsx prisma/seed.ts
+The Prisma Client is missing, stale or unusable. Running prisma generate.
+Live provider configuration is applied; configuration values are not displayed.
+· next dev (pid=41728) → http://localhost:49502（/api/health 与 /agent 均已就绪）
+· /api/health={"ok":true,"data":{"status":"ok","time":1792728410394,"llmMode":"live"}}
+· 真实浏览器：C:\Program Files\Google\Chrome\Application\chrome.exe
+PASS lB-live-investment-partial-redemption — 口径=按金额部分赎回（¥2,000.00，费用口径 SIMULATED_NONE）；B1 实际发送：「追加申购稳健理财A 1000元」 → MFA 123456 → 剩余持仓成本 6000.00、持仓份额 5965.395384（最新净值 1.0357）、市值 6178.3599992088（全精度）；B2 实际发送：「我持有的稳健理财A按金额部分赎回2000元，保留剩余持仓」 → MFA 123456 → 赎回份额 1931.061118 × 成交净值 1.0357 = 预计到账 2000.00；剩余份额 4034.334266、剩余成本 4057.74（本次扣减 1942.26）、市值 4178.3599992962（全精度）、本次已实现收益 57.74；/investments 显示 持有金额=¥4,057.74、剩余持仓成本=¥4,057.74、持仓份额=4034.334266 份、最新净值=1.0357 元/份、市值=¥4,178.36、持仓收益=+¥120.62、累计收益=+¥178.36、已实现收益=¥57.74；账本新增 DEBIT -1000.00（cmvkg7v7c007150f83viu321k，认购稳健理财A/投资）与 CREDIT 2000.00（cmvkg866a00gl50f80mm5ga6u，赎回/投资）；活期余额 23580.00 → 24580.00
+· 累计网络 4xx/5xx：0，console error：0，pageerror：0
+· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：
+（无持久化的 transfer_money/search_contact 调用）
+· 【证据】种子库收款人 张伟 手机号=139****0002
+== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==
+EXITCODE=0   

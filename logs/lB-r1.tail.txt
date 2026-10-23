@@ -1,0 +1,14 @@
+﻿Live environment configuration loaded without displaying values.
+== AI Banking Agent 鐪熷疄娴忚鍣?+ 鐪熷疄 DeepSeek 鍦ㄧ嚎楠屾敹 (tests/e2e/live) ==
+Live run uses the configured model.
+路 闅旂 LIVE 鏁版嵁搴擄細file:D:/projects/banking-agent/.genesis/workers/worker_T7_A846/prisma/live-acceptance.db锛坧risma/dev.db 涓?prisma/test.db 涓嶅彈褰卞搷锛?路 閲嶇疆 LIVE 鏁版嵁搴?鈫掞紙缂?Prisma Client 鏃跺厛 prisma generate锛夆啋 db push 闃舵 鈫?probe 鈫?tsx prisma/seed.ts
+The Prisma Client is missing, stale or unusable. Running prisma generate.
+Live provider configuration is applied; configuration values are not displayed.
+路 next dev (pid=41728) 鈫?http://localhost:49502锛?api/health 涓?/agent 鍧囧凡灏辩华锛?路 /api/health={"ok":true,"data":{"status":"ok","time":1792728410394,"llmMode":"live"}}
+路 鐪熷疄娴忚鍣細C:\Program Files\Google\Chrome\Application\chrome.exe
+PASS lB-live-investment-partial-redemption 鈥?鍙ｅ緞=鎸夐噾棰濋儴鍒嗚祹鍥烇紙楼2,000.00锛岃垂鐢ㄥ彛寰?SIMULATED_NONE锛夛紱B1 瀹為檯鍙戦€侊細銆岃拷鍔犵敵璐ǔ鍋ョ悊璐 1000鍏冦€?鈫?MFA 123456 鈫?鍓╀綑鎸佷粨鎴愭湰 6000.00銆佹寔浠撲唤棰?5965.395384锛堟渶鏂板噣鍊?1.0357锛夈€佸競鍊?6178.3599992088锛堝叏绮惧害锛夛紱B2 瀹為檯鍙戦€侊細銆屾垜鎸佹湁鐨勭ǔ鍋ョ悊璐鎸夐噾棰濋儴鍒嗚祹鍥?000鍏冿紝淇濈暀鍓╀綑鎸佷粨銆?鈫?MFA 123456 鈫?璧庡洖浠介 1931.061118 脳 鎴愪氦鍑€鍊?1.0357 = 棰勮鍒拌处 2000.00锛涘墿浣欎唤棰?4034.334266銆佸墿浣欐垚鏈?4057.74锛堟湰娆℃墸鍑?1942.26锛夈€佸競鍊?4178.3599992962锛堝叏绮惧害锛夈€佹湰娆″凡瀹炵幇鏀剁泭 57.74锛?investments 鏄剧ず 鎸佹湁閲戦=楼4,057.74銆佸墿浣欐寔浠撴垚鏈?楼4,057.74銆佹寔浠撲唤棰?4034.334266 浠姐€佹渶鏂板噣鍊?1.0357 鍏?浠姐€佸競鍊?楼4,178.36銆佹寔浠撴敹鐩?+楼120.62銆佺疮璁℃敹鐩?+楼178.36銆佸凡瀹炵幇鏀剁泭=楼57.74锛涜处鏈柊澧?DEBIT -1000.00锛坈mvkg7v7c007150f83viu321k锛岃璐ǔ鍋ョ悊璐/鎶曡祫锛変笌 CREDIT 2000.00锛坈mvkg866a00gl50f80mm5ga6u锛岃祹鍥?鎶曡祫锛夛紱娲绘湡浣欓 23580.00 鈫?24580.00
+路 绱缃戠粶 4xx/5xx锛?锛宑onsole error锛?锛宲ageerror锛?
+路 銆愯瘉鎹€戞寔涔呭寲鐨?transfer_money / search_contact 宸ュ叿璋冪敤锛圓gentSession.stateJson锛屽弬鏁板璞￠€愬瓧锛夛細
+锛堟棤鎸佷箙鍖栫殑 transfer_money/search_contact 璋冪敤锛?路 銆愯瘉鎹€戠瀛愬簱鏀舵浜?寮犱紵 鎵嬫満鍙?139****0002
+== 姹囨€伙細PASS 1 锝?FAIL 0 锝?SKIP 0 ==
+EXITCODE=0   
