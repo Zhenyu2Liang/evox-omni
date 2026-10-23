@@ -106,12 +106,15 @@
 | `business.cards.monthlyLimit` | 月限额 | Monthly limit | 卡片带月限额时的一行 |
 | `business.cards.categoryLimits` | 分类限额 | Category limits | 分类限额区块标题 |
 
-关联账户名称复用既有 `business.cards.linkedAccount`，关联账户可用余额说明可复用 `business.cards.accountAvailable`；`business.cards.usableBalance` 是更通用的可用余额标签。
+关联账户名称复用既有 `business.cards.linkedAccount`；`business.cards.usableBalance` 是更通用的可用余额标签。
 取值相同的键不重复新增，例如不设 `business.cards.linkedAccountName`。
 当前渲染方：`components/banking/CardTile.tsx` 把 `accountBalance` / `usableBalance` 渲染成 `<dt>` 标签，`linkedAccount` 渲染成 `<span>` 标签，`cardUnavailable` / `cardFrozenNotice` / `cardLostNotice` / `linkedAccountMissing` / `linkedAccountUntrusted` 由 `components/banking/card-account-display.ts` 的映射选择。
 `business.cards.accountAvailable`、`business.cards.payableAmount`、`business.cards.balanceFromAccount` 当前没有任何组件渲染；`tests/e2e/card-labels.e2e-helper.ts` 只把前两者读入 `CARD_LABEL_RETIRED`，用于断言它们不再出现。
 浏览器验收断言的卡片标签来自 `tests/e2e/card-labels.e2e-helper.ts` 的 `CARD_LABEL`，它用 `createTranslator('zh-CN')` 读目录而不是复制字符串。
 
+本目录没有「卡号」「账号」「尾号」「结算账户」这类键：脱敏卡号是 `CardView.numberMasked`（`****6688`，4 个 `*` + 4 位数字）原样渲染，关联账号是 `CardView.linkedAccountNumber`，都不经目录；「结算账户」只出现在 `chat.policy.consume_virtual_card` 的策略描述里。
+`/cards` 页自身的键集中在 `pages.cards.*`（`messages/pages.zh-CN.json:30-74` 与 `pages.en.json:30-74` 行号一致）；其中 `pages.cards.summary`（`{count}`）与 `pages.cards.verificationFailed`（`{attempts}`）含占位符，断言前必须先补值，其余卡片页键是纯字面量。
+`tests/e2e/card-labels.e2e-helper.ts` 尚未收录类型键、状态键与三条不可用提示键（`cardUnavailable`/`cardFrozenNotice`/`cardLostNotice`）。
 `pages.cards.consume*` 提供卡片消费界面（模拟消费表单、消费结果提示与消费记录）的中英文标签。
 
 ## 显示映射（display-sources）
