@@ -5,6 +5,13 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 产品年化收益率是 `annualYieldRate`，为无量纲比例。投资持仓按净值与份额核算：`latestNetValuePerUnit` 是规范十进制净值，`shares` 是持有份额，`principalAmountMinor` 是剩余成本基数。公开持仓的 `amount` 是剩余持仓成本，`marketValue` 是未取整估值，`profit` 是未实现收益，`realizedProfit` 是已实现收益，`cumulativeProfit` 是累计收益。百分比只在展示层转换。
 单个持仓没有 SDK 内的时间累积：净值只取产品发布的 `latestNetValuePerUnit`，SDK 不按时间推导增长。市值一律由 `shares × latestNetValuePerUnit` 派生；`estimatedMarketValue` 只是列上的快照，读取不使用它。持仓收益是未实现收益，等于市值减去剩余成本；追加申购金额不计入收益。
 十进制最多 40 位整数与 18 位小数。SDK 使用精确算术、拒绝非法值，只在文档化的结算边界取整。当前赎回策略是 HALF_UP 到人民币分；授权与执行使用同一换算。最终余额与流水仍是有符号 INT64 分。
+## 符号性与非负门禁
+`ProductView.annualYieldRate` 唯一产自 `investment.ts#toProductView`（投影行 `annualYieldRate: nonNegativeDecimal(row.annualYieldRate)`），后续 `listProducts`、`compareInvestments`、`listHoldings.product` 都复用它。负值因此不是以负数渲染，而是在读取时抛 `VALIDATION`（`Financial value must be nonnegative.`）；展示层 `lib/decimal.ts#rateRatioToPercent` 的同一门禁不会在渲染期触发。
+`HoldingView.profitRate` 是带符号比率：`holdingValuation` 调 `net-value.ts#profitRateOf(profit, cost)`，内部 `parseFixed` 保留符号、`halfUpDivide` 向远离零取整，成本为零返回 `undefined`；它绝不进 `nonNegativeDecimal`，展示用 `lib/decimal.ts#signedRateToPercent`。
+带符号字段：`profit`（`marketValue − cost`）、`cumulativeProfit`（`realizedProfit + profit`）、`realizedProfit`（`centsToMoney(realizedProfitMinor)`，`lib/money.ts#centsToMoney` 保留符号）、`profitRate`。
+非负字段：`shares` 与 `latestNetValue`（`nonNegativeDecimal` + 必须大于零，否则视为缺失）、`marketValue`（份额×净值的精确乘积，或历史不足时回退剩余成本）、`amount`。
+`investment.ts` 的 `nonNegativeDecimal` 用途：产品净值（`productNetValue`）、持仓份额（`recordedShares`）、年化收益率（`toProductView`）、历史记录十进制字段（`requireDecimal`）、赎回回执估值（`parseRedeemResult`）、赎回份额输入（`normalizeRequestedShares`）、确认快照 `expectedShares`/`expectedNetValue`（`assertConfirmedSnapshot`）；外加顶部 import 一行。
+数据层写入门禁只在仓储：`lib/db/repositories/investment.ts#createProduct` 过 `nonNegativeDecimal(annualYieldRate)`，`createHolding` 过 `nonNegativeDecimal(marketValue)`。`prisma/seed.ts` 直接 `investmentProduct.createMany` 写硬编码正值，绕过该门禁。
 ## 净值与份额换算
 `banking-sdk/net-value.ts` 是无读写的纯函数模块。
 常量是 `NET_VALUE_DECIMALS = 4`、`SHARE_DECIMALS = 6` 与 `REDEMPTION_FEE_RULE = 'SIMULATED_NONE'`。
