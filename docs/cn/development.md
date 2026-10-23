@@ -17,6 +17,7 @@
 
 版本声明见 [package.json](../../package.json)。
 依赖变更需要更新 `pnpm-lock.yaml`。
+只提交 `pnpm-lock.yaml`，不引入 npm 或 Yarn 的锁文件。
 
 依次执行以下命令：
 
@@ -447,7 +448,7 @@ Prisma 7 的 `db push` 不再自动生成客户端。
 业务记录重建后，旧对话可能仍指向原操作。
 从初始状态重新体验时，使用 `db:reset`。
 
-首次建立空库时，按“首次启动”执行这 3 个命令。
+首次建立空库时，按“首次启动”依次执行 `db:generate`、`db:push` 和 `db:seed`。
 日常启动只需 `pnpm dev`，无需重新填充数据。
 修改 schema 后，同步表结构并更新客户端。
 
@@ -844,6 +845,9 @@ Vitest 使用 [tests/setup.ts](../../tests/setup.ts)建立 `prisma/test.db`。
 数据库测试共享这个文件，并重置模拟数据。
 [vitest.config.ts](../../vitest.config.ts)关闭了测试文件并行。
 不得同时运行多个使用数据库的 Vitest 进程。
+驱动真实对话轮的用例，把 [tests/helpers/timeouts.ts](../../tests/helpers/timeouts.ts) 的 `CHAT_DRIVEN_TEST_TIMEOUT_MS` 作为 `it(...)` 的第 3 个参数。
+用命令行初始化冷库的用例传 `COLD_DB_PROVISION_TEST_TIMEOUT_MS`。
+两者是共享常量，不得写成裸数字，也不得在用例里另建副本。
 
 定向测试命令如下：
 

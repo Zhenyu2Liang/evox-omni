@@ -44,21 +44,20 @@ Decimal 最多支持 40 位整数和 18 位小数。
 口径见 [卡片管理](card-management.md)。
 
 live 验收的结论只对已运行场景成立。
-[LIVE-ACCEPTANCE-REPORT.md](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md) 记录 22 条证据行。
-`lC`–`lG` 的既有轮次认证 `d1cccd00` 与 `7a7a4d3` 两个产品树。
-`lB`、`lH`、`lI`、`lJ` 的认证轮次覆盖 `3ba488a`（round 1）与 `d26b2636`（round 2 终轮）两个产品树。
-22 条证据行包含 `lF` 3 轮、`lG` 4 轮、`lC` 1 轮、`lD` 2 轮、`lE` 2 轮、`lB`／`lH`／`lI`／`lJ` 各 2 轮，另加日期边界入口与 mock 套件。
-其中 8 轮认证当前产品树，带双信号退出码；`lB`、`lH`、`lI`、`lJ` 另有 8 条行，每轮只有 `EXITCODE=0` 一个退出信号。
-`lA` 与 live id `0`–`15`、`2p`、`7` 没有证据行；`lB`、`lH`、`lI`、`lJ` 的证据只覆盖 `3ba488a` 与 `d26b2636` 两个产品树上的有限轮次，不含 `d26b2636` 之后的产品改动。
+证据表与每轮认证范围见 [LIVE-ACCEPTANCE-REPORT.md](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md)。
+每行证据只认证报告标注的产品树。
+产品代码改动后，需要在该产品树上重跑。
 报告列出的未验证内容见 [NOT verified by these runs](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md#not-verified-by-these-runs)。
 这批内容包括生产构建、集群并发、真实银行接口与其他节点的 Vitest。
-另有 `DEBIT` 卡补办、`cards.mfa.failedAttemptsLimit` 文案在 live 路径下不可达、开发者重置熔断只有 mock 套件覆盖以及模型稳定性。
-`lG` 的 rounds 1、2、5、6 缺退出码认证。
+模型稳定性、`DEBIT` 卡补办的 live 路径与 `MISSING`、`UNTRUSTED` 绑定的页面渲染也属于这批内容。
 
 ## 业务结果的含义
 
 - 理财申购从活期账户扣款，追加申购并入已有持仓。赎回必须声明服务端模式 `SHARES`／`AMOUNT`／`ALL`：`SHARES` 按份额赎回，`AMOUNT` 按 `FLOOR(金额 ÷ 净值, 6 位小数)` 折算份额，`ALL` 赎回全部份额。超出持仓的请求被拒绝而不截断，剩余份额为零时关闭整笔持仓。
 - 卡片限额只修改分类消费上限，不调整总授信。虚拟卡绑定活期账户，支持本地模拟消费，未接入真实商户支付。
+- 虚拟卡消费在本地记账：一次事务扣减绑定的活期账户并写入 `CardConsumption`，不产生真实商户或银行交易。
+- 消费时刻由服务端生成，调用方传入的 `occurredAt` 被拒绝。
+- 月限额把同一张卡补办前后的消费合并累计。
 - 原交易记录没有卡片 ID。异常交易冻结入口要求用户选择卡片。
 - 本人交易确认只保存审计记录，不删除异常标记。
 - 总资产等于账户余额与持仓估值之和，不扣除信用卡负债。
@@ -69,6 +68,7 @@ live 验收的结论只对已运行场景成立。
 - 读取侧 `valueBasis` 为 `MIGRATED_ESTIMATE`，界面标注“估算”。这类持仓是估算值，不是真实申购记录。
 - 产品未发布净值或净值为零时，脚本跳过该行，不伪造份额。负净值让整轮中止且零写入。
 - 市值一律按 `份额 × 最新净值` 派生，入口是 `banking-sdk/investment.ts#holdingValuation`。
+- 净值最多 4 位小数，份额最多 6 位小数，超出位数的输入按参数错误拒绝。
 - `InvestmentHolding.estimatedMarketValue` 只是写入时的快照，读取路径不使用。
 - 份额或净值缺失时，`valueBasis` 为 `HISTORICAL_DATA_INSUFFICIENT`，市值回退为剩余成本，且不给收益与收益率。申购时间与净值历史不参与估值。
 - 费用恒为零是模拟口径：数据模型没有费用列，持仓、`Transaction` 与 `CardConsumption` 都不记录费用。
