@@ -189,6 +189,30 @@ mock 与日期边界报告写 `output/playwright/REPORT-mock-suite.md`、`output
 `output/playwright/` 与 `logs/` 都在 `.gitignore` 中：提交证据需 `git add -f` 指定具体文件，惯例只提交上述文本报告与选定的截图。
 原始 stdout、evidence JSON、DB dump 只放仓库 `logs/`，不提交；不得提交 `.env.local` 或任何 `*.db`。
 
+## 可复用断言原语（新增场景时先读本节）
+
+`/cards` 页面没有冻结/解冻控件：`app/cards/CardManager.tsx` 卡片底部只有 `data-card-consume` 与 `data-card-delete`，头部只有 `data-card-refresh`/`data-card-add`。
+冻结/解冻只能经 `/agent` 的 `freeze_card`/`unfreeze_card`（均为 RED 写工具），因此 `card-freeze.e2e-helper.ts` 只导出 `journeyMultiCardFreeze`，不含页面级冻结助手。
+`card-management.e2e-helper.ts` 只导出 `journeyCardManagement`，覆盖人工新增/注销实体卡。
+`banking-pages.e2e-helper.ts` 只导出 `journeyBankingPages`，无 `/overview` 与 dashboard 断言。
+
+`readCardTileRows(page, cardId)` 返回 `Record<去全部空白的渲染标签, 去首尾空白的 dd 文本>`（遍历 `dl > dt`，值取 `dt.nextElementSibling`）：只覆盖 `<dl>` 行，故 `关联账户`/`月限额` 这类 `<span>` 标签取不到。
+标签键把连续空白**删除**（`replace(/\s+/g,'')`，不是 trim），调用点必须按目录原文取值，且比较金额前先断言该行存在，否则目录改名会静默空通过。
+`readCardTileText(page, cardId)` 返回容器 `innerText`（空白折叠为单空格），是读取 `<span>` 标签、状态 `Badge`（`已冻结`/`已挂失`）与不可用提示的唯一途径。
+`CARD_LABEL` 只有 8 个键；`未关联账户`/`账户暂不可用`/`卡片不可用` 与 `卡片已冻结，暂不可用于消费（余额仍可查看）`/`卡片已挂失，暂不可用于消费（余额仍可查看）` 不在其中，须直取 `lib/i18n/messages/business.zh-CN.json` 或读 tile 文本。
+
+FROZEN/LOST 的 `LINKED` 卡照常渲染真实 `账户余额` + `可用余额`（`banking-sdk/card.ts#toCardView` 只看 `settlement.status`），不可用性只由状态与提示 `Badge` 表达。
+`assertLinkedAccountTileLabels(rows, label, status = 'LINKED', tileText?)` 不检查 `usable`，因此对冻结/挂失卡仍通过；`assertCreditTileLabels` 断言信用额度行存在且无账户余额行；`assertNoRetiredCardLabels` 断言废弃标签缺席。
+`readCardChainMoneySnapshot(baseUrl)` 是唯一的 `/api/dashboard` 原语（`Promise.all([fetchDashboardSummary, fetchLedger])` → `{ checkingBalance, ledger }`），配合 `assertCardChainMoneyUnchanged(before, after, label)`。
+`helpers.ts#fetchDashboardSummary` 返回 `getJson` 的 `envelope.data`，其 `DashboardView` 只是路由 `DashboardSummary` 的收窄子集；三方核对需就地放宽类型而不是依赖该别名。
+
+`completeConfirmationPanel(page, label, code='123456')`：无 MFA 卡时先 `clickConfirm(page, 90_000)`，再 `waitForMfaCard(page, 120_000)`，最后 `submitMfa(page, code, 60_000)`。
+`openConsumeDialog` 对 `usable === false` 的卡必然超时（按钮 `disabled`），不得用于冻结/挂失卡。
+
+新场景注册：加入 `live-acceptance.e2e.ts` 的 `const SCENARIOS`（现止于 `lG`），`run` 用 `withPage(ctx.browser, …, { label })` 包裹并注入 `drive: (turns) => driveRedTool(page, ctx.baseUrl, turns)`、`captureShot: captureLive`。
+`LIVE_SCENARIOS` 过滤 id；选 `2` 连带 `2p`；场景 `7` 不在数组内且恒最后运行。
+`E2E_BROWSER_PATH` 在 `helpers.ts#resolveBrowserExecutable` 中优先命中（路径存在即用），否则回退常见 Chrome/Edge 路径。
+
 ## 结果解释
 
 `LIVE-ACCEPTANCE-REPORT.md` 记录当前工作周期的逐轮结果（每场景每轮的 PASS/FAIL、提示词、DB 数字、截图路径与退出码）；历史结果留在 Git 历史。
