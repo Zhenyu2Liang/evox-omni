@@ -1,0 +1,24 @@
+Live environment configuration loaded without displaying values.
+== AI Banking Agent 真实浏览器 + 真实 DeepSeek 在线验收 (tests/e2e/live) ==
+Live run uses the configured model.
+· 隔离 LIVE 数据库：file:D:/projects/banking-agent/.genesis/workers/worker_T7_A701/prisma/live-acceptance.db（prisma/dev.db 与 prisma/test.db 不受影响）
+· 重置 LIVE 数据库 →（缺 Prisma Client 时先 prisma generate）→ db push 阶梯 → probe → tsx prisma/seed.ts
+Live provider configuration is applied; configuration values are not displayed.
+· next dev (pid=61060) → http://localhost:53517（/api/health 与 /agent 均已就绪）
+· /api/health={"ok":true,"data":{"status":"ok","time":1792731019714,"llmMode":"live"}}
+· 真实浏览器：C:\Program Files\Google\Chrome\Application\chrome.exe
+PASS lI-live-identity-resolution-by-number — 【真模型】GET /api/health llmMode=live，model=deepseek-flash，本轮 ModelRequest=7 次，provider x-request-id=(未采集)
+【精确匹配】给13900000002转200.00元 → 确认卡收款人=张伟 / 139****0002（=种子掩码号），取消后余额 23580.00 未变、无新增流水
+【近号防误匹配】13911110002 → 未渲染确认卡、无新增 transfer_money PendingAction（[]）、余额 23580.00→23580.00 未变、无新增流水；工具/澄清证据=有
+【尾号唯一定位】尾号6688 → 确认卡 卡片=信用卡 ****6688（=DB numberFull 后四位 6688），无需完整卡号
+【尾号≠cardId】set_card_limit args={"cardTail":"6688","category":"餐饮","amount":"1000.00"}（cardTail 载 6688，cardId=缺省）
+【脱敏】确认卡/assistant/工具结果/stateJson 均无完整手机号或完整卡号；页面仅用户气泡含完整手机号，正文无完整卡号
+· 累计网络 4xx/5xx：0，console error：0，pageerror：0
+· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：
+session=demo:user_liming msg#2 assistant→ toolCall search_contact args={"query":"13900000002"}
+session=demo:user_liming msg#3 toolResult search_contact isError=false text=找到 1 位匹配“13900000002”的联系人：张伟（139****0002，招商银行）。 {"ok":true,"data":[{"bank":"招商银行","id":"contact_zhangwei","name":"张伟","phone":"139****0002"}]}
+session=demo:user_liming msg#7 assistant→ toolCall transfer_money args={"amount":"200.00","contactId":"contact_zhangwei"}
+session=demo:user_liming msg#8 toolResult transfer_money isError=true text=__SECURITY_BLOCK__{"actionId":"cmvkhrk8m006ltof8zqeanqfk","decisionKind":"require_confirmation"}
+· 【证据】种子库收款人 张伟 手机号=139****0002
+== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==
+EXITCODE=0   

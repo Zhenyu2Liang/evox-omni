@@ -1,0 +1,84 @@
+✓ Lockfile passes supply-chain policies (verified 23h ago)
+Lockfile is up to date, resolution step is skipped
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: D:\.pnpm-store\v11
+  Virtual store is at:             node_modules/.pnpm
+Progress: resolved 151, reused 151, downloaded 0, added 113
+Progress: resolved 293, reused 293, downloaded 0, added 251
+Progress: resolved 302, reused 302, downloaded 0, added 260
+Progress: resolved 306, reused 306, downloaded 0, added 262
+Progress: resolved 344, reused 344, downloaded 0, added 300
+Progress: resolved 422, reused 421, downloaded 0, added 377
+Progress: resolved 422, reused 422, downloaded 0, added 378
+Progress: resolved 520, reused 520, downloaded 0, added 481
+Progress: resolved 534, reused 534, downloaded 0, added 498
+Progress: resolved 563, reused 563, downloaded 0, added 530
+Progress: resolved 576, reused 576, downloaded 0, added 549
+Progress: resolved 597, reused 597, downloaded 0, added 574
+Progress: resolved 606, reused 606, downloaded 0, added 589
+Progress: resolved 611, reused 611, downloaded 0, added 593
+Progress: resolved 612, reused 612, downloaded 0, added 596
+Packages: +612
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 612, reused 612, downloaded 0, added 612, done
+
+dependencies:
++ @earendil-works/pi-agent-core 1.2.0
++ @earendil-works/pi-ai 1.2.0
++ @earendil-works/pi-coding-agent 1.2.0
++ @next/env 16.4.0
++ @prisma/adapter-better-sqlite3 7.10.0
++ @prisma/client 7.10.0
++ decimal.js 10.6.0
++ next 16.4.0
++ pi-weixinbot 1.0.5
++ qrcode 1.5.4
++ react 19.3.0
++ react-dom 19.3.0
++ react-markdown 10.1.0
++ remark-gfm 4.0.1
++ zod 4.6.7
+
+devDependencies:
++ @next/eslint-plugin-next 16.4.0
++ @tailwindcss/postcss 4.3.3
++ @types/node 26.6.5
++ @types/qrcode 1.5.6
++ @types/react 19.3.0
++ @types/react-dom 19.3.0
++ @typescript/native <- typescript 7.0.2
++ eslint 10.12.0
++ eslint-plugin-react-hooks 7.1.1
++ globals 17.13.0
++ playwright-core 1.64.0
++ postcss 8.5.30
++ prisma 7.10.0
++ tailwindcss 4.3.3
++ tsx 4.23.15
++ typescript <- @typescript/typescript6 6.0.2
++ typescript-eslint 8.71.2
++ vitest 5.0.4
+
+Done in 53.3s using pnpm v12.3.4
+Live environment configuration loaded without displaying values.
+== AI Banking Agent 真实浏览器 + 真实 DeepSeek 在线验收 (tests/e2e/live) ==
+Live run uses the configured model.
+· 隔离 LIVE 数据库：file:D:/projects/banking-agent/.genesis/workers/worker_T7_A701/prisma/live-acceptance.db（prisma/dev.db 与 prisma/test.db 不受影响）
+· 重置 LIVE 数据库 →（缺 Prisma Client 时先 prisma generate）→ db push 阶梯 → probe → tsx prisma/seed.ts
+The Prisma Client is missing, stale or unusable. Running prisma generate.
+Live provider configuration is applied; configuration values are not displayed.
+· next dev (pid=51632) → http://localhost:62079（/api/health 与 /agent 均已就绪）
+· /api/health={"ok":true,"data":{"status":"ok","time":1792730395362,"llmMode":"live"}}
+· 真实浏览器：C:\Program Files\Google\Chrome\Application\chrome.exe
+PASS lB-live-investment-partial-redemption — B0 持仓展示：实际发送「我的持仓」→ 聊天投资卡 持仓份额=4999.864825 份、最新净值=1.0357 元/份、市值=¥5,178.36、持仓收益=+¥178.36、持仓收益率=3.56719998505%（DB holding.shares=4999.864825、最新净值 1.0357、市值 5178.3599992525，持仓收益率行存在且为带符号百分比）；/investments 显示 持有金额=¥5,000.00、剩余持仓成本=¥5,000.00、持仓份额=4999.864825 份、最新净值=1.0357 元/份、市值=¥5,178.36、持仓收益=+¥178.36、累计收益=+¥178.36、已实现收益=¥0.00；本步新增 pageerror 0 条；B1 实际发送：「追加申购稳健理财A 1000元」 → MFA 123456 → 剩余持仓成本 6000.00、持仓份额 5965.395384（最新净值 1.0357）、市值 6178.3599992088（全精度），写后聊天卡持仓份额 5965.395384 份（≠ 写前 4999.864825 份）；B2 实际发送：「我持有的稳健理财A按金额部分赎回2000元，保留剩余持仓」 → MFA 123456 → 赎回份额 1931.061118 × 成交净值 1.0357 = 预计到账 2000.00；剩余份额 4034.334266、剩余成本 4057.74（本次扣减 1942.26）、市值 4178.3599992962（全精度）、本次已实现收益 57.74；写后聊天卡 持仓份额=4034.334266 份、剩余持仓成本=¥4,057.74、市值=¥4,178.36；/investments 显示 持有金额=¥4,057.74、剩余持仓成本=¥4,057.74、持仓份额=4034.334266 份、最新净值=1.0357 元/份、市值=¥4,178.36、持仓收益=+¥120.62、累计收益=+¥178.36、已实现收益=¥57.74；账本新增 DEBIT -1000.00（cmvkhet7b00skv0f8exoqirkc，认购稳健理财A/投资）与 CREDIT 2000.00（cmvkhey2f00ybv0f83miwb3lv，赎回/投资）；活期余额 23580.00 → 24580.00；B3 实际发送：「我持有的稳健理财A按份额赎回 100 份」 → 确认面板 持仓=稳健理财A（holding_wenjiana）、操作=赎回名下理财持仓。、风险等级=🔴 红色、赎回口径=按份额赎回、赎回份额=100、成交净值=1.0357、净值日期=2026-09-25、预计到账金额=¥103.57、费用口径=赎回费 ¥0.00（SIMULATED_NONE：模拟规则免收）、金额变化=净值、份额或到账金额变化时停止执行，需重新确认。、入账账户=活期账户 → 确认 + MFA 123456 → 份额 4034.334266 → 3934.334266（恰 −100）、剩余成本 3957.16（扣减 100.58）、本次已实现收益 2.99、账本新增 CREDIT 103.57（cmvkhf2w7013yv0f8lz7bi9e0）、活期余额 24580.00 → 24683.57；B4 实际发送：「赎回2000」→ 无确认/MFA 面板、五处零变更（holding(shares=3934.334266,cost=3957.16,realized=60.73,status=HOLDING) 活期=24683.57 Transaction=235 PendingAction=3[executed,executed,executed] AuditLog=3）、澄清文本逐字：「您这次说的“赎回2000”没有说明口径，我需要先确认，因为两种口径的结果不同：
+
+按金额赎回 ¥2,000.00：按最新净值 1.0357 折合约 1,931.06 份；
+按份额赎回 2,000 份：按最新净值 1.0357 约合 ¥2,071.40，但您当前稳健理财A 只剩 3,934.334266 份，这是部分赎回。
+
+另外请确认产品是稳健理财A（我按上一轮对话默认理解）。请告诉我“按金额”还是“按份额”，确认后我再帮您提交。收益为模拟估算，不承诺保本。」；B5：/api/health llmMode=live；完成请求 10 个，每个都有 stream payload + 200 响应头 + transport_end([DONE])；最近一次 cmvkhf3tq014nv0f87w2qlhpg 收尾 [DONE]；上游 provider 响应 id 10 个（如 40988ee8-7d71-4392-9e00-30ee966dd766）；截图 D:\projects\banking-agent\.genesis\workers\worker_T7_A701\output\playwright\live\01-lB-investments-B0.png / D:\projects\banking-agent\.genesis\workers\worker_T7_A701\output\playwright\live\02-lB-investments.png / D:\projects\banking-agent\.genesis\workers\worker_T7_A701\output\playwright\live\03-lB-redeem-by-shares-panel.png / D:\projects\banking-agent\.genesis\workers\worker_T7_A701\output\playwright\live\04-lB-bare-number-clarification.png；证据 JSON D:\projects\banking-agent\.genesis\workers\worker_T7_A701\logs\lB-investment-partial-redemption-evidence.json
+· 累计网络 4xx/5xx：0，console error：0，pageerror：0
+· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：
+（无持久化的 transfer_money/search_contact 调用）
+· 【证据】种子库收款人 张伟 手机号=139****0002
+== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==
+EXITCODE=0   

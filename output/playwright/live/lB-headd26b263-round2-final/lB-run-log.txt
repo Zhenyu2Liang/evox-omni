@@ -1,0 +1,21 @@
+Live environment configuration loaded without displaying values.
+== AI Banking Agent 真实浏览器 + 真实 DeepSeek 在线验收 (tests/e2e/live) ==
+Live run uses the configured model.
+· 隔离 LIVE 数据库：file:D:/projects/banking-agent/.genesis/workers/worker_T7_A701/prisma/live-acceptance.db（prisma/dev.db 与 prisma/test.db 不受影响）
+· 重置 LIVE 数据库 →（缺 Prisma Client 时先 prisma generate）→ db push 阶梯 → probe → tsx prisma/seed.ts
+Live provider configuration is applied; configuration values are not displayed.
+· next dev (pid=76180) → http://localhost:52442（/api/health 与 /agent 均已就绪）
+· /api/health={"ok":true,"data":{"status":"ok","time":1792730954194,"llmMode":"live"}}
+· 真实浏览器：C:\Program Files\Google\Chrome\Application\chrome.exe
+PASS lB-live-investment-partial-redemption — B0 持仓展示：实际发送「我的持仓」→ 聊天投资卡 持仓份额=4999.864825 份、最新净值=1.0357 元/份、市值=¥5,178.36、持仓收益=+¥178.36、持仓收益率=3.56719998505%（DB holding.shares=4999.864825、最新净值 1.0357、市值 5178.3599992525，持仓收益率行存在且为带符号百分比）；/investments 显示 持有金额=¥5,000.00、剩余持仓成本=¥5,000.00、持仓份额=4999.864825 份、最新净值=1.0357 元/份、市值=¥5,178.36、持仓收益=+¥178.36、累计收益=+¥178.36、已实现收益=¥0.00；本步新增 pageerror 0 条；B1 实际发送：「追加申购稳健理财A 1000元」 → MFA 123456 → 剩余持仓成本 6000.00、持仓份额 5965.395384（最新净值 1.0357）、市值 6178.3599992088（全精度），写后聊天卡持仓份额 5965.395384 份（≠ 写前 4999.864825 份）；B2 实际发送：「我持有的稳健理财A按金额部分赎回2000元，保留剩余持仓」 → MFA 123456 → 赎回份额 1931.061118 × 成交净值 1.0357 = 预计到账 2000.00；剩余份额 4034.334266、剩余成本 4057.74（本次扣减 1942.26）、市值 4178.3599992962（全精度）、本次已实现收益 57.74；写后聊天卡 持仓份额=4034.334266 份、剩余持仓成本=¥4,057.74、市值=¥4,178.36；/investments 显示 持有金额=¥4,057.74、剩余持仓成本=¥4,057.74、持仓份额=4034.334266 份、最新净值=1.0357 元/份、市值=¥4,178.36、持仓收益=+¥120.62、累计收益=+¥178.36、已实现收益=¥57.74；账本新增 DEBIT -1000.00（cmvkhqcbd00qyowf87s0f1sm1，认购稳健理财A/投资）与 CREDIT 2000.00（cmvkhqic700vzowf8do79tfh7，赎回/投资）；活期余额 23580.00 → 24580.00；B3 实际发送：「我持有的稳健理财A按份额赎回 100 份」 → 确认面板 持仓=稳健理财A（holding_wenjiana）、操作=赎回名下理财持仓。、风险等级=🔴 红色、赎回口径=按份额赎回、赎回份额=100、成交净值=1.0357、净值日期=2026-09-25、预计到账金额=¥103.57、费用口径=赎回费 ¥0.00（SIMULATED_NONE：模拟规则免收）、金额变化=净值、份额或到账金额变化时停止执行，需重新确认。、入账账户=活期账户 → 确认 + MFA 123456 → 份额 4034.334266 → 3934.334266（恰 −100）、剩余成本 3957.16（扣减 100.58）、本次已实现收益 2.99、账本新增 CREDIT 103.57（cmvkhqmf6010wowf8pmwigbg7）、活期余额 24580.00 → 24683.57；B4 实际发送：「赎回2000」→ 无确认/MFA 面板、五处零变更（holding(shares=3934.334266,cost=3957.16,realized=60.73,status=HOLDING) 活期=24683.57 Transaction=235 PendingAction=3[executed,executed,executed] AuditLog=3）、澄清文本逐字：「您说的「赎回2000」我需要先确认两件事：
+
+赎回哪只产品？ 您现在持有货币基金、稳健理财A、稳健理财B 三笔。刚才两次赎回都发生在稳健理财A，默认是它吗？
+2000 是「按金额」还是「按份额」？ 2000 元按金额赎回，会折算成约 1,931 份；2000 份按份额赎回，按最新净值 1.0357 计算，到账约 ¥2,071.40。两种口径结果不同，我不能替您默认。
+
+麻烦告诉我「稳健理财A 按金额赎回 2000 元」这样的明确说法，我再为您提交。」；B5：/api/health llmMode=live；完成请求 6 个，每个都有 stream payload + 200 响应头 + transport_end([DONE])；最近一次 cmvkhqncm011lowf8ef1c84nt 收尾 [DONE]；上游 provider 响应 id 6 个（如 89ec303f-c47d-4585-8d28-79fad230940f）；截图 D:\projects\banking-agent\.genesis\workers\worker_T7_A701\output\playwright\live\01-lB-investments-B0.png / D:\projects\banking-agent\.genesis\workers\worker_T7_A701\output\playwright\live\02-lB-investments.png / D:\projects\banking-agent\.genesis\workers\worker_T7_A701\output\playwright\live\03-lB-redeem-by-shares-panel.png / D:\projects\banking-agent\.genesis\workers\worker_T7_A701\output\playwright\live\04-lB-bare-number-clarification.png；证据 JSON D:\projects\banking-agent\.genesis\workers\worker_T7_A701\logs\lB-investment-partial-redemption-evidence.json
+· 累计网络 4xx/5xx：0，console error：0，pageerror：0
+· 【证据】持久化的 transfer_money / search_contact 工具调用（AgentSession.stateJson，参数对象逐字）：
+（无持久化的 transfer_money/search_contact 调用）
+· 【证据】种子库收款人 张伟 手机号=139****0002
+== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==
+EXITCODE=0   

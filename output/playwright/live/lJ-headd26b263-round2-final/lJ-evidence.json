@@ -1,0 +1,159 @@
+{
+  "scenario": "lJ-live-debit-card-linked-account-balance",
+  "model": "deepseek-flash",
+  "llmMode": "live",
+  "modelEvidence": {
+    "completedRequests": 10,
+    "requestIds": [
+      "1faae374-347e-46c7-8aa4-568458bdf5c2",
+      "fb3c8abe-1bc7-4c81-a6fc-0224e3c8d39a",
+      "2610c55c-2c1a-4927-9275-9297b4d89d90",
+      "99775c91-63f2-4534-b704-433e4b0da928",
+      "3b6cf4f6-3c93-4491-b19a-2ff138d47467",
+      "eb8662f4-32a8-463f-8b8c-ab2d22d7b923",
+      "dcf308c6-338f-4a2c-8759-36339932acae",
+      "c2fe7819-737d-41d9-8fba-45ba451469de",
+      "33ad38bd-3f80-4069-b837-27f1521ddc66",
+      "ee45b3d5-85c6-4fc4-9ac7-523b8b4d02e4"
+    ],
+    "model": "deepseek-flash",
+    "upstreamEventType": "provider_response_event",
+    "completedRequestsWithUpstreamId": 10,
+    "upstreamModel": "deepseek-flash",
+    "systemFingerprint": "e72d3c7f663d3e1383b00b3884cb4501",
+    "responseHeaderNames": [
+      "content-type"
+    ],
+    "responseStatuses": [
+      200
+    ],
+    "sampleModelRequestId": "cmvkhtenx0008t8f8xh33tkh1"
+  },
+  "sqlite": {
+    "account": {
+      "id": "acct_checking",
+      "name": "活期账户",
+      "number": "****8821",
+      "type": "CHECKING",
+      "balanceMinorAtStart": "2358000",
+      "balanceMinorAfterTransfer": "2356766"
+    },
+    "cardDebit": {
+      "id": "card_debit",
+      "type": "DEBIT",
+      "status": "ACTIVE",
+      "numberMasked": "****8821",
+      "creditLimitMinor": null,
+      "availableLimitMinor": null,
+      "monthlyLimitMinor": null,
+      "linkedAccountId": "acct_checking",
+      "replacedByCardId": null
+    },
+    "cardVirtual": {
+      "id": "card_virtual",
+      "type": "VIRTUAL",
+      "status": "ACTIVE",
+      "numberMasked": "****7788",
+      "creditLimitMinor": null,
+      "availableLimitMinor": null,
+      "monthlyLimitMinor": "500000",
+      "linkedAccountId": "acct_checking",
+      "replacedByCardId": null
+    },
+    "cardCredit": {
+      "id": "card_credit",
+      "type": "CREDIT",
+      "status": "ACTIVE",
+      "numberMasked": "****6688",
+      "creditLimitMinor": "1800000",
+      "availableLimitMinor": "1800000",
+      "monthlyLimitMinor": "1800000",
+      "linkedAccountId": null,
+      "replacedByCardId": null
+    },
+    "cardDebitAfterFreeze": {
+      "id": "card_debit",
+      "type": "DEBIT",
+      "status": "FROZEN",
+      "numberMasked": "****8821",
+      "creditLimitMinor": null,
+      "availableLimitMinor": null,
+      "monthlyLimitMinor": null,
+      "linkedAccountId": "acct_checking",
+      "replacedByCardId": null
+    },
+    "cardVirtualAfterLost": {
+      "id": "card_virtual",
+      "type": "VIRTUAL",
+      "status": "LOST",
+      "numberMasked": "****7788",
+      "creditLimitMinor": null,
+      "availableLimitMinor": null,
+      "monthlyLimitMinor": "500000",
+      "linkedAccountId": "acct_checking",
+      "replacedByCardId": null
+    },
+    "transferDebitRow": {
+      "id": "txidem_b28a15d2e832d9dc16c970f3d946ab26",
+      "amountMinor": "-1234",
+      "merchant": "转账给张伟",
+      "category": "转账"
+    }
+  },
+  "threeWay": {
+    "baseline": {
+      "dom": "¥23,580.00",
+      "apiCards": "23580.00",
+      "accountBalance": "23580.00",
+      "dashboardChecking": "23580.00"
+    },
+    "afterTransfer": {
+      "domDebit": "¥23,567.66",
+      "domVirtual": "¥23,567.66",
+      "domSecondVirtual": "¥23,567.66",
+      "apiCards": "23567.66",
+      "sqlite": "23567.66",
+      "dashboardChecking": "23567.66",
+      "assetsDrop": "12.34"
+    },
+    "afterFreeze": {
+      "domDebit": "¥23,567.66",
+      "domUsable": "¥23,567.66",
+      "sqlite": "23567.66"
+    },
+    "afterLost": {
+      "domVirtual": "¥23,567.66",
+      "domUsable": "¥5,000.00",
+      "sqlite": "23567.66"
+    }
+  },
+  "renderedCopy": {
+    "debitTile": "借记卡 · UnionPay ****8821 正常 关联账户 活期账户 · ****8821 账户余额 ¥23,580.00 可用余额 ¥23,580.00 消费 删除演示卡片",
+    "debitTileFrozen": "借记卡 · UnionPay ****8821 已冻结 卡片已冻结，暂不可用于消费（余额仍可查看） 关联账户 活期账户 · ****8821 账户余额 ¥23,567.66 可用余额 ¥23,567.66 消费 删除演示卡片",
+    "virtualTileLost": "虚拟卡 · UnionPay ****7788 已挂失 卡片已挂失，暂不可用于消费（余额仍可查看） 关联账户 活期账户 · ****8821 账户余额 ¥23,567.66 可用余额 ¥5,000.00 月限额 ¥5,000.00 消费 删除演示卡片",
+    "creditTile": "信用卡 · UnionPay ****6688 正常 信用额度 ¥18,000.00 可用额度 ¥18,000.00 月限额 ¥18,000.00 分类限额 餐饮 ¥2,000.50 娱乐 ¥3,000.00 购物 ¥4,500.80 出行 ¥1,200.75 消费 删除演示卡片",
+    "overview": "资产总览 2026-09 · 最近 5 笔交易 询问助手 资产总览 预估总资产 ¥96,658.78 活期余额 ¥23,567.66 信用卡可用额度 ¥18,000.00 已入账消费 · 2026-09 ¥13,948.39 可疑消费提醒 低风险 大额消费（>¥5,000） Apple Store -¥6,999.00 2026-09-20 18:32 最近交易 商户 分类 时间 金额 转账给张伟 转账 2026-09-25 12:00 -¥12.34 美团外卖 餐饮 2026-09-25 11:40 -¥45.80 星巴克 餐饮 2026-09-25 09:05 -¥38.00 顺丰快递 其他 2026-09-24 13:31 -¥15.63 云盘会员 订阅 2026-09-23 15:45 -¥12.80"
+  },
+  "sentTurns": {
+    "transfer": [
+      "给张伟转12.34元"
+    ],
+    "freeze": [
+      "请把我的借记卡冻结（我确认，可随时解冻）。"
+    ],
+    "lost": [
+      "尾号7788的虚拟卡丢失了，请正式挂失，我确认不可撤销。"
+    ],
+    "secondVirtualCard": [
+      "请帮我新开一张虚拟卡，月消费限额设为100元"
+    ]
+  },
+  "screenshots": {
+    "shotBaseline": "D:\\projects\\banking-agent\\.genesis\\workers\\worker_T7_A701\\output\\playwright\\live\\01-lJ-baseline-cards.png",
+    "shotSecondCard": "D:\\projects\\banking-agent\\.genesis\\workers\\worker_T7_A701\\output\\playwright\\live\\02-lJ-second-virtual-card.png",
+    "shotTransferCards": "D:\\projects\\banking-agent\\.genesis\\workers\\worker_T7_A701\\output\\playwright\\live\\03-lJ-transfer-cards.png",
+    "shotOverview": "D:\\projects\\banking-agent\\.genesis\\workers\\worker_T7_A701\\output\\playwright\\live\\04-lJ-transfer-overview.png",
+    "shotFrozen": "D:\\projects\\banking-agent\\.genesis\\workers\\worker_T7_A701\\output\\playwright\\live\\05-lJ-frozen-card.png",
+    "shotLost": "D:\\projects\\banking-agent\\.genesis\\workers\\worker_T7_A701\\output\\playwright\\live\\06-lJ-lost-virtual-card.png"
+  }
+}
