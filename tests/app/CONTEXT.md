@@ -235,6 +235,26 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 本目录没有 `leaseExpiresAt` 或 `maxRecoveryAttempts` 用例，也没有 `vi.useFakeTimers`：经 HTTP 入口的租约过期与恢复次数上限完全未覆盖。
 唯一注入时钟的是调度器 `tickScheduledTasks(identity, { now: NOW })`（`scheduled-dispatch-http.test.ts:37` 起），以及 `developer-chat-http.test.ts:109` 直接写 `agentSession.activeRunId` 表示活动租约。
 
+## 驱动 chat turn 的用例的超时预算
+
+`CHAT_DRIVEN_TEST_TIMEOUT_MS = 60_000`（本文件顶部常量区）是 body 会驱动真实 `POST /api/chat` 的用例的显式预算，作为 `it(...)` 的第三个参数传入。
+带该预算的用例：it 1、it 2、it 3（经 `parkTwoTransfers()` 调两次 `chatTurn()`）与 it 9、it 10、it 11、it 12（it 9 直接调 `chatTurn()`，it 10–12 经 `lockOwner()` 调一次）。
+不驱动 chat 的 it 4–8、it 13（`runSubmitPlan`/`executeGatedTool`/纯路由）沿用全局 `testTimeout: 20000`。
+新写驱动 chat 的用例时必须同样套用该常量：其成本由串行语句数决定，与断言数量无关。
+
+依据：一次 chat turn 约 1.4s、落库约 101 行 `agentRunEvent`；每个 Pi 事件各开一个交互式事务（`agent/durable/journal.ts:120-123` → `lib/db/repositories/agentRun.ts:118-122`），全部串行排在同一条 native SQLite 连接上（`lib/db/serialized-connection.ts`）。
+`parkTwoTransfers()` 调两次 `chatTurn()`，故 it 1–3 的 body ≈ 200 次串行交互式事务。
+mock 路径没有任何内部 deadline 或 sleep/重试：`agent/durable/journal.ts:223-228` 的 20 000ms 心跳已 `.unref()`，live 专属的 `AbortSignal.timeout` 不生效。
+所以 body 墙钟 ≈ 语句条数 × 单语句延迟，随宿主 I/O 延迟线性放大，`testTimeout: 20000` 是唯一边界。
+
+实测（同一用例 it 2）：单独跑 1919ms、完整 `pnpm test` 1622ms、`tests/app`+`tests/integration` 111 文件批次 2639ms、`tests/app`+`tests/unit` 批次 1431ms。
+宿主争用下同一文件单跑 it 1 7081ms / it 2 6710ms / it 3 2397ms（相对 1.9s 约 3.7–4.4 倍）；该文件曾出现 `Error: Test timed out in 20000ms.`（用例起始行 `:294`，实际 24316ms），当时整套只慢 1.29×。
+
+已排除的成因：无第二个进程写同一 `prisma/test.db`（无锁竞争，也没有 >1s 的可复现单步停顿）；`prisma/test.db` 与 WAL 规模均在正常区间波动；`tests/setup.ts` 的 schema 哈希标记匹配，跑批中途不重建库；子进程只有四处 spawn 点且都在各自用例内 `await` + `kill`，`deploy-db-push` 用自己的库。
+唯一能同时解释「整套只慢 1.29×、单用例却慢 12.7×」的是宿主争用（同类 agent 的多个 worktree 在同机并发跑 node 进程）。
+
+残余风险：真实的 ~12× I/O 争用仍可能让更重的组合用例（多个 chat turn 叠加阶梯式 verify 循环）超过 60s。该预算抬高的是下限而非保证——超时是环境放大信号，不得据此断言业务缺陷或放宽断言。
+
 ## 常用命令
 
 `pnpm exec vitest run tests/app`
