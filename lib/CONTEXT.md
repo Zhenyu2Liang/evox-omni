@@ -14,6 +14,7 @@
 | `date.ts`、`clock.ts` | 业务日历与时钟 |
 | `config.ts`、`constants.ts` | 运行配置与演示常量 |
 | `ledger.ts` | 执行身份、流水身份与输入摘要 |
+| `banking-selectors.ts` | `resolveBankingArgs`：把模型给的资源 id 绑到当前用户拥有的行 |
 | `chat-history.ts`、`chat-plan-history.ts` | 历史分页与计划归属 |
 | `chat-cards.ts`、`action-summary.ts` | 业务卡片与授权摘要 |
 | `sensitive.ts`、`tool-diagnostics.ts` | 敏感字段过滤与诊断投影 |
