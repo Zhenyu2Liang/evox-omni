@@ -69,6 +69,38 @@
 `settleAction` 对匹配 `actionId` 的终态清除 `pendingAction`。
 `pull` 的 `clearPending` 守卫要求 `!hasError`，故带 `error` 的响应不会清除决定，除非 `settleAction` 已清。
 
+## 授权/验证面的 DOM 契约（浏览器测试的定位面）
+
+面板是否出现只由 `pendingAction` 决定：`ChatWindow.tsx:237-238` 在 `pending && <ApprovalRequest key={pending.actionId} …/>`，挂在 `[data-chat-composer-dock="true"]`（`ChatWindow.tsx:226`）内、滚动区 `[data-chat-scroll="true"]` 之外。
+`pendingAction` 只来自本轮 `confirmation_required`/`mfa_required` 事件，或 `pickPendingAction` 从 `GET /api/actions` 中挑选的 `pending`/`awaiting_mfa`（`decision` attention）行（`agent-stream-reducer.ts:554-573`）。
+故「面板存在」⇔ 服务端存在一条未终态的 `PendingAction`，或本轮刚收到 `mfa_required`；模型文字不产生面板。
+
+`ApprovalRequest.tsx:23-25` 的容器是唯一带 `data-approval-request` 的元素：
+`<section tabIndex={-1} aria-label={t(pending.kind === 'mfa' ? 'chat.approval.verification' : 'chat.approval.confirmation')} data-approval-request="true" data-action-id={pending.actionId} data-kind={pending.kind}>`，并在 `actionId`/`kind` 变化时 `focus({preventScroll:true})`。
+标题行文字与 `aria-label` 同键；`kind === 'mfa'` 渲染 `MfaCard`（另带 `key={pending.actionId}`），否则 `ConfirmationCard`。
+
+`ConfirmationCard` 与 `MfaCard` 都走 `ui/Card layout="request"`：标题区 + 可滚动 body + `footer`（`Card.tsx:45-60`）；`footer === undefined` 时按钮区整块消失。
+按钮均为 `ui/Button` → `<button type="button" disabled={disabled || loading} aria-busy={loading || undefined}>`（`Button.tsx:55-79`），文案 `cards.cancel`/`cards.confirm`/`cards.verify`。
+`ConfirmationCard`：取消 `disabled={busy || !canCancel}`、确认 `loading={busy} disabled={busy || !canConfirm}`（`ConfirmationCard.tsx:72-92`）。
+`MfaCard`：取消 `disabled={busy}`、验证 `loading={busy} disabled={!canSubmit}`，`canSubmit = /^\d{6}$/.test(code.trim()) && !busy && !readOnly`（`MfaCard.tsx:52-68`）。
+
+MFA 输入框（`MfaCard.tsx:90-106`）没有 `maxLength`、`name` 与任何 `data-*`：唯一稳定选择器是 `[data-approval-request="true"] input[aria-label="{cards.mfa.label}"]`（zh-CN 文案「验证码」）。
+其余属性：`type="text"`、`inputMode="numeric"`、`autoComplete="one-time-code"`、`placeholder={cards.mfa.placeholder}`、`disabled={busy}`，值是本地受控 state；Enter 触发 `preventDefault()` + 提交。
+`hint`（`localizeVerificationHint`，缺省 `cards.mfa.hint`）只在非只读时渲染。
+
+终态（`asTerminalStatus`：`executed`/`failed`/`cancelled`/`locked`/`needs_reconciliation`）时 `footer` 被替换：`ConfirmationCard` 换成 `cards.terminal.*` 徽标；`MfaCard` 保留 body 内的 `<p role="status">{cards.terminal.*}</p>` 且不再渲染 footer。
+已尝试次数只由 `MfaCard` 输出（`MfaCard.tsx:108-114`）：`attempts > 0` 时渲染 `<p role="status">`，`attempts >= maxAttempts` 用 `cards.mfa.failedAttemptsLimit`（`{attempts, maxAttempts}`），否则 `cards.mfa.failedAttempts`（`{attempts}`）。
+`attempts` 是 `useAgentStream.mfaAttempts`（失败的 verify 每次 +1，`pendingAction` 的 `actionId`/`kind` 变化或清除时归零，`useAgentStream.ts:244-246`、`:355-360`），`maxAttempts` 由 `ChatWindow` 传入 `MFA_MAX_ATTEMPTS`（`lib/constants.ts:10` = 3）。
+
+### 锁定后实时 dock 卸载（断言须知）
+
+`status === 'locked'` 的 verify 响应会带 `security_event`（`code`/`reason` 由 `securityFacts` 从顶层或 `failure` 取，`actions.ts:650-658`）与终态 `action_settled`（`actions.ts:661-668`）。
+`settleAction` 对终态清除同 `actionId` 的 `pendingAction`（`agent-stream-reducer.ts:319-343`），二者在同一批事件里折叠，故 `MfaCard` 的 `data-mfa-locked` / `cards.terminal.locked` 分支在实时流程中不会上屏——实时可见证据是「dock 整体消失」加一条 `role:'system'` 气泡（`securityNotice` → `chat.error.actionLocked`）。
+`data-approval-locked` 只出现在只读 `ApprovalRecord` 上（`data-status="locked"`），来源两处：
+实时转录里的内联 `mfa`/`confirmation` 卡（若存在）由 `settleAction` 在同一批事件里打上 `status:'locked'`（`agent-stream-reducer.ts:278-281`），因此**当内联卡存在时它会在实时流程中上屏**；
+内联卡是否在实时流程里存在取决于 `mfa_required` 的 `attachPlanDecisionRecord`——只有当某条消息的 `plan` 卡里有节点 `output.pendingActionId === actionId` 时才会附加（`agent-stream-reducer.ts:366-375`），不经过计划的直接工具调用没有内联卡。
+刷新/历史路径由 `app/agent/decision-record.ts#verificationCard` 保留 `status` 重建该内联卡，`CardRenderer` 把 `mfa`/`confirmation` 都交给 `ApprovalRecord`，故刷新后一定出现。
+
 ## 文本安全与本地化
 
 安全与拒绝类文本的唯一收口点是 `lib/public-text.ts`（`isInternalDiagnostic`、`safePublicText`、`securityNotice`）。
@@ -121,6 +153,20 @@
 整页刷新会丢失内存态：`settledActions` 与内联卡片上的终态标记都不持久化。
 服务端把锁定 CAS 持久化为 `PendingAction.status='locked'`（`security/security-gateway.ts` 的 `persistLockedAction`），`GET /api/actions` 因此不再返回该行，`toPendingActionRef` 也丢弃 `locked`，`pickPendingAction` 只接受 `pending`/`awaiting_mfa`——刷新后底部弹窗不会重开，会话内已终态的决定也不再重开（`hasSettledAction`/`visibleRefs`）。
 历史页仍会返回该内联卡：`app/agent/history.ts` 在行状态非 `awaiting_mfa` 时保留 `{type:'mfa', actionId, action, status: row.status}`，故 `status:'locked'` 的卡片随页面加载重新渲染为只读终态，文案与实时卡片一致。
+
+`cards.mfa.locked`（“已锁定，请到安全中心处理。”）不可达：`locked` 属 `TERMINAL_STATUSES`，`MfaCard` 先走 `terminal === 'locked'` 分支；`readOnly && !terminal` 那行只在状态既非终态又非 `pending`/`awaiting_mfa`（如 `confirmed`）时落到 `cards.mfa.processing`。
+`cards.mfa.failedAttemptsLimit` 在实时锁定流程中不可达：第 3 次错误验证码的响应 `status:'locked'` 让 `settleAction` 清除 `pendingAction`，底部 `MfaCard` 卸载，`useAgentStream` 的 `verify` 计数条件（`pendingAction` 仍是同一 mfa 决策）不再成立，`mfaAttempts` 停在上一次的数值。
+连续错误验证码的三段可见变化：前两次保留底部面板（顶部 `role="alert"` 因 `showNotice={!pending}` 不渲染），第三次面板整体消失，`chat.error.actionLocked` 改由 system 气泡、工具行 `errorCode:'MFA_LOCKED'` 与可能的只读内联卡承载。
+
+## 测试定位（DOM 标记）
+
+端到端测试只依赖以下标记与目录文案，不依赖样式类名。
+- 唯一活动面板：`section[data-approval-request="true"][data-action-id][data-kind="mfa"|"confirmation"]`，`aria-label` 与标题取 `chat.approval.verification` / `chat.approval.confirmation`。
+- MFA 输入框：`input[type="text"][inputmode="numeric"][autocomplete="one-time-code"]`，`aria-label` = `cards.mfa.label`，`placeholder` = `cards.mfa.placeholder`；提交按钮文案 `cards.verify`，取消 `cards.cancel`，YELLOW 确认 `cards.confirm`（`ui/Button` 不输出任何 `data-*`）。
+- 实时锁定区块：`[data-mfa-locked="true"]`（`MfaCard`），只在活动面板仍渲染已锁定的 mfa 决策时存在。
+- 只读授权记录：`section[data-approval-history="true"][data-action-id][data-status]`，内含 `[data-approval-stage="previous"|"current"][data-stage-status]`；`status="locked"` 时另有 `[data-approval-locked="true"]`。
+- 安全拒绝气泡：`[data-message-role="system"] [data-message-content="true"]`；工具行 `li[data-tool-call-id][data-tool-status]`；卡片容器 `[data-chat-card-type]`。
+- 输入区：`textarea[data-chat-composer="true"][data-chat-ready]`，发送按钮文案 `chat.composer.send`；消息滚动容器 `[data-chat-scroll="true"]`，底部停靠区 `[data-chat-composer-dock="true"]`。
 
 ## 显示与诊断
 

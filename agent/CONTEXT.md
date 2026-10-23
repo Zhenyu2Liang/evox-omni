@@ -123,6 +123,20 @@ Known boundaries: `financial-response.ts` `renderFinancialResponse` supports a `
 No test under `agent/` or `tests/` feeds a bare `__SECURITY_BLOCK__{"decisionKind":"deny"}` payload through this classification.
 `providers/mock/narration.ts` detects the literal `__SECURITY_BLOCK__` (not the exported prefix) and answers with fixed templates; its branch order prefers the MFA/验证码 template when the same string also contains 锁定/熔断.
 
+## `verifyAction` MFA decision outcome shape
+
+`agent/confirmation.ts:55-57` `verifyAction` = `withLiveConfirmation(() => authorizeAndExecute(actionId, opts, code))`; `authorizeAndExecute` (`:31-49`) calls `gateway.authorizeAction` and on `!auth.ok` returns `confirmation/outcomes.ts:158-186` `blockedOutcome`, which RE-RENDERS the sentence from typed facts via `securityNotice` — so a gateway sentence (`ATTEMPTS_EXHAUSTED_MESSAGE`, `CIRCUIT_LOCK_MESSAGE`) is never the returned `message`; only a prompt with no `code`+`failure` (code still required / challenge renewed) keeps gateway text.
+`blockedOutcome` attaches `events` only while the row is open (`view.requiresMfa && mayPromptForDecision(view.status)`), so every terminal refusal carries `events: []` and a lock never re-emits `mfa_required`.
+Wrong code with attempts remaining → `status:'awaiting_mfa'`, `tier:'RED'`, top-level `code:'MFA_FAILED'`, `failure{code:'MFA_FAILED', reason:'mfa_code_invalid', attemptsUsed:n, attemptsLeft:maxAttempts−n, maxAttempts:3}`, `message` = `chat.error.verificationRemaining` (`验证码错误。还可尝试 {count} 次。`, `count` = `attemptsLeft`), `events:[{type:'mfa_required', actionId, action}]`.
+Third wrong code → `status:'locked'` where the top-level `code` is `CIRCUIT_OPEN` but `failure.code` is `MFA_LOCKED` (`security/security-gateway.ts:1243-1257`), `failure{reason:'mfa_attempts_exhausted', attemptsUsed:3, attemptsLeft:0, maxAttempts:3}`, `message` = `chat.error.actionLocked`, `events:[]`; the row is CAS-ed `pending|awaiting_mfa → locked` (`security-gateway.ts:1105-1108` `persistLockedAction`).
+Verify on an ALREADY-`locked` row short-circuits at `security/security-gateway.ts:1472-1475` to `lockedOutcome` (`:1115-1132`): `status:'locked'`, `code:'CIRCUIT_OPEN'`, `failure{code:'CIRCUIT_OPEN', reason:'mfa_session_locked', attemptsLeft:0, maxAttempts:3}` with NO `attemptsUsed`, `message` = `chat.error.securityLocked`, `events:[]` — identical for a CORRECT and a WRONG code because the guard fires before `mfa.verify`.
+An account breaker tripped by a DIFFERENT operation reports `failure{code:'CIRCUIT_OPEN', reason:'circuit_open', attemptsUsed, attemptsLeft}` and the same `chat.error.securityLocked` copy.
+A consumed challenge CASes the row to `cancelled` (`security-gateway.ts:1189-1200`): `requiresMfa:false`, `code:'CONFLICT'`, `failure{code:'CONFLICT', reason:'denied'}`, `message` = `chat.error.securityDenied`; an expired/`command_changed` challenge re-issues and returns `awaiting_mfa` with NO `code`/`failure` and the `renewedChallenge` sentence, so it re-prompts.
+Any other terminal row throws `CONFLICT`, which `confirmation.ts:43-45` turns into `outcomes.ts:109-131` `conflictOutcome`: `status` = the PERSISTED status, `tier`/`requiresMfa` from the persisted row, `code:'CONFLICT'`, `failure{code:'CONFLICT', reason:'denied'}`, `message` = `chat.error.stateChanged`, `events:[]`.
+Success returns gateway `status:'confirmed'` (`security-gateway.ts:1309-1318`, `VERIFY_OK_MESSAGE`) and then `executeAuthorizedAction` (`confirmation/authorized-execution.ts:103-108`) reports the SETTLED status (`executed`/`failed`/`needs_reconciliation`) with the real continuation `events`.
+The verify path produces NO `security_event`: `kind:'locked'` exists only on the SSE decision-prompt path (`turns/authorization-view.ts:61-67` `settledDecisionSignal`).
+The breaker is OWNER-scoped and DB-durable (`security/circuit-breaker.ts:121-127`), so three wrong codes deny every later tool call of that user — GREEN reads included — until the security centre resets it, and an unlock never revives the locked action.
+
 ## Presentation
 
 Developer chat reset clears the current transcript, model messages and intent only after the session
