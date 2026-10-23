@@ -83,6 +83,16 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 `unit/banking-sdk/net-value-redemption.test.ts` 覆盖份额折算、按份额／金额／全额赎回的结算与成本守恒。
 `unit/security/redemption-stale-authorization.test.ts` 覆盖确认快照不一致时的 `CONFLICT`：本次零写入、`PendingAction` 为 `failed`，同身份重放返回原回执与原净值。
 
+负值口径的断言只落在 `unit/`：
+负 `HoldingView.profit` 见 `unit/banking-sdk/net-value-redemption.test.ts:379`/`:386`/`:418`（`:380`/`:381`/`:419`/`:420` 断符号与量级）；
+负 `InvestResult.realizedProfit` 见同文件 `:394`/`:395`/`:400`（`realizedProfitMinor === -19_231n`）；
+负 `profitRate` 没有任何 SDK 产出断言，只有 `unit/planner/decimal-format.test.ts:45-67` 注入的手工 `HoldingView` 字面量渲染成 `-1.23%` / `-2.9726666666666667%`；
+负比例换算与闸门见 `unit/financial-values.test.ts:70-74`（`signedRateToPercent` 负值不取绝对值）与 `:83`（`rateRatioToPercent` 对负比例抛 `VALIDATION`）。
+`integration/`、`app/`、`scenarios/` 完全没有 `profit`/`profitRate`/`cumulativeProfit`/`realizedProfit` 断言；
+夹具世界只有一个盈利持仓 `holding_wenjiana`（`helpers/fixtures.ts:429`，+50），亏损持仓只能靠用例内申购 + 下调净值（`prod_wenjib` 净值 `0.9880`）构造。
+`e2e/live-investment.e2e-helper.ts:699` 的持仓收益率门正则是 `^[+-]?\d+(\.\d+)?%$`，正收益同样通过，不能当作负收益率已渲染的证据。
+`amount` 为 0 时 `profitRate` 为 `undefined` 只有函数级覆盖（`unit/banking-sdk/net-value.test.ts:160-161` 的 `profitRateOf`）。
+
 ## 卡片生命周期能力契约的覆盖
 
 能力事实以 `lib/contracts/tool-catalog.ts` 与 `lib/contracts/card-management.ts` 为准：
