@@ -59,18 +59,29 @@ SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件�
 
 ## 完整号码列
 
+`Account.number` 只存已脱敏账号（字段注释 `masked, e.g. "****8821"`），没有对应的完整账号列；账号身份只能用 `Account.id` 精确匹配，脱敏值仅作候选过滤。
+种子直接写入脱敏串：活期 `****8821`、储蓄 `****3309`。
 `Contact.phoneFull` 与 `Card.numberFull` 保存完整的虚构手机号与卡号，仅供服务端精确匹配。
-两列都可空，未补全的行为空值，缺失数字无法从脱敏列恢复。
+这两列都可空，未补全的行为空值，缺失数字无法从脱敏列恢复。
 `Contact.phone` 与 `Card.numberMasked` 只存脱敏值，是唯一对外展示来源。
 两列不得出现在日志、工具结果、接口响应或错误消息中。
 演示数据与夹具使用虚构号段：手机号中间四位为 `0000`，卡号为 `6222` 加全 `0` 加原尾 4 位。
 补全命令见 [scripts/CONTEXT.md](../scripts/CONTEXT.md)。
 
+## 稳定 id 与演示余额
+
+演示用户 id 是 `lib/constants.ts` 的 `DEFAULT_DEMO_USER_ID = 'user_liming'`（`seed.ts` 以 `USER_ID` 引用），姓名 `李明`，`phone` 存脱敏值 `138****0001`。
+账户：`acct_checking`（`CHECKING`，名称 `活期账户`，`number` `****8821`）、`acct_savings`（`SAVINGS`，名称 `储蓄账户`，`number` `****3309`）。
+卡片 id：`card_credit`（CREDIT）、`card_debit`（DEBIT）、`card_virtual`（VIRTUAL），三者 `status` 均为 `ACTIVE`。
+活期存储余额是派生值：`OPENING_CHECKING_CENTS = 2_358_000n - CHECKING_LEDGER_CENTS`，抛错断言 `CHECKING_BALANCE_CENTS === 2_358_000n`（¥23,580.00）守住终点；增删流水只改期初。
+储蓄无流水，`OPENING_SAVINGS_CENTS = 5_000_000n`（¥50,000.00）。
+`card_credit` 的 `creditLimitMinor` 与 `availableLimitMinor` 均 `1_800_000n`（¥18,000.00）。
+
 ## 种子行为
 
 `seed.ts` 使用 `businessDate` 构造北京时间。
 金额由 `minorUnits` 转成整数分。
-活期余额由期初余额加全部已入账流水核对。
+`seed.ts` 只按 `DATABASE_URL`（经 `lib/db/url.ts#resolveDatabaseUrl` 解析，缺省 `file:./dev.db`）播种，验收隔离库同样用它；e2e 库是 `prisma db push` 后跑 `tsx prisma/seed.ts` 得到的全新数据，不是 `dev.db` 的拷贝。
 演示数据包含收支、小数交易、异常样例与多类业务记录。
 卡片夹具含 `card_credit`、`card_debit` 与虚拟卡 `card_virtual`；
 借记卡 `card_debit` 与虚拟卡 `card_virtual` 均通过 `linkedAccountId` 绑定活期账户 `acct_checking`，虚拟卡月限额 ¥5,000.00。

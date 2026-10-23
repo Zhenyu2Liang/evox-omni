@@ -7,7 +7,7 @@
 | `shared.ts` | 语言校验、消息键类型、模板插值 |
 | `server.ts` | 请求级 `getServerI18n()`，通过 Next cookies 读取 `banking_locale` |
 | `LocaleProvider.tsx` | 客户端翻译上下文、cookie 持久化、服务端组件刷新 |
-| `LocaleText.tsx` | 面向服务端安全原语的客户端叶子组件，支持渲染回调 |
+| `LocaleText.tsx` | `<LocaleText messageKey params />`：只输出 `t(messageKey, params)` 文本的客户端叶子组件，让父级保持服务端可渲染 |
 | `messages/` | 应用框架、对话、业务与页面文案的中英文对照目录 |
 | `display.ts` | 静态元数据与策略值的翻译，以及调用详情字段来源判断 |
 
@@ -69,10 +69,19 @@
 
 ## 卡片标签
 
-`business.cards.*` 提供卡片业务的中英文标签，语义如下：
+`business.cards.*` 提供卡片业务的中英文标签，语义如下。
+全部 23 个键集中在 `messages/business.zh-CN.json:47-69` 与 `messages/business.en.json:47-69`（两侧行号一致）；`app`/`chat`/`pages` 目录不含该前缀的键。
+这些值都是纯字面量，**没有 `{...}` 占位符**，`t(key)` 的结果就是目录里的原字符串。
+
+关联账户与余额标签：
 
 | 键 | zh-CN | en | 含义 |
 | --- | --- | --- | --- |
+| `business.cards.debit` | 借记卡 | Debit card | `CardTile` 卡片类型标签（DEBIT） |
+| `business.cards.credit` | 信用卡 | Credit card | 卡片类型标签（CREDIT） |
+| `business.cards.virtual` | 虚拟卡 | Virtual card | 卡片类型标签（VIRTUAL） |
+| `business.cards.limit` | 信用额度 | Credit limit | CREDIT 卡的额度行 |
+| `business.cards.monthlyLimit` | 月限额 | Monthly limit | 月消费限额行 |
 | `business.cards.linkedAccount` | 关联账户 | Linked account | 卡片关联的账户名称或编号 |
 | `business.cards.accountAvailable` | 账户可用余额 | Account available balance | 关联账户当前可用余额 |
 | `business.cards.payableAmount` | 当前可支付金额 | Currently payable | 结合卡片额度与账户余额后当前可支付的金额 |
@@ -85,9 +94,34 @@
 | `business.cards.cardLostNotice` | 卡片已挂失，暂不可用于消费（余额仍可查看） | Card reported lost — not usable for spending; the balance is still viewable | 挂失状态下的说明句：不可消费但余额仍可查看 |
 | `business.cards.balanceFromAccount` | 余额来自关联账户 | Balance from the linked account | 说明余额来源是关联账户 |
 
-关联账户名称复用既有 `business.cards.linkedAccount`，关联账户可用余额说明可复用 `business.cards.accountAvailable`；`business.cards.usableBalance` 是更通用的可用余额标签。
-取值相同的键不重复新增，例如不设 `business.cards.linkedAccountName`。
+卡片类型、状态与额度标签：
 
+| 键 | zh-CN | en | 含义 |
+| --- | --- | --- | --- |
+| `business.cards.debit` | 借记卡 | Debit card | `CardView.type === 'DEBIT'` |
+| `business.cards.credit` | 信用卡 | Credit card | `CardView.type === 'CREDIT'` |
+| `business.cards.virtual` | 虚拟卡 | Virtual card | `CardView.type === 'VIRTUAL'` |
+| `business.cards.active` | 正常 | Active | `status === 'ACTIVE'` |
+| `business.cards.frozen` | 已冻结 | Frozen | `status === 'FROZEN'` |
+| `business.cards.lost` | 已挂失 | Reported lost | `status === 'LOST'` |
+| `business.cards.pending` | 待激活 | Pending activation | `status === 'PENDING'` |
+| `business.cards.replaced` | 已补卡 | Replaced | 已被补卡替换的卡片徽标（`replacedByCardId` 有值） |
+| `business.cards.limit` | 信用额度 | Credit limit | 仅 CREDIT 卡 |
+| `business.cards.available` | 可用额度 | Available credit | 仅 CREDIT 卡 |
+| `business.cards.monthlyLimit` | 月限额 | Monthly limit | 卡片带月限额时的一行 |
+| `business.cards.categoryLimits` | 分类限额 | Category limits | 分类限额区块标题 |
+
+这些卡片键全部**不含占位符**，`t(key)` 返回值即目录原文；en 的 `cardFrozenNotice` / `cardLostNotice` 使用 U+2014 em dash（`Card frozen — not usable…`），断言时不要写成连字符。
+`lib/i18n/messages/pages.*.json` 不含任何 `business.cards.*` 键，`shared.ts:15`/`:21` 的展开覆盖不会改变这些值；`pages.cards.*` 是 `/cards` 页面自身的表单、消费与空态文案。
+关联账户名称复用既有 `business.cards.linkedAccount`；`business.cards.usableBalance` 是更通用的可用余额标签。
+取值相同的键不重复新增，例如不设 `business.cards.linkedAccountName`。
+当前渲染方：`components/banking/CardTile.tsx` 把 `accountBalance` / `usableBalance` 渲染成 `<dt>` 标签，`linkedAccount` 渲染成 `<span>` 标签，`cardUnavailable` / `cardFrozenNotice` / `cardLostNotice` / `linkedAccountMissing` / `linkedAccountUntrusted` 由 `components/banking/card-account-display.ts` 的映射选择。
+`business.cards.accountAvailable`、`business.cards.payableAmount`、`business.cards.balanceFromAccount` 当前没有任何组件渲染；`tests/e2e/card-labels.e2e-helper.ts` 只把前两者读入 `CARD_LABEL_RETIRED`，用于断言它们不再出现。
+浏览器验收断言的卡片标签来自 `tests/e2e/card-labels.e2e-helper.ts` 的 `CARD_LABEL`，它用 `createTranslator('zh-CN')` 读目录而不是复制字符串。
+
+本目录没有「卡号」「账号」「尾号」「结算账户」这类键：脱敏卡号是 `CardView.numberMasked`（`****6688`，4 个 `*` + 4 位数字）原样渲染，关联账号是 `CardView.linkedAccountNumber`，都不经目录；「结算账户」只出现在 `chat.policy.consume_virtual_card` 的策略描述里。
+`/cards` 页自身的键集中在 `pages.cards.*`（`messages/pages.zh-CN.json:30-74` 与 `pages.en.json:30-74` 行号一致）；其中 `pages.cards.summary`（`{count}`）与 `pages.cards.verificationFailed`（`{attempts}`）含占位符，断言前必须先补值，其余卡片页键是纯字面量。
+`tests/e2e/card-labels.e2e-helper.ts` 尚未收录类型键、状态键与三条不可用提示键（`cardUnavailable`/`cardFrozenNotice`/`cardLostNotice`）。
 `pages.cards.consume*` 提供卡片消费界面（模拟消费表单、消费结果提示与消费记录）的中英文标签。
 
 ## 显示映射（display-sources）
@@ -162,6 +196,11 @@
 `已锁定` 精确出现在三处：`cards.terminal.locked`、`pages.activity.status.locked`、`pages.audit.status.locked`。
 `chat.approval.status.locked` 是「验证已锁定」，`cards.mfa.locked` 是完整句「已锁定，请到安全中心处理。」，两者不可替代 `cards.terminal.locked`。
 终态卡片的 `terminalStatusView`（`components/chat/cards/confirmationStatus.ts`）自带硬编码中文标签且不经本目录，见 [components/chat/cards/CONTEXT.md](../../components/chat/cards/CONTEXT.md)。
+客户端查找链：`createTranslator(locale)`（`shared.ts:41-43`）返回 `(key, params?) => translate(locale, key, params)`，签名见 `Translator`（`shared.ts:18`），返回值就是目录字符串本身（无包裹、无追加空白或标点）。
+`LocaleProvider`（`LocaleProvider.tsx:23-48`）用 `useState(initialLocale)` + `useMemo(() => createTranslator(locale))` 提供上下文的 `t`；`useI18n()`（`:51-53`）就是 `useContext(I18nContext)`。
+不在 `LocaleProvider` 之内时 `useI18n()` 落到 `DEFAULT_CONTEXT`（`:15-20`），即 `zh-CN` 的 translator 与 `pending: false`、空操作 `setLocale`。
+`initialLocale` 由 `app/layout.tsx:25` 的 `getServerI18n()` 给出；`setLocale`（`:36-44`）写 cookie `banking_locale`（`Path=/; Max-Age=31536000; SameSite=Lax`，https 时加 `Secure`），再 `router.refresh()` 刷新服务端组件，不重挂载对话。
+因此全新浏览器（无 cookie）服务端读到 `undefined`，`resolveLocale` 回退 `zh-CN`，页面文案为中文目录。
 
 ## 修改约束
 

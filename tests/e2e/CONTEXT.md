@@ -109,6 +109,22 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 `linkedAccountStatus` 四态决定金额行：`LINKED` 渲染账户名 + 脱敏账号 + `账户余额` + `可用余额`；`MISSING`/`UNTRUSTED` 只渲染提示文案（`未关联账户`/`账户暂不可用`），**完全不渲染任何金额行**，绝不以 `0.00` 冒充；`FROZEN`/`LOST`（`usable === false`）追加提示但照常渲染真实且非零的余额——「不可用 ≠ 余额为零」；CREDIT 恒为 `NOT_APPLICABLE`。
 `LiveCardRecord` 与 `helpers.ts#CardView` 是 `GET /api/cards` 的读模型子集：服务端契约（`banking-sdk/types.ts#CardView`）中 `linkedAccountStatus` 与 `usable` 必填，`accountAvailableBalance`/`payableAmount` 仅在 `LINKED` 出现；测试侧只按 JSON 读取使用，从不构造 `CardView` 字面量。
 
+## `/cards` 定位与断言的现状约定（新增卡片渲染用例前必读）
+
+`/cards` 的正规导航是 `gotoCards`（`live-virtual-card.e2e-helper.ts:526-529`）：`page.goto(\`${baseUrl}/cards\`, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })` 后 `waitForElementHydration(page, '[data-card-add] button')`。
+重复的裸导航仍存在（`live-acceptance.e2e.ts:1267-1268`、`:1716-1717`、`card-management.e2e-helper.ts:21-22`）；刷新后等 `waitForElementHydration(page, \`[data-card-id="${cardId}"]\`)`。
+卡片定位只有一条通道：`[data-card-id="<cardId>"]`，且一律 `.first()`；没有 `aria-label`、标题层级或掩码卡号选择器。
+`data-card-id` 由页面包裹层 `app/cards/CardManager.tsx` 发出，`components/banking/CardTile.tsx` 自身不输出任何 `data-*`。
+本目录用例只依赖语义 `data-*` 属性，未使用 `data-testid`；不按 `nth()` 或卡类型选卡片，tile 边界就是带 `data-card-id` 的那个元素。
+`readCardTileRows` 只收集 `dl dt` 的 `dt → dd`（`账户余额`/`可用余额`/信用额度/分类限额），`<span>` 渲染的 `关联账户`/`月限额` 只能经 `readCardTileText`（整块 innerText 折叠空白）用 `includes` 断言；`未关联账户`/`账户暂不可用` 是 `<p>`，状态与不可用提示是 `Badge`。
+本目录没有 `@playwright/test`：无 `expect`/`toBe`/`toContainText`，断言一律 `if (...) throw new Error(...)`，`run` 返回一条证据串。
+金额两端都用 `formatCNY`；现存硬编码字面量只有 `live-acceptance.e2e.ts:1273` 的 `'¥18,000.00'` 与 `:1733` 的 `'****8821'`。
+状态徽标文案（`正常`/`已挂失`/`已补卡`）在 `live-acceptance.e2e.ts:1276-1281` 是硬编码中文，未走 `CARD_LABEL` 的目录取值；改 `CardTile` 文案不会被任何目录读取捕获。
+`VirtualCardProjection.linkedAccountText` 无任何调用点传入，因此“关联账户显示账户名/脱敏账号”的渲染断言当前不存在，只断言 `关联账户` 标签本身出现。
+`assertLinkedAccountTileLabels` 的 `MISSING`/`UNTRUSTED` 分支（只渲染 `未关联账户`/`账户暂不可用` 且零金额行）在本目录从未执行：唯一调用点 `card-replace-chain.e2e-helper.ts:1021` 用默认 `LINKED` 且不传 `tileText`；这两种绑定态只在服务端投影用例（`tests/unit`、`tests/integration`、`tests/app`）里覆盖。
+FROZEN/LOST 的 tile 断言只覆盖 CREDIT 卡（`card-replace-chain.e2e-helper.ts:704-710`：LOST 源卡仍渲染真实 `可用额度`）；DEBIT/VIRTUAL 的 `usable === false` 渲染无任何用例。
+`GET /api/cards` 读模型断言的字段名以 `LiveCardRecord`（`live-virtual-card.e2e-helper.ts:109-127`）为准：`linkedAccountName`/`linkedAccountNumber`/`linkedAccountStatus`/`usable` 都是可选字段，只有 `linkedAccountStatus === 'LINKED'` 才带金额串。
+
 ## 消费入账时间边界（独立于前端流程）
 
 `date-tamper-boundary.e2e.ts` 对运行中的应用发真实 HTTP 请求，自带隔离库 `prisma/live-acceptance-date-tamper.db`（≠ `e2e.db`/`test.db`/`dev.db`），不驱动 UI、不经过模型。
@@ -269,6 +285,34 @@ harness 的截图文件名固定，下一轮会覆盖，因此每轮截图需复
 mock 与日期边界报告写 `output/playwright/REPORT-mock-suite.md`、`output/playwright/REPORT-date-tamper-boundary.md`。
 `output/playwright/` 与 `logs/` 都在 `.gitignore` 中：提交证据需 `git add -f` 指定具体文件，惯例只提交上述文本报告与选定的截图。
 原始 stdout、evidence JSON、DB dump 只放仓库 `logs/`，不提交；不得提交 `.env.local` 或任何 `*.db`。
+
+## 可复用断言原语（新增场景时先读本节）
+
+`/cards` 页面没有冻结/解冻控件：`app/cards/CardManager.tsx` 卡片底部只有 `data-card-consume` 与 `data-card-delete`，头部只有 `data-card-refresh`/`data-card-add`。
+冻结/解冻只能经 `/agent` 的 `freeze_card`/`unfreeze_card`（均为 RED 写工具），因此 `card-freeze.e2e-helper.ts` 只导出 `journeyMultiCardFreeze`，不含页面级冻结助手。
+`card-management.e2e-helper.ts` 只导出 `journeyCardManagement`，覆盖人工新增/注销实体卡。
+`banking-pages.e2e-helper.ts` 只导出 `journeyBankingPages`，无 `/overview` 与 dashboard 断言。
+
+`readCardTileRows(page, cardId)` 返回 `Record<去全部空白的渲染标签, 去首尾空白的 dd 文本>`（遍历 `dl > dt`，值取 `dt.nextElementSibling`）：只覆盖 `<dl>` 行，故 `关联账户`/`月限额` 这类 `<span>` 标签取不到。
+标签键把连续空白**删除**（`replace(/\s+/g,'')`，不是 trim），调用点必须按目录原文取值，且比较金额前先断言该行存在，否则目录改名会静默空通过。
+`readCardTileText(page, cardId)` 返回容器 `innerText`（空白折叠为单空格），是读取 `<span>` 标签、状态 `Badge`（`已冻结`/`已挂失`）与不可用提示的唯一途径。
+`CARD_LABEL` 只有 8 个键；`未关联账户`/`账户暂不可用`/`卡片不可用` 与 `卡片已冻结，暂不可用于消费（余额仍可查看）`/`卡片已挂失，暂不可用于消费（余额仍可查看）` 不在其中，须直取 `lib/i18n/messages/business.zh-CN.json` 或读 tile 文本。
+
+FROZEN/LOST 的 `LINKED` 卡照常渲染真实 `账户余额` + `可用余额`（`banking-sdk/card.ts#toCardView` 只看 `settlement.status`），不可用性只由状态与提示 `Badge` 表达。
+`assertLinkedAccountTileLabels(rows, label, status = 'LINKED', tileText?)` 不检查 `usable`，因此对冻结/挂失卡仍通过；`assertCreditTileLabels` 断言信用额度行存在且无账户余额行；`assertNoRetiredCardLabels` 断言废弃标签缺席。
+`readCardChainMoneySnapshot(baseUrl)` 是唯一的 `/api/dashboard` 原语（`Promise.all([fetchDashboardSummary, fetchLedger])` → `{ checkingBalance, ledger }`），配合 `assertCardChainMoneyUnchanged(before, after, label)`。
+`helpers.ts#fetchDashboardSummary` 返回 `getJson` 的 `envelope.data`，其 `DashboardView` 只是路由 `DashboardSummary` 的收窄子集；三方核对需就地放宽类型而不是依赖该别名。
+
+`completeConfirmationPanel(page, label, code='123456')`：无 MFA 卡时先 `clickConfirm(page, 90_000)`，再 `waitForMfaCard(page, 120_000)`，最后 `submitMfa(page, code, 60_000)`。
+`openConsumeDialog` 对 `usable === false` 的卡必然超时（按钮 `disabled`），不得用于冻结/挂失卡。
+
+`/cards` 的全部页脚按钮（`data-card-add`/`data-card-refresh`/`data-card-consume`/`data-card-delete`）在 `CardManager` 首帧客户端刷新完成前被同一个 `disabled = busy || refreshing || !loaded`（`app/cards/CardManager.tsx:181`）整体禁用；`gotoCards` 只等水合，因此该帧读到的按钮状态描述的是刷新而非卡片，判定按钮状态前必须等到 `[data-card-add] button` 解除 `disabled`。
+逐卡的 `data-card-consume` 在该三元组之外只追加 `!card.usable`（`CardManager.tsx:191`，`usable = status === 'ACTIVE'`），因此**消费入口与卡类型无关**：任何 ACTIVE 卡（DEBIT/CREDIT/VIRTUAL）都渲染可用的消费入口，非 ACTIVE 才不可用；不要假设「只有虚拟卡能消费」。
+`live-debit-card.e2e-helper.ts#assertConsumeEntry` 就是这个模式（先 settle 再读，`consumeButtonEnabled` 在按钮未渲染时直接失败），同一张卡要求「启用 → 停用」翻转才算非空断言。
+
+新场景注册：加入 `live-acceptance.e2e.ts` 的 `const SCENARIOS`（现止于 `lG`），`run` 用 `withPage(ctx.browser, …, { label })` 包裹并注入 `drive: (turns) => driveRedTool(page, ctx.baseUrl, turns)`、`captureShot: captureLive`。
+`LIVE_SCENARIOS` 过滤 id；选 `2` 连带 `2p`；场景 `7` 不在数组内且恒最后运行。
+`E2E_BROWSER_PATH` 在 `helpers.ts#resolveBrowserExecutable` 中优先命中（路径存在即用），否则回退常见 Chrome/Edge 路径。
 
 ## 结果解释
 

@@ -58,6 +58,11 @@ JSON 金额使用十进制字符串。
 比例、数量与未结算估值使用 `decimal.ts`。
 `moneyToChartNumber` 只用于图形坐标。
 `formatDecimalCNY` 在展示边界把金额按 HALF_UP 舍入到两位小数，并保留符号与千分位。
+展示字符串形状（两者一致）：`¥1,234.50`；负数为 `-¥1,234.50`（符号在货币符号之前）；千分位只用 ASCII 逗号，恰好两位小数，不出现空格或分隔符变体。
+`money.ts#formatCNY`（`:79-84`）接受十进制文本或 bigint 分，先用 `centsToMoney` 取绝对值文本、只对整数部分加千分位，再拼 `${sign}${CNY}${grouped}.${fraction}`，`CNY = '¥'`（`:7`）；非法输入抛 `VALIDATION`。
+`decimal.ts#formatDecimalCNY`（`:72-76`）先 `decimalText` 归一化再 `toFixed(2, ROUND_HALF_UP)`，形如 `-¥0.00` 的负零（输入为极小负数）也会带负号。
+`money.ts#centsToMoney` 只产出无符号、无千分位的规范十进制文本（如 `-1234.50`），用于 JSON 与存储边界，不是展示格式。
+本目录没有 `formatMoney`；`decimal.ts` 不经 `index.ts` 再导出，调用方需直接 `import from './decimal'`。
 命令金额字段（`contracts/command.ts` 的 `MONETARY_FIELDS`）在入参归一化时转为十进制字符串：`amount`、`creditLimit`、`monthlyLimit`、`expectedRedemptionAmount`、`redeemAmount`。
 
 `date.ts` 按北京时间构造和格式化日期。
@@ -67,6 +72,25 @@ JSON 金额使用十进制字符串。
 日期范围通常为半开区间；以调用接口为准。
 
 ## 展示脱敏（`mask.ts`）
+
+## 货币展示文本（`money.ts` / `decimal.ts`）
+
+两个格式化器的输出形状是界面与 Playwright 断言的契约，输出形态统一为 `^[+-]?¥[\d,]+\.\d{2}$`。
+`CNY = '¥'`（`money.ts:7`，U+00A5，非全角 `￥`），符号在数字前、整数分组用半角逗号、小数固定两位。
+`formatCNY(amount: MoneyInput | bigint)`（`money.ts:79-84`）：`bigint` 实参表示分（minor units），`string` 实参表示元的十进制文本。
+输出 = 负号（仅当 minor < 0）+ `¥` + 三位分组整数 + `.` + 两位小数；正数不加 `+`。例：`0n`/`'0'` → `¥0.00`，`'-0.20'` → `-¥0.20`，`'-0'` 归一为 `0n` 故为 `¥0.00`，`'90071992547409.93'` → `¥90,071,992,547,409.93`。
+`formatCNY` **不做舍入**：`parseExactMinor`（`money.ts:18-23`）只接受最多两位小数，`'1.005'` 之类直接抛 `VALIDATION`。
+`formatCNY` 的字符串入参会先剥除 `¥`/`￥`/`,`/空白（`money.ts:13`），所以 `'¥1,234.5'` 合法。
+`bigint` 入参绕过 `assertMinorUnits`，字符串入参经 `moneyToCents` 执行有符号 64 位范围校验。
+`MoneyInput = string`（`money.ts:6`），`MoneyAmount = string`（`money.ts:4`）——金融输入与 JSON 边界从不使用 JavaScript `number`。
+`formatDecimalCNY(input: string)`（`decimal.ts:72-76`）：先 `decimalText` 校验，再 `toFixed(2, ROUND_HALF_UP)` 一次性舍入，然后分组。
+输出 = 负号（`value.isNegative()`，符号取自原值）+ `¥` + 三位分组整数 + `.` + 两位小数。
+关键差异：`formatDecimalCNY` 会舍入并保留「负零」符号，`'-0.000001'` → `-¥0.00`；`formatCNY` 永不产出 `-¥0.00`。
+`formatDecimalFixed(input, digits)`（`decimal.ts:83-85`）输出无货币符号、无分组，固定 `digits` 位（份额 6 位、净值 4 位）。
+显式 `+` 前缀由组件加，不是格式化器产出：`components/ui/Money.tsx:16` 与 `components/ui/DecimalMoney.tsx:16` 仅在 `signed` 且严格为正时前置 `'+'`。
+`compareDecimal(left, right)`（`decimal.ts:107-114`）返回 `-1 | 0 | 1`，按对齐后的整数系数比较，接受 `string | number | bigint`，`number` 会拒绝超出分精度的值（`decimal.ts:90`）。
+`DecimalAmount = string`（`decimal.ts:6`）；`FinancialDecimal` 精度 120 位、默认 `ROUND_HALF_UP`（`decimal.ts:9`）。
+断言锚点见 `tests/CONTEXT.md`。
 
 `lib/mask.ts` 是展示脱敏的唯一实现，零依赖，任何层都直接复用它。
 `maskPhone` 保留前 3 位与末 4 位：长度 ≤ 3 全掩码为 `****`，长度 4–7 为前 3 位加 `****`，长度 > 7 为前 3 位 + `****` + 末 4 位；`null` / `undefined` / 非字符串 / 空串返回空串，缺省值不会渲染成星号，且不做 trim。

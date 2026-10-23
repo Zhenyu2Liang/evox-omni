@@ -167,6 +167,15 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 本目录没有任何「用户可见文本/事件 message 不含内部标记」的断言：`__SECURITY_BLOCK__` 在 `tests/app/*.ts` 零匹配（只出现在本文件）、`decisionKind` 零匹配、无堆栈/原始 JSON「不含」断言；`not.toContain` 只用于 MFA 码、隐私字段与「已不 surfaced 的 actionId」。
 内部标记的不含断言在 `tests/unit/`（`lib/public-text.test.ts`、`security/mfa-failure-contract.test.ts`、`agent/turn-security-event.test.ts`，见 `tests/unit/CONTEXT.md`）。
 
+## 金额与货币文本的断言形态
+
+本目录零 `formatCNY(`、零 `formatDecimalCNY(`：没有任何用例断言渲染后的货币字符串。
+`¥`（U+00A5）在本目录只出现在三种非断言位置：JSDoc/行注释里的夹具金额（如 `¥23,580`、`¥5,050`）、`it(...)`/`describe(...)` 标题、以及 `expect(actual, '...¥...')` 的第二参数失败消息（`actions-http.test.ts:317`、`cancel-during-authorization-http.test.ts:226`/`:289`、`cancel-safety-http.test.ts:235`/`:433`、`ledger-consistency-http.test.ts:379`、`mfa-escalation-upgrade-http.test.ts:212`/`:225`/`:248`、`mfa-lock-http-contract.test.ts:306`、`security-workflow-http.test.ts:218`/`:231`/`:1061`）。
+金额一律按十进制文本（`'2000.00'`、`'5050.51'`、`'1200.12'`）或 `BigInt` 最小单位（`2358000n`、`200050n`、`2356000n`）断言，从不经展示格式化器往返。
+`currency: 'CNY'` 在本目录只是数据字段值（`card-consume-http.test.ts`、`card-links-http.test.ts`），不是渲染输出。
+真正的渲染货币字面量锚点只在 `tests/integration/handoff-*` 之外三处（`frontend-followup-fixes.test.ts:44`/`:91`/`:116`、`frontend-review-fixes.test.ts:90`、`task-feature-hardening.test.ts:122`），格式化器自身的字面量夹在 `tests/unit/financial-values.test.ts`、`tests/unit/planner/decimal-format.test.ts`、`tests/unit/planner/chart-presentation.test.ts`。
+浏览器文本断言（Playwright 等）应从后两类文件取字面量，不要从本目录推导。
+
 ## 规格文件清单
 
 | 文件 | 覆盖 |
