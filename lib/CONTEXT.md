@@ -60,7 +60,7 @@ JSON 金额使用十进制字符串。
 `formatDecimalCNY` 在展示边界把金额按 HALF_UP 舍入到两位小数，并保留符号与千分位。
 展示字符串形状（两者一致）：`¥1,234.50`；负数为 `-¥1,234.50`（符号在货币符号之前）；千分位只用 ASCII 逗号，恰好两位小数，不出现空格或分隔符变体。
 `money.ts#formatCNY`（`:79-84`）接受十进制文本或 bigint 分，先用 `centsToMoney` 取绝对值文本、只对整数部分加千分位，再拼 `${sign}${CNY}${grouped}.${fraction}`，`CNY = '¥'`（`:7`）；非法输入抛 `VALIDATION`。
-`decimal.ts#formatDecimalCNY`（`:72-76`）先 `decimalText` 归一化再 `toFixed(2, ROUND_HALF_UP)`，形如 `-¥0.00` 的负零（输入为极小负数）也会带负号。
+`decimal.ts#formatDecimalCNY`（`:87-91`）先 `decimalText` 归一化再 `toFixed(2, ROUND_HALF_UP)`，形如 `-¥0.00` 的负零（输入为极小负数）也会带负号。
 `money.ts#centsToMoney` 只产出无符号、无千分位的规范十进制文本（如 `-1234.50`），用于 JSON 与存储边界，不是展示格式。
 本目录没有 `formatMoney`；`decimal.ts` 不经 `index.ts` 再导出，调用方需直接 `import from './decimal'`。
 命令金额字段（`contracts/command.ts` 的 `MONETARY_FIELDS`）在入参归一化时转为十进制字符串：`amount`、`creditLimit`、`monthlyLimit`、`expectedRedemptionAmount`、`redeemAmount`。
