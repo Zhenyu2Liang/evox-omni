@@ -71,6 +71,16 @@ const SEEDED_BALANCE = normalizeMoney(CHECKING.balance);
 const TRANSFER_AMOUNT = '600';
 
 /**
+ * Explicit budget for the tests that drive real `POST /api/chat` turns.
+ * One chat turn costs ~1.4s and ~101 sequential interactive SQLite transactions
+ * (one transaction per Pi event), and the body has no internal deadline, so its wall
+ * time scales with per-statement latency. Measured: 1.9s standalone, 2.6s inside a
+ * 111-file batch; a 12x latency spike on a shared host produced `timed out in 20000ms`.
+ * Rationale and the full measurement set live in `tests/app/CONTEXT.md`.
+ */
+const CHAT_DRIVEN_TEST_TIMEOUT_MS = 60_000;
+
+/**
  * The route's JSON envelope — the app-layer transport shape (NOT a frozen `@/lib/contracts` type).
  * Declared structurally so specs can narrow `ok` / `data` / `error` without importing app privates.
  */
@@ -287,7 +297,7 @@ describe('[integration] POST /api/actions/[id]/confirm — two YELLOW parks in O
     expect(await checkingBalance()).toBe(subtractMoney(SEEDED_BALANCE, TRANSFER_AMOUNT));
 
     expectNoMfaLeak('Scenario 1 / it 1', resA.data, resA.data?.data, resB.data, resB.data?.data);
-  });
+  }, CHAT_DRIVEN_TEST_TIMEOUT_MS);
 });
 
 describe('[integration] POST /api/actions/[id]/verify — completing an escalated transfer', () => {
@@ -340,7 +350,7 @@ describe('[integration] POST /api/actions/[id]/verify — completing an escalate
       res.data,
       res.data?.data,
     );
-  });
+  }, CHAT_DRIVEN_TEST_TIMEOUT_MS);
 });
 
 describe('[integration] POST /api/actions/[id]/verify — a WRONG code on an escalated transfer', () => {
@@ -372,7 +382,7 @@ describe('[integration] POST /api/actions/[id]/verify — a WRONG code on an esc
     expect(rowB.riskLevel).toBe('RED');
 
     expectNoMfaLeak('Scenario 1 / it 3', escalated, res.data, res.data?.data);
-  });
+  }, CHAT_DRIVEN_TEST_TIMEOUT_MS);
 });
 
 /* ============================================================================================== *
@@ -1033,7 +1043,7 @@ describe('[integration] demo identity — browser hints never select foreign res
       probe.data,
       probe.data?.data,
     );
-  });
+  }, CHAT_DRIVEN_TEST_TIMEOUT_MS);
 });
 
 /* ============================================================================================== *
@@ -1090,7 +1100,7 @@ describe('[integration] POST /api/security/reset — the AUDITED unlock gate (IS
     expect(await countResetEvents(sessionId)).toBe(0);
 
     expectNoMfaLeak('Scenario 5 / it 10', res.data, res.data?.data);
-  });
+  }, CHAT_DRIVEN_TEST_TIMEOUT_MS);
 
   it('11 — while LOCKED, a WRONG verificationCode is REFUSED (423 CIRCUIT_OPEN) and leaves the lock intact', async () => {
     const { sessionId } = await lockOwner();
@@ -1106,7 +1116,7 @@ describe('[integration] POST /api/security/reset — the AUDITED unlock gate (IS
     expect(await countResetEvents(sessionId)).toBe(0);
 
     expectNoMfaLeak('Scenario 5 / it 11', res.data, res.data?.data);
-  });
+  }, CHAT_DRIVEN_TEST_TIMEOUT_MS);
 
   it('12 — while LOCKED, the CORRECT verificationCode unlocks (200, audited exactly once, per owner)', async () => {
     const { sessionId } = await lockOwner();
@@ -1137,7 +1147,7 @@ describe('[integration] POST /api/security/reset — the AUDITED unlock gate (IS
     expect(resets[0]!.userId).toBe(DEMO_USER_ID);
 
     expectNoMfaLeak('Scenario 5 / it 12', res.data, res.data?.data);
-  });
+  }, CHAT_DRIVEN_TEST_TIMEOUT_MS);
 
   it('13 — while NOT locked, a body-less reset SUCCEEDS (the code is required only while locked)', async () => {
     // A fresh session on a freshly-seeded DB: no breaker state ⇒ nothing to unlock ⇒ no code needed.
