@@ -248,6 +248,20 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 所有语句共用 `lib/db/serialized-connection.ts` 的 FIFO 锁，交互事务从 `BEGIN` 到 `COMMIT` 全程持有该锁，因此 park 事务会阻塞同进程其它请求；等待上限由 Prisma `maxWait`/`timeout` 10 000 ms 与适配器 `timeout` 10 000 ms 界定（`lib/db/database.ts:23-25`）。
 三个 `$transaction` 调用点（`security-gateway.ts:969`/`:1278`/`:1348`）都不传 options，没有 CAS 失败重试循环，也没有 `$queryRaw`/PRAGMA。
 
+### confirm / verify 路径的往返（authorizeAction / authorizeWithMfa / verify）
+
+`authorizeAction`（`security-gateway.ts:1458`）顺序读：`getPendingAction` 1 → `assertOwnership` 的 `getSession` 1（`:390`）→ 静态策略升级分支 `pendingAction.updateMany` 1 + 重读 `getPendingAction` 1（`:1487-1493`，仅当持久化档位低于当前 RED）→ `manualReview.findFirst` 1（`:1497`）→ `isLocked` 2 读（`:1504`）；熔断分支再 `persistLockedAction` 1 次 CAS 写（`:1105-1108`）。
+静态 YELLOW 确认：`claimPendingAction({from:['pending'],to:'confirmed'})`（`:1520`）因 `to==='confirmed'` 且未传 client 而**自开一个** `$transaction`（`lib/db/repositories/pendingAction.ts:260`），内含无副作用 `updateMany` + `findUnique(taskId)` + `manualReview.findFirst` + CAS 约 4 条语句：一次确认会在 park 事务之外再叠加一个独立事务。
+RED：`authorizeWithMfa`（`:1139`）先 `getMfaChallenge` 1；挑战缺失/过期/摘要变化时 `issueChallenge` 3–4 条写（`mfa.ts:155`）；未提交验证码或刚重签即返回 `awaiting_mfa` 提示态，不再产生语句。
+带正确码：`mfa.verify`（`mfa.ts:215`）约 10 条（`getMfaChallenge` 1 + `getPendingAction` 1 + `isLocked` 2 + `mfaChallenge.update` 1 + `recordSuccess` 的 owner 解析 2 加写 1 + 再 `isLocked` 2），随后 `prisma.$transaction`（`:1278`）内 `assertActionMayStart` 3 + CAS 1 + 可选 `agentTask.findUnique` ≈ 4–5。
+带错误码额外约 8–9 条：`incrementMfaAttempts` 1 + `recordFailure` 事务（owner 解析 2 + upsert 1 + 首次 trip 的事件 1）+ 再次 `resolveBreakerOwner` 2 + `MFA_FAILURE` 事件 1 + 条件性 `updateMfaChallengeStatus` 1 + `attemptState` 1。
+合计一次正确码 verify ≈ 20 条往返、一次错误码 ≈ 24–26 条；其中只有 claim 那 4–5 条属于本层的交互事务，其余每条各自单独获取 `lib/db/serialized-connection.ts` 的 FIFO 锁。
+MFA 尝试梯度是**跨请求**的：3 次错误码等于 3 个独立 `POST /api/actions/[id]/verify`，单次请求内不重试、不 sleep、不轮询；`RESET_COOLDOWN_MS = 60_000`（`lib/constants.ts:17`）只在 `circuit-breaker.ts:237` 比较，未到冷却期立即抛 `CIRCUIT_OPEN`（HTTP 423），从不等待。
+`execution-policy.ts#assertSessionMayWrite`（`:13`）读 `agentSession.findUnique` 1 + `isLocked` 2：在 SDK 写事务内必须传入该事务 client，否则这 3 条读会排到自持唯一连接的事务后面，直到 `timeout: 10000` 才失败。
+`recovery-authorization.ts` 不在 confirm/verify 路由上；其 `expiresAt` 判定（`:61-62`，`Date.now()` 真实时钟）只比较不等待，`:37` 的事务先以 `confirmed` 认领作为写入序列化点，`:73` 的 `issueChallenge` 在提交之后。
+`incidents.ts` 的 `SIGNAL_POLICY` 窗口（`:8-11`，600000/300000 ms）只是 `riskSignal.count` 的 `createdAt >= now - windowMs` 过滤条件，不是定时器。
+本层每条语句的硬上限来自下游而非本层：适配器 `timeout: 10000` 与 Prisma `maxWait`/`timeout: 10000`（`lib/db/database.ts:23-25`）；本层不引入任何额外的等待、重试或轮询，因此延迟完全等于「语句条数 × 单条耗时 + FIFO 队列等待」，后者无上限。
+
 ## 已知边界
 
 `lib/db/repositories/pendingAction.ts#setPendingActionStatus` 仍是无条件状态写入原语，本层与 `agent/` 都不再调用它（别名 `updatePendingActionStatus` 同样无人使用），只剩测试引用；状态写入一律走 `claimPendingAction`。
