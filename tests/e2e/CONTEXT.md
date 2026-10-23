@@ -183,7 +183,7 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 锁定态的 DOM 钩子（写锁定断言时唯一可信的来源）：可操作停泊区 `data-approval-request="true"` + `data-action-id` + `data-kind`（`components/chat/ApprovalRequest.tsx:23-25`）；
 `MfaCard.tsx:74` 的 `<p role="status">已锁定</p>` 与 `:76-80` 的 `[data-mfa-locked="true"]` 只在停泊区收到终态 `status` 时渲染，而停泊区在终态到达的同一渲染内卸载，因此二者都不是可断言的锁定钩子；
 锁定文案 `chat.error.actionLocked` 由只读回执、system 气泡与工具行承载，停泊区在锁定时已不存在；
-尝试次数行 `MfaCard.tsx:108-114` 在 `attempts >= maxAttempts` 时由 `cards.mfa.failedAttempts`（`chat.zh-CN.json:137`）翻成 `cards.mfa.failedAttemptsLimit`（`:138`），第 3 次提交必须断言 limit 变体；
+`cards.mfa.failedAttemptsLimit` 要求同一停泊区活到 `attempts >= maxAttempts`，锁定路径上不可达，停泊区可见的尝试次数只有「验证失败，已尝试 N 次。」（`cards.mfa.failedAttempts`）；
 只读回执钩子 `data-approval-history="true"` + `data-action-id` + `data-status`（`components/chat/cards/ApprovalRecord.tsx:50-51`）与 `data-approval-locked="true"`（`:70`），`data-status="locked"` 时徽章是 `chat.approval.status.locked`「验证已锁定」（`:16`）；
 锁定后 `MfaCard.tsx:59`/`:71`/`:90-106` 同时撤掉 footer 与输入框，因此 `SELECTORS.mfaInput` 与「验证」按钮计数都归 0。
 `submitMfa` 取 `SELECTORS.mfaInput` 的 `.last()` 填码再点「验证」（`helpers.ts:1168-1173`）；`waitForStatusText` 扫全页 `[role="status"]` 做去空白子串匹配（`helpers.ts:1194-1202`）。
