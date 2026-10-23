@@ -7,6 +7,7 @@ classify user intent from words, rewrite model archives, authorize a banking act
 or derive execution evidence from prose. The typed turn declaration updates the
 buffer's advice and protocol-example preferences through the runtime callback.
 This node is presentation only: it implements no banking tools and no card tooling or card-consumption/spend/purchase/pay/debit capability (card and account tools live in `../tools/`).
+It also has NO banking-fee concept: no fee argument, fee field, fee rule constant or fee wording (手续费/管理费/赎回费/费用) in any file — `ToolExecutionResult`, `PendingActionSummary` and card payloads are forwarded opaquely, and this node never computes or formats a monetary amount. Fee semantics live in `banking-sdk/`, `agent/tools/` and `agent/financial-response.ts`, never here.
 
 ## Ownership
 
