@@ -51,7 +51,7 @@
 ## 卡片展示（CardTile）不在本目录
 
 本目录没有用例导入 `components/banking/CardTile`；`renderToStaticMarkup` 覆盖的是聊天卡、审批/MFA 卡与解锁面板。
-仅有的两个 `components/banking/*` 导入是 `planner/tool-diagnostics.test.ts` 的 `AgentTaskTimeline` 与 `planner/investment-purchase-display.test.ts` 的 `InvestmentProductTile`。
+`components/banking/*` 的导入只有三处：`planner/tool-diagnostics.test.ts` 的 `AgentTaskTimeline`、`planner/investment-purchase-display.test.ts` 的 `InvestmentProductTile`、`planner/decimal-format.test.ts` 的 `HoldingFacts`（同一用例还渲染 `components/ui/DecimalMoney`）。
 `components/banking/card-account-display.ts` 的四个纯函数与 `components/chat/cards/CardsCard.tsx` 都没有单元用例。
 `CardTile` 自身不输出任何 `data-*`：`data-card-id`/`data-card-list`/`data-card-consume`/`data-card-delete` 由 `app/cards/CardManager.tsx:191` 的包裹层发出。
 展示文案真值在 `lib/i18n/messages/business.zh-CN.json:47-69`（类型 `debit`/`credit`/`virtual`，状态 `active`/`frozen`/`lost`/`pending`，`limit`/`available`/`monthlyLimit`、`replaced`、`linkedAccount`、`accountBalance`、`usableBalance`、`linkedAccountMissing`、`linkedAccountUntrusted`、`cardUnavailable`、`cardFrozenNotice`、`cardLostNotice`）。
