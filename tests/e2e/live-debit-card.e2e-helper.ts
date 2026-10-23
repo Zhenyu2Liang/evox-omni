@@ -28,6 +28,7 @@ import {
   errText,
   fetchPendingActions,
   getJson,
+  gotoAgent,
   submitChat,
   waitFor,
   waitForConfirmCard,
@@ -433,6 +434,24 @@ async function cardListText(page: Page): Promise<string> {
   return (await list.innerText()).replace(/\s+/g, ' ');
 }
 
+// --- page context ----------------------------------------------------------------------------------
+
+/**
+ * Put the page on `/agent` immediately BEFORE a chat-driving leg.
+ *
+ * WHY this exists: the chat composer (`textarea[data-chat-composer="true"]`) exists ONLY on `/agent`.
+ * This scenario deliberately hops between three surfaces — `/cards` (tile/entry reads), `/overview`
+ * (asset total) and `/agent` (the real model) — so driving the chat while still sitting on `/cards`
+ * or `/overview` hangs forever on `submitChat`'s composer wait and the failure looks like a model
+ * problem instead of a navigation bug. `gotoAgent` (which this wraps) waits for the composer to
+ * render AND hydrate, so the next `submitChat` cannot race the page. Never remove a call site: every
+ * leg below that calls `drive(...)`/`driveYellowTransfer(...)` is preceded by one, and the only
+ * exception is `applyVirtualCardViaAgent`, which navigates itself (see P2).
+ */
+async function openAgent(page: Page, baseUrl: string): Promise<void> {
+  await gotoAgent(page, baseUrl);
+}
+
 // --- YELLOW (confirm-only) transfer leg -------------------------------------------------------------
 
 /** The number of rendered actionable `确认` buttons (a YELLOW tool parks a confirm card, no MFA). */
@@ -646,6 +665,9 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
   const shotBaseline = await captureShot(page, 'lJ-baseline-cards');
 
   // ---- P2: a SECOND virtual card on the same account shares ONE balance, counted once -----------
+  // Page context: this leg drives the chat, but `applyVirtualCardViaAgent` navigates to `/agent`
+  // ITSELF (`live-virtual-card.e2e-helper.ts:498`), so no extra `openAgent` is needed here — and the
+  // tile reads below are re-entered through `gotoCards` because the leg ends ON `/agent`.
   const cardsAtStart = new Set(cards0.map((card) => card.id));
   const applied = await applyVirtualCardViaAgent(page, baseUrl, drive, {
     excludeCardIds: [...cardsAtStart],
@@ -702,6 +724,8 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
   const beforeTransfer = await readAccount();
   const debitsBefore = await readAccountDebits();
   const knownDebitIds = new Set(debitsBefore.map((row) => row.id));
+  // Page context: the previous block left the page on `/cards`, which has NO chat composer.
+  await openAgent(page, baseUrl);
   const sentTransfer = await driveYellowTransfer(page, baseUrl, TRANSFER_PROMPT, TRANSFER_NUDGES);
   const afterTransferMinor = beforeTransfer.balanceMinor - TRANSFER_AMOUNT_MINOR;
   const settled = await waitFor(
@@ -772,6 +796,9 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
   const shotOverview = await captureShot(page, 'lJ-transfer-overview');
 
   // ---- P4: freeze the DEBIT card — real balance stays visible, card explicitly unusable --------
+  // Page context: the `/overview` visit above replaced the composer-less page, so re-enter `/agent`
+  // before the freeze leg drives the chat.
+  await openAgent(page, baseUrl);
   const sentFreeze = await drive(FREEZE_TURNS);
   const cards3 = await waitFor(
     async () => {
@@ -824,6 +851,8 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
   // ---- P5: report the seed VIRTUAL card lost — balance visible, card explicitly unusable --------
   const lostTail = (cardById(cards3, VIRTUAL_CARD_ID)?.numberMasked ?? '').replace(/\D/g, '').slice(-4);
   if (lostTail.length !== 4) fail(`无法从 ${VIRTUAL_CARD_ID}.numberMasked 取到 4 位尾号：${cardById(cards3, VIRTUAL_CARD_ID)?.numberMasked}`);
+  // Page context: the freeze block above left the page on `/cards` for the tile/entry assertions.
+  await openAgent(page, baseUrl);
   const sentLost = await drive([
     `尾号${lostTail}的虚拟卡丢失了，请正式挂失，我确认不可撤销。`,
     '确认，请正式挂失',
