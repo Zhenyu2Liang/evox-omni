@@ -83,7 +83,7 @@ JSON 金额使用十进制字符串。
 `formatCNY` 的字符串入参会先剥除 `¥`/`￥`/`,`/空白（`money.ts:13`），所以 `'¥1,234.5'` 合法。
 `bigint` 入参绕过 `assertMinorUnits`，字符串入参经 `moneyToCents` 执行有符号 64 位范围校验。
 `MoneyInput = string`（`money.ts:6`），`MoneyAmount = string`（`money.ts:4`）——金融输入与 JSON 边界从不使用 JavaScript `number`。
-`formatDecimalCNY(input: string)`（`decimal.ts:72-76`）：先 `decimalText` 校验，再 `toFixed(2, ROUND_HALF_UP)` 一次性舍入，然后分组。
+`formatDecimalCNY(input: string)`（`decimal.ts:87-91`）：先 `decimalText` 校验，再 `toFixed(2, ROUND_HALF_UP)` 一次性舍入，然后分组。
 输出 = 负号（`value.isNegative()`，符号取自原值）+ `¥` + 三位分组整数 + `.` + 两位小数。
 关键差异：`formatDecimalCNY` 会舍入并保留「负零」符号，`'-0.000001'` → `-¥0.00`；`formatCNY` 永不产出 `-¥0.00`。
 `formatDecimalFixed(input, digits)`（`decimal.ts:83-85`）输出无货币符号、无分组，固定 `digits` 位（份额 6 位、净值 4 位）。
