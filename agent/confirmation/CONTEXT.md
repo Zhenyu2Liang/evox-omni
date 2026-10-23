@@ -117,5 +117,6 @@ MFA 连续错误触发会话熔断（`security/mfa.ts` `verify` → `security/se
 
 - 一切拒绝文案必须经 `lib/public-text.ts`（`safePublicText`/`securityNotice`/`isInternalDiagnostic`）或 `publicRefusalMessage` 产出，拒绝同时携带类型化 `code`/`failure`；不要把网关句、状态字面量、载荷、JSON、堆栈塞进 `message`。
 - 新增状态判断请使用 `agent/action-status.ts` 的谓词，勿写本地字面量比较。
+- 本层不做任何金额运算：没有费率/手续费/费用字段、没有金额格式化，也没有 `fee`/`feeAmount`/`REDEMPTION_FEE_RULE` 之类的目录；`ToolExecutionResult`/`GatedToolOutcome` 的 `data` 只是透传，金额计算与费用口径都在 `banking-sdk/`。改动金额语义时不必在此目录寻找。
 - 不要新增 `action_settled` 的服务端发出者；它由浏览器客户端发出。
 - 修改结算来源时，`from` 必须显式且合法，`locked` 永不作来源；CAS 落败只如实上报持久化状态。
