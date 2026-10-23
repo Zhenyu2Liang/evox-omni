@@ -23,6 +23,7 @@
 | `internal-text.ts` | 纯文本形状判定 `isInternalDiagnostic` 与 `publicSafeMessage` |
 | `errors.ts` | `ErrorCode`、`AppError`（含构造期净化的 `publicMessage`）与 `Result` |
 | `prisma-cli-env.ts` | Prisma 命令环境与可执行文件解析 |
+| `i18n/` | 消息目录 `messages/{app,chat,business,pages}.{zh-CN,en}.json`、`translate` 占位符插值（`{name}`；缺参数时原样保留占位符）与展示本地化，见 [i18n/CONTEXT.md](i18n/CONTEXT.md) |
 | `db/` | 客户端、事务上下文与仓储 |
 
 ## 运行配置（`config.ts`）
@@ -37,6 +38,16 @@
 `GET /api/health` 的 `llmMode` 直接取自 `getConfig().llmMode`，永不写死。
 测试环境三处都强制 `LLM_MODE=mock`：`vitest.config.ts` 的 `test.env`、`agent/vitest.agent.config.ts` 的 `test.env`、`tests/setup.ts`；`tests/e2e/acceptance.e2e.ts` 在入口设 `mock`/`faux`，`tests/e2e/live-acceptance.e2e.ts` 设 `live` 与 `deepseek`。
 `tests/unit` 下目前没有专门覆盖 `getConfig()` 的单元测试文件。
+
+## 演示常量（`constants.ts`）
+
+`MFA_CODE = '123456'` 是演示唯一可用的验证码。
+`MFA_MAX_ATTEMPTS = 3` 是熔断前允许的连续验证失败次数；界面把同一个常量作为 MFA 卡片的 `maxAttempts` 传入。
+`RESET_COOLDOWN_MS = 60_000` 是熔断后必须凭验证码解锁的冷却窗口（`security/circuit-breaker.ts`）。
+`DAILY_TRANSFER_LIMIT = '1000.00'`（日累计超过即升级为 RED）、`ANOMALY_AMOUNT_THRESHOLD = '5000.00'`（可疑消费阈值）。
+`DEMO_NOW = 2026-09-25T12:00:00+08:00` 是固定演示时刻，所有相对日期逻辑默认取它。
+这些常量是编译期字面量，没有任何 env 或配置覆盖；服务端、界面与测试都必须复用同一导出，不要各自硬写 `3` / `'123456'`。
+`RISK_LABEL` 给出三档等级的中文标签（`🟢 绿色` / `🟡 黄色` / `🔴 红色`），只用于展示。
 
 ## 金融与时间约定
 
@@ -114,6 +125,15 @@ JSON 金额使用十进制字符串。
 `SecurityFailure` 的消费点只用字段、不做文案匹配：`agent/turns/events.ts` 用 `failure.code` → `errorCode`、`attemptsLeft`/`attemptsUsed`/`maxAttempts` → `errorParams`，并在 `security_event` 上只带 `code`/`reason`/`actionId`/`attemptsLeft`/`maxAttempts`（不带 `message`）；`agent/confirmation/contracts.ts` 与 `app/api/_lib/types.ts` 只透传可选 `failure`；`app/api/_lib/locked-action.ts`（`code`/`reason`/`actionId`）与 `app/api/security/route.ts`（只 `code`+`reason`）自行构造；`channels/weixin/banking-client.ts` 只声明不读，由 `bridge.ts` 交给 `securityNotice`；`components/chat/actions.ts` 用局部子集（`code?: string`，无 `actionId`/`attemptsUsed`）；`tests/helpers/scenario.ts` 复现与生产相同的投影。
 `lib/db/repositories/pendingAction.ts` 不对状态做枚举校验：写入 API 多声明为 `string`（`CreatePendingActionInput.status?`、`updatePendingActionStatus`），只有 `claimPendingAction` 的 `from`/`to` 用 `PendingActionStatus`、`claimPendingActionLease`（`pendingAction.ts:206`）用 `OPEN_PENDING_ACTION_STATUSES` 过滤；`locked` 因此是合法 CAS 目标，也是 `renewLockedMfaChallenges`（`:363`）里 `MfaChallenge.status === 'locked'` 的过滤值；`needs_reconciliation` 在该文件不出现，只能经通用 `setPendingActionStatus` 写入，无专门处理。
 
+## 待处理操作视图（`PendingAction` / `PendingActionSummary`）
+
+`PendingAction`（`contracts/security.ts:126-141`）= `id`、`sessionId`、`toolName`、`args`、`tier`、`requiresMfa`、`status: PendingActionStatus`、`summary: PendingActionSummary`、可选 `userRequest`、可选 `intent`、`createdAt`、`updatedAt`。
+`PendingAction` **没有**验证尝试计数（不存在 `mfaAttempts` 字段）、**没有** `preview`、也**没有**顶层 `amount`；摘要以 `summary` 承载。
+`PendingActionSummary`（`:115-124`）= 可选 `actionId`、`title`、`toolName`、`tier`、`fields: Array<{label, value}>`、可选 `amount`、`requiresMfa`、可选 `mfaHint`。
+`PendingActionSummary` **没有** `status` / `message`：终态是界面（等 `action_settled`）自己加到摘要对象上的扩展字段，不是本目录的契约。
+验证剩余次数只出现在两处：`ToolEventView.errorParams.attemptsLeft`（`contracts/agent.ts`）与 `SecurityFailure` / `SecurityNoticeInput` 的 `attemptsLeft` / `maxAttempts`（`contracts/security.ts`、`public-text.ts`），不在 `PendingAction` 上。
+`AgentStreamEvent`（`contracts/agent.ts:90-114`）没有 `notice` 变体：与 MFA/锁定相关的只有 `confirmation_required`、`mfa_required`（`actionId` + `hint?` + `action?`，无 `status`）、`action_settled`（`actionId` + `status: PendingActionStatus` + `message?`，面板靠它关闭）、`security_event`（`kind: string` 为自由字符串，另有 `code?`/`reason?`/`actionId?`/`attemptsLeft?`/`maxAttempts?`/`message?`，`message` 从不被渲染）、`card`（`ChatCard` 的 `mfa` / `confirmation` / `error` 变体）与 `error`。
+
 ## 公开文本漏斗（`public-text.ts`）
 
 `isInternalDiagnostic(text: string | undefined)` 定义在 `internal-text.ts`（`:33-40`）、由 `public-text.ts` 重新导出以保持既有 `@/lib/public-text` 导入路径，是唯一的内部诊断判定：非字符串或 `trim()` 后为空 → `false`；命中任一条件 → `true`：含 `__SECURITY_BLOCK__`（`:37`，常量 `:17`，跨层不 import 以避免循环）、`trim` 后精确等于 `undefined`/`null`/`[object Object]`（`:20`/`:38`）、匹配 `/\{\s*"|":/`（原始 JSON 片段，`:23`）、匹配栈帧或异常头正则 `/\n\s+at\s|[A-Za-z]*Error:/`（`:26`）；它刻意不是业务文案白名单，`Insufficient funds: …` 一类正常业务消息仍判为可渲染。
@@ -126,6 +146,7 @@ JSON 金额使用十进制字符串。
 锁定文案由此分成三段：`chat.error.actionLocked`（`securityNotice` 的终止文案）、`chat.approval.status.locked`（「验证已锁定」）、`cards.terminal.locked`（「已锁定」），恢复指引在 `pages.security.title`（「安全中心」）与 `pages.security.unlockDescription`（「连续验证失败后，高风险操作保持锁定。」）。
 `securityNotice(failure, t)`（`public-text.ts:91-94`，签名只有 `failure` 与 `t`，无 fallback 参数）是 `securityNoticeKey(failure)` 与 `securityNoticeParams(failure)` 的组合，完全按 TYPED 字段判定，`securityNoticeKey`（`:67-82`）的分支顺序为：`code==='MFA_LOCKED' || reason==='mfa_attempts_exhausted'` → `chat.error.actionLocked`；`reason==='mfa_code_invalid' || code==='MFA_FAILED'` → `chat.error.verificationRemaining {count: attemptsLeft ?? 0}`；`code==='MANUAL_REVIEW_HOLD' || reason==='manual_review_hold'` → `chat.error.manualReviewHold`；`code==='CIRCUIT_OPEN' || reason==='circuit_open' || reason==='mfa_session_locked'` → `chat.error.securityLocked`；其余（含 `failure === undefined`、`denied`、任何未识别的 `code`/`reason` 字符串）一律 `chat.error.securityDenied`。
 `SecurityNoticeInput` 的 `code`/`reason`/`kind` 声明为 `string`（不是 `ErrorCode`/`SecurityFailureReason`），未识别的取值因此静默落到 `chat.error.securityDenied`。
+`CONFLICT` 在 `securityNoticeKey` 里没有分支：把 `{code:'CONFLICT'}` 交给 `securityNotice` 得到的是 `chat.error.securityDenied`；`CONFLICT` 只在 `PUBLIC_ERROR_CODES`（`tool-feedback.ts:12`）里映射到 `chat.error.stateChanged`，因此只有显式传 `errorCode` 的 `publicToolError`/`publicErrorMessage` 才会渲染「业务状态已变化。请刷新并核对原操作卡片。」。
 `securityNoticeKey`/`securityNoticeParams` 一并导出，让所有层共用同一映射；`securityNoticeParams` 只在 `chat.error.verificationRemaining` 时给出 `{count: attemptsLeft ?? 0}`，否则 `undefined`。
 `SecurityNoticeInput` 是导出的接口（`code`/`reason`/`kind`/`attemptsLeft`/`maxAttempts`）；`kind` 与 `maxAttempts` 只声明、从不读取（`kind` 仅由调用方用于分流），依赖它们产生新文案前必须先改 `securityNotice` 本体。
 `mfa_code_invalid`/`MFA_FAILED` 若未带 `attemptsLeft` 会渲染成「剩余 0 次」，因此调用方应始终转发 `attemptsLeft`。
@@ -146,3 +167,8 @@ JSON 金额使用十进制字符串。
 - 意图声明与计划校验入口见 [agent/CONTEXT.md](../agent/CONTEXT.md)。
 
 开发命令见 [development.md](../docs/cn/development.md)。
+
+## Notes for Agents
+
+工作区检出的 CONTEXT.md 是 CRLF（`git ls-files --eol` 显示 `w/crlf`），跨行的 `edit_context` 锚点会匹配失败；优先用单行锚点，或把整段替换成单行。
+消息目录里中文文案是真实中文，只有 `tool-feedback.ts` 的内联表用 `\uXXXX` 转义；需要精确中文文案时读 `lib/i18n/messages/*.zh-CN.json`，不要从代码里的转义推断。

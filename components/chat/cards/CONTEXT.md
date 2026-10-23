@@ -122,6 +122,25 @@
 控制回调传递所属计划标识。
 暂停、取消与恢复规则由服务端执行。
 
+## DOM 测试钩子（e2e/Playwright 定位）
+
+卡内几乎没有 test-id，定位靠 `data-*` 与中文 `aria-label`/按钮文案（默认语言 `zh-CN`）。
+
+| 元素 | 选择器 |
+| --- | --- |
+| 底部授权面板 | `[data-approval-request="true"][data-action-id][data-kind="confirmation"｜"mfa"]`（`components/chat/ApprovalRequest.tsx`） |
+| MFA 输入框 | `[data-approval-request="true"] input[aria-label="验证码"]`；无 `name`、无 test-id |
+| 实时锁定块 | `[data-mfa-locked="true"]`（`MfaCard`） |
+| 历史锁定回执 | `section[data-approval-history="true"][data-action-id][data-status="locked"]` 内的 `[data-approval-locked="true"]`（`ApprovalRecord`） |
+| 历史阶段行 | `[data-approval-stage="previous"]` / `[data-approval-stage="current"]`（后者 `role="status"`），均带 `data-stage-status` |
+| 卡片外层 | `[data-chat-card-type="mfa"｜"confirmation"]`（`CardRenderer`） |
+
+按钮按角色文本定位：`取消`（`cards.cancel`）、`确认`（`cards.confirm`）、`验证`（`cards.verify`）。
+实时锁定块与历史锁定块属性不同——实时 `data-mfa-locked`、历史 `data-approval-locked`，测试不要混用。
+`cards.mfa.failedAttempts` 的 `{attempts}` 是客户端 `useAgentStream` 的自增计数（`ChatWindow` 传入 `attempts={stream.mfaAttempts}`），
+与 `maxAttempts`（`lib/constants.ts` 的 `MFA_MAX_ATTEMPTS`）比较；`attempts >= maxAttempts` 分支要求面板仍 pending，
+达到上限时 `settleAction` 已清除 `pendingAction`，故 `cards.mfa.failedAttemptsLimit` 实际不可达。
+
 ## 展示约束
 
 金额、收款人与状态必须取自对应业务结果。

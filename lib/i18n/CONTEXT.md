@@ -145,6 +145,23 @@
 `params` 中没有该名时占位符原样保留（`:37` 返回 `placeholder`）；`params` 值经 `String()` 转换，金额必须以已格式化字符串传入。
 缺失键：`translate` 直接做 `messages[locale][key].replace(...)`，键不存在时抛 `TypeError`（对 `undefined` 调 `replace`），**没有**键级回退、不返回键名、不返回空串；`Record<MessageKey, string>` 的类型只是假设，运行期不校验。
 因此新增键必须同时写进 en 与 zh-CN 目录（否则类型或运行期失败），中英文键顺序在四份文件中保持一致便于对照。
+键是**扁平字面量**，没有嵌套路径遍历：`t('cards.mfa.label')` 里的点号只是键名的一部分，`translate` 直接 `messages[locale][key]` 取值。
+参数名不统一，按键取值：`cards.mfa.failedAttempts` 用 `{attempts}`，`cards.mfa.failedAttemptsLimit` 用 `{attempts, maxAttempts}`，`chat.error.verificationRemaining` 用 `{count}`（值来自 `failure.attemptsLeft ?? 0`），`security.reset.success` 与 `security.breaker.failureCount` 用 `{count, max}`。
+`tests/e2e/` 的断言文案经 `createTranslator('zh-CN')` 从本目录读取（`tests/e2e/acceptance.e2e.ts:695` 与多数 `*.e2e-helper.ts`），新增 e2e 断言应沿用该写法而非硬编码中文字面量；`tests/e2e/conversation.zh-CN.json` 是用户提示词与否定词的 fixture，不是界面文案表。
+
+## 安全与验证文案的跨目录分布
+
+同一概念在多个目录各有一份，文案并不相同，改动时必须同时核对：
+
+| 层 | 目录 | 键 |
+| --- | --- | --- |
+| 对话卡片 | `messages/chat.zh-CN.json` | `cards.mfa.*`、`cards.terminal.*`、`cards.confirm`/`cards.verify`/`cards.cancel`、`chat.approval.*`、`chat.error.*` |
+| 安全中心与熔断 | `messages/business.zh-CN.json` | `security.breaker.*`、`security.reset.*`、`security.events.*`、`security.permissions.*` |
+| 页面 | `messages/pages.zh-CN.json` | `pages.security.*`、`pages.cards.locked`、`pages.activity.status.locked`、`pages.audit.status.locked` |
+
+`已锁定` 精确出现在三处：`cards.terminal.locked`、`pages.activity.status.locked`、`pages.audit.status.locked`。
+`chat.approval.status.locked` 是「验证已锁定」，`cards.mfa.locked` 是完整句「已锁定，请到安全中心处理。」，两者不可替代 `cards.terminal.locked`。
+终态卡片的 `terminalStatusView`（`components/chat/cards/confirmationStatus.ts`）自带硬编码中文标签且不经本目录，见 [components/chat/cards/CONTEXT.md](../../components/chat/cards/CONTEXT.md)。
 
 ## 修改约束
 
