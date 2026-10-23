@@ -141,7 +141,7 @@ JSON 金额使用十进制字符串。
 `localizeVerificationHint(hint, t)`：只查 `display-sources.json#hints` 的 4 条精确服务端字符串 → `chat.display.smsHint` / `chat.display.demoHint` / `chat.display.safetyHint`；未命中的 `hint` 原样透出，因此新增服务端 hint 文案必须同时在这张表里加映射。
 `public-text.ts`、`tool-feedback.ts`、`internal-text.ts` 定义的映射在测试中的断言位置：`tests/unit/lib/public-text.test.ts`、`public-text.locked.test.ts`、`public-text.manual-review.test.ts`、`app-error-public-message.test.ts`、`i18n-display.test.ts`。
 `constants.ts`：`MFA_MAX_ATTEMPTS = 3`（连续验证失败上限，也是锁定文案里的次数来源）、`MFA_CODE = '123456'`（演示验证码）、`RESET_COOLDOWN_MS = 60_000`（`security/circuit-breaker.ts` 解锁冷却）。
-占位符插值是 `shared.ts#translate` 的正则替换 `/\\{([A-Za-z][A-Za-z0-9_]*)\\}/`：`params` 里没有同名键时保留字面 `{name}`（不会渲染成空串或 `undefined`）。
+占位符插值是 `shared.ts#translate` 的正则替换 `/\{([A-Za-z][A-Za-z0-9_]*)\}/g`：`params` 里没有同名键时保留字面 `{name}`（不会渲染成空串或 `undefined`）。
 `messages` 以 `en` 目录的键集为 `MessageKey` 全集（`en`/`zh-CN` 各自展开后取 `keyof`），因此**新增键必须先加到 `*.en.json`**，否则 `t(key)` 不通过类型检查；`isMessageKey` 也只查这张 `en` 表。
 
 ## 修改约束
