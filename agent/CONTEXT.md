@@ -213,6 +213,19 @@ disable that automatic continuation. `authorization-context.ts` locates the
 original assistant through the owned action, invocation and model request, so reused provider call IDs
 cannot redirect an older committed result into a newer operation.
 
+## Wall-clock profile of one chat turn
+
+`POST /api/chat` finishes one whole turn inside one HTTP request in both modes (`app/api/chat/route.ts:74-100`: `await runTurn` for JSON, `ReadableStream.start` awaiting the same call for SSE); no route exports `maxDuration`/`runtime` and no `AbortSignal` reaches `@/agent`, so the only server caps are the provider deadline and the DB limits below.
+There is no `sleep`/`delay`/`setTimeout`/`setInterval`/`await new Promise(...)` and no backoff retry loop anywhere on the turn path: every second is an awaited DB statement, a model round-trip, or CPU.
+`durable/journal.ts:223-230` `startHeartbeat(intervalMs = 20_000)` is the ONLY timer on a turn (started `turn-runtime.ts:44`, stopped in `finish`/`finally`); each tick enqueues `renewAgentRunLease` on the SAME FIFO `tail` as event writes (`journal.ts:107-117`) and holds the one SQLite connection.
+Live model calls only: `providers/request-options.ts:8-9,13,44` `LLM_REQUEST_TIMEOUT_MS ?? 30000` clamped `1000..120000`, `AbortSignal.timeout(timeoutMs)`, `maxRetries: 1`, `maxRetryDelayMs: 1500` ⇒ ≤31_500 ms per model request (≤121_500 ms configured); MOCK mode bypasses the wrapper (`providers/provider-mock.ts:33` bare `streamSimple`) and therefore has no deadline at all.
+One turn makes 2..5 sequential model round-trips (`turns/live-prompt.ts:77,88,89` prompt → declared-write continuation → format repair; the continuation is live-only, `write-continuation.ts:57`), and compaction adds `k` more sequential summary calls before the answer (`context-compaction/index.ts:65-74`, `k = pending.chunks.length`, bounded only by the model context window).
+DB: one `PrismaClient` on one serialized SQLite connection (`lib/db/serialized-connection.ts:5-21,35-56` FIFO mutex held for a whole interactive transaction, no acquire timeout) with `maxWait: 10000, timeout: 10000` (`lib/db/database.ts:23-25`), overridden to `{ maxWait: 10000, timeout: 20000 }` in `command-execution.ts:103` and `scheduled-dispatcher.ts:86`.
+Journaling cost per turn: one interactive transaction PER event (`journal.ts:120-123` → `appendRuntimeEvent`, incl. lease assertions + sequence + insert), one per provider stream chunk (`providers/model-audit.ts:19-33` awaited from `request-options.ts:33`), and a full-snapshot `encodeCheckpoint` per assistant message and per tool result (`journal.ts:80,142`, `durable/checkpoint.ts:13-15`), so wall time scales with reply length × statement latency.
+Every turn also re-reads all presentation events page by page at the end: `turn-runtime.ts:16-25` `for(;;) readRunPresentation(runId, userId, cursor, 500)` called at `:73`.
+No lease is ever waited on: a duplicate concurrent turn or an expired lease throws `CONFLICT` immediately (`lib/db/repositories/agentRun.ts:52-55,85-87`). TTL constants: `DEFAULT_LEASE_MS = 120_000` (`agentRun.ts:11`), `EXECUTION_LEASE_TTL_MS = 120_000` (`confirmation-recovery.ts:116`), `WORKFLOW_EXECUTION_LEASE_MS = 600_000` (`lib/contracts/runtime.ts:2`), `MFA_CHALLENGE_TTL_MS = 5 * 60_000` (`security/mfa.ts:34`).
+Background only, never on the chat path: the recovery worker (`recovery-worker.ts:74-99`, `intervalMs ?? 5000`, clamp `250..60000`, strictly sequential per candidate) and the persisted recovery backoff `Date.now() + 1000 * 2 ** recoveryAttempts` (`lib/db/repositories/agentRun.ts:397`).
+
 ## Known Issues
 
 - `planner/failure.ts:111` `sealReason` treats EVERY non-open `actionStatus` as `action_not_open`, including `executed`/`needs_reconciliation` — the two statuses `action-status.ts:59-63` `REPRESENTED_ACTION_STATUSES` says still represent their node.
