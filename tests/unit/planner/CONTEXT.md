@@ -14,6 +14,7 @@
 | `approval-record`、`action-attention-state` | 历史授权与待处理状态 |
 | `chat-plan-history`、`plan-history-page` | 计划的历史归属 |
 | `financial-display`、`chart-presentation` | 精确金额与图表显示 |
+| `decimal-format`、`business-result-cards`、`investment-purchase-display`、`chat-read-results` | CNY 渲染字面量与业务结果卡 |
 | `context-compaction`、`conversation-context` | 历史压缩与上下文恢复 |
 | `scripted-provider` | 脚本化模型辅助模块自身 |
 
@@ -57,6 +58,15 @@
 `chat.error.securityLocked` 只在该文件里经 `errorCode:'CIRCUIT_OPEN'` 的工具行与 `security_event` 命中。
 工具行摘要的锁定文案同样只在 `locked-card-rendering.test.ts` 经 `publicToolSummary` 覆盖；`tool-feedback.test.ts` 只覆盖 `chat.error.toolFailed`。
 `securityNotice` 的键级覆盖在 [../lib/CONTEXT.md](../lib/CONTEXT.md) 的 `public-text.test.ts`，不经过任何卡片渲染。
+
+## 金额渲染字面量
+
+`formatCNY`（`lib/money.ts`）与 `formatDecimalCNY`（`lib/decimal.ts`）的精确输出字面量只钉在两处：
+`../financial-values.test.ts` 直调两个格式化器（`¥184,467,440,737,095,516.14`、`¥90,071,992,547,409.93`、`-¥0.20`、`-¥0.00`），
+`decimal-format.test.ts` 经真实 `DecimalMoney` 组件渲染 markup（含 `1.005 → ¥1.01`、`2.675 → ¥2.68`、`0.999999999999999999 → ¥1.00`、`+¥118.91`、`-¥118.91`）。
+`financial-display.test.ts`、`chart-presentation.test.ts`、`chat-read-results.test.ts` 另钉 `+¥0.00`/`-¥0.00`、`¥46,116,860,184,273,879.04` 轴标签与 `-¥0.07`。
+已知缺口：本目录与 `../financial-values.test.ts` 都没有 `formatCNY('0.00')` 的零值用例，也没有把 bigint 分为参数传进 `formatCNY` 的用例（唯一输入是大数经 `addMoney` 得到的元字符串）；零值只经 `DecimalMoney` 覆盖。
+`business-result-cards.test.ts`、`investment-purchase-display.test.ts`、`security/gateway.test.ts` 用 `toContain(formatCNY(...))` 断言，期望值随实现计算，不构成字面量。
 
 ## 相关但不在本目录
 
