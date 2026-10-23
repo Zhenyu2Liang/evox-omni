@@ -150,7 +150,7 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 - 活动面板根 `[data-approval-request="true"]`（`data-action-id`/`data-kind`，`aria-label` 为 `chat.approval.verification`/`chat.approval.confirmation`）= `SELECTORS.approvalRequest`。
 - 验证码输入 `input[aria-label="验证码"]`（`cards.mfa.label`）；`SELECTORS.mfaInput` 已限定在面板内，历史回执不含输入框。
 - 按钮用 `getByRole('button', { name: '验证'|'确认'|'取消', exact: true })`；`验证` 仅在 `/^\d{6}$/` 且非 busy/readOnly 时可点。
-- 尝试次数行是 `role="status"`，文案 `cards.mfa.failedAttempts`（`{attempts}`）或达上限时 `cards.mfa.failedAttemptsLimit`。
+- 尝试次数行是 `MfaCard.tsx:108-114` 的 `role="status"`：第 1、2 次错码渲染 `cards.mfa.failedAttempts`（`{attempts}`，`chat.zh-CN.json:137`）；`cards.mfa.failedAttemptsLimit`（`:138`）要求同一停泊区渲染到 `attempts >= maxAttempts`，而锁定时停泊区已卸载，本目录无法断言该变体。
 - 锁定只读区块 `[data-mfa-locked="true"]`（含 `chat.error.actionLocked` + `pages.security.unlockDescription` + `/security` 链接）；历史回执用 `[data-approval-history]` 的 `data-status`、`[data-approval-locked="true"]`、`data-approval-stage`/`data-stage-status`。
 
 `[data-mfa-locked]`、`[data-approval-locked]`、`data-status="locked"` 在本目录**没有任何断言**：锁定事实只由 `waitForStatusText(..., t('cards.terminal.locked'))`（全页 `[role="status"]` 去空白子串）与 `SELECTORS.mfaInput` 计数为 0 表达。更强的断言应先加在上面的专用属性上。
