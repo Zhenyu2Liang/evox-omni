@@ -79,7 +79,7 @@ SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件�
 
 `seed.ts` 使用 `businessDate` 构造北京时间。
 金额由 `minorUnits` 转成整数分。
-活期余额由期初余额加全部已入账流水核对。
+`seed.ts` 只按 `DATABASE_URL`（经 `lib/db/url.ts#resolveDatabaseUrl` 解析，缺省 `file:./dev.db`）播种，验收隔离库同样用它；e2e 库是 `prisma db push` 后跑 `tsx prisma/seed.ts` 得到的全新数据，不是 `dev.db` 的拷贝。
 演示数据包含收支、小数交易、异常样例与多类业务记录。
 卡片夹具含 `card_credit`、`card_debit` 与虚拟卡 `card_virtual`；
 借记卡 `card_debit` 与虚拟卡 `card_virtual` 均通过 `linkedAccountId` 绑定活期账户 `acct_checking`，虚拟卡月限额 ¥5,000.00。
