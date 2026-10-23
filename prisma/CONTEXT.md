@@ -37,6 +37,7 @@
 `estimatedMarketValue` 只是未取整快照，读取一律由 `shares × latestNetValuePerUnit` 派生。
 `realizedProfitMinor` 累计已实现收益，默认 `0`，可为负。
 `purchaseHistory` 与 `redemptionHistory` 按笔保存份额、净值、净值日期与结算金额。
+`InvestmentProduct` 与 `InvestmentHolding` 没有手续费/管理费列（无 `feeMinor`、`managementFee`、`serviceFee`、`redemptionFee`），`Transaction` 与 `CardConsumption` 同样没有；`prisma/seed.ts` 也不写入任何手续费。
 口径与取整规则见[理财产品](../docs/cn/investments.md)。
 
 ## 卡片与账户模型
