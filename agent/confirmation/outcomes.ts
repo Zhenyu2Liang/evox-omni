@@ -45,6 +45,8 @@ function failureReasonFor(code: ErrorCode): SecurityFailureReason {
   if (code === 'MFA_FAILED') return 'mfa_code_invalid';
   if (code === 'MFA_LOCKED') return 'mfa_attempts_exhausted';
   if (code === 'CIRCUIT_OPEN') return 'circuit_open';
+  // A manual-review hold is NOT a denial: the operation is intact and unexecuted, only held.
+  if (code === 'MANUAL_REVIEW_HOLD') return 'manual_review_hold';
   return 'denied';
 }
 
@@ -96,7 +98,14 @@ export async function cancelledPlanOutcome(
   };
 }
 
-/** Converge a standalone wedge before reporting a repeated decision. */
+/**
+ * Converge a standalone wedge before reporting a refused decision.
+ *
+ * Projects the refusal the gateway raised into a DOMAIN outcome: `ok: false` plus the PERSISTED
+ * status and the typed `code`/`failure`. The historical name is kept because `CONFLICT` is still its
+ * main caller; the code and the public sentence always come from the error handed in, so a
+ * `MANUAL_REVIEW_HOLD` renders its own hold copy instead of the generic "state changed" fallback.
+ */
 export async function conflictOutcome(actionId: string, error: AppError): Promise<ConfirmationOutcome> {
   const recovered = await recoverStandaloneWedge(actionId, { selfHoldsLiveMarker: true });
   if (recovered !== undefined) {

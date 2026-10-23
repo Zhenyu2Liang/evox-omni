@@ -226,6 +226,7 @@ const FAILURE_REASONS: readonly SecurityFailureReason[] = [
   'mfa_attempts_exhausted',
   'mfa_session_locked',
   'circuit_open',
+  'manual_review_hold',
   'denied',
 ];
 
@@ -1261,7 +1262,9 @@ async function authorizeAction(
   const action = toContractPendingAction(row);
   const effectiveRequiresMfa = row.requiresMfa || action.tier === 'RED';
   if (row.taskId && await prisma.manualReview.findFirst({ where: { taskId: row.taskId, status: 'open' } })) {
-    throw new AppError('CONFLICT', 'This workflow is under manual review; a new command cannot start.');
+    // A neutral internal sentence: the public copy is decided from the TYPED code by
+    // `lib/public-text.ts` (`chat.error.manualReviewHold`), never from this text.
+    throw new AppError('MANUAL_REVIEW_HOLD', 'This workflow is under manual review; a new command cannot start.');
   }
 
   // Circuit breaker is a hard gate the LLM (and even a correct code) cannot bypass.

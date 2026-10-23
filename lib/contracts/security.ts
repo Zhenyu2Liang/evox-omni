@@ -5,12 +5,17 @@ import type { MoneyAmount } from '../money';
 
 export type SecurityDecisionKind = 'allow' | 'require_confirmation' | 'require_mfa' | 'deny';
 
-/** Why a security-governed operation was refused — TYPED, never inferred from message text. */
+/**
+ * Why a security-governed operation was refused — TYPED, never inferred from message text.
+ * `manual_review_hold` is NOT a security denial: the operation is intact and unexecuted; it is only
+ * held while its owning workflow has an open manual review.
+ */
 export type SecurityFailureReason =
   | 'mfa_code_invalid'
   | 'mfa_attempts_exhausted'
   | 'mfa_session_locked'
   | 'circuit_open'
+  | 'manual_review_hold'
   | 'denied';
 
 /**

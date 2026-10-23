@@ -63,7 +63,8 @@ export const DEFAULT_ENDPOINTS: ChatEndpoints = {
 
 /** Server-owned security-failure reasons (`lib/contracts/security`). */
 const SECURITY_FAILURE_REASONS: readonly SecurityFailureReason[] = [
-  'mfa_code_invalid', 'mfa_attempts_exhausted', 'mfa_session_locked', 'circuit_open', 'denied',
+  'mfa_code_invalid', 'mfa_attempts_exhausted', 'mfa_session_locked', 'circuit_open',
+  'manual_review_hold', 'denied',
 ];
 
 /** A non-negative integer attempt count, else `undefined`. */

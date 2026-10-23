@@ -1,6 +1,6 @@
 import { publicSafeMessage } from './internal-text';
 
-export type ErrorCode = 'VALIDATION' | 'NOT_FOUND' | 'INSUFFICIENT_FUNDS' | 'LIMIT_EXCEEDED' | 'SECURITY_DENIED' | 'MFA_FAILED' | 'MFA_LOCKED' | 'CIRCUIT_OPEN' | 'CONFLICT' | 'TOOL_FAILED' | 'INTERNAL';
+export type ErrorCode = 'VALIDATION' | 'NOT_FOUND' | 'INSUFFICIENT_FUNDS' | 'LIMIT_EXCEEDED' | 'SECURITY_DENIED' | 'MFA_FAILED' | 'MFA_LOCKED' | 'CIRCUIT_OPEN' | 'MANUAL_REVIEW_HOLD' | 'CONFLICT' | 'TOOL_FAILED' | 'INTERNAL';
 
 export class AppError extends Error {
   readonly code: ErrorCode;

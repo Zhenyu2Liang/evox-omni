@@ -10,6 +10,7 @@ const PUBLIC_ERROR_CODES: Record<ErrorCode, MessageKey> = {
   SECURITY_DENIED: 'chat.error.securityDenied', MFA_FAILED: 'chat.error.verificationFailed',
   MFA_LOCKED: 'chat.error.actionLocked',
   CIRCUIT_OPEN: 'chat.error.securityLocked', CONFLICT: 'chat.error.stateChanged',
+  MANUAL_REVIEW_HOLD: 'chat.error.manualReviewHold',
   TOOL_FAILED: 'chat.error.toolFailed', INTERNAL: 'chat.error.toolFailed',
 };
 

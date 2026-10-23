@@ -277,7 +277,7 @@ export async function assertActionMayStart(actionId: string, client: Prisma.Tran
   await client.pendingAction.updateMany({ where: { id: actionId }, data: { id: actionId } });
   const action = await client.pendingAction.findUnique({ where: { id: actionId }, select: { taskId: true } });
   if (action?.taskId && await client.manualReview.findFirst({ where: { taskId: action.taskId, status: 'open' } })) {
-    throw new AppError('CONFLICT', 'This workflow is under manual review; a new command cannot start.');
+    throw new AppError('MANUAL_REVIEW_HOLD', 'This workflow is under manual review; a new command cannot start.');
   }
 }
 

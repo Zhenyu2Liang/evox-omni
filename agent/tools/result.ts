@@ -13,6 +13,7 @@ const NEXT_ACTION: Record<ErrorCode, string> = {
   CIRCUIT_OPEN: 'Ask the user to resolve the lock in the security interface.',
   MFA_LOCKED: 'Stop. The operation is locked after too many incorrect codes; ask the user to resolve the lock in the security interface and start a new operation.',
   CONFLICT: 'Read the current resource or recorded operation status before proposing a new operation.',
+  MANUAL_REVIEW_HOLD: 'The owning workflow is under human review and the operation was not executed. Tell the user to resume it from the review inbox or wait for the review to finish; never claim it ran.',
   TOOL_FAILED: 'Check the recorded outcome before proposing another write. Do not report success.',
   INTERNAL: 'The outcome has not been verified. Check saved operation records before retrying a write.',
 };

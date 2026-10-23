@@ -22,7 +22,12 @@ export { executeGatedTool } from './confirmation/gated-execution';
 
 const gateway = security.gateway.securityGateway;
 
-/** Confirmation and MFA share ownership, cancellation and execution checks. */
+/**
+ * Confirmation and MFA share ownership, cancellation and execution checks. A refused authorization
+ * that carries a DOMAIN code (`CONFLICT`: the action is no longer decidable; `MANUAL_REVIEW_HOLD`:
+ * its workflow is taken over by an open manual review) becomes a domain outcome — never an HTTP
+ * error — so the caller keeps the persisted status plus the typed `code`/`failure`.
+ */
 async function authorizeAndExecute(
   actionId: string, opts?: ConfirmOptions, mfaCode?: string,
 ): Promise<ConfirmationOutcome> {
@@ -36,7 +41,7 @@ async function authorizeAndExecute(
       ...(mfaCode !== undefined ? { mfaCode } : {}),
     });
   } catch (error) {
-    if (error instanceof AppError && error.code === 'CONFLICT') return conflictOutcome(actionId, error);
+    if (error instanceof AppError && (error.code === 'CONFLICT' || error.code === 'MANUAL_REVIEW_HOLD')) return conflictOutcome(actionId, error);
     throw error;
   }
   if (!auth.ok) return blockedOutcome(actionId, auth, opts);
@@ -59,7 +64,7 @@ export async function cancelAction(actionId: string, opts?: ConfirmOptions): Pro
   let action: PendingAction;
   try { action = await gateway.cancelAction(actionId, identity); }
   catch (error) {
-    if (error instanceof AppError && error.code === 'CONFLICT') return conflictOutcome(actionId, error);
+    if (error instanceof AppError && (error.code === 'CONFLICT' || error.code === 'MANUAL_REVIEW_HOLD')) return conflictOutcome(actionId, error);
     throw error;
   }
   // Success must be PROVEN against the persisted row: a cancel that never settled must not be

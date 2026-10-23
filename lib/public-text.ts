@@ -56,6 +56,9 @@ export interface SecurityNoticeInput {
  *  - an exhausted / locked verification → `chat.error.actionLocked`;
  *  - a retryable wrong code → `chat.error.verificationRemaining` (see `securityNoticeParams`);
  *  - a session lock or an open circuit → `chat.error.securityLocked`;
+ *  - a MANUAL-REVIEW HOLD (`MANUAL_REVIEW_HOLD` / `manual_review_hold`) → `chat.error.manualReviewHold`:
+ *    the operation is intact and unexecuted, it only waits for the open review to be released, so the
+ *    generic "state changed, refresh" sentence must never stand in for it;
  *  - any other refusal → `chat.error.securityDenied`.
  *
  * Exported so every layer (gateway, HTTP edge, channel, UI) shares ONE mapping instead of
@@ -67,6 +70,9 @@ export function securityNoticeKey(failure: SecurityNoticeInput | undefined): Mes
   }
   if (failure && (failure.reason === 'mfa_code_invalid' || failure.code === 'MFA_FAILED')) {
     return 'chat.error.verificationRemaining';
+  }
+  if (failure && (failure.code === 'MANUAL_REVIEW_HOLD' || failure.reason === 'manual_review_hold')) {
+    return 'chat.error.manualReviewHold';
   }
   if (failure && (failure.code === 'CIRCUIT_OPEN' || failure.reason === 'circuit_open'
     || failure.reason === 'mfa_session_locked')) {
