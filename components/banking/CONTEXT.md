@@ -49,7 +49,7 @@ SDK 类型通过类型导入使用。
 | 持仓市值 | `business.investments.marketValue` | 市值 | Market value | `DecimalMoney(marketValue)`；估值缺省不取整，展示 HALF_UP 到两位 |
 | 剩余持仓成本 | `business.investments.remainingCost` | 剩余持仓成本 | Remaining cost | `Money(holding.amount)`，已入账人民币分 |
 | 持仓收益 | `business.investments.holdingProfit` | 持仓收益 | Holding return | `DecimalMoney(profit) signed`，为未实现收益 |
-| 持仓收益率 | `business.investments.holdingProfitRate` | 持仓收益率 | Holding return rate | `rateRatioToPercent(profitRate)` 加 `%` |
+| 持仓收益率 | `business.investments.holdingProfitRate` | 持仓收益率 | Holding return rate | `signedRateToPercent(profitRate)` 加 `%`（收益率有符号，亏损持仓为负值） |
 | 累计收益 | `business.investments.cumulativeProfit` | 累计收益 | Cumulative return | `DecimalMoney(cumulativeProfit) signed` |
 | 已实现收益 | `business.investments.realizedProfit` | 已实现收益 | Realized return | `DecimalMoney(realizedProfit)`，不加正号 |
 
