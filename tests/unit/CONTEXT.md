@@ -59,6 +59,20 @@
 卡片 DOM 断言（`CARD_LABEL`、`readCardTileRows`、`assertLinkedAccountTileLabels`）只在 `tests/e2e`，见 [../e2e/CONTEXT.md](../e2e/CONTEXT.md)。
 `weixin-presentation.test.ts:23` 的 `type:'cards'` 用例只断言微信文本含 `¥87.66`，不是 React 渲染。
 
+## 持仓盈亏（含负值）断言的落点
+
+亏损口径只有下面这些锚点，没有任何用例断言 `HoldingView.profitRate` 缺省。
+
+- `banking-sdk/net-value-redemption.test.ts:379`/`:386`/`:418`：`HoldingView.profit` 的负字面量（`'-0.000000928'`、`'-192.3076932'`、`'-0.0000002173'`），`:380`/`:395` 另用 `compareDecimal(..., '0')` 判负。
+- `banking-sdk/net-value-redemption.test.ts:394`/`:400`：亏损全额赎回的 `realizedProfit === '-192.31'` 与 `realizedProfitMinor === -19_231n`。
+- `banking-sdk/share-estimate-basis.test.ts:70-71`：`profit`/`cumulativeProfit` 等于 `subtractDecimal(marketValue, '5000.00')`，数值上为负（≈ −3765.475463078），但以派生表达式断言而非负字面量。
+- `planner/decimal-format.test.ts:78`/`:87`/`:88`：真实 `HoldingFacts` 把负 `profitRate` 渲染成 `-1.23%`、全精度 `-2.9726666666666667%`（card 与 tile 两种 layout）；`:91` 亏损市值渲染成 `-¥49.20`；`:94` 是 `profitRate: undefined` 时不出 `%` 的唯一断言。
+- `financial-values.test.ts:70-74`：`signedRateToPercent` 对负比例不取绝对值、不抛错；`:83` 断言 `rateRatioToPercent('-0.032575')` 抛 `VALIDATION`。
+- 能力缺口：`amount` 为 0 时 `HoldingView.profitRate` 为 `undefined` 只有函数级覆盖（`banking-sdk/net-value.test.ts:160-161` 的 `profitRateOf`）。
+  `banking-sdk/investment.ts:197` 以 `profitRate: profitRateOf(...)` 直接赋值，键始终存在，因此 `'profitRate' in view` 恒为 `true`，不可断言键缺失。
+  无 `HoldingView.cumulativeProfit` / `HoldingView.realizedProfit` 为负的断言。
+  亏损持仓在渲染层的两个入口都经 `HoldingFacts`（`components/banking/HoldingFacts.tsx:89-91`）走 `signedRateToPercent`；`InvestmentsCard`/`InvestmentProductTile` 里的 `rateRatioToPercent` 只用于 `annualYieldRate`。
+
 ## 终止锁定与内部诊断的上屏边界
 
 `@/lib/public-text`（`isInternalDiagnostic`/`safePublicText`/`securityNotice`）是唯一把内部诊断转成公开文本的漏斗。
