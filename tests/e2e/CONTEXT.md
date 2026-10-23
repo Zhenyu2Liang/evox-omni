@@ -178,7 +178,8 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 `j-circuit-breaker-lock` 因此断言三次后 `SELECTORS.mfaInput` 不存在、余额与流水零变化、`/security` 的 `已熔断` + `失败 3 / 3 次` + `CIRCUIT_BREAKER_TRIPPED`（`severity` `high`，DB 交叉核对）。
 
 锁定终态的断言范围（`j` 的实际覆盖）：`waitForStatusText(page, t('cards.terminal.locked'))` 是对全页 `[role="status"]` 做去空白**子串**匹配，
-不绑定 `MfaCard` 容器，也未断言 `cards.mfa.locked`（「已锁定，请到安全中心处理。」）这一只读历史变体，更未断言 `data-mfa-locked` 或 `cards.mfa.failedAttemptsLimit`。
+它不绑定 `MfaCard` 容器：命中来自只读回执的阶段行，`ApprovalRecord.tsx:61-63` 渲染 `div[role="status"][data-approval-stage="current"]`，内容是「当前 验证已锁定」，其中「验证已锁定」（`chat.approval.status.locked`）含子串「已锁定」（`cards.terminal.locked`，`chat.zh-CN.json:128`）。
+因此 `j` 通过不构成 `MfaCard` 渲染过锁定分支的证据；`cards.mfa.locked`、`[data-mfa-locked]` 与 `cards.mfa.failedAttemptsLimit` 在锁定后都不存在于 DOM。
 锁定态的 DOM 钩子（写锁定断言时唯一可信的来源）：可操作停泊区 `data-approval-request="true"` + `data-action-id` + `data-kind`（`components/chat/ApprovalRequest.tsx:23-24`）；
 `data-mfa-locked="true"` 只在 `components/chat/cards/MfaCard.tsx:76` 的 `terminal === 'locked'` 分支出现，内含 `securityNotice` 锁定句与 `href="/security"`；
 锁定终态标题是 `MfaCard.tsx:74` 的 `<p role="status">已锁定</p>`（`cards.terminal.locked`，`lib/i18n/messages/chat.zh-CN.json:128`）；
