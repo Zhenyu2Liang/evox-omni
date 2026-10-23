@@ -75,7 +75,7 @@ JSON 金额使用十进制字符串。
 
 公开文本只能来自消息目录，内部诊断只进 `debugDetail` 与开发者面板。
 `publicToolError(message, t, fallback = 'chat.error.toolFailed', errorCode?, params?)` 的判定顺序：`PUBLIC_BUSINESS_ERRORS` 精确 SDK 消息 → 三条固定正则（余额不足、低于起购、验证码剩余次数）→ `PUBLIC_ERROR_CODES[errorCode]` → 无 `message` 取 `fallback` → `CONVERSATION_TOOL_REJECTION` → `chat.error.` 前缀且 `isMessageKey` 命中 → `localizeChatError` 命中（`display-sources.json` 的 `errors`）→ 否则 `fallback`；`params` 只透传给最终选中的目录键。
-`PUBLIC_ERROR_CODES` 是 `Record<ErrorCode, MessageKey>`，覆盖全部 11 个 `ErrorCode`；`TOOL_FAILED` 与 `INTERNAL` 都映射到 `chat.error.toolFailed`，`CIRCUIT_OPEN` 映射 `chat.error.securityLocked`，`MFA_FAILED` 映射 `chat.error.verificationFailed`，`MFA_LOCKED` 映射 `chat.error.actionLocked`，`SECURITY_DENIED` 映射 `chat.error.securityDenied`。
+`PUBLIC_ERROR_CODES`（`tool-feedback.ts:7-15`）是 `Record<ErrorCode, MessageKey>`，覆盖全部 12 个 `ErrorCode`；`TOOL_FAILED` 与 `INTERNAL` 都映射到 `chat.error.toolFailed`，`CIRCUIT_OPEN` 映射 `chat.error.securityLocked`，`MFA_FAILED` 映射 `chat.error.verificationFailed`，`MFA_LOCKED` 映射 `chat.error.actionLocked`，`MANUAL_REVIEW_HOLD` 映射 `chat.error.manualReviewHold`，`SECURITY_DENIED` 映射 `chat.error.securityDenied`。
 未识别的 `errorCode`（任意不在 `ErrorCode` 联合内的字符串）与未识别 `message` 一律落到 `chat.error.toolFailed`。
 `PUBLIC_BUSINESS_ERRORS`（`tool-feedback.ts:17-33`）共有 12 条精确字符串，其中三条来自安全网关：`authorizeWithMfa`（`security/security-gateway.ts:957`）的验证码耗尽句「验证码错误次数过多，本会话高风险操作已被锁定。请前往安全中心解除限制后再试。」→ `chat.error.actionLocked`；`lockedOutcome()`（`:880`）的「当前会话已触发安全熔断，操作已被拒绝。请前往安全中心解除限制后再试。」→ `chat.error.actionLocked`；`gatewayDecide` 的 `HIGH_RISK_BLOCKED` 拒绝（`:485`）「当前会话已触发安全熔断，高风险操作已被锁定。请前往安全中心解除限制后再试。」→ `chat.error.securityLocked`。
 这三条是 COMPATIBILITY ONLY：只服务已按文本持久化的历史拒绝与未传 typed 字段的调用方；权威路径是 `publicSecurityError` 按结构化字段渲染（见下）。
@@ -90,7 +90,7 @@ JSON 金额使用十进制字符串。
 
 ## 错误类型（`errors.ts`）
 
-`ErrorCode`（`errors.ts:3`）为 11 个字面量联合：`VALIDATION`、`NOT_FOUND`、`INSUFFICIENT_FUNDS`、`LIMIT_EXCEEDED`、`SECURITY_DENIED`、`MFA_FAILED`、`MFA_LOCKED`、`CIRCUIT_OPEN`、`CONFLICT`、`TOOL_FAILED`、`INTERNAL`。
+`ErrorCode`（`errors.ts:3`）为 12 个字面量联合：`VALIDATION`、`NOT_FOUND`、`INSUFFICIENT_FUNDS`、`LIMIT_EXCEEDED`、`SECURITY_DENIED`、`MFA_FAILED`、`MFA_LOCKED`、`CIRCUIT_OPEN`、`MANUAL_REVIEW_HOLD`、`CONFLICT`、`TOOL_FAILED`、`INTERNAL`。
 `AppError`（`errors.ts:5-25`）只有 `readonly code: ErrorCode`、继承的 `message`（内部诊断，可进日志）、`readonly detail?: unknown`（内部用途）与 `readonly publicMessage?: string`（public-safe）；没有结构化 `failure` 字段，也没有 `toJSON` 或自定义序列化，故 `JSON.stringify` 只出现自有可枚举属性 `code`/`detail`（以及存在时的 `publicMessage`）。
 `publicMessage` 在构造器里用 `internal-text.ts#publicSafeMessage` 净化：可渲染时等于 `message`，被判为内部诊断或空白时为 `undefined`，语义是「没有可公开文案，调用方用目录兜底」。
 `message` 与 `detail` 语义不变：`message` 仍是内部诊断文本，`detail` 仍只供日志与开发者面板。
@@ -103,9 +103,9 @@ JSON 金额使用十进制字符串。
 
 ## 结构化安全失败契约（`contracts/security.ts`）
 
-`SecurityFailureReason`（`contracts/security.ts:9-14`）= `mfa_code_invalid` | `mfa_attempts_exhausted` | `mfa_session_locked` | `circuit_open` | `denied`。
-`SecurityFailure`（`contracts/security.ts:21-28`）= 必填 `code: ErrorCode`、必填 `reason: SecurityFailureReason`，可选 `actionId`、`attemptsUsed`、`attemptsLeft`、`maxAttempts`；**不含**用户文案，渲染由 `public-text.ts#securityNotice` / `tool-feedback.ts#publicSecurityError` 负责。
-`PendingActionStatus`（`contracts/security.ts:42-58`）含终态 `locked`（MFA 次数耗尽或熔断的 CAS 目标）与 `needs_reconciliation`（终态，需人工核对）。
+`SecurityFailureReason`（`contracts/security.ts:13-19`）= `mfa_code_invalid` | `mfa_attempts_exhausted` | `mfa_session_locked` | `circuit_open` | `manual_review_hold` | `denied`；`manual_review_hold` 不是安全拒绝，而是「操作尚未执行、等人工复核释放」的留置。
+`SecurityFailure`（`contracts/security.ts:26-33`）= 必填 `code: ErrorCode`、必填 `reason: SecurityFailureReason`，可选 `actionId`、`attemptsUsed`、`attemptsLeft`、`maxAttempts`；**不含**用户文案，渲染由 `public-text.ts#securityNotice` / `tool-feedback.ts#publicSecurityError` 负责。
+`PendingActionStatus`（`contracts/security.ts:47-63`）含终态 `locked`（MFA 次数耗尽或熔断的 CAS 目标）与 `needs_reconciliation`（终态，需人工核对）。
 同文件导出状态词表常量：`OPEN_PENDING_ACTION_STATUSES`（`pending`、`awaiting_mfa`）、`TERMINAL_PENDING_ACTION_STATUSES`（`executed`、`failed`、`cancelled`、`locked`、`needs_reconciliation`）、`SETTLED_PENDING_ACTION_STATUSES`（结算事实集合，含 `locked`，当前与 TERMINAL 同值）、`RUN_BLOCKING_PENDING_ACTION_STATUSES`（仍阻塞 run 收尾 = open + `confirmed` + `needs_reconciliation`，按构造不含 `locked`）。
 `locked` 是终态：验证码次数耗尽或熔断造成的**已结算拒绝**，永不复活、永不再提示、永不作为 CAS 源。
 `lib/` 不得依赖 `agent/`，因此 `agent/action-status.ts` 持有语义相同的另一份词表（`OPEN_ACTION_STATUSES` / `TERMINAL_ACTION_STATUSES` / `CLAIMABLE_ACTION_STATUSES` / `ALL_ACTION_STATUSES`）；两侧增删状态必须同步。
@@ -122,7 +122,10 @@ JSON 金额使用十进制字符串。
 `safePublicText(text, t, fallback)` 只做分流：缺失或内部诊断取 `t(fallback)`，否则委托 `publicToolError`。
 `publicErrorMessage(error, t, fallback = 'chat.error.toolFailed')` 渲染 `AppError`：走 `publicToolError(error.publicMessage, t, fallback, error.code)`；非 `AppError` 的值先 `publicSafeMessage` 再进同一漏斗。
 `public-text.ts` 导出 `isInternalDiagnostic`（重新导出）、`safePublicText`、`publicErrorMessage`、`SecurityNoticeInput`、`securityNoticeKey`、`securityNoticeParams`、`securityNotice`，不经 `lib/index.ts` 再导出。
-`securityNotice(failure, t)` 是 `securityNoticeKey(failure)` 与 `securityNoticeParams(failure)` 的组合，完全按 TYPED 字段判定，顺序为 `code==='MANUAL_REVIEW_HOLD' || reason==='manual_review_hold'` → `chat.error.manualReviewHold`（该分支优先于熔断与默认兜底，且与 `PUBLIC_ERROR_CODES.MANUAL_REVIEW_HOLD` 渲染同一句）；`code==='MFA_LOCKED' || reason==='mfa_attempts_exhausted'` → `chat.error.actionLocked`；`reason==='mfa_code_invalid' || code==='MFA_FAILED'` → `chat.error.verificationRemaining {count: attemptsLeft ?? 0}`；`code==='CIRCUIT_OPEN' || reason==='circuit_open' || reason==='mfa_session_locked'` → `chat.error.securityLocked`；其余一律 `chat.error.securityDenied`。
+本目录没有「`PendingActionStatus` → 文案」的映射（不存在 `PENDING_ACTION_STATUS_LABEL` / `statusLabel`）：状态标签由界面层提供（`components/chat/cards/ApprovalRecord.tsx` 的 `STATUS_KEYS`、`components/chat/cards/confirmationStatus.ts` 的 `terminalStatusView`），`cards.terminal.*` / `chat.approval.status.*` 目录键由界面层自行取用。
+锁定文案由此分成三段：`chat.error.actionLocked`（`securityNotice` 的终止文案）、`chat.approval.status.locked`（「验证已锁定」）、`cards.terminal.locked`（「已锁定」），恢复指引在 `pages.security.title`（「安全中心」）与 `pages.security.unlockDescription`（「连续验证失败后，高风险操作保持锁定。」）。
+`securityNotice(failure, t)`（`public-text.ts:91-94`，签名只有 `failure` 与 `t`，无 fallback 参数）是 `securityNoticeKey(failure)` 与 `securityNoticeParams(failure)` 的组合，完全按 TYPED 字段判定，`securityNoticeKey`（`:67-82`）的分支顺序为：`code==='MFA_LOCKED' || reason==='mfa_attempts_exhausted'` → `chat.error.actionLocked`；`reason==='mfa_code_invalid' || code==='MFA_FAILED'` → `chat.error.verificationRemaining {count: attemptsLeft ?? 0}`；`code==='MANUAL_REVIEW_HOLD' || reason==='manual_review_hold'` → `chat.error.manualReviewHold`；`code==='CIRCUIT_OPEN' || reason==='circuit_open' || reason==='mfa_session_locked'` → `chat.error.securityLocked`；其余（含 `failure === undefined`、`denied`、任何未识别的 `code`/`reason` 字符串）一律 `chat.error.securityDenied`。
+`SecurityNoticeInput` 的 `code`/`reason`/`kind` 声明为 `string`（不是 `ErrorCode`/`SecurityFailureReason`），未识别的取值因此静默落到 `chat.error.securityDenied`。
 `securityNoticeKey`/`securityNoticeParams` 一并导出，让所有层共用同一映射；`securityNoticeParams` 只在 `chat.error.verificationRemaining` 时给出 `{count: attemptsLeft ?? 0}`，否则 `undefined`。
 `SecurityNoticeInput` 是导出的接口（`code`/`reason`/`kind`/`attemptsLeft`/`maxAttempts`）；`kind` 与 `maxAttempts` 只声明、从不读取（`kind` 仅由调用方用于分流），依赖它们产生新文案前必须先改 `securityNotice` 本体。
 `mfa_code_invalid`/`MFA_FAILED` 若未带 `attemptsLeft` 会渲染成「剩余 0 次」，因此调用方应始终转发 `attemptsLeft`。
