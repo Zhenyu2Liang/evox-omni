@@ -28,6 +28,24 @@
 
 所有接口的请求用户由服务端注入，客户端不得发送 userId。
 
+## 页面结构（浏览器断言用）
+
+`page.tsx` 是 `dynamic = 'force-dynamic'` 的服务端组件，只渲染唯一客户端组件 `CardManager`。
+`CardManager` 的根元素是 `<main className="mx-auto flex w-full min-w-0 max-w-6xl …">`，内部顺序固定：
+- `<header>` 内 `<h1>` 取 `pages.cards.title`（卡片），同级 `<p>` 取 `pages.cards.summary`（`{count}`）；右侧两个 `<span>` 钩子 `data-card-refresh`、`data-card-add` 各包一个 `Button`。
+- 演示说明 `<p>` 取 `pages.cards.demoDescription`。
+- 通知段按需渲染一个 `<p>`，`role` 为 `alert`（错误）或 `status`（成功）。
+- 未完成操作 `<section data-card-pending-changes>`，`<h2>` 取 `pages.cards.pending`，每项 `<li data-card-pending-change-id={id}>` 内含 `pages.cards.reviewAdd`/`reviewDelete` 文案、`card.numberMasked`（font-mono）与 `pages.cards.resume` 按钮。
+- 卡片网格 `<section data-card-list className="grid min-w-0 gap-4 sm:grid-cols-2">`：是网格 `<div>`，不是 `<ul>/<li>`；每张卡是 `<div data-card-id={id}>` 包一个 `<CardTile card footer />`。
+- `footer` 是右对齐 `<div>`，内含 `data-card-consume`、`data-card-delete` 两个 `<span>` 包 `Button`。
+卡片列表为空时渲染 `EmptyState`：标题/描述分别落在 `<div>` 与 `<p>`，既不是 heading 角色也没有 data 钩子，只能按文本定位。
+`EmptyState` 自身没有 `role`/`data-*`；`CardTile` 内部除 `data-card-*` 之外没有任何 `data-*`、`aria-*`、`role`、`id` 属性，标题用的是 `<div>` 而非 heading。
+`CardTile` 的段落依次为：卡类型+`card.network`（`text-sm` 的 `<div>`，形如「借记卡 · UnionPay」）、`numberMasked`（font-mono `<div>`）、状态 `Badge`（可加「已补卡」`Badge`）、不可用提示 `Badge`、CREDIT 的 `<dl>`（`business.cards.limit`/`business.cards.available`）、关联账户行（label `<span>` + 值 `<span>`，非 `<dt>`）、账户余额 `<dl>`（`business.cards.accountBalance`/`business.cards.usableBalance`）、绑定异常提示 `<p>`、月限额行（label `<span>`）、分类限额 `<ul>/<li>`（`business.cards.categoryLimits` 标题为 `<div>`）。
+金额一律经 `ui/Money` 渲染成 `¥1,800.00` 形式（千分位 + `¥`，`lib/money.ts#formatCNY`），断言金额必须含该格式。
+`CardConsumeDialog` 打开时在 `data-card-consume-dialog` 内**再渲染一个 `CardTile`（仅传 `card`，无 `footer`/`className`）**，因此同一张卡的卡号与限额文本在页面上会同时存在两份（网格内 + 弹窗内）。
+弹窗标题为 `<h2 id="card-change-title">` / `<h2 id="card-consume-title">`，`dialog` 用 `aria-labelledby` 指向它们；字段名固定为 `type`、`creditLimit`、`monthlyLimit`、`confirmed`、`code`、`amount`、`category`、`merchant`。
+`AppShell` 侧栏导航链接也渲染 `app.cards`＝「卡片」，与页面 `<h1>` 同文本，故按文本定位必须限定 `main h1` 或 `[data-card-list]`。
+
 ## 命令边界
 
 卡片新增与删除是模拟记录管理，只在页面办理，助手不能调用。
