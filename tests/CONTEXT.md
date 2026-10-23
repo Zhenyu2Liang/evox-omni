@@ -83,6 +83,18 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 `unit/banking-sdk/net-value-redemption.test.ts` 覆盖份额折算、按份额／金额／全额赎回的结算与成本守恒。
 `unit/security/redemption-stale-authorization.test.ts` 覆盖确认快照不一致时的 `CONFLICT`：本次零写入、`PendingAction` 为 `failed`，同身份重放返回原回执与原净值。
 
+### 亏损持仓（负收益率 / 负收益）的覆盖边界
+
+负 `profitRate` / `profit` / `cumulativeProfit` 只在渲染层、金额层与 SDK 层被断言，工具结果层没有用例。
+`unit/planner/decimal-format.test.ts:44-96` 用真实 `HoldingFacts` 渲染一笔亏损持仓（`profit`/`cumulativeProfit` 均为 `'-49.20'`，无 `realizedProfit` 字段），断言 `-1.23%`（`:78`、`:88` 的 `tile`）、`-2.9726666666666667%`（`:87`）、`-¥49.20`（`:90`）、`not.toThrow()`（`:77`）与无费率时不出现 `%`（`:94`）。
+`unit/financial-values.test.ts:64-84` 是符号语义的唯一权威：`signedRateToPercent` 保号（`:70`/`:71`/`:72`/`:74`），非负比率与 `rateRatioToPercent` 字节相同（`:76`），`nonNegativeDecimal` 与 `rateRatioToPercent` 对负值抛 `VALIDATION`（`:79`/`:80`/`:83`）。
+`unit/banking-sdk/net-value-redemption.test.ts:366-403` 覆盖净值下跌赎回的负已实现收益：`realizedProfit '-192.31'`（`:394`）、`compareDecimal(...) === -1`（`:395`）、`realizedProfitMinor -19_231n`（`:400`）、`profit` 负值（`:379`/`:386`）。
+`unit/banking-sdk/net-value.test.ts:154-159` 断言 `profitRateOf` 对负利润输出负比率；`tests/helpers/fixtures.ts:224-239` 的 `稳健理财B`（`0.9880`）是唯一天然亏损定价的夹具，但没有播种持仓。
+负号在工具侧缺口：`get_investment_holdings` 在 `tests/` 中只出现 4 次（`e2e/live-investment.e2e-helper.ts:633` 注释、`e2e/weixin-capabilities.e2e-helper.ts:44` 工具名矩阵、`unit/agent/providers/mock-turn-declaration.test.ts:155` 声明矩阵、`unit/security/permission-engine.test.ts:27` 只读白名单），没有一条断言工具 `summary` 出现负百分比或 `data[].profitRate` 保留负号；`agent/tools/investment.ts` 的 `percentText` 在 `tests/` 内零引用。
+聊天卡与微信展示只走正收益率：`unit/planner/chat-read-results.test.ts:55-71`（`'3.2575%'` 见 `:65`）、`unit/planner/financial-display.test.ts:34-46`（`:42`）、`unit/weixin-presentation.test.ts:90-120`（`:100` 为 `持仓收益率 3.57%`，`:115-120` 断言历史数据不足时不出现 `%`）。
+真实浏览器侧只有 `e2e/live-investment.e2e-helper.ts:699-706` 一处签名守卫：`/^[+-]?\d+(\.\d+)?%$/` 正则加 B0 零 `pageerror`；它读的 B0 持仓本身是盈利的，因此负收益率只靠正则形态兜底而非真实亏损数据。
+`unit/planner/decimal-format.test.ts:75-76`、`unit/financial-values.test.ts:65-66`、`e2e/live-investment.e2e-helper.ts:16`+`:671-672` 是仅有的三处「负收益率曾导致整页崩白」的回归注释。
+
 ## 卡片生命周期能力契约的覆盖
 
 能力事实以 `lib/contracts/tool-catalog.ts` 与 `lib/contracts/card-management.ts` 为准：
