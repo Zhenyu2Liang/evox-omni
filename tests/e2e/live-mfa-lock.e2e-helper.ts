@@ -391,6 +391,16 @@ export async function scenarioMfaAttemptLimitLock(params: MfaLockParams): Promis
         if (record.counterLine === '') {
           throw new Error(`第 ${attempt} 次错码后未渲染「验证失败，已尝试 ${attempt} 次。」计数行：${record.statusTexts.join(' ｜ ')}`);
         }
+        // (a) The dock's own error line must name the cause AND the remaining attempts: a wrong code
+        // is not a transport failure, so the generic request-failure sentence would be a false statement.
+        const wrongCodeCopy = t('chat.error.verificationRemaining', { count: MAX_ATTEMPTS - attempt });
+        if (!record.dockText.includes(wrongCodeCopy)) {
+          throw new Error(`第 ${attempt} 次错码后停泊区未显示剩余次数文案「${wrongCodeCopy}」：${record.dockText.slice(-260)}`);
+        }
+        const genericFailureCopy = t('chat.error.request');
+        if (record.dockText.includes(genericFailureCopy)) {
+          throw new Error(`第 ${attempt} 次错码后停泊区显示了网络兜底句「${genericFailureCopy}」，错码不是网络故障：${record.dockText.slice(-260)}`);
+        }
         if (!(await mfaCardPresent(page))) {
           throw new Error(`第 ${attempt} 次错码后 MFA 已应保留重试，但验证码输入框消失（status=${record.status}）`);
         }
@@ -489,7 +499,8 @@ export async function scenarioMfaAttemptLimitLock(params: MfaLockParams): Promis
     const zeroProbe = [/还可尝试\s*0\s*次/, /剩余尝试次数[：:]\s*0/, /还可尝试\s*-\d/];
     const zeroHits = zeroProbe.filter((re) => re.test(lockedBody));
     const retryCopyPresent = ['还可尝试 2 次', '还可尝试 1 次'].filter((needle) => lockedBody.includes(needle));
-    const dockBadgeCopy = t('chat.error.request');
+    // (a) Asserted per attempt above: the dock error line is the typed wrong-code copy, not the transport fallback.
+    const dockBadgeCopy = t('chat.error.verificationRemaining', { count: 1 });
 
     // --- (b) the verification entry point is gone AND the row is terminal -------------------
     const mfaInputsAfterLock = await page.locator(SELECTORS.mfaInput).count();
@@ -764,7 +775,7 @@ export async function scenarioMfaAttemptLimitLock(params: MfaLockParams): Promis
       `(a) 第1次「${firstCopy}」failure=${JSON.stringify(first.failure)} attemptsLeft=${String(first.attemptsLeft)}/${String(first.maxAttempts)}`,
       `(a) 第2次「${secondCopy}」failure=${JSON.stringify(second.failure)} attemptsLeft=${String(second.attemptsLeft)}/${String(second.maxAttempts)}`,
       `(a) 第3次「${lockedCopy}」status=${third.status} code=${third.code} failure=${JSON.stringify(third.failure)} attemptsLeft=${String(third.attemptsLeft)}`,
-      `(a-extra) 「还可尝试0次」误渲染命中=${zeroHits.length}，可重试文案出现=${retryCopyPresent.length}，停泊区徽章兜底句「${dockBadgeCopy}」，服务端 attemptsLeft 直传 2/1/0 正确`,
+      `(a-extra) 「还可尝试0次」误渲染命中=${zeroHits.length}，可重试文案出现=${retryCopyPresent.length}，停泊区错码文案「${dockBadgeCopy}」（非网络兜底句），服务端 attemptsLeft 直传 2/1/0 正确`,
       `(b) 验证码输入框=${mfaInputsAfterLock}、mfaCardPresent=${String(await mfaCardPresent(page))}、停泊区=${dockAfterLock}；PendingAction.status=${persisted.status}、resultJson=${persisted.resultJson === null ? 'null' : '非空'}；GET /api/actions 不再含该 id；MfaChallenge attempts=${dbFacts.challenge.attempts}/max=${dbFacts.challenge.maxAttempts}/status=${dbFacts.challenge.status}；CircuitBreaker key=${dbFacts.breaker.key} failures=${dbFacts.breaker.failures}/locked=${String(dbFacts.breaker.locked)}`,
       `(c) 内部标记检查 ${markerChecks.length} 项（DOM ${DOM_FORBIDDEN.length} 类 × ${domTextsByAttempt.length} 个文本面 + verify JSON ${JSON_FORBIDDEN.length} 类 × ${verifyCalls.length} 次）全部未命中（__SECURITY_BLOCK__/decisionKind/"code":"/{\\"/Error:/堆栈帧），账本新增 ${ledgerDiff.added.length} 条`,
       `(d) 刷新后 锁定回执=${reloadedLockedReceipts}、当前阶段=${reloadedStages}、验证码输入框=${reloadedInputs}、停泊区=${reloadedDock}、确认按钮=${reloadedConfirm}、验证按钮=${reloadedVerify}、PendingAction.status=${reloadedPersisted?.status ?? '(缺)'}`,

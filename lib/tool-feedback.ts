@@ -54,8 +54,11 @@ export function publicToolError(message: string | undefined, t: Translator, fall
     if (insufficient) return t('chat.error.insufficientFunds', { balance: insufficient[1], amount: insufficient[2] });
     const minimum = /^Purchase amount is below the minimum (\d+\.\d{2})\.$/.exec(message);
     if (minimum) return t('chat.error.purchaseMinimum', { amount: minimum[1] });
-    const verification = /^\u9a8c\u8bc1\u7801\u9519\u8bef\uff0c\u8bf7\u91cd\u8bd5\u3002\u5269\u4f59\u5c1d\u8bd5\u6b21\u6570\uff1a(\d+)\u3002$/.exec(message);
-    if (verification) return t('chat.error.verificationRemaining', { count: verification[1] });
+    // The gateway renders a retryable wrong code from `chat.error.verificationRemaining`; the older
+    // persisted wording is still accepted for stored rows. Anything else (an internal diagnostic, a
+    // provider message) must keep reaching the `fallback`.
+    const verification = /^(?:\u9a8c\u8bc1\u7801\u9519\u8bef\u3002\u8fd8\u53ef\u5c1d\u8bd5 (\d+) \u6b21\u3002|\u9a8c\u8bc1\u7801\u9519\u8bef\uff0c\u8bf7\u91cd\u8bd5\u3002\u5269\u4f59\u5c1d\u8bd5\u6b21\u6570\uff1a(\d+)\u3002)$/.exec(message);
+    if (verification) return t('chat.error.verificationRemaining', { count: verification[1] ?? verification[2] });
   }
   if (errorCode && Object.hasOwn(PUBLIC_ERROR_CODES, errorCode)) {
     return params ? t(PUBLIC_ERROR_CODES[errorCode as ErrorCode], params) : t(PUBLIC_ERROR_CODES[errorCode as ErrorCode]);
