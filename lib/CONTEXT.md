@@ -109,6 +109,10 @@ JSON 金额使用十进制字符串。
 两个百分数出口的实际调用方：`rateRatioToPercent` ← `channels/weixin/presentation.ts:151`、`components/banking/InvestmentProductTile.tsx:49`、`components/chat/cards/InvestmentsCard.tsx:76`（只用于产品 `annualYieldRate`，负值直接抛 `VALIDATION`）；`signedRateToPercent` ← `components/banking/HoldingFacts.tsx:91`（唯一消费点，渲染 `HoldingView.profitRate`）。
 `channels/weixin/presentation.ts:70-72` 的本地 `percentText` 不走这两个出口：`multiplyDecimal(ratio,'100')` + `formatDecimalCNY`，不过非负门禁、容忍负号，但 HALF_UP 到 2 位小数，因此同一 `profitRate` 在微信显示 `3.26%`、在网页显示 `3.2575%`。
 `money.ts#addMoney`（`:56-58`）只把两个 `parseExactMinor` 结果相加，不调用 `assertMinorUnits`，结果无 INT64 范围校验；需要范围保证的路径必须先过 `moneyToCents` 或 `assertMinorUnits`。
+本目录没有 `money.ts#addDecimal`：带符号的十进制加法是 `decimal.ts#addDecimal`（`:42-44`），`money.ts` 只有分单位（最多两位小数）的 `addMoney`。
+`addMoney` / `addDecimal` 都是有符号纯加法，不取绝对值、不夹 0、无任何非负门禁：`addMoney` 经 `parseExactMinor`（`money.ts:18-23`）接受前导 `-`（`agent/grounding-facts.ts:121` 靠它累加可为负的余额增量），`addDecimal` 经 `decimalText` 的 `[+-]?` 接受负值（`agent/tools/investment.ts:239`、`banking-sdk/investment.ts:1316` 用它累加可为负的收益）。
+`addMoney` 的入参先被 `money.ts#decimalText`（`:11-16`）剥掉 `¥`/`￥`/`,`/空白，只接受 ≤2 位小数的十进制文本，否则以 `AppError('VALIDATION')` 报 `'Money must be decimal text.'`（`:12`）或 `'Money must have at most two decimal places.'`（`:20`）；结果由 `centsToMoney` 固定两位小数并保留符号（`addMoney('-0.5','0')` → `'-0.50'`）。
+`addDecimal` 的结果再经 `decimalText` 规范化，故尾随零丢失（`addDecimal('0.10','0.20')` → `'0.3'`），小数位 >18 或整数位 >40 抛 `VALIDATION`（`decimal.ts:29-31`）。
 
 `lib/mask.ts` 是展示脱敏的唯一实现，零依赖，任何层都直接复用它。
 `maskPhone` 保留前 3 位与末 4 位：长度 ≤ 3 全掩码为 `****`，长度 4–7 为前 3 位加 `****`，长度 > 7 为前 3 位 + `****` + 末 4 位；`null` / `undefined` / 非字符串 / 空串返回空串，缺省值不会渲染成星号，且不做 trim。
