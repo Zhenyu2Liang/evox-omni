@@ -11,7 +11,7 @@
 import type { HoldingView } from '@/banking-sdk';
 import { Money } from '../ui/Money';
 import { DecimalMoney } from '../ui/DecimalMoney';
-import { formatDecimalFixed, rateRatioToPercent } from '@/lib/decimal';
+import { formatDecimalFixed, signedRateToPercent } from '@/lib/decimal';
 import { formatBusinessDate } from '@/lib/date';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey, Translator } from '@/lib/i18n/shared';
@@ -84,9 +84,11 @@ function buildFacts(holding: HoldingView, t: Translator): HoldingFact[] {
     { key: 'holdingProfit', labelKey: 'business.investments.holdingProfit', value: holding.profit === undefined
       ? insufficient
       : { kind: 'decimal', amount: holding.profit, signed: true } },
+    // `profitRate` is SIGNED: a losing holding reports a negative ratio, so it must not pass through
+    // the nonnegative gate (that threw during render and blanked the page).
     { key: 'holdingProfitRate', labelKey: 'business.investments.holdingProfitRate', value: profitRate === undefined
       ? insufficient
-      : { kind: 'text', text: `${rateRatioToPercent(profitRate)}%` } },
+      : { kind: 'text', text: `${signedRateToPercent(profitRate)}%` } },
     { key: 'cumulativeProfit', labelKey: 'business.investments.cumulativeProfit', value: holding.cumulativeProfit === undefined
       ? insufficient
       : { kind: 'decimal', amount: holding.cumulativeProfit, signed: true } },
