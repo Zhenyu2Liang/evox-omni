@@ -70,3 +70,5 @@ Playwright 选择器只能依赖可见文本、原生元素、`role` 与 class�
 主题来自 `app/globals.css`。
 本目录不负责数据请求或业务授权。
 显示测试见 `tests/unit/planner/financial-display.test.ts`。
+`DecimalMoney` 的渲染字面量断言（`+¥118.91`、`-¥0.00`、`¥4,118.91` 等）在
+`tests/unit/planner/decimal-format.test.ts`，可直接作为选择器文本锚点。
