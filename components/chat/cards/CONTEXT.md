@@ -91,6 +91,9 @@
 | 费用口径 | `chat.value.feeRuleSimulatedNone` | 模拟环境不收取赎回费，赎回费 ¥0.00 | 费用口径字段值含 `SIMULATED_NONE` |
 | 重新确认 | `chat.value.reconfirmOnChange` | 确认期间净值变化时需重新确认 | 命中快照 |
 
+`费用口径` 行本身照常作为普通字段行渲染：`localizeActionFieldValue` 没有 `chat.field.feeRule` 分支，值按服务端原文显示（如「赎回费 ¥0.00（SIMULATED_NONE：模拟规则免收）」）；免收句子是额外追加，不是替换。
+费用判定只读值字符串：`isSimulatedNoneFeeField` 要求标签映射为 `chat.field.feeRule` 且 `field.value.includes('SIMULATED_NONE')`，没有结构化费用字段。
+值不含 `SIMULATED_NONE` 时只显示原文，不打印免收句子，也不做任何清洗。
 赎回字段与策略值的映射登记在 `lib/i18n/messages/display-sources.json`。
 
 ## 授权与状态
