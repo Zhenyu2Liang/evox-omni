@@ -90,7 +90,7 @@ JSON 金额使用十进制字符串。
 
 ## 错误类型（`errors.ts`）
 
-`ErrorCode`（`errors.ts:3`）为 11 个字面量联合：`VALIDATION`、`NOT_FOUND`、`INSUFFICIENT_FUNDS`、`LIMIT_EXCEEDED`、`SECURITY_DENIED`、`MFA_FAILED`、`MFA_LOCKED`、`CIRCUIT_OPEN`、`CONFLICT`、`TOOL_FAILED`、`INTERNAL`。
+`ErrorCode`（`errors.ts:3`）为 12 个字面量联合：`VALIDATION`、`NOT_FOUND`、`INSUFFICIENT_FUNDS`、`LIMIT_EXCEEDED`、`SECURITY_DENIED`、`MFA_FAILED`、`MFA_LOCKED`、`CIRCUIT_OPEN`、`MANUAL_REVIEW_HOLD`、`CONFLICT`、`TOOL_FAILED`、`INTERNAL`。
 `AppError`（`errors.ts:5-25`）只有 `readonly code: ErrorCode`、继承的 `message`（内部诊断，可进日志）、`readonly detail?: unknown`（内部用途）与 `readonly publicMessage?: string`（public-safe）；没有结构化 `failure` 字段，也没有 `toJSON` 或自定义序列化，故 `JSON.stringify` 只出现自有可枚举属性 `code`/`detail`（以及存在时的 `publicMessage`）。
 `publicMessage` 在构造器里用 `internal-text.ts#publicSafeMessage` 净化：可渲染时等于 `message`，被判为内部诊断或空白时为 `undefined`，语义是「没有可公开文案，调用方用目录兜底」。
 `message` 与 `detail` 语义不变：`message` 仍是内部诊断文本，`detail` 仍只供日志与开发者面板。
