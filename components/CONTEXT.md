@@ -29,19 +29,24 @@ SDK 数据类型使用类型导入。
 组件必须保留业务状态与操作身份。
 
 金额显示使用 `Money` 或 `DecimalMoney`。
-部分赎回后的持仓按剩余本金（`holding.amount`）及估算市值与收益显示。
+持仓市值恒由份额与最新净值派生（`shares × 最新净值`，由 `banking-sdk` 的 `holdingValuation` 计算），组件不重算。
+`banking/HoldingFacts` 是净值与份额事实的唯一渲染源，`card`/`tile` 两种布局只改变行结构，
+`InvestmentProductTile` 与 `chat/cards/InvestmentsCard` 因此显示同一组数值；
+净值份额模式下它无条件产出 9 项事实，缺失的事实渲染「历史数据不足」而不是 0。
+「估算」只描述份额口径：`valueBasis: 'MIGRATED_ESTIMATE'`（`sharesEstimated` 为真）的市值与收益算法与
+`NET_VALUE` 完全相同，被标注出来的是「份额由旧账面数据派生」，不是市值本身；
+`HISTORICAL_DATA_INSUFFICIENT` 的市值回退为剩余成本，收益类事实渲染「历史数据不足」。
+部分赎回后的持仓按剩余本金（`holding.amount`）、派生市值与未实现收益显示。
 已加购持仓显示最近申购时间（`lastPurchaseAt`）与申购记录数（`purchases`），
 投资产品卡与对话投资卡片以“已加购”标记加购。
 
 卡片结算账户区块只由 `CardView.linkedAccountStatus` 决定，
-由 `banking/card-account-display.ts` 的纯函数统一归约，
-`banking/CardTile` 与 `chat/cards/CardsCard` 复用同一套判定，不各自实现。
-`LINKED` 展示关联账户（`linkedAccountName` + 已脱敏 `linkedAccountNumber`，缺省回退 `linkedAccountId`）、
-账户余额（`accountAvailableBalance`）与该卡可用余额（`payableAmount`）；
-`MISSING`（未关联账户）与 `UNTRUSTED`（账户暂不可用）只展示提示文案，
-不渲染任何金额，不得以 0 占位；
-`NOT_APPLICABLE` 是信用卡，只展示 `信用额度`（`business.cards.limit`）与 `可用额度`（`business.cards.available`）。
-`accountAvailableBalance` 是关联账户的现金余额，不是授信额度，也不是卡片自有的第二份余额。
+归约只走 `banking/card-account-display.ts` 的纯函数，
+`banking/CardTile` 与 `chat/cards/CardsCard` 复用同一套四态判定，不各自实现；
+各状态携带哪些字段（账户名、脱敏号码、账户余额、可用余额）由 `banking-sdk` 的 `CardView` 投影决定，
+规则见 [banking-sdk/CONTEXT.md](../banking-sdk/CONTEXT.md)。
+组件层只决定展示：`NOT_APPLICABLE` 是信用卡，只展示 `信用额度`（`business.cards.limit`）与 `可用额度`（`business.cards.available`）；
+`MISSING`（未关联账户）与 `UNTRUSTED`（账户暂不可用）只展示提示文案，不渲染任何金额，不得以 0 占位；
 `usable === false`（FROZEN/LOST）另加「卡片不可用」提示，账户余额区块照常显示。
 展示脱敏统一走 `lib/mask.ts`，`chat/cards/maskPhone.ts` 仅为再导出。
 
