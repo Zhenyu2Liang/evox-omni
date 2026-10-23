@@ -19,6 +19,13 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 - `NET_VALUE`：`shares` 可用且产品发布了净值，份额来自真实申购记录（`sharesEstimated` 为假）。
 - `MIGRATED_ESTIMATE`：`shares` 可用、净值可用，但 `sharesEstimated` 为真——份额由 `scripts/investment-share-backfill.mjs` 按历史账面价值派生，只能算作估算；市值与收益的计算口径与 `NET_VALUE` 完全相同，只是标注不同。
 - `HISTORICAL_DATA_INSUFFICIENT`：`shares` 缺失或不合法，或产品没有净值。此时市值回退为剩余成本、收益缺省；`sharesEstimated` 为真也不会凭空估值。
+## 十进制符号规则（本目录）
+`addDecimal`/`subtractDecimal` 保留符号，专门用于可为负的累加与差；`nonNegativeDecimal`（`lib/decimal.ts`，负数抛 `VALIDATION`）只是「真实非负量」的闸门。
+`addDecimal` 调用点：`investment.ts:1316` `cumulativeProfit = addDecimal(realizedProfit, profit)`（已实现 + 未实现收益两者都可为负）、`investment.ts:782` 份额累加（正数）、`dashboard.ts:44` 持仓市值累加（恒非负）。
+`nonNegativeDecimal` 调用点：净值 `investment.ts:124`、份额 `investment.ts:145`、产品年化比例 `investment.ts:219`、历史记录十进制字段 `investment.ts:364`、赎回估值 `investment.ts:542`、请求份额 `investment.ts:926`、确认快照 `investment.ts:1001`/`1004`、比例估值入参 `valuation.ts:73`。
+`HoldingView.profitRate` 由 `net-value.ts#profitRateOf(profit, cost)` 推导（`investment.ts:197`），`profit = marketValue − 剩余成本` 可为负，因此 `profitRate` 是带符号比例（种子 `holding_wenjib`：成本 10000、净值 0.9880、份额 10000 → 收益 −120、收益率 −0.012）。
+本目录绝不把 `profitRate`、`profit`、`realizedProfit`、`cumulativeProfit` 送入 `nonNegativeDecimal`，也不在本目录换算百分比：`listHoldings` 原样投影 `profitRate`（`investment.ts:1314`）。
+本目录没有任何 `signedRateToPercent`/`rateRatioToPercent` 调用；带符号比例的百分比换算只发生在展示层 `components/banking/HoldingFacts.tsx`（`signedRateToPercent`），年化比例用 `rateRatioToPercent`。
 ## 认购：新建或聚合
 `subscribeInvestment` 先校验 `userId` 与正金额，再在同一个事务内判断该 (用户, 产品) 是否已有 `HOLDING`。
 产品没有净值时抛 `VALIDATION`（`该产品未发布净值，暂不可申购`）。
