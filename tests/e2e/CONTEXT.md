@@ -173,7 +173,8 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 `MFA_MAX_ATTEMPTS = 3`（`lib/constants.ts:10`），由 `ChatWindow.tsx:237-238` 经 `ApprovalRequest` 传给 `MfaCard`。
 第 1、2 次错误码服务端回 `awaiting_mfa`：停泊区与输入框保留，计数行显示 `验证失败，已尝试 1 次。`/`…2 次。`（`cards.mfa.failedAttempts`）。
 `mfaAttempts` 只在「仍是同一 `mfa` 决策且本轮有 `error`」时自增（`useAgentStream.ts:346-363`），决策变更或清空时归零（`:240-246`）。
-第 3 次服务端把 `PendingAction` CAS 为 `locked`，`settleAction` 置终态并清空 `pendingAction`（`agent-stream-reducer.ts:319-342`），**整个弹层消失**，会话内只留只读历史卡；`pickPendingAction` 只恢复 `pending`/`awaiting_mfa`（`:557-559`），刷新不会重开面板。
+第 3 次服务端把 `PendingAction` CAS 为 `locked`，`settleAction` 在同一个 fold 里把 transcript 的 `mfa` 卡写成终态（`agent-stream-reducer.ts:277-281`）并清空 `pendingAction`（`:319-342`），停泊区因此与卡片终态在同一渲染内卸载，**整个弹层消失**，会话内只留只读历史卡。
+`pickPendingAction` 只恢复 `pending`/`awaiting_mfa`（`:557-559`），刷新不会重开面板。
 `j-circuit-breaker-lock` 因此断言三次后 `SELECTORS.mfaInput` 不存在、余额与流水零变化、`/security` 的 `已熔断` + `失败 3 / 3 次` + `CIRCUIT_BREAKER_TRIPPED`（`severity` `high`，DB 交叉核对）。
 
 锁定终态的断言范围（`j` 的实际覆盖）：`waitForStatusText(page, t('cards.terminal.locked'))` 是对全页 `[role="status"]` 做去空白**子串**匹配，
