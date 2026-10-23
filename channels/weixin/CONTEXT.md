@@ -78,6 +78,15 @@ notices 与 feedback 在拼接前 `new Set` 去重（`banking-client.ts:148`）�
 `body` 为空时才使用兜底句（`banking-client.ts:149`），`emptyNotice:false` 回空串；默认仍回 `本次请求已处理，请在网页查看业务详情；没有确认或验证的业务不会执行。`。
 `renderBusinessCard` 用 try/catch 兜底为 `服务端结果字段不完整，请在网页核对；未据此推断业务成功或余额。`；列表渲染前 `Array.isArray` 校验；电话按 11 位掩码。
 
+## 百分比与符号契约（presentation.ts）
+
+本目录唯一的 `lib/decimal` 引用是 `presentation.ts:8`（`formatDecimalCNY`、`multiplyDecimal`、`rateRatioToPercent`）；全目录没有调用 `signedRateToPercent`、`nonNegativeDecimal`、`addDecimal`、`addMoney`。
+产品「预期年化」：`presentation.ts:151` 用 `rateRatioToPercent(row.annualYieldRate)`；该函数是 `signedRateToPercent(nonNegativeDecimal(ratio))`（`lib/decimal.ts:76-78`），负值抛 `AppError('VALIDATION')`。
+`ProductView.annualYieldRate`（`banking-sdk/types.ts:413`）在创建（`lib/db/repositories/investment.ts:33`）与投影（`banking-sdk/investment.ts:219`）两处被 `nonNegativeDecimal` 上闸，负值到不了本行；万一出现，抛错被 `renderBusinessCard` 的 try/catch（`presentation.ts:109-112`）吞掉，降级的是整张理财卡，不是单个字段。
+持仓收益率：`presentation.ts:88` 用本文件 `percentText`（`presentation.ts:70-72`），只做 `multiplyDecimal(ratio,'100')` + `formatDecimalCNY`，不过非负门禁，因此亏损持仓正常显示负号（种子持仓 `holding_wenjib` 即负）。
+`HoldingView.profitRate` 是有符号业务事实（`banking-sdk/net-value.ts#profitRateOf` 保留 `profit` 符号，零成本时缺省）：不能改用 `rateRatioToPercent`，否则亏损持仓渲染抛错；网页端对应出口是 `components/banking/HoldingFacts.tsx` 的 `signedRateToPercent`。
+精度差异：微信 `percentText` HALF_UP 到 2 位小数（`3.26%`），网页 `signedRateToPercent` 保留 4 位（`3.2575%`）；同一事实两端位数不同是已知差异。
+
 ## HTTP 错误通道
 
 `banking-client.ts` 不做运行时 schema 校验（网页侧才用 `components/chat/transport-validation.ts` 的 zod）。
