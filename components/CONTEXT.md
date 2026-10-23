@@ -54,6 +54,14 @@ SDK 数据类型使用类型导入。
 不渲染验证码输入、提交或重试控件。
 颜色与圆角使用 `app/globals.css` 中的主题。
 
+## 定位与可测性
+
+组件不输出 `data-testid`；页面级 `data-*` 钩子（如 `data-card-id`、`data-card-list`）由页面提供，不在组件内。
+`Button` 的 `disabled` 与 `loading` 都落到原生 `disabled` 属性；`loading` 只插入旋转 `span` 并设 `aria-busy`，不追加文案。
+`EmptyState` 的标题渲染为无角色的 `div`，`getByRole('heading')` 定位不到。
+金额文本统一是 `[±]¥#,##0.00` 的单个 `span.tabular-nums`。
+具体 DOM 契约见 `ui/CONTEXT.md`（Button / EmptyState / Money / Card / Badge）与 `banking/CONTEXT.md`（CardTile 行结构）。
+
 ## 修改约束
 
 - 客户端不得导入 Prisma 或服务端业务执行函数。
