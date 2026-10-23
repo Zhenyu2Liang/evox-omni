@@ -158,6 +158,9 @@ financial records or the immutable model/event archive. See `turns/CONTEXT.md` f
 
 Card results — the card reads, the card mutations and `consume_virtual_card` — render as a `cards` card built from the server-returned card projection (`card-emitter.ts`), which carries the linked account, its available balance, the monthly limit and the currently payable amount; model prose never fills a result card.
 
+Yield/profit rendering: `tools/investment.ts` calls `rateRatioToPercent` ONLY on `product.annualYieldRate` (already `nonNegativeDecimal`-gated in `banking-sdk/investment.ts:219`), while the signed `HoldingView.profitRate` renders through the file-local `percentText` (`multiplyDecimal(ratio,'100')` + `formatDecimalCNY`, which keeps the sign) — `nonNegativeDecimal` has NO call site in `agent/`, so a loss ratio cannot throw the VALIDATION gate on render.
+Holdings profit is accumulated with the SIGNED `addDecimal` (`tools/investment.ts:239`, `holding.profit ?? '0'`, so a missing profit silently counts as 0) while cost is summed with the signed `addMoney` (`:238`); `addMoney` accepts negative operands (`lib/money.ts:56`, up to 2 dp, no sign or 64-bit range check) — `grounding-facts.ts:121` relies on that for a possibly-negative balance delta.
+
 Investment writes follow the same rule: `subscribe_investment` and `redeem_investment` re-read the CURRENT holdings (`banking.investment.listHoldings`) after the write commits and attach that snapshot additively as `data.holdings`, so `card-emitter.ts` projects the validated receipt AND an `investments` card of the post-write positions. The authoritative `InvestResult` fields keep their meaning; an unavailable re-read is omitted rather than fabricated, leaving the committed write successful with its receipt only.
 
 The registered internal describe_turn tool declares purpose, ordered requested capabilities and
