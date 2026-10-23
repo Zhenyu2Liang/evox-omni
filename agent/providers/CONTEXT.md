@@ -148,6 +148,12 @@ The marker reaches `narrate` as the Pi tool result reason (`agent/banking-agent.
 `narrateConversationHistory` (`mock/history.ts:20-27`) quotes only matches whose `role === 'user'`, so it cannot re-quote a tool-result marker.
 `toolLabels` (`mock/narration.ts:65-76`) and `narrationLeads` (`:36-63`) have no `consume_virtual_card` entry, so a blocked card spend falls back to the raw English tool name in `{operation}` (branch 1/3) or to `操作已完成：` (success lead).
 
+## No fee model in this node
+
+`agent/providers/` models NO banking fee: no `fee` / `feeAmount` / `feeRule` / `REDEMPTION_FEE_RULE` / `SIMULATED_NONE` identifier, no 手续费/管理费/赎回费 copy, no fee field in any mock tool-call argument, and no fee sentence in `mock/narration.ts` — a `redeem_investment` result narrates as `理财赎回结果：` plus the tool's own first summary part, so any 费用口径 comes only from the server-authored tool summary and is passed through verbatim here.
+The only 费用 text in this node is subscription cost in `mock/messages.zh-CN.json:14` (`费用为 {amount}/月`, filled by `mock/discussion.ts`); the 费 characters in `mock/conversation-policy.ts:21` (花费), `mock/request-command-patterns.ts:15` and `mock/subscription-intents.ts:13` (续费) are unrelated spending/subscription words.
+`provider-live.ts:116` `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }` is model token pricing metadata, not a banking fee.
+
 ## Mock intent and safety constraints
 
 The mock provider reads current tool declarations through Pi getCurrentTools(messages), including
