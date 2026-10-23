@@ -158,6 +158,8 @@ financial records or the immutable model/event archive. See `turns/CONTEXT.md` f
 
 Card results — the card reads, the card mutations and `consume_virtual_card` — render as a `cards` card built from the server-returned card projection (`card-emitter.ts`), which carries the linked account, its available balance, the monthly limit and the currently payable amount; model prose never fills a result card.
 
+Investment writes follow the same rule: `subscribe_investment` and `redeem_investment` re-read the CURRENT holdings (`banking.investment.listHoldings`) after the write commits and attach that snapshot additively as `data.holdings`, so `card-emitter.ts` projects the validated receipt AND an `investments` card of the post-write positions. The authoritative `InvestResult` fields keep their meaning; an unavailable re-read is omitted rather than fabricated, leaving the committed write successful with its receipt only.
+
 The registered internal describe_turn tool declares purpose, ordered requested capabilities and
 optional workflow/example flags for one current user turn. Its result is interpretation, never
 authorization. Ordinary explanation permits automatic GREEN reads but cannot open a gated read or

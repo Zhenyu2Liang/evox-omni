@@ -43,6 +43,7 @@ import {
   runSubscribeInvestment,
 } from '@/agent/tools/investment';
 import { validateBankingParameters } from '@/agent/tools/plan-parameters';
+import { toCards } from '@/agent/card-emitter';
 import { AGENT_TOOL_NAMES } from '@/lib/contracts/tool-catalog';
 import { AppError } from '@/lib/errors';
 
@@ -74,6 +75,103 @@ const REDEEMED = {
   remainingCost: '4000.00',
   partial: true,
 };
+
+/**
+ * The CURRENT position after the write — what `banking.investment.listHoldings` reports once the
+ * purchase/redemption has committed. It is deliberately different from any pre-write snapshot: the
+ * chat must never keep showing the previous 份额 after the user's own write went through.
+ */
+const CURRENT_HOLDING = {
+  id: 'holding_1', productId: 'product_1', productName: '稳健理财', riskLevel: 'R2', amount: '3034.33',
+  shares: '4034.334266', latestNetValue: '0.988', latestNetValueDate: 1_700_000_000_000,
+  marketValue: '3985.922', profit: '951.592', profitRate: '0.0437', realizedProfit: '0.00',
+  cumulativeProfit: '951.592', valueBasis: 'NET_VALUE', status: 'HOLDING', boughtAt: 1_700_000_000_000,
+  product: { id: 'product_1', code: 'WJA001', name: '稳健理财A', riskLevel: 'R2', annualYieldRate: '0.032',
+    termDays: 30, minAmount: '1000.00', description: '稳健型产品' },
+};
+
+describe('investment writes project the CURRENT holdings after committing', () => {
+  beforeEach(() => vi.resetAllMocks());
+
+  it('carries the re-read position on a subscription and projects it as an investments card', async () => {
+    investment.subscribeInvestment.mockResolvedValue({
+      success: true, holdingId: 'holding_1', productId: 'product_1', amount: '1000.00', newBalance: '4000.00',
+      sourceAccountId: 'account_1', occurredAt: 1_700_000_000_000, subscribedShares: '1012.145748',
+      totalShares: '4034.334266', addedToExisting: true,
+    });
+    investment.listHoldings.mockResolvedValue([CURRENT_HOLDING]);
+
+    const result = await runSubscribeInvestment('owner',
+      { productId: 'product_1', amount: '1000.00' }, { idempotencyKey: 'run-key' });
+
+    // The authoritative write fields are untouched and the snapshot is additional evidence.
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({
+      amount: '1000.00', subscribedShares: '1012.145748', totalShares: '4034.334266', addedToExisting: true,
+    });
+    expect((result.data as { holdings?: unknown }).holdings).toEqual([CURRENT_HOLDING]);
+
+    const cards = toCards('subscribe_investment', result);
+    expect(cards.map((card) => card.type)).toEqual(['receipt', 'investments']);
+    expect(cards[1]).toEqual({ type: 'investments', data: { holdings: [CURRENT_HOLDING] } });
+  });
+
+  it('projects the re-read position after a partial redemption, not the pre-write 份额', async () => {
+    investment.redeemInvestment.mockResolvedValue(REDEEMED);
+    investment.listHoldings.mockResolvedValue([CURRENT_HOLDING]);
+
+    const result = await runRedeemInvestment('owner',
+      { holdingId: 'holding_1', mode: 'AMOUNT', amount: '2000.00' }, { idempotencyKey: 'run-key' });
+
+    expect(result.ok).toBe(true);
+    expect(result.data).toMatchObject({ amount: '1000.00', mode: 'SHARES' });
+    expect((result.data as { holdings?: unknown }).holdings).toEqual([CURRENT_HOLDING]);
+
+    const cards = toCards('redeem_investment', result);
+    expect(cards.map((card) => card.type)).toEqual(['receipt', 'investments']);
+    const projected = cards[1];
+    expect(projected.type).toBe('investments');
+    if (projected.type === 'investments') {
+      expect(projected.data).toEqual({ holdings: [CURRENT_HOLDING] });
+    }
+  });
+
+  it('projects the honest empty position after a closing redemption', async () => {
+    investment.redeemInvestment.mockResolvedValue({
+      ...REDEEMED, mode: 'ALL', redeemedShares: '5000', remainingShares: '0', remainingCost: '0.00',
+    });
+    investment.listHoldings.mockResolvedValue([]);
+
+    const result = await runRedeemInvestment('owner',
+      { holdingId: 'holding_1', mode: 'ALL' }, { idempotencyKey: 'run-key' });
+
+    expect(result.ok).toBe(true);
+    expect(toCards('redeem_investment', result)).toEqual([
+      expect.objectContaining({ type: 'receipt' }),
+      { type: 'investments', data: { holdings: [] } },
+    ]);
+  });
+
+  it('keeps a committed write successful with only its receipt when the re-read fails', async () => {
+    investment.redeemInvestment.mockResolvedValue(REDEEMED);
+    investment.listHoldings.mockRejectedValue(new AppError('TOOL_FAILED', 'read failed'));
+
+    const result = await runRedeemInvestment('owner',
+      { holdingId: 'holding_1', mode: 'SHARES', shares: '1000' }, { idempotencyKey: 'run-key' });
+
+    // The redemption already committed: no fabricated holding list, no error card, no failed call.
+    expect(result.ok).toBe(true);
+    expect(result.data).not.toHaveProperty('holdings');
+    expect(toCards('redeem_investment', result).map((card) => card.type)).toEqual(['receipt']);
+  });
+
+  it('never projects a holding list from an unusable snapshot payload', async () => {
+    for (const holdings of ['not-a-list', null, [{ shares: '1' }, 'not-a-record'], undefined]) {
+      const cards = toCards('redeem_investment', { ok: true, data: { ...REDEEMED, holdings } });
+      expect(cards.map((card) => card.type)).toEqual(['receipt']);
+    }
+  });
+});
 
 describe('redeem_investment — required 赎回口径', () => {
   beforeEach(() => vi.resetAllMocks());

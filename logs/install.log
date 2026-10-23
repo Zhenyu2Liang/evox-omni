@@ -1,0 +1,63 @@
+✓ Lockfile passes supply-chain policies (verified 23h ago)
+Lockfile is up to date, resolution step is skipped
+Packages are hard linked from the content-addressable store to the virtual store.
+  Content-addressable store is at: D:\.pnpm-store\v11
+  Virtual store is at:             node_modules/.pnpm
+Progress: resolved 142, reused 142, downloaded 0, added 104
+Progress: resolved 282, reused 282, downloaded 0, added 245
+Progress: resolved 309, reused 309, downloaded 0, added 271
+Progress: resolved 372, reused 372, downloaded 0, added 334
+Progress: resolved 443, reused 443, downloaded 0, added 405
+Progress: resolved 482, reused 482, downloaded 0, added 442
+Progress: resolved 507, reused 507, downloaded 0, added 469
+Progress: resolved 522, reused 522, downloaded 0, added 481
+Progress: resolved 581, reused 581, downloaded 0, added 539
+Progress: resolved 604, reused 604, downloaded 0, added 575
+Progress: resolved 611, reused 611, downloaded 0, added 590
+Progress: resolved 612, reused 611, downloaded 0, added 591
+Progress: resolved 612, reused 612, downloaded 0, added 592
+Progress: resolved 612, reused 612, downloaded 0, added 593
+Progress: resolved 612, reused 612, downloaded 0, added 594
+Packages: +612
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+Progress: resolved 612, reused 612, downloaded 0, added 612, done
+
+dependencies:
++ @earendil-works/pi-agent-core 1.2.0
++ @earendil-works/pi-ai 1.2.0
++ @earendil-works/pi-coding-agent 1.2.0
++ @next/env 16.4.0
++ @prisma/adapter-better-sqlite3 7.10.0
++ @prisma/client 7.10.0
++ decimal.js 10.6.0
++ next 16.4.0
++ pi-weixinbot 1.0.5
++ qrcode 1.5.4
++ react 19.3.0
++ react-dom 19.3.0
++ react-markdown 10.1.0
++ remark-gfm 4.0.1
++ zod 4.6.7
+
+devDependencies:
++ @next/eslint-plugin-next 16.4.0
++ @tailwindcss/postcss 4.3.3
++ @types/node 26.6.5
++ @types/qrcode 1.5.6
++ @types/react 19.3.0
++ @types/react-dom 19.3.0
++ @typescript/native <- typescript 7.0.2
++ eslint 10.12.0
++ eslint-plugin-react-hooks 7.1.1
++ globals 17.13.0
++ playwright-core 1.64.0
++ postcss 8.5.30
++ prisma 7.10.0
++ tailwindcss 4.3.3
++ tsx 4.23.15
++ typescript <- @typescript/typescript6 6.0.2
++ typescript-eslint 8.71.2
++ vitest 5.0.4
+
+Done in 55.8s using pnpm v12.3.4
+EXITCODE=0 

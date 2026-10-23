@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   addDecimal, compareDecimal, decimalText, divideDecimal, formatDecimalCNY,
-  multiplyDecimal, rateRatioToPercent, subtractDecimal, valuationToMinor,
+  multiplyDecimal, nonNegativeDecimal, rateRatioToPercent, signedRateToPercent, subtractDecimal,
+  valuationToMinor,
 } from '@/lib/decimal';
 import {
   addMoney, centsToMoney, formatCNY, MAX_MINOR_UNITS,
@@ -58,6 +59,28 @@ describe('exact financial values', () => {
     expect(divideDecimal('325', '10000')).toBe('0.0325');
     expect(() => divideDecimal('1', '3')).toThrow();
     expect(() => divideDecimal('1', '0')).toThrow();
+  });
+
+  it('converts a SIGNED ratio to percent without clamping or abs, and never relaxes the amount gate', () => {
+    // A holding's 持仓收益率 is signed: a losing position must render a negative percentage rather
+    // than 0, an absolute value or a thrown error (that throw blanked the page in the live browser run).
+    expect(signedRateToPercent('0.032575')).toBe('3.2575');
+    expect(signedRateToPercent('0')).toBe('0');
+    expect(signedRateToPercent('0.0123')).toBe('1.23');
+    expect(signedRateToPercent('-0.0123')).toBe('-1.23');
+    expect(signedRateToPercent('-0.0001')).toBe('-0.01');
+    expect(signedRateToPercent('-1')).toBe('-100');
+    // The SDK ratio keeps every digit: the display conversion never re-rounds it.
+    expect(signedRateToPercent('-0.029726666666666667')).toBe('-2.9726666666666667');
+    // A nonnegative ratio yields exactly the text `rateRatioToPercent` produced before the split.
+    expect(signedRateToPercent('0.032575')).toBe(rateRatioToPercent('0.032575'));
+    expect(() => signedRateToPercent(-0.0123 as unknown as string)).toThrow();
+    // Money, shares and net values keep their nonnegative gate, and the annual yield stays nonnegative.
+    expect(() => nonNegativeDecimal('-0.0123')).toThrow(expect.objectContaining({ code: 'VALIDATION' }));
+    expect(() => nonNegativeDecimal('-1')).toThrow(expect.objectContaining({ code: 'VALIDATION' }));
+    expect(nonNegativeDecimal('0')).toBe('0');
+    expect(nonNegativeDecimal('000.03257500')).toBe('0.032575');
+    expect(() => rateRatioToPercent('-0.032575')).toThrow(expect.objectContaining({ code: 'VALIDATION' }));
   });
 
   it('normalizes and bounds decimals without truncation or binary arithmetic', () => {

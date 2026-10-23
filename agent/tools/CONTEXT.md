@@ -149,6 +149,10 @@ replays its recorded model call. The stored intent shape is `ConversationIntent`
 
 对已持有产品的重复申购由 SDK 聚合进现有 `HOLDING`：增加该持仓份额与本金并重算市值，`InvestResult.addedToExisting = true`，不新建持仓。工具层以 `{ productId, amount }`（金额规范成两位小数）转发给 `banking.investment.subscribeInvestment`，并把 `opts.idempotencyKey` 转发为执行身份。申购结果本身不带成交净值，`runSubscribeInvestment` 因此以一次只读的 `banking.investment.listHoldings()` 回读该持仓最近一笔 `purchases[].netValuePerUnit` / `netValueDate` 作为**展示**用成交净值；这次回读失败或被重放的旧记录没有该字段时，摘要写「历史数据不足」，绝不把已成交的申购判为失败或凭空补一个净值。摘要字段为已认购金额、持仓号、`申购份额`、`成交净值`（含净值日期）、`持仓总份额`、可选账户余额，末尾附 `收益为模拟估算，不承诺保本。`。金额始终为精确十进制字符串，计算使用整数最小单位或十进制算术。
 
+### 写入后的持仓卡（`data.holdings`）
+
+`subscribe_investment` 与 `redeem_investment` 在写事务提交后都调用 `investment.ts#currentHoldings()` 重读 `banking.investment.listHoldings(userId)`，再用 `withHoldings()` 把这份**当前**持仓以 `data.holdings` 附加在权威 `InvestResult` 之上（`amount`/`shares`/`realizedProfit` 等字段语义与取值不变，只是新增一个展示字段）。`agent/card-emitter.ts#writtenHoldings` 因此对这两个写工具投影 `receipt` + `investments`（`{ holdings }`）两张卡：回执仍是写入的权威结论，紧随其后的持仓卡与 `get_investment_holdings` 的形状完全相同，所以聊天里最新一张持仓卡永远是本次写入后的真实状态，绝不会停在写入前的旧快照。回读失败或不返回数组时 `data.holdings` 整体缺失，只投影回执卡——写入已提交，事实优先，绝不把成功写入变成失败调用，也不伪造空持仓；重放时重读的是「现在」的真实持仓。
+
 ## `planning.ts` entry points
 
 | Export | Line | Kind / signature |

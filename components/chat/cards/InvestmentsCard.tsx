@@ -64,7 +64,7 @@ function InvestmentResult({ product, holding }: { product: ProductView; holding?
     ?? (addedToExisting ? purchases[purchases.length - 1].at : undefined);
   const basisKey = holding === undefined ? undefined : valueBasisLabelKey(holding);
   return (
-    <div className="min-w-0 rounded-xl border border-banking-light bg-slate-50/60 p-3.5">
+    <div data-investment-card="true" data-investment-holding-id={holding?.id ?? undefined} className="min-w-0 rounded-xl border border-banking-light bg-slate-50/60 p-3.5">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="break-words text-sm font-semibold text-banking-deep">{product.name}</div>
