@@ -405,6 +405,9 @@ export async function scenarioMfaAttemptLimitLock(params: MfaLockParams): Promis
         record.counterLine = findCounterLine(lockedStatusTexts);
       }
 
+      // One screenshot per wrong code, so the evidence pack shows EACH rung of the ladder
+      // (1st/2nd keep the dock with the counter line, 3rd shows the terminal lock).
+      await shoot(`lH-wrong-${attempt}`);
       attempts.push(record);
     }
 
