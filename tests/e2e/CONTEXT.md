@@ -134,7 +134,7 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 ## MFA 验证码与熔断覆盖
 
 `acceptance.e2e.ts` 的 `j-circuit-breaker-lock` 在同一会话内连续提交 3 次错误验证码（每次 `submitMfa('000000')`），
-断言 `cards.terminal.locked`（已锁定）且验证码输入框 `SELECTORS.mfaInput` 消失，
+断言 `cards.terminal.locked`（「已锁定」，实际命中只读回执阶段行而非停泊区，见「锁定终态：尝试次数与面板消失」）且验证码输入框 `SELECTORS.mfaInput` 消失，
 随后切换到 `/security` 核对已熔断并在该页刷新验证持久化；三次尝试之间不刷新页面。
 `e2-refresh-mfa`（journey e）断言挂起但未锁定的红档转账刷新后 MFA 卡片恢复。
 `live-acceptance.e2e.ts` 的 S4 只提交一次错误码并断言卡片保留，正确码在独立页面执行；live 侧不校验尝试次数上限。
