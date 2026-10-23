@@ -59,6 +59,8 @@ SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件�
 
 ## 完整号码列
 
+`Account.number` 只存已脱敏账号（字段注释 `masked, e.g. "****8821"`），没有对应的完整账号列；账号身份只能用 `Account.id` 精确匹配，脱敏值仅作候选过滤。
+种子直接写入脱敏串：活期 `****8821`、储蓄 `****3309`。
 `Contact.phoneFull` 与 `Card.numberFull` 保存完整的虚构手机号与卡号，仅供服务端精确匹配。
 这两列都可空，未补全的行为空值，缺失数字无法从脱敏列恢复。
 `Contact.phone` 与 `Card.numberMasked` 只存脱敏值，是唯一对外展示来源。
