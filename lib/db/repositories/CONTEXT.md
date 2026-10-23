@@ -79,7 +79,7 @@
 落库兜底：`maxAttempts: input.maxAttempts ?? 3`（`:323`）、`expiresAt: input.expiresAt ?? new Date(Date.now() + 5 * 60_000)`（`:324`）；`commandDigest` 原样透传（可不传，落到模型可空列）；`attempts` 与 `status` 从不写，由 schema 默认 `0` / `'pending'`（`prisma/schema.prisma:476`/`:478`，`maxAttempts` 默认 `3` 在 `:477`）。
 默认 `expiresAt` 在函数内部设置，硬编码 5 分钟字面量，不 import `security/`（本文件不依赖业务安全层），因此 `security/mfa.ts:34` 的 `MFA_CHALLENGE_TTL_MS` 与本文件是两份独立字面量，改常量不传导到默认值。
 默认 TTL 用 `Date.now()`，安全层用 `realNow()`（`lib/clock.ts`），两者是不同时钟入口。
-`getMfaChallenge`（`:329`）是 `findUnique({ where: { actionId } })`：按 `actionId`（schema `@unique`，`schema.prisma:452`）查，至多一条，无状态过滤。
+`getMfaChallenge`（`:330-335`）是 `findUnique({ where: { actionId } })`：按 `actionId`（schema `@unique` 且 `onDelete: Cascade`，`schema.prisma:473`/`:474`）查，至多一条，无状态过滤，不与 action 联查。
 `incrementMfaAttempts`（`:336`）单条 `update` + `attempts: { increment: 1 }`：自增是原子的，但没有状态/代次条件（不是 CAS），返回更新后的整行。
 `updateMfaChallengeStatus`（`:346`）与 `resetMfaAttempts`（`:354`）都是无条件 `update({ where: { actionId } })`，只写目标列，不改 `expiresAt`；`status` 取值为自由字符串，仓储不校验。
 `renewLockedMfaChallenges`（`:362`）是唯一的续期/复活语句：单个 `updateMany`，过滤 `status: 'locked'` 且关联 `action` 满足（有 `userId` 时按 `userId`，否则按 `sessionId`）＋ `status: 'awaiting_mfa'` ＋ `requiresMfa: true`；写入 `attempts: 0`、`status: 'pending'`、`expiresAt: new Date(Date.now() + 5 * 60_000)`、`verifiedAt: null`、`consumedAt: null`，返回匹配行数 `count`。
