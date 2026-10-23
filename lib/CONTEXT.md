@@ -103,7 +103,7 @@ JSON 金额使用十进制字符串。
 
 ## 结构化安全失败契约（`contracts/security.ts`）
 
-`SecurityFailureReason`（`contracts/security.ts:13-19`）= `mfa_code_invalid` | `mfa_attempts_exhausted` | `mfa_session_locked` | `circuit_open` | `denied`。
+`SecurityFailureReason`（`contracts/security.ts:13-19`）= `mfa_code_invalid` | `mfa_attempts_exhausted` | `mfa_session_locked` | `circuit_open` | `manual_review_hold` | `denied`；`manual_review_hold` 不是安全拒绝，而是「操作尚未执行、等人工复核释放」的留置。
 `SecurityFailure`（`contracts/security.ts:21-28`）= 必填 `code: ErrorCode`、必填 `reason: SecurityFailureReason`，可选 `actionId`、`attemptsUsed`、`attemptsLeft`、`maxAttempts`；**不含**用户文案，渲染由 `public-text.ts#securityNotice` / `tool-feedback.ts#publicSecurityError` 负责。
 `PendingActionStatus`（`contracts/security.ts:42-58`）含终态 `locked`（MFA 次数耗尽或熔断的 CAS 目标）与 `needs_reconciliation`（终态，需人工核对）。
 同文件导出状态词表常量：`OPEN_PENDING_ACTION_STATUSES`（`pending`、`awaiting_mfa`）、`TERMINAL_PENDING_ACTION_STATUSES`（`executed`、`failed`、`cancelled`、`locked`、`needs_reconciliation`）、`SETTLED_PENDING_ACTION_STATUSES`（结算事实集合，含 `locked`，当前与 TERMINAL 同值）、`RUN_BLOCKING_PENDING_ACTION_STATUSES`（仍阻塞 run 收尾 = open + `confirmed` + `needs_reconciliation`，按构造不含 `locked`）。
