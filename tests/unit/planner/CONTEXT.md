@@ -14,6 +14,7 @@
 | `approval-record`、`action-attention-state` | 历史授权与待处理状态 |
 | `chat-plan-history`、`plan-history-page` | 计划的历史归属 |
 | `financial-display`、`chart-presentation` | 精确金额与图表显示 |
+| `decimal-format`、`business-result-cards`、`investment-purchase-display`、`chat-read-results` | CNY 渲染字面量与业务结果卡 |
 | `context-compaction`、`conversation-context` | 历史压缩与上下文恢复 |
 | `scripted-provider` | 脚本化模型辅助模块自身 |
 
