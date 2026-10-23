@@ -46,7 +46,7 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 已实现收益按 `到账金额 − 该次消耗成本` 累加到 `realizedProfitMinor`，可为负，此后不再重算。
 `ALL` 把 `HOLDING` 原子地转为 `REDEEMED`，把原始结果持久化到 `redeemExecutionKey` 与 `redeemResult`。
 `SHARES` 与 `AMOUNT` 保持 `HOLDING`，扣减 `shares` 与 `principalAmountMinor`，并向 `redemptionHistory` 追加一条记录。
-`redemptionHistory` 是 JSON 数组，元素形如 `{ at, redeemedShares, totalShares, netValue, netValueDate?, settledAmount, cost, remainingShares, remainingCost, remainingMarketValue, newBalance, sourceAccountId, executionKey? }`。
+`redemptionHistory` 是 JSON 数组，元素形如 `{ at, mode, shares, netValuePerUnit, netValueDate?, settledAmount, feeAmount, feeRule, cost, realizedProfit, remainingShares, remainingCost, remainingMarketValue, newBalance, sourceAccountId, executionKey? }`。
 `remainingCost` 同时以 `remainingPrincipal` 别名出现，供更早写入的记录复用。
 全额赎回的 `redeemResult` 中 `remainingPrincipal` 与 `remainingShares` 都是零。
 `HoldingView` 暴露 `shares`、`latestNetValue`、`latestNetValueDate`、`marketValue`、`profit`、`profitRate`、`realizedProfit`、`cumulativeProfit`、`valueBasis`、`purchases` 与 `redemptions`。
