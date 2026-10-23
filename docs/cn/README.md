@@ -16,6 +16,7 @@
 | 修改事件日志、重试或崩溃恢复 | [持久化与恢复](agent-durability.md) |
 | 修改对话归档、Pi 官方压缩或原话搜索 | [上下文压缩](context-compaction.md) |
 | 修改金额、利率、估值或结算 | [金融数值与结算](financial-values.md) |
+| 修改理财申购、赎回、净值、份额或收益口径 | [理财产品：净值与份额](investments.md) |
 | 修改业务卡片、工具进度或开发者详情 | [对话业务卡片](chat-presentation.md) |
 | 修改卡片增删、结算账户绑定或余额展示 | [卡片管理](card-management.md) |
 | 修改收款人或卡片的选择、号码脱敏边界或号码补全 | [号码与卡片身份解析](identity-resolution.md) |
