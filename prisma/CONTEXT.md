@@ -66,6 +66,15 @@ SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件�
 演示数据与夹具使用虚构号段：手机号中间四位为 `0000`，卡号为 `6222` 加全 `0` 加原尾 4 位。
 补全命令见 [scripts/CONTEXT.md](../scripts/CONTEXT.md)。
 
+## 稳定 id 与演示余额
+
+演示用户 id 是 `lib/constants.ts` 的 `DEFAULT_DEMO_USER_ID = 'user_liming'`（`seed.ts` 以 `USER_ID` 引用），姓名 `李明`，`phone` 存脱敏值 `138****0001`。
+账户：`acct_checking`（`CHECKING`，名称 `活期账户`，`number` `****8821`）、`acct_savings`（`SAVINGS`，名称 `储蓄账户`，`number` `****3309`）。
+卡片 id：`card_credit`（CREDIT）、`card_debit`（DEBIT）、`card_virtual`（VIRTUAL），三者 `status` 均为 `ACTIVE`。
+活期存储余额是派生值：`OPENING_CHECKING_CENTS = 2_358_000n - CHECKING_LEDGER_CENTS`，抛错断言 `CHECKING_BALANCE_CENTS === 2_358_000n`（¥23,580.00）守住终点；增删流水只改期初。
+储蓄无流水，`OPENING_SAVINGS_CENTS = 5_000_000n`（¥50,000.00）。
+`card_credit` 的 `creditLimitMinor` 与 `availableLimitMinor` 均 `1_800_000n`（¥18,000.00）。
+
 ## 种子行为
 
 `seed.ts` 使用 `businessDate` 构造北京时间。
