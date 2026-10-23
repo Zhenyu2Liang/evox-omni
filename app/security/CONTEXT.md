@@ -57,6 +57,9 @@
   诊断为真的字段整条不渲染。
 - 工具名优先映射到 `chat.tool.<toolName>`（`isMessageKey` 守卫），无对应 key 时显示原始 `toolName`。
 - 列表为空时**整块不渲染**；区块标题复用现有 key（`pages.activity.status.locked`），不新增 key。
+- 稳定选择器钩子：区块 `data-locked-actions={n}`，每行 `data-locked-action-id` / `data-locked-action-tool`；
+  结构化锁定原因块 `data-lock-reason="CIRCUIT_BREAKER_TRIPPED"`（仅在 `breaker.locked` 时出现，
+  内含 `security.breaker.failureCount` 与 `security.breaker.lockedDescription` 文本及 `<time datetime>`）。
 
 ## 解锁语义
 
