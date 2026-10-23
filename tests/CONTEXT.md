@@ -215,6 +215,18 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 阶梯一律走 `securityGateway#authorizeAction`；**绝不**直接调 `security/mfa.ts#verify`——它只锁 challenge，不落 `PendingAction` 终态，正是这些规格要防的弹窗复活路径。
 逐文件的恢复/租约驱动方式见 [integration/CONTEXT.md](integration/CONTEXT.md)、[app/CONTEXT.md](app/CONTEXT.md)、[unit/CONTEXT.md](unit/CONTEXT.md)。
 
+## 串行化与时间预算（stall 归因）
+
+全进程只有一条 native SQLite 连接（`lib/db/client.ts:25-27`），所有语句与交互事务经 `lib/db/serialized-connection.ts` 的 FIFO `ConnectionMutex`（`:9-21`）排队；`startTransaction`（`:35-56`）在 `commit`/`rollback`/抛错时才释放（`:49-50`、`:52-55`），因此**一个被 `await` 的 `$transaction` 会在其整个生命周期内独占该锁**。`acquire()` 的 `await previous` 没有超时也没有取消：若存在未 await 的事务（fire-and-forget），后续每条语句都会无声挂死。`lib/` 当前没有任何 fire-and-forget 事务；`tests/integration/database-adapter-isolation.test.ts:67-111` 固定了 `maxWait`/`timeout` 到期后锁确实被释放（`P2028` 在 `maxWait` 阶段就产生，`callbackEntered === false`）。
+
+`$transaction` 一律继承 `lib/db/database.ts:25` 的 `{ maxWait: 10000, timeout: 10000 }`（例外：`agent/command-execution.ts:103`、`agent/scheduled-dispatcher.ts:86` 用 `timeout: 20000`）。测试进程内的挂钟成本 = 语句数 × 单语句延迟，没有内部截止时间：mock 模型（`agent/providers/provider-mock.ts:33` 无 `tokensPerSecond`）不产生任何 timer，`agent/durable/journal.ts:223-228` 的 20 000 ms 心跳在 20 s 内 0 次触发，`withLiveRequestLimits` 只在 live 模式生效。一次 chat turn 里每个 Pi 事件与每个流事件各开一个 `$transaction`（`lib/db/repositories/agentRun.ts:118`、`:140`、`:162`、`:181`、`:191`、`:313`、`:322`、`:341`、`:355`），故 `tests/app` 的「2 次 chat + 2 次 confirm + 1 次 verify」是数千条串行语句；单语句延迟放大 10 倍即从约 2 s 涨到超过 20 s 的 `testTimeout`。mock 模式没有请求级 deadline，所以超时是唯一边界。
+
+PRAGMA 分层：`lib/db/database.ts:12` 每次 `connect()` 只设 `foreign_keys`/`journal_mode=WAL`；`synchronous=NORMAL` 与 `busy_timeout=10000` 是**连接级**且**只**由 `tests/helpers/db.ts:65-78#ensureTestPragmas()` 经 `truncateAll()`（`:98`）施加，即每个进程的第一次 `resetDatabase()` 才生效。因此任何不调 `truncateAll` 而同用 `prisma/test.db` 的执行者（`tests/helpers/restart-process.ts`、`tests/helpers/standalone-restart-process.ts` 的 fork 子进程，`tests/deploy-db-push.test.ts` 的自建文件）跑在默认 `synchronous=FULL`、无 `busy_timeout` 上；`journal_mode=WAL` 写在文件里会被继承，`synchronous`/`busy_timeout` 不会。
+
+`tests/setup.ts:123` 在**每个测试文件进程**执行 `ensurePrismaClientGenerated`（`tests/helpers/prisma-cli.ts:233-239`），其 `prismaClientUsable`（`:215-224`）会 `spawnSync(process.execPath, ['--import','tsx','-e', …])`——一次约 1-2 s 的阻塞子进程，位于 `setupFiles`，不计入 `testTimeout`。`tests/deploy-db-push.test.ts:59-75` 另有两个 `spawnSync`（`db-push.ts`、`seed.ts`）。
+
+子进程清单（排除 `tests/e2e/**`）只有四处 `node:child_process`：`tests/integration/process-restart.test.ts:24-28`（`fork` `restart-process.ts`）、`tests/integration/standalone-workflow-restart.test.ts:22-26`（`fork` `standalone-restart-process.ts`）、`tests/deploy-db-push.test.ts:59-75`（`spawnSync`）、`tests/helpers/prisma-cli.ts:112-120,218-222,409-414`（`spawnSync`）。两个 `fork` 消费者都 `await` 子进程 `exit` 并在 `afterEach` 对其 `SIGKILL`（`process-restart.test.ts:64-70,82-94`、`standalone-workflow-restart.test.ts:60-65`），等待上限各 15 000 ms；`tests/helpers/restart-process.ts` 自身不 spawn，只用 `setInterval`（`:26`）+ `new Promise(() => undefined)`（`:29`）把自己的 `start` 场景永久停住。没有任何子进程能越过其所在文件的最后一个测试继续写 `prisma/test.db`。
+
 ## wedge 故障注入的接缝
 
 「副作用已提交、结果+状态落定事务回滚」的 wedge 只能注入生产确认路径实际调用的符号。
