@@ -69,6 +69,13 @@
 事实、徽标与布局变体的规则见
 [banking/CONTEXT.md](../../banking/CONTEXT.md)。
 
+## 业务回执（BusinessReceiptCard）
+
+`BusinessReceiptCard`（`ChatCard.type === 'receipt'`）按 `data.kind` 分两支：`budget` 取 `name`/`amount`/`status`/`purpose`/`dueDate`；
+`investmentPurchase`/`investmentRedemption` 取 `amount`（`Money`）、`success` 徽标、`newBalance`（`cards.balanceAfter`）、`occurredAt`，
+以及可选的 `redemptionValuation`（`business.receipt.valuation`，`DecimalMoney`）与 `settlementRounding`（`business.receipt.rounding`，有值即渲染 `business.receipt.halfUp`）。
+回执契约 `BusinessReceipt` 没有费用字段，因此回执卡片不展示手续费、赎回费或费用口径。
+
 ## 调用详情（ActionDetails）
 
 `ActionDetails.tsx` 是确认面板与历史授权记录共用的字段渲染器。
