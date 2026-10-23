@@ -140,6 +140,10 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 `live-acceptance.e2e.ts` 的 S4 只提交一次错误码并断言卡片保留，正确码在独立页面执行；live 侧不校验尝试次数上限。
 `lA`/`lD`/`lE`/`lF`/`lG` 的 live 腿只提交正确码 `123456`（`MfaChallenge.attempts=0`），live 不接受错误码、不触达尝试上限。
 当前没有用例在锁定后刷新 `/agent` 再断言弹窗保持消失。
+`driveRedTool`（`live-acceptance.e2e.ts:575-636`）是入口文件唯一的 RED 驱动，在 `:591`/`:634` 硬编码正确码 `123456`，所以错误码/锁定链路必须在它之外另写驱动，或先给它加码/次数参数。
+它的类型 `RedToolDriver` 定义在 `live-virtual-card.e2e-helper.ts:471`，入口以 `(turns) => driveRedTool(page, ctx.baseUrl, turns)` 注入 `applyVirtualCardViaAgent`（`:1902-1910`）与 `lF`/`lG`（`:2342`/`:2343`）。
+live 入口文件没有 `data-testid`/`getByTestId`：DOM 断言只靠 `data-*` 选择器（`data-approval-request`、`data-card-id`、`data-card-consume*`、`data-investment-holdings`）与 `getByRole` 的中文可及名（`确认`/`取消`/`验证`/`提交消费`）。
+`helpers.ts#waitForMfaSettled` 在 live 入口未被引入：它在 `验证` 按钮计数为 0 时即返回 true，无法区分「锁定」与「验证成功」，锁定断言不能用它。
 
 锁定终态的断言范围（`j` 的实际覆盖）：`waitForStatusText(page, t('cards.terminal.locked'))` 是对全页 `[role="status"]` 做去空白**子串**匹配，
 不绑定 `MfaCard` 容器，也未断言 `cards.mfa.locked`（「已锁定，请到安全中心处理。」）这一只读历史变体。
