@@ -230,6 +230,27 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 - `app/actions-recovery-http.test.ts:301-302` 断言 wedge 恢复后 `plan.status`/`node.status` 为 `success`，实测当前为 `failed`（同用例 `:292` 的 `ok:true` 通过）。期望值权威：`recoverAction`（`agent/index.ts:209-227`）先把计划关联行结清为 `executed`，再 `resumeTask`；`resumeTask`（`agent/workflows/controls.ts:82-89`）经 `sealedParkedNodes` + `sealSettledNodes` 把已结清动作的停靠节点写为 `failed`（`agent/workflows/parked-actions.ts:80-94`、`planner/failure.ts:111-116` 的 `action_not_open`、`planner/executor.ts:481`/`:665`），计划随之为 `failed`；`agent/index.ts:234-235` 仍把「计划 failed + 动作 executed」判为成功。不得把断言改成 `failed`，也不得把「计划 failed」固化成生产契约。
 - `app/manual-review-http.test.ts:277` 断言确认被人工复核守卫拦下时 `blocked.body.data.message` 含 `manual review`，实测该串不存在：人工复核事实在对外文案收口时被压成通用 `CONFLICT` 文案（`security/security-gateway.ts:1263-1265` 抛 `AppError('CONFLICT', …)` → `agent/confirmation/outcomes.ts:119` `publicRefusalMessage(..., { code }, 'chat.error.stateChanged')` → `lib/tool-feedback.ts:12`/`:59-61` → `chat.error.stateChanged`「业务状态已变化。请刷新并核对原操作卡片。」）。该断言代表期望行为，不得按现有实现改断言；`:275` 的 `ok:false`、`:276` 的 `status:'pending'`（`PendingAction` 行未走 CAS）与 `:278` 的金额不变断言仍通过。
 
+## 货币文案的断言锚点
+
+`formatCNY`（`lib/money.ts`）与 `formatDecimalCNY`（`lib/decimal.ts`）的权威全等字面量只在
+`unit/financial-values.test.ts`：`'¥90,071,992,547,409.93'`（`:37`）、`'-¥0.20'`（`:38`）、
+`'¥184,467,440,737,095,516.14'`（`:19`）、`'¥90,071,992,547,409.93'` / `'-¥0.00'`（`:73`/`:74`）。
+经真实 `DecimalMoney` 组件渲染的形态断言在 `unit/planner/decimal-format.test.ts`
+（`'¥0.00'`、`'¥1.01'`、`'¥2.68'`、`'¥10.00'`、`'¥1,234,567,890,123.46'`、`'+¥118.91'`、`'-¥118.91'`）。
+
+`+` 前缀不属于格式化器输出：`components/ui/Money.tsx:19` 与 `components/ui/DecimalMoney.tsx:19` 只在 `signed` 且严格为正时前置。
+两个组件把整段金额渲染进同一个 `<span>`，因此浏览器侧 `getByText('¥…', { exact: true })` 可直接命中。
+
+硬编码的渲染字面量仅在这些位置：`integration/frontend-followup-fixes.test.ts:91`（`'¥5,050.00'`）、`:116`（`'¥5,050.51'`，5050×1.0001 HALF_UP）、
+`integration/frontend-review-fixes.test.ts:90`（`'¥5,000.25'`，桩输入而非格式化结果）、`integration/task-feature-hardening.test.ts:122`（`'¥1,200.12'`，标签是英文 `Amount`）、
+`e2e/acceptance.e2e.ts:622`（`'-¥6,999.00'`）、`e2e/live-acceptance.e2e.ts:1273`（`'¥18,000.00'`）、`e2e/weixin-capabilities.e2e-helper.ts:126`（`'¥87.66'`）、`fixtures/mfa-escalation.zh-CN.json:11`（`'¥500.50'`）。
+其余货币断言都由 `formatCNY(centsToMoney(minor))` / `formatDecimalCNY(...)` 现算，没有可抄的字面量。
+
+`tests/app/` 与 `tests/helpers/` 完全没有 `formatCNY`/`formatDecimalCNY`：金额按十进制文本（`'2000.50'`）或 `bigint` 分（`2358000n`）断言，`¥` 只出现在注释、`it()` 标题与 `expect(实际, '提示')` 的失败信息里。
+`unit/planner/chart-presentation.test.ts:25-31` 提供另一种形态：`['-¥0.07', '-¥0.04', '¥0.00']` 的坐标轴标签。
+缺口：`formatCNY` 的零值与 bigint 分入参没有全等字面量；`-¥0.00` 只有 `formatDecimalCNY`（`unit/financial-values.test.ts:74`）与 `DecimalMoney signed`（`unit/planner/financial-display.test.ts:52`）两处。
+微信通道的金额文案模板见 `unit/weixin-presentation.test.ts`（`'持仓市值 ¥5,178.36'` 等）。
+
 ## 常用命令
 
 `pnpm test` 运行全部 Vitest 测试。
