@@ -53,7 +53,7 @@ regardless of which evidence-only commit was HEAD when each ran. Evidence commit
 
 Equivalence is measured at the repository root with the `:(exclude)*.md` pathspec because `CONTEXT.md` lives under
 those very paths: without the exclusion the command is non-empty after any documentation-only merge (for `88d38550`
-→ `cab32956` it lists 22 files, all `*/CONTEXT.md`), so it cannot prove equivalence. The single `*` covers a repository-root `.md` as well as one any number of levels deep, whereas `**/*.md` matches only paths that carry at least one directory and so leaves the root `CONTEXT.md` in the list (`88d38550` → HEAD: 24 files with it, 23 without; `d26b2636` → HEAD: 86 with it, 85 without).
+→ `cab32956` it lists 22 files, all `*/CONTEXT.md`), so it cannot prove equivalence. The single `*` covers a repository-root `.md` as well as one any number of levels deep, whereas `**/*.md` matches only paths that carry at least one directory and so leaves the root `CONTEXT.md` in the list (`88d38550` → HEAD: 24 files with it, 23 without; `d26b2636` → HEAD: 86 with it, 85 without). Those leak counts come from a whole-tree diff without the product path list; with `banking-sdk … scripts` appended the two forms print identical output, because no root-level `.md` lives under those paths — the form only tightens the exclusion's coverage and changes no recorded equivalence result.
 
 Those eight rounds do **not** extend to the current HEAD. Measured now at the repository root,
 `git --no-pager diff --stat d1cccd00 HEAD -- ':(exclude)*.md' banking-sdk agent security planner lib app components prisma scripts`
