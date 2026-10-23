@@ -19,6 +19,7 @@
 确认采用原子认领，并重新评估累计风险。
 开放的人工接管阻断新的执行认领；已授权的在途命令仍可落地。
 `authorizeAction` 与 `lib/db/repositories/pendingAction.ts#assertActionMayStart` 在人工复核接管时抛 `AppError('MANUAL_REVIEW_HOLD', …)`（HTTP 409），而不是通用的 `CONFLICT`：拒绝条件本身不变（`row.taskId` 加未关闭的 `manualReview`），但原因以结构化错误码对外表达，最终文案由 `lib/public-text.ts` 收口为 `chat.error.manualReviewHold`。
+人工复核接管拦的是**新授权**（confirm/verify 经 `authorizeAction`）与**新命令**（`claimPendingAction` 仅在 `to === 'confirmed'` 时调用 `assertActionMayStart`），因此 `cancel` 是例外：`cancelAction` 只做 `NOT_FOUND`/`isManualCardCommand`→`SECURITY_DENIED`/`assertOwnership`，再以 `claimPendingAction({ from: ['pending','awaiting_mfa'], to: 'cancelled' })` 原子认领，未结算的行仍会被取消为 `cancelled`，只有已结算或已 `locked` 的行才是 `CONFLICT`；同一条边界也适用于终态锁定——它拦新授权与新命令，不拦所有者撤回自己的挂起命令。
 `authorization-record.ts` 记录策略版本、命令指纹、原因与脱敏输入。
 
 `injection-guard.ts` 检测可疑指令。
@@ -48,6 +49,7 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 挑战级的 `consumed`/`expired`/`command_changed` 判定更早（见下表），因此对 `locked` 行提交已失效挑战时 `verify` 先返回 `ChallengeInvalidError`；网关在 `cancelled` 认领落空后重读该行，仍回落为 `lockedOutcome(…, 'mfa_session_locked')` 的终态拒绝。
 `mfa.ts#issueChallenge` 对 `status==='locked'` 的行抛 `AppError('MFA_LOCKED', …)` 并携带 `SecurityFailure`，不铸码、不写库；对 `MfaChallenge.status==='locked'` 的既有挑战只回读视图，不重置为 `pending`。
 `cancelAction` 只从 `pending`/`awaiting_mfa` 认领，`locked` 行返回 `CONFLICT`。
+`locked` 行的取消在 HTTP 路由层更早就被结构化拒绝：`app/api/actions/[id]/cancel/route.ts` 在委派 `cancelOwned` 之前以 `status:'locked'`、`mfaResult:'not_required'`、类型化 `code:'CIRCUIT_OPEN'` 与 `failure { code:'CIRCUIT_OPEN', reason:'mfa_session_locked', actionId }` 返回域拒绝（`data.ok === false`），不写行、不发事件、不触达所属计划，行与计划保持网关留下的状态。
 `recordActionResult` 经 `claimPendingAction({ from: RESULT_RECORDABLE_STATUSES })` 写入，该集合刻意不含 `locked`，迟到的 `executed`/`failed` 通知既不改写锁定行也不伪造执行证据。
 `recovery-authorization.ts` 以同一事务内 `status:'confirmed'` 的认领为前置写，`locked` 行在认领处即为 `CONFLICT`。
 
