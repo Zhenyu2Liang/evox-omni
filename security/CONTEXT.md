@@ -54,6 +54,8 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 ## 解锁（SECURITY_RESET）只解除熔断
 
 `circuit-breaker.ts#resetSession` 是唯一解锁入口：锁定态需要验证码或冷却期（真实墙钟）才能清除，裸会话 cookie 被拒绝。
+网页入口是 `POST /api/security/reset`（可选 body `{ verificationCode? }`）：锁定态缺码且未过冷却时 `resetSession` 抛 `CIRCUIT_OPEN` → HTTP 423 且锁保持；成功返回 `{ locked, failures, max, lockedActionsReopened: false, message }`，从不写 `PendingAction`。
+解锁成功后用户恢复操作的唯一方式是**重新发起并重新确认**新操作；`resetDemoSession` 是仅开发者可用的维护入口。
 解锁只清熔断状态与连续失败计数（`failures`→0、`locked`=false、`lockedAt` 清空），并在同一事务内以 `renewLockedMfaChallenges` 续期**仅限** `PendingAction.status='awaiting_mfa'` 的已耗尽挑战。
 解锁**不**恢复已锁定（`status='locked'`）的操作：它们保持锁定，用户必须重新发起并重新确认，本层不会自动执行旧操作。
 状态清除与 `SECURITY_RESET` 审计在同一事务内提交（`strict: true`），CAS 建立在读取时的快照上，因此并发解锁或更新的重新锁定让旧请求变成良性空操作且不产生重复事件。
@@ -119,16 +121,16 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 ## MfaChallenge 行的创建点与 expiresAt
 
 本层唯一的 `MfaChallenge` 行创建点：`mfa.ts#issueChallenge` → `createMfaChallenge`（`mfa.ts:195-201`），`maxAttempts` 取 `MFA_MAX_ATTEMPTS`，`expiresAt` 取 `MFA_CHALLENGE_TTL_MS`。
-已存在挑战的续期走 `prisma.mfaChallenge.update`（`mfa.ts:126-130`），TTL 同源。
-`MFA_CHALLENGE_TTL_MS = 5 * 60_000`（`mfa.ts:34`）在本层仅被 `mfa.ts:128`、`mfa.ts:138` 引用，不从 `index.ts` 导出。
-`authorizeWithMfa` 不建行，只按 `expiresAt`/`commandDigest` 判断是否调用 `issueChallenge` 重签（`security-gateway.ts:899-905`）。
-`expiresAt` 的其余读取点均为过期判定：`mfa.ts:123`、`mfa.ts:166`、`security-gateway.ts:902-903`、`recovery-authorization.ts:61-62`、`manual-card-management.ts:193-194`。
-本层对挑战的其它写操作只改 `status`/`consumedAt`（`mfa.ts:202`、`mfa.ts:234`、`manual-card-management.ts:201`、`:222`），不触碰 `expiresAt`。
+已存在挑战的续期走 `prisma.mfaChallenge.update`（`mfa.ts:187-191`），TTL 同源。
+`MFA_CHALLENGE_TTL_MS = 5 * 60_000`（`mfa.ts:34`）在本层仅被 `mfa.ts:189`、`mfa.ts:199` 引用，不从 `index.ts` 导出。
+`authorizeWithMfa` 不建行，只按 `expiresAt`/`commandDigest` 判断是否调用 `issueChallenge` 重签（`security-gateway.ts:1148-1154`）。
+`expiresAt` 的其余读取点均为过期判定：`mfa.ts:184`、`mfa.ts:229`、`security-gateway.ts:1151-1152`、`recovery-authorization.ts:61-62`、`manual-card-management.ts:193-194`。
+本层对挑战的其它写操作只改 `status`/`verifiedAt`/`consumedAt`（`mfa.ts:267` 置 `verified`、`mfa.ts:299` 置 `locked`、`manual-card-management.ts:201`、`:222`），不触碰 `expiresAt`。
 `circuit-breaker.ts:298-300` 的解锁续期 `renewLockedMfaChallenges` 在仓储层，自带硬编码 5 分钟 TTL，不读 `MFA_CHALLENGE_TTL_MS`；仓储层 `createMfaChallenge` 的默认值同样硬编码，因此改常量不会自动传导。
 
-RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:758` 在 `PendingAction` 落库（`status='awaiting_mfa'`，`:716`）之后执行 `if (ev.requiresMfa) await issueChallenge(created.row.id)`。
-不建挑战的挂起分支：`clarify`（`:621-623`）、`plan_cancelled`（`:755`）、复用同一计划节点的既有行（`:638-639`，沿用原挑战）。
-首次提交验证码时挑战通常已存在且有效，`authorizeWithMfa` 只在 `expiresAt` 缺失/已过或 `commandDigest` 变化时才 `issueChallenge` 重签（`:902-905`）；因此当次提交不被 `verify`，而是返回 `awaiting_mfa` 的提示态（`:907-919`）。
+RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 在 `PendingAction` 落库（`status='awaiting_mfa'`，`:965`，事务内 `:969-1002`）之后执行 `if (ev.requiresMfa) await issueChallenge(created.row.id)`。
+不建挑战的挂起分支：`clarify`（`:853-857` 卡片目标、`:879-882` 转账收款人，两者都不落库）、`plan_cancelled`（`:1004`）、复用同一计划节点的既有行（`:897-898`，沿用原挑战）。
+首次提交验证码时挑战通常已存在且有效，`authorizeWithMfa` 只在 `expiresAt` 缺失/已过或 `commandDigest` 变化时才 `issueChallenge` 重签（`:1148-1154`）；因此当次提交不被 `verify`，而是返回 `awaiting_mfa` 的提示态（`:1156-1169`）。
 `manual-card-management.ts` 同样在 `proposeCardChange`（`:134`）与 `verifyCardChange`（`:162`）调用 `issueChallenge`，不自行写 `expiresAt`。
 本层不导出除 `issueChallenge` 之外的挑战创建入口：`mfa.ts` 仅导出 `MFA_CHALLENGE_TTL_MS`、`issueChallenge`、`verify`、`getChallenge`（视图类型另计）。
 `step-up-authenticator.ts#issue` 只返回演示验证码，不写库。
@@ -207,13 +209,16 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:758` �
 ## 逐次错误验证码的响应事实（文案口径与计数）
 
 `MFA_MAX_ATTEMPTS = 3`（`lib/constants.ts:10`）；熔断在 `failures >= max` 的当次触发（`lib/db/repositories/circuitBreaker.ts:78`），因此**第 3 次**错误即锁定，不是第 4 次。
-第 1/2 次错误走 `security-gateway.ts:1230-1242`：`status:'awaiting_mfa'`、`code:'MFA_FAILED'`、`mfaResult:'failed'`、`failure {code:'MFA_FAILED', reason:'mfa_code_invalid', actionId, attemptsUsed:1|2, attemptsLeft:2|1, maxAttempts:3}`，`message` 由 `:1239` 内插为「验证码错误，请重试。剩余尝试次数：2|1。」，不写任何行。
+第 1/2 次错误走 `security-gateway.ts:1230-1242`：`status:'awaiting_mfa'`、`code:'MFA_FAILED'`、`mfaResult:'failed'`、`failure {code:'MFA_FAILED', reason:'mfa_code_invalid', actionId, attemptsUsed:1|2, attemptsLeft:2|1, maxAttempts:3}`，`message` 由 `:1239` 内插为「验证码错误，请重试。剩余尝试次数：2|1。」；`PendingAction` 状态不变，但 `MfaChallenge.attempts` 自增（`mfa.ts:277`）、熔断 `failures` 自增并写一条 `MFA_FAILURE`。
 第 3 次错误：`attemptState` 的 `exhausted`（`mfa.ts:119`）为真，走 `security-gateway.ts:1243-1256`：`status:'locked'`、`code:'CIRCUIT_OPEN'`、`mfaResult:'failed'`、`failure {code:'MFA_LOCKED', reason:'mfa_attempts_exhausted', actionId, attemptsUsed:3, attemptsLeft:0, maxAttempts:3}`、`message: ATTEMPTS_EXHAUSTED_MESSAGE`（`:277`），并经 `persistLockedAction`（`:1105-1108`）CAS 落库 `locked`。
 文案常量：`ATTEMPTS_EXHAUSTED_MESSAGE`（`:277`）与 `lib/tool-feedback.ts:28` 的 `PUBLIC_BUSINESS_ERRORS` 键逐字相同 → `chat.error.actionLocked`；`lib/public-text.ts:68-69` 也从 `failure.code === 'MFA_LOCKED'` / `reason === 'mfa_attempts_exhausted'` 得出同一键。两条独立路径一致，故锁定文案稳定为 `chat.error.actionLocked`。
 顶层 `code` 不能单独用于选文案：锁定响应的顶层 `code` 是 `CIRCUIT_OPEN`，按 `lib/tool-feedback.ts:12` 会得到 `chat.error.securityLocked`，与该响应自带的 `failure`/`message` 口径相反。渲染方必须优先用 `failure`。
 `lockedOutcome`（`:1115-1132`）不带 `mfaResult`，其 `message` 是 `CIRCUIT_LOCK_MESSAGE`（`:274`，「操作已被拒绝」版）→ `chat.error.actionLocked`（`lib/tool-feedback.ts:32`）；`security-gateway.ts:516` 的「高风险操作已被锁定」熔断文案才映射 `chat.error.securityLocked`（`:33`）。
 `AuthorizationResult`（`:118-137`）没有 `events` 字段：`events` 由 HTTP/agent 层合成（`app/api/actions/[id]/verify/route.ts:91`），`mfaResult` 在该路由由 `status` 推导（`:73-77`）。
 每次错误另写一条 `MFA_FAILURE`（`severity:'medium'`）事件（`mfa.ts:281-296`）；锁定当次再由 `recordFailure` 写一条 `CIRCUIT_BREAKER_TRIPPED`（`severity:'high'`，`detail.result:'session_locked'`，`circuit-breaker.ts:179-188`），owner 键为 `user:<userId>`（`:121-127`）。
+锁定当次三处写入同时发生：`MfaChallenge.status='locked'`（`mfa.ts:298-300`，仅当 `attempts >= maxAttempts`）、熔断 `CircuitBreakerState.locked=true` 加 `lockedAt`、`PendingAction` CAS 到 `'locked'`（`security-gateway.ts:1105-1108`）。
+`attemptsUsed` 恒取 `mfa.attemptState`（`mfa.ts:113-121`）的行内 `attempts`（`security-gateway.ts:1225-1228`），因此账户级熔断（本操作 0 次尝试）报 `mfa_session_locked`/`circuit_open` 而不是 `mfa_attempts_exhausted`。
+未锁定态的 1/2 次错误仍发 `mfa_required`（继续提示输入验证码）；`locked` 终态不发 `mfa_required`、也不发 `security_event`，该流事件判定在 `agent/confirmation/outcomes.ts`（见 `app/api/CONTEXT.md`）。
 
 ## 已知边界
 
