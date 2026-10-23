@@ -153,7 +153,7 @@ are published. JSON mode returns the same ordered presentation events. Stable re
 transport retries to their original run, without selecting identity or granting authorization.
 Raw model thinking and original provider events stay in the internal journal.
 
-## Chat mode selection and edge timing
+### Chat mode selection and edge timing
 
 `chat/route.ts#wantsStream` (`:57-61`) picks the mode from the query and the `Accept` header, and `application/json` WINS: `if (stream === '0') return false; return !accept.includes('application/json')`.
 `?stream=1` therefore does NOT force streaming when `Accept` also lists `application/json` — which is exactly what the shipped browser client sends (`components/chat/actions.ts:528` `Accept: 'text/event-stream, application/json'`, `endpoints.chat = '/api/chat'` with no query at `:54`).
