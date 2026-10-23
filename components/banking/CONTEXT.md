@@ -95,7 +95,7 @@ e2e 行读取器按标签 `span` 的文本精确定位，再取同一父元素�
 
 金额格式：`Money`→`formatCNY`（`lib/money.ts`，`¥#,##0.00` 精确到分）；
 `DecimalMoney`→`formatDecimalCNY`（`lib/decimal.ts`，HALF_UP 到两位）；二者输出形状一致（`[±]¥#,##0.00`）。
-`signed` 时正数前置 `+`。年化率经 `rateRatioToPercent`（比值×100）加 `%`，如 `3.2575%`。
+`signed` 时正数前置 `+`。产品预期年化经 `rateRatioToPercent`（比值×100，天然非负）加 `%`，如 `3.2575%`；持仓收益率有符号，经 `signedRateToPercent`（同样×100，但不过非负闸门）渲染，亏损显示为 `-1.23%`。
 份额与净值经 `formatDecimalFixed` 定长输出，6 位与 4 位小数，不经金额格式化。
 净值日期经 `formatBusinessDate` 按 UTC+08:00 输出 `YYYY-MM-DD`。
 
