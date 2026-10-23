@@ -26,6 +26,8 @@ and aggregate repositories. Business permissions and risk rules belong to `secur
   current transaction handle when present, otherwise the singleton. A read inside an existing
   transaction must use that transaction; the single connection cannot run a second global query while
   its transaction owns the connection.
+- `serialized-connection.ts#serializeSqliteConnection` wraps the ONE native connection in a FIFO promise-chain mutex: every `queryRaw` / `executeRaw` / `executeScript` / `dispose` call acquires it, and `startTransaction` HOLDS it from BEGIN until `commit` / `rollback`, so an ordinary statement issued while another request's interactive transaction is open WAITS with no mutex timeout (bounded only by Prisma's `maxWait` / `timeout`). The mutex is PER CLIENT INSTANCE — independent clients do not share it and contend on native SQLite locks instead. Statements inside a transaction deliberately skip it ("Transaction statements already own the connection lock and must not acquire it again").
+- There is no per-query `$queryRaw` / PRAGMA / schema round trip and no transaction retry loop (no `P2034` / `P1008` handling, no sleeps) in this layer: the only PRAGMAs run once per connection inside the adapter's awaited `connect()`.
 - `unit-of-work.ts` carries the transaction handle through `AsyncLocalStorage`. Explicit banking
   execution boundaries compose business changes, receipts, audits and invocation status in one
   transaction.
