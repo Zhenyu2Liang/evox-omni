@@ -59,7 +59,11 @@
 待处理操作的批量读取只有两条路径，且默认都不按状态过滤：`listPendingActions`（`pendingAction.ts:121-137`，可选 `sessionId`、`status`（单值等值，不是 `in` 列表）、`limit`，缺省 `DEFAULT_LIMIT = 100`（`:85`），`orderBy: { createdAt: 'desc' }`）与 `listPendingActionsByTask`（`:145-157`，按 `taskId`，可选 `statuses` 用 `in`，`createdAt: 'asc'`，无 `take`）。
 因此 `listPendingActions({ sessionId })` 会把 `locked`/`executed` 等终态行一并返回：把 `locked` 排除出「待决策」列表是调用方的责任（`app/api/actions/route.ts#attentionFor` 让 `locked` 走兜底 `return undefined`），不要把它下沉成仓储默认行为。
 关联不依赖节点输出中的临时字段。
-`claimPendingAction`（`pendingAction.ts:255`）是唯一的待处理操作状态 CAS：单条 `updateMany`，条件为 `id` + `status IN from`，可选 `userId`/`sessionId`；`to === 'confirmed'` 时先经过 `assertActionMayStart`（人工接管栅栏，`manualReview status='open'` 抛 `CONFLICT`）。`from`/`to` 取值由调用方给定，函数本身不限制。
+`claimPendingAction`（`pendingAction.ts:255-273`）是唯一的待处理操作状态 CAS：单条 `updateMany`，`where` 为 `id` + `status IN input.from`，可选 `userId`/`sessionId`，`data: { status: input.to }`；**返回 `boolean`（`result.count === 1`），返回行数而非行**。
+`to === 'confirmed'` 时先经过 `assertActionMayStart`（人工接管栅栏，`manualReview status='open'` 抛 `CONFLICT`），且此时若 `client === prisma` 会自行 `prisma.$transaction(tx => claimPendingAction(input, tx))` 重入；其它 `to` 值（含 `'locked'`）不走该分支。
+`from`/`to` 取值由调用方给定，函数本身不限制（`to` 只受 `PendingActionStatus` 类型约束，运行时任意字符串可写入）。
+无版本号、无时间戳、无租约守卫：CAS 条件只有 `id` + `status IN from`（+ 可选身份）。
+不显式写 `updatedAt`：`PendingAction.updatedAt` 是 schema `@updatedAt`（`prisma/schema.prisma:463`），Prisma 在每条 `update`/`updateMany` 时自动刷新，因此任何状态迁移（含 `claimPendingAction`）都会 bump `updatedAt`。
 `claimPendingActionLease`（`pendingAction.ts:206`）的租约 CAS 前置条件用 `OPEN_PENDING_ACTION_STATUSES`：`locked` 及任何终态都拿不到执行租约。
 `PendingAction.status` 是 Prisma 无枚举的 `String @default("pending")`（`prisma/schema.prisma:426`），合法取值由 `contracts/security.ts` 的 `PendingActionStatus` 与状态词表常量约束（`OPEN_PENDING_ACTION_STATUSES` / `TERMINAL_PENDING_ACTION_STATUSES` / `SETTLED_PENDING_ACTION_STATUSES` / `RUN_BLOCKING_PENDING_ACTION_STATUSES`，含 `locked`、`needs_reconciliation`）。
 本目录没有写入 `status:'locked'` 的语句（`locked` 由 `security/security-gateway.ts` 经 `claimPendingAction` 的 CAS 与 `persistLockedAction` 写入）；`renewLockedMfaChallenges`（`pendingAction.ts:363`）只重置 `MfaChallenge.status='locked'`，其 where 条件要求 `action.status='awaiting_mfa'`，且只写 `MfaChallenge`，从不改 `PendingAction.status`。
