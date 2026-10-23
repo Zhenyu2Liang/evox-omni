@@ -41,6 +41,19 @@ HTTP 200 不等于业务成功。
 故排序与 `?limit=` 用例用 `seedConsumption` 直接写入不同 `occurredAt`；
 真实 POST→GET 链路另有用例覆盖。
 
+## 卡片结算账户投影
+
+`card-links-http.test.ts` 覆盖 `GET /api/cards` 的公开 JSON 边界（`CardView`）：
+`LINKED` 卡只给出脱敏账户号（`Account.number` 原样）、账户名、账户余额与
+`payableAmount = min(账户余额, 家庭本月剩余限额)`；
+`UNTRUSTED`（他人账户）与 `MISSING`（`linkedAccountId: null`）**没有任何余额字段**，
+既不泄漏他人余额/账号/户名，也不伪造 `"0.00"` 或 `null`；
+`FROZEN`/`LOST` 仍返回真实余额，只用 `usable: false` 区分「不可用」与「没钱」；
+`CREDIT` 恒 `NOT_APPLICABLE`，不查账户、保留 `creditLimit`/`availableLimit`。
+断言同时作用于解析后的行与 `JSON.stringify` 的整段报文，因为 `undefined` 键在报文里必须缺席。
+`GET /api/cards` 固定读演示用户，因此「他人视角」方向经路由调用的同一投影
+（`banking.card.getCards`）断言。
+
 ## 解锁入口
 
 解锁入口必须区分：

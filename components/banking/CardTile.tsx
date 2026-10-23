@@ -1,12 +1,18 @@
 'use client';
 
 /**
- * CardTile — read-model tile: one bank card (masked number, status, limits, credit line) and, for an
- * account-bound virtual card, its linked settlement account.
+ * CardTile — read-model tile: one bank card (masked number, status, limits, credit line) and, when
+ * its settlement account resolves, that account and its balances.
  *
  * Localized presentational component with no data access — the
  * `CardView` DTO arrives via props. Money renders only through `ui/Money`; the (non-risk) card
  * status uses `ui/Badge`, never `ui/StatusBadge` (which is reserved for permission tiers).
+ *
+ * The settlement-account block follows `CardView.linkedAccountStatus` exactly as
+ * `./card-account-display` reduces it: `LINKED` shows 关联账户 / 账户余额 / 可用余额, `MISSING` and
+ * `UNTRUSTED` show ONLY their notice (no amount, never `0.00`), `NOT_APPLICABLE` (a CREDIT card)
+ * keeps its 信用额度 / 可用额度 rows. An unusable card (`!usable`) adds a notice but keeps its
+ * balances visible — unusable is not empty.
  */
 import type { CardView } from '@/banking-sdk';
 import type { ReactNode } from 'react';
@@ -16,6 +22,12 @@ import { Card } from '../ui/Card';
 import { Money } from '../ui/Money';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
+import {
+  cardAccountDisplay,
+  cardShowsAccountAmounts,
+  cardUnavailableNoticeKey,
+  linkedAccountNoticeKey,
+} from './card-account-display';
 
 export interface CardTileProps {
   card: CardView;
@@ -46,10 +58,22 @@ const STATUS_TONE: Record<CardView['status'], NonNullable<BadgeProps['tone']>> =
   PENDING: 'warn',
 };
 
+/** Card status → tone of the 「卡片不可用」 notice (loss is an error, a freeze a warning). */
+const UNAVAILABLE_TONE: Record<CardView['status'], NonNullable<BadgeProps['tone']>> = {
+  ACTIVE: 'neutral',
+  FROZEN: 'warn',
+  LOST: 'danger',
+  PENDING: 'neutral',
+};
+
 export function CardTile({ card, className, footer }: CardTileProps) {
   const { t } = useI18n();
   const cls = ['space-y-3', className].filter(Boolean).join(' ');
-  const isVirtual = card.type === 'VIRTUAL';
+  const showsAccountAmounts = cardShowsAccountAmounts(card);
+  const account = cardAccountDisplay(card);
+  const unavailableNotice = cardUnavailableNoticeKey(card);
+  const linkedAccountNotice = linkedAccountNoticeKey(card.linkedAccountStatus);
+  const accountLabel = [account.accountName, account.accountNumber].filter(Boolean).join(' · ');
 
   return (
     <Card className={cls} footer={footer}>
@@ -69,6 +93,10 @@ export function CardTile({ card, className, footer }: CardTileProps) {
           <Badge tone={STATUS_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
         </div>
       </div>
+
+      {unavailableNotice !== undefined ? (
+        <Badge tone={UNAVAILABLE_TONE[card.status]}>{t(unavailableNotice)}</Badge>
+      ) : null}
 
       {card.type === 'CREDIT' &&
       (card.creditLimit !== undefined || card.availableLimit !== undefined) ? (
@@ -92,38 +120,37 @@ export function CardTile({ card, className, footer }: CardTileProps) {
         </dl>
       ) : null}
 
-      {isVirtual &&
-      (card.linkedAccountNumber !== undefined || card.linkedAccountId !== undefined) ? (
+      {showsAccountAmounts && accountLabel ? (
         <div className="flex items-center justify-between gap-3 text-sm">
           <span className="text-banking-navy/60">{t('business.cards.linkedAccount')}</span>
-          <span className="font-semibold text-banking-deep">
-            {card.linkedAccountNumber ?? card.linkedAccountId}
-          </span>
+          <span className="font-semibold text-banking-deep">{accountLabel}</span>
         </div>
       ) : null}
 
-      {isVirtual &&
-      (card.accountAvailableBalance !== undefined || card.payableAmount !== undefined) ? (
+      {showsAccountAmounts &&
+      (account.accountBalance !== undefined || account.usableBalance !== undefined) ? (
         <dl className="grid grid-cols-2 gap-3">
-          {card.accountAvailableBalance !== undefined ? (
+          {account.accountBalance !== undefined ? (
             <div>
-              <dt className="text-xs text-banking-navy/60">
-                {t('business.cards.accountAvailable')}
-              </dt>
+              <dt className="text-xs text-banking-navy/60">{t('business.cards.accountBalance')}</dt>
               <dd className="text-sm font-semibold text-banking-deep">
-                <Money amount={card.accountAvailableBalance} />
+                <Money amount={account.accountBalance} />
               </dd>
             </div>
           ) : null}
-          {card.payableAmount !== undefined ? (
+          {account.usableBalance !== undefined ? (
             <div>
-              <dt className="text-xs text-banking-navy/60">{t('business.cards.payableAmount')}</dt>
+              <dt className="text-xs text-banking-navy/60">{t('business.cards.usableBalance')}</dt>
               <dd className="text-sm font-semibold text-banking-deep">
-                <Money amount={card.payableAmount} />
+                <Money amount={account.usableBalance} />
               </dd>
             </div>
           ) : null}
         </dl>
+      ) : null}
+
+      {linkedAccountNotice !== undefined ? (
+        <p className="text-sm text-banking-navy/60">{t(linkedAccountNotice)}</p>
       ) : null}
 
       {card.monthlyLimit !== undefined ? (

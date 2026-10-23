@@ -37,9 +37,21 @@
 主路径：模型的工具调用 → agent `beforeToolCall`（`agent/banking-agent.ts`）→ `securityGateway.handleToolCall`（`security-gateway.ts`）→ `gatewayCreatePendingAction` → 仓储 `createPendingAction`（`lib/db/repositories/pendingAction.ts#createPendingAction` → `client.pendingAction.create`）。
 纯文本回复不经过 `beforeToolCall`，因此不会创建任何 `PendingAction`，也不会出现确认/MFA 面板。
 `gatewayCreatePendingAction` 落库状态：`ev.requiresMfa ? 'awaiting_mfa' : 'pending'`；RED 同时铸造 MFA 挑战。
-它还可能返回 `{ kind: 'clarify' }`（转账收款人无法唯一解析，不落库）或 `{ kind: 'plan_cancelled' }`（所属计划已取消，不落库）。
+它还可能返回 `{ kind: 'clarify' }`（转账收款人或卡片目标无法唯一解析，不落库）或 `{ kind: 'plan_cancelled' }`（所属计划已取消，不落库）。
 计划节点（`submit_plan` 之后）经 `agent/confirmation/gated-execution.ts` 以 `taskId`/`nodeId` 复用同一 `handleToolCall` 路径。
 独立路径：`manual-card-management.ts#proposeCardChange`（`POST /api/cards`）直接 `pendingAction.create`，工具名 `manual_add_card`/`manual_delete_card`，被 `app/api/actions/route.ts` 显式过滤，不出现在主确认面板。`addDemoCardSchema` 另接受可选 `linkedAccountId`（VIRTUAL 卡的结算账户绑定），`toChange` 将其透传到 `CardChange`；该绑定的账户归属与类型由 SDK 在服务端校验。
+
+## 收款人与卡片的身份解析
+
+`recipient-resolution.ts` 与 `card-resolution.ts` 在 park 阶段只读调用者本人的数据，把选择器解析为唯一 id。
+`resolveTransferRecipient` 接受 `contactId`、`name` 与 `phone`：先用 `phoneIdentityMatches` 做身份判定，脱敏 `phone` 只做候选唯一化；成功时 `canonicalizeTransferArgs` 写入 `contactId` 并删除 `phone` 与 `name`。
+`resolveCardTarget` 接受 `cardId`、`cardType`、`cardTail` 与 `cardNumber`：每个字段只匹配自己的面，成功后 `canonicalizeCardArgs` 写入 `cardId` 并删除其余 3 个选择器。
+两者都返回 `resolved`、`not_found`、`ambiguous` 或 `invalid`，都不抛错、不写库。
+`gatewayCreatePendingAction` 在进入参数归一化之前解析卡片目标，`CARD_TARGET_TOOLS` 的 6 个写工具都走这条路径。
+把尾号或完整卡号写进 `cardId` 返回 `invalid`，不退化为按尾号查询。
+澄清文本由 `buildRecipientClarifyMessage` 与 `buildCardClarifyMessage` 生成，只含脱敏值。
+`Contact.phoneFull` 与 `Card.numberFull` 不离开存储层。
+规则见 `docs/cn/identity-resolution.md`。
 
 ## 赎回报价
 

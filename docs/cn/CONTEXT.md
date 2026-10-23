@@ -25,6 +25,8 @@
 | 事件、检查点、重试与恢复 | [agent-durability.md](agent-durability.md) |
 | 金融单位与结算 | [financial-values.md](financial-values.md) |
 | 理财净值、份额与收益口径 | [investments.md](investments.md) |
+| 卡片增删、结算账户绑定与余额展示 | [card-management.md](card-management.md) |
+| 号码与卡片的身份判定、候选筛选、完整号码边界与补全 | [identity-resolution.md](identity-resolution.md) |
 | 对话卡片与调用详情 | [chat-presentation.md](chat-presentation.md) |
 | 权限、认证与审计 | [security.md](security.md) |
 | 人工接管与证据处理 | [manual-review.md](manual-review.md) |

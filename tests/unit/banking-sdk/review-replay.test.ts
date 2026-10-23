@@ -74,15 +74,19 @@ describe('reviewed SDK replay boundaries', () => {
     expect(await postedState()).toEqual({ balance: 2863000n, flows: 1 });
   });
 
-  it('resolves a raw phone through the same masked matching rule as contact search', async () => {
+  it('identifies the recipient by EXACT complete phone (middle digits decide)', async () => {
     const result = await banking.transfer.createTransfer({ userId: DEMO_USER_ID, phone: '13900000002', amount: '100.00' });
     expect(result.recipient.contactId).toBe('contact_zhangwei');
     expect(result.newBalance).toBe('23480.00');
   });
 
-  it('rejects ambiguous masked phone matches without moving cash', async () => {
-    await getTestPrisma().contact.create({ data: { userId: DEMO_USER_ID, name: 'Duplicate contact', phone: '139****0002' } });
-    await expect(banking.transfer.createTransfer({ userId: DEMO_USER_ID, phone: '13900000002', amount: '100.00' }))
+  it('rejects a masked phone whose visible ends match several contacts, without moving cash', async () => {
+    // A genuine collision: same visible ends (139…0002), DIFFERENT complete number. A MASKED selector
+    // can only narrow, so two candidates must fail closed instead of picking one.
+    await getTestPrisma().contact.create({
+      data: { userId: DEMO_USER_ID, name: 'Duplicate contact', phone: '139****0002', phoneFull: '13911110002' },
+    });
+    await expect(banking.transfer.createTransfer({ userId: DEMO_USER_ID, phone: '139****0002', amount: '100.00' }))
       .rejects.toMatchObject({ code: 'CONFLICT' });
     expect((await getTestPrisma().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(2358000n);
   });

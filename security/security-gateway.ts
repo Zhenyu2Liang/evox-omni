@@ -77,6 +77,12 @@ import { requestDigest } from '../lib/ledger';
 import { realNow } from '../lib/clock';
 import mfaMessages from './messages/mfa.zh-CN.json';
 import { resolveBankingArgs } from '../lib/banking-selectors';
+import {
+  buildCardClarifyMessage,
+  canonicalizeCardArgs,
+  cardTypeLabel,
+  resolveCardTarget,
+} from './card-resolution';
 import { withActionPolicy } from '../lib/action-summary';
 import { scheduledTime } from '../lib/scheduled-time';
 import { redactRequest, redactSecrets } from '../lib/sensitive';
@@ -720,13 +726,24 @@ function requestArgs(tool: ToolName, args: Record<string, unknown>): Record<stri
 /**
  * Outcome of the internal park path. `created` ⇒ a `PendingAction` was persisted (or reused);
  * `plan_cancelled` ⇒ refused because the owning `AgentTask` is already `'cancelled'`; `clarify` ⇒ a
- * transfer recipient could not be resolved unambiguously, so NOTHING was persisted (no `PendingAction`,
+ * transfer recipient — or a card target — could not be resolved unambiguously, so NOTHING was persisted
+ * (no `PendingAction`,
  * no MFA challenge) and the caller must ask the user to clarify.
  */
 type CreatePendingActionResult =
   | { kind: 'created'; action: PendingAction }
   | { kind: 'plan_cancelled' }
   | { kind: 'clarify'; message: string };
+
+/** Tools whose target card may be named by selectors (`cardType`/`cardTail`/`cardNumber`) instead of an id. */
+const CARD_TARGET_TOOLS: readonly string[] = [
+  'set_card_limit',
+  'freeze_card',
+  'unfreeze_card',
+  'consume_virtual_card',
+  'report_lost_card',
+  'replace_card',
+];
 
 /**
  * Persist a gated call as a `PendingAction` with a `PendingActionSummary`.
@@ -736,6 +753,12 @@ type CreatePendingActionResult =
  * recipient returns `{ kind: 'clarify' }` without persisting anything, and a resolved one canonicalizes
  * the args to the resolved `contactId` BEFORE the dedupe (so a re-park compares canonical args and the
  * args the SDK later executes are the ones validated here).
+ *
+ * Every CARD-target tool gets the same park-time treatment through `security/card-resolution.ts`: the
+ * user's words (`cardType`/`cardTail`/`cardNumber`, or an exact `cardId`) become ONE owned card, an
+ * unresolvable/ambiguous/invalid selector is a `{ kind: 'clarify' }` request, and a resolved target is
+ * canonicalized to the resolved `cardId` BEFORE `resolveBankingArgs`, so the card shown on the
+ * confirmation summary is exactly the card the SDK operates on.
  *
  * Returns `{ kind: 'plan_cancelled' }` when the call is plan-scoped (`ctx.taskId`) and the owning
  * `AgentTask` is already `'cancelled'`. The plan-status read and the row insert run in ONE transaction,
@@ -747,6 +770,16 @@ async function gatewayCreatePendingAction(
   ctx: GatewayContext,
   ev: SecurityEvaluation,
 ): Promise<CreatePendingActionResult> {
+  // Card targets are resolved from the USER'S WORDS before anything else touches the args: an exact-id
+  // validation can then never mask a selector, and a tail/card number placed in the id slot is REFUSED
+  // (never looked up) instead of silently matching some other card.
+  if (CARD_TARGET_TOOLS.includes(ctx.toolName)) {
+    const card = await resolveCardTarget(ctx.userId, ctx.args);
+    if (card.status !== 'resolved') {
+      return { kind: 'clarify', message: buildCardClarifyMessage(card) };
+    }
+    ctx = { ...ctx, args: canonicalizeCardArgs(ctx.args, card.card.id) };
+  }
   ctx = { ...ctx, args: await resolveBankingArgs(ctx.userId, ctx.toolName, ctx.args),
     userRequest: redactRequest(ctx.userRequest) };
   ctx.args = canonicalCommandArgs(ctx.args);
@@ -790,7 +823,7 @@ async function gatewayCreatePendingAction(
   const summary = buildPendingActionSummary(ctx, ev, recipient, accountLabel);
   if (ctx.args.cardId) {
     const card = await prisma.card.findFirst({ where: { id: String(ctx.args.cardId), userId: ctx.userId } });
-    if (card) summary.fields.unshift({ label: '卡片', value: `${({ CREDIT: '信用卡', DEBIT: '借记卡', VIRTUAL: '虚拟卡' } as Record<string, string>)[card.type] ?? card.type} ${card.numberMasked}` });
+    if (card) summary.fields.unshift({ label: '卡片', value: `${cardTypeLabel(card.type)} ${card.numberMasked}` });
   }
   if (ctx.args.productId) {
     const product = await prisma.investmentProduct.findUnique({ where: { id: String(ctx.args.productId) } });

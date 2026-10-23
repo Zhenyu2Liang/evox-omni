@@ -61,7 +61,7 @@
 补办卡与源卡共享同一连续月度额度（`banking-sdk/card-family.ts` 双向遍历 `replacedByCardId`），历史 `CardConsumption` 保持原卡归属不改写。
 
 卡片集合按 id/type/状态断言，不使用固定卡片总数。
-mock 夹具播种 `card_credit`/`card_debit`，演示种子（`prisma/seed.ts`）另有 `card_virtual`。
+mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `acct_checking`（`linkedAccountId: 'acct_checking'`），演示种子（`prisma/seed.ts`）另有绑定同一账户的 `card_virtual`。
 `lA` 补办后为「补办 ACTIVE 信用卡 + LOST 源卡 + DEBIT + VIRTUAL」，由类型/状态推导而非硬编码。
 
 `tests/helpers/db.ts#truncateAll()` 清空 `prisma/schema.prisma` 的每一个 model（含无关系的 `CardConsumption`）。
@@ -101,6 +101,49 @@ mock 夹具播种 `card_credit`/`card_debit`，演示种子（`prisma/seed.ts`�
 
 话术断言绑定产品原文：`test-18` 与 `unit/agent/card-capability-guidance.test.ts` 读取目录与提示词的真实渲染结果，
 因此改动 `agent/messages/*.json` 的卡片管理条目或 `agent/system-prompt.ts` 的 `manual-only` 语句时必须同时核对这两处。
+
+## 卡片-结算账户绑定的覆盖
+
+`Card.linkedAccountId` 是真实外键（可选关系，未写 `onDelete` → 默认 `SetNull`）。
+`CardView` 用 `linkedAccountStatus`（`LINKED`/`MISSING`/`UNTRUSTED`/`NOT_APPLICABLE`）与 `usable`（= `status === 'ACTIVE'`）表达绑定状态。
+`accountAvailableBalance` 是**账户**余额，`payableAmount = min(账户余额, 家庭本月剩余限额)`，两者都只在 `LINKED` 出现。
+`MISSING`/`UNTRUSTED` 不得带任何余额字段，也绝不以 `0.00` 冒充。
+`FROZEN`/`LOST` 保留真实余额而 `usable === false`；`CREDIT` 恒 `NOT_APPLICABLE`。
+UNTRUSTED 的可构造来源只有「他人账户」与「非 CHECKING 账户」；「账户不存在」在真外键下不可表示（删除账户走 `SetNull` → `MISSING`）。
+单账户多卡共享同一份余额，一张卡的消费同步反映到同账户的其它卡，资产汇总额只计该账户一次。
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `unit/lib/mask.test.ts` | `lib/mask` 为唯一脱敏实现：末 4 位保留且长度不变、幂等、过短原样不抛错、`maskPhone(null) === ''`；`lib/phone.ts#maskPhone` 与 `lib/mask.ts#maskPhone` 是同一函数引用 |
+| `unit/banking-sdk/card-linked-account.test.ts` | LINKED 的名称/掩码/账户余额/应付金额、月限额截断、MISSING 与 UNTRUSTED 无余额字段、FK `SetNull` 后读为 MISSING、FROZEN/LOST 真实余额、CREDIT `NOT_APPLICABLE`、创建即绑定与 0 或多个活期账户时的 `VALIDATION`/`SECURITY_DENIED` |
+| `integration/card-linked-account-projection.test.ts` | 他人账户的 owner 隔离与消费拒绝、多卡共享同一账户的余额同步与汇总只计一次、转账/消费/投资申购三条路径的卡视图余额与账户余额同口径 |
+| `app/card-links-http.test.ts` | `GET /api/cards` 报文层：只出现脱敏账号、他人余额/账号/户名不出现在 JSON、FROZEN/LOST 不序列化成 `0.00`、MISSING 与 CREDIT 无余额字段 |
+| `integration/card-dashboard-assets.test.ts` | 绑定借记卡仍不计入可用额度，资产汇总不重复计入 |
+| `integration/card-replacement-transaction.test.ts`、`card-replace-capability-contract.test.ts` | 补办继承结算账户；漂移只可能是「存在但不可信」或删除后 `SetNull`；写入无行 id 被外键拒绝 |
+| `scenarios/test-13/14/16/19` | 借记卡补办、虚拟卡申请与重放、家族限额、CREDIT 补办的绑定与 `NOT_APPLICABLE` 投影 |
+
+## 号码与卡片身份解析的覆盖
+
+身份判定与候选筛选必须分开断言：身份用例只接受完整号码，候选用例必须同时断言「候选不唯一即不执行」。
+解析用例必须断言三件事：参数被规范化为唯一 id、澄清时不写 `PendingAction`、对外文本不含完整号码。
+涉及完整号码的用例读取 `Contact.phoneFull` 与 `Card.numberFull`，断言对象只到脱敏值。
+
+| 文件 | 覆盖 |
+| --- | --- |
+| `unit/lib/phone-identity.test.ts` | 形状判定、`phoneIdentityMatches` 只认相等完整号码（中间四位参与比较）、候选筛选的可见端与片段、只保留脱敏值的历史行、`maskAwarePhoneMatch` 与 `searchPhoneMatch` 不得互换、号码层只回答布尔值 |
+| `unit/security/phone-identity.test.ts` | 收款人身份判定对片段、脱敏值与位数错误的拒绝；搜索片段仍可用于候选 |
+| `unit/security/recipient-identity.test.ts` | 每个选择器只匹配自己的字段，跨字段别名与片段被拒；多字段必须指向同一联系人；掩码冲突报 `ambiguous` 且候选全部脱敏 |
+| `unit/security/recipient-phone-identity.test.ts` | 完整号码精确解析、可见端相同而中间四位不同的号码不解析、只保留脱敏值的历史行不可识别、脱敏值仅作唯一候选、完整号码不降级为候选、他人的 id 与号码不解析且不回显 |
+| `unit/security/recipient-resolution.test.ts` | 网关 park：姓名、完整号码与 `contactId` 均规范化为 `contactId` 并生成脱敏摘要；无法解析时返回澄清，不落库 |
+| `unit/lib/contact.search.test.ts` | `searchContacts` 用完整号码或脱敏号码收窄候选；掩码冲突返回全部候选；返回行不含完整号码 |
+| `unit/scripts/number-backfill.test.ts` | 复制完整值并以 `lib/mask` 规范化展示列、重复执行幂等、脱敏值报 `unrecoverable-masked`、已有完整值的行不被改写、回滚只清空仍持有写入值的行、报告只含脱敏值、CLI 参数严格 |
+| `unit/security/card-resolution.test.ts` | `resolveCardTarget` 直连：`cardId`、`cardType`、`cardTail`、`cardNumber` 各自命中，多个选择器必须指向同一张卡，`cardNumber` 只与 `numberFull` 精确相等；没有候选为 `not_found`、多个为 `ambiguous` 且候选只有 `id`/`type`/`numberMasked`；他人的 `cardId`、`cardTail`、`cardNumber` 均为 `not_found` 且不投影候选；尾号或完整卡号写进 `cardId` 为 `invalid`；`canonicalizeCardArgs` 只留 `cardId`，`buildCardClarifyMessage` 不含 12 至 19 位数字 |
+| `unit/security/card-selector-gateway.test.ts` | 网关 park 阶段：解析成功时持久化参数只有 `cardId`，确认摘要用脱敏尾号；`ambiguous`、`invalid` 与组合冲突只在 `blockReason` 给出纯文本澄清，`PendingAction` 与 `mfaChallenge` 计数不变 |
+| `scenarios/card-selector-consumption.test.ts` | 生产运行链路下 `consume_virtual_card` 分别用 `cardType: "VIRTUAL"` 与 `cardTail: "7788"` 解析到同一张虚拟卡，MFA 后扣减其绑定活期账户并写入 `channel` 为 `CARD` 的流水与 `CardConsumption` 行；完整卡号写进 `cardId` 在 park 前被拒；park 参数、确认摘要与叙述都不含 12 至 19 位数字 |
+| `scenarios/test-17-consumption-time-guard.test.ts` | `consume_virtual_card` 的参数键集合含 `cardId`、`cardType`、`cardTail` 与 `cardNumber` |
+| `app/contacts-http.test.ts` | `POST /api/contacts` 的完整号码只写入 `Contact.phoneFull`，响应与审计行只有脱敏值；同一完整号码重复提交返回 `409`，脱敏值或带符号号码返回 `400`；他人联系人不可删除 |
+
+卡片选择器语法见 [identity-resolution.md](../docs/cn/identity-resolution.md)。
 
 ## 常用命令
 

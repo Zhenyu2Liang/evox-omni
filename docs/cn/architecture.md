@@ -301,6 +301,8 @@ Groq、OpenRouter、xAI、Mistral 和 Cerebras。
 证据缺失或矛盾时，停止执行并转入人工核对。
 执行证据规则见[持久化与恢复](agent-durability.md)。
 金额和预算规则见[金融数值与结算](financial-values.md)。
+卡片消费扣减结算活期账户现金，并写入消费流水。
+绑定、余额展示与数据升级规则见[卡片管理](card-management.md)。
 
 ## 持久化证据与恢复
 

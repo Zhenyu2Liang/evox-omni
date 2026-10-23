@@ -23,6 +23,6 @@ describe('plan parameter preflight', () => {
 
   it('accepts a zero card limit and rejects a missing required card field', () => {
     expect(() => validatePlanParameters(node('set_card_limit', { cardId: 'card', category: SPENDING_CATEGORIES[0], amount: '0.00' }))).not.toThrow();
-    expect(() => validatePlanParameters(node('set_card_limit', { category: SPENDING_CATEGORIES[0], amount: '0.00' }))).toThrow();
+    expect(() => validatePlanParameters(node('set_card_limit', { cardType: 'DEBIT', amount: '0.00' }))).toThrow();
   });
 });

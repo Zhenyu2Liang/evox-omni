@@ -20,6 +20,10 @@
 | 提交校验 | fence | 提交时检查执行者仍持有所有权 |
 | 执行键 | operation key | 用于识别和去重业务操作的服务端键 |
 | 输入摘要 | request digest | 规范输入的摘要，用于识别参数变化 |
+| 身份判定 | identity、`phoneIdentityMatches` | 用完整号码逐字符相等确定唯一对象，可以绑定执行对象 |
+| 候选筛选 | candidate、`phoneCandidateMatches` | 用脱敏号码或数字片段收窄候选，不绑定执行对象 |
+| 身份解析 | resolution | 服务端在 park 阶段把选择器解析为唯一资源 id |
+| 完整号码 | `Contact.phoneFull`、`Card.numberFull` | 仅供服务端精确匹配的虚构完整手机号或卡号 |
 | 执行回执 | `ExecutionReceipt` | 已提交业务的完整原结果 |
 | 重放 | replay | 读取并返回已保存的原结果 |
 | 重试 | retry | 重新执行同一调用，并增加尝试次数 |
@@ -45,6 +49,13 @@
 | 部分赎回 | partial redemption、`SHARES`、`AMOUNT` | 赎回部分份额，剩余份额与成本继续持有 |
 | 追加申购 | `addedToExisting` | 对已持有产品再次申购，并入现有持仓 |
 | 银行业务工具库 | SDK、`banking-sdk/` | 执行所属用户的模拟银行业务 |
+| 借记卡 | `DEBIT` | 绑定本人活期账户、消费扣减账户现金的银行卡 |
+| 信用卡 | `CREDIT` | 使用授信额度、不绑定结算账户的银行卡 |
+| 虚拟卡 | `VIRTUAL` | 由卡片页或智能体申请、绑定本人活期账户的虚拟借记卡 |
+| 结算账户 | settlement account、`Card.linkedAccountId` | 借记卡与虚拟卡消费所扣减的本人活期账户 |
+| 关联状态 | `linkedAccountStatus` | 卡片与结算账户的关联结果：`LINKED`、`MISSING`、`UNTRUSTED`、`NOT_APPLICABLE` |
+| 账户余额 | `accountAvailableBalance` | 结算账户的可用现金 |
+| 可用余额 | `payableAmount` | 本卡当前可消费金额，取账户余额与剩余月限额的较小值 |
 | 有符号 64 位整数 | INT64 | 当前已入账金额的数据库存储范围 |
 | 绿色权限 | GREEN | 当前策略允许自动执行 |
 | 黄色权限 | YELLOW | 执行前需要用户确认 |

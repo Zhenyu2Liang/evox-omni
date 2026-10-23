@@ -45,10 +45,26 @@ HTTP 200 且 `CardChangeResponse.ok === false`。
 发生，因此不会产生任何持久化副作用（无资金变动、无流水行、无 `CardConsumption` 行）。只有「键不存在」
 才被接受。
 
+## CardView 整对象透传
+
+卡片读模型一律整对象透传：`GET /api/cards` 的 `cards[]`、`POST /api/cards/[id]/consume` 的
+`ConsumeCardResult.card`、手动卡片变更里的 `CardChange.card`，都是 SDK／`security/manual-card-management`
+直接返回的 `CardView`，交给 `_lib/http#jsonResponse` 时不做任何手写字段投影、改名或收窄。因此下列字段
+原样出现在 HTTP 响应里：`id`、`type`、`network`、`numberMasked`、`status`、`creditLimit`、
+`availableLimit`、`monthlyLimit`、`replacedByCardId`、`linkedAccountId`、`linkedAccountStatus`、
+`linkedAccountNumber`、`linkedAccountName`、`accountAvailableBalance`、`payableAmount`、`usable`、`limits`。
+
+`linkedAccountStatus` 为 `MISSING`／`UNTRUSTED`／`NOT_APPLICABLE` 时，`linkedAccountNumber`、
+`linkedAccountName`、`accountAvailableBalance`、`payableAmount` 本就不存在（`undefined` 在 JSON 序列化
+时被丢弃，「没有这个键」就是契约），不是 `0`。路由不得把这些余额补成 `0`、不得回填默认账户、不得用
+`linkedAccountId` 反推账号或余额；`status` 与 `usable` 同样由 SDK 决定，路由只负责搬运。需要收窄或改名
+这些字段时，先改 `banking-sdk/types.ts#CardView` 的 DTO 合同，不要在路由里裁剪。
+
 ## 约束
 
 - 服务端拥有时间：路由不得从请求体、查询参数或请求头读取记账/生效/限额归属时间，也不得添加任何
   时间参数；客户端送来这类键时必须显式拒绝，不能静默剥离。
+- 卡片 `CardView` 原样透传：路由不写字段投影、不补零、不补默认账户（见上节「CardView 整对象透传」）。
 - 身份来自 `_lib/session`，所有权由 SDK（或 `security/manual-card-management`）在事务内校验；
   路由内不重复实现授权或资金逻辑。
 - 请求体 schema 保持模块私有：路由模块只导出 HTTP 处理函数、路由配置和 TypeScript 类型。
@@ -78,3 +94,7 @@ HTTP 200 且 `CardChangeResponse.ok === false`。
   用于确认卡片端点不绕过确认、MFA 与审计。
 - 上述测试由其他代理维护，本目录只读。测试进程共享一个 SQLite 库且不得并行；测试与构建输出写入
   `logs/`（如 `pnpm exec vitest run tests/app 2>&1 | Tee-Object logs/api-cards-test.txt`）。
+- `GET /api/cards` 与卡片消费返回的 `CardView` 字段形状由 `tests/app/card-*.test.ts` 覆盖：如
+  `card-consume-http.test.ts` 断言消费结果 `card.accountAvailableBalance`（`GET /api/cards` 的
+  `payableAmount`／`accountAvailableBalance` 另由 e2e `date-tamper-boundary`／`card-replace-chain` 读取）。
+  整对象透传意味着路由不裁剪，`linkedAccountStatus`／`usable` 的取值本身由 SDK 单元测试保证。

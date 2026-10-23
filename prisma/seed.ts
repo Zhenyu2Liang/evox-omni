@@ -286,6 +286,7 @@ const ACCOUNTS = [
   { id: ACCT_SAVINGS, userId: USER_ID, type: 'SAVINGS', name: '储蓄账户', number: '****3309', balanceMinor: SAVINGS_BALANCE_CENTS, currency: 'CNY' },
 ];
 
+// 虚构测试数据：0000 号段，非真实手机号/卡号
 const CARDS = [
   {
     id: CARD_CREDIT,
@@ -293,6 +294,7 @@ const CARDS = [
     type: 'CREDIT',
     network: 'UnionPay',
     numberMasked: '****6688',
+    numberFull: '6222000000006688',
     status: 'ACTIVE',
     creditLimitMinor: 1_800_000n,
     availableLimitMinor: 1_800_000n,
@@ -304,10 +306,12 @@ const CARDS = [
     type: 'DEBIT',
     network: 'UnionPay',
     numberMasked: '****8821',
+    numberFull: '6222000000008821',
     status: 'ACTIVE',
     creditLimitMinor: null,
     availableLimitMinor: null,
     monthlyLimitMinor: null,
+    linkedAccountId: ACCT_CHECKING,
   },
   {
     id: CARD_VIRTUAL,
@@ -315,6 +319,7 @@ const CARDS = [
     type: 'VIRTUAL',
     network: 'UnionPay',
     numberMasked: '****7788',
+    numberFull: '6222000000007788',
     status: 'ACTIVE',
     creditLimitMinor: null,
     availableLimitMinor: null,
@@ -330,15 +335,16 @@ const CARD_LIMITS = [
   { id: 'limit_credit_shopping', cardId: CARD_CREDIT, category: '购物', amountMinor: 450_080n },
 ];
 
+// 虚构测试数据：0000 号段，非真实手机号/卡号
 const CONTACTS = [
-  { id: 'contact_zhangwei', userId: USER_ID, name: '张伟', phone: '139****0002', bank: '招商银行', remark: null },
-  { id: 'contact_wangfang', userId: USER_ID, name: '王芳', phone: '137****0003', bank: '工商银行', remark: null },
-  { id: 'contact_mama', userId: USER_ID, name: '妈妈', phone: '136****0004', bank: '建设银行', remark: '家人' },
-  { id: 'contact_lihua', userId: USER_ID, name: '李华', phone: '135****0005', bank: '农业银行', remark: null },
-  { id: 'contact_landlord', userId: USER_ID, name: '房东', phone: '134****0006', bank: '建设银行', remark: '每月房租' },
-  { id: 'contact_chenchen', userId: USER_ID, name: '陈晨', phone: '133****0007', bank: '招商银行', remark: '同事，聚餐AA' },
-  { id: 'contact_wangqiang', userId: USER_ID, name: '王强', phone: '132****0008', bank: '工商银行', remark: '朋友' },
-  { id: 'contact_partner', userId: USER_ID, name: '爱人', phone: '131****0009', bank: '中国银行', remark: '生日10月20日' },
+  { id: 'contact_zhangwei', userId: USER_ID, name: '张伟', phone: '139****0002', phoneFull: '13900000002', bank: '招商银行', remark: null },
+  { id: 'contact_wangfang', userId: USER_ID, name: '王芳', phone: '137****0003', phoneFull: '13700000003', bank: '工商银行', remark: null },
+  { id: 'contact_mama', userId: USER_ID, name: '妈妈', phone: '136****0004', phoneFull: '13600000004', bank: '建设银行', remark: '家人' },
+  { id: 'contact_lihua', userId: USER_ID, name: '李华', phone: '135****0005', phoneFull: '13500000005', bank: '农业银行', remark: null },
+  { id: 'contact_landlord', userId: USER_ID, name: '房东', phone: '134****0006', phoneFull: '13400000006', bank: '建设银行', remark: '每月房租' },
+  { id: 'contact_chenchen', userId: USER_ID, name: '陈晨', phone: '133****0007', phoneFull: '13300000007', bank: '招商银行', remark: '同事，聚餐AA' },
+  { id: 'contact_wangqiang', userId: USER_ID, name: '王强', phone: '132****0008', phoneFull: '13200000008', bank: '工商银行', remark: '朋友' },
+  { id: 'contact_partner', userId: USER_ID, name: '爱人', phone: '131****0009', phoneFull: '13100000009', bank: '中国银行', remark: '生日10月20日' },
 ];
 
 /** Monthly subscription fees (cents) — mirror the seeded 订阅 ledger rows; charged again in October. */

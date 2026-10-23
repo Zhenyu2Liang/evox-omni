@@ -204,6 +204,19 @@ export interface CardLimitView {
   amount: MoneyAmount;
 }
 
+/**
+ * How a card's settlement account resolved for ONE projection — see `CardView.linkedAccountStatus`.
+ *
+ *  - `LINKED`          a settlement account is recorded AND it resolves to an existing `CHECKING`
+ *                      account owned by the card's owner.
+ *  - `MISSING`         no settlement account is recorded on the card at all.
+ *  - `UNTRUSTED`       an account id is recorded, but it does not resolve to one of the owner's
+ *                      `CHECKING` accounts (deleted, owned by someone else, or the wrong type).
+ *  - `NOT_APPLICABLE`  a `CREDIT` card: by design it draws on its credit line, never on a
+ *                      settlement account, so none is looked up.
+ */
+export type CardLinkedAccountStatus = 'LINKED' | 'MISSING' | 'UNTRUSTED' | 'NOT_APPLICABLE';
+
 export interface CardView {
   id: string;
   type: CardType;
@@ -215,18 +228,45 @@ export interface CardView {
   monthlyLimit?: MoneyAmount;
   /** Id of the replacement card issued for this (lost) card; historical reference only. */
   replacedByCardId?: string;
-  /** Settlement CHECKING account id bound to this card (virtual cards); absent when unbound. */
+  /**
+   * Settlement CHECKING account id RECORDED on this card (DEBIT/VIRTUAL cards); absent when unbound.
+   * It only echoes the stored reference — whether it still resolves is `linkedAccountStatus`.
+   */
   linkedAccountId?: string;
-  /** Masked settlement-account number of the bound account, e.g. `****8821`; absent when unbound. */
+  /** How this card's settlement account resolved for this projection. */
+  linkedAccountStatus: CardLinkedAccountStatus;
+  /**
+   * Masked settlement-account number of the bound account, e.g. `****8821`. Present ONLY when
+   * `linkedAccountStatus === 'LINKED'`; the already-masked `Account.number` is echoed as stored, the
+   * full account number is never exposed.
+   */
   linkedAccountNumber?: string;
-  /** Bound account's available balance (CNY); absent when the card is unbound. */
+  /**
+   * Bound settlement CHECKING account display name, e.g. 活期账户. Present ONLY when
+   * `linkedAccountStatus === 'LINKED'`.
+   */
+  linkedAccountName?: string;
+  /**
+   * Bound account's available balance (CNY). Present ONLY when `linkedAccountStatus === 'LINKED'`.
+   * This is the ACCOUNT's cash, never a second balance owned by the card: several cards bound to one
+   * account therefore share it. A `MISSING`/`UNTRUSTED` binding reports NO balance at all — another
+   * owner's cash is never leaked and `0.00` is never fabricated.
+   */
   accountAvailableBalance?: MoneyAmount;
   /**
    * Amount currently payable by this card (CNY): the bound account balance, capped by the remaining
    * monthly limit of the card FAMILY's business month — `demoNow()` for a read, the enforced instant
    * inside `consumeCard`. A `null` monthly limit is unlimited (governed by the account balance).
+   * Present ONLY when `linkedAccountStatus === 'LINKED'`, and derived from that account: a card never
+   * carries an independent balance of its own.
    */
   payableAmount?: MoneyAmount;
+  /**
+   * Whether this card may spend right now (`status === 'ACTIVE'`); `FROZEN`/`LOST`/`PENDING` are
+   * `false`. Being unusable is NOT the same as being empty: the balance fields above stay populated
+   * whenever the binding is `LINKED`.
+   */
+  usable: boolean;
   limits: CardLimitView[];
 }
 

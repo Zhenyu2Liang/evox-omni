@@ -4,9 +4,11 @@
  * Pure SDK-level acceptance for the 补办 contract that lives in `banking-sdk/card.ts`:
  *   - `replaceCard` on a `LOST` VIRTUAL card MINTS a new `ACTIVE` row that INHERITS the source's
  *     `linkedAccountId`, re-validated in the same transaction (row exists, owned by the user,
- *     `CHECKING`). A source with a broken binding (`missing` / foreign / `SAVINGS` / `null`) is a
+ *     `CHECKING`). A source with a broken binding (foreign / `SAVINGS` / `null`) is a
  *     `CONFLICT` and mints NOTHING — a dead card is never issued. The validation runs BEFORE the
- *     idempotent return, so a broken source can never replay into a dead card either;
+ *     idempotent return, so a broken source can never replay into a dead card either. A recorded
+ *     binding that names a NONEXISTENT account cannot be constructed at all: `linkedAccountId` is a
+ *     real FK, so the row is refused by SQLite before the SDK ever sees it;
  *   - the replacement can spend IMMEDIATELY: `consumeCard` debits the bound account exactly once
  *     (one `channel='CARD'` ledger row + one `CardConsumption` row, both in the same transaction);
  *   - the monthly limit travels WITH the plastic: the enforced limit AND the projected
@@ -382,11 +384,15 @@ describe('banking-sdk · repeated and multi-generation replacement', () => {
 });
 
 describe('banking-sdk · a broken source binding never mints a dead card', () => {
-  it('rejects a missing / foreign / SAVINGS / absent binding with CONFLICT and writes nothing', async () => {
+  it('rejects a foreign / SAVINGS / absent binding with CONFLICT and writes nothing', async () => {
     await addForeignUser();
 
+    // `Card.linkedAccountId` is a REAL foreign key, so "records an account id that does not exist" is
+    // UNREPRESENTABLE: the insert itself is refused. The UNTRUSTED state is therefore covered with an
+    // account that EXISTS but is not the owner's CHECKING account (foreign / wrong type).
+    await expect(insertCard({ id: 'card_src_ghost', type: 'VIRTUAL', status: 'LOST', numberMasked: '****0098', linkedAccountId: 'acct_missing' }))
+      .rejects.toThrow(/foreign key/i);
     const brokenSources: ReadonlyArray<{ label: string; id: string; linkedAccountId: string | null }> = [
-      { label: 'missing account id', id: 'card_src_missing', linkedAccountId: 'acct_missing' },
       { label: 'foreign CHECKING account', id: 'card_src_foreign', linkedAccountId: FOREIGN_CHECKING },
       { label: 'SAVINGS account', id: 'card_src_savings', linkedAccountId: SAVINGS },
       { label: 'no binding at all', id: 'card_src_unbound', linkedAccountId: null },
@@ -418,7 +424,7 @@ describe('banking-sdk · a broken source binding never mints a dead card', () =>
       expect(row.linkedAccountId).toBe(source.linkedAccountId);
     }
 
-    // Nothing was minted by any of the four rejections either.
+    // Nothing was minted by any of the three rejections either.
     expect(await db().card.count({ where: { userId: DEMO_USER_ID } })).toBe(seededCards + brokenSources.length);
   });
 });

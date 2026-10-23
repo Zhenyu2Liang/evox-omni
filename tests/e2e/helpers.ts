@@ -1217,11 +1217,26 @@ export interface CardLimitView {
   amount: string;
 }
 
-/** A `CardView` (`GET /api/cards`). */
+/**
+ * A `CardView` (`GET /api/cards`) — a **read-model SUBSET**: the fields this harness actually reads,
+ * taken straight from the JSON response (nothing here builds a `CardView` literal, so nothing here can
+ * drift into a fabricated shape).
+ *
+ * The rest of the server contract (`banking-sdk/types.ts#CardView`) a card assertion may rely on:
+ * `linkedAccountStatus` and `usable` are always present, while `accountAvailableBalance` /
+ * `payableAmount` come back ONLY when `linkedAccountStatus === 'LINKED'`. An unusable card is not an
+ * empty one: `FROZEN`/`LOST` keep their REAL balances and merely set `usable === false` (i.e.
+ * `status !== 'ACTIVE'`), whereas `MISSING`/`UNTRUSTED` bindings carry NO amount field at all (never a
+ * placeholder `0.00`). A `CREDIT` card is always `NOT_APPLICABLE`: it has no settlement-account cash.
+ */
 export interface CardView {
   id: string;
   status: string;
   limits: CardLimitView[];
+  /** How a card's settlement account resolved — `CardView.linkedAccountStatus` (`banking-sdk/types.ts`). */
+  linkedAccountStatus?: 'LINKED' | 'MISSING' | 'UNTRUSTED' | 'NOT_APPLICABLE';
+  /** Whether the card can be charged at all — `CardView.usable`, i.e. `status === 'ACTIVE'`. */
+  usable?: boolean;
 }
 
 /** A non-terminal `PendingAction` from `GET /api/actions`. */

@@ -76,6 +76,17 @@
 | `business.cards.linkedAccount` | 关联账户 | Linked account | 卡片关联的账户名称或编号 |
 | `business.cards.accountAvailable` | 账户可用余额 | Account available balance | 关联账户当前可用余额 |
 | `business.cards.payableAmount` | 当前可支付金额 | Currently payable | 结合卡片额度与账户余额后当前可支付的金额 |
+| `business.cards.accountBalance` | 账户余额 | Account balance | 关联账户的现金余额 |
+| `business.cards.usableBalance` | 可用余额 | Usable balance | 结合卡片状态与额度后可动用的余额 |
+| `business.cards.linkedAccountMissing` | 未关联账户 | No linked account | 卡片没有关联账户时的占位文案 |
+| `business.cards.linkedAccountUntrusted` | 账户暂不可用 | Account unavailable | 关联账户信息不可信时的提示 |
+| `business.cards.cardUnavailable` | 卡片不可用 | Card unavailable | 卡片整体不可用的短标签 |
+| `business.cards.cardFrozenNotice` | 卡片已冻结，暂不可用于消费（余额仍可查看） | Card frozen — not usable for spending; the balance is still viewable | 冻结状态下的说明句：不可消费但余额仍可查看 |
+| `business.cards.cardLostNotice` | 卡片已挂失，暂不可用于消费（余额仍可查看） | Card reported lost — not usable for spending; the balance is still viewable | 挂失状态下的说明句：不可消费但余额仍可查看 |
+| `business.cards.balanceFromAccount` | 余额来自关联账户 | Balance from the linked account | 说明余额来源是关联账户 |
+
+关联账户名称复用既有 `business.cards.linkedAccount`，关联账户可用余额说明可复用 `business.cards.accountAvailable`；`business.cards.usableBalance` 是更通用的可用余额标签。
+取值相同的键不重复新增，例如不设 `business.cards.linkedAccountName`。
 
 `pages.cards.consume*` 提供卡片消费界面（模拟消费表单、消费结果提示与消费记录）的中英文标签。
 

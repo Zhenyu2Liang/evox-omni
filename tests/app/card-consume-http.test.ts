@@ -10,8 +10,9 @@
  * exercised here; identity is resolved SERVER-SIDE (`_lib/session#resolveUserId`), so a
  * client-supplied cookie/session hint can never name the owner.
  *
- * The seed ships NO account-bound card (both seeded cards are unbound), so every spec first ISSUES
- * a VIRTUAL card through the real SDK (`banking.card.applyVirtualCard`, bound to `acct_checking`)
+ * The seeded DEBIT card is already bound to `acct_checking` but carries no monthly limit, so each
+ * spec first ISSUES
+ * a VIRTUAL card through the real SDK (`banking.card.applyVirtualCard`, bound to `acct_checking`),
  * and then drives the HTTP surface against it. Money is asserted as exact canonical CNY decimal
  * strings / integer minor units — never floats.
  *

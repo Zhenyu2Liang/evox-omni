@@ -7,32 +7,49 @@
  * persisted: the persisted + executed args are then CANONICALIZED to the resolved `contactId`
  * (`canonicalizeTransferArgs`), so the card and `banking-sdk/transfer.ts#resolveRecipient` AGREE.
  *
- * Each supplied selector matches only its declared field. IDs and names are exact; phone numbers
- * have a complete normalized or masked shape. Every supplied field must match the same contact.
- * Resolution considers only the caller's owned contacts. The candidate set is:
- *   - EXACTLY ONE distinct contact  → `resolved`;
- *   - ZERO                            → `not_found`;
- *   - MORE THAN ONE distinct contact → `ambiguous` (duplicate names or masked phones).
- * It is a pure function of the validated args and the caller's OWN contacts (owner isolation: only
- * the caller's contacts are ever considered, so a foreign/unknown id can never resolve or leak).
+ * TWO DISTINCT phone questions are asked, in this order (`lib/phone`):
+ *   1. IDENTITY (`phoneIdentityMatches`) — a complete number must equal the contact's stored complete
+ *      number (`Contact.phoneFull`) character-for-character, so the middle four digits always take
+ *      part and a mask can never identify anybody.
+ *   2. CANDIDATE (`phoneCandidateMatches`) — a MASKED selector only narrows the caller's contacts by
+ *      the visible ends. It never claims number equality; it may resolve ONLY a unique candidate
+ *      (the user typed a mask, so a single visible-end match is the best available evidence and the
+ *      confirmation card still shows the resolved name + masked number).
+ *
+ * Each supplied selector matches only its declared field. IDs and names are exact. Every supplied
+ * field must match the same contact. Resolution considers only the caller's owned contacts (owner
+ * isolation: a foreign/unknown id can never resolve or leak). The outcome is:
+ *   - EXACTLY ONE identity match      → `resolved`;
+ *   - ZERO with no masked phone       → `not_found`;
+ *   - EXACTLY ONE mask candidate      → `resolved` (candidate uniquification, not equality);
+ *   - ZERO mask candidates            → `not_found`;
+ *   - MORE THAN ONE contact           → `ambiguous` (duplicate names or colliding masks).
+ * A history row that kept only a mask (`phoneFull` NULL) can never be identified by a complete
+ * number — "looks like" is not "is" — so a complete number for it is `not_found`.
+ * Nothing in this module ever emits `Contact.phoneFull`: only `maskPhone`-ed values leave it.
  * It NEVER throws — every outcome is reported so the caller can ask the user to clarify.
  */
 import type { Contact } from '@/lib/db/prisma';
+import { contactPhoneFacets, listContacts } from '../lib/db/repositories/contact';
 import { getAccount } from '../lib/db/repositories/account';
-import { listContacts } from '../lib/db/repositories/contact';
-import { maskAwarePhoneMatch, maskPhone } from '../lib/phone';
+import { isMaskedPhone, maskPhone, phoneCandidateMatches, phoneIdentityMatches } from '../lib/phone';
 
-// The gateway and SDK share the same phone identity rules.
-export { maskAwarePhoneMatch, maskPhone };
+export { maskPhone };
 
 /** The recipient selector slots a `transfer_money` call may carry. */
 type SelectorKind = 'contactId' | 'phone' | 'name';
+
+/** One supplied selector: the field it declares and the value to match on that field alone. */
+interface Selection {
+  kind: SelectorKind;
+  value: string;
+}
 
 /**
  * Result of a SERVER-SIDE transfer-recipient resolution performed at park time. `resolved` names the
  * exact contact the SDK will resolve at execution; every other status is a clarification request
  * (nothing is parked). `kind`/`supplied` describe the FIRST supplied selector so the clarify
- * messages stay stable.
+ * messages stay stable. Every phone value here is already `maskPhone`-ed.
  */
 export type RecipientResolution =
   | { status: 'resolved'; contact: { id: string; name: string; phone: string } }
@@ -50,17 +67,33 @@ function isPresent(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
 
-/** A selector is matched only against its declared identity field. */
-function contactMatchesSelector(contact: Contact, kind: SelectorKind, value: string): boolean {
-  if (kind === 'contactId') return contact.id === value;
-  if (kind === 'name') return contact.name === value;
-  return maskAwarePhoneMatch(value, contact.phone);
+/** A selector is matched against its declared IDENTITY field only. */
+function matchesIdentity(contact: Contact, selection: Selection): boolean {
+  if (selection.kind === 'contactId') return contact.id === selection.value;
+  if (selection.kind === 'name') return contact.name === selection.value;
+  return phoneIdentityMatches(selection.value, contactPhoneFacets(contact));
+}
+
+/** Same field isolation, but the phone slot only NARROWS by visible ends (a candidate, not identity). */
+function matchesCandidate(contact: Contact, selection: Selection): boolean {
+  if (selection.kind === 'phone') return phoneCandidateMatches(selection.value, contactPhoneFacets(contact));
+  return matchesIdentity(contact, selection);
+}
+
+/** Public projection of a resolved contact — the phone is masked, `phoneFull` never leaves storage. */
+function resolvedContact(contact: Contact): { id: string; name: string; phone: string } {
+  return { id: contact.id, name: contact.name, phone: maskPhone(contact.phone) };
+}
+
+/** Public projection of unresolvable candidates — masked names/phones only. */
+function maskedCandidates(rows: Contact[]): Array<{ name: string; phone: string }> {
+  return rows.map((contact) => ({ name: contact.name, phone: maskPhone(contact.phone) }));
 }
 
 /**
  * Resolve the transfer recipient SERVER-SIDE at park time. Accepts ONE OR MORE of
  * `contactId` | `phone` | `name` (a completely absent recipient is `invalid`). Every supplied field
- * must match its own identity facet on the same owned contact. Never throws.
+ * must match its own facet on the same owned contact. Never throws.
  */
 export async function resolveTransferRecipient(
   userId: string,
@@ -75,21 +108,30 @@ export async function resolveTransferRecipient(
   }
   const kind = keys[0];
   const supplied = args[kind] as string;
+  const selections: Selection[] = keys.map((key) => ({ kind: key, value: args[key] as string }));
 
   // Owner isolation for free: only the caller's OWN contacts are ever considered.
   const contacts = await listContacts(userId);
-  const candidates = contacts.filter(contact => keys.every(key => contactMatchesSelector(contact, key, args[key] as string)));
-  if (candidates.length === 0) return { status: 'not_found', kind, supplied };
-  if (candidates.length > 1) {
-    return {
-      status: 'ambiguous',
-      kind,
-      supplied,
-      candidates: candidates.map((c) => ({ name: c.name, phone: c.phone })),
-    };
+
+  // 1. IDENTITY — the only rule that may bind a recipient to a stored phone number.
+  const identified = contacts.filter((contact) => selections.every((selection) => matchesIdentity(contact, selection)));
+  if (identified.length === 1) return { status: 'resolved', contact: resolvedContact(identified[0]) };
+  if (identified.length > 1) {
+    return { status: 'ambiguous', kind, supplied, candidates: maskedCandidates(identified) };
   }
-  const contact = candidates[0];
-  return { status: 'resolved', contact: { id: contact.id, name: contact.name, phone: contact.phone } };
+
+  // 2. CANDIDATE — a MASKED selector may narrow to exactly one owned contact. This is candidate
+  //    uniquification, NOT number equality: the mask hides the middle digits, so the caller must
+  //    confirm the masked recipient that was reported back.
+  if (!selections.some((selection) => selection.kind === 'phone' && isMaskedPhone(selection.value))) {
+    return { status: 'not_found', kind, supplied };
+  }
+  const narrowed = contacts.filter((contact) => selections.every((selection) => matchesCandidate(contact, selection)));
+  if (narrowed.length === 1) return { status: 'resolved', contact: resolvedContact(narrowed[0]) };
+  if (narrowed.length > 1) {
+    return { status: 'ambiguous', kind, supplied, candidates: maskedCandidates(narrowed) };
+  }
+  return { status: 'not_found', kind, supplied };
 }
 
 /**

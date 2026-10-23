@@ -1,7 +1,20 @@
 import type { Contact } from '@/lib/db/prisma';
 import { createHash } from 'node:crypto';
 import { dbClient } from '../client';
-import { searchPhoneMatch } from '../../phone';
+import { isCompletePhone, phoneCandidateMatches, type PhoneCandidate } from '../../phone';
+
+/**
+ * The phone facets of a stored contact, shaped for `lib/phone`.
+ *
+ * `Contact.phone` is the PUBLIC display value (masked for seeded/history rows, complete for rows
+ * created through the HTTP API) while `Contact.phoneFull` holds the complete number for
+ * SERVER-SIDE exact matching only and is never projected to a caller. Feeding both to the phone
+ * helpers keeps every caller consistent: an identity can only ever come from a complete number,
+ * while a mask stays a candidate narrowing.
+ */
+export function contactPhoneFacets(contact: Pick<Contact, 'phone' | 'phoneFull'>): PhoneCandidate {
+  return { full: contact.phoneFull ?? null, display: contact.phone };
+}
 
 export function listContacts(userId: string): Promise<Contact[]> {
   return dbClient().contact.findMany({
@@ -28,12 +41,13 @@ export function getContactByName(userId: string, name: string): Promise<Contact 
 }
 
 /**
- * Contacts whose name or phone matches `keyword`.
+ * Contacts whose name or phone CANDIDATE-matches `keyword`.
  *
- * Stored `Contact.phone` values are MASKED (e.g. `139****0002`) while a transfer recipient may be typed
- * as a RAW number (e.g. `13900000002`). Search returns candidate names or phone fragments;
- * executable transfers separately bind a complete phone identity or exact contact ID/name.
- * An empty keyword returns all owned contacts.
+ * A hit means "maybe this contact", never "this is the recipient": a masked or fragment phone only
+ * narrows the list (`phoneCandidateMatches`), so a transfer recipient must still be established by an
+ * exact identity check (complete number / contact id / exact name) or by a UNIQUE candidate. The
+ * stored complete number (`phoneFull`) takes part in the narrowing, so a complete query is not
+ * degraded to the mask's visible ends. An empty keyword returns all owned contacts.
  */
 export function searchContacts(userId: string, keyword: string): Promise<Contact[]> {
   const needle = keyword.toLowerCase();
@@ -43,7 +57,7 @@ export function searchContacts(userId: string, keyword: string): Promise<Contact
       contacts.filter(
         (contact) =>
           contact.name.toLowerCase().includes(needle) ||
-          searchPhoneMatch(keyword, contact.phone),
+          phoneCandidateMatches(keyword, contactPhoneFacets(contact)),
       ),
     );
 }
@@ -57,6 +71,9 @@ export function createContact(input: { userId: string; name: string; phone: stri
       userId: input.userId,
       name: input.name,
       phone: input.phone,
+      // The complete number also lands in the SERVER-ONLY column, so identity checks never depend on
+      // which column happens to hold the full value (see `contactPhoneFacets`).
+      phoneFull: isCompletePhone(input.phone) ? input.phone : null,
       ...(input.bank !== undefined ? { bank: input.bank } : {}),
       ...(input.remark !== undefined ? { remark: input.remark } : {}),
     },

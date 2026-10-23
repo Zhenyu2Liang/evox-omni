@@ -57,7 +57,7 @@ Creating a scheduled intent does not preauthorize a future financial write.
 Brand-new physical card creation and card deletion are manual-only on the Cards page and expose no
 agent capability; the Cards page has no 补办 action.
 `replace_card` is an ordinary agent capability for ANY owned `LOST` card — DEBIT, CREDIT or VIRTUAL.
-Its params are `{ cardId }` only, with no per-type gating: the replacement inherits the source type
+Its params carry the shared card selectors (`cardSelectorFields`, see below) with no per-type gating: the replacement inherits the source type
 and network (a CREDIT replacement inherits `creditLimitMinor`/`availableLimitMinor`; a VIRTUAL
 replacement keeps its linked settlement account and the month-continuous family allowance), the
 source card stays `LOST` and records `replacedByCardId`, and a repeat call on the same source returns
@@ -82,6 +82,32 @@ server-returned facts: consumption amount and merchant, the card's masked number
 绑定账户可用余额, 月消费限额 (or `未设置月限额` when the card has none) and 当前可支付金额.
 Card reads and analysis (`get_cards`, `analyze_spending`, `get_transactions`,
 `get_dashboard_summary`) never debit.
+
+## Card target selectors
+
+`cardSelectorFields()` in `card.ts` defines one optional selector set shared by every card-target
+write: `set_card_limit`, `freeze_card`, `unfreeze_card`, `consume_virtual_card`, `report_lost_card`
+and `replace_card` (the gateway's `CARD_TARGET_TOOLS`). `get_cards` and `apply_virtual_card` carry no
+selector: one is a read, the other creates a new card.
+
+- `cardId` is an exact id from `get_cards` and is never interpreted as anything else. A tail or a
+  complete card number placed here is REFUSED (`invalid`), never re-looked-up as a selector, so a
+  misplaced tail cannot hit an arbitrary card.
+- `cardType` accepts `DEBIT`/`CREDIT`/`VIRTUAL` (case-insensitive) or 借记卡/储蓄卡/信用卡/虚拟卡.
+- `cardTail` accepts exactly four trailing digits, written as `6688`, `尾号6688`, `****6688` or `...6688`.
+- `cardNumber` accepts a complete 12–19 digit number (spaces or dashes allowed) and matches only by
+  exact equality with the server-only `Card.numberFull`, so a card with a NULL `numberFull` cannot be
+  selected this way.
+
+Supplied selectors combine: every one must hit the SAME owned card.
+`security/card-resolution.ts#resolveCardTarget` resolves them at park time into four statuses
+(`resolved`/`not_found`/`ambiguous`/`invalid`); a multi-candidate result must be clarified and lists
+masked candidates only. A resolved target is canonicalized to `cardId` (`canonicalizeCardArgs`
+deletes `cardType`/`cardTail`/`cardNumber`), so the confirmation summary and the SDK act on the same
+card. `cardTargetId(userId, args)` is the runner-side fallback: a canonical `cardId` passes through,
+selectors-only args go through the same resolver, and an unresolved target throws `VALIDATION` with
+the masked clarification. Model-facing descriptions must steer 尾号6688 to `cardTail` and 我的借记卡
+to `cardType`. See `docs/cn/identity-resolution.md`.
 
 `describe_turn` lives in `turn-intent.ts` and records model-declared conversational purpose.
 It is an internal control tool, not a banking capability or customer authorization.

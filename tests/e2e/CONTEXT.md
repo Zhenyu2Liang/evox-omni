@@ -55,8 +55,8 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 `lA` 的二次补卡腿只用确定性 `GET /api/cards` 核对（仍恰 4 张 = 1 张补办 ACTIVE 信用卡 + 1 张 LOST 源卡 + `card_debit` + `card_virtual`、唯一 ACTIVE 信用卡 id 不变），允许模型重放、返回既有结果或明确拒绝，不要求再次生成 MFA。
 `lA` 同时断言可用信用额度不得翻倍：非 `LOST` CREDIT 合计前后恒为 `18000.00`，朴素全 CREDIT 合计 `36000.00` 作为 bug 签名被显式排除。
 `lB`（`scenarioPartialRedeem`）经 `/agent` 追加申购再部分赎回理财，断言 `/investments`、账本与 `holding_wenjiana` 的 `principalAmountMinor`/`estimatedMarketValue`。
-`lC`（`scenarioVirtualCardConsume`，id `lC-live-virtual-card-consumption`）经 `/agent` 确认既有虚拟卡 `card_virtual`，经 `/cards` 消费对话框在限额内消费；断言恰好一笔 `channel=CARD`/`direction=DEBIT` 的 `Transaction`（精确金额）、一条 `CardConsumption`、检查账户余额仅扣减一次、虚拟卡可支付金额更新为 `min(可用余额, 剩余月限额)`；并用 `helpers.ts#assertNoFabricatedConfirmationPanel` 守卫 RED 驱动腿，同时断言卡片总数不变（不重复生成虚拟卡）。
-`lD`（`scenarioVirtualCardApplyAndLimit`，id `lD-live-virtual-card-apply-and-limit`）自然语言新开一张月限额 `100.00` 的虚拟卡并完成真实确认/MFA 面板，再经 `/cards` 对话框消费：断言 RAW `Card` 为 `VIRTUAL`/`ACTIVE`、`linkedAccountId=acct_checking`、信用额度列全为 null（`/cards` 只渲染账户可用余额与当前可支付金额，不出现信用额度）、恰好一笔 `channel=CARD` 借记 + 一条 `CardConsumption`、可支付金额 = `min(账户可用余额, 剩余月限额)`，超限消费以 `422 LIMIT_EXCEEDED` 拒绝且不移动资金。
+`lC`（`scenarioVirtualCardConsume`，id `lC-live-virtual-card-consumption`）经 `/agent` 确认既有虚拟卡 `card_virtual`，经 `/cards` 消费对话框在限额内消费；断言恰好一笔 `channel=CARD`/`direction=DEBIT` 的 `Transaction`（精确金额）、一条 `CardConsumption`、检查账户余额仅扣减一次、虚拟卡可支付金额更新为 `min(账户余额, 剩余月限额)`；并用 `helpers.ts#assertNoFabricatedConfirmationPanel` 守卫 RED 驱动腿，同时断言卡片总数不变（不重复生成虚拟卡）。
+`lD`（`scenarioVirtualCardApplyAndLimit`，id `lD-live-virtual-card-apply-and-limit`）自然语言新开一张月限额 `100.00` 的虚拟卡并完成真实确认/MFA 面板，再经 `/cards` 对话框消费：断言 RAW `Card` 为 `VIRTUAL`/`ACTIVE`、`linkedAccountId=acct_checking`、信用额度列全为 null（`/cards` 只渲染 `账户余额` 与 `可用余额`，不出现信用额度）、恰好一笔 `channel=CARD` 借记 + 一条 `CardConsumption`、可支付金额 = `min(账户余额, 剩余月限额)`，超限消费以 `422 LIMIT_EXCEEDED` 拒绝且不移动资金。
 `lE`（`scenarioVirtualCardReplaceContinuity`，id `lE-live-virtual-card-replace-continuity`）自然语言挂失 → 补办（两腿均完成真实确认/MFA 面板）后在新卡上真实前端消费：断言源卡保持 `LOST` 且 `replacedByCardId` 指向新卡、恰一张新 `VIRTUAL`/`ACTIVE` 卡继承同一 `linkedAccountId`、新卡号、月限额连续不重置（可支付 `100.00` → `70.00` → 补办后仍 `70.00` → `0.00`），新卡消费恰好成功一次。
 `lD`/`lE` 共用 `applyVirtualCardLeg`（含 RAW `Card` 行断言）、`awaitPayable`、`vcMaskTail`。
 「不变」以场景开始时 `GET /api/cards` 的卡片数为基线：`lA` 会在同一进程内先新增补办信用卡，硬编码种子值会让 `lC` 在合并运行中失败。
@@ -84,6 +84,29 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 读取共享演示会话使用 `readDemoSessionId`（读 `[data-demo-session-id]` 属性）。
 不得等待不存在的认证 Cookie。
 当前授权面板与历史授权记录必须分别定位。
+
+## 卡片渲染标签契约（断言按渲染标签取值）
+
+`/cards` 的卡片区块（`components/banking/CardTile.tsx`）与消费弹窗摘要（`app/cards/CardConsumeDialog.tsx` 的 `data-card-consume-summary`）都用同一组标签，断言必须从单一来源 `card-labels.e2e-helper.ts` 取值，不得硬编码中文标签。
+`CARD_LABEL` 经 `createTranslator('zh-CN')` 读取 `lib/i18n/messages/business.zh-CN.json`，即组件实际渲染的同一份目录：
+
+| 键 | i18n 键 | 渲染文本 | 承载的值 |
+| --- | --- | --- | --- |
+| `CARD_LABEL.linkedAccount` | `business.cards.linkedAccount` | `关联账户` | 账户名 + 脱敏账号（`<span>`，不是 `<dt>` 行） |
+| `CARD_LABEL.accountBalance` | `business.cards.accountBalance` | `账户余额` | `CardView.accountAvailableBalance`（结算账户现金） |
+| `CARD_LABEL.usableBalance` | `business.cards.usableBalance` | `可用余额` | `CardView.payableAmount` = `min(账户现金, 剩余月限额)` |
+| `CARD_LABEL.monthlyLimit` | `business.cards.monthlyLimit` | `月限额` | 卡自身月限额（`<span>` 标签） |
+| `CARD_LABEL.creditLimit` / `availableLimit` | `business.cards.limit` / `business.cards.available` | `信用额度` / `可用额度` | 仅 CREDIT 卡渲染；出现在 VIRTUAL/DEBIT 上是 bug 签名 |
+| `CARD_LABEL.linkedAccountMissing` / `linkedAccountUntrusted` | `business.cards.linkedAccountMissing` / `business.cards.linkedAccountUntrusted` | `未关联账户` / `账户暂不可用` | 仅提示文案（无金额） |
+
+`CARD_LABEL_RETIRED`（`business.cards.accountAvailable` / `business.cards.payableAmount` = `账户可用余额` / `当前可支付金额`）已无组件渲染，但键仍在目录里，因此断言可以**证明**这两个标签缺席，而不是仅仅忘记它们。
+
+`readCardTileRows` / `readDialogRows` 把 DOM 里渲染出的标签当作 `Record<renderedLabel, renderedValue>` 的键，所以调用点写成 `rows[CARD_LABEL.accountBalance]`。
+硬编码字面量的真实故障不是「取到旧值」，而是目录改名后比较两侧同时变成 `undefined` 而静默空通过；因此每处金额比较前都先断言该标签行确实存在。
+`card-replace-chain.e2e-helper.ts` 集中提供三个标签契约断言：`assertNoRetiredCardLabels`（任何卡片行都不得含废弃标签）、`assertCreditTileLabels`（CREDIT 必须有 `信用额度` + `可用额度`，且不得有 `账户余额`/`可用余额`）、`assertLinkedAccountTileLabels`（按 `linkedAccountStatus` 断言：`LINKED` 必须有 `账户余额` + `可用余额`，`MISSING`/`UNTRUSTED` 必须一行金额都不渲染且只出现提示文案；两者都不得有信用额度行）。
+
+`linkedAccountStatus` 四态决定金额行：`LINKED` 渲染账户名 + 脱敏账号 + `账户余额` + `可用余额`；`MISSING`/`UNTRUSTED` 只渲染提示文案（`未关联账户`/`账户暂不可用`），**完全不渲染任何金额行**，绝不以 `0.00` 冒充；`FROZEN`/`LOST`（`usable === false`）追加提示但照常渲染真实且非零的余额——「不可用 ≠ 余额为零」；CREDIT 恒为 `NOT_APPLICABLE`。
+`LiveCardRecord` 与 `helpers.ts#CardView` 是 `GET /api/cards` 的读模型子集：服务端契约（`banking-sdk/types.ts#CardView`）中 `linkedAccountStatus` 与 `usable` 必填，`accountAvailableBalance`/`payableAmount` 仅在 `LINKED` 出现；测试侧只按 JSON 读取使用，从不构造 `CardView` 字面量。
 
 ## 消费入账时间边界（独立于前端流程）
 

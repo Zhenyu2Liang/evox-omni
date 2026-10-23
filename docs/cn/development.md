@@ -597,6 +597,10 @@ pnpm db:generate
 
 覆盖前删除 `prisma/dev.db-wal` 和 `prisma/dev.db-shm`，避免重放旧预写日志。
 恢复后按需执行 `pnpm db:seed` 或直接启动应用。
+### 卡片结算账户补绑定
+
+需要补齐未绑定结算账户的卡片时，按[卡片管理](card-management.md#数据升级与回滚)执行。
+备份、同步、补绑定和回滚命令在该专题。
 
 ## 页面入口
 

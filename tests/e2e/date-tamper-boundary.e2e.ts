@@ -861,7 +861,7 @@ async function casePayableAllowance(note: (key: string, value: unknown) => void)
   const snap = await snapshot();
   note('db', snap);
   assertMoney(snap.cardMonthConsumptionTotal, EXPECTED_MONTH_TOTAL, '本业务月该卡入账合计');
-  return `GET /api/cards 可支付金额 = ${String(httpCard.payableAmount)}（min(账户可用 ${String(httpCard.accountAvailableBalance)}, 剩余月限额 ${EXPECTED_REMAINING_LIMIT})）；若 ${FORGED_SPEND} 曾入账，此处会是 ${centsToMoney(remainingMinor - FORGED_SPEND_MINOR)}`;
+  return `GET /api/cards 可支付金额 = ${String(httpCard.payableAmount)}（min(账户余额 ${String(httpCard.accountAvailableBalance)}, 剩余月限额 ${EXPECTED_REMAINING_LIMIT})）；若 ${FORGED_SPEND} 曾入账，此处会是 ${centsToMoney(remainingMinor - FORGED_SPEND_MINOR)}`;
 }
 
 // --- main ------------------------------------------------------------------------------------------

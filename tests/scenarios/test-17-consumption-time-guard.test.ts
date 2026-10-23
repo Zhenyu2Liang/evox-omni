@@ -366,8 +366,8 @@ describe('Scenario 17 — 虚拟卡消费入账时间由服务端决定（伪造
       required?: string[];
     };
     const properties = Object.keys(schema.properties ?? {});
-    expect(properties.sort()).toEqual(['amount', 'cardId', 'category', 'merchant']);
-    expect([...(schema.required ?? [])].sort()).toEqual(['amount', 'cardId']);
+    expect(properties.sort()).toEqual(['amount', 'cardId', 'cardNumber', 'cardTail', 'cardType', 'category', 'merchant']);
+    expect([...(schema.required ?? [])].sort()).toEqual(['amount']);
     for (const field of CLIENT_TIME_FIELDS) expect(properties).not.toContain(field);
 
     // The LEGITIMATE path: the model proposes cardId/amount/category/merchant only.

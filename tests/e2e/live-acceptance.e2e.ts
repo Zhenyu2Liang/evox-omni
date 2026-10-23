@@ -132,6 +132,9 @@ import {
   type LiveCardRecord,
   type RawCardRow,
 } from './live-virtual-card.e2e-helper';
+// The Chinese `CardTile` / `CardConsumeDialog` row labels are NOT hard-coded here: they come from the
+// single source module that derives them from the very catalogue those components render from.
+import { CARD_LABEL } from './card-labels.e2e-helper';
 // Card-loss / replace chain scenarios (lF: fresh-session credit lost->replace; lG: ONE session full chain).
 // The scenario bodies live in this module; the entry only registers them.
 import { scenarioCreditReplaceNewSession, scenarioFullCardChain } from './card-replace-chain.e2e-helper';
@@ -1267,7 +1270,7 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
       const newTileText = (await page.locator(`[data-card-id="${newId}"]`).first().innerText()).replace(/\s+/g, ' ');
       const sourceTileText = (await page.locator(`[data-card-id="${CREDIT_CARD_ID}"]`).first().innerText()).replace(/\s+/g, ' ');
       const cardsShot = await captureLive(page, 'lA-cards');
-      if (newRows['信用额度'] !== '¥18,000.00' || newRows['可用额度'] !== '¥18,000.00') {
+      if (newRows[CARD_LABEL.creditLimit] !== '¥18,000.00' || newRows[CARD_LABEL.availableLimit] !== '¥18,000.00') {
         throw new Error(`补办信用卡 ${newId} 应显示 信用额度=可用额度=¥18,000.00，实际 ${JSON.stringify(newRows)}`);
       }
       if (!newTileText.includes('正常')) {
@@ -1357,7 +1360,7 @@ async function scenarioCreditReplace(ctx: Ctx): Promise<string> {
         throw new Error(`重复补卡请求后「非 LOST 信用卡可用额度合计」仍须为 ${centsToMoney(totalAvailableBeforeMinor)}（不得重复发卡/放额度），实际 ${centsToMoney(totalAvailableAfterIdemMinor)}：${afterSecond.filter((card) => card.type === 'CREDIT').map((card) => `${card.id}:${card.status}:可用=${card.availableLimit ?? '无'}`).join(' ')}`);
       }
 
-      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows['信用额度']}、可用额度=${newRows['可用额度']}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（重复请求，允许重放/返回既有结果/显式拒绝，不要求二次 MFA/工具执行）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）；可用信用额度（非 LOST 信用卡合计）：补办前 ${centsToMoney(totalAvailableBeforeMinor)}（${CREDIT_CARD_ID}:ACTIVE:可用=${sourceBefore.availableLimit}）→ 补办后 ${centsToMoney(totalAvailableAfterMinor)}（唯一 ACTIVE 补办卡 ${newId}:可用=${active.availableLimit}；${CREDIT_CARD_ID}:LOST:可用=${source?.availableLimit ?? '无'}，已排除）；把 LOST 源卡也计入的朴素合计 ${centsToMoney(naiveAllCreditBeforeMinor)} → ${centsToMoney(naiveAllCreditAfterMinor)}（重复计额度，已被断言排除）；重复补卡后合计=${centsToMoney(totalAvailableAfterIdemMinor)}；截图 ${cardsShot ?? '未落盘'}`;
+      return `A1 实际发送：${sentA1.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → card_credit=LOST；A2 实际发送：${sentA2.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新卡 ${newId}（信用额度=${newRows[CARD_LABEL.creditLimit]}、可用额度=${newRows[CARD_LABEL.availableLimit]}，状态含「正常」）；/cards 上 ${CREDIT_CARD_ID} 显示「已挂失」+「已补卡」；GET /api/cards：共 ${cards.length} 张、唯一 ACTIVE 信用卡 id=${active.id}、creditLimit=${active.creditLimit}、availableLimit=${active.availableLimit}、card_credit.status=${source?.status}、replacedByCardId=${source?.replacedByCardId}；再次补卡实际发送：${sentIdem.map((t) => `「${t}」`).join(' → ')}（重复请求，允许重放/返回既有结果/显式拒绝，不要求二次 MFA/工具执行）后仍为 ${afterSecond.length} 张、ACTIVE id=${activeAfter?.id ?? '无'}（未新增第二张）；可用信用额度（非 LOST 信用卡合计）：补办前 ${centsToMoney(totalAvailableBeforeMinor)}（${CREDIT_CARD_ID}:ACTIVE:可用=${sourceBefore.availableLimit}）→ 补办后 ${centsToMoney(totalAvailableAfterMinor)}（唯一 ACTIVE 补办卡 ${newId}:可用=${active.availableLimit}；${CREDIT_CARD_ID}:LOST:可用=${source?.availableLimit ?? '无'}，已排除）；把 LOST 源卡也计入的朴素合计 ${centsToMoney(naiveAllCreditBeforeMinor)} → ${centsToMoney(naiveAllCreditAfterMinor)}（重复计额度，已被断言排除）；重复补卡后合计=${centsToMoney(totalAvailableAfterIdemMinor)}；截图 ${cardsShot ?? '未落盘'}`;
     },
     { label: 'lA-credit-report-lost-and-replace' },
   );
@@ -1724,14 +1727,14 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
         throw new Error(`消费弹窗应绑定 ${VIRTUAL_CARD_ID}，实际 data-card-consume-card-id=${dialogCardId}`);
       }
       const summary = await readDialogRows(page, '[data-card-consume-summary]');
-      if (summary['月限额'] !== formatCNY(monthlyLimit)) {
-        throw new Error(`消费弹窗「月限额」应为 ${formatCNY(monthlyLimit)}，实际 ${summary['月限额']}（${JSON.stringify(summary)}）`);
+      if (summary[CARD_LABEL.monthlyLimit] !== formatCNY(monthlyLimit)) {
+        throw new Error(`消费弹窗「${CARD_LABEL.monthlyLimit}」应为 ${formatCNY(monthlyLimit)}，实际 ${summary[CARD_LABEL.monthlyLimit]}（${JSON.stringify(summary)}）`);
       }
-      if (summary['关联账户'] !== '****8821') {
-        throw new Error(`消费弹窗「关联账户」应为 ****8821，实际 ${summary['关联账户']}（${JSON.stringify(summary)}）`);
+      if (summary[CARD_LABEL.linkedAccount] !== '****8821') {
+        throw new Error(`消费弹窗「${CARD_LABEL.linkedAccount}」应为 ****8821，实际 ${summary[CARD_LABEL.linkedAccount]}（${JSON.stringify(summary)}）`);
       }
-      if (summary['当前可支付金额'] !== formatCNY(payableBefore)) {
-        throw new Error(`消费弹窗「当前可支付金额」应为 ${formatCNY(payableBefore)}，实际 ${summary['当前可支付金额']}（${JSON.stringify(summary)}）`);
+      if (summary[CARD_LABEL.usableBalance] !== formatCNY(payableBefore)) {
+        throw new Error(`消费弹窗「${CARD_LABEL.usableBalance}」应为 ${formatCNY(payableBefore)}，实际 ${summary[CARD_LABEL.usableBalance]}（${JSON.stringify(summary)}）`);
       }
       const form = page.locator('[data-card-consume-form]').first();
       // The dialog must offer NO time control at all: the booking instant is SERVER-owned.
@@ -1854,11 +1857,11 @@ async function scenarioVirtualCardConsume(ctx: Ctx): Promise<string> {
       await waitForElementHydration(page, `[data-card-id="${VIRTUAL_CARD_ID}"]`);
       const tileRows = await readCardTileRows(page, VIRTUAL_CARD_ID);
       const tileShot = await captureLive(page, 'lC-card-tile');
-      if (tileRows['当前可支付金额'] !== formatCNY(centsToMoney(expectedPayableAfterMinor))) {
-        throw new Error(`${VIRTUAL_CARD_ID} 卡片「当前可支付金额」应为 ${formatCNY(centsToMoney(expectedPayableAfterMinor))}，实际 ${tileRows['当前可支付金额']}（${JSON.stringify(tileRows)}）`);
+      if (tileRows[CARD_LABEL.usableBalance] !== formatCNY(centsToMoney(expectedPayableAfterMinor))) {
+        throw new Error(`${VIRTUAL_CARD_ID} 卡片「${CARD_LABEL.usableBalance}」应为 ${formatCNY(centsToMoney(expectedPayableAfterMinor))}，实际 ${tileRows[CARD_LABEL.usableBalance]}（${JSON.stringify(tileRows)}）`);
       }
 
-      return `C1 实际发送：${sentC1.map((t) => `「${t}」`).join(' → ')} → 仍恰 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}，未被重复开通）；C2 前端消费弹窗（绑定 ${dialogCardId}，月限额 ${summary['月限额']}、关联账户 ${summary['关联账户']}、消费前当前可支付金额 ${summary['当前可支付金额']}）提交 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}）→ 消费成功；SQLite：新增 1 条 channel=CARD/DEBIT 流水 ${debitRow.amountMinor}（${debitRow.id}）、1 条 CardConsumption amountMinor=${consumptionRow.amountMinor}（${consumptionRow.id}）；活期余额 ${centsToMoney(before.balanceMinor)} → ${centsToMoney(after.balanceMinor)}（恰扣一次）；${VIRTUAL_CARD_ID}.payableAmount ${payableBefore} → ${virtualAfter?.payableAmount} = min(可用余额 ${virtualAfter?.accountAvailableBalance}、剩余月限额 ${centsToMoney(remainingAfterMinor)})；卡片「当前可支付金额」=${tileRows['当前可支付金额']}；记账时间由服务端拥有：弹窗请求体逐字 ${sentBodyText}（键=${sentKeys}，无 occurredAt），落账 Transaction.occurredAt 与 CardConsumption.occurredAt 均为 ${debitRow.occurredAt.toISOString()}（= DEMO_NOW 服务端业务时钟 2026-09-25T12:00:00+08:00）；截图 ${formShot ?? '未落盘'} / ${successShot ?? '未落盘'} / ${tileShot ?? '未落盘'}`;
+      return `C1 实际发送：${sentC1.map((t) => `「${t}」`).join(' → ')} → 仍恰 1 张 VIRTUAL 卡（${VIRTUAL_CARD_ID}，未被重复开通）；C2 前端消费弹窗（绑定 ${dialogCardId}，月限额 ${summary[CARD_LABEL.monthlyLimit]}、关联账户 ${summary[CARD_LABEL.linkedAccount]}、消费前可用余额 ${summary[CARD_LABEL.usableBalance]}）提交 ${formatCNY(VIRTUAL_CONSUME_AMOUNT)}（${VIRTUAL_CONSUME_CATEGORY}/${VIRTUAL_CONSUME_MERCHANT}）→ 消费成功；SQLite：新增 1 条 channel=CARD/DEBIT 流水 ${debitRow.amountMinor}（${debitRow.id}）、1 条 CardConsumption amountMinor=${consumptionRow.amountMinor}（${consumptionRow.id}）；活期余额 ${centsToMoney(before.balanceMinor)} → ${centsToMoney(after.balanceMinor)}（恰扣一次）；${VIRTUAL_CARD_ID}.payableAmount ${payableBefore} → ${virtualAfter?.payableAmount} = min(可用余额 ${virtualAfter?.accountAvailableBalance}、剩余月限额 ${centsToMoney(remainingAfterMinor)})；卡片「可用余额」=${tileRows[CARD_LABEL.usableBalance]}；记账时间由服务端拥有：弹窗请求体逐字 ${sentBodyText}（键=${sentKeys}，无 occurredAt），落账 Transaction.occurredAt 与 CardConsumption.occurredAt 均为 ${debitRow.occurredAt.toISOString()}（= DEMO_NOW 服务端业务时钟 2026-09-25T12:00:00+08:00）；截图 ${formShot ?? '未落盘'} / ${successShot ?? '未落盘'} / ${tileShot ?? '未落盘'}`;
     },
     { label: 'lC-virtual-card-consumption' },
   );
@@ -1938,7 +1941,7 @@ function awaitPayable(baseUrl: string, cardId: string, expected: string): Promis
     {
       timeoutMs: 180_000,
       intervalMs: 1_000,
-      description: `${cardId}.payableAmount === ${expected}（min(账户可用余额, 剩余月限额)）`,
+      description: `${cardId}.payableAmount === ${expected}（min(账户余额, 剩余月限额)）`,
     },
   );
 }
@@ -1988,11 +1991,11 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
 
       // WITHIN-LIMIT SPEND through the REAL consume dialog (`POST /api/cards/[id]/consume`).
       const summary = await openConsumeDialog(page, cardId);
-      if (summary['月限额'] !== formatCNY(VC_MONTHLY_LIMIT)) {
-        throw new Error(`消费弹窗「月限额」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary['月限额']}（${JSON.stringify(summary)}）`);
+      if (summary[CARD_LABEL.monthlyLimit] !== formatCNY(VC_MONTHLY_LIMIT)) {
+        throw new Error(`消费弹窗「${CARD_LABEL.monthlyLimit}」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary[CARD_LABEL.monthlyLimit]}（${JSON.stringify(summary)}）`);
       }
-      if (summary['当前可支付金额'] !== formatCNY(VC_MONTHLY_LIMIT)) {
-        throw new Error(`消费弹窗「当前可支付金额」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary['当前可支付金额']}（${JSON.stringify(summary)}）`);
+      if (summary[CARD_LABEL.usableBalance] !== formatCNY(VC_MONTHLY_LIMIT)) {
+        throw new Error(`消费弹窗「${CARD_LABEL.usableBalance}」应为 ${formatCNY(VC_MONTHLY_LIMIT)}，实际 ${summary[CARD_LABEL.usableBalance]}（${JSON.stringify(summary)}）`);
       }
       const spend = await consumeSuccessfully(
         page,
@@ -2072,7 +2075,7 @@ async function scenarioVirtualCardApplyAndLimit(ctx: Ctx): Promise<string> {
         screenshots: { applyShot, spendShot, refusalShot },
       });
 
-      return `lD 实际发送：${leg.sent.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新虚拟卡 ${cardId}（RAW：type=VIRTUAL、status=ACTIVE、monthlyLimitMinor=${leg.raw.monthlyLimitMinor}（${VC_MONTHLY_LIMIT}）、linkedAccountId=${leg.raw.linkedAccountId}、creditLimitMinor=${leg.raw.creditLimitMinor}、availableLimitMinor=${leg.raw.availableLimitMinor}、卡号 ${leg.raw.numberMasked} 与既有卡片均不同）；payableAmount=${VC_MONTHLY_LIMIT}（月限额绑定，账户可用余额 ${cashBefore}）；/cards 渲染 ${JSON.stringify(applyTileRows)}（无「信用额度」/「可用额度」）；消费 ${VC_FIRST_SPEND}（${VC_SPEND_CATEGORY}/${VC_MERCHANT_APPLY}）→ ${spend.notice}：新增 CARD/DEBIT 流水 ${delta.debit.amountMinor}（${delta.debit.id}）+ 1 条 CardConsumption amountMinor=${delta.consumption.amountMinor}（${delta.consumption.id}），活期余额 ${centsToMoney(delta.balanceBeforeMinor)} → ${centsToMoney(delta.balanceAfterMinor)}（恰扣一次）；payableAmount → ${payableAfterSpend}，刷新后卡片「当前可支付金额」=${spendTileRows['当前可支付金额']}；超限 ${VC_OVER_LIMIT_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝：「${refusalText}」，流水/余额/CardConsumption 零变化，payableAmount 仍 ${payableAfterRefusal}；截图 ${applyShot ?? '未落盘'} / ${spendShot ?? '未落盘'} / ${refusalShot ?? '未落盘'}；证据 JSON ${evidenceFile ?? '未落盘'}`;
+      return `lD 实际发送：${leg.sent.map((t) => `「${t}」`).join(' → ')} → MFA 123456 → 新虚拟卡 ${cardId}（RAW：type=VIRTUAL、status=ACTIVE、monthlyLimitMinor=${leg.raw.monthlyLimitMinor}（${VC_MONTHLY_LIMIT}）、linkedAccountId=${leg.raw.linkedAccountId}、creditLimitMinor=${leg.raw.creditLimitMinor}、availableLimitMinor=${leg.raw.availableLimitMinor}、卡号 ${leg.raw.numberMasked} 与既有卡片均不同）；payableAmount=${VC_MONTHLY_LIMIT}（月限额绑定，账户余额 ${cashBefore}）；/cards 渲染 ${JSON.stringify(applyTileRows)}（无「信用额度」/「可用额度」）；消费 ${VC_FIRST_SPEND}（${VC_SPEND_CATEGORY}/${VC_MERCHANT_APPLY}）→ ${spend.notice}：新增 CARD/DEBIT 流水 ${delta.debit.amountMinor}（${delta.debit.id}）+ 1 条 CardConsumption amountMinor=${delta.consumption.amountMinor}（${delta.consumption.id}），活期余额 ${centsToMoney(delta.balanceBeforeMinor)} → ${centsToMoney(delta.balanceAfterMinor)}（恰扣一次）；payableAmount → ${payableAfterSpend}，刷新后卡片「可用余额」=${spendTileRows[CARD_LABEL.usableBalance]}；超限 ${VC_OVER_LIMIT_SPEND}（${VC_MERCHANT_REFUSED}）被拒绝：「${refusalText}」，流水/余额/CardConsumption 零变化，payableAmount 仍 ${payableAfterRefusal}；截图 ${applyShot ?? '未落盘'} / ${spendShot ?? '未落盘'} / ${refusalShot ?? '未落盘'}；证据 JSON ${evidenceFile ?? '未落盘'}`;
     },
     { label: 'lD-virtual-card-apply-and-limit' },
   );
@@ -2175,7 +2178,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         .reduce((sum, row) => sum + row.amountMinor, 0n);
       const familyPayable = centsToMoney(expectedPayableMinor(limitMinor, familySpentMinor, afterLost.balanceMinor));
       if (familyPayable !== '70.00') {
-        throw new Error(`补办卡的家庭剩余月限额应为 ${VC_MONTHLY_LIMIT} − ${VC_FIRST_SPEND} = 70.00，实际 ${familyPayable}（家庭已用 ${familySpentMinor}、账户可用余额 ${centsToMoney(afterLost.balanceMinor)}）`);
+        throw new Error(`补办卡的家庭剩余月限额应为 ${VC_MONTHLY_LIMIT} − ${VC_FIRST_SPEND} = 70.00，实际 ${familyPayable}（家庭已用 ${familySpentMinor}、账户余额 ${centsToMoney(afterLost.balanceMinor)}）`);
       }
       const cardsAfterReplace = await awaitPayable(ctx.baseUrl, replacementId, familyPayable);
       const replacementView = cardById(cardsAfterReplace, replacementId);
@@ -2218,7 +2221,7 @@ async function scenarioVirtualCardReplaceContinuity(ctx: Ctx): Promise<string> {
         expectedPayableMinor(limitMinor, familySpentMinor + moneyToCents(VC_SECOND_SPEND), afterSecondSpend.balanceMinor),
       );
       if (exhaustedPayable !== '0.00') {
-        throw new Error(`家庭月限额用尽后 payableAmount 应为 0.00，实际 ${exhaustedPayable}（账户可用余额 ${centsToMoney(afterSecondSpend.balanceMinor)}）`);
+        throw new Error(`家庭月限额用尽后 payableAmount 应为 0.00，实际 ${exhaustedPayable}（账户余额 ${centsToMoney(afterSecondSpend.balanceMinor)}）`);
       }
       const cardsExhausted = await awaitPayable(ctx.baseUrl, replacementId, exhaustedPayable);
       assertVirtualCardView(cardById(cardsExhausted, replacementId), {
