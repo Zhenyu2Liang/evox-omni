@@ -5,10 +5,12 @@
  * The unit spec (`parked-actions.test.ts`) pins the reader and the wiring with stubbed ports; this
  * spec proves the same contract end to end, on real `AgentTask`/`AgentTaskNode`/`PendingAction` rows:
  *
- *  - `resumeTask` SEALS a node parked on a TERMINAL action: the node is recorded `failed` with the
- *    catalog sentence, its dead `pendingActionId` is dropped, the node is never driven (the tool port
- *    is not reached) and the plan is returned normally — no exception, no resurrection of the locked
- *    decision, no new `PendingAction`, no new `SecurityEvent`/audit row, the locked row untouched.
+ *  - `resumeTask` SEALS a node parked on a TERMINAL action: the node is recorded with the status that
+ *    decision PROJECTS — `success` for an operation the server really `executed` (with NO sentence),
+ *    `failed` with the catalog sentence for a lock or an unknown outcome — its dead `pendingActionId`
+ *    is dropped, the node is never driven (the tool port is not reached) and the plan is returned
+ *    normally: no exception, no resurrection of the settled decision, no new `PendingAction`, no new
+ *    `SecurityEvent`/audit row, the settled row untouched.
  *  - the seal is LOCAL to the settled node: an order-only successor keeps advancing, and a plan whose
  *    every node is already terminal simply reports that there is nothing left to advance.
  *  - `retryTask` stays a STRUCTURED refusal (`MFA_LOCKED` for a lock, `CONFLICT` for an unknown
@@ -31,6 +33,7 @@ import {
   auditLogCount,
   demoSessionId,
   lockAction,
+  parkConfirmOnlyTransfer,
   parkRedTransferPlan,
   pendingActionRow,
   securityEventsOfKind,
@@ -52,6 +55,8 @@ const LOCKED_SENTENCE = '该操作已锁定，无法继续验证或执行。原�
 const RECIPIENT = '张伟';
 /** Transfer above the ¥1,000 confirmation-only limit ⇒ RED ⇒ the gateway parks `awaiting_mfa`. */
 const RED_AMOUNT = '5000';
+/** Transfer below the limit ⇒ YELLOW ⇒ the gateway parks `pending` (confirmation only). */
+const CONFIRM_ONLY_AMOUNT = '500';
 /** The node the seeded single-node plans park on. */
 const NODE_ID = 'n1';
 /** The order-only successor of a sealed node in the two-node plan. */
@@ -63,7 +68,7 @@ const INTERNAL_MARKERS = ['__SECURITY_BLOCK__', 'decisionKind', '[object Object]
 const STACK_FRAME = /\n\s+at\s/;
 
 /** The statuses a sealed decision must never be "resumed" back to. */
-const ACTIONABLE_STATUSES = ['pending', 'awaiting_mfa'];
+const ACTIONABLE_STATUSES = ['pending', 'awaiting_mfa'] as const;
 
 /* --------------------------------------------------------------------------------------- ports */
 
@@ -154,6 +159,15 @@ async function captureFailure(run: () => Promise<unknown>): Promise<{ thrown?: s
 }
 
 /**
+ * Settle the parked action to the status the SERVER persists once the operation really landed — the
+ * precondition of the "a committed write must not be sealed as a failure" spec.
+ */
+async function markActionExecuted(parked: ParkedPlanAction): Promise<void> {
+  expect(await claimPendingAction({ actionId: parked.actionId, from: [...ACTIONABLE_STATUSES], to: 'executed' })).toBe(true);
+  expect((await pendingActionRow(parked.actionId))!.status, 'the action must be settled executed').toBe('executed');
+}
+
+/**
  * Seed a two-node plan whose FIRST node parks on a RED transfer and whose SECOND node is an
  * order-only successor (`after`) reading the balance. The DB row of the parked action is CAS-ed to
  * `locked` — exactly the terminal status `security/security-gateway.ts#persistLockedAction` writes —
@@ -233,6 +247,9 @@ describe('resuming a plan whose parked decision already settled SEALS that node'
     expect(sealed.error).not.toContain('locked');
     expect(sealed.error).not.toContain(parked.actionId);
 
+    // A locked decision is a FAILURE of the plan — it is never reported as a completed step.
+    expect(resumed.status).toBe('failed');
+
     // The decision itself is a TERMINAL fact: not re-opened, not duplicated, not rewritten.
     const after = await actionsOfTask(parked.taskId);
     expect(after.map(action => ({ id: action.id, status: action.status }))).toEqual(before.actions);
@@ -248,6 +265,62 @@ describe('resuming a plan whose parked decision already settled SEALS that node'
     expect((await securityEventsOfKind(parked.sessionId, 'locked')).length).toBe(before.security);
 
     assertNoInternalMarkers(JSON.stringify(resumed), 'resumed plan snapshot');
+  });
+
+  it('records a settled EXECUTED node as COMPLETED — plan success, no sentence, no re-run', async () => {
+    const parked = await parkConfirmOnlyTransfer(CONFIRM_ONLY_AMOUNT);
+    await markActionExecuted(parked);
+    const before = await pendingActionRow(parked.actionId);
+
+    const { runTool, driven } = recordingRunTool(parked.sessionId, '继续之前的转账', []);
+    const resumed = await resumeTask(parked.sessionId, parked.taskId, { runTool });
+
+    // The write really landed, so the node COMPLETES and the plan settles `success`: the task card can
+    // no longer show a failed plan for an operation whose limit/transfer already succeeded.
+    const sealed = nodeOf(resumed, parked.nodeId);
+    expect(sealed.status).toBe('success');
+    expect(sealed.error).toBeUndefined();
+    expect(readPendingActionId(sealed.output)).toBeUndefined();
+    expect(resumed.status).toBe('success');
+
+    // Not driven, not re-executed: the settled operation is evidence, never a re-run.
+    expect(driven).toEqual([]);
+
+    // The settled row is untouched and no duplicate/executable action was minted.
+    const after = await actionsOfTask(parked.taskId);
+    expect(after.map(action => ({ id: action.id, status: action.status }))).toEqual([
+      { id: parked.actionId, status: 'executed' },
+    ]);
+    for (const action of after) {
+      expect(ACTIONABLE_STATUSES, 'a sealed decision reopened an executable action').not.toContain(action.status);
+    }
+    expect((await pendingActionRow(parked.actionId))!.updatedAt.getTime()).toBe(before!.updatedAt.getTime());
+
+    assertNoInternalMarkers(JSON.stringify(resumed), 'completed-seal plan snapshot');
+  });
+
+  it('records an UNKNOWN OUTCOME as failed with the unknown-outcome sentence', async () => {
+    const parked = await parkConfirmOnlyTransfer(CONFIRM_ONLY_AMOUNT);
+    expect(await claimPendingAction({
+      actionId: parked.actionId,
+      from: [...ACTIONABLE_STATUSES],
+      to: 'needs_reconciliation',
+    })).toBe(true);
+
+    const { runTool, driven } = recordingRunTool(parked.sessionId, '继续之前的转账', []);
+    const resumed = await resumeTask(parked.sessionId, parked.taskId, { runTool });
+
+    // An unknown outcome claims NEITHER success NOR a failed business effect: it stays failed, with
+    // the manual-reconciliation sentence, and the plan does not claim a completed step.
+    const sealed = nodeOf(resumed, parked.nodeId);
+    expect(sealed.status).toBe('failed');
+    expect(sealed.error).toBe(t('chat.error.unknownOutcome'));
+    expect(readPendingActionId(sealed.output)).toBeUndefined();
+    expect(resumed.status).toBe('failed');
+    expect(driven).toEqual([]);
+    expect((await pendingActionRow(parked.actionId))!.status).toBe('needs_reconciliation');
+
+    assertNoInternalMarkers(JSON.stringify(resumed), 'unknown-outcome plan snapshot');
   });
 
   it('seals only the settled node — its successor still advances through the gateway', async () => {
@@ -320,6 +393,21 @@ describe('resuming a plan whose parked decision already settled SEALS that node'
     expect(unknown.driven).toEqual([]);
     expect((await actionsOfTask(parked.taskId)).map(action => action.id)).toEqual(before);
     expect((await pendingActionRow(parked.actionId))!.status).toBe('needs_reconciliation');
+  });
+
+  it('keeps an explicit retry of an EXECUTED action a structured refusal', async () => {
+    const parked = await parkConfirmOnlyTransfer(CONFIRM_ONLY_AMOUNT);
+    await markActionExecuted(parked);
+    const before = (await actionsOfTask(parked.taskId)).map(action => ({ id: action.id, status: action.status }));
+
+    // A completed operation is still NEVER re-driven by a retry: the node is not reset, no new action
+    // is minted and the tool never runs again.
+    const retried = recordingRunTool(parked.sessionId, '重试之前的转账', []);
+    await expect(retryTask(parked.sessionId, parked.taskId, { runTool: retried.runTool }))
+      .rejects.toMatchObject({ code: 'CONFLICT', message: t('chat.error.stateChanged') });
+    expect(retried.driven).toEqual([]);
+    expect((await actionsOfTask(parked.taskId)).map(action => ({ id: action.id, status: action.status })))
+      .toEqual(before);
   });
 
   it('surfaces no internal marker through a control path error or a returned plan', async () => {

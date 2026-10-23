@@ -4,11 +4,14 @@
  * One reader, two consumers, pinned here against the PERSISTED `PendingAction` status:
  *  - `sealedParkedNodes` / `parkedActionIds` (READ-ONLY) — an OPEN (`pending` / `awaiting_mfa`)
  *    action, an ABSENT row and a `confirmed` row keep today's behavior (`confirmed` is neither open
- *    nor terminal — an authorized continuation in flight); a TERMINAL action — `locked` above all —
- *    is reported as SEALED with the plan layer's reason and a catalog sentence;
- *  - `resumeTask` SEALS such a node: it records the node `failed` with catalog text, drops the dead
- *    `pendingActionId` and lets the rest of the plan advance — the node is never driven, never
- *    surfaced as a pending decision, and the plan is returned normally (no exception);
+ *    nor terminal — an authorized continuation in flight); a TERMINAL action is reported as SEALED
+ *    with the plan layer's reason and the node status that reason projects: only an `executed`
+ *    operation completes (and records NO sentence), every refusal (`locked` above all) and every
+ *    unknown outcome stays `failed` with its catalog sentence;
+ *  - `resumeTask` SEALS such a node: it records the PROJECTED terminal status (completed for an
+ *    executed operation, `failed` with catalog text for a refusal), drops the dead `pendingActionId`
+ *    and lets the rest of the plan advance — the node is never driven, never surfaced as a pending
+ *    decision, and the plan is returned normally (no exception);
  *  - `retryTask` REFUSES with a STRUCTURED `AppError`, no plan/node status is claimed (so the
  *    persisted plan status never flips to `running`) and no tool runs;
  *  - the refusal's public `message` is catalog business text, never a status literal, an id or a
@@ -237,27 +240,50 @@ describe('sealedParkedNodes', () => {
     }
   });
 
-  it('reports every settled parked node with the plan reason and the catalog sentence — read-only', async () => {
+  it('reports every settled parked node with the plan reason and the node status it projects — read-only', async () => {
     // The reason vocabulary is the plan layer's own (`@/planner` `SealReason`): every status that is
-    // no longer OPEN is `action_not_open`, and a recorded LOCKED refusal is `locked_refusal`.
+    // no longer OPEN is `action_not_open`, and a recorded LOCKED refusal is `locked_refusal`. The
+    // PROJECTION then decides the node status: ONLY an `executed` operation completed (and records no
+    // sentence at all); a refusal or an unknown outcome stays `failed` with its catalog sentence.
     const cases = [
-      { status: 'locked', reason: 'action_not_open', error: t('chat.error.actionLocked') },
-      { status: 'needs_reconciliation', reason: 'action_not_open', error: t('chat.error.unknownOutcome') },
-      { status: 'executed', reason: 'action_not_open', error: t('chat.error.stateChanged') },
-      { status: 'cancelled', reason: 'action_not_open', error: t('chat.error.stateChanged') },
+      { status: 'locked', reason: 'action_not_open', nodeStatus: 'failed', error: t('chat.error.actionLocked') },
+      { status: 'needs_reconciliation', reason: 'action_not_open', nodeStatus: 'failed', error: t('chat.error.unknownOutcome') },
+      { status: 'executed', reason: 'action_not_open', nodeStatus: 'success', error: undefined },
+      { status: 'failed', reason: 'action_not_open', nodeStatus: 'failed', error: t('chat.error.stateChanged') },
+      { status: 'cancelled', reason: 'action_not_open', nodeStatus: 'failed', error: t('chat.error.stateChanged') },
     ] as const;
     for (const expected of cases) {
       fakes.getPendingActionOwnership.mockResolvedValue(actionOwnership(expected.status));
       await expect(sealedParkedNodes(plan([node('n1', 'waiting_verification', ACTION)]))).resolves.toEqual([
-        { nodeId: 'n1', actionId: ACTION, actionStatus: expected.status, reason: expected.reason, error: expected.error },
+        {
+          nodeId: 'n1',
+          actionId: ACTION,
+          actionStatus: expected.status,
+          reason: expected.reason,
+          nodeStatus: expected.nodeStatus,
+          error: expected.error,
+        },
       ]);
     }
+    // An EXECUTED operation is the one settled status that completes its node — and it records NO
+    // failure text: a business write that really landed must never be narrated as "state changed".
+    fakes.getPendingActionOwnership.mockResolvedValue(actionOwnership('executed'));
+    const [completed] = await sealedParkedNodes(plan([node('n1', 'waiting_confirmation', ACTION)]));
+    expect(completed?.nodeStatus).toBe('success');
+    expect(completed?.error).toBeUndefined();
     // A recorded LOCKED refusal seals the node through the refusal itself, ahead of the status check.
     fakes.getPendingActionOwnership.mockResolvedValue(actionOwnership('locked'));
     await expect(sealedParkedNodes(plan([
       node('n1', 'waiting_verification', ACTION, { code: 'MFA_LOCKED', reason: 'mfa_attempts_exhausted' }),
     ]))).resolves.toEqual([
-      { nodeId: 'n1', actionId: ACTION, actionStatus: 'locked', reason: 'locked_refusal', error: t('chat.error.actionLocked') },
+      {
+        nodeId: 'n1',
+        actionId: ACTION,
+        actionStatus: 'locked',
+        reason: 'locked_refusal',
+        nodeStatus: 'failed',
+        error: t('chat.error.actionLocked'),
+      },
     ]);
     // A read-only query: no status write, no claim, no execution.
     expect(fakes.updatePendingActionStatus).not.toHaveBeenCalled();
@@ -309,7 +335,7 @@ describe('assertParkedActionsNotTerminal', () => {
 /* ------------------------------------------------------------------------ resume / retry wiring */
 
 describe('resume / retry of a plan parked on a settled decision', () => {
-  it('SEALS the settled node on resume — recorded failed, action link dropped, never driven', async () => {
+  it('SEALS a LOCKED node as failed — recorded with catalog text, action link dropped, never driven', async () => {
     fakes.getPendingActionOwnership.mockResolvedValue(actionOwnership('locked'));
 
     // A settled parked decision is NO LONGER a refusal: resume returns the plan normally.
@@ -349,6 +375,38 @@ describe('resume / retry of a plan parked on a settled decision', () => {
     expect(fakes.claimTaskStatus).toHaveBeenCalledTimes(1);
     expect(fakes.claimTaskExecution).toHaveBeenCalledTimes(1);
     expect(fakes.releaseTaskExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it('SEALS an EXECUTED node as COMPLETED — plan success, no sentence, never driven', async () => {
+    fakes.getPendingActionOwnership.mockResolvedValue(actionOwnership('executed'));
+
+    const resumed = await resumeTask(SESSION, TASK, { runTool });
+
+    // The operation really landed, so the node COMPLETES and the plan settles `success`: the overview
+    // can no longer show a failed plan for a write that already succeeded.
+    const resumedNode = resumed.results.find(result => result.id === 'n1');
+    expect(resumedNode?.status).toBe('success');
+    expect(resumedNode?.error).toBeUndefined();
+    expect(readPendingActionId(resumedNode?.output)).toBeUndefined();
+    expect(resumed.status).toBe('success');
+
+    // A completed seal is still NOT a re-drive: the tool port is never reached.
+    expect(runTool).not.toHaveBeenCalled();
+
+    expect(fakes.persistNode).toHaveBeenCalledTimes(1);
+    const [persistedPlanId, persistedNode] = fakes.persistNode.mock.calls[0] as [string, TaskNodeResult];
+    expect(persistedPlanId).toBe(TASK);
+    expect(persistedNode.id).toBe('n1');
+    expect(persistedNode.status).toBe('success');
+    expect(persistedNode.output).toBeUndefined();
+    expect(readPendingActionId(persistedNode.output)).toBeUndefined();
+    // NO failure text at all: nothing claims a business-state change for a committed operation.
+    expect(persistedNode.error).toBeUndefined();
+
+    // The seal never settles, re-opens or re-creates the decision it reports on.
+    expect(fakes.updatePendingActionStatus).not.toHaveBeenCalled();
+    expect(fakes.claimPendingAction).not.toHaveBeenCalled();
+    expect(fakes.createPendingAction).not.toHaveBeenCalled();
   });
 
   it('refuses to retry a plan parked on a settled decision', async () => {
