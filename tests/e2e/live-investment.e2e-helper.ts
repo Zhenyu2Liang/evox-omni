@@ -38,6 +38,7 @@ import {
   assistantTexts,
   clickConfirm,
   diffLedger,
+  errText,
   fetchDashboardSummary,
   fetchLedger,
   getJson,
@@ -270,6 +271,64 @@ async function readCardFacts(card: Locator, labels: readonly string[]): Promise<
     out[label] = value;
   }
   return out;
+}
+
+/**
+ * Poll the NEWEST holding card until every requested fact equals its expected text.
+ *
+ * WHY A BOUNDED WAIT: the write projects its own post-write position card from the tool result, and
+ * that projection is RENDERED after the DB commit is already visible. Reading the card the instant
+ * `awaitHolding` returns can therefore still hit the PREVIOUS card (the stale snapshot), so this waits
+ * for the BUSINESS condition — the newest card carries the expected facts — instead of guessing a
+ * delay. A transiently missing card/row is NOT an error: it just fails this poll and is retried. A
+ * card that never updates still FAILS the step, and the timeout error carries the LAST facts actually
+ * read (plus the card count and the expected text) so the diagnosis is immediate.
+ */
+async function awaitCardFacts(
+  page: Page,
+  labels: readonly string[],
+  expected: Record<string, string>,
+  description: string,
+  timeoutMs = 90_000,
+): Promise<Record<string, string>> {
+  let lastFacts: Record<string, string> = {};
+  let lastCardCount = 0;
+  let lastProblem = '尚未读取';
+  try {
+    return await waitFor(
+      async () => {
+        const cards = holdingCards(page);
+        try {
+          lastCardCount = await cards.count();
+          if (lastCardCount === 0) {
+            lastFacts = {};
+            lastProblem = `聊天里还没有任何「${PRODUCT_NAME}」投资持仓卡`;
+            return false;
+          }
+          const facts: Record<string, string> = {};
+          for (const label of labels) facts[label] = await readCardRow(cards.last(), label);
+          lastFacts = facts;
+          const missing = labels.filter((label) => facts[label] === '');
+          lastProblem = missing.length > 0
+            ? `最新投资卡未渲染「${missing.join('、')}」行`
+            : '最新投资卡的事实与该轮期望不符';
+          return labels.every((label) => facts[label] === expected[label]) ? facts : false;
+        } catch (e) {
+          // A re-render can detach the node mid-read: keep polling — the CONDITION decides, not the read.
+          lastProblem = `读取最新投资卡失败：${errText(e)}`;
+          return false;
+        }
+      },
+      { timeoutMs, intervalMs: 500, description },
+    );
+  } catch {
+    const actual = labels.map((label) => `${label}=${lastFacts[label] ?? '（读不到该行）'}`).join('、');
+    const wanted = labels.map((label) => `${label}=${expected[label]}`).join('、');
+    throw new Error(
+      `等待超时（${timeoutMs}ms）：${description}；最新投资卡实际 ${actual}；期望 ${wanted}；`
+        + `当前「${PRODUCT_NAME}」投资持仓卡共 ${lastCardCount} 张；最后一次轮询状态：${lastProblem}`,
+    );
+  }
 }
 
 /** `formatDecimalFixed(shares, 6) + ' 份'` — the ONE rendering of a share count in cards and pages. */
@@ -673,7 +732,13 @@ export async function scenarioInvestmentPartialRedemption(params: InvestmentScen
   }
   // The write projects its own post-write position card: the NEWEST card must show the CURRENT shares
   // and must differ from the card that was newest BEFORE the write (a stale card would equal it).
-  const cardB1 = await readCardFacts(holdingCards(page).last(), [LABEL.shares]);
+  const cardB1 = await awaitCardFacts(
+    page,
+    [LABEL.shares],
+    { [LABEL.shares]: sharesText(subscribed.shares) },
+    `B1 写后最新投资卡的持仓份额应为 ${sharesText(subscribed.shares)}（写前为 ${factsB0[LABEL.shares]}）`,
+    90_000,
+  );
   if (cardB1[LABEL.shares] !== sharesText(subscribed.shares)) {
     throw new Error(`B1 之后聊天里最新投资卡的持仓份额应为 ${sharesText(subscribed.shares)}（写后重读的 DB 值），实际 ${cardB1[LABEL.shares]}`);
   }
@@ -722,7 +787,17 @@ export async function scenarioInvestmentPartialRedemption(params: InvestmentScen
     throw new Error(`本次已实现收益应为 到账 ${expectedSettlement} − 扣减成本 ${centsToMoney(consumedCostMinor)} = ${centsToMoney(expectedSettlementMinor - consumedCostMinor)}，实际 ${centsToMoney(realizedDelta)}`);
   }
   // The write's own position card must mirror the CURRENT position (剩余成本 = `Money`, 市值 = `DecimalMoney`).
-  const cardB2 = await readCardFacts(holdingCards(page).last(), [LABEL.shares, LABEL.remainingCost, LABEL.marketValue]);
+  const cardB2 = await awaitCardFacts(
+    page,
+    [LABEL.shares, LABEL.remainingCost, LABEL.marketValue],
+    {
+      [LABEL.shares]: sharesText(redeemed.shares),
+      [LABEL.remainingCost]: formatCNY(centsToMoney(redeemed.costMinor)),
+      [LABEL.marketValue]: formatDecimalCNY(redeemed.marketValue),
+    },
+    `B2 写后最新投资卡的持仓份额应为 ${sharesText(redeemed.shares)}、剩余持仓成本应为 ${formatCNY(centsToMoney(redeemed.costMinor))}、市值应为 ${formatDecimalCNY(redeemed.marketValue)}`,
+    90_000,
+  );
   if (cardB2[LABEL.shares] !== sharesText(redeemed.shares)) {
     throw new Error(`B2 之后聊天里最新投资卡的持仓份额应为 ${sharesText(redeemed.shares)}，实际 ${cardB2[LABEL.shares]}`);
   }
