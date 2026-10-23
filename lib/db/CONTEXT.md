@@ -35,6 +35,16 @@ and aggregate repositories. Business permissions and risk rules belong to `secur
   `Prisma.TransactionClient` for atomic composition. Preserve identity checks and conditional writes;
   do not replace claims/revocations with separate read-modify-write statements.
 
+## Wait, lock and timeout facts
+
+- `timeout: 10000` (`database.ts:23`) is the adapter's busy-wait passed to better-sqlite3 (10 s `busy_timeout` equivalent); no `PRAGMA busy_timeout` is issued in this layer, and `PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;` runs ONCE in `connect()` (`database.ts:12`) — there is no per-call PRAGMA round trip.
+- `transactionOptions: { maxWait: 10000, timeout: 10000 }` (`database.ts:25`) is the only transaction budget; transaction callbacks do not pass their own `maxWait`/`timeout`/`isolationLevel`, so every interactive transaction inherits 10 s.
+- `maxWait` does NOT bound a wait that happens inside `startTransaction` (the mutex): the engine has already checked out the connection, so the real bound there is the unbounded mutex chain above.
+- One client = one native connection + one mutex: a second transaction on the same client waits for the first to commit or roll back, and a plain (non-transaction) statement queues behind any open transaction.
+- Default-client asymmetry: repositories defaulting to `dbClient()` join the ambient `withinTransaction` scope; those defaulting to the global `prisma` (`repositories/pendingAction.ts`, `repositories/circuitBreaker.ts`) always queue on the mutex, even inside a unit of work.
+- `repositories/pendingAction.ts#claimPendingAction` fails fast — one `updateMany`, `Promise<boolean>`, no retry — except for `to === 'confirmed'` on the global client, where it opens a fresh interactive transaction (`assertActionMayStart`: one no-op writer lock + two reads, then the CAS).
+- No retry, sleep, poll or busy-error helper exists anywhere under `lib/db`: no `SQLITE_BUSY` / `P2034` / "database is locked" matching, no `setTimeout`/`setInterval`.
+
 ## Constraints
 
 - Generated code is ignored by Git. Run `pnpm db:generate` before type checking, building, or executing
