@@ -12,6 +12,11 @@ Server pages may use the identity helper; client components call HTTP routes ins
   `requireIdentity(req?)` return the configured user and fixed `demo:${userId}` workspace through
   `getDemoSession`. The request parameter does not select identity. There is no login or
   authentication cookie. Generic internal sessions cannot be selected through this interface.
+  The chain is `getConfig().demoUserId || DEFAULT_DEMO_USER_ID` → `getDemoSession(userId)` →
+  `ensureDemoSession('demo:' + userId)` (idempotent upsert with `update: {}`), so the session id is
+  exactly `demo:<userId>` and survives restarts. `getConfig().demoUserId` reads the `DEMO_USER_ID`
+  env var with fallback `'user_liming'` (`lib/config.ts`), so `DEFAULT_DEMO_USER_ID` is the
+  effective value when the env var is unset.
 - `http.ts`: JSON envelopes, `AppError` status mapping, Zod body/query parsing, optional body
   parsing and SSE helpers. Unknown exceptions use a generic internal error without exposing
   credentials, stack traces or database internals.
