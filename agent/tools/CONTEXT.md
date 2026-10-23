@@ -108,6 +108,13 @@ card. `cardTargetId(userId, args)` is the runner-side fallback: a canonical `car
 selectors-only args go through the same resolver, and an unresolved target throws `VALIDATION` with
 the masked clarification. Model-facing descriptions must steer 尾号6688 to `cardTail` and 我的借记卡
 to `cardType`. See `docs/cn/identity-resolution.md`.
+A `clarify` refusal never opens a `PendingAction`: `security/security-gateway.ts:1628-1635` returns
+the plain Chinese sentence as `blockReason` (no `BLOCK_REASON_PREFIX` payload), so
+`agent/turns/events.ts:63-69` publishes a `status:'error'` tool event whose `summary` IS that verbatim
+clarification and whose `errorCode` is absent. The rendered error card is NOT that text:
+`lib/tool-feedback.ts:50-68` `publicToolError` allow-lists only exact business messages plus a few
+closed regexes, so `buildCardClarifyMessage`/`buildRecipientClarifyMessage` output falls through to the
+generic `chat.error.toolFailed`. Assert on the tool event's `status`/`summary`, never on card copy.
 
 `describe_turn` lives in `turn-intent.ts` and records model-declared conversational purpose.
 It is an internal control tool, not a banking capability or customer authorization.
