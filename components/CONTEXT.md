@@ -27,9 +27,17 @@ SDK 数据类型使用类型导入。
 组件必须保留业务状态与操作身份。
 
 金额显示使用 `Money` 或 `DecimalMoney`。
+收益类字段可为负（亏损持仓）：`profit` / `realizedProfit` / `cumulativeProfit` 只经 `DecimalMoney` → `formatDecimalCNY`（`lib/decimal.ts:87-91`，内部 `decimalText` 保留负号），`profitRate` 只经 `signedRateToPercent`（`lib/decimal.ts:71-73`）。
+非负门禁只用于产品年化收益率与入账金额/估值：`rateRatioToPercent`（`lib/decimal.ts:76-78`）、`nonNegativeDecimal`（`lib/decimal.ts:36-40`）、`valuationToMinor`（`lib/decimal.ts:81-84`）在负值上抛 `AppError('VALIDATION')`，在 render 期调用会崩掉整棵客户端树；绝不把 `profitRate` 或收益字段交给它们。
+组件内 `rateRatioToPercent` 仅两处调用，入参都是 `product.annualYieldRate`（业务上非负）：`banking/InvestmentProductTile.tsx:48-50`（`formatRate`，用于 :79）与 `chat/cards/InvestmentsCard.tsx:76`。
+`DecimalMoney` 的 `signed` 只添加正号，负号由 `formatDecimalCNY` 给出（`ui/DecimalMoney.tsx:15-19`）。
 部分赎回后的持仓按剩余本金（`holding.amount`）及估算市值与收益显示。
 已加购持仓显示最近申购时间（`lastPurchaseAt`）与申购记录数（`purchases`），
 投资产品卡与对话投资卡片以“已加购”标记加购。
+收益率与收益的符号处理只有一条路径：带符号的持仓收益率 `HoldingView.profitRate` 走 `lib/decimal.ts#signedRateToPercent`（`banking/HoldingFacts.tsx:91`）。
+只有非负的产品年化收益率 `ProductView.annualYieldRate` 才走 `rateRatioToPercent`（内部 `nonNegativeDecimal` 门禁：负值在渲染期抛 `AppError('VALIDATION')`，会清空整棵客户端树）。
+带符号的 `profit`/`cumulativeProfit`/`realizedProfit` 交给 `DecimalMoney signed`；累计金额用 `addDecimal`/`addMoney`，二者都接受带符号文本（`chat/cards/InvestmentsCard.tsx:123-127`）。
+展示层不得用 `Math.abs`、`Number()`、截断或自行补号绕开非负门禁；组件内没有一处把带符号值送入非负门禁。
 
 卡片结算账户区块只由 `CardView.linkedAccountStatus` 决定，
 由 `banking/card-account-display.ts` 的纯函数统一归约，

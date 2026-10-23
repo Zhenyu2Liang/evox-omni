@@ -56,10 +56,20 @@ SDK 类型通过类型导入使用。
 收益口径见 [investments.md](../../docs/cn/investments.md)。
 
 缺失的事实渲染 `business.investments.insufficient`（历史数据不足），不渲染 0。
+该占位串与 `business.investments.valueBasis.insufficient` 同文（中文均「历史数据不足」，英文均 "Insufficient history"），
+所以 `valueBasis === 'HISTORICAL_DATA_INSUFFICIENT'` 时净值/份额/收益类行都显示这四个字，`realizedProfit` 有值时仍显示真实金额。
+符号只由格式化函数体现：持仓收益与累计收益走 `DecimalMoney signed`（正数加 `+`，负数由 `formatDecimalCNY` 加 `-`），
+已实现收益、市值不加 `+`；持仓收益率经 `signedRateToPercent` 只做 ×100，正数不加 `+`（`-3.5%` / `3.5%` / `0%`）。
+所有事实行共用静态 `font-medium text-banking-deep`，界面不按正负着色（无 `text-red-*`、无 `text-banking-success`）。
+`signedRateToPercent` 与 `formatDecimalCNY`/`formatDecimalFixed` 都不做取绝对值、`Math.max(0, …)` 或 0 截断，
+但也没有 try/catch：非法十进制文本会在渲染期抛错（`nonNegativeDecimal` 的负值闸门只属于 `rateRatioToPercent`，收益率不得走它）。
 `holding.amount` 始终存在，是唯一不缺省的金额事实。
 没有净值字段的旧持仓只渲染市值与收益两行，不显示份额、净值与成本行。
 `usesNetValueModel(holding)` 判定持仓是否按净值 + 份额计价：`valueBasis`、`shares`、`latestNetValue`、`cumulativeProfit` 有一个存在即为真。
 `valueBasisLabelKey(holding)` 返回徽标键，`NET_VALUE` 返回 `undefined`，即不显示徽标。
+字段读取位置（`HoldingFacts.tsx`）：`valueBasis` `:40`、`:48-49`；`shares`/`latestNetValue`/`latestNetValueDate` `:68-78`；`marketValue` `:79-81`（旧口径 `:58-61`）；`amount` `:82-83`（必填，无缺省）；`profit` `:84-86`（旧口径 `:62-65`）；`profitRate` `:89-91`；`cumulativeProfit` `:92-94`；`realizedProfit` `:95-97`。
+`purchases`/`lastPurchaseAt` 与 `redemptions` 不由 `HoldingFacts` 渲染：前两者在 `InvestmentProductTile.tsx:58-60`、`:115-125`。
+`rateRatioToPercent` 在本目录的唯一用途是 `InvestmentProductTile.tsx:48-50` 的 `product.annualYieldRate`（服务端保证非负）；持仓收益率绝不可改走它。
 
 ## valueBasis 徽标
 
@@ -96,6 +106,8 @@ e2e 行读取器按标签 `span` 的文本精确定位，再取同一父元素�
 金额格式：`Money`→`formatCNY`（`lib/money.ts`，`¥#,##0.00` 精确到分）；
 `DecimalMoney`→`formatDecimalCNY`（`lib/decimal.ts`，HALF_UP 到两位）；二者输出形状一致（`[±]¥#,##0.00`）。
 `signed` 时正数前置 `+`。产品预期年化经 `rateRatioToPercent`（比值×100，天然非负）加 `%`，如 `3.2575%`；持仓收益率有符号，经 `signedRateToPercent`（同样×100，但不过非负闸门）渲染，亏损显示为 `-1.23%`。
+收益率有两个不可互换的换算：`rateRatioToPercent` 只用于产品预期年化（`InvestmentProductTile.tsx:48-50,79`、`chat/cards/InvestmentsCard.tsx:76`，其内部先过 `nonNegativeDecimal` 非负闸门，负输入抛 `AppError('VALIDATION')`）；持仓收益率 `HoldingView.profitRate` 有符号，只能走 `signedRateToPercent`（`HoldingFacts.tsx:14,89-91`，即 `×100`，不取绝对值、不过闸门），否则渲染期抛错、整页渲染失败。
+`profitRate` 由 `banking-sdk/net-value.ts#profitRateOf`（235-242 行）计算，成本为零时返回 `undefined`（渲染“历史数据不足”）。
 份额与净值经 `formatDecimalFixed` 定长输出，6 位与 4 位小数，不经金额格式化。
 净值日期经 `formatBusinessDate` 按 UTC+08:00 输出 `YYYY-MM-DD`。
 
@@ -221,6 +233,7 @@ DOM 定位只能靠文本 + 调用方 wrapper：`/cards` 页的 `[data-card-list
 - 金额必须沿用通用组件的单位约定。
 - 脱敏号码不得代替服务端资源标识。
 - 持仓事实只在 `HoldingFacts` 维护，其他组件不得另写一份。
+- 收益与收益率为有符号值：不得 `Math.max(0, …)`、`Math.abs`、四舍到 0 或按符号条件隐藏行；`profitRate` 只经 `signedRateToPercent`，收益字段只经 `DecimalMoney`（`realizedProfit` 不带 `signed`，负号仍由 `formatDecimalCNY` 保留）。
 - 账户余额（`accountAvailableBalance`）是关联账户的资金，不是授信额度；
   `MISSING`/`UNTRUSTED` 时不渲染任何金额，也不得以 0 占位。
 - 卡片不得持有独立余额：余额与可用余额都派生自结算账户。

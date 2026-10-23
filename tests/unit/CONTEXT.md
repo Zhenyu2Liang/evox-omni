@@ -52,13 +52,39 @@
 
 本目录没有用例导入 `components/banking/CardTile`；`renderToStaticMarkup` 覆盖的是聊天卡、审批/MFA 卡、解锁面板与投资持仓。
 渲染环境（`environment: 'node'`、无 jsdom/`@testing-library`、`.tsx` 不被收集）与 i18n 约定见 [../CONTEXT.md](../CONTEXT.md) 的「组件渲染测试（React SSR，无 DOM 环境）」。
-`components/banking/*` 的导入只有三处：`planner/tool-diagnostics.test.ts` 的 `AgentTaskTimeline`、`planner/investment-purchase-display.test.ts` 的 `InvestmentProductTile`、`planner/decimal-format.test.ts` 的 `HoldingFacts`（同一用例还渲染 `components/ui/DecimalMoney`）。
-`components/banking/card-account-display.ts` 的纯函数、`CardTile`、`AssetSummaryCard`、`RecentTransactions`、`SubscriptionTile` 与 `components/chat/cards/CardsCard.tsx` 都没有单元用例。
+本目录导入 `components/banking/*` 的用例有三处：`planner/tool-diagnostics.test.ts:9` 的 `AgentTaskTimeline`、`planner/investment-purchase-display.test.ts:5` 的 `InvestmentProductTile`、`planner/decimal-format.test.ts:6` 的 `HoldingFacts`（同一用例还渲染 `components/ui/DecimalMoney`）。
+`components/banking/card-account-display.ts` 的四个纯函数、`CardTile`、`AssetSummaryCard`、`RecentTransactions`、`SubscriptionTile` 与 `components/chat/cards/CardsCard.tsx` 都没有单元用例。
 `CardTile` 自身不输出任何 `data-*`：`data-card-id`/`data-card-list`/`data-card-consume`/`data-card-delete` 由 `app/cards/CardManager.tsx:191` 的包裹层发出。
 展示文案真值在 `lib/i18n/messages/business.zh-CN.json:47-69`（类型 `debit`/`credit`/`virtual`，状态 `active`/`frozen`/`lost`/`pending`，`limit`/`available`/`monthlyLimit`、`replaced`、`linkedAccount`、`accountBalance`、`usableBalance`、`linkedAccountMissing`、`linkedAccountUntrusted`、`cardUnavailable`、`cardFrozenNotice`、`cardLostNotice`）。
 单元层只断言 DTO 与脱敏：`banking-sdk/card-linked-account.test.ts`、`banking-sdk/card-consumption.test.ts`、`lib/mask.test.ts`（`****8821`/`************8821`）。
 卡片 DOM 断言（`CARD_LABEL`、`readCardTileRows`、`assertLinkedAccountTileLabels`）只在 `tests/e2e`，见 [../e2e/CONTEXT.md](../e2e/CONTEXT.md)。
 `weixin-presentation.test.ts:23` 的 `type:'cards'` 用例只断言微信文本含 `¥87.66`，不是 React 渲染。
+
+## 持仓收益率与亏损的断言落点
+
+`components/banking/HoldingFacts.tsx` 是持仓净值/份额/收益率的唯一渲染源：`profitRate` 经 `signedRateToPercent` 拼成 `${…}%`，`profit`/`cumulativeProfit` 走 `DecimalMoney(..., signed:true)`，`marketValue`/`realizedProfit` 不带 `signed`。
+符号转换入口 `lib/decimal.ts#signedRateToPercent` 只用于持仓收益率；金额、份额、净值与 `annualYieldRate` 仍走 `nonNegativeDecimal`/`rateRatioToPercent` 的非负闸门。
+同一亏损事实因此分三层钉住（符号转换 → 组件渲染 → SDK 比率）：
+
+- `financial-values.test.ts:64-84`：`signedRateToPercent` 保留符号与全部精度（`'-0.0123'`→`'-1.23'`、`'-0.0001'`→`'-0.01'`、`'-1'`→`'-100'`、`'-0.029726666666666667'`→`'-2.9726666666666667'`），正值与 `rateRatioToPercent` 结果全等（`:76`），非字符串入参抛错（`:77`）；同用例反向固定金额/年化闸门：`nonNegativeDecimal('-0.0123')`、`nonNegativeDecimal('-1')`、`rateRatioToPercent('-0.032575')` 抛 `{code:'VALIDATION'}`（`:79`/`:80`/`:83`）。
+- `financial-values.test.ts:96-97`：`formatDecimalCNY('-0.000001')` 为 `'-¥0.00'`，负值舍到分仍保留符号。
+- `planner/decimal-format.test.ts:37-41`：`DecimalMoney({signed:true})` 只在严格为正时前置 `+`（`'+¥118.91'` 与 `'-¥118.91'`）。
+- `planner/decimal-format.test.ts:44-96`：本目录唯一的亏损持仓渲染用例。`holdingView(profitRate)` 造 4199.864825 份 × 净值 0.9407 → 市值 3950.80、剩余成本 4000.00、`profit`/`cumulativeProfit` 为 `'-49.20'`；经 `renderToStaticMarkup` 走真实 `HoldingFacts`（`layout` 取 `card`/`tile`），断言 `'-0.0123'` 不抛错且渲染 `-1.23%`（`:77-78`）、全精度 `-2.9726666666666667%`、`tile` 布局同为 `-1.23%` 且同一亏损金额 `-¥49.20`（`:86-91`）、正/零收益率仍是 `3.2575%`/`0%`（`:81-84`）、无收益率时整段不出 `%`（`:94`）。
+- `planner/financial-display.test.ts:48-53`：`DecimalMoney({signed:true})` 对 `-0.0000000001` 渲染 `'-¥0.00'`（正值 `'+¥0.00'`），符号不被舍入吃掉。
+- `banking-sdk/net-value.test.ts:153-161`：`profitRateOf` 产出带符号比率（`'-23.45'/1000.00`→`'-0.02345'`、`'-1.00'/3.00'`→`'-0.333333333333333333'`），零成本返回 `undefined`；净值/份额的非法入参拒绝见 [banking-sdk/CONTEXT.md](banking-sdk/CONTEXT.md)。
+- `banking-sdk/net-value-redemption.test.ts:379`/`:386`/`:418`：`HoldingView.profit` 的负字面量（`'-0.000000928'`、`'-192.3076932'`、`'-0.0000002173'`），`compareDecimal(..., '0')` 判负在 `:380`/`:395`/`:419`。
+- `banking-sdk/net-value-redemption.test.ts:394`/`:400`：亏损全额赎回的 `InvestResult.realizedProfit === '-192.31'` 与库内 `realizedProfitMinor === -19_231n`，是全仓唯一的负已实现收益断言。
+- `banking-sdk/share-estimate-basis.test.ts:70-71`：`profit`/`cumulativeProfit` 等于 `subtractDecimal(marketValue, '5000.00')`，数值上为负（≈ −3765.475463078），以派生表达式而非负字面量断言。
+
+缺口（当前事实，非待修项）：
+
+- 没有组件级用例把负 `annualYieldRate` 喂给 `InvestmentProductTile`/`InvestmentsCard`：`rateRatioToPercent` 的负值只在 `financial-values.test.ts:83` 以抛错覆盖，仓储层拒绝在 `banking-sdk/investment-precision.test.ts:257-274` 只用 `rejects.toBeDefined()`，不校验错误码。
+- `/investments` 页的收益率行没有外部校验：`../e2e/live-investment.e2e-helper.ts:424-433` 的 `labels` 不含 `持仓收益率`，所以 `tile` 布局的收益率行只由 `planner/decimal-format.test.ts:88` 断言。
+- 默认数据都是盈利仓位：`../helpers/fixtures.ts:429` 成本 5000.00 / 市值 5050（+50），`prisma/seed.ts:378-379` 的 `holding_wenjiana`/`holding_huobi` 高于成本；唯一亏损仓位是 `prisma/seed.ts:380` 的 `holding_wenjib`（剩余成本 10000.00 / 市值 9880.00，−¥120.00），而 e2e 只核对 `稳健理财A`。
+- 其余持仓展示用例只喂正值：`planner/chat-read-results.test.ts:73-86`、`planner/financial-display.test.ts:35-46`、`planner/investment-purchase-display.test.ts`。
+- `HoldingView` 上没有任何为负的 `cumulativeProfit`/`realizedProfit` 断言：负已实现收益只在 `InvestResult` 层（`banking-sdk/net-value-redemption.test.ts:394`）。
+- `amount` 为 0 时 `HoldingView.profitRate` 为 `undefined` 只有函数级覆盖（`banking-sdk/net-value.test.ts:160-161`）；`banking-sdk/investment.ts:197` 无条件赋值该键，`'profitRate' in view` 恒为真，不可断言键缺失。
+- 亏损持仓的两个渲染入口都经 `HoldingFacts`：`InvestmentsCard`/`InvestmentProductTile` 里的 `rateRatioToPercent` 只作用于 `annualYieldRate`。
 
 ## 终止锁定与内部诊断的上屏边界
 
