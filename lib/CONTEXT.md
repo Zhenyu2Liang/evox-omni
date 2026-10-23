@@ -135,6 +135,15 @@ JSON 金额使用十进制字符串。
 结构化拒绝的上游装配：`security/security-gateway.ts:927-940`（`MFA_FAILED`/`mfa_code_invalid`，无 `attemptsLeft`）与 `:941-961`（`MFA_LOCKED`/`mfa_attempts_exhausted` 与 `mfa_code_invalid`，含 `attemptsUsed`/`attemptsLeft`/`maxAttempts`）；`security/security-gateway.ts:866-883`（`lockedOutcome`，`attemptsLeft: 0`）；`app/api/_lib/locked-action.ts:66`（`{code:'CIRCUIT_OPEN', reason:'mfa_session_locked'}`，无计数）；`app/api/actions/[id]/verify/route.ts:89-90`（把 `failure` 与 `attemptsLeft`/`maxAttempts` 摊到 `ActionResponse`）；`agent/turns/events.ts:92-96`（`security_event` 只带 TYPED 字段）。
 单元测试：`tests/unit/lib/public-text.test.ts`（诊断分类、`attemptsLeft` 渲染、四种锁定/拒绝文案）、`tests/unit/lib/public-text.locked.test.ts`（typed 主路径与三条网关兼容句）、`tests/unit/lib/app-error-public-message.test.ts`（`AppError.publicMessage` 净化与 `publicErrorMessage` 兜底）。
 
+## 展示映射（`i18n/display.ts`）与演示常量（`constants.ts`）
+
+`localizeChatError(message, t)`：先查 `messages/display-sources.json#errors` 精确表（命中且键合法才翻译，否则原样返回），再匹配固定 HTTP 模板 `/^请求失败，请稍后重试（([1-5]\d{2})）$/` → `chat.error.requestStatus {status}`；其余自由文本原样返回。`publicToolSummary` 的兜底分支依赖这个「未命中即原样返回」的行为。
+`localizeVerificationHint(hint, t)`：只查 `display-sources.json#hints` 的 4 条精确服务端字符串 → `chat.display.smsHint` / `chat.display.demoHint` / `chat.display.safetyHint`；未命中的 `hint` 原样透出，因此新增服务端 hint 文案必须同时在这张表里加映射。
+`public-text.ts`、`tool-feedback.ts`、`internal-text.ts` 定义的映射在测试中的断言位置：`tests/unit/lib/public-text.test.ts`、`public-text.locked.test.ts`、`public-text.manual-review.test.ts`、`app-error-public-message.test.ts`、`i18n-display.test.ts`。
+`constants.ts`：`MFA_MAX_ATTEMPTS = 3`（连续验证失败上限，也是锁定文案里的次数来源）、`MFA_CODE = '123456'`（演示验证码）、`RESET_COOLDOWN_MS = 60_000`（`security/circuit-breaker.ts` 解锁冷却）。
+占位符插值是 `shared.ts#translate` 的正则替换 `/\\{([A-Za-z][A-Za-z0-9_]*)\\}/`：`params` 里没有同名键时保留字面 `{name}`（不会渲染成空串或 `undefined`）。
+`messages` 以 `en` 目录的键集为 `MessageKey` 全集（`en`/`zh-CN` 各自展开后取 `keyof`），因此**新增键必须先加到 `*.en.json`**，否则 `t(key)` 不通过类型检查；`isMessageKey` 也只查这张 `en` 表。
+
 ## 修改约束
 
 - 修改共享类型时，必须更新 `contracts/` 的原定义。
