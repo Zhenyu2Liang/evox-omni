@@ -13,6 +13,7 @@
 `mfa.test.ts` / `mfa-audit.test.ts` 直接调 `@/security/mfa`（`issueChallenge`/`verify`），不经网关；
 `mfa-failure-contract.test.ts` / `gateway.test.ts` / `authorize-hardening.test.ts` / `circuit-breaker-audit.test.ts` 经 `securityGateway.authorizeAction` / `evaluate` / `handleToolCall`；
 `circuit-breaker*.test.ts` 直接调 `@/security/circuit-breaker`。
+`unlock-panel-render.test.ts` / `unlock-panel-notice.test.ts` / `developer-reset-panel-hook.test.ts` 只做 `react-dom/server` 静态渲染，不连库、不调网关。
 安全事件落 `securityEvent` 表，不是 `auditLog`。
 
 ## `mfa.test.ts` 的骨架与覆盖缺口
@@ -24,8 +25,10 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
 不造 User/AgentSession/MfaChallenge 行：`MfaChallenge` 一律由被测的 `issueChallenge` 产生。
 每例 `newSessionId()` = `newId('sess_mfa')`（`:30-32`），没有对应 `AgentSession` 行（`PendingAction.sessionId` 无外键，`prisma/schema.prisma:418-448`），熔断所有者因此落到 `session:<该 id>` 兜底键（`security/circuit-breaker.ts:121-127`），而不是用户级 `user:user_liming`；隔离来自每例唯一 id 加 `truncateAll()` 清 `circuitBreakerState`。
 文件头「in-process breaker keyed by sessionId」的注释与实现不符：熔断状态是持久化、按所有者键的表（`security/circuit-breaker.ts:1-6`、`prisma/schema.prisma:465-479`）。
-本文件不用任何假时钟：`expiresAt` 从不出现，challenge 有效期恒为 `realNow() + MFA_CHALLENGE_TTL_MS`（`security/mfa.ts:34`、`:138`）。
-因此以下 `security/mfa.ts` 分支不被本文件触达，改动它们时不会有本文件报错保护：`locked` 动作的 `MFA_LOCKED` 拒绝（`:106-109`）、已执行/已取消的 `CONFLICT` 拒绝（`:112-115`）、challenge 过期或 `commandDigest` 不符时的重建分支（`:123-131`）、`consumedAt` 与摘要不符的拒绝（`:165-169`）、已 `verified` challenge 的短路（`:192-198`）。
+本文件不用任何假时钟：`expiresAt` 从不出现，challenge 有效期恒为 `realNow() + MFA_CHALLENGE_TTL_MS`（常量 `security/mfa.ts:34`，两处写入点 `:189`、`:199`）。
+因此以下 `security/mfa.ts` 分支不被本文件触达，改动它们时不会有本文件报错保护：
+`issueChallenge` 的 `locked` 动作 `MFA_LOCKED` 拒绝（`:167-169`）、已执行/已取消的 `CONFLICT` 拒绝（`:173-175`）、已 `locked` challenge 直接回 `toView` 而不重置计数（`:183`）、过期或 `commandDigest` 不符时的重建（`:184-192`）；
+`verify` 的 `consumed`/`expired`/`command_changed` 拒绝（`:228-234`，`ChallengeInvalidError`）、`locked` 动作与已锁会话/已锁 challenge 的 `locked:true` 短路（`:241-254`）、已 `verified` challenge 的短路（`:257-263`）。
 `tests/unit/security` 全目录不出现 `expiresAt`；`MfaChallenge.expiresAt` 的改写只出现在 `tests/integration/confirmed-write-authority.test.ts:60,97-99,112,144`（恒为 `new Date(Date.now() - 1)`，另两例改 `consumedAt`/`commandDigest`）与 `tests/integration/refactor-security-runtime.test.ts:68`。
 `confirmed-write-authority.test.ts:97-99` 的三态（`expired`/`consumed`/`changed_digest`）是在 `pauseAtWriteFence()` 屏障处改写，用来证明网关授权通过之后、扣款之前仍会复核 challenge。
 `tests/integration/confirmation-lease-contention.test.ts:76` 改的是 `PendingAction.executionLeaseExpiresAt`（执行租约），与验证码有效期无关，不要混为一谈。
@@ -34,8 +37,10 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
 ## 安全中心解锁面板（`/security`）的渲染契约
 
 `app/security/page.tsx` 是 await `cookies()`/`requireIdentity()`/DB 的 async Server Component，Node 测试无法调用，**页面本身不在本目录测试**。
-`unlock-panel-render.test.ts` 直测页面无条件渲染的 `app/security/UnlockPanel.tsx`（`createElement` + `renderToStaticMarkup`，
-`vi.mock('next/navigation')` 提供 `useRouter`，`LocaleProvider` 固定 `zh-CN`，期望值取 `createTranslator('zh-CN')` 与 `*.zh-CN.json` 真值）：
+`unlock-panel-render.test.ts` 与 `unlock-panel-notice.test.ts` 共用同一套 harness 直测页面无条件渲染的 `app/security/UnlockPanel.tsx`（`createElement` + `renderToStaticMarkup`，
+`vi.mock('next/navigation')` 提供 `useRouter`，`LocaleProvider` 固定 `zh-CN`，期望值取 `createTranslator('zh-CN')` 与 `*.zh-CN.json` 真值；
+两者都先用 `markup.replace(/<!-- -->/g, '')` 去掉 React 的相邻文本分隔注释，再断言人读文本）。
+前者管属性、输入形态与不外泄，后者管解锁语义的四段文案与 `data-unlock-reinitiate` 钩子：
 
 - 锁定态（`locked:true, failures:3, maxAttempts:3, lockedActionCount:1`）：根节点 `data-unlock-panel` 与 `data-unlock-locked="true"`、
   `data-unlock-failures="3"`、`data-unlock-max-attempts="3"`、`data-unlock-locked-actions="1"`，
@@ -50,11 +55,13 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
 - 未锁定态（`locked:false, failures:0, maxAttempts:3, lockedActionCount:0`）：面板照常渲染
   （`data-unlock-locked="false"`、无 `data-unlock-impact`、同一 `aria-label` 验证码输入仍在），
   因此浏览器套件的「没有开发者验证码输入」类断言必须限定作用域而非断言整页。
-- `data-unlock-panel` 与验证码输入的 `aria-label` 值就是 e2e 依赖的页面级不变量，改名须同步 `tests/e2e/`。
-- 该用例只证明服务端渲染的属性、文案与输入形态，不证明点击、请求或解锁结果——`POST /api/security/reset` 的行为仍不在本目录（见 `../../app`）。
-- 文案缺口：要求的「解锁后需重新发起并重新确认，原操作不会自动执行」在消息目录中没有对应 key
-  （`app/security/CONTEXT.md`「已知边界 · 文案缺口」记录同一事实），面板只用 `pages.security.unlockDescription` +
-  `chat.error.actionLocked` 组合表达；补齐专用 key 前该句无法断言。
+- 解锁语义四段由 `unlock-panel-notice.test.ts` 钉住：`security.reset.lockReason`（目录模板含 `{count}`/`{max}`，插值成 `连续验证失败 3 / 3 次`）、`security.reset.lockedActionState`、`security.reset.reinitiate`、`security.reset.recovery`（`:60-73`、`:85-96`）。
+- `security.reset.reinitiate` 的整句「解锁后需重新发起并重新确认，原操作不会自动执行。」以字面量 `REINITIATE`（`:35`）与 `createTranslator` 真值双重断言；
+  `data-unlock-reinitiate` 必须挂在承载整句的 `<p>` 上（`:75-83`），两种熔断态都渲染该语义（`:98-126` 的钩子清单、`:128-138` 的未锁定态语义），未锁定态不出现「锁定原因：」（`:136`）。
+- `data-unlock-panel`、`data-unlock-reinitiate` 与验证码输入的 `aria-label` 值就是 e2e 依赖的页面级不变量，改名须同步 `tests/e2e/`。
+- 开发者专属的熔断重置入口由 `developer-reset-panel-hook.test.ts` 钉住：`app/security/ResetBreakerButton.tsx` 在开发者模式下渲染 `data-developer-breaker-reset-panel` 包裹 `data-developer-breaker-reset` 按钮与 `security.reset.developerOnly` 文案（`:43-57`），
+  非开发者模式渲染空串、两个钩子都不出现（`:59-65`）；`UnlockPanel` 在两种熔断态且对非开发者都渲染，所以浏览器套件的「这里没有开发者重置入口」断言必须限定到该 panel 钩子。
+- 两个用例只证明服务端渲染的属性、文案与输入形态，不证明点击、请求或解锁结果——`POST /api/security/reset` 的行为仍不在本目录（见 `../../app`）。
 
 ## 终止锁定（locked）结果的覆盖边界
 
@@ -80,7 +87,7 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
    先用 `circuitBreaker.recordFailure` 循环触发熔断，再提交 `MFA_CODE`，断言 `ok`/`status`/`mfaResult === undefined` 与持久化行状态；两条都**不**断言 `code`/`failure`。
 
 锁定断言核对的机器事实：
-`res.ok === false`、`res.status === 'locked'`、`failure.{code,reason,actionId,attemptsUsed,attemptsLeft,maxAttempts}`（仅出口 1、2）、
+`res.ok === false`、`res.status === 'locked'`、`failure`（形状即 `lib/contracts/security.ts:26-33` 的 `SecurityFailure`：`code` + `reason` + 可选 `actionId`/`attemptsUsed`/`attemptsLeft`/`maxAttempts`；`reason` ∈ `mfa_code_invalid`/`mfa_attempts_exhausted`/`mfa_session_locked`/`circuit_open`/`manual_review_hold`/`denied`，见 `:13-19`；本目录只钉出口 1、2 的 `failure`）、
 `res.mfaResult` 为 `undefined`（出口 3）或 `'failed'`（出口 1，只有 `../../app` 断言）、
 `message` 只做负例断言（不含验证码、不含 `__SECURITY_BLOCK__`）、
 持久化 `PendingAction.status === 'locked'`、`MfaChallenge.status === 'locked'`、
@@ -88,7 +95,7 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
 `failure` 一律用 `toMatchObject`，字段多/少都不会被发现。
 `'MFA_LOCKED'` 与 `'mfa_attempts_exhausted'` 在本目录只同时出现在 `mfa-failure-contract.test.ts:116-123`（`toMatchObject`，无 `toBe` 全等断言可钉住该组合）；
 作为**顶层** `code` 的 `'CIRCUIT_OPEN'` 只在 `mfa-failure-contract.test.ts:149`（`retry.code`）断言，`gateway.test.ts:452-471`、`authorize-hardening.test.ts:251-264`、`authorize-concurrency.test.ts` 的锁定用例都不断言 `code`/`failure`。
-中文锁定文案与 i18n 键（`chat.error.securityLocked`）在本目录无断言。
+本目录不出现 `chat.error.securityLocked` 的断言；唯一的中文锁定文案断言属于解锁面板（`security.breaker.lockedDescription`、`chat.error.actionLocked`、`pages.security.unlockDescription`、`security.reset.*`，见上文「安全中心解锁面板」）。
 
 拒绝类断言使用 `AppError` 的 `code`：`CIRCUIT_OPEN`（熔断 / 解锁被拒）与 `SECURITY_DENIED`（所有权不符）。
 `execution-policy.test.ts` 是唯一直接守住「写入前 `isLocked(tx)` → `CIRCUIT_OPEN`」的用例。
@@ -107,8 +114,11 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
 
 改写文案、删除 `__SECURITY_BLOCK__` 原文透传或调整工具错误映射时，下列**精确形状**断言会失败，必须同时核对：
 
-- `gateway.test.ts:190` 与 `:539-542`/`:555-558`：`serializeBlockReason`/`parseBlockReason` 的往返对象 `toEqual` 恰好 `{ actionId, decisionKind }` 两键，收窄/加键都会失败。
-- `gateway.test.ts:202-234`：`parseBlockReason` 对无前缀 JSON、缺/空 `actionId`、缺/非法 `decisionKind` 一律 `toBeNull()`；把 deny 载荷改成可解析（返回部分对象）会打破这些用例。
+- `gateway.test.ts:190` 与 `:193-199`/`:539-542`/`:555-558`：**不带 `failure`** 时 `serializeBlockReason`/`parseBlockReason` 的往返对象 `toEqual` 恰好 `{ actionId, decisionKind }` 两键；这些用例钉的是「省略 `failure` 时载荷仍是两键」，无条件往载荷里塞 `failure` 会失败。
+  `security/security-gateway.ts:780-789` 的第三参 `failure?: SecurityFailure` 只在给出时写入；`:1379`/`:1411` 的 deny 拒绝分别在载荷内带 `{code:'CIRCUIT_OPEN', reason:'circuit_open'}` 与 `{code:'SECURITY_DENIED', reason:'denied'}`。
+- `gateway.test.ts:202-234`：`parseBlockReason` 对空串、无前缀 JSON、前缀后非 JSON、前缀后非对象（`null`/字符串）、缺/非法 `decisionKind` 一律 `toBeNull()`；
+  **缺省或空 `actionId` 是合法载荷**（`:218-227` 断言落到 `{ decisionKind: 'require_mfa' }`，与 `security/security-gateway.ts:832` 的「`actionId` is OPTIONAL」一致），改成必填会打破这两条。
+  `parseFailure`（`:793-814`）只保留 typed 字段：`code` 非空且 `reason` ∈ `FAILURE_REASONS`（`:224` 的六个 `SecurityFailureReason`），否则整个 `failure` 被丢弃；`attempts*` 只收有限数值。
 - `gateway.test.ts:465`、`authorize-hardening.test.ts:262`：熔断分支的 `mfaResult` 必须 `toBeUndefined()`；在 `lockedOutcome` 上补 `'failed'` 会失败。
 - `mfa-failure-contract.test.ts:77-84/90-97/116-123/150-156`：`failure` 用 `toMatchObject` 钉住 `code`/`reason`/`actionId`/`attemptsUsed`/`attemptsLeft`/`maxAttempts`，改这些字段名或取值会失败。
 - `mfa.test.ts:174-178`/`:227-231`、`mfa-audit.test.ts:131-135`：`verify()` 返回值 `toEqual` 恰好 `{ ok, attemptsLeft, locked }` 三键。
@@ -120,16 +130,14 @@ import 直连 `../../helpers/db`、`../../helpers/fixtures`，不走 `helpers/in
 ## 本目录不覆盖（负向结论）
 
 - 唯一的网关层「三次错码」用例是 `mfa-failure-contract.test.ts`；`gateway.test.ts` 的网关错码用例仍只错一次。
-- 没有「解锁后需重新发起并重新确认，原操作不会自动执行」的断言：该句在消息目录中无对应 key
-  （见 `app/security/CONTEXT.md` 的文案缺口），`unlock-panel-render.test.ts` 只钉住现有的
-  `chat.error.actionLocked`（含「重新发起操作」）与 `pages.security.unlockDescription`。
 - 没有 `persistLockedAction` 的 CAS 负例：`claimPendingAction({ from: ['pending','awaiting_mfa'], to: 'locked' })` 只有正向断言，已终态行不被覆盖没有直接用例。
-- `__SECURITY_BLOCK__` 只在本目录一处作负例（`mfa-failure-contract.test.ts:101-102/124/157`，检查 `message` 与 `failure.reason`）；没有 `SecurityEvent.detail`/`message` 的 marker、`decisionKind`、栈或原始 JSON 断言。
+- `__SECURITY_BLOCK__` 在本目录三处作负例：`mfa-failure-contract.test.ts:101-102/124/157`（`message` 与 `failure.reason`）、`unlock-panel-render.test.ts:121-134`、`unlock-panel-notice.test.ts:140-156`（渲染串，另含 `{"decisionKind"`、`Error:`、`undefined`、`[object Object]`、`MFA_CODE` 与 `/\n\s+at\s/`）；没有 `SecurityEvent.detail`/`message` 的 marker、`decisionKind`、栈或原始 JSON 断言。
 - 没有 turn 级 `security_event{kind:'locked', message}` 形状或内容断言（只断言 DB 级 `SecurityEvent` 行：`MFA_FAILURE`/`CIRCUIT_BREAKER_TRIPPED`/`SECURITY_RESET`/`INJECTION_ATTEMPT`）。
 - 没有断言 `decisionKind === 'deny'` 之外的 deny 载荷文本，也没有断言 deny 载荷不含 `actionId`。
 - 没有 `mfa_required` 事件断言，也没有「锁定后不再 surface」的 `GET /api/actions` 断言（那在 `../../app`）。
 - 不调用 `publicToolError`/`publicToolSummary`，不断言 `chat.error.toolFailed` 或 `chat.error.securityLocked`；工具错误映射的唯一覆盖在 `../planner/tool-feedback.test.ts`。
 - 解锁路径（`POST /api/security/reset`、`lockedActionsReopened`、旧 `PendingAction` 保持 `locked`、解锁后新请求得到新 id）不在本目录，见 `../../app`；本目录只覆盖熔断器层 `resetSession` 与 `SECURITY_RESET` 审计。
+- 人工复核停泊（`MANUAL_REVIEW_HOLD` / `reason:'manual_review_hold'`）不在本目录：开着的复核拦下 confirm/verify/cancel 的用例在 `../../app`（`manual-review-http.test.ts`）。
 
 ## 关键边界
 
