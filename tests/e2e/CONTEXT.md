@@ -172,6 +172,22 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 `queryPendingActionStatus` 只在 journey f 使用，`j` 不核对 `PendingAction.status === 'locked'`，也不核对锁定后 `/api/actions` 为空。
 「验证码错误次数过多」与 `chat.error.securityLocked` 在本目录无任何断言（覆盖在 `tests/unit/security`、`tests/scenarios`、`tests/integration`、`tests/app`）。
 
+锁定终态已实现但本目录尚未断言的 DOM 锚点：`components/chat/cards/MfaCard.tsx:76` 的 `<div data-mfa-locked="true">`（dock 内唯一一处，同时渲染 `securityNotice({code:'MFA_LOCKED',reason:'mfa_attempts_exhausted'})`、`pages.security.unlockDescription` 与 `/security` 链接），`MfaCard.tsx:74` 的 `<p role="status">{t('cards.terminal.locked')}</p>`，`components/chat/cards/ApprovalRecord.tsx:70` 的 `<div data-approval-locked="true">`（历史回执变体），以及 `ApprovalRecord.tsx:50`/`:61` 的 `data-status`/`data-stage-status="locked"`。
+`MfaCard.tsx:51` 的 `readOnly` 在 `terminal !== undefined` 时成立，因此锁定后 `:71` 的 footer（取消/验证按钮）与 `:90-106` 的验证码输入整块消失——`SELECTORS.mfaInput` 计数归零是本目录已断言的唯一锁定 DOM 事实。
+`MfaCard.tsx:108-114` 的尝试计数用 `role="status"` 渲染 `cards.mfa.failedAttemptsLimit`（`attempts >= maxAttempts`），`maxAttempts` 由 `components/chat/ChatWindow.tsx:237-238` 从 `lib/constants.ts:10` 的 `MFA_MAX_ATTEMPTS = 3` 传入。
+`tests/e2e` 的错误码与正确码都是本地字面量：`acceptance.e2e.ts:662` 的 `const MOCK_MFA_CODE = '123456';`（注释指向 `lib/constants.MFA_CODE` 但不 import）、锁定腿提交 `'000000'`；不要为本目录新增 `lib/constants` 导入。
+比 `waitForStatusText` 更精确的锁定锚点：`page.locator('[data-mfa-locked="true"]')`、`queryPendingActionStatus(actionId).status === 'locked'`、`fetchPendingActions(baseUrl)` 不再包含该 id、`page.locator('[data-approval-request="true"] button').count() === 0`。
+服务端锁定事实另有 `GET /api/security` 的 `circuitBreaker{failures,max,locked}`、`lock`（`{code:'CIRCUIT_OPEN',reason:'circuit_open'}`）与 `lockedActions[].actionId`（`app/api/security/route.ts:56-84`）；`/security` 页面侧是 `[data-unlock-panel][data-unlock-locked="true"][data-unlock-failures="3"][data-unlock-locked-actions="N"]`（`app/security/UnlockPanel.tsx:134-139`）。
+
+## 熔断复位的可重复性
+
+熔断按 OWNER（`user:user_liming`）持久化，同一用户的新会话不复位，所以重复运行必须显式复位。
+轮次之间由 `reseedDemoDatabase()`（`helpers.ts:799-816`）删除 `circuitBreakerState` 在内的 15 张表后重播种，库固定为 `useIsolatedDatabase()` 的 `prisma/e2e.db`；`E2E_SKIP_DB_RESET=1` 跳过。
+单场景内的确定性起点由开发者维护按钮建立：`[data-developer-toggle]`（`:visible`）开启开发者模式 → `SELECTORS.developerResetButton`（`button[data-developer-breaker-reset]`）→ `POST /api/developer/security/reset`；成功文案 `t('security.reset.success',{count:0,max:3})` 经 `app/security/ResetBreakerButton.tsx:64` 的 `role="status"` 出现，可直接用 `waitForStatusText` 等。
+普通模式必须先断言两条负例：按钮计数为 0，且同一 POST 返回 403（`app/api/_lib/developer.ts#requireDeveloperMode`）。
+运行期解锁是另一条路径：`POST /api/security/reset` 在锁定时无正确码返回 423 `CIRCUIT_OPEN` 且锁保持不变，成功返回 `lockedActionsReopened:false`（`app/api/security/reset/route.ts:52`/`:87-95`）；`tests/e2e` 只用开发者按钮，从未调用该路由。
+解锁永不把 `'locked'` 行写回 `pending`/`awaiting_mfa`，断言锁定持久性不应期待它被解除。
+
 ## 退出码与资源清理
 
 正常结束时退出码由 `reporter.failures` 决定：入口在场景结束后打印汇总并执行 `process.exitCode = failures > 0 ? 1 : 0`。
