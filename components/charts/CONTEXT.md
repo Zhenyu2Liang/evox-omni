@@ -22,7 +22,10 @@ color. Each interactive leaf is a client component; the barrel remains neutral.
 - Only geometry uses moneyToChartNumber. Tooltip, legend, SVG title and accessible labels retain
   the original exact amounts through formatCNY. Never derive financial labels from coordinates.
 - chartTheme.tsx owns colors, scale, empty state and tooltip. Scale includes a zero baseline and
-  places negative and positive values on opposite sides.
+  places negative and positive values on opposite sides. `chartTicks` seeds minimum and maximum from
+  `'0.00'`, so the minimum tick is zero or negative; its midpoint label is
+  `divideDecimal(addDecimal(minimum, maximum), '2')` (`chartTheme.tsx:71`). `addDecimal` accepts
+  signed decimal text and applies no nonnegative gate, so tick text may carry a minus sign.
 - Bar, trend and donut points support hover, focus and tap. Escape hides the tooltip. Each point
   has an accessible name containing its full exact amount.
 - Share values come from the SDK. Only positive shares are drawn; legends retain original data.

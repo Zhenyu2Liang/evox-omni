@@ -105,6 +105,9 @@ JSON 金额使用十进制字符串。
 其他非负/正整数门禁都**不在比率路径**上：`contracts/command.ts:31`（`shares`/`expectedShares`/`expectedNetValue` 参数身份）、`db/repositories/investment.ts:33,62`、`banking-sdk/valuation.ts:73`、`banking-sdk/investment.ts:347,374,390` 的 `requireNonNegativeMoney`/`optionalNonNegativeMoney`/严格正校验、`security/security-gateway.ts:652,686`、`agent/tools/decimal-schema.ts` 的 `canonicalShareCount`/`canonicalNetValue`；`money.ts` 侧对应的是 `normalizeTransferAmount`（`:50-54`，金额必须 > 0）与 `assertMinorUnits`（`:31-36`，仅范围）。
 `centsToMoney(minor)`（`money.ts:39-43`）**保留符号**且恒为「整数 + `.` + 两位」：`-12345n` → `'-123.45'`、`-1250n` → `'-12.50'`（`percentageRatio` 依赖该形状）、`0n` → `'0.00'`；不分组、无 `¥`。故 `HoldingView.profit`/`cumulativeProfit`/`realizedProfit` 的负值即此文本（`banking-sdk/investment.ts:1301,1313,1316`），`HoldingView.amount`（`:1308`）来自受非负门禁约束的 `principalAmountMinor`。
 断言锚点见 `tests/CONTEXT.md`。
+两个百分数出口的实际调用方：`rateRatioToPercent` ← `channels/weixin/presentation.ts:151`、`components/banking/InvestmentProductTile.tsx:49`、`components/chat/cards/InvestmentsCard.tsx:76`（只用于产品 `annualYieldRate`，负值直接抛 `VALIDATION`）；`signedRateToPercent` ← `components/banking/HoldingFacts.tsx:91`（唯一消费点，渲染 `HoldingView.profitRate`）。
+`channels/weixin/presentation.ts:70-72` 的本地 `percentText` 不走这两个出口：`multiplyDecimal(ratio,'100')` + `formatDecimalCNY`，不过非负门禁、容忍负号，但 HALF_UP 到 2 位小数，因此同一 `profitRate` 在微信显示 `3.26%`、在网页显示 `3.2575%`。
+`money.ts#addMoney`（`:56-58`）只把两个 `parseExactMinor` 结果相加，不调用 `assertMinorUnits`，结果无 INT64 范围校验；需要范围保证的路径必须先过 `moneyToCents` 或 `assertMinorUnits`。
 
 `lib/mask.ts` 是展示脱敏的唯一实现，零依赖，任何层都直接复用它。
 `maskPhone` 保留前 3 位与末 4 位：长度 ≤ 3 全掩码为 `****`，长度 4–7 为前 3 位加 `****`，长度 > 7 为前 3 位 + `****` + 末 4 位；`null` / `undefined` / 非字符串 / 空串返回空串，缺省值不会渲染成星号，且不做 trim。
