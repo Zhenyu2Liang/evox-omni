@@ -514,7 +514,7 @@ async function verifyProviderCompletionEvidence(): Promise<ProviderEvidence> {
     const providerIds = new Set<string>();
     for (const request of requests) {
       const evidence = records
-        .map((record) => ({ type: record.eventType, ...JSON.parse(record.payloadJson) as Record<string, unknown> }))
+        .map((record): Record<string, unknown> => ({ type: record.eventType, ...JSON.parse(record.payloadJson) as Record<string, unknown> }))
         .filter((record) => record['modelRequestId'] === request.id);
       const payloadOf = (type: string): Record<string, unknown>[] => evidence
         .filter((record) => record.type === type)
@@ -546,7 +546,7 @@ async function verifyProviderCompletionEvidence(): Promise<ProviderEvidence> {
     });
     if (!latest) throw new Error('B5 未找到最近一次已完成的模型请求');
     const latestEvidence = records
-      .map((record) => ({ type: record.eventType, ...JSON.parse(record.payloadJson) as Record<string, unknown> }))
+      .map((record): Record<string, unknown> => ({ type: record.eventType, ...JSON.parse(record.payloadJson) as Record<string, unknown> }))
       .filter((record) => record['modelRequestId'] === latest.id);
     const terminators = latestEvidence
       .filter((record) => record.type === 'provider_response_event')
