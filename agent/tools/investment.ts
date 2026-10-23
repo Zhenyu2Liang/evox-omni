@@ -272,31 +272,57 @@ export function createSubscribeInvestmentTool(
 }
 
 /**
- * The net value a just-committed subscription executed at, read back from the holding's own purchase
- * record (`HoldingPurchase.netValuePerUnit`).
+ * Read the CURRENT holdings right after a committed write — the very read `get_investment_holdings`
+ * publishes (`banking.investment.listHoldings`), taken AFTER the mutation committed, so the chat can
+ * show the position the user actually holds now (`agent/card-emitter.ts`).
  *
- * PRESENTATION ONLY: `InvestResult` is the authoritative outcome of the purchase, so a lookup that
- * cannot read the record (a replayed result, a legacy holding) reports 「历史数据不足」 instead of
- * re-pricing anything or turning an already-committed write into a failed tool call.
+ * `undefined` means "no usable re-read". The write already happened, so an unavailable read degrades
+ * to projecting only the receipt card: it never turns a successful mutation into a failed tool call
+ * and never invents an empty holding list.
  */
-async function executedNetValue(
-  userId: string,
-  holdingId: string,
-): Promise<{ netValue?: string; netValueDate?: number }> {
+async function currentHoldings(userId: string): Promise<HoldingView[] | undefined> {
   try {
-    const holding = (await banking.investment.listHoldings(userId)).find((entry) => entry.id === holdingId);
-    if (holding === undefined) return {};
-    const purchase = holding.purchases?.[holding.purchases.length - 1];
-    const fromPurchase = purchase?.netValuePerUnit !== undefined;
-    const netValue = fromPurchase ? purchase?.netValuePerUnit : holding.latestNetValue;
-    const netValueDate = fromPurchase ? purchase?.netValueDate : holding.latestNetValueDate;
-    return {
-      ...(netValue !== undefined ? { netValue } : {}),
-      ...(netValueDate !== undefined ? { netValueDate } : {}),
-    };
+    const holdings = await banking.investment.listHoldings(userId);
+    return Array.isArray(holdings) ? holdings : undefined;
   } catch {
-    return {};
+    return undefined;
   }
+}
+
+/**
+ * Attach the post-write holdings snapshot to a committed write's result. ADDITIVE presentation
+ * evidence only: every authoritative `InvestResult` field (amount, shares, realized profit, …) keeps
+ * its meaning, and the field is omitted entirely when the re-read was unavailable.
+ */
+function withHoldings(
+  result: InvestResult,
+  holdings: HoldingView[] | undefined,
+): InvestResult | (InvestResult & { holdings: HoldingView[] }) {
+  return holdings === undefined ? result : { ...result, holdings };
+}
+
+/**
+ * The net value a just-committed subscription executed at, read back from the holding's own purchase
+ * record (`HoldingPurchase.netValuePerUnit`) in the post-write holdings snapshot.
+ *
+ * PRESENTATION ONLY: `InvestResult` is the authoritative outcome of the purchase, so a snapshot that
+ * does not carry the record (an unavailable re-read, a legacy holding) reports 「历史数据不足」 instead
+ * of re-pricing anything or turning an already-committed write into a failed tool call.
+ */
+function executedNetValue(
+  holdings: readonly HoldingView[] | undefined,
+  holdingId: string,
+): { netValue?: string; netValueDate?: number } {
+  const holding = holdings?.find((entry) => entry.id === holdingId);
+  if (holding === undefined) return {};
+  const purchase = holding.purchases?.[holding.purchases.length - 1];
+  const fromPurchase = purchase?.netValuePerUnit !== undefined;
+  const netValue = fromPurchase ? purchase?.netValuePerUnit : holding.latestNetValue;
+  const netValueDate = fromPurchase ? purchase?.netValueDate : holding.latestNetValueDate;
+  return {
+    ...(netValue !== undefined ? { netValue } : {}),
+    ...(netValueDate !== undefined ? { netValueDate } : {}),
+  };
 }
 
 /** Model-free runner — `banking.investment.subscribeInvestment({ userId, productId, amount, idempotencyKey })`. */
@@ -318,7 +344,8 @@ export async function runSubscribeInvestment(
       // Replay uses the server-owned action or plan-node identity.
       idempotencyKey: opts?.idempotencyKey,
     });
-    const executed = await executedNetValue(userId, result.holdingId);
+    const holdings = await currentHoldings(userId);
+    const executed = executedNetValue(holdings, result.holdingId);
     const parts = [
       `已认购 ${formatCNY(result.amount)}（产品 ${result.productId}，持仓号 ${result.holdingId}${result.addedToExisting ? '，合并至原持仓' : ''}）`,
       `申购份额 ${result.subscribedShares === undefined ? HISTORY_INSUFFICIENT : `${result.subscribedShares} 份`}`,
@@ -328,7 +355,7 @@ export async function runSubscribeInvestment(
     if (result.newBalance != null) parts.push(`账户余额 ${formatCNY(result.newBalance)}`);
     return {
       ok: true,
-      data: result,
+      data: withHoldings(result, holdings),
       summary: `${parts.join('；')}。${SIMULATED_PROFIT_NOTICE}`,
     };
   } catch (e) {
@@ -526,9 +553,12 @@ export async function runRedeemInvestment(
       // At-most-once: the server-owned execution identity, forwarded verbatim to `idempotencyKey`.
       idempotencyKey: opts?.idempotencyKey,
     });
+    // The redemption is committed: re-read the position (a replay reports TODAY's position) and
+    // project it as the post-write holdings card. An unavailable re-read leaves the receipt alone.
+    const holdings = await currentHoldings(userId);
     return {
       ok: true,
-      data: result,
+      data: withHoldings(result, holdings),
       summary: redemptionSummary(result),
     };
   } catch (e) {

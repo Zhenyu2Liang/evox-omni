@@ -49,7 +49,7 @@ SDK 类型通过类型导入使用。
 | 持仓市值 | `business.investments.marketValue` | 市值 | Market value | `DecimalMoney(marketValue)`；估值缺省不取整，展示 HALF_UP 到两位 |
 | 剩余持仓成本 | `business.investments.remainingCost` | 剩余持仓成本 | Remaining cost | `Money(holding.amount)`，已入账人民币分 |
 | 持仓收益 | `business.investments.holdingProfit` | 持仓收益 | Holding return | `DecimalMoney(profit) signed`，为未实现收益 |
-| 持仓收益率 | `business.investments.holdingProfitRate` | 持仓收益率 | Holding return rate | `rateRatioToPercent(profitRate)` 加 `%` |
+| 持仓收益率 | `business.investments.holdingProfitRate` | 持仓收益率 | Holding return rate | `signedRateToPercent(profitRate)` 加 `%`（收益率有符号，亏损持仓为负值） |
 | 累计收益 | `business.investments.cumulativeProfit` | 累计收益 | Cumulative return | `DecimalMoney(cumulativeProfit) signed` |
 | 已实现收益 | `business.investments.realizedProfit` | 已实现收益 | Realized return | `DecimalMoney(realizedProfit)`，不加正号 |
 
@@ -95,7 +95,7 @@ e2e 行读取器按标签 `span` 的文本精确定位，再取同一父元素�
 
 金额格式：`Money`→`formatCNY`（`lib/money.ts`，`¥#,##0.00` 精确到分）；
 `DecimalMoney`→`formatDecimalCNY`（`lib/decimal.ts`，HALF_UP 到两位）；二者输出形状一致（`[±]¥#,##0.00`）。
-`signed` 时正数前置 `+`。年化率经 `rateRatioToPercent`（比值×100）加 `%`，如 `3.2575%`。
+`signed` 时正数前置 `+`。产品预期年化经 `rateRatioToPercent`（比值×100，天然非负）加 `%`，如 `3.2575%`；持仓收益率有符号，经 `signedRateToPercent`（同样×100，但不过非负闸门）渲染，亏损显示为 `-1.23%`。
 份额与净值经 `formatDecimalFixed` 定长输出，6 位与 4 位小数，不经金额格式化。
 净值日期经 `formatBusinessDate` 按 UTC+08:00 输出 `YYYY-MM-DD`。
 

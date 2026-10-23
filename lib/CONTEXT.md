@@ -60,7 +60,7 @@ JSON 金额使用十进制字符串。
 `formatDecimalCNY` 在展示边界把金额按 HALF_UP 舍入到两位小数，并保留符号与千分位。
 展示字符串形状（两者一致）：`¥1,234.50`；负数为 `-¥1,234.50`（符号在货币符号之前）；千分位只用 ASCII 逗号，恰好两位小数，不出现空格或分隔符变体。
 `money.ts#formatCNY`（`:79-84`）接受十进制文本或 bigint 分，先用 `centsToMoney` 取绝对值文本、只对整数部分加千分位，再拼 `${sign}${CNY}${grouped}.${fraction}`，`CNY = '¥'`（`:7`）；非法输入抛 `VALIDATION`。
-`decimal.ts#formatDecimalCNY`（`:72-76`）先 `decimalText` 归一化再 `toFixed(2, ROUND_HALF_UP)`，形如 `-¥0.00` 的负零（输入为极小负数）也会带负号。
+`decimal.ts#formatDecimalCNY`（`:87-91`）先 `decimalText` 归一化再 `toFixed(2, ROUND_HALF_UP)`，形如 `-¥0.00` 的负零（输入为极小负数）也会带负号。
 `money.ts#centsToMoney` 只产出无符号、无千分位的规范十进制文本（如 `-1234.50`），用于 JSON 与存储边界，不是展示格式。
 本目录没有 `formatMoney`；`decimal.ts` 不经 `index.ts` 再导出，调用方需直接 `import from './decimal'`。
 命令金额字段（`contracts/command.ts` 的 `MONETARY_FIELDS`）在入参归一化时转为十进制字符串：`amount`、`creditLimit`、`monthlyLimit`、`expectedRedemptionAmount`、`redeemAmount`。
@@ -83,12 +83,13 @@ JSON 金额使用十进制字符串。
 `formatCNY` 的字符串入参会先剥除 `¥`/`￥`/`,`/空白（`money.ts:13`），所以 `'¥1,234.5'` 合法。
 `bigint` 入参绕过 `assertMinorUnits`，字符串入参经 `moneyToCents` 执行有符号 64 位范围校验。
 `MoneyInput = string`（`money.ts:6`），`MoneyAmount = string`（`money.ts:4`）——金融输入与 JSON 边界从不使用 JavaScript `number`。
-`formatDecimalCNY(input: string)`（`decimal.ts:72-76`）：先 `decimalText` 校验，再 `toFixed(2, ROUND_HALF_UP)` 一次性舍入，然后分组。
+`formatDecimalCNY(input: string)`（`decimal.ts:87-91`）：先 `decimalText` 校验，再 `toFixed(2, ROUND_HALF_UP)` 一次性舍入，然后分组。
 输出 = 负号（`value.isNegative()`，符号取自原值）+ `¥` + 三位分组整数 + `.` + 两位小数。
 关键差异：`formatDecimalCNY` 会舍入并保留「负零」符号，`'-0.000001'` → `-¥0.00`；`formatCNY` 永不产出 `-¥0.00`。
-`formatDecimalFixed(input, digits)`（`decimal.ts:83-85`）输出无货币符号、无分组，固定 `digits` 位（份额 6 位、净值 4 位）。
+`formatDecimalFixed(input, digits)`（`decimal.ts:98-100`）输出无货币符号、无分组，固定 `digits` 位（份额 6 位、净值 4 位）。
 显式 `+` 前缀由组件加，不是格式化器产出：`components/ui/Money.tsx:16` 与 `components/ui/DecimalMoney.tsx:16` 仅在 `signed` 且严格为正时前置 `'+'`。
-`compareDecimal(left, right)`（`decimal.ts:107-114`）返回 `-1 | 0 | 1`，按对齐后的整数系数比较，接受 `string | number | bigint`，`number` 会拒绝超出分精度的值（`decimal.ts:90`）。
+`compareDecimal(left, right)`（`decimal.ts:122-129`）返回 `-1 | 0 | 1`，按对齐后的整数系数比较，接受 `string | number | bigint`，`number` 会拒绝超出分精度的值（`decimal.ts:105`）。
+比例展示换算有两个出口（`decimal.ts`）：`rateRatioToPercent(ratio)`（`:76-78`）仅供天然非负的比例（产品预期年化），内部先过 `nonNegativeDecimal` 闸门；`signedRateToPercent(ratio)`（`:71-73`）是同一「比值×100」的**有符号**版本，供持仓收益率这类可负的展示值使用——它是展示换算，绝不允许用 `Math.abs`、截断为 0、吞异常或浮点运算替代。
 `DecimalAmount = string`（`decimal.ts:6`）；`FinancialDecimal` 精度 120 位、默认 `ROUND_HALF_UP`（`decimal.ts:9`）。
 断言锚点见 `tests/CONTEXT.md`。
 
