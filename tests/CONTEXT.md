@@ -215,6 +215,22 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 阶梯一律走 `securityGateway#authorizeAction`；**绝不**直接调 `security/mfa.ts#verify`——它只锁 challenge，不落 `PendingAction` 终态，正是这些规格要防的弹窗复活路径。
 逐文件的恢复/租约驱动方式见 [integration/CONTEXT.md](integration/CONTEXT.md)、[app/CONTEXT.md](app/CONTEXT.md)、[unit/CONTEXT.md](unit/CONTEXT.md)。
 
+## 时间预算与环境放大
+
+`tests/app/security-workflow-http.test.ts` 顶部 `CHAT_DRIVEN_TEST_TIMEOUT_MS = 60_000` 是 body 驱动真实 `POST /api/chat` 的用例（it 1–3、9–12）的显式预算；其余用例沿用根 `vitest.config.ts` 的 `testTimeout: 20000`。带预算的用例清单与实测见 [app/CONTEXT.md](app/CONTEXT.md)。
+新写驱动 chat 的用例必须同样套用该常量：成本由串行语句数决定，与断言条数无关。
+
+通用判据：经 HTTP 入口的用例墙钟 ≈ 串行语句条数 × 单语句延迟。
+一次 chat turn 实测约 1.4s、落库约 101 行 `agentRunEvent`；每个 Pi 事件各开一个交互式事务（`agent/durable/journal.ts:120-123` → `lib/db/repositories/agentRun.ts:118-122`），全部串行排在同一条 native SQLite 连接上（`lib/db/serialized-connection.ts`）。
+mock 路径没有内部 deadline：`agent/durable/journal.ts:223-228` 的 20 000ms 心跳已 `.unref()`，live 专属的 `AbortSignal.timeout` 不生效，因此 `testTimeout` 是这类用例的唯一边界。
+
+同一用例（`security-workflow-http.test.ts` it 2）实测：单独 1919ms、完整 `pnpm test` 1622ms、`tests/app`+`tests/integration` 111 文件批次 2639ms，都在 20 000ms 内。
+宿主争用下同一文件单跑可达 7081/6710/2397ms（约 3.7–4.4 倍），并出现过 `Test timed out in 20000ms`（实际 24316ms），而当时整套只慢 1.29×。
+因此这类超时首先是环境放大信号：不得据此断言业务缺陷，也不得为此放宽或删除断言。
+
+已排除的成因（不必重新调查）：无第二个进程写同一 `prisma/test.db`、无锁竞争与 >1s 的可复现停顿、DB 与 WAL 规模正常、`tests/setup.ts` 的 schema 哈希标记匹配因而跑批中途不重建库、子进程只有四处 spawn 点且都在各自用例内 `await` + `kill`（`deploy-db-push` 用自己的库）。
+事件持久化当前是每事件一事务，把 ~101 次串行事务压到个位数才能从根上消除 I/O 争用放大；这属于产品代码，测试侧只能抬高预算下限。
+
 ## 串行化与时间预算（stall 归因）
 
 全进程只有一条 native SQLite 连接（`lib/db/client.ts:25-27`），所有语句与交互事务经 `lib/db/serialized-connection.ts` 的 FIFO `ConnectionMutex`（`:9-21`）排队；`startTransaction`（`:35-56`）在 `commit`/`rollback`/抛错时才释放（`:49-50`、`:52-55`），因此**一个被 `await` 的 `$transaction` 会在其整个生命周期内独占该锁**。`acquire()` 的 `await previous` 没有超时也没有取消：若存在未 await 的事务（fire-and-forget），后续每条语句都会无声挂死。`lib/` 当前没有任何 fire-and-forget 事务；`tests/integration/database-adapter-isolation.test.ts:67-111` 固定了 `maxWait`/`timeout` 到期后锁确实被释放（`P2028` 在 `maxWait` 阶段就产生，`callbackEntered === false`）。
