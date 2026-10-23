@@ -64,6 +64,10 @@ JSON 金额使用十进制字符串。
 展示列 `Contact.phone` 与 `Card.numberMasked` 只存脱敏值，投影、日志、工具结果、接口响应与错误消息都只输出脱敏值。
 身份判定只用完整号码严格相等，脱敏值仅作候选筛选，规则见 [identity-resolution.md](../docs/cn/identity-resolution.md)。
 
+`lib/` 自身不做投影期脱敏：本目录只提供 `mask.ts` 与 `phone.ts`，脱敏发生在 `banking-sdk` 投影层（`contact.ts#toContactView`、`transfer.ts#toRecipient` 调 `maskPhone`；`account.ts#toAccountView` 内联 `****${row.number.slice(-4)}` 而非调用 `maskAccountNumber`；`card.ts#toCardView` 直接回显 `Card.numberMasked`，不二次脱敏）。
+完整号码在本目录只出现于 `db/repositories/contact.ts`：`createContact`（行 76）写入 `phoneFull`，`contactPhoneFacets`（行 15）把 `phoneFull`/`phone` 装成 `PhoneCandidate`；`db/repositories/card.ts#createCard` 没有 `numberFull` 入参，卡的完整号只由 `banking-sdk/card.ts#generateCardIdentity` 直接经 prisma 写入，仓库层不提供任何脱敏 helper。
+公开契约只声明脱敏字段：`contracts/tool-output.ts` 的 `card` 是 `numberMasked`（行 21）、`contact` 是 `phone`（行 24）；`contracts/agent.ts:15-20` 的 `ContactCardView.phone` 只是普通 `string`，其值由 `agent/business-card-payloads.ts#contactPayload` 原样搬运，脱敏责任在上游 SDK 投影。
+
 ## 投资输出契约与标签
 
 `contracts/tool-output.ts` 只声明可被数据引用寻址的字段路径，不强制字段存在，新增字段不破坏既有输出。
