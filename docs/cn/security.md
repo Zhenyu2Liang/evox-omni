@@ -170,6 +170,13 @@ Web 演示使用服务端配置的单一用户和共享会话。
 账户已熔断而本操作未用尽时，`reason` 为 `circuit_open`。
 该分支的 `failure.code` 同为 `CIRCUIT_OPEN`，并把本操作写成 `locked`。
 操作级上限与账户级熔断因此不会混淆。
+账户熔断还会在进入验证码步骤之前拦住新授权，并返回 `failure.code` 为 `CIRCUIT_OPEN`、`reason` 为 `circuit_open` 的拒绝，把本操作写成 `locked`。
+
+熔断器锁按所有者划分，不按操作或会话划分。
+[熔断器](../../security/circuit-breaker.ts) 的 `resolveBreakerOwner` 把会话解析为 `user:<userId>`。
+因此同一账户的另一个操作在 `mfa.verify` 里同样得到 `locked: true`。
+本操作耗尽尝试与账户熔断这两个分支都把 `PendingAction` 写成 `locked`。
+两个分支的 `attemptsUsed` 与 `maxAttempts` 都取自该操作自己的挑战行。
 
 ### 挑战不可用的三种形态
 
@@ -212,10 +219,11 @@ Web 演示使用服务端配置的单一用户和共享会话。
 
 ### 人工复核接管
 
-任务存在打开的复核项时，确认、验证和取消都返回领域拒绝，而不是 HTTP 错误响应。
+任务存在打开的复核项时，确认与验证返回领域拒绝，而不是 HTTP 错误响应。
 拒绝的 `code` 为 `MANUAL_REVIEW_HOLD`，`failure.reason` 为 `manual_review_hold`。
 `failure.actionId` 指向原操作，`status` 仍为 `pending`，金额不变。
 拦截条件只看原操作所属任务与是否仍有打开的复核项，接管不放宽任何写入条件。
+取消不经过该拦截，显式取消仍把原操作写成 `cancelled`。
 该错误码逃出确认路径时映射为 HTTP 409。
 
 接管期间的对外文案只有 `chat.error.manualReviewHold` 一条。
@@ -377,9 +385,10 @@ Web 演示使用服务端配置的单一用户和共享会话。
 
 ### 对外文案收口
 
-[公开文案](../../lib/public-text.ts)和[工具反馈](../../lib/tool-feedback.ts)是唯一出口。
-内部诊断转成用户可见文本时，只能经这 2 个模块。
-`isInternalDiagnostic` 识别 4 类内部诊断：
+[公开文案](../../lib/public-text.ts)是唯一出口。
+内部诊断转成用户可见文本时，只能经该模块。
+识别内部诊断的唯一谓词是 `isInternalDiagnostic`，见 [内部文本判定](../../lib/internal-text.ts)。
+该谓词识别 4 类内部诊断：
 
 - `__SECURITY_BLOCK__` 内部载荷。
 - 原始 JSON 片段。
@@ -387,8 +396,11 @@ Web 演示使用服务端配置的单一用户和共享会话。
 - `undefined`、`null`、`[object Object]` 等空值文本。
 
 `safePublicText` 把命中的文本换成词条兜底。
+`publicToolError` 由 [工具反馈](../../lib/tool-feedback.ts) 提供，是 `safePublicText` 调用的白名单。
 `publicToolError` 只放行词条、精确业务文案和 3 条闭合正则。
 `securityNotice` 只读 `code`、`reason` 和 `attemptsLeft` 3 个字段。
+剩余次数只在 `chat.error.verificationRemaining` 一条文案里插值。
+该插值唯一的默认值是 1 个 `?? 0`：缺少 `attemptsLeft` 时按 0 渲染，负值原样渲染。
 
 网页对话和微信通道都经该出口渲染拒绝文案。
 内部标记、原始 JSON 和异常堆栈不得出现在任何用户可见文本。
