@@ -42,6 +42,8 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 产品没有净值时抛 `VALIDATION`（`该产品未发布净值，暂不可赎回`）；持仓没有记录份额时抛 `CONFLICT`（`该持仓尚未记录份额，暂不可赎回`）。
 到账金额是 `HALF_UP(赎回份额 × 成交净值, 人民币分)`，只取整一次。
 赎回费恒为 `0.00`，`feeRule` 恒为 `REDEMPTION_FEE_RULE`（`SIMULATED_NONE`）。
+`feeAmount`/`feeRule` 是赎回结果的只读元数据（`SIMULATED_NONE`）：它们随 `redemptionHistory` 记录与 `redeemResult` 载荷持久化并被投影校验（`requireNonNegativeMoney`/`requireText`），但绝不参与任何算术——到账金额 `settledMinor`、已实现收益 `settledMinor − redeemedCost` 与账户入账都不扣费。
+SDK 中没有 `手续费`/`管理费` 概念，也没有任何费用账户、费率表或费用流水行。
 成本按份额比例扣减：`redeemedCostMinor` 用 `剩余成本 × 赎回份额 ÷ 总份额` 并 HALF_UP 到分，剩余成本等于原成本减去该值，两者相加恒等于原成本。
 已实现收益按 `到账金额 − 该次消耗成本` 累加到 `realizedProfitMinor`，可为负，此后不再重算。
 `ALL` 把 `HOLDING` 原子地转为 `REDEEMED`，把原始结果持久化到 `redeemExecutionKey` 与 `redeemResult`。
