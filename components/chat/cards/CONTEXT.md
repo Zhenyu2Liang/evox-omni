@@ -77,6 +77,8 @@
 字段行来自服务端快照 `PendingActionSummary.fields`。
 界面按快照原样显示，不重新报价、不重算金额。
 标签与已知策略值经 `lib/i18n/display.ts` 翻译，未知标签和自由文本原样保留。
+`fields.map()` 逐条渲染，没有标签白名单、数量上限或裁剪：任何 `{label, value}` 都会上屏。
+`费用口径` 已登记（`chat.field.feeRule`），其值不经重写，含 `SIMULATED_NONE` 时同样以原文可见。
 
 通用金额行 `cards.amount`（金额）仅在 `action.amount` 是字符串、且下面两条同时成立时渲染：
 `fields` 里没有映射到 `cards.amount` 的字段，也没有映射到 `chat.field.settlementAmount`（预计到账金额）的字段。
