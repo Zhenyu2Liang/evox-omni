@@ -13,6 +13,7 @@
 - 通道内不导入 `banking-sdk`，只经本机 HTTP API 读写；`weixin/config.ts` 强制只允许 localhost 银行地址。
 - 面向用户的文本只能经 `lib/public-text.ts`（`isInternalDiagnostic` / `safePublicText` / `securityNotice`）收口；原始工具参数、节点 output、`__SECURITY_BLOCK__` 载荷、堆栈和 `undefined` 不得上屏。
 - 安全拒绝只按 `ActionResult.status`、`code`、`failure` 的类型化字段渲染，禁止文案匹配。
+- 展示比例的两个出口不可互换：产品年化 `annualYieldRate` 走 `rateRatioToPercent`（内部非负门禁，负值抛 `VALIDATION`），持仓收益率 `profitRate` 是有符号事实、必须走无门禁的转换；细节见 `weixin/CONTEXT.md`「百分比与符号契约」。
 - 验证码只存在单次 HTTP 请求体内，不写本地 state、不进模型、不在日志回显。
 
 ## Routing Table

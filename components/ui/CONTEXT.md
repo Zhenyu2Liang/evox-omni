@@ -66,6 +66,32 @@ Playwright 选择器只能依赖可见文本、原生元素、`role` 与 class�
 ## 已知问题
 
 - `index.ts` 未导出 `DecimalMoney`（只导出 `./Money`），使用时须从 `./DecimalMoney` 直接导入。
+
+## 符号与非法输入（Money / DecimalMoney）
+
+`Money.tsx:14-21` 与 `DecimalMoney.tsx:14-21` 结构一致：单个 `span.tabular-nums [className]`，
+文本来自 `lib/money.ts#formatCNY` / `lib/decimal.ts#formatDecimalCNY`，仅当 `showPlus` 为真时前置 `+`（`` `+${text}` ``）。
+两组件都**没有**随符号变化的 class（无 `text-red-*`/`text-banking-danger` 条件分支），颜色只来自调用方 `className` 或外层元素。
+
+`+` 判定用**原值**而非四舍五入后的文本，故亚分值与文本符号可不一致：
+
+- `DecimalMoney amount='0.0000000001' signed` → `+¥0.00`（`compareDecimal` 严格 > 0，`DecimalMoney.tsx:16`）；
+  `amount='-0.0000000001' signed` → `-¥0.00`（`formatDecimalCNY` 取原值符号，`lib/decimal.ts:90`）。
+- `signed` 缺省/false 时负数仍带 `-`（符号由格式化函数给出，与 `signed` 无关）；零输出 `¥0.00`，无 `+`/`-`。
+- `Money amount='-0.00'` → `¥0.00`（`parseExactMinor` 得 `0n`，`lib/money.ts:22,83` 只在 `minor < 0n` 时加 `-`），
+  故 `-¥0.00` 只可能来自 `DecimalMoney`。
+- 上述两例有测试锁定：`tests/unit/planner/financial-display.test.ts:48-53`。
+
+非法输入一律**抛错**，不渲染空、不静默降级：
+
+- `DecimalMoney`：非字符串（含 `undefined`）→ `AppError('VALIDATION')`「Financial decimals must be decimal text.」；
+  空串/非数字/超 128 字符 →「Invalid financial decimal text.」（`lib/decimal.ts:17-20`）；
+  超 40 位整数 / 18 位小数 / 指数越界 → 另一条 `VALIDATION`（`lib/decimal.ts:25-31`）。
+- `Money`：非字符串 →「Money input must be decimal text.」；超过两位小数、空串、`abc` →「Money must have at most two decimal places.」
+  （`lib/money.ts:12,20`）。`formatCNY` 用 `parseExactMinor`，**不做** 64 位范围校验；
+  但 `signed` 为真的字符串入参经 `moneyToCents`→`assertMinorUnits`（`lib/money.ts:27,31-36`），
+  故同一超范围文本 `signed` 缺省能渲染、`signed` 为真却抛「Money exceeds the supported signed 64-bit range.」。
+- `bigint` 入参（`Money` 专有）按分解释，`signed` 判定直接比较 bigint，不经过 `moneyToCents`。
 - `rg` 工具在本仓库的默认内容输出常静默返回空结果（假阴性，已见于 `role=`、`aria-`、`tabular-nums`）；
   `-c` / `-l` 模式可信。核对属性存在性时用 `rg -c` 或直接读文件，不要据空结果下否定结论。
 
