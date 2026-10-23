@@ -61,7 +61,7 @@ settle 结果不含 `security_event`；聊天轮次中模型写调用被拒绝�
 判定与 i18n 映射全部复用 `lib/public-text.ts`（`isInternalDiagnostic` / `safePublicText` / `securityNotice`），通道内不另写字符串清洗。
 `securityNotice` 把 `MFA_LOCKED` / `mfa_attempts_exhausted` 映射为 `chat.error.actionLocked`，`MFA_FAILED` / `mfa_code_invalid` 映射为 `chat.error.verificationRemaining {count}`，`MANUAL_REVIEW_HOLD` / `manual_review_hold` 映射为 `chat.error.manualReviewHold`，`CIRCUIT_OPEN` / `circuit_open` / `mfa_session_locked` 映射为 `chat.error.securityLocked`，其余为 `chat.error.securityDenied`；判定按 `code` 优先（`code === 'MFA_LOCKED'` 时即使 reason 是 `mfa_session_locked` 也走 `actionLocked`）。
 `label(value)`（`presentation.ts:26-27`）不再原样透出未知值：仅当匹配 `^[A-Za-z][A-Za-z0-9_]{0,63}$` 且非内部诊断时输出原枚举，否则为 `未知状态`。
-`case 'error'`（`presentation.ts:120`）经 `channelText` 渲染为 `业务提示：…`，SDK 原文只在非内部诊断时透出。
+`case 'error'`（`presentation.ts:171`）经 `channelText` 渲染为 `业务提示：…`，SDK 原文只在非内部诊断时透出。
 因此 `__SECURITY_BLOCK__…`、`{"decisionKind":…}`、堆栈关键字都不可能经 `channelText` 进入微信回复。
 未收口路径：`message_end` 的 assistant 正文（`banking-client.ts:119`）与 `BankingApiError.message`（`bridge.ts:37`，仅按 `status<500` + `^[A-Z_]+$` 过滤，不做诊断判定）原样透出。
 
