@@ -13,6 +13,7 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 `settlementFromShares` 只做一次 HALF_UP 结算到人民币分。
 `redeemedCostMinor` 按份额比例扣减成本并 HALF_UP 到分，已赎回成本与剩余成本之和恒等于原成本。
 `remainingSharesOf` 返回剩余份额，`profitRateOf` 返回 18 位小数比例，成本为零时返回 `undefined`。
+`profitRateOf` 保留收益符号：亏损持仓的 `HoldingView.profitRate` 是负数，这是预期状态而不是故障；展示层必须走 `lib/decimal.ts#signedRateToPercent`（仅 `multiplyDecimal`），用 `rateRatioToPercent` 会在渲染期抛 `Financial value must be nonnegative.`。
 安全层铸造确认快照与执行结算都调用这些函数，确认金额与执行金额不会分叉。
 `holdingValuation` 是 `listHoldings`、仪表盘与赎回共用的唯一估值规则。
 `valueBasis` 有三个取值，各自由明确条件产出：
