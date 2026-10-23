@@ -99,6 +99,18 @@
 该续期不改 `PendingAction.status`、不重签 `code`、不校验 `commandDigest`；它要求显式传入 `client`（无默认单例），只在账号解锁事务内调用（调用点 `security/circuit-breaker.ts:298-300`，仅 `prior?.locked` 为真时）；其 where 要求父 action 仍为 `awaiting_mfa`，因此已被 CAS 成 `locked` 的 `PendingAction` 不会被它复活。
 本文件内没有任何 `prisma.mfaChallenge.*` 直接调用，全部走 `client.mfaChallenge.*`：`:319` create、`:334` findUnique、`:341`/`:352`/`:359` update、`:367` updateMany。
 
+## 重试、退避与租约常量（本目录内）
+
+本目录**没有任何进程内重试、`sleep`、`setTimeout`、`setInterval`、抖动、轮询或 `waitFor*`/`awaitUntil`/看门狗**：这些标识符在这些文件里一次都不出现。唯一的循环是 `agentRun.ts:246 for (const action of actions) await settleInvocationFromAction(action.id, client);`（串行结算，无上限常量、无延迟）与 `auditLog.ts:181`/`transaction.ts:80` 的纯内存 `for (const row of rows)`。
+重试是**持久化**的（外部 worker 读时间戳再次进入），不是本目录里循环：`agentRun.ts:329 if (previous.attempt >= previous.maxAttempts) throw new AppError('CONFLICT', 'Model request retry limit reached');`、`agentRun.ts:447` CAS `attempt: expectedAttempt` + `maxAttempts: { gt: expectedAttempt }` + `status: { in: ['interrupted', 'failed'] }`、`workflowInvocation.ts:96 where: { id, attempt: claim.invocation.attempt, status: claim.invocation.status }`。
+退避字面量：`agentRun.ts:200 nextRecoveryAt: new Date(Date.now() + 2000)`（`finishAgentRun` 把 `MODEL_TRANSIENT` 失败降级为 `interrupted` 的固定 2 s）；`agentRun.ts:397 nextRecoveryAt: retryable ? new Date(Date.now() + 1000 * 2 ** run.recoveryAttempts) : null`（`scheduleRunRecovery` 的指数退避：底数 1000 ms、倍数 2^`recoveryAttempts`，**无上限、无抖动**）；到期判定在 `agentRun.ts:304 { OR: [{ nextRecoveryAt: null }, { nextRecoveryAt: { lte: now } }] }`，`now` 默认 `new Date()`。
+租约/到期常量：`agentRun.ts:11 const DEFAULT_LEASE_MS = 120_000;`（`beginAgentRun` 可被 `input.leaseMs` 覆盖，`renewAgentRunLease` 默认用它）；`agentRun.ts:8` 导入的 `WORKFLOW_EXECUTION_LEASE_MS` 值为 `600_000`（`lib/contracts/runtime.ts:2`），用于 `agentRun.ts:299 executionClaimedAt: { lt: new Date(now.getTime() - WORKFLOW_EXECUTION_LEASE_MS) }`。
+租约到期的写入用 `agentRun.ts:61 new Date(now.getTime() + leaseMs)` 与 `:95 new Date(Date.now() + leaseMs)`（即 `Date.now()`/入参 `now`，不经过 `lib/clock.ts`）；到期读取是 `agentRun.ts:85-86 (!allowExpired && run.leaseExpiresAt <= now)` 与 `(!allowExpired && session.runLeaseExpiresAt <= now)`，`allowExpired = true` 只在 `finishAgentRun`（`:192`）出现；占用判定是 `agentRun.ts:52 session.runLeaseExpiresAt > now`。
+`pendingAction.ts:206 claimPendingActionLease` 自身不含 TTL：`expiresAt` 与 `now` 都由调用方传入，过期条件是 `executionLeaseExpiresAt: { lte: lease.now }`（注释指向 agent 层的 `EXECUTION_LEASE_TTL_MS`）；`clearPendingActionLease`（`:231`）无条件清空两列。`task.ts:179 claimTaskExecution` 与 `:353 claimNodeExecution` 的 `opts.staleBefore` 同样由调用方给定，本目录无默认陈旧窗口。
+`circuitBreaker.ts` 只持久化 `lockedAt`，不含冷却时长（`RESET_COOLDOWN_MS` 在 `lib/constants.ts`，由 `security/circuit-breaker.ts` 施加）。
+分页/扫描上限常量：`pendingAction.ts:85`、`auditLog.ts:53`、`securityEvent.ts:33` 的 `DEFAULT_LIMIT = 100`；`agentRun.ts:287 take: Math.min(Math.max(limit, 1), 501)`；`agentRun.ts:295 listRecoverableAgentRuns(now = new Date(), limit = 100)`。
+错误码嗅探只有一处：`task.ts:314 error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025'` → `NOT_FOUND`。本目录**没有**任何 `SQLITE_BUSY` / `database is locked` / `P2034` / `Transaction already closed` 的字符串匹配或 catch-重试；`executionReceipt.ts:38` 的注释说明 `P2002` 故意不在此处捕获（由调用方识别为「已commit 的同 key 胜者」并重放）。
+
 ## Agent 运行租约与恢复（`agentRun.ts`）
 
 - 默认租约时长 `DEFAULT_LEASE_MS = 120_000`（`agentRun.ts:11`）。
