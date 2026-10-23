@@ -185,7 +185,7 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 锁定文案 `chat.error.actionLocked` 由只读回执、system 气泡与工具行承载，停泊区在锁定时已不存在；
 `cards.mfa.failedAttemptsLimit` 要求同一停泊区活到 `attempts >= maxAttempts`，锁定路径上不可达，停泊区可见的尝试次数只有「验证失败，已尝试 N 次。」（`cards.mfa.failedAttempts`）；
 只读回执钩子 `data-approval-history="true"` + `data-action-id` + `data-status`（`components/chat/cards/ApprovalRecord.tsx:50-51`）与 `data-approval-locked="true"`（`:70`），`data-status="locked"` 时徽章是 `chat.approval.status.locked`「验证已锁定」（`:16`）；
-锁定后 `MfaCard.tsx:59`/`:71`/`:90-106` 同时撤掉 footer 与输入框，因此 `SELECTORS.mfaInput` 与「验证」按钮计数都归 0。
+停泊区在锁定时已整体卸载，因此 `SELECTORS.mfaInput` 与「验证」按钮计数都归 0。
 `submitMfa` 取 `SELECTORS.mfaInput` 的 `.last()` 填码再点「验证」（`helpers.ts:1168-1173`）；`waitForStatusText` 扫全页 `[role="status"]` 做去空白子串匹配（`helpers.ts:1194-1202`）。
 正确验证码是常量而非环境变量：`lib/constants.ts:7` `MFA_CODE = '123456'`、`:10` `MFA_MAX_ATTEMPTS = 3`；错误码惯例为 `'000000'`。
 本目录没有任何 `'locked'` 字符串字面量断言：`data-status` 只核对 `executed`（`approval-ux.e2e-helper.ts#assertApprovalExecuted`）与 `awaiting_mfa`（`card-freeze.e2e-helper.ts`），
