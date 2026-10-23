@@ -178,6 +178,16 @@ A `'running'` result after `runPlan` means the claim was taken over; the durable
 `submit_plan` is special in three places: dispatched through `runners.submit_plan` (`:312-317`, returns `{ ok:false, errorCode:'INTERNAL' }` without `opts.submitPlan`), `get('submit_plan')` without `opts.submitPlan` returns the throwing placeholder `createUnconfiguredSubmitPlanTool()` (`:208-218`), and the `:388-413` loop adds `prepareArguments` but does NOT replace its `execute` (`:397`) — its own `execute` calls `runSubmitPlan` directly.
 So a test that wants the real plan path must build the registry with `{ submitPlan: { sessionId, runTool } }` and then call `registry.executeDirect('submit_plan', args)`.
 
+## Pre-park latency contract
+
+No file in this directory schedules a wall-clock wait: zero `setTimeout`/`setInterval`/`new Promise`/sleep/delay/`AbortSignal.timeout`, zero timeout/TTL constants and zero retry/backoff or `while`/`for(;;)` loops.
+`planning.ts:96` declares `signal?: AbortSignal` only to forward `{ signal: deps.signal, now: deps.now }` into `executor.runPlan` (`:385`); it constructs no deadline.
+`createToolRegistry` (`index.ts:236-406`) awaits nothing at construction (two literal factory maps + one `for (const name of TOOL_NAMES)` rewrite). Its awaits (`:393` `automaticWriteFence`, `:395` `operationIdentity`) are per call.
+`validateBankingParameters`/`validateSchemaParameters` (`plan-parameters.ts:44-80`), `compileRequestedPlan` (`plan-compiler.ts:10-34`) and the `planner/dag.ts` checks are synchronous CPU only.
+`preflightRequestedPlan` (`planning.ts:215-238`) executes NO tool and opens no transaction: it compiles, validates parameters, then does at most one unbounded `listHoldings` read (only when a node uses `redeem_investment`) plus one `resolveBankingArgs` read per tool node INSIDE a `Promise.all`. N declared steps therefore cost O(1) sequential DB round trips (1 for a plain multi-write plan, 2 with a redemption, +1 `listContacts` for a transfer), never N.
+Every read on that path is unbounded (`lib/banking-selectors.ts:16,20,24,28,37`, `lib/db/repositories/investment.ts:41-47`, `lib/db/repositories/contact.ts:19-24` — no `take`); the bounded read is `get_transactions` (`transaction.ts:47` `limit: query.limit ?? 50`, schema max `MAX_TRANSACTION_READ_LIMIT = 200`).
+Unbounded GREEN reads are NOT on the pre-park path because they are model-driven tool executions: `analyze_spending` scans a 6-month window (`banking-sdk/transaction.ts:38` `TREND_MONTHS = 6`, `:72`) and `detect_anomaly` scans the whole history plus an unfiltered-by-take `auditLog.findMany` (`:102`, `:113`).
+
 ## Parameters and SDK errors
 
 Every family exports `<Name>Params`, `<Name>Args`, `create<Name>Tool`, and `run<Name>`.

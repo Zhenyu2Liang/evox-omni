@@ -237,6 +237,17 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 `attemptsUsed` 恒取 `mfa.attemptState`（`mfa.ts:113-121`）的行内 `attempts`（`security-gateway.ts:1225-1228`），因此账户级熔断（本操作 0 次尝试）报 `mfa_session_locked`/`circuit_open` 而不是 `mfa_attempts_exhausted`。
 未锁定态的 1/2 次错误仍发 `mfa_required`（继续提示输入验证码）；`locked` 终态不发 `mfa_required`、也不发 `security_event`，该流事件判定在 `agent/confirmation/outcomes.ts`（见 `app/api/CONTEXT.md`）。
 
+## 同步耗时与数据库往返（handleToolCall / park 路径）
+
+本层没有任何 `setTimeout`/`setInterval`/`new Promise` 等待、sleep、退避或轮询：`handleToolCall` 与 `gatewayCreatePendingAction` 只等数据库。
+唯二的毫秒常量都只做时间戳比较、从不被等待：`MFA_CHALLENGE_TTL_MS = 5 * 60_000`（300000 ms，`mfa.ts:34`；写入 `expiresAt` 于 `mfa.ts:189`/`:199`，比较于 `mfa.ts:184`/`:229` 与 `security-gateway.ts:1151`）和 `RESET_COOLDOWN_MS = 60_000`（`lib/constants.ts:17`，仅 `circuit-breaker.ts:237` 比较）。
+`step-up-authenticator.ts#issue` 返回固定演示码、`verify` 用 `timingSafeEqual`，无 I/O、无等待。
+一次 park（YELLOW/RED 写被挂起）的往返顺序：`gatewayEvaluate` 3 次读（`computeDailyTransferTotal` 1 次，`isLocked` 2 次 = `getSession` 1 + `getBreakerState` 1；会话行缺失时 `getUser` 再 1）→ `recordAuthorizationDecision` 1 次写 → 工具相关读（卡片工具：`resolveCardTarget` 的 `listCards` 1 + `resolveBankingArgs` 的 `card.findMany` 1 + 摘要 `card.findFirst` 1；转账：`listContacts` 1 + 可选 `getAccount` 1；计划节点：`listPendingActionsByTask` 1）→ 挂起事务（`BEGIN` + `runtimeFence` 2 次读 + 可选 `agentTask.findUnique` + 1 次插入 + `COMMIT`）→ RED 再 `issueChallenge` 4 次（`getPendingAction` 2 + `getMfaChallenge` 1 + `createMfaChallenge` 1）。
+合计约 11 次（YELLOW 卡片写）到 15 次（RED 卡片写）往返；`clarify` 分支约 6 次（含两次授权决定写入），GREEN 允许分支 4 次（含 1 次授权决定写入）。
+`computeDailyTransferTotal` 对每个工具都执行（不限转账）；`isLocked` 每次都重新解析 owner。
+所有语句共用 `lib/db/serialized-connection.ts` 的 FIFO 锁，交互事务从 `BEGIN` 到 `COMMIT` 全程持有该锁，因此 park 事务会阻塞同进程其它请求；等待上限由 Prisma `maxWait`/`timeout` 10 000 ms 与适配器 `timeout` 10 000 ms 界定（`lib/db/database.ts:23-25`）。
+三个 `$transaction` 调用点（`security-gateway.ts:969`/`:1278`/`:1348`）都不传 options，没有 CAS 失败重试循环，也没有 `$queryRaw`/PRAGMA。
+
 ## 已知边界
 
 `lib/db/repositories/pendingAction.ts#setPendingActionStatus` 仍是无条件状态写入原语，本层与 `agent/` 都不再调用它（别名 `updatePendingActionStatus` 同样无人使用），只剩测试引用；状态写入一律走 `claimPendingAction`。

@@ -14,6 +14,7 @@
 | `date.ts`、`clock.ts` | 业务日历与时钟 |
 | `config.ts`、`constants.ts` | 运行配置与演示常量 |
 | `ledger.ts` | 执行身份、流水身份与输入摘要 |
+| `banking-selectors.ts` | `resolveBankingArgs`：把模型给的资源 id 绑到当前用户拥有的行 |
 | `chat-history.ts`、`chat-plan-history.ts` | 历史分页与计划归属 |
 | `chat-cards.ts`、`action-summary.ts` | 业务卡片与授权摘要 |
 | `sensitive.ts`、`tool-diagnostics.ts` | 敏感字段过滤与诊断投影 |
@@ -205,6 +206,8 @@ JSON 金额使用十进制字符串。
 - 金融单位规则见 [financial-values.md](../docs/cn/financial-values.md)。
 - 数据访问规则见 [db/CONTEXT.md](db/CONTEXT.md)。
 - `index.ts` 不得导出数据库客户端。
+- `banking-selectors.ts#resolveBankingArgs(userId, toolName, args)` 每个工具名最多一次 owner 范围读：`transfer_money`（带 `sourceAccountId`）读账户、`freeze_card`/`unfreeze_card`/`report_lost_card`/`replace_card`/`set_card_limit` 读卡片、`cancel_subscription`/`set_subscription_reminder` 读订阅、`subscribe_investment`/`compare_investments` 读产品（全表无 owner 过滤）、`redeem_investment` 读持仓（`include: { product: true }`）；`apply_virtual_card`、`create_scheduled_task` 等未列入分支的工具 **0 次查询**，只返回入参浅拷贝。
+- `resolveBankingArgs` 的选择逻辑是同一次读结果上的内存 `filter`/`some`/`map` 精确 id 匹配（`select()` 命中恰好一行否则 `NOT_FOUND`），没有重读、重试、定时器或并发；它直接 import 模块级 `prisma` 单例而不是 `dbClient()`，因此**不会**加入调用方已开启的事务。
 - 新增展示脱敏一律使用 `lib/mask.ts`，不得在调用层重复实现。
 - 本目录不得依赖业务执行层或界面层。
 - 意图声明与计划校验入口见 [agent/CONTEXT.md](../agent/CONTEXT.md)。
