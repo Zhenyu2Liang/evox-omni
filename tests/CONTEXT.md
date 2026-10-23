@@ -194,6 +194,11 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 合并后回归集（不含 live e2e、不含全量）：
 `pnpm exec vitest run tests/unit/security tests/unit/agent tests/unit/planner tests/unit/lib tests/unit/weixin-lock-presentation.test.ts tests/integration tests/app/mfa-lock-http-contract.test.ts tests/app/mfa-lock-refresh-unlock-http.test.ts tests/app/mfa-terminal-lock-http.test.ts tests/app/security-workflow-http.test.ts tests/app/actions-http.test.ts`
 该集合耗时约 16 分钟，需单独占用测试库。
+合并后分两批串行的完整回归入口（覆盖 `tests/**` 全目录，且不碰 `tests/e2e`）：
+批 A `pnpm exec vitest run tests/app tests/unit`；批 B `pnpm exec vitest run tests/integration tests/scenarios`。
+两批各自独占测试库，批间不重叠；`vitest` 的 `fileParallelism:false` 不足以免除「不并行起两个 vitest 进程」。
+节点本地三文件：`pnpm exec vitest run security/mfa-lock-reason-authority.test.ts planner/plan-failure-contract.test.ts planner/plan-drive-guard.test.ts`（根 `vitest.config.ts` 已收集 `security/**`、`planner/**`）。
+当前预期失败只有上文「已知缺口」三条加 `integration/confirmation-policy.test.ts` 的两条 `a stale recovery uses the committed RED decision in the {CONFLICT,CIRCUIT_OPEN} receipt fallback`（后者是真实缺陷，见 [agent/CONTEXT.md](../agent/CONTEXT.md) 的 Known Issues），其余全绿。
 失败项归因分「死 spy 注入接缝」与「再驱动入口语义收窄」两类，见上文 wedge 小节与 [integration/CONTEXT.md](integration/CONTEXT.md)。
 `pnpm exec tsx tests/e2e/acceptance.e2e.ts` 运行浏览器验收。
 
