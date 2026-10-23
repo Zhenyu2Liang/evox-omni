@@ -18,6 +18,39 @@
 金融单位见
 [financial-values.md](../../docs/cn/financial-values.md)。
 
+## 渲染结构（供 DOM / Playwright 断言）
+
+`Card`、`Money`、`Badge` 都是无 Hook、无状态的展示组件，不声明 `'use client'`，
+在 DOM 中表现为普通 `<div>`/`<span>`。
+本目录没有任何 `data-*` 属性（包括 `data-testid`）；
+`aria-*`/`role` 只出现在 `Button`、`Dialog`、`EmptyState`、`Spinner`、`Tabs`。
+对本目录组件的 DOM 断言只能用元素类型、静态 className 与文本内容。
+
+`Card` 根节点是 `<div>`（`rounded-2xl bg-white shadow-xs ring-1 ring-black/5 overflow-hidden`，
+`layout='request'` 时追加 `flex min-h-0 flex-1 flex-col`，最后接调用方 `className`）。
+头部 `<div>` 仅在 `title !== undefined || description !== undefined` 时存在
+（`border-b border-banking-light` + 内边距）；
+标题渲染为内部 `<div class="text-banking-navy font-semibold">`，不是标题级元素，也没有 `title` 属性；
+描述为 `text-sm text-gray-500`（有标题时追加 `mt-1`）。
+`children` 包在带内边距的 `<div>` 中（`request` 布局追加 `min-h-0 overflow-y-auto overscroll-contain`）。
+页脚 `<div>` 仅在 `footer !== undefined` 时存在（`border-t border-banking-light bg-banking-light/40 text-sm text-gray-600`）；
+`footer={null}` 仍渲染一个空的页脚框，只有省略（`undefined`）才完全不存在。
+同理 `title=""` 会渲染空标题并保留头部边框与 `mt-1` 判定。
+`padding` 默认 `'md'`，映射 `none→p-0`、`sm→p-3`、`md→p-5`、`lg→p-7`，同时作用于头部、主体、页脚。
+
+`Money` 渲染单个 `<span class="tabular-nums …">`，`className` 追加在后，无 `data-*`、`title`、`aria-*`。
+文本来自 `lib/money.ts#formatCNY`：`¥` + 千分位整数 + 两位小数，
+负数前缀 `-`（如 `-¥1,234.56`），零为 `¥0.00`；
+`signed` 只在金额严格大于 0 时前置 `+`，与 `formatCNY` 组合成 `+¥1,234.56`，零与负数不加 `+`。
+`DecimalMoney` 的 `<span>` 结构与 `className` 规则和 `Money` 完全一致，只有格式化函数不同。
+
+`Badge` 渲染单个 `<span class="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium …">`，
+再接 tone 类与 `className`；`tone` 默认 `'neutral'`，映射
+`neutral→bg-gray-100 text-gray-700`、`info→bg-blue-50 text-banking-accent`、
+`success→bg-green-50 text-banking-success`、`warn→bg-amber-50 text-banking-warn`、
+`danger→bg-red-50 text-banking-danger`；无 `data-*`/`role`/`aria-*`。
+`StatusBadge` 只是把 tier 映射成 tone 后渲染 `Badge`，DOM 形态相同。
+
 ## 修改约束
 
 组件保留叶子模块的客户端边界。
