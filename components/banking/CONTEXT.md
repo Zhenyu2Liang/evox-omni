@@ -56,6 +56,13 @@ SDK 类型通过类型导入使用。
 收益口径见 [investments.md](../../docs/cn/investments.md)。
 
 缺失的事实渲染 `business.investments.insufficient`（历史数据不足），不渲染 0。
+该占位串与 `business.investments.valueBasis.insufficient` 同文（中文均「历史数据不足」，英文均 "Insufficient history"），
+所以 `valueBasis === 'HISTORICAL_DATA_INSUFFICIENT'` 时净值/份额/收益类行都显示这四个字，`realizedProfit` 有值时仍显示真实金额。
+符号只由格式化函数体现：持仓收益与累计收益走 `DecimalMoney signed`（正数加 `+`，负数由 `formatDecimalCNY` 加 `-`），
+已实现收益、市值不加 `+`；持仓收益率经 `signedRateToPercent` 只做 ×100，正数不加 `+`（`-3.5%` / `3.5%` / `0%`）。
+所有事实行共用静态 `font-medium text-banking-deep`，界面不按正负着色（无 `text-red-*`、无 `text-banking-success`）。
+`signedRateToPercent` 与 `formatDecimalCNY`/`formatDecimalFixed` 都不做取绝对值、`Math.max(0, …)` 或 0 截断，
+但也没有 try/catch：非法十进制文本会在渲染期抛错（`nonNegativeDecimal` 的负值闸门只属于 `rateRatioToPercent`，收益率不得走它）。
 `holding.amount` 始终存在，是唯一不缺省的金额事实。
 没有净值字段的旧持仓只渲染市值与收益两行，不显示份额、净值与成本行。
 `usesNetValueModel(holding)` 判定持仓是否按净值 + 份额计价：`valueBasis`、`shares`、`latestNetValue`、`cumulativeProfit` 有一个存在即为真。
