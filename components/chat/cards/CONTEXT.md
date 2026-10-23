@@ -111,6 +111,7 @@
 锁定态不渲染验证码输入、提交或重试入口：`MfaCard` 的 `readOnly` 由 `asTerminalStatus(status)` 或非 `pending`/`awaiting_mfa` 推导，`locked` 同时是只读且终态，输入框与 `footer` 均不渲染；`ApprovalRecord` 只渲染文本与安全中心链接。
 非 MFA 的 `confirmation` 卡被结算为 `locked` 时（`ConfirmationCard`）只渲染 `cards.terminal.locked` 角标、不解释原因——MFA 次数耗尽只产生 `mfa` 卡片。
 `terminalStatusView('locked')` 的 `label` 是未翻译的 `'Locked'`，而终态角标实际取 `cards.terminal.*` / `chat.approval.status.locked`，该 `label` 落在不可达分支。
+`MfaCard` 的 `cards.mfa.locked` 分支（`readOnly && !terminal` 三元里再判 `status === 'locked'`）同样不可达：`locked` 属终态，`!terminal` 已先排除它；非 `pending`/`awaiting_mfa` 的只读状态只会落到 `cards.mfa.processing`。
 卡片错误徽标（`MfaCard`、`ConfirmationCard`）使用 `localizeChatError`，未登记字符串原样显示，不回落错误文案登记表。
 `ErrorCard` 用 `publicToolError(message, t, 'chat.error.toolFailed', code)` 渲染文本，原始 `message`/`detail` 仅限开发者模式诊断。
 
