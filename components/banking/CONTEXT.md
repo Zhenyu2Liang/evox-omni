@@ -96,6 +96,8 @@ e2e 行读取器按标签 `span` 的文本精确定位，再取同一父元素�
 金额格式：`Money`→`formatCNY`（`lib/money.ts`，`¥#,##0.00` 精确到分）；
 `DecimalMoney`→`formatDecimalCNY`（`lib/decimal.ts`，HALF_UP 到两位）；二者输出形状一致（`[±]¥#,##0.00`）。
 `signed` 时正数前置 `+`。产品预期年化经 `rateRatioToPercent`（比值×100，天然非负）加 `%`，如 `3.2575%`；持仓收益率有符号，经 `signedRateToPercent`（同样×100，但不过非负闸门）渲染，亏损显示为 `-1.23%`。
+收益率有两个不可互换的换算：`rateRatioToPercent` 只用于产品预期年化（`InvestmentProductTile.tsx:48-50,79`、`chat/cards/InvestmentsCard.tsx:76`，其内部先过 `nonNegativeDecimal` 非负闸门，负输入抛 `AppError('VALIDATION')`）；持仓收益率 `HoldingView.profitRate` 有符号，只能走 `signedRateToPercent`（`HoldingFacts.tsx:14,89-91`，即 `×100`，不取绝对值、不过闸门），否则渲染期抛错、整页渲染失败。
+`profitRate` 由 `banking-sdk/net-value.ts#profitRateOf`（235-242 行）计算，成本为零时返回 `undefined`（渲染“历史数据不足”）。
 份额与净值经 `formatDecimalFixed` 定长输出，6 位与 4 位小数，不经金额格式化。
 净值日期经 `formatBusinessDate` 按 UTC+08:00 输出 `YYYY-MM-DD`。
 
