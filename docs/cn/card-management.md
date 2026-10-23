@@ -17,17 +17,19 @@
 | 信用卡 | `CREDIT` | `creditLimit` 授信额度 | `availableLimit` |
 
 借记卡和虚拟卡各绑定 1 个本人的活期账户，作为结算账户。
+这两类卡没有自己的余额：账户余额是结算活期账户的现金，永远不是信用额度。
+可用余额是本卡当前可消费的金额，即账户现金与剩余月限额的较小值。
+
 月限额（`monthlyLimit`）限制该类卡的当月累计消费。
 月限额为空时，消费上限只受账户余额限制。
 当月累计消费按补办前后各卡合并计算。
-消费在 1 个事务内扣减账户现金，并写入消费流水和消费记录。
-账户余额是本卡结算账户的现金，可用余额是本卡当前可消费的金额。
+具体扣款与记账规则见[消费结算](#消费结算)。
 
 ## 结算账户绑定
 
 卡片用 `Card.linkedAccountId` 记录结算账户。
 该字段映射到 `linked_account_id` 列，是指向 `Account.id` 的真实外键。
-该列有索引，删除账户时置为 `NULL`，卡片随之变为未关联账户。
+该列有索引；外键按 Prisma 默认的 `SetNull` 处理，账户被删除时该列被置为 `NULL`，卡片随之解析为 `MISSING`。
 
 服务端按以下规则解析结算账户：
 
@@ -74,6 +76,44 @@
 此时页面的消费入口禁用，并显示不可用提示。
 余额字段仍返回真实值，`LINKED` 的卡片照常显示账户余额与可用余额。
 提示文案按状态取 `business.cards.cardFrozenNotice`、`business.cards.cardLostNotice` 或 `business.cards.cardUnavailable`。
+
+## 消费结算
+
+`banking-sdk/card.ts#consumeCard` 在一个事务内完成资格复核、限额判定、扣款与记账。
+结算账户和卡片状态在事务内重新校验，不复用事务外的读结果。
+
+事务按以下顺序执行：
+
+1. 按 `executionKey` 读取已提交的消费记录；命中则原样重放保存的结果，不再次扣款。
+2. 读取卡片并确认属于本人且状态为 `ACTIVE`；卡片不存在返回 `NOT_FOUND`，状态不是 `ACTIVE` 返回 `CONFLICT`。
+3. 重新校验结算账户；`MISSING` 与 `UNTRUSTED` 都返回 `CONFLICT`，并在 `detail.linkedAccountStatus` 标明状态。
+4. 卡片带月限额时，在同一个服务端时刻读取补办前后各卡的当月累计消费；本次消费会超出限额时返回 `LIMIT_EXCEEDED`。
+5. 以带余额下限的原子扣减写账户余额；没有任何行被更新时返回 `INSUFFICIENT_FUNDS`。
+6. 写入 `channel='CARD'` 的交易流水和 1 条 `CardConsumption` 记录，再把本次结果快照写进该记录的 `resultJson`。
+
+消费时刻由服务端业务时钟决定，调用方不提供时间参数。
+当月窗口是 UTC+08:00 的业务月，限额判定与记账使用同一个时刻。
+同一 `executionKey` 的并发调用只产生 1 笔扣款，落败的事务回滚后重读已提交记录并重放。
+
+拒绝码与触发条件如下：
+
+| 错误码 | 触发条件 |
+| --- | --- |
+| `VALIDATION` | 提交了时间字段、金额不大于零、类别不受支持，或缺用户 id、卡片 id |
+| `NOT_FOUND` | 卡片不存在或不属于本人 |
+| `CONFLICT` | 卡片状态不是 `ACTIVE`、结算账户 `MISSING` 或 `UNTRUSTED`、重放身份不属于本次消费 |
+| `LIMIT_EXCEEDED` | 本次消费会使补办前后各卡的当月累计消费超过月限额 |
+| `INSUFFICIENT_FUNDS` | 结算账户现金不足 |
+
+SDK 对借记卡与虚拟卡使用同一套消费规则，Agent 只注册 `consume_virtual_card` 这 1 个消费工具。
+消费入口有 2 个：
+
+- 接口 `POST /api/cards/[id]/consume`：请求体为 `{ amount, category?, merchant?, executionKey? }`，成功返回 `200` 与 `ConsumeCardResult`。
+- Agent 工具 `consume_virtual_card`：RED 操作，参数表没有日期或时间字段。
+
+接口判断原始请求体是否出现 `occurredAt` 键，出现即返回 `VALIDATION`，与取值无关。
+工具在调用 SDK 前用 `rejectClientSuppliedTime` 拒绝 `occurredAt`、`bookedAt` 等时间字段。
+两种拒绝都发生在任何读写之前，因此不产生扣款、流水或消费记录。
 
 ## 资产汇总口径
 
@@ -231,6 +271,8 @@ Agent 注册虚拟卡申请与挂失卡补办，两者都是 RED 操作。
 - [页面交互](../../app/cards/CardManager.tsx)管理预览、验证和刷新。
 - [消费对话框](../../app/cards/CardConsumeDialog.tsx)提交本地模拟消费。
 - [卡片 SDK](../../banking-sdk/card.ts)解析结算账户、扣减现金并生成卡片视图。
+- [消费接口](../../app/api/cards/[id]/consume/route.ts)拒绝调用方时间并调用 `consumeCard`。
+- [卡片工具](../../agent/tools/card.ts)定义选择器与 `consume_virtual_card` 的时间守卫。
 - [卡片 DTO](../../banking-sdk/types.ts)定义 `CardView` 与 `linkedAccountStatus`。
 - [数据库 schema](../../prisma/schema.prisma)定义 `linked_account_id` 外键和索引。
 - [演示种子](../../prisma/seed.ts)把借记卡和虚拟卡绑定到 `acct_checking`。
