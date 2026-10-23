@@ -129,6 +129,16 @@ the archived copies are the files in each `live/<set>/` directory listed in the 
 - `/api/health` → `{"ok":true,"data":{"status":"ok","time":…,"llmMode":"live"}}` on the booted app, every run.
 - Resolved model id read from persisted `AgentRunEvent(eventType='provider_request_payload').payloadJson.payload.model`
   → `deepseek-flash`; `LIVE_FORCE_MODEL` unset, so `.env.local`'s id is used unchanged.
+- The provider call itself is recorded by the server, never by anything the model says: `startModelRequest`
+  (`lib/db/repositories/agentRun.ts:321`) commits one `ModelRequest` row — run id, ordinal, request digest, input JSON —
+  under `assertAgentRunLease` **before** the provider is called, `completeModelRequest` (`:340`) moves that same row from
+  `started` to `completed`/`failed` while re-asserting the lease, and `agent/providers/model-audit.ts#withModelAudit`
+  persists the wire evidence as `AgentRunEvent`s — `provider_request_payload` (`:21`), `provider_response_headers`
+  (`:27`) and `provider_response_event` (`:31`, through `agent/durable/journal.ts#recordModelProviderEvent`), each bound
+  to the prepared `ModelRequest` (`journal.ts:130-133` rejects provider evidence when no model request was prepared).
+  Model prose cannot produce any of these rows; what separates harness-only runs from a live round is that the mock mode
+  reaches the same code with an in-process `banking-demo-mock` faux provider (`agent/providers/provider-mock.ts:25`), so
+  these records certify a *remote* call only when read together with `llmMode: 'live'` and the `deepseek-flash` id above.
 - Every business write carries a gateway `PendingAction` (RED, `requiresMfa=true`) and an `MfaChallenge` row;
   the code `123456` was typed into the real MFA card in the real browser.
 - `prisma/live-acceptance.db` is reprovisioned per run (`db push` → probe → `tsx prisma/seed.ts`).
@@ -479,8 +489,11 @@ are not lost the way a plain file copy would lose them).
 The whole-suite, typecheck, lint and build results belong to the final-verification commit `88d38550`.
 The browser entries were run on the product trees named in their own rows, not on `88d38550`; the equivalence sections
 above are what connect them, and none of them is claimed beyond its own tree.
-Head when this was written: `cab32956` (merge of the report branch with the final-verification branch), branch
-`evogit-agent-T7-A1092`, whose only difference from `88d38550` is documentation.
+Report head: `cab32956` (merge of the report branch with the final-verification branch), which is the tip of this task's
+branch `evogit-agent-T7-A1`. `88d38550` is an ancestor of that merge and the merge's only difference from it is
+documentation, so the gate numbers above still describe the product tree these live rounds were measured against; the same
+`git --no-pager diff --stat cab32956 HEAD -- ':(exclude)*.md' banking-sdk agent security planner lib app components prisma scripts`
+command prints nothing between `cab32956` and current `HEAD` either: everything committed after that merge is documentation.
 Nothing was pushed to a remote: no branch of this task was published and no remote-tracking ref was updated.
 No API key is recorded here: `.env.local` is described by existence only and is never read, printed or committed, and no
 run log, evidence JSON or screenshot carries a credential value.
