@@ -67,6 +67,9 @@ SDK 类型通过类型导入使用。
 没有净值字段的旧持仓只渲染市值与收益两行，不显示份额、净值与成本行。
 `usesNetValueModel(holding)` 判定持仓是否按净值 + 份额计价：`valueBasis`、`shares`、`latestNetValue`、`cumulativeProfit` 有一个存在即为真。
 `valueBasisLabelKey(holding)` 返回徽标键，`NET_VALUE` 返回 `undefined`，即不显示徽标。
+字段读取位置（`HoldingFacts.tsx`）：`valueBasis` `:40`、`:48-49`；`shares`/`latestNetValue`/`latestNetValueDate` `:68-78`；`marketValue` `:79-81`（旧口径 `:58-61`）；`amount` `:82-83`（必填，无缺省）；`profit` `:84-86`（旧口径 `:62-65`）；`profitRate` `:89-91`；`cumulativeProfit` `:92-94`；`realizedProfit` `:95-97`。
+`purchases`/`lastPurchaseAt` 与 `redemptions` 不由 `HoldingFacts` 渲染：前两者在 `InvestmentProductTile.tsx:58-60`、`:115-125`。
+`rateRatioToPercent` 在本目录的唯一用途是 `InvestmentProductTile.tsx:48-50` 的 `product.annualYieldRate`（服务端保证非负）；持仓收益率绝不可改走它。
 
 ## valueBasis 徽标
 
