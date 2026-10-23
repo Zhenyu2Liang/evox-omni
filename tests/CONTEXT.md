@@ -178,6 +178,12 @@ MFA 次数耗尽与已开熔断都产出终止 `locked` 域结果，本目录按
 `security/security-gateway.ts:1268` 的 `recordActionResult` 在落定之后调用，只用于观察时序窗口，不能制造 wedge。
 逐文件注入点与 `fired()` 自检见 [integration/CONTEXT.md](integration/CONTEXT.md)。
 
+## 与当前生产契约不一致的既有断言（已知缺口）
+
+- `app/actions-recovery-http.test.ts:301-302` 断言 wedge 恢复后 `plan.status`/`node.status` 为 `success`。当前契约相反：`recoverAction`（`agent/index.ts:209-227`）先把计划关联行结清为 `executed`，再 `resumeTask`；`resumeTask`（`agent/workflows/controls.ts:82-90`）经 `sealedParkedNodes` + `sealSettledNodes` 把已结清动作的停靠节点直接封存为 `failed`（`agent/workflows/parked-actions.ts:80-94`、`planner/failure.ts:111-116` 的 `action_not_open`、`planner/executor.ts:481`/`:665`），计划随之为 `failed`；`agent/index.ts:234-235` 仍把「计划 failed + 动作 executed」判为成功，所以 `ok:true`。冻结不要按老断言改生产，也不要删断言。
+- `app/manual-review-http.test.ts:277` 断言确认被人工复核守卫拦下时 `message` 含 `manual review`。当前拒绝文案由目录收口：`security/security-gateway.ts:1263-1265` 抛 `AppError('CONFLICT', …)` → `agent/confirmation/outcomes.ts:119` `publicRefusalMessage(..., { code }, 'chat.error.stateChanged')` → `lib/tool-feedback.ts:12`/`:59-61` → `chat.error.stateChanged`（「业务状态已变化。请刷新并核对原操作卡片。」）。守卫句不再上屏，`PendingAction` 行保持 `pending`（未走 CAS）。
+- `integration/card-manual-only-management.test.ts:143` 用 `toEqual` 精确断言 `executeGatedTool` 的拒绝结果只有 `{ok,errorCode,error}`；`agent/confirmation/gated-execution.ts:154-157` 的 catch 分支现在恒附 `failure: toPlanFailure(...)`（`GatedToolOutcome.failure`），因此该处必然多出 `failure` 字段。拒绝语义与零副作用不变（`:159` 的 `sideEffects` 仍相等），`:183` 因用 `toMatchObject` 不受影响。
+
 ## 常用命令
 
 `pnpm test` 运行全部 Vitest 测试。
