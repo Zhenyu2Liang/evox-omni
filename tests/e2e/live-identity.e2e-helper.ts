@@ -349,6 +349,15 @@ export async function scenarioIdentityResolution(input: ScenarioIdentityInput): 
   await gotoAgent(page, baseUrl);
   await assertHealthLive(baseUrl);
 
+  // Clean slate: a scenario that ran earlier in the SAME harness round may have left a `pending` action
+  // whose confirmation card re-renders on load. Dismiss it so legs 1–3 can attribute every card to the
+  // turn that produced it (an isolated `LIVE_SCENARIOS=lI` round starts on a fresh DB with nothing to clear).
+  let clearGuard = 0;
+  while ((await confirmButtonCount(page)) > 0 && clearGuard < 5) {
+    await cancelApproval(page);
+    clearGuard += 1;
+  }
+
   // ================================================================================================
   // LEG 1 — EXACT full number resolves to the ONE owned contact; cancel → no money moves.
   // ================================================================================================
