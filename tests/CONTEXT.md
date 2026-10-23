@@ -247,7 +247,7 @@ i18n 不需要 Provider：`lib/i18n/LocaleProvider.tsx:15` 的默认上下文是
 | --- | --- |
 | `unit/planner/decimal-format.test.ts` | `components/ui/DecimalMoney` 与 `components/banking/HoldingFacts`（唯一一处，含 `card`/`tile` 两种 layout） |
 | `unit/planner/investment-purchase-display.test.ts` | `components/banking/InvestmentProductTile`、`components/chat/cards/InvestmentsCard` |
-| `unit/planner/business-result-cards.test.ts`、`chat-presentation.test.ts`、`locked-card-rendering.test.ts`、`tool-diagnostics.test.ts`、`tool-feedback.test.ts`、`approval-record.test.ts`、`transcript-activity.test.ts`、`chart-presentation.test.ts`、`financial-display.test.ts`、`composer-readiness.test.ts`、`chat-read-results.test.ts`、`chat-plan-controls.test.ts`、`chat-history-ui.test.ts`、`manual-review-presentation.test.ts`、`tool-event-lifecycle.test.ts`、`reply-format*` 之外的展示用例 | 聊天卡、审批/MFA 卡、工具时间线、图表 |
+| `unit/planner/business-result-cards.test.ts`、`chat-presentation.test.ts`、`locked-card-rendering.test.ts`、`tool-diagnostics.test.ts`、`tool-feedback.test.ts`、`approval-record.test.ts`、`transcript-activity.test.ts`、`chart-presentation.test.ts`、`financial-display.test.ts`、`composer-readiness.test.ts`、`chat-read-results.test.ts`、`chat-plan-controls.test.ts`、`chat-history-ui.test.ts`、`manual-review-presentation.test.ts`、`tool-event-lifecycle.test.ts` | 聊天卡、审批/MFA 卡、工具时间线、图表 |
 | `unit/security/unlock-panel-render.test.ts`、`unlock-panel-notice.test.ts` | `app/security/UnlockPanel` |
 | `unit/security/developer-reset-panel-hook.test.ts` | `app/security/ResetBreakerButton`（`DeveloperModeProvider` + `LocaleProvider`） |
 | `unit/lib/activity-presentation.test.ts` | 活动投影展示 |
