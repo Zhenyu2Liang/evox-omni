@@ -53,7 +53,7 @@
 本目录没有用例导入 `components/banking/CardTile`；`renderToStaticMarkup` 覆盖的是聊天卡、审批/MFA 卡、解锁面板与投资持仓。
 渲染环境（`environment: 'node'`、无 jsdom/`@testing-library`、`.tsx` 不被收集）与 i18n 约定见 [../CONTEXT.md](../CONTEXT.md) 的「组件渲染测试（React SSR，无 DOM 环境）」。
 `components/banking/*` 的导入只有三处：`planner/tool-diagnostics.test.ts` 的 `AgentTaskTimeline`、`planner/investment-purchase-display.test.ts` 的 `InvestmentProductTile`、`planner/decimal-format.test.ts` 的 `HoldingFacts`（同一用例还渲染 `components/ui/DecimalMoney`）。
-`components/banking/card-account-display.ts` 的四个纯函数与 `components/chat/cards/CardsCard.tsx` 都没有单元用例。
+`components/banking/card-account-display.ts` 的纯函数、`CardTile`、`AssetSummaryCard`、`RecentTransactions`、`SubscriptionTile` 与 `components/chat/cards/CardsCard.tsx` 都没有单元用例。
 `CardTile` 自身不输出任何 `data-*`：`data-card-id`/`data-card-list`/`data-card-consume`/`data-card-delete` 由 `app/cards/CardManager.tsx:191` 的包裹层发出。
 展示文案真值在 `lib/i18n/messages/business.zh-CN.json:47-69`（类型 `debit`/`credit`/`virtual`，状态 `active`/`frozen`/`lost`/`pending`，`limit`/`available`/`monthlyLimit`、`replaced`、`linkedAccount`、`accountBalance`、`usableBalance`、`linkedAccountMissing`、`linkedAccountUntrusted`、`cardUnavailable`、`cardFrozenNotice`、`cardLostNotice`）。
 单元层只断言 DTO 与脱敏：`banking-sdk/card-linked-account.test.ts`、`banking-sdk/card-consumption.test.ts`、`lib/mask.test.ts`（`****8821`/`************8821`）。
