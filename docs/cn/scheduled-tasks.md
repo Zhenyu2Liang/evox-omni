@@ -5,6 +5,20 @@
 `/schedules` 显示当前会话的任务和提醒通知。
 “检查到期任务”执行 1 轮服务器检查。命令行使用相同分发服务。
 
+## 工具入口
+
+模型用 `create_scheduled_task` 创建任务，用 `list_scheduled_tasks` 读取任务。
+`create_scheduled_task` 是 YELLOW 能力，用户确认后才落库。
+`list_scheduled_tasks` 是 GREEN 读取，直接返回结果。
+取消没有对应的模型工具：`banking-sdk/task.ts` 的 `cancelScheduledTask` 只供服务端调用。
+能力与风险等级见 [tool-catalog.ts](../../lib/contracts/tool-catalog.ts)。
+
+时间只由两个参数声明：整数 `runAt`（毫秒时间戳）或 `runAtLocal`。
+`runAtLocal` 的格式为 `YYYY-MM-DDTHH:mm[:ss]`，时区固定为 Asia/Shanghai。
+缺参数、格式错误、日期不存在、时间已过或两者冲突时，校验以 `VALIDATION` 拒绝。
+模型散文里的时间不改变已声明的时间。
+规则见 [scheduled-time.ts](../../lib/scheduled-time.ts) 与 [plan-parameters.ts](../../agent/tools/plan-parameters.ts)。
+
 ## 到期行为
 
 | 类型 | 到期处理 | 完成依据 |
@@ -19,10 +33,20 @@
 用户在 AI 助手中处理原待授权操作。
 
 保存的 `requiresConfirmation` 不能免除到期权限检查。
+该字段由服务端按类型派生：提醒为 `false`，付款与转账为 `true`。
 重复分发复用原工作流和原授权，不重复创建付款入口。
 后台不会自动推进待确认、待认证或人工暂停的工作流。
+到期检查只继续 `pending` 与 `running` 状态的原工作流。
+人工复核进行中时，`/确认`、`/验证`、`/取消` 返回领域拒绝。
+该拒绝的 `code` 是 `MANUAL_REVIEW_HOLD`，`failure.reason` 是 `manual_review_hold`。
+文案只渲染 `chat.error.manualReviewHold`：操作未执行，需从复核收件箱恢复或等待复核结束。
+通用“业务状态已变化”文案在这里不成立，因为刷新不解除复核。
+已锁定的操作是终态：不再被分发、不再被重试、不会复活。
+停等节点一旦结清即被封存，后续检查不再驱动它。
+重试封存节点会被结构化拒绝：`locked` 返回 `MFA_LOCKED`，其余终态返回 `CONFLICT`。
 
 待人工决定的任务不占新分发容量。后续到期任务仍能分发。
+可分发状态只有 `SCHEDULED` 与 `DISPATCHING`，已完成的决策不再占用容量。
 默认每个用户与会话范围每轮检查 25 个任务，上限为 100 个任务。
 
 ## 任务状态
@@ -53,6 +77,7 @@
 已分发付款必须通过所属计划取消。
 取消计划会撤销未执行授权，并保留已提交交易。
 存在活动工作流时，银行 SDK 拒绝直接取消定时意图。
+取消的判定条件是 `dispatchTaskId` 为空且状态仍为 `SCHEDULED`。
 
 付款参数只接受明确收款人和合法金额。
 任意工具名、执行代码和验证码在创建工作流前拒绝。
@@ -76,6 +101,10 @@ pnpm scheduler:tick --now '2099-11-20T09:00:00+08:00'
 
 调度快进可以触发未来意图。授权与认证仍按真实时间过期。
 演示时钟不能延长认证有效期。
+创建时的时间校验比较演示时钟：`runAt` 必须晚于 `demoNow()`。
+到期分发使用真实时间 `Date.now()`，命令行的 `--now` 只改变分发时钟。
+业务日与业务月边界固定为 UTC+08:00（`Asia/Shanghai`）。
+安全过期、租约与运维调度使用真实时间。
 
 ## 部署入口
 
@@ -104,6 +133,7 @@ pnpm scheduler:tick
 | [命令行入口](../../scripts/scheduler.ts) | 遍历已绑定会话并执行有界检查 |
 | `ScheduledTask.dispatchTaskId` | 关联唯一的原付款工作流 |
 | `ScheduledNotification.scheduledTaskId` | 通过唯一约束阻止重复通知 |
+| [定时任务工具](../../agent/tools/task.ts) | `create_scheduled_task` 与 `list_scheduled_tasks` 的参数与结果 |
 
 生日采购使用预算额度、未来意图和提醒。系统不会实际购买鲜花或蛋糕。
 预算额度不冻结可提现资金，定时付款也不提前扣款。

@@ -34,12 +34,23 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 ```
 
 `pnpm test` 使用 [Vitest 配置](../../vitest.config.ts)。
-配置收集 `tests/` 和 `agent/` 下的测试。
-浏览器验收有独立入口，Vitest 不收集浏览器验收。
+配置只收集 `tests/`、`agent/`、`security/`、`planner/` 下的 `*.test.ts` 和 `*.spec.ts`。
+`*.e2e.ts` 与 `*.e2e-helper.ts` 不匹配该模式，因此浏览器与边界入口一律单独运行。
+配置把 `testTimeout` 固定为 20 秒，并设置 `fileParallelism: false`。
+对话驱动的用例从 [测试预算](../../tests/helpers/timeouts.ts) 取显式每测试预算。
+驱动真实 `POST /api/chat` 轮次的用例传入 `CHAT_DRIVEN_TEST_TIMEOUT_MS`。
+冷库自建的用例传入 `COLD_DB_PROVISION_TEST_TIMEOUT_MS`。
+两者都作为 `it(...)` 的第三个参数传入。
+不得改写成裸数字，也不得在用例文件内复制这两个常量。
 
 生产构建单独执行 `pnpm build`。
 构建前先生成符合当前 schema 的 Prisma Client。
 页面按请求读取语言和业务数据，构建时不查询数据库。
+Prisma 命令在离线环境运行，并设置三个变量。
+三个变量是 `CHECKPOINT_DISABLE=1`、`PRISMA_HIDE_UPDATE_MESSAGE=1` 和 `CI=1`。
+缺少时 `pnpm db:generate` 可能停在更新检查上。
+需要留存的命令输出和文件日志写入 `logs/`。
+仓库根目录不放 `.log` 文件。
 准备步骤见[开发指南](development.md)。
 
 ## 语言切换验收
@@ -152,6 +163,8 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 | Vitest | `prisma/test.db` | 离线模拟或受控响应 |
 | 离线浏览器验收 | `prisma/e2e.db` | 离线模拟 |
 | 真实模型浏览器验收 | `prisma/live-acceptance.db` | DeepSeek |
+| HTTP 边界验收 | `prisma/live-acceptance-date-tamper.db` | 离线模拟 |
+| 微信通道验收 | `prisma/weixin-live-<runId>.db` | DeepSeek |
 
 测试入口在导入应用代码前设置 `DATABASE_URL`。
 测试入口生成 Prisma Client，并创建当前 schema。
@@ -162,11 +175,12 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 需要保留验收数据时，先保存数据库副本。
 不得通过重置 `prisma/dev.db` 处理测试失败。
 
-注意：Vitest 文件共享可重置的 `prisma/test.db`。
-同一工作区内的 Vitest 命令必须串行执行。
-浏览器验收也必须单独执行。
-浏览器验收与开发服务、构建共享 Next.js 生成文件。
-并行执行可能干扰生成文件和服务状态。
+注意：全部 Vitest 文件共享同一个可重置的 `prisma/test.db`。
+配置以 `fileParallelism: false` 让文件顺序执行。
+不得同时运行两个会重置同一测试库的进程。
+两个 `pnpm test`、Vitest 与浏览器验收、浏览器验收与 `pnpm build` 都算重叠。
+重叠执行会让一方读到另一方重置中的库，产生假失败。
+浏览器验收与开发服务、构建共享 Next.js 生成文件，因此也须单独运行。
 
 数据库初始化失败时，查看初始化诊断。
 先检查 Prisma Client、schema 和隔离库路径。
@@ -180,11 +194,18 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 | --- | --- |
 | `tests/unit/` | 金融值、银行事务、权限、计划和界面契约 |
 | `agent/**/*.test.ts` | 持久化运行、模型传输和可信金融回复 |
+| `security/**/*.test.ts` | MFA 拒绝原因与已消费挑战的判定 |
+| `planner/**/*.test.ts` | 计划驱动守卫与计划失败契约 |
 | `tests/scenarios/` | 受控模型驱动的银行智能体场景 |
 | `tests/app/` | 实际路由处理器、固定演示身份和操作控制 |
 | `tests/integration/` | 跨模块执行、持久化、恢复和并发约束 |
 | `tests/deploy-db-push.test.ts` | 当前 schema 建库、显式重置和目录边界 |
-| `tests/e2e/` | 运行中应用的浏览器操作 |
+| `tests/helpers/` | 隔离库、夹具、脚本模型与进程恢复探针 |
+| `tests/fixtures/` | 共享的 `*.zh-CN.json` 对话与策略剧本 |
+| `tests/e2e/` | 运行中应用的浏览器操作与 HTTP 边界用例 |
+
+`tests/e2e/` 有四个可执行入口：`acceptance.e2e.ts`、`live-acceptance.e2e.ts`、`date-tamper-boundary.e2e.ts` 和 `weixin-live.e2e.ts`。
+`*.e2e-helper.ts` 与 `helpers.ts` 是入口共用的驱动与断言模块，自身不运行。
 
 路由测试直接调用实际处理器。
 路由测试不检查浏览器渲染和网络传输。
@@ -209,6 +230,14 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 | 熔断锁定 | `test-10-circuit-breaker.test.ts` | 连续错码锁定执行，并保存审计 |
 | 条件计划 | `test-11-conditional-dag.test.ts` | 依赖和条件控制后续节点 |
 | 生日计划 | `test-12-birthday-plan.test.ts` | 预算和计划记录不代表实际资金冻结 |
+| 补办挂失卡 | `test-13-card-replace.test.ts` | 红色权限确认后生成新卡，原卡保持 `LOST` |
+| 申请虚拟卡 | `test-14-virtual-card.test.ts` | 通过 MFA 后发行绑定活期账户的虚拟卡 |
+| 授信额度守卫 | `test-15-card-limit-guard.test.ts` | 智能体只能改月限额，不能改授信额度 |
+| 虚拟卡生命周期 | `test-16-virtual-card-lifecycle.test.ts` | 申请、消费、挂失、补办共用同一月度额度；重放只扣一次 |
+| 入账时间守卫 | `test-17-consumption-time-guard.test.ts` | 客户端时间参数在任何写入前被拒，扣款为零 |
+| 卡片能力咨询 | `test-18-card-capability-consultation.test.ts` | 咨询与歧义只产生文字或澄清，不改动卡片 |
+| 信用卡补办 | `test-19-card-replace-credit-runtime.test.ts` | 生产运行时 MFA 后只生成 1 张 `CREDIT` 卡，原卡保持 `LOST` |
+| 卡片选择器消费 | `card-selector-consumption.test.ts` | 类型和尾号解析为 `cardId`；完整卡号在 park 前被拒 |
 
 `mock-integration.test.ts` 检查完整离线处理流程。
 离线测试不需要 API Key。
@@ -244,6 +273,30 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 `annualYieldRate` 是无量纲比例。
 仅展示时转换为百分数。
 入账金额还受有符号 64 位整数范围限制。
+
+## 核心契约回归
+
+净值、赎回口径、锁定、解析和消费各有专门用例。
+
+| 契约 | 必须保持的结果 | 测试入口 |
+| --- | --- | --- |
+| 净值与份额 | 净值 4 位、份额 6 位，市值不取整，结算按 `HALF_UP` 舍入 1 次 | [净值模型](../../tests/unit/banking-sdk/net-value.test.ts)、[赎回模型](../../tests/unit/banking-sdk/net-value-redemption.test.ts) |
+| 赎回口径 | `SHARES`、`AMOUNT`、`ALL` 各自结算；缺失、混用或 `redeemAmount` 在写入前澄清 | [口径拒绝](../../tests/unit/security/redemption-stale-authorization.test.ts)、[工具参数](../../agent/tools/redeem-investment.test.ts) |
+| 确认快照 | 净值、份额或净值日期变动时返回 `CONFLICT`，资金、份额与流水都不动 | [陈旧授权](../../tests/unit/security/redemption-stale-authorization.test.ts) |
+| 写入后投影 | 申购和赎回卡片显示提交后重读的持仓，不是写入前快照 | [持仓投影](../../agent/tools/redeem-investment.test.ts) |
+| MFA 终态 | 用尽次数后动作置为 `locked`，正确验证码也不重开 | [终态锁定](../../tests/app/mfa-terminal-lock-http.test.ts)、[接口契约](../../tests/app/mfa-lock-http-contract.test.ts) |
+| 锁定恢复 | 终态锁定不被恢复、重试或取消复活 | [锁定恢复](../../tests/integration/locked-action-recovery.test.ts) |
+| 所有者熔断 | 熔断按 `user:<userId>` 生效，原因取自本操作的尝试记录 | [原因判定](../../security/mfa-lock-reason-authority.test.ts)、[持久化](../../tests/unit/security/circuit-breaker-persistence.test.ts) |
+| 对外文案 | 结构化 `SecurityFailure` 决定文本，内部标记不进入公开文本 | [锁定文案](../../tests/unit/lib/public-text.locked.test.ts)、[内部诊断](../../tests/unit/lib/public-text.test.ts) |
+| 号码身份 | 只有完整号码相等才确定对象，掩码只收窄候选 | [号码身份](../../tests/unit/lib/phone-identity.test.ts)、[收款人解析](../../tests/unit/security/recipient-resolution.test.ts) |
+| 卡片身份 | 完整卡号精确命中，中间四位不同即未找到，共享尾号按歧义澄清 | [卡片解析](../../tests/unit/security/card-resolution.test.ts)、[选择器网关](../../tests/unit/security/card-selector-gateway.test.ts) |
+| 虚拟卡消费 | 扣款、流水与 `CardConsumption` 同一事务；月限额按补办家族合并 | [消费事务](../../tests/integration/card-consume-transaction.test.ts)、[消费接口](../../tests/app/card-consume-http.test.ts) |
+| 消费时刻 | 入账时刻由服务端 `demoNow()` 决定，客户端时间参数被拒 | [时刻权威](../../tests/unit/banking-sdk/card-consumption-time-authority.test.ts)、[时间守卫](../../tests/scenarios/test-17-consumption-time-guard.test.ts) |
+| 消费重放 | 同一执行键只扣 1 次并返回原结果 | [生命周期](../../tests/scenarios/test-16-virtual-card-lifecycle.test.ts)、[消费接口](../../tests/app/card-consume-http.test.ts) |
+
+净值与份额口径见[理财净值](investments.md)。
+锁定与熔断的判定顺序见[安全](security.md)。
+消费时刻和限额口径见[卡片管理](card-management.md)。
 
 ## 持久化与进程恢复回归
 
@@ -304,7 +357,10 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 入口选择空闲端口，并启动实际 Next.js 开发服务。
 验收结束时关闭浏览器和服务进程树。
 
-当前离线入口注册以下 11 条流程。
+当前离线入口在 `JOURNEYS` 中注册 23 条流程。
+`E2E_JOURNEYS` 按名称选择子集，未设置时执行全部流程。
+下表列出其中 11 条资金与权限主流程。
+其余流程见上文各小节。
 
 | 流程标识 | 主要证据 |
 | --- | --- |
@@ -324,6 +380,11 @@ pnpm exec tsx tests/e2e/acceptance.e2e.ts
 任何 `FAIL` 使入口返回非零退出码。
 `SKIP` 不使入口失败，也不算验收通过。
 入口见[离线浏览器验收](../../tests/e2e/acceptance.e2e.ts)。
+`pnpm exec tsx tests/e2e/date-tamper-boundary.e2e.ts` 运行 HTTP 边界用例。
+该入口不发模型请求，也不启动浏览器。
+边界入口按 `PASS|FAIL|SKIP <case-id>` 逐条输出，并用 `SUMMARY` 汇总。
+`pnpm exec tsx tests/e2e/weixin-live.e2e.ts` 运行微信通道验收。
+该入口使用本地协议服务器，不冒充真实手机。
 
 界面流程检查 390px 和 320px 手机宽度。
 流程模拟普通 HTTP 缺少 `randomUUID` 的环境。
@@ -349,7 +410,9 @@ LIVE_SCENARIOS=1,3 pnpm exec tsx tests/e2e/live-acceptance.e2e.ts
 ```
 
 `LIVE_SCENARIOS` 选择场景编号。
-未设置时执行入口注册的全部场景。
+未设置时执行入口登记的全部场景编号。
+编号 `1`…`6` 是转账与多轮用例，`0` 和 `8`…`15` 是对话与上下文用例。
+`2p` 跟随 `2` 一起选中；`lA`…`lJ` 是卡片、理财、锁定与身份解析用例。
 默认保留配置中的模型标识。
 `LIVE_FORCE_MODEL` 可显式覆盖模型标识。
 覆盖后必须在验收记录中写明模型标识。
@@ -373,11 +436,11 @@ HTTP 503 注入用于检查故障处理。
 7. 记录模型请求数，区分重新规划和原操作继续。
 8. 记录隔离库路径、配置覆盖和故障注入方式。
 
-历史报告记载过真实 DeepSeek 的专项浏览器验收。
-场景包括转账、赎回、开卡、解锁和多步计划。
-历史验收属于当时提交和指定输入的证据。
-历史金额存储、测试总数和构建结果不能代表当前版本。
-当前版本是否通过，以重新执行的结果为准。
+真实模型验收的结论范围见 [LIVE-ACCEPTANCE-REPORT.md](../../tests/e2e/LIVE-ACCEPTANCE-REPORT.md)。
+该文件只列出当前证据集覆盖的场景、认证提交和判定。
+逐轮记录留在 Git 历史。
+账本口径、测试总数和构建结果以重新执行为准。
+被认证的提交与当前 HEAD 的产品树不一致时，该结论不延伸到当前版本。
 
 离线回归检查应用对指定响应的行为。
 真实模型验收也不能穷举自然语言表达。
