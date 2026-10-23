@@ -378,7 +378,7 @@ export function rejectClientSuppliedTime(
   const forged = CLIENT_TIME_FIELDS.filter(field => Object.hasOwn(args, field));
   if (forged.length === 0) return;
   throw new AppError('VALIDATION',
-    `消费入账时间由服务端决定，consume_virtual_card 不接受时间参数（${forged.join(', ')}）。请只提交 cardId、amount、category、merchant。`,
+    `消费入账时间由服务端决定，consume_virtual_card 不接受时间参数（${forged.join(', ')}）。请只提交 cardId（或 cardType/cardTail/cardNumber 卡片选择器）、amount、category、merchant。`,
     { ...detail, fields: forged });
 }
 

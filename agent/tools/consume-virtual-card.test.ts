@@ -61,10 +61,16 @@ describe('consume_virtual_card', () => {
 
   it('declares the spend inputs and NEVER a server-owned identity, execution key, fence or booking time', () => {
     // The booking time is server-owned, so the schema publishes no date/time field at all.
+    // The card is named by `cardId` OR by one of the shared SELECTOR slots (`cardType`/`cardTail`/
+    // `cardNumber`), which `security/card-resolution.ts` turns into ONE owned card id at park time —
+    // so `cardId` itself is optional and the amount is the only required input.
+    for (const serverOwned of ['userId', 'ownerId', 'executionKey', 'sessionId', 'fence', 'occurredAt', 'bookedAt']) {
+      expect(Object.keys(ConsumeVirtualCardParams.properties)).not.toContain(serverOwned);
+    }
     expect(Object.keys(ConsumeVirtualCardParams.properties).sort())
-      .toEqual(['amount', 'cardId', 'category', 'merchant']);
+      .toEqual(['amount', 'cardId', 'cardNumber', 'cardTail', 'cardType', 'category', 'merchant']);
     const required = (ConsumeVirtualCardParams as { required?: string[] }).required ?? [];
-    expect([...required].sort()).toEqual(['amount', 'cardId']);
+    expect([...required].sort()).toEqual(['amount']);
   });
 
   it('accepts an exact decimal spend and rejects unusable amounts without coercion', () => {
@@ -83,10 +89,22 @@ describe('consume_virtual_card', () => {
       { cardId: 'card_1', amount: '10.00', executionKey: 'forged' },
       { cardId: 'card_1', amount: '10.00', sessionId: 'session_1' },
       { cardId: 'card_1', amount: '10.00', fence: {} },
-      { amount: '10.00' },
+      { amount: '10.00', cardTail: '6688', executionKey: 'forged' },
     ]) {
       expect(() => validateBankingParameters('consume_virtual_card', forged, 'call')).toThrow(AppError);
     }
+  });
+
+  it('accepts a card SELECTOR instead of cardId, to be resolved server-side before parking', () => {
+    // The model names the card the way the USER spoke ("我的虚拟卡", "尾号7788") and the gateway turns
+    // one selector into ONE owned card id before parking; the schema therefore accepts each slot.
+    for (const selector of [{ cardType: 'VIRTUAL' }, { cardTail: '尾号7788' }, { cardNumber: '6222021234567890123' }]) {
+      expect(() => validateBankingParameters('consume_virtual_card', { ...selector, amount: '10.00' }, 'call'))
+        .not.toThrow();
+    }
+    // Missing card identity is NOT a schema violation: `cardTargetId` → `resolveCardTarget` refuses it
+    // with the masked clarification instead of guessing a card, so no guessed tail can hit a card here.
+    expect(() => validateBankingParameters('consume_virtual_card', { amount: '10.00' }, 'call')).not.toThrow();
   });
 
   it('refuses a model-supplied booking time with the deliberate server-owned-time reason', () => {

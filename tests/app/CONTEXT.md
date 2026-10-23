@@ -125,12 +125,6 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 `GET /api/cards` 固定读演示用户，因此「他人视角」方向经路由调用的同一投影
 （`banking.card.getCards`）断言。
 
-## 解锁入口
-
-解锁入口必须区分：
-- `/api/security/reset` 使用验证码或冷却策略。
-- `/api/developer/security/reset` 使用开发者模式重置策略。
-
 执行命令：`pnpm exec vitest run tests/app`。
 
 ## 覆盖与缺口
