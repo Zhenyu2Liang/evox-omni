@@ -19,3 +19,7 @@ cmd /v:on /c "set LIVE_SCENARIOS=lB&& set E2E_BROWSER_PATH=C:\Program Files\Goog
 - DB 核对：`logs/lB-r3.dbcheck.log`、`logs/lB-r4.dbcheck.log`（`logs/dbcheck-lB.ts` 生成），两轮结果一致：`holding_wenjiana` shares=3934.334266、principalAmountMinor=395716、realizedProfitMinor=6073、status=HOLDING；`acct_checking` balanceMinor=2468357；`category='投资'` 三条流水（-100000 / +200000 / +10357）；三条 `AuditLog` success；三条 `PendingAction` executed；每条 `ExecutionReceipt.responseJson` 都带写后 `holdings`。
 - 截图：`output/playwright/live/lB-head6da00b8-round3/`、`output/playwright/live/lB-head6da00b8-round4/`（B0 持仓、B2 赎回后持仓、B3 按份额赎回确认面板、B4 裸数字澄清）。
 - 逐条证据：`logs/lB-investment-partial-redemption-evidence.json`、`logs/lB-r3.log` / `logs/lB-r4.log` 的 PASS 行。
+
+## 注意：本文件与 `logs/lB-r<N>.log` 才是权威记录
+
+`logs/lB-round1.log`、`logs/lB-round2.log`、`logs/lB-round3.log` 及同名 `.dbcheck.log` 是更早一次场景修订留下的历史产物（数值与当前场景不符，例如 holding 成本 400000 分），不要当作本轮认证证据读取。
