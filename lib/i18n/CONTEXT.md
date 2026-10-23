@@ -147,7 +147,7 @@
 因此新增键必须同时写进 en 与 zh-CN 目录（否则类型或运行期失败），中英文键顺序在四份文件中保持一致便于对照。
 键是**扁平字面量**，没有嵌套路径遍历：`t('cards.mfa.label')` 里的点号只是键名的一部分，`translate` 直接 `messages[locale][key]` 取值。
 参数名不统一，按键取值：`cards.mfa.failedAttempts` 用 `{attempts}`，`cards.mfa.failedAttemptsLimit` 用 `{attempts, maxAttempts}`，`chat.error.verificationRemaining` 用 `{count}`（值来自 `failure.attemptsLeft ?? 0`），`security.reset.success` 与 `security.breaker.failureCount` 用 `{count, max}`。
-`tests/e2e/` 的断言文案经 `createTranslator('zh-CN')` 从本目录读取（`tests/e2e/acceptance.e2e.ts:695` 及 15 个 `*.e2e-helper.ts`），新增 e2e 断言应沿用该写法而非硬编码中文字面量；`tests/e2e/conversation.zh-CN.json` 是用户提示词/否定词fixture，不是界面文案表。
+`tests/e2e/` 的断言文案经 `createTranslator('zh-CN')` 从本目录读取（`tests/e2e/acceptance.e2e.ts:695` 与多数 `*.e2e-helper.ts`），新增 e2e 断言应沿用该写法而非硬编码中文字面量；`tests/e2e/conversation.zh-CN.json` 是用户提示词与否定词的 fixture，不是界面文案表。
 
 ## 安全与验证文案的跨目录分布
 
