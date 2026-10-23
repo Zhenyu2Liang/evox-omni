@@ -152,6 +152,33 @@ e2e 行读取器按标签 `span` 的文本精确定位，再取同一父元素�
 关联账户为 flex 行（标签 `text-banking-navy/60`，值 `font-semibold text-banking-deep`）；提示文案为 `<p className="text-sm text-banking-navy/60">`。
 限额字段（`creditLimit`/`availableLimit`/`monthlyLimit`/`limits[].amount`）与 `accountAvailableBalance`/`payableAmount` 都是 `MoneyAmount`（CNY 十进制字符串），经 `Money`→`formatCNY` 展示；`linkedAccountNumber`/`linkedAccountId`/`linkedAccountName` 是文本。
 
+## CardTile 渲染结构（DOM 断言）
+
+`CardTile.tsx` 是 `'use client'`；props `{ card: CardView; className?: string; footer?: ReactNode }`，`className` 追加到 `Card` 根的 `space-y-3 …`。
+`footer` 为 `undefined` 时 `ui/Card` 完全不渲染页脚块；`footer={null}` 会渲染一个空的带边框页脚。
+
+全组件（含 `ui/Card`、`ui/Money`、`ui/Badge`）**不输出任何 `data-*`**，也没有 `role`/`aria-label`/`title`。
+金额值恒为 `<span class="tabular-nums">`（`ui/Money` → `formatCNY`，形状 `[±]¥#,##0.00`）。
+DOM 定位只能靠文本 + 调用方 wrapper：`/cards` 页的 `[data-card-list]` / `[data-card-id]` 由 `app/cards/CardManager.tsx:191` 提供，`CardTile` 自身无钩子。
+
+渲染顺序（自上而下，条件满足才出现）：
+
+1. 类型 · 网络 `div.text-sm.font-medium.text-banking-navy` + 脱敏卡号 `div.font-mono.text-lg.tracking-widest`；右侧 `[已补卡 Badge] + 状态 Badge`（`span.inline-flex.rounded-full…`）。
+2. 不可用徽章（`usable === false`）。
+3. 信用卡额度 `dl.grid.grid-cols-2.gap-3`（仅 `CREDIT` 且 `creditLimit`/`availableLimit` 存在）。
+4. 关联账户 `div.flex.items-center.justify-between.gap-3.text-sm`：标签 `span.text-banking-navy/60`、值 `span.font-semibold.text-banking-deep`，值是 `accountName · accountNumber` 单个拼接字符串（`' · '` 分隔，缺一者用 `filter(Boolean)` 去掉）。
+5. 账户金额 `dl.grid.grid-cols-2.gap-3`：每列 `div > dt.text-xs.text-banking-navy/60` + `dd.text-sm.font-semibold.text-banking-deep > span.tabular-nums`。
+6. `MISSING`/`UNTRUSTED` 提示 `p.text-sm.text-banking-navy/60`。
+7. 月限额 flex 行（`monthlyLimit` 存在时，所有卡类型）。
+8. 分类限额 `div.space-y-1.border-t.border-banking-light.pt-2` + `ul > li`（标签是 `limit.category` 原文）。
+
+`CardTile` 只用 `business.cards.accountBalance` / `usableBalance` 表意账户余额与可用余额；
+目录内 `business.cards.accountAvailable` / `payableAmount` / `balanceFromAccount` 三个键在 `CardTile` 中未被引用。
+断言注意：账户名与脱敏账号被合成**一个** `span` 文本（`accountName · accountNumber`），无法分别定位，只能按完整字符串（如 `活期账户 · ****8821`）或不含换行的 `hasText` 子串匹配；种子数据中 `acct_checking.number === card_debit.numberMasked === '****8821'`，只用 `****8821` 无法区分卡号与账号。不可用提示（`cardFrozenNotice`/`cardLostNotice`/`cardUnavailable`）是 `Badge` 里的 `span`，`MISSING`/`UNTRUSTED` 提示才是 `<p>`。
+
+`AssetSummaryCard.tsx:55` 用 `business.assets.credit`（信用卡可用额度 / Available credit）显示 `summary.creditAvailable`，
+这是页面级授信口径的唯一出处（`CardTile` 之外）：值为 `banking-sdk/dashboard.ts:36-38` 汇总的 `type === 'CREDIT' && status !== 'LOST'` 卡 `availableLimitMinor` 之和。
+
 ## 关联账户展示（card-account-display.ts）
 
 `card-account-display.ts` 是纯函数模块：无 React、无 Hook、不请求数据、不引入 i18n 运行时

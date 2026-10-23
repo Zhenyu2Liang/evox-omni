@@ -15,6 +15,14 @@
 | `write-failure.ts` | 保留真实事务的写入失败注入 |
 | `locked-action.ts` | 终止锁定用例的 RED/YELLOW 计划动作播种、网关验证码阶梯与只读探针 |
 
+### fixtures.ts 的账户与卡片标识
+标识全是固定字符串常量（无工厂、无随机后缀），可直接在断言中写死：
+`ACCOUNTS`（`fixtures.ts:82-85`）只有 `acct_checking`（活期账户、`number: '****8821'`、`balance: '23580.00'`）与 `acct_savings`（储蓄账户、`****3309`、`50000.00`）；
+`CARDS`（`fixtures.ts:108-134`）只有 `card_credit`（CREDIT、`****6688`、额度/可用/月限额均 `18000.00`、不绑定账户）与 `card_debit`（DEBIT、`****8821`、`linkedAccountId: 'acct_checking'`、三个额度字段均 `null`）。
+**夹具没有 VIRTUAL 卡**：`card_virtual` 只存在于 `prisma/seed.ts`（`****7788`、`monthlyLimitMinor: 500_000n`、`linkedAccountId: acct_checking`），浏览器验收靠 `tsx prisma/seed.ts` 播种，因此 e2e 可断言 VIRTUAL 卡而 Vitest 夹具不能。
+`CARD_LIMITS` 只有一条 `limit_credit_ent`（`card_credit` / 娱乐 / `3000.00`）；seed 另有餐饮/出行/购物限额与 `card_debit` 的分类限额，夹具与 seed 的限额行不等价。
+`tests/e2e` 不 import 本目录：它把同样的标识重述为 `VC_CHECKING_ACCOUNT_ID = 'acct_checking'`（`tests/e2e/live-virtual-card.e2e-helper.ts:40`）与 `DEMO_CHECKING_ID`/`CREDIT_CARD_ID`/`DEBIT_CARD_ID`/`VIRTUAL_CARD_ID`（`tests/e2e/live-acceptance.e2e.ts:148-153`）。
+
 ### locked-action.ts
 
 `locked-action.ts` 为「MFA 三码锁定」的终止锁定用例提供共享基础设施：经生产 `submit_plan` 播种到计划节点的 RED（¥5000，`awaiting_mfa`）与 YELLOW（¥500 及以下，`pending`、`requiresMfa:false`）待处理动作，

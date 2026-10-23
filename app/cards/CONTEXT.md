@@ -9,8 +9,10 @@
 
 ## 数据来源
 
-服务端用 `banking.card.getCards(demoUserId)` 投影 `CardView[]`，作为 `CardManager` 的初始 props。
+`page.tsx` 是异步服务端组件并带 `export const dynamic = 'force-dynamic'`，服务端用 `banking.card.getCards(demoUserId)` 投影 `CardView[]`，作为 `CardManager` 的初始 props，故首屏 HTML 已含 `CardTile` 的关联账户与余额行，e2e 不必等客户端 fetch 即可断言。
 客户端刷新只走 `GET /api/cards` 与 `GET /api/cards/changes`，只采用最新请求序号的响应。
+`CardManager` 首帧 `refreshing=true`、`loaded=false`，`disabled = busy || refreshing || !loaded`，故刷新请求返回前入口按钮全为 disabled；断言按钮可用性必须等这两个请求完成。
+本页没有授信额度汇总头：页头只有 `pages.cards.summary`（`{count} 张卡片 · 额度与状态`）的卡片计数；`信用额度` 只出现在新增/审阅弹窗（`CardChangeDialog.tsx`），信用卡可用总额汇总在 `/overview` 的 `AssetSummaryCard`。
 消费弹窗打开时只单独请求 `GET /api/cards/[id]/consumptions`，不在整页重复请求消费记录。
 
 ## 接口
@@ -70,6 +72,7 @@ e2e 场景在 `tests/e2e/live-virtual-card.e2e-helper.ts` 与 `tests/e2e/card-ma
 金额展示规则见 [financial-values.md](../../docs/cn/financial-values.md)。
 测试钩子：data-card-consume（入口）、data-card-consume-dialog、data-card-consume-card-id、data-card-consume-summary、data-card-consume-form、data-card-consumptions、data-card-consumption（记录行）、data-card-id（单个卡片容器）。
 消费相关 e2e 断言以 data-card-* 钩子定位，改动这些属性名会破坏 tests/e2e 下的场景。
+`data-card-id`（值为 `card.id`）是列表里唯一的单卡定位钩子；`components/banking/CardTile` 内部没有任何 `data-*`/`aria-*`，关联账户名（`linkedAccountName · linkedAccountNumber` 合成一串）、账户余额与可用余额只能按 `dt`/`span` 标签文本在该作用域内定位。
 `POST /api/cards/[id]/consume` 拒绝任何携带 `occurredAt` 的请求体（400 `VALIDATION`）：入账时间归服务端所有，界面不发送该字段，也不要补充任何客户端时间。
 手动卡片验证是本目录唯一自带错误码的 MFA 面：`security/manual-card-management.ts` 熔断时抛 `AppError('CIRCUIT_OPEN')`，`_lib/http.ts` 映射为 HTTP 423 失败信封，`CardManager.tsx` 84-100 行据此把申请置为 `locked` 并显示 `pages.cards.locked`。
 同一处检查的 `'LOCKED'` 不在 `ErrorCode`（`lib/errors.ts:1`）里，服务端不可能返回，属不可达分支。

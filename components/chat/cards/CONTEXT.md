@@ -122,6 +122,15 @@
 控制回调传递所属计划标识。
 暂停、取消与恢复规则由服务端执行。
 
+## 测试钩子与断言文本
+
+本目录的卡片自身不输出 `data-*`（无 `data-testid`）；唯一稳定的卡片类型钩子是 `CardRenderer` 外层的 `data-chat-card-type={card.type}`（值为 `cards`/`dashboard`/`investments` 等）。
+按可见文本断言限额或关联账户区块时，必须先用 `[data-chat-card-type="..."]` 限定卡片类型作用域。
+`ResultMetric` 只渲染 `<dt>{label}</dt><dd>{value}</dd>`；金额经 `ui/Money` → `formatCNY` 输出 `¥1,234.00`（`¥` 前缀 + 千分位 + 两位小数）。
+专用钩子只存在于授权类卡片：`ApprovalRecord` 的 `data-approval-history`/`data-action-id`/`data-status`/`data-approval-stage`（`previous`|`current`）/`data-stage-status`/`data-approval-locked`，`MfaCard` 的 `data-mfa-locked`，`ErrorCard` 开发者模式诊断块的 `data-error-diagnostics`。
+跨卡片同名字面量：`DashboardCard`（`dashboard` 卡片）用 `business.assets.credit` 展示 `creditAvailable`，中文「信用卡可用额度」含「可用额度」子串、英文 `Available credit` 与 `business.cards.available` 完全相同。
+本目录无「授信」字样，也不自建卡片余额键；限额与账户文案只经 `business.cards.*` 取得。
+
 ## 展示约束
 
 金额、收款人与状态必须取自对应业务结果。

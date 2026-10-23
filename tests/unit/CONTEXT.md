@@ -48,6 +48,17 @@
 它们证明服务端渲染的措辞与目录事实一致，不证明真实模型不再生成同类散文（那以 live 验收为准），也不覆盖网关授权与执行路径。
 测试夹具只做分句、否定辖域与标记词表分类，不复刻产品逻辑。
 
+## 卡片展示（CardTile）不在本目录
+
+本目录没有用例导入 `components/banking/CardTile`；`renderToStaticMarkup` 覆盖的是聊天卡、审批/MFA 卡与解锁面板。
+仅有的两个 `components/banking/*` 导入是 `planner/tool-diagnostics.test.ts` 的 `AgentTaskTimeline` 与 `planner/investment-purchase-display.test.ts` 的 `InvestmentProductTile`。
+`components/banking/card-account-display.ts` 的四个纯函数与 `components/chat/cards/CardsCard.tsx` 都没有单元用例。
+`CardTile` 自身不输出任何 `data-*`：`data-card-id`/`data-card-list`/`data-card-consume`/`data-card-delete` 由 `app/cards/CardManager.tsx:191` 的包裹层发出。
+展示文案真值在 `lib/i18n/messages/business.zh-CN.json:47-69`（类型 `debit`/`credit`/`virtual`，状态 `active`/`frozen`/`lost`/`pending`，`limit`/`available`/`monthlyLimit`、`replaced`、`linkedAccount`、`accountBalance`、`usableBalance`、`linkedAccountMissing`、`linkedAccountUntrusted`、`cardUnavailable`、`cardFrozenNotice`、`cardLostNotice`）。
+单元层只断言 DTO 与脱敏：`banking-sdk/card-linked-account.test.ts`、`banking-sdk/card-consumption.test.ts`、`lib/mask.test.ts`（`****8821`/`************8821`）。
+卡片 DOM 断言（`CARD_LABEL`、`readCardTileRows`、`assertLinkedAccountTileLabels`）只在 `tests/e2e`，见 [../e2e/CONTEXT.md](../e2e/CONTEXT.md)。
+`weixin-presentation.test.ts:23` 的 `type:'cards'` 用例只断言微信文本含 `¥87.66`，不是 React 渲染。
+
 ## 终止锁定与内部诊断的上屏边界
 
 `@/lib/public-text`（`isInternalDiagnostic`/`safePublicText`/`securityNotice`）是唯一把内部诊断转成公开文本的漏斗。

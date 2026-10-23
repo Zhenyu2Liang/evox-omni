@@ -155,6 +155,14 @@ MISSING 与 UNTRUSTED 不报任何余额字段，绝不以 `0.00` 冒充空账�
 已持久化动作与计划节点的重放同样被拒；不带时间字段的对照计划可正常提交。
 拒绝时不产生扣款、`channel='CARD'` 流水或 `CardConsumption` 记录。
 
+## 货币格式化的断言口径
+
+本目录唯一的 `formatCNY` 使用者是 `test-02-transfer-confirm.test.ts`：`AMOUNT = '200'`（十进制字符串元），期望值为计算值而非硬编码——`:123` 与 `:155` 用 `toBe(formatCNY(AMOUNT))` 断言 `PendingActionSummary` 与确认卡片的 `Amount` 字段，`:130` 把它写进整份 `fields` 数组的 `toEqual`，`:243` 用 `toContain(formatCNY(AMOUNT))` 断言叙述（同行注释给出 `¥200.00`）。本目录没有 `formatDecimalCNY`。
+
+其余 `¥` 命中几乎全是测试标题与文档注释里的说明性金额；`test-01-balance.test.ts:38` 的 `NARRATION = '您的活期余额为 ¥23,580.00。'` 是喂给脚本化模型的输入文案，本目录只有 `:91`/`:141` 与 `mock-integration.test.ts:134` 三条 `toContain('23,580')` 弱断言（只认千分位片段，不认 `¥` 与小数位）。
+
+因此本目录不覆盖 `¥0.00`、`-¥…`、三位小数 HALF_UP 取整；金额精度与舍入只在 `../unit/banking-sdk`、`../integration` 与 `../e2e` 断言。共享的可复用渲染金额夹具在 `../fixtures/mfa-escalation.zh-CN.json#formattedAmount`（`"¥500.50"`，由 `../integration/decision-guidance.test.ts` 断言）。
+
 ## 已知问题
 
 `test-18` case 3 只覆盖 `agent/system-prompt.ts` 渲染出的英文提示句与 `card_management_required` 中文指引；其他语言的目录条目不在此判定。
