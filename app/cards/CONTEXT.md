@@ -11,6 +11,8 @@
 
 `page.tsx` 是异步服务端组件并带 `export const dynamic = 'force-dynamic'`，服务端用 `banking.card.getCards(demoUserId)` 投影 `CardView[]`，作为 `CardManager` 的初始 props，故首屏 HTML 已含 `CardTile` 的关联账户与余额行，e2e 不必等客户端 fetch 即可断言。
 客户端刷新只走 `GET /api/cards` 与 `GET /api/cards/changes`，只采用最新请求序号的响应。
+`CardManager` 首帧 `refreshing=true`、`loaded=false`，`disabled = busy || refreshing || !loaded`，故刷新请求返回前入口按钮全为 disabled；断言按钮可用性必须等这两个请求完成。
+本页没有授信额度汇总头：页头只有 `pages.cards.summary`（`{count} 张卡片 · 额度与状态`）的卡片计数；`信用额度` 只出现在新增/审阅弹窗（`CardChangeDialog.tsx`），信用卡可用总额汇总在 `/overview` 的 `AssetSummaryCard`。
 消费弹窗打开时只单独请求 `GET /api/cards/[id]/consumptions`，不在整页重复请求消费记录。
 
 ## 接口
