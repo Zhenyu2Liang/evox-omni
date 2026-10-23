@@ -64,6 +64,10 @@
 - 最近申购：`business.investments.lastPurchase`，值 `formatDateTime`。
 - 申购记录：`business.investments.purchases` 加 `purchaseCount`，只在有申购记录时渲染。
 
+收益与收益率为可负值：汇总 `cards.investment.profit` 用 `DecimalMoney signed`（`InvestmentsCard.tsx:143`），正数带 `+`、负数带 `-¥`，不随符号换色、不取绝对值、不按 0 截断。
+亏损持仓的 `profitRate` 不在本文件换算：`banking/HoldingFacts.tsx:89-91` 用 `signedRateToPercent` 输出 `${…}%`（正数不加 `+`、无着色）。
+本文件唯一的 `rateRatioToPercent`（`InvestmentsCard.tsx:76`）只服务 `ProductView.annualYieldRate`；`HoldingView.profitRate` 等可负值绝不可送进它——`lib/decimal.ts:76-78` 内含 `nonNegativeDecimal`，负比例抛 `AppError('VALIDATION')`，渲染期抛错会崩掉整棵客户端树。
+汇总指标 `hasMarketValue`/`hasProfit`（`InvestmentsCard.tsx:124`、`:126`）要求每个 `HOLDING` 持仓都有该字段，缺一项即整项不渲染，不用 0 补齐。
 卡片级口径脚注是 `business.investments.profitScope` 与 `business.investments.disclaimer`。
 仅当所有持仓条目都按净值 + 份额计价（`usesNetValueModel`）时，脚注才出现在卡片底部。
 事实、徽标与布局变体的规则见
@@ -143,7 +147,8 @@
 达到上限时 `settleAction` 已清除 `pendingAction`，故 `cards.mfa.failedAttemptsLimit` 实际不可达。
 ## 测试钩子与断言文本
 
-本目录的卡片自身不输出 `data-*`（无 `data-testid`）；唯一稳定的卡片类型钩子是 `CardRenderer` 外层的 `data-chat-card-type={card.type}`（值为 `cards`/`dashboard`/`investments` 等）。
+本目录没有 `data-testid`；卡片类型钩子是 `CardRenderer` 外层的 `data-chat-card-type={card.type}`（值为 `cards`/`dashboard`/`investments` 等）。
+卡片内部唯一自带的 `data-*` 是 `InvestmentsCard` 的条目容器 `[data-investment-card="true"]`（`InvestmentsCard.tsx:67`，持有中时另带 `data-investment-holding-id`），故投资卡条目也可不经 `data-chat-card-type` 直接定位。
 按可见文本断言限额或关联账户区块时，必须先用 `[data-chat-card-type="..."]` 限定卡片类型作用域。
 `ResultMetric` 只渲染 `<dt>{label}</dt><dd>{value}</dd>`；金额经 `ui/Money` → `formatCNY` 输出 `¥1,234.00`（`¥` 前缀 + 千分位 + 两位小数）。
 专用钩子只存在于授权类卡片：`ApprovalRecord` 的 `data-approval-history`/`data-action-id`/`data-status`/`data-approval-stage`（`previous`|`current`）/`data-stage-status`/`data-approval-locked`，`MfaCard` 的 `data-mfa-locked`，`ErrorCard` 开发者模式诊断块的 `data-error-diagnostics`。
