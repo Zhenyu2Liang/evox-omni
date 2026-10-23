@@ -2,7 +2,7 @@
 SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行写入。权限层级、人工确认、MFA 与熔断决策属于安全层。SDK 从不执行模型生成的代码、SQL 或 shell 命令。
 ## 公开契约
 能力从 `banking-sdk/index.ts` 导入；DTO 位于 `types.ts`。金额输入与输出都是十进制字符串。仓储持久化使用 bigint 人民币分保存已记账金额，使用规范十进制 TEXT 保存收益率与估值。`MoneyInput` 只接受字符串。`normalizeMoney` 校验已记账精度；缺省值不等于零。
-产品年化收益率是 `annualYieldRate`，为无量纲比例。投资持仓按净值与份额核算：`latestNetValuePerUnit` 是规范十进制净值，`shares` 是持有份额，`principalAmountMinor` 是剩余成本基数。公开持仓的 `amount` 是剩余持仓成本，`marketValue` 是未取整估值，`profit` 是未实现收益，`realizedProfit` 是已实现收益，`cumulativeProfit` 是累计收益。百分比只在展示层转换。
+产品年化收益率是 `annualYieldRate`，为无量纲比例，且恒不为负：创建时 `lib/db/repositories/investment.ts#createProduct` 与投影时 `investment.ts#toProductView` 都经 `nonNegativeDecimal` 上闸，负数会抛 `VALIDATION` 而不是被渲染。因此展示层的 `lib/decimal.ts#rateRatioToPercent`（自带非负门）只适用于产品年化，绝不适用于持仓收益率。投资持仓按净值与份额核算：`latestNetValuePerUnit` 是规范十进制净值，`shares` 是持有份额，`principalAmountMinor` 是剩余成本基数。公开持仓的 `amount` 是剩余持仓成本，`marketValue` 是未取整估值，`profit` 是未实现收益，`realizedProfit` 是已实现收益，`cumulativeProfit` 是累计收益。百分比只在展示层转换。
 单个持仓没有 SDK 内的时间累积：净值只取产品发布的 `latestNetValuePerUnit`，SDK 不按时间推导增长。市值一律由 `shares × latestNetValuePerUnit` 派生；`estimatedMarketValue` 只是列上的快照，读取不使用它。持仓收益是未实现收益，等于市值减去剩余成本；追加申购金额不计入收益。
 十进制最多 40 位整数与 18 位小数。SDK 使用精确算术、拒绝非法值，只在文档化的结算边界取整。当前赎回策略是 HALF_UP 到人民币分；授权与执行使用同一换算。最终余额与流水仍是有符号 INT64 分。
 ## 净值与份额换算
