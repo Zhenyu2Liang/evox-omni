@@ -9,7 +9,7 @@
 
 ## 数据来源
 
-服务端用 `banking.card.getCards(demoUserId)` 投影 `CardView[]`，作为 `CardManager` 的初始 props。
+`page.tsx` 是异步服务端组件并带 `export const dynamic = 'force-dynamic'`，服务端用 `banking.card.getCards(demoUserId)` 投影 `CardView[]`，作为 `CardManager` 的初始 props，故首屏 HTML 已含 `CardTile` 的关联账户与余额行，e2e 不必等客户端 fetch 即可断言。
 客户端刷新只走 `GET /api/cards` 与 `GET /api/cards/changes`，只采用最新请求序号的响应。
 消费弹窗打开时只单独请求 `GET /api/cards/[id]/consumptions`，不在整页重复请求消费记录。
 
