@@ -88,7 +88,8 @@ JSON 金额使用十进制字符串。
 关键差异：`formatDecimalCNY` 会舍入并保留「负零」符号，`'-0.000001'` → `-¥0.00`；`formatCNY` 永不产出 `-¥0.00`。
 `formatDecimalFixed(input, digits)`（`decimal.ts:98-100`）输出无货币符号、无分组，固定 `digits` 位（份额 6 位、净值 4 位）。
 显式 `+` 前缀由组件加，不是格式化器产出：`components/ui/Money.tsx:16` 与 `components/ui/DecimalMoney.tsx:16` 仅在 `signed` 且严格为正时前置 `'+'`。
-`compareDecimal(left, right)`（`decimal.ts:107-114`）返回 `-1 | 0 | 1`，按对齐后的整数系数比较，接受 `string | number | bigint`，`number` 会拒绝超出分精度的值（`decimal.ts:90`）。
+`compareDecimal(left, right)`（`decimal.ts:122-129`）返回 `-1 | 0 | 1`，按对齐后的整数系数比较，接受 `string | number | bigint`，`number` 会拒绝超出分精度的值（`decimal.ts:104`）。
+比例展示换算有两个出口（`decimal.ts`）：`rateRatioToPercent(ratio)`（`:76-78`）仅供天然非负的比例（产品预期年化），内部先过 `nonNegativeDecimal` 闸门；`signedRateToPercent(ratio)`（`:71-73`）是同一「比值×100」的**有符号**版本，供持仓收益率这类可负的展示值使用——它是展示换算，绝不允许用 `Math.abs`、截断为 0、吞异常或浮点运算替代。
 `DecimalAmount = string`（`decimal.ts:6`）；`FinancialDecimal` 精度 120 位、默认 `ROUND_HALF_UP`（`decimal.ts:9`）。
 断言锚点见 `tests/CONTEXT.md`。
 
