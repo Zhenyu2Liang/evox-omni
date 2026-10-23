@@ -17,7 +17,7 @@ A competition simulator for natural-language banking with server-controlled perm
 - `banking-sdk/net-value.ts`: BigInt fixed-point net value and share conversions — 4 dp net value, 6 dp shares, unrounded valuation, one HALF_UP settlement to cents.
 - `components/banking/HoldingFacts.tsx`: the single render source for a holding's net value and share facts (`card` and `tile` layouts).
 - `lib/db/unit-of-work.ts`: nested repository calls share the current transaction.
-- `lib/phone.ts`, `security/recipient-resolution.ts`, `security/card-resolution.ts`: identity matches only complete numbers or exact owned ids, masked values are candidate filters only, and full numbers live solely in `Contact.phoneFull`/`Card.numberFull`. See `docs/cn/identity-resolution.md`.
+- `lib/phone.ts`, `security/recipient-resolution.ts`, `security/card-resolution.ts`: identity matches only complete numbers or exact owned ids (`Contact.phoneFull`/`Card.numberFull` stay authoritative, though a display column may hold one); masks and tails only narrow candidates, never identity, and every outward projection is masked. See `docs/cn/identity-resolution.md`.
 - `agent/financial-response.ts`: financial claims from structured evidence.
 - `agent/write-continuation.ts`: bounded, restart-safe continuation when a declared write produced no controlled tool call.
 - `agent/manual-review.ts`: stop future work while preserving already-started command facts.
