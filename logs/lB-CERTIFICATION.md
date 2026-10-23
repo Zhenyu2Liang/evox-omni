@@ -15,7 +15,10 @@ cmd /v:on /c "set LIVE_SCENARIOS=lB&& set E2E_BROWSER_PATH=C:\Program Files\Goog
 | round3 | `6da00b86` | 0 | `== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==` | PASS（B0–B5 全绿） |
 | round4 | `6da00b86` | 0 | `== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==` | PASS（B0–B5 全绿，连续第二轮） |
 
-- 认证双信号：round3 / round4 均为「退出码 0 + `PASS 1 ｜ FAIL 0 ｜ SKIP 0`」，且两轮 `累计网络 4xx/5xx：0，console error：0，pageerror：0`。
+| round5 | `60bdcb05`（合并树 HEAD，独立 agent 复跑） | 0 | `== 汇总：PASS 1 ｜ FAIL 0 ｜ SKIP 0 ==` | PASS（B0–B5 全绿；B4 澄清措辞为**第三种**写法仍通过；DB 末态与 round3/round4 完全一致） |
+
+- 认证双信号：round3 / round4 / round5 均为「退出码 0 + `PASS 1 ｜ FAIL 0 ｜ SKIP 0`」，且三轮 `累计网络 4xx/5xx：0，console error：0，pageerror：0`。
+- round5 运行日志：`logs/a-lB-merged-head.log`（合并树独立复跑）、DB 核对 `logs/lB-rmerged.dbcheck.log`、截图 `output/playwright/live/lB-head60bdcb0-round5/`。round1 的失败复现证据为 `logs/a-lB-round1.log`（修复前 `pageerror: Financial value must be nonnegative.`）。`logs/lB-investment-partial-redemption-evidence.json` 为最近一次运行（round5）的证据 JSON。
 - DB 核对：`logs/lB-r3.dbcheck.log`、`logs/lB-r4.dbcheck.log`（`logs/dbcheck-lB.ts` 生成），两轮结果一致：`holding_wenjiana` shares=3934.334266、principalAmountMinor=395716、realizedProfitMinor=6073、status=HOLDING；`acct_checking` balanceMinor=2468357；`category='投资'` 三条流水（-100000 / +200000 / +10357）；三条 `AuditLog` success；三条 `PendingAction` executed；每条 `ExecutionReceipt.responseJson` 都带写后 `holdings`。
 - 截图：`output/playwright/live/lB-head6da00b8-round3/`、`output/playwright/live/lB-head6da00b8-round4/`（B0 持仓、B2 赎回后持仓、B3 按份额赎回确认面板、B4 裸数字澄清）。
 - 逐条证据：`logs/lB-investment-partial-redemption-evidence.json`、`logs/lB-r3.log` / `logs/lB-r4.log` 的 PASS 行。
