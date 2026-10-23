@@ -49,7 +49,7 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 选择 `2` 会同时选中 `2p`。
 场景 `7`（`scenarioCommittedContinuationFailed`）不在 `SCENARIOS` 中，恒为最后阶段。
 场景契约为 `{ id, name, run(ctx): Promise<string>, skipReason? }`，`run` 返回一条证据串。
-新增场景：定义 `run`、加入 `SCENARIOS` 并使用唯一 `id`/`name`。
+新增场景：定义 `run`、加入 `SCENARIOS` 并使用唯一 `id`/`name`。当前没有任何场景实现 `skipReason`：跳过只发生在找不到真实浏览器时（整批所选场景统一 SKIP，仍打印汇总与退出码）；需要「测试数据不满足即不认证」前置条件的新场景，才是第一次用 `skipReason` 的场合。
 `driveRedTool`（`live-acceptance.e2e.ts:534`）用有界自然中文轮次驱动 RED 工具并提交 MFA `123456`。
 `lA`（`scenarioCreditReplace`）经 `/agent` 挂失并补办信用卡，断言真实 `/cards` 页与 `GET /api/cards`。
 `lA` 的二次补卡腿只用确定性 `GET /api/cards` 核对（仍恰 4 张 = 1 张补办 ACTIVE 信用卡 + 1 张 LOST 源卡 + `card_debit` + `card_virtual`、唯一 ACTIVE 信用卡 id 不变），允许模型重放、返回既有结果或明确拒绝，不要求再次生成 MFA。
