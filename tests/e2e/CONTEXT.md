@@ -153,7 +153,14 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 - 尝试次数行是 `MfaCard.tsx:108-114` 的 `role="status"`：第 1、2 次错码渲染 `cards.mfa.failedAttempts`（`{attempts}`，`chat.zh-CN.json:137`）；`cards.mfa.failedAttemptsLimit`（`:138`）要求同一停泊区渲染到 `attempts >= maxAttempts`，而锁定时停泊区已卸载，本目录无法断言该变体。
 - 只读回执是 `[data-approval-history="true"]` + `data-action-id`/`data-status`（`ApprovalRecord.tsx:50-51`），阶段行 `[data-approval-stage="previous"|"current"]` + `data-stage-status`（`:57-63`）；`data-status="locked"` 时另有 `[data-approval-locked="true"]`（`:70`，含 `securityNotice({code:'MFA_LOCKED',reason:'mfa_attempts_exhausted'})` + `pages.security.unlockDescription` + `/security` 链接），徽章文案是 `chat.approval.status.locked`「验证已锁定」（`chat.zh-CN.json:16`）。
 
-`[data-mfa-locked]`、`[data-approval-locked]`、`data-status="locked"` 在本目录**没有任何断言**：锁定事实只由 `waitForStatusText(..., t('cards.terminal.locked'))`（全页 `[role="status"]` 去空白子串）与 `SELECTORS.mfaInput` 计数为 0 表达。更强的断言应先加在上面的专用属性上。
+`MfaCard` 的终态分支在「连错三次验证码」中不可达，不可作为浏览器锁定断言：`MfaCard.tsx:74` 的 `cards.terminal.*` 标题、`:76-80` 的 `[data-mfa-locked="true"]` 区块、`:85` 的 `cards.mfa.locked` 都只在停泊区收到终态 `status` 时渲染。
+`components/chat/agent-stream-reducer.ts#settleAction` 在同一个 fold 里把 transcript 的 `mfa` 卡写成终态（`:277-281`）并清空 `pendingAction`（`:340-342`），停泊区因此与卡片终态在同一渲染内卸载。
+恢复路径也只认 `pending`/`awaiting_mfa`（`pickPendingAction`，`:554-559`），`fetchPendingActions` 不会把 `locked` 行变回停泊区。
+锁定的可靠锚点（mock 与 live 都成立）：`[data-approval-history="true"][data-status="locked"]` 内含 `[data-approval-locked="true"]`，阶段行是 `[data-approval-stage="current"][data-stage-status="locked"]`。
+服务端叙述同时出现于 system 气泡 `[data-message-role="system"] [data-message-content="true"]` 与 `li[data-tool-status="error"]` 的 summary，两者都是 `chat.error.actionLocked`。
+面板消失表现为 `[data-approval-request="true"]` 与其 `input[aria-label="验证码"]` 计数为 0。
+
+`[data-mfa-locked]`、`[data-approval-locked]`、`data-status="locked"` 在本目录**没有任何断言**：现行锁定事实只由 `waitForStatusText(..., t('cards.terminal.locked'))`（全页 `[role="status"]` 去空白子串，见下节）与 `SELECTORS.mfaInput` 计数为 0 表达，更强的断言应加在上面列出的回执与叙述锚点上。
 
 ## zh-CN 文案取值约定
 
