@@ -248,6 +248,8 @@ Web 演示使用服务端配置的单一用户和共享会话。
 
 `GET /api/tasks`、`GET /api/tasks/[id]` 按持久化状态返回 `pendingActionStatus`。
 锁定操作的决策不再发布 `mfa_required` 事件。
+会话恢复时的停放投影只按终态输出 `MFA_LOCKED` 与 `mfa_attempts_exhausted`。
+该投影不区分原始拒绝是耗尽本操作尝试，还是账户熔断在别处触发。
 恢复、重试、取消、确认和验证对锁定操作返回结构化拒绝。
 执行租约只授予 `pending` 和 `awaiting_mfa` 状态。
 每次写 `PendingAction` 状态都带来源状态守卫，`from` 是必填的来源集合。
