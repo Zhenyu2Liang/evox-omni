@@ -25,7 +25,6 @@ import {
   assertNoFabricatedConfirmationPanel,
   assistantTexts,
   clickConfirm,
-  errText,
   fetchPendingActions,
   getJson,
   submitChat,
@@ -36,7 +35,6 @@ import { CARD_LABEL, CARD_LABEL_RETIRED } from './card-labels.e2e-helper';
 import {
   applyVirtualCardViaAgent,
   cardById,
-  cny,
   expectedPayableMinor,
   fetchLiveCards,
   gotoCards,

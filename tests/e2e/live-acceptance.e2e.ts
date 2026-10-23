@@ -138,6 +138,7 @@ import { CARD_LABEL } from './card-labels.e2e-helper';
 // Card-loss / replace chain scenarios (lF: fresh-session credit lost->replace; lG: ONE session full chain).
 // The scenario bodies live in this module; the entry only registers them.
 import { scenarioCreditReplaceNewSession, scenarioFullCardChain } from './card-replace-chain.e2e-helper';
+import { scenarioDebitCardLinkedAccount } from './live-debit-card.e2e-helper';
 
 // --- isolated LIVE database ---------------------------------------------------------------------
 
@@ -2341,6 +2342,7 @@ const SCENARIOS: readonly Scenario[] = [
   { id: 'lE', name: 'lE-live-virtual-card-replace-continuity', run: scenarioVirtualCardReplaceContinuity },
   { id: 'lF', name: 'lF-live-credit-report-lost-and-replace-new-session', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioCreditReplaceNewSession({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive }); }, { label: 'lF-live-credit-report-lost-and-replace-new-session' }) },
   { id: 'lG', name: 'lG-live-full-card-loss-replace-chain-single-session', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioFullCardChain({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive }); }, { label: 'lG-live-full-card-loss-replace-chain-single-session' }) },
+  { id: 'lJ', name: 'lJ-live-debit-card-linked-account-balance', run: (ctx) => withPage(ctx.browser, async (page) => { attachCollectors(page); return scenarioDebitCardLinkedAccount({ page, baseUrl: ctx.baseUrl, drive: (turns) => driveRedTool(page, ctx.baseUrl, turns), captureShot: captureLive }); }, { label: 'lJ-live-debit-card-linked-account-balance' }) },
 ];
 
 /** `LIVE_SCENARIOS=1,3` (comma separated) runs only those scenario ids (plus scenario 7 if `7`). */
