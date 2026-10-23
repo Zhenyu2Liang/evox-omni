@@ -160,6 +160,8 @@ Card results — the card reads, the card mutations and `consume_virtual_card` �
 
 Investment writes follow the same rule: `subscribe_investment` and `redeem_investment` re-read the CURRENT holdings (`banking.investment.listHoldings`) after the write commits and attach that snapshot additively as `data.holdings`, so `card-emitter.ts` projects the validated receipt AND an `investments` card of the post-write positions. The authoritative `InvestResult` fields keep their meaning; an unavailable re-read is omitted rather than fabricated, leaving the committed write successful with its receipt only.
 
+Holding profit is SIGNED and `agent/` never gates it: `HoldingView.profit`/`profitRate`/`realizedProfit`/`cumulativeProfit` are touched ONLY by `tools/investment.ts` (`:222-224` rendering, `:239` signed aggregate, `:523` realized profit) and pass to the model verbatim through `tools/result.ts#modelBankingData`; `card-emitter.ts:164-169,199-211` projects them unvalidated into the `investments` card. No `nonNegativeDecimal`/`rateRatioToPercent`/`valuationToMinor`/`Math.abs`/clamp/filter appears in `agent/`, and `signedRateToPercent` has no caller here (the browser出口 is `components/banking/HoldingFacts.tsx:91`; the chat summary uses `tools/investment.ts:77-80` `percentText`). Details in `./tools/CONTEXT.md`.
+
 The registered internal describe_turn tool declares purpose, ordered requested capabilities and
 optional workflow/example flags for one current user turn. Its result is interpretation, never
 authorization. Ordinary explanation permits automatic GREEN reads but cannot open a gated read or
