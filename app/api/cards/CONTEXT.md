@@ -60,6 +60,15 @@ HTTP 200 且 `CardChangeResponse.ok === false`。
 `linkedAccountId` 反推账号或余额；`status` 与 `usable` 同样由 SDK 决定，路由只负责搬运。需要收窄或改名
 这些字段时，先改 `banking-sdk/types.ts#CardView` 的 DTO 合同，不要在路由里裁剪。
 
+## 客户端读取路径与种子形状
+
+`/cards` 页面在服务端渲染 `banking.card.getCards(getConfig().demoUserId)`，把结果作为 `initialCards` 交给客户端组件（`app/cards/page.tsx:9-11`）。
+客户端 `CardManager` 的刷新只发 GET：`fetch('/api/cards', { cache: 'no-store' })` 与 `fetch('/api/cards/changes', …)`，读 `envelope.data.cards`（`CardManager.tsx:32-47`）。
+`POST /api/cards`、`DELETE /api/cards/[id]` 只用于手动增删提案，从不用于读取，所以 `/cards` 的读路径是 GET-only。
+`GET /api/cards` 不调用 `requireIdentity`（不读 Cookie、不写会话行），只用 `resolveUserId()`；卡片按 `card.findMany({ where: { userId }, orderBy: { id: 'asc' } })` 返回（`lib/db/repositories/card.ts:15-20`），`LOST` 卡与已被补办的卡照样出现。
+种子卡片（`prisma/seed.ts:290-329`）：`card_credit`（CREDIT `****6688`，`NOT_APPLICABLE`，`creditLimit`/`availableLimit`/`monthlyLimit` 均 ¥18,000.00，带四个分类限额）、`card_debit`（DEBIT `****8821`，绑定 `acct_checking`）、`card_virtual`（VIRTUAL `****7788`，绑定同一账户，`monthlyLimit` ¥5,000.00）。
+`Account.number` 的存储值本身已打码（`****8821`），`CardView.linkedAccountNumber` 原样回显它（不同于 `AccountView.numberMasked` 在读边界再打一次码）。
+
 ## 约束
 
 - 服务端拥有时间：路由不得从请求体、查询参数或请求头读取记账/生效/限额归属时间，也不得添加任何
