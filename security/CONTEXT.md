@@ -18,6 +18,7 @@
 `security-gateway.ts` 校验归属资源、记录确定性授权决定并创建待确认操作。
 确认采用原子认领，并重新评估累计风险。
 开放的人工接管阻断新的执行认领；已授权的在途命令仍可落地。
+`authorizeAction` 与 `lib/db/repositories/pendingAction.ts#assertActionMayStart` 在人工复核接管时抛 `AppError('MANUAL_REVIEW_HOLD', …)`（HTTP 409），而不是通用的 `CONFLICT`：拒绝条件本身不变（`row.taskId` 加未关闭的 `manualReview`），但原因以结构化错误码对外表达，最终文案由 `lib/public-text.ts` 收口为 `chat.error.manualReviewHold`。
 `authorization-record.ts` 记录策略版本、命令指纹、原因与脱敏输入。
 
 `injection-guard.ts` 检测可疑指令。

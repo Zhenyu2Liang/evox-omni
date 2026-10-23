@@ -129,8 +129,8 @@ Web 演示使用服务端配置的单一用户和共享会话。
 
 | 字段 | 含义 |
 | --- | --- |
-| `code` | 公开错误码，含 `MFA_FAILED`、`MFA_LOCKED`、`CIRCUIT_OPEN`。 |
-| `reason` | `mfa_code_invalid`、`mfa_attempts_exhausted`、`mfa_session_locked`、`circuit_open`、`denied`。 |
+| `code` | 公开错误码，含 `MFA_FAILED`、`MFA_LOCKED`、`CIRCUIT_OPEN`、`MANUAL_REVIEW_HOLD`。 |
+| `reason` | `mfa_code_invalid`、`mfa_attempts_exhausted`、`mfa_session_locked`、`circuit_open`、`manual_review_hold`、`denied`。 |
 | `actionId` | 被拒绝的原操作。 |
 | `attemptsUsed`、`attemptsLeft`、`maxAttempts` | 已用次数、剩余次数和上限。 |
 
@@ -209,6 +209,21 @@ Web 演示使用服务端配置的单一用户和共享会话。
 
 网页渲染规则见[对话与业务卡片](chat-presentation.md)。
 微信回复结构见[微信通道](weixin.md)。
+
+### 人工复核接管
+
+任务存在打开的复核项时，确认、验证和取消都返回领域拒绝，而不是 HTTP 错误响应。
+拒绝的 `code` 为 `MANUAL_REVIEW_HOLD`，`failure.reason` 为 `manual_review_hold`。
+`failure.actionId` 指向原操作，`status` 仍为 `pending`，金额不变。
+拦截条件只看原操作所属任务与是否仍有打开的复核项，接管不放宽任何写入条件。
+该错误码逃出确认路径时映射为 HTTP 409。
+
+接管期间的对外文案只有 `chat.error.manualReviewHold` 一条。
+该文案说明三件事：操作尚未执行、可从复核收件箱恢复、或等待复核结束后重试。
+状态已变化文案不适用：复核结束前刷新页面不会改变结果。
+网页对话经 `publicToolError` 按 `code` 取词条，微信与结构化渲染经 `securityNotice` 按 `code`/`reason` 取词条，两条路径落到同一句文案。
+内部英文原因只进日志与诊断，不作为对外文案。
+复核关闭后重新确认原操作即可执行，金额与收款人不需要重建。
 
 ### 重试路径与状态不变量
 

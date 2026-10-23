@@ -199,7 +199,8 @@ cannot redirect an older committed result into a newer operation.
 ## Known Issues
 
 - `planner/failure.ts:111` `sealReason` treats EVERY non-open `actionStatus` as `action_not_open`, including `executed`/`needs_reconciliation` — the two statuses `action-status.ts:59-63` `REPRESENTED_ACTION_STATUSES` says still represent their node.
-- `confirmation/outcomes.ts:119` funnels a gateway CONFLICT sentence through `lib/tool-feedback.ts#publicToolError`, where `PUBLIC_ERROR_CODES.CONFLICT` → `chat.error.stateChanged` wins unless the exact sentence is in `PUBLIC_BUSINESS_ERRORS`; the manual-review refusal thrown at `security/security-gateway.ts:1264` is not, so a confirm/verify while a manual review is open renders `chat.error.stateChanged` instead of that sentence.
+- `confirmation/outcomes.ts#conflictOutcome` (used by confirm/verify/cancel and by `confirmation/liveness.ts`) projects both `CONFLICT` and `MANUAL_REVIEW_HOLD` into a domain outcome: `ok:false` plus the persisted `status`, the original `code` and a structured `failure`. It funnels `error.message` through `lib/tool-feedback.ts#publicToolError` with the error `code`, so the rendered copy comes from `PUBLIC_ERROR_CODES` (`MANUAL_REVIEW_HOLD` → `chat.error.manualReviewHold`, `CONFLICT` → `chat.error.stateChanged`) and never from the raw gateway sentence.
+- `failureReasonFor` maps `MANUAL_REVIEW_HOLD` → `'manual_review_hold'`, deliberately not `'denied'`: an open manual review is a hold, not a security denial.
 - `confirmation/gated-execution.ts:154-157` attaches `failure: toPlanFailure(error)` (i.e. `{code}`) to EVERY thrown gated refusal, so a refused `manual_add_card`/`manual_delete_card` call carries `failure` in addition to `errorCode`/`error` (`GatedToolOutcome.failure` is a documented contract field).
 
 Use the central tool catalog and financial string contracts. See `docs/cn/architecture.md`, `docs/cn/agent-durability.md` and `docs/cn/security.md` for current behavior and limits.
