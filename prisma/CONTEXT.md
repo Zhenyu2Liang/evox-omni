@@ -90,7 +90,7 @@ SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件�
 因此新状态值无需改库，但必须同步 `schema.prisma` 文件头注释。
 `PendingAction`（`schema.prisma` 第 439 行起）字段：`id`/`sessionId`/`userId`/`toolName`/`argsJson`（参数 JSON）/
 `riskLevel`/`requiresMfa`（默认 false）/`status`（默认 `"pending"`）/`summaryJson`/可空 `resultJson`/可空 `userRequest`/`intent`、
-`executionLeaseExpiresAt`；**没有** 锁定原因、错误代码、
+可空 `authorizationDecisionId`/`invocationId`/`taskId`/`nodeId`/`executionLeaseOwner`/`executionLeaseExpiresAt`、`createdAt`/`updatedAt`，反向关系 `mfa MfaChallenge?`；索引仅 `@@index([sessionId])` 与 `@@index([taskId])`。
 尝试次数或过期时间字段。
 文件头第 25 行列出的 `status` 取值不含 `locked`，
 而 `security/security-gateway.ts` 会写入 `locked`，注释落后于实际取值。
