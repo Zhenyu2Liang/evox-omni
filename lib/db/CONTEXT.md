@@ -21,6 +21,7 @@ and aggregate repositories. Business permissions and risk rules belong to `secur
   Connection setup enables `foreign_keys = ON` and `journal_mode = WAL` before application statements.
   Native lock waiting, transaction queue waiting and transaction execution each have a 10-second limit.
   Do not replace this factory with a bare constructor or the removed datasource constructor options.
+- `serialized-connection.ts#serializeSqliteConnection(connection)` wraps that single native connection in a FIFO `ConnectionMutex`: every `queryRaw`/`executeRaw`/`executeScript`/`dispose` takes the lock, and `startTransaction` holds it for the WHOLE interactive transaction (the transaction handle's own statements bypass the mutex; `commit`/`rollback` release it). The queue has no deadline — `acquire()` is `await previous` on an unbounded promise chain (`:9-16`).
 - `client.ts` exposes the process-wide `prisma` singleton, `DbClient`, `dbClient()`, and factory/URL
   exports. Development caches the singleton on `globalThis` for Next.js HMR. `dbClient()` returns the
   current transaction handle when present, otherwise the singleton. A read inside an existing
