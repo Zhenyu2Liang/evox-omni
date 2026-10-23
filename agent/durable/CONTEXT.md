@@ -68,6 +68,7 @@ Invocation receipt replay precedes mutable lookup; a write's committed receipt m
 `continueDurableRun` throws `CONFLICT` on ownership/revision mismatch, on a permanent model failure, on mismatched original tool arguments and on unresolved original calls.
 Never create a replacement operation identity for an uncertain effect; unknown outcomes park as `RECONCILIATION_REQUIRED`/`needs_reconciliation`.
 Delegated write evidence and gateway authorization live in `../confirmation/` and `../tools/`; this layer only persists and resumes it.
+No financial arithmetic and no domain money field exists here: amounts, fees, rates and receipts stay opaque inside a tool result's `data`/`content`/`summary` or an `ExecutionReceipt` row, and this layer only snapshots, digest-compares and replays those blobs.
 A parked decision is re-presented only while its persisted row is open; a terminal row is skipped and reported through typed event fields, never through text.
 Raw tool payloads stay in the stored `content`/`internalSummary` evidence for the model and classifiers; every user-visible string is funnelled through `@/lib/public-text` or a catalog key.
 
