@@ -104,8 +104,9 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 
 - 没有组件级用例把负 `annualYieldRate` 喂给 `InvestmentProductTile`/`InvestmentsCard`：`rateRatioToPercent` 的负值行为只在 `unit/financial-values.test.ts:83` 以抛错覆盖，负 `annualYieldRate`/负 `marketValue` 的仓储拒绝在 `unit/banking-sdk/investment-precision.test.ts:257-274`（`rejects.toBeDefined()`，不校验错误码）。
 - `e2e/live-investment.e2e-helper.ts:424-433` 的 `labels` 不含 `持仓收益率`：`tile` 布局的收益率行只在 `unit/planner/decimal-format.test.ts:88` 断言，`/investments` 页无收益率断言。
-- e2e 只「允许」负号，没有任何一步要求渲染出 `-` 开头：`helpers/fixtures.ts:429` 的 `holding_wenjiana` 是成本 5000.00/市值 5050（+50），`prisma/seed.ts:378` 是 5000.00/5178.36，都是盈利仓位。
-- 夹具里唯一「跌破 1 的净值」是 `helpers/fixtures.ts:236` 的 `prod_wenjib`（0.9880，见 `:231` 注释），但只有在 `unit/banking-sdk/net-value-redemption.test.ts` 运行时申购才产生负值，且该用例只断言 SDK 数值，不经过组件。
+- e2e 只「允许」负号，没有任何一步要求渲染出 `-` 开头：B0 步骤持仓是 `helpers/fixtures.ts:429` 的 `holding_wenjiana`（成本 5000.00 / 市值 5050 → +50），演示种子 `prisma/seed.ts:378` 亦为 +178.36。
+- 唯一的亏损持仓在演示种子 `prisma/seed.ts:380` 的 `holding_wenjib`（`principalAmountMinor: 1_000_000n` = ¥10,000.00，`shares '10000.000000'` × 净值 `0.9880` → 市值 9880.00，收益率 −1.2%），见 `:374` 注释；因此真实浏览器上的亏损行只靠演示种子，mock 夹具 `helpers/fixtures.ts:427-431` 只播种一个盈利持仓。
+- 两个种子集里唯一「跌破 1 的净值」都是 `prod_wenjib` 的 0.9880（`helpers/fixtures.ts:236` 与 `prisma/seed.ts:362`，见 `helpers/fixtures.ts:231` 注释）；运行时申购它才产生负值，`unit/banking-sdk/net-value-redemption.test.ts` 只断言 SDK 数值，不经过组件。
 - 微信通道只有盈利持仓文本：`unit/weixin-presentation.test.ts:87-104` 断言 `持仓收益率 3.57%`，无亏损用例。
 - 其余持仓渲染用例只喂正值：`unit/planner/chat-read-results.test.ts:73-86`、`unit/planner/investment-purchase-display.test.ts`、`integration/frontend-review-fixes.test.ts:67-84`。
 
