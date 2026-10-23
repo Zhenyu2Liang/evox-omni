@@ -73,6 +73,11 @@
 
 | 键 | zh-CN | en | 含义 |
 | --- | --- | --- | --- |
+| `business.cards.debit` | 借记卡 | Debit card | `CardTile` 卡片类型标签（DEBIT） |
+| `business.cards.credit` | 信用卡 | Credit card | 卡片类型标签（CREDIT） |
+| `business.cards.virtual` | 虚拟卡 | Virtual card | 卡片类型标签（VIRTUAL） |
+| `business.cards.limit` | 信用额度 | Credit limit | CREDIT 卡的额度行 |
+| `business.cards.monthlyLimit` | 月限额 | Monthly limit | 月消费限额行 |
 | `business.cards.linkedAccount` | 关联账户 | Linked account | 卡片关联的账户名称或编号 |
 | `business.cards.accountAvailable` | 账户可用余额 | Account available balance | 关联账户当前可用余额 |
 | `business.cards.payableAmount` | 当前可支付金额 | Currently payable | 结合卡片额度与账户余额后当前可支付的金额 |
