@@ -111,6 +111,16 @@ e2e 行读取器按标签 `span` 的文本精确定位，再取同一父元素�
 份额与净值经 `formatDecimalFixed` 定长输出，6 位与 4 位小数，不经金额格式化。
 净值日期经 `formatBusinessDate` 按 UTC+08:00 输出 `YYYY-MM-DD`。
 
+## 亏损与零值的渲染口径
+
+亏损持仓（`marketValue` < `amount`，即未实现亏损）是正常状态而不是缺失：`profit`/`cumulativeProfit` 为负、`profitRate` 为负时，全部事实行照常渲染（如 `-¥49.20`、`-1.23%`），不隐藏行、不取绝对值、不落 0，也不替换成 `business.investments.insufficient`。
+值 0 不是缺失：字段存在且为 `0` 时渲染 `¥0.00`（`marketValue`/`profit`/`cumulativeProfit`/`realizedProfit`）、`0.000000 份`、`0.0000 元/份`；只有字段为 `undefined` 才渲染 `insufficient` 占位。
+负值即使舍入到分后为零仍保留负号（`formatDecimalCNY('-0.001')` → `-¥0.00`），不会被读成正数或零收益。
+成本基数为 0 时服务端缺省 `profitRate`（`banking-sdk/net-value.ts#profitRateOf`），收益率行落 `insufficient`，本组件不产生 NaN 或除零。
+
+回归用例：`tests/unit/planner/decimal-format.test.ts` 的 `describe('HoldingFacts signed 持仓收益率 rendering')` 是仓库唯一直接渲染本组件的用例（`renderToStaticMarkup`，`card` 与 `tile` 两种 layout，覆盖亏损、盈利、零与缺省收益率，并断言亏损金额 `-¥49.20`）。
+改动 `HoldingFacts` 的事实集合或 `lib/decimal` 的符号语义须同步该用例。
+
 ## 卡片渲染（CardTile）
 
 `CardTile` 由 `CardView` DTO 驱动（`banking-sdk`）：卡类型+网络、脱敏卡号 `numberMasked`、状态徽章、限额与结算账户绑定信息。
