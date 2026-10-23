@@ -141,6 +141,12 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 `lA`/`lD`/`lE`/`lF`/`lG` 的 live 腿只提交正确码 `123456`（`MfaChallenge.attempts=0`），live 不接受错误码、不触达尝试上限。
 当前没有用例在锁定后刷新 `/agent` 再断言弹窗保持消失。
 
+MFA／锁定的 DOM 驱动接缝全部在 `helpers.ts`，入口不复刻：
+`SELECTORS.mfaInput` = `[data-approval-request="true"] input[aria-label="验证码"]`（只匹配动作停靠区，历史回执不带输入框）。
+`waitForMfaCard(page, timeoutMs, minCount)` 等 `count >= minCount` 再等 `.last()` 可见；`submitMfa` 填 `.last()` 输入框并点 `[data-approval-request="true"]` 内的 `验证` 按钮；`mfaCardPresent` 只数输入框数量，锁定后归零即「卡片关闭」。
+`waitForStatusText` 对全页 `[role="status"]` 去空白后做**子串**匹配，因此断言串可省略空格与句末标点（断言 `验证失败，已尝试1次`，目录原值为 `验证失败，已尝试 {attempts} 次。`）。
+目录原值：`cards.terminal.locked` = `已锁定`、`cards.mfa.locked` = `已锁定，请到安全中心处理。`、`cards.mfa.failedAttempts` = `验证失败，已尝试 {attempts} 次。`、`security.breaker.locked` = `已熔断`、`security.breaker.failureCount` = `失败 {count} / {max} 次`、`security.reset.success` = `已解除限制，当前失败 {count} / {max} 次。`。
+
 锁定终态的断言范围（`j` 的实际覆盖）：`waitForStatusText(page, t('cards.terminal.locked'))` 是对全页 `[role="status"]` 做去空白**子串**匹配，
 不绑定 `MfaCard` 容器，也未断言 `cards.mfa.locked`（「已锁定，请到安全中心处理。」）这一只读历史变体。
 本目录没有任何 `'locked'` 字符串字面量断言：`data-status` 只核对 `executed`（`approval-ux.e2e-helper.ts#assertApprovalExecuted`）与 `awaiting_mfa`（`card-freeze.e2e-helper.ts`），
