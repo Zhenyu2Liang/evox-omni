@@ -30,7 +30,7 @@ live 数据库文件为 `prisma/live-acceptance.db`（含 `-wal`/`-shm`/`-journa
 
 `pnpm exec tsx tests/e2e/live-acceptance.e2e.ts`
 运行真实模型场景。
-`LIVE_SCENARIOS` 可指定场景标识列表（`lA`/`lB`/`lC`/`lD`/`lE`/`lF`/`lG` 等）。
+`LIVE_SCENARIOS` 可指定场景标识列表（`lA`/`lB`/`lC`/`lD`/`lE`/`lF`/`lG`/`lH` 等）。
 `LIVE_FORCE_MODEL` 仅在显式配置时覆盖模型。
 live 场景必须每轮独立起进程、独立重置隔离库。
 
@@ -44,8 +44,9 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 
 ## live 场景与辅助模块
 
-`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG`。
+`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG,lH`。
 `lF`/`lG` 是「卡片挂失 → 补办」链路场景，id `lF-live-credit-report-lost-and-replace-new-session` 与 `lG-live-full-card-loss-replace-chain-single-session`。
+`lH` 是「MFA 尝试上限 → 终态锁定」场景，id `lH-live-mfa-attempt-limit-lock-terminal`，body 在 `live-mfa-lock.e2e-helper.ts` 的 `scenarioMfaAttemptLimitLock`（注入 `{ page, baseUrl, captureShot }`），链路为 🔴 转账停泊 → 三次错码 `000000` → 锁定 → 刷新 `/agent` → `/security`。
 选择 `2` 会同时选中 `2p`。
 场景 `7`（`scenarioCommittedContinuationFailed`）不在 `SCENARIOS` 中，恒为最后阶段。
 场景契约为 `{ id, name, run(ctx): Promise<string>, skipReason? }`，`run` 返回一条证据串。
@@ -137,10 +138,10 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 断言 `cards.terminal.locked`（「已锁定」，实际命中只读回执阶段行而非停泊区，见「锁定终态：尝试次数与面板消失」）且验证码输入框 `SELECTORS.mfaInput` 消失，
 随后切换到 `/security` 核对已熔断并在该页刷新验证持久化；三次尝试之间不刷新页面。
 `e2-refresh-mfa`（journey e）断言挂起但未锁定的红档转账刷新后 MFA 卡片恢复。
-`live-acceptance.e2e.ts` 的 S4 只提交一次错误码并断言卡片保留，正确码在独立页面执行；live 侧不校验尝试次数上限。
-`lA`/`lD`/`lE`/`lF`/`lG` 的 live 腿只提交正确码 `123456`（`MfaChallenge.attempts=0`），live 不接受错误码、不触达尝试上限。
-当前没有用例在锁定后刷新 `/agent` 再断言弹窗保持消失。
-`driveRedTool`（`live-acceptance.e2e.ts:575-636`）是入口文件唯一的 RED 驱动，在 `:591`/`:634` 硬编码正确码 `123456`，所以错误码/锁定链路必须在它之外另写驱动，或先给它加码/次数参数。
+`live-acceptance.e2e.ts` 的 S4 只提交一次错误码并断言卡片保留，正确码在独立页面执行；live 侧的尝试次数上限只由 `lH` 校验。
+`lA`/`lD`/`lE`/`lF`/`lG` 的 live 腿只提交正确码 `123456`（`MfaChallenge.attempts=0`）；`lH` 是唯一提交错误码（三次 `000000`）并触达尝试上限的 live 腿。
+锁定后刷新 `/agent` 再断言弹窗保持消失由 `lH` 覆盖：刷新后停泊区与验证码输入框计数仍为 0、只读回执停在 `[data-status="locked"]`、`PendingAction.status` 仍为 `locked`。
+`driveRedTool`（`live-acceptance.e2e.ts:575-636`）是卡片链路共用的 RED 驱动，在 `:591`/`:634` 硬编码正确码 `123456`，因此错码链路在它之外另写：`lH` 的 `ensureMfaDock`（`live-mfa-lock.e2e-helper.ts`）只催泊停靠区、从不提交验证码，错码阶梯由场景自己连发三次 `000000`。
 它的类型 `RedToolDriver` 定义在 `live-virtual-card.e2e-helper.ts:471`，入口以 `(turns) => driveRedTool(page, ctx.baseUrl, turns)` 注入 `applyVirtualCardViaAgent`（`:1902-1910`）与 `lF`/`lG`（`:2342`/`:2343`）。
 live 入口文件没有 `data-testid`/`getByTestId`：DOM 断言只靠 `data-*` 选择器（`data-approval-request`、`data-card-id`、`data-card-consume*`、`data-investment-holdings`）与 `getByRole` 的中文可及名（`确认`/`取消`/`验证`/`提交消费`）。
 `helpers.ts#waitForMfaSettled` 在 live 入口未被引入：它在 `验证` 按钮计数为 0 时即返回 true，无法区分「锁定」与「验证成功」，锁定断言不能用它。
@@ -170,7 +171,7 @@ MFA／锁定的 DOM 驱动接缝全部在 `helpers.ts`，入口不复刻：
 服务端叙述同时出现于 system 气泡 `[data-message-role="system"] [data-message-content="true"]` 与 `li[data-tool-status="error"]` 的 summary，两者都是 `chat.error.actionLocked`。
 面板消失表现为 `[data-approval-request="true"]` 与其 `input[aria-label="验证码"]` 计数为 0。
 
-`[data-mfa-locked]`、`[data-approval-locked]`、`data-status="locked"` 在本目录**没有任何断言**：现行锁定事实只由 `waitForStatusText(..., t('cards.terminal.locked'))`（全页 `[role="status"]` 去空白子串，见下节）与 `SELECTORS.mfaInput` 计数为 0 表达，更强的断言应加在上面列出的回执与叙述锚点上。
+mock 的 `j` 仍只把锁定事实表达为 `waitForStatusText(..., t('cards.terminal.locked'))`（全页 `[role="status"]` 去空白子串，见下节）加 `SELECTORS.mfaInput` 计数为 0；只读回执与叙述锚点由 `lH` 断言（见「`lH` 锁定的可复用锚点」）。`[data-mfa-locked]` 在本目录仍无任何断言。
 
 ## zh-CN 文案取值约定
 
@@ -198,17 +199,26 @@ MFA／锁定的 DOM 驱动接缝全部在 `helpers.ts`，入口不复刻：
 停泊区在锁定时已整体卸载，因此 `SELECTORS.mfaInput` 与「验证」按钮计数都归 0。
 `submitMfa` 取 `SELECTORS.mfaInput` 的 `.last()` 填码再点「验证」（`helpers.ts:1168-1173`）；`waitForStatusText` 扫全页 `[role="status"]` 做去空白子串匹配（`helpers.ts:1194-1202`）。
 正确验证码是常量而非环境变量：`lib/constants.ts:7` `MFA_CODE = '123456'`、`:10` `MFA_MAX_ATTEMPTS = 3`；错误码惯例为 `'000000'`。
-本目录没有任何 `'locked'` 字符串字面量断言：`data-status` 只核对 `executed`（`approval-ux.e2e-helper.ts#assertApprovalExecuted`）与 `awaiting_mfa`（`card-freeze.e2e-helper.ts`），
-`queryPendingActionStatus` 只在 journey f 使用，`j` 不核对 `PendingAction.status === 'locked'`，也不核对锁定后 `/api/actions` 为空。
+`data-status` 由 `assertApprovalExecuted`（`approval-ux.e2e-helper.ts`）核对 `executed`、`card-freeze.e2e-helper.ts` 核对 `awaiting_mfa`。
+`queryPendingActionStatus` 被 journey f 与 `lH` 使用；`lH` 断言 `PendingAction.status === 'locked'`、`resultJson === null`、`GET /api/actions` 不再含该 id、`MfaChallenge.attempts=3`/`status='locked'`、`CircuitBreakerState key='user:user_liming' failures=3 locked=true`，`j` 仍不核对这些。
 「验证码错误次数过多」与 `chat.error.securityLocked` 在本目录无任何断言（覆盖在 `tests/unit/security`、`tests/scenarios`、`tests/integration`、`tests/app`）。
 
-锁定终态已实现但本目录尚未断言的钩子是只读回执与叙述：`components/chat/cards/ApprovalRecord.tsx:50` 的 `data-status="locked"`、`:61` 的 `[data-approval-stage="current"][data-stage-status="locked"]`、`:70` 的 `<div data-approval-locked="true">`，以及 system 气泡与 `li[data-tool-status="error"]` 行里的 `chat.error.actionLocked`。
+锁定终态的只读回执与叙述钩子由 `lH` 断言：`components/chat/cards/ApprovalRecord.tsx:50` 的 `data-status="locked"`、`:61` 的 `[data-approval-stage="current"][data-stage-status="locked"]`、`:70` 的 `<div data-approval-locked="true">`，以及刷新后全页可见文本里的 `chat.error.actionLocked` 与 `role="status"` 里的徽章「验证已锁定」（`chat.approval.status.locked`）。
 `MfaCard.tsx:51` 的 `readOnly` 在 `terminal !== undefined` 时成立，但停泊区能带上终态之前就已卸载，所以锁定后 `SELECTORS.mfaInput` 计数归零证明的是停泊区卸载，而不是终态块渲染。
 错码时停泊区徽章渲染的不是剩余次数文案，而是通用兜底句，细节见本节末「停泊区错码提示的已知缺口」。
-**LIVE 入口永远渲染不出 `MfaCard` 的锁定终态 DOM**：live dock 的 `PendingHumanDecision.status` 只来自 `pickPendingAction`（`components/chat/agent-stream-reducer.ts:554-559`，只收 `pending`/`awaiting_mfa`），`asTerminalStatus` 因此恒为 `undefined`；第 3 次错码走 `settleAction`（`:319-343`）清空 `pendingAction` 并整块卸载 dock。所以 `tests/e2e` 的 live 场景若要断言锁定，只能靠服务端叙述 `chat.error.actionLocked`（system 气泡与 `li[data-tool-status="error"]` 行）+ `queryPendingActionStatus(...).status === 'locked'` + `fetchPendingActions` 不再含该 id + `SELECTORS.mfaInput` 计数 0；`[data-mfa-locked]`/`cards.terminal.locked` 只可能在刷新后的只读历史回执（`[data-approval-history][data-status="locked"]` + `[data-approval-locked="true"]`）里出现。当前没有任何 live 场景走到锁定：live 腿只提交正确码，唯一错误码腿是 `4-live-large-transfer-mfa` 的一次 `000000`。
+**LIVE 入口永远渲染不出 `MfaCard` 的锁定终态 DOM**：live dock 的 `PendingHumanDecision.status` 只来自 `pickPendingAction`（`components/chat/agent-stream-reducer.ts:554-559`，只收 `pending`/`awaiting_mfa`），`asTerminalStatus` 因此恒为 `undefined`；第 3 次错码走 `settleAction`（`:319-343`）清空 `pendingAction` 并整块卸载 dock。所以 `tests/e2e` 的 live 场景若要断言锁定，只能靠服务端叙述 `chat.error.actionLocked`（system 气泡与 `li[data-tool-status="error"]` 行）+ `queryPendingActionStatus(...).status === 'locked'` + `fetchPendingActions` 不再含该 id + `SELECTORS.mfaInput` 计数 0；`[data-mfa-locked]`/`cards.terminal.locked` 只可能在刷新后的只读历史回执（`[data-approval-history][data-status="locked"]` + `[data-approval-locked="true"]`）里出现。`lH` 是走到终态锁定的 live 场景（见「`lH` 锁定的可复用锚点」）；其余 live 腿只提交正确码，`4-live-large-transfer-mfa` 只提交一次 `000000` 后停住。
 `tests/e2e` 的错误码与正确码都是本地字面量：`acceptance.e2e.ts:662` 的 `const MOCK_MFA_CODE = '123456';`（注释指向 `lib/constants.MFA_CODE` 但不 import）、锁定腿提交 `'000000'`；不要为本目录新增 `lib/constants` 导入。
 比 `waitForStatusText` 更精确的锁定锚点：`queryPendingActionStatus(actionId).status === 'locked'`、`fetchPendingActions(baseUrl)` 不再包含该 id、`page.locator('[data-approval-history][data-status="locked"] [data-approval-locked="true"]')` 存在、`page.locator('[data-approval-request="true"] button').count() === 0`。
-服务端锁定事实另有 `GET /api/security` 的 `circuitBreaker{failures,max,locked}`、`lock`（`{code:'CIRCUIT_OPEN',reason:'circuit_open'}`）与 `lockedActions[].actionId`（`app/api/security/route.ts:56-84`）；`/security` 页面侧是 `[data-unlock-panel][data-unlock-locked="true"][data-unlock-failures="3"][data-unlock-locked-actions="N"]`（`app/security/UnlockPanel.tsx:134-139`）。
+服务端锁定事实另有 `GET /api/security` 的 `circuitBreaker{failures,max,locked}`、`lock`（`{code:'CIRCUIT_OPEN',reason:'circuit_open'}`）与 `lockedActions[].actionId`（`app/api/security/route.ts:56-84`）；`/security` 页面侧是 `[data-unlock-panel][data-unlock-locked="true"][data-unlock-failures="3"][data-unlock-max-attempts="3"][data-unlock-locked-actions="N"]`（`app/security/UnlockPanel.tsx:134-139`）。
+
+## `lH` 锁定的可复用锚点
+
+`lH` 的三次 `POST /api/actions/[id]/verify` 都是 HTTP 200 域结果，不要断言 423/409：#1/#2 `status='awaiting_mfa'` + `code='MFA_FAILED'` + `failure={code:'MFA_FAILED',reason:'mfa_code_invalid',attemptsUsed:1|2,attemptsLeft:2|1,maxAttempts:3}`；#3 `status='locked'` + 顶层 `code='CIRCUIT_OPEN'` + `failure={code:'MFA_LOCKED',reason:'mfa_attempts_exhausted',attemptsUsed:3,attemptsLeft:0}`。
+锁定后停泊区整块卸载，`SELECTORS.mfaInput` 计数 0 只能证明卸载；锁定事实必须同时靠 `PendingAction.status === 'locked'`、`GET /api/actions` 不再含该 id 与服务端叙述。
+刷新 `/agent` 后的锚点：`[data-approval-history="true"][data-status="locked"] [data-approval-locked="true"]`、`[data-approval-stage="current"][data-stage-status="locked"]`（当前验证阶段行，文案「当前验证已锁定。」）、徽章「验证已锁定」（`chat.approval.status.locked`）。
+`/security` 锚点：`[data-unlock-panel][data-unlock-locked="true"][data-unlock-failures="3"][data-unlock-max-attempts="3"][data-unlock-locked-actions="N"]`、`[data-lock-reason="CIRCUIT_BREAKER_TRIPPED"]`、`section[data-locked-actions] li[data-locked-action-id]`、`[data-security-event-kind="CIRCUIT_BREAKER_TRIPPED"]`；读模型是 `GET /api/security` 的 `circuitBreaker{failures,max,locked}` / `lock.code` / `lockedActions[]`。
+DB 侧由 `helpers.ts#queryPendingActionStatus`（`status`/`resultJson`）、`withDb`（`PendingAction`/`MfaChallenge`/`CircuitBreakerState` 行）与 `querySecurityEvents({ sessionId })`（`MFA_FAILURE` ≥ 3、`CIRCUIT_BREAKER_TRIPPED` 恰 1）交叉核对。
+三次错码之间账本零新增（`fetchLedger` + `diffLedger`），全页可见文本与 `verify` 响应原文都不含 `__SECURITY_BLOCK__`/`decisionKind`/原始 JSON/堆栈。
 
 ## 停泊区错码提示的已知缺口
 
@@ -220,6 +230,7 @@ MFA／锁定的 DOM 驱动接缝全部在 `helpers.ts`，入口不复刻：
 测试后果：不要在停泊区断言「验证码错误。还可尝试 N 次。」或任何剩余次数文案；该句只存在于响应体与 `tests/unit`、`tests/app` 的断言里。
 错码的确定性断言是停泊区计数行 `p[role="status"]`「验证失败，已尝试 N 次。」（`cards.mfa.failedAttempts`，`MfaCard.tsx:108-114`），第 3 次因停泊区卸载而不可达。
 `role="alert"` 横幅在停泊期间被抑制（`components/chat/ChatWindow.tsx:189` 的 `showNotice={!pending}`），错码同样不产生横幅断言点。
+`lH` 在 live 侧复核同一事实：错码后停泊区徽章可读到 `chat.error.request` 兜底句，所以剩余次数只能用 `p[role="status"]` 的计数行「验证失败，已尝试 N 次。」断言（第 1、2 次各一档）；服务端始终直传 `attemptsLeft` 2/1/0，`lib/public-text.ts#securityNotice` 的单一 `?? 0` 在这条链路上未被触发，页面从未出现「还可尝试 0 次」。
 
 ## 熔断复位的可重复性
 
@@ -229,7 +240,8 @@ MFA／锁定的 DOM 驱动接缝全部在 `helpers.ts`，入口不复刻：
 普通模式必须先断言两条负例：按钮计数为 0，且同一 POST 返回 403（`app/api/_lib/developer.ts#requireDeveloperMode`）。
 运行期解锁是另一条路径：`POST /api/security/reset` 在锁定时无正确码返回 423 `CIRCUIT_OPEN` 且锁保持不变，成功返回 `lockedActionsReopened:false`（`app/api/security/reset/route.ts:52`/`:87-95`）；`tests/e2e` 只用开发者按钮，从未调用该路由。
 解锁永不把 `'locked'` 行写回 `pending`/`awaiting_mfa`，断言锁定持久性不应期待它被解除。
-`PendingAction` 状态的 DB 接缝：live 入口用本地 `readPendingAction`（`live-acceptance.e2e.ts:254-262`，`withDb` + `pendingAction.findUnique({ where: { id, sessionId } })`）；mock 入口用 `helpers.ts#queryPendingActionStatus`（`:220-234`，只按 `id`，走 `createDatabaseClient()` 的当前 `DATABASE_URL`）。
+`lH` 不按开发者按钮、也不重置熔断：它依赖 live 入口每轮重建的 `prisma/live-acceptance.db`（`db push` + seed），同一库上连跑第二轮会从已熔断状态开始。
+`PendingAction` 状态的 DB 接缝：live 入口用本地 `readPendingAction`（`live-acceptance.e2e.ts:254-262`，`withDb` + `pendingAction.findUnique({ where: { id, sessionId } })`）；mock 入口用 `helpers.ts#queryPendingActionStatus`（`:220-234`，只按 `id`，走 `createDatabaseClient()` 的当前 `DATABASE_URL`），`lH` 也用它直读锁定行。
 `scenarioLargeTransferMfa` 的单次错码腿在 `live-acceptance.e2e.ts:1005` 用裸字面量 `input[aria-label="验证码"]` 计数（未走 `SELECTORS.mfaInput`）；两者当前等价，改选择器时两处都要看。
 
 ## 退出码与资源清理
