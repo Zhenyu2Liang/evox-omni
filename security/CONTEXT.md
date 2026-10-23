@@ -118,7 +118,7 @@ MFA 连续 `MFA_MAX_ATTEMPTS`（`lib/constants.ts` = 3）次错误产生三重�
 
 ## MfaChallenge 行的创建点与 expiresAt
 
-本层唯一的 `MfaChallenge` 行创建点：`mfa.ts#issueChallenge` → `createMfaChallenge`（`mfa.ts:134-140`），`maxAttempts` 取 `MFA_MAX_ATTEMPTS`，`expiresAt` 取 `MFA_CHALLENGE_TTL_MS`。
+本层唯一的 `MfaChallenge` 行创建点：`mfa.ts#issueChallenge` → `createMfaChallenge`（`mfa.ts:195-201`），`maxAttempts` 取 `MFA_MAX_ATTEMPTS`，`expiresAt` 取 `MFA_CHALLENGE_TTL_MS`。
 已存在挑战的续期走 `prisma.mfaChallenge.update`（`mfa.ts:126-130`），TTL 同源。
 `MFA_CHALLENGE_TTL_MS = 5 * 60_000`（`mfa.ts:34`）在本层仅被 `mfa.ts:128`、`mfa.ts:138` 引用，不从 `index.ts` 导出。
 `authorizeWithMfa` 不建行，只按 `expiresAt`/`commandDigest` 判断是否调用 `issueChallenge` 重签（`security-gateway.ts:899-905`）。
