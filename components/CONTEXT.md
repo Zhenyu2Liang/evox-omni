@@ -45,6 +45,13 @@ SDK 数据类型使用类型导入。
 `usable === false`（FROZEN/LOST）另加「卡片不可用」提示，账户余额区块照常显示。
 展示脱敏统一走 `lib/mask.ts`，`chat/cards/maskPhone.ts` 仅为再导出。
 
+费用在组件层只有一处出口：`chat/cards/ActionDetails`（`ConfirmationCard`/`MfaCard`/`ApprovalRecord` 共用）。
+服务端把赎回费写成一条普通字段行（标签 `chat.field.feeRule` →「费用口径」/`Fee basis`，值原文如「赎回费 ¥0.00（SIMULATED_NONE：模拟规则免收）」），
+界面按快照逐字渲染；值含 `SIMULATED_NONE` 且同组字段构成赎回快照时，另加一句 `chat.value.feeRuleSimulatedNone`（文案内写死 ¥0.00）。
+`ReconciliationCard` 只渲染这些字段行，不追加该句。
+`banking/` 的 tile、`HoldingFacts`、理财卡与回执卡都不渲染费用：`HoldingRedemption.feeAmount`/`feeRule` 与 `BusinessReceipt` 在组件层无处展示。
+没有 `手续费`/`管理费` 键，也没有结构化费用字段或费用计算。
+
 图表只有坐标可转换为普通数值。
 本地化使用 `lib/i18n`，不改变金融值与资源身份。
 安全与拒绝类文案只经 `lib/public-text.ts`（`securityNotice`/`safePublicText`）
