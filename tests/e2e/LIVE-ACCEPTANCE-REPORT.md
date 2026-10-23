@@ -285,7 +285,8 @@ Tail `4348` is the mask the harness had just created — no invented data.
 `report_lost_card {"cardId":"<source>","reason":"用户表示虚拟卡（尾号4348）丢失，申请正式挂失"}` →
 `describe_turn replace_card` → `replace_card {"cardId":"<source>"}`.
 
-**Panel reality** (`logs/live-round3-db.json`): three `PendingAction` rows, `riskLevel=RED`, `requiresMfa=true`,
+**Panel reality** (read from the git-ignored local dump `logs/live-round3-db.json`, which is not repository
+evidence): three `PendingAction` rows, `riskLevel=RED`, `requiresMfa=true`,
 `status=executed`, `argsJson` normalized (`apply_virtual_card` → `{"monthlyLimit":"100.00"}`); three `MfaChallenge`
 rows, code `123456`, `attempts=0/3`, `status=verified` (`verifiedAt` `06:58:22.594Z`, `06:58:35.682Z`,
 `06:58:38.851Z`).
@@ -475,9 +476,9 @@ receipt exactly once; `h-investment-flow` `−1000.00` DEBIT / `+6178.36` CREDIT
   ended exit 1 as a **session-lease flake** (first `POST /api/chat` `500 INTERNAL`, then two
   `409 Another agent run owns this session`, dock never appeared, `waitForMfaCard` timed out at 90 s) with product and
   scenario code unchanged between rounds. None of the three is a product verdict, and none of them is one of the eight
-  certified sets. The `lB` artifacts for those rounds are reference files under `logs/` (`logs/lB-CERTIFICATION.md`,
-  `logs/lB-r2.log`, `logs/lB-r3.dbcheck.log`, …): `logs/` is a git-ignored path whose files are force-added, so they
-  are reading material, not part of the certified evidence surface.
+  certified sets. The `lB` artifacts for those rounds are not repository evidence: `logs/` is a git-ignored, untracked
+  local path holding `logs/lB-CERTIFICATION.md`, `logs/lB-r2.log`, `logs/lB-r3.dbcheck.log` and the like, which exist
+  only in the workspace that produced them: reading material, not part of the certified evidence surface.
 - **`lB`'s two diagnosed defects are recorded, not re-proven by these rounds**: the whole-page client crash
   `Financial value must be nonnegative.` raised from `lib/decimal.ts#nonNegativeDecimal` through
   `components/banking/HoldingFacts.tsx#rateRatioToPercent(profitRate)` for a negative `profitRate` (it blanks `/agent`,
@@ -537,7 +538,7 @@ receipt exactly once; `h-investment-flow` `−1000.00` DEBIT / `+6178.36` CREDIT
 | `output/playwright/live/lH-head0da121d-round{3,4}/`, `output/playwright/live/lH-head7e06a0d-round1-merged/`, `output/playwright/live/REPORT-lH-head0da121d-round4.md` | earlier `lH` rounds on `0da121d2` / `7e06a0d`; the report file records the round-2 session-lease flake and the pre-`d26b2636` dock copy |
 | `output/playwright/live/lI-head7e06a0d-round3/` | earlier `lI` round on `7e06a0d` |
 | `output/playwright/live/lJ-head7e06a0d-round1-merged/`, `output/playwright/live/lJ-head53fbde4-round{5,6}/RUN.md` | earlier `lJ` rounds on `7e06a0d` and `53fbde4`, the latter with their own `RUN.md` write-ups |
-| `logs/` (git-ignored path, selected files force-added) | reference material only: `lB-CERTIFICATION.md`, `lB-diagnosis.md`, `lB-r{1..4}.log` / `lB-r{3,4}.dbcheck.log`, the round-based `lB-round*.log` / `dbcheck` scripts and `typecheck.log`. The `lB`/`lH`/`lI`/`lJ` runs themselves keep their stdout inside each `output/playwright/live/<set>/*-run-log.txt`. |
+| `logs/` (git-ignored, untracked local path) | not repository evidence: `lB-CERTIFICATION.md`, `lB-diagnosis.md`, the round-based `lB*.log` / `dbcheck` scripts and `typecheck.log` exist only in the workspace that ran those rounds, so the `lB`/`lH`/`lI`/`lJ` references in this file resolve to each `output/playwright/live/<set>/*-evidence.json` and `*-run-log.txt` instead. |
 
 Per-round screenshots live in `…-round<N>/` directories because the harness's fixed screenshot names are overwritten
 by the next run.
@@ -622,7 +623,7 @@ plus `lB-evidence.json` and `lB-run-log.txt`.
 | Round | Product tree | Verdict | Exit | Note |
 | --- | --- | --- | --- | --- |
 | 1 (`7e66cee7`/`ec12289d`) | pre-`6da00b86` | PASS 1 / FAIL 0 / SKIP 0 | `0` | regression leg only — B3–B5 not covered |
-| 2 (`89ea7891`) | pre-`6da00b86` | **PASS 0 / FAIL 1** | `1` | `B1 之后聊天里最新投资卡的持仓份额应为 5965.395384 份（写后重读的 DB 值），实际 4999.864825 份` — the read saw the pre-write card; `logs/lB-CERTIFICATION.md` classifies the round as a test-side race, while `logs/lB-diagnosis.md` records the same symptom as the then-missing write-tool projection in `agent/card-emitter.ts`. The certified rounds assert the post-write value. |
+| 2 (`89ea7891`) | pre-`6da00b86` | **PASS 0 / FAIL 1** | `1` | `B1 之后聊天里最新投资卡的持仓份额应为 5965.395384 份（写后重读的 DB 值），实际 4999.864825 份` — the read saw the pre-write card; the git-ignored local notes `logs/lB-CERTIFICATION.md` (not repository evidence) classify the round as a test-side race, while `logs/lB-diagnosis.md` records the same symptom as the then-missing write-tool projection in `agent/card-emitter.ts`. The certified rounds assert the post-write value. |
 | 3, 4 (`6da00b86`) | `6da00b86` | PASS 1 / FAIL 0 / SKIP 0 each | `0` | full B0–B5; the two independent DB checks agree on shares `3934.334266`, `principalAmountMinor 395716`, `realizedProfitMinor 6073`, balance `2468357`, the three `投资` ledger rows and the three `executed` gate rows |
 | 1 (`3ba488a`) | `3ba488a` | PASS 1 / FAIL 0 / SKIP 0 | `EXITCODE=0` | certified set, 10 model requests |
 | 2 (`d26b2636`) | `d26b2636` | PASS 1 / FAIL 0 / SKIP 0 | `EXITCODE=0` | certified set, 6 model requests |

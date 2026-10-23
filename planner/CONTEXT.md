@@ -54,16 +54,16 @@ planner 不让内部诊断文本进入任何可渲染字段。
 取消在检查点阻止后续工作。
 已完成业务不因取消而伪装回滚。
 
-`summary` 没有节点列：无 `data` 时才并入 `output`（`node-outcome.ts:20`、`:21`）。
+`summary` 没有节点列：无 `data` 时才并入 `output`（`node-outcome.ts#settleToolNode` 的 `success` 分支；`summary` 先过 `publicFailureText`）。
 可推进节点的重写保护来自持久层「终结态不写终结态」的条件更新；不可推进节点由守卫提前拦下（见「不可再驱动」）。
 `compensationReport` 描述已执行与已取消节点。
 它不执行资金补偿。
 
 ## 赎回口径校验
 
-赎回类工具节点必须显式给出赎回口径 `mode`（`SHARES`/`AMOUNT`/`ALL`）。
+赎回类工具节点（`tool === 'redeem_investment'`）必须显式给出赎回口径 `mode`（`SHARES`/`AMOUNT`/`ALL`）。
 `SHARES` 只接受 `shares`，`AMOUNT` 只接受 `amount`，`ALL` 两者都不接受。
-口径缺失、未知、混用或沿用已废止的 `redeemAmount` 的节点在校验期被拒绝。
+口径缺失、未知、混用或沿用已废止的 `redeemAmount` 的节点在校验期被拒绝（`dag.ts#redeemModeProblem`，由 `dag.ts#validatePlan` 汇总成 `AppError('VALIDATION')`）：那是澄清请求，绝不取任何默认口径。
 节点 `args` 原样转发给工具调用，赎回快照由安全网关在挂起时生成。
 ## 不可再驱动（已锁定/已终态动作）
 
@@ -118,9 +118,9 @@ planner 不让内部诊断文本进入任何可渲染字段。
 
 ## 错误传播面
 
-本目录只抛 `AppError('VALIDATION')`（`dag.ts:248`、`dag.ts:426`、`executor.ts:628`）与 `AppError('NOT_FOUND')`（`lifecycle.ts:335`）；没有任何 `AppError('CONFLICT', …)`。
-`runPlan`（`executor.ts:271`）唯一会传播出去的自身抛错是 `topologicalOrder` 的环检测（`dag.ts:248`，经 `executor.ts:302` 调用，无 try 包裹）：`plan dependency graph contains a cycle (N of M nodes ordered)`。
-条件节点缺表达式（`executor.ts:628`）与 `assertConditionResolvable`（`dag.ts:426`）都在 `executor.ts:627-638` 的 try/catch 内，收敛成 `failed` 节点（经 `publicFailureText`/`toPlanFailure` 投影），不外抛。
+本目录只抛 `AppError('VALIDATION')`（`dag.ts#topologicalOrder` 的环检测、`dag.ts#assertConditionResolvable`、`executor.ts#runPlan` 中条件节点缺表达式的分支）与 `AppError('NOT_FOUND')`（`lifecycle.ts#resumePlan`）；没有任何 `AppError('CONFLICT', …)`。
+`runPlan`（`executor.ts#runPlan`）唯一会传播出去的自身抛错是 `topologicalOrder` 的环检测（`dag.ts#topologicalOrder`，在 `runPlan` 内无 try 包裹地调用）：`plan dependency graph contains a cycle (N of M nodes ordered)`。
+条件节点缺表达式与 `assertConditionResolvable`（`dag.ts#assertConditionResolvable`）都在 `runPlan` 条件分支的 try/catch 内，收敛成 `failed` 节点（经 `publicFailureText`/`toPlanFailure` 投影），不外抛。
 `retryPlan`（`lifecycle.ts:244`）自身无 throw；它末尾调用 `runPlan`（`lifecycle.ts:300`），抛错面同上。
 `deps.runTool` 的拒绝在 `executor.ts:504-509` 被 `AppError.from` 转成 `{ok:false, error, failure}`，再经 `settleToolNode`（`executor.ts:516`）记为 failed 节点，不传播。
 其余注入端口的抛错不被捕获，直接从入口穿透：`persistNode`/`onNodeUpdate`（`executor.ts:355-360`）、`claimNode`（`:486`）、`releaseNode`（`:527`，`finally` 内，会覆盖原始异常）、`isRunOwner`（`:322-323`）、`controls.pollControls`（`:426`）、`loadPlan`/`persistPlan`（`:229`、`:232`）。`runPlan` 顶层 `try`（`:546`）只有 `finally` 摘除 abort 监听，没有 catch。
@@ -149,7 +149,7 @@ planner 不让内部诊断文本进入任何可渲染字段。
 节点写入顺序：认领后先写 `running` 行，再调 `runTool`（`executor.ts:491`、`:505`），之后写结算行（`:517`）；`requiresConfirmation`/`pendingActionId` 结果为挂起时置计划 `waiting_confirmation` 并 `return 'parked'`（`:518-521`），走查 break（`:674-677`）后照常写结算快照，不抛错。
 全程 `await`：走查内无 fire-and-forget 节点 promise，唯一未 await 的是 `opts.onControls?.(controls)`（`executor.ts:532`，返回类型 `void`）。
 `lifecycle` 全无 catch；`resumePlan` 的 `AppError('NOT_FOUND')`（`lifecycle.ts:335`）是 lifecycle 里唯一的显式抛出。
-本目录全部显式抛出只有三处：`dag.ts:248`（有环，经 `executor.ts:302` 逃出 `runPlan`）、`dag.ts:426`（条件输出缺失/不可比，被 `executor.ts:632` 捕获）、`executor.ts:628`（条件无表达式，同处捕获）。
+本目录全部显式抛出只有三处：`dag.ts#topologicalOrder`（有环，经 `runPlan` 逃出）、`dag.ts#assertConditionResolvable`（条件输出缺失/不可比，被 `runPlan` 条件分支捕获）、`runPlan` 中条件节点无表达式的分支（同处捕获）。
 `retryPlan` 对 `cancelled` 计划、无目标、无任何可重置节点三种情况原样返回同一 plan（`lifecycle.ts:249`/`:261`/`:291`），从不因终态/已锁定节点抛错。
 `PlanToolOutcome.ok === false` 只让节点 `failed`（或在 `requiresConfirmation`/`pendingActionId` 存在时挂起，`node-outcome.ts:36-52`），不抛错也不直接改计划状态；计划成败在结算处按「全部 success/skipped」判定（`executor.ts:720-724`）。
 
@@ -158,4 +158,4 @@ planner 不让内部诊断文本进入任何可渲染字段。
 `plan-failure-contract.test.ts`（7 用例）与 `plan-drive-guard.test.ts`（8 用例）是纯注入式单元测试，共用 `plan-test-harness.ts` 的 `PlanDeps` 桩：无 DB、无网络、无需 Prisma 生成。
 两者都用 `toEqual` 精确断言 `PlanNodeResult`，覆盖结构化拒绝的字段保真与内部诊断不外泄，以及已锁定/已终态动作不被重新驱动（`sealReason`/`mayDriveNode`/`mayResetNode` 的四条路径，含 `actionStatus:'pending'` 仍可驱动的正例）。
 运行方式：`pnpm exec vitest run --config planner/vitest.config.ts`；该配置复用根 `@` 别名、`environment:'node'`、`globals:true`、`include:['planner/**/*.test.ts']`，不设 `setupFiles`。
-规范位置是 `tests/unit/planner/`：根 `vitest.config.ts` 的 `include` 需由有权限的节点补上 `planner/**/*.{test,spec}.ts`（或迁移后的 `tests/unit/planner/**`），再迁走本目录的测试与配置。
+根 `vitest.config.ts` 的 `include` 已收集 `planner/**/*.{test,spec}.ts`（与 `tests/**`、`agent/**`、`security/**` 并列），两套纯用例留在本目录即可被默认收集；`planner/vitest.config.ts` 是只跑本目录纯用例、不设 `setupFiles` 的可选配置。
