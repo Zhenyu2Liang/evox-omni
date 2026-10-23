@@ -15,6 +15,9 @@
 `Money` 的字符串输入单位是元。
 显式 `bigint` 输入单位是分。
 格式化使用 `lib/money`，不接受普通数值金额。
+本目录不含费用概念：12 个源文件（含 `index.ts`）无 `fee`/`Fee`/`feeAmount`/`feeRule`/`SIMULATED_NONE`，也无 手续费 / 管理费 / 费用 / 赎回费 文案。
+`Money` 与 `DecimalMoney` 只有 `amount`、`signed`、`className` 三个属性，不接受单位、标签或百分比，全目录也没有 `%` 字符；
+费率或费用行只能由调用方经 `title`/`footer`/`header`/`label`/`children` 自行渲染，`Table` 的“手续费”列同样须由调用方定义 `header`/`render`。
 金融单位见
 [financial-values.md](../../docs/cn/financial-values.md)。
 

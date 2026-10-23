@@ -173,7 +173,7 @@ Agent 注册虚拟卡申请与挂失卡补办，两者都是 RED 操作。
 ### 升级步骤
 
 1. 停止应用和恢复进程。
-2. 停止数据库连接，按[开发指南的备份步骤](development.md#备份默认数据库)创建数据库快照。
+2. 停止数据库连接，按[开发指南的备份步骤](development.md#数据库备份与净值份额升级)创建数据库快照。
 3. 同步外键和索引。
 
    ```sh
@@ -210,7 +210,7 @@ Agent 注册虚拟卡申请与挂失卡补办，两者都是 RED 操作。
    pnpm exec tsx scripts/card-account-binding.ts --rollback=logs/card-account-binding/<时间戳>-applied.json
    ```
 
-3. 需要恢复更早的数据时，用 `backups/` 中的快照覆盖数据库。
+3. 需要恢复更早的数据时，用 `logs/db-backups/` 中的快照覆盖数据库。
 
 回滚只还原仍持有脚本写入值的行，人工改过的行保持不变。
 

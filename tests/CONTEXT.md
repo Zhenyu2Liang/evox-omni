@@ -82,6 +82,9 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 
 `unit/banking-sdk/net-value-redemption.test.ts` 覆盖份额折算、按份额／金额／全额赎回的结算与成本守恒。
 `unit/security/redemption-stale-authorization.test.ts` 覆盖确认快照不一致时的 `CONFLICT`：本次零写入、`PendingAction` 为 `failed`，同身份重放返回原回执与原净值。
+`unit/banking-sdk/atomicity.test.ts:116-140` 覆盖同一持仓的并发赎回：两个 `Promise.allSettled` 的 `mode:'ALL'` 赎回恰一个成功、另一个抛 `CONFLICT`，账户只入账一次（不是排队，也不是部分成交）。
+单进程内两次事务由 `lib/db/serialized-connection.ts` 的单连接 FIFO 串行化，失败方随后在「已平仓」或旧 `shares` 的条件写处被拒；该用例只覆盖进程内竞态，不覆盖跨进程写者。
+`integration/node-recovery.test.ts` 覆盖同一 `idempotencyKey` 的并发重放返回同一结果、不同 key 的重复赎回被拒（后者是串行调用，不构成竞态）。
 
 ## 卡片生命周期能力契约的覆盖
 
@@ -110,6 +113,7 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 `MISSING`/`UNTRUSTED` 不得带任何余额字段，也绝不以 `0.00` 冒充。
 `FROZEN`/`LOST` 保留真实余额而 `usable === false`；`CREDIT` 恒 `NOT_APPLICABLE`。
 UNTRUSTED 的可构造来源只有「他人账户」与「非 CHECKING 账户」；「账户不存在」在真外键下不可表示（删除账户走 `SetNull` → `MISSING`）。
+`MISSING`/`UNTRUSTED` 只由直接写库构造（`db().card.create/update` 写 `linkedAccountId: null`、造他人或非 CHECKING 账户、删除已绑定账户触发 `SetNull`）；演示种子（`prisma/seed.ts`）与任何 API 路径都不产生这两种状态，因此相关覆盖是合成夹具而非可复现的用户流程。
 单账户多卡共享同一份余额，一张卡的消费同步反映到同账户的其它卡，资产汇总额只计该账户一次。
 
 | 文件 | 覆盖 |

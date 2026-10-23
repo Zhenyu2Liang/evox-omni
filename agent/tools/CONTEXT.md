@@ -153,6 +153,14 @@ replays its recorded model call. The stored intent shape is `ConversationIntent`
 
 `subscribe_investment` 与 `redeem_investment` 在写事务提交后都调用 `investment.ts#currentHoldings()` 重读 `banking.investment.listHoldings(userId)`，再用 `withHoldings()` 把这份**当前**持仓以 `data.holdings` 附加在权威 `InvestResult` 之上（`amount`/`shares`/`realizedProfit` 等字段语义与取值不变，只是新增一个展示字段）。`agent/card-emitter.ts#writtenHoldings` 因此对这两个写工具投影 `receipt` + `investments`（`{ holdings }`）两张卡：回执仍是写入的权威结论，紧随其后的持仓卡与 `get_investment_holdings` 的形状完全相同，所以聊天里最新一张持仓卡永远是本次写入后的真实状态，绝不会停在写入前的旧快照。回读失败或不返回数组时 `data.holdings` 整体缺失，只投影回执卡——写入已提交，事实优先，绝不把成功写入变成失败调用，也不伪造空持仓；重放时重读的是「现在」的真实持仓。
 
+### 费用字段（`feeAmount` / `feeRule`）的投影边界
+
+SDK 的 `InvestResult` 与 `HoldingRedemption` 都声明 `feeAmount`（模拟环境恒为 `'0.00'`）与 `feeRule`（恒为 `'SIMULATED_NONE'`）。本目录没有任何按名字读取这两个字段的投影逻辑，只有两处是它们真正落地的地方：
+- `redemptionSummary()` 的 `feeLine()`（`investment.ts:497-504`，常量 `REDEMPTION_FEE_RULE` 由 `@/banking-sdk` 导出，`:25`）：`feeRule === REDEMPTION_FEE_RULE` 时渲染 `费用口径 SIMULATED_NONE（模拟环境不收取赎回费，赎回费 ¥0.00）`；字段缺失写「历史数据不足」，不凭空补 `0.00`。
+- `runRedeemInvestment()` / `runSubscribeInvestment()` 返回的 `data` 是 SDK 结果**原样**传递（`withHoldings()` `:297-302` 只追加 `holdings`），所以 `feeAmount` / `feeRule` 原样进入 `data`：模型 JSON（`result.ts:42-53` 的 `INTERNAL_FIELDS` 不剔除它们）、`ToolInvocation.resultJson`（`durable/journal.ts:175-184` 存 `data: event.result.details`）、`ExecutionReceipt.resultJson`/`responseJson`（`command-execution.ts:86-95`）、`PendingAction.resultJson`（`confirmation-recovery.ts:274-279`）与 `AuditEntry.toolResult`（`execution-audit.ts:24`、`confirmation/authorized-execution.ts:68`）都是整体序列化，没有专用费用字段。
+- 用户可见的回执卡**不含费用**：`business-card-payloads.ts#investmentPayload`（`:70-77`）只投影 `success`/`amount`/`newBalance`/`occurredAt`/`redemptionValuation`/`settlementRounding`，而 `BusinessReceipt`（`lib/contracts/agent.ts:11-13`）没有费用槽位。费用文案只出现在赎回摘要（`summary`，经 `ToolEventView.summary` 与 `financial-response.ts#renderWrite` 的 `write.summary` 展示）与确认快照字段里。
+- `subscribe_investment` 的摘要**没有**费用行：`feeLine()` 唯一调用点是 `redemptionSummary()`（`investment.ts:520`）。
+
 ## `planning.ts` entry points
 
 | Export | Line | Kind / signature |
@@ -254,6 +262,8 @@ Declared-write enforcement stays REACTIVE and declaration-gated: `compileRequest
 `planning.ts:265` calls `dag.validatePlan(nodes, knownTools)` with only two args, so output-contract validation is skipped there; the output-contract check runs in `plan-compiler.ts:16` (`BANKING_TOOL_OUTPUTS`).
 
 ## Verification
+
+The redemption summary's `费用口径` sentence is rendered only by `investment.ts#feeLine` from the result's `feeAmount`/`feeRule` (the simulation waives the fee, but the fields still render as `模拟环境不收取赎回费，赎回费 ¥0.00`); `redeem-investment.test.ts:300-305` pins that exact string through a `toBe` on the whole summary, so changing `feeLine` copy breaks a test. Only the `REDEMPTION_FEE_RULE` (`SIMULATED_NONE`) branch is asserted — the generic `费用口径 <rule>（赎回费 …）` branch and the missing-`feeAmount` `历史数据不足` fallback are untested. No `agent/tools/` capability accepts a fee as an input parameter or computes one.
 
 Use pure tests for schemas, typed error adapters, public data projection, and parameter boundaries.
 Use isolated database tests for ownership, exact balances, atomic receipts, independent MFA,

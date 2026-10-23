@@ -55,6 +55,38 @@ and aggregate repositories. Business permissions and risk rules belong to `secur
   belongs in the adapter's awaited `connect()` method.
 - Keep files below approximately 1000 lines and separate persistence from business rules.
 
+## No fee concept in the data-access layer
+
+No file in this subtree (client/database/prisma/serialized-connection/unit-of-work/url and every
+`repositories/*` module) constructs, writes, reads, sums or removes a fee / 手续费 / 管理费 /
+`managementFee` / `feeRule` / `feeAmount` / `feeMinor` / `netOfFees` field, and no module computes an
+amount by SUBTRACTING a deduction: the only arithmetic here is addition (`repositories/account.ts:29`
+`total + row.balanceMinor`, `:55` `row.balanceMinor + moneyToCents(delta)`,
+`repositories/transaction.ts:73/82/129` `total + absoluteMinor(row.amountMinor)`,
+`repositories/investment.ts:79` `total + row.principalAmountMinor`).
+`prisma/schema.prisma` has no fee column; the fee surface lives entirely OUTSIDE this layer as
+`banking-sdk` DTO/persisted-JSON keys (`feeAmount` always `'0.00'`, `feeRule` always `SIMULATED_NONE`).
+Because `InvestmentHolding.purchaseHistory` / `redemptionHistory` / `redeemResult` are opaque JSON-text
+columns, a fee key can appear INSIDE them without any column or repository change; only
+`lib/db/repositories/investment.ts` (write side) and the SDK projection (read side) matter.
+
+Near-misses that are NOT fees — do not mistake them for one: `Subscription.amountMinor` (recurring
+subscription price), `InvestmentHolding.principalAmountMinor` (remaining cost basis),
+`Card.creditLimitMinor` / `availableLimitMinor` / `monthlyLimitMinor` + `CardLimit.amountMinor`
+(spend limits), `InvestmentProduct.latestNetValuePerUnit` + `InvestmentHolding.estimatedMarketValue`
+(valuation), `ExecutionReceipt.txId` (ledger link).
+
+Exact column set written by the investment repositories: `createHolding` writes `userId`, `productId`,
+`principalAmountMinor`, and optionally `estimatedMarketValue`, `boughtAt`, `status`;
+`updateHoldingStatus` writes only `{ status }`; `sumActiveHoldings` writes nothing and sums
+`principalAmountMinor` over `status: 'HOLDING'`.
+`executionReceipt.putExecutionReceipt` writes only `id`, `userId`, `key`, `toolName`, `requestDigest`,
+`resultJson`, optional `txId` — no fee key; the receipt payload is caller-supplied JSON text.
+Gotcha: `ExecutionReceipt` also declares nullable `commandDigest` / `responseJson` columns that this
+repository never writes, while `repositories/agentRun.ts:433` compares `receipt.responseJson` — a
+receipt created through `putExecutionReceipt` therefore has `responseJson === null`. Do not assume the
+repository is the only writer of that row.
+
 ## Routing Table
 
 - [repositories/](repositories/CONTEXT.md) → aggregate queries, commands and durable runtime claims.

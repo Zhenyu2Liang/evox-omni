@@ -67,6 +67,15 @@
 | `chat.value.feeRuleSimulatedNone` | 模拟环境不收取赎回费，赎回费 ¥0.00。 | No redemption fee is charged in the simulation; the redemption fee is ¥0.00. | 模拟免费用口径 |
 | `chat.value.reconfirmOnChange` | 确认期间净值变化时需重新确认。 | If the net value changes before confirmation, the redemption must be reconfirmed. | 重新确认提示 |
 
+## 费用（fee）文案
+
+本目录只有「费用口径」展示标签，没有任何费用计算、费用字段或费用占位符。
+与手续费相关的键只有两个：`chat.field.feeRule`（zh `费用口径` / en `Fee basis`，`messages/chat.*.json:260`，由 `display-sources.json#fields:87` 映射）与 `chat.value.feeRuleSimulatedNone`（`messages/chat.*.json:277`，zh「模拟环境不收取赎回费，赎回费 ¥0.00。」/ en「No redemption fee is charged in the simulation; the redemption fee is ¥0.00.」）。
+`chat.value.feeRuleSimulatedNone` 是固定字面量：不带 `{...}` 占位符，`¥0.00` 写死在文案里，不渲染任何计算结果；它也不在 `display-sources.json#policyValues`（`:120-133`）中，因此 `localizeActionFieldValue` 不翻译费用数值。
+字段标签 `费用口径` 由调用方以 TS 字面量写进摘要（`security/security-gateway.ts`），不经 `chat.field.feeRule` 查表。
+检索 `费用`/`fee` 会命中两处**订阅费用**文案，与银行手续费无关：`pages.subscriptions.summary`（zh「…费用与续费日期」/ en「…Fees and renewal dates」，`messages/pages.*.json:76`）与 `pages.subscriptions.listDescription`（zh「名称 / 费用 / 计费周期 / 下次扣费」/ en「Name / fee / billing cycle / next charge」，`:86`）。
+`business.subscriptions.nextCharge`（下次扣费 / Next charge）与 `cards.reconciliation.recoverable.help`（不会重复扣款）里的「扣费/扣款」是扣款语义，同样不是手续费。
+
 ## 卡片标签
 
 `business.cards.*` 提供卡片业务的中英文标签，语义如下。
