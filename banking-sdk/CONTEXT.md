@@ -129,6 +129,10 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 - `NOT_APPLICABLE`：`CREDIT` 卡，按设计不解析结算账户，额度仍来自 `creditLimit`/`availableLimit`。
 
 `usable = (status === 'ACTIVE')`，`FROZEN`/`LOST`/`PENDING` 为 `false`；但卡片不可用不等于余额为零，`LINKED` 卡的余额字段照常填充。
+
+`CardView`（`types.ts`）字段是封闭集合：`id`、`type`（`'DEBIT'|'CREDIT'|'VIRTUAL'`）、`network`、`numberMasked`、`status`、`usable`、`limits`，加上可选的 `creditLimit`/`availableLimit`/`monthlyLimit`/`replacedByCardId`/`linkedAccountId`/`linkedAccountNumber`/`linkedAccountName`/`accountAvailableBalance`/`payableAmount`（后四个只在 `LINKED` 时出现）。没有 `balance`、`cardType` 或 `kind`：卡类别只看 `type`，卡片自身从不持有余额。
+唯一的投影入口是 `card.ts#toCardView`（经 `loadCardView` 取限额、解析绑定与家族月消费），所有返回 `CardView` 的路径都经过它，因此 `FROZEN`/`LOST` 卡同样带完整绑定状态与余额。
+`CardView` 的金额字段是 `lib/money.ts#centsToMoney` 的规范两位小数十进制文本（`1234.50`，无分组、无货币符号）；带 `¥1,234.50` 的 `formatCNY` 只属于展示层。
 `accountAvailableBalance` 是账户资金，`payableAmount` 是该卡当前实际可支付额：`payableAmount = monthlyLimitMinor 为空 ? accountAvailableBalance : min(accountAvailableBalance, max(0, monthlyLimitMinor − 当月已消费))`。二者都只来自关联账户，卡片没有自己的独立余额；绑定同一账户的多张卡共享同一份现金。绑定解析在投影的同一读 client（同一 unit-of-work 事务）内一次完成，存在性、owner 与 `CHECKING` 类型一次校验，且只在 `LINKED` 时才去查家族月消费。`linkedAccountId` 只回显记录的引用，是否仍然可信看 `linkedAccountStatus`。
 
 当月已消费是补办家族口径。`banking-sdk/card-family.ts` 的 `cardFamilyMonthSpend(client, cardId, userId, now?)` 先由 `cardFamilyIds` 沿 `replacedByCardId` 双向遍历得到家族，再按 `demoMonthRange(now)` 的 UTC+08:00 业务月汇总 `CardConsumption.amountMinor`。遍历用访问集与 `MAX_CARD_FAMILY = 64` 上限，只纳入同一 `userId` 的卡片，因此多代补办算作一个家族，损坏的环会终止，跨用户指针不会扩大归集。限额强制与 `payableAmount` 读取同一个家族数字，并使用同一个业务时刻：普通读取取 `demoNow()`，`consumeCard` 取本次消费的服务端时刻。
