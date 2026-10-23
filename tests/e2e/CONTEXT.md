@@ -181,7 +181,7 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 它不绑定 `MfaCard` 容器：命中来自只读回执的阶段行，`ApprovalRecord.tsx:61-63` 渲染 `div[role="status"][data-approval-stage="current"]`，内容是「当前 验证已锁定」，其中「验证已锁定」（`chat.approval.status.locked`）含子串「已锁定」（`cards.terminal.locked`，`chat.zh-CN.json:128`）。
 因此 `j` 通过不构成 `MfaCard` 渲染过锁定分支的证据；`cards.mfa.locked`、`[data-mfa-locked]` 与 `cards.mfa.failedAttemptsLimit` 在锁定后都不存在于 DOM。
 锁定态的 DOM 钩子（写锁定断言时唯一可信的来源）：可操作停泊区 `data-approval-request="true"` + `data-action-id` + `data-kind`（`components/chat/ApprovalRequest.tsx:23-25`）；
-`data-mfa-locked="true"` 只在 `components/chat/cards/MfaCard.tsx:76` 的 `terminal === 'locked'` 分支出现，内含 `securityNotice` 锁定句与 `href="/security"`；
+`MfaCard.tsx:74` 的 `<p role="status">已锁定</p>` 与 `:76-80` 的 `[data-mfa-locked="true"]` 只在停泊区收到终态 `status` 时渲染，而停泊区在终态到达的同一渲染内卸载，因此二者都不是可断言的锁定钩子；
 锁定终态标题是 `MfaCard.tsx:74` 的 `<p role="status">已锁定</p>`（`cards.terminal.locked`，`lib/i18n/messages/chat.zh-CN.json:128`）；
 尝试次数行 `MfaCard.tsx:108-114` 在 `attempts >= maxAttempts` 时由 `cards.mfa.failedAttempts`（`chat.zh-CN.json:137`）翻成 `cards.mfa.failedAttemptsLimit`（`:138`），第 3 次提交必须断言 limit 变体；
 只读回执钩子 `data-approval-history="true"` + `data-action-id` + `data-status`（`components/chat/cards/ApprovalRecord.tsx:50-51`）与 `data-approval-locked="true"`（`:70`），`data-status="locked"` 时徽章是 `chat.approval.status.locked`「验证已锁定」（`:16`）；
