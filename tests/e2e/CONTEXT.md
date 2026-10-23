@@ -44,13 +44,14 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 
 ## live 场景与辅助模块
 
-`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG,lH`。
+`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG,lH,lJ,lI`。
 `lF`/`lG` 是「卡片挂失 → 补办」链路场景，id `lF-live-credit-report-lost-and-replace-new-session` 与 `lG-live-full-card-loss-replace-chain-single-session`。
 `lH` 是「MFA 尝试上限 → 终态锁定」场景，id `lH-live-mfa-attempt-limit-lock-terminal`，body 在 `live-mfa-lock.e2e-helper.ts` 的 `scenarioMfaAttemptLimitLock`（注入 `{ page, baseUrl, captureShot }`），链路为 🔴 转账停泊 → 三次错码 `000000` → 锁定 → 刷新 `/agent` → `/security`。
-`lI` 是「号码与尾号身份解析」场景，id `lI-live-identity-resolution`，body 在 `live-identity.e2e-helper.ts`：腿 1 精确手机号转账确认卡（取消后金额不变）、腿 2 近号 `13911110002` 被拒不产生 `PendingAction`、腿 3 尾号 `6688` 定位卡、腿 4 脱敏渲染。四条腿都只读 `Contact.phone`/`Card.numberMasked` 形态，完整号码仅作为用户气泡与工具参数出现。
+`lI` 是「号码与尾号身份解析」场景，id `lI-live-identity-resolution-by-number`，body 在 `live-identity.e2e-helper.ts`：腿 1 精确手机号转账确认卡（取消后金额不变）、腿 2 近号 `13911110002` 被拒不产生 `PendingAction`、腿 3 尾号 `6688` 定位卡、腿 4 脱敏渲染。四条腿都只读 `Contact.phone`/`Card.numberMasked` 形态，完整号码仅作为用户气泡与工具参数出现。
 `lI` 必须**单独成轮**（同 session 内重复同一 prompt 会被真模型拒绝，`2p,lI` 同轮产生伪失败）；需要回归 `2p` 时换金额/措辞并另起一轮。
 `lI` 的脱敏断言口径：`search_contact` 摘要会回显调用方自己的 `query`（`agent/tools/contact.ts#summarizeContacts`），因此先抹掉工具参数中的字符串（`\d{12,}` 形状的完整卡号**不豁免**）再判泄漏；回显完整号码的结果必须同时含脱敏候选行（`\d{3}\*{4}\d{3,4}`）才通过。
 `lI` 的卡定位参数既接受 `cardTail`（含尾号）也接受 `cardId`（须形如 `^card_`），两者都不得等于尾号或完整卡号。
+`lJ` 是「借记卡展示绑定结算账户余额」场景，id `lJ-live-debit-card-linked-account-balance`，body 在 `live-debit-card.e2e-helper.ts` 的 `scenarioDebitCardLinkedAccount`（注入 `{ page, baseUrl, drive, captureShot }`）：断言 `card_debit` 渲染 `关联账户` + `账户余额`/`可用余额`（绑定 `acct_checking`）、新开与既有虚拟卡和借记卡共享同一账户余额（转账后三卡同步）、FROZEN 与 LOST 卡仍显示真实余额而 `usable=false`、CREDIT 卡只显示信用额度不显示账户余额。
 选择 `2` 会同时选中 `2p`。
 场景 `7`（`scenarioCommittedContinuationFailed`）不在 `SCENARIOS` 中，恒为最后阶段。
 场景契约为 `{ id, name, run(ctx): Promise<string>, skipReason? }`，`run` 返回一条证据串。
@@ -59,7 +60,7 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 `lA`（`scenarioCreditReplace`）经 `/agent` 挂失并补办信用卡，断言真实 `/cards` 页与 `GET /api/cards`。
 `lA` 的二次补卡腿只用确定性 `GET /api/cards` 核对（仍恰 4 张 = 1 张补办 ACTIVE 信用卡 + 1 张 LOST 源卡 + `card_debit` + `card_virtual`、唯一 ACTIVE 信用卡 id 不变），允许模型重放、返回既有结果或明确拒绝，不要求再次生成 MFA。
 `lA` 同时断言可用信用额度不得翻倍：非 `LOST` CREDIT 合计前后恒为 `18000.00`，朴素全 CREDIT 合计 `36000.00` 作为 bug 签名被显式排除。
-`lB`（`scenarioPartialRedeem`）经 `/agent` 追加申购再部分赎回理财，断言 `/investments`、账本与 `holding_wenjiana` 的 `principalAmountMinor`/`estimatedMarketValue`。
+`lB`（`scenarioInvestmentPartialRedemption`，id `lB-live-investment-partial-redemption`）经 `/agent` 追加申购再部分赎回理财，断言 `/investments`、账本与 `holding_wenjiana` 的 `principalAmountMinor`/`estimatedMarketValue`。
 `lC`（`scenarioVirtualCardConsume`，id `lC-live-virtual-card-consumption`）经 `/agent` 确认既有虚拟卡 `card_virtual`，经 `/cards` 消费对话框在限额内消费；断言恰好一笔 `channel=CARD`/`direction=DEBIT` 的 `Transaction`（精确金额）、一条 `CardConsumption`、检查账户余额仅扣减一次、虚拟卡可支付金额更新为 `min(账户余额, 剩余月限额)`；并用 `helpers.ts#assertNoFabricatedConfirmationPanel` 守卫 RED 驱动腿，同时断言卡片总数不变（不重复生成虚拟卡）。
 `lD`（`scenarioVirtualCardApplyAndLimit`，id `lD-live-virtual-card-apply-and-limit`）自然语言新开一张月限额 `100.00` 的虚拟卡并完成真实确认/MFA 面板，再经 `/cards` 对话框消费：断言 RAW `Card` 为 `VIRTUAL`/`ACTIVE`、`linkedAccountId=acct_checking`、信用额度列全为 null（`/cards` 只渲染 `账户余额` 与 `可用余额`，不出现信用额度）、恰好一笔 `channel=CARD` 借记 + 一条 `CardConsumption`、可支付金额 = `min(账户余额, 剩余月限额)`，超限消费以 `422 LIMIT_EXCEEDED` 拒绝且不移动资金。
 `lE`（`scenarioVirtualCardReplaceContinuity`，id `lE-live-virtual-card-replace-continuity`）自然语言挂失 → 补办（两腿均完成真实确认/MFA 面板）后在新卡上真实前端消费：断言源卡保持 `LOST` 且 `replacedByCardId` 指向新卡、恰一张新 `VIRTUAL`/`ACTIVE` 卡继承同一 `linkedAccountId`、新卡号、月限额连续不重置（可支付 `100.00` → `70.00` → 补办后仍 `70.00` → `0.00`），新卡消费恰好成功一次。
@@ -237,7 +238,7 @@ mock 的 `j` 仍只把锁定事实表达为 `waitForStatusText(..., t('cards.ter
 
 锁定终态的只读回执与叙述钩子由 `lH` 断言：`components/chat/cards/ApprovalRecord.tsx:50` 的 `data-status="locked"`、`:61` 的 `[data-approval-stage="current"][data-stage-status="locked"]`、`:70` 的 `<div data-approval-locked="true">`，以及刷新后全页可见文本里的 `chat.error.actionLocked` 与 `role="status"` 里的徽章「验证已锁定」（`chat.approval.status.locked`）。
 `MfaCard.tsx:51` 的 `readOnly` 在 `terminal !== undefined` 时成立，但停泊区能带上终态之前就已卸载，所以锁定后 `SELECTORS.mfaInput` 计数归零证明的是停泊区卸载，而不是终态块渲染。
-错码时停泊区徽章渲染的不是剩余次数文案，而是通用兜底句，细节见本节末「停泊区错码提示的已知缺口」。
+错码时停泊区徽章渲染剩余次数文案（`chat.error.verificationRemaining`「验证码错误。还可尝试 N 次。」）；`p[role="status"]` 计数行是更稳的锚点，细节见下文「停泊区错码提示」。
 **LIVE 入口永远渲染不出 `MfaCard` 的锁定终态 DOM**：live dock 的 `PendingHumanDecision.status` 只来自 `pickPendingAction`（`components/chat/agent-stream-reducer.ts:554-559`，只收 `pending`/`awaiting_mfa`），`asTerminalStatus` 因此恒为 `undefined`；第 3 次错码走 `settleAction`（`:319-343`）清空 `pendingAction` 并整块卸载 dock。所以 `tests/e2e` 的 live 场景若要断言锁定，只能靠服务端叙述 `chat.error.actionLocked`（system 气泡与 `li[data-tool-status="error"]` 行）+ `queryPendingActionStatus(...).status === 'locked'` + `fetchPendingActions` 不再含该 id + `SELECTORS.mfaInput` 计数 0；`[data-mfa-locked]`/`cards.terminal.locked` 只可能在刷新后的只读历史回执（`[data-approval-history][data-status="locked"]` + `[data-approval-locked="true"]`）里出现。`lH` 是走到终态锁定的 live 场景（见「`lH` 锁定的可复用锚点」）；其余 live 腿只提交正确码，`4-live-large-transfer-mfa` 只提交一次 `000000` 后停住。
 `tests/e2e` 的错误码与正确码都是本地字面量：`acceptance.e2e.ts:662` 的 `const MOCK_MFA_CODE = '123456';`（注释指向 `lib/constants.MFA_CODE` 但不 import）、锁定腿提交 `'000000'`；不要为本目录新增 `lib/constants` 导入。
 比 `waitForStatusText` 更精确的锁定锚点：`queryPendingActionStatus(actionId).status === 'locked'`、`fetchPendingActions(baseUrl)` 不再包含该 id、`page.locator('[data-approval-history][data-status="locked"] [data-approval-locked="true"]')` 存在、`page.locator('[data-approval-request="true"] button').count() === 0`。
@@ -252,17 +253,17 @@ mock 的 `j` 仍只把锁定事实表达为 `waitForStatusText(..., t('cards.ter
 DB 侧由 `helpers.ts#queryPendingActionStatus`（`status`/`resultJson`）、`withDb`（`PendingAction`/`MfaChallenge`/`CircuitBreakerState` 行）与 `querySecurityEvents({ sessionId })`（`MFA_FAILURE` ≥ 3、`CIRCUIT_BREAKER_TRIPPED` 恰 1）交叉核对。
 三次错码之间账本零新增（`fetchLedger` + `diffLedger`），全页可见文本与 `verify` 响应原文都不含 `__SECURITY_BLOCK__`/`decisionKind`/原始 JSON/堆栈。
 
-## 停泊区错码提示的已知缺口
+## 停泊区错码提示
 
-一次错码时停泊区徽章显示的是通用兜底句「请求失败，请检查网络后稍后重试。」（`chat.error.request`），不是剩余次数，这是当前实现的事实而非测试笔误。
+一次错码时停泊区徽章渲染剩余次数文案 `chat.error.verificationRemaining`「验证码错误。还可尝试 N 次。」（`count` 取服务端 `attemptsLeft`）。
 链路：`components/chat/cards/MfaCard.tsx:116` 的徽章渲染 `localizeChatError(error, t)`，`error` 由 `components/chat/ChatWindow.tsx:237-238` 的 `error={localizedError}` 传入，而 `ChatWindow.tsx:77` 的 `localizedError = publicToolError(stream.error, t, 'chat.error.request', stream.errorCode)`。
 `stream.error` 是服务端 `data.message`「验证码错误。还可尝试 N 次。」（`lib/public-text.ts:67-73` 把 `mfa_code_invalid`/`MFA_FAILED` 映射到 `chat.error.verificationRemaining`），由 `components/chat/actions.ts:640-643` 包成不带 `code` 的 `{type:'error', message}` 推进事件流。
-因此 `components/chat/agent-stream-reducer.ts:507` 写入的 `errorCode` 是 `undefined`，`lib/tool-feedback.ts:50-68` 走不到 `PUBLIC_ERROR_CODES` 的 `MFA_FAILED → chat.error.verificationFailed` 映射。
-文本本身也匹配不上：`PUBLIC_BUSINESS_ERRORS`（`lib/tool-feedback.ts:18-34`）只登记旧网关句，`:57` 的闭集正则只认「验证码错误，请重试。剩余尝试次数：N。」，`lib/i18n/messages/display-sources.json#errors` 没有该字面量，于是落到 `:63`/`:67` 的 `t('chat.error.request')` 兜底。
-测试后果：不要在停泊区断言「验证码错误。还可尝试 N 次。」或任何剩余次数文案；该句只存在于响应体与 `tests/unit`、`tests/app` 的断言里。
-错码的确定性断言是停泊区计数行 `p[role="status"]`「验证失败，已尝试 N 次。」（`cards.mfa.failedAttempts`，`MfaCard.tsx:108-114`），第 3 次因停泊区卸载而不可达。
+因此 `components/chat/agent-stream-reducer.ts:507` 写入的 `errorCode` 为 `undefined` 不影响徽章文案：`lib/tool-feedback.ts:51-61` 的原文分支先于 `:63` 的 `errorCode` 分支命中。
+`lib/tool-feedback.ts:60` 的闭集正则同时接受「验证码错误。还可尝试 N 次。」与旧的持久化句「验证码错误，请重试。剩余尝试次数：N。」，两者都映射到 `chat.error.verificationRemaining`（`:61`）。
+徽章文案完全取决于该正则是否接受服务端原文，不接受时 `publicToolError` 退化为兜底句 `chat.error.request`「请求失败，请检查网络后稍后重试。」。
+更稳的错码断言是停泊区计数行 `p[role="status"]`「验证失败，已尝试 N 次。」（`cards.mfa.failedAttempts`，`MfaCard.tsx:108-114`），第 3 次因停泊区卸载而不可达。
 `role="alert"` 横幅在停泊期间被抑制（`components/chat/ChatWindow.tsx:189` 的 `showNotice={!pending}`），错码同样不产生横幅断言点。
-`lH` 在 live 侧复核同一事实：错码后停泊区徽章可读到 `chat.error.request` 兜底句，所以剩余次数只能用 `p[role="status"]` 的计数行「验证失败，已尝试 N 次。」断言（第 1、2 次各一档）；服务端始终直传 `attemptsLeft` 2/1/0，`lib/public-text.ts#securityNotice` 的单一 `?? 0` 在这条链路上未被触发，页面从未出现「还可尝试 0 次」。
+`lH` 在 live 侧复核同一链路：错码后停泊区徽章读到「验证码错误。还可尝试 N 次。」（`output/playwright/live/lH-headd26b263-round2-mfa-copy-fix/` 观测到 `还可尝试 1 次`），`p[role="status"]` 的计数行「验证失败，已尝试 N 次。」同时成立（第 1、2 次各一档）；服务端始终直传 `attemptsLeft` 2/1/0，`lib/public-text.ts#securityNotice` 的单一 `?? 0` 在这条链路上未被触发，页面从未出现「还可尝试 0 次」。
 
 ## 熔断复位的可重复性
 
@@ -295,7 +296,7 @@ live 入口的场景后诊断与 TASK-A 证据读取位于主 `try` 内、`clean
 ## 截图、日志与证据
 
 截图目录由 `SCREENSHOTS_DIR` 指定，当前为 `output/playwright`；live 截图写入其 `live/` 子目录。
-harness 的截图文件名固定，下一轮会覆盖，因此每轮截图需复制到 `output/playwright/live/<场景>-head<产品树提交前7位>-round<N>/`。
+harness 的截图文件名固定，下一轮会覆盖，因此每轮截图需复制到 `output/playwright/live/<场景>-head<产品树提交前7位>-round<N>-<标签>/`（如 `lB-head3ba488a-round1-merged/`、`lH-headd26b263-round2-mfa-copy-fix/`）；每套证据含 PNG 截图 + `*-evidence.json` + `*-run-log.txt`。
 目录名带上被认证的产品树提交，不同提交的证据因此不会互相覆盖。
 每轮的结论文本证据写 `output/playwright/live/REPORT-<场景>-head<产品树提交>-round<N>.md`（含命令、退出码、汇总行、逐字提示词、工具调用与参数、`PendingAction`/`MfaChallenge` 行、DB 数字、截图路径）。
 mock 与日期边界报告写 `output/playwright/REPORT-mock-suite.md`、`output/playwright/REPORT-date-tamper-boundary.md`。
@@ -326,7 +327,7 @@ FROZEN/LOST 的 `LINKED` 卡照常渲染真实 `账户余额` + `可用余额`�
 逐卡的 `data-card-consume` 在该三元组之外只追加 `!card.usable`（`CardManager.tsx:191`，`usable = status === 'ACTIVE'`），因此**消费入口与卡类型无关**：任何 ACTIVE 卡（DEBIT/CREDIT/VIRTUAL）都渲染可用的消费入口，非 ACTIVE 才不可用；不要假设「只有虚拟卡能消费」。
 `live-debit-card.e2e-helper.ts#assertConsumeEntry` 就是这个模式（先 settle 再读，`consumeButtonEnabled` 在按钮未渲染时直接失败），同一张卡要求「启用 → 停用」翻转才算非空断言。
 
-新场景注册：加入 `live-acceptance.e2e.ts` 的 `const SCENARIOS`（现止于 `lG`），`run` 用 `withPage(ctx.browser, …, { label })` 包裹并注入 `drive: (turns) => driveRedTool(page, ctx.baseUrl, turns)`、`captureShot: captureLive`。
+新场景注册：加入 `live-acceptance.e2e.ts` 的 `const SCENARIOS`（现止于 `lI`），`run` 用 `withPage(ctx.browser, …, { label })` 包裹并注入 `drive: (turns) => driveRedTool(page, ctx.baseUrl, turns)`、`captureShot: captureLive`。
 `LIVE_SCENARIOS` 过滤 id；选 `2` 连带 `2p`；场景 `7` 不在数组内且恒最后运行。
 `E2E_BROWSER_PATH` 在 `helpers.ts#resolveBrowserExecutable` 中优先命中（路径存在即用），否则回退常见 Chrome/Edge 路径。
 
