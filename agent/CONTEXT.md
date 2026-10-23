@@ -220,6 +220,14 @@ disable that automatic continuation. `authorization-context.ts` locates the
 original assistant through the owned action, invocation and model request, so reused provider call IDs
 cannot redirect an older committed result into a newer operation.
 
+## Wall-clock waits on the turn path
+
+There is exactly ONE timer in `agent/`: `durable/journal.ts:223-228` `startHeartbeat(intervalMs = 20_000)` (`setInterval` + `unref?.()` + `void this.enqueue(() => renewAgentRunLease(this.lease))`), started by `turn-runtime.ts:44`. It fires 0 times for a turn under 20 000 ms and its renewal queues behind the same serialized write tail.
+No `sleep`/`delay`/`await new Promise`/polling `for(;;)` over run/lease rows exists on the mock turn path. `turn-runtime.ts:16-25` `presentationEvents` is a cursor paging loop (2 queries per 500 events), not a timed poll.
+`providers/request-options.ts` `LLM_REQUEST_TIMEOUT_MS` (default 30 000, clamp 1000–120 000) with `AbortSignal.timeout` and `maxRetries: 1` is applied only by `provider-live.ts:222`; `LLM_MODE=mock` (`providers/index.ts:14-19`) has NO request deadline and NO retry.
+`durable/retry-policy.ts` is a pure decision function (no loop, no backoff wait) used only on recovery. Lease acquisition (`lib/db/repositories/agentRun.ts:52-70`) is a fail-fast CAS, never a wait/retry; recovery backoff (`:200` `+2000` ms, `:397` `1000 * 2 ** attempts`) is persisted for the background worker only.
+The real ceiling is not a timer but the DB: `lib/db/serialized-connection.ts` holds ONE native connection behind an unbounded FIFO `ConnectionMutex` with no timeout, and `lib/db/database.ts:23-25` caps each adapter/`$transaction` at `timeout: 10000`, `maxWait: 10000`. A leaked interactive transaction therefore blocks a chat turn indefinitely with nothing to end it.
+
 ## Known Issues
 
 - `planner/failure.ts:111` `sealReason` treats EVERY non-open `actionStatus` as `action_not_open`, including `executed`/`needs_reconciliation` — the two statuses `action-status.ts:59-63` `REPRESENTED_ACTION_STATUSES` says still represent their node.
