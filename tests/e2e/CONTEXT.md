@@ -157,6 +157,12 @@ MFA／锁定的 DOM 驱动接缝全部在 `helpers.ts`，入口不复刻：
 `queryPendingActionStatus` 只在 journey f 使用，`j` 不核对 `PendingAction.status === 'locked'`，也不核对锁定后 `/api/actions` 为空。
 「验证码错误次数过多」与 `chat.error.securityLocked` 在本目录无任何断言（覆盖在 `tests/unit/security`、`tests/scenarios`、`tests/integration`、`tests/app`）。
 
+锁定专用选择器已存在于组件、但本目录尚未使用：`components/chat/cards/MfaCard.tsx:76` 的 `data-mfa-locked="true"`（叠在 `data-approval-request` 停靠区内的 `MfaCard` 上）与 `components/chat/cards/ApprovalRecord.tsx:70` 的 `data-approval-locked="true"`（历史回执锁定块，容器带 `data-approval-history="true"`/`data-action-id`/`data-status`）。
+锁定成功后动作停靠区整体消失（`ApprovalRequest` 只在存在 `pending`/`awaiting_mfa` 行时渲染），所以「锁定」与「验证成功」只能靠锁定文案或 `PendingAction.status === 'locked'` 区分，不能靠卡片消失。
+`PendingAction` 状态的 DB 接缝：live 入口用本地 `readPendingAction`（`live-acceptance.e2e.ts:254-262`，`withDb` + `pendingAction.findUnique({ where: { id, sessionId } })`）；mock 入口用 `helpers.ts#queryPendingActionStatus`（`:220-234`，只按 `id`，走 `createDatabaseClient()` 的当前 `DATABASE_URL`）。
+`scenarioLargeTransferMfa` 的单次错码腿在 `live-acceptance.e2e.ts:1005` 用裸字面量 `input[aria-label="验证码"]` 计数（未走 `SELECTORS.mfaInput`）；两者当前等价，改选择器时两处都要看。
+`acceptance.e2e.ts:662` 的 `MOCK_MFA_CODE` 已无引用（`j` 腿用字面量 `'000000'`），新用例不要依赖它。
+
 ## 退出码与资源清理
 
 正常结束时退出码由 `reporter.failures` 决定：入口在场景结束后打印汇总并执行 `process.exitCode = failures > 0 ? 1 : 0`。
