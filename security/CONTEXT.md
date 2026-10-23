@@ -205,7 +205,7 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 金额口径超过持仓市值时同样拒绝，并提示改用全额或按份额赎回。
 持仓未记录份额时抛 `CONFLICT`，产品未发布净值时抛 `VALIDATION`，两者都不铸造报价。
 确认摘要固定展示赎回口径、赎回份额、成交净值、净值日期、预计到账金额与费用口径。
-摘要金额是预计到账金额，不是本金；费用口径为 `feeAmount: '0.00'` 与 `feeRule: 'SIMULATED_NONE'`。
+摘要金额（`summary.amount`）是预计到账金额，不是本金。
 快照字段为 `expectedShares`、`expectedNetValue`、`expectedNetValueDate`、`expectedSettlementAmount`。
 快照字段属于服务端报价，重复挂起时不计入请求身份（`requestArgs`）。
 快照字段同时进入命令指纹，口径或金额变化会作废旧授权。
