@@ -246,7 +246,8 @@ RED 工具调用被挂起时**立即**铸造挑战：`security-gateway.ts:1007` 
 合计约 11 次（YELLOW 卡片写）到 15 次（RED 卡片写）往返；`clarify` 分支约 6 次（含两次授权决定写入），GREEN 允许分支 4 次（含 1 次授权决定写入）。
 `computeDailyTransferTotal` 对每个工具都执行（不限转账）；`isLocked` 每次都重新解析 owner。
 所有语句共用 `lib/db/serialized-connection.ts` 的 FIFO 锁，交互事务从 `BEGIN` 到 `COMMIT` 全程持有该锁，因此 park 事务会阻塞同进程其它请求；等待上限由 Prisma `maxWait`/`timeout` 10 000 ms 与适配器 `timeout` 10 000 ms 界定（`lib/db/database.ts:23-25`）。
-三个 `$transaction` 调用点（`security-gateway.ts:969`/`:1278`/`:1348`）都不传 options，没有 CAS 失败重试循环，也没有 `$queryRaw`/PRAGMA。
+本层共 10 个 `$transaction` 调用点（`security-gateway.ts:969`/`:1278`/`:1348`、`circuit-breaker.ts:171`/`:289`、`incidents.ts:20`、`manual-card-management.ts:114`/`:170`/`:218`、`recovery-authorization.ts:37`），全部 `await`、无一处 fire-and-forget，且全部不传 options，因此一律继承 `lib/db/database.ts:25` 的 `maxWait:10000`/`timeout:10000`；没有 CAS 失败重试循环，也没有 `$queryRaw`/PRAGMA。
+本层经 `manual-card-management.ts:176` 的 `executeBankingCommand` 触达唯一一个 20 s 事务（`agent/command-execution.ts:67`，options 在 `:103` 为 `{ maxWait:10000, timeout:20000 }`）：该事务持锁期间，本层任何语句都会排队到它结束。
 三个事务体内部**全部**语句都绑在事务 client 上，没有一条全局 `prisma` 语句：`runtimeFence(tx)` → `agent/durable/journal.ts:206-210` → `repositories/agentRun.ts:82-90` 只用 `client.agentRun`/`client.agentSession`；`repositories/pendingAction.ts#createPendingAction`/`claimPendingAction`/`assertActionMayStart`（含其中的 `manualReview.findFirst`）与 `risk-engine.ts#computeEffectiveTransferTotalWith` 都把同一 client 透传到每条语句。
 `manual-card-management.ts:114`/`:170`/`:218` 与 `circuit-breaker.ts:171`/`:289` 同样全 client 绑定：`:114` 用 `withinTransaction(client, …)` 把事务发布进 ALS，`assertDemoCardDeletable` → `banking-sdk/tx.ts:31-32` 因此直接复用该事务而不新开 `$transaction`；`:176` 的 `executeBankingCommand` 与 :170/:218 的审计事务各自独立开事务（互不嵌套）；`auditChange` 的 `{client, strict}` 与 `recordSecurityEvent` 的 `{client, strict}` 一直穿透到唯一的 `auditLog.create`/`securityEvent.create`，`'failed'` 审计不带 dedupeKey 因而没有全局回读。
 
