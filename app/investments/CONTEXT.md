@@ -91,6 +91,8 @@
 ## 约束
 
 - 金额一律经 `Money`/`DecimalMoney`，禁止手工格式化。
+- 本页不做任何百分比换算：`page.tsx:38` 只把 `HoldingView` 原样传给 `InvestmentProductTile`，收益率在 `components/banking/HoldingFacts.tsx:91` 用 `signedRateToPercent(profitRate)` 渲染。
+- `profitRate` 可为负（`banking-sdk/net-value.ts#profitRateOf`），只能走 `signedRateToPercent`；`rateRatioToPercent` 内含 `nonNegativeDecimal` 非负闸门，负输入抛 `AppError('VALIDATION')`，仅用于产品年化。
 - 份额、净值与日期经 `formatDecimalFixed`/`formatBusinessDate`，禁止拼字符串。
 - 市值与收益是未结算估值，剩余持仓成本是已入账金额。
 - 缺失的事实显示“历史数据不足”，不用本金或零补齐。
