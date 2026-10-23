@@ -83,7 +83,6 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 `unit/banking-sdk/net-value-redemption.test.ts` 覆盖份额折算、按份额／金额／全额赎回的结算与成本守恒。
 `unit/security/redemption-stale-authorization.test.ts` 覆盖确认快照不一致时的 `CONFLICT`：本次零写入、`PendingAction` 为 `failed`，同身份重放返回原回执与原净值。
 
-<<<<<<< .merge_file_J4Xg4J
 ## 持仓亏损（负收益率／负收益）的断言锚点
 
 `components/banking/HoldingFacts.tsx` 的收益率走 `signedRateToPercent(profitRate)`，`profit`/`cumulativeProfit` 走 `DecimalMoney(..., signed)`，`realizedProfit` 不带 `signed`。
