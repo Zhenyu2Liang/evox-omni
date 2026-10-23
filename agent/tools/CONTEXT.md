@@ -255,6 +255,8 @@ Declared-write enforcement stays REACTIVE and declaration-gated: `compileRequest
 
 ## Verification
 
+The redemption summary's `费用口径` sentence is rendered only by `investment.ts#feeLine` from the result's `feeAmount`/`feeRule` (the simulation waives the fee, but the fields still render as `模拟环境不收取赎回费，赎回费 ¥0.00`); `redeem-investment.test.ts:300-305` pins that exact string through a `toBe` on the whole summary, so changing `feeLine` copy breaks a test. Only the `REDEMPTION_FEE_RULE` (`SIMULATED_NONE`) branch is asserted — the generic `费用口径 <rule>（赎回费 …）` branch and the missing-`feeAmount` `历史数据不足` fallback are untested. No `agent/tools/` capability accepts a fee as an input parameter or computes one.
+
 Use pure tests for schemas, typed error adapters, public data projection, and parameter boundaries.
 Use isolated database tests for ownership, exact balances, atomic receipts, independent MFA,
 workflow claims, and process-crash recovery. Full-pipeline tests must use the real registry and
