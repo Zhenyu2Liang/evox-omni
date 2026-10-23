@@ -142,7 +142,15 @@ LIVE 模型偶尔只叙述「请确认」并调用 `search_contact`，却不调�
 当前没有用例在锁定后刷新 `/agent` 再断言弹窗保持消失。
 
 锁定终态的断言范围（`j` 的实际覆盖）：`waitForStatusText(page, t('cards.terminal.locked'))` 是对全页 `[role="status"]` 做去空白**子串**匹配，
-不绑定 `MfaCard` 容器，也未断言 `cards.mfa.locked`（「已锁定，请到安全中心处理。」）这一只读历史变体。
+不绑定 `MfaCard` 容器，也未断言 `cards.mfa.locked`（「已锁定，请到安全中心处理。」）这一只读历史变体，更未断言 `data-mfa-locked` 或 `cards.mfa.failedAttemptsLimit`。
+锁定态的 DOM 钩子（写锁定断言时唯一可信的来源）：可操作停泊区 `data-approval-request="true"` + `data-action-id` + `data-kind`（`components/chat/ApprovalRequest.tsx:23-24`）；
+`data-mfa-locked="true"` 只在 `components/chat/cards/MfaCard.tsx:76` 的 `terminal === 'locked'` 分支出现，内含 `securityNotice` 锁定句与 `href="/security"`；
+锁定终态标题是 `MfaCard.tsx:74` 的 `<p role="status">已锁定</p>`（`cards.terminal.locked`，`lib/i18n/messages/chat.zh-CN.json:128`）；
+尝试次数行 `MfaCard.tsx:108-114` 在 `attempts >= maxAttempts` 时由 `cards.mfa.failedAttempts`（`chat.zh-CN.json:137`）翻成 `cards.mfa.failedAttemptsLimit`（`:138`），第 3 次提交必须断言 limit 变体；
+只读回执钩子 `data-approval-history="true"` + `data-action-id` + `data-status`（`components/chat/cards/ApprovalRecord.tsx:50-51`）与 `data-approval-locked="true"`（`:70`），`data-status="locked"` 时徽章是 `chat.approval.status.locked`「验证已锁定」（`:16`）；
+锁定后 `MfaCard.tsx:59`/`:71`/`:90-106` 同时撤掉 footer 与输入框，因此 `SELECTORS.mfaInput` 与「验证」按钮计数都归 0。
+`submitMfa` 取 `SELECTORS.mfaInput` 的 `.last()` 填码再点「验证」（`helpers.ts:1168-1173`）；`waitForStatusText` 扫全页 `[role="status"]` 做去空白子串匹配（`helpers.ts:1194-1202`）。
+正确验证码是常量而非环境变量：`lib/constants.ts:7` `MFA_CODE = '123456'`、`:10` `MFA_MAX_ATTEMPTS = 3`；错误码惯例为 `'000000'`。
 本目录没有任何 `'locked'` 字符串字面量断言：`data-status` 只核对 `executed`（`approval-ux.e2e-helper.ts#assertApprovalExecuted`）与 `awaiting_mfa`（`card-freeze.e2e-helper.ts`），
 `queryPendingActionStatus` 只在 journey f 使用，`j` 不核对 `PendingAction.status === 'locked'`，也不核对锁定后 `/api/actions` 为空。
 「验证码错误次数过多」与 `chat.error.securityLocked` 在本目录无任何断言（覆盖在 `tests/unit/security`、`tests/scenarios`、`tests/integration`、`tests/app`）。
