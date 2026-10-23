@@ -126,5 +126,16 @@ SDK 校验银行业务不变量，并通过仓储或 `runInTransaction` 执行�
 `Card.numberFull` 只在制卡时由 `generateCardIdentity` 生成并写入（`addDemoCard`、`replaceCard`、`applyVirtualCard` 的两个分支），仅用于去重与服务端精确匹配（`security/card-resolution.ts`），绝不进入任何投影、日志或工具结果；`banking-sdk/card.ts` 内的 `maskCardNumber` 调用只有 `generateCardIdentity` 的两行（990、996），投影不脱敏。
 `Contact.phoneFull` 由 `lib/db/repositories/contact.ts#createContact` 写入，SDK 只通过 `lib/phone.ts#phoneIdentityMatches` 做精确匹配，不投影。
 `ScheduledTaskView.payload`（`types.ts:697`）原样回显已持久化载荷（`task.ts#toScheduledTaskView`）；定时支付/转账载荷里的收款人选择器可能是调用方自己提交过的完整手机号——这是回显调用方输入，不是投影存储的第三方号码。
+## 收益字段的符号（有符号量，禁止非负门禁）
+`profit`、`profitRate`、`realizedProfit`、`cumulativeProfit` 是有符号量，亏损持仓必须原样输出负文本；`marketValue`、`amount`（剩余成本）、`shares`、净值恒为非负。
+计算点全在 `investment.ts#holdingValuation`（181-200）：`marketValue` 由 `marketValueFromShares`（188，非负乘积），`profit` 由 `subtractDecimal(marketValue, cost)`（189，可为负），`profitRate` 由 `profitRateOf(profit, cost)`（197）。
+`net-value.ts#profitRateOf`（235-242）是唯一比率换算：符号经 `parseFixed`（58-77）保留、`halfUpDivide`（122-129）按 HALF_UP 取 18 位、`fixedToDecimal`（106-113）还原负号；成本为零时返回 `undefined`（238），因此 `amount === 0` 的持仓没有 `profitRate`。
+`listHoldings`（investment.ts:1295-1325）的映射：`marketValue` 1312、`profit` 1313、`profitRate` 1314、`realizedProfit` 1301（`centsToMoney(row.realizedProfitMinor)`，`lib/money.ts:39-43` 保留负号）、`cumulativeProfit` 1316（`addDecimal(realizedProfit, valuation.profit)`）；`HISTORICAL_DATA_INSUFFICIENT`（`holdingValuation` 186）时 `profit`/`profitRate`/`cumulativeProfit` 三键整体缺省。
+`redeemInvestment` 的已实现收益同样有符号：`realizedProfitMinor = settledMinor − redeemedCost`（1101，`assertMinorUnits` 只查 INT64 范围），落库 1122/1228，返回 1165/1214、重放 1282；`remainingProfit` 1287 与记录里 `realizedProfit`（1214，`requireMoney` 518/608）都不设非负门禁。亏损赎回不抛错，`parseRedeemResult`（531-551）只校验结算金额与估值，不看 `realizedProfit` 符号。
+非负门禁只属于 reader 保护与金额：`productNetValue`（124）、`recordedShares`（145）、`annualYieldRate`（219）、历史记录里的 `marketValue`/份额/净值（`requireDecimal` 364）、`valuation.ts:73`/`valuationToMinor`（`lib/decimal.ts:81-84`）。
+因此把 `profit` 系列送进 `nonNegativeDecimal`/`rateRatioToPercent`/`valuationToMinor` 都会在亏损持仓上抛 `VALIDATION`（`lib/decimal.ts:36-39`、`:76-78`）。
+百分比换算属于展示层，不在 SDK：浏览器侧 `components/banking/HoldingFacts.tsx:91` 用 `signedRateToPercent`，聊天摘要 `agent/tools/investment.ts:77-80` 用 `multiplyDecimal(ratio,'100')`；SDK 自身不把 `profitRate` 转百分比。
+测试锚点：`tests/unit/banking-sdk/net-value.test.ts:153-161`（比率符号与零成本）、`tests/unit/banking-sdk/net-value-redemption.test.ts:379-386`/`:394-400`（负 `profit` 与负 `realizedProfit`）。
+
 ## 存储生命周期
 只支持当前 schema 与契约。`pnpm db:push` 同步 schema；`pnpm db:reset` 重建模拟数据。不要新增旧 schema 迁移、数字金额适配器、旧指纹接受或回执前的重放路径。当前回执、审计与重启恢复是运行时保证，而不是兼容特性。服务端消费时间与补办家族归集不引入 schema 变更。

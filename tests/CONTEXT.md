@@ -83,17 +83,37 @@ mock 夹具播种 `card_credit` 与 `card_debit`，其中 `card_debit` 绑定 `a
 `unit/banking-sdk/net-value-redemption.test.ts` 覆盖份额折算、按份额／金额／全额赎回的结算与成本守恒。
 `unit/security/redemption-stale-authorization.test.ts` 覆盖确认快照不一致时的 `CONFLICT`：本次零写入、`PendingAction` 为 `failed`，同身份重放返回原回执与原净值。
 
-### 亏损持仓（负收益率 / 负收益）的覆盖边界
+## 持仓亏损（负收益率／负收益）的断言锚点
 
-负 `profitRate` / `profit` / `cumulativeProfit` 只在渲染层、金额层与 SDK 层被断言，工具结果层没有用例。
-`unit/planner/decimal-format.test.ts:44-96` 用真实 `HoldingFacts` 渲染一笔亏损持仓（`profit`/`cumulativeProfit` 均为 `'-49.20'`，无 `realizedProfit` 字段），断言 `-1.23%`（`:78`、`:88` 的 `tile`）、`-2.9726666666666667%`（`:87`）、`-¥49.20`（`:90`）、`not.toThrow()`（`:77`）与无费率时不出现 `%`（`:94`）。
-`unit/financial-values.test.ts:64-84` 是符号语义的唯一权威：`signedRateToPercent` 保号（`:70`/`:71`/`:72`/`:74`），非负比率与 `rateRatioToPercent` 字节相同（`:76`），`nonNegativeDecimal` 与 `rateRatioToPercent` 对负值抛 `VALIDATION`（`:79`/`:80`/`:83`）。
-`unit/banking-sdk/net-value-redemption.test.ts:366-403` 覆盖净值下跌赎回的负已实现收益：`realizedProfit '-192.31'`（`:394`）、`compareDecimal(...) === -1`（`:395`）、`realizedProfitMinor -19_231n`（`:400`）、`profit` 负值（`:379`/`:386`）。
-`unit/banking-sdk/net-value.test.ts:154-159` 断言 `profitRateOf` 对负利润输出负比率；`tests/helpers/fixtures.ts:224-239` 的 `稳健理财B`（`0.9880`）是唯一天然亏损定价的夹具，但没有播种持仓。
-负号在工具侧缺口：`get_investment_holdings` 在 `tests/` 中只出现 4 次（`e2e/live-investment.e2e-helper.ts:633` 注释、`e2e/weixin-capabilities.e2e-helper.ts:44` 工具名矩阵、`unit/agent/providers/mock-turn-declaration.test.ts:155` 声明矩阵、`unit/security/permission-engine.test.ts:27` 只读白名单），没有一条断言工具 `summary` 出现负百分比或 `data[].profitRate` 保留负号；`agent/tools/investment.ts` 的 `percentText` 在 `tests/` 内零引用。
-聊天卡与微信展示只走正收益率：`unit/planner/chat-read-results.test.ts:55-71`（`'3.2575%'` 见 `:65`）、`unit/planner/financial-display.test.ts:34-46`（`:42`）、`unit/weixin-presentation.test.ts:90-120`（`:100` 为 `持仓收益率 3.57%`，`:115-120` 断言历史数据不足时不出现 `%`）。
-真实浏览器侧只有 `e2e/live-investment.e2e-helper.ts:699-706` 一处签名守卫：`/^[+-]?\d+(\.\d+)?%$/` 正则加 B0 零 `pageerror`；它读的 B0 持仓本身是盈利的，因此负收益率只靠正则形态兜底而非真实亏损数据。
-`unit/planner/decimal-format.test.ts:75-76`、`unit/financial-values.test.ts:65-66`、`e2e/live-investment.e2e-helper.ts:16`+`:671-672` 是仅有的三处「负收益率曾导致整页崩白」的回归注释。
+`components/banking/HoldingFacts.tsx` 的收益率走 `signedRateToPercent(profitRate)`，`profit`/`cumulativeProfit` 走 `DecimalMoney(..., signed)`，`realizedProfit` 不带 `signed`。
+亏损因此分三层钉住：符号转换（`lib/decimal`）、组件渲染（`HoldingFacts` 的 `card`/`tile` 两种布局）、真实浏览器读行。
+
+| 文件:行 | 断言 |
+| --- | --- |
+| `unit/financial-values.test.ts:64-84` | `signedRateToPercent` 保留符号与全部精度：`'-0.0123'`→`'-1.23'`、`'-0.0001'`→`'-0.01'`、`'-1'`→`'-100'`、`'-0.029726666666666667'`→`'-2.9726666666666667'`（`:74`）；正值与 `rateRatioToPercent` 结果全等（`:76`）；非字符串入参抛错；同一用例反向固定金额闸门：`nonNegativeDecimal('-0.0123'`/`'-1')` 与 `rateRatioToPercent('-0.032575')` 抛 `{code:'VALIDATION'}`（`:79`/`:80`/`:83`） |
+| `unit/financial-values.test.ts:96-97` | `formatDecimalCNY('-0.000001')` 为 `'-¥0.00'`：负值四舍到分仍保留符号 |
+| `unit/planner/decimal-format.test.ts:37-41` | `DecimalMoney({signed:true})` 只在严格为正时前置 `+`：`'+¥118.91'` 与 `'-¥118.91'` |
+| `unit/planner/decimal-format.test.ts:44-96` | 唯一构造的亏损持仓（4199.864825 份 × 净值 0.9407 → 市值 3950.80，`profit`/`cumulativeProfit` 为 `'-49.20'`）：`'-0.0123'` 不抛错且渲染 `-1.23%`（`:77-78`）；全精度 `-2.9726666666666667%`、`tile` 布局同为 `-1.23%`、同一亏损的金额 `-¥49.20`（`:86-91`）；正/零收益率仍是 `3.2575%`/`0%`（`:81-84`）；无收益率时整行不出 `%`（`:94`） |
+| `unit/planner/financial-display.test.ts:48-53` | 极小负收益 `-0.0000000001` 经 `DecimalMoney(signed)` 渲染成 `'-¥0.00'`：符号不被舍入吃掉 |
+| `unit/banking-sdk/net-value.test.ts:153-161` | `profitRateOf` 产出带符号比率：`'-23.45'/1000.00`→`'-0.02345'`、`'-1.00'/3.00`→`'-0.333333333333333333'`；零成本返回 `undefined` |
+| `unit/banking-sdk/net-value-redemption.test.ts:366-403` | 净值下跌仓位的负值口径：`profit` `'-0.000000928'`/`'-192.3076932'`、`realizedProfit` `'-192.31'`、`realizedProfitMinor` `-19_231n`（SDK 数值，不渲染） |
+| `e2e/live-investment.e2e-helper.ts:695-706` | B0 聊天卡：持仓收益与 `signedDecimalCNY(市值 − 剩余持仓成本)` 全等（`signedDecimalCNY` 定义在 `:229-231`，只对正值加 `+`），`持仓收益率` 必须匹配 `/^[+-]?\d+(\.\d+)?%$/`（失败文案写明「负收益率必须正常显示」），并断言本步零 pageerror（负收益率不得崩页） |
+| `e2e/live-investment.e2e-helper.ts:441-473` | `/investments` 页逐行全等：金额 `/^[+-]?¥[\d,]+\.\d{2}$/` 允许负号且拒绝未结算的高精度，持仓收益/累计收益按带符号 CNY 全等，已实现收益按不带符号 `formatDecimalCNY` 全等，并按「市值 − 持有金额」「已实现 + 持仓」双向自洽 |
+
+缺口与边界：
+
+- 没有组件级用例把负 `annualYieldRate` 喂给 `InvestmentProductTile`/`InvestmentsCard`：`rateRatioToPercent` 的负值行为只在 `unit/financial-values.test.ts:83` 以抛错覆盖，负 `annualYieldRate`/负 `marketValue` 的仓储拒绝在 `unit/banking-sdk/investment-precision.test.ts:257-274`（`rejects.toBeDefined()`，不校验错误码）。
+- `e2e/live-investment.e2e-helper.ts:424-433` 的 `labels` 不含 `持仓收益率`：`tile` 布局的收益率行只在 `unit/planner/decimal-format.test.ts:88` 断言，`/investments` 页无收益率断言。
+- e2e 只「允许」负号，没有任何一步要求渲染出 `-` 开头：B0 步骤持仓是 `helpers/fixtures.ts:429` 的 `holding_wenjiana`（成本 5000.00 / 市值 5050 → +50），演示种子 `prisma/seed.ts:378` 亦为 +178.36。
+- 唯一的亏损持仓在演示种子 `prisma/seed.ts:380` 的 `holding_wenjib`（`principalAmountMinor: 1_000_000n` = ¥10,000.00，`shares '10000.000000'` × 净值 `0.9880` → 市值 9880.00，收益率 −1.2%），见 `:374` 注释；因此真实浏览器上的亏损行只靠演示种子，mock 夹具 `helpers/fixtures.ts:427-431` 只播种一个盈利持仓。
+- 两个种子集里唯一「跌破 1 的净值」都是 `prod_wenjib` 的 0.9880（`helpers/fixtures.ts:236` 与 `prisma/seed.ts:362`，见 `helpers/fixtures.ts:231` 注释）；运行时申购它才产生负值，`unit/banking-sdk/net-value-redemption.test.ts` 只断言 SDK 数值，不经过组件。
+- 微信通道只有盈利持仓文本：`unit/weixin-presentation.test.ts:87-104` 断言 `持仓收益率 3.57%`，无亏损用例。
+- 其余持仓渲染用例只喂正值：`unit/planner/chat-read-results.test.ts:73-86`、`unit/planner/investment-purchase-display.test.ts`、`integration/frontend-review-fixes.test.ts:67-84`。
+- `integration/`、`app/`、`scenarios/` 完全没有 `profit`/`profitRate`/`cumulativeProfit`/`realizedProfit` 断言，负值口径只落在 `unit/`。
+- 没有 `HoldingView.cumulativeProfit` / `HoldingView.realizedProfit` 为负的断言：负已实现收益只在 `InvestResult` 层（`unit/banking-sdk/net-value-redemption.test.ts:394`/`:400`）。
+- `amount` 为 0 时 `HoldingView.profitRate` 为 `undefined` 只有函数级覆盖（`unit/banking-sdk/net-value.test.ts:160-161`）；`banking-sdk/investment.ts:197` 无条件赋值该键，`'profitRate' in view` 恒为真，不可断言键缺失。
+- 工具结果层无覆盖：`get_investment_holdings` 在 `tests/` 内只有 4 处引用（`e2e/live-investment.e2e-helper.ts:633` 注释、`e2e/weixin-capabilities.e2e-helper.ts:44` 工具名矩阵、`unit/agent/providers/mock-turn-declaration.test.ts:155` 声明矩阵、`unit/security/permission-engine.test.ts:27` 只读白名单），没有一条断言工具 `summary` 出现负百分比或 `data[].profitRate` 保留负号；`agent/tools/investment.ts#percentText` 在 `tests/` 内零引用。
+- 「负收益率曾导致整页崩白」的回归注释只有三处：`unit/planner/decimal-format.test.ts:75-76`、`unit/financial-values.test.ts:65-66`、`e2e/live-investment.e2e-helper.ts:16`+`:671-672`。
 
 ## 卡片生命周期能力契约的覆盖
 

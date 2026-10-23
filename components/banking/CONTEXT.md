@@ -221,6 +221,7 @@ DOM 定位只能靠文本 + 调用方 wrapper：`/cards` 页的 `[data-card-list
 - 金额必须沿用通用组件的单位约定。
 - 脱敏号码不得代替服务端资源标识。
 - 持仓事实只在 `HoldingFacts` 维护，其他组件不得另写一份。
+- 收益与收益率为有符号值：不得 `Math.max(0, …)`、`Math.abs`、四舍到 0 或按符号条件隐藏行；`profitRate` 只经 `signedRateToPercent`，收益字段只经 `DecimalMoney`（`realizedProfit` 不带 `signed`，负号仍由 `formatDecimalCNY` 保留）。
 - 账户余额（`accountAvailableBalance`）是关联账户的资金，不是授信额度；
   `MISSING`/`UNTRUSTED` 时不渲染任何金额，也不得以 0 占位。
 - 卡片不得持有独立余额：余额与可用余额都派生自结算账户。
