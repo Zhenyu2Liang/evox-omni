@@ -85,10 +85,10 @@ SQLite 无原生枚举，字符串枚举的允许值见 `schema.prisma` 文件�
 
 ## 安全状态表
 
-没有 Prisma 原生枚举，也没有 `migrations/` 目录；
+`schema.prisma` 中**没有任何 `enum` 块**，也没有 `@db.` 原生类型注解，没有 `migrations/` 目录；
 所有状态都是 `String` + 注释约定，SQLite 层无 CHECK 约束，
 因此新状态值无需改库，但必须同步 `schema.prisma` 文件头注释。
-`PendingAction`（`schema.prisma` 第 439 行起）只有
+`PendingAction`（`schema.prisma` 第 439 行起）字段：`id`/`sessionId`/`userId`/`toolName`/`argsJson`（参数 JSON）/
 `status`、`summaryJson`、`resultJson`、`executionLeaseOwner`、
 `executionLeaseExpiresAt`；**没有** 锁定原因、错误代码、
 尝试次数或过期时间字段。
