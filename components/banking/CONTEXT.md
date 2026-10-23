@@ -152,6 +152,49 @@ e2e 行读取器按标签 `span` 的文本精确定位，再取同一父元素�
 关联账户为 flex 行（标签 `text-banking-navy/60`，值 `font-semibold text-banking-deep`）；提示文案为 `<p className="text-sm text-banking-navy/60">`。
 限额字段（`creditLimit`/`availableLimit`/`monthlyLimit`/`limits[].amount`）与 `accountAvailableBalance`/`payableAmount` 都是 `MoneyAmount`（CNY 十进制字符串），经 `Money`→`formatCNY` 展示；`linkedAccountNumber`/`linkedAccountId`/`linkedAccountName` 是文本。
 
+### CardTile 的 DOM 结构与 e2e 定位
+
+`CardTile` 属性只有 `card: CardView`、`className?`、`footer?: ReactNode`；没有 `layout`/`variant`，
+唯一结构是 `ui/Card` 外壳（`space-y-3` 追加到根，`className` 由调用方给）。
+它自己不渲染任何 `<button>`：页面的操作按钮由调用方以 `footer` 传入，
+落在 `Card` 的 `div.border-t.border-banking-light.bg-banking-light/40` 区块。
+
+渲染顺序（条件不成立时整块消失）：
+
+1. 头部 `div.flex.items-start.justify-between.gap-3`。
+   左列 `div.space-y-1`：`div.text-sm.font-medium.text-banking-navy` = `{卡类型} · {network}`
+   （如 `信用卡 · UnionPay`，分隔符是 ` · `），其下 `div.font-mono.text-lg.tracking-widest` = `card.numberMasked`。
+   右列 `div.flex.items-center.gap-2`：可选「已补卡」`Badge`（tone `info`），然后是状态 `Badge`。
+2. `card.usable === false` 时的提示 `Badge`。
+3. `type === 'CREDIT'` 且 `creditLimit`/`availableLimit` 任一存在时的 `dl.grid.grid-cols-2`，
+   `dt` 为 `信用额度` / `可用额度`。
+4. `LINKED` 且账户标签非空时的 `div.flex.items-center.justify-between`：
+   左 `span.text-banking-navy/60` 为 `关联账户`，右 `span.font-semibold` 为
+   `{linkedAccountName} · {脱敏账号}`（同款 ` · `）。
+5. `LINKED` 且金额存在时的 `dl.grid.grid-cols-2`，`dt` 为 `账户余额` / `可用余额`，`dd` 内是 `Money`。
+6. `MISSING`/`UNTRUSTED` 的提示 `<p class="text-sm text-banking-navy/60">`。
+7. `monthlyLimit` 存在时的 `div.flex.items-center.justify-between`，左 `span` 为 `月限额`。
+8. `limits.length > 0` 时的 `div.border-t`：小标题 `div.text-xs` = `分类限额`，
+   `ul > li.flex` 左 `span` 是 `limit.category` 原文（非 i18n），右 `span` 内是 `Money`。
+
+`dt` 恒为 `text-xs text-banking-navy/60`，`dd` 恒为 `text-sm font-semibold text-banking-deep`；
+`Money` 的输出形状见 `ui/CONTEXT.md`（`¥18,000.00`）。
+`CardTile` 没有 `data-*` 属性；`data-card-list`、`data-card-id`、`data-card-consume`、
+`data-card-delete` 等钩子由 `app/cards/CardManager.tsx` 提供。
+
+脱敏卡号 `numberMasked` 由服务端给出并逐字渲染（`CardTile.tsx:85-87`），
+形状固定为 4 个 `*` + 4 位数字（`****6688`）：无空格、无分组、界面不做二次脱敏。
+来源是 `banking-sdk/card.ts#generateCardIdentity` 对完整卡号末尾 8 位调用
+`lib/mask.ts#maskCardNumber`（`CARD_MASK_SOURCE_LENGTH = 8`，算法保留长度只替换前部）。
+
+演示数据（`prisma/seed.ts`；`getCards` 按 `id asc` 返回，顺序是 `card_credit`、`card_debit`、`card_virtual`）：
+
+- 信用卡 `****6688`：信用额度与可用额度均 `¥18,000.00`，月限额 `¥18,000.00`，四条分类限额
+  （按 `limit id asc`：餐饮 `2,000.50`、娱乐 `3,000.00`、购物 `4,500.80`、出行 `1,200.75`）。
+- 借记卡 `****8821`：无月限额，关联 `活期账户`，账户余额与可用余额同为 `¥23,580.00`。
+- 虚拟卡 `****7788`：月限额 `¥5,000.00`，关联同一活期账户，可用余额 `¥5,000.00`
+  （月度消费只统计 `CardConsumption` 行，种子数据没有这类行）。
+
 ## 关联账户展示（card-account-display.ts）
 
 `card-account-display.ts` 是纯函数模块：无 React、无 Hook、不请求数据、不引入 i18n 运行时
