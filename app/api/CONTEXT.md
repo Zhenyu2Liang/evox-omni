@@ -61,6 +61,45 @@ attention states and cannot acquire a lease or replay a write. Explicit action/r
 to receipt-first runtime recovery; missing evidence never establishes success or failure. Task
 controls preserve succeeded nodes and execute only work permitted by their current persisted state.
 
+## Action-decision transport facts (confirm / verify / cancel / recover)
+
+`POST /api/actions/[id]/verify` (body `{ code }`, schema `z.object({code: z.string().min(1)})`) answers
+**HTTP 200** for every DOMAIN refusal: a wrong code, the lock-tripping third code and a re-attempt on an
+already-`locked` row all return the success envelope `{ ok: true, data }` with `data.ok === false`
+(`_lib/http.ts#jsonResponse`). The route's own header comment claiming `423` is stale — only a THROWN
+`AppError` picks up a status from `_lib/http.ts#STATUS_BY_CODE` (`CIRCUIT_OPEN`/`MFA_LOCKED` → 423,
+`MANUAL_REVIEW_HOLD`/`CONFLICT` → 409, `MFA_FAILED`/`SECURITY_DENIED` → 403, `NOT_FOUND` → 404,
+`VALIDATION` → 400); on this route only identity/existence and body validation throw.
+
+`data` is `ActionResponse` (`_lib/types.ts:44-65`): `actionId`, `sessionId`, `ok`, `status`, `tier`,
+`requiresMfa`, `mfaResult`, `message`, `events`, plus `code` and (`failure`, flattened `attemptsLeft`,
+`maxAttempts`) only when the outcome carries them (`verify/route.ts:79-92`). `mfaResult` is DERIVED from
+`status` (`:73-77`): `success` when `ok`, `failed` for `awaiting_mfa`/`locked`, else `not_required`.
+`requiresMfa` is `status === 'awaiting_mfa' || tier === 'RED'`, so it stays `true` after a lock.
+
+Verify ladder, projected by `agent/confirmation/outcomes.ts#blockedOutcome` from `security/security-gateway.ts`:
+
+- wrong code with attempts left (`security-gateway.ts:1229-1241`): `status:'awaiting_mfa'`,
+  `code:'MFA_FAILED'`, `failure{code:'MFA_FAILED', reason:'mfa_code_invalid', attemptsUsed, attemptsLeft, maxAttempts}`,
+  `events:[{type:'mfa_required'}]`.
+- third wrong code (`:1243-1256`, CAS `pending|awaiting_mfa → locked`): `status:'locked'`, top-level
+  `code:'CIRCUIT_OPEN'` while `failure.code:'MFA_LOCKED'` with `reason:'mfa_attempts_exhausted'` and
+  `attemptsLeft: 0`, `events: []` — no `mfa_required`, so the locked popup is never reopened.
+- already-`locked` row (`:1115-1132` via `:1185`): `code:'CIRCUIT_OPEN'`, `failure.reason:'mfa_session_locked'`,
+  NO `attemptsUsed`; a correct and a wrong code return the same refusal.
+- consumed challenge: `status:'cancelled'`, `code:'CONFLICT'`, `failure.reason:'denied'`
+  (`security-gateway.ts:1189-1200`); a gateway-thrown `CONFLICT` becomes the domain `conflictOutcome`
+  (`agent/confirmation.ts:43-46`).
+
+`message` is re-rendered from the typed facts (`outcomes.ts#publicRefusalMessage` →
+`lib/public-text.ts#securityNotice`), never the gateway sentence: 「验证码错误。还可尝试 N 次。」,
+「该操作已锁定…」 for the terminal lock, 「安全验证已锁定。请在安全中心查看状态。」 for an
+already-locked row. The client therefore receives public prose, not a catalog key.
+
+The route itself never writes `status`: locking is the gateway's CAS, and the edge reads the row only for
+existence/ownership. `_lib/agent-bridge.ts#withPlanUpdate` appends a refreshed `plan_update` (and the next
+parked decision) to `events` after resolution.
+
 ## Public security-event projection
 
 `GET /api/security` serializes no raw `SecurityEvent`: both `events` and `status.recentEvents` are
