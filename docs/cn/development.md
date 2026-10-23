@@ -381,6 +381,19 @@ Prisma 读取 `prisma/schema.prisma`。
 业务代码通过客户端查询和写入数据库。
 这个命令不创建表，也不写入业务数据。
 
+离线环境中，Prisma CLI 会检查更新，命令可能长时间无输出。
+执行 Prisma CLI 前，先设置以下环境变量：
+
+```sh
+CHECKPOINT_DISABLE=1 PRISMA_HIDE_UPDATE_MESSAGE=1 CI=1 pnpm db:generate
+```
+
+PowerShell 逐项设置后执行：
+
+```powershell
+$env:CHECKPOINT_DISABLE = '1'; $env:PRISMA_HIDE_UPDATE_MESSAGE = '1'; $env:CI = '1'; pnpm db:generate
+```
+
 Prisma CLI 读取 [prisma.config.ts](../../prisma.config.ts)。
 该文件声明 schema、数据库地址和种子命令。
 schema 只声明 SQLite 类型，地址由配置文件提供。
@@ -398,6 +411,7 @@ SQLite 客户端使用连接级队列隔离并发请求。
 
 `pnpm db:push` 执行 [db-push.ts](../../scripts/db-push.ts)。
 脚本加载环境配置，再调用 `prisma db push`。
+脚本同时固定 schema 引擎日志级别，无需手工设置，见 [prisma-cli-env.ts](../../lib/prisma-cli-env.ts)。
 数据库地址来自 `DATABASE_URL`。
 默认 SQLite 数据库为 `prisma/dev.db`。
 
@@ -503,20 +517,34 @@ DATABASE_URL=file:./dev.db pnpm dev
 
 #### 备份默认数据库
 
-停止所有数据库连接后，可用 SQLite 命令行创建快照。
-以下示例需要 `sqlite3` 命令。
-备份文件保存在仓库内的 `backups/`。
+停止所有数据库连接后，用备份脚本创建快照：
 
 ```sh
-mkdir -p backups
-task_backup_file="backups/dev-$(date +%Y%m%d-%H%M%S).db"
-sqlite3 prisma/dev.db ".backup '$task_backup_file'"
+node scripts/db-backup.mjs
 ```
 
-SQLite 备份命令会包含已提交的预写日志（WAL）数据。
+脚本把快照写入 `logs/db-backups/<yyyyMMdd-HHmmss>-<源数据库文件名>`。
+时间戳格式为 `yyyyMMdd-HHmmss`，后缀是源数据库文件名，例如 `logs/db-backups/20250130-093015-dev.db`。
+执行后，脚本打印快照路径和源库路径。
+快照目录不存在时自动创建，命令可以重复执行。
+同一秒生成的同名快照先被删除，再重新生成。
+源库不存在时，脚本提示先执行 `pnpm db:push`，并以非 0 状态退出。
+快照保存在 `logs/` 下，已被 `.gitignore` 忽略，不提交。
+脚本只用 `node:sqlite`，不需要 `node_modules`。
+
+脚本使用 SQLite 在线备份，快照包含已提交的预写日志（WAL）数据。
 只复制主数据库文件可能遗漏 WAL 中的提交。
-备份命令成功后，再执行重置。
-自定义数据库需要将示例中的源路径换成实际路径。
+
+备份脚本只读取进程环境中显式导出的 `DATABASE_URL`，不读取 `.env.local`。
+未设置时，脚本使用 `file:./dev.db`，即 `prisma/dev.db`。
+备份自定义库时，先导出与启动应用相同的地址：
+
+```sh
+DATABASE_URL=file:./other.db node scripts/db-backup.mjs
+```
+
+相对 `file:` 路径以 `prisma/` 为基准。
+备份成功后，再执行重置。
 
 #### 只清空聊天记录
 
@@ -540,17 +568,11 @@ SQLite 备份命令会包含已提交的预写日志（WAL）数据。
 理财持仓按“净值 + 份额”记账后，旧库需要补齐 `shares`。
 以下步骤按顺序执行，顺序不能交换。
 
-先备份数据库：
+先备份数据库，命令与快照目录见[备份默认数据库](#备份默认数据库)：
 
 ```sh
 node scripts/db-backup.mjs
 ```
-
-脚本把快照写到 `logs/db-backups/<时间戳>-dev.db`，并打印目标路径。
-时间戳格式为 `yyyyMMdd-HHmmss`。
-快照使用 SQLite 在线备份生成，包含已提交的预写日志数据。
-目录不存在时自动创建，命令可以重复执行。
-源数据库不存在时，脚本报错并以非 0 状态退出。
 
 再同步表结构：
 
@@ -567,17 +589,39 @@ pnpm db:push
 node scripts/investment-share-backfill.mjs
 ```
 
-默认是只读试运行，打印每个持仓的派生结果与汇总。
+默认是只读试运行，不写入数据库。
+试运行打印表格，列为 `holding`、`product`、`old market value`、`net value`、`shares`、`new market value`、`drift` 与 `outcome`。
+逐行的 `outcome` 为 `derived`、`derived (cost basis)` 或 `skipped: <原因>`。
+`derived (cost basis)` 表示 `estimatedMarketValue` 为空，市值回退为剩余持仓成本。
+跳过原因只有 2 种：`no-net-value` 表示产品无净值或无匹配产品，`net-value-not-positive` 表示净值为 0。
+表格之后打印汇总行，例如：
+
+```text
+[backfill] migrated: 2 (dry run)
+[backfill] skipped (历史数据不足): 1
+[backfill] total economic-value drift: 0.0000003265 CNY
+[backfill] Re-run with --apply to persist the derived shares.
+```
+
 核对结果后写入：
 
 ```sh
 node scripts/investment-share-backfill.mjs --apply
 ```
 
+脚本只接受 `--apply` 1 个参数，其他参数报错。
+
 派生口径为 `shares = FLOOR(市值 ÷ 净值, 6 位小数)`，市值取持仓的 `estimatedMarketValue`。
-`estimatedMarketValue` 为空时，市值回退为剩余成本。
-写入时同时把 `estimatedMarketValue` 设为 `shares × 净值` 的精确乘积，市值与份额保持自洽。
-单笔经济价值漂移必须小于 `0.01 元`；任一笔超出时，脚本不写入并以非 0 状态退出。
+`estimatedMarketValue` 为空时，市值回退为剩余持仓成本。
+`--apply` 在单个事务内写入 `shares`、`estimatedMarketValue` 和 `shares_estimated = 1`。
+写入的市值是 `shares × 净值` 的精确乘积，与份额保持自洽。
+漂移守卫：任一笔经济价值变化达到 `0.01 元` 时，脚本整轮不写入，并以非 0 状态退出。
+净值为负时，脚本同样中止并保持零写入。
+
+派生的份额是估算，不是申购记录。
+读取侧因此报 `valueBasis: 'MIGRATED_ESTIMATE'`，页面、卡片和微信标注“估算”。
+试运行和 `--apply` 都会说明这一标记。
+净值、份额与收益口径见[理财净值、份额与收益口径](investments.md)。
 
 产品没有净值时不伪造份额。
 这类持仓保持原样，汇总中计为 `历史数据不足`。
@@ -587,16 +631,34 @@ node scripts/investment-share-backfill.mjs --apply
 重复执行不会再次派生，已迁移数量为 `0`。
 汇总包含已迁移数量、跳过数量和总经济价值漂移。
 
-需要回滚时，先停止所有数据库连接，再用快照覆盖 `prisma/dev.db`：
+需要回滚时，按以下步骤恢复：
+
+1. 停止所有数据库连接。
+2. 删除 `prisma/dev.db-wal` 与 `prisma/dev.db-shm`。
+3. 用快照覆盖 `prisma/dev.db`。
+4. 执行 `pnpm db:generate`。
+
+删除 `-wal` 与 `-shm` 的原因：避免重放旧预写日志。
+POSIX shell 与 PowerShell 两种写法等价，只执行其一。
+
+POSIX shell：
 
 ```sh
 rm -f prisma/dev.db-wal prisma/dev.db-shm
-cp logs/db-backups/<时间戳>-dev.db prisma/dev.db
+cp 'logs/db-backups/<时间戳>-dev.db' prisma/dev.db
 pnpm db:generate
 ```
 
-覆盖前删除 `prisma/dev.db-wal` 和 `prisma/dev.db-shm`，避免重放旧预写日志。
-恢复后按需执行 `pnpm db:seed` 或直接启动应用。
+PowerShell：
+
+```powershell
+Remove-Item -Force -ErrorAction SilentlyContinue prisma/dev.db-wal, prisma/dev.db-shm
+Copy-Item 'logs/db-backups/<时间戳>-dev.db' prisma/dev.db
+pnpm db:generate
+```
+
+恢复后按需执行 `pnpm db:seed`，或直接启动应用。
+
 ### 卡片结算账户补绑定
 
 需要补齐未绑定结算账户的卡片时，按[卡片管理](card-management.md#数据升级与回滚)执行。
