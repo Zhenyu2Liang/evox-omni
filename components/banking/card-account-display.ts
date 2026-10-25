@@ -25,6 +25,15 @@ import type { CardLinkedAccountStatus, CardView } from '@/banking-sdk';
 import type { MessageKey } from '@/lib/i18n/shared';
 import type { MoneyAmount } from '@/lib/money';
 
+/** The simulator spends account cash; it does not implement credit-line purchases. */
+export function cardSupportsConsumption(card: CardView): boolean {
+  return card.type === 'DEBIT' || card.type === 'VIRTUAL';
+}
+
+export function cardCanConsume(card: CardView): boolean {
+  return cardSupportsConsumption(card) && card.usable && card.linkedAccountStatus === 'LINKED';
+}
+
 /** Account fields a `LINKED` card displays; every field is `undefined` for any other state. */
 export interface CardAccountDisplay {
   /** Bound settlement account display name, e.g. 活期账户. */

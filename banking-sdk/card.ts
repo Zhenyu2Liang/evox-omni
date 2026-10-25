@@ -837,6 +837,9 @@ export async function consumeCard(
 
       const card = await tx.card.findFirst({ where: { id: cardId, userId } });
       if (!card) throw new AppError('NOT_FOUND', `卡片不存在：${cardId}`, { cardId });
+      if (card.type === 'CREDIT') {
+        throw new AppError('CONFLICT', '信用卡暂不支持模拟消费。', { cardId });
+      }
       if (card.status !== 'ACTIVE') {
         throw new AppError('CONFLICT', '卡片状态不允许消费。', { cardId, status: card.status });
       }

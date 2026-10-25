@@ -21,6 +21,7 @@
 `unit/security/redemption-position-version.test.ts` 覆盖持仓变化后拒绝旧赎回授权。
 `unit/scripts/database-maintenance.test.ts` 覆盖配置读取、备份不覆盖与份额回填。
 `unit/scripts/demo-reference-backfill.test.ts` 覆盖显式补齐、归属隔离与历史估值保留。
+`integration/credit-consumption-entry.test.ts` 覆盖信用卡入口、直接挂载弹窗和伪造消费请求。
 
 ## 入口
 

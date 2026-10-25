@@ -57,7 +57,7 @@ it('honors an explicit database override ahead of .env.local', () => {
 it('does not report an incomplete share upgrade as success', () => {
   const root = fixture(); const db = new DatabaseSync(path.join(root, 'prisma/actual.db'));
   db.exec(`CREATE TABLE InvestmentProduct(id TEXT PRIMARY KEY,code TEXT,latest_net_value_per_unit TEXT);
-    CREATE TABLE InvestmentHolding(id TEXT PRIMARY KEY,productId TEXT,principal_amount_minor INTEGER,estimated_market_value TEXT,shares TEXT,shares_estimated INTEGER DEFAULT 0,position_version INTEGER DEFAULT 0,status TEXT);
+    CREATE TABLE InvestmentHolding(id TEXT PRIMARY KEY,productId TEXT,principal_amount_minor INTEGER,estimated_market_value TEXT,shares TEXT,shares_estimated INTEGER DEFAULT 0,position_version INTEGER DEFAULT 0,realized_profit_minor INTEGER DEFAULT 0,redemptionHistory TEXT,status TEXT);
     INSERT INTO InvestmentProduct VALUES('p','P',NULL);
     INSERT INTO InvestmentHolding(id,productId,principal_amount_minor,estimated_market_value,status) VALUES('h','p',100000,'1100','HOLDING');`);
   db.close();
@@ -77,4 +77,19 @@ it('does not report an incomplete share upgrade as success', () => {
   const unchanged = new DatabaseSync(path.join(root, 'prisma/actual.db'));
   try { expect(unchanged.prepare('SELECT shares,estimated_market_value FROM InvestmentHolding').get()).toMatchObject({ shares: null, estimated_market_value: '1.005' }); }
   finally { unchanged.close(); }
+});
+
+it('restores historical partial-redemption profit from original cash and cost without rewriting receipts', () => {
+  const root = fixture(); const db = new DatabaseSync(path.join(root, 'prisma/actual.db'));
+  db.exec(`CREATE TABLE InvestmentProduct(id TEXT PRIMARY KEY,code TEXT,latest_net_value_per_unit TEXT);
+    CREATE TABLE InvestmentHolding(id TEXT PRIMARY KEY,productId TEXT,principal_amount_minor INTEGER,estimated_market_value TEXT,shares TEXT,shares_estimated INTEGER DEFAULT 0,position_version INTEGER DEFAULT 0,realized_profit_minor INTEGER DEFAULT 0,redemptionHistory TEXT,status TEXT);
+    INSERT INTO InvestmentProduct VALUES('p','P','1.1');
+    INSERT INTO InvestmentHolding(id,productId,principal_amount_minor,estimated_market_value,status) VALUES('h','p',300000,'3107.016','HOLDING');`);
+  const history = JSON.stringify([{ redeemedPrincipal: '2000.00', settledAmount: '2071.34', executionKey: 'original' }]);
+  db.prepare('UPDATE InvestmentHolding SET redemptionHistory=?').run(history); db.close();
+  expect(run(root, 'investment-share-backfill.mjs', ['--apply']).status).toBe(0);
+  const after = new DatabaseSync(path.join(root, 'prisma/actual.db'));
+  try { expect(after.prepare('SELECT realized_profit_minor,redemptionHistory FROM InvestmentHolding').get()).toMatchObject({ realized_profit_minor: 7134, redemptionHistory: history }); }
+  finally { after.close(); }
+  expect(run(root, 'investment-share-backfill.mjs', ['--apply']).status).toBe(0);
 });

@@ -70,6 +70,7 @@
   "pages.cards.consumeInsufficient": "账户可用余额不足",
   "pages.cards.consumeLimitExceeded": "超出本月消费限额",
   "pages.cards.consumeUnavailable": "该卡片当前不可消费",
+  "pages.cards.creditConsumeUnsupported": "信用卡暂不支持模拟消费",
   "pages.cards.consumptions": "消费记录",
   "pages.cards.consumptionsEmpty": "暂无消费记录",
   "pages.subscriptions.title": "订阅",

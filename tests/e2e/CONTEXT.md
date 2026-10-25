@@ -51,7 +51,14 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 `lI` 必须**单独成轮**（同 session 内重复同一 prompt 会被真模型拒绝，`2p,lI` 同轮产生伪失败）；需要回归 `2p` 时换金额/措辞并另起一轮。
 `lI` 的脱敏断言口径：`search_contact` 摘要会回显调用方自己的 `query`（`agent/tools/contact.ts#summarizeContacts`），因此先抹掉工具参数中的字符串（`\d{12,}` 形状的完整卡号**不豁免**）再判泄漏；回显完整号码的结果必须同时含脱敏候选行（`\d{3}\*{4}\d{3,4}`）才通过。
 `lI` 的卡定位参数既接受 `cardTail`（含尾号）也接受 `cardId`（须形如 `^card_`），两者都不得等于尾号或完整卡号。
-`lJ` 是「借记卡展示绑定结算账户余额」场景，id `lJ-live-debit-card-linked-account-balance`，body 在 `live-debit-card.e2e-helper.ts` 的 `scenarioDebitCardLinkedAccount`（注入 `{ page, baseUrl, drive, captureShot }`）：断言 `card_debit` 渲染 `关联账户` + `账户余额`/`可用余额`（绑定 `acct_checking`）、新开与既有虚拟卡和借记卡共享同一账户余额（转账后三卡同步）、FROZEN 与 LOST 卡仍显示真实余额而 `usable=false`、CREDIT 卡只显示信用额度不显示账户余额。
+`lJ` 验证借记卡展示结算账户余额。
+场景 id 为 `lJ-live-debit-card-linked-account-balance`。
+实现在 `live-debit-card.e2e-helper.ts#scenarioDebitCardLinkedAccount`，注入 `{ page, baseUrl, drive, captureShot }`。
+卡片页面展示关联账户、账户余额与可用余额。
+转账后，绑定同一账户的多卡余额同步更新。
+冻结或挂失保留真实余额，同时禁用消费入口。
+信用卡仅显示信用额度，不显示账户余额或消费按钮。
+正常借记卡与虚拟卡的消费入口仍可用。
 选择 `2` 会同时选中 `2p`。
 场景 `7`（`scenarioCommittedContinuationFailed`）不在 `SCENARIOS` 中，恒为最后阶段。
 场景契约为 `{ id, name, run(ctx): Promise<string>, skipReason? }`，`run` 返回一条证据串。
@@ -324,7 +331,7 @@ FROZEN/LOST 的 `LINKED` 卡照常渲染真实 `账户余额` + `可用余额`�
 `openConsumeDialog` 对 `usable === false` 的卡必然超时（按钮 `disabled`），不得用于冻结/挂失卡。
 
 `/cards` 的全部页脚按钮（`data-card-add`/`data-card-refresh`/`data-card-consume`/`data-card-delete`）在 `CardManager` 首帧客户端刷新完成前被同一个 `disabled = busy || refreshing || !loaded`（`app/cards/CardManager.tsx:181`）整体禁用；`gotoCards` 只等水合，因此该帧读到的按钮状态描述的是刷新而非卡片，判定按钮状态前必须等到 `[data-card-add] button` 解除 `disabled`。
-逐卡的 `data-card-consume` 在该三元组之外只追加 `!card.usable`（`CardManager.tsx:191`，`usable = status === 'ACTIVE'`），因此**消费入口与卡类型无关**：任何 ACTIVE 卡（DEBIT/CREDIT/VIRTUAL）都渲染可用的消费入口，非 ACTIVE 才不可用；不要假设「只有虚拟卡能消费」。
+逐卡入口复用 `cardSupportsConsumption` 与 `cardCanConsume`。信用卡不渲染 `data-card-consume`，并显示暂不支持的说明。借记卡与虚拟卡需卡片可用且账户关联为 `LINKED` 才能消费。
 `live-debit-card.e2e-helper.ts#assertConsumeEntry` 就是这个模式（先 settle 再读，`consumeButtonEnabled` 在按钮未渲染时直接失败），同一张卡要求「启用 → 停用」翻转才算非空断言。
 
 新场景注册：加入 `live-acceptance.e2e.ts` 的 `const SCENARIOS`（现止于 `lI`），`run` 用 `withPage(ctx.browser, …, { label })` 包裹并注入 `drive: (turns) => driveRedTool(page, ctx.baseUrl, turns)`、`captureShot: captureLive`。

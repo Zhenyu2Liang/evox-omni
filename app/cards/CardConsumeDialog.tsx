@@ -8,6 +8,7 @@ import { formatDateTime } from '@/lib/date';
 import { moneyToCents, normalizeMoney } from '@/lib/money';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
+import { cardCanConsume, cardSupportsConsumption } from '@/components/banking/card-account-display';
 
 interface Envelope<T> { ok: boolean; data?: T; error?: { code: string; message?: string } }
 interface Notice { key: MessageKey; error: boolean; detail?: string }
@@ -87,7 +88,7 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
   }
 
   async function consume(input: { amount: string; category: string; merchant: string }) {
-    if (busyRef.current) return;
+    if (busyRef.current || !cardCanConsume(card)) return;
     busyRef.current = true;
     setBusy(true);
     setNotice(null);
@@ -143,13 +144,14 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
   }
 
   const linked = card.linkedAccountStatus === 'LINKED';
-  const blocked = !card.usable || card.linkedAccountStatus === 'MISSING' || card.linkedAccountStatus === 'UNTRUSTED';
+  const blocked = !cardCanConsume(card);
   // Read every value straight from the projection: an absent balance is never rendered as 0.
   const linkedName = card.linkedAccountName?.trim() ? card.linkedAccountName : undefined;
   const hasSummary = linked || card.monthlyLimit !== undefined;
 
   /** Why this card cannot spend right now, in display order. */
   const unavailable: MessageKey[] = [];
+  if (!cardSupportsConsumption(card)) unavailable.push('pages.cards.creditConsumeUnsupported');
   if (!card.usable) unavailable.push(card.status === 'FROZEN' ? 'business.cards.cardFrozenNotice' : card.status === 'LOST' ? 'business.cards.cardLostNotice' : 'business.cards.cardUnavailable');
   if (card.linkedAccountStatus === 'MISSING') unavailable.push('business.cards.linkedAccountMissing');
   if (card.linkedAccountStatus === 'UNTRUSTED') unavailable.push('business.cards.linkedAccountUntrusted');

@@ -61,7 +61,10 @@
 `linkedAccountStatus` 为 `MISSING`/`UNTRUSTED` 时账号与余额字段整体缺失，界面绝不补 0，也不兜底成默认账户。
 `linkedAccountName`、`linkedAccountNumber`、`accountAvailableBalance`、`payableAmount` 只在 `LINKED` 时出现。
 关联账户、账户余额、可用余额与不可用提示的唯一渲染处是 `components/banking/CardTile`；本目录只传 `card` 与 `footer`。
-页面层只读 `usable` 与 `linkedAccountStatus`，用于决定入口按钮、弹窗提示与表单可用态。
+页面层复用 `cardSupportsConsumption` 与 `cardCanConsume`。
+信用卡隐藏消费按钮，显示 `pages.cards.creditConsumeUnsupported`。
+借记卡与虚拟卡只有在 `usable` 且 `linkedAccountStatus === 'LINKED'` 时可消费。
+打开弹窗、提交表单和服务端消费都检查卡片类型。
 
 ## 消费弹窗
 
@@ -125,7 +128,7 @@
 | `pages.cards.reviewAdd` / `reviewDelete` | 行内文本节点 | 无 | `li[data-card-pending-change-id={changeId}]` | 同上，按 `change.kind` 取一 |
 | `pages.cards.locked` | 行内 `p`（`text-banking-danger`） | 无 | 同上 `li` 内 | 该变更 `status === 'locked'` |
 | `pages.cards.resume` | `Button`（secondary） | `button` | 同上 `li` 内 | 同上，每行一个 |
-| `pages.cards.consume` | `Button`（secondary, sm） | `button` | `span[data-card-consume]` | 每卡一个；`!card.usable` 时 disabled |
+| `pages.cards.consume` | `Button`（secondary, sm） | `button` | `span[data-card-consume]` | 仅借记卡与虚拟卡显示；`!cardCanConsume(card)` 时 disabled |
 | `pages.cards.delete` | `Button`（ghost, sm） | `button` | `span[data-card-delete]` | 同上；该卡已有删除申请时 disabled |
 | `pages.cards.emptyTitle` | `EmptyState` 的 `div.font-semibold` | 无（`components/ui/EmptyState.tsx` 不加 role） | 无 | 仅 `cards.length === 0` |
 | `pages.cards.emptyDescription` | `EmptyState` 的 `p` | 无 | 无 | 同上 |

@@ -48,6 +48,8 @@ const HOLDING_QUERY = `
          h.shares                 AS shares,
          h.shares_estimated       AS sharesEstimated,
          h.position_version       AS positionVersion,
+         h.realized_profit_minor  AS realizedProfitMinor,
+         h.redemptionHistory      AS redemptionHistory,
          h.status                 AS status,
          p.code                   AS productCode,
          p.latest_net_value_per_unit AS latestNetValuePerUnit
@@ -60,9 +62,10 @@ const HOLDING_QUERY = `
 /** The guarded write: still legacy, still open, still not yet derived — so the run is idempotent. */
 const UPDATE_QUERY = `
   UPDATE "InvestmentHolding"
-     SET shares = ?, estimated_market_value = ?, shares_estimated = 1, position_version = position_version + 1
+     SET shares = ?, estimated_market_value = ?, realized_profit_minor = ?, shares_estimated = 1, position_version = position_version + 1
    WHERE id = ? AND status = 'HOLDING' AND shares IS NULL
      AND principal_amount_minor = ? AND estimated_market_value IS ? AND position_version = ?
+     AND realized_profit_minor = ? AND redemptionHistory IS ?
      AND EXISTS (SELECT 1 FROM "InvestmentProduct" p WHERE p.id = productId AND p.latest_net_value_per_unit = ?)
 `;
 
@@ -136,6 +139,36 @@ function roundedMinor(value) {
   return (parsed.coefficient * MINOR_PER_UNIT * 2n + denominator) / (denominator * 2n);
 }
 
+/** Restore booked realized profit only from explicit settled cash and cost in original receipts. */
+function realizedProfitFromHistory(row) {
+  if (row.redemptionHistory === null) return row.realizedProfitMinor;
+  try {
+    const records = JSON.parse(row.redemptionHistory);
+    if (!Array.isArray(records)) throw new Error('Not an array');
+    const money = value => {
+      if (typeof value !== 'string' || !/^\d+(?:\.\d{1,2})?$/.test(value)) throw new Error('Missing booked money');
+      const [integer, fraction = ''] = value.split('.');
+      return BigInt(integer) * 100n + BigInt(fraction.padEnd(2, '0'));
+    };
+    const identities = new Set();
+    const total = records.reduce((sum, record) => {
+      if (!record || typeof record !== 'object') throw new Error('Invalid receipt');
+      if (record.executionKey) {
+        if (identities.has(record.executionKey)) throw new Error('Duplicate receipt');
+        identities.add(record.executionKey);
+      }
+      const cost = money(record.cost ?? record.redeemedPrincipal);
+      if (record.cost !== undefined && record.redeemedPrincipal !== undefined && money(record.redeemedPrincipal) !== cost) throw new Error('Conflicting cost');
+      return sum + money(record.settledAmount) - cost;
+    }, 0n);
+    if (total < -(2n ** 63n) || total >= 2n ** 63n) throw new Error('Profit outside money range');
+    if (row.realizedProfitMinor !== 0n && row.realizedProfitMinor !== total) throw new Error('Conflicting realized profit');
+    return total;
+  } catch {
+    throw new Error(`Cannot verify original redemption receipts for ${row.holdingId}; nothing was applied.`);
+  }
+}
+
 /** Print an aligned table; the numeric columns are right-aligned so their decimals line up. */
 function renderTable(headers, rows, rightAligned) {
   const widths = headers.map((header, index) =>
@@ -159,6 +192,8 @@ function planHolding(row) {
     originalCost: row.principalAmountMinor,
     originalSnapshot: row.estimatedMarketValue,
     originalVersion: row.positionVersion,
+    originalRealizedProfit: row.realizedProfitMinor,
+    originalRedemptionHistory: row.redemptionHistory,
     productCode: row.productCode ?? '(missing product)',
     oldMarketValueText,
     usedFallback: row.estimatedMarketValue === null,
@@ -173,6 +208,7 @@ function planHolding(row) {
   return {
     ...base,
     outcome: 'derived',
+    realizedProfitMinor: realizedProfitFromHistory(row),
     sharesText: formatScaled(sharesScaled, SHARE_FRACTION_DIGITS),
     newMarketValueText,
     drift: absoluteDifference(newMarketValueText, oldMarketValueText),
@@ -257,8 +293,9 @@ async function runBackfill() {
       database.exec('BEGIN IMMEDIATE');
       try {
         for (const plan of derived) {
-          const result = update.run(plan.sharesText, plan.newMarketValueText, plan.holdingId,
-            plan.originalCost, plan.originalSnapshot, plan.originalVersion, plan.netValueText);
+          const result = update.run(plan.sharesText, plan.newMarketValueText, plan.realizedProfitMinor, plan.holdingId,
+            plan.originalCost, plan.originalSnapshot, plan.originalVersion, plan.originalRealizedProfit,
+            plan.originalRedemptionHistory, plan.netValueText);
           if (Number(result.changes) !== 1) throw new Error(`Position or net value changed: ${plan.holdingId}. Nothing was applied.`);
           written++;
         }

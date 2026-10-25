@@ -70,6 +70,7 @@
   "pages.cards.consumeInsufficient": "Insufficient account balance",
   "pages.cards.consumeLimitExceeded": "Monthly limit exceeded",
   "pages.cards.consumeUnavailable": "This card cannot be used for spending",
+  "pages.cards.creditConsumeUnsupported": "Simulated credit-card spending is not supported",
   "pages.cards.consumptions": "Spending records",
   "pages.cards.consumptionsEmpty": "No spending records",
   "pages.subscriptions.title": "Subscriptions",

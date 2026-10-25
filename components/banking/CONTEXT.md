@@ -17,6 +17,8 @@
 金融值和状态来自调用方的数据。
 SDK 类型通过类型导入使用。
 `card-account-display.ts` 是不渲染任何内容的纯函数模块，供卡片类组件共用关联账户判定。
+`cardSupportsConsumption` 只允许借记卡与虚拟卡。
+`cardCanConsume` 还要求卡片可用且账户关联为 `LINKED`。
 
 ## 投资持仓渲染（e2e 定位）
 

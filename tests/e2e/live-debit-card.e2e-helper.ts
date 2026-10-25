@@ -728,6 +728,12 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
   const creditRows0 = await readCardTileRows(page, CREDIT_CARD_ID);
   const creditText0 = await readCardTileText(page, CREDIT_CARD_ID);
   assertCreditTile(CREDIT_CARD_ID, creditRows0, creditText0, creditView0.availableLimit ?? '0.00');
+  await waitForCardsSettled(page);
+  const creditTile = page.locator(`[data-card-id="${CREDIT_CARD_ID}"]`);
+  if (await creditTile.locator('[data-card-consume]').count() !== 0) fail('信用卡不应显示模拟消费入口');
+  if (!(await creditTile.innerText()).includes(t('pages.cards.creditConsumeUnsupported'))) fail('信用卡应说明暂不支持模拟消费');
+  await assertConsumeEntry(page, DEBIT_CARD_ID, 'enabled', '正常且已关联活期账户的借记卡仍可消费');
+  await assertConsumeEntry(page, VIRTUAL_CARD_ID, 'enabled', '正常且已关联活期账户的虚拟卡仍可消费');
 
   const listText0 = await cardListText(page);
   // Credit wording belongs to CREDIT cards only; a debit instrument naming it would misrepresent cash.
@@ -1059,7 +1065,7 @@ export async function scenarioDebitCardLinkedAccount(params: DebitCardParams): P
     + `/cards DOM 行「${CARD_LABEL.linkedAccount}」=「${account.name} · ${account.number}」「${CARD_LABEL.accountBalance}」=${debitRows0[CARD_LABEL.accountBalance]}「${CARD_LABEL.usableBalance}」=${debitRows0[CARD_LABEL.usableBalance]} 状态=「${t('business.cards.active')}」；`
     + `虚拟卡 ${VIRTUAL_CARD_ID} 同一余额 ${virtualRows0[CARD_LABEL.accountBalance]}、可用 ${virtualRows0[CARD_LABEL.usableBalance]}（月限额 ${centsToMoney(virtualRaw.monthlyLimitMinor ?? 0n)}）；信用卡 ${CREDIT_CARD_ID} 只有「${CARD_LABEL.availableLimit}」=${creditRows0[CARD_LABEL.availableLimit]}、无账户行、无「${CARD_LABEL.linkedAccount}」；页面无「授信额度」；`
     + `第 2 张虚拟卡（自然语言「${applied.sent.join('」→「')}」）：${applied.cardId} 同余额 ${secondRows1[CARD_LABEL.accountBalance]}、可用 ${secondRows1[CARD_LABEL.usableBalance]}，三张卡账户余额全等，checkingBalance 与 totalAssets 未变；`
-    + `真实业务「${sentTransfer.join('」→「')}」：SQLite 余额 ${cash} → ${centsToMoney(settled.balanceMinor)}（流水 ${settled.debit.id} ${settled.debit.amountMinor}），/cards DOM 借记=${debitRows2[CARD_LABEL.accountBalance]} 虚拟=${virtualRows2[CARD_LABEL.accountBalance]} 新虚拟=${secondRows2[CARD_LABEL.accountBalance]}，/api/cards=${cash2}，/api/dashboard.checkingBalance=${dashboard2.checkingBalance}，/overview 含 ${formatCNY(cash2)}，totalAssets 仅下降 ${assetsDrop}；`
+    + `信用卡无模拟消费按钮并说明暂不支持，借记卡与虚拟卡入口可用；真实业务「${sentTransfer.join('」→「')}」：SQLite 余额 ${cash} → ${centsToMoney(settled.balanceMinor)}（流水 ${settled.debit.id} ${settled.debit.amountMinor}），/cards DOM 借记=${debitRows2[CARD_LABEL.accountBalance]} 虚拟=${virtualRows2[CARD_LABEL.accountBalance]} 新虚拟=${secondRows2[CARD_LABEL.accountBalance]}，/api/cards=${cash2}，/api/dashboard.checkingBalance=${dashboard2.checkingBalance}，/overview 含 ${formatCNY(cash2)}，totalAssets 仅下降 ${assetsDrop}；`
     + `冻结（「${sentFreeze.join('」→「')}」）：SQLite status=FROZEN、usable=false、余额仍 ${frozenRows[CARD_LABEL.accountBalance]}、可用 ${frozenRows[CARD_LABEL.usableBalance]}，tile 逐字「${t('business.cards.frozen')}」+「${t('business.cards.cardFrozenNotice')}」，消费按钮 disabled，同时 ${VIRTUAL_CARD_ID} 仍可用；`
     + `挂失（「${sentLost.join('」→「')}」）：SQLite status=LOST、usable=false、余额仍 ${lostRows[CARD_LABEL.accountBalance]}、可用 ${lostRows[CARD_LABEL.usableBalance]}，tile 逐字「${t('business.cards.lost')}」+「${t('business.cards.cardLostNotice')}」，消费按钮 disabled，creditAvailable=${dashboard4.creditAvailable}（=非 LOST CREDIT 合计）、totalAssets 未变；`
     + `截图 ${[shotBaseline, shotSecondCard, shotTransferCards, shotOverview, shotFrozen, shotLost].map((shot) => shot ?? '未落盘').join(' / ')}；证据 JSON ${evidenceFile ?? '未落盘'}`;
