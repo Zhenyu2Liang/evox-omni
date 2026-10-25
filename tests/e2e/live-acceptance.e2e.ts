@@ -86,7 +86,7 @@ import { journeySharedDemo } from './shared-demo.e2e-helper';
 import { journeyToolLifecycle } from './tool-lifecycle.e2e-helper';
 import { journeyMultiCardFreeze } from './card-freeze.e2e-helper';
 import { journeyCardManagement } from './card-management.e2e-helper';
-import { journeyNaturalConversation, journeyDialogueRegressions, journeySubscriptionAdvice, journeyCompleteFraudDiscussion } from './conversation.e2e-helper';
+import { journeyNaturalConversation, journeyDialogueRegressions, journeySubscriptionAdvice, journeyCompleteFraudDiscussion, journeyExplicitDraftResume } from './conversation.e2e-helper';
 import { journeyLiveCompaction } from './compaction.e2e-helper';
 // Virtual-card live scenarios (lD/lE) are built ON TOP of this shared helper module. Its read-model /
 // DB primitives (`LiveCardRecord`, `cardById`, `fetchLiveCards`, `readCardTileRows`, `readDialogRows`,
@@ -146,6 +146,7 @@ import { scenarioIdentityResolution } from './live-identity.e2e-helper';
 // lB: 净值 + 份额 partial redemption (RED 追加申购 then 按金额部分赎回, /investments tiles, ledger).
 // The scenario body lives in this module; the entry only injects its drivers and registers it.
 import { scenarioInvestmentPartialRedemption } from './live-investment.e2e-helper';
+import { scenarioScheduleBusinessClock } from './live-schedule-clock.e2e-helper';
 
 // --- isolated LIVE database ---------------------------------------------------------------------
 
@@ -971,10 +972,11 @@ async function scenarioMultiTurn(ctx: Ctx): Promise<string> {
       // turn 3 — MFA a RED transfer (post-MFA model continuation)
       await submitChat(page, MSG.transferLarge);
       await awaitMfaCard(page, ctx.baseUrl);
+      const beforeRed = { balance: afterYellow.balance, ledger: await fetchLedger(ctx.baseUrl) };
       await submitMfa(page, '123456');
       const afterRed = await waitForTransferSettled(
         ctx.baseUrl,
-        { balance: afterYellow.balance, ledger: await fetchLedger(ctx.baseUrl) },
+        beforeRed,
         LARGE_AMOUNT,
       );
 
@@ -2081,6 +2083,11 @@ async function verifyProviderCompletionEvidence(): Promise<string> {
 }
 
 const SCENARIOS: readonly Scenario[] = [
+  { id: 'lL', name: 'lL-live-explicit-draft-resumption', run: ctx => journeyExplicitDraftResume(ctx.browser, ctx.baseUrl) },
+  { id: 'lK', name: 'lK-live-scheduled-reminder-business-clock', run: ctx => withPage(ctx.browser, async page => {
+    attachCollectors(page);
+    return scenarioScheduleBusinessClock({ page, baseUrl: ctx.baseUrl, captureShot: captureLive });
+  }, { label: 'lK-live-scheduled-reminder-business-clock' }) },
   { id: '15', name: '15-live-complete-fraud-choice-discussion', run: async ctx => {
     const result = await journeyCompleteFraudDiscussion(ctx.browser, ctx.baseUrl);
     return `${result} ${await verifyProviderCompletionEvidence()}`;
@@ -2233,7 +2240,8 @@ async function main(): Promise<void> {
     );
     devServer = await bootDevServer({ timeoutMs: NAV_TIMEOUT_MS, attempts: 2 });
     const baseUrl = devServer.baseUrl;
-    console.log(`· next dev (pid=${devServer.pid}) → ${baseUrl}（/api/health 与 /agent 均已就绪）`);
+    const serverCommand = process.env.E2E_SERVER_MODE === 'production' ? 'start' : 'dev';
+    console.log(`· next ${serverCommand} (pid=${devServer.pid}) → ${baseUrl}（/api/health 与 /agent 均已就绪）`);
 
     // LIVE-mode confirmation: read the RESOLVED config the app actually serves (mock vs live) and,
     // when running scenario 1, observe a narration the scripted mock cannot produce.

@@ -12,6 +12,7 @@ The agent layer assembles Pi Core, provider adapters, user context, workflow por
 - `./providers/`: live + mock provider/model adapters.
 - `./workflows/`: workflow control, the parked-decision seal/refusal projections (`parked-actions.ts`) and cancellation.
 - `./context-compaction/`: historical summaries and bounded model-request projection.
+- `./current-turn-focus.ts`: server-owned per-request topic scope. Historical messages remain intact; a topic change suspends unsubmitted drafts, while an explicit banking resumption still uses normal declarations and authorization.
 - `./messages/`: presentation message catalogs.
 - `./session.ts`: `SessionSnapshot` persistence (`stateJson` = `agentState` + `transcript` + reply/compaction state; plus `intentJson`, `revision` column) through `lib/db/repositories/session`. `getDemoSession(userId)` is the single server-configured web workspace: it seeds `newSession`, sets `sessionId = demo:${userId}`, calls `ensureDemoSession` (a Prisma `upsert` on that explicit primary key with `update: {}` — it never resets state or leases) and returns `loadSession(row.id)`, so the same `userId` always resolves to the same `sessionId`, including across restarts; a row owned by another user throws `The demo conversation belongs to another user`. `saveSession`/`getOrCreateSession` instead ADOPT the repository-minted cuid (a `newId('sess')` is provisional), and a save carrying an `AgentRunLease` goes through `commitRunSession` with the revision fence.
 
@@ -58,6 +59,9 @@ Authorized workflow progress remains the executor's responsibility, not another 
 declaration. `tools/plan-compiler.ts` validates declared write counts/order and explicit structured
 parameters, dates, conditions and output references before createTaskGraph persists the whole DAG.
 Production does not extract arguments or dependencies from the original user sentence.
+
+Fresh model requests include `current-turn-focus.ts` metadata after compaction. Its token cost is reserved in the projection budget. The metadata is journaled with the model input, never appended to the saved conversation or shown in the UI. Durable recovery retains the original recorded input. `scheduled-dispatcher.ts` and `scripts/scheduler.ts` default to `demoNow()`, matching creation validation; an explicit server-side `now` can advance a dispatch pass without changing security time.
+Topic focus is a model instruction rather than a semantic validator of arbitrary prose. Banking authorization remains enforced by the existing server gateways.
 
 Preflight refusals remain model-facing corrections in `planningRejections` and Pi tool results.
 `turns/events.ts` projects them through `lib/tool-feedback.ts` into catalog-owned public summaries

@@ -4,6 +4,8 @@ import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import type { ChatMessage } from '@/lib/contracts/agent';
 import { restoreConversationUserMemory } from '@/agent/conversation-context';
 import { normalizeToolResultMessages } from '@/agent/message-normalize';
+import { currentTurnFocus, withCurrentTurnFocus } from '@/agent/current-turn-focus';
+import { advanceConversationIntent } from '@/agent/intent-context';
 
 function user(content: string): AgentMessage {
   return { role: 'user', content, timestamp: 1 };
@@ -12,6 +14,32 @@ function user(content: string): AgentMessage {
 function savedUsers(contents: string[]): ChatMessage[] {
   return contents.map((content, index) => ({ id: `saved_user_${index}`, role: 'user', content, timestamp: index + 10 }));
 }
+
+describe('request-only turn focus', () => {
+  it('preserves every old message and contiguous tool result while adding a fresh current-turn boundary', () => {
+    const call = fauxToolCall('get_balance', {});
+    const assistant = fauxAssistantMessage([call]);
+    const result: AgentMessage = { role: 'toolResult', toolCallId: call.id, toolName: call.name,
+      content: [{ type: 'text', text: 'Recorded balance.' }], isError: false, timestamp: 2 };
+    const original = [user('Transfer -200 to Zhang Wei.'), assistant, result, user('Can you create reminders?')];
+    const serialized = JSON.stringify(original);
+    const focus = currentTurnFocus(advanceConversationIntent(undefined, 'Can you create reminders?'));
+    const projection = withCurrentTurnFocus(original, focus);
+    expect(projection.slice(1)).toEqual(original);
+    expect(projection[0]).toBe(focus);
+    expect(JSON.stringify(original)).toBe(serialized);
+    expect(normalizeToolResultMessages(projection).filter(message => message.role !== 'system')).toEqual(original);
+  });
+
+  it('replaces an obsolete projection boundary without duplicating context or removing explicit resumption', () => {
+    const old = currentTurnFocus(advanceConversationIntent(undefined, 'Explain scheduling.', { id: 'old' }));
+    const current = currentTurnFocus(advanceConversationIntent(undefined, 'Continue the transfer to Zhang Wei for 200.', { id: 'new' }));
+    const request = user('Continue the transfer to Zhang Wei for 200.');
+    const next = withCurrentTurnFocus([old, request], current);
+    expect(next).toEqual([current, request]);
+    expect(withCurrentTurnFocus(next, current)).toEqual(next);
+  });
+});
 
 describe('server transcript user memory restoration', () => {
   it('restores a missing negative request before the next surviving user boundary', () => {

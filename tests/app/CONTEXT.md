@@ -205,7 +205,7 @@ HTTP 200 不等于业务成功；锁定的写操作也是 200 + `data.ok:false`�
 | `plan-linkage-http.test.ts` | 停放动作的计划/节点链接（`taskId`/`nodeId`）、`resume` 复用同一动作、同参不同计划不合并 |
 | `plan-parking-http.test.ts` | `submit_plan` 条件 DAG 在闸门节点停放：SSE 走 analyze→check→setlimit、只发 YELLOW、confirm 恢复计划 |
 | `plan-pause-terminal-http.test.ts` | 暂停计划里确认已停放节点只结算节点不推进计划、取消/完成计划后 resume/retry/pause 是 no-op |
-| `scheduled-dispatch-http.test.ts` | 定时派发：提醒只投递一次、到期支付重新过闸、拒绝客户端时钟、审计失败回滚、停放审批不饿死提醒 |
+| `scheduled-dispatch-http.test.ts` | 默认时钟一致、到期不重复、付款过闸、拒绝客户端时钟、审计回滚、停放不阻塞提醒 |
 | `security-workflow-http.test.ts` | 两笔 ¥600 的 confirm 升级、错码、计划取消/已完成终态、运行中 pause 停住下一节点、伪造身份不能验证/取消/控制、`/api/security/reset` 423/200 解锁闸门 |
 | `session-takeover-http.test.ts` | 共享会话 HTTP 入口：无/未知/外来 cookie 落到同一持久会话、外来 body 断言被拒、`requestId` 去重 |
 | `task-resume-retry-http.test.ts` | 两个重叠 `resume`/`retry` 请求：未完成节点只执行一次、持久状态与读模型一致 |

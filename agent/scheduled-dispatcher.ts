@@ -12,6 +12,7 @@ import { resumeTask } from './task-control';
 import { scheduledTransferArgs } from '@/lib/contracts/scheduled-command';
 import { CLAIMABLE_ACTION_STATUSES } from './action-status';
 import { isInternalDiagnostic } from '@/lib/public-text';
+import { demoNow } from '@/lib/clock';
 
 export interface ScheduleIdentity { userId: string; sessionId: string; }
 export interface ScheduleTickOptions { now?: number; limit?: number; }
@@ -129,10 +130,10 @@ async function dispatchWorkflow(row: ScheduledTask, identity: ScheduleIdentity):
     pendingActionId: action?.id, notificationId: notification?.id, error: publicDispatchError(current.dispatchError) };
 }
 
-/** Run one bounded scheduler pass. Production uses real wall time; tests and CLI can inject a demo time. */
+/** Creation and dispatch use the same business clock; an explicit server-side simulation can advance it. */
 export async function tickScheduledTasks(identity: ScheduleIdentity, options: ScheduleTickOptions = {}): Promise<ScheduleTickResult> {
   await assertIdentity(identity);
-  const now = options.now ?? Date.now();
+  const now = demoNow(options.now);
   if (!Number.isFinite(now)) throw new AppError('VALIDATION', 'The scheduler clock is invalid.');
   const limit = Math.max(1, Math.min(100, options.limit ?? 25));
   const due = await prisma.scheduledTask.findMany({ where: {

@@ -46,6 +46,34 @@ function hasAuthorization(response: ChatTurnResponse): boolean {
   return response.events.some(event => event.type === 'confirmation_required' || event.type === 'mfa_required');
 }
 
+it('journals a fresh current-turn scope without rewriting history or reviving a previous write', async () => {
+  const first = undeclaredProvider([fauxAssistantMessage('Please specify the transfer amount.')]);
+  const draft = await runTurn({ message: 'Transfer to Zhang Wei.' }, { provider: first.provider, config });
+  const request = 'Can you create a reminder? Only explain the capability.';
+  const second = scriptedProvider({ purpose: 'conversation', operations: [] }, [fauxAssistantMessage('I can create a reminder after you specify a time and confirm it.')]);
+  const reply = await runTurn({ sessionId: draft.sessionId, message: request }, { provider: second.provider, config });
+  expect(hasAuthorization(reply)).toBe(false);
+  const snapshot = await loadSession(reply.sessionId);
+  expect(snapshot!.transcript.filter(message => message.role === 'user').map(message => message.content))
+    .toEqual(['Transfer to Zhang Wei.', request]);
+  expect(snapshot!.agentState.messages.filter(message => message.role === 'system').some(message =>
+    typeof message.content === 'string' && message.content.startsWith('[Banking current-turn scope]'))).toBe(false);
+  expect(reply.runId).toBeTruthy();
+  const requests = await getTestPrisma().modelRequest.findMany({ where: { runId: reply.runId }, orderBy: { ordinal: 'asc' } });
+  expect(requests).toHaveLength(2);
+  const purposes: string[] = [];
+  for (const row of requests) {
+    const input = JSON.parse(row.inputJson) as { messages: { role: string; content: unknown }[] };
+    const scopes = input.messages.filter(message => message.role === 'system' && typeof message.content === 'string' && message.content.startsWith('[Banking current-turn scope]'));
+    expect(scopes).toHaveLength(1);
+    expect(scopes[0].content).toContain('"historicalRequests":"reference_only"');
+    purposes.push(JSON.parse((scopes[0].content as string).split('\n')[1]).purpose);
+    expect(input.messages.some(message => message.role === 'user' && contentText(message.content as string) === request)).toBe(true);
+  }
+  expect(purposes).toEqual(['undecided', 'conversation']);
+  await expectNoAuthorization();
+});
+
 async function expectNoMutation(): Promise<void> {
   const db = getTestPrisma();
   expect(await db.executionReceipt.count()).toBe(0);

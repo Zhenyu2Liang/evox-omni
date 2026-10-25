@@ -515,14 +515,15 @@ function resolveNextBin(): string | undefined {
  * empty stdout pipe in this environment.
  */
 function devServerCommand(port: number): { command: string; args: string[] } {
+  const mode = process.env.E2E_SERVER_MODE === 'production' ? 'start' : 'dev';
   const nextBin = resolveNextBin();
   if (nextBin !== undefined) {
-    return { command: process.execPath, args: [nextBin, 'dev', '-p', String(port)] };
+    return { command: process.execPath, args: [nextBin, mode, '-p', String(port)] };
   }
   if (process.platform === 'win32') {
-    return { command: 'cmd.exe', args: ['/d', '/s', '/c', `npx next dev -p ${port}`] };
+    return { command: 'cmd.exe', args: ['/d', '/s', '/c', `npx next ${mode} -p ${port}`] };
   }
-  return { command: 'npx', args: ['next', 'dev', '-p', String(port)] };
+  return { command: 'npx', args: ['next', mode, '-p', String(port)] };
 }
 
 /**
@@ -540,7 +541,7 @@ export function startDevServer(port: number): DevServer {
     env: {
       ...process.env,
       NEXT_TELEMETRY_DISABLED: '1',
-      BANKING_NEXT_DIST_DIR: '.next-e2e',
+      BANKING_NEXT_DIST_DIR: process.env.E2E_SERVER_MODE === 'production' ? '.next-build' : '.next-e2e',
       DEMO_USER_ID: 'user_liming',
       // Isolate the app from the shared `prisma/dev.db` — see `useIsolatedDatabase`/`E2E_DB_URL`.
       DATABASE_URL: process.env['DATABASE_URL'] ?? E2E_DB_URL,

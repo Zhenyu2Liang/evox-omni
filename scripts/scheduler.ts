@@ -8,9 +8,10 @@ loadEnvConfig(process.cwd());
 async function main(): Promise<void> {
   const { prisma } = await import('../lib/db/client');
   const { tickScheduledTasks } = await import('../agent/scheduled-dispatcher');
+  const { demoNow } = await import('../lib/clock');
   try {
     const index = process.argv.indexOf('--now');
-    const now = index >= 0 ? Date.parse(process.argv[index + 1] ?? '') : Date.now();
+    const now = index >= 0 ? Date.parse(process.argv[index + 1] ?? '') : demoNow();
     if (!Number.isFinite(now)) throw new Error('Expected --now followed by an ISO timestamp.');
     const schedules = await prisma.scheduledTask.findMany({
       where: {

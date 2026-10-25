@@ -32,6 +32,9 @@ live 数据库文件为 `prisma/live-acceptance.db`（含 `-wal`/`-shm`/`-journa
 运行真实模型场景。
 `LIVE_SCENARIOS` 可指定场景标识列表（`lA`/`lB`/`lC`/`lD`/`lE`/`lF`/`lG`/`lH` 等）。
 `LIVE_FORCE_MODEL` 仅在显式配置时覆盖模型。
+`E2E_SERVER_MODE=production` 使用 `next start`，读取 `.next-build`。
+先设置 `BANKING_NEXT_DIST_DIR=.next-build` 并执行 `pnpm build`。
+未设置时仍使用独立的 `.next-e2e` 开发服务。
 live 场景必须每轮独立起进程、独立重置隔离库。
 
 `pnpm exec tsx tests/e2e/date-tamper-boundary.e2e.ts`
@@ -44,7 +47,14 @@ live 场景必须每轮独立起进程、独立重置隔离库。
 
 ## live 场景与辅助模块
 
-`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG,lH,lJ,lI`（数组顺序，`lJ` 在 `lI` 之前）。
+`lL` 验证切换话题后，用户仍可明确续办旧转账。
+闲聊不提及旧收款人；续办生成新的确认入口，确认前不扣款，确认后仅入账一次。
+
+`lK` 位于 `live-schedule-clock.e2e-helper.ts`，通过真实模型创建未来提醒。
+页面检查不提前分发，也不推进无关种子任务。
+测试仅把新建隔离记录设为到期，再通过页面证明通知与审计只提交一次、资金不变。
+
+`live-acceptance.e2e.ts` 的 `SCENARIOS` 标识：`lL,lK,15,14,13,12,11,10,9,8,0,1,2,2p,3,5,6,4,lA,lB,lC,lD,lE,lF,lG,lH,lJ,lI`（数组顺序）。
 `lF`/`lG` 是「卡片挂失 → 补办」链路场景，id `lF-live-credit-report-lost-and-replace-new-session` 与 `lG-live-full-card-loss-replace-chain-single-session`。
 `lH` 是「MFA 尝试上限 → 终态锁定」场景，id `lH-live-mfa-attempt-limit-lock-terminal`，body 在 `live-mfa-lock.e2e-helper.ts` 的 `scenarioMfaAttemptLimitLock`（注入 `{ page, baseUrl, captureShot }`），链路为 🔴 转账停泊 → 三次错码 `000000` → 锁定 → 刷新 `/agent` → `/security`。
 `lI` 是「号码与尾号身份解析」场景，id `lI-live-identity-resolution-by-number`，body 在 `live-identity.e2e-helper.ts`：腿 1 精确手机号转账确认卡（取消后金额不变）、腿 2 近号 `13911110002` 被拒不产生 `PendingAction`、腿 3 尾号 `6688` 定位卡、腿 4 脱敏渲染。四条腿都只读 `Contact.phone`/`Card.numberMasked` 形态，完整号码仅作为用户气泡与工具参数出现。

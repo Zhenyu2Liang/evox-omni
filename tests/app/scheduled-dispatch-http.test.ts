@@ -8,6 +8,8 @@ import { GET as inboxGet } from '@/app/api/schedules/route';
 import { POST as tickPost } from '@/app/api/schedules/tick/route';
 import { auditStore } from '@/audit/audit-logger';
 import { MFA_CODE } from '@/lib/constants';
+import { demoNow } from '@/lib/clock';
+import { scheduledTime } from '@/lib/scheduled-time';
 import { disconnectTestPrisma, getTestPrisma, resetDatabase } from '@/tests/helpers/db';
 import { DEMO_USER_ID } from '@/tests/helpers/fixtures';
 
@@ -31,6 +33,45 @@ async function schedule(kind: 'REMINDER' | 'TRANSFER' | 'PAYMENT', payload: Reco
 }
 
 describe('durable scheduled dispatch', () => {
+  it('uses the creation business clock for the default HTTP tick even when real time is months later', async () => {
+    const { sessionId } = await getDemoSession(DEMO_USER_ID);
+    const task = await withBankingExecution({ sessionId }, () => banking.task.createScheduledTask({
+      userId: DEMO_USER_ID, name: 'One minute in the business future', kind: 'REMINDER',
+      runAt: scheduledTime({ runAtLocal: '2026-09-25T12:01' }), payload: { note: 'Not due yet' },
+    }));
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2099-01-01T00:00:00Z'));
+    const response = await tickPost(new NextRequest('http://localhost/api/schedules/tick', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).data).toMatchObject({ evaluatedAt: demoNow(), dispatches: [] });
+    expect((await db().scheduledTask.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('SCHEDULED');
+    expect(await db().scheduledNotification.count()).toBe(0);
+    expect(await db().pendingAction.count()).toBe(0);
+  });
+
+  it('delivers a reminder at the default business boundary once without changing account money', async () => {
+    const { sessionId } = await getDemoSession(DEMO_USER_ID);
+    const task = await withBankingExecution({ sessionId }, () => banking.task.createScheduledTask({
+      userId: DEMO_USER_ID, name: 'Due at the business boundary', kind: 'REMINDER',
+      runAt: demoNow(), payload: { note: 'Due now' },
+    }));
+    const balance = (await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor;
+    for (let index = 0; index < 2; index++) {
+      const response = await tickPost(new NextRequest('http://localhost/api/schedules/tick', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      }));
+      expect(response.status).toBe(200);
+      expect((await response.json()).data.evaluatedAt).toBe(demoNow());
+    }
+    const delivered = await db().scheduledTask.findUniqueOrThrow({ where: { id: task.id } });
+    expect(delivered.status).toBe('DONE');
+    expect(delivered.deliveredAt?.getTime()).toBe(demoNow());
+    expect(await db().scheduledNotification.count({ where: { scheduledTaskId: task.id } })).toBe(1);
+    expect(await db().auditLog.count({ where: { dedupeKey: `schedule:${task.id}:delivery` } })).toBe(1);
+    expect((await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor).toBe(balance);
+  });
+
   it('delivers a reminder once with its audit, including concurrent scheduler ticks', async () => {
     const { task, identity } = await schedule('REMINDER', { note: 'Prepare the birthday gift' });
     const balance = (await db().account.findUniqueOrThrow({ where: { id: 'acct_checking' } })).balanceMinor;

@@ -15,7 +15,7 @@
 | `chat-plan-history`、`plan-history-page` | 计划的历史归属 |
 | `financial-display`、`chart-presentation` | 精确金额与图表显示 |
 | `decimal-format`、`business-result-cards`、`investment-purchase-display`、`chat-read-results` | CNY 渲染字面量与业务结果卡 |
-| `context-compaction`、`conversation-context` | 历史压缩与上下文恢复 |
+| `context-compaction`、`conversation-context` | 历史压缩、上下文恢复与不拆分工具结果的当前话题边界 |
 | `scripted-provider` | 脚本化模型辅助模块自身 |
 
 表内名称对应同名测试文件，扩展名为 `.test.ts`。

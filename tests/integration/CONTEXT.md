@@ -5,6 +5,7 @@
 测试使用真实运行入口、网关、执行器与隔离 SQLite。
 模型响应和并发时序可由测试控制。
 文件名中的 live 不代表调用真实模型。
+`conversational-turns.test.ts` 检查当前话题边界进入持久化模型请求，同时保留历史原文、原授权约束和已保存对话。
 本目录直接 import `@/app/api/.../route` 处理器并在进程内包裹 `new NextRequest` 调用（`taskPost`／`confirmPost`／`actionsGet` 等），不是只测领域函数。
 `../app/CONTEXT.md` 的 harness 在本目录的借用方只有 `task-feature-hardening.test.ts:13`（`idCtx`／`postJson`／`getJson`／`taskUrl`／`actionUrl`）与 `locked-action-recovery.test.ts:42`（只借 `getJson` 复读 `GET /api/actions`）。
 真实模型与浏览器证据见
