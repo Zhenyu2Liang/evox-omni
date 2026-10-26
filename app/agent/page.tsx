@@ -40,10 +40,6 @@ export default async function AgentPage() {
           <h1 className="text-base font-semibold tracking-tight text-banking-deep">{t('app.assistant')}</h1>
           <p className="mt-1 text-xs text-banking-navy">{t('app.assistantDescription')}</p>
         </div>
-        <span className="inline-flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-banking-navy">
-          <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-banking-accent" />
-          {t('app.simulatedBanking')}
-        </span>
       </header>
 
       <ChatWindow key={initialHistory.historyGeneration} sessionId={sessionId} taskId={latestTask?.id} initialHistory={initialHistory} className="flex-1" />
