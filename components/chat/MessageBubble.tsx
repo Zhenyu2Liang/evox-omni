@@ -13,6 +13,7 @@ import { CardRenderer } from './cards';
 import { ToolEventList } from './ToolEventList';
 import { AssistantMarkdown } from './AssistantMarkdown';
 import { ChatAvatar } from './ChatAvatar';
+import { isVisibleChatMessage } from './message-day';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import { isInternalDiagnostic, safePublicText } from '@/lib/public-text';
 
@@ -43,7 +44,7 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
   const cards = message.cards ?? [];
   const toolEvents = message.toolEvents ?? [];
   const isBusinessEntry = message.role === 'tool' || message.role === 'system';
-  const hasBody = message.content.length > 0 || isBusinessEntry && (cards.length > 0 || toolEvents.length > 0);
+  const hasBody = isVisibleChatMessage(message);
   // A `system` notice is a security refusal. The live text is already the typed catalog rendering
   // produced by `./agent-stream-reducer` (through `securityNotice`); a refusal restored from saved
   // history can still be the raw internal payload, so anything the public-text funnel classifies as
@@ -56,9 +57,13 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
   const approvals = cards.filter(card => card.type === 'confirmation' || card.type === 'mfa');
   const groupedResult = approvals.length === 1 && cards.some(card => !['confirmation', 'mfa', 'plan'].includes(card.type));
   const renderedCards = cards.map((card, index) => <CardRenderer key={index} card={card} action={action} />);
+  const businessCards = cards.filter(card => card.type !== 'confirmation' && card.type !== 'mfa');
+  const singleBankCard = businessCards.length === 1 && businessCards[0].type === 'cards' &&
+    Array.isArray(businessCards[0].data) && businessCards[0].data.length === 1;
 
   if (message.role === 'tool') return (
-    <div data-message-role="tool" data-message-id={message.id} className={`min-w-0 w-[94%] max-w-[52rem] space-y-3 sm:ml-12 sm:w-[86%] ${className ?? ''}`.trim()}>
+    <div data-message-role="tool" data-message-id={message.id} data-single-bank-card={singleBankCard ? 'true' : undefined}
+      className={`min-w-0 w-[94%] space-y-3 sm:ml-12 ${singleBankCard ? 'max-w-[28rem] sm:w-full' : 'max-w-[52rem] sm:w-[86%]'} ${className ?? ''}`.trim()}>
       <p className="text-[11px] font-medium tracking-wide text-banking-navy/70">{t('chat.message.activity')}</p>
       <ToolEventList events={toolEvents} compact={cards.length > 0} />
       {groupedResult ? <div data-operation-record className="overflow-hidden rounded-2xl border border-slate-200 bg-white [&_[data-approval-history]]:rounded-none [&_[data-approval-history]]:border-0 [&>[data-chat-card-type]+[data-chat-card-type]]:border-t [&>[data-chat-card-type]+[data-chat-card-type]]:border-slate-100 [&>[data-chat-card-type]>div]:rounded-none [&>[data-chat-card-type]>div]:shadow-none [&>[data-chat-card-type]>div]:ring-0">

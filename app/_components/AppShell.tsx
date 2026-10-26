@@ -9,6 +9,7 @@ import { getNavigationTitle } from './navigation';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const isChatWorkspace = pathname === '/agent';
   const { t } = useI18n();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -54,7 +55,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <div className="min-h-dvh lg:flex">
+    <div data-chat-workspace={isChatWorkspace ? 'true' : undefined} className={isChatWorkspace ? 'fixed inset-0 overflow-hidden lg:flex' : 'min-h-dvh lg:flex'}>
       <a href="#workspace" className="sr-only z-50 rounded-xl bg-white px-4 py-3 text-banking-deep shadow-lg focus:not-sr-only focus:fixed focus:left-4 focus:top-4">{t('app.skipContent')}</a>
       <aside aria-label={t('app.sidebar')} className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r border-slate-200/80 bg-white lg:flex">
         <div className="px-7 pb-4 pt-7"><Brand /></div>
@@ -66,7 +67,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <button type="button" aria-label={t('app.openNavigation')} aria-expanded={menuOpen} aria-controls="mobile-navigation" onClick={() => { dialogRef.current?.showModal(); setMenuOpen(true); }} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 text-banking-deep hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
           </button>
-          <span className="truncate text-sm font-semibold text-banking-deep">{getNavigationTitle(pathname, t)}</span>
+          {isChatWorkspace ? <div className="min-w-0">
+            <h1 className="truncate text-sm font-semibold text-banking-deep">{getNavigationTitle(pathname, t)}</h1>
+            <p className="sr-only">{t('app.assistantDescription')}</p>
+          </div> : <span className="truncate text-sm font-semibold text-banking-deep">{getNavigationTitle(pathname, t)}</span>}
         </div>
         <LanguageSwitcher compact />
       </header>

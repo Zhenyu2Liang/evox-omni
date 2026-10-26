@@ -16,7 +16,7 @@
  * `taskId` (optional) enables refresh recovery of the server-selected actionable plan. Historical
  * snapshots are supplied in the persisted transcript; browser storage never selects a plan.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ChatMessage } from '@/lib/contracts/agent';
 import type { ChatEndpoints } from './actions';
 import type { CardActionHandlers } from './cards';
@@ -25,6 +25,7 @@ import { PlanCard, ReconciliationCard } from './cards';
 import { ApprovalRequest } from './ApprovalRequest';
 import { MessageBubble } from './MessageBubble';
 import { presentationMessages } from './presentation-messages';
+import { isVisibleChatMessage, messageDay, MessageDayDivider } from './message-day';
 import { StreamingText } from './StreamingText';
 import { Composer } from './Composer';
 import { ChatWelcome } from './ChatWelcome';
@@ -87,7 +88,7 @@ export function ChatWindow({
   const [draft, setDraft] = useState<{ content: string }>();
 
   const pending = stream.pendingAction;
-  const visibleMessages = presentationMessages(stream.messages, pending?.actionId);
+  const visibleMessages = presentationMessages(stream.messages, pending?.actionId).filter(isVisibleChatMessage);
   const detachedPlan = stream.activePlan && isActionablePlan(stream.activePlan) &&
     !historyPlan(visibleMessages, stream.activePlan.id) ? stream.activePlan : undefined;
 
@@ -197,9 +198,14 @@ export function ChatWindow({
           <ChatWelcome disabled={stream.busy || stream.restoring} onSelect={content => setDraft({ content })} />
         ) : (
           <>
-            {visibleMessages.map((m) => (
-              <MessageBubble key={m.id} message={m} action={action} />
-            ))}
+            {visibleMessages.map((m, index) => {
+              const day = messageDay(m.timestamp);
+              const startsDay = day !== undefined && (index === 0 || day !== messageDay(visibleMessages[index - 1].timestamp));
+              return <Fragment key={m.id}>
+                {startsDay ? <MessageDayDivider day={day} /> : null}
+                <MessageBubble message={m} action={action} />
+              </Fragment>;
+            })}
             {stream.busy && (
               <div role="status" aria-label={t('chat.responding')} className="max-w-[min(88%,52rem)] rounded-2xl border border-slate-200/80 bg-white px-5 py-4 sm:ml-12">
                 <StreamingText text={stream.streamingText} active phase={stream.replyPhase} />

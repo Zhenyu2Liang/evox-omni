@@ -47,7 +47,7 @@ export function CardsCard(p: CardsCardProps) {
       {p.data.length === 0 ? (
         <EmptyState title={t('cards.bankCards.empty.title')} description={t('cards.bankCards.empty.description')} />
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2">
+        <ul data-bank-card-grid data-card-count={p.data.length} className={p.data.length === 1 ? 'grid grid-cols-1 gap-3' : 'grid gap-3 sm:grid-cols-2'}>
           {p.data.map((card) => {
             const account = cardAccountDisplay(card);
             const showsAccountAmounts = cardShowsAccountAmounts(card);
