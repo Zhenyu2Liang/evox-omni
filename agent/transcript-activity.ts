@@ -61,7 +61,12 @@ export function projectTranscriptActivity(messages: readonly ChatMessage[], mess
       const result = safeParse<ToolExecutionResult | null>(resultJson, null);
       if (result?.ok === true) {
         cards ??= [];
-        for (const card of toCards(event.toolName, result)) {
+        for (const card of toCards(event.toolName, result, action?.id)) {
+          if (card.type === 'cards' && card.issuanceActionId) {
+            const existing = cards.findIndex(value => value.type === 'cards' &&
+              cardFingerprint({ type: 'cards', data: value.data }) === cardFingerprint({ type: 'cards', data: card.data }));
+            if (existing >= 0) { cards[existing] = card; continue; }
+          }
           if (!cards.some(existing => cardFingerprint(existing) === cardFingerprint(card))) cards.push(card);
         }
       }

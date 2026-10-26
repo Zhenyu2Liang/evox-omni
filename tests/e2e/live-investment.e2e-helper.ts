@@ -842,6 +842,7 @@ export async function scenarioInvestmentPartialRedemption(params: InvestmentScen
   const sentB3 = [`我持有的${PRODUCT_NAME}按份额赎回 ${SHARES_BY_QUANTITY} 份`];
   await submitChat(page, sentB3[0] as string);
   const panelB3 = await waitForRedemptionPanel(page);
+  if (panelB3[PANEL.holding] !== PRODUCT_NAME) throw new Error(`The redemption holding label is not its product name: ${panelB3[PANEL.holding]}`);
   const panelShot = await captureShot(page, 'lB-redeem-by-shares-panel');
   const expectedNetValuePanel = formatDecimalFixed(redeemed.netValue, 4);
   const expectedSettlementB3 = settlementFromShares(SHARES_BY_QUANTITY, redeemed.netValue);
@@ -877,6 +878,8 @@ export async function scenarioInvestmentPartialRedemption(params: InvestmentScen
   );
 
   const expectedSharesB3 = subtractDecimal(redeemed.shares, SHARES_BY_QUANTITY);
+  const resultText = (await assistantTexts(page)).join('\n');
+  if (resultText.includes(HOLDING_WENJIANA_ID) || resultText.includes('。。')) throw new Error('The public redemption result contains an internal holding id or duplicate punctuation');
   await awaitHolding(
     (row) => row.shares !== null && compareDecimal(row.shares, expectedSharesB3) === 0,
     `B3 后持仓份额应为 ${expectedSharesB3}（赎回前 ${redeemed.shares} − ${SHARES_BY_QUANTITY} 份）`,

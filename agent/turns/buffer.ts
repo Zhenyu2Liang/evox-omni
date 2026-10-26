@@ -146,7 +146,7 @@ export function publishAuthorizedToolOutcome(buffer: TurnBuffer, transcript: Cha
     upsertToolEvent(message, owned);
     if (view.toolName === 'submit_plan') buffer.resumedPlanMessage = message;
     buffer.events.push({ type: 'tool_end', toolEvent: owned });
-    if (input.toolResult.ok) emitToolCards(buffer, input.resultToolName ?? input.toolName, input.toolResult, message);
+    if (input.toolResult.ok) emitToolCards(buffer, input.resultToolName ?? input.toolName, input.toolResult, message, input.actionId);
     publishToolMessage(buffer, message);
     return;
   }
@@ -157,8 +157,8 @@ export function emitCard(buffer: TurnBuffer, card: ChatCard, message: ChatMessag
   buffer.events.push({ type: 'card', card, ...(message ? { messageId: message.id } : {}) });
 }
 
-export function emitToolCards(buffer: TurnBuffer, toolName: string, result: ToolExecutionResult, message: ChatMessage | null): void {
-  for (const card of toCards(toolName as ToolName, result)) {
+export function emitToolCards(buffer: TurnBuffer, toolName: string, result: ToolExecutionResult, message: ChatMessage | null, actionId?: string): void {
+  for (const card of toCards(toolName as ToolName, result, actionId)) {
     if (message?.cards?.some(existing => cardFingerprint(existing) === cardFingerprint(card))) continue;
     emitCard(buffer, card, message);
   }

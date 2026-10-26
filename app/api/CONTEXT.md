@@ -33,6 +33,12 @@ selectable browser identities.
 
 ## Endpoint groups
 
+`GET /api/actions/[id]/card-number` reads a verified issuance receipt. It requires the fixed
+workspace's owned `replace_card` or `apply_virtual_card` action to be executed with verified,
+consumed MFA. The new card ID comes from its stored successful result, never request input.
+The response reveals that owned card's complete number with `Cache-Control: no-store`.
+This browser endpoint is not an agent tool; the complete number does not enter model results.
+
 | Group | Contract | Owning implementation |
 | --- | --- | --- |
 | `POST /api/chat` | Text, optional request/session consistency identifiers; SSE by default, JSON with `stream=0` | Agent turn admission and execution |

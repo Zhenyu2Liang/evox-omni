@@ -1,4 +1,11 @@
 {
+  "business.cards.issuedNumber": "New card number",
+  "business.cards.copyNumber": "Copy card number",
+  "business.cards.numberCopied": "Copied",
+  "business.cards.issuedNumberHint": "This issuance was verified. Save your new card number.",
+  "business.cards.numberUnavailable": "The new card number is unavailable. Try again.",
+  "business.cards.retryNumber": "Retry",
+  "business.cards.numberLoading": "Loading new card number…",
   "business.assets.title": "Asset summary",
   "business.results.asOf": "Snapshot as of {time}",
   "business.contacts.title": "Matching recipients",

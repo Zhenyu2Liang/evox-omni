@@ -2,6 +2,15 @@
 
 The agent layer assembles Pi Core, provider adapters, user context, workflow ports and server-authored presentation. It does not grant banking permission.
 
+Redemption summaries and confirmation fields display the product name, never a holding ID.
+Post-write name lookup may fall back to the product catalog or a generic product label; a failed
+display lookup never changes a committed redemption into a reported failure. Financial receipt
+rendering appends one terminal full stop after trimming existing terminal punctuation.
+Successful card issuance attaches its action ID to the UI-only card descriptor. Transcript
+projection restores this descriptor on the original tool result without duplicating old cards.
+The browser reads complete card numbers through the verified issuance endpoint; neither the
+tool result nor saved conversation contains them.
+
 ## Routing Table
 
 - `./action-status.ts`: the single `PendingAction` status vocabulary — `OPEN_ACTION_STATUSES` (`pending`/`awaiting_mfa`), `TERMINAL_ACTION_STATUSES` (`executed`/`failed`/`cancelled`/`locked`/`needs_reconciliation`), `CLAIMABLE_ACTION_STATUSES`, `ALL_ACTION_STATUSES`, `REPRESENTED_ACTION_STATUSES` and the `isOpenActionStatus`/`isTerminalActionStatus`/`mayPromptForDecision`/`isClaimableActionStatus`/`isLegalActionSourceStatus` predicates plus the `asPendingActionStatus` narrowing for persisted strings; no agent path compares status literals locally.

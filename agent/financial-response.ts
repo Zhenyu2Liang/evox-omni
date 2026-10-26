@@ -43,7 +43,8 @@ function renderWrite(write: TrustedWrite, ordinal: number): string {
   if (write.balanceAfter !== undefined) details.push(`执行时账户余额 ${formatCNY(write.balanceAfter)}`);
   // Non-money writes have their own server-authored SDK summaries (card/category/holding details).
   if (write.toolName !== 'transfer_money' && write.summary) details.push(write.summary);
-  return `${details.join('；')}。`;
+  // Runners own complete sentences; normalize only the join boundary, never financial values.
+  return `${details.join('；').replace(/[。.!！?？；;\s]+$/u, '')}。`;
 }
 
 export interface FinancialResponseOptions {

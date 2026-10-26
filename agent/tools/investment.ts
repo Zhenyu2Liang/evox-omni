@@ -325,6 +325,14 @@ function executedNetValue(
   };
 }
 
+/** Display lookup cannot turn an already committed write into a failure or expose internal IDs. */
+async function writtenProductName(result: InvestResult, holdings: readonly HoldingView[] | undefined): Promise<string> {
+  const ownedName = holdings?.find(holding => holding.id === result.holdingId)?.product?.name;
+  if (ownedName) return ownedName;
+  try { return (await banking.investment.listProducts({})).find(product => product.id === result.productId)?.name || '该理财产品'; }
+  catch { return '该理财产品'; }
+}
+
 /** Model-free runner — `banking.investment.subscribeInvestment({ userId, productId, amount, idempotencyKey })`. */
 export async function runSubscribeInvestment(
   userId: string,
@@ -346,8 +354,9 @@ export async function runSubscribeInvestment(
     });
     const holdings = await currentHoldings(userId);
     const executed = executedNetValue(holdings, result.holdingId);
+    const productName = await writtenProductName(result, holdings);
     const parts = [
-      `已认购 ${formatCNY(result.amount)}（产品 ${result.productId}，持仓号 ${result.holdingId}${result.addedToExisting ? '，合并至原持仓' : ''}）`,
+      `已认购「${productName}」${formatCNY(result.amount)}${result.addedToExisting ? '（合并至原持仓）' : ''}`,
       `申购份额 ${result.subscribedShares === undefined ? HISTORY_INSUFFICIENT : `${result.subscribedShares} 份`}`,
       netValueLine(executed.netValue, executed.netValueDate, '成交净值'),
       `持仓总份额 ${result.totalShares === undefined ? HISTORY_INSUFFICIENT : `${result.totalShares} 份`}`,
@@ -355,7 +364,7 @@ export async function runSubscribeInvestment(
     if (result.newBalance != null) parts.push(`账户余额 ${formatCNY(result.newBalance)}`);
     return {
       ok: true,
-      data: withHoldings(result, holdings),
+      data: { ...withHoldings(result, holdings), productName },
       summary: `${parts.join('；')}。${SIMULATED_PROFIT_NOTICE}`,
     };
   } catch (e) {
@@ -517,12 +526,12 @@ function feeLine(feeAmount: string | undefined, feeRule: string | undefined): st
  * its business date), the credited amount, the fee口径, the remaining shares and cost, and the
  * realized profit — all of it server-returned, none of it recomputed.
  */
-function redemptionSummary(result: InvestResult): string {
+function redemptionSummary(result: InvestResult, productName: string): string {
   const remaining = result.remainingShares;
   const remainingCost = result.remainingCost ?? result.remainingPrincipal;
   const closed = remaining !== undefined && compareDecimal(remaining, '0') === 0;
   const parts = [
-    `${result.mode === undefined ? '已赎回持仓' : `已${REDEMPTION_MODE_LABEL[result.mode]}持仓`} ${result.holdingId}`,
+    `${result.mode === undefined ? '已赎回' : `已${REDEMPTION_MODE_LABEL[result.mode]}`}「${productName}」`,
     `赎回份额 ${result.redeemedShares === undefined ? HISTORY_INSUFFICIENT : `${result.redeemedShares} 份`}`,
     netValueLine(result.netValuePerUnit, result.netValueDate, '成交净值'),
     `预计到账 ${formatCNY(result.amount)}`,
@@ -569,10 +578,12 @@ export async function runRedeemInvestment(
     // The redemption is committed: re-read the position (a replay reports TODAY's position) and
     // project it as the post-write holdings card. An unavailable re-read leaves the receipt alone.
     const holdings = await currentHoldings(userId);
+    // Closing redemptions disappear from current holdings; the catalog still names the original product.
+    const displayName = await writtenProductName(result, holdings);
     return {
       ok: true,
-      data: withHoldings(result, holdings),
-      summary: redemptionSummary(result),
+      data: { ...withHoldings(result, holdings), productName: displayName },
+      summary: redemptionSummary(result, displayName),
     };
   } catch (e) {
     return toolFailure(e);

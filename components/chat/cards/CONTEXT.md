@@ -14,6 +14,12 @@
 
 ## 卡片结果卡（CardsCard）
 
+补办或申请虚拟卡成功后，结果卡携带 `issuanceActionId`。
+`IssuedCardNumber` 读取本人已完成验证的发卡凭证。
+凭证显示新卡完整卡号，并提供复制按钮。
+完整卡号仅保存在浏览器组件状态，不写入模型请求或对话历史。
+刷新后通过原操作身份恢复，普通卡片查询仍显示脱敏卡号。
+
 `CardsCard`（`ChatCard.type === 'cards'`，data 为 `CardView[]`）用标题键 `cards.bankCards.title`（卡片/Bank cards），空态用 `cards.bankCards.empty.title` / `cards.bankCards.empty.description`。
 每张卡复用 `business.cards.*` 键：类型 `business.cards.debit/credit/virtual`、状态 `business.cards.active/frozen/lost/pending`、额度 `business.cards.limit`（仅 CREDIT）/`business.cards.available`（仅 CREDIT）/`business.cards.monthlyLimit`（任意类型，字段存在即显示）/`business.cards.categoryLimits`；分类项标签同样是 `limit.category` 原始字符串。
 限额值经 `Money`→`formatCNY` 展示；与 `banking/CardTile` 使用同一套键与分支规则，但布局不同（`ResultCard` + `ResultMetric`）。

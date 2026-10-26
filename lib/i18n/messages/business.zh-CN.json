@@ -1,4 +1,11 @@
 {
+  "business.cards.issuedNumber": "新卡完整卡号",
+  "business.cards.copyNumber": "复制卡号",
+  "business.cards.numberCopied": "已复制",
+  "business.cards.issuedNumberHint": "补办或开卡已通过本人验证，请保存新卡号。",
+  "business.cards.numberUnavailable": "暂时无法读取新卡号，请重试。",
+  "business.cards.retryNumber": "重新读取",
+  "business.cards.numberLoading": "正在读取新卡号…",
   "business.assets.title": "资产总览",
   "business.results.asOf": "查询时间：{time}",
   "business.contacts.title": "匹配的收款人",

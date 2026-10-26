@@ -24,6 +24,7 @@ import { spawnSync } from 'node:child_process';
 import type { Page } from 'playwright-core';
 import { centsToMoney, formatCNY, moneyToCents } from '../../lib/money';
 import { CARD_LABEL, CARD_LABEL_RETIRED } from './card-labels.e2e-helper';
+import { assertIssuanceReceipt } from './issuance-receipt.e2e-helper';
 import {
   REPO_ROOT,
   SELECTORS,
@@ -732,6 +733,7 @@ export async function scenarioCreditReplaceNewSession(params: CardChainParams): 
     label: 'lF 补办信用卡',
   });
   const newId = outcome.replacementId;
+  await assertIssuanceReceipt(page, baseUrl, leg.action.id, newId);
   if (outcome.replacementRaw.numberMasked === LF_CREDIT_CARD_MASK) {
     throw new Error(`lF：补办卡卡号不得沿用源卡 ${LF_CREDIT_CARD_MASK}，实际 ${outcome.replacementRaw.numberMasked}`);
   }

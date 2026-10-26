@@ -913,7 +913,7 @@ async function gatewayCreatePendingAction(
   }
   if (ctx.args.holdingId) {
     const holding = await prisma.investmentHolding.findFirst({ where: { id: String(ctx.args.holdingId), userId: ctx.userId }, include: { product: true } });
-    if (holding) summary.fields.unshift({ label: '持仓', value: `${holding.product.name}（${holding.id}）` });
+    if (holding) summary.fields.unshift({ label: '持仓', value: holding.product.name });
     if (holding && ctx.toolName === 'redeem_investment') {
       // The SERVER mints the 「净值 + 份额」 quote from the PARKED request: the stated口径 decides the
       // shares redeemed, and the SAME SDK helpers (`sharesFromAmount` / `settlementFromShares`) settle

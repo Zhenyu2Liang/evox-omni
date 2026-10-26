@@ -15,6 +15,17 @@ function transfer(id: string, amount = '200.00', newBalance = '23380.00'): FactI
 }
 
 describe('server-owned financial result presentation', () => {
+  it('does not append a second sentence terminator to an investment result summary', () => {
+    const text = renderFinancialResponse([{ toolName: 'redeem_investment', result: {
+      ok: true, data: { amount: '1035.70', newBalance: '27437.04' },
+      summary: '已按份额赎回「稳健理财A」；赎回份额 1000 份。收益为模拟估算，不承诺保本。',
+    } }]);
+    expect(text).toContain('稳健理财A');
+    expect(text).toContain('¥1,035.70');
+    expect(text).toContain('¥27,437.04');
+    expect(text.endsWith('保本。')).toBe(true);
+    expect(text).not.toContain('。。');
+  });
   it('renders recipient/amount/outcome from the specific real operation', () => {
     const text = renderFinancialResponse([transfer('a')]);
     expect(text).toBe('转账处理结果：第1笔操作实际执行成功；收款人 张伟；金额 ¥200.00；执行时账户余额 ¥23,380.00。');

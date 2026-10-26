@@ -63,7 +63,7 @@ export type ChatCard =
   | { type: 'mfa'; actionId: string; hint?: string; action?: PendingActionSummary; status?: string; message?: string }
   | { type: 'transactions'; data: unknown }
   | { type: 'spending'; data: unknown }
-  | { type: 'cards'; data: unknown }
+  | { type: 'cards'; data: unknown; issuanceActionId?: string }
   | { type: 'investments'; data: unknown }
   | { type: 'subscriptions'; data: unknown }
   | { type: 'contacts'; data: ContactCardView[] }

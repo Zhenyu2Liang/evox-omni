@@ -12,9 +12,11 @@ import {
   linkedAccountNoticeKey,
 } from '@/components/banking/card-account-display';
 import { ResultCard, ResultMetric } from './ResultCard';
+import { IssuedCardNumber } from './IssuedCardNumber';
 
 export interface CardsCardProps {
   data: CardView[];
+  issuanceActionId?: string;
   className?: string;
 }
 
@@ -75,6 +77,7 @@ export function CardsCard(p: CardsCardProps) {
                   {linkedAccountNotice !== undefined ? (
                     <p className="text-xs text-banking-navy/60">{t(linkedAccountNotice)}</p>
                   ) : null}
+                  {p.issuanceActionId ? <IssuedCardNumber actionId={p.issuanceActionId} cardId={card.id} /> : null}
                   {card.limits.length ? (
                     <div>
                       <div className="mb-2 text-xs text-banking-navy/60">{t('business.cards.categoryLimits')}</div>

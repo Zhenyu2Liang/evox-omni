@@ -17,6 +17,7 @@ const investment = vi.hoisted(() => ({
   redeemInvestment: vi.fn(),
   subscribeInvestment: vi.fn(),
   listHoldings: vi.fn(),
+  listProducts: vi.fn(),
 }));
 
 vi.mock('@/banking-sdk', async (importOriginal) => {
@@ -30,6 +31,7 @@ vi.mock('@/banking-sdk', async (importOriginal) => {
         redeemInvestment: investment.redeemInvestment,
         subscribeInvestment: investment.subscribeInvestment,
         listHoldings: investment.listHoldings,
+        listProducts: investment.listProducts,
       },
     },
   };
@@ -109,6 +111,9 @@ describe('investment writes project the CURRENT holdings after committing', () =
     expect(result.data).toMatchObject({
       amount: '1000.00', subscribedShares: '1012.145748', totalShares: '4034.334266', addedToExisting: true,
     });
+    expect(result.summary).toContain('已认购「稳健理财A」');
+    expect(result.summary).not.toContain('holding_1');
+    expect(result.summary).not.toContain('product_1');
     expect((result.data as { holdings?: unknown }).holdings).toEqual([CURRENT_HOLDING]);
 
     const cards = toCards('subscribe_investment', result);
@@ -155,12 +160,16 @@ describe('investment writes project the CURRENT holdings after committing', () =
   it('keeps a committed write successful with only its receipt when the re-read fails', async () => {
     investment.redeemInvestment.mockResolvedValue(REDEEMED);
     investment.listHoldings.mockRejectedValue(new AppError('TOOL_FAILED', 'read failed'));
+    investment.listProducts.mockRejectedValue(new AppError('TOOL_FAILED', 'catalog unavailable'));
 
     const result = await runRedeemInvestment('owner',
       { holdingId: 'holding_1', mode: 'SHARES', shares: '1000' }, { idempotencyKey: 'run-key' });
 
     // The redemption already committed: no fabricated holding list, no error card, no failed call.
     expect(result.ok).toBe(true);
+    expect(result.summary).toContain('该理财产品');
+    expect(result.summary).not.toContain('holding_1');
+    expect(result.summary).not.toContain('product_1');
     expect(result.data).not.toHaveProperty('holdings');
     expect(toCards('redeem_investment', result).map((card) => card.type)).toEqual(['receipt']);
   });
@@ -174,7 +183,7 @@ describe('investment writes project the CURRENT holdings after committing', () =
 });
 
 describe('redeem_investment — required 赎回口径', () => {
-  beforeEach(() => vi.resetAllMocks());
+  beforeEach(() => { vi.resetAllMocks(); investment.listProducts.mockResolvedValue([CURRENT_HOLDING.product]); });
 
   it('is an agent-visible capability that publishes mode as REQUIRED and no retired principal field', () => {
     expect(AGENT_TOOL_NAMES).toContain('redeem_investment');
@@ -298,7 +307,7 @@ describe('redeem_investment — required 赎回口径', () => {
 
     expect(result.ok).toBe(true);
     expect(result.summary).toBe(
-      '已按份额赎回持仓 holding_1；赎回份额 1000 份；成交净值 0.9880 元/份（净值日期 2023-11-15）；'
+      '已按份额赎回「稳健理财A」；赎回份额 1000 份；成交净值 0.9880 元/份（净值日期 2023-11-15）；'
       + '预计到账 ¥1,000.00；费用口径 SIMULATED_NONE（模拟环境不收取赎回费，赎回费 ¥0.00）；'
       + '剩余份额 4000 份；剩余成本 ¥4,000.00；已实现收益 -¥12.00；账户余额 ¥5,000.00。'
       + SIMULATED_NOTICE,
@@ -314,7 +323,8 @@ describe('redeem_investment — required 赎回口径', () => {
       userId: 'owner', holdingId: 'holding_1', mode: 'AMOUNT', amount: '2000.00', idempotencyKey: 'run-key',
     });
     expect(result.ok).toBe(true);
-    expect(result.summary).toContain('已按金额赎回持仓 holding_1');
+    expect(result.summary).toContain('已按金额赎回「稳健理财A」');
+    expect(result.summary).not.toContain('holding_1');
     expect(result.summary).toContain('赎回份额 1000 份');
     expect(result.summary).toContain('成交净值 0.9880 元/份');
   });
@@ -330,7 +340,8 @@ describe('redeem_investment — required 赎回口径', () => {
       userId: 'owner', holdingId: 'holding_1', mode: 'ALL', idempotencyKey: 'run-key',
     });
     expect(result.ok).toBe(true);
-    expect(result.summary).toContain('已全部赎回持仓 holding_1');
+    expect(result.summary).toContain('已全部赎回「稳健理财A」');
+    expect(result.summary).not.toContain('holding_1');
     expect(result.summary).toContain('剩余份额 0 份（持仓已结清）');
     expect(result.summary).toContain('剩余成本 ¥0.00');
   });

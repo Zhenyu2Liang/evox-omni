@@ -94,7 +94,7 @@ function writtenHoldings(data: unknown): unknown[] | null {
 /* ------------------------------------------------------------------------- toCards */
 
 /** Map a tool result to zero or more chat cards. PURE + total (unknown ⇒ [{type:'error'}]). */
-export function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCard[] {
+export function toCards(toolName: ToolName, result: ToolExecutionResult, actionId?: string): ChatCard[] {
   // Historical quotations support prose and are never banking result cards.
   if (toolName === 'search_conversation_history') return [];
   // A failed tool never yields a data card — its failure is surfaced as an error card.
@@ -129,7 +129,8 @@ export function toCards(toolName: ToolName, result: ToolExecutionResult): ChatCa
     case 'apply_virtual_card': {
       const cards = toDtoList(data);
       return cards !== null && isEveryRecord(cards)
-        ? [{ type: 'cards', data: cards }]
+        ? [{ type: 'cards', data: cards, ...((toolName === 'replace_card' || toolName === 'apply_virtual_card') && actionId
+          ? { issuanceActionId: actionId } : {}) }]
         : [malformed(toolName)];
     }
 
