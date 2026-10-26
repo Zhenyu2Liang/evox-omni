@@ -91,6 +91,7 @@ export async function journeyCardManagement(browser: Browser, baseUrl: string): 
     const created = (await fetchCards(baseUrl)).find(card => !original.some(previous => previous.id === card.id));
     if (!created) throw new Error('The added card is missing');
     const tile = page.locator(`[data-card-id="${created.id}"]`);
+    await tile.locator('[data-card-details] > summary').click();
     const text = await tile.innerText();
     if (!text.includes('200.37') || !text.includes('100.23')) throw new Error('The page rounded card limits');
     const replay = await page.request.post(`${baseUrl}/api/cards/changes/${id}/verify`, { data: { code: '123456' } });

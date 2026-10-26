@@ -54,6 +54,7 @@ import { liveModelId, withDb, writeScenarioEvidence } from './live-virtual-card.
 import { addDecimal, compareDecimal, formatDecimalCNY, formatDecimalFixed, subtractDecimal } from '../../lib/decimal';
 import { addMoney, centsToMoney, formatCNY, moneyToCents, subtractMoney } from '../../lib/money';
 import { marketValueFromShares, redeemedCostMinor, settlementFromShares } from '../../banking-sdk/net-value';
+import { assertApprovalDockFitsViewport } from './approval-ux.e2e-helper';
 
 /** The seeded position every assertion is derived from (never a hard-coded principal + fixed yield). */
 const HOLDING_WENJIANA_ID = 'holding_wenjiana';
@@ -264,6 +265,8 @@ async function readCardRow(card: Locator, label: string): Promise<string> {
 
 /** Read the required facts of ONE chat card; a missing row is a failure, never an empty default. */
 async function readCardFacts(card: Locator, labels: readonly string[]): Promise<Record<string, string>> {
+  const details = card.locator('[data-holding-details]');
+  if (await details.count() && !await details.evaluate(el => (el as HTMLDetailsElement).open)) await details.locator('summary').click();
   const out: Record<string, string> = {};
   for (const label of labels) {
     const value = await readCardRow(card, label);
@@ -421,8 +424,11 @@ async function assertInvestmentsPage(params: {
   const tiles = page.locator('[data-investment-holdings] div.rounded-2xl').filter({ hasText: PRODUCT_NAME });
   const tileCount = await tiles.count();
   if (tileCount !== 1) throw new Error(`/investments 持仓区「${PRODUCT_NAME}」卡片应恰 1 张，实际 ${tileCount}`);
+  const holdingDetails = tiles.first().locator('[data-holding-details]');
+  if (await holdingDetails.getAttribute('open') !== null) throw new Error('Holding details must start collapsed');
+  await captureShot(page, `${label}-overview`);
+  await holdingDetails.locator('summary').click();
   const labels = [
-    LABEL.principal,
     LABEL.remainingCost,
     LABEL.shares,
     LABEL.netValue,
@@ -438,13 +444,12 @@ async function assertInvestmentsPage(params: {
     shown[rowLabel] = value;
   }
   const shot = await captureShot(page, label);
-  for (const rowLabel of [LABEL.principal, LABEL.remainingCost, LABEL.marketValue, LABEL.holdingProfit, LABEL.cumulativeProfit, LABEL.realizedProfit]) {
+  for (const rowLabel of [LABEL.remainingCost, LABEL.marketValue, LABEL.holdingProfit, LABEL.cumulativeProfit, LABEL.realizedProfit]) {
     if (/\.\d{3,}/.test(shown[rowLabel])) throw new Error(`「${rowLabel}」展示了未结算的过高精度：${shown[rowLabel]}`);
     if (!/^[+-]?¥[\d,]+\.\d{2}$/.test(shown[rowLabel])) throw new Error(`「${rowLabel}」显示值格式不正确：${shown[rowLabel]}`);
   }
   // 剩余持仓成本 (and the booked 持有金额 that mirrors it) is money, not a share of the old principal.
   const expectedCost = formatCNY(centsToMoney(snapshot.costMinor));
-  if (shown[LABEL.principal] !== expectedCost) throw new Error(`持有金额应为 ${expectedCost}（剩余持仓成本），实际 ${shown[LABEL.principal]}`);
   if (shown[LABEL.remainingCost] !== expectedCost) throw new Error(`剩余持仓成本应为 ${expectedCost}，实际 ${shown[LABEL.remainingCost]}`);
   const expectedShares = sharesText(snapshot.shares);
   if (shown[LABEL.shares] !== expectedShares) throw new Error(`持仓份额应为 ${expectedShares}，实际 ${shown[LABEL.shares]}`);
@@ -465,8 +470,8 @@ async function assertInvestmentsPage(params: {
     throw new Error(`累计收益应为 ${signedDecimalCNY(cumulative)}（已实现收益 + 持仓收益），实际 ${shown[LABEL.cumulativeProfit]}`);
   }
   // Cross-field consistency: 持仓收益 = 市值 − 持有金额 and 累计收益 = 已实现收益 + 持仓收益.
-  if (renderedMinor(shown[LABEL.holdingProfit]) !== renderedMinor(shown[LABEL.marketValue]) - renderedMinor(shown[LABEL.principal])) {
-    throw new Error(`持仓收益与「市值 − 持有金额」不自洽：${shown[LABEL.holdingProfit]} vs ${shown[LABEL.marketValue]} − ${shown[LABEL.principal]}`);
+  if (renderedMinor(shown[LABEL.holdingProfit]) !== renderedMinor(shown[LABEL.marketValue]) - renderedMinor(shown[LABEL.remainingCost])) {
+    throw new Error(`持仓收益与市值减剩余持仓成本不自洽：${shown[LABEL.holdingProfit]} vs ${shown[LABEL.marketValue]} − ${shown[LABEL.remainingCost]}`);
   }
   if (renderedMinor(shown[LABEL.cumulativeProfit]) !== renderedMinor(shown[LABEL.realizedProfit]) + renderedMinor(shown[LABEL.holdingProfit])) {
     throw new Error(`累计收益与「已实现收益 + 持仓收益」不自洽：${shown[LABEL.cumulativeProfit]} vs ${shown[LABEL.realizedProfit]} + ${shown[LABEL.holdingProfit]}`);
@@ -842,6 +847,18 @@ export async function scenarioInvestmentPartialRedemption(params: InvestmentScen
   const sentB3 = [`我持有的${PRODUCT_NAME}按份额赎回 ${SHARES_BY_QUANTITY} 份`];
   await submitChat(page, sentB3[0] as string);
   const panelB3 = await waitForRedemptionPanel(page);
+  const dock = page.locator('[data-approval-request="true"]');
+  const approvalId = await dock.getAttribute('data-action-id');
+  if (await page.locator(`[data-approval-history="true"][data-action-id="${approvalId}"]`).count()) throw new Error('The current action is repeated in transcript history');
+  if (await dock.locator('[data-approval-progress]').count() !== 1) throw new Error('The current operation has no unified progress indicator');
+  if (!approvalId) throw new Error('The active approval has no persisted identity');
+  const originalViewport = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await assertApprovalDockFitsViewport(page, approvalId);
+  await dock.locator('input').scrollIntoViewIfNeeded();
+  if (!await dock.locator('input').isVisible()) throw new Error('The mobile verification input is unreachable');
+  await captureShot(page, 'lB-mobile-approval');
+  if (originalViewport) await page.setViewportSize(originalViewport);
   if (panelB3[PANEL.holding] !== PRODUCT_NAME) throw new Error(`The redemption holding label is not its product name: ${panelB3[PANEL.holding]}`);
   const panelShot = await captureShot(page, 'lB-redeem-by-shares-panel');
   const expectedNetValuePanel = formatDecimalFixed(redeemed.netValue, 4);
@@ -879,6 +896,17 @@ export async function scenarioInvestmentPartialRedemption(params: InvestmentScen
 
   const expectedSharesB3 = subtractDecimal(redeemed.shares, SHARES_BY_QUANTITY);
   const resultText = (await assistantTexts(page)).join('\n');
+  const receipt = page.locator('[data-chat-card-type="receipt"]').last();
+  if (!await receipt.evaluate(element => Boolean(element.closest('[data-operation-record]')?.querySelector('[data-approval-progress]')))) throw new Error('The settled receipt is separated from its approval progress');
+  const receiptDetails = receipt.locator('[data-receipt-details]');
+  if (await receiptDetails.getAttribute('open') !== null) throw new Error('Receipt details must start collapsed');
+  await captureShot(page, 'lB-compact-result');
+  await receiptDetails.locator('summary').click();
+  if (!(await receiptDetails.innerText()).includes('操作后余额')) throw new Error('Expanded receipt lost the balance');
+  const explanation = page.locator('[data-financial-summary="true"]').last().locator('[data-result-explanation]');
+  if (await explanation.getAttribute('open') !== null) throw new Error('The full financial explanation must start collapsed');
+  await explanation.locator('summary').click();
+  if (!(await explanation.innerText()).includes('已按份额赎回')) throw new Error('Expanding the explanation lost the original redemption facts');
   if (resultText.includes(HOLDING_WENJIANA_ID) || resultText.includes('。。')) throw new Error('The public redemption result contains an internal holding id or duplicate punctuation');
   await awaitHolding(
     (row) => row.shares !== null && compareDecimal(row.shares, expectedSharesB3) === 0,

@@ -782,6 +782,22 @@ export async function scenarioCreditReplaceNewSession(params: CardChainParams): 
   const renderedAfterReplaceMinor = await renderedCreditAvailableMinor(page, cardsAfter, { includeLost: false });
   const renderedNaiveMinor = await renderedCreditAvailableMinor(page, cardsAfter, { includeLost: true });
   const replaceShot = await captureShot(page, 'lF-cards-after-replace');
+  for (const card of cardsAfter.filter(card => card.status === 'ACTIVE')) {
+    const expected = card.type === 'CREDIT' ? card.availableLimit : card.type === 'VIRTUAL' ? card.payableAmount : card.accountAvailableBalance;
+    if (expected === undefined) continue;
+    const hero = page.locator(`[data-card-id="${card.id}"] [data-card-primary-amount]`);
+    if ((await hero.locator('dd').textContent())?.trim() !== formatCNY(expected)) throw new Error(`The ${card.type} tile shows the wrong primary amount`);
+    const details = page.locator(`[data-card-id="${card.id}"] [data-card-details]`);
+    if (await details.getAttribute('open') !== null) throw new Error('Card details must initially be collapsed');
+    await details.locator('summary').click();
+    if (!(await details.innerText()).trim()) throw new Error('Expanded card facts are unavailable');
+    await details.locator('summary').click();
+  }
+  const desktopViewport = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)) throw new Error('Mobile cards overflow horizontally');
+  await captureShot(page, 'lF-mobile-card-overview');
+  if (desktopViewport) await page.setViewportSize(desktopViewport);
   if (replacementTileRows[CARD_LABEL.creditLimit] !== formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))) {
     throw new Error(`lF：补办卡「${CARD_LABEL.creditLimit}」应渲染 ${formatCNY(centsToMoney(LF_CREDIT_LIMIT_MINOR))}，实际 ${replacementTileRows[CARD_LABEL.creditLimit]}（${JSON.stringify(replacementTileRows)}）`);
   }

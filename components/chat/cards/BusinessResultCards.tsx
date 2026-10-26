@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import type { BusinessReceipt, ContactCardView, DashboardCardView, ScheduledCardView } from '@/lib/contracts/agent';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import { formatDateTime } from '@/lib/date';
+import { formatDecimalFixed } from '@/lib/decimal';
 import { Badge, Card, Money } from '../../ui';
 import { DecimalMoney } from '../../ui/DecimalMoney';
 import { maskPhone } from './maskPhone';
@@ -84,13 +85,20 @@ export function BusinessReceiptCard({ data, className }: { data: BusinessReceipt
         {data.dueDate === undefined ? null : <Field label={t('business.receipt.dueDate')}>{formatDateTime(data.dueDate)}</Field>}
       </dl></Card>;
   }
-  return <Card className={className} title={<Header icon={<ResultIcon kind="investment" />} title={t(`business.receipt.${data.kind}`)} />}>
+  return <Card className={className} title={<Header icon={<ResultIcon kind="investment" />} title={t(`business.receipt.${data.kind}`)} subtitle={data.productName} />}>
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-banking-light/40 p-4">
-      <p className="break-all text-2xl font-semibold text-banking-deep"><Money amount={data.amount} /></p>
+      <div><p className="mb-1 text-xs text-banking-navy/65">{t(data.kind === 'investmentRedemption' ? 'business.presentation.credited' : 'cards.amount')}</p>
+      <p className="break-all text-2xl font-semibold text-banking-deep"><Money amount={data.amount} /></p></div>
       <Badge tone={data.success ? 'success' : 'danger'}>{t(data.success ? 'cards.success' : 'cards.failed')}</Badge></div>
-    <dl className="mt-3"><Field label={t('cards.balanceAfter')}><Money amount={data.newBalance} /></Field>
+    {data.remainingShares === undefined ? null : <dl className="mt-2"><Field label={t('business.presentation.remainingShares')}>{formatDecimalFixed(data.remainingShares, 6)} {t('business.investments.units.shares')}</Field></dl>}
+    <details data-receipt-details className="mt-3 border-t border-banking-light pt-3">
+      <summary className="cursor-pointer text-sm font-medium text-banking-accent">{t('business.presentation.details')}</summary>
+      <dl className="mt-2"><Field label={t('business.presentation.balanceAfter')}><Money amount={data.newBalance} /></Field>
       <Field label={t('business.receipt.time')}>{formatDateTime(data.occurredAt)}</Field>
+      {data.redeemedShares === undefined ? null : <Field label={t('business.presentation.redeemedShares')}>{formatDecimalFixed(data.redeemedShares, 6)} {t('business.investments.units.shares')}</Field>}
+      {data.netValuePerUnit === undefined ? null : <Field label={t('business.presentation.executionNetValue')}>{formatDecimalFixed(data.netValuePerUnit, 4)} {t('business.investments.units.netValue')}</Field>}
+      {data.feeAmount === undefined ? null : <Field label={t('business.presentation.fee')}><Money amount={data.feeAmount} /></Field>}
       {data.redemptionValuation === undefined ? null : <Field label={t('business.receipt.valuation')}><DecimalMoney amount={data.redemptionValuation} /></Field>}
       {data.settlementRounding === undefined ? null : <Field label={t('business.receipt.rounding')}>{t('business.receipt.halfUp')}</Field>}
-    </dl></Card>;
+    </dl></details></Card>;
 }

@@ -11,6 +11,7 @@ import { sanitizeToolArguments } from '@/lib/tool-diagnostics';
 import { Badge } from '../../ui';
 import type { MessageKey } from '@/lib/i18n/shared';
 import { ActionDetails } from './ActionDetails';
+import { ApprovalProgress } from './ApprovalProgress';
 
 const STATUS_KEYS: Record<PendingActionStatus, MessageKey> = {
   pending: 'chat.approval.status.pending',
@@ -53,7 +54,8 @@ export function ApprovalRecord({ action, actionId, verification = false, status,
       <h3 className="text-sm font-semibold text-banking-deep">{action ? localizeActionTitle(action.title, t) : t('chat.approval.verification')}</h3>
       <Badge tone={tone}>{t(STATUS_KEYS[current])}</Badge>
     </div>
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-slate-100 bg-slate-50/70 px-4 py-3 text-xs">
+    <div className="border-t border-slate-100 px-3 pb-2"><ApprovalProgress status={current} requiresMfa={Boolean(verification || action?.requiresMfa)} /></div>
+    <div className="sr-only">
       <div data-approval-stage="previous" data-stage-status={initial} className="text-banking-navy/70">
         <span className="mr-1.5">{t('chat.approval.previous')}</span>{t(STATUS_KEYS[initial])}
       </div>

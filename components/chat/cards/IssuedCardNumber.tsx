@@ -11,7 +11,9 @@ export function IssuedCardNumber({ actionId, cardId }: { actionId: string; cardI
   const [failed, setFailed] = useState(false);
   const [copied, setCopied] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [revealed, setRevealed] = useState(false);
   useEffect(() => {
+    if (!revealed) return;
     const controller = new AbortController();
     setNumber(undefined); setFailed(false); setCopied(false);
     void (async () => {
@@ -23,7 +25,7 @@ export function IssuedCardNumber({ actionId, cardId }: { actionId: string; cardI
       } catch { if (!controller.signal.aborted) setFailed(true); }
     })();
     return () => controller.abort();
-  }, [actionId, cardId, attempt]);
+  }, [actionId, cardId, attempt, revealed]);
 
   async function copy() {
     if (!number) return;
@@ -33,9 +35,10 @@ export function IssuedCardNumber({ actionId, cardId }: { actionId: string; cardI
 
   return <section data-issued-card-number data-issued-card-id={cardId} className="space-y-2 rounded-xl bg-cyan-50 p-3">
     <p className="text-sm font-semibold text-banking-deep">{t('business.cards.issuedNumber')}</p>
-    {number ? <>
+    {!revealed ? <Button size="sm" onClick={() => setRevealed(true)}>{t('business.presentation.showNumber')}</Button> : number ? <>
       <p data-full-card-number className="break-all font-mono text-lg tracking-wider text-banking-deep">{number}</p>
       <Button size="sm" onClick={() => void copy()}>{t(copied ? 'business.cards.numberCopied' : 'business.cards.copyNumber')}</Button>
+      <Button size="sm" variant="secondary" onClick={() => { setRevealed(false); setNumber(undefined); setCopied(false); }}>{t('business.presentation.hideNumber')}</Button>
       <p className="text-xs text-banking-navy/70">{t('business.cards.issuedNumberHint')}</p>
     </> : failed ? <>
       <p role="status" className="text-sm text-banking-navy">{t('business.cards.numberUnavailable')}</p>

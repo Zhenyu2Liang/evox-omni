@@ -30,6 +30,13 @@ const READ_LABELS: Readonly<Record<string, string>> = {
 
 export { financialOperationKey } from './financial-operation-key';
 
+/** Presentation preview for successful writes only; uncertain or failed outcomes stay fully visible. */
+export function financialResponseSummary(entries: readonly FactInput[]): string | undefined {
+  const { writes } = buildFinancialFacts(entries);
+  if (!writes.length || writes.some(write => write.outcome !== 'succeeded')) return;
+  return writes.map(write => `${WRITE_LABELS[write.toolName] ?? '银行操作'}已完成${write.recipient?.name ? `，收款人 ${write.recipient.name}` : ''}${write.amount !== undefined ? `，${write.toolName === 'redeem_investment' ? '到账' : '金额'} ${formatCNY(write.amount)}` : ''}。`).join('\n');
+}
+
 function renderWrite(write: TrustedWrite, ordinal: number): string {
   const label = WRITE_LABELS[write.toolName] ?? '银行操作';
   const resultLabel = write.toolName === 'subscribe_investment' || write.toolName === 'redeem_investment'

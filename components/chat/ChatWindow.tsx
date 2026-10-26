@@ -24,6 +24,7 @@ import { useAgentStream } from './useAgentStream';
 import { PlanCard, ReconciliationCard } from './cards';
 import { ApprovalRequest } from './ApprovalRequest';
 import { MessageBubble } from './MessageBubble';
+import { presentationMessages } from './presentation-messages';
 import { StreamingText } from './StreamingText';
 import { Composer } from './Composer';
 import { ChatWelcome } from './ChatWelcome';
@@ -86,7 +87,7 @@ export function ChatWindow({
   const [draft, setDraft] = useState<{ content: string }>();
 
   const pending = stream.pendingAction;
-  const visibleMessages = stream.messages;
+  const visibleMessages = presentationMessages(stream.messages, pending?.actionId);
   const detachedPlan = stream.activePlan && isActionablePlan(stream.activePlan) &&
     !historyPlan(visibleMessages, stream.activePlan.id) ? stream.activePlan : undefined;
 

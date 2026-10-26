@@ -72,12 +72,12 @@ function InvestmentResult({ product, holding }: { product: ProductView; holding?
         </div>
         <Badge tone={RISK_TONE[product.riskLevel]}>{product.riskLevel} · {t(RISK_LABEL[product.riskLevel])}</Badge>
       </div>
-      <dl className="mt-3 grid gap-2 sm:grid-cols-3">
+      {!holding ? <dl className="mt-3 grid gap-2 sm:grid-cols-3">
         <ResultMetric label={t('business.investments.yield')}><span className="text-banking-success">{rateRatioToPercent(product.annualYieldRate)}%</span></ResultMetric>
         <ResultMetric label={t('business.investments.term')}>{t('business.investments.days', { count: product.termDays })}</ResultMetric>
         <ResultMetric label={t('business.investments.minimum')}><Money amount={product.minAmount} /></ResultMetric>
-      </dl>
-      {product.description ? <p className="mt-3 text-xs leading-relaxed text-banking-navy/60">{product.description}</p> : null}
+      </dl> : null}
+      {!holding && product.description ? <p className="mt-3 text-xs leading-relaxed text-banking-navy/60">{product.description}</p> : null}
       {holding ? (
         <div className="mt-3 border-t border-banking-light pt-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -91,11 +91,19 @@ function InvestmentResult({ product, holding }: { product: ProductView; holding?
             </div>
           </div>
           <dl className="space-y-2 text-xs">
-            <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.principal')}</dt><dd className="font-semibold text-banking-deep"><Money amount={holding.amount} /></dd></div>
-            <HoldingFacts holding={holding} layout="card" />
+            <HoldingFacts holding={holding} layout="card" section="summary" />
+          </dl>
+          <details data-holding-details className="mt-3 border-t border-banking-light pt-3">
+            <summary className="cursor-pointer text-xs font-medium text-banking-accent">{t('business.presentation.holdingDetails')}</summary>
+          <dl className="mt-3 space-y-2 text-xs">
+            {!usesNetValueModel(holding) ? <div className="flex flex-wrap justify-between gap-2"><dt>{t('business.investments.principal')}</dt><dd><Money amount={holding.amount} /></dd></div> : null}
+            <HoldingFacts holding={holding} layout="card" section="details" />
             {lastPurchaseAt !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.lastPurchase')}</dt><dd className="font-medium text-banking-deep">{formatDateTime(lastPurchaseAt)}</dd></div> : null}
             {addedToExisting ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.purchases')}</dt><dd className="font-medium text-banking-deep">{t('business.investments.purchaseCount', { count: purchases.length })}</dd></div> : null}
           </dl>
+          {purchases.length ? <ul className="mt-3 space-y-1 text-xs text-banking-navy/70">{purchases.map((purchase, index) => <li key={index} className="flex flex-wrap justify-between gap-2"><span>{formatDateTime(purchase.at)}</span><Money amount={purchase.amount} /></li>)}</ul> : null}
+          <p className="mt-3 text-xs text-banking-navy/60">{t('business.investments.yield')} {rateRatioToPercent(product.annualYieldRate)}% · {t('business.investments.days', { count: product.termDays })}</p>
+          </details>
         </div>
       ) : null}
     </div>

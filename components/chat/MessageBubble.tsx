@@ -52,11 +52,17 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
     : message.content;
   if (!hasBody) return null;
 
+  const approvals = cards.filter(card => card.type === 'confirmation' || card.type === 'mfa');
+  const groupedResult = approvals.length === 1 && cards.some(card => !['confirmation', 'mfa', 'plan'].includes(card.type));
+  const renderedCards = cards.map((card, index) => <CardRenderer key={index} card={card} action={action} />);
+
   if (message.role === 'tool') return (
     <div data-message-role="tool" data-message-id={message.id} className={`min-w-0 w-[94%] max-w-[52rem] space-y-3 sm:ml-12 sm:w-[86%] ${className ?? ''}`.trim()}>
       <p className="text-[11px] font-medium tracking-wide text-banking-navy/70">{t('chat.message.activity')}</p>
       <ToolEventList events={toolEvents} compact={cards.length > 0} />
-      {cards.map((card, index) => <CardRenderer key={index} card={card} action={action} />)}
+      {groupedResult ? <div data-operation-record className="overflow-hidden rounded-2xl border border-slate-200 bg-white [&_[data-approval-history]]:rounded-none [&_[data-approval-history]]:border-0 [&>[data-chat-card-type]+[data-chat-card-type]]:border-t [&>[data-chat-card-type]+[data-chat-card-type]]:border-slate-100 [&>[data-chat-card-type]>div]:rounded-none [&>[data-chat-card-type]>div]:shadow-none [&>[data-chat-card-type]>div]:ring-0">
+        {renderedCards}
+      </div> : renderedCards}
     </div>
   );
 
@@ -73,7 +79,13 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
         {hasBody && (
           <>
             {message.content.length > 0 && (message.role === 'assistant' ? (
-              <AssistantMarkdown text={message.content} />
+              message.financialSummary ? <div data-financial-summary="true" className="space-y-3">
+                <AssistantMarkdown text={message.financialSummary} />
+                <details data-result-explanation className="border-t border-slate-100 pt-2">
+                  <summary className="cursor-pointer text-xs font-medium text-banking-accent">{t('business.presentation.resultExplanation')}</summary>
+                  <div className="mt-3"><AssistantMarkdown text={message.content} /></div>
+                </details>
+              </div> : <AssistantMarkdown text={message.content} />
             ) : (
               <p data-message-content="true" className="whitespace-pre-wrap break-words text-sm leading-relaxed">
                 {systemText}

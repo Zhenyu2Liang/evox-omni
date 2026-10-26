@@ -10,7 +10,7 @@ export type ChatRole = 'user' | 'assistant' | 'system' | 'tool';
 /** Business receipts contain only validated public result fields, never tool arguments. */
 export type BusinessReceipt =
   | { kind: 'budget'; name: string; amount: string; purpose?: string; status: 'RESERVED' | 'USED' | 'RELEASED'; dueDate?: number }
-  | { kind: 'investmentPurchase' | 'investmentRedemption'; success: boolean; amount: string; newBalance: string; occurredAt: number; redemptionValuation?: string; settlementRounding?: 'HALF_UP' };
+  | { kind: 'investmentPurchase' | 'investmentRedemption'; success: boolean; amount: string; newBalance: string; occurredAt: number; redemptionValuation?: string; settlementRounding?: 'HALF_UP'; productName?: string; remainingShares?: string; redeemedShares?: string; netValuePerUnit?: string; feeAmount?: string };
 
 export interface ContactCardView {
   name: string;
@@ -78,6 +78,8 @@ export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
+  /** Optional server-authored preview; the original financial explanation remains expandable. */
+  financialSummary?: string;
   timestamp: number;
   /** Server offers this only before gateway/executor/write entry, including trusted preflight refusal. */
   retryRequest?: string;

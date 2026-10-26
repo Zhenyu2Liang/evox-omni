@@ -62,6 +62,14 @@ export function projectTranscriptActivity(messages: readonly ChatMessage[], mess
       if (result?.ok === true) {
         cards ??= [];
         for (const card of toCards(event.toolName, result, action?.id)) {
+          // Enrich an existing receipt in its exact invocation instead of appending a second amount card.
+          if (card.type === 'receipt' && card.data.kind !== 'budget') {
+            const data = card.data;
+            const existing = cards.findIndex(value => value.type === 'receipt' && value.data.kind === data.kind &&
+              value.data.amount === data.amount &&
+              value.data.newBalance === data.newBalance && value.data.occurredAt === data.occurredAt);
+            if (existing >= 0) { cards[existing] = card; continue; }
+          }
           if (card.type === 'cards' && card.issuanceActionId) {
             const existing = cards.findIndex(value => value.type === 'cards' &&
               cardFingerprint({ type: 'cards', data: value.data }) === cardFingerprint({ type: 'cards', data: card.data }));

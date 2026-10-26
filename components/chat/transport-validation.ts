@@ -77,7 +77,7 @@ const card = z.discriminatedUnion('type', [
   z.object({ type: z.literal('error'), message: z.string(), code: errorCode.optional() }),
 ]);
 const message = z.object({ id, role: z.enum(['user', 'assistant', 'system', 'tool']), content: z.string(), timestamp,
-  retryRequest: z.string().optional(), cards: z.array(card).optional(), toolEvents: z.array(toolEvent).optional() }).superRefine((value, context) => {
+  financialSummary: z.string().optional(), retryRequest: z.string().optional(), cards: z.array(card).optional(), toolEvents: z.array(toolEvent).optional() }).superRefine((value, context) => {
   if (value.role === 'tool' && (value.content !== '' || value.toolEvents?.length !== 1 ||
       value.toolEvents[0].messageId !== value.id)) {
     context.addIssue({ code: 'custom', message: 'A tool row must identify exactly one call and contain no prose.' });

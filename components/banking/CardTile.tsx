@@ -22,6 +22,7 @@ import { Card } from '../ui/Card';
 import { Money } from '../ui/Money';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
+import { CardPrimaryAmount } from './CardPrimaryAmount';
 import {
   cardAccountDisplay,
   cardShowsAccountAmounts,
@@ -98,6 +99,10 @@ export function CardTile({ card, className, footer }: CardTileProps) {
         <Badge tone={UNAVAILABLE_TONE[card.status]}>{t(unavailableNotice)}</Badge>
       ) : null}
 
+      <CardPrimaryAmount card={card} />
+      <details data-card-details className="border-t border-banking-light pt-3">
+        <summary className="cursor-pointer text-sm font-medium text-banking-accent">{t('business.presentation.cardDetails')}</summary>
+        <div className="mt-3 space-y-3">
       {card.type === 'CREDIT' &&
       (card.creditLimit !== undefined || card.availableLimit !== undefined) ? (
         <dl className="grid grid-cols-2 gap-3">
@@ -180,6 +185,7 @@ export function CardTile({ card, className, footer }: CardTileProps) {
           </ul>
         </div>
       ) : null}
+      </div></details>
     </Card>
   );
 }

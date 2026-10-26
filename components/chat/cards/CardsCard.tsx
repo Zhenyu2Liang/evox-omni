@@ -13,6 +13,7 @@ import {
 } from '@/components/banking/card-account-display';
 import { ResultCard, ResultMetric } from './ResultCard';
 import { IssuedCardNumber } from './IssuedCardNumber';
+import { CardPrimaryAmount } from '../../banking/CardPrimaryAmount';
 
 export interface CardsCardProps {
   data: CardView[];
@@ -66,7 +67,11 @@ export function CardsCard(p: CardsCardProps) {
                   {unavailableNotice !== undefined ? (
                     <p className="rounded-xl bg-banking-light/70 px-3 py-2 text-xs text-banking-navy/70">{t(unavailableNotice)}</p>
                   ) : null}
-                  <dl className="grid gap-2 sm:grid-cols-2">
+                  <CardPrimaryAmount card={card} />
+                  {p.issuanceActionId ? <IssuedCardNumber actionId={p.issuanceActionId} cardId={card.id} /> : null}
+                  <details data-card-details>
+                    <summary className="cursor-pointer text-sm font-medium text-banking-accent">{t('business.presentation.cardDetails')}</summary>
+                  <div className="mt-3 space-y-3"><dl className="grid gap-2 sm:grid-cols-2">
                     {card.type === 'CREDIT' && card.creditLimit !== undefined ? <ResultMetric label={t('business.cards.limit')}><Money amount={card.creditLimit} /></ResultMetric> : null}
                     {card.type === 'CREDIT' && card.availableLimit !== undefined ? <ResultMetric label={t('business.cards.available')}><Money amount={card.availableLimit} /></ResultMetric> : null}
                     {showsAccountAmounts && accountLabel ? <ResultMetric label={t('business.cards.linkedAccount')}>{accountLabel}</ResultMetric> : null}
@@ -77,7 +82,6 @@ export function CardsCard(p: CardsCardProps) {
                   {linkedAccountNotice !== undefined ? (
                     <p className="text-xs text-banking-navy/60">{t(linkedAccountNotice)}</p>
                   ) : null}
-                  {p.issuanceActionId ? <IssuedCardNumber actionId={p.issuanceActionId} cardId={card.id} /> : null}
                   {card.limits.length ? (
                     <div>
                       <div className="mb-2 text-xs text-banking-navy/60">{t('business.cards.categoryLimits')}</div>
@@ -91,6 +95,7 @@ export function CardsCard(p: CardsCardProps) {
                       </dl>
                     </div>
                   ) : null}
+                  </div></details>
                 </div>
               </li>
             );

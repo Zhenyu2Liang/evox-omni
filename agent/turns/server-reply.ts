@@ -1,6 +1,7 @@
 import type { BankingAgentRuntime } from '../banking-agent';
 import type { TurnBuffer } from './contracts';
 import { newAssistantMessage } from './buffer';
+import { financialResponseSummary } from '../financial-response';
 
 /**
  * Remove only an unpublished conversational candidate. The original provider response stays archived
@@ -21,7 +22,8 @@ export function retireUnpublishedReply(buffer: TurnBuffer): void {
 
 /** Server rendering appends memory but never emits another tool call or provider usage. */
 export function publishServerReply(runtime: BankingAgentRuntime, buffer: TurnBuffer, now: () => number, content: string, retryRequest?: string): void {
-  const message = { ...newAssistantMessage(now()), content, ...(retryRequest ? { retryRequest } : {}) };
+  const financialSummary = financialResponseSummary(buffer.factResults);
+  const message = { ...newAssistantMessage(now()), content, ...(financialSummary ? { financialSummary } : {}), ...(retryRequest ? { retryRequest } : {}) };
   buffer.current = message;
   buffer.assistants.push(message);
   buffer.groundedIds.add(message.id);

@@ -52,7 +52,7 @@ export function valueBasisLabelKey(holding: HoldingView): MessageKey | undefined
 }
 
 /** The seven holding facts. Missing values stay explicit — a zero would read as a real figure. */
-function buildFacts(holding: HoldingView, t: Translator): HoldingFact[] {
+function buildFacts(holding: HoldingView, t: Translator, compactRate = false): HoldingFact[] {
   const insufficient: FactValue = { kind: 'text', text: t('business.investments.insufficient') };
   if (!usesNetValueModel(holding)) {
     const legacy: HoldingFact[] = [];
@@ -89,7 +89,7 @@ function buildFacts(holding: HoldingView, t: Translator): HoldingFact[] {
     // the nonnegative gate (that threw during render and blanked the page).
     { key: 'holdingProfitRate', labelKey: 'business.investments.holdingProfitRate', value: profitRate === undefined
       ? insufficient
-      : { kind: 'text', text: `${signedRateToPercent(profitRate)}%` } },
+      : { kind: 'text', text: `${compactRate ? formatDecimalFixed(signedRateToPercent(profitRate), 2) : signedRateToPercent(profitRate)}%` } },
     { key: 'cumulativeProfit', labelKey: 'business.investments.cumulativeProfit', value: holding.cumulativeProfit === undefined
       ? insufficient
       : { kind: 'decimal', amount: holding.cumulativeProfit, signed: true } },
@@ -106,17 +106,19 @@ function FactValue({ value }: { value: FactValue }) {
   return <>{value.text}</>;
 }
 
-export function HoldingFacts({ holding, layout }: { holding: HoldingView; layout: HoldingFactsLayout }) {
+export function HoldingFacts({ holding, layout, section = 'all' }: { holding: HoldingView; layout: HoldingFactsLayout; section?: 'all' | 'summary' | 'details' }) {
   const { t } = useI18n();
-  return <>{buildFacts(holding, t).map(fact => layout === 'tile' ? (
-    <div key={fact.key} className="flex items-center justify-between gap-3 text-sm">
+  const primary = new Set(['marketValue', 'holdingProfit', 'holdingProfitRate', 'profit']);
+  const facts = buildFacts(holding, t, section === 'summary').filter(fact => section === 'all' || (section === 'summary') === primary.has(fact.key));
+  return <>{facts.map(fact => layout === 'tile' ? (
+    <div key={fact.key} className={`flex items-center justify-between gap-3 text-sm ${section === 'summary' && fact.key === 'marketValue' ? 'rounded-xl bg-banking-light/50 px-3 py-3' : ''}`}>
       <span className="text-banking-navy/60">{t(fact.labelKey)}</span>
-      <span className="font-medium text-banking-deep"><FactValue value={fact.value} /></span>
+      <span className={`${section === 'summary' && fact.key === 'marketValue' ? 'text-xl font-semibold' : 'font-medium'} text-banking-deep`}><FactValue value={fact.value} /></span>
     </div>
   ) : (
-    <div key={fact.key} className="flex flex-wrap justify-between gap-2">
+    <div key={fact.key} className={`flex flex-wrap justify-between gap-2 ${section === 'summary' && fact.key === 'marketValue' ? 'rounded-xl bg-banking-light/50 p-3' : ''}`}>
       <dt className="text-banking-navy/60">{t(fact.labelKey)}</dt>
-      <dd className="font-medium text-banking-deep"><FactValue value={fact.value} /></dd>
+      <dd className={`${section === 'summary' && fact.key === 'marketValue' ? 'text-lg font-semibold' : 'font-medium'} text-banking-deep`}><FactValue value={fact.value} /></dd>
     </div>
   ))}</>;
 }

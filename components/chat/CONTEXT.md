@@ -2,6 +2,16 @@
 
 ## 职责与入口
 
+成功业务的助手回复可携带服务端生成的 `financialSummary`。
+默认显示该摘要，完整原文保留在“查看结果说明”中。
+失败和待核对结果不生成成功摘要。
+`presentation-messages.ts` 只合并相同操作标识的授权展示。
+当前授权仅在底部面板中交互，终态保留一张历史记录。
+此投影不修改保存的消息，迟到的待验证记录不能覆盖终态。
+旧理财回执补充展示字段时更新原卡片，不重复追加金额卡。
+`ApprovalProgress` 在活动面板与历史记录中展示同一套阶段。
+结算后的授权进度和业务回执在同一张操作卡内展示。
+
 `ChatWindow` 组合消息、工具记录、历史和输入框。
 `useAgentStream` 是状态化 Hook：持有 `ChatUIState`、发起请求、应用事件批次。
 `agent-stream-reducer.ts` 承载纯折叠逻辑（`ChatUIState`、`applyEvent`、`reduceAgentEvents`、`settleAction`、`upsertToolEvent`、`visibleRefs`、`pickPendingAction`、`reconcileInterruptedHistory` 等），`useAgentStream` 重新导出它，调用方与测试不必改导入路径。
