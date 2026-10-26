@@ -21,6 +21,8 @@
 `history.ts` 与 `history-request.ts` 处理分页和恢复。
 
 `AssistantMarkdown` 渲染助手的 Markdown。
+`ChatAvatar` 为助手和用户提供本地矢量头像。
+每个实例使用独立的渐变标识，不请求外部图片。
 用户消息保持原文。
 原始 HTML 与图片请求关闭。
 链接采用允许的协议与相对路径。

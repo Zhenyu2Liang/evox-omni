@@ -12,6 +12,7 @@ import type { CardActionHandlers } from './cards';
 import { CardRenderer } from './cards';
 import { ToolEventList } from './ToolEventList';
 import { AssistantMarkdown } from './AssistantMarkdown';
+import { ChatAvatar } from './ChatAvatar';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import { isInternalDiagnostic, safePublicText } from '@/lib/public-text';
 
@@ -68,9 +69,7 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
 
   return (
     <div data-message-role={message.role} data-message-id={message.id} className={`flex min-w-0 w-full items-start gap-2 sm:gap-3 ${ALIGN[message.role]} ${className ?? ''}`.trim()}>
-      {message.role === 'assistant' ? <span aria-hidden="true" className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-xl bg-banking-accent/10 text-banking-accent sm:h-9 sm:w-9">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="7" width="16" height="13" rx="4" /><path d="M12 3v4M8 12h.01M16 12h.01M9 16h6" /></svg>
-      </span> : null}
+      {message.role === 'assistant' ? <ChatAvatar role="assistant" /> : null}
       <div className={`min-w-0 ${message.role === 'user' ? 'max-w-[min(80%,40rem)]' : message.role === 'assistant' ? 'max-w-[min(88%,52rem)]' : 'max-w-[88%]'} space-y-1.5`}>
         {message.role === 'assistant' || message.role === 'user' ? <p className={`px-1 text-[11px] font-medium text-banking-navy/70 ${message.role === 'user' ? 'text-right' : ''}`}>
           {t(message.role === 'user' ? 'chat.message.user' : 'chat.message.assistant')}
@@ -99,9 +98,7 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
         )}
         </div>
       </div>
-      {message.role === 'user' ? <span aria-hidden="true" className="mt-5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-banking-deep text-white sm:h-9 sm:w-9">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="12" cy="8" r="3.5" /><path d="M5 21v-2a7 7 0 0 1 14 0v2" /></svg>
-      </span> : null}
+      {message.role === 'user' ? <ChatAvatar role="user" /> : null}
     </div>
   );
 }
