@@ -61,26 +61,26 @@ export default async function SubscriptionsPage() {
       </header>
 
       <Card title={t('pages.subscriptions.annualSummary')} description={t('pages.subscriptions.annualDescription')}>
-        <dl data-subscription-summary className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <div className="rounded-xl bg-banking-blue-soft p-4">
+        <div className="@container"><dl data-subscription-summary className="grid grid-cols-1 gap-3 @[18rem]:grid-cols-2 @[34rem]:grid-cols-3">
+          <div className="min-w-0 rounded-xl bg-banking-blue-soft p-3">
             <dt className="text-xs text-banking-navy">{t('pages.subscriptions.count')}</dt>
             <dd className="mt-1 text-lg font-semibold text-banking-deep">
               {t('pages.subscriptions.itemCount', { count: subscriptions.length })}
             </dd>
           </div>
-          <div className="rounded-xl bg-banking-lilac-soft p-4">
+          <div className="min-w-0 rounded-xl bg-banking-lilac-soft p-3">
             <dt className="text-xs text-banking-navy">{t('pages.subscriptions.annualCost')}</dt>
-            <dd className="mt-1 text-lg font-semibold text-banking-deep">
+            <dd className="mt-1 max-w-full overflow-x-auto whitespace-nowrap text-lg font-semibold text-banking-deep">
               <Money amount={annualTotal} />
             </dd>
           </div>
-          <div className="rounded-xl bg-banking-teal-soft p-4">
+          <div className="min-w-0 rounded-xl bg-banking-teal-soft p-3">
             <dt className="text-xs text-banking-navy">{t('pages.subscriptions.enabledReminders')}</dt>
             <dd className="mt-1">
               <Badge tone={remindCount > 0 ? 'success' : 'neutral'}>{t('pages.subscriptions.itemCount', { count: remindCount })}</Badge>
             </dd>
           </div>
-        </dl>
+        </dl></div>
       </Card>
 
       {subscriptions.length === 0 ? (
@@ -89,10 +89,10 @@ export default async function SubscriptionsPage() {
         <Card
           title={t('pages.subscriptions.list')}
           description={t('pages.subscriptions.listDescription')}
-          padding="lg"
+          padding="sm"
           footer={t('pages.subscriptions.footer')}
         >
-          <ul className="flex flex-col gap-3">
+          <ul className="divide-y divide-banking-border/70">
             {subscriptions.map((subscription) => (
               <li key={subscription.id}>
                 <SubscriptionTile subscription={subscription} />

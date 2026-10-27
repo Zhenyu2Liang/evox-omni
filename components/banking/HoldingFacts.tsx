@@ -112,12 +112,12 @@ export function HoldingFacts({ holding, layout, section = 'all' }: { holding: Ho
   const facts = buildFacts(holding, t, section === 'summary').filter(fact => section === 'all' || (section === 'summary') === primary.has(fact.key));
   return <>{facts.map(fact => layout === 'tile' ? (
     <div key={fact.key} className={`flex items-center justify-between gap-3 text-sm ${section === 'summary' && fact.key === 'marketValue' ? 'rounded-xl bg-banking-blue-soft px-3 py-3' : ''}`}>
-      <span className="text-banking-navy/60">{t(fact.labelKey)}</span>
+      <span className="text-banking-navy">{t(fact.labelKey)}</span>
       <span className={`${section === 'summary' && fact.key === 'marketValue' ? 'text-xl font-semibold' : 'font-medium'} text-banking-deep`}><FactValue value={fact.value} /></span>
     </div>
   ) : (
     <div key={fact.key} className={`flex flex-wrap justify-between gap-2 ${section === 'summary' && fact.key === 'marketValue' ? 'rounded-xl bg-banking-blue-soft p-3' : ''}`}>
-      <dt className="text-banking-navy/60">{t(fact.labelKey)}</dt>
+      <dt className="text-banking-navy">{t(fact.labelKey)}</dt>
       <dd className={`${section === 'summary' && fact.key === 'marketValue' ? 'text-lg font-semibold' : 'font-medium'} text-banking-deep`}><FactValue value={fact.value} /></dd>
     </div>
   ))}</>;

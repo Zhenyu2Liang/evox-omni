@@ -64,7 +64,7 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
   if (message.role === 'tool') return (
     <div data-message-role="tool" data-message-id={message.id} data-single-bank-card={singleBankCard ? 'true' : undefined}
       className={`min-w-0 w-[94%] space-y-3 sm:ml-12 ${singleBankCard ? 'max-w-[28rem] sm:w-full' : 'max-w-[52rem] sm:w-[86%]'} ${className ?? ''}`.trim()}>
-      <p className="text-[11px] font-medium tracking-wide text-banking-navy/70">{t('chat.message.activity')}</p>
+      <p className="text-[11px] font-medium tracking-wide text-banking-navy">{t('chat.message.activity')}</p>
       <ToolEventList events={toolEvents} compact={cards.length > 0} />
       {groupedResult ? <div data-operation-record className="overflow-hidden rounded-2xl border border-banking-border bg-white [&_[data-approval-history]]:rounded-none [&_[data-approval-history]]:border-0 [&>[data-chat-card-type]+[data-chat-card-type]]:border-t [&>[data-chat-card-type]+[data-chat-card-type]]:border-banking-border/60 [&>[data-chat-card-type]>div]:rounded-none [&>[data-chat-card-type]>div]:shadow-none [&>[data-chat-card-type]>div]:ring-0">
         {renderedCards}
@@ -76,7 +76,7 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
     <div data-message-role={message.role} data-message-id={message.id} className={`flex min-w-0 w-full items-start gap-2 sm:gap-3 ${ALIGN[message.role]} ${className ?? ''}`.trim()}>
       {message.role === 'assistant' ? <ChatAvatar role="assistant" /> : null}
       <div className={`min-w-0 ${message.role === 'user' ? 'max-w-[min(80%,40rem)]' : message.role === 'assistant' ? 'max-w-[min(88%,52rem)]' : 'max-w-[88%]'} space-y-1.5`}>
-        {message.role === 'assistant' || message.role === 'user' ? <p className={`px-1 text-[11px] font-medium text-banking-navy/70 ${message.role === 'user' ? 'text-right' : ''}`}>
+        {message.role === 'assistant' || message.role === 'user' ? <p className={`px-1 text-[11px] font-medium text-banking-navy ${message.role === 'user' ? 'text-right' : ''}`}>
           {t(message.role === 'user' ? 'chat.message.user' : 'chat.message.assistant')}
         </p> : null}
         <div className={`min-w-0 space-y-3 px-4 py-3 sm:px-5 sm:py-4 ${BUBBLE[message.role]}`}>

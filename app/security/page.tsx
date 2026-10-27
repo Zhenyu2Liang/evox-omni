@@ -204,7 +204,7 @@ export default async function SecurityPage() {
               </span>
               <span>{t('security.breaker.failureCount', { count: breaker.failures, max: maxAttempts })}</span>
               {lockedSince !== undefined ? (
-                <time className="text-xs text-banking-navy/70" dateTime={new Date(lockedSince).toISOString()}>
+                <time className="text-xs text-banking-navy" dateTime={new Date(lockedSince).toISOString()}>
                   {formatTime(lockedSince, locale)}
                 </time>
               ) : null}
@@ -238,7 +238,7 @@ export default async function SecurityPage() {
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <h3 className="font-semibold text-banking-deep">{action.title}</h3>
                   {action.title !== action.toolLabel ? (
-                    <span className="text-xs text-banking-navy/70">{action.toolLabel}</span>
+                    <span className="text-xs text-banking-navy">{action.toolLabel}</span>
                   ) : null}
                 </div>
                 {action.fields.length > 0 ? (
@@ -251,7 +251,7 @@ export default async function SecurityPage() {
                     ))}
                   </dl>
                 ) : null}
-                <p className="mt-3 text-xs text-banking-navy/70">
+                <p className="mt-3 text-xs text-banking-navy">
                   <time dateTime={new Date(action.createdAt).toISOString()}>
                     {formatTime(action.createdAt, locale)}
                   </time>

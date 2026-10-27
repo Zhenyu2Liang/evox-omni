@@ -37,18 +37,18 @@ export function SubscriptionsCard(p: SubscriptionsCardProps) {
               </div>
               <div className="mt-3 flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
                 <Money amount={subscription.amount} className="break-words text-xl font-semibold tracking-tight text-banking-deep" />
-                <span className="text-xs text-banking-navy/60">/ {t(CYCLE_LABEL[subscription.cycle])}</span>
+                <span className="text-xs text-banking-navy">/ {t(CYCLE_LABEL[subscription.cycle])}</span>
               </div>
               <dl className="mt-3 space-y-2 border-t border-banking-light pt-3 text-xs">
                 {subscription.status === 'ACTIVE' ? (
                   <div className="flex flex-wrap justify-between gap-x-2 gap-y-1">
-                    <dt className="text-banking-navy/60">{t('business.subscriptions.nextCharge')}</dt>
+                    <dt className="text-banking-navy">{t('business.subscriptions.nextCharge')}</dt>
                     <dd className="tabular-nums text-banking-navy">{formatDateTime(subscription.nextChargeAt)}</dd>
                   </div>
                 ) : null}
                 <div className="flex flex-wrap justify-between gap-x-2 gap-y-1">
-                  <dt className="text-banking-navy/60">{t('business.subscriptions.reminder')}</dt>
-                  <dd className={subscription.remind ? 'font-medium text-banking-success' : 'text-banking-navy/60'}>
+                  <dt className="text-banking-navy">{t('business.subscriptions.reminder')}</dt>
+                  <dd className={subscription.remind ? 'font-medium text-banking-success' : 'text-banking-navy'}>
                     {t(subscription.remind ? 'business.subscriptions.reminderOn' : 'business.subscriptions.reminderOff')}
                   </dd>
                 </div>

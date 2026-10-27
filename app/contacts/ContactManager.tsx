@@ -101,12 +101,12 @@ export default function ContactManager({ initialContacts }: { initialContacts: C
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
                   <span data-contact-avatar aria-hidden="true" className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full font-semibold ${AVATAR_TONES[index % AVATAR_TONES.length]}`}>{Array.from(contact.name)[0]}</span>
-                  <div className="min-w-0"><h2 className="break-words font-semibold text-banking-deep">{contact.name}</h2><p className="mt-1 text-sm text-banking-navy/70">{contact.phone}</p></div>
+                  <div className="min-w-0"><h2 className="break-words font-semibold text-banking-deep">{contact.name}</h2><p className="mt-1 text-sm text-banking-navy">{contact.phone}</p></div>
                 </div>
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setNotice(null); setDeleting(contact); }}>{t('pages.contacts.delete')}</Button>
               </div>
               {contact.bank ? <p className="mt-4 break-words text-sm text-banking-navy">{contact.bank}</p> : null}
-              {contact.remark ? <p className="mt-2 break-words text-sm text-banking-navy/60">{contact.remark}</p> : null}
+              {contact.remark ? <p className="mt-2 break-words text-sm text-banking-navy">{contact.remark}</p> : null}
             </article>
           ))}
         </section>

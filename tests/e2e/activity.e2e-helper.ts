@@ -51,6 +51,17 @@ export async function journeyOperationHistory(browser: Browser, baseUrl: string)
     for (const internal of [PRIVATE_MARKER, 'add_contact', 'delete_contact', 'toolArgs', 'toolResult', 'Private audit arguments']) {
       if (business.includes(internal)) throw new Error(`Ordinary history leaks ${internal}`);
     }
+    const historyRows = page.locator('[data-operation-row]');
+    const rowFacts = await historyRows.allTextContents();
+    if (rowFacts.length !== history.entries.length || await historyRows.locator('time[datetime]').count() !== rowFacts.length) throw new Error('Compact history lost records or stored timestamps');
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error(`Operation history overflows at ${width}px`);
+      if (await historyRows.evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height > 110))) throw new Error(`Operation history rows are still oversized at ${width}px`);
+      if (JSON.stringify(await historyRows.allTextContents()) !== JSON.stringify(rowFacts)) throw new Error('Responsive operation history changed status or verification facts');
+      await captureScreenshot(page, `compact-operation-history-${width}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 960 });
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.locator('[data-operation-history]').waitFor();
     await waitForElementHydration(page, '[data-developer-toggle]');

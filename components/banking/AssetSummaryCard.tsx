@@ -29,7 +29,7 @@ interface AssetStatProps {
 /** One labelled money stat (local, non-exported). */
 function AssetStat({ label, amount, className, estimated }: AssetStatProps) {
   const cls = [
-    'flex flex-col gap-1 rounded-xl p-4 shadow-xs',
+    'flex min-w-0 items-center justify-between gap-3 rounded-xl p-3 shadow-xs @[18rem]:flex-col @[18rem]:items-stretch @[18rem]:gap-1 sm:p-4',
     className ?? 'bg-banking-light',
   ]
     .filter(Boolean)
@@ -37,8 +37,8 @@ function AssetStat({ label, amount, className, estimated }: AssetStatProps) {
 
   return (
     <div data-asset-stat className={cls}>
-      <span className="text-sm text-banking-navy/70">{label}</span>
-      <span className="text-xl font-semibold text-banking-deep">
+      <span className="min-w-0 text-sm text-banking-navy">{label}</span>
+      <span data-asset-value className="max-w-[65%] shrink-0 overflow-x-auto whitespace-nowrap text-lg font-semibold text-banking-deep @[18rem]:max-w-full @[44rem]:text-xl">
         {estimated ? <DecimalMoney amount={amount} /> : <Money amount={amount} />}
       </span>
     </div>
@@ -49,12 +49,12 @@ export function AssetSummaryCard({ summary, className }: AssetSummaryCardProps) 
   const { t } = useI18n();
   return (
     <Card title={t('business.assets.title')} className={className}>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="@container"><div className="grid grid-cols-1 gap-3 @[18rem]:grid-cols-2 @[44rem]:grid-cols-4">
         <AssetStat label={t('business.assets.total')} amount={summary.totalAssets} className="bg-banking-teal-soft" estimated />
         <AssetStat label={t('business.assets.checking')} amount={summary.checkingBalance} className="bg-banking-blue-soft" />
         <AssetStat label={t('business.assets.credit')} amount={summary.creditAvailable} className="bg-banking-lilac-soft" />
         <AssetStat label={t('business.assets.spend', { month: summary.month })} amount={summary.monthSpend} className="bg-banking-apricot-soft" />
-      </div>
+      </div></div>
     </Card>
   );
 }

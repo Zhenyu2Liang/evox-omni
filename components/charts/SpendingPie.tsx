@@ -48,7 +48,7 @@ export function SpendingPie(p: SpendingPieProps) {
               <span className="min-w-0 break-words">
                 <span className="block font-medium text-banking-deep">{point.category}</span>
                 <span className="block">{formatCNY(point.amount)}</span>
-                <span className="block text-banking-navy/60">{point.share}%</span>
+                <span className="block text-banking-navy">{point.share}%</span>
               </span>
             </li>
           ))}

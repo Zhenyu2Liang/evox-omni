@@ -112,7 +112,7 @@ export function CardTile({ card, className, footer }: CardTileProps) {
         <dl className="grid grid-cols-2 gap-3">
           {card.creditLimit !== undefined ? (
             <div>
-              <dt className="text-xs text-banking-navy/60">{t('business.cards.limit')}</dt>
+              <dt className="text-xs text-banking-navy">{t('business.cards.limit')}</dt>
               <dd className="text-sm font-semibold text-banking-deep">
                 <Money amount={card.creditLimit} />
               </dd>
@@ -120,7 +120,7 @@ export function CardTile({ card, className, footer }: CardTileProps) {
           ) : null}
           {card.availableLimit !== undefined ? (
             <div>
-              <dt className="text-xs text-banking-navy/60">{t('business.cards.available')}</dt>
+              <dt className="text-xs text-banking-navy">{t('business.cards.available')}</dt>
               <dd className="text-sm font-semibold text-banking-deep">
                 <Money amount={card.availableLimit} />
               </dd>
@@ -131,7 +131,7 @@ export function CardTile({ card, className, footer }: CardTileProps) {
 
       {showsAccountAmounts && accountLabel ? (
         <div className="flex items-center justify-between gap-3 text-sm">
-          <span className="text-banking-navy/60">{t('business.cards.linkedAccount')}</span>
+          <span className="text-banking-navy">{t('business.cards.linkedAccount')}</span>
           <span className="font-semibold text-banking-deep">{accountLabel}</span>
         </div>
       ) : null}
@@ -141,7 +141,7 @@ export function CardTile({ card, className, footer }: CardTileProps) {
         <dl className="grid grid-cols-2 gap-3">
           {account.accountBalance !== undefined ? (
             <div>
-              <dt className="text-xs text-banking-navy/60">{t('business.cards.accountBalance')}</dt>
+              <dt className="text-xs text-banking-navy">{t('business.cards.accountBalance')}</dt>
               <dd className="text-sm font-semibold text-banking-deep">
                 <Money amount={account.accountBalance} />
               </dd>
@@ -149,7 +149,7 @@ export function CardTile({ card, className, footer }: CardTileProps) {
           ) : null}
           {account.usableBalance !== undefined ? (
             <div>
-              <dt className="text-xs text-banking-navy/60">{t('business.cards.usableBalance')}</dt>
+              <dt className="text-xs text-banking-navy">{t('business.cards.usableBalance')}</dt>
               <dd className="text-sm font-semibold text-banking-deep">
                 <Money amount={account.usableBalance} />
               </dd>
@@ -159,12 +159,12 @@ export function CardTile({ card, className, footer }: CardTileProps) {
       ) : null}
 
       {linkedAccountNotice !== undefined ? (
-        <p className="text-sm text-banking-navy/60">{t(linkedAccountNotice)}</p>
+        <p className="text-sm text-banking-navy">{t(linkedAccountNotice)}</p>
       ) : null}
 
       {card.monthlyLimit !== undefined ? (
         <div className="flex items-center justify-between gap-3 text-sm">
-          <span className="text-banking-navy/60">{t('business.cards.monthlyLimit')}</span>
+          <span className="text-banking-navy">{t('business.cards.monthlyLimit')}</span>
           <span className="font-semibold text-banking-deep">
             <Money amount={card.monthlyLimit} />
           </span>
@@ -173,7 +173,7 @@ export function CardTile({ card, className, footer }: CardTileProps) {
 
       {card.limits.length > 0 ? (
         <div className="space-y-1 border-t border-banking-light pt-2">
-          <div className="text-xs text-banking-navy/60">{t('business.cards.categoryLimits')}</div>
+          <div className="text-xs text-banking-navy">{t('business.cards.categoryLimits')}</div>
           <ul className="space-y-1">
             {card.limits.map((limit, index) => (
               <li

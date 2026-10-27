@@ -26,22 +26,22 @@ function ResultIcon({ kind }: { kind: ResultIconKind }) {
 
 function Header({ icon, title, subtitle }: { icon: ReactNode; title: string; subtitle?: string }) {
   return <div className="flex items-start gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-banking-neutral text-banking-interactive">{icon}</span>
-    <div><h3 className="font-semibold text-banking-deep">{title}</h3>{subtitle ? <p className="mt-1 text-xs font-normal text-banking-navy/65">{subtitle}</p> : null}</div></div>;
+    <div><h3 className="font-semibold text-banking-deep">{title}</h3>{subtitle ? <p className="mt-1 text-xs font-normal text-banking-navy">{subtitle}</p> : null}</div></div>;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
-  return <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 py-2"><dt className="text-sm text-banking-navy/65">{label}</dt>
+  return <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 py-2"><dt className="text-sm text-banking-navy">{label}</dt>
     <dd className="break-words text-right text-sm font-medium text-banking-deep">{children}</dd></div>;
 }
 
 export function ContactsCard({ data, className }: { data: ContactCardView[]; className?: string }) {
   const { t } = useI18n();
   return <Card className={className} title={<Header icon={<ResultIcon kind="contact" />} title={t('business.contacts.title')} subtitle={t('business.contacts.count', { count: data.length })} />}>
-    {data.length === 0 ? <p className="text-sm text-banking-navy/65">{t('business.contacts.empty')}</p> :
+    {data.length === 0 ? <p className="text-sm text-banking-navy">{t('business.contacts.empty')}</p> :
       <div className="grid gap-3 sm:grid-cols-2">{data.map((contact, index) => <div key={index} className="rounded-xl border border-banking-light bg-banking-light/30 p-4">
-        <p className="font-semibold text-banking-deep">{contact.name}</p><p className="mt-1 text-sm text-banking-navy/65">{maskPhone(contact.phone)}</p>
-        {contact.bank ? <p className="mt-2 text-xs text-banking-navy/65">{contact.bank}</p> : null}
-        {contact.remark ? <p className="mt-2 break-words text-sm text-banking-navy/75">{contact.remark}</p> : null}
+        <p className="font-semibold text-banking-deep">{contact.name}</p><p className="mt-1 text-sm text-banking-navy">{maskPhone(contact.phone)}</p>
+        {contact.bank ? <p className="mt-2 text-xs text-banking-navy">{contact.bank}</p> : null}
+        {contact.remark ? <p className="mt-2 break-words text-sm text-banking-navy">{contact.remark}</p> : null}
       </div>)}</div>}
   </Card>;
 }
@@ -56,7 +56,7 @@ export function DashboardCard({ data, className }: { data: DashboardCardView; cl
   ];
   return <Card className={className} title={<Header icon={<ResultIcon kind="assets" />} title={t('business.assets.title')} subtitle={t('business.results.asOf', { time: formatDateTime(data.asOf) })} />}>
     <div className="grid gap-3 sm:grid-cols-2">{stats.map(stat => <div key={stat.key} className="rounded-xl bg-banking-light/50 p-4">
-      <p className="text-xs text-banking-navy/65">{t(stat.key, { month: data.month })}</p><p className="mt-2 break-all text-xl font-semibold text-banking-deep">{stat.value}</p>
+      <p className="text-xs text-banking-navy">{t(stat.key, { month: data.month })}</p><p className="mt-2 break-all text-xl font-semibold text-banking-deep">{stat.value}</p>
     </div>)}</div>
   </Card>;
 }
@@ -64,7 +64,7 @@ export function DashboardCard({ data, className }: { data: DashboardCardView; cl
 export function ScheduledCard({ data, created, className }: { data: ScheduledCardView[]; created: boolean; className?: string }) {
   const { t } = useI18n();
   return <Card className={className} title={<Header icon={<ResultIcon kind="schedule" />} title={t(created ? 'business.scheduled.created' : 'business.scheduled.title')} subtitle={t('business.scheduled.scope')} />}>
-    {data.length === 0 ? <p className="text-sm text-banking-navy/65">{t('business.scheduled.empty')}</p> : <div className="space-y-3">{data.map((task, index) =>
+    {data.length === 0 ? <p className="text-sm text-banking-navy">{t('business.scheduled.empty')}</p> : <div className="space-y-3">{data.map((task, index) =>
       <div key={index} className="rounded-xl border border-banking-light bg-banking-light/20 p-4"><div className="flex flex-wrap items-center justify-between gap-2">
         <h4 className="font-semibold text-banking-deep">{task.name}</h4><Badge tone={task.status === 'DONE' ? 'success' : task.status === 'FAILED' ? 'danger' : 'info'}>{t(`business.scheduled.status.${task.status}`)}</Badge>
       </div><dl className="mt-2"><Field label={t('business.scheduled.kind')}>{t(`business.scheduled.kind.${task.kind}`)}</Field>
@@ -78,7 +78,7 @@ export function BusinessReceiptCard({ data, className }: { data: BusinessReceipt
   const { t } = useI18n();
   if (data.kind === 'budget') {
     return <Card className={className} title={<Header icon={<ResultIcon kind="budget" />} title={t('business.receipt.budget')} subtitle={t('business.receipt.budgetScope')} />}>
-      <div className="rounded-xl bg-banking-neutral p-4"><p className="text-sm text-banking-navy/70">{data.name}</p>
+      <div className="rounded-xl bg-banking-neutral p-4"><p className="text-sm text-banking-navy">{data.name}</p>
         <p className="mt-2 break-all text-2xl font-semibold text-banking-deep"><Money amount={data.amount} /></p></div>
       <dl className="mt-3"><Field label={t('business.receipt.status')}>{t(`business.receipt.budgetStatus.${data.status}`)}</Field>
         {data.purpose ? <Field label={t('business.receipt.purpose')}>{data.purpose}</Field> : null}
@@ -87,7 +87,7 @@ export function BusinessReceiptCard({ data, className }: { data: BusinessReceipt
   }
   return <Card className={className} title={<Header icon={<ResultIcon kind="investment" />} title={t(`business.receipt.${data.kind}`)} subtitle={data.productName} />}>
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-banking-light/40 p-4">
-      <div><p className="mb-1 text-xs text-banking-navy/65">{t(data.kind === 'investmentRedemption' ? 'business.presentation.credited' : 'cards.amount')}</p>
+      <div><p className="mb-1 text-xs text-banking-navy">{t(data.kind === 'investmentRedemption' ? 'business.presentation.credited' : 'cards.amount')}</p>
       <p className="break-all text-2xl font-semibold text-banking-deep"><Money amount={data.amount} /></p></div>
       <Badge tone={data.success ? 'success' : 'danger'}>{t(data.success ? 'cards.success' : 'cards.failed')}</Badge></div>
     {data.remainingShares === undefined ? null : <dl className="mt-2"><Field label={t('business.presentation.remainingShares')}>{formatDecimalFixed(data.remainingShares, 6)} {t('business.investments.units.shares')}</Field></dl>}

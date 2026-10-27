@@ -26,7 +26,7 @@ export function TransferCard({ data, className }: TransferCardProps) {
       }
     >
       <div className="mb-3 rounded-xl bg-banking-light/50 p-4">
-        <p className="text-xs text-banking-navy/70">{t('cards.amount')}</p>
+        <p className="text-xs text-banking-navy">{t('cards.amount')}</p>
         <p className="my-2 text-2xl font-semibold text-banking-deep"><Money amount={amount} /></p>
         <dl><Field label={t('cards.recipient')} value={recipient.name} /></dl>
       </div>
@@ -52,7 +52,7 @@ interface FieldProps {
 function Field({ label, value }: FieldProps) {
   return (
     <div className="flex items-center justify-between gap-4">
-      <dt className="text-sm text-banking-navy/70">{label}</dt>
+      <dt className="text-sm text-banking-navy">{label}</dt>
       <dd className="font-medium text-banking-deep">{value}</dd>
     </div>
   );

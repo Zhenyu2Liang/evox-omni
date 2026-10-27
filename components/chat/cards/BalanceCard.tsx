@@ -37,7 +37,7 @@ export function BalanceCard({ data, className }: BalanceCardProps) {
             >
               <div className="flex min-w-0 flex-col">
                 <span className="font-medium text-banking-deep">{account.name}</span>
-                <span className="text-xs text-banking-navy/60">{account.numberMasked}</span>
+                <span className="text-xs text-banking-navy">{account.numberMasked}</span>
               </div>
               <span className="break-words text-right font-semibold text-banking-deep">
                 <Money amount={account.balance} />

@@ -181,7 +181,7 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
 
       <section data-card-consumptions className="mt-4">
         <h3 className="font-semibold text-banking-deep">{t('pages.cards.consumptions')}</h3>
-        {recordsLoaded ? (consumptions.length === 0 ? <p data-card-consumptions-empty className="mt-2 text-sm text-banking-navy/70">{t('pages.cards.consumptionsEmpty')}</p> : <ul className="mt-2 space-y-2">{consumptions.map(record => <li key={record.id} data-card-consumption={record.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-banking-light pt-2 text-sm"><div className="min-w-0"><div className="truncate text-banking-deep">{record.merchant}</div><div className="text-xs text-banking-navy/60">{formatDateTime(record.occurredAt)} · {record.category}</div></div><Money amount={record.amount} /></li>)}</ul>) : null}
+        {recordsLoaded ? (consumptions.length === 0 ? <p data-card-consumptions-empty className="mt-2 text-sm text-banking-navy">{t('pages.cards.consumptionsEmpty')}</p> : <ul className="mt-2 space-y-2">{consumptions.map(record => <li key={record.id} data-card-consumption={record.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-banking-light pt-2 text-sm"><div className="min-w-0"><div className="truncate text-banking-deep">{record.merchant}</div><div className="text-xs text-banking-navy">{formatDateTime(record.occurredAt)} · {record.category}</div></div><Money amount={record.amount} /></li>)}</ul>) : null}
       </section>
 
       <form onSubmit={submit} data-card-consume-form className="mt-5">

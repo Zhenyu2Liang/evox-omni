@@ -187,7 +187,7 @@ export function ChatWindow({
           </button>
           {stream.historyError && <p role="alert" className="text-center text-sm text-banking-danger">{t(stream.historyError)}</p>}
         </div>}
-        {stream.history && !stream.history.hasMore && visibleMessages.length > 0 && <p data-history-complete="true" className="text-center text-xs text-banking-navy/70">{t('chat.history.complete')}</p>}
+        {stream.history && !stream.history.hasMore && visibleMessages.length > 0 && <p data-history-complete="true" className="text-center text-xs text-banking-navy">{t('chat.history.complete')}</p>}
         <ChatErrorFeedback message={stream.error} code={stream.errorCode} showNotice={!pending} />
         {isEmpty && stream.restoring ? (
           <div role="status" className="flex flex-col items-center justify-center gap-3 py-16">
@@ -246,7 +246,7 @@ export function ChatWindow({
         <Composer onSend={send} draft={draft} busy={stream.busy} disabled={stream.restoring}
           helpExamplesDisabled={pending !== undefined || stream.pendingReconciliations.length > 0}
           className={pending ? '[&_textarea]:max-h-16' : undefined} />
-        {!pending && <p className="mt-2.5 text-center text-[11px] leading-4 text-banking-navy/80">{t('chat.composer.help')}</p>}
+        {!pending && <p className="mt-2.5 text-center text-[11px] leading-4 text-banking-navy">{t('chat.composer.help')}</p>}
         </div>
       </div>
     </div>

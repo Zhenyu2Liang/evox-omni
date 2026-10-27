@@ -36,14 +36,14 @@ interface StatusMeta {
  * `TaskNodeStatus` is covered so an unknown status can never fall through unrendered.
  */
 const STATUS_META: Record<TaskNodeStatus, StatusMeta> = {
-  pending: { icon: '○', label: 'tasks.timeline.pending', tone: 'neutral', text: 'text-banking-navy/60' },
+  pending: { icon: '○', label: 'tasks.timeline.pending', tone: 'neutral', text: 'text-banking-navy' },
   running: { icon: '●', label: 'tasks.timeline.running', tone: 'info', text: 'text-banking-interactive' },
   waiting_confirmation: { icon: '⏳', label: 'tasks.timeline.waitingConfirmation', tone: 'warn', text: 'text-banking-warn' },
   waiting_verification: { icon: '⏳', label: 'tasks.timeline.waitingVerification', tone: 'warn', text: 'text-banking-warn' },
   success: { icon: '✓', label: 'tasks.timeline.success', tone: 'success', text: 'text-banking-success' },
   failed: { icon: '✗', label: 'tasks.timeline.failed', tone: 'danger', text: 'text-banking-danger' },
-  cancelled: { icon: '×', label: 'tasks.timeline.cancelled', tone: 'neutral', text: 'text-banking-navy/60' },
-  skipped: { icon: '–', label: 'tasks.timeline.skipped', tone: 'neutral', text: 'text-banking-navy/60' },
+  cancelled: { icon: '×', label: 'tasks.timeline.cancelled', tone: 'neutral', text: 'text-banking-navy' },
+  skipped: { icon: '–', label: 'tasks.timeline.skipped', tone: 'neutral', text: 'text-banking-navy' },
 };
 
 /** Minimal row shape the timeline renders (spec `name`/`tool` enriched from the result). */

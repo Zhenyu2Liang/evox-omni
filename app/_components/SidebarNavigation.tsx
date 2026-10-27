@@ -30,7 +30,7 @@ export default function SidebarNavigation({ pathname, onNavigate }: { pathname: 
       <nav aria-label={t('app.mainNavigation')} className="min-h-0 flex-1 space-y-7 overflow-y-auto px-4 py-5">
         {getNavigationGroups(enabled).map((group) => (
           <section key={group.labelKey} aria-label={t(group.labelKey)}>
-            <p className="mb-2 px-3 text-[11px] font-semibold tracking-wide text-banking-navy/80">{t(group.labelKey)}</p>
+            <p className="mb-2 px-3 text-[11px] font-semibold tracking-wide text-banking-navy">{t(group.labelKey)}</p>
             <ul className="space-y-1">
               {group.items.map((item) => {
                 const active = isNavigationActive(pathname, item.href);

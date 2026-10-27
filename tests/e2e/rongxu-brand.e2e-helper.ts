@@ -27,6 +27,8 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
     await page.getByRole('button', { name: t('help.close'), exact: true }).click();
 
     const businessRoutes = ['overview', 'cards', 'investments', 'bills', 'subscriptions', 'contacts', 'schedules', 'activity', 'security'];
+    let assetAmounts: string[] = [];
+    let subscriptionFacts: string[] = [];
     for (const route of businessRoutes) {
       await page.goto(`${baseUrl}/${route}`, { waitUntil: 'networkidle' });
       if (await page.title() !== t('app.brandTitle')) throw new Error(`Brand metadata differs on ${route}`);
@@ -34,14 +36,19 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
       if (route === 'overview') {
         const statColours = await page.locator('[data-asset-stat]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundColor));
         if (statColours.length !== 4 || new Set(statColours).size !== 4) throw new Error('Asset panels have lost their distinct supporting colours');
+        assetAmounts = await page.locator('[data-asset-value]').allTextContents();
+        if (await page.locator('[data-asset-stat] > span').first().evaluate(el => getComputedStyle(el).color) !== 'rgb(120, 107, 99)') throw new Error('Asset labels are still too faint');
       }
       if (route === 'subscriptions') {
         const summaryColours = await page.locator('[data-subscription-summary] > div').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundColor));
         if (summaryColours.length !== 3 || new Set(summaryColours).size !== 3) throw new Error('Subscription summary panels have lost their distinct supporting colours');
+        subscriptionFacts = await page.locator('[data-subscription-row]').allTextContents();
+        if (await page.locator('[data-subscription-row]').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height > 160))) throw new Error('Desktop subscription rows are still oversized');
       }
       if (route === 'contacts') {
         const avatarColours = await page.locator('[data-contact-avatar]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundColor));
         if (new Set(avatarColours).size < 2) throw new Error('Contact avatars still use one uniform background');
+        if (await page.locator('[data-contact-id] p').first().evaluate(el => getComputedStyle(el).color) !== 'rgb(120, 107, 99)') throw new Error('Contact phones are still too faint');
       }
       if (route === 'overview' || route === 'investments') {
         const primaryLink = page.locator('main a[href="/agent"]').first();
@@ -88,6 +95,20 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
       for (const route of businessRoutes.filter(route => route !== 'cards' && route !== 'bills')) {
         await page.goto(`${baseUrl}/${route}`, { waitUntil: 'networkidle' });
         if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error(`${route} overflows at ${width}px`);
+        if (route === 'overview') {
+          const overflow = await page.locator('[data-asset-stat]').evaluateAll(nodes => nodes.some(node => {
+            const value = node.querySelector('[data-asset-value]')!;
+            return node.scrollWidth > node.clientWidth + 1 || value.scrollWidth > value.clientWidth + 1;
+          }));
+          if (overflow) throw new Error(`An exact asset amount overflows inside its panel at ${width}px`);
+          if (JSON.stringify(await page.locator('[data-asset-value]').allTextContents()) !== JSON.stringify(assetAmounts)) throw new Error('Responsive asset layout altered or abbreviated money');
+        }
+        if (route === 'subscriptions') {
+          const overflow = await page.locator('[data-subscription-summary] .tabular-nums').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().right > node.closest('[data-subscription-summary] > div')!.getBoundingClientRect().right + 1));
+          if (overflow) throw new Error(`The annual subscription amount overflows its panel at ${width}px`);
+          if (JSON.stringify(await page.locator('[data-subscription-row]').allTextContents()) !== JSON.stringify(subscriptionFacts)) throw new Error('Responsive subscription rows lost fee, cycle, status or reminder facts');
+          if (await page.locator('[data-subscription-row]').evaluateAll(nodes => nodes.some(node => node.getBoundingClientRect().height > 180))) throw new Error('Phone subscription rows are still oversized');
+        }
         await captureScreenshot(page, `rongxu-${route}-mobile-${width}`);
       }
     }

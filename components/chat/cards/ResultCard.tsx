@@ -31,7 +31,7 @@ export function ResultCard({ title, children, className, description, marker }: 
 export function ResultMetric({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0 rounded-xl bg-banking-light/70 p-3">
-      <dt className="text-xs text-banking-navy/60">{label}</dt>
+      <dt className="text-xs text-banking-navy">{label}</dt>
       <dd className="mt-1 break-words text-sm font-semibold tabular-nums text-banking-deep">{children}</dd>
     </div>
   );

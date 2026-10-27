@@ -21,7 +21,7 @@ export function EmptyState({ title, description, icon, action, className }: Empt
       )}
     >
       {icon ? (
-        <div className="text-3xl text-banking-navy/60" aria-hidden="true">
+        <div className="text-3xl text-banking-navy" aria-hidden="true">
           {icon}
         </div>
       ) : null}

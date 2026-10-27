@@ -56,7 +56,7 @@ export function ResetBreakerButton({ className }: { className?: string }) {
   if (!enabled) return null;
   return (
     <div data-developer-breaker-reset-panel className={['flex flex-col items-start gap-2', className].filter(Boolean).join(' ')}>
-      <p className="text-xs text-banking-navy/70">{t('security.reset.developerOnly')}</p>
+      <p className="text-xs text-banking-navy">{t('security.reset.developerOnly')}</p>
       <button type="button" data-developer-breaker-reset onClick={handleClick} disabled={busy}
         className="rounded-xl bg-banking-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-banking-accent/90 disabled:cursor-not-allowed disabled:opacity-60">
         {t(busy ? 'security.reset.busy' : 'security.reset.reset')}

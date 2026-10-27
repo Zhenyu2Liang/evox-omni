@@ -68,7 +68,7 @@ function InvestmentResult({ product, holding }: { product: ProductView; holding?
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="break-words text-sm font-semibold text-banking-deep">{product.name}</div>
-          <div className="mt-0.5 text-xs text-banking-navy/60">{product.code}</div>
+          <div className="mt-0.5 text-xs text-banking-navy">{product.code}</div>
         </div>
         <Badge tone={RISK_TONE[product.riskLevel]}>{product.riskLevel} · {t(RISK_LABEL[product.riskLevel])}</Badge>
       </div>
@@ -77,7 +77,7 @@ function InvestmentResult({ product, holding }: { product: ProductView; holding?
         <ResultMetric label={t('business.investments.term')}>{t('business.investments.days', { count: product.termDays })}</ResultMetric>
         <ResultMetric label={t('business.investments.minimum')}><Money amount={product.minAmount} /></ResultMetric>
       </dl> : null}
-      {!holding && product.description ? <p className="mt-3 text-xs leading-relaxed text-banking-navy/60">{product.description}</p> : null}
+      {!holding && product.description ? <p className="mt-3 text-xs leading-relaxed text-banking-navy">{product.description}</p> : null}
       {holding ? (
         <div className="mt-3 border-t border-banking-light pt-3">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -98,11 +98,11 @@ function InvestmentResult({ product, holding }: { product: ProductView; holding?
           <dl className="mt-3 space-y-2 text-xs">
             {!usesNetValueModel(holding) ? <div className="flex flex-wrap justify-between gap-2"><dt>{t('business.investments.principal')}</dt><dd><Money amount={holding.amount} /></dd></div> : null}
             <HoldingFacts holding={holding} layout="card" section="details" />
-            {lastPurchaseAt !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.lastPurchase')}</dt><dd className="font-medium text-banking-deep">{formatDateTime(lastPurchaseAt)}</dd></div> : null}
-            {addedToExisting ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy/60">{t('business.investments.purchases')}</dt><dd className="font-medium text-banking-deep">{t('business.investments.purchaseCount', { count: purchases.length })}</dd></div> : null}
+            {lastPurchaseAt !== undefined ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy">{t('business.investments.lastPurchase')}</dt><dd className="font-medium text-banking-deep">{formatDateTime(lastPurchaseAt)}</dd></div> : null}
+            {addedToExisting ? <div className="flex flex-wrap justify-between gap-2"><dt className="text-banking-navy">{t('business.investments.purchases')}</dt><dd className="font-medium text-banking-deep">{t('business.investments.purchaseCount', { count: purchases.length })}</dd></div> : null}
           </dl>
-          {purchases.length ? <ul className="mt-3 space-y-1 text-xs text-banking-navy/70">{purchases.map((purchase, index) => <li key={index} className="flex flex-wrap justify-between gap-2"><span>{formatDateTime(purchase.at)}</span><Money amount={purchase.amount} /></li>)}</ul> : null}
-          <p className="mt-3 text-xs text-banking-navy/60">{t('business.investments.yield')} {rateRatioToPercent(product.annualYieldRate)}% · {t('business.investments.days', { count: product.termDays })}</p>
+          {purchases.length ? <ul className="mt-3 space-y-1 text-xs text-banking-navy">{purchases.map((purchase, index) => <li key={index} className="flex flex-wrap justify-between gap-2"><span>{formatDateTime(purchase.at)}</span><Money amount={purchase.amount} /></li>)}</ul> : null}
+          <p className="mt-3 text-xs text-banking-navy">{t('business.investments.yield')} {rateRatioToPercent(product.annualYieldRate)}% · {t('business.investments.days', { count: product.termDays })}</p>
           </details>
         </div>
       ) : null}
@@ -162,7 +162,7 @@ export function InvestmentsCard(p: InvestmentsCardProps) {
             ))}
           </div>
           {showReturnDefinitions ? (
-            <p className="mt-3 text-xs leading-relaxed text-banking-navy/60">
+            <p className="mt-3 text-xs leading-relaxed text-banking-navy">
               {t('business.investments.profitScope')} {t('business.investments.disclaimer')}
             </p>
           ) : null}

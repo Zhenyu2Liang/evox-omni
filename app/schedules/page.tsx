@@ -44,14 +44,14 @@ export default function SchedulesPage() {
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-red-700">{publicScheduleText(error.text, t, error.fallback)}</p>}
     <Card title={t('tasks.schedules.notifications')}>
       {inbox?.notifications.length ? <ul className="space-y-3">{inbox.notifications.map(notification => <li key={notification.id}>
-        <p>{publicScheduleText(notification.message, t, 'tasks.schedules.emptyNotifications')}</p><p className="text-xs text-banking-navy/60">{formatDateTime(notification.createdAt)}</p>
+        <p>{publicScheduleText(notification.message, t, 'tasks.schedules.emptyNotifications')}</p><p className="text-xs text-banking-navy">{formatDateTime(notification.createdAt)}</p>
       </li>)}</ul> : <EmptyState title={t('tasks.schedules.emptyNotifications')} description={t('tasks.schedules.emptyNotificationsDescription')} />}
     </Card>
     <Card title={t('tasks.schedules.title')}>
       {inbox?.tasks.length ? <ul className="space-y-4">{inbox.tasks.map((task, index) => <li key={task.id} className={`rounded-xl p-3 ${index % 2 === 0 ? 'bg-banking-blue-soft' : 'bg-banking-lilac-soft'}`}>
         <div className="flex justify-between"><span>{task.name}</span><Badge tone={task.status === 'DONE' ? 'success'
           : task.status === 'FAILED' ? 'danger' : task.status === 'AWAITING_CONFIRMATION' ? 'warn' : 'neutral'}>{label(`tasks.schedules.status.${task.status}`, task.status)}</Badge></div>
-        <p className="mt-1 text-xs text-banking-navy/60">{label(`tasks.schedules.kind.${task.kind}`, task.kind)} · {formatDateTime(task.runAt)}</p>
+        <p className="mt-1 text-xs text-banking-navy">{label(`tasks.schedules.kind.${task.kind}`, task.kind)} · {formatDateTime(task.runAt)}</p>
         {task.dispatchError && <p className="mt-2 text-sm text-red-700">{publicScheduleText(task.dispatchError, t, 'tasks.schedules.dispatchFailed')}</p>}
       </li>)}</ul> : <EmptyState title={t('tasks.schedules.empty')} description={t('tasks.schedules.emptyDescription')} />}
     </Card>

@@ -74,17 +74,17 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
 
       {!holding ? <div className="grid grid-cols-3 gap-3">
         <div>
-          <div className="text-xs text-banking-navy/60">{t('business.investments.yield')}</div>
+          <div className="text-xs text-banking-navy">{t('business.investments.yield')}</div>
           <div className="text-sm font-semibold text-banking-success">
             {formatRate(product.annualYieldRate)}
           </div>
         </div>
         <div>
-          <div className="text-xs text-banking-navy/60">{t('business.investments.term')}</div>
+          <div className="text-xs text-banking-navy">{t('business.investments.term')}</div>
           <div className="text-sm font-semibold text-banking-deep">{t('business.investments.days', { count: product.termDays })}</div>
         </div>
         <div>
-          <div className="text-xs text-banking-navy/60">{t('business.investments.minimum')}</div>
+          <div className="text-xs text-banking-navy">{t('business.investments.minimum')}</div>
           <div className="text-sm font-semibold text-banking-deep">
             <Money amount={product.minAmount} />
           </div>
@@ -92,13 +92,13 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
       </div> : null}
 
       {!holding && product.description ? (
-        <p className="text-xs text-banking-navy/60">{product.description}</p>
+        <p className="text-xs text-banking-navy">{product.description}</p>
       ) : null}
 
       {holding ? (
         <div className="space-y-1 border-t border-banking-light pt-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs text-banking-navy/60">{t('business.investments.holdings')}</span>
+            <span className="text-xs text-banking-navy">{t('business.investments.holdings')}</span>
             {basisKey !== undefined ? (
               <Badge tone={holding.valueBasis === 'HISTORICAL_DATA_INSUFFICIENT' ? 'warn' : 'info'}>
                 {t(basisKey)}
@@ -106,7 +106,7 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
             ) : null}
           </div>
           {!usesNetValueModel(holding) ? <div className="flex items-center justify-between gap-3 text-sm">
-            <span className="text-banking-navy/60">{t('business.investments.principal')}</span>
+            <span className="text-banking-navy">{t('business.investments.principal')}</span>
             <span className="font-medium text-banking-deep">
               <Money amount={holding.amount} />
             </span>
@@ -118,19 +118,19 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
           <HoldingFacts holding={holding} layout="tile" section="details" />
           {lastPurchaseAt !== undefined ? (
             <div className="flex items-center justify-between gap-3 text-sm">
-              <span className="text-banking-navy/60">{t('business.investments.lastPurchase')}</span>
+              <span className="text-banking-navy">{t('business.investments.lastPurchase')}</span>
               <span className="text-banking-deep">{formatDateTime(lastPurchaseAt)}</span>
             </div>
           ) : null}
           {purchases.length > 0 ? (
-            <div className="text-xs text-banking-navy/60">
+            <div className="text-xs text-banking-navy">
               {t('business.investments.purchases')} · {t('business.investments.purchaseCount', { count: purchases.length })}
             </div>
           ) : null}
-          {purchases.length ? <ul className="space-y-1 text-xs text-banking-navy/70">{purchases.map((purchase, index) => <li key={index} className="flex flex-wrap justify-between gap-2"><span>{formatDateTime(purchase.at)}</span><Money amount={purchase.amount} /></li>)}</ul> : null}
-          <p className="text-xs text-banking-navy/60">{t('business.investments.yield')} {formatRate(product.annualYieldRate)} · {t('business.investments.days', { count: product.termDays })}</p>
+          {purchases.length ? <ul className="space-y-1 text-xs text-banking-navy">{purchases.map((purchase, index) => <li key={index} className="flex flex-wrap justify-between gap-2"><span>{formatDateTime(purchase.at)}</span><Money amount={purchase.amount} /></li>)}</ul> : null}
+          <p className="text-xs text-banking-navy">{t('business.investments.yield')} {formatRate(product.annualYieldRate)} · {t('business.investments.days', { count: product.termDays })}</p>
           </div></details>
-          <p className="text-xs leading-relaxed text-banking-navy/60">
+          <p className="text-xs leading-relaxed text-banking-navy">
             {usesNetValueModel(holding) ? `${t('business.investments.profitScope')} ` : null}
             {t('business.investments.disclaimer')}
           </p>

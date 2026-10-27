@@ -75,7 +75,7 @@ export function MfaCard(p: MfaCardProps) {
         {terminal === 'failed' ? <p className="text-sm text-banking-danger">{publicToolError(p.statusMessage, t)}</p> : null}
         {terminal === 'locked' ? <div className="flex flex-col items-start gap-1" data-mfa-locked="true">
           <p className="text-sm text-banking-danger">{securityNotice(LOCKED_NOTICE, t)}</p>
-          <p className="text-xs text-banking-navy/70">{t('pages.security.unlockDescription')}</p>
+          <p className="text-xs text-banking-navy">{t('pages.security.unlockDescription')}</p>
           <Link href="/security" className="text-sm text-banking-interactive underline">{t('pages.security.title')}</Link>
         </div> : null}
         {developerMode && p.statusMessage ? <details className="text-xs text-banking-navy">
@@ -83,7 +83,7 @@ export function MfaCard(p: MfaCardProps) {
           <pre className="mt-1 whitespace-pre-wrap break-words">{String(sanitizeToolArguments(p.statusMessage))}</pre>
         </details> : null}
         {readOnly && !terminal ? <p role="status">{t(p.status === 'locked' ? 'cards.mfa.locked' : 'cards.mfa.processing')}</p> : null}
-        {!readOnly ? <p className="text-sm text-banking-navy/70">
+        {!readOnly ? <p className="text-sm text-banking-navy">
           {hint ? localizeVerificationHint(hint, t) : t('cards.mfa.hint')}
         </p> : null}
 

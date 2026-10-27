@@ -66,7 +66,7 @@ export function CardsCard(p: CardsCardProps) {
                 </BankCardFace>
                 <div className="space-y-3 p-3.5">
                   {unavailableNotice !== undefined ? (
-                    <p className="rounded-xl bg-banking-light/70 px-3 py-2 text-xs text-banking-navy/70">{t(unavailableNotice)}</p>
+                    <p className="rounded-xl bg-banking-light/70 px-3 py-2 text-xs text-banking-navy">{t(unavailableNotice)}</p>
                   ) : null}
                   <CardPrimaryAmount card={card} />
                   {p.issuanceActionId ? <IssuedCardNumber actionId={p.issuanceActionId} cardId={card.id} /> : null}
@@ -81,11 +81,11 @@ export function CardsCard(p: CardsCardProps) {
                     {card.monthlyLimit !== undefined ? <ResultMetric label={t('business.cards.monthlyLimit')}><Money amount={card.monthlyLimit} /></ResultMetric> : null}
                   </dl>
                   {linkedAccountNotice !== undefined ? (
-                    <p className="text-xs text-banking-navy/60">{t(linkedAccountNotice)}</p>
+                    <p className="text-xs text-banking-navy">{t(linkedAccountNotice)}</p>
                   ) : null}
                   {card.limits.length ? (
                     <div>
-                      <div className="mb-2 text-xs text-banking-navy/60">{t('business.cards.categoryLimits')}</div>
+                      <div className="mb-2 text-xs text-banking-navy">{t('business.cards.categoryLimits')}</div>
                       <dl className="space-y-1.5">
                         {card.limits.map((limit, index) => (
                           <div key={`${limit.category}-${index}`} className="flex flex-wrap justify-between gap-2 text-xs">

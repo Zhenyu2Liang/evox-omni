@@ -27,7 +27,7 @@ export function StreamingText({ text, active = false, phase, className }: Stream
         .join(' ')}
     >
       {showHint ? (
-        <span className="animate-pulse text-banking-navy/80">{t(phase ? `chat.replyProgress.${phase}` : 'chat.working')}</span>
+        <span className="animate-pulse text-banking-navy">{t(phase ? `chat.replyProgress.${phase}` : 'chat.working')}</span>
       ) : (
         <AssistantMarkdown text={text} />
       )}
