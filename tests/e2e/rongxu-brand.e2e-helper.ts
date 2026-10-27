@@ -29,8 +29,20 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
     for (const route of ['overview', 'cards', 'investments']) {
       await page.goto(`${baseUrl}/${route}`, { waitUntil: 'networkidle' });
       if (await page.title() !== t('app.brandTitle')) throw new Error(`Brand metadata differs on ${route}`);
+      if (route === 'cards') {
+        const faceColours = await page.locator('[data-bank-card-face]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundImage));
+        if (faceColours.length < 3 || new Set(faceColours).size < 3) throw new Error('Card types are not visually distinct');
+      }
       await captureScreenshot(page, `rongxu-brand-${route}`);
     }
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.goto(`${baseUrl}/cards`, { waitUntil: 'networkidle' });
+      if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error(`The tinted card faces overflow at ${width}px`);
+      await page.locator('[data-card-details]').first().locator('summary').click();
+      await captureScreenshot(page, `rongxu-cards-mobile-${width}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 960 });
     await gotoAgent(page, baseUrl);
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 844 });

@@ -39,12 +39,12 @@ export function SpendingTrend(p: SpendingTrendProps) {
           </g>
         ))}
         <polyline points={coordinates.map((point, index) => `${x(index)},${scale.y(point.value)}`).join(' ')}
-          fill="none" stroke={BANKING_PALETTE.deep} strokeWidth="2.5" strokeLinejoin="round" />
+          fill="none" stroke={BANKING_PALETTE.plot} strokeWidth="2.5" strokeLinejoin="round" />
         {coordinates.map((point, index) => (
           <g key={point.month} className="group" {...tooltip.point(point.month, point.amount, BANKING_PALETTE.accent)}>
             <title>{`${point.month}: ${formatCNY(point.amount)}`}</title>
             <circle cx={x(index)} cy={scale.y(point.value)} r="12" fill="transparent" />
-            <circle cx={x(index)} cy={scale.y(point.value)} r="4" fill={BANKING_PALETTE.deep} stroke="white" strokeWidth="2"
+            <circle cx={x(index)} cy={scale.y(point.value)} r="4" fill={BANKING_PALETTE.plot} stroke="white" strokeWidth="2"
               className="group-hover:fill-banking-accent group-focus:fill-banking-accent" />
             {index === coordinates.length - 1 || (index % labelStride === 0 &&
               (index === 0 || x(coordinates.length - 1) - x(index) >= 68)) ? (

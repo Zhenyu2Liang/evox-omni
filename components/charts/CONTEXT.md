@@ -20,7 +20,7 @@ color. Each interactive leaf is a client component; the barrel remains neutral.
 ## Invariants
 
 - Chart category series have a separate muted palette; they do not reuse brand red or risk colours.
-  Default bars and trend lines are charcoal. Hovering or focusing a point highlights it in brand red.
+  Default bars and trend lines are mist blue. Hovering or focusing a point highlights it in brand red.
   Values, exact labels and keyboard tooltip behaviour are independent of the colour change.
 
 - Only geometry uses moneyToChartNumber. Tooltip, legend, SVG title and accessible labels retain

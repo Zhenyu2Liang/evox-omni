@@ -4,15 +4,15 @@
 @source "../components";
 
 @theme {
-  --color-banking-deep: #373435;
-  --color-banking-navy: #70666a;
+  --color-banking-deep: #293b49;
+  --color-banking-navy: #6a7c8b;
   --color-banking-accent: #c8383c;
-  --color-banking-interactive: #514c4f;
-  --color-banking-neutral: #f1efee;
+  --color-banking-interactive: #4b667a;
+  --color-banking-neutral: #eef3f7;
   --color-banking-success: #16a34a;
   --color-banking-warn: #f59e0b;
   --color-banking-danger: #b42318;
-  --color-banking-light: #faf8f7;
+  --color-banking-light: #f7f8fa;
   --radius-xl: 1rem;
   --radius-2xl: 1.25rem;
 }
@@ -30,8 +30,28 @@ body {
 }
 
 ::selection {
-  background: #f4d7d8;
+  background: #e9d9d9;
   color: var(--color-banking-deep);
+}
+
+.bank-card-face {
+  background: linear-gradient(125deg, #f9f5f3, #f2e3df);
+  border: 1px solid rgb(188 143 132 / 12%);
+}
+
+.bank-card-face[data-bank-card-face="DEBIT"] {
+  background: linear-gradient(125deg, #f3f7fc, #e3edf7);
+  border-color: rgb(112 148 177 / 14%);
+}
+
+.bank-card-face[data-bank-card-face="VIRTUAL"] {
+  background: linear-gradient(125deg, #f2f8f5, #e2eeea);
+  border-color: rgb(112 155 142 / 14%);
+}
+
+.bank-card-face[data-card-inactive="true"] {
+  background: linear-gradient(125deg, #f7f8fa, #eceff2);
+  border-color: rgb(112 132 150 / 10%);
 }
 
 .assistant-workspace {

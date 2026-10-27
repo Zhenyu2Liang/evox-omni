@@ -21,8 +21,8 @@ export async function journeyCharcoalSecurity(browser: Browser, baseUrl: string,
     await page.setViewportSize({ width: 1440, height: 960 });
     await gotoAgent(page, baseUrl);
     const activeLink = page.locator('aside a[aria-current="page"]');
-    if (await activeLink.evaluate(el => getComputedStyle(el).color) !== 'rgb(81, 76, 79)') throw new Error('Normal navigation is still red');
-    if (await page.locator('[data-assistant-help-trigger]:visible').evaluate(el => getComputedStyle(el).color) !== 'rgb(81, 76, 79)') throw new Error('The help entry is still red');
+    if (await activeLink.evaluate(el => getComputedStyle(el).color) !== 'rgb(75, 102, 122)') throw new Error('Normal navigation is still red');
+    if (await page.locator('[data-assistant-help-trigger]:visible').evaluate(el => getComputedStyle(el).color) !== 'rgb(75, 102, 122)') throw new Error('The help entry is still red');
     await captureScreenshot(page, 'charcoal-assistant');
     await page.goto(`${baseUrl}/security`, { waitUntil: 'networkidle' });
     await assertNormal(page);
@@ -30,7 +30,7 @@ export async function journeyCharcoalSecurity(browser: Browser, baseUrl: string,
     await page.goto(`${baseUrl}/bills`, { waitUntil: 'networkidle' });
     const bars = page.getByRole('group', { name: t('chart.categories'), exact: true });
     const bar = bars.locator('g[role="img"]').first();
-    if (await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) !== 'rgb(55, 52, 53)') throw new Error('The default bar chart is not charcoal');
+    if (await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) !== 'rgb(108, 143, 168)') throw new Error('The default bar chart is not the muted plot colour');
     await bar.focus();
     await waitFor(async () => await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) === 'rgb(200, 56, 60)', { description: 'Keyboard focus highlights only the selected bar in brand red' });
     await bar.press('Tab');
@@ -39,7 +39,7 @@ export async function journeyCharcoalSecurity(browser: Browser, baseUrl: string,
     if (slices.length < 5 || new Set(slices).size !== slices.length || slices.some(color => ['#C8383C', '#B42318'].includes(color ?? ''))) throw new Error('Category colours repeat or borrow warning/brand reds');
     await page.getByRole('heading', { name: t('pages.bills.title'), exact: true }).click();
     await page.mouse.move(0, 0);
-    await waitFor(async () => await bars.locator('g[role="img"] rect').evaluateAll(nodes => nodes.every(node => getComputedStyle(node).fill === 'rgb(55, 52, 53)')), { description: 'Unselected chart bars return to charcoal' });
+    await waitFor(async () => await bars.locator('g[role="img"] rect').evaluateAll(nodes => nodes.every(node => getComputedStyle(node).fill === 'rgb(108, 143, 168)')), { description: 'Unselected chart bars return to the muted plot colour' });
     await captureScreenshot(page, 'charcoal-bills');
 
     await gotoAgent(page, baseUrl);
@@ -91,6 +91,6 @@ export async function journeyCharcoalSecurity(browser: Browser, baseUrl: string,
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error('Security history overflows the phone viewport');
     await captureScreenshot(page, 'security-normal-with-history-mobile');
     if (JSON.stringify(await fetchLedger(baseUrl)) !== ledger || (await fetchDashboardSummary(baseUrl)).checkingBalance !== balance) throw new Error('The lock/unlock presentation test changed funds or ledger records');
-    return 'Charcoal navigation/help/chart defaults; distinct category colours and red focused bars; normal, restricted and normal-with-history security states agree with server facts; wrong unlock denied, correct unlock retains terminal action; reload/mobile work; balances and ledger unchanged.';
+    return 'Muted navigation/help/chart defaults; distinct category colours and red focused bars; normal, restricted and normal-with-history security states agree with server facts; wrong unlock denied, correct unlock retains terminal action; reload/mobile work; balances and ledger unchanged.';
   }, { label: 'charcoal-and-security-state' });
 }

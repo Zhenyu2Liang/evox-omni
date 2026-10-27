@@ -23,6 +23,7 @@ import { Money } from '../ui/Money';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import type { MessageKey } from '@/lib/i18n/shared';
 import { CardPrimaryAmount } from './CardPrimaryAmount';
+import { BankCardFace } from './BankCardFace';
 import {
   cardAccountDisplay,
   cardShowsAccountAmounts,
@@ -78,22 +79,25 @@ export function CardTile({ card, className, footer }: CardTileProps) {
 
   return (
     <Card className={cls} footer={footer}>
+      <div className="space-y-4">
+      <BankCardFace type={card.type} inactive={card.status !== 'ACTIVE'}>
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="text-sm font-medium text-banking-navy">
             {t(CARD_TYPE_LABEL[card.type])} · {card.network}
           </div>
-          <div className="font-mono text-lg tracking-widest text-banking-deep">
+          <div className="pt-2 font-mono text-xl tracking-[0.12em] text-banking-deep">
             {card.numberMasked}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
           {card.replacedByCardId !== undefined ? (
             <Badge tone="info">{t('business.cards.replaced')}</Badge>
           ) : null}
           <Badge tone={STATUS_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
         </div>
       </div>
+      </BankCardFace>
 
       {unavailableNotice !== undefined ? (
         <Badge tone={UNAVAILABLE_TONE[card.status]}>{t(unavailableNotice)}</Badge>
@@ -186,6 +190,7 @@ export function CardTile({ card, className, footer }: CardTileProps) {
         </div>
       ) : null}
       </div></details>
+      </div>
     </Card>
   );
 }

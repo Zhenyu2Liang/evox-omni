@@ -14,6 +14,7 @@ import {
 import { ResultCard, ResultMetric } from './ResultCard';
 import { IssuedCardNumber } from './IssuedCardNumber';
 import { CardPrimaryAmount } from '../../banking/CardPrimaryAmount';
+import { BankCardFace } from '../../banking/BankCardFace';
 
 export interface CardsCardProps {
   data: CardView[];
@@ -56,13 +57,13 @@ export function CardsCard(p: CardsCardProps) {
             const accountLabel = [account.accountName, account.accountNumber].filter(Boolean).join(' · ');
             return (
               <li key={card.id} className="min-w-0 overflow-hidden rounded-xl border border-banking-light">
-                <div className="bg-gradient-to-br from-banking-deep to-banking-navy p-3.5 text-white">
+                <BankCardFace type={card.type} inactive={card.status !== 'ACTIVE'} className="!rounded-b-none !border-0 !p-3.5">
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <span className="text-xs text-white/75">{t(TYPE_LABEL[card.type])} · {card.network}</span>
+                    <span className="text-xs text-banking-navy">{t(TYPE_LABEL[card.type])} · {card.network}</span>
                     <Badge tone={STATUS_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
                   </div>
                   <div className="mt-3 break-words font-mono text-lg tracking-widest">{card.numberMasked}</div>
-                </div>
+                </BankCardFace>
                 <div className="space-y-3 p-3.5">
                   {unavailableNotice !== undefined ? (
                     <p className="rounded-xl bg-banking-light/70 px-3 py-2 text-xs text-banking-navy/70">{t(unavailableNotice)}</p>
