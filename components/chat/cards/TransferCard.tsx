@@ -26,7 +26,7 @@ export function TransferCard({ data, className }: TransferCardProps) {
       }
     >
       <div className="mb-3 rounded-xl bg-banking-light/50 p-4">
-        <p className="text-xs text-banking-navy">{t('cards.amount')}</p>
+        <p className="text-banking-caption text-banking-navy">{t('cards.amount')}</p>
         <p className="my-2 text-2xl font-semibold text-banking-deep"><Money amount={amount} /></p>
         <dl><Field label={t('cards.recipient')} value={recipient.name} /></dl>
       </div>

@@ -37,6 +37,7 @@ import { journeyCharcoalSecurity } from './charcoal-security.e2e-helper';
 import { journeyBankingPages } from './banking-pages.e2e-helper';
 import { journeyResultPriority } from './result-priority.e2e-helper';
 import { journeyTheme } from './theme.e2e-helper';
+import { journeyReadability } from './readability.e2e-helper';
 import { journeyCardManagement } from './card-management.e2e-helper';
 import { journeyNaturalConversation, journeyDialogueRegressions } from './conversation.e2e-helper';
 import { journeyOperationHistory } from './activity.e2e-helper';
@@ -796,6 +797,7 @@ interface Journey {
 }
 
 const JOURNEYS: readonly Journey[] = [
+  { name: 'typography-and-dark-contrast', run: journeyReadability },
   { name: 'theme-appearance-and-persistence', run: journeyTheme },
   { name: 'current-assets-and-compact-results', run: journeyResultPriority },
   { name: 'charcoal-and-security-state', run: journeyCharcoalSecurity },

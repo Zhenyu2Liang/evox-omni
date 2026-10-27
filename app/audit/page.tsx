@@ -70,7 +70,7 @@ export default async function AuditPage() {
     { key: 'timestamp', header: t('pages.audit.column.time'), render: (entry) => formatDateTime(entry.timestamp) },
     { key: 'userRequest', header: t('pages.audit.column.request'), render: (entry) => entry.userRequest || '—' },
     { key: 'intent', header: t('pages.audit.column.intent'), render: (entry) => entry.intent ? localizeActionTitle(entry.intent, t) : '—' },
-    { key: 'toolName', header: t('pages.audit.column.tool'), render: (entry) => <><span>{localizeToolLabel(entry.toolName, t)}</span><code className="block text-xs">{entry.toolName}</code></> },
+    { key: 'toolName', header: t('pages.audit.column.tool'), render: (entry) => <><span>{localizeToolLabel(entry.toolName, t)}</span><code className="block text-banking-caption">{entry.toolName}</code></> },
     { key: 'riskLevel', header: t('pages.audit.column.risk'), render: (entry) => <StatusBadge tier={entry.riskLevel} /> },
     { key: 'confirmationRequired', header: t('pages.audit.column.confirmationRequired'), align: 'center', render: (entry) => yesNo(entry.confirmationRequired) },
     { key: 'confirmed', header: t('pages.audit.column.confirmed'), align: 'center', render: (entry) => yesNo(entry.confirmed) },
@@ -78,7 +78,7 @@ export default async function AuditPage() {
     { key: 'mfaResult', header: t('pages.audit.column.verificationResult'), render: (entry) =>
       entry.mfaResult ? verificationLabels[entry.mfaResult] : entry.mfaRequired ? '—' : verificationLabels.not_required },
     { key: 'toolResult', header: t('pages.audit.column.toolResult'), render: (entry) => summarizeToolResult(entry.toolResult) },
-    { key: 'toolArgs', header: t('pages.audit.column.toolArgs'), render: (entry) => <details><summary>{t('pages.audit.inspect')}</summary><pre className="max-h-64 max-w-xs overflow-auto whitespace-pre-wrap break-all text-xs">{JSON.stringify({ args: entry.toolArgs, result: entry.toolResult, detail: entry.detail, taskId: entry.taskId, nodeId: entry.nodeId }, null, 2)}</pre></details> },
+    { key: 'toolArgs', header: t('pages.audit.column.toolArgs'), render: (entry) => <details><summary>{t('pages.audit.inspect')}</summary><pre className="max-h-64 max-w-xs overflow-auto whitespace-pre-wrap break-all text-banking-caption">{JSON.stringify({ args: entry.toolArgs, result: entry.toolResult, detail: entry.detail, taskId: entry.taskId, nodeId: entry.nodeId }, null, 2)}</pre></details> },
     {
       key: 'status',
       header: t('pages.audit.column.status'),

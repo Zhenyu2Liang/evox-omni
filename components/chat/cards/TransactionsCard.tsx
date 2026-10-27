@@ -16,7 +16,7 @@ export function TransactionsCard({ data }: { data: TransactionView[] }) {
             <li key={row.id} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 py-3 first:pt-1 last:pb-1">
               <div className="min-w-0">
                 <div className="break-words text-sm font-medium text-banking-deep">{row.merchant}</div>
-                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-banking-navy">
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-banking-caption text-banking-navy">
                   <span className="rounded-md bg-banking-light px-1.5 py-0.5">{row.category}</span>
                   <span className="tabular-nums">{formatDateTime(row.occurredAt)}</span>
                 </div>

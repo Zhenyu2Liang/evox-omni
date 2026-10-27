@@ -65,7 +65,7 @@ const STRUCTURED_REFUSALS: ReadonlySet<string> = new Set(['MFA_LOCKED', 'MFA_FAI
 const CODE_LENGTH = 6;
 
 const INPUT_CLASS =
-  'mt-1 w-full rounded-xl border border-banking-light px-3 py-2 text-sm tracking-widest text-banking-deep outline-none focus:border-banking-accent';
+  'bank-input mt-1 w-full rounded-xl border px-3 py-2 text-base sm:text-sm tracking-widest text-banking-deep outline-none focus:border-banking-accent';
 
 const BUTTON_CLASS =
   'rounded-xl bg-banking-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-banking-accent/90 disabled:cursor-not-allowed disabled:opacity-60';
@@ -157,7 +157,7 @@ export function UnlockPanel({
       {lockedActionCount > 0 ? (
         <p className="text-sm leading-5 text-banking-navy" data-unlock-impact={lockedActionCount}>
           {locked ? t('security.breaker.lockedDescription') : t('security.reset.historicalImpact', { count: lockedActionCount })}
-          <span className="ml-2 whitespace-nowrap rounded-lg bg-banking-neutral px-2 py-0.5 text-xs font-medium">
+          <span className="ml-2 whitespace-nowrap rounded-lg bg-banking-neutral px-2 py-0.5 text-banking-caption font-medium">
             {t('pages.activity.status.locked')} · {lockedActionCount}
           </span>
         </p>

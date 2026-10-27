@@ -28,7 +28,7 @@ function ReviewForm({ title, handoff = false, onSubmit, busy, mayRetry, mayResum
     <label className="block text-sm font-medium">{label}
       <textarea aria-label={t('tasks.manual.formLabel', { label, title })} value={text} onChange={(e) => setText(e.target.value)}
         maxLength={handoff ? 1000 : 2000} rows={3}
-        className="mt-2 w-full rounded-xl border border-gray-300 p-3 font-normal" placeholder={t('tasks.manual.placeholder')} />
+        className="bank-input mt-2 w-full rounded-xl border border-gray-300 p-3 font-normal" placeholder={t('tasks.manual.placeholder')} />
     </label>
     <div className="flex flex-wrap gap-2">
       <Button loading={busy} disabled={!mayStop || text.trim().length < 5} onClick={() => void onSubmit(text, 'stop')}>
@@ -121,7 +121,7 @@ function ManualReviewInboxPage() {
             mayResume={review.mayResume} mayStop={review.mayStop}
             onSubmit={(text, resolution) => resolve(review, text, resolution)} /> : <>
             <p className="text-sm">{t('tasks.manual.notes', { notes: review.notes ?? '' })}</p>
-            <p className="text-xs text-banking-navy">{t('tasks.manual.resolvedAt', { time: review.resolvedAt ? new Date(review.resolvedAt).toLocaleString(locale) : '' })}</p>
+            <p className="text-banking-caption text-banking-navy">{t('tasks.manual.resolvedAt', { time: review.resolvedAt ? new Date(review.resolvedAt).toLocaleString(locale) : '' })}</p>
             <p className="text-sm">{t(review.resolution === 'retry' ? 'tasks.manual.retryResolution'
               : review.resolution === 'resume' ? 'tasks.manual.resumeResolution' : 'tasks.manual.stopResolution')}</p>
             {review.resolution === 'retry' && review.mayRetry && <Button disabled={busy} variant="secondary"

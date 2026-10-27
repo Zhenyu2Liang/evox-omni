@@ -55,7 +55,7 @@ export function ApprovalRecord({ action, actionId, verification = false, status,
       <Badge tone={tone}>{t(STATUS_KEYS[current])}</Badge>
     </div>
     {current === 'executed' ? <details data-completed-approval-details className="border-t border-banking-border/60 px-4 py-3">
-      <summary className="cursor-pointer text-xs font-medium text-banking-navy">{t('chat.approval.details')}</summary>
+      <summary className="cursor-pointer text-banking-caption font-medium text-banking-navy">{t('chat.approval.details')}</summary>
       <div className="mt-3"><ApprovalProgress status={current} requiresMfa={Boolean(verification || action?.requiresMfa)} /></div>
       {action && (action.fields.length > 0 || action.amount !== undefined) ? <div className="mt-3"><ActionDetails action={action} /></div> : null}
     </details> : <div className="border-t border-banking-border/60 px-3 pb-2"><ApprovalProgress status={current} requiresMfa={Boolean(verification || action?.requiresMfa)} /></div>}
@@ -69,17 +69,17 @@ export function ApprovalRecord({ action, actionId, verification = false, status,
       </div>
     </div>
     {current !== 'executed' && action && (action.fields.length > 0 || action.amount !== undefined) ? <details className="border-t border-banking-border/60 px-4 py-3">
-      <summary className="cursor-pointer text-xs font-medium text-banking-navy">{t('chat.approval.details')}</summary>
+      <summary className="cursor-pointer text-banking-caption font-medium text-banking-navy">{t('chat.approval.details')}</summary>
       <div className="mt-3"><ActionDetails action={action} /></div>
     </details> : null}
     {current === 'failed' ? <p className="px-4 pb-3 text-sm text-banking-danger">{publicToolError(message, t)}</p> : null}
     {current === 'locked' ? <div className="flex flex-col items-start gap-1 px-4 pb-3" data-approval-locked="true">
       <p className="text-sm text-banking-danger">{securityNotice(LOCKED_NOTICE, t)}</p>
-      <p className="text-xs text-banking-navy">{t('pages.security.unlockDescription')}</p>
+      <p className="text-banking-caption text-banking-navy">{t('pages.security.unlockDescription')}</p>
       <Link href="/security" className="text-sm text-banking-interactive underline">{t('pages.security.title')}</Link>
     </div> : null}
     {current === 'needs_reconciliation' ? <p className="px-4 pb-3 text-sm text-banking-navy">{t('cards.terminal.reconciliationExplanation')}</p> : null}
-    {developerMode && message ? <details className="px-4 pb-3 text-xs text-banking-navy">
+    {developerMode && message ? <details className="px-4 pb-3 text-banking-caption text-banking-navy">
       <summary>{t('chat.diagnostics.detail')}</summary>
       <pre className="mt-2 whitespace-pre-wrap break-words">{String(sanitizeToolArguments(message))}</pre>
     </details> : null}

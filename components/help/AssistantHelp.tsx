@@ -98,7 +98,7 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
       <div className="flex max-h-[calc(100dvh-1.5rem)] flex-col">
         <header className="flex shrink-0 items-start justify-between gap-3 border-b border-banking-border/60 px-5 py-4 sm:px-7">
           <div>
-            <p className="mb-1 text-xs font-semibold text-banking-accent-text">{t('help.eyebrow')}</p>
+            <p className="mb-1 text-banking-caption font-semibold text-banking-accent-text">{t('help.eyebrow')}</p>
             <h2 id="assistant-guide-title" className="text-xl font-semibold tracking-tight">{t('help.title')}</h2>
             <p id="assistant-guide-description" className="mt-2 text-sm leading-6 text-banking-navy">{t('help.description')}</p>
           </div>
@@ -112,21 +112,21 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
             <h3 id="guide-start-title" className="font-semibold">{t('help.startTitle')}</h3>
             <ol className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
               {(['describe', 'review', 'result'] as const).map((step, index) => <li key={step} className={`rounded-2xl p-3 ${GUIDE_TONES[index]}`}>
-                <span className="mb-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-banking-surface text-xs font-semibold text-banking-interactive">{index + 1}</span>
+                <span className="mb-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-banking-surface text-banking-caption font-semibold text-banking-interactive">{index + 1}</span>
                 <p className="font-medium">{t(`help.step.${step}.title`)}</p>
-                <p className="mt-1 text-xs leading-5 text-banking-navy">{t(`help.step.${step}.body`)}</p>
+                <p className="mt-1 text-banking-caption leading-5 text-banking-navy">{t(`help.step.${step}.body`)}</p>
               </li>)}
             </ol>
           </section>
           <section className="mt-6" aria-labelledby="guide-features-title">
             <h3 id="guide-features-title" className="font-semibold">{t('help.featuresTitle')}</h3>
-            <p className="mt-1 text-xs leading-5 text-banking-navy">{t(canSelect ? 'help.exampleHint' : 'help.examplesUnavailable')}</p>
+            <p className="mt-1 text-banking-caption leading-5 text-banking-navy">{t(canSelect ? 'help.exampleHint' : 'help.examplesUnavailable')}</p>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
               {FEATURES.map((feature, index) => <article key={feature} className="flex flex-col rounded-2xl border border-banking-border/80 p-4">
                 <h4 className="text-sm font-semibold">{t(`help.feature.${feature}.title`)}</h4>
-                <p className="mt-1.5 flex-1 text-xs leading-5 text-banking-navy">{t(`help.feature.${feature}.body`)}</p>
+                <p className="mt-1.5 flex-1 text-banking-caption leading-5 text-banking-navy">{t(`help.feature.${feature}.body`)}</p>
                 <button type="button" data-help-example={feature} disabled={!canSelect} onClick={() => selectExample(t(`help.feature.${feature}.example`))}
-                  className={`mt-3 min-h-11 rounded-xl px-3 py-2 text-left text-xs leading-5 hover:bg-banking-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent disabled:cursor-not-allowed disabled:opacity-50 ${EXAMPLE_TONES[index % EXAMPLE_TONES.length]}`}>
+                  className={`mt-3 min-h-11 rounded-xl px-3 py-2 text-left text-banking-caption leading-5 hover:bg-banking-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent disabled:cursor-not-allowed disabled:opacity-50 ${EXAMPLE_TONES[index % EXAMPLE_TONES.length]}`}>
                   <span className="block font-semibold">{t('help.tryExample')}</span>{t(`help.feature.${feature}.example`)}
                 </button>
               </article>)}
@@ -134,21 +134,21 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
           </section>
           <section className="mt-6" aria-labelledby="guide-security-title">
             <h3 id="guide-security-title" className="font-semibold">{t('help.securityTitle')}</h3>
-            <ul className="mt-3 space-y-2 text-xs leading-5 text-banking-navy">
+            <ul className="mt-3 space-y-2 text-banking-caption leading-5 text-banking-navy">
               {(['green', 'yellow', 'red'] as const).map(tier => <li key={tier} className="flex items-start gap-2">
-                <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${tier === 'green' ? 'bg-emerald-500' : tier === 'yellow' ? 'bg-amber-400' : 'bg-red-500'}`} aria-hidden="true" />
+                <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${tier === 'green' ? 'bg-green-500' : tier === 'yellow' ? 'bg-amber-400' : 'bg-red-500'}`} aria-hidden="true" />
                 <span>{t(`help.security.${tier}`)}</span>
               </li>)}
             </ul>
-            <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-banking-warning-label">{t('help.securityResult')}</p>
+            <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-banking-caption leading-5 text-banking-warning-label">{t('help.securityResult')}</p>
           </section>
-          <aside className="mt-5 rounded-2xl bg-banking-light p-4 text-xs leading-5 text-banking-navy">
+          <aside className="mt-5 rounded-2xl bg-banking-light p-4 text-banking-caption leading-5 text-banking-navy">
             <p className="font-semibold text-banking-deep">{t('help.demoTitle')}</p>
             <p className="mt-1">{t('help.demoBody')}</p>
           </aside>
         </div>
         <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-banking-border/60 px-5 py-4 sm:px-7">
-          <p className="text-xs leading-5 text-banking-navy">{t('help.reopenHint')}</p>
+          <p className="text-banking-caption leading-5 text-banking-navy">{t('help.reopenHint')}</p>
           <button type="button" onClick={begin} className="min-h-11 rounded-xl bg-banking-accent px-5 py-2 text-sm font-medium text-white hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-banking-accent">{t('help.begin')}</button>
         </footer>
       </div>

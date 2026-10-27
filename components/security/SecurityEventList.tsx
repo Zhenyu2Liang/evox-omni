@@ -73,7 +73,7 @@ export function SecurityEventList({ events, emptyText, className }: SecurityEven
                 <Badge tone={SEVERITY_TONE[event.severity]}>{t(SEVERITY_LABEL[event.severity])}</Badge>
                 <span className="text-sm font-medium text-banking-deep">{kindLabel}</span>
               </div>
-              <time className="text-xs text-banking-navy">{formatTimestamp(event.timestamp, locale)}</time>
+              <time className="text-banking-caption text-banking-navy">{formatTimestamp(event.timestamp, locale)}</time>
             </div>
             <p className="mt-2 text-sm leading-5 text-banking-navy">{publicMessage(event.message, kindLabel)}</p>
           </li>

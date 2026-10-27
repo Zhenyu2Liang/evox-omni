@@ -26,7 +26,7 @@ const STATUS_KEYS: Record<ToolEventView['status'], MessageKey> = {
 const STATUS_STYLE: Record<ToolEventView['status'], { glyph: string; colour: string }> = {
   started: { glyph: '…', colour: 'bg-banking-neutral text-banking-interactive' },
   updated: { glyph: '…', colour: 'bg-banking-neutral text-banking-interactive' },
-  success: { glyph: '✓', colour: 'bg-emerald-50 text-banking-success' },
+  success: { glyph: '✓', colour: 'bg-green-50 text-banking-success' },
   error: { glyph: '×', colour: 'bg-red-50 text-banking-danger' },
   blocked: { glyph: '!', colour: 'bg-amber-50 text-banking-warn' },
   cancelled: { glyph: '×', colour: 'bg-banking-subtle text-banking-navy' },
@@ -49,7 +49,7 @@ export function ToolEventList({ events, className, compact = false }: ToolEventL
   if (groups.length === 0) return null;
 
   return (
-    <div className={['space-y-2 text-xs', className].filter(Boolean).join(' ')}>
+    <div className={['space-y-2 text-banking-caption', className].filter(Boolean).join(' ')}>
       {groups.map(group => (
         <section key={group.category} data-tool-category={group.category}
           aria-label={t(ACTIVITY_CATEGORY_KEYS[group.category])}
@@ -60,7 +60,7 @@ export function ToolEventList({ events, className, compact = false }: ToolEventL
             </svg>
             <h3 className="font-semibold">{t(ACTIVITY_CATEGORY_KEYS[group.category])}</h3>
           </div>
-          <ol className="divide-y divide-slate-200/60">
+          <ol className="divide-y divide-banking-border/60">
             {group.events.map(event => {
               const style = STATUS_STYLE[event.status];
               const active = event.status === 'started' || event.status === 'updated';
@@ -85,7 +85,7 @@ export function ToolEventList({ events, className, compact = false }: ToolEventL
                     {showSummary && summary ? <p className="whitespace-pre-wrap break-words leading-5 text-banking-navy">{summary}</p> : null}
                     {developerMode && <details data-tool-diagnostics="true" className="mt-2 rounded-lg border border-banking-border bg-banking-surface p-2.5">
                       <summary className="cursor-pointer select-none font-medium text-banking-navy">{t('chat.diagnostics.title')}</summary>
-                      <dl className="mt-3 space-y-2 text-[11px]">
+                      <dl className="mt-3 space-y-2 text-xs">
                         <div className="flex flex-wrap justify-between gap-2"><dt>{t('chat.diagnostics.tool')}</dt><dd><code>{event.toolName}</code></dd></div>
                         <div className="flex flex-wrap justify-between gap-2"><dt>{t('chat.diagnostics.call')}</dt><dd className="break-all font-mono">{event.toolCallId}</dd></div>
                         {event.actionId ? <div className="flex flex-wrap justify-between gap-2"><dt>{t('chat.diagnostics.action')}</dt><dd className="break-all font-mono">{event.actionId}</dd></div> : null}

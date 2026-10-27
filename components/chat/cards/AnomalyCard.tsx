@@ -82,7 +82,7 @@ export function AnomalyCard({ data, onAcknowledge, onViewDetail, onFreeze, class
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="font-medium text-banking-navy">{anomaly.transaction.merchant}</div>
-                <div className="mt-0.5 text-xs text-slate-500">
+                <div className="mt-0.5 text-banking-caption text-banking-navy">
                   {anomaly.transaction.category} · {formatDateTime(anomaly.transaction.occurredAt)}
                 </div>
               </div>
@@ -100,8 +100,8 @@ export function AnomalyCard({ data, onAcknowledge, onViewDetail, onFreeze, class
               </div>
             </div>
 
-            <p className="mt-2 text-sm text-slate-600">{anomaly.reason}</p>
-            {expanded === anomaly.transaction.id ? <dl className="mt-2 text-xs space-y-1">
+            <p className="mt-2 text-sm text-banking-navy">{anomaly.reason}</p>
+            {expanded === anomaly.transaction.id ? <dl className="mt-2 text-banking-caption space-y-1">
               <div>{t('cards.anomaly.transactionId', { id: anomaly.transaction.id })}</div><div>{t('cards.anomaly.account', { id: anomaly.transaction.accountId })}</div>
               <div>{t('cards.anomaly.channel', { channel: anomaly.transaction.channel ?? t('cards.notProvided') })}</div><div>{t('cards.anomaly.remark', { remark: anomaly.transaction.remark ?? t('cards.none') })}</div>
             </dl> : null}
@@ -113,7 +113,7 @@ export function AnomalyCard({ data, onAcknowledge, onViewDetail, onFreeze, class
               <Button variant="ghost" size="sm" onClick={() => { setExpanded(anomaly.transaction.id); onViewDetail?.(); }}>
                 {t('cards.anomaly.details')}
               </Button>
-              <select aria-label={t('cards.anomaly.selectCard')} value={selectedCard} onChange={event => setSelectedCard(event.target.value)} className="rounded-sm border border-banking-border px-2 text-xs">
+              <select aria-label={t('cards.anomaly.selectCard')} value={selectedCard} onChange={event => setSelectedCard(event.target.value)} className="bank-input rounded-sm border border-banking-border px-2 text-banking-caption">
                 <option value="">{t('cards.anomaly.selectCard')}</option>
                 {(data.cards ?? []).map(card => <option key={card.id} value={card.id}>{card.type} {card.numberMasked}</option>)}
               </select>

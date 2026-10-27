@@ -11,7 +11,7 @@ export function DeveloperModeToggle() {
   const { t } = useI18n();
   const { enabled, pending, setEnabled } = useDeveloperMode();
   return (
-    <div className="flex min-h-11 items-center justify-between gap-3 text-xs text-banking-navy">
+    <div className="flex min-h-11 items-center justify-between gap-3 text-banking-caption text-banking-navy">
       <span>{t('app.developerMode')}</span>
       <button type="button" role="switch" aria-checked={enabled} aria-label={t('app.developerMode')} data-developer-toggle="true" disabled={pending} onClick={() => setEnabled(!enabled)} className={`relative h-7 w-12 shrink-0 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent disabled:opacity-60 ${enabled ? 'bg-banking-accent' : 'bg-banking-border'}`}>
         <span aria-hidden="true" className={`absolute top-1 h-5 w-5 rounded-full bg-white shadow-xs transition-transform ${enabled ? 'left-1 translate-x-5' : 'left-1'}`} />

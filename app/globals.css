@@ -10,6 +10,7 @@
   --color-banking-interactive: light-dark(#77574b, #dec2b5);
   --color-banking-accent-hover: #a62f34;
   --color-banking-border: light-dark(#e8e0d9, #463d40);
+  --color-banking-input-border: light-dark(#9b8a80, #897880);
   --color-banking-subtle: light-dark(#f3eee8, #2f2c30);
   --color-banking-neutral: light-dark(#f8eeea, #392b30);
   --color-banking-success: light-dark(#16a34a, #8bd2a3);
@@ -32,6 +33,8 @@
   --color-red-50: light-dark(oklch(97.1% 0.013 17.38), #3b282d);
   --color-amber-50: light-dark(oklch(98.7% 0.022 95.277), #3c3226);
   --color-green-50: light-dark(oklch(98.2% 0.018 155.826), #24392f);
+  --text-banking-caption: 0.8125rem;
+  --text-banking-caption--line-height: 1.5;
   --radius-xl: 1rem;
   --radius-2xl: 1.25rem;
 }
@@ -43,6 +46,23 @@ html {
 
 html[data-theme="light"] { color-scheme: light; }
 html[data-theme="dark"] { color-scheme: dark; }
+
+.bank-input {
+  border-color: var(--color-banking-input-border);
+  background-color: var(--color-banking-surface);
+  color: var(--color-banking-deep);
+}
+
+.bank-input:focus {
+  border-color: var(--color-banking-accent-text);
+  outline: 2px solid var(--color-banking-accent-text);
+  outline-offset: 2px;
+}
+
+.bank-input::placeholder {
+  color: var(--color-banking-navy);
+  opacity: 1;
+}
 
 body {
   margin: 0;

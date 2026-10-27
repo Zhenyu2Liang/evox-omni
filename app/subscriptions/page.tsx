@@ -63,19 +63,19 @@ export default async function SubscriptionsPage() {
       <Card title={t('pages.subscriptions.annualSummary')} description={t('pages.subscriptions.annualDescription')}>
         <div className="@container"><dl data-subscription-summary className="grid grid-cols-1 gap-3 @[18rem]:grid-cols-2 @[34rem]:grid-cols-3">
           <div className="min-w-0 rounded-xl bg-banking-blue-soft p-3">
-            <dt className="text-xs text-banking-navy">{t('pages.subscriptions.count')}</dt>
+            <dt className="text-banking-caption text-banking-navy">{t('pages.subscriptions.count')}</dt>
             <dd className="mt-1 text-lg font-semibold text-banking-deep">
               {t('pages.subscriptions.itemCount', { count: subscriptions.length })}
             </dd>
           </div>
           <div className="min-w-0 rounded-xl bg-banking-lilac-soft p-3">
-            <dt className="text-xs text-banking-navy">{t('pages.subscriptions.annualCost')}</dt>
+            <dt className="text-banking-caption text-banking-navy">{t('pages.subscriptions.annualCost')}</dt>
             <dd className="mt-1 max-w-full overflow-x-auto whitespace-nowrap text-lg font-semibold text-banking-deep">
               <Money amount={annualTotal} />
             </dd>
           </div>
           <div className="min-w-0 rounded-xl bg-banking-teal-soft p-3">
-            <dt className="text-xs text-banking-navy">{t('pages.subscriptions.enabledReminders')}</dt>
+            <dt className="text-banking-caption text-banking-navy">{t('pages.subscriptions.enabledReminders')}</dt>
             <dd className="mt-1">
               <Badge tone={remindCount > 0 ? 'success' : 'neutral'}>{t('pages.subscriptions.itemCount', { count: remindCount })}</Badge>
             </dd>

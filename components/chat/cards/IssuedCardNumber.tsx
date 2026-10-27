@@ -39,7 +39,7 @@ export function IssuedCardNumber({ actionId, cardId }: { actionId: string; cardI
       <p data-full-card-number className="break-all font-mono text-lg tracking-wider text-banking-deep">{number}</p>
       <Button size="sm" onClick={() => void copy()}>{t(copied ? 'business.cards.numberCopied' : 'business.cards.copyNumber')}</Button>
       <Button size="sm" variant="secondary" onClick={() => { setRevealed(false); setNumber(undefined); setCopied(false); }}>{t('business.presentation.hideNumber')}</Button>
-      <p className="text-xs text-banking-navy">{t('business.cards.issuedNumberHint')}</p>
+      <p className="text-banking-caption text-banking-navy">{t('business.cards.issuedNumberHint')}</p>
     </> : failed ? <>
       <p role="status" className="text-sm text-banking-navy">{t('business.cards.numberUnavailable')}</p>
       <Button size="sm" onClick={() => setAttempt(value => value + 1)}>{t('business.cards.retryNumber')}</Button>

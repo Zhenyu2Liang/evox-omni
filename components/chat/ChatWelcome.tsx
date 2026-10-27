@@ -35,8 +35,8 @@ export function ChatWelcome({ onSelect, disabled }: { onSelect: (prompt: string)
         {SUGGESTIONS.map((suggestion, index) => (
           <button key={suggestion.symbol} type="button" disabled={disabled} onClick={() => onSelect(t(suggestion.prompt))} className="group flex items-center gap-2 rounded-2xl border border-banking-border/80 bg-banking-surface p-3 text-left transition hover:border-banking-accent/40 hover:shadow-xs disabled:opacity-50 sm:block sm:p-4">
             <span data-suggestion-icon className={`inline-flex shrink-0 rounded-xl p-1.5 transition group-hover:bg-banking-accent/10 sm:mb-3 sm:p-2 ${ICON_TONES[index]}`}><SuggestionIcon symbol={suggestion.symbol} /></span>
-            <span className="block text-xs font-semibold leading-5 text-banking-deep sm:text-sm">{t(suggestion.title)}</span>
-            <span className="mt-1 hidden text-xs leading-5 text-banking-navy sm:block">{t(suggestion.description)}</span>
+            <span className="block text-banking-caption font-semibold leading-5 text-banking-deep sm:text-sm">{t(suggestion.title)}</span>
+            <span className="mt-1 hidden text-banking-caption leading-5 text-banking-navy sm:block">{t(suggestion.description)}</span>
           </button>
         ))}
       </div>

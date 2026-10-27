@@ -37,9 +37,9 @@ export function SubscriptionsCard(p: SubscriptionsCardProps) {
               </div>
               <div className="mt-3 flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
                 <Money amount={subscription.amount} className="break-words text-xl font-semibold tracking-tight text-banking-deep" />
-                <span className="text-xs text-banking-navy">/ {t(CYCLE_LABEL[subscription.cycle])}</span>
+                <span className="text-banking-caption text-banking-navy">/ {t(CYCLE_LABEL[subscription.cycle])}</span>
               </div>
-              <dl className="mt-3 space-y-2 border-t border-banking-light pt-3 text-xs">
+              <dl className="mt-3 space-y-2 border-t border-banking-light pt-3 text-banking-caption">
                 {subscription.status === 'ACTIVE' ? (
                   <div className="flex flex-wrap justify-between gap-x-2 gap-y-1">
                     <dt className="text-banking-navy">{t('business.subscriptions.nextCharge')}</dt>

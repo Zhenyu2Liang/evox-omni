@@ -36,8 +36,8 @@ const ALIGN: Record<ChatRole, string> = {
 const BUBBLE: Record<ChatRole, string> = {
   user: 'bg-banking-ink text-white rounded-2xl rounded-br-md',
   assistant: 'bg-banking-surface text-banking-deep border border-banking-border/80 rounded-2xl rounded-tl-md shadow-xs',
-  system: 'bg-banking-light text-banking-navy text-center text-xs rounded-xl',
-  tool: 'bg-banking-light text-banking-navy text-xs rounded-xl',
+  system: 'bg-banking-light text-banking-navy text-center text-banking-caption rounded-xl',
+  tool: 'bg-banking-light text-banking-navy text-banking-caption rounded-xl',
 };
 
 export function MessageBubble({ message, action, className, compactResultExplanation = false }: MessageBubbleProps) {
@@ -65,7 +65,7 @@ export function MessageBubble({ message, action, className, compactResultExplana
   if (message.role === 'tool') return (
     <div data-message-role="tool" data-message-id={message.id} data-single-bank-card={singleBankCard ? 'true' : undefined}
       className={`min-w-0 w-[94%] space-y-3 sm:ml-12 ${singleBankCard ? 'max-w-[28rem] sm:w-full' : 'max-w-[52rem] sm:w-[86%]'} ${className ?? ''}`.trim()}>
-      <p className="text-[11px] font-medium tracking-wide text-banking-navy">{t('chat.message.activity')}</p>
+      <p className="text-xs font-medium tracking-wide text-banking-navy">{t('chat.message.activity')}</p>
       <ToolEventList events={toolEvents} compact={cards.length > 0} />
       {groupedResult ? <div data-operation-record className="overflow-hidden rounded-2xl border border-banking-border bg-banking-surface [&_[data-approval-history]]:rounded-none [&_[data-approval-history]]:border-0 [&>[data-chat-card-type]+[data-chat-card-type]]:border-t [&>[data-chat-card-type]+[data-chat-card-type]]:border-banking-border/60 [&>[data-chat-card-type]>div]:rounded-none [&>[data-chat-card-type]>div]:shadow-none [&>[data-chat-card-type]>div]:ring-0">
         {renderedCards}
@@ -77,7 +77,7 @@ export function MessageBubble({ message, action, className, compactResultExplana
     <div data-message-role={message.role} data-message-id={message.id} className={`flex min-w-0 w-full items-start gap-2 sm:gap-3 ${ALIGN[message.role]} ${className ?? ''}`.trim()}>
       {message.role === 'assistant' ? <ChatAvatar role="assistant" /> : null}
       <div className={`min-w-0 ${message.role === 'user' ? 'max-w-[min(80%,40rem)]' : message.role === 'assistant' ? 'max-w-[min(88%,52rem)]' : 'max-w-[88%]'} space-y-1.5`}>
-        {message.role === 'assistant' || message.role === 'user' ? <p className={`px-1 text-[11px] font-medium text-banking-navy ${message.role === 'user' ? 'text-right' : ''}`}>
+        {message.role === 'assistant' || message.role === 'user' ? <p className={`px-1 text-xs font-medium text-banking-navy ${message.role === 'user' ? 'text-right' : ''}`}>
           {t(message.role === 'user' ? 'chat.message.user' : 'chat.message.assistant')}
         </p> : null}
         <div className={`min-w-0 space-y-3 px-4 py-3 sm:px-5 sm:py-4 ${BUBBLE[message.role]}`}>
@@ -85,20 +85,20 @@ export function MessageBubble({ message, action, className, compactResultExplana
           <>
             {message.content.length > 0 && (message.role === 'assistant' ? (
               compactResultExplanation ? <div data-compact-result-explanation className="space-y-2">
-                <p className="text-sm">{t('business.presentation.resultInCard')}</p>
+                <p className="text-base sm:text-[15px]">{t('business.presentation.resultInCard')}</p>
                 <details data-result-explanation>
-                  <summary className="cursor-pointer text-xs font-medium text-banking-interactive hover:text-banking-accent-text">{t('business.presentation.resultExplanation')}</summary>
+                  <summary className="cursor-pointer text-banking-caption font-medium text-banking-interactive hover:text-banking-accent-text">{t('business.presentation.resultExplanation')}</summary>
                   <div className="mt-3 space-y-3">{message.financialSummary ? <AssistantMarkdown text={message.financialSummary} /> : null}<AssistantMarkdown text={message.content} /></div>
                 </details>
               </div> : message.financialSummary ? <div data-financial-summary="true" className="space-y-3">
                 <AssistantMarkdown text={message.financialSummary} />
                 <details data-result-explanation className="border-t border-banking-border/60 pt-2">
-                  <summary className="cursor-pointer text-xs font-medium text-banking-interactive hover:text-banking-accent-text">{t('business.presentation.resultExplanation')}</summary>
+                  <summary className="cursor-pointer text-banking-caption font-medium text-banking-interactive hover:text-banking-accent-text">{t('business.presentation.resultExplanation')}</summary>
                   <div className="mt-3"><AssistantMarkdown text={message.content} /></div>
                 </details>
               </div> : <AssistantMarkdown text={message.content} />
             ) : (
-              <p data-message-content="true" className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+              <p data-message-content="true" className="whitespace-pre-wrap break-words text-base leading-relaxed sm:text-[15px]">
                 {systemText}
               </p>
             ))}

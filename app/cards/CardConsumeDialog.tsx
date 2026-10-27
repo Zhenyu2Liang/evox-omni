@@ -14,7 +14,7 @@ interface Envelope<T> { ok: boolean; data?: T; error?: { code: string; message?:
 interface Notice { key: MessageKey; error: boolean; detail?: string }
 
 const AMOUNT_PATTERN = /^\d+(?:\.\d{1,2})?$/;
-const inputClass = 'mt-1 w-full rounded-xl border border-banking-navy/20 bg-banking-surface px-3 py-2.5 text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
+const inputClass = 'bank-input mt-1 w-full rounded-xl border border-banking-navy/20 bg-banking-surface px-3 py-2.5 text-base sm:text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
 
 /** Map a spend failure code to its localized message key. */
 function failureKey(code: string | undefined): MessageKey {
@@ -181,7 +181,7 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
 
       <section data-card-consumptions className="mt-4">
         <h3 className="font-semibold text-banking-deep">{t('pages.cards.consumptions')}</h3>
-        {recordsLoaded ? (consumptions.length === 0 ? <p data-card-consumptions-empty className="mt-2 text-sm text-banking-navy">{t('pages.cards.consumptionsEmpty')}</p> : <ul className="mt-2 space-y-2">{consumptions.map(record => <li key={record.id} data-card-consumption={record.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-banking-light pt-2 text-sm"><div className="min-w-0"><div className="truncate text-banking-deep">{record.merchant}</div><div className="text-xs text-banking-navy">{formatDateTime(record.occurredAt)} · {record.category}</div></div><Money amount={record.amount} /></li>)}</ul>) : null}
+        {recordsLoaded ? (consumptions.length === 0 ? <p data-card-consumptions-empty className="mt-2 text-sm text-banking-navy">{t('pages.cards.consumptionsEmpty')}</p> : <ul className="mt-2 space-y-2">{consumptions.map(record => <li key={record.id} data-card-consumption={record.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-banking-light pt-2 text-sm"><div className="min-w-0"><div className="truncate text-banking-deep">{record.merchant}</div><div className="text-banking-caption text-banking-navy">{formatDateTime(record.occurredAt)} · {record.category}</div></div><Money amount={record.amount} /></li>)}</ul>) : null}
       </section>
 
       <form onSubmit={submit} data-card-consume-form className="mt-5">

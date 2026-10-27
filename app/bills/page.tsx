@@ -69,7 +69,7 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
         </div>
         <form className="flex items-center gap-2" method="get">
           <label htmlFor="month" className="text-sm text-banking-navy">{t('pages.bills.selectMonth')}</label>
-          <input id="month" type="month" name="month" defaultValue={analysis.month} className="rounded-lg border border-banking-accent/15 bg-banking-surface px-2 py-1 text-sm text-banking-navy" />
+          <input id="month" type="month" name="month" defaultValue={analysis.month} className="bank-input rounded-lg border border-banking-accent/15 bg-banking-surface px-2 py-1 text-sm text-banking-navy" />
           <button type="submit" className="rounded-lg bg-banking-accent px-3 py-1 text-sm text-white hover:bg-banking-accent/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-banking-accent">{t('pages.bills.view')}</button>
         </form>
       </header>
@@ -77,17 +77,17 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
       <section className="grid gap-4 sm:grid-cols-3">
         <Card title={t('pages.bills.bookedSpending')}>
           <Money amount={analysis.total} className="text-2xl font-semibold text-banking-deep" />
-          <p className="mt-1 text-xs text-banking-navy">
+          <p className="mt-1 text-banking-caption text-banking-navy">
             {t('pages.bills.monthComparison', { change: `${compareDecimal(analysis.momChangePct, '0') > 0 ? '+' : ''}${analysis.momChangePct}`, total: formatCNY(analysis.prevTotal) })}
           </p>
         </Card>
         <Card title={t('pages.bills.largestTransaction')}>
           <Money amount={analysis.largest?.amount ?? '0.00'} signed className="text-2xl font-semibold text-banking-deep" />
-          <p className="mt-1 text-xs text-banking-navy">{analysis.largest?.merchant ?? t('pages.bills.noSpending')}</p>
+          <p className="mt-1 text-banking-caption text-banking-navy">{analysis.largest?.merchant ?? t('pages.bills.noSpending')}</p>
         </Card>
         <Card title={t('pages.bills.topMerchant')}>
           <Money amount={analysis.topMerchant?.amount ?? '0.00'} className="text-2xl font-semibold text-banking-deep" />
-          <p className="mt-1 text-xs text-banking-navy">{analysis.topMerchant?.merchant ?? t('pages.bills.noSpending')}</p>
+          <p className="mt-1 text-banking-caption text-banking-navy">{analysis.topMerchant?.merchant ?? t('pages.bills.noSpending')}</p>
         </Card>
       </section>
 

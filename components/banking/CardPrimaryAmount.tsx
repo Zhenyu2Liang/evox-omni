@@ -13,7 +13,7 @@ export function CardPrimaryAmount({ card }: { card: CardView }) {
   const label = card.type === 'CREDIT' ? card.usable ? 'business.cards.available' : 'business.presentation.recordedCredit' : card.type === 'VIRTUAL' ? 'business.presentation.payable' : 'business.cards.accountBalance';
   if (amount === undefined) return null;
   return <dl data-card-primary-amount data-card-type={card.type} className="rounded-xl border border-banking-navy/10 bg-banking-surface/80 p-4">
-    <dt className="text-xs text-banking-navy">{t(label)}</dt>
+    <dt className="text-banking-caption text-banking-navy">{t(label)}</dt>
     <dd className="mt-1 break-all text-2xl font-semibold tabular-nums text-banking-deep"><Money amount={amount} /></dd>
   </dl>;
 }

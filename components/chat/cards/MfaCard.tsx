@@ -75,10 +75,10 @@ export function MfaCard(p: MfaCardProps) {
         {terminal === 'failed' ? <p className="text-sm text-banking-danger">{publicToolError(p.statusMessage, t)}</p> : null}
         {terminal === 'locked' ? <div className="flex flex-col items-start gap-1" data-mfa-locked="true">
           <p className="text-sm text-banking-danger">{securityNotice(LOCKED_NOTICE, t)}</p>
-          <p className="text-xs text-banking-navy">{t('pages.security.unlockDescription')}</p>
+          <p className="text-banking-caption text-banking-navy">{t('pages.security.unlockDescription')}</p>
           <Link href="/security" className="text-sm text-banking-interactive underline">{t('pages.security.title')}</Link>
         </div> : null}
-        {developerMode && p.statusMessage ? <details className="text-xs text-banking-navy">
+        {developerMode && p.statusMessage ? <details className="text-banking-caption text-banking-navy">
           <summary>{t('chat.diagnostics.detail')}</summary>
           <pre className="mt-1 whitespace-pre-wrap break-words">{String(sanitizeToolArguments(p.statusMessage))}</pre>
         </details> : null}
@@ -102,11 +102,11 @@ export function MfaCard(p: MfaCardProps) {
               submit();
             }
           }}
-          className="w-full rounded-xl border border-banking-navy/20 bg-banking-light px-3 py-2 text-sm text-banking-navy outline-hidden transition focus:border-banking-accent disabled:opacity-60"
+          className="bank-input w-full rounded-xl border border-banking-navy/20 bg-banking-light px-3 py-2 text-base text-banking-navy sm:text-sm outline-hidden transition focus:border-banking-accent disabled:opacity-60"
         /> : null}
 
         {typeof attempts === 'number' && attempts > 0 ? (
-          <p className="text-xs text-banking-warn" role="status">
+          <p className="text-banking-caption text-banking-warn" role="status">
             {typeof maxAttempts === 'number' && attempts >= maxAttempts
               ? t('cards.mfa.failedAttemptsLimit', { attempts, maxAttempts })
               : t('cards.mfa.failedAttempts', { attempts })}

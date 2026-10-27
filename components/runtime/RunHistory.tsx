@@ -94,15 +94,15 @@ export function RunHistory() {
         {runs.map(run => <button key={run.id} disabled={busy} onClick={() => void inspect(run.id)}
           className={`rounded-lg border p-3 text-left ${selected === run.id ? 'border-banking-accent bg-banking-neutral' : 'border-banking-border bg-banking-surface'}`}>
           <span className="block font-medium">{label(`runs.status.${run.status}`, run.status)}</span>
-          <time className="block text-xs">{new Date(run.startedAt).toLocaleString(locale)}</time>
-          <span className="block text-xs">{t('runs.count', { calls: run._count.invocations, events: run.nextSequence })}</span>
-          <span className="block truncate font-mono text-xs">{run.id}</span>
+          <time className="block text-banking-caption">{new Date(run.startedAt).toLocaleString(locale)}</time>
+          <span className="block text-banking-caption">{t('runs.count', { calls: run._count.invocations, events: run.nextSequence })}</span>
+          <span className="block truncate font-mono text-banking-caption">{run.id}</span>
         </button>)}
       </section>
       <section className="min-w-0 rounded-lg border border-banking-border bg-banking-surface p-4" aria-label={t('runs.details')}>
         {!detail ? <p className="text-sm">{t('runs.select')}</p> : <>
           <div className="mb-4 flex items-center justify-between gap-3">
-            <div><h2 className="font-semibold">{label(`runs.status.${detail.status}`, detail.status)}</h2><p className="font-mono text-xs">{detail.id}</p></div>
+            <div><h2 className="font-semibold">{label(`runs.status.${detail.status}`, detail.status)}</h2><p className="font-mono text-banking-caption">{detail.id}</p></div>
             {['interrupted', 'failed', 'waiting_confirmation', 'waiting_verification'].includes(detail.status) &&
               <button disabled={busy} onClick={() => void recover()} className="rounded-sm bg-banking-accent px-3 py-2 text-sm text-white">{t('runs.recover')}</button>}
           </div>
@@ -114,7 +114,7 @@ export function RunHistory() {
             </tr>)}</tbody>
           </table></div>
           <h3 className="mb-2 mt-5 font-semibold">{t('runs.events')}</h3>
-          <ol className="max-h-96 space-y-2 overflow-auto font-mono text-xs">
+          <ol className="max-h-96 space-y-2 overflow-auto font-mono text-banking-caption">
             {events.map(event => <li key={event.id} className="rounded-sm bg-banking-light p-2">
               <span className="font-semibold">#{event.sequence} {event.eventType}</span>
               <pre className="mt-1 whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>

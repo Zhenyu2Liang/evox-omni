@@ -59,14 +59,14 @@ export function CardsCard(p: CardsCardProps) {
               <li key={card.id} className="min-w-0 overflow-hidden rounded-xl border border-banking-light">
                 <BankCardFace type={card.type} inactive={card.status !== 'ACTIVE'} className="!rounded-b-none !border-0 !p-3.5">
                   <div className="flex flex-wrap items-start justify-between gap-2">
-                    <span className="text-xs text-banking-navy">{t(TYPE_LABEL[card.type])} · {card.network}</span>
+                    <span className="text-banking-caption text-banking-navy">{t(TYPE_LABEL[card.type])} · {card.network}</span>
                     <Badge tone={STATUS_TONE[card.status]}>{t(STATUS_LABEL[card.status])}</Badge>
                   </div>
                   <div className="mt-3 break-words font-mono text-lg tracking-widest">{card.numberMasked}</div>
                 </BankCardFace>
                 <div className="space-y-3 p-3.5">
                   {unavailableNotice !== undefined ? (
-                    <p className="rounded-xl bg-banking-light/70 px-3 py-2 text-xs text-banking-navy">{t(unavailableNotice)}</p>
+                    <p className="rounded-xl bg-banking-light/70 px-3 py-2 text-banking-caption text-banking-navy">{t(unavailableNotice)}</p>
                   ) : null}
                   <CardPrimaryAmount card={card} />
                   {p.issuanceActionId ? <IssuedCardNumber actionId={p.issuanceActionId} cardId={card.id} /> : null}
@@ -81,14 +81,14 @@ export function CardsCard(p: CardsCardProps) {
                     {card.monthlyLimit !== undefined ? <ResultMetric label={t('business.cards.monthlyLimit')}><Money amount={card.monthlyLimit} /></ResultMetric> : null}
                   </dl>
                   {linkedAccountNotice !== undefined ? (
-                    <p className="text-xs text-banking-navy">{t(linkedAccountNotice)}</p>
+                    <p className="text-banking-caption text-banking-navy">{t(linkedAccountNotice)}</p>
                   ) : null}
                   {card.limits.length ? (
                     <div>
-                      <div className="mb-2 text-xs text-banking-navy">{t('business.cards.categoryLimits')}</div>
+                      <div className="mb-2 text-banking-caption text-banking-navy">{t('business.cards.categoryLimits')}</div>
                       <dl className="space-y-1.5">
                         {card.limits.map((limit, index) => (
-                          <div key={`${limit.category}-${index}`} className="flex flex-wrap justify-between gap-2 text-xs">
+                          <div key={`${limit.category}-${index}`} className="flex flex-wrap justify-between gap-2 text-banking-caption">
                             <dt className="text-banking-navy">{limit.category}</dt>
                             <dd className="font-semibold text-banking-deep"><Money amount={limit.amount} /></dd>
                           </div>

@@ -16,7 +16,7 @@ export function ActivityHistory({ entries, t }: { entries: ActivityRecord[]; t: 
       <h2 className="text-sm font-semibold text-banking-deep">{t(`pages.activity.type.${entry.type}`)}</h2>
       <Badge tone={STATUS_TONES[entry.status]}>{t(`pages.activity.status.${entry.status}`)}</Badge>
     </div>
-    <dl className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1 text-xs text-banking-navy">
+    <dl className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1 text-banking-caption text-banking-navy">
       <div className="flex flex-wrap items-baseline gap-x-2"><dt>{t('pages.activity.column.time')}</dt><dd><time dateTime={new Date(entry.timestamp).toISOString()}>{formatDateTime(entry.timestamp)}</time></dd></div>
       <div className="flex flex-wrap items-baseline gap-x-2"><dt>{t('pages.activity.column.verification')}</dt><dd>{t(`pages.activity.verification.${entry.verification}`)}</dd></div>
     </dl>

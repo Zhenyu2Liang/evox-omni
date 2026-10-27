@@ -24,7 +24,7 @@ interface CardChangeDialogProps {
 const typeLabels: Record<CardType, MessageKey> = {
   DEBIT: 'business.cards.debit', CREDIT: 'business.cards.credit', VIRTUAL: 'business.cards.virtual',
 };
-const inputClass = 'mt-1 w-full rounded-xl border border-banking-navy/20 bg-banking-surface px-3 py-2.5 text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
+const inputClass = 'bank-input mt-1 w-full rounded-xl border border-banking-navy/20 bg-banking-surface px-3 py-2.5 text-base sm:text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
 
 /** A native modal keeps focus inside the reviewed operation and supports keyboard cancellation. */
 export default function CardChangeDialog(props: CardChangeDialogProps) {
@@ -100,7 +100,7 @@ export default function CardChangeDialog(props: CardChangeDialogProps) {
             <fieldset disabled={busy || change.status !== 'pending'} className="space-y-4 disabled:opacity-60">
               <label className="flex items-start gap-3 text-sm"><input name="confirmed" type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 shrink-0 accent-banking-accent" />{t('pages.cards.confirmDetails')}</label>
               <label className="block text-sm">{t('cards.mfa.label')}<input name="code" value={code} onChange={event => setCode(event.target.value)} type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} className={inputClass} /></label>
-              <p className="text-xs leading-5 text-banking-navy">{t('pages.cards.verificationHint')}</p>
+              <p className="text-banking-caption leading-5 text-banking-navy">{t('pages.cards.verificationHint')}</p>
             </fieldset>
             <div className="flex flex-wrap justify-end gap-3">
               <Button variant="secondary" disabled={busy} onClick={() => props.onCancel(change)}>{t('pages.cards.cancelChange')}</Button>

@@ -17,7 +17,7 @@ export function Brand({ onNavigate }: { onNavigate?: () => void }) {
       <BrandMark width={44} height={40} className="h-10 w-11 shrink-0 object-contain" />
       <span className="min-w-0">
         <span className="block text-xl font-semibold tracking-[0.08em] text-banking-deep">{t('app.brand')}</span>
-        <span className="mt-0.5 block text-[10px] font-semibold tracking-[0.22em] text-banking-navy">{t('app.brandDescription')}</span>
+        <span className="mt-0.5 block text-[11px] font-semibold tracking-[0.22em] text-banking-navy">{t('app.brandDescription')}</span>
       </span>
     </Link>
   );
@@ -31,7 +31,7 @@ export default function SidebarNavigation({ pathname, onNavigate }: { pathname: 
       <nav aria-label={t('app.mainNavigation')} className="min-h-0 flex-1 space-y-7 overflow-y-auto px-4 py-5">
         {getNavigationGroups(enabled).map((group) => (
           <section key={group.labelKey} aria-label={t(group.labelKey)}>
-            <p className="mb-2 px-3 text-[11px] font-semibold tracking-wide text-banking-navy">{t(group.labelKey)}</p>
+            <p className="mb-2 px-3 text-xs font-semibold tracking-wide text-banking-navy">{t(group.labelKey)}</p>
             <ul className="space-y-1">
               {group.items.map((item) => {
                 const active = isNavigationActive(pathname, item.href);
@@ -52,8 +52,8 @@ export default function SidebarNavigation({ pathname, onNavigate }: { pathname: 
       </nav>
       <div className="space-y-2 border-t border-banking-border px-5 pt-3"><LanguageSwitcher /><ThemeSwitcher /><DeveloperModeToggle /></div>
       <div className="m-4 rounded-2xl border border-banking-border bg-banking-light p-3.5">
-        <p className="flex items-center gap-2 text-xs font-semibold text-banking-deep"><span aria-hidden="true" className="h-2 w-2 rounded-full bg-banking-navy" />{t('app.demoWorkspace')}</p>
-        <p className="mt-1.5 text-xs leading-5 text-banking-navy">{t('app.demoDescription')}</p>
+        <p className="flex items-center gap-2 text-banking-caption font-semibold text-banking-deep"><span aria-hidden="true" className="h-2 w-2 rounded-full bg-banking-navy" />{t('app.demoWorkspace')}</p>
+        <p className="mt-1.5 text-banking-caption leading-5 text-banking-navy">{t('app.demoDescription')}</p>
       </div>
     </>
   );

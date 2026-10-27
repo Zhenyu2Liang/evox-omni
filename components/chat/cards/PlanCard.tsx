@@ -137,12 +137,12 @@ export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
         </section>}
 
         <section className="space-y-2">
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-banking-navy">{t('cards.plan.dependencies')}</h4>
+          <h4 className="text-banking-caption font-semibold uppercase tracking-wide text-banking-navy">{t('cards.plan.dependencies')}</h4>
           <ul className="space-y-1.5">
             {plan.nodes.map((node) => (
               <li key={node.id} className="flex flex-wrap items-baseline gap-x-2 text-sm">
                 <span className="font-medium text-banking-deep">{localizeToolLabel(node.name, t)}</span>
-                <span className="text-xs text-banking-navy">{dependencyLabel(node, nameById, t)}</span>
+                <span className="text-banking-caption text-banking-navy">{dependencyLabel(node, nameById, t)}</span>
               </li>
             ))}
           </ul>

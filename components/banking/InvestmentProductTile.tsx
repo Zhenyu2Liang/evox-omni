@@ -65,7 +65,7 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="font-medium text-banking-deep">{product.name}</div>
-          <div className="inline-flex rounded-md bg-banking-lilac-soft px-2 py-0.5 text-xs text-banking-lilac">{product.code}</div>
+          <div className="inline-flex rounded-md bg-banking-lilac-soft px-2 py-0.5 text-banking-caption text-banking-lilac">{product.code}</div>
         </div>
         <Badge tone={RISK_TONE[product.riskLevel]}>
           {product.riskLevel} · {t(RISK_LABEL[product.riskLevel])}
@@ -74,17 +74,17 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
 
       {!holding ? <div className="grid grid-cols-3 gap-3">
         <div>
-          <div className="text-xs text-banking-navy">{t('business.investments.yield')}</div>
+          <div className="text-banking-caption text-banking-navy">{t('business.investments.yield')}</div>
           <div className="text-sm font-semibold text-banking-success">
             {formatRate(product.annualYieldRate)}
           </div>
         </div>
         <div>
-          <div className="text-xs text-banking-navy">{t('business.investments.term')}</div>
+          <div className="text-banking-caption text-banking-navy">{t('business.investments.term')}</div>
           <div className="text-sm font-semibold text-banking-deep">{t('business.investments.days', { count: product.termDays })}</div>
         </div>
         <div>
-          <div className="text-xs text-banking-navy">{t('business.investments.minimum')}</div>
+          <div className="text-banking-caption text-banking-navy">{t('business.investments.minimum')}</div>
           <div className="text-sm font-semibold text-banking-deep">
             <Money amount={product.minAmount} />
           </div>
@@ -92,13 +92,13 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
       </div> : null}
 
       {!holding && product.description ? (
-        <p className="text-xs text-banking-navy">{product.description}</p>
+        <p className="text-banking-caption text-banking-navy">{product.description}</p>
       ) : null}
 
       {holding ? (
         <div className="space-y-1 border-t border-banking-light pt-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs text-banking-navy">{t('business.investments.holdings')}</span>
+            <span className="text-banking-caption text-banking-navy">{t('business.investments.holdings')}</span>
             {basisKey !== undefined ? (
               <Badge tone={holding.valueBasis === 'HISTORICAL_DATA_INSUFFICIENT' ? 'warn' : 'info'}>
                 {t(basisKey)}
@@ -123,14 +123,14 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
             </div>
           ) : null}
           {purchases.length > 0 ? (
-            <div className="text-xs text-banking-navy">
+            <div className="text-banking-caption text-banking-navy">
               {t('business.investments.purchases')} · {t('business.investments.purchaseCount', { count: purchases.length })}
             </div>
           ) : null}
-          {purchases.length ? <ul className="space-y-1 text-xs text-banking-navy">{purchases.map((purchase, index) => <li key={index} className="flex flex-wrap justify-between gap-2"><span>{formatDateTime(purchase.at)}</span><Money amount={purchase.amount} /></li>)}</ul> : null}
-          <p className="text-xs text-banking-navy">{t('business.investments.yield')} {formatRate(product.annualYieldRate)} · {t('business.investments.days', { count: product.termDays })}</p>
+          {purchases.length ? <ul className="space-y-1 text-banking-caption text-banking-navy">{purchases.map((purchase, index) => <li key={index} className="flex flex-wrap justify-between gap-2"><span>{formatDateTime(purchase.at)}</span><Money amount={purchase.amount} /></li>)}</ul> : null}
+          <p className="text-banking-caption text-banking-navy">{t('business.investments.yield')} {formatRate(product.annualYieldRate)} · {t('business.investments.days', { count: product.termDays })}</p>
           </div></details>
-          <p className="text-xs leading-relaxed text-banking-navy">
+          <p className="text-banking-caption leading-relaxed text-banking-navy">
             {usesNetValueModel(holding) ? `${t('business.investments.profitScope')} ` : null}
             {t('business.investments.disclaimer')}
           </p>

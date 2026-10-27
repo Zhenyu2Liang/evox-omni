@@ -175,12 +175,12 @@ export function ChartTooltip(p: ChartTooltipProps) {
   return (
     <div role="tooltip" className="rounded-lg border border-banking-navy/10 bg-banking-surface px-3 py-2 shadow-md">
       {p.label !== undefined && p.label !== null && p.label !== '' ? (
-        <p className="mb-1 text-xs font-semibold text-banking-deep">{p.label}</p>
+        <p className="mb-1 text-banking-caption font-semibold text-banking-deep">{p.label}</p>
       ) : null}
       <ul className="space-y-0.5">
         {p.entries.map((item, i) => {
           return (
-            <li key={i} className="flex items-center gap-2 text-xs text-banking-navy">
+            <li key={i} className="flex items-center gap-2 text-banking-caption text-banking-navy">
               <span
                 className="inline-block h-2 w-2 shrink-0 rounded-full"
                 style={{ background: item.color ?? BANKING_PALETTE.accent }}

@@ -52,7 +52,7 @@ export function CircuitBreakerStatus({
             {t(tripped ? 'security.breaker.locked' : 'security.breaker.normal')}
           </span>
         </div>
-        <span className="text-xs text-banking-navy">{t('security.breaker.title')}</span>
+        <span className="text-banking-caption text-banking-navy">{t('security.breaker.title')}</span>
       </div>
 
       <p className="mt-2 text-sm leading-5 text-banking-navy">
@@ -60,7 +60,7 @@ export function CircuitBreakerStatus({
       </p>
 
       <div className="mt-4">
-        <div className="flex items-center justify-between text-xs text-banking-navy">
+        <div className="flex items-center justify-between text-banking-caption text-banking-navy">
           <span>{t('security.breaker.failures')}</span>
           <span>
             {t('security.breaker.failureCount', { count: failureCount, max: safeMaxAttempts })}

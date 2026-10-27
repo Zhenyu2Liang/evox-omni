@@ -12,7 +12,7 @@ interface ContactEnvelope {
   error?: { code: string };
 }
 
-const inputClass = 'mt-1 w-full rounded-xl border border-banking-navy/20 bg-banking-surface px-3 py-2.5 text-sm text-banking-deep outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
+const inputClass = 'bank-input mt-1 w-full rounded-xl border border-banking-navy/20 bg-banking-surface px-3 py-2.5 text-base sm:text-sm text-banking-deep outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
 const AVATAR_TONES = ['bg-banking-teal-soft text-banking-teal', 'bg-banking-lilac-soft text-banking-lilac',
   'bg-banking-blue-soft text-banking-blue', 'bg-banking-apricot-soft text-banking-apricot'] as const;
 

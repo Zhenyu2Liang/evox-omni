@@ -59,7 +59,7 @@ export function ChatErrorFeedback({ message, code, showNotice = true }: { messag
     {showNotice ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-banking-danger">
       {publicToolError(message, t, 'chat.error.request', code)}
     </div> : null}
-    {developerMode ? <details data-chat-error-diagnostics="true" className="rounded-xl border border-banking-border bg-banking-surface p-3 text-xs text-banking-navy">
+    {developerMode ? <details data-chat-error-diagnostics="true" className="rounded-xl border border-banking-border bg-banking-surface p-3 text-banking-caption text-banking-navy">
       <summary>{t('chat.diagnostics.detail')}</summary>
       <pre className="mt-2 whitespace-pre-wrap break-words">{String(sanitizeToolArguments(message))}</pre>
     </details> : null}
@@ -187,7 +187,7 @@ export function ChatWindow({
           </button>
           {stream.historyError && <p role="alert" className="text-center text-sm text-banking-danger">{t(stream.historyError)}</p>}
         </div>}
-        {stream.history && !stream.history.hasMore && visibleMessages.length > 0 && <p data-history-complete="true" className="text-center text-xs text-banking-navy">{t('chat.history.complete')}</p>}
+        {stream.history && !stream.history.hasMore && visibleMessages.length > 0 && <p data-history-complete="true" className="text-center text-banking-caption text-banking-navy">{t('chat.history.complete')}</p>}
         <ChatErrorFeedback message={stream.error} code={stream.errorCode} showNotice={!pending} />
         {isEmpty && stream.restoring ? (
           <div role="status" className="flex flex-col items-center justify-center gap-3 py-16">
@@ -246,7 +246,7 @@ export function ChatWindow({
         <Composer onSend={send} draft={draft} busy={stream.busy} disabled={stream.restoring}
           helpExamplesDisabled={pending !== undefined || stream.pendingReconciliations.length > 0}
           className={pending ? '[&_textarea]:max-h-16' : undefined} />
-        {!pending && <p className="mt-2.5 text-center text-[11px] leading-4 text-banking-navy">{t('chat.composer.help')}</p>}
+        {!pending && <p className="mt-2.5 text-center text-xs leading-4 text-banking-navy">{t('chat.composer.help')}</p>}
         </div>
       </div>
     </div>

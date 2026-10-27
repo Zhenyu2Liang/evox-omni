@@ -33,7 +33,7 @@ export function ActionDetails({ action }: { action: Pick<PendingActionSummary, '
           <dd className="font-semibold text-banking-deep"><Money amount={action.amount} /></dd>
         </div> : null}
     </dl>
-    {redemption ? <div className="space-y-1 text-xs leading-relaxed text-banking-navy">
+    {redemption ? <div className="space-y-1 text-banking-caption leading-relaxed text-banking-navy">
       <p>{t('chat.value.settlementFormula')}</p>
       {simulatedNoneFee ? <p>{t('chat.value.feeRuleSimulatedNone')}</p> : null}
       <p>{t('chat.value.reconfirmOnChange')}</p>
