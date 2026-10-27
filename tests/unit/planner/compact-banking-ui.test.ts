@@ -9,7 +9,7 @@ import { IssuedCardNumber } from '@/components/chat/cards/IssuedCardNumber';
 import { MessageBubble } from '@/components/chat/MessageBubble';
 import { BusinessReceiptCard } from '@/components/chat/cards/BusinessResultCards';
 import { ApprovalProgress } from '@/components/chat/cards/ApprovalProgress';
-import { presentationMessages } from '@/components/chat/presentation-messages';
+import { canCompactResultExplanation, presentationMessages } from '@/components/chat/presentation-messages';
 import { financialResponseSummary } from '@/agent/financial-response';
 import { investmentPayload } from '@/agent/business-card-payloads';
 import { isChatMessage } from '@/components/chat/transport-validation';
@@ -123,5 +123,49 @@ describe('compact banking presentation', () => {
     expect(renderToStaticMarkup(createElement(ApprovalProgress, { status: 'awaiting_mfa', requiresMfa: true }))).toContain('data-current-step="2"');
     expect(renderToStaticMarkup(createElement(ApprovalProgress, { status: 'executed', requiresMfa: false }))).toContain('data-current-step="3"');
     expect(renderToStaticMarkup(createElement(ApprovalProgress, { status: 'confirmed', requiresMfa: true }))).toContain('data-current-step="3"');
+  });
+
+  it('folds repeated successful prose without deleting the original financial explanation', () => {
+    const messages: ChatMessage[] = [
+      { id: 'user', role: 'user', timestamp: 0, content: '赎回100份' },
+      { id: 'result', role: 'tool', timestamp: 0, content: '', toolEvents: [{ toolCallId: 'call', toolName: 'redeem_investment', actionId: 'a', status: 'success' }], cards: [
+        { type: 'mfa', actionId: 'a', status: 'executed' },
+        { type: 'receipt', data: { kind: 'investmentRedemption', success: true, amount: '103.57', newBalance: '24683.57', occurredAt: 0 } },
+      ] },
+      { id: 'assistant', role: 'assistant', timestamp: 0, content: '已赎回100份，到账¥103.57，余额¥24,683.57。', financialSummary: '到账¥103.57。' },
+    ];
+    expect(canCompactResultExplanation(messages, 2)).toBe(true);
+    const markup = renderToStaticMarkup(createElement(MessageBubble, { message: messages[2], compactResultExplanation: true }));
+    expect(markup.split('<details')[0]).not.toContain('103.57');
+    expect(markup).toContain('24,683.57');
+    expect(markup).toContain('已赎回100份');
+    expect(markup).not.toMatch(/<details[^>]*\bopen\b/);
+    expect(canCompactResultExplanation(messages, 2, 'another-pending-action')).toBe(false);
+    expect(canCompactResultExplanation([messages[0], messages[1], { ...messages[0], id: 'new-user' }, messages[2]], 3)).toBe(false);
+    const withPrelude = [messages[0], messages[1], { ...messages[2], id: 'prelude', content: '已准备好办理。' }, messages[2]];
+    expect(canCompactResultExplanation(withPrelude, 2)).toBe(false);
+    expect(canCompactResultExplanation(withPrelude, 3)).toBe(true);
+  });
+
+  it.each(['pending', 'awaiting_mfa', 'confirmed', 'failed', 'cancelled', 'locked', 'needs_reconciliation'])('keeps %s explanations directly visible', status => {
+    const messages: ChatMessage[] = [
+      { id: 'result', role: 'tool', timestamp: 0, content: '', cards: [
+        { type: 'mfa', actionId: 'a', status },
+        { type: 'receipt', data: { kind: 'investmentRedemption', success: true, amount: '1.07', newBalance: '2.00', occurredAt: 0 } },
+      ] },
+      { id: 'assistant', role: 'assistant', timestamp: 0, content: '请核对当前状态。' },
+    ];
+    expect(canCompactResultExplanation(messages, 1)).toBe(false);
+  });
+
+  it('does not hide mixed failures or uncertain results behind another completed card', () => {
+    const result: ChatMessage = { id: 'result', role: 'tool', timestamp: 0, content: '', cards: [
+      { type: 'mfa', actionId: 'a', status: 'executed' },
+      { type: 'receipt', data: { kind: 'investmentRedemption', success: true, amount: '1.07', newBalance: '2.00', occurredAt: 0 } },
+    ] };
+    const reply: ChatMessage = { id: 'reply', role: 'assistant', timestamp: 0, content: '另一笔操作需要核对。' };
+    expect(canCompactResultExplanation([{ ...result, toolEvents: [{ toolCallId: 'b', toolName: 'transfer_money', status: 'needs_reconciliation' }] }, reply], 1)).toBe(false);
+    expect(canCompactResultExplanation([{ ...result, cards: [...result.cards!, { type: 'error', message: '另一笔失败' }] }, reply], 1)).toBe(false);
+    expect(canCompactResultExplanation([{ id: 'denied', role: 'system', timestamp: 0, content: '安全拦截' }, result, reply], 2)).toBe(false);
   });
 });

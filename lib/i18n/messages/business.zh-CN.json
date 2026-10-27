@@ -1,6 +1,7 @@
 {
   "business.presentation.details": "查看交易详情",
   "business.presentation.resultExplanation": "查看结果说明",
+  "business.presentation.resultInCard": "办理结果见上方卡片。",
   "business.presentation.credited": "到账金额",
   "business.presentation.balanceAfter": "操作后余额",
   "business.presentation.payable": "当前可支付金额",

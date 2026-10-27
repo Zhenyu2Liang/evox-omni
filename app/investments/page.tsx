@@ -26,16 +26,16 @@ export default async function InvestmentsPage() {
         <p className="text-xs text-banking-navy">{t('business.investments.profitScope')}</p>
         <p className="text-xs text-banking-navy">{t('business.investments.disclaimer')}</p>
       </div>
-      <section className="space-y-4" data-investment-products>
-        <h2 className="text-lg font-semibold text-banking-deep">{t('pages.investments.products')}</h2>
-        {products.length === 0 ? <EmptyState title={t('pages.investments.emptyProducts')} description={t('pages.investments.emptyDescription')} /> : (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{products.map(product => <InvestmentProductTile key={product.id} product={product} />)}</div>
-        )}
-      </section>
       <section className="space-y-4" data-investment-holdings>
         <h2 className="text-lg font-semibold text-banking-deep">{t('pages.investments.holdings')}</h2>
         {holdings.length === 0 ? <EmptyState title={t('pages.investments.emptyHoldings')} description={t('pages.investments.emptyDescription')} /> : (
           <div className="grid gap-4 sm:grid-cols-2">{holdings.map(holding => <InvestmentProductTile key={holding.id} product={holding.product} holding={holding} />)}</div>
+        )}
+      </section>
+      <section className="space-y-4" data-investment-products>
+        <h2 className="text-lg font-semibold text-banking-deep">{t('pages.investments.products')}</h2>
+        {products.length === 0 ? <EmptyState title={t('pages.investments.emptyProducts')} description={t('pages.investments.emptyDescription')} /> : (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{products.map(product => <InvestmentProductTile key={product.id} product={product} />)}</div>
         )}
       </section>
     </main>

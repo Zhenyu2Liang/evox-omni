@@ -54,7 +54,11 @@ export function ApprovalRecord({ action, actionId, verification = false, status,
       <h3 className="text-sm font-semibold text-banking-deep">{action ? localizeActionTitle(action.title, t) : t('chat.approval.verification')}</h3>
       <Badge tone={tone}>{t(STATUS_KEYS[current])}</Badge>
     </div>
-    <div className="border-t border-banking-border/60 px-3 pb-2"><ApprovalProgress status={current} requiresMfa={Boolean(verification || action?.requiresMfa)} /></div>
+    {current === 'executed' ? <details data-completed-approval-details className="border-t border-banking-border/60 px-4 py-3">
+      <summary className="cursor-pointer text-xs font-medium text-banking-navy">{t('chat.approval.details')}</summary>
+      <div className="mt-3"><ApprovalProgress status={current} requiresMfa={Boolean(verification || action?.requiresMfa)} /></div>
+      {action && (action.fields.length > 0 || action.amount !== undefined) ? <div className="mt-3"><ActionDetails action={action} /></div> : null}
+    </details> : <div className="border-t border-banking-border/60 px-3 pb-2"><ApprovalProgress status={current} requiresMfa={Boolean(verification || action?.requiresMfa)} /></div>}
     <div className="sr-only">
       <div data-approval-stage="previous" data-stage-status={initial} className="text-banking-navy">
         <span className="mr-1.5">{t('chat.approval.previous')}</span>{t(STATUS_KEYS[initial])}
@@ -64,7 +68,7 @@ export function ApprovalRecord({ action, actionId, verification = false, status,
         <span className="mr-1.5 font-normal text-banking-navy">{t('chat.approval.current')}</span>{t(STATUS_KEYS[current])}
       </div>
     </div>
-    {action && (action.fields.length > 0 || action.amount !== undefined) ? <details className="border-t border-banking-border/60 px-4 py-3">
+    {current !== 'executed' && action && (action.fields.length > 0 || action.amount !== undefined) ? <details className="border-t border-banking-border/60 px-4 py-3">
       <summary className="cursor-pointer text-xs font-medium text-banking-navy">{t('chat.approval.details')}</summary>
       <div className="mt-3"><ActionDetails action={action} /></div>
     </details> : null}

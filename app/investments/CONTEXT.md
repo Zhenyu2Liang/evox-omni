@@ -1,5 +1,7 @@
 # 理财页（/investments）
 
+当前持仓位于产品目录之前。顺序只影响展示，不改变 SDK 的持仓筛选、估值或金额。
+
 ## 职责
 
 - 只有一个文件 `page.tsx`：`/investments` 路由（Next.js 服务端组件，`export const dynamic = 'force-dynamic'`）。

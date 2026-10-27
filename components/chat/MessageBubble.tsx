@@ -21,6 +21,7 @@ export interface MessageBubbleProps {
   message: ChatMessage;
   action?: CardActionHandlers;
   className?: string;
+  compactResultExplanation?: boolean;
 }
 
 /** Outer alignment per role. */
@@ -39,7 +40,7 @@ const BUBBLE: Record<ChatRole, string> = {
   tool: 'bg-banking-light text-banking-navy text-xs rounded-xl',
 };
 
-export function MessageBubble({ message, action, className }: MessageBubbleProps) {
+export function MessageBubble({ message, action, className, compactResultExplanation = false }: MessageBubbleProps) {
   const { t } = useI18n();
   const cards = message.cards ?? [];
   const toolEvents = message.toolEvents ?? [];
@@ -83,7 +84,13 @@ export function MessageBubble({ message, action, className }: MessageBubbleProps
         {hasBody && (
           <>
             {message.content.length > 0 && (message.role === 'assistant' ? (
-              message.financialSummary ? <div data-financial-summary="true" className="space-y-3">
+              compactResultExplanation ? <div data-compact-result-explanation className="space-y-2">
+                <p className="text-sm">{t('business.presentation.resultInCard')}</p>
+                <details data-result-explanation>
+                  <summary className="cursor-pointer text-xs font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.resultExplanation')}</summary>
+                  <div className="mt-3 space-y-3">{message.financialSummary ? <AssistantMarkdown text={message.financialSummary} /> : null}<AssistantMarkdown text={message.content} /></div>
+                </details>
+              </div> : message.financialSummary ? <div data-financial-summary="true" className="space-y-3">
                 <AssistantMarkdown text={message.financialSummary} />
                 <details data-result-explanation className="border-t border-banking-border/60 pt-2">
                   <summary className="cursor-pointer text-xs font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.resultExplanation')}</summary>

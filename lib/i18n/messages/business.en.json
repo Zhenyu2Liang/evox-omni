@@ -1,6 +1,7 @@
 {
   "business.presentation.details": "View transaction details",
   "business.presentation.resultExplanation": "View result explanation",
+  "business.presentation.resultInCard": "See the result card above for details.",
   "business.presentation.credited": "Amount credited",
   "business.presentation.balanceAfter": "Balance after operation",
   "business.presentation.payable": "Payable now",

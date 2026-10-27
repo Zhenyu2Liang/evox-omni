@@ -8,14 +8,14 @@
  * is derived from the analysed month.
  *
  * Composes `@/components` (read-only sibling): charts `SpendingPie`/`SpendingBar`/`SpendingTrend`/
- * `MiniSparkline`, `ui/Table` (ledger), `banking/AnomalyBanner` (flagged spends), `ui/Card`/`ui/Money`/
+ * `ui/Table` (ledger), `banking/AnomalyBanner` (flagged spends), `ui/Card`/`ui/Money`/
  * `ui/EmptyState`. Money is rendered by `ui/Money`; props stay JSON-serializable (epoch ms).
  */
 import { getConfig } from '@/lib/config';
 import { formatDateTime, monthRange } from '@/lib/date';
 import { banking } from '@/banking-sdk';
 import type { AnomalyItem, SpendingAnalysis, TransactionView } from '@/banking-sdk';
-import { AnomalyBanner, Card, EmptyState, MiniSparkline, Money, SpendingBar, SpendingPie, SpendingTrend, Table } from '@/components';
+import { AnomalyBanner, Card, EmptyState, Money, SpendingBar, SpendingPie, SpendingTrend, Table } from '@/components';
 import type { TableColumn } from '@/components';
 import { compareDecimal } from '@/lib/decimal';
 import { formatCNY } from '@/lib/money';
@@ -96,7 +96,6 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
         <Card title={t('pages.bills.categoryAmounts')}><SpendingBar data={analysis.byCategory} height={240} /></Card>
         <Card title={t('pages.bills.sixMonthTrend')} className="lg:col-span-2">
           <SpendingTrend data={analysis.monthlyTrend} height={220} />
-          <MiniSparkline data={analysis.monthlyTrend.map((point) => point.amount)} height={40} className="mt-2" />
         </Card>
       </section>
 

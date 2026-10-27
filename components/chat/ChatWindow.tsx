@@ -24,7 +24,7 @@ import { useAgentStream } from './useAgentStream';
 import { PlanCard, ReconciliationCard } from './cards';
 import { ApprovalRequest } from './ApprovalRequest';
 import { MessageBubble } from './MessageBubble';
-import { presentationMessages } from './presentation-messages';
+import { canCompactResultExplanation, presentationMessages } from './presentation-messages';
 import { isVisibleChatMessage, messageDay, MessageDayDivider } from './message-day';
 import { StreamingText } from './StreamingText';
 import { Composer } from './Composer';
@@ -203,7 +203,7 @@ export function ChatWindow({
               const startsDay = day !== undefined && (index === 0 || day !== messageDay(visibleMessages[index - 1].timestamp));
               return <Fragment key={m.id}>
                 {startsDay ? <MessageDayDivider day={day} /> : null}
-                <MessageBubble message={m} action={action} />
+                <MessageBubble message={m} action={action} compactResultExplanation={canCompactResultExplanation(visibleMessages, index, pending?.actionId)} />
               </Fragment>;
             })}
             {stream.busy && (
