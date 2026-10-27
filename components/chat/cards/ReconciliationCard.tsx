@@ -33,7 +33,7 @@ interface AttentionCopy {
 const COPY: Record<OutOfBandAttention, AttentionCopy> = {
   processing: {
     tone: 'info',
-    bannerClass: 'bg-blue-50 text-banking-accent',
+    bannerClass: 'bg-banking-accent/5 text-banking-accent',
   },
   recoverable: {
     tone: 'warn',

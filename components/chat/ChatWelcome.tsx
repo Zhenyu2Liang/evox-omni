@@ -1,6 +1,7 @@
 'use client';
 
 import { useI18n } from '@/lib/i18n/LocaleProvider';
+import Image from 'next/image';
 
 const SUGGESTIONS = [
   { title: 'chat.suggestion.balance.title', description: 'chat.suggestion.balance.description', prompt: 'chat.suggestion.balance.prompt', symbol: 'balance' },
@@ -23,8 +24,8 @@ export function ChatWelcome({ onSelect, disabled }: { onSelect: (prompt: string)
   const { t } = useI18n();
   return (
     <section className="mx-auto flex w-full max-w-2xl flex-col items-start py-5 sm:py-16">
-      <div aria-hidden="true" className="mb-5 flex h-11 w-11 items-center justify-center rounded-2xl bg-banking-accent/10 text-banking-accent sm:mb-6 sm:h-14 sm:w-14">
-        <svg viewBox="0 0 32 32" fill="none" className="h-8 w-8"><path d="m16 3 3.4 9.6L29 16l-9.6 3.4L16 29l-3.4-9.6L3 16l9.6-3.4L16 3Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" /></svg>
+      <div aria-hidden="true" className="mb-5 flex h-12 w-14 items-center justify-center sm:mb-6 sm:h-14 sm:w-16">
+        <Image src="/brand/rongxu-x.svg" alt="" width={64} height={56} className="h-full w-full object-contain" />
       </div>
       <h2 className="max-w-lg text-3xl font-semibold leading-tight tracking-tight text-banking-deep sm:text-4xl">{t('chat.welcome.title')}</h2>
       <p className="mt-4 max-w-lg text-sm leading-6 text-banking-navy">{t('chat.welcome.description')}</p>

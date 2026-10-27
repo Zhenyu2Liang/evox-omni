@@ -39,7 +39,7 @@ export default async function AgentPage() {
       <header data-chat-page-header className="hidden shrink-0 items-center justify-between gap-4 border-b border-slate-200/70 bg-white/80 px-5 py-4 sm:px-8 lg:flex">
         <div>
           <h1 className="text-base font-semibold tracking-tight text-banking-deep">{t('app.assistant')}</h1>
-          <p className="mt-1 text-xs text-banking-navy">{t('app.assistantDescription')}</p>
+          <p className="mt-1 text-xs text-banking-navy">{t('app.slogan')}</p>
         </div>
         <AssistantHelpButton />
       </header>

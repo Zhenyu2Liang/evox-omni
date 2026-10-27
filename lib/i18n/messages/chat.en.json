@@ -1,5 +1,5 @@
 {
-  "chat.message.assistant": "Banking assistant",
+  "chat.message.assistant": "RONGXU assistant",
   "chat.message.user": "You",
   "chat.message.activity": "Banking activity",
   "chat.approval.confirmation": "Review and approve",
@@ -15,7 +15,7 @@
   "chat.approval.status.cancelled": "Cancelled",
   "chat.approval.status.locked": "Verification locked",
   "chat.approval.status.needs_reconciliation": "Outcome needs reconciliation",
-  "chat.welcome.title": "What can I help you with today?",
+  "chat.welcome.title": "Bring needs together. Put finance in order.",
   "chat.welcome.description": "Ask a question or describe a task. Review the details before approving a banking action.",
   "chat.suggestion.balance.title": "Check balances",
   "chat.suggestion.balance.description": "See the money available in your accounts.",

@@ -98,7 +98,7 @@
 `GET /api/cards/changes` 决定待办 `section[data-card-pending-changes]` 是否出现，服务端不预渲染待办。
 断言前必须等 `span[data-card-add] button`、`span[data-card-refresh] button` 变为可用，否则读到的是水合前的禁用态。
 卡片顺序由服务端投影决定（`lib/db/repositories/card.ts` 按 `id asc`），种子数据顺序为信用卡、借记卡、虚拟卡。
-`/cards` 没有自己的 `metadata`，`<title>` 来自 `app/layout.tsx:10-11` 的 `app.brand`（`银行 AI 助手`）；侧栏与移动端标题用 `app.cards`（`卡片`）。
+`/cards` 没有自己的 `metadata`，`<title>` 来自 `app/layout.tsx` 的 `app.brandTitle`（`融序 RONGXU · EvoX`）；侧栏与移动端标题用 `app.cards`（`卡片`）。
 语言链为 `app/layout.tsx:25` `getServerI18n()` → `LocaleProvider initialLocale` → 组件 `useI18n().t`；`resolveLocale` 只认 Cookie `banking_locale`（`lib/i18n/shared.ts:13`）的 `'en'`，其余一律 `zh-CN`，`Accept-Language` 与 `localStorage` 不参与。
 
 ### 非目录文本（不在 i18n 表里的可见文本）

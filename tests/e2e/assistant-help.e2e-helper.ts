@@ -88,7 +88,7 @@ export async function journeyAssistantHelp(browser: Browser, baseUrl: string, op
     if (await page.locator(guide).isVisible()) throw new Error('Client navigation reopened dismissed help');
     await page.locator('[data-locale-switcher]:visible').selectOption('en');
     await page.getByRole('button', { name: 'Usage help', exact: true }).click();
-    await page.getByRole('heading', { name: 'Start a banking task in your own words', exact: true }).waitFor();
+    await page.getByRole('heading', { name: createTranslator('en')('help.title'), exact: true }).waitFor();
     await page.getByRole('button', { name: 'Close usage help', exact: true }).click();
     await page.locator('[data-locale-switcher]:visible').selectOption('zh-CN');
     if (JSON.stringify(await getJson(`${baseUrl}/api/bills`)) !== ledger) throw new Error('Help changed financial records');

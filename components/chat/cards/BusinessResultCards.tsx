@@ -25,7 +25,7 @@ function ResultIcon({ kind }: { kind: ResultIconKind }) {
 }
 
 function Header({ icon, title, subtitle }: { icon: ReactNode; title: string; subtitle?: string }) {
-  return <div className="flex items-start gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-cyan-50 text-banking-accent">{icon}</span>
+  return <div className="flex items-start gap-3"><span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-banking-accent/5 text-banking-accent">{icon}</span>
     <div><h3 className="font-semibold text-banking-deep">{title}</h3>{subtitle ? <p className="mt-1 text-xs font-normal text-banking-navy/65">{subtitle}</p> : null}</div></div>;
 }
 
@@ -78,7 +78,7 @@ export function BusinessReceiptCard({ data, className }: { data: BusinessReceipt
   const { t } = useI18n();
   if (data.kind === 'budget') {
     return <Card className={className} title={<Header icon={<ResultIcon kind="budget" />} title={t('business.receipt.budget')} subtitle={t('business.receipt.budgetScope')} />}>
-      <div className="rounded-xl bg-cyan-50/60 p-4"><p className="text-sm text-banking-navy/70">{data.name}</p>
+      <div className="rounded-xl bg-banking-accent/5 p-4"><p className="text-sm text-banking-navy/70">{data.name}</p>
         <p className="mt-2 break-all text-2xl font-semibold text-banking-deep"><Money amount={data.amount} /></p></div>
       <dl className="mt-3"><Field label={t('business.receipt.status')}>{t(`business.receipt.budgetStatus.${data.status}`)}</Field>
         {data.purpose ? <Field label={t('business.receipt.purpose')}>{data.purpose}</Field> : null}

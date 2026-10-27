@@ -15,13 +15,13 @@ import { useI18n } from '@/lib/i18n/LocaleProvider';
  * colours the charts are allowed to use.
  */
 export const BANKING_PALETTE = {
-  deep: '#142C36',
-  navy: '#4B6370',
-  accent: '#087F8C',
+  deep: '#373435',
+  navy: '#70666A',
+  accent: '#C8383C',
   success: '#16A34A',
   warn: '#F59E0B',
   danger: '#DC2626',
-  light: '#F6F8F8',
+  light: '#FAF8F7',
 } as const;
 
 /** Ordered series colours, cycled to colour pie slices / multi-series charts. */

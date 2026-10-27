@@ -4,13 +4,13 @@
 @source "../components";
 
 @theme {
-  --color-banking-deep: #142c36;
-  --color-banking-navy: #4b6370;
-  --color-banking-accent: #087f8c;
+  --color-banking-deep: #373435;
+  --color-banking-navy: #70666a;
+  --color-banking-accent: #c8383c;
   --color-banking-success: #16a34a;
   --color-banking-warn: #f59e0b;
   --color-banking-danger: #dc2626;
-  --color-banking-light: #f6f8f8;
+  --color-banking-light: #faf8f7;
   --radius-xl: 1rem;
   --radius-2xl: 1.25rem;
 }
@@ -28,7 +28,7 @@ body {
 }
 
 ::selection {
-  background: #bfe6e5;
+  background: #f4d7d8;
   color: var(--color-banking-deep);
 }
 
@@ -50,7 +50,7 @@ body {
 }
 
 .mobile-navigation::backdrop {
-  background: rgb(20 44 54 / 35%);
+  background: rgb(55 52 53 / 35%);
   backdrop-filter: blur(3px);
 }
 

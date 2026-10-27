@@ -8,7 +8,7 @@ import { DeveloperModeProvider } from '@/lib/developer-mode/DeveloperModeProvide
 
 export async function generateMetadata(): Promise<Metadata> {
   const { t } = await getServerI18n();
-  return { title: t('app.brand'), description: t('app.assistantDescription') };
+  return { title: t('app.brandTitle'), description: t('app.slogan') };
 }
 
 export const viewport: Viewport = {
