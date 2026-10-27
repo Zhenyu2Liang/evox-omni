@@ -24,7 +24,7 @@ export function DeveloperModeRequired({ titleKey = 'app.runs' }: { titleKey?: Me
   const { t } = useI18n();
   const { pending, setEnabled } = useDeveloperMode();
   return (
-    <section className="rounded-2xl border border-banking-border bg-white p-6">
+    <section className="rounded-2xl border border-banking-border bg-banking-surface p-6">
       <h1 className="text-xl font-semibold text-banking-deep">{t(titleKey)}</h1>
       <p className="mt-3 text-sm text-banking-navy">{t('app.developerRequired')}</p>
       <button type="button" disabled={pending} onClick={() => setEnabled(true)} className="mt-5 min-h-11 rounded-xl bg-banking-accent px-4 text-sm font-semibold text-white disabled:opacity-60">{t('app.enableDeveloperMode')}</button>
@@ -103,12 +103,12 @@ export default function DeveloperTools({ onNavigate }: { onNavigate?: () => void
     <>
       {enabled && <div className="mt-2 space-y-1" data-developer-tools="true">
         <button type="button" data-developer-refresh="true" onClick={reloadConversation} className="min-h-11 w-full rounded-xl px-3 text-left text-sm font-medium text-banking-navy hover:bg-banking-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent">{t('app.refreshChat')}</button>
-        <button type="button" data-developer-clear="true" onClick={showReset} className="min-h-11 w-full rounded-xl px-3 text-left text-sm font-medium text-red-700 hover:bg-red-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400">{t('app.clearChat')}</button>
+        <button type="button" data-developer-clear="true" onClick={showReset} className="min-h-11 w-full rounded-xl px-3 text-left text-sm font-medium text-banking-danger hover:bg-red-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-400">{t('app.clearChat')}</button>
       </div>}
-      {mounted && createPortal(<dialog ref={dialogRef} aria-labelledby={dialogTitleId} aria-describedby={dialogDescriptionId} data-developer-reset-dialog="true" onCancel={event => { if (busy) event.preventDefault(); }} className="m-auto w-[min(30rem,calc(100vw-2rem))] rounded-2xl border border-banking-border bg-white p-6 text-banking-deep shadow-xl backdrop:bg-banking-deep/40">
+      {mounted && createPortal(<dialog ref={dialogRef} aria-labelledby={dialogTitleId} aria-describedby={dialogDescriptionId} data-developer-reset-dialog="true" onCancel={event => { if (busy) event.preventDefault(); }} className="m-auto w-[min(30rem,calc(100vw-2rem))] rounded-2xl border border-banking-border bg-banking-surface p-6 text-banking-deep shadow-xl backdrop:bg-banking-ink/40">
         <h2 id={dialogTitleId} className="text-lg font-semibold">{t('app.clearChatTitle')}</h2>
         <p id={dialogDescriptionId} className="mt-3 text-sm leading-6 text-banking-navy">{t('app.clearChatDescription')}</p>
-        {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{error}</p>}
+        {error && <p role="alert" className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-banking-danger">{error}</p>}
         <div className="mt-6 flex justify-end gap-3">
           <button type="button" disabled={busy} onClick={() => dialogRef.current?.close()} className="min-h-11 rounded-xl border border-banking-border px-4 text-sm font-medium disabled:opacity-60">{t('app.cancel')}</button>
           <button type="button" data-developer-confirm-clear="true" disabled={busy || !enabled} onClick={() => void clearConversation()} className="min-h-11 rounded-xl bg-red-700 px-4 text-sm font-semibold text-white disabled:opacity-60">{t(busy ? 'app.clearingChat' : 'app.confirmClearChat')}</button>

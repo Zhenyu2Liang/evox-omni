@@ -14,8 +14,8 @@ export function messageDay(timestamp: number): string | undefined {
 
 export function MessageDayDivider({ day }: { day: string }) {
   return <div data-chat-day={day} className="flex items-center gap-3 py-1">
-    <span aria-hidden="true" className="h-px flex-1 bg-slate-200/70" />
-    <time dateTime={day} className="shrink-0 rounded-full bg-white/80 px-3 py-1 text-[11px] font-medium tabular-nums text-banking-navy">{day}</time>
-    <span aria-hidden="true" className="h-px flex-1 bg-slate-200/70" />
+    <span aria-hidden="true" className="h-px flex-1 bg-banking-border/70" />
+    <time dateTime={day} className="shrink-0 rounded-full bg-banking-surface/80 px-3 py-1 text-[11px] font-medium tabular-nums text-banking-navy">{day}</time>
+    <span aria-hidden="true" className="h-px flex-1 bg-banking-border/70" />
   </div>;
 }

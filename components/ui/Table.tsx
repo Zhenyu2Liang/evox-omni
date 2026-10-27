@@ -29,7 +29,7 @@ const ALIGN_CLASS: Record<'left' | 'right' | 'center', string> = {
 
 export function Table<T>({ columns, rows, rowKey, empty, className }: TableProps<T>) {
   return (
-    <div className={cn('overflow-hidden rounded-2xl border border-banking-light bg-white', className)}>
+    <div className={cn('overflow-hidden rounded-2xl border border-banking-light bg-banking-surface', className)}>
       <table className="w-full text-sm">
         <thead className="bg-banking-light text-banking-navy">
           <tr>

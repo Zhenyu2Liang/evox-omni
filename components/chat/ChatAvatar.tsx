@@ -10,7 +10,7 @@ export function ChatAvatar({ role }: { role: 'assistant' | 'user' }) {
   const clip = `${id}-clip`;
   const assistant = role === 'assistant';
   return <span aria-hidden="true" data-chat-avatar={role}
-    className="mt-5 inline-flex h-7 w-7 shrink-0 overflow-hidden rounded-full ring-2 ring-white shadow-sm sm:h-9 sm:w-9">
+    className="mt-5 inline-flex h-7 w-7 shrink-0 overflow-hidden rounded-full ring-2 ring-banking-surface shadow-sm sm:h-9 sm:w-9">
     <svg viewBox="0 0 48 48" fill="none" className="h-full w-full">
       <defs>
         <linearGradient id={background} x1="4" y1="0" x2="44" y2="48" gradientUnits="userSpaceOnUse">

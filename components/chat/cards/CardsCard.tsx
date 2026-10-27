@@ -71,7 +71,7 @@ export function CardsCard(p: CardsCardProps) {
                   <CardPrimaryAmount card={card} />
                   {p.issuanceActionId ? <IssuedCardNumber actionId={p.issuanceActionId} cardId={card.id} /> : null}
                   <details data-card-details>
-                    <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.cardDetails')}</summary>
+                    <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent-text">{t('business.presentation.cardDetails')}</summary>
                   <div className="mt-3 space-y-3"><dl className="grid gap-2 sm:grid-cols-2">
                     {card.type === 'CREDIT' && card.creditLimit !== undefined ? <ResultMetric label={t('business.cards.limit')}><Money amount={card.creditLimit} /></ResultMetric> : null}
                     {card.type === 'CREDIT' && card.availableLimit !== undefined ? <ResultMetric label={t('business.cards.available')}><Money amount={card.availableLimit} /></ResultMetric> : null}

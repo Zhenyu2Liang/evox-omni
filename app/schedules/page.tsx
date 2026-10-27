@@ -41,7 +41,7 @@ export default function SchedulesPage() {
         <Button loading={busy} onClick={() => void tick()}>{t('tasks.schedules.checkDue')}</Button>
       </div>
     </header>
-    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-red-700">{publicScheduleText(error.text, t, error.fallback)}</p>}
+    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-banking-danger">{publicScheduleText(error.text, t, error.fallback)}</p>}
     <Card title={t('tasks.schedules.notifications')}>
       {inbox?.notifications.length ? <ul className="space-y-3">{inbox.notifications.map(notification => <li key={notification.id}>
         <p>{publicScheduleText(notification.message, t, 'tasks.schedules.emptyNotifications')}</p><p className="text-xs text-banking-navy">{formatDateTime(notification.createdAt)}</p>
@@ -52,7 +52,7 @@ export default function SchedulesPage() {
         <div className="flex justify-between"><span>{task.name}</span><Badge tone={task.status === 'DONE' ? 'success'
           : task.status === 'FAILED' ? 'danger' : task.status === 'AWAITING_CONFIRMATION' ? 'warn' : 'neutral'}>{label(`tasks.schedules.status.${task.status}`, task.status)}</Badge></div>
         <p className="mt-1 text-xs text-banking-navy">{label(`tasks.schedules.kind.${task.kind}`, task.kind)} · {formatDateTime(task.runAt)}</p>
-        {task.dispatchError && <p className="mt-2 text-sm text-red-700">{publicScheduleText(task.dispatchError, t, 'tasks.schedules.dispatchFailed')}</p>}
+        {task.dispatchError && <p className="mt-2 text-sm text-banking-danger">{publicScheduleText(task.dispatchError, t, 'tasks.schedules.dispatchFailed')}</p>}
       </li>)}</ul> : <EmptyState title={t('tasks.schedules.empty')} description={t('tasks.schedules.emptyDescription')} />}
     </Card>
   </main>;

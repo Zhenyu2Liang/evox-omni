@@ -196,7 +196,7 @@ export default async function SecurityPage() {
         {breaker.locked ? (
           <div
             data-lock-reason="CIRCUIT_BREAKER_TRIPPED"
-            className="flex flex-col gap-1 rounded-2xl border border-banking-danger/30 bg-white p-4 text-sm leading-5 text-banking-navy"
+            className="flex flex-col gap-1 rounded-2xl border border-banking-danger/30 bg-banking-surface p-4 text-sm leading-5 text-banking-navy"
           >
             <p className="flex flex-wrap items-center gap-x-3 gap-y-1">
               <span className="font-semibold text-banking-danger">
@@ -233,7 +233,7 @@ export default async function SecurityPage() {
                 key={action.id}
                 data-locked-action-id={action.id}
                 data-locked-action-tool={action.toolName}
-                className="rounded-2xl border border-banking-border bg-white p-4 shadow-xs sm:p-5"
+                className="rounded-2xl border border-banking-border bg-banking-surface p-4 shadow-xs sm:p-5"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <h3 className="font-semibold text-banking-deep">{action.title}</h3>

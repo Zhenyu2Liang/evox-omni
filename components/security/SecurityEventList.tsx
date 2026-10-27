@@ -66,7 +66,7 @@ export function SecurityEventList({ events, emptyText, className }: SecurityEven
           <li
             key={event.id ?? index}
             data-security-event-kind={event.kind}
-            className="rounded-xl border border-banking-border bg-white p-4 shadow-xs"
+            className="rounded-xl border border-banking-border bg-banking-surface p-4 shadow-xs"
           >
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">

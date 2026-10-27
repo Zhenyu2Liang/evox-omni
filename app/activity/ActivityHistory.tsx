@@ -11,7 +11,7 @@ const STATUS_TONES: Record<ActivityStatus, 'info' | 'warn' | 'success' | 'danger
 /** Render only the closed business projection, including on narrow screens. */
 export function ActivityHistory({ entries, t }: { entries: ActivityRecord[]; t: Translator }) {
   if (entries.length === 0) return <EmptyState title={t('pages.activity.emptyTitle')} description={t('pages.activity.emptyDescription')} />;
-  return <ol className="divide-y divide-banking-border/70 overflow-hidden rounded-2xl border border-banking-border bg-white" data-operation-history="true">{entries.map(entry => <li key={entry.id} data-operation-row className="px-4 py-3 sm:px-5">
+  return <ol className="divide-y divide-banking-border/70 overflow-hidden rounded-2xl border border-banking-border bg-banking-surface" data-operation-history="true">{entries.map(entry => <li key={entry.id} data-operation-row className="px-4 py-3 sm:px-5">
     <div className="flex flex-wrap items-start justify-between gap-2">
       <h2 className="text-sm font-semibold text-banking-deep">{t(`pages.activity.type.${entry.type}`)}</h2>
       <Badge tone={STATUS_TONES[entry.status]}>{t(`pages.activity.status.${entry.status}`)}</Badge>

@@ -16,7 +16,7 @@ export function BalanceCard({ data, className }: BalanceCardProps) {
 
   return (
     <ResultCard title={t('cards.balance.title')} className={className} marker="¥">
-      <div className="rounded-xl bg-banking-deep px-4 py-4 text-white">
+      <div className="rounded-xl bg-banking-ink px-4 py-4 text-white">
         <div className="text-xs text-white/70">{t('cards.balance.available')}</div>
         <div className="mt-1 break-words text-2xl font-semibold tracking-tight sm:text-3xl"><Money amount={totalAvailable} /></div>
         <div className="mt-1 text-xs text-white/60">{currency}</div>

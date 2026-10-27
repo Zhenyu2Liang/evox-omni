@@ -20,6 +20,8 @@ color. Each interactive leaf is a client component; the barrel remains neutral.
 ## Invariants
 
 - Chart category series combine teal, apricot, muted purple, rose and sage;
+  Chart text, tracks and empty surfaces use CSS theme variables, so dark mode preserves readable labels.
+  Category series remain identical across appearances and never change the supplied financial values.
   they do not reuse exact risk colours. Donut slices and bars share the same indexed palette.
   Trends use teal with a light
   area fill to the zero baseline. Hovering or focusing a point highlights it in brand red.

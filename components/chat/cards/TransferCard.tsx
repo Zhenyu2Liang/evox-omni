@@ -31,7 +31,7 @@ export function TransferCard({ data, className }: TransferCardProps) {
         <dl><Field label={t('cards.recipient')} value={recipient.name} /></dl>
       </div>
       <details data-receipt-details>
-        <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.details')}</summary>
+        <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent-text">{t('business.presentation.details')}</summary>
       <dl className="mt-3 flex flex-col gap-2">
         <Field label={t('cards.phone')} value={maskPhone(recipient.phone)} />
         {recipient.bank ? <Field label={t('cards.bank')} value={recipient.bank} /> : null}

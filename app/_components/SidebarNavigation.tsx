@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import Image from 'next/image';
+import { BrandMark } from '@/components/ui/BrandMark';
+import ThemeSwitcher from './ThemeSwitcher';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
 import LanguageSwitcher from './LanguageSwitcher';
 import NavigationIcon from './NavigationIcon';
@@ -13,7 +14,7 @@ export function Brand({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n();
   return (
     <Link href="/agent" data-brand-link onClick={onNavigate} className="flex min-w-0 items-center gap-3 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent">
-      <Image data-brand-mark src="/brand/omni-x.svg" alt="" width={44} height={40} className="h-10 w-11 shrink-0 object-contain" />
+      <BrandMark width={44} height={40} className="h-10 w-11 shrink-0 object-contain" />
       <span className="min-w-0">
         <span className="block text-xl font-semibold tracking-[0.08em] text-banking-deep">{t('app.brand')}</span>
         <span className="mt-0.5 block text-[10px] font-semibold tracking-[0.22em] text-banking-navy">{t('app.brandDescription')}</span>
@@ -49,7 +50,7 @@ export default function SidebarNavigation({ pathname, onNavigate }: { pathname: 
           </section>
         ))}
       </nav>
-      <div className="space-y-2 border-t border-banking-border px-5 pt-3"><LanguageSwitcher /><DeveloperModeToggle /></div>
+      <div className="space-y-2 border-t border-banking-border px-5 pt-3"><LanguageSwitcher /><ThemeSwitcher /><DeveloperModeToggle /></div>
       <div className="m-4 rounded-2xl border border-banking-border bg-banking-light p-3.5">
         <p className="flex items-center gap-2 text-xs font-semibold text-banking-deep"><span aria-hidden="true" className="h-2 w-2 rounded-full bg-banking-navy" />{t('app.demoWorkspace')}</p>
         <p className="mt-1.5 text-xs leading-5 text-banking-navy">{t('app.demoDescription')}</p>

@@ -18,7 +18,7 @@ export function AssistantHelpButton() {
   const { t } = useI18n();
   if (!help) return null;
   return <button type="button" data-assistant-help-trigger aria-haspopup="dialog" onClick={help.openHelp}
-    className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-sm font-medium text-banking-interactive hover:bg-banking-neutral hover:text-banking-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent">
+    className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl px-3 text-sm font-medium text-banking-interactive hover:bg-banking-neutral hover:text-banking-accent-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent">
     <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M9.7 9a2.4 2.4 0 0 1 4.6 1c0 1.5-2.3 1.7-2.3 3.3M12 17h.01" /></svg>
     {t('help.open')}
   </button>;
@@ -94,11 +94,11 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
         else if (!event.shiftKey && document.activeElement === last && first) { event.preventDefault(); first.focus(); }
       }}
       onClick={event => { if (event.target === event.currentTarget) dismiss(); }}
-      className="m-auto max-h-[calc(100dvh-1.5rem)] w-[calc(100%-1.5rem)] max-w-3xl overflow-hidden rounded-3xl border border-banking-border bg-white p-0 text-banking-deep shadow-2xl backdrop:bg-banking-deep/35 backdrop:backdrop-blur-sm">
+      className="m-auto max-h-[calc(100dvh-1.5rem)] w-[calc(100%-1.5rem)] max-w-3xl overflow-hidden rounded-3xl border border-banking-border bg-banking-surface p-0 text-banking-deep shadow-2xl backdrop:bg-banking-ink/35 backdrop:backdrop-blur-sm">
       <div className="flex max-h-[calc(100dvh-1.5rem)] flex-col">
         <header className="flex shrink-0 items-start justify-between gap-3 border-b border-banking-border/60 px-5 py-4 sm:px-7">
           <div>
-            <p className="mb-1 text-xs font-semibold text-banking-accent">{t('help.eyebrow')}</p>
+            <p className="mb-1 text-xs font-semibold text-banking-accent-text">{t('help.eyebrow')}</p>
             <h2 id="assistant-guide-title" className="text-xl font-semibold tracking-tight">{t('help.title')}</h2>
             <p id="assistant-guide-description" className="mt-2 text-sm leading-6 text-banking-navy">{t('help.description')}</p>
           </div>
@@ -112,7 +112,7 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
             <h3 id="guide-start-title" className="font-semibold">{t('help.startTitle')}</h3>
             <ol className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
               {(['describe', 'review', 'result'] as const).map((step, index) => <li key={step} className={`rounded-2xl p-3 ${GUIDE_TONES[index]}`}>
-                <span className="mb-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-xs font-semibold text-banking-interactive">{index + 1}</span>
+                <span className="mb-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-banking-surface text-xs font-semibold text-banking-interactive">{index + 1}</span>
                 <p className="font-medium">{t(`help.step.${step}.title`)}</p>
                 <p className="mt-1 text-xs leading-5 text-banking-navy">{t(`help.step.${step}.body`)}</p>
               </li>)}
@@ -140,7 +140,7 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
                 <span>{t(`help.security.${tier}`)}</span>
               </li>)}
             </ul>
-            <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">{t('help.securityResult')}</p>
+            <p className="mt-3 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-banking-warning-label">{t('help.securityResult')}</p>
           </section>
           <aside className="mt-5 rounded-2xl bg-banking-light p-4 text-xs leading-5 text-banking-navy">
             <p className="font-semibold text-banking-deep">{t('help.demoTitle')}</p>

@@ -37,7 +37,7 @@ export function Card({ title, description, footer, padding = 'md', layout = 'def
   return (
     <div
       className={cn(
-        'rounded-2xl bg-white shadow-[0_3px_16px_-10px_rgba(85,64,45,0.16)] ring-1 ring-banking-border overflow-hidden',
+        'rounded-2xl bg-banking-surface shadow-[0_3px_16px_-10px_rgba(85,64,45,0.16)] ring-1 ring-banking-border overflow-hidden',
         layout === 'request' && 'flex min-h-0 flex-1 flex-col',
         className,
       )}

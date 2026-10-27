@@ -1,7 +1,7 @@
 'use client';
 
 import { useI18n } from '@/lib/i18n/LocaleProvider';
-import Image from 'next/image';
+import { BrandMark } from '@/components/ui/BrandMark';
 
 const SUGGESTIONS = [
   { title: 'chat.suggestion.balance.title', description: 'chat.suggestion.balance.description', prompt: 'chat.suggestion.balance.prompt', symbol: 'balance' },
@@ -27,13 +27,13 @@ export function ChatWelcome({ onSelect, disabled }: { onSelect: (prompt: string)
   return (
     <section className="mx-auto flex w-full max-w-2xl flex-col items-start py-5 sm:py-16">
       <div aria-hidden="true" className="mb-5 flex h-12 w-14 items-center justify-center sm:mb-6 sm:h-14 sm:w-16">
-        <Image src="/brand/omni-x.svg" alt="" width={64} height={56} className="h-full w-full object-contain" />
+        <BrandMark width={64} height={56} className="h-full w-full object-contain" />
       </div>
       <h2 className="max-w-lg text-3xl font-semibold leading-tight tracking-tight text-banking-deep sm:text-4xl">{t('chat.welcome.title')}</h2>
       <p className="mt-4 max-w-lg text-sm leading-6 text-banking-navy">{t('chat.welcome.description')}</p>
       <div className="mt-6 grid w-full grid-cols-2 gap-3 sm:mt-8">
         {SUGGESTIONS.map((suggestion, index) => (
-          <button key={suggestion.symbol} type="button" disabled={disabled} onClick={() => onSelect(t(suggestion.prompt))} className="group flex items-center gap-2 rounded-2xl border border-banking-border/80 bg-white p-3 text-left transition hover:border-banking-accent/40 hover:shadow-xs disabled:opacity-50 sm:block sm:p-4">
+          <button key={suggestion.symbol} type="button" disabled={disabled} onClick={() => onSelect(t(suggestion.prompt))} className="group flex items-center gap-2 rounded-2xl border border-banking-border/80 bg-banking-surface p-3 text-left transition hover:border-banking-accent/40 hover:shadow-xs disabled:opacity-50 sm:block sm:p-4">
             <span data-suggestion-icon className={`inline-flex shrink-0 rounded-xl p-1.5 transition group-hover:bg-banking-accent/10 sm:mb-3 sm:p-2 ${ICON_TONES[index]}`}><SuggestionIcon symbol={suggestion.symbol} /></span>
             <span className="block text-xs font-semibold leading-5 text-banking-deep sm:text-sm">{t(suggestion.title)}</span>
             <span className="mt-1 hidden text-xs leading-5 text-banking-navy sm:block">{t(suggestion.description)}</span>

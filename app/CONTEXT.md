@@ -28,6 +28,11 @@ API 校验输入、调用领域模块并序列化结果。
 普通模式隐藏开发者入口。
 开发者偏好不是生产认证。
 语言偏好仅影响界面显示。
+`ThemeSwitcher` 提供浅色、深色和跟随系统，入口位于桌面侧栏与手机导航底部。
+`layout.tsx` 读取 `banking_theme` Cookie，在首次 HTML 中设置 `data-theme`。
+`lib/theme/ThemeProvider.tsx` 更新 Cookie、文档属性与跨标签页状态，不刷新或重建对话。
+`globals.css` 通过 `color-scheme` 和 `light-dark()` 切换颜色，系统主题变化由浏览器处理。
+白色容器使用 `banking-surface`，固定深色底使用 `banking-ink`，不得借用文字色充当容器色。
 
 ## 身份与传输
 

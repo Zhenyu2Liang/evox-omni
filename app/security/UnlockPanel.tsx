@@ -138,7 +138,7 @@ export function UnlockPanel({
       data-unlock-max-attempts={maxAttempts}
       data-unlock-locked-actions={lockedActionCount}
       className={[
-        'flex flex-col gap-3 rounded-2xl border bg-white p-4 shadow-xs sm:p-5',
+        'flex flex-col gap-3 rounded-2xl border bg-banking-surface p-4 shadow-xs sm:p-5',
         locked ? 'border-banking-danger/40' : 'border-banking-light',
         className,
       ]
@@ -164,7 +164,7 @@ export function UnlockPanel({
       ) : null}
 
       <details data-unlock-guidance open={locked || failures > 0} className="rounded-xl border border-banking-border p-3">
-        <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent">{t('security.reset.helpTitle')}</summary>
+        <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent-text">{t('security.reset.helpTitle')}</summary>
         <div className="mt-3 space-y-3">
           <p className="text-sm leading-5 text-banking-navy">{t('pages.security.unlockDescription')}</p>
           {locked ? <p className="text-sm leading-5 text-banking-navy">{t('chat.error.actionLocked')}</p> : null}

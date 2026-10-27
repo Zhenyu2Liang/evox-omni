@@ -14,7 +14,7 @@ interface Envelope<T> { ok: boolean; data?: T; error?: { code: string; message?:
 interface Notice { key: MessageKey; error: boolean; detail?: string }
 
 const AMOUNT_PATTERN = /^\d+(?:\.\d{1,2})?$/;
-const inputClass = 'mt-1 w-full rounded-xl border border-banking-navy/20 bg-white px-3 py-2.5 text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
+const inputClass = 'mt-1 w-full rounded-xl border border-banking-navy/20 bg-banking-surface px-3 py-2.5 text-sm outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
 
 /** Map a spend failure code to its localized message key. */
 function failureKey(code: string | undefined): MessageKey {
@@ -160,7 +160,7 @@ export default function CardConsumeDialog({ card, onClose, onConsumed }: {
     <dialog ref={dialog} data-card-consume-dialog data-card-consume-card-id={card.id} aria-labelledby="card-consume-title" onCancel={event => {
       event.preventDefault();
       if (!busyRef.current) onClose();
-    }} className="m-auto max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-lg overflow-y-auto rounded-2xl border border-banking-navy/10 bg-white p-5 text-banking-deep shadow-xl backdrop:bg-banking-deep/40 sm:p-6">
+    }} className="m-auto max-h-[calc(100dvh_-_2rem)] w-[calc(100%_-_2rem)] max-w-lg overflow-y-auto rounded-2xl border border-banking-navy/10 bg-banking-surface p-5 text-banking-deep shadow-xl backdrop:bg-banking-ink/40 sm:p-6">
       <div className="flex items-start justify-between gap-3">
         <h2 id="card-consume-title" className="text-lg font-semibold">{t('pages.cards.consumeTitle')}</h2>
         <Button variant="ghost" size="sm" disabled={busy} onClick={onClose}>{t('pages.cards.close')}</Button>

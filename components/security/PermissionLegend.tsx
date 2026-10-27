@@ -23,7 +23,7 @@ export function PermissionLegend({ className }: PermissionLegendProps) {
   const { t } = useI18n();
   return (
     <div
-      className={['space-y-3 rounded-2xl border border-banking-border bg-white p-5 shadow-xs', className]
+      className={['space-y-3 rounded-2xl border border-banking-border bg-banking-surface p-5 shadow-xs', className]
         .filter(Boolean)
         .join(' ')}
     >

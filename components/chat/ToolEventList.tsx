@@ -83,7 +83,7 @@ export function ToolEventList({ events, className, compact = false }: ToolEventL
                       {event.tier && (event.status === 'blocked' || developerMode) ? <StatusBadge tier={event.tier} /> : null}
                     </div>
                     {showSummary && summary ? <p className="whitespace-pre-wrap break-words leading-5 text-banking-navy">{summary}</p> : null}
-                    {developerMode && <details data-tool-diagnostics="true" className="mt-2 rounded-lg border border-banking-border bg-white p-2.5">
+                    {developerMode && <details data-tool-diagnostics="true" className="mt-2 rounded-lg border border-banking-border bg-banking-surface p-2.5">
                       <summary className="cursor-pointer select-none font-medium text-banking-navy">{t('chat.diagnostics.title')}</summary>
                       <dl className="mt-3 space-y-2 text-[11px]">
                         <div className="flex flex-wrap justify-between gap-2"><dt>{t('chat.diagnostics.tool')}</dt><dd><code>{event.toolName}</code></dd></div>

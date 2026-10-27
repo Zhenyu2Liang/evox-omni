@@ -15,14 +15,14 @@ import { useI18n } from '@/lib/i18n/LocaleProvider';
  * combine warm and cool supporting colours; categories never borrow success/failure semantics.
  */
 export const BANKING_PALETTE = {
-  deep: '#3E3430',
-  navy: '#786B63',
+  deep: 'var(--color-banking-deep)',
+  navy: 'var(--color-banking-navy)',
   plot: '#5E8988',
   accent: '#C8383C',
   success: '#16A34A',
   warn: '#F59E0B',
   danger: '#B42318',
-  light: '#FBF8F5',
+  light: 'var(--color-banking-light)',
 } as const;
 
 /** Descriptive category colours; separate from brand emphasis and security status colours. */
@@ -173,7 +173,7 @@ export function ChartTooltip(p: ChartTooltipProps) {
   if (!p.active || p.entries.length === 0) return null;
 
   return (
-    <div role="tooltip" className="rounded-lg border border-banking-navy/10 bg-white px-3 py-2 shadow-md">
+    <div role="tooltip" className="rounded-lg border border-banking-navy/10 bg-banking-surface px-3 py-2 shadow-md">
       {p.label !== undefined && p.label !== null && p.label !== '' ? (
         <p className="mb-1 text-xs font-semibold text-banking-deep">{p.label}</p>
       ) : null}

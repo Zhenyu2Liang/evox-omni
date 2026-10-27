@@ -42,7 +42,7 @@ export function AssistantMarkdown({ text, className }: AssistantMarkdownProps) {
           td: ({ children }) => <td className="border-b border-banking-border/60 px-3 py-2 align-top">{children}</td>,
           hr: () => <hr className="my-4 border-banking-border" />,
           a: ({ children, href }) => href
-            ? <a href={href} target="_blank" rel="noopener noreferrer" className="underline decoration-banking-accent/50 underline-offset-2 hover:text-banking-accent">{children}</a>
+            ? <a href={href} target="_blank" rel="noopener noreferrer" className="underline decoration-banking-accent/50 underline-offset-2 hover:text-banking-accent-text">{children}</a>
             : <span>{children}</span>,
           img: ({ alt }) => <span className="text-banking-navy">{alt}</span>,
           input: ({ checked }) => <input type="checkbox" checked={checked ?? false} disabled readOnly className="mr-1 align-middle" />,

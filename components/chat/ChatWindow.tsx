@@ -59,7 +59,7 @@ export function ChatErrorFeedback({ message, code, showNotice = true }: { messag
     {showNotice ? <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm leading-6 text-banking-danger">
       {publicToolError(message, t, 'chat.error.request', code)}
     </div> : null}
-    {developerMode ? <details data-chat-error-diagnostics="true" className="rounded-xl border border-banking-border bg-white p-3 text-xs text-banking-navy">
+    {developerMode ? <details data-chat-error-diagnostics="true" className="rounded-xl border border-banking-border bg-banking-surface p-3 text-xs text-banking-navy">
       <summary>{t('chat.diagnostics.detail')}</summary>
       <pre className="mt-2 whitespace-pre-wrap break-words">{String(sanitizeToolArguments(message))}</pre>
     </details> : null}
@@ -182,7 +182,7 @@ export function ChatWindow({
         <div className="mx-auto w-full max-w-6xl space-y-6">
         {stream.history?.hasMore && <div className="flex flex-col items-center gap-2" data-history-controls="true">
           <button type="button" data-load-history="true" disabled={stream.loadingHistory || stream.historyError === 'chat.history.changed'}
-            onClick={() => void loadEarlier()} className="min-h-11 rounded-xl border border-banking-border bg-white px-4 py-2 text-sm font-medium text-banking-navy disabled:opacity-50">
+            onClick={() => void loadEarlier()} className="min-h-11 rounded-xl border border-banking-border bg-banking-surface px-4 py-2 text-sm font-medium text-banking-navy disabled:opacity-50">
             {t(stream.loadingHistory ? 'chat.history.loading' : stream.historyError === 'chat.history.failed' ? 'chat.history.retry' : 'chat.history.loadEarlier')}
           </button>
           {stream.historyError && <p role="alert" className="text-center text-sm text-banking-danger">{t(stream.historyError)}</p>}
@@ -207,7 +207,7 @@ export function ChatWindow({
               </Fragment>;
             })}
             {stream.busy && (
-              <div role="status" aria-label={t('chat.responding')} className="max-w-[min(88%,52rem)] rounded-2xl border border-banking-border/80 bg-white px-5 py-4 sm:ml-12">
+              <div role="status" aria-label={t('chat.responding')} className="max-w-[min(88%,52rem)] rounded-2xl border border-banking-border/80 bg-banking-surface px-5 py-4 sm:ml-12">
                 <StreamingText text={stream.streamingText} active phase={stream.replyPhase} />
               </div>
             )}
@@ -233,12 +233,12 @@ export function ChatWindow({
       <div data-chat-composer-dock="true" className="shrink-0 border-t border-banking-border/60 bg-banking-light px-3 pb-[max(1rem,env(safe-area-inset-bottom))] pt-3 sm:px-8 sm:pt-4">
         <div className="mx-auto w-full max-w-6xl">
         {!followingLatest && !pending && <button type="button" data-chat-latest="true" onClick={showLatest}
-          className="mb-3 min-h-11 rounded-xl border border-banking-border bg-white px-4 py-2 text-sm font-medium text-banking-interactive">
+          className="mb-3 min-h-11 rounded-xl border border-banking-border bg-banking-surface px-4 py-2 text-sm font-medium text-banking-interactive">
           {t(hasNewMessages ? 'chat.history.newMessages' : 'chat.history.latest')}
         </button>}
         {retryRequest && !pending && stream.pendingReconciliations.length === 0 && (
           <button type="button" disabled={stream.busy || stream.restoring}
-            className="mb-3 rounded-xl border border-banking-border bg-white px-3 py-2 text-sm text-banking-interactive disabled:opacity-50"
+            className="mb-3 rounded-xl border border-banking-border bg-banking-surface px-3 py-2 text-sm text-banking-interactive disabled:opacity-50"
             onClick={() => send(retryRequest)}>{t('chat.retryPlanning')}</button>
         )}
         {pending && <ApprovalRequest key={pending.actionId} pending={pending} action={action} busy={stream.busy}

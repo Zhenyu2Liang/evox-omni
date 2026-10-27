@@ -92,7 +92,7 @@ export function BusinessReceiptCard({ data, className }: { data: BusinessReceipt
       <Badge tone={data.success ? 'success' : 'danger'}>{t(data.success ? 'cards.success' : 'cards.failed')}</Badge></div>
     {data.remainingShares === undefined ? null : <dl className="mt-2"><Field label={t('business.presentation.remainingShares')}>{formatDecimalFixed(data.remainingShares, 6)} {t('business.investments.units.shares')}</Field></dl>}
     <details data-receipt-details className="mt-3 border-t border-banking-light pt-3">
-      <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.details')}</summary>
+      <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent-text">{t('business.presentation.details')}</summary>
       <dl className="mt-2"><Field label={t('business.presentation.balanceAfter')}><Money amount={data.newBalance} /></Field>
       <Field label={t('business.receipt.time')}>{formatDateTime(data.occurredAt)}</Field>
       {data.redeemedShares === undefined ? null : <Field label={t('business.presentation.redeemedShares')}>{formatDecimalFixed(data.redeemedShares, 6)} {t('business.investments.units.shares')}</Field>}

@@ -38,7 +38,7 @@ export function CircuitBreakerStatus({
   return (
     <div
       className={[
-        'rounded-2xl border bg-white p-5 shadow-xs',
+        'rounded-2xl border bg-banking-surface p-5 shadow-xs',
         tripped ? 'border-banking-danger/40' : 'border-banking-border',
         className,
       ]

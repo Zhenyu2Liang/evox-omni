@@ -49,7 +49,7 @@ export function ApprovalRecord({ action, actionId, verification = false, status,
   const tone = current === 'executed' ? 'success' : ['failed', 'locked'].includes(current) ? 'danger'
     : current === 'cancelled' ? 'neutral' : 'warn';
   return <section data-approval-history="true" data-action-id={actionId} data-status={current}
-    className={`overflow-hidden rounded-xl border border-banking-border bg-white ${className ?? ''}`}>
+    className={`overflow-hidden rounded-xl border border-banking-border bg-banking-surface ${className ?? ''}`}>
     <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
       <h3 className="text-sm font-semibold text-banking-deep">{action ? localizeActionTitle(action.title, t) : t('chat.approval.verification')}</h3>
       <Badge tone={tone}>{t(STATUS_KEYS[current])}</Badge>

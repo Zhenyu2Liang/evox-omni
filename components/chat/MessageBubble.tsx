@@ -34,8 +34,8 @@ const ALIGN: Record<ChatRole, string> = {
 
 /** Inner bubble styling per role. */
 const BUBBLE: Record<ChatRole, string> = {
-  user: 'bg-banking-deep text-white rounded-2xl rounded-br-md',
-  assistant: 'bg-white text-banking-deep border border-banking-border/80 rounded-2xl rounded-tl-md shadow-xs',
+  user: 'bg-banking-ink text-white rounded-2xl rounded-br-md',
+  assistant: 'bg-banking-surface text-banking-deep border border-banking-border/80 rounded-2xl rounded-tl-md shadow-xs',
   system: 'bg-banking-light text-banking-navy text-center text-xs rounded-xl',
   tool: 'bg-banking-light text-banking-navy text-xs rounded-xl',
 };
@@ -67,7 +67,7 @@ export function MessageBubble({ message, action, className, compactResultExplana
       className={`min-w-0 w-[94%] space-y-3 sm:ml-12 ${singleBankCard ? 'max-w-[28rem] sm:w-full' : 'max-w-[52rem] sm:w-[86%]'} ${className ?? ''}`.trim()}>
       <p className="text-[11px] font-medium tracking-wide text-banking-navy">{t('chat.message.activity')}</p>
       <ToolEventList events={toolEvents} compact={cards.length > 0} />
-      {groupedResult ? <div data-operation-record className="overflow-hidden rounded-2xl border border-banking-border bg-white [&_[data-approval-history]]:rounded-none [&_[data-approval-history]]:border-0 [&>[data-chat-card-type]+[data-chat-card-type]]:border-t [&>[data-chat-card-type]+[data-chat-card-type]]:border-banking-border/60 [&>[data-chat-card-type]>div]:rounded-none [&>[data-chat-card-type]>div]:shadow-none [&>[data-chat-card-type]>div]:ring-0">
+      {groupedResult ? <div data-operation-record className="overflow-hidden rounded-2xl border border-banking-border bg-banking-surface [&_[data-approval-history]]:rounded-none [&_[data-approval-history]]:border-0 [&>[data-chat-card-type]+[data-chat-card-type]]:border-t [&>[data-chat-card-type]+[data-chat-card-type]]:border-banking-border/60 [&>[data-chat-card-type]>div]:rounded-none [&>[data-chat-card-type]>div]:shadow-none [&>[data-chat-card-type]>div]:ring-0">
         {renderedCards}
       </div> : renderedCards}
     </div>
@@ -87,13 +87,13 @@ export function MessageBubble({ message, action, className, compactResultExplana
               compactResultExplanation ? <div data-compact-result-explanation className="space-y-2">
                 <p className="text-sm">{t('business.presentation.resultInCard')}</p>
                 <details data-result-explanation>
-                  <summary className="cursor-pointer text-xs font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.resultExplanation')}</summary>
+                  <summary className="cursor-pointer text-xs font-medium text-banking-interactive hover:text-banking-accent-text">{t('business.presentation.resultExplanation')}</summary>
                   <div className="mt-3 space-y-3">{message.financialSummary ? <AssistantMarkdown text={message.financialSummary} /> : null}<AssistantMarkdown text={message.content} /></div>
                 </details>
               </div> : message.financialSummary ? <div data-financial-summary="true" className="space-y-3">
                 <AssistantMarkdown text={message.financialSummary} />
                 <details data-result-explanation className="border-t border-banking-border/60 pt-2">
-                  <summary className="cursor-pointer text-xs font-medium text-banking-interactive hover:text-banking-accent">{t('business.presentation.resultExplanation')}</summary>
+                  <summary className="cursor-pointer text-xs font-medium text-banking-interactive hover:text-banking-accent-text">{t('business.presentation.resultExplanation')}</summary>
                   <div className="mt-3"><AssistantMarkdown text={message.content} /></div>
                 </details>
               </div> : <AssistantMarkdown text={message.content} />
