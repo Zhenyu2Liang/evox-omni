@@ -32,7 +32,7 @@ import { journeyDeveloperMode } from './developer-mode.e2e-helper';
 import { journeyMultiCardFreeze } from './card-freeze.e2e-helper';
 import { journeyChatLayout } from './chat-layout.e2e-helper';
 import { journeyAssistantHelp } from './assistant-help.e2e-helper';
-import { journeyRongxuBrand } from './rongxu-brand.e2e-helper';
+import { journeyOmniBrand } from './omni-brand.e2e-helper';
 import { journeyCharcoalSecurity } from './charcoal-security.e2e-helper';
 import { journeyBankingPages } from './banking-pages.e2e-helper';
 import { journeyResultPriority } from './result-priority.e2e-helper';
@@ -797,7 +797,7 @@ interface Journey {
 const JOURNEYS: readonly Journey[] = [
   { name: 'current-assets-and-compact-results', run: journeyResultPriority },
   { name: 'charcoal-and-security-state', run: journeyCharcoalSecurity },
-  { name: 'rongxu-brand-and-responsive-pages', run: journeyRongxuBrand },
+  { name: 'omni-brand-and-responsive-pages', run: journeyOmniBrand },
   { name: 'assistant-help-first-visit-and-reopening', run: journeyAssistantHelp },
   { name: 'chat-layout-and-date-separators', run: journeyChatLayout },
   { name: 'chat-history-pagination-and-scroll', run: journeyChatHistory },

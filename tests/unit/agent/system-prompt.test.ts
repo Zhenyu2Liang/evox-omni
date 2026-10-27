@@ -55,10 +55,10 @@ describe('system prompt policy catalog alignment', () => {
 });
 
 describe('system prompt forbids a fabricated confirmation/verification panel', () => {
-  it('identifies the assistant as Rongxu while retaining its financial evidence rules', () => {
+  it('identifies the assistant as Omni while retaining its financial evidence rules', () => {
     const prompt = promptFor(['get_balance']);
-    expect(prompt).toContain('融序 (RONGXU)');
-    expect(prompt).toContain('When introducing yourself, use 融序 or RONGXU');
+    expect(prompt).toContain('万象柜坊 (EvoX Omni)');
+    expect(prompt).toContain('When introducing yourself, use 万象柜坊 or EvoX Omni');
     expect(prompt).toContain(HALLUCINATION_RULE);
   });
   it('ties a real gate to a parked controlled-write tool result and forbids claiming one without it', () => {

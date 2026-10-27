@@ -12,7 +12,7 @@ export function bankingBaseUrl(value: string): string {
   const url = new URL(value);
   if (!['http:', 'https:'].includes(url.protocol) || !['localhost', '127.0.0.1', '[::1]'].includes(url.hostname) ||
       url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('WEIXIN_BANKING_URL 必须指向本机融序服务，例如 http://127.0.0.1:3000。');
+    throw new Error('WEIXIN_BANKING_URL 必须指向本机万象柜坊服务，例如 http://127.0.0.1:3000。');
   }
   return url.origin;
 }

@@ -13,7 +13,7 @@ export function Brand({ onNavigate }: { onNavigate?: () => void }) {
   const { t } = useI18n();
   return (
     <Link href="/agent" data-brand-link onClick={onNavigate} className="flex min-w-0 items-center gap-3 rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent">
-      <Image data-brand-mark src="/brand/rongxu-x.svg" alt="" width={44} height={40} className="h-10 w-11 shrink-0 object-contain" />
+      <Image data-brand-mark src="/brand/omni-x.svg" alt="" width={44} height={40} className="h-10 w-11 shrink-0 object-contain" />
       <span className="min-w-0">
         <span className="block text-xl font-semibold tracking-[0.08em] text-banking-deep">{t('app.brand')}</span>
         <span className="mt-0.5 block text-[10px] font-medium tracking-[0.22em] text-banking-navy">{t('app.brandDescription')}</span>

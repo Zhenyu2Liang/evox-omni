@@ -11,6 +11,12 @@
 | `messages/` | 应用框架、对话、业务与页面文案的中英文对照目录 |
 | `display.ts` | 静态元数据与策略值的翻译，以及调用详情字段来源判断 |
 
+## 品牌文字
+
+`app.brand` 为“万象柜坊”，`app.brandDescription` 为“EvoX Omni”。
+`app.slogan` 和 `chat.welcome.title` 使用“一坊通万象，一语办万事。”。
+中英文目录、帮助标题与助手标签使用同一品牌名称。
+
 ## 投资标签
 
 `business.investments.*` 提供投资业务的中英文标签，语义如下：

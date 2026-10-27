@@ -27,7 +27,7 @@ export function ChatWelcome({ onSelect, disabled }: { onSelect: (prompt: string)
   return (
     <section className="mx-auto flex w-full max-w-2xl flex-col items-start py-5 sm:py-16">
       <div aria-hidden="true" className="mb-5 flex h-12 w-14 items-center justify-center sm:mb-6 sm:h-14 sm:w-16">
-        <Image src="/brand/rongxu-x.svg" alt="" width={64} height={56} className="h-full w-full object-contain" />
+        <Image src="/brand/omni-x.svg" alt="" width={64} height={56} className="h-full w-full object-contain" />
       </div>
       <h2 className="max-w-lg text-3xl font-semibold leading-tight tracking-tight text-banking-deep sm:text-4xl">{t('chat.welcome.title')}</h2>
       <p className="mt-4 max-w-lg text-sm leading-6 text-banking-navy">{t('chat.welcome.description')}</p>

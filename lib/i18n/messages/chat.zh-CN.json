@@ -1,5 +1,5 @@
 {
-  "chat.message.assistant": "融序助手",
+  "chat.message.assistant": "万象柜坊助手",
   "chat.message.user": "你",
   "chat.message.activity": "业务操作",
   "chat.approval.confirmation": "请核对并确认",
@@ -15,7 +15,7 @@
   "chat.approval.status.cancelled": "已取消",
   "chat.approval.status.locked": "验证已锁定",
   "chat.approval.status.needs_reconciliation": "结果待核对",
-  "chat.welcome.title": "融万象之需，序金融之事。",
+  "chat.welcome.title": "一坊通万象，一语办万事。",
   "chat.welcome.description": "输入问题或描述需求。办理银行业务前，先核对详情再确认。",
   "chat.suggestion.balance.title": "查询余额",
   "chat.suggestion.balance.description": "查看各账户的可用余额。",

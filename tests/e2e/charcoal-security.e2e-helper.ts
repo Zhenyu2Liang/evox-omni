@@ -51,7 +51,7 @@ export async function journeyCharcoalSecurity(browser: Browser, baseUrl: string,
       await submitChat(page, '你叫什么名字？请用一句话介绍自己。');
       await waitFor(async () => await page.locator(SELECTORS.composer).isEnabled() && (await assistantTexts(page)).length > before, { timeoutMs: 120000, description: 'The real assistant introduces itself' });
       const introduction = (await assistantTexts(page)).slice(before).join('\n');
-      if (!/融序|RONGXU/i.test(introduction)) throw new Error('The real model did not introduce the Rongxu identity');
+      if (!/万象柜坊|EvoX Omni/i.test(introduction)) throw new Error('The real model did not introduce the Omni identity');
     }
     await submitChat(page, '给张伟转3000元');
     await waitForMfaCard(page, 120000);
