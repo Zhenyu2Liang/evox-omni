@@ -98,7 +98,7 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
       <div className="flex max-h-[calc(100dvh-1.5rem)] flex-col">
         <header className="flex shrink-0 items-start justify-between gap-3 border-b border-banking-border/60 px-5 py-4 sm:px-7">
           <div>
-            <p className="mb-1 text-xs font-medium text-banking-accent">{t('help.eyebrow')}</p>
+            <p className="mb-1 text-xs font-semibold text-banking-accent">{t('help.eyebrow')}</p>
             <h2 id="assistant-guide-title" className="text-xl font-semibold tracking-tight">{t('help.title')}</h2>
             <p id="assistant-guide-description" className="mt-2 text-sm leading-6 text-banking-navy">{t('help.description')}</p>
           </div>
