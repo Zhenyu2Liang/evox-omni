@@ -88,7 +88,7 @@ export default function ContactManager({ initialContacts }: { initialContacts: C
   return (
     <main className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <header>
-        <h1 className="text-2xl font-semibold text-banking-deep">{t('pages.contacts.title')}</h1>
+        <h1 className="bank-page-heading text-2xl font-semibold text-banking-deep">{t('pages.contacts.title')}</h1>
         <p className="mt-1 text-sm text-banking-navy">{t('pages.contacts.summary', { count: contacts.length })}</p>
       </header>
       {notice ? <p role={notice.error ? 'alert' : 'status'} className={`rounded-xl border p-3 text-sm ${notice.error ? 'border-banking-danger/20 bg-red-50 text-banking-danger' : 'border-banking-success/20 bg-green-50 text-banking-success'}`}>{t(notice.key)}</p> : null}

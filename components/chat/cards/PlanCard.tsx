@@ -128,7 +128,7 @@ export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
         <AgentTaskTimeline plan={plan} results={plan.results} />
         {plan.status === 'cancelled' && plan.results.some(result => result.status === 'success' &&
           ['reserve_budget', 'create_scheduled_task'].includes(result.tool ?? '')) &&
-          <p className="text-sm text-gray-600">{t('cards.plan.rollbackBoundary')}</p>}
+          <p className="text-sm text-banking-navy">{t('cards.plan.rollbackBoundary')}</p>}
         {plan.results.some(result => result.compensation) && <section aria-label={t('cards.plan.rollbackLabel')} className="space-y-2">
           <h4 className="text-sm font-semibold">{t('cards.plan.rollbackTitle')}</h4>
           {plan.results.filter(result => result.compensation).map(result => <p key={result.id} className="text-sm">
@@ -137,12 +137,12 @@ export function PlanCard({ plan, onControl, busy, className }: PlanCardProps) {
         </section>}
 
         <section className="space-y-2">
-          <h4 className="text-xs font-semibold uppercase tracking-wide text-gray-500">{t('cards.plan.dependencies')}</h4>
+          <h4 className="text-xs font-semibold uppercase tracking-wide text-banking-navy">{t('cards.plan.dependencies')}</h4>
           <ul className="space-y-1.5">
             {plan.nodes.map((node) => (
               <li key={node.id} className="flex flex-wrap items-baseline gap-x-2 text-sm">
                 <span className="font-medium text-banking-deep">{localizeToolLabel(node.name, t)}</span>
-                <span className="text-xs text-gray-500">{dependencyLabel(node, nameById, t)}</span>
+                <span className="text-xs text-banking-navy">{dependencyLabel(node, nameById, t)}</span>
               </li>
             ))}
           </ul>

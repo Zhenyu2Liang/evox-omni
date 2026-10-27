@@ -183,7 +183,7 @@ export default function CardManager({ initialCards }: { initialCards: CardView[]
   return (
     <main className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <header className="flex flex-wrap items-start justify-between gap-3">
-        <div><h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.cards.title')}</h1><p className="mt-1 text-sm text-banking-navy">{t('pages.cards.summary', { count: cards.length })}</p></div>
+        <div><h1 className="bank-page-heading text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.cards.title')}</h1><p className="mt-1 text-sm text-banking-navy">{t('pages.cards.summary', { count: cards.length })}</p></div>
         <div className="flex flex-wrap gap-2"><span data-card-refresh><Button variant="secondary" loading={refreshing} disabled={busy} onClick={() => { setNotice(null); void refresh(); }}>{t('pages.cards.refresh')}</Button></span><span data-card-add><Button disabled={disabled} onClick={() => open({ kind: 'add' })}>{t('pages.cards.add')}</Button></span></div>
       </header>
       <p className="rounded-xl bg-banking-light p-4 text-sm leading-6 text-banking-navy">{t('pages.cards.demoDescription')}</p>

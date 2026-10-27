@@ -23,14 +23,14 @@ export function PermissionLegend({ className }: PermissionLegendProps) {
   const { t } = useI18n();
   return (
     <div
-      className={['space-y-3 rounded-2xl border border-slate-200 bg-white p-5 shadow-xs', className]
+      className={['space-y-3 rounded-2xl border border-banking-border bg-white p-5 shadow-xs', className]
         .filter(Boolean)
         .join(' ')}
     >
       {TIERS.map((tier) => (
         <div key={tier} className="flex items-start gap-3">
           <StatusBadge tier={tier} />
-          <p className="text-sm leading-5 text-slate-600">{t(TIER_DESCRIPTION[tier])}</p>
+          <p className="text-sm leading-5 text-banking-navy">{t(TIER_DESCRIPTION[tier])}</p>
         </div>
       ))}
     </div>

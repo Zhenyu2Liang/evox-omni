@@ -35,7 +35,7 @@ export default function SchedulesPage() {
 
   return <main className="mx-auto w-full min-w-0 max-w-6xl space-y-6 p-4 sm:p-6 lg:p-8">
     <header className="space-y-3">
-      <h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('tasks.schedules.title')}</h1>
+      <h1 className="bank-page-heading text-2xl font-semibold tracking-tight text-banking-deep">{t('tasks.schedules.title')}</h1>
       <p className="text-sm text-banking-navy">{t('tasks.schedules.description')}</p>
       <div className="flex flex-wrap gap-3">
         <Button loading={busy} onClick={() => void tick()}>{t('tasks.schedules.checkDue')}</Button>

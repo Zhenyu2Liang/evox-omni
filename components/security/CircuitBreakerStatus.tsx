@@ -39,7 +39,7 @@ export function CircuitBreakerStatus({
     <div
       className={[
         'rounded-2xl border bg-white p-5 shadow-xs',
-        tripped ? 'border-banking-danger/40' : 'border-slate-200',
+        tripped ? 'border-banking-danger/40' : 'border-banking-border',
         className,
       ]
         .filter(Boolean)
@@ -52,15 +52,15 @@ export function CircuitBreakerStatus({
             {t(tripped ? 'security.breaker.locked' : 'security.breaker.normal')}
           </span>
         </div>
-        <span className="text-xs text-slate-500">{t('security.breaker.title')}</span>
+        <span className="text-xs text-banking-navy">{t('security.breaker.title')}</span>
       </div>
 
-      <p className="mt-2 text-sm leading-5 text-slate-600">
+      <p className="mt-2 text-sm leading-5 text-banking-navy">
         {t(tripped ? 'security.breaker.lockedDescription' : 'security.breaker.normalDescription')}
       </p>
 
       <div className="mt-4">
-        <div className="flex items-center justify-between text-xs text-slate-500">
+        <div className="flex items-center justify-between text-xs text-banking-navy">
           <span>{t('security.breaker.failures')}</span>
           <span>
             {t('security.breaker.failureCount', { count: failureCount, max: safeMaxAttempts })}

@@ -28,8 +28,8 @@ const SIZE_CLASSES: Record<NonNullable<ButtonProps['size']>, string> = {
 };
 
 const VARIANT_CLASSES: Record<NonNullable<ButtonProps['variant']>, string> = {
-  primary: 'bg-banking-accent text-white hover:bg-banking-deep',
-  secondary: 'bg-banking-light text-banking-navy hover:bg-gray-200',
+  primary: 'bg-banking-accent text-white hover:bg-banking-accent-hover',
+  secondary: 'bg-banking-light text-banking-navy hover:bg-banking-subtle',
   ghost: 'bg-transparent text-banking-navy hover:bg-banking-light',
   danger: 'bg-banking-danger text-white hover:bg-red-700',
 };

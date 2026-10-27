@@ -113,7 +113,7 @@ export function AnomalyCard({ data, onAcknowledge, onViewDetail, onFreeze, class
               <Button variant="ghost" size="sm" onClick={() => { setExpanded(anomaly.transaction.id); onViewDetail?.(); }}>
                 {t('cards.anomaly.details')}
               </Button>
-              <select aria-label={t('cards.anomaly.selectCard')} value={selectedCard} onChange={event => setSelectedCard(event.target.value)} className="rounded-sm border border-slate-200 px-2 text-xs">
+              <select aria-label={t('cards.anomaly.selectCard')} value={selectedCard} onChange={event => setSelectedCard(event.target.value)} className="rounded-sm border border-banking-border px-2 text-xs">
                 <option value="">{t('cards.anomaly.selectCard')}</option>
                 {(data.cards ?? []).map(card => <option key={card.id} value={card.id}>{card.type} {card.numberMasked}</option>)}
               </select>

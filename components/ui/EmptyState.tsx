@@ -21,12 +21,12 @@ export function EmptyState({ title, description, icon, action, className }: Empt
       )}
     >
       {icon ? (
-        <div className="text-3xl text-gray-400" aria-hidden="true">
+        <div className="text-3xl text-banking-navy/60" aria-hidden="true">
           {icon}
         </div>
       ) : null}
       <div className="text-banking-navy font-semibold">{title}</div>
-      {description ? <p className="text-sm text-gray-500">{description}</p> : null}
+      {description ? <p className="text-sm text-banking-navy">{description}</p> : null}
       {action ? <div className="mt-1">{action}</div> : null}
     </div>
   );

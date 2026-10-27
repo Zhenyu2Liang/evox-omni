@@ -24,7 +24,7 @@ const TAB_BASE_CLASSES =
 
 const TAB_ACTIVE_CLASSES = 'border-banking-accent font-semibold text-banking-navy';
 
-const TAB_INACTIVE_CLASSES = 'text-gray-500 hover:text-banking-navy';
+const TAB_INACTIVE_CLASSES = 'text-banking-navy hover:text-banking-navy';
 
 export function Tabs({ tabs, active, onChange, className }: TabsProps) {
   return (

@@ -84,7 +84,7 @@ export function RunHistory() {
     <header className="flex items-start justify-between gap-4">
       <div><h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('runs.title')}</h1>
         <p className="mt-1 text-sm text-banking-navy">{t('runs.description')}</p></div>
-      <button className="rounded-sm border border-slate-200 px-3 py-2 text-sm" disabled={busy} onClick={() => void loadRuns()}>{t('tasks.approvals.refresh')}</button>
+      <button className="rounded-sm border border-banking-border px-3 py-2 text-sm" disabled={busy} onClick={() => void loadRuns()}>{t('tasks.approvals.refresh')}</button>
     </header>
     {error && <p role="alert" className="rounded-sm bg-red-50 p-3 text-sm text-red-800">{label(error, error)}</p>}
     {notice && <p role="status" className="rounded-sm bg-banking-neutral p-3 text-sm">{notice}</p>}
@@ -92,14 +92,14 @@ export function RunHistory() {
       <section className="flex flex-col gap-2" aria-label={t('runs.list')}>
         {runs.length === 0 && <p className="text-sm">{t('runs.empty')}</p>}
         {runs.map(run => <button key={run.id} disabled={busy} onClick={() => void inspect(run.id)}
-          className={`rounded-lg border p-3 text-left ${selected === run.id ? 'border-banking-accent bg-banking-neutral' : 'border-slate-200 bg-white'}`}>
+          className={`rounded-lg border p-3 text-left ${selected === run.id ? 'border-banking-accent bg-banking-neutral' : 'border-banking-border bg-white'}`}>
           <span className="block font-medium">{label(`runs.status.${run.status}`, run.status)}</span>
           <time className="block text-xs">{new Date(run.startedAt).toLocaleString(locale)}</time>
           <span className="block text-xs">{t('runs.count', { calls: run._count.invocations, events: run.nextSequence })}</span>
           <span className="block truncate font-mono text-xs">{run.id}</span>
         </button>)}
       </section>
-      <section className="min-w-0 rounded-lg border border-slate-200 bg-white p-4" aria-label={t('runs.details')}>
+      <section className="min-w-0 rounded-lg border border-banking-border bg-white p-4" aria-label={t('runs.details')}>
         {!detail ? <p className="text-sm">{t('runs.select')}</p> : <>
           <div className="mb-4 flex items-center justify-between gap-3">
             <div><h2 className="font-semibold">{label(`runs.status.${detail.status}`, detail.status)}</h2><p className="font-mono text-xs">{detail.id}</p></div>
@@ -115,12 +115,12 @@ export function RunHistory() {
           </table></div>
           <h3 className="mb-2 mt-5 font-semibold">{t('runs.events')}</h3>
           <ol className="max-h-96 space-y-2 overflow-auto font-mono text-xs">
-            {events.map(event => <li key={event.id} className="rounded-sm bg-slate-50 p-2">
+            {events.map(event => <li key={event.id} className="rounded-sm bg-banking-light p-2">
               <span className="font-semibold">#{event.sequence} {event.eventType}</span>
               <pre className="mt-1 whitespace-pre-wrap break-words">{JSON.stringify(event.payload, null, 2)}</pre>
             </li>)}
           </ol>
-          <button disabled={busy} onClick={() => void loadMore()} className="mt-3 rounded-sm border border-slate-200 px-3 py-2 text-sm">
+          <button disabled={busy} onClick={() => void loadMore()} className="mt-3 rounded-sm border border-banking-border px-3 py-2 text-sm">
             {t(hasMore ? 'runs.loadMore' : 'runs.checkNew')}
           </button>
         </>}

@@ -37,7 +37,7 @@ export function Card({ title, description, footer, padding = 'md', layout = 'def
   return (
     <div
       className={cn(
-        'rounded-2xl bg-white shadow-[0_3px_16px_-10px_rgba(51,75,95,0.16)] ring-1 ring-banking-navy/10 overflow-hidden',
+        'rounded-2xl bg-white shadow-[0_3px_16px_-10px_rgba(85,64,45,0.16)] ring-1 ring-banking-border overflow-hidden',
         layout === 'request' && 'flex min-h-0 flex-1 flex-col',
         className,
       )}
@@ -46,7 +46,7 @@ export function Card({ title, description, footer, padding = 'md', layout = 'def
         <div className={cn('border-b border-banking-light', layout === 'request' && 'shrink-0', pad)}>
           {hasTitle ? <div className="text-banking-navy font-semibold">{title}</div> : null}
           {hasDescription ? (
-            <div className={cn('text-sm text-gray-500', hasTitle && 'mt-1')}>{description}</div>
+            <div className={cn('text-sm text-banking-navy', hasTitle && 'mt-1')}>{description}</div>
           ) : null}
         </div>
       ) : null}
@@ -54,7 +54,7 @@ export function Card({ title, description, footer, padding = 'md', layout = 'def
       <div className={cn(pad, layout === 'request' && 'min-h-0 overflow-y-auto overscroll-contain')}>{children}</div>
 
       {footer !== undefined ? (
-        <div className={cn('border-t border-banking-light bg-banking-light/40 text-sm text-gray-600', layout === 'request' && 'shrink-0', pad)}>
+        <div className={cn('border-t border-banking-light bg-banking-light/40 text-sm text-banking-navy', layout === 'request' && 'shrink-0', pad)}>
           {footer}
         </div>
       ) : null}

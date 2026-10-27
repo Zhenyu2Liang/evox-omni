@@ -66,16 +66,16 @@ export function SecurityEventList({ events, emptyText, className }: SecurityEven
           <li
             key={event.id ?? index}
             data-security-event-kind={event.kind}
-            className="rounded-xl border border-slate-200 bg-white p-4 shadow-xs"
+            className="rounded-xl border border-banking-border bg-white p-4 shadow-xs"
           >
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <Badge tone={SEVERITY_TONE[event.severity]}>{t(SEVERITY_LABEL[event.severity])}</Badge>
                 <span className="text-sm font-medium text-banking-deep">{kindLabel}</span>
               </div>
-              <time className="text-xs text-slate-500">{formatTimestamp(event.timestamp, locale)}</time>
+              <time className="text-xs text-banking-navy">{formatTimestamp(event.timestamp, locale)}</time>
             </div>
-            <p className="mt-2 text-sm leading-5 text-slate-600">{publicMessage(event.message, kindLabel)}</p>
+            <p className="mt-2 text-sm leading-5 text-banking-navy">{publicMessage(event.message, kindLabel)}</p>
           </li>
         );
       })}

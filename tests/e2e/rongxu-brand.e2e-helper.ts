@@ -26,9 +26,18 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
     await captureScreenshot(page, 'rongxu-brand-guide');
     await page.getByRole('button', { name: t('help.close'), exact: true }).click();
 
-    for (const route of ['overview', 'cards', 'investments', 'bills']) {
+    const businessRoutes = ['overview', 'cards', 'investments', 'bills', 'subscriptions', 'contacts', 'schedules', 'activity', 'security'];
+    for (const route of businessRoutes) {
       await page.goto(`${baseUrl}/${route}`, { waitUntil: 'networkidle' });
       if (await page.title() !== t('app.brandTitle')) throw new Error(`Brand metadata differs on ${route}`);
+      if (await page.locator('main h1').evaluate(el => getComputedStyle(el).color) !== 'rgb(62, 52, 48)') throw new Error(`The heading is not warm neutral on ${route}`);
+      if (route === 'overview' || route === 'investments') {
+        const primaryLink = page.locator('main a[href="/agent"]').first();
+        if (await primaryLink.evaluate(el => getComputedStyle(el).backgroundColor) !== 'rgb(200, 56, 60)') throw new Error(`Primary action differs on ${route}`);
+        await primaryLink.hover();
+        await waitFor(async () => await primaryLink.evaluate(el => getComputedStyle(el).backgroundColor) === 'rgb(166, 47, 52)', { description: 'Primary action retains warm red on hover' });
+        await page.mouse.move(0, 0);
+      }
       if (route === 'cards') {
         const faceColours = await page.locator('[data-bank-card-face]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundImage));
         if (faceColours.length < 3 || new Set(faceColours).size < 3) throw new Error('Card types are not visually distinct');
@@ -38,7 +47,9 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
         const slices = page.getByRole('group', { name: t('chart.shares'), exact: true }).locator('circle[tabindex]');
         const fills = await bars.locator('rect').evaluateAll(nodes => nodes.map(node => node.getAttribute('fill')));
         const strokes = await slices.evaluateAll(nodes => nodes.map(node => node.getAttribute('stroke')));
-        if (fills[0] !== '#CB5A4A' || fills.join() !== strokes.join()) throw new Error('Warm category colours differ between the donut and bars');
+        if (fills[0] !== '#D8A15F' || fills.join() !== strokes.join()) throw new Error('Warm category colours differ between the donut and bars');
+        if (await page.locator('main .tabular-nums').first().evaluate(el => getComputedStyle(el).color) !== 'rgb(62, 52, 48)') throw new Error('The monthly spending total still uses red emphasis');
+        if (await page.getByRole('group', { name: t('chart.trend'), exact: true }).locator('polyline').getAttribute('stroke') !== '#AE8C60') throw new Error('The trend still uses red emphasis');
         const firstBar = bars.first();
         const exactLabel = await firstBar.getAttribute('aria-label');
         await firstBar.focus();
@@ -62,6 +73,11 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
       await page.goto(`${baseUrl}/bills`, { waitUntil: 'networkidle' });
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error(`Warm bill charts overflow at ${width}px`);
       await captureScreenshot(page, `rongxu-bills-mobile-${width}`);
+      for (const route of businessRoutes.filter(route => route !== 'cards' && route !== 'bills')) {
+        await page.goto(`${baseUrl}/${route}`, { waitUntil: 'networkidle' });
+        if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error(`${route} overflows at ${width}px`);
+        await captureScreenshot(page, `rongxu-${route}-mobile-${width}`);
+      }
     }
     await page.setViewportSize({ width: 1440, height: 960 });
     await gotoAgent(page, baseUrl);

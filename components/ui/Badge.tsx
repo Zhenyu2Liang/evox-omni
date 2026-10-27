@@ -13,7 +13,7 @@ function cn(...parts: Array<string | false | null | undefined>): string {
 
 /** Semantic colour families for each badge tone (banking palette + neutral chrome). */
 const TONE: Record<NonNullable<BadgeProps['tone']>, string> = {
-  neutral: 'bg-gray-100 text-gray-700',
+  neutral: 'bg-banking-subtle text-banking-navy',
   info: 'bg-banking-neutral text-banking-interactive',
   success: 'bg-green-50 text-banking-success',
   warn: 'bg-amber-50 text-banking-warn',

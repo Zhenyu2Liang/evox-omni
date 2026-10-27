@@ -48,10 +48,10 @@ export function Table<T>({ columns, rows, rowKey, empty, className }: TableProps
             ))}
           </tr>
         </thead>
-        <tbody className="text-gray-700">
+        <tbody className="text-banking-deep">
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={columns.length} className="px-4 py-8 text-center text-gray-500">
+              <td colSpan={columns.length} className="px-4 py-8 text-center text-banking-navy">
                 {empty ?? <LocaleText messageKey="ui.noData" />}
               </td>
             </tr>

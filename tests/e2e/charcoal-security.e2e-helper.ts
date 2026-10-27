@@ -21,8 +21,8 @@ export async function journeyCharcoalSecurity(browser: Browser, baseUrl: string,
     await page.setViewportSize({ width: 1440, height: 960 });
     await gotoAgent(page, baseUrl);
     const activeLink = page.locator('aside a[aria-current="page"]');
-    if (await activeLink.evaluate(el => getComputedStyle(el).color) !== 'rgb(75, 102, 122)') throw new Error('Normal navigation is still red');
-    if (await page.locator('[data-assistant-help-trigger]:visible').evaluate(el => getComputedStyle(el).color) !== 'rgb(75, 102, 122)') throw new Error('The help entry is still red');
+    if (await activeLink.evaluate(el => getComputedStyle(el).color) !== 'rgb(119, 87, 75)') throw new Error('Normal navigation does not use warm neutral text');
+    if (await page.locator('[data-assistant-help-trigger]:visible').evaluate(el => getComputedStyle(el).color) !== 'rgb(119, 87, 75)') throw new Error('The help entry does not use warm neutral text');
     await captureScreenshot(page, 'charcoal-assistant');
     await page.goto(`${baseUrl}/security`, { waitUntil: 'networkidle' });
     await assertNormal(page);
@@ -30,7 +30,7 @@ export async function journeyCharcoalSecurity(browser: Browser, baseUrl: string,
     await page.goto(`${baseUrl}/bills`, { waitUntil: 'networkidle' });
     const bars = page.getByRole('group', { name: t('chart.categories'), exact: true });
     const bar = bars.locator('g[role="img"]').first();
-    if (await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) !== 'rgb(203, 90, 74)') throw new Error('The first bar does not use the warm series colour');
+    if (await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) !== 'rgb(216, 161, 95)') throw new Error('The first bar does not use the warm series colour');
     await bar.focus();
     await waitFor(async () => await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) === 'rgb(200, 56, 60)', { description: 'Keyboard focus highlights only the selected bar in brand red' });
     await bar.press('Tab');

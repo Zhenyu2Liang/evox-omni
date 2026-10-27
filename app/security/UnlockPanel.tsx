@@ -163,7 +163,7 @@ export function UnlockPanel({
         </p>
       ) : null}
 
-      <details data-unlock-guidance open={locked || failures > 0} className="rounded-xl border border-slate-200 p-3">
+      <details data-unlock-guidance open={locked || failures > 0} className="rounded-xl border border-banking-border p-3">
         <summary className="cursor-pointer text-sm font-medium text-banking-interactive hover:text-banking-accent">{t('security.reset.helpTitle')}</summary>
         <div className="mt-3 space-y-3">
           <p className="text-sm leading-5 text-banking-navy">{t('pages.security.unlockDescription')}</p>

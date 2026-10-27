@@ -47,7 +47,7 @@ export default function ManualPage() {
   const { enabled, pending, setEnabled } = useDeveloperMode();
   if (enabled) return <ManualReviewInboxPage />;
   return <main className="mx-auto w-full min-w-0 max-w-6xl p-4 sm:p-6 lg:p-8">
-    <section className="rounded-2xl border border-slate-200 bg-white p-6">
+    <section className="rounded-2xl border border-banking-border bg-white p-6">
       <h1 className="text-xl font-semibold text-banking-deep">{t('tasks.manual.title')}</h1>
       <p className="mt-3 text-sm text-banking-navy">{t('tasks.manual.developerRequired')}</p>
       <button type="button" disabled={pending} onClick={() => setEnabled(true)} className="mt-5 min-h-11 rounded-xl bg-banking-accent px-4 text-sm font-semibold text-white disabled:opacity-60">{t('app.enableDeveloperMode')}</button>

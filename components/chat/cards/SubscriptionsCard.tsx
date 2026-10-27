@@ -28,7 +28,7 @@ export function SubscriptionsCard(p: SubscriptionsCardProps) {
       ) : (
         <ul className="grid gap-3 sm:grid-cols-2">
           {p.data.map((subscription) => (
-            <li key={subscription.id} className="min-w-0 rounded-xl border border-banking-light bg-slate-50/60 p-3.5">
+            <li key={subscription.id} className="min-w-0 rounded-xl border border-banking-light bg-banking-light/60 p-3.5">
               <div className="flex items-start justify-between gap-2">
                 <span className="min-w-0 break-words text-sm font-semibold text-banking-deep">{subscription.name}</span>
                 <Badge className="shrink-0" tone={subscription.status === 'ACTIVE' ? 'success' : 'neutral'}>

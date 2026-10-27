@@ -173,7 +173,7 @@ export default async function SecurityPage() {
   return (
     <main className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <header>
-        <h1 className="text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.security.title')}</h1>
+        <h1 className="bank-page-heading text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.security.title')}</h1>
         <p className="mt-1 text-sm text-banking-navy">
           {t('pages.security.summary', { lock: t(breaker.locked ? 'pages.security.lockEnabled' : 'pages.security.lockInactive'), count: events.length })}
         </p>
@@ -233,7 +233,7 @@ export default async function SecurityPage() {
                 key={action.id}
                 data-locked-action-id={action.id}
                 data-locked-action-tool={action.toolName}
-                className="rounded-2xl border border-slate-200 bg-white p-4 shadow-xs sm:p-5"
+                className="rounded-2xl border border-banking-border bg-white p-4 shadow-xs sm:p-5"
               >
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <h3 className="font-semibold text-banking-deep">{action.title}</h3>
@@ -246,7 +246,7 @@ export default async function SecurityPage() {
                     {action.fields.map((field, index) => (
                       <div key={`${index}:${field.label}`}>
                         <dt className="text-banking-navy">{field.label}</dt>
-                        <dd className="mt-1 text-gray-700">{field.value}</dd>
+                        <dd className="mt-1 text-banking-deep">{field.value}</dd>
                       </div>
                     ))}
                   </dl>

@@ -16,12 +16,12 @@ export default async function InvestmentsPage() {
     <main className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold text-banking-deep">{t('pages.investments.title')}</h1>
+          <h1 className="bank-page-heading text-2xl font-semibold text-banking-deep">{t('pages.investments.title')}</h1>
           <p className="mt-1 text-sm text-banking-navy">{t('pages.investments.summary', { products: products.length, holdings: holdings.length })}</p>
         </div>
-        <Link href="/agent" className="rounded-xl bg-banking-deep px-4 py-2 text-sm font-medium text-white hover:bg-banking-interactive">{t('pages.investments.manage')}</Link>
+        <Link href="/agent" className="rounded-xl bg-banking-accent px-4 py-2 text-sm font-medium text-white hover:bg-banking-accent-hover">{t('pages.investments.manage')}</Link>
       </header>
-      <div className="space-y-2 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-banking-navy">
+      <div className="space-y-2 rounded-2xl border border-banking-border bg-white p-4 text-sm text-banking-navy">
         <p>{t('pages.investments.description')}</p>
         <p className="text-xs text-banking-navy/60">{t('business.investments.profitScope')}</p>
         <p className="text-xs text-banking-navy/60">{t('business.investments.disclaimer')}</p>

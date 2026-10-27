@@ -15,9 +15,9 @@ import { useI18n } from '@/lib/i18n/LocaleProvider';
  * use warm supporting colours; categories never borrow success/failure semantics.
  */
 export const BANKING_PALETTE = {
-  deep: '#293B49',
-  navy: '#877267',
-  plot: '#CB5A4A',
+  deep: '#3E3430',
+  navy: '#786B63',
+  plot: '#AE8C60',
   accent: '#C8383C',
   success: '#16A34A',
   warn: '#F59E0B',
@@ -27,8 +27,8 @@ export const BANKING_PALETTE = {
 
 /** Descriptive category colours; separate from brand emphasis and security status colours. */
 export const SERIES_COLORS: readonly string[] = [
-  '#CB5A4A', '#E49A55', '#D5B269', '#B96964', '#E8B997',
-  '#A67B63', '#E7A3A0', '#BE9467', '#B58D84', '#D5C2A4',
+  '#D8A15F', '#C6AB6D', '#BF7766', '#B59485', '#E7BE95',
+  '#A48865', '#D7ABAB', '#B4AA87', '#C6B7A0', '#DABFAE',
 ];
 
 /** Deterministic slice/series colour for a given index (wraps, tolerates negatives). */

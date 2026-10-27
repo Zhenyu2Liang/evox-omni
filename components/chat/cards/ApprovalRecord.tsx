@@ -49,12 +49,12 @@ export function ApprovalRecord({ action, actionId, verification = false, status,
   const tone = current === 'executed' ? 'success' : ['failed', 'locked'].includes(current) ? 'danger'
     : current === 'cancelled' ? 'neutral' : 'warn';
   return <section data-approval-history="true" data-action-id={actionId} data-status={current}
-    className={`overflow-hidden rounded-xl border border-slate-200 bg-white ${className ?? ''}`}>
+    className={`overflow-hidden rounded-xl border border-banking-border bg-white ${className ?? ''}`}>
     <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3">
       <h3 className="text-sm font-semibold text-banking-deep">{action ? localizeActionTitle(action.title, t) : t('chat.approval.verification')}</h3>
       <Badge tone={tone}>{t(STATUS_KEYS[current])}</Badge>
     </div>
-    <div className="border-t border-slate-100 px-3 pb-2"><ApprovalProgress status={current} requiresMfa={Boolean(verification || action?.requiresMfa)} /></div>
+    <div className="border-t border-banking-border/60 px-3 pb-2"><ApprovalProgress status={current} requiresMfa={Boolean(verification || action?.requiresMfa)} /></div>
     <div className="sr-only">
       <div data-approval-stage="previous" data-stage-status={initial} className="text-banking-navy/70">
         <span className="mr-1.5">{t('chat.approval.previous')}</span>{t(STATUS_KEYS[initial])}
@@ -64,7 +64,7 @@ export function ApprovalRecord({ action, actionId, verification = false, status,
         <span className="mr-1.5 font-normal text-banking-navy/70">{t('chat.approval.current')}</span>{t(STATUS_KEYS[current])}
       </div>
     </div>
-    {action && (action.fields.length > 0 || action.amount !== undefined) ? <details className="border-t border-slate-100 px-4 py-3">
+    {action && (action.fields.length > 0 || action.amount !== undefined) ? <details className="border-t border-banking-border/60 px-4 py-3">
       <summary className="cursor-pointer text-xs font-medium text-banking-navy">{t('chat.approval.details')}</summary>
       <div className="mt-3"><ActionDetails action={action} /></div>
     </details> : null}

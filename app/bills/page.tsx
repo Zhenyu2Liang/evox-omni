@@ -62,7 +62,7 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
     <main className="mx-auto flex w-full min-w-0 max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="border-l-4 border-banking-accent pl-3 text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.bills.title')}</h1>
+          <h1 className="bank-page-heading text-2xl font-semibold tracking-tight text-banking-deep">{t('pages.bills.title')}</h1>
           <p className="mt-1 text-sm text-banking-navy">
             {t('pages.bills.summary', { month: analysis.month, transactions: transactions.length, anomalies: anomalies.length, total: formatCNY(analysis.total) })}
           </p>
@@ -75,8 +75,8 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
       </header>
 
       <section className="grid gap-4 sm:grid-cols-3">
-        <Card title={t('pages.bills.bookedSpending')} className="border-t-2 border-banking-accent/70">
-          <Money amount={analysis.total} className="text-2xl font-semibold text-banking-accent" />
+        <Card title={t('pages.bills.bookedSpending')}>
+          <Money amount={analysis.total} className="text-2xl font-semibold text-banking-deep" />
           <p className="mt-1 text-xs text-banking-navy">
             {t('pages.bills.monthComparison', { change: `${compareDecimal(analysis.momChangePct, '0') > 0 ? '+' : ''}${analysis.momChangePct}`, total: formatCNY(analysis.prevTotal) })}
           </p>
@@ -92,9 +92,9 @@ export default async function BillsPage({ searchParams }: BillsPageProps) {
       </section>
 
       <section className="grid gap-6 lg:grid-cols-2">
-        <Card title={<span className="border-l-2 border-banking-accent/70 pl-2.5">{t('pages.bills.categoryShare')}</span>}><SpendingPie data={analysis.byCategory} height={240} /></Card>
-        <Card title={<span className="border-l-2 border-banking-accent/70 pl-2.5">{t('pages.bills.categoryAmounts')}</span>}><SpendingBar data={analysis.byCategory} height={240} /></Card>
-        <Card title={<span className="border-l-2 border-banking-accent/70 pl-2.5">{t('pages.bills.sixMonthTrend')}</span>} className="lg:col-span-2">
+        <Card title={t('pages.bills.categoryShare')}><SpendingPie data={analysis.byCategory} height={240} /></Card>
+        <Card title={t('pages.bills.categoryAmounts')}><SpendingBar data={analysis.byCategory} height={240} /></Card>
+        <Card title={t('pages.bills.sixMonthTrend')} className="lg:col-span-2">
           <SpendingTrend data={analysis.monthlyTrend} height={220} />
           <MiniSparkline data={analysis.monthlyTrend.map((point) => point.amount)} height={40} className="mt-2" />
         </Card>

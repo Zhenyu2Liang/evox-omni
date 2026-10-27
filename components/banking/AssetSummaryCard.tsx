@@ -38,7 +38,7 @@ function AssetStat({ label, amount, className, estimated }: AssetStatProps) {
   return (
     <div className={cls}>
       <span className="text-sm text-banking-navy/70">{label}</span>
-      <span className="text-xl font-semibold text-banking-navy">
+      <span className="text-xl font-semibold text-banking-deep">
         {estimated ? <DecimalMoney amount={amount} /> : <Money amount={amount} />}
       </span>
     </div>

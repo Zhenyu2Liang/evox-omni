@@ -39,21 +39,21 @@ Playwright 选择器只能依赖可见文本、原生元素、`role` 与 class�
 千分位分组，符号取**原值**符号，故 `-¥0.00` 只可能来自这里，`formatCNY` 不会产生。
 
 `Card`（`Card.tsx:31-62`）根元素 `<div>`，class
-`rounded-2xl bg-white shadow-xs ring-1 ring-black/5 overflow-hidden`；
+`rounded-2xl bg-white shadow-[0_3px_16px_-10px_rgba(85,64,45,0.16)] ring-1 ring-banking-border overflow-hidden`；
 `layout='request'` 时追加 `flex min-h-0 flex-1 flex-col`，最后接调用方 `className`。无 `role`、无 `data-*`。
 头部 `<div>` 仅在 `title !== undefined || description !== undefined` 时存在（`border-b border-banking-light` + 内边距）；
 `title` → `<div className="text-banking-navy font-semibold">`，是内部 `<div>`，不是标题级元素，也没有 `title` 属性；
-`description` → `<div className="text-sm text-gray-500">`（有标题时追加 `mt-1`）；
+`description` → `<div className="text-sm text-banking-navy">`（有标题时追加 `mt-1`）；
 `title=""` 会渲染空标题并保留头部边框与 `mt-1` 判定。
 正文 `<div className="<pad> [min-h-0 overflow-y-auto overscroll-contain]">`；
-`footer` → `<div className="border-t border-banking-light bg-banking-light/40 text-sm text-gray-600 <pad>">`，
+`footer` → `<div className="border-t border-banking-light bg-banking-light/40 text-sm text-banking-navy <pad>">`，
 仅当 `footer !== undefined` 时渲染；`footer={null}` 仍渲染一个空的页脚框。
 `padding` 默认 `'md'`：`none: p-0`、`sm: p-3`、`md: p-5`、`lg: p-7`，同时作用于头部、主体、页脚。
 
 `Badge`（`Badge.tsx:27-38`）是
 `<span className="inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium <TONE> <className>">`，
 无 `role`、无 `data-*`。`tone` 默认 `neutral`：
-`neutral: bg-gray-100 text-gray-700`、`info: bg-blue-50 text-banking-accent`、
+`neutral: bg-banking-subtle text-banking-navy`、`info: bg-banking-neutral text-banking-interactive`、
 `success: bg-green-50 text-banking-success`、`warn: bg-amber-50 text-banking-warn`、
 `danger: bg-red-50 text-banking-danger`。
 `StatusBadge` 只是把 tier 映射成 tone 后渲染 `Badge`，DOM 形态相同。
@@ -114,7 +114,7 @@ e2e 只能按可见文本或结构定位。
   并设置 `aria-busy="true"`；可见文本始终等于 `children`。
 - `EmptyState` 根节点是 `div.flex.flex-col.items-center.justify-center.rounded-2xl.border.border-dashed`；
   `title` 渲染在没有角色语义的 `div`（`text-banking-navy font-semibold`），
-  `description` 渲染为 `<p class="text-sm text-gray-500">`。
+  `description` 渲染为 `<p class="text-sm text-banking-navy">`。
   标题不是 `h1`/`h2`，`getByRole('heading')` 定位不到。
   `description`/`icon`/`action` 为假值时不渲染该节点。
 - `Money` 渲染单个 `span.tabular-nums`，文本就是 `lib/money.ts#formatCNY` 的输出

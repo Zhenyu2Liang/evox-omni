@@ -91,16 +91,16 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
         else if (!event.shiftKey && document.activeElement === last && first) { event.preventDefault(); first.focus(); }
       }}
       onClick={event => { if (event.target === event.currentTarget) dismiss(); }}
-      className="m-auto max-h-[calc(100dvh-1.5rem)] w-[calc(100%-1.5rem)] max-w-3xl overflow-hidden rounded-3xl border border-slate-200 bg-white p-0 text-banking-deep shadow-2xl backdrop:bg-slate-950/35 backdrop:backdrop-blur-sm">
+      className="m-auto max-h-[calc(100dvh-1.5rem)] w-[calc(100%-1.5rem)] max-w-3xl overflow-hidden rounded-3xl border border-banking-border bg-white p-0 text-banking-deep shadow-2xl backdrop:bg-banking-deep/35 backdrop:backdrop-blur-sm">
       <div className="flex max-h-[calc(100dvh-1.5rem)] flex-col">
-        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 px-5 py-4 sm:px-7">
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-banking-border/60 px-5 py-4 sm:px-7">
           <div>
             <p className="mb-1 text-xs font-medium text-banking-accent">{t('help.eyebrow')}</p>
             <h2 id="assistant-guide-title" className="text-xl font-semibold tracking-tight">{t('help.title')}</h2>
             <p id="assistant-guide-description" className="mt-2 text-sm leading-6 text-banking-navy">{t('help.description')}</p>
           </div>
           <button type="button" autoFocus aria-label={t('help.close')} onClick={dismiss}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-banking-navy hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent">
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-banking-navy hover:bg-banking-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent">
             <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="m6 6 12 12M18 6 6 18" /></svg>
           </button>
         </header>
@@ -119,7 +119,7 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
             <h3 id="guide-features-title" className="font-semibold">{t('help.featuresTitle')}</h3>
             <p className="mt-1 text-xs leading-5 text-banking-navy">{t(canSelect ? 'help.exampleHint' : 'help.examplesUnavailable')}</p>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              {FEATURES.map(feature => <article key={feature} className="flex flex-col rounded-2xl border border-slate-200/80 p-4">
+              {FEATURES.map(feature => <article key={feature} className="flex flex-col rounded-2xl border border-banking-border/80 p-4">
                 <h4 className="text-sm font-semibold">{t(`help.feature.${feature}.title`)}</h4>
                 <p className="mt-1.5 flex-1 text-xs leading-5 text-banking-navy">{t(`help.feature.${feature}.body`)}</p>
                 <button type="button" data-help-example={feature} disabled={!canSelect} onClick={() => selectExample(t(`help.feature.${feature}.example`))}
@@ -144,7 +144,7 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
             <p className="mt-1">{t('help.demoBody')}</p>
           </aside>
         </div>
-        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-4 sm:px-7">
+        <footer className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-banking-border/60 px-5 py-4 sm:px-7">
           <p className="text-xs leading-5 text-banking-navy">{t('help.reopenHint')}</p>
           <button type="button" onClick={begin} className="min-h-11 rounded-xl bg-banking-accent px-5 py-2 text-sm font-medium text-white hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-banking-accent">{t('help.begin')}</button>
         </footer>
