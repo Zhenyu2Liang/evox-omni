@@ -12,12 +12,12 @@ import { useI18n } from '@/lib/i18n/LocaleProvider';
  * chart files reuse one source of truth instead of copy-pasting palette/tooltip logic.
  *
  * Brand and status colours mirror the CSS theme in `app/globals.css`. Chart labels and series
- * use warm supporting colours; categories never borrow success/failure semantics.
+ * combine warm and cool supporting colours; categories never borrow success/failure semantics.
  */
 export const BANKING_PALETTE = {
   deep: '#3E3430',
   navy: '#786B63',
-  plot: '#AE8C60',
+  plot: '#5E8988',
   accent: '#C8383C',
   success: '#16A34A',
   warn: '#F59E0B',
@@ -27,8 +27,8 @@ export const BANKING_PALETTE = {
 
 /** Descriptive category colours; separate from brand emphasis and security status colours. */
 export const SERIES_COLORS: readonly string[] = [
-  '#D8A15F', '#C6AB6D', '#BF7766', '#B59485', '#E7BE95',
-  '#A48865', '#D7ABAB', '#B4AA87', '#C6B7A0', '#DABFAE',
+  '#6F9E9A', '#D5A069', '#A294B5', '#C68D87', '#9DAF91',
+  '#8CABC0', '#CAB680', '#AD9984', '#B5A7BF', '#D7B79F',
 ];
 
 /** Deterministic slice/series colour for a given index (wraps, tolerates negatives). */

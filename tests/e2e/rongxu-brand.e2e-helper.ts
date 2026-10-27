@@ -47,9 +47,9 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
         const slices = page.getByRole('group', { name: t('chart.shares'), exact: true }).locator('circle[tabindex]');
         const fills = await bars.locator('rect').evaluateAll(nodes => nodes.map(node => node.getAttribute('fill')));
         const strokes = await slices.evaluateAll(nodes => nodes.map(node => node.getAttribute('stroke')));
-        if (fills[0] !== '#D8A15F' || fills.join() !== strokes.join()) throw new Error('Warm category colours differ between the donut and bars');
+        if (fills[0] !== '#6F9E9A' || fills.join() !== strokes.join()) throw new Error('Category colours differ between the donut and bars');
         if (await page.locator('main .tabular-nums').first().evaluate(el => getComputedStyle(el).color) !== 'rgb(62, 52, 48)') throw new Error('The monthly spending total still uses red emphasis');
-        if (await page.getByRole('group', { name: t('chart.trend'), exact: true }).locator('polyline').getAttribute('stroke') !== '#AE8C60') throw new Error('The trend still uses red emphasis');
+        if (await page.getByRole('group', { name: t('chart.trend'), exact: true }).locator('polyline').getAttribute('stroke') !== '#5E8988') throw new Error('The trend does not use the contrasting teal');
         const firstBar = bars.first();
         const exactLabel = await firstBar.getAttribute('aria-label');
         await firstBar.focus();

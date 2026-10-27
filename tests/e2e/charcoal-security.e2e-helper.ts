@@ -30,7 +30,7 @@ export async function journeyCharcoalSecurity(browser: Browser, baseUrl: string,
     await page.goto(`${baseUrl}/bills`, { waitUntil: 'networkidle' });
     const bars = page.getByRole('group', { name: t('chart.categories'), exact: true });
     const bar = bars.locator('g[role="img"]').first();
-    if (await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) !== 'rgb(216, 161, 95)') throw new Error('The first bar does not use the warm series colour');
+    if (await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) !== 'rgb(111, 158, 154)') throw new Error('The first bar does not use the teal series colour');
     await bar.focus();
     await waitFor(async () => await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) === 'rgb(200, 56, 60)', { description: 'Keyboard focus highlights only the selected bar in brand red' });
     await bar.press('Tab');
