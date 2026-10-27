@@ -31,6 +31,18 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
       await page.goto(`${baseUrl}/${route}`, { waitUntil: 'networkidle' });
       if (await page.title() !== t('app.brandTitle')) throw new Error(`Brand metadata differs on ${route}`);
       if (await page.locator('main h1').evaluate(el => getComputedStyle(el).color) !== 'rgb(62, 52, 48)') throw new Error(`The heading is not warm neutral on ${route}`);
+      if (route === 'overview') {
+        const statColours = await page.locator('[data-asset-stat]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundColor));
+        if (statColours.length !== 4 || new Set(statColours).size !== 4) throw new Error('Asset panels have lost their distinct supporting colours');
+      }
+      if (route === 'subscriptions') {
+        const summaryColours = await page.locator('[data-subscription-summary] > div').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundColor));
+        if (summaryColours.length !== 3 || new Set(summaryColours).size !== 3) throw new Error('Subscription summary panels have lost their distinct supporting colours');
+      }
+      if (route === 'contacts') {
+        const avatarColours = await page.locator('[data-contact-avatar]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundColor));
+        if (new Set(avatarColours).size < 2) throw new Error('Contact avatars still use one uniform background');
+      }
       if (route === 'overview' || route === 'investments') {
         const primaryLink = page.locator('main a[href="/agent"]').first();
         if (await primaryLink.evaluate(el => getComputedStyle(el).backgroundColor) !== 'rgb(200, 56, 60)') throw new Error(`Primary action differs on ${route}`);

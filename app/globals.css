@@ -16,6 +16,14 @@
   --color-banking-warn: #f59e0b;
   --color-banking-danger: #b42318;
   --color-banking-light: #fbf8f5;
+  --color-banking-teal: #476e6d;
+  --color-banking-teal-soft: #edf5f3;
+  --color-banking-blue: #4f6d83;
+  --color-banking-blue-soft: #eef4f8;
+  --color-banking-lilac: #71647f;
+  --color-banking-lilac-soft: #f3f0f7;
+  --color-banking-apricot: #8b623d;
+  --color-banking-apricot-soft: #faf1e6;
   --radius-xl: 1rem;
   --radius-2xl: 1.25rem;
 }
@@ -43,13 +51,13 @@ body {
 }
 
 .bank-card-face[data-bank-card-face="DEBIT"] {
-  background: linear-gradient(125deg, #fbf6eb, #efe3cb);
-  border-color: rgb(172 143 93 / 14%);
+  background: linear-gradient(125deg, #edf4f7, #dbe8ef);
+  border-color: rgb(112 148 177 / 14%);
 }
 
 .bank-card-face[data-bank-card-face="VIRTUAL"] {
-  background: linear-gradient(125deg, #f7f2ea, #eadbcb);
-  border-color: rgb(163 133 105 / 14%);
+  background: linear-gradient(125deg, #edf5f1, #dbe9e3);
+  border-color: rgb(112 155 142 / 14%);
 }
 
 .bank-card-face[data-card-inactive="true"] {

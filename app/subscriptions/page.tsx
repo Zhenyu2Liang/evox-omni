@@ -61,20 +61,20 @@ export default async function SubscriptionsPage() {
       </header>
 
       <Card title={t('pages.subscriptions.annualSummary')} description={t('pages.subscriptions.annualDescription')}>
-        <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <div>
+        <dl data-subscription-summary className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+          <div className="rounded-xl bg-banking-blue-soft p-4">
             <dt className="text-xs text-banking-navy">{t('pages.subscriptions.count')}</dt>
             <dd className="mt-1 text-lg font-semibold text-banking-deep">
               {t('pages.subscriptions.itemCount', { count: subscriptions.length })}
             </dd>
           </div>
-          <div>
+          <div className="rounded-xl bg-banking-lilac-soft p-4">
             <dt className="text-xs text-banking-navy">{t('pages.subscriptions.annualCost')}</dt>
             <dd className="mt-1 text-lg font-semibold text-banking-deep">
               <Money amount={annualTotal} />
             </dd>
           </div>
-          <div>
+          <div className="rounded-xl bg-banking-teal-soft p-4">
             <dt className="text-xs text-banking-navy">{t('pages.subscriptions.enabledReminders')}</dt>
             <dd className="mt-1">
               <Badge tone={remindCount > 0 ? 'success' : 'neutral'}>{t('pages.subscriptions.itemCount', { count: remindCount })}</Badge>

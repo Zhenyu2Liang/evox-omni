@@ -25,6 +25,9 @@ export function AssistantHelpButton() {
 }
 
 const FEATURES = ['accounts', 'transfer', 'investment', 'cards', 'subscriptions', 'schedules'] as const;
+const GUIDE_TONES = ['bg-banking-blue-soft', 'bg-banking-apricot-soft', 'bg-banking-teal-soft'] as const;
+const EXAMPLE_TONES = ['bg-banking-blue-soft text-banking-blue', 'bg-banking-apricot-soft text-banking-apricot',
+  'bg-banking-teal-soft text-banking-teal', 'bg-banking-lilac-soft text-banking-lilac'] as const;
 
 /** A native modal supplies focus trapping, inert background and Escape handling. */
 export function AssistantHelpProvider({ active, children }: { active: boolean; children: ReactNode }) {
@@ -108,7 +111,7 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
           <section aria-labelledby="guide-start-title">
             <h3 id="guide-start-title" className="font-semibold">{t('help.startTitle')}</h3>
             <ol className="mt-3 grid gap-3 text-sm sm:grid-cols-3">
-              {(['describe', 'review', 'result'] as const).map((step, index) => <li key={step} className="rounded-2xl bg-banking-light p-3">
+              {(['describe', 'review', 'result'] as const).map((step, index) => <li key={step} className={`rounded-2xl p-3 ${GUIDE_TONES[index]}`}>
                 <span className="mb-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-white text-xs font-semibold text-banking-interactive">{index + 1}</span>
                 <p className="font-medium">{t(`help.step.${step}.title`)}</p>
                 <p className="mt-1 text-xs leading-5 text-banking-navy">{t(`help.step.${step}.body`)}</p>
@@ -119,11 +122,11 @@ export function AssistantHelpProvider({ active, children }: { active: boolean; c
             <h3 id="guide-features-title" className="font-semibold">{t('help.featuresTitle')}</h3>
             <p className="mt-1 text-xs leading-5 text-banking-navy">{t(canSelect ? 'help.exampleHint' : 'help.examplesUnavailable')}</p>
             <div className="mt-3 grid gap-3 sm:grid-cols-2">
-              {FEATURES.map(feature => <article key={feature} className="flex flex-col rounded-2xl border border-banking-border/80 p-4">
+              {FEATURES.map((feature, index) => <article key={feature} className="flex flex-col rounded-2xl border border-banking-border/80 p-4">
                 <h4 className="text-sm font-semibold">{t(`help.feature.${feature}.title`)}</h4>
                 <p className="mt-1.5 flex-1 text-xs leading-5 text-banking-navy">{t(`help.feature.${feature}.body`)}</p>
                 <button type="button" data-help-example={feature} disabled={!canSelect} onClick={() => selectExample(t(`help.feature.${feature}.example`))}
-                  className="mt-3 min-h-11 rounded-xl bg-banking-neutral px-3 py-2 text-left text-xs leading-5 text-banking-interactive hover:bg-banking-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent disabled:cursor-not-allowed disabled:opacity-50">
+                  className={`mt-3 min-h-11 rounded-xl px-3 py-2 text-left text-xs leading-5 hover:bg-banking-accent/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-banking-accent disabled:cursor-not-allowed disabled:opacity-50 ${EXAMPLE_TONES[index % EXAMPLE_TONES.length]}`}>
                   <span className="block font-semibold">{t('help.tryExample')}</span>{t(`help.feature.${feature}.example`)}
                 </button>
               </article>)}

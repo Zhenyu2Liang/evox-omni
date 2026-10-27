@@ -13,6 +13,8 @@ interface ContactEnvelope {
 }
 
 const inputClass = 'mt-1 w-full rounded-xl border border-banking-navy/20 bg-white px-3 py-2.5 text-sm text-banking-deep outline-hidden focus:border-banking-accent focus:ring-2 focus:ring-banking-accent/10';
+const AVATAR_TONES = ['bg-banking-teal-soft text-banking-teal', 'bg-banking-lilac-soft text-banking-lilac',
+  'bg-banking-blue-soft text-banking-blue', 'bg-banking-apricot-soft text-banking-apricot'] as const;
 
 export default function ContactManager({ initialContacts }: { initialContacts: ContactView[] }) {
   const { t } = useI18n();
@@ -94,11 +96,11 @@ export default function ContactManager({ initialContacts }: { initialContacts: C
       {notice ? <p role={notice.error ? 'alert' : 'status'} className={`rounded-xl border p-3 text-sm ${notice.error ? 'border-banking-danger/20 bg-red-50 text-banking-danger' : 'border-banking-success/20 bg-green-50 text-banking-success'}`}>{t(notice.key)}</p> : null}
       <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
         <section className="grid min-w-0 gap-3 sm:grid-cols-2" data-contact-list>
-          {contacts.length === 0 ? <div className="sm:col-span-2"><EmptyState title={t('pages.contacts.emptyTitle')} description={t('pages.contacts.emptyDescription')} /></div> : contacts.map(contact => (
+          {contacts.length === 0 ? <div className="sm:col-span-2"><EmptyState title={t('pages.contacts.emptyTitle')} description={t('pages.contacts.emptyDescription')} /></div> : contacts.map((contact, index) => (
             <article key={contact.id} data-contact-id={contact.id} className="min-w-0 rounded-2xl border border-banking-navy/10 bg-white p-5 shadow-xs">
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-banking-neutral font-semibold text-banking-interactive">{Array.from(contact.name)[0]}</span>
+                  <span data-contact-avatar aria-hidden="true" className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full font-semibold ${AVATAR_TONES[index % AVATAR_TONES.length]}`}>{Array.from(contact.name)[0]}</span>
                   <div className="min-w-0"><h2 className="break-words font-semibold text-banking-deep">{contact.name}</h2><p className="mt-1 text-sm text-banking-navy/70">{contact.phone}</p></div>
                 </div>
                 <Button variant="ghost" size="sm" disabled={busy} onClick={() => { setNotice(null); setDeleting(contact); }}>{t('pages.contacts.delete')}</Button>

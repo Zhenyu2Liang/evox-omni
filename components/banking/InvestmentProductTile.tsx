@@ -64,8 +64,8 @@ export function InvestmentProductTile({ product, holding, className }: Investmen
     <Card className={cls}>
       <div className="flex items-start justify-between gap-3">
         <div className="space-y-1">
-          <div className="font-medium text-banking-navy">{product.name}</div>
-          <div className="text-xs text-banking-navy/60">{product.code}</div>
+          <div className="font-medium text-banking-deep">{product.name}</div>
+          <div className="inline-flex rounded-md bg-banking-lilac-soft px-2 py-0.5 text-xs text-banking-lilac">{product.code}</div>
         </div>
         <Badge tone={RISK_TONE[product.riskLevel]}>
           {product.riskLevel} · {t(RISK_LABEL[product.riskLevel])}

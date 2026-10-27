@@ -48,7 +48,7 @@ export default function SchedulesPage() {
       </li>)}</ul> : <EmptyState title={t('tasks.schedules.emptyNotifications')} description={t('tasks.schedules.emptyNotificationsDescription')} />}
     </Card>
     <Card title={t('tasks.schedules.title')}>
-      {inbox?.tasks.length ? <ul className="space-y-4">{inbox.tasks.map(task => <li key={task.id} className="rounded-xl bg-banking-light p-3">
+      {inbox?.tasks.length ? <ul className="space-y-4">{inbox.tasks.map((task, index) => <li key={task.id} className={`rounded-xl p-3 ${index % 2 === 0 ? 'bg-banking-blue-soft' : 'bg-banking-lilac-soft'}`}>
         <div className="flex justify-between"><span>{task.name}</span><Badge tone={task.status === 'DONE' ? 'success'
           : task.status === 'FAILED' ? 'danger' : task.status === 'AWAITING_CONFIRMATION' ? 'warn' : 'neutral'}>{label(`tasks.schedules.status.${task.status}`, task.status)}</Badge></div>
         <p className="mt-1 text-xs text-banking-navy/60">{label(`tasks.schedules.kind.${task.kind}`, task.kind)} · {formatDateTime(task.runAt)}</p>

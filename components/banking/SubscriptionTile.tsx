@@ -47,7 +47,9 @@ export function SubscriptionTile({ subscription, className }: SubscriptionTilePr
   return (
     <Card
       className={cls}
-      title={subscription.name}
+      title={<span className="flex items-center gap-2.5"><span aria-hidden="true" className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg bg-banking-lilac-soft text-banking-lilac">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="5" width="16" height="16" rx="3" /><path d="M8 3v4m8-4v4M4 11h16m-12 5h4" /></svg>
+      </span>{subscription.name}</span>}
       description={t(CYCLE_LABEL[subscription.cycle])}
     >
       <div className="flex items-center justify-between gap-3">
