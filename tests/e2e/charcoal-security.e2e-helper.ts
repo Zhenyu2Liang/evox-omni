@@ -30,7 +30,7 @@ export async function journeyCharcoalSecurity(browser: Browser, baseUrl: string,
     await page.goto(`${baseUrl}/bills`, { waitUntil: 'networkidle' });
     const bars = page.getByRole('group', { name: t('chart.categories'), exact: true });
     const bar = bars.locator('g[role="img"]').first();
-    if (await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) !== 'rgb(108, 143, 168)') throw new Error('The default bar chart is not the muted plot colour');
+    if (await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) !== 'rgb(203, 90, 74)') throw new Error('The first bar does not use the warm series colour');
     await bar.focus();
     await waitFor(async () => await bar.locator('rect').evaluate(el => getComputedStyle(el).fill) === 'rgb(200, 56, 60)', { description: 'Keyboard focus highlights only the selected bar in brand red' });
     await bar.press('Tab');
@@ -39,7 +39,10 @@ export async function journeyCharcoalSecurity(browser: Browser, baseUrl: string,
     if (slices.length < 5 || new Set(slices).size !== slices.length || slices.some(color => ['#C8383C', '#B42318'].includes(color ?? ''))) throw new Error('Category colours repeat or borrow warning/brand reds');
     await page.getByRole('heading', { name: t('pages.bills.title'), exact: true }).click();
     await page.mouse.move(0, 0);
-    await waitFor(async () => await bars.locator('g[role="img"] rect').evaluateAll(nodes => nodes.every(node => getComputedStyle(node).fill === 'rgb(108, 143, 168)')), { description: 'Unselected chart bars return to the muted plot colour' });
+    await waitFor(async () => await bars.locator('g[role="img"] rect').evaluateAll(nodes => nodes.every(node => {
+      const hex = node.getAttribute('fill')?.match(/[a-f\d]{2}/gi);
+      return hex?.length === 3 && getComputedStyle(node).fill === `rgb(${hex.map(part => parseInt(part, 16)).join(', ')})`;
+    })), { description: 'Unselected chart bars return to their category colours' });
     await captureScreenshot(page, 'charcoal-bills');
 
     await gotoAgent(page, baseUrl);

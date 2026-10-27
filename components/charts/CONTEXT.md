@@ -19,8 +19,9 @@ color. Each interactive leaf is a client component; the barrel remains neutral.
 
 ## Invariants
 
-- Chart category series have a separate muted palette; they do not reuse brand red or risk colours.
-  Default bars and trend lines are mist blue. Hovering or focusing a point highlights it in brand red.
+- Chart category series use terracotta, apricot, gold and rose; they do not reuse exact risk colours.
+  Donut slices and bars share the same indexed category palette. Trends use terracotta with a light
+  area fill to the zero baseline. Hovering or focusing a point highlights it in brand red.
   Values, exact labels and keyboard tooltip behaviour are independent of the colour change.
 
 - Only geometry uses moneyToChartNumber. Tooltip, legend, SVG title and accessible labels retain

@@ -26,12 +26,30 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
     await captureScreenshot(page, 'rongxu-brand-guide');
     await page.getByRole('button', { name: t('help.close'), exact: true }).click();
 
-    for (const route of ['overview', 'cards', 'investments']) {
+    for (const route of ['overview', 'cards', 'investments', 'bills']) {
       await page.goto(`${baseUrl}/${route}`, { waitUntil: 'networkidle' });
       if (await page.title() !== t('app.brandTitle')) throw new Error(`Brand metadata differs on ${route}`);
       if (route === 'cards') {
         const faceColours = await page.locator('[data-bank-card-face]').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).backgroundImage));
         if (faceColours.length < 3 || new Set(faceColours).size < 3) throw new Error('Card types are not visually distinct');
+      }
+      if (route === 'bills') {
+        const bars = page.getByRole('group', { name: t('chart.categories'), exact: true }).locator('g[role="img"]');
+        const slices = page.getByRole('group', { name: t('chart.shares'), exact: true }).locator('circle[tabindex]');
+        const fills = await bars.locator('rect').evaluateAll(nodes => nodes.map(node => node.getAttribute('fill')));
+        const strokes = await slices.evaluateAll(nodes => nodes.map(node => node.getAttribute('stroke')));
+        if (fills[0] !== '#CB5A4A' || fills.join() !== strokes.join()) throw new Error('Warm category colours differ between the donut and bars');
+        const firstBar = bars.first();
+        const exactLabel = await firstBar.getAttribute('aria-label');
+        await firstBar.focus();
+        await waitFor(async () => await firstBar.locator('rect').evaluate(el => getComputedStyle(el).fill) === 'rgb(200, 56, 60)', { description: 'Warm bars retain red keyboard emphasis' });
+        const tooltip = page.getByRole('tooltip');
+        await tooltip.waitFor();
+        if (!exactLabel || !(await tooltip.innerText()).includes(exactLabel.split(': ')[1])) throw new Error('Chart focus loses the exact money label');
+        await firstBar.press('Escape');
+        await tooltip.waitFor({ state: 'hidden' });
+        await page.getByRole('heading', { name: t('pages.bills.title'), exact: true }).click();
+        await page.mouse.move(0, 0);
       }
       await captureScreenshot(page, `rongxu-brand-${route}`);
     }
@@ -41,6 +59,9 @@ export async function journeyRongxuBrand(browser: Browser, baseUrl: string): Pro
       if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error(`The tinted card faces overflow at ${width}px`);
       await page.locator('[data-card-details]').first().locator('summary').click();
       await captureScreenshot(page, `rongxu-cards-mobile-${width}`);
+      await page.goto(`${baseUrl}/bills`, { waitUntil: 'networkidle' });
+      if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error(`Warm bill charts overflow at ${width}px`);
+      await captureScreenshot(page, `rongxu-bills-mobile-${width}`);
     }
     await page.setViewportSize({ width: 1440, height: 960 });
     await gotoAgent(page, baseUrl);

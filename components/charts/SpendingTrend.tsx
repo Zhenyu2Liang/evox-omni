@@ -1,5 +1,6 @@
 'use client';
 
+import { useId } from 'react';
 import type { MonthlyTrendPoint } from '@/banking-sdk';
 import { formatCNY, moneyToChartNumber } from '@/lib/money';
 import { BANKING_PALETTE, ChartFrame, chartScale, chartTicks, isChartEmpty, useChartTooltip, useChartWidth } from './chartTheme';
@@ -23,6 +24,7 @@ export function SpendingTrend(p: SpendingTrendProps) {
   const plotWidth = Math.max(1, right - left);
   const labelStride = Math.max(1, Math.ceil(coordinates.length / Math.max(2, Math.floor(plotWidth / 68))));
   const tooltip = useChartTooltip();
+  const gradientId = `trend-warm-${useId().replace(/:/g, '')}`;
   const x = (index: number) => coordinates.length === 1 ? left + plotWidth / 2 : left + (index / (coordinates.length - 1)) * plotWidth;
 
   return (
@@ -30,6 +32,15 @@ export function SpendingTrend(p: SpendingTrendProps) {
       active={!isChartEmpty(coordinates.map(point => point.value))} tooltip={tooltip.tooltip}>
       <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} role="group" aria-label={t('chart.trend')}>
         <title>{t('chart.trend')}</title>
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={BANKING_PALETTE.plot} stopOpacity="0.18" />
+            <stop offset="100%" stopColor={BANKING_PALETTE.plot} stopOpacity="0.015" />
+          </linearGradient>
+        </defs>
+        {coordinates.length > 1 ? <polygon aria-hidden="true"
+          points={`${x(0)},${scale.y(0)} ${coordinates.map((point, index) => `${x(index)},${scale.y(point.value)}`).join(' ')} ${x(coordinates.length - 1)},${scale.y(0)}`}
+          fill={`url(#${gradientId})`} /> : null}
         {ticks.map((tick, index) => (
           <g key={index} aria-hidden="true">
             <line x1={left} x2={right} y1={scale.y(tick.value)} y2={scale.y(tick.value)} stroke={BANKING_PALETTE.navy} strokeOpacity="0.1" strokeDasharray="3 3" />
@@ -39,7 +50,7 @@ export function SpendingTrend(p: SpendingTrendProps) {
           </g>
         ))}
         <polyline points={coordinates.map((point, index) => `${x(index)},${scale.y(point.value)}`).join(' ')}
-          fill="none" stroke={BANKING_PALETTE.plot} strokeWidth="2.5" strokeLinejoin="round" />
+          fill="none" stroke={BANKING_PALETTE.plot} strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" />
         {coordinates.map((point, index) => (
           <g key={point.month} className="group" {...tooltip.point(point.month, point.amount, BANKING_PALETTE.accent)}>
             <title>{`${point.month}: ${formatCNY(point.amount)}`}</title>
