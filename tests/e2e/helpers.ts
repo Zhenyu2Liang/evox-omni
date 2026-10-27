@@ -921,6 +921,8 @@ export function launchBrowser(executablePath: string): Promise<Browser> {
 }
 
 export interface WithPageOptions {
+  /** Onboarding owns the genuinely fresh profile; other journeys represent a returning user. */
+  firstVisit?: boolean;
   timeoutMs?: number;
   navigationTimeoutMs?: number;
   /** Label used for a failure screenshot. */
@@ -953,6 +955,9 @@ export async function withPage<T>(
   opts: WithPageOptions = {},
 ): Promise<T> {
   const context = await browser.newContext();
+  if (!opts.firstVisit) await context.addInitScript(() => {
+    localStorage.setItem('banking-agent:guide-dismissed', '1');
+  });
   const page = await context.newPage();
   page.setDefaultTimeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   page.setDefaultNavigationTimeout(opts.navigationTimeoutMs ?? NAV_TIMEOUT_MS);

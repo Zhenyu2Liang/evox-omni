@@ -31,6 +31,7 @@ import { journeyToolLifecycle } from './tool-lifecycle.e2e-helper';
 import { journeyDeveloperMode } from './developer-mode.e2e-helper';
 import { journeyMultiCardFreeze } from './card-freeze.e2e-helper';
 import { journeyChatLayout } from './chat-layout.e2e-helper';
+import { journeyAssistantHelp } from './assistant-help.e2e-helper';
 import { journeyBankingPages } from './banking-pages.e2e-helper';
 import { journeyCardManagement } from './card-management.e2e-helper';
 import { journeyNaturalConversation, journeyDialogueRegressions } from './conversation.e2e-helper';
@@ -791,6 +792,7 @@ interface Journey {
 }
 
 const JOURNEYS: readonly Journey[] = [
+  { name: 'assistant-help-first-visit-and-reopening', run: journeyAssistantHelp },
   { name: 'chat-layout-and-date-separators', run: journeyChatLayout },
   { name: 'chat-history-pagination-and-scroll', run: journeyChatHistory },
   { name: 'signed-amount-memory-and-subscription-analysis', run: journeyDialogueRegressions },

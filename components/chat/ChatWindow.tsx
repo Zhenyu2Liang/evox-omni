@@ -243,7 +243,9 @@ export function ChatWindow({
         )}
         {pending && <ApprovalRequest key={pending.actionId} pending={pending} action={action} busy={stream.busy}
           error={localizedError} attempts={stream.mfaAttempts} maxAttempts={MFA_MAX_ATTEMPTS} />}
-        <Composer onSend={send} draft={draft} busy={stream.busy} disabled={stream.restoring} className={pending ? '[&_textarea]:max-h-16' : undefined} />
+        <Composer onSend={send} draft={draft} busy={stream.busy} disabled={stream.restoring}
+          helpExamplesDisabled={pending !== undefined || stream.pendingReconciliations.length > 0}
+          className={pending ? '[&_textarea]:max-h-16' : undefined} />
         {!pending && <p className="mt-2.5 text-center text-[11px] leading-4 text-banking-navy/80">{t('chat.composer.help')}</p>}
         </div>
       </div>

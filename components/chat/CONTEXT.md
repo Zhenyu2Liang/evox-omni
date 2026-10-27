@@ -13,6 +13,10 @@
 结算后的授权进度和业务回执在同一张操作卡内展示。
 
 `ChatWindow` 组合消息、工具记录、历史和输入框。
+`Composer` 向使用帮助注册示例填入回调。
+示例只填入空闲且为空的输入框，不自动发送，也不覆盖草稿。
+存在待确认或待核对操作时，帮助示例不可用。
+引导偏好与展示规则见 [help/CONTEXT.md](../help/CONTEXT.md)。
 `useAgentStream` 是状态化 Hook：持有 `ChatUIState`、发起请求、应用事件批次。
 `agent-stream-reducer.ts` 承载纯折叠逻辑（`ChatUIState`、`applyEvent`、`reduceAgentEvents`、`settleAction`、`upsertToolEvent`、`visibleRefs`、`pickPendingAction`、`reconcileInterruptedHistory` 等），`useAgentStream` 重新导出它，调用方与测试不必改导入路径。
 `reduceAgentEvents(state, events, t = createTranslator(DEFAULT_LOCALE))` 的第三参可选；两参调用继续可用，缺省使用默认语言 translator。

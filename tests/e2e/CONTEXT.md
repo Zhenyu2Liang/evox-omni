@@ -2,6 +2,15 @@
 
 ## 入口与隔离
 
+`assistant-help-first-visit-and-reopening` 使用首次访问的空浏览器偏好。
+场景检查自动打开、关闭记忆、刷新、手动重开、键盘焦点、草稿保留、
+示例只填入不发送、中英文切换、手机与短窗口布局，以及 Cookie 后备。
+其他 `withPage` 场景设置已关闭引导的偏好，保持原有业务断言。
+`firstVisit: true` 保留真实首次访问行为，不自动关闭引导。
+`assistant-help-live.e2e.ts` 复用这些检查，并从前端发送一次真实模型余额查询。
+运行命令为 `pnpm exec tsx tests/e2e/assistant-help-live.e2e.ts`。
+该入口使用隔离的 `prisma/e2e.db`，不能与其他浏览器套件同时运行。
+
 `chat-layout-and-date-separators` 使用隔离库中的三天历史消息检查布局。
 场景核对桌面和手机的外层滚动、消息区滚动、单卡宽度、多卡网格、
 手机标题、日期分页、草稿保留及其他页面的正常滚动。

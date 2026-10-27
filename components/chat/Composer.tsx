@@ -6,10 +6,11 @@
  * A controlled `<textarea>` paired with a submit `Button`. Enter sends (trimmed, non-empty) and
  * clears the input; Shift+Enter inserts a newline. Disabled until hydrated and while disabled or busy.
  */
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type { KeyboardEvent } from 'react';
 import { Button } from '../ui';
 import { useI18n } from '@/lib/i18n/LocaleProvider';
+import { useAssistantHelp } from '@/components/help/AssistantHelp';
 
 export interface ComposerProps {
   onSend: (text: string) => void;
@@ -18,6 +19,7 @@ export interface ComposerProps {
   placeholder?: string;
   className?: string;
   draft?: { content: string };
+  helpExamplesDisabled?: boolean;
 }
 
 function resizeInput(input: HTMLTextAreaElement | null) {
@@ -37,6 +39,7 @@ export function Composer({
   placeholder,
   className,
   draft,
+  helpExamplesDisabled = false,
 }: ComposerProps) {
   const { t } = useI18n();
   const [text, setText] = useState('');
@@ -44,6 +47,14 @@ export function Composer({
   // An unhydrated native form must not navigate away before React attaches its submit handler.
   const ready = useSyncExternalStore(subscribeToReadiness, clientReady, serverReady);
   const locked = disabled || busy || !ready;
+  const help = useAssistantHelp();
+  const fillHelpExample = useCallback((content: string) => {
+    setText(content);
+    inputRef.current?.focus();
+  }, []);
+  const registerComposer = help?.registerComposer;
+  const canUseHelpExample = !locked && !helpExamplesDisabled && text.length === 0;
+  useEffect(() => registerComposer?.(canUseHelpExample ? fillHelpExample : undefined), [registerComposer, canUseHelpExample, fillHelpExample]);
 
   useEffect(() => {
     if (!draft) return;

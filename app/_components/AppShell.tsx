@@ -6,6 +6,7 @@ import { useI18n } from '@/lib/i18n/LocaleProvider';
 import LanguageSwitcher from './LanguageSwitcher';
 import SidebarNavigation, { Brand } from './SidebarNavigation';
 import { getNavigationTitle } from './navigation';
+import { AssistantHelpButton, AssistantHelpProvider } from '@/components/help/AssistantHelp';
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -55,6 +56,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
+    <AssistantHelpProvider active={isChatWorkspace}>
     <div data-chat-workspace={isChatWorkspace ? 'true' : undefined} className={isChatWorkspace ? 'fixed inset-0 overflow-hidden lg:flex' : 'min-h-dvh lg:flex'}>
       <a href="#workspace" className="sr-only z-50 rounded-xl bg-white px-4 py-3 text-banking-deep shadow-lg focus:not-sr-only focus:fixed focus:left-4 focus:top-4">{t('app.skipContent')}</a>
       <aside aria-label={t('app.sidebar')} className="sticky top-0 hidden h-dvh w-64 shrink-0 flex-col border-r border-slate-200/80 bg-white lg:flex">
@@ -72,7 +74,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <p className="sr-only">{t('app.assistantDescription')}</p>
           </div> : <span className="truncate text-sm font-semibold text-banking-deep">{getNavigationTitle(pathname, t)}</span>}
         </div>
-        <LanguageSwitcher compact />
+        <div className="flex shrink-0 items-center gap-1">
+          {isChatWorkspace ? <AssistantHelpButton /> : null}
+          <LanguageSwitcher compact />
+        </div>
       </header>
 
       <dialog id="mobile-navigation" ref={dialogRef} aria-label={t('app.mobileNavigation')} onClose={() => setMenuOpen(false)} onClick={(event) => { if (event.target === event.currentTarget) closeMenu(); }} className="mobile-navigation h-dvh w-[min(20rem,calc(100vw-3rem))] border-r border-slate-200 bg-white p-0 text-banking-deep">
@@ -89,5 +94,6 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
       <div id="workspace" tabIndex={-1} className="min-w-0 flex-1 outline-hidden">{children}</div>
     </div>
+    </AssistantHelpProvider>
   );
 }

@@ -19,6 +19,7 @@ import { resolveUserId } from '@/app/api/_lib/session';
 import { prisma } from '@/lib/db/client';
 import { getServerI18n } from '@/lib/i18n/server';
 import { readChatHistoryPage } from './history';
+import { AssistantHelpButton } from '@/components/help/AssistantHelp';
 
 // Reads live conversation state and language preference; render on demand instead of at build.
 export const dynamic = 'force-dynamic';
@@ -40,6 +41,7 @@ export default async function AgentPage() {
           <h1 className="text-base font-semibold tracking-tight text-banking-deep">{t('app.assistant')}</h1>
           <p className="mt-1 text-xs text-banking-navy">{t('app.assistantDescription')}</p>
         </div>
+        <AssistantHelpButton />
       </header>
 
       <ChatWindow key={initialHistory.historyGeneration} sessionId={sessionId} taskId={latestTask?.id} initialHistory={initialHistory} className="flex-1" />
